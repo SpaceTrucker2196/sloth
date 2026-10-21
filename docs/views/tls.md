@@ -84,9 +84,10 @@ Both fingerprints emit alongside each other in the JSONL log
   claims to be. Classic implant signature — malware often uses a
   custom TLS library whose JA3 doesn't match Chrome/Firefox even when
   the UA says it's a browser.
-- **Threat-intel domain in SNI**: triggers `ALERT_THREAT_DOMAIN` CRIT.
-  The shipped IOC list is synthetic demo data — replace it before this
-  means anything ([[threat-intel]]).
+- **Threat-intel domain in SNI**: not matched. The SNI is **not**
+  checked against the IOC list; `ALERT_THREAT_DOMAIN` reads DNS qnames
+  only, so an IOC host reached over TLS shows up there only if its
+  lookup was overheard ([[threat-intel]]).
 - **Mass-flush of clienthellos** to many distinct SNIs in seconds:
   scanning behaviour, or browser cache rebuild.
 

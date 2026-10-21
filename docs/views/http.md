@@ -74,8 +74,9 @@ fields in JSONL as `ja4h`.
   [BEACONING](alerts.md#beaconing) alerts.
 - **Unusual User-Agent in path** (some malware encodes UA into the
   URL because they don't bother forging the real header).
-- **Threat-intel host hit**: hosts matching the embedded IOC list
-  fire [`ALERT_THREAT_DOMAIN`](alerts.md#threat_domain).
+- **Threat-intel host hit**: not matched. The `Host:` header is **not**
+  checked against the IOC list; [`ALERT_THREAT_DOMAIN`](alerts.md#threat_domain)
+  reads DNS qnames only ([[threat-intel]]).
 - **HTTP on a host that should only do HTTPS** (browsers, mail
   clients): could mean a proxy is downgrading the connection
   (intentional MITM, or

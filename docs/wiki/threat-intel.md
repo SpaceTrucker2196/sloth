@@ -24,7 +24,7 @@ own feed before production.
 `docs/views/alerts.md`, `docs/views/dns.md`,
 `docs/views/connections.md`, issue #96.
 
-**Last updated**: 2026-10-20 (#152 — a cut qname is not matched; the
+**Last updated**: 2026-10-21 (#152 — a cut qname is not matched; the
 SNI and HTTP `Host:` triggers this page used to list were never
 implemented and are removed. #118 moved `rule_threat_domain` and
 `rule_threat_ip` to `src/alerts/rules_wired.c`; #96 labelled the
@@ -95,8 +95,12 @@ could raise a CRIT for an IOC domain at will.
 name (`dns_log_entry_t.qname_trunc`, from `dns_read_name_len()`), and
 `rule_threat_domain` skips flagged rows, the guard `SURV_DNS` has had
 since #105. **Skipped, not down-graded**: the match is a suffix match
-and the wire name continues past the stored text, so there is no cut row
-on which the match is true. Nothing real is lost beyond truncation's own
+and the wire name continues past the stored text, so a match on a cut
+row is a match on where the cut fell, not on the queried name's suffix,
+and carries no evidence either way. A long name that really is under an
+IOC can have its cut land on an IOC string too
+(`<label>.malware.testing.com.<more>.malware.testing.com`), but that hit
+is the same coincidence as the benign one. Nothing real is lost beyond truncation's own
 cost — an IOC lookup longer than 63 bytes had its IOC suffix cut off
 before the rule ever saw it, and a feed swapped in for the demo list is
 missed on such names either way.
@@ -116,6 +120,7 @@ quiet; the same labels at exactly 63 bytes still fire CRIT.
 | `DGA_DOMAIN` | `dns_log` qname | none — entropy of the leftmost label | not exposed: it scores the leftmost label, which a 63-byte cut keeps whole and a NUL octet only shortens; either way it is the asker's own text, and no listed name is attributed |
 | `DNS_TUNNEL` | `dns_log` qname | none — buckets by 2-label parent | not a table match, but a cut name's parent is the cut prefix's last two labels; left alone, because tunnel queries are exactly the long names truncation cuts, and skipping them would blind the detector |
 | `WEAK_TLS` | `tls_log` SNI | none — the SNI is only shown in the detail | not exposed |
+| `CAPTIVE_PORTAL` (`cp_check_dns`, `cp_check_tls` in `src/capture/capture.c`) | parsed DNS qname, TLS SNI | connectivity-check sentinels (`src/captive_portal.c`) | not fixed, not material: `host_eq` is an **exact** match and every sentinel is shorter than 63 bytes, so the 63-byte cut can never produce one. A NUL octet in the last label can (`captive.apple.com\0x` stores as `captive.apple.com`, flagged but not skipped), but only an on-path or local injector can put that name in front of sloth, and such a party could spoof the real sentinel anyway, so skipping the flag would add nothing |
 
 ## What triggers
 

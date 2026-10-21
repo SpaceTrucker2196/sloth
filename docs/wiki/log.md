@@ -4457,7 +4457,7 @@ stays inside five cells (`123k`).
 
 Owner rulings of 2026-10-21. MISSION §1 now covers Bluetooth Classic (BR/EDR) and Low Energy, read from the host HCI controller or an Ubertooth; §2 rule 1 holds Bluetooth to the same no-injection rule (no inquiry, no active scan, no connection or GATT read, no advertising, no Ubertooth transmit or jamming mode). Schema changes now always ship a chained, value-preserving migration from the previous version (src/db.h, [[sqlite-schema]], agents/AGENTS.md); only a file from a newer build is refused.
 
-## 2026-10-20 — #152: THREAT_DOMAIN does not match a cut DNS name
+## 2026-10-21 — #152: THREAT_DOMAIN does not match a cut DNS name
 
 **Updated pages**: [threat-intel.md](threat-intel.md),
 [alerts.md](alerts.md), [ja3-fingerprinting.md](ja3-fingerprinting.md);
