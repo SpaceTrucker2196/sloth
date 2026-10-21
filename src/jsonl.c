@@ -2509,25 +2509,28 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
         h = fnv1a(d->addr, 6, h);
         h = fnv1a(d->sensor_iface,
                   strnlen(d->sensor_iface, sizeof(d->sensor_iface)), h);
-        /* pdu_mask, never last_event_type: an ADV_IND and its SCAN_RSP
-         * alternate, and a last-value field in here would make every
-         * snapshot a change. mfr_id / mfr_sub are first-seen on the row
-         * for the same reason (sloth.h). */
-        uint8_t b[20] = { d->addr_type, d->sensor_kind, d->sampled,
+        /* Only facts that appear once or only ratchet: presence bits
+         * (set, never cleared), the HID bits (OR-ed), pdu_mask (OR-ed),
+         * the first-seen mfr_id / mfr_sub, whether a watch category was
+         * ever matched, and the bucket of the BEST RSSI. Every other
+         * field on the row - name and name_complete, uuid16, appearance,
+         * tx_power, flags, service-data UUID, the current RSSI - takes
+         * the last report's value, and an ordinary advertiser alternates
+         * them (an ADV_IND with a shortened name and its SCAN_RSP with
+         * the complete one; two UUID lists): signing any of them wrote a
+         * record on every snapshot (#144 slice 4 second review). Those
+         * values still go out on every line this emits and on the
+         * heartbeat. */
+        uint8_t b[17] = { d->addr_type, d->sensor_kind, d->sampled,
                           d->pdu_mask, d->has_name, d->has_uuid16,
                           d->has_mfr, d->has_mfr_sub, d->mfr_sub,
                           d->has_svc_data, d->has_appearance, d->hid,
-                          d->has_tx_power, (uint8_t)d->tx_power,
-                          d->has_flags, d->flags,
-                          (uint8_t)rssi_bucket(d->has_rssi, d->rssi),
-                          (uint8_t)(d->adapter & 0xff),
-                          (uint8_t)(d->adapter >> 8), d->name_complete };
+                          d->has_tx_power, d->has_flags,
+                          (uint8_t)rssi_bucket(d->has_rssi, d->rssi_best),
+                          (uint8_t)(d->watch_cat[0] != '\0'),
+                          (uint8_t)(d->adapter & 0xff) };
         h = fnv1a(b, sizeof(b), h);
-        uint16_t ids[4] = { d->uuid16, d->mfr_id, d->svc_data_uuid16,
-                            d->appearance };
-        h = fnv1a(ids, sizeof(ids), h);
-        h = fnv1a(d->name, strnlen(d->name, sizeof(d->name)), h);
-        h = fnv1a(d->watch_cat, strnlen(d->watch_cat, sizeof(d->watch_cat)), h);
+        h = fnv1a(&d->mfr_id, sizeof(d->mfr_id), h);
         if (!jsonl_changed(JD_BLE_DEVICE, key, sizeof(key), h, now)) continue;
 
         char buf[LINEBUF]; int off = 0;

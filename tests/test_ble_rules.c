@@ -979,8 +979,17 @@ static void test_ble_device_record_is_change_only(void) {
     ASSERT(strstr(out, "\"mfr_id\":-1") != NULL);
     ASSERT(strstr(out, "\"watch_category\":\"\"") != NULL);
 
-    /* A 20 dB move is a change. */
+    /* A stronger best RSSI by a full bucket is a change; a weaker
+     * reading is not (the signature carries the best, which only
+     * ratchets, so a device hovering on a bucket edge stays quiet). */
     make_report(&r, 0x00, 0, a, AD_KEYBOARD, sizeof(AD_KEYBOARD), -75);
+    observe(&r, g_wall);
+    g_wall += 1;
+    ble_snapshot(&g_s);
+    jsonl_emit_ble_devices(&g_s);
+    out = jsonl_read();
+    ASSERT_EQ(count_str(out, "\"type\":\"ble_device\""), 1);
+    make_report(&r, 0x00, 0, a, AD_KEYBOARD, sizeof(AD_KEYBOARD), -30);
     observe(&r, g_wall);
     g_wall += 1;
     ble_snapshot(&g_s);
@@ -1024,6 +1033,40 @@ static void test_ble_alert_record_carries_the_flood_fields(void) {
  * last_event_type back in the signature in place of pdu_mask, the first
  * loop writes one line per snapshot; with mfr_sub kept as last-seen in
  * observe_locked(), the second does. */
+/* #144 slice 4 second review: an advertiser whose ADV_IND carries a
+ * shortened name, one UUID and TX power, and whose SCAN_RSP carries the
+ * complete name, a different UUID and none, alternates every last-value
+ * field on its row. Signing those fields wrote a record per snapshot.
+ * Seen to fail with the name and uuid16 back in the signature. */
+static void test_ble_device_alternating_fields_settle(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    jsonl_fresh();
+    /* Shortened name "kb" (0x08), UUID16 0x180F, TX power 4. */
+    static const uint8_t adv[] = { 0x03, 0x08, 'k', 'b',
+                                   0x03, 0x03, 0x0F, 0x18,
+                                   0x02, 0x0A, 0x04 };
+    /* Complete name "kbd" (0x09), UUID16 0x180A. */
+    static const uint8_t rsp[] = { 0x04, 0x09, 'k', 'b', 'd',
+                                   0x03, 0x03, 0x0A, 0x18 };
+    const uint8_t a[6] = { 0x00, 0x1b, 0xdc, 0x01, 0x02, 0x05 };
+    for (int i = 0; i < 40; i++) {
+        ble_adv_report_t r;
+        if (i & 1) make_report(&r, 0x04, 0, a, rsp, sizeof(rsp), -58);
+        else       make_report(&r, 0x00, 0, a, adv, sizeof(adv), -57);
+        observe(&r, g_wall);
+        g_wall += 1;
+        ble_snapshot(&g_s);
+        jsonl_emit_ble_devices(&g_s);
+    }
+    char *out = jsonl_read();
+    /* ADV_IND alone, then the row once SCAN_RSP and the TX-power, UUID
+     * and name presence bits are all set: never one per report. */
+    ASSERT(count_str(out, "\"addr\":\"00:1b:dc:01:02:05\"") <= 2);
+    jsonl_done();
+    sloth_clock_test_set(NULL, NULL);
+}
+
 static void test_ble_device_alternating_pdus_settles(void) {
     pin_clocks();
     memset(&g_s, 0, sizeof(g_s));
@@ -1225,6 +1268,7 @@ void run_ble_rules_tests(void) {
     RUN_TEST(test_watchlist_match_heard_long_ago_does_not_fire);
     RUN_TEST(test_ble_device_record_is_change_only);
     RUN_TEST(test_ble_alert_record_carries_the_flood_fields);
+    RUN_TEST(test_ble_device_alternating_fields_settle);
     RUN_TEST(test_ble_device_alternating_pdus_settles);
     RUN_TEST(test_sustained_flood_is_few_ble_alert_records);
     RUN_TEST(test_view_empty_state);
