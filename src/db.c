@@ -696,26 +696,47 @@ static int exec(const char *sql, const char *what) {
 /* ── schema version ──────────────────────────────────────── */
 
 /* The migration chain (db.h). Each step takes a file from `from` to
- * `from + 1`: its statements alter `devices` only, so a file that never
- * got as far as creating that table has nothing to alter and the schema
- * that runs next creates it with every column. One BEGIN IMMEDIATE
- * transaction per step, with that step's stamp, so a crash or a refused
- * statement leaves the file at the last version it fully reached, and
- * the failing step's own changes are not in it. */
+ * `from + 1`. `tables` names every table its statements alter — all of
+ * them must already exist for the ALTER to apply, since a file that
+ * never got as far as creating one of them has nothing to alter there
+ * and the unconditional schema below creates it with every column
+ * regardless. A step with no tables (v2 -> v3: a new table rides the
+ * unconditional schema, so there is no ALTER at all) always runs its
+ * (empty) SQL. One BEGIN IMMEDIATE transaction per step, with that
+ * step's stamp, so a crash or a refused statement leaves the file at
+ * the last version it fully reached, and the failing step's own
+ * changes are not in it. */
 typedef struct {
-    int         from;
-    const char *(*sql)(void);
-    const char *what;    /* for the one-line journal note */
+    int                from;
+    const char        *(*sql)(void);
+    const char *const *tables;   /* NULL-terminated; empty = stamp only */
+    const char        *what;     /* for the one-line journal note */
 } db_step_t;
 
+static const char *const TABLES_PROBE_CLIENTS[] = { "probe_clients", NULL };
+static const char *const TABLES_NONE[]          = { NULL };
+static const char *const TABLES_V3_BATCH[]      =
+    { "pnl_clients", "beacon_aps", "rogue_radius", NULL };
+static const char *const TABLES_KARMA[]    = { "karma_candidates", NULL };
+static const char *const TABLES_DEVICES[]  = { "devices", NULL };
+
 static const db_step_t g_steps[] = {
-    { 5, db_schema_migrate_v5_sql, "devices gained camera columns" },
-    { 6, db_schema_migrate_v6_sql,
+    { 1, db_schema_migrate_v1_sql, TABLES_PROBE_CLIENTS,
+      "probe_clients gained presence" },
+    { 2, db_schema_migrate_v2_sql, TABLES_NONE,
+      "assoc_reqs rides the unconditional schema; stamp only" },
+    { 3, db_schema_migrate_v3_sql, TABLES_V3_BATCH,
+      "pnl_clients/beacon_aps/rogue_radius gained the #60/#62/#65 columns" },
+    { 4, db_schema_migrate_v4_sql, TABLES_KARMA,
+      "karma_candidates gained pnl_best" },
+    { 5, db_schema_migrate_v5_sql, TABLES_DEVICES,
+      "devices gained camera columns" },
+    { 6, db_schema_migrate_v6_sql, TABLES_DEVICES,
       "devices gained camera classifier and DHCP option columns" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
-#define DB_MIGRATES_FROM 5
+#define DB_MIGRATES_FROM 1
 
 /* The chain must end at the version this build writes, with no gap. */
 typedef char db_steps_reach_current[
@@ -740,14 +761,18 @@ static int have_table(const char *name, int *out) {
 }
 
 static int migrate_step(const db_step_t *step) {
-    int have_devices = 0;
+    int ready = 1;
     char stamp[96];
-    if (!have_table("devices", &have_devices)) return 0;
+    for (const char *const *t = step->tables; *t; t++) {
+        int have = 0;
+        if (!have_table(*t, &have)) return 0;
+        if (!have) { ready = 0; break; }
+    }
     snprintf(stamp, sizeof(stamp),
              "UPDATE meta SET value='%d' WHERE key='schema_version'",
              step->from + 1);
     if (!exec("BEGIN IMMEDIATE", "migration begin")) return 0;
-    if ((have_devices && !exec(step->sql(), "schema migration")) ||
+    if ((ready && !exec(step->sql(), "schema migration")) ||
         !exec(stamp, "migration stamp") ||
         !exec("COMMIT", "migration commit")) {
         exec("ROLLBACK", "migration rollback");
@@ -783,13 +808,13 @@ static int check_version(void) {
                 sqlite3_errmsg(g_db));
         return 0;
     }
-    int found = 0, ok = 1;
+    int row_found = 0, ok = 1, migrate_from_v = -1;
     if (sqlite3_step(st) == SQLITE_ROW) {
         const unsigned char *v = sqlite3_column_text(st, 0);
-        found = 1;
+        row_found = 1;
         int have = v ? atoi((const char *)v) : -1;
         if (have >= DB_MIGRATES_FROM && have < DB_SCHEMA_VERSION) {
-            found = have;      /* migrate once the statement is gone */
+            migrate_from_v = have;
         } else if (have != DB_SCHEMA_VERSION) {
             fprintf(stderr,
                     "sloth: db schema v%d, this build writes v%d — "
@@ -799,8 +824,15 @@ static int check_version(void) {
     }
     sqlite3_finalize(st);
     if (!ok) return 0;
-    if (found >= DB_MIGRATES_FROM) return migrate_from(found);
-    if (!found) {
+    /* `migrate_from_v` is -1 unless `have` was actually in the
+     * migratable range above — kept separate from "a row exists" so a
+     * file already at DB_SCHEMA_VERSION is never re-run through
+     * migrate_from() on the strength of a reused flag. Seen to fail
+     * (reopening a current-version file wrongly re-migrates it, and
+     * db_open() refuses it on the second ALTER) when this collapses
+     * back to the single `found` variable and DB_MIGRATES_FROM <= 1. */
+    if (migrate_from_v >= 0) return migrate_from(migrate_from_v);
+    if (!row_found) {
         char sql[128];
         snprintf(sql, sizeof(sql),
                  "INSERT INTO meta (key,value) VALUES "

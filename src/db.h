@@ -65,14 +65,22 @@
  * Each step runs in one BEGIN IMMEDIATE transaction and is tested on a
  * file built at the previous version, including the failure case that
  * leaves the file unchanged. Only a file from a NEWER build is refused.
- * Today the chain is v5 -> v6 -> v7 (db_schema_migrate_v5_sql(),
- * db_schema_migrate_v6_sql()); v1..v4 files are still refused until
- * their steps are written (#145).
  *
  * Bumped to 7 on 2026-10-21: devices gained the #155 camera classifier
  * columns (cam_score, cam_evidence, cam_vetoes, cam_conflict) and the
  * DHCP options 55 / 60 display fields, with the v6 -> v7 step in the
- * same change. */
+ * same change.
+ *
+ * The chain now runs the full v1 -> v7 (#154, #145), so any file this
+ * build has ever written opens and migrates. v1 -> v2 (#53 retroactive)
+ * adds probe_clients.presence. v2 -> v3 (#60 slice 5a) adds no column at
+ * all: assoc_reqs is a new table, and the unconditional schema below
+ * creates it on any version via CREATE TABLE IF NOT EXISTS, so that step
+ * only advances the stamp — METRICS.md row 60e shows the historical bump
+ * was taken for a table that needed none, which is why it has no SQL
+ * here. v3 -> v4 (#60/#62/#65, batched) adds pnl_clients.phy_confirmed,
+ * beacon_aps.downgrade_flags/akm_bits and four rogue_radius nocert_*
+ * columns. v4 -> v5 (#90) adds karma_candidates.pnl_best. */
 #define DB_SCHEMA_VERSION 7
 
 /* ── AKM regression (#74 Detector B, temporal half) ──────────────────
@@ -278,6 +286,18 @@ const char *db_schema_sql(void);
  * first. */
 const char *db_schema_meta_sql(void);
 
+/* v1 -> v2 (#53 retroactive): ALTER TABLE ADD COLUMN only. Exposed for
+ * the same guardrail tests as db_schema_sql(). */
+const char *db_schema_migrate_v1_sql(void);
+/* v2 -> v3 (#60 slice 5a): no ALTER — assoc_reqs is a new table and
+ * rides the unconditional schema. Returns an empty statement list; the
+ * step still advances the version stamp in db.c. */
+const char *db_schema_migrate_v2_sql(void);
+/* v3 -> v4 (#60/#62/#65, batched): ALTER TABLE ADD COLUMN only, across
+ * pnl_clients, beacon_aps and rogue_radius. */
+const char *db_schema_migrate_v3_sql(void);
+/* v4 -> v5 (#90): ALTER TABLE ADD COLUMN only. */
+const char *db_schema_migrate_v4_sql(void);
 /* The v5 -> v6 step: ALTER TABLE ADD COLUMN statements only. Exposed
  * for the same guardrail tests as db_schema_sql(). */
 const char *db_schema_migrate_v5_sql(void);

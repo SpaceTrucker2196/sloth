@@ -266,10 +266,13 @@ static const char SCHEMA_SQL[] =
      * would cost a foreign key and a retention rule for no query anyone
      * would write.
      *
-     * A new table on an existing v3 file needs no version bump —
-     * db_open applies the schema after the version check, and CREATE
-     * TABLE IF NOT EXISTS creates what is missing. The bump #60 slice
-     * 5a took was for the table it added at v2; this rides it. */
+     * A new table needs no version bump — db_open applies the schema
+     * after the version check, and CREATE TABLE IF NOT EXISTS creates
+     * what is missing regardless of the file's stamped version. #60
+     * slice 5a's v2 -> v3 bump was taken for assoc_reqs even though, by
+     * this same rule, that table needed none (METRICS.md row 60e); this
+     * table rides the v3 stamp the same way assoc_reqs could have ridden
+     * v2. See db.h for the full v1 -> v7 chain. */
     "CREATE TABLE IF NOT EXISTS btm_requests ("
     "  bssid            TEXT NOT NULL,"
     "  sta_mac          TEXT NOT NULL,"
@@ -689,6 +692,45 @@ static const char META_SQL[] =
     "  value TEXT NOT NULL"
     ");\n";
 
+/* v1 -> v2 (#53 retroactive): probe_clients gained `presence` (the
+ * presence_class_t verdict) without a bump at the time, so a v1 file
+ * failed at schema application with a confusing SQL error. Additive: a
+ * v1 row's presence reads 0 (unknown), same as a fresh row would before
+ * its first classification. */
+static const char MIGRATE_V1_SQL[] =
+    "ALTER TABLE probe_clients ADD COLUMN presence INTEGER NOT NULL"
+    " DEFAULT 0;\n";
+
+/* v2 -> v3 (#60 slice 5a): no ALTER statement. assoc_reqs is a new
+ * table — CREATE TABLE IF NOT EXISTS below creates it regardless of the
+ * file's stamped version, so there is nothing here to add a column to.
+ * The step exists only to advance the stamp past the historical bump;
+ * see the comment on btm_requests above and METRICS.md row 60e. */
+static const char MIGRATE_V2_SQL[] = "";
+
+/* v3 -> v4 (#60/#62/#65, batched — METRICS.md row "v4"/03f977d): four
+ * columns across three tables, deferred and taken together rather than
+ * as three separate breaks. Additive only, same as every step here. */
+static const char MIGRATE_V3_SQL[] =
+    "ALTER TABLE pnl_clients ADD COLUMN phy_confirmed INTEGER NOT NULL"
+    " DEFAULT 0;\n"
+    "ALTER TABLE beacon_aps ADD COLUMN downgrade_flags INTEGER NOT NULL"
+    " DEFAULT 0;\n"
+    "ALTER TABLE beacon_aps ADD COLUMN akm_bits INTEGER NOT NULL"
+    " DEFAULT 0;\n"
+    "ALTER TABLE rogue_radius ADD COLUMN nocert_sessions INTEGER NOT NULL"
+    " DEFAULT 0;\n"
+    "ALTER TABLE rogue_radius ADD COLUMN nocert_no_hello INTEGER NOT NULL"
+    " DEFAULT 0;\n"
+    "ALTER TABLE rogue_radius ADD COLUMN last_nocert_sta TEXT;\n"
+    "ALTER TABLE rogue_radius ADD COLUMN last_nocert_ts INTEGER;\n";
+
+/* v4 -> v5 (#90): karma_candidates gained `pnl_best` so a stored score
+ * can be re-derived from its stored inputs. */
+static const char MIGRATE_V4_SQL[] =
+    "ALTER TABLE karma_candidates ADD COLUMN pnl_best INTEGER NOT NULL"
+    " DEFAULT 0;\n";
+
 /* v5 -> v6 (#106 round 2): the one migration, and additive only. Each
  * statement appends a column with a default; none rewrites a value
  * already in the file, so a v5 forensic record reads the same after it
@@ -718,5 +760,9 @@ static const char MIGRATE_V6_SQL[] =
 
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
+const char *db_schema_migrate_v1_sql(void) { return MIGRATE_V1_SQL; }
+const char *db_schema_migrate_v2_sql(void) { return MIGRATE_V2_SQL; }
+const char *db_schema_migrate_v3_sql(void) { return MIGRATE_V3_SQL; }
+const char *db_schema_migrate_v4_sql(void) { return MIGRATE_V4_SQL; }
 const char *db_schema_migrate_v5_sql(void) { return MIGRATE_V5_SQL; }
 const char *db_schema_migrate_v6_sql(void) { return MIGRATE_V6_SQL; }

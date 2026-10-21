@@ -1707,30 +1707,9 @@ static void test_session_calls_without_open_are_safe(void) {
     ASSERT_EQ(db_new_since(DB_NEW_DEVICE, 0, NULL, 2), 0);
 }
 
-/* A v1 file predates the probe_clients.presence column added in #53.
- * CREATE TABLE IF NOT EXISTS cannot add a column to an existing table,
- * so it must be refused with the version message rather than failing on
- * whatever statement happens to hit the missing column first. */
-static void test_stale_schema_version_refused_clearly(void) {
-    db_close();
-    unlink(db_path);
-    sqlite3 *h = NULL;
-    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
-    sqlite3_exec(h,
-        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
-        "INSERT INTO meta VALUES('schema_version','1');"
-        "CREATE TABLE probe_clients (mac TEXT PRIMARY KEY, ssid TEXT,"
-        " signal_dbm INTEGER, channel INTEGER,"
-        " frame_count INTEGER NOT NULL DEFAULT 0,"
-        " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);",
-        NULL, NULL, NULL);
-    sqlite3_close(h);
-
-    ASSERT_EQ(db_open(db_path), 0);
-    ASSERT_EQ(db_is_open(), 0);
-    unlink(db_path);
-}
-
+/* Superseded by test_v1_file_migrates_to_current (#154): this exact
+ * shape used to be refused because v1 -> v2 did not exist yet. It now
+ * migrates, by design — see the "Schema v1 -> v4" section below. */
 
 /* ── BTM steering persistence (#59) ──────────────────────── */
 
@@ -2632,42 +2611,442 @@ static void test_device_not_camera_never_overrides_mac_keyed_class(void) {
     unlink(db_path);
 }
 
-/* Only v5 is upgraded: a v4 file is still refused. */
-static void test_v4_file_is_still_refused(void) {
+/* The migration text is held to the same guardrail as the schema.
+ * Generalised (#154) to every step in the chain, not just the two that
+ * touch `devices` — the pattern is table-name-agnostic so a future step
+ * on a different table is covered without editing this test. */
+static void test_migration_sql_is_add_column_only(void) {
+    const char *const ms[] = {
+        db_schema_migrate_v1_sql(), db_schema_migrate_v2_sql(),
+        db_schema_migrate_v3_sql(), db_schema_migrate_v4_sql(),
+        db_schema_migrate_v5_sql(), db_schema_migrate_v6_sql(),
+    };
+    const int want[] = { 1, 0, 7, 1, 5, 6 };
+    for (int i = 0; i < 6; i++) {
+        const char *m = ms[i];
+        int alters = 0, adds = 0, semis = 0;
+        for (const char *p = m; (p = strstr(p, "ALTER TABLE ")); p++)
+            alters++;
+        for (const char *p = m; (p = strstr(p, " ADD COLUMN "));   p++)
+            adds++;
+        for (const char *p = m; *p; p++) semis += *p == ';';
+        ASSERT_EQ(alters, want[i]);
+        ASSERT_EQ(adds,   want[i]);
+        ASSERT_EQ(semis,  want[i]);   /* nothing but those statements */
+        ASSERT(strstr(m, "UPDATE") == NULL);
+        ASSERT(strstr(m, "DELETE") == NULL);
+        ASSERT(strstr(m, "DROP")   == NULL);
+        ASSERT(strstr(m, "CREATE") == NULL);
+        ASSERT(strstr(m, "password") == NULL);
+    }
+}
+
+/* ── Schema v1 -> v4: the pre-v5 chain (#154) ─────────────────────
+ *
+ * Each step's shape mirrors the v5/v6 tests above: write a file at the
+ * old version holding real values, open it with the current build,
+ * check the new column(s) default correctly and the old values read
+ * back unchanged, then check a deliberate ALTER failure leaves the file
+ * at the version it started from. v2 -> v3 has no ALTER at all (see
+ * db_schema.c), so it has no failure case to prove — exec("") cannot
+ * fail, and there is nothing to mutate that would make it. */
+
+/* A v0-ish explicit version below the floor is refused, same as one
+ * above DB_SCHEMA_VERSION. Seen to fail with DB_MIGRATES_FROM taken to
+ * 0 (every value becomes "on the chain", so nothing is ever refused on
+ * the low end). */
+static void test_schema_version_zero_is_refused(void) {
     db_close();
     unlink(db_path);
     sqlite3 *h = NULL;
     ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
     sqlite3_exec(h,
         "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
-        "INSERT INTO meta VALUES('schema_version','4');", NULL, NULL, NULL);
+        "INSERT INTO meta VALUES('schema_version','0');", NULL, NULL, NULL);
     sqlite3_close(h);
     chmod(db_path, 0600);
     ASSERT_EQ(db_open(db_path), 0);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "4");
+    ASSERT_STR(v, "0");
     unlink(db_path);
 }
 
-/* The migration text is held to the same guardrail as the schema. */
-static void test_migration_sql_is_add_column_only(void) {
-    const char *const ms[] = { db_schema_migrate_v5_sql(),
-                               db_schema_migrate_v6_sql() };
-    const int want[] = { 5, 6 };
-    for (int i = 0; i < 2; i++) {
-        const char *m = ms[i];
-        int stmts = 0, semis = 0;
-        for (const char *p = m; (p = strstr(p, "ALTER TABLE devices ADD COLUMN ")); p++)
-            stmts++;
-        for (const char *p = m; *p; p++) semis += *p == ';';
-        ASSERT_EQ(stmts, want[i]);
-        ASSERT_EQ(semis, want[i]);    /* nothing but those statements */
-        ASSERT(strstr(m, "UPDATE") == NULL);
-        ASSERT(strstr(m, "DELETE") == NULL);
-        ASSERT(strstr(m, "DROP")   == NULL);
-        ASSERT(strstr(m, "password") == NULL);
-    }
+/* A v1 probe_clients row predates `presence` (#53). v1 -> v2 adds it
+ * with default 0 and changes nothing else; the chain then runs on to
+ * v7, creating every newer table fresh. Seen to fail with the { 1, ... }
+ * step removed from g_steps[] (the build refuses: the static chain
+ * check), and at runtime with DB_MIGRATES_FROM taken back to 5 (the v1
+ * file is refused: db_open() returns 0). */
+static void test_v1_file_migrates_to_current(void) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','1');"
+        "CREATE TABLE probe_clients (mac TEXT PRIMARY KEY, ssid TEXT,"
+        " signal_dbm INTEGER, channel INTEGER,"
+        " frame_count INTEGER NOT NULL DEFAULT 0,"
+        " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);"
+        "INSERT INTO probe_clients (mac,ssid,frame_count,first_seen,"
+        " last_seen) VALUES ('02:00:00:00:00:51','OldNet',4,"
+        " 1600000000,1600000500);", NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    chmod(db_path, 0600);
+
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "7");
+    ASSERT_EQ(q_int("SELECT presence FROM probe_clients"
+                    " WHERE mac='02:00:00:00:00:51'"), 0);
+    q_text("SELECT ssid FROM probe_clients WHERE mac='02:00:00:00:00:51'",
+           v, sizeof(v));
+    ASSERT_STR(v, "OldNet");
+    ASSERT_EQ(q_int("SELECT frame_count FROM probe_clients"
+                    " WHERE mac='02:00:00:00:00:51'"), 4);
+    ASSERT_EQ(q_int("SELECT first_seen FROM probe_clients"
+                    " WHERE mac='02:00:00:00:00:51'"), 1600000000);
+    /* assoc_reqs (v2->v3) and every table through v7 exist fresh. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master"
+                    " WHERE type='table' AND name='assoc_reqs'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('pnl_clients')"
+                    " WHERE name='phy_confirmed'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
+                    " WHERE name='cam_score'"), 1);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);   /* reopening a migrated file is plain */
+    db_close();
+    unlink(db_path);
+}
+
+/* A v1 file that stopped right after the meta stamp never created
+ * probe_clients at all: v1 -> v2 has nothing to ALTER there, so it only
+ * stamps, and the unconditional schema creates the table whole,
+ * `presence` included. Mirrors test_v5_file_without_devices_migrates
+ * for a non-`devices` table, proving the generalised `tables[]` guard
+ * (not just the old hardcoded "devices" check). Seen to fail with the
+ * `ready &&` guard dropped from migrate_step() (the ALTER on the
+ * missing table fails and db_open() refuses the file). */
+static void test_v1_file_without_probe_clients_migrates(void) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','1');", NULL, NULL, NULL),
+        SQLITE_OK);
+    sqlite3_close(h);
+    chmod(db_path, 0600);
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[16];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "7");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('probe_clients')"
+                    " WHERE name='presence'"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* The migration is one transaction: a v1 file on which the ALTER fails
+ * (here, `presence` already exists) keeps v1 and its row untouched. */
+static void test_v1_migration_failure_leaves_file_unchanged(void) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','1');"
+        "CREATE TABLE probe_clients (mac TEXT PRIMARY KEY, ssid TEXT,"
+        " signal_dbm INTEGER, channel INTEGER,"
+        " frame_count INTEGER NOT NULL DEFAULT 0, presence INTEGER,"
+        " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);"
+        "INSERT INTO probe_clients (mac,frame_count,first_seen,last_seen)"
+        " VALUES ('02:00:00:00:00:52',1,1600000000,1600000500);",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    chmod(db_path, 0600);
+
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[16];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "1");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM probe_clients"), 1);
+    unlink(db_path);
+}
+
+/* v2 -> v3 has no ALTER (assoc_reqs is a new table): a v2 file with
+ * none of the v3+ tables migrates straight through on stamps alone,
+ * ending with every table the unconditional schema creates. */
+static void test_v2_file_migrates_to_current(void) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','2');", NULL, NULL, NULL),
+        SQLITE_OK);
+    sqlite3_close(h);
+    chmod(db_path, 0600);
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[16];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "7");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master"
+                    " WHERE type='table' AND name='assoc_reqs'"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v3 file predates the #60/#62/#65 batch (schema v4): pnl_clients has
+ * no phy_confirmed, beacon_aps no downgrade_flags/akm_bits, rogue_radius
+ * none of the four nocert_* columns. All seven are added with defaults
+ * across the three tables in one transaction and nothing already
+ * stored changes. */
+static void test_v3_file_migrates_additively(void) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','3');"
+        "CREATE TABLE pnl_clients (mac TEXT PRIMARY KEY,"
+        " mac_random INTEGER NOT NULL DEFAULT 0,"
+        " probe_count INTEGER NOT NULL DEFAULT 0, os_fp TEXT, phy TEXT,"
+        " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);"
+        "INSERT INTO pnl_clients (mac,probe_count,phy,first_seen,last_seen)"
+        " VALUES ('02:00:00:00:00:53',7,'ac',1600000000,1600000500);"
+        "CREATE TABLE beacon_aps (bssid TEXT PRIMARY KEY, ssid TEXT,"
+        " signal_dbm INTEGER, channel INTEGER, enc TEXT, beacon_ms INTEGER,"
+        " pairwise TEXT, group_ciph TEXT, akm TEXT, mfp INTEGER,"
+        " vendor TEXT, has_wps INTEGER NOT NULL DEFAULT 0,"
+        " wps_state INTEGER, wps_locked INTEGER, phy TEXT,"
+        " revealed INTEGER NOT NULL DEFAULT 0,"
+        " frame_count INTEGER NOT NULL DEFAULT 0,"
+        " has_qbss INTEGER NOT NULL DEFAULT 0, qbss_stations INTEGER,"
+        " qbss_chan_util INTEGER, first_seen INTEGER NOT NULL,"
+        " last_seen INTEGER NOT NULL);"
+        "INSERT INTO beacon_aps (bssid,ssid,channel,first_seen,last_seen)"
+        " VALUES ('aa:bb:cc:dd:ee:53','OldAP',6,1600000000,1600000500);"
+        "CREATE TABLE rogue_radius (bssid TEXT PRIMARY KEY,"
+        " eap_types_seen INTEGER NOT NULL DEFAULT 0,"
+        " weak_method INTEGER NOT NULL DEFAULT 0,"
+        " identity_leaks INTEGER NOT NULL DEFAULT 0, last_identity TEXT,"
+        " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);"
+        "INSERT INTO rogue_radius (bssid,identity_leaks,first_seen,"
+        " last_seen) VALUES ('aa:bb:cc:dd:ee:54',2,1600000000,1600000500);",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    chmod(db_path, 0600);
+
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "7");
+    ASSERT_EQ(q_int("SELECT phy_confirmed FROM pnl_clients"
+                    " WHERE mac='02:00:00:00:00:53'"), 0);
+    ASSERT_EQ(q_int("SELECT probe_count FROM pnl_clients"
+                    " WHERE mac='02:00:00:00:00:53'"), 7);
+    ASSERT_EQ(q_int("SELECT downgrade_flags FROM beacon_aps"
+                    " WHERE bssid='aa:bb:cc:dd:ee:53'"), 0);
+    ASSERT_EQ(q_int("SELECT akm_bits FROM beacon_aps"
+                    " WHERE bssid='aa:bb:cc:dd:ee:53'"), 0);
+    q_text("SELECT ssid FROM beacon_aps WHERE bssid='aa:bb:cc:dd:ee:53'",
+           v, sizeof(v));
+    ASSERT_STR(v, "OldAP");
+    ASSERT_EQ(q_int("SELECT nocert_sessions FROM rogue_radius"
+                    " WHERE bssid='aa:bb:cc:dd:ee:54'"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM rogue_radius"
+                    " WHERE bssid='aa:bb:cc:dd:ee:54'"
+                    " AND last_nocert_sta IS NULL"), 1);
+    ASSERT_EQ(q_int("SELECT identity_leaks FROM rogue_radius"
+                    " WHERE bssid='aa:bb:cc:dd:ee:54'"), 2);
+    db_close();
+    unlink(db_path);
+}
+
+/* The batch is one transaction across three tables: a v3 file on which
+ * the last ALTER fails (rogue_radius.last_nocert_ts already exists)
+ * keeps v3 and NONE of the seven columns, including the two on
+ * pnl_clients and beacon_aps that would have applied cleanly on their
+ * own. Seen to fail with each table's ALTERs run in separate
+ * transactions (phy_confirmed would survive). */
+static void test_v3_migration_failure_leaves_file_unchanged(void) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','3');"
+        "CREATE TABLE pnl_clients (mac TEXT PRIMARY KEY,"
+        " mac_random INTEGER NOT NULL DEFAULT 0,"
+        " probe_count INTEGER NOT NULL DEFAULT 0, os_fp TEXT, phy TEXT,"
+        " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);"
+        "CREATE TABLE beacon_aps (bssid TEXT PRIMARY KEY, ssid TEXT,"
+        " signal_dbm INTEGER, channel INTEGER, enc TEXT, beacon_ms INTEGER,"
+        " pairwise TEXT, group_ciph TEXT, akm TEXT, mfp INTEGER,"
+        " vendor TEXT, has_wps INTEGER NOT NULL DEFAULT 0,"
+        " wps_state INTEGER, wps_locked INTEGER, phy TEXT,"
+        " revealed INTEGER NOT NULL DEFAULT 0,"
+        " frame_count INTEGER NOT NULL DEFAULT 0,"
+        " has_qbss INTEGER NOT NULL DEFAULT 0, qbss_stations INTEGER,"
+        " qbss_chan_util INTEGER, first_seen INTEGER NOT NULL,"
+        " last_seen INTEGER NOT NULL);"
+        "CREATE TABLE rogue_radius (bssid TEXT PRIMARY KEY,"
+        " eap_types_seen INTEGER NOT NULL DEFAULT 0,"
+        " weak_method INTEGER NOT NULL DEFAULT 0,"
+        " identity_leaks INTEGER NOT NULL DEFAULT 0, last_identity TEXT,"
+        " last_nocert_ts INTEGER,"
+        " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    chmod(db_path, 0600);
+
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[16];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "3");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('pnl_clients')"
+                    " WHERE name='phy_confirmed'"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('beacon_aps')"
+                    " WHERE name='downgrade_flags'"), 0);
+    unlink(db_path);
+}
+
+/* The steps are separate transactions: a v3 file whose next step (v4 ->
+ * v5, karma_candidates.pnl_best) fails stops at v4 — the v3 -> v4 batch
+ * committed, pnl_best was never going to apply a second time. */
+static void test_v3_chain_stops_at_last_whole_step(void) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','3');"
+        "CREATE TABLE pnl_clients (mac TEXT PRIMARY KEY,"
+        " mac_random INTEGER NOT NULL DEFAULT 0,"
+        " probe_count INTEGER NOT NULL DEFAULT 0, os_fp TEXT, phy TEXT,"
+        " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);"
+        "CREATE TABLE beacon_aps (bssid TEXT PRIMARY KEY, ssid TEXT,"
+        " signal_dbm INTEGER, channel INTEGER, enc TEXT, beacon_ms INTEGER,"
+        " pairwise TEXT, group_ciph TEXT, akm TEXT, mfp INTEGER,"
+        " vendor TEXT, has_wps INTEGER NOT NULL DEFAULT 0,"
+        " wps_state INTEGER, wps_locked INTEGER, phy TEXT,"
+        " revealed INTEGER NOT NULL DEFAULT 0,"
+        " frame_count INTEGER NOT NULL DEFAULT 0,"
+        " has_qbss INTEGER NOT NULL DEFAULT 0, qbss_stations INTEGER,"
+        " qbss_chan_util INTEGER, first_seen INTEGER NOT NULL,"
+        " last_seen INTEGER NOT NULL);"
+        "CREATE TABLE rogue_radius (bssid TEXT PRIMARY KEY,"
+        " eap_types_seen INTEGER NOT NULL DEFAULT 0,"
+        " weak_method INTEGER NOT NULL DEFAULT 0,"
+        " identity_leaks INTEGER NOT NULL DEFAULT 0, last_identity TEXT,"
+        " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);"
+        "CREATE TABLE karma_candidates (bssid TEXT PRIMARY KEY,"
+        " ssid_count INTEGER NOT NULL DEFAULT 0,"
+        " pnl_overlap INTEGER NOT NULL DEFAULT 0, pnl_best INTEGER,"
+        " pnl_jaccard_ppm INTEGER NOT NULL DEFAULT 0,"
+        " ie_uniform INTEGER NOT NULL DEFAULT 0,"
+        " deauth_chain INTEGER NOT NULL DEFAULT 0,"
+        " score INTEGER NOT NULL DEFAULT 0, top_ssid TEXT,"
+        " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    chmod(db_path, 0600);
+
+    ASSERT_EQ(db_open(db_path), 0);
+    char v[16];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "4");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('pnl_clients')"
+                    " WHERE name='phy_confirmed'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('beacon_aps')"
+                    " WHERE name='downgrade_flags'"), 1);
+    unlink(db_path);
+}
+
+/* A v4 file predates karma_candidates.pnl_best (#90, schema v5). Added
+ * with default 0; the row's existing score is unchanged. Replaces the
+ * old refusal this version used to get before #154 wrote its step. */
+static void test_v4_file_migrates_additively(void) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','4');"
+        "CREATE TABLE karma_candidates (bssid TEXT PRIMARY KEY,"
+        " ssid_count INTEGER NOT NULL DEFAULT 0,"
+        " pnl_overlap INTEGER NOT NULL DEFAULT 0,"
+        " pnl_jaccard_ppm INTEGER NOT NULL DEFAULT 0,"
+        " ie_uniform INTEGER NOT NULL DEFAULT 0,"
+        " deauth_chain INTEGER NOT NULL DEFAULT 0,"
+        " score INTEGER NOT NULL DEFAULT 0, top_ssid TEXT,"
+        " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);"
+        "INSERT INTO karma_candidates (bssid,score,top_ssid,first_seen,"
+        " last_seen) VALUES ('aa:bb:cc:dd:ee:55',42,'FreeWiFi',"
+        " 1600000000,1600000500);", NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    chmod(db_path, 0600);
+
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "7");
+    ASSERT_EQ(q_int("SELECT pnl_best FROM karma_candidates"
+                    " WHERE bssid='aa:bb:cc:dd:ee:55'"), 0);
+    ASSERT_EQ(q_int("SELECT score FROM karma_candidates"
+                    " WHERE bssid='aa:bb:cc:dd:ee:55'"), 42);
+    q_text("SELECT top_ssid FROM karma_candidates"
+           " WHERE bssid='aa:bb:cc:dd:ee:55'", v, sizeof(v));
+    ASSERT_STR(v, "FreeWiFi");
+    db_close();
+    unlink(db_path);
+}
+
+/* A v4 file on which the v4 -> v5 ALTER fails (pnl_best already there)
+ * keeps v4 and the row as it was. */
+static void test_v4_migration_failure_leaves_file_unchanged(void) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','4');"
+        "CREATE TABLE karma_candidates (bssid TEXT PRIMARY KEY,"
+        " ssid_count INTEGER NOT NULL DEFAULT 0,"
+        " pnl_overlap INTEGER NOT NULL DEFAULT 0, pnl_best INTEGER,"
+        " pnl_jaccard_ppm INTEGER NOT NULL DEFAULT 0,"
+        " ie_uniform INTEGER NOT NULL DEFAULT 0,"
+        " deauth_chain INTEGER NOT NULL DEFAULT 0,"
+        " score INTEGER NOT NULL DEFAULT 0, top_ssid TEXT,"
+        " first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL);"
+        "INSERT INTO karma_candidates (bssid,score,first_seen,last_seen)"
+        " VALUES ('aa:bb:cc:dd:ee:56',9,1600000000,1600000500);",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    chmod(db_path, 0600);
+
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[16];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "4");
+    ASSERT_EQ(q_int("SELECT score FROM karma_candidates"
+                    " WHERE bssid='aa:bb:cc:dd:ee:56'"), 9);
+    unlink(db_path);
 }
 
 void run_db_tests(void) {
@@ -2710,12 +3089,21 @@ void run_db_tests(void) {
     RUN_TEST(test_v5_file_migrates_additively);
     RUN_TEST(test_v5_file_without_devices_migrates);
     RUN_TEST(test_v5_migration_failure_leaves_file_unchanged);
-    RUN_TEST(test_v4_file_is_still_refused);
     RUN_TEST(test_v6_file_migrates_additively);
     RUN_TEST(test_v6_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_v5_chain_stops_at_last_whole_step);
     RUN_TEST(test_device_not_camera_never_overrides_mac_keyed_class);
     RUN_TEST(test_migration_sql_is_add_column_only);
+    RUN_TEST(test_schema_version_zero_is_refused);
+    RUN_TEST(test_v1_file_migrates_to_current);
+    RUN_TEST(test_v1_file_without_probe_clients_migrates);
+    RUN_TEST(test_v1_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_v2_file_migrates_to_current);
+    RUN_TEST(test_v3_file_migrates_additively);
+    RUN_TEST(test_v3_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_v3_chain_stops_at_last_whole_step);
+    RUN_TEST(test_v4_file_migrates_additively);
+    RUN_TEST(test_v4_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_v5_karma_pnl_best_column_exists);
     RUN_TEST(test_v4_columns_exist);
     RUN_TEST(test_downgrade_flags_accumulate_on_the_ap);
@@ -2787,7 +3175,6 @@ void run_db_tests(void) {
     RUN_TEST(test_new_since_reports_zero_when_nothing_new);
     RUN_TEST(test_new_since_kinds_are_independent);
     RUN_TEST(test_session_calls_without_open_are_safe);
-    RUN_TEST(test_stale_schema_version_refused_clearly);
 
     TEST_SUITE("db: AKM posture history (#74)");
     RUN_TEST(test_akm_history_row_per_posture);

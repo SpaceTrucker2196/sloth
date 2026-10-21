@@ -1,6 +1,6 @@
 ---
 name: sqlite-schema
-description: The --db SQLite sink — why it exists, the 40-table schema v2, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
+description: The --db SQLite sink — why it exists, the schema and its v1 → v7 migration chain, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
 type: reference
 ---
 
@@ -12,9 +12,9 @@ and findings, upserted per entity rather than appended per tick, so a
 month of operation costs megabytes instead of a terabyte.
 
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
-`tests/test_db.c`, issues #42 and #56.
+`tests/test_db.c`, issues #42, #56 and #154.
 
-**Last updated**: 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
+**Last updated**: 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
 
 ---
 
@@ -136,14 +136,14 @@ These are what make the file trustworthy rather than merely present.
 | Evidence flags latch | deauth, twins, karma | A burst that crossed the flood threshold *was* a flood; a twin caught mid-attack was caught mid-attack. |
 | `sev` / `detail` track latest | `alerts` | Matches how `fire()` overwrites them in the live engine. |
 
-## Schema v4 — 41 tables
+## Schema — 41 tables, v1 → v7
 
-`meta` holds `schema_version`, currently **7** (the heading above is
-the v4 batch; v5 to v7 are below). `db_open()` refuses a file whose
-version it has no migration chain from — today anything below v5 or
-above v7 — and checks it *before* applying the rest of the schema so a
-mismatch produces the version message rather than whatever SQL error
-the schema happens to hit first.
+`meta` holds `schema_version`, currently **7**. `db_open()` checks it
+*before* applying the rest of the schema, so a mismatch produces the
+clear version message rather than whatever SQL error the schema happens
+to hit first. Since #154 the chain covers the full **v1 → v7**: any
+file this build has ever written opens and migrates forward. Only a
+file from a *newer* build (`schema_version` above 7) is refused.
 
 **v5** (#90): `karma_candidates.pnl_best`. **v6** (#106 round 2):
 `devices` gains `device_class`, `camera_vendor`, `camera_model`,
@@ -161,15 +161,33 @@ camera row (`test_v6_file_migrates_additively`) and on one whose last
 ALTER fails, which stays v6 with none of the step's columns
 (`test_v6_migration_failure_leaves_file_unchanged`).
 
-**The chain.** `src/db.c` lists the steps (`g_steps[]`: from 5, from 6)
-and runs every one from the file's version up, each in its own
-transaction with its own stamp, so a v5 file opened by this build goes
-v5 → v6 → v7. A step that fails leaves the file at the last version it
-fully reached — a v5 file whose second step fails is a v6 file, never
-half of v7 (`test_v5_chain_stops_at_last_whole_step`) — and `db_open()`
-refuses it. A static check fails the build unless the steps run from
+**The chain.** `src/db.c`'s `g_steps[]` lists one entry per step (`from`
+1 through 6) and runs every one from the file's version up, each in its
+own transaction with its own stamp, so a v1 file opened by this build
+goes v1 → v2 → v3 → v4 → v5 → v6 → v7 in one `db_open()` call. A step
+that fails leaves the file at the last version it fully reached — a v3
+file whose next step fails is a v4 file, never half of v5
+(`test_v3_chain_stops_at_last_whole_step`) — and `db_open()` refuses the
+open (though the partial progress already committed stays on disk).
+Each step also names the table(s) its `ALTER`s touch (`tables[]`); if
+one of them was never created (a file that stopped very early), the
+step skips its `ALTER` and only stamps, since the unconditional schema
+below creates that table whole regardless of the stamped version. A
+static check fails the build unless the steps run from
 `DB_MIGRATES_FROM` to `DB_SCHEMA_VERSION` without a gap, so a bump
 without its step does not compile.
+
+**#154 also fixed a latent bug in `check_version()`.** It used one
+variable both as "a `schema_version` row exists" and as "the version to
+migrate from" (reusing the boolean `1` as a fake low version number when
+no migration was needed). That was harmless while `DB_MIGRATES_FROM` was
+5, because `1 < 5` ; once it dropped to 1, a file already sitting at the
+current version satisfied `found >= DB_MIGRATES_FROM` on the strength of
+the stale flag and got silently re-run through the whole chain,
+failing on the first `ALTER` since every column already existed —
+`db_open()` on an up-to-date file started returning 0. Fixed by tracking
+the real migrate-from version (`-1` when none applies) separately from
+whether a row was found at all.
 
 **Upsert and `not-camera`.** `not-camera` is a verdict against, not a
 higher "for", so the `devices` upsert never lets it override the class
@@ -185,8 +203,7 @@ version stamp, in one `BEGIN IMMEDIATE` transaction. No existing value
 is rewritten, so a v5 forensic record reads the same afterwards; a
 statement that fails rolls the whole step back and the file stays v5
 (`tests/test_db.c :: test_v5_migration_failure_leaves_file_unchanged`).
-A file newer than v7 is refused; one older than v5 is refused until its
-steps exist.
+Only a file newer than v7 is refused.
 
 **Migration path, by design** (owner ruling 2026-10-21, replacing the
 earlier "no migration path by design"). Every schema bump ships its
@@ -206,9 +223,18 @@ next bump does not build until its step is written.
 `CREATE TABLE IF NOT EXISTS` runs on every open, so an older file simply
 gains it. Adding a **column to an existing table** is not: that
 statement is a no-op on a table that already exists, and the column
-never appears. v2 exists because `probe_clients.presence` (#53) was
-added without a bump, so v1 files must be refused. v3 came with
-`assoc_reqs` (#60).
+never appears. **v2** exists because `probe_clients.presence` (#53) was
+added without a bump, so a v1 file failed at schema application with a
+confusing SQL error instead of the clear version message — the v1 → v2
+step (#154) adds the column. **v3** is the one exception that proves the
+rule above: `assoc_reqs` (#60 slice 5a) is a *new table*, so by this
+same rule it needed no bump at all — `METRICS.md` row `60e` records that
+the bump was taken anyway, and the no-bump call was independently
+confirmed three weeks later when `#59`'s `btm_requests` (also new) rode
+the then-current version with no bump of its own. The v2 → v3 step
+(#154) therefore has no `ALTER` statement; it only advances the stamp,
+and `assoc_reqs` gets created by the unconditional schema below exactly
+as it would on any other version.
 
 **v4 is a deliberately batched bump.** Four columns across three issues
 each wanted one, and each on its own was a poor trade — making every
@@ -222,13 +248,23 @@ existing database refuse to open, for one field:
 
 Taken together it is one break instead of three, and it is the right
 moment to take the next one too: if you are adding a column, look at
-what else has been deferred first.
+what else has been deferred first. The v3 → v4 step (#154) applies all
+seven `ALTER`s across the three tables in one transaction: a v3 file on
+which the last one fails keeps v3, none of the seven, including the two
+that would have applied cleanly on their own
+(`test_v3_migration_failure_leaves_file_unchanged`).
 
 The consequence worth remembering when reading a slice note: `#59`'s
 `btm_requests` and anything else that adds only a *table* rides the
 current version. There is also no automated guard here — a fresh file
 gets every table regardless of version, so a missing bump only surfaces
-when an existing older database is opened, which no test does.
+when an existing older database is opened, which `tests/test_db.c`'s
+v1 → v4 migration tests now do.
+
+**v5** (#90, above) is the v4 → v5 step (#154): one `ALTER TABLE
+karma_candidates ADD COLUMN pnl_best` and the stamp. A v4 file on which
+it fails (`pnl_best` already there) keeps v4 and its row unchanged
+(`test_v4_migration_failure_leaves_file_unchanged`).
 
 ### Entities — "who was here"
 
