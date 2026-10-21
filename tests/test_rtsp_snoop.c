@@ -815,6 +815,8 @@ static void test_rule_detail_ignores_slot_order(void) {
     g_s.rtsp_streams[1] = tmp;
     alerts_update(&g_s);
     i = find_rtsp_alert(&g_s);
+    ASSERT(i >= 0);
+    if (i < 0) return;
     ASSERT(strstr(g_s.alerts[i].detail, "e.g. /a") != NULL);
     ASSERT_EQ((long long)g_s.alerts[i].observations, (long long)obs0);
 }

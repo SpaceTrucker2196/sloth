@@ -650,9 +650,10 @@ void rule_csa_abuse(const sloth_state_t *s, time_t now) {
  *  - 2.4 GHz, where §11.8 does not apply at all.
  *
  *  - 6 GHz, where the element that carries the power limit is the
- *    Transmit Power Envelope (tag 195), not either of these two. sloth
- *    does not parse tag 195, so the absence of 32 and 35 there is the
- *    wrong element being missing and not a finding. ap_band_label() is
+ *    Transmit Power Envelope (tag 195), not either of these two. Tag
+ *    195 is parsed and retained since #101 slice B (reg_6g.h) but this
+ *    rule does not read it: the absence of 32 and 35 there is the wrong
+ *    element being missing and not a finding. ap_band_label() is
  *    what separates 5 from 6: the channel numbers overlap outright, and
  *    only channel_source settles it (#66, #91).
  *

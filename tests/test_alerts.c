@@ -9787,9 +9787,10 @@ static void test_tpc_absent_quiet_on_24ghz(void) {
 static void test_tpc_absent_quiet_on_6ghz(void) {
     /* Channel 37 is a valid number in both 5 and 6 GHz; only
      * channel_source separates them. On 6 GHz the element carrying the
-     * power limit is the Transmit Power Envelope (tag 195), which sloth
-     * does not parse — so the absence of tags 32/35 there is the wrong
-     * element missing, not a finding. */
+     * power limit is the Transmit Power Envelope (tag 195), which this
+     * rule does not read (it is parsed since #101 slice B, reg_6g.h) —
+     * so the absence of tags 32/35 there is the wrong element missing,
+     * not a finding. */
     alerts_clear(); ownership_clear();
     sloth_state_t s; seed_state(&s);
     ASSERT(ownership_add_bssid("3c:37:86:10:00:01"));
