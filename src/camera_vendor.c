@@ -16,7 +16,8 @@
  * https://regauth.standards.ieee.org/standards-ra-web/pub/view.html#registries
  * and the assignee must read exactly as written here.
  * tests/test_camera_vendor.c holds the table to that file when the
- * host has it.
+ * host has it, and everywhere to a digest of the registry's names for
+ * these assignments, so CI without ieee-data still catches an edit.
  *
  * Only assignees whose own published material describes them as a
  * camera maker are here. That is a vendor test, not a product test:

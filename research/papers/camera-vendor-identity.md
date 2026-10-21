@@ -121,7 +121,10 @@ beacon.
 
 **Considered and not shipped.** Ubiquiti (the issue's own example),
 TP-Link and Wyze sell cameras, but most of what their blocks put on the
-air is an AP, router, plug or bulb — every UniFi AP would match.
+air is an AP, router, plug or bulb — every UniFi AP would match. This
+departs from #106 Case B as written (`B6:FB:E4`, expected to fire with
+vendor `ubiquiti`): the test pins the exclusion, and the deviation is
+pending an owner ruling on #106 rather than settled by this document.
 "Verkada Inc" (homepage describes "Security Systems"), "Hanwha Vision",
 "Zhejiang Uniview Technologies", "Vivotek" and "Swann" are registered
 but no vendor self-description naming cameras was retrieved; "Prama
@@ -135,7 +138,10 @@ The same position as `CAM_WS_DISCOVERY` and `CAM_SETUP_SSID`: each is
 the camera's own announcement, read from traffic sloth did not solicit.
 T1046 (Network Service Discovery) describes an adversary enumerating
 services; naming it would claim a step sloth never takes. WARN on first
-sighting, one alert per device with a rising count; the issue's
+sighting, one alert per identity with a rising count (per DNS-SD
+service instance, so a camera advertising two camera service types is
+two alerts; per SSDP device UUID, its rows folded into one detail; per
+BSSID); the issue's
 INFO -> WARN -> CRIT join across signals is not attempted (#145: it
 cannot be observed reliably from these inputs).
 

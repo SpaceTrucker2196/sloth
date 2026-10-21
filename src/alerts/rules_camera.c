@@ -8,7 +8,8 @@
  * step, so they sit on the empty-technique list with OPEN_SETUP_AP,
  * CAM_WS_DISCOVERY and CAM_SETUP_SSID: T1046 would claim an
  * enumeration sloth did not perform. Each WARNs on first sighting and
- * keeps one alert per device with a rising count (#145: the INFO ->
+ * keeps one alert per identity with a rising count — the DNS-SD
+ * service instance, the SSDP device UUID, the BSSID (#145: the INFO ->
  * WARN -> CRIT join across signals is unobservable, so it is not
  * attempted).
  *
@@ -99,46 +100,110 @@ static void usn_device(const char *usn, char *out, size_t n) {
     out[len] = '\0';
 }
 
+/* Does this row qualify, and as which shape? *vendor is set for a
+ * Basic:1 row (the SERVER match) and left NULL for a DSC row. */
+static int ssdp_cam_row(const ssdp_device_t *d, int *dsc,
+                        const char **vendor) {
+    *vendor = NULL;
+    *dsc = 0;
+    if (strcmp(d->nts, "search") == 0) return 0;
+    if (strcasecmp(d->type, UPNP_DSC1) == 0) { *dsc = 1; return 1; }
+    if (strcasecmp(d->type, UPNP_BASIC1) != 0) return 0;
+    return cam_vendor_server(d->server, vendor);
+}
+
+/* Same device: the same USN UUID, or with no UUID the same address. */
+static int ssdp_same_dev(const char *da, const ssdp_device_t *a,
+                         const char *db, const ssdp_device_t *b) {
+    if (da[0] || db[0]) return strcmp(da, db) == 0;
+    return strcmp(a->ip, b->ip) == 0;
+}
+
+/* A total order over one device's rows that does not depend on where
+ * they sit in the table: the DSC row first (it is the stronger claim),
+ * then by address, SERVER, USN and NTS. */
+static int ssdp_row_before(const ssdp_device_t *a, int adsc, int ai,
+                           const ssdp_device_t *b, int bdsc, int bi) {
+    int c;
+    if (adsc != bdsc) return adsc > bdsc;
+    if ((c = strcmp(a->ip, b->ip)) != 0)         return c < 0;
+    if ((c = strcmp(a->server, b->server)) != 0) return c < 0;
+    if ((c = strcmp(a->usn, b->usn)) != 0)       return c < 0;
+    if ((c = strcmp(a->nts, b->nts)) != 0)       return c < 0;
+    return ai < bi;
+}
+
+/* One fire() per device per tick. The table is keyed per USN, so one
+ * camera announcing DSC:1 and Basic:1 under one UUID, or from two
+ * addresses, is several rows of one incident. Firing each with its own
+ * detail alternated the detail signature every tick, so observations
+ * and alert.update events climbed with time while nothing changed — the
+ * change-only churn agents/AGENTS.md warns about. Here the first row in
+ * ssdp_row_before() order speaks for the device and the rest are folded
+ * into one deterministic detail. */
 void rule_cam_ssdp_device(const sloth_state_t *s, time_t now) {
-    for (int i = 0; i < s->ssdp_count; i++) {
+    char devs[MAX_SSDP_DEVICES][96];
+    int  ok[MAX_SSDP_DEVICES], dscv[MAX_SSDP_DEVICES];
+    const char *vend[MAX_SSDP_DEVICES];
+    int n = s->ssdp_count;
+    if (n > MAX_SSDP_DEVICES) n = MAX_SSDP_DEVICES;
+    for (int i = 0; i < n; i++) {
+        ok[i] = ssdp_cam_row(&s->ssdp_devices[i], &dscv[i], &vend[i]);
+        usn_device(s->ssdp_devices[i].usn, devs[i], sizeof(devs[i]));
+    }
+
+    for (int i = 0; i < n; i++) {
+        if (!ok[i]) continue;
         const ssdp_device_t *d = &s->ssdp_devices[i];
-        if (strcmp(d->nts, "search") == 0) continue;
 
-        const char *vendor = NULL;
-        int dsc = strcasecmp(d->type, UPNP_DSC1) == 0;
-        if (!dsc) {
-            if (strcasecmp(d->type, UPNP_BASIC1) != 0) continue;
-            if (!cam_vendor_server(d->server, &vendor)) continue;
+        int lead = 1, more = 0;
+        const char *other_vendor = NULL;
+        for (int j = 0; j < n && lead; j++) {
+            if (j == i || !ok[j]) continue;
+            const ssdp_device_t *o = &s->ssdp_devices[j];
+            if (!ssdp_same_dev(devs[i], d, devs[j], o)) continue;
+            if (ssdp_row_before(o, dscv[j], j, d, dscv[i], i)) lead = 0;
+            more++;
+            if (vend[j] && (!other_vendor || strcmp(vend[j], other_vendor) < 0))
+                other_vendor = vend[j];
         }
-
-        char dev[96];
-        usn_device(d->usn, dev, sizeof(dev));
+        if (!lead) continue;
 
         char key[ALERT_KEY_LEN];
         akey_t k;
         akey_begin(&k, key, sizeof(key), "camssdp");
-        if (dev[0]) {
+        if (devs[i][0]) {
             akey_tok(&k, "usn");
-            akey_remote(&k, dev, 48);
+            akey_remote(&k, devs[i], 48);
         } else {
             akey_tok(&k, "ip");
             akey_ip(&k, d->ip);
         }
         if (!akey_end(&k)[0]) continue;
 
+        char also[64] = "";
+        if (dscv[i] && other_vendor)
+            snprintf(also, sizeof(also),
+                     "; Basic:1 SERVER names vendor %.24s",
+                     other_vendor);
+        char rows[48] = "";
+        if (more)
+            snprintf(rows, sizeof(rows), "; %d more row%s for this device",
+                     more, more == 1 ? "" : "s");
+
         char detail[ALERT_DETAIL_LEN];
-        if (dsc)
+        if (dscv[i])
             snprintf(detail, sizeof(detail),
                      "UPnP DigitalSecurityCamera:1 device at %.46s announced"
-                     " itself over SSDP (NOTIFY %.15s)%s%.80s",
+                     " itself over SSDP (NOTIFY %.15s)%s%.64s%.54s%.47s",
                      d->ip, d->nts,
-                     d->server[0] ? ", SERVER " : "", d->server);
+                     d->server[0] ? ", SERVER " : "", d->server, also, rows);
         else
             snprintf(detail, sizeof(detail),
                      "UPnP Basic:1 device at %.46s names camera vendor %s"
                      " in its SERVER header (%.80s, NOTIFY %.15s) - the"
-                     " device's own claim, not a registry check",
-                     d->ip, vendor, d->server, d->nts);
+                     " device's own claim, not a registry check%.47s",
+                     d->ip, vend[i], d->server, d->nts, rows);
         fire(ALERT_TYPE_CAM_SSDP_DEVICE, ALERT_SEV_WARN,
              "CAM_SSDP_DEVICE", detail, key, d->ip, 0, now);
     }

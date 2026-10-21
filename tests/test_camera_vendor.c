@@ -101,6 +101,49 @@ static int csv_field(const char **pp, char *out, size_t n) {
     return 1;
 }
 
+/* The registry cross-check below needs oui.csv, which a host without
+ * Debian's ieee-data (CI among them) lacks, and there it can only
+ * skip. This pins the same thing everywhere: FNV-1a 64 over
+ * "AAAAAA\t<Organization Name>\n" per row, in table order, with the
+ * name as the REGISTRY writes it. The constant was computed from
+ * /usr/share/ieee-data/oui.csv (.lastupdate 1721654721, 2024-07-22),
+ * not from the table, and where the file is present the test below
+ * recomputes it from the registry and holds it to this value — so a
+ * changed assignee string goes red on every host, and a constant
+ * edited to match a wrong table goes red on any host with the file.
+ * Adding or changing a row means recomputing it from the registry. */
+#define CAM_OUI_REGISTRY_N      141
+#define CAM_OUI_REGISTRY_DIGEST 0xf841268fd11349c5ull
+
+static uint64_t oui_digest_row(uint64_t h, const uint8_t a[3],
+                               const char *org) {
+    char line[320];
+    snprintf(line, sizeof(line), "%02X%02X%02X\t%s\n", a[0], a[1], a[2],
+             org ? org : "");
+    for (const char *c = line; *c; c++) {
+        h ^= (uint8_t)*c;
+        h *= 0x100000001b3ull;
+    }
+    return h;
+}
+
+static void test_oui_table_matches_its_registry_digest(void) {
+    /* Seen red by changing one assignee string in g_cam_oui. */
+    int n = cam_vendor_oui_count();
+    ASSERT_EQ(n, CAM_OUI_REGISTRY_N);
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (int i = 0; i < n; i++) {
+        uint8_t a[3]; const char *o = NULL;
+        cam_vendor_oui_at(i, a, NULL, &o);
+        h = oui_digest_row(h, a, o);
+    }
+    if (h != CAM_OUI_REGISTRY_DIGEST)
+        printf("    table digest %016llx, registry digest %016llx\n",
+               (unsigned long long)h,
+               (unsigned long long)CAM_OUI_REGISTRY_DIGEST);
+    ASSERT(h == CAM_OUI_REGISTRY_DIGEST);
+}
+
 static void test_oui_table_matches_the_ieee_registry(void) {
     /* Every row claims to be one registry entry, verbatim. Hold it to
      * the registry where the host carries a copy (Debian's ieee-data);
@@ -114,8 +157,9 @@ static void test_oui_table_matches_the_ieee_registry(void) {
     }
     int n = cam_vendor_oui_count();
     int *ok = calloc((size_t)n, sizeof(int));
-    ASSERT(ok != NULL);
-    if (!ok) { fclose(f); return; }
+    char (*reg_org)[256] = calloc((size_t)n, sizeof(*reg_org));
+    ASSERT(ok != NULL && reg_org != NULL);
+    if (!ok || !reg_org) { free(ok); free(reg_org); fclose(f); return; }
     char line[1024];
     while (fgets(line, sizeof(line), f)) {
         const char *p = line;
@@ -129,7 +173,9 @@ static void test_oui_table_matches_the_ieee_registry(void) {
         for (int i = 0; i < n; i++) {
             uint8_t b[3]; const char *o = NULL;
             cam_vendor_oui_at(i, b, NULL, &o);
-            if (memcmp(a, b, 3) == 0 && o && strcmp(o, org) == 0) ok[i] = 1;
+            if (memcmp(a, b, 3) != 0) continue;
+            snprintf(reg_org[i], sizeof(reg_org[i]), "%s", org);
+            if (o && strcmp(o, org) == 0) ok[i] = 1;
         }
     }
     fclose(f);
@@ -142,6 +188,17 @@ static void test_oui_table_matches_the_ieee_registry(void) {
                b[0], b[1], b[2], o ? o : "");
         missing++;
     }
+    /* The pinned digest is the registry's, not the table's: recompute
+     * it from what oui.csv says for each row's assignment. Seen red by
+     * changing one digit of CAM_OUI_REGISTRY_DIGEST. */
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (int i = 0; i < n; i++) {
+        uint8_t b[3];
+        cam_vendor_oui_at(i, b, NULL, NULL);
+        h = oui_digest_row(h, b, reg_org[i]);
+    }
+    ASSERT(h == CAM_OUI_REGISTRY_DIGEST);
+    free(reg_org);
     free(ok);
     ASSERT_EQ(missing, 0);
 }
@@ -503,9 +560,44 @@ static void test_cam_ssdp_msearch_for_cameras_is_quiet(void) {
     ASSERT_EQ(find_alert(s, ALERT_TYPE_CAM_SSDP_DEVICE), -1);
 }
 
+/* A clock that moves: "one alert, a rising count" is only proven
+ * stable if the engine's update throttle (ALERT_UPDATE_MIN_MS) gets a
+ * chance to emit, which a pinned mono clock never gives it. */
+static uint64_t g_tick_mono;
+static uint64_t cv_mono_tick(void) { return g_tick_mono; }
+static time_t   cv_wall_tick(void) {
+    return cv_wall() + (time_t)((g_tick_mono - cv_mono()) / 1000ull);
+}
+
+/* Runs `ticks` alert passes a second apart and holds the incident to
+ * one rendering: evaluations rise with the ticks, but the evidence
+ * (observations) and the emitted events (event_seq) stay at one. Two
+ * rows of one device firing different details would alternate the
+ * detail signature, so observations and event_seq climb with time. */
+static void assert_one_stable_incident(sloth_state_t *s, int ticks) {
+    g_tick_mono = cv_mono();
+    sloth_clock_test_set(cv_mono_tick, cv_wall_tick);
+    for (int t = 0; t < ticks; t++) {
+        alerts_update(s);
+        g_tick_mono += 1000ull;
+    }
+    pin_clock();
+    ASSERT_EQ(count_alerts(s, ALERT_TYPE_CAM_SSDP_DEVICE), 1);
+    int i = find_alert(s, ALERT_TYPE_CAM_SSDP_DEVICE);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT_EQ(s->alerts[i].count, ticks);
+    ASSERT_EQ((int)s->alerts[i].observations, 1);
+    ASSERT_EQ((int)s->alerts[i].event_seq, 1);
+}
+
 static void test_cam_ssdp_one_device_one_alert(void) {
     /* One camera announcing DigitalSecurityCamera:1 and Basic:1 under
-     * the same device UUID (UDA §1.1.4) is one finding, counted. */
+     * the same device UUID (UDA §1.1.4) is one finding, counted, with
+     * one detail: the DSC row speaks for the device and the Basic:1
+     * row's vendor SERVER is folded in. Seen red with the per-device
+     * collapse removed from rule_cam_ssdp_device (count 1200,
+     * observations 605, event_seq 10 over 600 ticks). */
     sloth_state_t *s = fresh();
     ssdp_feed("192.168.1.64", k_dsc_alive);
     ssdp_feed("192.168.1.64",
@@ -518,12 +610,38 @@ static void test_cam_ssdp_one_device_one_alert(void) {
         "\r\n");
     ssdp_snapshot(s);
     ASSERT_EQ(s->ssdp_count, 2);
-    alerts_update(s);
-    ASSERT_EQ(count_alerts(s, ALERT_TYPE_CAM_SSDP_DEVICE), 1);
-    alerts_update(s);
-    ASSERT_EQ(count_alerts(s, ALERT_TYPE_CAM_SSDP_DEVICE), 1);
+    assert_one_stable_incident(s, 600);
     int i = find_alert(s, ALERT_TYPE_CAM_SSDP_DEVICE);
-    if (i >= 0) ASSERT_EQ(s->alerts[i].count, 4);
+    if (i < 0) return;
+    ASSERT(strstr(s->alerts[i].detail, "DigitalSecurityCamera:1") != NULL);
+    ASSERT(strstr(s->alerts[i].detail, "vendor Axis") != NULL);
+}
+
+static void test_cam_ssdp_one_device_two_ips_one_rendering(void) {
+    /* The same UUID announcing from two addresses (a dual-homed camera,
+     * or a lease change inside the table's lifetime). Seen red with the
+     * collapse removed, as above (same counts). */
+    sloth_state_t *s = fresh();
+    ssdp_feed("192.168.1.65", k_dsc_alive);
+    ssdp_feed("192.168.1.64",
+        "NOTIFY * HTTP/1.1\r\n"
+        "HOST: 239.255.255.250:1900\r\n"
+        "NT: urn:schemas-upnp-org:device:Basic:1\r\n"
+        "NTS: ssdp:alive\r\n"
+        "SERVER: Linux/3.x UPnP/1.0 Dahua/1.0\r\n"
+        "USN: uuid:cam-0001::urn:schemas-upnp-org:device:Basic:1\r\n"
+        "\r\n");
+    ssdp_snapshot(s);
+    ASSERT_EQ(s->ssdp_count, 2);
+    assert_one_stable_incident(s, 600);
+    int i = find_alert(s, ALERT_TYPE_CAM_SSDP_DEVICE);
+    if (i < 0) return;
+    /* The DSC row speaks for the device whatever its address; the
+     * other row is counted and its vendor kept. */
+    ASSERT(strstr(s->alerts[i].detail, "at 192.168.1.65") != NULL);
+    ASSERT(strcmp(s->alerts[i].match_ip, "192.168.1.65") == 0);
+    ASSERT(strstr(s->alerts[i].detail, "Dahua") != NULL);
+    ASSERT(strstr(s->alerts[i].detail, "1 more row") != NULL);
 }
 
 /* ── CAM_SETUP_OUI over beacon rows ───────────────────────── */
@@ -599,6 +717,7 @@ static void test_cam_setup_oui_once_per_bssid(void) {
 void run_camera_vendor_tests(void) {
     TEST_SUITE("camera identity: mDNS / SSDP / OUI (#106 slice A)");
     RUN_TEST(test_oui_table_rows_are_registry_shaped);
+    RUN_TEST(test_oui_table_matches_its_registry_digest);
     RUN_TEST(test_oui_table_matches_the_ieee_registry);
     RUN_TEST(test_oui_exact_match_is_not_local);
     RUN_TEST(test_oui_ul_bit_is_masked_and_reported);
@@ -619,6 +738,7 @@ void run_camera_vendor_tests(void) {
     RUN_TEST(test_cam_ssdp_media_renderer_is_quiet);
     RUN_TEST(test_cam_ssdp_msearch_for_cameras_is_quiet);
     RUN_TEST(test_cam_ssdp_one_device_one_alert);
+    RUN_TEST(test_cam_ssdp_one_device_two_ips_one_rendering);
     RUN_TEST(test_cam_setup_oui_fires_registered);
     RUN_TEST(test_cam_setup_oui_randomized_local_case_b);
     RUN_TEST(test_cam_setup_oui_quiet_on_non_camera_vendor);

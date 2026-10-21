@@ -4371,3 +4371,14 @@ kept across a byebye. `CAM_SETUP_OUI` matches a beaconing BSSID in a
 camera vendor's IEEE MA-L block with the U/L bit masked, and carries
 `randomized-local` when that bit was set. Sources in
 `research/papers/camera-vendor-identity.md`; [[alerts]] has the summary.
+
+## 2026-10-20 — #106 slice A review fixes
+
+`CAM_SSDP_DEVICE` now fires once per device UUID per tick: one camera's
+DSC:1 and Basic:1 rows, or one UUID from two addresses, used to fire
+alternating details and climb observations and `alert.update` events
+with time. The OUI table is pinned to a digest of the registry's names
+so the provenance check runs on hosts without ieee-data. [[alerts]]
+says "one alert per identity" and spells out the per-service-instance
+mDNS keying; the Ubiquiti departure from #106 Case B is marked as
+awaiting an owner ruling.
