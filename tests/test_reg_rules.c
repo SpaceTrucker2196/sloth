@@ -1,10 +1,13 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include "runner.h"
 #include "sloth.h"
 #include "alerts.h"
 #include "beacon_snoop.h"
+#include "jsonl.h"
 #include "ownership.h"
 #include "sloth_clock.h"
 #include "wifi_baseline.h"
@@ -29,12 +32,17 @@
 
 static time_t g_now = T0;
 static time_t pinned_wall(void) { return g_now; }
+/* The engine's update floor (ALERT_UPDATE_MIN_MS) is measured on the
+ * monotonic clock, so it is pinned too and moved with the wall. */
+static uint64_t g_mono = 1000000;
+static uint64_t pinned_mono(void) { return g_mono; }
 
 static sloth_state_t g_s;
 
 static void begin(void) {
     g_now = T0;
-    sloth_clock_test_set(NULL, pinned_wall);
+    g_mono = 1000000;
+    sloth_clock_test_set(pinned_mono, pinned_wall);
     alerts_clear();
     ownership_clear();
     wifi_baseline_clear();
@@ -227,6 +235,63 @@ static void test_country_absent_one_alert_per_bssid(void) {
     end();
 }
 
+/* Whole JSONL stream so far, for the change-only emission case. */
+static char g_jpath[] = "/tmp/sloth_regrules_XXXXXX";
+
+static int jsonl_count(const char *needle) {
+    static char buf[65536];
+    buf[0] = '\0';
+    FILE *fp = fopen(g_jpath, "r");
+    if (fp) {
+        size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+        buf[n] = '\0';
+        fclose(fp);
+    }
+    int c = 0;
+    for (const char *q = strstr(buf, needle); q; q = strstr(q + 1, needle))
+        c++;
+    return c;
+}
+
+static void test_country_absent_detail_is_still_across_ticks(void) {
+    /* The detail is the engine's change signature. With the live
+     * seconds-since and beacon count in it, every poll was a new
+     * observation and every ALERT_UPDATE_MIN_S an alert.update went out
+     * for each country-less AP in range. Driven through a file sink
+     * because what a remote consumer sees is the point. Seen red with
+     * the live counters restored in the detail: the observations and
+     * alert.update assertions below both failed. */
+    jsonl_close();
+    begin();
+    int fd = mkstemp(g_jpath);
+    if (fd >= 0) close(fd);
+    unlink(g_jpath);
+    ASSERT(jsonl_open(g_jpath));
+    beacon_ap_t *a = add_ap("CafeNet", BSS_A, 36);
+    g_now = T0 + COUNTRY_ABSENT_MIN_OBSERVED_S;
+    alerts_update(&g_s);
+    ASSERT_EQ(jsonl_count("\"type\":\"alert.create\""), 1);
+    for (int r = 0; r < 5; r++) {
+        g_now  += ALERT_UPDATE_MIN_S + 1;
+        g_mono += (uint64_t)(ALERT_UPDATE_MIN_S + 1) * 1000u;
+        a->frame_count += 600;
+        a->last_seen = g_now;
+        alerts_update(&g_s);
+    }
+    int i = find_alert(&g_s, ALERT_TYPE_COUNTRY_ABSENT);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)g_s.alerts[i].observations, 1);
+        ASSERT(strstr(g_s.alerts[i].detail, ">=60s and >=3 beacons") != NULL);
+    }
+    ASSERT_EQ(jsonl_count("\"type\":\"alert.update\""), 0);
+    jsonl_close();
+    unlink(g_jpath);
+    g_jpath[strlen(g_jpath) - 6] = '\0';
+    strcat(g_jpath, "XXXXXX");
+    end();
+}
+
 /* ── DFS_MASKING ────────────────────────────────────────────── */
 
 /* Freeze the RF baseline over whatever rows exist now; rows added
@@ -350,6 +415,37 @@ static void test_dfs_masking_quiet_when_own_csa_led_there(void) {
     end();
 }
 
+static void test_dfs_masking_own_csa_isolated_by_hidden_ssid(void) {
+    /* The case above also passes through the SSID-peer loop, which
+     * finds the AP's own row under its own SSID. A hidden SSID has no
+     * peers, so here only the own-BSSID branch can excuse the AP. Seen
+     * red with that branch disabled. */
+    begin();
+    freeze_baseline();
+    add_ap("", BSS_A, 100);
+    add_csa(BSS_A, 100, T0 - 1);
+    alerts_update(&g_s);
+    ASSERT_EQ(find_alert(&g_s, ALERT_TYPE_DFS_MASKING), -1);
+    end();
+}
+
+static void test_dfs_masking_csa_must_come_from_the_bss_it_names(void) {
+    /* addr2 != addr3: someone else speaking for the BSS. Not a move the
+     * BSS announced, for either branch. Seen red with the ta check
+     * removed. */
+    begin();
+    add_ap("Clinic", BSS_B, 36);
+    freeze_baseline();
+    g_s.beacon_aps[0].channel = 100;            /* the peer did move */
+    add_ap("", BSS_C, 100);                     /* own-branch shape */
+    add_csa(BSS_C, 100, T0 - 1)->ta[5] ^= 0x80;
+    add_ap("Clinic", BSS_A, 100);               /* peer-branch shape */
+    add_csa(BSS_B, 100, T0 - 1)->ta[5] ^= 0x80;
+    alerts_update(&g_s);
+    ASSERT_EQ(count_alerts(&g_s, ALERT_TYPE_DFS_MASKING), 2);
+    end();
+}
+
 static void test_dfs_masking_csa_must_name_that_channel(void) {
     begin();
     freeze_baseline();
@@ -379,6 +475,7 @@ static void test_dfs_masking_quiet_when_ssid_peer_announced(void) {
     begin();
     add_ap("Clinic", BSS_B, 36);
     freeze_baseline();
+    g_s.beacon_aps[0].channel = 100;    /* the announcer went there too */
     add_ap("Clinic", BSS_A, 100);
     add_csa(BSS_B, 100, T0 - 1);        /* the ESS moved off a radar hit */
     alerts_update(&g_s);
@@ -388,6 +485,25 @@ static void test_dfs_masking_quiet_when_ssid_peer_announced(void) {
              "Elsewhere");
     alerts_update(&g_s);
     ASSERT(find_alert(&g_s, ALERT_TYPE_DFS_MASKING) >= 0);
+    end();
+}
+
+static void test_dfs_masking_reports_the_csa_lure(void) {
+    /* #63's lure: a CSA forged in the real AP's name (addr2 = addr3 =
+     * its BSSID, both free to forge) names a DFS channel, and a twin of
+     * the same SSID comes up there. The real AP never moves — it keeps
+     * beaconing on 36 — so the peer CSA must not excuse the newcomer.
+     * Seen red with the "announcer heard on the target" check removed. */
+    begin();
+    add_ap("Clinic", BSS_B, 36);
+    freeze_baseline();
+    add_ap("Clinic", BSS_A, 100);
+    add_csa(BSS_B, 100, T0 - 1);
+    alerts_update(&g_s);
+    int i = find_alert(&g_s, ALERT_TYPE_DFS_MASKING);
+    ASSERT(i >= 0);
+    if (i >= 0)
+        ASSERT_STR(g_s.alerts[i].key, "dfsmask:02:11:22:33:44:01");
     end();
 }
 
@@ -477,7 +593,7 @@ static void test_dfs_masking_designated_bssid_stays_low(void) {
     end();
 }
 
-static void test_dfs_masking_warn_when_half_of_twin_pair(void) {
+static void test_dfs_masking_warn_when_twin_half_of_pair(void) {
     begin();
     freeze_baseline();
     add_ap("Lobby", BSS_A, 100);
@@ -492,6 +608,29 @@ static void test_dfs_masking_warn_when_half_of_twin_pair(void) {
     if (i >= 0) {
         ASSERT_EQ((int)g_s.alerts[i].sev, (int)ALERT_SEV_WARN);
         ASSERT(strstr(g_s.alerts[i].detail, "evil-twin pair") != NULL);
+    }
+    end();
+}
+
+static void test_dfs_masking_real_half_of_twin_pair_stays_low(void) {
+    /* The episode's real_bssid is the AP the twin rules judged
+     * legitimate; its coming up on a DFS channel is the benign reading
+     * and must not be escalated by the impostor's presence. Seen red
+     * (WARN) with real_bssid matched as well. */
+    begin();
+    freeze_baseline();
+    add_ap("Lobby", BSS_A, 100);
+    g_s.twin_episode_count = 1;
+    memcpy(g_s.twin_episodes[0].twin_bssid, BSS_C, 6);
+    memcpy(g_s.twin_episodes[0].real_bssid, BSS_A, 6);
+    snprintf(g_s.twin_episodes[0].ssid, sizeof(g_s.twin_episodes[0].ssid),
+             "Lobby");
+    alerts_update(&g_s);
+    int i = find_alert(&g_s, ALERT_TYPE_DFS_MASKING);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)g_s.alerts[i].sev, (int)ALERT_SEV_LOW);
+        ASSERT(strstr(g_s.alerts[i].detail, "evil-twin") == NULL);
     }
     end();
 }
@@ -626,6 +765,7 @@ void run_reg_rules_tests(void) {
     RUN_TEST(test_country_absent_ssid_only_is_not_claimed_yours);
     RUN_TEST(test_country_absent_names_malformed_elements);
     RUN_TEST(test_country_absent_one_alert_per_bssid);
+    RUN_TEST(test_country_absent_detail_is_still_across_ticks);
     TEST_SUITE("DFS_MASKING (#101 slice A)");
     RUN_TEST(test_dfs_masking_inert_before_baseline);
     RUN_TEST(test_dfs_masking_fires_low_on_new_bssid);
@@ -634,15 +774,19 @@ void run_reg_rules_tests(void) {
     RUN_TEST(test_dfs_masking_quiet_on_non_dfs_channels);
     RUN_TEST(test_dfs_masking_quiet_for_6ghz_numbering);
     RUN_TEST(test_dfs_masking_quiet_when_own_csa_led_there);
+    RUN_TEST(test_dfs_masking_own_csa_isolated_by_hidden_ssid);
+    RUN_TEST(test_dfs_masking_csa_must_come_from_the_bss_it_names);
     RUN_TEST(test_dfs_masking_csa_must_name_that_channel);
     RUN_TEST(test_dfs_masking_csa_must_precede_arrival);
     RUN_TEST(test_dfs_masking_quiet_when_ssid_peer_announced);
+    RUN_TEST(test_dfs_masking_reports_the_csa_lure);
     RUN_TEST(test_dfs_masking_hidden_ssid_has_no_peers);
     RUN_TEST(test_dfs_masking_needs_beacons);
     RUN_TEST(test_dfs_masking_uses_the_named_countrys_table);
     RUN_TEST(test_dfs_masking_warn_on_designated_ssid_impostor);
     RUN_TEST(test_dfs_masking_designated_bssid_stays_low);
-    RUN_TEST(test_dfs_masking_warn_when_half_of_twin_pair);
+    RUN_TEST(test_dfs_masking_warn_when_twin_half_of_pair);
+    RUN_TEST(test_dfs_masking_real_half_of_twin_pair_stays_low);
     TEST_SUITE("regulatory rules from hand-built beacons (#101 slice A)");
     RUN_TEST(test_e2e_country_element_decides_country_absent);
     RUN_TEST(test_e2e_first_seen_channel_is_set_once);

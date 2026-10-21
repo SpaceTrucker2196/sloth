@@ -3,7 +3,7 @@ source_url: https://www.ecfr.gov/current/title-47/chapter-I/subchapter-A/part-15
 retrieved: 2026-10-20
 topics: [dfs, radar, regulatory, fcc, etsi, unii, 5ghz, cac, heuristic]
 alert_kinds: [ALERT_TYPE_DFS_MASKING]
-citation: 47 CFR §15.407 (a)(1)-(3), (h)(2) (U-NII bands, radar detection); FCC KDB 905462 D02 (DFS compliance procedures, 60 s channel availability check); ETSI EN 301 893 V2.1.1 (2017-05) §4.2.6 (DFS, incl. 10 min CAC on 5600-5650 MHz) under Directive 2014/53/EU and Commission Decision 2005/513/EC as amended by 2007/90/EC
+citation: 47 CFR §15.407 (a)(1)-(3), (h)(2) (U-NII bands, radar detection), (h)(2)(ii) (60 s channel availability check); ETSI EN 301 893 V2.1.1 (2017-05) §4.2.6 (DFS), values in Annex D Table D.1 (60 s CAC, 10 min on 5600-5650 MHz) under Directive 2014/53/EU and Commission Decision 2005/513/EC as amended by 2007/90/EC
 ---
 # DFS — why a BSS rarely starts cold on a radar channel
 
@@ -15,18 +15,22 @@ Our own description, not an excerpt.
 ## The rule both regulators impose
 
 - **FCC, 47 CFR §15.407.** U-NII-1 (5150-5250 MHz, channels 36-48) and
-  U-NII-3 (5725-5850 MHz, 149-165) carry no radar-detection duty.
-  U-NII-2A (5250-5350, 52-64) and U-NII-2C (5470-5725, 100-144) do:
-  §15.407(h)(2) requires dynamic frequency selection there. The test
-  procedure that sets the channel availability check (CAC) at 60 s
-  before first transmission is the FCC's DFS guidance, KDB 905462 D02,
-  not the section itself.
+  U-NII-3 (5725-5850 MHz, 149-165; §15.407(a)(3)(i)) carry no
+  radar-detection duty. U-NII-2A (5250-5350, 52-64) and U-NII-2C
+  (5470-5725, 100-144) do: §15.407(h)(2) requires dynamic frequency
+  selection there, and §15.407(h)(2)(ii), "Channel Availability Check
+  Time", sets the channel availability check (CAC): the device may
+  start using the channel if no radar is detected within 60 seconds.
+  (a)(3)(ii)-(v) now also cover U-NII-4 (5850-5895 MHz), which has no
+  DFS duty and is not in the table.
 - **ETSI, EN 301 893 V2.1.1.** The harmonised standard for 5 GHz RLAN
   under the Radio Equipment Directive 2014/53/EU, with the band plan of
   Commission Decision 2005/513/EC (amended 2007/90/EC). It covers
-  5150-5350 and 5470-5725 MHz only; DFS applies on 5250-5350 and
-  5470-5725, with a 60 s CAC, extended to 10 minutes on channels
-  touching 5600-5650 MHz (weather radar: 120, 124, 128 at 20 MHz).
+  5150-5350 and 5470-5725 MHz only; DFS (§4.2.6) applies on 5250-5350
+  and 5470-5725. The values §4.2.6 refers to are in Annex D, Table D.1:
+  a 60 s CAC, extended to 10 minutes on channels whose bandwidth falls
+  wholly or partly in 5600-5650 MHz (note 1; weather radar: 120, 124,
+  128 at 20 MHz).
   Channel 144 is not in it (5710-5730 MHz runs past 5725), and nor are
   149-165, which other ETSI documents and national rules address.
 
@@ -50,7 +54,8 @@ that reboots onto a DFS channel after its CAC produces exactly the same
 observation, as does an AP whose channel a hopping radio first reached
 late. That is why sloth reports it at LOW, raises it to WARN only on
 corroboration from outside the rule (a designated SSID from a BSSID
-that is not designated, or a BSSID already in an evil-twin episode),
+that is not designated, or a BSSID that is the twin half of an
+evil-twin episode — never the half the twin rules judged real),
 and assigns no ATT&CK technique: the finding is a shape, not an
 observed adversary action. `tests/test_research_corpus.c ::
 test_uncitable_kinds_with_a_real_basis_are_still_cited` holds this

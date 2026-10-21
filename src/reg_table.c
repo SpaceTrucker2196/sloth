@@ -16,17 +16,21 @@
  * (a)(1) U-NII-1   5150-5250 MHz   36-48    no radar detection
  * (a)(2) U-NII-2A  5250-5350 MHz   52-64    DFS, §15.407(h)(2)
  * (a)(2) U-NII-2C  5470-5725 MHz   100-144  DFS, §15.407(h)(2)
- * (a)(3) U-NII-3   5725-5850 MHz   149-165  no radar detection
+ * (a)(3)(i) U-NII-3 5725-5850 MHz   149-165  no radar detection
  *
  * Channel 144 (5710-5730 MHz) straddles 5725 and is listed because the
  * U-NII-2C/U-NII-3 boundary straddle is permitted; its 5470-5725 part
- * is what makes it DFS. The 60 s channel availability check is not in
- * §15.407 itself but in the FCC's DFS test procedure, KDB 905462 D02.
- * U-NII-4 (5850-5895 MHz) is not here: it was not verified for this
- * table, and an unverified row is what the table refuses to carry. */
+ * is what makes it DFS. The 60 s channel availability check is
+ * §15.407(h)(2)(ii), "Channel Availability Check Time": the device "may
+ * start using the channel if no radar signal ... is detected within 60
+ * seconds". (a)(3)(ii)-(v) now also cover U-NII-4 (5850-5895 MHz,
+ * indoor access points and their clients), which has no DFS duty; its
+ * channels are not tabulated here because their numbering was not
+ * checked in this pass, and an unchecked row is what the table refuses
+ * to carry. */
 #define FCC_U1  "47 CFR 15.407(a)(1)"
-#define FCC_U2  "47 CFR 15.407(a)(2), (h)(2); CAC per KDB 905462 D02"
-#define FCC_U3  "47 CFR 15.407(a)(3)"
+#define FCC_U2  "47 CFR 15.407(a)(2), (h)(2); CAC (h)(2)(ii)"
+#define FCC_U3  "47 CFR 15.407(a)(3)(i)"
 
 static const reg_chan_row_t g_fcc_rows[] = {
     {  36, 5180, 0,          0, FCC_U1 },
@@ -65,15 +69,16 @@ static const reg_chan_row_t g_fcc_rows[] = {
  *   5150-5350 MHz   36-64    DFS on 52-64 (5250-5350)
  *   5470-5725 MHz   100-140  DFS throughout
  *
- * §4.2.6 sets the channel availability check at 60 s, and at 10 min on
- * any channel touching 5600-5650 MHz (weather radar): 120, 124, 128 at
+ * §4.2.6 is the DFS requirement; the values it refers to are in Annex D,
+ * Table D.1: a channel availability check of 60 s, and of 10 min on
+ * any channel whose bandwidth falls wholly or partly in 5600-5650 MHz (weather radar): 120, 124, 128 at
  * 20 MHz. 144 is not listed — 5710-5730 MHz runs past 5725 — and nor is
  * 149-165, which EN 301 893 does not cover (other ETSI documents and
  * national rules do; a missing row here is "not in this source"). */
 #define ETSI_LO  "EN 301 893 V2.1.1, 5150-5250 MHz"
-#define ETSI_MID "EN 301 893 V2.1.1, 5250-5350 MHz, DFS §4.2.6"
-#define ETSI_HI  "EN 301 893 V2.1.1, 5470-5725 MHz, DFS §4.2.6"
-#define ETSI_WX  "EN 301 893 V2.1.1, 5600-5650 MHz, DFS §4.2.6, 10 min CAC"
+#define ETSI_MID "EN 301 893 V2.1.1, 5250-5350 MHz, DFS §4.2.6, Table D.1"
+#define ETSI_HI  "EN 301 893 V2.1.1, 5470-5725 MHz, DFS §4.2.6, Table D.1"
+#define ETSI_WX  "EN 301 893 V2.1.1, 5600-5650 MHz, DFS §4.2.6, 10 min CAC per Table D.1"
 
 static const reg_chan_row_t g_etsi_rows[] = {
     {  36, 5180, 0,          0, ETSI_LO },

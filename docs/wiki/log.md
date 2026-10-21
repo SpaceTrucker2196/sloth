@@ -4318,3 +4318,20 @@ there. Its DFS set comes from the new compiled-in table
 cited-without-technique list in `tests/test_research_corpus.c`, with
 `research/ieee/802.11d-country-element.md` and
 `research/regulatory/dfs-15.407-en301893.md` as their sources.
+
+## 2026-10-20 — #101 slice A review: citations corrected, CSA lure closed, signature stilled
+
+The FCC channel availability check is cited as 47 CFR 15.407(h)(2)(ii)
+("Channel Availability Check Time"), not as FCC KDB 905462 D02: the 60 s
+is in the section itself. The ETSI values are cited as EN 301 893 §4.2.6
+with the numbers from Annex D Table D.1. U-NII-3 is (a)(3)(i); (a)(3)
+now also covers U-NII-4, still untabulated. `DFS_MASKING` no longer
+accepts a CSA from an SSID peer as an excuse unless the CSA's addr2
+equals its addr3 and the peer was then heard on the target channel: a
+CSA forged in the real AP's name (the #63 lure) used to suppress the
+finding in exactly the case it exists for. Its WARN escalation now
+reads only the twin half of an evil-twin episode; the half the twin
+rules judged real stays LOW. `COUNTRY_ABSENT` states its observation
+floors instead of live seconds and beacon counts, which had made every
+tick a new observation and an `alert.update` every 60 s per AP. See
+[[regulatory-table]] and [[alerts]].

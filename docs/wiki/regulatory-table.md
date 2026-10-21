@@ -8,9 +8,9 @@ type: reference
 
 **Summary**: sloth carries a small compiled-in table of 5 GHz channels for two jurisdictions — the FCC (47 CFR §15.407) and ETSI (EN 301 893, applied in the EU member states) — recording which 20 MHz channels each source lists and which of them require radar detection (DFS). It is **cited, dated 2026-10-20, and heuristic**: an aid to reading what an AP does, never a statement of what is lawful where the AP stands. Today one rule reads it, `DFS_MASKING`.
 
-**Sources**: `src/reg_table.c`, `src/reg_table.h`, `research/regulatory/dfs-15.407-en301893.md`, 47 CFR §15.407 (eCFR, read 2026-10-20), FCC KDB 905462 D02, ETSI EN 301 893 V2.1.1 (2017-05), Directive 2014/53/EU, Commission Decision 2005/513/EC as amended by 2007/90/EC, the EU member-state list on europa.eu. Issue #101 slice A; owner rulings on #145.
+**Sources**: `src/reg_table.c`, `src/reg_table.h`, `research/regulatory/dfs-15.407-en301893.md`, 47 CFR §15.407 (eCFR, read 2026-10-20; CAC at (h)(2)(ii)), ETSI EN 301 893 V2.1.1 (2017-05) §4.2.6 and Annex D Table D.1, Directive 2014/53/EU, Commission Decision 2005/513/EC as amended by 2007/90/EC, the EU member-state list on europa.eu. Issue #101 slice A; owner rulings on #145.
 
-**Last updated**: 2026-10-20 (#101 slice A: table created).
+**Last updated**: 2026-10-20 (#101 slice A: table created; review: CAC cited to 15.407(h)(2)(ii), ETSI values to Table D.1).
 
 ---
 
@@ -60,25 +60,28 @@ mapped.
 | Channels | MHz (20 MHz centres) | DFS | CAC | Clause |
 |---|---|---|---|---|
 | 36, 40, 44, 48 | 5180-5240 | no | — | §15.407(a)(1), U-NII-1 |
-| 52, 56, 60, 64 | 5260-5320 | yes | 60 s | §15.407(a)(2), (h)(2), U-NII-2A |
-| 100-144 (step 4) | 5500-5720 | yes | 60 s | §15.407(a)(2), (h)(2), U-NII-2C |
-| 149, 153, 157, 161, 165 | 5745-5825 | no | — | §15.407(a)(3), U-NII-3 |
+| 52, 56, 60, 64 | 5260-5320 | yes | 60 s | §15.407(a)(2), (h)(2); CAC (h)(2)(ii); U-NII-2A |
+| 100-144 (step 4) | 5500-5720 | yes | 60 s | §15.407(a)(2), (h)(2); CAC (h)(2)(ii); U-NII-2C |
+| 149, 153, 157, 161, 165 | 5745-5825 | no | — | §15.407(a)(3)(i), U-NII-3 |
 
-The 60 s channel availability check comes from the FCC's DFS test
-procedure, KDB 905462 D02, not from §15.407 itself. Channel 144 straddles
+The 60 s channel availability check is §15.407(h)(2)(ii), "Channel
+Availability Check Time": a device "may start using the channel if no
+radar signal ... is detected within 60 seconds". Channel 144 straddles
 the U-NII-2C/U-NII-3 edge at 5725 MHz; its 5470-5725 part is what makes
-it DFS. U-NII-4 (5850-5895) is absent because it was not verified for
-this table.
+it DFS. §15.407(a)(3)(ii)-(v) now also cover U-NII-4 (5850-5895 MHz,
+indoor access points and their clients), which carries no DFS duty; its
+channels are absent because their numbering was not checked for this
+table.
 
 ## ETSI — EN 301 893 V2.1.1
 
 | Channels | MHz (20 MHz centres) | DFS | CAC | Clause |
 |---|---|---|---|---|
 | 36, 40, 44, 48 | 5180-5240 | no | — | 5150-5250 MHz |
-| 52, 56, 60, 64 | 5260-5320 | yes | 60 s | 5250-5350 MHz, §4.2.6 |
-| 100, 104, 108, 112, 116 | 5500-5580 | yes | 60 s | 5470-5725 MHz, §4.2.6 |
-| 120, 124, 128 | 5600-5640 | yes, weather radar | 600 s | 5600-5650 MHz, §4.2.6 |
-| 132, 136, 140 | 5660-5700 | yes | 60 s | 5470-5725 MHz, §4.2.6 |
+| 52, 56, 60, 64 | 5260-5320 | yes | 60 s | 5250-5350 MHz, §4.2.6, Table D.1 |
+| 100, 104, 108, 112, 116 | 5500-5580 | yes | 60 s | 5470-5725 MHz, §4.2.6, Table D.1 |
+| 120, 124, 128 | 5600-5640 | yes, weather radar | 600 s | 5600-5650 MHz, §4.2.6, Table D.1 |
+| 132, 136, 140 | 5660-5700 | yes | 60 s | 5470-5725 MHz, §4.2.6, Table D.1 |
 
 Not listed: 144 (5710-5730 MHz runs past 5725) and 149-165 (outside the
 standard's scope).

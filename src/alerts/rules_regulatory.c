@@ -25,16 +25,20 @@
 #include "reg_table.h"
 #include "wifi_baseline.h"
 
-/* Is this BSSID either half of a materialised evil-twin episode? The
+/* Is this BSSID the twin half of a materialised evil-twin episode? The
  * episodes are what the twin rules already decided is a same-SSID,
- * different-radio pair, so this adds no judgement of its own. */
-static int bssid_in_twin_episode(const sloth_state_t *s,
-                                 const uint8_t bssid[6]) {
-    for (int i = 0; i < s->twin_episode_count; i++) {
-        const twin_episode_t *e = &s->twin_episodes[i];
-        if (memcmp(e->twin_bssid, bssid, 6) == 0 ||
-            memcmp(e->real_bssid, bssid, 6) == 0) return 1;
-    }
+ * different-radio pair, so this adds no judgement of its own.
+ *
+ * The twin half only. The episode's real_bssid is the radio the twin
+ * rules judged to be the legitimate AP, so a real half that comes up
+ * on a DFS channel is the benign reading — an AP rebooting after its
+ * CAC — and raising it would make the impostor's presence escalate the
+ * victim. It stays LOW, like any other new BSSID. */
+static int bssid_is_twin_half(const sloth_state_t *s,
+                              const uint8_t bssid[6]) {
+    for (int i = 0; i < s->twin_episode_count; i++)
+        if (memcmp(s->twin_episodes[i].twin_bssid, bssid, 6) == 0)
+            return 1;
     return 0;
 }
 
@@ -79,8 +83,7 @@ void rule_country_absent(const sloth_state_t *s, time_t now) {
 
         /* Absence needs observation behind it: time AND readings, for
          * the reason TPC_ABSENT_MIN_BEACONS records. */
-        if (!a->first_seen ||
-            now - a->first_seen < COUNTRY_ABSENT_MIN_OBSERVED_S) continue;
+        if (now - a->first_seen < COUNTRY_ABSENT_MIN_OBSERVED_S) continue;
         if (a->frame_count < COUNTRY_ABSENT_MIN_BEACONS) continue;
 
         const int my_bssid = ownership_is_my_bssid(a->bssid);
@@ -106,13 +109,19 @@ void rule_country_absent(const sloth_state_t *s, time_t now) {
                      " (%d malformed Country element(s) seen)",
                      a->reg.malformed_country);
 
+        /* The observation floors, never the live counters: the detail
+         * is the engine's change signature (fire_inv's detail_sig), and
+         * a seconds-since or beacon total in it would read as new
+         * evidence every tick and send an alert.update every
+         * ALERT_UPDATE_MIN_S for every country-less AP in range
+         * (agents/AGENTS.md, change-only emission). */
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
                  "%.17s \"%.20s\" ch%d: no Country element (802.11d, tag 7)"
-                 " in %lds over %u beacons%s - heuristic, no advisory;"
+                 " over >=%ds and >=%d beacons%s - heuristic, no advisory;"
                  " names no regulatory domain, not proof of a rogue%s",
                  bss, a->ssid[0] ? a->ssid : "<hidden>", a->channel,
-                 (long)(now - a->first_seen), (unsigned)a->frame_count,
+                 COUNTRY_ABSENT_MIN_OBSERVED_S, COUNTRY_ABSENT_MIN_BEACONS,
                  malformed,
                  my_bssid ? " - YOUR network"
                  : my_ssid ? " - carries YOUR SSID from a BSSID not"
@@ -127,25 +136,48 @@ void rule_country_absent(const sloth_state_t *s, time_t now) {
 /* Did a Channel Switch Announcement lead this AP to `channel`?
  *
  * "Leading there" is a CSA naming `channel` as its target, heard no
- * later than DFS_MASK_CSA_SLACK_S after the AP's first beacon, from
- * either the AP's own BSSID or a BSSID beaconing the same non-empty
- * SSID — an ESS moving off a radar hit takes every radio with it, and
- * the one sloth heard announce may not be the one it then hears land.
+ * later than DFS_MASK_CSA_SLACK_S after the AP's first beacon, sent by
+ * the BSS it names (addr2 == addr3), and either
+ *
+ *   - announced in the AP's own BSSID, or
+ *   - announced by a BSSID beaconing the same non-empty SSID that has
+ *     since been heard on `channel` itself — an ESS moving off a radar
+ *     hit takes every radio with it, and the one sloth heard announce
+ *     may not be the one it then hears land.
+ *
+ * Both conditions on the peer case exist because of the CSA lure
+ * (#63): a CSA forged in the real AP's name (addr3 = its BSSID) naming
+ * a DFS channel, then an evil twin of the same SSID coming up there.
+ * addr3 is spoofable and costs nothing, so a peer CSA alone would
+ * excuse exactly the shape this rule is for. What the forger cannot
+ * make happen is the real AP actually moving: it keeps beaconing on its
+ * old channel, its row's channel never becomes `channel`, and the
+ * exemption does not apply. A forger who also spoofs addr2 passes the
+ * first condition but not the second. A forged CSA is CSA_ABUSE's
+ * subject, not this rule's; the two report independently, and the lure
+ * may well raise both.
+ *
+ * The own-BSSID case needs no "moved" check: the AP is being heard on
+ * `channel`, which is the move.
  *
  * Bounded by the CSA ring (SLOTH_CSA_MAX_EVENTS, newest first): a move
  * announced long enough ago to have been pushed out reads as "no CSA".
- * That errs toward reporting, which a LOW finding can afford. */
+ * So does a genuine move whose announcer sloth has not yet re-heard on
+ * the new channel (a --hop run that has not come round to it). Both
+ * err toward reporting, which a LOW finding can afford. */
 static int csa_led_to(const sloth_state_t *s, const beacon_ap_t *a,
                       int channel) {
     for (int i = 0; i < s->csa_count; i++) {
         const sloth_csa_event_t *e = &s->csa_events[i];
         if (e->new_channel != channel) continue;
         if (!e->ts || e->ts > a->first_seen + DFS_MASK_CSA_SLACK_S) continue;
+        if (memcmp(e->ta, e->bssid, 6) != 0) continue;
         if (memcmp(e->bssid, a->bssid, 6) == 0) return 1;
         if (!a->ssid[0]) continue;
         for (int j = 0; j < s->beacon_count; j++) {
             const beacon_ap_t *b = &s->beacon_aps[j];
             if (memcmp(b->bssid, e->bssid, 6) != 0) continue;
+            if (b->channel != channel) continue;
             if (strcmp(b->ssid, a->ssid) == 0) return 1;
         }
     }
@@ -156,8 +188,9 @@ static int csa_led_to(const sloth_state_t *s, const beacon_ap_t *a,
  * channel with no CSA leading there.
  *
  * On 52-64 and 100-144 a transmitter must listen for radar before it
- * may start (47 CFR 15.407(h)(2); EN 301 893 §4.2.6): a 60 s channel
- * availability check, ten minutes on 120-128 under ETSI. The common
+ * may start (47 CFR 15.407(h)(2)(ii); EN 301 893 §4.2.6, values in
+ * Table D.1): a 60 s channel availability check, ten minutes on 120-128
+ * under ETSI. The common
  * ways a BSS arrives on such a channel are therefore "it was there
  * before we were" and "it moved there by announcing a switch". A BSSID
  * that turns up there after the RF picture settled, with no
@@ -192,7 +225,8 @@ void rule_dfs_masking(const sloth_state_t *s, time_t now) {
         const beacon_ap_t *a = &s->beacon_aps[i];
         const int ch = a->first_seen_channel;
 
-        if (ch <= 0) continue;
+        /* 0 (never set) is not a channel; ap_band_label() reads it
+         * as "?", so the band test below is what excludes it. */
         if (strcmp(ap_band_label(ch, a->channel_source), "5 GHz") != 0)
             continue;
         if (a->frame_count < DFS_MASK_MIN_BEACONS) continue;
@@ -208,7 +242,7 @@ void rule_dfs_masking(const sloth_state_t *s, time_t now) {
         const int my_bssid = ownership_is_my_bssid(a->bssid);
         const int ssid_impostor = !my_bssid && a->ssid[0] &&
                                   ownership_is_my_ssid(a->ssid);
-        const int twin = bssid_in_twin_episode(s, a->bssid);
+        const int twin = bssid_is_twin_half(s, a->bssid);
 
         char bss[20];
         mac_to_str(a->bssid, bss, sizeof(bss));

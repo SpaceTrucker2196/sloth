@@ -8,8 +8,9 @@
  * Every expectation below is written out from the sources, not derived
  * from the table under test: the channel sets from 47 CFR 15.407(a)
  * and EN 301 893's two sub-bands, the DFS flags from 15.407(h)(2) and
- * EN 301 893 §4.2.6, the CACs from KDB 905462 D02 (60 s) and §4.2.6
- * (600 s on 5600-5650 MHz). docs/wiki/regulatory-table.md states the
+ * EN 301 893 §4.2.6, the CACs from 15.407(h)(2)(ii) (60 s) and
+ * EN 301 893 Table D.1, which §4.2.6 refers to (60 s; 600 s on
+ * 5600-5650 MHz). docs/wiki/regulatory-table.md states the
  * same values, so an edit to src/reg_table.c that the page does not
  * describe goes red here.
  */
