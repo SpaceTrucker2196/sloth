@@ -2283,13 +2283,15 @@ static void seed_camera_device(sloth_state_t *s, int cls, int mask,
     snprintf(d->camera_model,  sizeof(d->camera_model),  "%s", model);
 }
 
-/* Written as observed, and kept as history: the mask ORs, the class
- * and the setup flag only rise, and an empty vendor/model never
- * overwrites a recorded one. Seen to fail with the upsert's cam_signals
- * set to excluded.cam_signals (the mask reads 4, the WSD bit lost) and
- * with the camera_model COALESCE replaced by excluded.camera_model (the
- * model reads ""). */
-static void test_device_camera_columns_are_sticky(void) {
+/* IP-joined evidence is the latest tick's, so a lease reused by
+ * another host does not leave a camera on that host's MAC for good:
+ * the record that read camera off a WS-Discovery row reads nothing once
+ * the row no longer joins. Seen to fail with the upsert's device_class
+ * as MAX(devices.device_class, ...) (class stays 2), with cam_signals
+ * as devices.cam_signals|excluded (the WSD bit stays), and with the
+ * camera_model / camera_vendor kept by COALESCE whatever the bits (the
+ * model and vendor stay). */
+static void test_device_ip_joined_camera_columns_follow_latest(void) {
     fresh_db();
     sloth_state_t s;
     seed_camera_device(&s, DEV_CLASS_CAMERA, CAM_SIG_WS_DISCOVERY,
@@ -2301,17 +2303,56 @@ static void test_device_camera_columns_are_sticky(void) {
     q_text("SELECT camera_model FROM devices", v, sizeof(v));
     ASSERT_STR(v, "HIKVISION DS-2CD2042WD-I");
 
-    /* Next tick: the ONVIF row aged out, an mDNS row is all that is left. */
-    seed_camera_device(&s, DEV_CLASS_CAMERA_VENDOR, CAM_SIG_MDNS_SERVICE,
-                       "", "", 0);
+    /* Next tick: the ONVIF row no longer joins this MAC. */
+    seed_camera_device(&s, DEV_CLASS_UNKNOWN, 0, "", "", 0);
     db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT device_class FROM devices"), 0);
+    ASSERT_EQ(q_int("SELECT cam_signals FROM devices"), 0);
+    q_text("SELECT COALESCE(camera_model,'') FROM devices", v, sizeof(v));
+    ASSERT_STR(v, "");
+    q_text("SELECT COALESCE(camera_vendor,'') FROM devices", v, sizeof(v));
+    ASSERT_STR(v, "");
+    db_close();
+    unlink(db_path);
+}
+
+/* MAC-keyed evidence is history: a setup SSID or camera-vendor OUI was
+ * seen on this very BSSID, so its bits OR, the class they imply and
+ * the setup flag only rise, and the vendor is kept while they stand;
+ * IP-joined bits beside them still follow the latest tick. Seen to fail
+ * with setup_mode=excluded.setup_mode (setup reads 0), with the
+ * cam_signals mask `&18` dropped (the beacon bits are lost), and with
+ * the class CASE dropped (class reads 0). */
+static void test_device_mac_keyed_camera_columns_are_sticky(void) {
+    fresh_db();
+    sloth_state_t s;
+    seed_camera_device(&s, DEV_CLASS_CAMERA,
+                       CAM_SIG_SETUP_SSID | CAM_SIG_RTSP_UNAUTH,
+                       "Hikvision", "", 1);
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT setup_mode FROM devices"), 1);
+
+    /* The SoftAP stopped beaconing; nothing joins this tick. */
+    seed_camera_device(&s, DEV_CLASS_UNKNOWN, 0, "", "", 0);
+    db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT setup_mode FROM devices"), 1);
+    ASSERT_EQ(q_int("SELECT cam_signals FROM devices"), CAM_SIG_SETUP_SSID);
     ASSERT_EQ(q_int("SELECT device_class FROM devices"), 2);
-    ASSERT_EQ(q_int("SELECT cam_signals FROM devices"),
-              CAM_SIG_WS_DISCOVERY | CAM_SIG_MDNS_SERVICE);
-    q_text("SELECT camera_model FROM devices", v, sizeof(v));
-    ASSERT_STR(v, "HIKVISION DS-2CD2042WD-I");
-    q_text("SELECT camera_vendor FROM devices", v, sizeof(v));
+    char v[64];
+    q_text("SELECT COALESCE(camera_vendor,'') FROM devices", v, sizeof(v));
     ASSERT_STR(v, "Hikvision");
+
+    /* An OUI-only BSSID implies camera-vendor, never camera. */
+    seed_camera_device(&s, DEV_CLASS_CAMERA_VENDOR, CAM_SIG_SETUP_OUI,
+                       "Axis", "", 0);
+    s.devices[0].mac[5] = 0x65;
+    db_tick(&s, 1700000200);
+    s.devices[0].device_class = DEV_CLASS_UNKNOWN;
+    s.devices[0].cam_signal_mask = 0;
+    s.devices[0].camera_vendor[0] = '\0';
+    db_tick(&s, 1700000300);
+    ASSERT_EQ(q_int("SELECT device_class FROM devices"
+                    " WHERE cam_signals=16"), 1);
     db_close();
     unlink(db_path);
 }
@@ -2404,6 +2445,32 @@ static void test_v5_file_migrates_additively(void) {
     unlink(db_path);
 }
 
+/* A v5 file that never got as far as creating `devices` (a run that
+ * stopped after the meta stamp) has nothing to alter: it is stamped v6
+ * and the schema creates the table whole. Seen to fail with
+ * migrate_v5()'s `have_devices &&` dropped (the ALTER on the missing
+ * table fails and db_open() refuses the file). */
+static void test_v5_file_without_devices_migrates(void) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','5');", NULL, NULL, NULL),
+        SQLITE_OK);
+    sqlite3_close(h);
+    chmod(db_path, 0600);
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[16];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "6");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
+                    " WHERE name='cam_signals'"), 1);
+    db_close();
+    unlink(db_path);
+}
+
 /* The migration is one transaction: a v5 file on which the last ALTER
  * fails (here, cam_signals already exists) keeps v5, its rows, and none
  * of the four columns the earlier statements added. Seen to fail with
@@ -2487,9 +2554,11 @@ void run_db_tests(void) {
     RUN_TEST(test_btm_requests_forcing_index_exists);
     RUN_TEST(test_btm_requests_in_finding_retention_tier);
     RUN_TEST(test_schema_version_is_six);
-    RUN_TEST(test_device_camera_columns_are_sticky);
+    RUN_TEST(test_device_ip_joined_camera_columns_follow_latest);
+    RUN_TEST(test_device_mac_keyed_camera_columns_are_sticky);
     RUN_TEST(test_ip_only_camera_record_is_not_persisted);
     RUN_TEST(test_v5_file_migrates_additively);
+    RUN_TEST(test_v5_file_without_devices_migrates);
     RUN_TEST(test_v5_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_v4_file_is_still_refused);
     RUN_TEST(test_migration_sql_is_add_column_only);

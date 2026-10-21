@@ -190,6 +190,14 @@ typedef struct {
      * camera's Basic:1 root from anything else's. Sticky: a byebye
      * carries no SERVER and must not erase what an alive said. */
     char   server[96];
+    /* Per-family source address of the same row (#106 round 2): a USN
+     * announced over both 239.255.255.250 and ff02::c (UDA 2.0 §1, Discovery)
+     * keeps one address per family, so a join by IP does not follow
+     * whichever family spoke last. ip[] stays the latest source. */
+    char   ip4[46];
+    time_t ip4_seen;
+    char   ip6[46];
+    time_t ip6_seen;
 } ssdp_device_t;
 
 /* ── WS-Discovery / ONVIF devices (#106 slice 1) ──────────
@@ -208,6 +216,15 @@ typedef struct {
     char   kind[16];       /* "Hello", "Bye", "ProbeMatch", "ResolveMatch" */
     int    is_camera;      /* 1 if Types names a NetworkVideoTransmitter */
     time_t last_seen;
+    /* Per-family source address (#106 round 2). WS-Discovery runs on
+     * 239.255.255.250 and ff02::c (WS-Discovery 1.1 §2.4), and a row is
+     * keyed by EndpointReference, so one camera's Hellos arrive from
+     * both an IPv4 and an IPv6 source. ip[] is the latest; these keep
+     * one per family so the device join does not flap between them. */
+    char   ip4[46];
+    time_t ip4_seen;
+    char   ip6[46];
+    time_t ip6_seen;
 } onvif_device_t;
 
 /* ── RTSP stream exposure (#106 slice B) ─────────────────

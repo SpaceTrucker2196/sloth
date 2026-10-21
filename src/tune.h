@@ -135,6 +135,9 @@ typedef enum {
        the registry explicitly. See src/wps_track.h. */
     TUNE_WPS_PIXIE_SILENCE_S,
     TUNE_WPS_PIXIE_SUCCESS_WINDOW_S,
+    /* #106 round 2: how recent a LAN camera row must be to be joined
+       to the device record holding its IP. See src/camera_join.h. */
+    TUNE_CAM_JOIN_FRESH_SECS,
     TUNE_COUNT
 } tune_id_t;
 

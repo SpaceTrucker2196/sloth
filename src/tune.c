@@ -11,6 +11,7 @@
  * drift apart. */
 #include "sloth.h"
 #include "action_snoop.h"
+#include "camera_join.h"
 #include "beacon_detect.h"
 #include "ctrl_frames.h"
 #include "db.h"
@@ -218,6 +219,10 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
      * is what bounds memory. */
     { "wps.pixie_silence_s",        WPS_PIXIE_SILENCE_S, 1, 3600, "seconds of silence after M3 with no M4" },
     { "wps.pixie_success_window_s", WPS_PIXIE_SUCCESS_WINDOW_S, 3600, 604800, "seconds an abandoned M3 run is correlated with a completed registration" },
+    /* #106 round 2. An IP is only a key while the address has not
+     * changed hands; the floor is one SSDP max-age half-period, the
+     * ceiling a week (the reuse risk the operator takes on). */
+    { "camera.join_fresh_secs",     CAM_JOIN_FRESH_SECS, 900, 604800, "seconds a LAN camera row stays joinable to the device holding its IP" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

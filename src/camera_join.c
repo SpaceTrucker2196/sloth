@@ -9,6 +9,7 @@
 #include "camera_join.h"
 #include "camera_vendor.h"
 #include "sensor_health.h"
+#include "tune.h"
 #include "alerts/rules.h"
 
 static const alert_type_t g_sig_alert[CAM_SIG_COUNT] = {
@@ -141,41 +142,111 @@ static void offer_vendor(join_t *j, int idx, const char *v, int prio) {
     j->vprio[idx] = prio;
 }
 
-/* Every record holding `ip`, appending an IP-only one when none does
- * and `create` is set. Writes indices into out[], returns the count. */
-static int by_ip(join_t *j, const char *ip, int create, time_t when,
-                 int *out) {
+static int is_fresh(time_t when, time_t now) {
+    return (long long)now - (long long)when <=
+           (long long)tune_val(TUNE_CAM_JOIN_FRESH_SECS);
+}
+
+cam_join_state_t cam_lan_state(const device_t *records, int n,
+                               const char *ip, time_t when, time_t now) {
+    if (!is_fresh(when, now)) return CAM_JOIN_STALE;
     int k = 0;
-    if (!ip || !ip[0]) return 0;
+    for (int i = 0; records && ip && i < n; i++)
+        if (strcmp(records[i].ip, ip) == 0) k++;
+    return k > 1 ? CAM_JOIN_AMBIGUOUS : CAM_JOIN_OK;
+}
+
+/* The record holding `ip`, appending an IP-only one when none does and
+ * `create` is set. -1 when the row may not join (cam_lan_state()). */
+static int by_ip(join_t *j, const char *ip, int create, time_t when,
+                 time_t now) {
+    if (!ip || !ip[0]) return -1;
+    if (cam_lan_state(j->dev, *j->n, ip, when, now) != CAM_JOIN_OK)
+        return -1;
     for (int i = 0; i < *j->n; i++)
-        if (strcmp(j->dev[i].ip, ip) == 0) out[k++] = i;
-    if (k || !create) return k;
-    if (*j->n >= MAX_DEVICES) { sh_evict_note(SH_EVICT_DEVICE); return 0; }
+        if (strcmp(j->dev[i].ip, ip) == 0) return i;
+    if (!create) return -1;
+    if (*j->n >= MAX_DEVICES) { sh_evict_note(SH_EVICT_DEVICE); return -1; }
     device_t *d = &j->dev[(*j->n)++];
     memset(d, 0, sizeof(*d));
     snprintf(d->ip, sizeof(d->ip), "%s", ip);
     d->last_seen = when;
     j->vprio[*j->n - 1] = VP_NONE;
-    out[k++] = *j->n - 1;
-    return k;
+    return *j->n - 1;
 }
 
-static void lan(join_t *j, const char *ip, int create, time_t when,
-                int sig, device_class_t cls, const char *vendor,
-                const char *model) {
-    int idx[MAX_DEVICES];
-    int k = by_ip(j, ip, create, when, idx);
-    for (int i = 0; i < k; i++) {
-        device_t *d = &j->dev[idx[i]];
-        fold(j, idx[i], sig, when);
-        d->sources |= DEV_SRC_CAMERA;
-        raise_class(d, cls);
-        offer_vendor(j, idx[i], vendor, VP_SERVER);
-        if (model && model[0] && !d->camera_model[0])
-            copy_printable(d->camera_model, sizeof(d->camera_model), model);
-        /* An IP-only record has no other source to age it. */
-        if (mac_is_zero(d->mac) && when > d->last_seen) d->last_seen = when;
+/* A row's IPv4 and IPv6 source, each with its own time. A row written
+ * before the per-family fields existed (or seeded with ip[] alone)
+ * reads its one address by family. */
+typedef struct { const char *ip; time_t when; } cam_addr_t;
+
+static void row_addrs(const char *ip, time_t seen, const char *ip4,
+                      time_t t4, const char *ip6, time_t t6,
+                      cam_addr_t a[2]) {
+    a[0].ip = ""; a[0].when = 0;
+    a[1].ip = ""; a[1].when = 0;
+    if (ip4[0] || ip6[0]) {
+        if (ip4[0]) { a[0].ip = ip4; a[0].when = t4; }
+        if (ip6[0]) { a[1].ip = ip6; a[1].when = t6; }
+    } else if (ip[0]) {
+        int v6 = strchr(ip, ':') != NULL;
+        a[v6].ip = ip; a[v6].when = seen;
     }
+}
+
+static int addr_of(const cam_addr_t a[2], const device_t *d, time_t *when) {
+    for (int f = 0; f < 2; f++)
+        if (cam_row_is_device_ip(d, a[f].ip)) {
+            if (when) *when = a[f].when;
+            return 1;
+        }
+    return 0;
+}
+
+int cam_onvif_addr_of(const onvif_device_t *o, const device_t *d,
+                      time_t *when) {
+    cam_addr_t a[2];
+    if (!o) return 0;
+    row_addrs(o->ip, o->last_seen, o->ip4, o->ip4_seen, o->ip6,
+              o->ip6_seen, a);
+    return addr_of(a, d, when);
+}
+
+int cam_ssdp_addr_of(const ssdp_device_t *e, const device_t *d,
+                     time_t *when) {
+    cam_addr_t a[2];
+    if (!e) return 0;
+    row_addrs(e->ip, e->last_seen, e->ip4, e->ip4_seen, e->ip6,
+              e->ip6_seen, a);
+    return addr_of(a, d, when);
+}
+
+/* Returns 1 when the row joined (or created) a record. */
+static int lan(join_t *j, const char *ip, int create, time_t when,
+               time_t now, int sig, device_class_t cls, const char *vendor,
+               const char *model) {
+    int i = by_ip(j, ip, create, when, now);
+    if (i < 0) return 0;
+    device_t *d = &j->dev[i];
+    fold(j, i, sig, when);
+    d->sources |= DEV_SRC_CAMERA;
+    raise_class(d, cls);
+    offer_vendor(j, i, vendor, VP_SERVER);
+    if (model && model[0] && !d->camera_model[0])
+        copy_printable(d->camera_model, sizeof(d->camera_model), model);
+    /* An IP-only record has no other source to age it. */
+    if (mac_is_zero(d->mac) && when > d->last_seen) d->last_seen = when;
+    return 1;
+}
+
+/* IPv4 first; once it joined, the IPv6 address may only attach, so a
+ * dual-stack row never makes an IP-only twin of a record it already
+ * marked. */
+static void lan_dual(join_t *j, const cam_addr_t a[2], int create,
+                     time_t now, int sig, device_class_t cls,
+                     const char *vendor, const char *model) {
+    int v4 = lan(j, a[0].ip, create, a[0].when, now, sig, cls, vendor, model);
+    lan(j, a[1].ip, create && !v4, a[1].when, now, sig, cls, vendor, model);
 }
 
 /* "name hardware", or whichever one is present. A name that already
@@ -195,7 +266,8 @@ static void onvif_model(const char *scopes, char *out, size_t n) {
     copy_printable(out, n, both);
 }
 
-void camera_join(const sloth_state_t *s, device_t *dev, int *n) {
+void camera_join(const sloth_state_t *s, device_t *dev, int *n,
+                 time_t now) {
     join_t j;
     if (!s || !dev || !n) return;
     j.dev = dev;
@@ -233,17 +305,23 @@ void camera_join(const sloth_state_t *s, device_t *dev, int *n) {
         const onvif_device_t *o = &s->onvif_devices[i];
         if (!o->is_camera) continue;
         char model[48];
+        cam_addr_t a[2];
         onvif_model(o->scopes, model, sizeof(model));
-        lan(&j, o->ip, 1, o->last_seen, CAM_SIG_WS_DISCOVERY,
-            DEV_CLASS_CAMERA, NULL, model);
+        row_addrs(o->ip, o->last_seen, o->ip4, o->ip4_seen, o->ip6,
+                  o->ip6_seen, a);
+        lan_dual(&j, a, 1, now, CAM_SIG_WS_DISCOVERY, DEV_CLASS_CAMERA,
+                 NULL, model);
     }
     for (int i = 0; i < s->ssdp_count && i < MAX_SSDP_DEVICES; i++) {
         const ssdp_device_t *d = &s->ssdp_devices[i];
         int dsc = 0;
         const char *v = NULL;
+        cam_addr_t a[2];
         if (!cam_ssdp_row(d->type, d->nts, d->server, &dsc, &v)) continue;
-        lan(&j, d->ip, 1, d->last_seen, CAM_SIG_SSDP_DEVICE,
-            dsc ? DEV_CLASS_CAMERA : DEV_CLASS_CAMERA_VENDOR, v, NULL);
+        row_addrs(d->ip, d->last_seen, d->ip4, d->ip4_seen, d->ip6,
+                  d->ip6_seen, a);
+        lan_dual(&j, a, 1, now, CAM_SIG_SSDP_DEVICE,
+                 dsc ? DEV_CLASS_CAMERA : DEV_CLASS_CAMERA_VENDOR, v, NULL);
     }
     for (int pass = 0; pass < 2; pass++) {
         for (int i = 0; i < s->mdns_count; i++) {
@@ -255,7 +333,8 @@ void camera_join(const sloth_state_t *s, device_t *dev, int *n) {
              * record; pass 1 _rtsp, which only attaches — after every
              * creating signal has run, so it finds those records. */
             if (specific != (pass == 0)) continue;
-            lan(&j, e->ip, specific, e->last_seen, CAM_SIG_MDNS_SERVICE,
+            lan(&j, e->ip, specific, e->last_seen, now,
+                CAM_SIG_MDNS_SERVICE,
                 specific ? DEV_CLASS_CAMERA : DEV_CLASS_UNKNOWN, NULL, NULL);
         }
         if (pass == 0) continue;
@@ -264,7 +343,7 @@ void camera_join(const sloth_state_t *s, device_t *dev, int *n) {
         for (int i = 0; i < rn; i++) {
             const rtsp_stream_t *r = &s->rtsp_streams[i];
             if (!r->anon_ok) continue;
-            lan(&j, r->server, 0, r->last_seen, CAM_SIG_RTSP_UNAUTH,
+            lan(&j, r->server, 0, r->last_seen, now, CAM_SIG_RTSP_UNAUTH,
                 DEV_CLASS_UNKNOWN, NULL, NULL);
         }
     }
@@ -272,20 +351,30 @@ void camera_join(const sloth_state_t *s, device_t *dev, int *n) {
 
 /* ── the trail ─────────────────────────────────────────────── */
 
-static void add_row(cam_trail_row_t *rows, int max, int *k,
-                    int sig, time_t when, const char *what) {
+static void add_row(cam_trail_row_t *rows, int max, int *k, int sig,
+                    time_t when, cam_join_state_t st, const char *what) {
+    static const char *const why[] = {
+        "",
+        "history, not joined (older than camera.join_fresh_secs): ",
+        "not joined (more than one device record holds this IP): ",
+    };
     if (*k >= max) return;
-    rows[*k].sig  = sig;
-    rows[*k].when = when;
-    snprintf(rows[*k].what, sizeof(rows[*k].what), "%s", what);
+    rows[*k].sig   = sig;
+    rows[*k].when  = when;
+    rows[*k].state = st;
+    snprintf(rows[*k].what, sizeof(rows[*k].what), "%s%s",
+             why[st <= CAM_JOIN_AMBIGUOUS ? st : 0], what);
     (*k)++;
 }
 
-int camera_trail(const sloth_state_t *s, const device_t *d,
+int camera_trail(const sloth_state_t *s, const device_t *d, time_t now,
                  cam_trail_row_t *rows, int max) {
     int k = 0;
-    char w[192];
+    char w[160];
+    time_t when = 0;
     if (!s || !d || !rows || max <= 0) return 0;
+    const device_t *recs = s->devices;
+    int nrec = s->device_count;
 
     if (!mac_is_zero(d->mac)) {
         for (int b = 0; b < s->beacon_count; b++) {
@@ -298,28 +387,28 @@ int camera_trail(const sloth_state_t *s, const device_t *d,
                 snprintf(w, sizeof(w), "beacon SSID %.32s: %s setup SSID,"
                          " enc %.12s (provisioning state not observed)",
                          a->ssid, label, a->enc[0] ? a->enc : "unknown");
-                add_row(rows, max, &k, CAM_SIG_SETUP_SSID,
-                        a->last_seen, w);
+                add_row(rows, max, &k, CAM_SIG_SETUP_SSID, a->last_seen,
+                        CAM_JOIN_OK, w);
             }
             if (cam_vendor_oui(a->bssid, &v, &org, &local)) {
                 snprintf(w, sizeof(w), "BSSID OUI %02X:%02X:%02X is IEEE"
-                         " MA-L \"%.48s\" (%s; device class not observed)%s",
+                         " MA-L \"%.40s\" (%s; device class not observed)%s",
                          (unsigned)(a->bssid[0] & ~0x02u),
                          (unsigned)a->bssid[1], (unsigned)a->bssid[2],
                          org, v, local ? "; randomized-local" : "");
-                add_row(rows, max, &k, CAM_SIG_SETUP_OUI,
-                        a->last_seen, w);
+                add_row(rows, max, &k, CAM_SIG_SETUP_OUI, a->last_seen,
+                        CAM_JOIN_OK, w);
             }
         }
     }
 
     for (int i = 0; i < s->onvif_count; i++) {
         const onvif_device_t *o = &s->onvif_devices[i];
-        if (!o->is_camera || !cam_row_is_device_ip(d, o->ip)) continue;
-        snprintf(w, sizeof(w), "ONVIF %s, Types %.60s%s%.80s", o->kind,
+        if (!o->is_camera || !cam_onvif_addr_of(o, d, &when)) continue;
+        snprintf(w, sizeof(w), "ONVIF %s, Types %.48s%s%.64s", o->kind,
                  o->types, o->xaddrs[0] ? ", XAddrs " : "", o->xaddrs);
-        add_row(rows, max, &k, CAM_SIG_WS_DISCOVERY,
-                o->last_seen, w);
+        add_row(rows, max, &k, CAM_SIG_WS_DISCOVERY, when,
+                cam_lan_state(recs, nrec, d->ip, when, now), w);
     }
     for (int i = 0; i < s->mdns_count; i++) {
         const mdns_service_t *e = &s->mdns_services[i];
@@ -330,14 +419,14 @@ int camera_trail(const sloth_state_t *s, const device_t *d,
         snprintf(w, sizeof(w), "mDNS %.31s instance %.64s (%s%s)",
                  e->service, e->instance, label,
                  specific ? "" : "; a protocol, not a device class");
-        add_row(rows, max, &k, CAM_SIG_MDNS_SERVICE,
-                e->last_seen, w);
+        add_row(rows, max, &k, CAM_SIG_MDNS_SERVICE, e->last_seen,
+                cam_lan_state(recs, nrec, d->ip, e->last_seen, now), w);
     }
     for (int i = 0; i < s->ssdp_count && i < MAX_SSDP_DEVICES; i++) {
         const ssdp_device_t *e = &s->ssdp_devices[i];
         int dsc = 0;
         const char *v = NULL;
-        if (!cam_row_is_device_ip(d, e->ip)) continue;
+        if (!cam_ssdp_addr_of(e, d, &when)) continue;
         if (!cam_ssdp_row(e->type, e->nts, e->server, &dsc, &v)) continue;
         if (dsc)
             snprintf(w, sizeof(w), "SSDP NOTIFY %.15s DigitalSecurityCamera:1",
@@ -345,8 +434,8 @@ int camera_trail(const sloth_state_t *s, const device_t *d,
         else
             snprintf(w, sizeof(w), "SSDP NOTIFY %.15s Basic:1, SERVER names"
                      " camera vendor %s (the device's own claim)", e->nts, v);
-        add_row(rows, max, &k, CAM_SIG_SSDP_DEVICE,
-                e->last_seen, w);
+        add_row(rows, max, &k, CAM_SIG_SSDP_DEVICE, when,
+                cam_lan_state(recs, nrec, d->ip, when, now), w);
     }
     int rn = s->rtsp_stream_count < MAX_RTSP_STREAMS
            ? s->rtsp_stream_count : MAX_RTSP_STREAMS;
@@ -354,10 +443,10 @@ int camera_trail(const sloth_state_t *s, const device_t *d,
         const rtsp_stream_t *r = &s->rtsp_streams[i];
         if (!r->anon_ok || !cam_row_is_device_ip(d, r->server)) continue;
         snprintf(w, sizeof(w), "RTSP DESCRIBE answered with no challenge"
-                 " on port %u path %.64s (%u time%s)", (unsigned)r->port,
+                 " on port %u path %.48s (%u time%s)", (unsigned)r->port,
                  r->path, (unsigned)r->anon_ok, r->anon_ok == 1 ? "" : "s");
-        add_row(rows, max, &k, CAM_SIG_RTSP_UNAUTH,
-                r->last_seen, w);
+        add_row(rows, max, &k, CAM_SIG_RTSP_UNAUTH, r->last_seen,
+                cam_lan_state(recs, nrec, d->ip, r->last_seen, now), w);
     }
 
     /* Newest first; ties keep the rule order above. Insertion sort:

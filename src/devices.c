@@ -150,7 +150,7 @@ void devices_update(sloth_state_t *s) {
      * ARP already gave its IP rather than creating an IP-only twin of
      * it, and before DHCP so an IP-only camera record can still pick
      * up its lease hostname (#106 round 2). */
-    camera_join (s, buf, &n);
+    camera_join (s, buf, &n, now);
     merge_dhcp  (s, buf, &n, now);
 
     /* Sort newest-first by last_seen. */

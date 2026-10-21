@@ -96,6 +96,15 @@ static dev_plan_t plan_cols(int cols) {
     return p;
 }
 
+/* The Hits cell is DEV_FIXED's 5: a sixth digit would put the row on
+ * the last column and wrap it. k and M keep any int inside five. */
+static void hits_cell(int h, char *out, size_t n) {
+    if (h < 0) h = 0;
+    if (h < 100000)        snprintf(out, n, "%d", h);
+    else if (h < 10000000) snprintf(out, n, "%dk", h / 1000);
+    else                   snprintf(out, n, "%dM", h / 1000000);
+}
+
 static int ascii_iprefix(const char *s, const char *p) {
     for (; *p; s++, p++) {
         char a = *s, b = *p;
@@ -184,6 +193,12 @@ static void age_str(time_t now, time_t t, char *out, size_t n) {
     else                 snprintf(out, n, "%ldd ago", a / 86400);
 }
 
+static int joined(const sloth_state_t *s, const device_t *d, time_t when,
+                  time_t now) {
+    return cam_lan_state(s->devices, s->device_count, d->ip, when, now)
+           == CAM_JOIN_OK;
+}
+
 static void draw_device_detail(const sloth_state_t *s) {
     dl_t b = { dev_cols() - 1, 0 };
     if (b.width < 20) b.width = 20;
@@ -233,7 +248,7 @@ static void draw_device_detail(const sloth_state_t *s) {
            " this camera");
 
     cam_trail_row_t trail[24];
-    int tn = camera_trail(s, d, trail, 24);
+    int tn = camera_trail(s, d, now, trail, 24);
     if (tn > 0) {
         dl_title(&b, "SIGNAL TRAIL");
         dl(&b, -1, "  %-17s %-9s %s", "RULE", "SEEN", "WHAT");
@@ -247,11 +262,17 @@ static void draw_device_detail(const sloth_state_t *s) {
         }
     }
 
+    /* The source sections show only rows the join counted: a stale or
+     * ambiguous row is on the trail as history, and its scopes or
+     * SERVER line under this record would read as this device's. */
     if (d->ip[0]) {
         int hdr = 0;
+        time_t when = 0;
         for (int i = 0; i < s->onvif_count; i++) {
             const onvif_device_t *o = &s->onvif_devices[i];
-            if (!o->is_camera || !cam_row_is_device_ip(d, o->ip)) continue;
+            if (!o->is_camera || !cam_onvif_addr_of(o, d, &when) ||
+                !joined(s, d, when, now))
+                continue;
             if (!hdr++) dl_title(&b, "ONVIF SCOPES");
             const char *p = o->scopes;
             while (*p) {
@@ -268,7 +289,9 @@ static void draw_device_detail(const sloth_state_t *s) {
         hdr = 0;
         for (int i = 0; i < s->mdns_count; i++) {
             const mdns_service_t *e = &s->mdns_services[i];
-            if (!cam_row_is_device_ip(d, e->ip)) continue;
+            if (!cam_row_is_device_ip(d, e->ip) ||
+                !joined(s, d, e->last_seen, now))
+                continue;
             if (!hdr++) dl_title(&b, "mDNS");
             dl(&b, 0, "  instance %s   %s   host %s:%u", e->instance,
                e->service, e->host[0] ? e->host : "-", (unsigned)e->port);
@@ -277,11 +300,16 @@ static void draw_device_detail(const sloth_state_t *s) {
         hdr = 0;
         for (int i = 0; i < s->ssdp_count && i < MAX_SSDP_DEVICES; i++) {
             const ssdp_device_t *e = &s->ssdp_devices[i];
-            if (!cam_row_is_device_ip(d, e->ip) || !e->server[0]) continue;
+            if (!e->server[0] || !cam_ssdp_addr_of(e, d, &when) ||
+                !joined(s, d, when, now))
+                continue;
             int dup = 0;
-            for (int j = 0; j < i && !dup; j++)
-                dup = cam_row_is_device_ip(d, s->ssdp_devices[j].ip) &&
+            for (int j = 0; j < i && !dup; j++) {
+                time_t wj = 0;
+                dup = cam_ssdp_addr_of(&s->ssdp_devices[j], d, &wj) &&
+                      joined(s, d, wj, now) &&
                       strcmp(s->ssdp_devices[j].server, e->server) == 0;
+            }
             if (dup) continue;
             if (!hdr++) dl_title(&b, "SSDP");
             dl(&b, 0, "  SERVER %s", e->server);
@@ -292,7 +320,9 @@ static void draw_device_detail(const sloth_state_t *s) {
                ? s->rtsp_stream_count : MAX_RTSP_STREAMS;
         for (int i = 0; i < rn; i++) {
             const rtsp_stream_t *r = &s->rtsp_streams[i];
-            if (!cam_row_is_device_ip(d, r->server)) continue;
+            if (!cam_row_is_device_ip(d, r->server) ||
+                !joined(s, d, r->last_seen, now))
+                continue;
             if (!hdr++) {
                 dl_title(&b, "RTSP EXPOSURE");
                 dl(&b, -1, "  %-5s %5s %5s %5s  %-8s %s", "PORT", "ANON",
@@ -379,6 +409,7 @@ void view_devices_draw(const sloth_state_t *s) {
         if (d->signal_dbm < 0) snprintf(sig, sizeof(sig), "%d", d->signal_dbm);
         else                   snprintf(sig, sizeof(sig), "-");
 
+        char hits_s[12]; hits_cell(d->probe_count, hits_s, sizeof(hits_s));
         int hits = d->probe_count;
 
         const char *risk = device_risk_label(d->risk_level);
@@ -389,10 +420,10 @@ void view_devices_draw(const sloth_state_t *s) {
 
         if (row == s->device_sel) {
             tui_sel();
-            TPRINT(" %-17s  %-*.*s  %-6s  %-*.*s  %-*.*s  %-7s  %-4s  %-4s  %-5d\n",
+            TPRINT(" %-17s  %-*.*s  %-6s  %-*.*s  %-*.*s  %-7s  %-4s  %-4s  %-5s\n",
                    mac, w.ip, w.ip, d->ip[0] ? d->ip : "-", cls,
                    w.vendor, w.vendor, vend, w.name, w.name, name,
-                   src, sig, risk, hits);
+                   src, sig, risk, hits_s);
             tui_reset();
         } else {
             tui_dim();    TPRINT(" %-17s", mac);
@@ -420,7 +451,7 @@ void view_devices_draw(const sloth_state_t *s) {
             TPRINT("  %-4s", risk);
 
             if (hits > 0) tui_heat(0.5); else tui_dim();
-            TPRINT("  %-5d\n", hits);
+            TPRINT("  %-5s\n", hits_s);
             tui_normal();
         }
     }

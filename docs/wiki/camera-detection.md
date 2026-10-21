@@ -19,7 +19,8 @@ credential.
 `research/rfc/2326-7826-rtsp.md`, issue #106, issue #145.
 
 **Last updated**: 2026-10-20 (#106 round 2: device-record join, CAMERA
-row, schema v6).
+row, schema v6; join recency window, ambiguous-IP refusal, per-family
+ONVIF / SSDP addresses, MAC-keyed-only DB stickiness).
 
 ## The signals
 
@@ -71,8 +72,53 @@ never marked on an input its rule stays quiet on.
 
 | Side | Signals | Joined on |
 |---|---|---|
-| LAN | WS-Discovery, mDNS, SSDP, RTSP | the row's source IP == the record's IP |
+| LAN | WS-Discovery, SSDP | the row's packet source address == the record's IP; one address kept per family (below) |
+| LAN | RTSP | the responder's address on the TCP connection == the record's IP |
+| LAN | mDNS | the address in the A / AAAA record whose owner name is the SRV target == the record's IP — the **advertised** address, not an observed packet source |
 | Radio | setup SSID, camera-vendor OUI | the BSSID == the record's MAC |
+
+The mDNS key is what an answer *claims*, sent by whoever answered: a
+Bonjour Sleep Proxy answers for a sleeping host (with that host's
+address, which is the point), an mDNS reflector re-sends another
+segment's answers from its own source, and anyone on the link can send
+a spoofed answer. Requiring the packet source to equal the A-record
+address would break the first two and not stop the third — a host that
+can spoof an mDNS answer can as easily spoof the UDP source of a
+WS-Discovery Hello — so sloth does not, and says here that the mDNS
+evidence on a record is the network's claim about that address.
+
+### When an IP is not a key
+
+An IP identifies a host only while the address has not changed hands,
+and a passive sensor cannot see a lease move. A join has to pass both
+of these:
+
+- **Recency.** A LAN row joins only when its `last_seen` is within
+  `camera.join_fresh_secs` of now (`--tune`, default 3600 s: SSDP
+  re-advertises inside its `max-age` >= 1800 s, mDNS refreshes service
+  records at 80 % of their TTL, and a lease turning over inside an hour
+  is the exception). The ONVIF, SSDP and RTSP tables only evict when
+  full, never by age, so a stale row is still there; it is listed on the
+  record's signal trail as *history, not joined* and adds nothing to the
+  record. A WS-Discovery Hello is sent once, on joining the network, so
+  a camera nobody probes drops back to unclassified after the window —
+  the knob trades that against the reuse risk.
+- **One record per address.** Two records holding the same IP — two
+  LANs on the same subnet, a stale neighbour entry beside a fresh one —
+  is a key that names no one: neither is marked, no IP-only record is
+  made, and the trail says *not joined (more than one device record
+  holds this IP)*. The rows do not carry the capture interface, so
+  sloth refuses rather than picks.
+
+**Dual stack.** WS-Discovery and SSDP run on both 239.255.255.250 and
+ff02::c, and their rows are keyed by `EndpointReference` / USN, so one
+camera's announcements arrive from an IPv4 and an IPv6 source. Each row
+keeps the last address of each family with its own time. The IPv4
+address joins first; when it joined or created a record, the IPv6 one
+only attaches to a record that already holds it, so a dual-stack camera
+is one record rather than one per family flipping with whichever
+family spoke last. A camera heard only over IPv6 still gets its record.
+Pinned by `test_dual_stack_onvif_is_one_record`.
 
 A setup SoftAP's BSSID is **never** joined to a LAN IP. Nothing on the
 air ties the AP a camera raises before provisioning to the address it
@@ -106,18 +152,29 @@ attach to an existing record: neither says the host is a camera.
 - **JSONL** `device` record: `device_class`, `camera_vendor`,
   `camera_model`, `setup_mode`, `cam_signals` (additive); an IP-only
   record has `"mac":""`. See [[jsonl-schema]].
-- **`--db`** `devices` table: the same five columns, schema v6. The
-  evidence is history, not a reading: the mask ORs and the class and
-  setup flag only rise across ticks. An IP-only record has no MAC to key
-  a row on and is not written. v5 files migrate in place by adding the
-  columns; see [[sqlite-schema]].
+- **`--db`** `devices` table: the same five columns, schema v6, keyed
+  by MAC. Evidence is sticky only where it was keyed on that MAC: the
+  setup-SSID (2) and OUI (16) bits OR across ticks, the class they imply
+  and `setup_mode` only rise, and the vendor is kept while one of those
+  bits stands. The LAN bits were joined by IP, so they, the class they
+  alone gave, and `camera_model` are the latest tick's — a lease that
+  moves to another host does not leave a camera on that host's MAC for
+  good. What each rule saw stays in the `alerts` table, keyed by what it
+  had. An IP-only record has no MAC to key a row on and is not written.
+  v5 files migrate in place by adding the columns; see [[sqlite-schema]].
 
 ## Limits
 
 - **A camera on the LAN with no camera announcement is invisible here.**
   The join can only mark what a rule could fire on.
-- **IP equality is the whole LAN key.** A DHCP lease that moves to
-  another host moves the evidence with it until the source rows age out.
+- **IP equality, bounded by recency, is the whole LAN key.** A lease
+  that moves to another host inside `camera.join_fresh_secs` moves the
+  evidence with it for the rest of that window; after it, the old rows
+  are history on the trail and mark nothing. The source tables never
+  age a row out on their own — only a full table evicts — so it is the
+  window, not the table, that ends the join.
+- **No interface on the LAN rows.** Two segments using one subnet make
+  the address ambiguous, and the join refuses it rather than guessing.
 - **No fingerprinting by traffic shape.** Bitrate, RTP payload type and
   cloud SNI are not used for the class; `SURV_CLOUD_SNI` (#105) is a
   separate rule about the destination, not the device.

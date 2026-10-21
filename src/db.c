@@ -125,6 +125,11 @@ enum {
 
 static sqlite3_stmt *g_st[ST_COUNT];
 
+/* The ST_DEVICE upsert spells the MAC-keyed camera bits as literals. */
+#if CAM_SIG_SETUP_SSID != 2 || CAM_SIG_SETUP_OUI != 16
+#error "ST_DEVICE's cam_signals literals no longer match CAM_SIG_*"
+#endif
+
 /* Upsert shape shared by every entity table.
  *
  * first_seen uses excluded-vs-existing MIN so a re-observation never
@@ -144,18 +149,25 @@ static const char *const SQL[ST_COUNT] = {
     "  signal_dbm=excluded.signal_dbm, probe_count=excluded.probe_count,"
     "  sources=excluded.sources, risk_signals=excluded.risk_signals,"
     "  risk_level=excluded.risk_level,"
-    /* Camera evidence is history, not a reading (#106 round 2): a
-     * signal seen once was seen, so the mask ORs and the class and
-     * setup flag only rise — the source tables are bounded and a row
-     * aging out of one must not erase what the file recorded. Vendor
-     * and model keep the newest non-empty value. */
-    "  device_class=MAX(devices.device_class,excluded.device_class),"
+    /* Camera evidence (#106 round 2) is sticky only where it carries
+     * its own identity. The beacon-side bits (CAM_SIG_SETUP_SSID 2,
+     * CAM_SIG_SETUP_OUI 16) were keyed on this row's MAC itself, so a
+     * signal seen once was seen: those bits OR, the class they imply
+     * and the setup flag only rise, and the vendor is kept while one
+     * of them stands. The LAN-side bits were joined by IP, and an IP
+     * changes hands under a passive sensor's feet: they, the class
+     * they alone gave, and the ONVIF model are the latest tick's, so a
+     * lease reused by another host does not write a camera onto that
+     * host's MAC for good. The alerts table keeps what each rule saw,
+     * keyed by what it had. */
+    "  device_class=MAX(excluded.device_class,"
+    "CASE WHEN devices.cam_signals&2 THEN 2"
+    " WHEN devices.cam_signals&16 THEN 1 ELSE 0 END),"
     "  camera_vendor=COALESCE(NULLIF(excluded.camera_vendor,''),"
-    "devices.camera_vendor),"
-    "  camera_model=COALESCE(NULLIF(excluded.camera_model,''),"
-    "devices.camera_model),"
+    "CASE WHEN devices.cam_signals&18 THEN devices.camera_vendor END),"
+    "  camera_model=excluded.camera_model,"
     "  setup_mode=MAX(devices.setup_mode,excluded.setup_mode),"
-    "  cam_signals=(devices.cam_signals|excluded.cam_signals),"
+    "  cam_signals=((devices.cam_signals&18)|excluded.cam_signals),"
     "  first_seen=MIN(devices.first_seen,excluded.first_seen),"
     "  last_seen=MAX(devices.last_seen,excluded.last_seen)",
 [ST_PNL_CLIENT] =

@@ -197,7 +197,7 @@ Keyed by natural identity, bounded by the fixed arrays in `sloth.h`.
 
 | Table | Key | Notes |
 |---|---|---|
-| `devices` | `mac` | synthesised profile + risk signals; camera identity since v6 (`device_class`, `camera_vendor`, `camera_model`, `setup_mode`, `cam_signals` — the mask ORs and class / setup only rise across ticks, so evidence a bounded source table aged out stays recorded). An IP-only camera record (no MAC) is not written |
+| `devices` | `mac` | synthesised profile + risk signals; camera identity since v6 (`device_class`, `camera_vendor`, `camera_model`, `setup_mode`, `cam_signals` — sticky only for the MAC-keyed beacon bits 2 and 16: those OR, the class they imply and `setup_mode` only rise, and the vendor stays while they stand; the IP-joined bits, the class they alone gave and `camera_model` are the latest tick's, so a reused lease does not write a camera onto another host's MAC for good — see [[camera-detection]]). An IP-only camera record (no MAC) is not written |
 | `pnl_clients` / `pnl_ssids` | `mac` / `(mac, ssid)` | split so *"which devices remember network X"* is a join, not a scan of repeated JSON arrays — the deanonymisation question |
 | `probe_clients` | `mac` | unassociated 802.11 devices |
 | `beacon_aps` / `beacon_ap_ssids` | `bssid` / `(bssid, ssid)` | passive monitor inventory; the SSID child table is the KARMA signal and the multi-VAP topology record |

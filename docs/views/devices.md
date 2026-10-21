@@ -33,17 +33,24 @@ Each source contributes a bit in the `Src` flag column.
 
 Two rows of chrome, then one row per device, newest first. IP, Vendor
 and the name column flex with the terminal width; at the 100-column
-minimum they get 15, 9 and 15 cells and nothing reaches the last column.
+minimum they get 15, 9 and 15 cells and nothing reaches the last column
+(a row that filled it would wrap and leave a blank line under itself).
+`Hits` stays inside its five cells: past 99999 it reads `123k`, then
+`12M`.
+
+Rendered by the offscreen ncurses harness at 100x33 from the
+`tests/test_camera_join.c` fixtures, with no alert active (so `Risk` is
+only the MAC, vendor, hostname and probe-only signals below):
 
 ```
  Devices: 6  cameras: 4  [up/dn] navigate  [Enter] detail  (newest first)
  MAC                IP               Class   Vendor     Hostname / SSID  Src      RSI   Risk  Hits
- 3c:22:fb:10:20:30  10.0.0.64        CAMERA  Hikvision  HIKVISION DS-2C  A-----C  -     HIGH  0
- -                  10.0.0.65        CAMERA  ?          AXIS P1435-LE    ------C  -     HIGH  0
- 9e:11:22:33:44:55  -                CAMERA  Hikvision  (camera setup A  ---B---  -55   MED   0
- 00:40:8c:01:02:03  -                CAM?    Axis Comm  (access point)   ---B---  -61   MED   0
+ 3c:22:fb:10:20:30  10.0.0.64        CAMERA  Hikvision  HIKVISION DS-2C  A-----C  -     MED   0
  b8:27:eb:11:22:33  192.168.1.100    -       Raspberry  raspberrypi      AD-----  -     LOW   0
- de:ad:be:ef:00:01  -                -       ?          ssid:Starbucks   ----P--  -55   MED   127
+ 9e:11:22:33:44:55  -                CAMERA  Randomize  Hikvision        ---B---  -55   MED   0
+ 00:40:8c:01:02:03  -                CAM?    Axis       Axis             ---B---  -61   MED   0
+ -                  10.0.0.65        CAMERA  ?          AXIS P1435-LE    ------C  -     MED   0
+ de:ad:be:ef:00:01  -                -       Randomize  ssid:Starbucks   ----P--  -55   HIGH  127
                                                                          │││││││
                                                                          ││││││└─ Camera row joined by IP
                                                                          │││││└── Station
@@ -66,8 +73,9 @@ minimum they get 15, 9 and 15 cells and nothing reaches the last column.
 
 Both forms corroborate; neither confirms. The name column falls back to
 the camera vendor and model (ONVIF `name` + `hardware` scopes) when there
-is no hostname, and to `(camera setup AP)` for a BSSID advertising a
-camera setup SSID.
+is no hostname — so a BSSID advertising a camera setup SSID reads as the
+SSID's brand (`Hikvision` above), with `Setup` in its detail — and to
+`(camera setup AP)` only when no brand is known.
 
 ### Enter: device detail
 
@@ -75,8 +83,8 @@ camera setup SSID.
 follows the device, not the row, so the newest-first re-sort under it
 does not move it to another device. It does not scroll: a section that
 does not fit is counted on the last line instead of drawn, and each line
-is cut at the terminal width rather than wrapped. Shown at 100 columns
-with the screen tall enough for every section:
+is cut at the terminal width rather than wrapped. Rendered by the same
+harness at 100 columns, with the screen tall enough for every section:
 
 ```
  ── DEVICE DETAIL ──  [Enter/Esc] back
@@ -107,7 +115,14 @@ with the screen tall enough for every section:
 ```
 
 The trail is one line per source row, newest first, each named by the
-rule that reads it. RTSP exposure lists every stream sloth saw answered
+rule that reads it, and lists only rows that rule would count. A LAN row
+at this IP that the join refused is still listed, as history, with the
+reason at the front of `WHAT`: `history, not joined (older than
+camera.join_fresh_secs)` for a row past the recency window (the address
+may have changed hands since), or `not joined (more than one device
+record holds this IP)`. The ONVIF, mDNS, SSDP and RTSP sections show
+joined rows only, so a camera's scopes never appear under the host that
+holds its old lease. RTSP exposure lists every stream sloth saw answered
 for the IP, authenticated ones included, so an anonymous path reads
 against its neighbours. No credential appears anywhere on this screen:
 sloth never stores one (the `cleartext_creds` guardrail), and
@@ -165,8 +180,8 @@ breakdown.
 - **A `CAMERA` row you do not own**, or one with `RTSP` in its signals:
   a stream description was handed out with no authentication step on
   the wire. Check the RTSP exposure table in the detail.
-- **`(camera setup AP)`**: a BSSID advertising a camera vendor's setup
-  SSID. Whether the camera is unprovisioned is not observed — a reset or
+- **A beacon-only (`---B---`) `CAMERA` row**: a BSSID advertising a
+  camera vendor's setup SSID (the detail's `Setup` line says so). Whether the camera is unprovisioned is not observed — a reset or
   a re-pair raises the same AP — but the SoftAP is reachable while it is
   up.
 - **A `CAM?` row**: only the address block or a SERVER string names a

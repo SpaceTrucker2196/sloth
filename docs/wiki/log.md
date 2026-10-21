@@ -4432,3 +4432,23 @@ exposure. JSONL `device` gains five additive fields; `--db` goes to
 schema v6 with an in-place, add-column-only v5 → v6 migration, the first
 migration `db_open()` performs. Default-credential matching stays struck
 (#145).
+
+## 2026-10-20 — #106 round 2 review: when an IP is not a camera key
+
+**Updated pages**: [camera-detection.md](camera-detection.md),
+[cli-reference.md](cli-reference.md), [jsonl-schema.md](jsonl-schema.md),
+[sqlite-schema.md](sqlite-schema.md); source doc `docs/views/devices.md`.
+
+The LAN join now refuses two keys it could not stand behind. A row older
+than `camera.join_fresh_secs` (new `--tune` knob, 3600 s) is history on
+the trail, not a join — the ONVIF / SSDP / RTSP tables never age rows
+out, so a three-day-old camera row used to mark whichever host held that
+lease now. An IP two device records hold (two LANs on one subnet) joins
+neither. ONVIF and SSDP rows keep one source address per family, IPv4
+joining first and IPv6 only attaching, so a dual-stack camera stops
+flapping between its ARP record and an IP-only IPv6 twin. In `--db`,
+only the MAC-keyed beacon evidence stays sticky; the IP-joined bits,
+their class and the model follow the latest tick. The mDNS key is
+documented as the advertised A-record address, not a packet source. The
+Devices list mockup is now a real harness render, and the Hits cell
+stays inside five cells (`123k`).

@@ -141,6 +141,13 @@ int ssdp_snoop(const char *src_ip, const uint8_t *data, int len,
     snprintf(e->nts,      sizeof(e->nts),       "%s", nts_short);
     if (srv[0]) snprintf(e->server, sizeof(e->server), "%s", srv);
     e->last_seen = sloth_wall();
+    if (strchr(src_ip, ':')) {
+        snprintf(e->ip6, sizeof(e->ip6), "%s", src_ip);
+        e->ip6_seen = e->last_seen;
+    } else {
+        snprintf(e->ip4, sizeof(e->ip4), "%s", src_ip);
+        e->ip4_seen = e->last_seen;
+    }
     pthread_mutex_unlock(&g_mu);
 
     if (info && infosz > 0) {

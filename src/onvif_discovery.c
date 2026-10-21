@@ -181,6 +181,13 @@ int onvif_ws_discovery_snoop(const char *src_ip, const uint8_t *data, int len,
      * one. */
     if (m.is_camera) e->is_camera = 1;
     e->last_seen = sloth_wall();
+    if (strchr(src_ip, ':')) {
+        snprintf(e->ip6, sizeof(e->ip6), "%s", src_ip);
+        e->ip6_seen = e->last_seen;
+    } else {
+        snprintf(e->ip4, sizeof(e->ip4), "%s", src_ip);
+        e->ip4_seen = e->last_seen;
+    }
     /* Read under the lock: once it is released the row is the table's
      * again, and an eviction on another thread may already have handed
      * it to a different device. */

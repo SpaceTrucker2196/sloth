@@ -26,7 +26,7 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-10-20 (#82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
+**Last updated**: 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
@@ -112,6 +112,12 @@ Defaults are the shipped values; ranges are inclusive and a value outside one ex
 |------|---------|-------|---------|
 | `wps.pixie_silence_s` | 60 | 1..3600 | seconds a WPS run must stay quiet after M3, with no M4, before `WPS_PIXIE_PROBE` calls it abandoned |
 | `wps.pixie_success_window_s` | 86400 | 3600..604800 | seconds `WPS_PIXIE_LIKELY_SUCCESS` looks back from a completed registration for an abandoned-after-M3 run at the same AP |
+
+#### Knob added by #106 round 2 (camera identity)
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `camera.join_fresh_secs` | 3600 | 900..604800 | seconds a LAN camera row (WS-Discovery, mDNS, SSDP, RTSP) stays joinable to the device record holding its IP; older rows are trail history only. Longer holds a quiet ONVIF camera's class; shorter narrows the window in which a reused DHCP lease carries it to another host. See [[camera-detection]] |
 
 `--refresh-ms` is deliberately not a knob: it is UI cadence, not a detector or retention decision.
 
