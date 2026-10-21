@@ -4,6 +4,10 @@
 #include <string.h>
 #include "ble_hci.h"
 #include "ble_snoop.h"
+#include "ble_detect.h"
+#include "ble_flood.h"
+#include "ble_watchlist.h"
+#include "sloth_clock.h"
 #include "stab.h"
 
 /* Contract, allow-list and sources in ble_hci.h. Opcodes are
@@ -308,6 +312,27 @@ static void observe_locked(const ble_obs_t *o) {
         d->rssi     = r->rssi;
         if (r->rssi > d->rssi_best) d->rssi_best = r->rssi;
     }
+    /* #144 slice 4: what the three BLE rules key on. */
+    if (r->has_mfr_data && r->mfr_data_len >= 1) {
+        d->has_mfr_sub = 1;
+        d->mfr_sub     = r->mfr_data[0];
+    }
+    if (r->has_svc_data16) {
+        d->has_svc_data    = 1;
+        d->svc_data_uuid16 = r->svc_data_uuid16;
+    }
+    if (r->has_appearance && ble_appearance_is_hid(r->appearance))
+        d->hid |= BLE_HID_APPEARANCE;
+    for (int i = 0; i < r->uuid16_count && i < BLE_UUID16_LIST_MAX; i++)
+        if (r->uuid16_list[i] == 0x1812) d->hid |= BLE_HID_SERVICE;
+    const char *cat = ble_watchlist_match(r);
+    if (cat) snprintf(d->watch_cat, sizeof(d->watch_cat), "%s", cat);
+
+    if (g_host.adv_first_ts == 0 || o->ts < g_host.adv_first_ts)
+        g_host.adv_first_ts = o->ts;
+    if (o->ts > g_host.adv_last_ts) g_host.adv_last_ts = o->ts;
+
+    ble_flood_note(o, key.addr, sloth_mono_ms());
 }
 
 void ble_dev_observe(const ble_obs_t *o) {
@@ -632,12 +657,14 @@ void ble_snapshot(sloth_state_t *s) {
     host_init_locked();
     s->ble_host = g_host;
     s->ble_device_count = stab_snapshot(&g_devs, s->ble_devices, MAX_BLE_DEVICES);
+    ble_flood_snapshot(s, sloth_mono_ms());
     pthread_mutex_unlock(&g_mu);
 }
 
 void ble_clear(void) {
     pthread_mutex_lock(&g_mu);
     stab_clear(&g_devs);
+    ble_flood_clear();
     g_host_init = 0;
     host_init_locked();
     pthread_mutex_unlock(&g_mu);

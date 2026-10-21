@@ -137,6 +137,9 @@ typedef enum {
     SH_EVICT_BLE_DEVICE,    /* src/ble_hci.c — least-recently-heard (address, type) advertiser dropped */
     /* #144 slice 3: the BR/EDR LAP table the Ubertooth stream fills. */
     SH_EVICT_BREDR_LAP,     /* src/bt_stream.c — least-recently-heard BR/EDR LAP dropped */
+    /* #144 slice 4: the advertising-flood windows. STAB_OLDEST for the
+     * same reason as the advertiser table: the keys are the air's. */
+    SH_EVICT_BLE_FLOOD,     /* src/ble_flood.c — least-recently-heard flood-window key dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 

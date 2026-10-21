@@ -286,6 +286,12 @@ static void test_uncitable_kinds_with_a_real_basis_are_still_cited(void) {
          * needs an account and there was none. RFC 2326 / RFC 7826 are
          * what it detects from. */
         "ALERT_TYPE_CAM_RTSP_UNAUTH",
+        /* #144 slice 4. A watched category of BLE advertiser in range
+         * is a third party's device being present; T1430 would claim an
+         * intent the advertisement cannot carry. The Bluetooth SIG
+         * member-UUID registry and each row's own source are what it
+         * detects from (research/bluetooth/ble-watchlist-categories.md). */
+        "ALERT_TYPE_BLE_WATCHLIST",
     };
     sqlite3 *db = open_corpus();
     ASSERT(db != NULL);

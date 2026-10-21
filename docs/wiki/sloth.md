@@ -16,8 +16,8 @@ type: reference
 
 ## What sloth surfaces
 
-- **<!-- count:views -->35<!-- /count --> ncurses views** (`VIEW_COUNT`, one per row of `include/sloth_views.def`) organised into observation, synthesis, and WiFi-SIGINT groups — see [[views-catalog]].
-- **<!-- count:rules -->87<!-- /count --> alert rules** (one per `ALERT_TYPE_*`, one per row of `include/sloth_alerts.def`) — see [[alerts]]. The threat-intel matcher among them ships a **synthetic demo IOC list**, not a feed — see [[threat-intel]].
+- **<!-- count:views -->36<!-- /count --> ncurses views** (`VIEW_COUNT`, one per row of `include/sloth_views.def`) organised into observation, synthesis, and WiFi-SIGINT groups — see [[views-catalog]].
+- **<!-- count:rules -->90<!-- /count --> alert rules** (one per `ALERT_TYPE_*`, one per row of `include/sloth_alerts.def`) — see [[alerts]]. The threat-intel matcher among them ships a **synthetic demo IOC list**, not a feed — see [[threat-intel]].
 - **Per-alert pcap dumps** when `--pcap-dir` is set — see [[pcap-export]].
 - **Optional JSONL forensic log** for downstream tooling.
 - **Composite dashboard** that tiles seven bands into one terminal — see [[dashboard]].

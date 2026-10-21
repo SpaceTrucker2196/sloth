@@ -25,7 +25,7 @@ default run originates no network traffic at all. Both of those are opt-in behin
 `--allow-active`, which announces itself on stderr; optional telemetry (`-o file.jsonl`,
 `--data-socket`) carries observations to a consumer you configured, over a path you
 configured, never to the segment being watched. It observes what your host already
-sees and turns it into **<!-- count:views -->35<!-- /count --> live views** and **<!-- count:rules -->87<!-- /count --> passive
+sees and turns it into **<!-- count:views -->36<!-- /count --> live views** and **<!-- count:rules -->90<!-- /count --> passive
 alert rules**, an embedded
 WiFi-SIGINT toolkit (PNL aggregation, RSN/cipher/MFP inventory, EAPOL/PMKID
 capture, hidden-SSID reveal, scored seqnum correlation across MAC rotations),
@@ -62,6 +62,7 @@ GitHub automatically; start at [`docs/wiki/index.md`](docs/wiki/index.md).
 [x] Twins       [y] KARMA        [z] RADIUS                  ← evil-twin, PineAP & 802.1X lures
 [f] Research                                                 ← sources behind each alert that fired
 [c] FragAttacks                                               ← per-BSSID counters for the seven CVE-2020-262xx/245xx rules
+[*] BLE                                                       ← BLE advertisers per sensor (--bt-monitor / --bt-capture)
 [k] PNL         [e] EAPOL        [j] Seqnum    [w] Assoc     ← WiFi SIGINT
 [m] Channel                                                  ← per-channel histogram
 ```
@@ -105,6 +106,7 @@ GitHub automatically; start at [`docs/wiki/index.md`](docs/wiki/index.md).
 | [**KARMA**](docs/views/karma.md)         | KARMA / PineAP candidate table — APs answering probes for SSIDs they never beacon, scored on PNL overlap, IE uniformity and deauth chaining (#30) |
 | [**RADIUS**](docs/views/rogue-radius.md) | 802.1X EAP method inventory and identity leaks — the hostapd-wpe / eaphammer surface (#31, #38) |
 | [**FragAttacks**](docs/views/fragattack.md) | Per-BSSID counters for the FragAttacks rules (CVE-2020-24586/24587/24588, CVE-2020-261xx) (#75) |
+| [**BLE**](docs/views/ble.md) `[*]`        | One row per BLE advertiser per sensor, with the HID / watchlist flags the BLE_* rules read and an `Enter` detail (#144) |
 | [**Research**](docs/views/research.md)   | The cited source behind each alert that actually fired — CVE, advisory, IEEE clause or paper (#73) |
 | [**Channel**](docs/views/channel.md)     | Per-channel 802.11 activity histogram: APs beaconing and STAs associated on each channel |
 | **Help** `[?]`                            | Keybindings, running version, and the embedded-data disclosures |
@@ -355,7 +357,7 @@ Use `[?]` inside sloth for an up-to-date reference card.
 
 ## Alerts
 
-**<!-- count:rules -->87<!-- /count --> rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` row in [`include/sloth_alerts.def`](include/sloth_alerts.def), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
+**<!-- count:rules -->90<!-- /count --> rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` row in [`include/sloth_alerts.def`](include/sloth_alerts.def), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
 
 Six of them, as a sample of the shape:
 

@@ -61,6 +61,7 @@
 #include "views/rogue_radius.h"
 #include "views/research.h"
 #include "views/fragattack.h"
+#include "views/ble.h"
 
 
 /* ── Sanitised emission (#138) ───────────────────────────── *

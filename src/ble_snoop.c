@@ -11,6 +11,7 @@
 #define BLE_AD_NAME_SHORT       0x08
 #define BLE_AD_NAME_COMPLETE    0x09
 #define BLE_AD_TX_POWER         0x0A
+#define BLE_AD_SVC_DATA16       0x16
 #define BLE_AD_APPEARANCE       0x19
 #define BLE_AD_MFR_DATA         0xFF
 
@@ -43,6 +44,23 @@ void ble_ad_parse(const uint8_t *data, size_t len, ble_adv_report_t *out) {
             if (val_len >= 2 && !out->has_service_uuid16) {
                 out->has_service_uuid16 = true;
                 out->service_uuid16 = (uint16_t)(val[0] | (val[1] << 8));
+            }
+            /* The list is val_len / 2 UUIDs; an odd trailing octet is
+             * not half a UUID and is skipped. */
+            for (size_t u = 0; u + 1 < val_len &&
+                               out->uuid16_count < BLE_UUID16_LIST_MAX; u += 2)
+                out->uuid16_list[out->uuid16_count++] =
+                    (uint16_t)(val[u] | (val[u + 1] << 8));
+            break;
+
+        case BLE_AD_SVC_DATA16:
+            if (val_len >= 2 && !out->has_svc_data16) {
+                out->has_svc_data16 = true;
+                out->svc_data_uuid16 = (uint16_t)(val[0] | (val[1] << 8));
+                size_t dl = val_len - 2;
+                size_t copy = dl < BLE_SVC_DATA_MAX ? dl : BLE_SVC_DATA_MAX;
+                memcpy(out->svc_data, val + 2, copy);
+                out->svc_data_len = (uint8_t)copy;
             }
             break;
 

@@ -213,6 +213,10 @@ CORE_COMMON_SRCS += src/ble_hci.c src/alerts/rules_ble.c
 # #144 slice 3: the Ubertooth stream's framer and its two link-layer
 # parsers are pure; the reader that feeds them is in PCAP_CORE_SRCS.
 CORE_COMMON_SRCS += src/btle_ll.c src/bredr_bb.c src/bt_stream.c
+# #144 slice 4: the flood windows, the watchlist matcher (shipped empty),
+# the three BLE detector lanes and the [*] BLE view. All pure.
+CORE_COMMON_SRCS += src/ble_flood.c src/ble_watchlist.c src/ble_detect.c
+CORE_COMMON_SRCS += src/views/ble.c
 CORE_COMMON_SRCS += src/scan.c
 CORE_COMMON_SRCS += src/alert_key.c
 CORE_COMMON_SRCS += src/camera_vendor.c

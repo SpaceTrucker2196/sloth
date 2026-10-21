@@ -5,6 +5,7 @@
 
 #include "sloth.h"
 #include "ble_hci.h"
+#include "ble_detect.h"
 
 /* libFuzzer target for the Bluetooth HCI monitor decoder (#144 slice 2).
  *
@@ -21,7 +22,9 @@
  * reached. Table state persists across
  * runs on purpose: eviction is reached only once the table has filled.
  * Afterwards every decoded string must still be terminated inside its
- * field. */
+ * field. Since #144 slice 4 the advertisements also feed the flood
+ * windows, and the three BLE detector lanes are run over each snapshot:
+ * every finding's key must be terminated and the count in bounds. */
 static sloth_state_t g_s;
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
@@ -54,6 +57,24 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         char kinds[192];
         bt_tx_kinds_format(~0u, kinds, sizeof(kinds));
         if (strnlen(kinds, sizeof(kinds)) >= sizeof(kinds)) abort();
+    }
+    if (g_s.ble_flood_count < 0 || g_s.ble_flood_count > MAX_BLE_FLOOD)
+        abort();
+    for (int i = 0; i < g_s.ble_device_count; i++) {
+        const ble_device_t *d = &g_s.ble_devices[i];
+        if (strnlen(d->watch_cat, sizeof(d->watch_cat)) >= sizeof(d->watch_cat))
+            abort();
+    }
+    {
+        static ble_finding_t f[BLE_FINDINGS_MAX];
+        int dropped = 0;
+        int n = ble_findings_build(&g_s, 1700000000, f, BLE_FINDINGS_MAX,
+                                   &dropped);
+        if (n < 0 || n > BLE_FINDINGS_MAX || dropped < 0) abort();
+        for (int i = 0; i < n; i++)
+            if (strnlen(f[i].key, sizeof(f[i].key)) >= sizeof(f[i].key) ||
+                !f[i].key[0])
+                abort();
     }
     return 0;
 }

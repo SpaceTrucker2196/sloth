@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-21 (#144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
+**Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
@@ -424,6 +424,62 @@ a host command is not seen. `sensor_health` carries the same state as
 on), `ble_own_tx` / `ble_own_tx_kind` (the newest command), and the scan
 configuration
 as `ble_scan_mode` / `ble_scan_filter`. → [[ble]]
+
+### Bluetooth Low Energy advertisements (#144 slice 4)
+
+Three lanes over advertisements other devices broadcast, read from the
+same BLE device table every BLE sensor fills (`--bt-monitor`,
+`--bt-capture`). sloth never scans actively, connects, pairs or reads
+GATT for any of them. All three are **WARN**: the issue's CRIT for a
+"stalk-grade" category "from a non-resident source" is deferred,
+because "non-resident" has no definition yet.
+
+| Kind | Sev | Fires on |
+|---|---|---|
+| `BLE_ADV_FLOOD` | WARN | many addresses, at high rate, on one documented BLE-spam payload key, in one window — all three gates together (below) |
+| `BLE_HID_UNEXPECTED` | WARN | a keyboard-class advertiser on attacker-helper silicon (public address, Hak5 / Espressif OUI), or HID appearances arriving on rotating random addresses |
+| `BLE_WATCHLIST` | WARN | an advertiser of a watched category in range — row-driven, **shipped empty** |
+
+**`BLE_ADV_FLOOD`'s gates.** Per sensor, per (HCI Event_Type, payload
+family, id, subtype) key, tumbling windows of `ble.flood_window_s` on
+the monotonic clock. The family is the Manufacturer Specific Data when a
+report has it (id = company ID, subtype = the first octet after it),
+else Service Data - 16-bit UUID. A window passes when it holds at least
+`ble.flood_distinct_addrs` distinct addresses **and** at least
+`ble.flood_rate` advertisements per second over the whole window length
+**and** the key is on the spam list. The list is what the public BLE
+Spam tool's own source emits (Apple Proximity Pair 0x07 and Nearby
+Action 0x0F, Microsoft Swift Pair beacon 0x03, Samsung EasySetup 0x42
+and 0x01, Google Fast Pair 0xFE2C); the tool also gives each payload a
+fresh random address and advertises every 20–500 ms, which is what
+makes addresses and rate the observables. Every key on the list is also
+what genuine AirPods, Surface peripherals, Galaxy Buds and Fast Pair
+headsets send, and **no source measures how many of them a crowded room
+holds** — so neither number has a cited basis, the defaults are a
+judgement stated as one, and no gate can be switched off. A window in
+progress is judged on what it holds so far, never extrapolated; a burst
+straddling a window boundary is split, which can only under-count.
+Ubertooth rows are a one-channel sample and say so.
+
+**`BLE_HID_UNEXPECTED` is a precursor, not an exploit.**
+CVE-2023-45866 is a HID host (BlueZ, Android, macOS, iOS) accepting an
+unauthenticated HID peripheral and its keyboard reports. sloth sees no
+pairing and no connection, and the public proof of concept presents as
+a BR/EDR keyboard (class of device 0x002540), not over LE — so what this
+rule sees is the advertising shape of an injected keyboard, nothing
+more. Form (a) keys on the two attacker-helper OUI tables that exist;
+form (b)'s threshold has no cited basis, and cannot fire in the first
+window of observation, when every address is new.
+
+**`BLE_WATCHLIST` is a category, never an identity** (the #94
+posture). Finder tags use random addresses that rotate, so the finding
+says "an advertiser of this kind is in range" and counts addresses, not
+devices. The shipped table is empty for #68's reason — an invented row
+passes every test and matches nothing — and each row lands with the
+primary source that documents its payload shape. Candidates and what
+each still needs: `research/bluetooth/ble-watchlist-categories.md`. The
+kind carries an empty technique on the cited-basis list: a tag riding in
+its owner's own bag is not T1430. → [[ble]]
 
 ### Multi-Link rules keyed by BSSID (#104)
 

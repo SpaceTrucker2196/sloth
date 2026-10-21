@@ -3,7 +3,7 @@
 **Issue:** [#73](https://github.com/SpaceTrucker2196/sloth/issues/73) ·
 **Built by:** `make research-index` · **Guard:** `tests/test_research_corpus.c`
 
-**Last updated**: 2026-10-15 (#137: corpus opened as an untrusted database)
+**Last updated**: 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
 
 `agents/AGENTS.md` § Discipline says every detector names its basis. The
 citations exist — in issue bodies, wiki pages and the rule table — but
@@ -387,7 +387,17 @@ Sources need not back an alert kind. The Bluetooth capture parsers
 tcpdump.org link types 256, 251, 192 and 255, the Link Layer and
 Baseband clauses read, and the Ubertooth firmware and tool facts the
 allowed/forbidden list in [[ubertooth]] rests on — with no
-`alert_kinds`, because no rule reads the stream yet.
+`alert_kinds`, because no rule read the stream then.
+
+#144 slice 4 adds three that do back kinds:
+`research/bluetooth/ble-spam-flood.md` (`BLE_ADV_FLOOD`: the Flipper
+coverage, the BLE Spam tool's own source for the payload keys, Apple
+HT214035), `research/cve/2023-45866.md` (`BLE_HID_UNEXPECTED`: NVD,
+HT214035, the PoC README, the SIG appearance and service numbers) and
+`research/bluetooth/ble-watchlist-categories.md` (`BLE_WATCHLIST`: the
+SIG member-UUID registry and what each candidate row still needs).
+Each states what it does not establish — chiefly, that no threshold in
+these rules has a cited basis.
 
 ## What is not here yet
 - **Coverage.** 59 of 60 alert kinds have a document, and the sixtieth

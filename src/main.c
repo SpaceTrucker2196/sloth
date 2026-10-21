@@ -49,6 +49,7 @@
 #include "views/rogue_radius.h"
 #include "views/research.h"
 #include "views/fragattack.h"
+#include "views/ble.h"
 #include "coverage.h"
 #include "karma_detect.h"
 #include "eap_track.h"

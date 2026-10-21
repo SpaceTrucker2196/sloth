@@ -18,13 +18,15 @@ host it listens through was told to transmit.
 
 **Sources**: `src/ble_hci.c`, `src/ble_hci.h`, `src/capture/bt_monitor.c`,
 `src/ble_snoop.c` (the advertising-report decoder, #144 slice 1),
-`src/alerts/rules_ble.c`, `src/capture/capture.c`
+`src/alerts/rules_ble.c`, `src/ble_flood.c`, `src/ble_detect.c`,
+`src/ble_watchlist.c`, `src/views/ble.c` (#144 slice 4),
+`src/capture/capture.c`
 (`capture_fallback_device`), `src/main.c`, `MISSION.md` §1–§2;
 Bluetooth Core Specification v5.4 Vol 4 Part E §5.4, §7.1, §7.3.2, §7.3.18,
 §7.7.65.2, §7.8; Linux `include/net/bluetooth/hci_mon.h` and
 `net/bluetooth/hci_sock.c`; libpcap `pcap-bt-monitor-linux.c`; #144.
 
-**Last updated**: 2026-10-21 (#144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
+**Last updated**: 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
 
 ---
 
@@ -123,8 +125,41 @@ two counts would mean neither. Ubertooth rows carry `sampled` = 1 and
 the LL channel index they were last heard on; host rows carry
 `channel` = -1, because a legacy advertising report does not say.
 
-This slice keeps the table and counts it; it does not yet export it.
-The `[B]` view and the `ble_device` JSONL record are #144 slice 4.
+Since #144 slice 4 the table is exported as the `ble_device` JSONL
+record (change-only, RSSI bucketed to 10 dB) and shown in the `[*]` BLE
+view (`*` because every letter and digit was taken; `b` is Beacons). A
+row also keeps the first manufacturer-data octet after the company ID
+(the Continuity type for Apple), the first Service Data UUID (AD type
+0x16, decoded from this slice), whether a HID appearance or the 0x1812
+service was advertised, and a watchlist category.
+
+## Detectors on the advertisements (#144 slice 4)
+
+These rules read what other devices broadcast; each is **WARN** and
+none makes sloth transmit, connect or read GATT. Full gates and sources
+in [[alerts]] and `research/bluetooth/`, `research/cve/2023-45866.md`.
+
+- **`BLE_ADV_FLOOD`**: per sensor and per payload key (Event_Type,
+  company ID or Service Data UUID, first octet), tumbling windows of
+  `ble.flood_window_s`. Fires only when a window holds at least
+  `ble.flood_distinct_addrs` addresses **and** `ble.flood_rate`
+  advertisements per second **and** the key is one the BLE Spam tool's
+  own source emits (Apple 0x07 / 0x0F, Microsoft Swift Pair 0x03,
+  Samsung 0x42 / 0x01, Google Fast Pair 0xFE2C). No threshold has a
+  cited basis for where a crowded room stops, so all three are required.
+- **`BLE_HID_UNEXPECTED`**: a HID appearance or the 0x1812 service from
+  a public address in the Hak5 or Espressif OUI table, or HID
+  appearances on `ble.hid_rotate_addrs` new random addresses inside
+  `ble.hid_rotate_window_s` once observation is older than that window.
+  A precursor of the CVE-2023-45866 class, never an exploit observation.
+- **`BLE_WATCHLIST`**: a category row (`src/ble_watchlist.c`) matched.
+  **The table ships empty**; a row lands with the primary source that
+  documents its shape. A category, never an identity.
+
+The stalk-grade CRIT the issue sketched is deferred: "non-resident" has
+no definition yet. A flood alert from an Ubertooth row says its counts
+are a one-channel sample. Each finding also has a `ble_alert` JSONL
+record built from the same list the rule fires from.
 
 ## Own transmissions
 
@@ -288,8 +323,9 @@ no capture is committed.
 ## Not built yet
 
 - Extended Advertising Report (0x0D) decode — counted, not decoded.
-- `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`, the `[B]` view
-  and the `ble_device` / `ble_alert` JSONL records (#144 slice 4).
+- Address-rotation correlation and the 802.11 crosswalk — split out of
+  #144.
+- Watchlist rows: none shipped; each needs its primary source.
 
 ## Related pages
 
@@ -297,7 +333,8 @@ no capture is committed.
   allowed and forbidden Ubertooth tools and flags.
 - [[cli-reference]] — `--bt-monitor` and the `bluetoothN` refusals.
 - [[jsonl-schema]] — the `btmon_*` / `ble_*` fields of `sensor_health`.
-- [[alerts]] — `BT_OWN_TRANSMIT` and the own-operational-state form.
+- [[alerts]] — `BT_OWN_TRANSMIT` and the own-operational-state form;
+  `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`.
 - [[non-ip-sensors]] — the sensor-family roadmap BLE came from.
 - [[monitor-mode]] — the 802.11 counterpart: sloth reads a monitor
   interface and never configures one.

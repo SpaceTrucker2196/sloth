@@ -58,3 +58,6 @@ X(KARMA,        "KARMA",       "y", karma)        /* KARMA / PineAP candidate ta
 X(ROGUE_RADIUS, "RADIUS",      "z", rogue_radius) /* 802.1X EAP method / identity-leak table (#38) */
 X(RESEARCH,     "Research",    "f", research)     /* research-corpus coverage for the alerts that fired (#73) */
 X(FRAGATTACK,   "FragAttacks", "c", fragattack)   /* per-BSSID FragAttacks counters (#75 slice 5) */
+/* '*', not a letter: every letter and digit already selects a view or
+ * is a global (q quits, n toggles DNS), and 'b' is Beacons. */
+X(BLE,          "BLE",         "*", ble)          /* BLE advertisers per sensor (#144 slice 4) */

@@ -49,6 +49,7 @@ One file per sloth view. Each covers:
 | `m` | Channel   | [channel.md](channel.md) |
 | `f` | Research  | [research.md](research.md) |
 | `c` | FragAttacks | [fragattack.md](fragattack.md) |
+| `*` | BLE | [ble.md](ble.md) |
 
 ## WiFi SIGINT (v1.1)
 

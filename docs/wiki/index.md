@@ -30,12 +30,12 @@ the Wi-Fi it watches:
 - [[threat-model]] — assets A1–A5, adversaries ADV-1..4, trust
   boundaries TB-1..7, and the finding → boundary map every security
   issue cites by ID.
-- [[views-catalog]] — keybinding-to-view map for all <!-- count:views -->35<!-- /count --> views.
+- [[views-catalog]] — keybinding-to-view map for all <!-- count:views -->36<!-- /count --> views.
 - [[dashboard]] — the seven-band composite view.
 
 ## Engines
 
-- [[alerts]] — alert engine internals and the <!-- count:rules -->87<!-- /count --> rules.
+- [[alerts]] — alert engine internals and the <!-- count:rules -->90<!-- /count --> rules.
 - [[beacon-detection]] — periodicity detector for C2 / implants.
 - [[threat-intel]] — embedded IOC matcher (synthetic demo data, not a feed).
 - [[retention]] — what `--db` actually deletes, and what nothing deletes.

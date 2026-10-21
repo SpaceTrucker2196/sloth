@@ -83,6 +83,9 @@ void rule_country_absent(const sloth_state_t *s, time_t now);   /* rules_regulat
 void rule_dfs_masking(const sloth_state_t *s, time_t now);      /* rules_regulatory.c */
 void rule_no_monitor_mode(const sloth_state_t *s, time_t now);
 void rule_bt_own_transmit(const sloth_state_t *s, time_t now);   /* rules_ble.c (#144) */
+void rule_ble_adv_flood(const sloth_state_t *s, time_t now);     /* rules_ble.c (#144 slice 4) */
+void rule_ble_hid_unexpected(const sloth_state_t *s, time_t now);/* rules_ble.c (#144 slice 4) */
+void rule_ble_watchlist(const sloth_state_t *s, time_t now);     /* rules_ble.c (#144 slice 4) */
 void rule_probe_flood(const sloth_state_t *s, time_t now);
 void rule_my_network_recon(const sloth_state_t *s, time_t now);
 void rule_recurring_transit(const sloth_state_t *s, time_t now);

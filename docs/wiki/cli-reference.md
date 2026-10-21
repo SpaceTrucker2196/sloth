@@ -26,7 +26,7 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-10-21 (#144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
+**Last updated**: 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
@@ -118,6 +118,23 @@ Defaults are the shipped values; ranges are inclusive and a value outside one ex
 | Knob | Default | Range | Meaning |
 |------|---------|-------|---------|
 | `camera.join_fresh_secs` | 3600 | 900..604800 | seconds a LAN camera row (WS-Discovery, mDNS, SSDP, RTSP) stays joinable to the device record holding its IP; older rows are trail history only. Longer holds a quiet ONVIF camera's class; shorter narrows the window in which a reused DHCP lease carries it to another host. See [[camera-detection]] |
+
+#### Knobs added by #144 slice 4 (BLE detectors)
+
+None of these has a cited basis for where legitimate traffic stops. The
+BLE-spam tool's source is the basis for the *shape* (a fresh address per
+payload, an advertising interval of 20–500 ms — [[ble]]), not for a
+number, so `BLE_ADV_FLOOD` requires all three of its gates together and
+none can be switched off: the third gate, a documented spam payload key,
+is not a knob.
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `ble.flood_window_s` | 10 | 1..600 | seconds per `BLE_ADV_FLOOD` window (tumbling, monotonic clock); a changed value restarts every window |
+| `ble.flood_distinct_addrs` | 20 | 2..128 | gate 1: distinct advertiser addresses on one spam-listed key in a window; 128 is the per-window set the table keeps |
+| `ble.flood_rate` | 10 | 1..10000 | gate 2: advertisements per second on that key, counted over the whole window (a window in progress is never extrapolated upward) |
+| `ble.hid_rotate_addrs` | 3 | 2..256 | `BLE_HID_UNEXPECTED` rotation form: new random addresses advertising a HID appearance on one sensor inside the window |
+| `ble.hid_rotate_window_s` | 900 | 60..86400 | seconds of that window; the form cannot fire until BLE observation began more than one window ago |
 
 `--refresh-ms` is deliberately not a knob: it is UI cadence, not a detector or retention decision.
 
@@ -307,10 +324,11 @@ per-frame detectors behave as live. → [[replay-integration]]
 | `6` Stats | `t` TLS | `g` Devices | `f` Research |
 | `7` Probe | `k` PNL | `o` Dashboard | `?` Help |
 | `8` ARP | `e` EAPOL | `m` Channel | |
-| `9` mDNS | `j` Seqnum | `w` Assoc | |
+| `9` mDNS | `j` Seqnum | `w` Assoc | `*` BLE |
 | `0` NBNS | | | |
 
-Full map with descriptions: [[views-catalog]].
+`*` is BLE because every letter and digit already selects a view or is
+a global (`b` is Beacons). Full map with descriptions: [[views-catalog]].
 
 ### Global keys
 
@@ -332,7 +350,7 @@ Full map with descriptions: [[views-catalog]].
 | `t` | (Interfaces) toggle iface visibility (display-only) |
 | `y` | (Interfaces) toggle iface data-stream selection — drops its packets pre-decode |
 | `m` | (Interfaces) retarget the 802.11 monitor radio onto the selected iface; refused, leaving a running radio alone, when a non-empty `--iface` allow-list excludes it — the reason shows as the probe error |
-| `Enter` | (Interfaces / Packets) open detail panel; (Devices) open the device detail — camera signal trail, ONVIF scopes, mDNS, SSDP `SERVER`, RTSP exposure; `Enter` / `Esc` returns ([[camera-detection]]) |
+| `Enter` | (Interfaces / Packets) open detail panel; (Devices) open the device detail — camera signal trail, ONVIF scopes, mDNS, SSDP `SERVER`, RTSP exposure; `Enter` / `Esc` returns ([[camera-detection]]); (BLE) open every decoded field of the selected advertiser, `Enter` / `Esc` returns ([[ble]]) |
 | `f` | (Conns / Packets) cycle filter |
 | `s` | (Conns) cycle sort |
 

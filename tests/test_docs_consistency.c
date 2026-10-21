@@ -2064,20 +2064,24 @@ static void test_charter_gate_flags_are_parsed_and_named(void) {
 }
 
 #define DC_MAX_KEYS      64
-/* Measured: the view list binds 34 alphanumeric keys (ten digits plus
- * 24 letters), and the keybinding tables backtick all 34. */
-#define DC_MIN_VIEW_KEYS 34
+/* Measured: the view list binds 35 keys (ten digits, 24 letters and,
+ * since #144 slice 4, '*' for BLE — the alphanumeric space is full),
+ * and the keybinding tables backtick all 35. */
+#define DC_MIN_VIEW_KEYS 35
 
-/* Collect the alphanumeric view-select keys from include/sloth_views.def
+/* Collect the view-select keys from include/sloth_views.def
  * (#117), the list the global key handling is generated from. Before
  * #117 this scraped `case 'x': s->active_view = ...` arms out of
  * src/main.c; those arms no longer exist, and the .def is where a key is
  * now bound.
  *
  * A row is `X(ID, "label", "k", slug)` at column 0: the key is the
- * second string literal on the line. `?` is skipped as non-alphanumeric
- * — the reference documents it with the absolute globals, not the view
- * table. Upper case folds onto lower, as view_for_key() does. */
+ * second string literal on the line. `?` is skipped — the reference
+ * documents it with the absolute globals, not the view table — and so
+ * is anything that is not one printable character. Punctuation is a
+ * view key like any other since #144 slice 4 ('*'), so it is scraped:
+ * an alphanumeric-only scrape would let a punctuation key go
+ * undocumented. Upper case folds onto lower, as view_for_key() does. */
 static int dc_view_keys(const char *src, char *out, int max) {
     int n = 0;
     for (const char *line = src; line && *line; ) {
@@ -2089,7 +2093,8 @@ static int dc_view_keys(const char *src, char *out, int max) {
         const char *q2 = q1 ? strchr(q1 + 1, '"') : NULL; /* label close */
         const char *k  = q2 ? strchr(q2 + 1, '"') : NULL; /* key open */
         if (!k || (nl && k > nl)) continue;
-        if (!isalnum((unsigned char)k[1]) || k[2] != '"') continue;
+        if (!isgraph((unsigned char)k[1]) || k[1] == '"' || k[1] == '?' ||
+            k[2] != '"') continue;
         char c   = (char)tolower((unsigned char)k[1]);
         int  dup = 0;
         for (int i = 0; i < n && !dup; i++) if (out[i] == c) dup = 1;
@@ -2104,14 +2109,16 @@ static void test_view_key_extractor(void) {
         "X(IFACE,   \"Interfaces\", \"1\", iface)\n"
         "X(DHCP,    \"DHCP\",       \"D\", dhcp_snoop)\n"
         "X(HELP,    \"Help\",       \"?\", help)\n"
+        "X(STAR,    \"Star\",       \"*\", star)\n"
         "X(TWO,     \"Two\",        \"ab\", two)\n"
         "  X(INDENTED, \"Indented\", \"z\", indented)\n"
         "X(BROKEN,  \"Broken\")\n"
         "\"x\"\n";
     char keys[DC_MAX_KEYS];
-    ASSERT_EQ(dc_view_keys(src, keys, DC_MAX_KEYS), 2);
+    ASSERT_EQ(dc_view_keys(src, keys, DC_MAX_KEYS), 3);
     ASSERT_EQ(keys[0], '1');
     ASSERT_EQ(keys[1], 'd');
+    ASSERT_EQ(keys[2], '*');
 }
 
 /* The .def and the compiled tables must agree. With both generated from

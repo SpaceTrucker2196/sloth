@@ -138,6 +138,15 @@ typedef enum {
     /* #106 round 2: how recent a LAN camera row must be to be joined
        to the device record holding its IP. See src/camera_join.h. */
     TUNE_CAM_JOIN_FRESH_SECS,
+    /* #144 slice 4: BLE_ADV_FLOOD's window and its two numeric gates,
+       and BLE_HID_UNEXPECTED's rotation form. None has a cited basis
+       for where legitimate traffic stops — see src/ble_detect.h — which
+       is why all of BLE_ADV_FLOOD's gates are required together. */
+    TUNE_BLE_FLOOD_WINDOW_S,
+    TUNE_BLE_FLOOD_DISTINCT_ADDRS,
+    TUNE_BLE_FLOOD_RATE,
+    TUNE_BLE_HID_ROTATE_ADDRS,
+    TUNE_BLE_HID_ROTATE_WINDOW_S,
     TUNE_COUNT
 } tune_id_t;
 

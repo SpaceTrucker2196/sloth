@@ -33,6 +33,8 @@
     X(beacon_clear) \
     X(bgp_snoop_clear) \
     X(ble_clear) \
+    X(ble_flood_clear) \
+    X(ble_watchlist_reset) \
     X(bt_stream_clear) \
     X(btm_clear) \
     X(bw_reset) \

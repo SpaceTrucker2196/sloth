@@ -4577,3 +4577,26 @@ counts are labelled samples of one channel. `sensor_health` gains the
 wiki page lists the allowed and forbidden Ubertooth tools and flags,
 the jam-mode firmware global, and DISABLE_TX firmware, which sloth
 cannot detect.
+
+## 2026-10-21 — #144 slice 4: BLE detectors, the `[*]` view, `ble_device` / `ble_alert`
+
+**Updated pages**: [ble.md](ble.md), [ubertooth.md](ubertooth.md),
+[alerts.md](alerts.md), [cli-reference.md](cli-reference.md),
+[jsonl-schema.md](jsonl-schema.md), [views-catalog.md](views-catalog.md);
+new view doc `docs/views/ble.md`; new corpus documents
+`research/bluetooth/ble-spam-flood.md`,
+`research/bluetooth/ble-watchlist-categories.md`,
+`research/cve/2023-45866.md`.
+
+Rules over advertisements other devices broadcast, all WARN.
+`BLE_ADV_FLOOD` (T1499) gates on distinct addresses, rate and a payload
+key the BLE Spam tool's source documents, all three together, because
+no threshold has a cited basis; `BLE_HID_UNEXPECTED` (T1200) is a
+CVE-2023-45866-class precursor from Hak5 / Espressif public addresses or
+HID appearances on rotating random addresses; `BLE_WATCHLIST` (empty
+technique, cited-basis list) is row-driven and ships with no rows.
+Five `--tune` rows (`ble.*`). The AD parser now decodes Service Data
+(0x16) and keeps every 16-bit service UUID listed. `[*]` BLE is the
+first punctuation view key. `ble_device` and `ble_alert` are change-only
+with RSSI and counts bucketed; `evict_ble_flood` joins `sensor_health`.
+The stalk-grade CRIT is deferred: "non-resident" is undefined.

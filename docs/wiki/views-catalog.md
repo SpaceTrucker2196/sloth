@@ -12,10 +12,10 @@ type: reference
 bar, the help card, the draw dispatch and the view-select keys are all
 generated from — #117), `docs/views/README.md` and all `docs/views/*.md`.
 
-**Count**: `VIEW_COUNT` = **<!-- count:views -->35<!-- /count -->**. Every key below is a row of
+**Count**: `VIEW_COUNT` = **<!-- count:views -->36<!-- /count -->**. Every key below is a row of
 `include/sloth_views.def`; if the two disagree, the `.def` is right.
 
-**Last updated**: 2026-10-15 (#117 — keys and count now generated from `sloth_views.def`).
+**Last updated**: 2026-10-21 (#144 slice 4: `*` BLE, the first punctuation view key); 2026-10-15 (#117 — keys and count now generated from `sloth_views.def`).
 
 ---
 
@@ -57,6 +57,7 @@ generated from — #117), `docs/views/README.md` and all `docs/views/*.md`.
 | `y` | KARMA     | [karma.md](../views/karma.md) | KARMA / PineAP candidate table (#30) |
 | `z` | RADIUS    | [rogue-radius.md](../views/rogue-radius.md) | 802.1X EAP method / identity-leak table (#31, #38) — see [[enterprise-rogue]] |
 | `c` | FragAttacks | [fragattack.md](../views/fragattack.md) | per-BSSID FragAttacks counters (#75) — see [[fragattacks]] |
+| `*` | BLE | [ble.md](../views/ble.md) | BLE advertisers per sensor, HID / watchlist flags, `Enter` detail (#144 slice 4) — see [[ble]]. `*` because every letter and digit is taken |
 | `f` | Research  | [research.md](../views/research.md) | the cited source behind each alert that fired (#73) — see [[research-corpus]] |
 | `?` | Help      | — | keybindings, version, and the embedded-data disclosures |
 

@@ -41,6 +41,7 @@
 #include "views/rogue_radius.h"
 #include "views/research.h"
 #include "views/fragattack.h"
+#include "views/ble.h"
 
 /* Every view through the shipped renderer (#116).
  *

@@ -28,7 +28,7 @@ the Ubertooth repository (`firmware/README`, `firmware/common.mk`,
 `host/libubertooth/src/ubertooth_interface.h`, the `ubertooth-btle`,
 `ubertooth-rx` and `ubertooth-util` usage text); #144.
 
-**Last updated**: 2026-10-21 (#144 slice 3).
+**Last updated**: 2026-10-21 (#144 slice 4: the rules, view and records read this stream; #144 slice 3).
 
 ---
 
@@ -250,10 +250,13 @@ iface `ubertooth`, is registered beside the host source's.
 
 ## Not built here
 
-No rule fires on this stream, and nothing exports the device or LAP
-tables yet: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`, the
-`[B]` view and the `ble_device` / `ble_alert` JSONL records are #144
-slice 4. ADV_EXT_IND and the AUX chain are not decoded.
+Since #144 slice 4 the advertisers this stream adds are read by
+`BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED` and `BLE_WATCHLIST`, shown in the
+`[*]` BLE view and exported as `ble_device` / `ble_alert` — each under
+`iface` `ubertooth`, never summed with the host controller's counts.
+A flood judged from this stream is judged on a one-channel sample, so
+its counts are a lower bound and the alert says so. The LAP table is
+still not exported. ADV_EXT_IND and the AUX chain are not decoded.
 
 ## Related pages
 

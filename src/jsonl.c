@@ -23,6 +23,8 @@
 #include "sensor_health.h"
 #include "ble_hci.h"        /* Bluetooth host source names (#144 slice 2) */
 #include "bt_stream.h"      /* Ubertooth stream state names (#144 slice 3) */
+#include "ble_detect.h"     /* ble_alert findings (#144 slice 4) */
+#include "ble_flood.h"
 #include "wifi_chanhop.h"     /* chanhop_retune_reason() (#91) */
 #include "libver.h"
 #include "capture/capture.h"
@@ -91,7 +93,8 @@ typedef struct {
 static jsonl_dedup_slot_t g_dedup[JSONL_DEDUP_SLOTS];
 
 /* Snapshot event "kinds" — one per deduped emitter. */
-enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH, JD_WIFI_REG };
+enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH, JD_WIFI_REG,
+       JD_BLE_DEVICE, JD_BLE_ALERT };
 
 static uint64_t fnv1a(const void *data, size_t n, uint64_t h) {
     const unsigned char *p = (const unsigned char *)data;
@@ -2466,6 +2469,185 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     emit_line(buf);
 }
 
+/* ── BLE (#144 slice 4) ─────────────────────────────────────────────
+ *
+ * ble_device: one record per advertiser row, change-only. The
+ * signature holds the row's discrete facts and its RSSI quantised to
+ * 10 dB; adv_count, the timestamps and the LL channel (an Ubertooth
+ * row hops between 37, 38 and 39) are written but never signed, so an
+ * advertiser that keeps advertising is a heartbeat, not a firehose.
+ *
+ * ble_alert: one record per finding ble_findings_build() returns — the
+ * same list the three BLE rules fire from — with its structured fields.
+ * Signed on the finding's identity and its counts quantised by powers
+ * of two (distinct addresses, advertisements, rate, address count) and
+ * its median RSSI by 10 dB. Neither record carries a raw AD byte. */
+
+static unsigned log2_bucket(uint64_t v) {
+    unsigned b = 0;
+    while (v) { b++; v >>= 1; }
+    return b;
+}
+
+static int rssi_bucket(int has, int rssi) {
+    return has ? (rssi + 200) / 10 : -1;
+}
+
+void jsonl_emit_ble_devices(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = sloth_wall();
+    for (int i = 0; i < s->ble_device_count && i < MAX_BLE_DEVICES; i++) {
+        const ble_device_t *d = &s->ble_devices[i];
+        uint8_t key[16];
+        memset(key, 0, sizeof(key));
+        memcpy(key, d->addr, 6);
+        key[6] = d->addr_type;
+        key[7] = d->sensor_kind;
+        memcpy(key + 8, d->sensor_iface, 8);
+
+        uint64_t h = FNV64_OFFSET;
+        h = fnv1a(d->addr, 6, h);
+        h = fnv1a(d->sensor_iface,
+                  strnlen(d->sensor_iface, sizeof(d->sensor_iface)), h);
+        uint8_t b[20] = { d->addr_type, d->sensor_kind, d->sampled,
+                          d->last_event_type, d->has_name, d->has_uuid16,
+                          d->has_mfr, d->has_mfr_sub, d->mfr_sub,
+                          d->has_svc_data, d->has_appearance, d->hid,
+                          d->has_tx_power, (uint8_t)d->tx_power,
+                          d->has_flags, d->flags,
+                          (uint8_t)rssi_bucket(d->has_rssi, d->rssi),
+                          (uint8_t)(d->adapter & 0xff),
+                          (uint8_t)(d->adapter >> 8), d->name_complete };
+        h = fnv1a(b, sizeof(b), h);
+        uint16_t ids[4] = { d->uuid16, d->mfr_id, d->svc_data_uuid16,
+                            d->appearance };
+        h = fnv1a(ids, sizeof(ids), h);
+        h = fnv1a(d->name, strnlen(d->name, sizeof(d->name)), h);
+        h = fnv1a(d->watch_cat, strnlen(d->watch_cat, sizeof(d->watch_cat)), h);
+        if (!jsonl_changed(JD_BLE_DEVICE, key, sizeof(key), h, now)) continue;
+
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "ble_device", now);
+        kv_mac(buf, LINEBUF, &off, "addr", d->addr);
+        kv_int(buf, LINEBUF, &off, "addr_type", d->addr_type);
+        kv_str(buf, LINEBUF, &off, "sensor", sensor_kind_name(d->sensor_kind));
+        kv_str(buf, LINEBUF, &off, "iface", d->sensor_iface);
+        kv_int(buf, LINEBUF, &off, "adapter", d->adapter);
+        kv_int(buf, LINEBUF, &off, "sampled", d->sampled);
+        kv_int(buf, LINEBUF, &off, "channel", d->channel);
+        kv_str(buf, LINEBUF, &off, "last_pdu", ble_adv_type_name(d->last_event_type));
+        kv_str(buf, LINEBUF, &off, "name", d->has_name ? d->name : "");
+        kv_int(buf, LINEBUF, &off, "name_complete", d->name_complete);
+        kv_int(buf, LINEBUF, &off, "uuid16", d->has_uuid16 ? d->uuid16 : -1);
+        kv_int(buf, LINEBUF, &off, "mfr_id", d->has_mfr ? d->mfr_id : -1);
+        kv_int(buf, LINEBUF, &off, "mfr_subtype", d->has_mfr_sub ? d->mfr_sub : -1);
+        kv_int(buf, LINEBUF, &off, "svc_data_uuid16",
+               d->has_svc_data ? d->svc_data_uuid16 : -1);
+        kv_int(buf, LINEBUF, &off, "appearance",
+               d->has_appearance ? d->appearance : -1);
+        kv_int(buf, LINEBUF, &off, "hid", d->hid);
+        kv_int(buf, LINEBUF, &off, "tx_power",
+               d->has_tx_power ? d->tx_power : -128);
+        kv_int(buf, LINEBUF, &off, "flags", d->has_flags ? d->flags : -1);
+        kv_int(buf, LINEBUF, &off, "has_rssi", d->has_rssi);
+        kv_int(buf, LINEBUF, &off, "rssi", d->has_rssi ? d->rssi : 0);
+        kv_int(buf, LINEBUF, &off, "rssi_best", d->has_rssi ? d->rssi_best : 0);
+        kv_int(buf, LINEBUF, &off, "adv_count", (long long)d->adv_count);
+        kv_str(buf, LINEBUF, &off, "watch_category", d->watch_cat);
+        kv_int(buf, LINEBUF, &off, "first_seen", (long long)d->first_seen);
+        kv_int(buf, LINEBUF, &off, "last_seen", (long long)d->last_seen);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
+static const char *ble_find_kind_name(int k) {
+    switch (k) {
+    case BLE_FIND_FLOOD:      return "adv_flood";
+    case BLE_FIND_HID_OUI:    return "hid_oui";
+    case BLE_FIND_HID_ROTATE: return "hid_rotate";
+    case BLE_FIND_WATCH:      return "watchlist";
+    default:                  return "unknown";
+    }
+}
+
+void jsonl_emit_ble_alerts(const sloth_state_t *s) {
+    if (!any_sink() || !s) return;
+    time_t now = sloth_wall();
+    ble_finding_t f[BLE_FINDINGS_MAX];
+    int n = ble_findings_build(s, now, f, BLE_FINDINGS_MAX, NULL);
+    for (int i = 0; i < n; i++) {
+        const ble_finding_t *x = &f[i];
+        /* The key string is the identity; two independent hashes of it
+         * fill the 16-byte dedup key. */
+        size_t kl = strnlen(x->key, sizeof(x->key));
+        uint64_t k1 = fnv1a(x->key, kl, FNV64_OFFSET);
+        uint64_t k2 = fnv1a(x->key, kl, 0x84222325cbf29ce4ULL);
+        uint8_t key[16];
+        memcpy(key, &k1, 8);
+        memcpy(key + 8, &k2, 8);
+
+        unsigned q[6] = {
+            (unsigned)x->kind,
+            log2_bucket(x->distinct) | (x->distinct_capped ? 0x100u : 0u),
+            log2_bucket(x->total), log2_bucket(x->rate_x10),
+            log2_bucket((uint64_t)(x->addrs > 0 ? x->addrs : 0)),
+            (unsigned)(rssi_bucket(x->has_rssi, x->rssi_median) + 1) };
+        uint64_t h = fnv1a(q, sizeof(q), k1);
+        if (!jsonl_changed(JD_BLE_ALERT, key, sizeof(key), h, now)) continue;
+
+        char buf[LINEBUF]; int off = 0;
+        start_obj(buf, LINEBUF, &off, "ble_alert", now);
+        kv_str(buf, LINEBUF, &off, "kind", ble_find_kind_name(x->kind));
+        kv_str(buf, LINEBUF, &off, "alert",
+               alert_type_name((alert_type_t)x->alert_type));
+        kv_int(buf, LINEBUF, &off, "ty", x->alert_type);
+        kv_str(buf, LINEBUF, &off, "key", x->key);
+        kv_str(buf, LINEBUF, &off, "sensor", sensor_kind_name(x->sensor_kind));
+        kv_str(buf, LINEBUF, &off, "iface", x->sensor_iface);
+        kv_int(buf, LINEBUF, &off, "sampled", x->sampled);
+        switch (x->kind) {
+        case BLE_FIND_FLOOD:
+            kv_str(buf, LINEBUF, &off, "adv_type", ble_adv_type_name(x->adv_type));
+            kv_str(buf, LINEBUF, &off, "family", ble_family_name(x->family));
+            kv_int(buf, LINEBUF, &off, "id", x->id);
+            kv_int(buf, LINEBUF, &off, "subtype", x->subtype);
+            kv_str(buf, LINEBUF, &off, "window", x->window ? "previous" : "current");
+            kv_int(buf, LINEBUF, &off, "window_s", x->window_s);
+            kv_int(buf, LINEBUF, &off, "distinct_addrs", x->distinct);
+            kv_int(buf, LINEBUF, &off, "distinct_capped", x->distinct_capped);
+            kv_int(buf, LINEBUF, &off, "total_adv", x->total);
+            kv_double(buf, LINEBUF, &off, "rate", x->rate_x10 / 10.0);
+            kv_int(buf, LINEBUF, &off, "has_rssi", x->has_rssi);
+            kv_int(buf, LINEBUF, &off, "median_rssi", x->has_rssi ? x->rssi_median : 0);
+            kv_str(buf, LINEBUF, &off, "spam_source",
+                   x->spam_source ? x->spam_source : "");
+            break;
+        case BLE_FIND_HID_OUI:
+            kv_mac(buf, LINEBUF, &off, "addr", x->addr);
+            kv_int(buf, LINEBUF, &off, "addr_type", x->addr_type);
+            kv_int(buf, LINEBUF, &off, "hid", x->hid);
+            kv_int(buf, LINEBUF, &off, "appearance", x->appearance);
+            kv_str(buf, LINEBUF, &off, "oui_table", x->oui_table ? x->oui_table : "");
+            break;
+        case BLE_FIND_HID_ROTATE:
+            kv_int(buf, LINEBUF, &off, "addrs", x->addrs);
+            kv_int(buf, LINEBUF, &off, "window_s", x->window_s);
+            kv_int(buf, LINEBUF, &off, "appearance", x->appearance);
+            break;
+        case BLE_FIND_WATCH:
+            kv_str(buf, LINEBUF, &off, "category", x->category);
+            kv_int(buf, LINEBUF, &off, "addrs", x->addrs);
+            kv_int(buf, LINEBUF, &off, "window_s", x->window_s);
+            break;
+        default:
+            break;
+        }
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+}
+
 void jsonl_emit_state_snapshots(sloth_state_t *s) {
     /* Cheap gating — every emitter checks any_sink() too, but the
      * batch-level skip avoids the per-call setup when nobody's there. */
@@ -2511,6 +2693,8 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_rdp_flows         (s);
     jsonl_emit_snmp_flows        (s);
     jsonl_emit_mqtt_flows        (s);
+    jsonl_emit_ble_devices       (s);   /* #144 slice 4 */
+    jsonl_emit_ble_alerts        (s);
     /* Last: the sensor's self-report about this tick, after every
      * observation in it has been emitted (#91 slice 3). */
     jsonl_emit_sensor_health     (s);

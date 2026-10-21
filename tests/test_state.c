@@ -44,6 +44,7 @@ void test_view_tab_cycles_forward(void) {
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_ROGUE_RADIUS);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_RESEARCH);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_FRAGATTACK);
+    v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_BLE);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_IFACE);   /* wraps */
 }
 
@@ -62,6 +63,9 @@ void test_view_for_key_selects(void) {
     ASSERT_EQ(view_for_key('c'), VIEW_FRAGATTACK);
     ASSERT_EQ(view_for_key('z'), VIEW_ROGUE_RADIUS);
     ASSERT_EQ(view_for_key('?'), VIEW_HELP);
+    /* #144 slice 4: the first punctuation view key, because every letter
+     * and digit was taken. Pinned so a later row cannot quietly take it. */
+    ASSERT_EQ(view_for_key('*'), VIEW_BLE);
     /* Not view keys: the handler's own globals, the Tab cycle, the
      * arrow codes views navigate with, and the NUL tui_poll_key()
      * returns for "no key". */

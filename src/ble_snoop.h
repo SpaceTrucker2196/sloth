@@ -22,6 +22,8 @@
 
 #define BLE_LOCAL_NAME_MAX 32
 #define BLE_MFR_DATA_MAX   27 /* max AD payload (31) minus the 2-byte company ID */
+#define BLE_SVC_DATA_MAX   27 /* max AD payload (31) minus the 2-byte UUID */
+#define BLE_UUID16_LIST_MAX 8 /* 16-bit service UUIDs kept per report */
 
 typedef struct {
     /* From the HCI event's per-report fixed fields. */
@@ -39,6 +41,19 @@ typedef struct {
 
     bool     has_service_uuid16; /* first 16-bit Service UUID found (type 0x02/0x03) */
     uint16_t service_uuid16;
+    /* Every 16-bit Service UUID listed (type 0x02/0x03), in order, up to
+     * BLE_UUID16_LIST_MAX (#144 slice 4): the HID service (0x1812) need
+     * not be the first one a device lists. */
+    uint8_t  uuid16_count;
+    uint16_t uuid16_list[BLE_UUID16_LIST_MAX];
+
+    /* Service Data - 16-bit UUID (AD type 0x16, Core Spec Supplement
+     * Part A §1.11): a 16-bit UUID, then data that service defines.
+     * First such structure only (#144 slice 4). */
+    bool     has_svc_data16;
+    uint16_t svc_data_uuid16;
+    uint8_t  svc_data[BLE_SVC_DATA_MAX];
+    uint8_t  svc_data_len;
 
     bool     has_local_name;
     bool     local_name_complete; /* true = Complete (0x09), false = Shortened (0x08) */

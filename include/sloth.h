@@ -2677,7 +2677,63 @@ typedef struct {
      * told to follow), so it hears a fraction of what was sent. */
     uint8_t  sampled;
     int8_t   channel;          /* LL channel index 0..39 last heard on, -1 unknown */
+    /* #144 slice 4. The first octet of the manufacturer data after the
+     * company ID: the message type for Apple Continuity, the beacon ID
+     * for Microsoft. Only what the rules key on; still no raw AD bytes. */
+    uint8_t  has_mfr_sub;
+    uint8_t  mfr_sub;
+    uint8_t  has_svc_data;
+    uint16_t svc_data_uuid16;  /* first Service Data - 16-bit UUID (AD 0x16) */
+    /* BLE_HID_*: bit 0 a HID appearance (0x03C0..0x03CA) was advertised,
+     * bit 1 the HID service UUID 0x1812 was listed. Kept once seen, like
+     * every other field on the row. */
+    uint8_t  hid;
+    /* BLE_WATCHLIST category this row matched, "" for none. A category,
+     * never an identity (src/ble_watchlist.h). */
+    char     watch_cat[16];
 } ble_device_t;
+
+#define BLE_HID_APPEARANCE  0x01
+#define BLE_HID_SERVICE     0x02
+
+/* ── BLE advertising-flood windows (#144 slice 4) ────────
+ *
+ * One row per (sensor, advertising type, payload family, id, subtype):
+ * the observable BLE_ADV_FLOOD gates on. Filled by src/ble_flood.c from
+ * every decoded advertisement, copied here by ble_snapshot(). Tumbling
+ * windows of ble.flood_window_s on the monotonic clock; `cur` is the
+ * window in progress, `prev` the one immediately before it (empty when
+ * a whole window passed with nothing). */
+#define MAX_BLE_FLOOD       32
+#define BLE_FLOOD_ADDR_CAP  128   /* distinct addresses counted per window */
+#define BLE_FLOOD_RSSI_CAP  64    /* RSSI samples kept per window, for the median */
+typedef enum {
+    BLE_FAM_NONE = 0,
+    BLE_FAM_MFR,       /* Manufacturer Specific Data: id = company ID */
+    BLE_FAM_SVC_DATA   /* Service Data - 16-bit UUID: id = the UUID */
+} ble_family_t;
+typedef struct {
+    uint32_t total;            /* advertisements counted */
+    uint16_t distinct;         /* distinct (address, type), at most BLE_FLOOD_ADDR_CAP */
+    uint8_t  distinct_capped;  /* 1: more addresses than were counted */
+    uint8_t  has_rssi;
+    int8_t   rssi_median;      /* dBm, of the first BLE_FLOOD_RSSI_CAP samples */
+} ble_flood_win_t;
+typedef struct {
+    uint8_t  sensor_kind;      /* sensor_kind_t */
+    char     sensor_iface[24];
+    uint8_t  sampled;          /* 1: a one-channel sample (Ubertooth) */
+    uint8_t  adv_type;         /* HCI Event_Type of the reports */
+    uint8_t  family;           /* ble_family_t */
+    uint16_t id;
+    int16_t  subtype;          /* first payload octet; -1 for a family without one */
+    uint8_t  spam_known;       /* the key is on the documented spam list (gate 3) */
+    uint32_t window_ms;        /* window length the counts were taken over */
+    uint32_t cur_elapsed_ms;   /* how far into `cur` the snapshot fell */
+    ble_flood_win_t cur, prev;
+    uint64_t total_all;        /* every advertisement on this key, ever */
+    time_t   first_seen, last_seen;   /* wall clock */
+} ble_flood_row_t;
 
 /* LE scan type as last set by the host (LE Set [Extended] Scan
  * Parameters). UNKNOWN until such a command is actually seen: an
@@ -2784,6 +2840,11 @@ typedef struct {
     uint64_t commands;             /* allow-listed host commands read */
     uint64_t ignored;              /* outside the allow-list, dropped unread */
     uint64_t malformed;            /* allow-listed type, bad length or snapped */
+    /* Frame clock of the first and the newest advertisement any BLE
+     * sensor decoded (#144 slice 4): the session BLE_HID_UNEXPECTED's
+     * rotation window is measured inside. 0 = none yet. */
+    time_t   adv_first_ts;
+    time_t   adv_last_ts;
 } ble_host_t;
 
 /* ── Ubertooth capture stream (#144 slice 3) ─────────────
@@ -3267,6 +3328,14 @@ typedef struct {
     ble_host_t       ble_host;
     ble_device_t     ble_devices[MAX_BLE_DEVICES];
     int              ble_device_count;
+    /* #144 slice 4: advertising-flood windows and the [*] BLE view. */
+    ble_flood_row_t  ble_flood[MAX_BLE_FLOOD];
+    int              ble_flood_count;
+    int              ble_sel;
+    int              ble_detail;          /* 1 while Enter's detail is open */
+    uint8_t          ble_detail_addr[6];  /* the row the detail was opened on */
+    uint8_t          ble_detail_type;
+    char             ble_detail_iface[24];
     /* Ubertooth capture stream (#144 slice 3): --bt-capture PATH. */
     bt_capture_health_t btcap;
     bredr_lap_t      bredr_laps[MAX_BREDR_LAPS];

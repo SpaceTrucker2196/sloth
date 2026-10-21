@@ -294,3 +294,25 @@ X(CAM_RTSP_UNAUTH, "") /* exposure, not adversary technique (#106 slice B) */
  * Bucketed by recency, so it resolves once the host goes quiet. */
 /* host controller seen transmitting on the HCI monitor channel — own state (#144 slice 2) */
 X(BT_OWN_TRANSMIT, "") /* own operational state, not adversary (#144 slice 2) */
+/* T1499 Endpoint DoS: what the flood costs is the receiving phones'
+ * and laptops' pairing UI (Swift Pair, Fast Pair, Continuity pop-ups).
+ * The three gates and the tool source they rest on are in
+ * src/ble_detect.h and research/bluetooth/ble-spam-flood.md. */
+/* many addresses, high rate, one documented BLE-spam payload key — BLE Spam tool source (#144 slice 4) */
+X(BLE_ADV_FLOOD, "T1499") /* Endpoint DoS — pairing-notification spam */
+/* T1200 Hardware Additions: a device presenting itself as a keyboard
+ * from attacker-helper silicon, or as one rotating its address, is the
+ * shape of an injected input device. A precursor only: sloth sees no
+ * pairing, and CVE-2023-45866's public PoC presents over BR/EDR. */
+/* HID appearance / 0x1812 from a Hak5 or Espressif public address, or across rotating addresses — CVE-2023-45866 class (#144 slice 4) */
+X(BLE_HID_UNEXPECTED, "T1200") /* Hardware Additions — a keyboard that should not be there */
+/* Deliberately empty, in the CAM_SETUP_OUI position: an advertiser of
+ * a watched category (a finder tag, say) in range is an observation of
+ * a third party's device, not an adversary's step. T1430 (Location
+ * Tracking) would claim intent the advertisement cannot carry - the
+ * same tag rides in its owner's own bag. The basis is the Bluetooth SIG
+ * member-UUID registry and the source each row must cite (see
+ * research/bluetooth/ble-watchlist-categories.md); the shipped table is
+ * empty, so with no rows it never fires. Category, never identity. */
+/* advertiser matching a watched category (row-driven, shipped empty) in range — Bluetooth SIG member UUIDs (#144 slice 4) */
+X(BLE_WATCHLIST, "") /* observation of a category, not adversary technique (#144 slice 4) */

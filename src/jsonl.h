@@ -101,6 +101,9 @@ void jsonl_emit_ssh_flows     (const sloth_state_t *s);
 void jsonl_emit_rdp_flows     (const sloth_state_t *s);
 void jsonl_emit_snmp_flows    (const sloth_state_t *s);
 void jsonl_emit_mqtt_flows    (const sloth_state_t *s);
+/* #144 slice 4: BLE advertisers and the BLE findings, change-only. */
+void jsonl_emit_ble_devices   (const sloth_state_t *s);
+void jsonl_emit_ble_alerts    (const sloth_state_t *s);
 
 /* Sensor self-report (#91 slice 3). Unlike every emitter above this is a
  * SINGLETON, not one line per table row: "healthy with no detections"
