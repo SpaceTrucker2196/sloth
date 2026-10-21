@@ -35,7 +35,7 @@ the Wi-Fi it watches:
 
 ## Engines
 
-- [[alerts]] — alert engine internals and the <!-- count:rules -->86<!-- /count --> rules.
+- [[alerts]] — alert engine internals and the <!-- count:rules -->87<!-- /count --> rules.
 - [[beacon-detection]] — periodicity detector for C2 / implants.
 - [[threat-intel]] — embedded IOC matcher (synthetic demo data, not a feed).
 - [[retention]] — what `--db` actually deletes, and what nothing deletes.
@@ -54,6 +54,7 @@ the Wi-Fi it watches:
 - [[wifi-sigint]] — overview of the v1.1 SIGINT view set.
 - [[wifi-sigint-guide]] — plain-language guide to passive RF inference and its limits, with every radio emission of a current iPhone and Android phone (sourced, 117 references).
 - [[non-ip-sensors]] — passive RF / non-IP sensor-family roadmap (#26).
+- [[ble]] — the Bluetooth host source: `--bt-monitor` over the HCI monitor channel, the passive-scan procedure, what is refused and never written (#144).
 - [[mac-randomisation]] — the 802.11 seqnum deanonymisation primitive.
 - [[evil-twin-reproducer]] — scapy snippets for live-testing each
   evil-twin detection layer (Phases 1-4).

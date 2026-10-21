@@ -10,6 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
+**Last updated**: 2026-10-21 (#144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
 
@@ -386,6 +387,30 @@ the headline rules per tier:
   `ATTACK_PATH`, `WPS_PIN_BRUTE`, `WPS_PBC_RACE`,
   `WPS_PIXIE_LIKELY_SUCCESS`
 
+### Own operational state
+
+These rules report on sloth's own sensor rather than on the network, and
+each carries an empty ATT&CK technique for that reason (the first form of
+the exemption in `agents/AGENTS.md`, *Detectors cite their sources*):
+
+| Kind | Sev | Fires on |
+|---|---|---|
+| `NO_MONITOR_MODE` | WARN | interfaces seen, none in monitor mode — the 802.11 views will be empty |
+| `BT_OWN_TRANSMIT` | WARN | the Bluetooth host controller sloth listens through (`--bt-monitor`, or a DLT 254 replay) was told by the host stack to transmit: an LE scan configured **active** (it sends SCAN_REQ), Inquiry or Periodic Inquiry, legacy / extended / periodic advertising enabled, LE or BR/EDR Create Connection, Remote Name Request, or Write Scan Enable with inquiry or page scan on (#144 slice 2) |
+
+`BT_OWN_TRANSMIT` is **recency-bucketed, not latched**: it is
+re-asserted only while the last such command arrived within
+`BT_TX_RECENT_SECS` (120 s), so it resolves through the normal quiet
+period once the host stops. One incident per transmission kind
+(`bttx:<kind>`). sloth sends no HCI or MGMT command itself; what fires
+here is the operator's own stack, and MISSION §2's Bluetooth paragraph
+is what makes it a finding. The finding's view of the host is limited to
+what crosses the monitor channel: a command the controller then
+rejects still counts, and a transmission a controller makes on its own
+without a host command is not seen. `sensor_health` carries the same
+state as `ble_own_tx` / `ble_own_tx_kind`, and the scan configuration
+as `ble_scan_mode` / `ble_scan_filter`. → [[ble]]
+
 ### Multi-Link rules keyed by BSSID (#104)
 
 | Kind | Sev | Fires on |
@@ -503,7 +528,7 @@ below) are on the same list for a posture or a heuristic shape rather
 than an exposure, and that list in the test named below is the authority — this
 page said "three" while it held five.
 
-This is not the `NO_MONITOR_MODE` case, which has no source to cite at
+This is not the `NO_MONITOR_MODE` (or `BT_OWN_TRANSMIT`) case, which has no source to cite at
 all. These have sources, they are just not ATT&CK IDs, and
 `tests/test_research_corpus.c ::
 test_uncitable_kinds_with_a_real_basis_are_still_cited` names each kind

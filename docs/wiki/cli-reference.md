@@ -26,14 +26,14 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
+**Last updated**: 2026-10-21 (#144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
 ## Synopsis
 
 ```
-sloth [output] [handshakes] [stream] [wifi] [correlation] [db]
+sloth [output] [handshakes] [stream] [wifi] [bluetooth] [correlation] [db]
       [inventory] [posture] [replay] [runtime] [--help] [--version]
 ```
 
@@ -139,6 +139,24 @@ scoped to the IP capture stream: the monitor radio sits outside the
 `--iface` allow-list. An interactive run's line is wiped by ncurses
 init, so the audience is journald / `--headless`. →
 [[views-catalog]], `docs/views/interfaces.md`
+
+### Bluetooth — the HCI monitor channel (#144)
+
+| Flag | Argument | Default | Effect |
+|---|---|---|---|
+| `--bt-monitor` | — | off | Also open libpcap's `bluetooth-monitor` device (Linux HCI monitor channel, DLT 254) and decode an allow-list of it: controller announcements (NEW_INDEX), single-report LE Advertising Reports, and the host's own scan, advertise and connect commands. **Receive-only**: the kernel gives the monitor socket no transmit path, and sloth sends no HCI or MGMT command — the operator starts a *passive* scan with their own stack ([[ble]]). Opened before the privilege drop beside the IP handle (binding the channel needs `CAP_NET_RAW`); a failure to open is announced on stderr and in `sensor_health.btmon_err`, and the run continues. Registers sensor kind `ble`. Nothing read off the channel is written verbatim anywhere — link keys and LTKs cross it. Refused (exit 2) with `--replay` and in a `WITH_PCAP=0` build. |
+
+The raw per-controller devices libpcap also lists — `bluetooth0`,
+`bluetooth1`, ... (`HCI_CHANNEL_RAW`) — accept injected packets, and no
+path opens one: `--iface bluetooth0` exits 2, the `[m]` retarget
+refuses it, and the IP capture's first-device fallback skips every
+`bluetooth*` name rather than taking the head of the device list.
+
+If `sensor_health.ble_scan_mode` reads `active`, or `ble_own_tx` reads
+`recent`, the host is transmitting and `BT_OWN_TRANSMIT` fires; stop
+the scan and start a passive one. `ble_scan_mode` is `unknown` until a
+scan-parameter command has actually been seen — start sloth before the
+scan, or restart the scan, to have it recorded. → [[ble]]
 
 ### Privilege — dropping root after capture opens
 
@@ -257,7 +275,7 @@ per-frame detectors behave as live. → [[replay-integration]]
 
 | Flag | Arg | Default | Effect |
 |------|-----|---------|--------|
-| `--replay` | `FILE[,FILE]` | off | Read up to 8 savefiles instead of opening any interface. Routed by datalink the way the live handles split: Ethernet (1), Linux cooked v1/v2 (113/276) → the IP path; radiotap (127) → the 802.11 monitor path; anything else is refused at startup, before a sink opens. Each record keeps its own capture time and wire length in what is exported; detection windows use arrival time (see above). Decoded synchronously before the first tick. **No host state is read**: interfaces, sockets, ARP, DHCP and the Wi-Fi scan come back empty, so the output describes the files and not the machine. `sensor_health` reports `capture_iface`/`monitor_iface` as `replay`. Refused (exit 2) with `--iface`, `--monitor-only` or `--hop`, which name live capture, and with `--allow-active`, which would resolve addresses read from the files, and in a `WITH_PCAP=0` build. An unreadable, undecodable or damaged file exits 1 — a replay that stopped part-way is not reported as a replay of the file. |
+| `--replay` | `FILE[,FILE]` | off | Read up to 8 savefiles instead of opening any interface. Routed by datalink the way the live handles split: Ethernet (1), Linux cooked v1/v2 (113/276) → the IP path; radiotap (127) → the 802.11 monitor path; Bluetooth Linux monitor (254, a tcpdump/Wireshark capture of `bluetooth-monitor`) → the Bluetooth host source, reported as `btmon_iface: replay`; anything else is refused at startup, before a sink opens. Each record keeps its own capture time and wire length in what is exported; detection windows use arrival time (see above). Decoded synchronously before the first tick. **No host state is read**: interfaces, sockets, ARP, DHCP and the Wi-Fi scan come back empty, so the output describes the files and not the machine. `sensor_health` reports `capture_iface`/`monitor_iface` as `replay`. Refused (exit 2) with `--iface`, `--monitor-only`, `--hop` or `--bt-monitor`, which name live capture, and with `--allow-active`, which would resolve addresses read from the files, and in a `WITH_PCAP=0` build. An unreadable, undecodable or damaged file exits 1 — a replay that stopped part-way is not reported as a replay of the file. |
 | `--ticks` | `N` | off (run until quit) | Exit `0` after `N` poll ticks, `1..1000000`; anything else exits 2. The last tick still emits; only the wait after it is skipped. With `--replay --headless` this makes a batch job: replay, tick, flush the sinks and reports, exit. |
 
 ### Runtime & meta
@@ -390,7 +408,7 @@ only a configured `storage.*` floor refuses anything in advance. See
 |------|---------|
 | `0` | Clean exit (incl. `--version`, `--help`, and the end of a `--ticks N` run). |
 | `1` | A `--replay` file that cannot be opened, is not a savefile, has a datalink with no route, or is damaged part-way (#119). |
-| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, a `--handshake-retention` value outside `0..36500`, a `--correlate-retain`/`--db-*`/`--wps-*` value that is not an integer inside its knob's range (#120), a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back). |
+| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, a `--handshake-retention` value outside `0..36500`, a `--correlate-retain`/`--db-*`/`--wps-*` value that is not an integer inside its knob's range (#120), a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back, `--iface` naming a raw HCI device `bluetoothN`, `--bt-monitor` with `--replay` or in a `WITH_PCAP=0` build). |
 
 ## Build variants (Makefile)
 
@@ -422,5 +440,6 @@ across the matrix (`AGENTS.md` Discipline).
 
 - [[what-sloth-does]] — what each output actually contains.
 - [[monitor-mode]] — the `--hop` / `--monitor-only` substrate.
+- [[ble]] — `--bt-monitor`, the passive-scan procedure and its warnings.
 - [[jsonl-schema]] · [[data-socket-exposure]] · [[sqlite-schema]] · [[pcap-export]].
 - [[views-catalog]] — the keys, with per-view detail.

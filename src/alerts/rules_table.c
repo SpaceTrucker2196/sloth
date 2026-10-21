@@ -97,6 +97,7 @@ const alert_rule_t g_alert_rules[] = {
     R(rule_attack_path),
     R(rule_weak_tls),
     R(rule_no_monitor_mode),
+    R(rule_bt_own_transmit),
     R(rule_cleartext_cred),
     R(rule_threat_ip),
     R(rule_beaconing),

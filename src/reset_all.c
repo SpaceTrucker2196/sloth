@@ -10,6 +10,7 @@
 #include "beacon_detect.h"
 #include "beacon_snoop.h"
 #include "bgp_snoop.h"
+#include "ble_hci.h"
 #include "capture/capture.h"
 #include "captive_portal.h"
 #include "cleartext_creds.h"

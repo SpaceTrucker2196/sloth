@@ -4508,3 +4508,24 @@ that no class calls a camera the Devices detail prints `Vendor ...
 `camera_vendor` in JSONL and `--db` keeps its name and is read beside
 `device_class`. The score floor is noted as implied by the two required
 bits, and the issue's two uplink statements as unresolved.
+## 2026-10-21 — #144 slice 2: the Bluetooth host source over the HCI monitor channel
+
+**New page**: [ble.md](ble.md). **Updated pages**:
+[cli-reference.md](cli-reference.md), [jsonl-schema.md](jsonl-schema.md),
+[alerts.md](alerts.md), [non-ip-sensors.md](non-ip-sensors.md),
+[research-corpus.md](research-corpus.md), [index.md](index.md); source
+doc `docs/views/alerts.md`.
+
+`--bt-monitor` opens libpcap's `bluetooth-monitor` (DLT 254) before the
+privilege drop and decodes an allow-list: NEW_INDEX, single-report LE
+Advertising Reports, and the host's own scan, advertise and connect
+commands. Multi-report events are refused whole and counted; extended
+reports are counted, not decoded. Nothing read off the channel is
+written verbatim anywhere, because link keys and LTKs cross it. Raw
+`bluetoothN` devices are refused on every path, including the IP
+capture's first-device fallback. New sensor kind `ble`, the
+`ble_device` eviction tally, a Bluetooth block appended to
+`sensor_health`, a DLT 254 `--replay` route, and `BT_OWN_TRANSMIT`, an
+own-operational-state finding (no technique, the `NO_MONITOR_MODE`
+form) for a host stack that makes the controller transmit, bucketed by
+recency.

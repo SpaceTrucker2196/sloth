@@ -373,6 +373,11 @@ and excludes it from both halves of the ratio: *nothing to cite* and
 
 Any future detector that reports sloth's own state rather than the
 network's gets this treatment automatically, by having no technique.
+`ALERT_TYPE_BT_OWN_TRANSMIT` (#144 slice 2) is the second: it reports
+that the Bluetooth host controller sloth listens through was told to
+transmit, which is a fact about sloth's own host. The commands it reads
+are spec opcodes and are listed with their clauses in [[ble]], but there
+is no adversary behaviour to cite a source *for*.
 
 ## What is not here yet
 - **Coverage.** 59 of 60 alert kinds have a document, and the sixtieth

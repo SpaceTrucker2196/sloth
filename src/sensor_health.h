@@ -131,6 +131,10 @@ typedef enum {
     SH_EVICT_RTSP_STREAM,   /* src/rtsp_snoop.c — least-recently-answered (server, port, path) stream row dropped */
     /* #155: the router-role table the camera classifier vetoes from. */
     SH_EVICT_LAN_ROLE,      /* src/lan_role.c — least-recently-seen DHCP-server / DNS-responder address dropped */
+    /* #144 slice 2: the BLE advertiser table, appended. STAB_OLDEST —
+     * random addresses rotate and an advertiser chooses its own, so the
+     * key space is the transmitter's, not sloth's. */
+    SH_EVICT_BLE_DEVICE,    /* src/ble_hci.c — least-recently-heard (address, type) advertiser dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -176,6 +180,7 @@ uint64_t sh_evict_total_tables(void);
  * "ssdp_device", "onvif_device", "smtp_flow", "eapol_pending",
  * "deauth_obs", "deauth_victim", "rtsp_exchange", "rtsp_stream",
  * "lan_role".
+ * "ble_device".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 

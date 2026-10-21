@@ -207,6 +207,9 @@ CORE_COMMON_SRCS += src/geo.c
 # #101 slice A: the compiled-in 5 GHz channel table and the rules that read it.
 CORE_COMMON_SRCS += src/reg_table.c src/alerts/rules_regulatory.c
 CORE_COMMON_SRCS += src/ble_snoop.c
+# #144 slice 2: the HCI monitor decoder and the own-transmission rule are
+# pure; the libpcap worker that feeds them is in PCAP_CORE_SRCS.
+CORE_COMMON_SRCS += src/ble_hci.c src/alerts/rules_ble.c
 CORE_COMMON_SRCS += src/scan.c
 CORE_COMMON_SRCS += src/alert_key.c
 CORE_COMMON_SRCS += src/camera_vendor.c
@@ -239,7 +242,7 @@ LINUX_WIFI_SRCS     = src/platform/linux_wifi.c
 # every build — so both are in CORE_COMMON_SRCS now. In a no-pcap build
 # the ring is never initialised (main.c calls evidence_ring_init_default()
 # only under WITH_PCAP), so it holds no arena and costs code, not memory.
-PCAP_CORE_SRCS      = src/capture/probe.c
+PCAP_CORE_SRCS      = src/capture/probe.c src/capture/bt_monitor.c
 
 # Embedded SQLite sink (#42). The research corpus (#73) is an FTS5 index,
 # so it goes wherever SQLite goes. query.h stubs to no-ops without it, and
@@ -656,7 +659,7 @@ replay-run: $(TARGET) $(REPLAY_GEN)
 	mkdir -p $(REPLAY_RUN)
 	$(REPLAY_GEN) $(REPLAY_RUN)
 	./$(TARGET) --headless \
-	    --replay $(REPLAY_RUN)/wired.pcap,$(REPLAY_RUN)/monitor.pcap \
+	    --replay $(REPLAY_RUN)/wired.pcap,$(REPLAY_RUN)/monitor.pcap,$(REPLAY_RUN)/bt.pcap \
 	    -o $(REPLAY_RUN)/out.jsonl --db $(REPLAY_RUN)/replay.db \
 	    --ticks $(REPLAY_TICKS) --refresh-ms 100
 	sh tests/replay/normalise.sh < $(REPLAY_RUN)/out.jsonl > $(REPLAY_RUN)/norm.jsonl
@@ -666,6 +669,12 @@ replay-check: replay-run
 	@./$(TARGET) --headless --replay /nonexistent.pcap --allow-active >/dev/null 2>&1; \
 	  rc=$$?; if [ $$rc -ne 2 ]; then \
 	    echo "replay-check: --replay --allow-active exited $$rc, want 2 (refused)" >&2; exit 1; fi
+	@./$(TARGET) --headless --ticks 1 --iface bluetooth0 >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then \
+	    echo "replay-check: --iface bluetooth0 exited $$rc, want 2 (raw HCI refused)" >&2; exit 1; fi
+	@./$(TARGET) --headless --replay /nonexistent.pcap --bt-monitor >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then \
+	    echo "replay-check: --replay --bt-monitor exited $$rc, want 2 (refused)" >&2; exit 1; fi
 	@echo "replay-check: $$(wc -l < $(REPLAY_GOLDEN)) records match $(REPLAY_GOLDEN)"
 
 replay-golden: replay-run

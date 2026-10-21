@@ -75,6 +75,10 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
 - **Out of scope**: connecting, pairing, GATT enumeration, active scan
   (which transmits SCAN_REQ).
 - **Test**: hand-built HCI LE Advertising Report byte arrays.
+- **Status**: in progress under #144. The host source shipped in slice 2
+  — the Linux HCI monitor channel via `--bt-monitor`, with the
+  `ble_device_t` table above, and an own-transmission check on the host.
+  See [[ble]].
 
 ### Zigbee / 802.15.4
 - **Observe**: MAC-layer frame metadata — PAN ID, short/extended addresses,

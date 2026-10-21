@@ -68,6 +68,7 @@
 #define PCAP_DLT_EN10MB     1
 #define PCAP_DLT_IEEE802_11 105   /* raw 802.11, no radiotap */
 #define PCAP_DLT_RADIOTAP   127   /* radiotap followed by 802.11 */
+#define PCAP_DLT_BT_MONITOR 254   /* Linux Bluetooth monitor (#144) */
 
 /* Serialise the 24-byte file header. thiszone and sigfigs are written
  * zero: the timestamps are UTC and nothing in the format's history has

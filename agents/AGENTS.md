@@ -13,7 +13,7 @@ It never injects a frame onto a network it monitors — the one absolute
 in `MISSION.md` §2; every other network-using behaviour is opt-in and
 announced. It reads `/proc`, `/sys`, netlink (rtnetlink / nl80211 / INET_DIAG) and a
 pcap stream, then surfaces what it sees through <!-- count:views -->35<!-- /count --> ncurses views
-(`VIEW_COUNT`), <!-- count:rules -->86<!-- /count --> alert rules (one per `ALERT_TYPE_*`), an embedded
+(`VIEW_COUNT`), <!-- count:rules -->87<!-- /count --> alert rules (one per `ALERT_TYPE_*`), an embedded
 threat-intel matcher whose shipped IOC list is **synthetic demo data**,
 optional per-alert pcap dumps, and an optional JSONL forensic log.
 

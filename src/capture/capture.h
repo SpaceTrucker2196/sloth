@@ -34,6 +34,18 @@ int capture_activate_failed(int rc);
    pinned by the test suite without linking libpcap. */
 int capture_dlt_has_ifindex(int dlt);
 
+/* The first device the IP capture may fall back to when "any" cannot be
+   opened, or NULL when none qualifies (#144 slice 2). libpcap's device
+   list also holds `bluetooth0`, `bluetooth1`, ... — raw HCI sockets
+   that accept injected packets — and `bluetooth-monitor`; none is an
+   IP interface, and the raw ones must never be opened at all, so every
+   Bluetooth name is skipped. Taking the head of the list, as this
+   fallback used to, opened `bluetooth0` on a host whose first-listed
+   device it was.
+
+   Pure, and compiled without WITH_PCAP so the test build pins it. */
+const char *capture_fallback_device(const char *const *names, int n);
+
 /* ── Fail-closed capture scope (#85) ──────────────────────────────
 
    The launch-time allow-list is an authorisation boundary: an operator

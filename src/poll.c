@@ -3,6 +3,8 @@
 #include "sloth_clock.h"
 #include "capture/capture.h"
 #include "capture/probe.h"
+#include "capture/bt_monitor.h"
+#include "ble_hci.h"
 #include "persist_health.h"
 #include "history.h"
 #include "bandwidth.h"
@@ -92,6 +94,7 @@ static void st_health(sloth_state_t *s, const poll_ctx_t *ctx) {
      * state rather than a missing one. */
     capture_health_poll(&s->cap_health);
     probe_health_poll(&s->mon_health);
+    bt_monitor_health_poll(&s->bt_health);   /* #144 slice 2 */
     /* #96: per-sink write-failure counts, for the cannot-persist badge. */
     persist_health_poll(&s->persist_health);
     /* #85: re-check each pinned ifindex still names its interface; a
@@ -165,6 +168,13 @@ static void st_wired_snapshots(sloth_state_t *s, const poll_ctx_t *ctx) {
 }
 #endif
 
+static void st_ble(sloth_state_t *s, const poll_ctx_t *ctx) {
+    (void)ctx;
+    /* #144 slice 2. Pure module, every config: a WITH_PCAP=0 build has
+     * no source to feed it and copies an empty table. */
+    ble_snapshot(s);
+}
+
 static void st_eap_track(sloth_state_t *s, const poll_ctx_t *ctx) {
     (void)ctx;
     eap_track_snapshot(s);   /* 802.1X EAP methods for ROGUE_RADIUS (#31) */
@@ -227,17 +237,29 @@ static void st_sensors(sloth_state_t *s, const poll_ctx_t *ctx) {
      * way. Ahead of EMIT (#113): the sensor and wifi_merged records used
      * to be written before this ran, so a new sensor's first tick was
      * never in the stream. */
-    if (!s->probe_iface[0]) return;
-    sensor_t *sn = sensor_register(s, SENSOR_WIFI, "Wi-Fi monitor",
-                                   s->probe_iface, ctx->wall);
-    sensor_observe(sn, mon_frame_total(), ctx->wall);
-    /* #21: fold this radio's beacon observations into the merged
-     * multi-radio world model. With one adapter this is an identity map;
-     * a second monitor radio would merge under its own sensor id. Rebuilt
-     * each poll so aged-out APs drop from the merged view too. */
-    if (sn) {
-        wifi_merge_reset(&s->wifi_merged);
-        wifi_merge_from_beacons(s, (int)(sn - s->sensors));
+    if (s->probe_iface[0]) {
+        sensor_t *sn = sensor_register(s, SENSOR_WIFI, "Wi-Fi monitor",
+                                       s->probe_iface, ctx->wall);
+        sensor_observe(sn, mon_frame_total(), ctx->wall);
+        /* #21: fold this radio's beacon observations into the merged
+         * multi-radio world model. With one adapter this is an identity
+         * map; a second monitor radio would merge under its own sensor
+         * id. Rebuilt each poll so aged-out APs drop from the merged view
+         * too. */
+        if (sn) {
+            wifi_merge_reset(&s->wifi_merged);
+            wifi_merge_from_beacons(s, (int)(sn - s->sensors));
+        }
+    }
+    /* #144 slice 2: the Bluetooth host source registers as the BLE
+     * sensor, observing decoded advertising reports. After the Wi-Fi
+     * radio, not before: a sensor's id is its registry slot and
+     * wifi_merged publishes it (sensor_mask, best_sensor), so the radio
+     * keeps id 0 whether or not a Bluetooth source is configured. */
+    if (s->bt_iface[0]) {
+        sensor_t *bt = sensor_register(s, SENSOR_BLE, "BLE HCI monitor",
+                                       s->bt_iface, ctx->wall);
+        sensor_observe(bt, s->ble_host.adv_reports, ctx->wall);
     }
 }
 
@@ -326,6 +348,7 @@ const poll_stage_t g_poll_stages[] = {
     { "wired_snapshots",   PH_SNAPSHOT, st_wired_snapshots   },
 #endif
     { "eap_track",         PH_SNAPSHOT, st_eap_track         },
+    { "ble",               PH_SNAPSHOT, st_ble               },
 
     { "history_bw",        PH_DERIVE,   st_history_bw        },
 #ifdef WITH_PCAP

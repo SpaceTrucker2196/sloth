@@ -34,6 +34,7 @@
 #include "worker_thread.h"        /* signal-blocked worker creation (#95) */
 #include "ctrl_frames.h"
 #include "mle.h"
+#include "ble_hci.h"              /* raw HCI device refusal (#144 slice 2) */
 
 #ifdef PLATFORM_LINUX
 #  include <dirent.h>
@@ -869,6 +870,14 @@ void probe_open(sloth_state_t *s) {
         return;
     }
 
+    /* find_monitor_iface() walks netdevs, which a Bluetooth controller
+     * is not; checked anyway so no open path is without it (#144). */
+    if (bt_dev_is_raw_hci(iface)) {
+        snprintf(s->probe_err, sizeof(s->probe_err),
+                 "%.15s refused: raw HCI device", iface);
+        return;
+    }
+
     char errbuf[PCAP_ERRBUF_SIZE];
     g_ph = pcap_open_live(iface, 65535, 1, 100, errbuf);
     if (!g_ph) {
@@ -964,6 +973,15 @@ void probe_set_iface(sloth_state_t *s, const char *iface) {
     /* already scanning on this exact interface */
     if (capture_run_flag_get(&g_running) && strcmp(s->probe_iface, iface) == 0)
         return;
+
+    /* A raw HCI device accepts injected packets; no path opens one
+     * (#144 slice 2). Before anything is stopped, like the allow-list
+     * refusal below. */
+    if (bt_dev_is_raw_hci(iface)) {
+        snprintf(s->probe_err, sizeof(s->probe_err),
+                 "%.15s refused: raw HCI device", iface);
+        return;
+    }
 
     /* The launch-time allow-list is an authorization boundary, so an
      * interactive [m] retarget has to clear it too (#85). Enforced here

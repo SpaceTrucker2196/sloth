@@ -1689,10 +1689,17 @@ static void test_emit_sensor_health_carries_loaded_libs(void) {
     const char *libs = strstr(body, "\"libs\":");
     ASSERT(last && libs);
     if (last && libs) ASSERT(last < libs);
-    /* Last field: the object closes right after the value. */
-    const char *close = libs ? strstr(libs, "\"}") : NULL;
+    /* libs was the last field until #144 slice 2 appended the
+     * Bluetooth block after it; the value still ends at its closing
+     * quote, and the appended block starts right there. */
+    const char *close = libs ? strstr(libs, "\",\"btmon_iface\":") : NULL;
     ASSERT(close != NULL);
-    if (close) ASSERT_EQ(close[2], '\n');
+    /* The record's last field is now the Bluetooth block's last one. */
+    const char *tail = strstr(body, "\"ble_own_tx_secs\":");
+    ASSERT(tail != NULL);
+    const char *end = tail ? strstr(tail, "}") : NULL;
+    ASSERT(end != NULL);
+    if (end) ASSERT_EQ(end[1], '\n');
 }
 
 /* …and, like the flow rings, the tally must NOT move the change-only
@@ -1773,7 +1780,7 @@ static void test_emit_sensor_health_memory_fields(void) {
     }
     /* The memory block is appended as a unit: the only field that may
      * follow resolver_calls is `libs` (#142, appended after #121), and
-     * libs is the record's last field. Asserting "resolver_calls is
+     * libs is followed only by the #144 Bluetooth block. Asserting "resolver_calls is
      * last" broke the moment a later slice appended its own field,
      * which is exactly what append-only is supposed to allow. */
     if (prev) {
@@ -1786,7 +1793,9 @@ static void test_emit_sensor_health_memory_fields(void) {
         const char *q = libs ? libs + strlen("\"libs\":\"") : NULL;
         while (q && *q && *q != '"') q += (*q == '\\' && q[1]) ? 2 : 1;
         ASSERT(q != NULL && *q == '"');
-        if (q && *q == '"') ASSERT(q[1] == '}');
+        /* Followed by the #144 Bluetooth block, appended after it. */
+        if (q && *q == '"')
+            ASSERT(strncmp(q + 1, ",\"btmon_iface\":", 15) == 0);
     }
     ASSERT_GT(field_ll(body, "\"rss_kb\":"), 0LL);
     ASSERT_GE(field_ll(body, "\"rss_hwm_kb\":"), field_ll(body, "\"rss_kb\":"));

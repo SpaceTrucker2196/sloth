@@ -2630,6 +2630,106 @@ typedef struct {
     uint64_t      dropped;    /* observations discarded (table full / bad sensor id) */
 } wifi_merge_t;
 
+/* ── Bluetooth host source (#144 slice 2) ────────────────
+ *
+ * What the HCI monitor channel (libpcap `bluetooth-monitor`, DLT 254)
+ * lets sloth see, decoded through an allow-list in src/ble_hci.c. The
+ * operator's own stack drives the controller; sloth only listens to the
+ * copy the kernel hands every monitor socket, and that socket has no
+ * transmit path (MISSION §2).
+ *
+ * ble_device_t is one advertiser, keyed by (address, address type).
+ * Decoded advertising fields only — the raw AD bytes are never kept,
+ * because nothing that crossed the monitor channel is written anywhere
+ * verbatim (link keys and LTKs travel the same channel). */
+#define MAX_BLE_DEVICES   256
+#define BLE_DEV_NAME_MAX  32
+typedef struct {
+    uint8_t  addr[6];          /* display order, most significant octet first */
+    uint8_t  addr_type;        /* 0 public, 1 random, 2/3 resolved identity */
+    uint16_t adapter;          /* HCI index of the controller that heard it */
+    uint8_t  last_event_type;  /* ADV_IND .. SCAN_RSP, Vol 4 Part E §7.7.65.2 */
+    uint8_t  has_name, name_complete;
+    char     name[BLE_DEV_NAME_MAX + 1];
+    uint8_t  has_uuid16;
+    uint16_t uuid16;           /* first 16-bit service UUID advertised */
+    uint8_t  has_mfr;
+    uint16_t mfr_id;           /* manufacturer company identifier */
+    uint8_t  has_appearance;
+    uint16_t appearance;
+    uint8_t  has_tx_power;
+    int8_t   tx_power;
+    uint8_t  has_flags, flags;
+    uint8_t  has_rssi;
+    int8_t   rssi;             /* last report's RSSI, dBm */
+    int8_t   rssi_best;        /* strongest seen, dBm */
+    time_t   first_seen;       /* frame clock */
+    time_t   last_seen;        /* frame clock */
+    uint64_t adv_count;        /* advertising reports decoded for this row */
+} ble_device_t;
+
+/* LE scan type as last set by the host (LE Set [Extended] Scan
+ * Parameters). UNKNOWN until such a command is actually seen: an
+ * absence of scan requests is not evidence of a passive scan, and the
+ * monitor channel would not show them anyway. */
+typedef enum {
+    BLE_SCAN_UNKNOWN = 0, BLE_SCAN_PASSIVE, BLE_SCAN_ACTIVE
+} ble_scan_mode_t;
+
+/* What the host controller was seen being told to put on the air. One
+ * per command family on the own-transmission allow-list. Names are part
+ * of the sensor_health JSONL contract — see bt_tx_kind_name(). */
+typedef enum {
+    BT_TX_NONE = 0,
+    BT_TX_ACTIVE_SCAN,        /* LE scan parameters with Scan_Type = active (SCAN_REQ) */
+    BT_TX_INQUIRY,            /* HCI_Inquiry */
+    BT_TX_PERIODIC_INQUIRY,   /* HCI_Periodic_Inquiry_Mode */
+    BT_TX_ADV,                /* LE Set Advertising Enable = 1 */
+    BT_TX_EXT_ADV,            /* LE Set Extended Advertising Enable = 1 */
+    BT_TX_PERIODIC_ADV,       /* LE Set Periodic Advertising Enable = 1 */
+    BT_TX_LE_CONNECT,         /* LE Create Connection / LE Extended Create Connection */
+    BT_TX_BREDR_CONNECT,      /* HCI_Create_Connection (page) */
+    BT_TX_REMOTE_NAME,        /* HCI_Remote_Name_Request (page) */
+    BT_TX_SCAN_ENABLE,        /* Write_Scan_Enable with inquiry or page scan on */
+    BT_TX_KIND_COUNT
+} bt_tx_kind_t;
+
+/* Recency of the last own transmission. Bucketed, never latched: a
+ * stack that advertised once an hour ago and has been quiet since is a
+ * different state from one advertising now. */
+typedef enum {
+    BT_TX_NEVER = -1, BT_TX_RECENT = 0, BT_TX_EARLIER = 1
+} bt_tx_recency_t;
+
+typedef struct {
+    /* Controllers announced by NEW_INDEX (primary type). */
+    int      controllers;
+    int      ctrl_index;           /* HCI index of the most recent one, -1 none */
+    uint8_t  ctrl_bus;             /* HCI bus type (USB, UART, ...) */
+    uint8_t  ctrl_addr[6];         /* display order */
+    char     ctrl_name[9];         /* "hci0" */
+    /* Scan configuration, as the host last set it. */
+    int      scan_mode;            /* ble_scan_mode_t */
+    int      filter_policy;        /* Scanning_Filter_Policy 0..3, -1 unknown */
+    int      scan_enabled;         /* -1 unknown, 0 off, 1 on */
+    /* Own transmissions, by arrival wall clock (the liveness clock). */
+    int      last_tx_kind;         /* bt_tx_kind_t */
+    int      last_tx_adapter;      /* HCI index it was sent to, -1 none */
+    time_t   last_tx_wall;         /* 0 = never */
+    uint32_t tx_kind_mask;         /* bit per bt_tx_kind_t ever seen */
+    uint64_t tx_count;
+    /* Record accounting: every record lands in exactly one bucket
+     * besides `records`, which counts them all. */
+    uint64_t records;              /* every monitor record offered */
+    uint64_t adv_reports;          /* single-report LE Advertising Reports decoded */
+    uint64_t multi_rejected;       /* Num_Reports > 1, refused whole (layout unconfirmed) */
+    uint64_t ext_adv_undecoded;    /* LE Extended Advertising Report, not decoded yet */
+    uint64_t new_index;            /* NEW_INDEX records */
+    uint64_t commands;             /* allow-listed host commands read */
+    uint64_t ignored;              /* outside the allow-list, dropped unread */
+    uint64_t malformed;            /* allow-listed type, bad length or snapped */
+} ble_host_t;
+
 /* ── Capture-worker health (#91 slice 2) ─────────────────
  *
  * Both capture workers used to `break` out of their dispatch loop on a
@@ -3028,6 +3128,15 @@ typedef struct {
      * rendered as a tab-bar badge — an export that fails must be
      * visible from every view, not only its own. */
     persist_health_t persist_health;
+    /* Bluetooth host source (#144 slice 2): the HCI monitor channel
+     * (--bt-monitor) or a DLT 254 replay. bt_iface is "" when neither
+     * is configured. */
+    char             bt_iface[24];
+    char             bt_err[80];
+    capture_health_t bt_health;
+    ble_host_t       ble_host;
+    ble_device_t     ble_devices[MAX_BLE_DEVICES];
+    int              ble_device_count;
 
     /* ── PNL snapshot (Preferred Network Lists per client) ── */
     pnl_client_t   pnl_clients[MAX_PNL_CLIENTS];

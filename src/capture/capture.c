@@ -9,6 +9,7 @@
 #include "radiotap.h"
 #include "capture/frame_edge.h"
 #include "pcap_format.h"
+#include "ble_hci.h"        /* bt_dev_is_bluetooth (#144 slice 2) */
 
 /* DLT_LINUX_SLL  (113) — Linux cooked capture v1 used by "any"
  * DLT_LINUX_SLL2 (276) — Linux cooked capture v2, carries the ingress
@@ -31,6 +32,15 @@ int capture_activate_failed(int rc) {
 /* Also outside the guard, and for the same reason. See capture.h. */
 int capture_dlt_has_ifindex(int dlt) {
     return dlt == MY_DLT_LINUX_SLL2;
+}
+
+/* Outside the guard as well; contract in capture.h. */
+const char *capture_fallback_device(const char *const *names, int n) {
+    if (!names) return NULL;
+    for (int i = 0; i < n; i++)
+        if (names[i] && names[i][0] && !bt_dev_is_bluetooth(names[i]))
+            return names[i];
+    return NULL;
 }
 
 /* Outside the guard again so the test build can pin it (#84 slice 2).
@@ -1509,10 +1519,21 @@ void capture_open(sloth_state_t *s) {
         if (g_handle) {
             snprintf(s->pkt_iface, sizeof(s->pkt_iface), "any");
         } else {
+            /* Not the head of the list: that can be a raw HCI device
+             * (#144 slice 2). The names go through the same pure picker
+             * the tests pin, so the walk and the refusal are one. */
             pcap_if_t *devs = NULL;
             if (pcap_findalldevs(&devs, errbuf) == 0 && devs) {
-                snprintf(s->pkt_iface, sizeof(s->pkt_iface), "%s", devs->name);
-                g_handle = pcap_open_live(devs->name, 65535, 1, 100, errbuf);
+                enum { FALLBACK_MAX = 64 };
+                const char *names[FALLBACK_MAX];
+                int nn = 0;
+                for (pcap_if_t *d = devs; d && nn < FALLBACK_MAX; d = d->next)
+                    names[nn++] = d->name;
+                const char *pick = capture_fallback_device(names, nn);
+                if (pick) {
+                    snprintf(s->pkt_iface, sizeof(s->pkt_iface), "%s", pick);
+                    g_handle = pcap_open_live(pick, 65535, 1, 100, errbuf);
+                }
                 pcap_freealldevs(devs);
             }
         }

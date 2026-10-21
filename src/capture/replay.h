@@ -12,8 +12,12 @@
  *
  * Routing is by the file's datalink, the way the live handles split the
  * world: Ethernet and Linux cooked capture go to the IP path
- * (on_packet()), radiotap goes to the monitor path (on_probe_frame()).
- * Anything else is refused at startup, before a sink opens. */
+ * (on_packet()), radiotap goes to the monitor path (on_probe_frame()),
+ * and the Linux Bluetooth monitor link type (254, what tcpdump or
+ * Wireshark write from libpcap's `bluetooth-monitor` device; btmon's own
+ * -w output is BTSnoop, not a savefile, and is not read) goes to the
+ * Bluetooth host source (#144 slice 2). Anything else is refused at startup,
+ * before a sink opens. */
 
 #include <stdint.h>
 #include "sloth.h"
@@ -24,7 +28,8 @@
 typedef enum {
     REPLAY_ROUTE_NONE = 0,   /* datalink sloth has no decoder for */
     REPLAY_ROUTE_WIRED,      /* EN10MB, LINUX_SLL, LINUX_SLL2 → on_packet() */
-    REPLAY_ROUTE_MONITOR     /* IEEE802_11_RADIO → on_probe_frame() */
+    REPLAY_ROUTE_MONITOR,    /* IEEE802_11_RADIO → on_probe_frame() */
+    REPLAY_ROUTE_BT          /* BLUETOOTH_LINUX_MONITOR → ble_mon_ingest() */
 } replay_route_t;
 
 /* Which path a savefile with link type `dlt` is replayed through. Pure;

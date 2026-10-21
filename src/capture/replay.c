@@ -9,6 +9,7 @@
 #define RP_DLT_EN10MB     1
 #define RP_DLT_LINUX_SLL  113
 #define RP_DLT_RADIOTAP   127
+#define RP_DLT_BT_MONITOR 254
 #define RP_DLT_LINUX_SLL2 276
 
 replay_route_t replay_route(int dlt) {
@@ -17,6 +18,7 @@ replay_route_t replay_route(int dlt) {
     case RP_DLT_LINUX_SLL:
     case RP_DLT_LINUX_SLL2: return REPLAY_ROUTE_WIRED;
     case RP_DLT_RADIOTAP:   return REPLAY_ROUTE_MONITOR;
+    case RP_DLT_BT_MONITOR: return REPLAY_ROUTE_BT;
     default:                return REPLAY_ROUTE_NONE;
     }
 }
@@ -64,6 +66,7 @@ void replay_platform_install(void) {
 #include <pcap.h>
 #include "capture/capture.h"
 #include "capture/probe.h"
+#include "capture/bt_monitor.h"
 
 /* Frames per dispatch. Each batch is re-serialised into an in-memory
  * savefile by the dispatch seam, so this bounds the copy, not the file. */
@@ -96,7 +99,8 @@ int replay_check(const char *path, replay_src_t *src, char *err, int errsz) {
     pcap_close(pc);
     if (src->route == REPLAY_ROUTE_NONE) {
         snprintf(err, (size_t)errsz,
-                 "%s: datalink %d is not Ethernet, Linux cooked or radiotap",
+                 "%s: datalink %d is not Ethernet, Linux cooked, radiotap "
+                 "or Bluetooth Linux monitor",
                  path, src->dlt);
         return -1;
     }
@@ -120,10 +124,19 @@ static int rp_batch_flush(sloth_state_t *s, const replay_src_t *src,
                           rp_batch_t *b) {
     if (b->n == 0) return 0;
     const uint8_t *const *fr = (const uint8_t *const *)b->frames;
-    int got = src->route == REPLAY_ROUTE_MONITOR
-        ? probe_test_dispatch(s, fr, b->lens, b->orig, b->ts, b->n)
-        : capture_dispatch_frames(s, src->dlt, fr, b->lens, b->orig,
-                                  b->ts, b->n);
+    int got;
+    switch (src->route) {
+    case REPLAY_ROUTE_MONITOR:
+        got = probe_test_dispatch(s, fr, b->lens, b->orig, b->ts, b->n);
+        break;
+    case REPLAY_ROUTE_BT:
+        got = bt_monitor_dispatch_frames(fr, b->lens, b->orig, b->ts, b->n);
+        break;
+    default:
+        got = capture_dispatch_frames(s, src->dlt, fr, b->lens, b->orig,
+                                      b->ts, b->n);
+        break;
+    }
     rp_batch_free(b);
     return got;
 }

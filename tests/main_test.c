@@ -78,6 +78,7 @@ void run_reg_rules_tests(void);
 void run_reg_6g_tests(void);              /* tests/test_reg_6g.c (#101 slice B) */
 void run_reg_obs_tests(void);             /* tests/test_reg_obs.c (#101 slice B) */
 void run_ble_snoop_tests(void);           /* tests/test_ble_snoop.c (#144 slice 1) */
+void run_ble_hci_tests(void);             /* tests/test_ble_hci.c (#144 slice 2) */
 void run_deauth_snoop_tests(void);
 void run_flood_window_tests(void);
 void run_clock_seam_tests(void);
@@ -401,6 +402,7 @@ int main(void) {
     run_poll_capture_path_tests();
     run_replay_tests();
     run_ble_snoop_tests();
+    run_ble_hci_tests();
 
     tui_offscreen_end();
     RUNNER_SUMMARY();

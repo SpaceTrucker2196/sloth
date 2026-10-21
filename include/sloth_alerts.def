@@ -284,3 +284,13 @@ X(CAM_SETUP_OUI, "") /* exposure, not adversary technique (#106 slice A) */
  * technique. */
 /* RTSP DESCRIBE answered 200 with no Authorization and no prior 401 on the connection — RFC 2326 §10.2 / RFC 7826 §13.2, §17.4.2 (#106 slice B) */
 X(CAM_RTSP_UNAUTH, "") /* exposure, not adversary technique (#106 slice B) */
+/* Deliberately empty, and for the NO_MONITOR_MODE reason: this reports
+ * sloth's OWN operational state, not an adversary. The host controller
+ * sloth is listening through was told, by the operator's stack, to put
+ * something on the air — an active scan's SCAN_REQ, an inquiry or page,
+ * advertising, a connection — which a passive sensor's own host must
+ * not do (MISSION §2, Bluetooth paragraph). There is no adversary
+ * behaviour to tag; the opcodes it keys on are listed in src/ble_hci.h.
+ * Bucketed by recency, so it resolves once the host goes quiet. */
+/* host controller seen transmitting on the HCI monitor channel — own state (#144 slice 2) */
+X(BT_OWN_TRANSMIT, "") /* own operational state, not adversary (#144 slice 2) */

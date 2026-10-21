@@ -2,8 +2,9 @@
  *
  *   gen_replay OUTDIR [BASE_TS]
  *
- * Writes OUTDIR/wired.pcap (EN10MB) and OUTDIR/monitor.pcap (radiotap)
- * for `make replay-check`. The savefiles are BUILT, never committed:
+ * Writes OUTDIR/wired.pcap (EN10MB), OUTDIR/monitor.pcap (radiotap) and
+ * OUTDIR/bt.pcap (Bluetooth Linux monitor, DLT 254, #144 slice 2) for
+ * `make replay-check`. The savefiles are BUILT, never committed:
  * tests/ holds no .pcap and must not start to (agents/AGENTS.md, "No
  * pcap fixtures"). What is committed is the normalised JSONL sloth
  * writes after reading them — tests/replay/golden.jsonl — so a change
@@ -207,6 +208,98 @@ static void build_monitor(set_t *s) {
     }
 }
 
+/* ── Bluetooth host source (DLT 254) ───────────────────────────────── */
+
+/* libpcap's monitor header, then the payload by monitor opcode (Linux
+ * include/net/bluetooth/hci_mon.h): 0 NEW_INDEX, 2 COMMAND, 3 EVENT,
+ * 5 ACL_RX. Addresses are locally administered / random-static shapes
+ * naming no real device; the local names say what they are. */
+static void bt_hdr(fb_t *b, uint16_t opcode) {
+    fb_be16(b, 0);          /* adapter index: hci0 */
+    fb_be16(b, opcode);
+}
+
+static void bt_cmd(set_t *s, uint16_t op, const uint8_t *p, uint8_t plen) {
+    fb_t b;
+    next_frame(s, &b);
+    bt_hdr(&b, 2);
+    fb_le16(&b, op);        /* Core Spec v5.4 Vol 4 Part E §5.4.1 */
+    fb_u8(&b, plen);
+    fb_bytes(&b, p, plen);
+    keep(s, &b);
+}
+
+/* One LE Advertising Report (§7.7.65.2), one report, a Complete Local
+ * Name AD structure (Vol 3 Part C §11). */
+static void bt_adv(set_t *s, const uint8_t addr_le[6], const char *name,
+                   int8_t rssi) {
+    fb_t b;
+    int nl = (int)strlen(name);
+    next_frame(s, &b);
+    bt_hdr(&b, 3);
+    fb_u8(&b, 0x3E);
+    fb_u8(&b, (uint8_t)(12 + 2 + nl));
+    fb_u8(&b, 0x02);        /* LE Advertising Report */
+    fb_u8(&b, 1);           /* Num_Reports */
+    fb_u8(&b, 0x03);        /* ADV_NONCONN_IND */
+    fb_u8(&b, 0x01);        /* random address */
+    fb_bytes(&b, addr_le, 6);
+    fb_u8(&b, (uint8_t)(2 + nl));
+    fb_u8(&b, (uint8_t)(1 + nl));
+    fb_u8(&b, 0x09);        /* Complete Local Name */
+    fb_bytes(&b, name, nl);
+    fb_u8(&b, (uint8_t)rssi);
+    keep(s, &b);
+}
+
+static void build_bt(set_t *s) {
+    static const uint8_t CTRL[6] = { 0x01, 0x53, 0x00, 0x5e, 0x00, 0x02 };
+    static const uint8_t TAG1[6] = { 0x01, 0x00, 0x00, 0x00, 0x00, 0xC0 };
+    static const uint8_t TAG2[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0xC0 };
+    fb_t b;
+
+    /* NEW_INDEX: primary controller on USB, "hci0". */
+    next_frame(s, &b);
+    bt_hdr(&b, 0);
+    fb_u8(&b, 0x00);
+    fb_u8(&b, 0x01);
+    fb_bytes(&b, CTRL, 6);
+    fb_bytes(&b, "hci0\0\0\0\0", 8);
+    keep(s, &b);
+
+    /* LE Set Scan Parameters (§7.8.10): PASSIVE, 10 ms / 10 ms, public
+     * own address, basic unfiltered policy — the scan docs/wiki/ble.md
+     * asks the operator to run. Then LE Set Scan Enable (§7.8.11). */
+    static const uint8_t params[7] = { 0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00 };
+    bt_cmd(s, 0x200B, params, 7);
+    static const uint8_t enable[2] = { 0x01, 0x00 };
+    bt_cmd(s, 0x200C, enable, 2);
+
+    bt_adv(s, TAG1, "replay-tag-1", -48);
+    bt_adv(s, TAG2, "replay-tag-2", -71);
+    bt_adv(s, TAG1, "replay-tag-1", -45);
+
+    /* A two-report event: refused whole and counted. */
+    next_frame(s, &b);
+    bt_hdr(&b, 3);
+    fb_u8(&b, 0x3E);
+    fb_u8(&b, 2 + 2 + 2 + 12 + 2 + 2);
+    fb_u8(&b, 0x02);
+    fb_u8(&b, 2);
+    fb_u8(&b, 0x03); fb_u8(&b, 0x03);
+    fb_u8(&b, 0x01); fb_u8(&b, 0x01);
+    fb_bytes(&b, TAG1, 6); fb_bytes(&b, TAG2, 6);
+    fb_u8(&b, 0); fb_u8(&b, 0);
+    fb_u8(&b, (uint8_t)-60); fb_u8(&b, (uint8_t)-61);
+    keep(s, &b);
+
+    /* ACL data: outside the allow-list, never read. */
+    next_frame(s, &b);
+    bt_hdr(&b, 5);
+    for (int i = 0; i < 12; i++) fb_u8(&b, 0xA5);
+    keep(s, &b);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2 || argc > 3) {
         fprintf(stderr, "usage: %s OUTDIR [BASE_TS]\n", argv[0]);
@@ -224,10 +317,11 @@ int main(int argc, char **argv) {
         base = (uint32_t)v;
     }
 
-    static set_t wired, mon;
+    static set_t wired, mon, bt;
     build_wired(&wired);
     build_monitor(&mon);
-    if (wired.bad || mon.bad) {
+    build_bt(&bt);
+    if (wired.bad || mon.bad || bt.bad) {
         fprintf(stderr, "gen_replay: a frame overflowed its buffer\n");
         return 1;
     }
@@ -237,5 +331,7 @@ int main(int argc, char **argv) {
     if (write_set(path, PCAP_DLT_EN10MB, &wired, base) != 0) return 1;
     snprintf(path, sizeof path, "%s/monitor.pcap", argv[1]);
     if (write_set(path, PCAP_DLT_RADIOTAP, &mon, base) != 0) return 1;
+    snprintf(path, sizeof path, "%s/bt.pcap", argv[1]);
+    if (write_set(path, PCAP_DLT_BT_MONITOR, &bt, base) != 0) return 1;
     return 0;
 }

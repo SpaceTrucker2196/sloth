@@ -15,6 +15,7 @@ scripts) code against.
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
 **Last updated**: 2026-10-21 (#155: `device` gained `cam_score`, `cam_evidence`, `cam_vetoes`, `cam_conflict`, `dhcp_prl`, `dhcp_vci`, `device_class` `"not-camera"`; `evict_lan_role` appended to the `sensor_health` breakout); 2026-10-20 (#106 slice B: `evict_rtsp_exchange` / `evict_rtsp_stream` appended to the `sensor_health` breakout); 2026-10-20 (#92 slice 3: `storage_pcap_failures` / `storage_eapol_failures` also count hashed-manifest failures; the manifest is its own JSONL file, not this stream); 2026-10-20 (#92 slices 1+2: `pcap_path` / `pcap_write_failures` on evidence-citing alerts; review: `-N` suffix on a name an earlier run used); 2026-10-19 (#143: `evict_deauth_obs`, `evict_deauth_victim`; #110: eleven more `evict_*` fields — fragattack and the last hand-written keyed tables; #132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured)., #131, #129, #138, #85, #90, #91
+**Last updated**: 2026-10-21 (#144 slice 2: the Bluetooth host block appended to `sensor_health` after `libs` — `btmon_*` stream health, `ble_*` decode counters, scan mode / filter policy, own-transmission recency; `evict_ble_device`); 2026-10-20 (#106 slice B: `evict_rtsp_exchange` / `evict_rtsp_stream` appended to the `sensor_health` breakout); 2026-10-20 (#92 slice 3: `storage_pcap_failures` / `storage_eapol_failures` also count hashed-manifest failures; the manifest is its own JSONL file, not this stream); 2026-10-20 (#92 slices 1+2: `pcap_path` / `pcap_write_failures` on evidence-citing alerts; review: `-N` suffix on a name an earlier run used); 2026-10-19 (#143: `evict_deauth_obs`, `evict_deauth_victim`; #110: eleven more `evict_*` fields — fragattack and the last hand-written keyed tables; #132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured)., #131, #129, #138, #85, #90, #91
 
 ---
 
@@ -719,6 +720,7 @@ does not know the type ignores it, as it would any other.
 | `capture_*` / `monitor_*` | the per-stream block below, once for each of the two handles |
 | `evictions` | total observations discarded by a full bounded table, lifetime |
 | `evict_alert`, `evict_top_host`, `evict_pnl_client`, `evict_pnl_ssid`, `evict_dhcp_event`, `evict_eap_session`, `evict_device`, `evict_beacon_ap`, `evict_seqnum_client`, `evict_assoc_pair`, `evict_assoc_req`, `evict_wps_session`, `evict_evidence_frame`, `evict_probe_client`, `evict_pm_forge`, `evict_queue_evict`, `evict_pcap_cooldown`, `evict_dns_log`, `evict_tls_log`, `evict_quic_log`, `evict_http_log`, `evict_ntp_log`, `evict_icmp_log`, `evict_rf_channel`, `evict_http_flow`, `evict_bgp_session`, `evict_ldap_event`, `evict_kerb_event`, `evict_smb_session`, `evict_ssh_flow`, `evict_rdp_flow`, `evict_snmp_flow`, `evict_mqtt_flow`, `evict_mdns_service`, `evict_nbns_name`, `evict_arp_hist`, `evict_frag_bss`, `evict_frag_sta`, `evict_frag_session`, `evict_frag_assoc`, `evict_frag_mpdu`, `evict_ndp_ra`, `evict_rogue_radius`, `evict_ssdp_device`, `evict_onvif_device`, `evict_smtp_flow`, `evict_eapol_pending`, `evict_deauth_obs`, `evict_deauth_victim`, `evict_rtsp_exchange`, `evict_rtsp_stream`, `evict_lan_role` | the same total broken out per table, in `sh_evict_t` order |
+| `evict_alert`, `evict_top_host`, `evict_pnl_client`, `evict_pnl_ssid`, `evict_dhcp_event`, `evict_eap_session`, `evict_device`, `evict_beacon_ap`, `evict_seqnum_client`, `evict_assoc_pair`, `evict_assoc_req`, `evict_wps_session`, `evict_evidence_frame`, `evict_probe_client`, `evict_pm_forge`, `evict_queue_evict`, `evict_pcap_cooldown`, `evict_dns_log`, `evict_tls_log`, `evict_quic_log`, `evict_http_log`, `evict_ntp_log`, `evict_icmp_log`, `evict_rf_channel`, `evict_http_flow`, `evict_bgp_session`, `evict_ldap_event`, `evict_kerb_event`, `evict_smb_session`, `evict_ssh_flow`, `evict_rdp_flow`, `evict_snmp_flow`, `evict_mqtt_flow`, `evict_mdns_service`, `evict_nbns_name`, `evict_arp_hist`, `evict_frag_bss`, `evict_frag_sta`, `evict_frag_session`, `evict_frag_assoc`, `evict_frag_mpdu`, `evict_ndp_ra`, `evict_rogue_radius`, `evict_ssdp_device`, `evict_onvif_device`, `evict_smtp_flow`, `evict_eapol_pending`, `evict_deauth_obs`, `evict_deauth_victim`, `evict_rtsp_exchange`, `evict_rtsp_stream`, `evict_ble_device` | the same total broken out per table, in `sh_evict_t` order |
 | `storage_failures` | total write failures across every on-disk sink, lifetime (#92) — "I detected something but could not persist the evidence", which used to be stderr-only or, for EAPOL, a view-header count nobody piping this stream would ever see |
 | `storage_jsonl_failures`, `storage_pcap_failures`, `storage_eapol_failures` | the same total broken out per sink: the `-o` log, per-alert pcap export, and the EAPOL 22000/handshake-pcap export. Since #92 slice 3 the pcap and EAPOL counts also include a failed append to that directory's hashed manifest ([[pcap-export]] §5) — the record of the evidence failed, the evidence itself did not. No new field |
 | `pcap_dir_free_mb` | MB free on the filesystem holding `--pcap-dir`, or **-1 for not measured** (no `--pcap-dir`, or `fstatvfs` failed). -1 rather than 0 on purpose: 0 free would read as a full filesystem on every sensor that exports no pcaps, which is most of them (#96) |
@@ -742,8 +744,30 @@ does not know the type ignores it, as it would any other.
 | `fd_count` | open descriptors in this process now (the sampler's own directory stream excluded). A slope is a handle leak — sockets, pcap dumpers, files on an error branch |
 | `resolver_calls` | lifetime `getnameinfo(3)` calls — the one path that loads NSS modules sloth does not control. Stays `0` unless `--allow-active` started the DNS worker |
 | `libs` | the parser libraries this process **loaded**, as `pcap: <pcap_lib_version()>; sqlite: <sqlite3_libversion()>`; either reads `none` in a build without it (#142). The loaded library, not the one built against: the distribution patches libpcap and sqlite independently of the sloth binary, so this is what to match against an advisory. Appended last; **additive**. Fixed for the life of the process, so it is outside the change-only signature and rides every line — no record of this type is ever without it |
+| `btmon_iface` | the Bluetooth host source: `bluetooth-monitor` under `--bt-monitor`, `replay` for a DLT 254 `--replay` file, `""` when neither is configured — which is what says the zeros below mean "not listening", not "nothing heard" (#144 slice 2). Appended after `libs`; **additive** |
+| `btmon_err` | why `--bt-monitor` could not open the channel (no such device, permission, a datalink other than 254), `""` = none |
+| `btmon_open` … `btmon_stale_secs` | the per-stream block below, for the HCI monitor worker. `btmon_stats_valid` may stay `0` for the whole run: libpcap's Bluetooth monitor backend need not implement `pcap_stats()`, and `0` there means *not measured*, not *no drops* |
+| `ble_controllers` | NEW_INDEX records seen — controllers the kernel announced on the monitor channel since sloth opened it (a controller already up when sloth started is announced too: the kernel replays the index list to a new monitor socket) |
+| `ble_devices` | rows in the BLE advertiser table now |
+| `ble_records` | every monitor record offered to the decoder, lifetime. Each lands in exactly one bucket: `ble_controllers`, `ble_adv_reports`, `ble_multi_report_rejected`, `ble_ext_adv_undecoded`, `ble_records_ignored`, `ble_records_malformed` or `ble_host_commands`, which therefore sum to it |
+| `ble_adv_reports` | single-report LE Advertising Reports (HCI LE Meta event 0x3E, subevent 0x02) decoded, lifetime. The `ble` sensor's observation count |
+| `ble_multi_report_rejected` | LE Advertising Reports with `Num_Reports` > 1, **refused whole**. The Core Specification draws the parameters as per-field arrays and the Linux kernel parses them as consecutive records; the two agree only for one report, so until the layout is confirmed sloth decodes none of a multi-report event rather than misattribute its fields. A rising count is advertising heard and not decoded |
+| `ble_ext_adv_undecoded` | LE Extended Advertising Reports (subevent 0x0D) seen and not decoded yet. A controller the host drives with the extended scan commands reports **only** these, so a large count here with `ble_adv_reports` flat is a sensor that is listening and decoding nothing |
+| `ble_records_ignored` | records outside the allow-list (ACL and SCO data, every other HCI event and command, MGMT traffic), dropped after reading at most their opcode. Link keys, LTKs and IRKs travel this channel; none of it is read or written anywhere |
+| `ble_records_malformed` | allow-listed records whose length does not match their clause, or that were snapped (captured shorter than sent) — never decoded from a prefix |
+| `ble_host_commands` | allow-listed host commands read (the scan, advertise and connect commands under `BT_OWN_TRANSMIT` in [[alerts]], plus scan enable), lifetime |
+| `ble_scan_mode` | `unknown`, `passive` or `active`: the LE scan type the host last set with LE Set Scan Parameters (0x200B) or LE Set Extended Scan Parameters (0x2041). **`unknown` until such a command is seen**, never inferred from the absence of one |
+| `ble_scan_filter` | the Scanning_Filter_Policy from the same command: `basic`, `accept_list`, `extended`, `extended_accept_list`, or `unknown` |
+| `ble_scan_accept_list` | `1` when that policy limits reports to the controller's Filter Accept List — the scan hears only devices the host already knows, and its silence about anything else is not a quiet room. `0` for an unfiltered policy, `-1` unknown |
+| `ble_scan_enabled` | the last LE Set (Extended) Scan Enable: `1`, `0`, or `-1` unknown |
+| `ble_own_tx` | `never`, `recent` (within 120 s) or `earlier`: the recency of the last host command that makes the controller transmit (the list under `BT_OWN_TRANSMIT` in [[alerts]]). Bucketed, not latched |
+| `ble_own_tx_kind` | which one it was: `active_scan`, `inquiry`, `periodic_inquiry`, `advertising`, `ext_advertising`, `periodic_advertising`, `le_connect`, `bredr_connect`, `remote_name_request`, `inquiry_page_scan`, or `none` |
+| `ble_own_tx_count` | such commands, lifetime |
+| `ble_own_tx_secs` | seconds since the last one arrived, host clock; `-1` never. Outside the signature |
 
-Per-stream block, with `<s>` being `capture` or `monitor`:
+Per-stream block, with `<s>` being `capture` or `monitor` — and `btmon`
+for the Bluetooth host source, whose block is appended after `libs`
+(#144 slice 2):
 | `<s>_last_frame_ts` | the capture timestamp of the last frame this stream delivered, `0` if none yet. The frame's OWN clock, so it correlates with other records from the same capture (#91) |
 | `<s>_stale_secs` | seconds since a frame last **arrived**, on the host clock, or `-1` if none ever has. Measured on the host clock and not derived from `<s>_last_frame_ts` on purpose: an offline replay carries timestamps far from now, so deriving age from the frame clock would report a dead stream for a healthy one. `-1` is not `0` — "never delivered" and "delivered just now" are different claims, and a stream that never started must not read as fresh. The change-only signature carries a bucketed state (never / fresh / stale past 60 s), never the raw seconds, or this record would emit once a second forever |
 
@@ -794,6 +818,15 @@ them reads `-1` for "not measured", never `0`.
 
 `libs` (#142) is outside it for the opposite reason: it never moves, so
 it could never be the change worth a line.
+
+The Bluetooth block (#144 slice 2) signs over the `btmon` liveness and
+exit fields, its stale **band** (as for the other two streams), the
+`ble_own_tx` bucket and the set of own-transmission kinds ever seen,
+`ble_scan_mode`, the filter policy, `ble_controllers`, and a none/some
+band for each of the rejected, undecoded and malformed counters. Not
+the last kind (a stack alternating scan and advertising would flip it
+on every command), not `ble_scan_enabled` (BlueZ discovery toggles it
+every few seconds), not `ble_own_tx_secs`, and not the record counts.
 
 The raw `chan_requested` / `chan_confirmed` numbers and the
 `chan_retune_failures` count left the signature in #91's close-out.
@@ -849,6 +882,7 @@ Owner decisions recorded 2026-10-19 (#85 close-out, plan in #145):
 
 **What the eviction tally does and does not cover.** Counted — one
 `evict_<name>` field each, and this is the whole set: `alert`, `top_host`, `pnl_client`, `pnl_ssid`, `dhcp_event`, `eap_session`, `device`, `beacon_ap`, `seqnum_client`, `assoc_pair`, `assoc_req`, `wps_session`, `evidence_frame`, `probe_client`, `pm_forge`, `queue_evict`, `pcap_cooldown`, `dns_log`, `tls_log`, `quic_log`, `http_log`, `ntp_log`, `icmp_log`, `rf_channel`, `http_flow`, `bgp_session`, `ldap_event`, `kerb_event`, `smb_session`, `ssh_flow`, `rdp_flow`, `snmp_flow`, `mqtt_flow`, `mdns_service`, `nbns_name`, `arp_hist`, `frag_bss`, `frag_sta`, `frag_session`, `frag_assoc`, `frag_mpdu`, `ndp_ra`, `rogue_radius`, `ssdp_device`, `onvif_device`, `smtp_flow`, `eapol_pending`, `deauth_obs`, `deauth_victim`, `rtsp_exchange`, `rtsp_stream`, `lan_role`. The
+`evict_<name>` field each, and this is the whole set: `alert`, `top_host`, `pnl_client`, `pnl_ssid`, `dhcp_event`, `eap_session`, `device`, `beacon_ap`, `seqnum_client`, `assoc_pair`, `assoc_req`, `wps_session`, `evidence_frame`, `probe_client`, `pm_forge`, `queue_evict`, `pcap_cooldown`, `dns_log`, `tls_log`, `quic_log`, `http_log`, `ntp_log`, `icmp_log`, `rf_channel`, `http_flow`, `bgp_session`, `ldap_event`, `kerb_event`, `smb_session`, `ssh_flow`, `rdp_flow`, `snmp_flow`, `mqtt_flow`, `mdns_service`, `nbns_name`, `arp_hist`, `frag_bss`, `frag_sta`, `frag_session`, `frag_assoc`, `frag_mpdu`, `ndp_ra`, `rogue_radius`, `ssdp_device`, `onvif_device`, `smtp_flow`, `eapol_pending`, `deauth_obs`, `deauth_victim`, `rtsp_exchange`, `rtsp_stream`, `ble_device`. The
 device table refuses a new entry rather than evicting an old one —
 different mechanism, same meaning. The 802.11 tables (`beacon_ap`,
 `seqnum_client`, the two `assoc_*`, `wps_session`) joined after the
@@ -869,6 +903,8 @@ with #143 the two deauth tables (`deauth_obs`, `deauth_victim`), and
 with #106 slice B the RTSP observer's connection and stream tables
 (`rtsp_exchange`, `rtsp_stream`), and with #155 the router-role table
 the camera classifier vetoes from (`lan_role`); the list above is kept in
+(`rtsp_exchange`, `rtsp_stream`), and with #144 slice 2 the BLE
+advertiser table (`ble_device`); the list above is kept in
 step with the build by `tests/test_sensor_health.c ::
 test_schema_doc_lists_every_counted_table`.
 
@@ -927,6 +963,12 @@ anyone on the segment can forge, so a spray of fake servers churns the
 table rather than filling it; an eviction loses that address's
 router-role evidence, and a mixed-vendor device it vetoed reads
 unclassified again until the role is seen anew.
+**`ble_device` is `STAB_OLDEST`** (#144 slice 2), 256 rows keyed by
+(address, address type). An advertiser chooses its own address and a
+random one rotates by design, so the key space is the transmitter's: a
+non-zero value means more than 256 distinct advertisers since the
+oldest row was last heard — a crowded room or an address-rotation
+spray — not a fault.
 
 **`arp_hist` has a consequence beyond the count.** The ARP-spoof
 baseline is `STAB_OLDEST` keyed by IP (previously it too refused new

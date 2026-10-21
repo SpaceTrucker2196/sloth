@@ -125,6 +125,8 @@
 #include "capture/capture.h"   /* likewise — and #57's scope check needs it
                                   in the no-pcap build too */
 #include "capture/replay.h"    /* --replay / --ticks (#119) */
+#include "capture/bt_monitor.h" /* --bt-monitor (#144 slice 2) */
+#include "ble_hci.h"
 
 static sloth_state_t g_state;
 /* Written from on_signal(), so the type is the one C99 7.14.1.1 allows a
@@ -305,6 +307,7 @@ static void print_usage(const char *argv0) {
             "       [--data-socket SPEC] [--data-socket-allow-remote]\n"
             "       [--no-discovery] [--out-format FORMAT]\n"
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
+            "       [--bt-monitor]\n"
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
@@ -520,6 +523,16 @@ static void print_usage(const char *argv0) {
             "                     from every other interface are dropped in the\n"
             "                     capture callback before decode. Purely\n"
             "                     logical — OS interface state is untouched.\n"
+            "  --bt-monitor       also listen to the Linux Bluetooth HCI\n"
+            "                     monitor channel (libpcap bluetooth-monitor):\n"
+            "                     controllers, LE advertising reports and the\n"
+            "                     host's own scan/advertise/connect commands.\n"
+            "                     Receive-only — the kernel gives that socket\n"
+            "                     no transmit path, and sloth sends no HCI or\n"
+            "                     MGMT command. Start a PASSIVE scan yourself\n"
+            "                     (docs/wiki/ble.md); sensor_health reports\n"
+            "                     the scan mode it saw. Needs CAP_NET_RAW at\n"
+            "                     startup. Raw bluetoothN devices are refused.\n"
             "  --monitor-only     shorthand: restrict the data stream to the\n"
             "                     monitor-mode Wi-Fi interface sloth discovers\n"
             "                     at startup. Fail-closed: if no monitor\n"
@@ -574,12 +587,15 @@ static void print_usage(const char *argv0) {
             "                     read libpcap savefiles instead of opening\n"
             "                     any interface (max 8). Ethernet and Linux\n"
             "                     cooked files feed the IP path, radiotap\n"
-            "                     files the 802.11 monitor path. No host\n"
+            "                     files the 802.11 monitor path, Bluetooth\n"
+            "                     Linux monitor files (DLT 254) the BLE host\n"
+            "                     source. No host\n"
             "                     state is read: interfaces, sockets, ARP,\n"
             "                     DHCP and Wi-Fi scan come back empty, so\n"
             "                     the output describes the files alone.\n"
-            "                     Refused with --iface, --monitor-only and\n"
-            "                     --hop, which name live capture.\n"
+            "                     Refused with --iface, --monitor-only,\n"
+            "                     --hop and --bt-monitor, which name live\n"
+            "                     capture.\n"
             "  --ticks N          exit 0 after N poll ticks (1..1000000).\n"
             "                     With --replay --headless this is a batch\n"
             "                     run: replay, tick, flush the sinks, exit.\n"
@@ -699,6 +715,7 @@ int main(int argc, char **argv) {
     const char *allow_ifaces[MAX_IFACES];/* --iface NAME, repeatable (#35) */
     int         allow_iface_count = 0;
     int         monitor_only = 0;        /* --monitor-only (#35) */
+    int         bt_monitor   = 0;        /* --bt-monitor (#144 slice 2) */
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     time_t      session_start = sloth_wall();
@@ -773,6 +790,16 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--check-manifest") && i + 1 < argc) {
             check_manifest = argv[++i];
         } else if (!strcmp(argv[i], "--iface") && i + 1 < argc) {
+            /* A raw HCI device is never a capture source (#144). The
+             * allow-list opens nothing itself, but naming one is a
+             * request sloth will not serve, so it is refused, not
+             * carried as an entry that can never match. */
+            if (bt_dev_is_raw_hci(argv[i + 1])) {
+                fprintf(stderr, "sloth: --iface %s refused: a raw HCI "
+                                "device accepts injected packets; use "
+                                "--bt-monitor\n", argv[i + 1]);
+                return 2;
+            }
             if (allow_iface_count < MAX_IFACES)
                 allow_ifaces[allow_iface_count++] = argv[++i];
             else {
@@ -782,6 +809,8 @@ int main(int argc, char **argv) {
             }
         } else if (!strcmp(argv[i], "--monitor-only")) {
             monitor_only = 1;
+        } else if (!strcmp(argv[i], "--bt-monitor")) {
+            bt_monitor = 1;
         } else if (!strcmp(argv[i], "--hop")) {
             g_hop_enabled = 1;
         } else if (!strcmp(argv[i], "--tune-list")) {
@@ -987,6 +1016,13 @@ int main(int argc, char **argv) {
      * ignored — an --iface that silently did nothing would read as a
      * replay filtered to that interface. Whole-command-line, like the
      * --eapol-dir check above. */
+#ifndef WITH_PCAP
+    if (bt_monitor) {
+        fprintf(stderr, "sloth: --bt-monitor needs a build with libpcap "
+                        "(this one is WITH_PCAP=0)\n");
+        return 2;
+    }
+#endif
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
     int  replay_count = 0;
     if (replay_arg) {
@@ -1003,10 +1039,10 @@ int main(int argc, char **argv) {
                     replay_arg, REPLAY_MAX_FILES);
             return 2;
         }
-        if (allow_iface_count || monitor_only || g_hop_enabled) {
+        if (allow_iface_count || monitor_only || g_hop_enabled || bt_monitor) {
             fprintf(stderr, "sloth: --replay reads savefiles, not "
-                            "interfaces: --iface, --monitor-only and --hop "
-                            "do not apply\n");
+                            "interfaces: --iface, --monitor-only, --hop "
+                            "and --bt-monitor do not apply\n");
             return 2;
         }
         /* --allow-active would send PTR queries for addresses read out of
@@ -1167,6 +1203,9 @@ int main(int argc, char **argv) {
             if (replay_srcs[i].route == REPLAY_ROUTE_MONITOR) {
                 snprintf(g_state.probe_iface, sizeof(g_state.probe_iface),
                          "replay");
+            } else if (replay_srcs[i].route == REPLAY_ROUTE_BT) {
+                snprintf(g_state.bt_iface, sizeof(g_state.bt_iface),
+                         "replay");
             } else if (!g_state.pkt_iface[0]) {
                 snprintf(g_state.pkt_iface, sizeof(g_state.pkt_iface),
                          "replay");
@@ -1176,6 +1215,20 @@ int main(int argc, char **argv) {
     } else {
         capture_open(&g_state);
         probe_open(&g_state);
+        /* #144 slice 2: beside the IP handle and for the same reason —
+         * binding the monitor channel needs CAP_NET_RAW, which the drop
+         * below gives up. Opt-in, and a failure is announced and the run
+         * continues, the decision already taken for an IP capture that
+         * could not be opened; sensor_health carries bt_err. */
+        if (bt_monitor) {
+            if (bt_monitor_open(&g_state) == 0)
+                fprintf(stderr, "sloth: Bluetooth HCI monitor open (%s, "
+                                "receive-only; start a passive scan "
+                                "yourself — see docs/wiki/ble.md)\n",
+                        g_state.bt_iface);
+            else
+                fprintf(stderr, "sloth: --bt-monitor: %s\n", g_state.bt_err);
+        }
     }
     /* First-launch UX (#25): when a monitor interface is present, open on
      * the RF-aware dashboard rather than the interface list. */
@@ -1204,6 +1257,7 @@ int main(int argc, char **argv) {
 #ifdef WITH_PCAP
             probe_stop();
             capture_stop();
+            bt_monitor_stop();
 #endif
             dns_cleanup();
             g_platform.cleanup();
@@ -1230,6 +1284,7 @@ int main(int argc, char **argv) {
 #ifdef WITH_PCAP
             probe_stop();
             capture_stop();
+            bt_monitor_stop();
 #endif
             g_platform.cleanup();
             return 2;
@@ -1379,7 +1434,9 @@ int main(int argc, char **argv) {
         }
         fprintf(stderr, "sloth: replayed %ld frame(s) from %s (%s path)\n",
                 nf, replay_srcs[i].path,
-                replay_srcs[i].route == REPLAY_ROUTE_MONITOR ? "802.11" : "IP");
+                replay_srcs[i].route == REPLAY_ROUTE_MONITOR ? "802.11"
+                : replay_srcs[i].route == REPLAY_ROUTE_BT    ? "Bluetooth"
+                                                             : "IP");
     }
     capture_run();
     /* #85: an allow-listed name that did not resolve is failed closed,
@@ -1415,6 +1472,7 @@ int main(int argc, char **argv) {
         }
     }
     probe_run();
+    bt_monitor_run();
 #endif
     event_wake_init();
     updater_init(check_manifest);
@@ -1484,6 +1542,7 @@ int main(int argc, char **argv) {
 #ifdef WITH_PCAP
     probe_stop();
     capture_stop();
+    bt_monitor_stop();
     /* After probe_stop() joins the monitor thread — the only writer — so
      * the arena cannot be freed from under a frame in flight. */
     evidence_ring_shutdown();

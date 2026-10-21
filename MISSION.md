@@ -24,7 +24,7 @@ console** for IP, 802.11 and Bluetooth (Classic BR/EDR and Low Energy)
 networks. It turns what a host already sees — `/proc`, `/sys`, netlink,
 a libpcap stream, and a Bluetooth receiver (the host's HCI controller,
 or an Ubertooth for over-the-air capture) — into a live
-operator view: <!-- count:views -->35<!-- /count --> panels, <!-- count:rules -->86<!-- /count --> alert rules, an embedded (synthetic)
+operator view: <!-- count:views -->35<!-- /count --> panels, <!-- count:rules -->87<!-- /count --> alert rules, an embedded (synthetic)
 threat-intel matcher, a WiFi-SIGINT toolkit, and an optional JSONL
 forensic log.
 
@@ -154,7 +154,7 @@ truth for this number; if the two disagree, the `#define` is right):
 
 - **<!-- count:views -->35<!-- /count --> views** (`VIEW_COUNT`), keyed `[1]…[0]`, `[a]…[z]`, indexed in
   the README and in [`docs/wiki/views-catalog.md`](docs/wiki/views-catalog.md).
-- **<!-- count:rules -->86<!-- /count --> alert rules** in `src/alerts.c` — one per `ALERT_TYPE_*`, each
+- **<!-- count:rules -->87<!-- /count --> alert rules** in `src/alerts.c` — one per `ALERT_TYPE_*`, each
   with a row in [`docs/views/alerts.md`](docs/views/alerts.md) and a
   cited basis in `research/` (enforced by
   `tests/test_research_corpus.c`).

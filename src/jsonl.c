@@ -21,6 +21,7 @@
 #include "formatter.h"
 #include "views/procs.h"
 #include "sensor_health.h"
+#include "ble_hci.h"        /* Bluetooth host source names (#144 slice 2) */
 #include "wifi_chanhop.h"     /* chanhop_retune_reason() (#91) */
 #include "libver.h"
 #include "capture/capture.h"
@@ -2090,6 +2091,19 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * the transition worth a line, the running count rides the
          * heartbeat like `evictions` of a flow ring. */
         int      socket_clients, socket_refused_any;
+        /* #144 slice 2, the Bluetooth host source. Liveness and the
+         * stale BAND, as for the other two streams. Own transmission
+         * enters as its recency bucket and the set of kinds ever seen —
+         * never the seconds-since, never the last kind, which a stack
+         * alternating scan and advertising would flip on every command.
+         * Scan enable is left out for the same reason: BlueZ discovery
+         * toggles it every few seconds. The record counters are
+         * none/some bands, like the socket refusals above. */
+        int      bt_open, bt_run, bt_exit, bt_stale_state;
+        int      ble_tx_recency, ble_scan_mode, ble_filter_policy;
+        uint32_t ble_tx_kind_mask;
+        int      ble_controllers;
+        int      ble_multi_any, ble_ext_adv_any, ble_malformed_any;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -2172,6 +2186,19 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     const unsigned long long socket_refused = data_socket_peer_refused_total();
     sig.socket_clients     = socket_clients;
     sig.socket_refused_any = socket_refused > 0;
+    const ble_host_t *bh = &s->ble_host;
+    sig.bt_open           = s->bt_health.open;
+    sig.bt_run            = s->bt_health.running;
+    sig.bt_exit           = s->bt_health.exit_reason;
+    sig.bt_stale_state    = stale_state(s->bt_health.stale_secs);
+    sig.ble_tx_recency    = bt_tx_recency(bh->last_tx_wall, now);
+    sig.ble_scan_mode     = bh->scan_mode;
+    sig.ble_filter_policy = bh->filter_policy;
+    sig.ble_tx_kind_mask  = bh->tx_kind_mask;
+    sig.ble_controllers   = bh->controllers;
+    sig.ble_multi_any     = bh->multi_rejected > 0;
+    sig.ble_ext_adv_any   = bh->ext_adv_undecoded > 0;
+    sig.ble_malformed_any = bh->malformed > 0;
 
     /* Singleton: one fixed key, so the slot is this record's alone. */
     static const char health_key[] = "sensor";
@@ -2333,6 +2360,45 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         char lbuf[192];
         libver_format(lbuf, sizeof(lbuf));
         kv_str(buf, LINEBUF, &off, "libs", lbuf);
+    }
+    /* Bluetooth host source (#144 slice 2). Appended, so every earlier
+     * field keeps its name and position. Counters and decoded state
+     * only: nothing that crossed the monitor channel is written here
+     * verbatim (src/ble_hci.h). `btmon_iface` is "" when no Bluetooth
+     * source is configured, which is what tells a consumer the zeros
+     * below mean "not listening" rather than "nothing heard". */
+    {
+        const ble_host_t *h = &s->ble_host;
+        int rec = bt_tx_recency(h->last_tx_wall, now);
+        kv_str(buf, LINEBUF, &off, "btmon_iface", s->bt_iface);
+        kv_str(buf, LINEBUF, &off, "btmon_err",   s->bt_err);
+        health_kv(buf, &off, "btmon", &s->bt_health);
+        kv_int(buf, LINEBUF, &off, "ble_controllers",  h->controllers);
+        kv_int(buf, LINEBUF, &off, "ble_devices",      s->ble_device_count);
+        kv_int(buf, LINEBUF, &off, "ble_records",      (long long)h->records);
+        kv_int(buf, LINEBUF, &off, "ble_adv_reports",  (long long)h->adv_reports);
+        /* Refused whole until the multi-report layout is confirmed
+         * against the spec: a rising count here is advertising sloth
+         * heard and did not decode. */
+        kv_int(buf, LINEBUF, &off, "ble_multi_report_rejected",
+               (long long)h->multi_rejected);
+        kv_int(buf, LINEBUF, &off, "ble_ext_adv_undecoded",
+               (long long)h->ext_adv_undecoded);
+        kv_int(buf, LINEBUF, &off, "ble_records_ignored",   (long long)h->ignored);
+        kv_int(buf, LINEBUF, &off, "ble_records_malformed", (long long)h->malformed);
+        kv_int(buf, LINEBUF, &off, "ble_host_commands",     (long long)h->commands);
+        kv_str(buf, LINEBUF, &off, "ble_scan_mode", ble_scan_mode_name(h->scan_mode));
+        kv_str(buf, LINEBUF, &off, "ble_scan_filter",
+               ble_filter_policy_name(h->filter_policy));
+        kv_int(buf, LINEBUF, &off, "ble_scan_accept_list",
+               h->filter_policy < 0 ? -1
+                   : ble_filter_policy_is_accept_list(h->filter_policy));
+        kv_int(buf, LINEBUF, &off, "ble_scan_enabled", h->scan_enabled);
+        kv_str(buf, LINEBUF, &off, "ble_own_tx", bt_tx_recency_name(rec));
+        kv_str(buf, LINEBUF, &off, "ble_own_tx_kind", bt_tx_kind_name(h->last_tx_kind));
+        kv_int(buf, LINEBUF, &off, "ble_own_tx_count", (long long)h->tx_count);
+        kv_int(buf, LINEBUF, &off, "ble_own_tx_secs",
+               h->last_tx_wall > 0 ? (long long)(now - h->last_tx_wall) : -1);
     }
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
