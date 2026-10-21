@@ -123,9 +123,13 @@ Single binary `sloth`. Test binary `sloth_test`.
 
   The exception is deliberate and narrow, and it has two forms. The
   first is a rule reporting sloth's **own operational state** rather
-  than an adversary: `ALERT_TYPE_NO_MONITOR_MODE` is still the only one,
-  and there is no CVE, advisory or clause to cite for it, so it is
-  excluded from the coverage count rather than treated as a gap.
+  than an adversary: `ALERT_TYPE_NO_MONITOR_MODE` and, since #144 slice
+  2, `ALERT_TYPE_BT_OWN_TRANSMIT` (the host's own Bluetooth controller
+  seen transmitting). There is no CVE, advisory or clause to cite for
+  either, so they are excluded from the coverage count rather than
+  treated as gaps. The set is pinned by
+  `tests/test_research_corpus.c :: test_own_state_kinds_are_named`;
+  trust that test, not this sentence, for the current list.
 
   The second arrived with #80 and is **not** the same thing: a finding
   that has a real, citable basis but no honest *ATT&CK technique*,
