@@ -14,6 +14,8 @@ void web_config_defaults(web_config_t *c) {
     web_acl_init_loopback(&c->acl);
     c->timeout_ms   = WEB_DEFAULT_TIMEOUT_MS;
     c->linger_ms    = WEB_DEFAULT_LINGER_MS;
+    c->tick_ms      = WEB_DEFAULT_TICK_MS;
+    c->ping_ms      = WEB_DEFAULT_PING_MS;
 }
 
 static int parse_port(const char *p, uint16_t *port, int allow_zero) {

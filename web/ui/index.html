@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>slothweb</title>
+<style>
+@include theme.css
+@include page.css
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="side">
+    <div class="brand">SLOTH<small>web <span id="milestone">M0</span></small></div>
+    <ol class="views">
+      <li class="on"><span class="k">1</span>Overview</li>
+      <li><span class="k">2</span>Activity</li>
+      <li><span class="k">3</span>Devices</li>
+      <li><span class="k">4</span>Anomalies</li>
+      <li><span class="k">5</span>WiFi</li>
+      <li><span class="k">6</span>Alerts</li>
+      <li><span class="k">7</span>Flows</li>
+      <li><span class="k">8</span>History</li>
+      <li><span class="k">9</span>Lookup</li>
+    </ol>
+    <div class="foot">
+      <div><span>sock</span><span id="sock">-</span></div>
+      <div><span>db</span><span id="db">-</span></div>
+    </div>
+  </aside>
+  <header class="strip">
+    <span><span class="dot wait" id="dot">&#9679;</span> <span id="conn">connecting</span></span>
+    <span>tick <b id="seq">-</b></span>
+    <span>up <b id="up">-</b></span>
+    <span>clients <b id="clients">-</b></span>
+  </header>
+  <main>
+    <div class="panel">
+      <div class="label">tick</div>
+      <div class="kpi" id="hero">-</div>
+      <p>Skeleton (M0). The counter above comes from the server's event
+      stream once a second; no sensor data is read yet.</p>
+    </div>
+  </main>
+</div>
+<script>
+@include app.js
+</script>
+</body>
+</html>

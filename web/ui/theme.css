@@ -1,0 +1,41 @@
+/* Design tokens, docs/web-ui-spec.md §8.1. The only place colour lives.
+ * Font stack per the 2026-10-21 rulings: system monospace only, no font
+ * file and no font request. */
+:root {
+  /* ground */
+  --bg:        #0a0a0a;
+  --panel:     #0f0f0f;
+  --rule:      #2a2a2a;
+  --rule-hi:   #3a3a3a;
+
+  /* type */
+  --ink:       #f2f2f2;
+  --muted:     #8c8c8c;
+  --faint:     #5c5c5c;
+
+  /* budgeted accents */
+  --signal:    #ff5a00;
+  --data:      #00c8ff;
+  --phosphor:  #00d7af;
+  --phosphor-dim: #00875f;
+
+  /* severity (matches TUI and sloth-ios) */
+  --sev-low:   #d7af00;
+  --sev-warn:  #ff8700;
+  --sev-crit:  #ff0000;
+
+  /* heat ramp (tui_heat thresholds 0.15 / 0.40 / 0.70) */
+  --heat-0:    #626262;
+  --heat-1:    #d7af00;
+  --heat-2:    #ff8700;
+  --heat-3:    #ff0000;
+
+  /* record-type hues */
+  --t-dns:  #7fd1ff;  --t-tls:  #b48cff;  --t-http: #ffd166;
+  --t-quic: #ff9ecb;  --t-icmp: #9be564;  --t-arp:  #c0c0c0;
+  --t-wifi: #00d7af;  --t-alert:#ff5a00;
+
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+  --radius: 0;
+  --gap: 8px;
+}

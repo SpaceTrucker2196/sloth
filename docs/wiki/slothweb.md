@@ -5,18 +5,22 @@ page tracks what has shipped; the design is
 [`docs/web-ui-spec.md`](../../docs/web-ui-spec.md), whose rulings table
 overrides its body.
 
-**Summary**: slothweb W0 (#157) is a listener with an allowed-peer list
-and no routes. Loopback-only bind by default (`127.0.0.1:8770`); a
-non-loopback bind or allow entry needs `--web-allow-remote` and is
-announced on stderr; `--strict` refuses both. Peers outside the list
-are closed at accept() and counted. Every `GET`/`HEAD` is `404`, every
-other method `405`, a header block over 8 KB `431`, and idle or slow
-clients time out on an absolute budget.
+**Summary**: slothweb is at M0 (#158) on top of W0 (#157). W0 is a
+listener with an allowed-peer list: loopback-only bind by default
+(`127.0.0.1:8770`); a non-loopback bind or allow entry needs
+`--web-allow-remote` and is announced on stderr; `--strict` refuses
+both. Peers outside the list are closed at accept() and counted. M0
+adds three routes behind it: one embedded page with an ETag and `304`,
+`/api/health`, and an `/events` Server-Sent Events stream with a 1 s
+tick counter. Every method other than `GET`/`HEAD` is `405` on every
+path, a header block over 8 KB `431`, and idle or slow clients time out
+on an absolute budget.
 
 **Sources**: `web/README.md`, `web/src/web_acl.c`, `web/src/web_config.c`,
-`web/src/web_http.c`, `web/src/web_server.c`, `web/src/main.c`,
-`web/tests/*.c`, `Makefile` (`web`, `web-test`, `cppcheck`),
-`docs/web-ui-spec.md`, issues #102 and #157.
+`web/src/web_http.c`, `web/src/web_routes.c`, `web/src/web_server.c`,
+`web/src/main.c`, `web/ui/*`, `web/tools/embed.c`, `web/tests/*.c`,
+`Makefile` (`web`, `web-test`, `cppcheck`), `docs/web-ui-spec.md`,
+issues #102, #157 and #158.
 
 **Last updated**: 2026-10-21.
 
@@ -42,7 +46,8 @@ resolves a name (its bind address included) and never writes to
 | Slice | Issue | State |
 |---|---|---|
 | W0: allow list and refusals, no routes | #157 | shipped |
-| M0 to M6 (page, ingest, series, baselines, devices, Wi-Fi, flows) | children of #102 | not started |
+| M0: embedded page, `/api/health`, SSE tick | #158 | shipped |
+| M1 to M6 (ingest, series, baselines, devices, Wi-Fi, flows) | children of #102 | not started |
 
 ## W0: the access boundary before any route
 
@@ -84,14 +89,15 @@ protect. W0 is that slice and nothing else.
 
 | Request | Answer |
 |---|---|
-| `GET` / `HEAD`, any target | `404` (`HEAD` without the body) |
-| any other method | `405` with `Allow: GET, HEAD`, permanently |
+| `GET` / `HEAD` of a route (M0, below) | the route's answer (`HEAD` without the body) |
+| `GET` / `HEAD`, any other path | `404` (`HEAD` without the body) |
+| any other method, any path | `405` with `Allow: GET, HEAD`, permanently |
 | header block over 8 KB | `431` |
 | malformed request line or header | `400` |
 | HTTP major version other than 1 | `505` |
 | no complete header block in 10 s | `408`, best effort, then close |
 
-Responses carry `Connection: close`, `Cache-Control: no-store`,
+Error responses carry `Connection: close`, `Cache-Control: no-store`,
 `X-Content-Type-Options: nosniff` and `Content-Security-Policy:
 default-src 'none'`. A request body is never read; after the response
 the server half-closes and drains for up to 1 s, so unread bytes end
@@ -117,6 +123,57 @@ back-off is counted.
 `--web-allow`, whatever `--web-allow-remote` says, matching sloth's
 `--strict` refusal of a routable `--data-socket`.
 
+## M0: the page, health and the tick stream
+
+M0's acceptance (spec §12) is opening `http://127.0.0.1:8770`, watching
+the tick strip move, and seeing no external request in the browser's
+network tab.
+
+### The page
+
+`/` is one HTML document with its CSS and JS inline. The sources are
+`web/ui/index.html`, `theme.css` (the spec §8.1 tokens, the only place
+colour lives), `page.css` (layout and the §8.2 sizes) and `app.js`.
+`web/tools/embed.c` fills in the `@include` lines at build time and
+writes `build/web/web_assets.c`: the page as a byte array, an ETag (the
+first 128 bits of its SHA-256) and a Content-Security-Policy. The
+generated file is never committed, and the embedder is C99 built with
+the same compiler, so the build gains no tool.
+
+The policy is `default-src 'none'` with `script-src` and `style-src`
+naming the SHA-256 of the page's one `<script>` and one `<style>`, and
+`connect-src 'self'` for the health read and the stream. A browser
+therefore refuses any fetch the page did not already make, and an
+injected inline block would not run either. `'unsafe-inline'` is never
+used.
+
+The fonts are the system monospace stack (rulings header, superseding
+§8.2's embedded FiraCode): no font file is in the tree and no font is
+requested. The page loads with `Cache-Control: no-cache` and revalidates
+with `If-None-Match`, answered `304` until a rebuild changes the page.
+
+### `/api/health`
+
+JSON with `service`, `milestone`, `uptime_s`, `sse_clients` and
+`tick_seq`, plus `socket`, `last_record_age_s`, `db`, `db_schema` and
+`db_rows`, which are `"none"` or `null` until M1 and M4 have something
+to report. `Cache-Control: no-store`.
+
+### `/events`
+
+Server-Sent Events, spec §7.1. The stream opens with `retry: 3000` and
+the current tick, then sends a `tick` event (with `id:`) every second
+and a `: ping` comment every 15 s. The tick's payload in M0 is
+`{seq, ts, uptime_s, sse_clients}`; the spec's `rx`, `tx`, `devices` and
+counts arrive with ingest. The ticks come from the poll loop's own
+timer, so there is still one thread and one lock.
+
+A client that stops reading is dropped once 64 KB is waiting for it
+(spec §10.2), with its socket send buffer capped at 16 KB so a stalled
+peer also pins little kernel memory. At most 24 streams are held; the
+25th `GET /events` is `503`, which keeps 8 of the 32 slots for the page
+and the API.
+
 ## Tests
 
 `make web-test` is self-contained: no host file, loopback ephemeral
@@ -132,6 +189,18 @@ of #157 maps to it as follows.
 | 8 KB header cap answered 431 | `test_header_cap_is_431`, `test_oversize_header_431_over_socket` |
 | refused remote bind under `--strict` | `test_strict_refuses_remote_even_with_flag` |
 | slow or idle clients time out | `test_idle_client_times_out`, `test_slow_client_times_out` |
+
+#158 (M0) maps as follows.
+
+| Acceptance item | Test |
+|---|---|
+| served page has no `http(s)://` URL and no external font or script reference | `test_page_makes_no_external_reference`, `test_page_over_socket`, `test_font_is_the_system_monospace_stack`, `test_csp_hashes_match_the_page` |
+| embedded page with ETag and `304` | `test_page_is_200_with_etag_and_csp`, `test_page_304_on_matching_validator`, `test_page_over_socket` |
+| `/api/health` | `test_health_json`, `test_health_over_socket` |
+| SSE tick counter and ping | `test_event_formats`, `test_events_stream_ticks_and_pings` |
+| slow-client drop | `test_slow_events_client_dropped` |
+| design tokens per §8.1 | `test_design_tokens_match_spec` |
+| `405` unchanged for writing methods | `test_routes_are_still_405_for_writes`, `test_routes_405_for_writes_over_socket` |
 
 A test cannot connect from a non-loopback address, so the socket-level
 refusals narrow the list and connect from loopback; the list function

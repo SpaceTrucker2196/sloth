@@ -1,0 +1,63 @@
+/* Layout and typography, docs/web-ui-spec.md §8.2-8.3. Colours come
+ * from theme.css tokens only. */
+*, *::before, *::after { box-sizing: border-box; border-radius: var(--radius); }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+td { font-size: 12px; font-variant-ligatures: none; }
+.app {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  grid-template-rows: auto 1fr;
+  grid-template-areas: "side strip" "side main";
+  min-height: 100vh;
+}
+.app.collapsed { grid-template-columns: 0 1fr; }
+.app.collapsed .side { display: none; }
+.side {
+  grid-area: side;
+  background: var(--panel);
+  border-right: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  padding: var(--gap);
+}
+.brand { font-size: 20px; font-weight: bold; letter-spacing: 0.1em; }
+.brand small { display: block; font-size: 11px; color: var(--muted); font-weight: normal; }
+.views { list-style: none; margin: calc(var(--gap) * 2) 0; padding: 0; }
+.views li { padding: 2px 0; color: var(--faint); }
+.views li.on { color: var(--ink); }
+.views li .k { color: var(--data); margin-right: var(--gap); }
+.foot { margin-top: auto; border-top: 1px solid var(--rule); padding-top: var(--gap); font-size: 11px; color: var(--muted); }
+.foot div { display: flex; justify-content: space-between; }
+.strip {
+  grid-area: strip;
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--gap) * 2);
+  align-items: baseline;
+  padding: var(--gap) calc(var(--gap) * 2);
+  border-bottom: 1px solid var(--rule);
+  font-size: 11px;
+  color: var(--muted);
+}
+.strip b { color: var(--data); font-weight: normal; font-size: 13px; }
+.dot { font-size: 13px; }
+.dot.ok { color: var(--phosphor); }
+.dot.wait { color: var(--sev-warn); }
+.dot.down { color: var(--sev-crit); }
+main { grid-area: main; padding: calc(var(--gap) * 2); }
+.kpi { font-size: 28px; color: var(--data); }
+.label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+.panel { background: var(--panel); border: 1px solid var(--rule); padding: calc(var(--gap) * 2); max-width: 640px; }
+.panel p { color: var(--muted); }
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; grid-template-areas: "strip" "side" "main"; }
+  .side { border-right: 0; border-bottom: 1px solid var(--rule); }
+}

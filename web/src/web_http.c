@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 /* RFC 9110 §5.6.2 tchar. */
 static int is_tchar(unsigned char c) {
@@ -20,8 +21,24 @@ static int line_clean(const char *s, size_t n) {
     return 1;
 }
 
+/* RFC 9112 §3.2: keep the path of an origin-form or absolute-form
+ * target, without its query. Asterisk-form and anything else is kept
+ * as written; no route matches it. */
+static void keep_path(web_req_t *rq, const char *t, size_t n) {
+    if (n > 7 && !strncasecmp(t, "http://", 7)) {
+        const char *slash = memchr(t + 7, '/', n - 7);
+        if (!slash) { t = "/"; n = 1; }
+        else { n -= (size_t)(slash - t); t = slash; }
+    }
+    const char *q = memchr(t, '?', n);
+    if (q) n = (size_t)(q - t);
+    if (n >= sizeof(rq->path)) { rq->path_long = 1; return; }
+    memcpy(rq->path, t, n);
+    rq->path[n] = '\0';
+}
+
 /* RFC 9112 §3: method SP request-target SP HTTP-version. */
-static int classify_request_line(const char *s, size_t n, int *is_head) {
+static int classify_request_line(const char *s, size_t n, web_req_t *rq) {
     size_t i = 0;
     while (i < n && is_tchar((unsigned char)s[i])) i++;
     size_t mlen = i;
@@ -41,9 +58,12 @@ static int classify_request_line(const char *s, size_t n, int *is_head) {
     if (v[5] != '1') return 505;
 
     /* Methods are case-sensitive (RFC 9110 §9.1): "get" is not GET. */
-    if (mlen == 3 && !memcmp(s, "GET", 3))  return 404;
-    if (mlen == 4 && !memcmp(s, "HEAD", 4)) { *is_head = 1; return 404; }
-    return 405;
+    int route = 0;
+    if (mlen == 3 && !memcmp(s, "GET", 3))  route = 1;
+    if (mlen == 4 && !memcmp(s, "HEAD", 4)) { rq->is_head = 1; route = 1; }
+    if (!route) return 405;
+    keep_path(rq, s + ts, (i - 1) - ts);
+    return WEB_HTTP_ROUTE;
 }
 
 /* RFC 9112 §5: field-name ":" ... with no whitespace before the colon,
@@ -54,10 +74,46 @@ static int header_line_ok(const char *s, size_t n) {
     return i > 0 && i < n && s[i] == ':';
 }
 
-int web_http_classify(const char *buf, size_t len, int *is_head) {
+/* RFC 9110 §5.3: several If-None-Match lines are one comma-separated
+ * list. Field names are case-insensitive; OWS around the value goes. */
+static void keep_inm(web_req_t *rq, const char *s, size_t n) {
+    static const char name[] = "if-none-match:";
+    size_t nl = sizeof(name) - 1;
+    if (n < nl || strncasecmp(s, name, nl) != 0) return;
+    const char *v = s + nl;
+    size_t vl = n - nl;
+    while (vl && (*v == ' ' || *v == '\t')) { v++; vl--; }
+    while (vl && (v[vl - 1] == ' ' || v[vl - 1] == '\t')) vl--;
+    size_t have = strlen(rq->inm);
+    size_t sep = rq->inm_present ? 2 : 0;
+    rq->inm_present = 1;
+    if (have + sep + vl >= sizeof(rq->inm)) { rq->inm_long = 1; return; }
+    if (sep) memcpy(rq->inm + have, ", ", 2);
+    memcpy(rq->inm + have + sep, v, vl);
+    rq->inm[have + sep + vl] = '\0';
+}
+
+int web_http_inm_matches(const char *inm, const char *etag) {
+    size_t el = strlen(etag);
+    const char *p = inm;
+    for (;;) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) return 0;
+        const char *e = p;
+        while (*e && *e != ',') e++;
+        size_t n = (size_t)(e - p);
+        while (n && (p[n - 1] == ' ' || p[n - 1] == '\t')) n--;
+        if (n == 1 && *p == '*') return 1;
+        if (n >= 2 && p[0] == 'W' && p[1] == '/') { p += 2; n -= 2; }
+        if (n == el && !memcmp(p, etag, el)) return 1;
+        p = e;
+    }
+}
+
+int web_http_parse(const char *buf, size_t len, web_req_t *rq) {
     size_t pos = 0;
     int    have_rl = 0, status = 0;
-    *is_head = 0;
+    memset(rq, 0, sizeof(*rq));
 
     for (;;) {
         if (pos >= WEB_HDR_MAX) return 431;
@@ -74,26 +130,37 @@ int web_http_classify(const char *buf, size_t len, int *is_head) {
             /* RFC 9112 §2.2: ignore empty lines before the request line. */
             if (n == 0) continue;
             if (!line_clean(line, n)) return 400;
-            status = classify_request_line(line, n, is_head);
+            status = classify_request_line(line, n, rq);
             if (status == 400 || status == 505) return status;
             have_rl = 1;
             continue;
         }
         if (n == 0) return status;               /* end of the header block */
         if (!line_clean(line, n) || !header_line_ok(line, n)) {
-            *is_head = 0;
+            rq->is_head = 0;
             return 400;
         }
+        if (status == WEB_HTTP_ROUTE) keep_inm(rq, line, n);
     }
+}
+
+int web_http_classify(const char *buf, size_t len, int *is_head) {
+    web_req_t rq;
+    int st = web_http_parse(buf, len, &rq);
+    *is_head = rq.is_head;
+    return st;
 }
 
 const char *web_http_reason(int status) {
     switch (status) {
+    case 200: return "OK";
+    case 304: return "Not Modified";
     case 400: return "Bad Request";
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
     case 408: return "Request Timeout";
     case 431: return "Request Header Fields Too Large";
+    case 503: return "Service Unavailable";
     case 505: return "HTTP Version Not Supported";
     default:  return "Internal Server Error";
     }
@@ -106,6 +173,7 @@ static const char *body_for(int status) {
     case 405: return "method not allowed\n";
     case 408: return "request timeout\n";
     case 431: return "request header fields too large\n";
+    case 503: return "service unavailable\n";
     case 505: return "http version not supported\n";
     default:  return "error\n";
     }

@@ -522,15 +522,15 @@ research-mcp:
 	$(CC) $(CFLAGS) -UWITH_PCAP -DWITH_SQLITE -Iinclude -Isrc -Iresearch -Iresearch/mcp \
 	      -o sloth-research-mcp $(MCP_SRCS) -lsqlite3
 
-# ── slothweb (#157) ─────────────────────────────────────────────────────────
+# ── slothweb (#157, #158) ───────────────────────────────────────────────────
 # The browser dashboard's server, docs/web-ui-spec.md. A separate binary
 # on purpose: nothing here is in `all` or `embedded`, no sloth source is
 # compiled into it, and nothing in src/ references web/ (spec §4.2). It
 # links libc and pthreads only; later milestones may add libsqlite3,
 # which WITH_SQLITE already links, and nothing else.
 #
-# W0 is the allow list and its refusals before any route exists: every
-# GET/HEAD is 404, every other method 405. web/README.md has the rest.
+# M0 serves one embedded page, /api/health and an /events stream behind
+# W0's allow list. web/README.md has the rest.
 #
 # Compiled with $(CFLAGS) and $(TEST_CFLAGS) like every other binary
 # here, so EXTRA_CFLAGS (-Werror, the sanitizers) reaches it the same way
@@ -539,24 +539,44 @@ research-mcp:
 # sloth's libraries. Both targets compile from source every time: the
 # tree is small, and it keeps a sanitizer build from linking objects
 # another build compiled.
+#
+# The page is web/ui/index.html with its @include lines filled in from
+# web/ui/, turned into a byte array by web/tools/embed.c. The array is
+# generated under build/web/ and never committed; it depends only on the
+# web/ui/ bytes, so one copy serves every flag set. The embedder is
+# built with $(CFLAGS) too, so -Werror reaches it.
 WEB_MAIN        = web/src/main.c
-WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c))
+WEB_GEN_DIR     = build/web
+WEB_EMBED       = $(WEB_GEN_DIR)/embed
+WEB_ASSETS_C    = $(WEB_GEN_DIR)/web_assets.c
+WEB_UI          = $(wildcard web/ui/*)
+WEB_TOOL_SRCS   = web/tools/sha256.c
+WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C)
 WEB_TEST_SRCS   = $(wildcard web/tests/*.c)
 WEB_LDLIBS      = -lpthread
 ifeq ($(UNAME),Linux)
     WEB_LDFLAGS = -pie -Wl,-z,relro,-z,now
 endif
 
+$(WEB_EMBED): web/tools/embed.c $(WEB_TOOL_SRCS) web/tools/sha256.h
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -Iweb/tools -o $@ web/tools/embed.c $(WEB_TOOL_SRCS)
+
+$(WEB_ASSETS_C): $(WEB_EMBED) $(WEB_UI)
+	$(WEB_EMBED) web/ui index.html $@.tmp
+	mv $@.tmp $@
+
 .PHONY: web web-test
-web:
+web: $(WEB_ASSETS_C)
 	$(CC) $(CFLAGS) -Iweb/src -o slothweb $(WEB_MAIN) $(WEB_SRCS) \
 	      $(WEB_LDFLAGS) $(WEB_LDLIBS)
 
 # Loopback and ephemeral ports only; no host file, no name lookup, no
-# network beyond 127.0.0.1 and ::1.
-web-test:
-	$(CC) $(TEST_CFLAGS) -Iweb/src -Iweb/tests -o slothweb_test \
-	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_LDLIBS)
+# network beyond 127.0.0.1 and ::1. The test links the embedder's
+# SHA-256 to recompute the page's CSP hashes; slothweb does not.
+web-test: $(WEB_ASSETS_C)
+	$(CC) $(TEST_CFLAGS) -Iweb/src -Iweb/tests -Iweb/tools -o slothweb_test \
+	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
 	./slothweb_test
 
 # ── Test build ───────────────────────────────────────────────────────────────
@@ -1012,7 +1032,7 @@ cppcheck:
 	  --enable=warning,portability,performance,information \
 	  --error-exitcode=1 \
 	  --suppressions-list=tests/cppcheck.supp \
-	  $(CPPCHECK_DEFS) -Iinclude -Isrc -Iresearch -Iweb/src -Iweb/tests \
+	  $(CPPCHECK_DEFS) -Iinclude -Isrc -Iresearch -Iweb/src -Iweb/tests -Iweb/tools \
 	  -i src/platform/bsd.c -i src/platform/win32.c -i src/platform/stub.c \
 	  src research web
 

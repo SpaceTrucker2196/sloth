@@ -1,5 +1,5 @@
-/* slothweb (#157, W0): the listener, the allow list and the refusals,
- * before any route exists. See web/README.md. */
+/* slothweb (#157 W0, #158 M0): the allow list and its refusals, the
+ * embedded page, /api/health and the /events stream. See web/README.md. */
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,7 +8,7 @@
 #include "web_config.h"
 #include "web_server.h"
 
-static web_server_t g_srv;   /* ~300 KB: static, not on the stack */
+static web_server_t g_srv;   /* ~2.3 MB: static, not on the stack */
 
 static void on_signal(int sig) {
     (void)sig;
@@ -40,8 +40,8 @@ int main(int argc, char **argv) {
     char where[64];
     web_format_bind(cfg.bind_family, cfg.bind_addr, web_server_port(&g_srv),
                     where, sizeof(where));
-    fprintf(stderr, "slothweb: listening on %s; no routes yet "
-                    "(GET/HEAD 404, other methods 405)\n", where);
+    fprintf(stderr, "slothweb: listening on http://%s/ "
+                    "(/, /api/health, /events)\n", where);
 
     rc = web_server_run(&g_srv);
 

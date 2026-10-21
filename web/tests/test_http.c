@@ -1,5 +1,5 @@
-/* Request classification on hand-written request bytes (RFC 9112 §2-5),
- * no socket. The server tests repeat the important cases over a real
+/* Request parsing on hand-written request bytes (RFC 9112 §2-5,
+ * RFC 9110 §13.1.2), no socket. The server tests repeat the important cases over a real
  * loopback connection. */
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +11,9 @@ static int cls(const char *req, int *is_head) {
     return web_http_classify(req, strlen(req), is_head);
 }
 
-static void test_get_and_head_are_404(void) {
+/* Every well-formed GET or HEAD reaches the router, whatever its
+ * target; web_routes.c decides between a route and 404. */
+static void test_get_and_head_are_routed(void) {
     static const char *const targets[] = {
         "/", "/api/health", "/api/live", "/events", "/index.html",
         "/assets/app.js", "/?q=1", "*", "http://127.0.0.1:8770/",
@@ -21,12 +23,105 @@ static void test_get_and_head_are_404(void) {
         int h = -1;
         snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: x\r\n\r\n",
                  targets[i]);
-        WT_EQ(cls(req, &h), 404);
+        WT_EQ(cls(req, &h), WEB_HTTP_ROUTE);
         WT_EQ(h, 0);
         snprintf(req, sizeof(req), "HEAD %s HTTP/1.0\r\n\r\n", targets[i]);
-        WT_EQ(cls(req, &h), 404);
+        WT_EQ(cls(req, &h), WEB_HTTP_ROUTE);
         WT_EQ(h, 1);
     }
+}
+
+static int parse(const char *req, web_req_t *rq) {
+    return web_http_parse(req, strlen(req), rq);
+}
+
+/* RFC 9112 §3.2: origin-form and absolute-form targets route by path;
+ * the query is not part of the route. */
+static void test_path_kept_without_query(void) {
+    static const struct { const char *target, *path; } cases[] = {
+        { "/",                                "/" },
+        { "/api/health",                      "/api/health" },
+        { "/api/health?x=1&y=2",              "/api/health" },
+        { "/?",                               "/" },
+        { "/events?types=dns",                "/events" },
+        { "http://127.0.0.1:8770/api/health", "/api/health" },
+        { "HTTP://127.0.0.1:8770",            "/" },
+        { "http://[::1]:8770/?q",             "/" },
+        { "*",                                "*" },
+        { "/API/HEALTH",                      "/API/HEALTH" },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char req[256];
+        web_req_t rq;
+        snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\n\r\n",
+                 cases[i].target);
+        WT_EQ(parse(req, &rq), WEB_HTTP_ROUTE);
+        if (strcmp(rq.path, cases[i].path))
+            fprintf(stderr, "    %s -> \"%s\"\n", cases[i].target, rq.path);
+        WT_ASSERT(!strcmp(rq.path, cases[i].path));
+        WT_EQ(rq.path_long, 0);
+    }
+
+    /* A path that does not fit is flagged, never truncated into a
+     * shorter path that might match a route. */
+    char *req = malloc(WEB_PATH_MAX + 64);
+    memcpy(req, "GET /", 5);
+    memset(req + 5, 'a', WEB_PATH_MAX);
+    strcpy(req + 5 + WEB_PATH_MAX, " HTTP/1.1\r\n\r\n");
+    web_req_t rq;
+    WT_EQ(parse(req, &rq), WEB_HTTP_ROUTE);
+    WT_EQ(rq.path_long, 1);
+    WT_EQ(rq.path[0], '\0');
+    free(req);
+}
+
+static void test_if_none_match_collected(void) {
+    web_req_t rq;
+    WT_EQ(parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n", &rq), WEB_HTTP_ROUTE);
+    WT_EQ(rq.inm_present, 0);
+
+    /* Field names are case-insensitive (RFC 9110 §5.1); OWS goes. */
+    WT_EQ(parse("GET / HTTP/1.1\r\nif-NONE-match:  \"abc\" \t\r\n\r\n", &rq),
+          WEB_HTTP_ROUTE);
+    WT_EQ(rq.inm_present, 1);
+    WT_ASSERT(!strcmp(rq.inm, "\"abc\""));
+
+    /* Two lines are one list (RFC 9110 §5.3). */
+    WT_EQ(parse("GET / HTTP/1.1\r\nIf-None-Match: \"a\"\r\n"
+                "X: y\r\nIf-None-Match: W/\"b\"\r\n\r\n", &rq),
+          WEB_HTTP_ROUTE);
+    WT_ASSERT(!strcmp(rq.inm, "\"a\", W/\"b\""));
+
+    /* A similar-looking field is not it. */
+    WT_EQ(parse("GET / HTTP/1.1\r\nIf-None-Matches: \"a\"\r\n\r\n", &rq),
+          WEB_HTTP_ROUTE);
+    WT_EQ(rq.inm_present, 0);
+
+    /* Too long to keep: present, flagged, and the router ignores it. */
+    char big[WEB_INM_MAX + 128];
+    int n = snprintf(big, sizeof(big), "GET / HTTP/1.1\r\nIf-None-Match: ");
+    memset(big + n, 'x', WEB_INM_MAX);
+    strcpy(big + n + WEB_INM_MAX, "\r\n\r\n");
+    WT_EQ(parse(big, &rq), WEB_HTTP_ROUTE);
+    WT_EQ(rq.inm_present, 1);
+    WT_EQ(rq.inm_long, 1);
+}
+
+/* RFC 9110 §13.1.2: If-None-Match uses the weak comparison. */
+static void test_inm_matching(void) {
+    const char *et = "\"abc\"";
+    WT_EQ(web_http_inm_matches("\"abc\"", et), 1);
+    WT_EQ(web_http_inm_matches("W/\"abc\"", et), 1);
+    WT_EQ(web_http_inm_matches("*", et), 1);
+    WT_EQ(web_http_inm_matches("\"x\", \"abc\"", et), 1);
+    WT_EQ(web_http_inm_matches(" \"x\" ,W/\"abc\" ", et), 1);
+    WT_EQ(web_http_inm_matches("\"abcd\"", et), 0);
+    WT_EQ(web_http_inm_matches("\"ab\"", et), 0);
+    WT_EQ(web_http_inm_matches("abc", et), 0);
+    WT_EQ(web_http_inm_matches("w/\"abc\"", et), 0);   /* W/ is case-sensitive */
+    WT_EQ(web_http_inm_matches("", et), 0);
+    WT_EQ(web_http_inm_matches(",,", et), 0);
+    WT_EQ(web_http_inm_matches("\"x\", *", et), 1);
 }
 
 static void test_every_other_method_is_405(void) {
@@ -71,8 +166,8 @@ static void test_split_across_reads(void) {
 
 static void test_bare_lf_and_leading_empty_lines(void) {
     int h;
-    WT_EQ(cls("GET / HTTP/1.1\nHost: x\n\n", &h), 404);
-    WT_EQ(cls("\r\n\r\nGET / HTTP/1.1\r\n\r\n", &h), 404);
+    WT_EQ(cls("GET / HTTP/1.1\nHost: x\n\n", &h), WEB_HTTP_ROUTE);
+    WT_EQ(cls("\r\n\r\nGET / HTTP/1.1\r\n\r\n", &h), WEB_HTTP_ROUTE);
 }
 
 static void test_malformed_is_400(void) {
@@ -113,8 +208,8 @@ static void test_version(void) {
     int h;
     WT_EQ(cls("GET / HTTP/2.0\r\n\r\n", &h), 505);
     WT_EQ(cls("GET / HTTP/0.9\r\n\r\n", &h), 505);
-    WT_EQ(cls("GET / HTTP/1.0\r\n\r\n", &h), 404);
-    WT_EQ(cls("GET / HTTP/1.9\r\n\r\n", &h), 404);
+    WT_EQ(cls("GET / HTTP/1.0\r\n\r\n", &h), WEB_HTTP_ROUTE);
+    WT_EQ(cls("GET / HTTP/1.9\r\n\r\n", &h), WEB_HTTP_ROUTE);
 }
 
 /* Build "GET / HTTP/1.1\r\nX: aaaa...\r\n\r\n" of exactly `total` bytes. */
@@ -134,7 +229,7 @@ static void test_header_cap_is_431(void) {
     int h;
     /* Exactly at the cap: the block fits, so it is answered normally. */
     char *at = sized_request(WEB_HDR_MAX);
-    WT_EQ(web_http_classify(at, WEB_HDR_MAX, &h), 404);
+    WT_EQ(web_http_classify(at, WEB_HDR_MAX, &h), WEB_HTTP_ROUTE);
     free(at);
 
     /* One byte over: the empty line ends past the cap. Seen red with
@@ -192,7 +287,10 @@ static void test_responses(void) {
 }
 
 void run_http_tests(void) {
-    WT_RUN(test_get_and_head_are_404);
+    WT_RUN(test_get_and_head_are_routed);
+    WT_RUN(test_path_kept_without_query);
+    WT_RUN(test_if_none_match_collected);
+    WT_RUN(test_inm_matching);
     WT_RUN(test_every_other_method_is_405);
     WT_RUN(test_incomplete_needs_more);
     WT_RUN(test_split_across_reads);

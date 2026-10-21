@@ -17,6 +17,11 @@
 /* After the response, how long a client may keep sending (a request
  * body nobody will read) before the socket is closed. */
 #define WEB_DEFAULT_LINGER_MS   1000
+/* Event-stream cadence (spec §7.1, §10.2): a tick every second and a
+ * keep-alive comment every 15 s. Not command-line flags; tests shorten
+ * them. */
+#define WEB_DEFAULT_TICK_MS     1000
+#define WEB_DEFAULT_PING_MS     15000
 
 typedef struct {
     int      bind_family;          /* AF_INET or AF_INET6 */
@@ -27,6 +32,8 @@ typedef struct {
     web_acl_t acl;                 /* loopback plus every --web-allow */
     int      timeout_ms;
     int      linger_ms;
+    int      tick_ms;
+    int      ping_ms;
 } web_config_t;
 
 void web_config_defaults(web_config_t *c);

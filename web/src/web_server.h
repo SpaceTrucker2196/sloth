@@ -1,9 +1,12 @@
-/* slothweb listener and connection loop (#157, W0).
+/* slothweb listener and connection loop (#157 W0, #158 M0).
  *
  * One poll() loop on one thread. Each accepted peer is checked against
  * the allow list before anything is read; a refused peer is closed and
- * counted. An admitted peer gets one fixed response (web_http.c) and the
- * connection is closed: there is no keep-alive in W0. */
+ * counted. An admitted peer's request is parsed (web_http.c) and routed
+ * (web_routes.c). A plain answer is followed by a close: there is no
+ * keep-alive. An /events stream stays open and is fed by the loop's own
+ * timers, a tick each tick_ms and a ping each ping_ms, until the client
+ * leaves or falls WEB_SSE_MAX_UNSENT bytes behind. */
 #ifndef SLOTHWEB_SERVER_H
 #define SLOTHWEB_SERVER_H
 
@@ -15,6 +18,15 @@
 #include "web_http.h"
 
 #define WEB_MAX_CONNS 32
+/* Event streams are long-lived, so they may not take every slot: the
+ * rest stay free for the page and the API. */
+#define WEB_MAX_SSE   24
+/* A stream client that has not taken this much is dropped (spec §10.2).
+ * It is also the size of every connection's output buffer. */
+#define WEB_SSE_MAX_UNSENT 65536
+/* SO_SNDBUF asked for on a stream socket, so a stalled client holds a
+ * bounded amount of kernel memory as well as of ours. */
+#define WEB_SSE_SNDBUF 16384
 /* How long the listener is left unpolled after accept() runs out of
  * descriptors or memory. */
 #define WEB_ACCEPT_BACKOFF_MS 100
@@ -27,6 +39,11 @@ typedef struct {
     unsigned long timeouts;   /* header or write budget exhausted */
     unsigned long accept_paused; /* accept() out of fds/memory: back-off */
     unsigned long status_404, status_405, status_431, status_400;
+    unsigned long status_200, status_304, status_503;
+    unsigned long sse_opened;     /* /events streams started */
+    unsigned long sse_closed;     /* ended by the client */
+    unsigned long sse_dropped;    /* ended by us: WEB_SSE_MAX_UNSENT behind */
+    unsigned long ticks;          /* tick events generated (not per client) */
 } web_stats_t;
 
 typedef struct {
@@ -36,7 +53,9 @@ typedef struct {
     size_t    len;
     char      buf[WEB_HDR_MAX];
     size_t    out_len, out_off;
-    char      out[1024];
+    char      out[WEB_SSE_MAX_UNSENT];
+    const unsigned char *body;    /* static body sent after out */
+    size_t    body_len, body_off;
 } web_conn_t;
 
 typedef struct {
@@ -44,6 +63,10 @@ typedef struct {
     int             wake[2];
     uint16_t        port;     /* the bound port, after an ephemeral bind */
     long long       accept_resume_ms; /* listener unpolled until then */
+    long long       start_ms;
+    long long       next_tick_ms, next_ping_ms;
+    unsigned long   tick_seq;
+    unsigned        sse_count;
     web_config_t    cfg;
     web_conn_t      conns[WEB_MAX_CONNS];
     pthread_mutex_t mu;       /* guards stats only */

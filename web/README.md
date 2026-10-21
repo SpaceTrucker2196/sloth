@@ -4,10 +4,12 @@ The browser dashboard for sloth data, built in milestones. The spec is
 [`docs/web-ui-spec.md`](../docs/web-ui-spec.md); the rulings table at its
 top overrides the body. Tracker: #102.
 
-**This is W0 (#157): the listener, the allowed-peer list and its
-refusals, before any route exists.** It serves nothing. Every `GET` and
-`HEAD` gets a fixed `404`, every other method gets `405`. M0 adds the
-first routes.
+**This is M0 (#158) on top of W0 (#157).** W0 is the listener, the
+allowed-peer list and its refusals. M0 adds three routes behind it: one
+embedded page, `/api/health`, and an `/events` stream carrying a tick
+counter. No sensor data is read yet; M1 adds the data-socket client.
+Open `http://127.0.0.1:8770` and the counter in the top strip moves once
+a second.
 
 ## Build and run
 
@@ -21,6 +23,14 @@ make web-test       # builds ./slothweb_test and runs it
 `make`, `make embedded` or `sloth`, no `src/` file is compiled into it,
 and nothing in `src/` references `web/`. Later milestones may link
 `libsqlite3`, which `WITH_SQLITE` already links; nothing else.
+
+The page is built, not checked in as one file. `web/tools/embed.c` (C99,
+built with the same compiler) reads `web/ui/index.html`, replaces each
+`@include NAME` line with `web/ui/NAME`, and writes the result as a byte
+array to `build/web/web_assets.c`, together with its ETag and a
+Content-Security-Policy holding the SHA-256 of its one `<style>` and one
+`<script>` block. That file is generated on every build that needs it
+and is never committed; neither is any font. No Python, no Node.
 
 ## Command line
 
@@ -45,12 +55,19 @@ on a usage error or a policy refusal.
    never replaces it.
 2. **The header block** must arrive complete, request line through the
    empty line, within 8 KB, or the answer is `431`. A body is never read.
-3. **One fixed answer**, then the connection closes (no keep-alive):
+3. **One answer**, then the connection closes (no keep-alive), except
+   for an event stream:
 
    | Request | Answer |
    |---|---|
-   | `GET` or `HEAD`, any target | `404` (`HEAD`: same headers, no body) |
-   | any other method (`POST`, `PUT`, `DELETE`, `PATCH`, ...) | `405`, `Allow: GET, HEAD` |
+   | `GET /` | the page, `200`, `ETag`, `Cache-Control: no-cache` |
+   | `GET /` with a matching `If-None-Match` | `304`, no body |
+   | `GET /api/health` | `200` JSON, `Cache-Control: no-store` |
+   | `GET /events` | `200` `text/event-stream`, held open (below) |
+   | `GET /events` with 24 streams already open | `503` |
+   | `GET` any other path | `404` |
+   | `HEAD` of any of these | the same status and headers, no body |
+   | any other method (`POST`, `PUT`, `DELETE`, `PATCH`, ...), any path | `405`, `Allow: GET, HEAD` |
    | header block over 8 KB | `431` |
    | malformed request line or header | `400` |
    | HTTP major version other than 1 | `505` |
@@ -73,11 +90,64 @@ on a usage error or a policy refusal.
 On shutdown slothweb prints the counters to stderr: admitted, refused at
 accept, busy, served, timed out, accept back-offs.
 
+## Routes (M0)
+
+Paths match exactly; the query string is ignored, and an absolute-form
+target (`GET http://127.0.0.1:8770/ HTTP/1.1`) routes by its path.
+
+**`/`** is the one page: `web/ui/index.html` with `theme.css`,
+`page.css` and `app.js` inline. The `ETag` is the first 128 bits of the
+page's SHA-256, so it changes exactly when the page does; the browser
+revalidates on every load and gets `304` until a rebuild. The page's
+policy is
+
+```
+default-src 'none'; script-src 'sha256-…'; style-src 'sha256-…';
+connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+```
+
+so the browser itself refuses any request the page did not hash, other
+than same-origin `fetch` and `EventSource`. The fonts are the system
+monospace stack (`ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans
+Mono", "Liberation Mono", monospace`); no font file exists. Colours are
+the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
+
+**`/api/health`** answers
+
+```json
+{"service":"slothweb","milestone":"M0","uptime_s":12,
+ "socket":"none","last_record_age_s":null,
+ "db":"none","db_schema":null,"db_rows":null,
+ "sse_clients":1,"tick_seq":12}
+```
+
+The socket and database fields are already there, `"none"` and `null`,
+so a client written now keeps working when M1 and M4 fill them.
+
+**`/events`** is a Server-Sent Events stream. It starts with
+`retry: 3000` and the current tick, then:
+
+| Event | Cadence | Payload |
+|---|---|---|
+| `tick` (with `id:`) | 1 s | `{"seq":N,"ts":UNIX,"uptime_s":U,"sse_clients":K}` |
+| `: ping` comment | 15 s | none; keeps proxies and idle timers from closing it |
+
+`seq` counts up by one per second from start-up; a late wake-up sends
+one tick, not a burst. Anything the client sends on the stream is read
+and discarded, which is also how its departure is noticed. A client
+that stops reading is dropped once 64 KB is waiting for it (its socket
+send buffer is capped at 16 KB as well), and its browser reconnects on
+its own after the `retry` delay. At most 24 streams are held, so 8 of
+the 32 connection slots stay free for the page and the API.
+
 ## What it never does
 
 - No method that writes, ever (`405` is permanent, not a W0 placeholder).
 - No name resolution of any kind, including its own bind address.
-- No write to `sloth.db`; W0 does not open it at all.
+- No write to `sloth.db`; M0 does not open it at all.
+- No request off the host from the page: no URL, no font, no script
+  from anywhere but the page itself, enforced by the CSP above and
+  checked by `test_routes.c`.
 - No TLS and no authentication. For access from another host, forward
   the loopback port (`ssh -L 8770:127.0.0.1:8770 user@sensor`) rather
   than binding a routable address.
@@ -96,8 +166,9 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 |---|---|
 | `test_acl.c` | the list on hand-built sockaddrs: loopback default, non-loopback v4/v6 refused, prefix boundaries, v4-mapped folding, CIDR parse errors |
 | `test_config.c` | default bind, remote bind refused without the flag and announced with it, remote `--web-allow` needs the flag, `--strict` |
-| `test_http.c` | hand-written request bytes: 404 for GET/HEAD, 405 for every other method, split reads, 400/505, the 8 KB boundary |
-| `test_server.c` | real loopback sockets: default bind address, a refused peer over v4 and v6, 405 for POST/PUT/DELETE/PATCH, 431, idle and slow clients timed out, slot exhaustion |
+| `test_http.c` | hand-written request bytes: GET/HEAD routed, 405 for every other method, split reads, 400/505, the 8 KB boundary, path and query, `If-None-Match` collection and weak comparison |
+| `test_routes.c` | the route table without a socket: page `200`/`304`/`HEAD`, no external reference in the served page, the system font stack, the §8.1 tokens, the CSP hashes recomputed (SHA-256 checked against FIPS 180-4 vectors), health JSON, stream headers, `503`, event formats, `404`, `405` on every route |
+| `test_server.c` | real loopback sockets: default bind address, a refused peer over v4 and v6, 405 for POST/PUT/DELETE/PATCH, 431, idle and slow clients timed out, slot exhaustion; the page byte for byte and its `304`, health, a stream's ticks and pings and the client leaving, a non-reading stream client dropped, the stream cap |
 
 A test cannot originate from a non-loopback address, so the refused-peer
 socket tests narrow the list instead (only `127.0.0.2`, or only IPv4)
@@ -117,8 +188,14 @@ web/
     main.c         argv, signals, the run
     web_config.c   command line, the remote-exposure policy, announcements
     web_acl.c      the allowed-peer list
-    web_http.c     request classification and the fixed responses
-    web_server.c   listener, poll loop, timeouts, counters
+    web_http.c     request parsing and the fixed error responses
+    web_routes.c   the route table, health JSON, event formats
+    web_server.c   listener, poll loop, timeouts, event streams, counters
+    web_assets.h   the generated page's symbols
+  ui/              the page sources (index.html, theme.css, page.css, app.js)
+  tools/
+    embed.c        ui/ -> build/web/web_assets.c (build time only)
+    sha256.c       SHA-256 and base64 for embed.c and the tests
   tests/           slothweb_test (make web-test)
 ```
 

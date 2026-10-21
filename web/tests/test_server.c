@@ -18,6 +18,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "web_assets.h"
 #include "web_server.h"
 #include "wtest.h"
 
@@ -211,13 +212,13 @@ static void test_get_head_404_over_socket(void) {
     uint16_t port = web_server_port(r.s);
     char out[4096];
 
-    static const char get[] = "GET /api/health HTTP/1.1\r\nHost: x\r\n\r\n";
+    static const char get[] = "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n";
     size_t n = exchange(AF_INET, port, get, sizeof(get) - 1, out, sizeof(out));
     WT_ASSERT(n > 0);
     WT_HAS(out, "HTTP/1.1 404 Not Found\r\n");
     WT_ASSERT(n >= 10 && !strcmp(out + n - 10, "not found\n"));
 
-    static const char head[] = "HEAD / HTTP/1.1\r\nHost: x\r\n\r\n";
+    static const char head[] = "HEAD /nope HTTP/1.1\r\nHost: x\r\n\r\n";
     n = exchange(AF_INET, port, head, sizeof(head) - 1, out, sizeof(out));
     WT_HAS(out, "HTTP/1.1 404 Not Found\r\n");
     WT_ASSERT(n >= 4 && !strcmp(out + n - 4, "\r\n\r\n"));
@@ -379,7 +380,7 @@ static void test_accept_emfile_backs_off(void) {
     WT_ASSERT(used < 100.0);
 
     if (fd >= 0) {
-        static const char get[] = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
+        static const char get[] = "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n";
         send_all(fd, get, sizeof(get) - 1);
         char out[4096];
         read_all(fd, out, sizeof(out));
@@ -401,7 +402,7 @@ static void test_oversize_header_431_over_socket(void) {
 
     size_t big = 3 * WEB_HDR_MAX;
     char *req = malloc(big);
-    static const char head[] = "GET / HTTP/1.1\r\nX: ";
+    static const char head[] = "GET /nope HTTP/1.1\r\nX: ";
     memcpy(req, head, sizeof(head) - 1);
     memset(req + sizeof(head) - 1, 'a', big - (sizeof(head) - 1));
     char out[4096];
@@ -439,7 +440,7 @@ static void refused_case(int family, const char *only) {
     WT_EQ(start(&r, &c), 0);
     if (!r.s) return;
     char out[4096];
-    static const char get[] = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
+    static const char get[] = "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n";
     size_t n = exchange(family, web_server_port(r.s), get, sizeof(get) - 1,
                         out, sizeof(out));
     WT_EQ(n, 0);
@@ -471,7 +472,7 @@ static void test_admitted_peer_v6(void) {
     WT_EQ(start(&r, &c), 0);
     if (!r.s) return;
     char out[4096];
-    static const char get[] = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
+    static const char get[] = "GET /nope HTTP/1.1\r\nHost: x\r\n\r\n";
     exchange(AF_INET6, web_server_port(r.s), get, sizeof(get) - 1,
              out, sizeof(out));
     WT_HAS(out, "HTTP/1.1 404 Not Found\r\n");
@@ -557,7 +558,7 @@ static void test_slots_exhausted(void) {
     struct timespec ts = { 0, 100 * 1000 * 1000 };
     nanosleep(&ts, NULL);
     char out[1024];
-    static const char get[] = "GET / HTTP/1.1\r\n\r\n";
+    static const char get[] = "GET /nope HTTP/1.1\r\n\r\n";
     size_t n = exchange(AF_INET, port, get, sizeof(get) - 1, out, sizeof(out));
     WT_EQ(n, 0);
     for (int i = 0; i < WEB_MAX_CONNS; i++) if (fds[i] >= 0) close(fds[i]);
@@ -568,6 +569,304 @@ static void test_slots_exhausted(void) {
     stop(&r, &st);
     WT_EQ(st.busy, 1);
     WT_EQ(st.refused, 0);
+}
+
+/* ── M0 routes over a real connection (#158) ──────────────────────────── */
+
+/* Read from fd into buf (NUL-terminated, appending at *len) until needle
+ * appears or ms pass. 1 when it appeared. */
+static int wait_for(int fd, char *buf, size_t cap, size_t *len,
+                    const char *needle, int ms) {
+    long long end = mono_ms() + ms;
+    for (;;) {
+        buf[*len] = '\0';
+        if (strstr(buf, needle)) return 1;
+        long long left = end - mono_ms();
+        if (left <= 0 || *len + 1 >= cap) return 0;
+        struct pollfd p = { fd, POLLIN, 0 };
+        if (poll(&p, 1, (int)left) <= 0) continue;
+        ssize_t r = recv(fd, buf + *len, cap - 1 - *len, 0);
+        if (r <= 0) { buf[*len] = '\0'; return strstr(buf, needle) != NULL; }
+        *len += (size_t)r;
+    }
+}
+
+static const char *ci_strstr(const char *h, const char *n) {
+    size_t nl = strlen(n);
+    for (; *h; h++) {
+        size_t k = 0;
+        while (k < nl && h[k] &&
+               (h[k] | 0x20) == (n[k] | 0x20))
+            k++;
+        if (k == nl) return h;
+    }
+    return NULL;
+}
+
+/* Wait until the server's stats satisfy pred, or ms pass. */
+static int wait_stats(web_server_t *s, int (*pred)(const web_stats_t *),
+                      int ms, web_stats_t *st) {
+    long long end = mono_ms() + ms;
+    for (;;) {
+        web_server_stats(s, st);
+        if (pred(st)) return 1;
+        if (mono_ms() >= end) return 0;
+        struct timespec ts = { 0, 5 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    }
+}
+
+static int one_closed(const web_stats_t *st)  { return st->sse_closed >= 1; }
+static int one_dropped(const web_stats_t *st) { return st->sse_dropped >= 1; }
+
+static void get(uint16_t port, const char *path, const char *extra,
+                char *out, size_t cap) {
+    char req[512];
+    int n = snprintf(req, sizeof(req), "GET %s HTTP/1.1\r\nHost: x\r\n%s\r\n",
+                     path, extra);
+    exchange(AF_INET, port, req, (size_t)n, out, cap);
+}
+
+/* The page as the browser gets it: every byte of the embedded array, an
+ * ETag that turns the next load into a 304, and no URL anywhere in the
+ * response (spec §12, M0 acceptance; test_routes.c has the full list
+ * and the mutations it was seen red under). */
+static void test_page_over_socket(void) {
+    web_config_t c;
+    base_cfg(&c, AF_INET);
+    running_t r;
+    WT_EQ(start(&r, &c), 0);
+    if (!r.s) return;
+    uint16_t port = web_server_port(r.s);
+    size_t cap = web_page_len + 8192;
+    char *out = malloc(cap);
+
+    get(port, "/", "", out, cap);
+    WT_HAS(out, "HTTP/1.1 200 OK\r\n");
+    char *body = strstr(out, "\r\n\r\n");
+    WT_ASSERT(body != NULL);
+    if (body) {
+        body += 4;
+        WT_EQ(strlen(body), web_page_len);
+        WT_ASSERT(!memcmp(body, web_page, web_page_len));
+    }
+    WT_ASSERT(ci_strstr(out, "http://") == NULL);
+    WT_ASSERT(ci_strstr(out, "https://") == NULL);
+
+    char inm[128];
+    snprintf(inm, sizeof(inm), "If-None-Match: %s\r\n", web_page_etag);
+    get(port, "/", inm, out, cap);
+    WT_HAS(out, "HTTP/1.1 304 Not Modified\r\n");
+    body = strstr(out, "\r\n\r\n");
+    WT_ASSERT(body && body[4] == '\0');
+
+    static const char head[] = "HEAD / HTTP/1.1\r\nHost: x\r\n\r\n";
+    size_t n = exchange(AF_INET, port, head, sizeof(head) - 1, out, cap);
+    WT_HAS(out, "HTTP/1.1 200 OK\r\n");
+    WT_ASSERT(n >= 4 && !strcmp(out + n - 4, "\r\n\r\n"));
+    free(out);
+
+    web_stats_t st;
+    stop(&r, &st);
+    WT_EQ(st.status_200, 2);
+    WT_EQ(st.status_304, 1);
+    WT_EQ(st.served, 3);
+}
+
+static void test_health_over_socket(void) {
+    web_config_t c;
+    base_cfg(&c, AF_INET);
+    running_t r;
+    WT_EQ(start(&r, &c), 0);
+    if (!r.s) return;
+    char out[4096];
+    get(web_server_port(r.s), "/api/health", "", out, sizeof(out));
+    WT_HAS(out, "HTTP/1.1 200 OK\r\n");
+    WT_HAS(out, "Content-Type: application/json\r\n");
+    WT_HAS(out, "\r\n\r\n{\"service\":\"slothweb\",\"milestone\":\"M0\",");
+    WT_HAS(out, "\"sse_clients\":0,");
+    web_stats_t st;
+    stop(&r, &st);
+    WT_EQ(st.status_200, 1);
+}
+
+/* Every "id: N" line in buf, in order, must count up by one: ticks are
+ * neither skipped nor sent twice to one client. Returns the count. */
+static int ids_in_order(const char *buf, long *last) {
+    int n = 0;
+    long prev = -1;
+    for (const char *p = buf; (p = strstr(p, "\nid: ")) != NULL; p++) {
+        long v = strtol(p + 5, NULL, 10);
+        if (prev >= 0 && v != prev + 1) {
+            fprintf(stderr, "    id %ld after %ld\n", v, prev);
+            return -1;
+        }
+        prev = v;
+        n++;
+    }
+    *last = prev;
+    return n;
+}
+
+/* A stream: the headers, the retry hint, a tick at once and then one per
+ * tick_ms with consecutive ids, and the keep-alive comment. The client
+ * then leaves mid-stream; the server notices, frees the slot and stops
+ * counting it. Seen red ("sse_clients":1 after the close) with the
+ * sse_count decrement removed from conn_close(). */
+static void test_events_stream_ticks_and_pings(void) {
+    web_config_t c;
+    base_cfg(&c, AF_INET);
+    c.tick_ms = 50;
+    c.ping_ms = 130;
+    running_t r;
+    WT_EQ(start(&r, &c), 0);
+    if (!r.s) return;
+    uint16_t port = web_server_port(r.s);
+
+    int fd = dial(AF_INET, port);
+    WT_ASSERT(fd >= 0);
+    if (fd < 0) { web_stats_t st; stop(&r, &st); return; }
+    static const char ev[] = "GET /events HTTP/1.1\r\nHost: x\r\n"
+                             "Accept: text/event-stream\r\n\r\n";
+    send_all(fd, ev, sizeof(ev) - 1);
+    static char buf[65536];
+    size_t len = 0;
+    WT_ASSERT(wait_for(fd, buf, sizeof(buf), &len, "\r\n\r\nretry: 3000\n\n", 2000));
+    WT_HAS(buf, "HTTP/1.1 200 OK\r\n");
+    WT_HAS(buf, "Content-Type: text/event-stream; charset=utf-8\r\n");
+    WT_ASSERT(wait_for(fd, buf, sizeof(buf), &len, "event: tick\n", 2000));
+    WT_ASSERT(wait_for(fd, buf, sizeof(buf), &len, ": ping\n\n", 3000));
+    /* Four ticks after the ping is due, so at least five in all. */
+    long last = -1;
+    long long end = mono_ms() + 3000;
+    while (mono_ms() < end) {
+        wait_for(fd, buf, sizeof(buf), &len, "\x01", 60);   /* just read */
+        if (ids_in_order(buf, &last) >= 5) break;
+    }
+    int nids = ids_in_order(buf, &last);
+    WT_ASSERT(nids >= 5);
+    WT_HAS(buf, "\"sse_clients\":1}");
+
+    char out[4096];
+    get(port, "/api/health", "", out, sizeof(out));
+    WT_HAS(out, "\"sse_clients\":1,");
+
+    close(fd);
+    web_stats_t st;
+    WT_ASSERT(wait_stats(r.s, one_closed, 2000, &st));
+    get(port, "/api/health", "", out, sizeof(out));
+    WT_HAS(out, "\"sse_clients\":0,");
+
+    stop(&r, &st);
+    WT_EQ(st.sse_opened, 1);
+    WT_EQ(st.sse_closed, 1);
+    WT_EQ(st.sse_dropped, 0);
+    WT_ASSERT(st.ticks >= 4);
+}
+
+/* A client that opens a stream and never reads is dropped once
+ * WEB_SSE_MAX_UNSENT bytes are waiting for it, instead of being
+ * buffered for without bound; the server carries on. A 1 ms tick fills
+ * the kernel buffers (the server's SO_SNDBUF is capped, the client's
+ * receive buffer is shrunk before connect) and then ours. Seen red
+ * (sse_dropped 0 after 20 s) with sse_queue() discarding the event
+ * instead of dropping the client. */
+static void test_slow_events_client_dropped(void) {
+    web_config_t c;
+    base_cfg(&c, AF_INET);
+    c.tick_ms = 1;
+    running_t r;
+    WT_EQ(start(&r, &c), 0);
+    if (!r.s) return;
+    uint16_t port = web_server_port(r.s);
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int small = 1024;
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &small, sizeof(small));
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    WT_EQ(connect(fd, (struct sockaddr *)&a, sizeof(a)), 0);
+    static const char ev[] = "GET /events HTTP/1.1\r\nHost: x\r\n\r\n";
+    send_all(fd, ev, sizeof(ev) - 1);
+
+    web_stats_t st;
+    WT_ASSERT(wait_stats(r.s, one_dropped, 20000, &st));
+
+    char out[4096];
+    get(port, "/api/health", "", out, sizeof(out));
+    WT_HAS(out, "\"sse_clients\":0,");
+    close(fd);
+
+    stop(&r, &st);
+    WT_EQ(st.sse_opened, 1);
+    WT_EQ(st.sse_dropped, 1);
+    WT_EQ(st.sse_closed, 0);
+}
+
+/* Streams may hold WEB_MAX_SSE slots, not all of them: the next stream
+ * is refused 503 while the page can still be loaded. */
+static void test_events_slots_capped(void) {
+    web_config_t c;
+    base_cfg(&c, AF_INET);
+    running_t r;
+    WT_EQ(start(&r, &c), 0);
+    if (!r.s) return;
+    uint16_t port = web_server_port(r.s);
+    static const char ev[] = "GET /events HTTP/1.1\r\nHost: x\r\n\r\n";
+    int fds[WEB_MAX_SSE];
+    int opened = 0;
+    for (int i = 0; i < WEB_MAX_SSE; i++) {
+        fds[i] = dial(AF_INET, port);
+        if (fds[i] < 0) continue;
+        send_all(fds[i], ev, sizeof(ev) - 1);
+        char buf[1024];
+        size_t len = 0;
+        opened += wait_for(fds[i], buf, sizeof(buf), &len, "retry: ", 2000);
+    }
+    WT_EQ(opened, WEB_MAX_SSE);
+
+    char out[8192];
+    exchange(AF_INET, port, ev, sizeof(ev) - 1, out, sizeof(out));
+    WT_HAS(out, "HTTP/1.1 503 Service Unavailable\r\n");
+    get(port, "/api/health", "", out, sizeof(out));
+    WT_HAS(out, "HTTP/1.1 200 OK\r\n");
+    char want[32];
+    snprintf(want, sizeof(want), "\"sse_clients\":%d,", WEB_MAX_SSE);
+    WT_HAS(out, want);
+
+    for (int i = 0; i < WEB_MAX_SSE; i++) if (fds[i] >= 0) close(fds[i]);
+    web_stats_t st;
+    stop(&r, &st);
+    WT_EQ(st.sse_opened, WEB_MAX_SSE);
+    WT_EQ(st.status_503, 1);
+}
+
+/* The routes add nothing a writing method can reach. */
+static void test_routes_405_for_writes_over_socket(void) {
+    web_config_t c;
+    base_cfg(&c, AF_INET);
+    running_t r;
+    WT_EQ(start(&r, &c), 0);
+    if (!r.s) return;
+    uint16_t port = web_server_port(r.s);
+    static const char *const paths[] = { "/", "/api/health", "/events" };
+    for (size_t i = 0; i < 3; i++) {
+        char req[256], out[4096];
+        int rl = snprintf(req, sizeof(req),
+            "POST %s HTTP/1.1\r\nHost: x\r\nContent-Length: 2\r\n\r\n{}",
+            paths[i]);
+        exchange(AF_INET, port, req, (size_t)rl, out, sizeof(out));
+        WT_HAS(out, "HTTP/1.1 405 Method Not Allowed\r\n");
+        WT_HAS(out, "Allow: GET, HEAD\r\n");
+    }
+    web_stats_t st;
+    stop(&r, &st);
+    WT_EQ(st.status_405, 3);
+    WT_EQ(st.status_200, 0);
+    WT_EQ(st.sse_opened, 0);
 }
 
 void run_server_tests(void) {
@@ -585,4 +884,10 @@ void run_server_tests(void) {
     WT_RUN(test_idle_client_times_out);
     WT_RUN(test_slow_client_times_out);
     WT_RUN(test_slots_exhausted);
+    WT_RUN(test_page_over_socket);
+    WT_RUN(test_health_over_socket);
+    WT_RUN(test_events_stream_ticks_and_pings);
+    WT_RUN(test_slow_events_client_dropped);
+    WT_RUN(test_events_slots_capped);
+    WT_RUN(test_routes_405_for_writes_over_socket);
 }

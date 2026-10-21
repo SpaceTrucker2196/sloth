@@ -4637,3 +4637,18 @@ Every GET/HEAD is 404, every other method 405, a header block over 8 KB
 431; idle and slow clients time out on an absolute budget. slothweb's
 flags are documented in `web/README.md`, not in [cli-reference.md](cli-reference.md),
 which is sloth's own parser.
+
+## 2026-10-21 — slothweb M0 (#158): embedded page, /api/health, SSE tick
+
+**Updated pages**: [slothweb.md](slothweb.md). Updated `web/README.md`.
+
+Three routes behind W0's allow list: `/` serves one page (`web/ui/`
+assembled by `web/tools/embed.c` into `build/web/web_assets.c` at build
+time, not committed) with an ETag and `304`; `/api/health` is JSON whose
+socket and database fields are already present as `"none"`/`null`;
+`/events` is Server-Sent Events with a 1 s `tick` counter, a 15 s `: ping`,
+a 24-stream cap (`503`) and a drop at 64 KB unsent. The page's CSP is
+`default-src 'none'` plus the SHA-256 of its one inline style and one
+inline script, the font is the system monospace stack, and a test checks
+the served bytes for any URL or external font, style or script
+reference. `405` for every writing method is unchanged on every route.

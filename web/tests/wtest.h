@@ -44,6 +44,7 @@ extern int wt_pass, wt_fail;
 void run_acl_tests(void);
 void run_config_tests(void);
 void run_http_tests(void);
+void run_routes_tests(void);
 void run_server_tests(void);
 
 #endif
