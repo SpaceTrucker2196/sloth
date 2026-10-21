@@ -257,7 +257,8 @@ overwritten. Full mechanism: `docs/wiki/wiki-maintenance.md`.
 - Don't run destructive git ops (`reset --hard`, `push --force`, branch
   delete) without explicit user authorisation.
 - Don't add new files at repo root; everything has a home (`src/`,
-  `tests/`, `docs/`, `include/`).
+  `tests/`, `docs/`, `include/`, and `web/` for slothweb — owner ruling
+  2026-10-19 on #102; its spec is `docs/web-ui-spec.md`).
 - Don't stage `wifi-sigint/`, `sloth`, or `sloth_test`.
 - Don't reintroduce coloured row backgrounds (deliberately removed).
 - Don't bypass git hooks (`--no-verify` etc.) unless explicitly asked.
