@@ -152,9 +152,13 @@ path opens one: `--iface bluetooth0` exits 2, the `[m]` retarget
 refuses it, and the IP capture's first-device fallback skips every
 `bluetooth*` name rather than taking the head of the device list.
 
-If `sensor_health.ble_scan_mode` reads `active`, or `ble_own_tx` reads
-`recent`, the host is transmitting and `BT_OWN_TRANSMIT` fires; stop
-the scan and start a passive one. `ble_scan_mode` is `unknown` until a
+If `sensor_health.ble_scan_mode` reads `active`, or
+`ble_own_tx_asserted` is not empty, the host is transmitting and
+`BT_OWN_TRANSMIT` fires; stop the scan and start a passive one.
+`ble_own_tx` = `never` means only that no transmit command has crossed
+the channel since sloth opened it — a controller already advertising or
+page-scanning before then is not in it until `ble_own_tx_baseline`
+reads `1` (power-cycle the adapter with sloth running). `ble_scan_mode` is `unknown` until a
 scan-parameter command has actually been seen — start sloth before the
 scan, or restart the scan, to have it recorded. → [[ble]]
 

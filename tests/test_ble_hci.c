@@ -53,12 +53,17 @@ static int put_hdr(uint8_t *b, uint16_t adapter, uint16_t opcode) {
     return 4;
 }
 
-static int rec_cmd(uint8_t *b, uint16_t op, const uint8_t *p, uint8_t plen) {
-    int n = put_hdr(b, 0, BT_MON_COMMAND_PKT);
+static int rec_cmd_at(uint8_t *b, uint16_t adapter, uint16_t op,
+                      const uint8_t *p, uint8_t plen) {
+    int n = put_hdr(b, adapter, BT_MON_COMMAND_PKT);
     b[n++] = (uint8_t)op; b[n++] = (uint8_t)(op >> 8);
     b[n++] = plen;
     if (plen) memcpy(b + n, p, plen);
     return n + plen;
+}
+
+static int rec_cmd(uint8_t *b, uint16_t op, const uint8_t *p, uint8_t plen) {
+    return rec_cmd_at(b, 0, op, p, plen);
 }
 
 static int rec_evt(uint8_t *b, uint8_t code, const uint8_t *p, uint8_t plen) {
@@ -89,15 +94,28 @@ static int rec_adv(uint8_t *b, uint16_t adapter, uint8_t evt_type,
     return n;
 }
 
-static int rec_new_index(uint8_t *b, uint16_t adapter, uint8_t bus,
-                         const uint8_t addr_le[6], const char *name) {
+/* struct hci_mon_new_index; `type` 0x00 HCI_PRIMARY, 0x01 HCI_AMP
+ * (Linux include/net/bluetooth/hci.h). */
+static int rec_new_index_type(uint8_t *b, uint16_t adapter, uint8_t type,
+                              uint8_t bus, const uint8_t addr_le[6],
+                              const char *name) {
     int n = put_hdr(b, adapter, BT_MON_NEW_INDEX);
-    b[n++] = 0x00;   /* HCI_PRIMARY */
+    b[n++] = type;
     b[n++] = bus;
     memcpy(b + n, addr_le, 6); n += 6;
     memset(b + n, 0, 8);
     memcpy(b + n, name, strlen(name) < 8 ? strlen(name) : 8);
     return n + 8;
+}
+
+static int rec_new_index(uint8_t *b, uint16_t adapter, uint8_t bus,
+                         const uint8_t addr_le[6], const char *name) {
+    return rec_new_index_type(b, adapter, 0x00, bus, addr_le, name);
+}
+
+/* DEL_INDEX: the monitor header alone, no payload. */
+static int rec_del_index(uint8_t *b, uint16_t adapter) {
+    return put_hdr(b, adapter, BT_MON_DEL_INDEX);
 }
 
 static ble_rec_verdict_t ing(const uint8_t *b, int n, time_t wall) {
@@ -556,6 +574,319 @@ static void test_own_transmit_silent_when_never_or_earlier(void) {
     sloth_clock_test_set(NULL, NULL);
 }
 
+/* ── Persistent transmissions: on until disabled ────────────────── */
+
+#define W0 1800000000
+
+static void cmd_at(uint16_t adapter, uint16_t op, const uint8_t *p,
+                   uint8_t plen, time_t wall) {
+    int n = rec_cmd_at(g_rec, adapter, op, p, plen);
+    ASSERT_EQ((int)ing(g_rec, n, wall), (int)BLE_REC_COMMAND);
+}
+
+static int key_fired(const sloth_state_t *s, const char *key) {
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == ALERT_TYPE_BT_OWN_TRANSMIT &&
+            strstr(s->alerts[i].key, key))
+            return i;
+    return -1;
+}
+
+/* The review case: advertising enabled at t and never disabled is still
+ * on the air at t+300, long past the recency window, and the finding
+ * must still be asserted. The disable is what ends it.
+ *
+ * Seen to fail, two ways: with bt_tx_asserted_mask() reading recency
+ * only (the on-mask term removed) the t+300 assertions go red; with the
+ * `a[0] == 0x00` branch removed from LE Set Advertising Enable the
+ * post-disable assertions go red. */
+static void test_advertising_held_on_until_disabled(void) {
+    g_wall = W0 + 300;
+    sloth_clock_test_set(NULL, pinned_wall);
+    memset(&g_s, 0, sizeof(g_s));
+    const uint8_t on = 0x01, off = 0x00;
+    cmd_at(0, 0x200A, &on, 1, W0);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(bt_tx_recency(g_s.ble_host.tx_wall[BT_TX_ADV], g_wall),
+              (int)BT_TX_EARLIER);
+    ASSERT_EQ((int)((g_s.ble_host.tx_on_mask >> BT_TX_ADV) & 1u), 1);
+    ASSERT_EQ(bt_tx_asserted_mask(&g_s.ble_host, g_wall), 1u << BT_TX_ADV);
+    alerts_update(&g_s);
+    int i = key_fired(&g_s, "bttx:advertising");
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT(strstr(g_s.alerts[i].detail, "still on") != NULL);
+
+    cmd_at(0, 0x200A, &off, 1, W0 + 300);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.tx_on_mask, 0u);
+    g_wall = W0 + 300 + BT_TX_RECENT_SECS + 1;
+    ASSERT_EQ(bt_tx_asserted_mask(&g_s.ble_host, g_wall), 0u);
+    alerts_clear();
+    memset(&g_s.alerts, 0, sizeof(g_s.alerts));
+    g_s.alert_count = 0;
+    alerts_update(&g_s);
+    ASSERT_EQ(find_alert(&g_s, ALERT_TYPE_BT_OWN_TRANSMIT), -1);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+typedef struct {
+    const char *what;
+    uint16_t on_op;  uint8_t on_len;  uint8_t on_p[13];
+    uint16_t off_op; uint8_t off_len; uint8_t off_p[6];
+    int      kind;
+} hold_case_t;
+
+/* Every persistent kind, each with its own disable (Core Spec v5.4
+ * Vol 4 Part E clause on each row). Enabled at W0, judged at W0+300
+ * (EARLIER by recency, so only the on-state can assert it), then
+ * disabled and judged again.
+ *
+ * Seen to fail: with `c->page_inq_scan_on = ...` changed to set only
+ * on a non-zero Scan_Enable (never cleared), the inquiry_page_scan row
+ * stays asserted after its disable; with Exit Periodic Inquiry Mode's
+ * clear removed, the periodic_inquiry row does. */
+static void test_each_persistent_kind_holds_until_its_disable(void) {
+    static const hold_case_t cases[] = {
+        { "page scan (§7.3.18)", 0x0C1A, 1, { 0x02 }, 0x0C1A, 1, { 0x00 },
+          BT_TX_SCAN_ENABLE },
+        { "inquiry scan (§7.3.18)", 0x0C1A, 1, { 0x01 }, 0x0C1A, 1, { 0x00 },
+          BT_TX_SCAN_ENABLE },
+        /* Enable, Num_Sets 1, Handle 3, Duration 0, Max_Events 0; then
+         * disable that one set by handle (§7.8.56). */
+        { "one ext set by handle", 0x2039, 6, { 0x01, 0x01, 0x03, 0, 0, 0 },
+          0x2039, 6, { 0x00, 0x01, 0x03, 0, 0, 0 }, BT_TX_EXT_ADV },
+        { "ext sets, disable all", 0x2039, 6, { 0x01, 0x01, 0x00, 0, 0, 0 },
+          0x2039, 2, { 0x00, 0x00 }, BT_TX_EXT_ADV },
+        /* Enable, Advertising_Handle (§7.8.63). */
+        { "periodic adv (§7.8.63)", 0x2040, 2, { 0x01, 0x05 },
+          0x2040, 2, { 0x00, 0x05 }, BT_TX_PERIODIC_ADV },
+        /* Max 5, Min 4, GIAC, Inquiry_Length 2, Num_Responses 0; Exit
+         * Periodic Inquiry Mode has no parameters (§7.1.3, §7.1.4). */
+        { "periodic inquiry (§7.1.3/4)", 0x0403, 9,
+          { 0x05, 0x00, 0x04, 0x00, 0x33, 0x8B, 0x9E, 0x02, 0x00 },
+          0x0404, 0, { 0 }, BT_TX_PERIODIC_INQUIRY },
+    };
+    g_wall = W0 + 300;
+    sloth_clock_test_set(NULL, pinned_wall);
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const hold_case_t *c = &cases[i];
+        ble_clear();
+        cmd_at(0, c->on_op, c->on_p, c->on_len, W0);
+        ble_snapshot(&g_s);
+        uint32_t bit = 1u << c->kind;
+        if (bt_tx_asserted_mask(&g_s.ble_host, g_wall) != bit)
+            printf("    %s: asserted 0x%x after enable\n", c->what,
+                   bt_tx_asserted_mask(&g_s.ble_host, g_wall));
+        ASSERT_EQ(bt_tx_asserted_mask(&g_s.ble_host, g_wall), bit);
+        cmd_at(0, c->off_op, c->off_p, c->off_len, W0 + 300);
+        ble_snapshot(&g_s);
+        if (g_s.ble_host.tx_on_mask != 0)
+            printf("    %s: on 0x%x after disable\n", c->what,
+                   g_s.ble_host.tx_on_mask);
+        ASSERT_EQ(g_s.ble_host.tx_on_mask, 0u);
+    }
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* Several extended sets in one command: their handles are not read
+ * (spec arrays and kernel per-set records disagree on where they sit),
+ * so a partial disable leaves the state on — the safe side — and only
+ * Num_Sets 0 clears it.
+ *
+ * Seen to fail: with the n == 1 guard dropped from the partial-disable
+ * branch (any partial disable clearing everything), the middle
+ * assertion goes red. */
+static void test_multi_set_ext_adv_clears_only_on_disable_all(void) {
+    /* Enable, Num_Sets 2, then two 4-octet set entries. */
+    const uint8_t en2[10] = { 0x01, 0x02, 0x00, 0, 0, 0, 0x01, 0, 0, 0 };
+    const uint8_t dis1[6] = { 0x00, 0x01, 0x00, 0, 0, 0 };
+    const uint8_t all[2]  = { 0x00, 0x00 };
+    cmd_at(0, 0x2039, en2, 10, W0);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.tx_on_mask, 1u << BT_TX_EXT_ADV);
+    cmd_at(0, 0x2039, dis1, 6, W0);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.tx_on_mask, 1u << BT_TX_EXT_ADV);
+    cmd_at(0, 0x2039, all, 2, W0);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.tx_on_mask, 0u);
+    /* Num_Sets that promises more set entries than the bytes hold. */
+    const uint8_t bad[6] = { 0x01, 0x02, 0x00, 0, 0, 0 };
+    int n = rec_cmd(g_rec, 0x2039, bad, 6);
+    ASSERT_EQ((int)ing(g_rec, n, W0), (int)BLE_REC_MALFORMED);
+}
+
+/* The kernel restarts a scan by toggling LE Set Scan Enable alone, the
+ * parameters set active long before. Each enable is a fresh SCAN_REQ
+ * source, so it refreshes the kind's clock; and while enabled under
+ * active parameters the scan is on regardless of age.
+ *
+ * Seen to fail: without the note_tx() in the LE Set Scan Enable case,
+ * tx_wall[ACTIVE_SCAN] stays at the parameter command's W0 - 500. */
+static void test_scan_enable_under_active_parameters_transmits(void) {
+    const uint8_t act[7] = { 0x01, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00 };
+    const uint8_t pas[7] = { 0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00 };
+    const uint8_t en[2] = { 0x01, 0x00 }, dis[2] = { 0x00, 0x00 };
+    cmd_at(0, 0x200B, act, 7, W0 - 500);
+    cmd_at(0, 0x200C, en, 2, W0);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.tx_wall[BT_TX_ACTIVE_SCAN], (time_t)W0);
+    ASSERT_EQ((int)g_s.ble_host.tx_count, 2);
+    ASSERT_EQ(g_s.ble_host.tx_on_mask, 1u << BT_TX_ACTIVE_SCAN);
+    ASSERT_EQ(bt_tx_asserted_mask(&g_s.ble_host, W0 + 1000),
+              1u << BT_TX_ACTIVE_SCAN);
+    cmd_at(0, 0x200C, dis, 2, W0 + 1);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.tx_on_mask, 0u);
+    ASSERT_EQ(bt_tx_asserted_mask(&g_s.ble_host, W0 + 1000), 0u);
+    /* The extended enable (§7.8.65) is read the same way. */
+    const uint8_t xen[6] = { 0x01, 0x00, 0, 0, 0, 0 };
+    cmd_at(0, 0x2042, xen, 6, W0 + 2);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.tx_wall[BT_TX_ACTIVE_SCAN], (time_t)(W0 + 2));
+    ASSERT_EQ(g_s.ble_host.tx_on_mask, 1u << BT_TX_ACTIVE_SCAN);
+    /* Under passive parameters an enable sends nothing. */
+    cmd_at(0, 0x200C, dis, 2, W0 + 3);
+    cmd_at(0, 0x200B, pas, 7, W0 + 3);
+    cmd_at(0, 0x200C, en, 2, W0 + 4);
+    ble_snapshot(&g_s);
+    ASSERT_EQ((int)g_s.ble_host.tx_count, 3);
+    ASSERT_EQ(g_s.ble_host.tx_on_mask, 0u);
+}
+
+/* The other review case: two kinds inside the window are two
+ * incidents. An active scan at t-30 and an inquiry at t-5; the newer
+ * one must not hide the older.
+ *
+ * Seen to fail: with the rule firing only last_tx_kind (the pre-review
+ * shape), bttx:active_scan is missing. */
+static void test_two_kinds_in_the_window_are_two_incidents(void) {
+    g_wall = W0;
+    sloth_clock_test_set(NULL, pinned_wall);
+    memset(&g_s, 0, sizeof(g_s));
+    active_scan_at(W0 - 30);
+    const uint8_t inq[5] = { 0x33, 0x8B, 0x9E, 0x08, 0x00 };
+    cmd_at(0, 0x0401, inq, 5, W0 - 5);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.last_tx_kind, (int)BT_TX_INQUIRY);
+    alerts_update(&g_s);
+    ASSERT(key_fired(&g_s, "bttx:active_scan") >= 0);
+    ASSERT(key_fired(&g_s, "bttx:inquiry") >= 0);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* HCI_Reset (§7.3.2) returns the controller to its power-on state, so
+ * it clears every on-kind and, from then on, the view of that
+ * controller is complete (tx_baseline). DEL_INDEX removes it outright.
+ *
+ * Seen to fail: with the OP_RESET case emptied, adv stays on after the
+ * Reset and tx_baseline stays 0. */
+static void test_reset_and_del_index_end_the_on_state(void) {
+    const uint8_t a[6] = { 1, 2, 3, 4, 5, 6 };
+    int n = rec_new_index(g_rec, 0, 0x01, a, "hci0");
+    ing(g_rec, n, W0);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.tx_baseline, 0);
+    const uint8_t on = 0x01;
+    cmd_at(0, 0x200A, &on, 1, W0);
+    cmd_at(0, 0x0C1A, (const uint8_t *)"\x02", 1, W0);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.tx_on_mask,
+              (1u << BT_TX_ADV) | (1u << BT_TX_SCAN_ENABLE));
+    cmd_at(0, 0x0C03, NULL, 0, W0 + 1);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.tx_on_mask, 0u);
+    ASSERT_EQ(g_s.ble_host.tx_baseline, 1);
+    ASSERT_EQ(g_s.ble_host.controllers, 1);
+    /* A Reset with parameters is not one. */
+    n = rec_cmd(g_rec, 0x0C03, &on, 1);
+    ASSERT_EQ((int)ing(g_rec, n, W0), (int)BLE_REC_MALFORMED);
+
+    cmd_at(0, 0x200A, &on, 1, W0 + 2);
+    n = rec_del_index(g_rec, 0);
+    ASSERT_EQ((int)ing(g_rec, n, W0 + 3), (int)BLE_REC_DEL_INDEX);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.tx_on_mask, 0u);
+    ASSERT_EQ(g_s.ble_host.controllers, 0);
+    ASSERT_EQ(g_s.ble_host.tx_baseline, 0);
+    /* Recency still holds both enables (W0 and W0 + 2) at W0 + 10, and
+     * neither once the window has passed. */
+    ASSERT_EQ(bt_tx_asserted_mask(&g_s.ble_host, W0 + 10),
+              (1u << BT_TX_ADV) | (1u << BT_TX_SCAN_ENABLE));
+    ASSERT_EQ(bt_tx_asserted_mask(&g_s.ble_host, W0 + 2 + BT_TX_RECENT_SECS + 1),
+              0u);
+}
+
+/* `controllers` is how many primary controllers are present, not how
+ * many announcements arrived: an AMP controller is not counted, and a
+ * controller that resets (DEL_INDEX, NEW_INDEX) counts once.
+ *
+ * Seen to fail: with the `p[0] == 0x00` primary check dropped, the AMP
+ * index makes it 2; with DEL_INDEX left IGNORED, the re-announce does. */
+static void test_controllers_counts_live_primary_only(void) {
+    const uint8_t a[6] = { 1, 2, 3, 4, 5, 6 };
+    int n = rec_new_index(g_rec, 0, 0x01, a, "hci0");
+    ing(g_rec, n, 0);
+    n = rec_new_index_type(g_rec, 1, 0x01 /* HCI_AMP */, 0x01, a, "hci1");
+    ing(g_rec, n, 0);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.controllers, 1);
+    n = rec_del_index(g_rec, 0);
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_DEL_INDEX);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.controllers, 0);
+    n = rec_new_index(g_rec, 0, 0x01, a, "hci0");
+    ing(g_rec, n, 0);
+    ing(g_rec, n, 0);    /* announced twice with no removal between */
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.controllers, 1);
+    ASSERT_EQ((int)g_s.ble_host.index_records, 5);
+    /* DEL_INDEX has no payload; one with bytes is not a DEL_INDEX. */
+    n = rec_del_index(g_rec, 0);
+    g_rec[n] = 0xAA;
+    ASSERT_EQ((int)ing(g_rec, n + 1, 0), (int)BLE_REC_MALFORMED);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.controllers, 1);
+    ASSERT_EQ((int)g_s.ble_host.records,
+              (int)(g_s.ble_host.index_records + g_s.ble_host.malformed));
+}
+
+/* Past BT_MAX_CTRL present controllers, the rest share one slot whose
+ * on-state only grows: a disable on one of them says nothing about the
+ * others.
+ *
+ * Seen to fail: with ctrl_recompute() assigning the overflow slot's
+ * mask instead of OR-ing it, the disable on hci<BT_MAX_CTRL> clears it. */
+static void test_untracked_controllers_never_clear(void) {
+    const uint8_t on = 0x01, off = 0x00;
+    const uint8_t a[6] = { 1, 2, 3, 4, 5, 6 };
+    /* Fill every slot with a present controller, so none is reusable. */
+    for (int i = 0; i < BT_MAX_CTRL; i++) {
+        int n = rec_new_index(g_rec, (uint16_t)i, 0x01, a, "hci");
+        ing(g_rec, n, W0);
+        cmd_at((uint16_t)i, 0x0C03, NULL, 0, W0);
+    }
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_host.tx_baseline, 1);
+    cmd_at(BT_MAX_CTRL, 0x200A, &on, 1, W0);
+    cmd_at(BT_MAX_CTRL, 0x200A, &off, 1, W0);
+    ble_snapshot(&g_s);
+    ASSERT_EQ((int)g_s.ble_host.ctrl_untracked, 2);
+    ASSERT_EQ(g_s.ble_host.tx_on_mask, 1u << BT_TX_ADV);
+    ASSERT_EQ(g_s.ble_host.tx_baseline, 0);
+}
+
+static void test_kinds_format(void) {
+    char b[192];
+    bt_tx_kinds_format(0, b, sizeof(b));
+    ASSERT_STR(b, "");
+    bt_tx_kinds_format((1u << BT_TX_ADV) | (1u << BT_TX_ACTIVE_SCAN), b, sizeof(b));
+    ASSERT_STR(b, "active_scan,advertising");
+    char small[8];
+    bt_tx_kinds_format(1u << BT_TX_ADV, small, sizeof(small));
+    ASSERT_STR(small, "");     /* does not fit: nothing half-written */
+}
+
 /* ── Eviction ───────────────────────────────────────────────────── */
 
 static void test_advertiser_table_evicts_and_tallies(void) {
@@ -628,6 +959,10 @@ static void test_sensor_health_carries_the_bluetooth_block(void) {
         ASSERT(strstr(b, "\"ble_own_tx\":\"never\"") != NULL);
         ASSERT(strstr(b, "\"ble_own_tx_kind\":\"none\"") != NULL);
         ASSERT(strstr(b, "\"ble_own_tx_secs\":-1") != NULL);
+        ASSERT(strstr(b, "\"ble_own_tx_on\":\"\"") != NULL);
+        ASSERT(strstr(b, "\"ble_own_tx_asserted\":\"\"") != NULL);
+        ASSERT(strstr(b, "\"ble_own_tx_baseline\":0") != NULL);
+        ASSERT(strstr(b, "\"ble_index_records\":0") != NULL);
         ASSERT(strstr(b, "\"ble_multi_report_rejected\":1") != NULL);
         ASSERT(strstr(b, "\"ble_records\":2") != NULL);
         ASSERT(strstr(b, "\"ble_host_commands\":1") != NULL);
@@ -668,6 +1003,55 @@ static void test_own_transmit_signature_is_bucketed(void) {
         ASSERT_EQ(count_lines(b), 3);
         ASSERT(strstr(b, "\"ble_own_tx\":\"recent\"") != NULL);
         ASSERT(strstr(b, "\"ble_own_tx\":\"earlier\"") != NULL);
+    }
+    unlink(g_tmp);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* What is on the air now reaches sensor_health, and stays there past
+ * the recency window: at +300 s `ble_own_tx` reads `earlier` while
+ * `ble_own_tx_on` still says advertising. And a scan the kernel toggles
+ * on and off under active parameters is one line, not one per toggle:
+ * the signature carries the asserted kinds (on or recent), which do not
+ * move while the scan keeps re-enabling.
+ *
+ * Seen to fail: with `sig.ble_tx_asserted` set from tx_on_mask instead
+ * of bt_tx_asserted_mask(), the toggles below write extra lines. */
+static void test_sensor_health_reports_what_is_on(void) {
+    g_wall = W0;
+    sloth_clock_test_set(NULL, pinned_wall);
+    ASSERT(open_tmp_jsonl());
+    memset(&g_s, 0, sizeof(g_s));
+    const uint8_t act[7] = { 0x01, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00 };
+    const uint8_t en[2] = { 0x01, 0x00 }, dis[2] = { 0x00, 0x00 };
+    cmd_at(0, 0x200B, act, 7, W0);
+    cmd_at(0, 0x200C, en, 2, W0);
+    ble_snapshot(&g_s);
+    jsonl_emit_sensor_health(&g_s);                 /* 1 */
+    for (int i = 1; i <= 4; i++) {
+        g_wall = W0 + i;
+        cmd_at(0, 0x200C, (i & 1) ? dis : en, 2, g_wall);
+        ble_snapshot(&g_s);
+        jsonl_emit_sensor_health(&g_s);             /* suppressed */
+    }
+    const uint8_t on = 0x01;
+    cmd_at(0, 0x200A, &on, 1, g_wall);
+    ble_snapshot(&g_s);
+    jsonl_emit_sensor_health(&g_s);                 /* 2: new kind */
+    g_wall += 300;
+    jsonl_emit_sensor_health(&g_s);                 /* 3: recent -> earlier */
+    jsonl_close();
+    char *b = slurp_tmp();
+    ASSERT(b != NULL);
+    if (b) {
+        ASSERT_EQ(count_lines(b), 3);
+        const char *last = b;
+        for (const char *q = b; (q = strstr(q, "\"type\":\"sensor_health\"")); q++)
+            last = q;
+        ASSERT(strstr(last, "\"ble_own_tx\":\"earlier\"") != NULL);
+        ASSERT(strstr(last, "\"ble_own_tx_on\":\"active_scan,advertising\"") != NULL);
+        ASSERT(strstr(last, "\"ble_own_tx_asserted\":\"active_scan,advertising\"") != NULL);
+        ASSERT(strstr(last, "\"ble_own_tx_baseline\":0") != NULL);
     }
     unlink(g_tmp);
     sloth_clock_test_set(NULL, NULL);
@@ -783,9 +1167,19 @@ void run_ble_hci_tests(void) {
     RUN_TEST(test_recency_is_bucketed_not_latched);
     RUN_TEST(test_own_transmit_fires_while_recent);
     RUN_TEST(test_own_transmit_silent_when_never_or_earlier);
+    RUN_TEST(test_advertising_held_on_until_disabled);
+    RUN_TEST(test_each_persistent_kind_holds_until_its_disable);
+    RUN_TEST(test_multi_set_ext_adv_clears_only_on_disable_all);
+    RUN_TEST(test_scan_enable_under_active_parameters_transmits);
+    RUN_TEST(test_two_kinds_in_the_window_are_two_incidents);
+    RUN_TEST(test_reset_and_del_index_end_the_on_state);
+    RUN_TEST(test_controllers_counts_live_primary_only);
+    RUN_TEST(test_untracked_controllers_never_clear);
+    RUN_TEST(test_kinds_format);
     RUN_TEST(test_advertiser_table_evicts_and_tallies);
     RUN_TEST(test_sensor_health_carries_the_bluetooth_block);
     RUN_TEST(test_own_transmit_signature_is_bucketed);
+    RUN_TEST(test_sensor_health_reports_what_is_on);
     RUN_TEST(test_replay_routes_dlt_254_to_the_bluetooth_source);
 #ifdef WITH_PCAP
     RUN_TEST(test_worker_callback_decodes_a_dlt_254_savefile);

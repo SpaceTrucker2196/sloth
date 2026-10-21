@@ -15,8 +15,10 @@
 
 #define OP_INQUIRY                  0x0401  /* §7.1.1 */
 #define OP_PERIODIC_INQUIRY         0x0403  /* §7.1.3 */
+#define OP_EXIT_PERIODIC_INQUIRY    0x0404  /* §7.1.4 */
 #define OP_CREATE_CONN              0x0405  /* §7.1.5 */
 #define OP_REMOTE_NAME_REQ          0x0419  /* §7.1.19 */
+#define OP_RESET                    0x0C03  /* §7.3.2 */
 #define OP_WRITE_SCAN_ENABLE        0x0C1A  /* §7.3.18 */
 #define OP_LE_SET_ADV_ENABLE        0x200A  /* §7.8.9 */
 #define OP_LE_SET_SCAN_PARAMS       0x200B  /* §7.8.10 */
@@ -62,6 +64,13 @@ STAB_DECL(g_devs, ble_device_t, MAX_BLE_DEVICES, last_seen, STAB_OLDEST,
 static ble_host_t g_host;
 static int        g_host_init;
 
+static void ctrl_init(ble_ctrl_t *c, int index) {
+    memset(c, 0, sizeof(*c));
+    c->index        = index;
+    c->scan_enabled = -1;
+    c->scan_mode    = BLE_SCAN_UNKNOWN;
+}
+
 static void host_init_locked(void) {
     if (g_host_init) return;
     memset(&g_host, 0, sizeof(g_host));
@@ -71,7 +80,84 @@ static void host_init_locked(void) {
     g_host.scan_enabled    = -1;
     g_host.last_tx_kind    = BT_TX_NONE;
     g_host.last_tx_adapter = -1;
+    for (int k = 0; k < BT_TX_KIND_COUNT; k++) g_host.tx_adapter[k] = -1;
+    for (int i = 0; i < BT_MAX_CTRL; i++) ctrl_init(&g_host.ctrl[i], -1);
+    ctrl_init(&g_host.ctrl_overflow, -1);
     g_host_init = 1;
+}
+
+/* ── Per-controller on/off state ──────────────────────────────────── */
+
+static int handles_any(const uint32_t *set) {
+    for (int i = 0; i < BT_ADV_HANDLE_WORDS; i++) if (set[i]) return 1;
+    return 0;
+}
+
+static void handle_put(uint32_t *set, uint8_t h, int on) {
+    uint32_t bit = 1u << (h & 31);
+    if (on) set[h >> 5] |= bit;
+    else    set[h >> 5] &= ~bit;
+}
+
+static int is_overflow(const ble_ctrl_t *c) { return c == &g_host.ctrl_overflow; }
+
+/* The slot for HCI index `adapter`: its own, else a free one, else one
+ * holding nothing worth keeping (no NEW_INDEX, nothing on), else the
+ * shared overflow slot. */
+static ble_ctrl_t *ctrl_for(uint16_t adapter) {
+    ble_ctrl_t *spare = NULL;
+    for (int i = 0; i < BT_MAX_CTRL; i++) {
+        ble_ctrl_t *c = &g_host.ctrl[i];
+        if (c->index == (int)adapter) return c;
+        if (!spare && c->index < 0) spare = c;
+    }
+    for (int i = 0; !spare && i < BT_MAX_CTRL; i++) {
+        ble_ctrl_t *c = &g_host.ctrl[i];
+        if (!c->live && c->on_mask == 0) spare = c;
+    }
+    if (!spare) {
+        g_host.ctrl_untracked++;
+        return &g_host.ctrl_overflow;
+    }
+    ctrl_init(spare, adapter);
+    return spare;
+}
+
+static ble_ctrl_t *ctrl_find(uint16_t adapter) {
+    for (int i = 0; i < BT_MAX_CTRL; i++)
+        if (g_host.ctrl[i].index == (int)adapter) return &g_host.ctrl[i];
+    return NULL;
+}
+
+/* Rederive one controller's on_mask from its fields, then the host's
+ * view across all of them. The overflow slot only ever gains bits: it
+ * stands for several controllers, so a disable seen on one of them is
+ * not evidence the others stopped. */
+static void ctrl_recompute(ble_ctrl_t *c) {
+    uint32_t m = 0;
+    if (c->adv_on)                                   m |= 1u << BT_TX_ADV;
+    if (c->ext_adv_unknown || handles_any(c->ext_adv_sets))
+                                                     m |= 1u << BT_TX_EXT_ADV;
+    if (handles_any(c->per_adv_sets))                m |= 1u << BT_TX_PERIODIC_ADV;
+    if (c->page_inq_scan_on)                         m |= 1u << BT_TX_SCAN_ENABLE;
+    if (c->per_inquiry_on)                           m |= 1u << BT_TX_PERIODIC_INQUIRY;
+    if (c->scan_enabled == 1 && c->scan_mode == BLE_SCAN_ACTIVE)
+                                                     m |= 1u << BT_TX_ACTIVE_SCAN;
+    c->on_mask = is_overflow(c) ? (c->on_mask | m) : m;
+
+    uint32_t on = g_host.ctrl_overflow.on_mask;
+    int live = 0, used = 0, reset_all = 1;
+    for (int i = 0; i < BT_MAX_CTRL; i++) {
+        const ble_ctrl_t *k = &g_host.ctrl[i];
+        if (k->index < 0) continue;
+        used++;
+        on |= k->on_mask;
+        if (k->live && k->primary) live++;
+        if (!k->reset_seen) reset_all = 0;
+    }
+    g_host.tx_on_mask  = on;
+    g_host.controllers = live;
+    g_host.tx_baseline = used > 0 && reset_all && g_host.ctrl_untracked == 0;
 }
 
 /* ── Names ─────────────────────────────────────────────────────────── */
@@ -130,6 +216,32 @@ int bt_tx_recency(time_t last_tx_wall, time_t now) {
      * a finding about sloth's own host transmitting. */
     if (now - last_tx_wall <= BT_TX_RECENT_SECS) return BT_TX_RECENT;
     return BT_TX_EARLIER;
+}
+
+uint32_t bt_tx_asserted_mask(const ble_host_t *h, time_t now) {
+    uint32_t m = 0;
+    if (!h) return 0;
+    for (int k = BT_TX_NONE + 1; k < BT_TX_KIND_COUNT; k++)
+        if (((h->tx_on_mask >> k) & 1u) ||
+            bt_tx_recency(h->tx_wall[k], now) == BT_TX_RECENT)
+            m |= 1u << k;
+    return m;
+}
+
+void bt_tx_kinds_format(uint32_t mask, char *buf, size_t sz) {
+    if (!buf || sz == 0) return;
+    size_t off = 0;
+    buf[0] = '\0';
+    for (int k = BT_TX_NONE + 1; k < BT_TX_KIND_COUNT; k++) {
+        if (!((mask >> k) & 1u)) continue;
+        const char *n = bt_tx_kind_name(k);
+        size_t need = strlen(n) + (off ? 1 : 0);
+        if (off + need + 1 > sz) break;
+        if (off) buf[off++] = ',';
+        memcpy(buf + off, n, strlen(n));
+        off += strlen(n);
+        buf[off] = '\0';
+    }
 }
 
 /* ── Advertising reports ───────────────────────────────────────────── */
@@ -214,10 +326,12 @@ static int popcount_phys(uint8_t phys) {
 }
 
 static void note_tx(int kind, uint16_t adapter, time_t wall) {
-    g_host.last_tx_kind    = kind;
-    g_host.last_tx_adapter = adapter;
-    g_host.last_tx_wall    = wall;
-    g_host.tx_kind_mask   |= 1u << kind;
+    g_host.last_tx_kind     = kind;
+    g_host.last_tx_adapter  = adapter;
+    g_host.last_tx_wall     = wall;
+    g_host.tx_wall[kind]    = wall;
+    g_host.tx_adapter[kind] = adapter;
+    g_host.tx_kind_mask    |= 1u << kind;
     g_host.tx_count++;
 }
 
@@ -230,11 +344,13 @@ static ble_rec_verdict_t ingest_command(const uint8_t *p, size_t len,
     int tx = BT_TX_NONE;
     switch (op) {
     case OP_INQUIRY:            tx = BT_TX_INQUIRY;          break;
-    case OP_PERIODIC_INQUIRY:   tx = BT_TX_PERIODIC_INQUIRY; break;
     case OP_CREATE_CONN:        tx = BT_TX_BREDR_CONNECT;    break;
     case OP_REMOTE_NAME_REQ:    tx = BT_TX_REMOTE_NAME;      break;
     case OP_LE_CREATE_CONN:
     case OP_LE_EXT_CREATE_CONN: tx = BT_TX_LE_CONNECT;       break;
+    case OP_PERIODIC_INQUIRY:
+    case OP_EXIT_PERIODIC_INQUIRY:
+    case OP_RESET:
     case OP_WRITE_SCAN_ENABLE:
     case OP_LE_SET_ADV_ENABLE:
     case OP_LE_SET_EXT_ADV_ENABLE:
@@ -252,41 +368,115 @@ static ble_rec_verdict_t ingest_command(const uint8_t *p, size_t len,
     if (3 + plen > len) return BLE_REC_MALFORMED;
     const uint8_t *a = p + 3;
 
-    /* The five commands whose mere issue puts the controller on the air:
-     * inquiry and paging transmit ID packets, and an LE initiator sends
-     * CONNECT_IND. Their parameters are not needed to say so. */
+    /* The one-shot commands whose mere issue puts the controller on the
+     * air: inquiry and paging transmit ID packets, and an LE initiator
+     * sends CONNECT_IND. Each ends on its own (Inquiry_Length is at most
+     * 61.44 s, inside the recency window), so recency alone covers them
+     * and their parameters are not needed. */
     if (tx != BT_TX_NONE) {
         note_tx(tx, adapter, wall);
         return BLE_REC_COMMAND;
     }
 
+    /* Every length is checked before the controller's state is touched,
+     * so a malformed command changes nothing. */
     switch (op) {
+    case OP_PERIODIC_INQUIRY:      if (plen != 9) return BLE_REC_MALFORMED; break;
+    case OP_EXIT_PERIODIC_INQUIRY:
+    case OP_RESET:                 if (plen != 0) return BLE_REC_MALFORMED; break;
     case OP_WRITE_SCAN_ENABLE:
-        /* Scan_Enable: bit 0 inquiry scan, bit 1 page scan — either
-         * makes the controller answer another device's inquiry or page. */
-        if (plen != 1) return BLE_REC_MALFORMED;
-        if (a[0] & 0x03) note_tx(BT_TX_SCAN_ENABLE, adapter, wall);
-        break;
-    case OP_LE_SET_ADV_ENABLE:
-        if (plen != 1) return BLE_REC_MALFORMED;
-        if (a[0] == 0x01) note_tx(BT_TX_ADV, adapter, wall);
-        break;
+    case OP_LE_SET_ADV_ENABLE:     if (plen != 1) return BLE_REC_MALFORMED; break;
     case OP_LE_SET_EXT_ADV_ENABLE:
-        /* Enable, Num_Sets, then per-set arrays; only Enable matters. */
-        if (plen < 2) return BLE_REC_MALFORMED;
-        if (a[0] == 0x01) note_tx(BT_TX_EXT_ADV, adapter, wall);
+        /* Enable, Num_Sets, then Advertising_Handle, Duration(2),
+         * Max_Extended_Advertising_Events for each set (§7.8.56). */
+        if (plen < 2 || plen != (size_t)(2 + 4 * a[1])) return BLE_REC_MALFORMED;
         break;
     case OP_LE_SET_PER_ADV_ENABLE:
-        /* Enable bit 0 = periodic advertising on (bit 1 is ADI only). */
-        if (plen != 2) return BLE_REC_MALFORMED;
+    case OP_LE_SET_SCAN_ENABLE:    if (plen != 2) return BLE_REC_MALFORMED; break;
+    case OP_LE_SET_SCAN_PARAMS:    if (plen != 7) return BLE_REC_MALFORMED; break;
+    case OP_LE_SET_EXT_SCAN_PARAMS: {
+        if (plen < 3) return BLE_REC_MALFORMED;
+        int nphy = popcount_phys(a[2]);
+        if (nphy == 0 || plen != (size_t)(3 + 5 * nphy)) return BLE_REC_MALFORMED;
+        break;
+    }
+    case OP_LE_SET_EXT_SCAN_ENABLE: if (plen != 6) return BLE_REC_MALFORMED; break;
+    default: break;
+    }
+
+    ble_ctrl_t *c = ctrl_for(adapter);
+    switch (op) {
+    case OP_PERIODIC_INQUIRY:
+        /* Inquires every period until Exit Periodic Inquiry Mode. */
+        c->per_inquiry_on = 1;
+        note_tx(BT_TX_PERIODIC_INQUIRY, adapter, wall);
+        break;
+    case OP_EXIT_PERIODIC_INQUIRY:
+        c->per_inquiry_on = 0;
+        break;
+    case OP_RESET:
+        /* §7.3.2: the controller returns to its power-on state — no
+         * advertising, no scan, no inquiry or page scan, no periodic
+         * inquiry. From here every change crosses the channel, so this
+         * controller's on-state is complete (tx_baseline). The scan type
+         * is not assumed from the default; it waits for parameters. */
+        if (!is_overflow(c)) {
+            int idx = c->index;
+            uint8_t live = c->live, primary = c->primary;
+            ctrl_init(c, idx);
+            c->live = live;
+            c->primary = primary;
+            c->scan_enabled = 0;
+            c->reset_seen = 1;
+        }
+        break;
+    case OP_WRITE_SCAN_ENABLE:
+        /* Scan_Enable: bit 0 inquiry scan, bit 1 page scan — either
+         * makes the controller answer another device's inquiry or page,
+         * until a Write_Scan_Enable that clears both. */
+        c->page_inq_scan_on = (a[0] & 0x03) != 0;
+        if (c->page_inq_scan_on) note_tx(BT_TX_SCAN_ENABLE, adapter, wall);
+        break;
+    case OP_LE_SET_ADV_ENABLE:
+        /* 0x00 off, 0x01 on; other values are reserved and change nothing. */
+        if (a[0] == 0x01) { c->adv_on = 1; note_tx(BT_TX_ADV, adapter, wall); }
+        else if (a[0] == 0x00) c->adv_on = 0;
+        break;
+    case OP_LE_SET_EXT_ADV_ENABLE: {
+        /* Sets are tracked by handle only when Num_Sets is 1: for more,
+         * the spec's per-field arrays and the kernel's per-set records
+         * (struct hci_cp_ext_adv_set) put the handles at different
+         * offsets — the same disagreement as multi-report events. So an
+         * enable of several sets is "on, handles unknown", which only a
+         * disable of all sets (Num_Sets 0) clears; a partial disable of
+         * several sets changes nothing, the safe side. */
+        uint8_t n = a[1];
+        if (a[0] == 0x01) {
+            if (n == 1) handle_put(c->ext_adv_sets, a[2], 1);
+            else        c->ext_adv_unknown = 1;
+            note_tx(BT_TX_EXT_ADV, adapter, wall);
+        } else if (a[0] == 0x00) {
+            if (n == 0) {
+                memset(c->ext_adv_sets, 0, sizeof(c->ext_adv_sets));
+                c->ext_adv_unknown = 0;
+            } else if (n == 1) {
+                handle_put(c->ext_adv_sets, a[2], 0);
+            }
+        }
+        break;
+    }
+    case OP_LE_SET_PER_ADV_ENABLE:
+        /* Enable bit 0 = periodic advertising on (bit 1 is ADI only),
+         * then the Advertising_Handle it applies to (§7.8.63). */
+        handle_put(c->per_adv_sets, a[1], a[0] & 0x01);
         if (a[0] & 0x01) note_tx(BT_TX_PERIODIC_ADV, adapter, wall);
         break;
     case OP_LE_SET_SCAN_PARAMS:
         /* LE_Scan_Type, Interval(2), Window(2), Own_Address_Type,
          * Scanning_Filter_Policy. */
-        if (plen != 7) return BLE_REC_MALFORMED;
         g_host.scan_mode     = a[0] == 0x01 ? BLE_SCAN_ACTIVE : BLE_SCAN_PASSIVE;
         g_host.filter_policy = a[6] <= 3 ? a[6] : -1;
+        c->scan_mode         = (int8_t)g_host.scan_mode;
         if (g_host.scan_mode == BLE_SCAN_ACTIVE)
             note_tx(BT_TX_ACTIVE_SCAN, adapter, wall);
         break;
@@ -294,29 +484,31 @@ static ble_rec_verdict_t ingest_command(const uint8_t *p, size_t len,
         /* Own_Address_Type, Scanning_Filter_Policy, Scanning_PHYs, then
          * Scan_Type, Interval(2), Window(2) per PHY bit set. Active if
          * any PHY scans actively. */
-        if (plen < 3) return BLE_REC_MALFORMED;
         int nphy = popcount_phys(a[2]);
-        if (nphy == 0 || plen != (size_t)(3 + 5 * nphy))
-            return BLE_REC_MALFORMED;
         int active = 0;
         for (int i = 0; i < nphy; i++)
             if (a[3 + 5 * i] == 0x01) active = 1;
         g_host.scan_mode     = active ? BLE_SCAN_ACTIVE : BLE_SCAN_PASSIVE;
         g_host.filter_policy = a[1] <= 3 ? a[1] : -1;
+        c->scan_mode         = (int8_t)g_host.scan_mode;
         if (active) note_tx(BT_TX_ACTIVE_SCAN, adapter, wall);
         break;
     }
     case OP_LE_SET_SCAN_ENABLE:
-        if (plen != 2) return BLE_REC_MALFORMED;
-        g_host.scan_enabled = a[0] == 0x01;
-        break;
     case OP_LE_SET_EXT_SCAN_ENABLE:
-        if (plen != 6) return BLE_REC_MALFORMED;
+        /* LE_Scan_Enable first in both (§7.8.11, §7.8.65). Enabling under
+         * active parameters is itself a transmission: the kernel restarts
+         * a scan by toggling enable alone, parameters untouched, and the
+         * scan sends SCAN_REQ again from that moment. */
         g_host.scan_enabled = a[0] == 0x01;
+        c->scan_enabled     = (int8_t)(a[0] == 0x01);
+        if (a[0] == 0x01 && c->scan_mode == BLE_SCAN_ACTIVE)
+            note_tx(BT_TX_ACTIVE_SCAN, adapter, wall);
         break;
     default:
         break;
     }
+    ctrl_recompute(c);
     return BLE_REC_COMMAND;
 }
 
@@ -324,7 +516,16 @@ static ble_rec_verdict_t ingest_new_index(const uint8_t *p, size_t len,
                                           uint16_t adapter) {
     /* struct hci_mon_new_index: type, bus, bdaddr (6, LE), name[8]. */
     if (len != 16) return BLE_REC_MALFORMED;
-    g_host.controllers++;
+    /* A newly registered controller has been told nothing yet; the
+     * replay a new monitor socket gets for controllers already up is
+     * the same record, and there too nothing is known before it. */
+    ble_ctrl_t *c = ctrl_for(adapter);
+    if (!is_overflow(c)) {
+        ctrl_init(c, adapter);
+        c->live    = 1;
+        c->primary = p[0] == 0x00;   /* HCI_PRIMARY; 0x01 is AMP */
+    }
+    ctrl_recompute(c);
     g_host.ctrl_index = adapter;
     g_host.ctrl_bus   = p[1];
     for (int i = 0; i < 6; i++) g_host.ctrl_addr[i] = p[2 + 5 - i];
@@ -337,6 +538,18 @@ static ble_rec_verdict_t ingest_new_index(const uint8_t *p, size_t len,
     }
     g_host.ctrl_name[n] = '\0';
     return BLE_REC_NEW_INDEX;
+}
+
+static ble_rec_verdict_t ingest_del_index(size_t len, uint16_t adapter) {
+    /* DEL_INDEX carries no payload. The controller is gone, so it is
+     * transmitting nothing and no longer counts as present. */
+    if (len != 0) return BLE_REC_MALFORMED;
+    ble_ctrl_t *c = ctrl_find(adapter);
+    if (c) {
+        ctrl_init(c, -1);
+        ctrl_recompute(c);
+    }
+    return BLE_REC_DEL_INDEX;
 }
 
 ble_rec_verdict_t ble_mon_ingest(const uint8_t *rec, size_t caplen,
@@ -352,6 +565,7 @@ ble_rec_verdict_t ble_mon_ingest(const uint8_t *rec, size_t caplen,
         const uint8_t *p = rec + BT_MON_HDR_LEN;
         size_t len = caplen - BT_MON_HDR_LEN;
         int listed = opcode == BT_MON_NEW_INDEX ||
+                     opcode == BT_MON_DEL_INDEX ||
                      opcode == BT_MON_COMMAND_PKT ||
                      opcode == BT_MON_EVENT_PKT;
         if (!listed)
@@ -360,6 +574,8 @@ ble_rec_verdict_t ble_mon_ingest(const uint8_t *rec, size_t caplen,
             v = BLE_REC_MALFORMED;   /* never decode from a snapped prefix */
         else if (opcode == BT_MON_NEW_INDEX)
             v = ingest_new_index(p, len, adapter);
+        else if (opcode == BT_MON_DEL_INDEX)
+            v = ingest_del_index(len, adapter);
         else if (opcode == BT_MON_EVENT_PKT)
             v = ingest_event(p, len, adapter, frame_ts);
         else
@@ -368,7 +584,8 @@ ble_rec_verdict_t ble_mon_ingest(const uint8_t *rec, size_t caplen,
     switch (v) {
     case BLE_REC_MALFORMED:         g_host.malformed++;         break;
     case BLE_REC_IGNORED:           g_host.ignored++;           break;
-    case BLE_REC_NEW_INDEX:         g_host.new_index++;         break;
+    case BLE_REC_NEW_INDEX:
+    case BLE_REC_DEL_INDEX:         g_host.index_records++;     break;
     case BLE_REC_ADV:               g_host.adv_reports++;       break;
     case BLE_REC_MULTI_REJECTED:    g_host.multi_rejected++;    break;
     case BLE_REC_EXT_ADV_UNDECODED: g_host.ext_adv_undecoded++; break;

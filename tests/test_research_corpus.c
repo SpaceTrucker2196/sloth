@@ -312,6 +312,34 @@ static void test_uncitable_kinds_with_a_real_basis_are_still_cited(void) {
     sqlite3_close(db);
 }
 
+/* The first exemption form, pinned the way the posture list above is:
+ * a rule reporting sloth's OWN operational state, with no adversary and
+ * so no ATT&CK technique, is excused the coverage count. Until #144
+ * slice 2 that was NO_MONITOR_MODE alone and lived only in prose
+ * (agents/AGENTS.md); BT_OWN_TRANSMIT is the second. Naming them here
+ * makes the set the test's to hold: a kind that leaves it (gains a
+ * technique, or is renamed) turns this red rather than silently moving
+ * between forms. A new own-state rule belongs on this list. */
+static void test_own_state_kinds_are_named(void) {
+    static const char *const kinds[] = {
+        "ALERT_TYPE_NO_MONITOR_MODE",
+        "ALERT_TYPE_BT_OWN_TRANSMIT",   /* #144 slice 2 */
+    };
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+        int found = 0;
+        for (int t = 0; t < (int)ALERT_TYPE_COUNT; t++) {
+            const char *name = alert_type_name((alert_type_t)t);
+            if (!name || strcmp(name, kinds[i]) != 0) continue;
+            found = 1;
+            const char *tech = alert_technique((alert_type_t)t);
+            ASSERT(tech && !tech[0]);
+            break;
+        }
+        if (!found) printf("    corpus: %s is not an alert kind\n", kinds[i]);
+        ASSERT(found);
+    }
+}
+
 void run_research_corpus_tests(void) {
     TEST_SUITE("research corpus guard (#73)");
     RUN_TEST(test_corpus_is_present_and_readable);
@@ -320,4 +348,5 @@ void run_research_corpus_tests(void) {
     RUN_TEST(test_coverage_query_is_exact_not_fts_match);
     RUN_TEST(test_every_citable_alert_kind_is_cited);
     RUN_TEST(test_uncitable_kinds_with_a_real_basis_are_still_cited);
+    RUN_TEST(test_own_state_kinds_are_named);
 }

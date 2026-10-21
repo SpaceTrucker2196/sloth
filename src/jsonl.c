@@ -2097,11 +2097,15 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * never the seconds-since, never the last kind, which a stack
          * alternating scan and advertising would flip on every command.
          * Scan enable is left out for the same reason: BlueZ discovery
-         * toggles it every few seconds. The record counters are
-         * none/some bands, like the socket refusals above. */
+         * toggles it every few seconds. The kinds BT_OWN_TRANSMIT asserts
+         * (on, or recent) enter as a mask rather than the raw on-state,
+         * because an active scan toggled by the kernel flips on and off
+         * just as fast while staying recent throughout. The record
+         * counters are none/some bands, like the socket refusals above. */
         int      bt_open, bt_run, bt_exit, bt_stale_state;
         int      ble_tx_recency, ble_scan_mode, ble_filter_policy;
-        uint32_t ble_tx_kind_mask;
+        uint32_t ble_tx_kind_mask, ble_tx_asserted;
+        int      ble_tx_baseline;
         int      ble_controllers;
         int      ble_multi_any, ble_ext_adv_any, ble_malformed_any;
     } sig;
@@ -2195,6 +2199,8 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.ble_scan_mode     = bh->scan_mode;
     sig.ble_filter_policy = bh->filter_policy;
     sig.ble_tx_kind_mask  = bh->tx_kind_mask;
+    sig.ble_tx_asserted   = bt_tx_asserted_mask(bh, now);
+    sig.ble_tx_baseline   = bh->tx_baseline;
     sig.ble_controllers   = bh->controllers;
     sig.ble_multi_any     = bh->multi_rejected > 0;
     sig.ble_ext_adv_any   = bh->ext_adv_undecoded > 0;
@@ -2399,6 +2405,18 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "ble_own_tx_count", (long long)h->tx_count);
         kv_int(buf, LINEBUF, &off, "ble_own_tx_secs",
                h->last_tx_wall > 0 ? (long long)(now - h->last_tx_wall) : -1);
+        /* What is on the air now, as far as the commands show it, and
+         * whether that view is complete: without a Reset seen on every
+         * controller, state set before sloth opened the channel is not
+         * in it, and "" here is not "listening only". */
+        char on[192];
+        bt_tx_kinds_format(h->tx_on_mask, on, sizeof(on));
+        kv_str(buf, LINEBUF, &off, "ble_own_tx_on", on);
+        bt_tx_kinds_format(bt_tx_asserted_mask(h, now), on, sizeof(on));
+        kv_str(buf, LINEBUF, &off, "ble_own_tx_asserted", on);
+        kv_int(buf, LINEBUF, &off, "ble_own_tx_baseline", h->tx_baseline);
+        kv_int(buf, LINEBUF, &off, "ble_index_records",
+               (long long)h->index_records);
     }
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);

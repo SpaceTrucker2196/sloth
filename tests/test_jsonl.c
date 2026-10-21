@@ -1695,7 +1695,7 @@ static void test_emit_sensor_health_carries_loaded_libs(void) {
     const char *close = libs ? strstr(libs, "\",\"btmon_iface\":") : NULL;
     ASSERT(close != NULL);
     /* The record's last field is now the Bluetooth block's last one. */
-    const char *tail = strstr(body, "\"ble_own_tx_secs\":");
+    const char *tail = strstr(body, "\"ble_index_records\":");
     ASSERT(tail != NULL);
     const char *end = tail ? strstr(tail, "}") : NULL;
     ASSERT(end != NULL);

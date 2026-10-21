@@ -44,5 +44,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (g_s.ble_host.last_tx_kind < 0 ||
         g_s.ble_host.last_tx_kind >= BT_TX_KIND_COUNT)
         abort();
+    /* On-state is a set of kinds; nothing outside the enum, and no
+     * more live controllers than slots. */
+    if (g_s.ble_host.tx_on_mask >> BT_TX_KIND_COUNT) abort();
+    if (g_s.ble_host.tx_on_mask & 1u) abort();
+    if (g_s.ble_host.controllers < 0 || g_s.ble_host.controllers > BT_MAX_CTRL)
+        abort();
+    {
+        char kinds[192];
+        bt_tx_kinds_format(~0u, kinds, sizeof(kinds));
+        if (strnlen(kinds, sizeof(kinds)) >= sizeof(kinds)) abort();
+    }
     return 0;
 }

@@ -4529,3 +4529,22 @@ capture's first-device fallback. New sensor kind `ble`, the
 own-operational-state finding (no technique, the `NO_MONITOR_MODE`
 form) for a host stack that makes the controller transmit, bucketed by
 recency.
+
+Review pass, same slice. The finding now tracks **on/off state per
+controller** for the kinds that stay on the air — advertising (legacy,
+extended, periodic), inquiry / page scan, periodic inquiry, and an LE
+scan enabled under active parameters — and ends each at its disable,
+Exit Periodic Inquiry Mode, Reset or DEL_INDEX, rather than going quiet
+120 s after the enable while the controller kept transmitting. Each kind
+keeps its own clock, so two kinds inside the window are two incidents.
+LE Set (Extended) Scan Enable under active parameters is itself counted
+as an active-scan transmission. `ble_own_tx` = `never` is documented as
+"no transmit command seen since the channel opened", with
+`ble_own_tx_on`, `ble_own_tx_asserted` and `ble_own_tx_baseline` (a
+Reset seen on every controller) appended to `sensor_health`, and the
+passive-scan procedure power-cycles the adapter under sloth to reach a
+complete baseline. `ble_controllers` counts primary controllers present
+now (DEL_INDEX decrements it, AMP is not counted); the accounting bucket
+it used to double as is `ble_index_records`. The own-state exemption set
+is pinned in `tests/test_research_corpus.c ::
+test_own_state_kinds_are_named`.

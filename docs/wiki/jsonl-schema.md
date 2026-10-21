@@ -747,23 +747,27 @@ does not know the type ignores it, as it would any other.
 | `btmon_iface` | the Bluetooth host source: `bluetooth-monitor` under `--bt-monitor`, `replay` for a DLT 254 `--replay` file, `""` when neither is configured — which is what says the zeros below mean "not listening", not "nothing heard" (#144 slice 2). Appended after `libs`; **additive** |
 | `btmon_err` | why `--bt-monitor` could not open the channel (no such device, permission, a datalink other than 254), `""` = none |
 | `btmon_open` … `btmon_stale_secs` | the per-stream block below, for the HCI monitor worker. `btmon_stats_valid` may stay `0` for the whole run: libpcap's Bluetooth monitor backend need not implement `pcap_stats()`, and `0` there means *not measured*, not *no drops* |
-| `ble_controllers` | NEW_INDEX records seen — controllers the kernel announced on the monitor channel since sloth opened it (a controller already up when sloth started is announced too: the kernel replays the index list to a new monitor socket) |
+| `ble_controllers` | primary-type controllers **present now**: announced by a NEW_INDEX with type `0x00` (HCI_PRIMARY; AMP controllers are not counted) and not since removed by DEL_INDEX, among up to 8 tracked. A controller already up when sloth started is counted too — the kernel replays the index list to a new monitor socket — and one that resets or is rfkill-toggled is removed and re-announced, so it counts once, not once per announcement |
 | `ble_devices` | rows in the BLE advertiser table now |
-| `ble_records` | every monitor record offered to the decoder, lifetime. Each lands in exactly one bucket: `ble_controllers`, `ble_adv_reports`, `ble_multi_report_rejected`, `ble_ext_adv_undecoded`, `ble_records_ignored`, `ble_records_malformed` or `ble_host_commands`, which therefore sum to it |
+| `ble_records` | every monitor record offered to the decoder, lifetime. Each lands in exactly one bucket: `ble_index_records`, `ble_adv_reports`, `ble_multi_report_rejected`, `ble_ext_adv_undecoded`, `ble_records_ignored`, `ble_records_malformed` or `ble_host_commands`, which therefore sum to it |
 | `ble_adv_reports` | single-report LE Advertising Reports (HCI LE Meta event 0x3E, subevent 0x02) decoded, lifetime. The `ble` sensor's observation count |
 | `ble_multi_report_rejected` | LE Advertising Reports with `Num_Reports` > 1, **refused whole**. The Core Specification draws the parameters as per-field arrays and the Linux kernel parses them as consecutive records; the two agree only for one report, so until the layout is confirmed sloth decodes none of a multi-report event rather than misattribute its fields. A rising count is advertising heard and not decoded |
 | `ble_ext_adv_undecoded` | LE Extended Advertising Reports (subevent 0x0D) seen and not decoded yet. A controller the host drives with the extended scan commands reports **only** these, so a large count here with `ble_adv_reports` flat is a sensor that is listening and decoding nothing |
 | `ble_records_ignored` | records outside the allow-list (ACL and SCO data, every other HCI event and command, MGMT traffic), dropped after reading at most their opcode. Link keys, LTKs and IRKs travel this channel; none of it is read or written anywhere |
 | `ble_records_malformed` | allow-listed records whose length does not match their clause, or that were snapped (captured shorter than sent) — never decoded from a prefix |
-| `ble_host_commands` | allow-listed host commands read (the scan, advertise and connect commands under `BT_OWN_TRANSMIT` in [[alerts]], plus scan enable), lifetime |
+| `ble_host_commands` | allow-listed host commands read (the scan, advertise and connect commands under `BT_OWN_TRANSMIT` in [[alerts]], their disables, Exit Periodic Inquiry Mode and Reset), lifetime |
 | `ble_scan_mode` | `unknown`, `passive` or `active`: the LE scan type the host last set with LE Set Scan Parameters (0x200B) or LE Set Extended Scan Parameters (0x2041). **`unknown` until such a command is seen**, never inferred from the absence of one |
 | `ble_scan_filter` | the Scanning_Filter_Policy from the same command: `basic`, `accept_list`, `extended`, `extended_accept_list`, or `unknown` |
 | `ble_scan_accept_list` | `1` when that policy limits reports to the controller's Filter Accept List — the scan hears only devices the host already knows, and its silence about anything else is not a quiet room. `0` for an unfiltered policy, `-1` unknown |
 | `ble_scan_enabled` | the last LE Set (Extended) Scan Enable: `1`, `0`, or `-1` unknown |
-| `ble_own_tx` | `never`, `recent` (within 120 s) or `earlier`: the recency of the last host command that makes the controller transmit (the list under `BT_OWN_TRANSMIT` in [[alerts]]). Bucketed, not latched |
+| `ble_own_tx` | `never`, `recent` (within 120 s) or `earlier`: the recency of the newest host command that makes the controller transmit (the list under `BT_OWN_TRANSMIT` in [[alerts]]). Bucketed, not latched. **`never` means no such command has crossed the channel since sloth opened it**, not that the controller is silent: one already advertising or page-scanning before then is not in it (see `ble_own_tx_baseline`). And `earlier` does not mean stopped — read `ble_own_tx_on` |
 | `ble_own_tx_kind` | which one it was: `active_scan`, `inquiry`, `periodic_inquiry`, `advertising`, `ext_advertising`, `periodic_advertising`, `le_connect`, `bredr_connect`, `remote_name_request`, `inquiry_page_scan`, or `none` |
 | `ble_own_tx_count` | such commands, lifetime |
 | `ble_own_tx_secs` | seconds since the last one arrived, host clock; `-1` never. Outside the signature |
+| `ble_own_tx_on` | the persistent kinds **on now**, comma-separated in the order above, `""` none: `advertising`, `ext_advertising`, `periodic_advertising`, `inquiry_page_scan`, `periodic_inquiry`, and `active_scan` while an LE scan is enabled under active parameters. Each stays on from its enable to its disable, Reset or DEL_INDEX, however old the enable — as far as commands since sloth opened the channel show |
+| `ble_own_tx_asserted` | the kinds `BT_OWN_TRANSMIT` fires for now: on, or the kind's own newest command within 120 s. Same format |
+| `ble_own_tx_baseline` | `1` when an HCI Reset has been seen on every tracked controller (and no more than 8 are in use), so `ble_own_tx_on` covers everything the controllers were told; `0` otherwise — then state set before sloth opened the channel may be missing from it. Power-cycling the adapter with sloth running normally gets it to `1` ([[ble]]) |
+| `ble_index_records` | NEW_INDEX and DEL_INDEX records, lifetime — the accounting bucket `ble_records` sums over |
 
 Per-stream block, with `<s>` being `capture` or `monitor` — and `btmon`
 for the Bluetooth host source, whose block is appended after `libs`
@@ -821,12 +825,16 @@ it could never be the change worth a line.
 
 The Bluetooth block (#144 slice 2) signs over the `btmon` liveness and
 exit fields, its stale **band** (as for the other two streams), the
-`ble_own_tx` bucket and the set of own-transmission kinds ever seen,
+`ble_own_tx` bucket, the set of own-transmission kinds ever seen, the
+set `ble_own_tx_asserted` names, `ble_own_tx_baseline`,
 `ble_scan_mode`, the filter policy, `ble_controllers`, and a none/some
 band for each of the rejected, undecoded and malformed counters. Not
 the last kind (a stack alternating scan and advertising would flip it
 on every command), not `ble_scan_enabled` (BlueZ discovery toggles it
-every few seconds), not `ble_own_tx_secs`, and not the record counts.
+every few seconds), not `ble_own_tx_on` (an active scan the kernel
+toggles flips it just as often, while the asserted set holds still
+because each re-enable keeps the kind recent), not `ble_own_tx_secs`,
+and not the record counts.
 
 The raw `chan_requested` / `chan_confirmed` numbers and the
 `chan_retune_failures` count left the signature in #91's close-out.

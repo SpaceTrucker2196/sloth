@@ -396,19 +396,33 @@ the exemption in `agents/AGENTS.md`, *Detectors cite their sources*):
 | Kind | Sev | Fires on |
 |---|---|---|
 | `NO_MONITOR_MODE` | WARN | interfaces seen, none in monitor mode — the 802.11 views will be empty |
-| `BT_OWN_TRANSMIT` | WARN | the Bluetooth host controller sloth listens through (`--bt-monitor`, or a DLT 254 replay) was told by the host stack to transmit: an LE scan configured **active** (it sends SCAN_REQ), Inquiry or Periodic Inquiry, legacy / extended / periodic advertising enabled, LE or BR/EDR Create Connection, Remote Name Request, or Write Scan Enable with inquiry or page scan on (#144 slice 2) |
+| `BT_OWN_TRANSMIT` | WARN | the Bluetooth host controller sloth listens through (`--bt-monitor`, or a DLT 254 replay) was told by the host stack to transmit and is still on, or was told within 120 s: an LE scan configured or enabled **active** (it sends SCAN_REQ), Inquiry or Periodic Inquiry, legacy / extended / periodic advertising enabled, LE or BR/EDR Create Connection, Remote Name Request, or Write Scan Enable with inquiry or page scan on (#144 slice 2) |
 
-`BT_OWN_TRANSMIT` is **recency-bucketed, not latched**: it is
-re-asserted only while the last such command arrived within
-`BT_TX_RECENT_SECS` (120 s), so it resolves through the normal quiet
-period once the host stops. One incident per transmission kind
-(`bttx:<kind>`). sloth sends no HCI or MGMT command itself; what fires
+`BT_OWN_TRANSMIT` is **bucketed, not latched**, on two clocks. The
+persistent kinds — advertising (legacy, extended, periodic), inquiry or
+page scan, periodic inquiry, and an LE scan enabled under active
+parameters — stay on the air from their enable to their disable, so
+each controller holds them **on/off**: they are re-asserted for as long
+as they are on, however old the enable, and end at the matching disable
+(Advertising Enable = 0, Write Scan Enable with both scans off, Exit
+Periodic Inquiry Mode, Scan Enable = 0), at Reset, or at DEL_INDEX. The
+one-shot kinds (Inquiry, the connects, Remote Name Request) are
+re-asserted while their command arrived within `BT_TX_RECENT_SECS`
+(120 s). A kind fires while either holds and resolves through the normal
+quiet period once neither does. **One incident per transmission kind**
+(`bttx:<kind>`), each on its own clock, so two kinds inside the window
+are two incidents. sloth sends no HCI or MGMT command itself; what fires
 here is the operator's own stack, and MISSION §2's Bluetooth paragraph
 is what makes it a finding. The finding's view of the host is limited to
-what crosses the monitor channel: a command the controller then
-rejects still counts, and a transmission a controller makes on its own
-without a host command is not seen. `sensor_health` carries the same
-state as `ble_own_tx` / `ble_own_tx_kind`, and the scan configuration
+what crosses the monitor channel since sloth opened it: a controller
+already transmitting before then is not seen until the host next
+commands it or resets it (`ble_own_tx_baseline` = `1` once a Reset of
+every controller has been seen), a command the controller then rejects
+still counts, and a transmission a controller makes on its own without
+a host command is not seen. `sensor_health` carries the same state as
+`ble_own_tx_on` (on now), `ble_own_tx_asserted` (what the rule fires
+on), `ble_own_tx` / `ble_own_tx_kind` (the newest command), and the scan
+configuration
 as `ble_scan_mode` / `ble_scan_filter`. → [[ble]]
 
 ### Multi-Link rules keyed by BSSID (#104)

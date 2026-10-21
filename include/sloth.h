@@ -2681,9 +2681,9 @@ typedef enum {
  * of the sensor_health JSONL contract — see bt_tx_kind_name(). */
 typedef enum {
     BT_TX_NONE = 0,
-    BT_TX_ACTIVE_SCAN,        /* LE scan parameters with Scan_Type = active (SCAN_REQ) */
+    BT_TX_ACTIVE_SCAN,        /* LE scan set active, or enabled under active parameters (SCAN_REQ) */
     BT_TX_INQUIRY,            /* HCI_Inquiry */
-    BT_TX_PERIODIC_INQUIRY,   /* HCI_Periodic_Inquiry_Mode */
+    BT_TX_PERIODIC_INQUIRY,   /* HCI_Periodic_Inquiry_Mode, until Exit (0x0404) */
     BT_TX_ADV,                /* LE Set Advertising Enable = 1 */
     BT_TX_EXT_ADV,            /* LE Set Extended Advertising Enable = 1 */
     BT_TX_PERIODIC_ADV,       /* LE Set Periodic Advertising Enable = 1 */
@@ -2694,37 +2694,82 @@ typedef enum {
     BT_TX_KIND_COUNT
 } bt_tx_kind_t;
 
-/* Recency of the last own transmission. Bucketed, never latched: a
- * stack that advertised once an hour ago and has been quiet since is a
- * different state from one advertising now. */
+/* Recency of a transmit command. Bucketed, never latched: an inquiry
+ * an hour ago is a different state from one now. Recency alone covers
+ * the one-shot kinds (inquiry, connect, remote name); the persistent
+ * kinds are also held on/off in ble_ctrl_t, because a controller told
+ * to advertise is still advertising long after the command is old. */
 typedef enum {
     BT_TX_NEVER = -1, BT_TX_RECENT = 0, BT_TX_EARLIER = 1
 } bt_tx_recency_t;
 
+/* One controller's transmit state, as far as the host's commands on
+ * the monitor channel show it. The persistent kinds — advertising
+ * (legacy, extended, periodic), inquiry / page scan, periodic inquiry
+ * and an enabled active scan — stay on the air from their enable
+ * command until a matching disable, HCI_Reset, or DEL_INDEX, so they
+ * are held as on/off here rather than read off a command's age. */
+#define BT_MAX_CTRL   8
+#define BT_ADV_HANDLE_WORDS 8   /* 256-bit Advertising_Handle set */
 typedef struct {
-    /* Controllers announced by NEW_INDEX (primary type). */
+    int      index;             /* HCI index; -1 = free slot */
+    uint8_t  live;              /* NEW_INDEX seen, no DEL_INDEX since */
+    uint8_t  primary;           /* NEW_INDEX type 0x00 (HCI_PRIMARY) */
+    uint8_t  reset_seen;        /* HCI_Reset seen: on-state complete from there */
+    int8_t   scan_enabled;      /* -1 unknown, 0 off, 1 on (this controller) */
+    int8_t   scan_mode;         /* ble_scan_mode_t (this controller) */
+    uint8_t  adv_on;            /* LE Set Advertising Enable */
+    uint8_t  page_inq_scan_on;  /* Write_Scan_Enable bit 0 or 1 */
+    uint8_t  per_inquiry_on;    /* Periodic Inquiry Mode until Exit */
+    uint8_t  ext_adv_unknown;   /* sets enabled whose handles were not read */
+    uint32_t ext_adv_sets[BT_ADV_HANDLE_WORDS];
+    uint32_t per_adv_sets[BT_ADV_HANDLE_WORDS];
+    uint32_t on_mask;           /* derived: bit per bt_tx_kind_t now on */
+} ble_ctrl_t;
+
+typedef struct {
+    /* Primary-type controllers live now: NEW_INDEX with type 0x00
+     * (HCI_PRIMARY) not since removed by DEL_INDEX, among the
+     * BT_MAX_CTRL tracked. A controller that resets or is rfkilled is
+     * removed and re-announced, so it never counts twice. */
     int      controllers;
     int      ctrl_index;           /* HCI index of the most recent one, -1 none */
     uint8_t  ctrl_bus;             /* HCI bus type (USB, UART, ...) */
     uint8_t  ctrl_addr[6];         /* display order */
     char     ctrl_name[9];         /* "hci0" */
-    /* Scan configuration, as the host last set it. */
+    /* Scan configuration, as the host last set it on any controller. */
     int      scan_mode;            /* ble_scan_mode_t */
     int      filter_policy;        /* Scanning_Filter_Policy 0..3, -1 unknown */
     int      scan_enabled;         /* -1 unknown, 0 off, 1 on */
-    /* Own transmissions, by arrival wall clock (the liveness clock). */
+    /* Own transmissions, by arrival wall clock (the liveness clock).
+     * last_* is the newest command of any kind; tx_wall / tx_adapter
+     * keep each kind's own newest, so two kinds inside the window are
+     * two findings. */
     int      last_tx_kind;         /* bt_tx_kind_t */
     int      last_tx_adapter;      /* HCI index it was sent to, -1 none */
     time_t   last_tx_wall;         /* 0 = never */
+    time_t   tx_wall[BT_TX_KIND_COUNT];      /* 0 = never */
+    int      tx_adapter[BT_TX_KIND_COUNT];   /* -1 none */
     uint32_t tx_kind_mask;         /* bit per bt_tx_kind_t ever seen */
+    uint32_t tx_on_mask;           /* bit per kind on, any controller */
+    /* 1 when every tracked controller has been seen through HCI_Reset,
+     * so tx_on_mask covers everything it was told. 0 means state set
+     * before sloth opened the channel may be missing from it. */
+    int      tx_baseline;
     uint64_t tx_count;
+    ble_ctrl_t ctrl[BT_MAX_CTRL];
+    /* Commands for a controller past BT_MAX_CTRL land here: its on-state
+     * is never cleared (a disable cannot be told apart between the
+     * controllers sharing it), and tx_baseline stays 0. */
+    ble_ctrl_t ctrl_overflow;
+    uint64_t ctrl_untracked;       /* records routed to ctrl_overflow */
     /* Record accounting: every record lands in exactly one bucket
      * besides `records`, which counts them all. */
     uint64_t records;              /* every monitor record offered */
     uint64_t adv_reports;          /* single-report LE Advertising Reports decoded */
     uint64_t multi_rejected;       /* Num_Reports > 1, refused whole (layout unconfirmed) */
     uint64_t ext_adv_undecoded;    /* LE Extended Advertising Report, not decoded yet */
-    uint64_t new_index;            /* NEW_INDEX records */
+    uint64_t index_records;        /* NEW_INDEX and DEL_INDEX records */
     uint64_t commands;             /* allow-listed host commands read */
     uint64_t ignored;              /* outside the allow-list, dropped unread */
     uint64_t malformed;            /* allow-listed type, bad length or snapped */

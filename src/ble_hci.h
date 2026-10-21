@@ -35,6 +35,7 @@
  * event code are on this list:
  *
  *   NEW_INDEX (monitor opcode 0)       controller announced
+ *   DEL_INDEX (monitor opcode 1)       controller removed (no payload)
  *   EVENT 0x3E / subevent 0x02         LE Advertising Report (single report)
  *   EVENT 0x3E / subevent 0x0D         counted, not decoded yet
  *   COMMAND, host's own scan, advertise and connect commands:
@@ -44,8 +45,15 @@
  *     0x2040 LE Set Periodic Advertising Enable
  *     0x200D LE Create Connection          0x2043 LE Extended Create Connection
  *     0x0401 Inquiry                       0x0403 Periodic Inquiry Mode
+ *     0x0404 Exit Periodic Inquiry Mode    0x0C03 Reset
  *     0x0405 Create Connection             0x0419 Remote Name Request
  *     0x0C1A Write Scan Enable
+ *
+ * The enable and disable halves are both read: advertising, inquiry or
+ * page scan, periodic inquiry and an enabled active scan stay on the air
+ * until the matching disable, a Reset or DEL_INDEX, so each controller
+ * holds them as on/off (ble_ctrl_t) and BT_OWN_TRANSMIT fires while one
+ * is on, not only while its command is recent.
  *
  * Anything else is counted under `ignored` after reading at most its
  * monitor opcode and HCI opcode/event code, and its bytes are never
@@ -75,7 +83,7 @@
  * copied whole out of the kernel. */
 #define BT_MONITOR_SNAPLEN  (BT_MON_HDR_LEN + 3 + 255)
 
-/* An own transmission counts as RECENT for this long after it arrived. */
+/* A transmit command counts as RECENT for this long after it arrived. */
 #define BT_TX_RECENT_SECS   120
 
 /* Monitor opcodes, Linux include/net/bluetooth/hci_mon.h. */
@@ -95,7 +103,8 @@ typedef enum {
     BLE_REC_ADV,               /* one advertising report decoded */
     BLE_REC_MULTI_REJECTED,    /* Num_Reports > 1 */
     BLE_REC_EXT_ADV_UNDECODED, /* subevent 0x0D */
-    BLE_REC_COMMAND            /* allow-listed host command read */
+    BLE_REC_COMMAND,           /* allow-listed host command read */
+    BLE_REC_DEL_INDEX          /* controller removed */
 } ble_rec_verdict_t;
 
 /* 1 for a libpcap raw-HCI device name ("bluetooth" followed by a
@@ -126,6 +135,14 @@ void ble_clear(void);
 /* bt_tx_recency_t for an own transmission that arrived at `last_tx_wall`
  * (0 = never), judged at `now`. */
 int bt_tx_recency(time_t last_tx_wall, time_t now);
+
+/* Bit per bt_tx_kind_t that BT_OWN_TRANSMIT asserts at `now`: on, on
+ * any controller, or its own newest command RECENT. */
+uint32_t bt_tx_asserted_mask(const ble_host_t *h, time_t now);
+
+/* `mask`'s kinds as comma-separated bt_tx_kind_name()s in enum order,
+ * "" for none. Always terminates `buf` when sz > 0. */
+void bt_tx_kinds_format(uint32_t mask, char *buf, size_t sz);
 
 /* Stable names, part of the sensor_health JSONL contract. */
 const char *bt_tx_kind_name(int kind);        /* "none", "active_scan", ... */
