@@ -545,7 +545,10 @@ already keeps against `src/camera_vendor.c` (embedded, #145 ruling 8):
   vendor. M-SEARCH is the asker's want and is skipped.
 - **`CAM_SETUP_OUI`** — a beaconing BSSID in a camera vendor's IEEE
   MA-L block, compared with the U/L bit masked; a match on a locally
-  administered address carries `randomized-local` in the detail.
+  administered address carries `randomized-local` in the detail. A
+  mixed-vendor block (Ubiquiti, TP-Link, Wyze; #155) fires only beside a
+  camera setup SSID on the same BSSID, says `mixed vendor` in the
+  detail, and never matches a locally administered address.
 
 All three WARN on first sighting with one alert per identity and a
 rising count: per advertised DNS-SD service instance (a camera that
@@ -554,10 +557,13 @@ SSDP device UUID with one detail however many rows it announces, and
 per BSSID. They corroborate and never confirm: an OUI names who the IEEE
 assigned the block to and a SERVER string is the firmware's own claim,
 so each detail says what was and was not observed. Sources, and what was
-considered and left out (Ubiquiti, TP-Link, Wyze; unregistered mDNS
-types), in `research/papers/camera-vendor-identity.md`. Leaving Ubiquiti
-out means #106's Case B (`B6:FB:E4` expected to fire as `ubiquiti`)
-does not fire by design; that deviation awaits an owner ruling on #106.
+considered and left out (unregistered mDNS types among them), in
+`research/papers/camera-vendor-identity.md`. Ubiquiti, TP-Link and Wyze
+are in the table since the owner's 2026-10-21 ruling on #106, as
+mixed-vendor rows: a prior for the device classifier, not a finding on
+their own ([[camera-detection]], `research/papers/camera-router-role.md`).
+#106's Case B (`B6:FB:E4`, a locally administered address) still does
+not fire: a mixed row never matches one.
 The camera rules' evidence is also folded onto the device record
 and shown as a `CAMERA` row on `[g]` Devices; how, and on which keys,
 is [[camera-detection]].

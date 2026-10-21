@@ -27,6 +27,13 @@ camera heard announcing itself on the LAN with no record for its IP
 gets one keyed by IP alone, with no MAC. Full rules and keys:
 [camera-detection](../wiki/camera-detection.md).
 
+Last, the same file scores every record for the mixed-vendor question
+(#155): a Ubiquiti, TP-Link or Wyze address block is a prior, an RTSP
+SDP answer is the one deciding signal, and a DHCP-server, RA-sender or
+DNS-responder role vetoes. The role rows come from
+[`src/lan_role.c`](../../src/lan_role.c) (DHCP replies and DNS answers,
+by packet source) and `src/ndp_snoop.c` (Router Advertisements).
+
 Each source contributes a bit in the `Src` flag column.
 
 ## View
@@ -70,6 +77,19 @@ only the MAC, vendor, hostname and probe-only signals below):
 | `CAMERA` | `camera` | the device named its own class: an ONVIF `NetworkVideoTransmitter`, UPnP `DigitalSecurityCamera:1`, an `axis-video` / `cctv` DNS-SD service, or a camera vendor's documented setup SSID |
 | `CAM?` | `camera-vendor` | only an IEEE OUI block or an SSDP `SERVER` product token names a camera maker; the device class was not observed |
 | `-` | — | no class-bearing signal. RTSP, and an mDNS `_rtsp` service, never set a class: RTSP is a protocol NVRs and media servers serve too |
+| `CAM?` | `camera-vendor` | also (#155): a mixed-vendor block (Ubiquiti, TP-Link, Wyze) that answered an RTSP `DESCRIBE` with `application/sdp` — score >= 3 with `rtsp_sdp` in it |
+| `NOTCAM` | `not-camera` | a mixed-vendor block seen in a router role (DHCP server, sends RAs, DNS responder to >= 2 LAN clients) with no camera evidence |
+| `CONFL!` | any | camera evidence and a router-role veto both stand. Not resolved: a scored-only record stays unclassified, a self-declared one keeps `camera`, and the detail lists both sides |
+
+A mixed-vendor block alone sets no class: the UNSW IoT list's TP-Link
+camera and TP-Link smart plug are in one assignee's blocks, so the
+block cannot tell them apart. It names the vendor and adds 1 to the
+score. On a switched port sloth sees broadcast and multicast but not
+other hosts' unicast RTSP, DNS or cloud uplink, so most mixed-vendor
+devices stay `-` unless one of them announces itself or sends a
+broadcast-visible router signal (an RA, a broadcast DHCP reply, a
+client's REQUEST naming its server); a mirror port or the gateway sees
+the rest.
 
 Both forms corroborate; neither confirms. The name column falls back to
 the camera vendor and model (ONVIF `name` + `hardware` scopes) when there
@@ -113,6 +133,42 @@ harness at 100 columns, with the screen tall enough for every section:
   554       4     0     0  -        /Streaming/Channels/101
   8554      0     0     1  Digest   /sub
 ```
+
+A mixed-vendor record carries the classifier's lines above the trail
+(#155). Rendered at 100 columns from the
+`tests/test_camera_class.c` fixture where a TP-Link camera that served
+an SDP is also seen handing out leases and sending RAs:
+
+```
+ ── DEVICE DETAIL ──  [Enter/Esc] back
+  MAC f4:f2:6d:93:51:f1   IP 192.168.1.41   OUI vendor ?   Src A-----C
+  Class    -
+  CONFLICT camera evidence and a router-role veto both stand; not resolved - see EVIDENCE
+  Score    3 (class from behaviour needs >= 3 with rtsp_sdp, on a mixed-vendor block)
+  Camera   vendor TP-Link   model -
+  Signals  - - - - - RTSP
+ ── EVIDENCE / VETOES ──
+  KIND          PTS  SEEN      WHAT
+  mixed_oui     +1   -         OUI F4:F2:6D, IEEE MA-L "TP-LINK TECHNOLOGIES CO.,LTD.": mixed vendo
+  rtsp_sdp      +2   30s ago   DESCRIBE 200 application/sdp, port 554 /stream1
+  dhcp_server   veto 10s ago   sent a BOOTREPLY from UDP 67; named in option 54 Server Identifier
+  sends_ra      veto 0s ago    sends RAs, lifetime 1800 s, from fe80::1 (SLLA is this MAC)
+ ── DHCP OPTIONS (evidence only, not scored) ──
+  55 PRL  1,3,6,15
+  60 VCI  MSFT 5.0
+ ── SIGNAL TRAIL ──
+  RULE              SEEN      WHAT
+  CAM_RTSP_UNAUTH   30s ago   RTSP DESCRIBE answered with no challenge on port 554 path /stream1 (1
+```
+
+`PTS` is the evidence weight, or `veto`. `rtsp_server` (+1, a
+`DESCRIBE` answered with no SDP seen) and `mdns_rtsp` (+1, an `_rtsp`
+advertisement) are shown but cannot decide: the rule needs `rtsp_sdp`.
+DHCP options 55 (Parameter Request List) and 60 (Vendor Class
+Identifier) are the client's own, from its BOOTREQUESTs, and are only
+shown: no table maps them to a class, and sloth never looks them up
+anywhere. No RTSP credential, `Authorization` value or URL userinfo
+appears in an evidence line.
 
 The trail is one line per source row, newest first, each named by the
 rule that reads it, and lists only rows that rule would count. A LAN row
@@ -163,6 +219,8 @@ breakdown.
 - Your own cameras show as `CAMERA` rows: ONVIF and vendor SSDP
   announcements are what they do by default. The operator's job is to
   recognise their inventory, not to treat each row as an incident.
+- Your Ubiquiti or TP-Link router reads `NOTCAM` once it has been seen
+  handing out a lease or sending RAs; its APs and plugs stay `-`.
 
 ## What's suspicious
 
@@ -185,7 +243,14 @@ breakdown.
   a re-pair raises the same AP — but the SoftAP is reachable while it is
   up.
 - **A `CAM?` row**: only the address block or a SERVER string names a
-  camera maker; an NVR from the same vendor reads the same.
+  camera maker; an NVR from the same vendor reads the same. On a
+  Ubiquiti, TP-Link or Wyze block it means the device served an RTSP
+  stream description, which is what a camera does and a router does not.
+- **A `CONFL!` row**: one device looks like a camera and acts like a
+  router. A camera does not hand out leases or advertise itself as a
+  default router, so either the evidence is crossed (two hosts behind
+  one IP inside the join window, a spoofed answer) or the box is both,
+  which is worth knowing too. Read both lists in the detail.
 
 ## See also
 

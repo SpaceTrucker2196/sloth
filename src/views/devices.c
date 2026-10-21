@@ -38,15 +38,23 @@ static void sources_str(int s, char out[8]) {
     out[7] = '\0';
 }
 
-/* The row type. CAM? is the weaker form: an address block or SERVER
- * token names a camera maker, and nothing said "camera". */
+/* The row type. CAM? is the weaker form: an address block, SERVER
+ * token or RTSP_SDP score names a camera, and nothing said "camera".
+ * NOTCAM is a mixed-vendor block seen in a router role (#155). */
 static const char *class_cell(device_class_t c) {
     switch (c) {
     case DEV_CLASS_CAMERA:        return "CAMERA";
     case DEV_CLASS_CAMERA_VENDOR: return "CAM?";
+    case DEV_CLASS_NOT_CAMERA:    return "NOTCAM";
     case DEV_CLASS_UNKNOWN:       break;
     }
     return "-";
+}
+
+/* Camera evidence met a router-role veto (#155): the cell says so
+ * instead of either verdict, whatever the class field holds. */
+static const char *row_class_cell(const device_t *d) {
+    return d->cam_conflict ? "CONFL!" : class_cell(d->device_class);
 }
 
 static int dev_cols(void) {
@@ -118,7 +126,7 @@ static int ascii_iprefix(const char *s, const char *p) {
 static void name_cell(const device_t *d, char *out, size_t n) {
     if (d->hostname[0])
         snprintf(out, n, "%s", d->hostname);
-    else if (d->device_class != DEV_CLASS_UNKNOWN &&
+    else if (device_class_is_camera(d->device_class) &&
              (d->camera_vendor[0] || d->camera_model[0])) {
         /* ONVIF name scopes usually lead with the maker already. */
         int dup = d->camera_model[0] && d->camera_vendor[0] &&
@@ -221,11 +229,26 @@ static void draw_device_detail(const sloth_state_t *s) {
     if (d->device_class == DEV_CLASS_CAMERA)
         dl(&b, 1, "  Class    camera - the device named its own class;"
            " corroborated, not confirmed");
+    else if (d->device_class == DEV_CLASS_CAMERA_VENDOR &&
+             (d->cam_evidence & CAM_EV_RTSP_SDP) &&
+             (d->cam_evidence & CAM_EV_MIXED_OUI))
+        dl(&b, 1, "  Class    camera-vendor - mixed-vendor block that served"
+           " an RTSP SDP; class not observed");
     else if (d->device_class == DEV_CLASS_CAMERA_VENDOR)
         dl(&b, 1, "  Class    camera-vendor - an address block or SERVER"
            " token names a camera maker; class not observed");
+    else if (d->device_class == DEV_CLASS_NOT_CAMERA)
+        dl(&b, 1, "  Class    not-camera - mixed-vendor block seen in a"
+           " router role; not confirmed");
     else
         dl(&b, 0, "  Class    -");
+    if (d->cam_conflict)
+        dl(&b, 1, "  CONFLICT camera evidence and a router-role veto both"
+           " stand; not resolved - see EVIDENCE");
+    if (d->cam_evidence || d->cam_vetoes)
+        dl(&b, 0, "  Score    %d (class from behaviour needs >= %d with"
+           " rtsp_sdp, on a mixed-vendor block)", d->cam_score,
+           CAM_CLASS_MIN_SCORE);
     if (d->camera_vendor[0] || d->camera_model[0])
         dl(&b, 0, "  Camera   vendor %s   model %s",
            d->camera_vendor[0] ? d->camera_vendor : "-",
@@ -246,6 +269,32 @@ static void draw_device_detail(const sloth_state_t *s) {
     if (mac_zero(d->mac))
         dl(&b, 0, "  Keyed by IP only: no link-layer address was seen for"
            " this camera");
+
+    {
+        cam_reason_t why[12];
+        int wn = camera_reasons(s, s->devices, s->device_count, d, now,
+                                why, 12);
+        if (wn > 0) {
+            dl_title(&b, "EVIDENCE / VETOES");
+            dl(&b, -1, "  %-13s %-4s %-9s %s", "KIND", "PTS", "SEEN", "WHAT");
+        }
+        for (int i = 0; i < wn; i++) {
+            char age[32], pts[8];
+            age_str(now, why[i].when, age, sizeof(age));
+            if (why[i].veto) snprintf(pts, sizeof(pts), "veto");
+            else snprintf(pts, sizeof(pts), "+%d",
+                          cam_evidence_weight(why[i].bit));
+            dl(&b, why[i].veto ? 1 : 0, "  %-13s %-4s %-9s %s",
+               why[i].veto ? cam_veto_slug(why[i].bit)
+                           : cam_evidence_slug(why[i].bit),
+               pts, age, why[i].what);
+        }
+    }
+    if (d->dhcp_prl[0] || d->dhcp_vci[0]) {
+        dl_title(&b, "DHCP OPTIONS (evidence only, not scored)");
+        if (d->dhcp_prl[0]) dl(&b, 0, "  55 PRL  %s", d->dhcp_prl);
+        if (d->dhcp_vci[0]) dl(&b, 0, "  60 VCI  %s", d->dhcp_vci);
+    }
 
     cam_trail_row_t trail[24];
     int tn = camera_trail(s, d, now, trail, 24);
@@ -350,7 +399,7 @@ void view_devices_draw(const sloth_state_t *s) {
 
     int cams = 0;
     for (int i = 0; i < s->device_count; i++)
-        if (s->devices[i].device_class != DEV_CLASS_UNKNOWN) cams++;
+        if (device_class_is_camera(s->devices[i].device_class)) cams++;
 
     tui_normal(); TPRINT(" Devices: ");
     tui_bright();  TPRINT("%d", s->device_count);
@@ -396,14 +445,15 @@ void view_devices_draw(const sloth_state_t *s) {
             !filter_match_any(s->filter, mac, d->ip, d->vendor,
                               d->hostname, d->last_ssid) &&
             !filter_match_any(s->filter, d->camera_vendor, d->camera_model,
-                              class_cell(d->device_class),
-                              device_class_label(d->device_class), ""))
+                              row_class_cell(d),
+                              device_class_label(d->device_class),
+                              d->cam_conflict ? "conflict" : ""))
             continue;
         char src[8];  sources_str(d->sources, src);
         char name[96]; name_cell(d, name, sizeof(name));
         const char *vend = d->vendor[0] ? d->vendor
                          : d->camera_vendor[0] ? d->camera_vendor : "?";
-        const char *cls = class_cell(d->device_class);
+        const char *cls = row_class_cell(d);
 
         char sig[8];
         if (d->signal_dbm < 0) snprintf(sig, sizeof(sig), "%d", d->signal_dbm);
@@ -429,9 +479,10 @@ void view_devices_draw(const sloth_state_t *s) {
             tui_dim();    TPRINT(" %-17s", mac);
             tui_normal(); TPRINT("  %-*.*s", w.ip, w.ip, d->ip[0] ? d->ip : "-");
 
-            if (d->device_class == DEV_CLASS_CAMERA)       tui_heat(0.5);
-            else if (d->device_class != DEV_CLASS_UNKNOWN) tui_normal();
-            else                                           tui_dim();
+            if (d->cam_conflict)                             tui_heat(0.7);
+            else if (d->device_class == DEV_CLASS_CAMERA)    tui_heat(0.5);
+            else if (d->device_class != DEV_CLASS_UNKNOWN)   tui_normal();
+            else                                             tui_dim();
             TPRINT("  %-6s", cls);
 
             if (d->vendor[0] || d->camera_vendor[0]) tui_bright(); else tui_dim();

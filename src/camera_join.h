@@ -80,8 +80,70 @@ int cam_onvif_addr_of(const onvif_device_t *o, const device_t *d,
 int cam_ssdp_addr_of(const ssdp_device_t *e, const device_t *d,
                      time_t *when);
 
-/* "camera", "camera-vendor", or "" for DEV_CLASS_UNKNOWN. */
+/* "camera", "camera-vendor", "not-camera", or "" for DEV_CLASS_UNKNOWN. */
 const char *device_class_label(device_class_t c);
+
+/* CAMERA or CAMERA_VENDOR: a class that says "camera". NOT_CAMERA is a
+ * verdict against and UNKNOWN none, so neither counts. */
+int device_class_is_camera(device_class_t c);
+
+/* ── #155: telling a camera from a router on a mixed-vendor OUI ──
+ *
+ * After the join, every record is scored from behavioural evidence
+ * (CAM_EV_*) and checked for router-role vetoes (CAM_VETO_*), each read
+ * from a table sloth already fills from traffic it did not solicit.
+ * The rule, from the issue's verified design:
+ *
+ *   - a self-declaration (ONVIF NVT, UPnP DigitalSecurityCamera:1, a
+ *     camera mDNS type, a camera setup SSID) still decides: CAMERA;
+ *   - a mixed-vendor OUI reads CAMERA_VENDOR only when the score is at
+ *     least CAM_CLASS_MIN_SCORE and RTSP_SDP is part of it;
+ *   - a veto on a mixed-vendor record with no camera evidence reads
+ *     NOT_CAMERA;
+ *   - camera evidence meeting a veto sets cam_conflict and is never
+ *     resolved silently: a scored-only record stays UNKNOWN.
+ *
+ * Every IP-keyed row is held to the join's own key rule (cam_lan_state:
+ * fresh, unambiguous); an RA carrying an SLLA option is keyed on the
+ * MAC instead. */
+#define CAM_CLASS_MIN_SCORE 3
+
+/* One evidence or veto line for a record: which CAM_EV_* / CAM_VETO_*
+ * bit (`veto` says which set), the source row's time (0 for the OUI,
+ * which has none) and what it said. */
+typedef struct {
+    int    bit;
+    int    veto;
+    time_t when;
+    char   what[200];
+} cam_reason_t;
+
+/* The classifier's inputs for `d`, judged against records[0..nrec) for
+ * the IP key rule. camera_join() uses exactly this; the Devices detail
+ * calls it on s->devices so it lists what the class rests on. Returns
+ * the rows written, at most `max`. */
+int camera_reasons(const sloth_state_t *s, const device_t *records,
+                   int nrec, const device_t *d, time_t now,
+                   cam_reason_t *rows, int max);
+
+/* Short stable names ("rtsp_sdp", "dhcp_server"), the JSONL contract;
+ * the descriptions are for the detail view. Unknown bits give "". */
+const char *cam_evidence_slug(int bit);
+const char *cam_evidence_desc(int bit);
+int         cam_evidence_weight(int bit);
+const char *cam_veto_slug(int bit);
+const char *cam_veto_desc(int bit);
+
+/* Comma-joined slugs of a mask, in bit order ("" for 0). */
+void cam_evidence_list(int mask, char *out, size_t n);
+void cam_veto_list(int mask, char *out, size_t n);
+
+/* Does CAM_SETUP_OUI count this beacon? A camera-vendor block always; a
+ * mixed-vendor block only beside a camera setup SSID on the same BSSID.
+ * The rule, the join and the trail all ask this, so they agree. Out
+ * pointers as cam_vendor_oui(), any may be NULL. */
+int cam_setup_oui_counts(const beacon_ap_t *a, const char **vendor,
+                         const char **org, int *local, int *mixed);
 
 /* The rule each CAM_SIG_* bit index (0..CAM_SIG_COUNT-1) mirrors. */
 alert_type_t cam_signal_alert(int idx);

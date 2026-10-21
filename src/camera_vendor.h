@@ -34,11 +34,18 @@
  * bit is not masked: a group address is never a transmitter.
  *
  * Returns 1 on a match and sets *vendor (short brand), *org (the
- * registry's assignee string, verbatim) and *local (1 when the
- * observed address had the U/L bit set — "randomized-local"). Any out
- * pointer may be NULL. */
+ * registry's assignee string, verbatim), *local (1 when the observed
+ * address had the U/L bit set — "randomized-local") and *mixed. Any out
+ * pointer may be NULL.
+ *
+ * *mixed is 1 for a mixed-vendor row (#155: Ubiquiti, TP-Link, Wyze —
+ * vendors whose blocks carry routers, APs and plugs beside cameras).
+ * Such a match names the vendor and is a +1 prior, nothing more: a
+ * caller must not set a device class or fire CAM_SETUP_OUI on it alone.
+ * A mixed row never matches a locally administered address — the U/L
+ * mask above is for camera-vendor rows only. */
 int cam_vendor_oui(const uint8_t mac[6], const char **vendor,
-                   const char **org, int *local);
+                   const char **org, int *local, int *mixed);
 
 /* UPnP Device Architecture 1.0 §1.1.2: SERVER is "OS name/OS version
  * UPnP/1.0 product name/product version". Matches a camera vendor's
@@ -77,5 +84,6 @@ int cam_ssdp_row(const char *type, const char *nts, const char *server,
 int cam_vendor_oui_count(void);
 void cam_vendor_oui_at(int i, uint8_t oui[3], const char **vendor,
                        const char **org);
+int cam_vendor_oui_mixed_at(int i);
 
 #endif /* CAMERA_VENDOR_H */

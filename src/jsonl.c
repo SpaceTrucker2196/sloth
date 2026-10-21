@@ -877,6 +877,21 @@ void jsonl_emit_devices(const sloth_state_t *s) {
         kv_str(buf, LINEBUF, &off, "camera_model",  e->camera_model);
         kv_int(buf, LINEBUF, &off, "setup_mode",    e->setup_mode ? 1 : 0);
         kv_int(buf, LINEBUF, &off, "cam_signals",   (long long)e->cam_signal_mask);
+        /* Additive (#155): the classifier's score, what it rests on and
+         * what vetoed it, as stable slugs (camera_join.h), the conflict
+         * flag, and the client's DHCP options 55 / 60, display-only. All
+         * discrete, so a future change-only signature can take them. */
+        {
+            char evs[128], vts[96];
+            cam_evidence_list(e->cam_evidence, evs, sizeof(evs));
+            cam_veto_list(e->cam_vetoes, vts, sizeof(vts));
+            kv_int(buf, LINEBUF, &off, "cam_score",    (long long)e->cam_score);
+            kv_str(buf, LINEBUF, &off, "cam_evidence", evs);
+            kv_str(buf, LINEBUF, &off, "cam_vetoes",   vts);
+            kv_int(buf, LINEBUF, &off, "cam_conflict", e->cam_conflict ? 1 : 0);
+            kv_str(buf, LINEBUF, &off, "dhcp_prl",     e->dhcp_prl);
+            kv_str(buf, LINEBUF, &off, "dhcp_vci",     e->dhcp_vci);
+        }
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }

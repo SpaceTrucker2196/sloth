@@ -111,9 +111,11 @@ static int csv_field(const char **pp, char *out, size_t n) {
  * recomputes it from the registry and holds it to this value — so a
  * changed assignee string goes red on every host, and a constant
  * edited to match a wrong table goes red on any host with the file.
- * Adding or changing a row means recomputing it from the registry. */
-#define CAM_OUI_REGISTRY_N      141
-#define CAM_OUI_REGISTRY_DIGEST 0xf841268fd11349c5ull
+ * Adding or changing a row means recomputing it from the registry.
+ * Recomputed for #155's 314 mixed-vendor rows from the same snapshot
+ * (the first 141 rows still give the previous 0xf841268fd11349c5). */
+#define CAM_OUI_REGISTRY_N      455
+#define CAM_OUI_REGISTRY_DIGEST 0xfa0094af1cd13ae2ull
 
 static uint64_t oui_digest_row(uint64_t h, const uint8_t a[3],
                                const char *org) {
@@ -224,7 +226,7 @@ static void test_oui_exact_match_is_not_local(void) {
     /* 44:19:B6 — IEEE MA-L, Hangzhou Hikvision Digital Technology. */
     const uint8_t mac[6] = {0x44,0x19,0xB6,0x12,0x34,0x56};
     const char *v = NULL, *o = NULL; int local = -1;
-    ASSERT_EQ(cam_vendor_oui(mac, &v, &o, &local), 1);
+    ASSERT_EQ(cam_vendor_oui(mac, &v, &o, &local, NULL), 1);
     ASSERT(v && strcmp(v, "Hikvision") == 0);
     ASSERT(o && strcmp(o, "Hangzhou Hikvision Digital Technology Co.,Ltd.") == 0);
     ASSERT_EQ(local, 0);
@@ -235,7 +237,7 @@ static void test_oui_ul_bit_is_masked_and_reported(void) {
      * 0x46. Without the mask this is no match at all. */
     const uint8_t mac[6] = {0x46,0x19,0xB6,0x12,0x34,0x56};
     const char *v = NULL; int local = -1;
-    ASSERT_EQ(cam_vendor_oui(mac, &v, NULL, &local), 1);
+    ASSERT_EQ(cam_vendor_oui(mac, &v, NULL, &local, NULL), 1);
     ASSERT(v && strcmp(v, "Hikvision") == 0);
     ASSERT_EQ(local, 1);
 }
@@ -245,19 +247,74 @@ static void test_oui_group_bit_and_other_bits_are_not_masked(void) {
      * transmitter; any other bit is a different OUI. */
     const uint8_t grp[6] = {0x45,0x19,0xB6,0x12,0x34,0x56};
     const uint8_t oth[6] = {0x4C,0x19,0xB6,0x12,0x34,0x56};
-    ASSERT_EQ(cam_vendor_oui(grp, NULL, NULL, NULL), 0);
-    ASSERT_EQ(cam_vendor_oui(oth, NULL, NULL, NULL), 0);
-    ASSERT_EQ(cam_vendor_oui(NULL, NULL, NULL, NULL), 0);
+    ASSERT_EQ(cam_vendor_oui(grp, NULL, NULL, NULL, NULL), 0);
+    ASSERT_EQ(cam_vendor_oui(oth, NULL, NULL, NULL, NULL), 0);
+    ASSERT_EQ(cam_vendor_oui(NULL, NULL, NULL, NULL, NULL), 0);
 }
 
-static void test_oui_ubiquiti_is_deliberately_absent(void) {
-    /* #106's own field example. Ubiquiti's blocks are on every UniFi AP,
-     * so they are not a camera signal; the exclusion is the design, and
-     * this pins it so a later "complete the table" does not undo it. */
+static void test_oui_ubiquiti_is_mixed_and_never_local(void) {
+    /* #106's own field example, under #155's ruling: Ubiquiti's block
+     * is in the table as a mixed-vendor row, and the UniFi setup AP's
+     * locally administered B6:FB:E4 does not match it at all. Seen red
+     * by dropping the `r->mixed && ul` refusal in cam_vendor_oui() (the
+     * local address matches, with *local 1). */
     const uint8_t reg[6] = {0xB4,0xFB,0xE4,0x01,0x02,0x03};
     const uint8_t loc[6] = {0xB6,0xFB,0xE4,0x01,0x02,0x03};
-    ASSERT_EQ(cam_vendor_oui(reg, NULL, NULL, NULL), 0);
-    ASSERT_EQ(cam_vendor_oui(loc, NULL, NULL, NULL), 0);
+    const char *v = NULL, *o = NULL;
+    int local = -1, mixed = -1;
+    ASSERT_EQ(cam_vendor_oui(reg, &v, &o, &local, &mixed), 1);
+    ASSERT(v && strcmp(v, "Ubiquiti") == 0);
+    ASSERT(o && strcmp(o, "Ubiquiti Inc") == 0);
+    ASSERT_EQ(local, 0);
+    ASSERT_EQ(mixed, 1);
+    local = -1; mixed = -1;
+    ASSERT_EQ(cam_vendor_oui(loc, NULL, NULL, &local, &mixed), 0);
+    ASSERT_EQ(local, -1);
+    ASSERT_EQ(mixed, -1);
+}
+
+static void test_oui_camera_vendor_rows_are_not_mixed(void) {
+    /* The U/L mask still applies to a camera-vendor row, and its match
+     * says mixed 0. Seen red by marking the Hikvision rows mixed. */
+    const uint8_t hik[6] = {0x46,0x19,0xB6,0x12,0x34,0x56};
+    int mixed = -1, local = -1;
+    ASSERT_EQ(cam_vendor_oui(hik, NULL, NULL, &local, &mixed), 1);
+    ASSERT_EQ(mixed, 0);
+    ASSERT_EQ(local, 1);
+}
+
+static void test_oui_mixed_rows_are_exactly_the_three_vendors(void) {
+    /* #155 names three companies; the flag follows the registry's
+     * assignee, never the brand column a later edit might retype. The
+     * UNSW IoT list's TP-Link camera (f4:f2:6d) and smart plug
+     * (50:c7:bf) are both in the table and both mixed: the point of the
+     * row kind is that the block cannot tell them apart. Seen red by
+     * setting one Wyze row's mixed to 0. */
+    static const char *const orgs[] = {
+        "TP-LINK TECHNOLOGIES CO.,LTD.", "TP-Link Systems Inc",
+        "TP-Link Systems Inc.", "Ubiquiti Inc", "Wyze Labs Inc",
+    };
+    int n = cam_vendor_oui_count(), wrong = 0, mixed_n = 0;
+    for (int i = 0; i < n; i++) {
+        uint8_t a[3]; const char *o = NULL;
+        cam_vendor_oui_at(i, a, NULL, &o);
+        int named = 0;
+        for (size_t k = 0; k < sizeof(orgs) / sizeof(orgs[0]); k++)
+            if (o && strcmp(o, orgs[k]) == 0) named = 1;
+        if (named != cam_vendor_oui_mixed_at(i)) wrong++;
+        mixed_n += cam_vendor_oui_mixed_at(i);
+    }
+    ASSERT_EQ(wrong, 0);
+    ASSERT_EQ(mixed_n, 314);
+    const uint8_t cam[6]  = {0xF4,0xF2,0x6D,0x93,0x51,0xF1};
+    const uint8_t plug[6] = {0x50,0xC7,0xBF,0x00,0x56,0x39};
+    int m1 = 0, m2 = 0;
+    ASSERT_EQ(cam_vendor_oui(cam,  NULL, NULL, NULL, &m1), 1);
+    ASSERT_EQ(cam_vendor_oui(plug, NULL, NULL, NULL, &m2), 1);
+    ASSERT_EQ(m1, 1);
+    ASSERT_EQ(m2, 1);
+    ASSERT_EQ(cam_vendor_oui_mixed_at(-1), 0);
+    ASSERT_EQ(cam_vendor_oui_mixed_at(n), 0);
 }
 
 /* ── camera_vendor.c: SERVER product token ───────────────── */
@@ -709,13 +766,47 @@ static void test_cam_setup_oui_randomized_local_case_b(void) {
 }
 
 static void test_cam_setup_oui_quiet_on_non_camera_vendor(void) {
-    /* Ubiquiti's block, both as registered and with U/L set. Seen red
-     * by adding a B4:FB:E4 row to the table. */
+    /* Ubiquiti's block, both as registered and with U/L set, beaconing
+     * SSIDs that are not a camera's setup SSID. Mixed-vendor since #155,
+     * so the block alone must not fire. Seen red by dropping the mixed
+     * gate in cam_setup_oui_counts() (the registered BSSID fires). */
     sloth_state_t *s = fresh();
     const uint8_t a[6] = {0xB4,0xFB,0xE4,0x01,0x02,0x03};
     const uint8_t b[6] = {0xB6,0xFB,0xE4,0x01,0x02,0x03};
     add_ap(s, "UniFi", a, "WPA2");
     add_ap(s, "UniFi-setup", b, "OPEN");
+    alerts_update(s);
+    ASSERT_EQ(find_alert(s, ALERT_TYPE_CAM_SETUP_OUI), -1);
+}
+
+static void test_cam_setup_oui_mixed_fires_beside_setup_ssid(void) {
+    /* #155: a TP-Link block (50:C7:BF, IEEE MA-L "TP-LINK TECHNOLOGIES
+     * CO.,LTD.") beaconing Tapo's documented camera setup SSID. The SSID
+     * corroborates the block, so the rule fires and says which kind of
+     * row it was. */
+    sloth_state_t *s = fresh();
+    const uint8_t b[6] = {0x50,0xC7,0xBF,0x0a,0x0b,0x0c};
+    add_ap(s, "Tapo_Cam_0B0C", b, "OPEN");
+    alerts_update(s);
+    int i = find_alert(s, ALERT_TYPE_CAM_SETUP_OUI);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT(strstr(s->alerts[i].detail, "TP-LINK TECHNOLOGIES CO.,LTD.") != NULL);
+    ASSERT(strstr(s->alerts[i].detail, "mixed vendor") != NULL);
+    ASSERT(strstr(s->alerts[i].detail, "camera setup SSID") != NULL);
+    ASSERT(strstr(s->alerts[i].detail, "randomized-local") == NULL);
+}
+
+static void test_cam_setup_oui_mixed_quiet_on_plug_ssid(void) {
+    /* The same TP-Link block beaconing a Tapo plug's setup SSID
+     * ("Tapo_Plug_..." is not the camera prefix Tapo_Cam_) and a hidden
+     * SSID: the block alone is a prior, never CAM_SETUP_OUI. Seen red
+     * by dropping the mixed gate in cam_setup_oui_counts(). */
+    sloth_state_t *s = fresh();
+    const uint8_t a[6] = {0x50,0xC7,0xBF,0x0a,0x0b,0x0c};
+    const uint8_t b[6] = {0x50,0xC7,0xBF,0x0a,0x0b,0x0d};
+    add_ap(s, "Tapo_Plug_0B0C", a, "OPEN");
+    add_ap(s, "", b, "OPEN");
     alerts_update(s);
     ASSERT_EQ(find_alert(s, ALERT_TYPE_CAM_SETUP_OUI), -1);
 }
@@ -739,7 +830,9 @@ void run_camera_vendor_tests(void) {
     RUN_TEST(test_oui_exact_match_is_not_local);
     RUN_TEST(test_oui_ul_bit_is_masked_and_reported);
     RUN_TEST(test_oui_group_bit_and_other_bits_are_not_masked);
-    RUN_TEST(test_oui_ubiquiti_is_deliberately_absent);
+    RUN_TEST(test_oui_ubiquiti_is_mixed_and_never_local);
+    RUN_TEST(test_oui_camera_vendor_rows_are_not_mixed);
+    RUN_TEST(test_oui_mixed_rows_are_exactly_the_three_vendors);
     RUN_TEST(test_server_token_matches_vendor_product);
     RUN_TEST(test_server_token_rejects_substrings_and_generic);
     RUN_TEST(test_mdns_service_table);
@@ -759,5 +852,7 @@ void run_camera_vendor_tests(void) {
     RUN_TEST(test_cam_setup_oui_fires_registered);
     RUN_TEST(test_cam_setup_oui_randomized_local_case_b);
     RUN_TEST(test_cam_setup_oui_quiet_on_non_camera_vendor);
+    RUN_TEST(test_cam_setup_oui_mixed_fires_beside_setup_ssid);
+    RUN_TEST(test_cam_setup_oui_mixed_quiet_on_plug_ssid);
     RUN_TEST(test_cam_setup_oui_once_per_bssid);
 }

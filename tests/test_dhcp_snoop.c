@@ -96,7 +96,7 @@ static void test_ack_fills_ip_and_hostname(void) {
     };
     uint8_t buf[300]; char info[64] = "";
     int len = build_dhcp(&a, buf, sizeof(buf));
-    ASSERT_EQ(1, dhcp_snoop(buf, len, info, sizeof(info)));
+    ASSERT_EQ(1, dhcp_snoop(NULL, 0, buf, len, info, sizeof(info)));
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     dhcp_snoop_snapshot(&s);
@@ -114,7 +114,7 @@ static void test_ack_populates_dns_cache(void) {
         .msg_type = 5, .hostname = "devbox"
     };
     uint8_t buf[300]; char info[64];
-    dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
+    dhcp_snoop(NULL, 0, buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
 
     const char *resolved = dns_lookup_cached("10.0.0.5", nb_, sizeof(nb_));
     ASSERT(resolved != NULL && strcmp(resolved, "devbox") == 0);
@@ -128,7 +128,7 @@ static void test_discover_no_ip(void) {
     };
     uint8_t buf[300]; char info[64] = "";
     int len = build_dhcp(&a, buf, sizeof(buf));
-    ASSERT_EQ(1, dhcp_snoop(buf, len, info, sizeof(info)));
+    ASSERT_EQ(1, dhcp_snoop(NULL, 0, buf, len, info, sizeof(info)));
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     dhcp_snoop_snapshot(&s);
@@ -147,7 +147,7 @@ static void test_discover_no_dns_cache(void) {
         .yiaddr = 0, .msg_type = 1, .hostname = "phantom"
     };
     uint8_t buf[300]; char info[64];
-    dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
+    dhcp_snoop(NULL, 0, buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
 
     /* This suite is one of two that start the real resolver thread via
      * dns_init(), so a miss taken through the active half would put a
@@ -174,7 +174,7 @@ static void test_request_uses_ciaddr(void) {
         .msg_type = 3, .hostname = "reqhost"
     };
     uint8_t buf[300]; char info[64];
-    dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
+    dhcp_snoop(NULL, 0, buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     dhcp_snoop_snapshot(&s);
@@ -190,12 +190,12 @@ static void test_dedup_same_mac(void) {
         .msg_type = 5, .hostname = "first"
     };
     uint8_t buf[300]; char info[64];
-    dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
+    dhcp_snoop(NULL, 0, buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
 
     /* Same MAC, new IP/hostname */
     a.yiaddr = (192u<<24)|(168u<<16)|(1u<<8)|20u;
     a.hostname = "second";
-    dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
+    dhcp_snoop(NULL, 0, buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     dhcp_snoop_snapshot(&s);
@@ -212,12 +212,12 @@ static void test_different_mac_separate_entries(void) {
     };
     memcpy(a.mac, mac_a, 6);
     uint8_t buf[300]; char info[64];
-    dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
+    dhcp_snoop(NULL, 0, buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
 
     a.yiaddr = (10u<<24)|(0u<<16)|(0u<<8)|2u;
     a.hostname = "hostB";
     memcpy(a.mac, mac_b, 6);
-    dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
+    dhcp_snoop(NULL, 0, buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     dhcp_snoop_snapshot(&s);
@@ -228,7 +228,7 @@ static void test_too_short_rejected(void) {
     reset();
     uint8_t buf[239] = {0};
     char info[64] = "";
-    ASSERT_EQ(0, dhcp_snoop(buf, 239, info, sizeof(info)));
+    ASSERT_EQ(0, dhcp_snoop(NULL, 0, buf, 239, info, sizeof(info)));
 }
 
 static void test_wrong_op_rejected(void) {
@@ -239,7 +239,7 @@ static void test_wrong_op_rejected(void) {
     };
     uint8_t buf[300]; char info[64] = "";
     int len = build_dhcp(&a, buf, sizeof(buf));
-    ASSERT_EQ(0, dhcp_snoop(buf, len, info, sizeof(info)));
+    ASSERT_EQ(0, dhcp_snoop(NULL, 0, buf, len, info, sizeof(info)));
 }
 
 static void test_wrong_htype_rejected(void) {
@@ -251,7 +251,7 @@ static void test_wrong_htype_rejected(void) {
     uint8_t buf[300]; char info[64] = "";
     int len = build_dhcp(&a, buf, sizeof(buf));
     buf[1] = 6;  /* token ring, not Ethernet */
-    ASSERT_EQ(0, dhcp_snoop(buf, len, info, sizeof(info)));
+    ASSERT_EQ(0, dhcp_snoop(NULL, 0, buf, len, info, sizeof(info)));
 }
 
 static void test_bad_magic_rejected(void) {
@@ -263,7 +263,7 @@ static void test_bad_magic_rejected(void) {
     uint8_t buf[300]; char info[64] = "";
     int len = build_dhcp(&a, buf, sizeof(buf));
     buf[236] = 0xDE; /* corrupt magic cookie */
-    ASSERT_EQ(0, dhcp_snoop(buf, len, info, sizeof(info)));
+    ASSERT_EQ(0, dhcp_snoop(NULL, 0, buf, len, info, sizeof(info)));
 }
 
 static void test_no_message_type_rejected(void) {
@@ -274,7 +274,7 @@ static void test_no_message_type_rejected(void) {
     buf[236]=0x63; buf[237]=0x82; buf[238]=0x53; buf[239]=0x63;
     buf[240] = 255; /* end immediately, no option 53 */
     char info[64] = "";
-    ASSERT_EQ(0, dhcp_snoop(buf, 241, info, sizeof(info)));
+    ASSERT_EQ(0, dhcp_snoop(NULL, 0, buf, 241, info, sizeof(info)));
 }
 
 static void test_info_contains_hostname_and_ip(void) {
@@ -285,7 +285,7 @@ static void test_info_contains_hostname_and_ip(void) {
         .msg_type = 5, .hostname = "infohost"
     };
     uint8_t buf[300]; char info[64] = "";
-    dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
+    dhcp_snoop(NULL, 0, buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
     ASSERT(strstr(info, "infohost")    != NULL);
     ASSERT(strstr(info, "192.168.5.1") != NULL);
 }
@@ -298,7 +298,7 @@ static void test_info_no_hostname(void) {
         .msg_type = 5, .hostname = NULL
     };
     uint8_t buf[300]; char info[64] = "";
-    int r = dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
+    int r = dhcp_snoop(NULL, 0, buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
     ASSERT_EQ(1, r);
     ASSERT(strstr(info, "ACK") != NULL || strstr(info, "DHCP") != NULL);
 }
@@ -311,7 +311,7 @@ static void test_last_seen_set(void) {
         .msg_type = 5, .hostname = "ts"
     };
     uint8_t buf[300]; char info[64];
-    dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
+    dhcp_snoop(NULL, 0, buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     dhcp_snoop_snapshot(&s);
@@ -326,7 +326,7 @@ static void test_clear_empties_table(void) {
         .msg_type = 5, .hostname = "clearme"
     };
     uint8_t buf[300]; char info[64];
-    dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
+    dhcp_snoop(NULL, 0, buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
     dhcp_snoop_clear();
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
@@ -382,7 +382,7 @@ static void test_clear_key_resets_state(void) {
         .yiaddr = (1u<<24), .msg_type = 5, .hostname = "x"
     };
     uint8_t buf[300]; char info[64];
-    dhcp_snoop(buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
+    dhcp_snoop(NULL, 0, buf, build_dhcp(&a, buf, sizeof(buf)), info, sizeof(info));
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     dhcp_snoop_snapshot(&s);
@@ -407,7 +407,7 @@ static void test_hostname_control_octets_marked(void) {
     };
     uint8_t buf[300]; char info[64] = "";
     int len = build_dhcp(&a, buf, sizeof(buf));
-    ASSERT_EQ(1, dhcp_snoop(buf, len, info, sizeof(info)));
+    ASSERT_EQ(1, dhcp_snoop(NULL, 0, buf, len, info, sizeof(info)));
     TEST_STATE(s); memset(&s, 0, sizeof(s));
     dhcp_snoop_snapshot(&s);
     ASSERT_EQ(1, s.dhcp_event_count);
@@ -427,12 +427,12 @@ static void test_table_full_evicts_oldest_and_tallies(void) {
     for (int i = 0; i < MAX_DHCP_EVENTS; i++) {
         a.mac[4] = (uint8_t)(i >> 8); a.mac[5] = (uint8_t)i;
         int n = build_dhcp(&a, buf, sizeof(buf));
-        ASSERT_EQ(dhcp_snoop(buf, n, NULL, 0), 1);
+        ASSERT_EQ(dhcp_snoop(NULL, 0, buf, n, NULL, 0), 1);
     }
     ASSERT_EQ((int)sh_evict_count(SH_EVICT_DHCP_EVENT), 0);
     a.mac[4] = 0xff; a.mac[5] = 0xff;
     int n = build_dhcp(&a, buf, sizeof(buf));
-    ASSERT_EQ(dhcp_snoop(buf, n, NULL, 0), 1);
+    ASSERT_EQ(dhcp_snoop(NULL, 0, buf, n, NULL, 0), 1);
     ASSERT_EQ((int)sh_evict_count(SH_EVICT_DHCP_EVENT), 1);
 
     sloth_state_t s; memset(&s, 0, sizeof(s));

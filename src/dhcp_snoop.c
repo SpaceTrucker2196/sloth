@@ -11,6 +11,7 @@
 #include "sensor_health.h"
 #include "dns.h"
 #include "stab.h"
+#include "lan_role.h"
 
 /* ── Internal table ──────────────────────────────────────── */
 
@@ -33,6 +34,11 @@ STAB_DECL(g_events, dhcp_event_t, MAX_DHCP_EVENTS, last_seen, STAB_OLDEST,
 #define OPT_MSGTYPE   53
 #define OPT_HOSTNAME  12
 #define OPT_SERVER_ID 54
+#define OPT_PRL       55   /* Parameter Request List, RFC 2132 §9.8   */
+#define OPT_VCI       60   /* Vendor Class Identifier, RFC 2132 §9.13 */
+
+/* RFC 2131 §4.1: servers send from, and clients to, UDP 67. */
+#define DHCP_SERVER_PORT 67
 
 static const char *msg_type_str(uint8_t t) {
     switch (t) {
@@ -69,7 +75,23 @@ static void fmt_mac(const uint8_t *raw, char *out) {
 
 /* ── Public API ──────────────────────────────────────────── */
 
-int dhcp_snoop(const uint8_t *data, int len, char *info, int infosz) {
+/* Option 55 as its codes in wire order, "1,3,6,15". Cut at a whole
+ * code, never mid-number, when the list outgrows the field. */
+static void fmt_prl(const uint8_t *p, int n, char *out, size_t outsz) {
+    size_t o = 0;
+    out[0] = '\0';
+    for (int i = 0; i < n; i++) {
+        char tok[8];
+        int k = snprintf(tok, sizeof(tok), "%s%u", i ? "," : "",
+                         (unsigned)p[i]);
+        if (k < 0 || o + (size_t)k + 1 > outsz) break;
+        memcpy(out + o, tok, (size_t)k + 1);
+        o += (size_t)k;
+    }
+}
+
+int dhcp_snoop(const char *src_ip, uint16_t src_port,
+               const uint8_t *data, int len, char *info, int infosz) {
     /* DHCP header through magic cookie is 240 bytes minimum */
     if (len < 240) return 0;
 
@@ -96,6 +118,9 @@ int dhcp_snoop(const uint8_t *data, int len, char *info, int infosz) {
     uint8_t  msg_type = 0;
     char     hostname[64]  = "";
     char     server_ip[46] = "";
+    char     prl[sizeof(((dhcp_event_t *)0)->prl)] = "";
+    char     vci[sizeof(((dhcp_event_t *)0)->vci)] = "";
+    int      have_prl = 0, have_vci = 0;
 
     const uint8_t *p   = data + 240;
     const uint8_t *end = data + len;
@@ -114,6 +139,14 @@ int dhcp_snoop(const uint8_t *data, int len, char *info, int infosz) {
         }
         else if (tag == OPT_SERVER_ID && olen == 4) {
             inet_ntop(AF_INET, p, server_ip, sizeof(server_ip));
+        }
+        else if (tag == OPT_PRL && olen > 0) {
+            fmt_prl(p, olen, prl, sizeof(prl));
+            have_prl = 1;
+        }
+        else if (tag == OPT_VCI && olen > 0) {
+            netstr_copy(vci, sizeof(vci), p, olen);              /* #138 */
+            have_vci = 1;
         }
         p += olen;
     }
@@ -137,10 +170,27 @@ int dhcp_snoop(const uint8_t *data, int len, char *info, int infosz) {
      * events so a flapping server identity surfaces. */
     if (server_ip[0])
         snprintf(e->server_ip, sizeof(e->server_ip), "%s", server_ip);
+    /* Options 55 / 60 are the client's (RFC 2132 §9.8, §9.13): kept from
+     * BOOTREQUESTs only, so a server's echo cannot overwrite them. */
+    if (op == 1 && have_prl)
+        snprintf(e->prl, sizeof(e->prl), "%s", prl);
+    if (op == 1 && have_vci)
+        snprintf(e->vci, sizeof(e->vci), "%s", vci);
     /* Feed DNS cache on ACK when we have both hostname and IP */
     if (msg_type == 5 && e->ip[0] && e->hostname[0])
         dns_set_resolved(e->ip, e->hostname);
     pthread_mutex_unlock(&g_mu);
+
+    /* Router-role evidence for the camera classifier (#155), outside
+     * g_mu: lan_role has its own lock and the two never nest. A
+     * BOOTREPLY from the server port is the sender acting as a server
+     * or relay (RFC 2131 §4.1); option 54 names a server whichever side
+     * wrote it — a client's REQUEST names the one that offered, and on
+     * a switched port that broadcast is often all sloth sees of it. */
+    if (op == 2 && src_port == DHCP_SERVER_PORT && src_ip)
+        lan_role_note_dhcp(src_ip, LAN_ROLE_DHCP_REPLY);
+    if (server_ip[0])
+        lan_role_note_dhcp(server_ip, LAN_ROLE_DHCP_SID);
 
     /* Build info string */
     if (info && infosz > 0) {

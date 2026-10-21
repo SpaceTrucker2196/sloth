@@ -2617,6 +2617,48 @@ static void test_emit_device_camera_fields(void) {
     ASSERT_EQ(count_lines(body), 2);
 }
 
+/* #155: the classifier's fields, additive after cam_signals. */
+TEST_STATE(g_cls_js);
+static void test_emit_device_classifier_fields(void) {
+    open_fresh();
+    sloth_state_t *s = &g_cls_js;
+    memset(s, 0, sizeof(*s));
+    device_t *d = &s->devices[s->device_count++];
+    d->mac[0] = 0x50; d->mac[1] = 0xc7; d->mac[2] = 0xbf; d->mac[5] = 0x39;
+    snprintf(d->ip, sizeof(d->ip), "192.168.1.1");
+    d->device_class = DEV_CLASS_NOT_CAMERA;
+    d->cam_evidence = CAM_EV_MIXED_OUI;
+    d->cam_vetoes   = CAM_VETO_DHCP_SERVER | CAM_VETO_DNS_RESPONDER;
+    d->cam_score    = 1;
+    snprintf(d->camera_vendor, sizeof(d->camera_vendor), "TP-Link");
+    snprintf(d->dhcp_prl, sizeof(d->dhcp_prl), "1,3,6,15");
+    snprintf(d->dhcp_vci, sizeof(d->dhcp_vci), "udhcp 1.31.1");
+    device_t *c = &s->devices[s->device_count++];
+    c->mac[0] = 0xf4; c->mac[5] = 0xf1;
+    c->cam_evidence = CAM_EV_MIXED_OUI | CAM_EV_RTSP_SDP;
+    c->cam_vetoes   = CAM_VETO_SENDS_RA;
+    c->cam_score    = 3;
+    c->cam_conflict = 1;
+    jsonl_emit_devices(s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT(contains(body, "\"device_class\":\"not-camera\",\"camera_vendor\":"
+                          "\"TP-Link\""));
+    ASSERT(contains(body, "\"cam_signals\":0,\"cam_score\":1,"
+                          "\"cam_evidence\":\"mixed_oui\","
+                          "\"cam_vetoes\":\"dhcp_server,dns_responder\","
+                          "\"cam_conflict\":0,\"dhcp_prl\":\"1,3,6,15\","
+                          "\"dhcp_vci\":\"udhcp 1.31.1\""));
+    ASSERT(contains(body, "\"device_class\":\"\""));
+    ASSERT(contains(body, "\"cam_score\":3,\"cam_evidence\":"
+                          "\"mixed_oui,rtsp_sdp\",\"cam_vetoes\":\"sends_ra\","
+                          "\"cam_conflict\":1,\"dhcp_prl\":\"\",\"dhcp_vci\":\"\""));
+    ASSERT(test_is_valid_utf8(body));
+    ASSERT_EQ(count_lines(body), 2);
+}
+
 void run_jsonl_tests(void) {
     TEST_SUITE("jsonl open/close");
     RUN_TEST(test_open_close);
@@ -2655,6 +2697,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_twin_episode_empty_no_output);
     RUN_TEST(test_emit_beacon_ie_order_fields);
     RUN_TEST(test_emit_device_camera_fields);
+    RUN_TEST(test_emit_device_classifier_fields);
     RUN_TEST(test_emit_beacon_tbtt_jitter_fields);
     RUN_TEST(test_emit_beacon_tbtt_jitter_absent_is_zero);
     RUN_TEST(test_emit_beacon_worst_case_escaping_fits);

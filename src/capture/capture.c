@@ -506,6 +506,7 @@ int capture_run_flag_take(capture_run_flag_t *f) {
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
 #include "dhcp_snoop.h"
+#include "lan_role.h"
 #include "ndp_snoop.h"
 #include "smb_snoop.h"
 #include "kerb_snoop.h"
@@ -798,6 +799,8 @@ static void decode_udp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
     if (pay_len <= 0) {
         snprintf(pkt->info, sizeof(pkt->info), "UDP %u", be16(tp + 4));
     } else if (port_is(pkt, 53)) {
+        /* A LAN host answering other LAN hosts' DNS (#155 router role). */
+        lan_role_dns_observe(pkt->src, pkt->src_port, pkt->dst, pay, pay_len);
         if (!dns_snoop(pay, pay_len, pkt->info, sizeof(pkt->info)))
             snprintf(pkt->info, sizeof(pkt->info), "UDP %u", be16(tp + 4));
         dns_log_entry_t dqe;
@@ -816,7 +819,8 @@ static void decode_udp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
         if (!nbns_snoop(pay, pay_len, pkt->info, sizeof(pkt->info)))
             snprintf(pkt->info, sizeof(pkt->info), "NBNS");
     } else if (port_is(pkt, 67) || port_is(pkt, 68)) {
-        if (!dhcp_snoop(pay, pay_len, pkt->info, sizeof(pkt->info)))
+        if (!dhcp_snoop(pkt->src, pkt->src_port, pay, pay_len,
+                        pkt->info, sizeof(pkt->info)))
             snprintf(pkt->info, sizeof(pkt->info), "DHCP");
     } else if (port_is(pkt, 443)) {
         const char *remote = (pkt->dst_port == 443) ? pkt->dst : pkt->src;

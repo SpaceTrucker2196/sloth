@@ -39,6 +39,7 @@
 #include "mqtt_snoop.h"
 #include "nbns_snoop.h"
 #include "ndp_snoop.h"
+#include "lan_role.h"
 #include "ntp_log.h"
 #include "onvif_discovery.h"
 #include "ownership.h"

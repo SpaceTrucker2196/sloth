@@ -110,6 +110,7 @@ void run_evidence_manifest_tests(void);
 void run_sha256_tests(void);
 void run_devices_tests(void);
 void run_camera_join_tests(void);        /* tests/test_camera_join.c (#106 round 2) */
+void run_camera_class_tests(void);       /* tests/test_camera_class.c (#155) */
 void run_beacon_detect_tests(void);
 void run_jsonl_tests(void);
 void run_filter_tests(void);
@@ -298,6 +299,7 @@ int main(void) {
     run_sha256_tests();
     run_devices_tests();
     run_camera_join_tests();
+    run_camera_class_tests();
     run_beacon_detect_tests();
     run_jsonl_tests();
     run_filter_tests();

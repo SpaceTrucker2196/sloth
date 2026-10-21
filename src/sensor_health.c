@@ -138,6 +138,7 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_DEAUTH_VICTIM: return "deauth_victim";
     case SH_EVICT_RTSP_EXCHANGE: return "rtsp_exchange";
     case SH_EVICT_RTSP_STREAM:   return "rtsp_stream";
+    case SH_EVICT_LAN_ROLE:      return "lan_role";
     case SH_EVICT_KIND_COUNT:  break;
     }
     return "";

@@ -119,13 +119,27 @@ reports it as `randomized-local` and leaves the inference to the
 operator. The I/G bit is not masked: a group address never transmits a
 beacon.
 
-**Considered and not shipped.** Ubiquiti (the issue's own example),
-TP-Link and Wyze sell cameras, but most of what their blocks put on the
-air is an AP, router, plug or bulb — every UniFi AP would match. This
-departs from #106 Case B as written (`B6:FB:E4`, expected to fire with
-vendor `ubiquiti`): the test pins the exclusion, and the deviation is
-pending an owner ruling on #106 rather than settled by this document.
-"Verkada Inc" (homepage describes "Security Systems"), "Hanwha Vision",
+**Mixed-vendor rows (#155, owner ruling 2026-10-21 on #106).** Ubiquiti
+(the issue's own example), TP-Link and Wyze sell cameras, but most of
+what their blocks put on the air is an AP, router, plug or bulb — every
+UniFi AP would match. They are now in the table as `mixed` rows: every
+MA-L assignment the same `oui.csv` snapshot lists under "TP-LINK
+TECHNOLOGIES CO.,LTD." (174), "TP-Link Systems Inc" (46), "TP-Link
+Systems Inc." (41), "Ubiquiti Inc" (48) and "Wyze Labs Inc" (5) — 314
+rows, verbatim, all of them, so the prior does not depend on which block
+a device was built in. A mixed match names the vendor and is a +1 prior
+in the device classifier; it never sets a device class alone and never
+fires `CAM_SETUP_OUI` alone — only beside a camera setup SSID on the
+same BSSID (e.g. `Tapo_Cam_`, `research/papers/camera-setup-softap.md`).
+It never matches a locally administered address, so #106 Case B
+(`B6:FB:E4`) still does not fire: the U/L mask is for camera-vendor rows
+only. How a mixed-vendor device is told from a router is
+`research/papers/camera-router-role.md`. The registry digest in
+`tests/test_camera_vendor.c` was recomputed from the snapshot for all
+455 rows (the first 141 still give the earlier value), and the test
+reads no host file.
+
+**Considered and not shipped.** "Verkada Inc" (homepage describes "Security Systems"), "Hanwha Vision",
 "Zhejiang Uniview Technologies", "Vivotek" and "Swann" are registered
 but no vendor self-description naming cameras was retrieved; "Prama
 Hikvision India" and "ZHEJIANG DAHUA ZHILIAN" are distinct assignees
@@ -148,6 +162,8 @@ cannot be observed reliably from these inputs).
 ## Related
 
 - `docs/views/alerts.md` — the three rows.
+- `research/papers/camera-router-role.md` — the classifier the mixed
+  rows feed (#155).
 - `research/papers/ws-discovery-onvif.md` — `CAM_WS_DISCOVERY`.
 - `research/papers/camera-setup-softap.md` — `CAM_SETUP_SSID` and the
   vendor onboarding documents the vendor set leans on.

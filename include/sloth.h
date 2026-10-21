@@ -267,8 +267,47 @@ typedef struct {
      * signal a rogue DHCP server on the segment. "" on client
      * requests (DISCOVER / REQUEST / DECLINE / RELEASE / INFORM). */
     char    server_ip[46];
+    /* Option 55 Parameter Request List and option 60 Vendor Class
+     * Identifier (RFC 2132 §9.8, §9.13) from this client's last message
+     * that carried them (#155). Display-only evidence: no table maps
+     * either to a device class, because no licence-clean source cites
+     * one per row. prl is the option codes in wire order, "1,3,6,15";
+     * vci is netstr-filtered (#138), the client chose every byte. */
+    char    prl[96];
+    char    vci[64];
     time_t  last_seen;
 } dhcp_event_t;
+
+/* ── LAN service roles (#155) ───────────────────────────────
+ * Addresses seen acting as a DHCP server or a DNS responder, keyed by
+ * IP. Router-role evidence for the device class: a camera does neither.
+ *
+ *   LAN_ROLE_DHCP_REPLY  a BOOTREPLY (op 2) from UDP 67 with this source
+ *                        (RFC 2131 §4.1: the server port)
+ *   LAN_ROLE_DHCP_SID    this address named in option 54 Server
+ *                        Identifier (RFC 2132 §9.7)
+ *   LAN_ROLE_DNS         a DNS response (QR 1, RFC 1035 §4.1.1) from
+ *                        UDP 53 with this source to a LAN client
+ *
+ * dns_clients counts distinct LAN destinations, saturating at
+ * LAN_ROLE_DNS_CLIENTS: the veto asks "two or more", never "how many". */
+#define MAX_LAN_ROLES         32
+#define LAN_ROLE_DNS_CLIENTS   4
+
+#define LAN_ROLE_DHCP_REPLY (1 << 0)
+#define LAN_ROLE_DHCP_SID   (1 << 1)
+#define LAN_ROLE_DNS        (1 << 2)
+
+typedef struct {
+    char    ip[46];
+    int     roles;                                 /* LAN_ROLE_* */
+    char    dns_client[LAN_ROLE_DNS_CLIENTS][46];  /* first distinct ones */
+    int     dns_clients;
+    time_t  dhcp_seen;        /* newest DHCP evidence, 0 = none */
+    time_t  dns_seen;         /* newest DNS response to a LAN client */
+    time_t  first_seen;
+    time_t  last_seen;
+} lan_role_t;
 
 /* ── ARP neighbors ──────────────────────────────────────── */
 #define MAX_ARP_ENTRIES  256
@@ -680,7 +719,30 @@ typedef enum {
     DEV_CLASS_UNKNOWN       = 0,
     DEV_CLASS_CAMERA_VENDOR = 1,
     DEV_CLASS_CAMERA        = 2,
+    /* #155: a mixed-vendor OUI (Ubiquiti, TP-Link, Wyze) on a record
+     * seen in a router role (CAM_VETO_*) with no camera evidence. Last
+     * and not ordered with the two above: it is a verdict against, not
+     * a stronger "for", so nothing may MAX() it against them. */
+    DEV_CLASS_NOT_CAMERA    = 3,
 } device_class_t;
+
+/* ── Behavioural evidence and router-role vetoes (#155) ──
+ *
+ * What camera_join.c's classifier scored for a record, and the
+ * router-role observations that veto a mixed-vendor OUI. Weights are in
+ * camera_join.c beside their sources; only RTSP_SDP decides a class
+ * (RFC 2326 §10.2), the rest are shown. Nothing here was solicited:
+ * every bit is a frame some other host sent. */
+#define CAM_EV_MIXED_OUI    (1 << 0)  /* +1: Ubiquiti / TP-Link / Wyze MA-L */
+#define CAM_EV_RTSP_SDP     (1 << 1)  /* +2: DESCRIBE 200, application/sdp  */
+#define CAM_EV_RTSP_SERVER  (1 << 2)  /* +1: answered DESCRIBE, no SDP seen */
+#define CAM_EV_MDNS_RTSP    (1 << 3)  /* +1: advertises _rtsp (a protocol)  */
+#define CAM_EV_COUNT        4
+
+#define CAM_VETO_DHCP_SERVER   (1 << 0)  /* RFC 2131 §4.1 / RFC 2132 §9.7 */
+#define CAM_VETO_SENDS_RA      (1 << 1)  /* RFC 4861 §4.2, lifetime > 0   */
+#define CAM_VETO_DNS_RESPONDER (1 << 2)  /* answers >= 2 LAN clients      */
+#define CAM_VETO_COUNT         3
 
 /* ── Device risk signals (roadmap #16 phase 4) ─────
  * A bitmask of signals contributing to a device's risk bucket.
@@ -728,6 +790,18 @@ typedef struct {
     int     setup_mode;
     int     cam_signal_mask;            /* CAM_SIG_* */
     time_t  cam_seen[CAM_SIG_COUNT];    /* newest source row per signal */
+    /* #155 classifier output. cam_conflict is 1 when camera evidence
+     * (a self-declaration, or the RTSP_SDP score) met a router-role
+     * veto: shown, never resolved - a scored-only record then stays
+     * DEV_CLASS_UNKNOWN, a self-declared one keeps its class. dhcp_prl
+     * and dhcp_vci are the client's DHCP options 55 / 60 (dhcp_event_t),
+     * display-only. */
+    int     cam_score;
+    int     cam_evidence;               /* CAM_EV_*   */
+    int     cam_vetoes;                 /* CAM_VETO_* */
+    int     cam_conflict;
+    char    dhcp_prl[96];
+    char    dhcp_vci[64];
 } device_t;
 
 /* Human-readable bucket name for the alerts view / JSONL. */
@@ -3031,6 +3105,8 @@ typedef struct {
     /* ── Live DHCP events ──────────────────────────────────── */
     dhcp_event_t   dhcp_events[MAX_DHCP_EVENTS];
     int            dhcp_event_count;
+    lan_role_t     lan_roles[MAX_LAN_ROLES];      /* #155 router-role vetoes */
+    int            lan_role_count;
     int            dhcp_event_sel;
 
     /* ── IPv6 NDP — Router Advertisement events ──────────── */

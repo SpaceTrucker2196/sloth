@@ -4470,3 +4470,27 @@ IOC domain nobody queried. [[threat-intel]] gains a table of every rule
 that matches a `dns_log` or `tls_log` name against a table and its
 status, and drops the SNI and HTTP `Host:` triggers it listed — they
 were never implemented.
+## 2026-10-21 — #155: telling a camera from a router on a mixed-vendor OUI
+
+**Updated pages**: [camera-detection.md](camera-detection.md),
+[alerts.md](alerts.md), [jsonl-schema.md](jsonl-schema.md),
+[sqlite-schema.md](sqlite-schema.md); source docs `docs/views/devices.md`,
+`docs/views/alerts.md`; research `research/papers/camera-router-role.md`
+(new), `research/papers/camera-vendor-identity.md`.
+
+Owner ruling on #106: Ubiquiti, TP-Link and Wyze go in the OUI table, as
+314 mixed-vendor rows verbatim from the registry snapshot. A mixed match
+is a vendor name and a +1 prior, never a class and never `CAM_SETUP_OUI`
+alone (only beside a camera setup SSID), and never matches a locally
+administered address. The device classifier scores RTSP `DESCRIBE`
+answered with `application/sdp` (+2) as the one deciding signal — a mixed
+block reads `camera-vendor` at score >= 3 with it — and vetoes on a DHCP
+server (BOOTREPLY from UDP 67 or option 54; `dhcp_snoop()` now takes the
+packet source), a Router Advertisement with lifetime > 0, and a DNS
+responder to >= 2 LAN clients, making a mixed block `not-camera`. Camera
+evidence meeting a veto is a conflict, shown (`CONFL!`) and not resolved.
+DHCP options 55 / 60 are kept and shown, never scored. Dropped by the
+fact-check: an RTP-source signal, an uplink-ratio score, an AP veto. On a
+switched port most mixed-vendor devices read unclassified; the page says
+why. New `lan_role` table (`evict_lan_role`); JSONL `device` gains six
+fields; `--db` schema v7 with a v6 → v7 step, and the steps now chain.

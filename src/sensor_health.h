@@ -129,6 +129,8 @@ typedef enum {
     /* #106 slice B: the RTSP observer's two tables, appended. */
     SH_EVICT_RTSP_EXCHANGE, /* src/rtsp_snoop.c — least-recently-seen RTSP connection with DESCRIBEs in flight dropped */
     SH_EVICT_RTSP_STREAM,   /* src/rtsp_snoop.c — least-recently-answered (server, port, path) stream row dropped */
+    /* #155: the router-role table the camera classifier vetoes from. */
+    SH_EVICT_LAN_ROLE,      /* src/lan_role.c — least-recently-seen DHCP-server / DNS-responder address dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -172,7 +174,8 @@ uint64_t sh_evict_total_tables(void);
  * "mdns_service", "nbns_name", "arp_hist", "frag_bss", "frag_sta",
  * "frag_session", "frag_assoc", "frag_mpdu", "ndp_ra", "rogue_radius",
  * "ssdp_device", "onvif_device", "smtp_flow", "eapol_pending",
- * "deauth_obs", "deauth_victim", "rtsp_exchange", "rtsp_stream".
+ * "deauth_obs", "deauth_victim", "rtsp_exchange", "rtsp_stream",
+ * "lan_role".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 

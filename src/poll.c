@@ -28,6 +28,7 @@
 #include "mdns_snoop.h"
 #include "nbns_snoop.h"
 #include "dhcp_snoop.h"
+#include "lan_role.h"
 #include "ndp_snoop.h"
 #include "smb_snoop.h"
 #include "kerb_snoop.h"
@@ -141,6 +142,7 @@ static void st_wired_snapshots(sloth_state_t *s, const poll_ctx_t *ctx) {
     mdns_snapshot(s);
     nbns_snapshot(s);
     dhcp_snoop_snapshot(s);
+    lan_role_snapshot(s);   /* camera router-role vetoes (#155) */
     ndp_snoop_snapshot(s);
     smb_snoop_snapshot(s);
     kerb_snoop_snapshot(s);

@@ -61,7 +61,19 @@ static const char SCHEMA_SQL[] =
     "  camera_vendor TEXT,"
     "  camera_model  TEXT,"
     "  setup_mode    INTEGER NOT NULL DEFAULT 0,"
-    "  cam_signals   INTEGER NOT NULL DEFAULT 0"
+    "  cam_signals   INTEGER NOT NULL DEFAULT 0,"
+    /* #155 classifier output (schema v7), after the v6 columns and in
+     * MIGRATE_V6_SQL's order for the same reason. cam_evidence and
+     * cam_vetoes are the CAM_EV_* / CAM_VETO_* masks, device_class may
+     * now be 3 (not-camera). dhcp_prl / dhcp_vci are the client's own
+     * DHCP options 55 / 60: an option-code list and a vendor class
+     * string, neither a secret (MISSION §2 guardrail tests). */
+    "  cam_score     INTEGER NOT NULL DEFAULT 0,"
+    "  cam_evidence  INTEGER NOT NULL DEFAULT 0,"
+    "  cam_vetoes    INTEGER NOT NULL DEFAULT 0,"
+    "  cam_conflict  INTEGER NOT NULL DEFAULT 0,"
+    "  dhcp_prl      TEXT,"
+    "  dhcp_vci      TEXT"
     ");\n"
     "CREATE INDEX IF NOT EXISTS idx_devices_last_seen ON devices(last_seen);\n"
 
@@ -691,6 +703,20 @@ static const char MIGRATE_V5_SQL[] =
     "ALTER TABLE devices ADD COLUMN setup_mode    INTEGER NOT NULL DEFAULT 0;\n"
     "ALTER TABLE devices ADD COLUMN cam_signals   INTEGER NOT NULL DEFAULT 0;\n";
 
+/* v6 -> v7 (#155): the camera classifier's score, evidence and veto
+ * masks, its conflict flag, and the DHCP options 55 / 60 display
+ * fields. Additive only, as v5 -> v6: every value a v6 file holds
+ * reads the same after it. A v6 row's device_class was 0..2 and stays
+ * so; 3 only appears in rows this build writes. */
+static const char MIGRATE_V6_SQL[] =
+    "ALTER TABLE devices ADD COLUMN cam_score     INTEGER NOT NULL DEFAULT 0;\n"
+    "ALTER TABLE devices ADD COLUMN cam_evidence  INTEGER NOT NULL DEFAULT 0;\n"
+    "ALTER TABLE devices ADD COLUMN cam_vetoes    INTEGER NOT NULL DEFAULT 0;\n"
+    "ALTER TABLE devices ADD COLUMN cam_conflict  INTEGER NOT NULL DEFAULT 0;\n"
+    "ALTER TABLE devices ADD COLUMN dhcp_prl      TEXT;\n"
+    "ALTER TABLE devices ADD COLUMN dhcp_vci      TEXT;\n";
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 const char *db_schema_migrate_v5_sql(void) { return MIGRATE_V5_SQL; }
+const char *db_schema_migrate_v6_sql(void) { return MIGRATE_V6_SQL; }

@@ -20,6 +20,7 @@
 #include <string.h>
 #include <time.h>
 #include "camera_vendor.h"
+#include "camera_join.h"
 #include "alert_key.h"
 #include "rules.h"
 #include "engine_internal.h"
@@ -214,13 +215,18 @@ void rule_cam_ssdp_device(const sloth_state_t *s, time_t now) {
  * Compared with the U/L bit masked (camera_vendor.h says why) and the
  * fact reported as "randomized-local": a locally administered address
  * is by definition not a registry assignment, so that match rests on
- * the remaining 22 free bits coinciding, and the operator is told so. */
+ * the remaining 22 free bits coinciding, and the operator is told so.
+ *
+ * A mixed-vendor block (Ubiquiti, TP-Link, Wyze; #155) fires only with a
+ * camera setup SSID on the same BSSID — cam_setup_oui_counts(), shared
+ * with the device join so the two cannot disagree. */
 void rule_cam_setup_oui(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
         const char *vendor = NULL, *org = NULL;
-        int local = 0;
-        if (!cam_vendor_oui(a->bssid, &vendor, &org, &local)) continue;
+        int local = 0, mixed = 0;
+        if (!cam_setup_oui_counts(a, &vendor, &org, &local, &mixed))
+            continue;
 
         char bssid_str[20];
         fmt_bssid(bssid_str, a->bssid);
@@ -234,16 +240,20 @@ void rule_cam_setup_oui(const sloth_state_t *s, time_t now) {
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
                  "BSSID %s ch %d SSID %.32s, enc %.9s: OUI %02X:%02X:%02X"
-                 " is IEEE MA-L \"%.48s\" (%s, camera vendor; device class"
+                 " is IEEE MA-L \"%.48s\" (%.12s, %s; device class"
                  " not observed)%s",
                  bssid_str, a->channel,
                  a->ssid[0] ? a->ssid : "<hidden>",
                  a->enc[0] ? a->enc : "unknown",
                  (unsigned)(a->bssid[0] & ~0x02u), (unsigned)a->bssid[1],
                  (unsigned)a->bssid[2], org, vendor,
-                 local ? "; randomized-local: U/L bit set, matched with it"
-                         " masked - not itself a registry assignment"
-                       : "");
+                 mixed ? "mixed vendor" : "camera vendor",
+                 /* A mixed row never matches a local address, so the
+                  * two tails cannot both apply. */
+                 mixed ? "; counted only beside its camera setup SSID"
+                 : local ? "; randomized-local: U/L bit set, matched with it"
+                           " masked - not itself a registry assignment"
+                 : "");
         fire(ALERT_TYPE_CAM_SETUP_OUI, ALERT_SEV_WARN,
              "CAM_SETUP_OUI", detail, key, NULL, 0, now);
     }

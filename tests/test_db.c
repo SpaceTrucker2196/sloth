@@ -1857,11 +1857,11 @@ static void test_btm_requests_in_finding_retention_tier(void) {
 
 /* ── Schema v4: the batched column bump ──────────────────── */
 
-static void test_schema_version_is_six(void) {
+static void test_schema_version_is_seven(void) {
     fresh_db();
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "6");
+    ASSERT_STR(v, "7");
     db_close();
     unlink(db_path);
 }
@@ -2377,8 +2377,9 @@ static void test_ip_only_camera_record_is_not_persisted(void) {
     unlink(db_path);
 }
 
-/* A v5 devices table, as the v5 DDL wrote it. */
-static void write_v5_file(const char *extra_sql) {
+/* A devices table as the v5 DDL wrote it, stamped `ver`: "5" as is,
+ * "6" with the v6 columns passed in `extra_sql`. */
+static void write_old_file(const char *ver, const char *extra_sql) {
     db_close();
     unlink(db_path);
     sqlite3 *h = NULL;
@@ -2386,7 +2387,7 @@ static void write_v5_file(const char *extra_sql) {
     char sql[2048];
     snprintf(sql, sizeof(sql),
         "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
-        "INSERT INTO meta VALUES('schema_version','5');"
+        "INSERT INTO meta VALUES('schema_version','%s');"
         "CREATE TABLE devices ("
         "  mac TEXT PRIMARY KEY, ip TEXT, hostname TEXT, vendor TEXT,"
         "  last_ssid TEXT, is_ap INTEGER NOT NULL DEFAULT 0,"
@@ -2398,10 +2399,35 @@ static void write_v5_file(const char *extra_sql) {
         "INSERT INTO devices (mac,ip,hostname,vendor,probe_count,sources,"
         "  risk_level,first_seen,last_seen) VALUES ('02:00:00:00:00:77',"
         "  '10.0.0.77','old-host','OldCo',9,3,2,1600000000,1600000500);",
-        extra_sql);
+        ver, extra_sql);
     ASSERT_EQ(sqlite3_exec(h, sql, NULL, NULL, NULL), SQLITE_OK);
     sqlite3_close(h);
     chmod(db_path, 0600);
+}
+
+static void write_v5_file(const char *extra_sql) {
+    write_old_file("5", extra_sql);
+}
+
+/* The v6 devices columns, in MIGRATE_V5_SQL's order. */
+#define V6_DEVICE_COLS \
+    ", device_class INTEGER NOT NULL DEFAULT 0, camera_vendor TEXT," \
+    " camera_model TEXT, setup_mode INTEGER NOT NULL DEFAULT 0," \
+    " cam_signals INTEGER NOT NULL DEFAULT 0"
+
+/* A v6 file whose one device was a camera: the values the v6 -> v7
+ * step must leave as they are. */
+static void write_v6_file(const char *extra_sql) {
+    char cols[512];
+    snprintf(cols, sizeof(cols), "%s%s", V6_DEVICE_COLS, extra_sql);
+    write_old_file("6", cols);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "UPDATE devices SET device_class=2, camera_vendor='Hikvision',"
+        " camera_model='DS-2CD', setup_mode=1, cam_signals=2;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
 }
 
 /* v5 -> v6 adds the five columns with their defaults and changes no
@@ -2413,7 +2439,10 @@ static void test_v5_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "6");
+    /* The chain runs on: v5 -> v6 -> v7 in one open (#155). */
+    ASSERT_STR(v, "7");
+    ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('devices')"
+                    " WHERE name='dhcp_vci'"), 23);
     q_text("SELECT hostname FROM devices WHERE mac='02:00:00:00:00:77'",
            v, sizeof(v));
     ASSERT_STR(v, "old-host");
@@ -2464,9 +2493,11 @@ static void test_v5_file_without_devices_migrates(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "6");
+    ASSERT_STR(v, "7");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
                     " WHERE name='cam_signals'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
+                    " WHERE name='cam_vetoes'"), 1);
     db_close();
     unlink(db_path);
 }
@@ -2486,6 +2517,118 @@ static void test_v5_migration_failure_leaves_file_unchanged(void) {
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
                     " WHERE name='camera_vendor'"), 0);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 1);
+    unlink(db_path);
+}
+
+/* ── Schema v7: the #155 classifier columns ─────────────── */
+
+/* v6 -> v7 adds six columns with their defaults and changes no value
+ * a v6 file holds — including the camera row's class, vendor, model,
+ * setup flag and signal mask. Seen to fail with the { 6, ... } step
+ * removed from g_steps[] (the build refuses: the static chain check),
+ * and at runtime with check_version()'s range test narrowed back to
+ * `have == DB_MIGRATES_FROM` (the v6 file is refused: db_open() 0). */
+static void test_v6_file_migrates_additively(void) {
+    write_v6_file("");
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "7");
+    q_text("SELECT hostname FROM devices", v, sizeof(v));
+    ASSERT_STR(v, "old-host");
+    ASSERT_EQ(q_int("SELECT device_class FROM devices"), 2);
+    ASSERT_EQ(q_int("SELECT setup_mode FROM devices"), 1);
+    ASSERT_EQ(q_int("SELECT cam_signals FROM devices"), 2);
+    q_text("SELECT camera_vendor FROM devices", v, sizeof(v));
+    ASSERT_STR(v, "Hikvision");
+    q_text("SELECT camera_model FROM devices", v, sizeof(v));
+    ASSERT_STR(v, "DS-2CD");
+    ASSERT_EQ(q_int("SELECT first_seen FROM devices"), 1600000000);
+    ASSERT_EQ(q_int("SELECT cam_score + cam_evidence + cam_vetoes +"
+                    " cam_conflict FROM devices"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices WHERE dhcp_prl IS NULL"
+                    " AND dhcp_vci IS NULL"), 1);
+    /* Column order matches a fresh v7 file. */
+    ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('devices')"
+                    " WHERE name='cam_score'"), 18);
+    ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('devices')"
+                    " WHERE name='dhcp_vci'"), 23);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v6 file on which the last v6 -> v7 ALTER fails (dhcp_vci already
+ * there) keeps v6 and none of the five columns the earlier statements
+ * of the same step added. Seen to fail with migrate_step()'s BEGIN
+ * IMMEDIATE dropped (cam_score survives the failed step). */
+static void test_v6_migration_failure_leaves_file_unchanged(void) {
+    write_v6_file(", dhcp_vci TEXT");
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[16];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "6");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
+                    " WHERE name='cam_score'"), 0);
+    ASSERT_EQ(q_int("SELECT device_class FROM devices"), 2);
+    unlink(db_path);
+}
+
+/* The steps are separate transactions: a v5 file whose second step
+ * fails stops at v6, the first step's columns in place and the second's
+ * absent — the last version it fully reached, never a half of one. */
+static void test_v5_chain_stops_at_last_whole_step(void) {
+    write_v5_file(", dhcp_vci TEXT");
+    ASSERT_EQ(db_open(db_path), 0);
+    char v[16];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "6");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
+                    " WHERE name='cam_signals'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
+                    " WHERE name='cam_score'"), 0);
+    unlink(db_path);
+}
+
+/* #155's output is written per tick. not-camera (3) is a verdict
+ * against, so it never MAX()es past a MAC-keyed camera class: that
+ * history keeps its class and the row records the conflict. Seen to
+ * fail with the upsert's device_class back to MAX(excluded, sticky)
+ * (class reads 3 over the stored setup-SSID camera). */
+static void test_device_not_camera_never_overrides_mac_keyed_class(void) {
+    fresh_db();
+    sloth_state_t s;
+    seed_camera_device(&s, DEV_CLASS_CAMERA, CAM_SIG_SETUP_SSID,
+                       "TP-Link Tapo", "", 1);
+    db_tick(&s, 1700000000);
+    seed_camera_device(&s, DEV_CLASS_NOT_CAMERA, 0, "TP-Link", "", 0);
+    s.devices[0].cam_vetoes   = CAM_VETO_DHCP_SERVER;
+    s.devices[0].cam_evidence = CAM_EV_MIXED_OUI;
+    s.devices[0].cam_score    = 1;
+    snprintf(s.devices[0].dhcp_prl, sizeof(s.devices[0].dhcp_prl),
+             "1,3,6,15");
+    db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT device_class FROM devices"), 2);
+    ASSERT_EQ(q_int("SELECT cam_conflict FROM devices"), 1);
+    ASSERT_EQ(q_int("SELECT cam_vetoes FROM devices"), CAM_VETO_DHCP_SERVER);
+    ASSERT_EQ(q_int("SELECT cam_evidence FROM devices"), CAM_EV_MIXED_OUI);
+    ASSERT_EQ(q_int("SELECT cam_score FROM devices"), 1);
+    char v[32];
+    q_text("SELECT dhcp_prl FROM devices", v, sizeof(v));
+    ASSERT_STR(v, "1,3,6,15");
+
+    /* With no MAC-keyed history the verdict is stored as it is. */
+    seed_camera_device(&s, DEV_CLASS_NOT_CAMERA, 0, "TP-Link", "", 0);
+    s.devices[0].mac[5] = 0x66;
+    s.devices[0].cam_vetoes = CAM_VETO_SENDS_RA;
+    db_tick(&s, 1700000200);
+    ASSERT_EQ(q_int("SELECT device_class FROM devices"
+                    " WHERE cam_vetoes=2"), 3);
+    ASSERT_EQ(q_int("SELECT cam_conflict FROM devices"
+                    " WHERE cam_vetoes=2"), 0);
+    db_close();
     unlink(db_path);
 }
 
@@ -2509,15 +2652,22 @@ static void test_v4_file_is_still_refused(void) {
 
 /* The migration text is held to the same guardrail as the schema. */
 static void test_migration_sql_is_add_column_only(void) {
-    const char *m = db_schema_migrate_v5_sql();
-    int stmts = 0;
-    for (const char *p = m; (p = strstr(p, "ALTER TABLE devices ADD COLUMN ")); p++)
-        stmts++;
-    ASSERT_EQ(stmts, 5);
-    ASSERT(strstr(m, "UPDATE") == NULL);
-    ASSERT(strstr(m, "DELETE") == NULL);
-    ASSERT(strstr(m, "DROP")   == NULL);
-    ASSERT(strstr(m, "password") == NULL);
+    const char *const ms[] = { db_schema_migrate_v5_sql(),
+                               db_schema_migrate_v6_sql() };
+    const int want[] = { 5, 6 };
+    for (int i = 0; i < 2; i++) {
+        const char *m = ms[i];
+        int stmts = 0, semis = 0;
+        for (const char *p = m; (p = strstr(p, "ALTER TABLE devices ADD COLUMN ")); p++)
+            stmts++;
+        for (const char *p = m; *p; p++) semis += *p == ';';
+        ASSERT_EQ(stmts, want[i]);
+        ASSERT_EQ(semis, want[i]);    /* nothing but those statements */
+        ASSERT(strstr(m, "UPDATE") == NULL);
+        ASSERT(strstr(m, "DELETE") == NULL);
+        ASSERT(strstr(m, "DROP")   == NULL);
+        ASSERT(strstr(m, "password") == NULL);
+    }
 }
 
 void run_db_tests(void) {
@@ -2553,7 +2703,7 @@ void run_db_tests(void) {
     RUN_TEST(test_btm_requests_first_seen_does_not_move);
     RUN_TEST(test_btm_requests_forcing_index_exists);
     RUN_TEST(test_btm_requests_in_finding_retention_tier);
-    RUN_TEST(test_schema_version_is_six);
+    RUN_TEST(test_schema_version_is_seven);
     RUN_TEST(test_device_ip_joined_camera_columns_follow_latest);
     RUN_TEST(test_device_mac_keyed_camera_columns_are_sticky);
     RUN_TEST(test_ip_only_camera_record_is_not_persisted);
@@ -2561,6 +2711,10 @@ void run_db_tests(void) {
     RUN_TEST(test_v5_file_without_devices_migrates);
     RUN_TEST(test_v5_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_v4_file_is_still_refused);
+    RUN_TEST(test_v6_file_migrates_additively);
+    RUN_TEST(test_v6_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_v5_chain_stops_at_last_whole_step);
+    RUN_TEST(test_device_not_camera_never_overrides_mac_keyed_class);
     RUN_TEST(test_migration_sql_is_add_column_only);
     RUN_TEST(test_v5_karma_pnl_best_column_exists);
     RUN_TEST(test_v4_columns_exist);

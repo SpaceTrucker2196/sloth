@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42 and #56.
 
-**Last updated**: 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
+**Last updated**: 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
 
 ---
 
@@ -138,16 +138,45 @@ These are what make the file trustworthy rather than merely present.
 
 ## Schema v4 — 41 tables
 
-`meta` holds `schema_version`, currently **6** (the heading above is
-the v4 batch; v5 and v6 are below). `db_open()` refuses a file whose
-version differs from the running build — with one exception, the v5 →
-v6 step — and checks it *before* applying the rest of the schema so a
+`meta` holds `schema_version`, currently **7** (the heading above is
+the v4 batch; v5 to v7 are below). `db_open()` refuses a file whose
+version it has no migration chain from — today anything below v5 or
+above v7 — and checks it *before* applying the rest of the schema so a
 mismatch produces the version message rather than whatever SQL error
 the schema happens to hit first.
 
 **v5** (#90): `karma_candidates.pnl_best`. **v6** (#106 round 2):
 `devices` gains `device_class`, `camera_vendor`, `camera_model`,
-`setup_mode`, `cam_signals` — see [[camera-detection]].
+`setup_mode`, `cam_signals` — see [[camera-detection]]. **v7** (#155):
+`devices` gains `cam_score`, `cam_evidence` (`CAM_EV_*` mask),
+`cam_vetoes` (`CAM_VETO_*` mask), `cam_conflict`, `dhcp_prl` and
+`dhcp_vci` (the client's DHCP options 55 / 60, display-only), and
+`device_class` may now hold 3, `not-camera`.
+
+**The v6 → v7 migration.** Six `ALTER TABLE devices ADD COLUMN`
+statements with defaults (`db_schema_migrate_v6_sql()`) and the stamp,
+in one `BEGIN IMMEDIATE` transaction; no v6 value changes (a v6 row's
+`device_class` was 0..2 and stays so). Tested on a v6 file holding a
+camera row (`test_v6_file_migrates_additively`) and on one whose last
+ALTER fails, which stays v6 with none of the step's columns
+(`test_v6_migration_failure_leaves_file_unchanged`).
+
+**The chain.** `src/db.c` lists the steps (`g_steps[]`: from 5, from 6)
+and runs every one from the file's version up, each in its own
+transaction with its own stamp, so a v5 file opened by this build goes
+v5 → v6 → v7. A step that fails leaves the file at the last version it
+fully reached — a v5 file whose second step fails is a v6 file, never
+half of v7 (`test_v5_chain_stops_at_last_whole_step`) — and `db_open()`
+refuses it. A static check fails the build unless the steps run from
+`DB_MIGRATES_FROM` to `DB_SCHEMA_VERSION` without a gap, so a bump
+without its step does not compile.
+
+**Upsert and `not-camera`.** `not-camera` is a verdict against, not a
+higher "for", so the `devices` upsert never lets it override the class
+a row's MAC-keyed beacon bits imply (setup SSID 2, OUI 16): that history
+keeps its class and the row is written `cam_conflict` 1, as the live
+classifier would. For 0..2 the rule is the `MAX` it was. The other v7
+columns are the latest tick's.
 
 **The v5 → v6 migration.** The first migration `db_open()` performs, and
 deliberately the only kind it will: five `ALTER TABLE devices ADD
@@ -156,7 +185,7 @@ version stamp, in one `BEGIN IMMEDIATE` transaction. No existing value
 is rewritten, so a v5 forensic record reads the same afterwards; a
 statement that fails rolls the whole step back and the file stays v5
 (`tests/test_db.c :: test_v5_migration_failure_leaves_file_unchanged`).
-A file newer than v6 is refused; one older than v5 is refused until its
+A file newer than v7 is refused; one older than v5 is refused until its
 steps exist.
 
 **Migration path, by design** (owner ruling 2026-10-21, replacing the
@@ -170,8 +199,8 @@ beside it, never rewriting a recorded value in place. Each step is one
 `BEGIN IMMEDIATE` transaction, tested on a file built at the previous
 version, including the failure that leaves the file unchanged. Only a
 file from a newer build is refused. `src/db.c` carries
-an `#error` that fires when `DB_SCHEMA_VERSION` moves, so the next bump
-has to decide this rather than inherit a stale step.
+a static check that the step list ends at `DB_SCHEMA_VERSION`, so the
+next bump does not build until its step is written.
 
 **When to bump.** Adding a whole new table is safe without a bump —
 `CREATE TABLE IF NOT EXISTS` runs on every open, so an older file simply
@@ -207,7 +236,7 @@ Keyed by natural identity, bounded by the fixed arrays in `sloth.h`.
 
 | Table | Key | Notes |
 |---|---|---|
-| `devices` | `mac` | synthesised profile + risk signals; camera identity since v6 (`device_class`, `camera_vendor`, `camera_model`, `setup_mode`, `cam_signals` — sticky only for the MAC-keyed beacon bits 2 and 16: those OR, the class they imply and `setup_mode` only rise, and the vendor stays while they stand; the IP-joined bits, the class they alone gave and `camera_model` are the latest tick's, so a reused lease does not write a camera onto another host's MAC for good — see [[camera-detection]]). An IP-only camera record (no MAC) is not written |
+| `devices` | `mac` | synthesised profile + risk signals; camera identity since v6 (`device_class`, `camera_vendor`, `camera_model`, `setup_mode`, `cam_signals` — sticky only for the MAC-keyed beacon bits 2 and 16: those OR, the class they imply and `setup_mode` only rise, and the vendor stays while they stand; the IP-joined bits, the class they alone gave and `camera_model` are the latest tick's, so a reused lease does not write a camera onto another host's MAC for good — see [[camera-detection]]). An IP-only camera record (no MAC) is not written. Since v7 also `cam_score`, `cam_evidence`, `cam_vetoes`, `cam_conflict`, `dhcp_prl`, `dhcp_vci` (#155), the latest tick's; `device_class` 3 (`not-camera`) never overrides a MAC-keyed camera class |
 | `pnl_clients` / `pnl_ssids` | `mac` / `(mac, ssid)` | split so *"which devices remember network X"* is a join, not a scan of repeated JSON arrays — the deanonymisation question |
 | `probe_clients` | `mac` | unassociated 802.11 devices |
 | `beacon_aps` / `beacon_ap_ssids` | `bssid` / `(bssid, ssid)` | passive monitor inventory; the SSID child table is the KARMA signal and the multi-VAP topology record |
