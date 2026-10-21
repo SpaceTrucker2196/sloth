@@ -33,6 +33,26 @@ static int set_flags(int fd) {
         pthread_mutex_unlock(&(s)->mu);      \
     } while (0)
 
+int web_server_socket(int family, char *err, size_t errsz) {
+    int fd = socket(family, SOCK_STREAM, 0);
+    if (fd < 0) {
+        snprintf(err, errsz, "socket: %s", strerror(errno));
+        return -1;
+    }
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    /* [::] means IPv6 only. A dual-stack listener would make "which
+     * peers can reach this" depend on a sysctl, so a failure to set it
+     * is a failure to open, not a silent fallback to dual-stack. */
+    if (family == AF_INET6 &&
+        setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one)) < 0) {
+        snprintf(err, errsz, "IPV6_V6ONLY: %s", strerror(errno));
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
 int web_server_open(web_server_t *s, const web_config_t *cfg,
                     char *err, size_t errsz) {
     memset(s, 0, sizeof(*s));
@@ -61,17 +81,8 @@ int web_server_open(web_server_t *s, const web_config_t *cfg,
         sl = sizeof(*a4);
     }
 
-    int fd = socket(cfg->bind_family, SOCK_STREAM, 0);
-    if (fd < 0) {
-        snprintf(err, errsz, "socket: %s", strerror(errno));
-        return -1;
-    }
-    int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    /* [::] means IPv6 only. A dual-stack listener would make "which
-     * peers can reach this" depend on a sysctl. */
-    if (cfg->bind_family == AF_INET6)
-        setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one));
+    int fd = web_server_socket(cfg->bind_family, err, errsz);
+    if (fd < 0) return -1;
     if (bind(fd, (struct sockaddr *)&ss, sl) < 0 || listen(fd, 16) < 0 ||
         set_flags(fd) < 0) {
         snprintf(err, errsz, "bind: %s", strerror(errno));
@@ -139,7 +150,19 @@ static void accept_ready(web_server_t *s) {
         struct sockaddr_storage peer;
         socklen_t pl = sizeof(peer);
         int fd = accept(s->lfd, (struct sockaddr *)&peer, &pl);
-        if (fd < 0) return;      /* EAGAIN, or a peer that already left */
+        if (fd < 0) {
+            /* Out of descriptors or kernel memory: the peer stays in the
+             * backlog and the listener stays readable, so polling it
+             * again at once would spin. Stop polling it for a moment.
+             * Anything else (EAGAIN, a peer that already left) just ends
+             * this pass. */
+            if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS ||
+                errno == ENOMEM) {
+                s->accept_resume_ms = now_ms() + WEB_ACCEPT_BACKOFF_MS;
+                STAT_INC(s, accept_paused);
+            }
+            return;
+        }
 
         /* The allow list is applied before anything else touches the
          * connection: no read, no write, no slot. */
@@ -239,7 +262,12 @@ int web_server_run(web_server_t *s) {
         long long now = now_ms(), next = -1;
 
         pfd[np].fd = s->wake[0]; pfd[np].events = POLLIN; idx[np++] = -1;
-        pfd[np].fd = s->lfd;     pfd[np].events = POLLIN; idx[np++] = -2;
+        /* A negative fd is skipped by poll(): the listener sits out an
+         * accept back-off while existing connections carry on. */
+        int paused = s->accept_resume_ms > now;
+        pfd[np].fd = paused ? -1 : s->lfd;
+        pfd[np].events = POLLIN; idx[np++] = -2;
+        if (paused) next = s->accept_resume_ms;
         for (int i = 0; i < WEB_MAX_CONNS; i++) {
             web_conn_t *c = &s->conns[i];
             if (c->fd < 0) continue;

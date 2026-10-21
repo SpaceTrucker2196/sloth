@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
@@ -129,6 +130,21 @@ static size_t read_all(int fd, char *out, size_t cap) {
     return n;
 }
 
+/* read_all(), also reporting how the stream ended: 0 for an orderly
+ * EOF (the peer's FIN), otherwise the errno of the failing recv(). */
+static size_t read_all_end(int fd, char *out, size_t cap, int *end) {
+    size_t n = 0;
+    *end = 0;
+    while (n + 1 < cap) {
+        ssize_t r = recv(fd, out + n, cap - 1 - n, 0);
+        if (r == 0) break;
+        if (r < 0) { *end = errno; break; }
+        n += (size_t)r;
+    }
+    out[n] = '\0';
+    return n;
+}
+
 /* One request on a fresh connection; the response in out. */
 static size_t exchange(int family, uint16_t port, const char *req,
                        size_t reqlen, char *out, size_t cap) {
@@ -225,8 +241,6 @@ static void test_write_methods_405_over_socket(void) {
     static const char *const methods[] = { "POST", "PUT", "DELETE", "PATCH" };
     for (size_t i = 0; i < 4; i++) {
         char req[256], out[4096];
-        /* With a body nobody reads: the lingering close is what keeps
-         * the unread bytes from turning the answer into a reset. */
         int rl = snprintf(req, sizeof(req),
             "%s /api/query HTTP/1.1\r\nHost: x\r\nContent-Length: 11\r\n"
             "\r\n{\"sql\":\"x\"}", methods[i]);
@@ -237,6 +251,144 @@ static void test_write_methods_405_over_socket(void) {
     web_stats_t st;
     stop(&r, &st);
     WT_EQ(st.status_405, 4);
+}
+
+/* A body far larger than one recv() is still unread when the answer
+ * goes out. Closing then would make the kernel send RST; the half-close
+ * and drain end the connection with a FIN instead.
+ *
+ * What this does NOT show is a response lost to the reset. On Linux the
+ * response is already in the client's receive queue when the RST lands,
+ * and recv() hands queued data over before reporting ECONNRESET, so the
+ * 405 arrives either way (seen: identical with the drain removed). The
+ * loss is a property of other stacks and of real links where the RST
+ * can overtake retransmitted data, and loopback cannot reproduce it.
+ * The assertion is therefore on how the stream ends: seen red
+ * (ECONNRESET instead of EOF) with conn_write() closing straight after
+ * the send. */
+static void test_unread_body_ends_with_fin_not_reset(void) {
+    web_config_t c;
+    base_cfg(&c, AF_INET);
+    running_t r;
+    WT_EQ(start(&r, &c), 0);
+    if (!r.s) return;
+    enum { BODY = 64 * 1024 };
+    static const char head[] =
+        "POST /api/query HTTP/1.1\r\nHost: x\r\nContent-Length: 65536\r\n\r\n";
+    size_t rl = sizeof(head) - 1 + BODY;
+    char *req = malloc(rl);
+    memcpy(req, head, sizeof(head) - 1);
+    memset(req + sizeof(head) - 1, 'b', BODY);
+
+    int fd = dial(AF_INET, web_server_port(r.s));
+    WT_ASSERT(fd >= 0);
+    if (fd >= 0) {
+        send_all(fd, req, rl);
+        char out[4096];
+        int end = -1;
+        read_all_end(fd, out, sizeof(out), &end);
+        close(fd);
+        WT_HAS(out, "HTTP/1.1 405 Method Not Allowed\r\n");
+        WT_EQ(end, 0);
+    }
+    free(req);
+    web_stats_t st;
+    stop(&r, &st);
+    WT_EQ(st.status_405, 1);
+}
+
+/* [::] must not quietly become dual-stack on a host whose
+ * net.ipv6.bindv6only is 0 (the Linux default). Checked on the unbound
+ * socket: binding [::] here would open a port on every interface, and
+ * binding [::1] proves nothing because Linux sets V6ONLY itself on a
+ * bind to a specific v6 address (seen: the open-and-read-back version
+ * of this test stayed green with the setsockopt removed). This one was
+ * seen red (0) with the setsockopt removed. */
+static void test_v6_listener_is_v6only(void) {
+    char err[128];
+    int fd = web_server_socket(AF_INET6, err, sizeof(err));
+    WT_ASSERT(fd >= 0);
+    if (fd < 0) return;
+    int v = -1;
+    socklen_t vl = sizeof(v);
+    WT_EQ(getsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v, &vl), 0);
+    WT_EQ(v, 1);
+    close(fd);
+}
+
+static double cpu_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+}
+
+/* accept() failing with EMFILE leaves the peer in the backlog and the
+ * listener readable. The server must back off rather than spin, and must
+ * serve the waiting peer once descriptors free up. The process's own
+ * descriptor table is filled (under a lowered soft limit) after the
+ * client has dialled, so the server thread's accept() is the call that
+ * fails. Seen red (~300 ms of CPU in a 300 ms window) with the
+ * back-off in accept_ready() removed. */
+static void test_accept_emfile_backs_off(void) {
+    web_config_t c;
+    base_cfg(&c, AF_INET);
+    running_t r;
+    WT_EQ(start(&r, &c), 0);
+    if (!r.s) return;
+    uint16_t port = web_server_port(r.s);
+
+    struct rlimit old;
+    WT_EQ(getrlimit(RLIMIT_NOFILE, &old), 0);
+    int probe = dup(0);
+    WT_ASSERT(probe >= 0);
+    if (probe < 0) { web_stats_t st; stop(&r, &st); return; }
+    close(probe);
+    struct rlimit low = old;
+    low.rlim_cur = (rlim_t)probe + 64;
+    if (low.rlim_cur > old.rlim_cur) low.rlim_cur = old.rlim_cur;
+    WT_EQ(setrlimit(RLIMIT_NOFILE, &low), 0);
+
+    enum { MAXFILL = 4096 };
+    static int fill[MAXFILL];
+    int nfill = 0;
+    while (nfill < MAXFILL) {
+        int d = dup(0);
+        if (d < 0) break;
+        fill[nfill++] = d;
+    }
+    WT_ASSERT(nfill > 0);
+    if (nfill > 0) close(fill[--nfill]);      /* exactly one slot, for the client */
+    int fd = dial(AF_INET, port);
+    WT_ASSERT(fd >= 0);
+    WT_ASSERT(dup(0) < 0);                    /* the table is full */
+
+    double c0 = cpu_ms();
+    struct timespec ts = { 0, 300 * 1000 * 1000 };
+    nanosleep(&ts, NULL);
+    double used = cpu_ms() - c0;
+
+    web_stats_t mid;
+    web_server_stats(r.s, &mid);
+    while (nfill > 0) close(fill[--nfill]);
+    WT_EQ(setrlimit(RLIMIT_NOFILE, &old), 0);
+
+    WT_ASSERT(mid.accept_paused >= 1);
+    WT_EQ(mid.accepted, 0);
+    if (used >= 100.0)
+        fprintf(stderr, "    accept back-off: %.0f ms CPU in 300 ms\n", used);
+    WT_ASSERT(used < 100.0);
+
+    if (fd >= 0) {
+        static const char get[] = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
+        send_all(fd, get, sizeof(get) - 1);
+        char out[4096];
+        read_all(fd, out, sizeof(out));
+        close(fd);
+        WT_HAS(out, "HTTP/1.1 404 Not Found\r\n");
+    }
+    web_stats_t st;
+    stop(&r, &st);
+    WT_EQ(st.accepted, 1);
 }
 
 static void test_oversize_header_431_over_socket(void) {
@@ -423,6 +575,9 @@ void run_server_tests(void) {
     WT_RUN(test_open_refuses_remote_bind);
     WT_RUN(test_get_head_404_over_socket);
     WT_RUN(test_write_methods_405_over_socket);
+    WT_RUN(test_unread_body_ends_with_fin_not_reset);
+    WT_RUN(test_v6_listener_is_v6only);
+    WT_RUN(test_accept_emfile_backs_off);
     WT_RUN(test_oversize_header_431_over_socket);
     WT_RUN(test_refused_peer_v4);
     WT_RUN(test_refused_peer_v6);

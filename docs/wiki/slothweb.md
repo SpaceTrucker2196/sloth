@@ -2,7 +2,7 @@
 
 The browser dashboard's server, a separate binary under `web/`. This
 page tracks what has shipped; the design is
-[`docs/web-ui-spec.md`](../web-ui-spec.md), whose rulings table
+[`docs/web-ui-spec.md`](../../docs/web-ui-spec.md), whose rulings table
 overrides its body.
 
 **Summary**: slothweb W0 (#157) is a listener with an allowed-peer list
@@ -94,15 +94,22 @@ protect. W0 is that slice and nothing else.
 Responses carry `Connection: close`, `Cache-Control: no-store`,
 `X-Content-Type-Options: nosniff` and `Content-Security-Policy:
 default-src 'none'`. A request body is never read; after the response
-the server half-closes and drains for up to 1 s so unread bytes do not
-turn the answer into a reset.
+the server half-closes and drains for up to 1 s, so unread bytes end
+the connection with a FIN rather than a reset. That is defensive: on
+some stacks, and on real links, a reset can discard a response the
+client has not read yet. Linux loopback cannot show that loss (the
+response is queued before the RST arrives and is still delivered), so
+the test asserts only the FIN, not a rescued response.
 
 ### Timeouts and limits
 
 The header budget is absolute from `accept()`, not reset per byte, so a
 slow-trickle client is cut off on the same schedule as an idle one. The
 response has its own budget. 32 connections are held at once; an
-admitted peer beyond that is closed and counted as busy.
+admitted peer beyond that is closed and counted as busy. If `accept()`
+runs out of descriptors or kernel memory, the listener is left unpolled
+for 100 ms instead of spinning on a backlog it cannot drain, and the
+back-off is counted.
 
 ### Strict
 

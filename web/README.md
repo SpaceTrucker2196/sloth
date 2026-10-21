@@ -61,13 +61,17 @@ on a usage error or a policy refusal.
    trickling one byte at a time is cut off on the same schedule as one
    that sends nothing. The response has its own 10 s budget. After it, a
    client may keep sending (a body nobody reads) for 1 s before the
-   socket closes; the half-close and drain stop those unread bytes from
-   turning the response into a reset.
+   socket closes. The half-close and drain make those unread bytes end the
+   connection with a FIN instead of a reset; this is defensive (some
+   stacks discard an unread response on reset) and the loopback tests
+   check the FIN, not a rescued response, because Linux delivers the
+   queued response either way.
 5. At most 32 connections are held. A 33rd admitted peer is closed and
-   counted as busy.
+   counted as busy. If `accept()` runs out of descriptors or memory, the
+   listener is left unpolled for 100 ms rather than spinning.
 
 On shutdown slothweb prints the counters to stderr: admitted, refused at
-accept, busy, served, timed out.
+accept, busy, served, timed out, accept back-offs.
 
 ## What it never does
 

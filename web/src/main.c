@@ -48,8 +48,9 @@ int main(int argc, char **argv) {
     web_stats_t st;
     web_server_stats(&g_srv, &st);
     fprintf(stderr, "slothweb: stopped: %lu admitted, %lu refused at accept, "
-                    "%lu busy, %lu served, %lu timed out\n",
-            st.accepted, st.refused, st.busy, st.served, st.timeouts);
+                    "%lu busy, %lu served, %lu timed out, %lu accept back-offs\n",
+            st.accepted, st.refused, st.busy, st.served, st.timeouts,
+            st.accept_paused);
     web_server_close(&g_srv);
     return rc == 0 ? 0 : 1;
 }

@@ -15,6 +15,9 @@
 #include "web_http.h"
 
 #define WEB_MAX_CONNS 32
+/* How long the listener is left unpolled after accept() runs out of
+ * descriptors or memory. */
+#define WEB_ACCEPT_BACKOFF_MS 100
 
 typedef struct {
     unsigned long accepted;   /* admitted by the allow list */
@@ -22,6 +25,7 @@ typedef struct {
     unsigned long busy;       /* admitted but closed: every slot in use */
     unsigned long served;     /* a complete response was written */
     unsigned long timeouts;   /* header or write budget exhausted */
+    unsigned long accept_paused; /* accept() out of fds/memory: back-off */
     unsigned long status_404, status_405, status_431, status_400;
 } web_stats_t;
 
@@ -39,11 +43,19 @@ typedef struct {
     int             lfd;
     int             wake[2];
     uint16_t        port;     /* the bound port, after an ephemeral bind */
+    long long       accept_resume_ms; /* listener unpolled until then */
     web_config_t    cfg;
     web_conn_t      conns[WEB_MAX_CONNS];
     pthread_mutex_t mu;       /* guards stats only */
     web_stats_t     stats;
 } web_server_t;
+
+/* The unbound listening socket web_server_open() uses: SO_REUSEADDR,
+ * and IPV6_V6ONLY for AF_INET6 (failing if that cannot be set). Its own
+ * entry point so the option can be checked without binding [::], which
+ * Linux would otherwise only reveal on a wildcard bind: binding a
+ * specific v6 address such as ::1 sets V6ONLY by itself. fd or -1. */
+int      web_server_socket(int family, char *err, size_t errsz);
 
 /* Applies web_config_check() again, so a caller that skips the CLI
  * still cannot bind a non-loopback address without allow_remote; the
