@@ -246,3 +246,4 @@
 | 64aa34c | 2026-10-21T02:50:45Z | claude-opus-5-5 | 18 | 4197 | 4557039 | 743776 | 6.9456 | Refuse camera joins an IP cannot stand behind (#106) |
 | 14222f6 | 2026-10-21T03:04:29Z | claude-opus-5-5 | 26 | 9742 | 10009605 | 14693 | 2.3144 | Make a migration path the schema rule, by design (owner ruling 2026-10-21) |
 | f5e1198 | 2026-10-21T04:49:27Z | claude-opus-5-5 | 56 | 28761 | 19425859 | 871998 | 11.4366 | #155 camera-vs-router, #144 slice 2 HCI monitor, #152 THREAT_DOMAIN cut names |
+| 56f516e | 2026-10-21T06:54:13Z | claude-opus-5-5 | 32 | 13028 | 11162892 | 861640 | 9.3864 | #144 slice 3: Ubertooth via --bt-capture |
