@@ -141,5 +141,6 @@ int reg_obs_power(const beacon_ap_t *ap, reg_power_obs_t *out) {
     out->fspl_1m_db       = reg_obs_fspl_1m_db(freq);
     out->apparent_loss_db = out->claimed_dbm - out->heard_dbm;
     out->excess_db        = out->fspl_1m_db - out->apparent_loss_db;
+    out->beyond_margin    = out->excess_db > REG_OBS_EXCESS_MARGIN_DB;
     return 1;
 }

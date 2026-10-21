@@ -4346,3 +4346,15 @@ block with the observed-vs-claimed power delta, shown as an observation
 with its free-space / 0 dBi assumption stated and never as an alert.
 New change-only JSONL record `wifi_regulatory` ([[jsonl-schema]]).
 Documented in [[wifi-sigint]] and `docs/views/beacons.md`.
+
+## 2026-10-20 — #101 slice B review fixes
+
+The `REG` column is dropped below 136 columns instead of forcing its
+4-cell floor and wrapping rows that fit without it. The power delta is
+highlighted only past a 10 dB margin (the ±5 dB TPC Report tolerance of
+802.11-2020 §9.4.2.16 plus typical receive gain); a smaller excess is
+printed uncoloured. The JSONL change cache is now 8-way set-associative
+over 4096 slots, so two live keys sharing a slot no longer evict each
+other and re-emit every tick ([[jsonl-schema]] is unchanged: same
+records, fewer duplicates). Documented in [[wifi-sigint]] and
+`docs/views/beacons.md`.

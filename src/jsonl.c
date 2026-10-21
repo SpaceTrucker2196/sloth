@@ -54,11 +54,23 @@ static int any_sink(void) {
  * long-lived idle entities still refresh periodically and windowed
  * consumers ("who was here 2–4 AM?") keep working.
  *
- * The cache is a pure optimisation: a hash collision can only cause an
- * extra (harmless) emit, never a wrongful suppression, because a slot is
- * consulted only when its stored identity matches exactly. */
+ * The cache is a pure optimisation: a collision can only cause an extra
+ * emit, never a wrongful suppression, because a slot is consulted only
+ * when its stored identity matches exactly. An extra emit is harmless
+ * once; it is not harmless every tick. A direct-mapped table made two
+ * live keys sharing a slot evict each other on every poll and both
+ * re-emit forever (#101 review: 256 random BSSIDs gave ~64 extra lines
+ * a tick). So the table is set-associative: a key hashes to a set of
+ * JSONL_DEDUP_WAYS slots, a miss takes a free way or else the way least
+ * recently looked up, and the table is sized well past every keyed
+ * emitter combined (MAX_PNL_CLIENTS + MAX_SEQNUM_CLIENTS +
+ * MAX_BEACON_APS + sensor_health = 641 keys over 4096 slots), so a set
+ * holding more live keys than it has ways is not a load the sensor
+ * reaches in practice. */
 #define JSONL_HEARTBEAT_SECS 300
-#define JSONL_DEDUP_SLOTS    1024
+#define JSONL_DEDUP_WAYS     8
+#define JSONL_DEDUP_SETS     512
+#define JSONL_DEDUP_SLOTS    (JSONL_DEDUP_WAYS * JSONL_DEDUP_SETS)
 #define JSONL_DEDUP_KEYLEN   16
 #define FNV64_OFFSET         0xcbf29ce484222325ULL
 #define FNV64_PRIME          0x100000001b3ULL
@@ -66,6 +78,7 @@ static int any_sink(void) {
 typedef struct {
     uint64_t sig;
     time_t   emit_ts;
+    time_t   seen_ts;    /* last lookup: the eviction order */
     uint8_t  key[JSONL_DEDUP_KEYLEN];
     uint8_t  keylen;
     uint8_t  kind;
@@ -96,15 +109,28 @@ static int jsonl_changed(uint8_t kind, const void *key, size_t keylen,
                          uint64_t sig, time_t now) {
     if (keylen > JSONL_DEDUP_KEYLEN) keylen = JSONL_DEDUP_KEYLEN;
     uint64_t h = fnv1a(key, keylen, fnv1a(&kind, 1, FNV64_OFFSET));
-    jsonl_dedup_slot_t *sl = &g_dedup[h % JSONL_DEDUP_SLOTS];
-    int match = sl->used && sl->kind == kind && sl->keylen == (uint8_t)keylen
-                && memcmp(sl->key, key, keylen) == 0;
-    if (match && sl->sig == sig && (now - sl->emit_ts) < JSONL_HEARTBEAT_SECS)
-        return 0;
-    sl->used   = 1;
-    sl->kind   = kind;
-    sl->keylen = (uint8_t)keylen;
-    memcpy(sl->key, key, keylen);
+    jsonl_dedup_slot_t *set =
+        &g_dedup[(size_t)(h % JSONL_DEDUP_SETS) * JSONL_DEDUP_WAYS];
+    jsonl_dedup_slot_t *sl = NULL, *victim = NULL;
+    for (int w = 0; w < JSONL_DEDUP_WAYS; w++) {
+        jsonl_dedup_slot_t *c = &set[w];
+        if (c->used && c->kind == kind && c->keylen == (uint8_t)keylen
+            && memcmp(c->key, key, keylen) == 0) { sl = c; break; }
+        if (!victim || (victim->used && (!c->used || c->seen_ts < victim->seen_ts)))
+            victim = c;
+    }
+    if (sl) {
+        sl->seen_ts = now;
+        if (sl->sig == sig && (now - sl->emit_ts) < JSONL_HEARTBEAT_SECS)
+            return 0;
+    } else {
+        sl = victim;
+        sl->used   = 1;
+        sl->kind   = kind;
+        sl->keylen = (uint8_t)keylen;
+        memcpy(sl->key, key, keylen);
+        sl->seen_ts = now;
+    }
     sl->sig     = sig;
     sl->emit_ts = now;
     return 1;

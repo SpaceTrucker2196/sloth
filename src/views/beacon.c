@@ -264,7 +264,10 @@ static void draw_detail_stack_measures(const beacon_ap_t *ap) {
  * still shows a country and its environment ("US/I") and a ceiling past
  * which the tokens run out. REG_COL_FIXED is the rest of the row: the
  * leading space, the eleven columns before REG with their separators,
- * REG's own separator, and "  Last". */
+ * REG's own separator, and "  Last". Below the floor the column is not
+ * drawn at all (width 0, separator included): forcing it in would wrap
+ * a row that fits without it, and the detail screen carries the same
+ * claims in full. */
 #define REG_COL_MIN    4
 #define REG_COL_MAX   28
 #define REG_COL_ANSI  14
@@ -276,7 +279,7 @@ static int reg_column_width(void) {
 #else
     int w = REG_COL_ANSI;
 #endif
-    if (w < REG_COL_MIN) w = REG_COL_MIN;
+    if (w < REG_COL_MIN) return 0;
     if (w > REG_COL_MAX) w = REG_COL_MAX;
     return w;
 }
@@ -366,18 +369,22 @@ static void draw_detail_regulatory(const beacon_ap_t *ap) {
     } else {
         /* One row, the first value of each entry: the 20 MHz figure for
          * EIRP, the first subchannel for PSD. Entries are added while
-         * they fit the terminal, because a wrapped row pushes the back
-         * hint off a screen that does not scroll; the full lists are in
+         * the whole row fits — the 15-cell "  TPE:         " prefix, the
+         * entries, and whichever "; +N more" and "; more dropped" tails
+         * that choice leaves — because a wrapped row pushes the back
+         * hint off a screen that does not scroll. The full lists are in
          * the wifi_regulatory JSONL record. */
 #ifdef WITH_NCURSES
-        size_t room = COLS > 16 + 14 ? (size_t)(COLS - 16 - 14) : 1;
+        size_t room = COLS > 1 + 15 + 24 ? (size_t)(COLS - 1 - 15) : 24;
 #else
         size_t room = 120;
 #endif
+        const size_t dropped_len = g->tpe_truncated ? strlen("; more dropped") : 0;
         char line[256] = "";
         size_t used = 0;
         int shown = 0;
-        for (int i = 0; i < g->tpe_count && i < REG_6G_MAX_TPE; i++) {
+        int count = g->tpe_count < REG_6G_MAX_TPE ? g->tpe_count : REG_6G_MAX_TPE;
+        for (int i = 0; i < count; i++) {
             const reg_tpe_t *e = &g->tpe[i];
             char ent[64];
             if (e->n_values)
@@ -391,7 +398,11 @@ static void draw_detail_regulatory(const beacon_ap_t *ap) {
                          reg_tpe_interp_name(e->interp),
                          e->category == REG_TPE_CAT_SUBORDINATE ? "/sub" : "");
             size_t el = strlen(ent);
-            if (used + el > room || used + el >= sizeof(line)) break;
+            int left = g->tpe_count - (i + 1);
+            char more[24] = "";
+            if (left > 0) snprintf(more, sizeof(more), "; +%d more", left);
+            if (used + el + strlen(more) + dropped_len > room ||
+                used + el >= sizeof(line)) break;
             memcpy(line + used, ent, el + 1);
             used += el;
             shown++;
@@ -407,7 +418,9 @@ static void draw_detail_regulatory(const beacon_ap_t *ap) {
      * the received level depends on a distance and antenna gains the
      * sensor does not know, so the line states the one assumption it
      * makes — free-space loss at 1 m — and what a positive excess would
-     * mean under it. */
+     * mean under it. Only an excess past REG_OBS_EXCESS_MARGIN_DB is
+     * highlighted; below that the TPC tolerance and receive gain alone
+     * can produce it. */
     reg_power_obs_t o;
     tui_dim(); TPRINT("  Power delta: ");
     if (!reg_obs_power(ap, &o)) {
@@ -420,10 +433,15 @@ static void draw_detail_regulatory(const beacon_ap_t *ap) {
                o.src == REG_PWR_SRC_TPC ? "TPC Report" : "TPE local EIRP",
                o.claimed_dbm, o.apparent_loss_db);
         tui_dim(); TPRINT("               ");
-        if (o.excess_db > 0) {
+        if (o.beyond_margin) {
             tui_heat(0.7);
             TPRINT("%.1f dB stronger than the claim allows at 1 m",
                    o.excess_db);
+        } else if (o.excess_db > 0) {
+            /* Inside the stated margin: the number, not a highlight. */
+            tui_normal();
+            TPRINT("%.1f dB over the 1 m figure, within the %.0f dB margin",
+                   o.excess_db, REG_OBS_EXCESS_MARGIN_DB);
         } else {
             tui_normal();
             TPRINT("consistent with the claim at 1 m or more");
@@ -755,15 +773,17 @@ void view_beacon_draw(const sloth_state_t *s) {
     reg_rule[reg_w] = '\0';
 
     tui_dim();
-    TPRINT(" %-22s  %-17s  %4s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s  %-*s  %4s\n",
+    TPRINT(" %-22s  %-17s  %4s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s",
            "SSID", "BSSID", "Sig", "Ch", "Enc",
-           "Pairwise", "posture", "AKM", "WPS", "Vendor", "PHY",
-           reg_w, "REG", "Last");
-    TPRINT(" %-22s  %-17s  %4s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s  %-*s  %4s\n",
+           "Pairwise", "posture", "AKM", "WPS", "Vendor", "PHY");
+    if (reg_w) TPRINT("  %-*s", reg_w, "REG");
+    TPRINT("  %4s\n", "Last");
+    TPRINT(" %-22s  %-17s  %4s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s",
            "----------------------", "-----------------",
            "----", "-------", "-----", "---------", "--------",
-           "----------", "---", "---------", "--------", reg_w, reg_rule,
-           "----");
+           "----------", "---", "---------", "--------");
+    if (reg_w) TPRINT("  %-*s", reg_w, reg_rule);
+    TPRINT("  %4s\n", "----");
     tui_normal();
 
     if (s->beacon_count == 0) {
@@ -882,10 +902,11 @@ void view_beacon_draw(const sloth_state_t *s) {
 
         if (row == s->beacon_sel) {
             tui_sel();
-            TPRINT(" %-22.22s  %-17.17s  %4s  %-7s  %-5.5s  %-9.9s  %-8s  %-10.10s  %-3s  %-9.9s  %-8.8s  %-*s  %s\n",
+            TPRINT(" %-22.22s  %-17.17s  %4s  %-7s  %-5.5s  %-9.9s  %-8s  %-10.10s  %-3s  %-9.9s  %-8.8s",
                    ssid, bssid_str(ap->bssid), sig_buf, ch_buf,
-                   ap->enc, pw, mfp_s, akm, wps_s, vend, phy_s,
-                   reg_w, reg_buf, age_buf);
+                   ap->enc, pw, mfp_s, akm, wps_s, vend, phy_s);
+            if (reg_w) TPRINT("  %-*s", reg_w, reg_buf);
+            TPRINT("  %s\n", age_buf);
             tui_reset();
         } else {
             /* dim hidden SSIDs */
@@ -956,10 +977,12 @@ void view_beacon_draw(const sloth_state_t *s) {
              * Dim when nothing was ever parsed; heat only for a
              * malformed element, the one token that is itself a
              * signal. */
-            if (!reg_obs_any(&ap->reg, &ap->reg6g)) tui_dim();
-            else if (strstr(reg_buf, "MAL"))         tui_heat(0.7);
-            else                                     tui_normal();
-            TPRINT("  %-*s", reg_w, reg_buf);
+            if (reg_w) {
+                if (!reg_obs_any(&ap->reg, &ap->reg6g)) tui_dim();
+                else if (strstr(reg_buf, "MAL"))         tui_heat(0.7);
+                else                                     tui_normal();
+                TPRINT("  %-*s", reg_w, reg_buf);
+            }
 
             tui_dim();
             TPRINT("  %s\n", age_buf);

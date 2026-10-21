@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <limits.h>
 #include <string.h>
 #include "runner.h"
@@ -172,6 +173,31 @@ static void test_he_op_shorter_than_fixed_part_is_malformed(void) {
     he_op_body(b, 1, 0, 0, 0);
     for (int len = 1; len < 7; len++)
         ASSERT_EQ(reg_6g_element(&g, 255, b, len), 0);
+    ASSERT_EQ(g.malformed_he6, 6);
+    ASSERT_EQ((int)g.he6_present, 0);
+
+    /* The same lengths with B17 clear. The 6 GHz walk's own bound cannot
+     * reach these — a non-6 GHz body returns before it — so only the
+     * fixed-part guard counts them. Each body is copied to a heap block
+     * of exactly its length, so a guard weakened far enough to read
+     * Parameters past the end is an ASan failure rather than a read of
+     * the test's spare stack. Seen to fail with the guard at `len < 4`
+     * (3 malformed, not 6). */
+    int full = he_op_body(b, 0, 0, 0, 0);
+    ASSERT_EQ(full, 7);
+    reg_6g_reset(&g);
+    for (int len = 1; len < 7; len++) {
+        uint8_t *h = malloc((size_t)len);
+        ASSERT(h != NULL);
+        if (!h) continue;
+        memcpy(h, b, (size_t)len);
+        ASSERT_EQ(reg_6g_element(&g, 255, h, len), 0);
+        free(h);
+    }
+    ASSERT_EQ(g.malformed_he6, 6);
+    /* The whole fixed part with B17 clear is a valid non-6 GHz element:
+     * no claim, and nothing malformed. */
+    ASSERT_EQ(reg_6g_element(&g, 255, b, full), 0);
     ASSERT_EQ(g.malformed_he6, 6);
     ASSERT_EQ((int)g.he6_present, 0);
 }
@@ -373,6 +399,30 @@ static void test_merge_is_per_element_and_per_pair(void) {
     ASSERT_EQ((int)dst.he6_reg_info, 0);
 }
 
+/* A frame that itself dropped TPE pairs passes the fact on. Merged into
+ * an empty record its eight kept pairs fit without overflowing, so only
+ * the explicit carry sets the flag there — the case a retained record
+ * would otherwise lose. A later clean frame does not clear it. Seen to
+ * fail with the `src->tpe_truncated` carry removed from the merge. */
+static void test_merge_carries_tpe_truncation(void) {
+    reg_6g_t f; reg_6g_reset(&f);
+    for (int k = 0; k < 12; k++) {
+        uint8_t e[2] = { TPI(0, k % 8, k / 8), (uint8_t)k };
+        reg_6g_element(&f, 195, e, 2);
+    }
+    ASSERT_EQ((int)f.tpe_truncated, 1);
+    reg_6g_t dst; reg_6g_reset(&dst);
+    reg_6g_merge(&dst, &f);
+    ASSERT_EQ((int)dst.tpe_count, REG_6G_MAX_TPE);
+    ASSERT_EQ((int)dst.tpe_truncated, 1);
+
+    reg_6g_t clean; reg_6g_reset(&clean);
+    const uint8_t one[] = { TPI(0, 0, 0), 46 };
+    reg_6g_element(&clean, 195, one, 2);
+    reg_6g_merge(&dst, &clean);
+    ASSERT_EQ((int)dst.tpe_truncated, 1);
+}
+
 static void test_merge_malformed_counts_accumulate_and_saturate(void) {
     reg_6g_t dst; reg_6g_reset(&dst);
     reg_6g_t f; reg_6g_reset(&f);
@@ -500,6 +550,7 @@ void run_reg_6g_tests(void) {
 
     TEST_SUITE("6 GHz regulatory retention (#101 slice B)");
     RUN_TEST(test_merge_is_per_element_and_per_pair);
+    RUN_TEST(test_merge_carries_tpe_truncation);
     RUN_TEST(test_merge_malformed_counts_accumulate_and_saturate);
     RUN_TEST(test_six_ghz_claims_reach_the_unified_parser);
     RUN_TEST(test_no_six_ghz_elements_leave_the_record_absent);

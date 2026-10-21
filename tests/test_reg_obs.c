@@ -198,6 +198,24 @@ static void test_power_stronger_than_claim_allows(void) {
     reg_power_obs_t o;
     ASSERT_EQ(reg_obs_power(ap, &o), 1);
     ASSERT_NEAR(o.excess_db, 26.74, 0.01);
+    ASSERT_EQ(o.beyond_margin, 1);
+}
+
+/* A positive excess inside the stated margin is not "beyond" it: the
+ * ±5 dB TPC tolerance and a few dBi of receive gain produce that much
+ * on their own. 46.74 - 40 = 6.74 dB over, under the 10 dB margin; the
+ * margin itself is not beyond (strictly greater). Seen to fail with
+ * beyond_margin set on excess_db > 0. */
+static void test_power_small_excess_is_within_margin(void) {
+    beacon_ap_t *ap = seed(0);
+    ap->reg.tpc_present = 1; ap->reg.tpc_tx_power_dbm = 0;
+    reg_power_obs_t o;
+    ASSERT_EQ(reg_obs_power(ap, &o), 1);
+    ASSERT_NEAR(o.excess_db, 6.74, 0.01);
+    ASSERT_EQ(o.beyond_margin, 0);
+    ap->signal_dbm = -36;              /* 10.74 dB over */
+    ASSERT_EQ(reg_obs_power(ap, &o), 1);
+    ASSERT_EQ(o.beyond_margin, 1);
 }
 
 /* With no TPC Report the default-category local EIRP TPE is the claim;
@@ -268,6 +286,18 @@ static void restore_screen(void) {
     tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
 }
 
+/* The AP's list row ends with its age ("0s" at the pinned clock) on the
+ * same screen row as its SSID — i.e. the row did not wrap. */
+static int list_row_on_one_line(void) {
+    char line[512];
+    for (int y = 0; y < tui_test_rows(); y++) {
+        int n = tui_test_line(y, line, sizeof(line));
+        if (n < 0 || !strstr(line, "reg-test")) continue;
+        return n >= 3 && strcmp(line + n - 3, " 0s") == 0;
+    }
+    return 0;
+}
+
 static void test_list_reg_column_flexes_with_width(void) {
     beacon_ap_t *ap = seed(0);
     set_country(ap, "US", REG_ENV_OUTDOOR);
@@ -277,15 +307,35 @@ static void test_list_reg_column_flexes_with_width(void) {
     draw_at(40, 220);
     ASSERT_SCREEN_HAS("REG");
     ASSERT_SCREEN_HAS("US/O TPC17 PC3");
+    ASSERT(list_row_on_one_line());
 
     /* 145 columns leave 145 - 132 = 13 for REG: room for two tokens. */
     draw_at(40, 145);
     ASSERT_SCREEN_HAS("US/O TPC17");
     ASSERT_SCREEN_LACKS("PC3");
+    ASSERT(list_row_on_one_line());
 
-    /* At the 100-column minimum the floor still shows the country. */
-    draw_at(40, 100);
+    /* 136 is the narrowest that fits the 4-cell floor on one line. */
+    draw_at(40, 136);
     ASSERT_SCREEN_HAS("US/O");
+    ASSERT(list_row_on_one_line());
+
+    /* Below it the column is dropped, not forced in: rows that fit
+     * without REG (129-135 columns) must not start wrapping because of
+     * it. Seen to fail with the floor clamped up (REG drawn at 4 cells)
+     * instead of dropped. */
+    draw_at(40, 135);
+    ASSERT_SCREEN_LACKS("US/O");
+    ASSERT_SCREEN_LACKS("REG");
+    ASSERT(list_row_on_one_line());
+    draw_at(40, 130);
+    ASSERT_SCREEN_LACKS("US/O");
+    ASSERT(list_row_on_one_line());
+
+    /* At the 100-column minimum rows wrap with or without REG; it is
+     * not drawn. */
+    draw_at(40, 100);
+    ASSERT_SCREEN_LACKS("US/O");
     ASSERT_SCREEN_LACKS("TPC17");
     restore_screen();
 }
@@ -339,6 +389,12 @@ static void test_detail_power_consistent_and_nothing_to_compare(void) {
     draw_at(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
     ASSERT_SCREEN_HAS("consistent with the claim at 1 m or more");
     ASSERT_SCREEN_LACKS("stronger than the claim");
+
+    /* 6.7 dB over at 1 m: printed as a number, not as "stronger". */
+    ap->reg.tpc_tx_power_dbm = 0;
+    draw_at(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+    ASSERT_SCREEN_HAS("6.7 dB over the 1 m figure, within the 10 dB margin");
+    ASSERT_SCREEN_LACKS("stronger than the claim");
     restore_screen();
 }
 
@@ -371,9 +427,13 @@ static void test_detail_block_gives_way_on_a_short_screen(void) {
 /* Worst case at the 100-column minimum: every TPE slot full, a
  * non-country environment, sixteen triplets, a reserved 6 GHz value and
  * the stronger-than-claimed branch. No row may wrap, or the back hint
- * goes off the bottom of a screen measured as having room. Seen to fail
- * with the TPE row printing every entry regardless of width. */
-static void test_detail_worst_case_does_not_wrap(void) {
+ * goes off the bottom of a screen measured as having room. Run twice:
+ * shortest TPE names first, and longest first — the second is the one
+ * that reaches the width with both "; +N more" and "; more dropped"
+ * still to print. Seen to fail with the TPE row printing every entry
+ * regardless of width, and (longest-first order only) with the row
+ * budget ignoring the prefix and the tails (COLS - 16 - 14). */
+static void worst_case_detail(const uint8_t order[REG_6G_MAX_TPE][2]) {
     beacon_ap_t *ap = seed(1);
     set_country(ap, "XX", REG_ENV_NON_COUNTRY);
     ap->reg.env_raw = 'X';
@@ -384,8 +444,8 @@ static void test_detail_worst_case_does_not_wrap(void) {
     ap->reg6g.he6_present = 1; ap->reg6g.he6_reg_info = 7;
     ap->reg6g.tpe_count = REG_6G_MAX_TPE; ap->reg6g.tpe_truncated = 1;
     for (int i = 0; i < REG_6G_MAX_TPE; i++) {
-        ap->reg6g.tpe[i].interp = (uint8_t)(i % 4);
-        ap->reg6g.tpe[i].category = (uint8_t)(i / 4);
+        ap->reg6g.tpe[i].interp   = order[i][0];
+        ap->reg6g.tpe[i].category = order[i][1];
         ap->reg6g.tpe[i].n_values = 1;
         ap->reg6g.tpe[i].values_half_db[0] = -128;
     }
@@ -417,6 +477,15 @@ static void test_detail_worst_case_does_not_wrap(void) {
     ASSERT_SCREEN_HAS("reserved in 802.11ax-2021");
     if (hint < 0 || tpe != title + 4) tui_test_dump(stderr);
     restore_screen();
+}
+
+static void test_detail_worst_case_does_not_wrap(void) {
+    static const uint8_t shortest_first[REG_6G_MAX_TPE][2] = {
+        {0,0},{1,0},{2,0},{3,0},{0,1},{1,1},{2,1},{3,1} };
+    static const uint8_t longest_first[REG_6G_MAX_TPE][2] = {
+        {3,1},{2,1},{3,0},{1,1},{2,0},{1,0},{0,1},{0,0} };
+    worst_case_detail(shortest_first);
+    worst_case_detail(longest_first);
 }
 
 /* ── wifi_regulatory JSONL ───────────────────────────────── */
@@ -472,6 +541,7 @@ static void seed_full(void) {
     ap->reg.power_constraint_present = 1; ap->reg.power_constraint_db = 3;
     ap->reg.tpc_present = 1; ap->reg.tpc_tx_power_dbm = -2;
     ap->reg6g.he6_present = 1; ap->reg6g.he6_reg_info = REG_6G_STANDARD_AP;
+    ap->reg6g.he6_control_raw = 0x0a;   /* 160 MHz, Regulatory Info 1 */
     ap->reg6g.tpe_count = 1;
     ap->reg6g.tpe[0].interp = REG_TPE_REG_CLIENT_EIRP_PSD;
     ap->reg6g.tpe[0].info_raw = 0x1a;
@@ -537,11 +607,19 @@ static void test_jsonl_change_only_on_claims(void) {
     emit_tick(1700000003);
     g_s.beacon_aps[0].reg6g.tpe[0].values_half_db[1] = 6;
     emit_tick(1700000004);
-    emit_tick(1700000004 + 300);   /* heartbeat */
+    /* Standard Power -> Indoor, as the parser stores it: the Control
+     * octet and the B3-B5 field it holds move together. The one path by
+     * which a Regulatory Info change produces a record. Seen to fail
+     * with he6_control_raw replaced by 0 in the signature. */
+    g_s.beacon_aps[0].reg6g.he6_reg_info    = REG_6G_INDOOR_AP;
+    g_s.beacon_aps[0].reg6g.he6_control_raw = 0x02;
+    emit_tick(1700000005);
+    emit_tick(1700000005 + 300);   /* heartbeat */
     jsonl_close();
     char *body = slurp();
     ASSERT(body != NULL);
-    ASSERT_EQ(count_of(body, "\"type\":\"wifi_regulatory\""), 4);
+    ASSERT_EQ(count_of(body, "\"type\":\"wifi_regulatory\""), 5);
+    ASSERT(strstr(body, "\"he6_reg_info_name\":\"indoor\"") != NULL);
     ASSERT(strstr(body, "\"tpc_tx_power_dbm\":5") != NULL);
     ASSERT(strstr(body, "\"values_half_db\":[-2,6]") != NULL);
 }
@@ -567,6 +645,49 @@ static void test_jsonl_malformed_counts_do_not_churn(void) {
     ASSERT(strstr(body, "\"malformed_tpc\":2") == NULL);
 }
 
+/* Lines in the sink, counted without slurp()'s 16 KiB ceiling: a full
+ * beacon table writes far more than that. */
+static int count_lines_of_type(const char *type) {
+    FILE *fp = fopen(g_path, "r");
+    if (!fp) return -1;
+    char needle[64];
+    snprintf(needle, sizeof(needle), "{\"type\":\"%s\"", type);
+    static char line[8192];
+    int n = 0;
+    while (fgets(line, sizeof(line), fp))
+        if (strncmp(line, needle, strlen(needle)) == 0) n++;
+    fclose(fp);
+    return n;
+}
+
+/* A full beacon table of random BSSIDs, unchanged for ten ticks, writes
+ * exactly one baseline line per AP. The change cache is shared by every
+ * keyed emitter; when it was direct-mapped, two live keys landing in one
+ * slot evicted each other on every tick and both re-emitted forever
+ * (this population gave 832 lines, not 256). Sequential BSSIDs cannot
+ * show it — FNV spreads a varying last octet over distinct low bits —
+ * hence the LCG. Seen to fail with JSONL_DEDUP_WAYS 1 and
+ * JSONL_DEDUP_SETS 1024, the old direct-mapped table. */
+static void test_jsonl_full_table_does_not_ping_pong(void) {
+    open_fresh();
+    memset(&g_s, 0, sizeof(g_s));
+    g_s.beacon_count = MAX_BEACON_APS;
+    uint32_t x = 0x2545f491u;
+    for (int i = 0; i < MAX_BEACON_APS; i++) {
+        beacon_ap_t *ap = &g_s.beacon_aps[i];
+        for (int k = 0; k < 6; k++) {
+            x = x * 1664525u + 1013904223u;
+            ap->bssid[k] = (uint8_t)(x >> 24);
+        }
+        ap->bssid[0] = (uint8_t)((ap->bssid[0] & 0xfc) | 0x02);
+        ap->bssid[5] = (uint8_t)i;   /* distinct whatever the LCG does */
+        set_country(ap, "US", REG_ENV_ANY);
+    }
+    for (int t = 0; t < 10; t++) emit_tick(1700000000 + t);
+    jsonl_close();
+    ASSERT_EQ(count_lines_of_type("wifi_regulatory"), MAX_BEACON_APS);
+}
+
 void run_reg_obs_tests(void) {
     TEST_SUITE("REG column on [b] (#101 slice B)");
     RUN_TEST(test_column_dash_when_nothing_was_ever_parsed);
@@ -581,6 +702,7 @@ void run_reg_obs_tests(void) {
     RUN_TEST(test_free_space_loss_at_one_metre);
     RUN_TEST(test_power_consistent_with_tpc_claim);
     RUN_TEST(test_power_stronger_than_claim_allows);
+    RUN_TEST(test_power_small_excess_is_within_margin);
     RUN_TEST(test_power_falls_back_to_tpe_local_eirp);
     RUN_TEST(test_power_has_nothing_to_compare);
 
@@ -598,4 +720,5 @@ void run_reg_obs_tests(void) {
     RUN_TEST(test_jsonl_silent_ap_writes_nothing);
     RUN_TEST(test_jsonl_change_only_on_claims);
     RUN_TEST(test_jsonl_malformed_counts_do_not_churn);
+    RUN_TEST(test_jsonl_full_table_does_not_ping_pong);
 }

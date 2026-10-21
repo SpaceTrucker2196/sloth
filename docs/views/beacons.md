@@ -400,7 +400,10 @@ slice.
 
 The list's `REG` column is the compact form. Every other column is
 fixed, so `REG` takes what is left of the terminal (4 to 28 cells) and
-adds tokens in priority order while they fit:
+adds tokens in priority order while they fit. Below 136 columns there is
+not room for its 4-cell floor and it is not drawn at all, rather than
+wrapping rows that fit without it; the detail screen carries every
+claim in full at any width.
 
 | Token | Meaning |
 |---|---|
@@ -438,7 +441,12 @@ the AP was heard stronger than a transmitter at the claimed power
 could produce at a metre in free space. That needs antenna gain, the
 sensor within a metre, or a claim that is not true — and the sensor
 cannot tell which, because it knows neither the distance nor the
-antennas. A regulatory-client or PSD envelope is never used as the
+antennas. Only an excess above 10 dB (`REG_OBS_EXCESS_MARGIN_DB`) is
+highlighted as "stronger than the claim allows": §9.4.2.16 allows the
+TPC Report value a ±5 dB tolerance, and an adapter's few dBi of receive
+gain and its RSSI calibration move the reading by the rest. A smaller
+positive excess is printed uncoloured, as "n dB over the 1 m figure,
+within the 10 dB margin". A regulatory-client or PSD envelope is never used as the
 claim: it bounds the clients, or a per-MHz density, not the AP's own
 power.
 

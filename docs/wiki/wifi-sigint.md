@@ -344,7 +344,8 @@ What the operator sees, none of it a verdict:
 
 - **`REG` column on `[b]`** — country and environment, then `MAL`,
   `6G:IN`/`6G:SP`, `TPCn`, `PCn`, `TPEn` while they fit; the column
-  takes the width left after the fixed columns. See
+  takes the width left after the fixed columns, and is not drawn below
+  136 columns rather than wrap the row. See
   [`docs/views/beacons.md`](../views/beacons.md).
 - **`REGULATORY` block on the `[b]` detail screen** — each claim in
   full, plus the observed-vs-claimed **power delta**: the received
@@ -354,7 +355,9 @@ What the operator sees, none of it a verdict:
   power could produce at a metre. It assumes free-space loss and 0 dBi
   antennas and the distance is unknown, so it is shown as an
   observation and never fires an alert — the owner's ruling on #101
-  (plan #145).
+  (plan #145). It is highlighted only past a 10 dB margin (the ±5 dB
+  TPC Report tolerance of §9.4.2.16 plus typical receive gain and RSSI
+  calibration); a smaller excess is printed as a plain number.
 - **`wifi_regulatory` JSONL record** — change-only per BSSID, emitted
   only once a regulatory element has been parsed from it; see
   [[jsonl-schema]].

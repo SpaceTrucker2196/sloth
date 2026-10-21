@@ -65,7 +65,20 @@ typedef struct {
      * free space — the claim and the reading cannot both be true without
      * antenna gain, or the sensor sitting within a metre of the AP. */
     double excess_db;
+    /* excess_db > REG_OBS_EXCESS_MARGIN_DB: the only case the [b]
+     * detail highlights. */
+    int    beyond_margin;
 } reg_power_obs_t;
+
+/* How far the reading may exceed the 1 m free-space figure before the
+ * detail screen highlights it. The comparison is exact only under its
+ * assumptions, and three things the sensor cannot see move it by
+ * several dB in the ordinary case: the TPC Report value itself, for
+ * which IEEE 802.11-2020 §9.4.2.16 allows a ±5 dB tolerance; receive
+ * antenna gain (3-5 dBi is typical for an adapter); and the adapter's
+ * RSSI calibration. 10 dB covers the tolerance and a typical receive
+ * gain. A smaller excess is still printed, as a number, uncoloured. */
+#define REG_OBS_EXCESS_MARGIN_DB 10.0
 
 /* 1 and `out` filled when the AP has a power claim (TPC Report first,
  * else a decoded default-category local EIRP TPE), a signal reading
