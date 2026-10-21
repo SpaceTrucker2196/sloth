@@ -522,6 +522,43 @@ research-mcp:
 	$(CC) $(CFLAGS) -UWITH_PCAP -DWITH_SQLITE -Iinclude -Isrc -Iresearch -Iresearch/mcp \
 	      -o sloth-research-mcp $(MCP_SRCS) -lsqlite3
 
+# ── slothweb (#157) ─────────────────────────────────────────────────────────
+# The browser dashboard's server, docs/web-ui-spec.md. A separate binary
+# on purpose: nothing here is in `all` or `embedded`, no sloth source is
+# compiled into it, and nothing in src/ references web/ (spec §4.2). It
+# links libc and pthreads only; later milestones may add libsqlite3,
+# which WITH_SQLITE already links, and nothing else.
+#
+# W0 is the allow list and its refusals before any route exists: every
+# GET/HEAD is 404, every other method 405. web/README.md has the rest.
+#
+# Compiled with $(CFLAGS) and $(TEST_CFLAGS) like every other binary
+# here, so EXTRA_CFLAGS (-Werror, the sanitizers) reaches it the same way
+# (tests/test_build_recipe.c); the feature -D set they carry is unused
+# by web/. The link line is its own, not $(LDFLAGS), which carries
+# sloth's libraries. Both targets compile from source every time: the
+# tree is small, and it keeps a sanitizer build from linking objects
+# another build compiled.
+WEB_MAIN        = web/src/main.c
+WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c))
+WEB_TEST_SRCS   = $(wildcard web/tests/*.c)
+WEB_LDLIBS      = -lpthread
+ifeq ($(UNAME),Linux)
+    WEB_LDFLAGS = -pie -Wl,-z,relro,-z,now
+endif
+
+.PHONY: web web-test
+web:
+	$(CC) $(CFLAGS) -Iweb/src -o slothweb $(WEB_MAIN) $(WEB_SRCS) \
+	      $(WEB_LDFLAGS) $(WEB_LDLIBS)
+
+# Loopback and ephemeral ports only; no host file, no name lookup, no
+# network beyond 127.0.0.1 and ::1.
+web-test:
+	$(CC) $(TEST_CFLAGS) -Iweb/src -Iweb/tests -o slothweb_test \
+	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_LDLIBS)
+	./slothweb_test
+
 # ── Test build ───────────────────────────────────────────────────────────────
 # Built the way the program ships (#116): WITH_NCURSES and WITH_PCAP, the
 # real renderer (src/tui.c) and the real probe (src/capture/probe.c).
@@ -975,9 +1012,9 @@ cppcheck:
 	  --enable=warning,portability,performance,information \
 	  --error-exitcode=1 \
 	  --suppressions-list=tests/cppcheck.supp \
-	  $(CPPCHECK_DEFS) -Iinclude -Isrc -Iresearch \
+	  $(CPPCHECK_DEFS) -Iinclude -Isrc -Iresearch -Iweb/src -Iweb/tests \
 	  -i src/platform/bsd.c -i src/platform/win32.c -i src/platform/stub.c \
-	  src research
+	  src research web
 
 # ── Mutation testing ────────────────────────────────────────────────────────
 # Verifies the test suite itself: introduces small faults into src/ files,
@@ -996,6 +1033,7 @@ mutate:
 clean:
 	rm -rf build
 	rm -f $(TARGET) $(TEST_BIN) $(NOFLAGS_BIN) research_ingest sloth-research-mcp
+	rm -f slothweb slothweb_test
 	rm -f sloth_test_pcap   # the pre-#116 capture-path binary
 	rm -f $(patsubst %.c,%.o,$(CORE_SRCS_ALL) $(APP_SRCS) $(TEST_ONLY_SRCS) $(wildcard tests/*.c))
 

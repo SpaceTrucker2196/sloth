@@ -4622,3 +4622,18 @@ window is per sensor.
 ## 2026-10-21 — slothweb spec committed
 
 `docs/web-ui-spec.md` is the #102 spec (2026-09-30 draft) with a header recording the rulings made since: localhost-only allow-list first, read-only, no active reverse DNS, SQL box behind a default-off flag, system fonts, generated OUI table, in-tree `web/`. Milestones become child issues; #102 is the tracker.
+
+## 2026-10-21 — slothweb W0 (#157): allow list and refusals, no routes
+
+**Created pages**: [slothweb.md](slothweb.md). **Updated pages**:
+[index.md](index.md). New `web/README.md`.
+
+`web/` gains the `slothweb` binary (`make web`, `make web-test`; not in
+`make embedded`, no `src/` file linked). Loopback-only bind by default
+on `127.0.0.1:8770`; `--web-allow-remote` gates a non-loopback bind or
+`--web-allow` entry and is announced on stderr; `--strict` refuses both.
+Peers outside the allowed-peer list are closed at accept() and counted.
+Every GET/HEAD is 404, every other method 405, a header block over 8 KB
+431; idle and slow clients time out on an absolute budget. slothweb's
+flags are documented in `web/README.md`, not in [cli-reference.md](cli-reference.md),
+which is sloth's own parser.
