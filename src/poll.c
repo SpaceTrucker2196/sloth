@@ -4,6 +4,7 @@
 #include "capture/capture.h"
 #include "capture/probe.h"
 #include "capture/bt_monitor.h"
+#include "bt_stream.h"
 #include "ble_hci.h"
 #include "persist_health.h"
 #include "history.h"
@@ -173,6 +174,9 @@ static void st_ble(sloth_state_t *s, const poll_ctx_t *ctx) {
     /* #144 slice 2. Pure module, every config: a WITH_PCAP=0 build has
      * no source to feed it and copies an empty table. */
     ble_snapshot(s);
+    /* #144 slice 3: the Ubertooth stream's health and LAP table. Its
+     * advertisers are already in the device table copied above. */
+    bt_stream_snapshot(s);
 }
 
 static void st_eap_track(sloth_state_t *s, const poll_ctx_t *ctx) {
@@ -260,6 +264,13 @@ static void st_sensors(sloth_state_t *s, const poll_ctx_t *ctx) {
         sensor_t *bt = sensor_register(s, SENSOR_BLE, "BLE HCI monitor",
                                        s->bt_iface, ctx->wall);
         sensor_observe(bt, s->ble_host.adv_reports, ctx->wall);
+    }
+    /* #144 slice 3: the Ubertooth stream is a second BLE sensor, on its
+     * own iface, so the registry keeps the two apart. */
+    if (s->btcap.configured) {
+        sensor_t *ub = sensor_register(s, SENSOR_BLE, "Ubertooth capture",
+                                       BT_CAPTURE_IFACE, ctx->wall);
+        sensor_observe(ub, s->btcap.adv + s->btcap.bredr, ctx->wall);
     }
 }
 

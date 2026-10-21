@@ -135,6 +135,8 @@ typedef enum {
      * random addresses rotate and an advertiser chooses its own, so the
      * key space is the transmitter's, not sloth's. */
     SH_EVICT_BLE_DEVICE,    /* src/ble_hci.c — least-recently-heard (address, type) advertiser dropped */
+    /* #144 slice 3: the BR/EDR LAP table the Ubertooth stream fills. */
+    SH_EVICT_BREDR_LAP,     /* src/bt_stream.c — least-recently-heard BR/EDR LAP dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 

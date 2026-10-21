@@ -2666,6 +2666,17 @@ typedef struct {
     time_t   first_seen;       /* frame clock */
     time_t   last_seen;        /* frame clock */
     uint64_t adv_count;        /* advertising reports decoded for this row */
+    /* Which sensor heard it (#144 slice 3). Part of the row's key, with
+     * the address and its type, so the host controller and an Ubertooth
+     * hearing the same advertiser are two rows: their counts mean
+     * different things (below) and must not be summed. */
+    uint8_t  sensor_kind;      /* sensor_kind_t, SENSOR_BLE today */
+    char     sensor_iface[24]; /* BT_MONITOR_DEVICE or BT_CAPTURE_IFACE */
+    /* 1 when adv_count is a SAMPLE: an Ubertooth listens on one RF
+     * channel at a time (one of the three advertising channels unless
+     * told to follow), so it hears a fraction of what was sent. */
+    uint8_t  sampled;
+    int8_t   channel;          /* LL channel index 0..39 last heard on, -1 unknown */
 } ble_device_t;
 
 /* LE scan type as last set by the host (LE Set [Extended] Scan
@@ -2774,6 +2785,79 @@ typedef struct {
     uint64_t ignored;              /* outside the allow-list, dropped unread */
     uint64_t malformed;            /* allow-listed type, bad length or snapped */
 } ble_host_t;
+
+/* ── Ubertooth capture stream (#144 slice 3) ─────────────
+ *
+ * --bt-capture PATH reads a classic pcap file or FIFO the operator
+ * produces with ubertooth-btle or ubertooth-rx (docs/wiki/ubertooth.md).
+ * sloth never drives the dongle: it reads a file, and the tool that owns
+ * the radio is the operator's. Decoded by src/btle_ll.c (DLT 256 and
+ * PPI around 251) and src/bredr_bb.c (DLT 255); framed and counted by
+ * src/bt_stream.c. */
+#define BT_CAPTURE_IFACE    "ubertooth"
+#define BT_CAPTURE_PATH_MAX 256
+
+/* Stream state. Names are part of the sensor_health JSONL contract —
+ * see bt_cap_state_name(). */
+typedef enum {
+    BT_CAP_OFF = 0,     /* --bt-capture not given */
+    BT_CAP_WAITING,     /* opened; no pcap file header read yet (a FIFO with no writer) */
+    BT_CAP_STREAMING,   /* header accepted, records flowing */
+    BT_CAP_EOF,         /* the file ended, or the FIFO's writer closed it */
+    BT_CAP_REFUSED,     /* not a classic pcap, or a link type sloth does not read */
+    BT_CAP_ERROR,       /* open or read failed, or the stream is corrupt */
+    BT_CAP_STOPPED      /* sloth stopped the worker */
+} bt_cap_state_t;
+
+typedef struct {
+    int      configured;       /* --bt-capture given */
+    int      state;            /* bt_cap_state_t */
+    char     err[96];          /* why REFUSED / ERROR, "" = none */
+    int      dlt;              /* accepted link type, -1 none yet */
+    int      refused_dlt;      /* link type refused, -1 none */
+    /* 40 for a BLE stream, 79 for BR/EDR, 0 before the header: an
+     * Ubertooth hears ONE of that many RF channels at a time, so every
+     * count below is a sample of that one channel. */
+    int      channels_of;
+    /* Records. Each lands in exactly one of drop, adv, scan_req,
+     * connect_ind, ext_adv, data_pdus, other, bredr, which sum to recv.
+     * truncated overlaps them: a record decoded only up to its trusted
+     * length is counted in its own bucket and here. */
+    uint64_t recv;             /* records framed out of the stream */
+    uint64_t drop;             /* refused at the edge, malformed, or over the record cap */
+    uint64_t truncated;        /* PDU length claimed past the trusted length */
+    uint64_t adv;              /* advertising PDUs that reached the device table */
+    uint64_t scan_req;         /* SCAN_REQ: some scanner near the dongle is active */
+    uint64_t connect_ind;      /* CONNECT_IND: a connection was set up */
+    uint64_t ext_adv;          /* ADV_EXT_IND and later types, counted not decoded */
+    uint64_t data_pdus;        /* data-channel PDUs (follow mode), counted not decoded */
+    uint64_t other;            /* AUX_CONNECT_RSP and reserved advertising PDU types */
+    uint64_t bredr;            /* DLT 255 packets */
+    uint64_t bredr_iac;        /* of those, an inquiry access code: someone inquiring */
+    time_t   last_frame_ts;    /* frame clock of the newest record, 0 = none */
+    time_t   last_frame_wall;  /* arrival clock of it, 0 = none */
+    int      stale_secs;       /* since a record last arrived, -1 = never */
+} bt_capture_health_t;
+
+/* One BR/EDR piconet as an Ubertooth hears it: by LAP only, the 24 bits
+ * of the access code. The UAP and NAP are not in the access code or the
+ * packet header (only an FHS payload carries them, and it is never
+ * read), so no BD_ADDR and no vendor is ever derived from this row.
+ * `ref_uap` is NOT an observation: it is the UAP the operator configured
+ * into ubertooth-rx (-u), echoed in DLT 255's Reference UAP field when
+ * flag 0x0080 is set, and it is kept only under that name. */
+#define MAX_BREDR_LAPS 64
+typedef struct {
+    uint32_t lap;                /* 24-bit lower address part */
+    uint8_t  iac;                /* 0x9E8B00..0x9E8B3F: an inquiry access code */
+    uint8_t  has_rssi;
+    int8_t   rssi, rssi_best;    /* dBm */
+    int8_t   channel;            /* RF channel 0..78 last heard on */
+    uint8_t  ref_uap_configured; /* flag 0x0080 seen with this LAP as reference */
+    uint8_t  ref_uap;            /* the operator's configured UAP, never observed */
+    time_t   first_seen, last_seen;   /* frame clock */
+    uint64_t count;              /* packets heard on the sampled channel */
+} bredr_lap_t;
 
 /* ── Capture-worker health (#91 slice 2) ─────────────────
  *
@@ -3182,6 +3266,10 @@ typedef struct {
     ble_host_t       ble_host;
     ble_device_t     ble_devices[MAX_BLE_DEVICES];
     int              ble_device_count;
+    /* Ubertooth capture stream (#144 slice 3): --bt-capture PATH. */
+    bt_capture_health_t btcap;
+    bredr_lap_t      bredr_laps[MAX_BREDR_LAPS];
+    int              bredr_lap_count;
 
     /* ── PNL snapshot (Preferred Network Lists per client) ── */
     pnl_client_t   pnl_clients[MAX_PNL_CLIENTS];

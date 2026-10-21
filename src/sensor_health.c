@@ -140,6 +140,7 @@ const char *sh_evict_name(sh_evict_t kind) {
     case SH_EVICT_RTSP_STREAM:   return "rtsp_stream";
     case SH_EVICT_LAN_ROLE:      return "lan_role";
     case SH_EVICT_BLE_DEVICE:    return "ble_device";
+    case SH_EVICT_BREDR_LAP:     return "bredr_lap";
     case SH_EVICT_KIND_COUNT:  break;
     }
     return "";

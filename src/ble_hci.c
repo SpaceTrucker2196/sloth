@@ -1,5 +1,6 @@
 #include <pthread.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 #include "ble_hci.h"
 #include "ble_snoop.h"
@@ -45,14 +46,21 @@ int bt_dev_is_raw_hci(const char *name) {
 /* ── State ─────────────────────────────────────────────────────────── */
 
 typedef struct {
-    uint8_t addr[6];   /* display order */
-    uint8_t type;
+    uint8_t     addr[6];   /* display order */
+    uint8_t     type;
+    uint8_t     kind;      /* sensor_kind_t */
+    char        iface[sizeof(((ble_device_t *)0)->sensor_iface)];
 } ble_key_t;
 
+/* Keyed on the sensor as well as the address (#144 slice 3): the host
+ * controller hears every advertisement it is scanning for, an Ubertooth
+ * samples one channel, and one row summing both would mean neither. */
 static int dev_key_eq(const void *row, const void *key) {
     const ble_device_t *d = row;
     const ble_key_t    *k = key;
-    return d->addr_type == k->type && memcmp(d->addr, k->addr, 6) == 0;
+    return d->addr_type == k->type && memcmp(d->addr, k->addr, 6) == 0 &&
+           d->sensor_kind == k->kind &&
+           strcmp(d->sensor_iface, k->iface) == 0;
 }
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -251,23 +259,32 @@ typedef struct {
     time_t   ts;
 } adv_ctx_t;
 
-static void on_report(const ble_adv_report_t *r, void *vctx) {
-    const adv_ctx_t *c = vctx;
+/* Caller holds g_mu. */
+static void observe_locked(const ble_obs_t *o) {
+    const ble_adv_report_t *r = o->r;
     ble_key_t key;
     for (int i = 0; i < 6; i++) key.addr[i] = r->addr[5 - i];
-    key.type = r->addr_type;
+    key.type  = r->addr_type;
+    key.kind  = o->sensor_kind;
+    /* Truncated to the row's field before comparing, so a name longer
+     * than the field still finds the row it made. */
+    snprintf(key.iface, sizeof(key.iface), "%s", o->iface ? o->iface : "");
 
     int created = 0;
-    ble_device_t *d = stab_get(&g_devs, &key, c->ts, &created);
+    ble_device_t *d = stab_get(&g_devs, &key, o->ts, &created);
     if (!d) return;   /* STAB_OLDEST never refuses; defensive only */
     if (created) {
         memcpy(d->addr, key.addr, 6);
-        d->addr_type  = key.type;
-        d->first_seen = c->ts;
-        d->rssi_best  = -128;
+        d->addr_type   = key.type;
+        d->sensor_kind = key.kind;
+        memcpy(d->sensor_iface, key.iface, sizeof(d->sensor_iface));
+        d->first_seen  = o->ts;
+        d->rssi_best   = -128;
     }
-    d->last_seen       = c->ts;
-    d->adapter         = c->adapter;
+    d->last_seen       = o->ts;
+    d->adapter         = o->adapter;
+    d->sampled         = o->sampled ? 1 : 0;
+    d->channel         = (int8_t)(o->channel >= 0 && o->channel <= 39 ? o->channel : -1);
     d->last_event_type = r->event_type;
     d->adv_count++;
     /* Fields are kept once seen: an ADV_IND and its SCAN_RSP carry
@@ -291,6 +308,20 @@ static void on_report(const ble_adv_report_t *r, void *vctx) {
         d->rssi     = r->rssi;
         if (r->rssi > d->rssi_best) d->rssi_best = r->rssi;
     }
+}
+
+void ble_dev_observe(const ble_obs_t *o) {
+    if (!o || !o->r) return;
+    pthread_mutex_lock(&g_mu);
+    host_init_locked();
+    observe_locked(o);
+    pthread_mutex_unlock(&g_mu);
+}
+
+static void on_report(const ble_adv_report_t *r, void *vctx) {
+    const adv_ctx_t *c = vctx;
+    ble_obs_t o = { r, SENSOR_BLE, BT_MONITOR_DEVICE, c->adapter, -1, 0, c->ts };
+    observe_locked(&o);
 }
 
 static ble_rec_verdict_t ingest_event(const uint8_t *p, size_t len,

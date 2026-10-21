@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <time.h>
 #include "sloth.h"
+#include "ble_snoop.h"
 
 /* The Bluetooth host source (#144 slice 2): records read off the Linux
  * HCI monitor channel, as libpcap delivers them from its
@@ -124,6 +125,22 @@ int bt_dev_is_bluetooth(const char *name);
 ble_rec_verdict_t ble_mon_ingest(const uint8_t *rec, size_t caplen,
                                  size_t origlen, time_t frame_ts,
                                  time_t wall);
+
+/* One advertising observation from any BLE sensor (#144 slice 3: the
+ * Ubertooth stream feeds the same table the host source does). `r` is
+ * the HCI-shaped report, address in transmission order (LSO first). The
+ * row is keyed by (sensor_kind, iface, address, address type). */
+typedef struct {
+    const ble_adv_report_t *r;
+    uint8_t     sensor_kind;   /* sensor_kind_t */
+    const char *iface;         /* BT_MONITOR_DEVICE, BT_CAPTURE_IFACE */
+    uint16_t    adapter;       /* HCI index; 0 for a capture stream */
+    int         channel;       /* LL channel index 0..39, -1 unknown */
+    int         sampled;       /* 1: one-channel sample (Ubertooth) */
+    time_t      ts;            /* frame clock */
+} ble_obs_t;
+
+void ble_dev_observe(const ble_obs_t *o);
 
 /* Copy the device table and host state into `s`. */
 void ble_snapshot(sloth_state_t *s);

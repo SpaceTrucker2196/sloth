@@ -55,6 +55,7 @@ the Wi-Fi it watches:
 - [[wifi-sigint-guide]] — plain-language guide to passive RF inference and its limits, with every radio emission of a current iPhone and Android phone (sourced, 117 references).
 - [[non-ip-sensors]] — passive RF / non-IP sensor-family roadmap (#26).
 - [[ble]] — the Bluetooth host source: `--bt-monitor` over the HCI monitor channel, the passive-scan procedure, what is refused and never written (#144).
+- [[ubertooth]] — the over-the-air Bluetooth source: `--bt-capture` reading an Ubertooth's pcap file or FIFO, the allowed and forbidden tools and flags, jam mode and DISABLE_TX firmware (#144 slice 3).
 - [[mac-randomisation]] — the 802.11 seqnum deanonymisation primitive.
 - [[evil-twin-reproducer]] — scapy snippets for live-testing each
   evil-twin detection layer (Phases 1-4).

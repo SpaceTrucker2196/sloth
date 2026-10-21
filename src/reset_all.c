@@ -11,6 +11,7 @@
 #include "beacon_snoop.h"
 #include "bgp_snoop.h"
 #include "ble_hci.h"
+#include "bt_stream.h"
 #include "capture/capture.h"
 #include "captive_portal.h"
 #include "cleartext_creds.h"

@@ -33,6 +33,7 @@
     X(beacon_clear) \
     X(bgp_snoop_clear) \
     X(ble_clear) \
+    X(bt_stream_clear) \
     X(btm_clear) \
     X(bw_reset) \
     X(capture_ifname_cache_reset) \

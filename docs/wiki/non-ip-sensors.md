@@ -78,7 +78,10 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
 - **Status**: in progress under #144. The host source shipped in slice 2
   — the Linux HCI monitor channel via `--bt-monitor`, with the
   `ble_device_t` table above, and an own-transmission check on the host.
-  See [[ble]].
+  See [[ble]]. Slice 3 added the over-the-air source: `--bt-capture`
+  reads an Ubertooth's pcap file or FIFO (BLE link layer and BR/EDR,
+  LAP only) into the same table as a second `ble` sensor. See
+  [[ubertooth]].
 
 ### Zigbee / 802.15.4
 - **Observe**: MAC-layer frame metadata — PAN ID, short/extended addresses,

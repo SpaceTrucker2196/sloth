@@ -126,6 +126,7 @@
                                   in the no-pcap build too */
 #include "capture/replay.h"    /* --replay / --ticks (#119) */
 #include "capture/bt_monitor.h" /* --bt-monitor (#144 slice 2) */
+#include "capture/bt_capture.h" /* --bt-capture (#144 slice 3) */
 #include "ble_hci.h"
 
 static sloth_state_t g_state;
@@ -307,7 +308,7 @@ static void print_usage(const char *argv0) {
             "       [--data-socket SPEC] [--data-socket-allow-remote]\n"
             "       [--no-discovery] [--out-format FORMAT]\n"
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
-            "       [--bt-monitor]\n"
+            "       [--bt-monitor] [--bt-capture PATH]\n"
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
@@ -533,6 +534,15 @@ static void print_usage(const char *argv0) {
             "                     (docs/wiki/ble.md); sensor_health reports\n"
             "                     the scan mode it saw. Needs CAP_NET_RAW at\n"
             "                     startup. Raw bluetoothN devices are refused.\n"
+            "  --bt-capture PATH  read a classic pcap file or FIFO you fill\n"
+            "                     with ubertooth-btle -q (DLT 256), -c (PPI\n"
+            "                     around 251) or ubertooth-rx -q (DLT 255).\n"
+            "                     sloth never drives the dongle; it reads the\n"
+            "                     path once, off the main thread, after the\n"
+            "                     privilege drop. Other link types are\n"
+            "                     refused. Counts are a sample of one channel\n"
+            "                     (docs/wiki/ubertooth.md lists the allowed\n"
+            "                     and forbidden tool flags).\n"
             "  --monitor-only     shorthand: restrict the data stream to the\n"
             "                     monitor-mode Wi-Fi interface sloth discovers\n"
             "                     at startup. Fail-closed: if no monitor\n"
@@ -594,8 +604,8 @@ static void print_usage(const char *argv0) {
             "                     DHCP and Wi-Fi scan come back empty, so\n"
             "                     the output describes the files alone.\n"
             "                     Refused with --iface, --monitor-only,\n"
-            "                     --hop and --bt-monitor, which name live\n"
-            "                     capture.\n"
+            "                     --hop, --bt-monitor and --bt-capture,\n"
+            "                     which name live capture.\n"
             "  --ticks N          exit 0 after N poll ticks (1..1000000).\n"
             "                     With --replay --headless this is a batch\n"
             "                     run: replay, tick, flush the sinks, exit.\n"
@@ -716,6 +726,7 @@ int main(int argc, char **argv) {
     int         allow_iface_count = 0;
     int         monitor_only = 0;        /* --monitor-only (#35) */
     int         bt_monitor   = 0;        /* --bt-monitor (#144 slice 2) */
+    const char *bt_capture   = NULL;     /* --bt-capture PATH (#144 slice 3) */
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     time_t      session_start = sloth_wall();
@@ -811,6 +822,8 @@ int main(int argc, char **argv) {
             monitor_only = 1;
         } else if (!strcmp(argv[i], "--bt-monitor")) {
             bt_monitor = 1;
+        } else if (!strcmp(argv[i], "--bt-capture") && i + 1 < argc) {
+            bt_capture = argv[++i];
         } else if (!strcmp(argv[i], "--hop")) {
             g_hop_enabled = 1;
         } else if (!strcmp(argv[i], "--tune-list")) {
@@ -1022,6 +1035,11 @@ int main(int argc, char **argv) {
                         "(this one is WITH_PCAP=0)\n");
         return 2;
     }
+    if (bt_capture) {
+        fprintf(stderr, "sloth: --bt-capture needs a build with libpcap "
+                        "(this one is WITH_PCAP=0)\n");
+        return 2;
+    }
 #endif
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
     int  replay_count = 0;
@@ -1039,10 +1057,11 @@ int main(int argc, char **argv) {
                     replay_arg, REPLAY_MAX_FILES);
             return 2;
         }
-        if (allow_iface_count || monitor_only || g_hop_enabled || bt_monitor) {
+        if (allow_iface_count || monitor_only || g_hop_enabled || bt_monitor ||
+            bt_capture) {
             fprintf(stderr, "sloth: --replay reads savefiles, not "
-                            "interfaces: --iface, --monitor-only, --hop "
-                            "and --bt-monitor do not apply\n");
+                            "interfaces: --iface, --monitor-only, --hop, "
+                            "--bt-monitor and --bt-capture do not apply\n");
             return 2;
         }
         /* --allow-active would send PTR queries for addresses read out of
@@ -1229,6 +1248,25 @@ int main(int argc, char **argv) {
             else
                 fprintf(stderr, "sloth: --bt-monitor: %s\n", g_state.bt_err);
         }
+        /* #144 slice 3. Checked here with stat() only - the open is the
+         * worker's, after the drop, so a FIFO with no writer yet cannot
+         * hold startup and is opened exactly once. A path that does not
+         * exist or is not a file or FIFO is a mistyped flag, refused. */
+        if (bt_capture) {
+            char berr[BT_CAPTURE_PATH_MAX + 64];
+            if (bt_capture_configure(bt_capture, berr, sizeof(berr)) != 0) {
+                fprintf(stderr, "sloth: --bt-capture %s\n", berr);
+                probe_stop();
+                capture_stop();
+                bt_monitor_stop();
+                g_platform.cleanup();
+                return 2;
+            }
+            fprintf(stderr, "sloth: --bt-capture reading %s off the main "
+                            "thread (receive-only: run ubertooth-btle or "
+                            "ubertooth-rx yourself - see "
+                            "docs/wiki/ubertooth.md)\n", bt_capture);
+        }
     }
     /* First-launch UX (#25): when a monitor interface is present, open on
      * the RF-aware dashboard rather than the interface list. */
@@ -1258,6 +1296,7 @@ int main(int argc, char **argv) {
             probe_stop();
             capture_stop();
             bt_monitor_stop();
+            bt_capture_stop();
 #endif
             dns_cleanup();
             g_platform.cleanup();
@@ -1285,6 +1324,7 @@ int main(int argc, char **argv) {
             probe_stop();
             capture_stop();
             bt_monitor_stop();
+            bt_capture_stop();
 #endif
             g_platform.cleanup();
             return 2;
@@ -1473,6 +1513,7 @@ int main(int argc, char **argv) {
     }
     probe_run();
     bt_monitor_run();
+    bt_capture_run();   /* after the drop: opens as the run's account */
 #endif
     event_wake_init();
     updater_init(check_manifest);
@@ -1543,6 +1584,7 @@ int main(int argc, char **argv) {
     probe_stop();
     capture_stop();
     bt_monitor_stop();
+    bt_capture_stop();
     /* After probe_stop() joins the monitor thread — the only writer — so
      * the arena cannot be freed from under a frame in flight. */
     evidence_ring_shutdown();

@@ -24,7 +24,7 @@ Bluetooth Core Specification v5.4 Vol 4 Part E §5.4, §7.1, §7.3.2, §7.3.18,
 §7.7.65.2, §7.8; Linux `include/net/bluetooth/hci_mon.h` and
 `net/bluetooth/hci_sock.c`; libpcap `pcap-bt-monitor-linux.c`; #144.
 
-**Last updated**: 2026-10-21 (#144 slice 2; on/off own-transmission state after review).
+**Last updated**: 2026-10-21 (#144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
 
 ---
 
@@ -105,7 +105,7 @@ rising count here is advertising sloth heard and did not use.
 
 ## The advertiser table
 
-One row per (address, address type), 256 rows, `STAB_OLDEST` — an
+One row per (sensor, address, address type), 256 rows, `STAB_OLDEST` — an
 advertiser picks its own address and a random one rotates, so a spray of
 fresh addresses churns the table instead of making it refuse. Every loss
 is `evict_ble_device` in `sensor_health`. A row keeps the local name,
@@ -113,6 +113,15 @@ first 16-bit service UUID, manufacturer company ID, appearance, TX power
 and flags once seen (an `ADV_IND` and its `SCAN_RSP` carry different AD
 structures), the last and strongest RSSI, the controller index that
 heard it, first/last seen on the capture clock, and a report count.
+
+Since #144 slice 3 the same table takes the Ubertooth stream's
+advertisers ([[ubertooth]]). The sensor is part of the key — kind `ble`
+plus `sensor_iface`, `bluetooth-monitor` or `ubertooth` — so one
+advertiser heard by both is two rows: the host controller reports what
+its scan hears, an Ubertooth samples one RF channel, and a sum of the
+two counts would mean neither. Ubertooth rows carry `sampled` = 1 and
+the LL channel index they were last heard on; host rows carry
+`channel` = -1, because a legacy advertising report does not say.
 
 This slice keeps the table and counts it; it does not yet export it.
 The `[B]` view and the `ble_device` JSONL record are #144 slice 4.
@@ -279,12 +288,13 @@ no capture is committed.
 ## Not built yet
 
 - Extended Advertising Report (0x0D) decode — counted, not decoded.
-- The Ubertooth source (`--bt-capture`, #144 slice 3).
 - `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`, the `[B]` view
   and the `ble_device` / `ble_alert` JSONL records (#144 slice 4).
 
 ## Related pages
 
+- [[ubertooth]] — the over-the-air source: `--bt-capture`, and the
+  allowed and forbidden Ubertooth tools and flags.
 - [[cli-reference]] — `--bt-monitor` and the `bluetoothN` refusals.
 - [[jsonl-schema]] — the `btmon_*` / `ble_*` fields of `sensor_health`.
 - [[alerts]] — `BT_OWN_TRANSMIT` and the own-operational-state form.

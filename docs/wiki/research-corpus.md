@@ -22,6 +22,8 @@ research/
   mitre/T1557.md                 ATT&CK techniques
   ieee/802.11-2020-9.6.14.md     clause-annotated summaries
   papers/bl0ck-2302.05899.md     academic sources
+  bluetooth/ubertooth-link-types-and-core-clauses.md
+                                 Bluetooth link types and Core Spec clauses
   tools/                         tool documentation
 ```
 
@@ -378,6 +380,14 @@ that the Bluetooth host controller sloth listens through was told to
 transmit, which is a fact about sloth's own host. The commands it reads
 are spec opcodes and are listed with their clauses in [[ble]], but there
 is no adversary behaviour to cite a source *for*.
+
+Sources need not back an alert kind. The Bluetooth capture parsers
+(#144 slice 3) cite theirs in
+`research/bluetooth/ubertooth-link-types-and-core-clauses.md` — the
+tcpdump.org link types 256, 251, 192 and 255, the Link Layer and
+Baseband clauses read, and the Ubertooth firmware and tool facts the
+allowed/forbidden list in [[ubertooth]] rests on — with no
+`alert_kinds`, because no rule reads the stream yet.
 
 ## What is not here yet
 - **Coverage.** 59 of 60 alert kinds have a document, and the sixtieth

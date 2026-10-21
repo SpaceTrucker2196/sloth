@@ -4548,3 +4548,32 @@ now (DEL_INDEX decrements it, AMP is not counted); the accounting bucket
 it used to double as is `ble_index_records`. The own-state exemption set
 is pinned in `tests/test_research_corpus.c ::
 test_own_state_kinds_are_named`.
+
+## 2026-10-21 — #144 slice 3: the Ubertooth capture stream
+
+**New page**: [ubertooth.md](ubertooth.md). **Updated pages**:
+[ble.md](ble.md), [cli-reference.md](cli-reference.md),
+[jsonl-schema.md](jsonl-schema.md), [non-ip-sensors.md](non-ip-sensors.md),
+[research-corpus.md](research-corpus.md), [index.md](index.md); new
+corpus document `research/bluetooth/ubertooth-link-types-and-core-clauses.md`.
+
+`--bt-capture PATH` reads a classic pcap file or FIFO the operator fills
+with `ubertooth-btle` or `ubertooth-rx`; sloth links no libubertooth,
+sends no USB request and starts no process. The path is checked with
+`stat()` at startup and opened once, non-blocking, on its own worker
+after the privilege drop, so a FIFO without a writer never holds
+startup and is never reopened; reads wait in `poll()` so stop always
+returns. Link types 256 (BLE LL with PHDR), 192 (PPI around 251) and 255
+(BR/EDR) are read; anything else, pcapng included, is refused with a
+message. `src/btle_ll.c` decodes the advertising PDUs, SCAN_REQ and
+CONNECT_IND against a trusted length (the claim bounded by the record
+and the Ubertooth's 50-octet capture limit), parses AD only inside it
+and never claims a CRC; `src/bredr_bb.c` keeps the LAP only, labels the
+0x0080 reference UAP as the operator's configured value, and derives no
+BD_ADDR or vendor. Advertisers join the BLE device table, now keyed by
+sensor too (`sensor_iface` `ubertooth`), as a second `ble` sensor;
+counts are labelled samples of one channel. `sensor_health` gains the
+`btcap_*` block (bucketed in the signature) and `evict_bredr_lap`. The
+wiki page lists the allowed and forbidden Ubertooth tools and flags,
+the jam-mode firmware global, and DISABLE_TX firmware, which sloth
+cannot detect.

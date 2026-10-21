@@ -22,6 +22,7 @@
 #include "views/procs.h"
 #include "sensor_health.h"
 #include "ble_hci.h"        /* Bluetooth host source names (#144 slice 2) */
+#include "bt_stream.h"      /* Ubertooth stream state names (#144 slice 3) */
 #include "wifi_chanhop.h"     /* chanhop_retune_reason() (#91) */
 #include "libver.h"
 #include "capture/capture.h"
@@ -2108,6 +2109,12 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         int      ble_tx_baseline;
         int      ble_controllers;
         int      ble_multi_any, ble_ext_adv_any, ble_malformed_any;
+        /* #144 slice 3, the Ubertooth stream: its state, the link type
+         * taken or refused, the freshness bucket, and none/some bands
+         * for drops and truncation. recv and the PDU counters move with
+         * every record and stay out. */
+        int      btcap_state, btcap_dlt, btcap_refused_dlt, btcap_stale_state;
+        int      btcap_drop_any, btcap_truncated_any;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -2205,6 +2212,12 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.ble_multi_any     = bh->multi_rejected > 0;
     sig.ble_ext_adv_any   = bh->ext_adv_undecoded > 0;
     sig.ble_malformed_any = bh->malformed > 0;
+    sig.btcap_state         = s->btcap.state;
+    sig.btcap_dlt           = s->btcap.dlt;
+    sig.btcap_refused_dlt   = s->btcap.refused_dlt;
+    sig.btcap_stale_state   = stale_state(s->btcap.stale_secs);
+    sig.btcap_drop_any      = s->btcap.drop > 0;
+    sig.btcap_truncated_any = s->btcap.truncated > 0;
 
     /* Singleton: one fixed key, so the slot is this record's alone. */
     static const char health_key[] = "sensor";
@@ -2417,6 +2430,37 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "ble_own_tx_baseline", h->tx_baseline);
         kv_int(buf, LINEBUF, &off, "ble_index_records",
                (long long)h->index_records);
+    }
+    /* Ubertooth capture stream (#144 slice 3). Appended. `btcap_iface`
+     * is "" when --bt-capture is not given, which is what tells the
+     * zeros below apart from a stream that heard nothing. Every count
+     * is a sample: `btcap_sampling` names how small a one ("1_of_40_channels"
+     * for BLE, "1_of_79_channels" for BR/EDR, "" before the header). */
+    {
+        const bt_capture_health_t *c = &s->btcap;
+        char samp[32] = "";
+        if (c->channels_of > 0)
+            snprintf(samp, sizeof(samp), "1_of_%d_channels", c->channels_of);
+        kv_str(buf, LINEBUF, &off, "btcap_iface",
+               c->configured ? BT_CAPTURE_IFACE : "");
+        kv_str(buf, LINEBUF, &off, "btcap_state", bt_cap_state_name(c->state));
+        kv_str(buf, LINEBUF, &off, "btcap_err", c->err);
+        kv_int(buf, LINEBUF, &off, "btcap_dlt", c->dlt);
+        kv_int(buf, LINEBUF, &off, "btcap_refused_dlt", c->refused_dlt);
+        kv_str(buf, LINEBUF, &off, "btcap_sampling", samp);
+        kv_int(buf, LINEBUF, &off, "btcap_stale_secs", c->stale_secs);
+        kv_int(buf, LINEBUF, &off, "btcap_recv",        (long long)c->recv);
+        kv_int(buf, LINEBUF, &off, "btcap_drop",        (long long)c->drop);
+        kv_int(buf, LINEBUF, &off, "btcap_truncated",   (long long)c->truncated);
+        kv_int(buf, LINEBUF, &off, "btcap_adv",         (long long)c->adv);
+        kv_int(buf, LINEBUF, &off, "btcap_scan_req",    (long long)c->scan_req);
+        kv_int(buf, LINEBUF, &off, "btcap_connect_ind", (long long)c->connect_ind);
+        kv_int(buf, LINEBUF, &off, "btcap_ext_adv_undecoded", (long long)c->ext_adv);
+        kv_int(buf, LINEBUF, &off, "btcap_data_pdus",   (long long)c->data_pdus);
+        kv_int(buf, LINEBUF, &off, "btcap_other_pdus",  (long long)c->other);
+        kv_int(buf, LINEBUF, &off, "btcap_bredr",       (long long)c->bredr);
+        kv_int(buf, LINEBUF, &off, "btcap_bredr_iac",   (long long)c->bredr_iac);
+        kv_int(buf, LINEBUF, &off, "btcap_bredr_laps",  s->bredr_lap_count);
     }
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
