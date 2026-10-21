@@ -4456,3 +4456,17 @@ stays inside five cells (`123k`).
 ## 2026-10-21 — Charter widened to Bluetooth and BLE; migration path by design
 
 Owner rulings of 2026-10-21. MISSION §1 now covers Bluetooth Classic (BR/EDR) and Low Energy, read from the host HCI controller or an Ubertooth; §2 rule 1 holds Bluetooth to the same no-injection rule (no inquiry, no active scan, no connection or GATT read, no advertising, no Ubertooth transmit or jamming mode). Schema changes now always ship a chained, value-preserving migration from the previous version (src/db.h, [[sqlite-schema]], agents/AGENTS.md); only a file from a newer build is refused.
+
+## 2026-10-20 — #152: THREAT_DOMAIN does not match a cut DNS name
+
+**Updated pages**: [threat-intel.md](threat-intel.md),
+[alerts.md](alerts.md), [ja3-fingerprinting.md](ja3-fingerprinting.md);
+source doc `docs/views/alerts.md`.
+
+`rule_threat_domain` now skips `dns_log` rows flagged `qname_trunc`, the
+guard `SURV_DNS` gained in d54110e: the stored 63-byte prefix of
+`<43 x a>.malware.testing.com.evil.example` used to raise a CRIT for an
+IOC domain nobody queried. [[threat-intel]] gains a table of every rule
+that matches a `dns_log` or `tls_log` name against a table and its
+status, and drops the SNI and HTTP `Host:` triggers it listed — they
+were never implemented.

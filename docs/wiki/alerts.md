@@ -471,6 +471,8 @@ Three edges, found in review:
   (`<43 x a>.control.verkada.com.evil.example` stores as a Verkada
   host). The parsers flag a stored name shorter than the wire name
   (`qname_trunc`, `host_trunc`), and both rules skip it.
+  `THREAT_DOMAIN` skips `qname_trunc` rows the same way since #152
+  (see [[threat-intel]]).
 - **One name per incident.** The detail carries the smallest name the
   host used for the vendor across the ring, not each row's, so two
   names under one key do not turn the incident into an `alert.update`

@@ -1169,7 +1169,15 @@ void rule_dga_domain(const sloth_state_t *s, time_t now) {
 void rule_threat_domain(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->dns_log_count; i++) {
         const dns_log_entry_t *e = &s->dns_log[i];
-        if (!e->qname[0]) continue;
+        /* qname_trunc (#152): the stored name is a prefix of the wire
+         * name, cut at 63 bytes or stopped at a NUL octet. An IOC match
+         * is a suffix match, and the wire name continues past the
+         * stored text, so a match on a cut row is always on a name
+         * nobody queried: "<43 x a>.malware.testing.com.evil.example"
+         * stores as an IOC host. Skipped, not down-graded - there is no
+         * case where the match is true, and any web page can make a
+         * browser resolve such a name. The same guard as rule_surv_dns. */
+        if (!e->qname[0] || e->qname_trunc) continue;
         const char *ioc = NULL;
         if (!ti_match_domain(e->qname, &ioc)) continue;
 

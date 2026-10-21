@@ -69,6 +69,7 @@ test-only parser that `test_sni_snoop.c` exercised refused them.
 
 ## Related pages
 
-- [[alerts]] — `THREAT_DOMAIN` fires when SNI hits the IOC list.
-- [[threat-intel]] — IOC list format used for SNI matching.
+- [[alerts]] — `THREAT_DOMAIN` fires when a DNS qname hits the IOC
+  list; SNI is not matched against it (#152 corrected this line).
+- [[threat-intel]] — the IOC list and its matching semantics.
 - [[attack-map]] — TLS downgrade / weak crypto / implant fingerprint entries.

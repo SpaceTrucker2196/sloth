@@ -35,6 +35,7 @@
 #include "ctrl_frames.h"
 #include "tune.h"
 #include "dns_log.h"
+#include "threat_intel.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
 
@@ -7777,6 +7778,83 @@ static void test_surv_dns_wire_name_with_nul_octet_does_not_fire(void) {
     surv_dns_end();
 }
 
+/* #152: THREAT_DOMAIN over the same wire-built names. The IOC match is
+ * a suffix match, so the stored 63-byte prefix of
+ * "<43 x a>.malware.testing.com.evil.example" reads as an IOC host
+ * while the name actually queried is under evil.example. */
+static int threat_domain_count(const sloth_state_t *s) {
+    int n = 0;
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == ALERT_TYPE_THREAT_DOMAIN) n++;
+    return n;
+}
+
+static void test_threat_domain_wire_name_cut_at_63_does_not_fire(void) {
+    /* Seen red by dropping `|| e->qname_trunc` from rule_threat_domain's
+       guard: the CRIT fires on malware.testing.com. */
+    sloth_state_t s; surv_dns_begin(&s);
+    char a[44]; memset(a, 'a', 43); a[43] = '\0';
+    const char *labs[] = { a, "malware", "testing", "com", "evil", "example" };
+    uint8_t m[128];
+    int len = surv_wire_query(m, (int)sizeof m, labs, 6);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(m, len, "10.0.0.5", &e), 1);
+    ASSERT_EQ((int)strlen(e.qname), DNS_NAME_LEN - 1);
+    /* The precondition the guard exists for: the cut text does match. */
+    ASSERT(ti_match_domain(e.qname, NULL));
+    ASSERT_EQ((int)e.qname_trunc, 1);
+    s.dns_log[s.dns_log_count++] = e;
+    alerts_update(&s);
+    ASSERT_EQ(threat_domain_count(&s), 0);
+    surv_dns_end();
+}
+
+static void test_threat_domain_wire_name_of_exactly_63_fires_crit(void) {
+    /* Positive control: the attacker's two labels removed, so the 63
+       stored bytes are the whole name and the IOC lookup is real. Seen
+       red by making the guard skip every row. */
+    sloth_state_t s; surv_dns_begin(&s);
+    char a[44]; memset(a, 'a', 43); a[43] = '\0';
+    const char *labs[] = { a, "malware", "testing", "com" };
+    uint8_t m[128];
+    int len = surv_wire_query(m, (int)sizeof m, labs, 4);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(m, len, "10.0.0.5", &e), 1);
+    ASSERT_EQ((int)strlen(e.qname), DNS_NAME_LEN - 1);
+    ASSERT_EQ((int)e.qname_trunc, 0);
+    s.dns_log[s.dns_log_count++] = e;
+    alerts_update(&s);
+    ASSERT_EQ(threat_domain_count(&s), 1);
+    int i = find_alert(&s, ALERT_TYPE_THREAT_DOMAIN);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+    surv_dns_end();
+}
+
+static void test_threat_domain_wire_name_with_nul_octet_does_not_fire(void) {
+    /* "com\0x": stored as x.malware.testing.com, but the last label on
+       the wire is the five octets c,o,m,NUL,x, not "com". Seen red by
+       the same guard mutation as the cut-at-63 test. */
+    sloth_state_t s; surv_dns_begin(&s);
+    static const uint8_t q[] = {
+        0x12,0x34, 0x01,0x00, 0x00,0x01, 0x00,0x00, 0x00,0x00, 0x00,0x00,
+        1,'x', 7,'m','a','l','w','a','r','e', 7,'t','e','s','t','i','n','g',
+        5,'c','o','m',0x00,'x', 0,
+        0x00,0x01, 0x00,0x01
+    };
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(q, (int)sizeof q, "10.0.0.5", &e), 1);
+    ASSERT_STR(e.qname, "x.malware.testing.com");
+    ASSERT(ti_match_domain(e.qname, NULL));
+    ASSERT_EQ((int)e.qname_trunc, 1);
+    s.dns_log[s.dns_log_count++] = e;
+    alerts_update(&s);
+    ASSERT_EQ(threat_domain_count(&s), 0);
+    surv_dns_end();
+}
+
 static void test_surv_dns_detail_names_one_stable_qname(void) {
     /* Two names for one host and vendor, in both row orders. The detail
        carries the smallest, whichever row fired last, so the incident's
@@ -10732,6 +10810,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_surv_dns_wire_name_cut_at_63_does_not_fire);
     RUN_TEST(test_surv_dns_wire_name_of_exactly_63_fires);
     RUN_TEST(test_surv_dns_wire_name_with_nul_octet_does_not_fire);
+    RUN_TEST(test_threat_domain_wire_name_cut_at_63_does_not_fire);
+    RUN_TEST(test_threat_domain_wire_name_of_exactly_63_fires_crit);
+    RUN_TEST(test_threat_domain_wire_name_with_nul_octet_does_not_fire);
     RUN_TEST(test_surv_dns_detail_names_one_stable_qname);
     RUN_TEST(test_surv_cloud_sni_quiet_on_truncated_host);
     RUN_TEST(test_surv_cloud_sni_detail_names_one_stable_host);
