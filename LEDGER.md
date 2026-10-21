@@ -241,3 +241,5 @@
 | 48e3dfe | 2026-10-20T18:10:46Z | claude-opus-5-5 | 40 | 12900 | 10254208 | 26431 | 2.5204 | Close the manifest review findings: counted failures, pinned bytes, no torn lines (refs #92) |
 | 1fc1201 | 2026-10-20T18:32:40Z | claude-opus-5-5 | 28 | 11396 | 8818608 | 25669 | 2.1971 | Bound the TLS ClientHello uint16 list walks at the extension |
 | 65321c9 | 2026-10-20T22:28:08Z | claude-fable-5-1, claude-opus-5-5 | 164 | 29189 | 19768815 | 1355344 | 16.1469 | Wave 2A of #145: #104 MLE rules, #82 Pixie-Dust + WPS timeline, #77 stack measures + WSC vendor strings, #105 SURV_DNS + Verkada row |
+| 30b7aa7 | 2026-10-21T01:03:23Z | claude-opus-5-5 | 46 | 21061 | 14320729 | 733199 | 9.1511 | Regenerate counts and the research index for the Wave 2B kinds (refs #145) |
+| 3a36b63 | 2026-10-21T01:34:01Z | claude-opus-5-5 | 32 | 12366 | 11137656 | 17911 | 2.6183 | Make the host OUI registry cross-check opt-in (refs #106) |
