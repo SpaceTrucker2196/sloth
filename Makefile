@@ -551,6 +551,7 @@ WEB_EMBED       = $(WEB_GEN_DIR)/embed
 WEB_ASSETS_C    = $(WEB_GEN_DIR)/web_assets.c
 WEB_UI          = $(wildcard web/ui/*)
 WEB_TOOL_SRCS   = web/tools/sha256.c
+WEB_EMBED_SRCS  = web/tools/embed.c $(WEB_TOOL_SRCS)
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C)
 WEB_TEST_SRCS   = $(wildcard web/tests/*.c)
 WEB_LDLIBS      = -lpthread
@@ -558,9 +559,9 @@ ifeq ($(UNAME),Linux)
     WEB_LDFLAGS = -pie -Wl,-z,relro,-z,now
 endif
 
-$(WEB_EMBED): web/tools/embed.c $(WEB_TOOL_SRCS) web/tools/sha256.h
+$(WEB_EMBED): $(WEB_EMBED_SRCS) web/tools/sha256.h
 	@mkdir -p $(WEB_GEN_DIR)
-	$(CC) $(CFLAGS) -Iweb/tools -o $@ web/tools/embed.c $(WEB_TOOL_SRCS)
+	$(CC) $(CFLAGS) -Iweb/tools -o $@ $(WEB_EMBED_SRCS)
 
 $(WEB_ASSETS_C): $(WEB_EMBED) $(WEB_UI)
 	$(WEB_EMBED) web/ui index.html $@.tmp
