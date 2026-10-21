@@ -20,8 +20,10 @@ per-view depth live in [`docs/views/`](docs/views/) and
 ## 1. Mission
 
 Sloth is a terminal-based **passive signals-intelligence (SIGINT)
-console** for IP and 802.11 networks. It turns what a host already
-sees — `/proc`, `/sys`, netlink, and a libpcap stream — into a live
+console** for IP, 802.11 and Bluetooth (Classic BR/EDR and Low Energy)
+networks. It turns what a host already sees — `/proc`, `/sys`, netlink,
+a libpcap stream, and a Bluetooth receiver (the host's HCI controller,
+or an Ubertooth for over-the-air capture) — into a live
 operator view: <!-- count:views -->35<!-- /count --> panels, <!-- count:rules -->86<!-- /count --> alert rules, an embedded (synthetic)
 threat-intel matcher, a WiFi-SIGINT toolkit, and an optional JSONL
 forensic log.
@@ -87,6 +89,16 @@ issue.
    when the handle opens. It changes what sloth's own NIC accepts, never
    what the segment carries. Stated here so the list is complete rather
    than comfortable.
+
+   **Bluetooth is held to the same rule.** On Bluetooth Classic and Low
+   Energy a receiver is used only to receive: no inquiry, no active
+   scanning (no SCAN_REQ), no connection, pairing or GATT read, no
+   advertising, and no Ubertooth transmit, interference or jamming mode.
+   A host controller is listened to through a passive scan the operator
+   started, or a capture stream; an Ubertooth is driven only in its
+   receive and follow modes. *(Scope widened to Bluetooth and BLE, with
+   Ubertooth support, on 2026-10-21 under the operator's explicit
+   instruction; see #144.)*
 
    *(Rule rewritten 2026-10-14. Drafted by the agent on #84 and applied
    under the operator's explicit authorisation of that date — the charter

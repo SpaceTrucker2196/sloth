@@ -4452,3 +4452,7 @@ their class and the model follow the latest tick. The mDNS key is
 documented as the advertised A-record address, not a packet source. The
 Devices list mockup is now a real harness render, and the Hits cell
 stays inside five cells (`123k`).
+
+## 2026-10-21 — Charter widened to Bluetooth and BLE; migration path by design
+
+Owner rulings of 2026-10-21. MISSION §1 now covers Bluetooth Classic (BR/EDR) and Low Energy, read from the host HCI controller or an Ubertooth; §2 rule 1 holds Bluetooth to the same no-injection rule (no inquiry, no active scan, no connection or GATT read, no advertising, no Ubertooth transmit or jamming mode). Schema changes now always ship a chained, value-preserving migration from the previous version (src/db.h, [[sqlite-schema]], agents/AGENTS.md); only a file from a newer build is refused.
