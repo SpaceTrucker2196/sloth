@@ -179,8 +179,7 @@ uint64_t sh_evict_total_tables(void);
  * "frag_session", "frag_assoc", "frag_mpdu", "ndp_ra", "rogue_radius",
  * "ssdp_device", "onvif_device", "smtp_flow", "eapol_pending",
  * "deauth_obs", "deauth_victim", "rtsp_exchange", "rtsp_stream",
- * "lan_role".
- * "ble_device".
+ * "lan_role", "ble_device".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 
