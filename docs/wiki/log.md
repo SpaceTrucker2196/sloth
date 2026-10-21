@@ -4405,3 +4405,30 @@ parameters are matched by name stem (`login`, `account`, `token`,
 `loginpas`); the alert detail's example path is the smallest anonymous
 path and carries no port, so slot order no longer moves the incident.
 The one-message-per-segment limit is now stated in the operator docs.
+
+## 2026-10-20 — #106 round 2: camera identity on the device record
+
+**Created pages**: [camera-detection.md](camera-detection.md) — the
+camera rules with their sources, and the join that puts their evidence
+on the device record.
+
+**Updated pages**: [index.md](index.md), [jsonl-schema.md](jsonl-schema.md),
+[sqlite-schema.md](sqlite-schema.md), [release-checklist.md](release-checklist.md),
+[cli-reference.md](cli-reference.md), [views-catalog.md](views-catalog.md),
+[alerts.md](alerts.md); source doc `docs/views/devices.md`.
+
+`src/camera_join.c` folds the camera rules' inputs onto `device_t`:
+`device_class` (`camera` / `camera-vendor`), `camera_vendor`,
+`camera_model` (ONVIF `name` + `hardware` scopes), `setup_mode` and a
+`cam_signal_mask`, joined on IP for the LAN signals and on MAC for the
+beacon ones, never a setup SoftAP's BSSID to a LAN IP. A camera heard on
+the LAN with no record for its IP gets an IP-only record (`Src` `C`, no
+MAC). The setup-SSID prefix table and the SSDP row test moved into
+`src/camera_vendor.c` so the rules and the join share them; no rule's
+behaviour changed. The Devices view gains a `Class` column (`CAMERA` /
+`CAM?`), flexing IP / Vendor / Name widths, and an `Enter` detail with
+the signal trail, ONVIF scopes, mDNS instances, SSDP `SERVER` and RTSP
+exposure. JSONL `device` gains five additive fields; `--db` goes to
+schema v6 with an in-place, add-column-only v5 → v6 migration, the first
+migration `db_open()` performs. Default-credential matching stays struck
+(#145).

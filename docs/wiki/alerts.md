@@ -556,6 +556,9 @@ considered and left out (Ubiquiti, TP-Link, Wyze; unregistered mDNS
 types), in `research/papers/camera-vendor-identity.md`. Leaving Ubiquiti
 out means #106's Case B (`B6:FB:E4` expected to fire as `ubiquiti`)
 does not fire by design; that deviation awaits an owner ruling on #106.
+The camera rules' evidence is also folded onto the device record
+and shown as a `CAMERA` row on `[g]` Devices; how, and on which keys,
+is [[camera-detection]].
 ### Anonymous RTSP — `CAM_RTSP_UNAUTH` (#106 slice B)
 
 `src/rtsp_snoop.c` reads RTSP on TCP 554 and 8554 (RFC 2326, RFC 7826

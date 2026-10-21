@@ -1857,11 +1857,11 @@ static void test_btm_requests_in_finding_retention_tier(void) {
 
 /* ── Schema v4: the batched column bump ──────────────────── */
 
-static void test_schema_version_is_five(void) {
+static void test_schema_version_is_six(void) {
     fresh_db();
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "5");
+    ASSERT_STR(v, "6");
     db_close();
     unlink(db_path);
 }
@@ -2268,6 +2268,191 @@ static void test_open_refuses_symlinked_db(void) {
     d87_unlink_all();
 }
 
+/* ── Schema v6: camera identity on devices (#106 round 2) ── */
+
+static void seed_camera_device(sloth_state_t *s, int cls, int mask,
+                               const char *vendor, const char *model,
+                               int setup) {
+    memset(s, 0, sizeof(*s));
+    seed_device(s, 0x64, "10.0.0.64", 1700000000);
+    device_t *d = &s->devices[0];
+    d->device_class    = (device_class_t)cls;
+    d->cam_signal_mask = mask;
+    d->setup_mode      = setup;
+    snprintf(d->camera_vendor, sizeof(d->camera_vendor), "%s", vendor);
+    snprintf(d->camera_model,  sizeof(d->camera_model),  "%s", model);
+}
+
+/* Written as observed, and kept as history: the mask ORs, the class
+ * and the setup flag only rise, and an empty vendor/model never
+ * overwrites a recorded one. Seen to fail with the upsert's cam_signals
+ * set to excluded.cam_signals (the mask reads 4, the WSD bit lost) and
+ * with the camera_model COALESCE replaced by excluded.camera_model (the
+ * model reads ""). */
+static void test_device_camera_columns_are_sticky(void) {
+    fresh_db();
+    sloth_state_t s;
+    seed_camera_device(&s, DEV_CLASS_CAMERA, CAM_SIG_WS_DISCOVERY,
+                       "Hikvision", "HIKVISION DS-2CD2042WD-I", 0);
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT device_class FROM devices"), 2);
+    ASSERT_EQ(q_int("SELECT cam_signals FROM devices"), CAM_SIG_WS_DISCOVERY);
+    char v[64];
+    q_text("SELECT camera_model FROM devices", v, sizeof(v));
+    ASSERT_STR(v, "HIKVISION DS-2CD2042WD-I");
+
+    /* Next tick: the ONVIF row aged out, an mDNS row is all that is left. */
+    seed_camera_device(&s, DEV_CLASS_CAMERA_VENDOR, CAM_SIG_MDNS_SERVICE,
+                       "", "", 0);
+    db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT device_class FROM devices"), 2);
+    ASSERT_EQ(q_int("SELECT cam_signals FROM devices"),
+              CAM_SIG_WS_DISCOVERY | CAM_SIG_MDNS_SERVICE);
+    q_text("SELECT camera_model FROM devices", v, sizeof(v));
+    ASSERT_STR(v, "HIKVISION DS-2CD2042WD-I");
+    q_text("SELECT camera_vendor FROM devices", v, sizeof(v));
+    ASSERT_STR(v, "Hikvision");
+    db_close();
+    unlink(db_path);
+}
+
+/* An IP-only camera record has no MAC to key a row on and is not
+ * written. Seen to fail with write_devices()'s zero-MAC skip removed
+ * (a 00:00:00:00:00:00 row appears). */
+static void test_ip_only_camera_record_is_not_persisted(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    device_t *d = &s.devices[s.device_count++];
+    snprintf(d->ip, sizeof(d->ip), "10.0.0.65");
+    d->sources = DEV_SRC_CAMERA;
+    d->device_class = DEV_CLASS_CAMERA;
+    d->last_seen = 1700000000;
+    seed_device(&s, 0x11, "10.0.0.5", 1700000000);
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"
+                    " WHERE mac='00:00:00:00:00:00'"), 0);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v5 devices table, as the v5 DDL wrote it. */
+static void write_v5_file(const char *extra_sql) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    char sql[2048];
+    snprintf(sql, sizeof(sql),
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','5');"
+        "CREATE TABLE devices ("
+        "  mac TEXT PRIMARY KEY, ip TEXT, hostname TEXT, vendor TEXT,"
+        "  last_ssid TEXT, is_ap INTEGER NOT NULL DEFAULT 0,"
+        "  signal_dbm INTEGER, probe_count INTEGER NOT NULL DEFAULT 0,"
+        "  sources INTEGER NOT NULL DEFAULT 0,"
+        "  risk_signals INTEGER NOT NULL DEFAULT 0,"
+        "  risk_level INTEGER NOT NULL DEFAULT 0,"
+        "  first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL%s);"
+        "INSERT INTO devices (mac,ip,hostname,vendor,probe_count,sources,"
+        "  risk_level,first_seen,last_seen) VALUES ('02:00:00:00:00:77',"
+        "  '10.0.0.77','old-host','OldCo',9,3,2,1600000000,1600000500);",
+        extra_sql);
+    ASSERT_EQ(sqlite3_exec(h, sql, NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    chmod(db_path, 0600);
+}
+
+/* v5 -> v6 adds the five columns with their defaults and changes no
+ * value already in the file, then the file takes v6 writes. Seen to
+ * fail with check_version()'s DB_MIGRATES_FROM branch removed (the v5
+ * file is refused: db_open() returns 0). */
+static void test_v5_file_migrates_additively(void) {
+    write_v5_file("");
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "6");
+    q_text("SELECT hostname FROM devices WHERE mac='02:00:00:00:00:77'",
+           v, sizeof(v));
+    ASSERT_STR(v, "old-host");
+    ASSERT_EQ(q_int("SELECT probe_count FROM devices"), 9);
+    ASSERT_EQ(q_int("SELECT risk_level FROM devices"), 2);
+    ASSERT_EQ(q_int("SELECT first_seen FROM devices"), 1600000000);
+    ASSERT_EQ(q_int("SELECT last_seen FROM devices"), 1600000500);
+    ASSERT_EQ(q_int("SELECT device_class FROM devices"), 0);
+    ASSERT_EQ(q_int("SELECT cam_signals FROM devices"), 0);
+    ASSERT_EQ(q_int("SELECT setup_mode FROM devices"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices WHERE camera_vendor IS NULL"
+                    " AND camera_model IS NULL"), 1);
+    /* Same column order as a fresh v6 file: the migrated table and the
+     * DDL agree position for position. */
+    ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('devices')"
+                    " WHERE name='cam_signals'"), 17);
+
+    sloth_state_t s;
+    seed_camera_device(&s, DEV_CLASS_CAMERA, CAM_SIG_SETUP_SSID,
+                       "Hikvision", "", 1);
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 2);
+    ASSERT_EQ(q_int("SELECT setup_mode FROM devices"
+                    " WHERE mac='02:00:00:00:00:64'"), 1);
+    db_close();
+    /* Reopening a migrated file is a plain v6 open. */
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* The migration is one transaction: a v5 file on which the last ALTER
+ * fails (here, cam_signals already exists) keeps v5, its rows, and none
+ * of the four columns the earlier statements added. Seen to fail with
+ * the BEGIN IMMEDIATE dropped from migrate_v5() (camera_vendor
+ * survives the failed migration). */
+static void test_v5_migration_failure_leaves_file_unchanged(void) {
+    write_v5_file(", cam_signals INTEGER");
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[16];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "5");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
+                    " WHERE name='camera_vendor'"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM devices"), 1);
+    unlink(db_path);
+}
+
+/* Only v5 is upgraded: a v4 file is still refused. */
+static void test_v4_file_is_still_refused(void) {
+    db_close();
+    unlink(db_path);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    sqlite3_exec(h,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        "INSERT INTO meta VALUES('schema_version','4');", NULL, NULL, NULL);
+    sqlite3_close(h);
+    chmod(db_path, 0600);
+    ASSERT_EQ(db_open(db_path), 0);
+    char v[16];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "4");
+    unlink(db_path);
+}
+
+/* The migration text is held to the same guardrail as the schema. */
+static void test_migration_sql_is_add_column_only(void) {
+    const char *m = db_schema_migrate_v5_sql();
+    int stmts = 0;
+    for (const char *p = m; (p = strstr(p, "ALTER TABLE devices ADD COLUMN ")); p++)
+        stmts++;
+    ASSERT_EQ(stmts, 5);
+    ASSERT(strstr(m, "UPDATE") == NULL);
+    ASSERT(strstr(m, "DELETE") == NULL);
+    ASSERT(strstr(m, "DROP")   == NULL);
+    ASSERT(strstr(m, "password") == NULL);
+}
+
 void run_db_tests(void) {
     TEST_SUITE("db: MISSION §2 schema guardrails");
     RUN_TEST(test_no_column_can_hold_secret_material);
@@ -2301,7 +2486,13 @@ void run_db_tests(void) {
     RUN_TEST(test_btm_requests_first_seen_does_not_move);
     RUN_TEST(test_btm_requests_forcing_index_exists);
     RUN_TEST(test_btm_requests_in_finding_retention_tier);
-    RUN_TEST(test_schema_version_is_five);
+    RUN_TEST(test_schema_version_is_six);
+    RUN_TEST(test_device_camera_columns_are_sticky);
+    RUN_TEST(test_ip_only_camera_record_is_not_persisted);
+    RUN_TEST(test_v5_file_migrates_additively);
+    RUN_TEST(test_v5_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_v4_file_is_still_refused);
+    RUN_TEST(test_migration_sql_is_add_column_only);
     RUN_TEST(test_v5_karma_pnl_best_column_exists);
     RUN_TEST(test_v4_columns_exist);
     RUN_TEST(test_downgrade_flags_accumulate_on_the_ap);

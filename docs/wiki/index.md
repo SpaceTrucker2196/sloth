@@ -44,6 +44,10 @@ the Wi-Fi it watches:
   format, how it merges with `--my-ssid`/`--my-bssid`, and why `site`
   is configuration-only.
 - [[ja3-fingerprinting]] — TLS ClientHello fingerprinting.
+- [[camera-detection]] — passive IP-camera recognition (#106): the
+  camera rules, their cited sources, and the device-record join behind
+  the `CAMERA` row on `[g]` Devices — joined on IP or MAC only, never a
+  setup SoftAP to a LAN IP; no default-credential matching.
 
 ## WiFi SIGINT
 

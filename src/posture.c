@@ -17,6 +17,17 @@
 #include "wifi_assess.h"
 #include "wifi_baseline.h"
 
+/* An IP-only camera device record (#106 round 2) has an all-zero MAC;
+ * it is printed as `none`, the same way the JSONL device record does,
+ * rather than as an address nobody has. */
+static void posture_mac(const uint8_t m[6], char *out, size_t n,
+                        const char *none) {
+    static const uint8_t z[6] = {0};
+    if (memcmp(m, z, 6) == 0) { snprintf(out, n, "%s", none); return; }
+    snprintf(out, n, "%02x:%02x:%02x:%02x:%02x:%02x",
+             m[0], m[1], m[2], m[3], m[4], m[5]);
+}
+
 static void iso_time(char out[32], time_t t) {
     struct tm tm_buf;
     struct tm *tm = gmtime_r(&t, &tm_buf);
@@ -125,9 +136,7 @@ int posture_render_md(FILE *out, const sloth_state_t *s,
             const device_t *d = &s->devices[i];
             if (d->risk_level < DEV_RISK_HIGH) continue;
             char mac[20];
-            snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x",
-                     d->mac[0], d->mac[1], d->mac[2],
-                     d->mac[3], d->mac[4], d->mac[5]);
+            posture_mac(d->mac, mac, sizeof(mac), "-");
             fprintf(out, "| `%s` | `%s` | %s | %s | **%s** | `0x%x` |\n",
                     mac,
                     d->ip[0] ? d->ip : "-",
@@ -456,9 +465,7 @@ int posture_render_json(FILE *out, const sloth_state_t *s, time_t session_start)
         const device_t *d = &s->devices[i];
         if (d->risk_level < DEV_RISK_HIGH) continue;
         char mac[20];
-        snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x",
-                 d->mac[0], d->mac[1], d->mac[2],
-                 d->mac[3], d->mac[4], d->mac[5]);
+        posture_mac(d->mac, mac, sizeof(mac), "");
         fprintf(out, "%s{\"mac\":\"%s\",\"ip\":\"%s\",\"vendor\":\"%s\","
                      "\"hostname\":\"%s\",\"risk\":\"%s\",\"risk_signals\":%d}",
                 first ? "" : ",",

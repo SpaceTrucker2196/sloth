@@ -27,6 +27,7 @@
 #include "alert_pcap.h"
 #include "eapol_log.h"
 #include "reg_obs.h"           /* wifi_regulatory (#101 slice B) */
+#include "camera_join.h"       /* device_class_label() (#106 round 2) */
 
 static FILE           *g_fp;
 /* Open refusal reason and write-failure count (#87), under g_mu. */
@@ -847,7 +848,13 @@ void jsonl_emit_devices(const sloth_state_t *s) {
         const device_t *e = &s->devices[i];
         char buf[LINEBUF]; int off = 0;
         start_obj(buf, LINEBUF, &off, "device", now);
-        kv_mac(buf, LINEBUF, &off, "mac",         e->mac);
+        /* An IP-only camera record (#106 round 2) has no MAC; "" says
+         * so, where 00:00:00:00:00:00 would read as an address. */
+        static const uint8_t zmac[6] = {0};
+        if (memcmp(e->mac, zmac, 6) == 0)
+            kv_str(buf, LINEBUF, &off, "mac", "");
+        else
+            kv_mac(buf, LINEBUF, &off, "mac",     e->mac);
         kv_str(buf, LINEBUF, &off, "ip",          e->ip);
         kv_str(buf, LINEBUF, &off, "hostname",    e->hostname);
         kv_str(buf, LINEBUF, &off, "vendor",      e->vendor);
@@ -859,6 +866,17 @@ void jsonl_emit_devices(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
         kv_str(buf, LINEBUF, &off, "risk",         device_risk_label(e->risk_level));
         kv_int(buf, LINEBUF, &off, "risk_signals", (long long)e->risk_signals);
+        /* Additive (#106 round 2): camera identity, every one a discrete
+         * value. This record has no change-only signature today; if it
+         * gains one these can enter it as they are. The per-signal
+         * cam_seen[] times stay off it: each source row already carries
+         * its own last_seen on its own record (onvif_device,
+         * mdns_service, ssdp_device, beacon). */
+        kv_str(buf, LINEBUF, &off, "device_class",  device_class_label(e->device_class));
+        kv_str(buf, LINEBUF, &off, "camera_vendor", e->camera_vendor);
+        kv_str(buf, LINEBUF, &off, "camera_model",  e->camera_model);
+        kv_int(buf, LINEBUF, &off, "setup_mode",    e->setup_mode ? 1 : 0);
+        kv_int(buf, LINEBUF, &off, "cam_signals",   (long long)e->cam_signal_mask);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }

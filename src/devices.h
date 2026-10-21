@@ -5,7 +5,8 @@
 
 /* Synthesize the device table from existing per-source state (ARP, DHCP,
  * beacons, probes, WiFi stations) and fill s->devices.
- * Deduplicates by MAC. Pulls hostname from DHCP via ARP-resolved IP,
+ * Deduplicates by MAC, then folds camera identity on (src/camera_join.h),
+ * which may add IP-only camera records. Pulls hostname from DHCP via ARP-resolved IP,
  * vendor from the embedded OUI table. Safe to call once per poll. */
 void devices_update(sloth_state_t *s);
 

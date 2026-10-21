@@ -5,6 +5,7 @@
 #include "sloth_clock.h"
 #include "sensor_health.h"
 #include "oui.h"
+#include "camera_join.h"
 
 /* ── MAC helpers ─────────────────────────────────────────── */
 
@@ -145,6 +146,11 @@ void devices_update(sloth_state_t *s) {
     merge_beacons(s, buf, &n, now);
     merge_probes(s, buf, &n, now);
     merge_stas  (s, buf, &n, now);
+    /* After every MAC-keyed source, so a camera row joins the record
+     * ARP already gave its IP rather than creating an IP-only twin of
+     * it, and before DHCP so an IP-only camera record can still pick
+     * up its lease hostname (#106 round 2). */
+    camera_join (s, buf, &n);
     merge_dhcp  (s, buf, &n, now);
 
     /* Sort newest-first by last_seen. */

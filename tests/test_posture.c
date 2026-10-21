@@ -118,6 +118,11 @@ static void test_md_lists_high_risk_devices_only(void) {
     ASSERT(contains(buf, "**CRIT**"));
     /* LOW device must not appear in the High-risk section. */
     ASSERT(!contains(buf, "printer.local"));
+    /* d2 has no MAC (an IP-only camera record has none, #106 round 2):
+     * "-", not an all-zero address. Seen to fail with posture_mac()'s
+     * zero test removed. */
+    ASSERT(contains(buf, "| `-` | `10.0.0.99` |"));
+    ASSERT(!contains(buf, "00:00:00:00:00:00"));
 }
 
 static void test_json_shape(void) {

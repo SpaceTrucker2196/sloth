@@ -210,6 +210,7 @@ CORE_COMMON_SRCS += src/ble_snoop.c
 CORE_COMMON_SRCS += src/scan.c
 CORE_COMMON_SRCS += src/alert_key.c
 CORE_COMMON_SRCS += src/camera_vendor.c
+CORE_COMMON_SRCS += src/camera_join.c
 CORE_COMMON_SRCS += src/privdrop.c
 CORE_COMMON_SRCS += src/poll.c
 

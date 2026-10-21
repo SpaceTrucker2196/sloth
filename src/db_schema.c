@@ -52,7 +52,16 @@ static const char SCHEMA_SQL[] =
     "  risk_signals  INTEGER NOT NULL DEFAULT 0,"
     "  risk_level    INTEGER NOT NULL DEFAULT 0,"
     "  first_seen    INTEGER NOT NULL,"
-    "  last_seen     INTEGER NOT NULL"
+    "  last_seen     INTEGER NOT NULL,"
+    /* Camera identity (#106 round 2, schema v6). Discrete values only:
+     * device_class is device_class_t, cam_signals the CAM_SIG_* mask.
+     * Listed last and in the order MIGRATE_V5_SQL adds them, so a
+     * migrated v5 file and a fresh v6 file have the same column order. */
+    "  device_class  INTEGER NOT NULL DEFAULT 0,"
+    "  camera_vendor TEXT,"
+    "  camera_model  TEXT,"
+    "  setup_mode    INTEGER NOT NULL DEFAULT 0,"
+    "  cam_signals   INTEGER NOT NULL DEFAULT 0"
     ");\n"
     "CREATE INDEX IF NOT EXISTS idx_devices_last_seen ON devices(last_seen);\n"
 
@@ -668,5 +677,20 @@ static const char META_SQL[] =
     "  value TEXT NOT NULL"
     ");\n";
 
-const char *db_schema_sql(void)      { return SCHEMA_SQL; }
-const char *db_schema_meta_sql(void) { return META_SQL; }
+/* v5 -> v6 (#106 round 2): the one migration, and additive only. Each
+ * statement appends a column with a default; none rewrites a value
+ * already in the file, so a v5 forensic record reads the same after it
+ * as before. A NOT NULL column needs its DEFAULT here for ALTER TABLE to
+ * accept it on a table that already has rows. Run inside one
+ * transaction by db.c, with the version stamp, so a file is never left
+ * half-migrated. */
+static const char MIGRATE_V5_SQL[] =
+    "ALTER TABLE devices ADD COLUMN device_class  INTEGER NOT NULL DEFAULT 0;\n"
+    "ALTER TABLE devices ADD COLUMN camera_vendor TEXT;\n"
+    "ALTER TABLE devices ADD COLUMN camera_model  TEXT;\n"
+    "ALTER TABLE devices ADD COLUMN setup_mode    INTEGER NOT NULL DEFAULT 0;\n"
+    "ALTER TABLE devices ADD COLUMN cam_signals   INTEGER NOT NULL DEFAULT 0;\n";
+
+const char *db_schema_sql(void)        { return SCHEMA_SQL; }
+const char *db_schema_meta_sql(void)   { return META_SQL; }
+const char *db_schema_migrate_v5_sql(void) { return MIGRATE_V5_SQL; }

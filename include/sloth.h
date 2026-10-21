@@ -630,6 +630,40 @@ typedef struct {
 #define DEV_SRC_BEACON  (1 << 3)
 #define DEV_SRC_PROBE   (1 << 4)
 #define DEV_SRC_STA     (1 << 5)
+/* A camera-discovery row (WS-Discovery, mDNS, SSDP, RTSP) joined to
+ * this record by IP (#106 round 2). A record with only this bit and an
+ * all-zero MAC is a camera sloth heard announce itself but never saw a
+ * link-layer address for: the IP is then its only key. */
+#define DEV_SRC_CAMERA  (1 << 6)
+
+/* ── Camera identity on the device record (#106 round 2) ──
+ *
+ * Which of the camera rules' inputs were seen for this device, joined
+ * only on a key sloth actually observes: the same IP for the LAN-side
+ * signals, the same MAC (BSSID) for the beacon-side ones. A setup
+ * SoftAP's BSSID is never joined to a LAN IP — nothing on the air ties
+ * the two, so the camera behind a setup AP and the same camera on the
+ * LAN are two records. One bit per rule, named after it. */
+#define CAM_SIG_WS_DISCOVERY  (1 << 0)  /* CAM_WS_DISCOVERY: ONVIF NVT */
+#define CAM_SIG_SETUP_SSID    (1 << 1)  /* CAM_SETUP_SSID: beacon SSID  */
+#define CAM_SIG_MDNS_SERVICE  (1 << 2)  /* CAM_MDNS_SERVICE             */
+#define CAM_SIG_SSDP_DEVICE   (1 << 3)  /* CAM_SSDP_DEVICE              */
+#define CAM_SIG_SETUP_OUI     (1 << 4)  /* CAM_SETUP_OUI: beacon BSSID  */
+#define CAM_SIG_RTSP_UNAUTH   (1 << 5)  /* CAM_RTSP_UNAUTH              */
+#define CAM_SIG_COUNT         6
+
+/* What the device class rests on. CAMERA: the device named its own
+ * class — an ONVIF NetworkVideoTransmitter, UPnP DigitalSecurityCamera:1,
+ * a camera DNS-SD service type, a camera vendor's documented setup SSID.
+ * CAMERA_VENDOR: only an address block or a SERVER product token ties it
+ * to a camera maker, and the class itself was not observed. Either one
+ * corroborates; neither confirms (#145 ruling 2). RTSP alone sets no
+ * class: it is a protocol, served by NVRs and media servers too. */
+typedef enum {
+    DEV_CLASS_UNKNOWN       = 0,
+    DEV_CLASS_CAMERA_VENDOR = 1,
+    DEV_CLASS_CAMERA        = 2,
+} device_class_t;
 
 /* ── Device risk signals (roadmap #16 phase 4) ─────
  * A bitmask of signals contributing to a device's risk bucket.
@@ -665,6 +699,18 @@ typedef struct {
     int                risk_signals;   /* bitmask of DEV_RISK_* */
     device_risk_level_t risk_level;
     time_t  last_seen;
+    /* Camera identity (#106 round 2), from src/camera_join.c. Vendor
+     * and model are what the device or its address block said, filtered
+     * to printable ASCII: model comes from the ONVIF name / hardware
+     * scopes, which the camera chooses. setup_mode is 1 only on a
+     * BSSID record whose SSID is a camera vendor's documented setup
+     * SSID — the advertisement, not the provisioning state. */
+    device_class_t device_class;
+    char    camera_vendor[32];
+    char    camera_model[48];
+    int     setup_mode;
+    int     cam_signal_mask;            /* CAM_SIG_* */
+    time_t  cam_seen[CAM_SIG_COUNT];    /* newest source row per signal */
 } device_t;
 
 /* Human-readable bucket name for the alerts view / JSONL. */
@@ -2724,6 +2770,12 @@ typedef struct {
     device_t devices[MAX_DEVICES];
     int      device_count;
     int      device_sel;
+    /* Enter detail (#106 round 2). Held by identity, not by row: the
+     * table is re-sorted newest-first every tick, so a row index would
+     * slide to another device under the operator. */
+    int      device_detail;
+    uint8_t  device_detail_mac[6];
+    char     device_detail_ip[46];
 
     /* ── Top hosts (aggregated remote IPs from conns + bw) ─── */
     top_host_t top_hosts[MAX_TOP_HOSTS];

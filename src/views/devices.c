@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -5,47 +6,337 @@
 #include "tui.h"
 #include "views/devices.h"
 #include "filter.h"
+#include "camera_join.h"
+#include "sloth_clock.h"
 
 #define DEV_PAGE 30
 
+static int mac_zero(const uint8_t m[6]) {
+    static const uint8_t z[6] = {0};
+    return memcmp(m, z, 6) == 0;
+}
+
 static void mac_str(const uint8_t mac[6], char *out, int sz) {
+    /* An IP-only camera record (#106 round 2) has no link-layer
+     * address; printing 00:00:00:00:00:00 would read as one. */
+    if (mac_zero(mac)) { snprintf(out, (size_t)sz, "-"); return; }
     snprintf(out, (size_t)sz, "%02x:%02x:%02x:%02x:%02x:%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 static void sources_str(int s, char out[8]) {
-    /* 5 single-letter source flags: A D M B P, dash if unseen.
-       (M for mDNS reserved — populated by future hookup.) */
+    /* 7 single-letter source flags, dash if unseen. M (mDNS) is
+     * reserved for a hostname join; C is a camera-discovery row
+     * joined by IP. */
     out[0] = (s & DEV_SRC_ARP)    ? 'A' : '-';
     out[1] = (s & DEV_SRC_DHCP)   ? 'D' : '-';
     out[2] = (s & DEV_SRC_MDNS)   ? 'M' : '-';
     out[3] = (s & DEV_SRC_BEACON) ? 'B' : '-';
     out[4] = (s & DEV_SRC_PROBE)  ? 'P' : '-';
     out[5] = (s & DEV_SRC_STA)    ? 'S' : '-';
-    out[6] = '\0';
+    out[6] = (s & DEV_SRC_CAMERA) ? 'C' : '-';
     out[7] = '\0';
 }
 
-void view_devices_draw(const sloth_state_t *s) {
+/* The row type. CAM? is the weaker form: an address block or SERVER
+ * token names a camera maker, and nothing said "camera". */
+static const char *class_cell(device_class_t c) {
+    switch (c) {
+    case DEV_CLASS_CAMERA:        return "CAMERA";
+    case DEV_CLASS_CAMERA_VENDOR: return "CAM?";
+    case DEV_CLASS_UNKNOWN:       break;
+    }
+    return "-";
+}
+
+static int dev_cols(void) {
 #ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
+    return COLS > 0 ? COLS : 100;
 #else
-    int page = DEV_PAGE;
+    return 100;
 #endif
+}
+
+/* Rows left below the cursor. The ANSI build has no screen to run out
+ * of, so it is never short. */
+static int rows_left(void) {
+#ifdef WITH_NCURSES
+    return LINES - getcury(stdscr);
+#else
+    return 1 << 20;
+#endif
+}
+
+/* ── column plan ───────────────────────────────────────────
+ *
+ * Fixed: MAC, Class, Src, RSI, Risk, Hits. Flexing: IP, Vendor and
+ * Name share whatever the terminal has left, so a 100-column terminal
+ * gets a row that does not wrap and a wide one gets whole hostnames
+ * and whole IPv6 addresses rather than the same 15 characters. */
+#define DEV_FIXED (1 + 17 + 2 + 2 + 6 + 2 + 2 + 2 + 7 + 2 + 4 + 2 + 4 + 2 + 5)
+
+typedef struct { int ip, vendor, name; } dev_plan_t;
+
+static dev_plan_t plan_cols(int cols) {
+    dev_plan_t p;
+    int avail = cols - 1 - DEV_FIXED;    /* never the last column */
+    if (avail < 24) avail = 24;
+    p.ip = 15;
+    int rest = avail - p.ip;
+    p.vendor = rest * 2 / 5;
+    if (p.vendor < 8)  p.vendor = 8;
+    if (p.vendor > 24) p.vendor = 24;
+    p.name = rest - p.vendor;
+    if (p.name > 48) {                   /* room to spare: widen IP to v6 */
+        int give = p.name - 48;
+        if (give > 39 - p.ip) give = 39 - p.ip;
+        p.ip   += give;
+        p.name -= give;
+    }
+    return p;
+}
+
+static int ascii_iprefix(const char *s, const char *p) {
+    for (; *p; s++, p++) {
+        char a = *s, b = *p;
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b) return 0;   /* also stops at s's NUL */
+    }
+    return 1;
+}
+
+static void name_cell(const device_t *d, char *out, size_t n) {
+    if (d->hostname[0])
+        snprintf(out, n, "%s", d->hostname);
+    else if (d->device_class != DEV_CLASS_UNKNOWN &&
+             (d->camera_vendor[0] || d->camera_model[0])) {
+        /* ONVIF name scopes usually lead with the maker already. */
+        int dup = d->camera_model[0] && d->camera_vendor[0] &&
+                  ascii_iprefix(d->camera_model, d->camera_vendor);
+        if (dup || !d->camera_vendor[0])
+            snprintf(out, n, "%s", d->camera_model);
+        else
+            snprintf(out, n, "%s%s%s", d->camera_vendor,
+                     d->camera_model[0] ? " " : "", d->camera_model);
+    }
+    else if (d->last_ssid[0])
+        snprintf(out, n, "ssid:%s", d->last_ssid);
+    else if (d->is_ap)
+        snprintf(out, n, "%s", d->setup_mode ? "(camera setup AP)"
+                                              : "(access point)");
+    else
+        snprintf(out, n, "-");
+}
+
+static const device_t *detail_device(const sloth_state_t *s) {
+    for (int i = 0; i < s->device_count; i++) {
+        const device_t *d = &s->devices[i];
+        if (!mac_zero(s->device_detail_mac)) {
+            if (memcmp(d->mac, s->device_detail_mac, 6) == 0) return d;
+        } else if (mac_zero(d->mac) &&
+                   strcmp(d->ip, s->device_detail_ip) == 0) {
+            return d;
+        }
+    }
+    return NULL;
+}
+
+/* ── detail ────────────────────────────────────────────────
+ *
+ * The screen does not scroll, so every line goes through dl(): it is
+ * cut to the terminal width (a wrapped line would push the rest down
+ * and off), and once one row is left the remainder is counted instead
+ * of drawn and the count is the last thing on the screen. */
+typedef struct { int width; int dropped; } dl_t;
+
+static void dl_title(dl_t *b, const char *t) {
+    if (rows_left() <= 2) { b->dropped++; return; }
+    tui_dim();
+    TPRINT(" \xe2\x94\x80\xe2\x94\x80 %s \xe2\x94\x80\xe2\x94\x80\n", t);
+}
+
+/* tone: 1 bright, 0 normal, -1 dim. */
+#if defined(__GNUC__)
+static void dl(dl_t *b, int tone, const char *fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+#endif
+static void dl(dl_t *b, int tone, const char *fmt, ...) {
+    char line[512];
+    va_list ap;
+    if (rows_left() <= 2) { b->dropped++; return; }
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if (tone > 0)      tui_bright();
+    else if (tone < 0) tui_dim();
+    else               tui_normal();
+    TPRINT("%.*s\n", b->width, line);
+}
+
+static void age_str(time_t now, time_t t, char *out, size_t n) {
+    if (t <= 0)          { snprintf(out, n, "-"); return; }
+    long a = (long)(now - t);
+    if (a < 0) a = 0;
+    if (a < 120)         snprintf(out, n, "%lds ago", a);
+    else if (a < 7200)   snprintf(out, n, "%ldm ago", a / 60);
+    else if (a < 172800) snprintf(out, n, "%ldh ago", a / 3600);
+    else                 snprintf(out, n, "%ldd ago", a / 86400);
+}
+
+static void draw_device_detail(const sloth_state_t *s) {
+    dl_t b = { dev_cols() - 1, 0 };
+    if (b.width < 20) b.width = 20;
+    const device_t *d = detail_device(s);
+    tui_dim();
+    TPRINT(" \xe2\x94\x80\xe2\x94\x80 DEVICE DETAIL \xe2\x94\x80\xe2\x94\x80"
+           "  [Enter/Esc] back\n");
+    if (!d) {
+        tui_dim();
+        TPRINT("  (device no longer in the table - press Enter to return)\n");
+        tui_normal();
+        return;
+    }
+    time_t now = sloth_wall();
+    char mac[20]; mac_str(d->mac, mac, sizeof(mac));
+    char src[8];  sources_str(d->sources, src);
+
+    dl(&b, 1, "  MAC %s   IP %s   OUI vendor %s   Src %s", mac,
+       d->ip[0] ? d->ip : "-", d->vendor[0] ? d->vendor : "?", src);
+    if (d->device_class == DEV_CLASS_CAMERA)
+        dl(&b, 1, "  Class    camera - the device named its own class;"
+           " corroborated, not confirmed");
+    else if (d->device_class == DEV_CLASS_CAMERA_VENDOR)
+        dl(&b, 1, "  Class    camera-vendor - an address block or SERVER"
+           " token names a camera maker; class not observed");
+    else
+        dl(&b, 0, "  Class    -");
+    if (d->camera_vendor[0] || d->camera_model[0])
+        dl(&b, 0, "  Camera   vendor %s   model %s",
+           d->camera_vendor[0] ? d->camera_vendor : "-",
+           d->camera_model[0]  ? d->camera_model  : "-");
+    if (d->setup_mode)
+        dl(&b, 0, "  Setup    advertises a camera vendor's documented setup"
+           " SSID (provisioning state not observed)");
+    {
+        static const char *const tag[CAM_SIG_COUNT] =
+            { "WSD", "SSID", "MDNS", "SSDP", "OUI", "RTSP" };
+        char sig[64]; int o = 0;
+        for (int i = 0; i < CAM_SIG_COUNT; i++)
+            o += snprintf(sig + o, sizeof(sig) - (size_t)o, "%s%s",
+                          i ? " " : "",
+                          (d->cam_signal_mask & (1 << i)) ? tag[i] : "-");
+        dl(&b, 0, "  Signals  %s", sig);
+    }
+    if (mac_zero(d->mac))
+        dl(&b, 0, "  Keyed by IP only: no link-layer address was seen for"
+           " this camera");
+
+    cam_trail_row_t trail[24];
+    int tn = camera_trail(s, d, trail, 24);
+    if (tn > 0) {
+        dl_title(&b, "SIGNAL TRAIL");
+        dl(&b, -1, "  %-17s %-9s %s", "RULE", "SEEN", "WHAT");
+        for (int i = 0; i < tn; i++) {
+            int si = 0;
+            while (si < CAM_SIG_COUNT && trail[i].sig != (1 << si)) si++;
+            const char *rule = alert_type_name(cam_signal_alert(si));
+            if (strncmp(rule, "ALERT_TYPE_", 11) == 0) rule += 11;
+            char age[32]; age_str(now, trail[i].when, age, sizeof(age));
+            dl(&b, 0, "  %-17s %-9s %s", rule, age, trail[i].what);
+        }
+    }
+
+    if (d->ip[0]) {
+        int hdr = 0;
+        for (int i = 0; i < s->onvif_count; i++) {
+            const onvif_device_t *o = &s->onvif_devices[i];
+            if (!o->is_camera || !cam_row_is_device_ip(d, o->ip)) continue;
+            if (!hdr++) dl_title(&b, "ONVIF SCOPES");
+            const char *p = o->scopes;
+            while (*p) {
+                while (*p == ' ') p++;
+                if (!*p) break;
+                const char *e = p;
+                while (*e && *e != ' ') e++;
+                dl(&b, 0, "  %.*s", (int)(e - p), p);
+                p = e;
+            }
+            if (o->xaddrs[0]) dl(&b, 0, "  XAddrs %s", o->xaddrs);
+        }
+
+        hdr = 0;
+        for (int i = 0; i < s->mdns_count; i++) {
+            const mdns_service_t *e = &s->mdns_services[i];
+            if (!cam_row_is_device_ip(d, e->ip)) continue;
+            if (!hdr++) dl_title(&b, "mDNS");
+            dl(&b, 0, "  instance %s   %s   host %s:%u", e->instance,
+               e->service, e->host[0] ? e->host : "-", (unsigned)e->port);
+        }
+
+        hdr = 0;
+        for (int i = 0; i < s->ssdp_count && i < MAX_SSDP_DEVICES; i++) {
+            const ssdp_device_t *e = &s->ssdp_devices[i];
+            if (!cam_row_is_device_ip(d, e->ip) || !e->server[0]) continue;
+            int dup = 0;
+            for (int j = 0; j < i && !dup; j++)
+                dup = cam_row_is_device_ip(d, s->ssdp_devices[j].ip) &&
+                      strcmp(s->ssdp_devices[j].server, e->server) == 0;
+            if (dup) continue;
+            if (!hdr++) dl_title(&b, "SSDP");
+            dl(&b, 0, "  SERVER %s", e->server);
+        }
+
+        hdr = 0;
+        int rn = s->rtsp_stream_count < MAX_RTSP_STREAMS
+               ? s->rtsp_stream_count : MAX_RTSP_STREAMS;
+        for (int i = 0; i < rn; i++) {
+            const rtsp_stream_t *r = &s->rtsp_streams[i];
+            if (!cam_row_is_device_ip(d, r->server)) continue;
+            if (!hdr++) {
+                dl_title(&b, "RTSP EXPOSURE");
+                dl(&b, -1, "  %-5s %5s %5s %5s  %-8s %s", "PORT", "ANON",
+                   "AUTH", "401", "SCHEME", "PATH");
+            }
+            dl(&b, r->anon_ok ? 1 : 0, "  %-5u %5u %5u %5u  %-8s %s",
+               (unsigned)r->port, (unsigned)r->anon_ok,
+               (unsigned)r->auth_ok, (unsigned)r->challenged,
+               r->auth_scheme[0] ? r->auth_scheme : "-", r->path);
+        }
+    }
+
+    if (b.dropped) {
+        tui_dim();
+        TPRINT("  ... %d more line%s (screen full)\n", b.dropped,
+               b.dropped == 1 ? "" : "s");
+    }
+    tui_normal();
+}
+
+/* ── list ──────────────────────────────────────────────── */
+
+void view_devices_draw(const sloth_state_t *s) {
+    if (s->device_detail) { draw_device_detail(s); return; }
+
+    int cams = 0;
+    for (int i = 0; i < s->device_count; i++)
+        if (s->devices[i].device_class != DEV_CLASS_UNKNOWN) cams++;
 
     tui_normal(); TPRINT(" Devices: ");
     tui_bright();  TPRINT("%d", s->device_count);
-    tui_dim();     TPRINT("  [up/dn] navigate  (joined from ARP/DHCP/Beacon/Probe/STA, newest first)");
+    tui_normal(); TPRINT("  cameras: ");
+    if (cams) tui_heat(0.5); else tui_dim();
+    TPRINT("%d", cams);
+    tui_dim();     TPRINT("  [up/dn] navigate  [Enter] detail  (newest first)");
     tui_filter_status(s);
     TPRINT("\n");
 
+    dev_plan_t w = plan_cols(dev_cols());
     tui_dim();
-    TPRINT(" %-17s  %-15s  %-16s  %-20s  %-6s  %-3s  %-4s  %s\n",
-           "MAC", "IP", "Vendor", "Hostname / SSID", "Src", "RSI", "Risk", "Hits");
-    TPRINT(" %-17s  %-15s  %-16s  %-20s  %-6s  %-3s  %-4s  %s\n",
-           "-----------------", "---------------", "----------------",
-           "--------------------", "------", "---", "----", "----");
+    TPRINT(" %-17s  %-*s  %-6s  %-*.*s  %-*.*s  %-7s  %-4s  %-4s  %-5s\n",
+           "MAC", w.ip, "IP", "Class", w.vendor, w.vendor, "Vendor",
+           w.name, w.name, "Hostname / SSID / Model", "Src", "RSI", "Risk",
+           "Hits");
     tui_normal();
 
     if (s->device_count == 0) {
@@ -54,6 +345,13 @@ void view_devices_draw(const sloth_state_t *s) {
         tui_normal();
         return;
     }
+
+#ifdef WITH_NCURSES
+    int page = rows_left() - 1;
+#else
+    int page = DEV_PAGE;
+#endif
+    if (page < 1) page = 1;
 
     int page_top = s->device_sel - page / 2;
     if (page_top + page > s->device_count) page_top = s->device_count - page;
@@ -66,21 +364,16 @@ void view_devices_draw(const sloth_state_t *s) {
         char mac[20]; mac_str(d->mac, mac, sizeof(mac));
         if (s->filter[0] &&
             !filter_match_any(s->filter, mac, d->ip, d->vendor,
-                              d->hostname, d->last_ssid))
+                              d->hostname, d->last_ssid) &&
+            !filter_match_any(s->filter, d->camera_vendor, d->camera_model,
+                              class_cell(d->device_class),
+                              device_class_label(d->device_class), ""))
             continue;
         char src[8];  sources_str(d->sources, src);
-
-        /* The "name" column: hostname preferred, else last probed SSID,
-           else the AP marker. */
-        char name[40];
-        if (d->hostname[0])
-            snprintf(name, sizeof(name), "%.31s", d->hostname);
-        else if (d->last_ssid[0])
-            snprintf(name, sizeof(name), "ssid:%.26s", d->last_ssid);
-        else if (d->is_ap)
-            snprintf(name, sizeof(name), "(access point)");
-        else
-            snprintf(name, sizeof(name), "-");
+        char name[96]; name_cell(d, name, sizeof(name));
+        const char *vend = d->vendor[0] ? d->vendor
+                         : d->camera_vendor[0] ? d->camera_vendor : "?";
+        const char *cls = class_cell(d->device_class);
 
         char sig[8];
         if (d->signal_dbm < 0) snprintf(sig, sizeof(sig), "%d", d->signal_dbm);
@@ -96,23 +389,30 @@ void view_devices_draw(const sloth_state_t *s) {
 
         if (row == s->device_sel) {
             tui_sel();
-            TPRINT(" %-17s  %-15.15s  %-16.16s  %-20.20s  %-6s  %-3s  %-4s  %d\n",
-                   mac, d->ip, d->vendor, name, src, sig, risk, hits);
+            TPRINT(" %-17s  %-*.*s  %-6s  %-*.*s  %-*.*s  %-7s  %-4s  %-4s  %-5d\n",
+                   mac, w.ip, w.ip, d->ip[0] ? d->ip : "-", cls,
+                   w.vendor, w.vendor, vend, w.name, w.name, name,
+                   src, sig, risk, hits);
             tui_reset();
         } else {
             tui_dim();    TPRINT(" %-17s", mac);
-            tui_normal(); TPRINT("  %-15.15s", d->ip[0] ? d->ip : "-");
+            tui_normal(); TPRINT("  %-*.*s", w.ip, w.ip, d->ip[0] ? d->ip : "-");
 
-            if (d->vendor[0]) tui_bright(); else tui_dim();
-            TPRINT("  %-16.16s", d->vendor[0] ? d->vendor : "?");
+            if (d->device_class == DEV_CLASS_CAMERA)       tui_heat(0.5);
+            else if (d->device_class != DEV_CLASS_UNKNOWN) tui_normal();
+            else                                           tui_dim();
+            TPRINT("  %-6s", cls);
+
+            if (d->vendor[0] || d->camera_vendor[0]) tui_bright(); else tui_dim();
+            TPRINT("  %-*.*s", w.vendor, w.vendor, vend);
 
             if (d->is_ap)             tui_heat(0.7);
             else if (d->hostname[0])  tui_bright();
             else                      tui_normal();
-            TPRINT("  %-20.20s", name);
+            TPRINT("  %-*.*s", w.name, w.name, name);
 
-            tui_dim();    TPRINT("  %-6s", src);
-            tui_dim();    TPRINT("  %-3s", sig);
+            tui_dim();    TPRINT("  %-7s", src);
+            tui_dim();    TPRINT("  %-4s", sig);
 
             /* Risk bucket: heat-graded per level so HIGH/CRIT jump out
              * at operator glance. LOW renders dim to stay quiet. */
@@ -120,7 +420,7 @@ void view_devices_draw(const sloth_state_t *s) {
             TPRINT("  %-4s", risk);
 
             if (hits > 0) tui_heat(0.5); else tui_dim();
-            TPRINT("  %d\n", hits);
+            TPRINT("  %-5d\n", hits);
             tui_normal();
         }
     }
@@ -128,6 +428,11 @@ void view_devices_draw(const sloth_state_t *s) {
 }
 
 void view_devices_key(sloth_state_t *s, int key) {
+    /* Detail swallows navigation; Enter or Esc returns. */
+    if (s->device_detail) {
+        if (key == '\r' || key == '\n' || key == 27) s->device_detail = 0;
+        return;
+    }
     switch (key) {
     case SLOTH_KEY_UP:
         if (s->device_sel > 0) s->device_sel--;
@@ -135,6 +440,15 @@ void view_devices_key(sloth_state_t *s, int key) {
     case SLOTH_KEY_DOWN:
         if (s->device_count > 0 && s->device_sel < s->device_count - 1)
             s->device_sel++;
+        break;
+    case '\r': case '\n':
+        if (s->device_sel >= 0 && s->device_sel < s->device_count) {
+            const device_t *d = &s->devices[s->device_sel];
+            memcpy(s->device_detail_mac, d->mac, 6);
+            snprintf(s->device_detail_ip, sizeof(s->device_detail_ip),
+                     "%s", d->ip);
+            s->device_detail = 1;
+        }
         break;
     default:
         break;

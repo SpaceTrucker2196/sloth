@@ -51,12 +51,19 @@
 /* Bumped to 5 on 2026-10-13: karma_candidates gained `pnl_best` so a
  * stored score can be re-derived from its stored inputs (#90).
  *
- * There is no migration path by design — db_open() refuses a file whose
- * version differs and tells the operator to use a separate one, rather
- * than rewriting a forensic database in place. So a bump is a breaking
- * change for every existing file and is an owner decision, not a
- * detection-change side effect. */
-#define DB_SCHEMA_VERSION 5
+ * Bumped to 6 on 2026-10-20: devices gained the camera identity columns
+ * (#106 round 2, ordered by the issue's 2026-10-19 plan).
+ *
+ * Migration: exactly one step, v5 -> v6, and only because it is purely
+ * additive — ALTER TABLE ... ADD COLUMN with defaults, no existing
+ * value rewritten (db_schema_migrate_v5_sql()). Every other mismatch is
+ * still refused with the "use a separate file" message: a file from a
+ * newer build, and anything older than v5, whose differences were never
+ * additive-only. The rule that held before stands for the next bump:
+ * rewriting a forensic database in place is not something db_open()
+ * does, so a bump that is not additive is a breaking change for every
+ * existing file and an owner decision. */
+#define DB_SCHEMA_VERSION 6
 
 /* ── AKM regression (#74 Detector B, temporal half) ──────────────────
  *
@@ -260,5 +267,9 @@ const char *db_schema_sql(void);
  * than whatever SQL error the rest of the schema happens to hit
  * first. */
 const char *db_schema_meta_sql(void);
+
+/* The v5 -> v6 step: ALTER TABLE ADD COLUMN statements only. Exposed
+ * for the same guardrail tests as db_schema_sql(). */
+const char *db_schema_migrate_v5_sql(void);
 
 #endif /* SLOTH_DB_H */

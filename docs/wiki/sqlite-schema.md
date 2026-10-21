@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42 and #56.
 
-**Last updated**: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional)., #137
+**Last updated**: 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
 
 ---
 
@@ -138,11 +138,30 @@ These are what make the file trustworthy rather than merely present.
 
 ## Schema v4 — 41 tables
 
-`meta` holds `schema_version`, currently **4**. `db_open()` refuses a
-file whose version differs from the running build, and checks it
-*before* applying the rest of the schema so a mismatch produces the
-version message rather than whatever SQL error the schema happens to hit
-first.
+`meta` holds `schema_version`, currently **6** (the heading above is
+the v4 batch; v5 and v6 are below). `db_open()` refuses a file whose
+version differs from the running build — with one exception, the v5 →
+v6 step — and checks it *before* applying the rest of the schema so a
+mismatch produces the version message rather than whatever SQL error
+the schema happens to hit first.
+
+**v5** (#90): `karma_candidates.pnl_best`. **v6** (#106 round 2):
+`devices` gains `device_class`, `camera_vendor`, `camera_model`,
+`setup_mode`, `cam_signals` — see [[camera-detection]].
+
+**The v5 → v6 migration.** The first migration `db_open()` performs, and
+deliberately the only kind it will: five `ALTER TABLE devices ADD
+COLUMN` statements with defaults (`db_schema_migrate_v5_sql()`), plus the
+version stamp, in one `BEGIN IMMEDIATE` transaction. No existing value
+is rewritten, so a v5 forensic record reads the same afterwards; a
+statement that fails rolls the whole step back and the file stays v5
+(`tests/test_db.c :: test_v5_migration_failure_leaves_file_unchanged`).
+A file older than v5 or newer than v6 is still refused. The rule for the
+next bump is unchanged: rewriting a forensic database in place is not
+something `db_open()` does, so a bump that is not purely additive is a
+break for every existing file and an owner decision. `src/db.c` carries
+an `#error` that fires when `DB_SCHEMA_VERSION` moves, so the next bump
+has to decide this rather than inherit a stale step.
 
 **When to bump.** Adding a whole new table is safe without a bump —
 `CREATE TABLE IF NOT EXISTS` runs on every open, so an older file simply
@@ -178,7 +197,7 @@ Keyed by natural identity, bounded by the fixed arrays in `sloth.h`.
 
 | Table | Key | Notes |
 |---|---|---|
-| `devices` | `mac` | synthesised profile + risk signals |
+| `devices` | `mac` | synthesised profile + risk signals; camera identity since v6 (`device_class`, `camera_vendor`, `camera_model`, `setup_mode`, `cam_signals` — the mask ORs and class / setup only rise across ticks, so evidence a bounded source table aged out stays recorded). An IP-only camera record (no MAC) is not written |
 | `pnl_clients` / `pnl_ssids` | `mac` / `(mac, ssid)` | split so *"which devices remember network X"* is a join, not a scan of repeated JSON arrays — the deanonymisation question |
 | `probe_clients` | `mac` | unassociated 802.11 devices |
 | `beacon_aps` / `beacon_ap_ssids` | `bssid` / `(bssid, ssid)` | passive monitor inventory; the SSID child table is the KARMA signal and the multi-VAP topology record |

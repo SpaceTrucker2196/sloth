@@ -303,7 +303,7 @@ Full map with descriptions: [[views-catalog]].
 | `t` | (Interfaces) toggle iface visibility (display-only) |
 | `y` | (Interfaces) toggle iface data-stream selection — drops its packets pre-decode |
 | `m` | (Interfaces) retarget the 802.11 monitor radio onto the selected iface; refused, leaving a running radio alone, when a non-empty `--iface` allow-list excludes it — the reason shows as the probe error |
-| `Enter` | (Interfaces / Packets) open detail panel |
+| `Enter` | (Interfaces / Packets) open detail panel; (Devices) open the device detail — camera signal trail, ONVIF scopes, mDNS, SSDP `SERVER`, RTSP exposure; `Enter` / `Esc` returns ([[camera-detection]]) |
 | `f` | (Conns / Packets) cycle filter |
 | `s` | (Conns) cycle sort |
 

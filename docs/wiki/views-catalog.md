@@ -50,7 +50,7 @@ generated from — #117), `docs/views/README.md` and all `docs/views/*.md`.
 | Key | View | Source doc | One-liner |
 |-----|------|-----------|-----------|
 | `v` | Alerts    | [alerts.md](../views/alerts.md) | rule-derived events — see [[alerts]] |
-| `g` | Devices   | [devices.md](../views/devices.md) | join of ARP + DHCP + beacons + probes + stations |
+| `g` | Devices   | [devices.md](../views/devices.md) | join of ARP + DHCP + beacons + probes + stations, with a `CAMERA` row type and an `Enter` signal-trail detail ([[camera-detection]]) |
 | `o` | Dashboard | [dashboard.md](../views/dashboard.md) | seven-band composite — see [[dashboard]] |
 | `l` | OSI stack | [osi.md](../views/osi.md) | every observed count mapped onto its OSI layer |
 | `x` | Twins     | [twins.md](../views/twins.md) | evil-twin episode table |

@@ -2580,6 +2580,43 @@ static void test_json_escape_keeps_text_escapes_line_separators(void) {
     ASSERT(test_is_valid_utf8(body));
 }
 
+/* #106 round 2: the device record's additive camera fields, and an
+ * IP-only camera record's empty MAC. Seen to fail with jsonl.c's
+ * zero-MAC branch removed (the record reads "mac":"00:00:00:00:00:00"). */
+TEST_STATE(g_cam_js);
+static void test_emit_device_camera_fields(void) {
+    open_fresh();
+    sloth_state_t *s = &g_cam_js;
+    memset(s, 0, sizeof(*s));
+    device_t *d = &s->devices[s->device_count++];
+    snprintf(d->ip, sizeof(d->ip), "10.0.0.65");
+    d->sources         = DEV_SRC_CAMERA;
+    d->device_class    = DEV_CLASS_CAMERA;
+    d->cam_signal_mask = CAM_SIG_WS_DISCOVERY | CAM_SIG_RTSP_UNAUTH;
+    snprintf(d->camera_model, sizeof(d->camera_model), "HIKVISION DS-2CD2042WD-I");
+    device_t *a = &s->devices[s->device_count++];
+    a->mac[0] = 0x9e; a->mac[5] = 0x55;
+    a->is_ap = 1;
+    a->setup_mode = 1;
+    a->device_class = DEV_CLASS_CAMERA;
+    a->cam_signal_mask = CAM_SIG_SETUP_SSID;
+    snprintf(a->camera_vendor, sizeof(a->camera_vendor), "Hikvision");
+    jsonl_emit_devices(s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT(contains(body, "\"mac\":\"\",\"ip\":\"10.0.0.65\""));
+    ASSERT(!contains(body, "\"mac\":\"00:00:00:00:00:00\""));
+    ASSERT(contains(body, "\"device_class\":\"camera\",\"camera_vendor\":\"\","
+                          "\"camera_model\":\"HIKVISION DS-2CD2042WD-I\","
+                          "\"setup_mode\":0,\"cam_signals\":33"));
+    ASSERT(contains(body, "\"mac\":\"9e:00:00:00:00:55\""));
+    ASSERT(contains(body, "\"camera_vendor\":\"Hikvision\",\"camera_model\":\"\","
+                          "\"setup_mode\":1,\"cam_signals\":2"));
+    ASSERT_EQ(count_lines(body), 2);
+}
+
 void run_jsonl_tests(void) {
     TEST_SUITE("jsonl open/close");
     RUN_TEST(test_open_close);
@@ -2617,6 +2654,7 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_twin_episode_unattributed_is_explicit);
     RUN_TEST(test_emit_twin_episode_empty_no_output);
     RUN_TEST(test_emit_beacon_ie_order_fields);
+    RUN_TEST(test_emit_device_camera_fields);
     RUN_TEST(test_emit_beacon_tbtt_jitter_fields);
     RUN_TEST(test_emit_beacon_tbtt_jitter_absent_is_zero);
     RUN_TEST(test_emit_beacon_worst_case_escaping_fits);

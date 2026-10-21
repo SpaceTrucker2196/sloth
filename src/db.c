@@ -134,14 +134,28 @@ static sqlite3_stmt *g_st[ST_COUNT];
 static const char *const SQL[ST_COUNT] = {
 [ST_DEVICE] =
     "INSERT INTO devices (mac,ip,hostname,vendor,last_ssid,is_ap,signal_dbm,"
-    "probe_count,sources,risk_signals,risk_level,first_seen,last_seen)"
-    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)"
+    "probe_count,sources,risk_signals,risk_level,first_seen,last_seen,"
+    "device_class,camera_vendor,camera_model,setup_mode,cam_signals)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,"
+    "?14,?15,?16,?17,?18)"
     " ON CONFLICT(mac) DO UPDATE SET"
     "  ip=excluded.ip, hostname=excluded.hostname, vendor=excluded.vendor,"
     "  last_ssid=excluded.last_ssid, is_ap=excluded.is_ap,"
     "  signal_dbm=excluded.signal_dbm, probe_count=excluded.probe_count,"
     "  sources=excluded.sources, risk_signals=excluded.risk_signals,"
     "  risk_level=excluded.risk_level,"
+    /* Camera evidence is history, not a reading (#106 round 2): a
+     * signal seen once was seen, so the mask ORs and the class and
+     * setup flag only rise — the source tables are bounded and a row
+     * aging out of one must not erase what the file recorded. Vendor
+     * and model keep the newest non-empty value. */
+    "  device_class=MAX(devices.device_class,excluded.device_class),"
+    "  camera_vendor=COALESCE(NULLIF(excluded.camera_vendor,''),"
+    "devices.camera_vendor),"
+    "  camera_model=COALESCE(NULLIF(excluded.camera_model,''),"
+    "devices.camera_model),"
+    "  setup_mode=MAX(devices.setup_mode,excluded.setup_mode),"
+    "  cam_signals=(devices.cam_signals|excluded.cam_signals),"
     "  first_seen=MIN(devices.first_seen,excluded.first_seen),"
     "  last_seen=MAX(devices.last_seen,excluded.last_seen)",
 [ST_PNL_CLIENT] =
@@ -650,6 +664,46 @@ static int exec(const char *sql, const char *what) {
 
 /* ── schema version ──────────────────────────────────────── */
 
+/* v5 -> v6, additive only (db.h). A v5 file that never got as far as
+ * creating `devices` has nothing to alter: the schema that runs next
+ * creates it with every column. One transaction with the stamp, so a
+ * crash or a refused statement leaves the file at v5, unaltered. */
+/* The one version db_open() upgrades from. migrate_v5() stamps v6, so
+ * the next bump revisits both rather than inheriting a stale step. */
+#define DB_MIGRATES_FROM 5
+#if DB_SCHEMA_VERSION != 6
+#error "migrate_v5() writes v6: revisit the migration for this bump"
+#endif
+
+static int migrate_v5(void) {
+    sqlite3_stmt *st = NULL;
+    int have_devices = 0;
+    if (sqlite3_prepare_v2(g_db,
+            "SELECT COUNT(*) FROM sqlite_master"
+            " WHERE type='table' AND name='devices'", -1, &st, NULL)
+            != SQLITE_OK) {
+        fprintf(stderr, "sloth: db migration query failed: %s\n",
+                sqlite3_errmsg(g_db));
+        return 0;
+    }
+    if (sqlite3_step(st) == SQLITE_ROW) have_devices = sqlite3_column_int(st, 0);
+    sqlite3_finalize(st);
+
+    if (!exec("BEGIN IMMEDIATE", "migration begin")) return 0;
+    if ((have_devices && !exec(db_schema_migrate_v5_sql(), "v5->v6 migration")) ||
+        !exec("UPDATE meta SET value='6' WHERE key='schema_version'",
+              "v5->v6 stamp") ||
+        !exec("COMMIT", "migration commit")) {
+        exec("ROLLBACK", "migration rollback");
+        fprintf(stderr, "sloth: db schema v5 could not be migrated to v6;"
+                " the file is unchanged\n");
+        return 0;
+    }
+    fprintf(stderr, "sloth: db schema v5 migrated to v6 (devices gained"
+            " camera columns; no existing value changed)\n");
+    return 1;
+}
+
 /* Refuse a file written by a newer sloth rather than silently writing
  * rows the other version's readers will misinterpret. An older file is
  * also refused for now: there is exactly one schema version, so a
@@ -668,7 +722,9 @@ static int check_version(void) {
         const unsigned char *v = sqlite3_column_text(st, 0);
         found = 1;
         int have = v ? atoi((const char *)v) : -1;
-        if (have != DB_SCHEMA_VERSION) {
+        if (have == DB_MIGRATES_FROM) {
+            found = DB_MIGRATES_FROM;  /* migrate once the statement is gone */
+        } else if (have != DB_SCHEMA_VERSION) {
             fprintf(stderr,
                     "sloth: db schema v%d, this build writes v%d — "
                     "use a separate file\n", have, DB_SCHEMA_VERSION);
@@ -677,6 +733,7 @@ static int check_version(void) {
     }
     sqlite3_finalize(st);
     if (!ok) return 0;
+    if (found == DB_MIGRATES_FROM) return migrate_v5();
     if (!found) {
         char sql[128];
         snprintf(sql, sizeof(sql),
@@ -838,8 +895,13 @@ int db_due(time_t now) {
 /* ── per-table writers ───────────────────────────────────── */
 
 static void write_devices(const sloth_state_t *s, time_t now) {
+    static const uint8_t zmac[6] = {0};
     for (int i = 0; i < s->device_count; i++) {
         const device_t *d = &s->devices[i];
+        /* An IP-only camera record (#106 round 2) has no MAC to key the
+         * row on; its evidence is in the alerts, mdns_services and
+         * ssdp_devices tables, keyed by what it does have. */
+        if (memcmp(d->mac, zmac, 6) == 0) continue;
         char mac[18]; mac_str(d->mac, mac);
         sqlite3_stmt *st = g_st[ST_DEVICE];
         bind_txt(st, 1, mac);
@@ -857,6 +919,11 @@ static void write_devices(const sloth_state_t *s, time_t now) {
          * true first observation from whichever tick saw it first. */
         sqlite3_bind_int64(st, 12, (sqlite3_int64)(d->last_seen ? d->last_seen : now));
         sqlite3_bind_int64(st, 13, (sqlite3_int64)(d->last_seen ? d->last_seen : now));
+        sqlite3_bind_int  (st, 14, (int)d->device_class);
+        bind_txt(st, 15, d->camera_vendor);
+        bind_txt(st, 16, d->camera_model);
+        sqlite3_bind_int  (st, 17, d->setup_mode ? 1 : 0);
+        sqlite3_bind_int  (st, 18, d->cam_signal_mask);
         step_reset(ST_DEVICE);
     }
 }
