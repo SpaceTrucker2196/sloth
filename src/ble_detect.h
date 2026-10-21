@@ -21,17 +21,33 @@
  * One src/ble_flood.c window, current or immediately previous, passing
  * ALL THREE gates:
  *
- *   1. distinct (address, type) >= ble.flood_distinct_addrs
+ *   1. FRESH (address, type) >= ble.flood_distinct_addrs: addresses
+ *      first heard on this key inside the window, heard in neither of
+ *      the two windows before it, and only in a window whose
+ *      predecessor held advertisements on the key (`baseline`)
  *   2. advertisements / window length >= ble.flood_rate per second
  *   3. the (family, id, subtype) key is on the documented spam list
  *      (ble_spam_family_known(); not tunable)
  *
+ * Gate 1 counts fresh addresses, not addresses present, because a crowd
+ * of genuine devices is the false positive the other two gates cannot
+ * tell apart: 25 Fast Pair headsets re-advertising every 250 ms are 25
+ * addresses at 100/s on a listed key. What separates them is the
+ * tool's own behaviour: ble_spam.c start_extra_beacon() calls
+ * randomize_mac() before every payload when the attack sets random_mac,
+ * and holds each payload for one 20..500 ms delay
+ * (research/bluetooth/ble-spam-flood.md), so its addresses do not
+ * survive into the next window; a genuine advertiser's do. The cost:
+ * a key's first window, and the first after a silent one, cannot fire,
+ * so a flood is reported one window late; and the tool's three Apple
+ * attacks set random_mac = false (one address per run), so only the
+ * mixed "Kitchen Sink" mode puts Apple keys on many addresses - a
+ * single-address Apple flood is not this rule's shape at all.
+ *
  * No threshold in gates 1 and 2 has a cited basis for where legitimate
- * traffic stops. The tool's source is the basis for the SHAPE - it
- * randomises its address and advertises every 20 to 500 ms
- * (research/bluetooth/ble-spam-flood.md) - but no source measures how
- * many Proximity Pair advertisers a crowded room holds. So no gate can
- * be switched off, and the defaults are a judgement, stated as one.
+ * traffic stops: no source measures how many new Proximity Pair
+ * addresses a busy concourse produces in 10 s. So no gate can be
+ * switched off, and the defaults are a judgement, stated as one.
  *
  * ── BLE_HID_UNEXPECTED ──
  *
@@ -42,8 +58,14 @@
  * 0x1812. (b) At least ble.hid_rotate_addrs distinct RANDOM addresses
  * (type 1 or 3) on one sensor, each first heard inside the last
  * ble.hid_rotate_window_s and each advertising a HID appearance, after
- * BLE observation began more than that window ago (so the first window of a run, when every address is new,
- * cannot qualify). (b)'s threshold has no cited basis.
+ * THAT SENSOR's first advertisement is more than that window old (so
+ * the first window of a run, or of a sensor started later, when every
+ * address is new to it, cannot qualify). (b)'s threshold has no cited
+ * basis. Known limit: a row evicted from the ble_device table (256,
+ * STAB_OLDEST) and heard again is re-created with a fresh first_seen,
+ * so on a site busy enough to churn the table a resident random-address
+ * keyboard can count as new; evict_ble_device in sensor_health says
+ * when that is happening.
  *
  * Both are precursors at most. CVE-2023-45866 is an unauthenticated HID
  * peripheral being accepted by a host; sloth sees no pairing and no
@@ -96,6 +118,13 @@ typedef struct {
     uint32_t total;
     uint16_t distinct;
     uint8_t  distinct_capped;
+    uint32_t fresh;             /* gate 1's count */
+    /* The last CLOSED window, whatever window passed: the ble_alert
+     * change signature reads these, so a flood in progress is one state,
+     * not a count climbing from zero every window. */
+    uint32_t prev_total, prev_fresh;
+    uint8_t  prev_has_rssi;
+    int8_t   prev_rssi_median;
     uint32_t rate_x10;          /* advertisements per second, x10 */
     uint8_t  has_rssi;
     int8_t   rssi_median;

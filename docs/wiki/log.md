@@ -4600,3 +4600,21 @@ Five `--tune` rows (`ble.*`). The AD parser now decodes Service Data
 first punctuation view key. `ble_device` and `ble_alert` are change-only
 with RSSI and counts bucketed; `evict_ble_flood` joins `sensor_health`.
 The stalk-grade CRIT is deferred: "non-resident" is undefined.
+
+## 2026-10-21 — #144 slice 4 review: fresh-address flood gate, settled change signatures
+
+**Updated pages**: [alerts.md](alerts.md), [ble.md](ble.md),
+[cli-reference.md](cli-reference.md), [jsonl-schema.md](jsonl-schema.md);
+`docs/views/alerts.md`, `docs/views/ble.md`,
+`research/bluetooth/ble-spam-flood.md`.
+
+`BLE_ADV_FLOOD` gate 1 counts **fresh** addresses (new to the key since
+the two windows before, in a window whose predecessor held traffic)
+instead of addresses present: 25 stable Fast Pair advertisers fired the
+old gate. The basis is the tool's `randomize_mac()` before each payload,
+re-read and quoted; the same read shows its Apple attacks keep one
+address per run, now stated as a gap. `ble_device` signs a sticky
+`pdu_mask` (new field) instead of the last PDU type, and keeps the first
+manufacturer pair; `ble_alert` signs the last closed window, not the one
+in progress, and gains `fresh_addrs`. The HID rotation form's first
+window is per sensor.

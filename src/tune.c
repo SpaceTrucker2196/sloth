@@ -224,16 +224,18 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
      * changed hands; the floor is one SSDP max-age half-period, the
      * ceiling a week (the reuse risk the operator takes on). */
     { "camera.join_fresh_secs",     CAM_JOIN_FRESH_SECS, 900, 604800, "seconds a LAN camera row stays joinable to the device holding its IP" },
-    /* #144 slice 4. The distinct-address ceiling is BLE_FLOOD_ADDR_CAP,
-     * the per-window set the table keeps: a gate above what can be
-     * counted would disable the rule. The rotation window floor is one
+    /* #144 slice 4. The address gate counts FRESH addresses (review:
+     * a crowd of genuine advertisers is many addresses, few of them
+     * new). Its ceiling stays BLE_FLOOD_ADDR_CAP: the fresh count is
+     * Bloom-backed and under-counts as a window fills, so a gate far
+     * above the exact set's size would be judged on the lossy part. The rotation window floor is one
      * minute and its ceiling a day; the address floor is 2, since one
      * new address is not a rotation. */
     { "ble.flood_window_s",         BLE_FLOOD_WINDOW_S, 1, 600, "seconds per BLE_ADV_FLOOD window (tumbling)" },
-    { "ble.flood_distinct_addrs",   BLE_FLOOD_DISTINCT_ADDRS, 2, BLE_FLOOD_ADDR_CAP, "distinct advertiser addresses on one spam-listed key per window" },
+    { "ble.flood_distinct_addrs",   BLE_FLOOD_DISTINCT_ADDRS, 2, BLE_FLOOD_ADDR_CAP, "advertiser addresses new to one spam-listed key per window (not heard on it in the two windows before)" },
     { "ble.flood_rate",             BLE_FLOOD_RATE, 1, 10000, "advertisements per second on that key, over the whole window" },
     { "ble.hid_rotate_addrs",       BLE_HID_ROTATE_ADDRS, 2, MAX_BLE_DEVICES, "new random addresses advertising a HID appearance on one sensor per window" },
-    { "ble.hid_rotate_window_s",    BLE_HID_ROTATE_WINDOW_S, 60, 86400, "seconds" },
+    { "ble.hid_rotate_window_s",    BLE_HID_ROTATE_WINDOW_S, 60, 86400, "seconds in the BLE_HID_UNEXPECTED rotation window; also how long a sensor listens before the form can fire" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

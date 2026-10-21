@@ -2509,8 +2509,12 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
         h = fnv1a(d->addr, 6, h);
         h = fnv1a(d->sensor_iface,
                   strnlen(d->sensor_iface, sizeof(d->sensor_iface)), h);
+        /* pdu_mask, never last_event_type: an ADV_IND and its SCAN_RSP
+         * alternate, and a last-value field in here would make every
+         * snapshot a change. mfr_id / mfr_sub are first-seen on the row
+         * for the same reason (sloth.h). */
         uint8_t b[20] = { d->addr_type, d->sensor_kind, d->sampled,
-                          d->last_event_type, d->has_name, d->has_uuid16,
+                          d->pdu_mask, d->has_name, d->has_uuid16,
                           d->has_mfr, d->has_mfr_sub, d->mfr_sub,
                           d->has_svc_data, d->has_appearance, d->hid,
                           d->has_tx_power, (uint8_t)d->tx_power,
@@ -2536,6 +2540,7 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "sampled", d->sampled);
         kv_int(buf, LINEBUF, &off, "channel", d->channel);
         kv_str(buf, LINEBUF, &off, "last_pdu", ble_adv_type_name(d->last_event_type));
+        kv_int(buf, LINEBUF, &off, "pdu_mask", d->pdu_mask);
         kv_str(buf, LINEBUF, &off, "name", d->has_name ? d->name : "");
         kv_int(buf, LINEBUF, &off, "name_complete", d->name_complete);
         kv_int(buf, LINEBUF, &off, "uuid16", d->has_uuid16 ? d->uuid16 : -1);
@@ -2587,12 +2592,17 @@ void jsonl_emit_ble_alerts(const sloth_state_t *s) {
         memcpy(key, &k1, 8);
         memcpy(key + 8, &k2, 8);
 
-        unsigned q[6] = {
+        /* Signed on the finding's STATE. A flood's counts are those of
+         * the last closed window, never the window in progress: that
+         * one climbs from zero every ble.flood_window_s, and signing it
+         * re-emitted a steady flood several times a window. A steady
+         * flood is two records (onset, then its first closed window)
+         * and the heartbeat after that. */
+        unsigned q[5] = {
             (unsigned)x->kind,
-            log2_bucket(x->distinct) | (x->distinct_capped ? 0x100u : 0u),
-            log2_bucket(x->total), log2_bucket(x->rate_x10),
+            log2_bucket(x->prev_fresh), log2_bucket(x->prev_total),
             log2_bucket((uint64_t)(x->addrs > 0 ? x->addrs : 0)),
-            (unsigned)(rssi_bucket(x->has_rssi, x->rssi_median) + 1) };
+            (unsigned)(rssi_bucket(x->prev_has_rssi, x->prev_rssi_median) + 1) };
         uint64_t h = fnv1a(q, sizeof(q), k1);
         if (!jsonl_changed(JD_BLE_ALERT, key, sizeof(key), h, now)) continue;
 
@@ -2616,6 +2626,7 @@ void jsonl_emit_ble_alerts(const sloth_state_t *s) {
             kv_int(buf, LINEBUF, &off, "window_s", x->window_s);
             kv_int(buf, LINEBUF, &off, "distinct_addrs", x->distinct);
             kv_int(buf, LINEBUF, &off, "distinct_capped", x->distinct_capped);
+            kv_int(buf, LINEBUF, &off, "fresh_addrs", x->fresh);
             kv_int(buf, LINEBUF, &off, "total_adv", x->total);
             kv_double(buf, LINEBUF, &off, "rate", x->rate_x10 / 10.0);
             kv_int(buf, LINEBUF, &off, "has_rssi", x->has_rssi);

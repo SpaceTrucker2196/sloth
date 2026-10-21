@@ -20,8 +20,11 @@
  *
  * Per key, tumbling windows of ble.flood_window_s on the monotonic
  * clock, each holding the advertisement count, the distinct (address,
- * type) count up to BLE_FLOOD_ADDR_CAP, and the median of the first
- * BLE_FLOOD_RSSI_CAP RSSI samples. Tumbling, not sliding: a burst that
+ * type) count up to BLE_FLOOD_ADDR_CAP, the FRESH count (addresses not
+ * heard on the key in either of the two windows before, through a Bloom
+ * set per window, uncapped), whether the window before held anything
+ * (`baseline`), and the median of the first BLE_FLOOD_RSSI_CAP RSSI
+ * samples. Tumbling, not sliding: a burst that
  * straddles a boundary is split across two windows, so each half is
  * judged alone. That can only under-count, never invent a flood.
  *

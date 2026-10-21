@@ -90,8 +90,9 @@ category, never an identity. `Enter` or `Esc` returns.
 
 - **Dozens of fresh random addresses on one payload key at once**
   (`mfr 004c/07`, `004c/0f`, `0006/03`, `0075/42`, `sd fe2c`) — the BLE
-  Spam tool's shape. `BLE_ADV_FLOOD` fires only when distinct addresses,
-  rate and a documented spam key all pass together; the `flood keys`
+  Spam tool's shape. `BLE_ADV_FLOOD` fires only when fresh addresses
+  (new to the key since the two windows before), rate and a documented
+  spam key all pass together, so a room of stable AirPods is quiet; the `flood keys`
   count in the header is how many payload keys are being counted, not
   how many are flooding.
 - **`H` on a public address in a Hak5 or Espressif block**, or `H`

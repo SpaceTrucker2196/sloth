@@ -165,9 +165,20 @@ static void test_hid_appearance_range(void) {
 
 /* ── BLE_ADV_FLOOD ────────────────────────────────────────────────── */
 
+/* One advertisement on the key from a resident address, then the clock
+ * moved to the next window boundary: the window after has a baseline
+ * (gate 1 judges freshness only against a window that held something),
+ * as it would have on a key genuine devices already use. */
+static void prime_key(const uint8_t *ad, size_t len, uint8_t evt) {
+    const uint8_t home[6] = { 0xC2, 0xFF, 0xFF, 0x00, 0x00, 0x01 };
+    ble_adv_report_t r;
+    make_report(&r, evt, 1, home, ad, len, -70);
+    observe(&r, g_wall);
+}
+
 /* 1000 advertisements from 500 addresses over 2 s, every 2 ms. */
-static void play_flood(const uint8_t *ad, size_t len, uint8_t evt,
-                       unsigned addr_base) {
+static void flood_now(const uint8_t *ad, size_t len, uint8_t evt,
+                      unsigned addr_base) {
     for (unsigned i = 0; i < 1000; i++) {
         uint8_t a[6];
         addr_n(a, addr_base + (i % 500));
@@ -176,6 +187,15 @@ static void play_flood(const uint8_t *ad, size_t len, uint8_t evt,
         observe(&r, g_wall);
         g_mono += 2;
     }
+}
+
+/* The key primed, one window boundary crossed, then the flood: the
+ * flood sits at the start of the key's second window. */
+static void play_flood(const uint8_t *ad, size_t len, uint8_t evt,
+                       unsigned addr_base) {
+    prime_key(ad, len, evt);
+    g_mono += BLE_FLOOD_WINDOW_S * 1000;
+    flood_now(ad, len, evt, addr_base);
 }
 
 static void test_swift_pair_flood_fires_once_per_key(void) {
@@ -189,11 +209,16 @@ static void test_swift_pair_flood_fires_once_per_key(void) {
     if (i >= 0) {
         ASSERT_EQ((int)g_s.alerts[i].sev, (int)ALERT_SEV_WARN);
         ASSERT_STR(g_s.alerts[i].key, "bleflood:bluetooth-monitor:3:mfr:6:3");
-        ASSERT(strstr(g_s.alerts[i].detail, ">=128 addresses") != NULL);
+        ASSERT(strstr(g_s.alerts[i].detail, " new of >=128 addresses") != NULL);
         ASSERT(strstr(g_s.alerts[i].detail, "1000 adv in 10s") != NULL);
         ASSERT(strstr(g_s.alerts[i].detail, "(100.0/s)") != NULL);
         ASSERT(strstr(g_s.alerts[i].detail, "ADV_NONCONN_IND") != NULL);
     }
+    /* 500 fresh addresses; the Bloom sets may lose a few, never add. */
+    ble_finding_t f[BLE_FINDINGS_MAX];
+    int nf = ble_findings_build(&g_s, g_wall, f, BLE_FINDINGS_MAX, NULL);
+    ASSERT_EQ(nf, 1);
+    if (nf == 1) { ASSERT(f[0].fresh > 450); ASSERT(f[0].fresh <= 500); }
     /* Evaluated again: the same incident, not a second one. */
     g_mono += 100;
     evaluate();
@@ -207,9 +232,13 @@ static void test_two_spam_keys_are_two_incidents(void) {
     memset(&g_s, 0, sizeof(g_s));
     uint8_t ad[8];
     size_t n = ad_apple(ad, 0x07);         /* Proximity Pair */
-    play_flood(AD_SWIFT, sizeof(AD_SWIFT), 0x03, 0);
-    play_flood(ad, n, 0x03, 10000);
-    play_flood(AD_FASTPAIR, sizeof(AD_FASTPAIR), 0x00, 20000);
+    prime_key(AD_SWIFT, sizeof(AD_SWIFT), 0x03);
+    prime_key(ad, n, 0x03);
+    prime_key(AD_FASTPAIR, sizeof(AD_FASTPAIR), 0x00);
+    g_mono += BLE_FLOOD_WINDOW_S * 1000;
+    flood_now(AD_SWIFT, sizeof(AD_SWIFT), 0x03, 0);
+    flood_now(ad, n, 0x03, 10000);
+    flood_now(AD_FASTPAIR, sizeof(AD_FASTPAIR), 0x00, 20000);
     evaluate();
     ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_ADV_FLOOD), 3);
     int fp = 0;
@@ -242,6 +271,12 @@ static void test_same_volume_on_an_unlisted_subtype_does_not_fire(void) {
 static void test_spread_across_subtypes_does_not_fire(void) {
     pin_clocks();
     memset(&g_s, 0, sizeof(g_s));
+    uint8_t pad[8];
+    size_t pn = ad_apple(pad, 0x07);
+    prime_key(pad, pn, 0x03);
+    pn = ad_apple(pad, 0x0F);
+    prime_key(pad, pn, 0x03);
+    g_mono += BLE_FLOOD_WINDOW_S * 1000;
     for (unsigned i = 0; i < 1000; i++) {
         uint8_t a[6], ad[8];
         addr_n(a, i % 500);
@@ -256,11 +291,14 @@ static void test_spread_across_subtypes_does_not_fire(void) {
     sloth_clock_test_set(NULL, NULL);
 }
 
-/* Gate 1. Five addresses at 50 adv/s. Seen to fail: with the
- * distinct-address comparison removed from win_passes(), it fires. */
+/* Gate 1. Five addresses at 50 adv/s, in a window with a baseline.
+ * Seen to fail: with the fresh-address comparison removed from
+ * win_passes(), it fires. */
 static void test_few_addresses_at_high_rate_does_not_fire(void) {
     pin_clocks();
     memset(&g_s, 0, sizeof(g_s));
+    prime_key(AD_SWIFT, sizeof(AD_SWIFT), 0x03);
+    g_mono += BLE_FLOOD_WINDOW_S * 1000;
     for (unsigned i = 0; i < 500; i++) {
         uint8_t a[6];
         addr_n(a, i % 5);
@@ -274,12 +312,14 @@ static void test_few_addresses_at_high_rate_does_not_fire(void) {
     sloth_clock_test_set(NULL, NULL);
 }
 
-/* Gate 2. Thirty addresses, one advertisement each, in one window: 3/s
- * against the 10/s gate. Seen to fail: with the total comparison
+/* Gate 2. Thirty fresh addresses, one advertisement each, in a window
+ * with a baseline: 3/s against the 10/s gate. Seen to fail: with the total comparison
  * removed from win_passes(), it fires. */
 static void test_many_addresses_at_low_rate_does_not_fire(void) {
     pin_clocks();
     memset(&g_s, 0, sizeof(g_s));
+    prime_key(AD_SWIFT, sizeof(AD_SWIFT), 0x03);
+    g_mono += BLE_FLOOD_WINDOW_S * 1000;
     for (unsigned i = 0; i < 30; i++) {
         uint8_t a[6];
         addr_n(a, i);
@@ -290,6 +330,113 @@ static void test_many_addresses_at_low_rate_does_not_fire(void) {
     }
     evaluate();
     ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_ADV_FLOOD), 0);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* ── Gate 1 is FRESH addresses (review of slice 4) ── */
+
+/* A crowd of genuine devices: 25 stable addresses re-advertising every
+ * 250 ms for 30 s - 100 adv/s from 25 addresses on a listed key, which
+ * passed the old distinct-address gate (the reviewer's probe: alerts=1).
+ * Seen to fail: with win_passes() comparing w->distinct instead of
+ * w->fresh, both crowds fire from their second window on. */
+static int play_crowd(const uint8_t *ad, size_t len, unsigned base) {
+    int fired = 0;
+    for (unsigned t = 0; t < 120; t++) {            /* 120 x 250 ms */
+        for (unsigned k = 0; k < 25; k++) {
+            uint8_t a[6];
+            addr_n(a, base + k);
+            ble_adv_report_t r;
+            make_report(&r, 0x00, 1, a, ad, len, -60 - (int)k);
+            observe(&r, g_wall);
+        }
+        g_mono += 250;
+        if (t % 4 == 3) {                           /* once a second */
+            evaluate();
+            fired += count_type(&g_s, ALERT_TYPE_BLE_ADV_FLOOD);
+        }
+    }
+    return fired;
+}
+
+static void test_crowd_of_stable_fast_pair_advertisers_does_not_fire(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    ASSERT_EQ(play_crowd(AD_FASTPAIR, sizeof(AD_FASTPAIR), 0x100), 0);
+    /* Counted, on a listed key, at the rate: only freshness failed. */
+    ASSERT(g_s.ble_flood_count >= 1);
+    if (g_s.ble_flood_count >= 1) {
+        ASSERT(g_s.ble_flood[0].spam_known);
+        ASSERT(g_s.ble_flood[0].prev.distinct >= 20);
+        ASSERT(g_s.ble_flood[0].prev.total >= 100);
+        ASSERT(g_s.ble_flood[0].prev.baseline);
+        ASSERT_EQ((int)g_s.ble_flood[0].prev.fresh, 0);
+    }
+    sloth_clock_test_set(NULL, NULL);
+}
+
+static void test_crowd_of_stable_proximity_pair_advertisers_does_not_fire(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    uint8_t ad[8];
+    size_t n = ad_apple(ad, 0x07);
+    ASSERT_EQ(play_crowd(ad, n, 0x200), 0);
+    /* The same crowd, then the tool's shape on top of it: fresh
+     * addresses on the same key. The crowd does not mask it. */
+    flood_now(ad, n, 0x00, 0x4000);
+    evaluate();
+    ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_ADV_FLOOD), 1);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* A key's first window has nothing to be fresh against. Seen to fail:
+ * with `w->baseline &&` removed from win_passes(), the unprimed flood
+ * fires in its first window. The same flood carried on into the next
+ * window fires there. */
+static void test_flood_on_a_new_key_waits_one_window(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    flood_now(AD_SWIFT, sizeof(AD_SWIFT), 0x03, 0);
+    evaluate();
+    ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_ADV_FLOOD), 0);
+    g_mono += 8000;                          /* the next window */
+    flood_now(AD_SWIFT, sizeof(AD_SWIFT), 0x03, 0x1000);
+    evaluate();
+    ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_ADV_FLOOD), 1);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* Addresses missed for one window are still not fresh: the baseline is
+ * the two windows before. Window 1: 25 addresses at rate. Window 2: one
+ * resident only (so window 3 has a baseline). Window 3: the 25 again.
+ * Seen to fail: with the bloom_prev2 test dropped from ble_flood_note(),
+ * window 3 fires. */
+static void test_address_heard_two_windows_ago_is_not_fresh(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    for (int w = 0; w < 3; w++) {
+        if (w == 1) {
+            prime_key(AD_SWIFT, sizeof(AD_SWIFT), 0x03);
+        } else {
+            for (unsigned i = 0; i < 400; i++) {     /* 4 s at 100/s */
+                uint8_t a[6];
+                addr_n(a, 0x300 + (i % 25));
+                ble_adv_report_t r;
+                make_report(&r, 0x03, 1, a, AD_SWIFT, sizeof(AD_SWIFT), -50);
+                observe(&r, g_wall);
+                g_mono += 10;
+            }
+        }
+        if (w == 0) g_mono += 6000;          /* to 10 s: window 2 */
+        if (w == 1) g_mono += 10000;         /* to 20 s: window 3 */
+    }
+    evaluate();                              /* 24 s, inside window 3 */
+    ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_ADV_FLOOD), 0);
+    ASSERT(g_s.ble_flood_count == 1);
+    if (g_s.ble_flood_count == 1) {
+        ASSERT(g_s.ble_flood[0].cur.baseline);
+        ASSERT_EQ((int)g_s.ble_flood[0].cur.total, 400);
+    }
     sloth_clock_test_set(NULL, NULL);
 }
 
@@ -306,13 +453,13 @@ static void test_flood_decays_after_two_quiet_windows(void) {
     play_flood(AD_SWIFT, sizeof(AD_SWIFT), 0x03, 0);
     ble_finding_t f[BLE_FINDINGS_MAX];
 
-    g_mono += 9000;                 /* 11 s after the start: prev holds it */
+    g_mono += 9000;                 /* 21 s after the prime: prev (10..20 s) holds it */
     ble_snapshot(&g_s);
     int n = ble_findings_build(&g_s, g_wall, f, BLE_FINDINGS_MAX, NULL);
     ASSERT_EQ(n, 1);
     if (n == 1) ASSERT_EQ(f[0].window, 1);
 
-    g_mono += 15000;                /* 26 s: two whole windows since */
+    g_mono += 15000;                /* 36 s: the window after it was empty */
     ble_snapshot(&g_s);
     n = ble_findings_build(&g_s, g_wall, f, BLE_FINDINGS_MAX, NULL);
     ASSERT_EQ(n, 0);
@@ -321,7 +468,7 @@ static void test_flood_decays_after_two_quiet_windows(void) {
     ble_clear();
     memset(&g_s, 0, sizeof(g_s));
     play_flood(AD_SWIFT, sizeof(AD_SWIFT), 0x03, 0);
-    g_mono += 23000;                /* 25 s after this flood's start */
+    g_mono += 23000;                /* 35 s: two windows close at once */
     ble_snapshot(&g_s);
     n = ble_findings_build(&g_s, g_wall, f, BLE_FINDINGS_MAX, NULL);
     ASSERT_EQ(n, 0);
@@ -334,6 +481,8 @@ static void test_tuned_gates_reach_the_detector(void) {
     char err[128];
     /* The low-rate case above, with the operator's rate gate at 2/s. */
     ASSERT_EQ(tune_set("ble.flood_rate=2", err, sizeof(err)), 0);
+    prime_key(AD_SWIFT, sizeof(AD_SWIFT), 0x03);
+    g_mono += BLE_FLOOD_WINDOW_S * 1000;
     for (unsigned i = 0; i < 30; i++) {
         uint8_t a[6];
         addr_n(a, i);
@@ -507,6 +656,142 @@ static void test_hid_rotation_needs_the_tuned_count(void) {
     for (unsigned i = 0; i < 2; i++) hid_on_new_random(i, g_wall - 100);
     evaluate();
     ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_HID_UNEXPECTED), 0);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* ESP32 IoT gear is everywhere and advertises from public Espressif
+ * addresses: without a HID field it is not this rule. Seen to fail:
+ * with `!d->hid ||` removed from hid_oui_findings(), it fires. */
+static void test_espressif_public_address_without_hid_does_not_fire(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    const uint8_t esp[6] = { 0x24, 0x0a, 0xc4, 0x44, 0x55, 0x66 };
+    const uint8_t ad[] = { 0x02, 0x01, 0x06, 0x05, 0x09, 'e', 's', 'p', '1' };
+    ble_adv_report_t r;
+    make_report(&r, 0x00, 0, esp, ad, sizeof(ad), -55);
+    observe(&r, g_wall);
+    evaluate();
+    ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_HID_UNEXPECTED), 0);
+    ASSERT_EQ(g_s.ble_device_count, 1);
+    if (g_s.ble_device_count == 1) ASSERT_EQ(g_s.ble_devices[0].hid, 0);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* Resident keyboards: three random HID addresses first heard before the
+ * window, still advertising inside it. Seen to fail: with
+ * `if (d->first_seen <= since) continue;` removed, they fire. */
+static void test_hid_rotation_ignores_addresses_heard_before_the_window(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    start_session_at(g_wall - 3000);
+    for (unsigned i = 0; i < 3; i++) hid_on_new_random(i, g_wall - 2000);
+    for (unsigned i = 0; i < 3; i++) hid_on_new_random(i, g_wall - 10);
+    evaluate();
+    ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_HID_UNEXPECTED), 0);
+    ASSERT_EQ(g_s.ble_device_count, 4);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* The rotation form is about RANDOM addresses; public ones do not
+ * rotate. Ordinary-OUI public keyboards, three new in the window. Seen
+ * to fail: with `if (!addr_is_random(d->addr_type)) continue;` removed,
+ * they fire. */
+static void test_hid_rotation_ignores_public_addresses(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    start_session_at(g_wall - 2000);
+    for (unsigned i = 0; i < 3; i++) {
+        const uint8_t a[6] = { 0x00, 0x1b, 0xdc, 0x0a, 0x0b, (uint8_t)i };
+        ble_adv_report_t r;
+        make_report(&r, 0x00, 0, a, AD_KEYBOARD, sizeof(AD_KEYBOARD), -50);
+        observe(&r, g_wall - 100);
+    }
+    evaluate();
+    ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_HID_UNEXPECTED), 0);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* The rotation form counts the HID APPEARANCE: a 0x1812-only row is a
+ * service list, which every HID host-side profile and many dongles
+ * carry. Seen to fail: with `if (!(d->hid & BLE_HID_APPEARANCE))
+ * continue;` removed, three such rows fire. */
+static void test_hid_rotation_ignores_service_only_rows(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    start_session_at(g_wall - 2000);
+    const uint8_t ad[] = { 0x03, 0x03, 0x12, 0x18 };
+    for (unsigned i = 0; i < 3; i++) {
+        uint8_t a[6];
+        addr_n(a, 0x600 + i);
+        ble_adv_report_t r;
+        make_report(&r, 0x00, 1, a, ad, sizeof(ad), -50);
+        observe(&r, g_wall - 100);
+    }
+    evaluate();
+    ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_HID_UNEXPECTED), 0);
+    ASSERT_EQ(g_s.ble_device_count, 4);
+    if (g_s.ble_device_count == 4) ASSERT_EQ(g_s.ble_devices[3].hid, BLE_HID_SERVICE);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* A second sensor started late has its own first window. The host
+ * controller has listened for 2000 s; an Ubertooth capture starts 100 s
+ * ago and hears three HID keyboards, all new to it. Seen to fail: with
+ * the per-iface sensor_first_ts() gate replaced by the host-wide
+ * adv_first_ts, the capture's first window fires. Once the capture has
+ * itself listened longer than the window, three new ones fire. */
+static void observe_capture(const ble_adv_report_t *r, time_t ts) {
+    ble_obs_t o = { r, SENSOR_BLE, BT_CAPTURE_IFACE, 0, 37, 1, ts };
+    ble_dev_observe(&o);
+}
+
+static void test_hid_rotation_first_window_is_per_sensor(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    start_session_at(g_wall - 2000);
+    for (unsigned i = 0; i < 3; i++) {
+        uint8_t a[6];
+        addr_n(a, 0x800 + i);
+        ble_adv_report_t r;
+        make_report(&r, 0x00, 1, a, AD_KEYBOARD, sizeof(AD_KEYBOARD), -50);
+        observe_capture(&r, g_wall - 100 + (time_t)i);
+    }
+    evaluate();
+    ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_HID_UNEXPECTED), 0);
+
+    g_wall += 1000;                          /* the capture is 1100 s old */
+    for (unsigned i = 0; i < 3; i++) {
+        uint8_t a[6];
+        addr_n(a, 0x810 + i);
+        ble_adv_report_t r;
+        make_report(&r, 0x00, 1, a, AD_KEYBOARD, sizeof(AD_KEYBOARD), -50);
+        observe_capture(&r, g_wall - 50);
+    }
+    evaluate();
+    int i = find_type(&g_s, ALERT_TYPE_BLE_HID_UNEXPECTED);
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_STR(g_s.alerts[i].key, "blehid:rotate:ubertooth");
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* Past the cap every lane goes on counting what it could not return.
+ * Seen to fail: with the lanes' `continue` after a refused slot() put
+ * back to `return`, three Espressif keyboards with room for one report
+ * 1 dropped, not 2. */
+static void test_dropped_counts_every_finding_past_the_cap(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    for (unsigned i = 0; i < 3; i++) {
+        const uint8_t esp[6] = { 0x24, 0x0a, 0xc4, 0x11, 0x22, (uint8_t)i };
+        ble_adv_report_t r;
+        make_report(&r, 0x00, 0, esp, AD_KEYBOARD, sizeof(AD_KEYBOARD), -55);
+        observe(&r, g_wall);
+    }
+    ble_snapshot(&g_s);
+    ble_finding_t f[1];
+    int dropped = -1;
+    ASSERT_EQ(ble_findings_build(&g_s, g_wall, f, 1, &dropped), 1);
+    ASSERT_EQ(dropped, 2);
     sloth_clock_test_set(NULL, NULL);
 }
 
@@ -726,8 +1011,86 @@ static void test_ble_alert_record_carries_the_flood_fields(void) {
     ASSERT(strstr(out, "\"family\":\"mfr\"") != NULL);
     ASSERT(strstr(out, "\"distinct_addrs\":128") != NULL);
     ASSERT(strstr(out, "\"distinct_capped\":1") != NULL);
+    ASSERT(strstr(out, "\"fresh_addrs\":") != NULL);
     ASSERT(strstr(out, "\"total_adv\":1000") != NULL);
     ASSERT(strstr(out, "\"spam_source\":\"ble_spam swiftpair.c") != NULL);
+    jsonl_done();
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* An ADV_IND and its SCAN_RSP alternate, and an Apple device rotates
+ * its Continuity type: neither is a change of the advertiser. The
+ * reviewer's probe wrote 10 lines of 10. Seen to fail: with
+ * last_event_type back in the signature in place of pdu_mask, the first
+ * loop writes one line per snapshot; with mfr_sub kept as last-seen in
+ * observe_locked(), the second does. */
+static void test_ble_device_alternating_pdus_settles(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    jsonl_fresh();
+    const uint8_t a[6] = { 0x00, 0x1b, 0xdc, 0x01, 0x02, 0x04 };
+    for (int i = 0; i < 10; i++) {
+        ble_adv_report_t r;
+        make_report(&r, (i & 1) ? 0x04 : 0x00, 0, a, AD_KEYBOARD,
+                    sizeof(AD_KEYBOARD), -55);
+        observe(&r, g_wall);
+        g_wall += 1;
+        ble_snapshot(&g_s);
+        jsonl_emit_ble_devices(&g_s);
+    }
+    char *out = jsonl_read();
+    ASSERT_EQ(count_str(out, "\"type\":\"ble_device\""), 2);   /* ADV_IND, then the mask with SCAN_RSP */
+    ASSERT(strstr(out, "\"pdu_mask\":17") != NULL);           /* bits 0 and 4 */
+
+    const uint8_t b[6] = { 0xC2, 0x10, 0x20, 0x30, 0x40, 0x50 };
+    for (int i = 0; i < 10; i++) {
+        uint8_t ad[8];
+        size_t n = ad_apple(ad, (i & 1) ? 0x10 : 0x0C);
+        ble_adv_report_t r;
+        make_report(&r, 0x00, 1, b, ad, n, -60);
+        observe(&r, g_wall);
+        g_wall += 1;
+        ble_snapshot(&g_s);
+        jsonl_emit_ble_devices(&g_s);
+    }
+    out = jsonl_read();
+    ASSERT_EQ(count_str(out, "\"addr\":\"c2:10:20:30:40:50\""), 1);
+    ASSERT(strstr(out, "\"mfr_subtype\":12") != NULL);        /* first seen, 0x0C */
+    jsonl_done();
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* A sustained flood is one state. 50 adv/s of Swift Pair from a fresh
+ * address each, snapshot and emit once a second for 60 s. The
+ * reviewer's probe wrote 18 lines. Seen to fail: with the signature
+ * signing the window in progress (log2 of x->total / x->rate_x10 in
+ * place of the prev_* fields), it writes one per power-of-two crossing
+ * of every window; with the prev_* values signed raw instead of
+ * bucketed, the jitter in fresh (Bloom losses) re-emits it too. */
+static void test_sustained_flood_is_few_ble_alert_records(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    jsonl_fresh();
+    prime_key(AD_SWIFT, sizeof(AD_SWIFT), 0x03);
+    g_mono += BLE_FLOOD_WINDOW_S * 1000;
+    unsigned addr = 0;
+    for (int sec = 0; sec < 60; sec++) {
+        for (int k = 0; k < 50; k++) {
+            uint8_t a[6];
+            addr_n(a, 0x10000 + addr++);
+            ble_adv_report_t r;
+            make_report(&r, 0x03, 1, a, AD_SWIFT, sizeof(AD_SWIFT), -50);
+            observe(&r, g_wall);
+            g_mono += 20;
+        }
+        g_wall += 1;
+        ble_snapshot(&g_s);
+        jsonl_emit_ble_alerts(&g_s);
+    }
+    char *out = jsonl_read();
+    int lines = count_str(out, "\"type\":\"ble_alert\"");
+    ASSERT(lines >= 1);
+    ASSERT(lines <= 3);
     jsonl_done();
     sloth_clock_test_set(NULL, NULL);
 }
@@ -834,6 +1197,10 @@ void run_ble_rules_tests(void) {
     RUN_TEST(test_spread_across_subtypes_does_not_fire);
     RUN_TEST(test_few_addresses_at_high_rate_does_not_fire);
     RUN_TEST(test_many_addresses_at_low_rate_does_not_fire);
+    RUN_TEST(test_crowd_of_stable_fast_pair_advertisers_does_not_fire);
+    RUN_TEST(test_crowd_of_stable_proximity_pair_advertisers_does_not_fire);
+    RUN_TEST(test_flood_on_a_new_key_waits_one_window);
+    RUN_TEST(test_address_heard_two_windows_ago_is_not_fresh);
     RUN_TEST(test_flood_decays_after_two_quiet_windows);
     RUN_TEST(test_tuned_gates_reach_the_detector);
     RUN_TEST(test_spam_list_names_its_source);
@@ -845,6 +1212,12 @@ void run_ble_rules_tests(void) {
     RUN_TEST(test_hid_rotating_across_random_addresses_fires);
     RUN_TEST(test_hid_rotation_cannot_fire_in_the_first_window);
     RUN_TEST(test_hid_rotation_needs_the_tuned_count);
+    RUN_TEST(test_espressif_public_address_without_hid_does_not_fire);
+    RUN_TEST(test_hid_rotation_ignores_addresses_heard_before_the_window);
+    RUN_TEST(test_hid_rotation_ignores_public_addresses);
+    RUN_TEST(test_hid_rotation_ignores_service_only_rows);
+    RUN_TEST(test_hid_rotation_first_window_is_per_sensor);
+    RUN_TEST(test_dropped_counts_every_finding_past_the_cap);
     RUN_TEST(test_shipped_table_is_empty_and_never_fires);
     RUN_TEST(test_categories_route_from_the_in_test_table);
     RUN_TEST(test_a_row_without_a_source_is_refused);
@@ -852,6 +1225,8 @@ void run_ble_rules_tests(void) {
     RUN_TEST(test_watchlist_match_heard_long_ago_does_not_fire);
     RUN_TEST(test_ble_device_record_is_change_only);
     RUN_TEST(test_ble_alert_record_carries_the_flood_fields);
+    RUN_TEST(test_ble_device_alternating_pdus_settles);
+    RUN_TEST(test_sustained_flood_is_few_ble_alert_records);
     RUN_TEST(test_view_empty_state);
     RUN_TEST(test_view_populated_fits_100x33);
     RUN_TEST(test_view_nav_and_enter_detail);

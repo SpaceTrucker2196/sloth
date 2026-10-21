@@ -59,16 +59,44 @@ Next-Flip/Momentum-Apps, `ble_spam/`, read 2026-10-21:
 - `protocols/easysetup.c`: `0x75; // Company ID (Samsung Electronics
   Co. Ltd.)`, followed by `0x42` (the buds packet) or `0x01` (the watch
   packet).
-- `ble_spam.c`: `randomize_mac()` fills the address with random bytes
-  when `payload->random_mac` is set; the advertising interval is
-  `min_adv_interval_ms = delay`, `max_adv_interval_ms = delay * 1.5`,
-  from `static uint16_t delays[] = {20, 50, 100, 200, 500};`.
+- `ble_spam.c`: `randomize_mac()` is
+  `furi_hal_random_fill_buf(state->config.address, sizeof(state->config.address));`.
+  `start_extra_beacon()` sets `config->min_adv_interval_ms = delay;`,
+  `config->max_adv_interval_ms = delay * 1.5;`, then
+  `if(payload->random_mac) randomize_mac(state);` before building and
+  starting each payload, with `delay` from
+  `static uint16_t delays[] = {20, 50, 100, 200, 500};`. `adv_thread()`
+  loops `start_extra_beacon(state);`,
+  `furi_thread_flags_wait(true, FuriFlagWaitAny, delays[state->delay]);`,
+  `furi_hal_bt_extra_beacon_stop()` — so with `random_mac` set, every
+  payload goes out on a new address and is held for one delay. Before
+  the loop, `if(!payload->random_mac) randomize_mac(state);`: one
+  address for the whole run otherwise. Re-read 2026-10-21 at the
+  `dev` branch, last commit to the file `cfea009e` (2024-09-02).
+- `ble_spam.c` `attacks[]`: `.random_mac = true` for "The Kitchen
+  Sink" (`.protocol = NULL`: a random protocol per payload), "BT
+  Settings Flood", "Android Device Connect" (Fast Pair), "Samsung Buds
+  Popup", "Samsung Watch Pair", "Windows Device Found" (Swift Pair) and
+  the two LoveSpouse entries; `.random_mac = false` for "iOS 17 Lockup
+  Crash", "Apple Action Modal" and "Apple Device Popup".
 
 So the keys `src/ble_flood.c` lists — (0x004C, 0x07), (0x004C, 0x0F),
 (0x0006, 0x03), (0x0075, 0x42), (0x0075, 0x01), Service Data 0xFE2C —
-are each documented by the tool that sends them. The address
-randomisation and the 20–500 ms interval are why distinct addresses and
-rate are the observables.
+are each documented by the tool that sends them. The per-payload
+address, held for one 20–500 ms delay, is why **fresh** addresses (new
+to the key since the windows before) and rate are the observables: the
+tool's addresses do not outlive a window, and a crowd of genuine
+devices on the same key keeps its addresses from window to window. That
+is the distinction `BLE_ADV_FLOOD` gate 1 draws; counting addresses
+*present* instead fired on 25 stable Fast Pair advertisers at a 250 ms
+interval (the slice 4 review's probe).
+
+The Apple attacks are the exception the source itself shows: their
+`random_mac = false` means one address per run, so the tool floods
+Apple keys from many addresses only in Kitchen Sink mode, mixed with
+every other protocol. A single-address Apple flood is a different shape
+(one advertiser at a high rate), and no source gives a rate at which a
+genuine device stops; sloth does not detect it.
 
 ## Apple HT214035
 
@@ -95,8 +123,10 @@ the cost is the receiving device's pairing UI.
   Surface mice or Fast Pair headsets advertise in a crowded room. Every
   listed key is also what a genuine device sends. That is why the rule
   requires all three gates, why none can be switched off, and why the
-  defaults (`ble.flood_distinct_addrs` 20, `ble.flood_rate` 10/s over a
-  10 s window) are described as a judgement, not a cited value.
+  defaults (`ble.flood_distinct_addrs` 20 fresh addresses,
+  `ble.flood_rate` 10/s over a 10 s window) are described as a
+  judgement, not a cited value. The source backs gate 1's *form*
+  (fresh, not present), not its number.
 - **No attribution to a Flipper.** The same payloads come from an
   nRF52 board, an ESP32 or a laptop running the same code. The finding
   names a payload family at flood volume, not a device.

@@ -445,14 +445,23 @@ family, id, subtype) key, tumbling windows of `ble.flood_window_s` on
 the monotonic clock. The family is the Manufacturer Specific Data when a
 report has it (id = company ID, subtype = the first octet after it),
 else Service Data - 16-bit UUID. A window passes when it holds at least
-`ble.flood_distinct_addrs` distinct addresses **and** at least
+`ble.flood_distinct_addrs` **fresh** addresses — heard on the key in
+neither of the two windows before it, counted only when the window
+before held advertisements on the key — **and** at least
 `ble.flood_rate` advertisements per second over the whole window length
 **and** the key is on the spam list. The list is what the public BLE
 Spam tool's own source emits (Apple Proximity Pair 0x07 and Nearby
 Action 0x0F, Microsoft Swift Pair beacon 0x03, Samsung EasySetup 0x42
 and 0x01, Google Fast Pair 0xFE2C); the tool also gives each payload a
-fresh random address and advertises every 20–500 ms, which is what
-makes addresses and rate the observables. Every key on the list is also
+fresh random address (`randomize_mac()` before every payload, held for
+one 20–500 ms delay), which is what makes *fresh* addresses and rate the
+observables: a crowd of genuine advertisers is many addresses but keeps
+them from window to window. The costs, stated: a key's first window,
+and the first after a silent one, cannot fire, so a flood is reported
+one window late; and the tool's three dedicated Apple attacks set
+`random_mac = false` (one address for the whole run), so only its mixed
+"Kitchen Sink" mode floods Apple keys from many addresses — a
+single-address flood is not this rule's shape. Every key on the list is also
 what genuine AirPods, Surface peripherals, Galaxy Buds and Fast Pair
 headsets send, and **no source measures how many of them a crowded room
 holds** — so neither number has a cited basis, the defaults are a
@@ -468,8 +477,9 @@ pairing and no connection, and the public proof of concept presents as
 a BR/EDR keyboard (class of device 0x002540), not over LE — so what this
 rule sees is the advertising shape of an injected keyboard, nothing
 more. Form (a) keys on the two attacker-helper OUI tables that exist;
-form (b)'s threshold has no cited basis, and cannot fire in the first
-window of observation, when every address is new.
+form (b)'s threshold has no cited basis, and cannot fire in a sensor's
+first window of observation, when every address is new to it (per
+sensor: an Ubertooth capture started later has its own).
 
 **`BLE_WATCHLIST` is a category, never an identity** (the #94
 posture). Finder tags use random addresses that rotate, so the finding

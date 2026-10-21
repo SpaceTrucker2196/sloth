@@ -290,6 +290,7 @@ static void observe_locked(const ble_obs_t *o) {
     d->sampled         = o->sampled ? 1 : 0;
     d->channel         = (int8_t)(o->channel >= 0 && o->channel <= 39 ? o->channel : -1);
     d->last_event_type = r->event_type;
+    if (r->event_type <= 7) d->pdu_mask |= (uint8_t)(1u << r->event_type);
     d->adv_count++;
     /* Fields are kept once seen: an ADV_IND and its SCAN_RSP carry
      * different AD structures, and the absence of one in the next report
@@ -303,7 +304,16 @@ static void observe_locked(const ble_obs_t *o) {
         d->name[n] = '\0';
     }
     if (r->has_service_uuid16) { d->has_uuid16 = 1; d->uuid16 = r->service_uuid16; }
-    if (r->has_mfr_data)       { d->has_mfr = 1;    d->mfr_id = r->mfr_id; }
+    /* Manufacturer company and first octet: the FIRST pair heard, kept
+     * (sloth.h), so a device rotating Continuity types is one row state. */
+    if (r->has_mfr_data && !d->has_mfr) {
+        d->has_mfr = 1;
+        d->mfr_id  = r->mfr_id;
+        if (r->mfr_data_len >= 1) {
+            d->has_mfr_sub = 1;
+            d->mfr_sub     = r->mfr_data[0];
+        }
+    }
     if (r->has_appearance)     { d->has_appearance = 1; d->appearance = r->appearance; }
     if (r->has_tx_power)       { d->has_tx_power = 1; d->tx_power = r->tx_power; }
     if (r->has_flags)          { d->has_flags = 1; d->flags = r->flags; }
@@ -313,10 +323,6 @@ static void observe_locked(const ble_obs_t *o) {
         if (r->rssi > d->rssi_best) d->rssi_best = r->rssi;
     }
     /* #144 slice 4: what the three BLE rules key on. */
-    if (r->has_mfr_data && r->mfr_data_len >= 1) {
-        d->has_mfr_sub = 1;
-        d->mfr_sub     = r->mfr_data[0];
-    }
     if (r->has_svc_data16) {
         d->has_svc_data    = 1;
         d->svc_data_uuid16 = r->svc_data_uuid16;
@@ -331,6 +337,22 @@ static void observe_locked(const ble_obs_t *o) {
     if (g_host.adv_first_ts == 0 || o->ts < g_host.adv_first_ts)
         g_host.adv_first_ts = o->ts;
     if (o->ts > g_host.adv_last_ts) g_host.adv_last_ts = o->ts;
+    /* Per sensor iface: the rotation form's first-window gate. A table
+     * full of ifaces leaves a new one untracked, and an untracked iface
+     * is never judged (ble_detect.c), so overflow is quiet, not noisy. */
+    for (int i = 0; i < BLE_SENSOR_IFACES_MAX; i++) {
+        if (g_host.adv_first_by[i].first_ts == 0) {
+            memcpy(g_host.adv_first_by[i].iface, key.iface,
+                   sizeof(g_host.adv_first_by[i].iface));
+            g_host.adv_first_by[i].first_ts = o->ts;
+            break;
+        }
+        if (strcmp(g_host.adv_first_by[i].iface, key.iface) == 0) {
+            if (o->ts < g_host.adv_first_by[i].first_ts)
+                g_host.adv_first_by[i].first_ts = o->ts;
+            break;
+        }
+    }
 
     ble_flood_note(o, key.addr, sloth_mono_ms());
 }

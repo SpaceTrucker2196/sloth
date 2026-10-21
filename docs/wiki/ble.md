@@ -142,7 +142,9 @@ in [[alerts]] and `research/bluetooth/`, `research/cve/2023-45866.md`.
 - **`BLE_ADV_FLOOD`**: per sensor and per payload key (Event_Type,
   company ID or Service Data UUID, first octet), tumbling windows of
   `ble.flood_window_s`. Fires only when a window holds at least
-  `ble.flood_distinct_addrs` addresses **and** `ble.flood_rate`
+  `ble.flood_distinct_addrs` **fresh** addresses (new to the key since
+  the two windows before, so a crowd of stable genuine advertisers
+  counts none and a key's first window cannot fire) **and** `ble.flood_rate`
   advertisements per second **and** the key is one the BLE Spam tool's
   own source emits (Apple 0x07 / 0x0F, Microsoft Swift Pair 0x03,
   Samsung 0x42 / 0x01, Google Fast Pair 0xFE2C). No threshold has a
@@ -150,7 +152,10 @@ in [[alerts]] and `research/bluetooth/`, `research/cve/2023-45866.md`.
 - **`BLE_HID_UNEXPECTED`**: a HID appearance or the 0x1812 service from
   a public address in the Hak5 or Espressif OUI table, or HID
   appearances on `ble.hid_rotate_addrs` new random addresses inside
-  `ble.hid_rotate_window_s` once observation is older than that window.
+  `ble.hid_rotate_window_s` once that sensor's observation is older
+  than that window (per sensor). A row evicted from the 256-row table
+  and heard again is new again, so on a site that churns the table
+  (`evict_ble_device`) a resident keyboard can count.
   A precursor of the CVE-2023-45866 class, never an exploit observation.
 - **`BLE_WATCHLIST`**: a category row (`src/ble_watchlist.c`) matched.
   **The table ships empty**; a row lands with the primary source that

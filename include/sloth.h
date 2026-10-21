@@ -2649,12 +2649,17 @@ typedef struct {
     uint8_t  addr_type;        /* 0 public, 1 random, 2/3 resolved identity */
     uint16_t adapter;          /* HCI index of the controller that heard it */
     uint8_t  last_event_type;  /* ADV_IND .. SCAN_RSP, Vol 4 Part E §7.7.65.2 */
+    /* Bit per Event_Type 0..4 ever heard from this row, sticky (#144
+     * slice 4 review). An ADV_IND and its SCAN_RSP alternate, so the
+     * last type is display only: the JSONL change signature takes this
+     * mask, which settles, and never last_event_type, which flips. */
+    uint8_t  pdu_mask;
     uint8_t  has_name, name_complete;
     char     name[BLE_DEV_NAME_MAX + 1];
     uint8_t  has_uuid16;
     uint16_t uuid16;           /* first 16-bit service UUID advertised */
     uint8_t  has_mfr;
-    uint16_t mfr_id;           /* manufacturer company identifier */
+    uint16_t mfr_id;           /* manufacturer company identifier, FIRST seen */
     uint8_t  has_appearance;
     uint16_t appearance;
     uint8_t  has_tx_power;
@@ -2679,7 +2684,11 @@ typedef struct {
     int8_t   channel;          /* LL channel index 0..39 last heard on, -1 unknown */
     /* #144 slice 4. The first octet of the manufacturer data after the
      * company ID: the message type for Apple Continuity, the beacon ID
-     * for Microsoft. Only what the rules key on; still no raw AD bytes. */
+     * for Microsoft. Only what the rules key on; still no raw AD bytes.
+     * Kept as FIRST seen, paired with mfr_id: an Apple device rotates
+     * its Continuity type report to report, and a last-value field would
+     * make every ble_device record a change (the rules read the report,
+     * not this). */
     uint8_t  has_mfr_sub;
     uint8_t  mfr_sub;
     uint8_t  has_svc_data;
@@ -2716,6 +2725,15 @@ typedef struct {
     uint32_t total;            /* advertisements counted */
     uint16_t distinct;         /* distinct (address, type), at most BLE_FLOOD_ADDR_CAP */
     uint8_t  distinct_capped;  /* 1: more addresses than were counted */
+    /* Addresses heard in this window that were not heard on this key in
+     * the two windows before it (BLE_ADV_FLOOD gate 1). Uncapped: a
+     * Bloom set per window, so a false positive only ever hides a fresh
+     * address, never invents one. */
+    uint32_t fresh;
+    /* 1 when the window before this one held advertisements on this
+     * key: only then is `fresh` a comparison against something. The
+     * first window of a key, or one after a silent window, is 0. */
+    uint8_t  baseline;
     uint8_t  has_rssi;
     int8_t   rssi_median;      /* dBm, of the first BLE_FLOOD_RSSI_CAP samples */
 } ble_flood_win_t;
@@ -2777,6 +2795,7 @@ typedef enum {
  * command until a matching disable, HCI_Reset, or DEL_INDEX, so they
  * are held as on/off here rather than read off a command's age. */
 #define BT_MAX_CTRL   8
+#define BLE_SENSOR_IFACES_MAX 8   /* BLE sensor ifaces tracked per host, as ble_detect.c groups them */
 #define BT_ADV_HANDLE_WORDS 8   /* 256-bit Advertising_Handle set */
 typedef struct {
     int      index;             /* HCI index; -1 = free slot */
@@ -2845,6 +2864,10 @@ typedef struct {
      * rotation window is measured inside. 0 = none yet. */
     time_t   adv_first_ts;
     time_t   adv_last_ts;
+    /* The same first-advertisement clock per sensor iface (#144 slice 4
+     * review): a second BLE sensor started later has its own first
+     * window, in which every address it hears is new to it. */
+    struct { char iface[24]; time_t first_ts; } adv_first_by[BLE_SENSOR_IFACES_MAX];
 } ble_host_t;
 
 /* ── Ubertooth capture stream (#144 slice 3) ─────────────

@@ -64,9 +64,21 @@ const char *ble_family_name(int family) {
 
 /* ── The table ─────────────────────────────────────────────────────── */
 
+/* Address sets per window, for the fresh-address count (gate 1). Two
+ * bits per address in 4096: 512 bytes a set, three sets a row. With
+ * BLE_FLOOD_ADDR_CAP-sized floods the false-positive rate is a few per
+ * cent; past a few thousand addresses a window it climbs, and every
+ * false positive is an address wrongly called "heard before" - fresh
+ * under-counts, which can hide a flood but never make one. */
+#define FLOOD_BLOOM_BITS  4096u
+#define FLOOD_BLOOM_BYTES (FLOOD_BLOOM_BITS / 8u)
+
 typedef struct {
     ble_flood_row_t pub;
     uint64_t win_start_ms;
+    uint8_t  bloom_cur[FLOOD_BLOOM_BYTES];    /* this window */
+    uint8_t  bloom_prev[FLOOD_BLOOM_BYTES];   /* the window before */
+    uint8_t  bloom_prev2[FLOOD_BLOOM_BYTES];  /* the one before that */
     uint8_t  addrs[BLE_FLOOD_ADDR_CAP][7];   /* display order + type */
     int8_t   rssi[BLE_FLOOD_RSSI_CAP];
     uint8_t  rssi_n;
@@ -116,9 +128,29 @@ static ble_flood_win_t cur_win(const flood_row_t *r) {
     return w;
 }
 
+/* The window in progress starts empty; it has a baseline when the
+ * window just closed held something on this key. */
 static void cur_reset(flood_row_t *r) {
     memset(&r->pub.cur, 0, sizeof(r->pub.cur));
+    memset(r->bloom_cur, 0, sizeof(r->bloom_cur));
+    r->pub.cur.baseline = r->pub.prev.total > 0;
     r->rssi_n = 0;
+}
+
+static void bloom_bits(const uint8_t a[7], unsigned *b1, unsigned *b2) {
+    uint64_t h = 0xcbf29ce484222325ULL;           /* FNV-1a 64 */
+    for (int i = 0; i < 7; i++) { h ^= a[i]; h *= 0x100000001b3ULL; }
+    *b1 = (unsigned)(h % FLOOD_BLOOM_BITS);
+    *b2 = (unsigned)((h >> 32) % FLOOD_BLOOM_BITS);
+}
+
+static int bloom_has(const uint8_t *set, unsigned b1, unsigned b2) {
+    return ((set[b1 >> 3] >> (b1 & 7)) & 1) && ((set[b2 >> 3] >> (b2 & 7)) & 1);
+}
+
+static void bloom_add(uint8_t *set, unsigned b1, unsigned b2) {
+    set[b1 >> 3] |= (uint8_t)(1u << (b1 & 7));
+    set[b2 >> 3] |= (uint8_t)(1u << (b2 & 7));
 }
 
 /* Close every window `now_ms` is past. Exactly one closed: it becomes
@@ -129,14 +161,24 @@ static void roll(flood_row_t *r, uint64_t now_ms, uint32_t win) {
     if (r->pub.window_ms != win) {
         r->pub.window_ms = win;
         memset(&r->pub.prev, 0, sizeof(r->pub.prev));
+        memset(r->bloom_prev, 0, sizeof(r->bloom_prev));
+        memset(r->bloom_prev2, 0, sizeof(r->bloom_prev2));
         cur_reset(r);
         r->win_start_ms = now_ms;
         return;
     }
     if (now_ms < r->win_start_ms + win) return;
     uint64_t n = (now_ms - r->win_start_ms) / win;
-    if (n == 1) r->pub.prev = cur_win(r);
-    else        memset(&r->pub.prev, 0, sizeof(r->pub.prev));
+    if (n == 1) {
+        r->pub.prev = cur_win(r);
+        memcpy(r->bloom_prev2, r->bloom_prev, sizeof(r->bloom_prev2));
+        memcpy(r->bloom_prev, r->bloom_cur, sizeof(r->bloom_prev));
+    } else {
+        memset(&r->pub.prev, 0, sizeof(r->pub.prev));
+        if (n == 2) memcpy(r->bloom_prev2, r->bloom_cur, sizeof(r->bloom_prev2));
+        else        memset(r->bloom_prev2, 0, sizeof(r->bloom_prev2));
+        memset(r->bloom_prev, 0, sizeof(r->bloom_prev));
+    }
     cur_reset(r);
     r->win_start_ms += n * win;
 }
@@ -199,6 +241,19 @@ void ble_flood_note(const ble_obs_t *o, const uint8_t addr[6],
             } else {
                 r->pub.cur.distinct_capped = 1;
             }
+        }
+        /* Fresh: first time in this window, and in neither of the two
+         * before it. A crowd of genuine advertisers keeps its addresses
+         * across windows; the spam tool takes a new one per payload
+         * (ble_spam.c start_extra_beacon(), research/bluetooth/
+         * ble-spam-flood.md). */
+        unsigned b1, b2;
+        bloom_bits(a, &b1, &b2);
+        if (!bloom_has(r->bloom_cur, b1, b2)) {
+            bloom_add(r->bloom_cur, b1, b2);
+            if (!bloom_has(r->bloom_prev, b1, b2) &&
+                !bloom_has(r->bloom_prev2, b1, b2))
+                r->pub.cur.fresh++;
         }
         if (rep->has_rssi && r->rssi_n < BLE_FLOOD_RSSI_CAP)
             r->rssi[r->rssi_n++] = rep->rssi;

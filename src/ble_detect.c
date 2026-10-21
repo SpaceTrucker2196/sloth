@@ -40,7 +40,8 @@ static void cpy(char *dst, size_t n, const char *src) {
 static int addr_is_public(uint8_t t)  { return t == 0 || t == 2; }
 static int addr_is_random(uint8_t t)  { return t == 1 || t == 3; }
 
-/* Room left in `out`, or count the drop. */
+/* Room left in `out`, or count the drop. Every lane goes on calling
+ * after a refusal, so *dropped is the whole overflow, not 1. */
 static ble_finding_t *slot(ble_finding_t *out, int max, int *n, int *dropped) {
     if (*n >= max) { (*dropped)++; return NULL; }
     ble_finding_t *f = &out[(*n)++];
@@ -56,7 +57,8 @@ static int win_passes(const ble_flood_win_t *w, uint32_t window_ms) {
      * judged on what it holds so far: never an extrapolation upward. */
     uint64_t need_total = (uint64_t)rate * window_ms / 1000u;
     if (need_total < 1) need_total = 1;
-    return (long)w->distinct >= need_addrs && (uint64_t)w->total >= need_total;
+    return w->baseline && (long)w->fresh >= need_addrs &&
+           (uint64_t)w->total >= need_total;
 }
 
 static void flood_findings(const sloth_state_t *s, ble_finding_t *out,
@@ -71,7 +73,7 @@ static void flood_findings(const sloth_state_t *s, ble_finding_t *out,
         if (!w) continue;                                   /* gates 1, 2 */
 
         ble_finding_t *f = slot(out, max, n, dropped);
-        if (!f) return;
+        if (!f) continue;               /* counted in *dropped; keep counting */
         f->kind        = BLE_FIND_FLOOD;
         f->alert_type  = ALERT_TYPE_BLE_ADV_FLOOD;
         f->sensor_kind = r->sensor_kind;
@@ -87,6 +89,11 @@ static void flood_findings(const sloth_state_t *s, ble_finding_t *out,
         f->total       = w->total;
         f->distinct    = w->distinct;
         f->distinct_capped = w->distinct_capped;
+        f->fresh       = w->fresh;
+        f->prev_total  = r->prev.total;
+        f->prev_fresh  = r->prev.fresh;
+        f->prev_has_rssi    = r->prev.has_rssi;
+        f->prev_rssi_median = r->prev.rssi_median;
         f->rate_x10    = (uint32_t)((uint64_t)w->total * 10000u / r->window_ms);
         f->has_rssi    = w->has_rssi;
         f->rssi_median = w->rssi_median;
@@ -115,7 +122,7 @@ static void hid_oui_findings(const sloth_state_t *s, ble_finding_t *out,
         if (!table) continue;
 
         ble_finding_t *f = slot(out, max, n, dropped);
-        if (!f) return;
+        if (!f) continue;               /* counted in *dropped; keep counting */
         f->kind        = BLE_FIND_HID_OUI;
         f->alert_type  = ALERT_TYPE_BLE_HID_UNEXPECTED;
         f->sensor_kind = d->sensor_kind;
@@ -151,20 +158,31 @@ static int ifaces_of(const sloth_state_t *s, char out[][24], int max) {
     return n;
 }
 
+static time_t sensor_first_ts(const ble_host_t *h, const char *ifc) {
+    for (int i = 0; i < BLE_SENSOR_IFACES_MAX; i++)
+        if (h->adv_first_by[i].first_ts &&
+            strncmp(h->adv_first_by[i].iface, ifc,
+                    sizeof(h->adv_first_by[i].iface)) == 0)
+            return h->adv_first_by[i].first_ts;
+    return 0;
+}
+
 static void hid_rotate_findings(const sloth_state_t *s, time_t now,
                                 ble_finding_t *out, int max, int *n,
                                 int *dropped) {
     const time_t win = (time_t)tune_val(TUNE_BLE_HID_ROTATE_WINDOW_S);
     const long   need = tune_val(TUNE_BLE_HID_ROTATE_ADDRS);
     const time_t since = now - win;
-    /* The first window of observation: every address is new in it, so
-     * no rotation can be told from a room full of keyboards. */
-    if (s->ble_host.adv_first_ts == 0 || s->ble_host.adv_first_ts > since)
-        return;
 
-    char ifs[8][24];
-    int nif = ifaces_of(s, ifs, 8);
+    char ifs[BLE_SENSOR_IFACES_MAX][24];
+    int nif = ifaces_of(s, ifs, BLE_SENSOR_IFACES_MAX);
     for (int k = 0; k < nif; k++) {
+        /* This sensor's first window: every address is new to it, so no
+         * rotation can be told from a room full of keyboards. Per
+         * sensor, because a --bt-capture started an hour after
+         * --bt-monitor has a first window of its own. */
+        time_t first = sensor_first_ts(&s->ble_host, ifs[k]);
+        if (first == 0 || first > since) continue;
         int count = 0;
         const ble_device_t *last = NULL;
         for (int i = 0; i < s->ble_device_count && i < MAX_BLE_DEVICES; i++) {
@@ -179,7 +197,7 @@ static void hid_rotate_findings(const sloth_state_t *s, time_t now,
         if (count < need || !last) continue;
 
         ble_finding_t *f = slot(out, max, n, dropped);
-        if (!f) return;
+        if (!f) continue;               /* counted in *dropped; keep counting */
         f->kind        = BLE_FIND_HID_ROTATE;
         f->alert_type  = ALERT_TYPE_BLE_HID_UNEXPECTED;
         f->sensor_kind = last->sensor_kind;
@@ -213,7 +231,21 @@ static void watch_findings(const sloth_state_t *s, time_t now,
         while (k < ng && (strcmp(g[k].ifc, d->sensor_iface) != 0 ||
                           strcmp(g[k].cat, d->watch_cat) != 0)) k++;
         if (k == ng) {
-            if (ng >= BLE_FINDINGS_MAX) { (*dropped)++; continue; }
+            if (ng >= BLE_FINDINGS_MAX) {
+                /* One drop per (iface, category) group, not per row:
+                 * an earlier qualifying row of the same group has
+                 * already been counted. */
+                int seen = 0;
+                for (int j = 0; j < i && !seen; j++) {
+                    const ble_device_t *e = &s->ble_devices[j];
+                    seen = e->watch_cat[0] &&
+                           e->last_seen >= now - BLE_WATCH_RECENT_SECS &&
+                           strcmp(e->watch_cat, d->watch_cat) == 0 &&
+                           strcmp(e->sensor_iface, d->sensor_iface) == 0;
+                }
+                if (!seen) (*dropped)++;
+                continue;
+            }
             cpy(g[ng].ifc, sizeof(g[ng].ifc), d->sensor_iface);
             cpy(g[ng].cat, sizeof(g[ng].cat), d->watch_cat);
             g[ng].addrs = 0;
@@ -224,7 +256,7 @@ static void watch_findings(const sloth_state_t *s, time_t now,
     }
     for (int k = 0; k < ng; k++) {
         ble_finding_t *f = slot(out, max, n, dropped);
-        if (!f) return;
+        if (!f) continue;               /* counted in *dropped; keep counting */
         f->kind        = BLE_FIND_WATCH;
         f->alert_type  = ALERT_TYPE_BLE_WATCHLIST;
         f->sensor_kind = g[k].d->sensor_kind;

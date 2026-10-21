@@ -82,12 +82,13 @@ static void fire_finding(const ble_finding_t *f, time_t now) {
         if (f->has_rssi) snprintf(rssi, sizeof(rssi), ", median %d dBm", (int)f->rssi_median);
         else             rssi[0] = '\0';
         snprintf(detail, sizeof(detail),
-                 "%s %s 0x%04x/%s: %s%u addresses, %u adv in %us (%u.%u/s)%s "
+                 "%s %s 0x%04x/%s: %u new of %s%u addresses, %u adv in %us (%u.%u/s)%s "
                  "via %s%s - a documented BLE-spam payload key at flood "
                  "volume; genuine devices send this key too, so the count "
                  "and rate are the evidence, not the payload",
                  ble_adv_type_name(f->adv_type), ble_family_name(f->family),
-                 (unsigned)f->id, sub, f->distinct_capped ? ">=" : "",
+                 (unsigned)f->id, sub, (unsigned)f->fresh,
+                 f->distinct_capped ? ">=" : "",
                  (unsigned)f->distinct, (unsigned)f->total,
                  (unsigned)f->window_s, (unsigned)(f->rate_x10 / 10),
                  (unsigned)(f->rate_x10 % 10), rssi, f->sensor_iface,

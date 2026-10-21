@@ -123,7 +123,8 @@ Defaults are the shipped values; ranges are inclusive and a value outside one ex
 
 None of these has a cited basis for where legitimate traffic stops. The
 BLE-spam tool's source is the basis for the *shape* (a fresh address per
-payload, an advertising interval of 20–500 ms — [[ble]]), not for a
+payload, which is why gate 1 counts addresses new to the key rather than
+addresses present, an advertising interval of 20–500 ms — [[ble]]), not for a
 number, so `BLE_ADV_FLOOD` requires all three of its gates together and
 none can be switched off: the third gate, a documented spam payload key,
 is not a knob.
@@ -131,10 +132,10 @@ is not a knob.
 | Knob | Default | Range | Meaning |
 |------|---------|-------|---------|
 | `ble.flood_window_s` | 10 | 1..600 | seconds per `BLE_ADV_FLOOD` window (tumbling, monotonic clock); a changed value restarts every window |
-| `ble.flood_distinct_addrs` | 20 | 2..128 | gate 1: distinct advertiser addresses on one spam-listed key in a window; 128 is the per-window set the table keeps |
+| `ble.flood_distinct_addrs` | 20 | 2..128 | gate 1: **fresh** advertiser addresses on one spam-listed key in a window — not heard on the key in the two windows before, and only in a window whose predecessor held advertisements on it (a crowd of stable genuine advertisers counts 0); the ceiling is the exact per-window set the table keeps, the fresh count past it is Bloom-backed and under-counts |
 | `ble.flood_rate` | 10 | 1..10000 | gate 2: advertisements per second on that key, counted over the whole window (a window in progress is never extrapolated upward) |
 | `ble.hid_rotate_addrs` | 3 | 2..256 | `BLE_HID_UNEXPECTED` rotation form: new random addresses advertising a HID appearance on one sensor inside the window |
-| `ble.hid_rotate_window_s` | 900 | 60..86400 | seconds of that window; the form cannot fire until BLE observation began more than one window ago |
+| `ble.hid_rotate_window_s` | 900 | 60..86400 | seconds in the `BLE_HID_UNEXPECTED` rotation window; the form cannot fire on a sensor until that sensor's first advertisement is more than one window old (per sensor: a `--bt-capture` started later has its own first window) |
 
 `--refresh-ms` is deliberately not a knob: it is UI cadence, not a detector or retention decision.
 
