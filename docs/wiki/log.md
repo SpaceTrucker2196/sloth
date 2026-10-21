@@ -4396,3 +4396,12 @@ and a Request-URI with userinfo or a `user=` / `password=` parameter is
 not tracked. Two eviction kinds, `rtsp_exchange` and `rtsp_stream`,
 join the `sensor_health` breakout. Basis: `research/rfc/2326-7826-rtsp.md`;
 see [[alerts]].
+
+Review follow-up, same day: a DESCRIBE whose header block does not end
+in its TCP segment is now dropped instead of counted anonymous (its
+`Authorization` may be in the next segment); credential-shaped URL
+parameters are matched by name stem (`login`, `account`, `token`,
+`auth` join `user` / `pass` / `pwd`, covering Foscam's `loginuse` /
+`loginpas`); the alert detail's example path is the smallest anonymous
+path and carries no port, so slot order no longer moves the incident.
+The one-message-per-segment limit is now stated in the operator docs.

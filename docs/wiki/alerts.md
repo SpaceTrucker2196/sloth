@@ -568,8 +568,18 @@ corroborates anonymous stream access and does not confirm it: SETUP or
 PLAY may still be authenticated, the server may filter by address, and
 the device need not be a camera.
 
+Segments are not reassembled: only the first RTSP message in each TCP
+segment is read, so a DESCRIBE pipelined behind another in one segment
+is missed. A DESCRIBE whose header block does not end (empty line) in
+its segment is dropped rather than counted anonymous, because its
+`Authorization` header may be in the next one. The detail's example path
+is the smallest of the server's anonymous paths, so only a new path or a
+stream-table eviction moves the incident.
+
 What it never does: read an `Authorization` value, keep URL userinfo or
-a `user=` / `password=` parameter (such a request is not tracked), or
+a credential-shaped parameter — `user=`, `password=`, `loginuse=` /
+`loginpas=`, `account=`, `token=`, `auth=` and other names on those
+stems (such a request is not tracked), or
 compare anything against a default-credential list — the issue's
 `camera_default_creds.csv` was dropped by the #145 ruling and the
 `src/cleartext_creds.h` guardrail stands. Same exposure position as

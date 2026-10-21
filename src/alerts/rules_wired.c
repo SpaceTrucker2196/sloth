@@ -1270,9 +1270,13 @@ void rule_beaconing(const sloth_state_t *s, time_t now) {
  * sloth sent nothing and never looked at a credential.
  *
  * One incident per server IP, however many paths: the detail carries
- * the count of distinct anonymous paths, which only moves when a new
- * path is seen, so the incident's observations rise with the evidence
- * and not with every repeat DESCRIBE.
+ * the count of distinct anonymous paths and, as its example, the
+ * lexicographically smallest of them. Both are functions of the set of
+ * anonymous rows and not of their slot order, and the port is left out
+ * of the text (it goes to match_port), so a repeat DESCRIBE or a table
+ * reshuffle moves nothing. The set itself can still change two ways: a
+ * new anonymous path joins it, or the stream table (STAB_OLDEST, paths
+ * chosen by the remote side) evicts one. Either bumps observations.
  *
  * WARN, the same level as CAM_WS_DISCOVERY. It corroborates anonymous
  * stream access, it does not confirm it: the server may authenticate
@@ -1295,10 +1299,14 @@ void rule_cam_rtsp_unauth(const sloth_state_t *s, time_t now) {
         if (!first) continue;
 
         int paths = 0;
-        for (int j = i; j < n; j++)
-            if (s->rtsp_streams[j].anon_ok &&
-                strcmp(s->rtsp_streams[j].server, r->server) == 0)
-                paths++;
+        const rtsp_stream_t *ex = r;
+        for (int j = i; j < n; j++) {
+            const rtsp_stream_t *q = &s->rtsp_streams[j];
+            if (!q->anon_ok || strcmp(q->server, r->server) != 0) continue;
+            paths++;
+            int c = strcmp(q->path, ex->path);
+            if (c < 0 || (c == 0 && q->port < ex->port)) ex = q;
+        }
 
         char key[ALERT_KEY_LEN];
         akey_t k;
@@ -1308,12 +1316,11 @@ void rule_cam_rtsp_unauth(const sloth_state_t *s, time_t now) {
 
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
-                 "RTSP server %.45s:%u answered DESCRIBE with no"
+                 "RTSP server %.45s answered DESCRIBE with no"
                  " authentication challenge on %d path%s (e.g. %.64s)"
                  " - anonymous stream access corroborated, not confirmed",
-                 r->server, (unsigned)r->port, paths, paths == 1 ? "" : "s",
-                 r->path);
+                 r->server, paths, paths == 1 ? "" : "s", ex->path);
         fire(ALERT_TYPE_CAM_RTSP_UNAUTH, ALERT_SEV_WARN,
-             "CAM_RTSP_UNAUTH", detail, key, r->server, r->port, now);
+             "CAM_RTSP_UNAUTH", detail, key, r->server, ex->port, now);
     }
 }

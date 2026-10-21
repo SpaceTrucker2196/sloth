@@ -202,6 +202,40 @@ static void test_parse_credential_query_is_flagged(void) {
     ASSERT_STR(m.path, "");
 }
 
+static void test_parse_firmware_credential_names_are_flagged(void) {
+    /* Names other than user=/password= that camera firmwares take a
+     * credential in: Foscam's loginuse/loginpas, account=, token=,
+     * auth=. Each is an authenticated request, so none may be tracked
+     * as anonymous. Seen to fail with the old exact-name list (user,
+     * username, usr, password, passwd, pass, pwd): loginuse parses with
+     * url_creds 0 and path "/videoMain". */
+    static const char *const r[] = {
+        "DESCRIBE rtsp://192.0.2.5/videoMain?loginuse=admin&loginpas=12345 RTSP/1.0\r\nCSeq: 2\r\n\r\n",
+        "DESCRIBE rtsp://192.0.2.5/live?account=admin&channel=1 RTSP/1.0\r\nCSeq: 2\r\n\r\n",
+        "DESCRIBE rtsp://192.0.2.5/live?token=8d4e1c RTSP/1.0\r\nCSeq: 2\r\n\r\n",
+        "DESCRIBE rtsp://192.0.2.5/live;auth=8d4e1c RTSP/1.0\r\nCSeq: 2\r\n\r\n",
+        "DESCRIBE rtsp://192.0.2.5/live?channel=1&LoginPas=12345 RTSP/1.0\r\nCSeq: 2\r\n\r\n",
+    };
+    for (size_t i = 0; i < sizeof r / sizeof r[0]; i++) {
+        rtsp_msg_t m;
+        ASSERT_EQ(rtsp_parse(u8(r[i]), slen(r[i]), &m), 1);
+        ASSERT_EQ(m.url_creds, 1);
+        ASSERT_STR(m.path, "");
+    }
+}
+
+static void test_firmware_credential_url_is_not_counted_anonymous(void) {
+    /* The observer end of the same case: a loginuse/loginpas DESCRIBE
+     * answered 200 leaves no row. */
+    const char *r = "DESCRIBE rtsp://192.0.2.5/videoMain?loginuse=admin&loginpas=12345 RTSP/1.0\r\n"
+                    "CSeq: 2\r\n\r\n";
+    observe(CLI, 51000, SRV, 554, r);
+    observe(SRV, 554, CLI, 51000, OK_SDP_2);
+    snap();
+    ASSERT_EQ(g_s.rtsp_stream_count, 0);
+    ASSERT(!bytes_contain(g_s.rtsp_streams, sizeof g_s.rtsp_streams, "12345"));
+}
+
 static void test_parse_credential_in_path_segment_is_flagged(void) {
     /* The path-parameter form some firmwares accept: the credential is
      * in abs_path itself, before any '?'. Seen to fail by letting
@@ -501,10 +535,14 @@ static void test_responses_out_of_order_pair_by_cseq(void) {
     const char *db = "DESCRIBE rtsp://192.0.2.5/b RTSP/1.0\r\nCSeq: 11\r\n\r\n";
     const char *ra = "RTSP/1.0 200 OK\r\nCSeq: 10\r\n\r\n";
     const char *rb = "RTSP/1.0 404 Not Found\r\nCSeq: 11\r\n\r\n";
+    /* ra comes first while db (CSeq 11) holds the last-used slot, so a
+     * settle() that took the newest pending request instead of the one
+     * whose CSeq matches would credit /a's 200 to /b. Seen to fail by
+     * dropping the CSeq comparison in settle(): the row is /b. */
     observe(CLI, 51000, SRV, 554, da);
     observe(CLI, 51000, SRV, 554, db);
-    observe(SRV, 554, CLI, 51000, rb);
     observe(SRV, 554, CLI, 51000, ra);
+    observe(SRV, 554, CLI, 51000, rb);
     snap();
     /* /b got a 404: nothing about authentication, no row. /a: 200. */
     ASSERT_EQ(g_s.rtsp_stream_count, 1);
@@ -535,6 +573,54 @@ static void test_url_credentials_are_never_tracked(void) {
     snap();
     ASSERT_EQ(g_s.rtsp_stream_count, 0);
     ASSERT(!bytes_contain(g_s.rtsp_streams, sizeof g_s.rtsp_streams, "12345"));
+}
+
+static void test_parse_reports_header_block_completeness(void) {
+    rtsp_msg_t m;
+    ASSERT_EQ(rtsp_parse(u8(DESCRIBE_2), slen(DESCRIBE_2), &m), 1);
+    ASSERT_EQ(m.complete, 1);
+    const char *open_ = "DESCRIBE rtsp://192.0.2.5/x RTSP/1.0\r\nCSeq: 5\r\n";
+    ASSERT_EQ(rtsp_parse(u8(open_), slen(open_), &m), 1);
+    ASSERT_EQ(m.complete, 0);
+    ASSERT_EQ(m.has_cseq, 1);
+}
+
+static void test_split_header_block_is_not_counted_anonymous(void) {
+    /* A client that writes its headers in two send()s: the request line
+     * and CSeq in one TCP segment, Authorization and the empty line in
+     * the next. The first segment alone shows no Authorization, but
+     * the header block is not finished, so has_auth is unknown and the
+     * request must not be counted anonymous when the 200 comes back.
+     * Seen to fail by dropping `m.complete` from the observer's
+     * DESCRIBE condition: anon_ok becomes 1. */
+    const char *seg1 = "DESCRIBE rtsp://192.0.2.5:554/p1 RTSP/1.0\r\n"
+                       "CSeq: 5\r\n"
+                       "User-Agent: test-client/1.0\r\n";
+    const char *seg2 = "Authorization: Digest username=\"admin\", realm=\"IP Camera\", "
+                       "nonce=\"8d4e1c\", uri=\"rtsp://192.0.2.5:554/p1\", "
+                       "response=\"00000000000000000000000000000000\"\r\n\r\n";
+    const char *ok = "RTSP/1.0 200 OK\r\nCSeq: 5\r\n"
+                     "Content-Type: application/sdp\r\n\r\n";
+    observe(CLI, 51000, SRV, 554, seg1);
+    observe(CLI, 51000, SRV, 554, seg2);
+    observe(SRV, 554, CLI, 51000, ok);
+    snap();
+    int anon = 0;
+    for (int i = 0; i < g_s.rtsp_stream_count; i++)
+        anon += (int)g_s.rtsp_streams[i].anon_ok;
+    ASSERT_EQ(anon, 0);
+    ASSERT_EQ(g_s.rtsp_stream_count, 0);
+
+    /* Control: the same request in one segment is tracked (and, with
+     * its Authorization, counted authenticated). */
+    char whole[512];
+    snprintf(whole, sizeof whole, "%s%s", seg1, seg2);
+    observe(CLI, 51001, SRV, 554, whole);
+    observe(SRV, 554, CLI, 51001, ok);
+    snap();
+    ASSERT_EQ(g_s.rtsp_stream_count, 1);
+    ASSERT_EQ((int)g_s.rtsp_streams[0].auth_ok, 1);
+    ASSERT_EQ((int)g_s.rtsp_streams[0].anon_ok, 0);
 }
 
 static void test_info_labels(void) {
@@ -655,7 +741,8 @@ static void test_rule_fires_warn_per_server(void) {
     ASSERT_STR(g_s.alerts[i].match_ip, SRV);
     ASSERT_EQ(g_s.alerts[i].match_port, 554);
     ASSERT_EQ((int)g_s.alerts[i].technique[0], 0);
-    ASSERT(strstr(g_s.alerts[i].detail, "192.0.2.5:554") != NULL);
+    ASSERT(strstr(g_s.alerts[i].detail, "RTSP server 192.0.2.5 ") != NULL);
+    ASSERT(strstr(g_s.alerts[i].detail, "e.g. /Streaming/Channels/101") != NULL);
     ASSERT(strstr(g_s.alerts[i].detail, "1 path ") != NULL);
     ASSERT(strstr(g_s.alerts[i].detail, "not confirmed") != NULL);
     /* Corroborate, never confirm: the detail names an RTSP server, and
@@ -702,6 +789,34 @@ static void test_rule_one_alert_per_server_with_rising_count(void) {
     i = find_rtsp_alert(&g_s);
     ASSERT(strstr(g_s.alerts[i].detail, "3 paths") != NULL);
     ASSERT_EQ((long long)g_s.alerts[i].observations, (long long)obs0 + 1);
+}
+
+static void test_rule_detail_ignores_slot_order(void) {
+    /* The snapshot's slot order is the stream table's, which eviction
+     * and reuse reshuffle. The detail's example path is the smallest
+     * one, so the same set of rows in another order is the same
+     * evidence and adds no observation. Seen to fail by taking the
+     * first row's path (and port) as the example: the swap moves the
+     * detail from "e.g. /a" to "e.g. /b" and observations rise. */
+    alerts_clear();
+    memset(&g_s, 0, sizeof g_s);
+    seed(&g_s, SRV, 8554, "/b", 1, 0);
+    seed(&g_s, SRV, 554, "/a", 1, 0);
+    alerts_update(&g_s);
+    int i = find_rtsp_alert(&g_s);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT(strstr(g_s.alerts[i].detail, "e.g. /a") != NULL);
+    ASSERT_EQ(g_s.alerts[i].match_port, 554);
+    uint32_t obs0 = g_s.alerts[i].observations;
+
+    rtsp_stream_t tmp = g_s.rtsp_streams[0];
+    g_s.rtsp_streams[0] = g_s.rtsp_streams[1];
+    g_s.rtsp_streams[1] = tmp;
+    alerts_update(&g_s);
+    i = find_rtsp_alert(&g_s);
+    ASSERT(strstr(g_s.alerts[i].detail, "e.g. /a") != NULL);
+    ASSERT_EQ((long long)g_s.alerts[i].observations, (long long)obs0);
 }
 
 static void test_rule_two_servers_two_alerts(void) {
@@ -815,6 +930,7 @@ void run_rtsp_snoop_tests(void) {
     RUN_TEST(test_parse_authorization_is_presence_only);
     RUN_TEST(test_parse_userinfo_is_flagged_and_dropped);
     RUN_TEST(test_parse_credential_query_is_flagged);
+    RUN_TEST(test_parse_firmware_credential_names_are_flagged);
     RUN_TEST(test_parse_credential_in_path_segment_is_flagged);
     RUN_TEST(test_parse_cred_name_needs_a_boundary);
     RUN_TEST(test_parse_path_control_bytes_are_neutralised);
@@ -846,6 +962,9 @@ void run_rtsp_snoop_tests(void) {
     RUN_TEST(test_responses_out_of_order_pair_by_cseq);
     RUN_TEST(test_non_describe_is_not_tracked);
     RUN_TEST(test_url_credentials_are_never_tracked);
+    RUN_TEST(test_firmware_credential_url_is_not_counted_anonymous);
+    RUN_TEST(test_parse_reports_header_block_completeness);
+    RUN_TEST(test_split_header_block_is_not_counted_anonymous);
     RUN_TEST(test_info_labels);
     RUN_TEST(test_clear_empties_the_table);
     RUN_TEST(test_stream_table_eviction_is_tallied);
@@ -855,6 +974,7 @@ void run_rtsp_snoop_tests(void) {
     RUN_TEST(test_rule_fires_warn_per_server);
     RUN_TEST(test_rule_quiet_when_only_authenticated);
     RUN_TEST(test_rule_one_alert_per_server_with_rising_count);
+    RUN_TEST(test_rule_detail_ignores_slot_order);
     RUN_TEST(test_rule_two_servers_two_alerts);
     RUN_TEST(test_rule_from_hand_built_bytes);
 

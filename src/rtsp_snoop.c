@@ -145,21 +145,29 @@ static int is_method_char(char c) {
 }
 
 /* Query/path parameter names that carry a credential in the URL forms
- * some camera firmwares accept in place of an Authorization header
- * ("...?user=admin&password=..."). Matched only as a whole parameter
- * name followed by '=', at the start of a segment, so "/compass" is not
- * "pass". This list decides what is NOT tracked: a URL that matches is
- * never stored, never compared, and never counted as anonymous. */
-static const char *const k_cred_names[] = {
-    "user", "username", "usr", "password", "passwd", "pass", "pwd", NULL
+ * camera firmwares accept in place of an Authorization header:
+ * "?user=admin&password=...", Foscam-style "?loginuse=admin&loginpas=...",
+ * "?account=...", "?token=...", "?auth=...". A parameter is a name
+ * starting at a segment boundary and running to '='; it is credential-
+ * shaped when the name begins with one of these stems, so "username",
+ * "passwd", "loginpas", "auth_key" and "token_id" all are, while
+ * "compass" (stem not at the start) and "users" (no '=') are not. The
+ * list errs wide on purpose: it decides what is NOT tracked, so a false
+ * match loses one finding and a miss would count an authenticated
+ * request anonymous. A URL that matches is never stored, never
+ * compared, and never counted as anonymous. */
+static const char *const k_cred_stems[] = {
+    "user", "usr", "pass", "pwd", "login", "account", "token", "auth", NULL
 };
 
 static int cred_token_at(const char *s, int n) {
-    for (int t = 0; k_cred_names[t]; t++) {
-        int tl = (int)strlen(k_cred_names[t]);
-        if (n > tl && ci_prefix(s, n, k_cred_names[t]) && s[tl] == '=')
-            return 1;
-    }
+    int nl = 0;
+    while (nl < n && s[nl] != '=' && s[nl] != '/' && s[nl] != '?' &&
+           s[nl] != '&' && s[nl] != ';')
+        nl++;
+    if (nl == 0 || nl == n || s[nl] != '=') return 0;
+    for (int t = 0; k_cred_stems[t]; t++)
+        if (ci_prefix(s, nl, k_cred_stems[t])) return 1;
     return 0;
 }
 
@@ -311,7 +319,7 @@ int rtsp_parse(const uint8_t *data, int len, rtsp_msg_t *out) {
     }
 
     while (next_line(buf, len, &pos, &l, &n)) {
-        if (n == 0) break;                     /* end of the header block */
+        if (n == 0) { out->complete = 1; break; }  /* end of headers */
         read_header(l, n, out);
     }
     return 1;
@@ -411,11 +419,16 @@ int rtsp_snoop_observe(const char *src, uint16_t sport,
     if (!src || !dst || !rtsp_parse(data, len, &m)) return 0;
 
     if (m.kind == RTSP_MSG_REQUEST) {
-        /* Tracked only when there is something to pair and a path that
-         * is safe to keep. A URI carrying a credential is neither
-         * anonymous nor ours to store, so it is dropped here. */
+        /* Tracked only when there is something to pair, a path that is
+         * safe to keep, and a whole header block. A URI carrying a
+         * credential is neither anonymous nor ours to store. A header
+         * block with no empty line in this segment may have its
+         * Authorization in the next one (a client writing headers in
+         * several send()s, a long Digest value): has_auth is unknown
+         * there, so the request is dropped rather than called
+         * anonymous. Segments are not reassembled. */
         if (strcmp(m.method, "DESCRIBE") == 0 && m.has_cseq &&
-            !m.url_creds && m.path[0]) {
+            m.complete && !m.url_creds && m.path[0]) {
             pthread_mutex_lock(&g_mu);
             note_describe(src, sport, dst, dport, &m, sloth_wall());
             pthread_mutex_unlock(&g_mu);

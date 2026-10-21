@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-10-20 (#106 slice B: `evict_rtsp_exchange` / `evict_rtsp_stream` appended to the `sensor_health` breakout).
+**Last updated**: 2026-10-20 (#106 slice B: `evict_rtsp_exchange` / `evict_rtsp_stream` appended to the `sensor_health` breakout); 2026-10-20 (#92 slice 3: `storage_pcap_failures` / `storage_eapol_failures` also count hashed-manifest failures; the manifest is its own JSONL file, not this stream); 2026-10-20 (#92 slices 1+2: `pcap_path` / `pcap_write_failures` on evidence-citing alerts; review: `-N` suffix on a name an earlier run used); 2026-10-19 (#143: `evict_deauth_obs`, `evict_deauth_victim`; #110: eleven more `evict_*` fields — fragattack and the last hand-written keyed tables; #132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured)., #131, #129, #138, #85, #90, #91
 
 ---
 

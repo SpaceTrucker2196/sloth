@@ -43,10 +43,17 @@ typedef struct {
     /* Both (RFC 2326 §12.17, RFC 7826 §18.20: MUST be present). */
     int      has_cseq;
     uint32_t cseq;
+    int      complete;         /* the header block's empty line was in
+                                * this segment, so every header is known */
 } rtsp_msg_t;
 
 /* Pure parse of the first RTSP message in `data`: the start line and
- * header block up to the blank line or the end of the segment. A line
+ * header block up to the blank line or the end of the segment. Only
+ * that first message is read: a second request pipelined into the same
+ * segment, or a header block continued in the next segment, is not
+ * reassembled. `complete` says whether the empty line ending the header
+ * block was reached; without it an absent header (Authorization, CSeq)
+ * may simply not have arrived yet. A line
  * the segment cuts off before its CRLF is not read — a truncated
  * "CSeq: 3" may be the front of "CSeq: 31". Interleaved binary data
  * ('$' framing, RFC 7826 §14) and anything whose version token is not
@@ -54,8 +61,11 @@ typedef struct {
  * a recognised request or response, 0 otherwise. */
 int rtsp_parse(const uint8_t *data, int len, rtsp_msg_t *out);
 
-/* Observe one TCP payload on 554/8554. A DESCRIBE is remembered against
- * its connection and CSeq; the response carrying the same CSeq
+/* Observe one TCP payload on 554/8554. A DESCRIBE whose header block is
+ * complete in the segment is remembered against its connection and
+ * CSeq — one whose headers run on into a later segment is dropped, not
+ * guessed anonymous, because its Authorization may be in that later
+ * segment. The response carrying the same CSeq
  * (RFC 7826 §18.20: "the agent MUST use the sequence number in the
  * response to pair it with the corresponding request") settles the
  * (server, port, path) row. Fills info with a short label. Returns 1
