@@ -24,7 +24,13 @@
  * used out first; evictions are counted, and an evicted row's id goes
  * into a small filter so that seeing it again on the same connection
  * is a baseline, not a second count of its whole total as if it had
- * just been born.
+ * just been born. The filter is two generations of WEB_HW_GONE_ROTATE
+ * ids each, the older cleared when the newer fills, so it never
+ * saturates: an id is remembered across at least WEB_HW_GONE_ROTATE
+ * later evictions (and fewer than twice that), and a lookup is wrongly
+ * positive (a born row taken as a baseline) at most about 2.7% of the
+ * time. A row evicted and seen again only after that many other
+ * evictions counts its total a second time.
  *
  * wifi.probe_clients and conns.total are rows per snapshot pass. A pass
  * runs from one batch start (the first `iface` record after another
@@ -46,9 +52,14 @@
 
 #define WEB_HW_ROWS   4096
 #define WEB_HW_ID_MAX 159
-/* Ids evicted from the high-water table on this connection, as a
- * two-hash filter: 64 Kbit, 8 KB. */
-#define WEB_HW_GONE_BITS 65536u
+/* Ids evicted from the high-water table on this connection, as two
+ * generations of a two-hash filter, 64 Kbit (8 KB) each. A generation
+ * takes WEB_HW_GONE_ROTATE ids; then the older one is cleared and takes
+ * the next. At 4096 ids in 64 Kbit with two hashes one generation is
+ * wrongly positive (1 - e^(-2*4096/65536))^2 = 1.4% of the time, the
+ * pair at most 2.7%. */
+#define WEB_HW_GONE_BITS   65536u
+#define WEB_HW_GONE_ROTATE 4096u
 
 typedef struct {
     char               id[WEB_HW_ID_MAX + 1];
@@ -68,7 +79,9 @@ typedef struct web_metrics {
     int          *hw_head;
     int           hw_n, hw_cap, hw_nhead;
     unsigned long long touch;
-    unsigned char hw_gone[WEB_HW_GONE_BITS / 8];
+    unsigned char hw_gone[2][WEB_HW_GONE_BITS / 8];
+    int           hw_gone_cur;           /* the generation taking ids */
+    unsigned      hw_gone_n;             /* ids it has taken */
 
     int       have_first_ts;
     long long first_ts;

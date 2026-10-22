@@ -2,7 +2,7 @@
  *
  * The file holds the closed rollup buckets and nothing else: a series
  * table naming each (metric, key), and one table per tier with sum,
- * count, min and max per bucket. Keys are canonical MACs, IPs,
+ * count, min and max per bucket, keyed (series, t) and indexed on t. Keys are canonical MACs, IPs,
  * interface names, channels and alert types (web_metrics.h), so no
  * string a peer chose is ever stored as it was sent; no column can hold
  * a credential (web/tests/test_store.c keeps sloth's test_db.c
@@ -19,7 +19,9 @@
  * Before anything is written the file is identified, on a read-only
  * connection: a read-write one that closes last on a WAL database
  * checkpoints the WAL into it, which would rewrite a refused sloth.db.
- * Only a file found ours or empty is opened read-write. An empty file is
+ * A WAL-mode file with no -wal is read there as an immutable URI, so
+ * that a refusal leaves no -wal or -shm behind either. Only a file
+ * found ours or empty is opened read-write, and identified again there. An empty file is
  * new. A file whose meta table names it a slothweb store is ours, at
  * the schema version recorded beside it. Anything else (sloth.db, any
  * other database) is refused untouched. A version newer than this
@@ -47,7 +49,7 @@
 #include "web_rollup.h"
 
 /* The version this build writes. */
-#define WEB_STORE_SCHEMA   1
+#define WEB_STORE_SCHEMA   2
 #define WEB_STORE_ERR_MAX  320
 #define WEB_DEFAULT_STORE  "./slothweb.db"
 /* --web-max-mb: the ceiling on the store's used pages. */
@@ -105,9 +107,10 @@ int  web_store_write(web_store_t *s, const web_qrow_t *rows, size_t n);
  * Over it, slices are dropped until it is under: the oldest 5 min of
  * fine rows (any series) until no fine row is left, then the oldest
  * hour of keyed minute rows, then the oldest day of keyed hour rows,
- * and only then the same for the global series; the series rows left
- * with no bucket go with them, and free pages go back to the file
- * system. Rows dropped, or -1. */
+ * and only then the same for the global series. Each slice is a range
+ * of the t index. The series rows left with no bucket are swept once
+ * after, and free pages go back to the file system. Rows dropped, or
+ * -1. */
 long long web_store_ceiling(web_store_t *s, long long max_bytes);
 
 /* Hourly upkeep: drop rows past each tier's retention (fine 24 h,
@@ -127,6 +130,15 @@ void web_store_stats(web_store_t *s, web_store_stats_t *out);
 
 /* Rows in tier, counted now (tests and the recount). -1 on error. */
 long long web_store_count(web_store_t *s, int tier);
+
+/* Test seams (web/tests/test_store.c); NULL and 0 in slothweb itself.
+ * web_store_test_between_opens runs after the read-only identify and
+ * before the read-write open, so a test can swap the file there as
+ * another process could. web_store_test_no_defensive makes open_db()
+ * read DEFENSIVE back as off, as a library ignoring it would. Neither
+ * is set anywhere but the tests. SQLite builds only. */
+extern void (*web_store_test_between_opens)(const char *path);
+extern int    web_store_test_no_defensive;
 
 /* The DDL of the version this build writes, and the step from version
  * from to from + 1 (NULL past the end). For the guardrail tests. */

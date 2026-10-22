@@ -135,15 +135,28 @@ static unsigned hw_hash2(const char *s) {
     return h ^ (h >> 15);
 }
 
+/* Into the current generation; a full one hands over to the other,
+ * cleared first, so the ids it forgets are the oldest. */
 static void gone_set(web_metrics_t *m, const char *id) {
+    if (m->hw_gone_n >= WEB_HW_GONE_ROTATE) {
+        m->hw_gone_cur ^= 1;
+        memset(m->hw_gone[m->hw_gone_cur], 0, sizeof(m->hw_gone[0]));
+        m->hw_gone_n = 0;
+    }
+    unsigned char *g = m->hw_gone[m->hw_gone_cur];
     unsigned a = hw_hash(id) % WEB_HW_GONE_BITS, b = hw_hash2(id) % WEB_HW_GONE_BITS;
-    m->hw_gone[a / 8] |= (unsigned char)(1u << (a % 8));
-    m->hw_gone[b / 8] |= (unsigned char)(1u << (b % 8));
+    g[a / 8] |= (unsigned char)(1u << (a % 8));
+    g[b / 8] |= (unsigned char)(1u << (b % 8));
+    m->hw_gone_n++;
 }
 
 static int gone_maybe(const web_metrics_t *m, const char *id) {
     unsigned a = hw_hash(id) % WEB_HW_GONE_BITS, b = hw_hash2(id) % WEB_HW_GONE_BITS;
-    return (m->hw_gone[a / 8] >> (a % 8) & 1) && (m->hw_gone[b / 8] >> (b % 8) & 1);
+    for (int i = 0; i < 2; i++) {
+        const unsigned char *g = m->hw_gone[i];
+        if ((g[a / 8] >> (a % 8) & 1) && (g[b / 8] >> (b % 8) & 1)) return 1;
+    }
+    return 0;
 }
 
 static long long default_clock(void *ctx) {
@@ -184,6 +197,8 @@ void web_metrics_stream(web_metrics_t *m) {
     }
     m->hw_n = 0;
     memset(m->hw_gone, 0, sizeof(m->hw_gone));
+    m->hw_gone_cur = 0;
+    m->hw_gone_n = 0;
     m->have_first_ts = 0;
     m->first_ts = 0;
     m->in_iface = 0;

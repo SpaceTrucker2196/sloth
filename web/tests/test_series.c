@@ -288,7 +288,7 @@ static void test_routes(void) {
     WT_HAS(out, "\"store\":\"memory\",\"store_path\":null,");
     WT_HAS(out, "\"series_key_caps\":{\"global\":1,\"device\":64,\"host\":32,\"label\":128}");
     WT_HAS(out, "\"key_evictions\":{\"global\":0,\"device\":0,\"host\":0,\"label\":0}");
-    WT_HAS(out, "\"queue_dropped\":0,\"oneshot_dropped\":0,");
+    WT_HAS(out, "\"queue_dropped\":0,\"churn_dropped\":0,");
     mem_done();
 }
 

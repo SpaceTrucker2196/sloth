@@ -23,30 +23,33 @@ static int fine(int m, const char *k, long long from, long long to,
 }
 
 /* 10 s, 1 min, 1 h boundaries; sum, count, min, max per bucket; the
- * open bucket closed by the first sample of the next. */
+ * open bucket closed by the first sample of the next. A global series,
+ * which is established from its first sample (a key is established
+ * once its samples span a minute: test_eviction_churn_on_whole_life). */
 static void test_bucket_boundaries_and_aggregates(void) {
     fresh(64, 1);
     const long long T = 1792627200;   /* a whole hour */
-    web_rollup_add(&ru, WM_IFACE_RX, "eth0", 4, T + 0);
-    web_rollup_add(&ru, WM_IFACE_RX, "eth0", 2, T + 9);
-    web_rollup_add(&ru, WM_IFACE_RX, "eth0", 9, T + 9);
+    web_rollup_add(&ru, WM_CONNS_TOTAL, "", 4, T + 0);
+    web_rollup_add(&ru, WM_CONNS_TOTAL, "", 2, T + 9);
+    web_rollup_add(&ru, WM_CONNS_TOTAL, "", 9, T + 9);
     web_point_t p[8];
     /* Nothing closed yet: only the open bucket, and only when asked. */
-    WT_EQ(fine(WM_IFACE_RX, "eth0", T, T + 3600, 0, p, 8), 0);
-    WT_EQ(fine(WM_IFACE_RX, "eth0", T, T + 3600, 1, p, 8), 1);
+    WT_EQ(fine(WM_CONNS_TOTAL, "", T, T + 3600, 0, p, 8), 0);
+    WT_EQ(fine(WM_CONNS_TOTAL, "", T, T + 3600, 1, p, 8), 1);
     WT_EQ(p[0].t, T);
     WT_EQ(p[0].n, 3);
     WT_ASSERT(p[0].sum == 15 && p[0].min == 2 && p[0].max == 9);
-    WT_ASSERT(fabs(web_point_value(WM_IFACE_RX, &p[0]) - 5.0) < 1e-9);
+    WT_ASSERT(fabs(web_point_value(WM_CONNS_TOTAL, &p[0]) - 5.0) < 1e-9);
 
-    web_rollup_add(&ru, WM_IFACE_RX, "eth0", 1, T + 10);   /* next bucket */
-    WT_EQ(fine(WM_IFACE_RX, "eth0", T, T + 3600, 0, p, 8), 1);
+    web_rollup_add(&ru, WM_CONNS_TOTAL, "", 1, T + 10);    /* next bucket */
+    WT_EQ(fine(WM_CONNS_TOTAL, "", T, T + 3600, 0, p, 8), 1);
     WT_EQ(p[0].t, T);
     size_t n = web_rollup_take(&ru, q, WEB_QUEUE_ROWS);
     WT_EQ(n, 1);                         /* only the fine bucket closed */
     WT_EQ(q[0].tier, WEB_TIER_FINE);
     WT_EQ(q[0].t, T);
-    WT_HAS(q[0].key, "eth0");
+    WT_EQ(q[0].metric, WM_CONNS_TOTAL);
+    WT_EQ(q[0].key[0], '\0');
 
     /* Minute closes at T+60, hour at T+3600, whatever arrives. */
     web_rollup_close_due(&ru, T + 59);
@@ -147,11 +150,10 @@ static void test_key_classes_are_bounded_lru(void) {
     }
     WT_EQ(has2, 0);
     WT_EQ(has1, 1);
-    /* The evicted key's open buckets were flushed. 10.0.0.2 had one
-     * sample and lived under 10 s, a one-shot key: its fine row reached
-     * the store queue with its value, its minute and hour rows were
-     * dropped and counted (test_eviction_oneshot_and_lived has a key
-     * that lived). */
+    /* The evicted key's open buckets were flushed. 10.0.0.2's samples
+     * never spanned a minute: its fine row reached the store queue with
+     * its value, its minute and hour rows were dropped and counted
+     * (test_eviction_churn_on_whole_life has keys that were established). */
     size_t qn = web_rollup_take(&ru, q, WEB_QUEUE_ROWS);
     int flushed = 0;
     for (size_t i = 0; i < qn; i++)
@@ -160,7 +162,7 @@ static void test_key_classes_are_bounded_lru(void) {
             flushed++;
     WT_EQ(flushed, 1);
     web_rollup_stats(&ru, &st);
-    WT_EQ(st.oneshot_dropped, 2);
+    WT_EQ(st.churn_dropped, 2);
     /* The device class is separate: filling it leaves hosts alone. */
     for (int i = 0; i < 40; i++) {
         snprintf(k, sizeof(k), "02:00:00:00:00:%02x", i);
@@ -176,61 +178,136 @@ static void test_key_classes_are_bounded_lru(void) {
     web_rollup_destroy(&ru);
 }
 
-/* What an eviction writes. A key with two samples, or one that lived
- * a fine bucket or longer, has all three of its open buckets flushed;
- * a key with one sample that lived under 10 s (what key churn is) has
- * only its fine row flushed, and its minute and hour rows are dropped
- * and counted, so churn cannot fill the 30-day and 400-day tiers. Seen
- * red with key_oneshot() always 0 (the churn key's minute and hour
- * rows were queued, oneshot_dropped stayed 0), with it always 1 (the
- * keys that lived lost theirs), and with its lifetime test alone
- * removed (10.0.0.2 lost its minute and hour rows). */
-static void test_eviction_oneshot_and_lived(void) {
+/* Per key and tier, the queued rows of metric m for keys k[0..nk). */
+static void tally(const char *const *k, int nk, int m, size_t qn,
+                  int out[][WEB_TIER_COUNT]) {
+    for (size_t i = 0; i < qn; i++)
+        for (int j = 0; j < nk; j++)
+            if (!strcmp(q[i].key, k[j]) && q[i].metric == m)
+                out[j][q[i].tier]++;
+}
+
+/* Feed one sample and run the store thread's close, as it would. */
+static void add_step(int m, const char *k, double v, long long now) {
+    web_rollup_add(&ru, m, k, v, now);
+    web_rollup_close_due(&ru, now);
+}
+
+/* What an eviction writes is decided on the key's whole life. A key
+ * whose samples never spanned a minute is churn however many it took:
+ * two (A) or three (B) samples, each key crossing a minute and an hour
+ * boundary, and the store thread closing buckets every second as they
+ * fall due. Their fine rows are written; their minute and hour rows
+ * are held, never queued, and dropped and counted at eviction. A key
+ * whose samples spanned exactly a minute (C) is established and keeps
+ * all of its rows.
+ *
+ * Seen red, one mutation at a time: key_flush() emitting an
+ * unestablished key's long-tier rows (A and B queued minute and hour
+ * rows, churn_dropped 0); close_where()'s skip of unestablished long
+ * tiers removed (A's T-60 minute row was pushed out of the held slot
+ * when its T minute fell due at T+60); the establishing test as
+ * "> WEB_MINUTE_S" (C lost its minute and hour rows, and so did D in
+ * test_unestablished_key_held_not_lost). */
+static void test_eviction_churn_on_whole_life(void) {
     fresh(16, 1);                         /* 8 host keys */
-    const long long T = 1792627200;
+    const long long T = 1792627200;       /* a whole hour */
+    static const char *const K[] = { "10.0.0.1", "10.0.0.2", "10.0.0.3" };
+    add_step(WM_HOST_CONNS, K[0], 1, T - 5);
+    add_step(WM_HOST_CONNS, K[1], 1, T - 4);
+    add_step(WM_HOST_CONNS, K[2], 1, T - 5);
+    add_step(WM_HOST_CONNS, K[1], 1, T + 2);
+    add_step(WM_HOST_CONNS, K[0], 1, T + 5);
+    add_step(WM_HOST_CONNS, K[1], 1, T + 50);
+    add_step(WM_HOST_CONNS, K[2], 1, T + 55);
     char k[32];
-    /* 10.0.0.1: two samples in one second. 10.0.0.2: one sample in
-     * each of two series, at T and T + 15 (one per series, but it lived
-     * past a fine bucket). 10.0.0.3..8: one each. */
-    web_rollup_add(&ru, WM_HOST_CONNS, "10.0.0.1", 1, T);
-    web_rollup_add(&ru, WM_HOST_CONNS, "10.0.0.1", 2, T);
-    web_rollup_add(&ru, WM_HOST_CONNS, "10.0.0.2", 1, T);
-    for (int i = 3; i <= 8; i++) {
+    for (int i = 4; i <= 8; i++) {
         snprintf(k, sizeof(k), "10.0.0.%d", i);
-        web_rollup_add(&ru, WM_HOST_CONNS, k, 1, T + 16);
+        add_step(WM_HOST_CONNS, k, 1, T + 56);
     }
-    web_rollup_add(&ru, WM_HOST_RX, "10.0.0.2", 1, T + 15);
-    WT_EQ(web_rollup_take(&ru, q, WEB_QUEUE_ROWS), 0);
-    /* Three new keys evict 10.0.0.1 (T), 10.0.0.2 (T + 15), then 10.0.0.3
-     * (T + 16, one sample: one-shot). */
+    int tiers[3][WEB_TIER_COUNT];
+    memset(tiers, 0, sizeof(tiers));
+    for (long long now = T + 57; now <= T + 61; now++) web_rollup_close_due(&ru, now);
+    size_t qn = web_rollup_take(&ru, q, WEB_QUEUE_ROWS);
+    tally(K, 3, WM_HOST_CONNS, qn, tiers);
+    /* Nothing of A or B's long tiers left memory while they lived. */
+    WT_EQ(tiers[0][WEB_TIER_MINUTE] + tiers[0][WEB_TIER_HOUR], 0);
+    WT_EQ(tiers[1][WEB_TIER_MINUTE] + tiers[1][WEB_TIER_HOUR], 0);
+    /* Three new keys evict A (T+5), B (T+50), C (T+55). */
     for (int i = 0; i < 3; i++) {
         snprintf(k, sizeof(k), "10.0.1.%d", i);
-        web_rollup_add(&ru, WM_HOST_CONNS, k, 1, T + 17);
+        add_step(WM_HOST_CONNS, k, 1, T + 61);
     }
     web_rollup_stats_t st;
     web_rollup_stats(&ru, &st);
     WT_EQ(st.evictions[WEB_KC_HOST], 3);
-    size_t qn = web_rollup_take(&ru, q, WEB_QUEUE_ROWS);
-    int tiers[3][WEB_TIER_COUNT];
-    memset(tiers, 0, sizeof(tiers));
-    for (size_t i = 0; i < qn; i++)
-        for (int j = 0; j < 3; j++) {
-            snprintf(k, sizeof(k), "10.0.0.%d", j + 1);
-            if (!strcmp(q[i].key, k) && q[i].metric == WM_HOST_CONNS)
-                tiers[j][q[i].tier]++;
-        }
-    for (int t = 0; t < WEB_TIER_COUNT; t++) {
-        WT_EQ(tiers[0][t], 1);
-        WT_EQ(tiers[1][t], 1);
-    }
-    WT_EQ(tiers[2][WEB_TIER_FINE], 1);
-    WT_EQ(tiers[2][WEB_TIER_MINUTE], 0);
-    WT_EQ(tiers[2][WEB_TIER_HOUR], 0);
-    WT_EQ(st.oneshot_dropped, 2);
-    /* A key that is never evicted is never one-shot: closed as due. */
+    qn = web_rollup_take(&ru, q, WEB_QUEUE_ROWS);
+    tally(K, 3, WM_HOST_CONNS, qn, tiers);
+    WT_EQ(tiers[0][WEB_TIER_FINE], 2);           /* T-10, T */
+    WT_EQ(tiers[0][WEB_TIER_MINUTE], 0);
+    WT_EQ(tiers[0][WEB_TIER_HOUR], 0);
+    WT_EQ(tiers[1][WEB_TIER_FINE], 3);           /* T-10, T, T+50 */
+    WT_EQ(tiers[1][WEB_TIER_MINUTE], 0);
+    WT_EQ(tiers[1][WEB_TIER_HOUR], 0);
+    WT_EQ(tiers[2][WEB_TIER_FINE], 2);           /* T-10, T+50 */
+    WT_EQ(tiers[2][WEB_TIER_MINUTE], 2);         /* T-60, T */
+    WT_EQ(tiers[2][WEB_TIER_HOUR], 2);           /* T-3600, T */
+    /* A and B: a held and an open row in each of two tiers. */
+    WT_EQ(st.churn_dropped, 8);
     web_rollup_close_all(&ru);
     web_rollup_stats(&ru, &st);
-    WT_EQ(st.oneshot_dropped, 2);
+    WT_EQ(st.churn_dropped, 8);
+    web_rollup_destroy(&ru);
+}
+
+/* An unestablished key that is not evicted loses nothing. Seen again a
+ * minute after it was first (D), its held rows are released then, with
+ * their values; still unestablished at shutdown (E), close_all()
+ * writes its held and open rows. Seen red with release_held() left out
+ * of web_rollup_add() (D's T-60 minute and T-3600 hour rows never came)
+ * and out of close_where() (E's held rows never came). */
+static void test_unestablished_key_held_not_lost(void) {
+    fresh(16, 1);
+    const long long T = 1792627200;
+    static const char *const K[] = { "10.0.0.4", "10.0.0.5" };
+    add_step(WM_HOST_RX, K[0], 3, T - 5);
+    add_step(WM_HOST_RX, K[1], 3, T - 5);
+    add_step(WM_HOST_RX, K[0], 4, T + 5);
+    add_step(WM_HOST_RX, K[1], 4, T + 5);
+    for (long long now = T + 6; now < T + 55; now++) web_rollup_close_due(&ru, now);
+    int tiers[2][WEB_TIER_COUNT];
+    memset(tiers, 0, sizeof(tiers));
+    size_t qn = web_rollup_take(&ru, q, WEB_QUEUE_ROWS);
+    tally(K, 2, WM_HOST_RX, qn, tiers);
+    WT_EQ(tiers[0][WEB_TIER_MINUTE] + tiers[0][WEB_TIER_HOUR], 0);
+    add_step(WM_HOST_RX, K[0], 5, T + 55);       /* spans 60 s: established */
+    qn = web_rollup_take(&ru, q, WEB_QUEUE_ROWS);
+    int got_min = 0, got_hour = 0;
+    for (size_t i = 0; i < qn; i++) {
+        if (strcmp(q[i].key, K[0])) continue;
+        if (q[i].tier == WEB_TIER_MINUTE && q[i].t == T - 60 && q[i].sum == 3)
+            got_min++;
+        if (q[i].tier == WEB_TIER_HOUR && q[i].t == T - 3600 && q[i].sum == 3)
+            got_hour++;
+    }
+    WT_EQ(got_min, 1);
+    WT_EQ(got_hour, 1);
+    /* Established, its T minute closes when due. */
+    web_rollup_close_due(&ru, T + 60);
+    qn = web_rollup_take(&ru, q, WEB_QUEUE_ROWS);
+    memset(tiers, 0, sizeof(tiers));
+    tally(K, 2, WM_HOST_RX, qn, tiers);
+    WT_EQ(tiers[0][WEB_TIER_MINUTE], 1);
+    WT_EQ(tiers[1][WEB_TIER_MINUTE], 0);
+    web_rollup_close_all(&ru);
+    qn = web_rollup_take(&ru, q, WEB_QUEUE_ROWS);
+    memset(tiers, 0, sizeof(tiers));
+    tally(K, 2, WM_HOST_RX, qn, tiers);
+    WT_EQ(tiers[1][WEB_TIER_MINUTE], 2);         /* T-60 held, T open */
+    WT_EQ(tiers[1][WEB_TIER_HOUR], 2);           /* T-3600 held, T open */
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.churn_dropped, 0);
     web_rollup_destroy(&ru);
 }
 
@@ -364,7 +441,8 @@ void run_rollup_tests(void) {
     WT_RUN(test_point_value_by_kind);
     WT_RUN(test_values_bounded);
     WT_RUN(test_key_classes_are_bounded_lru);
-    WT_RUN(test_eviction_oneshot_and_lived);
+    WT_RUN(test_eviction_churn_on_whole_life);
+    WT_RUN(test_unestablished_key_held_not_lost);
     WT_RUN(test_ring_query_merges_and_bounds);
     WT_RUN(test_no_store_no_queue);
     WT_RUN(test_queue_full_drops_newest_and_counts);

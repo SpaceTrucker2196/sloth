@@ -133,7 +133,7 @@ static void tsdb_health(web_tsdb_t *t, web_jw_t *w) {
     web_jw_raw(w, ",\"ring_rows\":");        web_jw_int(w, (long long)rs.ring_rows);
     web_jw_raw(w, ",\"queue_rows\":");       web_jw_int(w, (long long)rs.queue_rows);
     web_jw_raw(w, ",\"queue_dropped\":");    web_jw_int(w, (long long)rs.q_dropped);
-    web_jw_raw(w, ",\"oneshot_dropped\":");  web_jw_int(w, (long long)rs.oneshot_dropped);
+    web_jw_raw(w, ",\"churn_dropped\":");  web_jw_int(w, (long long)rs.churn_dropped);
     web_jw_raw(w, ",\"highwater_evictions\":");
     web_jw_int(w, (long long)rs.hw_evictions);
     web_jw_raw(w, ",\"values_clamped\":");   web_jw_int(w, (long long)rs.clamped);

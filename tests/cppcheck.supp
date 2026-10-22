@@ -62,6 +62,10 @@ readdirCalled:src/eapol_log.c
 # and closedir()s it before returning; nothing else ever sees that stream.
 readdirCalled:src/sensor_health.c
 readdirCalled:research/ingest/main.c
+# #160's clean-WAL refusal test: dir_list() opendir()s its own temporary
+# directory into a local DIR* and closedir()s it before returning, on
+# the test's one thread.
+readdirCalled:web/tests/test_store.c
 
 # ── False positives, checked by hand ────────────────────────────────────
 # Bucket arrays filled field-by-field when a slot is claimed; the flagged

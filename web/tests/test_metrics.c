@@ -437,6 +437,64 @@ static void test_highwater_evicted_row_not_recounted(void) {
     done();
 }
 
+/* One line, unchecked: for the thousands of filler rows, whose own
+ * parse is not under test. */
+static int feed(const char *s) {
+    if (web_jl_parse(s, strlen(s), &rec) != WEB_JL_OK) return 0;
+    web_metrics_record(&mx, &rec);
+    return 1;
+}
+
+static int fill_rows(int from, int count) {
+    char b[256];
+    int fed = 0;
+    for (int i = from; i < from + count; i++) {
+        snprintf(b, sizeof(b), "{\"type\":\"probe_client\",\"ts\":1000,\"mac\":"
+                 "\"02:00:00:%02x:%02x:%02x\",\"first_seen\":1000,"
+                 "\"last_seen\":1000,\"frame_count\":1}",
+                 (i >> 16) & 0xff, (i >> 8) & 0xff, i & 0xff);
+        fed += feed(b);
+    }
+    return fed;
+}
+
+/* The evicted-id filter is two generations of WEB_HW_GONE_ROTATE ids,
+ * so it is bounded rather than filling up over a long connection. X
+ * and Y are the first two rows evicted. After 8191 evictions in all X
+ * is still in the older generation: seen again, a baseline. The next
+ * eviction (8193rd, X's own re-sighting being the 8192nd) fills the
+ * newer generation and clears the older, so Y, seen again then, is
+ * forgotten and counts its total in full: the residual the header
+ * states, an id is remembered across at least WEB_HW_GONE_ROTATE
+ * later evictions, not forever. Seen red with the rotation removed
+ * from gone_set() (Y stayed a baseline) and with gone_maybe() reading
+ * only the current generation (X counted its 5 again). */
+static void test_highwater_gone_filter_rotates(void) {
+    fresh();
+    g_now -= 100;
+    line("{\"type\":\"probe_client\",\"ts\":1000,\"mac\":\"02:00:00:ff:ff:01\","
+         "\"first_seen\":1000,\"last_seen\":1000,\"frame_count\":5}");
+    line("{\"type\":\"probe_client\",\"ts\":1000,\"mac\":\"02:00:00:ff:ff:02\","
+         "\"first_seen\":1000,\"last_seen\":1000,\"frame_count\":5}");
+    /* 4094 fill the table; then 8191 evictions, X and Y the first two. */
+    WT_EQ(fill_rows(0, WEB_HW_ROWS - 2 + 8191), WEB_HW_ROWS - 2 + 8191);
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.hw_evictions, 8191);
+    WT_EQ(2 * WEB_HW_GONE_ROTATE, 8192);
+    g_now += 100;
+    line("{\"type\":\"probe_client\",\"ts\":1001,\"mac\":\"02:00:00:ff:ff:01\","
+         "\"first_seen\":1000,\"last_seen\":1001,\"frame_count\":5}");
+    WT_EQ(cur(WM_DEV_FRAMES, "02:00:00:ff:ff:01").n, 0);
+    line("{\"type\":\"probe_client\",\"ts\":1001,\"mac\":\"02:00:00:ff:ff:02\","
+         "\"first_seen\":1000,\"last_seen\":1001,\"frame_count\":6}");
+    WT_ASSERT(cur(WM_DEV_FRAMES, "02:00:00:ff:ff:02").sum == 6);
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.hw_evictions, 8193);
+    WT_EQ(mx.hw_gone_n, 1);
+    done();
+}
+
 void run_metrics_tests(void) {
     WT_RUN(test_key_canonicalisers);
     WT_RUN(test_gauges);
@@ -449,4 +507,5 @@ void run_metrics_tests(void) {
     WT_RUN(test_pass_gauges);
     WT_RUN(test_highwater_table_bounded);
     WT_RUN(test_highwater_evicted_row_not_recounted);
+    WT_RUN(test_highwater_gone_filter_rotates);
 }

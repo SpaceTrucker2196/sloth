@@ -16,11 +16,19 @@
  * full class evicts the one seen least recently, after flushing its
  * open buckets. Evictions are counted per class and shown on
  * /api/health. Global metrics have one key, "", and are never evicted.
- * A key evicted after less than one fine bucket and one sample per
- * series (a scan, or any key churn: only a full class evicts) has its
- * fine rows flushed but its minute and hour rows dropped and counted,
- * so churn cannot fill the 30-day and 400-day tiers with one-sample
- * series.
+ * Churn is decided on a key's whole life, not its sample count. Until
+ * a key's samples span WEB_MINUTE_S (last_seen - first_seen >= 60 s)
+ * it is not established: its fine buckets close and are written as
+ * usual, but its minute and hour buckets are held in memory, not
+ * queued. When it becomes established they are released to the queue.
+ * When it is evicted first (only a full class evicts, so only churn
+ * does this) they are dropped and counted (churn_dropped on
+ * /api/health), however many samples it took. A key that is neither
+ * established nor evicted has them written at shutdown. So what key
+ * churn can put in the 30-day and 400-day tiers is the rows of keys
+ * seen over a minute or more, at most one per metric per bucket each;
+ * a scan whose targets are each seen for under a minute writes fine
+ * rows only.
  *
  * Keys arrive already validated and canonical (web_metrics.c); the
  * rollup trusts them only as far as WEB_KEY_MAX bytes. Bucketing uses
@@ -130,8 +138,15 @@ typedef struct {
     int       used;
     int       next;                       /* hash chain, -1 ends it */
     long long first_seen, last_seen;      /* slothweb's clock */
+    int       est;                        /* samples span a minute: its
+                                             minute and hour rows go out */
     uint32_t  sid[WM_COUNT];              /* 0: no series for that metric */
     web_agg_t open[WM_COUNT][WEB_TIER_COUNT];
+    /* An unestablished key's closed minute and hour buckets ([0] minute,
+     * [1] hour). Its samples lie within one minute, so they touch at
+     * most two buckets of each tier: the one open and the one held.
+     * 1.7 KB a key. */
+    web_agg_t held[WM_COUNT][WEB_TIER_COUNT - 1];
 } web_rkey_t;
 
 typedef struct {
@@ -152,7 +167,7 @@ typedef struct {
     web_qrow_t     *queue;
     size_t          q_cap, q_n;
     unsigned long   q_dropped;
-    unsigned long   oneshot_dropped;      /* see key_flush() */
+    unsigned long   churn_dropped;        /* see key_flush() */
     unsigned long long samples;
     unsigned long   clamped;
     unsigned long   hw_evictions;         /* web_metrics.c's high-water rows */
@@ -164,7 +179,7 @@ typedef struct {
     unsigned long evictions[WEB_KC_COUNT];
     unsigned long series;
     size_t        ring_rows, queue_rows;
-    unsigned long q_dropped, oneshot_dropped, clamped, hw_evictions;
+    unsigned long q_dropped, churn_dropped, clamped, hw_evictions;
     unsigned long long samples;
     unsigned long rows_closed[WEB_TIER_COUNT];
 } web_rollup_stats_t;
@@ -189,10 +204,12 @@ void web_rollup_destroy(web_rollup_t *ru);
 void web_rollup_add(web_rollup_t *ru, int metric, const char *key, double v,
                     long long now_s);
 
-/* Close every open bucket whose interval ended at or before now_s. */
+/* Close every open bucket whose interval ended at or before now_s;
+ * an unestablished key's minute and hour buckets stay open. */
 void web_rollup_close_due(web_rollup_t *ru, long long now_s);
-/* Close every open bucket, finished or not (shutdown). The store merges
- * a partial bucket with the rest of it on the next run. */
+/* Close every open bucket, finished or not, and release every held one
+ * (shutdown). The store merges a partial bucket with the rest of it on
+ * the next run. */
 void web_rollup_close_all(web_rollup_t *ru);
 
 /* Move up to max queued rows into out, oldest first. Returns how many. */

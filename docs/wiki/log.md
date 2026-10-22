@@ -4716,3 +4716,18 @@ rows before the global series'; a key evicted after one sample and under
 evicted and seen again on one connection is a baseline, not a second
 count of its total. New tests cover the merged-answer cap and the full
 store queue.
+
+## 2026-10-22 — slothweb M2 second review fixes (#160)
+
+**Updated**: [slothweb.md](slothweb.md) — key churn is judged on a
+key's whole life: until its samples span a minute its 1 min and 1 h
+buckets are held in memory and dropped if it is evicted first
+(`churn_dropped`, was `oneshot_dropped`), so churn of two or three
+samples per key no longer reaches the 30-day and 400-day tiers. The
+store is at schema v2 (an index on `t` per tier; a ceiling trim at
+256 MB went from 4.8 s to 0.2 s, at the cost of about 36% of the fine
+rows the ceiling holds), and the orphan sweep runs once per trim. A
+cleanly closed WAL-mode file is identified as an immutable URI, so a
+refused sloth.db no longer gets a `-wal` and `-shm` left beside it. The
+evicted-id filter rotates two generations of 4,096 ids. The DEFENSIVE
+read-back and the writer's second identify are tested through seams.

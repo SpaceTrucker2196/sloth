@@ -55,6 +55,16 @@ static const char STEP_V1_SQL[] =
     "  PRIMARY KEY (series, t)\n"
     ") WITHOUT ROWID;\n";
 
+/* v1 -> v2: an index on t in each tier. Retention, the --web-max-mb
+ * ceiling's oldest-slice deletes and its MIN(t) all select on t alone,
+ * and without these each was a full scan of the tier: at the 256 MB
+ * ceiling one trim took 4.8 s on the store thread. Additive: a new
+ * index changes no row. */
+static const char STEP_V2_SQL[] =
+    "CREATE INDEX fine_t ON fine (t);\n"
+    "CREATE INDEX minute_t ON minute (t);\n"
+    "CREATE INDEX hour_t ON hour (t);\n";
+
 typedef struct {
     int         from;
     const char *sql;
@@ -63,6 +73,7 @@ typedef struct {
 
 static const web_step_t STEPS[] = {
     { 0, STEP_V1_SQL, "created series, fine, minute and hour" },
+    { 1, STEP_V2_SQL, "indexed fine, minute and hour on t" },
 };
 #define STEP_N ((int)(sizeof(STEPS) / sizeof(STEPS[0])))
 
@@ -191,9 +202,13 @@ static const char *const CEIL_STEP[] = {
 #undef KEYED
 #undef GLOBAL
 #define CEIL_STEPS ((int)(sizeof(CEIL_STEP) / sizeof(CEIL_STEP[0])))
+/* A probe of each tier's (series, t) key per series row, not a set
+ * built from every row of every tier. */
 static const char SWEEP_SERIES[] =
-    "DELETE FROM series WHERE id NOT IN (SELECT series FROM fine UNION"
-    " SELECT series FROM minute UNION SELECT series FROM hour)";
+    "DELETE FROM series WHERE"
+    " NOT EXISTS (SELECT 1 FROM fine WHERE fine.series=series.id) AND"
+    " NOT EXISTS (SELECT 1 FROM minute WHERE minute.series=series.id) AND"
+    " NOT EXISTS (SELECT 1 FROM hour WHERE hour.series=series.id)";
 static const char *const COUNT_ROWS[WEB_TIER_COUNT] = {
     "SELECT COUNT(*) FROM fine",
     "SELECT COUNT(*) FROM minute",
@@ -201,6 +216,9 @@ static const char *const COUNT_ROWS[WEB_TIER_COUNT] = {
 };
 
 int web_store_available(void) { return 1; }
+
+void (*web_store_test_between_opens)(const char *path) = NULL;
+int    web_store_test_no_defensive = 0;
 
 static void set_err(web_store_t *s, const char *what, sqlite3 *db) {
     pthread_mutex_lock(&s->mu);
@@ -402,10 +420,60 @@ static void recount(web_store_t *s) {
     pthread_mutex_unlock(&s->mu);
 }
 
-static int open_db(const char *path, int flags, sqlite3 **out, char *err,
-                   size_t errsz) {
+/* 1 when path is a WAL-mode database (header bytes 18 and 19 are 2)
+ * with no -wal beside it: all it holds is in the main file. */
+static int wal_clean(const char *path) {
+    unsigned char h[20];
+    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
+    if (fd < 0) return 0;
+    ssize_t n = pread(fd, h, sizeof(h), 0);
+    close(fd);
+    if (n != (ssize_t)sizeof(h) || memcmp(h, "SQLite format 3", 16) != 0 ||
+        h[18] != 2 || h[19] != 2)
+        return 0;
+    char w[4200];
+    struct stat st;
+    snprintf(w, sizeof(w), "%s-wal", path);
+    return lstat(w, &st) != 0 && errno == ENOENT;
+}
+
+/* path as a read-only, immutable SQLite URI, percent-encoded so that
+ * no character of it reads as URI syntax. */
+static void immutable_uri(const char *path, char *out, size_t outsz) {
+    static const char hex[] = "0123456789ABCDEF";
+    size_t o = (size_t)snprintf(out, outsz, "file:");
+    for (size_t i = 0; path[i] && o + 4 < outsz; i++) {
+        unsigned char c = (unsigned char)path[i];
+        /* A second leading slash would start a URI authority. */
+        int keep = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') || c == '.' || c == '_' ||
+                    c == '-' || c == '~' || c == '/') &&
+                   !(i == 1 && c == '/');
+        if (keep) {
+            out[o++] = (char)c;
+        } else {
+            out[o++] = '%';
+            out[o++] = hex[c >> 4];
+            out[o++] = hex[c & 15];
+        }
+    }
+    out[o] = '\0';
+    snprintf(out + o, outsz - o, "?mode=ro&immutable=1");
+}
+
+/* immutable: open path read-only as an immutable URI (no lock, no
+ * side file). */
+static int open_db(const char *path, int flags, int immutable, sqlite3 **out,
+                   char *err, size_t errsz) {
     *out = NULL;
-    if (sqlite3_open_v2(path, out, flags | SQLITE_OPEN_NOFOLLOW, NULL)
+    char uri[3 * 4096 + 64];
+    const char *name = path;
+    if (immutable) {
+        immutable_uri(path, uri, sizeof(uri));
+        name = uri;
+        flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI;
+    }
+    if (sqlite3_open_v2(name, out, flags | SQLITE_OPEN_NOFOLLOW, NULL)
             != SQLITE_OK) {
         snprintf(err, errsz, "%s: %s", path, *out ? sqlite3_errmsg(*out) : "?");
         sqlite3_close(*out);
@@ -416,8 +484,9 @@ static int open_db(const char *path, int flags, sqlite3 **out, char *err,
      * store never needs. Read back, so a library that ignores it fails
      * the open instead of passing it. */
     int on = -1;
-    if (sqlite3_db_config(*out, SQLITE_DBCONFIG_DEFENSIVE, 1, &on) != SQLITE_OK
-            || on != 1) {
+    int rc = sqlite3_db_config(*out, SQLITE_DBCONFIG_DEFENSIVE, 1, &on);
+    if (web_store_test_no_defensive) on = 0;
+    if (rc != SQLITE_OK || on != 1) {
         snprintf(err, errsz, "%s: SQLITE_DBCONFIG_DEFENSIVE refused", path);
         sqlite3_close(*out);
         *out = NULL;
@@ -452,13 +521,28 @@ int web_store_open(web_store_t *s, const char *path, char *err, size_t errsz) {
      * the main file and deletes it, so a refusal made on one would
      * rewrite the file it refused: a sloth.db that sloth left with an
      * unflushed WAL would be checkpointed by slothweb. A read-only
-     * connection never checkpoints. */
+     * connection never checkpoints.
+     *
+     * It does make an absent -wal (empty) and -shm (32 KB) on a WAL
+     * database, which a refusal would leave behind beside a cleanly
+     * closed sloth.db. With no -wal there are no frames to read, so
+     * that file is identified as immutable, which opens no side file.
+     * Unlinking them afterwards instead would race sloth opening its
+     * own file and could take a -shm it had just attached to. A sloth
+     * starting between the lstat() and the read can only make the file
+     * look emptier than it is (its first tables still in a new WAL),
+     * and the writer's own identify below sees the WAL and refuses. A
+     * -wal left with no -shm (a crash that lost only the -shm) still
+     * gets a -shm made: there are frames to read, so not immutable. */
     sqlite3 *ro = NULL;
-    if (open_db(path, SQLITE_OPEN_READONLY, &ro, err, errsz) != 0) return -1;
+    if (open_db(path, SQLITE_OPEN_READONLY, wal_clean(path), &ro, err, errsz)
+            != 0)
+        return -1;
     int v = identify(ro, path, err, errsz);
     sqlite3_close(ro);
     if (v == -1) return -1;
-    if (open_db(path, SQLITE_OPEN_READWRITE, &s->db, err, errsz) != 0)
+    if (web_store_test_between_opens) web_store_test_between_opens(path);
+    if (open_db(path, SQLITE_OPEN_READWRITE, 0, &s->db, err, errsz) != 0)
         return -1;
     /* Once more on the writer: what was identified is what it opened. */
     if (identify(s->db, path, err, errsz) != v) {
@@ -516,7 +600,8 @@ int web_store_open(web_store_t *s, const char *path, char *err, size_t errsz) {
             return -1;
         }
     if (private_side(path, err, errsz) != 0) return -1;
-    if (open_db(path, SQLITE_OPEN_READONLY, &s->rd, err, errsz) != 0) return -1;
+    if (open_db(path, SQLITE_OPEN_READONLY, 0, &s->rd, err, errsz) != 0)
+        return -1;
     for (int t = 0; t < WEB_TIER_COUNT; t++)
         if (sqlite3_prepare_v2(s->rd, Q_ROW[t], -1, &s->q_row[t], NULL)
                 != SQLITE_OK) {
@@ -636,7 +721,11 @@ static long long used_bytes(sqlite3 *db) {
 
 /* The ceiling's loop, inside no transaction (each DELETE is its own).
  * Rows dropped, or -1. Bounded, so a file that will not shrink cannot
- * spin: every pass either deletes a slice or moves on a class. */
+ * spin: every pass either deletes a slice or moves on a class. The
+ * series rows of what went are swept once, after the loop: under key
+ * churn they are as much of the file as the buckets, but a sweep per
+ * slice cost more than the slice. The loop does not count what the
+ * sweep will free, so it may take one slice more than it needed. */
 static long long ceiling_loop(web_store_t *s, long long max_bytes) {
     long long dropped = 0;
     int step = 0;
@@ -649,10 +738,8 @@ static long long ceiling_loop(web_store_t *s, long long max_bytes) {
         if (d < 0) return -1;
         if (d == 0) { step++; continue; }
         dropped += d;
-        /* The series rows of what went: under key churn they are as
-         * much of the file as the buckets. */
-        if (run_del(s->db, SWEEP_SERIES, 0, 0) < 0) return -1;
     }
+    if (dropped > 0 && run_del(s->db, SWEEP_SERIES, 0, 0) < 0) return -1;
     return dropped;
 }
 

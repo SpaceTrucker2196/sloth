@@ -3,6 +3,7 @@
  * 2026-10-21 owner rule), the file rules, writes, compaction and the
  * ceiling. Every file lives in a fresh mkdtemp() directory under /tmp. */
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -40,17 +41,20 @@ static const char *const FORBIDDEN[] = {
 };
 #define NFORBIDDEN (sizeof(FORBIDDEN) / sizeof(FORBIDDEN[0]))
 
-/* The DDL text, in every build: nothing named for a secret, and the
- * migration step is additive (CREATE TABLE only: nothing rewritten,
- * nothing dropped). "mic" is checked as a column name only, since
- * "minute" contains no such word but other prose might. */
+/* The DDL text, in every build: nothing named for a secret, and every
+ * migration step is additive (CREATE TABLE or CREATE INDEX only:
+ * nothing rewritten, nothing dropped). "mic" is checked as a column
+ * name only, since "minute" contains no such word but other prose
+ * might. */
 static void test_schema_text_guardrail(void) {
     const char *meta = web_store_meta_sql();
     const char *v1 = web_store_step_sql(0);
-    WT_ASSERT(meta && v1);
-    WT_ASSERT(web_store_step_sql(1) == NULL);     /* v1 is current */
-    const char *both[2] = { meta, v1 };
-    for (int k = 0; k < 2; k++) {
+    const char *v2 = web_store_step_sql(1);
+    WT_ASSERT(meta && v1 && v2);
+    WT_ASSERT(web_store_step_sql(2) == NULL);     /* v2 is current */
+    WT_EQ(WEB_STORE_SCHEMA, 2);
+    const char *both[3] = { meta, v1, v2 };
+    for (int k = 0; k < 3; k++) {
         for (size_t i = 0; i < NFORBIDDEN; i++) {
             if (!strcmp(FORBIDDEN[i], "mic")) {
                 WT_ASSERT(strstr(both[k], "  mic ") == NULL);
@@ -69,8 +73,14 @@ static void test_schema_text_guardrail(void) {
     for (const char *p = v1; *p; p++) semis += *p == ';';
     WT_EQ(creates, 4);
     WT_EQ(semis, 4);
+    creates = semis = 0;
+    for (const char *p = v2; (p = strstr(p, "CREATE INDEX ")); p++) creates++;
+    for (const char *p = v2; *p; p++) semis += *p == ';';
+    WT_EQ(creates, 3);
+    WT_EQ(semis, 3);
     /* Not IF NOT EXISTS: a step must fail on a name already taken. */
     WT_ASSERT(strstr(v1, "IF NOT EXISTS") == NULL);
+    WT_ASSERT(strstr(v2, "IF NOT EXISTS") == NULL);
 }
 
 #ifndef WITH_SQLITE
@@ -171,16 +181,20 @@ static void test_fresh_store(void) {
     struct stat sb;
     WT_EQ(stat(p, &sb), 0);
     WT_EQ(sb.st_mode & 0777, 0600);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 1);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"),
+          WEB_STORE_SCHEMA);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM meta WHERE name='store' AND"
                      " value='slothweb'"), 1);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
                      " AND name IN ('series','fine','minute','hour')"), 4);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
+                     " AND name IN ('fine_t','minute_t','hour_t')"), 3);
     WT_EQ(raw_int(p, "PRAGMA auto_vacuum"), 2);   /* INCREMENTAL */
     /* Reopening a current file runs no step again. */
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 1);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"),
+          WEB_STORE_SCHEMA);
     rm_store(p);
 }
 
@@ -280,7 +294,7 @@ static void test_v0_file_is_migrated(void) {
                 "('schema_version','0'),('note','kept');");
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 1);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 2);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM meta WHERE name='note' AND"
                      " value='kept'"), 1);              /* nothing rewritten */
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
@@ -309,6 +323,58 @@ static void test_v0_failed_step_leaves_file_unchanged(void) {
     rm_store(p);
 }
 
+/* A file built at v1 (by the v1 step itself, as the build before this
+ * one wrote it) with rows in it: brought to v2, every row as it was. */
+static void make_v1(const char *p, const char *extra) {
+    char sql[4096];
+    snprintf(sql, sizeof(sql), "%s INSERT INTO meta VALUES ('store','slothweb'),"
+             "('schema_version','1'); %s"
+             "INSERT INTO series VALUES (1,'host.rx_rate','10.0.0.1');"
+             "INSERT INTO fine VALUES (1,1000,5,2,1,4);"
+             "INSERT INTO minute VALUES (1,960,7,3,1,4);"
+             "INSERT INTO hour VALUES (1,0,9,4,1,4); %s",
+             web_store_meta_sql(), web_store_step_sql(0), extra);
+    raw_exec(p, sql);
+}
+
+static void test_v1_file_is_migrated(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v1.db");
+    make_v1(p, "");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_point_t pt[4];
+    int more;
+    WT_EQ(web_store_query(&S, WEB_TIER_FINE, WM_HOST_RX, "10.0.0.1", 0, 5000,
+                          pt, 4, &more), 1);
+    WT_ASSERT(pt[0].t == 1000 && pt[0].sum == 5 && pt[0].n == 2);
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 2);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
+                     " AND name IN ('fine_t','minute_t','hour_t')"), 3);
+    WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    WT_EQ(raw_int(p, "SELECT sum FROM hour WHERE series=1 AND t=0"), 9);
+    rm_store(p);
+}
+
+/* The v1 step's failure: a v1 file already holding the name hour_t
+ * stays at v1 with its rows and that table, and gets neither of the
+ * step's other two indexes. Seen red with the step's ROLLBACK replaced
+ * by COMMIT (fine_t and minute_t were left behind at v1). */
+static void test_v1_failed_step_leaves_file_unchanged(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v1bad.db");
+    make_v1(p, "CREATE TABLE hour_t (x INTEGER); INSERT INTO hour_t VALUES (7);");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), -1);
+    WT_HAS(err, "unchanged from v1");
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
+                     " AND name IN ('fine_t','minute_t')"), 0);
+    WT_EQ(raw_int(p, "SELECT x FROM hour_t"), 7);
+    WT_EQ(raw_int(p, "SELECT sum FROM fine WHERE series=1 AND t=1000"), 5);
+    rm_store(p);
+}
+
 static void refused_untouched(const char *p, const char *want) {
     static unsigned char before[1 << 16], after[1 << 16];
     size_t nb = slurp(p, before, sizeof(before));
@@ -329,9 +395,9 @@ static void refused_untouched(const char *p, const char *want) {
  * left exactly as it was. */
 static void test_newer_file_refused(void) {
     char p[128];
-    path_in(p, sizeof(p), "v2.db");
+    path_in(p, sizeof(p), "v3.db");
     raw_exec(p, "CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);"
-                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','2');"
+                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','3');"
                 "CREATE TABLE future (x INTEGER);");
     refused_untouched(p, "newer slothweb");
     rm_store(p);
@@ -432,7 +498,9 @@ static void test_foreign_wal_left_as_it_is(void) {
  * The owner rule (a file owned by another uid is refused) is not
  * covered here: making a file another uid owns needs privilege a test
  * must not ask for, and removing the uid check from check_stat() leaves
- * this suite green. It is held by code reading only.
+ * this suite green. It is held by code reading only. The DEFENSIVE
+ * read-back and the writer's second identify are covered through test
+ * seams: test_defensive_read_back, test_file_swapped_between_opens.
  *
  * DEFENSIVE is asserted by what it forbids: on the store's own handle,
  * writable_schema is ignored and sqlite_master cannot be written. Seen
@@ -495,6 +563,120 @@ static void test_file_rules(void) {
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), -1);
     web_store_close(&S);
     rmdir(p);
+}
+
+/* The DEFENSIVE read-back: a library that takes the call but leaves
+ * DEFENSIVE off fails the open, and the new file it made is left with
+ * no table. Seen red with "|| on != 1" removed from open_db() (the
+ * open succeeded). */
+static void test_defensive_read_back(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "nodef.db");
+    web_store_test_no_defensive = 1;
+    int rc = web_store_open(&S, p, err, sizeof(err));
+    web_store_test_no_defensive = 0;
+    WT_EQ(rc, -1);
+    WT_HAS(err, "DEFENSIVE");
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master"), 0);
+    rm_store(p);
+}
+
+static char g_swap_from[160];
+static void swap_in(const char *path) {
+    WT_EQ(rename(g_swap_from, path), 0);
+}
+
+/* The writer's identify: a file identified as new and empty on the
+ * read-only connection, then replaced before the read-write open by
+ * another program's database, is refused, and that database is left
+ * byte for byte. Seen red with the writer's identify check removed
+ * from web_store_open() (the store stamped its meta table into it and
+ * opened). */
+static void test_file_swapped_between_opens(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "swap.db");
+    path_in(g_swap_from, sizeof(g_swap_from), "swap-other.db");
+    raw_exec(g_swap_from, "CREATE TABLE things (x INTEGER);"
+                          "INSERT INTO things VALUES (1);");
+    static unsigned char before[1 << 16], after[1 << 16];
+    size_t nb = slurp(g_swap_from, before, sizeof(before));
+    WT_ASSERT(nb > 0);
+    web_store_test_between_opens = swap_in;
+    int rc = web_store_open(&S, p, err, sizeof(err));
+    web_store_test_between_opens = NULL;
+    WT_EQ(rc, -1);
+    WT_HAS(err, "not a slothweb store");
+    web_store_close(&S);
+    size_t na = slurp(p, after, sizeof(after));
+    WT_EQ(na, nb);
+    WT_ASSERT(!memcmp(before, after, nb));
+    WT_EQ(raw_int(p, "SELECT x FROM things"), 1);
+    rm_store(p);
+}
+
+/* A cleanly closed WAL-mode sloth.db (no -wal or -shm beside it) is
+ * refused and the directory is left as it was: no empty -wal, no
+ * -shm. A read-only connection makes both on a WAL database; the clean
+ * one is identified as immutable instead. Seen red with wal_clean()'s
+ * answer ignored in web_store_open() (sloth.db-wal and sloth.db-shm
+ * were left behind). */
+static int cmp_name(const void *a, const void *b) {
+    return strcmp((const char *)a, (const char *)b);
+}
+
+static int dir_list(const char *dir, char *out, size_t outsz) {
+    DIR *d = opendir(dir);
+    if (!d) return -1;
+    static char names[32][256];
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) && n < 32) {
+        if (e->d_name[0] == '.') continue;
+        snprintf(names[n++], sizeof(names[0]), "%.255s", e->d_name);
+    }
+    closedir(d);
+    qsort(names, (size_t)n, sizeof(names[0]), cmp_name);
+    out[0] = '\0';
+    for (int i = 0; i < n; i++) {
+        strncat(out, names[i], outsz - strlen(out) - 2);
+        strncat(out, " ", outsz - strlen(out) - 1);
+    }
+    return n;
+}
+
+static void test_clean_wal_refused_leaves_dir_unchanged(void) {
+    char dir[96], p[160], err[512];
+    snprintf(dir, sizeof(dir), "%s/cleanwal", g_dir);
+    WT_EQ(mkdir(dir, 0700), 0);
+    snprintf(p, sizeof(p), "%s/sloth.db", dir);
+    int fd = open(p, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    WT_ASSERT(fd >= 0);
+    if (fd >= 0) close(fd);
+    sqlite3 *h = NULL;
+    WT_EQ(sqlite3_open_v2(p, &h, SQLITE_OPEN_READWRITE, NULL), SQLITE_OK);
+    WT_EQ(sqlite3_exec(h, "PRAGMA journal_mode=WAL;"
+                          "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);"
+                          "INSERT INTO meta VALUES ('schema_version','6');",
+                       NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);                         /* checkpointed, WAL removed */
+    char la[512], lb[512];
+    WT_EQ(dir_list(dir, lb, sizeof(lb)), 1);
+    WT_HAS(lb, "sloth.db ");
+    static unsigned char mb[1 << 16], ma[1 << 16];
+    size_t nmb = slurp(p, mb, sizeof(mb));
+    WT_ASSERT(nmb > 0 && mb[18] == 2 && mb[19] == 2);      /* WAL mode */
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), -1);
+    WT_HAS(err, "not a slothweb store");
+    web_store_close(&S);
+    WT_EQ(dir_list(dir, la, sizeof(la)), 1);
+    WT_ASSERT(!strcmp(la, lb));
+    if (strcmp(la, lb)) fprintf(stderr, "  before: %s\n  after:  %s\n", lb, la);
+    size_t nma = slurp(p, ma, sizeof(ma));
+    WT_EQ(nma, nmb);
+    WT_ASSERT(!memcmp(mb, ma, nmb));
+    rm_store(p);
+    rmdir(dir);
 }
 
 static web_qrow_t row(int tier, int metric, const char *key, long long t,
@@ -656,7 +838,7 @@ static long long disk_bytes(const char *p) {
  * with a 4 MB ceiling. After every step the used size is under the ceiling and the
  * file and its WAL within the WAL's 1 MB cap of it; the ceiling ran
  * between compactions (only the start one ran); the churn keys' minute
- * and hour rows were never written (one-shot evictions); the global
+ * and hour rows were never written (evicted before established); the global
  * series kept all of its minute rows and its newest fine ones. Seen red
  * with the ceiling call removed from web_tsdb.c's flush() (the used
  * size reached 6.8 MB, 7.7 MB on disk, before the first hourly
@@ -703,7 +885,7 @@ static void test_ceiling_holds_under_key_churn(void) {
     web_rollup_stats_t rs;
     web_rollup_stats(&ru, &rs);
     WT_EQ(rs.q_dropped, 0);
-    WT_ASSERT(rs.oneshot_dropped > 0);
+    WT_ASSERT(rs.churn_dropped > 0);
     WT_ASSERT(rs.evictions[WEB_KC_HOST] > 70000);
 
     web_tsdb_flush_all(&ts);
@@ -722,6 +904,74 @@ static void test_ceiling_holds_under_key_churn(void) {
     web_store_close(&S);
     rm_store(p);
 }
+
+/* Key churn with more than one sample per key, through the real
+ * rollup, store thread step and store: 20 new source IPs a second for
+ * 400 s, each seen `samples` times two seconds apart (a spoofed source
+ * sending two or three queries, a scanned host in two or three
+ * top_hosts passes), so each lives 2 or 4 s and crosses minute
+ * boundaries throughout. None of them was ever seen across a minute,
+ * so while slothweb runs not one of their minute or hour rows reaches
+ * the file, and their fine rows do. A control host seen every second
+ * is established after a minute and has its minute rows. At shutdown
+ * the keys still resident (at most the 128 of the host class) write
+ * what they held, at most two rows a tier each. Seen red with
+ * key_flush() emitting unestablished keys' long tiers (7,933 churn
+ * minute rows and 7,693 hour rows on disk before shutdown with two
+ * samples a key, 8,225 and 7,745 with three). */
+static void churn_samples(int samples) {
+    char p[128], err[512];
+    snprintf(err, sizeof(err), "churn%d.db", samples);
+    path_in(p, sizeof(p), err);
+    static web_rollup_t ru;
+    static web_tsdb_t ts;
+    const long long T = 1792627200;
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    WT_EQ(web_rollup_init(&ru, 256, 1, err, sizeof(err)), 0);
+    WT_EQ(web_tsdb_init(&ts, &ru, &S, 30, 256, NULL, NULL), 0);
+    for (int sec = 0; sec < 400; sec++) {
+        long long now = T + sec;
+        web_rollup_add(&ru, WM_DNS_QUERIES, "192.168.0.1", 1, now);
+        for (int j = 0; j < samples; j++) {
+            int born = sec - 2 * j;           /* keys born at second `born` */
+            if (born < 0) continue;
+            for (int i = 0; i < 20; i++) {
+                unsigned ip = (unsigned)born * 20 + (unsigned)i;
+                char k[32];
+                snprintf(k, sizeof(k), "10.%u.%u.%u", (ip >> 16) & 0xff,
+                         (ip >> 8) & 0xff, ip & 0xff);
+                web_rollup_add(&ru, WM_DNS_QUERIES, k, 1, now);
+            }
+        }
+        web_tsdb_step(&ts, now);
+    }
+    web_rollup_stats_t rs;
+    web_rollup_stats(&ru, &rs);
+    WT_ASSERT(rs.evictions[WEB_KC_HOST] > 7000);
+    WT_ASSERT(rs.churn_dropped > 7000);
+    WT_EQ(rs.q_dropped, 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM minute m JOIN series s ON"
+                     " s.id=m.series WHERE s.key LIKE '10.%'"), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM hour m JOIN series s ON"
+                     " s.id=m.series WHERE s.key LIKE '10.%'"), 0);
+    WT_ASSERT(raw_int(p, "SELECT COUNT(*) FROM fine m JOIN series s ON"
+                         " s.id=m.series WHERE s.key LIKE '10.%'") > 7000);
+    WT_ASSERT(raw_int(p, "SELECT COUNT(*) FROM minute m JOIN series s ON"
+                         " s.id=m.series WHERE s.key='192.168.0.1'") >= 5);
+    web_tsdb_flush_all(&ts);
+    long long held = raw_int(p, "SELECT COUNT(*) FROM minute m JOIN series s"
+                                " ON s.id=m.series WHERE s.key LIKE '10.%'");
+    WT_ASSERT(held > 0 && held <= 2 * 128);
+    WT_ASSERT(raw_int(p, "SELECT COUNT(*) FROM hour m JOIN series s ON"
+                         " s.id=m.series WHERE s.key LIKE '10.%'") <= 2 * 128);
+    web_tsdb_destroy(&ts);
+    web_rollup_destroy(&ru);
+    web_store_close(&S);
+    rm_store(p);
+}
+
+static void test_churn_two_samples_not_in_long_tiers(void) { churn_samples(2); }
+static void test_churn_three_samples_not_in_long_tiers(void) { churn_samples(3); }
 
 /* Past the fine tier, the ceiling takes keyed minute and hour rows
  * before any row of a global series: those are one series per metric
@@ -778,15 +1028,22 @@ void run_store_tests(void) {
     WT_RUN(test_no_column_can_hold_secret_material);
     WT_RUN(test_v0_file_is_migrated);
     WT_RUN(test_v0_failed_step_leaves_file_unchanged);
+    WT_RUN(test_v1_file_is_migrated);
+    WT_RUN(test_v1_failed_step_leaves_file_unchanged);
     WT_RUN(test_newer_file_refused);
     WT_RUN(test_foreign_files_refused);
     WT_RUN(test_foreign_wal_left_as_it_is);
     WT_RUN(test_file_rules);
+    WT_RUN(test_defensive_read_back);
+    WT_RUN(test_file_swapped_between_opens);
+    WT_RUN(test_clean_wal_refused_leaves_dir_unchanged);
     WT_RUN(test_write_merge_query);
     WT_RUN(test_compaction_retention);
     WT_RUN(test_ceiling_drops_oldest_fine_first);
     WT_RUN(test_ceiling_spares_global_series);
     WT_RUN(test_ceiling_holds_under_key_churn);
+    WT_RUN(test_churn_two_samples_not_in_long_tiers);
+    WT_RUN(test_churn_three_samples_not_in_long_tiers);
     WT_RUN(test_secrets_never_reach_disk);
     rmdir(g_dir);
 }

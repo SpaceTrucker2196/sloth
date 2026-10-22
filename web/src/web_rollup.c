@@ -148,9 +148,9 @@ static void ring_push(web_rollup_t *ru, uint32_t sid, const web_agg_t *a) {
     if (ru->ring_n < ru->ring_cap) ru->ring_n++;
 }
 
-/* Close one open bucket: to the ring (fine) and the store queue. */
-static void emit(web_rollup_t *ru, web_rkey_t *k, int m, int tier) {
-    web_agg_t *a = &k->open[m][tier];
+/* One closed bucket a of key k: to the ring (fine) and the store queue. */
+static void emit_agg(web_rollup_t *ru, web_rkey_t *k, int m, int tier,
+                     web_agg_t *a) {
     if (a->t < 0) return;
     if (tier == WEB_TIER_FINE) ring_push(ru, k->sid[m], a);
     if (ru->store_on) {
@@ -172,45 +172,65 @@ static void emit(web_rollup_t *ru, web_rkey_t *k, int m, int tier) {
     a->t = -1;
 }
 
-/* A key that lived less than one fine bucket and took one sample per
- * series: what a scan or any other key churn looks like. Only a full
- * class evicts, so only churn reaches this test. */
-static int key_oneshot(const web_rkey_t *k) {
-    if (k->last_seen - k->first_seen >= WEB_FINE_S) return 0;
-
-
-    for (int m = 0; m < WM_COUNT; m++) {
-        if (!k->sid[m]) continue;
-        const web_agg_t *a = &k->open[m][WEB_TIER_HOUR];
-        if (a->t >= 0 && a->n > 1) return 0;
+/* Close one open bucket. An unestablished key's minute or hour bucket
+ * is held instead (see web_rollup.h). The held slot is free whenever
+ * this runs on the clock as it should go: samples within one minute
+ * cross at most one boundary per tier. Only a clock stepped back can
+ * find it taken, and then the older row goes out rather than being
+ * lost. */
+static void emit(web_rollup_t *ru, web_rkey_t *k, int m, int tier) {
+    web_agg_t *a = &k->open[m][tier];
+    if (a->t < 0) return;
+    if (tier == WEB_TIER_FINE || k->est) {
+        emit_agg(ru, k, m, tier, a);
+        return;
     }
-    return 1;
+    web_agg_t *h = &k->held[m][tier - 1];
+    if (h->t >= 0) emit_agg(ru, k, m, tier, h);
+    *h = *a;
+    a->t = -1;
 }
 
-/* Flush an evicted key's open buckets. A one-shot key keeps its fine
- * rows (24 h, and the first the --web-max-mb ceiling drops) but not its
- * minute and hour rows: under churn those would be one row per key per
- * tier for 30 and 400 days, and push real history out of the store.
- * Dropped rows are counted (oneshot_dropped on /api/health). */
-static void key_flush(web_rollup_t *ru, web_rkey_t *k) {
-    int oneshot = key_oneshot(k);
+/* Every held bucket of k to the queue. */
+static void release_held(web_rollup_t *ru, web_rkey_t *k) {
     for (int m = 0; m < WM_COUNT; m++) {
         if (!k->sid[m]) continue;
-        for (int t = 0; t < WEB_TIER_COUNT; t++) {
-            if (oneshot && t != WEB_TIER_FINE) {
-                if (k->open[m][t].t >= 0) ru->oneshot_dropped++;
-                k->open[m][t].t = -1;
+        for (int t = WEB_TIER_MINUTE; t < WEB_TIER_COUNT; t++)
+            emit_agg(ru, k, m, t, &k->held[m][t - 1]);
+    }
+}
+
+/* Flush an evicted key's buckets. An established key's go out as they
+ * are. An unestablished one is what churn looks like, however many
+ * samples it took: its fine rows go out (24 h, and the first the
+ * --web-max-mb ceiling drops) but its held and open minute and hour
+ * rows are dropped and counted (churn_dropped on /api/health). Kept,
+ * they would be one row per key per metric per tier for 30 and 400
+ * days, and would push real history out of the store. */
+static void key_flush(web_rollup_t *ru, web_rkey_t *k) {
+    for (int m = 0; m < WM_COUNT; m++) {
+        if (!k->sid[m]) continue;
+        emit(ru, k, m, WEB_TIER_FINE);
+        for (int t = WEB_TIER_MINUTE; t < WEB_TIER_COUNT; t++) {
+            if (k->est) {
+                emit(ru, k, m, t);
                 continue;
             }
-            emit(ru, k, m, t);
+            web_agg_t *h = &k->held[m][t - 1], *a = &k->open[m][t];
+            if (h->t >= 0) ru->churn_dropped++;
+            if (a->t >= 0) ru->churn_dropped++;
+            h->t = a->t = -1;
         }
     }
 }
 
 static void key_reset(web_rkey_t *k) {
     memset(k->sid, 0, sizeof(k->sid));
-    for (int m = 0; m < WM_COUNT; m++)
+    k->est = 0;
+    for (int m = 0; m < WM_COUNT; m++) {
         for (int t = 0; t < WEB_TIER_COUNT; t++) k->open[m][t].t = -1;
+        for (int t = 0; t < WEB_TIER_COUNT - 1; t++) k->held[m][t].t = -1;
+    }
 }
 
 /* The slot for key in class c, made (evicting the least recently seen
@@ -236,6 +256,8 @@ static web_rkey_t *key_get(web_rollup_t *ru, web_kclass_t *c, const char *key,
     snprintf(k->key, sizeof(k->key), "%s", key);
     key_reset(k);
     k->first_seen = k->last_seen = now_s;
+    /* The global series are one per metric and never evicted. */
+    k->est = c == &ru->cls[WEB_KC_GLOBAL];
     unsigned h = hash_key(k->key) & (unsigned)(c->nhead - 1);
     k->next = c->head[h];
     c->head[h] = i;
@@ -309,6 +331,10 @@ void web_rollup_add(web_rollup_t *ru, int metric, const char *key, double v,
         k->sid[metric] = ru->next_sid++;
         if (!ru->next_sid) ru->next_sid = 1;
     }
+    if (!k->est && now_s - k->first_seen >= WEB_MINUTE_S) {
+        k->est = 1;
+        release_held(ru, k);
+    }
     for (int t = 0; t < WEB_TIER_COUNT; t++) {
         web_agg_t *a = &k->open[metric][t];
         long long b = bucket_of(now_s, TIER_STEP[t]);
@@ -340,9 +366,19 @@ static void close_where(web_rollup_t *ru, long long now_s, int all) {
                 for (int t = 0; t < WEB_TIER_COUNT; t++) {
                     const web_agg_t *a = &k->open[m][t];
                     if (a->t < 0) continue;
-                    if (all || a->t + TIER_STEP[t] <= now_s) emit(ru, k, m, t);
+                    if (all) {
+                        emit_agg(ru, k, m, t, &k->open[m][t]);
+                        continue;
+                    }
+                    /* Left open until the key is established or
+                     * evicted. Closed here it would take the held slot,
+                     * which the key's next boundary needs: two closed
+                     * minutes would push the older one out. */
+                    if (t != WEB_TIER_FINE && !k->est) continue;
+                    if (a->t + TIER_STEP[t] <= now_s) emit(ru, k, m, t);
                 }
             }
+            if (all) release_held(ru, k);
         }
     }
 }
@@ -481,7 +517,7 @@ void web_rollup_stats(web_rollup_t *ru, web_rollup_stats_t *st) {
     st->ring_rows = ru->ring_n;
     st->queue_rows = ru->q_n;
     st->q_dropped = ru->q_dropped;
-    st->oneshot_dropped = ru->oneshot_dropped;
+    st->churn_dropped = ru->churn_dropped;
     st->clamped = ru->clamped;
     st->hw_evictions = ru->hw_evictions;
     st->samples = ru->samples;
