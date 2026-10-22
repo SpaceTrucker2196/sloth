@@ -40,6 +40,12 @@ jobs:
       - name: Build and test slothweb
         run: make web && make web-test
 
+      # The memory-only shape (#160): without SQLite slothweb has no store
+      # and /api/series serves the in-memory fine tier. Nothing else builds
+      # that variant, which is how #99 happened to sloth's WITH_WIFI=0.
+      - name: Build and test slothweb without SQLite
+        run: make web WITH_SQLITE=0 && make web-test WITH_SQLITE=0
+
       # The capture path is not in `make test`: sloth_test is built
       # without WITH_PCAP, so on_packet() and every parser it reaches
       # were untested and unsanitised until #95 added this binary.
