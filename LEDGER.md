@@ -252,3 +252,4 @@
 | 0d069f5 | 2026-10-21T22:38:10Z | claude-opus-5-5 | 44 | 15734 | 16643337 | 1820886 | 18.2106 | slothweb W0 (#157) + M0 (#158) + CI wiring |
 | 992bbcb | 2026-10-22T01:31:59Z | claude-opus-5-5 | 30 | 9835 | 9489028 | 1864172 | 17.0080 | slothweb M1 (#159): ingest, /api/live, Overview |
 | 74e95c5 | 2026-10-22T08:00:47Z | claude-opus-5-5 | 82 | 25888 | 11731909 | 276840 | 5.0792 | slothweb M2 (#160): metrics, 10s/1m/1h rollups, slothweb.db v2 with migrations, /api/series, Activity view; 3 review rounds; CI no-SQLite step |
+| 15f2946 | 2026-10-22T22:25:38Z | claude-fable-5-1, claude-opus-5-5 | 250 | 41288 | 7133512 | 969826 | 12.4851 | slothweb M3 (#161): audit of 2ebde74 (19 fixes), persisted baselines/episodes (v3), MAD from hour tier, A1-A3/A5-A10 episodes, Anomalies view, heatmaps, 6-week acceptance; 3 review rounds |
