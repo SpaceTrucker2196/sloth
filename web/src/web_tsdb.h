@@ -32,6 +32,11 @@
 #define WEB_FLUSH_MAX  4096    /* rows per take from the queue */
 #define WEB_FLUSH_HIGH (WEB_QUEUE_ROWS / 2)   /* queued rows: flush now */
 
+/* An optional hook run at the end of every step, after buckets are
+ * closed, so it sees this second's data as current as the store does
+ * (web_anomaly.h is the one hook today). ctx is opaque to web_tsdb. */
+typedef void (*web_tsdb_hook_fn)(void *ctx, long long now_s);
+
 typedef struct {
     web_rollup_t *ru;
     web_store_t  *store;          /* NULL: memory only */
@@ -42,6 +47,8 @@ typedef struct {
     web_qrow_t   *batch;
     web_clock_fn  clock;
     void         *clock_ctx;
+    web_tsdb_hook_fn hook;
+    void         *hook_ctx;
     int           stop[2];
     pthread_t     th;
     int           running;
@@ -53,6 +60,10 @@ int  web_tsdb_init(web_tsdb_t *t, web_rollup_t *ru, web_store_t *store,
                    int retain_days, int max_mb, web_clock_fn clock,
                    void *clock_ctx);
 void web_tsdb_destroy(web_tsdb_t *t);
+
+/* Call hook(ctx, now_s) at the end of every web_tsdb_step(), once
+ * attached. NULL hook detaches. Call before web_tsdb_start(). */
+void web_tsdb_set_hook(web_tsdb_t *t, web_tsdb_hook_fn hook, void *ctx);
 
 /* One pass at now_s. */
 void web_tsdb_step(web_tsdb_t *t, long long now_s);

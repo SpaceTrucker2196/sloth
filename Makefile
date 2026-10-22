@@ -560,7 +560,7 @@ WEB_TOOL_SRCS   = web/tools/sha256.c
 WEB_EMBED_SRCS  = web/tools/embed.c $(WEB_TOOL_SRCS)
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C)
 WEB_TEST_SRCS   = $(wildcard web/tests/*.c)
-WEB_LDLIBS      = -lpthread
+WEB_LDLIBS      = -lpthread -lm
 ifeq ($(WITH_SQLITE),1)
     WEB_SQL_DEFS = -DWITH_SQLITE
     WEB_LDLIBS  += -lsqlite3

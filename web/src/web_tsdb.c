@@ -34,6 +34,11 @@ void web_tsdb_destroy(web_tsdb_t *t) {
     t->batch = NULL;
 }
 
+void web_tsdb_set_hook(web_tsdb_t *t, web_tsdb_hook_fn hook, void *ctx) {
+    t->hook = hook;
+    t->hook_ctx = ctx;
+}
+
 static void flush(web_tsdb_t *t) {
     if (!t->store) return;
     size_t n;
@@ -72,6 +77,7 @@ void web_tsdb_step(web_tsdb_t *t, long long now_s) {
             web_store_compact(t->store, now_s, t->retain_days, t->max_bytes);
         t->next_compact = now_s + WEB_COMPACT_S;
     }
+    if (t->hook) t->hook(t->hook_ctx, now_s);
 }
 
 /* What is queued goes first, so close_all() starts from an empty

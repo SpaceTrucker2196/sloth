@@ -54,5 +54,7 @@ void run_rollup_tests(void);
 void run_metrics_tests(void);
 void run_store_tests(void);
 void run_series_tests(void);
+void run_baseline_tests(void);
+void run_anomaly_tests(void);
 
 #endif

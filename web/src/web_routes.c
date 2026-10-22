@@ -310,6 +310,33 @@ static int route_series(const web_req_t *rq, const web_health_t *h, int which,
     return json_answer(rq, status, bl, out, outsz, r);
 }
 
+/* /api/anomalies. No query parameters yet (a kind/since filter is a
+ * follow-up); any query at all is a 400, consistent with the other
+ * routes' strictness. */
+static int route_anomalies(const web_req_t *rq, const web_health_t *h,
+                           char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    int status = 200;
+    size_t bl;
+    if (!h->anomaly) {
+        status = 503;
+        bl = web_series_error_json("no_anomaly_engine", body, cap);
+    } else if (rq->query_long || rq->query[0]) {
+        status = 400;
+        bl = web_series_error_json("unknown_parameter", body, cap);
+    } else {
+        bl = web_anomaly_json(h->anomaly, h->wall_s, body, cap);
+    }
+    if (bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, status, bl, out, outsz, r);
+}
+
 static int route_events(const web_req_t *rq, int sse_room, char *out,
                         size_t outsz, web_resp_t *r) {
     if (!rq->is_head && !sse_room) {
@@ -374,6 +401,8 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
             return route_series(rq, h, SR_KEYS, out, outsz, r);
         if (!strcmp(rq->path, "/api/metrics"))
             return route_series(rq, h, SR_METRICS, out, outsz, r);
+        if (!strcmp(rq->path, "/api/anomalies"))
+            return route_anomalies(rq, h, out, outsz, r);
     }
     r->status = 404;
     r->out_len = web_http_response(404, rq->is_head, out, outsz);

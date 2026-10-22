@@ -16,6 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "web_anomaly.h"
 #include "web_config.h"
 #include "web_http.h"
 #include "web_live.h"
@@ -84,6 +85,7 @@ typedef struct {
     web_conn_t      conns[WEB_MAX_CONNS];
     web_live_t     *live;     /* NULL: no data socket; set before run */
     web_tsdb_t     *tsdb;     /* NULL: no time series; set before run */
+    web_anomaly_t  *anomaly;  /* NULL: no anomaly engine; set before run */
     unsigned long long rec_sent;  /* newest ticker record broadcast */
     pthread_mutex_t mu;       /* guards stats only */
     web_stats_t     stats;
@@ -115,6 +117,9 @@ void     web_server_stop(web_server_t *s);
 void     web_server_set_live(web_server_t *s, web_live_t *live);
 /* Attach the time series the M2 routes read (web_tsdb.h). Same rule. */
 void     web_server_set_tsdb(web_server_t *s, web_tsdb_t *tsdb);
+/* Attach the anomaly engine /api/anomalies reads (web_anomaly.h). Same
+ * rule. */
+void     web_server_set_anomaly(web_server_t *s, web_anomaly_t *anomaly);
 
 void     web_server_stats(web_server_t *s, web_stats_t *out);
 uint16_t web_server_port(const web_server_t *s);

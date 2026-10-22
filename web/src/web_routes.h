@@ -9,6 +9,7 @@
  *   /api/series   JSON: one series' buckets (web_series.h, M2)
  *   /api/keys     JSON: the keys of one metric
  *   /api/metrics  JSON: the metric catalogue and tiers
+ *   /api/anomalies JSON: open and recently closed anomaly episodes (M3)
  *   /events       Server-Sent Events: tick, record, ping
  *   anything else 404
  *
@@ -22,6 +23,7 @@
 
 #include <stddef.h>
 
+#include "web_anomaly.h"
 #include "web_http.h"
 #include "web_live.h"
 #include "web_tsdb.h"
@@ -37,6 +39,7 @@ typedef struct {
     long long     now_ms;     /* the monotonic clock, for ages in live */
     web_tsdb_t   *tsdb;       /* NULL: no time series (M2) */
     long long     wall_s;     /* unix seconds, for the series routes */
+    web_anomaly_t *anomaly;   /* NULL: no baseline/anomaly engine (M3) */
 } web_health_t;
 
 /* /api/live and the series routes are built into the connection's

@@ -4,16 +4,34 @@ The browser dashboard for sloth data, built in milestones. The spec is
 [`docs/web-ui-spec.md`](../docs/web-ui-spec.md); the rulings table at its
 top overrides the body. Tracker: #102.
 
-**This is M2 (#160) on top of M1 (#159), M0 (#158) and W0 (#157).** W0
-is the listener, the allowed-peer list and its refusals. M0 added the
-embedded page, `/api/health` and an `/events` stream. M1 added the
-data-socket client: slothweb reads sloth's JSONL stream, keeps a small
-live state, serves it as `/api/live`, and the page's Overview shows the
-device count, open alerts by severity, records per second, sensor
-health and a record ticker. M2 adds the time series: metrics derived
-from the same records, rolled into 10 s, 1 min and 1 h buckets, kept in
-slothweb's own `slothweb.db`, served as `/api/series`, and drawn by the
-Activity view. Run it beside sloth and open `http://127.0.0.1:8770`.
+**This is the backend half of M3 (#161), on top of M2 (#160), M1
+(#159), M0 (#158) and W0 (#157).** W0 is the listener, the
+allowed-peer list and its refusals. M0 added the embedded page,
+`/api/health` and an `/events` stream. M1 added the data-socket
+client: slothweb reads sloth's JSONL stream, keeps a small live state,
+serves it as `/api/live`, and the page's Overview shows the device
+count, open alerts by severity, records per second, sensor health and
+a record ticker. M2 adds the time series: metrics derived from the
+same records, rolled into 10 s, 1 min and 1 h buckets, kept in
+slothweb's own `slothweb.db`, served as `/api/series`, and drawn by
+the Activity view. Run it beside sloth and open `http://127.0.0.1:8770`.
+
+**M3 adds baselines and anomaly rules** (`web_baseline.h`,
+`web_anomaly.h`), served as `/api/anomalies`: 168 hour-of-week cells
+per (metric, key) with a four-week EWMA half-life (§5.3), and five of
+§6's ten rules — A1 (any keyed metric's minute value out of band for
+three consecutive minutes, which also covers §6's A7 since
+`host.conns` is one of the metrics A1 scans), A3 (a device present in
+an hour of the week it is normally absent), A8 (a host's NXDOMAIN
+share over its last ten minutes), A9 (a host's first-ever use of
+flow.ssh/rdp/smb/snmp/mqtt) and A10 (the data socket connected but
+silent). **A2, A4, A5 and A6 are not implemented**: each is a lookup
+against `sloth.db` or the vendor/name lookup module, neither of which
+exists yet — that is M4 (#162). The Anomalies view and the Overview
+heatmaps §6/§8.4 call for are also not built yet; today the rules are
+only reachable at `/api/anomalies`. Without SQLite, A10 still runs (it
+only needs the live state); A1, A3, A8 and A9 need the minute or hour
+tier and do not.
 
 ## Build and run
 
@@ -84,6 +102,7 @@ the store is refused, `2` on a usage error or a policy refusal.
    | `GET /api/health` | `200` JSON, `Cache-Control: no-store` |
    | `GET /api/live` | `200` JSON, `Cache-Control: no-store` |
    | `GET /api/series?...`, `/api/keys?...`, `/api/metrics` | `200` JSON, `Cache-Control: no-store`; `400` with `{"error":"reason"}` for a parameter that does not pass (below); `503` with no time series attached |
+   | `GET /api/anomalies` | `200` JSON, `Cache-Control: no-store`, open and recently-closed episodes; no query parameters yet, any query is `400` |
    | `GET /events` | `200` `text/event-stream`, held open (below) |
    | `GET /events` with 24 streams already open | `503` |
    | `GET` any other path | `404` |
@@ -684,6 +703,8 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_store.c` | the DDL guardrail in every build; with SQLite: a fresh store, `test_db.c`'s secret-column sweep, secrets fed through the stream absent from the file, a v0 and a v1 file migrated, a v0 and a v1 file whose step fails left where they were, a newer file and foreign files (a sloth.db shape, other databases, a file with another program's `application_id` and `user_version` but no table yet, our own `meta` under a foreign `application_id`, not SQLite) refused byte for byte, a WAL-mode sloth.db with an unflushed WAL refused with the file and its WAL byte for byte, a cleanly closed WAL-mode sloth.db refused with its directory listing unchanged, the file rules (symlink, mode, links, side files, a directory; the owner rule is not tested, see below), `DEFENSIVE` refusing a `sqlite_master` write on the store's handle and a library that leaves it off failing the open, a file swapped between the identifying and the writing open refused byte for byte, merged writes counted once in `store_rows` and bound queries, retention, the WAL left empty by the compaction, a start after a long stop expiring everything with the WAL never past one slice, the ceiling dropping the oldest fine rows first and sparing global series, and holding under 200 new keys a second within one flush interval; churn of two and three samples per key writing no minute or hour row while slothweb runs |
 | `test_series.c` | every parameter rule and its reason, the answer's shape and paging, the routes (`HEAD`, `400` without echo, `query_too_long`, `421` and `405` on all three, `503` without a time series, the health members), the 900-point worst case fitting, the 900-point cap on a store+memory answer of 1,800 buckets and its next page, the store thread running beside reads and writes, and spec §12's M2 acceptance: an hour of records through the framer on a pinned clock, the 24 h request answered with 360 points 10 s apart (from memory, from the store's fine tier, and through `/api/series` again after a restart over the same store), the store under 5 MB on disk with its WAL after every step of the hour |
 | `test_server.c` | real loopback sockets: default bind address, a refused peer over v4 and v6, 405 for POST/PUT/DELETE/PATCH, 431, idle and slow clients timed out, slot exhaustion; the page byte for byte and its `304`, health, a stream's ticks and pings and the client leaving, the first tick at once, a departing client noticed on the read path with no event due, the stream socket's `TCP_NODELAY` and `SO_SNDBUF`, a non-reading stream client dropped at the 64 KB backlog and not past it, the stream cap, `421` for `Host: attacker.example` |
+| `test_baseline.c` | the hour-of-week index wrapping weekly, a never-fed (metric, key) scoring absent, fewer than `WEB_BL_WARM_N` feeds forcing z to 0 even against a wildly different probe, an established cell scoring a near-zero z at its own mean and a large one far from it, two hour-of-week cells of the same (metric, key) warming independently, a full table evicting the least-recently-fed entry and never one still in use, re-feeding the same pair not growing the table, `web_baseline_cap_for()` at the default and the extremes, and a NaN/infinite feed ignored |
+| `test_anomaly.c` | end to end against a real `slothweb.db` and rollup, weeks of baseline history established through `web_baseline_feed()` directly and "now" written through `web_store_write()` and read back by the rule through `web_store_query()` — the same call production makes: the hourly pass itself wiring a closed hour bucket into the baseline, A1 opening on three consecutive minutes of a sustained burst and staying silent on a quiet stream or two burst minutes broken by a quiet one, A3 firing for a device present in an hour of the week it is normally absent and staying silent in its normal hours, A8 firing on a high NXDOMAIN share and not on a normal one, A9 firing once on a host's first-ever use of a protocol and not touching that episode again once the baseline has an entry, A10 firing past `WEB_ANOM_A10_SILENCE_S` of socket silence and not before it, every rule but A10 a no-op without a store, and an open episode closing after `WEB_ANOM_CLEAR_TICKS` quiet minutes |
 
 A test cannot originate from a non-loopback address, so the refused-peer
 socket tests narrow the list instead (only `127.0.0.2`, or only IPv4)
@@ -722,6 +743,8 @@ web/
     web_store.c    slothweb.db: open rules, identification, migration, I/O
     web_tsdb.c     the store thread: close, write, compact
     web_series.c   /api/series, /api/keys, /api/metrics
+    web_baseline.c 168 hour-of-week cells per (metric, key), z-scoring (M3)
+    web_anomaly.c  A1, A3, A8, A9, A10; /api/anomalies (M3)
     web_json.c     the JSON writer every outgoing string goes through
     web_assets.h   the generated page's symbols
   ui/              the page sources (index.html, theme.css, page.css, app.js)

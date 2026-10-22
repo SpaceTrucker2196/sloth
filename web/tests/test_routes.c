@@ -25,7 +25,7 @@ static void inm(web_req_t *rq, const char *v) {
     snprintf(rq->inm, sizeof(rq->inm), "%s", v);
 }
 
-static const web_health_t H = { 42, 2, 17, NULL, 0, NULL, 0 };
+static const web_health_t H = { 42, 2, 17, NULL, 0, NULL, 0, NULL };
 
 /* Case-insensitive search over the first len bytes. */
 static const char *ci_find(const char *hay, size_t len, const char *needle) {

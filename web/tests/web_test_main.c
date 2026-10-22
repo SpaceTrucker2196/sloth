@@ -19,6 +19,8 @@ int main(void) {
     run_metrics_tests();
     run_store_tests();
     run_series_tests();
+    run_baseline_tests();
+    run_anomaly_tests();
     printf("slothweb tests: %d passed, %d failed\n", wt_pass, wt_fail);
     return wt_fail ? 1 : 0;
 }

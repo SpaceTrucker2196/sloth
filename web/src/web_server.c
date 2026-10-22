@@ -122,6 +122,9 @@ uint16_t web_server_port(const web_server_t *s) { return s->port; }
 void web_server_set_live(web_server_t *s, web_live_t *live) { s->live = live; }
 
 void web_server_set_tsdb(web_server_t *s, web_tsdb_t *tsdb) { s->tsdb = tsdb; }
+void web_server_set_anomaly(web_server_t *s, web_anomaly_t *anomaly) {
+    s->anomaly = anomaly;
+}
 
 void web_server_stop(web_server_t *s) {
     char b = 1;
@@ -179,6 +182,7 @@ static void health_now(web_server_t *s, web_health_t *h) {
     h->now_ms      = now_ms();
     h->tsdb        = s->tsdb;
     h->wall_s      = (long long)time(NULL);
+    h->anomaly     = s->anomaly;
 }
 
 /* Send what a stream has queued. A client that went away is closed and
