@@ -242,12 +242,18 @@ with `textContent` only: the script contains no `innerHTML` or other
 HTML or code sink, and a record type picks its colour from a fixed
 table rather than becoming a class name.
 
-**The device count.** sloth rebuilds `s->devices` every poll and writes
-one `device` record per row, contiguously (`jsonl_emit_devices()`), so
-the number of `device` records in one pass is exactly the TUI's
+**The device count.** sloth's poll thread rebuilds `s->devices` every
+poll and writes one `device` record per row (`jsonl_emit_devices()`),
+so the number of `device` records in one pass is exactly the TUI's
 `device_count`. slothweb counts rows, not distinct MACs, for the same
-reason. A pass ends at the first record of another type and is then
-published. A pass that a `socket_gap`, an undecodable line or an
+reason. The pass is not one unbroken run on the wire: the capture
+thread writes `dns`, `tls`, `quic`, `http`, `ntp`, `icmp` and
+`cleartext_cred` records through the same writer at the same time, and
+no lock spans the pass, so a DNS answer can land between two device
+rows. Only the poll thread's own record types (`POLL_TYPES` in
+`web/src/web_live.c`) steer the count; every other type, alerts and
+types sloth adds later included, is passed over. A pass ends at the
+first poll-thread record of another type and is then published. A pass that a `socket_gap`, an undecodable line or an
 implausible `type` may have cut short is not published, and the
 previous count stands (`device_passes_unpublished`). sloth's snapshot
 batch starts with the `iface` records, so a batch that reaches the next

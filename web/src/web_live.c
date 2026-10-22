@@ -135,8 +135,44 @@ static void close_round(web_live_t *l) {
     l->round_taint = 0;
 }
 
+/* The record types sloth's poll thread writes, from src/jsonl.c:
+ * jsonl_emit_connections() and jsonl_emit_twin_episodes(), then every
+ * emitter jsonl_emit_state_snapshots() calls, in that order. Only
+ * these steer the device bookkeeping.
+ *
+ * The rest are passed over, and that is not an optimisation. dns, tls,
+ * quic, http, ntp, icmp and cleartext_cred come from the libpcap
+ * capture thread (src/capture/capture.c capture_thread() into the
+ * *_log.c rings), through the same emit_line() as the poll thread's
+ * snapshot but under no lock that spans a pass: data_socket_emit()
+ * locks per line. So a DNS answer can land between two device rows,
+ * and treating it as the end of the pass would publish half of it.
+ * alert and alert.* are poll-thread (alerts_update() in src/poll.c,
+ * before the snapshot) but steer nothing here, so they are passed over
+ * too; so is any type sloth adds later, until it is listed. */
+static const char *const POLL_TYPES[] = {
+    "connections", "twin_episode",
+    "iface", "sensor", "wifi_merged", "arp", "dhcp_lease", "wifi_ap",
+    "wifi_sta", "top_host", "device", "beacon", "wifi_regulatory",
+    "deauth", "probe_client", "pnl_client", "seqnum_client",
+    "seqnum_correlation", "channel_summary", "assoc", "wifi_assoc_req",
+    "btm_request", "wifi_csa_event", "rrm_beacon_request", "wifi_mld",
+    "captive_portal_event", "eapol", "mdns_service", "nbns_name",
+    "ssdp_device", "onvif_device", "scan_entry", "packet", "process",
+    "ndp_ra", "smb_session", "kerb_event", "ldap_event", "bgp_session",
+    "ssh_flow", "rdp_flow", "snmp_flow", "mqtt_flow", "ble_device",
+    "ble_alert", "sensor_health", NULL
+};
+
+static int poll_type(const char *t) {
+    for (int i = 0; POLL_TYPES[i]; i++)
+        if (!strcmp(POLL_TYPES[i], t)) return 1;
+    return 0;
+}
+
 /* The device-count bookkeeping for one record of type t. */
 static void devices_step(web_live_t *l, const char *t, long long ts) {
+    if (!poll_type(t)) return;
     int is_dev = !strcmp(t, "device");
     int is_iface = !strcmp(t, "iface");
     if (!is_dev && l->in_round) close_round(l);
@@ -165,6 +201,9 @@ static void devices_step(web_live_t *l, const char *t, long long ts) {
     }
 }
 
+#define SUMMARY_TMP 512
+typedef char SUMMARY_TMP_FITS[WEB_LIVE_TEXT_MAX < SUMMARY_TMP - 1 ? 1 : -1];
+
 static const char *const SUMMARY_KEYS[] = {
     "qname", "host", "ssid", "mac", "bssid", "sta_mac", "addr", "ip",
     "src", "src_ip", "hostname", "name", "instance", "dst", "dst_ip",
@@ -175,7 +214,7 @@ static const char *const SUMMARY_KEYS[] = {
  * first. Only decoded strings go in; the output is escaped later. */
 static void summarise(const web_jrec_t *r, int is_alert, char *out,
                       size_t cap) {
-    char tmp[512];
+    char tmp[SUMMARY_TMP];
     size_t n = 0;
     tmp[0] = '\0';
     if (is_alert) {
@@ -194,19 +233,13 @@ static void summarise(const web_jrec_t *r, int is_alert, char *out,
             used++;
         }
     }
-    /* snprintf may have cut tmp mid-sequence; web_utf8_copy only cuts
-     * on a boundary, so recut tmp's own tail first. */
-    size_t tl = strlen(tmp);
-    while (tl > 0 && ((unsigned char)tmp[tl - 1] & 0x80)) {
-        unsigned cp;
-        size_t s = tl - 1;
-        while (s > 0 && ((unsigned char)tmp[s] & 0xC0) == 0x80) s--;
-        if (web_utf8_seq((const unsigned char *)tmp + s, tl - s, &cp) ==
-            tl - s)
-            break;
-        tl = s;
-    }
-    tmp[tl] = '\0';
+    /* tmp holds whole decoded strings, except that snprintf may have cut
+     * the last one mid-sequence; it only does so with tmp full (511
+     * bytes). web_utf8_copy() cuts on a code-point boundary at cap
+     * (WEB_LIVE_TEXT_MAX, the only cap passed), far
+     * short of that, so the ragged tail never reaches out. That holds
+     * while cap stays under sizeof(tmp) - 1: SUMMARY_TMP_FITS fails the
+     * build otherwise. */
     web_utf8_copy(out, cap, tmp);
 }
 
@@ -341,8 +374,11 @@ static const char *sensor_word(const web_live_t *l, long long now_ms) {
     return "ok";
 }
 
-const char *web_live_sensor_word(const web_live_t *l, long long now_ms) {
-    return sensor_word(l, now_ms);
+const char *web_live_sensor_word(web_live_t *l, long long now_ms) {
+    pthread_mutex_lock(&l->mu);
+    const char *w = sensor_word(l, now_ms);
+    pthread_mutex_unlock(&l->mu);
+    return w;
 }
 
 static long rate10(const web_live_t *l, long long now_ms) {

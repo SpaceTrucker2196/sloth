@@ -13,9 +13,14 @@
  * kept only when they look like one ([a-z0-9_.], 1..32 bytes).
  *
  * The device count is the number of `device` records in sloth's latest
- * snapshot pass, which is exactly the TUI's device_count: sloth emits
- * one `device` record per row of s->devices, contiguously, every poll
- * (src/jsonl.c jsonl_emit_devices()). A pass ends at the first record of
+ * snapshot pass, which is exactly the TUI's device_count: sloth's poll
+ * thread emits one `device` record per row of s->devices every poll
+ * (src/jsonl.c jsonl_emit_devices()). The pass is contiguous only among
+ * the poll thread's own records: the capture thread's dns, tls, quic,
+ * http, ntp, icmp and cleartext_cred records can land inside it, since
+ * no lock spans the pass. So only the poll thread's record types
+ * (POLL_TYPES in web_live.c) steer the count; every other type is
+ * passed over, and a pass ends at the first poll-thread record of
  * another type. A pass that a `socket_gap` or an undecodable line may
  * have cut short is not published; the previous count stands. A
  * snapshot batch with no `device` record at all (batches start with
@@ -190,6 +195,6 @@ const char *web_live_sock_word(int state);
 
 /* "ok", "degraded", "not_observing", "stale" or "unknown": the
  * sensor_health liveness, from the latest record and its age. */
-const char *web_live_sensor_word(const web_live_t *l, long long now_ms);
+const char *web_live_sensor_word(web_live_t *l, long long now_ms);
 
 #endif

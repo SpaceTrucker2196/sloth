@@ -111,7 +111,16 @@ static void puts_fd(int fd, const char *s) { put(fd, s, strlen(s)); }
  * iface rows, the tables before devices, n device rows (field order of
  * jsonl_emit_devices()), then beacons and sensor_health. host is the
  * hostname every device row carries. */
+static void sloth_batch_cut(int fd, int n, long long ts, const char *host,
+                            int dns_at);
 static void sloth_batch(int fd, int n, long long ts, const char *host) {
+    sloth_batch_cut(fd, n, ts, host, -1);
+}
+
+/* The same, with one capture-thread dns record landing before device
+ * row dns_at, as it can when the capture thread writes mid-pass. */
+static void sloth_batch_cut(int fd, int n, long long ts, const char *host,
+                            int dns_at) {
     static char b[1 << 20];
     size_t o = 0;
     o += (size_t)snprintf(b + o, sizeof(b) - o,
@@ -125,7 +134,11 @@ static void sloth_batch(int fd, int n, long long ts, const char *host) {
         "\"owner\":\"\",\"first_seen\":1,\"last_seen\":1,\"conn_count\":1,"
         "\"rx_rate\":0.0,\"tx_rate\":0.0,\"rx_bytes\":0,\"tx_bytes\":0}\n",
         ts, ts, ts);
-    for (int i = 0; i < n; i++)
+    for (int i = 0; i < n; i++) {
+        if (i == dns_at)
+            o += (size_t)snprintf(b + o, sizeof(b) - o,
+                "{\"type\":\"dns\",\"ts\":%lld,\"src\":\"10.0.0.9\",\"dst\":\"10.0.0.1\","
+                "\"qname\":\"mid-pass.example\",\"qtype\":1,\"rcode\":0,\"answers\":1}\n", ts);
         o += (size_t)snprintf(b + o, sizeof(b) - o,
             "{\"type\":\"device\",\"ts\":%lld,\"mac\":\"02:00:00:00:%02x:%02x\","
             "\"ip\":\"10.0.%d.%d\",\"hostname\":\"%s\",\"vendor\":\"\",\"last_ssid\":\"\","
@@ -135,6 +148,7 @@ static void sloth_batch(int fd, int n, long long ts, const char *host) {
             "\"setup_mode\":0,\"cam_signals\":0,\"cam_score\":0,\"cam_evidence\":\"\","
             "\"cam_vetoes\":\"\",\"cam_conflict\":0,\"dhcp_prl\":\"\",\"dhcp_vci\":\"\"}\n",
             ts, i / 256, i % 256, i / 256, i % 256, host, ts);
+    }
     o += (size_t)snprintf(b + o, sizeof(b) - o,
         "{\"type\":\"beacon\",\"ts\":%lld,\"ssid\":\"<svg onload=alert(1)>\","
         "\"bssid\":\"02:00:00:00:ff:01\",\"signal_dbm\":-50,\"channel\":6}\n"
@@ -392,6 +406,32 @@ static void device_passes(int fd, uint16_t port) {
     WT_HAS(h, "\"socket\":\"connected\"");
     WT_HAS(h, "\"socket_connects\":1,");
     WT_HAS(h, "\"socket_decode_errors\":0,");
+
+    /* The capture thread's records land inside a pass on a real sloth
+     * (no lock spans one): the count is still the rows sent. Seen red
+     * (150, 290, then 1 for the dns before the last row) with the poll_type() return removed from
+     * web_live.c devices_step(). */
+    static const int at[] = { 150, 10, 299 };
+    for (size_t k = 0; k < sizeof(at) / sizeof(at[0]); k++) {
+        long long t0 = mono_ms();
+        for (int rep = 0; rep < 3; rep++)
+            sloth_batch_cut(fd, 300, ts++, "h", at[k]);
+        long got = -9;
+        while (mono_ms() - t0 < 5000) {
+            got = http_devices(port);
+            if (got == 300) break;
+            nap(10);
+        }
+        if (got != 300)
+            fprintf(stderr, "    dns at row %d: /api/live says %ld\n", at[k], got);
+        WT_EQ(got, 300);
+        /* then a pass of another size, so the next 300 is not stale */
+        sloth_batch(fd, 1, ts++, "h");
+        sloth_batch(fd, 1, ts++, "h");
+        t0 = mono_ms();
+        while (mono_ms() - t0 < 5000 && http_devices(port) != 1) nap(10);
+        WT_EQ(http_devices(port), 1);
+    }
 }
 
 /* Spec §12, M1 acceptance: "Overview shows the same device count as
@@ -591,6 +631,55 @@ static void test_tcp_loopback(void) {
     close(lfd);
 }
 
+/* A connect that never completes gives up at connect_ms and backs off,
+ * rather than hanging the client. The listener's accept queue is full
+ * (backlog 0, one connection held unaccepted), so Linux drops the next
+ * SYN and the client's non-blocking connect stays EINPROGRESS. Costs
+ * WEB_SOCK_CONNECT_MS of wall time. Seen red (no "timed out" error in
+ * 2x WEB_SOCK_CONNECT_MS) with the deadline branch in dial() disabled;
+ * a stop still ended the run, through the stop pipe. */
+static void test_connect_timeout(void) {
+    uint16_t port;
+    int lfd = tcp_listen(&port);
+    WT_ASSERT(lfd >= 0);
+    if (lfd < 0) return;
+    WT_EQ(listen(lfd, 0), 0);
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    a.sin_port = htons(port);
+    int fill[4];
+    for (int i = 0; i < 4; i++) {
+        fill[i] = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+        if (fill[i] >= 0) (void)connect(fill[i], (struct sockaddr *)&a, sizeof(a));
+    }
+    nap(50);
+    char spec[64], err[256];
+    snprintf(spec, sizeof(spec), "tcp:127.0.0.1:%u", (unsigned)port);
+    web_sockspec_t sp;
+    WT_EQ(web_sockspec_parse(spec, &sp, err, sizeof(err)), 0);
+    web_live_init(&g_live, spec);
+    long long t0 = mono_ms();
+    WT_EQ(web_ingest_start(&g_ing, &sp, 20, 100, &g_live, err, sizeof(err)), 0);
+    char want[64];
+    snprintf(want, sizeof(want), "connect: timed out after %d ms", WEB_SOCK_CONNECT_MS);
+    int seen = 0;
+    while (!seen && mono_ms() - t0 < 2 * WEB_SOCK_CONNECT_MS) {
+        pthread_mutex_lock(&g_live.mu);
+        seen = g_live.last_error_ms >= 0 && !strcmp(g_live.last_error, want);
+        pthread_mutex_unlock(&g_live.mu);
+        if (!seen) nap(20);
+    }
+    long long took = mono_ms() - t0;
+    WT_ASSERT(seen);
+    WT_ASSERT(took >= WEB_SOCK_CONNECT_MS - 50);
+    WT_EQ(live_ul(&g_live.connects), 0);
+    stop_ingest();
+    for (int i = 0; i < 4; i++) if (fill[i] >= 0) close(fill[i]);
+    close(lfd);
+}
+
 /* The lines a socket can deliver that sloth would not write, mixed in
  * with ones it would. Each bad line costs itself and nothing else. */
 static void test_hostile_stream(void) {
@@ -679,6 +768,7 @@ void run_ingest_tests(void) {
     WT_RUN(test_backoff_without_a_peer);
     WT_RUN(test_instant_close_is_backed_off);
     WT_RUN(test_tcp_loopback);
+    WT_RUN(test_connect_timeout);
     WT_RUN(test_hostile_stream);
     WT_RUN(test_client_never_writes);
 }

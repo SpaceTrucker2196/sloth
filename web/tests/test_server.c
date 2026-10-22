@@ -550,31 +550,59 @@ static void test_slow_client_times_out(void) {
 }
 
 /* Every slot held by an idle client: the next peer is admitted by the
- * list but closed as busy, and the server recovers once they time out. */
+ * list but closed as busy, and the server recovers once they go.
+ *
+ * Waits on the server's own counters, not a fixed sleep: under load
+ * (parallel ASan runs) a 100 ms nap did not cover the accepts, and a
+ * 300 ms idle timeout freed a slot before the extra peer arrived, so
+ * it was served (n 219, busy 0). The timeout is now well past every
+ * wait here, and recovery is retried until it shows. */
 static void test_slots_exhausted(void) {
     web_config_t c;
     base_cfg(&c, AF_INET);
-    c.timeout_ms = 300;
+    c.timeout_ms = 5000;
     running_t r;
     WT_EQ(start(&r, &c), 0);
     if (!r.s) return;
     uint16_t port = web_server_port(r.s);
     int fds[WEB_MAX_CONNS];
     for (int i = 0; i < WEB_MAX_CONNS; i++) fds[i] = dial(AF_INET, port);
-    /* Give the loop time to accept all of them into slots. */
-    struct timespec ts = { 0, 100 * 1000 * 1000 };
-    nanosleep(&ts, NULL);
+    web_stats_t st;
+    long long t0 = mono_ms();
+    do {
+        web_server_stats(r.s, &st);
+        if (st.accepted >= WEB_MAX_CONNS) break;
+        struct timespec ts = { 0, 2 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    } while (mono_ms() - t0 < 3000);
+    WT_EQ(st.accepted, WEB_MAX_CONNS);
+    WT_EQ(st.busy, 0);
     char out[1024];
     static const char get[] = "GET /nope HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
     size_t n = exchange(AF_INET, port, get, sizeof(get) - 1, out, sizeof(out));
     WT_EQ(n, 0);
-    for (int i = 0; i < WEB_MAX_CONNS; i++) if (fds[i] >= 0) close(fds[i]);
-    nanosleep(&ts, NULL);
-    exchange(AF_INET, port, get, sizeof(get) - 1, out, sizeof(out));
-    WT_HAS(out, "HTTP/1.1 404 Not Found\r\n");
-    web_stats_t st;
-    stop(&r, &st);
+    /* The loop closes the extra peer before it counts it. */
+    t0 = mono_ms();
+    do {
+        web_server_stats(r.s, &st);
+        if (st.busy) break;
+        struct timespec ts = { 0, 2 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    } while (mono_ms() - t0 < 1000);
     WT_EQ(st.busy, 1);
+    for (int i = 0; i < WEB_MAX_CONNS; i++) if (fds[i] >= 0) close(fds[i]);
+    /* The loop frees the slots as it reads each EOF; until it has, a
+     * peer is busy again, which is not what is under test here. */
+    t0 = mono_ms();
+    do {
+        exchange(AF_INET, port, get, sizeof(get) - 1, out, sizeof(out));
+        if (strstr(out, "HTTP/1.1 404 Not Found\r\n")) break;
+        struct timespec ts = { 0, 10 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    } while (mono_ms() - t0 < 3000);
+    WT_HAS(out, "HTTP/1.1 404 Not Found\r\n");
+    stop(&r, &st);
+    WT_ASSERT(st.busy >= 1);
     WT_EQ(st.refused, 0);
 }
 

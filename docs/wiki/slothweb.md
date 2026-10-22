@@ -252,11 +252,16 @@ carries them (active reverse DNS is cut, rulings header).
 
 ### The device count
 
-sloth rebuilds its device table each poll and writes one `device`
-record per row in one contiguous run (`jsonl_emit_devices()`), so the
-length of that run is the TUI's `device_count` (rows, not distinct
-MACs). slothweb publishes a run's length when the first record of
-another type ends it. A run that a `socket_gap`, an undecodable line or
+sloth's poll thread rebuilds its device table each poll and writes one
+`device` record per row (`jsonl_emit_devices()`), so the number of
+device rows in one pass is the TUI's `device_count` (rows, not distinct
+MACs). The pass is contiguous only among the poll thread's records: the
+capture thread's `dns`, `tls`, `quic`, `http`, `ntp`, `icmp` and
+`cleartext_cred` records go through the same writer concurrently, with
+no lock spanning the pass, and can land inside it. So slothweb lets
+only the poll thread's record types steer the count, passes over every
+other type, and publishes a run's length when the first poll-thread
+record of another type ends it. A run that a `socket_gap`, an undecodable line or
 an implausible `type` may have shortened is not published and the
 previous count stands. The snapshot batch begins with the `iface`
 records (`jsonl_emit_state_snapshots()`), so a batch with no device
