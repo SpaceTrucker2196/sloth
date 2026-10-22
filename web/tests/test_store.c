@@ -932,6 +932,60 @@ static void test_long_stop_expiry_keeps_wal_small(void) {
     rm_store(p);
 }
 
+/* Expiry finds a batch's tiles by each series' oldest row, so batches
+ * with nothing expired are skipped and a series whose expired rows span
+ * many tiles is emptied tile by tile. 600 series (three batches of
+ * WEB_STORE_EXPIRE_SERIES), each with a live row; one expired row on
+ * the first series; the last ten with 3 to 30 expired rows 1,000 s
+ * apart, 3 to 12 tiles each and starting at different t, and one row at
+ * exactly the cutoff, which stays. Seen red with a series taken as done
+ * after its first tile (its oldest t not sought again): 31 of the 166
+ * expired rows dropped. */
+static void test_sparse_expiry_across_batches_and_tiles(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "sparse.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    const long long now = 1792627200 + 3 * 86400;
+    const long long cutoff = now - 86400;
+    static web_qrow_t r[1024];
+    char k[32];
+    size_t n = 0;
+    long long expired = 0;
+    for (int i = 0; i < 600; i++) {
+        snprintf(k, sizeof(k), "10.1.%d.%d", i >> 8, i & 255);
+        r[n++] = row(WEB_TIER_FINE, WM_HOST_RX, k, now - 100, 1, 1, 1, 1);
+    }
+    WT_EQ(web_store_write(&S, r, n), 0);        /* ids in key order */
+    n = 0;
+    r[n++] = row(WEB_TIER_FINE, WM_HOST_RX, "10.1.0.0", cutoff - 5000, 1, 1, 1, 1);
+    expired++;
+    for (int i = 590; i < 600; i++) {
+        snprintf(k, sizeof(k), "10.1.%d.%d", i >> 8, i & 255);
+        int rows = (i - 590) * 3 + 3;
+        for (int j = 0; j < rows; j++)
+            r[n++] = row(WEB_TIER_FINE, WM_HOST_RX, k,
+                         cutoff - 10 - (long long)(i - 590) * 70 - j * 1000LL,
+                         1, 1, 1, 1);
+        expired += rows;
+        r[n++] = row(WEB_TIER_FINE, WM_HOST_RX, k, cutoff, 1, 1, 1, 1);
+    }
+    WT_EQ(web_store_write(&S, r, n), 0);
+    WT_EQ(web_store_count(&S, WEB_TIER_FINE), 600 + 10 + expired);
+    WT_EQ(web_store_compact(&S, now, 30, 256LL << 20), 0);
+    web_store_stats_t st;
+    web_store_stats(&S, &st);
+    WT_EQ(expired, 166);
+    WT_EQ(st.dropped_expired, expired);
+    WT_EQ(web_store_count(&S, WEB_TIER_FINE), 600 + 10);
+    web_point_t pt[4];
+    int more;
+    WT_EQ(web_store_query(&S, WEB_TIER_FINE, WM_HOST_RX, "10.1.2.87",
+                          0, now, pt, 4, &more), 2);
+    WT_EQ(pt[1].t, cutoff);
+    web_store_close(&S);
+    rm_store(p);
+}
+
 static long long disk_bytes(const char *p) {
     char w[200];
     struct stat sb;
@@ -1152,6 +1206,7 @@ void run_store_tests(void) {
     WT_RUN(test_compaction_retention);
     WT_RUN(test_ceiling_drops_oldest_fine_first);
     WT_RUN(test_long_stop_expiry_keeps_wal_small);
+    WT_RUN(test_sparse_expiry_across_batches_and_tiles);
     WT_RUN(test_ceiling_spares_global_series);
     WT_RUN(test_ceiling_holds_under_key_churn);
     WT_RUN(test_churn_two_samples_not_in_long_tiers);

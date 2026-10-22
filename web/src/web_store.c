@@ -191,21 +191,29 @@ static const char *const Q_ROW[WEB_TIER_COUNT] = {
  * pages (P, Q the rows a page holds), some 2,000 pages, whatever the
  * size of the store. One delete of every expired row in one
  * transaction changed every page holding one and after a long stop
- * grew the WAL to the size of the file. EXP_NEXT finds the tile's
- * start: the oldest expired t of the series range at or after ?1,
- * read off the t index (the + keeps the planner off the key). */
+ * grew the WAL to the size of the file. EXP_NEXT is a series' oldest
+ * t, a seek on the key, so a batch with nothing expired costs one seek
+ * per series and the tile's start is the least of them. Read off the t
+ * index instead (the oldest expired t of the batch's id range), an
+ * empty batch walked every expired row of the tier: at 100,000 series
+ * with the expired rows on the last 5,000, 5.9 s of 371 such walks. */
 static const char *const EXP_DEL[WEB_TIER_COUNT] = {
     "DELETE FROM fine WHERE series=?1 AND t>=?2 AND t<?3",
     "DELETE FROM minute WHERE series=?1 AND t>=?2 AND t<?3",
     "DELETE FROM hour WHERE series=?1 AND t>=?2 AND t<?3",
 };
 static const char *const EXP_NEXT[WEB_TIER_COUNT] = {
-    "SELECT t FROM fine WHERE t>=?1 AND t<?2 AND +series BETWEEN ?3 AND ?4"
-    " ORDER BY t LIMIT 1",
-    "SELECT t FROM minute WHERE t>=?1 AND t<?2 AND +series BETWEEN ?3 AND ?4"
-    " ORDER BY t LIMIT 1",
-    "SELECT t FROM hour WHERE t>=?1 AND t<?2 AND +series BETWEEN ?3 AND ?4"
-    " ORDER BY t LIMIT 1",
+    "SELECT t FROM fine WHERE series=?1 ORDER BY t LIMIT 1",
+    "SELECT t FROM minute WHERE series=?1 ORDER BY t LIMIT 1",
+    "SELECT t FROM hour WHERE series=?1 ORDER BY t LIMIT 1",
+};
+/* Whether a tier has any row older than ?1 at all: one seek on the t
+ * index, so a tier with nothing expired (the minute and hour tiers on
+ * most compactions) costs no per-series seek. */
+static const char *const EXP_ANY[WEB_TIER_COUNT] = {
+    "SELECT 1 FROM fine WHERE t<?1 LIMIT 1",
+    "SELECT 1 FROM minute WHERE t<?1 LIMIT 1",
+    "SELECT 1 FROM hour WHERE t<?1 LIMIT 1",
 };
 /* The ceiling drops the oldest slice of one class of rows at a time,
  * in this order: fine rows (any series; the 24 h tier is the one the
@@ -859,43 +867,59 @@ long long web_store_ceiling(web_store_t *s, long long max_bytes) {
 
 /* The prepared statements of one tier's expiry. */
 typedef struct {
-    sqlite3_stmt *del, *next;
+    sqlite3_stmt *del, *next, *any;
 } web_exp_t;
 
-/* The oldest expired t of series a..b at or after from, or -1. */
-static long long exp_next(sqlite3_stmt *st, long long from, long long cutoff,
-                          long long a, long long b, int *bad) {
+/* The oldest t of series id if it is older than cutoff, else LLONG_MAX
+ * (nothing expired, or no row). */
+static long long exp_next(sqlite3_stmt *st, long long id, long long cutoff,
+                          int *bad) {
     sqlite3_reset(st);
-    sqlite3_bind_int64(st, 1, from);
-    sqlite3_bind_int64(st, 2, cutoff);
-    sqlite3_bind_int64(st, 3, a);
-    sqlite3_bind_int64(st, 4, b);
-    long long t = -1;
+    sqlite3_bind_int64(st, 1, id);
+    long long t = LLONG_MAX;
     int rc = sqlite3_step(st);
     if (rc == SQLITE_ROW) t = sqlite3_column_int64(st, 0);
     else if (rc != SQLITE_DONE) *bad = 1;
     sqlite3_reset(st);
-    return t;
+    return t < cutoff ? t : LLONG_MAX;
+}
+
+/* Whether a tier has a row older than cutoff. */
+static int exp_any(sqlite3_stmt *st, long long cutoff, int *bad) {
+    sqlite3_reset(st);
+    sqlite3_bind_int64(st, 1, cutoff);
+    int rc = sqlite3_step(st);
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) *bad = 1;
+    sqlite3_reset(st);
+    return rc == SQLITE_ROW;
 }
 
 /* Every row of every tier older than its cutoff, tile by tile (see
- * EXP_DEL). Rows dropped, or -1. */
+ * EXP_DEL). nx[i] is batch[i]'s oldest expired t; a tile starts at the
+ * least of them, deletes only in the series with a row in it, and seeks
+ * again only those. Rows dropped, or -1. */
 static long long expire(web_store_t *s, const long long cutoff[WEB_TIER_COUNT]) {
     web_exp_t ex[WEB_TIER_COUNT];
     sqlite3_stmt *ids = NULL;
     memset(ex, 0, sizeof(ex));
     long long total = 0, last = 0;
-    int bad = 0;
-    long long batch[WEB_STORE_EXPIRE_SERIES];
+    int bad = 0, nlive = 0, live[WEB_TIER_COUNT] = { 0, 0, 0 };
+    long long batch[WEB_STORE_EXPIRE_SERIES], nx[WEB_STORE_EXPIRE_SERIES];
     if (sqlite3_prepare_v2(s->db, "SELECT id FROM series WHERE id>?1 ORDER BY id"
                            " LIMIT ?2", -1, &ids, NULL) != SQLITE_OK)
         bad = 1;
     for (int t = 0; t < WEB_TIER_COUNT && !bad; t++)
         if (sqlite3_prepare_v2(s->db, EXP_DEL[t], -1, &ex[t].del, NULL) != SQLITE_OK ||
             sqlite3_prepare_v2(s->db, EXP_NEXT[t], -1, &ex[t].next, NULL)
+                != SQLITE_OK ||
+            sqlite3_prepare_v2(s->db, EXP_ANY[t], -1, &ex[t].any, NULL)
                 != SQLITE_OK)
             bad = 1;
-    while (!bad) {
+    for (int t = 0; t < WEB_TIER_COUNT && !bad; t++) {
+        live[t] = exp_any(ex[t].any, cutoff[t], &bad);
+        nlive += live[t];
+    }
+    while (!bad && nlive) {
         int n = 0;
         sqlite3_reset(ids);
         sqlite3_bind_int64(ids, 1, last);
@@ -906,14 +930,19 @@ static long long expire(web_store_t *s, const long long cutoff[WEB_TIER_COUNT]) 
         if (n == 0) break;
         last = batch[n - 1];
         for (int t = 0; t < WEB_TIER_COUNT && !bad; t++) {
+            if (!live[t]) continue;
             const long long span = (long long)WEB_STORE_EXPIRE_STEPS * web_tier_step(t);
-            long long lo = exp_next(ex[t].next, LLONG_MIN, cutoff[t], batch[0],
-                                    last, &bad);
-            while (!bad && lo >= 0) {
+            long long lo = LLONG_MAX;
+            for (int i = 0; i < n && !bad; i++) {
+                nx[i] = exp_next(ex[t].next, batch[i], cutoff[t], &bad);
+                if (nx[i] < lo) lo = nx[i];
+            }
+            while (!bad && lo != LLONG_MAX) {
                 long long hi = lo + span < cutoff[t] ? lo + span : cutoff[t];
                 if (sqlite3_exec(s->db, "BEGIN IMMEDIATE", NULL, NULL, NULL)
                         != SQLITE_OK) { bad = 1; break; }
                 for (int i = 0; i < n && !bad; i++) {
+                    if (nx[i] >= hi) continue;
                     sqlite3_reset(ex[t].del);
                     sqlite3_bind_int64(ex[t].del, 1, batch[i]);
                     sqlite3_bind_int64(ex[t].del, 2, lo);
@@ -929,7 +958,13 @@ static long long expire(web_store_t *s, const long long cutoff[WEB_TIER_COUNT]) 
                     break;
                 }
                 after_commit(s);
-                lo = exp_next(ex[t].next, hi, cutoff[t], batch[0], last, &bad);
+                long long next = LLONG_MAX;
+                for (int i = 0; i < n && !bad; i++) {
+                    if (nx[i] < hi)
+                        nx[i] = exp_next(ex[t].next, batch[i], cutoff[t], &bad);
+                    if (nx[i] < next) next = nx[i];
+                }
+                lo = next;
             }
         }
     }
@@ -937,6 +972,7 @@ static long long expire(web_store_t *s, const long long cutoff[WEB_TIER_COUNT]) 
     for (int t = 0; t < WEB_TIER_COUNT; t++) {
         sqlite3_finalize(ex[t].del);
         sqlite3_finalize(ex[t].next);
+        sqlite3_finalize(ex[t].any);
     }
     return bad ? -1 : total;
 }
