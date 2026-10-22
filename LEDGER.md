@@ -250,3 +250,4 @@
 | 44153ce | 2026-10-21T08:44:19Z | claude-opus-5-5 | 36 | 12274 | 12400474 | 883563 | 9.7942 | #144 slice 4: BLE rules, [*] view, BLE JSONL |
 | 5c7281e | 2026-10-21T17:52:53Z | claude-opus-5-5 | 28 | 6532 | 9969313 | 891552 | 9.2570 | MISSION.md view keys and rule location |
 | 0d069f5 | 2026-10-21T22:38:10Z | claude-opus-5-5 | 44 | 15734 | 16643337 | 1820886 | 18.2106 | slothweb W0 (#157) + M0 (#158) + CI wiring |
+| 992bbcb | 2026-10-22T01:31:59Z | claude-opus-5-5 | 30 | 9835 | 9489028 | 1864172 | 17.0080 | slothweb M1 (#159): ingest, /api/live, Overview |
