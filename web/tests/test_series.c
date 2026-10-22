@@ -465,6 +465,86 @@ static void test_queue_high_water_flushes_early(void) {
     snprintf(s2, sizeof(s2), "%s-shm", p); unlink(s2);
     rmdir(dir);
 }
+
+/* One sample of every metric for every key its class can hold at
+ * --web-max-keys 8192, at now; how many series that is. */
+static size_t sample_all_keys(long long now) {
+    char k[WEB_KEY_MAX + 1];
+    size_t n = 0;
+    for (int m = 0; m < WM_COUNT; m++) {
+        int kc = web_metric_defs[m].kclass;
+        int cap = kc == WEB_KC_GLOBAL ? 1 : kc == WEB_KC_DEV ? WEB_MAX_KEYS_MAX
+                : kc == WEB_KC_HOST ? WEB_MAX_KEYS_MAX / 2
+                : kc == WEB_KC_IFACE ? WEB_IFACE_KEYS
+                : kc == WEB_KC_CHANNEL ? WEB_CHANNEL_KEYS : WEB_ALERT_KEYS;
+        for (int i = 0; i < cap; i++) {
+            switch (kc) {
+            case WEB_KC_GLOBAL:  k[0] = '\0'; break;
+            case WEB_KC_DEV:     snprintf(k, sizeof(k), "02:00:00:00:%02x:%02x",
+                                          i >> 8, i & 0xff); break;
+            case WEB_KC_HOST:    snprintf(k, sizeof(k), "10.0.%d.%d", i >> 8,
+                                          i & 0xff); break;
+            case WEB_KC_IFACE:   snprintf(k, sizeof(k), "eth%d", i); break;
+            default:             snprintf(k, sizeof(k), "%d", i + 1); break;
+            }
+            web_rollup_add(&ru, m, k, 1, now);
+            n++;
+        }
+    }
+    return n;
+}
+
+/* Shutdown writes what is queued before close_all() adds its rows: the
+ * queue is sized for close_all()'s rows on their own
+ * (web_rollup.h), not on top of a backlog. Every series at --web-max-
+ * keys 8192, sampled every 10 s for 40 s inside one minute with no
+ * flush, leaves four fine rows a series queued; web_tsdb_flush_all() on
+ * a real store then loses nothing, and every series' open fine, minute
+ * and hour bucket is in the store. Seen red with the leading flush()
+ * removed from web_tsdb_flush_all(): queue_dropped 74,050, and the
+ * fine tier 296,200 rows of 370,250 (every series' open one lost). */
+static void test_flush_all_writes_backlog_first(void) {
+    char dir[64] = "/tmp/slothweb-fall-XXXXXX";
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    char p[128], err[512], e2[64];
+    snprintf(p, sizeof(p), "%s/f.db", dir);
+    static web_store_t st;
+    WT_EQ(web_store_open(&st, p, err, sizeof(err)), 0);
+    WT_EQ(web_rollup_init(&ru, WEB_MAX_KEYS_MAX, 1, e2, sizeof(e2)), 0);
+    WT_EQ(web_tsdb_init(&ts, &ru, &st, 30, 256, NULL, NULL), 0);
+    const long long B = T + 600;                 /* a whole minute */
+    size_t series = 0;
+    for (long long now = B; now <= B + 40; now += 10)
+        series = sample_all_keys(now);
+    web_rollup_stats_t rs;
+    web_rollup_stats(&ru, &rs);
+    WT_EQ(rs.series, series);
+    WT_EQ(rs.q_dropped, 0);
+    WT_EQ(rs.queue_rows, 4 * series);
+    /* More than close_all()'s rows fit beside: the order matters. */
+    WT_ASSERT(rs.queue_rows + 3 * series > rs.queue_cap);
+    web_tsdb_flush_all(&ts);
+    web_rollup_stats(&ru, &rs);
+    WT_EQ(rs.q_dropped, 0);
+    WT_EQ(rs.queue_rows, 0);
+    WT_EQ(web_store_count(&st, WEB_TIER_FINE), 5 * (long long)series);
+    WT_EQ(web_store_count(&st, WEB_TIER_MINUTE), series);
+    WT_EQ(web_store_count(&st, WEB_TIER_HOUR), series);
+    web_point_t pt[2];
+    int more;
+    WT_EQ(web_store_query(&st, WEB_TIER_HOUR, WM_HOST_RX, "10.0.15.255",
+                          T, T + 3600, pt, 2, &more), 1);
+    WT_EQ(pt[0].t, T);
+    WT_EQ(pt[0].n, 5);
+    web_tsdb_destroy(&ts);
+    web_rollup_destroy(&ru);
+    web_store_close(&st);
+    unlink(p);
+    char s2[160];
+    snprintf(s2, sizeof(s2), "%s-wal", p); unlink(s2);
+    snprintf(s2, sizeof(s2), "%s-shm", p); unlink(s2);
+    rmdir(dir);
+}
 #endif
 
 /* ── spec §12, M2 ───────────────────────────────────────────────────────
@@ -779,6 +859,7 @@ void run_series_tests(void) {
     WT_RUN(test_worst_case_fits);
     WT_RUN(test_merged_answer_capped);
     WT_RUN(test_queue_high_water_flushes_early);
+    WT_RUN(test_flush_all_writes_backlog_first);
 #endif
     WT_RUN(test_acceptance_one_hour);
     WT_RUN(test_store_thread);
