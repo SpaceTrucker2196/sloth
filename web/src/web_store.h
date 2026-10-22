@@ -97,6 +97,11 @@ typedef struct {
     unsigned long compactions;
     unsigned long long dropped_expired, dropped_ceiling;
     unsigned long ceiling_runs;           /* passes that dropped rows */
+    unsigned long ceiling_held;           /* passes that dropped nothing
+                                             because the analysis state
+                                             alone was over the ceiling */
+    long long     analysis_bytes;         /* its pages when last measured
+                                             (dbstat), -1 not measurable */
     unsigned long bl_rows_reused;         /* baseline rows a new entry
                                              took over (a delete that
                                              had not reached the file) */
@@ -111,6 +116,9 @@ typedef struct {
     struct sqlite3_stmt *upd_row[WEB_TIER_COUNT];
     struct sqlite3_stmt *q_row[WEB_TIER_COUNT];
     struct sqlite3_stmt *an[WEB_STORE_AN_STMTS];  /* the analysis state's */
+    long long            an_bytes;  /* the analysis state's pages */
+    int                  an_fresh;  /* an_bytes is current; cleared by
+                                       every baseline write */
     pthread_mutex_t      mu;      /* guards st */
     pthread_mutex_t      rmu;     /* serialises rd */
     int                  mu_init;
@@ -148,11 +156,20 @@ int  web_store_write(web_store_t *s, const web_qrow_t *rows, size_t n);
  *
  * The ceiling is the whole file's used pages, the analysis state (v3's
  * baseline, baseline_cell, episode, fanout and reported tables)
- * included, but only time-series rows can be dropped. If the analysis
- * state alone is over the ceiling, every check drops every bucket (the
- * history A9 and the MAD ratio read) and the file is still over it. A
- * small --web-max-mb with a large --web-max-keys can do that: slothweb
- * warns at start when the ceiling is below
+ * included, but only time-series rows can be dropped. When the analysis
+ * state's own pages (measured with dbstat) are at or over the ceiling,
+ * no number of dropped buckets can bring the file under it, and dropping
+ * them would only erase the history A9 and the MAD ratio read: the pass
+ * then drops nothing and is counted in ceiling_held (/api/health
+ * store_ceiling_held), and the file stays over until the baselines
+ * shrink or the ceiling is raised. The measurement is taken when a pass
+ * is over the ceiling and kept until the next baseline write (the
+ * baselines are nearly all of it; the episode, fan-out and reported
+ * tables are bounded at a few hundred KB, and the hourly baseline write
+ * refreshes the figure). A library without dbstat cannot measure it
+ * (analysis_bytes -1) and keeps the old behaviour: drop until under or
+ * out of rows. A small --web-max-mb with a large --web-max-keys can get
+ * here: slothweb warns at start when the ceiling is below
  * web_store_analysis_max_bytes(). */
 long long web_store_ceiling(web_store_t *s, long long max_bytes);
 

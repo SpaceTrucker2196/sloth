@@ -47,10 +47,17 @@
  *                the reported set (it outlives a restart) is keyed by
  *                first_seen and loses an entry only when that leaves the
  *                window; full, it refuses (counted) rather than forget a
- *                MAC it would then report again. More than
- *                WEB_ANOM_A2_BURST new MACs in one minute are one
- *                episode keyed "", not one each, and are not put in the
- *                reported set (a flood would fill it). At most
+ *                MAC it would then report again; a refusal opens (or
+ *                holds) an episode keyed WEB_ANOM_A2_FULL_KEY whose
+ *                evidence says how many were refused and names at most
+ *                three, and the refused MACs are tried again each
+ *                minute. More than WEB_ANOM_A2_BURST new MACs in one
+ *                minute, or more than WEB_ANOM_A2_HOUR_MAX in a rolling
+ *                hour (counted from the MACs folded or reported, in
+ *                memory: a restart starts it at 0), are one episode
+ *                keyed "", held while the hour is over, not one each,
+ *                and are not put in the reported set (a flood, or a
+ *                trickle of a few a minute, would fill it). At most
  *                WEB_ANOM_A2_CHECKS_PER_MIN store lookups a minute; the
  *                rest wait a minute (counted). Randomised MACs are left
  *                out: every rotation is new by construction, and A5 is
@@ -174,6 +181,8 @@ enum { WEB_EP_FREE = 0, WEB_EP_BUILDING, WEB_EP_OPEN, WEB_EP_CLOSED };
 #define WEB_ANOM_A2_WINDOW_S    86400
 #define WEB_ANOM_A2_SKEW_S      300
 #define WEB_ANOM_A2_BURST       8
+#define WEB_ANOM_A2_HOUR_MAX    16
+#define WEB_ANOM_A2_FULL_KEY    "reported-set-full"
 #define WEB_ANOM_A2_CHECKS_PER_MIN 256
 #define WEB_ANOM_A3_MEAN_MAX    0.1
 #define WEB_ANOM_A3_MIN_N       4
@@ -261,6 +270,12 @@ void web_anomaly_attach(web_anomaly_t *a, web_tsdb_t *t);
  * whose last_seen is older than now_s - WEB_ANOM_KEEP_S are dropped.
  * 0, or -1 (the store refused a read; the engine starts empty). */
 int  web_anomaly_restore(web_anomaly_t *a, long long now_s);
+
+/* One episode as web_anomaly_restore() takes it from the store, with
+ * the same checks (a bad id, time, state, kind or metric is dropped;
+ * scores are clamped to 0..100). For the tests, which can hand it
+ * values the store's reader never produces. */
+void web_anomaly_restore_episode(web_anomaly_t *a, const web_store_ep_t *s);
 
 /* The two hooks (also called directly by the tests). */
 void web_anomaly_rows(void *a, const web_qrow_t *rows, size_t n);

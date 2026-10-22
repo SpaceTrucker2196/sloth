@@ -120,6 +120,10 @@ static void tsdb_health(web_tsdb_t *t, web_jw_t *w) {
     web_jw_int(w, (long long)ss.dropped_ceiling);
     web_jw_raw(w, ",\"store_ceiling_runs\":");
     web_jw_int(w, (long long)ss.ceiling_runs);
+    web_jw_raw(w, ",\"store_ceiling_held\":");
+    web_jw_int(w, (long long)ss.ceiling_held);
+    web_jw_raw(w, ",\"store_analysis_bytes\":");
+    web_jw_int(w, open ? ss.analysis_bytes : -1);
     web_jw_raw(w, ",\"store_baseline_rows_reused\":");
     web_jw_int(w, (long long)ss.bl_rows_reused);
     web_jw_raw(w, ",\"retain_days\":");     web_jw_int(w, t->retain_days);

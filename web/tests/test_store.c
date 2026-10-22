@@ -1402,6 +1402,76 @@ static void churn_samples(int samples) {
 static void test_churn_two_samples_not_in_long_tiers(void) { churn_samples(2); }
 static void test_churn_three_samples_not_in_long_tiers(void) { churn_samples(3); }
 
+/* The analysis state alone over the ceiling: no number of dropped
+ * buckets could bring the file under, so the ceiling drops none (the
+ * history A9 and the MAD ratio read) and counts the pass held, at the
+ * batch check and in the compaction alike. 1,000 baselines of 168
+ * cells (2.8 MB of pages here) and 20 series of 2,000 fine rows; a
+ * ceiling of 1 MB holds, one between the analysis state and the file
+ * trims as before. Seen red with the hold test removed from
+ * ceiling_loop() (every fine row dropped, then the minute rows, the
+ * file still over). */
+static void test_ceiling_holds_when_analysis_alone_is_over(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "ceilan.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_store_close(&S);
+    raw_exec(p, "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c"
+                " WHERE x<1000) INSERT INTO baseline (id,metric,key,"
+                "last_active,last_fed,first_fed) SELECT x,'dns.queries',"
+                "'10.0.'||(x/256)||'.'||(x%256),x*3600,x*3600,x*3600 FROM c;"
+                "WITH RECURSIVE k(c) AS (SELECT 0 UNION ALL SELECT c+1 FROM k"
+                " WHERE c<167) INSERT INTO baseline_cell (cell,id,mean,var,n)"
+                " SELECT k.c,b.id,1.0,0.0,1 FROM k CROSS JOIN baseline b;");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    const long long now = 1792627200;
+    static web_qrow_t r[2000];
+    char k[32];
+    for (int s = 0; s < 20; s++) {
+        snprintf(k, sizeof(k), "10.1.%d.1", s);
+        for (int b = 0; b < 2000; b++)
+            r[b] = row(WEB_TIER_FINE, WM_HOST_RX, k, now - 20000 + b * 10,
+                       b, 1, b, b);
+        WT_EQ(web_store_write(&S, r, 2000), 0);
+    }
+    r[0] = row(WEB_TIER_MINUTE, WM_HOST_RX, "10.1.0.1", now - 600, 1, 1, 1, 1);
+    WT_EQ(web_store_write(&S, r, 1), 0);
+    web_store_stats_t st;
+    web_store_stats(&S, &st);
+    WT_EQ(st.analysis_bytes, -1);              /* not measured yet */
+    const long long small = 1LL << 20;
+    WT_ASSERT(st.bytes > small);
+    WT_EQ(web_store_ceiling(&S, small), 0);
+    web_store_stats(&S, &st);
+    WT_EQ(st.ceiling_held, 1);
+    WT_EQ(st.ceiling_runs, 0);
+    WT_EQ(st.dropped_ceiling, 0);
+    WT_ASSERT(st.analysis_bytes >= small);
+    WT_ASSERT(st.bytes > small);
+    WT_EQ(web_store_count(&S, WEB_TIER_FINE), 40000);
+    WT_EQ(web_store_count(&S, WEB_TIER_MINUTE), 1);
+    WT_EQ(web_store_compact(&S, now, 30, small), 0);
+    web_store_stats(&S, &st);
+    WT_EQ(st.ceiling_held, 2);
+    WT_EQ(st.dropped_ceiling, 0);
+    WT_EQ(web_store_count(&S, WEB_TIER_FINE), 40000);
+    /* Room for the analysis state and some rows: the ceiling trims. */
+    long long an = st.analysis_bytes;
+    fprintf(stderr, "  analysis state %lld bytes of a %lld byte store\n", an,
+            st.bytes);
+    WT_ASSERT(an > 0 && an < st.bytes);
+    long long mid = an + (st.bytes - an) / 2;
+    WT_ASSERT(web_store_ceiling(&S, mid) > 0);
+    web_store_stats(&S, &st);
+    WT_EQ(st.ceiling_held, 2);
+    WT_EQ(st.ceiling_runs, 1);
+    WT_ASSERT(st.bytes <= mid);
+    long long left = web_store_count(&S, WEB_TIER_FINE);
+    WT_ASSERT(left > 0 && left < 40000);
+    web_store_close(&S);
+    rm_store(p);
+}
+
 /* Past the fine tier, the ceiling takes keyed minute and hour rows
  * before any row of a global series: those are one series per metric
  * whatever the traffic, and the long view of the whole network. Seen
@@ -1475,6 +1545,7 @@ void run_store_tests(void) {
     WT_RUN(test_long_stop_expiry_keeps_wal_small);
     WT_RUN(test_sparse_expiry_across_batches_and_tiles);
     WT_RUN(test_ceiling_spares_global_series);
+    WT_RUN(test_ceiling_holds_when_analysis_alone_is_over);
     WT_RUN(test_ceiling_holds_under_key_churn);
     WT_RUN(test_churn_two_samples_not_in_long_tiers);
     WT_RUN(test_churn_three_samples_not_in_long_tiers);

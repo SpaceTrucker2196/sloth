@@ -208,6 +208,7 @@ typedef struct {
 #define CAND_MAX    4096
 #define BL_BATCH    512
 #define BL_DEL_BATCH 256
+#define A2_WIN      60
 
 struct web_anom_priv {
     agg_t      *agg;
@@ -232,6 +233,10 @@ struct web_anom_priv {
                                    first_seen; evicting one costs only a
                                    second look at it */
     int         a2_checks;      /* evidence lookups this minute */
+    long long   a2_wmin[A2_WIN];/* A2's rolling hour: new MACs counted */
+    int         a2_wn[A2_WIN];  /* (folded or reported) in minute wmin */
+    char        a2_last[3][WEB_KEY_MAX + 1]; /* the latest folded MACs */
+    int         a2_nlast;
 
     kvtab_t     known;          /* A9: (flow metric, host) with history */
 
@@ -839,6 +844,24 @@ static int a2_old_evidence(web_anomaly_t *a, const char *mac, long long ts) {
     return 0;
 }
 
+/* A2's rolling hour, a slot a minute: the new MACs folded into the
+ * episode keyed "" or given their own, counted in the minute (ts / 60)
+ * that took them. A MAC refused (the reported set full) or dropped (the
+ * episode table full) is not counted: it is tried again next minute. */
+static void a2_win_add(struct web_anom_priv *p, long long m, int n) {
+    int k = (int)(m % A2_WIN);
+    if (k < 0) k += A2_WIN;
+    if (p->a2_wmin[k] != m) { p->a2_wmin[k] = m; p->a2_wn[k] = 0; }
+    p->a2_wn[k] += n;
+}
+
+static int a2_win_sum(const struct web_anom_priv *p, long long m) {
+    long long n = 0;
+    for (int k = 0; k < A2_WIN; k++)
+        if (p->a2_wmin[k] > m - A2_WIN && p->a2_wmin[k] <= m) n += p->a2_wn[k];
+    return n > INT_MAX ? INT_MAX : (int)n;
+}
+
 static void a2_scan(web_anomaly_t *a, long long ts) {
     struct web_anom_priv *p = a->p;
     p->a2_checks = 0;
@@ -874,8 +897,10 @@ static void a2_scan(web_anomaly_t *a, long long ts) {
         a->st.a2_deferred += deferred;
         pthread_mutex_unlock(&a->mu);
     }
+    long long m = ts / 60;
+    int win = a2_win_sum(p, m);
     char ev[256];
-    if (nnew <= WEB_ANOM_A2_BURST) {
+    if (nnew <= WEB_ANOM_A2_BURST && win + nnew <= WEB_ANOM_A2_HOUR_MAX) {
         for (int i = 0; i < nnew; i++) {
             const web_id_new_t *f = &p->firsts[i];
             long long age = ts - f->first_seen;
@@ -886,27 +911,48 @@ static void a2_scan(web_anomaly_t *a, long long ts) {
         }
         return;
     }
-    /* A burst: more new MACs at once than a household acquires in a
-     * month is one event (probe requests from spoofed addresses look
-     * exactly like this), so it is one episode keyed "", not one per
-     * MAC, which would take the table from every other rule. Its MACs
-     * are covered by it: they go to the not-one-by-one set, not to the
-     * reported set, so that a flood cannot fill the reported set and
-     * leave a real new device refused for a day. */
+    /* A burst, or a trickle: more new MACs at once than a household
+     * acquires in a month (probe requests from spoofed addresses look
+     * exactly like this), or more in an hour than WEB_ANOM_A2_HOUR_MAX,
+     * is one event, one episode keyed "", not one per MAC, which would
+     * take the table from every other rule. The trickle is the case a
+     * per-minute test alone misses: eight spoofed MACs a minute are
+     * never a burst, and given an episode each they fill the reported
+     * set within hours and leave every real new device refused for a
+     * day. The episode holds while the hour's count is over the limit,
+     * so a trickle is one episode, not one per minute it ticks. Its
+     * MACs are covered by it: they go to the not-one-by-one set, not to
+     * the reported set, so a flood cannot fill the reported set. */
     for (int i = 0; i < nnew; i++) {
         int made;
         int k = kv_get(&p->old, 0, p->firsts[i].mac, p->firsts[i].first_seen,
                        &made, NULL);
         p->old.e[k].t = p->firsts[i].first_seen;
     }
-    pthread_mutex_lock(&a->mu);
-    a->st.a2_in_burst += (unsigned long)nnew;
-    pthread_mutex_unlock(&a->mu);
-    int o = snprintf(ev, sizeof(ev), "%d MACs new to sloth in one minute:",
-                     nnew);
-    for (int i = 0; i < nnew && i < 3 && o > 0 && (size_t)o < sizeof(ev); i++)
-        o += snprintf(ev + o, sizeof(ev) - (size_t)o, " %s", p->firsts[i].mac);
-    cand(a, WEB_ANOM_A2_NEW, -1, "", 60.0, ev);
+    if (nnew > 0) {
+        a2_win_add(p, m, nnew);
+        win += nnew;
+        p->a2_nlast = 0;
+        for (int i = nnew > 3 ? nnew - 3 : 0; i < nnew; i++)
+            snprintf(p->a2_last[p->a2_nlast++], WEB_KEY_MAX + 1, "%s",
+                     p->firsts[i].mac);
+        pthread_mutex_lock(&a->mu);
+        a->st.a2_in_burst += (unsigned long)nnew;
+        pthread_mutex_unlock(&a->mu);
+    }
+    int o;
+    if (nnew > WEB_ANOM_A2_BURST) {
+        o = snprintf(ev, sizeof(ev), "%d MACs new to sloth in one minute:", nnew);
+        for (int i = 0; i < nnew && i < 3 && o > 0 && (size_t)o < sizeof(ev); i++)
+            o += snprintf(ev + o, sizeof(ev) - (size_t)o, " %s", p->firsts[i].mac);
+    } else {
+        o = snprintf(ev, sizeof(ev), "%d MACs new to sloth in the last hour "
+                     "(over %d), %d this minute; latest:", win,
+                     WEB_ANOM_A2_HOUR_MAX, nnew);
+        for (int i = 0; i < p->a2_nlast && o > 0 && (size_t)o < sizeof(ev); i++)
+            o += snprintf(ev + o, sizeof(ev) - (size_t)o, " %s", p->a2_last[i]);
+    }
+    cand(a, WEB_ANOM_A2_NEW, -1, "", nnew > WEB_ANOM_A2_BURST ? 60.0 : 50.0, ev);
 }
 
 static int cmp_named(const void *x, const void *y) {
@@ -1102,6 +1148,8 @@ static int touch_locked(web_anomaly_t *a, const cand_t *c, long long bucket,
 static void apply(web_anomaly_t *a, const int *evaluated, long long bucket,
                   long long ts) {
     struct web_anom_priv *p = a->p;
+    int refused = 0;
+    char rmac[3][WEB_KEY_MAX + 1];
     pthread_mutex_lock(&a->mu);
     for (int i = 0; i < p->cand_n; i++) {
         const cand_t *c = &p->cand[i];
@@ -1109,14 +1157,41 @@ static void apply(web_anomaly_t *a, const int *evaluated, long long bucket,
          * reported, so a full table delays it rather than losing it. A
          * reported set full of MACs still in their window refuses the
          * report rather than forget one of them (which would report
-         * that one again). A burst (key "") marked its MACs itself. */
+         * that one again). A fold (key "") marked its MACs itself. */
         int a2 = c->rule == WEB_ANOM_A2_NEW && c->key[0];
         if (a2 && kv_find(&p->rep, 0, c->key) < 0 && p->rep.n >= p->rep.cap) {
             a->st.reported_refused++;
+            if (refused < 3)
+                snprintf(rmac[refused], sizeof(rmac[0]), "%s", c->key);
+            refused++;
             continue;
         }
-        if (touch_locked(a, c, bucket, ts) && a2)
-            rep_mark(p, c->key, c->t0 >= 0 ? c->t0 : ts);
+        if (touch_locked(a, c, bucket, ts) && a2 &&
+            rep_mark(p, c->key, c->t0 >= 0 ? c->t0 : ts) == 0)
+            a2_win_add(p, ts / 60, 1);
+    }
+    /* A refusal is loud: a new device that cannot be reported is the
+     * thing A2 is for, so it opens (or holds) an episode of its own
+     * while the set stays full, rather than only a counter on
+     * /api/health. Its evidence names at most three of the refused
+     * MACs; they are tried again every minute and reported on their own
+     * once the set has room. */
+    if (refused) {
+        cand_t fc;
+        memset(&fc, 0, sizeof(fc));
+        fc.rule = WEB_ANOM_A2_NEW;
+        fc.metric = -1;
+        fc.t0 = -1;
+        fc.score = 70.0;
+        snprintf(fc.key, sizeof(fc.key), "%s", WEB_ANOM_A2_FULL_KEY);
+        int o = snprintf(fc.ev, sizeof(fc.ev), "reported set full (%d MACs "
+                         "reported in the last 24 h): %d new MAC%s refused "
+                         "this minute, %lu refusals in all:", p->rep.n,
+                         refused, refused == 1 ? "" : "s",
+                         a->st.reported_refused);
+        for (int i = 0; i < refused && i < 3 && o > 0 && (size_t)o < sizeof(fc.ev); i++)
+            o += snprintf(fc.ev + o, sizeof(fc.ev) - (size_t)o, " %s", rmac[i]);
+        touch_locked(a, &fc, bucket, ts);
     }
     for (int i = 0; i < a->cap; i++) {
         web_anom_ep_t *e = &a->ep[i];
@@ -1556,7 +1631,10 @@ static void restore_ep(void *ctx, const web_store_ep_t *s) {
         !T_SANE(s->last_seen) || s->first_seen > s->last_seen ||
         (s->last_bucket != LLONG_MIN && !T_SANE(s->last_bucket)))
         return;
-    if (s->metric >= WM_COUNT) return;
+    /* -1 (no metric) or a metric: the store's reader maps a name to one
+     * of those, but this is the restore's own contract, not the
+     * reader's. */
+    if (s->metric < -1 || s->metric >= WM_COUNT) return;
     int slot = -1;
     for (int i = 0; i < a->cap; i++)
         if (a->ep[i].state == WEB_EP_FREE) { slot = i; break; }
@@ -1578,6 +1656,12 @@ static void restore_ep(void *ctx, const web_store_ep_t *s) {
     e->last_bucket = s->last_bucket;
     e->seq = ++a->seq;
     if (s->id >= a->p->next_id) a->p->next_id = s->id + 1;
+}
+
+void web_anomaly_restore_episode(web_anomaly_t *a, const web_store_ep_t *s) {
+    pthread_mutex_lock(&a->mu);
+    restore_ep(a, s);
+    pthread_mutex_unlock(&a->mu);
 }
 
 static void restore_fan(void *ctx, const web_store_fan_t *f) {

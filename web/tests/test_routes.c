@@ -9,6 +9,7 @@
 #include "sha256.h"
 #include "web_assets.h"
 #include "web_routes.h"
+#include "web_series.h"
 #include "wtest.h"
 
 static const char *page(void) { return (const char *)web_page; }
@@ -839,6 +840,63 @@ static void test_page_carries_the_m3_view(void) {
     eng_down(&e);
 }
 
+/* The page's cellOf(), the server's cell for a point: its UTC hour
+ * bucket's local hour of the week. Pinned as the page carries it, then
+ * cross-checked, in C, against /api/baseline's now_cell in a half-hour
+ * zone (IST, +5:30) for every 10 minutes of a week: the page reads the
+ * cell the server scores. cellOf(t) taken from t itself (t + off) is a
+ * different cell for the second half of every UTC hour there, which
+ * the last assertion shows. Seen red with app.js's expression changed
+ * to (t + off) (the pinned source no longer found). */
+static int js_cell_of(long long t, long long off) {
+    long long u = t - t % 3600 + off;          /* new Date(u * 1000) */
+    long long day = u >= 0 ? u / 86400 : -((-u + 86399) / 86400);
+    int wday = (int)(((day + 4) % 7 + 7) % 7); /* getUTCDay(): 1970-01-01 a Thursday */
+    int hour = (int)(((u % 86400) + 86400) % 86400 / 3600);
+    return ((wday + 6) % 7) * 24 + hour;
+}
+
+static void test_page_cell_matches_the_servers_cell(void) {
+    WT_HAS(page(), "function cellOf(t, off) {\n"
+                   "    var d = new Date((t - t % 3600 + off) * 1000);\n"
+                   "    return ((d.getUTCDay() + 6) % 7) * 24 + d.getUTCHours();\n"
+                   "  }");
+    WT_HAS(page(), "bl.cells[cellOf(pts[i][0], bl.utc_offset_s || 0)]");
+    setenv("TZ", "IST-5:30", 1);
+    tzset();
+    static char out[16384];
+    int checked = 0, differs = 0;
+    const long long mon = 1792454400LL;        /* Tuesday 2026-10-20 00:00 UTC */
+    for (long long t = mon; t < mon + 7 * 86400; t += 600) {
+        size_t n = web_baseline_json(NULL, WM_HOST_CONNS, "10.0.0.5", t, out,
+                                     sizeof(out));
+        WT_ASSERT(n > 0 && n < sizeof(out));
+        out[n] = '\0';
+        const char *c = strstr(out, "\"now_cell\":");
+        const char *o = strstr(out, "\"utc_offset_s\":");
+        long long cell = -1, off = 0;
+        if (!c || !o || sscanf(c, "\"now_cell\":%lld", &cell) != 1 ||
+            sscanf(o, "\"utc_offset_s\":%lld", &off) != 1) {
+            WT_ASSERT(!"now_cell or utc_offset_s missing");
+            break;
+        }
+        if (off != 19800 || js_cell_of(t, off) != cell) {
+            WT_EQ(off, 19800);
+            WT_EQ(js_cell_of(t, off), cell);
+            break;
+        }
+        checked++;
+        long long u = t + off;
+        int naive = (int)((((u / 86400) + 4) % 7 + 6) % 7) * 24 +
+                    (int)(u % 86400 / 3600);
+        differs += naive != cell;
+    }
+    setenv("TZ", "UTC0", 1);
+    tzset();
+    WT_EQ(checked, 7 * 144);
+    WT_EQ(differs, 7 * 72);
+}
+
 /* A cell that is not a finite number (none can be made: a restored one
  * past a float's range is refused) still answers JSON: null, never a
  * bare inf. Seen red with jw_num()'s isfinite() test removed. */
@@ -915,5 +973,6 @@ void run_routes_tests(void) {
     WT_RUN(test_baseline_route);
     WT_RUN(test_page_carries_the_m3_view);
     WT_RUN(test_baseline_route_never_prints_inf);
+    WT_RUN(test_page_cell_matches_the_servers_cell);
     WT_RUN(test_anomaly_event_and_tick);
 }

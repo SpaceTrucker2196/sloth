@@ -867,6 +867,7 @@ int web_store_open(web_store_t *s, const char *path, char *err, size_t errsz) {
         }
     recount(s);
     refresh_size(s);
+    s->st.analysis_bytes = -1;
     s->st.open = 1;
     return 0;
 }
@@ -999,14 +1000,42 @@ static long long used_bytes(sqlite3 *db) {
  * as the buckets, but a sweep per slice cost more than the slice. The
  * loop does not count what the sweep will free, so it may take one
  * slice more than it needed. */
-static long long ceiling_loop(web_store_t *s, long long max_bytes) {
+/* The pages of the analysis state's tables and their indexes, from
+ * dbstat; -1 when the library has no dbstat. Kept until the next
+ * baseline write (web_store.h). */
+static long long analysis_bytes(web_store_t *s) {
+    static const char sql[] =
+        "SELECT COALESCE(SUM(pgsize),0) FROM dbstat WHERE name IN"
+        " (SELECT name FROM sqlite_schema WHERE tbl_name IN ('baseline',"
+        "'baseline_cell','episode','fanout','reported'))";
+    if (s->an_fresh) return s->an_bytes;
+    sqlite3_stmt *st = NULL;
+    long long b = -1;
+    if (sqlite3_prepare_v2(s->db, sql, -1, &st, NULL) == SQLITE_OK &&
+        sqlite3_step(st) == SQLITE_ROW)
+        b = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    s->an_bytes = b;
+    s->an_fresh = 1;
+    pthread_mutex_lock(&s->mu);
+    s->st.analysis_bytes = b;
+    pthread_mutex_unlock(&s->mu);
+    return b;
+}
+
+/* *held is set when the pass stopped because the analysis state alone
+ * is at or over max_bytes. */
+static long long ceiling_loop(web_store_t *s, long long max_bytes, int *held) {
     long long dropped = 0;
     int step = 0;
+    *held = 0;
     for (int guard = 0; max_bytes > 0 && step < CEIL_STEPS && guard < 1000000;
          guard++) {
         long long used = used_bytes(s->db);
         if (used < 0) return -1;
         if (used <= max_bytes) break;
+        long long an = analysis_bytes(s);
+        if (an >= max_bytes) { *held = 1; break; }
         long long d = run_del(s->db, CEIL_STEP[step], 1, WEB_STORE_SLICE_ROWS);
         if (d < 0) return -1;
         after_commit(s);
@@ -1052,7 +1081,8 @@ long long web_store_ceiling(web_store_t *s, long long max_bytes) {
     /* The cheap test first: three PRAGMAs, no table read. */
     long long used = used_bytes(s->db);
     if (used >= 0 && used <= max_bytes) return 0;
-    long long d = ceiling_loop(s, max_bytes);
+    int held;
+    long long d = ceiling_loop(s, max_bytes, &held);
     if (d < 0) { note_fail(s, "ceiling"); return -1; }
     if (d > 0) {
         if (vacuum_slices(s) != 0) { note_fail(s, "vacuum"); return -1; }
@@ -1062,6 +1092,7 @@ long long web_store_ceiling(web_store_t *s, long long max_bytes) {
     pthread_mutex_lock(&s->mu);
     s->st.dropped_ceiling += (unsigned long long)d;
     if (d > 0) s->st.ceiling_runs++;
+    if (held) s->st.ceiling_held++;
     pthread_mutex_unlock(&s->mu);
     return d;
 }
@@ -1190,7 +1221,8 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     char err[WEB_STORE_ERR_MAX];
     long long expired = expire(s, cutoff);
     if (expired < 0) goto fail;
-    long long ceiling = ceiling_loop(s, max_bytes);
+    int held;
+    long long ceiling = ceiling_loop(s, max_bytes, &held);
     if (ceiling < 0) goto fail;
     if (run_del(s->db, SWEEP_SERIES, 0, 0) < 0)
         goto fail;
@@ -1206,6 +1238,7 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     s->st.dropped_expired += (unsigned long long)expired;
     s->st.dropped_ceiling += (unsigned long long)ceiling;
     if (ceiling > 0) s->st.ceiling_runs++;
+    if (held) s->st.ceiling_held++;
     s->st.last_compact = now_s;
     pthread_mutex_unlock(&s->mu);
     return 0;
@@ -1337,6 +1370,7 @@ static int bl_del_slices(web_store_t *s, const long long *ids, size_t n,
 
 int web_store_bl_load(web_store_t *s, web_baseline_t *b) {
     if (!s->db) return -1;
+    s->an_fresh = 0;
     sqlite3_stmt *st = NULL;
     int cap = b->cap;
     bl_map_t *map = malloc((size_t)cap * sizeof(*map));
@@ -1445,6 +1479,7 @@ static int bl_del_slices(web_store_t *s, const long long *ids, size_t n,
 int web_store_bl_put(web_store_t *s, web_baseline_t *b,
                      const web_bl_rec_t *recs, int n) {
     if (!s->db) return -1;
+    s->an_fresh = 0;
     if (n <= 0) return 0;
     long long *ids = malloc((size_t)n * sizeof(*ids));
     if (!ids) return -1;
@@ -1535,6 +1570,7 @@ int web_store_bl_put(web_store_t *s, web_baseline_t *b,
 
 int web_store_bl_del(web_store_t *s, const long long *ids, int n) {
     if (!s->db) return -1;
+    s->an_fresh = 0;
     if (n <= 0) return 0;
     if (an_begin(s) != 0) return -1;
     for (int i = 0; i < n; i++)

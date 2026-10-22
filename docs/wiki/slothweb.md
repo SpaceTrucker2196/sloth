@@ -452,7 +452,9 @@ In short:
 - **Rules.** A1 rate, A2 new device (the stream's own `first_seen`
   within 24 h and nothing older about the MAC in slothweb's baselines
   or store, since sloth resets `first_seen` when it restarts; once per
-  MAC; more than eight at once are one episode), A3 off-hours presence, A5 a randomised MAC sharing another's
+  MAC; more than eight at once, or sixteen in a rolling hour, are one
+  episode keyed `""`, and a reported set too full to take a new MAC is
+  an episode of its own, `reported-set-full`), A3 off-hours presence, A5 a randomised MAC sharing another's
   DHCP or mDNS name, A6 DHCP, mDNS and NBNS names disagreeing, A7 a
   host's 10-minute peak flow count far above its own p95 (the stream has
   flow counts, not peer lists), A8 a client's NXDOMAIN share (answers
@@ -474,9 +476,12 @@ In short:
   whose pair still has a row takes it over, and a refused batch is
   written the hour after. A restore into a smaller table deletes the
   rest in small transactions. The analysis state counts towards
-  `--web-max-mb` but the ceiling can only drop time-series rows, so
-  slothweb warns at start when the ceiling is below what the baselines
-  can take at the given `--web-max-keys`.
+  `--web-max-mb` but the ceiling can only drop time-series rows: when
+  the analysis state's own pages (SQLite's `dbstat`) are at or over the
+  ceiling, it drops nothing and counts the pass (`store_ceiling_held`)
+  rather than erase the history A9 and the MAD ratio read, and slothweb
+  warns at start when the ceiling is below what the baselines can take
+  at the given `--web-max-keys`.
 - **Page.** The Anomalies view (cards with a kind glyph, score bar in
   the heat ramp, evidence, the metric's last hour, first and last seen,
   chips by kind), and on the Overview a throughput tile and "now vs

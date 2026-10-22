@@ -730,36 +730,103 @@ static void test_slot_policy_keeps_each_rules_history(void) {
 
 /* The reported set holds a MAC until its first_seen leaves the window,
  * never less: full of MACs still in their window, it refuses the next
- * one (counted) rather than push out one it would then report again.
- * 64 MACs (the cap at --web-max-keys 64), eight a minute so none is a
- * burst, then a 65th, then the first again. Seen red with rep_mark()
- * allowed to evict (66 opened: the 65th, then the first again). */
+ * one rather than push out one it would then report again, and the
+ * refusal is an episode of its own, not only a counter on /api/health.
+ * --web-max-keys 16 (a set of 16): eight MACs a minute twice, so none
+ * is a burst and the hour's count is at its limit, not over; an hour
+ * later (the rolling count empty again) a 17th, then the first again.
+ * Seen red with apply()'s full-set test removed (the 17th got an
+ * episode of its own and nothing was refused), and separately with the
+ * refusal episode removed (no episode keyed reported-set-full: the
+ * refusal only counted). */
 static void test_a2_reported_set_refuses_rather_than_forgets(void) {
     fx(0, NULL);
+    web_anomaly_destroy(&an);
+    g_cfg.max_keys = WEB_MAX_KEYS_MIN;
+    WT_EQ(web_anomaly_init(&an, 32, &g_cfg), 0);
     long long t = T0;
     step(t);
-    for (int i = 0; i < 64; i++) {
+    for (int i = 0; i < 16; i++) {
         char mac[24];
         snprintf(mac, sizeof(mac), "00:11:22:00:00:%02x", i);
         probe(mac, t - 60, t);
         if (i % 8 == 7) { step(t + 60); t += 60; }
     }
-    WT_EQ(an.st.opened, 64UL);
+    WT_EQ(an.st.opened, 16UL);
+    WT_EQ(an.st.reported, 16);
     WT_EQ(an.st.reported_refused, 0UL);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "")->state, WEB_EP_FREE);
+    t += 61 * 60;
+    step(t);
     probe("00:11:22:00:01:00", t - 60, t);
     step(t + 60);
     t += 60;
-    WT_EQ(an.st.opened, 64UL);
-    WT_ASSERT(an.st.reported_refused >= 1);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "00:11:22:00:01:00")->state, WEB_EP_FREE);
+    WT_EQ(an.st.reported_refused, 1UL);
+    web_anom_ep_t *f = ep(WEB_ANOM_A2_NEW, WEB_ANOM_A2_FULL_KEY);
+    WT_EQ(f->state, WEB_EP_OPEN);
+    WT_HAS(f->evidence, "reported set full (16 MACs reported in the last "
+                        "24 h): 1 new MAC refused this minute, 1 refusals "
+                        "in all: 00:11:22:00:01:00");
+    WT_HAS(list(t), "\"key\":\"reported-set-full\"");
+    /* Still waiting next minute: tried again, refused again, the same
+     * episode held; and the first MAC is not reported a second time. */
+    probe("00:11:22:00:01:00", t - 120, t);
     probe("00:11:22:00:00:00", T0 - 60, t);
     step(t + 60);
-    WT_EQ(an.st.opened, 64UL);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, WEB_ANOM_A2_FULL_KEY), f);
+    WT_EQ(f->state, WEB_EP_OPEN);
+    WT_HAS(f->evidence, "2 refusals in all");
+    WT_EQ(an.st.opened, 17UL);
+    WT_EQ(count_rule(WEB_ANOM_A2_NEW), 17);
+    fx_done();
+}
+
+/* The trickle the per-minute burst test misses: eight spoofed MACs a
+ * minute for ten minutes, never more than WEB_ANOM_A2_BURST at once.
+ * The first sixteen (the hour's limit) are reported one by one, the
+ * other 64 fold into one episode keyed "", which holds while the hour
+ * is over the limit and closes once it is not; the reported set takes
+ * 16, not 80. Seen red with the rolling-hour test removed from
+ * a2_scan() (80 episodes tried for 32 slots, the set filled). */
+static void test_a2_trickle_is_one_episode(void) {
+    fx(0, NULL);
+    long long t = T0;
+    step(t);
+    for (int m = 0; m < 10; m++, t += 60) {
+        for (int k = 0; k < 8; k++) {
+            char mac[24];
+            snprintf(mac, sizeof(mac), "00:5e:01:%02x:%02x:01", m, k);
+            probe(mac, t, t);
+        }
+        step(t + 60);
+    }
+    WT_EQ(count_rule(WEB_ANOM_A2_NEW), 17);
+    WT_EQ(an.st.dropped, 0UL);
+    WT_EQ(an.st.reported, 16);
+    WT_EQ(an.st.a2_in_burst, 64UL);
+    web_anom_ep_t *b = ep(WEB_ANOM_A2_NEW, "");
+    WT_EQ(b->state, WEB_EP_OPEN);
+    WT_HAS(b->evidence, "80 MACs new to sloth in the last hour (over 16), "
+                        "8 this minute; latest: 00:5e:01:09:05:01 "
+                        "00:5e:01:09:06:01 00:5e:01:09:07:01");
+    /* Quiet for half an hour: the hour is still over, the episode holds. */
+    t += 30 * 60;
+    step(t);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, ""), b);
+    WT_EQ(b->state, WEB_EP_OPEN);
+    WT_HAS(b->evidence, "0 this minute");
+    /* An hour after the last fold, the count is under: it closes. */
+    t += 35 * 60;
+    step(t);
+    WT_EQ(b->state, WEB_EP_CLOSED);
+    WT_EQ(count_rule(WEB_ANOM_A2_NEW), 17);
     fx_done();
 }
 
 /* --web-max-keys past 4096: a new MAC in identity slot 4501 is scanned.
- * The 4500 before it are recent too (a burst, reported together), so
- * only the size of the scan decides. Seen red with the reader's buffer
+ * The 4500 before it are recent too (a burst, reported together, an
+ * hour before), so only the size of the scan decides. Seen red with the reader's buffer
  * fixed at 4096 rows (the MAC was never reported, and the cut scan was
  * counted in ident_truncated). */
 static void test_a2_scans_every_identity_slot(void) {
@@ -778,8 +845,12 @@ static void test_a2_scans_every_identity_slot(void) {
     }
     step(T0 + 60);
     WT_EQ(ep(WEB_ANOM_A2_NEW, "")->state, WEB_EP_OPEN);
-    probe("00:11:ff:ff:00:02", T0 + 60, T0 + 60);
-    step(T0 + 120);
+    /* An hour on, so that the burst no longer counts in A2's rolling
+     * hour and the new MAC is reported on its own. */
+    long long t = T0 + 62 * 60;
+    step(t);
+    probe("00:11:ff:ff:00:02", t, t);
+    step(t + 60);
     WT_EQ(ep(WEB_ANOM_A2_NEW, "00:11:ff:ff:00:02")->state, WEB_EP_OPEN);
     WT_EQ(an.st.ident_truncated, 0UL);
     fx_done();
@@ -1165,6 +1236,36 @@ static void test_mad_confirms_a_real_burst(void) {
     fx_done();
 }
 
+/* The within-hour term in the MAD ratio, on its own. 28 weeks of 95 and
+ * 105 a minute, alternating (median 100, MAD 5: sd 7.4 on the
+ * normal-equivalent scale), each hour's minutes spread with variance
+ * 900 (sd 30). 200 a minute for three minutes: z, with the within term,
+ * is 100 / sqrt(var + 900), about 3.3, so A1 asks the MAD ratio; with
+ * the same term the modified z is 100 / sqrt(7.4^2 + 900), 3.2, under
+ * 3.5, refuted; without it the sd is the floor of 10 and the modified z
+ * is 10, confirmed. Seen red with the within term removed from
+ * mad_confirms() (the A1 episode opened). */
+static void test_mad_counts_the_within_hour_spread(void) {
+    fx(1, NULL);
+    const char *key = "10.0.0.92";
+    for (int k = 28; k >= 1; k--) {
+        double per_min = k % 2 ? 95 : 105;
+        store_row(WEB_TIER_HOUR, WM_DNS_QUERIES, key, T0 - k * WEEK,
+                  per_min * 60);
+        WT_EQ(web_baseline_feed_w(&bl, WM_DNS_QUERIES, key, T0 - k * WEEK,
+                                  per_min, 900.0, 1), 0);
+    }
+    web_bl_score_t sc;
+    WT_EQ(web_baseline_score(&bl, WM_DNS_QUERIES, key, T0, 200, &sc), 0);
+    WT_ASSERT(sc.z >= WEB_ANOM_Z_THRESHOLD && sc.z < 3.5);
+    WT_ASSERT(fabs(sc.within - 900.0) < 1.0);
+    counter_run(key, 200);
+    WT_EQ(count_rule(WEB_ANOM_A1_RATE), 0);
+    WT_EQ(an.st.mad_queries, 1UL);
+    WT_EQ(an.st.mad_skipped, 0UL);
+    fx_done();
+}
+
 /* ── persistence ─────────────────────────────────────────────────────── */
 
 /* A restart keeps the baselines and the open episode: A1 keeps scoring
@@ -1288,9 +1389,14 @@ static void test_baseline_refused_batch_is_written_later(void) {
 /* Values read back from slothweb.db are checked before they are used:
  * a score past 100 is 100 (the listing rounds it to an integer, which
  * is undefined behaviour for 1e300), and an id of 0 or a time before
- * 1970 is not an episode of ours. Seen red with the clamp removed from
- * restore_ep() ("score":250), and separately with the id and time
- * checks removed (the other two listed). */
+ * 1970 is not an episode of ours. The restored episode's own score is
+ * read, not only the listing's, which clamps again. A metric below -1
+ * cannot come out of the store's reader (it maps a name to -1 or a
+ * metric), so it goes to the restore directly. Seen red with the clamp
+ * removed from restore_ep() (score 250 in the episode; the listing
+ * stayed 100), separately with the id and time checks removed (the
+ * other two listed), and with the metric test's lower bound removed
+ * (the episode with metric -2 restored). */
 static void test_restored_episode_values_are_checked(void) {
     fx(1, NULL);
     web_store_ep_t e[3];
@@ -1314,6 +1420,22 @@ static void test_restored_episode_values_are_checked(void) {
     WT_HAS(j, "\"key\":\"10.0.0.30\",\"score\":100,\"peak\":100,");
     WT_LACKS(j, "10.0.0.31");
     WT_LACKS(j, "10.0.0.32");
+    web_anom_ep_t *r = ep(WEB_ANOM_A6_NAMES, "10.0.0.30");
+    WT_EQ(r->state, WEB_EP_OPEN);
+    WT_ASSERT(r->score == 100.0);
+    WT_ASSERT(r->peak == 100.0);
+    web_store_ep_t d = e[2];
+    d.first_seen = T0;
+    d.id = 20;
+    d.metric = -2;
+    snprintf(d.key, sizeof(d.key), "10.0.0.34");
+    web_anomaly_restore_episode(&an, &d);
+    WT_EQ(ep(WEB_ANOM_A6_NAMES, "10.0.0.34")->state, WEB_EP_FREE);
+    d.id = 21;
+    d.metric = -1;
+    snprintf(d.key, sizeof(d.key), "10.0.0.35");
+    web_anomaly_restore_episode(&an, &d);
+    WT_EQ(ep(WEB_ANOM_A6_NAMES, "10.0.0.35")->state, WEB_EP_OPEN);
     fx_done();
 }
 #endif
@@ -1485,6 +1607,7 @@ void run_anomaly_tests(void) {
     WT_RUN(test_a2_flood_is_one_episode_and_keeps_history);
     WT_RUN(test_slot_policy_keeps_each_rules_history);
     WT_RUN(test_a2_reported_set_refuses_rather_than_forgets);
+    WT_RUN(test_a2_trickle_is_one_episode);
     WT_RUN(test_a2_scans_every_identity_slot);
     WT_RUN(test_a2_old_and_random_macs_are_not_new);
     WT_RUN(test_a3_fires_for_off_hours_presence);
@@ -1505,6 +1628,7 @@ void run_anomaly_tests(void) {
     WT_RUN(test_a9_silent_for_history_across_restart);
     WT_RUN(test_mad_refutes_a_return_to_normal);
     WT_RUN(test_mad_confirms_a_real_burst);
+    WT_RUN(test_mad_counts_the_within_hour_spread);
     WT_RUN(test_state_survives_restart);
     WT_RUN(test_a7_history_survives_restart);
     WT_RUN(test_baseline_evicted_and_back_in_one_hour);
