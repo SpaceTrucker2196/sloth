@@ -870,7 +870,10 @@ static void test_page_cell_matches_the_servers_cell(void) {
     for (long long t = mon; t < mon + 7 * 86400; t += 600) {
         size_t n = web_baseline_json(NULL, WM_HOST_CONNS, "10.0.0.5", t, out,
                                      sizeof(out));
-        WT_ASSERT(n > 0 && n < sizeof(out));
+        if (n == 0 || n >= sizeof(out)) {
+            WT_ASSERT(!"the baseline answer did not fit");
+            break;
+        }
         out[n] = '\0';
         const char *c = strstr(out, "\"now_cell\":");
         const char *o = strstr(out, "\"utc_offset_s\":");
