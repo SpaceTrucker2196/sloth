@@ -4,6 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <math.h>
+#include <time.h>
+
+#include "web_anomaly.h"
 #include "web_json.h"
 #include "web_metrics.h"
 
@@ -296,6 +300,97 @@ size_t web_series_error_json(const char *reason, char *out, size_t cap) {
     web_jw_init(&w, out, cap);
     web_jw_raw(&w, "{\"error\":");
     web_jw_str(&w, reason);
+    web_jw_raw(&w, "}\n");
+    return w.overflow ? 0 : w.len;
+}
+
+/* ── /api/anomalies and /api/baseline (M3) ──────────────────────────── */
+
+int web_anomalies_parse(const char *query, long long now_s, long long *since,
+                        int *kind, char *err, size_t errsz) {
+    param_t ps[2] = { { "since", "", 0 }, { "kind", "", 0 } };
+    *since = now_s - WEB_ANOM_RECENT_S;
+    *kind = -1;
+    if (parse_params(query, ps, 2, err, errsz) != 0) return -1;
+    if (ps[0].seen) {
+        if (parse_secs(ps[0].val, since) != 0) return fail(err, errsz, "bad_since");
+        if (*since > now_s + 86400) return fail(err, errsz, "since_in_future");
+        /* Nothing older is kept. */
+        if (*since < now_s - WEB_ANOM_KEEP_S) *since = now_s - WEB_ANOM_KEEP_S;
+    }
+    if (ps[1].seen) {
+        *kind = web_anomaly_kind_find(ps[1].val);
+        if (*kind < 0) return fail(err, errsz, "unknown_kind");
+    }
+    return 0;
+}
+
+int web_baseline_parse(const char *query, int *metric, char *key,
+                       char *err, size_t errsz) {
+    param_t ps[2] = { { "metric", "", 0 }, { "key", "", 0 } };
+    if (parse_params(query, ps, 2, err, errsz) != 0) return -1;
+    if (!ps[0].seen) return fail(err, errsz, "missing_metric");
+    *metric = web_metric_find(ps[0].val);
+    if (*metric < 0) return fail(err, errsz, "unknown_metric");
+    if (web_key_canon(*metric, ps[1].seen ? ps[1].val : "", key) != 0)
+        return fail(err, errsz, "bad_key");
+    return 0;
+}
+
+/* Seconds east of UTC at t, from the calendar fields alone (tm_gmtoff
+ * is not C99). */
+static long long utc_offset(long long t) {
+    time_t tt = (time_t)t;
+    struct tm lt, gt;
+    if (!localtime_r(&tt, &lt) || !gmtime_r(&tt, &gt)) return 0;
+    long long d = lt.tm_yday - gt.tm_yday;
+    if (lt.tm_year != gt.tm_year) d = lt.tm_year > gt.tm_year ? 1 : -1;
+    return ((d * 24 + (lt.tm_hour - gt.tm_hour)) * 60 +
+            (lt.tm_min - gt.tm_min)) * 60 + (lt.tm_sec - gt.tm_sec);
+}
+
+size_t web_baseline_json(web_baseline_t *b, int metric, const char *key,
+                         long long now_s, char *out, size_t cap) {
+    web_bl_cell_t *cells = malloc(WEB_BL_CELLS * sizeof(*cells));
+    if (!cells) return 0;
+    const web_metric_t *md = &web_metric_defs[metric];
+    web_jw_t w;
+    web_jw_init(&w, out, cap);
+    web_jw_raw(&w, "{\"metric\":"); web_jw_str(&w, md->name);
+    web_jw_raw(&w, ",\"key\":");    web_jw_str(&w, key);
+    web_jw_raw(&w, ",\"kind\":");   web_jw_str(&w, kind_word(md->kind));
+    web_jw_raw(&w, ",\"unit\":");   web_jw_str(&w, md->unit);
+    web_jw_raw(&w, ",\"scale\":");
+    web_jw_str(&w, md->kind == WEB_MK_COUNTER ? "per_minute"
+                   : md->kind == WEB_MK_PRESENCE ? "share_of_weeks" : "mean");
+    web_jw_raw(&w, ",\"warm_n\":");       web_jw_int(&w, WEB_BL_WARM_N);
+    web_jw_raw(&w, ",\"cell_order\":\"local, Monday 00:00 first\"");
+    web_jw_raw(&w, ",\"now\":");          web_jw_int(&w, now_s);
+    web_jw_raw(&w, ",\"now_cell\":");     web_jw_int(&w, web_bl_cell_index(now_s));
+    web_jw_raw(&w, ",\"utc_offset_s\":"); web_jw_int(&w, utc_offset(now_s));
+    int fed = b && web_baseline_cells(b, metric, key, cells) == 0;
+    web_jw_raw(&w, ",\"fed\":"); web_jw_raw(&w, fed ? "true" : "false");
+    web_jw_raw(&w, ",\"cells\":");
+    if (!fed) {
+        web_jw_raw(&w, "null");
+    } else {
+        /* [mean, sd, n]: sd floored the way a score floors it. */
+        web_jw_raw(&w, "[");
+        for (int i = 0; i < WEB_BL_CELLS; i++) {
+            const web_bl_cell_t *c = &cells[i];
+            double sd = sqrt(c->var > 0 ? (double)c->var : 0.0);
+            double fl = web_bl_sd_floor(metric, c->mean);
+            web_jw_raw(&w, i ? ",[" : "[");
+            jw_num(&w, c->n ? c->mean : 0);
+            web_jw_raw(&w, ",");
+            jw_num(&w, c->n ? (sd > fl ? sd : fl) : 0);
+            web_jw_raw(&w, ",");
+            web_jw_int(&w, c->n);
+            web_jw_raw(&w, "]");
+        }
+        web_jw_raw(&w, "]");
+    }
+    free(cells);
     web_jw_raw(&w, "}\n");
     return w.overflow ? 0 : w.len;
 }

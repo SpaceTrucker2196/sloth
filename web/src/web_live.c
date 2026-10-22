@@ -407,6 +407,13 @@ static void summary_locked(const web_live_t *l, web_live_sum_t *s,
     s->sensor = sensor_word(l, now_ms);
     s->last_record_age_ms = l->last_record_ms < 0 ? -1
                           : now_ms - l->last_record_ms;
+    if (l->sock_state == WEB_SOCK_CONNECTED) {
+        long long from = l->connected_ms;
+        if (l->last_record_ms > from) from = l->last_record_ms;
+        s->silence_ms = now_ms - from;
+    } else {
+        s->silence_ms = -1;
+    }
 }
 
 void web_live_summary(web_live_t *l, web_live_sum_t *s, long long now_ms) {

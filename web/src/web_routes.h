@@ -9,8 +9,10 @@
  *   /api/series   JSON: one series' buckets (web_series.h, M2)
  *   /api/keys     JSON: the keys of one metric
  *   /api/metrics  JSON: the metric catalogue and tiers
- *   /api/anomalies JSON: open and recently closed anomaly episodes (M3)
- *   /events       Server-Sent Events: tick, record, ping
+ *   /api/anomalies JSON: open and recently closed anomaly episodes (M3),
+ *                 ?since= and ?kind= (web_series.h)
+ *   /api/baseline JSON: one series' 168 hour-of-week cells (M3)
+ *   /events       Server-Sent Events: tick, record, anomaly, ping
  *   anything else 404
  *
  * Before the table: no Host, or two, is 400; a Host (or absolute-form
@@ -72,5 +74,9 @@ size_t web_sse_record(char *out, size_t outsz, const web_live_rec_t *e);
 
 /* The keep-alive comment. */
 size_t web_sse_ping(char *out, size_t outsz);
+
+/* One "anomaly" event (§7.1): an episode opened, advanced or closed,
+ * as /api/anomalies renders it. No id, like "record". */
+size_t web_sse_anomaly(char *out, size_t outsz, const web_anom_ep_t *e);
 
 #endif

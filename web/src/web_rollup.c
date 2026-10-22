@@ -249,7 +249,8 @@ static void emit_agg(web_rollup_t *ru, web_rkey_t *k, int m, int tier,
                      web_agg_t *a) {
     if (a->t < 0) return;
     if (tier == WEB_TIER_FINE) ring_push(ru, k->sid[m], a);
-    if (ru->store_on) {
+    if (ru->store_on &&
+        !(ru->store_on == WEB_ROLLUP_Q_LONG && tier == WEB_TIER_FINE)) {
         web_qrow_t *q = q_slot(ru, tier);
         if (q) {
             q->tier = tier;

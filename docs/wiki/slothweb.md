@@ -5,8 +5,14 @@ page tracks what has shipped; the design is
 [`docs/web-ui-spec.md`](../../docs/web-ui-spec.md), whose rulings table
 overrides its body.
 
-**Summary**: slothweb is at M2 (#160) on top of M1 (#159), M0 (#158)
-and W0 (#157). M2 derives the spec §5.1 metrics from the records M1
+**Summary**: slothweb is at M3 (#161) on top of M2 (#160), M1 (#159),
+M0 (#158) and W0 (#157). M3 keeps 168 local hour-of-week baseline cells
+per (metric, key) with the MAD ratio, runs nine of §6's ten anomaly
+rules (A4 moves to M4 with the OUI table) as episodes on the buckets
+that just closed, keeps both in `slothweb.db` (schema v3) across
+restarts, serves them as `/api/anomalies`, `/api/baseline` and an
+`anomaly` event, and draws the Anomalies view and the Overview's band,
+hour-of-week heatmap and top anomalies. M2 derives the spec §5.1 metrics from the records M1
 decodes, rolls them into 10 s, 1 min and 1 h buckets (sum, count, min,
 max), keeps them in its own `slothweb.db` (never `sloth.db`), serves
 them as `/api/series`, and draws the Activity view's band chart and
@@ -28,7 +34,8 @@ tick counter. Every method other than `GET`/`HEAD` is `405` on every
 path, a header block over 8 KB `431`, and idle or slow clients time out
 on an absolute budget.
 
-**Sources**: `web/README.md`, `web/src/web_metrics.c`, `web/src/web_rollup.c`,
+**Sources**: `web/README.md`, `web/src/web_baseline.c`,
+`web/src/web_anomaly.c`, `web/src/web_ident.c`, `web/src/web_metrics.c`, `web/src/web_rollup.c`,
 `web/src/web_store.c`, `web/src/web_tsdb.c`, `web/src/web_series.c`,
 `web/src/web_ingest.c`, `web/src/web_jsonl.c`,
 `web/src/web_live.c`, `web/src/web_json.c`, `web/src/web_acl.c`, `web/src/web_config.c`,
@@ -37,9 +44,11 @@ on an absolute budget.
 `Makefile` (`web`, `web-test`, `cppcheck`), `docs/web-ui-spec.md`,
 `src/jsonl.c` (`jsonl_emit_devices()`, `jsonl_emit_state_snapshots()`),
 `src/db.c` and `src/secure_file.c` (the open and migration rules M2
-re-implements), issues #102, #157, #158, #159 and #160.
+re-implements), `src/top_hosts.c` (what `conn_count` counts),
+`src/probe_pnl.c` (what `mac_random` is), issues #102, #157, #158,
+#159, #160 and #161.
 
-**Last updated**: 2026-10-22 (M2, #160).
+**Last updated**: 2026-10-22 (M3, #161).
 
 ---
 
@@ -66,7 +75,8 @@ resolves a name (its bind address included) and never writes to
 | M0: embedded page, `/api/health`, SSE tick | #158 | shipped |
 | M1: data-socket client, live state, `/api/live`, Overview | #159 | shipped |
 | M2: rollups, `slothweb.db`, `/api/series`, Activity view | #160 | shipped |
-| M3 to M6 (baselines, devices, Wi-Fi, flows) | children of #102 | not started |
+| M3: baselines, anomaly rules and episodes, Anomalies view, heatmaps | #161 | shipped (A4 moved to M4) |
+| M4 to M6 (devices and lookup, Wi-Fi and history, flows) | #162 and on | not started |
 
 ## W0: the access boundary before any route
 
@@ -404,10 +414,51 @@ paging. Every parameter is validated first: known names only, each
 once, percent-decoded to printable ASCII, the key through the metric's
 canonicaliser, the range non-empty, at most a day ahead and no longer
 than the tier keeps. `/api/keys` and `/api/metrics` feed the pickers.
-The Activity view draws the selected series as a line over its
-per-bucket min..max band on Canvas 2D, with a small multiple per key
-(the loudest top left) coloured by the TUI's IP hash palette. Baselines,
-z-scores and the ratio toggle are M3.
+The Activity view draws the selected series as a line on Canvas 2D,
+over its M3 baseline band where there is one and its per-bucket min..max
+band where not, with a small multiple per key (the loudest top left)
+coloured by the TUI's IP hash palette. The `abs(z)` ordering and the
+ratio toggle are not built yet.
+
+## M3: baselines and anomalies
+
+The full account, with every departure from the spec's body and its
+reason, is in [`web/README.md`](../../web/README.md#baselines-and-anomalies-m3).
+In short:
+
+- **Rows, not the store.** The engine reads every minute and hour bucket
+  as it leaves the rollup's queue, and a store-thread step that crosses
+  a minute boundary flushes first. The first M3 slice asked the store
+  whether the bucket had arrived, which depended on the 10 s flush
+  phase: the hour feed ran about one hour in ten, and a minute bucket
+  could be scored twice or not at all.
+- **Baselines.** A cell is the local hour of the week (Monday 00:00
+  first), so a routine survives daylight saving. A counter is per
+  minute. An hour with no row is 0 for a counter and for presence and
+  not a sample for a gauge. The sd is floored at 10% of the mean and one
+  unit, and counters must also pass the MAD ratio over the last 28
+  same-hour rows on disk. Only hours with at least 45 observed minutes
+  are fed; unobserved minutes are not scored.
+- **Rules.** A1 rate, A2 new device (the stream's own `first_seen`, once
+  per MAC), A3 off-hours presence, A5 a randomised MAC sharing another's
+  DHCP or mDNS name, A6 DHCP, mDNS and NBNS names disagreeing, A7 a
+  host's 10-minute peak flow count far above its own p95 (the stream has
+  flow counts, not peer lists), A8 a client's NXDOMAIN share (answers
+  joined to the client by qname: sloth's answers name only the
+  resolver), A9 the first row of a flow series the store has ever had,
+  A10 a connected socket silent for 60 s. A4 needs the OUI table (M4).
+- **Episodes** build, open, close after two quiet evaluated minutes, and
+  are kept 24 h; a recurrence starts a new one. The table holds 512 and
+  never pushes out an open or building episode.
+- **Persistence.** Schema v3 adds `baseline`, `baseline_cell`,
+  `episode`, `fanout` and `reported`, migrated from v2 in one additive
+  `BEGIN IMMEDIATE` step. A memory-only build keeps all of it in memory
+  and says so.
+- **Page.** The Anomalies view (cards with a kind glyph, score bar in
+  the heat ramp, evidence, the metric's last hour, first and last seen,
+  chips by kind), and on the Overview a throughput tile and "now vs
+  normal" over the baseline band, the hour-of-week heatmap, the top five
+  open episodes, and a view-only sensitivity slider.
 
 ## Tests
 
@@ -469,6 +520,17 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | compaction and the ceiling | `test_compaction_retention`, `test_ceiling_drops_oldest_fine_first`, `test_long_stop_expiry_keeps_wal_small`, `test_ceiling_spares_global_series`, `test_ceiling_holds_under_key_churn` |
 | strict parameters, bounded answers, behind the W0/M0 checks | `test_parameters_validated`, `test_series_json_and_paging`, `test_routes`, `test_worst_case_fits`, `test_merged_answer_capped` |
 | writes off the HTTP thread | `test_store_thread` |
+
+#161 (M3) maps as follows.
+
+| Acceptance item | Test |
+|---|---|
+| a generated 7 d stream: nothing fires on the quiet one, A3 for a device that appears only at night, A1 for a burst | `test_six_weeks_quiet_then_burst_and_night` (`test_replay.c`: six generated weeks through the framer, decoder, rollup, store thread and engine on pinned clocks; four weeks warm the cells, which a 7 d stream alone cannot, since a cell sees one sample a week) |
+| the closed hour fed whatever the flush phase | `test_hour_feed_any_flush_phase` |
+| a seeded-state test per rule | `test_anomaly.c`: `test_a1_*`, `test_a2_*`, `test_a3_*`, `test_a5_*`, `test_a6_*`, `test_a7_*`, `test_a8_*`, `test_a9_*`, `test_a10_*`, `test_mad_*` |
+| episodes, the listing, the event | `test_episode_closes_after_two_quiet_minutes`, `test_closed_episode_listed_for_its_window`, `test_reopen_needs_a_fresh_streak`, `test_full_table_keeps_open_episodes`, `test_worst_case_listing_fits`, `test_anomalies_route`, `test_anomalies_route_worst_case`, `test_baseline_route`, `test_anomaly_event_and_tick` |
+| v3 migration, its failure, persistence | `test_v2_file_is_migrated`, `test_v2_failed_step_leaves_file_unchanged`, `test_analysis_state_round_trip`, `test_state_survives_restart` |
+| bounded identity tables | `test_ident.c` |
 
 A test cannot connect from a non-loopback address, so the socket-level
 refusals narrow the list and connect from loopback; the list function

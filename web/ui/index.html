@@ -13,12 +13,12 @@
 <body>
 <div class="app" id="app">
   <aside class="side">
-    <div class="brand">SLOTH<small>web <span id="milestone">M2</span></small></div>
+    <div class="brand">SLOTH<small>web <span id="milestone">M3</span></small></div>
     <ol class="views">
       <li class="on" id="nav-overview"><span class="k">1</span>Overview</li>
       <li class="go" id="nav-activity"><span class="k">2</span>Activity</li>
       <li><span class="k">3</span>Devices</li>
-      <li><span class="k">4</span>Anomalies</li>
+      <li class="go" id="nav-anomalies"><span class="k">4</span>Anomalies</li>
       <li><span class="k">5</span>WiFi</li>
       <li><span class="k">6</span>Alerts</li>
       <li><span class="k">7</span>Flows</li>
@@ -36,6 +36,7 @@
     <span>sensor <b id="s-sock">-</b></span>
     <span>devs <b id="s-devs">-</b></span>
     <span>alerts <b id="s-alerts">-</b></span>
+    <span>anomalies <b id="s-anoms">-</b></span>
     <span>rec/s <b id="s-rate">-</b></span>
     <span>tick <b id="seq">-</b></span>
     <span>up <b id="up">-</b></span>
@@ -44,6 +45,17 @@
   <main>
    <div id="v-overview">
     <section class="kpis" aria-label="overview">
+      <div class="tile">
+        <div class="label">throughput <span id="k-tp-key"></span></div>
+        <div class="kpi" id="k-tp">-</div>
+        <canvas class="spark" id="k-tp-spark" aria-label="throughput, 24 h, over its baseline band"></canvas>
+        <div class="sub" id="k-tp-sub">rx, 24 h, band = mean &#177; k sd</div>
+      </div>
+      <div class="tile">
+        <div class="label">open anomalies</div>
+        <div class="kpi" id="k-anoms">-</div>
+        <div class="sub" id="k-anoms-sub">rules A1-A3, A5-A10</div>
+      </div>
       <div class="tile">
         <div class="label">devices</div>
         <div class="kpi" id="k-devs">-</div>
@@ -65,13 +77,50 @@
         <div class="sub" id="k-sensor-sub">-</div>
       </div>
     </section>
-    <section class="panel">
-      <div class="label">latest alerts</div>
-      <ol class="alerts" id="alerts"></ol>
+    <section class="panel controls" aria-label="sensitivity">
+      <label>sensitivity <input type="range" id="sens" min="1.5" max="4" step="0.5" value="2"></label>
+      <b id="sens-v">2.0</b> sd
+      <span class="sub">view only: the band drawn, and which rate episodes are listed; nothing stored changes, and the server fires A1 at 3 sd</span>
+    </section>
+    <section class="row2">
+      <div class="panel">
+        <div class="label">now vs normal <span class="sub" id="o-nvn-note"></span></div>
+        <canvas class="chart" id="o-nvn" aria-label="throughput against its baseline band"></canvas>
+      </div>
+      <div class="panel">
+        <div class="label">hour of week <span class="sub" id="o-heat-note"></span></div>
+        <canvas class="heat" id="o-heat" aria-label="hour-of-week heatmap, Monday first, the current hour outlined"></canvas>
+        <div class="sub">grey hatched: warming (fewer than 3 weeks); outlined: now</div>
+      </div>
+    </section>
+    <section class="row2">
+      <div class="panel">
+        <div class="label">top anomalies</div>
+        <div class="cards" id="o-anoms"></div>
+      </div>
+      <div class="panel">
+        <div class="label">latest alerts</div>
+        <ol class="alerts" id="alerts"></ol>
+      </div>
     </section>
     <section class="panel">
       <div class="label">records <button type="button" id="pause">pause</button> <span class="sub" id="tick-note"></span></div>
       <ol class="ticker" id="ticker"></ol>
+    </section>
+   </div>
+   <div id="v-anomalies" hidden>
+    <section class="panel controls" aria-label="anomaly filters">
+      <span class="chips" id="n-chips"></span>
+      <label>closed in <select id="n-win">
+        <option value="3600" selected>1 h</option>
+        <option value="21600">6 h</option>
+        <option value="86400">24 h</option>
+      </select></label>
+      <span class="sub" id="n-note"></span>
+    </section>
+    <section class="panel">
+      <div class="label">open first, then closed <span class="sub" id="n-count"></span></div>
+      <div class="cards" id="n-cards"></div>
     </section>
    </div>
    <div id="v-activity" hidden>
@@ -91,7 +140,7 @@
     <section class="panel">
       <div class="label"><span id="a-title">-</span> <span class="sub" id="a-src"></span></div>
       <canvas class="chart" id="a-chart" height="240" aria-label="band chart"></canvas>
-      <div class="sub" id="a-hover">bucket value over its min-max band; baselines arrive with M3</div>
+      <div class="sub" id="a-hover">bucket value over its baseline band (mean &#177; k sd for its hour of the week)</div>
     </section>
     <section class="panel">
       <div class="label">every key, last hour at 10 s <span class="sub" id="a-multi-note"></span></div>

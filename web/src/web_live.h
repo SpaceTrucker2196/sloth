@@ -156,6 +156,11 @@ typedef struct {
     unsigned long long records;
     const char        *sensor;            /* a fixed word, see below */
     long long          last_record_age_ms;  /* -1 never */
+    /* While connected: how long since the later of the last record and
+     * the connection itself, so that a connection that never sends
+     * counts from its start and a fresh one is not charged with the
+     * silence of the last; -1 when not connected. */
+    long long          silence_ms;
 } web_live_sum_t;
 
 /* spec is the operator's --socket text, kept for display. */

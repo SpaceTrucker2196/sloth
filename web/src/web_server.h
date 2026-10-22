@@ -42,6 +42,9 @@
 #define WEB_SSE_RECORDS_PER_TICK 20
 /* Room for one tick event, the live summary included. */
 #define WEB_SSE_EVENT_MAX 1024
+/* Anomaly events sent per tick, at most (§7.1 "on change"). An episode
+ * that changes again before it is sent is sent once, as it is then. */
+#define WEB_SSE_ANOMALIES_PER_TICK 16
 
 typedef struct {
     unsigned long accepted;   /* admitted by the allow list */
@@ -58,6 +61,7 @@ typedef struct {
     unsigned long sse_drop_backlog; /* bytes still unsent at the last drop */
     unsigned long ticks;          /* tick events generated (not per client) */
     unsigned long records_sent;   /* record events generated (not per client) */
+    unsigned long anomalies_sent; /* anomaly events generated (not per client) */
 } web_stats_t;
 
 typedef struct {
@@ -87,6 +91,7 @@ typedef struct {
     web_tsdb_t     *tsdb;     /* NULL: no time series; set before run */
     web_anomaly_t  *anomaly;  /* NULL: no anomaly engine; set before run */
     unsigned long long rec_sent;  /* newest ticker record broadcast */
+    unsigned long long anom_sent; /* newest anomaly change broadcast */
     pthread_mutex_t mu;       /* guards stats only */
     web_stats_t     stats;
 } web_server_t;

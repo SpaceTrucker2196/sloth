@@ -1,4 +1,6 @@
 #include <signal.h>
+#include <stdlib.h>
+#include <time.h>
 
 #include "wtest.h"
 
@@ -6,6 +8,10 @@ int wt_pass, wt_fail;
 
 int main(void) {
     signal(SIGPIPE, SIG_IGN);
+    /* The baselines index the local hour of the week: the suite pins the
+     * zone, as it pins the clock, so a cell is the same on every host. */
+    setenv("TZ", "UTC0", 1);
+    tzset();
     run_acl_tests();
     run_config_tests();
     run_http_tests();
@@ -20,7 +26,9 @@ int main(void) {
     run_store_tests();
     run_series_tests();
     run_baseline_tests();
+    run_ident_tests();
     run_anomaly_tests();
+    run_replay_tests();
     printf("slothweb tests: %d passed, %d failed\n", wt_pass, wt_fail);
     return wt_fail ? 1 : 0;
 }

@@ -250,8 +250,11 @@ typedef struct {
 } web_keyinfo_t;
 
 /* max_keys is --web-max-keys (device keys; hosts get half). store_on
- * says whether closed buckets are queued for a store. 0, or -1 with err
- * (memory). */
+ * says whether closed buckets are queued: 0 not at all, 1 every tier
+ * (for a store), WEB_ROLLUP_Q_LONG the minute and hour tiers only (no
+ * store, but the anomaly engine reads them off the queue, web_tsdb.h).
+ * 0, or -1 with err (memory). */
+#define WEB_ROLLUP_Q_LONG 2
 int  web_rollup_init(web_rollup_t *ru, int max_keys, int store_on,
                      char *err, size_t errsz);
 void web_rollup_destroy(web_rollup_t *ru);

@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "web_ident.h"
 #include "web_live.h"
 
 /* ── keys ────────────────────────────────────────────────────────────── */
@@ -209,6 +210,10 @@ void web_metrics_stream(web_metrics_t *m) {
 
 void web_metrics_taint(web_metrics_t *m) { m->taint = 1; }
 
+void web_metrics_set_ident(web_metrics_t *m, struct web_ident *id) {
+    m->ident = id;
+}
+
 static void hw_unlink(web_metrics_t *m, int idx) {
     int *pp = &m->hw_head[hw_hash(m->hw[idx].id) & (unsigned)(m->hw_nhead - 1)];
     while (*pp >= 0 && *pp != idx) pp = &m->hw[*pp].next;
@@ -326,6 +331,7 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
         m->first_ts = ts;
     }
     if (!strcmp(t, "socket_gap")) { m->taint = 1; return; }
+    if (m->ident) web_ident_record(m->ident, r, now);
 
     if (!strcmp(t, "iface")) {
         if (!m->in_iface) batch_start(m, now);

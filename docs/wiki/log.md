@@ -4731,3 +4731,15 @@ cleanly closed WAL-mode file is identified as an immutable URI, so a
 refused sloth.db no longer gets a `-wal` and `-shm` left beside it. The
 evicted-id filter rotates two generations of 4,096 ids. The DEFENSIVE
 read-back and the writer's second identify are tested through seams.
+
+## 2026-10-22 — slothweb M3: baselines and anomalies (#161)
+
+**Updated**: [slothweb.md](slothweb.md) — M3 shipped: local hour-of-week
+baselines with an sd floor and the MAD ratio, nine anomaly rules as
+episodes (A4 moves to M4 with the OUI table; A7 measures a host's
+10-minute peak flow count, since the stream has no peer lists; A8 joins
+NXDOMAIN answers to the client by qname), fed from the buckets as they
+close rather than from the store, kept in `slothweb.db` schema v3 across
+restarts, served as `/api/anomalies`, `/api/baseline` and an `anomaly`
+event, and drawn by the Anomalies view and the Overview's band,
+heatmap and top anomalies. Updated `web/README.md`.

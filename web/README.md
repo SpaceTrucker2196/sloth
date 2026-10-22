@@ -4,7 +4,7 @@ The browser dashboard for sloth data, built in milestones. The spec is
 [`docs/web-ui-spec.md`](../docs/web-ui-spec.md); the rulings table at its
 top overrides the body. Tracker: #102.
 
-**This is the backend half of M3 (#161), on top of M2 (#160), M1
+**This is M3 (#161), on top of M2 (#160), M1
 (#159), M0 (#158) and W0 (#157).** W0 is the listener, the
 allowed-peer list and its refusals. M0 added the embedded page,
 `/api/health` and an `/events` stream. M1 added the data-socket
@@ -16,22 +16,16 @@ same records, rolled into 10 s, 1 min and 1 h buckets, kept in
 slothweb's own `slothweb.db`, served as `/api/series`, and drawn by
 the Activity view. Run it beside sloth and open `http://127.0.0.1:8770`.
 
-**M3 adds baselines and anomaly rules** (`web_baseline.h`,
-`web_anomaly.h`), served as `/api/anomalies`: 168 hour-of-week cells
-per (metric, key) with a four-week EWMA half-life (§5.3), and five of
-§6's ten rules — A1 (any keyed metric's minute value out of band for
-three consecutive minutes, which also covers §6's A7 since
-`host.conns` is one of the metrics A1 scans), A3 (a device present in
-an hour of the week it is normally absent), A8 (a host's NXDOMAIN
-share over its last ten minutes), A9 (a host's first-ever use of
-flow.ssh/rdp/smb/snmp/mqtt) and A10 (the data socket connected but
-silent). **A2, A4, A5 and A6 are not implemented**: each is a lookup
-against `sloth.db` or the vendor/name lookup module, neither of which
-exists yet — that is M4 (#162). The Anomalies view and the Overview
-heatmaps §6/§8.4 call for are also not built yet; today the rules are
-only reachable at `/api/anomalies`. Without SQLite, A10 still runs (it
-only needs the live state); A1, A3, A8 and A9 need the minute or hour
-tier and do not.
+**M3 adds baselines and anomaly episodes** (`web_baseline.h`,
+`web_anomaly.h`, `web_ident.h`): 168 local hour-of-week cells per
+(metric, key) with a four-week EWMA half-life and the MAD ratio
+(§5.3), nine of §6's ten rules as episodes (A1-A3, A5-A10; A4 needs
+the OUI table and moves to M4, #162), all of it kept in `slothweb.db`
+across restarts, served as `/api/anomalies`, `/api/baseline` and an
+`anomaly` event on `/events`, and drawn by the Anomalies view and the
+Overview's band, hour-of-week heatmap and top anomalies. The details,
+and every place this departs from the spec's body and why, are in
+[Baselines and anomalies](#baselines-and-anomalies-m3) below.
 
 ## Build and run
 
@@ -71,8 +65,8 @@ and is never committed; neither is any font. No Python, no Node.
 | `--web-allow CIDR` | Admit peers in `CIDR` as well as loopback. Repeatable, up to 30 entries. Host bits past the prefix must be zero (`10.0.0.1/8` is refused, write `10.0.0.0/8`). A non-loopback entry needs `--web-allow-remote`. |
 | `--web-allow-remote` | Authorise a non-loopback bind and non-loopback `--web-allow` entries. Each one is announced on stderr at startup. It authorises the bind, not the peers: with no `--web-allow`, a remote bind still admits loopback only. |
 | `--strict` | Refuse any non-loopback bind or allow entry, even with `--web-allow-remote`, and a non-loopback `--socket tcp:` address. Same shape as sloth's `--strict` refusing a routable `--data-socket`. |
-| `--store PATH` | slothweb's own SQLite file for the time series (M2); default `./slothweb.db`. Never `sloth.db`: a file that is not a slothweb store is refused untouched (below). Needs a `WITH_SQLITE` build; in one without, the flag is a usage error. |
-| `--web-max-keys N` | Device keys tracked by keyed metrics, 16..8192, default 512; host keys get N/2 (256). Least recently seen out first. |
+| `--store PATH` | slothweb's own SQLite file for the time series (M2) and the baselines and anomaly episodes (M3); default `./slothweb.db`. Never `sloth.db`: a file that is not a slothweb store is refused untouched (below). Needs a `WITH_SQLITE` build; in one without, the flag is a usage error. |
+| `--web-max-keys N` | Device keys tracked by keyed metrics, 16..8192, default 512; host keys get N/2 (256). Least recently seen out first. It also sizes M3's tables: the baseline cap (`web_baseline_cap_for()`), the identity tables (N MACs, N/2 IPs) and A7's hosts (N/2). |
 | `--web-max-mb N` | Ceiling on the store's used size, in MB, default 256. Checked after every 10 s write and at each compaction; over it, the oldest 10 s rows go first, then the 1 min and 1 h rows of keyed series, and the global series' rows last. |
 | `--web-retain-days N` | Days of 1 min buckets kept, 1..400, default 30. |
 | `--help` | Usage. |
@@ -102,7 +96,8 @@ the store is refused, `2` on a usage error or a policy refusal.
    | `GET /api/health` | `200` JSON, `Cache-Control: no-store` |
    | `GET /api/live` | `200` JSON, `Cache-Control: no-store` |
    | `GET /api/series?...`, `/api/keys?...`, `/api/metrics` | `200` JSON, `Cache-Control: no-store`; `400` with `{"error":"reason"}` for a parameter that does not pass (below); `503` with no time series attached |
-   | `GET /api/anomalies` | `200` JSON, `Cache-Control: no-store`, open and recently-closed episodes; no query parameters yet, any query is `400` |
+   | `GET /api/anomalies?since=&kind=` | `200` JSON, `Cache-Control: no-store`, open episodes and those closed since `since` (below); `400` for a parameter that does not pass; `503` with no anomaly engine |
+   | `GET /api/baseline?metric=&key=` | `200` JSON, one series' 168 hour-of-week cells; `400` / `503` as above |
    | `GET /events` | `200` `text/event-stream`, held open (below) |
    | `GET /events` with 24 streams already open | `503` |
    | `GET` any other path | `404` |
@@ -148,7 +143,8 @@ accept, busy, served, timed out, accept back-offs.
 
 Paths match exactly, and an absolute-form target (`GET
 http://127.0.0.1:8770/ HTTP/1.1`) routes by its path. The query string
-is ignored except by the three M2 routes, which validate it whole.
+is ignored except by the three M2 routes and the two M3 ones, which
+validate it whole.
 
 **`/`** is the one page: `web/ui/index.html` with `theme.css`,
 `page.css` and `app.js` inline. The `ETag` is the first 128 bits of the
@@ -170,7 +166,7 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
 **`/api/health`** answers
 
 ```json
-{"service":"slothweb","milestone":"M2","uptime_s":12,
+{"service":"slothweb","milestone":"M3","uptime_s":12,
  "socket":"connected","socket_spec":"unix:/run/sloth/sloth.sock",
  "last_record_age_s":0,"socket_attempts":1,"socket_connects":1,
  "socket_reconnects":0,"socket_failures":0,"socket_closes":0,
@@ -181,7 +177,7 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
    "not_object":0,"duplicate_key":0,"no_type":0,"overlong":0,"truncated":0},
  "socket_gaps":0,"socket_gap_dropped":0,
  "db":"none","db_schema":null,"db_rows":null,
- "store":"open","store_path":"./slothweb.db","store_schema":2,
+ "store":"open","store_path":"./slothweb.db","store_schema":3,
  "store_rows":{"fine":42120,"minute":7020,"hour":117},
  "store_bytes":1765376,"store_max_bytes":268435456,"store_batches":360,
  "store_write_errors":0,"store_last_error":null,"store_compactions":2,
@@ -194,6 +190,17 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
  "series":117,"samples":221385,"ring_rows":42120,"queue_rows":0,
  "queue_cap":32768,"queue_dropped":0,"churn_dropped":0,"highwater_evictions":0,
  "values_clamped":0,
+ "anomaly":{"open":1,"building":0,"closed_kept":2,"cap":512,"opened":3,
+   "closed":2,"dropped":0,"evicted_closed":0,"candidates_dropped":0,
+   "rows_dropped":0,"late_rows":4,"hours_fed":31,"hours_unobserved":1,
+   "minutes_unobserved":3,"mad":true,"mad_queries":2,"mad_skipped":0,
+   "a9":true,"a9_queries":5,"fanout_hosts":20,"fanout_evictions":0,
+   "reported":1,"reported_evictions":0,"known_evictions":0,
+   "persist_errors":0,"persisted":true},
+ "baseline":{"entries":212,"cap":4930,"evictions":0,"aged_out":0,
+   "fed":6020,"zero_fed":1311,"deletes_lost":0},
+ "ident":{"macs":30,"mac_cap":512,"mac_evictions":0,"ips":24,"ip_cap":256,
+   "ip_evictions":0,"dns_matched":12,"dns_unmatched":3,"query_overwrites":0},
  "sse_clients":1,"tick_seq":12}
 ```
 
@@ -212,7 +219,10 @@ disk is not counted again) and recounted at each compaction;
 `key_returns` evicted device and host keys that came back and were given
 their earlier life (below), `queue_cap` the store queue's size and
 `queue_dropped` the closed buckets it had no room for, and
-`highwater_evictions` rows pushed out of the running-total table.
+`highwater_evictions` rows pushed out of the running-total table. The
+`anomaly`, `baseline` and `ident` members are M3's: every table the
+engine keeps, its bound, and what it has had to drop or evict (below);
+`persisted` is `false` in a build without SQLite.
 
 **`/api/live`** is the live state:
 
@@ -247,8 +257,9 @@ their earlier life (below), `queue_cap` the store queue's size and
 
 | Event | Cadence | Payload |
 |---|---|---|
-| `tick` (with `id:`) | 1 s | `{"seq":N,"ts":UNIX,"uptime_s":U,"sse_clients":K,"socket":"connected","devices":42,"devices_stale":false,"alerts_open":[low,warn,crit],"records_s":61.4,"records":9120,"sensor":"ok"}` |
+| `tick` (with `id:`) | 1 s | `{"seq":N,"ts":UNIX,"uptime_s":U,"sse_clients":K,"socket":"connected","devices":42,"devices_stale":false,"alerts_open":[low,warn,crit],"records_s":61.4,"records":9120,"sensor":"ok","anomalies_open":1}` |
 | `record` | with each tick | `{"seq":N,"type":"dns","ts":UNIX,"text":"..."}`, the records added since the previous tick, the newest 20 at most (spec §7.1: coalesced to 20 a second); a gap in `seq` says some were skipped |
+| `anomaly` | with each tick, on change | one episode as `/api/anomalies` renders it, each time it opens, advances (an open episode's minute) or closes; the newest 16 changes a tick at most, an episode that changed twice sent once as it is now |
 | `: ping` comment | 15 s | none; keeps proxies and idle timers from closing it |
 
 `seq` counts up by one per second from start-up; a late wake-up sends
@@ -470,9 +481,11 @@ and in a build without SQLite it is all there is.
 
 ### slothweb.db
 
-`--store` (default `./slothweb.db`) is slothweb's file and holds nothing
-but closed buckets: `series(id, metric, key)` and one table per tier,
-`(series, t, sum, n, min, max)`. It is never `sloth.db`.
+`--store` (default `./slothweb.db`) is slothweb's file. It holds the
+closed buckets, `series(id, metric, key)` and one table per tier,
+`(series, t, sum, n, min, max)`, and since v3 the anomaly engine's
+state (`baseline`, `baseline_cell`, `episode`, `fanout`, `reported`;
+[below](#baselines-and-anomalies-m3)). It is never `sloth.db`.
 
 - **Opening** follows sloth's rules for its own database (`src/db.c`,
   `src/secure_file.c`, re-implemented because no `src/` file is linked):
@@ -510,10 +523,10 @@ but closed buckets: `series(id, metric, key)` and one table per tier,
   own version stamp, so a failed step leaves the file at the version it
   last reached, with the step's own changes rolled back. A new file is
   stamped v0 first and takes the same chain, so the chain runs on every
-  first start. Today the chain is two steps: v0 to v1 creates the four
-  tables, v1 to v2 indexes each tier on `t` (plain `CREATE TABLE` and
-  `CREATE INDEX`: a name already taken fails the step rather than being
-  adopted).
+  first start. Today the chain is three steps: v0 to v1 creates the four
+  tables, v1 to v2 indexes each tier on `t`, v2 to v3 creates the five
+  analysis tables (plain `CREATE TABLE` and `CREATE INDEX`: a name
+  already taken fails the step rather than being adopted).
 - **No column can hold a credential**: `web/tests/test_store.c` keeps
   sloth's `test_db.c` guardrail (no column named for a password, a
   community, a nonce, a key or a token may be TEXT or BLOB), and scans
@@ -648,10 +661,12 @@ this build serves them.
 metric (from `/api/metrics`), a key (from `/api/keys`) and a window
 (1 h, 6 h and 24 h from the 10 s tier; 7 d and 30 d from 1 min; 400 d
 from 1 h), and draws the series on Canvas 2D: the bucket value as a
-line over its min..max band. That band is the spread inside each bucket;
-the spec's baseline band (`mean ± 2 sd`), the z-score in the hover, the
-`abs(z)` ordering and the ratio-to-baseline toggle need M3's baselines
-and are not here. Below it, a small multiple per key (the 24 most
+line over the baseline band, `mean ± k sd` of each bucket's hour of the
+week with `k` the sensitivity slider's (2 by default), a segment out of
+the band in the heat ramp, and the baseline mean and z in the hover. A
+series with no baseline yet is drawn over its min..max spread instead.
+The spec's `abs(z)` ordering of the small multiples and the
+ratio-to-baseline toggle are not here yet. Below it, a small multiple per key (the 24 most
 recently seen), each the last hour at 10 s, sorted by current value so
 the loudest is top left, with the key in the TUI's colour for it: the
 eight hues of `src/tui_palette.c` picked by `src/ip_color.c`'s hash
@@ -660,6 +675,213 @@ keeps the colours equal). Colours come from `theme.css` tokens read back
 at run time. Keys are shown with `textContent` and `fillText` only and
 leave the page only as an `encodeURIComponent()`'d parameter of a
 same-origin `fetch`.
+
+## Baselines and anomalies (M3)
+
+### Where the numbers come from
+
+The engine reads the buckets that close, not the store. The store
+thread hands it every minute and hour row as the row leaves the
+rollup's queue (`web_tsdb_set_rows_hook`), after writing it, and a
+store-thread step that crosses a minute boundary flushes first whatever
+the 10 s flush cadence says, so the minute pass that runs at the first
+step of minute `m+1` has every row the boundary closed for minute `m`.
+Rows are merged per `(tier, metric, key, t)`: an eviction and a return
+can close one bucket in two parts. The previous slice instead asked the
+store for "the newest minute row in the last two minutes" and "the hour
+row that just closed"; whether either had been flushed yet depended on
+the flush phase, so a bucket was scored twice or not at all, and the
+hour feed ran for about one hour in ten.
+
+Without SQLite the rollup still queues its minute and hour rows (and
+not its 10 s rows) for the engine, so the baselines and every rule but
+A9 run in memory, and are lost at exit.
+
+**Observed time.** A minute is observed when the socket was connected
+and a record had arrived within 60 s at every store-thread step in it,
+and slothweb was running at its start. A minute that was not is not
+scored at all: neither a hit nor a quiet minute for any episode. An
+hour is fed to the baselines only when at least 45 of its minutes were
+observed; otherwise it is skipped and counted (`hours_unobserved`): a
+counter that did not see half its hour would read as a quiet hour.
+
+### The baseline (§5.3)
+
+- **Cells** are the local hour of the week, `((tm_wday + 6) % 7) * 24 +
+  tm_hour` from `localtime_r()`, Monday 00:00 first, so a routine keeps
+  its cells across a daylight-saving change (a UTC index moved every
+  edge hour of a routine by one cell twice a year). A closed hour starts
+  on a UTC hour and is filed under the local hour its start falls in.
+  `/api/baseline` reports `now_cell` and the current `utc_offset_s` so
+  the page maps a time to the same cell.
+- **Scale.** A gauge's mean, a presence metric's max (0 or 1), and a
+  counter's count **per minute**, so a minute bucket and an hour bucket
+  of a counter compare directly.
+- **An hour with no row** is 0 for a counter and for presence (a counter
+  that counted nothing, a device that was not there), fed to every
+  counter and presence entry the hour did not feed. For a gauge it is
+  not a sample: sloth not reporting a host, a channel or an interface is
+  not a measurement of zero. Only an entry that exists is zero-fed; an
+  entry is made by a key's first real hour row.
+- **The sd floor.** A score divides by `max(sd, 10% of |mean|, one
+  unit)`, one unit being one count a minute, one connection, one AP, or
+  1 KiB/s for a byte rate. A cell whose samples were all equal has
+  variance 0; with the previous `sqrt(var + 1e-9)` one more AP on a
+  channel scored z = 31,623.
+- **The MAD ratio.** For an A1 candidate on a counter, the last 28 hour
+  rows of the same local hour of the week are read from the hour tier
+  (28 primary-key lookups; a DST change moves the target hour by one),
+  and the candidate stands only if Iglewicz and Hoaglin's modified z,
+  `0.6745 |x - median| / MAD`, is at least 3.5 (MAD floored like the
+  sd). With fewer than 6 rows there is no claim and z alone decides. An
+  hour with no row is not in the sample: the file cannot tell an hour
+  that counted nothing from one slothweb did not see. Computed once per
+  series per hour, at most 32 series a minute (past that z alone
+  decides, counted as `mad_skipped`). A memory-only build has no hour
+  tier and skips it.
+- **The table** holds `web_baseline_cap_for(--web-max-keys)` entries
+  (4,930 at the default) but allocates them 256 at a time as they are
+  made; a cell is 12 bytes (float mean and variance, a 16-bit count), an
+  entry about 2.1 KB. A free list and an LRU list ordered by the last
+  hour with a real row make every insert, touch and eviction O(1); an
+  entry idle longer than the hour tier keeps (400 days) is aged out.
+
+### The rules (§6)
+
+| Rule | Kind | What it measures |
+|---|---|---|
+| A1 | `rate` | a keyed, non-presence metric's minute value (a counter's count, a gauge's mean) with `|z| >= 3` against its cell, in 3 consecutive observed minutes; a counter with a baseline and no row this minute is scored as 0, a gauge with no row breaks the streak; a counter must also pass the MAD ratio |
+| A2 | `new` | a MAC whose own `first_seen` (the `probe_client`, `pnl_client` or `assoc` row's, from sloth) is within 24 h, reported once per MAC across restarts; randomised MACs are left out (each rotation is new by construction; A5 is about them) |
+| A3 | `hours` | a MAC present this minute in a cell whose presence mean is below 0.1 over 4 or more weeks |
+| A5 | `ident` | a randomised MAC (the locally administered bit, which is how sloth sets `mac_random`) whose DHCP or mDNS hostname is also the name of another MAC |
+| A6 | `ident` | an IP whose current DHCP hostname, mDNS host and NBNS name (two or more of them) disagree in normal form |
+| A7 | `fanout` | the largest `host.conns` sample of each 10-minute window against the host's own p95 of that value; fires above both 2 x p95 and p95 + 5, after 144 windows |
+| A8 | `dns` | a client with 20 or more queries in 10 min and more than 30% of them answered NXDOMAIN |
+| A9 | `proto` | a host's `flow.{ssh,rdp,smb,snmp,mqtt}` minute row with no row of that series before it in the minute or hour tier |
+| A10 | `sensor` | the socket connected and nothing received for 60 s, counted from the later of the last record and the connection |
+
+Where this departs from the spec's body, and why:
+
+- **A2** reads `first_seen` from the stream, not `sloth.db` (M3 reads no
+  `sloth.db`; M4 does). Only stations sloth heard over the air carry
+  one (`arp` and `device` do not), and a row sloth evicted and made
+  again has a new `first_seen`; `sloth.db`'s `devices.first_seen` is the
+  durable answer, in M4.
+- **A4** (vendor unknown) needs the full IEEE OUI table, which is M4's
+  (#162). Not here.
+- **A5 and A6** use the names the stream carries: `device.hostname`
+  (sloth's copy of the DHCP lease hostname), `dhcp_lease`, `mdns_service`
+  and `nbns_name` (suffixes 0x00 and 0x20 only: the others name a group).
+  A name reached through an IP counts for a MAC only while that IP's own
+  ARP binding is that MAC, so a lease handed to another device does not
+  name both. Names compare as ASCII lower case, first label only, and an
+  NBNS name against the first 15 bytes of the other.
+- **A7.** The spec asks for distinct peers in 10 minutes. The stream has
+  no per-host peer list: `top_host` is a remote IP the sensor host talks
+  to, and its `conn_count` is the number of distinct flows between the
+  two in one poll (`src/top_hosts.c`). A7 measures that. And "above its
+  own p95" alone is true of one window in twenty by construction; the
+  margin is what keeps a quiet stream quiet.
+- **A8.** sloth's `dns` record names its sender only, so an NXDOMAIN
+  answer's `src` is the resolver, and `dns.nxdomain` is keyed by it. The
+  previous slice divided a host's NXDOMAIN answers *sent* by its queries
+  and could not fire for a client. A8 now joins an answer to the client
+  that asked the same qname (held as a 64-bit hash, never the text) in
+  the 10 s before, once.
+- **A9** "first ever" is the store's: any earlier row of that series in
+  the minute (30 d) or hour (400 d) tier. The previous slice used "no
+  baseline entry", which every restart and every LRU eviction made true
+  again. A memory-only build has no history to ask and skips A9.
+
+### Episodes
+
+An episode is one row per (rule, metric, key) that advances: building
+until its rule has held for 3 consecutive evaluated buckets (A1) or 1
+(the rest), then open, then closed after 2 evaluated buckets in which it
+did not hold. One bucket advances an episode once, however often it is
+scored. A building episode that misses a bucket is dropped. A closed
+episode is kept for 24 h; if its rule holds again a new episode starts
+and has to earn its streak afresh (the previous slice deleted a closed
+episode a minute after it closed, and a recurrence in that minute
+reopened it at once with its old streak). The table holds 512: a new
+episode takes a free slot or the oldest closed one; an open or building
+one is never pushed out, and the newcomer is dropped and counted.
+
+The rules run without the episode lock, which is taken only to apply a
+minute's candidates, so a request never waits on a rule's SQLite.
+
+### What outlives a restart
+
+Schema v3 adds five tables; the store thread writes them, and they are
+read back before any thread starts:
+
+| Table | Holds | Written |
+|---|---|---|
+| `baseline (id, metric, key, last_active, last_fed)` | one row per entry | after each hour's feed, with its cells |
+| `baseline_cell (cell, id, mean, var, n)` | the cells fed, keyed `(cell, id)` so that the hourly write, the same cell of every entry, is a run of adjacent rows | after each hour's feed |
+| `episode (id, kind, metric, key, state, score, peak, evidence, ...)` | open and closed episodes; `kind` holds the rule (`A1`..`A10`) | each minute an episode changes |
+| `fanout (key, windows, hist)` | A7's per-host histogram, 16 weights as text | at each 10-minute window |
+| `reported (kind, key, t)` | the MACs A2 has reported in the last 24 h | as they are reported |
+
+At start the most recently active entries up to the cap are loaded and
+any other row is deleted, so the file never holds a row the table does
+not. Episodes older than 24 h are dropped. A memory-only build keeps all
+of it in memory, says so at start and on `/api/health`
+(`"persisted":false`), and loses it at exit.
+
+### /api/anomalies and /api/baseline
+
+`/api/anomalies?since=S&kind=K` answers
+
+```json
+{"now":1792684660,"since":1792681060,"anomalies":[
+  {"id":2,"rule":"A1","kind":"rate","metric":"host.conns","key":"10.0.0.5",
+   "score":100,"peak":100,"evidence":"host.conns[10.0.0.5] z=195.0 value=200 baseline=5±1",
+   "first_seen":1792684620,"last_seen":1792684800,"state":"open","open":true}],
+ "more":false,"omitted":0}
+```
+
+open episodes first, highest score first, then those closed at or after
+`since` (default an hour ago, never earlier than the 24 h kept), newest
+first; `kind` is one of `rate`, `new`, `hours`, `ident`, `fanout`,
+`dns`, `proto`, `sensor`. The list stops before an episode that might
+not fit (the worst case is 159 bytes of evidence and a 47-byte key, each
+byte escaped six-fold) with `"more":true` and `omitted`, so it always
+fits; the previous slice answered `503` past 276 episodes. Evidence is
+slothweb's own sentence; names in it came off the stream, cut on a
+code-point boundary and escaped like every other string.
+
+`/api/baseline?metric=M&key=K` answers the 168 cells of one series as
+`[mean, sd, n]` (sd floored as a score floors it), Monday 00:00 local
+first, with `now_cell`, `utc_offset_s`, `warm_n` and `scale`
+(`per_minute`, `mean` or `share_of_weeks`); `"cells":null` for a pair
+never fed.
+
+### The Anomalies view and the Overview
+
+`4` (or the sidebar) opens the Anomalies view (§8.7): one card per
+episode, open first, each with its kind's glyph (`~` rate, `+` new, `@`
+hours, `=` ident, `<` fanout, `?` dns, `^` proto, `!` sensor) and word,
+the key in its hash colour, a score bar in the heat ramp, the evidence,
+the last hour of the metric that fired (from `/api/series`), and first
+and last seen; chips filter by kind, and a window picks how far back
+closed episodes are listed. It re-reads `/api/anomalies` on each
+`anomaly` event, at most once a second. Opening a device or host drawer
+from a card waits for M4's drawers.
+
+The Overview (§8.4) gains a throughput tile (the `iface.rx_rate` of the
+interface sloth reported most recently) with its 24 h sparkline over the
+baseline band, an open-anomalies tile, "now vs normal" (the same series,
+larger), the hour-of-week heatmap of that series (7 x 24, the heat ramp
+by mean, warming cells grey and hatched, the current cell outlined in
+`--signal`), and the five highest-scoring open episodes. The device,
+alert and anomaly counts have no stored series behind them, so only
+throughput has a band.
+
+The **sensitivity** slider (1.5 to 4 sd, kept in this browser only)
+changes the band drawn and hides `rate` episodes whose |z| is under it.
+It changes nothing stored, and the server fires A1 at 3 sd whatever it
+says, so a setting under 3 shows what 3 shows.
 
 ## What it never does
 
@@ -681,8 +903,9 @@ same-origin `fetch`.
 `web/src/` modules (not `main.c`). It needs no host file and no running
 sloth, opens only loopback ephemeral ports (`127.0.0.1` and `::1`, port
 0), and unix sockets and SQLite files in fresh `mkdtemp()` directories
-under `/tmp`, and never leaves the host. Every M2 test runs on a pinned
-clock. `make web-test WITH_SQLITE=0` builds and runs the same suite
+under `/tmp`, and never leaves the host. Every M2 and M3 test runs on a
+pinned clock, and the suite pins the zone (`TZ=UTC0`) too, since a
+baseline cell is a local hour. `make web-test WITH_SQLITE=0` builds and runs the same suite
 against the memory-only build. It is clean under
 `EXTRA_CFLAGS="-Werror -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"`
 and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
@@ -693,18 +916,20 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_acl.c` | the list on hand-built sockaddrs: loopback default, non-loopback v4/v6 refused, prefix boundaries, v4-mapped folding, CIDR parse errors |
 | `test_config.c` | default bind, remote bind refused without the flag and announced with it, remote `--web-allow` needs the flag, `--strict`; `--socket` default, parsing, the announcement of a non-loopback `tcp:` and its `--strict` refusal |
 | `test_http.c` | hand-written request bytes: GET/HEAD routed, 405 for every other method, split reads, 400/505, the 8 KB boundary, path and query, `If-None-Match` collection and weak comparison, `Host` collection and which values are accepted |
-| `test_routes.c` | the route table without a socket: page `200`/`304`/`HEAD`, no external reference in the served page, no HTML or code sink in its script (stream values are `textContent` only), the system font stack, the §8.1 tokens, the CSP hashes recomputed (SHA-256 checked against FIPS 180-4 vectors), health JSON, stream headers, `503`, event formats, `404`, `405` on every route, `421` for a foreign `Host` on every route and `400` for none or two |
+| `test_routes.c` | the route table without a socket: page `200`/`304`/`HEAD`, no external reference in the served page, no HTML or code sink in its script (stream values are `textContent` only), the system font stack, the §8.1 tokens, the CSP hashes recomputed (SHA-256 checked against FIPS 180-4 vectors), health JSON, stream headers, `503`, event formats, `404`, `405` on every route, `421` for a foreign `Host` on every route and `400` for none or two; `/api/anomalies` (`503` without an engine, the JSON byte for byte, `HEAD`, every `400`, the filters, the worst case a `200` with `more`), `/api/baseline` (`503`, every `400`, never fed, a fed cell at its index), the `anomaly` event as one data line, `anomalies_open` in the tick, the M3 health members |
 | `test_json.c` | the writer's escaping byte for byte: markup, quotes, controls, C1, U+2028/9, invalid UTF-8 as U+FFFD, the code-point-boundary cut |
 | `test_jsonl.c` | hand-written lines: sloth's shapes, escapes and surrogate pairs, member text inside a string, every truncation of a record, syntax errors, invalid UTF-8 raw and escaped, duplicate members, the depth, member and integer limits |
 | `test_live.c` | the live state and the framer without a socket: the device count per pass, passes cut by a gap, a bad line or a bad type not published, an empty table publishing 0, a reconnect as a new stream, the alert lifecycle counts, type names, records per second, sensor-health states, the recent ring, hostile strings escaped in `/api/live` and in `record` events, the worst-case `/api/live` fitting its buffer, split reads, truncated and overlong lines |
 | `test_ingest.c` | the client over a real unix socket and loopback TCP, the test playing sloth: `--socket` parsing and its refusals, the back-off bound, **the device count `/api/live` reports matching what the fake sent within 5 s** for 3, 12, 300, 0 and 7 devices (spec §12, M1), markup escaped over HTTP and over `/events`, reconnect after the peer closes, retrying with no peer at the capped interval, no tight loop on a peer that closes at once, a mixed stream of truncated, overlong, invalid-UTF-8 and hostile lines, and that the client never writes to the socket |
 | `test_rollup.c` | bucket boundaries in all three tiers, sum/count/min/max, value by kind, non-finite and huge values, the per-class key caps and LRU eviction with its flush and counters, churn decided on a key's whole life (keys of two and three samples crossing minute and hour boundaries keep only their 10 s rows, a key spanning a minute keeps all), held rows released when a key is established and at shutdown, a host recurring under LRU pressure keeping its minute and hour rows, interface, channel and alert keys established from their first sample and in classes of their own, the ring query's merge and bounds, the full store queue dropping 10 s rows before minute and hour rows and counting them, and every class full at `--web-max-keys` 8192 across an hour boundary and a shutdown with nothing dropped |
 | `test_metrics.c` | hand-written lines through the decoder on a pinned clock: the key canonicalisers, gauges from `%.2f` reals, hostile keys refused, event counters, running totals as deltas floored at zero and first-sight baselines, flows, channels, presence, a probe request counted once though both `probe_client` and `seqnum_client` carry it, rows per pass with gaps and bad lines, the bounded high-water table, an evicted row seen again not counted twice, the evicted-id filter's two generations remembering an id across 8,191 evictions and forgetting it at the next rotation |
-| `test_store.c` | the DDL guardrail in every build; with SQLite: a fresh store, `test_db.c`'s secret-column sweep, secrets fed through the stream absent from the file, a v0 and a v1 file migrated, a v0 and a v1 file whose step fails left where they were, a newer file and foreign files (a sloth.db shape, other databases, a file with another program's `application_id` and `user_version` but no table yet, our own `meta` under a foreign `application_id`, not SQLite) refused byte for byte, a WAL-mode sloth.db with an unflushed WAL refused with the file and its WAL byte for byte, a cleanly closed WAL-mode sloth.db refused with its directory listing unchanged, the file rules (symlink, mode, links, side files, a directory; the owner rule is not tested, see below), `DEFENSIVE` refusing a `sqlite_master` write on the store's handle and a library that leaves it off failing the open, a file swapped between the identifying and the writing open refused byte for byte, merged writes counted once in `store_rows` and bound queries, retention, the WAL left empty by the compaction, a start after a long stop expiring everything with the WAL never past one slice, the ceiling dropping the oldest fine rows first and sparing global series, and holding under 200 new keys a second within one flush interval; churn of two and three samples per key writing no minute or hour row while slothweb runs |
+| `test_store.c` | the DDL guardrail in every build; with SQLite: a fresh store, `test_db.c`'s secret-column sweep, secrets fed through the stream absent from the file, a v0, a v1 and a v2 file migrated, a v0, a v1 and a v2 file whose step fails left where they were, the v3 tables through their own calls (a baseline restored into a smaller table with the rest and an invalid row deleted, episodes expired at load, histograms, the reported set pruned, the A9 and MAD reads), a newer file and foreign files (a sloth.db shape, other databases, a file with another program's `application_id` and `user_version` but no table yet, our own `meta` under a foreign `application_id`, not SQLite) refused byte for byte, a WAL-mode sloth.db with an unflushed WAL refused with the file and its WAL byte for byte, a cleanly closed WAL-mode sloth.db refused with its directory listing unchanged, the file rules (symlink, mode, links, side files, a directory; the owner rule is not tested, see below), `DEFENSIVE` refusing a `sqlite_master` write on the store's handle and a library that leaves it off failing the open, a file swapped between the identifying and the writing open refused byte for byte, merged writes counted once in `store_rows` and bound queries, retention, the WAL left empty by the compaction, a start after a long stop expiring everything with the WAL never past one slice, the ceiling dropping the oldest fine rows first and sparing global series, and holding under 200 new keys a second within one flush interval; churn of two and three samples per key writing no minute or hour row while slothweb runs |
 | `test_series.c` | every parameter rule and its reason, the answer's shape and paging, the routes (`HEAD`, `400` without echo, `query_too_long`, `421` and `405` on all three, `503` without a time series, the health members), the 900-point worst case fitting, the 900-point cap on a store+memory answer of 1,800 buckets and its next page, the store thread running beside reads and writes, and spec §12's M2 acceptance: an hour of records through the framer on a pinned clock, the 24 h request answered with 360 points 10 s apart (from memory, from the store's fine tier, and through `/api/series` again after a restart over the same store), the store under 5 MB on disk with its WAL after every step of the hour |
 | `test_server.c` | real loopback sockets: default bind address, a refused peer over v4 and v6, 405 for POST/PUT/DELETE/PATCH, 431, idle and slow clients timed out, slot exhaustion; the page byte for byte and its `304`, health, a stream's ticks and pings and the client leaving, the first tick at once, a departing client noticed on the read path with no event due, the stream socket's `TCP_NODELAY` and `SO_SNDBUF`, a non-reading stream client dropped at the 64 KB backlog and not past it, the stream cap, `421` for `Host: attacker.example` |
-| `test_baseline.c` | the hour-of-week index wrapping weekly, a never-fed (metric, key) scoring absent, fewer than `WEB_BL_WARM_N` feeds forcing z to 0 even against a wildly different probe, an established cell scoring a near-zero z at its own mean and a large one far from it, two hour-of-week cells of the same (metric, key) warming independently, a full table evicting the least-recently-fed entry and never one still in use, re-feeding the same pair not growing the table, `web_baseline_cap_for()` at the default and the extremes, and a NaN/infinite feed ignored |
-| `test_anomaly.c` | end to end against a real `slothweb.db` and rollup, weeks of baseline history established through `web_baseline_feed()` directly and "now" written through `web_store_write()` and read back by the rule through `web_store_query()` — the same call production makes: the hourly pass itself wiring a closed hour bucket into the baseline, A1 opening on three consecutive minutes of a sustained burst and staying silent on a quiet stream or two burst minutes broken by a quiet one, A3 firing for a device present in an hour of the week it is normally absent and staying silent in its normal hours, A8 firing on a high NXDOMAIN share and not on a normal one, A9 firing once on a host's first-ever use of a protocol and not touching that episode again once the baseline has an entry, A10 firing past `WEB_ANOM_A10_SILENCE_S` of socket silence and not before it, every rule but A10 a no-op without a store, and an open episode closing after `WEB_ANOM_CLEAR_TICKS` quiet minutes |
+| `test_baseline.c` | the cell as the local hour of the week, Monday first, and the same cell for the same local hour across a DST change (167 UTC hours apart), a never-fed pair scoring absent and a zero feed making no entry, warming forcing z to 0, an established cell's z, the sd floor (a constant history and one AP more scores 1, not 31,623; 10% of the mean; 1 KiB/s for a byte rate), an hour fed once, zero feeds for counters and presence and none for gauges and not counted as activity, cells independent, the full table evicting the least recently active entry by real feeds only, ageing out with the row id queued for deletion, allocation following the entries, dirty cells out once and back through a restore, the cap at the default and the extremes, NaN and both infinities ignored, the value scale per kind |
+| `test_ident.c` | records on a pinned clock: the earliest `first_seen` kept and randomised MACs left out, names cut to 63 bytes on a code-point boundary and NBNS to 15, group NBNS suffixes ignored and names current for their TTL, both tables evicting and counting, the DNS join (an NXDOMAIN answer counted once against the client that asked that qname within 10 s, a late or unknown one unmatched), the normal form |
+| `test_anomaly.c` | every rule from seeded state, rows given to the engine as web_tsdb gives them and the clock moved only through its step: A1 opening on three burst minutes with the evidence `metric[key]` closed, never on two, a gauge gap breaking the streak, a constant history with ±1 jitter firing nothing, a silent counter scored as 0, unobserved minutes not scored, a bucket closed in two parts scored as one, 300 keys all scored (the previous cap was 256); the lifecycle (open after one quiet minute, closed after two, a closed episode listed 59 minutes on and not 61, a recurrence starting a new episode that must earn three minutes, a full table keeping its open episodes, the worst-case listing fitting with `more`, the kind and since filters, the change feed); A2 once per MAC across a restart and never for an old or randomised MAC; A3 at four weeks and not three, and not in normal hours; A5 for the randomised MAC only and not through a reassigned lease; A6's normal form and escaped evidence; A7 far above its p95 and not without history or margin; A8 for the client the answers were joined to, not under 20 queries or at exactly 30%; A9 on first use and not for a host with history across a restart; MAD refuting a return to an old level and confirming a real burst, once per hour per series; baselines and an open episode surviving a restart; A10 for a connection that never sends, not just after a reconnect, not while disconnected, not before the limit; the engine without a store |
+| `test_replay.c` | spec §12's M3 acceptance: a six-week JSONL stream generated in the test (never a fixture) through the framer, decoder, live state, metric derivation, identity tables, rollup, `web_tsdb_step()` and the engine as `main.c` wires them, on pinned clocks: four weeks of routine, then a quiet 7 d week in which nothing at all fires, then a 7 d week in which A1 fires for a burst of connections and A3 for a daytime device that appears only at night, while a device that is only ever present at night never fires; and the hour that just closed reaching the baseline at flush phases 0, 3 and 7 (the previous slice fed it only at phase 0). Both builds |
 
 A test cannot originate from a non-loopback address, so the refused-peer
 socket tests narrow the list instead (only `127.0.0.2`, or only IPv4)
@@ -742,9 +967,10 @@ web/
     web_rollup.c   the metric table, the three tiers, key bounds, the ring
     web_store.c    slothweb.db: open rules, identification, migration, I/O
     web_tsdb.c     the store thread: close, write, compact
-    web_series.c   /api/series, /api/keys, /api/metrics
-    web_baseline.c 168 hour-of-week cells per (metric, key), z-scoring (M3)
-    web_anomaly.c  A1, A3, A8, A9, A10; /api/anomalies (M3)
+    web_series.c   /api/series, /api/keys, /api/metrics, /api/baseline
+    web_baseline.c 168 local hour-of-week cells per (metric, key) (M3)
+    web_ident.c    names, MAC/IP bindings, first_seen, the DNS join (M3)
+    web_anomaly.c  rows in, the rules, episodes, persistence (M3)
     web_json.c     the JSON writer every outgoing string goes through
     web_assets.h   the generated page's symbols
   ui/              the page sources (index.html, theme.css, page.css, app.js)

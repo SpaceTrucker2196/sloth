@@ -378,10 +378,11 @@ static void test_health_json(void) {
     WT_EQ(r.kind, WEB_R_ONESHOT);
     WT_ASSERT(r.body == NULL);
     static const char body[] =
-        "{\"service\":\"slothweb\",\"milestone\":\"M2\",\"uptime_s\":42,"
+        "{\"service\":\"slothweb\",\"milestone\":\"M3\",\"uptime_s\":42,"
         "\"socket\":\"none\",\"last_record_age_s\":null,"
         "\"db\":\"none\",\"db_schema\":null,\"db_rows\":null,"
-        "\"store\":\"none\",\"sse_clients\":2,\"tick_seq\":17}\n";
+        "\"store\":\"none\",\"anomaly\":null,\"sse_clients\":2,"
+        "\"tick_seq\":17}\n";
     WT_HAS(out, "Content-Type: application/json\r\n");
     WT_HAS(out, "Cache-Control: no-store\r\n");
     WT_HAS(out, "Content-Security-Policy: default-src 'none'");
@@ -614,6 +615,216 @@ static void test_small_buffer_is_an_error(void) {
     }
 }
 
+
+/* ── /api/anomalies, /api/baseline, the anomaly event (M3) ──────────── */
+
+static char g_big[65536];
+
+static void qreq(web_req_t *rq, const char *path, const char *query,
+                 int is_head) {
+    req(rq, path, is_head);
+    snprintf(rq->query, sizeof(rq->query), "%s", query);
+}
+
+static const char *body_of(const char *out) {
+    const char *sep = strstr(out, "\r\n\r\n");
+    return sep ? sep + 4 : "";
+}
+
+typedef struct {
+    web_baseline_t bl;
+    web_ident_t    id;
+    web_anomaly_t  an;
+    web_health_t   h;
+} eng_t;
+
+static void eng_up(eng_t *e, int cap) {
+    memset(e, 0, sizeof(*e));
+    WT_EQ(web_baseline_init(&e->bl, 64), 0);
+    WT_EQ(web_ident_init(&e->id, 8, 8), 0);
+    web_anom_cfg_t c;
+    memset(&c, 0, sizeof(c));
+    c.bl = &e->bl;
+    c.ident = &e->id;
+    c.max_keys = 16;
+    WT_EQ(web_anomaly_init(&e->an, cap, &c), 0);
+    e->h = H;
+    e->h.anomaly = &e->an;
+    e->h.wall_s = 1792627200;
+}
+
+static void eng_down(eng_t *e) {
+    web_anomaly_destroy(&e->an);
+    web_ident_destroy(&e->id);
+    web_baseline_destroy(&e->bl);
+}
+
+/* The audit found no test that routed this path at all: a NULL engine,
+ * the strict query, HEAD and the content type were all unexercised.
+ * The 400s seen red with the query check in route_anomalies() turned
+ * off; the 503 with its NULL test removed (a crash). */
+static void test_anomalies_route(void) {
+    web_req_t rq;
+    web_resp_t r;
+    qreq(&rq, "/api/anomalies", "", 0);
+    WT_EQ(web_route(&rq, &H, 1, g_big, sizeof(g_big), &r), 0);
+    g_big[r.out_len] = '\0';
+    WT_EQ(r.status, 503);
+    WT_HAS(body_of(g_big), "{\"error\":\"no_anomaly_engine\"}");
+
+    eng_t e;
+    eng_up(&e, 8);
+    e.an.ep[0] = (web_anom_ep_t){ .id = 3, .state = WEB_EP_OPEN,
+        .rule = WEB_ANOM_A1_RATE, .metric = WM_HOST_CONNS, .key = "10.0.0.5",
+        .score = 61, .peak = 70, .evidence = "host.conns[10.0.0.5] z=3.1\n<x>",
+        .first_seen = 1792627000, .last_seen = 1792627100 };
+    WT_EQ(web_route(&rq, &e.h, 1, g_big, sizeof(g_big), &r), 0);
+    g_big[r.out_len] = '\0';
+    WT_EQ(r.status, 200);
+    WT_HAS(g_big, "Content-Type: application/json\r\n");
+    WT_HAS(g_big, "Cache-Control: no-store\r\n");
+    const char *b = body_of(g_big);
+    WT_HAS(b, "{\"now\":1792627200,\"since\":1792623600,\"anomalies\":[{\"id\":3,"
+              "\"rule\":\"A1\",\"kind\":\"rate\",\"metric\":\"host.conns\","
+              "\"key\":\"10.0.0.5\",\"score\":61,\"peak\":70,");
+    WT_HAS(b, "z=3.1\\n\\u003cx\\u003e\"");
+    WT_HAS(b, "\"state\":\"open\",\"open\":true}],\"more\":false,\"omitted\":0}");
+    size_t full = r.out_len, blen = strlen(b);
+
+    qreq(&rq, "/api/anomalies", "", 1);
+    WT_EQ(web_route(&rq, &e.h, 1, g_big, sizeof(g_big), &r), 0);
+    WT_EQ(r.status, 200);
+    WT_EQ(r.out_len, full - blen);
+
+    static const char *const bad[][2] = {
+        { "x=1", "unknown_parameter" }, { "kind=vendor", "unknown_kind" },
+        { "since=abc", "bad_since" }, { "since=1&since=2", "repeated_parameter" },
+        { "kind=", "empty_value" },
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        qreq(&rq, "/api/anomalies", bad[i][0], 0);
+        WT_EQ(web_route(&rq, &e.h, 1, g_big, sizeof(g_big), &r), 0);
+        g_big[r.out_len] = '\0';
+        WT_EQ(r.status, 400);
+        WT_HAS(body_of(g_big), bad[i][1]);
+    }
+    qreq(&rq, "/api/anomalies", "", 0);
+    rq.query_long = 1;
+    WT_EQ(web_route(&rq, &e.h, 1, g_big, sizeof(g_big), &r), 0);
+    g_big[r.out_len] = '\0';
+    WT_EQ(r.status, 400);
+    WT_HAS(body_of(g_big), "query_too_long");
+
+    qreq(&rq, "/api/anomalies", "kind=dns&since=1792600000", 0);
+    WT_EQ(web_route(&rq, &e.h, 1, g_big, sizeof(g_big), &r), 0);
+    g_big[r.out_len] = '\0';
+    WT_EQ(r.status, 200);
+    WT_HAS(body_of(g_big), "\"since\":1792600000,\"anomalies\":[]");
+    eng_down(&e);
+}
+
+/* The worst case through the route: a 200 that stops with "more", never
+ * the 503 the previous slice answered past 276 episodes. */
+static void test_anomalies_route_worst_case(void) {
+    eng_t e;
+    eng_up(&e, WEB_ANOM_CAP);
+    for (int i = 0; i < e.an.cap; i++) {
+        web_anom_ep_t *x = &e.an.ep[i];
+        x->id = i + 1;
+        x->state = WEB_EP_OPEN;
+        x->rule = WEB_ANOM_A1_RATE;
+        x->metric = WM_HOST_CONNS;
+        snprintf(x->key, sizeof(x->key), "2001:db8:aaaa:bbbb:cccc:dddd:%04x:%04x",
+                 i, i);
+        memset(x->evidence, '&', WEB_ANOM_EVIDENCE_MAX);
+        x->evidence[WEB_ANOM_EVIDENCE_MAX] = '\0';
+    }
+    web_req_t rq;
+    web_resp_t r;
+    qreq(&rq, "/api/anomalies", "", 0);
+    WT_EQ(web_route(&rq, &e.h, 1, g_big, sizeof(g_big), &r), 0);
+    WT_EQ(r.status, 200);
+    WT_ASSERT(r.out_len < sizeof(g_big));
+    g_big[r.out_len < sizeof(g_big) ? r.out_len : sizeof(g_big) - 1] = '\0';
+    WT_HAS(body_of(g_big), "\"more\":true");
+    eng_down(&e);
+}
+
+static void test_baseline_route(void) {
+    web_req_t rq;
+    web_resp_t r;
+    qreq(&rq, "/api/baseline", "metric=host.conns&key=10.0.0.5", 0);
+    WT_EQ(web_route(&rq, &H, 1, g_big, sizeof(g_big), &r), 0);
+    WT_EQ(r.status, 503);
+    eng_t e;
+    eng_up(&e, 8);
+    static const char *const bad[][2] = {
+        { "", "missing_metric" }, { "metric=nope", "unknown_metric" },
+        { "metric=host.conns&key=not-an-ip", "bad_key" },
+        { "metric=conns.total&key=1", "bad_key" },
+        { "metric=host.conns&tier=hour", "unknown_parameter" },
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        qreq(&rq, "/api/baseline", bad[i][0], 0);
+        WT_EQ(web_route(&rq, &e.h, 1, g_big, sizeof(g_big), &r), 0);
+        g_big[r.out_len] = '\0';
+        WT_EQ(r.status, 400);
+        WT_HAS(body_of(g_big), bad[i][1]);
+    }
+    qreq(&rq, "/api/baseline", "metric=host.conns&key=10.0.0.5", 0);
+    WT_EQ(web_route(&rq, &e.h, 1, g_big, sizeof(g_big), &r), 0);
+    g_big[r.out_len] = '\0';
+    WT_EQ(r.status, 200);
+    WT_HAS(body_of(g_big), "\"fed\":false,\"cells\":null}");
+    /* Thursday 14:00 UTC (the suite's zone): cell 3 * 24 + 14. */
+    web_baseline_feed(&e.bl, WM_HOST_CONNS, "10.0.0.5", 1792677600, 5, 1);
+    WT_EQ(web_route(&rq, &e.h, 1, g_big, sizeof(g_big), &r), 0);
+    g_big[r.out_len] = '\0';
+    const char *b = body_of(g_big);
+    WT_HAS(b, "{\"metric\":\"host.conns\",\"key\":\"10.0.0.5\",\"kind\":\"gauge\"");
+    WT_HAS(b, "\"now_cell\":72,\"utc_offset_s\":0,\"fed\":true,\"cells\":[[0,0,0],");
+    WT_HAS(b, ",[5,1,1],");
+    int cells = 0;
+    for (const char *p = strstr(b, "\"cells\":["); p && (p = strstr(p + 1, "]")); )
+        cells++;
+    WT_EQ(cells, WEB_BL_CELLS + 1);
+    eng_down(&e);
+}
+
+/* §7.1's anomaly event: one data line, whatever the evidence holds. */
+static void test_anomaly_event_and_tick(void) {
+    web_anom_ep_t x = { .id = 9, .state = WEB_EP_CLOSED, .rule = WEB_ANOM_A6_NAMES,
+        .metric = -1, .key = "10.0.0.9", .evidence = "a\r\nb" };
+    char ev[WEB_ANOM_EP_JSON_MAX + 128];
+    size_t n = web_sse_anomaly(ev, sizeof(ev), &x);
+    WT_ASSERT(n > 0);
+    WT_ASSERT(!strncmp(ev, "event: anomaly\ndata: {\"id\":9,\"rule\":\"A6\","
+                           "\"kind\":\"ident\",\"metric\":null,", 60));
+    int lf = 0;
+    for (size_t i = 0; i < n; i++) lf += ev[i] == '\n';
+    WT_EQ(lf, 3);
+    WT_HAS(ev, "\"evidence\":\"a\\r\\nb\"");
+    WT_HAS(ev, "\"open\":false}\n\n");
+    eng_t e;
+    eng_up(&e, 8);
+    e.an.ep[0] = x;
+    e.an.ep[0].state = WEB_EP_OPEN;
+    char t[1024];
+    WT_ASSERT(web_sse_tick(t, sizeof(t), 1, 5, &e.h) > 0);
+    WT_HAS(t, "\"anomalies_open\":1}");
+    web_req_t rq;
+    web_resp_t r;
+    req(&rq, "/api/health", 0);
+    WT_EQ(web_route(&rq, &e.h, 1, g_big, sizeof(g_big), &r), 0);
+    g_big[r.out_len] = '\0';
+    WT_HAS(g_big, "\"anomaly\":{\"open\":1,\"building\":0,\"closed_kept\":0,"
+                  "\"cap\":8,");
+    WT_HAS(g_big, "\"baseline\":{\"entries\":0,\"cap\":64,");
+    WT_HAS(g_big, "\"ident\":{\"macs\":0,\"mac_cap\":8,\"mac_evictions\":0,");
+    WT_HAS(g_big, "\"persisted\":false");
+    eng_down(&e);
+}
+
 void run_routes_tests(void) {
     WT_RUN(test_page_is_200_with_etag_and_csp);
     WT_RUN(test_page_304_on_matching_validator);
@@ -632,4 +843,8 @@ void run_routes_tests(void) {
     WT_RUN(test_local_hosts_are_served);
     WT_RUN(test_host_count_must_be_one);
     WT_RUN(test_small_buffer_is_an_error);
+    WT_RUN(test_anomalies_route);
+    WT_RUN(test_anomalies_route_worst_case);
+    WT_RUN(test_baseline_route);
+    WT_RUN(test_anomaly_event_and_tick);
 }

@@ -93,10 +93,32 @@ canvas.chart { display: block; width: 100%; height: 240px; margin-top: var(--gap
 .cell .nm { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cell .v { font-size: 11px; color: var(--muted); }
 .cell canvas { display: block; width: 100%; height: 40px; }
+.kpis { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+canvas.spark { display: block; width: 100%; height: 36px; margin-top: 4px; }
+.row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(var(--gap) * 2); }
+.row2 > .panel { min-width: 0; }
+canvas.heat { display: block; width: 100%; height: 180px; margin-top: var(--gap); }
+input[type=range] { vertical-align: middle; accent-color: var(--data); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chips button.on { color: var(--ink); border-color: var(--data); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--gap); margin-top: var(--gap); }
+.card { border: 1px solid var(--rule); padding: var(--gap); min-width: 0; }
+.card.open { border-left: 3px solid var(--sev-warn); }
+.card.closed { color: var(--muted); }
+.card .hd { display: flex; gap: var(--gap); align-items: baseline; min-width: 0; }
+.card .gl { color: var(--data); flex: none; min-width: 2ch; }
+.card .kd { color: var(--muted); flex: none; font-size: 11px; }
+.card .ky { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.card .ev { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; margin: 4px 0; }
+.card .tm { font-size: 11px; color: var(--faint); }
+.bar { height: 4px; background: var(--rule); margin: 4px 0; }
+.bar > i { display: block; height: 4px; }
+.card canvas { display: block; width: 100%; height: 32px; }
 [hidden] { display: none !important; }
 button { font: inherit; font-size: 11px; color: var(--data); background: var(--bg); border: 1px solid var(--rule-hi); padding: 0 var(--gap); cursor: pointer; }
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; grid-template-areas: "strip" "side" "main"; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .row2 { grid-template-columns: 1fr; }
   .side { border-right: 0; border-bottom: 1px solid var(--rule); }
 }

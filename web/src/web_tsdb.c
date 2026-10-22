@@ -25,6 +25,7 @@ int web_tsdb_init(web_tsdb_t *t, web_rollup_t *ru, web_store_t *store,
     t->clock = clock ? clock : wall;
     t->clock_ctx = clock_ctx;
     t->stop[0] = t->stop[1] = -1;
+    t->last_minute = -1;
     t->batch = calloc(WEB_FLUSH_MAX, sizeof(*t->batch));
     return t->batch ? 0 : -1;
 }
@@ -39,18 +40,24 @@ void web_tsdb_set_hook(web_tsdb_t *t, web_tsdb_hook_fn hook, void *ctx) {
     t->hook_ctx = ctx;
 }
 
+void web_tsdb_set_rows_hook(web_tsdb_t *t, web_tsdb_rows_fn fn, void *ctx) {
+    t->rows_hook = fn;
+    t->rows_ctx = ctx;
+}
+
 static void flush(web_tsdb_t *t) {
-    if (!t->store) return;
+    if (!t->store && !t->rows_hook) return;
     size_t n;
     int wrote = 0;
     while ((n = web_rollup_take(t->ru, t->batch, WEB_FLUSH_MAX)) > 0) {
-        web_store_write(t->store, t->batch, n);
+        if (t->store) web_store_write(t->store, t->batch, n);
+        if (t->rows_hook) t->rows_hook(t->rows_ctx, t->batch, n);
         wrote = 1;
         if (n < WEB_FLUSH_MAX) break;
     }
     /* The ceiling after every batch, not only at the hourly compaction:
      * key churn can write millions of rows in an hour. */
-    if (wrote) web_store_ceiling(t->store, t->max_bytes);
+    if (wrote && t->store) web_store_ceiling(t->store, t->max_bytes);
 }
 
 void web_tsdb_step(web_tsdb_t *t, long long now_s) {
@@ -64,8 +71,13 @@ void web_tsdb_step(web_tsdb_t *t, long long now_s) {
     }
     web_rollup_close_due(t->ru, now_s);
     /* Early when the queue is past its high-water mark, so a burst of
-     * evictions is written rather than left to fill it. */
-    if (now_s >= t->next_flush ||
+     * evictions is written rather than left to fill it; and at every
+     * minute boundary when a hook reads the rows, so its minute pass
+     * sees the minute that just closed (web_tsdb.h). */
+    long long minute = now_s / WEB_MINUTE_S;
+    int crossed = t->rows_hook && minute != t->last_minute;
+    t->last_minute = minute;
+    if (now_s >= t->next_flush || crossed ||
         (t->store && web_rollup_queued(t->ru) >= WEB_FLUSH_HIGH)) {
         flush(t);
         t->next_flush = now_s + WEB_FLUSH_S;

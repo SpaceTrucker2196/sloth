@@ -142,10 +142,82 @@ static void tsdb_health(web_tsdb_t *t, web_jw_t *w) {
     web_jw_raw(w, ",\"values_clamped\":");   web_jw_int(w, (long long)rs.clamped);
 }
 
+/* The M3 members: the baseline table, the episode table and the
+ * identity tables, each with its bound and what it has had to drop. */
+static void analysis_health(web_anomaly_t *a, web_jw_t *w) {
+    web_jw_raw(w, ",\"anomaly\":");
+    if (!a) { web_jw_raw(w, "null"); return; }
+    web_anom_stats_t s;
+    web_anomaly_stats(a, &s);
+    web_jw_raw(w, "{\"open\":");              web_jw_int(w, s.open);
+    web_jw_raw(w, ",\"building\":");          web_jw_int(w, s.building);
+    web_jw_raw(w, ",\"closed_kept\":");       web_jw_int(w, s.closed_kept);
+    web_jw_raw(w, ",\"cap\":");               web_jw_int(w, a->cap);
+    web_jw_raw(w, ",\"opened\":");            web_jw_int(w, (long long)s.opened);
+    web_jw_raw(w, ",\"closed\":");            web_jw_int(w, (long long)s.closed);
+    web_jw_raw(w, ",\"dropped\":");           web_jw_int(w, (long long)s.dropped);
+    web_jw_raw(w, ",\"evicted_closed\":");    web_jw_int(w, (long long)s.evicted_closed);
+    web_jw_raw(w, ",\"candidates_dropped\":"); web_jw_int(w, (long long)s.candidates_dropped);
+    web_jw_raw(w, ",\"rows_dropped\":");      web_jw_int(w, (long long)s.rows_dropped);
+    web_jw_raw(w, ",\"late_rows\":");         web_jw_int(w, (long long)s.late_rows);
+    web_jw_raw(w, ",\"hours_fed\":");         web_jw_int(w, (long long)s.hours_fed);
+    web_jw_raw(w, ",\"hours_unobserved\":");  web_jw_int(w, (long long)s.hours_unobserved);
+    web_jw_raw(w, ",\"minutes_unobserved\":"); web_jw_int(w, (long long)s.minutes_unobserved);
+    web_jw_raw(w, ",\"mad\":");
+    web_jw_raw(w, a->cfg.store ? "true" : "false");
+    web_jw_raw(w, ",\"mad_queries\":");       web_jw_int(w, (long long)s.mad_queries);
+    web_jw_raw(w, ",\"mad_skipped\":");       web_jw_int(w, (long long)s.mad_skipped);
+    web_jw_raw(w, ",\"a9\":");
+    web_jw_raw(w, a->cfg.store ? "true" : "false");
+    web_jw_raw(w, ",\"a9_queries\":");        web_jw_int(w, (long long)s.a9_queries);
+    web_jw_raw(w, ",\"fanout_hosts\":");      web_jw_int(w, s.fanout);
+    web_jw_raw(w, ",\"fanout_evictions\":");  web_jw_int(w, (long long)s.fanout_evictions);
+    web_jw_raw(w, ",\"reported\":");          web_jw_int(w, s.reported);
+    web_jw_raw(w, ",\"reported_evictions\":"); web_jw_int(w, (long long)s.reported_evictions);
+    web_jw_raw(w, ",\"known_evictions\":");   web_jw_int(w, (long long)s.known_evictions);
+    web_jw_raw(w, ",\"persist_errors\":");    web_jw_int(w, (long long)s.persist_errors);
+    web_jw_raw(w, ",\"persisted\":");
+    web_jw_raw(w, a->cfg.store ? "true" : "false");
+    web_jw_raw(w, "}");
+    web_jw_raw(w, ",\"baseline\":");
+    if (!a->cfg.bl) {
+        web_jw_raw(w, "null");
+    } else {
+        web_bl_stats_t b;
+        web_baseline_stats(a->cfg.bl, &b);
+        web_jw_raw(w, "{\"entries\":");     web_jw_int(w, b.entries);
+        web_jw_raw(w, ",\"cap\":");         web_jw_int(w, b.cap);
+        web_jw_raw(w, ",\"evictions\":");   web_jw_int(w, (long long)b.evictions);
+        web_jw_raw(w, ",\"aged_out\":");    web_jw_int(w, (long long)b.aged_out);
+        web_jw_raw(w, ",\"fed\":");         web_jw_int(w, (long long)b.fed);
+        web_jw_raw(w, ",\"zero_fed\":");    web_jw_int(w, (long long)b.zero_fed);
+        web_jw_raw(w, ",\"deletes_lost\":"); web_jw_int(w, (long long)b.del_lost);
+        web_jw_raw(w, "}");
+    }
+    web_jw_raw(w, ",\"ident\":");
+    if (!a->cfg.ident) {
+        web_jw_raw(w, "null");
+    } else {
+        web_id_stats_t i;
+        web_ident_stats(a->cfg.ident, &i);
+        web_jw_raw(w, "{\"macs\":");          web_jw_int(w, i.macs);
+        web_jw_raw(w, ",\"mac_cap\":");       web_jw_int(w, i.mac_cap);
+        web_jw_raw(w, ",\"mac_evictions\":"); web_jw_int(w, (long long)i.mac_evictions);
+        web_jw_raw(w, ",\"ips\":");           web_jw_int(w, i.ips);
+        web_jw_raw(w, ",\"ip_cap\":");        web_jw_int(w, i.ip_cap);
+        web_jw_raw(w, ",\"ip_evictions\":");  web_jw_int(w, (long long)i.ip_evictions);
+        web_jw_raw(w, ",\"dns_matched\":");   web_jw_int(w, (long long)i.dns_matched);
+        web_jw_raw(w, ",\"dns_unmatched\":"); web_jw_int(w, (long long)i.dns_unmatched);
+        web_jw_raw(w, ",\"query_overwrites\":");
+        web_jw_int(w, (long long)i.query_overwrites);
+        web_jw_raw(w, "}");
+    }
+}
+
 static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
     web_jw_t w;
     web_jw_init(&w, out, outsz);
-    web_jw_raw(&w, "{\"service\":\"slothweb\",\"milestone\":\"M2\",\"uptime_s\":");
+    web_jw_raw(&w, "{\"service\":\"slothweb\",\"milestone\":\"M3\",\"uptime_s\":");
     web_jw_int(&w, h->uptime_s);
     /* With no data socket the M0 shape stands: "none" and null. Every
      * stream-derived or operator-given string goes through web_jw_str. */
@@ -153,6 +225,7 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
     else         web_jw_raw(&w, ",\"socket\":\"none\",\"last_record_age_s\":null");
     web_jw_raw(&w, ",\"db\":\"none\",\"db_schema\":null,\"db_rows\":null,");
     tsdb_health(h->tsdb, &w);
+    analysis_health(h->anomaly, &w);
     web_jw_raw(&w, ",\"sse_clients\":");
     web_jw_int(&w, h->sse_clients);
     web_jw_raw(&w, ",\"tick_seq\":");
@@ -310,9 +383,10 @@ static int route_series(const web_req_t *rq, const web_health_t *h, int which,
     return json_answer(rq, status, bl, out, outsz, r);
 }
 
-/* /api/anomalies. No query parameters yet (a kind/since filter is a
- * follow-up); any query at all is a 400, consistent with the other
- * routes' strictness. */
+/* /api/anomalies?since=&kind= and /api/baseline?metric=&key= (M3).
+ * Parameters as strict as the series routes': an unknown, repeated or
+ * malformed one is a 400 naming the reason in a word of our own. The
+ * anomaly list always fits: it stops with "more":true first. */
 static int route_anomalies(const web_req_t *rq, const web_health_t *h,
                            char *out, size_t outsz, web_resp_t *r) {
     if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
@@ -320,14 +394,52 @@ static int route_anomalies(const web_req_t *rq, const web_health_t *h,
     size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
     int status = 200;
     size_t bl;
+    char why[48] = "";
+    long long since;
+    int kind;
     if (!h->anomaly) {
         status = 503;
         bl = web_series_error_json("no_anomaly_engine", body, cap);
-    } else if (rq->query_long || rq->query[0]) {
+    } else if (rq->query_long) {
         status = 400;
-        bl = web_series_error_json("unknown_parameter", body, cap);
+        bl = web_series_error_json("query_too_long", body, cap);
+    } else if (web_anomalies_parse(rq->query, h->wall_s, &since, &kind, why,
+                                   sizeof(why)) != 0) {
+        status = 400;
+        bl = web_series_error_json(why, body, cap);
     } else {
-        bl = web_anomaly_json(h->anomaly, h->wall_s, body, cap);
+        bl = web_anomaly_json(h->anomaly, h->wall_s, since, kind, body, cap);
+    }
+    if (bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, status, bl, out, outsz, r);
+}
+
+static int route_baseline(const web_req_t *rq, const web_health_t *h,
+                          char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    int status = 200;
+    size_t bl;
+    char why[48] = "", key[WEB_KEY_MAX + 1];
+    int metric;
+    if (!h->anomaly || !h->anomaly->cfg.bl) {
+        status = 503;
+        bl = web_series_error_json("no_anomaly_engine", body, cap);
+    } else if (rq->query_long) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+    } else if (web_baseline_parse(rq->query, &metric, key, why,
+                                  sizeof(why)) != 0) {
+        status = 400;
+        bl = web_series_error_json(why, body, cap);
+    } else {
+        bl = web_baseline_json(h->anomaly->cfg.bl, metric, key, h->wall_s,
+                               body, cap);
     }
     if (bl == 0) {
         r->status = 503;
@@ -403,6 +515,8 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
             return route_series(rq, h, SR_METRICS, out, outsz, r);
         if (!strcmp(rq->path, "/api/anomalies"))
             return route_anomalies(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/baseline"))
+            return route_baseline(rq, h, out, outsz, r);
     }
     r->status = 404;
     r->out_len = web_http_response(404, rq->is_head, out, outsz);
@@ -435,6 +549,10 @@ size_t web_sse_tick(char *out, size_t outsz, unsigned long seq, long long ts,
         web_jw_raw(&w, ",\"records\":"); web_jw_int(&w, (long long)s.records);
         web_jw_raw(&w, ",\"sensor\":"); web_jw_str(&w, s.sensor);
     }
+    if (h->anomaly) {
+        web_jw_raw(&w, ",\"anomalies_open\":");
+        web_jw_int(&w, web_anomaly_open_count(h->anomaly));
+    }
     web_jw_raw(&w, "}");
     if (w.overflow) return 0;
     int n = snprintf(out, outsz, "id: %lu\nevent: tick\ndata: %s\n\n", seq, data);
@@ -455,6 +573,18 @@ size_t web_sse_record(char *out, size_t outsz, const web_live_rec_t *e) {
     web_jw_raw(&w, "}");
     if (w.overflow) return 0;
     int n = snprintf(out, outsz, "event: record\ndata: %s\n\n", data);
+    if (n < 0 || (size_t)n >= outsz) return 0;
+    return (size_t)n;
+}
+
+size_t web_sse_anomaly(char *out, size_t outsz, const web_anom_ep_t *e) {
+    char data[WEB_ANOM_EP_JSON_MAX + 64];
+    web_jw_t w;
+    web_jw_init(&w, data, sizeof(data));
+    web_anomaly_ep_json(&w, e);
+    if (w.overflow) return 0;
+    /* One data line: web_jw_str escapes CR and LF. */
+    int n = snprintf(out, outsz, "event: anomaly\ndata: %s\n\n", data);
     if (n < 0 || (size_t)n >= outsz) return 0;
     return (size_t)n;
 }

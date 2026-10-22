@@ -1,11 +1,16 @@
-/* slothweb.db (#160, M2): slothweb's own SQLite file. Never sloth.db.
+/* slothweb.db (#160, M2; #161, M3): slothweb's own SQLite file. Never
+ * sloth.db.
  *
- * The file holds the closed rollup buckets and nothing else: a series
- * table naming each (metric, key), and one table per tier with sum,
- * count, min and max per bucket, keyed (series, t) and indexed on t. Keys are canonical MACs, IPs,
- * interface names, channels and alert types (web_metrics.h), so no
- * string a peer chose is ever stored as it was sent; no column can hold
- * a credential (web/tests/test_store.c keeps sloth's test_db.c
+ * The file holds the closed rollup buckets: a series table naming each
+ * (metric, key), and one table per tier with sum, count, min and max
+ * per bucket, keyed (series, t) and indexed on t. Since v3 it also
+ * holds the anomaly engine's state (the baselines, the episodes, A7's
+ * histograms and A2's reported MACs; web_anomaly.h). Keys are canonical
+ * MACs, IPs, interface names, channels and alert types (web_metrics.h),
+ * so no string a peer chose is ever stored as it was sent as a key; the
+ * one free text is an episode's evidence, slothweb's own sentence with
+ * any stream name in it cut to a code-point boundary. No column can
+ * hold a credential (web/tests/test_store.c keeps sloth's test_db.c
  * guardrail).
  *
  * Opening it follows sloth's own rules for its database (src/db.c,
@@ -50,10 +55,11 @@
 #include <pthread.h>
 #include <stddef.h>
 
+#include "web_baseline.h"
 #include "web_rollup.h"
 
 /* The version this build writes. */
-#define WEB_STORE_SCHEMA   2
+#define WEB_STORE_SCHEMA   3
 #define WEB_STORE_ERR_MAX  320
 #define WEB_DEFAULT_STORE  "./slothweb.db"
 /* --web-max-mb: the ceiling on the store's used pages. */
@@ -73,6 +79,8 @@
 #define WEB_STORE_EXPIRE_SERIES 256
 #define WEB_STORE_EXPIRE_STEPS  256
 #define WEB_STORE_VACUUM_PAGES  256
+
+#define WEB_STORE_AN_STMTS 14
 
 struct sqlite3;
 struct sqlite3_stmt;
@@ -99,6 +107,7 @@ typedef struct {
     struct sqlite3_stmt *ins_series, *get_series, *ins_row[WEB_TIER_COUNT];
     struct sqlite3_stmt *upd_row[WEB_TIER_COUNT];
     struct sqlite3_stmt *q_row[WEB_TIER_COUNT];
+    struct sqlite3_stmt *an[WEB_STORE_AN_STMTS];  /* the analysis state's */
     pthread_mutex_t      mu;      /* guards st */
     pthread_mutex_t      rmu;     /* serialises rd */
     int                  mu_init;
@@ -153,6 +162,85 @@ void web_store_stats(web_store_t *s, web_store_stats_t *out);
 
 /* Rows in tier, counted now (tests and the recount). -1 on error. */
 long long web_store_count(web_store_t *s, int tier);
+
+/* ── the analysis state (v3, #161) ───────────────────────────────────
+ *
+ * Everything below runs on the writer connection, so only from the
+ * thread that owns it: the store thread, or the main thread before any
+ * thread starts (the restore). Each call that writes is one
+ * transaction. Every string read back is checked again by its caller as
+ * if it came off the wire: a key passes its canonicaliser, a metric and
+ * a kind must be a catalogue name, evidence is cut on a code-point
+ * boundary. Built without SQLite every call returns -1. */
+
+/* Restore the baseline: the cap most recently active entries, with
+ * their cells, into b; the rows of any entry beyond the cap are
+ * deleted. Entries loaded, or -1. */
+int  web_store_bl_load(web_store_t *s, web_baseline_t *b);
+/* Write n dirty records (web_baseline_take_dirty()); an entry new to
+ * the file gets its row id given back to b. 0, or -1. */
+int  web_store_bl_put(web_store_t *s, web_baseline_t *b,
+                      const web_bl_rec_t *recs, int n);
+/* Delete entries by row id, with their cells. 0, or -1. */
+int  web_store_bl_del(web_store_t *s, const long long *ids, int n);
+
+#define WEB_STORE_KIND_MAX 15
+#define WEB_STORE_EV_MAX   159
+typedef struct {
+    long long id;
+    char      kind[WEB_STORE_KIND_MAX + 1];
+    int       metric;                 /* -1 none */
+    char      key[WEB_KEY_MAX + 1];
+    int       state;
+    double    score, peak;
+    char      evidence[WEB_STORE_EV_MAX + 1];
+    long long first_seen, last_seen;
+    int       hit_streak, clear_streak;
+    long long last_bucket;
+} web_store_ep_t;
+
+/* Every episode with last_seen >= since, to fn. Rows, or -1. */
+int  web_store_ep_load(web_store_t *s, long long since,
+                       void (*fn)(void *ctx, const web_store_ep_t *e),
+                       void *ctx);
+int  web_store_ep_put(web_store_t *s, const web_store_ep_t *e, int n);
+int  web_store_ep_del(web_store_t *s, const long long *ids, int n);
+
+#define WEB_STORE_HIST_MAX 255
+typedef struct {
+    char key[WEB_KEY_MAX + 1];
+    long windows;
+    char hist[WEB_STORE_HIST_MAX + 1];
+} web_store_fan_t;
+int  web_store_fan_load(web_store_t *s,
+                        void (*fn)(void *ctx, const web_store_fan_t *f),
+                        void *ctx);
+int  web_store_fan_put(web_store_t *s, const web_store_fan_t *f, int n);
+int  web_store_fan_del(web_store_t *s, const char (*keys)[WEB_KEY_MAX + 1],
+                       int n);
+
+typedef struct {
+    char      kind[WEB_STORE_KIND_MAX + 1];
+    char      key[WEB_KEY_MAX + 1];
+    long long t;
+} web_store_rep_t;
+/* Rows with t >= since, to fn; rows older than since are deleted
+ * first. */
+int  web_store_rep_load(web_store_t *s, long long since,
+                        void (*fn)(void *ctx, const web_store_rep_t *r),
+                        void *ctx);
+int  web_store_rep_put(web_store_t *s, const web_store_rep_t *r, int n);
+int  web_store_rep_prune(web_store_t *s, long long before);
+
+/* Whether (metric, key) has any minute row with t < before, or any hour
+ * row with t < before rounded down to its hour: 1, 0, or -1. */
+int  web_store_any_before(web_store_t *s, int metric, const char *key,
+                          long long before);
+/* The hour rows of (metric, key) at each of the n hour starts ts[];
+ * out[i].t is ts[i] when there was one and -1 when not. Rows found, or
+ * -1. */
+int  web_store_hours_at(web_store_t *s, int metric, const char *key,
+                        const long long *ts, int n, web_point_t *out);
 
 /* Test seams (web/tests/test_store.c); NULL and 0 in slothweb itself.
  * web_store_test_between_opens runs after the read-only identify and

@@ -69,8 +69,11 @@ typedef struct {
 
 typedef long long (*web_clock_fn)(void *ctx);
 
+struct web_ident;
+
 typedef struct web_metrics {
     web_rollup_t *ru;
+    struct web_ident *ident;     /* M3: names for the anomaly rules, or NULL */
     web_clock_fn  clock;
     void         *clock_ctx;
 
@@ -100,6 +103,9 @@ void web_metrics_stream(web_metrics_t *m);
  * sampled. */
 void web_metrics_taint(web_metrics_t *m);
 void web_metrics_record(web_metrics_t *m, const web_jrec_t *r);
+/* Also hand every record to the identity tables (web_ident.h), on the
+ * same clock. Call before the ingest thread starts. */
+void web_metrics_set_ident(web_metrics_t *m, struct web_ident *id);
 
 /* Key canonicalisers; out holds WEB_KEY_MAX + 1. 0, or -1 when s is not
  * one. Also what /api/series checks its key parameter with. */

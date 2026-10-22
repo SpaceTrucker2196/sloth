@@ -260,6 +260,24 @@ static void send_records(web_server_t *s) {
     }
 }
 
+/* The anomaly episodes that changed since the last tick, oldest change
+ * first, WEB_SSE_ANOMALIES_PER_TICK at most (the newest when more). */
+static void send_anomalies(web_server_t *s) {
+    if (!s->anomaly) return;
+    web_anom_ep_t eps[WEB_SSE_ANOMALIES_PER_TICK];
+    unsigned long long latest;
+    int n = web_anomaly_changes(s->anomaly, s->anom_sent, eps,
+                                WEB_SSE_ANOMALIES_PER_TICK, &latest);
+    s->anom_sent = latest;
+    char ev[WEB_ANOM_EP_JSON_MAX + 128];
+    for (int i = 0; i < n; i++) {
+        size_t len = web_sse_anomaly(ev, sizeof(ev), &eps[i]);
+        if (!len) continue;
+        sse_broadcast(s, ev, len);
+        STAT_INC(s, anomalies_sent);
+    }
+}
+
 static void run_timers(web_server_t *s, long long now) {
     char ev[WEB_SSE_EVENT_MAX];
     if (now >= s->next_tick_ms) {
@@ -268,6 +286,7 @@ static void run_timers(web_server_t *s, long long now) {
         size_t n = tick_event(s, ev, sizeof(ev));
         if (n) sse_broadcast(s, ev, n);
         send_records(s);
+        send_anomalies(s);
         s->next_tick_ms = now + s->cfg.tick_ms;
     }
     if (now >= s->next_ping_ms) {

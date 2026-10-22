@@ -33,6 +33,7 @@
 
 #include <stddef.h>
 
+#include "web_baseline.h"
 #include "web_rollup.h"
 #include "web_tsdb.h"
 
@@ -68,5 +69,21 @@ size_t web_metrics_json(web_tsdb_t *t, char *out, size_t cap);
 
 /* {"error":"reason"} */
 size_t web_series_error_json(const char *reason, char *out, size_t cap);
+
+/* /api/anomalies?since=S&kind=K (M3): since defaults to an hour ago and
+ * is raised to the oldest a closed episode is kept (WEB_ANOM_KEEP_S);
+ * kind is one of §6's kinds. *kind is -1 for every kind. */
+int    web_anomalies_parse(const char *query, long long now_s,
+                           long long *since, int *kind, char *err,
+                           size_t errsz);
+
+/* /api/baseline?metric=M&key=K (M3): the 168 hour-of-week cells of one
+ * series, [mean, sd, n] each, Monday 00:00 local first; sd floored as a
+ * score floors it; "cells":null for a pair never fed. The value scale
+ * is the baseline's (web_bl_value()): a counter per minute. */
+int    web_baseline_parse(const char *query, int *metric, char *key,
+                          char *err, size_t errsz);
+size_t web_baseline_json(web_baseline_t *b, int metric, const char *key,
+                         long long now_s, char *out, size_t cap);
 
 #endif

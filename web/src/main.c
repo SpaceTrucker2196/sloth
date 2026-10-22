@@ -1,7 +1,8 @@
-/* slothweb (#157 W0, #158 M0, #159 M1, #160 M2): the allow list and
- * its refusals, the embedded page, /api/health, /api/live, the /events
- * stream, the data-socket client that feeds them, and the time series
- * behind /api/series. See web/README.md. */
+/* slothweb (#157 W0, #158 M0, #159 M1, #160 M2, #161 M3): the allow
+ * list and its refusals, the embedded page, /api/health, /api/live, the
+ * /events stream, the data-socket client that feeds them, the time
+ * series behind /api/series, and the baselines and anomaly rules behind
+ * /api/baseline and /api/anomalies. See web/README.md. */
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +12,7 @@
 #include "web_anomaly.h"
 #include "web_baseline.h"
 #include "web_config.h"
+#include "web_ident.h"
 #include "web_ingest.h"
 #include "web_live.h"
 #include "web_metrics.h"
@@ -28,27 +30,7 @@ static web_store_t   g_store;
 static web_tsdb_t    g_tsdb;
 static web_baseline_t g_baseline;
 static web_anomaly_t  g_anomaly;
-
-typedef struct {
-    web_anomaly_t  *a;
-    web_baseline_t *bl;
-    web_rollup_t   *ru;
-    web_store_t    *store;
-    web_live_t     *live;
-} analysis_ctx_t;
-
-static analysis_ctx_t g_analysis_ctx;
-
-static long long mono_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-
-static void analysis_hook(void *ctx, long long now_s) {
-    analysis_ctx_t *c = ctx;
-    web_anomaly_step(c->a, c->bl, c->ru, c->store, c->live, now_s, mono_ms());
-}
+static web_ident_t    g_ident;
 
 static void on_signal(int sig) {
     (void)sig;
@@ -82,28 +64,37 @@ int main(int argc, char **argv) {
         }
         have_store = 1;
     }
-    if (web_rollup_init(&g_rollup, cfg.max_keys, have_store, err,
+    /* Without a store the rollup still queues its minute and hour rows:
+     * the anomaly engine reads them off the queue (web_tsdb.h), so the
+     * baselines and every rule but A9 run in memory. */
+    web_anom_cfg_t acfg;
+    memset(&acfg, 0, sizeof(acfg));
+    acfg.bl = &g_baseline;
+    acfg.store = have_store ? &g_store : NULL;
+    acfg.live = &g_live;
+    acfg.ident = &g_ident;
+    acfg.max_keys = cfg.max_keys;
+    if (web_rollup_init(&g_rollup, cfg.max_keys,
+                        have_store ? 1 : WEB_ROLLUP_Q_LONG, err,
                         sizeof(err)) != 0 ||
         web_metrics_init(&g_metrics, &g_rollup, NULL, NULL) != 0 ||
         web_tsdb_init(&g_tsdb, &g_rollup, have_store ? &g_store : NULL,
                       cfg.retain_days, cfg.max_mb, NULL, NULL) != 0 ||
         web_baseline_init(&g_baseline,
                           web_baseline_cap_for(cfg.max_keys)) != 0 ||
-        web_anomaly_init(&g_anomaly, WEB_ANOM_CAP) != 0) {
+        web_ident_init(&g_ident, cfg.max_keys, cfg.max_keys / 2) != 0 ||
+        web_anomaly_init(&g_anomaly, WEB_ANOM_CAP, &acfg) != 0) {
         fprintf(stderr, "slothweb: time series: out of memory\n");
         return 1;
     }
-    /* Wired either way: A10's sensor-silence rule only needs the live
-     * state, so it still runs on a build without SQLite; the store
-     * passed through is NULL there and web_anomaly_step() skips every
-     * rule that needs the minute or hour tier, the same way
-     * /api/series without a store serves fine buckets only. */
-    g_analysis_ctx.a = &g_anomaly;
-    g_analysis_ctx.bl = &g_baseline;
-    g_analysis_ctx.ru = &g_rollup;
-    g_analysis_ctx.store = have_store ? &g_store : NULL;
-    g_analysis_ctx.live = &g_live;
-    web_tsdb_set_hook(&g_tsdb, analysis_hook, &g_analysis_ctx);
+    /* Before any thread starts: the restore runs on the store's writer
+     * connection, which the store thread owns from then on. */
+    if (web_anomaly_restore(&g_anomaly, (long long)time(NULL)) != 0)
+        fprintf(stderr, "slothweb: store: the saved baselines or anomaly "
+                        "episodes could not all be read; starting from what "
+                        "was\n");
+    web_metrics_set_ident(&g_metrics, &g_ident);
+    web_anomaly_attach(&g_anomaly, &g_tsdb);
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -137,21 +128,25 @@ int main(int argc, char **argv) {
                     where, sizeof(where));
     fprintf(stderr, "slothweb: listening on http://%s/ "
                     "(/, /api/health, /api/live, /api/series, /api/keys, "
-                    "/api/metrics, /api/anomalies, /events)\n", where);
+                    "/api/metrics, /api/baseline, /api/anomalies, /events)\n",
+            where);
     fprintf(stderr, "slothweb: reading %s (read-only; reconnects on its "
                     "own)\n", spec);
     if (have_store) {
         fprintf(stderr, "slothweb: time series in %s (10 s for 24 h, 1 min "
                         "for %d d, 1 h for 400 d; ceiling %d MB)\n",
                 cfg.store_path, cfg.retain_days, cfg.max_mb);
-        fprintf(stderr, "slothweb: baselines and anomaly rules A1, A3, A8, "
-                        "A9, A10 active (A2, A4, A5, A6 need #162's "
-                        "sloth.db reader)\n");
+        fprintf(stderr, "slothweb: baselines (%d restored) and anomaly "
+                        "rules A1-A3, A5-A10 active, kept in %s; A4 needs "
+                        "#162's OUI table\n", web_baseline_count(&g_baseline),
+                cfg.store_path);
     } else {
         fprintf(stderr, "slothweb: built without SQLite: time series in "
-                        "memory only (10 s buckets, no minute or hour tier); "
-                        "anomaly rule A10 (sensor silence) is still active, "
-                        "A1, A3, A8, A9 are not\n");
+                        "memory only (10 s buckets, no minute or hour tier "
+                        "to read back); baselines and anomaly episodes in "
+                        "memory, lost at exit; rules A1 (z only, no MAD), "
+                        "A2, A3, A5-A8 and A10 active, A9 needs the store, "
+                        "A4 #162\n");
     }
 
     rc = web_server_run(&g_srv);
@@ -171,6 +166,7 @@ int main(int argc, char **argv) {
     web_rollup_destroy(&g_rollup);
     web_anomaly_destroy(&g_anomaly);
     web_baseline_destroy(&g_baseline);
+    web_ident_destroy(&g_ident);
     web_store_close(&g_store);
     return rc == 0 ? 0 : 1;
 }

@@ -50,11 +50,12 @@ static void test_schema_text_guardrail(void) {
     const char *meta = web_store_meta_sql();
     const char *v1 = web_store_step_sql(0);
     const char *v2 = web_store_step_sql(1);
-    WT_ASSERT(meta && v1 && v2);
-    WT_ASSERT(web_store_step_sql(2) == NULL);     /* v2 is current */
-    WT_EQ(WEB_STORE_SCHEMA, 2);
-    const char *both[3] = { meta, v1, v2 };
-    for (int k = 0; k < 3; k++) {
+    const char *v3 = web_store_step_sql(2);
+    WT_ASSERT(meta && v1 && v2 && v3);
+    WT_ASSERT(web_store_step_sql(3) == NULL);     /* v3 is current */
+    WT_EQ(WEB_STORE_SCHEMA, 3);
+    const char *both[4] = { meta, v1, v2, v3 };
+    for (int k = 0; k < 4; k++) {
         for (size_t i = 0; i < NFORBIDDEN; i++) {
             if (!strcmp(FORBIDDEN[i], "mic")) {
                 WT_ASSERT(strstr(both[k], "  mic ") == NULL);
@@ -78,9 +79,16 @@ static void test_schema_text_guardrail(void) {
     for (const char *p = v2; *p; p++) semis += *p == ';';
     WT_EQ(creates, 3);
     WT_EQ(semis, 3);
+    /* v3: five new tables and nothing else. */
+    creates = semis = 0;
+    for (const char *p = v3; (p = strstr(p, "CREATE TABLE ")); p++) creates++;
+    for (const char *p = v3; *p; p++) semis += *p == ';';
+    WT_EQ(creates, 5);
+    WT_EQ(semis, 5);
     /* Not IF NOT EXISTS: a step must fail on a name already taken. */
     WT_ASSERT(strstr(v1, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v2, "IF NOT EXISTS") == NULL);
+    WT_ASSERT(strstr(v3, "IF NOT EXISTS") == NULL);
 }
 
 #ifndef WITH_SQLITE
@@ -217,7 +225,12 @@ static void test_no_column_can_hold_secret_material(void) {
     }
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
-                     " AND UPPER(c.type)='TEXT'"), 4);   /* name value metric key */
+                     " AND UPPER(c.type)='TEXT'"), 14);
+    /* meta (name, value), series (metric, key), baseline (metric, key),
+     * episode (kind, metric, key, evidence), fanout (key, hist) and
+     * reported (kind, key): ten of them hold a canonical key, a
+     * catalogue name or numbers; evidence is our own sentence, with
+     * names the stream already carries (web_anomaly.h). */
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
                      " AND UPPER(c.type)='BLOB'"), 0);
@@ -295,7 +308,8 @@ static void test_v0_file_is_migrated(void) {
                 "('schema_version','0'),('note','kept');");
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 2);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"),
+          WEB_STORE_SCHEMA);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM meta WHERE name='note' AND"
                      " value='kept'"), 1);              /* nothing rewritten */
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
@@ -349,7 +363,8 @@ static void test_v1_file_is_migrated(void) {
                           pt, 4, &more), 1);
     WT_ASSERT(pt[0].t == 1000 && pt[0].sum == 5 && pt[0].n == 2);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 2);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"),
+          WEB_STORE_SCHEMA);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
                      " AND name IN ('fine_t','minute_t','hour_t')"), 3);
     WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
@@ -376,6 +391,166 @@ static void test_v1_failed_step_leaves_file_unchanged(void) {
     rm_store(p);
 }
 
+/* A file built at v2 by the v1 and v2 steps, as the M2 build wrote it,
+ * with rows: brought to v3, the five analysis tables made, every row as
+ * it was. */
+static void make_v2(const char *p, const char *extra) {
+    char sql[4096];
+    snprintf(sql, sizeof(sql), "%s INSERT INTO meta VALUES ('store','slothweb'),"
+             "('schema_version','2'); %s %s"
+             "INSERT INTO series VALUES (1,'host.rx_rate','10.0.0.1');"
+             "INSERT INTO minute VALUES (1,960,7,3,1,4);"
+             "INSERT INTO hour VALUES (1,0,9,4,1,4); %s",
+             web_store_meta_sql(), web_store_step_sql(0),
+             web_store_step_sql(1), extra);
+    raw_exec(p, sql);
+}
+
+static void test_v2_file_is_migrated(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v2.db");
+    make_v2(p, "");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 3);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                     " AND name IN ('baseline','baseline_cell','episode',"
+                     "'fanout','reported')"), 5);
+    WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    WT_EQ(raw_int(p, "SELECT sum FROM hour WHERE series=1 AND t=0"), 9);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM series"), 1);
+    rm_store(p);
+}
+
+/* The v2 step's failure: a v2 file already holding the name fanout
+ * stays at v2 with its rows and that table, and gets none of the step's
+ * other four tables. Seen red with the step's ROLLBACK replaced by
+ * COMMIT (baseline, baseline_cell and episode were left behind). */
+static void test_v2_failed_step_leaves_file_unchanged(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v2bad.db");
+    make_v2(p, "CREATE TABLE fanout (x INTEGER); INSERT INTO fanout VALUES (7);");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), -1);
+    WT_HAS(err, "unchanged from v2");
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 2);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                     " AND name IN ('baseline','baseline_cell','episode',"
+                     "'reported')"), 0);
+    WT_EQ(raw_int(p, "SELECT x FROM fanout"), 7);
+    WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    rm_store(p);
+}
+
+static int g_eps, g_fans, g_reps;
+static web_store_ep_t g_ep;
+static void on_ep(void *c, const web_store_ep_t *e) { (void)c; g_ep = *e; g_eps++; }
+static void on_fan(void *c, const web_store_fan_t *f) { (void)c; (void)f; g_fans++; }
+static void on_rep(void *c, const web_store_rep_t *r) { (void)c; (void)r; g_reps++; }
+
+/* The v3 tables through their own calls: baselines (with a cap smaller
+ * than the rows, and a row that is not valid), episodes, A7's
+ * histograms, A2's reported set, and the two reads the rules make. The
+ * rows left out seen red with the load's deletes skipped; the expired
+ * episode with its expiry made a no-op; the old reported row with its
+ * prune made a no-op. */
+static void test_analysis_state_round_trip(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "an.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_baseline_t b;
+    WT_EQ(web_baseline_init(&b, 8), 0);
+    for (int i = 0; i < 3; i++) {
+        char k[32];
+        snprintf(k, sizeof(k), "10.0.0.%d", i + 1);
+        web_baseline_feed(&b, WM_DNS_QUERIES, k, 3600LL * (i + 1), 4.0 + i, 1);
+    }
+    web_bl_rec_t rec[16];
+    int n = web_baseline_take_dirty(&b, rec, 16);
+    WT_EQ(n, 6);
+    WT_EQ(web_store_bl_put(&S, &b, rec, n), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM baseline"), 3);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM baseline_cell"), 3);
+    web_baseline_destroy(&b);
+    raw_exec(p, "INSERT INTO baseline (metric,key,last_active,last_fed) VALUES"
+                " ('dns.queries','not an ip',99999,99999);");
+    /* Restored into a table of two: the two most recently active, the
+     * rest deleted with their cells, the invalid row too. */
+    WT_EQ(web_baseline_init(&b, 2), 0);
+    WT_EQ(web_store_bl_load(&S, &b), 2);
+    web_bl_score_t sc;
+    WT_EQ(web_baseline_score(&b, WM_DNS_QUERIES, "10.0.0.3", 3600LL * 3, 6, &sc), 0);
+    WT_EQ(sc.n, 1);
+    WT_ASSERT(sc.mean == 6.0);
+    WT_EQ(web_baseline_score(&b, WM_DNS_QUERIES, "10.0.0.1", 3600, 4, &sc), -1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM baseline"), 2);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM baseline_cell"), 2);
+    long long id = raw_int(p, "SELECT id FROM baseline WHERE key='10.0.0.2'");
+    WT_EQ(web_store_bl_del(&S, &id, 1), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM baseline_cell"), 1);
+    web_baseline_destroy(&b);
+
+    web_store_ep_t e;
+    memset(&e, 0, sizeof(e));
+    e.id = 5;
+    snprintf(e.kind, sizeof(e.kind), "A1");
+    e.metric = WM_HOST_CONNS;
+    snprintf(e.key, sizeof(e.key), "10.0.0.5");
+    e.state = 2;
+    e.score = 60;
+    snprintf(e.evidence, sizeof(e.evidence), "host.conns[10.0.0.5] z=3.1");
+    e.first_seen = 1000;
+    e.last_seen = 2000;
+    WT_EQ(web_store_ep_put(&S, &e, 1), 0);
+    e.id = 6;
+    e.last_seen = 10;
+    WT_EQ(web_store_ep_put(&S, &e, 1), 0);
+    g_eps = 0;
+    WT_EQ(web_store_ep_load(&S, 1500, on_ep, NULL), 1);   /* 6 expired */
+    WT_EQ(g_eps, 1);
+    WT_EQ(g_ep.id, 5);
+    WT_HAS(g_ep.evidence, "z=3.1");
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM episode"), 1);
+    WT_EQ(web_store_ep_del(&S, &e.id, 1), 0);
+
+    web_store_fan_t f;
+    snprintf(f.key, sizeof(f.key), "10.0.0.5");
+    f.windows = 200;
+    snprintf(f.hist, sizeof(f.hist), "0,0,0,0,0,150");
+    WT_EQ(web_store_fan_put(&S, &f, 1), 0);
+    g_fans = 0;
+    WT_EQ(web_store_fan_load(&S, on_fan, NULL), 1);
+    web_store_rep_t r;
+    snprintf(r.kind, sizeof(r.kind), "A2");
+    snprintf(r.key, sizeof(r.key), "00:11:22:33:44:55");
+    r.t = 5000;
+    WT_EQ(web_store_rep_put(&S, &r, 1), 0);
+    g_reps = 0;
+    WT_EQ(web_store_rep_load(&S, 6000, on_rep, NULL), 0);  /* pruned */
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM reported"), 0);
+
+    web_qrow_t q;
+    memset(&q, 0, sizeof(q));
+    q.tier = WEB_TIER_HOUR;
+    q.metric = WM_FLOW_SSH;
+    snprintf(q.key, sizeof(q.key), "10.0.0.8");
+    q.t = 7200;
+    q.sum = q.min = q.max = 3;
+    q.n = 1;
+    WT_EQ(web_store_write(&S, &q, 1), 0);
+    WT_EQ(web_store_any_before(&S, WM_FLOW_SSH, "10.0.0.8", 7200), 0);
+    WT_EQ(web_store_any_before(&S, WM_FLOW_SSH, "10.0.0.8", 10800), 1);
+    WT_EQ(web_store_any_before(&S, WM_FLOW_SSH, "10.0.0.9", 99999), 0);
+    long long ts[2] = { 7200, 3600 };
+    web_point_t pts[2];
+    WT_EQ(web_store_hours_at(&S, WM_FLOW_SSH, "10.0.0.8", ts, 2, pts), 1);
+    WT_EQ(pts[0].t, 7200);
+    WT_ASSERT(pts[0].sum == 3);
+    WT_EQ(pts[1].t, -1);
+    web_store_close(&S);
+    rm_store(p);
+}
+
 static void refused_untouched(const char *p, const char *want) {
     static unsigned char before[1 << 16], after[1 << 16];
     size_t nb = slurp(p, before, sizeof(before));
@@ -396,9 +571,9 @@ static void refused_untouched(const char *p, const char *want) {
  * left exactly as it was. */
 static void test_newer_file_refused(void) {
     char p[128];
-    path_in(p, sizeof(p), "v3.db");
+    path_in(p, sizeof(p), "v4.db");
     raw_exec(p, "CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);"
-                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','3');"
+                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','4');"
                 "CREATE TABLE future (x INTEGER);");
     refused_untouched(p, "newer slothweb");
     rm_store(p);
@@ -1195,6 +1370,9 @@ void run_store_tests(void) {
     WT_RUN(test_v0_failed_step_leaves_file_unchanged);
     WT_RUN(test_v1_file_is_migrated);
     WT_RUN(test_v1_failed_step_leaves_file_unchanged);
+    WT_RUN(test_v2_file_is_migrated);
+    WT_RUN(test_v2_failed_step_leaves_file_unchanged);
+    WT_RUN(test_analysis_state_round_trip);
     WT_RUN(test_newer_file_refused);
     WT_RUN(test_foreign_files_refused);
     WT_RUN(test_foreign_wal_left_as_it_is);
