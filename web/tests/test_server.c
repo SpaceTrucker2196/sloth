@@ -1058,6 +1058,13 @@ static void test_events_carry_anomalies(void) {
 
     int fd = dial(AF_INET, web_server_port(r.s));
     WT_ASSERT(fd >= 0);
+    web_stats_t st;
+    if (fd < 0) {
+        stop(&r, &st);
+        web_anomaly_destroy(&an);
+        web_baseline_destroy(&bl);
+        return;
+    }
     static const char ev[] = "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
     send_all(fd, ev, sizeof(ev) - 1);
     static char buf[65536];
@@ -1077,7 +1084,6 @@ static void test_events_carry_anomalies(void) {
     /* Several ticks more: still one. */
     wait_for(fd, buf, sizeof(buf), &len, "\x01", 300);
     close(fd);
-    web_stats_t st;
     stop(&r, &st);
     WT_EQ(st.anomalies_sent, 1UL);
     web_anomaly_destroy(&an);
