@@ -55,7 +55,7 @@ and is never committed; neither is any font. No Python, no Node.
 | `--strict` | Refuse any non-loopback bind or allow entry, even with `--web-allow-remote`, and a non-loopback `--socket tcp:` address. Same shape as sloth's `--strict` refusing a routable `--data-socket`. |
 | `--store PATH` | slothweb's own SQLite file for the time series (M2); default `./slothweb.db`. Never `sloth.db`: a file that is not a slothweb store is refused untouched (below). Needs a `WITH_SQLITE` build; in one without, the flag is a usage error. |
 | `--web-max-keys N` | Device keys tracked by keyed metrics, 16..8192, default 512; host keys get N/2 (256). Least recently seen out first. |
-| `--web-max-mb N` | Ceiling on the store's used size, in MB, default 256. Over it, the hourly compaction drops the oldest 10 s rows first, then 1 min, then 1 h. |
+| `--web-max-mb N` | Ceiling on the store's used size, in MB, default 256. Checked after every 10 s write and at each compaction; over it, the oldest 10 s rows go first, then the 1 min and 1 h rows of keyed series, and the global series' rows last. |
 | `--web-retain-days N` | Days of 1 min buckets kept, 1..400, default 30. |
 | `--help` | Usage. |
 
@@ -166,12 +166,14 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
  "store_rows":{"fine":42120,"minute":7020,"hour":117},
  "store_bytes":1101824,"store_max_bytes":268435456,"store_batches":360,
  "store_write_errors":0,"store_last_error":null,"store_compactions":2,
- "store_dropped_expired":0,"store_dropped_ceiling":0,"retain_days":30,
+ "store_dropped_expired":0,"store_dropped_ceiling":0,"store_ceiling_runs":0,
+ "retain_days":30,
  "series_keys":{"global":1,"device":30,"host":20,"label":5},
  "series_key_caps":{"global":1,"device":512,"host":256,"label":128},
  "key_evictions":{"global":0,"device":0,"host":0,"label":0},
  "series":117,"samples":221385,"ring_rows":42120,"queue_rows":0,
- "queue_dropped":0,"highwater_evictions":0,"values_clamped":0,
+ "queue_dropped":0,"oneshot_dropped":0,"highwater_evictions":0,
+ "values_clamped":0,
  "sse_clients":1,"tick_seq":12}
 ```
 
@@ -343,7 +345,11 @@ the connection's first record, i.e. it was born while slothweb was
 listening; rows with no `first_seen` (`seqnum_client`, `channel_summary`)
 are always a baseline on first sight. Every connection starts a new
 table. The table holds 4,096 rows, least recently used out first,
-counted as `highwater_evictions`.
+counted as `highwater_evictions`. An evicted row's id goes into a small
+two-hash filter (8 KB, cleared with the table), so a row born while
+listening, evicted and then seen again on the same connection is a
+baseline the second time rather than counting its whole total twice; a
+filter collision can only turn a born row into a baseline.
 
 **Rows per pass** (`conns.total`, `wifi.probe_clients`) use the same
 batch start as the device count: the first `iface` record after another
@@ -372,7 +378,13 @@ per class: device MACs (`--web-max-keys`, 512), host IPs (half, 256),
 labels (interfaces, channels, alert types: 128); a new key in a full
 class evicts the one seen least recently, after writing out its open
 buckets, and is counted in `key_evictions`. The one global key is never
-evicted. Closed 10 s buckets also go to a ring of 131,072 rows in
+evicted. Only a full class evicts, so an eviction means key churn: a key
+evicted after less than one 10 s bucket and one sample per series (a
+scan, a spoofed-source flood) has its 10 s row written but its 1 min and
+1 h rows dropped, counted as `oneshot_dropped`, so churn cannot fill the
+30-day and 400-day tiers with one-sample series. A key evicted and seen
+again is a new series in memory: `/api/series` finds its earlier rows in
+the store, and without one they are gone from the answer. Closed 10 s buckets also go to a ring of 131,072 rows in
 memory (about 5 MB); `/api/series` reads it for what the store has not
 written yet, and in a build without SQLite it is all there is.
 
@@ -390,8 +402,12 @@ but closed buckets: `series(id, metric, key)` and one table per tier,
   `-journal` files, when present, the same; anything else is refused,
   never repaired. SQLite then opens it with `SQLITE_OPEN_NOFOLLOW` and
   `SQLITE_DBCONFIG_DEFENSIVE`, and needs 3.31.0 or later.
-- **Identification** happens before anything is written. An empty file
-  is new. A file whose `meta` table says `store = slothweb` is ours, at
+- **Identification** happens before anything is written, on a
+  read-only connection: the last read-write connection to close on a
+  WAL database checkpoints the WAL into it and deletes the WAL, so
+  identifying a WAL-mode sloth.db on one would rewrite the file it
+  refused. Only once the file is ours or empty is it opened read-write
+  (and identified again there). An empty file is new. A file whose `meta` table says `store = slothweb` is ours, at
   its `schema_version`. Anything else (sloth.db, whose `meta` is
   differently shaped, any other database, a file that is not SQLite) is
   refused and left byte for byte as it was. So is a store whose version
@@ -415,14 +431,26 @@ but closed buckets: `series(id, metric, key)` and one table per tier,
   10 s it writes the closed ones in one transaction. A bucket already on
   disk (one an eviction or a restart closed early) is merged: sums and
   counts added, min and max widened. On shutdown every open bucket is
-  closed and written, so a restart picks up where it stopped.
+  closed and written, so a restart picks up where it stopped. One
+  bucket is briefly short after a restart: the one the restart split.
+  Until this run's part of it is written (within two flush intervals),
+  `/api/series` has the last run's part in the store and this run's in
+  memory, and shows the fuller of the two rather than their sum.
+- **The ceiling** (`--web-max-mb`) is checked after every 10 s write,
+  not only at compaction, so it bounds the file within one flush
+  interval: key churn can otherwise write millions of rows in an hour.
+  The check is three PRAGMAs. Over it, slices go until it is under: the
+  oldest 5 minutes of fine rows (any series) until none is left, then
+  the oldest hour of keyed minute rows, then the oldest day of keyed
+  hour rows, and only then the same for the global series, which are one
+  per metric whatever the traffic; series rows left with no bucket go
+  with them, and free pages are returned. Passes that dropped rows are
+  `store_ceiling_runs`, rows `store_dropped_ceiling`.
 - **Compaction** runs at start and then once an hour, after the write:
-  rows past each tier's retention go; then, while the used size is over
-  `--web-max-mb`, the oldest hour of fine rows, then the oldest day of
-  minute rows, then the oldest month of hour rows; then free pages are
-  returned (`auto_vacuum=INCREMENTAL`) and the WAL is truncated. The WAL
-  checkpoints at 1 MB and is capped at 1 MB, so the file and its WAL
-  stay near the ceiling.
+  rows past each tier's retention go, then the ceiling as above; then
+  free pages are returned (`auto_vacuum=INCREMENTAL`) and the WAL is
+  truncated. The WAL checkpoints at 1 MB and is capped at 1 MB, so the
+  file and its WAL stay near the ceiling.
 - **Reads** come from the HTTP thread over a second, read-only
   connection (WAL lets it read beside the writer), with every value
   bound as a parameter; a table name is chosen from three constant
@@ -538,10 +566,10 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_jsonl.c` | hand-written lines: sloth's shapes, escapes and surrogate pairs, member text inside a string, every truncation of a record, syntax errors, invalid UTF-8 raw and escaped, duplicate members, the depth, member and integer limits |
 | `test_live.c` | the live state and the framer without a socket: the device count per pass, passes cut by a gap, a bad line or a bad type not published, an empty table publishing 0, a reconnect as a new stream, the alert lifecycle counts, type names, records per second, sensor-health states, the recent ring, hostile strings escaped in `/api/live` and in `record` events, the worst-case `/api/live` fitting its buffer, split reads, truncated and overlong lines |
 | `test_ingest.c` | the client over a real unix socket and loopback TCP, the test playing sloth: `--socket` parsing and its refusals, the back-off bound, **the device count `/api/live` reports matching what the fake sent within 5 s** for 3, 12, 300, 0 and 7 devices (spec §12, M1), markup escaped over HTTP and over `/events`, reconnect after the peer closes, retrying with no peer at the capped interval, no tight loop on a peer that closes at once, a mixed stream of truncated, overlong, invalid-UTF-8 and hostile lines, and that the client never writes to the socket |
-| `test_rollup.c` | bucket boundaries in all three tiers, sum/count/min/max, value by kind, non-finite and huge values, the per-class key caps and LRU eviction with its flush and counters, the ring query's merge and bounds |
-| `test_metrics.c` | hand-written lines through the decoder on a pinned clock: the key canonicalisers, gauges from `%.2f` reals, hostile keys refused, event counters, running totals as deltas floored at zero and first-sight baselines, flows, channels, presence, rows per pass with gaps and bad lines, the bounded high-water table |
-| `test_store.c` | the DDL guardrail in every build; with SQLite: a fresh store, `test_db.c`'s secret-column sweep, secrets fed through the stream absent from the file, a v0 file migrated, a v0 file whose step fails left at v0, a newer file and foreign files (a sloth.db shape, other databases, not SQLite) refused byte for byte, the file rules (symlink, mode, links, side files, a directory), merged writes and bound queries, retention, the ceiling dropping the oldest fine rows first |
-| `test_series.c` | every parameter rule and its reason, the answer's shape and paging, the routes (`HEAD`, `400` without echo, `query_too_long`, `421` and `405` on all three, `503` without a time series, the health members), the 900-point worst case fitting, the store thread running beside reads and writes, and spec §12's M2 acceptance: an hour of records through the framer on a pinned clock, the 24 h request answered with 360 points 10 s apart, the store under 5 MB |
+| `test_rollup.c` | bucket boundaries in all three tiers, sum/count/min/max, value by kind, non-finite and huge values, the per-class key caps and LRU eviction with its flush and counters, one-shot evictions keeping only their 10 s rows, the ring query's merge and bounds, the full store queue dropping the newest rows and counting them |
+| `test_metrics.c` | hand-written lines through the decoder on a pinned clock: the key canonicalisers, gauges from `%.2f` reals, hostile keys refused, event counters, running totals as deltas floored at zero and first-sight baselines, flows, channels, presence, rows per pass with gaps and bad lines, the bounded high-water table, an evicted row seen again not counted twice |
+| `test_store.c` | the DDL guardrail in every build; with SQLite: a fresh store, `test_db.c`'s secret-column sweep, secrets fed through the stream absent from the file, a v0 file migrated, a v0 file whose step fails left at v0, a newer file and foreign files (a sloth.db shape, other databases, not SQLite) refused byte for byte, a WAL-mode sloth.db with an unflushed WAL refused with the file and its WAL byte for byte, the file rules (symlink, mode, links, side files, a directory; the owner rule is not tested, see below), `DEFENSIVE` refusing a `sqlite_master` write on the store's handle, merged writes and bound queries, retention, the ceiling dropping the oldest fine rows first and sparing global series, and holding under 200 new keys a second within one flush interval |
+| `test_series.c` | every parameter rule and its reason, the answer's shape and paging, the routes (`HEAD`, `400` without echo, `query_too_long`, `421` and `405` on all three, `503` without a time series, the health members), the 900-point worst case fitting, the 900-point cap on a store+memory answer of 1,800 buckets and its next page, the store thread running beside reads and writes, and spec §12's M2 acceptance: an hour of records through the framer on a pinned clock, the 24 h request answered with 360 points 10 s apart, the store under 5 MB |
 | `test_server.c` | real loopback sockets: default bind address, a refused peer over v4 and v6, 405 for POST/PUT/DELETE/PATCH, 431, idle and slow clients timed out, slot exhaustion; the page byte for byte and its `304`, health, a stream's ticks and pings and the client leaving, the first tick at once, a departing client noticed on the read path with no event due, the stream socket's `TCP_NODELAY` and `SO_SNDBUF`, a non-reading stream client dropped at the 64 KB backlog and not past it, the stream cap, `421` for `Host: attacker.example` |
 
 A test cannot originate from a non-loopback address, so the refused-peer
@@ -549,7 +577,10 @@ socket tests narrow the list instead (only `127.0.0.2`, or only IPv4)
 and connect from `127.0.0.1` and `::1`; `test_acl.c` covers the
 non-loopback addresses against the same function the accept path calls.
 Every absence assertion was seen to fail under a mutant of the guard it
-covers before it was trusted.
+covers before it was trusted. One rule has none: the store's owner rule
+(a file owned by another uid is refused) cannot be exercised without
+privilege a test must not ask for, and removing it leaves the suite
+green; it is held by code reading.
 
 `make cppcheck` analyses `web/` with the rest of the tree.
 

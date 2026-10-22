@@ -16,6 +16,11 @@
  * full class evicts the one seen least recently, after flushing its
  * open buckets. Evictions are counted per class and shown on
  * /api/health. Global metrics have one key, "", and are never evicted.
+ * A key evicted after less than one fine bucket and one sample per
+ * series (a scan, or any key churn: only a full class evicts) has its
+ * fine rows flushed but its minute and hour rows dropped and counted,
+ * so churn cannot fill the 30-day and 400-day tiers with one-sample
+ * series.
  *
  * Keys arrive already validated and canonical (web_metrics.c); the
  * rollup trusts them only as far as WEB_KEY_MAX bytes. Bucketing uses
@@ -124,7 +129,7 @@ typedef struct {
     char      key[WEB_KEY_MAX + 1];
     int       used;
     int       next;                       /* hash chain, -1 ends it */
-    long long last_seen;                  /* slothweb's clock */
+    long long first_seen, last_seen;      /* slothweb's clock */
     uint32_t  sid[WM_COUNT];              /* 0: no series for that metric */
     web_agg_t open[WM_COUNT][WEB_TIER_COUNT];
 } web_rkey_t;
@@ -147,6 +152,7 @@ typedef struct {
     web_qrow_t     *queue;
     size_t          q_cap, q_n;
     unsigned long   q_dropped;
+    unsigned long   oneshot_dropped;      /* see key_flush() */
     unsigned long long samples;
     unsigned long   clamped;
     unsigned long   hw_evictions;         /* web_metrics.c's high-water rows */
@@ -158,7 +164,7 @@ typedef struct {
     unsigned long evictions[WEB_KC_COUNT];
     unsigned long series;
     size_t        ring_rows, queue_rows;
-    unsigned long q_dropped, clamped, hw_evictions;
+    unsigned long q_dropped, oneshot_dropped, clamped, hw_evictions;
     unsigned long long samples;
     unsigned long rows_closed[WEB_TIER_COUNT];
 } web_rollup_stats_t;
@@ -194,8 +200,14 @@ size_t web_rollup_take(web_rollup_t *ru, web_qrow_t *out, size_t max);
 
 /* The fine buckets of (metric, key) with from <= t < to that are in
  * memory, newest first, at most max; with_open adds the bucket still
- * filling. Two rows for one bucket (a key evicted and back inside it)
- * are merged. Returns how many; *more is set when max cut it short. */
+ * filling. Only the key's current series instance is read: a key that
+ * was evicted and came back has a new one, and the ring rows of its
+ * earlier life are not returned (with a store they are on disk under
+ * the same (metric, key), and /api/series reads them there; without
+ * one that history is gone from the answer). Two ring rows of the
+ * current instance for one bucket (a close_all() and then more samples
+ * in the same bucket, or the clock stepping back) are merged. Returns
+ * how many; *more is set when max cut it short. */
 int  web_rollup_fine(web_rollup_t *ru, int metric, const char *key,
                      long long from, long long to, int with_open,
                      web_point_t *out, int max, int *more);

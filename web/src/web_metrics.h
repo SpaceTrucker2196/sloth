@@ -21,7 +21,10 @@
  * total, is not counted as one huge burst. Rows without first_seen
  * (seqnum_client, channel_summary) are always a baseline on first
  * sight. High-water rows are held in a bounded table, least recently
- * used out first; evictions are counted.
+ * used out first; evictions are counted, and an evicted row's id goes
+ * into a small filter so that seeing it again on the same connection
+ * is a baseline, not a second count of its whole total as if it had
+ * just been born.
  *
  * wifi.probe_clients and conns.total are rows per snapshot pass. A pass
  * runs from one batch start (the first `iface` record after another
@@ -43,6 +46,9 @@
 
 #define WEB_HW_ROWS   4096
 #define WEB_HW_ID_MAX 159
+/* Ids evicted from the high-water table on this connection, as a
+ * two-hash filter: 64 Kbit, 8 KB. */
+#define WEB_HW_GONE_BITS 65536u
 
 typedef struct {
     char               id[WEB_HW_ID_MAX + 1];
@@ -62,6 +68,7 @@ typedef struct web_metrics {
     int          *hw_head;
     int           hw_n, hw_cap, hw_nhead;
     unsigned long long touch;
+    unsigned char hw_gone[WEB_HW_GONE_BITS / 8];
 
     int       have_first_ts;
     long long first_ts;

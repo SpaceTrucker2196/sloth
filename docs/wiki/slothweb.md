@@ -330,7 +330,11 @@ each bucket with sum, count, min and max. Keys are bounded per class:
 `--web-max-keys` device MACs (512) and half that many host IPs, least
 recently seen out first, evictions counted on `/api/health`; labels
 (interfaces, channels, alert types) are capped at 128; global metrics
-are always kept. Closed fine buckets also go to a 131,072-row ring in
+are always kept. Only a full class evicts, so an eviction is key churn:
+a key evicted after under 10 s and one sample per series keeps its 10 s
+row but not its 1 min and 1 h rows (`oneshot_dropped`), so a scan cannot
+fill the long tiers. A key evicted and back is a new series in memory;
+its earlier rows come from the store, or are gone without one. Closed fine buckets also go to a 131,072-row ring in
 memory, which is all `/api/series` has without SQLite.
 
 ### The store
@@ -340,8 +344,10 @@ and refused (never repaired) if it is not a regular file of the
 effective uid with no group or other bits and one link; the WAL and
 shared-memory files are checked the same way, and SQLite then opens it
 with `SQLITE_OPEN_NOFOLLOW` and `DEFENSIVE`: sloth's own rules for
-`sloth.db`. The file is identified before anything is written: empty is
-new, a `meta` table naming it a slothweb store is ours, anything else
+`sloth.db`. The file is identified before anything is written, on a
+read-only connection (a read-write one closing last on a WAL database
+checkpoints and deletes its WAL, which would rewrite a refused
+sloth.db): empty is new, a `meta` table naming it a slothweb store is ours, anything else
 (sloth.db included) is refused untouched, and so is a schema newer than
 the build. Schema changes follow the 2026-10-21 owner rule: a chain of
 additive steps from v0, each in one `BEGIN IMMEDIATE` with its own
@@ -349,10 +355,12 @@ stamp, so a failed step leaves the file at the version it reached. A
 new file is stamped v0 and takes the same chain. There is only v1 today.
 No column can hold a credential (sloth's `test_db.c` guardrail, copied).
 
-The store thread, never the HTTP one, closes due buckets every second,
-writes them in one transaction every 10 s, and once an hour drops rows
-past retention, then, while the used size is over `--web-max-mb` (256),
-the oldest fine rows, then minute, then hour; then returns free pages
+The store thread, never the HTTP one, closes due buckets every second
+and writes them in one transaction every 10 s. After every write, while
+the used size is over `--web-max-mb` (256), it drops the oldest fine
+rows, then keyed minute and hour rows, and the global series' rows last,
+so the ceiling holds within one flush interval even under key churn.
+Once an hour it also drops rows past retention, then returns free pages
 and truncates the WAL. Queries use a second, read-only connection with
 every parameter bound.
 
@@ -423,17 +431,18 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | after 1 h, the 24 h chart shows the last hour at 10 s and the store is under 5 MB | `test_acceptance_one_hour` (an hour of records through the framer on a pinned clock: 42,120 fine rows, 360 points 10 s apart from the 24 h request, about 1.1 MB on disk) |
 | metric derivation, deltas floored at zero | `test_gauges`, `test_event_counters`, `test_highwater_deltas`, `test_flow_counters`, `test_channels`, `test_presence`, `test_pass_gauges` |
 | three tiers with sum/count/min/max | `test_bucket_boundaries_and_aggregates` |
-| keyed metrics bounded, LRU, evictions counted | `test_key_classes_are_bounded_lru`, `test_highwater_table_bounded` |
-| own file, secure open, migration chain, newer refused | `test_fresh_store`, `test_v0_file_is_migrated`, `test_v0_failed_step_leaves_file_unchanged`, `test_newer_file_refused`, `test_foreign_files_refused`, `test_file_rules` |
+| keyed metrics bounded, LRU, evictions counted | `test_key_classes_are_bounded_lru`, `test_eviction_oneshot_and_lived`, `test_highwater_table_bounded`, `test_highwater_evicted_row_not_recounted`, `test_queue_full_drops_newest_and_counts` |
+| own file, secure open, migration chain, newer refused | `test_fresh_store`, `test_v0_file_is_migrated`, `test_v0_failed_step_leaves_file_unchanged`, `test_newer_file_refused`, `test_foreign_files_refused`, `test_foreign_wal_left_as_it_is`, `test_file_rules` (not the owner rule, which needs privilege to exercise) |
 | secret-column guardrail | `test_schema_text_guardrail`, `test_no_column_can_hold_secret_material`, `test_secrets_never_reach_disk` |
-| compaction and the ceiling | `test_compaction_retention`, `test_ceiling_drops_oldest_fine_first` |
-| strict parameters, bounded answers, behind the W0/M0 checks | `test_parameters_validated`, `test_series_json_and_paging`, `test_routes`, `test_worst_case_fits` |
+| compaction and the ceiling | `test_compaction_retention`, `test_ceiling_drops_oldest_fine_first`, `test_ceiling_spares_global_series`, `test_ceiling_holds_under_key_churn` |
+| strict parameters, bounded answers, behind the W0/M0 checks | `test_parameters_validated`, `test_series_json_and_paging`, `test_routes`, `test_worst_case_fits`, `test_merged_answer_capped` |
 | writes off the HTTP thread | `test_store_thread` |
 
 A test cannot connect from a non-loopback address, so the socket-level
 refusals narrow the list and connect from loopback; the list function
 itself is tested on non-loopback sockaddrs. Each absence assertion was
-run against a mutant of its guard and seen to fail before it was kept.
+run against a mutant of its guard and seen to fail before it was kept,
+except the store's owner rule, held by code reading only.
 
 The suite runs clean under ASan/UBSan and TSan, and `make cppcheck`
 covers `web/`.

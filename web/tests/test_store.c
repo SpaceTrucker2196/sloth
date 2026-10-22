@@ -374,16 +374,82 @@ static void test_foreign_files_refused(void) {
     rm_store(p);
 }
 
+/* A WAL-mode sloth.db that sloth left with frames never checkpointed
+ * (it exited uncleanly, or is simply between checkpoints): refused, and
+ * neither the file nor its WAL is touched. sloth.db is WAL (src/db.c),
+ * and the last read-write connection to close on a WAL database
+ * checkpoints it into the main file and deletes the WAL; identifying on
+ * a read-only connection is what prevents that. The writer here closes
+ * with SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, which leaves the WAL as a
+ * crashed process would. Seen red with identify() run on the
+ * read-write connection again (the main file grew from 4096 to 20480
+ * bytes and the WAL was gone). */
+static void test_foreign_wal_left_as_it_is(void) {
+    char p[128], w[160];
+    path_in(p, sizeof(p), "sloth-wal.db");
+    snprintf(w, sizeof(w), "%s-wal", p);
+    int fd = open(p, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    WT_ASSERT(fd >= 0);
+    if (fd >= 0) close(fd);
+    sqlite3 *h = NULL;
+    WT_EQ(sqlite3_open_v2(p, &h, SQLITE_OPEN_READWRITE, NULL), SQLITE_OK);
+    char *m = NULL;
+    WT_EQ(sqlite3_exec(h, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"
+                          "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);"
+                          "INSERT INTO meta VALUES ('schema_version','6');"
+                          "CREATE TABLE devices (mac TEXT PRIMARY KEY);"
+                          "INSERT INTO devices VALUES ('aa:bb:cc:dd:ee:ff');",
+                       NULL, NULL, &m), SQLITE_OK);
+    sqlite3_free(m);
+    int off = -1;
+    WT_EQ(sqlite3_db_config(h, SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1, &off),
+          SQLITE_OK);
+    WT_EQ(off, 1);
+    sqlite3_close(h);
+
+    static unsigned char mb[1 << 16], ma[1 << 16], wb[1 << 17], wa[1 << 17];
+    size_t nmb = slurp(p, mb, sizeof(mb)), nwb = slurp(w, wb, sizeof(wb));
+    WT_ASSERT(nwb > 0);                      /* frames really are pending */
+    WT_ASSERT(nwb < sizeof(wb));
+    char err[512];
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), -1);
+    WT_HAS(err, "not a slothweb store");
+    web_store_close(&S);
+    size_t nma = slurp(p, ma, sizeof(ma)), nwa = slurp(w, wa, sizeof(wa));
+    WT_EQ(nma, nmb);
+    WT_ASSERT(nmb > 0 && !memcmp(mb, ma, nmb));
+    WT_EQ(nwa, nwb);
+    WT_ASSERT(!memcmp(wb, wa, nwb));
+    rm_store(p);
+}
+
 /* sloth's secure_file rules: a symlink, group or other access, two
  * links, a directory, and the same for a side file, are refused and
  * never repaired. Seen red with O_NOFOLLOW dropped from private_main():
  * SQLite's own SQLITE_OPEN_NOFOLLOW still refused the link, but without
- * the reason, so this asserts the reason as well as the refusal. */
+ * the reason, so this asserts the reason as well as the refusal.
+ *
+ * The owner rule (a file owned by another uid is refused) is not
+ * covered here: making a file another uid owns needs privilege a test
+ * must not ask for, and removing the uid check from check_stat() leaves
+ * this suite green. It is held by code reading only.
+ *
+ * DEFENSIVE is asserted by what it forbids: on the store's own handle,
+ * writable_schema is ignored and sqlite_master cannot be written. Seen
+ * red with the sqlite3_db_config() call removed from open_db() (the
+ * UPDATE went through). */
 static void test_file_rules(void) {
     char p[128], q[160], err[512];
     path_in(p, sizeof(p), "target.db");
     path_in(q, sizeof(q), "link.db");
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    WT_ASSERT(sqlite3_exec(S.db, "PRAGMA writable_schema=ON; UPDATE sqlite_master"
+                                 " SET sql=sql WHERE name='meta'",
+                           NULL, NULL, NULL) != SQLITE_OK);
+    sqlite3_exec(S.db, "PRAGMA writable_schema=OFF", NULL, NULL, NULL);
+    /* The positive control: the same handle does write its own tables. */
+    WT_EQ(sqlite3_exec(S.db, "UPDATE meta SET value=value WHERE name='store'",
+                       NULL, NULL, NULL), SQLITE_OK);
     web_store_close(&S);
     WT_EQ(symlink(p, q), 0);
     WT_EQ(web_store_open(&S, q, err, sizeof(err)), -1);
@@ -573,6 +639,134 @@ static void test_ceiling_drops_oldest_fine_first(void) {
     rm_store(p);
 }
 
+static long long disk_bytes(const char *p) {
+    char w[200];
+    struct stat sb;
+    long long b = 0;
+    if (stat(p, &sb) == 0) b += sb.st_size;
+    snprintf(w, sizeof(w), "%s-wal", p);
+    if (stat(w, &sb) == 0) b += sb.st_size;
+    return b;
+}
+
+/* --web-max-mb bounds the store within one flush interval, not one
+ * compaction: key churn (200 new source IPs a second, as a scan of the
+ * LAN or a DNS flood from spoofed sources would give) through the real
+ * rollup, store and store thread step, on a pinned clock, for 400 s
+ * with a 4 MB ceiling. After every step the used size is under the ceiling and the
+ * file and its WAL within the WAL's 1 MB cap of it; the ceiling ran
+ * between compactions (only the start one ran); the churn keys' minute
+ * and hour rows were never written (one-shot evictions); the global
+ * series kept all of its minute rows and its newest fine ones. Seen red
+ * with the ceiling call removed from web_tsdb.c's flush() (the used
+ * size reached 6.8 MB, 7.7 MB on disk, before the first hourly
+ * compaction). */
+static void test_ceiling_holds_under_key_churn(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "churn.db");
+    static web_rollup_t ru;
+    static web_tsdb_t ts;
+    const long long T = 1792627200;
+    const int max_mb = 4;
+    const long long cap = (long long)max_mb << 20;
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    WT_EQ(web_rollup_init(&ru, 256, 1, err, sizeof(err)), 0);
+    WT_EQ(web_tsdb_init(&ts, &ru, &S, 30, max_mb, NULL, NULL), 0);
+    long long worst_used = 0, worst_disk = 0;
+    unsigned ip = 0;
+    for (int sec = 0; sec < 400; sec++) {
+        long long now = T + sec;
+        web_rollup_add(&ru, WM_CONNS_TOTAL, "", 15, now);
+        for (int i = 0; i < 200; i++, ip++) {
+            char k[32];
+            snprintf(k, sizeof(k), "10.%u.%u.%u", (ip >> 16) & 0xff,
+                     (ip >> 8) & 0xff, ip & 0xff);
+            web_rollup_add(&ru, WM_DNS_QUERIES, k, 1, now);
+        }
+        web_tsdb_step(&ts, now);
+        web_store_stats_t st;
+        web_store_stats(&S, &st);
+        if (st.bytes > worst_used) worst_used = st.bytes;
+        long long d = disk_bytes(p);
+        if (d > worst_disk) worst_disk = d;
+    }
+    fprintf(stderr, "  churn: worst used %lld, worst on disk %lld (cap %lld)\n",
+            worst_used, worst_disk, cap);
+    WT_ASSERT(worst_used <= cap);
+    WT_ASSERT(worst_disk <= cap + (5LL << 18));
+    web_store_stats_t st;
+    web_store_stats(&S, &st);
+    WT_EQ(st.compactions, 1);
+    WT_ASSERT(st.ceiling_runs > 0);
+    WT_ASSERT(st.dropped_ceiling > 0);
+    WT_EQ(st.write_errors, 0);
+    web_rollup_stats_t rs;
+    web_rollup_stats(&ru, &rs);
+    WT_EQ(rs.q_dropped, 0);
+    WT_ASSERT(rs.oneshot_dropped > 0);
+    WT_ASSERT(rs.evictions[WEB_KC_HOST] > 70000);
+
+    web_tsdb_flush_all(&ts);
+    web_point_t pt[16];
+    int more;
+    /* Six closed minutes and the one in progress; the hour; the newest
+     * minute of fine rows. */
+    WT_EQ(web_store_query(&S, WEB_TIER_MINUTE, WM_CONNS_TOTAL, "", T, T + 3600,
+                          pt, 16, &more), 7);
+    WT_EQ(web_store_query(&S, WEB_TIER_HOUR, WM_CONNS_TOTAL, "", T, T + 3600,
+                          pt, 16, &more), 1);
+    WT_EQ(web_store_query(&S, WEB_TIER_FINE, WM_CONNS_TOTAL, "", T + 340, T + 400,
+                          pt, 16, &more), 6);
+    web_tsdb_destroy(&ts);
+    web_rollup_destroy(&ru);
+    web_store_close(&S);
+    rm_store(p);
+}
+
+/* Past the fine tier, the ceiling takes keyed minute and hour rows
+ * before any row of a global series: those are one series per metric
+ * whatever the traffic, and the long view of the whole network. Seen
+ * red with the ceiling's steps reordered to take global rows first
+ * (the global minute rows went while keyed ones were left). */
+static void test_ceiling_spares_global_series(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "ceilg.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    const long long now = 1792627200;
+    static web_qrow_t r[3000];
+    char k[32];
+    for (int s = 0; s < 12; s++) {
+        snprintf(k, sizeof(k), "10.0.%d.1", s);
+        for (int b = 0; b < 3000; b++)
+            r[b] = row(WEB_TIER_MINUTE, WM_HOST_RX, k, now - 200000 + b * 60,
+                       b, 1, b, b);
+        WT_EQ(web_store_write(&S, r, 3000), 0);
+    }
+    for (int b = 0; b < 3000; b++)
+        r[b] = row(WEB_TIER_MINUTE, WM_CONNS_TOTAL, "", now - 200000 + b * 60,
+                   b, 1, b, b);
+    WT_EQ(web_store_write(&S, r, 3000), 0);
+    web_store_stats_t st;
+    web_store_stats(&S, &st);
+    const long long cap = 512LL << 10;
+    WT_ASSERT(st.bytes > cap);
+    WT_ASSERT(web_store_ceiling(&S, cap) > 0);
+    web_store_stats(&S, &st);
+    WT_ASSERT(st.bytes <= cap);
+    WT_EQ(st.ceiling_runs, 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM minute m JOIN series s ON s.id="
+                     "m.series WHERE s.key=''"), 3000);
+    long long keyed = raw_int(p, "SELECT COUNT(*) FROM minute m JOIN series s"
+                                 " ON s.id=m.series WHERE s.key<>''");
+    WT_ASSERT(keyed > 0 && keyed < 36000);
+    /* Under the ceiling, a second call is the cheap test and nothing. */
+    WT_EQ(web_store_ceiling(&S, cap), 0);
+    web_store_stats(&S, &st);
+    WT_EQ(st.ceiling_runs, 1);
+    web_store_close(&S);
+    rm_store(p);
+}
+
 void run_store_tests(void) {
     if (mkdir_tmp() != 0) {
         WT_ASSERT(!"mkdtemp");
@@ -586,10 +780,13 @@ void run_store_tests(void) {
     WT_RUN(test_v0_failed_step_leaves_file_unchanged);
     WT_RUN(test_newer_file_refused);
     WT_RUN(test_foreign_files_refused);
+    WT_RUN(test_foreign_wal_left_as_it_is);
     WT_RUN(test_file_rules);
     WT_RUN(test_write_merge_query);
     WT_RUN(test_compaction_retention);
     WT_RUN(test_ceiling_drops_oldest_fine_first);
+    WT_RUN(test_ceiling_spares_global_series);
+    WT_RUN(test_ceiling_holds_under_key_churn);
     WT_RUN(test_secrets_never_reach_disk);
     rmdir(g_dir);
 }

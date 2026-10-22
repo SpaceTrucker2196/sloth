@@ -288,6 +288,7 @@ static void test_routes(void) {
     WT_HAS(out, "\"store\":\"memory\",\"store_path\":null,");
     WT_HAS(out, "\"series_key_caps\":{\"global\":1,\"device\":64,\"host\":32,\"label\":128}");
     WT_HAS(out, "\"key_evictions\":{\"global\":0,\"device\":0,\"host\":0,\"label\":0}");
+    WT_HAS(out, "\"queue_dropped\":0,\"oneshot_dropped\":0,");
     mem_done();
 }
 
@@ -327,6 +328,92 @@ static void test_worst_case_fits(void) {
     WT_EQ(rr.status, 200);
     WT_HAS(out, "\"more\":true");
     WT_HAS(out, ",-1.234568e-300,-1.234568e-300,4294967295]]}");
+    web_tsdb_destroy(&ts);
+    web_rollup_destroy(&ru);
+    web_store_close(&st);
+    unlink(p);
+    char s2[160];
+    snprintf(s2, sizeof(s2), "%s-wal", p); unlink(s2);
+    snprintf(s2, sizeof(s2), "%s-shm", p); unlink(s2);
+    rmdir(dir);
+}
+
+static int count_points(const char *b, long long *oldest, long long *newest) {
+    const char *pt = strstr(b, "\"points\":[");
+    int c = 0;
+    *oldest = *newest = -1;
+    for (const char *q = pt ? pt + 10 : NULL; q && (q = strchr(q, '[')); q++) {
+        long long t = atoll(q + 1);
+        if (*oldest < 0) *oldest = t;
+        *newest = t;
+        c++;
+    }
+    return c;
+}
+
+/* The 900-point cap holds on the merged answer, not only on each half:
+ * the store holds 900 older fine buckets of a series and the ring 900
+ * newer ones (899 closed and the one filling), so the union is 1800.
+ * The answer is the newest 900, more is set and next_to is the oldest
+ * returned bucket; the page below it is the store's 900. Seen red with
+ * the merge loop's cap raised to 2 * max (1800 points came back). */
+static void test_merged_answer_capped(void) {
+    char dir[64] = "/tmp/slothweb-merge-XXXXXX";
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    char p[128], err[512], e2[64], why[48];
+    snprintf(p, sizeof(p), "%s/m.db", dir);
+    static web_store_t st;
+    WT_EQ(web_store_open(&st, p, err, sizeof(err)), 0);
+    WT_EQ(web_rollup_init(&ru, 64, 0, e2, sizeof(e2)), 0);
+    WT_EQ(web_tsdb_init(&ts, &ru, &st, 30, 256, NULL, NULL), 0);
+    const int M = WEB_SERIES_MAX_POINTS;
+    static web_qrow_t r[WEB_SERIES_MAX_POINTS];
+    for (int i = 0; i < M; i++) {
+        memset(&r[i], 0, sizeof(r[i]));
+        r[i].tier = WEB_TIER_FINE;
+        r[i].metric = WM_HOST_RX;
+        snprintf(r[i].key, sizeof(r[i].key), "10.0.0.1");
+        r[i].t = T + (long long)i * 10;
+        r[i].sum = r[i].min = r[i].max = 1;
+        r[i].n = 1;
+    }
+    WT_EQ(web_store_write(&st, r, (size_t)M), 0);
+    const long long mid = T + (long long)M * 10;
+    for (int i = 0; i < M; i++)
+        web_rollup_add(&ru, WM_HOST_RX, "10.0.0.1", 2, mid + (long long)i * 10);
+    const long long end = mid + (long long)M * 10;
+
+    web_series_q_t q;
+    char qs[160];
+    snprintf(qs, sizeof(qs), "metric=host.rx_rate&key=10.0.0.1&from=%lld&to=%lld",
+             T, end);
+    WT_EQ(parse(qs, end - 1, 1, &q, why), 0);
+    size_t n = web_series_json(&ts, &q, body, sizeof(body));
+    WT_ASSERT(n > 0);
+    body[n < sizeof(body) ? n : sizeof(body) - 1] = '\0';
+    WT_HAS(body, "\"source\":\"store+memory\"");
+    WT_HAS(body, "\"more\":true");
+    long long lo, hi;
+    WT_EQ(count_points(body, &lo, &hi), M);
+    WT_EQ(lo, mid);
+    WT_EQ(hi, end - 10);
+    char want[64];
+    snprintf(want, sizeof(want), "\"next_to\":%lld,", mid);
+    WT_HAS(body, want);
+    WT_ASSERT(strstr(body, ",1,1,1,1]") == NULL);   /* no store point yet */
+
+    snprintf(qs, sizeof(qs), "metric=host.rx_rate&key=10.0.0.1&from=%lld&to=%lld",
+             T, mid);
+    WT_EQ(parse(qs, end - 1, 1, &q, why), 0);
+    n = web_series_json(&ts, &q, body, sizeof(body));
+    WT_ASSERT(n > 0);
+    body[n < sizeof(body) ? n : sizeof(body) - 1] = '\0';
+    WT_HAS(body, "\"more\":false,\"next_to\":null,");
+    WT_EQ(count_points(body, &lo, &hi), M);
+    WT_EQ(lo, T);
+    WT_EQ(hi, mid - 10);
+    WT_ASSERT(strstr(body, ",2,2,2,1]") == NULL);   /* no ring point */
+
     web_tsdb_destroy(&ts);
     web_rollup_destroy(&ru);
     web_store_close(&st);
@@ -587,6 +674,7 @@ void run_series_tests(void) {
     WT_RUN(test_routes);
 #ifdef WITH_SQLITE
     WT_RUN(test_worst_case_fits);
+    WT_RUN(test_merged_answer_capped);
 #endif
     WT_RUN(test_acceptance_one_hour);
     WT_RUN(test_store_thread);

@@ -127,6 +127,25 @@ static unsigned hw_hash(const char *s) {
     return h;
 }
 
+/* A second, independent hash for the evicted-row filter. */
+static unsigned hw_hash2(const char *s) {
+    unsigned h = 5381;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++)
+        h = h * 33u + *p;
+    return h ^ (h >> 15);
+}
+
+static void gone_set(web_metrics_t *m, const char *id) {
+    unsigned a = hw_hash(id) % WEB_HW_GONE_BITS, b = hw_hash2(id) % WEB_HW_GONE_BITS;
+    m->hw_gone[a / 8] |= (unsigned char)(1u << (a % 8));
+    m->hw_gone[b / 8] |= (unsigned char)(1u << (b % 8));
+}
+
+static int gone_maybe(const web_metrics_t *m, const char *id) {
+    unsigned a = hw_hash(id) % WEB_HW_GONE_BITS, b = hw_hash2(id) % WEB_HW_GONE_BITS;
+    return (m->hw_gone[a / 8] >> (a % 8) & 1) && (m->hw_gone[b / 8] >> (b % 8) & 1);
+}
+
 static long long default_clock(void *ctx) {
     (void)ctx;
     return (long long)time(NULL);
@@ -164,6 +183,7 @@ void web_metrics_stream(web_metrics_t *m) {
         for (int i = 0; i < m->hw_nhead; i++) m->hw_head[i] = -1;
     }
     m->hw_n = 0;
+    memset(m->hw_gone, 0, sizeof(m->hw_gone));
     m->have_first_ts = 0;
     m->first_ts = 0;
     m->in_iface = 0;
@@ -204,6 +224,7 @@ static double hw_delta(web_metrics_t *m, const char *id, long long v,
         for (int i = 1; i < m->hw_cap; i++)
             if (m->hw[i].touched < m->hw[slot].touched) slot = i;
         hw_unlink(m, slot);
+        gone_set(m, m->hw[slot].id);
         web_rollup_note_hw_eviction(m->ru);
     }
     web_hw_t *e = &m->hw[slot];
@@ -213,8 +234,13 @@ static double hw_delta(web_metrics_t *m, const char *id, long long v,
     e->touched = m->touch;
     e->next = m->hw_head[h];
     m->hw_head[h] = slot;
-    /* Born while we were listening: its whole total is new. */
-    if (first_seen >= 0 && m->have_first_ts && first_seen >= m->first_ts)
+    /* Born while we were listening: its whole total is new. Unless
+     * this table evicted the row earlier on this connection: its total
+     * up to then was already counted, so it is a baseline again. The
+     * filter can only err towards a baseline (a born row whose id
+     * collides with an evicted one loses its first total). */
+    if (first_seen >= 0 && m->have_first_ts && first_seen >= m->first_ts &&
+        !gone_maybe(m, id))
         return (double)v;
     return 0;
 }

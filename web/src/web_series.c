@@ -158,7 +158,14 @@ size_t web_series_json(web_tsdb_t *t, const web_series_q_t *q, char *out,
                              b, max, &more_b);
 
     /* Both newest first; one point per bucket, the fuller one when both
-     * have it (the store's merges a bucket split by a restart). */
+     * have it. In one process lifetime the store's row for a bucket is a
+     * copy of the ring's, or the ring's merged with an older part, so
+     * the fuller one is right. The one exception is the bucket a
+     * restart split: until this process's part of it is flushed (at
+     * most two flush intervals after start), the store holds only the
+     * last run's part and the ring only this run's, and the answer
+     * shows the fuller part, not their sum: a transient undercount of
+     * that one bucket, accepted rather than tracked. */
     int i = 0, j = 0, n = 0, more = more_a || more_b;
     while ((i < na || j < nb) && n < max) {
         if (j >= nb || (i < na && a[i].t > b[j].t)) m[n++] = a[i++];

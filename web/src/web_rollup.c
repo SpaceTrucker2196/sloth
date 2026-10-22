@@ -172,10 +172,38 @@ static void emit(web_rollup_t *ru, web_rkey_t *k, int m, int tier) {
     a->t = -1;
 }
 
-static void key_flush(web_rollup_t *ru, web_rkey_t *k) {
+/* A key that lived less than one fine bucket and took one sample per
+ * series: what a scan or any other key churn looks like. Only a full
+ * class evicts, so only churn reaches this test. */
+static int key_oneshot(const web_rkey_t *k) {
+    if (k->last_seen - k->first_seen >= WEB_FINE_S) return 0;
+
+
     for (int m = 0; m < WM_COUNT; m++) {
         if (!k->sid[m]) continue;
-        for (int t = 0; t < WEB_TIER_COUNT; t++) emit(ru, k, m, t);
+        const web_agg_t *a = &k->open[m][WEB_TIER_HOUR];
+        if (a->t >= 0 && a->n > 1) return 0;
+    }
+    return 1;
+}
+
+/* Flush an evicted key's open buckets. A one-shot key keeps its fine
+ * rows (24 h, and the first the --web-max-mb ceiling drops) but not its
+ * minute and hour rows: under churn those would be one row per key per
+ * tier for 30 and 400 days, and push real history out of the store.
+ * Dropped rows are counted (oneshot_dropped on /api/health). */
+static void key_flush(web_rollup_t *ru, web_rkey_t *k) {
+    int oneshot = key_oneshot(k);
+    for (int m = 0; m < WM_COUNT; m++) {
+        if (!k->sid[m]) continue;
+        for (int t = 0; t < WEB_TIER_COUNT; t++) {
+            if (oneshot && t != WEB_TIER_FINE) {
+                if (k->open[m][t].t >= 0) ru->oneshot_dropped++;
+                k->open[m][t].t = -1;
+                continue;
+            }
+            emit(ru, k, m, t);
+        }
     }
 }
 
@@ -187,7 +215,8 @@ static void key_reset(web_rkey_t *k) {
 
 /* The slot for key in class c, made (evicting the least recently seen
  * key when the class is full) if it is not there. */
-static web_rkey_t *key_get(web_rollup_t *ru, web_kclass_t *c, const char *key) {
+static web_rkey_t *key_get(web_rollup_t *ru, web_kclass_t *c, const char *key,
+                           long long now_s) {
     int i = key_find(c, key);
     if (i >= 0) return &c->k[i];
     if (c->n < c->cap) {
@@ -206,6 +235,7 @@ static web_rkey_t *key_get(web_rollup_t *ru, web_kclass_t *c, const char *key) {
     k->used = 1;
     snprintf(k->key, sizeof(k->key), "%s", key);
     key_reset(k);
+    k->first_seen = k->last_seen = now_s;
     unsigned h = hash_key(k->key) & (unsigned)(c->nhead - 1);
     k->next = c->head[h];
     c->head[h] = i;
@@ -273,7 +303,7 @@ void web_rollup_add(web_rollup_t *ru, int metric, const char *key, double v,
     ru->samples++;
     if (clamped) ru->clamped++;
     web_kclass_t *c = &ru->cls[md->kclass];
-    web_rkey_t *k = key_get(ru, c, key);
+    web_rkey_t *k = key_get(ru, c, key, now_s);
     k->last_seen = now_s;
     if (!k->sid[metric]) {
         k->sid[metric] = ru->next_sid++;
@@ -451,6 +481,7 @@ void web_rollup_stats(web_rollup_t *ru, web_rollup_stats_t *st) {
     st->ring_rows = ru->ring_n;
     st->queue_rows = ru->q_n;
     st->q_dropped = ru->q_dropped;
+    st->oneshot_dropped = ru->oneshot_dropped;
     st->clamped = ru->clamped;
     st->hw_evictions = ru->hw_evictions;
     st->samples = ru->samples;

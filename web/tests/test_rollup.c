@@ -147,15 +147,20 @@ static void test_key_classes_are_bounded_lru(void) {
     }
     WT_EQ(has2, 0);
     WT_EQ(has1, 1);
-    /* The evicted key's open buckets reached the store queue: all three
-     * tiers of 10.0.0.2's one series, with its value. */
+    /* The evicted key's open buckets were flushed. 10.0.0.2 had one
+     * sample and lived under 10 s, a one-shot key: its fine row reached
+     * the store queue with its value, its minute and hour rows were
+     * dropped and counted (test_eviction_oneshot_and_lived has a key
+     * that lived). */
     size_t qn = web_rollup_take(&ru, q, WEB_QUEUE_ROWS);
     int flushed = 0;
     for (size_t i = 0; i < qn; i++)
         if (!strcmp(q[i].key, "10.0.0.2") && q[i].metric == WM_HOST_CONNS &&
-            q[i].sum == 1)
+            q[i].sum == 1 && q[i].tier == WEB_TIER_FINE)
             flushed++;
-    WT_EQ(flushed, 3);
+    WT_EQ(flushed, 1);
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.oneshot_dropped, 2);
     /* The device class is separate: filling it leaves hosts alone. */
     for (int i = 0; i < 40; i++) {
         snprintf(k, sizeof(k), "02:00:00:00:00:%02x", i);
@@ -171,8 +176,67 @@ static void test_key_classes_are_bounded_lru(void) {
     web_rollup_destroy(&ru);
 }
 
-/* A key evicted and back inside one bucket leaves two ring rows for it;
- * the query merges them into one. The new key is a new series, so the
+/* What an eviction writes. A key with two samples, or one that lived
+ * a fine bucket or longer, has all three of its open buckets flushed;
+ * a key with one sample that lived under 10 s (what key churn is) has
+ * only its fine row flushed, and its minute and hour rows are dropped
+ * and counted, so churn cannot fill the 30-day and 400-day tiers. Seen
+ * red with key_oneshot() always 0 (the churn key's minute and hour
+ * rows were queued, oneshot_dropped stayed 0), with it always 1 (the
+ * keys that lived lost theirs), and with its lifetime test alone
+ * removed (10.0.0.2 lost its minute and hour rows). */
+static void test_eviction_oneshot_and_lived(void) {
+    fresh(16, 1);                         /* 8 host keys */
+    const long long T = 1792627200;
+    char k[32];
+    /* 10.0.0.1: two samples in one second. 10.0.0.2: one sample in
+     * each of two series, at T and T + 15 (one per series, but it lived
+     * past a fine bucket). 10.0.0.3..8: one each. */
+    web_rollup_add(&ru, WM_HOST_CONNS, "10.0.0.1", 1, T);
+    web_rollup_add(&ru, WM_HOST_CONNS, "10.0.0.1", 2, T);
+    web_rollup_add(&ru, WM_HOST_CONNS, "10.0.0.2", 1, T);
+    for (int i = 3; i <= 8; i++) {
+        snprintf(k, sizeof(k), "10.0.0.%d", i);
+        web_rollup_add(&ru, WM_HOST_CONNS, k, 1, T + 16);
+    }
+    web_rollup_add(&ru, WM_HOST_RX, "10.0.0.2", 1, T + 15);
+    WT_EQ(web_rollup_take(&ru, q, WEB_QUEUE_ROWS), 0);
+    /* Three new keys evict 10.0.0.1 (T), 10.0.0.2 (T + 15), then 10.0.0.3
+     * (T + 16, one sample: one-shot). */
+    for (int i = 0; i < 3; i++) {
+        snprintf(k, sizeof(k), "10.0.1.%d", i);
+        web_rollup_add(&ru, WM_HOST_CONNS, k, 1, T + 17);
+    }
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.evictions[WEB_KC_HOST], 3);
+    size_t qn = web_rollup_take(&ru, q, WEB_QUEUE_ROWS);
+    int tiers[3][WEB_TIER_COUNT];
+    memset(tiers, 0, sizeof(tiers));
+    for (size_t i = 0; i < qn; i++)
+        for (int j = 0; j < 3; j++) {
+            snprintf(k, sizeof(k), "10.0.0.%d", j + 1);
+            if (!strcmp(q[i].key, k) && q[i].metric == WM_HOST_CONNS)
+                tiers[j][q[i].tier]++;
+        }
+    for (int t = 0; t < WEB_TIER_COUNT; t++) {
+        WT_EQ(tiers[0][t], 1);
+        WT_EQ(tiers[1][t], 1);
+    }
+    WT_EQ(tiers[2][WEB_TIER_FINE], 1);
+    WT_EQ(tiers[2][WEB_TIER_MINUTE], 0);
+    WT_EQ(tiers[2][WEB_TIER_HOUR], 0);
+    WT_EQ(st.oneshot_dropped, 2);
+    /* A key that is never evicted is never one-shot: closed as due. */
+    web_rollup_close_all(&ru);
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.oneshot_dropped, 2);
+    web_rollup_destroy(&ru);
+}
+
+/* Newest first, bounded, half-open. Two ring rows of one series for
+ * one bucket (close_all() and then more samples inside it) are merged
+ * into one. A key evicted and back is a new series instance, so the
  * rows before its eviction are found by (metric, key) only through the
  * store. */
 static void test_ring_query_merges_and_bounds(void) {
@@ -230,6 +294,54 @@ static void test_no_store_no_queue(void) {
     web_rollup_destroy(&ru);
 }
 
+/* The store queue is bounded: past WEB_QUEUE_ROWS a closed bucket is
+ * dropped and counted (queue_dropped on /api/health), never written
+ * over a queued one, so what the store thread takes is the oldest
+ * rows. One global series, a sample per 10 s bucket: each add closes
+ * the previous fine bucket, every sixth a minute, every 360th an hour,
+ * in that order, which the test replays to know which row is the last
+ * one the queue kept. Seen red with the full branch writing the last
+ * slot instead of dropping (q_dropped stayed 0 and the last row taken
+ * was the newest). */
+static void test_queue_full_drops_newest_and_counts(void) {
+    fresh(16, 1);
+    const long long T = 1792627200;
+    const int adds = 30000;
+    long long kept_t = -1;
+    int kept_tier = -1;
+    size_t emitted = 0;
+    for (int i = 0; i < adds; i++) {
+        long long now = T + (long long)i * 10;
+        web_rollup_add(&ru, WM_CONNS_TOTAL, "", i, now);
+        if (i == 0) continue;
+        static const int step[WEB_TIER_COUNT] = { 10, 60, 3600 };
+        for (int t = 0; t < WEB_TIER_COUNT; t++) {
+            long long prev = now - 10;
+            if ((now - now % step[t]) == (prev - prev % step[t])) continue;
+            if (++emitted == WEB_QUEUE_ROWS) {
+                kept_t = prev - prev % step[t];
+                kept_tier = t;
+            }
+        }
+    }
+    WT_ASSERT(emitted > WEB_QUEUE_ROWS);
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.queue_rows, WEB_QUEUE_ROWS);
+    WT_EQ(st.q_dropped, emitted - WEB_QUEUE_ROWS);
+    WT_EQ(st.rows_closed[WEB_TIER_FINE] + st.rows_closed[WEB_TIER_MINUTE] +
+          st.rows_closed[WEB_TIER_HOUR], emitted);
+    size_t n = web_rollup_take(&ru, q, WEB_QUEUE_ROWS);
+    WT_EQ(n, WEB_QUEUE_ROWS);
+    WT_EQ(q[0].tier, WEB_TIER_FINE);
+    WT_EQ(q[0].t, T);
+    WT_EQ(q[n - 1].tier, kept_tier);
+    WT_EQ(q[n - 1].t, kept_t);
+    WT_ASSERT(q[n - 1].t < T + (long long)(adds - 1) * 10 - 3600);
+    WT_EQ(web_rollup_take(&ru, q, WEB_QUEUE_ROWS), 0);
+    web_rollup_destroy(&ru);
+}
+
 static void test_catalogue(void) {
     WT_EQ(web_metric_find("iface.rx_rate"), WM_IFACE_RX);
     WT_EQ(web_metric_find("flow.mqtt"), WM_FLOW_MQTT);
@@ -252,7 +364,9 @@ void run_rollup_tests(void) {
     WT_RUN(test_point_value_by_kind);
     WT_RUN(test_values_bounded);
     WT_RUN(test_key_classes_are_bounded_lru);
+    WT_RUN(test_eviction_oneshot_and_lived);
     WT_RUN(test_ring_query_merges_and_bounds);
     WT_RUN(test_no_store_no_queue);
+    WT_RUN(test_queue_full_drops_newest_and_counts);
     WT_RUN(test_catalogue);
 }

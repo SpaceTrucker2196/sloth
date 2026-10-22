@@ -5,7 +5,8 @@
  *   - closes every bucket whose interval has passed, so a series that
  *     went quiet still gets its last bucket;
  *   - every WEB_FLUSH_S, writes the closed buckets to slothweb.db in one
- *     transaction;
+ *     transaction, then applies the --web-max-mb ceiling, so the store
+ *     is bounded within one flush interval;
  *   - every WEB_COMPACT_S (and once at start), compacts: retention per
  *     tier, the --web-max-mb ceiling, free pages back, the WAL truncated.
  * On stop it closes every open bucket and flushes, so a restart merges

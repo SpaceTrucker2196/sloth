@@ -384,6 +384,59 @@ static void test_highwater_table_bounded(void) {
     done();
 }
 
+/* A row born while listening, evicted from the high-water table and
+ * then seen again on the same connection, is a baseline the second
+ * time: its total up to the eviction was counted when it was born, and
+ * counting it again would be a spurious burst. A row never evicted and
+ * born later still counts in full. Seen red with gone_maybe() left out
+ * of hw_delta()'s born test (the re-sent row counted its 5 again). */
+static void test_highwater_evicted_row_not_recounted(void) {
+    fresh();
+    char b[256];
+    /* The fillers are older on slothweb's clock than what follows, so
+     * the rollup's own LRU evicts one of them, not the row under test. */
+    g_now -= 100;
+    line("{\"type\":\"probe_client\",\"ts\":1000,\"mac\":\"02:00:00:ff:ff:ff\","
+         "\"first_seen\":1000,\"last_seen\":1000,\"frame_count\":5}");
+    WT_ASSERT(cur(WM_DEV_FRAMES, "02:00:00:ff:ff:ff").sum == 5);
+    int fed = 0;
+    for (int i = 0; i < WEB_HW_ROWS; i++) {
+        snprintf(b, sizeof(b), "{\"type\":\"probe_client\",\"ts\":1000,\"mac\":"
+                 "\"02:00:00:%02x:%02x:%02x\",\"first_seen\":1000,"
+                 "\"last_seen\":1000,\"frame_count\":1}",
+                 (i >> 16) & 0xff, (i >> 8) & 0xff, i & 0xff);
+        if (web_jl_parse(b, strlen(b), &rec) == WEB_JL_OK) {
+            web_metrics_record(&mx, &rec);
+            fed++;
+        }
+    }
+    WT_EQ(fed, WEB_HW_ROWS);
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.hw_evictions, 1);
+    g_now += 100;
+    /* The rollup's own device class (64 keys) has long since evicted
+     * the MAC too, so any sample now would make a new series. */
+    WT_EQ(has_series(WM_DEV_FRAMES, "02:00:00:ff:ff:ff"), 0);
+    line("{\"type\":\"probe_client\",\"ts\":1001,\"mac\":\"02:00:00:ff:ff:ff\","
+         "\"first_seen\":1000,\"last_seen\":1001,\"frame_count\":5}");
+    WT_EQ(cur(WM_DEV_FRAMES, "02:00:00:ff:ff:ff").n, 0);
+    line("{\"type\":\"probe_client\",\"ts\":1002,\"mac\":\"02:00:00:ff:ff:ff\","
+         "\"first_seen\":1000,\"last_seen\":1002,\"frame_count\":8}");
+    WT_ASSERT(cur(WM_DEV_FRAMES, "02:00:00:ff:ff:ff").sum == 3);
+    /* The control: born now, never evicted, counted in full. */
+    line("{\"type\":\"probe_client\",\"ts\":1002,\"mac\":\"02:00:00:fe:fe:fe\","
+         "\"first_seen\":1002,\"last_seen\":1002,\"frame_count\":7}");
+    WT_ASSERT(cur(WM_DEV_FRAMES, "02:00:00:fe:fe:fe").sum == 7);
+    /* A new connection forgets the filter with the table: born on it,
+     * the row counts in full (3 before, 4 now, one bucket). */
+    web_metrics_stream(&mx);
+    line("{\"type\":\"probe_client\",\"ts\":2000,\"mac\":\"02:00:00:ff:ff:ff\","
+         "\"first_seen\":2000,\"last_seen\":2000,\"frame_count\":4}");
+    WT_ASSERT(cur(WM_DEV_FRAMES, "02:00:00:ff:ff:ff").sum == 7);
+    done();
+}
+
 void run_metrics_tests(void) {
     WT_RUN(test_key_canonicalisers);
     WT_RUN(test_gauges);
@@ -395,4 +448,5 @@ void run_metrics_tests(void) {
     WT_RUN(test_presence);
     WT_RUN(test_pass_gauges);
     WT_RUN(test_highwater_table_bounded);
+    WT_RUN(test_highwater_evicted_row_not_recounted);
 }

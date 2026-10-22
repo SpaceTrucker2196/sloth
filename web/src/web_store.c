@@ -102,6 +102,11 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     return -1;
 }
 
+long long web_store_ceiling(web_store_t *s, long long max_bytes) {
+    (void)s; (void)max_bytes;
+    return -1;
+}
+
 int web_store_query(web_store_t *s, int tier, int metric, const char *key,
                     long long from, long long to, web_point_t *out, int max,
                     int *more) {
@@ -133,8 +138,6 @@ long long web_store_count(web_store_t *s, int tier) {
 #error "slothweb needs sqlite3 >= 3.31.0 (SQLITE_OPEN_NOFOLLOW)"
 #endif
 
-static const char *const TIER_TABLE[WEB_TIER_COUNT] = { "fine", "minute", "hour" };
-
 /* Constant SQL per tier: a table name cannot be a bound parameter, so
  * each statement is spelled out here and nothing from a request is
  * ever part of one. */
@@ -165,12 +168,32 @@ static const char *const DEL_EXPIRED[WEB_TIER_COUNT] = {
     "DELETE FROM minute WHERE t<?1",
     "DELETE FROM hour WHERE t<?1",
 };
-/* The ceiling drops the oldest slice of a tier at a time. */
-static const char *const DEL_OLDEST[WEB_TIER_COUNT] = {
-    "DELETE FROM fine WHERE t<(SELECT MIN(t) FROM fine)+3600",
-    "DELETE FROM minute WHERE t<(SELECT MIN(t) FROM minute)+86400",
-    "DELETE FROM hour WHERE t<(SELECT MIN(t) FROM hour)+2592000",
+/* The ceiling drops the oldest slice of one class of rows at a time,
+ * in this order: fine rows (any series; the 24 h tier is the one the
+ * spec gives up first), then the minute and hour rows of keyed series,
+ * and only then those of the global series (the network-wide totals,
+ * one series per metric, which no key churn can multiply). A class is
+ * left only once it is empty. The slices are small so that a ceiling
+ * met under load trims rather than wipes. */
+#define KEYED  "series IN (SELECT id FROM series WHERE key<>'')"
+#define GLOBAL "series IN (SELECT id FROM series WHERE key='')"
+static const char *const CEIL_STEP[] = {
+    "DELETE FROM fine WHERE t<(SELECT MIN(t) FROM fine)+300",
+    "DELETE FROM minute WHERE " KEYED " AND t<(SELECT MIN(t) FROM minute"
+    " WHERE " KEYED ")+3600",
+    "DELETE FROM hour WHERE " KEYED " AND t<(SELECT MIN(t) FROM hour"
+    " WHERE " KEYED ")+86400",
+    "DELETE FROM minute WHERE " GLOBAL " AND t<(SELECT MIN(t) FROM minute"
+    " WHERE " GLOBAL ")+3600",
+    "DELETE FROM hour WHERE " GLOBAL " AND t<(SELECT MIN(t) FROM hour"
+    " WHERE " GLOBAL ")+86400",
 };
+#undef KEYED
+#undef GLOBAL
+#define CEIL_STEPS ((int)(sizeof(CEIL_STEP) / sizeof(CEIL_STEP[0])))
+static const char SWEEP_SERIES[] =
+    "DELETE FROM series WHERE id NOT IN (SELECT series FROM fine UNION"
+    " SELECT series FROM minute UNION SELECT series FROM hour)";
 static const char *const COUNT_ROWS[WEB_TIER_COUNT] = {
     "SELECT COUNT(*) FROM fine",
     "SELECT COUNT(*) FROM minute",
@@ -424,11 +447,26 @@ int web_store_open(web_store_t *s, const char *path, char *err, size_t errsz) {
     }
     if (private_main(path, err, errsz) != 0) return -1;
     if (private_side(path, err, errsz) != 0) return -1;
+    /* Identify on a read-only connection. The last read-write
+     * connection to close on a WAL database checkpoints the WAL into
+     * the main file and deletes it, so a refusal made on one would
+     * rewrite the file it refused: a sloth.db that sloth left with an
+     * unflushed WAL would be checkpointed by slothweb. A read-only
+     * connection never checkpoints. */
+    sqlite3 *ro = NULL;
+    if (open_db(path, SQLITE_OPEN_READONLY, &ro, err, errsz) != 0) return -1;
+    int v = identify(ro, path, err, errsz);
+    sqlite3_close(ro);
+    if (v == -1) return -1;
     if (open_db(path, SQLITE_OPEN_READWRITE, &s->db, err, errsz) != 0)
         return -1;
-
-    int v = identify(s->db, path, err, errsz);
-    if (v == -1) return -1;
+    /* Once more on the writer: what was identified is what it opened. */
+    if (identify(s->db, path, err, errsz) != v) {
+        if (!err[0])
+            snprintf(err, errsz, "%s: changed while it was being opened; "
+                                 "refused", path);
+        return -1;
+    }
     if (v == -2) {
         /* auto_vacuum only takes on a file with no table yet. */
         if (exec(s->db, "PRAGMA auto_vacuum=INCREMENTAL", err, errsz,
@@ -596,6 +634,56 @@ static long long used_bytes(sqlite3 *db) {
     return (pc - fl) * ps;
 }
 
+/* The ceiling's loop, inside no transaction (each DELETE is its own).
+ * Rows dropped, or -1. Bounded, so a file that will not shrink cannot
+ * spin: every pass either deletes a slice or moves on a class. */
+static long long ceiling_loop(web_store_t *s, long long max_bytes) {
+    long long dropped = 0;
+    int step = 0;
+    for (int guard = 0; max_bytes > 0 && step < CEIL_STEPS && guard < 100000;
+         guard++) {
+        long long used = used_bytes(s->db);
+        if (used < 0) return -1;
+        if (used <= max_bytes) break;
+        long long d = run_del(s->db, CEIL_STEP[step], 0, 0);
+        if (d < 0) return -1;
+        if (d == 0) { step++; continue; }
+        dropped += d;
+        /* The series rows of what went: under key churn they are as
+         * much of the file as the buckets. */
+        if (run_del(s->db, SWEEP_SERIES, 0, 0) < 0) return -1;
+    }
+    return dropped;
+}
+
+static void note_fail(web_store_t *s, const char *what) {
+    pthread_mutex_lock(&s->mu);
+    s->st.write_errors++;
+    snprintf(s->st.last_error, sizeof(s->st.last_error), "%s: %s", what,
+             sqlite3_errmsg(s->db));
+    pthread_mutex_unlock(&s->mu);
+}
+
+long long web_store_ceiling(web_store_t *s, long long max_bytes) {
+    if (!s->db) return -1;
+    if (max_bytes <= 0) return 0;
+    /* The cheap test first: three PRAGMAs, no table read. */
+    long long used = used_bytes(s->db);
+    if (used >= 0 && used <= max_bytes) return 0;
+    long long d = ceiling_loop(s, max_bytes);
+    if (d < 0) { note_fail(s, "ceiling"); return -1; }
+    if (d > 0) {
+        sqlite3_exec(s->db, "PRAGMA incremental_vacuum", NULL, NULL, NULL);
+        recount(s);
+    }
+    refresh_size(s);
+    pthread_mutex_lock(&s->mu);
+    s->st.dropped_ceiling += (unsigned long long)d;
+    if (d > 0) s->st.ceiling_runs++;
+    pthread_mutex_unlock(&s->mu);
+    return d;
+}
+
 int web_store_compact(web_store_t *s, long long now_s, int retain_days,
                       long long max_bytes) {
     if (!s->db) return -1;
@@ -605,7 +693,8 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
         WEB_FINE_KEEP_S, (long long)retain_days * 86400, WEB_HOUR_KEEP_S
     };
     char err[WEB_STORE_ERR_MAX];
-    unsigned long long expired = 0, ceiling = 0;
+    unsigned long long expired = 0;
+    long long ceiling = 0;
     if (exec(s->db, "BEGIN IMMEDIATE", err, sizeof(err), "compact begin") != 0)
         goto fail;
     for (int t = 0; t < WEB_TIER_COUNT; t++) {
@@ -616,31 +705,9 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     if (exec(s->db, "COMMIT", err, sizeof(err), "compact commit") != 0)
         goto fail_rb_msg;
 
-    /* The ceiling: oldest fine rows first, then minute, then hour. A
-     * bound on the loop, so a file that will not shrink cannot spin. */
-    for (int guard = 0; max_bytes > 0 && guard < 100000; guard++) {
-        long long used = used_bytes(s->db);
-        if (used < 0 || used <= max_bytes) break;
-        int t;
-        for (t = 0; t < WEB_TIER_COUNT; t++) {
-            sqlite3_stmt *st = NULL;
-            char q[64];
-            snprintf(q, sizeof(q), "SELECT 1 FROM %s LIMIT 1", TIER_TABLE[t]);
-            int any = 0;
-            if (sqlite3_prepare_v2(s->db, q, -1, &st, NULL) == SQLITE_OK &&
-                sqlite3_step(st) == SQLITE_ROW)
-                any = 1;
-            sqlite3_finalize(st);
-            if (any) break;
-        }
-        if (t == WEB_TIER_COUNT) break;
-        long long d = run_del(s->db, DEL_OLDEST[t], 0, 0);
-        if (d <= 0) break;
-        ceiling += (unsigned long long)d;
-    }
-    if (run_del(s->db, "DELETE FROM series WHERE id NOT IN (SELECT series FROM"
-                       " fine UNION SELECT series FROM minute UNION SELECT"
-                       " series FROM hour)", 0, 0) < 0)
+    ceiling = ceiling_loop(s, max_bytes);
+    if (ceiling < 0) goto fail;
+    if (run_del(s->db, SWEEP_SERIES, 0, 0) < 0)
         goto fail;
     if (exec(s->db, "PRAGMA incremental_vacuum", err, sizeof(err), "vacuum") != 0)
         goto fail_msg;
@@ -652,7 +719,8 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     pthread_mutex_lock(&s->mu);
     s->st.compactions++;
     s->st.dropped_expired += expired;
-    s->st.dropped_ceiling += ceiling;
+    s->st.dropped_ceiling += (unsigned long long)ceiling;
+    if (ceiling > 0) s->st.ceiling_runs++;
     s->st.last_compact = now_s;
     pthread_mutex_unlock(&s->mu);
     return 0;

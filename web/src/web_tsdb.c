@@ -37,10 +37,15 @@ void web_tsdb_destroy(web_tsdb_t *t) {
 static void flush(web_tsdb_t *t) {
     if (!t->store) return;
     size_t n;
+    int wrote = 0;
     while ((n = web_rollup_take(t->ru, t->batch, WEB_FLUSH_MAX)) > 0) {
         web_store_write(t->store, t->batch, n);
+        wrote = 1;
         if (n < WEB_FLUSH_MAX) break;
     }
+    /* The ceiling after every batch, not only at the hourly compaction:
+     * key churn can write millions of rows in an hour. */
+    if (wrote) web_store_ceiling(t->store, t->max_bytes);
 }
 
 void web_tsdb_step(web_tsdb_t *t, long long now_s) {

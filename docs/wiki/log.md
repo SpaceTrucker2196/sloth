@@ -4702,3 +4702,17 @@ hourly with `--web-max-mb` and `--web-retain-days`. Built with
 the Activity view draws band charts and small multiples without
 baselines (M3). An hour of records on a pinned clock gives 42,120 fine
 rows and about 1.1 MB on disk.
+
+## 2026-10-21 — slothweb M2 review fixes (#160)
+
+**Updated pages**: [slothweb.md](slothweb.md). Updated `web/README.md`.
+
+The store is identified on a read-only connection, so a refused WAL-mode
+sloth.db keeps its WAL byte for byte (a read-write connection closing
+last would have checkpointed it into the file). The `--web-max-mb`
+ceiling runs after every 10 s write, not only hourly, and takes keyed
+rows before the global series'; a key evicted after one sample and under
+10 s keeps only its 10 s row (`oneshot_dropped`). A high-water row
+evicted and seen again on one connection is a baseline, not a second
+count of its total. New tests cover the merged-answer cap and the full
+store queue.

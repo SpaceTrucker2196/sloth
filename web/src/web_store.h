@@ -16,7 +16,10 @@
  * the -wal, -shm and -journal files, when present, pass the same test;
  * SQLite then opens it with SQLITE_OPEN_NOFOLLOW and DEFENSIVE on.
  *
- * Before anything is written the file is identified. An empty file is
+ * Before anything is written the file is identified, on a read-only
+ * connection: a read-write one that closes last on a WAL database
+ * checkpoints the WAL into it, which would rewrite a refused sloth.db.
+ * Only a file found ours or empty is opened read-write. An empty file is
  * new. A file whose meta table names it a slothweb store is ours, at
  * the schema version recorded beside it. Anything else (sloth.db, any
  * other database) is refused untouched. A version newer than this
@@ -64,6 +67,7 @@ typedef struct {
     unsigned long batches, rows_written, write_errors;
     unsigned long compactions;
     unsigned long long dropped_expired, dropped_ceiling;
+    unsigned long ceiling_runs;           /* passes that dropped rows */
     long long     last_compact;           /* unix s, 0 never */
     char          last_error[WEB_STORE_ERR_MAX];
 } web_store_stats_t;
@@ -95,9 +99,19 @@ void web_store_close(web_store_t *s);
  * widened. 0, or -1 (counted, and the reason kept). */
 int  web_store_write(web_store_t *s, const web_qrow_t *rows, size_t n);
 
+/* The --web-max-mb ceiling, run after every batch write (so it bounds
+ * the file within one flush interval, not one compaction) and inside
+ * every compaction. Cheap when under: the used size is three PRAGMAs.
+ * Over it, slices are dropped until it is under: the oldest 5 min of
+ * fine rows (any series) until no fine row is left, then the oldest
+ * hour of keyed minute rows, then the oldest day of keyed hour rows,
+ * and only then the same for the global series; the series rows left
+ * with no bucket go with them, and free pages go back to the file
+ * system. Rows dropped, or -1. */
+long long web_store_ceiling(web_store_t *s, long long max_bytes);
+
 /* Hourly upkeep: drop rows past each tier's retention (fine 24 h,
- * minute retain_days, hour 400 d), then, while the used size is over
- * max_bytes, the oldest fine-tier hour, then minute, then hour; then
+ * minute retain_days, hour 400 d), then the ceiling as above; then
  * return free pages and truncate the WAL. 0, or -1. */
 int  web_store_compact(web_store_t *s, long long now_s, int retain_days,
                        long long max_bytes);
