@@ -4,13 +4,15 @@
  * thread, never the HTTP one, wakes once a second and:
  *   - closes every bucket whose interval has passed, so a series that
  *     went quiet still gets its last bucket;
- *   - every WEB_FLUSH_S, writes the closed buckets to slothweb.db in one
- *     transaction, then applies the --web-max-mb ceiling, so the store
- *     is bounded within one flush interval;
+ *   - every WEB_FLUSH_S, or sooner once WEB_FLUSH_HIGH rows are
+ *     queued, writes the closed buckets to slothweb.db, WEB_FLUSH_MAX
+ *     to a transaction, then applies the --web-max-mb ceiling, so the
+ *     store is bounded within one flush interval;
  *   - every WEB_COMPACT_S (and once at start), compacts: retention per
  *     tier, the --web-max-mb ceiling, free pages back, the WAL truncated.
- * On stop it closes every open bucket and flushes, so a restart merges
- * the partial buckets with the rest of them.
+ * On stop it writes what is queued, closes every open bucket and
+ * flushes again, so a restart merges the partial buckets with the rest
+ * of them.
  *
  * Everything is driven by web_tsdb_step(now): the thread passes the
  * wall clock, the tests a pinned one. With no store (a build without
@@ -28,6 +30,7 @@
 #define WEB_FLUSH_S    10
 #define WEB_COMPACT_S  3600
 #define WEB_FLUSH_MAX  4096    /* rows per take from the queue */
+#define WEB_FLUSH_HIGH (WEB_QUEUE_ROWS / 2)   /* queued rows: flush now */
 
 typedef struct {
     web_rollup_t *ru;

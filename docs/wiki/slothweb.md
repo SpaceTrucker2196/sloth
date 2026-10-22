@@ -328,18 +328,30 @@ Bucketing uses slothweb's clock, never a record's `ts`.
 10 s for 24 h, 1 min for `--web-retain-days` (30), 1 h for 400 days,
 each bucket with sum, count, min and max. Keys are bounded per class:
 `--web-max-keys` device MACs (512) and half that many host IPs, least
-recently seen out first, evictions counted on `/api/health`; labels
-(interfaces, channels, alert types) are capped at 128; global metrics
-are always kept. Only a full class evicts, so an eviction is key churn,
-and it is judged on the key's whole life: until a key's samples span a
-minute its 1 min and 1 h buckets are held in memory, written once it
-spans one (or at shutdown) and dropped if it is evicted first
-(`churn_dropped`), however many samples it took. So a scan whose keys
-are each seen for under a minute writes 10 s rows only while slothweb
-runs; keys seen across a minute or more reach the long tiers under
-churn too, bounded only by `--web-max-mb`. A key evicted and back is a new series in memory;
-its earlier rows come from the store, or are gone without one. Closed fine buckets also go to a 131,072-row ring in
-memory, which is all `/api/series` has without SQLite.
+recently seen out first, evictions counted on `/api/health`;
+interfaces (32), channels (64) and alert types (128) each have a class
+sized from sloth's own bounds; global metrics are always kept. Those
+three come from catalogues no peer can churn, so their keys count as
+established from the first sample: a one-off alert type has its minute
+and hour rows written when they end. Device and host keys are judged
+on the key's whole life: until a key's samples span a minute its 1 min
+and 1 h buckets are held in memory, written once it spans one (or at
+shutdown) and dropped if it is evicted first (`churn_dropped`), however
+many samples it took. An evicted key's first sighting and whether it
+was established are remembered (four entries per key slot, established
+keys preferred) and given back when it returns, so a host evicted
+between every two of its samples under LRU pressure still keeps its
+minute and hour rows after its first minute. So a scan whose keys are
+each seen for under a minute writes 10 s rows only while slothweb runs;
+keys seen across a minute or more reach the long tiers under churn too,
+bounded only by `--web-max-mb`. A key evicted and back is a new series in memory;
+its earlier rows come from the store, or are gone without one. The
+store queue holds six rows per series the classes can hold (at least
+32,768), so an hour boundary or a shutdown at `--web-max-keys` 8192
+drops nothing; past it, under churn, 10 s rows go before minute and hour
+rows. Closed fine buckets also go to a 131,072-row ring in memory
+(about 3 h at 117 series, shared with the rows of evicted keys), which
+is all `/api/series` has without SQLite.
 
 ### The store
 
@@ -353,7 +365,9 @@ read-only connection (a read-write one closing last on a WAL database
 checkpoints and deletes its WAL, which would rewrite a refused
 sloth.db; a WAL-mode file with no `-wal` is read as an immutable URI,
 so that connection makes no `-wal` or `-shm` beside a refused, cleanly
-closed sloth.db): empty is new, a `meta` table naming it a slothweb store is ours, anything else
+closed sloth.db): empty (no object, `application_id` and `user_version`
+0) is new and is stamped with slothweb's own `application_id`, a file
+with any other non-zero one is refused, a `meta` table naming it a slothweb store is ours, anything else
 (sloth.db included) is refused untouched, and so is a schema newer than
 the build. Schema changes follow the 2026-10-21 owner rule: a chain of
 additive steps from v0, each in one `BEGIN IMMEDIATE` with its own
@@ -364,16 +378,23 @@ select on.
 No column can hold a credential (sloth's `test_db.c` guardrail, copied).
 
 The store thread, never the HTTP one, closes due buckets every second
-and writes them in one transaction every 10 s. After every write, while
-the used size is over `--web-max-mb` (256), it drops the oldest fine
-rows, then keyed minute and hour rows, and the global series' rows last,
-so the ceiling holds within one flush interval even under key churn;
-orphaned series rows are swept once after. With the v2 index a trim at
-the 256 MB ceiling takes about 0.2 s (4.8 s before it), and the ceiling
-holds about 36% fewer fine rows for the index's pages.
-Once an hour it also drops rows past retention, then returns free pages
-and truncates the WAL. Queries use a second, read-only connection with
-every parameter bound.
+and writes them every 10 s (sooner once 16,384 are queued), 4,096 to a
+transaction. After every write, while the used size is over
+`--web-max-mb` (256), it drops the oldest fine rows, then keyed minute
+and hour rows, and the global series' rows last, 2,048 to a
+transaction, so the ceiling holds within one flush interval even under
+key churn; orphaned series rows are swept once after. A trim at the
+64 MB ceiling takes about 59 ms (209 ms with the earlier 5-minute
+slices), and the ceiling holds about 36% fewer fine rows for the v2
+index's pages. Once an hour it also drops rows past retention, in
+tiles of 256 series by 256 buckets (one transaction each), then returns
+free pages 256 at a time and truncates the WAL. `--web-max-mb` bounds
+the main file, not the WAL; the WAL is kept small by keeping every
+transaction small: about 1 MB between transactions and, at 4 KB pages,
+about 32 MB at worst during one (a start-up compaction after a long
+stop measured 2.0 to 7.1 MB, where one delete of everything expired had
+grown it to the size of the file). `store_rows` counts rows stored, not merges. Queries use a
+second, read-only connection with every parameter bound.
 
 ### `/api/series` and the Activity view
 
@@ -439,13 +460,13 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 
 | Acceptance item | Test |
 |---|---|
-| after 1 h, the 24 h chart shows the last hour at 10 s and the store is under 5 MB | `test_acceptance_one_hour` (an hour of records through the framer on a pinned clock: 42,120 fine rows, 360 points 10 s apart from the 24 h request, about 1.8 MB on disk with the v2 index) |
+| after 1 h, the 24 h chart shows the last hour at 10 s and the store is under 5 MB | `test_acceptance_one_hour` (an hour of records through the framer on a pinned clock: 42,120 fine rows, 360 points 10 s apart from the 24 h request, from memory, from the store and after a restart; 1.8 MB on disk after the hour's compaction and at most 3.4 MB during the hour, WAL included, checked after every step) |
 | metric derivation, deltas floored at zero | `test_gauges`, `test_event_counters`, `test_highwater_deltas`, `test_flow_counters`, `test_channels`, `test_presence`, `test_pass_gauges` |
 | three tiers with sum/count/min/max | `test_bucket_boundaries_and_aggregates` |
-| keyed metrics bounded, LRU, evictions counted | `test_key_classes_are_bounded_lru`, `test_eviction_churn_on_whole_life`, `test_unestablished_key_held_not_lost`, `test_churn_two_samples_not_in_long_tiers`, `test_churn_three_samples_not_in_long_tiers`, `test_highwater_table_bounded`, `test_highwater_evicted_row_not_recounted`, `test_highwater_gone_filter_rotates`, `test_queue_full_drops_newest_and_counts` |
+| keyed metrics bounded, LRU, evictions counted | `test_key_classes_are_bounded_lru`, `test_eviction_churn_on_whole_life`, `test_unestablished_key_held_not_lost`, `test_churn_two_samples_not_in_long_tiers`, `test_churn_three_samples_not_in_long_tiers`, `test_highwater_table_bounded`, `test_highwater_evicted_row_not_recounted`, `test_highwater_gone_filter_rotates`, `test_queue_full_drops_fine_first_and_counts`, `test_recurring_host_under_lru_keeps_long_tiers`, `test_label_keys_established_and_separate`, `test_queue_holds_max_keys_hour_and_shutdown` |
 | own file, secure open, migration chain, newer refused | `test_fresh_store`, `test_v0_file_is_migrated`, `test_v0_failed_step_leaves_file_unchanged`, `test_v1_file_is_migrated`, `test_v1_failed_step_leaves_file_unchanged`, `test_newer_file_refused`, `test_foreign_files_refused`, `test_foreign_wal_left_as_it_is`, `test_clean_wal_refused_leaves_dir_unchanged`, `test_file_rules`, `test_defensive_read_back` and `test_file_swapped_between_opens` (through test seams; not the owner rule, which needs privilege to exercise) |
 | secret-column guardrail | `test_schema_text_guardrail`, `test_no_column_can_hold_secret_material`, `test_secrets_never_reach_disk` |
-| compaction and the ceiling | `test_compaction_retention`, `test_ceiling_drops_oldest_fine_first`, `test_ceiling_spares_global_series`, `test_ceiling_holds_under_key_churn` |
+| compaction and the ceiling | `test_compaction_retention`, `test_ceiling_drops_oldest_fine_first`, `test_long_stop_expiry_keeps_wal_small`, `test_ceiling_spares_global_series`, `test_ceiling_holds_under_key_churn` |
 | strict parameters, bounded answers, behind the W0/M0 checks | `test_parameters_validated`, `test_series_json_and_paging`, `test_routes`, `test_worst_case_fits`, `test_merged_answer_capped` |
 | writes off the HTTP thread | `test_store_thread` |
 

@@ -21,8 +21,12 @@
  * checkpoints the WAL into it, which would rewrite a refused sloth.db.
  * A WAL-mode file with no -wal is read there as an immutable URI, so
  * that a refusal leaves no -wal or -shm behind either. Only a file
- * found ours or empty is opened read-write, and identified again there. An empty file is
- * new. A file whose meta table names it a slothweb store is ours, at
+ * found ours or empty is opened read-write, and identified again there.
+ * An empty file is new: no schema object, and application_id and
+ * user_version both 0, so a file another program has only stamped is
+ * not taken for one. A new store is stamped with slothweb's own
+ * application_id (WEB_STORE_APP_ID), and a file carrying any other
+ * non-zero one is refused. A file whose meta table names it a slothweb store is ours, at
  * the schema version recorded beside it. Anything else (sloth.db, any
  * other database) is refused untouched. A version newer than this
  * build's is refused untouched. An older one is brought forward one
@@ -55,6 +59,20 @@
 /* --web-max-mb: the ceiling on the store's used pages. */
 #define WEB_DEFAULT_MAX_MB 256
 #define WEB_MAX_MB_MAX     1048576
+/* PRAGMA application_id of a slothweb store: "SLWE". Stores made
+ * before it was stamped carry 0 and are still ours by their meta. */
+#define WEB_STORE_APP_ID   0x534c5745
+/* What one transaction of upkeep may change, so that none grows the
+ * WAL much past a few MB (a single delete of everything a long stop
+ * expired grew it to the size of the file): a ceiling slice deletes the
+ * WEB_STORE_SLICE_ROWS oldest rows of its class; an expiry tile the
+ * expired rows of WEB_STORE_EXPIRE_SERIES series within
+ * WEB_STORE_EXPIRE_STEPS buckets of t; incremental_vacuum frees
+ * WEB_STORE_VACUUM_PAGES pages at a time. */
+#define WEB_STORE_SLICE_ROWS    2048
+#define WEB_STORE_EXPIRE_SERIES 256
+#define WEB_STORE_EXPIRE_STEPS  256
+#define WEB_STORE_VACUUM_PAGES  256
 
 struct sqlite3;
 struct sqlite3_stmt;
@@ -62,7 +80,8 @@ struct sqlite3_stmt;
 typedef struct {
     int           open;
     int           schema;
-    long long     rows[WEB_TIER_COUNT];   /* kept by the writer; recounted
+    long long     rows[WEB_TIER_COUNT];   /* rows stored: the writer counts
+                                             inserts, not merges; recounted
                                              at open and each compaction */
     long long     bytes;                  /* used pages x page size */
     long long     file_bytes;             /* page_count x page size */
@@ -78,6 +97,7 @@ typedef struct {
     struct sqlite3      *db;      /* the store thread's */
     struct sqlite3      *rd;      /* the HTTP thread's, read-only */
     struct sqlite3_stmt *ins_series, *get_series, *ins_row[WEB_TIER_COUNT];
+    struct sqlite3_stmt *upd_row[WEB_TIER_COUNT];
     struct sqlite3_stmt *q_row[WEB_TIER_COUNT];
     pthread_mutex_t      mu;      /* guards st */
     pthread_mutex_t      rmu;     /* serialises rd */
@@ -98,24 +118,27 @@ void web_store_close(web_store_t *s);
 /* The rows, in one transaction. Their (series, t) may already be on
  * disk (a bucket closed early by an eviction or a shutdown, then
  * finished): that row is merged, sum and count added, min and max
- * widened. 0, or -1 (counted, and the reason kept). */
+ * widened, and is not counted again in rows[]. 0, or -1 (counted, and
+ * the reason kept). */
 int  web_store_write(web_store_t *s, const web_qrow_t *rows, size_t n);
 
 /* The --web-max-mb ceiling, run after every batch write (so it bounds
  * the file within one flush interval, not one compaction) and inside
  * every compaction. Cheap when under: the used size is three PRAGMAs.
- * Over it, slices are dropped until it is under: the oldest 5 min of
- * fine rows (any series) until no fine row is left, then the oldest
- * hour of keyed minute rows, then the oldest day of keyed hour rows,
- * and only then the same for the global series. Each slice is a range
- * of the t index. The series rows left with no bucket are swept once
- * after, and free pages go back to the file system. Rows dropped, or
+ * Over it, slices are dropped until it is under: the oldest
+ * WEB_STORE_SLICE_ROWS fine rows (any series) until no fine row is
+ * left, then the oldest keyed minute rows, then the oldest keyed hour
+ * rows, and only then the same for the global series. Each slice is
+ * the head of the t index and its own transaction. The series rows
+ * left with no bucket are swept once after, and free pages go back to
+ * the file system, WEB_STORE_VACUUM_PAGES at a time. Rows dropped, or
  * -1. */
 long long web_store_ceiling(web_store_t *s, long long max_bytes);
 
 /* Hourly upkeep: drop rows past each tier's retention (fine 24 h,
- * minute retain_days, hour 400 d), then the ceiling as above; then
- * return free pages and truncate the WAL. 0, or -1. */
+ * minute retain_days, hour 400 d), a tile of series and t at a time;
+ * then the ceiling as above; then return free pages and truncate the
+ * WAL. 0, or -1. */
 int  web_store_compact(web_store_t *s, long long now_s, int retain_days,
                        long long max_bytes);
 
@@ -135,10 +158,14 @@ long long web_store_count(web_store_t *s, int tier);
  * web_store_test_between_opens runs after the read-only identify and
  * before the read-write open, so a test can swap the file there as
  * another process could. web_store_test_no_defensive makes open_db()
- * read DEFENSIVE back as off, as a library ignoring it would. Neither
- * is set anywhere but the tests. SQLite builds only. */
+ * read DEFENSIVE back as off, as a library ignoring it would.
+ * web_store_test_after_commit runs after every transaction the
+ * compaction and the ceiling commit, where the WAL is at its largest,
+ * so a test can measure it there. None is set anywhere but the tests.
+ * SQLite builds only. */
 extern void (*web_store_test_between_opens)(const char *path);
 extern int    web_store_test_no_defensive;
+extern void (*web_store_test_after_commit)(const char *path);
 
 /* The DDL of the version this build writes, and the step from version
  * from to from + 1 (NULL past the end). For the guardrail tests. */

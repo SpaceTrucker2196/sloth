@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -143,8 +144,7 @@ long long web_store_count(web_store_t *s, int tier) {
 
 /* SQLITE_OPEN_NOFOLLOW is the guard the side-file checks lean on (they
  * are advisory: a symlink can appear between lstat() and SQLite's own
- * open), and it arrived in 3.31.0; the upsert in web_store_write()
- * needs 3.24. Same floor as sloth (src/db.c). */
+ * open), and it arrived in 3.31.0. Same floor as sloth (src/db.c). */
 #if defined(SQLITE_VERSION_NUMBER) && SQLITE_VERSION_NUMBER < 3031000
 #error "slothweb needs sqlite3 >= 3.31.0 (SQLITE_OPEN_NOFOLLOW)"
 #endif
@@ -152,16 +152,24 @@ long long web_store_count(web_store_t *s, int tier) {
 /* Constant SQL per tier: a table name cannot be a bound parameter, so
  * each statement is spelled out here and nothing from a request is
  * ever part of one. */
+/* A row is inserted, or, when its (series, t) is already there, merged
+ * by the UPDATE. Two statements rather than one upsert so that the
+ * writer knows which happened and counts only the rows it added. */
 static const char *const INS_ROW[WEB_TIER_COUNT] = {
-    "INSERT INTO fine (series,t,sum,n,min,max) VALUES (?1,?2,?3,?4,?5,?6)"
-    " ON CONFLICT (series,t) DO UPDATE SET sum=sum+excluded.sum,"
-    " n=n+excluded.n, min=min(min,excluded.min), max=max(max,excluded.max)",
-    "INSERT INTO minute (series,t,sum,n,min,max) VALUES (?1,?2,?3,?4,?5,?6)"
-    " ON CONFLICT (series,t) DO UPDATE SET sum=sum+excluded.sum,"
-    " n=n+excluded.n, min=min(min,excluded.min), max=max(max,excluded.max)",
-    "INSERT INTO hour (series,t,sum,n,min,max) VALUES (?1,?2,?3,?4,?5,?6)"
-    " ON CONFLICT (series,t) DO UPDATE SET sum=sum+excluded.sum,"
-    " n=n+excluded.n, min=min(min,excluded.min), max=max(max,excluded.max)",
+    "INSERT OR IGNORE INTO fine (series,t,sum,n,min,max)"
+    " VALUES (?1,?2,?3,?4,?5,?6)",
+    "INSERT OR IGNORE INTO minute (series,t,sum,n,min,max)"
+    " VALUES (?1,?2,?3,?4,?5,?6)",
+    "INSERT OR IGNORE INTO hour (series,t,sum,n,min,max)"
+    " VALUES (?1,?2,?3,?4,?5,?6)",
+};
+static const char *const UPD_ROW[WEB_TIER_COUNT] = {
+    "UPDATE fine SET sum=sum+?3, n=n+?4, min=min(min,?5), max=max(max,?6)"
+    " WHERE series=?1 AND t=?2",
+    "UPDATE minute SET sum=sum+?3, n=n+?4, min=min(min,?5), max=max(max,?6)"
+    " WHERE series=?1 AND t=?2",
+    "UPDATE hour SET sum=sum+?3, n=n+?4, min=min(min,?5), max=max(max,?6)"
+    " WHERE series=?1 AND t=?2",
 };
 static const char *const Q_ROW[WEB_TIER_COUNT] = {
     "SELECT r.t,r.sum,r.n,r.min,r.max FROM fine r JOIN series s"
@@ -174,31 +182,54 @@ static const char *const Q_ROW[WEB_TIER_COUNT] = {
     " ON s.id=r.series WHERE s.metric=?1 AND s.key=?2 AND r.t>=?3"
     " AND r.t<?4 ORDER BY r.t DESC LIMIT ?5",
 };
-static const char *const DEL_EXPIRED[WEB_TIER_COUNT] = {
-    "DELETE FROM fine WHERE t<?1",
-    "DELETE FROM minute WHERE t<?1",
-    "DELETE FROM hour WHERE t<?1",
+/* Retention in tiles: WEB_STORE_EXPIRE_SERIES series (consecutive ids)
+ * by WEB_STORE_EXPIRE_STEPS buckets of t, one transaction each. A tier
+ * is keyed (series, t) and indexed on t, so a delete in t order
+ * scatters over the key's pages and one in series order over the
+ * index's; a tile is a run of each, and changes about
+ * series x (steps/P + 2) key pages and steps x (series/Q + 2) index
+ * pages (P, Q the rows a page holds), some 2,000 pages, whatever the
+ * size of the store. One delete of every expired row in one
+ * transaction changed every page holding one and after a long stop
+ * grew the WAL to the size of the file. EXP_NEXT finds the tile's
+ * start: the oldest expired t of the series range at or after ?1,
+ * read off the t index (the + keeps the planner off the key). */
+static const char *const EXP_DEL[WEB_TIER_COUNT] = {
+    "DELETE FROM fine WHERE series=?1 AND t>=?2 AND t<?3",
+    "DELETE FROM minute WHERE series=?1 AND t>=?2 AND t<?3",
+    "DELETE FROM hour WHERE series=?1 AND t>=?2 AND t<?3",
+};
+static const char *const EXP_NEXT[WEB_TIER_COUNT] = {
+    "SELECT t FROM fine WHERE t>=?1 AND t<?2 AND +series BETWEEN ?3 AND ?4"
+    " ORDER BY t LIMIT 1",
+    "SELECT t FROM minute WHERE t>=?1 AND t<?2 AND +series BETWEEN ?3 AND ?4"
+    " ORDER BY t LIMIT 1",
+    "SELECT t FROM hour WHERE t>=?1 AND t<?2 AND +series BETWEEN ?3 AND ?4"
+    " ORDER BY t LIMIT 1",
 };
 /* The ceiling drops the oldest slice of one class of rows at a time,
  * in this order: fine rows (any series; the 24 h tier is the one the
  * spec gives up first), then the minute and hour rows of keyed series,
  * and only then those of the global series (the network-wide totals,
  * one series per metric, which no key churn can multiply). A class is
- * left only once it is empty. The slices are small so that a ceiling
- * met under load trims rather than wipes. */
+ * left only once it is empty. A slice is the WEB_STORE_SLICE_ROWS
+ * oldest rows of its class, read off the head of the t index: small,
+ * so that a ceiling met under load trims rather than wipes, and so that
+ * no slice's transaction can grow the WAL by more than that many pages
+ * of each b-tree. */
 #define KEYED  "series IN (SELECT id FROM series WHERE key<>'')"
 #define GLOBAL "series IN (SELECT id FROM series WHERE key='')"
+#define SLICE(tier, cls) \
+    "DELETE FROM " tier " WHERE (series,t) IN (SELECT series,t FROM " tier \
+    cls " ORDER BY t LIMIT ?1)"
 static const char *const CEIL_STEP[] = {
-    "DELETE FROM fine WHERE t<(SELECT MIN(t) FROM fine)+300",
-    "DELETE FROM minute WHERE " KEYED " AND t<(SELECT MIN(t) FROM minute"
-    " WHERE " KEYED ")+3600",
-    "DELETE FROM hour WHERE " KEYED " AND t<(SELECT MIN(t) FROM hour"
-    " WHERE " KEYED ")+86400",
-    "DELETE FROM minute WHERE " GLOBAL " AND t<(SELECT MIN(t) FROM minute"
-    " WHERE " GLOBAL ")+3600",
-    "DELETE FROM hour WHERE " GLOBAL " AND t<(SELECT MIN(t) FROM hour"
-    " WHERE " GLOBAL ")+86400",
+    SLICE("fine", ""),
+    SLICE("minute", " WHERE " KEYED),
+    SLICE("hour", " WHERE " KEYED),
+    SLICE("minute", " WHERE " GLOBAL),
+    SLICE("hour", " WHERE " GLOBAL),
 };
+#undef SLICE
 #undef KEYED
 #undef GLOBAL
 #define CEIL_STEPS ((int)(sizeof(CEIL_STEP) / sizeof(CEIL_STEP[0])))
@@ -219,6 +250,11 @@ int web_store_available(void) { return 1; }
 
 void (*web_store_test_between_opens)(const char *path) = NULL;
 int    web_store_test_no_defensive = 0;
+void (*web_store_test_after_commit)(const char *path) = NULL;
+
+static void after_commit(web_store_t *s) {
+    if (web_store_test_after_commit) web_store_test_after_commit(s->path);
+}
 
 static void set_err(web_store_t *s, const char *what, sqlite3 *db) {
     pthread_mutex_lock(&s->mu);
@@ -346,7 +382,18 @@ static int identify(sqlite3 *db, const char *path, char *err, size_t errsz) {
                              "refused, left as it is", path, sqlite3_errmsg(db));
         return -1;
     }
-    if (objects == 0) return -2;
+    /* Empty means nothing anyone has written: no object, and neither
+     * header field another program stamps a file with before its first
+     * table. */
+    long long app = q_int(db, "PRAGMA application_id");
+    long long uv = q_int(db, "PRAGMA user_version");
+    if (objects == 0 && app == 0 && uv == 0) return -2;
+    if (app != 0 && app != WEB_STORE_APP_ID) {
+        snprintf(err, errsz, "%s: application_id %lld is another program's "
+                             "database; refused, left as it is. Use a "
+                             "separate --store", path, app);
+        return -1;
+    }
     char store[64] = "", ver[64] = "";
     if (q_int(db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
                   " AND name='meta'") != 1 ||
@@ -559,9 +606,12 @@ int web_store_open(web_store_t *s, const char *path, char *err, size_t errsz) {
     }
     /* WAL so the HTTP thread's reads never wait on the writer.
      * synchronous=NORMAL syncs at checkpoint, not per commit (the cost of
-     * a power cut is the last few seconds of rollups). The WAL is kept
-     * small: a 1 MB checkpoint and a 1 MB size limit, so the file and
-     * its WAL together stay near the ceiling --web-max-mb sets. */
+     * a power cut is the last few seconds of rollups). The WAL is
+     * checkpointed past 1 MB and cut back to 1 MB at the next write, so
+     * between transactions it is about 1 MB; within one it grows by the
+     * pages that transaction changes, which is why every write, slice,
+     * tile and vacuum step is kept small (web_store.h). --web-max-mb
+     * bounds the main file only. */
     if (exec(s->db, "PRAGMA journal_mode=WAL", err, errsz, "WAL") != 0 ||
         exec(s->db, "PRAGMA synchronous=NORMAL", err, errsz, "synchronous") != 0 ||
         exec(s->db, "PRAGMA wal_autocheckpoint=256", err, errsz, "checkpoint") != 0 ||
@@ -571,9 +621,9 @@ int web_store_open(web_store_t *s, const char *path, char *err, size_t errsz) {
     if (v == -2) {
         char stamp[512];
         snprintf(stamp, sizeof(stamp),
-                 "BEGIN IMMEDIATE; %s INSERT INTO meta (name,value) VALUES"
-                 " ('store','slothweb'),('schema_version','0'); COMMIT;",
-                 META_SQL);
+                 "BEGIN IMMEDIATE; PRAGMA application_id=%d; %s INSERT INTO"
+                 " meta (name,value) VALUES ('store','slothweb'),"
+                 "('schema_version','0'); COMMIT;", WEB_STORE_APP_ID, META_SQL);
         if (exec(s->db, stamp, err, errsz, "new store") != 0) {
             char ignore[64];
             exec(s->db, "ROLLBACK", ignore, sizeof(ignore), "rollback");
@@ -595,6 +645,8 @@ int web_store_open(web_store_t *s, const char *path, char *err, size_t errsz) {
     }
     for (int t = 0; t < WEB_TIER_COUNT; t++)
         if (sqlite3_prepare_v2(s->db, INS_ROW[t], -1, &s->ins_row[t], NULL)
+                != SQLITE_OK ||
+            sqlite3_prepare_v2(s->db, UPD_ROW[t], -1, &s->upd_row[t], NULL)
                 != SQLITE_OK) {
             snprintf(err, errsz, "%s: prepare: %s", path, sqlite3_errmsg(s->db));
             return -1;
@@ -620,8 +672,9 @@ void web_store_close(web_store_t *s) {
     sqlite3_finalize(s->get_series);
     for (int t = 0; t < WEB_TIER_COUNT; t++) {
         sqlite3_finalize(s->ins_row[t]);
+        sqlite3_finalize(s->upd_row[t]);
         sqlite3_finalize(s->q_row[t]);
-        s->ins_row[t] = s->q_row[t] = NULL;
+        s->ins_row[t] = s->upd_row[t] = s->q_row[t] = NULL;
     }
     s->ins_series = s->get_series = NULL;
     if (s->rd) sqlite3_close(s->rd);
@@ -666,18 +719,23 @@ int web_store_write(web_store_t *s, const web_qrow_t *rows, size_t n) {
             r->metric < 0 || r->metric >= WM_COUNT)
             continue;
         long long id = series_id(s, r->metric, r->key);
-        sqlite3_stmt *st = s->ins_row[r->tier];
         if (id < 0) goto fail;
-        sqlite3_reset(st);
-        sqlite3_bind_int64(st, 1, id);
-        sqlite3_bind_int64(st, 2, r->t);
-        sqlite3_bind_double(st, 3, r->sum);
-        sqlite3_bind_int64(st, 4, (sqlite3_int64)r->n);
-        sqlite3_bind_double(st, 5, r->min);
-        sqlite3_bind_double(st, 6, r->max);
-        if (sqlite3_step(st) != SQLITE_DONE) goto fail;
-        sqlite3_reset(st);
-        added[r->tier]++;
+        for (int u = 0; u < 2; u++) {
+            sqlite3_stmt *st = u ? s->upd_row[r->tier] : s->ins_row[r->tier];
+            sqlite3_reset(st);
+            sqlite3_bind_int64(st, 1, id);
+            sqlite3_bind_int64(st, 2, r->t);
+            sqlite3_bind_double(st, 3, r->sum);
+            sqlite3_bind_int64(st, 4, (sqlite3_int64)r->n);
+            sqlite3_bind_double(st, 5, r->min);
+            sqlite3_bind_double(st, 6, r->max);
+            if (sqlite3_step(st) != SQLITE_DONE) goto fail;
+            sqlite3_reset(st);
+            if (!u && sqlite3_changes(s->db) == 1) {
+                added[r->tier]++;
+                break;
+            }
+        }
     }
     if (exec(s->db, "COMMIT", err, sizeof(err), "commit") != 0) goto fail_msg;
     pthread_mutex_lock(&s->mu);
@@ -692,7 +750,10 @@ fail:
 fail_msg:
     {
         char ignore[64];
-        for (int t = 0; t < WEB_TIER_COUNT; t++) sqlite3_reset(s->ins_row[t]);
+        for (int t = 0; t < WEB_TIER_COUNT; t++) {
+            sqlite3_reset(s->ins_row[t]);
+            sqlite3_reset(s->upd_row[t]);
+        }
         exec(s->db, "ROLLBACK", ignore, sizeof(ignore), "rollback");
     }
     pthread_mutex_lock(&s->mu);
@@ -719,28 +780,53 @@ static long long used_bytes(sqlite3 *db) {
     return (pc - fl) * ps;
 }
 
-/* The ceiling's loop, inside no transaction (each DELETE is its own).
- * Rows dropped, or -1. Bounded, so a file that will not shrink cannot
- * spin: every pass either deletes a slice or moves on a class. The
- * series rows of what went are swept once, after the loop: under key
- * churn they are as much of the file as the buckets, but a sweep per
- * slice cost more than the slice. The loop does not count what the
- * sweep will free, so it may take one slice more than it needed. */
+/* The ceiling's loop, inside no transaction: each slice is its own,
+ * and after each commit the WAL is checkpointed (wal_autocheckpoint)
+ * and, at the next write, cut back to journal_size_limit, so what the
+ * WAL holds at a time is one slice. Rows dropped, or -1. Bounded, so a
+ * file that will not shrink cannot spin: every pass either deletes a
+ * slice or moves on a class. The series rows of what went are swept
+ * once, after the loop: under key churn they are as much of the file
+ * as the buckets, but a sweep per slice cost more than the slice. The
+ * loop does not count what the sweep will free, so it may take one
+ * slice more than it needed. */
 static long long ceiling_loop(web_store_t *s, long long max_bytes) {
     long long dropped = 0;
     int step = 0;
-    for (int guard = 0; max_bytes > 0 && step < CEIL_STEPS && guard < 100000;
+    for (int guard = 0; max_bytes > 0 && step < CEIL_STEPS && guard < 1000000;
          guard++) {
         long long used = used_bytes(s->db);
         if (used < 0) return -1;
         if (used <= max_bytes) break;
-        long long d = run_del(s->db, CEIL_STEP[step], 0, 0);
+        long long d = run_del(s->db, CEIL_STEP[step], 1, WEB_STORE_SLICE_ROWS);
         if (d < 0) return -1;
+        after_commit(s);
         if (d == 0) { step++; continue; }
         dropped += d;
     }
-    if (dropped > 0 && run_del(s->db, SWEEP_SERIES, 0, 0) < 0) return -1;
+    if (dropped > 0) {
+        if (run_del(s->db, SWEEP_SERIES, 0, 0) < 0) return -1;
+        after_commit(s);
+    }
     return dropped;
+}
+
+/* Free pages back to the file system, WEB_STORE_VACUUM_PAGES to a
+ * transaction: one incremental_vacuum of a freelist a long stop left
+ * moves as many pages as it frees, all in one WAL. */
+static int vacuum_slices(web_store_t *s) {
+    char q[64];
+    snprintf(q, sizeof(q), "PRAGMA incremental_vacuum(%d)", WEB_STORE_VACUUM_PAGES);
+    long long prev = -1;
+    for (int guard = 0; guard < 1000000; guard++) {
+        long long fl = q_int(s->db, "PRAGMA freelist_count");
+        if (fl < 0) return -1;
+        if (fl == 0 || fl == prev) break;
+        prev = fl;
+        if (sqlite3_exec(s->db, q, NULL, NULL, NULL) != SQLITE_OK) return -1;
+        after_commit(s);
+    }
+    return 0;
 }
 
 static void note_fail(web_store_t *s, const char *what) {
@@ -760,7 +846,7 @@ long long web_store_ceiling(web_store_t *s, long long max_bytes) {
     long long d = ceiling_loop(s, max_bytes);
     if (d < 0) { note_fail(s, "ceiling"); return -1; }
     if (d > 0) {
-        sqlite3_exec(s->db, "PRAGMA incremental_vacuum", NULL, NULL, NULL);
+        if (vacuum_slices(s) != 0) { note_fail(s, "vacuum"); return -1; }
         recount(s);
     }
     refresh_size(s);
@@ -771,33 +857,108 @@ long long web_store_ceiling(web_store_t *s, long long max_bytes) {
     return d;
 }
 
+/* The prepared statements of one tier's expiry. */
+typedef struct {
+    sqlite3_stmt *del, *next;
+} web_exp_t;
+
+/* The oldest expired t of series a..b at or after from, or -1. */
+static long long exp_next(sqlite3_stmt *st, long long from, long long cutoff,
+                          long long a, long long b, int *bad) {
+    sqlite3_reset(st);
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, cutoff);
+    sqlite3_bind_int64(st, 3, a);
+    sqlite3_bind_int64(st, 4, b);
+    long long t = -1;
+    int rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW) t = sqlite3_column_int64(st, 0);
+    else if (rc != SQLITE_DONE) *bad = 1;
+    sqlite3_reset(st);
+    return t;
+}
+
+/* Every row of every tier older than its cutoff, tile by tile (see
+ * EXP_DEL). Rows dropped, or -1. */
+static long long expire(web_store_t *s, const long long cutoff[WEB_TIER_COUNT]) {
+    web_exp_t ex[WEB_TIER_COUNT];
+    sqlite3_stmt *ids = NULL;
+    memset(ex, 0, sizeof(ex));
+    long long total = 0, last = 0;
+    int bad = 0;
+    long long batch[WEB_STORE_EXPIRE_SERIES];
+    if (sqlite3_prepare_v2(s->db, "SELECT id FROM series WHERE id>?1 ORDER BY id"
+                           " LIMIT ?2", -1, &ids, NULL) != SQLITE_OK)
+        bad = 1;
+    for (int t = 0; t < WEB_TIER_COUNT && !bad; t++)
+        if (sqlite3_prepare_v2(s->db, EXP_DEL[t], -1, &ex[t].del, NULL) != SQLITE_OK ||
+            sqlite3_prepare_v2(s->db, EXP_NEXT[t], -1, &ex[t].next, NULL)
+                != SQLITE_OK)
+            bad = 1;
+    while (!bad) {
+        int n = 0;
+        sqlite3_reset(ids);
+        sqlite3_bind_int64(ids, 1, last);
+        sqlite3_bind_int64(ids, 2, WEB_STORE_EXPIRE_SERIES);
+        while (n < WEB_STORE_EXPIRE_SERIES && sqlite3_step(ids) == SQLITE_ROW)
+            batch[n++] = sqlite3_column_int64(ids, 0);
+        sqlite3_reset(ids);
+        if (n == 0) break;
+        last = batch[n - 1];
+        for (int t = 0; t < WEB_TIER_COUNT && !bad; t++) {
+            const long long span = (long long)WEB_STORE_EXPIRE_STEPS * web_tier_step(t);
+            long long lo = exp_next(ex[t].next, LLONG_MIN, cutoff[t], batch[0],
+                                    last, &bad);
+            while (!bad && lo >= 0) {
+                long long hi = lo + span < cutoff[t] ? lo + span : cutoff[t];
+                if (sqlite3_exec(s->db, "BEGIN IMMEDIATE", NULL, NULL, NULL)
+                        != SQLITE_OK) { bad = 1; break; }
+                for (int i = 0; i < n && !bad; i++) {
+                    sqlite3_reset(ex[t].del);
+                    sqlite3_bind_int64(ex[t].del, 1, batch[i]);
+                    sqlite3_bind_int64(ex[t].del, 2, lo);
+                    sqlite3_bind_int64(ex[t].del, 3, hi);
+                    if (sqlite3_step(ex[t].del) != SQLITE_DONE) bad = 1;
+                    else total += sqlite3_changes(s->db);
+                    sqlite3_reset(ex[t].del);
+                }
+                if (bad || sqlite3_exec(s->db, "COMMIT", NULL, NULL, NULL)
+                               != SQLITE_OK) {
+                    bad = 1;
+                    sqlite3_exec(s->db, "ROLLBACK", NULL, NULL, NULL);
+                    break;
+                }
+                after_commit(s);
+                lo = exp_next(ex[t].next, hi, cutoff[t], batch[0], last, &bad);
+            }
+        }
+    }
+    sqlite3_finalize(ids);
+    for (int t = 0; t < WEB_TIER_COUNT; t++) {
+        sqlite3_finalize(ex[t].del);
+        sqlite3_finalize(ex[t].next);
+    }
+    return bad ? -1 : total;
+}
+
 int web_store_compact(web_store_t *s, long long now_s, int retain_days,
                       long long max_bytes) {
     if (!s->db) return -1;
     if (retain_days < 1) retain_days = 1;
     if (retain_days > WEB_RETAIN_DAYS_MAX) retain_days = WEB_RETAIN_DAYS_MAX;
-    const long long keep[WEB_TIER_COUNT] = {
-        WEB_FINE_KEEP_S, (long long)retain_days * 86400, WEB_HOUR_KEEP_S
+    const long long cutoff[WEB_TIER_COUNT] = {
+        now_s - WEB_FINE_KEEP_S, now_s - (long long)retain_days * 86400,
+        now_s - WEB_HOUR_KEEP_S
     };
     char err[WEB_STORE_ERR_MAX];
-    unsigned long long expired = 0;
-    long long ceiling = 0;
-    if (exec(s->db, "BEGIN IMMEDIATE", err, sizeof(err), "compact begin") != 0)
-        goto fail;
-    for (int t = 0; t < WEB_TIER_COUNT; t++) {
-        long long d = run_del(s->db, DEL_EXPIRED[t], 1, now_s - keep[t]);
-        if (d < 0) goto fail_rb;
-        expired += (unsigned long long)d;
-    }
-    if (exec(s->db, "COMMIT", err, sizeof(err), "compact commit") != 0)
-        goto fail_rb_msg;
-
-    ceiling = ceiling_loop(s, max_bytes);
+    long long expired = expire(s, cutoff);
+    if (expired < 0) goto fail;
+    long long ceiling = ceiling_loop(s, max_bytes);
     if (ceiling < 0) goto fail;
     if (run_del(s->db, SWEEP_SERIES, 0, 0) < 0)
         goto fail;
-    if (exec(s->db, "PRAGMA incremental_vacuum", err, sizeof(err), "vacuum") != 0)
-        goto fail_msg;
+    after_commit(s);
+    if (vacuum_slices(s) != 0) goto fail;
     /* TRUNCATE can be refused while a reader holds the WAL; that is
      * harmless, the next compaction tries again. */
     sqlite3_exec(s->db, "PRAGMA wal_checkpoint(TRUNCATE)", NULL, NULL, NULL);
@@ -805,23 +966,14 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     refresh_size(s);
     pthread_mutex_lock(&s->mu);
     s->st.compactions++;
-    s->st.dropped_expired += expired;
+    s->st.dropped_expired += (unsigned long long)expired;
     s->st.dropped_ceiling += (unsigned long long)ceiling;
     if (ceiling > 0) s->st.ceiling_runs++;
     s->st.last_compact = now_s;
     pthread_mutex_unlock(&s->mu);
     return 0;
-fail_rb:
-    snprintf(err, sizeof(err), "compact: %s", sqlite3_errmsg(s->db));
-fail_rb_msg:
-    {
-        char ignore[64];
-        exec(s->db, "ROLLBACK", ignore, sizeof(ignore), "rollback");
-    }
-    goto fail_msg;
 fail:
     snprintf(err, sizeof(err), "compact: %s", sqlite3_errmsg(s->db));
-fail_msg:
     pthread_mutex_lock(&s->mu);
     s->st.write_errors++;
     snprintf(s->st.last_error, sizeof(s->st.last_error), "%s", err);

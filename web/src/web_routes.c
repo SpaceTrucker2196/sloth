@@ -128,10 +128,13 @@ static void tsdb_health(web_tsdb_t *t, web_jw_t *w) {
     kc_obj(w, "series_key_caps", v);
     for (int c = 0; c < WEB_KC_COUNT; c++) v[c] = (long long)rs.evictions[c];
     kc_obj(w, "key_evictions", v);
+    for (int c = 0; c < WEB_KC_COUNT; c++) v[c] = (long long)rs.ghost_hits[c];
+    kc_obj(w, "key_returns", v);
     web_jw_raw(w, ",\"series\":");           web_jw_int(w, (long long)rs.series);
     web_jw_raw(w, ",\"samples\":");          web_jw_int(w, (long long)rs.samples);
     web_jw_raw(w, ",\"ring_rows\":");        web_jw_int(w, (long long)rs.ring_rows);
     web_jw_raw(w, ",\"queue_rows\":");       web_jw_int(w, (long long)rs.queue_rows);
+    web_jw_raw(w, ",\"queue_cap\":");        web_jw_int(w, (long long)rs.queue_cap);
     web_jw_raw(w, ",\"queue_dropped\":");    web_jw_int(w, (long long)rs.q_dropped);
     web_jw_raw(w, ",\"churn_dropped\":");  web_jw_int(w, (long long)rs.churn_dropped);
     web_jw_raw(w, ",\"highwater_evictions\":");

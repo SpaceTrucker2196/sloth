@@ -349,6 +349,13 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
         gauge(m, r, "tx_rate", WM_HOST_TX, k, now);
         gauge(m, r, "conn_count", WM_HOST_CONNS, k, now);
     } else if (!strcmp(t, "probe_client")) {
+        /* The one probe-side source of dev.frames. seqnum_client counts
+         * the same probe requests: sloth's capture feeds every one with
+         * a sequence number to seqnum_track_observe() and then, with a
+         * full body, to record_probe() (src/capture/probe.c), each
+         * adding one to its own frame_count. Summed, a MAC's probes
+         * counted twice. This one has first_seen, so a row born while
+         * listening counts from its first frame. */
         m->probe_n++;
         if (web_key_mac(web_jl_str(r, "mac"), k) != 0) return;
         snprintf(id, sizeof(id), "pc|%s", k);
@@ -362,11 +369,6 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
         count(m, WM_DEV_FRAMES, k,
               hw_delta(m, id, web_jl_int(r, "frame_count", 0),
                        web_jl_int(r, "first_seen", -1)), now);
-    } else if (!strcmp(t, "seqnum_client")) {
-        if (web_key_mac(web_jl_str(r, "mac"), k) != 0) return;
-        snprintf(id, sizeof(id), "sq|%s", k);
-        count(m, WM_DEV_FRAMES, k,
-              hw_delta(m, id, web_jl_int(r, "frame_count", 0), -1), now);
     } else if (!strcmp(t, "dns")) {
         if (web_key_ip(web_jl_str(r, "src"), k) != 0) return;
         long long resp = web_jl_int(r, "is_resp", -1);

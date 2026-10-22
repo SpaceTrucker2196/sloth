@@ -2,7 +2,9 @@
  * validation, the answer's shape and bounds, the routes behind the W0
  * and M0 checks, and the spec §12 M2 acceptance: an hour of records
  * driven through the decoder on a pinned clock, then the 24 h chart's
- * request answered at 10 s and the store under 5 MB. */
+ * request answered at 10 s (from the store's fine tier as well as from
+ * memory) and the store under 5 MB on disk, its WAL included, at every
+ * step of the hour. */
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -286,8 +288,13 @@ static void test_routes(void) {
     r = route(&h, "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n", out, sizeof(out));
     WT_EQ(r.status, 200);
     WT_HAS(out, "\"store\":\"memory\",\"store_path\":null,");
-    WT_HAS(out, "\"series_key_caps\":{\"global\":1,\"device\":64,\"host\":32,\"label\":128}");
-    WT_HAS(out, "\"key_evictions\":{\"global\":0,\"device\":0,\"host\":0,\"label\":0}");
+    WT_HAS(out, "\"series_key_caps\":{\"global\":1,\"device\":64,\"host\":32,"
+                "\"iface\":32,\"channel\":64,\"alert\":128}");
+    WT_HAS(out, "\"key_evictions\":{\"global\":0,\"device\":0,\"host\":0,"
+                "\"iface\":0,\"channel\":0,\"alert\":0}");
+    WT_HAS(out, "\"key_returns\":{\"global\":0,\"device\":0,\"host\":0,"
+                "\"iface\":0,\"channel\":0,\"alert\":0}");
+    WT_HAS(out, "\"queue_rows\":0,\"queue_cap\":0,");
     WT_HAS(out, "\"queue_dropped\":0,\"churn_dropped\":0,");
     mem_done();
 }
@@ -423,6 +430,41 @@ static void test_merged_answer_capped(void) {
     snprintf(s2, sizeof(s2), "%s-shm", p); unlink(s2);
     rmdir(dir);
 }
+
+/* A burst of evictions is written before the 10 s timer: once
+ * WEB_FLUSH_HIGH rows are queued, the next step writes them. 20,000 new
+ * host keys of one sample each, a second after a flush, each evicting
+ * one and so closing its 10 s row; the next step writes them all though
+ * the next flush is nine seconds off. Seen red with the high-water
+ * clause taken out of web_tsdb_step() (19,744 rows still queued). */
+static void test_queue_high_water_flushes_early(void) {
+    char dir[64] = "/tmp/slothweb-high-XXXXXX";
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    char p[128], err[512], e2[64];
+    snprintf(p, sizeof(p), "%s/h.db", dir);
+    static web_store_t st;
+    WT_EQ(web_store_open(&st, p, err, sizeof(err)), 0);
+    WT_EQ(web_rollup_init(&ru, WEB_DEFAULT_MAX_KEYS, 1, e2, sizeof(e2)), 0);
+    WT_EQ(web_tsdb_init(&ts, &ru, &st, 30, 256, NULL, NULL), 0);
+    web_tsdb_step(&ts, T);                      /* next flush at T+10 */
+    char k[32];
+    for (int i = 0; i < 20000; i++) {
+        snprintf(k, sizeof(k), "10.%d.%d.%d", i >> 16, (i >> 8) & 255, i & 255);
+        web_rollup_add(&ru, WM_DNS_QUERIES, k, 1, T + 1);
+    }
+    WT_ASSERT(web_rollup_queued(&ru) >= WEB_FLUSH_HIGH);
+    web_tsdb_step(&ts, T + 1);
+    WT_EQ(web_rollup_queued(&ru), 0);
+    WT_ASSERT(web_store_count(&st, WEB_TIER_FINE) >= 20000 - 256);
+    web_tsdb_destroy(&ts);
+    web_rollup_destroy(&ru);
+    web_store_close(&st);
+    unlink(p);
+    char s2[160];
+    snprintf(s2, sizeof(s2), "%s-wal", p); unlink(s2);
+    snprintf(s2, sizeof(s2), "%s-shm", p); unlink(s2);
+    rmdir(dir);
+}
 #endif
 
 /* ── spec §12, M2 ───────────────────────────────────────────────────────
@@ -505,18 +547,29 @@ static void test_acceptance_one_hour(void) {
     g_feed.metrics = &mx;
 
     static char buf[64 * 1024];
-    for (int s = 0; s < 3600; s++) {
+    /* The largest the store got on disk, WAL and shm included, after
+     * every step: the hour mark's compaction truncates the WAL, so a
+     * size taken only after it says nothing about the hour before. */
+    long long max_disk = 0;
+    int max_at = -1;
+    for (int s = 0; s <= 3600; s++) {
         g_now = T + s;
-        if (s % 2 == 0) {
+        if (s % 2 == 0 && s < 3600) {
             size_t n = pass(buf, sizeof(buf), g_now, s / 2);
             web_feed_bytes(&g_feed, &g_live, buf, n, (long long)s * 1000);
         }
+        /* At s = 3600, the hour mark: every bucket of the hour is due,
+         * written, and the hourly compaction has run after the write. */
         web_tsdb_step(&ts, g_now);
+        if (have) {
+            struct stat sb;
+            long long b = 0;
+            if (stat(p, &sb) == 0) b += sb.st_size;
+            if (stat(wal, &sb) == 0) b += sb.st_size;
+            if (stat(shm, &sb) == 0) b += sb.st_size;
+            if (b > max_disk) { max_disk = b; max_at = s; }
+        }
     }
-    /* The hour mark: every bucket of the hour is due, written, and the
-     * hourly compaction has run after the write. */
-    g_now = T + 3600;
-    web_tsdb_step(&ts, g_now);
     web_rollup_stats_t rs;
     web_rollup_stats(&ru, &rs);
     WT_EQ(rs.series, ACC_SERIES);
@@ -575,16 +628,41 @@ static void test_acceptance_one_hour(void) {
     WT_HAS(out, want);
 
     if (have) {
-        /* The store is under 5 MB on disk, its WAL included. */
+        /* The store stayed under 5 MB on disk, its WAL included, all
+         * hour long. Seen red with wal_autocheckpoint=0 and
+         * journal_size_limit=-1 in web_store_open(): 143,163,896 bytes
+         * at second 3590, while the size after the hour mark alone
+         * (2,027,520) stayed under 5 MB. */
         struct stat sb;
         long long bytes = 0;
         if (stat(p, &sb) == 0) bytes += sb.st_size;
         if (stat(wal, &sb) == 0) bytes += sb.st_size;
         if (stat(shm, &sb) == 0) bytes += sb.st_size;
-        fprintf(stderr, "  one hour: %d fine rows, %lld bytes on disk\n",
-                ACC_SERIES * 360, bytes);
+        fprintf(stderr, "  one hour: %d fine rows, %lld bytes on disk after "
+                "the hour's compaction, at most %lld (second %d)\n",
+                ACC_SERIES * 360, bytes, max_disk, max_at);
         WT_ASSERT(bytes > 0);
-        WT_ASSERT(bytes < 5LL * 1024 * 1024);
+        WT_ASSERT(max_disk >= bytes);
+        WT_ASSERT(max_disk < 5LL * 1024 * 1024);
+        /* The 24 h answer above is all in memory still (the ring holds
+         * the hour): the store's fine tier must answer it too, as it
+         * does once the ring has moved on or after a restart. */
+        static web_point_t sp[901];
+        int more = 0;
+        int sn = web_store_query(&st, WEB_TIER_FINE, WM_IFACE_RX, "eth0",
+                                 g_now - 86400, g_now, sp, 900, &more);
+        WT_EQ(sn, 360);
+        WT_EQ(more, 0);
+        int sgaps = 0;
+        for (int i = 1; i < sn; i++) if (sp[i - 1].t - sp[i].t != 10) sgaps++;
+        WT_EQ(sgaps, 0);
+        if (sn == 360) {
+            WT_EQ(sp[0].t, T + 3590);           /* newest first */
+            WT_EQ(sp[359].t, T);
+            WT_EQ(sp[359].n, 5);
+            WT_ASSERT(sp[359].sum == 5012.5 && sp[359].min == 1000.5 &&
+                      sp[359].max == 1004.5);
+        }
         /* The minute tier answers too. */
         snprintf(rq, sizeof(rq), "GET /api/series?metric=conns.total&tier=minute"
                  "&from=%lld&to=%lld HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
@@ -592,6 +670,31 @@ static void test_acceptance_one_hour(void) {
         r = route(&h, rq, out, sizeof(out));
         WT_EQ(r.status, 200);
         snprintf(want, sizeof(want), "[%lld,15,15,15,30]", T + 3540);
+        WT_HAS(out, want);
+
+        /* And through /api/series with nothing in memory: a restart over
+         * the same store, a new rollup with an empty ring, the same 24 h
+         * request answered from the store alone. Seen red with
+         * web_series.c reading the store for the minute and hour tiers
+         * only (0 points). */
+        web_tsdb_destroy(&ts);
+        web_rollup_destroy(&ru);
+        WT_EQ(web_rollup_init(&ru, WEB_DEFAULT_MAX_KEYS, 1, e2, sizeof(e2)), 0);
+        WT_EQ(web_tsdb_init(&ts, &ru, &st, WEB_DEFAULT_RETAIN_DAYS,
+                            WEB_DEFAULT_MAX_MB, pinned, NULL), 0);
+        snprintf(rq, sizeof(rq), "GET /api/series?metric=iface.rx_rate&key=eth0"
+                 "&tier=fine&from=%lld&to=%lld HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+                 g_now - 86400, g_now);
+        r = route(&h, rq, out, sizeof(out));
+        WT_EQ(r.status, 200);
+        WT_HAS(out, "\"source\":\"store+memory\"");
+        pt = strstr(out, "\"points\":[");
+        WT_ASSERT(pt != NULL);
+        count = 0;
+        for (const char *q = pt ? pt + 10 : NULL; q && (q = strchr(q, '[')); q++)
+            count++;
+        WT_EQ(count, 360);
+        snprintf(want, sizeof(want), "[%lld,1002.5,1000.5,1004.5,5]", T);
         WT_HAS(out, want);
     }
 
@@ -675,6 +778,7 @@ void run_series_tests(void) {
 #ifdef WITH_SQLITE
     WT_RUN(test_worst_case_fits);
     WT_RUN(test_merged_answer_capped);
+    WT_RUN(test_queue_high_water_flushes_early);
 #endif
     WT_RUN(test_acceptance_one_hour);
     WT_RUN(test_store_thread);

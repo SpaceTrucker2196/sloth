@@ -58,7 +58,10 @@ void web_tsdb_step(web_tsdb_t *t, long long now_s) {
         t->next_compact = now_s + WEB_COMPACT_S;
     }
     web_rollup_close_due(t->ru, now_s);
-    if (now_s >= t->next_flush) {
+    /* Early when the queue is past its high-water mark, so a burst of
+     * evictions is written rather than left to fill it. */
+    if (now_s >= t->next_flush ||
+        (t->store && web_rollup_queued(t->ru) >= WEB_FLUSH_HIGH)) {
         flush(t);
         t->next_flush = now_s + WEB_FLUSH_S;
     }
@@ -71,7 +74,11 @@ void web_tsdb_step(web_tsdb_t *t, long long now_s) {
     }
 }
 
+/* What is queued goes first, so close_all() starts from an empty
+ * queue: the per-series bound the queue is sized by (web_rollup.h)
+ * counts the shutdown's rows on their own. */
 void web_tsdb_flush_all(web_tsdb_t *t) {
+    flush(t);
     web_rollup_close_all(t->ru);
     flush(t);
 }

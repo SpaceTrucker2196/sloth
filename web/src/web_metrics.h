@@ -19,8 +19,7 @@
  * than the first record of the connection, i.e. it was born while we
  * were listening. So a reconnect, which re-sends every row at its full
  * total, is not counted as one huge burst. Rows without first_seen
- * (seqnum_client, channel_summary) are always a baseline on first
- * sight. High-water rows are held in a bounded table, least recently
+ * (channel_summary) are always a baseline on first sight. High-water rows are held in a bounded table, least recently
  * used out first; evictions are counted, and an evicted row's id goes
  * into a small filter so that seeing it again on the same connection
  * is a baseline, not a second count of its whole total as if it had

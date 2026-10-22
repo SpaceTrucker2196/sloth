@@ -190,6 +190,7 @@ static void test_fresh_store(void) {
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
                      " AND name IN ('fine_t','minute_t','hour_t')"), 3);
     WT_EQ(raw_int(p, "PRAGMA auto_vacuum"), 2);   /* INCREMENTAL */
+    WT_EQ(raw_int(p, "PRAGMA application_id"), WEB_STORE_APP_ID);
     /* Reopening a current file runs no step again. */
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
@@ -426,6 +427,32 @@ static void test_foreign_files_refused(void) {
                 "INSERT INTO meta VALUES ('store','someone-else'),"
                 "('schema_version','1');");
     refused_untouched(p, "not a slothweb store");
+    rm_store(p);
+
+    /* A file another program has set up but given no table yet: its
+     * header carries that program's application_id and user_version.
+     * Not empty, so not new: refused byte for byte (it was migrated in
+     * place when only an empty sqlite_master was asked for). Seen red
+     * with identify() taking any file with no object as new (opened,
+     * stamped and given the four tables). With only user_version set
+     * it is no slothweb store either. And our own meta under another
+     * program's application_id is not ours. */
+    path_in(p, sizeof(p), "stamped.db");
+    raw_exec(p, "PRAGMA application_id=1196444487; PRAGMA user_version=42;");
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master"), 0);
+    refused_untouched(p, "application_id 1196444487");
+    rm_store(p);
+
+    path_in(p, sizeof(p), "uv-only.db");
+    raw_exec(p, "PRAGMA user_version=42;");
+    refused_untouched(p, "not a slothweb store");
+    rm_store(p);
+
+    path_in(p, sizeof(p), "meta-foreign-app.db");
+    raw_exec(p, "PRAGMA application_id=5;"
+                "CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);"
+                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','2');");
+    refused_untouched(p, "application_id 5");
     rm_store(p);
 
     path_in(p, sizeof(p), "garbage.db");
@@ -738,8 +765,26 @@ static void test_write_merge_query(void) {
     web_store_stats(&S, &st);
     WT_EQ(st.batches, 1);
     WT_EQ(st.write_errors, 0);
+    /* store_rows counts rows stored, not rows written: 32 written, one
+     * a merge. The same minute bucket written five more times, as an
+     * eviction and a shutdown can, is still one row. Seen red with
+     * every written row counted (31 fine, then 6 minute). */
+    WT_EQ(st.rows[WEB_TIER_FINE], 30);
+    WT_EQ(st.rows[WEB_TIER_MINUTE], 1);
+    for (int i = 0; i < 5; i++) {
+        r[0] = row(WEB_TIER_MINUTE, WM_CONNS_TOTAL, "", 1792627200, 1, 1, 1, 1);
+        WT_EQ(web_store_write(&S, r, 1), 0);
+    }
+    web_store_stats(&S, &st);
+    WT_EQ(st.rows[WEB_TIER_MINUTE], 2);
+    WT_EQ(web_store_count(&S, WEB_TIER_MINUTE), 2);
+    WT_EQ(st.rows_written, 37);
+    k = web_store_query(&S, WEB_TIER_MINUTE, WM_CONNS_TOTAL, "", 0, 1792627260,
+                        pt, 64, &more);
+    WT_EQ(k, 1);
+    WT_EQ(pt[0].n, 5);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM series"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM series"), 2);
     rm_store(p);
 }
 
@@ -810,14 +855,80 @@ static void test_ceiling_drops_oldest_fine_first(void) {
                           now - 10, now, pt, 2, &more), 1);
     WT_EQ(web_store_query(&S, WEB_TIER_FINE, WM_HOST_RX, "10.0.0.1",
                           now - 40000, now - 39990, pt, 2, &more), 0);
-    web_store_close(&S);
-    /* Pages went back to the file system and the WAL was truncated. */
+    /* The compaction truncated the WAL: right after it, with the store
+     * still open, the -wal is there and empty. journal_size_limit alone
+     * would leave up to 1 MB in it. Seen red with the TRUNCATE
+     * checkpoint removed (the -wal held 1,048,576 bytes). */
     struct stat sb;
-    WT_EQ(stat(p, &sb), 0);
-    WT_ASSERT(sb.st_size <= cap + (256 << 10));
     char wal[200];
     snprintf(wal, sizeof(wal), "%s-wal", p);
-    if (stat(wal, &sb) == 0) WT_ASSERT(sb.st_size <= (1 << 20));
+    WT_EQ(stat(wal, &sb), 0);
+    WT_EQ(sb.st_size, 0);
+    web_store_close(&S);
+    /* Pages went back to the file system. */
+    WT_EQ(stat(p, &sb), 0);
+    WT_ASSERT(sb.st_size <= cap + (256 << 10));
+    rm_store(p);
+}
+
+static char      g_wal[200];
+static long long g_wal_peak;
+static int       g_wal_probes;
+
+static void wal_probe(const char *path) {
+    (void)path;
+    struct stat sb;
+    g_wal_probes++;
+    if (stat(g_wal, &sb) == 0 && sb.st_size > g_wal_peak) g_wal_peak = sb.st_size;
+}
+
+/* A start after a long stop expires everything at once, but the WAL
+ * never holds more than one expiry tile (WEB_STORE_EXPIRE_SERIES series
+ * by WEB_STORE_EXPIRE_STEPS buckets), where one delete of every expired
+ * row in one transaction grew it to about the size of the file, so disk
+ * use reached twice the ceiling. 4,000 series of 40 fine rows, the
+ * store closed and reopened three days later: measured after every
+ * commit the compaction makes (the seam), where the WAL is at its
+ * largest. Seen red with the tile made the whole tier (4,096 series by
+ * 100,000,000 buckets, one transaction): a WAL of 5,104,712 bytes
+ * beside a 5,378,048-byte file. */
+static void test_long_stop_expiry_keeps_wal_small(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "stop.db");
+    snprintf(g_wal, sizeof(g_wal), "%s-wal", p);
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    const long long t0 = 1792627200;
+    static web_qrow_t r[4000];
+    char k[32];
+    for (int b = 0; b < 40; b++) {
+        for (int i = 0; i < 4000; i++) {
+            snprintf(k, sizeof(k), "10.0.%d.%d", i >> 8, i & 255);
+            r[i] = row(WEB_TIER_FINE, WM_HOST_RX, k, t0 + b * 10, 1, 1, 1, 1);
+        }
+        WT_EQ(web_store_write(&S, r, 4000), 0);
+    }
+    web_store_close(&S);
+    struct stat sb;
+    WT_EQ(stat(p, &sb), 0);
+    long long file = sb.st_size;
+    WT_ASSERT(file > 4LL << 20);
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    g_wal_peak = 0;
+    g_wal_probes = 0;
+    web_store_test_after_commit = wal_probe;
+    WT_EQ(web_store_compact(&S, t0 + 3 * 86400, 30, 256LL << 20), 0);
+    web_store_test_after_commit = NULL;
+    WT_EQ(web_store_count(&S, WEB_TIER_FINE), 0);
+    web_store_stats_t st;
+    web_store_stats(&S, &st);
+    WT_EQ(st.dropped_expired, 160000);
+    WT_ASSERT(g_wal_probes > 10);
+    fprintf(stderr, "  long stop: %lld byte file, WAL peak %lld bytes\n",
+            file, g_wal_peak);
+    WT_ASSERT(g_wal_peak > 0);
+    WT_ASSERT(g_wal_peak < file / 2);
+    WT_ASSERT(g_wal_peak <= 2LL << 20);
+    web_store_close(&S);
     rm_store(p);
 }
 
@@ -1040,6 +1151,7 @@ void run_store_tests(void) {
     WT_RUN(test_write_merge_query);
     WT_RUN(test_compaction_retention);
     WT_RUN(test_ceiling_drops_oldest_fine_first);
+    WT_RUN(test_long_stop_expiry_keeps_wal_small);
     WT_RUN(test_ceiling_spares_global_series);
     WT_RUN(test_ceiling_holds_under_key_churn);
     WT_RUN(test_churn_two_samples_not_in_long_tiers);

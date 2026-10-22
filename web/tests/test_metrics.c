@@ -200,14 +200,20 @@ static void test_highwater_deltas(void) {
     line("{\"type\":\"probe_client\",\"ts\":1003,\"mac\":\"02:00:00:00:00:02\","
          "\"first_seen\":1003,\"last_seen\":1003,\"frame_count\":4}");
     WT_ASSERT(cur(WM_DEV_FRAMES, "02:00:00:00:00:02").sum == 4);
-    /* assoc counts against the station; seqnum_client (no first_seen)
-     * is always a baseline on first sight. */
+    /* assoc counts against the station. */
     line("{\"type\":\"assoc\",\"ts\":1003,\"bssid\":\"02:00:00:00:aa:01\","
          "\"sta_mac\":\"02:00:00:00:00:02\",\"first_seen\":1003,\"frame_count\":1}");
     WT_ASSERT(cur(WM_DEV_FRAMES, "02:00:00:00:00:02").sum == 5);
+    /* seqnum_client counts the same probe requests as probe_client
+     * (sloth's capture adds each one to both tables), so it is not a
+     * source: the same advance of 5 in both records is 5 frames, not
+     * 10. Seen red with the seqnum_client branch restored (sum 10). */
+    line("{\"type\":\"probe_client\",\"ts\":1003,\"mac\":\"02:00:00:00:00:03\","
+         "\"first_seen\":900,\"last_seen\":1003,\"frame_count\":90}");
     line("{\"type\":\"seqnum_client\",\"ts\":1003,\"mac\":\"02:00:00:00:00:03\","
          "\"mac_random\":1,\"last_seen\":1003,\"frame_count\":90,\"hist\":[1,2]}");
-    WT_EQ(has_series(WM_DEV_FRAMES, "02:00:00:00:00:03"), 0);
+    line("{\"type\":\"probe_client\",\"ts\":1004,\"mac\":\"02:00:00:00:00:03\","
+         "\"first_seen\":900,\"last_seen\":1004,\"frame_count\":95}");
     line("{\"type\":\"seqnum_client\",\"ts\":1004,\"mac\":\"02:00:00:00:00:03\","
          "\"mac_random\":1,\"last_seen\":1004,\"frame_count\":95,\"hist\":[1,2]}");
     WT_ASSERT(cur(WM_DEV_FRAMES, "02:00:00:00:00:03").sum == 5);
@@ -372,7 +378,7 @@ static void test_highwater_table_bounded(void) {
     fresh();
     char b[256];
     for (int i = 0; i < WEB_HW_ROWS + 10; i++) {
-        snprintf(b, sizeof(b), "{\"type\":\"seqnum_client\",\"ts\":1,\"mac\":"
+        snprintf(b, sizeof(b), "{\"type\":\"probe_client\",\"ts\":1,\"mac\":"
                  "\"02:00:00:%02x:%02x:%02x\",\"frame_count\":1}",
                  (i >> 16) & 0xff, (i >> 8) & 0xff, i & 0xff);
         line(b);
