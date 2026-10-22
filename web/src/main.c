@@ -63,6 +63,10 @@ int main(int argc, char **argv) {
             return 1;
         }
         have_store = 1;
+        /* web_config_check() refused a --web-max-mb below the analysis
+         * state's estimate plus this (web_store.h). */
+        web_store_set_history_allowance(&g_store, web_store_history_bytes(
+            web_baseline_cap_for(cfg.max_keys)));
     }
     /* Without a store the rollup still queues its minute and hour rows:
      * the anomaly engine reads them off the queue (web_tsdb.h), so the
@@ -140,21 +144,6 @@ int main(int argc, char **argv) {
                         "rules A1-A3, A5-A10 active, kept in %s; A4 needs "
                         "#162's OUI table\n", web_baseline_count(&g_baseline),
                 cfg.store_path);
-        /* The ceiling counts the analysis state but can only drop
-         * time-series rows (web_store.h): below this the analysis state
-         * can fill it on its own, and the ceiling then holds (drops
-         * nothing) with the file over it. */
-        long long an = web_store_analysis_max_bytes(
-            web_baseline_cap_for(cfg.max_keys), WEB_ANOM_CAP,
-            cfg.max_keys / 2, cfg.max_keys);
-        if ((long long)cfg.max_mb * 1024 * 1024 < an)
-            fprintf(stderr, "slothweb: warning: --web-max-mb %d is below what "
-                            "the baselines and episodes can take at "
-                            "--web-max-keys %d (about %lld MB); once they do, "
-                            "the file stays over it and the ceiling stops "
-                            "dropping time-series rows (store_ceiling_held). "
-                            "Raise --web-max-mb or lower --web-max-keys.\n", cfg.max_mb, cfg.max_keys,
-                    an / (1024 * 1024) + 1);
     } else {
         fprintf(stderr, "slothweb: built without SQLite: time series in "
                         "memory only (10 s buckets, no minute or hour tier "

@@ -296,9 +296,9 @@ static void test_routes(void) {
                 "\"iface\":0,\"channel\":0,\"alert\":0}");
     WT_HAS(out, "\"queue_rows\":0,\"queue_cap\":0,");
     WT_HAS(out, "\"queue_dropped\":0,\"churn_dropped\":0,");
-    /* The ceiling's held passes and the analysis state's measured size
+    /* The ceiling's raised passes and the analysis state's measured size
      * (none without a store: -1). */
-    WT_HAS(out, "\"store_ceiling_runs\":0,\"store_ceiling_held\":0,"
+    WT_HAS(out, "\"store_ceiling_runs\":0,\"store_ceiling_raised\":0,"
                 "\"store_analysis_bytes\":-1,");
     mem_done();
 }

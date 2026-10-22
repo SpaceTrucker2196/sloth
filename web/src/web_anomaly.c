@@ -117,22 +117,21 @@ static void kv_del(kvtab_t *t, int i) {
 }
 
 /* The slot of (a, k), made if absent; *made says so, and *evicted holds
- * the key pushed out to make it ("" when none). With no_evict a full
- * table answers -1 instead of pushing one out. */
+ * the key pushed out to make it, the one with the oldest t ("" when
+ * none), and *evicted_t its t. */
 static int kv_get2(kvtab_t *t, int a, const char *k, long long now, int *made,
-                   char evicted[WEB_KEY_MAX + 1], int no_evict) {
+                   char evicted[WEB_KEY_MAX + 1], long long *evicted_t) {
     *made = 0;
     if (evicted) evicted[0] = '\0';
     int i = kv_find(t, a, k);
     if (i >= 0) return i;
     if (t->n < t->cap) {
         for (i = 0; i < t->cap; i++) if (!t->e[i].used) break;
-    } else if (no_evict) {
-        return -1;
     } else {
         i = 0;
         for (int j = 1; j < t->cap; j++) if (t->e[j].t < t->e[i].t) i = j;
         if (evicted) snprintf(evicted, WEB_KEY_MAX + 1, "%s", t->e[i].key);
+        if (evicted_t) *evicted_t = t->e[i].t;
         kv_del(t, i);
         t->evictions++;
     }
@@ -151,7 +150,7 @@ static int kv_get2(kvtab_t *t, int a, const char *k, long long now, int *made,
 
 static int kv_get(kvtab_t *t, int a, const char *k, long long now, int *made,
                   char evicted[WEB_KEY_MAX + 1]) {
-    return kv_get2(t, a, k, now, made, evicted, 0);
+    return kv_get2(t, a, k, now, made, evicted, NULL);
 }
 
 /* ── the store thread's state ────────────────────────────────────────── */
@@ -192,7 +191,6 @@ typedef struct {
     char      key[WEB_KEY_MAX + 1];
     double    score;
     char      ev[WEB_ANOM_EVIDENCE_MAX + 1];
-    long long t0;               /* A2: the MAC's first_seen */
 } cand_t;
 
 typedef struct {
@@ -225,17 +223,18 @@ struct web_anom_priv {
     char      (*fan_del)[WEB_KEY_MAX + 1];
     int         fan_ndel;
 
-    kvtab_t     rep;            /* A2: MACs reported (a = 0), t first_seen */
+    kvtab_t     rep;            /* A2: MACs reported (a = 0), t first_seen;
+                                   full, the oldest first_seen goes to old */
     web_store_rep_t *rep_new;
     int         rep_nnew, rep_cap;
     kvtab_t     old;            /* A2: MACs not to report one by one (found
-                                   not new, or part of a burst), t
-                                   first_seen; evicting one costs only a
+                                   not new, folded, or pushed out of rep),
+                                   t first_seen; evicting one costs a
                                    second look at it */
     int         a2_checks;      /* evidence lookups this minute */
     long long   a2_wmin[A2_WIN];/* A2's rolling hour: new MACs counted */
     int         a2_wn[A2_WIN];  /* (folded or reported) in minute wmin */
-    char        a2_last[3][WEB_KEY_MAX + 1]; /* the latest folded MACs */
+    char        a2_last[2][WEB_KEY_MAX + 1]; /* the latest folded MACs */
     int         a2_nlast;
 
     kvtab_t     known;          /* A9: (flow metric, host) with history */
@@ -543,7 +542,6 @@ static cand_t *cand(web_anomaly_t *a, int rule, int metric, const char *key,
     snprintf(c->key, sizeof(c->key), "%s", key);
     c->score = score > 100 ? 100 : score < 0 ? 0 : score;
     web_utf8_copy(c->ev, WEB_ANOM_EVIDENCE_MAX, ev);
-    c->t0 = -1;
     return c;
 }
 
@@ -794,23 +792,30 @@ static int id_rows(web_anomaly_t *a, int total, int cap) {
     return cap;
 }
 
-/* Mark mac reported (first_seen t0) for A2, never pushing another out:
- * an entry leaves only when its first_seen leaves A2's window, so a MAC
- * reported within the window is never reported twice. 0, or -1 when
- * the set is full of MACs still in their window (the caller counts the
- * refusal). */
-static int rep_mark(struct web_anom_priv *p, const char *mac, long long t0) {
+/* Mark mac reported (first_seen t0) for A2. A full set pushes out the
+ * entry with the oldest first_seen (counted in rep.evictions), which
+ * goes to the not-one-by-one set rather than straight back to being
+ * new: a MAC is reported again only once both sets have let it go, so
+ * re-reports are at most the evictions. persist queues the entry for
+ * the store (not when it came from there). */
+static void rep_mark(struct web_anom_priv *p, const char *mac, long long t0,
+                     int persist) {
     int made;
-    int k = kv_get2(&p->rep, 0, mac, t0, &made, NULL, 1);
-    if (k < 0) return -1;
+    char gone[WEB_KEY_MAX + 1];
+    long long gone_t = 0;
+    int k = kv_get2(&p->rep, 0, mac, t0, &made, gone, &gone_t);
     p->rep.e[k].t = t0;
-    if (made && p->rep_nnew < p->rep_cap) {
+    if (gone[0]) {
+        int m2;
+        int o = kv_get(&p->old, 0, gone, gone_t, &m2, NULL);
+        p->old.e[o].t = gone_t;
+    }
+    if (persist && made && p->rep_nnew < p->rep_cap) {
         web_store_rep_t *r = &p->rep_new[p->rep_nnew++];
         snprintf(r->kind, sizeof(r->kind), "%s", RULE_NAME[WEB_ANOM_A2_NEW]);
         snprintf(r->key, sizeof(r->key), "%s", mac);
         r->t = t0;
     }
-    return 0;
 }
 
 /* Whether slothweb itself holds evidence of mac from before A2's
@@ -846,8 +851,9 @@ static int a2_old_evidence(web_anomaly_t *a, const char *mac, long long ts) {
 
 /* A2's rolling hour, a slot a minute: the new MACs folded into the
  * episode keyed "" or given their own, counted in the minute (ts / 60)
- * that took them. A MAC refused (the reported set full) or dropped (the
- * episode table full) is not counted: it is tried again next minute. */
+ * a2_scan() judged them new. Each is counted once: the scan puts it in
+ * the reported or the not-one-by-one set as it counts it, so no MAC is
+ * offered twice. */
 static void a2_win_add(struct web_anom_priv *p, long long m, int n) {
     int k = (int)(m % A2_WIN);
     if (k < 0) k += A2_WIN;
@@ -860,6 +866,16 @@ static int a2_win_sum(const struct web_anom_priv *p, long long m) {
     for (int k = 0; k < A2_WIN; k++)
         if (p->a2_wmin[k] > m - A2_WIN && p->a2_wmin[k] <= m) n += p->a2_wn[k];
     return n > INT_MAX ? INT_MAX : (int)n;
+}
+
+/* " mac" appended to ev at o, whole or not at all: evidence never names
+ * part of an address. The new length. */
+static size_t ev_mac(char *ev, size_t cap, size_t o, const char *mac) {
+    size_t n = strlen(mac);
+    if (o >= cap || n + 1 >= cap - o) return o;
+    ev[o] = ' ';
+    memcpy(ev + o + 1, mac, n + 1);
+    return o + 1 + n;
 }
 
 static void a2_scan(web_anomaly_t *a, long long ts) {
@@ -899,15 +915,18 @@ static void a2_scan(web_anomaly_t *a, long long ts) {
     }
     long long m = ts / 60;
     int win = a2_win_sum(p, m);
-    char ev[256];
+    if (nnew > 0) a2_win_add(p, m, nnew);
+    char ev[WEB_ANOM_EVIDENCE_MAX + 1];
     if (nnew <= WEB_ANOM_A2_BURST && win + nnew <= WEB_ANOM_A2_HOUR_MAX) {
+        /* Reported as the candidate is made: an episode the table
+         * cannot take is counted (dropped) and not offered again. */
         for (int i = 0; i < nnew; i++) {
             const web_id_new_t *f = &p->firsts[i];
             long long age = ts - f->first_seen;
+            rep_mark(p, f->mac, f->first_seen, 1);
             snprintf(ev, sizeof(ev), "%s first seen by sloth %lld min ago (%s)",
                      f->mac, age > 0 ? age / 60 : 0LL, f->src);
-            cand_t *c = cand(a, WEB_ANOM_A2_NEW, -1, f->mac, 40.0, ev);
-            if (c) c->t0 = f->first_seen;
+            cand(a, WEB_ANOM_A2_NEW, -1, f->mac, 40.0, ev);
         }
         return;
     }
@@ -917,12 +936,13 @@ static void a2_scan(web_anomaly_t *a, long long ts) {
      * is one event, one episode keyed "", not one per MAC, which would
      * take the table from every other rule. The trickle is the case a
      * per-minute test alone misses: eight spoofed MACs a minute are
-     * never a burst, and given an episode each they fill the reported
-     * set within hours and leave every real new device refused for a
-     * day. The episode holds while the hour's count is over the limit,
-     * so a trickle is one episode, not one per minute it ticks. Its
-     * MACs are covered by it: they go to the not-one-by-one set, not to
-     * the reported set, so a flood cannot fill the reported set. */
+     * never a burst, and given an episode each they would churn the
+     * reported set. The episode holds while the hour's count is over
+     * the limit, so a trickle is one episode, not one per minute it
+     * ticks. Its MACs are covered by it: they go to the not-one-by-one
+     * set, not to the reported set. The cost, stated in web_anomaly.h:
+     * a real device that arrives inside the trickle is one of them, and
+     * is not reported on its own. */
     for (int i = 0; i < nnew; i++) {
         int made;
         int k = kv_get(&p->old, 0, p->firsts[i].mac, p->firsts[i].first_seen,
@@ -930,27 +950,27 @@ static void a2_scan(web_anomaly_t *a, long long ts) {
         p->old.e[k].t = p->firsts[i].first_seen;
     }
     if (nnew > 0) {
-        a2_win_add(p, m, nnew);
         win += nnew;
         p->a2_nlast = 0;
-        for (int i = nnew > 3 ? nnew - 3 : 0; i < nnew; i++)
+        for (int i = nnew > 2 ? nnew - 2 : 0; i < nnew; i++)
             snprintf(p->a2_last[p->a2_nlast++], WEB_KEY_MAX + 1, "%s",
                      p->firsts[i].mac);
         pthread_mutex_lock(&a->mu);
         a->st.a2_in_burst += (unsigned long)nnew;
         pthread_mutex_unlock(&a->mu);
     }
-    int o;
+    size_t o;
     if (nnew > WEB_ANOM_A2_BURST) {
-        o = snprintf(ev, sizeof(ev), "%d MACs new to sloth in one minute:", nnew);
-        for (int i = 0; i < nnew && i < 3 && o > 0 && (size_t)o < sizeof(ev); i++)
-            o += snprintf(ev + o, sizeof(ev) - (size_t)o, " %s", p->firsts[i].mac);
+        o = (size_t)snprintf(ev, sizeof(ev), "%d MACs new to sloth in one "
+                             "minute:", nnew);
+        for (int i = 0; i < nnew && i < 2; i++)
+            o = ev_mac(ev, sizeof(ev), o, p->firsts[i].mac);
     } else {
-        o = snprintf(ev, sizeof(ev), "%d MACs new to sloth in the last hour "
-                     "(over %d), %d this minute; latest:", win,
-                     WEB_ANOM_A2_HOUR_MAX, nnew);
-        for (int i = 0; i < p->a2_nlast && o > 0 && (size_t)o < sizeof(ev); i++)
-            o += snprintf(ev + o, sizeof(ev) - (size_t)o, " %s", p->a2_last[i]);
+        o = (size_t)snprintf(ev, sizeof(ev), "%d MACs new to sloth in the "
+                             "last hour (over %d), %d this minute; latest:",
+                             win, WEB_ANOM_A2_HOUR_MAX, nnew);
+        for (int i = 0; i < p->a2_nlast; i++)
+            o = ev_mac(ev, sizeof(ev), o, p->a2_last[i]);
     }
     cand(a, WEB_ANOM_A2_NEW, -1, "", nnew > WEB_ANOM_A2_BURST ? 60.0 : 50.0, ev);
 }
@@ -1148,51 +1168,9 @@ static int touch_locked(web_anomaly_t *a, const cand_t *c, long long bucket,
 static void apply(web_anomaly_t *a, const int *evaluated, long long bucket,
                   long long ts) {
     struct web_anom_priv *p = a->p;
-    int refused = 0;
-    char rmac[3][WEB_KEY_MAX + 1];
     pthread_mutex_lock(&a->mu);
-    for (int i = 0; i < p->cand_n; i++) {
-        const cand_t *c = &p->cand[i];
-        /* A2 reports a MAC once: only one that got its episode counts as
-         * reported, so a full table delays it rather than losing it. A
-         * reported set full of MACs still in their window refuses the
-         * report rather than forget one of them (which would report
-         * that one again). A fold (key "") marked its MACs itself. */
-        int a2 = c->rule == WEB_ANOM_A2_NEW && c->key[0];
-        if (a2 && kv_find(&p->rep, 0, c->key) < 0 && p->rep.n >= p->rep.cap) {
-            a->st.reported_refused++;
-            if (refused < 3)
-                snprintf(rmac[refused], sizeof(rmac[0]), "%s", c->key);
-            refused++;
-            continue;
-        }
-        if (touch_locked(a, c, bucket, ts) && a2 &&
-            rep_mark(p, c->key, c->t0 >= 0 ? c->t0 : ts) == 0)
-            a2_win_add(p, ts / 60, 1);
-    }
-    /* A refusal is loud: a new device that cannot be reported is the
-     * thing A2 is for, so it opens (or holds) an episode of its own
-     * while the set stays full, rather than only a counter on
-     * /api/health. Its evidence names at most three of the refused
-     * MACs; they are tried again every minute and reported on their own
-     * once the set has room. */
-    if (refused) {
-        cand_t fc;
-        memset(&fc, 0, sizeof(fc));
-        fc.rule = WEB_ANOM_A2_NEW;
-        fc.metric = -1;
-        fc.t0 = -1;
-        fc.score = 70.0;
-        snprintf(fc.key, sizeof(fc.key), "%s", WEB_ANOM_A2_FULL_KEY);
-        int o = snprintf(fc.ev, sizeof(fc.ev), "reported set full (%d MACs "
-                         "reported in the last 24 h): %d new MAC%s refused "
-                         "this minute, %lu refusals in all:", p->rep.n,
-                         refused, refused == 1 ? "" : "s",
-                         a->st.reported_refused);
-        for (int i = 0; i < refused && i < 3 && o > 0 && (size_t)o < sizeof(fc.ev); i++)
-            o += snprintf(fc.ev + o, sizeof(fc.ev) - (size_t)o, " %s", rmac[i]);
-        touch_locked(a, &fc, bucket, ts);
-    }
+    for (int i = 0; i < p->cand_n; i++)
+        touch_locked(a, &p->cand[i], bucket, ts);
     for (int i = 0; i < a->cap; i++) {
         web_anom_ep_t *e = &a->ep[i];
         if (e->state == WEB_EP_CLOSED) {
@@ -1593,7 +1571,7 @@ void web_anomaly_step(web_anomaly_t *a, long long now_s) {
     if (fan_closed) persist_fanout(a);
     pthread_mutex_lock(&a->mu);
     a->st.fanout_evictions = p->fan_ix.evictions;
-    a->st.reported_evictions = p->rep.evictions;
+    a->st.reported_evicted = p->rep.evictions;
     a->st.known_evictions = p->known.evictions;
     a->st.fanout = p->fan_ix.n;
     a->st.reported = p->rep.n;
@@ -1688,10 +1666,10 @@ static void restore_rep(void *ctx, const web_store_rep_t *r) {
     web_anomaly_t *a = ctx;
     struct web_anom_priv *p = a->p;
     if (strcmp(r->kind, RULE_NAME[WEB_ANOM_A2_NEW])) return;
-    if (p->rep.n >= p->rep.cap || !T_SANE(r->t)) return;
-    int made;
-    int i = kv_get(&p->rep, 0, r->key, r->t, &made, NULL);
-    p->rep.e[i].t = r->t;
+    if (!T_SANE(r->t)) return;
+    /* More saved than the set holds (a smaller --web-max-keys): the
+     * oldest first_seen go to the not-one-by-one set, as at run time. */
+    rep_mark(p, r->key, r->t, 0);
 }
 
 int web_anomaly_restore(web_anomaly_t *a, long long now_s) {

@@ -292,7 +292,48 @@ static void test_socket_flag(void) {
     done(&p);
 }
 
+/* --web-max-mb below what the analysis state and the history allowance
+ * need is refused at start (main() exits 2 on it), naming the least
+ * that would do; at the minimum it runs. The defaults clear it; the
+ * largest --web-max-keys at the default ceiling does not. A memory-only
+ * build has no file to bound and refuses nothing. Seen red (rc 0, no
+ * message) with the size test removed from web_config_check(). */
+static void test_ceiling_below_minimum_refused(void) {
+    long long need = web_config_store_min_mb(WEB_DEFAULT_MAX_KEYS);
+    fprintf(stderr, "  minimum %lld MB at the default keys, %lld MB at %d\n",
+            need, web_config_store_min_mb(WEB_MAX_KEYS_MAX), WEB_MAX_KEYS_MAX);
+    WT_ASSERT(need > 64 && need <= WEB_DEFAULT_MAX_MB);
+    WT_ASSERT(web_config_store_min_mb(WEB_MAX_KEYS_MAX) > WEB_DEFAULT_MAX_MB);
+    char at[24], under[24], want[64];
+    snprintf(at, sizeof(at), "%lld", need);
+    snprintf(under, sizeof(under), "%lld", need - 1);
+    snprintf(want, sizeof(want), "Use --web-max-mb %lld or more", need);
+    parsed_t p;
+    const char *const low[] = { "--web-max-mb", under, NULL };
+    parse(&p, low);
+    if (web_store_available()) {
+        WT_EQ(p.rc, -1);
+        WT_HAS(p.err, "is below what --web-max-keys 512 needs");
+        WT_HAS(p.err, want);
+    } else {
+        WT_EQ(p.rc, 0);
+    }
+    done(&p);
+    const char *const ok[] = { "--web-max-mb", at, NULL };
+    parse(&p, ok);
+    WT_EQ(p.rc, 0);
+    done(&p);
+    parse(&p, NULL);
+    WT_EQ(p.rc, 0);
+    done(&p);
+    static const char *const big[] = { "--web-max-keys", "8192", NULL };
+    parse(&p, big);
+    WT_EQ(p.rc, web_store_available() ? -1 : 0);
+    done(&p);
+}
+
 void run_config_tests(void) {
+    WT_RUN(test_ceiling_below_minimum_refused);
     WT_RUN(test_socket_flag);
     WT_RUN(test_default_bind_is_loopback_8770);
     WT_RUN(test_loopback_binds_need_no_flag);

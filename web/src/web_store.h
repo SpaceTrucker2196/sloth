@@ -97,9 +97,11 @@ typedef struct {
     unsigned long compactions;
     unsigned long long dropped_expired, dropped_ceiling;
     unsigned long ceiling_runs;           /* passes that dropped rows */
-    unsigned long ceiling_held;           /* passes that dropped nothing
-                                             because the analysis state
-                                             alone was over the ceiling */
+    unsigned long ceiling_raised;         /* passes that trimmed the time
+                                             series to the history
+                                             allowance, the analysis state
+                                             leaving less than it under
+                                             the ceiling */
     long long     analysis_bytes;         /* its pages when last measured
                                              (dbstat), -1 not measurable */
     unsigned long bl_rows_reused;         /* baseline rows a new entry
@@ -116,9 +118,10 @@ typedef struct {
     struct sqlite3_stmt *upd_row[WEB_TIER_COUNT];
     struct sqlite3_stmt *q_row[WEB_TIER_COUNT];
     struct sqlite3_stmt *an[WEB_STORE_AN_STMTS];  /* the analysis state's */
-    long long            an_bytes;  /* the analysis state's pages */
-    int                  an_fresh;  /* an_bytes is current; cleared by
-                                       every baseline write */
+    long long            an_bl;     /* the baseline tables' pages */
+    int                  an_fresh;  /* an_bl is current; cleared by every
+                                       baseline write */
+    long long            hist_allow; /* the history allowance, bytes */
     pthread_mutex_t      mu;      /* guards st */
     pthread_mutex_t      rmu;     /* serialises rd */
     int                  mu_init;
@@ -156,22 +159,40 @@ int  web_store_write(web_store_t *s, const web_qrow_t *rows, size_t n);
  *
  * The ceiling is the whole file's used pages, the analysis state (v3's
  * baseline, baseline_cell, episode, fanout and reported tables)
- * included, but only time-series rows can be dropped. When the analysis
- * state's own pages (measured with dbstat) are at or over the ceiling,
- * no number of dropped buckets can bring the file under it, and dropping
- * them would only erase the history A9 and the MAD ratio read: the pass
- * then drops nothing and is counted in ceiling_held (/api/health
- * store_ceiling_held), and the file stays over until the baselines
- * shrink or the ceiling is raised. The measurement is taken when a pass
- * is over the ceiling and kept until the next baseline write (the
- * baselines are nearly all of it; the episode, fan-out and reported
- * tables are bounded at a few hundred KB, and the hourly baseline write
- * refreshes the figure). A library without dbstat cannot measure it
- * (analysis_bytes -1) and keeps the old behaviour: drop until under or
- * out of rows. A small --web-max-mb with a large --web-max-keys can get
- * here: slothweb warns at start when the ceiling is below
- * web_store_analysis_max_bytes(). */
+ * included, but only time-series rows can be dropped. So the bound a
+ * pass enforces is
+ *
+ *     used <= max(max_bytes, analysis + hist_allow)
+ *
+ * with analysis the analysis state's own pages (dbstat) and hist_allow
+ * the history allowance (web_store_set_history_allowance()): when the
+ * analysis state leaves less than the allowance under the ceiling, the
+ * time series is trimmed to the allowance instead of to the ceiling,
+ * and the pass is counted in ceiling_raised (/api/health
+ * store_ceiling_raised). The time series is never erased to make room
+ * the analysis state takes, and never kept without a limit either: it
+ * is bounded by the allowance while the analysis state stays over. Each
+ * bound holds to within one slice and the series rows the sweep frees.
+ * slothweb refuses at start a --web-max-mb below
+ * web_store_analysis_max_bytes() plus the allowance
+ * (web_config_check()), so at the configured caps only an analysis
+ * state beyond the estimate gets here.
+ *
+ * The baseline tables (nearly all of the analysis state) are measured
+ * when a pass first needs the figure and kept until the next baseline
+ * write (web_store_bl_put, web_store_bl_del, web_store_bl_load); the
+ * episode, fanout and reported tables are bounded at a few hundred KB
+ * and are measured afresh on every pass that needs the figure (dbstat
+ * reads only the b-trees it is named), so no write leaves the figure
+ * stale past the next pass. A library without dbstat cannot measure it
+ * (analysis_bytes -1): the allowance is then not applied, and the pass
+ * drops until under max_bytes or out of rows. */
 long long web_store_ceiling(web_store_t *s, long long max_bytes);
+
+/* The time series the ceiling keeps when the analysis state alone
+ * would leave less: 0 (the default) keeps none. slothweb sets
+ * web_store_history_bytes() of its baseline capacity after the open. */
+void web_store_set_history_allowance(web_store_t *s, long long bytes);
 
 /* An estimate of the most the analysis state can take in the file:
  * bl_cap baseline entries with every one of their 168 cells, ep_cap
@@ -186,6 +207,20 @@ long long web_store_ceiling(web_store_t *s, long long max_bytes);
 #define WEB_STORE_EST_REP_B   80
 long long web_store_analysis_max_bytes(int bl_cap, int ep_cap, int hosts,
                                        int macs);
+
+/* The history allowance: WEB_STORE_HIST_HOURS hour rows for each of
+ * bl_cap series, at WEB_STORE_EST_TSROW_B a row. A week of hour rows
+ * for every series the baselines can hold is the least history in
+ * which each hour-of-week cell has one row behind it: what A9's "any
+ * row before" and the MAD ratio's same-hour reads stand on. 64 bytes a
+ * row is measured: 828,240 hour rows (4,930 series, the baselines at
+ * the default --web-max-keys, for 168 hours, written hour by hour as
+ * slothweb writes them) took 51,748,864 bytes of 4 KB pages with the t
+ * index, 62.5 bytes each. About 51 MB at the default --web-max-keys,
+ * 760 MB at 8,192 (MB here and in the refusal are 2^20 bytes). */
+#define WEB_STORE_HIST_HOURS  168
+#define WEB_STORE_EST_TSROW_B 64
+long long web_store_history_bytes(int bl_cap);
 
 /* Hourly upkeep: drop rows past each tier's retention (fine 24 h,
  * minute retain_days, hour 400 d), a tile of series and t at a time;

@@ -1,5 +1,8 @@
 #include "web_config.h"
 
+#include "web_anomaly.h"
+#include "web_baseline.h"
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <stdlib.h>
@@ -113,6 +116,19 @@ void web_format_bind(int family, const uint8_t *addr, uint16_t port,
     else                    snprintf(buf, sz, "%s:%u",   host, (unsigned)port);
 }
 
+static long long mb_up(long long b) {
+    return (b + (1LL << 20) - 1) >> 20;
+}
+
+long long web_config_store_min_mb(int max_keys) {
+    if (max_keys < WEB_MAX_KEYS_MIN) max_keys = WEB_MAX_KEYS_MIN;
+    if (max_keys > WEB_MAX_KEYS_MAX) max_keys = WEB_MAX_KEYS_MAX;
+    int cap = web_baseline_cap_for(max_keys);
+    return mb_up(web_store_analysis_max_bytes(cap, WEB_ANOM_CAP, max_keys / 2,
+                                              max_keys) +
+                 web_store_history_bytes(cap));
+}
+
 int web_config_check(const web_config_t *c, char *err, size_t errsz) {
     char where[INET6_ADDRSTRLEN + 16];
     web_format_bind(c->bind_family, c->bind_addr, c->bind_port,
@@ -165,6 +181,29 @@ int web_config_check(const web_config_t *c, char *err, size_t errsz) {
             snprintf(err, errsz,
                 "slothweb: --web-allow %s admits non-loopback peers; that "
                 "needs --web-allow-remote.\n", cidr);
+            return -1;
+        }
+    }
+
+    /* The ceiling can drop only time-series rows, and keeps the history
+     * allowance whatever the analysis state takes (web_store.h): below
+     * their sum the file can only sit over --web-max-mb. Only with a
+     * store; a memory-only slothweb has no file to bound. */
+    if (web_store_available()) {
+        long long need = web_config_store_min_mb(c->max_keys);
+        if ((long long)c->max_mb < need) {
+            int cap = web_baseline_cap_for(c->max_keys);
+            snprintf(err, errsz,
+                "slothweb: --web-max-mb %d is below what --web-max-keys %d "
+                "needs: the baselines and episodes can take about %lld MB "
+                "and the ceiling keeps %lld MB of history beside them (a "
+                "week of hour rows for each of %d series).\n"
+                "  Use --web-max-mb %lld or more, or lower --web-max-keys.\n",
+                c->max_mb, c->max_keys,
+                mb_up(web_store_analysis_max_bytes(cap, WEB_ANOM_CAP,
+                                                   c->max_keys / 2,
+                                                   c->max_keys)),
+                mb_up(web_store_history_bytes(cap)), cap, need);
             return -1;
         }
     }

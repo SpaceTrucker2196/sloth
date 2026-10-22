@@ -728,18 +728,19 @@ static void test_slot_policy_keeps_each_rules_history(void) {
     fx_done();
 }
 
-/* The reported set holds a MAC until its first_seen leaves the window,
- * never less: full of MACs still in their window, it refuses the next
- * one rather than push out one it would then report again, and the
- * refusal is an episode of its own, not only a counter on /api/health.
- * --web-max-keys 16 (a set of 16): eight MACs a minute twice, so none
- * is a burst and the hour's count is at its limit, not over; an hour
- * later (the rolling count empty again) a 17th, then the first again.
- * Seen red with apply()'s full-set test removed (the 17th got an
- * episode of its own and nothing was refused), and separately with the
- * refusal episode removed (no episode keyed reported-set-full: the
- * refusal only counted). */
-static void test_a2_reported_set_refuses_rather_than_forgets(void) {
+/* A reported set of 16 (--web-max-keys 16), filled by eight MACs a
+ * minute twice, each first seen a second after the one before, so none
+ * is a burst and the hour's count is at its limit, not over. An hour
+ * later (the rolling count empty again) a 17th still gets an episode of
+ * its own: the set forgets its oldest first_seen (counted) rather than
+ * refuse. The one forgotten moves to the not-one-by-one set, so while
+ * sloth still lists it, it is not reported a second time. Seen red with
+ * rep_mark() refusing when full (reported_evicted stayed 0 and the
+ * oldest was kept), and separately with the move to the
+ * not-one-by-one set removed (00:11:22:00:00:00 reported again the
+ * next minute, pushing out the next oldest, which was reported again in
+ * turn: 19 A2 episodes, 4 evictions). */
+static void test_a2_reported_set_evicts_oldest(void) {
     fx(0, NULL);
     web_anomaly_destroy(&an);
     g_cfg.max_keys = WEB_MAX_KEYS_MIN;
@@ -749,36 +750,141 @@ static void test_a2_reported_set_refuses_rather_than_forgets(void) {
     for (int i = 0; i < 16; i++) {
         char mac[24];
         snprintf(mac, sizeof(mac), "00:11:22:00:00:%02x", i);
-        probe(mac, t - 60, t);
+        probe(mac, T0 - 100 + i, t);
         if (i % 8 == 7) { step(t + 60); t += 60; }
     }
     WT_EQ(an.st.opened, 16UL);
     WT_EQ(an.st.reported, 16);
-    WT_EQ(an.st.reported_refused, 0UL);
+    WT_EQ(an.st.reported_evicted, 0UL);
     WT_EQ(ep(WEB_ANOM_A2_NEW, "")->state, WEB_EP_FREE);
     t += 61 * 60;
     step(t);
     probe("00:11:22:00:01:00", t - 60, t);
     step(t + 60);
     t += 60;
-    WT_EQ(ep(WEB_ANOM_A2_NEW, "00:11:22:00:01:00")->state, WEB_EP_FREE);
-    WT_EQ(an.st.reported_refused, 1UL);
-    web_anom_ep_t *f = ep(WEB_ANOM_A2_NEW, WEB_ANOM_A2_FULL_KEY);
-    WT_EQ(f->state, WEB_EP_OPEN);
-    WT_HAS(f->evidence, "reported set full (16 MACs reported in the last "
-                        "24 h): 1 new MAC refused this minute, 1 refusals "
-                        "in all: 00:11:22:00:01:00");
-    WT_HAS(list(t), "\"key\":\"reported-set-full\"");
-    /* Still waiting next minute: tried again, refused again, the same
-     * episode held; and the first MAC is not reported a second time. */
-    probe("00:11:22:00:01:00", t - 120, t);
-    probe("00:11:22:00:00:00", T0 - 60, t);
-    step(t + 60);
-    WT_EQ(ep(WEB_ANOM_A2_NEW, WEB_ANOM_A2_FULL_KEY), f);
-    WT_EQ(f->state, WEB_EP_OPEN);
-    WT_HAS(f->evidence, "2 refusals in all");
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "00:11:22:00:01:00")->state, WEB_EP_OPEN);
+    WT_HAS(ep(WEB_ANOM_A2_NEW, "00:11:22:00:01:00")->evidence,
+           "00:11:22:00:01:00 first seen by sloth 2 min ago (probe_client)");
+    WT_EQ(an.st.reported_evicted, 1UL);
+    WT_EQ(an.st.reported, 16);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "")->state, WEB_EP_FREE);
+    /* The oldest went; sloth still lists it, and it stays unreported. */
+    for (int m = 0; m < 3; m++, t += 60) {
+        probe("00:11:22:00:00:00", T0 - 100, t);
+        step(t + 60);
+    }
     WT_EQ(an.st.opened, 17UL);
     WT_EQ(count_rule(WEB_ANOM_A2_NEW), 17);
+    WT_EQ(an.st.reported_evicted, 1UL);
+    fx_done();
+}
+
+/* A MAC both sets have let go may be reported again, and that is the
+ * whole of the cost: re-reports are at most the evictions. Identity
+ * tables of 16 MACs (so the not-one-by-one set holds 16 too) and a
+ * reported set of 16. A0-A15 reported; an hour on, B0-B7 and C0-C7 push
+ * all sixteen A out of the reported set into the other; an hour on,
+ * D0-D7 push B out, which pushes A0-A7 (the oldest first_seen) out of
+ * the other. A0-A7 seen again with their own first_seen are new to
+ * slothweb a second time: 8 re-reports, for 32 evictions. Seen red with
+ * kv_get2()'s eviction left uncounted (reported_evicted 0, under the 8
+ * re-reports it must bound). */
+static void test_a2_rereports_bounded_by_evictions(void) {
+    fx(0, NULL);
+    web_anomaly_destroy(&an);
+    web_ident_destroy(&idt);
+    WT_EQ(web_ident_init(&idt, 16, 16), 0);
+    g_cfg.ident = &idt;
+    g_cfg.max_keys = WEB_MAX_KEYS_MIN;
+    WT_EQ(web_anomaly_init(&an, 32, &g_cfg), 0);
+    char mac[24];
+    long long t = T0;
+    step(t);
+    for (int i = 0; i < 16; i++) {
+        snprintf(mac, sizeof(mac), "00:11:0a:00:00:%02x", i);
+        probe(mac, T0 - 100 + i, t);
+        if (i % 8 == 7) { step(t + 60); t += 60; }
+    }
+    t += 61 * 60;
+    step(t);
+    for (int g = 0; g < 2; g++) {
+        for (int i = 0; i < 8; i++) {
+            snprintf(mac, sizeof(mac), "00:11:%02x:00:00:%02x", 0x0b + g, i);
+            probe(mac, t - 60, t);
+        }
+        step(t + 60);
+        t += 60;
+    }
+    WT_EQ(an.st.reported_evicted, 16UL);
+    t += 61 * 60;
+    step(t);
+    for (int i = 0; i < 8; i++) {
+        snprintf(mac, sizeof(mac), "00:11:0d:00:00:%02x", i);
+        probe(mac, t - 60, t);
+    }
+    step(t + 60);
+    t += 60;
+    WT_EQ(an.st.opened, 40UL);
+    for (int i = 0; i < 8; i++) {
+        snprintf(mac, sizeof(mac), "00:11:0a:00:00:%02x", i);
+        probe(mac, T0 - 100 + i, t);
+    }
+    step(t + 60);
+    unsigned long rereports = an.st.opened - 40UL;
+    fprintf(stderr, "  %lu re-reports, %lu evictions\n", rereports,
+            an.st.reported_evicted);
+    WT_EQ(rereports, 8UL);
+    WT_EQ(an.st.dropped, 0UL);
+    WT_ASSERT(rereports <= an.st.reported_evicted);
+    WT_EQ(an.st.reported_evicted, 32UL);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "")->state, WEB_EP_FREE);
+    fx_done();
+}
+
+/* A burst's and a trickle's evidence count the MACs judged new in that
+ * minute or that hour, exactly: never one counted twice, never one the
+ * scan had already settled. Five reported in minute 1 (still listed by
+ * sloth every minute after), nine in minute 2 (a burst: "9", not the 14
+ * sloth lists), three in minute 3 (the hour at 17, over 16: a trickle
+ * fold of "17 ... 3 this minute"). Two MACs named, whole. Seen red with
+ * a2_scan()'s reported-set test removed (the burst counted the five
+ * again: "14 MACs"), and separately with three MACs named. */
+static void test_a2_burst_evidence_counts_exactly(void) {
+    fx(0, NULL);
+    char mac[24];
+    long long t = T0;
+    step(t);
+    for (int i = 0; i < 5; i++) {
+        snprintf(mac, sizeof(mac), "00:11:0e:00:00:%02x", i);
+        probe(mac, t - 60, t);
+    }
+    step(t + 60);
+    t += 60;
+    WT_EQ(an.st.opened, 5UL);
+    for (int i = 0; i < 9; i++) {
+        snprintf(mac, sizeof(mac), "00:11:0f:00:00:%02x", i);
+        probe(mac, t - 60, t);
+    }
+    step(t + 60);
+    t += 60;
+    web_anom_ep_t *b = ep(WEB_ANOM_A2_NEW, "");
+    WT_EQ(b->state, WEB_EP_OPEN);
+    WT_EQ(strcmp(b->evidence, "9 MACs new to sloth in one minute: "
+                              "00:11:0f:00:00:00 00:11:0f:00:00:01"), 0);
+    WT_EQ(an.st.a2_in_burst, 9UL);
+    for (int i = 0; i < 3; i++) {
+        snprintf(mac, sizeof(mac), "00:11:10:00:00:%02x", i);
+        probe(mac, t - 60, t);
+    }
+    step(t + 60);
+    t += 60;
+    WT_EQ(ep(WEB_ANOM_A2_NEW, ""), b);
+    WT_EQ(strcmp(b->evidence, "17 MACs new to sloth in the last hour (over "
+                              "16), 3 this minute; latest: 00:11:10:00:00:01 "
+                              "00:11:10:00:00:02"), 0);
+    WT_EQ(an.st.a2_in_burst, 12UL);
+    WT_EQ(an.st.opened, 6UL);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "00:11:10:00:00:00")->state, WEB_EP_FREE);
     fx_done();
 }
 
@@ -808,8 +914,8 @@ static void test_a2_trickle_is_one_episode(void) {
     web_anom_ep_t *b = ep(WEB_ANOM_A2_NEW, "");
     WT_EQ(b->state, WEB_EP_OPEN);
     WT_HAS(b->evidence, "80 MACs new to sloth in the last hour (over 16), "
-                        "8 this minute; latest: 00:5e:01:09:05:01 "
-                        "00:5e:01:09:06:01 00:5e:01:09:07:01");
+                        "8 this minute; latest: 00:5e:01:09:06:01 "
+                        "00:5e:01:09:07:01");
     /* Quiet for half an hour: the hour is still over, the episode holds. */
     t += 30 * 60;
     step(t);
@@ -1606,7 +1712,9 @@ void run_anomaly_tests(void) {
 #endif
     WT_RUN(test_a2_flood_is_one_episode_and_keeps_history);
     WT_RUN(test_slot_policy_keeps_each_rules_history);
-    WT_RUN(test_a2_reported_set_refuses_rather_than_forgets);
+    WT_RUN(test_a2_reported_set_evicts_oldest);
+    WT_RUN(test_a2_rereports_bounded_by_evictions);
+    WT_RUN(test_a2_burst_evidence_counts_exactly);
     WT_RUN(test_a2_trickle_is_one_episode);
     WT_RUN(test_a2_scans_every_identity_slot);
     WT_RUN(test_a2_old_and_random_macs_are_not_new);

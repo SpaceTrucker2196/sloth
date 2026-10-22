@@ -164,6 +164,11 @@ long long web_store_analysis_max_bytes(int bl_cap, int ep_cap, int hosts,
     return b;
 }
 
+long long web_store_history_bytes(int bl_cap) {
+    return bl_cap > 0
+        ? (long long)bl_cap * WEB_STORE_HIST_HOURS * WEB_STORE_EST_TSROW_B : 0;
+}
+
 #ifndef WITH_SQLITE
 
 int  web_store_available(void) { return 0; }
@@ -191,6 +196,10 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
 long long web_store_ceiling(web_store_t *s, long long max_bytes) {
     (void)s; (void)max_bytes;
     return -1;
+}
+
+void web_store_set_history_allowance(web_store_t *s, long long bytes) {
+    (void)s; (void)bytes;
 }
 
 int web_store_query(web_store_t *s, int tier, int metric, const char *key,
@@ -990,6 +999,44 @@ static long long used_bytes(sqlite3 *db) {
     return (pc - fl) * ps;
 }
 
+/* The pages of the named tables and their indexes, from dbstat (which
+ * reads only the b-trees named); -1 when the library has no dbstat. */
+static long long pages_of(web_store_t *s, const char *sql) {
+    sqlite3_stmt *st = NULL;
+    long long b = -1;
+    if (sqlite3_prepare_v2(s->db, sql, -1, &st, NULL) == SQLITE_OK &&
+        sqlite3_step(st) == SQLITE_ROW)
+        b = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    return b;
+}
+
+#define AN_PAGES(tables) \
+    "SELECT COALESCE(SUM(pgsize),0) FROM dbstat WHERE name IN" \
+    " (SELECT name FROM sqlite_schema WHERE tbl_name IN (" tables "))"
+
+/* The analysis state's pages: the baseline tables' as last measured
+ * (kept until the next baseline write), the episode, fanout and
+ * reported tables' measured now (web_store.h). */
+static long long analysis_bytes(web_store_t *s) {
+    if (!s->an_fresh) {
+        s->an_bl = pages_of(s, AN_PAGES("'baseline','baseline_cell'"));
+        s->an_fresh = 1;
+    }
+    long long small = pages_of(s, AN_PAGES("'episode','fanout','reported'"));
+    long long b = s->an_bl < 0 || small < 0 ? -1 : s->an_bl + small;
+    pthread_mutex_lock(&s->mu);
+    s->st.analysis_bytes = b;
+    pthread_mutex_unlock(&s->mu);
+    return b;
+}
+
+#undef AN_PAGES
+
+void web_store_set_history_allowance(web_store_t *s, long long bytes) {
+    s->hist_allow = bytes > 0 ? bytes : 0;
+}
+
 /* The ceiling's loop, inside no transaction: each slice is its own,
  * and after each commit the WAL is checkpointed (wal_autocheckpoint)
  * and, at the next write, cut back to journal_size_limit, so what the
@@ -999,43 +1046,28 @@ static long long used_bytes(sqlite3 *db) {
  * once, after the loop: under key churn they are as much of the file
  * as the buckets, but a sweep per slice cost more than the slice. The
  * loop does not count what the sweep will free, so it may take one
- * slice more than it needed. */
-/* The pages of the analysis state's tables and their indexes, from
- * dbstat; -1 when the library has no dbstat. Kept until the next
- * baseline write (web_store.h). */
-static long long analysis_bytes(web_store_t *s) {
-    static const char sql[] =
-        "SELECT COALESCE(SUM(pgsize),0) FROM dbstat WHERE name IN"
-        " (SELECT name FROM sqlite_schema WHERE tbl_name IN ('baseline',"
-        "'baseline_cell','episode','fanout','reported'))";
-    if (s->an_fresh) return s->an_bytes;
-    sqlite3_stmt *st = NULL;
-    long long b = -1;
-    if (sqlite3_prepare_v2(s->db, sql, -1, &st, NULL) == SQLITE_OK &&
-        sqlite3_step(st) == SQLITE_ROW)
-        b = sqlite3_column_int64(st, 0);
-    sqlite3_finalize(st);
-    s->an_bytes = b;
-    s->an_fresh = 1;
-    pthread_mutex_lock(&s->mu);
-    s->st.analysis_bytes = b;
-    pthread_mutex_unlock(&s->mu);
-    return b;
-}
-
-/* *held is set when the pass stopped because the analysis state alone
- * is at or over max_bytes. */
-static long long ceiling_loop(web_store_t *s, long long max_bytes, int *held) {
-    long long dropped = 0;
-    int step = 0;
-    *held = 0;
+ * slice more than it needed. The target is max_bytes, raised to the
+ * analysis state plus the history allowance when that is more
+ * (web_store.h); *raised says it was. Dropping rows does not change the
+ * analysis state, so it is measured once a pass. */
+static long long ceiling_loop(web_store_t *s, long long max_bytes, int *raised) {
+    long long dropped = 0, target = max_bytes;
+    int step = 0, measured = 0;
+    *raised = 0;
     for (int guard = 0; max_bytes > 0 && step < CEIL_STEPS && guard < 1000000;
          guard++) {
         long long used = used_bytes(s->db);
         if (used < 0) return -1;
-        if (used <= max_bytes) break;
-        long long an = analysis_bytes(s);
-        if (an >= max_bytes) { *held = 1; break; }
+        if (used <= target) break;
+        if (!measured) {
+            measured = 1;
+            long long an = analysis_bytes(s);
+            if (an >= 0 && an + s->hist_allow > max_bytes) {
+                target = an + s->hist_allow;
+                *raised = 1;
+                if (used <= target) break;
+            }
+        }
         long long d = run_del(s->db, CEIL_STEP[step], 1, WEB_STORE_SLICE_ROWS);
         if (d < 0) return -1;
         after_commit(s);
@@ -1081,8 +1113,8 @@ long long web_store_ceiling(web_store_t *s, long long max_bytes) {
     /* The cheap test first: three PRAGMAs, no table read. */
     long long used = used_bytes(s->db);
     if (used >= 0 && used <= max_bytes) return 0;
-    int held;
-    long long d = ceiling_loop(s, max_bytes, &held);
+    int raised;
+    long long d = ceiling_loop(s, max_bytes, &raised);
     if (d < 0) { note_fail(s, "ceiling"); return -1; }
     if (d > 0) {
         if (vacuum_slices(s) != 0) { note_fail(s, "vacuum"); return -1; }
@@ -1092,7 +1124,7 @@ long long web_store_ceiling(web_store_t *s, long long max_bytes) {
     pthread_mutex_lock(&s->mu);
     s->st.dropped_ceiling += (unsigned long long)d;
     if (d > 0) s->st.ceiling_runs++;
-    if (held) s->st.ceiling_held++;
+    if (raised) s->st.ceiling_raised++;
     pthread_mutex_unlock(&s->mu);
     return d;
 }
@@ -1221,8 +1253,8 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     char err[WEB_STORE_ERR_MAX];
     long long expired = expire(s, cutoff);
     if (expired < 0) goto fail;
-    int held;
-    long long ceiling = ceiling_loop(s, max_bytes, &held);
+    int raised;
+    long long ceiling = ceiling_loop(s, max_bytes, &raised);
     if (ceiling < 0) goto fail;
     if (run_del(s->db, SWEEP_SERIES, 0, 0) < 0)
         goto fail;
@@ -1238,7 +1270,7 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     s->st.dropped_expired += (unsigned long long)expired;
     s->st.dropped_ceiling += (unsigned long long)ceiling;
     if (ceiling > 0) s->st.ceiling_runs++;
-    if (held) s->st.ceiling_held++;
+    if (raised) s->st.ceiling_raised++;
     s->st.last_compact = now_s;
     pthread_mutex_unlock(&s->mu);
     return 0;

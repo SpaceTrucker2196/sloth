@@ -43,25 +43,37 @@
  *                no minute or hour row of either in the store before it.
  *                sloth sets first_seen to now whenever it makes a client
  *                entry (at its restart, src/capture/probe.c), so its
- *                first_seen alone is not "new". Reported once per MAC:
- *                the reported set (it outlives a restart) is keyed by
- *                first_seen and loses an entry only when that leaves the
- *                window; full, it refuses (counted) rather than forget a
- *                MAC it would then report again; a refusal opens (or
- *                holds) an episode keyed WEB_ANOM_A2_FULL_KEY whose
- *                evidence says how many were refused and names at most
- *                three, and the refused MACs are tried again each
- *                minute. More than WEB_ANOM_A2_BURST new MACs in one
- *                minute, or more than WEB_ANOM_A2_HOUR_MAX in a rolling
- *                hour (counted from the MACs folded or reported, in
- *                memory: a restart starts it at 0), are one episode
- *                keyed "", held while the hour is over, not one each,
- *                and are not put in the reported set (a flood, or a
- *                trickle of a few a minute, would fill it). At most
- *                WEB_ANOM_A2_CHECKS_PER_MIN store lookups a minute; the
- *                rest wait a minute (counted). Randomised MACs are left
- *                out: every rotation is new by construction, and A5 is
- *                the rule about them.
+ *                first_seen alone is not "new". Reported once per MAC
+ *                while slothweb remembers it: the reported set (it
+ *                outlives a restart) is keyed by first_seen and holds
+ *                --web-max-keys MACs; full, it forgets the one with the
+ *                oldest first_seen (counted, reported_evicted on
+ *                /api/health), which moves to the set of MACs not to
+ *                report one by one, and a MAC both sets have let go may
+ *                be reported a second time. That is the accepted cost: a
+ *                duplicate "new device" is better than a hidden one, and
+ *                the re-reports are at most the evictions. A MAC is
+ *                judged new once: the scan puts it in one set or the
+ *                other as it counts it, so nothing is offered twice
+ *                while those sets hold it (the not-one-by-one set holds
+ *                as many MACs as the identity tables, so only a churn
+ *                past them makes it judge one afresh), and an episode
+ *                the table cannot take is counted (dropped) and not
+ *                tried again. More than WEB_ANOM_A2_BURST new
+ *                MACs in one minute, or more than WEB_ANOM_A2_HOUR_MAX
+ *                in a rolling hour (each MAC counted in the minute it
+ *                was judged new, in memory: a restart starts it at 0),
+ *                are one episode keyed "", held while the hour is over,
+ *                not one each, and are not put in the reported set. Its
+ *                evidence counts the MACs judged new in that minute or
+ *                that hour, exactly, and names at most two, whole. The
+ *                stated cost of the fold: a real device that arrives
+ *                inside a spoofed trickle or burst is one of the MACs
+ *                folded into the "" episode and is not reported on its
+ *                own. At most WEB_ANOM_A2_CHECKS_PER_MIN store lookups a
+ *                minute; the rest wait a minute (counted, and not yet
+ *                judged). Randomised MACs are left out: every rotation
+ *                is new by construction, and A5 is the rule about them.
  *   A3  hours    a MAC present in this minute (dev.present) whose
  *                presence cell for this hour of the week has mean below
  *                WEB_ANOM_A3_MEAN_MAX over WEB_ANOM_A3_MIN_N or more
@@ -182,7 +194,6 @@ enum { WEB_EP_FREE = 0, WEB_EP_BUILDING, WEB_EP_OPEN, WEB_EP_CLOSED };
 #define WEB_ANOM_A2_SKEW_S      300
 #define WEB_ANOM_A2_BURST       8
 #define WEB_ANOM_A2_HOUR_MAX    16
-#define WEB_ANOM_A2_FULL_KEY    "reported-set-full"
 #define WEB_ANOM_A2_CHECKS_PER_MIN 256
 #define WEB_ANOM_A3_MEAN_MAX    0.1
 #define WEB_ANOM_A3_MIN_N       4
@@ -226,10 +237,10 @@ typedef struct {
     unsigned long candidates_dropped, rows_dropped, late_rows;
     unsigned long hours_fed, hours_unobserved, minutes_unobserved;
     unsigned long mad_queries, mad_skipped, a9_queries, a9_errors;
-    unsigned long fanout_evictions, reported_evictions, known_evictions;
+    unsigned long fanout_evictions, reported_evicted, known_evictions;
     unsigned long persist_errors;
     unsigned long a2_queries, a2_errors, a2_not_new, a2_deferred;
-    unsigned long reported_refused, ident_truncated, a2_in_burst;
+    unsigned long ident_truncated, a2_in_burst;
     int           open, building, closed_kept, fanout, reported;
 } web_anom_stats_t;
 

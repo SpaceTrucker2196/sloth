@@ -61,9 +61,17 @@ int  web_parse_bind(const char *s, int *family, uint8_t addr[16],
  *   - a non-loopback --web-allow entry needs allow_remote;
  *   - strict refuses both, whatever allow_remote says, and a --socket
  *     tcp: address that is not loopback (the stream has no TLS and no
- *     authentication; sloth's own --strict refuses to serve one).
+ *     authentication; sloth's own --strict refuses to serve one);
+ *   - with a store, a --web-max-mb below web_config_store_min_mb().
  * Pure: no output, no socket. 0, or -1 with the refusal in err. */
 int  web_config_check(const web_config_t *c, char *err, size_t errsz);
+
+/* The least --web-max-mb a store build accepts at --web-max-keys
+ * max_keys, in MB rounded up: web_store_analysis_max_bytes() at the
+ * caps slothweb sizes from it plus web_store_history_bytes() of the
+ * baseline capacity (web_store.h). web_config_check() refuses a smaller
+ * one when the build has SQLite, naming this figure. */
+long long web_config_store_min_mb(int max_keys);
 
 /* Parse argv (argv[0] is the program). Returns 0 to run, 1 when --help
  * printed usage to out, -1 on a usage error or a policy refusal (the

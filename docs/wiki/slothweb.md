@@ -452,9 +452,15 @@ In short:
 - **Rules.** A1 rate, A2 new device (the stream's own `first_seen`
   within 24 h and nothing older about the MAC in slothweb's baselines
   or store, since sloth resets `first_seen` when it restarts; once per
-  MAC; more than eight at once, or sixteen in a rolling hour, are one
-  episode keyed `""`, and a reported set too full to take a new MAC is
-  an episode of its own, `reported-set-full`), A3 off-hours presence, A5 a randomised MAC sharing another's
+  MAC while slothweb remembers it: a full reported set forgets its
+  oldest `first_seen` (`reported_evicted`), and a MAC forgotten may be
+  reported a second time, at most once per eviction, since a duplicate
+  "new device" is better than a hidden one; more than eight at once, or
+  sixteen in a rolling hour, are one episode keyed `""` whose evidence
+  counts exactly the MACs judged new in that minute or hour and names
+  two, and a real device arriving inside such a spoofed trickle is
+  folded into it, not reported on its own: the stated cost of the
+  fold), A3 off-hours presence, A5 a randomised MAC sharing another's
   DHCP or mDNS name, A6 DHCP, mDNS and NBNS names disagreeing, A7 a
   host's 10-minute peak flow count far above its own p95 (the stream has
   flow counts, not peer lists), A8 a client's NXDOMAIN share (answers
@@ -476,12 +482,19 @@ In short:
   whose pair still has a row takes it over, and a refused batch is
   written the hour after. A restore into a smaller table deletes the
   rest in small transactions. The analysis state counts towards
-  `--web-max-mb` but the ceiling can only drop time-series rows: when
-  the analysis state's own pages (SQLite's `dbstat`) are at or over the
-  ceiling, it drops nothing and counts the pass (`store_ceiling_held`)
-  rather than erase the history A9 and the MAD ratio read, and slothweb
-  warns at start when the ceiling is below what the baselines can take
-  at the given `--web-max-keys`.
+  `--web-max-mb` but the ceiling can only drop time-series rows, so it
+  keeps a history allowance beside the analysis state: a week of hour
+  rows for every series the baselines can hold (64 bytes a row,
+  measured; about 51 MB at the default 512 keys). The real bound is
+  `used <= max(ceiling, analysis + allowance)`: when the analysis
+  state's pages (SQLite's `dbstat`; the baseline tables re-measured
+  after each baseline write, the small tables on every pass) leave less
+  than the allowance, the time series is trimmed to the allowance
+  (`store_ceiling_raised`) rather than erased or left to grow. Without
+  `dbstat` the ceiling drops until under or out of rows. slothweb
+  refuses to start (exit 2) with a `--web-max-mb` below the estimate
+  plus the allowance and names the minimum: 96 MB at 512 keys, 1,437 MB
+  at 8,192.
 - **Page.** The Anomalies view (cards with a kind glyph, score bar in
   the heat ramp, evidence, the metric's last hour, first and last seen,
   chips by kind), and on the Overview a throughput tile and "now vs

@@ -1402,20 +1402,23 @@ static void churn_samples(int samples) {
 static void test_churn_two_samples_not_in_long_tiers(void) { churn_samples(2); }
 static void test_churn_three_samples_not_in_long_tiers(void) { churn_samples(3); }
 
-/* The analysis state alone over the ceiling: no number of dropped
- * buckets could bring the file under, so the ceiling drops none (the
- * history A9 and the MAD ratio read) and counts the pass held, at the
- * batch check and in the compaction alike. 1,000 baselines of 168
- * cells (2.8 MB of pages here) and 20 series of 2,000 fine rows; a
- * ceiling of 1 MB holds, one between the analysis state and the file
- * trims as before. Seen red with the hold test removed from
- * ceiling_loop() (every fine row dropped, then the minute rows, the
- * file still over). */
-static void test_ceiling_holds_when_analysis_alone_is_over(void) {
-    char p[128], err[512];
-    path_in(p, sizeof(p), "ceilan.db");
-    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
-    web_store_close(&S);
+/* Whether the linked library has dbstat, the one way the ceiling can
+ * measure the analysis state. */
+static int has_dbstat(void) {
+    sqlite3 *h = NULL;
+    int ok = 0;
+    if (sqlite3_open(":memory:", &h) == SQLITE_OK) {
+        sqlite3_stmt *st = NULL;
+        ok = sqlite3_prepare_v2(h, "SELECT pgsize FROM dbstat LIMIT 1", -1,
+                                &st, NULL) == SQLITE_OK;
+        sqlite3_finalize(st);
+    }
+    sqlite3_close(h);
+    return ok;
+}
+
+/* 1,000 baselines of 168 cells (2.8 MB of pages here), ids 1-1000. */
+static void make_baselines(const char *p) {
     raw_exec(p, "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c"
                 " WHERE x<1000) INSERT INTO baseline (id,metric,key,"
                 "last_active,last_fed,first_fed) SELECT x,'dns.queries',"
@@ -1423,51 +1426,155 @@ static void test_ceiling_holds_when_analysis_alone_is_over(void) {
                 "WITH RECURSIVE k(c) AS (SELECT 0 UNION ALL SELECT c+1 FROM k"
                 " WHERE c<167) INSERT INTO baseline_cell (cell,id,mean,var,n)"
                 " SELECT k.c,b.id,1.0,0.0,1 FROM k CROSS JOIN baseline b;");
+}
+
+/* The analysis state alone over the ceiling: no number of dropped
+ * buckets can bring the file under, so the ceiling keeps the history
+ * allowance of time series beside it, neither erasing the history A9
+ * and the MAD ratio read nor holding it without a limit. A ceiling of
+ * 1 MB under 2.8 MB of baselines, an allowance of 512 KB, and 40 rounds
+ * of 2,000 fine rows (20 series a round, 80,000 rows, several MB) with
+ * the batch check after each: the time series (the used pages less the
+ * analysis state's) stays within the allowance and one slice of slack
+ * after every pass, and rows are left. Seen red with the raise removed
+ * from ceiling_loop() (every fine row dropped, the file still over),
+ * and separately with the old hold restored (nothing dropped, the time
+ * series past the allowance and its slack on every pass after the
+ * first few). A library without dbstat cannot measure the
+ * analysis state: then the documented fallback, every time-series row
+ * dropped trying to get under, and analysis_bytes -1. */
+static void test_ceiling_keeps_the_allowance_when_analysis_is_over(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "ceilan.db");
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_store_close(&S);
+    make_baselines(p);
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    const long long allow = 512 * 1024, slack = 256 * 1024;
+    web_store_set_history_allowance(&S, allow);
     const long long now = 1792627200;
+    const long long small = 1LL << 20;
+    int dbstat = has_dbstat();
+    fprintf(stderr, "  dbstat %s\n", dbstat ? "present" : "absent");
     static web_qrow_t r[2000];
     char k[32];
-    for (int s = 0; s < 20; s++) {
-        snprintf(k, sizeof(k), "10.1.%d.1", s);
-        for (int b = 0; b < 2000; b++)
-            r[b] = row(WEB_TIER_FINE, WM_HOST_RX, k, now - 20000 + b * 10,
-                       b, 1, b, b);
-        WT_EQ(web_store_write(&S, r, 2000), 0);
-    }
-    r[0] = row(WEB_TIER_MINUTE, WM_HOST_RX, "10.1.0.1", now - 600, 1, 1, 1, 1);
-    WT_EQ(web_store_write(&S, r, 1), 0);
     web_store_stats_t st;
-    web_store_stats(&S, &st);
-    WT_EQ(st.analysis_bytes, -1);              /* not measured yet */
-    const long long small = 1LL << 20;
-    WT_ASSERT(st.bytes > small);
-    WT_EQ(web_store_ceiling(&S, small), 0);
-    web_store_stats(&S, &st);
-    WT_EQ(st.ceiling_held, 1);
-    WT_EQ(st.ceiling_runs, 0);
-    WT_EQ(st.dropped_ceiling, 0);
+    long long worst = 0;
+    unsigned long passes = 0;
+    for (int round = 0; round < 40; round++) {
+        snprintf(k, sizeof(k), "10.1.%d.1", round);
+        for (int b = 0; b < 2000; b++)
+            r[b] = row(WEB_TIER_FINE, WM_HOST_RX, k,
+                       now - 80000 + round * 2000 + b, b, 1, b, b);
+        WT_EQ(web_store_write(&S, r, 2000), 0);
+        WT_ASSERT(web_store_ceiling(&S, small) >= 0);
+        passes++;
+        web_store_stats(&S, &st);
+        if (!dbstat) continue;
+        long long ts_bytes = st.bytes - st.analysis_bytes;
+        if (ts_bytes > worst) worst = ts_bytes;
+        WT_ASSERT(ts_bytes <= allow + slack);
+    }
+    if (!dbstat) {
+        WT_EQ(st.analysis_bytes, -1);
+        WT_EQ(st.ceiling_raised, 0);
+        WT_EQ(web_store_count(&S, WEB_TIER_FINE), 0);
+        web_store_close(&S);
+        rm_store(p);
+        return;
+    }
+    fprintf(stderr, "  analysis %lld bytes, time series at most %lld of a "
+                    "%lld byte allowance\n", st.analysis_bytes, worst, allow);
     WT_ASSERT(st.analysis_bytes >= small);
-    WT_ASSERT(st.bytes > small);
-    WT_EQ(web_store_count(&S, WEB_TIER_FINE), 40000);
-    WT_EQ(web_store_count(&S, WEB_TIER_MINUTE), 1);
+    WT_EQ(st.ceiling_raised, passes);
+    WT_ASSERT(st.dropped_ceiling > 0);
+    long long left = web_store_count(&S, WEB_TIER_FINE);
+    WT_ASSERT(left > 2000 && left < 80000);
+    /* The compaction applies the same bound. */
     WT_EQ(web_store_compact(&S, now, 30, small), 0);
     web_store_stats(&S, &st);
-    WT_EQ(st.ceiling_held, 2);
-    WT_EQ(st.dropped_ceiling, 0);
-    WT_EQ(web_store_count(&S, WEB_TIER_FINE), 40000);
-    /* Room for the analysis state and some rows: the ceiling trims. */
+    WT_EQ(st.ceiling_raised, passes + 1);
+    WT_ASSERT(st.bytes - st.analysis_bytes <= allow + slack);
+    WT_ASSERT(web_store_count(&S, WEB_TIER_FINE) > 0);
+    /* Room under the ceiling for more than the allowance: it trims to
+     * the ceiling, as before, and is not counted raised. */
     long long an = st.analysis_bytes;
-    fprintf(stderr, "  analysis state %lld bytes of a %lld byte store\n", an,
-            st.bytes);
-    WT_ASSERT(an > 0 && an < st.bytes);
-    long long mid = an + (st.bytes - an) / 2;
+    for (int round = 0; round < 8; round++) {
+        snprintf(k, sizeof(k), "10.2.%d.1", round);
+        for (int b = 0; b < 2000; b++)
+            r[b] = row(WEB_TIER_FINE, WM_HOST_RX, k, now - 2000 + b, b, 1, b, b);
+        WT_EQ(web_store_write(&S, r, 2000), 0);
+    }
+    web_store_stats(&S, &st);
+    long long mid = an + allow + (st.bytes - an - allow) / 2;
+    WT_ASSERT(st.bytes > mid);
     WT_ASSERT(web_store_ceiling(&S, mid) > 0);
     web_store_stats(&S, &st);
-    WT_EQ(st.ceiling_held, 2);
-    WT_EQ(st.ceiling_runs, 1);
+    WT_EQ(st.ceiling_raised, passes + 1);
     WT_ASSERT(st.bytes <= mid);
-    long long left = web_store_count(&S, WEB_TIER_FINE);
-    WT_ASSERT(left > 0 && left < 40000);
+    web_store_close(&S);
+    rm_store(p);
+}
+
+/* The analysis figure is never stale past the next pass. The baseline
+ * tables are measured once and kept until a baseline write: 900 of the
+ * 1,000 deleted through web_store_bl_del() and the next pass measures
+ * them again (smaller). The episode, fanout and reported tables are
+ * measured on every pass: 2,000 episodes written and the next pass's
+ * figure is larger. Seen red with the invalidation removed from
+ * web_store_bl_del() (the figure stayed at the 1,000), and separately
+ * with the small tables cached alongside the baselines (the figure did
+ * not move after the episodes). Needs dbstat; without it, -1 throughout
+ * (asserted). */
+static void test_ceiling_remeasures_after_analysis_writes(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "remeasure.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_store_close(&S);
+    make_baselines(p);
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    /* Below anything the file can shrink to, so every pass measures. */
+    const long long small = 16 * 1024;
+    web_store_stats_t st;
+    WT_EQ(web_store_ceiling(&S, small), 0);
+    web_store_stats(&S, &st);
+    if (!has_dbstat()) {
+        WT_EQ(st.analysis_bytes, -1);
+        web_store_close(&S);
+        rm_store(p);
+        return;
+    }
+    long long full = st.analysis_bytes;
+    WT_ASSERT(full > 1LL << 20);
+    static long long ids[900];
+    for (int i = 0; i < 900; i++) ids[i] = i + 1;
+    WT_EQ(web_store_bl_del(&S, ids, 900), 0);
+    WT_EQ(web_store_ceiling(&S, small), 0);
+    web_store_stats(&S, &st);
+    long long cut = st.analysis_bytes;
+    fprintf(stderr, "  analysis %lld bytes, %lld after 900 deletes\n", full, cut);
+    WT_ASSERT(cut > 0 && cut < full / 2);
+    WT_ASSERT(st.bytes > small);   /* still over: each pass measured */
+    static web_store_ep_t e[2000];
+    for (int i = 0; i < 2000; i++) {
+        memset(&e[i], 0, sizeof(e[i]));
+        e[i].id = i + 1;
+        snprintf(e[i].kind, sizeof(e[i].kind), "A1");
+        e[i].metric = WM_HOST_CONNS;
+        snprintf(e[i].key, sizeof(e[i].key), "10.0.%d.%d", i / 256, i % 256);
+        e[i].state = 2;
+        e[i].score = 60;
+        snprintf(e[i].evidence, sizeof(e[i].evidence),
+                 "host.conns[10.0.%d.%d] 500 against a mean of 5", i / 256,
+                 i % 256);
+        e[i].first_seen = 1000;
+        e[i].last_seen = 2000;
+    }
+    WT_EQ(web_store_ep_put(&S, e, 2000), 0);
+    WT_EQ(web_store_ceiling(&S, small), 0);
+    web_store_stats(&S, &st);
+    fprintf(stderr, "  %lld after 2,000 episodes\n", st.analysis_bytes);
+    WT_ASSERT(st.analysis_bytes > cut + 100 * 1024);
     web_store_close(&S);
     rm_store(p);
 }
@@ -1545,7 +1652,8 @@ void run_store_tests(void) {
     WT_RUN(test_long_stop_expiry_keeps_wal_small);
     WT_RUN(test_sparse_expiry_across_batches_and_tiles);
     WT_RUN(test_ceiling_spares_global_series);
-    WT_RUN(test_ceiling_holds_when_analysis_alone_is_over);
+    WT_RUN(test_ceiling_keeps_the_allowance_when_analysis_is_over);
+    WT_RUN(test_ceiling_remeasures_after_analysis_writes);
     WT_RUN(test_ceiling_holds_under_key_churn);
     WT_RUN(test_churn_two_samples_not_in_long_tiers);
     WT_RUN(test_churn_three_samples_not_in_long_tiers);

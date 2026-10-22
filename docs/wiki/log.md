@@ -4759,3 +4759,16 @@ persistence deletes before it writes, never forgets a delete, takes
 over a stale row, and keeps a refused batch; a shrinking restore is
 sliced. Restored values are range-checked. The ceiling's blind spot
 (the analysis state) is documented and warned about at start.
+
+## 2026-10-22 — slothweb M3: A2 evicts, the ceiling keeps an allowance (#161)
+
+**Updated**: [slothweb.md](slothweb.md) — A2's reported set forgets
+its oldest MAC when full (`reported_evicted`) instead of refusing, so a
+new MAC always gets its episode; a forgotten MAC may be reported again,
+at most once per eviction. The `reported-set-full` episode and the
+retry of refused MACs are gone, and a burst's or trickle's evidence
+counts exactly the MACs judged new. The `--web-max-mb` ceiling keeps a
+history allowance (a week of hour rows per baseline series) beside the
+analysis state, `used <= max(ceiling, analysis + allowance)`
+(`store_ceiling_raised`), and a ceiling below the estimate plus the
+allowance is refused at start.

@@ -120,8 +120,8 @@ static void tsdb_health(web_tsdb_t *t, web_jw_t *w) {
     web_jw_int(w, (long long)ss.dropped_ceiling);
     web_jw_raw(w, ",\"store_ceiling_runs\":");
     web_jw_int(w, (long long)ss.ceiling_runs);
-    web_jw_raw(w, ",\"store_ceiling_held\":");
-    web_jw_int(w, (long long)ss.ceiling_held);
+    web_jw_raw(w, ",\"store_ceiling_raised\":");
+    web_jw_int(w, (long long)ss.ceiling_raised);
     web_jw_raw(w, ",\"store_analysis_bytes\":");
     web_jw_int(w, open ? ss.analysis_bytes : -1);
     web_jw_raw(w, ",\"store_baseline_rows_reused\":");
@@ -179,9 +179,8 @@ static void analysis_health(web_anomaly_t *a, web_jw_t *w) {
     web_jw_raw(w, ",\"fanout_hosts\":");      web_jw_int(w, s.fanout);
     web_jw_raw(w, ",\"fanout_evictions\":");  web_jw_int(w, (long long)s.fanout_evictions);
     web_jw_raw(w, ",\"reported\":");          web_jw_int(w, s.reported);
-    web_jw_raw(w, ",\"reported_evictions\":"); web_jw_int(w, (long long)s.reported_evictions);
+    web_jw_raw(w, ",\"reported_evicted\":");  web_jw_int(w, (long long)s.reported_evicted);
     web_jw_raw(w, ",\"known_evictions\":");   web_jw_int(w, (long long)s.known_evictions);
-    web_jw_raw(w, ",\"reported_refused\":");  web_jw_int(w, (long long)s.reported_refused);
     web_jw_raw(w, ",\"a2_queries\":");        web_jw_int(w, (long long)s.a2_queries);
     web_jw_raw(w, ",\"a2_not_new\":");        web_jw_int(w, (long long)s.a2_not_new);
     web_jw_raw(w, ",\"a2_deferred\":");       web_jw_int(w, (long long)s.a2_deferred);
