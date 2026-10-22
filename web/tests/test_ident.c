@@ -1,5 +1,6 @@
 /* The identity tables (#161, M3): names, MAC/IP bindings, first_seen
  * and the DNS client join, from decoded records on a pinned clock. */
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -25,7 +26,7 @@ static void test_first_seen_keeps_the_earliest(void) {
     rec("{\"type\":\"pnl_client\",\"mac\":\"00:11:22:33:44:55\",\"first_seen\":900}", 1000);
     rec("{\"type\":\"probe_client\",\"mac\":\"02:11:22:33:44:56\",\"first_seen\":700}", 1000);
     web_id_new_t out[8];
-    int n = web_ident_firsts(&id, out, 8);
+    int n = web_ident_firsts(&id, LLONG_MIN, out, 8);
     WT_EQ(n, 1);                         /* the randomised one is left out */
     WT_EQ(out[0].first_seen, 400);
     WT_HAS(out[0].src, "assoc");

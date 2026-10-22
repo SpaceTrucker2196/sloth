@@ -4743,3 +4743,19 @@ close rather than from the store, kept in `slothweb.db` schema v3 across
 restarts, served as `/api/anomalies`, `/api/baseline` and an `anomaly`
 event, and drawn by the Anomalies view and the Overview's band,
 heatmap and top anomalies. Updated `web/README.md`.
+
+## 2026-10-22 — slothweb M3 review fixes (#161)
+
+**Updated**: [slothweb.md](slothweb.md) — A1 scores a minute with the
+cell's week-to-week spread plus the spread of minutes inside the hour
+(learnt from the minute rows; Poisson for counters), and so does the
+MAD ratio and the UI band; a minute is scored against its own UTC hour
+bucket's cell (half-hour zones). A2 needs no older evidence of the MAC
+in slothweb itself (sloth resets `first_seen` at its restart), folds a
+burst of new MACs into one episode, and its reported set refuses rather
+than forgets. A9 checks a late-released first row. Episodes evict only
+their own rule's closed ones (or a rule over its share). Baseline
+persistence deletes before it writes, never forgets a delete, takes
+over a stale row, and keeps a refused batch; a shrinking restore is
+sliced. Restored values are range-checked. The ceiling's blind spot
+(the analysis state) is documented and warned about at start.

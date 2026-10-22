@@ -131,8 +131,11 @@ int web_series_parse(const char *query, long long now_s, int retain_days,
 
 static void jw_num(web_jw_t *w, double v) {
     char b[40];
-    /* Values are finite by construction (the rollup clamps them), so
-     * %g never writes inf or nan here; -0 reads as 0. */
+    /* Values are finite by construction (the rollup clamps them, a
+     * restored cell is refused past a float's range), but %g would
+     * write a bare inf or nan, which is not JSON: null instead, should
+     * one ever get here. -0 reads as 0. */
+    if (!isfinite(v)) { web_jw_raw(w, "null"); return; }
     if (v == 0) v = 0;
     snprintf(b, sizeof(b), "%.7g", v);
     web_jw_raw(w, b);
@@ -366,7 +369,9 @@ size_t web_baseline_json(web_baseline_t *b, int metric, const char *key,
     web_jw_raw(&w, ",\"warm_n\":");       web_jw_int(&w, WEB_BL_WARM_N);
     web_jw_raw(&w, ",\"cell_order\":\"local, Monday 00:00 first\"");
     web_jw_raw(&w, ",\"now\":");          web_jw_int(&w, now_s);
-    web_jw_raw(&w, ",\"now_cell\":");     web_jw_int(&w, web_bl_cell_index(now_s));
+    /* The cell a score of now reads: its UTC hour bucket's. */
+    web_jw_raw(&w, ",\"now_cell\":");
+    web_jw_int(&w, web_bl_cell_index(now_s - now_s % 3600));
     web_jw_raw(&w, ",\"utc_offset_s\":"); web_jw_int(&w, utc_offset(now_s));
     int fed = b && web_baseline_cells(b, metric, key, cells) == 0;
     web_jw_raw(&w, ",\"fed\":"); web_jw_raw(&w, fed ? "true" : "false");
@@ -374,18 +379,23 @@ size_t web_baseline_json(web_baseline_t *b, int metric, const char *key,
     if (!fed) {
         web_jw_raw(&w, "null");
     } else {
-        /* [mean, sd, n]: sd floored the way a score floors it. */
+        /* [mean, sd, n, sd_hour]: sd is a minute's spread, the one A1
+         * scores with (week to week plus within the hour), sd_hour an
+         * hour bucket's (week to week alone); both floored the way a
+         * score floors them. */
         web_jw_raw(&w, "[");
         for (int i = 0; i < WEB_BL_CELLS; i++) {
             const web_bl_cell_t *c = &cells[i];
-            double sd = sqrt(c->var > 0 ? (double)c->var : 0.0);
-            double fl = web_bl_sd_floor(metric, c->mean);
+            double sh;
+            double sd = web_bl_cell_sd(metric, c, &sh, NULL);
             web_jw_raw(&w, i ? ",[" : "[");
             jw_num(&w, c->n ? c->mean : 0);
             web_jw_raw(&w, ",");
-            jw_num(&w, c->n ? (sd > fl ? sd : fl) : 0);
+            jw_num(&w, c->n ? sd : 0);
             web_jw_raw(&w, ",");
             web_jw_int(&w, c->n);
+            web_jw_raw(&w, ",");
+            jw_num(&w, c->n ? sh : 0);
             web_jw_raw(&w, "]");
         }
         web_jw_raw(&w, "]");

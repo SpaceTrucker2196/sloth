@@ -1030,6 +1030,60 @@ static void test_events_slots_capped(void) {
 }
 
 /* The routes add nothing a writing method can reach. */
+/* The anomaly push end to end: an engine attached before the loop
+ * runs, a stream client, then an episode that opens. It reaches the
+ * client as one "event: anomaly" within a tick, and is counted once
+ * however many ticks pass. Seen red with the send_anomalies() call
+ * removed from run_timers(). */
+static void test_events_carry_anomalies(void) {
+    web_config_t c;
+    base_cfg(&c, AF_INET);
+    c.tick_ms = 50;
+    web_baseline_t bl;
+    web_anomaly_t an;
+    WT_EQ(web_baseline_init(&bl, 4), 0);
+    web_anom_cfg_t ac;
+    memset(&ac, 0, sizeof(ac));
+    ac.bl = &bl;
+    ac.max_keys = 16;
+    WT_EQ(web_anomaly_init(&an, 4, &ac), 0);
+    running_t r;
+    char err[256];
+    r.s = calloc(1, sizeof(*r.s));
+    WT_ASSERT(r.s != NULL);
+    if (!r.s) return;
+    WT_EQ(web_server_open(r.s, &c, err, sizeof(err)), 0);
+    web_server_set_anomaly(r.s, &an);
+    WT_EQ(pthread_create(&r.th, NULL, server_main, &r), 0);
+
+    int fd = dial(AF_INET, web_server_port(r.s));
+    WT_ASSERT(fd >= 0);
+    static const char ev[] = "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+    send_all(fd, ev, sizeof(ev) - 1);
+    static char buf[65536];
+    size_t len = 0;
+    WT_ASSERT(wait_for(fd, buf, sizeof(buf), &len, "event: tick\n", 2000));
+    WT_LACKS(buf, "event: anomaly\n");
+    /* As the engine opens one: under its lock, with a new seq. */
+    pthread_mutex_lock(&an.mu);
+    an.ep[0] = (web_anom_ep_t){ .id = 7, .state = WEB_EP_OPEN,
+        .rule = WEB_ANOM_A6_NAMES, .metric = -1, .key = "10.0.0.9",
+        .score = 40, .peak = 40, .evidence = "names disagree",
+        .first_seen = 1792627200, .last_seen = 1792627200 };
+    an.ep[0].seq = ++an.seq;
+    pthread_mutex_unlock(&an.mu);
+    WT_ASSERT(wait_for(fd, buf, sizeof(buf), &len, "\"key\":\"10.0.0.9\"", 2000));
+    WT_HAS(buf, "event: anomaly\ndata: {\"id\":7,\"rule\":\"A6\"");
+    /* Several ticks more: still one. */
+    wait_for(fd, buf, sizeof(buf), &len, "\x01", 300);
+    close(fd);
+    web_stats_t st;
+    stop(&r, &st);
+    WT_EQ(st.anomalies_sent, 1UL);
+    web_anomaly_destroy(&an);
+    web_baseline_destroy(&bl);
+}
+
 static void test_routes_405_for_writes_over_socket(void) {
     web_config_t c;
     base_cfg(&c, AF_INET);
@@ -1078,4 +1132,5 @@ void run_server_tests(void) {
     WT_RUN(test_foreign_host_refused_over_socket);
     WT_RUN(test_events_slots_capped);
     WT_RUN(test_routes_405_for_writes_over_socket);
+    WT_RUN(test_events_carry_anomalies);
 }

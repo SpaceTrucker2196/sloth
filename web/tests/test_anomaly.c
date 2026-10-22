@@ -13,7 +13,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
+#ifdef WITH_SQLITE
+#include <sqlite3.h>
+#endif
 
 #include "web_anomaly.h"
 #include "web_baseline.h"
@@ -233,7 +237,8 @@ static void test_a1_quiet_jitter_fires_nothing(void) {
 
 /* A counter with a baseline and no row counted nothing, and nothing is
  * far out of band for a host that asks 30 names a minute at this hour
- * every week. */
+ * every week. Every week alike, the spread is a count's own: Poisson,
+ * sd = sqrt(30), so z = -30 / 5.48. */
 static void test_a1_silent_counter_scores_zero(void) {
     fx(0, NULL);
     const double v[] = { 30, 30, 30, 30 };
@@ -242,7 +247,8 @@ static void test_a1_silent_counter_scores_zero(void) {
     for (int i = 0; i < 3; i++) step(T0 + (i + 1) * 60);
     web_anom_ep_t *e = ep(WEB_ANOM_A1_RATE, "10.0.0.8");
     WT_ASSERT(e->state == WEB_EP_OPEN);
-    WT_HAS(list(T0 + 180), "dns.queries[10.0.0.8] z=-10.0 value=0");
+    WT_HAS(list(T0 + 180), "dns.queries[10.0.0.8] z=-5.5 value=0 "
+                           "baseline=30\xc2\xb1" "5.48");
     fx_done();
 }
 
@@ -269,18 +275,18 @@ static void test_a1_unobserved_minutes_are_not_scored(void) {
 }
 
 /* A bucket closed in two parts (an eviction and a return) is scored as
- * their sum: 3 + 3 is this host's usual 6 a minute. Scored as two
- * buckets of 3 each it is z = -3. Seen red with agg_put() never
- * merging. */
+ * their sum: 30 + 30 is this host's usual 60 a minute. Scored as two
+ * buckets of 30 each it is z = -30 / sqrt(60) = -3.9. Seen red with
+ * agg_put() never merging. */
 static void test_a1_bucket_in_two_parts_is_one_bucket(void) {
     fx(0, NULL);
-    const double v[] = { 6, 6, 6 };
+    const double v[] = { 60, 60, 60 };
     seed(WM_DNS_QUERIES, "10.0.0.9", T0, v, 3);
     step(T0);
     for (int i = 0; i < 4; i++) {
         long long t = T0 + i * 60;
-        counter(WM_DNS_QUERIES, "10.0.0.9", t, 3);
-        counter(WM_DNS_QUERIES, "10.0.0.9", t, 3);
+        counter(WM_DNS_QUERIES, "10.0.0.9", t, 30);
+        counter(WM_DNS_QUERIES, "10.0.0.9", t, 30);
         step(t + 60);
     }
     WT_EQ(count_rule(WEB_ANOM_A1_RATE), 0);
@@ -512,6 +518,56 @@ static void test_changes_feed(void) {
     fx_done();
 }
 
+/* More changes than the caller takes: the newest max, oldest first.
+ * The slots hold them in the opposite order from their seqs' order of
+ * age, so a walk of the slots that stops at max returns the oldest.
+ * Seen red with web_anomaly_changes()'s window narrowing replaced by a
+ * break (it returned seqs 1..4). */
+static void test_changes_returns_the_newest_max(void) {
+    fx(0, NULL);
+    for (int i = 0; i < 6; i++) {
+        an.ep[i] = (web_anom_ep_t){ .id = i + 1, .state = WEB_EP_OPEN,
+            .rule = WEB_ANOM_A6_NAMES, .metric = -1, .first_seen = 100,
+            .last_seen = 100, .seq = (unsigned long long)(i + 1) };
+        snprintf(an.ep[i].key, sizeof(an.ep[i].key), "10.0.0.%d", i + 1);
+    }
+    an.seq = 6;
+    web_anom_ep_t out[4];
+    unsigned long long latest;
+    WT_EQ(web_anomaly_changes(&an, 0, out, 4, &latest), 4);
+    WT_EQ(latest, 6ULL);
+    for (int i = 0; i < 4; i++) WT_EQ(out[i].seq, (unsigned long long)(i + 3));
+    fx_done();
+}
+
+/* The hour pass learns the spread of minutes inside the hour from the
+ * minute rows it scored: a gauge alternating 2 and 8 every minute has
+ * an hour mean of 5 and a within-hour variance of 9, and the score's
+ * sd carries it (sqrt(0 + 9) = 3, where the floor alone said 1). Seen
+ * red with within_var() answering -1 (wn 0, sd 1). */
+static void test_hour_pass_learns_the_within_hour_spread(void) {
+    fx(0, NULL);
+    step(T0);
+    for (int i = 0; i < 60; i++) {
+        double v = i % 2 ? 8 : 2;
+        gauge(WM_HOST_CONNS, "10.0.0.20", T0 + i * 60, v);
+        /* The hour row comes with the flush of the step that closes
+         * the hour, before that step's passes. */
+        if (i == 59) row(WEB_TIER_HOUR, WM_HOST_CONNS, "10.0.0.20", T0, 300, 60, 8);
+        step(T0 + (i + 1) * 60);
+    }
+    web_bl_cell_t c[WEB_BL_CELLS];
+    WT_EQ(web_baseline_cells(&bl, WM_HOST_CONNS, "10.0.0.20", c), 0);
+    const web_bl_cell_t *k = &c[web_bl_cell_index(T0)];
+    WT_EQ(k->n, 1);
+    WT_EQ(k->wn, 1);
+    WT_ASSERT(fabs(k->wvar - 9.0) < 1e-3);
+    double sh, w;
+    WT_ASSERT(fabs(web_bl_cell_sd(WM_HOST_CONNS, k, &sh, &w) - 3.0) < 1e-3);
+    WT_ASSERT(fabs(sh - 1.0) < 1e-9);         /* var 0: the floor */
+    fx_done();
+}
+
 /* ── A2 ──────────────────────────────────────────────────────────────── */
 
 static void feed(const char *line, long long now) {
@@ -556,10 +612,184 @@ static void test_a2_new_device_reported_once(void) {
     fx_done();
 }
 
+/* sloth resets a client's first_seen to now when it makes the entry
+ * (its own restart, or a station evicted and re-learnt), so a MAC with
+ * weeks of history arrives with a first_seen of a minute ago. Not new:
+ * slothweb's own baseline has known it for four weeks. Seen red with
+ * the baseline test removed from a2_old_evidence(). */
+static void test_a2_not_new_after_sloth_restarts(void) {
+    fx(0, NULL);
+    const double one4[] = { 1, 1, 1, 1 };
+    seed(WM_DEV_PRESENT, "00:11:22:33:44:99", T0, one4, 4);
+    step(T0);
+    probe("00:11:22:33:44:99", T0 - 60, T0);
+    step(T0 + 60);
+    WT_EQ(count_rule(WEB_ANOM_A2_NEW), 0);
+    WT_ASSERT(an.st.a2_not_new >= 1);
+    /* Asked once: the answer is remembered for the window. */
+    unsigned long seen = an.st.a2_not_new;
+    probe("00:11:22:33:44:99", T0 - 60, T0 + 60);
+    step(T0 + 120);
+    WT_EQ(an.st.a2_not_new, seen);
+    fx_done();
+}
+
+#ifdef WITH_SQLITE
+static void store_row(int tier, int metric, const char *key, long long t,
+                      double v);
+
+/* The same with nothing in memory (slothweb restarted too, and the
+ * baseline was pushed out): the store's rows of the MAC from three days
+ * ago are the evidence. A MAC whose oldest row is two hours old is new.
+ * Seen red with the store lookup removed from a2_old_evidence(). */
+static void test_a2_not_new_by_the_stores_rows(void) {
+    fx(1, NULL);
+    store_row(WEB_TIER_MINUTE, WM_DEV_FRAMES, "00:11:22:33:44:9a",
+              T0 - 3 * 86400, 5);
+    store_row(WEB_TIER_MINUTE, WM_DEV_FRAMES, "00:11:22:33:44:9b",
+              T0 - 2 * HOUR, 5);
+    step(T0);
+    probe("00:11:22:33:44:9a", T0 - 60, T0);
+    probe("00:11:22:33:44:9b", T0 - 60, T0);
+    step(T0 + 60);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "00:11:22:33:44:9a")->state, WEB_EP_FREE);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "00:11:22:33:44:9b")->state, WEB_EP_OPEN);
+    WT_ASSERT(an.st.a2_queries >= 2);
+    fx_done();
+}
+#endif
+
+/* The audit's flood: spoofed probe requests, 40 fresh MACs a minute for
+ * ten minutes, after an A1 episode closed. The burst is one A2 episode,
+ * nothing is dropped, and the A1 episode is still listed. "One episode,
+ * none dropped" seen red with WEB_ANOM_A2_BURST raised past 40 (401
+ * episodes tried for 32 slots); the A1 episode's survival was seen red
+ * only with that and the slot policy reverted together (an oldest-closed
+ * pool for every rule), since either alone keeps it. */
+static void test_a2_flood_is_one_episode_and_keeps_history(void) {
+    fx(1, NULL);
+    open_a1("10.0.0.12");
+    long long t = T0 + 180;
+    for (int i = 0; i < 2; i++, t += 60) {
+        gauge(WM_HOST_CONNS, "10.0.0.12", t, 5);
+        step(t + 60);
+    }
+    WT_ASSERT(ep(WEB_ANOM_A1_RATE, "10.0.0.12")->state == WEB_EP_CLOSED);
+    for (int m = 0; m < 10; m++, t += 60) {
+        for (int k = 0; k < 40; k++) {
+            char mac[24];
+            snprintf(mac, sizeof(mac), "00:5e:%02x:%02x:00:01", m, k);
+            probe(mac, t, t);
+        }
+        step(t + 60);
+    }
+    WT_ASSERT(ep(WEB_ANOM_A1_RATE, "10.0.0.12")->state == WEB_EP_CLOSED);
+    WT_HAS(list(t), "\"key\":\"10.0.0.12\"");
+    WT_EQ(count_rule(WEB_ANOM_A2_NEW), 1);
+    WT_EQ(an.st.dropped, 0UL);
+    web_anom_ep_t *b = ep(WEB_ANOM_A2_NEW, "");
+    WT_ASSERT(b->state == WEB_EP_OPEN);
+    WT_HAS(b->evidence, "40 MACs new to sloth in one minute: 00:5e:09:");
+    fx_done();
+}
+
+/* The slot policy on its own: a table full of closed episodes, all A2
+ * but one old A1. A new A2 takes its own rule's oldest, never the A1;
+ * and a new A1 (a rule under its share) takes the oldest A2 rather than
+ * being dropped. Seen red with new_slot_locked() taking the oldest
+ * closed episode of any rule (the A1 went), and separately with the
+ * share test removed (the A1 candidate was dropped). */
+static void test_slot_policy_keeps_each_rules_history(void) {
+    fx(0, NULL);
+    an.ep[0] = (web_anom_ep_t){ .id = 1, .state = WEB_EP_CLOSED,
+        .rule = WEB_ANOM_A1_RATE, .metric = WM_HOST_CONNS, .key = "10.0.0.12",
+        .first_seen = T0 - 7200, .last_seen = T0 - 7200 };
+    for (int i = 1; i < an.cap; i++) {
+        an.ep[i] = (web_anom_ep_t){ .id = i + 1, .state = WEB_EP_CLOSED,
+            .rule = WEB_ANOM_A2_NEW, .metric = -1,
+            .first_seen = T0 - 3600 + i, .last_seen = T0 - 3600 + i };
+        snprintf(an.ep[i].key, sizeof(an.ep[i].key), "00:5e:00:00:00:%02x", i);
+    }
+    step(T0);
+    probe("00:11:22:33:44:a0", T0 - 60, T0);
+    step(T0 + 60);
+    WT_ASSERT(ep(WEB_ANOM_A1_RATE, "10.0.0.12")->state == WEB_EP_CLOSED);
+    WT_ASSERT(ep(WEB_ANOM_A2_NEW, "00:11:22:33:44:a0")->state == WEB_EP_OPEN);
+    WT_ASSERT(ep(WEB_ANOM_A2_NEW, "00:5e:00:00:00:01")->state == WEB_EP_FREE);
+    /* Now no A1 history at all: the table is all A2, over its share. */
+    an.ep[0].rule = WEB_ANOM_A2_NEW;
+    an.ep[0].metric = -1;
+    snprintf(an.ep[0].key, sizeof(an.ep[0].key), "00:5e:00:00:00:00");
+    seed(WM_HOST_CONNS, "10.0.0.13", T0 + 60, FIVE3, 3);
+    gauge(WM_HOST_CONNS, "10.0.0.13", T0 + 60, 500);
+    step(T0 + 120);
+    WT_ASSERT(ep(WEB_ANOM_A1_RATE, "10.0.0.13")->state == WEB_EP_BUILDING);
+    WT_EQ(an.st.dropped, 0UL);
+    fx_done();
+}
+
+/* The reported set holds a MAC until its first_seen leaves the window,
+ * never less: full of MACs still in their window, it refuses the next
+ * one (counted) rather than push out one it would then report again.
+ * 64 MACs (the cap at --web-max-keys 64), eight a minute so none is a
+ * burst, then a 65th, then the first again. Seen red with rep_mark()
+ * allowed to evict (66 opened: the 65th, then the first again). */
+static void test_a2_reported_set_refuses_rather_than_forgets(void) {
+    fx(0, NULL);
+    long long t = T0;
+    step(t);
+    for (int i = 0; i < 64; i++) {
+        char mac[24];
+        snprintf(mac, sizeof(mac), "00:11:22:00:00:%02x", i);
+        probe(mac, t - 60, t);
+        if (i % 8 == 7) { step(t + 60); t += 60; }
+    }
+    WT_EQ(an.st.opened, 64UL);
+    WT_EQ(an.st.reported_refused, 0UL);
+    probe("00:11:22:00:01:00", t - 60, t);
+    step(t + 60);
+    t += 60;
+    WT_EQ(an.st.opened, 64UL);
+    WT_ASSERT(an.st.reported_refused >= 1);
+    probe("00:11:22:00:00:00", T0 - 60, t);
+    step(t + 60);
+    WT_EQ(an.st.opened, 64UL);
+    fx_done();
+}
+
+/* --web-max-keys past 4096: a new MAC in identity slot 4501 is scanned.
+ * The 4500 before it are recent too (a burst, reported together), so
+ * only the size of the scan decides. Seen red with the reader's buffer
+ * fixed at 4096 rows (the MAC was never reported, and the cut scan was
+ * counted in ident_truncated). */
+static void test_a2_scans_every_identity_slot(void) {
+    fx(0, NULL);
+    web_anomaly_destroy(&an);
+    web_ident_destroy(&idt);
+    WT_EQ(web_ident_init(&idt, 5000, 2500), 0);
+    g_cfg.ident = &idt;
+    g_cfg.max_keys = 5000;
+    WT_EQ(web_anomaly_init(&an, 32, &g_cfg), 0);
+    step(T0);
+    for (int i = 0; i < 4500; i++) {
+        char mac[24];
+        snprintf(mac, sizeof(mac), "00:11:%02x:%02x:00:01", i / 256, i % 256);
+        probe(mac, T0 - 60, T0);
+    }
+    step(T0 + 60);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "")->state, WEB_EP_OPEN);
+    probe("00:11:ff:ff:00:02", T0 + 60, T0 + 60);
+    step(T0 + 120);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "00:11:ff:ff:00:02")->state, WEB_EP_OPEN);
+    WT_EQ(an.st.ident_truncated, 0UL);
+    fx_done();
+}
+
 /* Not new: a MAC whose own first_seen is three days old, however
  * recently slothweb started, and a randomised MAC (A5's business).
- * Seen red with the 24 h window check removed, and separately with
- * web_ident_firsts() keeping randomised MACs. */
+ * Seen red with the 24 h window removed (from web_ident_firsts()'s
+ * since and a2_scan()'s age test together: either alone keeps it), and
+ * separately with web_ident_firsts() keeping randomised MACs. */
 static void test_a2_old_and_random_macs_are_not_new(void) {
     fx(0, NULL);
     step(T0);
@@ -710,17 +940,24 @@ static void test_a6_evidence_is_escaped(void) {
 
 /* ── A7 ──────────────────────────────────────────────────────────────── */
 
-/* windows 10-minute windows of host.conns peaking at 5, then one at
- * last. */
-static void a7_run(int windows, double last) {
-    long long t = T0;
-    step(t);
-    for (int w = 0; w <= windows; w++)
+/* windows 10-minute windows of host.conns peaking at base from t, then
+ * (last >= 0) one more peaking at last. Returns the time after. */
+static long long a7_windows(long long t, int windows, double base,
+                            double last) {
+    int n = windows + (last >= 0 ? 1 : 0);
+    for (int w = 0; w < n; w++)
         for (int m = 0; m < 10; m++, t += 60) {
-            double v = w == windows && m == 5 ? last : 5;
+            double v = w == windows && m == 5 ? last : base;
             row(WEB_TIER_MINUTE, WM_HOST_CONNS, "10.0.0.60", t, v, 1, v);
             step(t + 60);
         }
+    return t;
+}
+
+/* windows windows peaking at 5, then one at last. */
+static void a7_run(int windows, double last) {
+    step(T0);
+    a7_windows(T0, windows, 5, last);
 }
 
 static void test_a7_fires_far_above_its_p95(void) {
@@ -746,6 +983,35 @@ static void test_a7_silent_without_history_or_margin(void) {
     WT_EQ(count_rule(WEB_ANOM_A7_FANOUT), 0);
     fx_done();
 }
+
+/* A host whose window peak is 2 (p95 2) reaching 5: over twice its p95,
+ * but by 3, under WEB_ANOM_A7_MIN_EXCESS. Silent: on a quiet host a
+ * factor alone fires for a handful of flows. Seen red with the
+ * MIN_EXCESS test removed from a7_close(). */
+static void test_a7_silent_below_the_min_excess(void) {
+    fx(0, NULL);
+    step(T0);
+    a7_windows(T0, WEB_ANOM_A7_MIN_WINDOWS, 2, 5);
+    WT_EQ(count_rule(WEB_ANOM_A7_FANOUT), 0);
+    fx_done();
+}
+
+#ifdef WITH_SQLITE
+/* The window histograms outlive a restart: the history before it and a
+ * spike after it open A7. Seen red with persist_fanout() returning at
+ * once, and separately with restore_fan() doing so (no history after
+ * the restart: silent). */
+static void test_a7_history_survives_restart(void) {
+    fx(1, NULL);
+    step(T0);
+    long long t = a7_windows(T0, WEB_ANOM_A7_MIN_WINDOWS, 5, -1);
+    restart(t);
+    step(t);
+    a7_windows(t, 0, 5, 40);
+    WT_ASSERT(ep(WEB_ANOM_A7_FANOUT, "10.0.0.60")->state == WEB_EP_OPEN);
+    fx_done();
+}
+#endif
 
 /* ── A8 ──────────────────────────────────────────────────────────────── */
 
@@ -849,14 +1115,15 @@ static void test_a9_silent_for_history_across_restart(void) {
 
 /* ── MAD ─────────────────────────────────────────────────────────────── */
 
-/* 14 weeks at 2 a minute, then fourteen at 10: the EWMA cell (a
- * four-week half-life) says 9.3 with sd 2.3, and the 28 same-hour rows
- * have median 6 and MAD 4. */
+/* 14 weeks at 40 a minute, then fourteen at 200: the EWMA cell (a
+ * four-week half-life) says 185.9 with a week-to-week sd of 45.4 (47.4
+ * with the count's own Poisson spread), and the 28 same-hour rows have
+ * median 120 and MAD 80. */
 static void mad_history(const char *key) {
     long long h = T0;
     double v[28];
     for (int k = 28; k >= 1; k--) {
-        double per_min = k <= 14 ? 10 : 2;
+        double per_min = k <= 14 ? 200 : 40;
         store_row(WEB_TIER_HOUR, WM_DNS_QUERIES, key, h - k * WEEK, per_min * 60);
         v[28 - k] = per_min;
     }
@@ -871,16 +1138,16 @@ static void counter_run(const char *key, double v) {
     }
 }
 
-/* Back to its old level of 2 a minute: z says out of band (-3.2: the
- * last fourteen weeks were 10), the modified z over 28 weeks says 0.67.
- * Seen red with mad_confirms() returning 1. */
+/* Back to its old level of 40 a minute: z says out of band (-3.1: the
+ * last fourteen weeks were 200), the modified z over 28 weeks says
+ * 0.67. Seen red with mad_confirms() returning 1. */
 static void test_mad_refutes_a_return_to_normal(void) {
     fx(1, NULL);
     mad_history("10.0.0.90");
     web_bl_score_t sc;
-    WT_EQ(web_baseline_score(&bl, WM_DNS_QUERIES, "10.0.0.90", T0, 2, &sc), 0);
+    WT_EQ(web_baseline_score(&bl, WM_DNS_QUERIES, "10.0.0.90", T0, 40, &sc), 0);
     WT_ASSERT(fabs(sc.z) >= WEB_ANOM_Z_THRESHOLD);
-    counter_run("10.0.0.90", 2);
+    counter_run("10.0.0.90", 40);
     WT_EQ(count_rule(WEB_ANOM_A1_RATE), 0);
     WT_ASSERT(an.st.mad_queries >= 1);
     WT_ASSERT(an.st.mad_queries <= 1);      /* cached for the hour */
@@ -891,7 +1158,7 @@ static void test_mad_refutes_a_return_to_normal(void) {
 static void test_mad_confirms_a_real_burst(void) {
     fx(1, NULL);
     mad_history("10.0.0.91");
-    counter_run("10.0.0.91", 30);
+    counter_run("10.0.0.91", 600);
     web_anom_ep_t *e = ep(WEB_ANOM_A1_RATE, "10.0.0.91");
     WT_ASSERT(e->state == WEB_EP_OPEN);
     WT_HAS(e->evidence, " mad_z=4.0");
@@ -929,7 +1196,163 @@ static void test_state_survives_restart(void) {
     WT_HAS(list(T0 + HOUR + 10), "\"key\":\"10.0.0.12\"");
     fx_done();
 }
+
+static long long an_raw_int(const char *sql) {
+    char p[128];
+    db_path(p, sizeof(p));
+    sqlite3 *h = NULL;
+    long long v = -1;
+    sqlite3_stmt *s = NULL;
+    if (sqlite3_open(p, &h) == SQLITE_OK &&
+        sqlite3_prepare_v2(h, sql, -1, &s, NULL) == SQLITE_OK &&
+        sqlite3_step(s) == SQLITE_ROW)
+        v = sqlite3_column_int64(s, 0);
+    sqlite3_finalize(s);
+    sqlite3_close(h);
+    return v;
+}
+
+static void an_raw_exec(const char *sql) {
+    char p[128];
+    db_path(p, sizeof(p));
+    sqlite3 *h = NULL;
+    WT_EQ(sqlite3_open(p, &h), SQLITE_OK);
+    WT_EQ(sqlite3_exec(h, sql, NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    chmod(p, 0600);
+}
+
+/* One hour row of host.conns for key at hour h. */
+static void hour_row(const char *key, long long h) {
+    row(WEB_TIER_HOUR, WM_HOST_CONNS, key, h, 50, 10, 5);
+}
+
+/* The audit's case: a baseline of two, a pair evicted and fed again in
+ * the same hour. Its old row is deleted before its new one is written,
+ * so the write neither fails nor has to take the old row over, and the
+ * file holds exactly what memory does. Seen red with the writes put
+ * back before the deletes in persist_baseline() (a row taken over:
+ * store_baseline_rows_reused 1; with the take-over also removed, the
+ * whole batch rolled back: persist_errors 1). */
+static void test_baseline_evicted_and_back_in_one_hour(void) {
+    fx(1, NULL);
+    web_anomaly_destroy(&an);
+    web_baseline_destroy(&bl);
+    WT_EQ(web_baseline_init(&bl, 2), 0);
+    g_cfg.bl = &bl;
+    WT_EQ(web_anomaly_init(&an, 32, &g_cfg), 0);
+    step(T0);
+    hour_row("10.0.0.1", T0);
+    hour_row("10.0.0.2", T0);
+    step(T0 + HOUR);
+    WT_EQ(an_raw_int("SELECT COUNT(*) FROM baseline"), 2);
+    hour_row("10.0.0.3", T0 + HOUR);
+    hour_row("10.0.0.4", T0 + HOUR);
+    hour_row("10.0.0.1", T0 + HOUR);
+    step(T0 + 2 * HOUR);
+    WT_EQ(web_baseline_evictions(&bl), 3UL);
+    WT_EQ(an.st.persist_errors, 0UL);
+    web_store_stats_t ss;
+    web_store_stats(&st, &ss);
+    WT_EQ(ss.bl_rows_reused, 0UL);
+    WT_EQ(an_raw_int("SELECT COUNT(*) FROM baseline"), 2);
+    WT_EQ(an_raw_int("SELECT COUNT(*) FROM baseline_cell"), 2);
+    WT_EQ(an_raw_int("SELECT COUNT(*) FROM baseline WHERE key IN"
+                     " ('10.0.0.1','10.0.0.4')"), 2);
+    fx_done();
+}
+
+/* A batch the store refuses (here: its table gone for an hour) is kept
+ * dirty, not lost, and written the hour after. Seen red with
+ * web_baseline_redirty() not called (the first hour's cell never
+ * reached the file). */
+static void test_baseline_refused_batch_is_written_later(void) {
+    fx(1, NULL);
+    step(T0);
+    an_raw_exec("DROP TABLE baseline_cell");
+    hour_row("10.0.0.1", T0);
+    step(T0 + HOUR);
+    WT_ASSERT(an.st.persist_errors >= 1);
+    an_raw_exec("CREATE TABLE baseline_cell (cell INTEGER NOT NULL,"
+                " id INTEGER NOT NULL, mean REAL NOT NULL, var REAL NOT NULL,"
+                " n INTEGER NOT NULL, wvar REAL NOT NULL DEFAULT 0,"
+                " wn INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (cell, id))"
+                " WITHOUT ROWID");
+    hour_row("10.0.0.1", T0 + HOUR);
+    step(T0 + 2 * HOUR);
+    WT_EQ(an_raw_int("SELECT COUNT(*) FROM baseline WHERE key='10.0.0.1'"), 1);
+    WT_EQ(an_raw_int("SELECT COUNT(*) FROM baseline_cell"), 2);
+    fx_done();
+}
+
+/* Values read back from slothweb.db are checked before they are used:
+ * a score past 100 is 100 (the listing rounds it to an integer, which
+ * is undefined behaviour for 1e300), and an id of 0 or a time before
+ * 1970 is not an episode of ours. Seen red with the clamp removed from
+ * restore_ep() ("score":250), and separately with the id and time
+ * checks removed (the other two listed). */
+static void test_restored_episode_values_are_checked(void) {
+    fx(1, NULL);
+    web_store_ep_t e[3];
+    memset(e, 0, sizeof(e));
+    for (int i = 0; i < 3; i++) {
+        e[i].id = 10 + i;
+        snprintf(e[i].kind, sizeof(e[i].kind), "A6");
+        e[i].metric = -1;
+        snprintf(e[i].key, sizeof(e[i].key), "10.0.0.%d", 30 + i);
+        e[i].state = WEB_EP_OPEN;
+        e[i].score = e[i].peak = 40;
+        e[i].first_seen = e[i].last_seen = e[i].last_bucket = T0;
+    }
+    e[0].score = 250;
+    e[0].peak = 1e300;
+    e[1].id = 0;
+    e[2].first_seen = -5;
+    WT_EQ(web_store_ep_put(&st, e, 3), 0);
+    restart(T0 + 60);
+    const char *j = list(T0 + 60);
+    WT_HAS(j, "\"key\":\"10.0.0.30\",\"score\":100,\"peak\":100,");
+    WT_LACKS(j, "10.0.0.31");
+    WT_LACKS(j, "10.0.0.32");
+    fx_done();
+}
 #endif
+
+/* A zone half an hour off UTC (IST, +5:30). A device present every day
+ * from 13:30 to 14:30 local is present in the UTC hour bucket 08:00Z,
+ * filed under cell 13; at 14:10 local it must be scored against that
+ * cell, not against cell 14 (the bucket 09:00Z, 14:30-15:30, where it
+ * is absent). Seen red with web_baseline_score() taking the cell of t
+ * itself (A3 fired on a perfectly regular routine). */
+static void test_a3_half_hour_zone_scores_its_own_bucket(void) {
+    setenv("TZ", "IST-5:30", 1);
+    tzset();
+    fx(0, NULL);
+    long long h = THU0 + 8 * HOUR;
+    /* Four weeks of the routine, in time order: present in 08:00Z,
+     * absent in 09:00Z. */
+    for (int k = 4; k >= 1; k--) {
+        web_baseline_feed(&bl, WM_DEV_PRESENT, "aa:bb:cc:dd:ee:05",
+                          h - k * WEEK, 1, 1);
+        web_baseline_feed(&bl, WM_DEV_PRESENT, "aa:bb:cc:dd:ee:05",
+                          h + HOUR - k * WEEK, 0, 0);
+    }
+    web_bl_cell_t c[WEB_BL_CELLS];
+    WT_EQ(web_baseline_cells(&bl, WM_DEV_PRESENT, "aa:bb:cc:dd:ee:05", c), 0);
+    WT_ASSERT(c[web_bl_cell_index(h)].n == 4 && c[web_bl_cell_index(h)].mean == 1);
+    WT_ASSERT(c[web_bl_cell_index(h + HOUR)].n == 4 &&
+              c[web_bl_cell_index(h + HOUR)].mean == 0);
+    /* 14:10 local is in local hour 14, the absent cell. */
+    WT_EQ(web_bl_cell_index(h + 40 * 60), web_bl_cell_index(h + HOUR));
+    step(h + 40 * 60);
+    row(WEB_TIER_MINUTE, WM_DEV_PRESENT, "aa:bb:cc:dd:ee:05", h + 40 * 60,
+        1, 1, 1);
+    step(h + 41 * 60);
+    WT_EQ(count_rule(WEB_ANOM_A3_HOURS), 0);
+    fx_done();
+    setenv("TZ", "UTC0", 1);
+    tzset();
+}
 
 /* ── A10 ─────────────────────────────────────────────────────────────── */
 
@@ -1052,7 +1475,17 @@ void run_anomaly_tests(void) {
     WT_RUN(test_worst_case_listing_fits);
     WT_RUN(test_listing_filters);
     WT_RUN(test_changes_feed);
+    WT_RUN(test_changes_returns_the_newest_max);
+    WT_RUN(test_hour_pass_learns_the_within_hour_spread);
     WT_RUN(test_a2_new_device_reported_once);
+    WT_RUN(test_a2_not_new_after_sloth_restarts);
+#ifdef WITH_SQLITE
+    WT_RUN(test_a2_not_new_by_the_stores_rows);
+#endif
+    WT_RUN(test_a2_flood_is_one_episode_and_keeps_history);
+    WT_RUN(test_slot_policy_keeps_each_rules_history);
+    WT_RUN(test_a2_reported_set_refuses_rather_than_forgets);
+    WT_RUN(test_a2_scans_every_identity_slot);
     WT_RUN(test_a2_old_and_random_macs_are_not_new);
     WT_RUN(test_a3_fires_for_off_hours_presence);
     WT_RUN(test_a3_needs_four_weeks);
@@ -1063,6 +1496,8 @@ void run_anomaly_tests(void) {
     WT_RUN(test_a6_evidence_is_escaped);
     WT_RUN(test_a7_fires_far_above_its_p95);
     WT_RUN(test_a7_silent_without_history_or_margin);
+    WT_RUN(test_a7_silent_below_the_min_excess);
+    WT_RUN(test_a3_half_hour_zone_scores_its_own_bucket);
     WT_RUN(test_a8_fires_for_the_client);
     WT_RUN(test_a8_needs_twenty_queries_and_the_share);
 #ifdef WITH_SQLITE
@@ -1071,6 +1506,10 @@ void run_anomaly_tests(void) {
     WT_RUN(test_mad_refutes_a_return_to_normal);
     WT_RUN(test_mad_confirms_a_real_burst);
     WT_RUN(test_state_survives_restart);
+    WT_RUN(test_a7_history_survives_restart);
+    WT_RUN(test_baseline_evicted_and_back_in_one_hour);
+    WT_RUN(test_baseline_refused_batch_is_written_later);
+    WT_RUN(test_restored_episode_values_are_checked);
 #endif
     WT_RUN(test_a10_fires_when_a_connection_never_sends);
     WT_RUN(test_a10_silent_just_after_a_reconnect);

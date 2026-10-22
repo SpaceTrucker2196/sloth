@@ -1107,6 +1107,95 @@ static void test_long_stop_expiry_keeps_wal_small(void) {
     rm_store(p);
 }
 
+/* A new entry whose pair still has a row (its delete was lost, or has
+ * not reached the file) takes that row over, cells cleared, instead of
+ * hitting UNIQUE (metric, key): before, the whole batch of up to 512
+ * records rolled back, every hour, until restart. Seen red with the
+ * lookup in web_store_bl_put() skipped (the put failed). */
+static void test_baseline_insert_takes_over_a_stale_row(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "stale.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_baseline_t b;
+    WT_EQ(web_baseline_init(&b, 4), 0);
+    web_baseline_feed(&b, WM_DNS_QUERIES, "10.0.0.1", 3600, 4.0, 1);
+    web_bl_rec_t rec[4];
+    int n = web_baseline_take_dirty(&b, rec, 4);
+    WT_EQ(n, 2);
+    WT_EQ(web_store_bl_put(&S, &b, rec, n), 0);
+    web_baseline_destroy(&b);
+    /* The pair again, from nothing: another hour's cell, no row id. */
+    WT_EQ(web_baseline_init(&b, 4), 0);
+    web_baseline_feed(&b, WM_DNS_QUERIES, "10.0.0.1", 7200, 6.0, 1);
+    n = web_baseline_take_dirty(&b, rec, 4);
+    WT_EQ(rec[0].db_id, -1);
+    WT_EQ(web_store_bl_put(&S, &b, rec, n), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM baseline"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM baseline_cell"), 1);
+    WT_EQ(raw_int(p, "SELECT mean FROM baseline_cell"), 6);
+    web_store_stats_t ss;
+    web_store_stats(&S, &ss);
+    WT_EQ(ss.bl_rows_reused, 1UL);
+    web_baseline_destroy(&b);
+    web_store_close(&S);
+    rm_store(p);
+}
+
+/* A restore into a table smaller than the file (--web-max-keys shrank)
+ * deletes the rest a slice at a time: 4,000 entries of 168 cells
+ * restored into ten, measured after every commit. The bound is the
+ * checkpoint's (wal_autocheckpoint 256 pages, journal_size_limit 1 MiB)
+ * plus one slice, far under the file. Seen red with the slice made the
+ * whole set (one transaction: a WAL as large as the cells it deleted). */
+static void test_baseline_shrinking_restore_keeps_wal_small(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "shrink.db");
+    snprintf(g_wal, sizeof(g_wal), "%s-wal", p);
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_store_close(&S);
+    raw_exec(p, "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c"
+                " WHERE x<4000) INSERT INTO baseline (id,metric,key,"
+                "last_active,last_fed,first_fed) SELECT x,'dns.queries',"
+                "'10.0.'||(x/256)||'.'||(x%256),x*3600,x*3600,x*3600 FROM c;"
+                "WITH RECURSIVE k(c) AS (SELECT 0 UNION ALL SELECT c+1 FROM k"
+                " WHERE c<167) INSERT INTO baseline_cell (cell,id,mean,var,n)"
+                " SELECT k.c,b.id,1.0,0.0,1 FROM k CROSS JOIN baseline b;");
+    struct stat sb;
+    WT_EQ(stat(p, &sb), 0);
+    long long file = sb.st_size;
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_baseline_t b;
+    WT_EQ(web_baseline_init(&b, 10), 0);
+    g_wal_peak = 0;
+    g_wal_probes = 0;
+    web_store_test_after_commit = wal_probe;
+    WT_EQ(web_store_bl_load(&S, &b), 10);
+    web_store_test_after_commit = NULL;
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM baseline"), 10);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM baseline_cell"), 10 * 168);
+    fprintf(stderr, "  shrinking restore: %lld byte file, WAL peak %lld bytes"
+            " over %d commits\n", file, g_wal_peak, g_wal_probes);
+    WT_ASSERT(file >= 10LL << 20);
+    WT_ASSERT(g_wal_probes > 10);
+    WT_ASSERT(g_wal_peak <= 3LL << 20);
+    web_baseline_destroy(&b);
+    web_store_close(&S);
+    rm_store(p);
+}
+
+/* The start-up warning's estimate: the default --web-max-keys clears
+ * the default ceiling, the largest does not. */
+static void test_analysis_estimate_against_the_ceiling(void) {
+    long long def = web_store_analysis_max_bytes(
+        web_baseline_cap_for(WEB_DEFAULT_MAX_KEYS), 512,
+        WEB_DEFAULT_MAX_KEYS / 2, WEB_DEFAULT_MAX_KEYS);
+    long long big = web_store_analysis_max_bytes(
+        web_baseline_cap_for(WEB_MAX_KEYS_MAX), 512, WEB_MAX_KEYS_MAX / 2,
+        WEB_MAX_KEYS_MAX);
+    WT_ASSERT(def > 0 && def < (long long)WEB_DEFAULT_MAX_MB * 1024 * 1024);
+    WT_ASSERT(big > (long long)WEB_DEFAULT_MAX_MB * 1024 * 1024);
+}
+
 /* Expiry finds a batch's tiles by each series' oldest row, so batches
  * with nothing expired are skipped and a series whose expired rows span
  * many tiles is emptied tile by tile. 600 series (three batches of
@@ -1390,6 +1479,9 @@ void run_store_tests(void) {
     WT_RUN(test_churn_two_samples_not_in_long_tiers);
     WT_RUN(test_churn_three_samples_not_in_long_tiers);
     WT_RUN(test_secrets_never_reach_disk);
+    WT_RUN(test_baseline_insert_takes_over_a_stale_row);
+    WT_RUN(test_baseline_shrinking_restore_keeps_wal_small);
+    WT_RUN(test_analysis_estimate_against_the_ceiling);
     rmdir(g_dir);
 }
 

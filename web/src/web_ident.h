@@ -130,19 +130,27 @@ void web_ident_norm(const char *name, char *out);
 
 /* ── what the rules read (store thread) ─────────────────────────────── */
 
-/* A2: every MAC that is not randomised, with a first_seen of its own. */
+/* Each reader fills at most max rows and returns how many rows there
+ * were, which is more than max when it had to stop short: the caller
+ * counts that (a scan cut short skips whatever is in the later slots).
+ * The rule engine sizes its buffers from the tables' caps, so it never
+ * should. */
+
+/* A2: every MAC that is not randomised, with a first_seen of its own
+ * at or after since. */
 typedef struct {
     char      mac[WEB_KEY_MAX + 1];
     long long first_seen;
     char      src[16];
 } web_id_new_t;
-int  web_ident_firsts(web_ident_t *id, web_id_new_t *out, int max);
+int  web_ident_firsts(web_ident_t *id, long long since, web_id_new_t *out,
+                      int max);
 
 /* A5: (mac, name, source, randomised) for every MAC with a current
  * DHCP or mDNS name: its own device hostname, or the DHCP and mDNS
  * names of the IP that is bound to it now (and only while that IP's
  * own MAC binding is this MAC, so a lease handed to another device does
- * not name both). */
+ * not name both). At most three rows per MAC. */
 typedef struct {
     char mac[WEB_KEY_MAX + 1];
     char name[WEB_ID_NAME_MAX + 1];

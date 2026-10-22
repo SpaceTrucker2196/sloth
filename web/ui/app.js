@@ -332,15 +332,21 @@
     return getJSON(p).catch(function () { return null; });
   }
 
-  // The server's cell for unix second t: its local hour of the week,
-  // Monday 00:00 first, from the offset /api/baseline reported.
+  // The server's cell for unix second t: the local hour of the week
+  // its UTC hour bucket (t - t % 3600) was filed under, Monday 00:00
+  // first, from the offset /api/baseline reported. The bucket's start,
+  // not t itself, as the server scores: in a half-hour zone the two
+  // differ for half of every hour.
   function cellOf(t, off) {
-    var d = new Date((t + off) * 1000);
+    var d = new Date((t - t % 3600 + off) * 1000);
     return ((d.getUTCDay() + 6) % 7) * 24 + d.getUTCHours();
   }
 
   // The band for each point, [lo, hi, mean, sd] or null where the cell
-  // is warming. A counter's baseline is per minute; its bucket of step
+  // is warming. A cell is [mean, sd, n, sd_hour]: sd is a minute's
+  // spread (week to week plus within the hour), sd_hour an hour
+  // bucket's (week to week alone), so a bucket of an hour or more uses
+  // sd_hour. A counter's baseline is per minute; its bucket of step
   // seconds is scaled to match.
   function bands(pts, bl, kind, step) {
     if (!bl || !bl.cells) return null;
@@ -349,7 +355,8 @@
     for (var i = 0; i < pts.length; i++) {
       var c = bl.cells[cellOf(pts[i][0], bl.utc_offset_s || 0)];
       if (!c || c[2] < bl.warm_n) { out.push(null); continue; }
-      var mean = c[0] / scale, sd = c[1] / scale;
+      var spread = step >= 3600 && num(c[3]) ? c[3] : c[1];
+      var mean = c[0] / scale, sd = spread / scale;
       out.push([mean - sens * sd, mean + sens * sd, mean, sd]);
     }
     return out;

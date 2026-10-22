@@ -117,15 +117,18 @@ static void kv_del(kvtab_t *t, int i) {
 }
 
 /* The slot of (a, k), made if absent; *made says so, and *evicted holds
- * the key pushed out to make it ("" when none). */
-static int kv_get(kvtab_t *t, int a, const char *k, long long now, int *made,
-                  char evicted[WEB_KEY_MAX + 1]) {
+ * the key pushed out to make it ("" when none). With no_evict a full
+ * table answers -1 instead of pushing one out. */
+static int kv_get2(kvtab_t *t, int a, const char *k, long long now, int *made,
+                   char evicted[WEB_KEY_MAX + 1], int no_evict) {
     *made = 0;
     if (evicted) evicted[0] = '\0';
     int i = kv_find(t, a, k);
     if (i >= 0) return i;
     if (t->n < t->cap) {
         for (i = 0; i < t->cap; i++) if (!t->e[i].used) break;
+    } else if (no_evict) {
+        return -1;
     } else {
         i = 0;
         for (int j = 1; j < t->cap; j++) if (t->e[j].t < t->e[i].t) i = j;
@@ -146,14 +149,25 @@ static int kv_get(kvtab_t *t, int a, const char *k, long long now, int *made,
     return i;
 }
 
+static int kv_get(kvtab_t *t, int a, const char *k, long long now, int *made,
+                  char evicted[WEB_KEY_MAX + 1]) {
+    return kv_get2(t, a, k, now, made, evicted, 0);
+}
+
 /* ── the store thread's state ────────────────────────────────────────── */
+
+/* A merged row, or (tier TIER_ACC, t an hour start) the sums of the
+ * minute values one series had in that hour: n minutes with a row, sum
+ * and sq the sum and the sum of squares of their values on the
+ * baseline's minute scale, for the cell's within-hour variance. */
+#define TIER_ACC WEB_TIER_COUNT
 
 typedef struct {
     int           used, next;
     int           tier, metric;
     char          key[WEB_KEY_MAX + 1];
     long long     t;
-    double        sum, min, max;
+    double        sum, min, max, sq;
     unsigned long n;
 } agg_t;
 
@@ -174,10 +188,11 @@ typedef struct {
 } mad_t;
 
 typedef struct {
-    int    rule, metric;
-    char   key[WEB_KEY_MAX + 1];
-    double score;
-    char   ev[WEB_ANOM_EVIDENCE_MAX + 1];
+    int       rule, metric;
+    char      key[WEB_KEY_MAX + 1];
+    double    score;
+    char      ev[WEB_ANOM_EVIDENCE_MAX + 1];
+    long long t0;               /* A2: the MAC's first_seen */
 } cand_t;
 
 typedef struct {
@@ -191,7 +206,8 @@ typedef struct {
 #define COV_OK      1
 #define COV_BAD     2
 #define CAND_MAX    4096
-#define ID_ROWS     4096
+#define BL_BATCH    512
+#define BL_DEL_BATCH 256
 
 struct web_anom_priv {
     agg_t      *agg;
@@ -208,9 +224,14 @@ struct web_anom_priv {
     char      (*fan_del)[WEB_KEY_MAX + 1];
     int         fan_ndel;
 
-    kvtab_t     rep;            /* A2: MACs reported (a = 0) */
+    kvtab_t     rep;            /* A2: MACs reported (a = 0), t first_seen */
     web_store_rep_t *rep_new;
     int         rep_nnew, rep_cap;
+    kvtab_t     old;            /* A2: MACs not to report one by one (found
+                                   not new, or part of a burst), t
+                                   first_seen; evicting one costs only a
+                                   second look at it */
+    int         a2_checks;      /* evidence lookups this minute */
 
     kvtab_t     known;          /* A9: (flow metric, host) with history */
 
@@ -236,7 +257,9 @@ struct web_anom_priv {
     web_id_named_t *named;
     web_id_names_t *ipn;
     web_id_dns_t   *dns;
+    int             firsts_cap, named_cap, ipn_cap, dns_cap;
     web_bl_rec_t   *blrec;
+    long long      *bldel;
 };
 
 /* ── init ────────────────────────────────────────────────────────────── */
@@ -254,11 +277,12 @@ void web_anomaly_destroy(web_anomaly_t *a) {
         free(p->agg); free(p->agg_head);
         kv_free(&p->fan_ix); free(p->fan); free(p->fan_del);
         kv_free(&p->rep); free(p->rep_new);
+        kv_free(&p->old);
         kv_free(&p->known);
         free(p->cand); free(p->pairs); free(p->idx);
         free(p->ep_del); free(p->ep_out);
         free(p->firsts); free(p->named); free(p->ipn); free(p->dns);
-        free(p->blrec);
+        free(p->blrec); free(p->bldel);
         free(p);
     }
     a->p = NULL;
@@ -280,9 +304,9 @@ int web_anomaly_init(web_anomaly_t *a, int cap, const web_anom_cfg_t *cfg) {
     struct web_anom_priv *p = calloc(1, sizeof(*p));
     a->p = p;
     if (!a->ep || !p) { web_anomaly_destroy(a); return -1; }
-    /* Each series has at most a minute row or two and one hour row
-     * waiting at a time. */
-    p->agg_cap = web_baseline_cap_for(mk) * 3;
+    /* Each series has at most a minute row or two, one hour row and one
+     * hour's minute sums waiting at a time. */
+    p->agg_cap = web_baseline_cap_for(mk) * 4;
     p->agg_nhead = 1;
     while (p->agg_nhead < p->agg_cap) p->agg_nhead <<= 1;
     p->agg = calloc((size_t)p->agg_cap, sizeof(*p->agg));
@@ -295,15 +319,29 @@ int web_anomaly_init(web_anomaly_t *a, int cap, const web_anom_cfg_t *cfg) {
     p->cand = calloc(CAND_MAX, sizeof(*p->cand));
     p->ep_del = calloc((size_t)cap * 2, sizeof(*p->ep_del));
     p->ep_out = calloc((size_t)cap, sizeof(*p->ep_out));
-    p->firsts = calloc(ID_ROWS, sizeof(*p->firsts));
-    p->named = calloc(ID_ROWS, sizeof(*p->named));
-    p->ipn = calloc(ID_ROWS, sizeof(*p->ipn));
-    p->dns = calloc(ID_ROWS, sizeof(*p->dns));
-    p->blrec = calloc(512, sizeof(*p->blrec));
+    /* The identity readers' buffers hold everything the tables can:
+     * sized from the tables' own caps, so a scan never stops short (a
+     * fixed 4096 skipped every MAC past the 4096th slot once
+     * --web-max-keys allowed more). */
+    int macs = 1, ips = 1;
+    if (a->cfg.ident) {
+        if (a->cfg.ident->mac_cap > macs) macs = a->cfg.ident->mac_cap;
+        if (a->cfg.ident->ip_cap > ips) ips = a->cfg.ident->ip_cap;
+    }
+    p->firsts_cap = macs;
+    p->named_cap = macs * 3;
+    p->ipn_cap = p->dns_cap = ips;
+    p->firsts = calloc((size_t)p->firsts_cap, sizeof(*p->firsts));
+    p->named = calloc((size_t)p->named_cap, sizeof(*p->named));
+    p->ipn = calloc((size_t)p->ipn_cap, sizeof(*p->ipn));
+    p->dns = calloc((size_t)p->dns_cap, sizeof(*p->dns));
+    p->blrec = calloc(BL_BATCH, sizeof(*p->blrec));
+    p->bldel = calloc(BL_DEL_BATCH, sizeof(*p->bldel));
     if (!p->agg || !p->agg_head || !p->fan || !p->fan_del || !p->rep_new ||
         !p->cand || !p->ep_del || !p->ep_out || !p->firsts || !p->named ||
-        !p->ipn || !p->dns || !p->blrec ||
+        !p->ipn || !p->dns || !p->blrec || !p->bldel ||
         kv_init(&p->fan_ix, hosts) != 0 || kv_init(&p->rep, mk) != 0 ||
+        kv_init(&p->old, macs) != 0 ||
         kv_init(&p->known, hosts * 5) != 0) {
         web_anomaly_destroy(a);
         return -1;
@@ -351,16 +389,10 @@ static void agg_release(struct web_anom_priv *p, int i) {
     p->agg_free = i;
 }
 
-static int agg_put(struct web_anom_priv *p, const web_qrow_t *r) {
-    int i = agg_find(p, r->tier, r->metric, r->key, r->t);
-    if (i >= 0) {
-        agg_t *g = &p->agg[i];
-        g->sum += r->sum;
-        if (r->min < g->min) g->min = r->min;
-        if (r->max > g->max) g->max = r->max;
-        g->n += r->n;
-        return 0;
-    }
+/* A new, zeroed slot for (tier, metric, key, t), hashed; -1 when full. */
+static int agg_new(struct web_anom_priv *p, int tier, int metric,
+                   const char *key, long long t) {
+    int i;
     if (p->agg_free >= 0) {
         i = p->agg_free;
         p->agg_free = p->agg[i].next;
@@ -370,21 +402,75 @@ static int agg_put(struct web_anom_priv *p, const web_qrow_t *r) {
         return -1;
     }
     agg_t *g = &p->agg[i];
+    memset(g, 0, sizeof(*g));
     g->used = 1;
-    g->tier = r->tier;
-    g->metric = r->metric;
-    memcpy(g->key, r->key, sizeof(g->key));
-    g->key[WEB_KEY_MAX] = '\0';
-    g->t = r->t;
-    g->sum = r->sum;
-    g->min = r->min;
-    g->max = r->max;
-    g->n = r->n;
+    g->tier = tier;
+    g->metric = metric;
+    snprintf(g->key, sizeof(g->key), "%s", key);
+    g->t = t;
     unsigned h = agg_hash(g->tier, g->metric, g->key, g->t) &
                  (unsigned)(p->agg_nhead - 1);
     g->next = p->agg_head[h];
     p->agg_head[h] = i;
+    return i;
+}
+
+static int agg_put(struct web_anom_priv *p, const web_qrow_t *rr) {
+    /* The row's key terminated here, whatever the queue holds. */
+    web_qrow_t rc = *rr;
+    rc.key[WEB_KEY_MAX] = '\0';
+    const web_qrow_t *r = &rc;
+    int i = agg_find(p, r->tier, r->metric, r->key, r->t);
+    if (i >= 0) {
+        agg_t *g = &p->agg[i];
+        g->sum += r->sum;
+        if (r->min < g->min) g->min = r->min;
+        if (r->max > g->max) g->max = r->max;
+        g->n += r->n;
+        return 0;
+    }
+    i = agg_new(p, r->tier, r->metric, r->key, r->t);
+    if (i < 0) return -1;
+    agg_t *g = &p->agg[i];
+    g->sum = r->sum;
+    g->min = r->min;
+    g->max = r->max;
+    g->n = r->n;
     return 0;
+}
+
+/* One minute value v of (metric, key) into its hour's sums. Presence
+ * has no within-hour spread to learn (A3 reads the mean). 0, or -1 when
+ * the table is full (the hour then has no within sample). */
+static int acc_add(struct web_anom_priv *p, int metric, const char *key,
+                   long long t, double v) {
+    if (web_metric_defs[metric].kind == WEB_MK_PRESENCE || !isfinite(v))
+        return 0;
+    long long h = t - t % 3600;
+    int i = agg_find(p, TIER_ACC, metric, key, h);
+    if (i < 0 && (i = agg_new(p, TIER_ACC, metric, key, h)) < 0) return -1;
+    agg_t *g = &p->agg[i];
+    g->sum += v;
+    g->sq += v * v;
+    g->n++;
+    return 0;
+}
+
+/* The variance of hour row g's minute values about their own mean, on
+ * the baseline's minute scale, or -1 when this hour has no sample of
+ * it. A counter's minutes without a row counted 0, so its mean and
+ * variance are over all 60; a gauge's minutes without a row were not
+ * measured, so its are over the minutes it has (two at least). */
+static double within_var(struct web_anom_priv *p, const agg_t *g) {
+    int kind = web_metric_defs[g->metric].kind;
+    if (kind == WEB_MK_PRESENCE) return -1;
+    int i = agg_find(p, TIER_ACC, g->metric, g->key, g->t);
+    if (i < 0) return -1;
+    const agg_t *s = &p->agg[i];
+    double n = kind == WEB_MK_COUNTER ? 60.0 : (double)s->n;
+    if (kind != WEB_MK_COUNTER && s->n < 2) return -1;
+    double m = s->sum / n, v = s->sq / n - m * m;
+    return v > 0 ? v : 0;
 }
 
 static web_point_t agg_point(const agg_t *g) {
@@ -437,14 +523,14 @@ static long long silence_ms(web_anomaly_t *a, long long mono, int *connected) {
 
 /* ── candidates ──────────────────────────────────────────────────────── */
 
-static void cand(web_anomaly_t *a, int rule, int metric, const char *key,
-                 double score, const char *ev) {
+static cand_t *cand(web_anomaly_t *a, int rule, int metric, const char *key,
+                    double score, const char *ev) {
     struct web_anom_priv *p = a->p;
     if (p->cand_n >= CAND_MAX) {
         pthread_mutex_lock(&a->mu);
         a->st.candidates_dropped++;
         pthread_mutex_unlock(&a->mu);
-        return;
+        return NULL;
     }
     cand_t *c = &p->cand[p->cand_n++];
     c->rule = rule;
@@ -452,6 +538,8 @@ static void cand(web_anomaly_t *a, int rule, int metric, const char *key,
     snprintf(c->key, sizeof(c->key), "%s", key);
     c->score = score > 100 ? 100 : score < 0 ? 0 : score;
     web_utf8_copy(c->ev, WEB_ANOM_EVIDENCE_MAX, ev);
+    c->t0 = -1;
+    return c;
 }
 
 /* Names go into evidence cut on a code-point boundary, so that the
@@ -497,9 +585,15 @@ static int same_cells(long long h, long long *ts) {
 }
 
 /* 1 when the MAD ratio confirms an A1 candidate (or cannot judge it),
- * 0 when it refutes it; *mz gets the modified z, or NAN. */
+ * 0 when it refutes it; *mz gets the modified z, or NAN. The 28 rows
+ * are hour values, so their MAD is the week-to-week spread on the
+ * hour's scale; v is a minute's. The same within-hour variance the
+ * z-score added (within, from the cell) is added here, on the
+ * normal-equivalent scale (sd = MAD / 0.6745): without it the ratio
+ * confirmed whatever z flagged, since both were blind to the spread of
+ * minutes inside an hour. */
 static int mad_confirms(web_anomaly_t *a, int metric, const char *key,
-                        long long t, double v, double *mz) {
+                        long long t, double v, double within, double *mz) {
     struct web_anom_priv *p = a->p;
     *mz = NAN;
     if (!a->cfg.store || web_metric_defs[metric].kind != WEB_MK_COUNTER)
@@ -544,11 +638,12 @@ static int mad_confirms(web_anomaly_t *a, int metric, const char *key,
         }
     }
     if (!m->ok) return 1;
-    /* A MAD of 0 (most weeks identical) is floored like the sd is, on
-     * the normal-equivalent scale (MAD = 0.6745 sd). */
-    double fl = web_bl_sd_floor(metric, m->med) * 0.6745;
-    double mad = m->mad > fl ? m->mad : fl;
-    *mz = 0.6745 * fabs(v - m->med) / mad;
+    /* A MAD of 0 (most weeks identical) is floored like the sd is. */
+    double sb = m->mad / 0.6745;
+    double sd = sqrt(sb * sb + (within > 0 ? within : 0));
+    double fl = web_bl_sd_floor(metric, m->med);
+    if (sd < fl) sd = fl;
+    *mz = fabs(v - m->med) / sd;
     return *mz >= WEB_ANOM_MAD_THRESHOLD;
 }
 
@@ -562,7 +657,7 @@ static void a1_score(web_anomaly_t *a, int metric, const char *key,
         return;
     if (fabs(sc.z) < WEB_ANOM_Z_THRESHOLD) return;
     double mz;
-    if (!mad_confirms(a, metric, key, t, v, &mz)) return;
+    if (!mad_confirms(a, metric, key, t, v, sc.within, &mz)) return;
     char ev[256], madtxt[32] = "";
     if (!isnan(mz)) snprintf(madtxt, sizeof(madtxt), " mad_z=%.1f", mz);
     snprintf(ev, sizeof(ev), "%s[%s] z=%.1f value=%.3g baseline=%.3g\xc2\xb1%.3g%s",
@@ -685,19 +780,133 @@ static void a7_close(web_anomaly_t *a, long long ws) {
 
 /* ── the rules over the identity tables ──────────────────────────────── */
 
+/* An identity reader filled min(total, cap) rows: count a scan it cut. */
+static int id_rows(web_anomaly_t *a, int total, int cap) {
+    if (total <= cap) return total;
+    pthread_mutex_lock(&a->mu);
+    a->st.ident_truncated++;
+    pthread_mutex_unlock(&a->mu);
+    return cap;
+}
+
+/* Mark mac reported (first_seen t0) for A2, never pushing another out:
+ * an entry leaves only when its first_seen leaves A2's window, so a MAC
+ * reported within the window is never reported twice. 0, or -1 when
+ * the set is full of MACs still in their window (the caller counts the
+ * refusal). */
+static int rep_mark(struct web_anom_priv *p, const char *mac, long long t0) {
+    int made;
+    int k = kv_get2(&p->rep, 0, mac, t0, &made, NULL, 1);
+    if (k < 0) return -1;
+    p->rep.e[k].t = t0;
+    if (made && p->rep_nnew < p->rep_cap) {
+        web_store_rep_t *r = &p->rep_new[p->rep_nnew++];
+        snprintf(r->kind, sizeof(r->kind), "%s", RULE_NAME[WEB_ANOM_A2_NEW]);
+        snprintf(r->key, sizeof(r->key), "%s", mac);
+        r->t = t0;
+    }
+    return 0;
+}
+
+/* Whether slothweb itself holds evidence of mac from before A2's
+ * window: a dev.present or dev.frames baseline entry first fed before
+ * it, or a minute or hour row of either in the store before it. sloth
+ * sets first_seen to now whenever it makes a client entry, at its own
+ * restart and when it re-learns an evicted station, so first_seen alone
+ * called a device with weeks of history new. 1 old, 0 no evidence, -1
+ * not known yet (a store error, or this minute's lookups are spent). */
+static int a2_old_evidence(web_anomaly_t *a, const char *mac, long long ts) {
+    static const int M[2] = { WM_DEV_PRESENT, WM_DEV_FRAMES };
+    struct web_anom_priv *p = a->p;
+    long long before = ts - WEB_ANOM_A2_WINDOW_S;
+    for (int i = 0; i < 2; i++) {
+        long long ff;
+        if (web_baseline_first_fed(a->cfg.bl, M[i], mac, &ff) == 0 &&
+            ff >= 0 && ff < before)
+            return 1;
+    }
+    if (!a->cfg.store) return 0;
+    if (p->a2_checks >= WEB_ANOM_A2_CHECKS_PER_MIN) return -1;
+    p->a2_checks++;
+    for (int i = 0; i < 2; i++) {
+        int r = web_store_any_before(a->cfg.store, M[i], mac, before);
+        pthread_mutex_lock(&a->mu);
+        a->st.a2_queries++;
+        if (r < 0) a->st.a2_errors++;
+        pthread_mutex_unlock(&a->mu);
+        if (r != 0) return r;
+    }
+    return 0;
+}
+
 static void a2_scan(web_anomaly_t *a, long long ts) {
     struct web_anom_priv *p = a->p;
-    int n = web_ident_firsts(a->cfg.ident, p->firsts, ID_ROWS);
+    p->a2_checks = 0;
+    int n = id_rows(a, web_ident_firsts(a->cfg.ident,
+                                        ts - WEB_ANOM_A2_WINDOW_S,
+                                        p->firsts, p->firsts_cap),
+                    p->firsts_cap);
+    int nnew = 0;
+    unsigned long not_new = 0, deferred = 0;
     for (int i = 0; i < n; i++) {
         const web_id_new_t *f = &p->firsts[i];
         long long age = ts - f->first_seen;
         if (age > WEB_ANOM_A2_WINDOW_S || age < -WEB_ANOM_A2_SKEW_S) continue;
         if (kv_find(&p->rep, 0, f->mac) >= 0) continue;
-        char ev[256];
-        snprintf(ev, sizeof(ev), "%s first seen by sloth %lld min ago (%s)",
-                 f->mac, age > 0 ? age / 60 : 0LL, f->src);
-        cand(a, WEB_ANOM_A2_NEW, -1, f->mac, 40.0, ev);
+        if (kv_find(&p->old, 0, f->mac) >= 0) continue;
+        int o = a2_old_evidence(a, f->mac, ts);
+        if (o < 0) { deferred++; continue; }
+        if (o == 1) {
+            /* Remembered for the window, so the store is asked once;
+             * pushing one out costs only a second lookup. */
+            int made;
+            int k = kv_get(&p->old, 0, f->mac, f->first_seen, &made, NULL);
+            p->old.e[k].t = f->first_seen;
+            not_new++;
+            continue;
+        }
+        if (nnew != i) p->firsts[nnew] = *f;
+        nnew++;
     }
+    if (not_new || deferred) {
+        pthread_mutex_lock(&a->mu);
+        a->st.a2_not_new += not_new;
+        a->st.a2_deferred += deferred;
+        pthread_mutex_unlock(&a->mu);
+    }
+    char ev[256];
+    if (nnew <= WEB_ANOM_A2_BURST) {
+        for (int i = 0; i < nnew; i++) {
+            const web_id_new_t *f = &p->firsts[i];
+            long long age = ts - f->first_seen;
+            snprintf(ev, sizeof(ev), "%s first seen by sloth %lld min ago (%s)",
+                     f->mac, age > 0 ? age / 60 : 0LL, f->src);
+            cand_t *c = cand(a, WEB_ANOM_A2_NEW, -1, f->mac, 40.0, ev);
+            if (c) c->t0 = f->first_seen;
+        }
+        return;
+    }
+    /* A burst: more new MACs at once than a household acquires in a
+     * month is one event (probe requests from spoofed addresses look
+     * exactly like this), so it is one episode keyed "", not one per
+     * MAC, which would take the table from every other rule. Its MACs
+     * are covered by it: they go to the not-one-by-one set, not to the
+     * reported set, so that a flood cannot fill the reported set and
+     * leave a real new device refused for a day. */
+    for (int i = 0; i < nnew; i++) {
+        int made;
+        int k = kv_get(&p->old, 0, p->firsts[i].mac, p->firsts[i].first_seen,
+                       &made, NULL);
+        p->old.e[k].t = p->firsts[i].first_seen;
+    }
+    pthread_mutex_lock(&a->mu);
+    a->st.a2_in_burst += (unsigned long)nnew;
+    pthread_mutex_unlock(&a->mu);
+    int o = snprintf(ev, sizeof(ev), "%d MACs new to sloth in one minute:",
+                     nnew);
+    for (int i = 0; i < nnew && i < 3 && o > 0 && (size_t)o < sizeof(ev); i++)
+        o += snprintf(ev + o, sizeof(ev) - (size_t)o, " %s", p->firsts[i].mac);
+    cand(a, WEB_ANOM_A2_NEW, -1, "", 60.0, ev);
 }
 
 static int cmp_named(const void *x, const void *y) {
@@ -708,7 +917,8 @@ static int cmp_named(const void *x, const void *y) {
 
 static void a5_scan(web_anomaly_t *a, long long ts) {
     struct web_anom_priv *p = a->p;
-    int n = web_ident_named(a->cfg.ident, ts, p->named, ID_ROWS);
+    int n = id_rows(a, web_ident_named(a->cfg.ident, ts, p->named, p->named_cap),
+                    p->named_cap);
     qsort(p->named, (size_t)n, sizeof(*p->named), cmp_named);
     for (int i = 0; i < n;) {
         int j = i;
@@ -745,7 +955,8 @@ static int names_agree(const char *x, int xs, const char *y, int ys) {
 
 static void a6_scan(web_anomaly_t *a, long long ts) {
     struct web_anom_priv *p = a->p;
-    int n = web_ident_ip_names(a->cfg.ident, ts, p->ipn, ID_ROWS);
+    int n = id_rows(a, web_ident_ip_names(a->cfg.ident, ts, p->ipn, p->ipn_cap),
+                    p->ipn_cap);
     for (int i = 0; i < n; i++) {
         const web_id_names_t *r = &p->ipn[i];
         int bad = 0;
@@ -766,7 +977,8 @@ static void a6_scan(web_anomaly_t *a, long long ts) {
 
 static void a8_scan(web_anomaly_t *a, long long to) {
     struct web_anom_priv *p = a->p;
-    int n = web_ident_dns(a->cfg.ident, to, p->dns, ID_ROWS);
+    int n = id_rows(a, web_ident_dns(a->cfg.ident, to, p->dns, p->dns_cap),
+                    p->dns_cap);
     for (int i = 0; i < n; i++) {
         const web_id_dns_t *d = &p->dns[i];
         if (d->q < WEB_ANOM_A8_MIN_Q) continue;
@@ -795,25 +1007,46 @@ static void bump(web_anomaly_t *a, web_anom_ep_t *e) {
     e->dirty = 1;
 }
 
-/* A slot for a new episode: free, else the oldest closed. Never an open
- * one, and never a building one: builders taking each other's slots
- * would keep every one of them from reaching its streak. A building
- * episode that misses a bucket frees its slot at the next sweep. */
-static int new_slot_locked(web_anomaly_t *a) {
-    int closed_i = -1;
+/* A slot for a new episode of rule: a free one; else the rule's own
+ * oldest closed episode; else, while the rule holds fewer than its
+ * share (cap / rules) of the table, the oldest closed episode of a rule
+ * holding more than its share. Never an open one, and never a building
+ * one: builders taking each other's slots would keep every one of them
+ * from reaching its streak (a building episode that misses a bucket
+ * frees its slot at the next sweep). Never another rule's closed one
+ * otherwise: when one oldest-closed pool served every rule, a flood of
+ * one kind (spoofed probe requests, each a new MAC) pushed every other
+ * rule's closed episodes out of the table well inside their 24 h. */
+static int new_slot_locked(web_anomaly_t *a, int rule) {
+    int count[WEB_ANOM_RULE_COUNT] = { 0 };
+    int own = -1, other[WEB_ANOM_RULE_COUNT];
+    for (int r = 0; r < WEB_ANOM_RULE_COUNT; r++) other[r] = -1;
+    int free_i = -1;
     for (int i = 0; i < a->cap; i++) {
         web_anom_ep_t *e = &a->ep[i];
-        if (e->state == WEB_EP_FREE) return i;
-        if (e->state == WEB_EP_CLOSED &&
-            (closed_i < 0 || e->last_seen < a->ep[closed_i].last_seen))
-            closed_i = i;
+        if (e->state == WEB_EP_FREE) {
+            if (free_i < 0) free_i = i;
+            continue;
+        }
+        if (e->rule < 0 || e->rule >= WEB_ANOM_RULE_COUNT) continue;
+        count[e->rule]++;
+        if (e->state != WEB_EP_CLOSED) continue;
+        int *best = e->rule == rule ? &own : &other[e->rule];
+        if (*best < 0 || e->last_seen < a->ep[*best].last_seen) *best = i;
     }
-    if (closed_i >= 0) {
-        a->st.evicted_closed++;
-        ep_delete(a, &a->ep[closed_i]);
-        return closed_i;
-    }
-    return -1;
+    if (free_i >= 0) return free_i;
+    int quota = a->cap / WEB_ANOM_RULE_COUNT;
+    if (quota < 1) quota = 1;
+    int take = own;
+    if (take < 0 && count[rule] < quota)
+        for (int r = 0; r < WEB_ANOM_RULE_COUNT; r++)
+            if (r != rule && count[r] > quota && other[r] >= 0 &&
+                (take < 0 || a->ep[other[r]].last_seen < a->ep[take].last_seen))
+                take = other[r];
+    if (take < 0) return -1;
+    a->st.evicted_closed++;
+    ep_delete(a, &a->ep[take]);
+    return take;
 }
 
 static web_anom_ep_t *active_locked(web_anomaly_t *a, int rule, int metric,
@@ -833,7 +1066,7 @@ static int touch_locked(web_anomaly_t *a, const cand_t *c, long long bucket,
                         long long ts) {
     web_anom_ep_t *e = active_locked(a, c->rule, c->metric, c->key);
     if (!e) {
-        int i = new_slot_locked(a);
+        int i = new_slot_locked(a, c->rule);
         if (i < 0) { a->st.dropped++; return 0; }
         e = &a->ep[i];
         memset(e, 0, sizeof(*e));
@@ -870,21 +1103,21 @@ static void apply(web_anomaly_t *a, const int *evaluated, long long bucket,
                   long long ts) {
     struct web_anom_priv *p = a->p;
     pthread_mutex_lock(&a->mu);
-    for (int i = 0; i < p->cand_n; i++)
+    for (int i = 0; i < p->cand_n; i++) {
+        const cand_t *c = &p->cand[i];
         /* A2 reports a MAC once: only one that got its episode counts as
-         * reported, so a full table delays it rather than losing it. */
-        if (touch_locked(a, &p->cand[i], bucket, ts) &&
-            p->cand[i].rule == WEB_ANOM_A2_NEW) {
-            int made;
-            int k = kv_get(&p->rep, 0, p->cand[i].key, ts, &made, NULL);
-            p->rep.e[k].t = ts;
-            if (made && p->rep_nnew < p->rep_cap) {
-                web_store_rep_t *r = &p->rep_new[p->rep_nnew++];
-                snprintf(r->kind, sizeof(r->kind), "%s", RULE_NAME[WEB_ANOM_A2_NEW]);
-                snprintf(r->key, sizeof(r->key), "%s", p->cand[i].key);
-                r->t = ts;
-            }
+         * reported, so a full table delays it rather than losing it. A
+         * reported set full of MACs still in their window refuses the
+         * report rather than forget one of them (which would report
+         * that one again). A burst (key "") marked its MACs itself. */
+        int a2 = c->rule == WEB_ANOM_A2_NEW && c->key[0];
+        if (a2 && kv_find(&p->rep, 0, c->key) < 0 && p->rep.n >= p->rep.cap) {
+            a->st.reported_refused++;
+            continue;
         }
+        if (touch_locked(a, c, bucket, ts) && a2)
+            rep_mark(p, c->key, c->t0 >= 0 ? c->t0 : ts);
+    }
     for (int i = 0; i < a->cap; i++) {
         web_anom_ep_t *e = &a->ep[i];
         if (e->state == WEB_EP_CLOSED) {
@@ -953,6 +1186,22 @@ static void minute_pass(web_anomaly_t *a, long long m, int latest,
     if (p->mad_hour != t - t % 3600) p->mad_n = 0;
     p->mad_q = 0;
 
+    /* Every minute row into its hour's sums, observed or not: whether
+     * the hour is fed is the hour pass's decision. */
+    unsigned long acc_full = 0;
+    for (int k = 0; k < p->idx_n; k++) {
+        const agg_t *g = &p->agg[p->idx[k]];
+        if (g->t != t) continue;
+        web_point_t pt = agg_point(g);
+        if (acc_add(p, g->metric, g->key, t, web_bl_value(g->metric, &pt, 60)) != 0)
+            acc_full++;
+    }
+    if (acc_full) {
+        pthread_mutex_lock(&a->mu);
+        a->st.rows_dropped += acc_full;
+        pthread_mutex_unlock(&a->mu);
+    }
+
     if (observed) {
         evaluated[WEB_ANOM_A1_RATE] = evaluated[WEB_ANOM_A3_HOURS] = 1;
         if (a->cfg.store) evaluated[WEB_ANOM_A9_PROTO] = 1;
@@ -1017,23 +1266,44 @@ static void minute_pass(web_anomaly_t *a, long long m, int latest,
     apply(a, evaluated, t, ts);
 }
 
+/* The hour's baseline writes. Deletes first: a pair evicted and fed
+ * again in the same hour then finds its old row gone when its new one
+ * is written (written first, the insert hit UNIQUE (metric, key) and
+ * rolled its whole batch back). A delete the store refused goes back on
+ * the queue and the writes wait for the next hour, so no write can take
+ * over a row whose delete is still pending. A refused batch of writes
+ * is marked dirty again and held to the next pass; the batches after it
+ * still go. */
 static void persist_baseline(web_anomaly_t *a) {
     struct web_anom_priv *p = a->p;
-    long long ids[256];
+    long long *ids = p->bldel;
     int n;
     if (!a->cfg.store) {
-        while (web_baseline_take_deleted(a->cfg.bl, ids, 256) > 0) {}
+        while (web_baseline_take_deleted(a->cfg.bl, ids, BL_DEL_BATCH) > 0) {}
         return;
     }
-    while ((n = web_baseline_take_dirty(a->cfg.bl, p->blrec, 512)) > 0)
-        if (web_store_bl_put(a->cfg.store, a->cfg.bl, p->blrec, n) != 0) {
-            pthread_mutex_lock(&a->mu);
-            a->st.persist_errors++;
-            pthread_mutex_unlock(&a->mu);
+    unsigned long errors = 0;
+    int del_ok = 1;
+    while ((n = web_baseline_take_deleted(a->cfg.bl, ids, BL_DEL_BATCH)) > 0)
+        if (web_store_bl_del(a->cfg.store, ids, n) != 0) {
+            web_baseline_requeue_deleted(a->cfg.bl, ids, n);
+            errors++;
+            del_ok = 0;
             break;
         }
-    while ((n = web_baseline_take_deleted(a->cfg.bl, ids, 256)) > 0)
-        if (web_store_bl_del(a->cfg.store, ids, n) != 0) break;
+    if (del_ok) {
+        web_baseline_pass(a->cfg.bl);
+        while ((n = web_baseline_take_dirty(a->cfg.bl, p->blrec, BL_BATCH)) > 0)
+            if (web_store_bl_put(a->cfg.store, a->cfg.bl, p->blrec, n) != 0) {
+                web_baseline_redirty(a->cfg.bl, p->blrec, n);
+                errors++;
+            }
+    }
+    if (errors) {
+        pthread_mutex_lock(&a->mu);
+        a->st.persist_errors += errors;
+        pthread_mutex_unlock(&a->mu);
+    }
 }
 
 static void hour_pass(web_anomaly_t *a, long long h) {
@@ -1041,14 +1311,17 @@ static void hour_pass(web_anomaly_t *a, long long h) {
     int obs = hour_observed(a, h) && (!a->cfg.live || h >= p->start_s);
     p->idx_n = 0;
     for (int i = 0; i < p->agg_alloc; i++)
-        if (p->agg[i].used && p->agg[i].tier == WEB_TIER_HOUR &&
+        if (p->agg[i].used && (p->agg[i].tier == WEB_TIER_HOUR ||
+                               p->agg[i].tier == TIER_ACC) &&
             p->agg[i].t <= h)
             idx_push(p, i);
     for (int k = 0; obs && k < p->idx_n; k++) {
         const agg_t *g = &p->agg[p->idx[k]];
+        if (g->tier != WEB_TIER_HOUR) continue;
         web_point_t pt = agg_point(g);
-        web_baseline_feed(a->cfg.bl, g->metric, g->key, g->t,
-                          web_bl_value(g->metric, &pt, 3600), 1);
+        web_baseline_feed_w(a->cfg.bl, g->metric, g->key, g->t,
+                            web_bl_value(g->metric, &pt, 3600),
+                            within_var(p, g), 1);
     }
     if (obs) web_baseline_zero_missing(a->cfg.bl, h);
     for (int k = 0; k < p->idx_n; k++) agg_release(p, p->idx[k]);
@@ -1148,8 +1421,26 @@ void web_anomaly_rows(void *ctx, const web_qrow_t *rows, size_t n) {
         if (r->tier == WEB_TIER_MINUTE) {
             if (p->start_s >= 0 && r->t / 60 <= p->done_minute) {
                 /* Released late (a key established after its first
-                 * minute): too late to score, still a window sample. */
-                if (r->metric == WM_HOST_CONNS) fan_window(a, r->key, r->max, r->t);
+                 * minute): too late to score for A1, still a window
+                 * sample, still a minute of its hour, and still a first
+                 * use. A9 is the case that matters: a host new to the
+                 * stream whose first activity is the protocol has its
+                 * first minute row held until the key is established,
+                 * and by the next minute that row is in the store, so
+                 * skipping it here meant A9 never fired for exactly the
+                 * host it is for. The row is already written (the store
+                 * takes a batch before this hook), and the check asks
+                 * for rows strictly before its own t. */
+                web_qrow_t rc = *r;
+                rc.key[WEB_KEY_MAX] = '\0';
+                web_point_t pt = { rc.t, rc.sum, rc.min, rc.max, rc.n };
+                double v = web_bl_value(rc.metric, &pt, 60);
+                if (rc.metric == WM_HOST_CONNS) fan_window(a, rc.key, rc.max, rc.t);
+                if (p->final_hour == LLONG_MIN || rc.t - rc.t % 3600 > p->final_hour)
+                    acc_add(p, rc.metric, rc.key, rc.t, v);
+                if (a->cfg.store && is_flow(rc.metric) && v > 0 &&
+                    minute_observed(a, rc.t / 60))
+                    a9_check(a, rc.metric, rc.key, rc.t);
                 late++;
                 continue;
             }
@@ -1215,10 +1506,13 @@ void web_anomaly_step(web_anomaly_t *a, long long now_s) {
         if (a->cfg.store)
             web_store_rep_prune(a->cfg.store,
                                 now_s - WEB_ANOM_A2_WINDOW_S - WEB_ANOM_A2_SKEW_S);
+        /* Both keyed by the MAC's first_seen: an entry leaves exactly
+         * when a2_scan() would no longer consider the MAC new. */
+        long long cut = now_s - WEB_ANOM_A2_WINDOW_S - WEB_ANOM_A2_SKEW_S;
         for (int i = 0; i < p->rep.cap; i++)
-            if (p->rep.e[i].used &&
-                p->rep.e[i].t < now_s - WEB_ANOM_A2_WINDOW_S - WEB_ANOM_A2_SKEW_S)
-                kv_del(&p->rep, i);
+            if (p->rep.e[i].used && p->rep.e[i].t < cut) kv_del(&p->rep, i);
+        for (int i = 0; i < p->old.cap; i++)
+            if (p->old.e[i].used && p->old.e[i].t < cut) kv_del(&p->old, i);
     }
     if (ran) persist(a);
     if (fan_closed) persist_fanout(a);
@@ -1242,11 +1536,27 @@ void web_anomaly_attach(web_anomaly_t *a, web_tsdb_t *t) {
 
 /* ── restore ─────────────────────────────────────────────────────────── */
 
+/* A unix second slothweb could have written: from 1970 to the year
+ * 3000. Anything else in the file is not one of its episodes. */
+#define T_SANE(t) ((t) >= 0 && (t) <= 32503680000LL)
+
+static double clamp100(double v) {
+    return !isfinite(v) || v < 0 ? 0 : v > 100 ? 100 : v;
+}
+
 static void restore_ep(void *ctx, const web_store_ep_t *s) {
     web_anomaly_t *a = ctx;
     int rule = rule_find(s->kind);
     if (rule < 0 || (s->state != WEB_EP_OPEN && s->state != WEB_EP_CLOSED))
         return;
+    /* Read back as if off the wire: next_id = id + 1 must not overflow,
+     * ages are differences of these times, and the listing rounds the
+     * scores to integers (undefined for 1e300). */
+    if (s->id <= 0 || s->id == LLONG_MAX || !T_SANE(s->first_seen) ||
+        !T_SANE(s->last_seen) || s->first_seen > s->last_seen ||
+        (s->last_bucket != LLONG_MIN && !T_SANE(s->last_bucket)))
+        return;
+    if (s->metric >= WM_COUNT) return;
     int slot = -1;
     for (int i = 0; i < a->cap; i++)
         if (a->ep[i].state == WEB_EP_FREE) { slot = i; break; }
@@ -1258,13 +1568,13 @@ static void restore_ep(void *ctx, const web_store_ep_t *s) {
     e->rule = rule;
     e->metric = s->metric;
     snprintf(e->key, sizeof(e->key), "%s", s->key);
-    e->score = isfinite(s->score) ? s->score : 0;
-    e->peak = isfinite(s->peak) ? s->peak : 0;
+    e->score = clamp100(s->score);
+    e->peak = clamp100(s->peak);
     web_utf8_copy(e->evidence, WEB_ANOM_EVIDENCE_MAX, s->evidence);
     e->first_seen = s->first_seen;
     e->last_seen = s->last_seen;
-    e->hit_streak = s->hit_streak;
-    e->clear_streak = s->clear_streak;
+    e->hit_streak = s->hit_streak > 0 ? s->hit_streak : 0;
+    e->clear_streak = s->clear_streak > 0 ? s->clear_streak : 0;
     e->last_bucket = s->last_bucket;
     e->seq = ++a->seq;
     if (s->id >= a->p->next_id) a->p->next_id = s->id + 1;
@@ -1294,7 +1604,7 @@ static void restore_rep(void *ctx, const web_store_rep_t *r) {
     web_anomaly_t *a = ctx;
     struct web_anom_priv *p = a->p;
     if (strcmp(r->kind, RULE_NAME[WEB_ANOM_A2_NEW])) return;
-    if (p->rep.n >= p->rep.cap) return;
+    if (p->rep.n >= p->rep.cap || !T_SANE(r->t)) return;
     int made;
     int i = kv_get(&p->rep, 0, r->key, r->t, &made, NULL);
     p->rep.e[i].t = r->t;
@@ -1332,8 +1642,8 @@ void web_anomaly_ep_json(web_jw_t *w, const web_anom_ep_t *e) {
         web_jw_raw(w, "null");
     }
     web_jw_raw(w, ",\"key\":");          web_jw_str(w, e->key);
-    web_jw_raw(w, ",\"score\":");        web_jw_int(w, (long long)(e->score + 0.5));
-    web_jw_raw(w, ",\"peak\":");         web_jw_int(w, (long long)(e->peak + 0.5));
+    web_jw_raw(w, ",\"score\":");        web_jw_int(w, (long long)(clamp100(e->score) + 0.5));
+    web_jw_raw(w, ",\"peak\":");         web_jw_int(w, (long long)(clamp100(e->peak) + 0.5));
     web_jw_raw(w, ",\"evidence\":");     web_jw_str(w, e->evidence);
     web_jw_raw(w, ",\"first_seen\":");   web_jw_int(w, e->first_seen);
     web_jw_raw(w, ",\"last_seen\":");    web_jw_int(w, e->last_seen);

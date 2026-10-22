@@ -24,18 +24,37 @@
  *                counter's count in the minute, a gauge's mean) has
  *                |z| >= WEB_ANOM_Z_THRESHOLD against its own cell for
  *                this hour of the week, in WEB_ANOM_STREAK_MIN
- *                consecutive observed minutes. A counter with a baseline
- *                and no row this minute counted 0 and is scored as 0; a
- *                gauge with no row was not measured and breaks the
- *                streak. A counter must also pass the MAD ratio (§5.3,
- *                below) when the store has the history for it.
+ *                consecutive observed minutes. The z of a minute uses
+ *                the cell's minute spread, sqrt(var + wvar)
+ *                (web_baseline.h): the week-to-week spread of the hour
+ *                plus the spread of minutes inside it, which the engine
+ *                learns from the minute rows it scores (summed per
+ *                series per hour, handed over when the hour is fed). A
+ *                counter with a baseline and no row this minute counted
+ *                0 and is scored as 0; a gauge with no row was not
+ *                measured and breaks the streak. A counter must also
+ *                pass the MAD ratio (§5.3, below) when the store has
+ *                the history for it.
  *   A2  new      a MAC whose own first_seen (the probe_client,
  *                pnl_client or assoc row's, from sloth) is within
- *                WEB_ANOM_A2_WINDOW_S of now, reported once per MAC (the
- *                reported set outlives a restart). Randomised MACs are
- *                left out: every rotation is new by construction, and
- *                A5 is the rule about them. A MAC sloth first saw long
- *                ago is not new however recently slothweb connected.
+ *                WEB_ANOM_A2_WINDOW_S of now, and of which slothweb
+ *                holds nothing older than that window: no dev.present
+ *                or dev.frames baseline entry first fed before it, and
+ *                no minute or hour row of either in the store before it.
+ *                sloth sets first_seen to now whenever it makes a client
+ *                entry (at its restart, src/capture/probe.c), so its
+ *                first_seen alone is not "new". Reported once per MAC:
+ *                the reported set (it outlives a restart) is keyed by
+ *                first_seen and loses an entry only when that leaves the
+ *                window; full, it refuses (counted) rather than forget a
+ *                MAC it would then report again. More than
+ *                WEB_ANOM_A2_BURST new MACs in one minute are one
+ *                episode keyed "", not one each, and are not put in the
+ *                reported set (a flood would fill it). At most
+ *                WEB_ANOM_A2_CHECKS_PER_MIN store lookups a minute; the
+ *                rest wait a minute (counted). Randomised MACs are left
+ *                out: every rotation is new by construction, and A5 is
+ *                the rule about them.
  *   A3  hours    a MAC present in this minute (dev.present) whose
  *                presence cell for this hour of the week has mean below
  *                WEB_ANOM_A3_MEAN_MAX over WEB_ANOM_A3_MIN_N or more
@@ -68,7 +87,10 @@
  *   A9  proto    a host's flow.{ssh,rdp,smb,snmp,mqtt} minute row with
  *                no row of that (metric, key) before it in the minute or
  *                hour tier: the first use the store has ever recorded.
- *                Needs the store; a memory-only build skips it.
+ *                A row released late (a host new to the stream has its
+ *                first minute held until its key is established) is
+ *                checked as it arrives, at its own t. Needs the store;
+ *                a memory-only build skips it.
  *   A10 sensor   the socket is connected and nothing has arrived for
  *                WEB_ANOM_A10_SILENCE_S, counted from the later of the
  *                last record and the connection itself, so a connection
@@ -98,8 +120,11 @@
  * kept for WEB_ANOM_KEEP_S (listed by /api/anomalies within its
  * window); if its rule holds again, a new episode starts and has to
  * earn its streak afresh. The table holds WEB_ANOM_CAP: a new episode
- * takes a free slot, else the oldest closed one; an open or building
- * episode is never pushed out (the new one is dropped and counted).
+ * takes a free slot, else its own rule's oldest closed one, else (while
+ * its rule holds less than cap / rules) the oldest closed one of a rule
+ * holding more than that; never another rule's otherwise, so one rule's
+ * flood cannot erase the others' history. An open or building episode
+ * is never pushed out (the new one is dropped and counted).
  *
  * Threads: the rows hook and the step hook run on the store thread,
  * which alone writes the engine's state. The rules are evaluated
@@ -148,6 +173,8 @@ enum { WEB_EP_FREE = 0, WEB_EP_BUILDING, WEB_EP_OPEN, WEB_EP_CLOSED };
 #define WEB_ANOM_MAD_PER_MIN    32
 #define WEB_ANOM_A2_WINDOW_S    86400
 #define WEB_ANOM_A2_SKEW_S      300
+#define WEB_ANOM_A2_BURST       8
+#define WEB_ANOM_A2_CHECKS_PER_MIN 256
 #define WEB_ANOM_A3_MEAN_MAX    0.1
 #define WEB_ANOM_A3_MIN_N       4
 #define WEB_ANOM_A7_WINDOW_S    600
@@ -192,6 +219,8 @@ typedef struct {
     unsigned long mad_queries, mad_skipped, a9_queries, a9_errors;
     unsigned long fanout_evictions, reported_evictions, known_evictions;
     unsigned long persist_errors;
+    unsigned long a2_queries, a2_errors, a2_not_new, a2_deferred;
+    unsigned long reported_refused, ident_truncated, a2_in_burst;
     int           open, building, closed_kept, fanout, reported;
 } web_anom_stats_t;
 

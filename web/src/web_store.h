@@ -80,7 +80,7 @@
 #define WEB_STORE_EXPIRE_STEPS  256
 #define WEB_STORE_VACUUM_PAGES  256
 
-#define WEB_STORE_AN_STMTS 14
+#define WEB_STORE_AN_STMTS 16
 
 struct sqlite3;
 struct sqlite3_stmt;
@@ -97,6 +97,9 @@ typedef struct {
     unsigned long compactions;
     unsigned long long dropped_expired, dropped_ceiling;
     unsigned long ceiling_runs;           /* passes that dropped rows */
+    unsigned long bl_rows_reused;         /* baseline rows a new entry
+                                             took over (a delete that
+                                             had not reached the file) */
     long long     last_compact;           /* unix s, 0 never */
     char          last_error[WEB_STORE_ERR_MAX];
 } web_store_stats_t;
@@ -141,8 +144,31 @@ int  web_store_write(web_store_t *s, const web_qrow_t *rows, size_t n);
  * the head of the t index and its own transaction. The series rows
  * left with no bucket are swept once after, and free pages go back to
  * the file system, WEB_STORE_VACUUM_PAGES at a time. Rows dropped, or
- * -1. */
+ * -1.
+ *
+ * The ceiling is the whole file's used pages, the analysis state (v3's
+ * baseline, baseline_cell, episode, fanout and reported tables)
+ * included, but only time-series rows can be dropped. If the analysis
+ * state alone is over the ceiling, every check drops every bucket (the
+ * history A9 and the MAD ratio read) and the file is still over it. A
+ * small --web-max-mb with a large --web-max-keys can do that: slothweb
+ * warns at start when the ceiling is below
+ * web_store_analysis_max_bytes(). */
 long long web_store_ceiling(web_store_t *s, long long max_bytes);
+
+/* An estimate of the most the analysis state can take in the file:
+ * bl_cap baseline entries with every one of their 168 cells, ep_cap
+ * episodes, hosts fan-out histograms and macs reported MACs, at the
+ * row sizes below (payload, b-tree overhead and the UNIQUE index; pages
+ * about three quarters full). Not a measurement: the order of
+ * magnitude a ceiling has to clear. */
+#define WEB_STORE_EST_CELL_B  56
+#define WEB_STORE_EST_ROW_B   160
+#define WEB_STORE_EST_EP_B    400
+#define WEB_STORE_EST_FAN_B   200
+#define WEB_STORE_EST_REP_B   80
+long long web_store_analysis_max_bytes(int bl_cap, int ep_cap, int hosts,
+                                       int macs);
 
 /* Hourly upkeep: drop rows past each tier's retention (fine 24 h,
  * minute retain_days, hour 400 d), a tile of series and t at a time;

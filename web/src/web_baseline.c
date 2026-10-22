@@ -1,5 +1,7 @@
 #include "web_baseline.h"
 
+#include <float.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,6 +51,21 @@ double web_bl_sd_floor(int metric, double mean) {
     return rel > unit ? rel : unit;
 }
 
+double web_bl_cell_sd(int metric, const web_bl_cell_t *c, double *sd_hour,
+                      double *within) {
+    double var = c->var > 0 ? (double)c->var : 0.0;
+    double w = c->wn && c->wvar > 0 ? (double)c->wvar : 0.0;
+    if (metric >= 0 && metric < WM_COUNT &&
+        web_metric_defs[metric].kind == WEB_MK_COUNTER &&
+        w < fabs((double)c->mean))
+        w = fabs((double)c->mean);
+    double fl = web_bl_sd_floor(metric, c->mean);
+    double sd = sqrt(var + w), sh = sqrt(var);
+    if (sd_hour) *sd_hour = sh > fl ? sh : fl;
+    if (within) *within = w;
+    return sd > fl ? sd : fl;
+}
+
 static unsigned hash_entry(int metric, const char *key) {
     unsigned h = 5381u ^ ((unsigned)metric * 0x9e3779b1u);
     for (const unsigned char *p = (const unsigned char *)key; *p; p++)
@@ -85,8 +102,11 @@ void web_baseline_destroy(web_baseline_t *b) {
         for (int i = 0; i < b->nchunk; i++) free(b->chunk[i]);
     free(b->chunk);
     free(b->head);
+    free(b->del);
     b->chunk = NULL;
     b->head = NULL;
+    b->del = NULL;
+    b->ndel = b->delcap = 0;
 }
 
 static int find_locked(web_baseline_t *b, int metric, const char *key) {
@@ -151,13 +171,27 @@ static void unhash(web_baseline_t *b, int idx) {
     if (*pp == idx) *pp = x->hnext;
 }
 
+/* Room for need more ids. Grown, never trimmed by dropping: a dropped
+ * id is a row nothing deletes while the process runs. */
+static int del_room(web_baseline_t *b, int need) {
+    if (b->ndel + need <= b->delcap) return 0;
+    int nc = b->delcap ? b->delcap : 256;
+    while (nc < b->ndel + need) {
+        if (nc > INT_MAX / 2) return -1;
+        nc *= 2;
+    }
+    long long *nd = realloc(b->del, (size_t)nc * sizeof(*nd));
+    if (!nd) return -1;
+    b->del = nd;
+    b->delcap = nc;
+    return 0;
+}
+
 static void queue_delete(web_baseline_t *b, long long id) {
     if (id < 0) return;
-    if (b->ndel >= WEB_BL_DEL_MAX) {
-        memmove(b->del, b->del + 1, (WEB_BL_DEL_MAX - 1) * sizeof(b->del[0]));
-        b->ndel--;
-        b->del_lost++;
-    }
+    /* Out of memory only: counted, and the store's insert finds the row
+     * by its pair and reuses it, so the pair still persists. */
+    if (del_room(b, 1) != 0) { b->del_lost++; return; }
     b->del[b->ndel++] = id;
 }
 
@@ -206,7 +240,7 @@ static int create_locked(web_baseline_t *b, int metric, const char *key) {
     e->metric = metric;
     e->used = 1;
     e->db_id = -1;
-    e->last_active = e->last_fed = -1;
+    e->last_active = e->last_fed = e->first_fed = -1;
     e->lprev = e->lnext = -1;
     unsigned h = hash_entry(metric, key) & (unsigned)(b->nhead - 1);
     e->hnext = b->head[h];
@@ -221,14 +255,14 @@ static int valid_pair(int metric, const char *key) {
            strlen(key) <= WEB_KEY_MAX;
 }
 
-static void feed_cell(web_bl_entry_t *e, int ci, double value) {
+static void feed_cell(web_bl_entry_t *e, int ci, double value, double wvar) {
+    static const double alpha = 0.15910358474628547; /* 1 - 2^(-1/4) */
     web_bl_cell_t *c = &e->cell[ci];
     if (c->n == 0) {
         c->mean = (float)value;
         c->var = 0;
         c->n = 1;
     } else {
-        static const double alpha = 0.15910358474628547; /* 1 - 2^(-1/4) */
         double mean = c->mean, var = c->var;
         double delta = value - mean;
         mean += alpha * delta;
@@ -237,15 +271,27 @@ static void feed_cell(web_bl_entry_t *e, int ci, double value) {
         c->var = (float)var;
         if (c->n < WEB_BL_N_MAX) c->n++;
     }
+    if (wvar >= 0) {
+        if (c->wn == 0) c->wvar = (float)wvar;
+        else c->wvar = (float)((1.0 - alpha) * c->wvar + alpha * wvar);
+        if (c->wn < WEB_BL_N_MAX) c->wn++;
+    }
     e->dirty[ci / 8] |= (uint8_t)(1u << (ci % 8));
     e->dirty_meta = 1;
 }
 
 int web_baseline_feed(web_baseline_t *b, int metric, const char *key,
                       long long t, double value, int real) {
+    return web_baseline_feed_w(b, metric, key, t, value, -1.0, real);
+}
+
+int web_baseline_feed_w(web_baseline_t *b, int metric, const char *key,
+                        long long t, double value, double wvar, int real) {
     if (!isfinite(value) || !valid_pair(metric, key)) return -1;
     if (value > WEB_VALUE_MAX) value = WEB_VALUE_MAX;
     if (value < -WEB_VALUE_MAX) value = -WEB_VALUE_MAX;
+    /* A within-variance a float cannot hold is no sample. */
+    if (!isfinite(wvar) || wvar < 0 || wvar > FLT_MAX) wvar = -1.0;
     pthread_mutex_lock(&b->mu);
     int idx = find_locked(b, metric, key);
     if (idx < 0) {
@@ -259,7 +305,8 @@ int web_baseline_feed(web_baseline_t *b, int metric, const char *key,
         pthread_mutex_unlock(&b->mu);
         return -1;
     }
-    feed_cell(e, web_bl_cell_index(t), value);
+    feed_cell(e, web_bl_cell_index(t), value, wvar);
+    if (e->first_fed < 0 || t < e->first_fed) e->first_fed = t;
     e->last_fed = t;
     if (real) {
         b->fed++;
@@ -282,7 +329,8 @@ int web_baseline_zero_missing(web_baseline_t *b, long long t) {
         web_bl_entry_t *e = E(b, i);
         int k = web_metric_defs[e->metric].kind;
         if (k == WEB_MK_GAUGE || e->last_fed >= t) continue;
-        feed_cell(e, ci, 0.0);
+        /* Nothing in any minute: no spread inside the hour either. */
+        feed_cell(e, ci, 0.0, 0.0);
         e->last_fed = t;
         b->zero_fed++;
         n++;
@@ -313,13 +361,11 @@ int web_baseline_score(web_baseline_t *b, int metric, const char *key,
         pthread_mutex_unlock(&b->mu);
         return -1;
     }
-    const web_bl_cell_t *c = &E(b, idx)->cell[web_bl_cell_index(t)];
+    const web_bl_cell_t *c = &E(b, idx)->cell[web_bl_cell_index(t - t % 3600)];
     out->mean = c->mean;
     out->n = c->n;
     out->warming = c->n < WEB_BL_WARM_N;
-    double sd = sqrt(c->var > 0 ? (double)c->var : 0.0);
-    double fl = web_bl_sd_floor(metric, out->mean);
-    out->sd = sd > fl ? sd : fl;
+    out->sd = web_bl_cell_sd(metric, c, &out->sd_hour, &out->within);
     out->z = out->warming ? 0.0 : (value - out->mean) / out->sd;
     pthread_mutex_unlock(&b->mu);
     return 0;
@@ -348,12 +394,19 @@ void web_baseline_each_counter(web_baseline_t *b,
     pthread_mutex_unlock(&b->mu);
 }
 
+void web_baseline_pass(web_baseline_t *b) {
+    pthread_mutex_lock(&b->mu);
+    /* 0 is "never held". */
+    if (++b->pass == 0) b->pass = 1;
+    pthread_mutex_unlock(&b->mu);
+}
+
 int web_baseline_take_dirty(web_baseline_t *b, web_bl_rec_t *out, int max) {
     int n = 0;
     pthread_mutex_lock(&b->mu);
     for (int i = b->lru_head; i >= 0 && n < max; i = E(b, i)->lnext) {
         web_bl_entry_t *e = E(b, i);
-        if (!e->dirty_meta) continue;
+        if (!e->dirty_meta || (b->pass && e->held_pass == b->pass)) continue;
         /* A new entry's row first: its cells need the id it gets. */
         int rows_needed = e->db_id < 0 ? 1 : 0;
         for (int c = 0; c < WEB_BL_CELLS; c++)
@@ -370,15 +423,18 @@ int web_baseline_take_dirty(web_baseline_t *b, web_bl_rec_t *out, int max) {
             memcpy(r->key, e->key, sizeof(r->key));
             r->last_active = e->last_active;
             r->last_fed = e->last_fed;
+            r->first_fed = e->first_fed;
             r->cell = c;
             if (c >= 0) {
                 r->mean = e->cell[c].mean;
                 r->var = e->cell[c].var;
+                r->wvar = e->cell[c].wvar;
                 r->n = e->cell[c].n;
+                r->wn = e->cell[c].wn;
                 e->dirty[c / 8] &= (uint8_t)~(1u << (c % 8));
             } else {
-                r->mean = r->var = 0;
-                r->n = 0;
+                r->mean = r->var = r->wvar = 0;
+                r->n = r->wn = 0;
                 wrote_meta = 1;
             }
         }
@@ -388,6 +444,25 @@ int web_baseline_take_dirty(web_baseline_t *b, web_bl_rec_t *out, int max) {
     }
     pthread_mutex_unlock(&b->mu);
     return n;
+}
+
+void web_baseline_redirty(web_baseline_t *b, const web_bl_rec_t *recs, int n) {
+    pthread_mutex_lock(&b->mu);
+    for (int i = 0; i < n; i++) {
+        const web_bl_rec_t *r = &recs[i];
+        if (!valid_pair(r->metric, r->key)) continue;
+        int idx = find_locked(b, r->metric, r->key);
+        if (idx < 0) continue;
+        web_bl_entry_t *e = E(b, idx);
+        /* A record of a row the entry no longer has (it was evicted and
+         * came back) belongs to nothing. */
+        if (r->db_id >= 0 && e->db_id != r->db_id) continue;
+        if (r->cell >= 0 && r->cell < WEB_BL_CELLS)
+            e->dirty[r->cell / 8] |= (uint8_t)(1u << (r->cell % 8));
+        e->dirty_meta = 1;
+        e->held_pass = b->pass;
+    }
+    pthread_mutex_unlock(&b->mu);
 }
 
 void web_baseline_set_dbid(web_baseline_t *b, int metric, const char *key,
@@ -402,16 +477,42 @@ void web_baseline_set_dbid(web_baseline_t *b, int metric, const char *key,
 int web_baseline_take_deleted(web_baseline_t *b, long long *out, int max) {
     pthread_mutex_lock(&b->mu);
     int n = b->ndel < max ? b->ndel : max;
-    memcpy(out, b->del, (size_t)n * sizeof(*out));
-    memmove(b->del, b->del + n, (size_t)(b->ndel - n) * sizeof(b->del[0]));
-    b->ndel -= n;
+    if (n > 0) {
+        memcpy(out, b->del, (size_t)n * sizeof(*out));
+        memmove(b->del, b->del + n, (size_t)(b->ndel - n) * sizeof(b->del[0]));
+        b->ndel -= n;
+    }
     pthread_mutex_unlock(&b->mu);
     return n;
 }
 
+void web_baseline_requeue_deleted(web_baseline_t *b, const long long *ids,
+                                  int n) {
+    if (n <= 0) return;
+    pthread_mutex_lock(&b->mu);
+    if (del_room(b, n) == 0) {
+        memmove(b->del + n, b->del, (size_t)b->ndel * sizeof(b->del[0]));
+        memcpy(b->del, ids, (size_t)n * sizeof(*ids));
+        b->ndel += n;
+    } else {
+        b->del_lost += (unsigned long)n;
+    }
+    pthread_mutex_unlock(&b->mu);
+}
+
+int web_baseline_first_fed(web_baseline_t *b, int metric, const char *key,
+                           long long *out) {
+    if (!valid_pair(metric, key)) return -1;
+    pthread_mutex_lock(&b->mu);
+    int idx = find_locked(b, metric, key);
+    if (idx >= 0) *out = E(b, idx)->first_fed;
+    pthread_mutex_unlock(&b->mu);
+    return idx >= 0 ? 0 : -1;
+}
+
 int web_baseline_load(web_baseline_t *b, int metric, const char *key,
                       long long db_id, long long last_active,
-                      long long last_fed) {
+                      long long last_fed, long long first_fed) {
     if (!valid_pair(metric, key)) return -1;
     pthread_mutex_lock(&b->mu);
     int rc = -1;
@@ -423,6 +524,10 @@ int web_baseline_load(web_baseline_t *b, int metric, const char *key,
             e->db_id = db_id;
             e->last_active = last_active;
             e->last_fed = last_fed;
+            /* A row without one (or a nonsense one) says only that the
+             * entry is at least as old as its last feed. */
+            e->first_fed = first_fed >= 0 && first_fed <= last_fed
+                ? first_fed : last_fed;
             lru_place(b, idx);
             rc = 0;
         }
@@ -431,10 +536,18 @@ int web_baseline_load(web_baseline_t *b, int metric, const char *key,
     return rc;
 }
 
+/* What a float holds as a finite number (a cast of anything larger is
+ * an infinity, which /api/baseline would print as bare inf). */
+static int float_ok(double v) {
+    return isfinite(v) && fabs(v) <= FLT_MAX;
+}
+
 int web_baseline_load_cell(web_baseline_t *b, int metric, const char *key,
-                           int cell, double mean, double var, long n) {
+                           int cell, double mean, double var, long n,
+                           double wvar, long wn) {
     if (!valid_pair(metric, key) || cell < 0 || cell >= WEB_BL_CELLS ||
-        !isfinite(mean) || !isfinite(var) || var < 0 || n < 1)
+        !float_ok(mean) || !float_ok(var) || var < 0 || n < 1 ||
+        !float_ok(wvar) || wvar < 0 || wn < 0)
         return -1;
     pthread_mutex_lock(&b->mu);
     int idx = find_locked(b, metric, key);
@@ -443,6 +556,8 @@ int web_baseline_load_cell(web_baseline_t *b, int metric, const char *key,
         c->mean = (float)mean;
         c->var = (float)var;
         c->n = (uint16_t)(n > WEB_BL_N_MAX ? WEB_BL_N_MAX : n);
+        c->wvar = (float)wvar;
+        c->wn = (uint16_t)(wn > WEB_BL_N_MAX ? WEB_BL_N_MAX : wn);
     }
     pthread_mutex_unlock(&b->mu);
     return idx >= 0 ? 0 : -1;

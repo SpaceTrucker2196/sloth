@@ -140,6 +140,20 @@ int main(int argc, char **argv) {
                         "rules A1-A3, A5-A10 active, kept in %s; A4 needs "
                         "#162's OUI table\n", web_baseline_count(&g_baseline),
                 cfg.store_path);
+        /* The ceiling counts the analysis state but can only drop
+         * time-series rows (web_store.h): below this it would drop all
+         * of them and still be over. */
+        long long an = web_store_analysis_max_bytes(
+            web_baseline_cap_for(cfg.max_keys), WEB_ANOM_CAP,
+            cfg.max_keys / 2, cfg.max_keys);
+        if ((long long)cfg.max_mb * 1024 * 1024 < an)
+            fprintf(stderr, "slothweb: warning: --web-max-mb %d is below what "
+                            "the baselines and episodes can take at "
+                            "--web-max-keys %d (about %lld MB); once they do, "
+                            "the ceiling drops every time-series row and the "
+                            "file stays over it. Raise --web-max-mb or lower "
+                            "--web-max-keys.\n", cfg.max_mb, cfg.max_keys,
+                    an / (1024 * 1024) + 1);
     } else {
         fprintf(stderr, "slothweb: built without SQLite: time series in "
                         "memory only (10 s buckets, no minute or hour tier "

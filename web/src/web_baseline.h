@@ -10,9 +10,14 @@
  * read as out of band for the week after. A closed hour bucket starts
  * on a UTC hour (web_rollup.h); it is filed under the local hour its
  * start falls in. In a zone with a half-hour offset that hour spans two
- * local hours and is filed under the first. Across a DST change one
- * cell gets no sample that week (spring) or two (autumn): both are one
- * sample of four in the half-life, not a shifted routine.
+ * local hours and is filed under the first, so a score looks up the
+ * same cell: the one its own UTC hour bucket was filed under
+ * (web_baseline_score() takes the cell of t - t % 3600, not of t).
+ * Scoring 14:10 IST against cell 14 would compare it with the bucket
+ * 14:30-15:30, and a device present every day from 13:30 to 14:30
+ * would read as out of hours for half of every visit. Across a DST
+ * change one cell gets no sample that week (spring) or two (autumn):
+ * both are one sample of four in the half-life, not a shifted routine.
  *
  * A cell is fed once an hour, when the hour closes, with the bucket's
  * value on one scale per metric (web_bl_value()): a gauge's mean, a
@@ -22,6 +27,23 @@
  * four-sample half-life, §5.3's formula (alpha = 1 - 2^(-1/4); a cell
  * sees one sample a week, so about four weeks). A cell with fewer than
  * WEB_BL_WARM_N samples is warming and makes no claim.
+ *
+ * Two spreads, because a score and a cell are on different scales. The
+ * cell's var is how much the HOUR's value moves from week to week. A1
+ * scores a MINUTE, and the minutes inside one hour spread far more than
+ * their hour's mean moves between weeks: a host whose connection count
+ * is 2 to 8 every minute of every hour has hour means within a few
+ * tenths of 5, so var alone put a minute of 8 at z = 6. So a cell also
+ * learns wvar, the variance of the hour's minute values about their own
+ * mean (the anomaly engine sums the minute rows it scores and hands the
+ * hour's within-variance to web_baseline_feed_w(); a counter's minutes
+ * without a row count 0), as an EWMA on the same half-life. A minute is
+ * scored with sd = sqrt(var + wvar); for a counter the within term is at
+ * least its mean, the Poisson variance of a count, so that a counter
+ * whose minutes were all alike (or a cell that has no wvar yet) does not
+ * call one extra event in a quiet minute out of band. An hour bucket is
+ * compared with var alone (web_bl_cell_sd()), which is what the UI's band
+ * uses for buckets of an hour or more.
  *
  * What an hour without a row means depends on the metric's kind:
  * a counter that counted nothing and a device that was not present
@@ -52,7 +74,18 @@
  * of its row there and a bitmap of cells changed since it was last
  * written. The store thread takes the dirty cells after each hourly
  * feed and writes them; an evicted or aged-out entry's id is queued for
- * deletion. Restored entries are loaded before any thread starts.
+ * deletion, and the queue grows rather than forget one (a forgotten id
+ * left a row that the same pair's next insert collided with, every hour,
+ * until restart). The deletes are applied before the writes, so a pair
+ * evicted and fed again in one hour finds its old row gone. A batch the
+ * store refused is marked dirty again (web_baseline_redirty()) and is
+ * not taken again in the same pass (web_baseline_pass()), so one bad
+ * batch neither loses its cells nor stops the batches after it.
+ * Restored entries are loaded before any thread starts.
+ *
+ * first_fed, the hour of an entry's first feed, is kept and persisted
+ * for A2: a MAC with an entry older than A2's window is not new,
+ * whatever first_seen sloth sends after its own restart.
  *
  * One mutex guards everything. Only the store thread writes (feeds,
  * evicts, takes dirty cells); the HTTP thread reads cells for
@@ -71,14 +104,11 @@
 #define WEB_BL_SD_REL     0.10  /* sd floor, as a share of |mean| */
 #define WEB_BL_CHUNK      256   /* entries per allocation */
 #define WEB_BL_N_MAX      65535
-/* Ids of evicted entries waiting to be deleted from the store. Past
- * this the oldest are forgotten (counted): their rows are then deleted
- * when the store next finds more rows than entries, at restore. */
-#define WEB_BL_DEL_MAX    4096
 
 typedef struct {
-    float    mean, var;
-    uint16_t n;
+    float    mean, var;   /* the hour value's EWMA mean and variance */
+    float    wvar;        /* EWMA of the variance of minutes in the hour */
+    uint16_t n, wn;       /* samples of mean/var, and of wvar */
 } web_bl_cell_t;
 
 typedef struct {
@@ -89,8 +119,10 @@ typedef struct {
     int           lprev, lnext;   /* LRU list, most recently active first */
     long long     last_active;    /* hour start of the last real row */
     long long     last_fed;       /* hour start of the last feed, real or zero */
+    long long     first_fed;      /* hour start of the first feed */
     long long     db_id;          /* its row in slothweb.db, -1 none yet */
     int           dirty_meta;
+    unsigned      held_pass;      /* refused by the store in this pass */
     uint8_t       dirty[(WEB_BL_CELLS + 7) / 8];
     web_bl_cell_t cell[WEB_BL_CELLS];
 } web_bl_entry_t;
@@ -104,13 +136,16 @@ typedef struct {
     int             *head;
     int              nhead;
     unsigned long    evictions, aged_out, zero_fed, fed, skipped_dup;
-    long long        del[WEB_BL_DEL_MAX];
-    int              ndel;
-    unsigned long    del_lost;
+    long long       *del;         /* ids to delete, grown as needed */
+    int              ndel, delcap;
+    unsigned long    del_lost;    /* only when growing it failed */
+    unsigned         pass;
 } web_baseline_t;
 
 typedef struct {
     double mean, sd, z;
+    double sd_hour;    /* the week-to-week spread alone, floored */
+    double within;     /* the within-hour variance sd included */
     int    n;          /* samples this cell has seen */
     int    warming;    /* n < WEB_BL_WARM_N */
 } web_bl_score_t;
@@ -120,10 +155,10 @@ typedef struct {
     long long db_id;              /* -1: the entry has no row yet */
     int       metric;
     char      key[WEB_KEY_MAX + 1];
-    long long last_active, last_fed;
+    long long last_active, last_fed, first_fed;
     int       cell;               /* -1: the entry's row only */
-    double    mean, var;
-    int       n;
+    double    mean, var, wvar;
+    int       n, wn;
 } web_bl_rec_t;
 
 /* The entries worth capacity for, from --web-max-keys: every metric's
@@ -145,13 +180,23 @@ double web_bl_value(int metric, const web_point_t *p, int step);
 /* The least sd a score divides by, for metric at mean. */
 double web_bl_sd_floor(int metric, double mean);
 
+/* The spreads of cell c of metric, both floored: a minute's (the return
+ * value: sqrt(var + within), the within term at least the mean for a
+ * counter) and, into *sd_hour when not NULL, an hour bucket's
+ * (sqrt(var)). *within, when not NULL, gets the within term used. */
+double web_bl_cell_sd(int metric, const web_bl_cell_t *c, double *sd_hour,
+                      double *within);
+
 /* Feed one closed hour (start t) of (metric, key). real: the hour had a
  * row, so the entry is created if it is new and its last_active moves;
  * not real (a zero feed): only an existing entry is fed. An hour
  * already fed for the entry, a NaN or an infinity is ignored. 0 fed,
- * -1 not. */
+ * -1 not. web_baseline_feed() has no within-hour sample;
+ * web_baseline_feed_w() takes one (wvar < 0 or not finite: none). */
 int  web_baseline_feed(web_baseline_t *b, int metric, const char *key,
                        long long t, double value, int real);
+int  web_baseline_feed_w(web_baseline_t *b, int metric, const char *key,
+                         long long t, double value, double wvar, int real);
 
 /* Feed 0 at hour t to every counter and presence entry whose last feed
  * is older than t. Returns how many. */
@@ -161,9 +206,10 @@ int  web_baseline_zero_missing(web_baseline_t *b, long long t);
  * many. */
 int  web_baseline_age_out(web_baseline_t *b, long long before);
 
-/* Score value against the cell of t's hour of the week. 0 with *out
- * filled, or -1 when the pair has never been fed. A warming cell scores
- * z as 0. */
+/* Score value, a minute's, against the cell that t's UTC hour bucket
+ * (t - t % 3600) was filed under, with web_bl_cell_sd()'s minute
+ * spread. 0 with *out filled, or -1 when the pair has never been fed. A
+ * warming cell scores z as 0. */
 int  web_baseline_score(web_baseline_t *b, int metric, const char *key,
                         long long t, double value, web_bl_score_t *out);
 
@@ -179,22 +225,38 @@ void web_baseline_each_counter(web_baseline_t *b,
                                           const char *key),
                                void *ctx);
 
-/* Up to max dirty cells (and entry rows) into out, clearing them.
- * Returns how many. */
+/* Start a persistence pass: what web_baseline_redirty() marks in it is
+ * not taken again until the next pass. */
+void web_baseline_pass(web_baseline_t *b);
+/* Up to max dirty cells (and entry rows) into out, clearing them. An
+ * entry's records never span two calls. Returns how many. */
 int  web_baseline_take_dirty(web_baseline_t *b, web_bl_rec_t *out, int max);
+/* The store refused recs: mark them dirty again, held to the next pass.
+ * A record whose entry is gone, or now has another row, is dropped. */
+void web_baseline_redirty(web_baseline_t *b, const web_bl_rec_t *recs, int n);
 /* The store gave (metric, key) row id. */
 void web_baseline_set_dbid(web_baseline_t *b, int metric, const char *key,
                            long long id);
 /* Up to max ids of entries evicted since the last call. */
 int  web_baseline_take_deleted(web_baseline_t *b, long long *out, int max);
+/* Ids the store failed to delete, back to the front of the queue. */
+void web_baseline_requeue_deleted(web_baseline_t *b, const long long *ids,
+                                  int n);
+
+/* The hour of (metric, key)'s first feed into *out: 0, or -1 when the
+ * pair has no entry. */
+int  web_baseline_first_fed(web_baseline_t *b, int metric, const char *key,
+                            long long *out);
 
 /* Restore: an entry with its row id, then its cells. 0, or -1 when the
- * table is full or the pair is not valid. */
+ * table is full or a value is not valid (a mean or a variance a float
+ * cannot hold, a negative variance, a cell out of range). */
 int  web_baseline_load(web_baseline_t *b, int metric, const char *key,
                        long long db_id, long long last_active,
-                       long long last_fed);
+                       long long last_fed, long long first_fed);
 int  web_baseline_load_cell(web_baseline_t *b, int metric, const char *key,
-                            int cell, double mean, double var, long n);
+                            int cell, double mean, double var, long n,
+                            double wvar, long wn);
 
 typedef struct {
     int           entries, cap, chunks;

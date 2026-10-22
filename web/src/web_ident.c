@@ -304,15 +304,20 @@ static int fresh(long long t, long long now) {
     return t >= 0 && now - t <= WEB_ID_TTL_S;
 }
 
-int web_ident_firsts(web_ident_t *id, web_id_new_t *out, int max) {
+int web_ident_firsts(web_ident_t *id, long long since, web_id_new_t *out,
+                     int max) {
     int n = 0;
     pthread_mutex_lock(&id->mu);
-    for (int i = 0; i < id->mac_cap && n < max; i++) {
+    for (int i = 0; i < id->mac_cap; i++) {
         const web_id_mac_t *m = &id->mac[i];
-        if (!m->used || m->random || m->first_seen < 0) continue;
-        snprintf(out[n].mac, sizeof(out[n].mac), "%s", m->mac);
-        out[n].first_seen = m->first_seen;
-        snprintf(out[n].src, sizeof(out[n].src), "%s", m->first_src);
+        if (!m->used || m->random || m->first_seen < 0 ||
+            m->first_seen < since)
+            continue;
+        if (n < max) {
+            snprintf(out[n].mac, sizeof(out[n].mac), "%s", m->mac);
+            out[n].first_seen = m->first_seen;
+            snprintf(out[n].src, sizeof(out[n].src), "%s", m->first_src);
+        }
         n++;
     }
     pthread_mutex_unlock(&id->mu);
@@ -326,40 +331,47 @@ static web_id_ip_t *ip_find(web_ident_t *id, const char *ip) {
     return NULL;
 }
 
-static void put_named(web_id_named_t *o, const web_id_mac_t *m,
-                      const char *name, int src) {
-    snprintf(o->mac, sizeof(o->mac), "%s", m->mac);
-    snprintf(o->name, sizeof(o->name), "%s", name);
-    web_ident_norm(name, o->norm);
-    o->src = src;
-    o->random = m->random;
+/* One row into out[*n] while there is room; counted either way. A name
+ * with nothing left in normal form is not a row. */
+static void put_named(web_id_named_t *out, int max, int *n,
+                      const web_id_mac_t *m, const char *name, int src) {
+    char norm[WEB_ID_NAME_MAX + 1];
+    web_ident_norm(name, norm);
+    if (!norm[0]) return;
+    if (*n < max) {
+        web_id_named_t *o = &out[*n];
+        snprintf(o->mac, sizeof(o->mac), "%s", m->mac);
+        snprintf(o->name, sizeof(o->name), "%s", name);
+        memcpy(o->norm, norm, sizeof(o->norm));
+        o->src = src;
+        o->random = m->random;
+    }
+    (*n)++;
 }
 
 int web_ident_named(web_ident_t *id, long long now, web_id_named_t *out,
                     int max) {
     int n = 0;
     pthread_mutex_lock(&id->mu);
-    for (int i = 0; i < id->mac_cap && n < max; i++) {
+    for (int i = 0; i < id->mac_cap; i++) {
         const web_id_mac_t *m = &id->mac[i];
         if (!m->used) continue;
-        if (fresh(m->dhcp.t, now)) put_named(&out[n++], m, m->dhcp.name,
-                                             WEB_ID_SRC_DHCP);
+        if (fresh(m->dhcp.t, now))
+            put_named(out, max, &n, m, m->dhcp.name, WEB_ID_SRC_DHCP);
         if (!fresh(m->ip_t, now) || !m->ip[0]) continue;
         const web_id_ip_t *p = ip_find(id, m->ip);
         if (!p || strcmp(p->mac, m->mac) || !fresh(p->mac_t, now)) continue;
-        for (int s = WEB_ID_SRC_DHCP; s <= WEB_ID_SRC_MDNS && n < max; s++) {
+        for (int s = WEB_ID_SRC_DHCP; s <= WEB_ID_SRC_MDNS; s++) {
             if (!fresh(p->name[s].t, now)) continue;
             /* The device's own copy of its lease hostname is the same
              * name from the same source: once is enough. */
             if (s == WEB_ID_SRC_DHCP && fresh(m->dhcp.t, now) &&
                 !strcmp(m->dhcp.name, p->name[s].name))
                 continue;
-            put_named(&out[n++], m, p->name[s].name, s);
+            put_named(out, max, &n, m, p->name[s].name, s);
         }
     }
     pthread_mutex_unlock(&id->mu);
-    for (int i = 0; i < n; i++)
-        if (!out[i].norm[0]) out[i--] = out[--n];
     return n;
 }
 
@@ -367,17 +379,19 @@ int web_ident_ip_names(web_ident_t *id, long long now, web_id_names_t *out,
                        int max) {
     int n = 0;
     pthread_mutex_lock(&id->mu);
-    for (int i = 0; i < id->ip_cap && n < max; i++) {
+    for (int i = 0; i < id->ip_cap; i++) {
         const web_id_ip_t *p = &id->ip[i];
         if (!p->used) continue;
         int have = 0;
         for (int s = 0; s < WEB_ID_SRC_COUNT; s++)
             if (fresh(p->name[s].t, now)) have++;
         if (have < 2) continue;
-        snprintf(out[n].ip, sizeof(out[n].ip), "%s", p->ip);
-        for (int s = 0; s < WEB_ID_SRC_COUNT; s++)
-            snprintf(out[n].name[s], sizeof(out[n].name[s]), "%s",
-                     fresh(p->name[s].t, now) ? p->name[s].name : "");
+        if (n < max) {
+            snprintf(out[n].ip, sizeof(out[n].ip), "%s", p->ip);
+            for (int s = 0; s < WEB_ID_SRC_COUNT; s++)
+                snprintf(out[n].name[s], sizeof(out[n].name[s]), "%s",
+                         fresh(p->name[s].t, now) ? p->name[s].name : "");
+        }
         n++;
     }
     pthread_mutex_unlock(&id->mu);
@@ -388,7 +402,7 @@ int web_ident_dns(web_ident_t *id, long long to, web_id_dns_t *out, int max) {
     int n = 0;
     long long from = to - (long long)WEB_ID_DNS_MINUTES * 60;
     pthread_mutex_lock(&id->mu);
-    for (int i = 0; i < id->ip_cap && n < max; i++) {
+    for (int i = 0; i < id->ip_cap; i++) {
         const web_id_ip_t *p = &id->ip[i];
         if (!p->used) continue;
         uint32_t q = 0, nx = 0;
@@ -398,9 +412,11 @@ int web_ident_dns(web_ident_t *id, long long to, web_id_dns_t *out, int max) {
             nx += p->dns_nx[k];
         }
         if (!q && !nx) continue;
-        snprintf(out[n].ip, sizeof(out[n].ip), "%s", p->ip);
-        out[n].q = q;
-        out[n].nx = nx;
+        if (n < max) {
+            snprintf(out[n].ip, sizeof(out[n].ip), "%s", p->ip);
+            out[n].q = q;
+            out[n].nx = nx;
+        }
         n++;
     }
     pthread_mutex_unlock(&id->mu);

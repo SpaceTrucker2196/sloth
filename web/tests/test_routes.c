@@ -2,6 +2,7 @@
  * (web_routes.c, build/web/web_assets.c). test_server.c repeats the
  * important answers over a real loopback connection. */
 #include <ctype.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -782,12 +783,78 @@ static void test_baseline_route(void) {
     g_big[r.out_len] = '\0';
     const char *b = body_of(g_big);
     WT_HAS(b, "{\"metric\":\"host.conns\",\"key\":\"10.0.0.5\",\"kind\":\"gauge\"");
-    WT_HAS(b, "\"now_cell\":72,\"utc_offset_s\":0,\"fed\":true,\"cells\":[[0,0,0],");
-    WT_HAS(b, ",[5,1,1],");
+    WT_HAS(b, "\"now_cell\":72,\"utc_offset_s\":0,\"fed\":true,\"cells\":[[0,0,0,0],");
+    /* [mean, sd, n, sd_hour]: a gauge's minute and hour spreads, both
+     * at the floor of one unit for a single sample. */
+    WT_HAS(b, ",[5,1,1,1],");
     int cells = 0;
     for (const char *p = strstr(b, "\"cells\":["); p && (p = strstr(p + 1, "]")); )
         cells++;
     WT_EQ(cells, WEB_BL_CELLS + 1);
+    eng_down(&e);
+}
+
+/* The M3 page: the elements app.js draws into and the two fetches it
+ * makes, as the served page carries them (both halves of each name:
+ * the HTML's id and the script's lookup of it), and the exact query
+ * shapes those fetches send, answered 200. A rename on one side only
+ * left the suite green before. Each seen red with the id renamed in
+ * index.html, and with the fetch prefix misspelt in app.js. */
+static void test_page_carries_the_m3_view(void) {
+    const char *p = page();
+    static const char *const ids[] = {
+        "v-anomalies", "n-cards", "n-chips", "o-heat", "sens", "k-tp-spark"
+    };
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        char want[64];
+        snprintf(want, sizeof(want), "id=\"%s\"", ids[i]);
+        WT_HAS(p, want);
+        if (i == 0) continue;                 /* looked up as "v-" + view */
+        snprintf(want, sizeof(want), "$(\"%s\")", ids[i]);
+        WT_HAS(p, want);
+    }
+    WT_HAS(p, "\"anomalies\"");               /* in the views it shows */
+    WT_HAS(p, "\"/api/anomalies?since=\" + (now - win)");
+    WT_HAS(p, "p += \"&kind=\" + encodeURIComponent(N.kind)");
+    WT_HAS(p, "\"/api/baseline?metric=\" + encodeURIComponent(m)");
+    WT_HAS(p, "p += \"&key=\" + encodeURIComponent(key)");
+
+    /* The shapes those build: since alone, since and kind, metric
+     * alone (a global series) and metric and key. */
+    eng_t e;
+    eng_up(&e, 8);
+    web_req_t rq;
+    web_resp_t r;
+    static const char *const q[][2] = {
+        { "/api/anomalies", "since=1792623600" },
+        { "/api/anomalies", "since=1792623600&kind=rate" },
+        { "/api/baseline", "metric=conns.total" },
+        { "/api/baseline", "metric=iface.rx_rate&key=eth0" },
+    };
+    for (size_t i = 0; i < sizeof(q) / sizeof(q[0]); i++) {
+        qreq(&rq, q[i][0], q[i][1], 0);
+        WT_EQ(web_route(&rq, &e.h, 1, g_big, sizeof(g_big), &r), 0);
+        WT_EQ(r.status, 200);
+    }
+    eng_down(&e);
+}
+
+/* A cell that is not a finite number (none can be made: a restored one
+ * past a float's range is refused) still answers JSON: null, never a
+ * bare inf. Seen red with jw_num()'s isfinite() test removed. */
+static void test_baseline_route_never_prints_inf(void) {
+    eng_t e;
+    eng_up(&e, 8);
+    web_baseline_feed(&e.bl, WM_HOST_CONNS, "10.0.0.5", 1792677600, 5, 1);
+    e.bl.chunk[0][0].cell[web_bl_cell_index(1792677600)].mean = INFINITY;
+    web_req_t rq;
+    web_resp_t r;
+    qreq(&rq, "/api/baseline", "metric=host.conns&key=10.0.0.5", 0);
+    WT_EQ(web_route(&rq, &e.h, 1, g_big, sizeof(g_big), &r), 0);
+    g_big[r.out_len] = '\0';
+    WT_EQ(r.status, 200);
+    WT_HAS(body_of(g_big), ",[null,");
+    WT_LACKS(body_of(g_big), "inf");
     eng_down(&e);
 }
 
@@ -846,5 +913,7 @@ void run_routes_tests(void) {
     WT_RUN(test_anomalies_route);
     WT_RUN(test_anomalies_route_worst_case);
     WT_RUN(test_baseline_route);
+    WT_RUN(test_page_carries_the_m3_view);
+    WT_RUN(test_baseline_route_never_prints_inf);
     WT_RUN(test_anomaly_event_and_tick);
 }

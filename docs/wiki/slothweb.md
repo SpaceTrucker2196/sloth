@@ -433,27 +433,50 @@ In short:
   phase: the hour feed ran about one hour in ten, and a minute bucket
   could be scored twice or not at all.
 - **Baselines.** A cell is the local hour of the week (Monday 00:00
-  first), so a routine survives daylight saving. A counter is per
+  first), so a routine survives daylight saving; a minute is scored
+  against the cell its own UTC hour bucket was filed under, so a
+  half-hour zone (IST) compares like with like. A counter is per
   minute. An hour with no row is 0 for a counter and for presence and
-  not a sample for a gauge. The sd is floored at 10% of the mean and one
-  unit, and counters must also pass the MAD ratio over the last 28
-  same-hour rows on disk. Only hours with at least 45 observed minutes
-  are fed; unobserved minutes are not scored.
-- **Rules.** A1 rate, A2 new device (the stream's own `first_seen`, once
-  per MAC), A3 off-hours presence, A5 a randomised MAC sharing another's
+  not a sample for a gauge. A cell learns two spreads: how much the
+  hour's value moves from week to week, and how much the minutes inside
+  the hour spread about it (from the minute rows the engine scores). A
+  minute is scored with both, sqrt(var + wvar), the within term at
+  least the mean for a counter (Poisson); scored with the week-to-week
+  spread alone, a host whose connection count was 2 to 8 every minute
+  fired A1 all week. The sd is floored at 10% of the mean and one unit,
+  and counters must also pass the MAD ratio over the last 28 same-hour
+  rows on disk, with the same within-hour term. Only hours with at
+  least 45 observed minutes are fed; unobserved minutes are not scored.
+  `/api/baseline` serves `[mean, sd, n, sd_hour]` per cell, and the
+  band uses `sd_hour` for buckets of an hour or more.
+- **Rules.** A1 rate, A2 new device (the stream's own `first_seen`
+  within 24 h and nothing older about the MAC in slothweb's baselines
+  or store, since sloth resets `first_seen` when it restarts; once per
+  MAC; more than eight at once are one episode), A3 off-hours presence, A5 a randomised MAC sharing another's
   DHCP or mDNS name, A6 DHCP, mDNS and NBNS names disagreeing, A7 a
   host's 10-minute peak flow count far above its own p95 (the stream has
   flow counts, not peer lists), A8 a client's NXDOMAIN share (answers
   joined to the client by qname: sloth's answers name only the
-  resolver), A9 the first row of a flow series the store has ever had,
+  resolver), A9 the first row of a flow series the store has ever had
+  (including a new host's first row, which the rollup releases late),
   A10 a connected socket silent for 60 s. A4 needs the OUI table (M4).
 - **Episodes** build, open, close after two quiet evaluated minutes, and
   are kept 24 h; a recurrence starts a new one. The table holds 512 and
-  never pushes out an open or building episode.
+  never pushes out an open or building episode. A new episode takes a
+  free slot, else its own rule's oldest closed one, else (while its rule
+  holds under a ninth of the table) the oldest closed one of a rule over
+  that share: one rule's flood cannot erase another's history.
 - **Persistence.** Schema v3 adds `baseline`, `baseline_cell`,
   `episode`, `fanout` and `reported`, migrated from v2 in one additive
   `BEGIN IMMEDIATE` step. A memory-only build keeps all of it in memory
-  and says so.
+  and says so. Evicted baselines' rows are deleted before the hour's
+  writes, the delete queue grows rather than forget an id, a new entry
+  whose pair still has a row takes it over, and a refused batch is
+  written the hour after. A restore into a smaller table deletes the
+  rest in small transactions. The analysis state counts towards
+  `--web-max-mb` but the ceiling can only drop time-series rows, so
+  slothweb warns at start when the ceiling is below what the baselines
+  can take at the given `--web-max-keys`.
 - **Page.** The Anomalies view (cards with a kind glyph, score bar in
   the heat ramp, evidence, the metric's last hour, first and last seen,
   chips by kind), and on the Overview a throughput tile and "now vs
@@ -525,11 +548,12 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 
 | Acceptance item | Test |
 |---|---|
-| a generated 7 d stream: nothing fires on the quiet one, A3 for a device that appears only at night, A1 for a burst | `test_six_weeks_quiet_then_burst_and_night` (`test_replay.c`: six generated weeks through the framer, decoder, rollup, store thread and engine on pinned clocks; four weeks warm the cells, which a 7 d stream alone cannot, since a cell sees one sample a week) |
+| a generated 7 d stream: nothing fires on the quiet one, A3 for a device that appears only at night, A1 for a burst | `test_six_weeks_quiet_then_burst_and_night` (`test_replay.c`: six generated weeks through the framer, decoder, rollup, store thread and engine on pinned clocks; four weeks warm the cells, which a 7 d stream alone cannot, since a cell sees one sample a week; the routine has noisy gauges, Poisson counts and an input for every rule, and slothweb and sloth restart mid-week), `test_a9_fires_for_a_new_host_at_real_cadence`, `test_half_hour_zone_routine_is_quiet` |
 | the closed hour fed whatever the flush phase | `test_hour_feed_any_flush_phase` |
 | a seeded-state test per rule | `test_anomaly.c`: `test_a1_*`, `test_a2_*`, `test_a3_*`, `test_a5_*`, `test_a6_*`, `test_a7_*`, `test_a8_*`, `test_a9_*`, `test_a10_*`, `test_mad_*` |
 | episodes, the listing, the event | `test_episode_closes_after_two_quiet_minutes`, `test_closed_episode_listed_for_its_window`, `test_reopen_needs_a_fresh_streak`, `test_full_table_keeps_open_episodes`, `test_worst_case_listing_fits`, `test_anomalies_route`, `test_anomalies_route_worst_case`, `test_baseline_route`, `test_anomaly_event_and_tick` |
-| v3 migration, its failure, persistence | `test_v2_file_is_migrated`, `test_v2_failed_step_leaves_file_unchanged`, `test_analysis_state_round_trip`, `test_state_survives_restart` |
+| v3 migration, its failure, persistence | `test_v2_file_is_migrated`, `test_v2_failed_step_leaves_file_unchanged`, `test_analysis_state_round_trip`, `test_state_survives_restart`, `test_baseline_evicted_and_back_in_one_hour`, `test_baseline_refused_batch_is_written_later`, `test_baseline_insert_takes_over_a_stale_row`, `test_baseline_shrinking_restore_keeps_wal_small`, `test_restored_episode_values_are_checked`, `test_a7_history_survives_restart` |
+| the page's M3 elements and fetches, and the push | `test_page_carries_the_m3_view`, `test_events_carry_anomalies` |
 | bounded identity tables | `test_ident.c` |
 
 A test cannot connect from a non-loopback address, so the socket-level

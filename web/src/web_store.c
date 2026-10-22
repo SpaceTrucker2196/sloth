@@ -86,6 +86,7 @@ static const char STEP_V3_SQL[] =
     "  key         TEXT NOT NULL,\n"
     "  last_active INTEGER NOT NULL,\n"
     "  last_fed    INTEGER NOT NULL,\n"
+    "  first_fed   INTEGER NOT NULL DEFAULT -1,\n"
     "  UNIQUE (metric, key)\n"
     ");\n"
     "CREATE TABLE baseline_cell (\n"
@@ -94,6 +95,8 @@ static const char STEP_V3_SQL[] =
     "  mean REAL NOT NULL,\n"
     "  var  REAL NOT NULL,\n"
     "  n    INTEGER NOT NULL,\n"
+    "  wvar REAL NOT NULL DEFAULT 0,\n"
+    "  wn   INTEGER NOT NULL DEFAULT 0,\n"
     "  PRIMARY KEY (cell, id)\n"
     ") WITHOUT ROWID;\n"
     "CREATE TABLE episode (\n"
@@ -147,6 +150,18 @@ const char *web_store_step_sql(int from) {
     for (int i = 0; i < STEP_N; i++)
         if (STEPS[i].from == from) return STEPS[i].sql;
     return NULL;
+}
+
+long long web_store_analysis_max_bytes(int bl_cap, int ep_cap, int hosts,
+                                       int macs) {
+    long long b = 0;
+    if (bl_cap > 0)
+        b += (long long)bl_cap *
+             (WEB_STORE_EST_ROW_B + (long long)WEB_BL_CELLS * WEB_STORE_EST_CELL_B);
+    if (ep_cap > 0) b += (long long)ep_cap * WEB_STORE_EST_EP_B;
+    if (hosts > 0) b += (long long)hosts * WEB_STORE_EST_FAN_B;
+    if (macs > 0) b += (long long)macs * WEB_STORE_EST_REP_B;
+    return b;
 }
 
 #ifndef WITH_SQLITE
@@ -397,15 +412,15 @@ static const char *const COUNT_ROWS[WEB_TIER_COUNT] = {
 enum {
     AN_BL_INS = 0, AN_BL_UPD, AN_CELL_PUT, AN_BL_DEL, AN_CELL_DEL,
     AN_EP_PUT, AN_EP_DEL, AN_FAN_PUT, AN_FAN_DEL, AN_REP_PUT, AN_REP_PRUNE,
-    AN_ANY_MIN, AN_ANY_HOUR, AN_HOUR_AT
+    AN_ANY_MIN, AN_ANY_HOUR, AN_HOUR_AT, AN_BL_FIND, AN_EP_EXPIRE
 };
 static const char *const AN_SQL[WEB_STORE_AN_STMTS] = {
-    [AN_BL_INS]    = "INSERT INTO baseline (metric,key,last_active,last_fed)"
-                     " VALUES (?1,?2,?3,?4)",
-    [AN_BL_UPD]    = "UPDATE baseline SET last_active=?2, last_fed=?3"
-                     " WHERE id=?1",
-    [AN_CELL_PUT]  = "INSERT OR REPLACE INTO baseline_cell (cell,id,mean,var,n)"
-                     " VALUES (?1,?2,?3,?4,?5)",
+    [AN_BL_INS]    = "INSERT INTO baseline (metric,key,last_active,last_fed,"
+                     "first_fed) VALUES (?1,?2,?3,?4,?5)",
+    [AN_BL_UPD]    = "UPDATE baseline SET last_active=?2, last_fed=?3,"
+                     " first_fed=?4 WHERE id=?1",
+    [AN_CELL_PUT]  = "INSERT OR REPLACE INTO baseline_cell (cell,id,mean,var,n,"
+                     "wvar,wn) VALUES (?1,?2,?3,?4,?5,?6,?7)",
     [AN_BL_DEL]    = "DELETE FROM baseline WHERE id=?1",
     [AN_CELL_DEL]  = "DELETE FROM baseline_cell WHERE cell=?1 AND id=?2",
     [AN_EP_PUT]    = "INSERT OR REPLACE INTO episode (id,kind,metric,key,"
@@ -426,6 +441,8 @@ static const char *const AN_SQL[WEB_STORE_AN_STMTS] = {
     [AN_HOUR_AT]   = "SELECT r.sum,r.n,r.min,r.max FROM hour r JOIN series s"
                      " ON s.id=r.series WHERE s.metric=?1 AND s.key=?2"
                      " AND r.t=?3",
+    [AN_BL_FIND]   = "SELECT id FROM baseline WHERE metric=?1 AND key=?2",
+    [AN_EP_EXPIRE] = "DELETE FROM episode WHERE last_seen<?1",
 };
 
 int web_store_available(void) { return 1; }
@@ -1315,6 +1332,9 @@ static int cmp_map(const void *a, const void *b) {
     return x->id < y->id ? -1 : x->id > y->id;
 }
 
+static int bl_del_slices(web_store_t *s, const long long *ids, size_t n,
+                         const char *what);
+
 int web_store_bl_load(web_store_t *s, web_baseline_t *b) {
     if (!s->db) return -1;
     sqlite3_stmt *st = NULL;
@@ -1330,7 +1350,7 @@ int web_store_bl_load(web_store_t *s, web_baseline_t *b) {
      * row the table does not, which a new entry for the same pair would
      * collide with. */
     if (sqlite3_prepare_v2(s->db,
-            "SELECT id,metric,key,last_active,last_fed FROM baseline"
+            "SELECT id,metric,key,last_active,last_fed,first_fed FROM baseline"
             " ORDER BY last_active DESC, id DESC", -1, &st, NULL) != SQLITE_OK) {
         free(map);
         free(bad);
@@ -1345,7 +1365,8 @@ int web_store_bl_load(web_store_t *s, web_baseline_t *b) {
         int metric = web_metric_find(mname);
         if (n >= cap || metric < 0 || !key_ok(metric, key) ||
             web_baseline_load(b, metric, key, id, sqlite3_column_int64(st, 3),
-                              sqlite3_column_int64(st, 4)) != 0) {
+                              sqlite3_column_int64(st, 4),
+                              sqlite3_column_int64(st, 5)) != 0) {
             if (nbad == badcap) {
                 long long *nb = realloc(bad, badcap * 2 * sizeof(*bad));
                 if (!nb) continue;
@@ -1362,8 +1383,8 @@ int web_store_bl_load(web_store_t *s, web_baseline_t *b) {
     }
     sqlite3_finalize(st);
     qsort(map, (size_t)n, sizeof(*map), cmp_map);
-    if (sqlite3_prepare_v2(s->db, "SELECT cell,id,mean,var,n FROM baseline_cell",
-                           -1, &st, NULL) == SQLITE_OK) {
+    if (sqlite3_prepare_v2(s->db, "SELECT cell,id,mean,var,n,wvar,wn FROM"
+                           " baseline_cell", -1, &st, NULL) == SQLITE_OK) {
         while (sqlite3_step(st) == SQLITE_ROW) {
             bl_map_t k;
             memset(&k, 0, sizeof(k));
@@ -1373,26 +1394,52 @@ int web_store_bl_load(web_store_t *s, web_baseline_t *b) {
             web_baseline_load_cell(b, m->metric, m->key, sqlite3_column_int(st, 0),
                                    sqlite3_column_double(st, 2),
                                    sqlite3_column_double(st, 3),
-                                   (long)sqlite3_column_int64(st, 4));
+                                   (long)sqlite3_column_int64(st, 4),
+                                   sqlite3_column_double(st, 5),
+                                   (long)sqlite3_column_int64(st, 6));
         }
         sqlite3_finalize(st);
     }
     free(map);
-    if (an_begin(s) != 0) { free(bad); return -1; }
-    for (size_t i = 0; i < nbad; i++) {
-        sqlite3_stmt *d = s->an[AN_BL_DEL];
-        sqlite3_bind_int64(d, 1, bad[i]);
-        if (an_step_done(d) != 0) { free(bad); return an_fail(s, "baseline prune"); }
-    }
+    /* The rows left out go in slices, each its own transaction with the
+     * WAL checkpointed between (after_commit), as the ceiling's do: a
+     * restore after --web-max-keys shrank can leave hundreds of
+     * thousands of rows and 168 cells each, and one transaction of all
+     * of them would grow the WAL by the whole of it. */
+    int rc = bl_del_slices(s, bad, nbad, "baseline prune");
     free(bad);
-    /* One sweep for the cells of every row deleted, rather than 168
-     * seeks a row. */
-    if (nbad && sqlite3_exec(s->db, "DELETE FROM baseline_cell WHERE id NOT IN"
-                             " (SELECT id FROM baseline)", NULL, NULL, NULL)
-                    != SQLITE_OK)
-        return an_fail(s, "baseline prune");
-    if (an_commit(s) != 0) return -1;
-    return n;
+    return rc != 0 ? -1 : n;
+}
+
+/* Delete the rows ids[0..n) and their cells, BL_DEL_SLICE rows to a
+ * transaction (each row is itself and 168 cells). 0, or -1. */
+#define BL_DEL_SLICE (WEB_STORE_SLICE_ROWS / (WEB_BL_CELLS + 1) > 0 \
+                      ? WEB_STORE_SLICE_ROWS / (WEB_BL_CELLS + 1) : 1)
+
+static int bl_del_one(web_store_t *s, long long id) {
+    sqlite3_stmt *d = s->an[AN_BL_DEL];
+    sqlite3_bind_int64(d, 1, id);
+    if (an_step_done(d) != 0) return -1;
+    for (int c = 0; c < WEB_BL_CELLS; c++) {
+        sqlite3_stmt *dc = s->an[AN_CELL_DEL];
+        sqlite3_bind_int(dc, 1, c);
+        sqlite3_bind_int64(dc, 2, id);
+        if (an_step_done(dc) != 0) return -1;
+    }
+    return 0;
+}
+
+static int bl_del_slices(web_store_t *s, const long long *ids, size_t n,
+                         const char *what) {
+    for (size_t at = 0; at < n; at += BL_DEL_SLICE) {
+        size_t end = at + BL_DEL_SLICE < n ? at + BL_DEL_SLICE : n;
+        if (an_begin(s) != 0) return -1;
+        for (size_t i = at; i < end; i++)
+            if (bl_del_one(s, ids[i]) != 0) return an_fail(s, what);
+        if (an_commit(s) != 0) return -1;
+        after_commit(s);
+    }
+    return 0;
 }
 
 int web_store_bl_put(web_store_t *s, web_baseline_t *b,
@@ -1414,16 +1461,54 @@ int web_store_bl_put(web_store_t *s, web_baseline_t *b,
                 sqlite3_bind_int64(u, 1, r->db_id);
                 sqlite3_bind_int64(u, 2, r->last_active);
                 sqlite3_bind_int64(u, 3, r->last_fed);
+                sqlite3_bind_int64(u, 4, r->first_fed);
                 if (an_step_done(u) != 0) { free(ids); return an_fail(s, "baseline update"); }
                 cur = r->db_id;
             } else {
-                sqlite3_stmt *ins = s->an[AN_BL_INS];
-                sqlite3_bind_text(ins, 1, mname, -1, SQLITE_STATIC);
-                sqlite3_bind_text(ins, 2, r->key, -1, SQLITE_TRANSIENT);
-                sqlite3_bind_int64(ins, 3, r->last_active);
-                sqlite3_bind_int64(ins, 4, r->last_fed);
-                if (an_step_done(ins) != 0) { free(ids); return an_fail(s, "baseline insert"); }
-                cur = sqlite3_last_insert_rowid(s->db);
+                /* A pair new to the table may still have a row: the
+                 * entry was evicted and came back before its delete
+                 * reached the file, or the delete was lost. A plain
+                 * insert then hits UNIQUE (metric, key) and rolls the
+                 * whole batch back, every hour. The old row is taken
+                 * over instead, its cells cleared: they were the old
+                 * entry's, and the new one writes every cell it has. */
+                sqlite3_stmt *f = s->an[AN_BL_FIND];
+                sqlite3_bind_text(f, 1, mname, -1, SQLITE_STATIC);
+                sqlite3_bind_text(f, 2, r->key, -1, SQLITE_TRANSIENT);
+                int frc = sqlite3_step(f);
+                long long old = frc == SQLITE_ROW ? sqlite3_column_int64(f, 0) : -1;
+                sqlite3_reset(f);
+                if (frc != SQLITE_ROW && frc != SQLITE_DONE) {
+                    free(ids);
+                    return an_fail(s, "baseline find");
+                }
+                if (old >= 0) {
+                    sqlite3_stmt *u = s->an[AN_BL_UPD];
+                    sqlite3_bind_int64(u, 1, old);
+                    sqlite3_bind_int64(u, 2, r->last_active);
+                    sqlite3_bind_int64(u, 3, r->last_fed);
+                    sqlite3_bind_int64(u, 4, r->first_fed);
+                    if (an_step_done(u) != 0) { free(ids); return an_fail(s, "baseline update"); }
+                    for (int c = 0; c < WEB_BL_CELLS; c++) {
+                        sqlite3_stmt *dc = s->an[AN_CELL_DEL];
+                        sqlite3_bind_int(dc, 1, c);
+                        sqlite3_bind_int64(dc, 2, old);
+                        if (an_step_done(dc) != 0) { free(ids); return an_fail(s, "baseline reuse"); }
+                    }
+                    cur = old;
+                    pthread_mutex_lock(&s->mu);
+                    s->st.bl_rows_reused++;
+                    pthread_mutex_unlock(&s->mu);
+                } else {
+                    sqlite3_stmt *ins = s->an[AN_BL_INS];
+                    sqlite3_bind_text(ins, 1, mname, -1, SQLITE_STATIC);
+                    sqlite3_bind_text(ins, 2, r->key, -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_int64(ins, 3, r->last_active);
+                    sqlite3_bind_int64(ins, 4, r->last_fed);
+                    sqlite3_bind_int64(ins, 5, r->first_fed);
+                    if (an_step_done(ins) != 0) { free(ids); return an_fail(s, "baseline insert"); }
+                    cur = sqlite3_last_insert_rowid(s->db);
+                }
                 ids[i] = cur;
             }
             continue;
@@ -1436,6 +1521,8 @@ int web_store_bl_put(web_store_t *s, web_baseline_t *b,
         sqlite3_bind_double(c, 3, r->mean);
         sqlite3_bind_double(c, 4, r->var);
         sqlite3_bind_int(c, 5, r->n);
+        sqlite3_bind_double(c, 6, r->wvar);
+        sqlite3_bind_int(c, 7, r->wn);
         if (an_step_done(c) != 0) { free(ids); return an_fail(s, "baseline cell"); }
     }
     if (an_commit(s) != 0) { free(ids); return -1; }
@@ -1450,17 +1537,8 @@ int web_store_bl_del(web_store_t *s, const long long *ids, int n) {
     if (!s->db) return -1;
     if (n <= 0) return 0;
     if (an_begin(s) != 0) return -1;
-    for (int i = 0; i < n; i++) {
-        sqlite3_stmt *d = s->an[AN_BL_DEL];
-        sqlite3_bind_int64(d, 1, ids[i]);
-        if (an_step_done(d) != 0) return an_fail(s, "baseline delete");
-        for (int c = 0; c < WEB_BL_CELLS; c++) {
-            sqlite3_stmt *dc = s->an[AN_CELL_DEL];
-            sqlite3_bind_int(dc, 1, c);
-            sqlite3_bind_int64(dc, 2, ids[i]);
-            if (an_step_done(dc) != 0) return an_fail(s, "baseline cell delete");
-        }
-    }
+    for (int i = 0; i < n; i++)
+        if (bl_del_one(s, ids[i]) != 0) return an_fail(s, "baseline delete");
     return an_commit(s);
 }
 
@@ -1469,10 +1547,9 @@ int web_store_ep_load(web_store_t *s, long long since,
                       void *ctx) {
     if (!s->db) return -1;
     sqlite3_stmt *st = NULL;
-    char sql[96];
-    snprintf(sql, sizeof(sql), "DELETE FROM episode WHERE last_seen<%lld",
-             since);
-    if (sqlite3_exec(s->db, sql, NULL, NULL, NULL) != SQLITE_OK) {
+    sqlite3_stmt *x = s->an[AN_EP_EXPIRE];
+    sqlite3_bind_int64(x, 1, since);
+    if (an_step_done(x) != 0) {
         note_fail(s, "episode expiry");
         return -1;
     }
