@@ -779,6 +779,44 @@ static void test_a2_reported_set_evicts_oldest(void) {
     fx_done();
 }
 
+/* A full episode table delays a report, never loses it: with room for
+ * four episodes, five new MACs in one minute give four episodes and one
+ * drop, and the fifth, still listed by sloth, gets its own episode once
+ * a slot frees. Seen red with rep_mark() back in a2_scan() before the
+ * candidate is touched (the fifth is marked reported, never offered
+ * again, and never gets an episode). */
+static void test_a2_full_table_delays_not_loses(void) {
+    fx(0, NULL);
+    web_anomaly_destroy(&an);
+    g_cfg.max_keys = WEB_MAX_KEYS_MIN;
+    WT_EQ(web_anomaly_init(&an, 4, &g_cfg), 0);
+    long long t = T0;
+    step(t);
+    char mac[24];
+    for (int i = 0; i < 5; i++) {
+        snprintf(mac, sizeof(mac), "00:11:22:00:02:%02x", i);
+        probe(mac, T0 - 100 + i, t);
+    }
+    step(t + 60);
+    t += 60;
+    WT_EQ(an.st.opened, 4UL);
+    WT_ASSERT(an.st.dropped >= 1UL);
+    WT_EQ(an.st.reported, 4);
+    int got = 0;
+    for (int m = 0; m < 24 * 60 && !got; m++, t += 60) {
+        for (int i = 0; i < 5; i++) {
+            snprintf(mac, sizeof(mac), "00:11:22:00:02:%02x", i);
+            probe(mac, T0 - 100 + i, t);
+        }
+        step(t + 60);
+        got = ep(WEB_ANOM_A2_NEW, "00:11:22:00:02:04")->state != WEB_EP_FREE;
+    }
+    WT_ASSERT(got);
+    WT_EQ(an.st.reported, 5);
+    WT_EQ(an.st.opened, 5UL);
+    fx_done();
+}
+
 /* A MAC both sets have let go may be reported again, and that is the
  * whole of the cost: re-reports are at most the evictions. Identity
  * tables of 16 MACs (so the not-one-by-one set holds 16 too) and a
@@ -1713,6 +1751,7 @@ void run_anomaly_tests(void) {
     WT_RUN(test_a2_flood_is_one_episode_and_keeps_history);
     WT_RUN(test_slot_policy_keeps_each_rules_history);
     WT_RUN(test_a2_reported_set_evicts_oldest);
+    WT_RUN(test_a2_full_table_delays_not_loses);
     WT_RUN(test_a2_rereports_bounded_by_evictions);
     WT_RUN(test_a2_burst_evidence_counts_exactly);
     WT_RUN(test_a2_trickle_is_one_episode);

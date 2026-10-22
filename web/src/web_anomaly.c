@@ -191,6 +191,8 @@ typedef struct {
     char      key[WEB_KEY_MAX + 1];
     double    score;
     char      ev[WEB_ANOM_EVIDENCE_MAX + 1];
+    int       a2_mark;   /* A2 one-by-one: mark key reported once touched */
+    long long t0;        /* its first_seen */
 } cand_t;
 
 typedef struct {
@@ -542,6 +544,8 @@ static cand_t *cand(web_anomaly_t *a, int rule, int metric, const char *key,
     snprintf(c->key, sizeof(c->key), "%s", key);
     c->score = score > 100 ? 100 : score < 0 ? 0 : score;
     web_utf8_copy(c->ev, WEB_ANOM_EVIDENCE_MAX, ev);
+    c->a2_mark = 0;
+    c->t0 = 0;
     return c;
 }
 
@@ -868,6 +872,16 @@ static int a2_win_sum(const struct web_anom_priv *p, long long m) {
     return n > INT_MAX ? INT_MAX : (int)n;
 }
 
+/* The longer of a2_scan()'s two evidence prefixes, with every %d at
+ * its widest (11 characters), and the two canonical MACs (17 characters
+ * and a space each) it names after it, must fit the evidence: then
+ * ev_mac() below never has to leave a named MAC out. C99 form of a
+ * static assertion (as include/sloth_compat.h). */
+#define A2_EV_PREFIX \
+    "%d MACs new to sloth in the last hour (over %d), %d this minute; latest:"
+typedef char a2_evidence_fits[(sizeof(A2_EV_PREFIX) - 1 - 3 * 2 + 3 * 11 +
+                               2 * (17 + 1) <= WEB_ANOM_EVIDENCE_MAX) ? 1 : -1];
+
 /* " mac" appended to ev at o, whole or not at all: evidence never names
  * part of an address. The new length. */
 static size_t ev_mac(char *ev, size_t cap, size_t o, const char *mac) {
@@ -915,21 +929,23 @@ static void a2_scan(web_anomaly_t *a, long long ts) {
     }
     long long m = ts / 60;
     int win = a2_win_sum(p, m);
-    if (nnew > 0) a2_win_add(p, m, nnew);
     char ev[WEB_ANOM_EVIDENCE_MAX + 1];
     if (nnew <= WEB_ANOM_A2_BURST && win + nnew <= WEB_ANOM_A2_HOUR_MAX) {
-        /* Reported as the candidate is made: an episode the table
-         * cannot take is counted (dropped) and not offered again. */
+        /* Marked reported, and counted in the hour, only in apply() once
+         * its episode exists: a MAC the table (or the candidate list)
+         * cannot take this minute is judged afresh next minute, so a
+         * full table delays a report rather than losing it. */
         for (int i = 0; i < nnew; i++) {
             const web_id_new_t *f = &p->firsts[i];
             long long age = ts - f->first_seen;
-            rep_mark(p, f->mac, f->first_seen, 1);
             snprintf(ev, sizeof(ev), "%s first seen by sloth %lld min ago (%s)",
                      f->mac, age > 0 ? age / 60 : 0LL, f->src);
-            cand(a, WEB_ANOM_A2_NEW, -1, f->mac, 40.0, ev);
+            cand_t *c = cand(a, WEB_ANOM_A2_NEW, -1, f->mac, 40.0, ev);
+            if (c) { c->a2_mark = 1; c->t0 = f->first_seen; }
         }
         return;
     }
+    if (nnew > 0) a2_win_add(p, m, nnew);
     /* A burst, or a trickle: more new MACs at once than a household
      * acquires in a month (probe requests from spoofed addresses look
      * exactly like this), or more in an hour than WEB_ANOM_A2_HOUR_MAX,
@@ -966,8 +982,7 @@ static void a2_scan(web_anomaly_t *a, long long ts) {
         for (int i = 0; i < nnew && i < 2; i++)
             o = ev_mac(ev, sizeof(ev), o, p->firsts[i].mac);
     } else {
-        o = (size_t)snprintf(ev, sizeof(ev), "%d MACs new to sloth in the "
-                             "last hour (over %d), %d this minute; latest:",
+        o = (size_t)snprintf(ev, sizeof(ev), A2_EV_PREFIX,
                              win, WEB_ANOM_A2_HOUR_MAX, nnew);
         for (int i = 0; i < p->a2_nlast; i++)
             o = ev_mac(ev, sizeof(ev), o, p->a2_last[i]);
@@ -1169,8 +1184,13 @@ static void apply(web_anomaly_t *a, const int *evaluated, long long bucket,
                   long long ts) {
     struct web_anom_priv *p = a->p;
     pthread_mutex_lock(&a->mu);
-    for (int i = 0; i < p->cand_n; i++)
-        touch_locked(a, &p->cand[i], bucket, ts);
+    for (int i = 0; i < p->cand_n; i++) {
+        const cand_t *c = &p->cand[i];
+        if (touch_locked(a, c, bucket, ts) && c->a2_mark) {
+            rep_mark(p, c->key, c->t0, 1);
+            a2_win_add(p, ts / 60, 1);
+        }
+    }
     for (int i = 0; i < a->cap; i++) {
         web_anom_ep_t *e = &a->ep[i];
         if (e->state == WEB_EP_CLOSED) {

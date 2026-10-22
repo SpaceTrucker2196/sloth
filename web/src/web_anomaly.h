@@ -57,9 +57,11 @@
  *                other as it counts it, so nothing is offered twice
  *                while those sets hold it (the not-one-by-one set holds
  *                as many MACs as the identity tables, so only a churn
- *                past them makes it judge one afresh), and an episode
- *                the table cannot take is counted (dropped) and not
- *                tried again. More than WEB_ANOM_A2_BURST new
+ *                past them makes it judge one afresh). A MAC is marked
+ *                reported only once its episode exists: one the table
+ *                cannot take is counted (dropped) and judged afresh the
+ *                next minute, so a full table delays a report, never
+ *                loses it. More than WEB_ANOM_A2_BURST new
  *                MACs in one minute, or more than WEB_ANOM_A2_HOUR_MAX
  *                in a rolling hour (each MAC counted in the minute it
  *                was judged new, in memory: a restart starts it at 0),

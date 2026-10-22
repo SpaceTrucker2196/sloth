@@ -817,8 +817,10 @@ Where this departs from the spec's body, and why:
   device" is better than a hidden one, and the re-reports are at most
   the evictions. A MAC is judged new
   once: the scan puts it in one set or the other as it counts it, so no
-  MAC is offered twice, and one whose episode the table cannot take is
-  counted (`dropped`) and not tried again. A burst (more than 8 new MACs
+  MAC is offered twice. It is marked reported only once its episode
+  exists, so one whose episode the table cannot take is counted
+  (`dropped`) and judged afresh the next minute: a full table delays a
+  report, never loses it. A burst (more than 8 new MACs
   in one minute, which is what spoofed probe requests look like) or a
   trickle (more than 16 in a rolling hour: 8 a minute is never a burst)
   is one episode keyed `""`, held while the hour is over its limit, and
