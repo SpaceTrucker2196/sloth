@@ -58,6 +58,10 @@ typedef struct {
     const char *str;      /* WEB_J_STR: NUL-terminated decoded value */
     size_t      slen;
     long long   i;        /* WEB_J_INT, and WEB_J_BOOL as 0/1 */
+    /* WEB_J_INT and WEB_J_REAL: the value as a double (M2's gauges are
+     * sloth's "%.2f" rates). A number too long to convert, or one that
+     * overflows, is NaN, which web_jl_num() refuses. */
+    double      d;
 } web_jfield_t;
 
 typedef struct {
@@ -78,6 +82,10 @@ const web_jfield_t *web_jl_get(const web_jrec_t *r, const char *key);
 const char *web_jl_str(const web_jrec_t *r, const char *key);
 /* The member's integer (or boolean), or def. */
 long long   web_jl_int(const web_jrec_t *r, const char *key, long long def);
+
+/* The member's number (integer or real) in *out when it is one and
+ * finite: 1, else 0. */
+int         web_jl_num(const web_jrec_t *r, const char *key, double *out);
 
 const char *web_jl_error_name(int e);
 

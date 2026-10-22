@@ -4681,3 +4681,24 @@ not published when a `socket_gap` or bad line may have shortened it.
 `/api/live` and the `/events` `tick` and `record` events feed the
 Overview's tiles and record ticker; `/api/health` carries the socket's
 state and counters. Flags stay in `web/README.md`.
+
+## 2026-10-21 — slothweb M2 (#160): rollups, slothweb.db, /api/series, Activity
+
+**Updated pages**: [slothweb.md](slothweb.md). Updated `web/README.md`.
+
+slothweb derives the spec §5.1 metrics from the records it already
+decodes (every one has a source sloth writes today), with keys checked
+and canonicalised by type and running totals turned into deltas floored
+at zero. They roll into 10 s, 1 min and 1 h buckets with sum, count, min
+and max, keyed metrics bounded by `--web-max-keys` (512 devices, 256
+hosts, least recently seen out, evictions on `/api/health`). Buckets go
+to slothweb's own `slothweb.db` (`--store`), opened under sloth's
+secure-file rules, identified before any write (sloth.db and a newer
+schema are refused untouched) and migrated by a chain from v0 per the
+2026-10-21 rule; writes are batched on their own thread, compaction is
+hourly with `--web-max-mb` and `--web-retain-days`. Built with
+`WITH_SQLITE=0` it keeps the 10 s tier in memory only. `/api/series`,
+`/api/keys` and `/api/metrics` validate every parameter and bind them;
+the Activity view draws band charts and small multiples without
+baselines (M3). An hour of records on a pinned clock gives 42,120 fine
+rows and about 1.1 MB on disk.

@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "web_acl.h"
+#include "web_metrics.h"
 
 /* ── --socket ────────────────────────────────────────────────────────── */
 
@@ -123,8 +124,13 @@ static void one_line(web_feed_t *f, web_live_t *l, long long now_ms) {
     size_t n = f->len;
     if (n == 0 || (n == 1 && f->line[0] == '\r')) return;
     int e = web_jl_parse(f->line, n, &f->rec);
-    if (e == WEB_JL_OK) web_live_apply(l, &f->rec, now_ms);
-    else                web_live_decode_error(l, e, now_ms);
+    if (e == WEB_JL_OK) {
+        web_live_apply(l, &f->rec, now_ms);
+        if (f->metrics) web_metrics_record(f->metrics, &f->rec);
+    } else {
+        web_live_decode_error(l, e, now_ms);
+        if (f->metrics) web_metrics_taint(f->metrics);
+    }
 }
 
 size_t web_feed_bytes(web_feed_t *f, web_live_t *l, const char *buf,
@@ -139,6 +145,7 @@ size_t web_feed_bytes(web_feed_t *f, web_live_t *l, const char *buf,
             f->discarding = 1;
             f->len = 0;
             web_live_decode_error(l, WEB_JL_ELONG, now_ms);
+            if (f->metrics) web_metrics_taint(f->metrics);
         } else {
             memcpy(f->line + f->len, buf, take);
             f->len += take;
@@ -300,6 +307,7 @@ static void *ingest_main(void *arg) {
         if (fd >= 0) {
             web_live_sock_connected(g->live, mono_ms());
             web_feed_reset(&g->feed);
+            if (g->feed.metrics) web_metrics_stream(g->feed.metrics);
             size_t lines;
             int stop = pump(g, fd, err, sizeof(err), &lines);
             web_feed_eof(&g->feed, g->live);
@@ -342,6 +350,10 @@ int web_ingest_start(web_ingest_t *g, const web_sockspec_t *spec,
     }
     g->running = 1;
     return 0;
+}
+
+void web_ingest_set_metrics(web_ingest_t *g, struct web_metrics *m) {
+    g->feed.metrics = m;
 }
 
 void web_ingest_stop(web_ingest_t *g) {

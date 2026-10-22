@@ -19,6 +19,7 @@
 #include "web_config.h"
 #include "web_http.h"
 #include "web_live.h"
+#include "web_tsdb.h"
 
 #define WEB_MAX_CONNS 32
 /* Event streams are long-lived, so they may not take every slot: the
@@ -82,6 +83,7 @@ typedef struct {
     web_config_t    cfg;
     web_conn_t      conns[WEB_MAX_CONNS];
     web_live_t     *live;     /* NULL: no data socket; set before run */
+    web_tsdb_t     *tsdb;     /* NULL: no time series; set before run */
     unsigned long long rec_sent;  /* newest ticker record broadcast */
     pthread_mutex_t mu;       /* guards stats only */
     web_stats_t     stats;
@@ -111,6 +113,8 @@ void     web_server_stop(web_server_t *s);
 /* Attach the live state the routes and the stream read. Call after
  * web_server_open() and before web_server_run(). */
 void     web_server_set_live(web_server_t *s, web_live_t *live);
+/* Attach the time series the M2 routes read (web_tsdb.h). Same rule. */
+void     web_server_set_tsdb(web_server_t *s, web_tsdb_t *tsdb);
 
 void     web_server_stats(web_server_t *s, web_stats_t *out);
 uint16_t web_server_port(const web_server_t *s);

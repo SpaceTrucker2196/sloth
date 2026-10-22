@@ -35,6 +35,12 @@
   --t-quic: #ff9ecb;  --t-icmp: #9be564;  --t-arp:  #c0c0c0;
   --t-wifi: #00d7af;  --t-alert:#ff5a00;
 
+  /* key hash colours: the TUI's IP palette (src/tui_palette.c
+   * tui_ip_fg), picked by the same hash (src/ip_color.c), so a key has
+   * one colour in the TUI and here */
+  --k-0: #00ffd7;  --k-1: #5fd7d7;  --k-2: #87ffaf;  --k-3: #afff87;
+  --k-4: #d7af00;  --k-5: #ffaf5f;  --k-6: #d78787;  --k-7: #87afd7;
+
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
   --radius: 0;
   --gap: 8px;

@@ -13,10 +13,10 @@
 <body>
 <div class="app" id="app">
   <aside class="side">
-    <div class="brand">SLOTH<small>web <span id="milestone">M1</span></small></div>
+    <div class="brand">SLOTH<small>web <span id="milestone">M2</span></small></div>
     <ol class="views">
-      <li class="on"><span class="k">1</span>Overview</li>
-      <li><span class="k">2</span>Activity</li>
+      <li class="on" id="nav-overview"><span class="k">1</span>Overview</li>
+      <li class="go" id="nav-activity"><span class="k">2</span>Activity</li>
       <li><span class="k">3</span>Devices</li>
       <li><span class="k">4</span>Anomalies</li>
       <li><span class="k">5</span>WiFi</li>
@@ -28,6 +28,7 @@
     <div class="foot">
       <div><span>sock</span><span id="sock">-</span></div>
       <div><span>db</span><span id="db">-</span></div>
+      <div><span>store</span><span id="store">-</span></div>
     </div>
   </aside>
   <header class="strip">
@@ -41,6 +42,7 @@
     <span>clients <b id="clients">-</b></span>
   </header>
   <main>
+   <div id="v-overview">
     <section class="kpis" aria-label="overview">
       <div class="tile">
         <div class="label">devices</div>
@@ -71,6 +73,31 @@
       <div class="label">records <button type="button" id="pause">pause</button> <span class="sub" id="tick-note"></span></div>
       <ol class="ticker" id="ticker"></ol>
     </section>
+   </div>
+   <div id="v-activity" hidden>
+    <section class="panel controls" aria-label="activity controls">
+      <label>metric <select id="a-metric"></select></label>
+      <label>key <select id="a-key"></select></label>
+      <label>window <select id="a-win">
+        <option value="3600">1 h</option>
+        <option value="21600">6 h</option>
+        <option value="86400" selected>24 h</option>
+        <option value="604800">7 d</option>
+        <option value="2592000">30 d</option>
+        <option value="34560000">400 d</option>
+      </select></label>
+      <span class="sub" id="a-note"></span>
+    </section>
+    <section class="panel">
+      <div class="label"><span id="a-title">-</span> <span class="sub" id="a-src"></span></div>
+      <canvas class="chart" id="a-chart" height="240" aria-label="band chart"></canvas>
+      <div class="sub" id="a-hover">bucket value over its min-max band; baselines arrive with M3</div>
+    </section>
+    <section class="panel">
+      <div class="label">every key, last hour at 10 s <span class="sub" id="a-multi-note"></span></div>
+      <div class="multi" id="a-multi"></div>
+    </section>
+   </div>
   </main>
 </div>
 <script>

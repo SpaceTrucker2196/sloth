@@ -6,6 +6,9 @@
  *   /             the embedded page; ETag, If-None-Match gives 304
  *   /api/health   JSON: uptime, streams, the data socket's state
  *   /api/live     JSON: the live state (web_live.h)
+ *   /api/series   JSON: one series' buckets (web_series.h, M2)
+ *   /api/keys     JSON: the keys of one metric
+ *   /api/metrics  JSON: the metric catalogue and tiers
  *   /events       Server-Sent Events: tick, record, ping
  *   anything else 404
  *
@@ -21,6 +24,7 @@
 
 #include "web_http.h"
 #include "web_live.h"
+#include "web_tsdb.h"
 
 /* EventSource reconnect delay sent at the start of every stream. */
 #define WEB_SSE_RETRY_MS 3000
@@ -31,10 +35,12 @@ typedef struct {
     unsigned long tick_seq;
     web_live_t   *live;       /* NULL: no data socket configured */
     long long     now_ms;     /* the monotonic clock, for ages in live */
+    web_tsdb_t   *tsdb;       /* NULL: no time series (M2) */
+    long long     wall_s;     /* unix seconds, for the series routes */
 } web_health_t;
 
-/* /api/live is built into the connection's output buffer behind its
- * header; this much is kept free for the header. */
+/* /api/live and the series routes are built into the connection's
+ * output buffer behind their header; this much is kept free for it. */
 #define WEB_LIVE_HDR_RESERVE 1024
 
 enum { WEB_R_ONESHOT = 0, WEB_R_SSE };

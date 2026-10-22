@@ -164,7 +164,7 @@ static const char *const POLL_TYPES[] = {
     "ble_alert", "sensor_health", NULL
 };
 
-static int poll_type(const char *t) {
+int web_live_is_poll_type(const char *t) {
     for (int i = 0; POLL_TYPES[i]; i++)
         if (!strcmp(POLL_TYPES[i], t)) return 1;
     return 0;
@@ -172,7 +172,7 @@ static int poll_type(const char *t) {
 
 /* The device-count bookkeeping for one record of type t. */
 static void devices_step(web_live_t *l, const char *t, long long ts) {
-    if (!poll_type(t)) return;
+    if (!web_live_is_poll_type(t)) return;
     int is_dev = !strcmp(t, "device");
     int is_iface = !strcmp(t, "iface");
     if (!is_dev && l->in_round) close_round(l);

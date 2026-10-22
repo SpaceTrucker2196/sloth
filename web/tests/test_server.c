@@ -718,7 +718,7 @@ static void test_health_over_socket(void) {
     get(web_server_port(r.s), "/api/health", "", out, sizeof(out));
     WT_HAS(out, "HTTP/1.1 200 OK\r\n");
     WT_HAS(out, "Content-Type: application/json\r\n");
-    WT_HAS(out, "\r\n\r\n{\"service\":\"slothweb\",\"milestone\":\"M1\",");
+    WT_HAS(out, "\r\n\r\n{\"service\":\"slothweb\",\"milestone\":\"M2\",");
     WT_HAS(out, "\"sse_clients\":0,");
     web_stats_t st;
     stop(&r, &st);

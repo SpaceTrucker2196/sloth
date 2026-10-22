@@ -20,6 +20,9 @@
  * 200 where a 304 would have done. */
 #define WEB_PATH_MAX 1024
 #define WEB_INM_MAX  512
+/* The query string, kept for the M2 series routes (web_series.h); a
+ * longer one is not kept (query_long), and those routes answer 400. */
+#define WEB_QUERY_MAX 512
 /* A Host value (or an absolute-form authority) longer than this is not
  * kept: the longest acceptable one, a bracketed IPv6 literal with a
  * port, is 47 bytes. */
@@ -32,6 +35,8 @@ typedef struct {
     int  is_head;
     char path[WEB_PATH_MAX];  /* request target, query removed */
     int  path_long;
+    char query[WEB_QUERY_MAX]; /* after the '?', raw; "" when none */
+    int  query_long;
     char inm[WEB_INM_MAX];    /* every If-None-Match line, comma-joined */
     int  inm_present, inm_long;
     char host[WEB_HOST_MAX];  /* the Host value, OWS trimmed */

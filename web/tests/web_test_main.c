@@ -15,6 +15,10 @@ int main(void) {
     run_jsonl_tests();
     run_live_tests();
     run_ingest_tests();
+    run_rollup_tests();
+    run_metrics_tests();
+    run_store_tests();
+    run_series_tests();
     printf("slothweb tests: %d passed, %d failed\n", wt_pass, wt_fail);
     return wt_fail ? 1 : 0;
 }

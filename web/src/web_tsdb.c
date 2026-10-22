@@ -1,0 +1,117 @@
+#include "web_tsdb.h"
+
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+
+static long long wall(void *ctx) {
+    (void)ctx;
+    return (long long)time(NULL);
+}
+
+int web_tsdb_init(web_tsdb_t *t, web_rollup_t *ru, web_store_t *store,
+                  int retain_days, int max_mb, web_clock_fn clock,
+                  void *clock_ctx) {
+    memset(t, 0, sizeof(*t));
+    t->ru = ru;
+    t->store = store;
+    t->retain_days = retain_days;
+    t->max_bytes = (long long)max_mb * 1024 * 1024;
+    t->clock = clock ? clock : wall;
+    t->clock_ctx = clock_ctx;
+    t->stop[0] = t->stop[1] = -1;
+    t->batch = calloc(WEB_FLUSH_MAX, sizeof(*t->batch));
+    return t->batch ? 0 : -1;
+}
+
+void web_tsdb_destroy(web_tsdb_t *t) {
+    free(t->batch);
+    t->batch = NULL;
+}
+
+static void flush(web_tsdb_t *t) {
+    if (!t->store) return;
+    size_t n;
+    while ((n = web_rollup_take(t->ru, t->batch, WEB_FLUSH_MAX)) > 0) {
+        web_store_write(t->store, t->batch, n);
+        if (n < WEB_FLUSH_MAX) break;
+    }
+}
+
+void web_tsdb_step(web_tsdb_t *t, long long now_s) {
+    if (!t->started) {
+        t->started = 1;
+        t->next_flush = now_s + WEB_FLUSH_S;
+        /* A compaction at start trims what a long stop left behind. */
+        if (t->store)
+            web_store_compact(t->store, now_s, t->retain_days, t->max_bytes);
+        t->next_compact = now_s + WEB_COMPACT_S;
+    }
+    web_rollup_close_due(t->ru, now_s);
+    if (now_s >= t->next_flush) {
+        flush(t);
+        t->next_flush = now_s + WEB_FLUSH_S;
+    }
+    if (now_s >= t->next_compact) {
+        /* After the write, like sloth's db_maintain(). */
+        flush(t);
+        if (t->store)
+            web_store_compact(t->store, now_s, t->retain_days, t->max_bytes);
+        t->next_compact = now_s + WEB_COMPACT_S;
+    }
+}
+
+void web_tsdb_flush_all(web_tsdb_t *t) {
+    web_rollup_close_all(t->ru);
+    flush(t);
+}
+
+static void *tsdb_main(void *arg) {
+    web_tsdb_t *t = arg;
+    for (;;) {
+        web_tsdb_step(t, t->clock(t->clock_ctx));
+        struct pollfd p = { t->stop[0], POLLIN, 0 };
+        int r = poll(&p, 1, 1000);
+        if (r > 0) break;
+        if (r < 0 && errno != EINTR) break;
+    }
+    return NULL;
+}
+
+int web_tsdb_start(web_tsdb_t *t, char *err, size_t errsz) {
+    if (pipe(t->stop) < 0) {
+        snprintf(err, errsz, "pipe: %s", strerror(errno));
+        t->stop[0] = t->stop[1] = -1;
+        return -1;
+    }
+    fcntl(t->stop[0], F_SETFD, FD_CLOEXEC);
+    fcntl(t->stop[1], F_SETFD, FD_CLOEXEC);
+    if (pthread_create(&t->th, NULL, tsdb_main, t) != 0) {
+        snprintf(err, errsz, "pthread_create failed");
+        close(t->stop[0]);
+        close(t->stop[1]);
+        t->stop[0] = t->stop[1] = -1;
+        return -1;
+    }
+    t->running = 1;
+    return 0;
+}
+
+void web_tsdb_stop(web_tsdb_t *t) {
+    if (t->running) {
+        char b = 1;
+        ssize_t w = write(t->stop[1], &b, 1);
+        (void)w;
+        pthread_join(t->th, NULL);
+        close(t->stop[0]);
+        close(t->stop[1]);
+        t->stop[0] = t->stop[1] = -1;
+        t->running = 0;
+    }
+    web_tsdb_flush_all(t);
+}

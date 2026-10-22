@@ -1,0 +1,72 @@
+/* slothweb /api/series, /api/keys and /api/metrics (#160, M2).
+ *
+ *   /api/series?metric=M&key=K&tier=T&from=F&to=E
+ *       buckets of one series with F <= t < E, as
+ *       {"metric":..,"points":[[t,value,min,max,n],...]} oldest first.
+ *       value is the bucket's mean for a gauge, its sum for a counter,
+ *       its max for presence. tier is fine (10 s, default), minute or
+ *       hour. to defaults to the end of the current bucket, from to one
+ *       hour (fine), one day (minute) or thirty days (hour) before it.
+ *   /api/keys?metric=M
+ *       the keys holding a series of M, most recently seen first.
+ *   /api/metrics
+ *       the metric catalogue and the tiers this build can serve.
+ *
+ * Parameters are validated before anything reads a series, and only
+ * ever bound into SQL, never written into it:
+ *   - the query is name=value pairs joined by '&', nothing else; a name
+ *     is [a-z]+ and one of the route's own, each at most once, so an
+ *     unknown, repeated or empty parameter is a 400;
+ *   - a value is percent-decoded (RFC 3986 §2.1) and must then be
+ *     1..63 bytes of printable ASCII;
+ *   - metric is a catalogue name; key passes the metric's canonicaliser
+ *     (web_metrics.h) and must be absent for a global metric;
+ *   - from and to are decimal seconds, from < to, to no more than a day
+ *     ahead of now, and the span no longer than the tier keeps (24 h,
+ *     --web-retain-days, 400 days);
+ *   - minute and hour need the store: without it (no SQLite, or none
+ *     opened) they are a 400 "tier_unavailable".
+ * A result is at most WEB_SERIES_MAX_POINTS buckets, the newest ones;
+ * "more":true and "next_to" say where to ask for the older ones. */
+#ifndef SLOTHWEB_SERIES_H
+#define SLOTHWEB_SERIES_H
+
+#include <stddef.h>
+
+#include "web_rollup.h"
+#include "web_tsdb.h"
+
+/* A point is at most 69 bytes: a 10-digit t, three %.7g values of at
+ * most 14 bytes, a count capped at 2^32 - 1, brackets and commas. 900
+ * of them are 62,100 bytes, inside the 64,512 an answer has behind its
+ * header (web_routes.h); test_series.c builds that worst case. */
+#define WEB_SERIES_MAX_POINTS 900
+#define WEB_KEYS_MAX          256
+#define WEB_PARAM_MAX         63
+
+typedef struct {
+    int       metric, tier;
+    char      key[WEB_KEY_MAX + 1];
+    long long from, to;
+} web_series_q_t;
+
+/* 0, or -1 with a short reason ("unknown_parameter", "bad_key", ...) in
+ * err. store_on says whether minute and hour can be served. */
+int    web_series_parse(const char *query, long long now_s, int retain_days,
+                        int store_on, web_series_q_t *q, char *err,
+                        size_t errsz);
+/* The answer's JSON into out. 0 if it did not fit. */
+size_t web_series_json(web_tsdb_t *t, const web_series_q_t *q, char *out,
+                       size_t cap);
+
+int    web_keys_parse(const char *query, int *metric, char *err, size_t errsz);
+size_t web_keys_json(web_tsdb_t *t, int metric, char *out, size_t cap);
+
+/* Only an empty query is accepted. */
+int    web_metrics_parse(const char *query, char *err, size_t errsz);
+size_t web_metrics_json(web_tsdb_t *t, char *out, size_t cap);
+
+/* {"error":"reason"} */
+size_t web_series_error_json(const char *reason, char *out, size_t cap);
+
+#endif

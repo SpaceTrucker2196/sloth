@@ -50,5 +50,9 @@ void run_json_tests(void);
 void run_jsonl_tests(void);
 void run_live_tests(void);
 void run_ingest_tests(void);
+void run_rollup_tests(void);
+void run_metrics_tests(void);
+void run_store_tests(void);
+void run_series_tests(void);
 
 #endif

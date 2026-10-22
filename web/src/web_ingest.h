@@ -52,9 +52,14 @@ int  web_backoff_next(int cur, int min_ms, int max_ms);
 /* The line framer, without a socket: bytes in, records and decode
  * errors out to the live state. A line over WEB_JL_MAX_LINE is
  * discarded through its newline and counted once. */
+struct web_metrics;
+
 typedef struct {
     size_t     len;
     int        discarding;
+    /* M2: every decoded record also goes to the metric derivation
+     * (web_metrics.h) when this is set; lost lines taint its pass. */
+    struct web_metrics *metrics;
     char       line[WEB_JL_MAX_LINE + 1];
     web_jrec_t rec;
 } web_feed_t;
@@ -81,6 +86,9 @@ typedef struct {
 int  web_ingest_start(web_ingest_t *g, const web_sockspec_t *spec,
                       int backoff_min_ms, int backoff_max_ms,
                       web_live_t *live, char *err, size_t errsz);
+/* Feed the time series as well as the live state. Call before
+ * web_ingest_start(); the metrics are then the ingest thread's alone. */
+void web_ingest_set_metrics(web_ingest_t *g, struct web_metrics *m);
 /* Stop and join it; safe to call when it never started. */
 void web_ingest_stop(web_ingest_t *g);
 

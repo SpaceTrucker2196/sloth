@@ -7,6 +7,8 @@
 
 #include "web_acl.h"
 #include "web_ingest.h"
+#include "web_rollup.h"
+#include "web_store.h"
 
 #define WEB_DEFAULT_BIND        "127.0.0.1:8770"
 #define WEB_DEFAULT_PORT        8770
@@ -38,6 +40,12 @@ typedef struct {
     web_sockspec_t sock;           /* --socket, default WEB_DEFAULT_SOCKET */
     int      sock_backoff_min_ms;  /* reconnect back-off; tests shorten it */
     int      sock_backoff_max_ms;
+    /* M2 (#160): the time series. */
+    char     store_path[4096];     /* --store, default WEB_DEFAULT_STORE */
+    int      store_given;          /* --store was on the command line */
+    int      max_keys;             /* --web-max-keys */
+    int      max_mb;               /* --web-max-mb */
+    int      retain_days;          /* --web-retain-days */
 } web_config_t;
 
 void web_config_defaults(web_config_t *c);

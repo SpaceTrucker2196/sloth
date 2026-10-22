@@ -39,7 +39,15 @@ static void keep_path(web_req_t *rq, const char *t, size_t n) {
         else { n -= (size_t)(slash - t); t = slash; }
     }
     const char *q = memchr(t, '?', n);
-    if (q) n = (size_t)(q - t);
+    if (q) {
+        size_t ql = n - (size_t)(q - t) - 1;
+        if (ql >= sizeof(rq->query)) rq->query_long = 1;
+        else {
+            memcpy(rq->query, q + 1, ql);
+            rq->query[ql] = '\0';
+        }
+        n = (size_t)(q - t);
+    }
     if (n >= sizeof(rq->path)) { rq->path_long = 1; return; }
     memcpy(rq->path, t, n);
     rq->path[n] = '\0';

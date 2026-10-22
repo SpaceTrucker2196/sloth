@@ -1,5 +1,8 @@
 #include "web_jsonl.h"
 
+#include <errno.h>
+#include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "web_json.h"
@@ -122,7 +125,8 @@ static int string(jp_t *j, int store, const char **out, size_t *olen) {
 
 /* RFC 8259 §6 number. *is_int when it has no fraction or exponent and
  * fits a long long. */
-static int number(jp_t *j, long long *v, int *is_int) {
+static int number(jp_t *j, long long *v, int *is_int, double *d) {
+    const unsigned char *start = j->p;
     int neg = 0, ok = 1;
     unsigned long long acc = 0;
     if (j->p < j->end && *j->p == '-') { neg = 1; j->p++; }
@@ -158,6 +162,21 @@ static int number(jp_t *j, long long *v, int *is_int) {
     if (ok) {
         if (neg) *v = acc ? -(long long)(acc - 1) - 1 : 0;
         else     *v = (long long)acc;
+        *d = (double)*v;
+        return 0;
+    }
+    /* The grammar above has already been checked, so the copy is a
+     * well-formed number and strtod() reads all of it. slothweb never
+     * calls setlocale(), so the decimal point is '.'. */
+    char tmp[64];
+    size_t n = (size_t)(j->p - start);
+    *d = NAN;
+    if (n < sizeof(tmp)) {
+        memcpy(tmp, start, n);
+        tmp[n] = '\0';
+        errno = 0;
+        double x = strtod(tmp, NULL);
+        if (errno == 0 && isfinite(x)) *d = x;
     }
     return 0;
 }
@@ -206,6 +225,7 @@ static int value(jp_t *j, int depth, web_jfield_t *f) {
     f->str = NULL;
     f->slen = 0;
     f->i = 0;
+    f->d = 0;
     if (c == '"') {
         f->kind = WEB_J_STR;
         return string(j, f != &dummy, &f->str, &f->slen);
@@ -218,7 +238,7 @@ static int value(jp_t *j, int depth, web_jfield_t *f) {
     if (c == 'f') { f->kind = WEB_J_BOOL; return literal(j, "false"); }
     if (c == 'n') { f->kind = WEB_J_NULL; return literal(j, "null"); }
     int is_int;
-    if (number(j, &f->i, &is_int) != 0) return -1;
+    if (number(j, &f->i, &is_int, &f->d) != 0) return -1;
     f->kind = is_int ? WEB_J_INT : WEB_J_REAL;
     return 0;
 }
@@ -286,6 +306,14 @@ long long web_jl_int(const web_jrec_t *r, const char *key, long long def) {
     const web_jfield_t *f = web_jl_get(r, key);
     if (!f || (f->kind != WEB_J_INT && f->kind != WEB_J_BOOL)) return def;
     return f->i;
+}
+
+int web_jl_num(const web_jrec_t *r, const char *key, double *out) {
+    const web_jfield_t *f = web_jl_get(r, key);
+    if (!f || (f->kind != WEB_J_INT && f->kind != WEB_J_REAL)) return 0;
+    if (!isfinite(f->d)) return 0;
+    *out = f->d;
+    return 1;
 }
 
 const char *web_jl_error_name(int e) {

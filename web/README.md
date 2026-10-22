@@ -4,30 +4,37 @@ The browser dashboard for sloth data, built in milestones. The spec is
 [`docs/web-ui-spec.md`](../docs/web-ui-spec.md); the rulings table at its
 top overrides the body. Tracker: #102.
 
-**This is M1 (#159) on top of M0 (#158) and W0 (#157).** W0 is the
-listener, the allowed-peer list and its refusals. M0 added the embedded
-page, `/api/health` and an `/events` stream. M1 adds the data-socket
-client: slothweb reads sloth's JSONL stream, keeps a small live state,
-serves it as `/api/live`, and the page's Overview shows the device
-count, open alerts by severity, records per second, sensor health and a
-record ticker. Run it beside sloth and open `http://127.0.0.1:8770`.
+**This is M2 (#160) on top of M1 (#159), M0 (#158) and W0 (#157).** W0
+is the listener, the allowed-peer list and its refusals. M0 added the
+embedded page, `/api/health` and an `/events` stream. M1 added the
+data-socket client: slothweb reads sloth's JSONL stream, keeps a small
+live state, serves it as `/api/live`, and the page's Overview shows the
+device count, open alerts by severity, records per second, sensor
+health and a record ticker. M2 adds the time series: metrics derived
+from the same records, rolled into 10 s, 1 min and 1 h buckets, kept in
+slothweb's own `slothweb.db`, served as `/api/series`, and drawn by the
+Activity view. Run it beside sloth and open `http://127.0.0.1:8770`.
 
 ## Build and run
 
 ```sh
-make web            # builds ./slothweb
+make web            # builds ./slothweb (with SQLite, as sloth's default)
 make web-test       # builds ./slothweb_test and runs it
-./slothweb          # listens on 127.0.0.1:8770, reads unix:/run/sloth/sloth.sock
+make web WITH_SQLITE=0       # a slothweb with no store (10 s tier in memory)
+make web-test WITH_SQLITE=0  # and its tests
+./slothweb          # listens on 127.0.0.1:8770, reads unix:/run/sloth/sloth.sock,
+                    # keeps its time series in ./slothweb.db
 ```
 
 sloth creates its unix socket `0600`, so slothweb runs as the same user
 as sloth (or one sloth's socket directory admits); the kernel's
 permission check is the only authentication the stream has.
 
-`slothweb` is C99 and links libc and pthreads only. It is not part of
-`make`, `make embedded` or `sloth`, no `src/` file is compiled into it,
-and nothing in `src/` references `web/`. Later milestones may link
-`libsqlite3`, which `WITH_SQLITE` already links; nothing else.
+`slothweb` is C99 and links libc and pthreads, and `libsqlite3` when
+built with `WITH_SQLITE=1` (the default, the same switch and library
+sloth uses); nothing else. It is not part of `make`, `make embedded` or
+`sloth`, no `src/` file is compiled into it, and nothing in `src/`
+references `web/`.
 
 The page is built, not checked in as one file. `web/tools/embed.c` (C99,
 built with the same compiler) reads `web/ui/index.html`, replaces each
@@ -46,10 +53,14 @@ and is never committed; neither is any font. No Python, no Node.
 | `--web-allow CIDR` | Admit peers in `CIDR` as well as loopback. Repeatable, up to 30 entries. Host bits past the prefix must be zero (`10.0.0.1/8` is refused, write `10.0.0.0/8`). A non-loopback entry needs `--web-allow-remote`. |
 | `--web-allow-remote` | Authorise a non-loopback bind and non-loopback `--web-allow` entries. Each one is announced on stderr at startup. It authorises the bind, not the peers: with no `--web-allow`, a remote bind still admits loopback only. |
 | `--strict` | Refuse any non-loopback bind or allow entry, even with `--web-allow-remote`, and a non-loopback `--socket tcp:` address. Same shape as sloth's `--strict` refusing a routable `--data-socket`. |
+| `--store PATH` | slothweb's own SQLite file for the time series (M2); default `./slothweb.db`. Never `sloth.db`: a file that is not a slothweb store is refused untouched (below). Needs a `WITH_SQLITE` build; in one without, the flag is a usage error. |
+| `--web-max-keys N` | Device keys tracked by keyed metrics, 16..8192, default 512; host keys get N/2 (256). Least recently seen out first. |
+| `--web-max-mb N` | Ceiling on the store's used size, in MB, default 256. Over it, the hourly compaction drops the oldest 10 s rows first, then 1 min, then 1 h. |
+| `--web-retain-days N` | Days of 1 min buckets kept, 1..400, default 30. |
 | `--help` | Usage. |
 
-Exit status: `0` after `SIGINT`/`SIGTERM`, `1` when the bind fails, `2`
-on a usage error or a policy refusal.
+Exit status: `0` after `SIGINT`/`SIGTERM`, `1` when the bind fails or
+the store is refused, `2` on a usage error or a policy refusal.
 
 ## What a peer gets
 
@@ -72,6 +83,7 @@ on a usage error or a policy refusal.
    | `GET /` with a matching `If-None-Match` | `304`, no body |
    | `GET /api/health` | `200` JSON, `Cache-Control: no-store` |
    | `GET /api/live` | `200` JSON, `Cache-Control: no-store` |
+   | `GET /api/series?...`, `/api/keys?...`, `/api/metrics` | `200` JSON, `Cache-Control: no-store`; `400` with `{"error":"reason"}` for a parameter that does not pass (below); `503` with no time series attached |
    | `GET /events` | `200` `text/event-stream`, held open (below) |
    | `GET /events` with 24 streams already open | `503` |
    | `GET` any other path | `404` |
@@ -115,8 +127,9 @@ accept, busy, served, timed out, accept back-offs.
 
 ## Routes
 
-Paths match exactly; the query string is ignored, and an absolute-form
-target (`GET http://127.0.0.1:8770/ HTTP/1.1`) routes by its path.
+Paths match exactly, and an absolute-form target (`GET
+http://127.0.0.1:8770/ HTTP/1.1`) routes by its path. The query string
+is ignored except by the three M2 routes, which validate it whole.
 
 **`/`** is the one page: `web/ui/index.html` with `theme.css`,
 `page.css` and `app.js` inline. The `ETag` is the first 128 bits of the
@@ -138,7 +151,7 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
 **`/api/health`** answers
 
 ```json
-{"service":"slothweb","milestone":"M1","uptime_s":12,
+{"service":"slothweb","milestone":"M2","uptime_s":12,
  "socket":"connected","socket_spec":"unix:/run/sloth/sloth.sock",
  "last_record_age_s":0,"socket_attempts":1,"socket_connects":1,
  "socket_reconnects":0,"socket_failures":0,"socket_closes":0,
@@ -149,6 +162,16 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
    "not_object":0,"duplicate_key":0,"no_type":0,"overlong":0,"truncated":0},
  "socket_gaps":0,"socket_gap_dropped":0,
  "db":"none","db_schema":null,"db_rows":null,
+ "store":"open","store_path":"./slothweb.db","store_schema":1,
+ "store_rows":{"fine":42120,"minute":7020,"hour":117},
+ "store_bytes":1101824,"store_max_bytes":268435456,"store_batches":360,
+ "store_write_errors":0,"store_last_error":null,"store_compactions":2,
+ "store_dropped_expired":0,"store_dropped_ceiling":0,"retain_days":30,
+ "series_keys":{"global":1,"device":30,"host":20,"label":5},
+ "series_key_caps":{"global":1,"device":512,"host":256,"label":128},
+ "key_evictions":{"global":0,"device":0,"host":0,"label":0},
+ "series":117,"samples":221385,"ring_rows":42120,"queue_rows":0,
+ "queue_dropped":0,"highwater_evictions":0,"values_clamped":0,
  "sse_clients":1,"tick_seq":12}
 ```
 
@@ -157,7 +180,13 @@ back-off of `socket_retry_ms`). `socket_last_error` is slothweb's own
 text (`connect: No such file or directory`, `peer closed the stream`),
 never anything the peer sent. `socket_gaps` counts sloth's `socket_gap`
 markers and `socket_gap_dropped` the records they say were dropped
-(jsonl-schema, #93). The database fields stay `"none"`/`null` until M4.
+(jsonl-schema, #93). The `db` fields are `sloth.db`'s and stay
+`"none"`/`null` until M4. The `store` fields are M2's (below): `store` is
+`open`, or `memory` in a build without SQLite (`store_path`,
+`store_schema` and `store_rows` are then `null`); `store_rows` is kept
+by the writer and recounted at each compaction; `key_evictions` counts
+keys pushed out of each class by `--web-max-keys`, and
+`highwater_evictions` rows pushed out of the running-total table.
 
 **`/api/live`** is the live state:
 
@@ -268,11 +297,216 @@ while disconnected cannot leave one open forever: the set starts empty
 on every connection. An under-count heals itself; an over-count would
 not.
 
+## The time series (M2)
+
+### Metrics
+
+The ingest thread hands each decoded record to `web/src/web_metrics.c`
+after the live state, which turns it into samples. The set is
+docs/web-ui-spec.md §5.1, and every one of its metrics has a source
+`src/jsonl.c` writes today, so none is left out:
+
+| Metric | Kind | Key | From |
+|---|---|---|---|
+| `iface.rx_rate`, `iface.tx_rate` | gauge | interface | `iface` `rx_rate`, `tx_rate` |
+| `host.rx_rate`, `host.tx_rate`, `host.conns` | gauge | IP | `top_host` `rx_rate`, `tx_rate`, `conn_count` |
+| `dev.frames` | counter | MAC | `frame_count` deltas of `probe_client` (`mac`), `assoc` (`sta_mac`), `seqnum_client` (`mac`) |
+| `dev.present` | presence | MAC | any record with `mac` or `sta_mac` whose `last_seen`, if it has one, is within 10 s of its `ts` |
+| `dns.queries` | counter | IP | `dns` with `is_resp` 0, by `src` |
+| `dns.nxdomain` | counter | IP | `dns` with `answer` `NXDOMAIN`, by `src`, which on a response is the resolver: sloth's record names no client for an answer |
+| `tls.handshakes` | counter | IP | `tls`, by `src` |
+| `http.requests` | counter | IP | `http` without `status` (a response has one), by `src` |
+| `alerts.fired` | counter | alert type | `alert` (one per new alert key), by `ty`; the lifecycle records are not counted again |
+| `wifi.ap_count` | gauge | channel | `channel_summary` `ap_count` |
+| `wifi.ctrl_total` | counter | channel | `channel_summary` `ctrl_total` deltas: sloth's figure is a running total, so this is a counter, not the spec's gauge |
+| `wifi.deauth` | counter | MAC (BSSID) | `deauth` `count` deltas per (src, dst, bssid, subtype), by `bssid` |
+| `wifi.probe_clients` | gauge | none | `probe_client` rows per snapshot pass |
+| `conns.total` | gauge | none | `connections` rows per snapshot pass |
+| `flow.ssh`, `flow.rdp`, `flow.smb`, `flow.snmp`, `flow.mqtt` | counter | IP | deltas of `ssh_flow` `banner_count`, `rdp_flow` `connect_req_count`, `smb_session` `count` (by `client_ip`), `snmp_flow` get+getnext+getbulk+set+response+trap, `mqtt_flow` connect+subscribe+publish, per flow, by source |
+
+A key is a canonical form checked by type: a MAC is lower-case
+`xx:xx:xx:xx:xx:xx` (all zeros, sloth's "no MAC", is not one), an IP is
+what `inet_ntop()` writes back for what `inet_pton()` accepted, an
+interface name is 1..15 bytes of `[A-Za-z0-9_.:@-]`, a channel is
+1..233 with `6g` in front on 6 GHz (5 and 6 GHz share numbers), an alert
+type is `ty` 0..9999. A record whose key does not pass is not counted,
+so no string a peer wrote is ever a key as it was sent. Gauges take
+sloth's `%.2f` reals.
+
+**Running totals.** `frame_count`, `count` and the flow counts are
+high-water marks. Each is turned into a delta against the last value
+seen for the same row, floored at zero, so a row sloth evicted and made
+again does not read as a negative burst. On a new connection sloth
+re-sends every row at its full total, so the first sight of a row is a
+baseline (no delta) unless the row's own `first_seen` is no earlier than
+the connection's first record, i.e. it was born while slothweb was
+listening; rows with no `first_seen` (`seqnum_client`, `channel_summary`)
+are always a baseline on first sight. Every connection starts a new
+table. The table holds 4,096 rows, least recently used out first,
+counted as `highwater_evictions`.
+
+**Rows per pass** (`conns.total`, `wifi.probe_clients`) use the same
+batch start as the device count: the first `iface` record after another
+poll-thread record. `connections` is written just before its tick's
+`iface` records, so the window that closes at a batch start holds that
+tick's connections and the previous tick's probe clients. The partial
+window a connection opens in is not sampled, nor is one that a
+`socket_gap` or an undecodable line may have cut.
+
+Bucketing uses slothweb's clock, never a record's `ts`: a hostile `ts`
+could otherwise write anywhere in history.
+
+### Tiers
+
+| Tier | Bucket | Kept | `tier=` |
+|---|---|---|---|
+| fine | 10 s | 24 h | `fine` |
+| minute | 1 min | `--web-retain-days` (30 d) | `minute` |
+| hour | 1 h | 400 d | `hour` |
+
+Every series keeps one open bucket per tier with sum, count, min and
+max. A bucket closes when a sample lands in a later one, or when the
+store thread finds its interval over, whichever is first. A gauge's
+value is sum/count, a counter's sum, presence's max. Keys are bounded
+per class: device MACs (`--web-max-keys`, 512), host IPs (half, 256),
+labels (interfaces, channels, alert types: 128); a new key in a full
+class evicts the one seen least recently, after writing out its open
+buckets, and is counted in `key_evictions`. The one global key is never
+evicted. Closed 10 s buckets also go to a ring of 131,072 rows in
+memory (about 5 MB); `/api/series` reads it for what the store has not
+written yet, and in a build without SQLite it is all there is.
+
+### slothweb.db
+
+`--store` (default `./slothweb.db`) is slothweb's file and holds nothing
+but closed buckets: `series(id, metric, key)` and one table per tier,
+`(series, t, sum, n, min, max)`. It is never `sloth.db`.
+
+- **Opening** follows sloth's rules for its own database (`src/db.c`,
+  `src/secure_file.c`, re-implemented because no `src/` file is linked):
+  the path is opened by descriptor with `O_NOFOLLOW` and created `0600`;
+  an existing file must be a regular file owned by the effective uid
+  with no group or other bits and one link, and the `-wal`, `-shm` and
+  `-journal` files, when present, the same; anything else is refused,
+  never repaired. SQLite then opens it with `SQLITE_OPEN_NOFOLLOW` and
+  `SQLITE_DBCONFIG_DEFENSIVE`, and needs 3.31.0 or later.
+- **Identification** happens before anything is written. An empty file
+  is new. A file whose `meta` table says `store = slothweb` is ours, at
+  its `schema_version`. Anything else (sloth.db, whose `meta` is
+  differently shaped, any other database, a file that is not SQLite) is
+  refused and left byte for byte as it was. So is a store whose version
+  is newer than this build's.
+- **Migration** follows the 2026-10-21 owner rule: a chain of steps from
+  v0, each additive, each in one `BEGIN IMMEDIATE` transaction with its
+  own version stamp, so a failed step leaves the file at the version it
+  last reached, with the step's own changes rolled back. A new file is
+  stamped v0 first and takes the same chain, so the chain runs on every
+  first start. Today the chain is one step, v0 to v1, which creates the
+  four tables (plain `CREATE TABLE`: a name already taken fails the step
+  rather than being adopted).
+- **No column can hold a credential**: `web/tests/test_store.c` keeps
+  sloth's `test_db.c` guardrail (no column named for a password, a
+  community, a nonce, a key or a token may be TEXT or BLOB), and scans
+  the file for an SNMP community, an MQTT user name and a cleartext
+  credential fed through the stream. Keys are canonical addresses and
+  names only.
+- **Writes** come only from the store thread (`web/src/web_tsdb.c`),
+  never the HTTP thread: once a second it closes due buckets, every
+  10 s it writes the closed ones in one transaction. A bucket already on
+  disk (one an eviction or a restart closed early) is merged: sums and
+  counts added, min and max widened. On shutdown every open bucket is
+  closed and written, so a restart picks up where it stopped.
+- **Compaction** runs at start and then once an hour, after the write:
+  rows past each tier's retention go; then, while the used size is over
+  `--web-max-mb`, the oldest hour of fine rows, then the oldest day of
+  minute rows, then the oldest month of hour rows; then free pages are
+  returned (`auto_vacuum=INCREMENTAL`) and the WAL is truncated. The WAL
+  checkpoints at 1 MB and is capped at 1 MB, so the file and its WAL
+  stay near the ceiling.
+- **Reads** come from the HTTP thread over a second, read-only
+  connection (WAL lets it read beside the writer), with every value
+  bound as a parameter; a table name is chosen from three constant
+  statements, never from the request.
+
+An hour of a small home network's records (2 interfaces, 20 hosts, 30
+devices, 10 probe clients, 3 channels, 15 connections, a DNS query
+every 2 s; 117 series) is 42,120 fine rows and about 1.1 MB on disk.
+
+**Without SQLite** (`make web WITH_SQLITE=0`), there is no store:
+`--store` is a usage error, the minute and hour tiers are not kept, and
+`/api/series` serves the fine tier from the in-memory ring only, which
+covers about 131,072 / (number of series) buckets (two days at 117
+series, under an hour at 3,000). `/api/metrics` says `"store":false`
+and marks the two tiers unavailable; asking for one is a `400`
+`tier_unavailable`. `/api/health` says `"store":"memory"`.
+
+### /api/series, /api/keys, /api/metrics
+
+```
+GET /api/series?metric=iface.rx_rate&key=eth0&tier=fine&from=1792540800&to=1792627200
+{"metric":"iface.rx_rate","key":"eth0","tier":"fine","step":10,"kind":"gauge",
+ "unit":"B/s","from":1792540800,"to":1792627200,"source":"store+memory",
+ "more":false,"next_to":null,
+ "points":[[1792623600,1002.5,1000.5,1004.5,5],...]}
+```
+
+`points` are `[t, value, min, max, n]`, oldest first, for buckets with
+`from <= t < to`; `value` is the mean for a gauge, the sum for a
+counter, the max for presence. Buckets with no sample are absent. At
+most 900 come back, the newest; `"more":true` and `next_to` say to ask
+again with `to=next_to` for the older ones (the page does, up to twelve
+times). The bucket still filling is included. `source` is
+`store+memory`, `store` (minute and hour) or `memory`.
+
+The parameters are validated before anything reads a series, and every
+refusal is a `400` with a reason word of slothweb's own, never the
+value back:
+
+| Rule | Reason |
+|---|---|
+| the query is `name=value` pairs joined by `&`, nothing else | `bad_query` |
+| a name is one of `metric`, `key`, `tier`, `from`, `to` (`/api/keys`: `metric`; `/api/metrics`: none) | `unknown_parameter` |
+| each at most once | `repeated_parameter` |
+| a value is percent-decoded (RFC 3986 §2.1), then 1..63 bytes of printable ASCII | `bad_escape`, `bad_value`, `empty_value`, `value_too_long` |
+| the whole query is under 512 bytes | `query_too_long` |
+| `metric` is one of the table above | `missing_metric`, `unknown_metric` |
+| `key` passes the metric's canonicaliser; a global metric takes none | `bad_key` |
+| `tier` is `fine` (default), `minute` or `hour`, the last two only with a store | `unknown_tier`, `tier_unavailable` |
+| `from` and `to` are 1..11 decimal digits; `to` defaults to the end of the current bucket, `from` to 1 h, 1 d or 30 d before it | `bad_from`, `bad_to` |
+| `from < to`, `to` at most a day ahead, the span no longer than the tier keeps plus one bucket | `empty_range`, `to_in_future`, `range_too_long` |
+
+A point is at most 69 bytes, so 900 fit the 64 KB answer buffer with its
+header; `test_series.c` builds that worst case. `/api/keys?metric=M`
+lists the keys holding a series of `M`, most recently seen first (256 at
+most, with `total`). `/api/metrics` lists the metric table, each with
+its key count, and the tiers with their steps, retention and whether
+this build serves them.
+
+### The Activity view
+
+`2` (or the sidebar) opens it; `1` goes back to the Overview. It picks a
+metric (from `/api/metrics`), a key (from `/api/keys`) and a window
+(1 h, 6 h and 24 h from the 10 s tier; 7 d and 30 d from 1 min; 400 d
+from 1 h), and draws the series on Canvas 2D: the bucket value as a
+line over its min..max band. That band is the spread inside each bucket;
+the spec's baseline band (`mean ± 2 sd`), the z-score in the hover, the
+`abs(z)` ordering and the ratio-to-baseline toggle need M3's baselines
+and are not here. Below it, a small multiple per key (the 24 most
+recently seen), each the last hour at 10 s, sorted by current value so
+the loudest is top left, with the key in the TUI's colour for it: the
+eight hues of `src/tui_palette.c` picked by `src/ip_color.c`'s hash
+(djb2; the spec says FNV-1a, but the TUI's own hash is the one that
+keeps the colours equal). Colours come from `theme.css` tokens read back
+at run time. Keys are shown with `textContent` and `fillText` only and
+leave the page only as an `encodeURIComponent()`'d parameter of a
+same-origin `fetch`.
+
 ## What it never does
 
 - No method that writes, ever (`405` is permanent, not a W0 placeholder).
 - No name resolution of any kind, including its own bind address.
-- No write to `sloth.db`; M1 does not open it at all.
+- No write to `sloth.db`, and no open of it: `--store` pointed at it is
+  refused untouched.
 - No write to the data socket, ever: slothweb only reads it.
 - No request off the host from the page: no URL, no font, no script
   from anywhere but the page itself, enforced by the CSP above and
@@ -286,8 +520,10 @@ not.
 `make web-test` builds `slothweb_test` from `web/tests/*.c` and the
 `web/src/` modules (not `main.c`). It needs no host file and no running
 sloth, opens only loopback ephemeral ports (`127.0.0.1` and `::1`, port
-0) and unix sockets in a fresh `mkdtemp()` directory under `/tmp`, and
-never leaves the host. It is clean under
+0), and unix sockets and SQLite files in fresh `mkdtemp()` directories
+under `/tmp`, and never leaves the host. Every M2 test runs on a pinned
+clock. `make web-test WITH_SQLITE=0` builds and runs the same suite
+against the memory-only build. It is clean under
 `EXTRA_CFLAGS="-Werror -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"`
 and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 `TSAN_OPTIONS=halt_on_error=1`.
@@ -302,6 +538,10 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_jsonl.c` | hand-written lines: sloth's shapes, escapes and surrogate pairs, member text inside a string, every truncation of a record, syntax errors, invalid UTF-8 raw and escaped, duplicate members, the depth, member and integer limits |
 | `test_live.c` | the live state and the framer without a socket: the device count per pass, passes cut by a gap, a bad line or a bad type not published, an empty table publishing 0, a reconnect as a new stream, the alert lifecycle counts, type names, records per second, sensor-health states, the recent ring, hostile strings escaped in `/api/live` and in `record` events, the worst-case `/api/live` fitting its buffer, split reads, truncated and overlong lines |
 | `test_ingest.c` | the client over a real unix socket and loopback TCP, the test playing sloth: `--socket` parsing and its refusals, the back-off bound, **the device count `/api/live` reports matching what the fake sent within 5 s** for 3, 12, 300, 0 and 7 devices (spec §12, M1), markup escaped over HTTP and over `/events`, reconnect after the peer closes, retrying with no peer at the capped interval, no tight loop on a peer that closes at once, a mixed stream of truncated, overlong, invalid-UTF-8 and hostile lines, and that the client never writes to the socket |
+| `test_rollup.c` | bucket boundaries in all three tiers, sum/count/min/max, value by kind, non-finite and huge values, the per-class key caps and LRU eviction with its flush and counters, the ring query's merge and bounds |
+| `test_metrics.c` | hand-written lines through the decoder on a pinned clock: the key canonicalisers, gauges from `%.2f` reals, hostile keys refused, event counters, running totals as deltas floored at zero and first-sight baselines, flows, channels, presence, rows per pass with gaps and bad lines, the bounded high-water table |
+| `test_store.c` | the DDL guardrail in every build; with SQLite: a fresh store, `test_db.c`'s secret-column sweep, secrets fed through the stream absent from the file, a v0 file migrated, a v0 file whose step fails left at v0, a newer file and foreign files (a sloth.db shape, other databases, not SQLite) refused byte for byte, the file rules (symlink, mode, links, side files, a directory), merged writes and bound queries, retention, the ceiling dropping the oldest fine rows first |
+| `test_series.c` | every parameter rule and its reason, the answer's shape and paging, the routes (`HEAD`, `400` without echo, `query_too_long`, `421` and `405` on all three, `503` without a time series, the health members), the 900-point worst case fitting, the store thread running beside reads and writes, and spec §12's M2 acceptance: an hour of records through the framer on a pinned clock, the 24 h request answered with 360 points 10 s apart, the store under 5 MB |
 | `test_server.c` | real loopback sockets: default bind address, a refused peer over v4 and v6, 405 for POST/PUT/DELETE/PATCH, 431, idle and slow clients timed out, slot exhaustion; the page byte for byte and its `304`, health, a stream's ticks and pings and the client leaving, the first tick at once, a departing client noticed on the read path with no event due, the stream socket's `TCP_NODELAY` and `SO_SNDBUF`, a non-reading stream client dropped at the 64 KB backlog and not past it, the stream cap, `421` for `Host: attacker.example` |
 
 A test cannot originate from a non-loopback address, so the refused-peer
@@ -328,6 +568,11 @@ web/
     web_ingest.c   --socket, the data-socket thread, back-off, line framing
     web_jsonl.c    the strict JSONL record decoder
     web_live.c     the live state: counts, devices, alerts, sensor, ring
+    web_metrics.c  records to samples: keys, deltas, rows per pass (M2)
+    web_rollup.c   the metric table, the three tiers, key bounds, the ring
+    web_store.c    slothweb.db: open rules, identification, migration, I/O
+    web_tsdb.c     the store thread: close, write, compact
+    web_series.c   /api/series, /api/keys, /api/metrics
     web_json.c     the JSON writer every outgoing string goes through
     web_assets.h   the generated page's symbols
   ui/              the page sources (index.html, theme.css, page.css, app.js)

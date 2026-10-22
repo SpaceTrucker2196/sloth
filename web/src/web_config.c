@@ -21,6 +21,21 @@ void web_config_defaults(web_config_t *c) {
         c->sock.kind = 0;   /* not reachable: the default is a constant */
     c->sock_backoff_min_ms = WEB_SOCK_BACKOFF_MIN_MS;
     c->sock_backoff_max_ms = WEB_SOCK_BACKOFF_MAX_MS;
+    snprintf(c->store_path, sizeof(c->store_path), "%s", WEB_DEFAULT_STORE);
+    c->max_keys    = WEB_DEFAULT_MAX_KEYS;
+    c->max_mb      = WEB_DEFAULT_MAX_MB;
+    c->retain_days = WEB_DEFAULT_RETAIN_DAYS;
+}
+
+/* A decimal in [lo, hi], digits only. */
+static int parse_count(const char *p, int lo, int hi, int *out) {
+    size_t n = strlen(p);
+    if (n == 0 || n > 9) return -1;
+    for (size_t i = 0; i < n; i++) if (p[i] < '0' || p[i] > '9') return -1;
+    long v = strtol(p, NULL, 10);
+    if (v < lo || v > hi) return -1;
+    *out = (int)v;
+    return 0;
 }
 
 static int parse_port(const char *p, uint16_t *port, int allow_zero) {
@@ -160,7 +175,8 @@ void web_usage(FILE *out) {
     fprintf(out,
         "usage: slothweb [--socket SPEC] [--web-bind ADDR:PORT]\n"
         "                [--web-allow CIDR]... [--web-allow-remote] [--strict]\n"
-        "                [--help]\n"
+        "                [--store PATH] [--web-max-keys N] [--web-max-mb N]\n"
+        "                [--web-retain-days N] [--help]\n"
         "\n"
         "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
         "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
@@ -178,10 +194,21 @@ void web_usage(FILE *out) {
         "                        --web-allow entries; announced on stderr.\n"
         "  --strict              refuse any non-loopback bind or allow entry,\n"
         "                        even with --web-allow-remote.\n"
+        "  --store PATH          slothweb's own SQLite file for the time series\n"
+        "                        (default " WEB_DEFAULT_STORE "); never sloth.db, which\n"
+        "                        is refused. Created 0600. Needs a WITH_SQLITE\n"
+        "                        build; without one only the last hours of\n"
+        "                        10 s buckets are kept, in memory.\n"
+        "  --web-max-keys N      device keys tracked (default 512; hosts get N/2,\n"
+        "                        range 16..8192). Least recently seen out first.\n"
+        "  --web-max-mb N        store ceiling in MB (default 256); the oldest\n"
+        "                        10 s rows go first.\n"
+        "  --web-retain-days N   days of 1 min buckets kept (default 30, 1..400).\n"
         "  --help                this text.\n"
         "\n"
-        "Routes (GET and HEAD): / (the page), /api/health and /api/live\n"
-        "(JSON), /events (Server-Sent Events). Any other path is 404; any\n"
+        "Routes (GET and HEAD): / (the page), /api/health, /api/live,\n"
+        "/api/series, /api/keys and /api/metrics (JSON), /events (Server-Sent\n"
+        "Events). Any other path is 404; any\n"
         "other method is 405; a Host that is not localhost or an IP\n"
         "literal is 421; a header block over 8 KB is 431.\n");
 }
@@ -207,6 +234,43 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
             }
             if (web_sockspec_parse(argv[++i], &c->sock, msg, sizeof(msg)) != 0) {
                 fprintf(err, "slothweb: %s\n", msg);
+                return -1;
+            }
+        } else if (!strcmp(a, "--store")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (!v[0] || strlen(v) >= sizeof(c->store_path) - 16) {
+                fprintf(err, "slothweb: --store: empty or too long a path\n");
+                return -1;
+            }
+            if (!web_store_available()) {
+                fprintf(err, "slothweb: --store needs SQLite; this slothweb "
+                             "was built with WITH_SQLITE=0\n");
+                return -1;
+            }
+            snprintf(c->store_path, sizeof(c->store_path), "%s", v);
+            c->store_given = 1;
+        } else if (!strcmp(a, "--web-max-keys") || !strcmp(a, "--web-max-mb") ||
+                   !strcmp(a, "--web-retain-days")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            int lo, hi, *dst;
+            if (!strcmp(a, "--web-max-keys")) {
+                lo = WEB_MAX_KEYS_MIN; hi = WEB_MAX_KEYS_MAX; dst = &c->max_keys;
+            } else if (!strcmp(a, "--web-max-mb")) {
+                lo = 1; hi = WEB_MAX_MB_MAX; dst = &c->max_mb;
+            } else {
+                lo = 1; hi = WEB_RETAIN_DAYS_MAX; dst = &c->retain_days;
+            }
+            if (parse_count(v, lo, hi, dst) != 0) {
+                fprintf(err, "slothweb: %s %s: want a whole number from %d "
+                             "to %d\n", a, v, lo, hi);
                 return -1;
             }
         } else if (!strcmp(a, "--web-bind") || !strcmp(a, "--web-allow")) {

@@ -193,6 +193,11 @@ void web_live_health_members(web_live_t *l, web_jw_t *w, long long now_ms);
 
 const char *web_live_sock_word(int state);
 
+/* Is t one of the poll thread's record types (sloth's snapshot batch,
+ * src/jsonl.c jsonl_emit_state_snapshots())? The capture thread's types
+ * can land anywhere inside a batch; these cannot. */
+int  web_live_is_poll_type(const char *t);
+
 /* "ok", "degraded", "not_observing", "stale" or "unknown": the
  * sensor_health liveness, from the latest record and its age. */
 const char *web_live_sensor_word(web_live_t *l, long long now_ms);

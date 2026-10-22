@@ -522,22 +522,27 @@ research-mcp:
 	$(CC) $(CFLAGS) -UWITH_PCAP -DWITH_SQLITE -Iinclude -Isrc -Iresearch -Iresearch/mcp \
 	      -o sloth-research-mcp $(MCP_SRCS) -lsqlite3
 
-# ── slothweb (#157, #158, #159) ─────────────────────────────────────────────
+# ── slothweb (#157, #158, #159, #160) ───────────────────────────────────────
 # The browser dashboard's server, docs/web-ui-spec.md. A separate binary
 # on purpose: nothing here is in `all` or `embedded`, no sloth source is
 # compiled into it, and nothing in src/ references web/ (spec §4.2). It
-# links libc and pthreads only; later milestones may add libsqlite3,
-# which WITH_SQLITE already links, and nothing else.
+# links libc and pthreads, and libsqlite3 when WITH_SQLITE=1 (M2's
+# slothweb.db), and nothing else.
 #
 # M0 serves one embedded page, /api/health and an /events stream behind
-# W0's allow list; M1 adds the data-socket client thread and /api/live.
-# web/README.md has the rest.
+# W0's allow list; M1 adds the data-socket client thread and /api/live;
+# M2 the rollups, slothweb.db and /api/series. web/README.md has the rest.
+#
+# WITH_SQLITE decides the store for both targets. TEST_CFLAGS defines
+# WITH_SQLITE unconditionally for sloth's suite, so web-test undefines
+# it again when WITH_SQLITE=0: `make web-test WITH_SQLITE=0` then builds
+# and tests the memory-only slothweb.
 #
 # Compiled with $(CFLAGS) and $(TEST_CFLAGS) like every other binary
 # here, so EXTRA_CFLAGS (-Werror, the sanitizers) reaches it the same way
-# (tests/test_build_recipe.c); the feature -D set they carry is unused
-# by web/. The link line is its own, not $(LDFLAGS), which carries
-# sloth's libraries. Both targets compile from source every time: the
+# (tests/test_build_recipe.c); of the feature -D set they carry, web/
+# reads only WITH_SQLITE, which WEB_SQL_DEFS restates. The link line is
+# its own, not $(LDFLAGS), which carries sloth's libraries. Both targets compile from source every time: the
 # tree is small, and it keeps a sanitizer build from linking objects
 # another build compiled.
 #
@@ -556,6 +561,12 @@ WEB_EMBED_SRCS  = web/tools/embed.c $(WEB_TOOL_SRCS)
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C)
 WEB_TEST_SRCS   = $(wildcard web/tests/*.c)
 WEB_LDLIBS      = -lpthread
+ifeq ($(WITH_SQLITE),1)
+    WEB_SQL_DEFS = -DWITH_SQLITE
+    WEB_LDLIBS  += -lsqlite3
+else
+    WEB_SQL_DEFS = -UWITH_SQLITE
+endif
 ifeq ($(UNAME),Linux)
     WEB_LDFLAGS = -pie -Wl,-z,relro,-z,now
 endif
@@ -570,15 +581,16 @@ $(WEB_ASSETS_C): $(WEB_EMBED) $(WEB_UI)
 
 .PHONY: web web-test
 web: $(WEB_ASSETS_C)
-	$(CC) $(CFLAGS) -Iweb/src -o slothweb $(WEB_MAIN) $(WEB_SRCS) \
-	      $(WEB_LDFLAGS) $(WEB_LDLIBS)
+	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -o slothweb $(WEB_MAIN) \
+	      $(WEB_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
 
 # Loopback and ephemeral ports, and unix sockets in a mkdtemp() directory,
 # only; no host file, no running sloth, no name lookup, no network beyond
 # 127.0.0.1 and ::1. The test links the embedder's
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
 web-test: $(WEB_ASSETS_C)
-	$(CC) $(TEST_CFLAGS) -Iweb/src -Iweb/tests -Iweb/tools -o slothweb_test \
+	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -Iweb/tests -Iweb/tools \
+	      -o slothweb_test \
 	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
 	./slothweb_test
 
