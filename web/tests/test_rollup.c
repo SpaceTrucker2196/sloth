@@ -428,6 +428,161 @@ static void test_queue_full_drops_fine_first_and_counts(void) {
     web_rollup_destroy(&ru);
 }
 
+/* What one global series, given sample i at T + 10 i for i in [from,
+ * to), closes, in the order the rollup closes it: per add the fine,
+ * then the minute, then the hour bucket of the previous sample. sums[]
+ * carries the open sums across calls. Returns the rows written. */
+typedef struct { int tier; long long t; double sum; } exp_row_t;
+
+static size_t model_rows(long long T, int from, int to, double sums[3],
+                         exp_row_t *out) {
+    static const long long step[WEB_TIER_COUNT] = { 10, 60, 3600 };
+    size_t n = 0;
+    for (int i = from; i < to; i++) {
+        long long now = T + (long long)i * 10;
+        for (int t = 0; t < WEB_TIER_COUNT; t++) {
+            if (i > 0 && now % step[t] == 0) {
+                out[n].tier = t;
+                out[n].t = now - step[t];
+                out[n].sum = sums[t];
+                n++;
+                sums[t] = 0;
+            }
+            sums[t] += i;
+        }
+    }
+    return n;
+}
+
+static void add_global(long long T, int from, int to) {
+    for (int i = from; i < to; i++)
+        web_rollup_add(&ru, WM_CONNS_TOTAL, "", i, T + (long long)i * 10);
+}
+
+/* Rows taken in chunks of chunk, appended to got from *n on. */
+static void take_into(web_qrow_t *got, size_t *n, size_t max, size_t chunk) {
+    size_t k;
+    while (*n < max) {
+        size_t want = max - *n < chunk ? max - *n : chunk;
+        if ((k = web_rollup_take(&ru, q, want)) == 0) break;
+        memcpy(got + *n, q, k * sizeof(*q));
+        *n += k;
+    }
+}
+
+static size_t mismatches(const web_qrow_t *got, const exp_row_t *want,
+                         size_t n) {
+    size_t bad = 0;
+    for (size_t i = 0; i < n; i++)
+        if (got[i].tier != want[i].tier || got[i].t != want[i].t ||
+            got[i].sum != want[i].sum || got[i].metric != WM_CONNS_TOTAL)
+            bad++;
+    return bad;
+}
+
+/* The queue is a ring (a take moves only what it takes). Fill it, take
+ * part, refill past the end of the array, take the rest in chunks that
+ * straddle the end: every row comes out once, in closing order, with
+ * its contents. Seen red with web_rollup_take() copying only the run up
+ * to the end of the array (the rows after the wrap came out as stale
+ * slots: 3,235 mismatches). */
+static void test_queue_ring_wraps_in_order(void) {
+    fresh(16, 1);
+    const long long T = 1792627200;              /* a whole hour */
+    exp_row_t *want = calloc(64 * 1024, sizeof(*want));
+    web_qrow_t *got = calloc(64 * 1024, sizeof(*got));
+    WT_ASSERT(want && got);
+    if (!want || !got) { free(want); free(got); return; }
+    double sums[3] = { 0, 0, 0 };
+    size_t nw = model_rows(T, 0, 20000, sums, want);
+    add_global(T, 0, 20000);
+    size_t ng = 0;
+    take_into(got, &ng, 15000, 4096);
+    WT_EQ(ng, 15000);
+    nw += model_rows(T, 20000, 40000, sums, want + nw);
+    add_global(T, 20000, 40000);
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.queue_cap, WEB_QUEUE_ROWS);
+    WT_EQ(st.q_dropped, 0);
+    WT_EQ(st.queue_rows, nw - 15000);
+    /* The live rows run past the end of the array. */
+    WT_ASSERT(ru.q_head + st.queue_rows > st.queue_cap);
+    take_into(got, &ng, nw + 1, 7001);
+    WT_EQ(ng, nw);
+    WT_EQ(mismatches(got, want, nw), 0);
+    WT_EQ(web_rollup_take(&ru, q, WEB_QUEUE_ROWS), 0);
+    free(want);
+    free(got);
+    web_rollup_destroy(&ru);
+}
+
+/* Drop-fine-first holds across the wrap: with the live rows straddling
+ * the end of the array, an overfilled queue keeps every minute and hour
+ * row and, of the fine rows, the oldest, contiguous from the first one
+ * not taken. Seen red with q_slot()'s scan indexing the array instead
+ * of the ring (it replaced fine rows below the newest: the fine rows
+ * kept were not the oldest). */
+static void test_queue_ring_drops_fine_first_across_wrap(void) {
+    fresh(16, 1);
+    const long long T = 1792627200;
+    exp_row_t *want = calloc(64 * 1024, sizeof(*want));
+    web_qrow_t *got = calloc(64 * 1024, sizeof(*got));
+    WT_ASSERT(want && got);
+    if (!want || !got) { free(want); free(got); return; }
+    double sums[3] = { 0, 0, 0 };
+    size_t nw = model_rows(T, 0, 20000, sums, want);
+    add_global(T, 0, 20000);
+    size_t ng = 0;
+    take_into(got, &ng, 15000, 4096);
+    WT_EQ(mismatches(got, want, 15000), 0);
+    nw += model_rows(T, 20000, 50000, sums, want + nw);
+    add_global(T, 20000, 50000);
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.queue_rows, WEB_QUEUE_ROWS);
+    WT_EQ(st.q_dropped, nw - 15000 - WEB_QUEUE_ROWS);
+    WT_ASSERT(ru.q_head > 0);
+    /* What the rest should be: every minute and hour row after the
+     * first 15,000, and the oldest fine rows filling the remainder. */
+    size_t long_rows = 0, long_tsum[WEB_TIER_COUNT] = { 0, 0, 0 };
+    long long fine_first = -1;
+    for (size_t i = 15000; i < nw; i++) {
+        if (want[i].tier != WEB_TIER_FINE) {
+            long_rows++;
+            long_tsum[want[i].tier] += (size_t)(want[i].t - T);
+        } else if (fine_first < 0) {
+            fine_first = want[i].t;
+        }
+    }
+    size_t fine_keep = WEB_QUEUE_ROWS - long_rows;
+    ng = 0;
+    take_into(got, &ng, WEB_QUEUE_ROWS + 1, 7001);
+    WT_EQ(ng, WEB_QUEUE_ROWS);
+    size_t cnt[WEB_TIER_COUNT] = { 0, 0, 0 }, tsum[WEB_TIER_COUNT] = { 0, 0, 0 };
+    long long fine_min = -1, fine_max = -1, fine_prev = -1;
+    size_t fine_unordered = 0;
+    for (size_t i = 0; i < ng; i++) {
+        cnt[got[i].tier]++;
+        tsum[got[i].tier] += (size_t)(got[i].t - T);
+        if (got[i].tier != WEB_TIER_FINE) continue;
+        if (fine_min < 0 || got[i].t < fine_min) fine_min = got[i].t;
+        if (got[i].t > fine_max) fine_max = got[i].t;
+        if (got[i].t <= fine_prev) fine_unordered++;
+        fine_prev = got[i].t;
+    }
+    WT_EQ(cnt[WEB_TIER_MINUTE] + cnt[WEB_TIER_HOUR], long_rows);
+    WT_EQ(tsum[WEB_TIER_MINUTE], long_tsum[WEB_TIER_MINUTE]);
+    WT_EQ(tsum[WEB_TIER_HOUR], long_tsum[WEB_TIER_HOUR]);
+    WT_EQ(cnt[WEB_TIER_FINE], fine_keep);
+    WT_EQ(fine_min, fine_first);
+    WT_EQ(fine_max, fine_first + (long long)(fine_keep - 1) * 10);
+    WT_EQ(fine_unordered, 0);
+    free(want);
+    free(got);
+    web_rollup_destroy(&ru);
+}
+
 /* A host that recurs under LRU pressure keeps its long tiers. 300 hosts
  * against 256 host keys, each sending a query every 10 s, staggered, so
  * every host is evicted between each two of its samples. Each stay is
@@ -720,6 +875,8 @@ void run_rollup_tests(void) {
     WT_RUN(test_ring_query_merges_and_bounds);
     WT_RUN(test_no_store_no_queue);
     WT_RUN(test_queue_full_drops_fine_first_and_counts);
+    WT_RUN(test_queue_ring_wraps_in_order);
+    WT_RUN(test_queue_ring_drops_fine_first_across_wrap);
     WT_RUN(test_recurring_host_under_lru_keeps_long_tiers);
     WT_RUN(test_churn_cannot_displace_established_ghost);
     WT_RUN(test_ghost_table_keeps_established_ways);

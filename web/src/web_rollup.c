@@ -212,23 +212,33 @@ static void ring_push(web_rollup_t *ru, uint32_t sid, const web_agg_t *a) {
     if (ru->ring_n < ru->ring_cap) ru->ring_n++;
 }
 
+/* The queue is a ring: logical row i (0 the oldest) is at
+ * queue[(q_head + i) % q_cap], so a take moves only the rows taken and
+ * never shifts the rest under the mutex. */
+static web_qrow_t *q_at(web_rollup_t *ru, size_t i) {
+    size_t p = ru->q_head + i;
+    if (p >= ru->q_cap) p -= ru->q_cap;
+    return &ru->queue[p];
+}
+
 /* Where a closed bucket of tier goes in the store queue, or NULL when
  * it is dropped. A full queue drops a fine row first: a minute or hour
  * row takes the place of the newest queued fine row, which is counted
  * as dropped; a fine row arriving at a full queue is dropped itself.
- * q_scan walks down from the top once the queue is full and only moves
- * down, since every row above it is a minute or an hour row, so a run
- * of these costs one pass over the queue between two takes. */
+ * q_scan, a logical index, walks down from the newest row once the
+ * queue is full and only moves down, since every row above it is a
+ * minute or an hour row, so a run of these costs one pass over the
+ * queue between two takes. */
 static web_qrow_t *q_slot(web_rollup_t *ru, int tier) {
     if (ru->q_n < ru->q_cap) {
-        web_qrow_t *q = &ru->queue[ru->q_n++];
+        web_qrow_t *q = q_at(ru, ru->q_n++);
         if (ru->q_n == ru->q_cap) ru->q_scan = ru->q_cap;
         return q;
     }
     ru->q_dropped++;
     if (tier == WEB_TIER_FINE) return NULL;
     while (ru->q_scan > 0) {
-        web_qrow_t *q = &ru->queue[--ru->q_scan];
+        web_qrow_t *q = q_at(ru, --ru->q_scan);
         if (q->tier == WEB_TIER_FINE) return q;
     }
     return NULL;
@@ -506,9 +516,17 @@ size_t web_rollup_take(web_rollup_t *ru, web_qrow_t *out, size_t max) {
     pthread_mutex_lock(&ru->mu);
     size_t n = ru->q_n < max ? ru->q_n : max;
     if (n) {
-        memcpy(out, ru->queue, n * sizeof(*out));
-        memmove(ru->queue, ru->queue + n, (ru->q_n - n) * sizeof(*out));
+        /* At most two runs: up to the end of the array, then from 0. */
+        size_t first = ru->q_cap - ru->q_head;
+        if (first > n) first = n;
+        memcpy(out, &ru->queue[ru->q_head], first * sizeof(*out));
+        if (n > first) memcpy(out + first, ru->queue, (n - first) * sizeof(*out));
+        ru->q_head = (ru->q_head + n) % ru->q_cap;
         ru->q_n -= n;
+        /* Logical indexes shift down by n; q_scan is only read while the
+         * queue is full and is reset when it fills again, but keep it
+         * pointing at the same row meanwhile. */
+        ru->q_scan = ru->q_scan > n ? ru->q_scan - n : 0;
     }
     pthread_mutex_unlock(&ru->mu);
     return n;

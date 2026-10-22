@@ -220,7 +220,8 @@ typedef struct {
     int             store_on;
     web_qrow_t     *queue;
     size_t          q_cap, q_n;
-    size_t          q_scan;               /* rows above it are not fine */
+    size_t          q_head;               /* the oldest row; a ring */
+    size_t          q_scan;               /* logical; rows above not fine */
     unsigned long   q_dropped;
     unsigned long   churn_dropped;        /* see key_flush() */
     unsigned long long samples;
