@@ -233,7 +233,67 @@ static void test_allow_list_capacity(void) {
     done(&p);
 }
 
+/* --socket (#159): sloth's default path unless told otherwise, literal
+ * addresses only, and a stream read from another host is announced or,
+ * under --strict, refused. Seen red (rc 0, nothing on stderr) with the
+ * --socket test removed from web_config_check(). */
+static void test_socket_flag(void) {
+    parsed_t p;
+    parse(&p, NULL);
+    WT_EQ(p.rc, 0);
+    WT_EQ(p.cfg.sock.kind, WEB_SOCKSPEC_UNIX);
+    WT_ASSERT(!strcmp(p.cfg.sock.path, "/run/sloth/sloth.sock"));
+    done(&p);
+
+    static const char *const loop[] = { "--socket", "tcp:127.0.0.1:8765", NULL };
+    parse(&p, loop);
+    WT_EQ(p.rc, 0);
+    WT_EQ(p.cfg.sock.kind, WEB_SOCKSPEC_TCP);
+    WT_EQ(p.cfg.sock.port, 8765);
+    WT_ASSERT(p.ann && p.ann[0] == '\0');
+    done(&p);
+
+    static const char *const remote[] = { "--socket", "tcp:192.168.1.5:8765", NULL };
+    parse(&p, remote);
+    WT_EQ(p.rc, 0);
+    WT_HAS(p.ann, "WARNING: reading the data stream from tcp:192.168.1.5:8765");
+    done(&p);
+
+    static const char *const strict[] = { "--strict", "--socket",
+                                          "tcp:192.168.1.5:8765", NULL };
+    parse(&p, strict);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--strict refuses a non-loopback --socket (tcp:192.168.1.5:8765)");
+    done(&p);
+
+    static const char *const strict_ok[] = { "--strict", "--socket",
+                                             "unix:/tmp/x.sock", NULL };
+    parse(&p, strict_ok);
+    WT_EQ(p.rc, 0);
+    done(&p);
+
+    static const char *const name[] = { "--socket", "tcp:localhost:8765", NULL };
+    parse(&p, name);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "names are not resolved");
+    done(&p);
+
+    static const char *const bare[] = { "--socket", NULL };
+    parse(&p, bare);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--socket needs an argument");
+    done(&p);
+
+    static const char *const help[] = { "--help", NULL };
+    parse(&p, help);
+    WT_EQ(p.rc, 1);
+    WT_HAS(p.out, "--socket SPEC");
+    WT_HAS(p.out, "/api/live");
+    done(&p);
+}
+
 void run_config_tests(void) {
+    WT_RUN(test_socket_flag);
     WT_RUN(test_default_bind_is_loopback_8770);
     WT_RUN(test_loopback_binds_need_no_flag);
     WT_RUN(test_remote_bind_refused_without_flag);

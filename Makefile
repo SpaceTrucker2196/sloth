@@ -522,7 +522,7 @@ research-mcp:
 	$(CC) $(CFLAGS) -UWITH_PCAP -DWITH_SQLITE -Iinclude -Isrc -Iresearch -Iresearch/mcp \
 	      -o sloth-research-mcp $(MCP_SRCS) -lsqlite3
 
-# ── slothweb (#157, #158) ───────────────────────────────────────────────────
+# ── slothweb (#157, #158, #159) ─────────────────────────────────────────────
 # The browser dashboard's server, docs/web-ui-spec.md. A separate binary
 # on purpose: nothing here is in `all` or `embedded`, no sloth source is
 # compiled into it, and nothing in src/ references web/ (spec §4.2). It
@@ -530,7 +530,8 @@ research-mcp:
 # which WITH_SQLITE already links, and nothing else.
 #
 # M0 serves one embedded page, /api/health and an /events stream behind
-# W0's allow list. web/README.md has the rest.
+# W0's allow list; M1 adds the data-socket client thread and /api/live.
+# web/README.md has the rest.
 #
 # Compiled with $(CFLAGS) and $(TEST_CFLAGS) like every other binary
 # here, so EXTRA_CFLAGS (-Werror, the sanitizers) reaches it the same way
@@ -572,8 +573,9 @@ web: $(WEB_ASSETS_C)
 	$(CC) $(CFLAGS) -Iweb/src -o slothweb $(WEB_MAIN) $(WEB_SRCS) \
 	      $(WEB_LDFLAGS) $(WEB_LDLIBS)
 
-# Loopback and ephemeral ports only; no host file, no name lookup, no
-# network beyond 127.0.0.1 and ::1. The test links the embedder's
+# Loopback and ephemeral ports, and unix sockets in a mkdtemp() directory,
+# only; no host file, no running sloth, no name lookup, no network beyond
+# 127.0.0.1 and ::1. The test links the embedder's
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
 web-test: $(WEB_ASSETS_C)
 	$(CC) $(TEST_CFLAGS) -Iweb/src -Iweb/tests -Iweb/tools -o slothweb_test \

@@ -13,7 +13,7 @@
 <body>
 <div class="app" id="app">
   <aside class="side">
-    <div class="brand">SLOTH<small>web <span id="milestone">M0</span></small></div>
+    <div class="brand">SLOTH<small>web <span id="milestone">M1</span></small></div>
     <ol class="views">
       <li class="on"><span class="k">1</span>Overview</li>
       <li><span class="k">2</span>Activity</li>
@@ -32,17 +32,45 @@
   </aside>
   <header class="strip">
     <span><span class="dot wait" id="dot">&#9679;</span> <span id="conn">connecting</span></span>
+    <span>sensor <b id="s-sock">-</b></span>
+    <span>devs <b id="s-devs">-</b></span>
+    <span>alerts <b id="s-alerts">-</b></span>
+    <span>rec/s <b id="s-rate">-</b></span>
     <span>tick <b id="seq">-</b></span>
     <span>up <b id="up">-</b></span>
     <span>clients <b id="clients">-</b></span>
   </header>
   <main>
-    <div class="panel">
-      <div class="label">tick</div>
-      <div class="kpi" id="hero">-</div>
-      <p>Skeleton (M0). The counter above comes from the server's event
-      stream once a second; no sensor data is read yet.</p>
-    </div>
+    <section class="kpis" aria-label="overview">
+      <div class="tile">
+        <div class="label">devices</div>
+        <div class="kpi" id="k-devs">-</div>
+        <div class="sub" id="k-devs-sub">waiting for a device pass</div>
+      </div>
+      <div class="tile">
+        <div class="label">open alerts</div>
+        <div class="kpi"><span class="sev2" id="k-crit">-</span> <span class="sev1" id="k-warn">-</span> <span class="sev0" id="k-low">-</span></div>
+        <div class="sub">crit / warn / low, since connect</div>
+      </div>
+      <div class="tile">
+        <div class="label">records/s</div>
+        <div class="kpi" id="k-rate">-</div>
+        <div class="sub" id="k-rate-sub">-</div>
+      </div>
+      <div class="tile">
+        <div class="label">sensor health</div>
+        <div class="kpi" id="k-sensor">-</div>
+        <div class="sub" id="k-sensor-sub">-</div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="label">latest alerts</div>
+      <ol class="alerts" id="alerts"></ol>
+    </section>
+    <section class="panel">
+      <div class="label">records <button type="button" id="pause">pause</button> <span class="sub" id="tick-note"></span></div>
+      <ol class="ticker" id="ticker"></ol>
+    </section>
   </main>
 </div>
 <script>

@@ -5,7 +5,15 @@ page tracks what has shipped; the design is
 [`docs/web-ui-spec.md`](../../docs/web-ui-spec.md), whose rulings table
 overrides its body.
 
-**Summary**: slothweb is at M0 (#158) on top of W0 (#157). W0 is a
+**Summary**: slothweb is at M1 (#159) on top of M0 (#158) and W0
+(#157). M1 reads sloth's data socket (`--socket`, default
+`unix:/run/sloth/sloth.sock`) on its own thread with a capped
+reconnect back-off, decodes each JSONL line with a strict bounded
+reader that treats every byte as untrusted, keeps a live state (record
+counts by type, the device count of sloth's latest pass, open alerts by
+severity, `sensor_health` liveness, recent records), serves it as
+`/api/live` and on the `/events` stream, and draws the Overview: KPI
+tiles and a record ticker. Below it, W0 is a
 listener with an allowed-peer list: loopback-only bind by default
 (`127.0.0.1:8770`); a non-loopback bind or allow entry needs
 `--web-allow-remote` and is announced on stderr; `--strict` refuses
@@ -16,11 +24,13 @@ tick counter. Every method other than `GET`/`HEAD` is `405` on every
 path, a header block over 8 KB `431`, and idle or slow clients time out
 on an absolute budget.
 
-**Sources**: `web/README.md`, `web/src/web_acl.c`, `web/src/web_config.c`,
+**Sources**: `web/README.md`, `web/src/web_ingest.c`, `web/src/web_jsonl.c`,
+`web/src/web_live.c`, `web/src/web_json.c`, `web/src/web_acl.c`, `web/src/web_config.c`,
 `web/src/web_http.c`, `web/src/web_routes.c`, `web/src/web_server.c`,
 `web/src/main.c`, `web/ui/*`, `web/tools/embed.c`, `web/tests/*.c`,
 `Makefile` (`web`, `web-test`, `cppcheck`), `docs/web-ui-spec.md`,
-issues #102, #157 and #158.
+`src/jsonl.c` (`jsonl_emit_devices()`, `jsonl_emit_state_snapshots()`),
+issues #102, #157, #158 and #159.
 
 **Last updated**: 2026-10-21.
 
@@ -47,7 +57,8 @@ resolves a name (its bind address included) and never writes to
 |---|---|---|
 | W0: allow list and refusals, no routes | #157 | shipped |
 | M0: embedded page, `/api/health`, SSE tick | #158 | shipped |
-| M1 to M6 (ingest, series, baselines, devices, Wi-Fi, flows) | children of #102 | not started |
+| M1: data-socket client, live state, `/api/live`, Overview | #159 | shipped |
+| M2 to M6 (series, baselines, devices, Wi-Fi, flows) | children of #102 | not started |
 
 ## W0: the access boundary before any route
 
@@ -198,6 +209,79 @@ one's ACK. At most 24 streams are held; the
 25th `GET /events` is `503`, which keeps 8 of the 32 slots for the page
 and the API.
 
+## M1: ingest and the live view
+
+M1's acceptance (spec §12) is running slothweb beside sloth and seeing
+the Overview's device count match the TUI's within 5 s. The full route
+and field reference is in `web/README.md`; what follows is the design.
+
+### The client
+
+One thread connects to `--socket` (`unix:PATH`, or `tcp:` with a literal
+address; names are refused, not resolved), reads, and never writes: the
+stream is one-way and sloth never reads from a client. A failed connect
+or a closed stream is retried after 250 ms, doubling to a 4 s cap, so a
+restarted sloth reappears within 5 s. Only a connection that delivered a
+whole line resets the wait, so a peer that accepts and closes at once
+(sloth's per-peer cap, #135) is not redialled in a loop. `--strict`
+refuses a non-loopback `tcp:` address; without it one is announced.
+`/api/health` reports the socket's state, attempts, connects,
+reconnects, closes, the current back-off, the last error (slothweb's own
+words), bytes, lines, decode errors by reason and sloth's `socket_gap`
+markers.
+
+### Untrusted input
+
+Every byte from the socket is untrusted: a different sloth build,
+someone else's socket, and strings that carry whatever was on the air.
+Lines are capped at 16 KB and an overlong one is discarded through its
+newline. The decoder (`web/src/web_jsonl.c`) is a strict
+recursive-descent reader with fixed caps (384 members, depth 8) that
+refuses a line whole for any syntax error, ill-formed UTF-8 raw or
+escaped (lone surrogates, overlongs, `\u0000`), a raw control byte, a
+duplicated member or a missing string `type`. `research/mcp/json.c` was
+not reused: it decodes `\u` only to Latin-1 and does not validate raw
+UTF-8.
+
+Output goes through one writer (`web/src/web_json.c`) that escapes per
+RFC 8259 and also writes `<`, `>`, `&`, `'`, DEL, C1 and U+2028/9 as
+`\uXXXX`, so markup in a hostname or SSID is never markup in what
+slothweb sends; the page renders every stream value with `textContent`
+and has no HTML or code sink at all. Names are shown only as the stream
+carries them (active reverse DNS is cut, rulings header).
+
+### The device count
+
+sloth rebuilds its device table each poll and writes one `device`
+record per row in one contiguous run (`jsonl_emit_devices()`), so the
+length of that run is the TUI's `device_count` (rows, not distinct
+MACs). slothweb publishes a run's length when the first record of
+another type ends it. A run that a `socket_gap`, an undecodable line or
+an implausible `type` may have shortened is not published and the
+previous count stands. The snapshot batch begins with the `iface`
+records (`jsonl_emit_state_snapshots()`), so a batch with no device
+run publishes 0 at the next batch's start, unless it lost records. The
+count is marked stale while the socket is down and until the new
+connection delivers a run.
+
+### Alerts and sensor health
+
+Open incidents are tracked from `alert.create` / `.update` /
+`.escalate` / `.resolve` by `incident_id`, starting empty on each
+connection: sloth replays nothing, and a resolve missed while away must
+not hold an incident open forever, so the count can only under-report,
+and heals as incidents update or resolve. `sensor_health` is change-only
+with a 300 s heartbeat; its state is `ok`, `degraded` (a handle open
+behind a stopped thread, or the launch scope not enforced, #85/#91),
+`not_observing`, `stale` after 330 s without one, or `unknown`.
+
+### The page
+
+The Overview has four tiles (devices, open alerts by severity,
+records/s, sensor health) fed by the 1 s `tick` event, the latest alerts
+from `/api/live` every 5 s, and a ticker of the last 50 records fed by
+`record` events (at most 20 per tick, spec §7.1), which can be paused.
+
 ## Tests
 
 `make web-test` is self-contained: no host file, loopback ephemeral
@@ -230,6 +314,21 @@ of #157 maps to it as follows.
 | drop at the 64 KB threshold, not past it | `test_slow_events_client_dropped` (`sse_drop_backlog`) |
 | foreign `Host` refused (DNS rebinding) | `test_foreign_host_is_421`, `test_foreign_host_refused_over_socket`, `test_host_ok`, `test_host_count_must_be_one` |
 
+#159 (M1) maps as follows. The fake sloth is the test itself, writing
+hand-written lines in `src/jsonl.c`'s order and field layout into a
+unix socket in a fresh temporary directory, or a loopback TCP port.
+
+| Acceptance item | Test |
+|---|---|
+| Overview device count matches the TUI within 5 s | `test_device_count_matches_what_sloth_sent` (3, 12, 300, 0 and 7 devices per pass, each read back from `/api/live` over HTTP within 5 s), `test_device_count_is_the_latest_pass` |
+| reconnect, with capped back-off | `test_reconnect_after_peer_closes`, `test_backoff_without_a_peer`, `test_backoff_bound`, `test_instant_close_is_backed_off` |
+| truncated, overlong, invalid UTF-8 and hostile lines | `test_hostile_stream`, `test_truncated_lines`, `test_invalid_utf8_refused`, `test_duplicate_member_refused`, `test_framer_drops_overlong_lines`, `test_caps` |
+| markup in an SSID or hostname renders as text | `test_markup_is_escaped`, `test_hostile_strings_are_escaped`, `test_events_carry_escaped_records`, `test_page_renders_stream_values_as_text` |
+| socket state on `/api/health` | `test_reconnect_after_peer_closes`, `test_backoff_without_a_peer`, `test_device_count_matches_what_sloth_sent` |
+| a count that may be short is not shown as current | `test_cut_pass_is_not_published`, `test_empty_table_publishes_zero`, `test_reconnect_is_a_new_stream` |
+| read-only towards sloth | `test_client_never_writes` |
+| `/api/live` fits its buffer at every cap | `test_worst_case_live_fits` |
+
 A test cannot connect from a non-loopback address, so the socket-level
 refusals narrow the list and connect from loopback; the list function
 itself is tested on non-loopback sockaddrs. Each absence assertion was
@@ -241,7 +340,7 @@ covers `web/`.
 ## Related pages
 
 - [[data-socket-exposure]] — the remote-bind guard this copies.
-- [[jsonl-schema]] — the stream later milestones consume.
+- [[jsonl-schema]] — the stream M1 consumes.
 - [[sqlite-schema]] — the database later milestones read, read-only.
 - [[cli-reference]] — sloth's own flags; slothweb's are in
   [`web/README.md`](../../web/README.md).

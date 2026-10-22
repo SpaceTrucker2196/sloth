@@ -1,10 +1,12 @@
-/* slothweb routes (#158, M0): the exact-match table and the bytes each
- * route sends. Pure: no socket, no clock, so every answer can be checked
- * byte for byte (web/tests/test_routes.c).
+/* slothweb routes (#158 M0, #159 M1): the exact-match table and the
+ * bytes each route sends. No socket and no clock of their own: the
+ * caller passes the time and the live state, so every answer can be
+ * checked byte for byte (web/tests/test_routes.c).
  *
  *   /             the embedded page; ETag, If-None-Match gives 304
- *   /api/health   JSON
- *   /events       Server-Sent Events: tick, ping
+ *   /api/health   JSON: uptime, streams, the data socket's state
+ *   /api/live     JSON: the live state (web_live.h)
+ *   /events       Server-Sent Events: tick, record, ping
  *   anything else 404
  *
  * Before the table: no Host, or two, is 400; a Host (or absolute-form
@@ -18,6 +20,7 @@
 #include <stddef.h>
 
 #include "web_http.h"
+#include "web_live.h"
 
 /* EventSource reconnect delay sent at the start of every stream. */
 #define WEB_SSE_RETRY_MS 3000
@@ -26,7 +29,13 @@ typedef struct {
     long long     uptime_s;
     unsigned      sse_clients;
     unsigned long tick_seq;
+    web_live_t   *live;       /* NULL: no data socket configured */
+    long long     now_ms;     /* the monotonic clock, for ages in live */
 } web_health_t;
+
+/* /api/live is built into the connection's output buffer behind its
+ * header; this much is kept free for the header. */
+#define WEB_LIVE_HDR_RESERVE 1024
 
 enum { WEB_R_ONESHOT = 0, WEB_R_SSE };
 
@@ -43,10 +52,14 @@ typedef struct {
 int    web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
                  char *out, size_t outsz, web_resp_t *r);
 
-/* One "tick" event: id, event name and a JSON data line. 0 if out is
- * too small. */
+/* One "tick" event: id, event name and a JSON data line, with the live
+ * summary when h->live is set. 0 if out is too small. */
 size_t web_sse_tick(char *out, size_t outsz, unsigned long seq, long long ts,
                     const web_health_t *h);
+
+/* One "record" event for the ticker. No id: the ticks carry the ids,
+ * and a reconnecting page re-reads /api/live rather than replaying. */
+size_t web_sse_record(char *out, size_t outsz, const web_live_rec_t *e);
 
 /* The keep-alive comment. */
 size_t web_sse_ping(char *out, size_t outsz);

@@ -11,6 +11,10 @@ int main(void) {
     run_http_tests();
     run_routes_tests();
     run_server_tests();
+    run_json_tests();
+    run_jsonl_tests();
+    run_live_tests();
+    run_ingest_tests();
     printf("slothweb tests: %d passed, %d failed\n", wt_pass, wt_fail);
     return wt_fail ? 1 : 0;
 }

@@ -1,4 +1,4 @@
-/* slothweb listener and connection loop (#157 W0, #158 M0).
+/* slothweb listener and connection loop (#157 W0, #158 M0, #159 M1).
  *
  * One poll() loop on one thread. Each accepted peer is checked against
  * the allow list before anything is read; a refused peer is closed and
@@ -6,7 +6,9 @@
  * (web_routes.c). A plain answer is followed by a close: there is no
  * keep-alive. An /events stream stays open and is fed by the loop's own
  * timers, a tick each tick_ms and a ping each ping_ms, until the client
- * leaves or falls WEB_SSE_MAX_UNSENT bytes behind. */
+ * leaves or falls WEB_SSE_MAX_UNSENT bytes behind. Each tick also sends
+ * the ticker records the ingest thread has added since the last one.
+ * The live state has its own lock (web_live.h); this loop only reads it. */
 #ifndef SLOTHWEB_SERVER_H
 #define SLOTHWEB_SERVER_H
 
@@ -16,6 +18,7 @@
 
 #include "web_config.h"
 #include "web_http.h"
+#include "web_live.h"
 
 #define WEB_MAX_CONNS 32
 /* Event streams are long-lived, so they may not take every slot: the
@@ -32,6 +35,11 @@
 /* How long the listener is left unpolled after accept() runs out of
  * descriptors or memory. */
 #define WEB_ACCEPT_BACKOFF_MS 100
+/* Ticker records sent per tick, at most (spec §7.1: coalesced to 20 a
+ * second). When more arrived, the newest are sent; the seq gap shows. */
+#define WEB_SSE_RECORDS_PER_TICK 20
+/* Room for one tick event, the live summary included. */
+#define WEB_SSE_EVENT_MAX 1024
 
 typedef struct {
     unsigned long accepted;   /* admitted by the allow list */
@@ -47,6 +55,7 @@ typedef struct {
     unsigned long sse_dropped;    /* ended by us: WEB_SSE_MAX_UNSENT behind */
     unsigned long sse_drop_backlog; /* bytes still unsent at the last drop */
     unsigned long ticks;          /* tick events generated (not per client) */
+    unsigned long records_sent;   /* record events generated (not per client) */
 } web_stats_t;
 
 typedef struct {
@@ -72,6 +81,8 @@ typedef struct {
     unsigned        sse_count;
     web_config_t    cfg;
     web_conn_t      conns[WEB_MAX_CONNS];
+    web_live_t     *live;     /* NULL: no data socket; set before run */
+    unsigned long long rec_sent;  /* newest ticker record broadcast */
     pthread_mutex_t mu;       /* guards stats only */
     web_stats_t     stats;
 } web_server_t;
@@ -96,6 +107,10 @@ int      web_server_run(web_server_t *s);
 
 /* Async-signal-safe and thread-safe: one write() to a pipe. */
 void     web_server_stop(web_server_t *s);
+
+/* Attach the live state the routes and the stream read. Call after
+ * web_server_open() and before web_server_run(). */
+void     web_server_set_live(web_server_t *s, web_live_t *live);
 
 void     web_server_stats(web_server_t *s, web_stats_t *out);
 uint16_t web_server_port(const web_server_t *s);

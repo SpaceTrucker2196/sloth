@@ -25,7 +25,7 @@ static void inm(web_req_t *rq, const char *v) {
     snprintf(rq->inm, sizeof(rq->inm), "%s", v);
 }
 
-static const web_health_t H = { 42, 2, 17 };
+static const web_health_t H = { 42, 2, 17, NULL, 0 };
 
 /* Case-insensitive search over the first len bytes. */
 static const char *ci_find(const char *hay, size_t len, const char *needle) {
@@ -169,6 +169,34 @@ static void test_page_makes_no_external_reference(void) {
      * relative paths. */
     WT_HAS(p, "new EventSource(\"/events\")");
     WT_HAS(p, "fetch(\"/api/health\"");
+    WT_HAS(p, "fetch(\"/api/live\"");
+}
+
+/* #159: stream strings (hostnames, SSIDs, alert details) are shown as
+ * text. The JSON already carries < > & ' escaped (test_json.c), and the
+ * page must not turn a decoded value back into markup: no sink that
+ * parses HTML or code is in the script at all. Seen red with
+ * li.innerHTML = r.text added to addRecord() in web/ui/app.js. */
+static void test_page_renders_stream_values_as_text(void) {
+    const char *p = page();
+    size_t n = web_page_len;
+    static const char *const sinks[] = {
+        "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write",
+        "createContextualFragment", "DOMParser", "eval(", "new Function",
+        "setAttribute(", "setTimeout(\"", "setInterval(\"", ".src =",
+        ".href =", "srcdoc",
+    };
+    for (size_t i = 0; i < sizeof(sinks) / sizeof(sinks[0]); i++) {
+        const char *hit = ci_find(p, n, sinks[i]);
+        if (hit)
+            fprintf(stderr, "    page contains \"%s\" at byte %zu\n",
+                    sinks[i], (size_t)(hit - p));
+        WT_ASSERT(hit == NULL);
+    }
+    WT_HAS(p, ".textContent = String(");
+    /* The one class name chosen by a stream value comes from a fixed
+     * table, never from the value itself. */
+    WT_HAS(p, "Object.prototype.hasOwnProperty.call(TYPE_CLASS, t)");
 }
 
 /* §8.1 as amended by the 2026-10-21 fonts ruling: the system monospace
@@ -350,7 +378,7 @@ static void test_health_json(void) {
     WT_EQ(r.kind, WEB_R_ONESHOT);
     WT_ASSERT(r.body == NULL);
     static const char body[] =
-        "{\"service\":\"slothweb\",\"milestone\":\"M0\",\"uptime_s\":42,"
+        "{\"service\":\"slothweb\",\"milestone\":\"M1\",\"uptime_s\":42,"
         "\"socket\":\"none\",\"last_record_age_s\":null,"
         "\"db\":\"none\",\"db_schema\":null,\"db_rows\":null,"
         "\"sse_clients\":2,\"tick_seq\":17}\n";
@@ -434,7 +462,7 @@ static void test_event_formats(void) {
 
 static void test_unknown_paths_are_404(void) {
     static const char *const paths[] = {
-        "", "/index.html", "/api", "/api/", "/api/health/", "/api/live",
+        "", "/index.html", "/api", "/api/", "/api/health/", "/api/live/",
         "/events/", "/API/HEALTH", "//", "*", "/assets/app.js",
         "/favicon.ico", "/%61pi/health",
     };
@@ -464,9 +492,10 @@ static void test_unknown_paths_are_404(void) {
  * reaches the router, whatever path it names. */
 static void test_routes_are_still_405_for_writes(void) {
     static const char *const methods[] = { "POST", "PUT", "DELETE", "PATCH" };
-    static const char *const paths[] = { "/", "/api/health", "/events" };
+    static const char *const paths[] = { "/", "/api/health", "/api/live",
+                                         "/events" };
     for (size_t m = 0; m < 4; m++)
-        for (size_t p = 0; p < 3; p++) {
+        for (size_t p = 0; p < 4; p++) {
             char rqs[256];
             snprintf(rqs, sizeof(rqs),
                      "%s %s HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n",
@@ -484,11 +513,12 @@ static void test_routes_are_still_405_for_writes(void) {
  * Seen red (200, 200, 200, 404) with the web_http_host_ok() test
  * removed from web_route(). */
 static void test_foreign_host_is_421(void) {
-    static const char *const paths[] = { "/", "/api/health", "/events", "/x" };
+    static const char *const paths[] = { "/", "/api/health", "/api/live",
+                                         "/events", "/x" };
     static const char *const hosts[] = {
         "attacker.example", "attacker.example:8770", "127.0.0.1.nip.io",
     };
-    for (size_t p = 0; p < 4; p++)
+    for (size_t p = 0; p < 5; p++)
         for (size_t h = 0; h < 3; h++)
             for (int is_head = 0; is_head < 2; is_head++) {
                 web_req_t rq;
@@ -576,8 +606,9 @@ static void test_small_buffer_is_an_error(void) {
     web_req_t rq;
     web_resp_t r;
     char out[64];
-    static const char *const paths[] = { "/", "/api/health", "/events", "/x" };
-    for (size_t i = 0; i < 4; i++) {
+    static const char *const paths[] = { "/", "/api/health", "/api/live",
+                                         "/events", "/x" };
+    for (size_t i = 0; i < 5; i++) {
         req(&rq, paths[i], 0);
         WT_EQ(web_route(&rq, &H, 1, out, sizeof(out), &r), -1);
     }
@@ -587,6 +618,7 @@ void run_routes_tests(void) {
     WT_RUN(test_page_is_200_with_etag_and_csp);
     WT_RUN(test_page_304_on_matching_validator);
     WT_RUN(test_page_makes_no_external_reference);
+    WT_RUN(test_page_renders_stream_values_as_text);
     WT_RUN(test_font_is_the_system_monospace_stack);
     WT_RUN(test_design_tokens_match_spec);
     WT_RUN(test_sha256_and_base64_vectors);

@@ -4665,3 +4665,19 @@ claimed but unguarded: the first tick at once, a departing client seen
 on the read path, the drop at exactly the 64 KB backlog, and the
 `SO_SNDBUF` cap; a compile-time check keeps the output buffer at least
 as large as the drop threshold. `--help` no longer describes W0.
+
+## 2026-10-21 — slothweb M1 (#159): data-socket client, /api/live, Overview
+
+**Updated pages**: [slothweb.md](slothweb.md). Updated `web/README.md`.
+
+slothweb now reads sloth's data socket (`--socket`, default
+`unix:/run/sloth/sloth.sock`, `tcp:` with literal addresses only) on its
+own thread, reconnecting at 250 ms doubling to a 4 s cap. Every line is
+decoded by a strict bounded reader that refuses ill-formed UTF-8,
+duplicate members and anything over 16 KB, and every outgoing string is
+escaped so markup in a hostname or SSID stays text. The device count is
+the length of sloth's latest `device` pass (the TUI's `device_count`),
+not published when a `socket_gap` or bad line may have shortened it.
+`/api/live` and the `/events` `tick` and `record` events feed the
+Overview's tiles and record ticker; `/api/health` carries the socket's
+state and counters. Flags stay in `web/README.md`.

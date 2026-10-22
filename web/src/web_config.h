@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #include "web_acl.h"
+#include "web_ingest.h"
 
 #define WEB_DEFAULT_BIND        "127.0.0.1:8770"
 #define WEB_DEFAULT_PORT        8770
@@ -34,6 +35,9 @@ typedef struct {
     int      linger_ms;
     int      tick_ms;
     int      ping_ms;
+    web_sockspec_t sock;           /* --socket, default WEB_DEFAULT_SOCKET */
+    int      sock_backoff_min_ms;  /* reconnect back-off; tests shorten it */
+    int      sock_backoff_max_ms;
 } web_config_t;
 
 void web_config_defaults(web_config_t *c);
@@ -47,7 +51,9 @@ int  web_parse_bind(const char *s, int *family, uint8_t addr[16],
 /* The remote-exposure policy, applied to a complete config:
  *   - a non-loopback bind needs allow_remote;
  *   - a non-loopback --web-allow entry needs allow_remote;
- *   - strict refuses both, whatever allow_remote says.
+ *   - strict refuses both, whatever allow_remote says, and a --socket
+ *     tcp: address that is not loopback (the stream has no TLS and no
+ *     authentication; sloth's own --strict refuses to serve one).
  * Pure: no output, no socket. 0, or -1 with the refusal in err. */
 int  web_config_check(const web_config_t *c, char *err, size_t errsz);
 
@@ -58,8 +64,9 @@ int  web_config_parse(web_config_t *c, int argc, char **argv,
                       FILE *out, FILE *err);
 
 /* Print the stderr announcement every authorised remote exposure gets:
- * one for a non-loopback bind, one per non-loopback allow entry. Prints
- * nothing for a loopback-only configuration. */
+ * one for a non-loopback bind, one per non-loopback allow entry, and
+ * one for a --socket read from another host. Prints nothing for a
+ * loopback-only configuration. */
 void web_config_announce(const web_config_t *c, FILE *err);
 
 /* "127.0.0.1:8770" / "[::1]:8770". */

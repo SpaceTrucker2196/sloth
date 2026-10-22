@@ -46,5 +46,9 @@ void run_config_tests(void);
 void run_http_tests(void);
 void run_routes_tests(void);
 void run_server_tests(void);
+void run_json_tests(void);
+void run_jsonl_tests(void);
+void run_live_tests(void);
+void run_ingest_tests(void);
 
 #endif

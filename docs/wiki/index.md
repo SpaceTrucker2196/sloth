@@ -128,8 +128,10 @@ the Wi-Fi it watches:
   `unix:` trust boundary, the remote-bind guard, and the three
   supported ways to reach it from another host.
 - [[slothweb]] — the browser dashboard's separate server under `web/`
-  (#102): W0 (#157) is the loopback-default bind, the allowed-peer
-  list refused at accept(), and no routes (GET/HEAD 404, else 405).
+  (#102): W0 (#157) is the loopback-default bind and the allowed-peer
+  list refused at accept(); M0 (#158) the page, `/api/health` and the
+  `/events` stream; M1 (#159) the data-socket client, `/api/live` and
+  the Overview.
 - [[deployment]] — `make install` + `make install-service` (#139): the
   shipped hardened unit, why it runs as `sloth` and not root, what each
   sandbox key costs, and the migration off a build-tree unit.

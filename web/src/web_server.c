@@ -119,6 +119,8 @@ int web_server_open(web_server_t *s, const web_config_t *cfg,
 
 uint16_t web_server_port(const web_server_t *s) { return s->port; }
 
+void web_server_set_live(web_server_t *s, web_live_t *live) { s->live = live; }
+
 void web_server_stop(web_server_t *s) {
     char b = 1;
     ssize_t r = write(s->wake[1], &b, 1);
@@ -167,10 +169,12 @@ static void conn_respond(web_server_t *s, web_conn_t *c, int status,
     count_status(s, status);
 }
 
-static void health_now(const web_server_t *s, web_health_t *h) {
+static void health_now(web_server_t *s, web_health_t *h) {
     h->uptime_s    = (now_ms() - s->start_ms) / 1000;
     h->sse_clients = s->sse_count;
     h->tick_seq    = s->tick_seq;
+    h->live        = s->live;
+    h->now_ms      = now_ms();
 }
 
 /* Send what a stream has queued. A client that went away is closed and
@@ -222,7 +226,7 @@ static void sse_broadcast(web_server_t *s, const char *ev, size_t n) {
             sse_queue(s, &s->conns[i], ev, n);
 }
 
-static size_t tick_event(const web_server_t *s, char *out, size_t sz) {
+static size_t tick_event(web_server_t *s, char *out, size_t sz) {
     web_health_t h;
     health_now(s, &h);
     return web_sse_tick(out, sz, s->tick_seq, (long long)time(NULL), &h);
@@ -230,13 +234,32 @@ static size_t tick_event(const web_server_t *s, char *out, size_t sz) {
 
 /* The loop's timers. A late wake-up sends one tick, not a burst to
  * catch up: the counter is a heartbeat, not a clock. */
+/* The ticker records added since the last tick, newest
+ * WEB_SSE_RECORDS_PER_TICK at most. */
+static void send_records(web_server_t *s) {
+    if (!s->live) return;
+    web_live_rec_t recs[WEB_SSE_RECORDS_PER_TICK];
+    unsigned long long latest;
+    int n = web_live_recent_after(s->live, s->rec_sent, recs,
+                                  WEB_SSE_RECORDS_PER_TICK, &latest);
+    s->rec_sent = latest;
+    char ev[(WEB_LIVE_TYPE_MAX + WEB_LIVE_TEXT_MAX) * WEB_JW_EXPAND + 256];
+    for (int i = 0; i < n; i++) {
+        size_t len = web_sse_record(ev, sizeof(ev), &recs[i]);
+        if (!len) continue;
+        sse_broadcast(s, ev, len);
+        STAT_INC(s, records_sent);
+    }
+}
+
 static void run_timers(web_server_t *s, long long now) {
-    char ev[256];
+    char ev[WEB_SSE_EVENT_MAX];
     if (now >= s->next_tick_ms) {
         s->tick_seq++;
         STAT_INC(s, ticks);
         size_t n = tick_event(s, ev, sizeof(ev));
         if (n) sse_broadcast(s, ev, n);
+        send_records(s);
         s->next_tick_ms = now + s->cfg.tick_ms;
     }
     if (now >= s->next_ping_ms) {
@@ -268,7 +291,7 @@ static void conn_route(web_server_t *s, web_conn_t *c, const web_req_t *rq) {
         STAT_INC(s, sse_opened);
         /* The current count at once, so a new page does not sit on "-"
          * for up to a tick. */
-        char ev[256];
+        char ev[WEB_SSE_EVENT_MAX];
         size_t n = tick_event(s, ev, sizeof(ev));
         if (n) sse_queue(s, c, ev, n);
         else   sse_flush(s, c);

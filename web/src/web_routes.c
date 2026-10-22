@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "web_assets.h"
+#include "web_json.h"
 
 /* What every answer carries. no-referrer because nothing on the page
  * should tell anyone where it was; nosniff because every type is
@@ -61,36 +62,88 @@ static int route_page(const web_req_t *rq, char *out, size_t outsz,
         outsz, &r->out_len);
 }
 
-static int health_json(const web_health_t *h, char *out, size_t outsz) {
-    /* M0 has no data socket and no database yet; the fields that will
-     * describe them are present and null so a client written now does
-     * not change shape at M1. Nothing here comes from a peer, so
-     * nothing needs escaping. */
-    return snprintf(out, outsz,
-        "{\"service\":\"slothweb\",\"milestone\":\"M0\","
-        "\"uptime_s\":%lld,"
-        "\"socket\":\"none\",\"last_record_age_s\":null,"
-        "\"db\":\"none\",\"db_schema\":null,\"db_rows\":null,"
-        "\"sse_clients\":%u,\"tick_seq\":%lu}\n",
-        h->uptime_s, h->sse_clients, h->tick_seq);
+static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
+    web_jw_t w;
+    web_jw_init(&w, out, outsz);
+    web_jw_raw(&w, "{\"service\":\"slothweb\",\"milestone\":\"M1\",\"uptime_s\":");
+    web_jw_int(&w, h->uptime_s);
+    /* With no data socket the M0 shape stands: "none" and null. Every
+     * stream-derived or operator-given string goes through web_jw_str. */
+    if (h->live) web_live_health_members(h->live, &w, h->now_ms);
+    else         web_jw_raw(&w, ",\"socket\":\"none\",\"last_record_age_s\":null");
+    web_jw_raw(&w, ",\"db\":\"none\",\"db_schema\":null,\"db_rows\":null,"
+                   "\"sse_clients\":");
+    web_jw_int(&w, h->sse_clients);
+    web_jw_raw(&w, ",\"tick_seq\":");
+    web_jw_int(&w, (long long)h->tick_seq);
+    web_jw_raw(&w, "}\n");
+    return w.overflow ? 0 : w.len;
 }
 
 static int route_health(const web_req_t *rq, const web_health_t *h,
                         char *out, size_t outsz, web_resp_t *r) {
-    char body[512];
-    int bl = health_json(h, body, sizeof(body));
-    if (bl < 0 || (size_t)bl >= sizeof(body)) return -1;
+    char body[4096];
+    size_t bl = health_json(h, body, sizeof(body));
+    if (bl == 0) return -1;
     r->status = 200;
     return fit(snprintf(out, outsz,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: application/json\r\n"
-        "Content-Length: %d\r\n"
+        "Content-Length: %zu\r\n"
         "Cache-Control: no-store\r\n"
         COMMON
         CSP_NONE
         "Connection: close\r\n"
         "\r\n"
         "%s", bl, rq->is_head ? "" : body), outsz, &r->out_len);
+}
+
+static size_t live_body(const web_health_t *h, char *out, size_t cap) {
+    if (h->live) return web_live_json(h->live, out, cap, h->now_ms);
+    static const char none[] =
+        "{\"socket\":\"none\",\"devices\":null,\"devices_stale\":true,"
+        "\"alerts_open\":null,\"records\":0,\"records_s\":null,"
+        "\"sensor\":{\"state\":\"unknown\"},\"alerts\":[],\"recent\":[]}\n";
+    if (cap < sizeof(none)) return 0;
+    memcpy(out, none, sizeof(none));
+    return sizeof(none) - 1;
+}
+
+/* The body is rendered straight into out behind room for the header,
+ * then the header is written in front of it: one copy, no second 64 KB
+ * buffer. */
+static int route_live(const web_req_t *rq, const web_health_t *h,
+                      char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t bl = live_body(h, body, outsz - WEB_LIVE_HDR_RESERVE);
+    if (bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    char hdr[WEB_LIVE_HDR_RESERVE];
+    size_t hl;
+    if (fit(snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", bl), sizeof(hdr), &hl) != 0)
+        return -1;
+    r->status = 200;
+    if (rq->is_head) {
+        memcpy(out, hdr, hl);
+        r->out_len = hl;
+        return 0;
+    }
+    memmove(out + hl, body, bl);
+    memcpy(out, hdr, hl);
+    r->out_len = hl + bl;
+    return 0;
 }
 
 static int route_events(const web_req_t *rq, int sse_room, char *out,
@@ -147,6 +200,8 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
             return route_page(rq, out, outsz, r);
         if (!strcmp(rq->path, "/api/health"))
             return route_health(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/live"))
+            return route_live(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/events"))
             return route_events(rq, sse_room, out, outsz, r);
     }
@@ -157,11 +212,50 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
 
 size_t web_sse_tick(char *out, size_t outsz, unsigned long seq, long long ts,
                     const web_health_t *h) {
-    int n = snprintf(out, outsz,
-        "id: %lu\n"
-        "event: tick\n"
-        "data: {\"seq\":%lu,\"ts\":%lld,\"uptime_s\":%lld,\"sse_clients\":%u}\n"
-        "\n", seq, seq, ts, h->uptime_s, h->sse_clients);
+    char data[512];
+    web_jw_t w;
+    web_jw_init(&w, data, sizeof(data));
+    web_jw_raw(&w, "{\"seq\":");        web_jw_int(&w, (long long)seq);
+    web_jw_raw(&w, ",\"ts\":");         web_jw_int(&w, ts);
+    web_jw_raw(&w, ",\"uptime_s\":");   web_jw_int(&w, h->uptime_s);
+    web_jw_raw(&w, ",\"sse_clients\":"); web_jw_int(&w, h->sse_clients);
+    if (h->live) {
+        web_live_sum_t s;
+        char r10[32];
+        web_live_summary(h->live, &s, h->now_ms);
+        web_jw_raw(&w, ",\"socket\":"); web_jw_str(&w, web_live_sock_word(s.sock_state));
+        web_jw_raw(&w, ",\"devices\":");
+        if (s.dev_known) web_jw_int(&w, s.devices); else web_jw_raw(&w, "null");
+        web_jw_raw(&w, ",\"devices_stale\":"); web_jw_raw(&w, s.dev_stale ? "true" : "false");
+        web_jw_raw(&w, ",\"alerts_open\":[");
+        web_jw_int(&w, (long long)s.alerts[0]); web_jw_raw(&w, ",");
+        web_jw_int(&w, (long long)s.alerts[1]); web_jw_raw(&w, ",");
+        web_jw_int(&w, (long long)s.alerts[2]); web_jw_raw(&w, "]");
+        snprintf(r10, sizeof(r10), "%ld.%ld", s.rate10 / 10, s.rate10 % 10);
+        web_jw_raw(&w, ",\"records_s\":"); web_jw_raw(&w, r10);
+        web_jw_raw(&w, ",\"records\":"); web_jw_int(&w, (long long)s.records);
+        web_jw_raw(&w, ",\"sensor\":"); web_jw_str(&w, s.sensor);
+    }
+    web_jw_raw(&w, "}");
+    if (w.overflow) return 0;
+    int n = snprintf(out, outsz, "id: %lu\nevent: tick\ndata: %s\n\n", seq, data);
+    if (n < 0 || (size_t)n >= outsz) return 0;
+    return (size_t)n;
+}
+
+size_t web_sse_record(char *out, size_t outsz, const web_live_rec_t *e) {
+    /* The escaped JSON holds no raw CR or LF (web_jw_strn escapes both),
+     * so it is one SSE data line whatever the record said. */
+    char data[(WEB_LIVE_TYPE_MAX + WEB_LIVE_TEXT_MAX) * WEB_JW_EXPAND + 128];
+    web_jw_t w;
+    web_jw_init(&w, data, sizeof(data));
+    web_jw_raw(&w, "{\"seq\":");  web_jw_int(&w, (long long)e->seq);
+    web_jw_raw(&w, ",\"type\":"); web_jw_str(&w, e->type);
+    web_jw_raw(&w, ",\"ts\":");   web_jw_int(&w, e->ts);
+    web_jw_raw(&w, ",\"text\":"); web_jw_str(&w, e->text);
+    web_jw_raw(&w, "}");
+    if (w.overflow) return 0;
+    int n = snprintf(out, outsz, "event: record\ndata: %s\n\n", data);
     if (n < 0 || (size_t)n >= outsz) return 0;
     return (size_t)n;
 }

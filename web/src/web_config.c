@@ -16,6 +16,11 @@ void web_config_defaults(web_config_t *c) {
     c->linger_ms    = WEB_DEFAULT_LINGER_MS;
     c->tick_ms      = WEB_DEFAULT_TICK_MS;
     c->ping_ms      = WEB_DEFAULT_PING_MS;
+    char err[128];
+    if (web_sockspec_parse(WEB_DEFAULT_SOCKET, &c->sock, err, sizeof(err)) != 0)
+        c->sock.kind = 0;   /* not reachable: the default is a constant */
+    c->sock_backoff_min_ms = WEB_SOCK_BACKOFF_MIN_MS;
+    c->sock_backoff_max_ms = WEB_SOCK_BACKOFF_MAX_MS;
 }
 
 static int parse_port(const char *p, uint16_t *port, int allow_zero) {
@@ -119,6 +124,17 @@ int web_config_check(const web_config_t *c, char *err, size_t errsz) {
         }
     }
 
+    if (c->strict && c->sock.kind && !web_sockspec_is_local(&c->sock)) {
+        char sp[INET6_ADDRSTRLEN + 16];
+        web_sockspec_format(&c->sock, sp, sizeof(sp));
+        snprintf(err, errsz,
+            "slothweb: --strict refuses a non-loopback --socket (%s).\n"
+            "  The stream has no TLS and no authentication. Read it on the "
+            "sensor, or\n  forward it: ssh -L 8765:127.0.0.1:8765 "
+            "user@sensor\n", sp);
+        return -1;
+    }
+
     for (int i = 0; i < c->acl.n; i++) {
         const web_acl_entry_t *e = &c->acl.e[i];
         if (web_acl_entry_is_loopback(e)) continue;
@@ -142,9 +158,14 @@ int web_config_check(const web_config_t *c, char *err, size_t errsz) {
 
 void web_usage(FILE *out) {
     fprintf(out,
-        "usage: slothweb [--web-bind ADDR:PORT] [--web-allow CIDR]...\n"
-        "                [--web-allow-remote] [--strict] [--help]\n"
+        "usage: slothweb [--socket SPEC] [--web-bind ADDR:PORT]\n"
+        "                [--web-allow CIDR]... [--web-allow-remote] [--strict]\n"
+        "                [--help]\n"
         "\n"
+        "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
+        "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
+        "                        addresses only (default " WEB_DEFAULT_SOCKET ").\n"
+        "                        Reconnects on its own; read-only.\n"
         "  --web-bind ADDR:PORT  listen address, a literal A.B.C.D:PORT or\n"
         "                        [V6]:PORT (default " WEB_DEFAULT_BIND ").\n"
         "                        A non-loopback address is refused unless\n"
@@ -159,10 +180,10 @@ void web_usage(FILE *out) {
         "                        even with --web-allow-remote.\n"
         "  --help                this text.\n"
         "\n"
-        "Routes (GET and HEAD): / (the page), /api/health (JSON), /events\n"
-        "(Server-Sent Events). Any other path is 404; any other method is\n"
-        "405; a Host that is not localhost or an IP literal is 421; a\n"
-        "header block over 8 KB is 431.\n");
+        "Routes (GET and HEAD): / (the page), /api/health and /api/live\n"
+        "(JSON), /events (Server-Sent Events). Any other path is 404; any\n"
+        "other method is 405; a Host that is not localhost or an IP\n"
+        "literal is 421; a header block over 8 KB is 431.\n");
 }
 
 int web_config_parse(web_config_t *c, int argc, char **argv,
@@ -179,6 +200,15 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
             c->allow_remote = 1;
         } else if (!strcmp(a, "--strict")) {
             c->strict = 1;
+        } else if (!strcmp(a, "--socket")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            if (web_sockspec_parse(argv[++i], &c->sock, msg, sizeof(msg)) != 0) {
+                fprintf(err, "slothweb: %s\n", msg);
+                return -1;
+            }
         } else if (!strcmp(a, "--web-bind") || !strcmp(a, "--web-allow")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);
@@ -238,5 +268,12 @@ void web_config_announce(const web_config_t *c, FILE *err) {
         fprintf(err, "slothweb: WARNING: admitting non-loopback peers in %s "
                      "(--web-allow, authorised by --web-allow-remote).\n",
                 cidr);
+    }
+    if (c->sock.kind && !web_sockspec_is_local(&c->sock)) {
+        char sp[INET6_ADDRSTRLEN + 16];
+        web_sockspec_format(&c->sock, sp, sizeof(sp));
+        fprintf(err, "slothweb: WARNING: reading the data stream from %s, "
+                     "which is not loopback.\n"
+                     "  It travels with no TLS and no authentication.\n", sp);
     }
 }
