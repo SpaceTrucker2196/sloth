@@ -96,6 +96,7 @@ static void ctrl_init(ble_ctrl_t *c, int index) {
     c->index        = index;
     c->scan_enabled = -1;
     c->scan_mode    = BLE_SCAN_UNKNOWN;
+    c->filter_dups  = -1;
 }
 
 static void host_init_locked(void) {
@@ -380,14 +381,45 @@ static void observe_locked(const ble_obs_t *o) {
     ble_flood_note(o, key.addr, sloth_mono_ms());
     /* #156: the one gate. Without --ble-rotation-hints nothing below
      * runs, so no seam table is allocated or written. */
-    if (ble_rot_enabled())
+    if (ble_rot_enabled()) {
+        /* The HCI path is blind while this adapter's controller may be
+         * filtering duplicates: Filter_Duplicates on, or no scan enable
+         * seen since sloth started listening (or since a Reset). An
+         * untracked adapter (the overflow slot) is never known. The
+         * Ubertooth stream is raw air, never filtered. */
+        int blind = 0;
+        if (strcmp(key.iface, BT_MONITOR_DEVICE) == 0) {
+            const ble_ctrl_t *c = ctrl_find(o->adapter);
+            blind = !c || c->filter_dups != 0;
+        }
         ble_rot_observe(r, o->sensor_kind, key.iface, o->adapter, key.addr,
-                        o->ts, ble_flood_fresh_active(o));
+                        o->ts, ble_flood_fresh_active(o), blind);
+    }
+}
+
+/* ble_rotation.c's row sink: a freed entry's hint onto its row. */
+static void rot_row_sink(uint8_t kind, const char *iface,
+                         const uint8_t addr[6], const ble_identity_hint_t *h) {
+    ble_key_t key;
+    memset(&key, 0, sizeof(key));
+    memcpy(key.addr, addr, 6);
+    key.type = 1;
+    key.kind = kind;
+    snprintf(key.iface, sizeof(key.iface), "%s", iface ? iface : "");
+    ble_device_t *d = stab_find(&g_devs, &key);
+    if (d) d->hint = *h;
 }
 
 int ble_hci_rotation_enable(int on) {
     pthread_mutex_lock(&g_mu);
+    ble_rot_set_row_sink(rot_row_sink);
     int rc = ble_rot_set_enabled(on);
+    /* Chain ids belong to the run that drew them: none survives a
+     * turn on or off on the rows they were copied to. */
+    for (int i = 0; i < stab_count(&g_devs); i++) {
+        ble_device_t *d = stab_at(&g_devs, i);
+        if (d) memset(&d->hint, 0, sizeof(d->hint));
+    }
     pthread_mutex_unlock(&g_mu);
     return rc;
 }
@@ -682,6 +714,11 @@ static ble_rec_verdict_t ingest_command(const uint8_t *p, size_t len,
          * scan sends SCAN_REQ again from that moment. */
         g_host.scan_enabled = a[0] == 0x01;
         c->scan_enabled     = (int8_t)(a[0] == 0x01);
+        /* Filter_Duplicates second in both: 0x00 off, anything else
+         * filters (0x02, extended only, resets per period). Read only
+         * from an enable; a disable's value means nothing. #156: the
+         * rotation hints need the re-reports a filter suppresses. */
+        if (a[0] == 0x01) c->filter_dups = a[1] == 0x00 ? 0 : 1;
         if (a[0] == 0x01 && c->scan_mode == BLE_SCAN_ACTIVE)
             note_tx(BT_TX_ACTIVE_SCAN, adapter, wall);
         break;
@@ -781,6 +818,11 @@ void ble_snapshot(sloth_state_t *s) {
     pthread_mutex_lock(&g_mu);
     host_init_locked();
     s->ble_host = g_host;
+    if (ble_rot_enabled()) {
+        ble_rot_tick_all();
+        for (int i = 0; i < stab_count(&g_devs); i++)
+            ble_rot_update_row(stab_at(&g_devs, i));
+    }
     s->ble_device_count = stab_snapshot(&g_devs, s->ble_devices, MAX_BLE_DEVICES);
     ble_rot_snapshot(s);
     ble_flood_snapshot(s, sloth_mono_ms());

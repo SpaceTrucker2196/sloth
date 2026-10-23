@@ -31,6 +31,13 @@ static int           g_init;
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     if (!g_init) {
         if (ble_hci_rotation_enable(1) != 0) abort();
+        /* LE Set Scan Enable, Filter_Duplicates 0, on both adapters:
+         * otherwise the HCI path is blind and proposes nothing. */
+        for (uint16_t a = 0; a < 2; a++) {
+            const uint8_t cmd[] = { 0, (uint8_t)a, 0, BT_MON_COMMAND_PKT,
+                                    0x0C, 0x20, 2, 0x01, 0x00 };
+            (void)ble_mon_ingest(cmd, sizeof(cmd), sizeof(cmd), g_ts, g_ts);
+        }
         g_init = 1;
     }
     size_t off = 0;
@@ -70,8 +77,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         if (h->basis && !h->chain) abort();
         if (h->hops > BLE_ROT_MAX_HOPS) abort();
         if (g_s.ble_devices[i].addr_type != 1 && h->chain) abort();
+        if (h->pchain && !h->chain) abort();
     }
-    int d = ble_rot_distinct(&g_s, NULL, NULL);
+    int d = ble_rot_distinct(&g_s, NULL, NULL, 0);
     if (d > rows || (rows > 0 && d < 1)) abort();
+    int p = ble_rot_distinct(&g_s, NULL, NULL, 1);
+    if (p < d || p > rows) abort();
     return 0;
 }

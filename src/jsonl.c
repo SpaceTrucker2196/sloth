@@ -2042,6 +2042,16 @@ static void health_kv(char *buf, int *off, const char *prefix,
     kv_int(buf, LINEBUF, off, key, (long long)h->stale_secs);
 }
 
+/* A lifetime count as its decade band, for a field whose exact value
+ * would say more than its order of magnitude should (#156). */
+static const char *count_band(uint64_t n) {
+    if (n == 0)    return "0";
+    if (n < 10)    return "1-9";
+    if (n < 100)   return "10-99";
+    if (n < 1000)  return "100-999";
+    return "1000+";
+}
+
 void jsonl_emit_sensor_health(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
     time_t now = sloth_wall();
@@ -2119,10 +2129,10 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * every record and stay out. */
         int      btcap_state, btcap_dlt, btcap_refused_dlt, btcap_stale_state;
         int      btcap_drop_any, btcap_truncated_any;
-        /* #156, --ble-rotation-hints: on/off and none/some bands of its
-         * four lifetime counters. All zero with the flag off. */
-        int      ble_rot_on, ble_rot_payload_any, ble_rot_timing_any;
-        int      ble_rot_poisoned_any, ble_rot_evicted_any;
+        /* #156, --ble-rotation-hints: on/off only. Its counts stay out,
+         * so a link committing never writes a line at that moment (the
+         * moment would tell a consumer which address pair it was). */
+        int      ble_rot_on;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -2227,10 +2237,6 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.btcap_drop_any      = s->btcap.drop > 0;
     sig.btcap_truncated_any = s->btcap.truncated > 0;
     sig.ble_rot_on           = s->ble_rot.enabled != 0;
-    sig.ble_rot_payload_any  = s->ble_rot.hints_payload > 0;
-    sig.ble_rot_timing_any   = s->ble_rot.hints_timing > 0;
-    sig.ble_rot_poisoned_any = s->ble_rot.poisoned > 0;
-    sig.ble_rot_evicted_any  = s->ble_rot.seam_evictions > 0;
 
     /* Singleton: one fixed key, so the slot is this record's alone. */
     static const char health_key[] = "sensor";
@@ -2488,14 +2494,16 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     }
     /* #156: BLE address-rotation hints, ONLY while --ble-rotation-hints
      * is on, so a run without it writes exactly what it wrote before.
-     * Aggregate lifetime counters: no address, link, token or digest
-     * (src/ble_rotation.h). Appended. */
+     * Decade bands of lifetime aggregates, payload and timing summed:
+     * no address, link, token or digest, and no exact count a consumer
+     * could match to one departure/arrival pair (src/ble_rotation.h).
+     * Appended. */
     if (s->ble_rot.enabled) {
         const ble_rot_stats_t *r = &s->ble_rot;
-        kv_int(buf, LINEBUF, &off, "ble_rot_hints_payload",  (long long)r->hints_payload);
-        kv_int(buf, LINEBUF, &off, "ble_rot_hints_timing",   (long long)r->hints_timing);
-        kv_int(buf, LINEBUF, &off, "ble_rot_poisoned",       (long long)r->poisoned);
-        kv_int(buf, LINEBUF, &off, "ble_rot_seam_evictions", (long long)r->seam_evictions);
+        kv_str(buf, LINEBUF, &off, "ble_rot_hints",
+               count_band(r->hints_payload + r->hints_timing));
+        kv_str(buf, LINEBUF, &off, "ble_rot_poisoned",       count_band(r->poisoned));
+        kv_str(buf, LINEBUF, &off, "ble_rot_seam_evictions", count_band(r->seam_evictions));
     }
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);

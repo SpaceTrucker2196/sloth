@@ -30,8 +30,12 @@
  *     Flags_and_Device_Status 0x00, Salt (4), Device_Hash (19).
  *   Fast Pair (Provider Advertising signal): Service Data 0xFE2C;
  *     discoverable = the 24-bit Model ID; not discoverable = version
- *     0x00, 0bLLLLTTTT (L 4, T 0b0000), a 4-octet Account Key Filter,
- *     0b00100001, a 2-octet Salt.
+ *     0x00, 0bLLLLTTTT (L 5, T 0b0000), a 5-octet Account Key Filter
+ *     (n = 2 keys), 0b00100001, a 2-octet Salt.
+ *   HCI LE Set Scan Enable (Vol 4 Part E §7.8.11, opcode 0x200C):
+ *     LE_Scan_Enable, Filter_Duplicates. Every HCI-path test enables
+ *     the scan with Filter_Duplicates 0 first (scan_on()), since a
+ *     filtering or unknown controller proposes no link at all.
  *   Apple Handoff, UNVERIFIED: no vendor specification. Built from the
  *     papers' published layout (Celosia and Cunche, PoPETs 2020, Fig. 9;
  *     Martin et al., PoPETs 2019, Fig. 2): Continuity type 0x0C, length
@@ -51,15 +55,27 @@ static time_t   pin_wall(void) { return g_wall; }
 
 static const char *const MON = BT_MONITOR_DEVICE;
 
-static void setup(int hints_on) {
+/* LE Set Scan Enable on `adapter`, scanning, with Filter_Duplicates
+ * `fd`, through the monitor decoder. */
+static void scan_on(uint16_t adapter, uint8_t fd) {
+    const uint8_t rec[] = { (uint8_t)(adapter >> 8), (uint8_t)adapter,
+                            0, BT_MON_COMMAND_PKT, 0x0C, 0x20, 2, 0x01, fd };
+    ASSERT_EQ((int)ble_mon_ingest(rec, sizeof(rec), sizeof(rec), g_wall, g_wall),
+              (int)BLE_REC_COMMAND);
+}
+
+static void setup_scan(int hints_on, int scan) {
     g_mono = 5000000;
     g_wall = 1800000000;
     sloth_clock_test_set(pin_mono, pin_wall);
     memset(&g_s, 0, sizeof(g_s));
     ble_hci_rotation_enable(0);
     ble_clear();
+    if (scan) scan_on(0, 0x00);
     if (hints_on) ASSERT_EQ(ble_hci_rotation_enable(1), 0);
 }
+
+static void setup(int hints_on) { setup_scan(hints_on, 1); }
 
 static void teardown(void) {
     ble_hci_rotation_enable(0);
@@ -116,10 +132,10 @@ static void ad_handoff(uint8_t b[HANDOFF_LEN], uint8_t seed) {
     for (int i = 0; i < 10; i++) b[10 + i] = (uint8_t)(0xB0 + i); /* payload */
 }
 
-#define FP_ACCT_LEN 13
+#define FP_ACCT_LEN 14
 static void ad_fp_account(uint8_t b[FP_ACCT_LEN], uint8_t salt1) {
-    const uint8_t v[] = { 0x0C, 0x16, 0x2C, 0xFE, 0x00, 0x40,
-                          0xD1, 0xD2, 0xD3, 0xD4, 0x21, 0xE7, salt1 };
+    const uint8_t v[] = { 0x0D, 0x16, 0x2C, 0xFE, 0x00, 0x50,
+                          0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0x21, 0xE7, salt1 };
     memcpy(b, v, sizeof(v));
 }
 
@@ -242,8 +258,13 @@ static void test_fast_pair_forms(void) {
     ASSERT_EQ(ble_rot_tokens(&r, t, 3, &disc), 1);
     ASSERT_EQ(disc, 0);
     ASSERT_EQ(t[0].kind, BLE_TOK_FAST_PAIR_ACCOUNT);
-    ASSERT_EQ(t[0].len, 7);                  /* filter 4 + header + salt 2 */
-    ASSERT(t[0].bytes && t[0].bytes[0] == 0xD1 && t[0].bytes[6] == 0x01);
+    /* Filter 5, then the salt 2 as its own run: the 0x21 header between
+     * them is a constant and is left out. Seen to fail: with bytes2
+     * pointed at the header (`salt_hdr` for `salt_hdr + 1`). */
+    ASSERT_EQ(t[0].len, 5);
+    ASSERT(t[0].bytes && t[0].bytes[0] == 0xD1 && t[0].bytes[4] == 0xD5);
+    ASSERT_EQ(t[0].len2, 2);
+    ASSERT(t[0].bytes2 && t[0].bytes2[0] == 0xE7 && t[0].bytes2[1] == 0x01);
 
     /* Discoverable: Model ID alone. Flagged, never a token. The
      * not-discoverable form above and the short filter below read
@@ -264,9 +285,18 @@ static void test_fast_pair_forms(void) {
     ASSERT_EQ(ble_rot_tokens(&r, t, 3, &disc), 0);
     ASSERT_EQ(disc, 0);
     ad_fp_account(ad, 0x01);
-    ad[10] = 0x11;
+    ad[11] = 0x11;
     r = parsed(ad, sizeof(ad));
     ASSERT_EQ(ble_rot_tokens(&r, t, 3, NULL), 0);
+    /* A 4-octet filter (one key) is the form, but filter + salt is at
+     * most ~39.8 bits, under the 40-bit bound: no token, and not
+     * discoverable either. Seen to fail: with BLE_ROT_FP_FILTER_MIN 4. */
+    const uint8_t one_key[] = { 0x0C, 0x16, 0x2C, 0xFE, 0x00, 0x40,
+                                0xD1, 0xD2, 0xD3, 0xD4, 0x21, 0xE7, 0x01 };
+    r = parsed(one_key, sizeof(one_key));
+    disc = 9;
+    ASSERT_EQ(ble_rot_tokens(&r, t, 3, &disc), 0);
+    ASSERT_EQ(disc, 0);
 }
 
 static void test_only_private_addresses_are_candidates(void) {
@@ -315,7 +345,7 @@ static void test_cdp_carried_across_the_seam_is_a_payload_hint(void) {
     ASSERT_EQ(g_s.ble_rot.enabled, 1);
     ASSERT_EQ(g_s.ble_rot.hints_payload, 1);
     ASSERT_EQ(g_s.ble_rot.hints_timing, 0);
-    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL), 1);
+    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 1);
     teardown();
 }
 
@@ -433,6 +463,7 @@ static void test_no_link_while_the_flood_gate_is_active(void) {
  * fail: with the adapter left out of sensor_for()'s match. */
 static void test_never_across_adapters(void) {
     setup(1);
+    scan_on(1, 0x00);
     uint8_t ad[CDP_LEN], A[6], B[6];
     ad_cdp(ad, 0);
     rpa(A, 1); rpa(B, 2);
@@ -636,6 +667,274 @@ static void test_seam_table_evictions_are_counted(void) {
     teardown();
 }
 
+/* ── Review round: spray, filter, persistence, expiry ────────────── */
+
+/* `a` once at `ts`, the monotonic clock moved with the frame clock so
+ * BLE_ADV_FLOOD's windows roll as they would live. */
+static time_t g_t0;
+static void obs_live(const uint8_t a[6], uint8_t atype, const uint8_t *ad,
+                     size_t len, time_t ts) {
+    g_mono = 5000000 + (uint64_t)(ts - g_t0) * 1000u;
+    obs_on(a, atype, 0x03, ad, len, ts, MON, 0);
+}
+
+static const uint8_t PUB[6] = { 0x00, 0x1B, 0xDC, 0, 0, 0x01 };
+
+/* One captured CDP token sprayed on fresh addresses one after another,
+ * one a second: never interleaving, and too slow for the flood gate
+ * (ten fresh addresses a window against twenty). Three addresses first
+ * heard inside one d_swap is not one advertiser. Seen to fail: with the
+ * `fresh >= BLE_ROT_SPRAY_ADDRS` test in ble_rot_observe() made `0`
+ * (payload links commit down the spray). */
+static void test_sequential_token_spray_is_poisoned(void) {
+    setup(1);
+    uint8_t ad[CDP_LEN];
+    ad_cdp(ad, 0);
+    g_t0 = g_wall - 200;
+    for (unsigned i = 0; i < 30; i++) {
+        uint8_t a[6];
+        rpa(a, 500 + i);
+        obs_live(a, 1, ad, sizeof(ad), g_t0 + (time_t)i);
+    }
+    obs_live(PUB, 0, AD_KBD, sizeof(AD_KBD), g_t0 + 50);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 0);
+    ASSERT(g_s.ble_rot.poisoned >= 1);
+    teardown();
+}
+
+/* A genuine rotation A -> B, B heard once, then the flood gate trips on
+ * the CDP key (25 static spam addresses, each its own token, in one
+ * window) before B's link is due. B is never heard under the gate
+ * itself, so only the sweep of every entry on the key stops the commit.
+ * Seen to fail: with flood_sweep()'s `flags |= ENT_EXCLUDED` removed
+ * (the link commits under the gate). */
+static void test_link_pending_when_the_flood_gate_trips_is_refused(void) {
+    setup(1);
+    uint8_t ad[CDP_LEN], spam[CDP_LEN], A[6], B[6];
+    ad_cdp(ad, 0);
+    rpa(A, 1); rpa(B, 2);
+    time_t t0 = g_wall - 100;
+    run_addr(A, ad, sizeof(ad), t0, t0 + 10, 2);
+    obs(B, ad, sizeof(ad), t0 + 12);
+    for (unsigned i = 0; i < 25; i++) {
+        uint8_t z[6] = { 0xC3, 0, 0, 1, (uint8_t)(i >> 8), (uint8_t)i };
+        ad_cdp(spam, (uint8_t)(i + 1));
+        obs_on(z, 1, 0x03, spam, sizeof(spam), t0 + 13, MON, 0);
+    }
+    obs_on(PUB, 0, 0x03, AD_KBD, sizeof(AD_KBD), t0 + 30, MON, 0);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 0);
+    ASSERT_EQ(g_s.ble_rot.hints_timing, 0);
+    teardown();
+}
+
+/* Filter_Duplicates on, and never seen: the controller may report each
+ * address once, so the re-reports the guards need never come and
+ * nothing links; off, the same rotation links. A link pending when the
+ * filter goes on is revoked at commit. Seen to fail, one mutation at a
+ * time: with ble_hci.c's `blind` forced to 0 (the unknown, 0x01, 0x02
+ * and pending cases all link), with the Filter_Duplicates parse forced
+ * to 0 (0x01, 0x02 and pending link), and with tick()'s `S->blind ||`
+ * removed (the pending one commits). */
+static void test_no_link_while_the_controller_may_filter_duplicates(void) {
+    uint8_t A[6], B[6];
+    setup_scan(1, 0);                         /* no scan enable seen */
+    cdp_rotation(g_wall - 100, A, B);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 0);
+    teardown();
+
+    setup_scan(1, 0);
+    scan_on(0, 0x01);                         /* filtering */
+    cdp_rotation(g_wall - 100, A, B);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 0);
+    teardown();
+
+    setup_scan(1, 0);
+    scan_on(0, 0x02);                         /* extended: filtering, reset per period */
+    cdp_rotation(g_wall - 100, A, B);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 0);
+    teardown();
+
+    uint8_t ad[CDP_LEN];
+    ad_cdp(ad, 0);
+    time_t t0 = g_wall - 100;
+
+    setup(1);                                 /* Filter_Duplicates 0 */
+    run_addr(A, ad, sizeof(ad), t0, t0 + 20, 2);
+    obs(B, ad, sizeof(ad), t0 + 22);          /* proposed, pending */
+    scan_on(0, 0x01);
+    obs(B, ad, sizeof(ad), t0 + 40);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 0);
+    teardown();
+
+    setup(1);
+    cdp_rotation(g_wall - 100, A, B);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 1);
+    teardown();
+}
+
+/* A committed link outlives the seam table: 63 more private addresses
+ * evict the departed one (the least recently heard), and the two rows
+ * still count once. Both ways the row keeps it: the freed entry's hint
+ * pushed to its row when no snapshot ran since the commit, and a row
+ * whose entry is gone left as it was when one did. Seen to fail, one
+ * mutation at a time: with ent_free()'s row-sink call removed (first
+ * half), and with ble_rot_update_row() zeroing the hint before its
+ * `e < 0` return (second half). */
+static void evict_after(int snap_between) {
+    setup(1);
+    uint8_t A[6], B[6];
+    cdp_rotation(g_wall - 300, A, B);
+    if (snap_between) {
+        snap();
+        ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 1);
+    }
+    for (unsigned i = 0; i < BLE_ROT_SEAM - 1; i++) {
+        uint8_t a[6];
+        rpa(a, 2000 + i);
+        obs(a, AD_KBD, sizeof(AD_KBD), g_wall - 200);   /* one instant: ambiguous */
+    }
+    snap();
+    ASSERT_EQ(g_s.ble_rot.seam_evictions, 1);
+    ASSERT_EQ(g_s.ble_device_count, BLE_ROT_SEAM + 1);
+    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), BLE_ROT_SEAM);
+    const ble_device_t *a = row(A), *b = row(B);
+    ASSERT(a && b && a->hint.chain && a->hint.chain == b->hint.chain);
+    teardown();
+}
+
+static void test_committed_link_outlives_eviction(void) {
+    evict_after(0);
+    evict_after(1);
+}
+
+/* Expiry without frames: a quiet radio, or a --bt-capture file that
+ * ended, still lets go. Twenty seconds of silence wipe the digests and
+ * shapes; two hours wipe the entries and poison slots; the rows keep
+ * their chain. Seen to fail: with sensor_now() returning S->now (the
+ * frame clock alone: nothing is ever freed). */
+static void test_expiry_runs_without_frames(void) {
+    setup(1);
+    uint8_t A[6], B[6], C[6];
+    rpa(A, 1); rpa(B, 2); rpa(C, 3);
+    uint8_t ad[CDP_LEN];
+    ad_cdp(ad, 0);
+    time_t t0 = g_wall - 100;
+    run_addr(A, ad, sizeof(ad), t0, t0 + 20, 2);
+    obs(C, ad, sizeof(ad), t0 + 21);
+    obs(A, ad, sizeof(ad), t0 + 22);         /* interleave: a poison slot */
+    run_addr(B, AD_KBD, sizeof(AD_KBD), t0 + 30, t0 + 40, 2);
+    snap();
+    ASSERT(g_s.ble_rot.poisoned >= 1);
+    ASSERT(ble_rot_test_digests() > 0);
+    g_mono += (BLE_ROT_FORGET_S + 1) * 1000u;
+    snap();
+    ASSERT_EQ(ble_rot_test_digests(), 0);
+    ASSERT(ble_rot_test_held() > 0);
+    teardown();
+
+    setup(1);
+    run_addr(A, AD_KBD, sizeof(AD_KBD), t0, t0 + 20, 2);
+    run_addr(B, AD_KBD, sizeof(AD_KBD), t0 + 22, t0 + 40, 2);
+    run_addr(C, AD_KBD, sizeof(AD_KBD), t0 + 42, t0 + 60, 2);
+    snap();
+    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 1);
+    g_mono += 100000u * 1000u;
+    g_wall += 100000;
+    snap();
+    ASSERT_EQ(ble_rot_test_held(), 0);
+    ASSERT_EQ(g_s.ble_device_count, 3);
+    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 1);
+    teardown();
+}
+
+/* Seventeen tokens poisoned, thirty seconds apart (the flood gate stays
+ * off), against sixteen slots: the seventeenth must not re-arm the
+ * first. Token 0 then crosses a clean seam on fresh addresses and gets
+ * no payload link. Seen to fail: with poison() overwriting slot 0 when
+ * none is spare (token 0's slot, re-armed: a payload link). */
+static void test_full_poison_list_fails_closed(void) {
+    setup(1);
+    g_t0 = g_wall - 2000;
+    for (unsigned k = 0; k < BLE_ROT_POISON_MAX + 1; k++) {
+        uint8_t ad[CDP_LEN], X[6], Y[6];
+        ad_cdp(ad, (uint8_t)k);
+        rpa(X, 600 + 2 * k); rpa(Y, 601 + 2 * k);
+        time_t t = g_t0 + 30 * (time_t)k;
+        obs_live(X, 1, ad, sizeof(ad), t);
+        obs_live(Y, 1, ad, sizeof(ad), t + 1);
+        obs_live(X, 1, ad, sizeof(ad), t + 2);
+    }
+    snap();
+    ASSERT_EQ(g_s.ble_rot.poisoned, BLE_ROT_POISON_MAX + 1);
+    uint8_t ad[CDP_LEN], P[6], Q[6];
+    ad_cdp(ad, 0);
+    rpa(P, 900); rpa(Q, 901);
+    obs_live(P, 1, ad, sizeof(ad), g_t0 + 600);
+    obs_live(Q, 1, ad, sizeof(ad), g_t0 + 601);
+    obs_live(PUB, 0, AD_KBD, sizeof(AD_KBD), g_t0 + 620);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 0);
+    teardown();
+}
+
+/* A token poisoned stays poisoned for its documented life, about an
+ * hour, not an address interval: half an hour on, it crosses a clean
+ * seam on fresh addresses and gets no payload link. Seen to fail: with
+ * BLE_ROT_POISON_S at 900. */
+static void test_poison_lasts_the_token_life(void) {
+    setup(1);
+    uint8_t ad[CDP_LEN], X[6], Y[6], P[6], Q[6];
+    ad_cdp(ad, 0);
+    rpa(X, 1); rpa(Y, 2); rpa(P, 3); rpa(Q, 4);
+    g_t0 = g_wall - 2000;
+    obs_live(X, 1, ad, sizeof(ad), g_t0);
+    obs_live(Y, 1, ad, sizeof(ad), g_t0 + 1);
+    obs_live(X, 1, ad, sizeof(ad), g_t0 + 2);
+    obs_live(P, 1, ad, sizeof(ad), g_t0 + 1800);
+    obs_live(Q, 1, ad, sizeof(ad), g_t0 + 1801);
+    obs_live(PUB, 0, AD_KBD, sizeof(AD_KBD), g_t0 + 1820);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.poisoned, 1);
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 0);
+    teardown();
+}
+
+/* X -> A -> B on timing, then A heard again after B: the A -> B link
+ * is wrong and goes, and A stays chained to X - its own link in is
+ * committed. Seen to fail: with rot_revoke() judging A's chain by its
+ * predecessor's link (`F->pred < 0 || S->e[F->pred].state !=
+ * LINK_COMMITTED`) instead of A's own (X, the root, has none, so A
+ * left its chain: three advertisers). */
+static void test_revoking_a_link_keeps_the_older_half_chained(void) {
+    setup(1);
+    uint8_t X[6], A[6], B[6];
+    rpa(X, 1); rpa(A, 2); rpa(B, 3);
+    time_t t0 = g_wall - 200;
+    run_addr(X, AD_KBD, sizeof(AD_KBD), t0, t0 + 20, 2);
+    run_addr(A, AD_KBD, sizeof(AD_KBD), t0 + 22, t0 + 50, 2);
+    run_addr(B, AD_KBD, sizeof(AD_KBD), t0 + 52, t0 + 80, 2);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_timing, 2);
+    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 1);
+    obs(A, AD_KBD, sizeof(AD_KBD), t0 + 81);
+    snap();
+    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 2);
+    const ble_device_t *x = row(X), *a = row(A), *b = row(B);
+    ASSERT(x && a && b);
+    if (x && a && b) {
+        ASSERT(x->hint.chain && x->hint.chain == a->hint.chain);
+        ASSERT_EQ(b->hint.chain, 0u);
+    }
+    teardown();
+}
+
 /* ── Consumers ───────────────────────────────────────────────────── */
 
 static void keyboard_rotating_four_times(void) {
@@ -659,9 +958,36 @@ static int count_type(alert_type_t t) {
     return n;
 }
 
-/* Without the hints, four addresses are four (the shipped behaviour);
- * with them, one advertiser. Seen to fail: with hid_rotate_findings()
- * gating on `count` instead of the de-duplicated `advertisers`. */
+/* A HID appearance and Fast Pair account data with an unchanged salt:
+ * a HID advertiser carrying a documented token across its rotations. */
+#define HID_FP_LEN (sizeof(AD_KBD) + FP_ACCT_LEN)
+static void ad_hid_fp(uint8_t b[HID_FP_LEN]) {
+    memcpy(b, AD_KBD, sizeof(AD_KBD));
+    ad_fp_account(b + sizeof(AD_KBD), 0x01);
+}
+
+static void hid_fp_rotating_four_times(void) {
+    const uint8_t s[6] = { 0xC2, 0, 0, 0, 0, 0x99 };
+    const uint8_t ad[] = { 0x02, 0x01, 0x06 };
+    obs_on(s, 1, 0x00, ad, sizeof(ad), g_wall - 2000, MON, 0);
+    uint8_t hf[HID_FP_LEN];
+    ad_hid_fp(hf);
+    time_t t = g_wall - 200;
+    for (unsigned k = 0; k < 4; k++) {
+        uint8_t a[6];
+        rpa(a, 300 + k);
+        run_addr(a, hf, sizeof(hf), t, t + 20, 4);
+        t += 22;
+    }
+}
+
+/* A lone fast rotator on timing alone still fires with the hints on:
+ * timing is a corroborator, never a finding, and must not decide the
+ * very rotation form (b) is for. A HID advertiser whose rotations carry
+ * a token counts once. Seen to fail, one mutation at a time: with
+ * hid_rotate_findings() passing payload_only 0 (the timing keyboard is
+ * suppressed), and with it gating on `count` instead of `advertisers`
+ * (the payload advertiser fires). */
 static void test_hid_rotation_counts_advertisers_with_hints(void) {
     setup(0);
     keyboard_rotating_four_times();
@@ -672,12 +998,78 @@ static void test_hid_rotation_counts_advertisers_with_hints(void) {
     alerts_clear();
 
     setup(1);
-    memset(&g_s, 0, sizeof(g_s));
     keyboard_rotating_four_times();
     snap();
     ASSERT_EQ(g_s.ble_rot.hints_timing, 3);
+    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 2);   /* the estimate still joins them */
+    alerts_update(&g_s);
+    ASSERT_EQ(count_type(ALERT_TYPE_BLE_HID_UNEXPECTED), 1);
+    teardown();
+    alerts_clear();
+
+    setup(0);
+    hid_fp_rotating_four_times();
+    snap();
+    alerts_update(&g_s);
+    ASSERT_EQ(count_type(ALERT_TYPE_BLE_HID_UNEXPECTED), 1);
+    teardown();
+    alerts_clear();
+
+    setup(1);
+    hid_fp_rotating_four_times();
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 3);
     alerts_update(&g_s);
     ASSERT_EQ(count_type(ALERT_TYPE_BLE_HID_UNEXPECTED), 0);
+    teardown();
+    alerts_clear();
+}
+
+/* A row whose chain partner is outside the window is not a duplicate of
+ * it: the root predates the window (first_seen <= since), so only the
+ * newer address and two unrelated HID addresses are new, three, and the
+ * form fires. Seen to fail: with ble_rot_distinct()'s `(!keep ||
+ * keep(o, ctx))` on the earlier member dropped (the newer address
+ * counts as its excluded root, two, no finding). */
+static void test_hid_chain_root_before_the_window_still_counts(void) {
+    setup(1);
+    uint8_t hf[HID_FP_LEN], A[6], B[6];
+    ad_hid_fp(hf);
+    rpa(A, 1); rpa(B, 2);
+    time_t t0 = g_wall - (BLE_HID_ROTATE_WINDOW_S + 100);
+    run_addr(A, hf, sizeof(hf), t0, g_wall - 500, 20);
+    time_t a_last = t0 + ((g_wall - 500 - t0) / 20) * 20;
+    run_addr(B, hf, sizeof(hf), a_last + 2, g_wall - 300, 4);
+    const uint8_t x[6] = { 0xC2, 0, 0, 0, 1, 0x01 }, y[6] = { 0xC2, 0, 0, 0, 1, 0x02 };
+    run_addr(x, AD_KBD, sizeof(AD_KBD), g_wall - 200, g_wall - 100, 10);
+    run_addr(y, AD_KBD, sizeof(AD_KBD), g_wall - 90, g_wall - 10, 10);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 1);
+    const ble_device_t *a = row(A), *b = row(B);
+    ASSERT(a && b && a->hint.pchain && a->hint.pchain == b->hint.pchain);
+    alerts_update(&g_s);
+    ASSERT_EQ(count_type(ALERT_TYPE_BLE_HID_UNEXPECTED), 1);
+    teardown();
+    alerts_clear();
+}
+
+/* Any timing-only hint behind the estimate adds the research's timing
+ * wording; a payload-only estimate does not carry it (the test below).
+ * Seen to fail: with the `if (s->ble_rot.hints_timing)` line removed
+ * from view_ble_draw() (and, for the absence below, made `if (1)`). */
+static void test_view_states_the_timing_caveat(void) {
+    setup(1);
+    uint8_t A[6], B[6];
+    rpa(A, 1); rpa(B, 2);
+    time_t t0 = g_wall - 100;
+    run_addr(A, AD_KBD, sizeof(AD_KBD), t0, t0 + 20, 2);
+    run_addr(B, AD_KBD, sizeof(AD_KBD), t0 + 22, t0 + 50, 2);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_timing, 1);
+    tui_test_erase();
+    view_ble_draw(&g_s);
+    ASSERT_SCREEN_HAS("est. 1 advertiser for 2 addresses");
+    ASSERT_SCREEN_HAS("Includes timing-only hints. Weak: another advertiser leaving and arriving reads the same.");
     teardown();
 }
 
@@ -703,6 +1095,7 @@ static void test_view_states_the_estimate_and_never_a_link(void) {
     ASSERT_SCREEN_LACKS("tracked");
     ASSERT_SCREEN_LACKS("identified");
     ASSERT_SCREEN_LACKS("may be the same");
+    ASSERT_SCREEN_LACKS("timing-only");
     /* Nor the detail of either linked row. */
     for (int i = 0; i < g_s.ble_device_count; i++) {
         g_s.ble_sel = i;
@@ -814,12 +1207,18 @@ static void rotation_scenario(void) {
 
 /* With the flag absent: no seam table, no `ble_rot_` field, no estimate
  * line, every row's hint zero, and the bytes equal to a run made after
- * the feature was turned on and off again. Seen to fail, one mutation
- * at a time: with ble_hci.c's `if (ble_rot_enabled())` gate removed
- * (a table is allocated), with jsonl.c's `if (s->ble_rot.enabled)`
- * removed (four zero fields appear), and with the view's removed (the
- * estimate line appears). */
-static void test_off_means_off_byte_identical(void) {
+ * the feature was turned on and off again. That is determinism of the
+ * off path plus absence, NOT byte identity with the build before #156:
+ * both off runs come from this build, so an unconditional change to the
+ * off path shows in both and passes here. The comparison with the
+ * previous build is `make replay-check`, whose golden predates #156 and
+ * replays a DLT 254 Bluetooth capture with the flag off (seen to fail:
+ * with an unconditional `blerot_` field written into sensor_health).
+ * Seen to fail here, one mutation at a time: with ble_hci.c's `if
+ * (ble_rot_enabled())` gate removed (a table is allocated), with
+ * jsonl.c's `if (s->ble_rot.enabled)` removed (three fields appear),
+ * and with the view's removed (the estimate line appears). */
+static void test_off_runs_match_and_carry_nothing(void) {
     setup(0);
     rotation_scenario();
     char *off1 = outputs();
@@ -840,7 +1239,7 @@ static void test_off_means_off_byte_identical(void) {
     setup(1);
     rotation_scenario();
     char *on = outputs();
-    ASSERT(strstr(on, "\"ble_rot_hints_payload\":3") != NULL);
+    ASSERT(strstr(on, "\"ble_rot_hints\":\"1-9\"") != NULL);
     ASSERT(strstr(on, "rotation hints") != NULL);
     teardown();
     alerts_clear();
@@ -878,14 +1277,15 @@ static void test_no_digest_or_token_byte_reaches_any_output(void) {
     setup(1);
     rotation_scenario();
     char *all = outputs();
-    ASSERT(strstr(all, "\"ble_rot_hints_payload\":3") != NULL);
+    ASSERT(strstr(all, "\"ble_rot_hints\":\"1-9\"") != NULL);
 
     uint8_t cdp[CDP_LEN], ho[HANDOFF_LEN], fp[FP_ACCT_LEN];
     ad_cdp(cdp, 0); ad_handoff(ho, 0); ad_fp_account(fp, 0x01);
-    struct { uint8_t kind; const uint8_t *b; uint8_t len; } tok[3] = {
-        { BLE_TOK_MS_CDP,            cdp + 8,  23 },
-        { BLE_TOK_APPLE_HANDOFF,     ho + 7,   13 },
-        { BLE_TOK_FAST_PAIR_ACCOUNT, fp + 6,    7 },
+    struct { uint8_t kind; const uint8_t *b; uint8_t len;
+             const uint8_t *b2; uint8_t len2; } tok[3] = {
+        { BLE_TOK_MS_CDP,            cdp + 8,  23, NULL,    0 },
+        { BLE_TOK_APPLE_HANDOFF,     ho + 7,   13, NULL,    0 },
+        { BLE_TOK_FAST_PAIR_ACCOUNT, fp + 6,    5, fp + 12, 2 },
     };
     for (int k = 0; k < 3; k++) {
         char hx[3][16];
@@ -897,7 +1297,8 @@ static void test_no_digest_or_token_byte_reaches_any_output(void) {
             if (has_ci(all, hx[f])) fprintf(stderr, "    token %d leaks as %s\n", k, hx[f]);
             ASSERT(!has_ci(all, hx[f]));
         }
-        uint64_t d = ble_rot_test_digest(tok[k].kind, tok[k].b, tok[k].len);
+        uint64_t d = ble_rot_test_digest(tok[k].kind, tok[k].b, tok[k].len,
+                                         tok[k].b2, tok[k].len2);
         char dx[4][32];
         snprintf(dx[0], sizeof(dx[0]), "%016llx", (unsigned long long)d);
         snprintf(dx[1], sizeof(dx[1]), "%llu", (unsigned long long)d);
@@ -922,9 +1323,9 @@ static void test_no_digest_or_token_byte_reaches_any_output(void) {
 static void test_key_is_drawn_per_run(void) {
     setup(1);
     const uint8_t t[7] = { 1, 2, 3, 4, 5, 6, 7 };
-    uint64_t d1 = ble_rot_test_digest(BLE_TOK_FAST_PAIR_ACCOUNT, t, sizeof(t));
+    uint64_t d1 = ble_rot_test_digest(BLE_TOK_FAST_PAIR_ACCOUNT, t, 5, t + 5, 2);
     ASSERT_EQ(ble_hci_rotation_enable(1), 0);
-    uint64_t d2 = ble_rot_test_digest(BLE_TOK_FAST_PAIR_ACCOUNT, t, sizeof(t));
+    uint64_t d2 = ble_rot_test_digest(BLE_TOK_FAST_PAIR_ACCOUNT, t, 5, t + 5, 2);
     ASSERT(d1 != d2);
     teardown();
 }
@@ -955,9 +1356,19 @@ void run_ble_rotation_tests(void) {
     RUN_TEST(test_chain_is_capped_in_hops);
     RUN_TEST(test_chain_is_capped_in_age);
     RUN_TEST(test_seam_table_evictions_are_counted);
+    RUN_TEST(test_sequential_token_spray_is_poisoned);
+    RUN_TEST(test_link_pending_when_the_flood_gate_trips_is_refused);
+    RUN_TEST(test_no_link_while_the_controller_may_filter_duplicates);
+    RUN_TEST(test_committed_link_outlives_eviction);
+    RUN_TEST(test_expiry_runs_without_frames);
+    RUN_TEST(test_full_poison_list_fails_closed);
+    RUN_TEST(test_poison_lasts_the_token_life);
+    RUN_TEST(test_revoking_a_link_keeps_the_older_half_chained);
     RUN_TEST(test_hid_rotation_counts_advertisers_with_hints);
+    RUN_TEST(test_hid_chain_root_before_the_window_still_counts);
+    RUN_TEST(test_view_states_the_timing_caveat);
     RUN_TEST(test_view_states_the_estimate_and_never_a_link);
-    RUN_TEST(test_off_means_off_byte_identical);
+    RUN_TEST(test_off_runs_match_and_carry_nothing);
     RUN_TEST(test_no_digest_or_token_byte_reaches_any_output);
     RUN_TEST(test_key_is_drawn_per_run);
 }

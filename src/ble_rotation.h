@@ -25,13 +25,19 @@
  * ── Who reads it ──
  *
  * Internal consumers only: the [*] view's de-duplicated advertiser
- * estimate, and BLE_HID_UNEXPECTED's rotation form (one keyboard
- * rotating its RPA is not N new HID addresses). No row shows a link, no
- * JSONL field names a link or a token, nothing goes to the database.
- * What leaves the process is four aggregate counters in sensor_health
- * (ble_rot_hints_payload, ble_rot_hints_timing, ble_rot_poisoned,
- * ble_rot_seam_evictions), which carry no address, and only while the
- * flag is on.
+ * estimate (payload and timing chains), and BLE_HID_UNEXPECTED's
+ * rotation form (PAYLOAD chains only: see ble_rot_distinct()). No row
+ * shows a link, no JSONL field names a link or a token, nothing goes to
+ * the database. What leaves the process is three banded aggregates in
+ * sensor_health (ble_rot_hints, ble_rot_poisoned,
+ * ble_rot_seam_evictions: "0", "1-9", "10-99", "100-999", "1000+"),
+ * which carry no address, do not split payload from timing, enter no
+ * change-only signature, and appear only while the flag is on. Exact
+ * counts and the split would let a consumer match an increment to the
+ * one departure/arrival pair on a quiet sensor, ten seconds after the
+ * newer address's first ble_device record, and learn the two carried
+ * the same token; bands and no signature edge leave a coarser
+ * residual: a band crossing, seen at the next heartbeat.
  *
  * ── Candidates ──
  *
@@ -59,11 +65,16 @@
  *          al. 2019 Fig. 2; Celosia and Cunche 2020 Fig. 9), and Jouans
  *          et al. 2021 saw carry-over associate nothing on iOS 13.
  *        Fast Pair account data: Service Data 0xFE2C in the
- *          non-discoverable form, an Account Key Filter of at least 4
- *          octets and a 2-octet Salt; the token is filter + salt, so it
- *          matches only when the salt did NOT change, which is the
+ *          non-discoverable form, an Account Key Filter of at least
+ *          BLE_ROT_FP_FILTER_MIN octets and a 2-octet Salt; the token is
+ *          filter + salt (the fixed 0x21 header between them left out),
+ *          so it matches only when the salt did NOT change, which is the
  *          vendor ignoring the spec's "should be regenerated every time
- *          the RPA is updated".
+ *          the RPA is updated". A 4-octet filter (one key) is the form
+ *          but not a token: at most 8 bits set in 32 is <= 23.8 bits,
+ *          39.8 with the salt, under the 40-bit bound; 5 octets (two
+ *          keys) reach at most 53.1. Ceilings, not measured entropy, and
+ *          in the very case the row exists for the salt may be constant.
  *   B  exclusivity plus a seam: the old address's last report precedes
  *      the new address's first in arrival order on one sensor, the gap
  *      is at most BLE_ROT_DSWAP_S, and the old one is not heard again
@@ -79,14 +90,27 @@
  *
  * ── Guards ──
  *
- *   - A token digest heard on two addresses whose reports interleave
- *     is poisoned for BLE_ROT_POISON_S on that sensor, and every link
- *     resting on it is revoked (replay and spam tools, Apple's
- *     concurrent addresses).
+ *   - A token digest heard on two addresses whose reports interleave,
+ *     or on BLE_ROT_SPRAY_ADDRS addresses first heard inside one
+ *     d_swap (a replay sprayed on fresh addresses one after another
+ *     never interleaves), is poisoned for BLE_ROT_POISON_S on that
+ *     sensor, and every link resting on it is revoked (replay and spam
+ *     tools, Apple's concurrent addresses). A full poison list fails
+ *     closed: no payload link on the sensor for the window the
+ *     unrecorded poison would have had, never an early re-arm.
  *   - No link, and no candidacy, for an address heard while
  *     BLE_ADV_FLOOD's fresh-address gate is active on its payload key
  *     (ble_flood_fresh_active()): spam tools replay genuine Continuity
- *     payloads under fresh addresses.
+ *     payloads under fresh addresses. A report under the gate also
+ *     excludes every entry on its key on that sensor, whatever the
+ *     reporting address, so a link proposed before the gate tripped is
+ *     refused at commit.
+ *   - No link proposed, and none committed, on an HCI adapter whose
+ *     LE Set (Extended) Scan Enable Filter_Duplicates (Vol 4 Part E
+ *     §7.8.11, §7.8.65) is on or was never seen: a filtering
+ *     controller reports an address once, so the re-report both the
+ *     exclusivity guard and poisoning rest on never arrives. The
+ *     Ubertooth stream is raw air and is not filtered.
  *   - Never across sensors or adapters: one seam table per (sensor
  *     kind, iface, HCI adapter).
  *   - Never a Fast Pair discoverable advertisement (Model ID form,
@@ -109,12 +133,23 @@
  * full table drops its least recently heard entry (STAB_OLDEST
  * semantics), tallied as ble_rot_seam_evictions. That tally is not an
  * `evict_*` field: the evict_* breakout is emitted on every run, and a
- * run without the flag must write byte-identical output. Per entry:
- * the address, its sub-type, first/last arrival and frame time, the
- * shape tuple, and up to BLE_ROT_TOKENS digests. Token bytes are never
+ * run without the flag must write the same output. Per entry: the
+ * address, its sub-type, first/last arrival and frame time, the shape
+ * tuple, and up to BLE_ROT_TOKENS digests. Token bytes are never
  * stored, the digest is never exported or persisted, and the key is
  * drawn from getrandom() per run, so no digest is comparable across
  * runs.
+ *
+ * Expiry runs on the frame clock carried forward by monotonic time
+ * since the sensor's last report, so a quiet radio or an ended capture
+ * file still expires. An entry silent BLE_ROT_FORGET_S loses its
+ * digests and shape (the research's freshness rule: d_swap after the
+ * last report, plus the d_swap a pending link waits); its address and
+ * chain fields stay to BLE_ROT_RETAIN_S, because the interleave guard
+ * needs to recognise the older address if it speaks again. Expired
+ * poison slots are wiped. A committed chain id outlives its entries on
+ * the advertiser row it was copied to (ble_rot_update_row()), for the
+ * row's life and no longer; turning the feature on or off clears it.
  *
  * Thread model: every function but the pure ones is called from
  * src/ble_hci.c with its module mutex held. */
@@ -123,15 +158,26 @@
 #define BLE_ROT_SENSORS     8
 #define BLE_ROT_TOKENS      4
 #define BLE_ROT_POISON_MAX  16
+/* Addresses first heard inside one d_swap carrying one token: two is
+ * a rotation seen from both sides of a short seam, three is not one
+ * advertiser. */
+#define BLE_ROT_SPRAY_ADDRS 3
+/* Fast Pair: the shortest Account Key Filter whose filter + salt can
+ * clear the 40-bit bound (above). */
+#define BLE_ROT_FP_FILTER_MIN 5
 /* Jouans et al. bound the seam by d_swap = 10 x T_int. T_int is not
  * measurable at the one-second frame clock (above), so d_swap is ten
  * of those seconds: a judgement, stated as one. */
 #define BLE_ROT_DSWAP_S     10
-/* Core v5.4 Vol 3 Part C Appendix A: T_GAP(private_addr_int), the
- * recommended MAXIMUM interval between private address changes, is
- * 15 min. A poisoned token outlives every address the spec's
- * recommendation would put it on. */
-#define BLE_ROT_POISON_S    900
+#define BLE_ROT_FORGET_S    (2 * BLE_ROT_DSWAP_S)
+/* Sized to the token, not the address. The longest documented token
+ * life in research/bluetooth/ble-address-rotation.md is about an hour:
+ * MS-CDP's last 23 octets "static about 1 h" while the address changes
+ * about every 960 s (Becker et al. 2019), Device_Hash about 60 min
+ * against an address of about 16 min (Celosia and Cunche 2019). Core
+ * v5.4 Vol 3 Part C Appendix A's 15-min T_GAP(private_addr_int) bounds
+ * addresses only, so a 900 s window would re-arm a token still live. */
+#define BLE_ROT_POISON_S    3600
 #define BLE_ROT_MAX_HOPS    8
 #define BLE_ROT_RETAIN_S    7200
 /* Confidence ceilings, 0..100 (cf. corr_confidence() in
@@ -153,6 +199,8 @@ typedef struct {
     uint8_t        kind;     /* ble_token_kind_t */
     const uint8_t *bytes;
     uint8_t        len;
+    const uint8_t *bytes2;   /* a second run of the same token, or NULL */
+    uint8_t        len2;
 } ble_token_t;
 
 /* Tokens in `r`, at most `max`. *fp_discoverable (if non-NULL) is set
@@ -172,14 +220,34 @@ int  ble_rot_set_enabled(int on);
 int  ble_rot_enabled(void);
 
 /* One observation from ble_hci.c. `addr` display order. `flooded` is
- * ble_flood_fresh_active() for this report. */
+ * ble_flood_fresh_active() for this report. `blind` is 1 when the
+ * stream's controller may be filtering duplicate reports (HCI adapter
+ * with Filter_Duplicates on or never seen). */
 void ble_rot_observe(const ble_adv_report_t *r, uint8_t sensor_kind,
                      const char *iface, uint16_t adapter,
-                     const uint8_t addr[6], time_t ts, int flooded);
+                     const uint8_t addr[6], time_t ts, int flooded,
+                     int blind);
 
-/* Commit what is due and copy the committed hints onto the rows in
- * `s->ble_devices`, and the counters into `s->ble_rot`. With the
- * feature off it only zeroes `s->ble_rot` and touches no table. */
+/* Expire and commit what is due on every table, on each sensor's
+ * carried-forward clock. No-op with the feature off. */
+void ble_rot_tick_all(void);
+
+/* Copy the committed hint onto one live advertiser row (ble_hci.c's
+ * table, before its snapshot). A row whose address has no entry keeps
+ * the hint it has. No-op with the feature off. */
+void ble_rot_update_row(ble_device_t *d);
+
+/* Where an entry's committed hint goes when the entry is freed (evicted
+ * or expired), so the row keeps it whether or not a snapshot ran since
+ * the commit: ble_hci.c's row table. Called with ble_hci.c's mutex
+ * held. `addr` display order; the row is (addr, random, kind, iface). */
+typedef void (*ble_rot_row_sink_t)(uint8_t sensor_kind, const char *iface,
+                                   const uint8_t addr[6],
+                                   const ble_identity_hint_t *h);
+void ble_rot_set_row_sink(ble_rot_row_sink_t fn);
+
+/* The counters into `s->ble_rot`; with the feature off it only zeroes
+ * them. */
 void ble_rot_snapshot(sloth_state_t *s);
 
 /* Empty the tables (ble_clear()); counters, key and the on/off state
@@ -192,17 +260,26 @@ void ble_rot_drop_tables(void);
 void ble_rot_reset(void);
 
 /* De-duplicated count over the rows `keep` accepts (all rows when NULL):
- * rows sharing a committed chain count once. With no hints on the rows
- * this is the plain row count. */
+ * rows sharing a committed chain count once. With `payload_only`, only
+ * payload links join rows: timing-only chains are a corroborator, never
+ * a finding, so they may shrink an estimate but must not decide an
+ * alert (a lone fast rotator is never ambiguous, and timing alone would
+ * suppress the very rotation BLE_HID_UNEXPECTED's form (b) is for).
+ * With no hints on the rows this is the plain row count. */
 int ble_rot_distinct(const sloth_state_t *s,
                      int (*keep)(const ble_device_t *d, void *ctx),
-                     void *ctx);
+                     void *ctx, int payload_only);
 
-/* Test seams. allocated: 1 once any seam table exists. digest: the
- * digest this run would hold for a token, so a test can search every
- * output for it. key_set: pin the key (tests only). */
+/* Test seams. allocated: 1 once any seam table exists. held: entries,
+ * digests, shapes, keys and poison slots still held. digests: digests
+ * and link digests still held. digest: the digest this run would hold
+ * for a token, so a test can search every output for it. key_set: pin
+ * the key (tests only). */
 int      ble_rot_test_allocated(void);
-uint64_t ble_rot_test_digest(uint8_t kind, const uint8_t *bytes, size_t len);
+int      ble_rot_test_held(void);
+int      ble_rot_test_digests(void);
+uint64_t ble_rot_test_digest(uint8_t kind, const uint8_t *bytes, size_t len,
+                             const uint8_t *bytes2, size_t len2);
 void     ble_rot_test_set_key(const uint8_t key[16]);
 
 #endif /* BLE_ROTATION_H */

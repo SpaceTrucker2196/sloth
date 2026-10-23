@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-10-23 (#156: the four `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
+**Last updated**: 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
 and `drained`; the `beacon-overflow` `BEACONING` finding; IPv4-mapped
 beaconing peers keyed as IPv4), 2026-10-23 (#165 audit: a PTR `answer`
 is whole up to 63 bytes, for a PTR question only; a target that would
@@ -848,21 +848,33 @@ with every record and ride the emitted line and the heartbeat instead.
 
 **BLE address-rotation hints** (#156 item 2). Appended after the
 `btcap_*` block **only while `--ble-rotation-hints` is on**; a run
-without the flag writes none of them, byte for byte what it wrote
-before. Aggregate lifetime counters: no address, link, token or digest
-is written anywhere ([[ble]]).
+without the flag writes none of them (`make replay-check` holds a run
+without it to the golden recorded before the feature). Decade bands of
+lifetime aggregates, each a string: `"0"`, `"1-9"`, `"10-99"`,
+`"100-999"`, `"1000+"`. No address, link, token or digest is written
+anywhere ([[ble]]).
 
 | Field | Meaning |
 |---|---|
-| `ble_rot_hints_payload` | rotation hints committed on a documented token carried across the change (MS-CDP, Apple Handoff, Fast Pair account data), lifetime |
-| `ble_rot_hints_timing` | hints committed on a clean seam and the same advertising shape alone, lifetime; used only for de-duplication |
-| `ble_rot_poisoned` | token digests poisoned for being heard on two interleaving addresses (replay, spam, concurrent addresses) |
+| `ble_rot_hints` | rotation hints committed, payload and timing together, lifetime. Not split: which basis a link had says whether two addresses carried the same token |
+| `ble_rot_poisoned` | token digests poisoned: heard on two interleaving addresses (replay, spam, concurrent addresses) or on three addresses first heard inside one 10 s seam (a sequential spray). While the poison list is full, further poisonings are covered by its fail-closed refusal and not counted again |
 | `ble_rot_seam_evictions` | seam-table entries (64 per sensor and adapter) dropped on full. Not an `evict_*` field, because that breakout is written on every run |
 
-In the change-only signature they enter as on/off and none/some bands.
-A sensor where `ble_rot_hints_payload` stays 0 while `ble_rot_hints_timing`
-climbs is one whose advertisers synchronise payload changes with
-address changes, as the spec asks.
+Only the on/off state enters the change-only signature: a band crossing
+does not write a line, so no line's timestamp marks the moment a link
+committed; the next heartbeat or other change carries the new band. The
+residual, stated: on a quiet sensor, a band moving between two lines
+still says some link committed in that interval. What a band cannot say
+is which pair, or whether it rested on a token; exact counts could,
+matched against the `ble_device` records' `first_seen` (a link commits
+10 s after the newer address's first report).
+
+The hints are not a census of synchronising advertisers. Payload links
+come only from MS-CDP, Apple Handoff and Fast Pair account data, so few
+payload links against many timing ones means no documented token was
+carried across a change: either no such advertiser was present (most
+Android phones, keyboards and tags carry none) or those present
+synchronise their payload with their address, as the spec asks.
 
 Per-stream block, with `<s>` being `capture` or `monitor` — and `btmon`
 for the Bluetooth host source, whose block is appended after `libs`

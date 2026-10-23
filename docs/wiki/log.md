@@ -4914,3 +4914,17 @@ report events.
   `research/bluetooth/ble-address-rotation.md`, which also corrects the
   issue's "RPAs rotate every 5–15 min" (spec: a recommended maximum of
   15 minutes; observed: seconds to days).
+- 2026-10-23 — [[ble]]: address-rotation hints, review round (#156).
+  A token first heard on three addresses inside one 10 s seam is
+  poisoned (a sequential spray never interleaves), and the flood gate
+  is judged at commit too; no link on an HCI adapter whose scan filters
+  duplicates or was never seen enabled; poison window 3600 s (the
+  token's documented life), and a full poison list fails closed;
+  expiry runs without frames, digests go after 20 s of silence;
+  committed chains survive seam-table eviction on their rows; Fast
+  Pair tokens need a 5-octet filter (a 4-octet one is under the 40-bit
+  bound). [[alerts]]: `BLE_HID_UNEXPECTED` form (b) de-duplicates on
+  payload hints only, so a lone fast rotator still fires.
+  [[jsonl-schema]]: three decade-banded fields, no signature edge, the
+  residual inference stated; the payload-versus-timing reading
+  corrected. The `[*]` estimate carries the timing-only caveat.

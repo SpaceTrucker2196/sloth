@@ -34,7 +34,8 @@ static int page_rows(const sloth_state_t *s) {
 #else
     int p = 30;
 #endif
-    if (s->ble_rot.enabled) p -= 3;   /* the rotation-hints estimate */
+    if (s->ble_rot.enabled)           /* the rotation-hints estimate */
+        p -= s->ble_rot.hints_timing ? 4 : 3;
     return p < 3 ? 3 : p;
 }
 
@@ -229,7 +230,7 @@ void view_ble_draw(const sloth_state_t *s) {
     /* #156, --ble-rotation-hints only: the de-duplicated total, stated
      * as an estimate. No row says which addresses it joined. */
     if (s->ble_rot.enabled) {
-        int est = ble_rot_distinct(s, NULL, NULL);
+        int est = ble_rot_distinct(s, NULL, NULL, 0);
         tui_dim();
         TPRINT(" rotation hints (internal): est. %d advertiser%s for %d "
                "address%s - possible address rotation;\n",
@@ -239,6 +240,11 @@ void view_ble_draw(const sloth_state_t *s) {
                "or person.\n"
                "   These records alone are not grounds for personnel action "
                "or physical identification.\n");
+        /* The research's timing-only wording, whenever the estimate may
+         * rest on one. */
+        if (s->ble_rot.hints_timing)
+            TPRINT("   Includes timing-only hints. Weak: another advertiser "
+                   "leaving and arriving reads the same.\n");
         tui_normal();
     }
 

@@ -28,7 +28,7 @@ Bluetooth Core Specification v5.4 Vol 4 Part E §5.2 (arrayed parameters), §5.4
 §7.7.65.2, §7.7.65.13, §7.8; Vol 6 Part B §2.3.1 (legacy PDU payload); Linux `include/net/bluetooth/hci_mon.h` and
 `net/bluetooth/hci_sock.c`; libpcap `pcap-bt-monitor-linux.c`; #144.
 
-**Last updated**: 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
+**Last updated**: 2026-10-23 (#156 item 2 review round: sequential-spray poisoning and the flood gate judged at commit; no link under controller duplicate filtering; `BLE_HID_UNEXPECTED` de-duplicates on payload chains only; banded `sensor_health` fields; expiry without frames; 3600 s poison window, full list fails closed; Fast Pair token from a 5-octet filter), 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
 
 ---
 
@@ -304,8 +304,12 @@ from seconds to more than four days. Sources and grades:
   Scenario_Type 1); an Apple Handoff body (0x004C, Continuity type 0x0C)
   — **unverified**, the layout is the papers' and a 2021 study saw it
   link nothing on iOS 13; Fast Pair account data whose salt did *not*
-  change, which is the vendor ignoring the spec. Tokens are held only as
-  SipHash-2-4 digests.
+  change, which is the vendor ignoring the spec — from a 5-octet Account
+  Key Filter up, filter + salt with the fixed 0x21 header left out. A
+  4-octet filter (one key) is not a token: at most 8 bits set in 32 is
+  at most about 23.8 bits, 39.8 with the salt, under the research's
+  40-bit bound (5 octets reach at most about 53.1; ceilings, not
+  measured entropy). Tokens are held only as SipHash-2-4 digests.
 - **Timing (grade B + C).** No token: the old address's last report
   came before the new one's first, within 10 s, the two never
   interleaved, and the advertising shape (PDU type, payload family, AD
@@ -316,34 +320,83 @@ from seconds to more than four days. Sources and grades:
 
 **Guards.** Static random, public and resolved-identity addresses
 (Address_Type 2/3) are never candidates. A token heard on two
-interleaving addresses is poisoned for 900 s and every link on it is
-revoked. Nothing links while `BLE_ADV_FLOOD`'s fresh-address gate is
-active on the payload key. Never across sensors or adapters. Never a
+interleaving addresses, or on three addresses first heard inside one
+10 s seam (a captured token sprayed on fresh addresses one after
+another never interleaves), is poisoned for 3600 s — the longest
+documented token life (MS-CDP about an hour, Becker; Celosia 2019), not
+the 15-minute address interval — and every link on it is revoked. A
+full poison list (16 per sensor and adapter) fails closed: no payload
+link on that sensor until the window of the poison it could not record
+has passed. Nothing links while `BLE_ADV_FLOOD`'s fresh-address gate is
+active on the payload key, and a report under the gate excludes every
+recent entry on that key, so a link proposed before the gate tripped is
+refused when it falls due. Never across sensors or adapters. Never a
 Fast Pair discoverable advertisement ("the BLE address shall not be
 rotated"). A chain stops at 8 links and at 2 h from its first address.
 
+**Duplicate filtering.** Exclusivity and poisoning both need the older
+address to be reported *again* after the newer one appears. A
+controller scanning with `Filter_Duplicates` on (LE Set Scan Enable
+0x200C / LE Set Extended Scan Enable 0x2042, Vol 4 Part E §7.8.11,
+§7.8.65) reports each address once, so neither can be seen. sloth reads
+the parameter from the host's own enable command on each adapter, and
+**proposes and commits no link on an HCI adapter whose filter is on or
+was never seen** (sloth started after the scan did, or a Reset since).
+The passive-scan procedure below already asks for that:
+`hcitool lescan --passive --duplicates` enables with
+`Filter_Duplicates` = 0; an extended-scan tool must send 0x00 in the
+same field. Otherwise the feature is silent on that adapter. The
+Ubertooth stream (`--bt-capture`) is raw air and is not filtered.
+
 **Who reads it.** Internal consumers only: the `[*]` view's estimate
-line ("est. N advertisers for M addresses", stated as an estimate) and
-`BLE_HID_UNEXPECTED`'s rotation form, which then counts advertisers, so
-one keyboard rotating its RPA is not three new HID addresses. The
-deferred stalk-grade CRIT's "non-resident" definition is not built; its
-hook is the hint's chain start (`src/ble_detect.h`).
+line ("est. N advertisers for M addresses", stated as an estimate,
+with the timing-only caveat whenever a timing hint was committed) and
+`BLE_HID_UNEXPECTED`'s rotation form. **That form counts payload
+chains only**: rows a committed *payload* hint joins count once, so an
+advertiser carrying a documented token across its rotations is one, but
+a timing-only chain never reduces the count. The research grades
+timing a corroborator, never a finding, and a lone fast-rotating HID
+advertiser — the case form (b) exists for — is never ambiguous on
+timing, so letting timing de-duplicate would suppress exactly it. The
+trade: a keyboard rotating its RPA with no token (most of them) is
+still counted per address, as without the flag. The deferred
+stalk-grade CRIT's "non-resident" definition is not built; its hook is
+the hint's chain start (`src/ble_detect.h`).
 
 **Privacy statement.** The feature is itself a tracking capability, so:
 
-- **default off**, and with the flag absent nothing is allocated and
-  every output is byte-identical to a build without it (tested);
+- **default off**, and with the flag absent nothing is allocated, no
+  field or line appears, and two off runs write the same bytes whether
+  or not the feature ran in between (unit-tested); byte identity with
+  the build before #156 is `make replay-check`, whose golden predates it
+  and replays a Bluetooth monitor capture with the flag off;
 - **keyed per run**: the SipHash key is drawn from `getrandom()` at
   startup, so no digest means anything outside the run that made it;
 - **never exported**: no row shows a link, no JSONL field names a link,
   a token or a digest, nothing goes to the database. Token bytes are
-  never stored. What leaves the process is four aggregate
-  `sensor_health` counters — `ble_rot_hints_payload`,
-  `ble_rot_hints_timing`, `ble_rot_poisoned`, `ble_rot_seam_evictions`
-  ([[jsonl-schema]]) — which carry no address;
+  never stored. What leaves the process is three `sensor_health`
+  decade bands — `ble_rot_hints` (payload and timing summed),
+  `ble_rot_poisoned`, `ble_rot_seam_evictions` ([[jsonl-schema]]) —
+  which carry no address and enter no change-only signature. **Residual
+  inference, stated:** exact counts with the payload/timing split would
+  let a consumer of the `ble_device` records on a quiet sensor match an
+  increment, 10 s after one address's first report, to the single
+  departure/arrival pair, and learn the two carried the same token
+  (which it cannot compute itself: token bytes are never exported).
+  Bands and no signature edge reduce that to "some link committed
+  between two heartbeats"; they do not remove it;
 - **bounded**: 64 recently heard private addresses per sensor and
-  adapter, oldest dropped first (`ble_rot_seam_evictions`), nothing kept
-  past 2 h of silence.
+  adapter, oldest dropped first (`ble_rot_seam_evictions`). Expiry runs
+  on the frame clock carried forward by monotonic time, so a quiet
+  radio or an ended `--bt-capture` file still expires. 20 s of silence
+  (d_swap after the last report plus the d_swap a pending link waits)
+  wipes an address's digests and shape; 2 h wipes the address and its
+  chain fields, which the interleave guard needs until then — a
+  deviation from the research's freshness rule, flagged there. Expired
+  poison slots are wiped. A committed chain id stays on the advertiser
+  row it joined for that row's life (internal, never exported), so a
+  link survives the seam table's eviction; turning the flag on or off
+  clears it.
 
 Receive-only throughout (MISSION §2): no scan request, no connection,
 no GATT read. The advertising interval, which the research grades as a

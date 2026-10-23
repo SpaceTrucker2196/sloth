@@ -551,10 +551,11 @@ static void print_usage(const char *argv0) {
             "                     the change, or timing alone), to de-duplicate\n"
             "                     the [*] view's total and BLE_HID_UNEXPECTED's\n"
             "                     rotation form. Keyed per run, bounded, never\n"
-            "                     exported: only four aggregate sensor_health\n"
+            "                     exported: only three banded sensor_health\n"
             "                     counters. A hint identifies no device or\n"
             "                     person. Ignored, with a notice, without\n"
-            "                     --bt-monitor or --bt-capture.\n"
+            "                     --bt-monitor or --bt-capture; silent on an\n"
+            "                     HCI scan that filters duplicates.\n"
             "  --monitor-only     shorthand: restrict the data stream to the\n"
             "                     monitor-mode Wi-Fi interface sloth discovers\n"
             "                     at startup. Fail-closed: if no monitor\n"
@@ -1094,7 +1095,7 @@ int main(int argc, char **argv) {
 
     /* #156 item 2 (owner ruling 2026-10-23): internal use only, off by
      * default. Ignored with a notice, not refused, without a BLE source:
-     * it adds no output of its own beyond four sensor_health counters,
+     * it adds no output of its own beyond three sensor_health bands,
      * so a run that cannot use it loses nothing by going on, and it is
      * also ignored under --replay, which takes neither source flag. By
      * here --replay and WITH_PCAP=0 have refused both source flags. */
@@ -1107,7 +1108,7 @@ int main(int argc, char **argv) {
                             "could be drawn; hints stay off\n");
         else
             fprintf(stderr, "sloth: BLE address-rotation hints on (internal "
-                            "only: aggregate counters in sensor_health, "
+                            "only: banded aggregates in sensor_health, "
                             "nothing per address exported; see "
                             "docs/wiki/ble.md)\n");
     }

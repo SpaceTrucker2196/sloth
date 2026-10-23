@@ -74,10 +74,16 @@
  *
  * With --ble-rotation-hints (#156, src/ble_rotation.h) form (b)
  * compares ble.hid_rotate_addrs against advertisers, not addresses:
- * rows a committed rotation hint chains together count once, so one
- * keyboard rotating its RPA does not read as N new HID addresses. The
- * finding's `addrs` stays the address count. Off by default, and then
- * the gate is the address count, as before.
+ * rows a committed PAYLOAD hint chains together count once, so a HID
+ * advertiser carrying a documented token across its rotations does not
+ * read as N new HID addresses. Timing-only hints never reduce the
+ * count. The research grades timing a corroborator, never a finding;
+ * a lone fast rotator is never ambiguous on timing, so it would chain
+ * completely and suppress the very rotation this form is for. The
+ * trade, accepted: a HID advertiser rotating with no token (most
+ * keyboards) is counted per address with the flag on, as without it.
+ * The finding's `addrs` stays the address count. Off by default, and
+ * then the gate is the address count, as before.
  *
  * Both are precursors at most. CVE-2023-45866 is an unauthenticated HID
  * peripheral being accepted by a host; sloth sees no pairing and no

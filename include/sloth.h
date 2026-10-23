@@ -2666,6 +2666,7 @@ typedef struct {
     uint8_t  confidence;   /* 0..100, under BLE_ROT_CONF_*_MAX */
     uint8_t  hops;         /* links from the chain's first address */
     uint32_t chain;        /* per-run chain id, 0 = in no chain; rows sharing one count once */
+    uint32_t pchain;       /* the same over payload links only (BLE_HID_UNEXPECTED reads it) */
     /* First report of the chain's first address (frame clock): the
      * hook the deferred "non-resident" definition (src/ble_detect.h)
      * reads instead of first_seen when hints are on. 0 = none. */
@@ -2853,6 +2854,7 @@ typedef struct {
     uint8_t  reset_seen;        /* HCI_Reset seen: on-state complete from there */
     int8_t   scan_enabled;      /* -1 unknown, 0 off, 1 on (this controller) */
     int8_t   scan_mode;         /* ble_scan_mode_t (this controller) */
+    int8_t   filter_dups;       /* -1 unknown, 0 off, 1 on: Filter_Duplicates of the last scan enable (#156) */
     uint8_t  adv_on;            /* LE Set Advertising Enable */
     uint8_t  page_inq_scan_on;  /* Write_Scan_Enable bit 0 or 1 */
     uint8_t  per_inquiry_on;    /* Periodic Inquiry Mode until Exit */

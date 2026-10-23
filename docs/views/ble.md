@@ -74,15 +74,18 @@ category, never an identity. `Enter` or `Esc` returns.
 ```
 
 With `--ble-rotation-hints` (#156, internal use only, off by default)
-three lines follow the header — the only place the hints show:
+three lines sit above the column header — the only place the hints
+show — and a fourth once any timing-only hint has committed:
 
 ```
  rotation hints (internal): est. 3 advertisers for 4 addresses - possible address rotation;
    corroborates, does not confirm, and identifies no device or person.
    These records alone are not grounds for personnel action or physical identification.
+   Includes timing-only hints. Weak: another advertiser leaving and arriving reads the same.
 ```
 
-The estimate counts addresses a committed hint chains together once.
+The estimate counts addresses a committed hint, payload or timing,
+chains together once.
 No row, and no detail, says which addresses were joined
 ([the BLE operator guide](../wiki/ble.md#address-rotation-hints-internal-use-only) has the grades and guards).
 

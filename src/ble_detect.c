@@ -204,11 +204,15 @@ static void hid_rotate_findings(const sloth_state_t *s, time_t now,
             count++;
             last = d;
         }
-        /* #156: with --ble-rotation-hints, addresses a committed hint
-         * chains together count once, so one keyboard rotating its RPA
-         * is one advertiser, not N new ones. Without the flag every row
-         * is its own chain and this is `count`. */
-        int advertisers = ble_rot_distinct(s, hid_rot_keep, &c);
+        /* #156: with --ble-rotation-hints, addresses a committed
+         * PAYLOAD hint chains together count once, so an advertiser
+         * carrying a documented token across its rotations is one, not
+         * N new ones. Timing-only chains do not count here: the
+         * research grades them a corroborator, never a finding, and a
+         * lone fast rotator - the case this form exists for - is never
+         * ambiguous, so timing would suppress it. Without the flag
+         * every row is its own chain and this is `count`. */
+        int advertisers = ble_rot_distinct(s, hid_rot_keep, &c, 1);
         if (advertisers < need || !last) continue;
 
         ble_finding_t *f = slot(out, max, n, dropped);

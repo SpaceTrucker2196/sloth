@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b) de-duplicated under `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
+**Last updated**: 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b) de-duplicated under `--ble-rotation-hints`, on payload hints only); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
 **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
@@ -508,9 +508,14 @@ form (b)'s threshold has no cited basis, and cannot fire in a sensor's
 first window of observation, when every address is new to it (per
 sensor: an Ubertooth capture started later has its own).
 With `--ble-rotation-hints` (#156, internal use only, off by default)
-form (b) counts advertisers rather than addresses: addresses a committed
-rotation hint chains together count once, so one keyboard rotating its
-RPA is not three new HID addresses ([[ble]]).
+form (b) counts advertisers rather than addresses, joined by **payload**
+hints only: addresses a committed payload hint (a documented token
+carried across the change) chains together count once. Timing-only
+hints never reduce the count — the research grades them a corroborator,
+never a finding, and a lone fast rotator is never ambiguous on timing,
+so they would suppress the very case form (b) is for. The trade: a HID
+advertiser rotating with no token is still counted per address, as
+without the flag ([[ble]]).
 
 **`BLE_WATCHLIST` is a category, never an identity** (the #94
 posture). Finder tags use random addresses that rotate, so the finding

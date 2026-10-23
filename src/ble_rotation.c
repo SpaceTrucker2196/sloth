@@ -6,12 +6,21 @@
 #include <sys/random.h>
 #include "ble_rotation.h"
 #include "siphash.h"
+#include "sloth_clock.h"
 
 /* Contract, grades, guards and sources in ble_rotation.h. */
 
-#define ENT_EXCLUDED  0x01   /* Fast Pair discoverable, or heard under an active flood gate */
+#define ENT_EXCLUDED  0x01   /* Fast Pair discoverable, or its key under an active flood gate */
 
 enum { LINK_NONE = 0, LINK_PENDING, LINK_COMMITTED };
+
+/* The BLE_ADV_FLOOD payload key of one report, less the sensor kind and
+ * iface the seam table already fixes (src/ble_flood.c key_of()). */
+typedef struct {
+    uint8_t  set, evt, fam;
+    uint16_t id;
+    int16_t  sub;
+} fkey_t;
 
 typedef struct {
     uint8_t  used;
@@ -31,6 +40,7 @@ typedef struct {
     /* Grade A: digests only, never the token. */
     uint64_t dig[BLE_ROT_TOKENS];
     uint8_t  ndig, dig_next;
+    fkey_t   tkey;           /* flood key of the last report that carried a token */
     /* The link INTO this entry (this entry the newer address). */
     int16_t  pred;
     uint8_t  basis;          /* ble_hint_basis_t */
@@ -40,8 +50,9 @@ typedef struct {
     uint64_t link_dig;
     /* The link OUT of it. */
     int16_t  succ;
-    /* Chain, set at commit. */
-    uint32_t chain;
+    /* Chain, set at commit. pchain is the same over payload links
+     * only: the id BLE_HID_UNEXPECTED de-duplicates on. */
+    uint32_t chain, pchain;
     uint8_t  hops;
     time_t   root_ts;
 } ent_t;
@@ -58,6 +69,9 @@ typedef struct {
     uint16_t adapter;
     uint64_t ord;            /* arrival order of reports on this sensor */
     time_t   now;            /* newest frame time heard on it */
+    uint64_t mono_last;      /* sloth_mono_ms() at that report */
+    uint8_t  blind;          /* last report: controller duplicate filter on or unknown */
+    time_t   poison_full_until;  /* a poison found every slot live: no payload link until */
     ent_t    e[BLE_ROT_SEAM];
     poison_t poison[BLE_ROT_POISON_MAX];
 } rot_sensor_t;
@@ -67,6 +81,7 @@ static uint8_t   g_key[16];
 static rot_sensor_t *g_tabs;     /* BLE_ROT_SENSORS, allocated on first use while on */
 static uint32_t  g_chain;
 static ble_rot_stats_t g_st;
+static ble_rot_row_sink_t g_sink;
 
 /* ── Pure parts ────────────────────────────────────────────────────── */
 
@@ -105,6 +120,7 @@ int ble_rot_tokens(const ble_adv_report_t *r, ble_token_t *out, int max,
     int n = 0;
     if (fp_discoverable) *fp_discoverable = 0;
     if (!r || !out || max <= 0) return 0;
+    memset(out, 0, sizeof(*out) * (size_t)max);
 
     if (r->has_mfr_data && !r->mfr_data_clipped) {
         /* [MS-CDP] 2.2.2.2.3: Scenario_Type 1, Version_and_Device_Type,
@@ -141,13 +157,24 @@ int ble_rot_tokens(const ble_adv_report_t *r, ble_token_t *out, int max,
             uint8_t flen = (uint8_t)(d[1] >> 4), ftype = (uint8_t)(d[1] & 0x0F);
             size_t salt_hdr = 2 + (size_t)flen;
             if ((ftype == 0x00 || ftype == 0x02) && flen >= 4 &&
-                salt_hdr + 3 <= len && d[salt_hdr] == 0x21 && n < max) {
-                /* Filter and salt together: equal only when the salt
-                 * did not change across the rotation. */
-                out[n].kind  = BLE_TOK_FAST_PAIR_ACCOUNT;
-                out[n].bytes = d + 2;
-                out[n].len   = (uint8_t)(flen + 3);
-                n++;
+                salt_hdr + 3 <= len && d[salt_hdr] == 0x21) {
+                /* The form, but a token only from a 5-octet filter up.
+                 * A filter sets at most 8 bits per key, so a 4-octet one
+                 * (n = 1) holds at most log2(sum C(32, 1..8)) ~ 23.8
+                 * bits and with the salt ~ 39.8, under the 40-bit bound;
+                 * a 5-octet one (n = 2) at most ~ 37.1 + 16 ~ 53.1.
+                 * Those are ceilings, not the entropy: the bits come
+                 * from the keys' hashes. Filter and salt together, the
+                 * fixed 0x21 header between them left out: equal only
+                 * when the salt did not change across the rotation. */
+                if (flen >= BLE_ROT_FP_FILTER_MIN && n < max) {
+                    out[n].kind  = BLE_TOK_FAST_PAIR_ACCOUNT;
+                    out[n].bytes = d + 2;
+                    out[n].len   = flen;
+                    out[n].bytes2 = d + salt_hdr + 1;
+                    out[n].len2   = 2;
+                    n++;
+                }
             }
         }
     }
@@ -277,6 +304,23 @@ static void chain_relabel(rot_sensor_t *S, int start, uint32_t chain) {
     }
 }
 
+/* The same along the committed PAYLOAD successors of `start`. */
+static void pchain_relabel(rot_sensor_t *S, int start, uint32_t pchain) {
+    int cur = start;
+    for (int guard = 0; cur >= 0 && guard < BLE_ROT_SEAM; guard++) {
+        int nx = S->e[cur].succ;
+        if (nx < 0 || S->e[nx].state != LINK_COMMITTED ||
+            S->e[nx].basis != BLE_HINT_PAYLOAD)
+            break;
+        S->e[nx].pchain = pchain;
+        cur = nx;
+    }
+}
+
+static int committed_payload(const ent_t *e) {
+    return e->state == LINK_COMMITTED && e->basis == BLE_HINT_PAYLOAD;
+}
+
 /* Break the link into entry `ei`. A committed one splits its chain: the
  * newer half becomes a chain of its own, or of nothing. */
 static void rot_revoke(rot_sensor_t *S, int ei) {
@@ -284,6 +328,7 @@ static void rot_revoke(rot_sensor_t *S, int ei) {
     if (E->pred < 0) return;
     ent_t *F = &S->e[E->pred];
     int was_committed = E->state == LINK_COMMITTED;
+    int was_payload   = committed_payload(E);
     F->succ = -1;
     E->pred = -1;
     E->basis = BLE_HINT_NONE;
@@ -291,8 +336,19 @@ static void rot_revoke(rot_sensor_t *S, int ei) {
     E->conf  = 0;
     E->has_link_dig = 0;
     if (!was_committed) return;
-    if (F->pred < 0 || S->e[F->pred].state != LINK_COMMITTED) {
+    /* F keeps its chain only through a committed link into F itself;
+     * its one successor was E. */
+    if (F->state != LINK_COMMITTED) {
         F->chain = 0; F->hops = 0; F->root_ts = 0;
+    }
+    if (was_payload) {
+        if (!committed_payload(F)) F->pchain = 0;
+        if (E->succ >= 0 && committed_payload(&S->e[E->succ])) {
+            E->pchain = ++g_chain;
+            pchain_relabel(S, ei, E->pchain);
+        } else {
+            E->pchain = 0;
+        }
     }
     int has_next = E->succ >= 0 && S->e[E->succ].state == LINK_COMMITTED;
     E->hops = 0;
@@ -306,12 +362,34 @@ static void rot_revoke(rot_sensor_t *S, int ei) {
     }
 }
 
+static void hint_of(const ent_t *E, ble_identity_hint_t *h) {
+    memset(h, 0, sizeof(*h));
+    if (!E->chain) return;
+    h->chain      = E->chain;
+    h->pchain     = E->pchain;
+    h->hops       = E->hops;
+    h->root_first = E->root_ts;
+    if (E->state == LINK_COMMITTED) {
+        h->basis      = E->basis;
+        h->confidence = E->conf;
+    }
+}
+
 /* Free entry `i` (evicted or past retention). A link through it is cut
- * without un-chaining what was committed: the chain id already on the
- * survivors stays the right grouping. A pending link that loses its
- * predecessor can never commit and is dropped. */
+ * without un-chaining what was committed: the chain ids already on the
+ * survivors, and on the advertiser rows (ble_rot_update_row() leaves a
+ * row whose entry is gone as it was), stay the right grouping. A
+ * pending link that loses its predecessor can never commit and is
+ * dropped. */
 static void ent_free(rot_sensor_t *S, int i) {
     ent_t *X = &S->e[i];
+    /* Its last word to its row, which may not have seen a snapshot
+     * since the commit. */
+    if (g_sink && X->chain) {
+        ble_identity_hint_t h;
+        hint_of(X, &h);
+        g_sink(S->kind, S->iface, X->addr, &h);
+    }
     if (X->succ >= 0) {
         ent_t *N = &S->e[X->succ];
         if (N->state == LINK_PENDING) {
@@ -337,23 +415,35 @@ static int ent_alloc(rot_sensor_t *S) {
 }
 
 static int is_poisoned(const rot_sensor_t *S, uint64_t dig, time_t now) {
+    if (S->poison_full_until && now <= S->poison_full_until) return 1;
     for (int i = 0; i < BLE_ROT_POISON_MAX; i++)
         if (S->poison[i].until && S->poison[i].dig == dig && now <= S->poison[i].until)
             return 1;
     return 0;
 }
 
+/* A full list never overwrites a live slot: that would re-arm the
+ * token in it early. It fails closed instead, every payload link on the
+ * sensor refused for the window the unrecorded poison would have had. */
 static void poison(rot_sensor_t *S, uint64_t dig, time_t now) {
-    int slot = -1, oldest = 0;
+    /* Counted once per poisoning: a digest already held, or covered by
+     * a live overflow refusal, is not counted again. */
+    int already = is_poisoned(S, dig, now);
+    int slot = -1, spare = -1;
     for (int i = 0; i < BLE_ROT_POISON_MAX; i++) {
         poison_t *p = &S->poison[i];
-        if (p->until && p->dig == dig) { slot = i; break; }
-        if (p->until < S->poison[oldest].until) oldest = i;
+        int live = p->until && now <= p->until;
+        if (live && p->dig == dig) { slot = i; break; }
+        if (!live && spare < 0) spare = i;
     }
-    if (slot < 0 || now > S->poison[slot].until) g_st.poisoned++;
-    if (slot < 0) slot = oldest;
-    S->poison[slot].dig   = dig;
-    S->poison[slot].until = now + BLE_ROT_POISON_S;
+    if (!already) g_st.poisoned++;
+    if (slot < 0) slot = spare;
+    if (slot >= 0) {
+        S->poison[slot].dig   = dig;
+        S->poison[slot].until = now + BLE_ROT_POISON_S;
+    } else {
+        S->poison_full_until = now + BLE_ROT_POISON_S;
+    }
     for (int i = 0; i < BLE_ROT_SEAM; i++)
         if (S->e[i].used && S->e[i].has_link_dig && S->e[i].link_dig == dig)
             rot_revoke(S, i);
@@ -469,16 +559,21 @@ static int tail_len(const rot_sensor_t *S, int ei) {
     return n;
 }
 
-static void commit(rot_sensor_t *S, int ei) {
+static void commit(rot_sensor_t *S, int ei, time_t now) {
     ent_t *E = &S->e[ei];
     ent_t *F = &S->e[E->pred];
     /* The caps, judged here on the chain the commit would make, not
      * when the link was proposed: a newer address may have committed
-     * onto E in between, and the joined chain is what must fit. */
+     * onto E in between, and the joined chain is what must fit. And
+     * the flood gate, judged on everything since the proposal: either
+     * end's key seen under it (flood_sweep()) refuses the link, so a
+     * spray whose first addresses came before the gate tripped does
+     * not commit them under it. */
     int f_hops = F->chain ? F->hops : 0;
     time_t root = F->chain ? F->root_ts : F->first_ts;
-    if (f_hops + 1 + tail_len(S, ei) > BLE_ROT_MAX_HOPS ||
-        S->now - root > BLE_ROT_RETAIN_S) {
+    if (((E->flags | F->flags) & ENT_EXCLUDED) ||
+        f_hops + 1 + tail_len(S, ei) > BLE_ROT_MAX_HOPS ||
+        now - root > BLE_ROT_RETAIN_S) {
         rot_revoke(S, ei);
         return;
     }
@@ -494,10 +589,37 @@ static void commit(rot_sensor_t *S, int ei) {
     E->hops    = (uint8_t)(F->hops + 1);
     E->root_ts = F->root_ts;
     chain_relabel(S, ei, E->chain);
+    if (E->basis == BLE_HINT_PAYLOAD) {
+        if (!F->pchain) F->pchain = ++g_chain;
+        E->pchain = F->pchain;
+        pchain_relabel(S, ei, E->pchain);
+    }
 }
 
-static void tick(rot_sensor_t *S) {
-    time_t now = S->now;
+/* What an entry silent for BLE_ROT_FORGET_S no longer needs: it can no
+ * longer be a seam's older side (gap > d_swap) and every link into it
+ * has resolved (pending lasts d_swap from its first report), so its
+ * digests, its link's digest and its shape go. Kept until
+ * BLE_ROT_RETAIN_S: the address, its arrival bounds and its chain
+ * fields, which the interleave guard and the chain caps read. */
+static void ent_forget(ent_t *X) {
+    wipe(X->dig, sizeof(X->dig));
+    X->ndig = X->dig_next = 0;
+    X->has_link_dig = 0;
+    X->link_dig = 0;
+    wipe(&X->tkey, sizeof(X->tkey));
+    X->has_shape = 0;
+    X->evt = X->fam = 0;
+    X->id = 0;
+    X->subtype = 0;
+    X->ad_shape = 0;
+}
+
+static void tick(rot_sensor_t *S, time_t now) {
+    for (int i = 0; i < BLE_ROT_POISON_MAX; i++)
+        if (S->poison[i].until && now > S->poison[i].until)
+            wipe(&S->poison[i], sizeof(S->poison[i]));
+    if (S->poison_full_until && now > S->poison_full_until) S->poison_full_until = 0;
     for (int i = 0; i < BLE_ROT_SEAM; i++)
         if (S->e[i].used && now - S->e[i].last_ts > BLE_ROT_RETAIN_S)
             ent_free(S, i);
@@ -505,33 +627,104 @@ static void tick(rot_sensor_t *S) {
         ent_t *E = &S->e[i];
         if (!E->used || E->state != LINK_PENDING) continue;
         if (now - E->first_ts < BLE_ROT_DSWAP_S) continue;
-        if (E->basis == BLE_HINT_TIMING && timing_ambiguous(S, i)) {
+        if (S->blind ||
+            (E->basis == BLE_HINT_TIMING && timing_ambiguous(S, i))) {
             rot_revoke(S, i);
             continue;
         }
-        commit(S, i);
+        commit(S, i, now);
     }
+    /* After the commits: timing_ambiguous() reads the shapes. */
+    for (int i = 0; i < BLE_ROT_SEAM; i++)
+        if (S->e[i].used && now - S->e[i].last_ts > BLE_ROT_FORGET_S)
+            ent_forget(&S->e[i]);
 }
 
-static uint64_t digest(uint8_t kind, const uint8_t *b, size_t len) {
+/* The frame clock, carried forward by the monotonic time since the
+ * sensor's last report: a radio gone quiet, or a --bt-capture file that
+ * ended, still expires what it left. */
+static time_t sensor_now(const rot_sensor_t *S) {
+    uint64_t m = sloth_mono_ms();
+    if (m <= S->mono_last) return S->now;
+    return S->now + (time_t)((m - S->mono_last) / 1000u);
+}
+
+static uint64_t digest(uint8_t kind, const uint8_t *b, size_t len,
+                       const uint8_t *b2, size_t len2) {
     uint8_t m[1 + 32];
     if (len > 32) len = 32;
+    if (!b2) len2 = 0;
+    if (len2 > 32 - len) len2 = 32 - len;
     m[0] = kind;
     memcpy(m + 1, b, len);
-    uint64_t d = siphash24(g_key, m, 1 + len);
+    if (len2) memcpy(m + 1 + len, b2, len2);
+    uint64_t d = siphash24(g_key, m, 1 + len + len2);
     wipe(m, sizeof(m));
     return d;
 }
 
+static int report_key(const ble_adv_report_t *r, fkey_t *k) {
+    memset(k, 0, sizeof(*k));
+    k->evt = r->event_type;
+    if (r->has_mfr_data) {
+        k->fam = BLE_FAM_MFR;
+        k->id  = r->mfr_id;
+        k->sub = r->mfr_data_len >= 1 ? r->mfr_data[0] : -1;
+    } else if (r->has_svc_data16) {
+        k->fam = BLE_FAM_SVC_DATA;
+        k->id  = r->svc_data_uuid16;
+        k->sub = -1;
+    } else {
+        return 0;
+    }
+    k->set = 1;
+    return 1;
+}
+
+static int fkey_eq(const fkey_t *a, const fkey_t *b) {
+    return a->set && b->set && a->evt == b->evt && a->fam == b->fam &&
+           a->id == b->id && a->sub == b->sub;
+}
+
+static int ent_on_key(const ent_t *X, const fkey_t *k) {
+    if (fkey_eq(&X->tkey, k)) return 1;
+    return X->has_shape && X->fam && X->evt == k->evt && X->fam == k->fam &&
+           X->id == k->id && X->subtype == k->sub;
+}
+
+/* A report the flood gate holds active on its key: every entry on that
+ * key, on every adapter of this sensor (the gate is per sensor kind and
+ * iface, not per adapter), is excluded, so a link proposed before the
+ * gate tripped is refused at commit. The reporting address need not be
+ * a candidate: a spam tool on static addresses trips the gate too. */
+static void flood_sweep(uint8_t kind, const char *iface, const fkey_t *k) {
+    for (int t = 0; t < BLE_ROT_SENSORS; t++) {
+        rot_sensor_t *S = &g_tabs[t];
+        if (!S->used || S->kind != kind ||
+            strncmp(S->iface, iface, sizeof(S->iface)) != 0)
+            continue;
+        for (int i = 0; i < BLE_ROT_SEAM; i++)
+            if (S->e[i].used && ent_on_key(&S->e[i], k))
+                S->e[i].flags |= ENT_EXCLUDED;
+    }
+}
+
 void ble_rot_observe(const ble_adv_report_t *r, uint8_t sensor_kind,
                      const char *iface, uint16_t adapter,
-                     const uint8_t addr[6], time_t ts, int flooded) {
+                     const uint8_t addr[6], time_t ts, int flooded,
+                     int blind) {
     if (!r || !addr) return;
-    rot_sensor_t *S = sensor_for(sensor_kind, iface ? iface : "", adapter);
+    if (!iface) iface = "";
+    rot_sensor_t *S = sensor_for(sensor_kind, iface, adapter);
     if (!S) return;
     if (ts > S->now) S->now = ts;
+    S->mono_last = sloth_mono_ms();
+    S->blind = blind ? 1 : 0;
     uint64_t ord = ++S->ord;
-    if (!ble_rot_addr_candidate(r->addr_type, addr)) { tick(S); return; }
+    fkey_t rk;
+    int keyed = report_key(r, &rk);
+    if (flooded && keyed) flood_sweep(sensor_kind, iface, &rk);
+    if (!ble_rot_addr_candidate(r->addr_type, addr)) { tick(S, S->now); return; }
 
     ble_token_t tok[3];
     int fp_disc = 0;
@@ -577,15 +770,24 @@ void ble_rot_observe(const ble_adv_report_t *r, uint8_t sensor_kind,
         }
         A->ad_shape = r->ad_shape;
     }
+    if (nt > 0 && keyed) A->tkey = rk;
     for (int t = 0; t < nt; t++) {
-        uint64_t d = digest(tok[t].kind, tok[t].bytes, tok[t].len);
+        uint64_t d = digest(tok[t].kind, tok[t].bytes, tok[t].len,
+                            tok[t].bytes2, tok[t].len2);
         /* The same token on another address heard since this one first
-         * appeared: two addresses at once carrying it. */
+         * appeared: two addresses at once carrying it. Or on
+         * BLE_ROT_SPRAY_ADDRS addresses first heard inside one d_swap,
+         * this one included: no single advertiser rotates that fast, a
+         * replay sprayed on fresh addresses one after another does, and
+         * a sequential spray never interleaves. */
+        int fresh = A->first_ts >= ts - BLE_ROT_DSWAP_S;
         for (int g = 0; g < BLE_ROT_SEAM; g++) {
             const ent_t *G = &S->e[g];
             if (g == i || !G->used || !has_dig(G, d)) continue;
-            if (G->last_ord > A->first_ord) { poison(S, d, ts); break; }
+            if (G->last_ord > A->first_ord) { fresh = -1; break; }
+            if (G->first_ts >= ts - BLE_ROT_DSWAP_S) fresh++;
         }
+        if (fresh < 0 || fresh >= BLE_ROT_SPRAY_ADDRS) poison(S, d, ts);
         A = &S->e[i];
         if (!has_dig(A, d)) {
             A->dig[A->dig_next] = d;
@@ -593,10 +795,33 @@ void ble_rot_observe(const ble_adv_report_t *r, uint8_t sensor_kind,
             if (A->ndig < BLE_ROT_TOKENS) A->ndig++;
         }
     }
-    if (!(A->flags & ENT_EXCLUDED) && ts - A->first_ts <= BLE_ROT_DSWAP_S)
+    /* A controller filtering duplicates reports an address once, so an
+     * older address heard again after the newer one - what both the
+     * exclusivity guard and token poisoning rest on - never reaches
+     * here: propose nothing on such a stream. */
+    if (!S->blind && !(A->flags & ENT_EXCLUDED) && ts - A->first_ts <= BLE_ROT_DSWAP_S)
         try_link(S, i, ts);
-    tick(S);
+    tick(S, S->now);
 }
+
+void ble_rot_tick_all(void) {
+    if (!g_on || !g_tabs) return;
+    for (int k = 0; k < BLE_ROT_SENSORS; k++)
+        if (g_tabs[k].used) tick(&g_tabs[k], sensor_now(&g_tabs[k]));
+}
+
+void ble_rot_update_row(ble_device_t *d) {
+    if (!g_on || !d || d->addr_type != 1) return;
+    const rot_sensor_t *S = sensor_find(d->sensor_kind, d->sensor_iface, d->adapter);
+    if (!S) return;
+    int e = ent_find(S, d->addr);
+    /* No entry: evicted or expired. The row keeps what was committed
+     * onto it, so a link outlives the seam table's 64 entries. */
+    if (e < 0) return;
+    hint_of(&S->e[e], &d->hint);
+}
+
+void ble_rot_set_row_sink(ble_rot_row_sink_t fn) { g_sink = fn; }
 
 void ble_rot_snapshot(sloth_state_t *s) {
     if (!s) return;
@@ -604,43 +829,25 @@ void ble_rot_snapshot(sloth_state_t *s) {
         memset(&s->ble_rot, 0, sizeof(s->ble_rot));
         return;
     }
-    if (g_tabs)
-        for (int k = 0; k < BLE_ROT_SENSORS; k++)
-            if (g_tabs[k].used) tick(&g_tabs[k]);
-    for (int i = 0; i < s->ble_device_count && i < MAX_BLE_DEVICES; i++) {
-        ble_device_t *d = &s->ble_devices[i];
-        memset(&d->hint, 0, sizeof(d->hint));
-        if (d->addr_type != 1) continue;
-        const rot_sensor_t *S = sensor_find(d->sensor_kind, d->sensor_iface, d->adapter);
-        if (!S) continue;
-        int e = ent_find(S, d->addr);
-        if (e < 0 || !S->e[e].chain) continue;
-        const ent_t *E = &S->e[e];
-        d->hint.chain      = E->chain;
-        d->hint.hops       = E->hops;
-        d->hint.root_first = E->root_ts;
-        if (E->state == LINK_COMMITTED) {
-            d->hint.basis      = E->basis;
-            d->hint.confidence = E->conf;
-        }
-    }
     s->ble_rot = g_st;
     s->ble_rot.enabled = 1;
 }
 
 int ble_rot_distinct(const sloth_state_t *s,
                      int (*keep)(const ble_device_t *d, void *ctx),
-                     void *ctx) {
+                     void *ctx, int payload_only) {
     int n = 0;
     if (!s) return 0;
     for (int i = 0; i < s->ble_device_count && i < MAX_BLE_DEVICES; i++) {
         const ble_device_t *d = &s->ble_devices[i];
         if (keep && !keep(d, ctx)) continue;
+        uint32_t id = payload_only ? d->hint.pchain : d->hint.chain;
         int dup = 0;
-        if (d->hint.chain)
+        if (id)
             for (int j = 0; j < i && !dup; j++) {
                 const ble_device_t *o = &s->ble_devices[j];
-                if (o->hint.chain == d->hint.chain && (!keep || keep(o, ctx)))
+                uint32_t oid = payload_only ? o->hint.pchain : o->hint.chain;
+                if (oid == id && (!keep || keep(o, ctx)))
                     dup = 1;
             }
         if (!dup) n++;
@@ -650,8 +857,37 @@ int ble_rot_distinct(const sloth_state_t *s,
 
 int ble_rot_test_allocated(void) { return g_tabs != NULL; }
 
-uint64_t ble_rot_test_digest(uint8_t kind, const uint8_t *bytes, size_t len) {
-    return digest(kind, bytes, len);
+int ble_rot_test_held(void) {
+    int n = 0;
+    if (!g_tabs) return 0;
+    for (int k = 0; k < BLE_ROT_SENSORS; k++) {
+        const rot_sensor_t *S = &g_tabs[k];
+        for (int i = 0; i < BLE_ROT_SEAM; i++) {
+            const ent_t *E = &S->e[i];
+            if (E->used) n++;
+            n += E->ndig + E->has_link_dig + E->has_shape + E->tkey.set;
+        }
+        for (int i = 0; i < BLE_ROT_POISON_MAX; i++)
+            if (S->poison[i].until || S->poison[i].dig) n++;
+        if (S->poison_full_until) n++;
+    }
+    return n;
+}
+
+int ble_rot_test_digests(void) {
+    int n = 0;
+    if (!g_tabs) return 0;
+    for (int k = 0; k < BLE_ROT_SENSORS; k++)
+        for (int i = 0; i < BLE_ROT_SEAM; i++) {
+            const ent_t *E = &g_tabs[k].e[i];
+            n += E->ndig + E->has_link_dig;
+        }
+    return n;
+}
+
+uint64_t ble_rot_test_digest(uint8_t kind, const uint8_t *bytes, size_t len,
+                             const uint8_t *bytes2, size_t len2) {
+    return digest(kind, bytes, len, bytes2, len2);
 }
 
 void ble_rot_test_set_key(const uint8_t key[16]) {
