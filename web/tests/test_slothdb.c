@@ -441,6 +441,12 @@ static void test_crashed_sloth_restarts_beside_a_reader(void) {
         sqlite3 *sloth = NULL;
         int rc = sqlite3_open_v2(p, &sloth, SQLITE_OPEN_READWRITE |
                                  SQLITE_OPEN_CREATE | SQLITE_OPEN_NOFOLLOW, NULL);
+        /* As sloth's db_open() does since 88fc997 (DB_BUSY_MS): readonly_shm
+         * keeps the reader from setting up or writing the -shm, but its
+         * brief lock probes can still meet a starting writer's recovery,
+         * which a writer with no busy handler sees as BUSY_RECOVERY (seen
+         * under TSan, 2 runs in 8). Real sloth waits; so does this one. */
+        if (rc == SQLITE_OK) sqlite3_busy_timeout(sloth, 1000);
         if (rc == SQLITE_OK)
             rc = sqlite3_exec(sloth, "PRAGMA auto_vacuum=INCREMENTAL", NULL, NULL, NULL);
         if (rc == SQLITE_OK)
