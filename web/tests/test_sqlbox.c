@@ -724,6 +724,11 @@ static void test_writes_refused(void) {
         int st = query(no[i][0], &b);
         char want[64];
         snprintf(want, sizeof(want), "{\"error\":\"%s\"", no[i][1]);
+        /* A SQLite built without the dbpage table (Ubuntu 24.04's 3.45)
+         * refuses it before the authorizer is asked: no such table. */
+        if (!strcmp(no[i][0], "SELECT * FROM sqlite_dbpage") &&
+            strstr(b, "no such table: sqlite_dbpage"))
+            snprintf(want, sizeof(want), "{\"error\":\"sql_error\"");
         if (st != 400 || !strstr(b, want))
             fprintf(stderr, "    %d %s for: %s\n", st, b, no[i][0]);
         WT_EQ(st, 400);
@@ -964,8 +969,16 @@ static void test_limits(void) {
     n = web_sqlbox_query(&b, big, strlen(big), SDB_NOW, out,
                          WEB_SQL_HDR + WEB_SQL_OUT_MAX, &off, &status);
     out[off + n] = '\0';
-    WT_EQ(status, 400);
-    WT_HAS(out + off, "{\"error\":\"sql_error\"");
+    /* Past SQLITE_LIMIT_LENGTH, SQLite 3.53 fails the statement and 3.45
+     * (CI's Ubuntu 24.04) yields an empty value: either way no value of
+     * 100000 bytes reaches the answer, which is the bound held here. */
+    int big_refused = status == 400;
+    if (big_refused) {
+        WT_HAS(out + off, "{\"error\":\"sql_error\"");
+    } else {
+        WT_EQ(status, 200);
+        WT_ASSERT(n < 4096);
+    }
     /* A sort past the page cache: refused at its first spill, not run
      * for the whole budget writing a temporary file. Seen red with
      * box_open() passing temporary files through (a 200, "truncated_by":
@@ -984,7 +997,7 @@ static void test_limits(void) {
     WT_EQ(st.queries, 5);
     WT_EQ(st.timeouts, 1);
     WT_EQ(st.truncated, 3);
-    WT_EQ(st.refused, 2);
+    WT_EQ(st.refused, 1UL + (unsigned long)big_refused);
     /* No sloth.db: a 503 naming its state. */
     web_slothdb_t none;
     char miss[160];
