@@ -5,11 +5,19 @@
  * slothweb never sends a query; every name here is one a record
  * carried. */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#ifdef WITH_SQLITE
+#include <sqlite3.h>
+#endif
 
+#include "web_anomaly.h"
+#include "web_baseline.h"
 #include "web_ident.h"
 #include "web_jsonl.h"
 #include "web_ptr.h"
+#include "web_store.h"
 #include "wtest.h"
 
 #define T0 1792627200LL
@@ -44,7 +52,7 @@ static void test_reverse_names(void) {
 
 /* What is recorded, and what is not: a PTR answer with a host name for
  * a reverse name; not a query, not another type, not an empty answer
- * (what sloth writes for a PTR answer today, counted), not NXDOMAIN,
+ * (what a sloth older than #165 wrote for every PTR answer, counted), not NXDOMAIN,
  * an address or a name with markup. Seen red with name_ok()'s character
  * check removed. */
 static void test_records(void) {
@@ -166,9 +174,113 @@ static void test_ident_readers(void) {
     web_ident_destroy(&id);
 }
 
+/* #165: the dns record sloth writes for a PTR answer, byte for byte as
+ * tests/test_jsonl.c :: test_emit_dns_ptr_answer pins it (a 48-byte
+ * target, past the 45 bytes sloth's answer held before), through the
+ * decoder and the identity tables into the cache, then through the
+ * store thread's persist (web_anomaly_step, which owns the writer) into
+ * slothweb.db passive_ptr, and back at a restart. Seen red (counted
+ * empty, nothing stored) with web_ident_record() handing the PTR cache
+ * a misspelt "answer" key. */
+#define SLOTH_PTR_LINE \
+    "{\"type\":\"dns\",\"ts\":1792627200,\"src\":\"192.0.2.53\"," \
+    "\"qname\":\"25.113.0.203.in-addr.arpa\",\"qtype\":\"PTR\"," \
+    "\"answer\":\"ec2-203-0-113-25.us-west-2.compute.amazonaws.com\"," \
+    "\"is_resp\":1}"
+#define SLOTH_PTR_NAME "ec2-203-0-113-25.us-west-2.compute.amazonaws.com"
+
+#ifdef WITH_SQLITE
+static int passive_ptr_int(const char *path, const char *sql) {
+    sqlite3 *db = NULL;
+    int v = -1;
+    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK) {
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) == SQLITE_OK &&
+            sqlite3_step(st) == SQLITE_ROW)
+            v = sqlite3_column_int(st, 0);
+        sqlite3_finalize(st);
+    }
+    sqlite3_close(db);
+    return v;
+}
+
+/* The store thread's side: persist on a minute boundary, then a fresh
+ * cache restored from the file. */
+static void ptr_through_the_store(web_ptr_t *p) {
+    char dir[64], path[128], err[512], s[160];
+    snprintf(dir, sizeof(dir), "/tmp/slothweb-ptr-XXXXXX");
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    snprintf(path, sizeof(path), "%s/w.db", dir);
+    web_store_t st;
+    WT_EQ(web_store_open(&st, path, err, sizeof(err)), 0);
+    web_baseline_t bl;
+    WT_EQ(web_baseline_init(&bl, 16), 0);
+    web_anom_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.bl = &bl;
+    cfg.store = &st;
+    cfg.ptr = p;
+    cfg.max_keys = 16;
+    web_anomaly_t an;
+    WT_EQ(web_anomaly_init(&an, 8, &cfg), 0);
+    web_anomaly_step(&an, T0);
+    web_anomaly_step(&an, T0 + 120);       /* minutes ran: persist */
+    WT_EQ(passive_ptr_int(path, "SELECT COUNT(*) FROM passive_ptr"), 1);
+    WT_EQ(passive_ptr_int(path, "SELECT COUNT(*) FROM passive_ptr WHERE"
+                                " ip='203.0.113.25' AND name='" SLOTH_PTR_NAME "'"
+                                " AND first_seen=1792627200"), 1);
+    web_anomaly_destroy(&an);
+
+    web_ptr_t back;
+    WT_EQ(web_ptr_init(&back, 8), 0);
+    cfg.ptr = &back;
+    WT_EQ(web_anomaly_init(&an, 8, &cfg), 0);
+    WT_EQ(web_anomaly_restore(&an, T0 + 180), 0);
+    char name[WEB_PTR_NAME_MAX + 1];
+    long long t = 0;
+    WT_EQ(web_ptr_get(&back, "203.0.113.25", name, &t), 1);
+    WT_ASSERT(!strcmp(name, SLOTH_PTR_NAME));
+    WT_EQ(t, T0);
+    web_anomaly_destroy(&an);
+    web_ptr_destroy(&back);
+    web_baseline_destroy(&bl);
+    web_store_close(&st);
+    unlink(path);
+    snprintf(s, sizeof(s), "%s-wal", path); unlink(s);
+    snprintf(s, sizeof(s), "%s-shm", path); unlink(s);
+    rmdir(dir);
+}
+#endif
+
+static void test_sloth_ptr_record_lands_in_passive_ptr(void) {
+    web_ident_t id;
+    web_ptr_t p;
+    WT_EQ(web_ident_init(&id, 16, 16), 0);
+    WT_EQ(web_ptr_init(&p, 8), 0);
+    web_ident_set_ptr(&id, &p);
+    feed(&id, SLOTH_PTR_LINE, T0);
+    web_ptr_stats_t st;
+    web_ptr_stats(&p, &st);
+    WT_EQ(st.seen, 1);
+    WT_EQ(st.stored, 1);
+    WT_EQ(st.empty, 0);
+    WT_EQ(st.refused, 0);
+    char name[WEB_PTR_NAME_MAX + 1];
+    long long t = 0;
+    WT_EQ(web_ptr_get(&p, "203.0.113.25", name, &t), 1);
+    WT_ASSERT(!strcmp(name, SLOTH_PTR_NAME));
+    WT_EQ(t, T0);
+#ifdef WITH_SQLITE
+    if (web_store_available()) ptr_through_the_store(&p);
+#endif
+    web_ptr_destroy(&p);
+    web_ident_destroy(&id);
+}
+
 void run_ptr_tests(void) {
     WT_RUN(test_reverse_names);
     WT_RUN(test_records);
     WT_RUN(test_bound_and_dirty);
+    WT_RUN(test_sloth_ptr_record_lands_in_passive_ptr);
     WT_RUN(test_ident_readers);
 }
