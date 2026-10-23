@@ -227,6 +227,81 @@ static void test_swift_pair_flood_fires_once_per_key(void) {
     sloth_clock_test_set(NULL, NULL);
 }
 
+/* The same floods delivered as LE Extended Advertising Reports through
+ * the monitor decoder, as a BT 5 controller under BlueZ's extended scan
+ * reports them (§7.7.65.13; layout in tests/test_ble_snoop.c). The
+ * monitor header is adapter 0, opcode 3 (EVENT). */
+static void ext_ingest(uint16_t et, const uint8_t addr[6], const uint8_t *ad,
+                       size_t len, int rssi) {
+    uint8_t b[4 + 4 + 24 + 64];
+    int n = 0;
+    b[n++] = 0; b[n++] = 0; b[n++] = 0; b[n++] = 3;
+    b[n++] = 0x3E;
+    b[n++] = (uint8_t)(2 + 24 + len);
+    b[n++] = 0x0D;
+    b[n++] = 1;
+    b[n++] = (uint8_t)et; b[n++] = (uint8_t)(et >> 8);
+    b[n++] = 0x01;                              /* random */
+    for (int i = 0; i < 6; i++) b[n++] = addr[5 - i];
+    b[n++] = 0x01; b[n++] = (et & 0x0010) ? 0x00 : 0x02;
+    b[n++] = (et & 0x0010) ? 0xFF : 0x01;       /* SID */
+    b[n++] = 127;
+    b[n++] = (uint8_t)(int8_t)rssi;
+    b[n++] = 0; b[n++] = 0;
+    b[n++] = 0;
+    memset(b + n, 0, 6); n += 6;
+    b[n++] = (uint8_t)len;
+    memcpy(b + n, ad, len); n += (int)len;
+    ble_mon_ingest(b, (size_t)n, (size_t)n, g_wall, g_wall);
+}
+
+static void ext_play_flood(uint16_t et) {
+    const uint8_t home[6] = { 0xC2, 0xFF, 0xFF, 0x00, 0x00, 0x01 };
+    ext_ingest(et, home, AD_SWIFT, sizeof(AD_SWIFT), -70);
+    g_mono += BLE_FLOOD_WINDOW_S * 1000;
+    for (unsigned i = 0; i < 1000; i++) {
+        uint8_t a[6];
+        addr_n(a, i % 500);
+        ext_ingest(et, a, AD_SWIFT, sizeof(AD_SWIFT), -40 - (int)(i % 20));
+        g_mono += 2;
+    }
+}
+
+/* A legacy PDU through an extended scan floods the legacy key: the
+ * operator's alert does not depend on which scan commands the stack
+ * chose. */
+static void test_flood_over_legacy_bit_extended_reports(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    ext_play_flood(0x0010);                     /* Legacy ADV_NONCONN_IND */
+    evaluate();
+    ASSERT_EQ((int)g_s.ble_host.ext_adv_reports, 1001);
+    ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_ADV_FLOOD), 1);
+    int i = find_type(&g_s, ALERT_TYPE_BLE_ADV_FLOOD);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_STR(g_s.alerts[i].key, "bleflood:bluetooth-monitor:3:mfr:6:3");
+        ASSERT(strstr(g_s.alerts[i].detail, "ADV_NONCONN_IND") != NULL);
+    }
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* An extended PDU flood is its own payload key, named EXT_ADV. */
+static void test_flood_over_extended_pdus(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    ext_play_flood(0x0000);                     /* extended, non-connectable */
+    evaluate();
+    ASSERT_EQ(count_type(&g_s, ALERT_TYPE_BLE_ADV_FLOOD), 1);
+    int i = find_type(&g_s, ALERT_TYPE_BLE_ADV_FLOOD);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_STR(g_s.alerts[i].key, "bleflood:bluetooth-monitor:5:mfr:6:3");
+        ASSERT(strstr(g_s.alerts[i].detail, "EXT_ADV") != NULL);
+    }
+    sloth_clock_test_set(NULL, NULL);
+}
+
 static void test_two_spam_keys_are_two_incidents(void) {
     pin_clocks();
     memset(&g_s, 0, sizeof(g_s));
@@ -1275,6 +1350,8 @@ void run_ble_rules_tests(void) {
     RUN_TEST(test_hid_appearance_range);
     RUN_TEST(test_swift_pair_flood_fires_once_per_key);
     RUN_TEST(test_two_spam_keys_are_two_incidents);
+    RUN_TEST(test_flood_over_legacy_bit_extended_reports);
+    RUN_TEST(test_flood_over_extended_pdus);
     RUN_TEST(test_same_volume_on_an_unlisted_subtype_does_not_fire);
     RUN_TEST(test_spread_across_subtypes_does_not_fire);
     RUN_TEST(test_few_addresses_at_high_rate_does_not_fire);

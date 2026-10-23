@@ -76,6 +76,24 @@ STAB_DECL(g_devs, ble_device_t, MAX_BLE_DEVICES, last_seen, STAB_OLDEST,
 static ble_host_t g_host;
 static int        g_host_init;
 
+/* Open fragment trains (ble_hci.h, "Fragmented extended reports"). */
+typedef struct {
+    uint64_t seq;          /* 0 = free; otherwise last touched, for eviction */
+    uint16_t adapter;
+    uint8_t  addr_type;
+    uint8_t  addr[6];      /* HCI order */
+    uint8_t  sid;
+    uint8_t  scan_rsp;
+} ext_train_t;
+static ext_train_t g_trains[BLE_EXT_TRAINS];
+static uint64_t    g_train_seq;
+
+static void trains_clear_adapter(int adapter) {
+    for (int i = 0; i < BLE_EXT_TRAINS; i++)
+        if (adapter < 0 || g_trains[i].adapter == (uint16_t)adapter)
+            memset(&g_trains[i], 0, sizeof(g_trains[i]));
+}
+
 static void ctrl_init(ble_ctrl_t *c, int index) {
     memset(c, 0, sizeof(*c));
     c->index        = index;
@@ -95,6 +113,7 @@ static void host_init_locked(void) {
     for (int k = 0; k < BT_TX_KIND_COUNT; k++) g_host.tx_adapter[k] = -1;
     for (int i = 0; i < BT_MAX_CTRL; i++) ctrl_init(&g_host.ctrl[i], -1);
     ctrl_init(&g_host.ctrl_overflow, -1);
+    trains_clear_adapter(-1);
     g_host_init = 1;
 }
 
@@ -291,6 +310,13 @@ static void observe_locked(const ble_obs_t *o) {
     d->channel         = (int8_t)(o->channel >= 0 && o->channel <= 39 ? o->channel : -1);
     d->last_event_type = r->event_type;
     if (r->event_type <= 7) d->pdu_mask |= (uint8_t)(1u << r->event_type);
+    if (created) d->adv_sid = 0xFF;
+    if (r->ext) {
+        if (!(r->ext_event_type & 0x0010)) d->ext_adv = 1;
+        d->primary_phy   = r->primary_phy;
+        d->secondary_phy = r->secondary_phy;
+        d->adv_sid       = r->sid;
+    }
     d->adv_count++;
     /* Fields are kept once seen: an ADV_IND and its SCAN_RSP carry
      * different AD structures, and the absence of one in the next report
@@ -371,6 +397,61 @@ static void on_report(const ble_adv_report_t *r, void *vctx) {
     observe_locked(&o);
 }
 
+static int train_find(const ext_train_t *k) {
+    for (int i = 0; i < BLE_EXT_TRAINS; i++) {
+        const ext_train_t *t = &g_trains[i];
+        if (t->seq && t->adapter == k->adapter && t->addr_type == k->addr_type &&
+            t->sid == k->sid && t->scan_rsp == k->scan_rsp &&
+            memcmp(t->addr, k->addr, 6) == 0)
+            return i;
+    }
+    return -1;
+}
+
+static void train_open(const ext_train_t *k) {
+    int slot = 0;
+    for (int i = 0; i < BLE_EXT_TRAINS; i++) {
+        if (!g_trains[i].seq) { slot = i; break; }
+        if (g_trains[i].seq < g_trains[slot].seq) slot = i;
+    }
+    if (g_trains[slot].seq) g_host.ext_trains_evicted++;
+    g_trains[slot] = *k;
+    g_trains[slot].seq = ++g_train_seq;
+}
+
+/* One decoded 0x0D report: into the table, or counted as the tail of a
+ * fragment train (ble_hci.h). */
+static ble_rec_verdict_t ext_report(const ble_adv_report_t *r,
+                                    uint16_t adapter, time_t ts) {
+    /* A Legacy-bit report is a whole legacy PDU, never fragmented, and
+     * the parser has refused one that says otherwise. */
+    if (!(r->ext_event_type & 0x0010)) {
+        ext_train_t k;
+        memset(&k, 0, sizeof(k));
+        k.adapter   = adapter;
+        k.addr_type = r->addr_type;
+        memcpy(k.addr, r->addr, 6);
+        k.sid       = r->sid;
+        k.scan_rsp  = r->event_type == BLE_EVT_EXT_SCAN_RSP;
+        int t = train_find(&k);
+        if (t >= 0) {
+            /* Middle or last fragment: its data starts wherever the one
+             * before stopped, so it is not walked. */
+            if (r->data_status == BLE_EXT_DATA_INCOMPLETE)
+                g_trains[t].seq = ++g_train_seq;
+            else
+                memset(&g_trains[t], 0, sizeof(g_trains[t]));
+            g_host.ext_fragments++;
+            return BLE_REC_EXT_FRAGMENT;
+        }
+        if (r->data_status == BLE_EXT_DATA_INCOMPLETE) train_open(&k);
+        if (r->data_status != BLE_EXT_DATA_COMPLETE) g_host.ext_adv_partial++;
+    }
+    adv_ctx_t c = { adapter, ts };
+    on_report(r, &c);
+    return BLE_REC_EXT_ADV;
+}
+
 static ble_rec_verdict_t ingest_event(const uint8_t *p, size_t len,
                                       uint16_t adapter, time_t ts) {
     if (len < 2) return BLE_REC_MALFORMED;
@@ -380,7 +461,14 @@ static ble_rec_verdict_t ingest_event(const uint8_t *p, size_t len,
     size_t plen = p[1];
     if (plen < 1 || 2 + plen > len) return BLE_REC_MALFORMED;
     uint8_t sub = p[2];
-    if (sub == HCI_SUBEV_EXT_ADV_REPORT) return BLE_REC_EXT_ADV_UNDECODED;
+    if (sub == HCI_SUBEV_EXT_ADV_REPORT) {
+        ble_adv_report_t r;
+        switch (ble_hci_ext_adv_parse(p, 2 + plen, &r)) {
+        case BLE_EXT_PARSE_OK:    return ext_report(&r, adapter, ts);
+        case BLE_EXT_PARSE_MULTI: return BLE_REC_EXT_MULTI_REJECTED;
+        default:                  return BLE_REC_MALFORMED;
+        }
+    }
     if (sub != HCI_SUBEV_ADV_REPORT)     return BLE_REC_IGNORED;
     if (plen < 2) return BLE_REC_MALFORMED;
     uint8_t num = p[3];
@@ -502,6 +590,8 @@ static ble_rec_verdict_t ingest_command(const uint8_t *p, size_t len,
             int idx = c->index;
             uint8_t live = c->live, primary = c->primary;
             ctrl_init(c, idx);
+            /* The controller drops whatever reports it was assembling. */
+            trains_clear_adapter(idx);
             c->live = live;
             c->primary = primary;
             c->scan_enabled = 0;
@@ -627,6 +717,7 @@ static ble_rec_verdict_t ingest_del_index(size_t len, uint16_t adapter) {
         ctrl_init(c, -1);
         ctrl_recompute(c);
     }
+    trains_clear_adapter(adapter);
     return BLE_REC_DEL_INDEX;
 }
 
@@ -666,7 +757,12 @@ ble_rec_verdict_t ble_mon_ingest(const uint8_t *rec, size_t caplen,
     case BLE_REC_DEL_INDEX:         g_host.index_records++;     break;
     case BLE_REC_ADV:               g_host.adv_reports++;       break;
     case BLE_REC_MULTI_REJECTED:    g_host.multi_rejected++;    break;
-    case BLE_REC_EXT_ADV_UNDECODED: g_host.ext_adv_undecoded++; break;
+    case BLE_REC_EXT_ADV:           g_host.ext_adv_reports++;   break;
+    case BLE_REC_EXT_MULTI_REJECTED:
+        g_host.ext_multi_rejected++;
+        g_host.ext_adv_undecoded++;
+        break;
+    case BLE_REC_EXT_FRAGMENT:      g_host.ext_adv_undecoded++; break;
     case BLE_REC_COMMAND:           g_host.commands++;          break;
     }
     pthread_mutex_unlock(&g_mu);

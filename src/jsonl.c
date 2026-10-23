@@ -2112,6 +2112,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         int      ble_tx_baseline;
         int      ble_controllers;
         int      ble_multi_any, ble_ext_adv_any, ble_malformed_any;
+        int      ble_ext_evicted_any;
         /* #144 slice 3, the Ubertooth stream: its state, the link type
          * taken or refused, the freshness bucket, and none/some bands
          * for drops and truncation. recv and the PDU counters move with
@@ -2214,6 +2215,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.ble_controllers   = bh->controllers;
     sig.ble_multi_any     = bh->multi_rejected > 0;
     sig.ble_ext_adv_any   = bh->ext_adv_undecoded > 0;
+    sig.ble_ext_evicted_any = bh->ext_trains_evicted > 0;
     sig.ble_malformed_any = bh->malformed > 0;
     sig.btcap_state         = s->btcap.state;
     sig.btcap_dlt           = s->btcap.dlt;
@@ -2406,6 +2408,19 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
                (long long)h->multi_rejected);
         kv_int(buf, LINEBUF, &off, "ble_ext_adv_undecoded",
                (long long)h->ext_adv_undecoded);
+        /* LE Extended Advertising Reports (0x0D slice): decoded, the
+         * two parts of ble_ext_adv_undecoded, and the fragment-train
+         * accounting (docs/wiki/ble.md). */
+        kv_int(buf, LINEBUF, &off, "ble_ext_adv_reports",
+               (long long)h->ext_adv_reports);
+        kv_int(buf, LINEBUF, &off, "ble_ext_multi_report_rejected",
+               (long long)h->ext_multi_rejected);
+        kv_int(buf, LINEBUF, &off, "ble_ext_adv_fragments",
+               (long long)h->ext_fragments);
+        kv_int(buf, LINEBUF, &off, "ble_ext_adv_partial",
+               (long long)h->ext_adv_partial);
+        kv_int(buf, LINEBUF, &off, "ble_ext_trains_evicted",
+               (long long)h->ext_trains_evicted);
         kv_int(buf, LINEBUF, &off, "ble_records_ignored",   (long long)h->ignored);
         kv_int(buf, LINEBUF, &off, "ble_records_malformed", (long long)h->malformed);
         kv_int(buf, LINEBUF, &off, "ble_host_commands",     (long long)h->commands);
@@ -2521,14 +2536,14 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
          * record on every snapshot (#144 slice 4 second review). Those
          * values still go out on every line this emits and on the
          * heartbeat. */
-        uint8_t b[17] = { d->addr_type, d->sensor_kind, d->sampled,
+        uint8_t b[18] = { d->addr_type, d->sensor_kind, d->sampled,
                           d->pdu_mask, d->has_name, d->has_uuid16,
                           d->has_mfr, d->has_mfr_sub, d->mfr_sub,
                           d->has_svc_data, d->has_appearance, d->hid,
                           d->has_tx_power, d->has_flags,
                           (uint8_t)rssi_bucket(d->has_rssi, d->rssi_best),
                           (uint8_t)(d->watch_cat[0] != '\0'),
-                          (uint8_t)(d->adapter & 0xff) };
+                          (uint8_t)(d->adapter & 0xff), d->ext_adv };
         h = fnv1a(b, sizeof(b), h);
         h = fnv1a(&d->mfr_id, sizeof(d->mfr_id), h);
         if (!jsonl_changed(JD_BLE_DEVICE, key, sizeof(key), h, now)) continue;
@@ -2562,6 +2577,10 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "rssi_best", d->has_rssi ? d->rssi_best : 0);
         kv_int(buf, LINEBUF, &off, "adv_count", (long long)d->adv_count);
         kv_str(buf, LINEBUF, &off, "watch_category", d->watch_cat);
+        kv_int(buf, LINEBUF, &off, "ext_adv", d->ext_adv);
+        kv_int(buf, LINEBUF, &off, "primary_phy", d->primary_phy);
+        kv_int(buf, LINEBUF, &off, "secondary_phy", d->secondary_phy);
+        kv_int(buf, LINEBUF, &off, "adv_sid", d->adv_sid == 0xFF ? -1 : d->adv_sid);
         kv_int(buf, LINEBUF, &off, "first_seen", (long long)d->first_seen);
         kv_int(buf, LINEBUF, &off, "last_seen", (long long)d->last_seen);
         end_obj(buf, LINEBUF, &off);

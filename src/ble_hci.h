@@ -38,7 +38,7 @@
  *   NEW_INDEX (monitor opcode 0)       controller announced
  *   DEL_INDEX (monitor opcode 1)       controller removed (no payload)
  *   EVENT 0x3E / subevent 0x02         LE Advertising Report (single report)
- *   EVENT 0x3E / subevent 0x0D         counted, not decoded yet
+ *   EVENT 0x3E / subevent 0x0D         LE Extended Advertising Report (single report)
  *   COMMAND, host's own scan, advertise and connect commands:
  *     0x200B LE Set Scan Parameters        0x2041 LE Set Extended Scan Parameters
  *     0x200C LE Set Scan Enable            0x2042 LE Set Extended Scan Enable
@@ -70,6 +70,27 @@
  * consecutive per-report records. The two agree for one report and
  * disagree for more, so until the layout is confirmed against a
  * controller sloth decodes none of them rather than half of them wrong.
+ * The LE Extended Advertising Report (0x0D) is held to the same rule,
+ * for the same reason: §7.7.65.13 draws per-field arrays too, and the
+ * two layouts carry the same total length (ble_hci_ext_adv_parse()).
+ * Its refusals are counted apart, `ext_multi_rejected`.
+ *
+ * ── Fragmented extended reports ──
+ *
+ * A 0x0D report's Data_Status says complete, incomplete with more to
+ * come, or incomplete and truncated. sloth does not reassemble. The
+ * FIRST fragment of an advertisement is decoded like a complete report:
+ * it starts at the first octet of the data, so the AD structures it
+ * holds whole are correct, and the one the boundary cut is dropped
+ * (`ext_adv_partial`). Its train is then held open in a fixed table of
+ * BLE_EXT_TRAINS (adapter, address, address type, SID, scan-response)
+ * keys, so the middle and last fragments, whose data begins mid-
+ * structure, are recognised and counted (`ext_fragments`) instead of
+ * being walked as if they began an advertisement. A full table pushes
+ * out its oldest train (`ext_trains_evicted`); that train's remaining
+ * fragments are then decoded as fresh reports, which is the one way a
+ * mid-structure fragment can reach the AD walker, and the counter says
+ * when it may have.
  *
  * Thread model: ble_mon_ingest() runs on the capture worker (or the
  * replay/test thread), ble_snapshot() on the poll thread. One module
@@ -87,6 +108,9 @@
 /* A transmit command counts as RECENT for this long after it arrived. */
 #define BT_TX_RECENT_SECS   120
 
+/* Open fragment trains of LE Extended Advertising Reports. */
+#define BLE_EXT_TRAINS      16
+
 /* Monitor opcodes, Linux include/net/bluetooth/hci_mon.h. */
 #define BT_MON_NEW_INDEX    0
 #define BT_MON_DEL_INDEX    1
@@ -103,9 +127,11 @@ typedef enum {
     BLE_REC_NEW_INDEX,
     BLE_REC_ADV,               /* one advertising report decoded */
     BLE_REC_MULTI_REJECTED,    /* Num_Reports > 1 */
-    BLE_REC_EXT_ADV_UNDECODED, /* subevent 0x0D */
+    BLE_REC_EXT_FRAGMENT,      /* subevent 0x0D, continuation of an open train */
     BLE_REC_COMMAND,           /* allow-listed host command read */
-    BLE_REC_DEL_INDEX          /* controller removed */
+    BLE_REC_DEL_INDEX,         /* controller removed */
+    BLE_REC_EXT_ADV,           /* one extended advertising report decoded */
+    BLE_REC_EXT_MULTI_REJECTED /* subevent 0x0D, Num_Reports > 1 */
 } ble_rec_verdict_t;
 
 /* 1 for a libpcap raw-HCI device name ("bluetooth" followed by a

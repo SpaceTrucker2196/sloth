@@ -5,6 +5,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "ble_hci.h"
+#include "ble_detect.h"
 #include "alerts.h"
 #include "jsonl.h"
 #include "sensor_health.h"
@@ -275,13 +276,336 @@ static void test_multi_report_event_is_rejected_and_counted(void) {
     ASSERT_EQ((int)g_s.ble_host.adv_reports, 0);
 }
 
-static void test_extended_report_is_counted_not_decoded(void) {
-    const uint8_t p[4] = { 0x0D, 1, 0x13, 0x00 };
-    int n = rec_evt(g_rec, 0x3E, p, 4);
-    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV_UNDECODED);
+/* ── LE Extended Advertising Reports (subevent 0x0D) ────────────────
+ *
+ * One report per event, §7.7.65.13 (tests/test_ble_snoop.c has the
+ * field-by-field layout):
+ *   0x3E plen 0x0D 01 Event_Type(LE16) Address_Type Address[6]
+ *   Primary_PHY Secondary_PHY Advertising_SID TX_Power RSSI
+ *   Periodic_Advertising_Interval(LE16) Direct_Address_Type
+ *   Direct_Address[6] Data_Length Data[Data_Length]
+ */
+#define EXT_LEGACY_NONCONN  0x0010   /* Legacy bit: ADV_NONCONN_IND */
+#define EXT_LEGACY_ADV_IND  0x0013   /* Legacy bit: ADV_IND */
+#define EXT_STATUS_MORE     0x0020   /* data status 01, more to come */
+#define EXT_STATUS_TRUNC    0x0040   /* data status 10, truncated */
+
+static int rec_ext_n(uint8_t *b, uint16_t adapter, uint8_t num, uint16_t et,
+                     uint8_t atype, const uint8_t addr_le[6], uint8_t sid,
+                     const uint8_t *data, uint8_t dlen, int8_t rssi) {
+    int n = put_hdr(b, adapter, BT_MON_EVENT_PKT);
+    b[n++] = 0x3E;
+    b[n++] = (uint8_t)(2 + 24 + dlen);
+    b[n++] = 0x0D;
+    b[n++] = num;
+    b[n++] = (uint8_t)et; b[n++] = (uint8_t)(et >> 8);
+    b[n++] = atype;
+    memcpy(b + n, addr_le, 6); n += 6;
+    b[n++] = (et & 0x0010) ? 0x01 : 0x03;   /* Primary_PHY: 1M, or Coded */
+    b[n++] = (et & 0x0010) ? 0x00 : 0x02;   /* Secondary_PHY: none, or 2M */
+    b[n++] = sid;
+    b[n++] = 127;                           /* TX_Power not available */
+    b[n++] = (uint8_t)rssi;
+    b[n++] = 0; b[n++] = 0;                 /* no periodic advertising */
+    b[n++] = 0;
+    memset(b + n, 0, 6); n += 6;
+    b[n++] = dlen;
+    if (dlen) memcpy(b + n, data, dlen);
+    return n + dlen;
+}
+
+static int rec_ext(uint8_t *b, uint16_t et, const uint8_t addr_le[6],
+                   uint8_t sid, const uint8_t *data, uint8_t dlen) {
+    return rec_ext_n(b, 0, 1, et, 0x01, addr_le, sid, data, dlen, -58);
+}
+
+static void test_ext_report_creates_a_device(void) {
+    uint8_t ad[32];
+    int dl = build_ad(ad);
+    int n = rec_ext(g_rec, 0x0001, ADDR_LE, 0x04, ad, (uint8_t)dl);
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
     ble_snapshot(&g_s);
-    ASSERT_EQ((int)g_s.ble_host.ext_adv_undecoded, 1);
+    ASSERT_EQ(g_s.ble_device_count, 1);
+    const ble_device_t *d = &g_s.ble_devices[0];
+    ASSERT_EQ(d->addr[0], 0xC1);
+    ASSERT_EQ(d->addr[5], 0x66);
+    ASSERT_STR(d->name, "sloth-tag");
+    ASSERT_EQ(d->uuid16, 0xFEAA);
+    ASSERT_EQ(d->rssi, -58);
+    ASSERT_EQ(d->ext_adv, 1);
+    ASSERT_EQ(d->primary_phy, 0x03);
+    ASSERT_EQ(d->secondary_phy, 0x02);
+    ASSERT_EQ(d->adv_sid, 0x04);
+    ASSERT_EQ(d->last_event_type, BLE_EVT_EXT_ADV);
+    ASSERT_STR(ble_adv_type_name(d->last_event_type), "EXT_ADV");
+    ASSERT_EQ((int)g_s.ble_host.ext_adv_reports, 1);
+    ASSERT_EQ((int)g_s.ble_host.ext_adv_undecoded, 0);
+    ASSERT_EQ((int)g_s.ble_host.adv_reports, 0);
+}
+
+/* A legacy PDU heard through an extended scan is the same advertiser,
+ * the same PDU type and the same row as through a legacy scan.
+ *
+ * Seen to fail: with ext_adv set for every 0x0D report (the Legacy-bit
+ * test removed in observe_locked()), the row reads ext_adv 1. */
+static void test_ext_legacy_bit_report_is_the_legacy_row(void) {
+    uint8_t ad[32];
+    int dl = build_ad(ad);
+    int n = rec_adv(g_rec, 0, 0x00 /* ADV_IND */, 0x01, ADDR_LE, ad,
+                    (uint8_t)dl, -60);
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_ADV);
+    n = rec_ext(g_rec, EXT_LEGACY_ADV_IND, ADDR_LE, 0xFF, ad, (uint8_t)dl);
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_device_count, 1);
+    const ble_device_t *d = &g_s.ble_devices[0];
+    ASSERT_EQ((int)d->adv_count, 2);
+    ASSERT_EQ(d->last_event_type, 0x00);
+    ASSERT_EQ(d->pdu_mask, 0x01);
+    ASSERT_EQ(d->ext_adv, 0);
+    ASSERT_EQ(d->primary_phy, 0x01);
+    ASSERT_EQ(d->adv_sid, 0xFF);
+}
+
+/* Seen to fail: with the Num_Reports > 1 refusal relaxed to > 2, the
+ * verdict is MALFORMED (the single-report length check refuses the
+ * event) instead of EXT_MULTI_REJECTED. That the row count stays 0 is
+ * not separately isolated: no single edit both lets the event past the
+ * refusal and past the length check. */
+static void test_ext_multi_report_is_rejected_and_counted(void) {
+    int n = put_hdr(g_rec, 0, BT_MON_EVENT_PKT);
+    g_rec[n++] = 0x3E;
+    g_rec[n++] = 2 + 24 + 24;
+    g_rec[n++] = 0x0D;
+    g_rec[n++] = 2;
+    for (int r = 0; r < 2; r++) {
+        memset(g_rec + n, 0, 24);
+        g_rec[n + 0] = 0x10;                  /* Legacy ADV_NONCONN_IND */
+        g_rec[n + 2] = 0x01;
+        memcpy(g_rec + n + 3, ADDR_LE, 6);
+        g_rec[n + 3] ^= (uint8_t)r;
+        g_rec[n + 9] = 0x01;
+        g_rec[n + 11] = 0xFF;
+        g_rec[n + 13] = (uint8_t)-50;
+        n += 24;                              /* Data_Length 0 */
+    }
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_MULTI_REJECTED);
+    ble_snapshot(&g_s);
     ASSERT_EQ(g_s.ble_device_count, 0);
+    ASSERT_EQ((int)g_s.ble_host.ext_multi_rejected, 1);
+    ASSERT_EQ((int)g_s.ble_host.ext_adv_undecoded, 1);
+    ASSERT_EQ((int)g_s.ble_host.ext_adv_reports, 0);
+    /* Counted apart from the legacy refusals. */
+    ASSERT_EQ((int)g_s.ble_host.multi_rejected, 0);
+}
+
+/* Seen to fail: with the single-report length test relaxed from `!=`
+ * to `>`, the first of the two records is decoded and a row appears. */
+static void test_ext_num_reports_disagreeing_is_malformed(void) {
+    uint8_t ad[32];
+    int dl = build_ad(ad);
+    int n = rec_ext(g_rec, 0x0000, ADDR_LE, 0x01, ad, (uint8_t)dl);
+    /* A second whole report after the first, Num_Reports still 1:
+     * its 24 octets copied from past another record's monitor header
+     * (4) and event header (0x3E plen 0x0D Num_Reports). */
+    uint8_t tmp[64];
+    int n2 = rec_ext(tmp, 0x0000, ADDR_LE, 0x02, NULL, 0);
+    memcpy(g_rec + n, tmp + 8, (size_t)(n2 - 8));
+    n += n2 - 8;
+    g_rec[5] = (uint8_t)(n - 6);             /* param_len covers both */
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_MALFORMED);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_device_count, 0);
+    ASSERT_EQ((int)g_s.ble_host.malformed, 1);
+    /* Captured short: the record ends before param_len does. */
+    n = rec_ext(g_rec, 0x0000, ADDR_LE, 0x01, ad, (uint8_t)dl);
+    ASSERT_EQ((int)ble_mon_ingest(g_rec, (size_t)n - 4, (size_t)n, TS, 0),
+              (int)BLE_REC_MALFORMED);
+    ASSERT_EQ((int)ing(g_rec, n - 1, 0), (int)BLE_REC_MALFORMED);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_device_count, 0);
+}
+
+/* An anonymous advertisement carries no AdvA; whatever its Address
+ * field holds is not an identity, so every one a sensor hears is one
+ * row (ble_snoop.h, BLE_ADDR_ANONYMOUS).
+ *
+ * Seen to fail: with the anonymous test dropped from the parser's
+ * Address copy, the three reports are three rows. */
+static void test_ext_anonymous_advertisers_are_one_row(void) {
+    uint8_t a[6];
+    for (int i = 0; i < 3; i++) {
+        memcpy(a, ADDR_LE, 6);
+        a[0] = (uint8_t)(0x10 + i);
+        int n = rec_ext_n(g_rec, 0, 1, 0x0000, 0xFF, a, 0x01, NULL, 0, -70);
+        ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    }
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_device_count, 1);
+    const ble_device_t *d = &g_s.ble_devices[0];
+    ASSERT_EQ(d->addr_type, 0xFF);
+    static const uint8_t Z[6] = { 0 };
+    ASSERT(memcmp(d->addr, Z, 6) == 0);
+    ASSERT_EQ((int)d->adv_count, 3);
+}
+
+/* A fragment train (ble_hci.h): the first fragment decoded from the
+ * structures it holds whole, the rest counted and never walked.
+ *
+ * Seen to fail: with the train lookup in ext_report() disabled
+ * (`if (t >= 0)` made `if (0)`), the middle fragment's octets are walked
+ * from the top and its "evil" name lands on the row. */
+static void test_ext_fragment_train_decodes_only_the_first(void) {
+    /* First fragment: Complete Local Name "frag", then a Manufacturer
+     * structure the boundary cut (length 9, three octets present). */
+    const uint8_t f1[] = { 0x05, 0x09, 'f', 'r', 'a', 'g',
+                           0x09, 0xFF, 0x4C };
+    /* Middle fragment: the rest of the cut structure, whose octets read
+     * from the top look like a name structure. */
+    const uint8_t f2[] = { 0x05, 0x09, 'e', 'v', 'i', 'l' };
+    const uint8_t f3[] = { 0x02, 0x0A, 0x00 };
+    int n = rec_ext(g_rec, 0x0000 | EXT_STATUS_MORE, ADDR_LE, 0x02, f1, sizeof(f1));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    n = rec_ext(g_rec, 0x0000 | EXT_STATUS_MORE, ADDR_LE, 0x02, f2, sizeof(f2));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_FRAGMENT);
+    n = rec_ext(g_rec, 0x0000, ADDR_LE, 0x02, f3, sizeof(f3));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_FRAGMENT);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_device_count, 1);
+    const ble_device_t *d = &g_s.ble_devices[0];
+    ASSERT_STR(d->name, "frag");
+    ASSERT_EQ(d->has_mfr, 0);           /* cut, so not taken */
+    ASSERT_EQ(d->has_tx_power, 0);      /* in the last fragment, never walked */
+    ASSERT_EQ((int)d->adv_count, 1);
+    ASSERT_EQ((int)g_s.ble_host.ext_adv_reports, 1);
+    ASSERT_EQ((int)g_s.ble_host.ext_adv_partial, 1);
+    ASSERT_EQ((int)g_s.ble_host.ext_fragments, 2);
+    ASSERT_EQ((int)g_s.ble_host.ext_adv_undecoded, 2);
+    /* The complete fragment closed the train: the next report is a new
+     * advertisement and decoded. */
+    n = rec_ext(g_rec, 0x0000, ADDR_LE, 0x02, f3, sizeof(f3));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_devices[0].has_tx_power, 1);
+}
+
+static void test_ext_truncated_fragment_ends_the_train(void) {
+    const uint8_t f[] = { 0x02, 0x01, 0x06 };
+    int n = rec_ext(g_rec, EXT_STATUS_MORE, ADDR_LE, 0x02, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    n = rec_ext(g_rec, EXT_STATUS_TRUNC, ADDR_LE, 0x02, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_FRAGMENT);
+    n = rec_ext(g_rec, 0x0000, ADDR_LE, 0x02, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    /* A truncated report with no train open is its own first fragment:
+     * decoded, partial, and opens nothing. */
+    n = rec_ext(g_rec, EXT_STATUS_TRUNC, ADDR_LE, 0x09, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    n = rec_ext(g_rec, 0x0000, ADDR_LE, 0x09, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    ble_snapshot(&g_s);
+    ASSERT_EQ((int)g_s.ble_host.ext_adv_partial, 2);
+    ASSERT_EQ((int)g_s.ble_host.ext_fragments, 1);
+}
+
+/* A train is one advertising set of one advertiser on one adapter; a
+ * report from another set, address or adapter is not its tail. */
+static void test_ext_trains_are_keyed_per_set(void) {
+    const uint8_t f[] = { 0x02, 0x01, 0x06 };
+    int n = rec_ext(g_rec, EXT_STATUS_MORE, ADDR_LE, 0x02, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    n = rec_ext(g_rec, 0x0000, ADDR_LE, 0x03, f, sizeof(f));       /* SID */
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    uint8_t other[6];
+    memcpy(other, ADDR_LE, 6); other[0] ^= 0x80;
+    n = rec_ext(g_rec, 0x0000, other, 0x02, f, sizeof(f));          /* address */
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    n = rec_ext_n(g_rec, 1, 1, 0x0000, 0x01, ADDR_LE, 0x02, f, sizeof(f), -58);
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);         /* adapter */
+    n = rec_ext_n(g_rec, 0, 1, 0x0000, 0x00, ADDR_LE, 0x02, f, sizeof(f), -58);
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);         /* addr type */
+    n = rec_ext(g_rec, 0x0008, ADDR_LE, 0x02, f, sizeof(f));        /* scan rsp */
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    /* A Legacy-bit report never joins or opens a train. */
+    n = rec_ext(g_rec, EXT_LEGACY_NONCONN, ADDR_LE, 0x02, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    /* And the train is still open for its own tail. */
+    n = rec_ext(g_rec, 0x0000, ADDR_LE, 0x02, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_FRAGMENT);
+}
+
+/* The train table is fixed: the oldest open train is pushed out and
+ * counted, and its tail is then decoded as a fresh report. */
+static void test_ext_full_train_table_evicts_the_oldest(void) {
+    const uint8_t f[] = { 0x02, 0x01, 0x06 };
+    uint8_t a[6];
+    for (int i = 0; i <= BLE_EXT_TRAINS; i++) {
+        memcpy(a, ADDR_LE, 6);
+        a[1] = (uint8_t)i;
+        int n = rec_ext(g_rec, EXT_STATUS_MORE, a, 0x01, f, sizeof(f));
+        ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    }
+    ble_snapshot(&g_s);
+    ASSERT_EQ((int)g_s.ble_host.ext_trains_evicted, 1);
+    memcpy(a, ADDR_LE, 6);
+    a[1] = 0;                                 /* the first, evicted */
+    int n = rec_ext(g_rec, 0x0000, a, 0x01, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    a[1] = 1;                                 /* the second, still open */
+    n = rec_ext(g_rec, 0x0000, a, 0x01, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_FRAGMENT);
+}
+
+/* A controller that goes away or is reset drops whatever it was
+ * assembling; the next report from it starts an advertisement.
+ *
+ * Seen to fail: with trains_clear_adapter() removed from
+ * ingest_del_index(), the report after DEL_INDEX is a FRAGMENT. */
+static void test_ext_del_index_and_reset_drop_open_trains(void) {
+    const uint8_t f[] = { 0x02, 0x01, 0x06 };
+    int n = rec_ext(g_rec, EXT_STATUS_MORE, ADDR_LE, 0x02, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    n = rec_del_index(g_rec, 0);
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_DEL_INDEX);
+    n = rec_ext(g_rec, 0x0000, ADDR_LE, 0x02, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+
+    n = rec_ext(g_rec, EXT_STATUS_MORE, ADDR_LE, 0x02, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    n = rec_cmd(g_rec, 0x0C03, NULL, 0);      /* HCI Reset, §7.3.2 */
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_COMMAND);
+    n = rec_ext(g_rec, 0x0000, ADDR_LE, 0x02, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+}
+
+/* Every record lands in exactly one top-level bucket, so they sum to
+ * ble_records; ext_multi_rejected and ext_fragments split
+ * ext_adv_undecoded and are not buckets of their own. */
+static void test_ext_buckets_sum_to_records(void) {
+    const uint8_t f[] = { 0x02, 0x01, 0x06 };
+    int n = rec_ext(g_rec, EXT_STATUS_MORE, ADDR_LE, 0x02, f, sizeof(f));
+    ing(g_rec, n, 0);
+    n = rec_ext(g_rec, 0x0000, ADDR_LE, 0x02, f, sizeof(f));
+    ing(g_rec, n, 0);
+    n = rec_ext(g_rec, 0x0060, ADDR_LE, 0x02, f, sizeof(f));   /* reserved */
+    ing(g_rec, n, 0);
+    uint8_t ad[32];
+    int dl = build_ad(ad);
+    n = rec_adv(g_rec, 0, 0x00, 0x01, ADDR_LE, ad, (uint8_t)dl, -60);
+    ing(g_rec, n, 0);
+    ble_snapshot(&g_s);
+    const ble_host_t *h = &g_s.ble_host;
+    ASSERT_EQ((int)h->records, 4);
+    ASSERT_EQ((int)h->ext_adv_reports, 1);
+    ASSERT_EQ((int)h->ext_adv_undecoded, 1);
+    ASSERT_EQ((int)h->malformed, 1);
+    ASSERT_EQ((int)h->adv_reports, 1);
+    ASSERT_EQ((int)h->ext_adv_undecoded,
+              (int)(h->ext_multi_rejected + h->ext_fragments));
+    ASSERT_EQ((int)h->records,
+              (int)(h->index_records + h->adv_reports + h->multi_rejected +
+                    h->ext_adv_reports + h->ext_adv_undecoded + h->ignored +
+                    h->malformed + h->commands));
 }
 
 static void test_bad_lengths_are_malformed_not_decoded(void) {
@@ -1156,7 +1480,17 @@ void run_ble_hci_tests(void) {
     RUN_TEST(test_new_index_records_the_controller);
     RUN_TEST(test_single_report_creates_a_device);
     RUN_TEST(test_multi_report_event_is_rejected_and_counted);
-    RUN_TEST(test_extended_report_is_counted_not_decoded);
+    RUN_TEST(test_ext_report_creates_a_device);
+    RUN_TEST(test_ext_legacy_bit_report_is_the_legacy_row);
+    RUN_TEST(test_ext_multi_report_is_rejected_and_counted);
+    RUN_TEST(test_ext_num_reports_disagreeing_is_malformed);
+    RUN_TEST(test_ext_anonymous_advertisers_are_one_row);
+    RUN_TEST(test_ext_fragment_train_decodes_only_the_first);
+    RUN_TEST(test_ext_truncated_fragment_ends_the_train);
+    RUN_TEST(test_ext_trains_are_keyed_per_set);
+    RUN_TEST(test_ext_full_train_table_evicts_the_oldest);
+    RUN_TEST(test_ext_del_index_and_reset_drop_open_trains);
+    RUN_TEST(test_ext_buckets_sum_to_records);
     RUN_TEST(test_bad_lengths_are_malformed_not_decoded);
     RUN_TEST(test_records_outside_the_allow_list_are_never_read);
     RUN_TEST(test_scan_mode_unknown_until_parameters_are_seen);

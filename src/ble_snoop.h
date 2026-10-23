@@ -15,9 +15,9 @@
  * Covers the legacy LE Advertising Report (HCI_EV_LE_Meta subevent 0x02,
  * Bluetooth Core Spec v5.x Vol 4 Part E §7.7.65.2) and the AD-structure
  * TLVs inside its Data field (Vol 3 Part C §11, types registered in the
- * Bluetooth "Assigned Numbers" supplement). The Extended Advertising
- * Report (subevent 0x0D, BT 5+ coded/extended PHY) is NOT decoded here —
- * named as a follow-up slice, not built.
+ * Bluetooth "Assigned Numbers" supplement), and since the 0x0D slice the
+ * LE Extended Advertising Report (subevent 0x0D, §7.7.65.13), one report
+ * per event: ble_hci_ext_adv_parse() below says why only one.
  */
 
 #define BLE_LOCAL_NAME_MAX 32
@@ -32,6 +32,26 @@ typedef struct {
     uint8_t addr[6];    /* as received over HCI (little-endian octet order) */
     bool    has_rssi;   /* false when the HCI RSSI field reads 127 ("not available") */
     int8_t  rssi;
+
+    /* LE Extended Advertising Report only (subevent 0x0D, §7.7.65.13);
+     * all zero for a legacy 0x02 report. `event_type` above is still the
+     * legacy 0x02 code for a report with the Legacy bit set (so a legacy
+     * PDU heard through an extended scan keys the same rows and flood
+     * windows as the same PDU through a legacy scan), and
+     * BLE_EVT_EXT_ADV / BLE_EVT_EXT_SCAN_RSP for an extended PDU. */
+    bool     ext;              /* decoded from a 0x0D report */
+    uint16_t ext_event_type;   /* the raw Event_Type bit field */
+    uint8_t  data_status;      /* BLE_EXT_DATA_*, Event_Type bits 5-6 */
+    uint8_t  primary_phy;      /* 0x01 LE 1M, 0x03 LE Coded */
+    uint8_t  secondary_phy;    /* 0x00 none, 0x01 1M, 0x02 2M, 0x03 Coded */
+    uint8_t  sid;              /* Advertising_SID 0x00..0x0F, 0xFF no ADI */
+    bool     has_adv_tx_power; /* false when TX_Power reads 127 */
+    int8_t   adv_tx_power;     /* dBm, from the report header, not an AD structure */
+    uint16_t periodic_interval;/* x 1.25 ms, 0 = no periodic advertising */
+    bool     directed;         /* Event_Type bit 2 */
+    uint8_t  direct_addr_type;
+    uint8_t  direct_addr[6];   /* HCI order, as received */
+    uint8_t  data_len;         /* Data_Length as received */
 
     /* From the AD-structure walk of that report's Data field. Every
      * has_* field is false (0) until ble_ad_parse() finds that AD type;
@@ -73,6 +93,30 @@ typedef struct {
     bool truncated; /* an AD structure's declared length ran past the data blob */
 } ble_adv_report_t;
 
+/* Legacy-PDU codes are the 0x02 Event_Type values 0x00..0x04
+ * (§7.7.65.2). These two are sloth's own, outside that range, for a
+ * 0x0D report whose Legacy bit is clear: an extended advertising PDU
+ * (AUX_ADV_IND or its chain) and the scan response to one. */
+#define BLE_EVT_EXT_ADV        0x05
+#define BLE_EVT_EXT_SCAN_RSP   0x06
+
+/* Event_Type bits 5-6 of a 0x0D report. 0x03 is reserved. */
+#define BLE_EXT_DATA_COMPLETE   0x00
+#define BLE_EXT_DATA_INCOMPLETE 0x01  /* more fragments to come */
+#define BLE_EXT_DATA_TRUNCATED  0x02  /* incomplete, no more to come */
+
+/* Address_Type 0xFF in a 0x0D report: an anonymous advertisement, no
+ * AdvA. The parser zeroes `addr` for it, so every anonymous advertiser
+ * a sensor hears is one row and one flood address, not a row per
+ * whatever the Address field happened to hold. */
+#define BLE_ADDR_ANONYMOUS     0xFF
+
+/* The fixed fields of one 0x0D report, before its Data: Event_Type(2)
+ * Address_Type Address(6) Primary_PHY Secondary_PHY Advertising_SID
+ * TX_Power RSSI Periodic_Advertising_Interval(2) Direct_Address_Type
+ * Direct_Address(6) Data_Length. */
+#define BLE_EXT_REPORT_FIXED   24
+
 /* Walks the AD structures (length, type, value) inside one advertising
  * report's Data field and fills in the AD-derived fields of `out`.
  * Does not touch the HCI-header fields (event_type/addr_type/addr/rssi) —
@@ -97,5 +141,38 @@ typedef void (*ble_report_cb_t)(const ble_adv_report_t *report, void *ctx);
  * decoded, or 0 for a buffer that is too short, the wrong event/subevent
  * code, or Num_Reports == 0. */
 int ble_hci_adv_walk(const uint8_t *evt, size_t len, ble_report_cb_t cb, void *ctx);
+
+/* ble_hci_ext_adv_parse() results. */
+#define BLE_EXT_PARSE_MALFORMED 0
+#define BLE_EXT_PARSE_OK        1
+#define BLE_EXT_PARSE_MULTI     2
+
+/* Parses an HCI LE Meta event (0x3E) carrying an LE Extended
+ * Advertising Report (subevent 0x0D, Core Specification v5.x Vol 4
+ * Part E §7.7.65.13). `len` is the event as framed: event code,
+ * parameter length, then exactly that many parameter octets.
+ *
+ * One report: fills `out` (zeroed first) and returns
+ * BLE_EXT_PARSE_OK. The parameter length must be exactly
+ * 2 + BLE_EXT_REPORT_FIXED + Data_Length, so an overlong Data_Length or
+ * a trailing octet is MALFORMED, never a prefix. A Legacy-bit report
+ * must say data complete, carry at most 31 octets, and be one of the six
+ * legacy Event_Type values the clause lists; anything else is
+ * MALFORMED. Data status 0x03 (reserved) is MALFORMED.
+ *
+ * Num_Reports > 1: returns BLE_EXT_PARSE_MULTI, and `out` is not
+ * written, when the Data_Lengths account for every parameter octet
+ * under at least one of the two layouts below; a Num_Reports neither
+ * layout can account for is MALFORMED, not MULTI. The clause draws the parameters as per-field
+ * arrays, as it does for 0x02; the kernel reads consecutive per-report
+ * records. Both layouts carry the same total length, so length cannot
+ * tell them apart, and for more than one report they put every field
+ * after the first Event_Type at a different offset. The same rule as
+ * legacy reports therefore holds: decoded only where the layouts
+ * agree, which is one report. docs/wiki/ble.md has the reconciliation.
+ *
+ * Num_Reports == 0, a wrong event or subevent code, or a short buffer
+ * is MALFORMED. Never reads past `len`. */
+int ble_hci_ext_adv_parse(const uint8_t *evt, size_t len, ble_adv_report_t *out);
 
 #endif /* BLE_SNOOP_H */

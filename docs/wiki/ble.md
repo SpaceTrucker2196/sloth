@@ -23,10 +23,10 @@ host it listens through was told to transmit.
 `src/capture/capture.c`
 (`capture_fallback_device`), `src/main.c`, `MISSION.md` §1–§2;
 Bluetooth Core Specification v5.4 Vol 4 Part E §5.4, §7.1, §7.3.2, §7.3.18,
-§7.7.65.2, §7.8; Linux `include/net/bluetooth/hci_mon.h` and
+§7.7.65.2, §7.7.65.13, §7.8; Vol 6 Part B §2.3.1 (legacy PDU payload); Linux `include/net/bluetooth/hci_mon.h` and
 `net/bluetooth/hci_sock.c`; libpcap `pcap-bt-monitor-linux.c`; #144.
 
-**Last updated**: 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
+**Last updated**: 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
 
 ---
 
@@ -79,7 +79,7 @@ are never copied.
 | NEW_INDEX (0) | controller type, bus, address, name | `ble_controllers` (primary type 0x00 only), a fresh per-controller state |
 | DEL_INDEX (1) | nothing (no payload) | the controller leaves `ble_controllers` and its on-state is dropped |
 | EVENT (3) | LE Meta 0x3E, subevent 0x02 LE Advertising Report, **one report** | the advertiser row |
-| EVENT (3) | LE Meta 0x3E, subevent 0x0D LE Extended Advertising Report | counted in `ble_ext_adv_undecoded`, not decoded yet |
+| EVENT (3) | LE Meta 0x3E, subevent 0x0D LE Extended Advertising Report, **one report** | the advertiser row, [as below](#extended-advertising-reports-0x0d) |
 | COMMAND (2) | the host's own scan, advertise and connect commands, listed under [own transmissions](#own-transmissions) | scan mode, filter policy, own-transmission state |
 
 **Nothing read off the channel is written anywhere verbatim** — not to
@@ -104,6 +104,77 @@ Until the layout is confirmed against a controller, sloth decodes none
 of a multi-report event rather than attribute one device's name to
 another's address. Controllers in practice report one at a time; a
 rising count here is advertising sloth heard and did not use.
+
+**The LE Extended Advertising Report (0x0D) is held to the same rule**,
+counted apart in `ble_ext_multi_report_rejected`. The reason carries
+over unchanged: §7.7.65.13 draws its parameters as per-field arrays too
+(every Event_Type, then every Address_Type, ... every Data_Length, then
+every Data), the kernel reads consecutive 24-octet-plus-Data records,
+and both layouts occupy the same total length, so no length check can
+tell which one a controller sent. For two or more reports every field
+after the first Event_Type sits at a different offset under each, and
+a wrong guess hands one advertiser's PHYs, SID and AD structures to
+another's address — worse for 0x0D than for 0x02, because those fields
+feed the flood keys. What 0x0D does get is a stricter refusal: a
+`Num_Reports` > 1 is only `multi_report_rejected` when its Data_Lengths
+account for every parameter octet under at least one of the two
+layouts; a `Num_Reports` that neither layout can account for is
+`ble_records_malformed`, since it is not an event sloth could decode
+once the layout is settled.
+
+## Extended advertising reports (0x0D)
+
+A BT 5 controller that the host drives with the extended scan commands
+(BlueZ does whenever the controller supports them) reports everything
+it hears as subevent 0x0D, legacy PDUs included. Before this decode
+such a sensor fed nothing to the table or the detectors. One report
+(§7.7.65.13) is decoded field by field, and the parameter length must
+be exactly the 24 fixed octets plus Data_Length — an overlong
+Data_Length or a trailing octet is malformed, never a prefix.
+
+| Field | What sloth does with it |
+|---|---|
+| Event_Type bits 0-3 (connectable, scannable, directed, scan response) | with the Legacy bit set, mapped to the 0x02 code of the same PDU — the six combinations the clause lists, anything else malformed; with it clear, `EXT_ADV`, or `EXT_SCAN_RSP` when bit 3 is set |
+| Event_Type bit 4 (Legacy) | a legacy PDU through an extended scan: the same row, `last_pdu` and flood key as through a legacy scan, so `BLE_ADV_FLOOD` does not depend on which scan commands the stack chose. Must say data complete and carry at most 31 octets (Vol 6 Part B §2.3.1), or it is malformed |
+| Event_Type bits 5-6 (data status) | complete, incomplete with more to come, or incomplete truncated; 0b11 is reserved and malformed. See fragments below |
+| Address_Type, Address | the row key. `0xFF` is an **anonymous** advertisement with no AdvA: the address is zeroed, so every anonymous advertiser a sensor hears is one row (`addr_type` 255) and one flood address, not a row per whatever the Address field held |
+| Primary_PHY, Secondary_PHY, Advertising_SID | the last 0x0D report's, on the row (`primary_phy`, `secondary_phy`, `adv_sid`; `-1` SID for none or no ADI) |
+| TX_Power, RSSI | 127 is "not available" for both and sets nothing. TX_Power is the header's, not the AD TX Power Level structure, and is not kept |
+| Periodic_Advertising_Interval, Direct_Address_Type, Direct_Address | decoded and bounded, not kept on the row |
+| Data_Length, Data | walked by the same AD-structure decoder as a legacy report |
+
+`ext_adv` on the row is 1 once an extended (non-legacy) PDU was heard
+from it.
+
+### Fragments are not reassembled
+
+An extended advertisement longer than one event arrives as a train of
+reports: data status *incomplete* on all but the last, which says
+*complete* (or *truncated* when the controller gave up). sloth holds no
+reassembly buffer. The **first** fragment of a train is decoded like a
+complete report: its Data starts at the first octet of the
+advertisement, so every AD structure it holds whole is correct, and
+the one the boundary cut is dropped (the walker's truncation rule).
+Such a report is counted in `ble_ext_adv_partial`. The middle and last
+fragments begin mid-structure, and walking them from the top would read
+AD types out of another structure's value, so they are recognised and
+counted in `ble_ext_adv_fragments`, never walked. To recognise them a
+train is held open in a fixed table of 16 (adapter, address, address
+type, SID, scan response) keys — no data, just the key — until its
+complete or truncated fragment arrives, or its controller resets or
+leaves. A full table pushes out its oldest train (`ble_ext_trains_evicted`);
+that train's remaining fragments are then decoded as fresh reports,
+which is the one way a mid-structure fragment can reach the AD walker,
+and the counter says when it may have. A legacy PDU is never
+fragmented, so a Legacy-bit report never opens or joins a train.
+
+The cost is the AD structures past the first fragment: a name or a
+manufacturer structure that only arrives in a later fragment is not
+on the row, and the detectors key on only what the first fragment held
+whole. A legacy-length advertisement fits one report and is never cut.
+
+`ble_ext_adv_undecoded` is now the 0x0D records that reached no row:
+`ble_ext_multi_report_rejected` plus `ble_ext_adv_fragments`.
 
 ## The advertiser table
 
@@ -275,9 +346,19 @@ the point of sloth's fields is that it checks itself.
 3. **Start a passive LE scan** with a tool that sets `LE_Scan_Type` =
    passive. BlueZ's deprecated `hcitool` does it directly:
    `hcitool -i hci0 lescan --passive --duplicates`. It uses the legacy
-   scan commands, so reports arrive as subevent 0x02, the one this slice
-   decodes. Another scanner on the same controller (bluetoothd's own)
-   can make it fail with an I/O error; stop that first.
+   scan commands, so reports arrive as subevent 0x02. Another scanner on
+   the same controller (bluetoothd's own) can make it fail with an I/O
+   error; stop that first. On a **BT 5 controller** the legacy commands
+   may be refused once the stack has used the extended ones (the
+   controller may not mix the two sets between resets), and since the
+   0x0D decode a passive **extended** scan is equally usable: any tool,
+   other than `bluetoothctl` and `btmgmt` (whose discovery is active),
+   that sends LE Set Extended Scan Parameters (0x2041) with
+   `LE_Scan_Type` = passive on every PHY it enables and then LE Set
+   Extended Scan Enable (0x2042). Its reports arrive as subevent 0x0D,
+   legacy PDUs included. **sloth still never starts a scan** of either
+   kind and sends neither command: the tool is the operator's, and
+   step 4 is how sloth checks it.
 4. **Verify in `sensor_health`**:
    - `ble_own_tx_baseline` = `1`, `ble_own_tx_asserted` = `""` and
      `ble_scan_mode` = `passive` — no transmitting state is on and no
@@ -287,7 +368,8 @@ the point of sloth's fields is that it checks itself.
      crossed the channel since sloth opened it;
    - `ble_scan_accept_list` = `0` — the scan is not limited to known
      devices;
-   - `ble_adv_reports` climbing.
+   - `ble_adv_reports` climbing under a legacy scan, or
+     `ble_ext_adv_reports` under an extended one.
 
    If `ble_scan_mode` reads `active` or `BT_OWN_TRANSMIT` fires, the host
    is on the air: stop the scan and start again from step 2. A powered
@@ -296,10 +378,10 @@ the point of sloth's fields is that it checks itself.
    off in the stack (`bluetoothctl discoverable off`, and
    `btmgmt connectable off`) should send the Write Scan Enable that ends
    it — confirm `ble_own_tx_on` drops `inquiry_page_scan`, since the
-   stack, not sloth, decides what it sends. If
-   `ble_ext_adv_undecoded` climbs while `ble_adv_reports` stays flat, the
-   stack is scanning with the extended commands (BlueZ does on BT 5
-   controllers), and this slice decodes nothing from those reports yet.
+   stack, not sloth, decides what it sends. A climbing
+   `ble_ext_adv_undecoded` is extended reports that reached no row:
+   multi-report events (`ble_ext_multi_report_rejected`) or the tails of
+   fragmented advertisements (`ble_ext_adv_fragments`).
 
 ### Warnings
 
@@ -327,7 +409,10 @@ no capture is committed.
 
 ## Not built yet
 
-- Extended Advertising Report (0x0D) decode — counted, not decoded.
+- Extended Advertising Reports with `Num_Reports` > 1, and reassembly of
+  fragmented ones — refused and counted, for the reasons above.
+- LE Periodic Advertising Reports (subevent 0x0F) and the other LE Meta
+  subevents — outside the allow-list (`ble_records_ignored`).
 - Address-rotation correlation and the 802.11 crosswalk — split out of
   #144.
 - Watchlist rows: none shipped; each needs its primary source.

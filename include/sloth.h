@@ -2648,8 +2648,10 @@ typedef struct {
     uint8_t  addr[6];          /* display order, most significant octet first */
     uint8_t  addr_type;        /* 0 public, 1 random, 2/3 resolved identity */
     uint16_t adapter;          /* HCI index of the controller that heard it */
-    uint8_t  last_event_type;  /* ADV_IND .. SCAN_RSP, Vol 4 Part E §7.7.65.2 */
-    /* Bit per Event_Type 0..4 ever heard from this row, sticky (#144
+    /* ADV_IND .. SCAN_RSP, Vol 4 Part E §7.7.65.2, or BLE_EVT_EXT_ADV /
+     * BLE_EVT_EXT_SCAN_RSP (src/ble_snoop.h) for an extended PDU */
+    uint8_t  last_event_type;
+    /* Bit per Event_Type 0..6 ever heard from this row, sticky (#144
      * slice 4 review). An ADV_IND and its SCAN_RSP alternate, so the
      * last type is display only: the JSONL change signature takes this
      * mask, which settles, and never last_event_type, which flips. */
@@ -2700,6 +2702,13 @@ typedef struct {
     /* BLE_WATCHLIST category this row matched, "" for none. A category,
      * never an identity (src/ble_watchlist.h). */
     char     watch_cat[16];
+    /* From LE Extended Advertising Reports (0x0D slice). ext_adv is 1
+     * once an extended (non-legacy) PDU was heard from the row, sticky;
+     * the PHYs and SID are the last 0x0D report's, 0 / 0xFF until one. */
+    uint8_t  ext_adv;
+    uint8_t  primary_phy;      /* 0 unknown, 0x01 LE 1M, 0x03 LE Coded */
+    uint8_t  secondary_phy;    /* 0 none or unknown, 0x01 1M, 0x02 2M, 0x03 Coded */
+    uint8_t  adv_sid;          /* 0x00..0x0F, 0xFF none */
 } ble_device_t;
 
 #define BLE_HID_APPEARANCE  0x01
@@ -2854,7 +2863,18 @@ typedef struct {
     uint64_t records;              /* every monitor record offered */
     uint64_t adv_reports;          /* single-report LE Advertising Reports decoded */
     uint64_t multi_rejected;       /* Num_Reports > 1, refused whole (layout unconfirmed) */
-    uint64_t ext_adv_undecoded;    /* LE Extended Advertising Report, not decoded yet */
+    uint64_t ext_adv_reports;      /* single-report LE Extended Advertising Reports decoded */
+    /* LE Extended Advertising Reports heard and not put in the table:
+     * ext_multi_rejected + ext_fragments, one bucket between them. */
+    uint64_t ext_adv_undecoded;
+    uint64_t ext_multi_rejected;   /* 0x0D, Num_Reports > 1, refused whole (as 0x02) */
+    uint64_t ext_fragments;        /* 0x0D continuation fragments of an open train */
+    /* Not buckets: of ext_adv_reports, how many were decoded from a
+     * leading or truncated fragment (data status incomplete), so from
+     * the AD structures the fragment held whole; and how many open
+     * fragment trains were pushed out of the bounded table. */
+    uint64_t ext_adv_partial;
+    uint64_t ext_trains_evicted;
     uint64_t index_records;        /* NEW_INDEX and DEL_INDEX records */
     uint64_t commands;             /* allow-listed host commands read */
     uint64_t ignored;              /* outside the allow-list, dropped unread */

@@ -4798,3 +4798,21 @@ readable schema is tied to `DB_SCHEMA_VERSION` by a test; `alerts.key`
 is predicate-only; A2's sloth.db new MACs skip random ones before the
 limit; `seen:<=DATE` includes the day; `name:` and `has:name` skip
 NBNS group names.
+## 2026-10-22 — BLE: LE Extended Advertising Report (0x0D) decoded
+
+**Updated**: [ble.md](ble.md) — subevent 0x0D (Core Specification
+Vol 4 Part E §7.7.65.13) is decoded, one report per event, into the
+same advertiser table and detectors as 0x02: a Legacy-bit report takes
+its legacy PDU code, so `BLE_ADV_FLOOD` keys the same on a BT 5
+controller under an extended scan; an extended PDU is `EXT_ADV` /
+`EXT_SCAN_RSP`; an anonymous advertisement (Address_Type 0xFF) is one
+zero-address row. The multi-report rule is reconciled explicitly: 0x0D
+is refused whole for the same layout ambiguity, and a `Num_Reports`
+neither layout accounts for is malformed. Fragments are not
+reassembled: the first is decoded from its whole AD structures, the
+rest are recognised through a fixed 16-key train table and counted.
+The passive-scan procedure allows a passive extended scan; sloth still
+starts none. [jsonl-schema.md](jsonl-schema.md) — five `ble_ext_*`
+counters in `sensor_health` (`ble_ext_adv_undecoded` narrowed to the
+0x0D records that reached no row), and `ext_adv`, `primary_phy`,
+`secondary_phy`, `adv_sid` on `ble_device`; all additive.

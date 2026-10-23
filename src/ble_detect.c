@@ -25,6 +25,8 @@ const char *ble_adv_type_name(uint8_t t) {
     case 0x02: return "ADV_SCAN_IND";
     case 0x03: return "ADV_NONCONN_IND";
     case 0x04: return "SCAN_RSP";
+    case BLE_EVT_EXT_ADV:      return "EXT_ADV";
+    case BLE_EVT_EXT_SCAN_RSP: return "EXT_SCAN_RSP";
     default:   return "adv";
     }
 }

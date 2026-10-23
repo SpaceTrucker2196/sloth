@@ -3,6 +3,9 @@
 
 #define HCI_EV_LE_META          0x3E
 #define HCI_SUBEVT_ADV_REPORT   0x02
+#define HCI_SUBEVT_EXT_ADV_REPORT 0x0D
+#define BLE_TX_POWER_NOT_AVAILABLE 127
+#define BLE_LEGACY_ADV_DATA_MAX 31
 #define BLE_RSSI_NOT_AVAILABLE  127
 
 #define BLE_AD_FLAGS            0x01
@@ -163,4 +166,115 @@ int ble_hci_adv_walk(const uint8_t *evt, size_t len, ble_report_cb_t cb, void *c
     }
 
     return decoded;
+}
+
+/* Event_Type bits of a 0x0D report (§7.7.65.13). */
+#define EXT_EVT_CONNECTABLE  0x0001
+#define EXT_EVT_SCANNABLE    0x0002
+#define EXT_EVT_DIRECTED     0x0004
+#define EXT_EVT_SCAN_RSP     0x0008
+#define EXT_EVT_LEGACY       0x0010
+
+/* The 0x02 Event_Type for a Legacy-bit report, -1 for a combination the
+ * clause does not list. Compared on bits 0-6: data status must already
+ * be complete, and bits 7-15 are reserved for future use. */
+static int legacy_code(uint16_t et) {
+    switch (et & 0x7F) {
+    case 0x13: return 0x00;   /* ADV_IND */
+    case 0x15: return 0x01;   /* ADV_DIRECT_IND */
+    case 0x12: return 0x02;   /* ADV_SCAN_IND */
+    case 0x10: return 0x03;   /* ADV_NONCONN_IND */
+    case 0x1B:                /* SCAN_RSP to an ADV_IND */
+    case 0x1A: return 0x04;   /* SCAN_RSP to an ADV_SCAN_IND */
+    default:   return -1;
+    }
+}
+
+/* Whether `n` reports' Data_Lengths account for exactly the `blen`
+ * octets after Num_Reports under at least one of the two layouts
+ * (ble_snoop.h): consecutive per-report records, each Data_Length at
+ * octet 23 of its record; or per-field arrays, Data_Length[0..n-1] at
+ * 23 * n, every Data after every fixed field. A count matching neither
+ * is not a multi-report event that could be decoded later, it is a
+ * Num_Reports that disagrees with the event. Reads only below `blen`;
+ * the caller has checked n * BLE_EXT_REPORT_FIXED <= blen. */
+static int ext_multi_accounts(const uint8_t *b, size_t blen, size_t n) {
+    size_t off = 0, i;
+    for (i = 0; i < n; i++) {
+        if (off + BLE_EXT_REPORT_FIXED > blen) break;
+        off += BLE_EXT_REPORT_FIXED + b[off + 23];
+    }
+    if (i == n && off == blen) return 1;
+    size_t sum = 0;
+    for (i = 0; i < n; i++) sum += b[23 * n + i];
+    return n * BLE_EXT_REPORT_FIXED + sum == blen;
+}
+
+int ble_hci_ext_adv_parse(const uint8_t *evt, size_t len, ble_adv_report_t *out) {
+    if (!evt || !out || len < 4) return BLE_EXT_PARSE_MALFORMED;
+    if (evt[0] != HCI_EV_LE_META) return BLE_EXT_PARSE_MALFORMED;
+    size_t plen = evt[1];
+    if (2 + plen != len || plen < 2) return BLE_EXT_PARSE_MALFORMED;
+    if (evt[2] != HCI_SUBEVT_EXT_ADV_REPORT) return BLE_EXT_PARSE_MALFORMED;
+
+    size_t num = evt[3];
+    if (num == 0) return BLE_EXT_PARSE_MALFORMED;
+    /* Either layout holds num fixed parts and then the Data; a parameter
+     * block too short for the fixed parts alone is no layout at all. */
+    if (2 + num * BLE_EXT_REPORT_FIXED > plen) return BLE_EXT_PARSE_MALFORMED;
+    if (num > 1)
+        return ext_multi_accounts(evt + 4, plen - 2, num)
+            ? BLE_EXT_PARSE_MULTI : BLE_EXT_PARSE_MALFORMED;
+
+    const uint8_t *r = evt + 4;
+    size_t dlen = r[23];
+    if (2 + BLE_EXT_REPORT_FIXED + dlen != plen) return BLE_EXT_PARSE_MALFORMED;
+
+    uint16_t et = (uint16_t)(r[0] | (r[1] << 8));
+    uint8_t status = (uint8_t)((et >> 5) & 0x03);
+    if (status == 0x03) return BLE_EXT_PARSE_MALFORMED;   /* reserved */
+
+    int code;
+    if (et & EXT_EVT_LEGACY) {
+        /* A legacy PDU is never fragmented and carries at most 31
+         * octets of AdvData or ScanRspData (Vol 6 Part B §2.3.1). */
+        if (status != BLE_EXT_DATA_COMPLETE || dlen > BLE_LEGACY_ADV_DATA_MAX)
+            return BLE_EXT_PARSE_MALFORMED;
+        code = legacy_code(et);
+        if (code < 0) return BLE_EXT_PARSE_MALFORMED;
+    } else {
+        code = (et & EXT_EVT_SCAN_RSP) ? BLE_EVT_EXT_SCAN_RSP : BLE_EVT_EXT_ADV;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->ext            = true;
+    out->ext_event_type = et;
+    out->event_type     = (uint8_t)code;
+    out->data_status    = status;
+    out->addr_type      = r[2];
+    if (r[2] != BLE_ADDR_ANONYMOUS) memcpy(out->addr, r + 3, 6);
+    out->primary_phy    = r[9];
+    out->secondary_phy  = r[10];
+    out->sid            = r[11];
+    int8_t tx = (int8_t)r[12];
+    if (tx != BLE_TX_POWER_NOT_AVAILABLE) {
+        out->has_adv_tx_power = true;
+        out->adv_tx_power     = tx;
+    }
+    int8_t rssi = (int8_t)r[13];
+    if (rssi != BLE_RSSI_NOT_AVAILABLE) {
+        out->has_rssi = true;
+        out->rssi     = rssi;
+    }
+    out->periodic_interval = (uint16_t)(r[14] | (r[15] << 8));
+    out->directed          = (et & EXT_EVT_DIRECTED) != 0;
+    out->direct_addr_type  = r[16];
+    memcpy(out->direct_addr, r + 17, 6);
+    out->data_len          = (uint8_t)dlen;
+    /* For an incomplete or truncated fragment this is a prefix of the
+     * advertising data from its first octet: every AD structure it holds
+     * whole decodes correctly, and the one the fragment boundary cut
+     * sets `truncated` and ends the walk. */
+    ble_ad_parse(r + BLE_EXT_REPORT_FIXED, dlen, out);
+    return BLE_EXT_PARSE_OK;
 }
