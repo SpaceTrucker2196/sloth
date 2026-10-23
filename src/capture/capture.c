@@ -818,7 +818,8 @@ static void decode_udp(const uint8_t *tp, int tlen, packet_info_t *pkt) {
             dns_log_record(&dqe);
             /* A connectivity-check host resolving into private or
              * CGNAT space is a portal answering for it (#69). */
-            int cp = cp_check_dns(dqe.qname, dqe.answer);
+            int cp = dns_log_is_ptr(&dqe)
+                         ? 0 : cp_check_dns(dqe.qname, dqe.answer);
             if (cp) cp_record((uint8_t)cp, dqe.qname, pkt->dst,
                               dqe.answer, sloth_wall());
         }

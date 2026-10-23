@@ -22,7 +22,13 @@ explicitly opted into asking.
 
 Per entry: source IP, qname (query name), qtype (`A`, `AAAA`, `PTR`, `MX`,
 `NS`, `CNAME`, `TXT`, `SRV`), the first A/AAAA answer or `NXDOMAIN`, and
-the Q/R flag. `src/dns_log.c` walks the message itself but decodes
+the Q/R flag. For a `PTR` question the answer is the first PTR record's
+target name (#165, RFC 1035 §3.3.12), shown whole in the last column;
+a PTR record answering any other qtype is ignored, and a target that
+would be cut at 63 bytes, is the root name, reads `NXDOMAIN`, or does
+not fill its RDATA exactly is skipped. A PTR row's answer is never read
+as an address: it stays out of the host cache, the IP index, the
+captive-portal DNS check and the dashboard's IP colouring. `src/dns_log.c` walks the message itself but decodes
 names through `dns_read_name()` in `src/dns_wire.c` (#131), the one
 RFC 1035 §4.1.4 reader every DNS-family parser shares (`dns_snoop`,
 `mdns_snoop`, `nbns_snoop`). A compression loop ends after 20 pointers

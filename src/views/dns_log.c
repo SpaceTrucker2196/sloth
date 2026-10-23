@@ -103,7 +103,10 @@ void view_dns_draw(const sloth_state_t *s) {
                 tui_heat(0.7); TPRINT("  %s", e->answer);
             } else if (has_answer) {
                 if (is_aaaa) tui_normal(); else tui_bright();
-                TPRINT("  %-15.15s", e->answer);
+                /* A PTR target (#165) is a host name, the row's last
+                 * column: an address's 15 cells would cut it. */
+                if (dns_log_is_ptr(e)) TPRINT("  %s", e->answer);
+                else                   TPRINT("  %-15.15s", e->answer);
             } else {
                 tui_dim(); TPRINT("  -");
             }

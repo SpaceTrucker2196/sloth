@@ -633,8 +633,12 @@ typedef struct {
     char   src[46];             /* source IP of the DNS packet */
     char   qname[DNS_NAME_LEN]; /* query name (truncated at 63 chars) */
     char   qtype[8];            /* "A", "AAAA", "PTR", "MX", "NS", "CNAME", "TXT", "SRV", "?" */
-    char   answer[46];          /* first A/AAAA IP, a PTR record's target
-                                    name, "NXDOMAIN", or "" */
+    /* First A/AAAA IP, "NXDOMAIN", or "" — or, for a PTR question
+     * (#165), the PTR target name. Sized to qname's 63 bytes: a
+     * 45-byte cut would clip common provider PTR names
+     * ("ec2-203-0-113-25.us-west-2.compute.amazonaws.com" is 48), and
+     * a target that does not fit is refused, not cut. */
+    char   answer[DNS_NAME_LEN];
     int    is_resp;             /* 0 = query, 1 = response */
     /* 1 when qname holds less than the wire name: cut at 63 bytes, or
      * stopped at a NUL octet inside a label. The stored text is then a

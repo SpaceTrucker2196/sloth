@@ -14,7 +14,10 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-10-23 (#165: `dns.answer` on a PTR response now
+**Last updated**: 2026-10-23 (#165 audit: a PTR `answer` is whole up to
+63 bytes, for a PTR question only; a target that would be cut, the root
+name, the text `NXDOMAIN` or one not filling its RDATA is skipped),
+2026-10-23 (#165: `dns.answer` on a PTR response now
 carries the PTR record's decoded target name instead of staying empty;
 `qname` is unchanged — still the reverse `in-addr.arpa` / `ip6.arpa`
 name), 2026-10-23 (multi-report BLE events decoded: `ble_multi_report_rejected` kept at 0, `ble_adv_reports` / `ble_ext_adv_reports` / `ble_ext_adv_undecoded` count events, `ble_ext_adv_fragments` per report; `primary_phy` / `secondary_phy` value 4; `ext_adv` no longer signed on its own), 2026-10-22 (0x0D slice: `ble_ext_adv_reports`, `ble_ext_adv_fragments`, `ble_ext_adv_partial`, `ble_ext_trains_evicted` in `sensor_health`, `ble_ext_adv_undecoded` narrowed; `ble_device` gained `ext_adv`, `primary_phy`, `secondary_phy`, `adv_sid`, `addr_type` 255, `EXT_*` PDU names); 2026-10-21 (#144 slice 4: `ble_device` and `ble_alert` records, change-only; `evict_ble_flood`; #144 slice 3: the Ubertooth stream block `btcap_*` appended to `sensor_health`; `evict_bredr_lap`; `ble_device` keyed by sensor too; #144 slice 2: the Bluetooth host block appended to `sensor_health` after `libs` — `btmon_*` stream health, `ble_*` decode counters, scan mode / filter policy, own-transmission recency; `evict_ble_device`; #155: `device` gained `cam_score`, `cam_evidence`, `cam_vetoes`, `cam_conflict`, `dhcp_prl`, `dhcp_vci`, `device_class` `"not-camera"`; `evict_lan_role` appended to the `sensor_health` breakout); 2026-10-20 (#106 slice B: `evict_rtsp_exchange` / `evict_rtsp_stream` appended to the `sensor_health` breakout); 2026-10-20 (#92 slice 3: `storage_pcap_failures` / `storage_eapol_failures` also count hashed-manifest failures; the manifest is its own JSONL file, not this stream); 2026-10-20 (#92 slices 1+2: `pcap_path` / `pcap_write_failures` on evidence-citing alerts; review: `-N` suffix on a name an earlier run used); 2026-10-19 (#143: `evict_deauth_obs`, `evict_deauth_victim`; #110: eleven more `evict_*` fields — fragattack and the last hand-written keyed tables; #132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured)., #131, #129, #138, #85, #90, #91
@@ -190,7 +193,7 @@ they are not UTF-8.
 | `src`    | string | source IP (the host that issued the query / received the response) |
 | `qname`  | string | queried name |
 | `qtype`  | string | `A` / `AAAA` / `PTR` / `MX` / `NS` / `CNAME` / `TXT` / `SRV` |
-| `answer` | string | first A/AAAA answer, a PTR record's target name, or `NXDOMAIN`, or empty if Q-only |
+| `answer` | string | first A/AAAA answer, or for a `PTR` question the first PTR record's target name (whole, at most 63 bytes — a target that would be cut, the root name, the text `NXDOMAIN`, or one not exactly filling its RDATA is skipped), or `NXDOMAIN`, or empty if Q-only |
 | `is_resp`| int    | 1 for response, 0 for query |
 
 ### `tls`

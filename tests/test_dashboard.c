@@ -3,6 +3,7 @@
 #include "sloth.h"
 #include "views/dashboard.h"
 #include "views/dashboard_internal.h"
+#include "tui.h"
 
 /* The dashboard is ~2,000 lines of ncurses-positioned mvprintw that the
  * test build compiled to nothing until #116; these tests used to be
@@ -401,11 +402,35 @@ static void test_conn_panel_drills_to_conns_without_monitor(void) {
     ASSERT_EQ((int)s.active_view, (int)VIEW_CONNS);
 }
 
+/* #165: the DNS panel's answer column paints anything that starts with
+ * a digit and holds a '.' as an address, through tui_ip_addstr(): the
+ * IP hash colour (or another IP's alert-hot or highlight pair), and no
+ * clip to the column. A PTR target such as "203-0-113-5.isp.example.net"
+ * is a name; it takes the response pair and the column's width. At
+ * w 40 the answer column starts at 29 and is 11 cells wide. The A row
+ * is the control: its address still takes the IP palette. Seen red
+ * (the name printed whole past the panel, in an IP pair) with the
+ * dns_log_is_ptr() test in draw_dns_log_panel() removed. */
+static void test_dns_panel_ptr_answer_is_not_an_address(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seed_dns_log(&s, "5.113.0.203.in-addr.arpa", "203-0-113-5.isp.example.net", 1);
+    snprintf(s.dns_log[0].qtype, sizeof(s.dns_log[0].qtype), "PTR");
+    seed_dns_log(&s, "www.example.com", "192.0.2.10", 1);
+    draw_dns_log_panel(&s, 0, 6, 0, 40);
+    ASSERT(runner_line_has(2, "203-0-113-5"));
+    ASSERT(!runner_line_has(2, "203-0-113-5."));
+    ASSERT_EQ(runner_find_col(2, "203-0-113-5"), 29);
+    ASSERT_EQ(tui_test_pair(2, 29), CP_BRIGHT);
+    ASSERT_EQ(runner_find_col(3, "192.0.2.10"), 29);
+    ASSERT_NE(tui_test_pair(3, 29), CP_BRIGHT);
+}
+
 void run_dashboard_tests(void) {
     TEST_SUITE("dashboard draw");
     RUN_TEST(test_draw_empty);
     RUN_TEST(test_draw_populated);
     RUN_TEST(test_bargraph_counts_a_long_info_once);
+    RUN_TEST(test_dns_panel_ptr_answer_is_not_an_address);
     RUN_TEST(test_draw_with_monitor_iface);
     RUN_TEST(test_draw_with_monitor_error);
     RUN_TEST(test_draw_assoc_band_when_monitoring);

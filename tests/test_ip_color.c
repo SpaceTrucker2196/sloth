@@ -135,6 +135,30 @@ static void test_build_from_state(void) {
     ASSERT_EQ(ip_index_is_cross_panel("10.0.0.5"), 0);
 }
 
+/* #165: a PTR row's answer is a host name, not an address, and does
+ * not enter the IP index under the DNS source. The probe is a second
+ * source holding the same string — a PTR target may be any name,
+ * "192.0.2.10" included (four labels): were it indexed, the conn
+ * panel's 192.0.2.10 would read as seen in two panels. The A row's
+ * 192.0.2.20 is the control. Seen red with the dns_log_is_ptr() gate
+ * in ip_index_build() removed. */
+static void test_build_skips_ptr_names(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    s.conn_count = 2;
+    snprintf(s.conns[0].remote_addr, sizeof(s.conns[0].remote_addr),
+             "192.0.2.10");
+    snprintf(s.conns[1].remote_addr, sizeof(s.conns[1].remote_addr),
+             "192.0.2.20");
+    s.dns_log_count = 2;
+    snprintf(s.dns_log[0].qtype,  sizeof(s.dns_log[0].qtype),  "PTR");
+    snprintf(s.dns_log[0].answer, sizeof(s.dns_log[0].answer), "192.0.2.10");
+    snprintf(s.dns_log[1].qtype,  sizeof(s.dns_log[1].qtype),  "A");
+    snprintf(s.dns_log[1].answer, sizeof(s.dns_log[1].answer), "192.0.2.20");
+    ip_index_build(&s);
+    ASSERT_EQ(ip_index_is_cross_panel("192.0.2.10"), 0);
+    ASSERT_EQ(ip_index_is_cross_panel("192.0.2.20"), 1);
+}
+
 void run_ip_color_tests(void) {
     TEST_SUITE("ip_color pkt_categorize");
     RUN_TEST(test_categorize_tcp);
@@ -160,4 +184,5 @@ void run_ip_color_tests(void) {
 
     TEST_SUITE("ip_color whole-state build");
     RUN_TEST(test_build_from_state);
+    RUN_TEST(test_build_skips_ptr_names);
 }

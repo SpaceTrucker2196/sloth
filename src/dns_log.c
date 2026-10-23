@@ -106,17 +106,36 @@ int dns_log_parse(const uint8_t *msg, int len,
             memcpy(&a6, msg + rdata, 16);
             inet_ntop(AF_INET6, &a6, out->answer, sizeof(out->answer));
             break;
-        } else if (rtype == 12) {
+        } else if (rtype == 12 && qtype == 12) {
             /* RDATA is a domain-name (RFC 1035 §3.3.12), compressed
-             * against the whole message like any other name. A
-             * malformed target (e.g. a compression loop) leaves
-             * answer empty rather than aborting the walk — a later
-             * RR may still carry a usable A/AAAA/PTR. */
+             * against the whole message like any other name. Taken
+             * for a PTR question only: answer is read as an address
+             * for every other qtype (host cache, captive-portal check),
+             * and a PTR RR ahead of the A in an A response used to
+             * stand in for it.
+             *
+             * A target that is not a whole host name is skipped
+             * rather than aborting the walk — a later RR may still
+             * carry a usable A/AAAA/PTR:
+             *   - malformed (loop, reserved label type, past the
+             *     message), or not ending exactly at RDLENGTH, since
+             *     the name is the RDATA's whole extent (§3.2.1);
+             *   - longer than answer holds, or cut at a NUL octet:
+             *     the text would be a prefix, and slothweb's
+             *     passive_ptr would record it as the name;
+             *   - the root name, which names no host;
+             *   - the text "NXDOMAIN", which every consumer of answer
+             *     (rule_nxdomain_burst, slothweb's counters) reads as
+             *     the rcode 3 sentinel. */
             char pname[DNS_NAME_LEN];
-            int  pn = dns_read_name(msg, len, rdata, pname, sizeof(pname));
-            if (pn >= 0) {
+            int  full = 0;
+            int  pn   = dns_read_name_len(msg, len, rdata, pname,
+                                          sizeof(pname), &full);
+            int  plen = (int)strlen(pname);
+            if (pn == rdata + (int)rdlen && full == plen && plen > 0 &&
+                strcmp(pname, "NXDOMAIN") != 0) {
                 netstr_copy(out->answer, sizeof(out->answer),
-                           (const uint8_t *)pname, strlen(pname));
+                           (const uint8_t *)pname, (size_t)plen);
                 break;
             }
         }
@@ -151,7 +170,7 @@ void dns_log_record(const dns_log_entry_t *e)
      * name — the opposite of host_cache_add's (ip, host) shape, so
      * feeding it through unchanged would cache an entry keyed on a
      * host name instead of an IP. */
-    if (strcmp(e->qtype, "PTR") != 0)
+    if (!dns_log_is_ptr(e))
         host_cache_add(e->answer, e->qname);
 }
 

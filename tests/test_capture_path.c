@@ -26,6 +26,7 @@
 #include "beacon_snoop.h"   /* the fuzz counters an FCS trailer used to bump (#123) */
 #include "eapol_log.h"      /* the collector DATAPAD used to blind (#123) */
 #include "dns_log.h"
+#include "captive_portal.h" /* a PTR name is not an address (#165) */
 #include "rf_quality.h"     /* bad-FCS policy pin (#123) */
 #include "libver.h"         /* loaded-libpcap report (#142) */
 #include "capture/frame_edge.h" /* FRAME_CAPLEN_MAX (#141) */
@@ -3521,6 +3522,63 @@ static void test_probe_response_wsc_reaches_the_beacon_table(void) {
     beacon_clear();
 }
 
+/* #165: the capture path hands each dns record's answer to the
+ * captive-portal DNS check, which reads it as an address. A PTR
+ * question about a sentinel host answered with the *name* "10.0.0.1"
+ * (labels 10, 0, 0, 1 — RFC 1035 §3.3.12 RDATA is any domain name) is
+ * not a sentinel resolving into private space. Responses per RFC 1035
+ * §4.1, the answer's owner a pointer to the question (§4.1.4). The A
+ * response is the control: the same path does record that one. Seen
+ * red (one portal event) with the dns_log_is_ptr() gate before
+ * cp_check_dns() in capture.c removed. */
+static const uint8_t I165_PTR_RESP[] = {
+    0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+    7, 'c', 'a', 'p', 't', 'i', 'v', 'e', 5, 'a', 'p', 'p', 'l', 'e',
+    3, 'c', 'o', 'm', 0,
+    0x00, 0x0c, 0x00, 0x01,                        /* QTYPE PTR, IN */
+    0xc0, 0x0c, 0x00, 0x0c, 0x00, 0x01,            /* owner, PTR, IN */
+    0x00, 0x00, 0x01, 0x2c, 0x00, 0x0a,            /* TTL 300, RDLENGTH 10 */
+    2, '1', '0', 1, '0', 1, '0', 1, '1', 0 };
+static const uint8_t I165_A_RESP[] = {
+    0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+    7, 'c', 'a', 'p', 't', 'i', 'v', 'e', 5, 'a', 'p', 'p', 'l', 'e',
+    3, 'c', 'o', 'm', 0,
+    0x00, 0x01, 0x00, 0x01,                        /* QTYPE A, IN */
+    0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01,
+    0x00, 0x00, 0x01, 0x2c, 0x00, 0x04,
+    10, 0, 0, 1 };
+
+static int i165_v4_dns_resp(uint8_t *f, int cap, const uint8_t *msg, int n) {
+    fb_t b; fb_init(&b, f, cap);
+    fb_eth(&b, I132_MAC_A, I132_MAC_B, 0x0800);
+    i132_ipv4(&b, 20 + 8 + n, 0, 17);
+    i132_udp(&b, 53, 40000, msg, n);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static void test_ptr_name_is_not_a_captive_portal_address(void) {
+    uint8_t f[256];
+    int n = i165_v4_dns_resp(f, sizeof f, I165_A_RESP, (int)sizeof I165_A_RESP);
+    ASSERT(n > 0);
+    cp_clear();
+    dns_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 1);
+    ASSERT_EQ(cp_event_count(), 1);                /* control */
+
+    n = i165_v4_dns_resp(f, sizeof f, I165_PTR_RESP, (int)sizeof I165_PTR_RESP);
+    ASSERT(n > 0);
+    cp_clear();
+    dns_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_dns_records(), 1);
+    ASSERT_STR(g_s.dns_log[0].qtype, "PTR");
+    ASSERT_STR(g_s.dns_log[0].answer, "10.0.0.1");
+    ASSERT_EQ(cp_event_count(), 0);
+    cp_clear();
+    dns_log_clear();
+}
+
 void run_capture_path_tests(void) {
     TEST_SUITE("capture path: real pcap_dispatch -> on_packet (#95)");
     RUN_TEST(test_wellformed_tcp_reaches_the_ring);
@@ -3638,6 +3696,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_ipv4_total_length_past_the_frame_counts_unless_snapped);
     RUN_TEST(test_ipv4_zero_total_length_is_read_as_unstated);
     RUN_TEST(test_tcp_data_offset_is_honoured_once);
+    RUN_TEST(test_ptr_name_is_not_a_captive_portal_address);
     RUN_TEST(test_ipv6_hop_by_hop_is_walked_to_udp);
     RUN_TEST(test_ipv6_routing_then_destination_options_are_walked);
     RUN_TEST(test_ipv6_ah_length_is_in_four_octet_units);

@@ -4881,3 +4881,12 @@ report events.
   one; the Flows table's address columns grow to 40 characters. The
   README's beside-sloth command is the literal one, installed binary
   and a store in `/var/lib/sloth`.
+
+- 2026-10-23 — [[jsonl-schema]]: #165 audit of the PTR decode. A PTR
+  record is taken for a `PTR` question only (one ahead of the A in an A
+  response used to become that record's `answer`, a host name the host
+  cache and captive-portal check read as an address); `answer` holds 63
+  bytes, not 45, and a target that would be cut, the root name, the
+  text `NXDOMAIN`, or one not exactly filling its RDATA is skipped. A
+  PTR row's answer stays out of the IP index and the dashboard's IP
+  colouring.

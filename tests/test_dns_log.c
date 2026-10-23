@@ -345,8 +345,8 @@ static void test_parse_response_ptr_compressed_target(void) {
 /* A malformed PTR RR must be discarded, not left half-decoded in
  * answer and not treated as fatal to the walk: the next RR's target
  * is used instead. Seen to fail (answer reads "partial" and the
- * second RR is never reached) with the `pn >= 0` guard in
- * dns_log_parse removed. */
+ * second RR is never reached) with the acceptance test in
+ * dns_log_parse replaced by `pn >= -1 && plen > 0`. */
 static void test_parse_response_ptr_malformed_rr_is_skipped(void) {
     uint8_t buf[128];
     int len = build_response_ptr_malformed_then_valid(buf, sizeof(buf),
@@ -400,6 +400,224 @@ static void test_parse_response_mixed_a_and_ptr_prefers_a(void) {
     dns_log_entry_t e;
     ASSERT_EQ(dns_log_parse(buf, len, "8.8.8.8", &e), 1);
     ASSERT_STR(e.answer, "10.0.0.99");
+}
+
+/* ── PTR edge cases (#165 audit) ─────────────────────────────
+ *
+ * Built per RFC 1035 §4.1 (header, question, RRs per §4.1.3), PTR
+ * RDATA per §3.3.12, compression per §4.1.4. The question is always at
+ * offset 12; each answer RR's owner is a pointer to it. 192.0.2.0/24
+ * and the names below are RFC 5737 / RFC 2606 documentation space. */
+typedef struct { uint8_t b[512]; int n; } pm_t;
+
+static void pm_u8(pm_t *m, int v) {
+    if (m->n < (int)sizeof m->b) m->b[m->n++] = (uint8_t)v;
+}
+static void pm_16(pm_t *m, int v) { pm_u8(m, (v >> 8) & 0xff); pm_u8(m, v & 0xff); }
+static void pm_raw(pm_t *m, const void *p, int n) {
+    for (int i = 0; i < n; i++) pm_u8(m, ((const uint8_t *)p)[i]);
+}
+/* Dotted text as labels, then the root label ("" is the root alone). */
+static void pm_name(pm_t *m, const char *dotted) {
+    const char *p = dotted;
+    while (*p) {
+        const char *dot = strchr(p, '.');
+        int l = dot ? (int)(dot - p) : (int)strlen(p);
+        pm_u8(m, l);
+        pm_raw(m, p, l);
+        p += l + (dot ? 1 : 0);
+    }
+    pm_u8(m, 0);
+}
+/* Response header (RCODE 0, QDCOUNT 1), then the question. */
+static void pm_resp(pm_t *m, int an, const char *qname, int qtype) {
+    m->n = 0;
+    pm_16(m, 0x1234); pm_16(m, 0x8180);
+    pm_16(m, 1); pm_16(m, an); pm_16(m, 0); pm_16(m, 0);
+    pm_name(m, qname);
+    pm_16(m, qtype); pm_16(m, 1);
+}
+/* An RR owned by the question, up to and including an RDLENGTH of
+ * rdlen; the caller writes the RDATA. */
+static void pm_rr(pm_t *m, int type, int rdlen) {
+    pm_16(m, 0xC00C);
+    pm_16(m, type); pm_16(m, 1);            /* CLASS IN */
+    pm_16(m, 0); pm_16(m, 300);             /* TTL */
+    pm_16(m, rdlen);
+}
+/* A PTR RR whose RDATA is exactly the encoded target. */
+static void pm_ptr_rr(pm_t *m, const char *target) {
+    pm_t t; t.n = 0;
+    pm_name(&t, target);
+    pm_rr(m, 12, t.n);
+    pm_raw(m, t.b, t.n);
+}
+
+#define REV_Q "10.2.0.192.in-addr.arpa"
+
+static void pm_parse(const pm_t *m, dns_log_entry_t *e) {
+    ASSERT_EQ(dns_log_parse(m->b, m->n, "192.0.2.53", e), 1);
+}
+
+/* A PTR RR in the answer to an A question answers nothing that was
+ * asked: the A after it is the answer, as it was before #165 added the
+ * PTR branch. Taking the PTR target made answer a host name for qtype
+ * A, which host_cache_add() keys as an IP and the captive-portal DNS
+ * check reads as a sentinel's address. Seen red (answer
+ * "host.example.net") with the `&& qtype == 12` gate removed. */
+static void test_parse_a_question_ignores_a_ptr_rr(void) {
+    static const uint8_t a4[] = { 192, 0, 2, 10 };
+    pm_t m;
+    pm_resp(&m, 2, "www.example.com", 1);
+    pm_ptr_rr(&m, "host.example.net");
+    pm_rr(&m, 1, 4);
+    pm_raw(&m, a4, 4);
+    dns_log_entry_t e;
+    pm_parse(&m, &e);
+    ASSERT_STR(e.qtype, "A");
+    ASSERT_STR(e.answer, "192.0.2.10");
+}
+
+/* answer holds qname's 63 bytes: common provider PTR names pass the
+ * 45 an address needs, and slothweb's passive_ptr would store a
+ * 45-byte cut as the name. Seen red (the 48-byte name cut to 45, the
+ * 63-byte one too) with answer put back to 46 bytes in sloth.h. */
+static void test_parse_ptr_target_longer_than_an_address_is_whole(void) {
+    static const char *const names[] = {
+        "ec2-203-0-113-25.us-west-2.compute.amazonaws.com",              /* 48 */
+        "aaaaaaaaa.bbbbbbbbb.ccccccccc.ddddddddd.eeeeeeeee.fffffffff.ggg", /* 63 */
+    };
+    for (int i = 0; i < 2; i++) {
+        pm_t m;
+        pm_resp(&m, 1, REV_Q, 12);
+        pm_ptr_rr(&m, names[i]);
+        dns_log_entry_t e;
+        pm_parse(&m, &e);
+        ASSERT_STR(e.answer, names[i]);
+    }
+}
+
+/* A target that does not fit in 63 bytes, or whose label holds a NUL
+ * octet (legal on the wire, RFC 2181 §11), would store as a prefix of
+ * itself; it is skipped and a later PTR answers. Seen red (the
+ * prefixes "aaaa…fffffffff.ggg" and "ho" stored) with the
+ * `full == plen &&` test removed. */
+static void test_parse_ptr_target_that_would_be_cut_is_skipped(void) {
+    pm_t m;
+    pm_resp(&m, 2, REV_Q, 12);
+    pm_ptr_rr(&m, "aaaaaaaaa.bbbbbbbbb.ccccccccc.ddddddddd.eeeeeeeee.fffffffff.gggg");
+    pm_ptr_rr(&m, "host.example.net");
+    dns_log_entry_t e;
+    pm_parse(&m, &e);
+    ASSERT_STR(e.answer, "host.example.net");
+
+    static const uint8_t nul_name[] = {
+        5, 'h', 'o', 0, 's', 't', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e',
+        3, 'n', 'e', 't', 0 };
+    pm_resp(&m, 2, REV_Q, 12);
+    pm_rr(&m, 12, (int)sizeof nul_name);
+    pm_raw(&m, nul_name, (int)sizeof nul_name);
+    pm_ptr_rr(&m, "host.example.net");
+    pm_parse(&m, &e);
+    ASSERT_STR(e.answer, "host.example.net");
+}
+
+/* The target is the RDATA's whole extent (RFC 1035 §3.2.1, §3.3.12):
+ * one that runs past RDLENGTH reads bytes outside its RR (RDLENGTH 2
+ * over an 18-byte name; RDLENGTH 0, which decodes the next RR's
+ * owner), and one shorter than RDLENGTH leaves octets RDATA does not
+ * define. None is taken. Seen red (answer "host.example.net" for the
+ * first, "www.example.com" for the second via the next RR's owner
+ * pointer, "host.example.net" for the third) with the extent test put
+ * back to `pn >= 0`. */
+static void test_parse_ptr_target_must_be_the_whole_rdata(void) {
+    pm_t t; t.n = 0;
+    pm_name(&t, "host.example.net");
+
+    pm_t m;
+    pm_resp(&m, 1, REV_Q, 12);
+    pm_rr(&m, 12, 2);                       /* RDLENGTH short of the name */
+    pm_raw(&m, t.b, t.n);
+    dns_log_entry_t e;
+    pm_parse(&m, &e);
+    ASSERT_STR(e.answer, "");
+
+    pm_resp(&m, 2, "www.example.com", 12);
+    pm_rr(&m, 12, 0);                       /* empty RDATA */
+    pm_rr(&m, 16, 1);                       /* a TXT RR follows */
+    pm_u8(&m, 0);
+    pm_parse(&m, &e);
+    ASSERT_STR(e.answer, "");
+
+    pm_resp(&m, 1, REV_Q, 12);
+    pm_rr(&m, 12, t.n + 2);                 /* two octets past the name */
+    pm_raw(&m, t.b, t.n);
+    pm_16(&m, 0);
+    pm_parse(&m, &e);
+    ASSERT_STR(e.answer, "");
+}
+
+/* A target that loops (a label, then a pointer back to that label) or
+ * points past the end of the message is malformed; nothing is stored
+ * and a later PTR still answers. The shared reader's hop and bounds
+ * checks refuse both. Seen red (the loop stores "host.host.…") with
+ * the acceptance test replaced by `pn >= -1 && plen > 0`. */
+static void test_parse_ptr_target_loop_or_past_end_is_skipped(void) {
+    pm_t m;
+    pm_resp(&m, 2, REV_Q, 12);
+    int at = m.n + 12;                      /* where the RDATA starts */
+    pm_rr(&m, 12, 7);
+    pm_u8(&m, 4); pm_raw(&m, "host", 4);
+    pm_16(&m, 0xC000 | at);                 /* back to "host" */
+    pm_ptr_rr(&m, "host.example.net");
+    dns_log_entry_t e;
+    pm_parse(&m, &e);
+    ASSERT_STR(e.answer, "host.example.net");
+
+    pm_resp(&m, 1, REV_Q, 12);
+    pm_rr(&m, 12, 2);
+    pm_16(&m, 0xC000 | 0x3FFF);             /* far past the message */
+    pm_parse(&m, &e);
+    ASSERT_STR(e.answer, "");
+}
+
+/* The root name (RDATA one zero octet) names no host; it is skipped,
+ * not stored as "" with the walk stopped. Seen red (answer "") with
+ * the `plen > 0 &&` test removed. */
+static void test_parse_ptr_root_target_is_skipped(void) {
+    pm_t m;
+    pm_resp(&m, 2, REV_Q, 12);
+    pm_ptr_rr(&m, "");
+    pm_ptr_rr(&m, "host.example.net");
+    dns_log_entry_t e;
+    pm_parse(&m, &e);
+    ASSERT_STR(e.answer, "host.example.net");
+}
+
+/* A target whose text is "NXDOMAIN" would read as the rcode 3 sentinel
+ * to rule_nxdomain_burst and to slothweb's NXDOMAIN counters, so a
+ * resolver naming a host that would forge NXDOMAIN counts. Seen red
+ * (answer "NXDOMAIN") with the strcmp refusal removed. */
+static void test_parse_ptr_nxdomain_text_is_refused(void) {
+    pm_t m;
+    pm_resp(&m, 1, REV_Q, 12);
+    pm_ptr_rr(&m, "NXDOMAIN");
+    dns_log_entry_t e;
+    pm_parse(&m, &e);
+    ASSERT_STR(e.answer, "");
+}
+
+/* RCODE 3 on a PTR question is the sentinel, as for any qtype, and the
+ * answer section is not walked. Seen red (answer "host.example.net")
+ * with the rcode 3 test in dns_log_parse() disabled. */
+static void test_parse_ptr_nxdomain_rcode(void) {
+    pm_t m;
+    pm_resp(&m, 1, REV_Q, 12);
+    m.b[3] = 0x83;                          /* RA, RCODE 3 */
+    pm_ptr_rr(&m, "host.example.net");
+    dns_log_entry_t e;
+    pm_parse(&m, &e);
+    ASSERT_STR(e.answer, "NXDOMAIN");
 }
 
 static void test_parse_query_mx(void) {
@@ -662,6 +880,29 @@ static void test_view_draw_populated(void) {
     ASSERT_EQ(runner_find_col(q, "-"), col);
 }
 
+/* #165: a PTR row's answer is a host name in the row's last column,
+ * shown whole rather than in an address's 15 cells. The A row is the
+ * control: its answer keeps the 15-cell pad. Seen red (the line holds
+ * "printer.office." only) with the PTR branch's `%s` put back to the
+ * address width. */
+static void test_view_draw_ptr_answer_whole(void) {
+    dns_log_clear();
+    dns_log_entry_t e1 = make_entry("192.0.2.53", "10.2.0.192.in-addr.arpa",
+                                    "PTR", "printer.office.example.net", 1);
+    dns_log_entry_t e2 = make_entry("192.0.2.53", "a.example", "A",
+                                    "192.0.2.77", 1);
+    dns_log_record(&e1);
+    dns_log_record(&e2);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    dns_log_snapshot(&s);
+    s.dns_log_sel = 0;          /* the A row: a selected row prints whole */
+    view_dns_draw(&s);
+    int y = runner_screen_find("printer.office.example.net");
+    ASSERT(y >= 0);
+    ASSERT_LINE_HAS(y, "PTR");
+    dns_log_clear();
+}
+
 /* ── view_dns_key tests ──────────────────────────────────── */
 
 static void test_view_key_nav(void) {
@@ -730,6 +971,14 @@ void run_dns_log_tests(void) {
     RUN_TEST(test_parse_response_ptr_rdata_past_message);
     RUN_TEST(test_parse_response_ptr_after_cname);
     RUN_TEST(test_parse_response_mixed_a_and_ptr_prefers_a);
+    RUN_TEST(test_parse_a_question_ignores_a_ptr_rr);
+    RUN_TEST(test_parse_ptr_target_longer_than_an_address_is_whole);
+    RUN_TEST(test_parse_ptr_target_that_would_be_cut_is_skipped);
+    RUN_TEST(test_parse_ptr_target_must_be_the_whole_rdata);
+    RUN_TEST(test_parse_ptr_target_loop_or_past_end_is_skipped);
+    RUN_TEST(test_parse_ptr_root_target_is_skipped);
+    RUN_TEST(test_parse_ptr_nxdomain_text_is_refused);
+    RUN_TEST(test_parse_ptr_nxdomain_rcode);
     RUN_TEST(test_parse_query_mx);
     RUN_TEST(test_parse_unknown_qtype);
     RUN_TEST(test_parse_rejects_short);
@@ -752,6 +1001,7 @@ void run_dns_log_tests(void) {
     TEST_SUITE("view_dns draw");
     RUN_TEST(test_view_draw_empty);
     RUN_TEST(test_view_draw_populated);
+    RUN_TEST(test_view_draw_ptr_answer_whole);
 
     TEST_SUITE("view_dns key");
     RUN_TEST(test_view_key_nav);

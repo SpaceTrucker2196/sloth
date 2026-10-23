@@ -13,6 +13,7 @@
 #include "karma_detect.h"
 #include "ip_color.h"
 #include "oui.h"
+#include "../dns_log.h"
 
 #ifdef WITH_NCURSES
 
@@ -419,10 +420,14 @@ void draw_dns_log_panel(const sloth_state_t *s, int y0, int h, int x, int w) {
         tui_pkt_bg_cat(cat);
         addch(' ');
         xc += qname_w + 1;
-        /* answer column — IP if it looks like one */
+        /* answer column — IP if it looks like one. A PTR target is a
+         * name however it looks (#165): "203-0-113-5.isp.example"
+         * starts with a digit, and tui_ip_addstr() would give it an
+         * address's hash colour (or another IP's alert-hot or
+         * highlight) and print it unclipped past answer_w. */
         move(y0 + 2 + i, xc);
-        if (strchr(e->answer, '.') && e->answer[0] >= '0' &&
-            e->answer[0] <= '9') {
+        if (!dns_log_is_ptr(e) && strchr(e->answer, '.') &&
+            e->answer[0] >= '0' && e->answer[0] <= '9') {
             tui_ip_addstr(e->answer, cat);
         } else {
             int is_nx = (strcmp(e->answer, "NXDOMAIN") == 0);

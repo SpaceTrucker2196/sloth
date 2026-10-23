@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "ip_color.h"
+#include "dns_log.h"
 
 /* ── Packet categorisation ───────────────────────────────── */
 
@@ -88,7 +89,9 @@ void ip_index_build(const sloth_state_t *s) {
         ip_index_add(s->arp_entries[i].ip, IP_SRC_ARP);
     for (int i = 0; i < s->dns_log_count; i++) {
         ip_index_add(s->dns_log[i].src,    IP_SRC_DNS);
-        ip_index_add(s->dns_log[i].answer, IP_SRC_DNS);
+        /* A PTR answer is a host name, not an address (#165). */
+        if (!dns_log_is_ptr(&s->dns_log[i]))
+            ip_index_add(s->dns_log[i].answer, IP_SRC_DNS);
     }
     for (int i = 0; i < s->icmp_log_count; i++) {
         ip_index_add(s->icmp_log[i].src, IP_SRC_ICMP);
