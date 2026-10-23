@@ -37,9 +37,9 @@ void jsonl_emit_cleartext_cred(const cleartext_cred_t *r);
  * `prev_sev` is the severity before the transition, or -1 when there
  * was none. `reason` is the resolve cause ("expired", "evicted",
  * "cleared", and from #148 BEACONING's "displaced" and "drained" —
- * docs/wiki/jsonl-schema.md has the table); NULL on every other event. Additive: these are new record
- * types, and the legacy `alert` record is still emitted unchanged on
- * every create. */
+ * docs/wiki/jsonl-schema.md has the table); NULL on every other event.
+ * Additive: these are new record types, and the legacy `alert` record
+ * is still emitted unchanged on every create. */
 void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
                             int prev_sev, const char *reason);
 
