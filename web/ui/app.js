@@ -275,11 +275,13 @@
     if (v === "devices") devices();
     if (v === "wifi") wifi();
     if (v === "flows") flows();
-    if (v === "history") history();
+    if (v === "history") historyView();
     if (v === "lookup") $("l-q").focus();
     // The view is in the address (#flows), so a reload or a link opens
     // it again; replaceState, so Back leaves the page as before.
-    try { history.replaceState(null, "", "#" + v); } catch (e) { /* a sandboxed frame */ }
+    // Only a sandboxed frame's refusal is expected; anything else is a
+    // bug and is left to surface rather than be swallowed here.
+    try { window.history.replaceState(null, "", "#" + v); } catch (e) { if (e.name !== "SecurityError") throw e; }
   }
   // The view named in the address, if it is one.
   function hashView() {
@@ -1478,8 +1480,13 @@
   function flowRow(f, cols) {
     var from = f.src, to = f.dst;
     var row = el("div", f.smb1 === true ? "frow sev2" : "frow");
-    row.appendChild(el("span", "", typeof from === "string" ? from : "-"));
-    row.appendChild(el("span", "", typeof to === "string" ? to : "(source only)"));
+    // The address columns grow to a full IPv6 address (40ch) when the
+    // row has room; narrower, the cell's ellipsis hides the tail, so the
+    // whole address is its tooltip.
+    var sc = row.appendChild(el("span", "", typeof from === "string" ? from : "-"));
+    var dc = row.appendChild(el("span", "", typeof to === "string" ? to : "(source only)"));
+    if (typeof from === "string") sc.title = from;
+    if (typeof to === "string") dc.title = to;
     var counts = (f.counts || []).map(function (v, i) {
       return String(cols[i] || "?").replace(/_count$/, "") + " " + fmt(v);
     }).join("  ");
@@ -1544,6 +1551,22 @@
       set("f-count", "");
       set("f-note", errText(e.message));
     });
+  }
+
+  // A chord label at most maxc characters long. Cut from the left (an
+  // address's tail is the part that differs), and only after a "." or
+  // ":", behind an ellipsis, so what is left can never read as another
+  // whole address: 198.51.100.1 becomes "\u2026.51.100.1", not
+  // "8.51.100.1". A label with no separator late enough is cut anywhere,
+  // still behind the ellipsis. The node's full address is what a click
+  // filters the table by.
+  function cutLabel(id, maxc) {
+    if (id.length <= maxc) return id;
+    for (var i = 1; i < id.length; i++) {
+      var c = id.charAt(i);
+      if ((c === "." || c === ":") && id.length - i + 1 <= maxc) return "\u2026" + id.slice(i);
+    }
+    return "\u2026" + id.slice(id.length - maxc + 1);
   }
 
   // The chord: the nodes the server kept on a circle, busiest first
@@ -1615,9 +1638,7 @@
       x.textBaseline = "middle";
       x.fillStyle = T.ink;
       var id = String(n.id);
-      // Cut from the left: an address's tail is the part that differs.
-      var maxc = narrow ? 11 : 22;
-      var t = id.length > maxc ? "~" + id.slice(id.length - maxc + 1) : id;
+      var t = cutLabel(id, narrow ? 11 : 22);
       var lx = p.x + (right ? 1 : -1) * (r + 4 * dpr), ly = p.y;
       x.fillText(t, lx, ly);
       F.hits.push({ x: p.x, y: p.y, r: Math.max(r, 8 * dpr), id: id });
@@ -1878,7 +1899,7 @@
     }).catch(function () { /* the cards stand empty */ });
   }
 
-  function history() {
+  function historyView() {
     var now = Math.floor(Date.now() / 1000);
     var to = now, from = to - 30 * 86400;
     getJSON("/api/history/overview?from=" + from + "&to=" + to + "&cols=180").then(function (j) {

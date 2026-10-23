@@ -408,7 +408,9 @@ chord diagram, History and Lookup.
 ![slothweb Overview on synthetic data](docs/assets/slothweb/overview.png)
 
 ```sh
-make web && ./slothweb --sloth-db /var/lib/sloth/sloth.db   # beside sloth --data-socket --db ...
+make web && sudo install -m 0755 slothweb /usr/local/bin/slothweb
+# beside sloth --data-socket --db ..., as the user sloth runs as:
+sudo -u sloth /usr/local/bin/slothweb --sloth-db /var/lib/sloth/sloth.db --store /var/lib/sloth/slothweb.db
 ```
 
 Five minutes from a clean checkout, with a synthetic demo if there is

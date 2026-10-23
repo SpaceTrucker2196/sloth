@@ -678,15 +678,20 @@ The full account is in
   pair tables (at most 200 read), their busiest endpoints (at most 64
   drawn), and a `fold` that says how many pairs, counted flows and
   addresses were left out of how many; drawn on Canvas 2D by protocol
-  hue with a text legend and the fold line.
+  hue with a text legend and the fold line. A label too long for its
+  width is cut from the left only after a `.` or `:`, behind `…`
+  (`….51.100.1`), so a cut address never reads as a different whole
+  one.
 - **Polish.** Found by driving the page in headless Chromium against
   the demo in four states (full, no `--sloth-db`, no stream,
   `WITH_SQLITE=0`) at 1280 and 360 px: the view list as buttons in tab
   order, rows and cards focusable with `Enter`, the drawer taking and
   returning focus, wide tables scrolling inside their own box, header
   columns aligned with their rows, pointer events on the History strip,
-  `color-scheme: dark`, the view in the address (`#flows`), and a
-  memory-only build's pages saying it cannot read sloth.db.
+  `color-scheme: dark`, the view in the address (`#flows`, through
+  `window.history`: a local `history()` once hid the global and the
+  call failed silently), and a memory-only build's pages saying it
+  cannot read sloth.db.
 - **The README** (`web/README.md`): prerequisites, build (with the
   optional IEEE CSV fetch), the demo, running beside sloth (the socket
   and its permissions, `--sloth-db`, `--store`), opening the page; a

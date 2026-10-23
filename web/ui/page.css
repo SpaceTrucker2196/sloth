@@ -172,7 +172,7 @@ table.qt td.nul { color: var(--faint); }
 }
 /* Flows (§8.9, M6): one tab's rows, the counters flexing; an SMB1 row is
  * in the critical colour and says SMB1 in its own column too. */
-.frow { display: grid; grid-template-columns: 16ch 16ch minmax(14ch, 1fr) 9ch 11ch 11ch 11ch; gap: 6px; align-items: center; font-size: 12px; white-space: nowrap; padding: 1px 0 1px 4px; border-left: 3px solid transparent; min-width: calc(88ch + 60px); }
+.frow { display: grid; grid-template-columns: minmax(16ch, 40ch) minmax(16ch, 40ch) minmax(14ch, 1fr) 9ch 11ch 11ch 11ch; gap: 6px; align-items: center; font-size: 12px; white-space: nowrap; padding: 1px 0 1px 4px; border-left: 3px solid transparent; min-width: calc(88ch + 60px); }
 .frow > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .frow.sev2 { color: var(--sev-crit); border-left-color: var(--sev-crit); }
 .frow .n { text-align: right; }

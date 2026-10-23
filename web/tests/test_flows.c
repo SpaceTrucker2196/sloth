@@ -96,7 +96,9 @@ static void test_tabs_against_the_allow_list(void) {
 }
 
 /* The page's Flows view. Seen red with f-chord renamed in index.html
- * and with the "7" key case removed from app.js. */
+ * and with the "7" key case removed from app.js. The replaceState
+ * line held to its window.history spelling: seen red on e89e3c2, where
+ * it read "history.replaceState" and a local function hid the global. */
 static void test_page_carries_the_flows_view(void) {
     const char *p = (const char *)web_page;
     static const char *const ids[] = {
@@ -128,8 +130,40 @@ static void test_page_carries_the_flows_view(void) {
     WT_HAS(p, ".hscroll { overflow-x: auto; max-width: 100%; }");
     WT_HAS(p, "color-scheme: dark;");
     WT_HAS(p, "<meta name=\"color-scheme\" content=\"dark\">");
-    WT_HAS(p, "history.replaceState(null, \"\", \"#\" + v)");
+    WT_HAS(p, "window.history.replaceState(null, \"\", \"#\" + v)");
     WT_HAS(p, "NOSQL = h.store === \"memory\";");
+}
+
+/* The page's script runs inside one function, where a declaration
+ * named after a browser global hides it from every line of that
+ * function: M6 shipped a "function history()" (the History view's
+ * loader), so "history.replaceState" called it, threw, and the catch
+ * around it hid that the address never named the view. No declaration
+ * in the page may take the name of a global the page uses. Seen red
+ * with historyView renamed back to history. */
+static void test_page_shadows_no_browser_global(void) {
+    const char *p = (const char *)web_page;
+    static const char *const globals[] = {
+        "window", "document", "location", "history", "navigator", "fetch",
+        "setTimeout", "clearTimeout", "setInterval", "clearInterval",
+        "getComputedStyle", "encodeURIComponent", "devicePixelRatio",
+        "requestAnimationFrame", "EventSource", "URL", "JSON", "Math", "Date",
+    };
+    static const char *const forms[] = {
+        "function %s(", "function %s (", "var %s ", "var %s=", "var %s;",
+        "var %s,", "let %s ", "const %s ",
+    };
+    for (size_t g = 0; g < sizeof(globals) / sizeof(globals[0]); g++) {
+        for (size_t f = 0; f < sizeof(forms) / sizeof(forms[0]); f++) {
+            char decl[64];
+            snprintf(decl, sizeof(decl), forms[f], globals[g]);
+            if (strstr(p, decl)) fprintf(stderr, "    the page declares \"%s\"\n", decl);
+            WT_ASSERT(strstr(p, decl) == NULL);
+        }
+    }
+    /* The positive control: the page does use the globals checked. */
+    WT_HAS(p, "window.history.");
+    WT_HAS(p, "location.hash");
 }
 
 #ifndef WITH_SQLITE
@@ -138,6 +172,7 @@ void run_flows_tests(void) {
     WT_RUN(test_without_sloth_db);
     WT_RUN(test_tabs_against_the_allow_list);
     WT_RUN(test_page_carries_the_flows_view);
+    WT_RUN(test_page_shadows_no_browser_global);
 }
 
 #else
@@ -446,6 +481,7 @@ void run_flows_tests(void) {
     WT_RUN(test_without_sloth_db);
     WT_RUN(test_tabs_against_the_allow_list);
     WT_RUN(test_page_carries_the_flows_view);
+    WT_RUN(test_page_shadows_no_browser_global);
     up();
     WT_RUN(test_tabs);
     WT_RUN(test_validation);

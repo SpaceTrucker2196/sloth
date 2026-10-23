@@ -102,12 +102,17 @@ sudo ./sloth --headless --data-socket unix:/run/sloth/sloth.sock --db /var/lib/s
 
 (`docs/wiki/deployment.md` has the systemd unit, which creates
 `/run/sloth` with `RuntimeDirectory=sloth`; by hand,
-`sudo install -d -m 0750 -o sloth /run/sloth`.) Then, as the user sloth
-runs as (the `sloth` account after its privilege drop, or `--user
-NAME`):
+`sudo install -d -m 0750 -o sloth /run/sloth`.) Then run slothweb as
+the user sloth runs as: the `sloth` account after its privilege drop
+(`docs/wiki/deployment.md`), or the `--user NAME` you gave it (put that
+name in place of `sloth`). That account usually cannot reach a
+checkout in your home directory, so install the binary first, and give
+it a store in a directory it owns (`/var/lib/sloth` is `sloth`'s, mode
+`0700`):
 
 ```sh
-./slothweb --sloth-db /var/lib/sloth/sloth.db
+sudo install -m 0755 slothweb /usr/local/bin/slothweb
+sudo -u sloth /usr/local/bin/slothweb --sloth-db /var/lib/sloth/sloth.db --store /var/lib/sloth/slothweb.db
 ```
 
 - **The data socket.** `--socket` defaults to sloth's own default,
@@ -122,7 +127,7 @@ NAME`):
   may not exist yet: slothweb retries on every request.
 - **`--store PATH`** is slothweb's own file (time series, baselines,
   anomaly episodes), default `./slothweb.db` in the directory you start
-  it from. It is created `0600`; never point it at `sloth.db` (refused).
+  it from, which must be one the user slothweb runs as can write. It is created `0600`; never point it at `sloth.db` (refused).
 
 ### Open the page
 
@@ -1830,7 +1835,9 @@ read, 64 nodes drawn, whatever sloth.db holds.
 
 **The view.** A Canvas 2D chord diagram: the kept addresses on a
 circle, busiest first from twelve o'clock, each with its hash colour
-(§8.12) and its address as text; each pair a curve through the middle
+(§8.12) and its address as text (cut to 22 characters, 11 below
+520 px, from the left and only after a `.` or `:`, behind `…`: so
+198.51.100.1 is `….51.100.1`, never a whole address it is not); each pair a curve through the middle
 from its source to an arrowhead at its destination, its width by the
 log of its total, its colour the protocol's hue (`--f-ssh` and the
 rest in `theme.css`), and an SMB1 session in `--sev-crit`. The legend
@@ -1839,7 +1846,10 @@ out, so the drawing never stands on colour alone. Clicking an address
 filters the table by it. Under it, the tab strip (each tab with its
 row count) and the table: source, destination, the counters by name,
 total, the protocol's extra (port and dialect, version, protocol mask),
-first and last seen; newest first, paged with "more". **An SMB1 row is
+first and last seen; newest first, paged with "more". The address
+columns grow from 16 to 40 characters with the width, enough for a
+whole IPv6 address, and a cut one has the whole address as its
+tooltip. **An SMB1 row is
 `--sev-crit`**, by a fixed class (`frow sev2`) and with `SMB1` in its
 own column. Without `--sloth-db`, or in a `WITH_SQLITE=0` build, both
 panels say why instead.

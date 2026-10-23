@@ -4893,3 +4893,11 @@ report events.
   a security section, a synthetic demo (`make web-demo`), the
   five-minute check (`make web-quickstart-check`) and screenshots of
   the demo in `docs/assets/slothweb/`.
+- 2026-10-23 — [[slothweb]]: M6 review fixes (#164). The view now
+  reaches the address (`#flows`): a local `history()` had hidden
+  `window.history`, and a test now refuses any declaration named after
+  a browser global the page uses. Chord labels are cut only after a `.`
+  or `:`, behind `…`, so a cut address never reads as another whole
+  one; the Flows table's address columns grow to 40 characters. The
+  README's beside-sloth command is the literal one, installed binary
+  and a store in `/var/lib/sloth`.
