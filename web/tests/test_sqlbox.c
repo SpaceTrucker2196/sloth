@@ -565,8 +565,11 @@ static void left_as_it_was(void) {
 }
 
 /* The recipes the page offers, counted without the extractor's own
- * rule: every line of a ```sh block whose command is sqlite3, however
- * it is written, and every ```sql block. */
+ * rule: every line of any fenced block (```sh, ```bash, ```console or
+ * none) whose command is sqlite3, however it is written, and every
+ * ```sql block. recipes.c takes only ```sh blocks and stops the build on
+ * a sqlite3 line in any other fence, so a recipe cannot be dropped by
+ * its fence. */
 static size_t page_recipes(const char *md) {
     size_t count = 0;
     int fence = 0;   /* 0 none, 1 sh, 2 another */
@@ -581,7 +584,7 @@ static size_t page_recipes(const char *md) {
                 fence = ll - i >= 5 && !strncmp(line + i + 3, "sh", 2) ? 1 : 2;
                 if (ll - i >= 6 && !strncmp(line + i + 3, "sql", 3)) count++;
             }
-        } else if (fence == 1 && ll - i >= 8 && !strncmp(line + i, "sqlite3", 7) &&
+        } else if (fence && ll - i >= 8 && !strncmp(line + i, "sqlite3", 7) &&
                    (line[i + 7] == ' ' || line[i + 7] == '\t')) {
             count++;
         }

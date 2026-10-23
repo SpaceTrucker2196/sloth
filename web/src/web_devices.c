@@ -422,10 +422,16 @@ int web_history_devices_route(const web_m4_t *m, const char *query,
      * tier is kept --web-retain-days; a range reaching further back
      * reads the hour tier (kept 400 d) as well, in cells of whole
      * hours. The last cell may be short: it ends at to. */
-    long long span = to - from;
     int store_on = m->tsdb && m->tsdb->store && m->tsdb->store->rd;
     int hour = store_on && from < now_s - (long long)m->tsdb->retain_days * 86400;
     long long step = hour ? 3600 : 60;
+    /* On the hour tier the cells start on the hour: an hour row stands
+     * for [t, t+3600), so a strip starting mid-hour would drop the row
+     * covering its start (the store keeps r.t >= origin) and file each
+     * later row one cell early. The origin is reported as presence_from.
+     * Minute cells keep from, as the minute tests pin. */
+    long long origin = hour ? from - ((from % 3600) + 3600) % 3600 : from;
+    long long span = to - origin;
     long long cell = (span + WEB_DEV_CELLS - 1) / WEB_DEV_CELLS;
     cell = (cell + step - 1) / step * step;
     int ncell = (int)((span + cell - 1) / cell);
@@ -435,7 +441,7 @@ int web_history_devices_route(const web_m4_t *m, const char *query,
     if (!macs || !bits) { free(macs); free(bits); free(c.rows); return -1; }
     for (int i = 0; i < show; i++)
         snprintf(macs[i], sizeof(macs[i]), "%s", c.rows[i].mac);
-    strips_at(m, (const char (*)[WEB_KEY_MAX + 1])macs, show, from, to, ncell,
+    strips_at(m, (const char (*)[WEB_KEY_MAX + 1])macs, show, origin, to, ncell,
               (int)cell, hour, bits);
     web_jw_t w;
     web_jw_init(&w, body, cap);
@@ -446,7 +452,7 @@ int web_history_devices_route(const web_m4_t *m, const char *query,
     web_jw_raw(&w, ",\"offset\":");  web_jw_int(&w, offset);
     web_jw_raw(&w, ",\"db_schema\":"); web_jw_int(&w, schema);
     web_jw_raw(&w, ",\"vendor_table\":"); web_jw_str(&w, vendor_table(m));
-    web_jw_raw(&w, ",\"presence_from\":"); web_jw_int(&w, from);
+    web_jw_raw(&w, ",\"presence_from\":"); web_jw_int(&w, origin);
     web_jw_raw(&w, ",\"presence_cell_s\":"); web_jw_int(&w, cell);
     web_jw_raw(&w, ",\"presence_cells\":"); web_jw_int(&w, ncell);
     web_jw_raw(&w, ",\"presence_tier\":"); web_jw_str(&w, hour ? "hour" : "minute");

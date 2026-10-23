@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
     if (strlen(md) != n) { fprintf(stderr, "recipes: NUL in %s\n", argv[1]); return 1; }
 
     static recipe_t R[RECIPE_MAX];
-    int nr = 0, in_sh = 0;
+    int nr = 0, in_sh = 0, in_fence = 0;
     char title[TITLE_MAX] = "";
     size_t pos = 0;
     while (pos < n) {
@@ -79,7 +79,10 @@ int main(int argc, char **argv) {
                         "it as sqlite3 sloth.db \"...\" in a ```sh block\n", pos);
                 return 1;
             }
-            in_sh = !in_sh && ll - i >= 5 && !memcmp(line + i + 3, "sh", 2);
+            /* An opening fence starts a block, sh or not; the next fence
+             * closes it, whatever it says. */
+            in_sh = !in_fence && ll - i >= 5 && !memcmp(line + i + 3, "sh", 2);
+            in_fence = !in_fence;
             title[0] = '\0';
             pos += ll + (nl ? 1 : 0);
             continue;
@@ -94,6 +97,12 @@ int main(int argc, char **argv) {
             title[tl + take] = '\0';
             pos += ll + (nl ? 1 : 0);
             continue;
+        }
+        const char *any = in_fence && !in_sh ? strstr(line, CMD) : NULL;
+        if (any && (size_t)(any - line) < ll) {
+            fprintf(stderr, "recipes: a recipe outside a ```sh block at offset "
+                    "%zu: the box takes ```sh blocks only\n", pos);
+            return 1;
         }
         const char *cmd = in_sh ? strstr(line, CMD) : NULL;
         if (cmd && (size_t)(cmd - line) < ll) {

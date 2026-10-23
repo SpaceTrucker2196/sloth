@@ -384,6 +384,27 @@ static void test_presence_from_the_hour_tier(void) {
     int c22[] = { 22 };
     strip_hex(c22, 1, hx);
     WT_HAS(row ? row : "", hx);
+    /* A sub-hour range that does not start on the hour: the cells start
+     * at the hour that holds from (reported as presence_from), so the
+     * hour row covering the range's start is cell 0, not dropped. Seen
+     * red with the origin left at from (presence_from T-3d-2h+600 and
+     * a blank strip). */
+    ts.retain_days = 3;
+    snprintf(qs, sizeof(qs), "from=%lld&to=%lld", T - 3 * DY - 2 * HR + 600,
+             T - 3 * DY - 2 * HR + 3000);
+    WT_EQ(route(&H, "/api/history/devices", qs), 200);
+    ts.retain_days = keep;
+    b = body_of(g_out);
+    char pf[64];
+    snprintf(pf, sizeof(pf), "\"presence_from\":%lld,", T - 3 * DY - 2 * HR);
+    WT_HAS(b, pf);
+    WT_HAS(b, "\"presence_cell_s\":3600,\"presence_cells\":1,\"presence_tier\":\"hour\",");
+    row = strstr(b, "{\"mac\":\"02:00:00:00:00:03\"");
+    WT_ASSERT(row != NULL);
+    int c0[] = { 0 };
+    strip_hex(c0, 1, hx);
+    WT_HAS(row ? row : "", hx);
+    snprintf(qs, sizeof(qs), "from=%lld&to=%lld", T - 4 * DY, T - 3 * DY);
     /* Inside the minute tier's days the same range reads it alone: the
      * hour row is not drawn into minute-sized cells. */
     WT_EQ(route(&H, "/api/history/devices", qs), 200);
