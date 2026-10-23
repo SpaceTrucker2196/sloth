@@ -549,7 +549,11 @@ static void test_parse_ptr_target_must_be_the_whole_rdata(void) {
  * (the shared reader's hop and bounds checks refuse the last two).
  * Seen red with the acceptance test in dns_log_parse replaced by
  * `pn >= -1 && plen > 0`: answer reads "partial" with the second RR
- * never reached, and the loop stores "host.host.…". */
+ * never reached, and the loop stores "host.host.…". The past-end case
+ * cannot be isolated by one edit and is not claimed seen red: the
+ * reader returns -1 and leaves the name empty, so both the RDLENGTH
+ * test and `plen > 0` refuse it. What it pins is that the refusal
+ * skips the RR and the walk goes on to the valid one after it. */
 static void test_parse_response_ptr_malformed_rr_is_skipped(void) {
     uint8_t buf[128];
     int len = build_response_ptr_malformed_then_valid(buf, sizeof(buf),
@@ -570,11 +574,12 @@ static void test_parse_response_ptr_malformed_rr_is_skipped(void) {
     pm_parse(&m, &e);
     ASSERT_STR(e.answer, "host.example.net");
 
-    pm_resp(&m, 1, REV_Q, 12);
+    pm_resp(&m, 2, REV_Q, 12);
     pm_rr(&m, 12, 2);
     pm_16(&m, 0xC000 | 0x3FFF);             /* far past the message */
+    pm_ptr_rr(&m, "host.example.net");
     pm_parse(&m, &e);
-    ASSERT_STR(e.answer, "");
+    ASSERT_STR(e.answer, "host.example.net");
 }
 
 /* The root name (RDATA one zero octet) names no host; it is skipped,
