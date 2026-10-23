@@ -222,6 +222,13 @@ static void test_overview(void) {
     b = body_of(g_out);
     WT_HAS(b, "\"sessions\":[{\"id\":1,");
     WT_LACKS(b, "{\"id\":3,");
+    /* A range after S1 ended and before S2 began: no session at all
+     * (seen red with the filter's end bound removed: S1 listed). */
+    snprintf(q, sizeof(q), "from=%lld&to=%lld", T - 8 * DY, T - 6 * DY);
+    WT_EQ(route(&H, "/api/history/overview", q), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"sessions\":[],");
+    WT_LACKS(b, "{\"id\":1,");
     /* The default: the last 30 days, 180 cells. */
     WT_EQ(route(&H, "/api/history/overview", ""), 200);
     snprintf(want, sizeof(want), "{\"from\":%lld,\"to\":%lld,\"cols\":180,\"cell_s\":14400,",
@@ -278,7 +285,7 @@ static void test_who_was_here(void) {
     snprintf(q, sizeof(q), "from=%lld&to=%lld", T - HR, T);
     WT_EQ(route(&H, "/api/history/devices", q), 200);
     const char *b = body_of(g_out);
-    WT_HAS(b, "\"presence_cell_s\":60,");
+    WT_HAS(b, "\"presence_cell_s\":60,\"presence_cells\":60,\"presence_tier\":\"minute\",");
     const char *row = strstr(b, "{\"mac\":\"02:00:00:00:00:04\"");
     WT_ASSERT(row != NULL);
     char hx[64] = "\"presence\":\"";
@@ -293,6 +300,98 @@ static void test_who_was_here(void) {
     WT_HAS(body_of(g_out), "\"count\":1,\"more\":true,\"next_offset\":1}");
     WT_EQ(route(&H, "/api/history/devices", "limit=0"), 400);
     WT_HAS(body_of(g_out), "{\"error\":\"bad_limit\"}");
+}
+
+/* hex: 36 digits, cell c set for each c in cells (n of them), as
+ * web_dev_presence_hex() writes them. */
+static void strip_hex(const int *cells, int n, char *out) {
+    int v[36] = { 0 };
+    for (int i = 0; i < n; i++) v[cells[i] / 4] |= 8 >> (cells[i] % 4);
+    int o = sprintf(out, "\"presence\":\"");
+    for (int d = 0; d < 36; d++) out[o++] = "0123456789abcdef"[v[d]];
+    out[o++] = '"';
+    out[o] = '\0';
+}
+
+/* The strip holds the range and nothing past it. A range of 1,815 s
+ * from a half minute is 31 cells of 60 s, the last ending at to (15 s
+ * short of a whole cell): a minute row at T-1740, past to but inside
+ * the last cell, is not drawn, and the row at T-2400 is cell 19. The
+ * same span ending at T-1015 puts D4's open fine bucket at T-1000
+ * (test_who_was_here's) in its last cell past to, and the two store
+ * rows in cells 7 and 18. Seen red with the cell count held at 144 (the
+ * count), with web_store_presence() reading to its last cell's end
+ * (cell 30 of the first) and with web_rollup_presence() doing the same
+ * (cell 30 of the second). */
+static void test_presence_inside_the_range(void) {
+    web_qrow_t q[2];
+    memset(q, 0, sizeof(q));
+    for (int i = 0; i < 2; i++) {
+        q[i].tier = WEB_TIER_MINUTE;
+        q[i].metric = WM_DEV_PRESENT;
+        snprintf(q[i].key, sizeof(q[i].key), "02:00:00:00:00:04");
+        q[i].t = i ? T - 1740 : T - 2400;
+        q[i].sum = q[i].min = q[i].max = 1;
+        q[i].n = 1;
+    }
+    WT_EQ(web_store_write(&st, q, 2), 0);
+    char qs[160], hx[64];
+    snprintf(qs, sizeof(qs), "from=%lld&to=%lld", T - 3570, T - 1755);
+    WT_EQ(route(&H, "/api/history/devices", qs), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"presence_cell_s\":60,\"presence_cells\":31,\"presence_tier\":\"minute\",");
+    const char *row = strstr(b, "{\"mac\":\"02:00:00:00:00:04\"");
+    WT_ASSERT(row != NULL);
+    int c19[] = { 19 };
+    strip_hex(c19, 1, hx);
+    WT_HAS(row ? row : "", hx);
+    snprintf(qs, sizeof(qs), "from=%lld&to=%lld", T - 2830, T - 1015);
+    WT_EQ(route(&H, "/api/history/devices", qs), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"presence_cell_s\":60,\"presence_cells\":31,");
+    row = strstr(b, "{\"mac\":\"02:00:00:00:00:04\"");
+    WT_ASSERT(row != NULL);
+    int c7[] = { 7, 18 };
+    strip_hex(c7, 2, hx);
+    WT_HAS(row ? row : "", hx);
+}
+
+/* A range older than the minute tier is kept: presence from the hour
+ * tier, in cells of whole hours. With --web-retain-days 3, a day four
+ * days back is 24 cells of an hour, and an hour row for D3 at T-3d-2h
+ * is cell 22. Seen red with strips_at() reading the minute tier alone
+ * (D3's strip empty). */
+static void test_presence_from_the_hour_tier(void) {
+    web_qrow_t q;
+    memset(&q, 0, sizeof(q));
+    q.tier = WEB_TIER_HOUR;
+    q.metric = WM_DEV_PRESENT;
+    snprintf(q.key, sizeof(q.key), "02:00:00:00:00:03");
+    q.t = T - 3 * DY - 2 * HR;
+    q.sum = q.min = q.max = 1;
+    q.n = 1;
+    WT_EQ(web_store_write(&st, &q, 1), 0);
+    int keep = ts.retain_days;
+    ts.retain_days = 3;
+    char qs[160], hx[64];
+    snprintf(qs, sizeof(qs), "from=%lld&to=%lld", T - 4 * DY, T - 3 * DY);
+    WT_EQ(route(&H, "/api/history/devices", qs), 200);
+    ts.retain_days = keep;
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"presence_cell_s\":3600,\"presence_cells\":24,\"presence_tier\":\"hour\",");
+    const char *row = strstr(b, "{\"mac\":\"02:00:00:00:00:03\"");
+    WT_ASSERT(row != NULL);
+    int c22[] = { 22 };
+    strip_hex(c22, 1, hx);
+    WT_HAS(row ? row : "", hx);
+    /* Inside the minute tier's days the same range reads it alone: the
+     * hour row is not drawn into minute-sized cells. */
+    WT_EQ(route(&H, "/api/history/devices", qs), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"presence_cell_s\":600,\"presence_cells\":144,\"presence_tier\":\"minute\",");
+    row = strstr(b, "{\"mac\":\"02:00:00:00:00:03\"");
+    strip_hex(NULL, 0, hx);
+    WT_HAS(row ? row : "", hx);
 }
 
 /* Alerts and flows in the range: never a key, a detail, a cookie or an
@@ -450,6 +549,8 @@ void run_history_tests(void) {
     up();
     WT_RUN(test_overview);
     WT_RUN(test_who_was_here);
+    WT_RUN(test_presence_inside_the_range);
+    WT_RUN(test_presence_from_the_hour_tier);
     WT_RUN(test_alerts_and_flows);
     WT_RUN(test_new_since);
     WT_RUN(test_sessions);

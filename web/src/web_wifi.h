@@ -6,8 +6,9 @@
  *       a channel x time grid of slothweb.db's wifi.ap_count (a gauge:
  *       each cell the mean of its buckets) or wifi.ctrl_total (a
  *       counter: each cell the sum), metric "ap_count" (default) or
- *       "ctrl_total". Rows are channels, 2.4 GHz first, then 5, then 6
- *       ("band"), each band by channel number; at most WEB_WIFI_ROWS of
+ *       "ctrl_total". Rows are channels, 2.4 GHz first, then 5, then 6,
+ *       then any sloth could not place ("?") ("band"), each band by
+ *       channel number; at most WEB_WIFI_ROWS of
  *       them ("more" past that). Columns are cols (1..WEB_WIFI_COLS,
  *       default WEB_WIFI_COLS) cells of col_s seconds from from; an
  *       empty cell is null. The tier is the finest that covers the
@@ -73,8 +74,9 @@ const char *web_akm_name(int t);
  * (include/sloth.h WPA_DG_*), or NULL. */
 const char *web_downgrade_name(int b);
 
-/* The band word of a channel key ("6g37" "6", "36" "5", "11" "2.4")
- * and its sort rank. */
+/* The band word of a channel key ("6g37" "6", "36" "5", "11" "2.4",
+ * and "?" for a number in neither sloth range, "20" or "180") and its
+ * sort rank (the unknown last). */
 const char *web_channel_band(const char *key, int *rank);
 
 #endif

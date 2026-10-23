@@ -339,11 +339,11 @@ int web_store_ptr_put(web_store_t *s, const web_store_ptr_t *r, int n,
     return -1;
 }
 
-int web_store_presence(web_store_t *s, int metric, const char *key,
-                       long long from, int ncell, int cell_s,
+int web_store_presence(web_store_t *s, int tier, int metric, const char *key,
+                       long long from, long long to, int ncell, int cell_s,
                        unsigned char *bits) {
-    (void)s; (void)metric; (void)key; (void)from; (void)ncell; (void)cell_s;
-    (void)bits;
+    (void)s; (void)tier; (void)metric; (void)key; (void)from; (void)to;
+    (void)ncell; (void)cell_s; (void)bits;
     return -1;
 }
 
@@ -2000,30 +2000,40 @@ int web_store_ptr_put(web_store_t *s, const web_store_ptr_t *r, int n,
     return 0;
 }
 
-/* The presence cells of (metric, key) from the minute tier: bit i of
- * bits (LSB first in each byte) is set when a minute row in
- * [from + i * cell_s, from + (i + 1) * cell_s) has a max of 0.5 or
- * more. One grouped range read of the (series, t) key; the read-only
- * connection, parameters bound. Cells set, or -1. */
-int web_store_presence(web_store_t *s, int metric, const char *key,
-                       long long from, int ncell, int cell_s,
+/* The presence cells of (metric, key) from tier (minute or hour): bit
+ * i of bits (LSB first in each byte) is set when a row of that tier
+ * starting in [from + i * cell_s, from + (i + 1) * cell_s) and before
+ * to has a max of 0.5 or more. One grouped range read of the (series,
+ * t) key; the read-only connection, parameters bound. Cells set, or
+ * -1. */
+static const char *const Q_PRESENCE[WEB_TIER_COUNT] = {
+    NULL,
+    "SELECT (r.t - ?3) / ?4 FROM minute r JOIN series x ON x.id=r.series"
+    " WHERE x.metric=?1 AND x.key=?2 AND r.t>=?3 AND r.t<?5"
+    " AND r.max>=0.5 GROUP BY 1",
+    "SELECT (r.t - ?3) / ?4 FROM hour r JOIN series x ON x.id=r.series"
+    " WHERE x.metric=?1 AND x.key=?2 AND r.t>=?3 AND r.t<?5"
+    " AND r.max>=0.5 GROUP BY 1",
+};
+
+int web_store_presence(web_store_t *s, int tier, int metric, const char *key,
+                       long long from, long long to, int ncell, int cell_s,
                        unsigned char *bits) {
-    if (!s->rd || metric < 0 || metric >= WM_COUNT || !key || ncell <= 0 ||
-        cell_s <= 0)
+    if (!s->rd || tier < 0 || tier >= WEB_TIER_COUNT || !Q_PRESENCE[tier] ||
+        metric < 0 || metric >= WM_COUNT || !key || ncell <= 0 || cell_s <= 0)
         return -1;
+    long long end = from + (long long)ncell * cell_s;
+    if (to < end) end = to;
     pthread_mutex_lock(&s->rmu);
     sqlite3_stmt *st = NULL;
-    int rc = sqlite3_prepare_v2(s->rd,
-        "SELECT (r.t - ?3) / ?4 FROM minute r JOIN series x ON x.id=r.series"
-        " WHERE x.metric=?1 AND x.key=?2 AND r.t>=?3 AND r.t<?5"
-        " AND r.max>=0.5 GROUP BY 1", -1, &st, NULL);
+    int rc = sqlite3_prepare_v2(s->rd, Q_PRESENCE[tier], -1, &st, NULL);
     int set = 0;
     if (rc == SQLITE_OK) {
         sqlite3_bind_text(st, 1, web_metric_defs[metric].name, -1, SQLITE_STATIC);
         sqlite3_bind_text(st, 2, key, -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(st, 3, from);
         sqlite3_bind_int(st, 4, cell_s);
-        sqlite3_bind_int64(st, 5, from + (long long)ncell * cell_s);
+        sqlite3_bind_int64(st, 5, end);
         while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
             long long c = sqlite3_column_int64(st, 0);
             if (c < 0 || c >= ncell) continue;

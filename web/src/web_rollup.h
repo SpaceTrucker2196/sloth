@@ -295,12 +295,13 @@ int  web_rollup_fine(web_rollup_t *ru, int metric, const char *key,
  * memory (the fine ring and the open bucket): for key k, bit i of
  * bits + k * ((ncell + 7) / 8), LSB first, is OR'd in when a bucket of
  * max >= 0.5 starts in cell i of ncell cells of cell_s seconds from
- * from. One pass over the ring for all n keys (M4's Devices table asks
- * for a page of rows at a time). Keys with no series are left alone. */
+ * from, and before until. One pass over the ring for all n keys (M4's
+ * Devices table asks for a page of rows at a time). Keys with no series
+ * are left alone. */
 void web_rollup_presence(web_rollup_t *ru, int metric,
                          const char (*keys)[WEB_KEY_MAX + 1], int n,
-                         long long from, int ncell, int cell_s,
-                         unsigned char *bits);
+                         long long from, long long until, int ncell,
+                         int cell_s, unsigned char *bits);
 
 /* The keys holding a series of metric, most recently seen first, at
  * most max. *total gets how many there are. */

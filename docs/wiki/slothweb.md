@@ -82,7 +82,7 @@ re-implements), `src/top_hosts.c` (what `conn_count` counts),
 `src/probe_pnl.c` (what `mac_random` is), issues #102, #157, #158,
 #159, #160, #161, #162 and #163.
 
-**Last updated**: 2026-10-23 (M5, #163).
+**Last updated**: 2026-10-23 (M5, #163; its review fixes: the SQL box's rest and temporary-file refusal, `dbstat` withheld, History presence inside the range and from the hour tier, the unknown band).
 
 ---
 
@@ -111,7 +111,7 @@ resolves a name (its bind address included) and never writes to
 | M2: rollups, `slothweb.db`, `/api/series`, Activity view | #160 | shipped |
 | M3: baselines, anomaly rules and episodes, Anomalies view, heatmaps | #161 | shipped (A4 moved to M4) |
 | M4: sloth.db read-only, query language, OUI table, passive names, A4, durable A2, Devices, drawer, Lookup | #162 | shipped (active reverse DNS cut by the rulings) |
-| M5: WiFi and History views, sessions and new-since, SQL box behind `--web-allow-sql` | #163 | shipped (two of the eight recipes read a withheld column and are refused) |
+| M5: WiFi and History views, sessions and new-since, SQL box behind `--web-allow-sql` | #163 | shipped (three of the eight recipes are refused: two read a withheld column, one `dbstat`) |
 | M6: Flows view, polish, README security section | #164 | not started |
 
 ## W0: the access boundary before any route
@@ -602,7 +602,8 @@ In short:
 
 - **WiFi** (§8.8). `/api/wifi/channels`: a channel x time grid of
   `wifi.ap_count` (mean per cell) or `wifi.ctrl_total` (sum), rows
-  2.4, 5 and 6 GHz by channel with a rule between bands, the finest
+  2.4, 5 and 6 GHz by channel, then channels sloth could not place
+  (`?`), with a rule between bands, the finest
   tier that covers the range, keys from the rollup and the store.
   `/api/wifi/aps`: `beacon_aps` through the M4 allow-list, AKM bits
   decoded to suite names (`src/rsn_ie.c`'s), downgrade flags by name
@@ -613,7 +614,9 @@ In short:
 - **History** (§8.10). `/api/history/overview` (the 30 d strip: devices
   first seen and alerts begun per cell, sessions as markers),
   `/api/history/devices` (who was here: `[first_seen, last_seen]`
-  overlapping the range, presence over the range), `/api/history/alerts`
+  overlapping the range, presence over the range and nothing past it,
+  from the hour tier as well for a range older than
+  `--web-retain-days`), `/api/history/alerts`
   and `/api/history/flows` (no key, detail, cookie or username;
   `mqtt_flows` not read), `/api/sessions` and `/api/sessions/new`:
   `--report`'s new APs, devices and probe clients since the previous
@@ -625,10 +628,12 @@ In short:
   queued; M4's opener; one statement (the tail must be blank); an
   authorizer allowing `SELECT`, `READ` and a short function list and
   denying everything else, and denying `READ` of the withheld columns,
-  `sqlite_dbpage`, `sqlite_stat3/4`, `pragma_*` and anything outside
-  `main`; `sqlite3_stmt_readonly()`; limits; 5 s by a progress handler,
-  10,000 rows, 4 MB; one query at a time on its own thread, a second a
-  `503` `busy`. The withheld columns (`web_secret.h`) are one list for
+  `sqlite_dbpage`, `sqlite_stat3/4`, `dbstat`, `pragma_*` and anything
+  outside `main`; `sqlite3_stmt_readonly()`; limits; 5 s by a progress
+  handler, 10,000 rows, 4 MB; no temporary file (a sort past the 2 MB
+  cache is a `400` `temp_space`); one query at a time on its own thread,
+  a second a `503` `busy`, and after each statement a rest as long as
+  it ran, so sloth can restart its WAL while a client loops the box. The withheld columns (`web_secret.h`) are one list for
   both readers: `tests/test_db.c`'s guardrail words and the credential
   words on any TEXT/BLOB column, plus `alerts.key`, `alerts.detail`,
   `cleartext_creds.username`, `mqtt_flows.last_username`,
@@ -636,7 +641,8 @@ In short:
   withheld in the box too. The recipes are extracted from
   [[sqlite-schema]] by `web/tools/recipes.c` at build time; the
   "Findings by severity" and "Cleartext credential exposures" recipes
-  read a withheld column and are refused naming it.
+  read a withheld column, and "What is actually taking the space?"
+  reads `dbstat`, and the three are refused naming it.
 
 ## Tests
 
@@ -729,7 +735,7 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 
 | Acceptance item | Test |
 |---|---|
-| the `sqlite-schema.md` recipes run from the SQL box and match the `sqlite3` output | `test_acceptance` (`test_sqlbox.c`: a sloth.db generated from `src/db_schema.c`, seeded so every recipe has rows; each recipe through `/api/query` over a loopback socket and through the sqlite3 C API on the same file, identical, and through the `sqlite3` shell when on `PATH`; the two recipes reading a withheld column refused naming it), `test_recipes_are_the_pages` |
+| the `sqlite-schema.md` recipes run from the SQL box and match the `sqlite3` output | `test_acceptance` (`test_sqlbox.c`: a sloth.db generated from `src/db_schema.c`, seeded so every recipe has rows; each recipe through `/api/query` over a loopback socket and through the sqlite3 C API on the same file, identical, and through the `sqlite3` shell when on `PATH`; the three recipes reading a withheld column or `dbstat` refused naming it), `test_recipes_are_the_pages` |
 | a write statement is refused | `test_writes_refused` (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ATTACH`, `PRAGMA writable_schema`, a temp table, DML-tail CTEs, two statements; the file byte for byte and its directory unchanged), `test_precheck`, `tests/fuzz/fuzz_web_sqlbox.c` |
 | no credential column servable, even in the box | `test_withheld_columns`, `test_writes_refused`'s recipe-shaped queries |
 | behind `--web-allow-sql`, default off; `--strict`; the remote warning | `test_off_by_default`, `test_web_allow_sql_flag` |

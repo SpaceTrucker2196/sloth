@@ -146,6 +146,39 @@ static void test_channels_grid(void) {
     mem_down();
 }
 
+/* A channel sloth could not place (ap_band_label()'s "?": a number in
+ * neither 1-14 nor 32-177, with no HE 6 GHz element) is its own group,
+ * drawn after 6 GHz, never filed under 5 GHz. Seen red with
+ * web_channel_band() answering "5" for every plain key above 14. */
+static void test_unknown_band(void) {
+    static const struct { const char *key, *band; int rank; } K[] = {
+        { "1", "2.4", 0 }, { "14", "2.4", 0 }, { "15", "?", 3 }, { "31", "?", 3 },
+        { "32", "5", 1 }, { "177", "5", 1 }, { "178", "?", 3 }, { "233", "?", 3 },
+        { "6g1", "6", 2 }, { "6g233", "6", 2 },
+    };
+    for (size_t i = 0; i < sizeof(K) / sizeof(K[0]); i++) {
+        int rank = -1;
+        const char *b = web_channel_band(K[i].key, &rank);
+        if (strcmp(b, K[i].band)) fprintf(stderr, "    %s: %s\n", K[i].key, b);
+        WT_ASSERT(!strcmp(b, K[i].band));
+        WT_EQ(rank, K[i].rank);
+    }
+    mem_up();
+    web_rollup_add(&ru, WM_WIFI_AP_COUNT, "20", 1, T - 60);
+    web_rollup_add(&ru, WM_WIFI_AP_COUNT, "36", 1, T - 60);
+    web_rollup_add(&ru, WM_WIFI_AP_COUNT, "6g37", 1, T - 60);
+    web_rollup_add(&ru, WM_WIFI_AP_COUNT, "180", 1, T - 60);
+    WT_EQ(route(&H, "/api/wifi/channels", ""), 200);
+    const char *b = body_of(g_out);
+    const char *k36 = strstr(b, "{\"key\":\"36\",\"band\":\"5\"");
+    const char *k37 = strstr(b, "{\"key\":\"6g37\",\"band\":\"6\"");
+    const char *k20 = strstr(b, "{\"key\":\"20\",\"band\":\"?\"");
+    const char *k180 = strstr(b, "{\"key\":\"180\",\"band\":\"?\"");
+    WT_ASSERT(k36 && k37 && k20 && k180);
+    WT_ASSERT(k36 < k37 && k37 < k20 && k20 < k180);
+    mem_down();
+}
+
 /* Past WEB_WIFI_ROWS channels the answer says "more"; each refusal is a
  * 400 with its word and never the value (seen red with the deauth route
  * passing the from value as the error's detail). */
@@ -224,6 +257,7 @@ static void test_page_carries_the_wifi_view(void) {
 void run_wifi_tests(void) {
     WT_RUN(test_channels_grid);
     WT_RUN(test_channels_bounds_and_refusals);
+    WT_RUN(test_unknown_band);
     WT_RUN(test_page_carries_the_wifi_view);
 }
 
@@ -486,6 +520,7 @@ static void test_ap_worst_case_fits(void) {
 void run_wifi_tests(void) {
     WT_RUN(test_channels_grid);
     WT_RUN(test_channels_bounds_and_refusals);
+    WT_RUN(test_unknown_band);
     WT_RUN(test_page_carries_the_wifi_view);
     WT_RUN(test_channels_from_the_store);
     WT_RUN(test_deauth_timeline);

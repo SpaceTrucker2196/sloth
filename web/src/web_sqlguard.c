@@ -172,10 +172,16 @@ static const char *const FUNCS[] = {
     "julianday", "unixepoch", "typeof", "printf", "format", NULL
 };
 
-/* Tables no statement in the box may read at all. */
+/* Tables no statement in the box may read at all: raw pages, sampled
+ * index keys, and the page and cell statistics (dbstat's payload, ncell
+ * and unused of a table or an index holding a withheld column, less its
+ * readable siblings, are the withheld value's length; sqlite_dbdata
+ * and sqlite_dbptr, the recovery extension's, are the same and are in
+ * no stock library, so no test reaches them). */
 static int denied_table(const char *t) {
     static const char *const T[] = { "sqlite_dbpage", "sqlite_stat3",
-                                     "sqlite_stat4", NULL };
+                                     "sqlite_stat4", "dbstat",
+                                     "sqlite_dbdata", "sqlite_dbptr", NULL };
     for (int i = 0; T[i]; i++) if (!sqlite3_stricmp(t, T[i])) return 1;
     return !sqlite3_strnicmp(t, "pragma_", 7);
 }
@@ -429,6 +435,16 @@ size_t web_sqlbox_run_db(sqlite3 *db, const char *sql, size_t len,
             rows++;
         }
         if (!cut && rc == SQLITE_INTERRUPT && x->timed_out) cut = 3;
+        if (!cut && rc != SQLITE_DONE &&
+            (sqlite3_extended_errcode(db) & 0xff) == SQLITE_CANTOPEN) {
+            /* The only file a running statement opens is a temporary
+             * one, which the box's VFS refuses (web_sqlbox.h). */
+            res->why = "temp_space";
+            bl = web_sqlbox_error(out, cap, res->why, "the statement needs more "
+                                  "sort or temporary space than the box keeps in "
+                                  "memory; temporary files are refused");
+            goto done;
+        }
         if (!cut && rc != SQLITE_DONE) {
             int busy = rc == SQLITE_BUSY || rc == SQLITE_LOCKED;
             res->status = busy ? 503 : 400;

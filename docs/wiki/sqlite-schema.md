@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56 and #154.
 
-**Last updated**: 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; two are refused there). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
+**Last updated**: 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
 
 ---
 
@@ -446,10 +446,13 @@ The distinction the schema draws is **identifier versus secret**:
 ## Query recipes
 
 These are also slothweb's SQL box recipes ([[slothweb]], M5): its build
-extracts every quoted statement below as written. The box
-withholds credential-bearing columns from the browser, so it refuses the
-two recipes that read one (`alerts.detail`, `cleartext_creds.username`);
-run those here.
+extracts every quoted statement below as written, and stops on a
+`sqlite3` line written any other way. The box withholds
+credential-bearing columns from the browser, so it refuses the two
+recipes that read one (`alerts.detail`, `cleartext_creds.username`),
+and `dbstat` too (a table's payload less its readable columns is the
+withheld one's length), so the space recipe is refused as well; run
+those three here.
 
 ```sh
 # Which devices remember a given network? (the deanonymisation question)

@@ -170,6 +170,11 @@ int  web_slothdb_open_flags(void);
  * err. web_slothdb_close() either way. */
 int  web_slothdb_open(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
                       long long now_s, char *err, size_t errsz);
+/* The same open for the SQL box (web_sqlbox.h): its VFS refuses every
+ * temporary file and its temp_store is FILE, so a statement's sorts and
+ * temporary b-trees are bounded by the page cache. */
+int  web_slothdb_open_box(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
+                          long long now_s, char *err, size_t errsz);
 void web_slothdb_close(web_sdb_conn_t *c);
 
 /* Open, count devices, close: the health check. The state. */

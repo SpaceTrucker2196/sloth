@@ -141,6 +141,11 @@ int web_slothdb_open(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
     return -1;
 }
 
+int web_slothdb_open_box(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
+                         long long now_s, char *err, size_t errsz) {
+    return web_slothdb_open(s, c, budget_ms, now_s, err, errsz);
+}
+
 void web_slothdb_close(web_sdb_conn_t *c) { (void)c; }
 
 int web_slothdb_check(web_slothdb_t *s, long long now_s) {
@@ -413,18 +418,33 @@ static int fail(web_sdb_conn_t *c, int state, char *err, size_t errsz,
  * VFS that read fails instead (SQLITE_CANTOPEN), and the next open
  * decides again. Temporary files (a sort that spills) are SQLite's own,
  * unnamed, and keep their create flag. */
-static sqlite3_vfs    g_vfs;
+static sqlite3_vfs    g_vfs, g_vfs_box;
 static sqlite3_vfs   *g_base;
 static int            g_vfs_ok;
 static pthread_once_t g_vfs_once = PTHREAD_ONCE_INIT;
-#define WEB_SDB_VFS "slothweb-nocreate"
+#define WEB_SDB_VFS     "slothweb-nocreate"
+#define WEB_SDB_VFS_BOX "slothweb-box"
+#define SDB_NAMED (SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_WAL)
 
 static int nc_open(sqlite3_vfs *v, const char *name, sqlite3_file *f,
                    int flags, int *out) {
     (void)v;
-    if (flags & (SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_WAL))
+    if (flags & SDB_NAMED)
         flags &= ~SQLITE_OPEN_CREATE;
     return g_base->xOpen(g_base, name, f, flags, out);
+}
+
+/* The SQL box's (web_sqlbox.h): the same, and no temporary file at all.
+ * An operator's statement whose sort or temporary b-tree outgrows the
+ * page cache fails here rather than spilling to the temporary
+ * directory; the connection's own reads never need one. */
+static int box_open(sqlite3_vfs *v, const char *name, sqlite3_file *f,
+                    int flags, int *out) {
+    if (!(flags & SDB_NAMED)) {
+        f->pMethods = NULL;
+        return SQLITE_CANTOPEN;
+    }
+    return nc_open(v, name, f, flags, out);
 }
 
 static void vfs_init(void) {
@@ -434,7 +454,11 @@ static void vfs_init(void) {
     g_vfs.pNext = NULL;
     g_vfs.zName = WEB_SDB_VFS;
     g_vfs.xOpen = nc_open;
-    g_vfs_ok = sqlite3_vfs_register(&g_vfs, 0) == SQLITE_OK;
+    g_vfs_box = g_vfs;
+    g_vfs_box.zName = WEB_SDB_VFS_BOX;
+    g_vfs_box.xOpen = box_open;
+    g_vfs_ok = sqlite3_vfs_register(&g_vfs, 0) == SQLITE_OK &&
+               sqlite3_vfs_register(&g_vfs_box, 0) == SQLITE_OK;
 }
 
 static int exists(const char *path) {
@@ -545,8 +569,8 @@ static int probe(web_sdb_conn_t *c) {
     return 0;
 }
 
-int web_slothdb_open(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
-                     long long now_s, char *err, size_t errsz) {
+static int open_conn(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
+                     long long now_s, char *err, size_t errsz, int box) {
     memset(c, 0, sizeof(*c));
     c->s = s;
     c->now_s = now_s;
@@ -607,7 +631,8 @@ int web_slothdb_open(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
     if (!g_vfs_ok)
         return fail(c, WEB_SDB_ERROR, err, errsz, "%s: %s",
                     "the no-create VFS could not be registered");
-    if (sqlite3_open_v2(name, &c->db, flags, WEB_SDB_VFS) != SQLITE_OK)
+    if (sqlite3_open_v2(name, &c->db, flags, box ? WEB_SDB_VFS_BOX : WEB_SDB_VFS)
+        != SQLITE_OK)
         return fail(c, WEB_SDB_ERROR, err, errsz, "%s: %s",
                     c->db ? sqlite3_errmsg(c->db) : "cannot open");
     int on = -1;
@@ -619,6 +644,17 @@ int web_slothdb_open(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
     if (sqlite3_exec(c->db, "PRAGMA query_only=1", NULL, NULL, NULL) != SQLITE_OK)
         return fail(c, WEB_SDB_ERROR, err, errsz, "%s: query_only: %s",
                     sqlite3_errmsg(c->db));
+    /* The box's temporary space is the page cache, a known 2 MB: temp
+     * files through its VFS (refused), never memory-only ones, which
+     * would grow without a bound instead. A library built always to
+     * keep them in memory has no box. */
+    if (box && (sqlite3_compileoption_used("TEMP_STORE=3") ||
+                sqlite3_exec(c->db, "PRAGMA temp_store=FILE;"
+                             "PRAGMA cache_size=-2048", NULL, NULL, NULL)
+                != SQLITE_OK))
+        return fail(c, WEB_SDB_ERROR, err, errsz, "%s: %s",
+                    "this SQLite keeps temporary tables in memory without "
+                    "a bound (TEMP_STORE=3): no SQL box");
     sqlite3_set_authorizer(c->db, authz, c);
     sqlite3_progress_handler(c->db, 1000, progress, c);
     sqlite3_create_function_v2(c->db, "web_vendor", 1,
@@ -698,6 +734,16 @@ int web_slothdb_open(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
     snprintf(s->st.mode, sizeof(s->st.mode), "%s", mode);
     pthread_mutex_unlock(&s->mu);
     return 0;
+}
+
+int web_slothdb_open(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
+                     long long now_s, char *err, size_t errsz) {
+    return open_conn(s, c, budget_ms, now_s, err, errsz, 0);
+}
+
+int web_slothdb_open_box(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
+                         long long now_s, char *err, size_t errsz) {
+    return open_conn(s, c, budget_ms, now_s, err, errsz, 1);
 }
 
 void web_slothdb_close(web_sdb_conn_t *c) {

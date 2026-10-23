@@ -4849,3 +4849,11 @@ report events.
   new-since), and the SQL box behind `--web-allow-sql` with
   [[sqlite-schema]]'s recipes extracted at build time; the credential
   columns withheld from both sloth.db readers, the box included.
+- 2026-10-23 — [[slothweb]]: M5 review fixes (#163). The SQL box rests
+  after each statement as long as it ran (a looping client no longer
+  stops sloth restarting its WAL), refuses temporary files (a large sort
+  is a `400` `temp_space`, not gigabytes in the temporary directory) and
+  `dbstat` (so [[sqlite-schema]]'s space recipe is refused there); the
+  History presence strip ends at the range's end and reads the hour tier
+  for a range older than `--web-retain-days`; a channel sloth labels `?`
+  is its own band.

@@ -29,7 +29,10 @@
  *     columns and every TEXT/BLOB column named for a secret, the same
  *     list M4's allow-list is held to), for sqlite_dbpage (raw pages
  *     would carry a withheld column's bytes), sqlite_stat3/4 (sampled
- *     index keys) and every pragma_* table-valued function. A query
+ *     index keys), dbstat, sqlite_dbdata and sqlite_dbptr (per-table and
+ *     per-index payload sizes and cell bytes: the length of a withheld
+ *     value, from its readable siblings') and every pragma_* table-valued
+ *     function. A query
  *     naming a withheld column, in its result or anywhere else, does
  *     not prepare, and the answer names the column;
  *   - sqlite3_stmt_readonly() must hold as well (a second, independent
@@ -51,6 +54,25 @@
  * and every other /api/query is a 503 "busy". The answer is held in the
  * box's buffer while it is sent, which is what bounds slothweb's memory
  * for it to one WEB_SQL_OUT_MAX buffer.
+ *
+ * The rest: a statement that kept sloth.db open for t ms (t at most the
+ * timeout) is followed by t ms in which the box holds no connection to
+ * it; a statement submitted then waits (queued, so the box is busy) and
+ * runs when the rest is over. A box reader holds a WAL read mark while
+ * it runs, and sloth can restart its WAL only when no reader holds one:
+ * without the rest, a client sending statements back to back kept one
+ * held for as long as it looped, and sloth.db-wal grew at sloth's whole
+ * write rate (to 14.7 MB in 40 s against a 4.2 MB control, and left at
+ * that size). With it, at most half of any stretch is a box reader's.
+ * The server's deadline for an asked-for answer is therefore its own
+ * timeout plus twice the box's (the rest, then the statement).
+ *
+ * Temporary files: the box's connection is opened through a VFS that
+ * refuses every file but sloth.db, its journal and its -wal
+ * (web_slothdb_open_box()), with temp_store FILE, so a sort or a
+ * temporary b-tree that outgrows the page cache fails ("temp_space", a
+ * 400) instead of writing gigabytes to the temporary directory, which
+ * on a sensor is the filesystem sloth.db lives on.
  *
  * --strict refuses --web-allow-sql (exit 2), and --web-allow-sql with
  * --web-allow-remote is announced on stderr naming the exposure

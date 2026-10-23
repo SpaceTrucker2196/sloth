@@ -12,7 +12,8 @@
  *     answers identical; and through the sqlite3 command-line shell as
  *     well when one is on PATH (CI may not have it; the library is the
  *     honest stand-in). The two recipes that read a withheld column
- *     (alerts.detail, cleartext_creds.username) are refused naming it;
+ *     (alerts.detail, cleartext_creds.username) and the one that reads
+ *     dbstat are refused naming it;
  *   - every write, every DDL, PRAGMA, ATTACH, a CTE with a DML tail and
  *     a second statement refused, and the file byte for byte and its
  *     directory as they were afterwards;
@@ -24,7 +25,11 @@
  *     one here), a value over the length limit, the function list;
  *   - one query at a time: a second /api/query while one runs is a
  *     503 "busy", the box is free again once the answer is sent, and a
- *     client that leaves while its statement runs frees it too. */
+ *     client that leaves while its statement runs frees it too, as does
+ *     a slot the server timed out before the answer came;
+ *   - the rest after each statement, and a writer at sloth's pace whose
+ *     -wal stays within twice its no-reader size while a client loops
+ *     the box. */
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -419,15 +424,18 @@ static void *serve(void *arg) {
     return NULL;
 }
 
-static int srv_up(int timeout_ms) {
+/* The server over db, the box's timeout box_ms, the server's own
+ * per-answer timeout conn_ms. */
+static int srv_up_at(const char *db, int box_ms, int conn_ms) {
+    int timeout_ms = box_ms;
     web_config_t c;
     web_config_defaults(&c);
     c.bind_port = 0;
-    c.timeout_ms = 8000;
+    c.timeout_ms = conn_ms;
     c.linger_ms = 200;
     c.allow_sql = 1;
-    snprintf(c.sloth_db, sizeof(c.sloth_db), "%s", g_db);
-    web_slothdb_init(&g_sdb, g_db, NULL);
+    snprintf(c.sloth_db, sizeof(c.sloth_db), "%s", db);
+    web_slothdb_init(&g_sdb, db, NULL);
     memset(&g_m4, 0, sizeof(g_m4));
     g_m4.sdb = &g_sdb;
     char err[256] = "";
@@ -443,6 +451,8 @@ static int srv_up(int timeout_ms) {
     web_server_set_sqlbox(g_srv, &g_box);
     return pthread_create(&g_th, NULL, serve, NULL) == 0 ? 0 : -1;
 }
+
+static int srv_up(int timeout_ms) { return srv_up_at(g_db, timeout_ms, 8000); }
 
 static void srv_down(void) {
     web_server_stop(g_srv);
@@ -527,6 +537,7 @@ static const char *refused_column(const char *title) {
     if (!strncmp(title, "Findings by severity", 20)) return "alerts.detail";
     if (!strncmp(title, "Cleartext credential exposures", 30))
         return "cleartext_creds.username";
+    if (!strncmp(title, "What is actually taking the space", 33)) return "dbstat";
     return NULL;
 }
 
@@ -553,9 +564,37 @@ static void left_as_it_was(void) {
     free(now);
 }
 
-/* Every recipe is the page's own: as many as the page has, each one
- * verbatim in it. Seen red with recipes.c keeping seven (the count) and
- * with it writing a newline as a space (the verbatim check). */
+/* The recipes the page offers, counted without the extractor's own
+ * rule: every line of a ```sh block whose command is sqlite3, however
+ * it is written, and every ```sql block. */
+static size_t page_recipes(const char *md) {
+    size_t count = 0;
+    int fence = 0;   /* 0 none, 1 sh, 2 another */
+    for (const char *line = md; *line;) {
+        const char *nl = strchr(line, '\n');
+        size_t ll = nl ? (size_t)(nl - line) : strlen(line);
+        size_t i = 0;
+        while (i < ll && (line[i] == ' ' || line[i] == '\t')) i++;
+        if (ll - i >= 3 && !strncmp(line + i, "```", 3)) {
+            if (fence) fence = 0;
+            else {
+                fence = ll - i >= 5 && !strncmp(line + i + 3, "sh", 2) ? 1 : 2;
+                if (ll - i >= 6 && !strncmp(line + i + 3, "sql", 3)) count++;
+            }
+        } else if (fence == 1 && ll - i >= 8 && !strncmp(line + i, "sqlite3", 7) &&
+                   (line[i + 7] == ' ' || line[i + 7] == '\t')) {
+            count++;
+        }
+        line += ll + (nl ? 1 : 0);
+    }
+    return count;
+}
+
+/* Every recipe is the page's own: as many as the page offers, each one
+ * verbatim in it. Seen red with recipes.c keeping seven (the count), with
+ * it writing a newline as a space (the verbatim check), and with a
+ * single-quoted sqlite3 line added to the page and recipes.c's check for
+ * one removed (the count: 9 offered, 8 taken). */
 static void test_recipes_are_the_pages(void) {
     FILE *f = fopen(web_recipes_source, "rb");
     WT_ASSERT(f != NULL);
@@ -564,9 +603,7 @@ static void test_recipes_are_the_pages(void) {
     size_t n = fread(md, 1, sizeof(md) - 1, f);
     fclose(f);
     md[n] = '\0';
-    size_t count = 0;
-    for (const char *p = md; (p = strstr(p, "sqlite3 sloth.db \"")); p++) count++;
-    WT_EQ(web_recipes_n, count);
+    WT_EQ(web_recipes_n, page_recipes(md));
     WT_ASSERT(web_recipes_n >= 8);
     for (size_t i = 0; i < web_recipes_n; i++) {
         WT_HAS(md, web_recipes[i].sql);
@@ -623,7 +660,7 @@ static void test_acceptance(void) {
         WT_HAS(b, tail);
         if (ex[i].rows && strstr(b, ex[i].rows)) matched++;
     }
-    WT_EQ(refused, 2);
+    WT_EQ(refused, 3);
     WT_EQ(matched + refused, (int)web_recipes_n);
     /* The recipes' values went out escaped: the markup hostname is in a
      * row the "between the last two visits" recipe does not read, so a
@@ -714,6 +751,22 @@ static void test_writes_refused(void) {
         WT_HAS(b, sec[i][1]);
         WT_LACKS(b, "alice");
         WT_LACKS(b, "corp-secret");
+    }
+    /* dbstat: a withheld column's length, from its table's payload (or
+     * its index's) less its readable siblings'. Seen red with "dbstat"
+     * off denied_table()'s list (each a 200 with the sizes). A library
+     * without it answers "no such table". */
+    static const char *const stat[] = {
+        "SELECT name, payload FROM dbstat WHERE name='cleartext_creds'",
+        "SELECT name, payload FROM dbstat('main',1) WHERE name LIKE 'sqlite_autoindex_alerts%'",
+        "SELECT sum(pgsize) FROM dbstat",
+    };
+    int have_dbstat = sqlite3_compileoption_used("ENABLE_DBSTAT_VTAB");
+    for (size_t i = 0; i < sizeof(stat) / sizeof(stat[0]); i++) {
+        const char *b;
+        WT_EQ(query(stat[i], &b), 400);
+        WT_HAS(b, have_dbstat ? "{\"error\":\"denied\",\"detail\":\"withheld: dbstat\"}"
+                              : "{\"error\":\"sql_error\"");
     }
     /* The functions outside the list. */
     static const char *const fn[] = {
@@ -910,12 +963,25 @@ static void test_limits(void) {
     out[off + n] = '\0';
     WT_EQ(status, 400);
     WT_HAS(out + off, "{\"error\":\"sql_error\"");
+    /* A sort past the page cache: refused at its first spill, not run
+     * for the whole budget writing a temporary file. Seen red with
+     * box_open() passing temporary files through (a 200, "truncated_by":
+     * "timeout", after 1 s of writing to the temporary directory). */
+    b.timeout_ms = 1000;
+    const char *sort = "SELECT printf('%.*c', 60000, a.name) v FROM sqlite_schema a,"
+                       " sqlite_schema b, sqlite_schema c ORDER BY v DESC, a.name";
+    n = web_sqlbox_query(&b, sort, strlen(sort), SDB_NOW, out,
+                         WEB_SQL_HDR + WEB_SQL_OUT_MAX, &off, &status);
+    out[off + n] = '\0';
+    WT_EQ(status, 400);
+    WT_HAS(out + off, "{\"error\":\"temp_space\"");
+    b.timeout_ms = WEB_SQL_TIMEOUT_MS;
     web_sqlbox_stats_t st;
     web_sqlbox_stats(&b, &st);
-    WT_EQ(st.queries, 4);
+    WT_EQ(st.queries, 5);
     WT_EQ(st.timeouts, 1);
     WT_EQ(st.truncated, 3);
-    WT_EQ(st.refused, 1);
+    WT_EQ(st.refused, 2);
     /* No sloth.db: a 503 naming its state. */
     web_slothdb_t none;
     char miss[160];
@@ -943,9 +1009,19 @@ static int wait_busy(int want, int ms) {
     return web_sqlbox_busy(&g_box) == want;
 }
 
+static long long t_mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
 /* One at a time. Seen red with web_sqlbox_submit() not checking the
- * state (the second ran: a 200), and with the release in conn_write()
- * removed (the box still busy once the answer was read). */
+ * state (the second ran: a 200), with the release in conn_write()
+ * removed (the box still busy once the answer was read), with the
+ * worker's rest removed (the statement after the 400 ms one answered at
+ * once), and with sql_ready()'s release of an answer nobody waits for
+ * removed (the box busy for good once the server had timed the slot
+ * out). */
 static void test_one_at_a_time(void) {
     WT_EQ(srv_up(400), 0);
     const char *slow = "SELECT count(*) FROM arp a, arp b, arp c, arp d, arp e, arp f";
@@ -959,9 +1035,18 @@ static void test_one_at_a_time(void) {
     WT_HAS(g_resp, "HTTP/1.1 200 OK\r\n");
     WT_HAS(g_resp, "\"truncated_by\":\"timeout\"");
     WT_EQ(web_sqlbox_busy(&g_box), 0);
+    /* The rest: the 400 ms statement is followed by 400 ms with no box
+     * reader, so the next statement waits most of that (the answer
+     * was read in the meantime) before it runs. */
+    long long t0 = t_mono_ms();
     WT_EQ(query("SELECT 1", &b), 200);
+    long long waited = t_mono_ms() - t0;
+    if (waited < 200) fprintf(stderr, "    answered after %lld ms\n", waited);
+    WT_ASSERT(waited >= 200);
     WT_HAS(b, "\"rows\":[[1]]");
-    /* A client that leaves while its statement runs frees the box. */
+    /* A client that leaves while its statement runs: the server does not
+     * poll a slot waiting on the box, so it learns of it when the answer
+     * is written, and that write's failure frees the box. */
     int fd2 = send_query(slow);
     WT_ASSERT(fd2 >= 0);
     WT_ASSERT(wait_busy(1, 3000));
@@ -984,6 +1069,120 @@ static void test_one_at_a_time(void) {
     web_sqlbox_stats(&g_box, &st);
     WT_ASSERT(st.busy >= 1);
     srv_down();
+    /* The server times the slot out before the box answers: here the box
+     * is held (its lock taken, so its worker cannot post the answer)
+     * past the slot's deadline, 200 ms + 2 x 400 ms, and the server
+     * closes the connection with nothing written. The answer then
+     * arrives for a slot that is gone, and sql_ready() must release
+     * the box itself: nobody else holds it. */
+    WT_EQ(srv_up_at(g_db, 400, 200), 0);
+    int fd3 = send_query(slow);
+    WT_ASSERT(fd3 >= 0);
+    WT_ASSERT(wait_busy(1, 3000));
+    pthread_mutex_lock(&g_box.mu);
+    size_t got = read_all(fd3, g_resp, RESP_CAP);   /* until the server closes */
+    pthread_mutex_unlock(&g_box.mu);
+    WT_EQ(got, 0);
+    WT_ASSERT(wait_busy(0, 5000));
+    WT_EQ(query("SELECT 3", &b), 200);
+    WT_HAS(b, "\"rows\":[[3]]");
+    srv_down();
+}
+
+/* sloth's writer as sloth runs it (src/db.c: WAL, synchronous NORMAL, a
+ * busy timeout), in a child process of its own: a 40 KB commit every
+ * 25 ms for ms milliseconds, with auto-checkpoints every 250 pages. The
+ * largest sloth.db-wal it saw after a commit, and its commits and BUSY
+ * answers, written to fd. Forked while this process has no other
+ * thread. */
+typedef struct { long long wal_max, commits, busy; } wal_obs_t;
+
+static pid_t wal_writer(const char *path, int ms, int fd) {
+    pid_t pid = fork();
+    if (pid != 0) return pid;
+    wal_obs_t o = { 0, 0, 0 };
+    char w[192];
+    snprintf(w, sizeof(w), "%s-wal", path);
+    sqlite3 *h = NULL;
+    if (sqlite3_open_v2(path, &h, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) _exit(1);
+    sqlite3_busy_timeout(h, 1000);
+    sqlite3_exec(h, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;"
+                    "PRAGMA wal_autocheckpoint=250", NULL, NULL, NULL);
+    long long end = t_mono_ms() + ms;
+    while (t_mono_ms() < end) {
+        int rc = sqlite3_exec(h, "BEGIN IMMEDIATE; INSERT INTO w VALUES"
+                                 " (zeroblob(40000)); COMMIT", NULL, NULL, NULL);
+        if (rc == SQLITE_OK) o.commits++;
+        else { o.busy++; sqlite3_exec(h, "ROLLBACK", NULL, NULL, NULL); }
+        struct stat sb;
+        if (stat(w, &sb) == 0 && sb.st_size > o.wal_max) o.wal_max = sb.st_size;
+        struct timespec ts = { 0, 25 * 1000000L };
+        nanosleep(&ts, NULL);
+    }
+    sqlite3_close(h);
+    ssize_t wr = write(fd, &o, sizeof(o));
+    _exit(wr == (ssize_t)sizeof(o) ? 0 : 1);
+}
+
+static int wal_collect(pid_t pid, int fd, wal_obs_t *o) {
+    memset(o, 0, sizeof(*o));
+    ssize_t r = read(fd, o, sizeof(*o));
+    int st = 0;
+    waitpid(pid, &st, 0);
+    return r == (ssize_t)sizeof(*o) && WIFEXITED(st) && WEXITSTATUS(st) == 0 ? 0 : -1;
+}
+
+/* A client sending statements back to back does not stop sloth from
+ * restarting its WAL: with a writer at sloth's pace, the largest
+ * sloth.db-wal while a client loops the box (each statement running to
+ * its 300 ms timeout) stays within twice the largest with no reader at
+ * all, while the writer appends several times that. Seen red with the
+ * worker's rest removed (the -wal grew with every commit, to about
+ * what was written). */
+static void test_box_lets_the_wal_restart(void) {
+    char p[160];
+    snprintf(p, sizeof(p), "%s/wal.db", g_dir);
+    WT_EQ(sdb_make(p, db_schema_version(), 1), 0);
+    WT_EQ(seed_recipes(p), 0);
+    WT_EQ(sdb_exec(p, "CREATE TABLE w (b BLOB)"), 0);
+    const int ms = 3000;
+    int pfd[2];
+    WT_EQ(pipe(pfd), 0);
+    /* The control: the writer alone. */
+    wal_obs_t ctl, box;
+    pid_t pid = wal_writer(p, ms, pfd[1]);
+    WT_ASSERT(pid > 0);
+    WT_EQ(wal_collect(pid, pfd[0], &ctl), 0);
+    /* The writer with the box looped (the child first: no thread yet). */
+    pid = wal_writer(p, ms, pfd[1]);
+    WT_ASSERT(pid > 0);
+    WT_EQ(srv_up_at(p, 300, 8000), 0);
+    const char *slow = "SELECT count(*) FROM arp a, arp b, arp c, arp d, arp e, arp f";
+    int answers = 0, other = 0;
+    long long end = t_mono_ms() + ms;
+    while (t_mono_ms() < end) {
+        const char *b;
+        int st = query(slow, &b);
+        if (st == 200) answers++;
+        else other++;
+    }
+    srv_down();
+    WT_EQ(wal_collect(pid, pfd[0], &box), 0);
+    close(pfd[0]);
+    close(pfd[1]);
+    long long written = box.commits * 40000;
+    fprintf(stderr, "    -wal max %lld B alone, %lld B with %d box answers (%d other);"
+            " %lld B written, %lld BUSY\n", ctl.wal_max, box.wal_max, answers, other,
+            written, box.busy);
+    WT_ASSERT(answers >= 3);
+    WT_EQ(other, 0);
+    WT_ASSERT(ctl.wal_max > 0);
+    WT_ASSERT(written > 3 * ctl.wal_max);     /* unbounded growth would show */
+    WT_ASSERT(box.wal_max <= 2 * ctl.wal_max);
+    char s[192];
+    unlink(p);
+    snprintf(s, sizeof(s), "%s-wal", p); unlink(s);
+    snprintf(s, sizeof(s), "%s-shm", p); unlink(s);
 }
 
 void run_sqlbox_tests(void) {
@@ -1006,6 +1205,7 @@ void run_sqlbox_tests(void) {
         WT_RUN(test_withheld_columns);
         WT_RUN(test_limits);
         WT_RUN(test_one_at_a_time);
+        WT_RUN(test_box_lets_the_wal_restart);
         left_as_it_was();
     }
     free(g_resp);

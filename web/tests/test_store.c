@@ -584,13 +584,13 @@ static void test_presence_cells(void) {
     WT_EQ(web_store_write(&S, q, 5), 0);
     unsigned char bits[18];
     memset(bits, 0, sizeof(bits));
-    WT_EQ(web_store_presence(&S, WM_DEV_PRESENT, "00:11:22:33:44:55", T, 144,
-                             600, bits), 2);
+    WT_EQ(web_store_presence(&S, WEB_TIER_MINUTE, WM_DEV_PRESENT,
+                             "00:11:22:33:44:55", T, T + 144 * 600, 144, 600, bits), 2);
     WT_EQ(bits[0], 0x03);                      /* cells 0 and 1 */
     for (int i = 1; i < 18; i++) WT_EQ(bits[i], 0);
     memset(bits, 0, sizeof(bits));
-    WT_EQ(web_store_presence(&S, WM_DEV_PRESENT, "00:11:22:33:44:66", T, 144,
-                             600, bits), 0);
+    WT_EQ(web_store_presence(&S, WEB_TIER_MINUTE, WM_DEV_PRESENT,
+                             "00:11:22:33:44:66", T, T + 144 * 600, 144, 600, bits), 0);
     web_store_close(&S);
     rm_store(p);
 }

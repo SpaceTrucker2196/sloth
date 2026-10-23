@@ -342,11 +342,13 @@ static void conn_route(web_server_t *s, web_conn_t *c, const web_req_t *rq) {
     }
     if (r.kind == WEB_R_SQL) {
         /* Nothing to write until the box answers; the budget runs from
-         * now, as it would for any other answer, and is the statement's
-         * timeout plus the time to send what it found. */
+         * now, as it would for any other answer, and is the box's rest
+         * after the previous statement and this one's timeout (each at
+         * most the box's timeout, web_sqlbox.h) plus the time to send
+         * what it found. */
         c->state = C_SQL;
         c->deadline_ms = now_ms() + s->cfg.timeout_ms +
-                         (s->sql ? s->sql->timeout_ms : 0);
+                         (s->sql ? 2LL * s->sql->timeout_ms : 0);
         s->sql_conn = (int)(c - s->conns);
         return;
     }

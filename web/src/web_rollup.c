@@ -596,13 +596,14 @@ int web_rollup_fine(web_rollup_t *ru, int metric, const char *key,
 
 void web_rollup_presence(web_rollup_t *ru, int metric,
                          const char (*keys)[WEB_KEY_MAX + 1], int n,
-                         long long from, int ncell, int cell_s,
-                         unsigned char *bits) {
+                         long long from, long long until, int ncell,
+                         int cell_s, unsigned char *bits) {
     if (metric < 0 || metric >= WM_COUNT || n <= 0 || ncell <= 0 || cell_s <= 0)
         return;
     const web_metric_t *md = &web_metric_defs[metric];
     size_t stride = (size_t)(ncell + 7) / 8;
     long long to = from + (long long)ncell * cell_s;
+    if (until < to) to = until;
     /* sid -> key index, open addressing over a power of two. */
     int hn = 1;
     while (hn < n * 2) hn <<= 1;

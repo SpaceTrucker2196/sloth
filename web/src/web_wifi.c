@@ -43,12 +43,17 @@ const char *web_downgrade_name(int b) {
     return b >= 0 && b < 4 ? N[b] : NULL;
 }
 
+/* sloth's own ranges (src/beacon_snoop.c ap_band_label()): 1-14 2.4 GHz,
+ * 32-177 5 GHz, 6 GHz only when an HE 6 GHz element said so (the "6g"
+ * key), and "?" for any other number, which a plain key outside both
+ * ranges therefore is. */
 const char *web_channel_band(const char *key, int *rank) {
     if (!strncmp(key, "6g", 2)) { *rank = 2; return "6"; }
     long ch = strtol(key, NULL, 10);
     if (ch >= 1 && ch <= 14) { *rank = 0; return "2.4"; }
-    *rank = 1;
-    return "5";
+    if (ch >= 32 && ch <= 177) { *rank = 1; return "5"; }
+    *rank = 3;
+    return "?";
 }
 
 /* ── answers ─────────────────────────────────────────────────────────── */

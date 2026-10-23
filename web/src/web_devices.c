@@ -141,24 +141,30 @@ static long long strip_from(long long now_s) {
     return now_s - now_s % WEB_DEV_CELL_S - (WEB_DEV_CELLS - 1) * WEB_DEV_CELL_S;
 }
 
-/* The strips of n MACs, WEB_DEV_CELLS cells of cell_s from from: the
- * store's minute tier, then what the ring and the open buckets hold. */
+/* The strips of n MACs, ncell (at most WEB_DEV_CELLS) cells of cell_s
+ * from from, nothing at or past to: the store's minute tier, and its
+ * hour tier too when hour is set (cells of whole hours, so an hour row
+ * belongs to one cell), then what the ring and the open buckets hold. */
 static void strips_at(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
-                      int n, long long from, int cell_s, unsigned char *bits) {
+                      int n, long long from, long long to, int ncell,
+                      int cell_s, int hour, unsigned char *bits) {
     memset(bits, 0, (size_t)n * (WEB_DEV_CELLS / 8));
     if (!m->tsdb) return;
     if (m->tsdb->store && m->tsdb->store->rd)
         for (int i = 0; i < n; i++)
-            web_store_presence(m->tsdb->store, WM_DEV_PRESENT, macs[i], from,
-                               WEB_DEV_CELLS, cell_s,
-                               bits + (size_t)i * (WEB_DEV_CELLS / 8));
-    web_rollup_presence(m->tsdb->ru, WM_DEV_PRESENT, macs, n, from,
-                        WEB_DEV_CELLS, cell_s, bits);
+            for (int t = WEB_TIER_MINUTE; t <= (hour ? WEB_TIER_HOUR : WEB_TIER_MINUTE); t++)
+                web_store_presence(m->tsdb->store, t, WM_DEV_PRESENT, macs[i],
+                                   from, to, ncell, cell_s,
+                                   bits + (size_t)i * (WEB_DEV_CELLS / 8));
+    web_rollup_presence(m->tsdb->ru, WM_DEV_PRESENT, macs, n, from, to,
+                        ncell, cell_s, bits);
 }
 
 static void strips(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
                    int n, long long now_s, unsigned char *bits) {
-    strips_at(m, macs, n, strip_from(now_s), WEB_DEV_CELL_S, bits);
+    long long from = strip_from(now_s);
+    strips_at(m, macs, n, from, from + (long long)WEB_DEV_CELLS * WEB_DEV_CELL_S,
+              WEB_DEV_CELLS, WEB_DEV_CELL_S, 0, bits);
 }
 
 static const char *vendor_table(const web_m4_t *m) {
@@ -410,18 +416,27 @@ int web_history_devices_route(const web_m4_t *m, const char *query,
         return answer_error(503, to_out ? "sloth_db_timeout" : "sloth_db_error",
                             NULL, body, cap, len, status);
     }
-    /* The strip over the range itself: 144 cells, none finer than the
-     * minute tier the store keeps for that long. */
+    /* The strip over the range itself and nothing past it: at most 144
+     * cells, each a whole number of the steps of the tier that still
+     * holds the range, as /api/wifi/channels chooses one. The minute
+     * tier is kept --web-retain-days; a range reaching further back
+     * reads the hour tier (kept 400 d) as well, in cells of whole
+     * hours. The last cell may be short: it ends at to. */
     long long span = to - from;
+    int store_on = m->tsdb && m->tsdb->store && m->tsdb->store->rd;
+    int hour = store_on && from < now_s - (long long)m->tsdb->retain_days * 86400;
+    long long step = hour ? 3600 : 60;
     long long cell = (span + WEB_DEV_CELLS - 1) / WEB_DEV_CELLS;
-    if (cell < 60) cell = 60;
+    cell = (cell + step - 1) / step * step;
+    int ncell = (int)((span + cell - 1) / cell);
     int show = c.n > limit ? (int)limit : c.n;
     char (*macs)[WEB_KEY_MAX + 1] = calloc((size_t)(show ? show : 1), sizeof(*macs));
     unsigned char *bits = calloc((size_t)(show ? show : 1), WEB_DEV_CELLS / 8);
     if (!macs || !bits) { free(macs); free(bits); free(c.rows); return -1; }
     for (int i = 0; i < show; i++)
         snprintf(macs[i], sizeof(macs[i]), "%s", c.rows[i].mac);
-    strips_at(m, (const char (*)[WEB_KEY_MAX + 1])macs, show, from, (int)cell, bits);
+    strips_at(m, (const char (*)[WEB_KEY_MAX + 1])macs, show, from, to, ncell,
+              (int)cell, hour, bits);
     web_jw_t w;
     web_jw_init(&w, body, cap);
     web_jw_raw(&w, "{\"now\":");     web_jw_int(&w, now_s);
@@ -433,6 +448,8 @@ int web_history_devices_route(const web_m4_t *m, const char *query,
     web_jw_raw(&w, ",\"vendor_table\":"); web_jw_str(&w, vendor_table(m));
     web_jw_raw(&w, ",\"presence_from\":"); web_jw_int(&w, from);
     web_jw_raw(&w, ",\"presence_cell_s\":"); web_jw_int(&w, cell);
+    web_jw_raw(&w, ",\"presence_cells\":"); web_jw_int(&w, ncell);
+    web_jw_raw(&w, ",\"presence_tier\":"); web_jw_str(&w, hour ? "hour" : "minute");
     web_jw_raw(&w, ",\"rows\":[");
     int shown = 0;
     for (int i = 0; i < show; i++) {

@@ -948,10 +948,12 @@
     return out;
   }
 
-  // The 144 cells of 10 minutes from the server's 36 hex digits, cell 0
-  // the oldest, its bit the high bit of the first digit; present in
-  // --phosphor, absent in --bg (§8.12).
-  function drawStrip(c, hex) {
+  // The cells from the server's 36 hex digits, cell 0 the oldest, its
+  // bit the high bit of the first digit; present in --phosphor, absent
+  // in --bg (§8.12). n of them across the width: 144 of 10 minutes on
+  // the Devices view and the drawer, History's presence_cells over its
+  // range (the rest of the 144 are past it).
+  function drawStrip(c, hex, n) {
     var T = theme();
     var dpr = sizeCanvas(c);
     var g = c.getContext("2d");
@@ -959,9 +961,10 @@
     g.fillStyle = T.bg;
     g.fillRect(0, 0, W, H);
     if (typeof hex !== "string" || !/^[0-9a-f]{36}$/.test(hex)) return;
-    var cw = W / 144;
+    n = num(n) && n >= 1 && n <= 144 ? Math.floor(n) : 144;
+    var cw = W / n;
     g.fillStyle = css("--phosphor");
-    for (var i = 0; i < 144; i++) {
+    for (var i = 0; i < n; i++) {
       var v = parseInt(hex.charAt(i >> 2), 16);
       if (v & (8 >> (i & 3))) g.fillRect(Math.floor(i * cw), 0, Math.max(dpr, Math.ceil(cw)), H);
     }
@@ -1480,7 +1483,7 @@
   }
   HS.ngen = 0;
 
-  function histDevRow(d) {
+  function histDevRow(d, cells) {
     var row = el("div", "hrow");
     var mac = el("span", "c-mac");
     var sw = el("span", "sw");
@@ -1496,7 +1499,7 @@
     row.appendChild(cv);
     row.addEventListener("click", function () { openDrawer(d.mac); });
     $("h-devs").appendChild(row);
-    drawStrip(cv, d.presence);
+    drawStrip(cv, d.presence, cells);
   }
 
   function historyRange() {
@@ -1507,9 +1510,10 @@
       if (gen !== HS.gen) return;
       var box = $("h-devs");
       while (box.firstChild) box.removeChild(box.firstChild);
-      (j.rows || []).forEach(histDevRow);
+      (j.rows || []).forEach(function (d) { histDevRow(d, j.presence_cells); });
       set("h-dev-count", (j.rows || []).length + " overlap the range" +
-          (j.more ? ", more than shown" : "") + "; strip: " + fmt(j.presence_cell_s) + " s cells");
+          (j.more ? ", more than shown" : "") + "; strip: " + fmt(j.presence_cells) +
+          " cells of " + fmt(j.presence_cell_s) + " s");
     }).catch(function (e) { if (gen === HS.gen) set("h-dev-count", errText(e.message)); });
     getJSON(histPath("alerts", from, to, "&limit=100")).then(function (j) {
       if (gen !== HS.gen) return;

@@ -4,9 +4,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "web_json.h"
+
+static long long box_mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
 
 /* ── state and thread ─────────────────────────────────────────────────── */
 
@@ -18,7 +25,12 @@ int web_sqlbox_init(web_sqlbox_t *b, web_slothdb_t *sdb, int enabled) {
     b->row_cap = WEB_SQL_ROW_CAP;
     b->out_max = WEB_SQL_OUT_MAX;
     pthread_mutex_init(&b->mu, NULL);
-    pthread_cond_init(&b->cv, NULL);
+    /* The rest between statements is timed on the monotonic clock. */
+    pthread_condattr_t ca;
+    pthread_condattr_init(&ca);
+    pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
+    pthread_cond_init(&b->cv, &ca);
+    pthread_condattr_destroy(&ca);
     if (!enabled) return 0;
     b->out = malloc(WEB_SQL_HDR + b->out_max);
     if (!b->out) return -1;
@@ -33,12 +45,24 @@ int web_sqlbox_init(web_sqlbox_t *b, web_slothdb_t *sdb, int enabled) {
     return 0;
 }
 
+/* The rest (web_sqlbox.h): a statement that held sloth.db open for t ms
+ * is followed by t ms with no box reader at all, so sloth's commits in
+ * between can checkpoint and restart its WAL. A box reader keeps a WAL
+ * read mark for as long as it runs, and a client sending statements
+ * back to back would otherwise hold one without a gap, and sloth.db-wal
+ * would grow at sloth's full write rate for as long as it kept on. */
 static void *worker(void *arg) {
     web_sqlbox_t *b = arg;
+    long long rest_until = 0;
     pthread_mutex_lock(&b->mu);
     for (;;) {
         while (!b->stop && b->state != WEB_SQLB_QUEUED)
             pthread_cond_wait(&b->cv, &b->mu);
+        while (!b->stop && box_mono_ms() < rest_until) {
+            struct timespec ts = { (time_t)(rest_until / 1000),
+                                   (long)(rest_until % 1000) * 1000000L };
+            pthread_cond_timedwait(&b->cv, &b->mu, &ts);
+        }
         if (b->stop) break;
         b->state = WEB_SQLB_RUNNING;
         /* sql, now_s and out are this thread's until DONE: submit()
@@ -46,8 +70,11 @@ static void *worker(void *arg) {
         pthread_mutex_unlock(&b->mu);
         int status = 503;
         size_t off = 0;
+        long long t0 = box_mono_ms();
         size_t n = web_sqlbox_query(b, b->sql, b->sql_len, b->now_s, b->out,
                                     WEB_SQL_HDR + b->out_max, &off, &status);
+        long long held = box_mono_ms() - t0;
+        rest_until = box_mono_ms() + (held < b->timeout_ms ? held : b->timeout_ms);
         if (n == 0) {
             static const char busy[] =
                 "HTTP/1.1 503 Service Unavailable\r\n"
@@ -226,8 +253,8 @@ size_t web_sqlbox_query(web_sqlbox_t *b, const char *sql, size_t len,
     web_sdb_conn_t c;
     char err[WEB_SDB_ERR_MAX];
     size_t bl;
-    if (!b->sdb || web_slothdb_open(b->sdb, &c, b->timeout_ms, now_s, err,
-                                    sizeof(err)) != 0) {
+    if (!b->sdb || web_slothdb_open_box(b->sdb, &c, b->timeout_ms, now_s, err,
+                                        sizeof(err)) != 0) {
         web_sdb_stats_t ss;
         char why[48];
         memset(&ss, 0, sizeof(ss));

@@ -13,7 +13,10 @@
  * byte (newlines and indentation included); its title is the run of
  * `#` comment lines just before it. A recipe with a double quote or a
  * backslash in its SQL, an unterminated one, or a page with none is an
- * error: the build stops rather than offer a recipe cut short.
+ * error: the build stops rather than offer a recipe cut short. So is a
+ * line in a ```sh block that runs sqlite3 any other way (single quotes,
+ * another file, a heredoc) and a ```sql block: either is a recipe the
+ * page offers and the box would silently not.
  *
  * OUT.c is generated under build/ and never committed. */
 #include <stdio.h>
@@ -71,6 +74,11 @@ int main(int argc, char **argv) {
         size_t i = 0;
         while (i < ll && line[i] == ' ') i++;
         if (ll - i >= 3 && !memcmp(line + i, "```", 3)) {
+            if (!in_sh && ll - i >= 6 && !memcmp(line + i + 3, "sql", 3)) {
+                fprintf(stderr, "recipes: a ```sql block at offset %zu: write "
+                        "it as sqlite3 sloth.db \"...\" in a ```sh block\n", pos);
+                return 1;
+            }
             in_sh = !in_sh && ll - i >= 5 && !memcmp(line + i + 3, "sh", 2);
             title[0] = '\0';
             pos += ll + (nl ? 1 : 0);
@@ -113,6 +121,13 @@ int main(int argc, char **argv) {
             const char *after = strchr(end, '\n');
             pos = after ? (size_t)(after - md) + 1 : n;
             continue;
+        }
+        if (in_sh && ll - i >= 7 && !memcmp(line + i, "sqlite3", 7) &&
+            (ll - i == 7 || line[i + 7] == ' ' || line[i + 7] == '\t')) {
+            fprintf(stderr, "recipes: a sqlite3 command at offset %zu that is "
+                    "not sqlite3 sloth.db \"...\": the box would not offer it\n",
+                    pos);
+            return 1;
         }
         if (in_sh) title[0] = '\0';
         pos += ll + (nl ? 1 : 0);

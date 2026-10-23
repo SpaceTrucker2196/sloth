@@ -349,12 +349,13 @@ int  web_store_ptr_load(web_store_t *s, int cap,
 int  web_store_ptr_put(web_store_t *s, const web_store_ptr_t *r, int n,
                        int cap, long long *evicted);
 
-/* The presence strip of (metric, key) from the minute tier, on the
- * read-only connection (the HTTP thread): bit i of bits, LSB first, is
- * OR'd in when a minute row of max >= 0.5 lies in cell i of ncell cells
- * of cell_s seconds from from. Cells newly set, or -1. */
-int  web_store_presence(web_store_t *s, int metric, const char *key,
-                        long long from, int ncell, int cell_s,
+/* The presence strip of (metric, key) from tier (WEB_TIER_MINUTE or
+ * WEB_TIER_HOUR), on the read-only connection (the HTTP thread): bit i
+ * of bits, LSB first, is OR'd in when a row of max >= 0.5 starts in
+ * cell i of ncell cells of cell_s seconds from from, and before to.
+ * Cells newly set, or -1. */
+int  web_store_presence(web_store_t *s, int tier, int metric, const char *key,
+                        long long from, long long to, int ncell, int cell_s,
                         unsigned char *bits);
 
 /* Test seams (web/tests/test_store.c); NULL and 0 in slothweb itself.

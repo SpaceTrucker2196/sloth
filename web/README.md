@@ -1341,7 +1341,9 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
 - **The waterfall** is slothweb.db's `wifi.ap_count` (a gauge: a cell is
   the mean of its buckets) or `wifi.ctrl_total` (a counter: their sum),
   the toggle on the view. Rows are channels, 2.4 GHz, then 5, then 6
-  (`6gN` keys, since 5 and 6 GHz share numbers), each band by channel
+  (`6gN` keys, since 5 and 6 GHz share numbers), then any channel sloth
+  could not place (`"band":"?"`: a number outside 1-14 and 32-177 with
+  no HE 6 GHz element, which sloth labels `?`), each band by channel
   number, with a rule drawn between bands; at most 40 rows, then
   `"more":true`. Columns are `cols` (1..96) cells of `col_s`, a
   whole number of the tier's step. The tier is the finest that covers
@@ -1387,10 +1389,16 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
 - **Who was here** (`/api/history/devices?from=&to=&limit=&offset=`) is
   the wiki's recipe as a route: devices whose `[first_seen, last_seen]`
   overlaps `[from, to]`, edges included, rendered as `/api/devices`
-  renders a row, with the presence strip over the range itself: 144
-  cells of `presence_cell_s` (the range over 144, never finer than the
-  minute tier the store keeps), from slothweb.db's `dev.present`. A row
-  opens the drawer.
+  renders a row, with the presence strip over the range itself and
+  nothing past it: `presence_cells` (at most 144) cells of
+  `presence_cell_s` from `from`, the last ending at `to`, from
+  slothweb.db's `dev.present`. A cell is a whole number of the steps of
+  `presence_tier`: `minute` while the range lies inside
+  `--web-retain-days`, `hour` (the hour tier, kept 400 d, with whatever
+  minute rows remain) for a range reaching further back, so the older
+  part of a long range is not drawn blank. The hex still carries 144
+  cells; those past `presence_cells` are 0, and the page spreads
+  `presence_cells` across the strip. A row opens the drawer.
 - **Alerts, anomalies and flows in the range**: `/api/history/alerts`
   (title, the IP it names, type, severity, count, first and last seen;
   never the key or the detail), the anomaly episodes slothweb still
@@ -1451,8 +1459,10 @@ What a statement goes through (`web_sqlbox.h` has the detail):
    CTE with a DML tail, which is an `INSERT`, `UPDATE` or `DELETE`.
    `SQLITE_READ` is itself denied for the withheld columns (below),
    `sqlite_dbpage` (raw pages would carry their bytes),
-   `sqlite_stat3`/`4` (sampled index keys), every `pragma_*`
-   table-valued function and anything outside `main`. The refusal names
+   `sqlite_stat3`/`4` (sampled index keys), `dbstat` (and the recovery
+   extension's `sqlite_dbdata`/`sqlite_dbptr`: a table's or an index's
+   payload less its readable siblings is a withheld value's length),
+   every `pragma_*` table-valued function and anything outside `main`. The refusal names
    what was denied (`{"error":"denied","detail":"withheld:
    cleartext_creds.username"}`).
 5. `sqlite3_stmt_readonly()` must also hold, a second, independent
@@ -1462,7 +1472,15 @@ What a statement goes through (`web_sqlbox.h` has the detail):
    bound parameters, `trusted_schema` and extension loading off.
 7. **5 s**, by a progress handler: what came back by then is the answer,
    `"truncated_by":"timeout"`. **10,000 rows** (`"rows"`) and **4 MB of
-   answer** (`"bytes"`) likewise. Every value is JSON (the writer every
+   answer** (`"bytes"`) likewise. **No temporary file**: the box's
+   connection goes through a VFS that opens sloth.db, its journal and
+   its `-wal` and nothing else, with `temp_store` FILE and a 2 MB page
+   cache, so a sort or temporary b-tree that outgrows the cache is a
+   `400` `temp_space` at its first spill instead of gigabytes written
+   to the temporary directory (the filesystem sloth.db is on, on a
+   sensor) for the whole 5 s. A library built to keep temporary tables
+   in memory regardless (`TEMP_STORE=3`, unbounded) has no box: every
+   statement is a `503`. Every value is JSON (the writer every
    string here goes through), a BLOB as `{"blob":"<hex>"}`, a REAL
    always with its point.
 8. **One at a time.** The statement runs on the box's own thread, so
@@ -1471,6 +1489,14 @@ What a statement goes through (`web_sqlbox.h` has the detail):
    written (or its client is gone) the box is busy, and every other
    `/api/query` is a `503` `{"error":"busy"}`. The answer is sent from
    the box's one buffer, which is what bounds the memory it costs.
+9. **The rest.** A statement that kept sloth.db open for *t* ms (at most
+   the timeout) is followed by *t* ms with no box connection to it; one
+   submitted then is queued (the box is busy) and runs after. A reader
+   holds a WAL read mark while it runs and sloth restarts its WAL only
+   when none is held, so without the rest a client looping the box kept
+   sloth.db-wal growing at sloth's whole write rate (14.7 MB in 40 s
+   against 4.2 MB with no reader) and left it that size. The server's
+   deadline for a box answer is its own timeout plus twice the box's.
 
 **The withheld columns** (`web_secret.h`) are the same list M4's reader
 is held to: the columns `tests/test_db.c`'s guardrail words name when
@@ -1494,9 +1520,12 @@ it. The integer flags and counts that carry the same words
 ` ```sh ` block at build time into `build/web/web_recipes.c` (never
 committed), the SQL byte for byte and the `#` line before it as the
 title; `/api/recipes` serves them and the box offers them in a list.
-Six of the eight run from the box. Two read a withheld column and are
-refused, naming it: "Findings by severity" (`alerts.detail`) and
-"Cleartext credential exposures" (`cleartext_creds.username`).
+Five of the eight run from the box. Three are refused, naming what
+they read: "Findings by severity" (`alerts.detail`), "Cleartext
+credential exposures" (`cleartext_creds.username`) and "What is
+actually taking the space?" (`dbstat`). The extractor stops the build
+on a `sqlite3` line in a ` ```sh ` block written any other way, and on
+a ` ```sql ` block, so the page cannot offer a recipe the box drops.
 
 **The acceptance** (`test_sqlbox.c`): a sloth.db generated from
 `src/db_schema.c` in a fresh directory, seeded so every recipe returns
@@ -1504,7 +1533,7 @@ rows; each recipe through `/api/query` over a real loopback socket and
 through the sqlite3 C API directly on the same file, the result
 identical; through the `sqlite3` shell too when one is on `PATH` (CI
 may have none; the library it would run is the honest stand-in); the
-two refused recipes refused, naming the column; every write in every
+three refused recipes refused, naming what they read; every write in every
 disguise refused (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ATTACH`,
 `PRAGMA writable_schema`, a temporary table, a CTE with a DML tail,
 two statements) and the file byte for byte and its directory unchanged.
@@ -1522,8 +1551,9 @@ exposure: every peer the allow list admits can then run any read-only
   few plain functions are allowed, nothing that reads a file, loads
   code or makes a blob of a chosen size.
 - The spec's acceptance says the recipes "match the sqlite3 CLI
-  output". Two recipes read a column withheld from every reader, so
-  they are refused instead; the other six match.
+  output". Two recipes read a column withheld from every reader and
+  one reads `dbstat`, so they are refused instead; the other five
+  match.
 - `HEAD /api/query` is a `405` (`Allow: GET`), the one route that is not
   GET and HEAD: a `HEAD` would have to run the statement to describe its
   answer.
