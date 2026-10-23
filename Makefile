@@ -587,6 +587,7 @@ WEB_OUI_C       = $(WEB_GEN_DIR)/web_oui_table.c
 WEB_OUI_STAMP   = $(WEB_GEN_DIR)/oui.inputs
 WEB_RECIPES_MD  = docs/wiki/sqlite-schema.md
 WEB_RECIPESGEN  = $(WEB_GEN_DIR)/recipes
+WEB_RECIPES_SRCS = web/tools/recipes.c
 WEB_RECIPES_C   = $(WEB_GEN_DIR)/web_recipes.c
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C) \
                   $(WEB_OUI_C) $(WEB_RECIPES_C)
@@ -623,9 +624,9 @@ $(WEB_OUI_C): $(WEB_OUIGEN) $(WEB_OUI_STAMP) $(WEB_OUI_CSVS) src/oui.c
 	$(WEB_OUIGEN) $@.tmp src/oui.c $(WEB_OUI_CSVS)
 	mv $@.tmp $@
 
-$(WEB_RECIPESGEN): web/tools/recipes.c
+$(WEB_RECIPESGEN): $(WEB_RECIPES_SRCS)
 	@mkdir -p $(WEB_GEN_DIR)
-	$(CC) $(CFLAGS) -o $@ web/tools/recipes.c
+	$(CC) $(CFLAGS) -o $@ $(WEB_RECIPES_SRCS)
 
 $(WEB_RECIPES_C): $(WEB_RECIPESGEN) $(WEB_RECIPES_MD) web/src/web_recipes.h
 	$(WEB_RECIPESGEN) $(WEB_RECIPES_MD) $@.tmp

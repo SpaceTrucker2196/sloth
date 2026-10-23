@@ -52,8 +52,7 @@ int main(int argc, char **argv) {
     }
     FILE *f = fopen(argv[1], "rb");
     if (!f) { fprintf(stderr, "recipes: cannot open %s\n", argv[1]); return 1; }
-    char *md = malloc(MD_MAX + 1);
-    if (!md) { fclose(f); return 1; }
+    static char md[MD_MAX + 1];
     size_t n = fread(md, 1, MD_MAX, f);
     int big = n == MD_MAX;
     fclose(f);
@@ -137,6 +136,5 @@ int main(int argc, char **argv) {
         free(R[k].sql);
     }
     fprintf(o, "};\nconst size_t web_recipes_n = %d;\n", nr);
-    free(md);
     return fclose(o) == 0 ? 0 : 1;
 }
