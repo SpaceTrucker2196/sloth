@@ -380,7 +380,7 @@ static void test_health_json(void) {
     WT_EQ(r.kind, WEB_R_ONESHOT);
     WT_ASSERT(r.body == NULL);
     static const char body[] =
-        "{\"service\":\"slothweb\",\"milestone\":\"M5\",\"uptime_s\":42,"
+        "{\"service\":\"slothweb\",\"milestone\":\"M6\",\"uptime_s\":42,"
         "\"socket\":\"none\",\"last_record_age_s\":null,"
         "\"db\":\"none\",\"db_schema\":null,\"db_rows\":null,"
         "\"db_supported\":[1,7],\"sql\":false,"

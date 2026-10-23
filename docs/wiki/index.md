@@ -131,7 +131,10 @@ the Wi-Fi it watches:
   (#102): W0 (#157) is the loopback-default bind and the allowed-peer
   list refused at accept(); M0 (#158) the page, `/api/health` and the
   `/events` stream; M1 (#159) the data-socket client, `/api/live` and
-  the Overview.
+  the Overview; M2 to M5 the time series, baselines and anomalies,
+  Devices, WiFi, History and the SQL box; M6 (#164) the Flows view and
+  the five-minute README (`web/README.md`) with its troubleshooting
+  table and security section.
 - [[deployment]] — `make install` + `make install-service` (#139): the
   shipped hardened unit, why it runs as `sloth` and not root, what each
   sandbox key costs, and the migration off a build-tree unit.

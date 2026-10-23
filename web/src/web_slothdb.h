@@ -349,6 +349,71 @@ int  web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,
 int  web_sdb_overview(web_sdb_conn_t *c, long long from, int cell_s,
                       int ncell, long long *devs, long long *alerts);
 
+/* ── M6 reads (#164): the Flows view ──────────────────────────────────── */
+
+/* The protocol tables the Flows view reads, one per tab, in tab order.
+ * The first four share WEB_FLOW_*'s numbers (History's flows).
+ * mqtt_flows is not one: it holds MQTT usernames (last_username), and
+ * the allow-list keeps that table whole off, as it did in M4. */
+enum { WEB_FP_SSH = WEB_FLOW_SSH, WEB_FP_RDP = WEB_FLOW_RDP,
+       WEB_FP_SMB = WEB_FLOW_SMB, WEB_FP_SNMP = WEB_FLOW_SNMP,
+       WEB_FP_LDAP, WEB_FP_KERB, WEB_FP_BGP, WEB_FP_KINDS };
+#define WEB_FP_COLS 6
+
+typedef struct {
+    const char *name;                 /* "ssh", the tab and the ?proto= */
+    const char *table;
+    const char *src, *dst;            /* dst NULL: a per-source table */
+    const char *cols[WEB_FP_COLS + 1];/* its counters, NULL-ended */
+    const char *xint;                 /* one more integer, or NULL */
+    const char *xtext;                /* one more short text, or NULL */
+    const char *withheld;             /* columns left off the allow-list,
+                                         and why; NULL none */
+} web_sdb_ftab_t;
+
+extern const web_sdb_ftab_t web_sdb_ftab[WEB_FP_KINDS];
+/* The tab's index for a name, or -1. */
+int web_sdb_ftab_find(const char *name);
+
+typedef struct {
+    int       proto;
+    char      src[WEB_SDB_TEXT_MAX + 1];
+    char      dst[WEB_SDB_TEXT_MAX + 1];
+    long long n[WEB_FP_COLS];
+    int       ncols;
+    long long total;                  /* the sum of n */
+    int       has_xint;
+    long long xint;
+    char      xtext[16];
+    long long first_seen, last_seen;
+} web_sdb_flow_t;
+
+typedef int (*web_sdb_flow_fn)(void *ctx, const web_sdb_flow_t *f);
+
+enum { WEB_FLOWS_SORT_LAST = 0, WEB_FLOWS_SORT_TOTAL, WEB_FLOWS_SORT_SRC,
+       WEB_FLOWS_SORT_COUNT };
+
+/* One tab's rows overlapping [from, to), sorted, at most limit from
+ * offset; ip, when not NULL, matches src or dst. *present 0 when the
+ * file has no such table (or lacks a column read): no rows. *total is
+ * every matching row's count. Rows given, or -1. */
+int web_sdb_flows(web_sdb_conn_t *c, int proto, long long from, long long to,
+                  const char *ip, int sort, long long limit, long long offset,
+                  web_sdb_flow_fn fn, void *ctx, int *present,
+                  long long *total);
+
+/* The pairs of every pair table (ldap and kerb have no dst) overlapping
+ * [from, to), largest total first, at most max to fn; and over all of
+ * them (sums[]): rows, pairs, the sum of totals, distinct endpoints.
+ * Per tab (tabs[k][0] rows, [1] sum of totals; -1 absent). 0, or -1. */
+typedef struct {
+    long long rows, pair_rows, flow_total, pair_total, nodes;
+    long long tabs[WEB_FP_KINDS][2];
+} web_sdb_fsum_t;
+int web_sdb_flow_pairs(web_sdb_conn_t *c, long long from, long long to,
+                       int max, web_sdb_flow_fn fn, void *ctx,
+                       web_sdb_fsum_t *sum);
+
 /* Test seams: the flags and the URI mode of the last open
  * (web/tests/test_slothdb.c). */
 extern int web_slothdb_test_flags;

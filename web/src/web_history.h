@@ -80,6 +80,20 @@ int web_sessions_route(const web_m4_t *m, const char *query, long long now_s,
 int web_sessions_new_route(const web_m4_t *m, const char *query,
                            long long now_s, char *body, size_t cap,
                            size_t *len, int *status);
+/* The answers every sloth.db route shares (web_flows.c too): an error
+ * body {"error":reason[,"detail":...]}; whether --sloth-db is set in a
+ * build that can read it; the 503 "no_sloth_db"; an open, or the 503
+ * that says why not (0 open, 1 answered, -1); and the 503 of a read
+ * that failed or ran past its budget, closing c. */
+int web_hist_error(int status, const char *reason, const char *detail,
+                   char *body, size_t cap, size_t *len, int *st);
+int web_hist_configured(const web_m4_t *m);
+int web_hist_no_db(char *body, size_t cap, size_t *len, int *status);
+int web_hist_open(const web_m4_t *m, web_sdb_conn_t *c, long long now_s,
+                  char *body, size_t cap, size_t *len, int *status);
+int web_hist_read_failed(web_sdb_conn_t *c, char *body, size_t cap,
+                         size_t *len, int *status);
+
 /* In web_devices.c. */
 int web_history_devices_route(const web_m4_t *m, const char *query,
                               long long now_s, char *body, size_t cap,

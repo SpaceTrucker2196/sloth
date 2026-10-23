@@ -1,4 +1,5 @@
-// slothweb M5 client: the Overview view (M1, with M3's baseline band,
+// slothweb M6 client: the Flows view (M6: /api/flows, /api/flows/graph,
+// a chord diagram on Canvas 2D) and, before it, the M5 client: the Overview view (M1, with M3's baseline band,
 // hour-of-week heatmap and top anomalies), the Activity view (M2, with
 // M3's baseline band), the Anomalies view (M3), the Devices view,
 // the device drawer and the Lookup view (M4: /api/devices,
@@ -23,6 +24,7 @@
 
   var $ = function (id) { return document.getElementById(id); };
   var TICKER_MAX = 50;
+  var NOSQL = false;
   var TYPE_CLASS = {
     "dns": "t-dns", "tls": "t-tls", "http": "t-http", "quic": "t-quic",
     "icmp": "t-icmp", "arp": "t-arp", "beacon": "t-wifi",
@@ -234,6 +236,9 @@
       set("sock", h.socket);
       set("db", h.db);
       set("store", h.store);
+      // A store of "memory" is a slothweb built without SQLite: it has
+      // no --sloth-db to suggest.
+      NOSQL = h.store === "memory";
       set("milestone", h.milestone);
       // The SQL box exists only when the server was started with
       // --web-allow-sql; otherwise it is never drawn and never asked.
@@ -252,32 +257,59 @@
   setInterval(live, 5000);
 
   // ── views ─────────────────────────────────────────────────────────
-  var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "history", "lookup"];
+  var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "flows", "history",
+               "lookup"];
   var view = "overview";
   function show(v) {
     view = v;
     for (var i = 0; i < VIEWS.length; i++) {
       $("v-" + VIEWS[i]).hidden = v !== VIEWS[i];
-      $("nav-" + VIEWS[i]).className = v === VIEWS[i] ? "on" : "go";
+      var nb = $("nav-" + VIEWS[i]);
+      nb.className = v === VIEWS[i] ? "on" : "go";
+      // ARIA reflection, not an attribute write: the page has none.
+      nb.ariaCurrent = v === VIEWS[i] ? "page" : null;
     }
     if (v === "activity") activity();
     if (v === "anomalies") anomalies();
     if (v === "overview") overview();
     if (v === "devices") devices();
     if (v === "wifi") wifi();
+    if (v === "flows") flows();
     if (v === "history") history();
     if (v === "lookup") $("l-q").focus();
+    // The view is in the address (#flows), so a reload or a link opens
+    // it again; replaceState, so Back leaves the page as before.
+    try { history.replaceState(null, "", "#" + v); } catch (e) { /* a sandboxed frame */ }
   }
+  // The view named in the address, if it is one.
+  function hashView() {
+    var h = String(location.hash || "").replace(/^#/, "");
+    return VIEWS.indexOf(h) >= 0 ? h : "";
+  }
+  window.addEventListener("hashchange", function () {
+    var h = hashView();
+    if (h && h !== view) show(h);
+  });
   $("nav-overview").addEventListener("click", function () { show("overview"); });
   $("nav-activity").addEventListener("click", function () { show("activity"); });
   $("nav-anomalies").addEventListener("click", function () { show("anomalies"); });
   $("nav-devices").addEventListener("click", function () { show("devices"); });
   $("nav-wifi").addEventListener("click", function () { show("wifi"); });
+  $("nav-flows").addEventListener("click", function () { show("flows"); });
   $("nav-history").addEventListener("click", function () { show("history"); });
   $("nav-lookup").addEventListener("click", function () { show("lookup"); });
 
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") { closeDrawer(); return; }
+    // A focused row or card opens as a click would.
+    var t = e.target;
+    if ((e.key === "Enter" || e.key === " ") && t && t.tabIndex === 0 && t.classList &&
+        (t.classList.contains("drow") || t.classList.contains("hrow") ||
+         t.classList.contains("frow") || t.classList.contains("card"))) {
+      e.preventDefault();
+      t.click();
+      return;
+    }
     if (e.target !== document.body) return;
     if (e.key === "[") $("app").classList.toggle("collapsed");
     if (e.key === "1") show("overview");
@@ -285,6 +317,7 @@
     if (e.key === "3") show("devices");
     if (e.key === "4") show("anomalies");
     if (e.key === "5") show("wifi");
+    if (e.key === "7") show("flows");
     if (e.key === "8") show("history");
     if (e.key === "9") show("lookup");
     // §3: search with /.
@@ -689,6 +722,7 @@
     if (typeof a.key === "string" && MAC_RE.test(a.key)) {
       c.className += " go";
       c.addEventListener("click", function () { openDrawer(a.key); });
+      c.tabIndex = 0;
     }
     return c;
   }
@@ -896,6 +930,8 @@
     "sloth_db_timeout": "sloth.db was too slow to answer; try again"
   };
   function errText(m) {
+    if (m === "no_sloth_db" && NOSQL)
+      return "this slothweb was built without SQLite (WITH_SQLITE=0): it cannot read sloth.db; rebuild with make web";
     return Object.prototype.hasOwnProperty.call(ERR_TEXT, m) ? ERR_TEXT[m] : "error: " + m;
   }
 
@@ -991,6 +1027,7 @@
     r.cv = document.createElement("canvas");
     r.el.appendChild(r.cv);
     r.el.addEventListener("click", function () { if (r.mac) openDrawer(r.mac); });
+    r.el.tabIndex = 0;
     return r;
   }
 
@@ -1067,6 +1104,8 @@
     D.sel = "";
     for (var i = 0; i < D.pool.length; i++) D.pool[i].k = -1;
     if (view === "devices") paint();
+    if (DR.back && DR.back.focus && document.body.contains(DR.back)) DR.back.focus();
+    DR.back = null;
   }
   $("dr-close").addEventListener("click", closeDrawer);
 
@@ -1113,7 +1152,10 @@
     D.sel = mac;
     for (var i = 0; i < D.pool.length; i++) D.pool[i].k = -1;
     if (view === "devices") paint();
+    // Keyboard: what opened the drawer gets the focus back when it closes.
+    if ($("drawer").hidden) DR.back = document.activeElement;
     $("drawer").hidden = false;
+    $("dr-close").focus();
     set("dr-mac", mac);
     $("dr-sw").style.background = keyColor(mac);
     set("dr-note", "loading");
@@ -1384,6 +1426,287 @@
   $("w-win").addEventListener("change", function () { wifi(); });
   $("w-sort").addEventListener("change", function () { wifiAps(); });
 
+  // ── Flows (§8.9, M6) ──────────────────────────────────────────────
+  // sloth.db's protocol tables, one tab each (/api/flows, paged), and a
+  // chord diagram of the busiest source -> destination pairs
+  // (/api/flows/graph): the server ranks and folds, the page draws
+  // what it was given and says what was folded. Addresses are drawn
+  // with fillText and set with textContent; a protocol name only ever
+  // picks from the fixed tables below. mqtt_flows is never read (it
+  // holds usernames), and its tab says so.
+  var FLOW_TABS = ["ssh", "rdp", "smb", "snmp", "ldap", "kerb", "bgp"];
+  var FLOW_LABEL = { "ssh": "SSH", "rdp": "RDP", "smb": "SMB", "snmp": "SNMP",
+                     "ldap": "LDAP", "kerb": "Kerberos", "bgp": "BGP" };
+  var FLOW_PAGE = 50;
+  var F = { proto: "ssh", gen: 0, ggen: 0, rows: [], offset: 0, graph: null,
+            tabs: null, hits: [] };
+
+  function flowHue(p) {
+    return Object.prototype.hasOwnProperty.call(FLOW_LABEL, p) ? css("--f-" + p) : css("--muted");
+  }
+
+  function flowRange() {
+    var to = Math.floor(Date.now() / 1000);
+    return { from: to - Number($("f-win").value), to: to };
+  }
+
+  function flowTabs() {
+    var box = $("f-tabs");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    FLOW_TABS.concat(["mqtt"]).forEach(function (p) {
+      var b = el("button", "");
+      b.type = "button";
+      b.role = "tab";
+      var t = F.tabs && F.tabs[p];
+      if (p === "mqtt") {
+        b.textContent = "MQTT withheld";
+        b.title = "mqtt_flows holds MQTT usernames; slothweb never reads it";
+        b.disabled = true;
+      } else {
+        b.textContent = FLOW_LABEL[p] + (t && num(t.rows) ? " " + t.rows : t === null ? " -" : "");
+        b.ariaSelected = p === F.proto ? "true" : "false";
+        b.addEventListener("click", function () {
+          F.proto = p;
+          flowTabs();
+          flowRows(true);
+        });
+      }
+      box.appendChild(b);
+    });
+  }
+
+  function flowRow(f, cols) {
+    var from = f.src, to = f.dst;
+    var row = el("div", f.smb1 === true ? "frow sev2" : "frow");
+    row.appendChild(el("span", "", typeof from === "string" ? from : "-"));
+    row.appendChild(el("span", "", typeof to === "string" ? to : "(source only)"));
+    var counts = (f.counts || []).map(function (v, i) {
+      return String(cols[i] || "?").replace(/_count$/, "") + " " + fmt(v);
+    }).join("  ");
+    row.appendChild(el("span", "", counts));
+    row.appendChild(el("span", "n", fmt(f.total)));
+    var extra = "";
+    if (num(f.server_port)) extra = ":" + f.server_port;
+    if (typeof f.dialect === "string") extra += " " + f.dialect;
+    if (num(f.version)) extra = "v" + (f.version === 0 ? "1" : f.version === 1 ? "2c" : f.version === 3 ? "3" : f.version);
+    if (num(f.proto_mask)) extra = "mask " + f.proto_mask;
+    row.appendChild(el("span", "", extra || "-"));
+    row.appendChild(el("span", "", num(f.first_seen) ? shortStamp(f.first_seen) : "-"));
+    row.appendChild(el("span", "", num(f.last_seen) ? shortStamp(f.last_seen) : "-"));
+    if (typeof from === "string") {
+      row.classList.add("go");
+      row.tabIndex = 0;
+      row.addEventListener("click", function () { $("f-ip").value = from; flowRows(true); });
+    }
+    return row;
+  }
+
+  function flowHead(j) {
+    var h = $("f-head");
+    while (h.firstChild) h.removeChild(h.firstChild);
+    var x = j.proto === "smb" ? "port, dialect" : j.proto === "snmp" ? "version"
+          : j.proto === "rdp" ? "protocols" : "";
+    ["source", j.per_source ? "" : "destination", "counts", "total", x, "first", "last"]
+      .forEach(function (t, i) { h.appendChild(el("span", i === 3 ? "n" : "", t)); });
+  }
+
+  function flowRows(fresh) {
+    var gen = ++F.gen;
+    if (fresh) { F.rows = []; F.offset = 0; }
+    var r = flowRange();
+    var ip = $("f-ip").value.trim();
+    var p = "&from=" + r.from + "&to=" + r.to + "&sort=" + encodeURIComponent($("f-sort").value) +
+            "&limit=" + FLOW_PAGE + "&offset=" + F.offset;
+    if (ip !== "") p += "&ip=" + encodeURIComponent(ip);
+    getJSON("/api/flows?proto=" + encodeURIComponent(F.proto) + p).then(function (j) {
+      if (gen !== F.gen) return;
+      var box = $("f-rows");
+      if (fresh) while (box.firstChild) box.removeChild(box.firstChild);
+      flowHead(j);
+      (j.rows || []).forEach(function (f) { box.appendChild(flowRow(f, j.columns || [])); });
+      F.offset += num(j.count) ? j.count : 0;
+      $("f-more").hidden = !j.more;
+      var shown = F.offset;
+      if (!j.present) {
+        set("f-count", "this sloth.db has no " + j.table + " table");
+      } else if (!num(j.total) || j.total === 0) {
+        set("f-count", "none in the window" + (ip !== "" ? " for " + ip : ""));
+      } else {
+        set("f-count", shown + " of " + j.total + " in " + j.table + (ip !== "" ? " naming " + ip : ""));
+      }
+      set("f-note", typeof j.withheld === "string"
+        ? "withheld, never read: " + j.withheld
+        : "sloth.db's " + j.table + ", read-only; nothing withheld from this table");
+    }).catch(function (e) {
+      if (gen !== F.gen) return;
+      while ($("f-rows").firstChild) $("f-rows").removeChild($("f-rows").firstChild);
+      $("f-more").hidden = true;
+      set("f-count", "");
+      set("f-note", errText(e.message));
+    });
+  }
+
+  // The chord: the nodes the server kept on a circle, busiest first
+  // from twelve o'clock; each pair a curve through the middle from its
+  // source to its destination, an arrowhead at the destination, its
+  // width by log of its total.
+  function chord(c, g, why) {
+    var T = theme();
+    var dpr = sizeCanvas(c);
+    var x = c.getContext("2d");
+    var W = c.width, H = c.height;
+    x.clearRect(0, 0, W, H);
+    F.hits = [];
+    var nodes = (g && g.nodes) || [], edges = (g && g.edges) || [];
+    x.font = (11 * dpr) + "px " + css("--font-mono");
+    if (!nodes.length) {
+      x.fillStyle = T.muted;
+      x.textAlign = "center";
+      x.fillText(why || "no source -> destination pairs in the window", W / 2, H / 2);
+      return;
+    }
+    var narrow = W / dpr < 520;
+    var lab = narrow ? 84 * dpr : 120 * dpr;
+    var R = Math.max(20 * dpr, Math.min(W / 2 - lab, H / 2 - 18 * dpr));
+    var cx = W / 2, cy = H / 2;
+    var pos = nodes.map(function (n, i) {
+      var a = -Math.PI / 2 + i / nodes.length * 2 * Math.PI;
+      return { x: cx + R * Math.cos(a), y: cy + R * Math.sin(a), a: a };
+    });
+    var max = 1;
+    edges.forEach(function (e) { if (num(e.total) && e.total > max) max = e.total; });
+    edges.forEach(function (e) {
+      var s = pos[e.s], d = pos[e.d];
+      if (!s || !d) return;
+      var w = (1 + 5 * Math.log(1 + e.total) / Math.log(1 + max)) * dpr;
+      var col = e.smb1 === true ? css("--sev-crit") : flowHue(e.proto);
+      x.strokeStyle = col;
+      x.globalAlpha = 0.8;
+      x.lineWidth = w;
+      // A self-pair would be a point: loop it outward instead.
+      var qx = s === d ? cx + 1.4 * (s.x - cx) : cx + 0.15 * (s.x + d.x - 2 * cx);
+      var qy = s === d ? cy + 1.4 * (s.y - cy) : cy + 0.15 * (s.y + d.y - 2 * cy);
+      x.beginPath();
+      x.moveTo(s.x, s.y);
+      x.quadraticCurveTo(qx, qy, d.x, d.y);
+      x.stroke();
+      var ang = Math.atan2(d.y - qy, d.x - qx), ah = (4 + w / dpr) * dpr;
+      x.globalAlpha = 1;
+      x.fillStyle = col;
+      x.beginPath();
+      x.moveTo(d.x, d.y);
+      x.lineTo(d.x - ah * Math.cos(ang - 0.4), d.y - ah * Math.sin(ang - 0.4));
+      x.lineTo(d.x - ah * Math.cos(ang + 0.4), d.y - ah * Math.sin(ang + 0.4));
+      x.closePath();
+      x.fill();
+    });
+    x.globalAlpha = 1;
+    var maxN = 1;
+    nodes.forEach(function (n) { if (num(n.total) && n.total > maxN) maxN = n.total; });
+    nodes.forEach(function (n, i) {
+      var p = pos[i];
+      var r = (2 + 4 * Math.sqrt(n.total / maxN)) * dpr;
+      x.fillStyle = keyColor(String(n.id));
+      x.beginPath();
+      x.arc(p.x, p.y, r, 0, 2 * Math.PI);
+      x.fill();
+      var right = Math.cos(p.a) >= 0;
+      x.textAlign = right ? "left" : "right";
+      x.textBaseline = "middle";
+      x.fillStyle = T.ink;
+      var id = String(n.id);
+      // Cut from the left: an address's tail is the part that differs.
+      var maxc = narrow ? 11 : 22;
+      var t = id.length > maxc ? "~" + id.slice(id.length - maxc + 1) : id;
+      var lx = p.x + (right ? 1 : -1) * (r + 4 * dpr), ly = p.y;
+      x.fillText(t, lx, ly);
+      F.hits.push({ x: p.x, y: p.y, r: Math.max(r, 8 * dpr), id: id });
+    });
+  }
+
+  function flowLegend(g) {
+    var box = $("f-legend");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    var seen = {};
+    ((g && g.edges) || []).forEach(function (e) { seen[e.proto] = true; if (e.smb1 === true) seen.smb1 = true; });
+    FLOW_TABS.forEach(function (p) {
+      if (p === "ldap" || p === "kerb") return;
+      var s = el("span", seen[p] ? "" : "sub");
+      var i = el("i", "");
+      i.style.background = flowHue(p);
+      s.appendChild(i);
+      s.appendChild(document.createTextNode(FLOW_LABEL[p]));
+      box.appendChild(s);
+    });
+    var s1 = el("span", "");
+    var i1 = el("i", "");
+    i1.style.background = css("--sev-crit");
+    s1.appendChild(i1);
+    s1.appendChild(document.createTextNode("SMB1"));
+    box.appendChild(s1);
+  }
+
+  function flowGraph() {
+    var gen = ++F.ggen;
+    var r = flowRange();
+    var c = $("f-chord");
+    var nodes = c.clientWidth < 520 ? 12 : 24;
+    getJSON("/api/flows/graph?from=" + r.from + "&to=" + r.to + "&nodes=" + nodes + "&edges=80").then(function (g) {
+      if (gen !== F.ggen) return;
+      F.graph = g;
+      F.tabs = g.tabs || null;
+      flowTabs();
+      chord(c, g);
+      flowLegend(g);
+      var f = g.fold || {};
+      set("f-fold", num(f.pairs) && f.pairs > 0
+        ? (f.pairs_shown + " of " + f.pairs + " pairs, " + f.nodes_shown + " of " + f.nodes +
+           " addresses" + (f.pairs_folded > 0
+             ? "; folded: " + f.pairs_folded + " pairs, " + fmt(f.flows_folded) + " of " +
+               fmt(f.flows) + " counted, " + f.nodes_folded + " addresses"
+             : "; nothing folded"))
+        : "no pairs in the window");
+    }).catch(function (e) {
+      if (gen !== F.ggen) return;
+      F.graph = null;
+      F.tabs = null;
+      flowTabs();
+      chord(c, null, errText(e.message));
+      flowLegend(null);
+      set("f-fold", errText(e.message));
+    });
+  }
+
+  function flows() {
+    flowTabs();
+    flowGraph();
+    flowRows(true);
+  }
+  $("f-win").addEventListener("change", flows);
+  $("f-sort").addEventListener("change", function () { flowRows(true); });
+  $("f-more").addEventListener("click", function () { flowRows(false); });
+  var fipTimer = 0;
+  $("f-ip").addEventListener("input", function () {
+    if (fipTimer) clearTimeout(fipTimer);
+    fipTimer = setTimeout(function () { fipTimer = 0; flowRows(true); }, 300);
+  });
+  $("f-chord").addEventListener("click", function (e) {
+    var c = $("f-chord"), b = c.getBoundingClientRect();
+    var dpr = window.devicePixelRatio || 1;
+    var px = (e.clientX - b.left) * dpr, py = (e.clientY - b.top) * dpr;
+    for (var i = 0; i < F.hits.length; i++) {
+      var h = F.hits[i];
+      if ((px - h.x) * (px - h.x) + (py - h.y) * (py - h.y) <= h.r * h.r) {
+        $("f-ip").value = h.id;
+        flowRows(true);
+        return;
+      }
+    }
+  });
+  window.addEventListener("resize", function () {
+    if (view === "flows" && F.graph) chord($("f-chord"), F.graph);
+  });
+
   // ── History (§8.10, M5) ───────────────────────────────────────────
   // A 30 d strip (/api/history/overview) to drag a range on; for the
   // range, who was here (/api/history/devices, presence restricted to
@@ -1498,6 +1821,7 @@
     var cv = document.createElement("canvas");
     row.appendChild(cv);
     row.addEventListener("click", function () { openDrawer(d.mac); });
+    row.tabIndex = 0;
     $("h-devs").appendChild(row);
     drawStrip(cv, d.presence, cells);
   }
@@ -1569,19 +1893,20 @@
     if (Q.on) recipes();
   }
 
-  $("h-strip").addEventListener("mousedown", function (e) {
+  // Pointer events: a mouse, a pen or a finger on a narrow screen.
+  $("h-strip").addEventListener("pointerdown", function (e) {
     if (!HS.ov) return;
     var c = $("h-strip"), r = c.getBoundingClientRect();
     var x = (e.clientX - r.left) * (c.width / Math.max(1, r.width));
     HS.drag = { a: x, b: x };
   });
-  $("h-strip").addEventListener("mousemove", function (e) {
+  $("h-strip").addEventListener("pointermove", function (e) {
     if (!HS.drag) return;
     var c = $("h-strip"), r = c.getBoundingClientRect();
     HS.drag.b = (e.clientX - r.left) * (c.width / Math.max(1, r.width));
     drawOverview();
   });
-  window.addEventListener("mouseup", function () {
+  window.addEventListener("pointerup", function () {
     if (!HS.drag) return;
     var c = $("h-strip"), d = HS.drag;
     HS.drag = null;
@@ -1672,6 +1997,10 @@
   // the tier), then draw it, and redraw every minute.
   getJSON("/api/metrics").then(function (j) { A.storeOn = !!j.store; })
     .catch(function () { /* fine tier only */ })
-    .then(function () { if (view === "overview") overview(); });
+    .then(function () {
+      var h = hashView();
+      if (h && h !== "overview") show(h);
+      else overview();
+    });
   setInterval(function () { if (view === "overview") overview(); }, 60000);
 })();

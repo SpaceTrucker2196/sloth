@@ -84,8 +84,68 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "snmp_flows", "response_count", 1, 0, 0 },
     { "snmp_flows", "trap_count", 1, 0, 0 }, { "snmp_flows", "version", 1, 0, 0 },
     { "snmp_flows", "first_seen", 1, 0, 0 }, { "snmp_flows", "last_seen", 1, 0, 0 },
+    /* M6 (#164): the Flows view. SMB's dialect is "SMB1" or "SMB2"
+     * (include/sloth.h smb_session_t), RDP's proto_mask the security
+     * protocols requested. kerb_events' preauth_required_count and
+     * preauth_failed_count are integer counts, but named for "auth":
+     * the name guard (test_allow_list_against_the_guardrail) is
+     * deliberately not type-aware, so they stay off the list and the
+     * Flows view says so (web_sdb_ftab[].withheld). */
+    { "smb_sessions", "dialect", 1, 0, 0 },
+    { "rdp_flows", "proto_mask", 1, 0, 0 },
+    { "ldap_events", "src_ip", 1, 0, 0 },  { "ldap_events", "bind_count", 1, 0, 0 },
+    { "ldap_events", "bind_anon_count", 1, 0, 0 },
+    { "ldap_events", "search_count", 1, 0, 0 },
+    { "ldap_events", "search_ref_count", 1, 0, 0 },
+    { "ldap_events", "first_seen", 1, 0, 0 }, { "ldap_events", "last_seen", 1, 0, 0 },
+    { "kerb_events", "src_ip", 1, 0, 0 },  { "kerb_events", "as_req_count", 1, 0, 0 },
+    { "kerb_events", "as_rep_count", 1, 0, 0 },
+    { "kerb_events", "tgs_req_count", 1, 0, 0 },
+    { "kerb_events", "tgs_rep_count", 1, 0, 0 },
+    { "kerb_events", "principal_unknown_count", 1, 0, 0 },
+    { "kerb_events", "error_other_count", 1, 0, 0 },
+    { "kerb_events", "first_seen", 1, 0, 0 }, { "kerb_events", "last_seen", 1, 0, 0 },
+    { "bgp_sessions", "peer_a", 1, 0, 0 }, { "bgp_sessions", "peer_b", 1, 0, 0 },
+    { "bgp_sessions", "open_count", 1, 0, 0 },
+    { "bgp_sessions", "update_count", 1, 0, 0 },
+    { "bgp_sessions", "notification_count", 1, 0, 0 },
+    { "bgp_sessions", "keepalive_count", 1, 0, 0 },
+    { "bgp_sessions", "first_seen", 1, 0, 0 }, { "bgp_sessions", "last_seen", 1, 0, 0 },
 };
 const size_t web_sdb_allow_n = sizeof(web_sdb_allow) / sizeof(web_sdb_allow[0]);
+
+/* The Flows view's tabs (web_slothdb.h). Every column named here is on
+ * web_sdb_allow[] above; web/tests/test_flows.c holds the two together. */
+const web_sdb_ftab_t web_sdb_ftab[WEB_FP_KINDS] = {
+    { "ssh", "ssh_flows", "src_ip", "dst_ip", { "banner_count", NULL },
+      NULL, NULL, "server_banner (the banner text is not read)" },
+    { "rdp", "rdp_flows", "src_ip", "dst_ip", { "connect_req_count", NULL },
+      "proto_mask", NULL, "last_cookie (an RDP cookie, an account name)" },
+    { "smb", "smb_sessions", "client_ip", "server_ip", { "obs_count", NULL },
+      "server_port", "dialect", NULL },
+    { "snmp", "snmp_flows", "src_ip", "dst_ip",
+      { "get_count", "getnext_count", "getbulk_count", "set_count",
+        "response_count", "trap_count", NULL },
+      "version", NULL, "community_count (named for the community string)" },
+    { "ldap", "ldap_events", "src_ip", NULL,
+      { "bind_count", "bind_anon_count", "search_count", "search_ref_count",
+        NULL }, NULL, NULL, NULL },
+    { "kerb", "kerb_events", "src_ip", NULL,
+      { "as_req_count", "as_rep_count", "tgs_req_count", "tgs_rep_count",
+        "principal_unknown_count", "error_other_count", NULL },
+      NULL, NULL, "preauth_required_count and preauth_failed_count (counts, "
+      "but named for a credential word, and the allow-list's name guard is "
+      "not type-aware)" },
+    { "bgp", "bgp_sessions", "peer_a", "peer_b",
+      { "open_count", "update_count", "notification_count", "keepalive_count",
+        NULL }, NULL, NULL, NULL },
+};
+
+int web_sdb_ftab_find(const char *name) {
+    for (int k = 0; name && k < WEB_FP_KINDS; k++)
+        if (!strcmp(web_sdb_ftab[k].name, name)) return k;
+    return -1;
+}
 
 int web_slothdb_test_flags = 0;
 int web_slothdb_test_immutable = 0;
@@ -263,6 +323,23 @@ int web_sdb_overview(web_sdb_conn_t *c, long long from, int cell_s,
     (void)c; (void)from; (void)cell_s; (void)ncell; (void)devs; (void)alerts;
     return -1;
 }
+int web_sdb_flows(web_sdb_conn_t *c, int proto, long long from, long long to,
+                  const char *ip, int sort, long long limit, long long offset,
+                  web_sdb_flow_fn fn, void *ctx, int *present,
+                  long long *total) {
+    (void)c; (void)proto; (void)from; (void)to; (void)ip; (void)sort;
+    (void)limit; (void)offset; (void)fn; (void)ctx;
+    *present = 0;
+    *total = 0;
+    return -1;
+}
+int web_sdb_flow_pairs(web_sdb_conn_t *c, long long from, long long to,
+                       int max, web_sdb_flow_fn fn, void *ctx,
+                       web_sdb_fsum_t *sum) {
+    (void)c; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
+    memset(sum, 0, sizeof(*sum));
+    return -1;
+}
 
 
 #else
@@ -302,6 +379,7 @@ static int allowed_table(const char *table) {
  * labels (web_sdb_new_since()). */
 static const char *const FUNCS[] = {
     "like", "coalesce", "substr", "instr", "min", "max", "count", "nullif",
+    "sum",              /* the Flows view's totals (web_sdb_flow_pairs()) */
     "web_vendor", "web_z", "web_anoms", "web_ptr", NULL
 };
 
@@ -1436,6 +1514,206 @@ int web_sdb_overview(web_sdb_conn_t *c, long long from, int cell_s,
         cells_of(c, "alerts", from, cell_s, ncell, alerts) != 0)
         return -1;
     return 0;
+}
+
+/* ── M6 reads (#164) ──────────────────────────────────────────────────── */
+
+/* Does the file carry every column tab k reads? */
+static int ftab_ok(web_sdb_conn_t *c, int k) {
+    const web_sdb_ftab_t *t = &web_sdb_ftab[k];
+    const char *want[WEB_FP_COLS + 8];
+    int n = 0;
+    want[n++] = t->src;
+    if (t->dst) want[n++] = t->dst;
+    for (int i = 0; t->cols[i]; i++) want[n++] = t->cols[i];
+    if (t->xint) want[n++] = t->xint;
+    if (t->xtext) want[n++] = t->xtext;
+    want[n++] = "first_seen";
+    want[n++] = "last_seen";
+    want[n] = NULL;
+    return have_all(c, t->table, want);
+}
+
+/* "a + b + c" of tab k's counters, NULLs as 0. */
+static void ftab_total(int k, char *out, size_t cap) {
+    const web_sdb_ftab_t *t = &web_sdb_ftab[k];
+    size_t o = 0;
+    out[0] = '\0';
+    for (int i = 0; t->cols[i] && o < cap; i++)
+        o += (size_t)snprintf(out + o, cap - o, "%scoalesce(%s, 0)",
+                              i ? " + " : "", t->cols[i]);
+}
+
+/* The select list every flow read shares: src, dst, the counters padded
+ * with 0 to WEB_FP_COLS, xint, xtext, total, first_seen, last_seen, and
+ * the tab's number. Columns 0..WEB_FP_COLS + 7. */
+static void ftab_select(int k, char *out, size_t cap) {
+    const web_sdb_ftab_t *t = &web_sdb_ftab[k];
+    char tot[400];
+    ftab_total(k, tot, sizeof(tot));
+    size_t o = (size_t)snprintf(out, cap, "SELECT %s, %s", t->src,
+                                t->dst ? t->dst : "''");
+    int nc = 0;
+    while (t->cols[nc]) nc++;
+    for (int i = 0; i < WEB_FP_COLS && o < cap; i++)
+        o += (size_t)snprintf(out + o, cap - o, ", %s",
+                              i < nc ? t->cols[i] : "0");
+    if (o < cap)
+        snprintf(out + o, cap - o, ", %s, %s, %s, first_seen, last_seen, %d"
+                 " FROM %s WHERE last_seen >= ?1 AND first_seen < ?2",
+                 t->xint ? t->xint : "NULL", t->xtext ? t->xtext : "NULL",
+                 tot, k, t->table);
+}
+
+static void flow_row(sqlite3_stmt *st, web_sdb_flow_t *f) {
+    memset(f, 0, sizeof(*f));
+    text(st, 0, f->src, WEB_SDB_TEXT_MAX);
+    text(st, 1, f->dst, WEB_SDB_TEXT_MAX);
+    for (int i = 0; i < WEB_FP_COLS; i++)
+        f->n[i] = sqlite3_column_int64(st, 2 + i);
+    f->has_xint = sqlite3_column_type(st, WEB_FP_COLS + 2) != SQLITE_NULL;
+    f->xint = sqlite3_column_int64(st, WEB_FP_COLS + 2);
+    text(st, WEB_FP_COLS + 3, f->xtext, sizeof(f->xtext) - 1);
+    f->total = sqlite3_column_int64(st, WEB_FP_COLS + 4);
+    f->first_seen = sqlite3_column_int64(st, WEB_FP_COLS + 5);
+    f->last_seen = sqlite3_column_int64(st, WEB_FP_COLS + 6);
+    int k = sqlite3_column_int(st, WEB_FP_COLS + 7);
+    f->proto = k >= 0 && k < WEB_FP_KINDS ? k : 0;
+    while (f->ncols < WEB_FP_COLS && web_sdb_ftab[f->proto].cols[f->ncols])
+        f->ncols++;
+}
+
+int web_sdb_flows(web_sdb_conn_t *c, int proto, long long from, long long to,
+                  const char *ip, int sort, long long limit, long long offset,
+                  web_sdb_flow_fn fn, void *ctx, int *present,
+                  long long *total) {
+    *present = 0;
+    *total = 0;
+    if (proto < 0 || proto >= WEB_FP_KINDS) return -1;
+    if (!ftab_ok(c, proto)) return 0;
+    *present = 1;
+    const web_sdb_ftab_t *t = &web_sdb_ftab[proto];
+    char sel[1200], where[200] = "", sql[1600];
+    ftab_select(proto, sel, sizeof(sel));
+    if (ip) {
+        if (t->dst)
+            snprintf(where, sizeof(where), " AND (%s = ?5 OR %s = ?5)",
+                     t->src, t->dst);
+        else
+            snprintf(where, sizeof(where), " AND %s = ?5", t->src);
+    }
+    /* Column numbers of ftab_select()'s list, 1-based for ORDER BY. */
+    static const char *const ORDER[WEB_FLOWS_SORT_COUNT] = {
+        " ORDER BY %d DESC, 1, 2", " ORDER BY %d DESC, %d DESC, 1, 2",
+        " ORDER BY 1, 2, %d DESC",
+    };
+    int s = sort >= 0 && sort < WEB_FLOWS_SORT_COUNT ? sort : 0;
+    char ord[64];
+    if (s == WEB_FLOWS_SORT_TOTAL)
+        snprintf(ord, sizeof(ord), ORDER[s], WEB_FP_COLS + 5, WEB_FP_COLS + 7);
+    else
+        snprintf(ord, sizeof(ord), ORDER[s], WEB_FP_COLS + 7);
+    snprintf(sql, sizeof(sql), "%s%s%s LIMIT ?3 OFFSET ?4", sel, where, ord);
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, to);
+    sqlite3_bind_int64(st, 3, limit);
+    sqlite3_bind_int64(st, 4, offset);
+    if (ip) sqlite3_bind_text(st, 5, ip, -1, SQLITE_TRANSIENT);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_flow_t f;
+        flow_row(st, &f);
+        n++;
+        if (fn(ctx, &f)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    if (rc != SQLITE_DONE) return -1;
+    snprintf(sql, sizeof(sql), "SELECT count(*) FROM %s WHERE last_seen >= ?1"
+             " AND first_seen < ?2%s", t->table, where);
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, to);
+    if (ip) sqlite3_bind_text(st, 5, ip, -1, SQLITE_TRANSIENT);
+    rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW) *total = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    return rc == SQLITE_ROW ? n : -1;
+}
+
+int web_sdb_flow_pairs(web_sdb_conn_t *c, long long from, long long to,
+                       int max, web_sdb_flow_fn fn, void *ctx,
+                       web_sdb_fsum_t *sum) {
+    memset(sum, 0, sizeof(*sum));
+    for (int k = 0; k < WEB_FP_KINDS; k++) sum->tabs[k][0] = sum->tabs[k][1] = -1;
+    /* One CTE over every tab the file has, its columns named so the
+     * three statements below can say them. */
+    char sql[12000];
+    size_t o = (size_t)snprintf(sql, sizeof(sql),
+        "WITH f(s, d, n0, n1, n2, n3, n4, n5, xi, xt, t, fs, ls, p) AS (");
+    int any = 0;
+    for (int k = 0; k < WEB_FP_KINDS; k++) {
+        if (!ftab_ok(c, k)) continue;
+        sum->tabs[k][0] = sum->tabs[k][1] = 0;
+        char sel[1200];
+        ftab_select(k, sel, sizeof(sel));
+        o += (size_t)snprintf(sql + o, sizeof(sql) - o, "%s%s",
+                              any ? " UNION ALL " : "", sel);
+        any = 1;
+    }
+    if (!any) return 0;
+    if (o >= sizeof(sql) - 400) return -1;
+    const size_t base = o;
+    sqlite3_stmt *st = NULL;
+    int rc;
+    /* Per tab: rows and the sum of totals. */
+    snprintf(sql + base, sizeof(sql) - base, ") SELECT p, count(*),"
+             " coalesce(sum(t), 0) FROM f GROUP BY p");
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, to);
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        int k = sqlite3_column_int(st, 0);
+        if (k < 0 || k >= WEB_FP_KINDS) continue;
+        sum->tabs[k][0] = sqlite3_column_int64(st, 1);
+        sum->tabs[k][1] = sqlite3_column_int64(st, 2);
+        sum->rows += sum->tabs[k][0];
+        sum->flow_total += sum->tabs[k][1];
+    }
+    sqlite3_finalize(st);
+    if (rc != SQLITE_DONE) return -1;
+    /* Over the pairs alone: rows, the sum of totals, distinct ends. */
+    snprintf(sql + base, sizeof(sql) - base, ") SELECT count(*),"
+             " coalesce(sum(t), 0), (SELECT count(*) FROM (SELECT s FROM f"
+             " WHERE d <> '' UNION SELECT d FROM f WHERE d <> '')) FROM f"
+             " WHERE d <> ''");
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, to);
+    rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW) {
+        sum->pair_rows = sqlite3_column_int64(st, 0);
+        sum->pair_total = sqlite3_column_int64(st, 1);
+        sum->nodes = sqlite3_column_int64(st, 2);
+    }
+    sqlite3_finalize(st);
+    if (rc != SQLITE_ROW) return -1;
+    /* The largest pairs. */
+    snprintf(sql + base, sizeof(sql) - base, ") SELECT s, d, n0, n1, n2, n3,"
+             " n4, n5, xi, xt, t, fs, ls, p FROM f WHERE d <> '' ORDER BY t"
+             " DESC, ls DESC, s, d, p LIMIT ?3");
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, to);
+    sqlite3_bind_int(st, 3, max);
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_flow_t f;
+        flow_row(st, &f);
+        if (fn(ctx, &f)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? 0 : -1;
 }
 
 #endif /* WITH_SQLITE */

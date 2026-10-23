@@ -37,6 +37,8 @@ int main(void) {
     run_parity_tests();
     run_wifi_tests();
     run_history_tests();
+    run_flows_tests();
+    run_readme_tests();
     run_sqlbox_tests();
     printf("slothweb tests: %d passed, %d failed\n", wt_pass, wt_fail);
     return wt_fail ? 1 : 0;

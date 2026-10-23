@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark">
 <title>slothweb</title>
 <style>
 @include theme.css
@@ -13,18 +14,18 @@
 <body>
 <div class="app" id="app">
   <aside class="side">
-    <div class="brand">SLOTH<small>web <span id="milestone">M5</span></small></div>
-    <ol class="views">
-      <li class="on" id="nav-overview"><span class="k">1</span>Overview</li>
-      <li class="go" id="nav-activity"><span class="k">2</span>Activity</li>
-      <li class="go" id="nav-devices"><span class="k">3</span>Devices</li>
-      <li class="go" id="nav-anomalies"><span class="k">4</span>Anomalies</li>
-      <li class="go" id="nav-wifi"><span class="k">5</span>WiFi</li>
-      <li><span class="k">6</span>Alerts</li>
-      <li><span class="k">7</span>Flows</li>
-      <li class="go" id="nav-history"><span class="k">8</span>History</li>
-      <li class="go" id="nav-lookup"><span class="k">9</span>Lookup</li>
-    </ol>
+    <div class="brand">SLOTH<small>web <span id="milestone">M6</span></small></div>
+    <nav aria-label="views"><ol class="views">
+      <li><button type="button" class="on" id="nav-overview" aria-current="page"><span class="k">1</span>Overview</button></li>
+      <li><button type="button" class="go" id="nav-activity"><span class="k">2</span>Activity</button></li>
+      <li><button type="button" class="go" id="nav-devices"><span class="k">3</span>Devices</button></li>
+      <li><button type="button" class="go" id="nav-anomalies"><span class="k">4</span>Anomalies</button></li>
+      <li><button type="button" class="go" id="nav-wifi"><span class="k">5</span>WiFi</button></li>
+      <li class="off" title="not built: the Overview lists the latest alerts"><span class="k">6</span>Alerts</li>
+      <li><button type="button" class="go" id="nav-flows"><span class="k">7</span>Flows</button></li>
+      <li><button type="button" class="go" id="nav-history"><span class="k">8</span>History</button></li>
+      <li><button type="button" class="go" id="nav-lookup"><span class="k">9</span>Lookup</button></li>
+    </ol></nav>
     <div class="foot">
       <div><span>sock</span><span id="sock">-</span></div>
       <div><span>db</span><span id="db">-</span></div>
@@ -136,12 +137,14 @@
     </section>
     <section class="panel">
       <div class="label">devices <span class="sub" id="d-count"></span></div>
+      <div class="hscroll">
       <div class="drow dhead" aria-hidden="true">
         <span class="c-mac">mac</span><span class="c-ven">vendor</span><span class="c-ip">ip</span><span class="c-nm">name</span><span class="c-ss">ssid</span><span class="c-sig">dBm</span><span class="c-src">src</span><span class="c-rk">risk</span><span class="c-fs">first</span><span class="c-ls">last</span><span class="c-z">z</span><span class="c-an">anom</span><span class="c-pr">24 h presence</span>
       </div>
       <div class="vscroll" id="d-scroll" tabindex="0" aria-label="devices table">
         <div class="vspace" id="d-space"></div>
         <div class="vrows" id="d-rows"></div>
+      </div>
       </div>
       <div class="sub">src: A arp, D dhcp, P probe, B beacon, S station; name: D dhcp, m mdns, N nbns, h sloth's hostname, p PTR seen on the wire; ~ a randomised (locally administered) mac. Click a row for everything known.</div>
     </section>
@@ -185,8 +188,10 @@
         <option value="karma">karma score</option>
         <option value="bssid">bssid</option>
       </select></label></div>
+      <div class="hscroll">
       <div class="aprow dhead" aria-hidden="true"><span>bssid</span><span>ssid</span><span>ch</span><span>dBm</span><span>enc / akm</span><span>mfp</span><span>downgrade</span><span>karma</span><span>last</span></div>
       <div id="w-aps"></div>
+      </div>
       <div class="sub">an ssid count above 1 (KARMA, multi-VAP) is in the warning colour with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers</div>
     </section>
     <section class="row2">
@@ -199,6 +204,39 @@
         <div class="label">probe clients <span class="sub" id="w-pc-note"></span></div>
         <canvas class="chart" id="w-probe" aria-label="probe clients over time, over their baseline band"></canvas>
       </div>
+    </section>
+   </div>
+   <div id="v-flows" hidden>
+    <section class="panel controls" aria-label="flow controls">
+      <label>window <select id="f-win">
+        <option value="3600">1 h</option>
+        <option value="86400">24 h</option>
+        <option value="604800" selected>7 d</option>
+        <option value="2592000">30 d</option>
+      </select></label>
+      <label>sort <select id="f-sort">
+        <option value="last" selected>last seen</option>
+        <option value="total">total</option>
+        <option value="src">source</option>
+      </select></label>
+      <label>ip <input type="search" id="f-ip" maxlength="45" spellcheck="false" autocomplete="off" placeholder="192.0.2.10"></label>
+      <span class="sub" id="f-note">sloth.db's protocol tables, read-only</span>
+    </section>
+    <section class="panel">
+      <div class="label">source &#8594; destination, by protocol <span class="sub" id="f-fold"></span></div>
+      <canvas class="chord" id="f-chord" aria-label="chord diagram: the busiest source to destination pairs, coloured by protocol; the fold note above says what was left out"></canvas>
+      <div class="legend" id="f-legend"></div>
+      <div class="sub">each line runs from a source to a destination (the arrowhead), its width by its count, its colour by protocol and named in the legend; red: an SMB1 session. ldap and kerb record a source only and are not drawn. Click an address to filter the table by it.</div>
+    </section>
+    <section class="panel">
+      <div class="label">flows <span class="sub" id="f-count"></span></div>
+      <div class="chips" id="f-tabs" role="tablist" aria-label="protocol tables"></div>
+      <div class="hscroll">
+        <div class="frow dhead" id="f-head" aria-hidden="true"></div>
+        <div id="f-rows"></div>
+      </div>
+      <button type="button" id="f-more" hidden>more</button>
+      <div class="sub">counts are sloth's running totals for the pair; SMB1 sessions are in the critical colour and marked SMB1. Withheld columns are named above the table and never read.</div>
     </section>
    </div>
    <div id="v-history" hidden>
@@ -214,7 +252,7 @@
     </section>
     <section class="panel">
       <div class="label">who was here <span class="sub" id="h-dev-count"></span></div>
-      <div id="h-devs"></div>
+      <div class="hscroll"><div id="h-devs"></div></div>
     </section>
     <section class="row2">
       <div class="panel">

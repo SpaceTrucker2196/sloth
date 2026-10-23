@@ -174,7 +174,8 @@ int main(int argc, char **argv) {
                     "(/, /api/health, /api/live, /api/series, /api/keys, "
                     "/api/metrics, /api/baseline, /api/anomalies, "
                     "/api/devices, /api/device/MAC, /api/lookup, "
-                    "/api/wifi/*, /api/history/*, /api/sessions%s, /events)\n",
+                    "/api/wifi/*, /api/history/*, /api/sessions, /api/flows, "
+                    "/api/flows/graph%s, /events)\n",
             where, cfg.allow_sql ? ", /api/query, /api/recipes" : "");
     if (cfg.allow_sql)
         fprintf(stderr, "slothweb: SQL box on (--web-allow-sql): one "

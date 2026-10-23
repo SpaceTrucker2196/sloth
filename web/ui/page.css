@@ -31,8 +31,8 @@ td { font-size: 12px; font-variant-ligatures: none; }
 .brand { font-size: 20px; font-weight: bold; letter-spacing: 0.1em; }
 .brand small { display: block; font-size: 11px; color: var(--muted); font-weight: normal; }
 .views { list-style: none; margin: calc(var(--gap) * 2) 0; padding: 0; }
-.views li { padding: 2px 0; color: var(--faint); }
-.views li.on { color: var(--ink); }
+.views li { padding: 0; color: var(--faint); }
+.views li.off { padding: 2px 0; }
 .views li .k { color: var(--data); margin-right: var(--gap); }
 .foot { margin-top: auto; border-top: 1px solid var(--rule); padding-top: var(--gap); font-size: 11px; color: var(--muted); }
 .foot div { display: flex; justify-content: space-between; }
@@ -81,8 +81,6 @@ main { grid-area: main; padding: calc(var(--gap) * 2); min-width: 0; }
 .ticker .t-wifi .ty { color: var(--t-wifi); }
 .ticker .t-alert .ty { color: var(--t-alert); }
 .ticker .t-other .ty { color: var(--muted); }
-.views li.go { color: var(--muted); cursor: pointer; }
-.views li.go:hover { color: var(--ink); }
 .controls { display: flex; flex-wrap: wrap; gap: calc(var(--gap) * 2); align-items: baseline; margin-top: 0; }
 .controls label { font-size: 11px; color: var(--muted); }
 select { font: inherit; font-size: 12px; color: var(--ink); background: var(--bg); border: 1px solid var(--rule-hi); max-width: 28ch; }
@@ -116,13 +114,14 @@ input[type=range] { vertical-align: middle; accent-color: var(--data); }
 .card canvas { display: block; width: 100%; height: 32px; }
 [hidden] { display: none !important; }
 button { font: inherit; font-size: 11px; color: var(--data); background: var(--bg); border: 1px solid var(--rule-hi); padding: 0 var(--gap); cursor: pointer; }
-/* Devices (§8.6): a virtualised table, one fixed row height. Text is
+/* Devices (§8.6): a virtualised table, one fixed row height, its
+ * columns sized to fit a 1280 px window (spec §8.3). Text is
  * --ink and --muted; the hash colour is on the swatch only, and a risk
  * level above 0 is a left border in its severity colour. */
 input[type=search] { font: inherit; font-size: 12px; color: var(--ink); background: var(--bg); border: 1px solid var(--rule-hi); width: 44ch; max-width: 100%; }
-.drow { display: grid; grid-template-columns: 19ch 16ch 15ch minmax(10ch, 1fr) 12ch 5ch 6ch 5ch 11ch 11ch 5ch 5ch 146px; gap: 6px; align-items: center; height: 22px; padding-left: 4px; border-left: 3px solid transparent; font-size: 12px; white-space: nowrap; }
+.drow { display: grid; grid-template-columns: 20ch 12ch 15ch minmax(8ch, 1fr) 12ch 4ch 6ch 4ch 10ch 10ch 4ch 4ch 146px; gap: 4px; align-items: center; height: 22px; padding-left: 4px; border-left: 3px solid transparent; font-size: 12px; white-space: nowrap; }
 .drow > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.dhead { color: var(--muted); font-size: 11px; text-transform: uppercase; margin-top: var(--gap); }
+.dhead { color: var(--muted); font-size: 12px; text-transform: uppercase; margin-top: var(--gap); }
 .vscroll { position: relative; height: 60vh; overflow: auto; border-top: 1px solid var(--rule); margin-top: 2px; }
 .vspace { width: 1px; }
 .vrows { position: absolute; top: 0; left: 0; right: 0; }
@@ -150,12 +149,12 @@ canvas.strip { display: block; width: 100%; height: 18px; margin: 4px 0 var(--ga
 .card.go { cursor: pointer; }
 /* WiFi and History (§8.8, §8.10). */
 canvas.wfall { display: block; width: 100%; height: 280px; margin-top: var(--gap); }
-canvas.ovw { display: block; width: 100%; height: 72px; margin-top: var(--gap); cursor: crosshair; }
+canvas.ovw { display: block; width: 100%; height: 72px; margin-top: var(--gap); cursor: crosshair; touch-action: none; }
 .aprow { display: grid; grid-template-columns: 19ch minmax(12ch, 1fr) 4ch 5ch 20ch 12ch 16ch 9ch 11ch; gap: 6px; align-items: center; font-size: 12px; white-space: nowrap; padding: 1px 0; }
 .aprow > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .aprow .warn, .aprow.multi .c-ssid { color: var(--sev-warn); }
 .aphist { padding-left: 21ch; }
-.hrow { display: grid; grid-template-columns: 19ch 16ch minmax(10ch, 1fr) 11ch 11ch 146px; gap: 6px; align-items: center; height: 22px; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.hrow { display: grid; grid-template-columns: 21ch 16ch minmax(10ch, 1fr) 11ch 11ch 146px; gap: 6px; align-items: center; height: 22px; font-size: 12px; white-space: nowrap; cursor: pointer; }
 .hrow > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .hrow canvas { display: block; width: 144px; height: 12px; }
 .hrow .rnd { color: var(--muted); }
@@ -171,3 +170,50 @@ table.qt td.nul { color: var(--faint); }
   .row2 { grid-template-columns: 1fr; }
   .side { border-right: 0; border-bottom: 1px solid var(--rule); }
 }
+/* Flows (§8.9, M6): one tab's rows, the counters flexing; an SMB1 row is
+ * in the critical colour and says SMB1 in its own column too. */
+.frow { display: grid; grid-template-columns: 16ch 16ch minmax(14ch, 1fr) 9ch 11ch 11ch 11ch; gap: 6px; align-items: center; font-size: 12px; white-space: nowrap; padding: 1px 0 1px 4px; border-left: 3px solid transparent; min-width: calc(88ch + 60px); }
+.frow > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.frow.sev2 { color: var(--sev-crit); border-left-color: var(--sev-crit); }
+.frow .n { text-align: right; }
+.frow.go { cursor: pointer; }
+.chips button[aria-selected=true] { color: var(--ink); border-color: var(--data); }
+.chips button:disabled { color: var(--faint); cursor: not-allowed; }
+canvas.chord { display: block; width: 100%; height: 420px; margin-top: var(--gap); cursor: pointer; }
+.legend { display: flex; flex-wrap: wrap; gap: calc(var(--gap) * 2); font-size: 11px; color: var(--muted); margin: 4px 0; }
+.legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 4px; }
+/* Polish (M6): wide row tables scroll inside their own box below their
+ * natural width, so a 360 px window never scrolls the page sideways. */
+.hscroll { overflow-x: auto; max-width: 100%; }
+.hscroll > .dhead.drow, .hscroll > .vscroll { min-width: calc(109ch + 210px); }
+/* The rows' size, so the two min-widths (in ch) are the same width. */
+.hscroll > .vscroll { font-size: 12px; }
+.hscroll .aprow { min-width: calc(108ch + 60px); }
+.hscroll .aphist { min-width: calc(108ch + 60px); }
+.hscroll .hrow { min-width: calc(69ch + 180px); }
+/* The view list is buttons, so Tab reaches every view in order. */
+.views button { font: inherit; font-size: 13px; color: var(--muted); background: none; border: 0; padding: 2px 0; width: 100%; text-align: left; cursor: pointer; }
+.views button:hover { color: var(--ink); }
+.views button.on { color: var(--ink); }
+.views li.off { color: var(--faint); }
+:focus-visible { outline: 1px solid var(--data); outline-offset: 1px; }
+.drow:focus-visible, .hrow:focus-visible, .frow:focus-visible { outline-offset: -1px; }
+@media (max-width: 900px) {
+  canvas.chord { height: 320px; }
+}
+@media (max-width: 480px) {
+  main { padding: var(--gap); }
+  .panel { padding: var(--gap); }
+  .kpi { font-size: 22px; }
+  .strip { gap: var(--gap); padding: var(--gap); }
+  .side { padding: var(--gap); }
+  .views { display: flex; flex-wrap: wrap; gap: 0 calc(var(--gap) * 2); margin: var(--gap) 0; }
+  .views li { padding: 0; }
+  .views button { width: auto; }
+  .cards { grid-template-columns: 1fr; }
+  .multi { grid-template-columns: 1fr; }
+  canvas.chord { height: 280px; }
+}
+/* A controls panel after another section keeps the panels' gap
+ * (.controls zeroes it for the first panel of a view). */
+section + .panel.controls { margin-top: calc(var(--gap) * 2); }

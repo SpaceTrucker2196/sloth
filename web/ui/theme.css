@@ -41,6 +41,18 @@
   --k-0: #00ffd7;  --k-1: #5fd7d7;  --k-2: #87ffaf;  --k-3: #afff87;
   --k-4: #d7af00;  --k-5: #ffaf5f;  --k-6: #d78787;  --k-7: #87afd7;
 
+  /* flow protocol hues (the Flows view, M6): categorical, each named
+   * beside its line in the legend, never colour alone; SMB1 is
+   * --sev-crit over all of them */
+  --f-ssh:  #7fd1ff;  --f-rdp:  #b48cff;  --f-smb:  #ffd166;
+  --f-snmp: #9be564;  --f-bgp:  #ff9ecb;  --f-ldap: #c0c0c0;
+  --f-kerb: #00d7af;
+
+  /* The page is dark only (spec §8.1, no light theme in the MVP): say
+   * so, so that form controls and scrollbars follow it whatever the
+   * browser's prefers-color-scheme is. */
+  color-scheme: dark;
+
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
   --radius: 0;
   --gap: 8px;

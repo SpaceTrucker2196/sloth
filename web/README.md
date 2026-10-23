@@ -1,102 +1,314 @@
 # slothweb
 
-The browser dashboard for sloth data, built in milestones. The spec is
-[`docs/web-ui-spec.md`](../docs/web-ui-spec.md); the rulings table at its
-top overrides the body. Tracker: #102.
+A browser dashboard for [sloth](../README.md), the passive network
+monitor. It runs beside sloth on the same host, reads sloth's live
+record stream (the data socket) and, if you point it there, sloth's
+SQLite file, and serves one page on `http://127.0.0.1:8770/`: live
+counts and a record ticker, time series with hour-of-week baselines,
+anomaly episodes, the device table, WiFi, a time-travel History view,
+and the protocol flows. It never sends anything onto a network and
+never writes to sloth or to `sloth.db`.
 
-**This is M5 (#163), on top of M4 (#162), M3 (#161), M2 (#160), M1
-(#159), M0 (#158) and W0 (#157).** W0 is the listener, the
-allowed-peer list and its refusals. M0 added the embedded page,
-`/api/health` and an `/events` stream. M1 added the data-socket
-client: slothweb reads sloth's JSONL stream, keeps a small live state,
-serves it as `/api/live`, and the page's Overview shows the device
-count, open alerts by severity, records per second, sensor health and
-a record ticker. M2 adds the time series: metrics derived from the
-same records, rolled into 10 s, 1 min and 1 h buckets, kept in
-slothweb's own `slothweb.db`, served as `/api/series`, and drawn by
-the Activity view. Run it beside sloth and open `http://127.0.0.1:8770`.
+![Overview](../docs/assets/slothweb/overview.png)
 
-**M3 adds baselines and anomaly episodes** (`web_baseline.h`,
-`web_anomaly.h`, `web_ident.h`): 168 local hour-of-week cells per
-(metric, key) with a four-week EWMA half-life and the MAD ratio
-(§5.3), nine of §6's ten rules as episodes (A1-A3, A5-A10; A4 needs
-the OUI table and moves to M4, #162), all of it kept in `slothweb.db`
-across restarts, served as `/api/anomalies`, `/api/baseline` and an
-`anomaly` event on `/events`, and drawn by the Anomalies view and the
-Overview's band, hour-of-week heatmap and top anomalies. The details,
-and every place this departs from the spec's body and why, are in
-[Baselines and anomalies](#baselines-and-anomalies-m3) below.
+The spec is [`docs/web-ui-spec.md`](../docs/web-ui-spec.md) (the
+rulings table at its top overrides the body); the wiki page is
+[`docs/wiki/slothweb.md`](../docs/wiki/slothweb.md). Everything below
+the Security section is reference: the command line, every route, and
+how each part works.
 
-**M4 adds devices and lookup** (`web_slothdb.h`, `web_query.h`,
-`web_oui.h`, `web_ptr.h`, `web_devices.h`): `sloth.db` read
-read-only (`--sloth-db`), the device query language of §9.1 compiled
-to one prepared statement with bound parameters, the vendor table
-generated at build time from the IEEE registry CSVs the developer
-fetches (never committed), passive names only (the active reverse DNS
-of §9.3 is cut by the rulings header: slothweb resolves nothing), rule
-A4 and a durable A2, the routes `/api/devices`, `/api/device/{mac}`
-and `/api/lookup`, and the Devices view, the device drawer and the
-Lookup view. See [Devices and lookup](#devices-and-lookup-m4) below.
+## Five minutes
 
-**M5 adds the WiFi and History views and the SQL box** (`web_wifi.h`,
-`web_history.h`, `web_sqlbox.h`, `web_secret.h`, `web_recipes.h`): a
-channel x time waterfall, the AP table, a deauth timeline and probe
-clients over their baseline band (§8.8); a 30 d strip with a drag range
-picker, who was here in the range with presence restricted to it, the
-alerts, anomalies and flows in it, and the survey sessions with
-`--report`'s "new since the previous session" one click away (§8.10);
-and the read-only SQL box behind `--web-allow-sql`, off by default,
-with `docs/wiki/sqlite-schema.md`'s recipes extracted at build time.
-See [WiFi, History and the SQL box](#wifi-history-and-the-sql-box-m5)
-below.
+### Prerequisites
 
-## Build and run
+- Linux (or macOS for the build and the demo), a C99 compiler (`cc`),
+  `make`, and the SQLite 3 headers and library: `libsqlite3-dev` on
+  Debian and Ubuntu, `sqlite-devel` on Fedora, `sqlite` from Homebrew.
+  SQLite 3.31 or newer; nothing else is linked but libc, pthreads and
+  libm.
+- A browser on the same host, or an SSH tunnel to it.
+- `curl`, only for the checks in this section.
+- For real data: sloth, built from this tree (`make`) and run with
+  `--data-socket` (below). Not needed for the demo.
+
+### Build
+
+From the top of this tree:
 
 ```sh
-make web            # builds ./slothweb (with SQLite, as sloth's default)
-make web-test       # builds ./slothweb_test and runs it
-make web WITH_SQLITE=0       # a slothweb with no store (10 s tier in memory)
-make web-test WITH_SQLITE=0  # and its tests
-./slothweb          # listens on 127.0.0.1:8770, reads unix:/run/sloth/sloth.sock,
-                    # keeps its time series in ./slothweb.db
-./slothweb --sloth-db /var/lib/sloth/sloth.db   # and reads sloth.db, read-only
-./slothweb --sloth-db /var/lib/sloth/sloth.db --web-allow-sql   # and the SQL box
+make web            # ./slothweb (with SQLite, the default)
+make web-demo       # build/web/slothweb-demo, the synthetic data for the demo below
 ```
 
-**The vendor table.** `make web` generates `build/web/web_oui_table.c`
-from whichever of these the developer has put in `web/data/` (a
-directory ignored by version control; the files are never committed,
-2026-10-21 OUI ruling): `oui.csv` (MA-L,
-`https://standards-oui.ieee.org/oui/oui.csv`), `mam.csv` (MA-M,
-`.../oui28/mam.csv`), `oui36.csv` (MA-S, `.../oui36/oui36.csv`) and
-`iab.csv` (`.../iab/iab.csv`). Fetching them is a manual step on the
-developer's machine; the build and the sensor never fetch anything.
-With none there the build still succeeds: the generator reads sloth's
-own table out of `src/oui.c` as text (117 entries today; the spec's
-"123" is out of date), `/api/health` says `"vendor_table":"sloth"`, the
-Lookup card says the table is not the full registry, and A4 is off with
-its reason. A malformed CSV fails the build rather than becoming a
-smaller table. The table is regenerated when the list of CSVs or a
-CSV's checksum changes.
+`make web WITH_SQLITE=0` builds a slothweb with no SQLite at all: no
+`--sloth-db`, no `--store`, history in memory only.
 
+**Optional, the full vendor table.** Without it slothweb uses sloth's
+own small table (about 120 vendors) and rule A4 is off. To use the
+IEEE registry instead, fetch the CSVs once into `web/data/` (ignored by
+git, never committed) and build again; neither the build nor slothweb
+ever fetches anything itself:
 
-sloth creates its unix socket `0600`, so slothweb runs as the same user
-as sloth (or one sloth's socket directory admits); the kernel's
-permission check is the only authentication the stream has.
+```sh
+mkdir -p web/data
+curl -fsSL -o web/data/oui.csv   https://standards-oui.ieee.org/oui/oui.csv
+curl -fsSL -o web/data/mam.csv   https://standards-oui.ieee.org/oui28/mam.csv
+curl -fsSL -o web/data/oui36.csv https://standards-oui.ieee.org/oui36/oui36.csv
+curl -fsSL -o web/data/iab.csv   https://standards-oui.ieee.org/iab/iab.csv
+make web
+```
 
-`slothweb` is C99 and links libc and pthreads, and `libsqlite3` when
-built with `WITH_SQLITE=1` (the default, the same switch and library
-sloth uses); nothing else. It is not part of `make`, `make embedded` or
-`sloth`, no `src/` file is compiled into it, and nothing in `src/`
-references `web/`.
+Any subset works (`oui.csv` alone is most of it). `/api/health` then
+says `"vendor_table":"ieee"`.
 
-The page is built, not checked in as one file. `web/tools/embed.c` (C99,
-built with the same compiler) reads `web/ui/index.html`, replaces each
-`@include NAME` line with `web/ui/NAME`, and writes the result as a byte
-array to `build/web/web_assets.c`, together with its ETag and a
-Content-Security-Policy holding the SHA-256 of its one `<style>` and one
-`<script>` block. That file is generated on every build that needs it
-and is never committed; neither is any font. No Python, no Node.
+### Try it on synthetic data
+
+No sensor needed. `slothweb-demo` writes a made-up `sloth.db` from
+sloth's own schema and serves a generated record stream on a unix
+socket, the way sloth's `--data-socket` does. Everything in it is
+invented: documentation addresses (`192.0.2.0/24`, `198.51.100.0/24`,
+`203.0.113.0/24`), locally administered MACs, `example` names.
+
+<!-- quickstart:begin -->
+```sh
+make web web-demo
+SRC=$PWD; cd "$(mktemp -d)"
+"$SRC/build/web/slothweb-demo" db sloth.db
+"$SRC/build/web/slothweb-demo" feed unix:sloth.sock &
+"$SRC/slothweb" --socket unix:sloth.sock --sloth-db sloth.db --store slothweb.db
+```
+<!-- quickstart:end -->
+
+Open `http://127.0.0.1:8770/`. The status strip should say `live`, the
+side panel `sock connected`, `db open`, `store open`. Stop with Ctrl-C,
+then `kill %1` for the demo stream. `make web-quickstart-check` runs
+exactly these steps in a temporary copy of the tree and checks the
+answer (`web/tools/quickstart_check.sh`).
+
+The time series start empty and fill at 10 s a bucket; baselines need
+three weeks of a given hour before they draw a band, so a fresh store
+says "no baseline yet". The demo's sloth.db already holds a month of
+devices, alerts, sessions and flows for the Devices, WiFi, History and
+Flows views.
+
+### Run it beside sloth
+
+Start sloth with its data socket, and, for the Devices, WiFi, History
+and Flows views, its database:
+
+```sh
+sudo ./sloth --headless --data-socket unix:/run/sloth/sloth.sock --db /var/lib/sloth/sloth.db
+```
+
+(`docs/wiki/deployment.md` has the systemd unit, which creates
+`/run/sloth` with `RuntimeDirectory=sloth`; by hand,
+`sudo install -d -m 0750 -o sloth /run/sloth`.) Then, as the user sloth
+runs as (the `sloth` account after its privilege drop, or `--user
+NAME`):
+
+```sh
+./slothweb --sloth-db /var/lib/sloth/sloth.db
+```
+
+- **The data socket.** `--socket` defaults to sloth's own default,
+  `unix:/run/sloth/sloth.sock`; `--socket tcp:127.0.0.1:8765` reads a
+  loopback TCP stream instead (`sloth --data-socket
+  tcp:127.0.0.1:8765`). sloth creates its unix socket `0600` inside a
+  `0750` directory, so the kernel's permission check is the stream's
+  only authentication: slothweb must run as the same user as sloth, or
+  as one the directory and socket admit. slothweb only ever reads the
+  socket and reconnects on its own if sloth restarts.
+- **`--sloth-db PATH`** is sloth's `--db` file, opened read-only. It
+  may not exist yet: slothweb retries on every request.
+- **`--store PATH`** is slothweb's own file (time series, baselines,
+  anomaly episodes), default `./slothweb.db` in the directory you start
+  it from. It is created `0600`; never point it at `sloth.db` (refused).
+
+### Open the page
+
+`http://127.0.0.1:8770/` on the same host. From another machine,
+forward the port rather than exposing it:
+
+```sh
+ssh -L 8770:127.0.0.1:8770 user@sensor     # then open http://127.0.0.1:8770/ locally
+```
+
+Keys: `1`..`9` switch views (`6` is not built yet), `/` searches
+devices, `[` hides the side panel, `Esc` closes the device drawer; the
+view is also in the address (`#flows`), so a reload stays on it.
+
+| | |
+|---|---|
+| ![Activity](../docs/assets/slothweb/activity.png) | ![Devices](../docs/assets/slothweb/devices.png) |
+| ![Anomalies](../docs/assets/slothweb/anomalies.png) | ![WiFi](../docs/assets/slothweb/wifi.png) |
+| ![Flows](../docs/assets/slothweb/flows.png) | ![History](../docs/assets/slothweb/history.png) |
+| ![Lookup](../docs/assets/slothweb/lookup.png) | ![Flows at 360 px](../docs/assets/slothweb/flows-narrow.png) |
+
+All screenshots are of the synthetic demo above, taken by headless
+Chromium; none shows anything captured from a real network.
+
+## Troubleshooting
+
+Every message slothweb can print as it starts, from the source (a test,
+`web/tests/test_readme.c`, fails when one is missing here). `PATH`,
+`ADDR`, `N` and `ERR` stand for the values printed. Exit status: `2` for
+a usage error or a policy refusal, `1` when the bind, the store or a
+thread fails; slothweb is not running after either.
+
+**Command line and policy** (exit 2):
+
+| Message | Remedy |
+|---|---|
+| `slothweb: unknown option OPT (see --help)` | `./slothweb --help` lists the flags. |
+| `slothweb: --flag needs an argument` | Give the flag its value. |
+| `slothweb: --web-max-keys V: want a whole number from N to N` (also `--web-max-mb`, `--web-retain-days`) | Use a whole number in the range printed. |
+| `slothweb: empty --web-bind` | `--web-bind 127.0.0.1:8770`. |
+| `slothweb: bad --web-bind ADDR (want A.B.C.D:PORT or [V6]:PORT)`, `bad --web-bind ADDR (want [V6]:PORT)`, `bad --web-bind address in ADDR`, `--web-bind ADDR: bad port` | A literal address and a port: `127.0.0.1:8770`, `[::1]:8770`. |
+| `slothweb: --web-bind ADDR: not a literal IPv4 address (names are not resolved)` | slothweb never resolves a name, its own bind included: `localhost:8770` is refused, write `127.0.0.1:8770`. |
+| `slothweb: refusing to bind ADDR: not a loopback address.` | Keep it on loopback and use `ssh -L` (above), or, deliberately, add `--web-allow-remote` and name the peers with `--web-allow` (Security). |
+| `slothweb: --strict refuses a non-loopback --web-bind (ADDR).`, `--strict refuses a non-loopback --web-allow (CIDR).`, `--strict refuses a non-loopback --socket (SPEC).` | `--strict` means loopback only, whatever else is given; drop one of the two. |
+| `slothweb: --web-allow CIDR admits non-loopback peers; that needs --web-allow-remote.` | Add `--web-allow-remote` if you mean it. |
+| `slothweb: --web-allow CIDR: empty address`, `bad address`, `not a literal IPv4 or IPv6 address`, `bad prefix`, `prefix too long`, `host bits set past the prefix` | A CIDR with its host bits zero: `10.0.0.0/8`, not `10.0.0.1/8`; no names. |
+| `slothweb: too many --web-allow entries (max N)` | Use fewer, wider prefixes. |
+| `slothweb: --socket SPEC: want unix:PATH or tcp:ADDR:PORT`, `want tcp:A.B.C.D:PORT or tcp:[V6]:PORT`, `want tcp:[V6]:PORT`, `bad address`, `bad port` | `--socket unix:/run/sloth/sloth.sock` or `--socket tcp:127.0.0.1:8765`. |
+| `slothweb: --socket SPEC: not a literal IPv4 address (names are not resolved)` | A literal address, never a name. |
+| `slothweb: --socket SPEC: the path must be 1..N bytes` | A unix socket path is limited to 107 bytes by the kernel: use a shorter path, or a relative one from the directory you start in. |
+| `slothweb: --sloth-db: empty or too long a path`, `--store: empty or too long a path` | Give a path, shorter than 4,080 bytes. |
+| `slothweb: --sloth-db needs SQLite; this slothweb was built with WITH_SQLITE=0`, `--store needs SQLite; this slothweb was built with WITH_SQLITE=0`, `--web-allow-sql needs SQLite; this slothweb was built with WITH_SQLITE=0` | Rebuild with `make web` (SQLite is the default), or drop the flag. |
+| `slothweb: --sloth-db and --store name the same file (PATH): sloth.db is sloth's, the store is slothweb's own` | Point `--store` somewhere else. |
+| `slothweb: --web-allow-sql needs --sloth-db PATH: the box reads sloth.db and nothing else.` | Add `--sloth-db`, or drop `--web-allow-sql`. |
+| `slothweb: --strict refuses --web-allow-sql.` | The SQL box is a query surface; `--strict` refuses it. Drop one. |
+| `slothweb: --web-max-mb N is below what --web-max-keys N needs: the baselines and episodes can take about N MB and the ceiling keeps N MB of history beside them (a week of hour rows for each of N series).` | Use the `--web-max-mb` it names, or a lower `--web-max-keys`. |
+
+**Warnings** (slothweb runs; each names an exposure you asked for):
+
+| Message | Meaning |
+|---|---|
+| `slothweb: WARNING: listening on ADDR, which is not a loopback address.` | `--web-allow-remote` and a routable `--web-bind`: every admitted peer reads everything, with no authentication and no TLS. |
+| `slothweb: WARNING: admitting non-loopback peers in CIDR (--web-allow, authorised by --web-allow-remote).` | As it says. |
+| `slothweb: WARNING: --web-allow-sql with --web-allow-remote: the SQL box (/api/query) ...` | Every admitted peer can run read-only SQL over sloth.db. |
+| `slothweb: WARNING: reading the data stream from SPEC, which is not loopback.` | The stream crosses a network unencrypted; read it on the sensor instead, or tunnel it. |
+
+**Starting up** (exit 1 unless said):
+
+| Message | Remedy |
+|---|---|
+| `slothweb: bind: Address already in use` (or another `bind: ERR`), `socket: ERR`, `IPV6_V6ONLY: ERR` | Another program (often another slothweb) holds the port: stop it, or `--web-bind 127.0.0.1:8771`. |
+| `slothweb: store: PATH: not a slothweb store (another program's database, sloth.db perhaps); refused, left as it is. Use a separate --store` | `--store` names a file that is not slothweb's: give a new path. |
+| `slothweb: store: PATH: application_id N is another program's database; refused, left as it is. Use a separate --store` | The same. |
+| `slothweb: store: PATH: not a readable SQLite database (ERR); refused, left as it is` | The same, or the file is damaged: move it aside. |
+| `slothweb: store: PATH: written by a newer slothweb (schema vN; this build writes vN); refused, left as it is. Use a separate --store` | Run the newer slothweb, or a separate `--store`. |
+| `slothweb: store: PATH: slothweb store with no readable schema version; refused, left as it is` | Move the file aside; slothweb makes a new one. |
+| `slothweb: store: PATH: schema vN could not be migrated to vN (ERR); the file is unchanged from vN` | Usually a full disk or a read-only directory; fix that and start again. |
+| `slothweb: store: PATH: mode 0644 gives group or other access; it must be 0600 (not repaired)` | `chmod 600 PATH`. |
+| `slothweb: store: PATH: owned by uid N, not this user` | Run as the file's owner, or use another `--store`. |
+| `slothweb: store: PATH: a symlink is refused`, `not a regular file`, `has N links; it must have one`, `PATH: fstat: ERR`, `PATH: ERR` | Name the real file, in a directory you own. |
+| `slothweb: store: PATH: changed while it was being opened; refused` | Something else is writing that path; give slothweb its own. |
+| `slothweb: store: PATH: SQLITE_DBCONFIG_DEFENSIVE refused`, `libsqlite3 VERSION is older than 3.31.0`, `PATH: prepare: ERR` | The SQLite library is too old or built without what slothweb needs: install 3.31 or newer. |
+| `slothweb: store: PATH: slothweb was built without SQLite (WITH_SQLITE=0); no store` | Not printed by a normal start (a memory-only build has no store); rebuild with `make web` for one. |
+| `slothweb: store: the saved baselines or anomaly episodes could not all be read; starting from what was` | Runs on (no exit): the rows that could not be read are skipped. |
+| `slothweb: time series: out of memory` | Lower `--web-max-keys`. |
+| `slothweb: SQL box: cannot start its thread`, `slothweb: pipe: ERR`, `slothweb: pthread_create failed` | Out of threads or descriptors: check `ulimit -u` and `ulimit -n`. |
+
+**sloth.db** (not fatal; slothweb runs and retries on every request,
+and the page says why in each view that needs it):
+
+| Message | Remedy |
+|---|---|
+| `slothweb: no --sloth-db: the Devices view and the drawer's sloth.db record are off; Lookup answers from the stream and the vendor table` | Add `--sloth-db PATH` for the Devices, WiFi AP table, History and Flows views. |
+| `slothweb: sloth.db PATH: missing (PATH: not there (yet): sloth makes it with --db); Devices and A2's durable first_seen wait for it, retried on every request` | Start sloth with `--db PATH`, or fix the path. The same line carries each reason below. |
+| `PATH: written by a newer sloth (schema vN): not read; update slothweb` | Build slothweb from the same tree as sloth. |
+| `PATH: schema vN is older than any sloth.db`, `PATH: no schema_version in its meta: not a sloth.db`, `PATH: no devices table with sloth's columns`, `PATH: not a sloth.db (ERR)` | `--sloth-db` names something that is not sloth's database. |
+| `PATH: a symlink is refused`, `PATH: not a regular file` | Name the real file. |
+| `PATH: needs recovery by sloth, which it does when it next opens it (ERR)` | sloth stopped mid-write; start sloth and it recovers the file. |
+| `PATH: SQLITE_DBCONFIG_DEFENSIVE refused`, `PATH: query_only: ERR` | The SQLite library lacks what slothweb needs: 3.31 or newer. |
+| `no --sloth-db`, `slothweb was built without SQLite; no sloth.db` | The reason `/api/health` gives (`db_error`) when there is no sloth.db to read. |
+
+**Normal start notices** (not problems): `listening on`, `vendor
+table: ... ; A4 off: build with the IEEE CSVs in web/data/` (see
+Build), `sloth.db ...: schema vN, N devices, read-only`, `reading
+SPEC`, `time series in`, `baselines (N restored)`, `store schema vN
+migrated to vN`, and in a `WITH_SQLITE=0` build:
+
+| Message | Meaning |
+|---|---|
+| `slothweb: built without SQLite: time series in memory only (10 s buckets, no minute or hour tier to read back); baselines and anomaly episodes in memory, lost at exit; rules A1 (z only, no MAD), A2, A3, A5-A8 and A10 active (A4 with the IEEE table), A9 needs the store` | What a memory-only build keeps; `make web` (with SQLite) keeps the rest. |
+
+**After start**, the stream's state is in `/api/health`
+(`socket`, `socket_last_error`) and in the side panel: `sock retrying`
+with `connect: No such file or directory` means sloth is not running or
+not with `--data-socket`; `Permission denied` means slothweb runs as
+another user than sloth (above).
+
+## Security
+
+Read this before exposing slothweb to anything but your own loopback.
+
+- **Loopback by default.** slothweb binds `127.0.0.1:8770` and admits
+  only loopback peers (`127.0.0.0/8`, `::1`); any other peer is closed
+  at `accept()` before a byte is read. Two separate opt-ins widen that:
+  `--web-allow-remote` permits a non-loopback `--web-bind`, and each
+  `--web-allow CIDR` admits that prefix (it needs `--web-allow-remote`
+  too). Each is announced on stderr at start. Loopback stays admitted
+  whatever is added. Prefer `ssh -L` to either.
+- **GET and HEAD only.** Every other method is `405`, on every path,
+  for good: there is no endpoint that changes anything in sloth,
+  slothweb, the host or the network.
+- **No authentication.** Whoever can reach the port reads everything
+  slothweb serves: every device, name, SSID, flow and alert. There are
+  no accounts and no token; the allow list is the only gate.
+- **No TLS.** Use an SSH tunnel (or a VPN you already trust) for
+  another host.
+- **The Host check.** A request is answered only when its `Host` is
+  `localhost` or a literal IP address (with an optional port); anything
+  else is `421` before any route. This stops a web page that points its
+  own name at `127.0.0.1` (DNS rebinding) from reading slothweb through
+  your browser.
+- **CSP and no external requests.** The page is one embedded file
+  served with `Content-Security-Policy: default-src 'none'` plus the
+  hashes of its own one script and one style, and `connect-src 'self'`:
+  it loads no font, script, image or anything else from anywhere, and
+  can talk only to slothweb. No CORS headers are sent.
+- **Read-only towards sloth.db.** `--sloth-db` is opened
+  `SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW` per request, through a
+  file layer that never creates a file. In WAL mode that means:
+  slothweb never checkpoints and never writes the WAL into the main
+  file; when sloth is running it reads sloth's `-shm` index read-only;
+  when sloth is not running it reads the file as of sloth's last
+  checkpoint (`"db_mode":"immutable"` in `/api/health`) rather than
+  create a `-wal` or `-shm` beside it; and every statement is its own
+  short read transaction with a time budget, so slothweb cannot hold
+  sloth's WAL from being reset or stall a sloth write. A file that
+  needs recovery is left for sloth to recover.
+- **Secret columns withheld everywhere.** sloth.db holds some
+  credential material by design (a cleartext-credential username, an
+  RDP cookie, an MQTT username, an EAP identity, the alert key and
+  detail that name them). slothweb reads sloth.db only through a
+  column allow-list enforced by an SQLite authorizer, so those columns
+  cannot be read by any route, and the same withheld list is refused
+  inside the SQL box. `mqtt_flows` is not read at all; Kerberos'
+  preauth counts are left out because the allow-list refuses any
+  column named for a credential word.
+- **`--web-allow-sql`.** Off by default. With it, `/api/query` runs one
+  read-only `SELECT` at a time over sloth.db (5 s, 10,000 rows, the
+  withheld columns refused) for every admitted peer. Combined with
+  `--web-allow-remote` that is announced as a warning.
+- **`--strict`** refuses every non-loopback bind, allow entry and
+  `--socket tcp:` address, and the SQL box, even when the opt-in flags
+  are given.
+- **No name resolution, ever.** slothweb resolves nothing: not its bind
+  address, not `--socket`, no reverse DNS, no WHOIS. Every name it
+  shows was already in sloth's stream or database.
+- **Third-party data.** The page shows other people's data: MAC
+  addresses, device and host names, SSIDs and probe lists, flows
+  between hosts. Treat the page, screenshots of it, and `slothweb.db`
+  as you would the capture itself, under whatever authorisation and
+  retention rules apply to the network you monitor.
+
+## Reference
+
+The rest of this file describes each part in detail, milestone by
+milestone (W0, M0 to M6; tracker #102).
 
 ## Command line
 
@@ -150,6 +362,8 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/wifi/aps?sort=&limit=&offset=` | `200` JSON, a page of sloth.db's beacon_aps; `400`; `503` with no `--sloth-db` or sloth.db unreadable |
    | `GET /api/history/overview`, `/api/history/devices`, `/api/history/alerts`, `/api/history/flows` (`?from=&to=` and their own) | `200` JSON, the History view's reads of sloth.db; `400`; `503` as above |
    | `GET /api/sessions`, `/api/sessions/new?id=` | `200` JSON, the survey sessions and one's "new since the previous session"; `404` for a session sloth.db does not have |
+   | `GET /api/flows?proto=&from=&to=&ip=&sort=&limit=&offset=` | `200` JSON, one protocol table of sloth.db (M6, below); `400` for a parameter that does not pass, `proto=mqtt` included (`proto_withheld`); `503` as above |
+   | `GET /api/flows/graph?from=&to=&nodes=&edges=` | `200` JSON, the chord diagram's pairs with the fold stated; `400`; `503` as above |
    | `GET /api/query?sql=` | only with `--web-allow-sql` (otherwise `404`): `200` JSON, the statement's result; `400` with `{"error":"reason"}` for a refused statement; `503` `busy` while another runs, or sloth.db unreadable |
    | `HEAD /api/query` | `405`, `Allow: GET`: nothing to describe without running it |
    | `GET /api/recipes` | only with `--web-allow-sql`: `200` JSON, the box's recipes |
@@ -222,7 +436,7 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
 **`/api/health`** answers
 
 ```json
-{"service":"slothweb","milestone":"M4","uptime_s":12,
+{"service":"slothweb","milestone":"M6","uptime_s":12,
  "socket":"connected","socket_spec":"unix:/run/sloth/sloth.sock",
  "last_record_age_s":0,"socket_attempts":1,"socket_connects":1,
  "socket_reconnects":0,"socket_failures":0,"socket_closes":0,
@@ -1562,7 +1776,96 @@ exposure: every peer the allow list admits can then run any read-only
 - "New since" for an older session closes its window at that visit's
   end (above); for the latest it is `--report`'s.
 
+## Flows (M6)
+
+#164. Spec §8.9 and §8.12, the rulings header. `web_flows.h`, the
+Flows view (`7`).
+
+![Flows](../docs/assets/slothweb/flows.png)
+
+**What is read.** sloth.db's protocol tables, one tab each:
+`ssh_flows`, `rdp_flows`, `smb_sessions`, `snmp_flows`, `ldap_events`,
+`kerb_events` and `bgp_sessions`, through the M4 reader and its column
+allow-list (`web_sdb_ftab[]` in `web_slothdb.c` names each tab's
+columns; `test_flows.c` holds every one to the allow-list). Three are
+left out, and the tab says which and why (`"withheld"`):
+`ssh_flows.server_banner` (M5 kept it off), `rdp_flows.last_cookie`
+(an `mstshash` account name) and `snmp_flows.community_count`;
+`kerb_events.preauth_required_count` and `preauth_failed_count` are
+integer counts, but named for a credential word, and the allow-list's
+name guard is deliberately not type-aware, so they stay off it rather
+than weaken the guard. **`mqtt_flows` is not read at all**: it holds
+MQTT usernames, M4's allow-list keeps the table whole off, and
+`/api/flows?proto=mqtt` is a `400` `proto_withheld`; its tab is shown
+disabled with the reason.
+
+**`/api/flows?proto=&from=&to=&ip=&sort=&limit=&offset=`.** One tab's
+rows overlapping `[from, to)` (History's range rules: the last 30 days
+by default, at most 400): `src`, `dst` (`null` for the per-source
+`ldap` and `kerb` tables), `counts` in the order of `columns`, their
+`total`, the SMB `server_port` and `dialect` with `smb1`, the RDP
+`proto_mask`, the SNMP `version`, `first_seen` and `last_seen`.
+`proto` is required. `ip` is a literal address, canonicalised, matched
+against either end. `sort` is `last` (default), `total` or `src`;
+`limit` 1..200 (default 50) and `offset` 0..1,000,000. `total` counts
+every matching row; a page that would not fit its 64 KB answer stops
+early with `"more":true`, and the next page starts at `offset +
+count`. Each parameter passes whole or the answer is a `400` with its
+reason (`missing_proto`, `unknown_proto`, `proto_withheld`, `bad_ip`,
+`bad_sort`, `bad_limit`, `bad_offset`, and History's range reasons).
+
+**`/api/flows/graph?from=&to=&nodes=&edges=`.** The chord diagram's
+data: the source -> destination pairs of the pair tables (`ssh`, `rdp`,
+`smb`, `snmp`, `bgp`; `ldap` and `kerb` record a source only), the
+`edges` largest by total (1..200, default 80), and of their endpoints
+the `nodes` busiest (2..64, default 24; the page asks for 12 below
+520 px). A pair with an end outside the kept nodes is folded, as is
+every pair past the largest `edges`. `"fold"` states it in numbers:
+pairs, flows (the sum of totals) and addresses, each as total, shown
+and folded, so the page can say "16 of 40 pairs, 24 of 61 addresses;
+folded: 24 pairs, 310 of 2,104 counted". `"tabs"` gives each tab's rows
+and total in the range for the tab strip (`null` for a table the file
+lacks, `"mqtt":"withheld"`). Bounded on both sides: at most 200 pairs
+read, 64 nodes drawn, whatever sloth.db holds.
+
+**The view.** A Canvas 2D chord diagram: the kept addresses on a
+circle, busiest first from twelve o'clock, each with its hash colour
+(§8.12) and its address as text; each pair a curve through the middle
+from its source to an arrowhead at its destination, its width by the
+log of its total, its colour the protocol's hue (`--f-ssh` and the
+rest in `theme.css`), and an SMB1 session in `--sev-crit`. The legend
+names every hue in text, and the fold line above says what was left
+out, so the drawing never stands on colour alone. Clicking an address
+filters the table by it. Under it, the tab strip (each tab with its
+row count) and the table: source, destination, the counters by name,
+total, the protocol's extra (port and dialect, version, protocol mask),
+first and last seen; newest first, paged with "more". **An SMB1 row is
+`--sev-crit`**, by a fixed class (`frow sev2`) and with `SMB1` in its
+own column. Without `--sloth-db`, or in a `WITH_SQLITE=0` build, both
+panels say why instead.
+
+**The polish pass** (#164's second half), each found by driving the
+page in headless Chromium against the demo data in four states (full,
+no `--sloth-db`, no stream, `WITH_SQLITE=0`) at 1280 x 900 and 360 x
+740: the view list is buttons, so `Tab` reaches every view in order
+(with `aria-current` on the open one), and device, history and flow
+rows and anomaly cards take focus and open with `Enter`; the device
+drawer takes the focus when it opens and gives it back when it closes;
+wide row tables scroll sideways inside their own box at a narrow width,
+so the page itself never does (it did at 360 px); the table headers'
+columns line up with their rows (an 11 px header against 12 px rows in
+`ch` units drifted left a column per screen); the MAC column fits a
+randomised MAC; the History strip takes pointer events, so a finger
+can drag a range; `color-scheme: dark`, so a browser that prefers a
+light scheme still draws dark controls on the dark page; the address
+names the view (`#flows`), so a reload stays on it; and a
+`WITH_SQLITE=0` build's pages say it cannot read sloth.db rather than
+suggesting a flag it does not have.
+
 ## What it never does
+
+The [Security](#security) section above is the summary; this is the
+same list as code facts.
 
 - No method that writes, ever (`405` is permanent, not a W0 placeholder).
 - No name resolution of any kind, including its own bind address.
@@ -1593,7 +1896,7 @@ sloth, opens only loopback ephemeral ports (`127.0.0.1` and `::1`, port
 under `/tmp`, and never leaves the host. Its sloth.db files are made
 from sloth's own DDL (`src/db_schema.c`, linked into the test binary
 only) and its OUI tables from CSVs it writes itself: nothing is a
-committed fixture. Every M2, M3, M4 and M5 test runs on a pinned clock, and the suite pins the zone (`TZ=UTC0`) too, since a
+committed fixture. Every M2 to M6 test runs on a pinned clock, and the suite pins the zone (`TZ=UTC0`) too, since a
 baseline cell is a local hour. `make web-test WITH_SQLITE=0` builds and runs the same suite
 against the memory-only build. It is clean under
 `EXTRA_CFLAGS="-Werror -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"`
@@ -1626,6 +1929,8 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_wifi.c` | the WiFi routes through the route table: the waterfall's band order and channel order, a gauge cell as the mean of its buckets and a counter's as their sum, null for empty, the defaults, 40 channels and `more`, every `400` (`tier_unavailable` past 24 h without a store), `503` without a time series or sloth.db; a channel only the store holds, at the minute and hour tiers; the deauth timeline by frames with its DEAUTH_FLOOD episodes in the range matched on the alert key that no body names, and without sloth.db; the AP table (AKM bits and downgrade flags by name, MFP as a word, the SSID history and count, KARMA, a markup SSID escaped, sorts, paging, refusals) and its worst-case row fitting `WEB_WIFI_AP_ROW_MAX`; the page's WiFi view, its ids and fetches. Both builds |
 | `test_history.c` | the History routes over a generated sloth.db: the strip's cells and session markers, the defaults and refusals; who was here at the edges of the overlap, the presence strip over the range, paging; the alerts and flows in a range with no key, detail, cookie or MQTT username and no `mqtt_flows`; the sessions; "new since the previous session" for a first visit, a visit after a crash (its window closed at the next start), one whose previous never ended (since its start), and the latest, whose devices are the ones the wiki's own recipe names; the page's History view. Both builds |
 | `test_sqlbox.c` | the SQL box: the parameter and text rules; `404` without `--web-allow-sql` and the page's box hidden; spec §12's M5 acceptance (above) over a real socket against the C API and the sqlite3 shell; every write, DDL, PRAGMA, ATTACH, DML-tail CTE and second statement refused with the file byte for byte; every withheld column refused, the guardrail's words on the list, the integer flags read; the row, byte, time and value limits; one at a time (`503` `busy`, free again once answered or once the client leaves), `HEAD` `405`, `/api/recipes`. Both builds |
+| `test_flows.c` | the Flows routes over a generated sloth.db: every tab's row byte for byte, an SMB1 session marked, the columns each tab reads held to the allow-list and the withheld ones held off it, no cookie, banner, MQTT username, community count or preauth count in any body, every `400`, paging, sorting, the `ip` filter, a page that stops early with `more` and the next one, the chord pairs with their fold at three sizes, a table the file lacks; the page's Flows view. Both builds |
+| `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
 | `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own |
 | `test_replay.c` | spec §12's M3 acceptance: a six-week JSONL stream generated in the test (never a fixture) through the framer, decoder, live state, metric derivation, identity tables, rollup, `web_tsdb_step()` and the engine as `main.c` wires them, on pinned clocks: four weeks of routine (noisy gauges, Poisson counts, and an input for every rule: names that agree, a randomised MAC with its own name, a month-old probe client, a steady ssh host), then a quiet 7 d week in which nothing at all fires, slothweb and sloth restarting in the middle of it in an SQLite build, then a 7 d week in which A1 fires for a burst of connections and A3 for a daytime device that appears only at night, while a device that is only ever present at night never fires; and the hour that just closed reaching the baseline at flush phases 0, 3 and 7 (the previous slice fed it only at phase 0); A9 for a new host whose first row the rollup released late, at sloth's real cadence (SQLite); five weeks of a 13:30-14:30 routine in IST firing nothing. Both builds |
 
@@ -1690,6 +1995,7 @@ web/
                    /api/history/devices (M5)
     web_wifi.c     /api/wifi/channels, /api/wifi/deauth, /api/wifi/aps (M5)
     web_history.c  /api/history/*, /api/sessions, /api/sessions/new (M5)
+    web_flows.c    /api/flows, /api/flows/graph (M6)
     web_secret.c   the withheld columns both sloth.db readers refuse (M5)
     web_sqlguard.c the SQL box's text rules, authorizer, limits, runner (M5)
     web_sqlbox.c   the SQL box's thread, its one answer, busy (M5)
@@ -1703,6 +2009,8 @@ web/
     oui_csv.c      the registry CSV reader the generator and the tests share
     recipes.c      docs/wiki/sqlite-schema.md -> build/web/web_recipes.c (build time only)
     sha256.c       SHA-256 and base64 for embed.c and the tests
+    demo.c         build/web/slothweb-demo: the synthetic sloth.db and stream (M6)
+    quickstart_check.sh  the five-minute check, make web-quickstart-check (M6)
   data/            the developer's IEEE registry CSVs; never committed
   tests/           slothweb_test (make web-test); sdb_gen.c builds the tests'
                    sloth.db from src/db_schema.c; src/rsn_ie.c is linked for

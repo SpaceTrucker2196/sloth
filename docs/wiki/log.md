@@ -2098,6 +2098,7 @@ told the reader the opposite of what the code now does.
   `persist_health_t` and requires `cli-reference.md` to contain the
   prefix and every sink token the formatter emits, so renaming a token
   in `src/persist_health.c` fails the suite and names the page.
+
 ## 2026-10-13 — the WPS lockout sawtooth is inspectable (#82)
 
 **Pages touched:** `alerts.md` (a paragraph under *Tunable thresholds*
@@ -2125,6 +2126,7 @@ is actually still open.
 JSONL or schema change. The WPS session table is still not
 state-resident, so no session/opcode timeline is on screen; the
 probe-response path still parses only the SSID tag.
+
 ## 2026-10-13 — #91: eviction tally covers rf_channel and http_flow
 
 **Source**: issue #91. Two more bounded synthesis tables reach the
@@ -2153,6 +2155,7 @@ shipped without its host and path, from an absence of either.
   completeness claim ("every bounded synthesis table in sloth") and is
   corrected in the same change. Only the *counted* list is pinned to
   the build by a test; the uncounted side is prose and had drifted.
+
 ## 2026-10-13 — CLI surface gated against the reference (#103)
 
 **Source**: `src/main.c` (argv loop, `handle_key`), `src/view_labels.c`,
@@ -2184,6 +2187,7 @@ shipped without its host and path, from an absence of either.
   the page's names are longer than the `view_labels[]` ones; short
   options; and the `print_usage()`/parser gap — `--no-colour` and
   `--help` are parsed and have no usage line.
+
 ## 2026-10-13 — #85: unresolved allow-list names are announced at launch
 
 **Source**: issue #85. An `--iface`/`--monitor-only` name that does not
@@ -2229,6 +2233,7 @@ replugged adapter stays failed closed until restart), the
 `scope_dropped`-vs-`[y]`-deselect contract discrepancy, and the
 `cli-reference.md` exit-code mismatch for the scope refusal (doc says
 `2`, `src/main.c` returns `1`). All three are owner decisions.
+
 ## 2026-10-13 — `SURV_CLOUD_SNI`: surveillance-vendor cloud endpoints (#105 family B)
 
 New `src/vendor_watchlist.{c,h}` — an embedded table of surveillance
@@ -2281,6 +2286,7 @@ uploading to its own vendor is the system working as designed. Cited in
   surveillance inventory/JSONL fields, `VIEW_SURVEILLANCE`, the
   cross-signal CRIT and `SURV_DHCP_VENDOR` (which also needs DHCP
   option 60/61 parsing that does not exist) are all untouched.
+
 ## 2026-10-13 — evidence-ring citations reach the alert (#92)
 
 **Pages touched**: [pcap-export.md](pcap-export.md) (new §4).
@@ -2315,6 +2321,7 @@ IDs rather than the first, and what is still unwired.
   its final name, contrary to the promise in `evidence_export.h`.
 - No new `ALERT_TYPE_*`, so no `research/` citation and no rule-count
   change; `alerts.md` and the count gates are untouched.
+
 ## 2026-10-13 — `TPC_ABSENT_HIGH_BAND`: the regulatory envelope stops being inert (#101 slice 3)
 
 **Updated**: [wifi-sigint.md](wifi-sigint.md) — the "Regulatory elements"
@@ -2351,6 +2358,7 @@ the Transmit Power Envelope element (tag 195), which sloth does not
 parse, so the absence of 32/35 would be the wrong element missing.
 
 ---
+
 ## 2026-10-13 — `CAM_SETUP_SSID`: camera setup-mode SoftAP (#106 slice 2)
 
 New `ALERT_TYPE_CAM_SETUP_SSID` (WARN, alert count 70 → 71). `#80`'s
@@ -2390,6 +2398,7 @@ Pages touched: [alerts.md](alerts.md) (new "Exposure rules" subsection),
 plus the 70 → 71 count in [index.md](index.md), [sloth.md](sloth.md),
 [what-sloth-does.md](what-sloth-does.md) and
 [attack-map.md](attack-map.md).
+
 ## 2026-10-13 — #90: the PNL escalator wants one station, not the union
 
 **Source**: issue #90, next slice. `src/karma_detect.{c,h}`,
@@ -2456,6 +2465,7 @@ column with its existing meaning.
 - **Not done.** The J% column is still computed, rendered, persisted
   and then ignored by the severity gate. A Jaccard-based escalator is
   the obvious next narrowing and is deliberately out of this slice.
+
 ## 2026-10-13 — Queued-frame release detector (#107 shape B)
 
 **Pages touched**:
@@ -4209,6 +4219,7 @@ see). Citation
 (hostapd, Wireshark, mac80211; the paywalled clause itself not read).
 `MLE_SWITCH_RATE` is dropped per the #145 ruling; #104 closes on this
 slice.
+
 ## 2026-10-20 — #105 family B close-out: `SURV_DNS` and a Verkada row
 
 [[alerts]]. The surveillance-vendor watchlist in `src/vendor_watchlist.c`
@@ -4242,6 +4253,7 @@ the vendor across the ring, so two names under one key no longer emit
 an `alert.update` per minute for unchanged evidence. And the docs now
 say that a forwarding resolver on the segment is its own asking host
 for `SURV_DNS`.
+
 ## 2026-10-20 — Pixie Dust: two rules, probe-response WSC, WPS sessions on [b] (#82)
 
 `WPS_PIXIE_PROBE` (WARN, T1110.002) fires on a WPS run that reached M1
@@ -4274,6 +4286,7 @@ guesses (new `guess_n` in `src/wps_track.c`), since one missed M4 in a
 successful online brute force reads as an M3 abandon. The short title
 `WPS_PIXIE_SUCCESS` is documented as deliberate (`ALERT_TITLE_LEN` is
 20). Tests now hold every `attempt_close()` guard, each seen red.
+
 ## 2026-10-20 — #77 last no-hardware slices: `[b]` stack measurements, WSC M1/M2 vendor strings
 
 The `[b]` detail screen gains a `STACK MEASUREMENTS` block showing
@@ -4335,6 +4348,7 @@ rules judged real stays LOW. `COUNTRY_ABSENT` states its observation
 floors instead of live seconds and beacon counts, which had made every
 tick a new observation and an `alert.update` every 60 s per AP. See
 [[regulatory-table]] and [[alerts]].
+
 ## 2026-10-20 — #101 slice B: 6 GHz regulatory claims, `REG` column, `wifi_regulatory`, power delta
 
 `src/reg_6g.c` parses the HE 6 GHz Operation Information's Regulatory
@@ -4358,6 +4372,7 @@ over 4096 slots, so two live keys sharing a slot no longer evict each
 other and re-emit every tick ([[jsonl-schema]] is unchanged: same
 records, fewer duplicates). Documented in [[wifi-sigint]] and
 `docs/views/beacons.md`.
+
 ## 2026-10-20 — #106 slice A: camera identity from mDNS, SSDP and the transmitter OUI
 
 Three new WARN kinds, each on the empty-technique exposure list and each
@@ -4382,6 +4397,7 @@ so the provenance check runs on hosts without ieee-data. [[alerts]]
 says "one alert per identity" and spells out the per-service-instance
 mDNS keying; the Ubiquiti departure from #106 Case B is marked as
 awaiting an owner ruling.
+
 ## 2026-10-20 — #106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE
 
 New passive observer `src/rtsp_snoop.c` reads RTSP/1.0 (RFC 2326) and
@@ -4470,6 +4486,7 @@ IOC domain nobody queried. [[threat-intel]] gains a table of every rule
 that matches a `dns_log` or `tls_log` name against a table and its
 status, and drops the SNI and HTTP `Host:` triggers it listed — they
 were never implemented.
+
 ## 2026-10-21 — #155: telling a camera from a router on a mixed-vendor OUI
 
 **Updated pages**: [camera-detection.md](camera-detection.md),
@@ -4508,6 +4525,7 @@ that no class calls a camera the Devices detail prints `Vendor ...
 `camera_vendor` in JSONL and `--db` keeps its name and is read beside
 `device_class`. The score floor is noted as implied by the two required
 bits, and the issue's two uplink statements as unresolved.
+
 ## 2026-10-21 — #144 slice 2: the Bluetooth host source over the HCI monitor channel
 
 **New page**: [ble.md](ble.md). **Updated pages**:
@@ -4849,6 +4867,7 @@ report events.
   new-since), and the SQL box behind `--web-allow-sql` with
   [[sqlite-schema]]'s recipes extracted at build time; the credential
   columns withheld from both sloth.db readers, the box included.
+
 - 2026-10-23 — [[slothweb]]: M5 review fixes (#163). The SQL box rests
   after each statement as long as it ran (a looping client no longer
   stops sloth restarting its WAL), refuses temporary files (a large sort
@@ -4857,6 +4876,7 @@ report events.
   History presence strip ends at the range's end and reads the hour tier
   for a range older than `--web-retain-days`; a channel sloth labels `?`
   is its own band.
+
 - 2026-10-23 — [[jsonl-schema]]: `dns.answer` on a PTR response (#165)
   now carries the PTR record's decoded target name (RFC 1035 §3.3.12,
   compression per §4.1.4) instead of staying empty — the gap
@@ -4864,3 +4884,12 @@ report events.
   documented as unfilled. `qname` is unchanged. `host_cache_add` is no
   longer fed a PTR record's `(answer, qname)` pair, which is inverted
   relative to the IP/host shape every other qtype feeds it.
+
+- 2026-10-23 — [[slothweb]]: M6 (#164). The Flows view (sloth.db's
+  protocol tables through the M4 allow-list, SMB1 in the critical
+  colour, a chord diagram with its fold stated; `mqtt_flows` never
+  read), a polish pass over every view, `web/README.md` rewritten for a
+  five-minute start with a troubleshooting table held to the source and
+  a security section, a synthetic demo (`make web-demo`), the
+  five-minute check (`make web-quickstart-check`) and screenshots of
+  the demo in `docs/assets/slothweb/`.

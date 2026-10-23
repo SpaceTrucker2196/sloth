@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "web_assets.h"
+#include "web_flows.h"
 #include "web_history.h"
 #include "web_json.h"
 #include "web_recipes.h"
@@ -237,7 +238,7 @@ static void analysis_health(web_anomaly_t *a, web_jw_t *w) {
 static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
     web_jw_t w;
     web_jw_init(&w, out, outsz);
-    web_jw_raw(&w, "{\"service\":\"slothweb\",\"milestone\":\"M5\",\"uptime_s\":");
+    web_jw_raw(&w, "{\"service\":\"slothweb\",\"milestone\":\"M6\",\"uptime_s\":");
     web_jw_int(&w, h->uptime_s);
     /* With no data socket the M0 shape stands: "none" and null. Every
      * stream-derived or operator-given string goes through web_jw_str. */
@@ -521,10 +522,10 @@ static int route_m4(const web_req_t *rq, const web_health_t *h, int which,
 }
 
 enum { M5_CHANNELS, M5_DEAUTH, M5_APS, M5_OVERVIEW, M5_HDEVICES, M5_HALERTS,
-       M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW };
+       M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW, M6_FLOWS, M6_GRAPH };
 
-/* The WiFi and History routes (M5, web_wifi.h, web_history.h): the
- * same shape as route_m4(). */
+/* The WiFi and History routes (M5, web_wifi.h, web_history.h) and the
+ * Flows routes (M6, web_flows.h): the same shape as route_m4(). */
 static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
                     char *out, size_t outsz, web_resp_t *r) {
     if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
@@ -540,7 +541,7 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         web_wifi_channels_route, web_wifi_deauth_route, web_wifi_aps_route,
         web_history_overview_route, web_history_devices_route,
         web_history_alerts_route, web_history_flows_route, web_sessions_route,
-        web_sessions_new_route,
+        web_sessions_new_route, web_flows_route, web_flows_graph_route,
     };
     if (qlong(rq)) {
         status = 400;
@@ -722,6 +723,8 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
             { "/api/history/flows", M5_HFLOWS },
             { "/api/sessions", M5_SESSIONS },
             { "/api/sessions/new", M5_SESSIONS_NEW },
+            { "/api/flows", M6_FLOWS },
+            { "/api/flows/graph", M6_GRAPH },
         };
         for (size_t i = 0; i < sizeof(M5) / sizeof(M5[0]); i++)
             if (!strcmp(rq->path, M5[i].path))

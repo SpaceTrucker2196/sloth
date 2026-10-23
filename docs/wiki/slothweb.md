@@ -5,8 +5,18 @@ page tracks what has shipped; the design is
 [`docs/web-ui-spec.md`](../../docs/web-ui-spec.md), whose rulings table
 overrides its body.
 
-**Summary**: slothweb is at M5 (#163) on top of M4 (#162), M3 (#161),
-M2 (#160), M1 (#159), M0 (#158) and W0 (#157). M5 adds the WiFi view
+**Summary**: slothweb is at M6 (#164), the last milestone of #102, on
+top of M5 (#163), M4 (#162), M3 (#161), M2 (#160), M1 (#159), M0 (#158)
+and W0 (#157). How to build and run it in five minutes, every start-up
+message with its remedy, and the security model are in
+[`web/README.md`](../../web/README.md). M6 adds the Flows view (sloth.db's
+protocol tables, one tab each, through the M4 allow-list, SMB1 sessions
+in the critical colour, and a chord diagram of the busiest source to
+destination pairs with what was folded stated; `/api/flows` and
+`/api/flows/graph`), a polish pass over every view (keyboard order,
+360 px, a light colour-scheme preference, a memory-only build), a
+synthetic demo (`make web-demo`), a five-minute check
+(`make web-quickstart-check`) and screenshots. M5 adds the WiFi view
 (a channel x time waterfall of `wifi.ap_count` or `wifi.ctrl_total`,
 bands grouped; sloth.db's `beacon_aps` with AKM bits and downgrade flags
 by name, MFP, SSID history and KARMA score; a deauth timeline per bssid
@@ -56,7 +66,10 @@ tick counter. Every method other than `GET`/`HEAD` is `405` on every
 path, a header block over 8 KB `431`, and idle or slow clients time out
 on an absolute budget.
 
-**Sources**: `web/README.md`, `web/src/web_slothdb.c`,
+**Sources**: `web/README.md`, `web/src/web_flows.c`, `web/tools/demo.c`,
+`web/tools/quickstart_check.sh`, `web/tests/test_flows.c`,
+`web/tests/test_readme.c`, `docs/assets/slothweb/`, `include/sloth.h`
+(`smb_session_t`'s dialect), `web/src/web_slothdb.c`,
 `web/src/web_query.c`, `web/src/web_oui.c`, `web/src/web_ptr.c`,
 `web/src/web_devices.c`, `web/tools/oui_gen.c`, `web/tools/oui_csv.c`,
 `tests/fuzz/fuzz_web_query.c`, `src/db_schema.c` (the tests' sloth.db),
@@ -80,9 +93,9 @@ on an absolute budget.
 `src/db.c` and `src/secure_file.c` (the open and migration rules M2
 re-implements), `src/top_hosts.c` (what `conn_count` counts),
 `src/probe_pnl.c` (what `mac_random` is), issues #102, #157, #158,
-#159, #160, #161, #162 and #163.
+#159, #160, #161, #162, #163 and #164.
 
-**Last updated**: 2026-10-23 (M5, #163; its review fixes: the SQL box's rest and temporary-file refusal, `dbstat` withheld, History presence inside the range and from the hour tier, the unknown band).
+**Last updated**: 2026-10-23 (M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
 
 ---
 
@@ -112,7 +125,7 @@ resolves a name (its bind address included) and never writes to
 | M3: baselines, anomaly rules and episodes, Anomalies view, heatmaps | #161 | shipped (A4 moved to M4) |
 | M4: sloth.db read-only, query language, OUI table, passive names, A4, durable A2, Devices, drawer, Lookup | #162 | shipped (active reverse DNS cut by the rulings) |
 | M5: WiFi and History views, sessions and new-since, SQL box behind `--web-allow-sql` | #163 | shipped (three of the eight recipes are refused: two read a withheld column, one `dbstat`) |
-| M6: Flows view, polish, README security section | #164 | not started |
+| M6: Flows view, polish, README security section, screenshots | #164 | shipped (`mqtt_flows` not read; Kerberos' preauth counts off the allow-list) |
 
 ## W0: the access boundary before any route
 
@@ -644,6 +657,51 @@ In short:
   read a withheld column, and "What is actually taking the space?"
   reads `dbstat`, and the three are refused naming it.
 
+## M6: Flows, polish, the README
+
+The full account is in
+[`web/README.md`](../../web/README.md#flows-m6). In short:
+
+- **Flows** (§8.9). `/api/flows?proto=` reads one of `ssh_flows`,
+  `rdp_flows`, `smb_sessions`, `snmp_flows`, `ldap_events`,
+  `kerb_events`, `bgp_sessions` through the M4 allow-list, paged
+  (`limit` 1..200, `offset`), sorted, filtered by an address, each
+  parameter validated whole. `mqtt_flows` is never read
+  (`proto_withheld`): it holds MQTT usernames. The columns a tab leaves
+  out are named in the answer: the SSH banner, the RDP cookie, the SNMP
+  community count, and Kerberos' two preauth counts, which are integers
+  but named for a credential word, and the allow-list's name guard
+  (held to `tests/test_db.c`'s guardrail) is not made type-aware to
+  admit them. An SMB1 session (`smb_sessions.dialect`, sticky to
+  `SMB1` in sloth) is `smb1: true` and drawn in `--sev-crit`.
+- **The chord diagram.** `/api/flows/graph`: the largest pairs of the
+  pair tables (at most 200 read), their busiest endpoints (at most 64
+  drawn), and a `fold` that says how many pairs, counted flows and
+  addresses were left out of how many; drawn on Canvas 2D by protocol
+  hue with a text legend and the fold line.
+- **Polish.** Found by driving the page in headless Chromium against
+  the demo in four states (full, no `--sloth-db`, no stream,
+  `WITH_SQLITE=0`) at 1280 and 360 px: the view list as buttons in tab
+  order, rows and cards focusable with `Enter`, the drawer taking and
+  returning focus, wide tables scrolling inside their own box, header
+  columns aligned with their rows, pointer events on the History strip,
+  `color-scheme: dark`, the view in the address (`#flows`), and a
+  memory-only build's pages saying it cannot read sloth.db.
+- **The README** (`web/README.md`): prerequisites, build (with the
+  optional IEEE CSV fetch), the demo, running beside sloth (the socket
+  and its permissions, `--sloth-db`, `--store`), opening the page; a
+  troubleshooting table of every start-up message, scraped from the
+  source by `test_readme.c` so an undocumented one fails the suite; and
+  the security section.
+- **Demo and check.** `make web-demo` builds `build/web/slothweb-demo`:
+  `db PATH` writes a sloth.db from sloth's own DDL, `feed unix:PATH`
+  serves a generated stream in sloth's record shapes and order, both
+  with documentation addresses, locally administered MACs and example
+  names only. `make web-quickstart-check` follows the README's quick
+  start literally in a temporary copy of the tree and curls
+  `/api/health` and `/`. The screenshots in `docs/assets/slothweb/` are
+  of that demo.
+
 ## Tests
 
 `make web-test` is self-contained: no host file, loopback ephemeral
@@ -742,6 +800,15 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | 5 s, 10,000 rows, bounded output, one at a time | `test_limits`, `test_one_at_a_time` |
 | WiFi: waterfall, AP table, deauth timeline | `test_wifi.c`, `test_parity.c` |
 | History: strip, who was here, sessions, new since | `test_history.c` |
+
+#164 (M6) maps as follows.
+
+| Acceptance item | Test |
+|---|---|
+| a stranger with the README can run it in five minutes | `make web-quickstart-check` (`web/tools/quickstart_check.sh`: the README's quick start, read out of the README and run in a temporary copy of the tree; `/api/health` connected with sloth.db open, `/` the page) |
+| every start-up message documented | `test_every_start_message_is_documented` (`test_readme.c`) |
+| the security section's points; the screenshots present and small | `test_security_section`, `test_screenshots` |
+| Flows: tabs, SMB1, withheld columns, validation, paging, the chord's fold | `test_flows.c` |
 
 A test cannot connect from a non-loopback address, so the socket-level
 refusals narrow the list and connect from loopback; the list function

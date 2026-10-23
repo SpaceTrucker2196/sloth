@@ -396,6 +396,29 @@ pipeline that pages on CRIT must read `alert.escalate`. `count` and
 when the evidence does. Full field tables in
 [`docs/wiki/jsonl-schema.md`](docs/wiki/jsonl-schema.md).
 
+## Browser dashboard (slothweb)
+
+`slothweb` is an optional browser dashboard that runs beside sloth on
+the same host: it reads the data socket and, read-only, `sloth.db`, and
+serves one page on `http://127.0.0.1:8770/` (loopback only by default,
+GET and HEAD only, no external requests). Overview, Activity with
+hour-of-week baselines, anomaly episodes, Devices, WiFi, Flows with a
+chord diagram, History and Lookup.
+
+![slothweb Overview on synthetic data](docs/assets/slothweb/overview.png)
+
+```sh
+make web && ./slothweb --sloth-db /var/lib/sloth/sloth.db   # beside sloth --data-socket --db ...
+```
+
+Five minutes from a clean checkout, with a synthetic demo if there is
+no sensor, troubleshooting and the security model:
+[`web/README.md`](web/README.md). More screenshots there (all of
+synthetic data): [Flows](docs/assets/slothweb/flows.png),
+[Devices](docs/assets/slothweb/devices.png),
+[WiFi](docs/assets/slothweb/wifi.png),
+[History](docs/assets/slothweb/history.png).
+
 ## Streaming and SIEM forwarding
 
 Sloth's JSONL stream is the contract for any downstream consumer. Two

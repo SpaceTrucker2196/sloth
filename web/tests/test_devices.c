@@ -123,7 +123,8 @@ static void test_page_carries_the_m4_views(void) {
             fprintf(stderr, "    no lookup of %s\n", ids[i]);
         WT_ASSERT(strstr(p, want) || strstr(p, alt));
     }
-    WT_HAS(p, "var VIEWS = [\"overview\", \"activity\", \"devices\", \"anomalies\", \"wifi\", \"history\", \"lookup\"];");
+    WT_HAS(p, "var VIEWS = [\"overview\", \"activity\", \"devices\", \"anomalies\", \"wifi\", \"flows\", \"history\",\n"
+              "               \"lookup\"];");
     WT_HAS(p, "var p = \"/api/devices?limit=\" + DEV_PAGE + \"&offset=\" + offset +\n"
               "            \"&sort=\" + encodeURIComponent(sort);");
     WT_HAS(p, "if (q !== \"\") p += \"&q=\" + encodeURIComponent(q);");
@@ -140,7 +141,7 @@ static void test_page_carries_the_m4_views(void) {
     /* No active lookup anywhere on the page (the 2026-10-21 ruling). */
     WT_LACKS(p, "ACTIVE QUERY");
     WT_LACKS(p, "active-rdns");
-    WT_HAS(p, "<span id=\"milestone\">M5</span>");
+    WT_HAS(p, "<span id=\"milestone\">M6</span>");
 }
 
 #ifdef WITH_SQLITE
@@ -536,7 +537,7 @@ static void test_lookup(void) {
 static void test_health_members(void) {
     WT_EQ(route(&H, "/api/health", "", 0), 200);
     const char *b = body_of(g_out);
-    WT_HAS(b, "\"milestone\":\"M5\"");
+    WT_HAS(b, "\"milestone\":\"M6\"");
     WT_HAS(b, "\"db\":\"open\",\"db_schema\":7,\"db_rows\":9,\"db_path\":");
     WT_HAS(b, "\"db_mode\":\"immutable\"");
     WT_HAS(b, "\"db_supported\":[1,7]");

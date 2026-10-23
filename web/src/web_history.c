@@ -7,7 +7,7 @@
 #include "web_json.h"
 #include "web_series.h"
 
-static int answer_error(int status, const char *reason, const char *detail,
+int web_hist_error(int status, const char *reason, const char *detail,
                         char *body, size_t cap, size_t *len, int *st) {
     web_jw_t w;
     web_jw_init(&w, body, cap);
@@ -54,18 +54,18 @@ int web_hist_range(const char *from_s, const char *to_s, long long now_s,
     return 0;
 }
 
-static int no_db(char *body, size_t cap, size_t *len, int *status) {
-    return answer_error(503, "no_sloth_db",
+int web_hist_no_db(char *body, size_t cap, size_t *len, int *status) {
+    return web_hist_error(503, "no_sloth_db",
                         "start slothweb with --sloth-db PATH (a WITH_SQLITE build)",
                         body, cap, len, status);
 }
 
-static int configured(const web_m4_t *m) {
+int web_hist_configured(const web_m4_t *m) {
     return m && m->sdb && m->sdb->configured && web_slothdb_available();
 }
 
 /* Open sloth.db, or answer why not: 0 open, 1 answered, -1. */
-static int open_db(const web_m4_t *m, web_sdb_conn_t *c, long long now_s,
+int web_hist_open(const web_m4_t *m, web_sdb_conn_t *c, long long now_s,
                    char *body, size_t cap, size_t *len, int *status) {
     char err[WEB_SDB_ERR_MAX];
     if (web_slothdb_open(m->sdb, c, WEB_SDB_HTTP_MS, now_s, err,
@@ -76,14 +76,14 @@ static int open_db(const web_m4_t *m, web_sdb_conn_t *c, long long now_s,
     web_slothdb_stats(m->sdb, &st);
     char r[48];
     snprintf(r, sizeof(r), "sloth_db_%s", web_slothdb_state_word(st.state));
-    return answer_error(503, r, err, body, cap, len, status) == 0 ? 1 : -1;
+    return web_hist_error(503, r, err, body, cap, len, status) == 0 ? 1 : -1;
 }
 
-static int read_failed(web_sdb_conn_t *c, char *body, size_t cap, size_t *len,
+int web_hist_read_failed(web_sdb_conn_t *c, char *body, size_t cap, size_t *len,
                        int *status) {
     int to = c->timed_out;
     web_slothdb_close(c);
-    return answer_error(503, to ? "sloth_db_timeout" : "sloth_db_error", NULL,
+    return web_hist_error(503, to ? "sloth_db_timeout" : "sloth_db_error", NULL,
                         body, cap, len, status);
 }
 
@@ -102,18 +102,18 @@ static void session_json(web_jw_t *w, const web_sdb_session_t *s) {
 int web_history_overview_route(const web_m4_t *m, const char *query,
                                long long now_s, char *body, size_t cap,
                                size_t *len, int *status) {
-    if (!configured(m)) return no_db(body, cap, len, status);
+    if (!web_hist_configured(m)) return web_hist_no_db(body, cap, len, status);
     web_param_t ps[3] = { { "from", "", 0 }, { "to", "", 0 }, { "cols", "", 0 } };
     char err[48];
     if (web_params_parse(query, ps, 3, err, sizeof(err)) != 0)
-        return answer_error(400, err, NULL, body, cap, len, status);
+        return web_hist_error(400, err, NULL, body, cap, len, status);
     long long from, to, cols = WEB_HIST_COLS;
     const char *why;
     if (web_hist_range(ps[0].seen ? ps[0].val : NULL, ps[1].seen ? ps[1].val : NULL,
                        now_s, &from, &to, &why) != 0)
-        return answer_error(400, why, NULL, body, cap, len, status);
+        return web_hist_error(400, why, NULL, body, cap, len, status);
     if (ps[2].seen && decimal(ps[2].val, 1, WEB_HIST_COLS_MAX, &cols) != 0)
-        return answer_error(400, "bad_cols", NULL, body, cap, len, status);
+        return web_hist_error(400, "bad_cols", NULL, body, cap, len, status);
     long long span = to - from;
     long long cell = (span + cols - 1) / cols;
     if (cell < 60) cell = 60;
@@ -123,13 +123,13 @@ int web_history_overview_route(const web_m4_t *m, const char *query,
     web_sdb_session_t *ss = calloc(WEB_HIST_SESSIONS, sizeof(*ss));
     if (!devs || !al || !ss) { free(devs); free(al); free(ss); return -1; }
     web_sdb_conn_t c;
-    int o = open_db(m, &c, now_s, body, cap, len, status);
+    int o = web_hist_open(m, &c, now_s, body, cap, len, status);
     if (o) { free(devs); free(al); free(ss); return o > 0 ? 0 : -1; }
     int ns = 0;
     if (web_sdb_overview(&c, from, (int)cell, ncell, devs, al) != 0 ||
         (ns = web_sdb_sessions(&c, ss, WEB_HIST_SESSIONS)) < 0) {
         free(devs); free(al); free(ss);
-        return read_failed(&c, body, cap, len, status);
+        return web_hist_read_failed(&c, body, cap, len, status);
     }
     web_slothdb_close(&c);
     web_jw_t w;
@@ -218,20 +218,20 @@ static int emit_flow(void *ctx, const web_sdb_item_t *it) {
 static int list_route(const web_m4_t *m, const char *query, long long now_s,
                       int flows, char *body, size_t cap, size_t *len,
                       int *status) {
-    if (!configured(m)) return no_db(body, cap, len, status);
+    if (!web_hist_configured(m)) return web_hist_no_db(body, cap, len, status);
     web_param_t ps[3] = { { "from", "", 0 }, { "to", "", 0 }, { "limit", "", 0 } };
     char err[48];
     if (web_params_parse(query, ps, 3, err, sizeof(err)) != 0)
-        return answer_error(400, err, NULL, body, cap, len, status);
+        return web_hist_error(400, err, NULL, body, cap, len, status);
     long long from, to, limit = WEB_HIST_LIMIT;
     const char *why;
     if (web_hist_range(ps[0].seen ? ps[0].val : NULL, ps[1].seen ? ps[1].val : NULL,
                        now_s, &from, &to, &why) != 0)
-        return answer_error(400, why, NULL, body, cap, len, status);
+        return web_hist_error(400, why, NULL, body, cap, len, status);
     if (ps[2].seen && decimal(ps[2].val, 1, WEB_HIST_LIMIT_MAX, &limit) != 0)
-        return answer_error(400, "bad_limit", NULL, body, cap, len, status);
+        return web_hist_error(400, "bad_limit", NULL, body, cap, len, status);
     web_sdb_conn_t c;
-    int o = open_db(m, &c, now_s, body, cap, len, status);
+    int o = web_hist_open(m, &c, now_s, body, cap, len, status);
     if (o) return o > 0 ? 0 : -1;
     web_jw_t w;
     web_jw_init(&w, body, cap);
@@ -243,7 +243,7 @@ static int list_route(const web_m4_t *m, const char *query, long long now_s,
     int got = flows
         ? web_sdb_flows_between(&c, from, to, (int)limit + 1, emit_flow, &h)
         : web_sdb_alerts_between(&c, from, to, (int)limit + 1, emit_alert, &h);
-    if (got < 0) return read_failed(&c, body, cap, len, status);
+    if (got < 0) return web_hist_read_failed(&c, body, cap, len, status);
     web_slothdb_close(&c);
     web_jw_raw(&w, "],\"count\":");  web_jw_int(&w, h.n);
     web_jw_raw(&w, ",\"more\":");    web_jw_raw(&w, h.cut ? "true" : "false");
@@ -270,16 +270,16 @@ int web_history_flows_route(const web_m4_t *m, const char *query,
 
 int web_sessions_route(const web_m4_t *m, const char *query, long long now_s,
                        char *body, size_t cap, size_t *len, int *status) {
-    if (!configured(m)) return no_db(body, cap, len, status);
+    if (!web_hist_configured(m)) return web_hist_no_db(body, cap, len, status);
     if (query && query[0])
-        return answer_error(400, "unknown_parameter", NULL, body, cap, len, status);
+        return web_hist_error(400, "unknown_parameter", NULL, body, cap, len, status);
     web_sdb_session_t *ss = calloc(WEB_HIST_SESSIONS + 1, sizeof(*ss));
     if (!ss) return -1;
     web_sdb_conn_t c;
-    int o = open_db(m, &c, now_s, body, cap, len, status);
+    int o = web_hist_open(m, &c, now_s, body, cap, len, status);
     if (o) { free(ss); return o > 0 ? 0 : -1; }
     int ns = web_sdb_sessions(&c, ss, WEB_HIST_SESSIONS + 1);
-    if (ns < 0) { free(ss); return read_failed(&c, body, cap, len, status); }
+    if (ns < 0) { free(ss); return web_hist_read_failed(&c, body, cap, len, status); }
     web_slothdb_close(&c);
     web_jw_t w;
     web_jw_init(&w, body, cap);
@@ -323,26 +323,26 @@ static int emit_new(void *ctx, const web_sdb_item_t *it) {
 int web_sessions_new_route(const web_m4_t *m, const char *query,
                            long long now_s, char *body, size_t cap,
                            size_t *len, int *status) {
-    if (!configured(m)) return no_db(body, cap, len, status);
+    if (!web_hist_configured(m)) return web_hist_no_db(body, cap, len, status);
     web_param_t ps[1] = { { "id", "", 0 } };
     char err[48];
     if (web_params_parse(query, ps, 1, err, sizeof(err)) != 0)
-        return answer_error(400, err, NULL, body, cap, len, status);
+        return web_hist_error(400, err, NULL, body, cap, len, status);
     long long id;
-    if (!ps[0].seen) return answer_error(400, "missing_id", NULL, body, cap, len, status);
+    if (!ps[0].seen) return web_hist_error(400, "missing_id", NULL, body, cap, len, status);
     if (decimal(ps[0].val, 1, 99999999999LL, &id) != 0)
-        return answer_error(400, "bad_id", NULL, body, cap, len, status);
+        return web_hist_error(400, "bad_id", NULL, body, cap, len, status);
     web_sdb_conn_t c;
-    int o = open_db(m, &c, now_s, body, cap, len, status);
+    int o = web_hist_open(m, &c, now_s, body, cap, len, status);
     if (o) return o > 0 ? 0 : -1;
     web_sdb_session_t s, prev;
     int has_prev = 0;
     long long next_started = -1;
     int f = web_sdb_session_pair(&c, id, &s, &prev, &has_prev, &next_started);
-    if (f < 0) return read_failed(&c, body, cap, len, status);
+    if (f < 0) return web_hist_read_failed(&c, body, cap, len, status);
     if (f == 0) {
         web_slothdb_close(&c);
-        return answer_error(404, "no_such_session", NULL, body, cap, len, status);
+        return web_hist_error(404, "no_such_session", NULL, body, cap, len, status);
     }
     web_jw_t w;
     web_jw_init(&w, body, cap);
@@ -373,7 +373,7 @@ int web_sessions_new_route(const web_m4_t *m, const char *query,
         long long total = 0;
         int got = web_sdb_new_since(&c, K[k].kind, since, until, WEB_HIST_NEW,
                                     emit_new, &l, &total);
-        if (got < 0) return read_failed(&c, body, cap, len, status);
+        if (got < 0) return web_hist_read_failed(&c, body, cap, len, status);
         web_jw_raw(&w, "],\"total\":"); web_jw_int(&w, total);
         web_jw_raw(&w, ",\"listed\":"); web_jw_int(&w, l.n);
         web_jw_raw(&w, "}");

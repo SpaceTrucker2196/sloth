@@ -67,5 +67,7 @@ void run_sqlbox_tests(void);
 void run_wifi_tests(void);
 void run_history_tests(void);
 void run_parity_tests(void);
+void run_flows_tests(void);
+void run_readme_tests(void);
 
 #endif

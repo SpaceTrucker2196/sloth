@@ -637,6 +637,27 @@ web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C)
 	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -o slothweb $(WEB_MAIN) \
 	      $(WEB_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
 
+# The demo data (M6, #164): build/web/slothweb-demo writes a synthetic
+# sloth.db from sloth's own DDL and serves a generated JSONL stream on a
+# unix socket, so slothweb runs without a sensor (web/README.md's
+# walk-through, the screenshots). Documentation addresses, locally
+# administered MACs and example names only; it never touches a network.
+# The db half needs WITH_SQLITE.
+WEB_DEMO        = $(WEB_GEN_DIR)/slothweb-demo
+.PHONY: web-demo web-quickstart-check
+web-demo: $(WEB_DEMO)
+$(WEB_DEMO): web/tools/demo.c src/db_schema.c
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iinclude -o $@ web/tools/demo.c \
+	      $(if $(filter 1,$(WITH_SQLITE)),src/db_schema.c -lsqlite3,) -lm
+
+# web/README.md's quick start, followed literally in a temporary copy of
+# the tracked tree (web/tools/quickstart_check.sh): build, start the demo
+# stream and slothweb, curl /api/health and /. Not run by CI; loopback
+# and a unix socket only.
+web-quickstart-check:
+	sh web/tools/quickstart_check.sh
+
 # Loopback and ephemeral ports, and unix sockets in a mkdtemp() directory,
 # only; no host file, no running sloth, no name lookup, no network beyond
 # 127.0.0.1 and ::1. The test links the embedder's
