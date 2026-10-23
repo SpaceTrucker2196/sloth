@@ -10,6 +10,22 @@
 
 #define DNS_PAGE 30
 
+/* Cells the answer may take from the cursor to the row's end. A PTR
+ * target (#165) is up to 63 bytes and the columns before it take 70,
+ * so at the 100-column minimum an unclipped one wraps and pushes every
+ * later row down. One cell is held back: a write into the last column
+ * moves the cursor to the next row, and the row's '\n' would then
+ * leave that row blank. The ANSI build has no screen width to clip to
+ * (-1: "%.*s" prints the whole string). */
+static int answer_room(void) {
+#ifdef WITH_NCURSES
+    int room = getmaxx(stdscr) - getcurx(stdscr) - 1;
+    return room > 0 ? room : 0;
+#else
+    return -1;
+#endif
+}
+
 void view_dns_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
     int page = LINES - 5;
@@ -68,11 +84,12 @@ void view_dns_draw(const sloth_state_t *s) {
 
         if (row == s->dns_log_sel) {
             tui_sel();
-            TPRINT(" %-8s  %-15.15s  %c  %-5.5s  %-28.28s%s  %s\n",
+            TPRINT(" %-8s  %-15.15s  %c  %-5.5s  %-28.28s%s  ",
                    ts_buf, e->src,
                    e->is_resp ? 'R' : 'Q',
                    e->qtype, e->qname,
-                   dga_is_suspicious(e->qname) ? " *" : "  ",
+                   dga_is_suspicious(e->qname) ? " *" : "  ");
+            TPRINT("%.*s\n", answer_room(),
                    e->answer[0] ? e->answer : "-");
             tui_reset();
         } else {
@@ -104,9 +121,11 @@ void view_dns_draw(const sloth_state_t *s) {
             } else if (has_answer) {
                 if (is_aaaa) tui_normal(); else tui_bright();
                 /* A PTR target (#165) is a host name, the row's last
-                 * column: an address's 15 cells would cut it. */
-                if (dns_log_is_ptr(e)) TPRINT("  %s", e->answer);
-                else                   TPRINT("  %-15.15s", e->answer);
+                 * column: an address's 15 cells would cut it, so it
+                 * takes what the row has left. */
+                TPRINT("  ");
+                if (dns_log_is_ptr(e)) TPRINT("%.*s", answer_room(), e->answer);
+                else                   TPRINT("%-15.15s", e->answer);
             } else {
                 tui_dim(); TPRINT("  -");
             }

@@ -19,6 +19,7 @@
 #include "web_ptr.h"
 #include "web_store.h"
 #include "wtest.h"
+#include "jsonl_ptr_fixture.h"
 
 #define T0 1792627200LL
 
@@ -174,20 +175,15 @@ static void test_ident_readers(void) {
     web_ident_destroy(&id);
 }
 
-/* #165: the dns record sloth writes for a PTR answer, byte for byte as
- * tests/test_jsonl.c :: test_emit_dns_ptr_answer pins it (a 48-byte
- * target, past the 45 bytes sloth's answer held before), through the
- * decoder and the identity tables into the cache, then through the
- * store thread's persist (web_anomaly_step, which owns the writer) into
- * slothweb.db passive_ptr, and back at a restart. Seen red (counted
- * empty, nothing stored) with web_ident_record() handing the PTR cache
- * a misspelt "answer" key. */
-#define SLOTH_PTR_LINE \
-    "{\"type\":\"dns\",\"ts\":1792627200,\"src\":\"192.0.2.53\"," \
-    "\"qname\":\"25.113.0.203.in-addr.arpa\",\"qtype\":\"PTR\"," \
-    "\"answer\":\"ec2-203-0-113-25.us-west-2.compute.amazonaws.com\"," \
-    "\"is_resp\":1}"
-#define SLOTH_PTR_NAME "ec2-203-0-113-25.us-west-2.compute.amazonaws.com"
+/* #165: the dns record sloth writes for a PTR answer
+ * (include/jsonl_ptr_fixture.h, which tests/test_jsonl.c ::
+ * test_emit_dns_ptr_answer pins sloth's writer to), through the decoder
+ * and the identity tables into the cache, then through the store
+ * thread's persist (web_anomaly_step, which owns the writer) into
+ * slothweb.db passive_ptr, and back at a restart. The persist half is
+ * what this test alone covers: seen red (passive_ptr empty, the
+ * restored cache missing the name) with web_anomaly.c's persist guard
+ * `if (a->cfg.ptr)` made `if (0)`. */
 
 #ifdef WITH_SQLITE
 static int passive_ptr_int(const char *path, const char *sql) {

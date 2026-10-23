@@ -342,22 +342,6 @@ static void test_parse_response_ptr_compressed_target(void) {
     ASSERT_STR(e.answer, "test.example.com");
 }
 
-/* A malformed PTR RR must be discarded, not left half-decoded in
- * answer and not treated as fatal to the walk: the next RR's target
- * is used instead. Seen to fail (answer reads "partial" and the
- * second RR is never reached) with the acceptance test in
- * dns_log_parse replaced by `pn >= -1 && plen > 0`. */
-static void test_parse_response_ptr_malformed_rr_is_skipped(void) {
-    uint8_t buf[128];
-    int len = build_response_ptr_malformed_then_valid(buf, sizeof(buf),
-                                                       NAME_PTR_ARPA, PTR_ARPA_LEN,
-                                                       NAME_HOST_EXAMPLE_NET, NAME2_LEN);
-    ASSERT(len > 0);
-    dns_log_entry_t e;
-    ASSERT_EQ(dns_log_parse(buf, len, "8.8.8.8", &e), 1);
-    ASSERT_STR(e.answer, "host.example.net");
-}
-
 /* RDLENGTH claiming bytes past the end of the message must not be
  * read: the RR is discarded and answer stays empty, same as any other
  * malformed RR (the bound predates #165; this pins it for the PTR
@@ -557,12 +541,25 @@ static void test_parse_ptr_target_must_be_the_whole_rdata(void) {
     ASSERT_STR(e.answer, "");
 }
 
-/* A target that loops (a label, then a pointer back to that label) or
- * points past the end of the message is malformed; nothing is stored
- * and a later PTR still answers. The shared reader's hop and bounds
- * checks refuse both. Seen red (the loop stores "host.host.…") with
- * the acceptance test replaced by `pn >= -1 && plen > 0`. */
-static void test_parse_ptr_target_loop_or_past_end_is_skipped(void) {
+/* A malformed PTR RR must be discarded, not left half-decoded in
+ * answer and not treated as fatal to the walk: the next RR's target
+ * is used instead. Three shapes: a label run that never reaches the
+ * root inside its RDATA, a target that loops (a label, then a pointer
+ * back to that label), and one pointing past the end of the message
+ * (the shared reader's hop and bounds checks refuse the last two).
+ * Seen red with the acceptance test in dns_log_parse replaced by
+ * `pn >= -1 && plen > 0`: answer reads "partial" with the second RR
+ * never reached, and the loop stores "host.host.…". */
+static void test_parse_response_ptr_malformed_rr_is_skipped(void) {
+    uint8_t buf[128];
+    int len = build_response_ptr_malformed_then_valid(buf, sizeof(buf),
+                                                       NAME_PTR_ARPA, PTR_ARPA_LEN,
+                                                       NAME_HOST_EXAMPLE_NET, NAME2_LEN);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(buf, len, "8.8.8.8", &e), 1);
+    ASSERT_STR(e.answer, "host.example.net");
+
     pm_t m;
     pm_resp(&m, 2, REV_Q, 12);
     int at = m.n + 12;                      /* where the RDATA starts */
@@ -570,7 +567,6 @@ static void test_parse_ptr_target_loop_or_past_end_is_skipped(void) {
     pm_u8(&m, 4); pm_raw(&m, "host", 4);
     pm_16(&m, 0xC000 | at);                 /* back to "host" */
     pm_ptr_rr(&m, "host.example.net");
-    dns_log_entry_t e;
     pm_parse(&m, &e);
     ASSERT_STR(e.answer, "host.example.net");
 
@@ -607,9 +603,12 @@ static void test_parse_ptr_nxdomain_text_is_refused(void) {
     ASSERT_STR(e.answer, "");
 }
 
-/* RCODE 3 on a PTR question is the sentinel, as for any qtype, and the
- * answer section is not walked. Seen red (answer "host.example.net")
- * with the rcode 3 test in dns_log_parse() disabled. */
+/* What this adds over test_parse_nxdomain, whose response carries no
+ * answer RR: an RCODE 3 response that does carry one (a PTR naming a
+ * host) still reads "NXDOMAIN", because the answer section is not
+ * walked after the sentinel is set. test_parse_nxdomain passes with
+ * the rcode 3 branch's `return 1` removed, since ANCOUNT 0 returns
+ * next; this one goes red (answer "host.example.net"). */
 static void test_parse_ptr_nxdomain_rcode(void) {
     pm_t m;
     pm_resp(&m, 1, REV_Q, 12);
@@ -903,6 +902,39 @@ static void test_view_draw_ptr_answer_whole(void) {
     dns_log_clear();
 }
 
+/* #165 review: at the 100-column minimum the columns before the
+ * answer take 70 cells, so a 48-byte PTR target printed whole wraps
+ * and every later row moves down one. The answer is clipped to the
+ * row instead, on a plain row and on the selected row. Seen red (the
+ * next record on y+2, y+1 holding the target's tail) with each
+ * branch's answer_room() put back to a bare "%s", one at a time. */
+static void test_view_draw_long_ptr_answer_clips_at_100_cols(void) {
+    static const char target[] =
+        "ec2-203-0-113-25.us-west-2.compute.amazonaws.com";
+    dns_log_clear();
+    dns_log_entry_t older = make_entry("192.0.2.53", "after.example", "A",
+                                       "192.0.2.77", 1);
+    dns_log_entry_t ptr = make_entry("192.0.2.53", "25.113.0.203.in-addr.arpa",
+                                     "PTR", target, 1);
+    ASSERT_STR(ptr.answer, target);
+    dns_log_record(&older);
+    dns_log_record(&ptr);
+    ASSERT_EQ(tui_init_offscreen(TEST_SCREEN_ROWS, 100), 0);
+    for (int sel = 1; sel >= 0; sel--) {     /* the PTR row plain, then selected */
+        sloth_state_t s; memset(&s, 0, sizeof(s));
+        dns_log_snapshot(&s);
+        s.dns_log_sel = sel;
+        tui_test_erase();
+        view_dns_draw(&s);
+        int y = runner_screen_find("in-addr.arpa");
+        ASSERT(y >= 0);
+        ASSERT_LINE_HAS(y, "ec2-203-0-113-25.us-west");
+        ASSERT_EQ(runner_screen_find("after.example"), y + 1);
+    }
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+    dns_log_clear();
+}
+
 /* ── view_dns_key tests ──────────────────────────────────── */
 
 static void test_view_key_nav(void) {
@@ -975,7 +1007,6 @@ void run_dns_log_tests(void) {
     RUN_TEST(test_parse_ptr_target_longer_than_an_address_is_whole);
     RUN_TEST(test_parse_ptr_target_that_would_be_cut_is_skipped);
     RUN_TEST(test_parse_ptr_target_must_be_the_whole_rdata);
-    RUN_TEST(test_parse_ptr_target_loop_or_past_end_is_skipped);
     RUN_TEST(test_parse_ptr_root_target_is_skipped);
     RUN_TEST(test_parse_ptr_nxdomain_text_is_refused);
     RUN_TEST(test_parse_ptr_nxdomain_rcode);
@@ -1002,6 +1033,7 @@ void run_dns_log_tests(void) {
     RUN_TEST(test_view_draw_empty);
     RUN_TEST(test_view_draw_populated);
     RUN_TEST(test_view_draw_ptr_answer_whole);
+    RUN_TEST(test_view_draw_long_ptr_answer_clips_at_100_cols);
 
     TEST_SUITE("view_dns key");
     RUN_TEST(test_view_key_nav);

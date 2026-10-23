@@ -23,6 +23,7 @@
 #include "sloth_clock.h"
 #include "wifi_chanhop.h"
 #include "fake_platform.h"
+#include "jsonl_ptr_fixture.h"
 
 /* Each test opens a fresh temp file, exercises the emitter, then reads
  * the file back and asserts on the recorded line(s). */
@@ -126,9 +127,10 @@ static void test_emit_dns_writes_fields(void) {
 }
 
 /* #165: a PTR record carries its target in answer, whole up to 63
- * bytes. The line is pinned byte for byte because
- * web/tests/test_ptr.c :: test_sloth_ptr_record_lands_in_passive_ptr
- * feeds the same bytes to slothweb. Seen red (the name cut to 45
+ * bytes. The line is pinned byte for byte, from
+ * include/jsonl_ptr_fixture.h, because web/tests/test_ptr.c ::
+ * test_sloth_ptr_record_lands_in_passive_ptr feeds the same line to
+ * slothweb. Seen red (the name cut to 45
  * bytes) with answer put back to 46 bytes in sloth.h. */
 static void test_emit_dns_ptr_answer(void) {
     open_fresh();
@@ -137,18 +139,13 @@ static void test_emit_dns_ptr_answer(void) {
     snprintf(e.src,    sizeof(e.src),    "192.0.2.53");
     snprintf(e.qname,  sizeof(e.qname),  "25.113.0.203.in-addr.arpa");
     snprintf(e.qtype,  sizeof(e.qtype),  "PTR");
-    snprintf(e.answer, sizeof(e.answer), "%s",
-             "ec2-203-0-113-25.us-west-2.compute.amazonaws.com");
+    snprintf(e.answer, sizeof(e.answer), "%s", SLOTH_PTR_NAME);
     e.is_resp = 1;
     jsonl_emit_dns(&e);
     jsonl_close();
     char *body = slurp(tmp_path);
     ASSERT(body != NULL);
-    ASSERT_STR(body,
-        "{\"type\":\"dns\",\"ts\":1792627200,\"src\":\"192.0.2.53\","
-        "\"qname\":\"25.113.0.203.in-addr.arpa\",\"qtype\":\"PTR\","
-        "\"answer\":\"ec2-203-0-113-25.us-west-2.compute.amazonaws.com\","
-        "\"is_resp\":1}\n");
+    ASSERT_STR(body, SLOTH_PTR_LINE "\n");
 }
 
 static void test_emit_tls_writes_ja3(void) {
