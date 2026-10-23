@@ -126,6 +126,10 @@ void web_server_set_anomaly(web_server_t *s, web_anomaly_t *anomaly) {
     s->anomaly = anomaly;
 }
 
+void web_server_set_m4(web_server_t *s, const web_m4_t *m4) {
+    s->m4 = m4;
+}
+
 void web_server_stop(web_server_t *s) {
     char b = 1;
     ssize_t r = write(s->wake[1], &b, 1);
@@ -183,6 +187,7 @@ static void health_now(web_server_t *s, web_health_t *h) {
     h->tsdb        = s->tsdb;
     h->wall_s      = (long long)time(NULL);
     h->anomaly     = s->anomaly;
+    h->m4          = s->m4;
 }
 
 /* Send what a stream has queued. A client that went away is closed and

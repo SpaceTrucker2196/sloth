@@ -12,6 +12,9 @@
  *   /api/anomalies JSON: open and recently closed anomaly episodes (M3),
  *                 ?since= and ?kind= (web_series.h)
  *   /api/baseline JSON: one series' 168 hour-of-week cells (M3)
+ *   /api/devices  JSON: sloth.db's devices matching ?q= (M4, web_devices.h)
+ *   /api/device/{mac} JSON: one device, everything known
+ *   /api/lookup   JSON: ?q= a MAC or an IP: vendor, passive names, record
  *   /events       Server-Sent Events: tick, record, anomaly, ping
  *   anything else 404
  *
@@ -26,6 +29,7 @@
 #include <stddef.h>
 
 #include "web_anomaly.h"
+#include "web_devices.h"
 #include "web_http.h"
 #include "web_live.h"
 #include "web_tsdb.h"
@@ -42,6 +46,7 @@ typedef struct {
     web_tsdb_t   *tsdb;       /* NULL: no time series (M2) */
     long long     wall_s;     /* unix seconds, for the series routes */
     web_anomaly_t *anomaly;   /* NULL: no baseline/anomaly engine (M3) */
+    const web_m4_t *m4;       /* NULL: no Devices or Lookup (M4) */
 } web_health_t;
 
 /* /api/live and the series routes are built into the connection's

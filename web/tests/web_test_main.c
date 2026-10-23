@@ -29,6 +29,11 @@ int main(void) {
     run_ident_tests();
     run_anomaly_tests();
     run_replay_tests();
+    run_oui_tests();
+    run_query_tests();
+    run_ptr_tests();
+    run_slothdb_tests();
+    run_devices_tests();
     printf("slothweb tests: %d passed, %d failed\n", wt_pass, wt_fail);
     return wt_fail ? 1 : 0;
 }

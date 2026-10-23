@@ -126,6 +126,22 @@ static const char STEP_V3_SQL[] =
     "  PRIMARY KEY (kind, key)\n"
     ") WITHOUT ROWID;\n";
 
+/* v3 -> v4 (#162, M4): the passive PTR cache (docs/web-ui-spec.md
+ * §9.3): a PTR answer seen on the wire names the address it was asked
+ * about, so the cache fills without slothweb sending a query. One row
+ * per address, the latest name; bounded (web_store_ptr_put() keeps the
+ * WEB_PTR_CAP most recently seen and counts what it drops). A name is
+ * not a credential, and the address is canonical (web_key_ip). Additive:
+ * one new table and its index, nothing that exists is changed. */
+static const char STEP_V4_SQL[] =
+    "CREATE TABLE passive_ptr (\n"
+    "  ip         TEXT PRIMARY KEY,\n"
+    "  name       TEXT NOT NULL,\n"
+    "  first_seen INTEGER NOT NULL,\n"
+    "  last_seen  INTEGER NOT NULL\n"
+    ") WITHOUT ROWID;\n"
+    "CREATE INDEX passive_ptr_last ON passive_ptr (last_seen);\n";
+
 typedef struct {
     int         from;
     const char *sql;
@@ -137,6 +153,7 @@ static const web_step_t STEPS[] = {
     { 1, STEP_V2_SQL, "indexed fine, minute and hour on t" },
     { 2, STEP_V3_SQL, "created baseline, baseline_cell, episode, fanout "
                       "and reported" },
+    { 3, STEP_V4_SQL, "created passive_ptr" },
 };
 #define STEP_N ((int)(sizeof(STEPS) / sizeof(STEPS[0])))
 
@@ -301,6 +318,28 @@ int web_store_hours_at(web_store_t *s, int metric, const char *key,
     return -1;
 }
 
+int web_store_ptr_load(web_store_t *s, int cap,
+                       void (*fn)(void *ctx, const web_store_ptr_t *r),
+                       void *ctx) {
+    (void)s; (void)cap; (void)fn; (void)ctx;
+    return -1;
+}
+
+int web_store_ptr_put(web_store_t *s, const web_store_ptr_t *r, int n,
+                      int cap, long long *evicted) {
+    (void)s; (void)r; (void)n; (void)cap;
+    if (evicted) *evicted = 0;
+    return -1;
+}
+
+int web_store_presence(web_store_t *s, int metric, const char *key,
+                       long long from, int ncell, int cell_s,
+                       unsigned char *bits) {
+    (void)s; (void)metric; (void)key; (void)from; (void)ncell; (void)cell_s;
+    (void)bits;
+    return -1;
+}
+
 #else
 
 #include <sqlite3.h>
@@ -421,7 +460,8 @@ static const char *const COUNT_ROWS[WEB_TIER_COUNT] = {
 enum {
     AN_BL_INS = 0, AN_BL_UPD, AN_CELL_PUT, AN_BL_DEL, AN_CELL_DEL,
     AN_EP_PUT, AN_EP_DEL, AN_FAN_PUT, AN_FAN_DEL, AN_REP_PUT, AN_REP_PRUNE,
-    AN_ANY_MIN, AN_ANY_HOUR, AN_HOUR_AT, AN_BL_FIND, AN_EP_EXPIRE
+    AN_ANY_MIN, AN_ANY_HOUR, AN_HOUR_AT, AN_BL_FIND, AN_EP_EXPIRE,
+    AN_PTR_PUT, AN_PTR_PRUNE
 };
 static const char *const AN_SQL[WEB_STORE_AN_STMTS] = {
     [AN_BL_INS]    = "INSERT INTO baseline (metric,key,last_active,last_fed,"
@@ -452,6 +492,18 @@ static const char *const AN_SQL[WEB_STORE_AN_STMTS] = {
                      " AND r.t=?3",
     [AN_BL_FIND]   = "SELECT id FROM baseline WHERE metric=?1 AND key=?2",
     [AN_EP_EXPIRE] = "DELETE FROM episode WHERE last_seen<?1",
+    /* first_seen is the first sight of the address's current name: a
+     * new name for it starts again. */
+    [AN_PTR_PUT]   = "INSERT INTO passive_ptr (ip,name,first_seen,last_seen)"
+                     " VALUES (?1,?2,?3,?4) ON CONFLICT(ip) DO UPDATE SET"
+                     " first_seen=CASE WHEN passive_ptr.name=excluded.name"
+                     " THEN MIN(passive_ptr.first_seen,excluded.first_seen)"
+                     " ELSE excluded.first_seen END,"
+                     " name=excluded.name,"
+                     " last_seen=MAX(passive_ptr.last_seen,excluded.last_seen)",
+    [AN_PTR_PRUNE] = "DELETE FROM passive_ptr WHERE ip IN (SELECT ip FROM"
+                     " passive_ptr ORDER BY last_seen DESC, ip LIMIT -1"
+                     " OFFSET ?1)",
 };
 
 int web_store_available(void) { return 1; }
@@ -1023,7 +1075,8 @@ static long long analysis_bytes(web_store_t *s) {
         s->an_bl = pages_of(s, AN_PAGES("'baseline','baseline_cell'"));
         s->an_fresh = 1;
     }
-    long long small = pages_of(s, AN_PAGES("'episode','fanout','reported'"));
+    long long small = pages_of(s, AN_PAGES("'episode','fanout','reported',"
+                                           "'passive_ptr'"));
     long long b = s->an_bl < 0 || small < 0 ? -1 : s->an_bl + small;
     pthread_mutex_lock(&s->mu);
     s->st.analysis_bytes = b;
@@ -1842,6 +1895,101 @@ int web_store_hours_at(web_store_t *s, int metric, const char *key,
         }
     }
     return found;
+}
+
+/* ── the passive PTR cache (v4, #162) ────────────────────────────────── */
+
+/* A name read back is held to the cache's own rule (web_ptr.h). */
+int web_store_ptr_load(web_store_t *s, int cap,
+                       void (*fn)(void *ctx, const web_store_ptr_t *r),
+                       void *ctx) {
+    if (!s->db || cap <= 0) return -1;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(s->db, "SELECT ip,name,first_seen,last_seen FROM"
+                           " passive_ptr ORDER BY last_seen DESC, ip LIMIT ?1",
+                           -1, &st, NULL) != SQLITE_OK) {
+        note_fail(s, "passive_ptr load");
+        return -1;
+    }
+    sqlite3_bind_int(st, 1, cap);
+    int n = 0;
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        web_store_ptr_t r;
+        col_text(st, 0, r.ip, WEB_KEY_MAX);
+        col_text(st, 1, r.name, WEB_STORE_PTR_NAME_MAX);
+        r.first_seen = sqlite3_column_int64(st, 2);
+        r.last_seen = sqlite3_column_int64(st, 3);
+        char c[WEB_KEY_MAX + 1];
+        if (web_key_ip(r.ip, c) != 0 || strcmp(c, r.ip)) continue;
+        fn(ctx, &r);
+        n++;
+    }
+    sqlite3_finalize(st);
+    return n;
+}
+
+int web_store_ptr_put(web_store_t *s, const web_store_ptr_t *r, int n,
+                      int cap, long long *evicted) {
+    if (evicted) *evicted = 0;
+    if (!s->db || cap <= 0) return -1;
+    if (n <= 0) return 0;
+    if (an_begin(s) != 0) return -1;
+    for (int i = 0; i < n; i++) {
+        sqlite3_stmt *p = s->an[AN_PTR_PUT];
+        sqlite3_bind_text(p, 1, r[i].ip, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(p, 2, r[i].name, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(p, 3, r[i].first_seen);
+        sqlite3_bind_int64(p, 4, r[i].last_seen);
+        if (an_step_done(p) != 0) return an_fail(s, "passive_ptr write");
+    }
+    sqlite3_stmt *d = s->an[AN_PTR_PRUNE];
+    sqlite3_bind_int(d, 1, cap);
+    if (an_step_done(d) != 0) return an_fail(s, "passive_ptr prune");
+    long long gone = sqlite3_changes(s->db);
+    if (an_commit(s) != 0) return -1;
+    if (evicted) *evicted = gone;
+    return 0;
+}
+
+/* The presence cells of (metric, key) from the minute tier: bit i of
+ * bits (LSB first in each byte) is set when a minute row in
+ * [from + i * cell_s, from + (i + 1) * cell_s) has a max of 0.5 or
+ * more. One grouped range read of the (series, t) key; the read-only
+ * connection, parameters bound. Cells set, or -1. */
+int web_store_presence(web_store_t *s, int metric, const char *key,
+                       long long from, int ncell, int cell_s,
+                       unsigned char *bits) {
+    if (!s->rd || metric < 0 || metric >= WM_COUNT || !key || ncell <= 0 ||
+        cell_s <= 0)
+        return -1;
+    pthread_mutex_lock(&s->rmu);
+    sqlite3_stmt *st = NULL;
+    int rc = sqlite3_prepare_v2(s->rd,
+        "SELECT (r.t - ?3) / ?4 FROM minute r JOIN series x ON x.id=r.series"
+        " WHERE x.metric=?1 AND x.key=?2 AND r.t>=?3 AND r.t<?5"
+        " AND r.max>=0.5 GROUP BY 1", -1, &st, NULL);
+    int set = 0;
+    if (rc == SQLITE_OK) {
+        sqlite3_bind_text(st, 1, web_metric_defs[metric].name, -1, SQLITE_STATIC);
+        sqlite3_bind_text(st, 2, key, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(st, 3, from);
+        sqlite3_bind_int(st, 4, cell_s);
+        sqlite3_bind_int64(st, 5, from + (long long)ncell * cell_s);
+        while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+            long long c = sqlite3_column_int64(st, 0);
+            if (c < 0 || c >= ncell) continue;
+            if (!(bits[c / 8] & (1u << (c % 8)))) set++;
+            bits[c / 8] |= (unsigned char)(1u << (c % 8));
+        }
+    }
+    int bad = rc != SQLITE_DONE;
+    sqlite3_finalize(st);
+    pthread_mutex_unlock(&s->rmu);
+    if (bad) {
+        set_err(s, "presence", s->rd);
+        return -1;
+    }
+    return set;
 }
 
 #endif /* WITH_SQLITE */

@@ -102,8 +102,11 @@ typedef struct {
     unsigned long dns_matched, dns_unmatched, query_overwrites;
 } web_id_stats_t;
 
+struct web_ptr;
+
 typedef struct web_ident {
     pthread_mutex_t mu;
+    struct web_ptr *ptr;            /* PTR answers go here too (M4); NULL none */
     web_id_mac_t   *mac;
     int            *mac_head;
     int             mac_cap, mac_n, mac_nhead;
@@ -178,5 +181,23 @@ typedef struct {
 int  web_ident_dns(web_ident_t *id, long long to, web_id_dns_t *out, int max);
 
 const char *web_ident_src_name(int src);
+
+/* ── what the Devices and Lookup routes read (HTTP thread, M4) ────────── */
+
+/* Hand every dns record's PTR answer to p as well (web_ptr.h). Before
+ * the ingest thread starts. */
+void web_ident_set_ptr(web_ident_t *id, struct web_ptr *p);
+
+/* What the stream says now about one address: its MAC binding ("" none)
+ * and its current names, one per source (name "" and t -1 when none is
+ * current). 1 known, 0 not. */
+int  web_ident_ip_info(web_ident_t *id, const char *ip, long long now_s,
+                       char *mac, web_id_name_t names[WEB_ID_SRC_COUNT]);
+
+/* About one MAC: its IP binding ("" none), its device hostname (sloth's
+ * copy of the DHCP lease name; "" and -1 when not current) and its own
+ * first_seen (-1 none). 1 known, 0 not. */
+int  web_ident_mac_info(web_ident_t *id, const char *mac, long long now_s,
+                        char *ip, web_id_name_t *dhcp, long long *first_seen);
 
 #endif

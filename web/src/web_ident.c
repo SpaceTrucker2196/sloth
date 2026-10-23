@@ -1,5 +1,7 @@
 #include "web_ident.h"
 
+#include "web_ptr.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -261,6 +263,11 @@ void web_ident_record(web_ident_t *id, const web_jrec_t *r, long long now) {
         }
     } else if (!strcmp(t, "dns")) {
         dns_record(id, r, now);
+        if (id->ptr)
+            web_ptr_record(id->ptr, web_jl_str(r, "qtype"),
+                           web_jl_int(r, "is_resp", -1),
+                           web_jl_str(r, "qname"), web_jl_str(r, "answer"),
+                           now);
     }
     pthread_mutex_unlock(&id->mu);
 }
@@ -421,4 +428,54 @@ int web_ident_dns(web_ident_t *id, long long to, web_id_dns_t *out, int max) {
     }
     pthread_mutex_unlock(&id->mu);
     return n;
+}
+
+void web_ident_set_ptr(web_ident_t *id, struct web_ptr *p) {
+    pthread_mutex_lock(&id->mu);
+    id->ptr = p;
+    pthread_mutex_unlock(&id->mu);
+}
+
+static const web_id_mac_t *mac_find(web_ident_t *id, const char *mac) {
+    unsigned h = hash_s(mac) & (unsigned)(id->mac_nhead - 1);
+    for (int i = id->mac_head[h]; i >= 0; i = id->mac[i].next)
+        if (!strcmp(id->mac[i].mac, mac)) return &id->mac[i];
+    return NULL;
+}
+
+int web_ident_ip_info(web_ident_t *id, const char *ip, long long now_s,
+                      char *mac, web_id_name_t names[WEB_ID_SRC_COUNT]) {
+    mac[0] = '\0';
+    for (int s = 0; s < WEB_ID_SRC_COUNT; s++) {
+        names[s].name[0] = '\0';
+        names[s].t = -1;
+    }
+    if (!id || !ip) return 0;
+    pthread_mutex_lock(&id->mu);
+    const web_id_ip_t *p = ip_find(id, ip);
+    if (p) {
+        snprintf(mac, WEB_KEY_MAX + 1, "%s", p->mac);
+        for (int s = 0; s < WEB_ID_SRC_COUNT; s++)
+            if (fresh(p->name[s].t, now_s)) names[s] = p->name[s];
+    }
+    pthread_mutex_unlock(&id->mu);
+    return p != NULL;
+}
+
+int web_ident_mac_info(web_ident_t *id, const char *mac, long long now_s,
+                       char *ip, web_id_name_t *dhcp, long long *first_seen) {
+    ip[0] = '\0';
+    dhcp->name[0] = '\0';
+    dhcp->t = -1;
+    *first_seen = -1;
+    if (!id || !mac) return 0;
+    pthread_mutex_lock(&id->mu);
+    const web_id_mac_t *m = mac_find(id, mac);
+    if (m) {
+        snprintf(ip, WEB_KEY_MAX + 1, "%s", m->ip);
+        if (fresh(m->dhcp.t, now_s)) *dhcp = m->dhcp;
+        *first_seen = m->first_seen;
+    }
+    pthread_mutex_unlock(&id->mu);
+    return m != NULL;
 }

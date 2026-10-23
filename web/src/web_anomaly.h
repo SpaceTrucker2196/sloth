@@ -117,8 +117,30 @@
  *                last record and the connection itself, so a connection
  *                that never sends fires and a fresh one does not.
  *
- * A4 (vendor unknown) needs the full IEEE OUI table, which arrives with
- * #162 (M4); it is not here.
+ *   A4  vendor   (M4, #162) a MAC present this minute (dev.present)
+ *                that is globally administered and unicast and whose
+ *                OUI the full IEEE table (web_oui.h) does not hold in
+ *                any of its MA-L, MA-M or MA-S blocks. Only with a table
+ *                built from the IEEE MA-L registry: sloth's 117-entry
+ *                fallback misses most vendors by design, so with it the
+ *                rule is off and /api/health says why (a4_reason). Its
+ *                episode is held while the MAC stays present. More than
+ *                WEB_ANOM_A4_BURST such MACs in one minute are one
+ *                episode keyed "", as A2's burst: spoofed addresses with
+ *                made-up OUIs would otherwise take the table.
+ *
+ * A2's durable source (M4). With --sloth-db, sloth.db is asked as well:
+ * the earliest first_seen it holds for the MAC (devices, probe_clients,
+ * pnl_clients, assocs), which sloth keeps as MIN() across its own
+ * restarts (src/db.c). Older than the window, the MAC is not new
+ * whatever the stream's first_seen says; within it, the MAC is judged
+ * as before (slothweb's own memory still has a say). sloth.db also
+ * names candidates the stream cannot: a MAC whose devices.first_seen is
+ * within the window (a wired device, learnt from ARP, carries no
+ * first_seen on the stream), at most WEB_ANOM_A2_SDB_NEW a minute. A
+ * MAC sloth.db does not hold, or no sloth.db, is the stream path as it
+ * was. At most WEB_ANOM_A2_CHECKS_PER_MIN lookups a minute, one
+ * connection for the pass, closed after it.
  *
  * MAD ratio (§5.3): for an A1 candidate on a counter, the last
  * WEB_ANOM_MAD_N hour rows of the same hour of the week are read from
@@ -164,6 +186,7 @@
 #include "web_ident.h"
 #include "web_json.h"
 #include "web_live.h"
+#include "web_oui.h"
 #include "web_rollup.h"
 #include "web_store.h"
 #include "web_tsdb.h"
@@ -178,6 +201,7 @@ enum {
     WEB_ANOM_A8_DNS,
     WEB_ANOM_A9_PROTO,
     WEB_ANOM_A10_SENSOR,
+    WEB_ANOM_A4_VENDOR,
     WEB_ANOM_RULE_COUNT
 };
 
@@ -197,6 +221,8 @@ enum { WEB_EP_FREE = 0, WEB_EP_BUILDING, WEB_EP_OPEN, WEB_EP_CLOSED };
 #define WEB_ANOM_A2_BURST       8
 #define WEB_ANOM_A2_HOUR_MAX    16
 #define WEB_ANOM_A2_CHECKS_PER_MIN 256
+#define WEB_ANOM_A2_SDB_NEW     64
+#define WEB_ANOM_A4_BURST       8
 #define WEB_ANOM_A3_MEAN_MAX    0.1
 #define WEB_ANOM_A3_MIN_N       4
 #define WEB_ANOM_A7_WINDOW_S    600
@@ -243,10 +269,15 @@ typedef struct {
     unsigned long persist_errors;
     unsigned long a2_queries, a2_errors, a2_not_new, a2_deferred;
     unsigned long ident_truncated, a2_in_burst;
+    unsigned long a2_sdb_queries, a2_sdb_old, a2_sdb_errors, a2_sdb_new;
+    unsigned long a4_checked, a4_unknown, a4_in_burst;
     int           open, building, closed_kept, fanout, reported;
 } web_anom_stats_t;
 
 typedef long long (*web_mono_fn)(void *ctx);
+
+struct web_slothdb;
+struct web_ptr;
 
 typedef struct {
     web_baseline_t *bl;
@@ -256,6 +287,10 @@ typedef struct {
     web_mono_fn     mono;      /* web_live's clock; NULL: CLOCK_MONOTONIC */
     void           *mono_ctx;
     int             max_keys;  /* --web-max-keys, for the table sizes */
+    /* M4 (#162): each may be NULL. */
+    const web_oui_tab_t *oui;  /* A4 runs only when web_oui_full() */
+    struct web_slothdb  *sdb;  /* A2's durable first_seen */
+    struct web_ptr      *ptr;  /* the passive PTR cache, persisted here */
 } web_anom_cfg_t;
 
 struct web_anom_priv;
@@ -322,6 +357,21 @@ int    web_anomaly_changes(web_anomaly_t *a, unsigned long long after,
                            unsigned long long *latest);
 
 int    web_anomaly_open_count(web_anomaly_t *a);
+
+/* M4's readers (HTTP thread): the |z| A1 last scored for a device key
+ * (the largest over its metrics) in the last WEB_ANOM_Z_FRESH_S, 1 with
+ * it in *z or 0; the open and recent episodes keyed key, of one kind
+ * (web_anomaly_kind_find()'s index) or all (-1); and up to max of them,
+ * open first, newest first. */
+#define WEB_ANOM_Z_FRESH_S 180
+int    web_anomaly_device_z(web_anomaly_t *a, const char *key, long long now_s,
+                            double *z);
+int    web_anomaly_key_count(web_anomaly_t *a, const char *key, int kind);
+int    web_anomaly_key_list(web_anomaly_t *a, const char *key,
+                            web_anom_ep_t *out, int max);
+
+/* Why A4 is off, or NULL when it runs. */
+const char *web_anomaly_a4_reason(const web_anomaly_t *a);
 void   web_anomaly_stats(web_anomaly_t *a, web_anom_stats_t *out);
 
 #endif

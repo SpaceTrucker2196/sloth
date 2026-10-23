@@ -594,6 +594,53 @@ int web_rollup_fine(web_rollup_t *ru, int metric, const char *key,
     return k;
 }
 
+void web_rollup_presence(web_rollup_t *ru, int metric,
+                         const char (*keys)[WEB_KEY_MAX + 1], int n,
+                         long long from, int ncell, int cell_s,
+                         unsigned char *bits) {
+    if (metric < 0 || metric >= WM_COUNT || n <= 0 || ncell <= 0 || cell_s <= 0)
+        return;
+    const web_metric_t *md = &web_metric_defs[metric];
+    size_t stride = (size_t)(ncell + 7) / 8;
+    long long to = from + (long long)ncell * cell_s;
+    /* sid -> key index, open addressing over a power of two. */
+    int hn = 1;
+    while (hn < n * 2) hn <<= 1;
+    uint32_t *hs = calloc((size_t)hn, sizeof(*hs));
+    int *hk = malloc((size_t)hn * sizeof(*hk));
+    if (!hs || !hk) { free(hs); free(hk); return; }
+    pthread_mutex_lock(&ru->mu);
+    web_kclass_t *c = &ru->cls[md->kclass];
+    int any = 0;
+    for (int k = 0; k < n; k++) {
+        int i = key_find(c, keys[k]);
+        if (i < 0 || !c->k[i].sid[metric]) continue;
+        uint32_t sid = c->k[i].sid[metric];
+        unsigned h = (sid * 2654435761u) & (unsigned)(hn - 1);
+        while (hs[h]) h = (h + 1) & (unsigned)(hn - 1);
+        hs[h] = sid;
+        hk[h] = k;
+        any = 1;
+        const web_agg_t *a = &c->k[i].open[metric][WEB_TIER_FINE];
+        if (a->t >= from && a->t < to && a->n && a->max >= 0.5) {
+            long long cell = (a->t - from) / cell_s;
+            bits[(size_t)k * stride + (size_t)cell / 8] |= (unsigned char)(1u << (cell % 8));
+        }
+    }
+    for (size_t j = 0; any && j < ru->ring_n; j++) {
+        const web_ring_row_t *r = &ru->ring[j];
+        if (r->t < from || r->t >= to || r->max < 0.5 || !r->sid) continue;
+        unsigned h = (r->sid * 2654435761u) & (unsigned)(hn - 1);
+        while (hs[h] && hs[h] != r->sid) h = (h + 1) & (unsigned)(hn - 1);
+        if (!hs[h]) continue;
+        long long cell = (r->t - from) / cell_s;
+        bits[(size_t)hk[h] * stride + (size_t)cell / 8] |= (unsigned char)(1u << (cell % 8));
+    }
+    pthread_mutex_unlock(&ru->mu);
+    free(hs);
+    free(hk);
+}
+
 static int cmp_key_desc(const void *a, const void *b) {
     const web_keyinfo_t *x = a, *y = b;
     if (x->last_seen != y->last_seen) return x->last_seen < y->last_seen ? 1 : -1;

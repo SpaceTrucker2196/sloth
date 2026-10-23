@@ -66,6 +66,10 @@ readdirCalled:research/ingest/main.c
 # directory into a local DIR* and closedir()s it before returning, on
 # the test's one thread.
 readdirCalled:web/tests/test_store.c
+# #162's sloth.db reader tests: sdb_listing() opendir()s the test's own
+# temporary directory into a local DIR* and closedir()s it before
+# returning, on the test's one thread.
+readdirCalled:web/tests/sdb_gen.c
 
 # ── False positives, checked by hand ────────────────────────────────────
 # Bucket arrays filled field-by-field when a slot is claimed; the flagged

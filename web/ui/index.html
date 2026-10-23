@@ -13,17 +13,17 @@
 <body>
 <div class="app" id="app">
   <aside class="side">
-    <div class="brand">SLOTH<small>web <span id="milestone">M3</span></small></div>
+    <div class="brand">SLOTH<small>web <span id="milestone">M4</span></small></div>
     <ol class="views">
       <li class="on" id="nav-overview"><span class="k">1</span>Overview</li>
       <li class="go" id="nav-activity"><span class="k">2</span>Activity</li>
-      <li><span class="k">3</span>Devices</li>
+      <li class="go" id="nav-devices"><span class="k">3</span>Devices</li>
       <li class="go" id="nav-anomalies"><span class="k">4</span>Anomalies</li>
       <li><span class="k">5</span>WiFi</li>
       <li><span class="k">6</span>Alerts</li>
       <li><span class="k">7</span>Flows</li>
       <li><span class="k">8</span>History</li>
-      <li><span class="k">9</span>Lookup</li>
+      <li class="go" id="nav-lookup"><span class="k">9</span>Lookup</li>
     </ol>
     <div class="foot">
       <div><span>sock</span><span id="sock">-</span></div>
@@ -123,6 +123,40 @@
       <div class="cards" id="n-cards"></div>
     </section>
    </div>
+   <div id="v-devices" hidden>
+    <section class="panel controls" aria-label="device search">
+      <label>search <input type="search" id="d-q" maxlength="256" spellcheck="false" autocomplete="off" placeholder="vendor:apple random:yes seen:&lt;24h"></label>
+      <label>sort <select id="d-sort">
+        <option value="last" selected>last seen</option>
+        <option value="first">first seen</option>
+        <option value="mac">mac</option>
+        <option value="risk">risk</option>
+      </select></label>
+      <span class="sub" id="d-note"></span>
+    </section>
+    <section class="panel">
+      <div class="label">devices <span class="sub" id="d-count"></span></div>
+      <div class="drow dhead" aria-hidden="true">
+        <span class="c-mac">mac</span><span class="c-ven">vendor</span><span class="c-ip">ip</span><span class="c-nm">name</span><span class="c-ss">ssid</span><span class="c-sig">dBm</span><span class="c-src">src</span><span class="c-rk">risk</span><span class="c-fs">first</span><span class="c-ls">last</span><span class="c-z">z</span><span class="c-an">anom</span><span class="c-pr">24 h presence</span>
+      </div>
+      <div class="vscroll" id="d-scroll" tabindex="0" aria-label="devices table">
+        <div class="vspace" id="d-space"></div>
+        <div class="vrows" id="d-rows"></div>
+      </div>
+      <div class="sub">src: A arp, D dhcp, P probe, B beacon, S station; name: D dhcp, m mdns, N nbns, h sloth's hostname, p PTR seen on the wire; ~ a randomised (locally administered) mac. Click a row for everything known.</div>
+    </section>
+   </div>
+   <div id="v-lookup" hidden>
+    <section class="panel controls" aria-label="lookup">
+      <label>mac or ip <input type="search" id="l-q" maxlength="45" spellcheck="false" autocomplete="off" placeholder="b8:27:eb:12:34:56 or 192.168.1.20"></label>
+      <button type="button" id="l-go">look up</button>
+      <span class="sub" id="l-note">passive only: the vendor table and names already seen; nothing is sent</span>
+    </section>
+    <section class="panel">
+      <div class="label">card <span class="sub" id="l-src"></span></div>
+      <div id="l-card"></div>
+    </section>
+   </div>
    <div id="v-activity" hidden>
     <section class="panel controls" aria-label="activity controls">
       <label>metric <select id="a-metric"></select></label>
@@ -148,6 +182,21 @@
     </section>
    </div>
   </main>
+  <aside class="drawer" id="drawer" hidden aria-label="device">
+    <div class="dr-hd">
+      <span class="sw" id="dr-sw"></span>
+      <b id="dr-mac">-</b>
+      <span class="sub" id="dr-note"></span>
+      <button type="button" id="dr-close">close</button>
+    </div>
+    <div id="dr-body"></div>
+    <div class="label">24 h presence, 10 min cells</div>
+    <canvas class="strip" id="dr-strip" aria-label="presence over the last 24 hours"></canvas>
+    <div class="label">hour of week presence <span class="sub" id="dr-week-note"></span></div>
+    <canvas class="heat" id="dr-week" aria-label="share of weeks present by local hour, Monday first"></canvas>
+    <div class="label">anomalies</div>
+    <div class="cards" id="dr-anoms"></div>
+  </aside>
 </div>
 <script>
 @include app.js

@@ -54,3 +54,15 @@ oom-*
 # it could not stat. One permissions change, or one run as the invoking
 # user, and crackable material becomes stageable. Hence an explicit rule.
 data/
+
+# slothweb's vendor table inputs (#162): the IEEE registry CSVs
+# (oui.csv, mam.csv, oui36.csv, iab.csv) a developer fetches by hand
+# into web/data/. Neither they nor the table generated from them
+# (build/web/web_oui_table.c, under /build/ above) are ever committed
+# (2026-10-21 OUI ruling). The data/ rule above already matches
+# web/data/; this names it, so the rule does not depend on that one.
+/web/data/
+oui.csv
+mam.csv
+oui36.csv
+iab.csv

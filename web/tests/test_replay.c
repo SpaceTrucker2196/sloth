@@ -106,7 +106,7 @@ static void rig_open(int fresh) {
                         wall_fn, NULL), 0);
     WT_EQ(web_baseline_init(&R.bl, web_baseline_cap_for(64)), 0);
     web_anom_cfg_t c = { &R.bl, R.have_st ? &R.st : NULL, &R.live, &R.idt,
-                         mono_fn, NULL, 64 };
+                         mono_fn, NULL, 64, NULL, NULL, NULL };
     WT_EQ(web_anomaly_init(&R.an, WEB_ANOM_CAP, &c), 0);
     WT_EQ(web_anomaly_restore(&R.an, g_now), 0);
     web_anomaly_attach(&R.an, &R.ts);

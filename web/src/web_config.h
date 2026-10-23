@@ -46,6 +46,8 @@ typedef struct {
     int      max_keys;             /* --web-max-keys */
     int      max_mb;               /* --web-max-mb */
     int      retain_days;          /* --web-retain-days */
+    /* M4 (#162): sloth.db, read-only. "" when not given. */
+    char     sloth_db[4096];       /* --sloth-db */
 } web_config_t;
 
 void web_config_defaults(web_config_t *c);

@@ -1,6 +1,9 @@
-// slothweb M3 client: the Overview view (M1, with M3's baseline band,
+// slothweb M4 client: the Overview view (M1, with M3's baseline band,
 // hour-of-week heatmap and top anomalies), the Activity view (M2, with
-// M3's baseline band) and the Anomalies view (M3). Overview: KPI tiles
+// M3's baseline band), the Anomalies view (M3), and the Devices view,
+// the device drawer and the Lookup view (M4: /api/devices,
+// /api/device/MAC, /api/lookup; passive only, nothing is ever resolved
+// or sent anywhere but this page's own server). Overview: KPI tiles
 // and the strip from the /events tick, the record ticker from /events
 // record events, /api/live for the alert list, the sensor detail and the
 // ticker's backlog. Charts: /api/metrics, /api/keys, /api/series and
@@ -27,11 +30,14 @@
   };
   var SEV_WORD = ["low", "warn", "crit"];
   // §6's kinds, each with a glyph so a card reads in greyscale too.
-  var KINDS = ["rate", "new", "hours", "ident", "fanout", "dns", "proto", "sensor"];
+  var KINDS = ["rate", "new", "hours", "ident", "fanout", "dns", "proto",
+               "sensor", "vendor"];
   var KIND_GLYPH = {
     "rate": "~", "new": "+", "hours": "@", "ident": "=", "fanout": "<",
-    "dns": "?", "proto": "^", "sensor": "!"
+    "dns": "?", "proto": "^", "sensor": "!", "vendor": "#"
   };
+  // A canonical MAC, as the server writes one: what may open a drawer.
+  var MAC_RE = /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/;
 
   function set(id, text) { $(id).textContent = String(text); }
 
@@ -229,6 +235,10 @@
       set("milestone", h.milestone);
       if (h.anomaly && h.anomaly.persisted === false)
         set("k-anoms-sub", "in memory only: lost at a restart");
+      else if (typeof h.a4 === "string" && h.a4 !== "on")
+        set("k-anoms-sub", "rules A1-A3, A5-A10; A4 off: " + h.a4);
+      else if (h.a4 === "on")
+        set("k-anoms-sub", "rules A1-A10");
     })
     .catch(function () { set("db", "?"); });
 
@@ -236,7 +246,7 @@
   setInterval(live, 5000);
 
   // ── views ─────────────────────────────────────────────────────────
-  var VIEWS = ["overview", "activity", "anomalies"];
+  var VIEWS = ["overview", "activity", "devices", "anomalies", "lookup"];
   var view = "overview";
   function show(v) {
     view = v;
@@ -247,17 +257,26 @@
     if (v === "activity") activity();
     if (v === "anomalies") anomalies();
     if (v === "overview") overview();
+    if (v === "devices") devices();
+    if (v === "lookup") $("l-q").focus();
   }
   $("nav-overview").addEventListener("click", function () { show("overview"); });
   $("nav-activity").addEventListener("click", function () { show("activity"); });
   $("nav-anomalies").addEventListener("click", function () { show("anomalies"); });
+  $("nav-devices").addEventListener("click", function () { show("devices"); });
+  $("nav-lookup").addEventListener("click", function () { show("lookup"); });
 
   document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { closeDrawer(); return; }
     if (e.target !== document.body) return;
     if (e.key === "[") $("app").classList.toggle("collapsed");
     if (e.key === "1") show("overview");
     if (e.key === "2") show("activity");
+    if (e.key === "3") show("devices");
     if (e.key === "4") show("anomalies");
+    if (e.key === "9") show("lookup");
+    // §3: search with /.
+    if (e.key === "/") { e.preventDefault(); show("devices"); $("d-q").focus(); }
   });
 
   // ── drawing ───────────────────────────────────────────────────────
@@ -654,6 +673,11 @@
     }
     c.appendChild(el("div", "tm", (a.open ? "open" : "closed") + "  score " + score +
                      "  first " + stamp(a.first_seen) + "  last " + stamp(a.last_seen)));
+    // An episode keyed by a MAC opens that device's drawer (§8.7).
+    if (typeof a.key === "string" && MAC_RE.test(a.key)) {
+      c.className += " go";
+      c.addEventListener("click", function () { openDrawer(a.key); });
+    }
     return c;
   }
 
@@ -841,6 +865,323 @@
     }).then(refresh).catch(function (e) { set("a-note", "error: " + e.message); });
     A.timer = setInterval(refresh, 10000);
   }
+
+  // ── Devices (§8.6) ────────────────────────────────────────────────
+  // sloth.db's devices that the query matches (§9.1; the server parses
+  // and binds it), up to DEV_MAX rows paged in, drawn as a virtualised
+  // table: only the rows in view exist, recycled as it scrolls. Every
+  // value is set with textContent; the MAC's hash colour is on the
+  // swatch only.
+  var DEV_MAX = 512, DEV_PAGE = 200, ROW_H = 22;
+  var D = { rows: [], gen: 0, timer: 0, pool: [], painting: false };
+  var SEV_CLASS = ["", "r1", "r2", "r3"];
+  var SRC_GLYPH = [[1, "A"], [2, "D"], [16, "P"], [8, "B"], [32, "S"]];
+  var ERR_TEXT = {
+    "no_sloth_db": "no sloth.db: start slothweb with --sloth-db PATH",
+    "sloth_db_missing": "sloth.db is not there yet",
+    "sloth_db_refused": "sloth.db was refused (see /api/health db_error)",
+    "sloth_db_error": "sloth.db could not be read just now",
+    "sloth_db_timeout": "sloth.db was too slow to answer; try again"
+  };
+  function errText(m) {
+    return Object.prototype.hasOwnProperty.call(ERR_TEXT, m) ? ERR_TEXT[m] : "error: " + m;
+  }
+
+  function devicesPath(q, sort, offset) {
+    var p = "/api/devices?limit=" + DEV_PAGE + "&offset=" + offset +
+            "&sort=" + encodeURIComponent(sort);
+    if (q !== "") p += "&q=" + encodeURIComponent(q);
+    return p;
+  }
+
+  function devices() {
+    var gen = ++D.gen;
+    var q = $("d-q").value.trim(), sort = $("d-sort").value;
+    var rows = [];
+    function page(off) {
+      return getJSON(devicesPath(q, sort, off)).then(function (j) {
+        if (gen !== D.gen) return;
+        rows = rows.concat(j.rows || []);
+        var more = !!j.more;
+        if (more && num(j.next_offset) && rows.length < DEV_MAX) return page(j.next_offset);
+        D.rows = rows.slice(0, DEV_MAX);
+        set("d-count", D.rows.length + " shown" +
+            (more || rows.length > DEV_MAX ? "; the first " + D.rows.length + ", narrow the search" : ""));
+        set("d-note", "vendor table " + j.vendor_table + ", sloth.db schema v" + j.db_schema);
+        layout();
+      });
+    }
+    page(0).catch(function (e) {
+      if (gen !== D.gen) return;
+      D.rows = [];
+      set("d-count", "");
+      set("d-note", errText(e.message));
+      layout();
+    });
+  }
+
+  function shortStamp(t) {
+    if (!num(t)) return "-";
+    var now = Date.now() / 1000;
+    if (now - t < 86400 && now - t > -60) return hhmmss(t).slice(0, 5);
+    var d = new Date(t * 1000);
+    function two(n) { return (n < 10 ? "0" : "") + n; }
+    return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate());
+  }
+
+  function srcGlyphs(bits) {
+    var out = "";
+    for (var i = 0; i < SRC_GLYPH.length; i++)
+      out += (bits & SRC_GLYPH[i][0]) ? SRC_GLYPH[i][1] : ".";
+    return out;
+  }
+
+  // The 144 cells of 10 minutes from the server's 36 hex digits, cell 0
+  // the oldest, its bit the high bit of the first digit; present in
+  // --phosphor, absent in --bg (§8.12).
+  function drawStrip(c, hex) {
+    var T = theme();
+    var dpr = sizeCanvas(c);
+    var g = c.getContext("2d");
+    var W = c.width, H = c.height;
+    g.fillStyle = T.bg;
+    g.fillRect(0, 0, W, H);
+    if (typeof hex !== "string" || !/^[0-9a-f]{36}$/.test(hex)) return;
+    var cw = W / 144;
+    g.fillStyle = css("--phosphor");
+    for (var i = 0; i < 144; i++) {
+      var v = parseInt(hex.charAt(i >> 2), 16);
+      if (v & (8 >> (i & 3))) g.fillRect(Math.floor(i * cw), 0, Math.max(dpr, Math.ceil(cw)), H);
+    }
+  }
+
+  function rowEl() {
+    var r = { el: el("div", "drow"), k: -1, mac: "" };
+    var cols = ["c-mac", "c-ven", "c-ip", "c-nm", "c-ss", "c-sig", "c-src",
+                "c-rk", "c-fs", "c-ls", "c-z", "c-an"];
+    r.sw = el("span", "sw");
+    r.cells = {};
+    for (var i = 0; i < cols.length; i++) {
+      var sp = el("span", cols[i]);
+      r.cells[cols[i]] = sp;
+      r.el.appendChild(sp);
+    }
+    r.macText = el("span", "");
+    r.cells["c-mac"].appendChild(r.sw);
+    r.cells["c-mac"].appendChild(r.macText);
+    r.glyph = el("span", "gl");
+    r.nameText = el("span", "");
+    r.cells["c-nm"].appendChild(r.glyph);
+    r.cells["c-nm"].appendChild(r.nameText);
+    r.cv = document.createElement("canvas");
+    r.el.appendChild(r.cv);
+    r.el.addEventListener("click", function () { if (r.mac) openDrawer(r.mac); });
+    return r;
+  }
+
+  function fill(r, d) {
+    r.mac = typeof d.mac === "string" ? d.mac : "";
+    var risk = num(d.risk) && d.risk >= 0 && d.risk <= 3 ? d.risk : 0;
+    r.el.className = "drow" + (SEV_CLASS[risk] ? " " + SEV_CLASS[risk] : "") +
+                     (r.mac === D.sel ? " on" : "");
+    r.sw.style.background = keyColor(r.mac);
+    r.macText.className = d.random ? "rnd" : "";
+    r.macText.textContent = (d.random ? "~" : "") + r.mac;
+    r.cells["c-ven"].textContent = d.vendor === null ? "?" : String(d.vendor);
+    r.cells["c-ip"].textContent = d.ip === null ? "-" : String(d.ip);
+    r.glyph.textContent = d.name_src === null ? "" : String(d.name_src) + " ";
+    r.nameText.textContent = d.name === null ? "-" : String(d.name);
+    r.cells["c-ss"].textContent = d.ssid === null ? "-" : String(d.ssid);
+    r.cells["c-sig"].textContent = num(d.signal) ? String(d.signal) : "-";
+    r.cells["c-src"].textContent = srcGlyphs(num(d.sources) ? d.sources : 0);
+    r.cells["c-rk"].textContent = String(risk);
+    r.cells["c-fs"].textContent = shortStamp(d.first_seen);
+    r.cells["c-ls"].textContent = shortStamp(d.last_seen);
+    r.cells["c-z"].textContent = num(d.z) ? d.z.toFixed(1) : "-";
+    r.cells["c-an"].textContent = num(d.anomalies) ? String(d.anomalies) : "0";
+    drawStrip(r.cv, d.presence);
+  }
+
+  function layout() {
+    $("d-space").style.height = (D.rows.length * ROW_H) + "px";
+    for (var i = 0; i < D.pool.length; i++) D.pool[i].k = -1;
+    paint();
+  }
+
+  function paint() {
+    D.painting = false;
+    var sc = $("d-scroll");
+    var first = Math.max(0, Math.floor(sc.scrollTop / ROW_H) - 5);
+    var n = Math.ceil((sc.clientHeight || 600) / ROW_H) + 10;
+    var box = $("d-rows");
+    while (D.pool.length < n) {
+      var nr = rowEl();
+      D.pool.push(nr);
+      box.appendChild(nr.el);
+    }
+    for (var i = 0; i < D.pool.length; i++) {
+      var r = D.pool[i], k = first + i;
+      if (i >= n || k >= D.rows.length) { r.el.hidden = true; r.k = -1; r.mac = ""; continue; }
+      r.el.hidden = false;
+      r.el.style.top = (k * ROW_H) + "px";
+      if (r.k !== k) { fill(r, D.rows[k]); r.k = k; }
+    }
+  }
+
+  $("d-scroll").addEventListener("scroll", function () {
+    if (D.painting) return;
+    D.painting = true;
+    window.requestAnimationFrame(paint);
+  });
+  $("d-q").addEventListener("input", function () {
+    if (D.timer) clearTimeout(D.timer);
+    D.timer = setTimeout(function () { D.timer = 0; devices(); }, 300);
+  });
+  $("d-q").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { if (D.timer) clearTimeout(D.timer); D.timer = 0; devices(); }
+  });
+  $("d-sort").addEventListener("change", function () { devices(); });
+
+  // ── the drawer (§8.6) ─────────────────────────────────────────────
+  // Everything /api/device/MAC knows about one device. The MAC reaches
+  // the server only as an encodeURIComponent()'d path segment.
+  var DR = { gen: 0 };
+
+  function closeDrawer() {
+    $("drawer").hidden = true;
+    D.sel = "";
+    for (var i = 0; i < D.pool.length; i++) D.pool[i].k = -1;
+    if (view === "devices") paint();
+  }
+  $("dr-close").addEventListener("click", closeDrawer);
+
+  function kvList(box, pairs) {
+    var kv = el("div", "kv");
+    for (var i = 0; i < pairs.length; i++) {
+      if (pairs[i][1] === null || pairs[i][1] === undefined || pairs[i][1] === "") continue;
+      kv.appendChild(el("span", "k", pairs[i][0]));
+      kv.appendChild(el("span", "v", pairs[i][1]));
+    }
+    box.appendChild(kv);
+  }
+
+  function itemList(box, title, items, line, more) {
+    box.appendChild(el("div", "label", title + (more ? " (more than shown)" : "")));
+    var ol = el("ol", "lst");
+    if (!items || !items.length) ol.appendChild(el("li", "sub", "none"));
+    for (var i = 0; items && i < items.length; i++) {
+      var li = el("li", "");
+      li.appendChild(el("span", "ts", shortStamp(items[i].last_seen)));
+      li.appendChild(el("span", "tx", line(items[i])));
+      ol.appendChild(li);
+    }
+    box.appendChild(ol);
+  }
+
+  function ouiPairs(o) {
+    if (!o) return [];
+    return [["vendor", o.found ? o.vendor : "not in the " + o.table + " table"],
+            ["block", o.found ? o.block + " (" + o.registry + ", " + o.bits + " bits)" : null],
+            ["registered", o.found ? (o["private"] ? "private" : "vendor") : null],
+            ["locally adm.", o.local ? "yes: randomised or software mac" : "no"],
+            ["multicast", o.multicast ? "yes" : "no"],
+            ["table", o.table + (o.full ? "" : " (not the full IEEE registry)")]];
+  }
+
+  function nameLine(n) {
+    return n.name + "  (" + n.src + ", " + n.where + ")";
+  }
+
+  function openDrawer(mac) {
+    if (typeof mac !== "string" || !MAC_RE.test(mac)) return;
+    var gen = ++DR.gen;
+    D.sel = mac;
+    for (var i = 0; i < D.pool.length; i++) D.pool[i].k = -1;
+    if (view === "devices") paint();
+    $("drawer").hidden = false;
+    set("dr-mac", mac);
+    $("dr-sw").style.background = keyColor(mac);
+    set("dr-note", "loading");
+    getJSON("/api/device/" + encodeURIComponent(mac)).then(function (j) {
+      if (gen !== DR.gen) return;
+      var box = $("dr-body");
+      while (box.firstChild) box.removeChild(box.firstChild);
+      set("dr-note", j.db === "open" ? "sloth.db record" + (j.record ? "" : ": none")
+                                     : "sloth.db " + j.db + "; the stream only");
+      var r = j.record, dt = r && r.detail ? r.detail : {};
+      kvList(box, ouiPairs(j.oui).concat(r ? [
+        ["ip", r.ip], ["name", r.name === null ? null : r.name + " (" + r.name_src + ")"],
+        ["hostname", dt.hostname], ["last ssid", r.ssid],
+        ["signal", num(r.signal) ? r.signal + " dBm" : null],
+        ["sources", srcGlyphs(r.sources)], ["risk", String(r.risk)],
+        ["first seen", stamp(r.first_seen)], ["last seen", stamp(r.last_seen)],
+        ["z now", num(r.z) ? r.z.toFixed(1) : null],
+        ["camera", dt.camera_vendor ? dt.camera_vendor + (dt.camera_model ? " " + dt.camera_model : "") : null],
+        ["dhcp vci", dt.dhcp_vci]
+      ] : [["stream ip", j.stream ? j.stream.ip : null],
+           ["stream first seen", j.stream && num(j.stream.first_seen) ? stamp(j.stream.first_seen) : null]]));
+      itemList(box, "names (passive)", j.names, nameLine, false);
+      itemList(box, "pnl ssids", j.ssids, function (x) { return x.ssid; }, j.ssids_more);
+      itemList(box, "associations", j.assocs, function (x) {
+        return x.bssid + "  " + (x.ssid === null ? "" : x.ssid) + "  ch " + x.channel +
+               (num(x.signal) ? "  " + x.signal + " dBm" : "") + "  source " + x.source;
+      }, j.assocs_more);
+      itemList(box, "arp addresses", j.ips, function (x) { return x.addr; }, j.ips_more);
+      itemList(box, "alerts naming it", j.alerts, function (x) {
+        return (x.sev >= 0 && x.sev <= 2 ? SEV_WORD[x.sev] : "?") + "  " + x.title +
+               "  x" + x.count;
+      }, j.alerts_more);
+      drawStrip($("dr-strip"), j.presence);
+      var wk = j.week || {};
+      var cells = null;
+      if (wk.cells && wk.cells.length === 168) {
+        cells = [];
+        for (var c = 0; c < 168; c++) cells.push([wk.cells[c][0], 0, wk.cells[c][1]]);
+      }
+      heatmap($("dr-week"), { cells: cells, warm_n: wk.warm_n, now_cell: wk.now_cell });
+      set("dr-week-note", cells ? "share of weeks present" : "no baseline yet");
+      var an = $("dr-anoms");
+      while (an.firstChild) an.removeChild(an.firstChild);
+      if (!j.anomalies || !j.anomalies.length) an.appendChild(el("div", "sub", "none"));
+      (j.anomalies || []).forEach(function (a) { an.appendChild(card(a)); });
+    }).catch(function (e) { if (gen === DR.gen) set("dr-note", errText(e.message)); });
+  }
+
+  // ── Lookup (§8.11) ────────────────────────────────────────────────
+  // One input, a MAC or an IP. The card is the vendor block and its
+  // bits, every passive name with its source and when, and sloth's
+  // record. There is no active query: nothing here sends a packet.
+  var L = { gen: 0 };
+  function lookup() {
+    var q = $("l-q").value.trim();
+    if (q === "") return;
+    var gen = ++L.gen;
+    getJSON("/api/lookup?q=" + encodeURIComponent(q)).then(function (j) {
+      if (gen !== L.gen) return;
+      var box = $("l-card");
+      while (box.firstChild) box.removeChild(box.firstChild);
+      set("l-src", j.kind + " " + j.q + ", sloth.db " + j.db);
+      kvList(box, j.kind === "mac" ? ouiPairs(j.oui) : [["ip", j.q]]);
+      itemList(box, "names (passive)", j.names, nameLine, false);
+      if (j.kind === "mac")
+        itemList(box, "arp addresses", j.ips, function (x) { return x.addr; }, j.ips_more);
+      else
+        itemList(box, "arp macs", j.macs, function (x) { return x.addr; }, j.macs_more);
+      var d = j.device;
+      if (d) {
+        kvList(box, [["sloth.db", d.mac], ["vendor", d.vendor], ["name", d.name],
+                     ["last seen", stamp(d.last_seen)]]);
+        var b = el("button", "", "open the drawer");
+        b.type = "button";
+        b.addEventListener("click", function () { openDrawer(d.mac); });
+        box.appendChild(b);
+      } else {
+        box.appendChild(el("div", "sub", "no sloth.db record"));
+      }
+    }).catch(function (e) { if (gen === L.gen) set("l-src", errText(e.message)); });
+  }
+  $("l-go").addEventListener("click", lookup);
+  $("l-q").addEventListener("keydown", function (e) { if (e.key === "Enter") lookup(); });
 
   // The Overview is the first view: learn whether there is a store (for
   // the tier), then draw it, and redraw every minute.

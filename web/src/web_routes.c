@@ -228,13 +228,14 @@ static void analysis_health(web_anomaly_t *a, web_jw_t *w) {
 static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
     web_jw_t w;
     web_jw_init(&w, out, outsz);
-    web_jw_raw(&w, "{\"service\":\"slothweb\",\"milestone\":\"M3\",\"uptime_s\":");
+    web_jw_raw(&w, "{\"service\":\"slothweb\",\"milestone\":\"M4\",\"uptime_s\":");
     web_jw_int(&w, h->uptime_s);
     /* With no data socket the M0 shape stands: "none" and null. Every
      * stream-derived or operator-given string goes through web_jw_str. */
     if (h->live) web_live_health_members(h->live, &w, h->now_ms);
     else         web_jw_raw(&w, ",\"socket\":\"none\",\"last_record_age_s\":null");
-    web_jw_raw(&w, ",\"db\":\"none\",\"db_schema\":null,\"db_rows\":null,");
+    web_m4_health(h->m4, h->wall_s, &w);
+    web_jw_raw(&w, ",");
     tsdb_health(h->tsdb, &w);
     analysis_health(h->anomaly, &w);
     web_jw_raw(&w, ",\"sse_clients\":");
@@ -460,6 +461,40 @@ static int route_baseline(const web_req_t *rq, const web_health_t *h,
     return json_answer(rq, status, bl, out, outsz, r);
 }
 
+enum { M4_DEVICES, M4_DEVICE, M4_LOOKUP };
+
+/* /api/devices, /api/device/{mac}, /api/lookup (M4, web_devices.h):
+ * validated whole, answered from sloth.db read-only, the stream and the
+ * OUI table. */
+static int route_m4(const web_req_t *rq, const web_health_t *h, int which,
+                    const char *arg, char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    static const web_m4_t none;
+    const web_m4_t *m = h->m4 ? h->m4 : &none;
+    if (rq->query_long) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else if (which == M4_DEVICES) {
+        rc = web_devices_route(m, rq->query, h->wall_s, body, cap, &bl, &status);
+    } else if (which == M4_DEVICE) {
+        rc = web_device_route(m, arg, rq->query, h->wall_s, body, cap, &bl,
+                              &status);
+    } else {
+        rc = web_lookup_route(m, rq->query, h->wall_s, body, cap, &bl, &status);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, status, bl, out, outsz, r);
+}
+
 static int route_events(const web_req_t *rq, int sse_room, char *out,
                         size_t outsz, web_resp_t *r) {
     if (!rq->is_head && !sse_room) {
@@ -528,6 +563,13 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
             return route_anomalies(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/baseline"))
             return route_baseline(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/devices"))
+            return route_m4(rq, h, M4_DEVICES, NULL, out, outsz, r);
+        if (!strcmp(rq->path, "/api/lookup"))
+            return route_m4(rq, h, M4_LOOKUP, NULL, out, outsz, r);
+        if (!strncmp(rq->path, "/api/device/", 12) && rq->path[12] &&
+            !strchr(rq->path + 12, '/'))
+            return route_m4(rq, h, M4_DEVICE, rq->path + 12, out, outsz, r);
     }
     r->status = 404;
     r->out_len = web_http_response(404, rq->is_head, out, outsz);

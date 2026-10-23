@@ -8,18 +8,24 @@
 #include <time.h>
 
 #include "web_metrics.h"
+#include "web_ptr.h"
+#include "web_slothdb.h"
 
 /* ── names ───────────────────────────────────────────────────────────── */
 
 static const char *const RULE_NAME[WEB_ANOM_RULE_COUNT] = {
-    "A1", "A2", "A3", "A5", "A6", "A7", "A8", "A9", "A10"
+    "A1", "A2", "A3", "A5", "A6", "A7", "A8", "A9", "A10", "A4"
 };
 static const char *const RULE_KIND[WEB_ANOM_RULE_COUNT] = {
     "rate", "new", "hours", "ident", "ident", "fanout", "dns", "proto",
-    "sensor"
+    "sensor", "vendor"
 };
+/* web_query_anomaly_kinds[] (web_query.c) is the same list; the tests
+ * hold the two together. "vendor" is last so that every M3 index
+ * stands. */
 static const char *const KINDS[] = {
-    "rate", "new", "hours", "ident", "fanout", "dns", "proto", "sensor", NULL
+    "rate", "new", "hours", "ident", "fanout", "dns", "proto", "sensor",
+    "vendor", NULL
 };
 
 const char *web_anomaly_kind(int rule) {
@@ -241,6 +247,17 @@ struct web_anom_priv {
 
     kvtab_t     known;          /* A9: (flow metric, host) with history */
 
+    web_sdb_conn_t sdb;         /* A2: this pass's sloth.db connection */
+    int         sdb_state;      /* 0 not tried, 1 open, -1 failed */
+    web_sdb_new_t *sdb_new;     /* A2: sloth.db's new MACs this minute */
+    char      (*a4_keys)[WEB_KEY_MAX + 1]; /* A4: this minute's unknown */
+    int         a4_n, a4_cap;
+
+    kvtab_t     zl;             /* |z| now per device key, under a->mu */
+    double     *zv;
+
+    web_store_ptr_t *ptr_out;   /* the passive PTR rows to write */
+
     mad_t       mad[MAD_CACHE];
     int         mad_n;
     long long   mad_hour;
@@ -285,6 +302,8 @@ void web_anomaly_destroy(web_anomaly_t *a) {
         kv_free(&p->rep); free(p->rep_new);
         kv_free(&p->old);
         kv_free(&p->known);
+        kv_free(&p->zl); free(p->zv);
+        free(p->sdb_new); free(p->a4_keys); free(p->ptr_out);
         free(p->cand); free(p->pairs); free(p->idx);
         free(p->ep_del); free(p->ep_out);
         free(p->firsts); free(p->named); free(p->ipn); free(p->dns);
@@ -343,11 +362,17 @@ int web_anomaly_init(web_anomaly_t *a, int cap, const web_anom_cfg_t *cfg) {
     p->dns = calloc((size_t)p->dns_cap, sizeof(*p->dns));
     p->blrec = calloc(BL_BATCH, sizeof(*p->blrec));
     p->bldel = calloc(BL_DEL_BATCH, sizeof(*p->bldel));
+    p->sdb_new = calloc(WEB_ANOM_A2_SDB_NEW, sizeof(*p->sdb_new));
+    p->a4_cap = mk;
+    p->a4_keys = calloc((size_t)p->a4_cap, sizeof(*p->a4_keys));
+    p->zv = calloc((size_t)mk, sizeof(*p->zv));
+    p->ptr_out = calloc(256, sizeof(*p->ptr_out));
     if (!p->agg || !p->agg_head || !p->fan || !p->fan_del || !p->rep_new ||
         !p->cand || !p->ep_del || !p->ep_out || !p->firsts || !p->named ||
-        !p->ipn || !p->dns || !p->blrec || !p->bldel ||
+        !p->ipn || !p->dns || !p->blrec || !p->bldel || !p->sdb_new ||
+        !p->a4_keys || !p->zv || !p->ptr_out ||
         kv_init(&p->fan_ix, hosts) != 0 || kv_init(&p->rep, mk) != 0 ||
-        kv_init(&p->old, macs) != 0 ||
+        kv_init(&p->old, macs) != 0 || kv_init(&p->zl, mk) != 0 ||
         kv_init(&p->known, hosts * 5) != 0) {
         web_anomaly_destroy(a);
         return -1;
@@ -656,12 +681,28 @@ static int mad_confirms(web_anomaly_t *a, int metric, const char *key,
 
 /* ── the rules over one minute's rows ────────────────────────────────── */
 
+/* The |z| now of a device key, for /api/devices and the z: term: the
+ * largest of its metrics' this minute. The table is the store
+ * thread's to write and the HTTP thread's to read, under a->mu. */
+static void z_note(web_anomaly_t *a, int metric, const char *key, long long t,
+                   double z) {
+    if (web_metric_defs[metric].kclass != WEB_KC_DEV || !isfinite(z)) return;
+    struct web_anom_priv *p = a->p;
+    pthread_mutex_lock(&a->mu);
+    int made;
+    int i = kv_get(&p->zl, 0, key, t, &made, NULL);
+    if (made || p->zl.e[i].t != t || fabs(z) > p->zv[i]) p->zv[i] = fabs(z);
+    p->zl.e[i].t = t;
+    pthread_mutex_unlock(&a->mu);
+}
+
 static void a1_score(web_anomaly_t *a, int metric, const char *key,
                      long long t, double v) {
     web_bl_score_t sc;
     if (web_baseline_score(a->cfg.bl, metric, key, t, v, &sc) != 0 ||
         sc.warming)
         return;
+    z_note(a, metric, key, t, sc.z);
     if (fabs(sc.z) < WEB_ANOM_Z_THRESHOLD) return;
     double mz;
     if (!mad_confirms(a, metric, key, t, v, sc.within, &mz)) return;
@@ -684,6 +725,57 @@ static void a3_score(web_anomaly_t *a, const char *key, long long t) {
              "week it is normally absent (mean %.2f over %d weeks)", key,
              sc.mean, sc.n);
     cand(a, WEB_ANOM_A3_HOURS, WM_DEV_PRESENT, key, 70.0, ev);
+}
+
+static size_t ev_mac(char *ev, size_t cap, size_t o, const char *mac);
+
+/* A4's question about one present MAC this minute: globally
+ * administered, unicast, and in none of the full table's blocks. Only
+ * asked when the table is the IEEE registry's (minute_pass). */
+static void a4_check(web_anomaly_t *a, const char *key) {
+    struct web_anom_priv *p = a->p;
+    uint8_t mac[6];
+    web_oui_hit_t hit;
+    if (web_oui_mac_bytes(key, mac) != 0) return;
+    pthread_mutex_lock(&a->mu);
+    a->st.a4_checked++;
+    pthread_mutex_unlock(&a->mu);
+    if (web_oui_lookup(a->cfg.oui, mac, &hit) || hit.local || hit.multicast)
+        return;
+    if (p->a4_n < p->a4_cap)
+        snprintf(p->a4_keys[p->a4_n++], WEB_KEY_MAX + 1, "%s", key);
+}
+
+static void a4_scan(web_anomaly_t *a) {
+    struct web_anom_priv *p = a->p;
+    char ev[WEB_ANOM_EVIDENCE_MAX + 1];
+    if (p->a4_n == 0) return;
+    pthread_mutex_lock(&a->mu);
+    a->st.a4_unknown += (unsigned long)p->a4_n;
+    if (p->a4_n > WEB_ANOM_A4_BURST) a->st.a4_in_burst += (unsigned long)p->a4_n;
+    pthread_mutex_unlock(&a->mu);
+    if (p->a4_n > WEB_ANOM_A4_BURST) {
+        size_t o = (size_t)snprintf(ev, sizeof(ev), "%d present MACs with an "
+                                    "OUI in no IEEE block this minute:",
+                                    p->a4_n);
+        for (int i = 0; i < 2; i++) o = ev_mac(ev, sizeof(ev), o, p->a4_keys[i]);
+        cand(a, WEB_ANOM_A4_VENDOR, WM_DEV_PRESENT, "", 40.0, ev);
+    } else {
+        for (int i = 0; i < p->a4_n; i++) {
+            snprintf(ev, sizeof(ev), "%s present; its OUI %.8s is in no IEEE "
+                     "MA-L, MA-M or MA-S block", p->a4_keys[i], p->a4_keys[i]);
+            cand(a, WEB_ANOM_A4_VENDOR, WM_DEV_PRESENT, p->a4_keys[i], 30.0, ev);
+        }
+    }
+    p->a4_n = 0;
+}
+
+const char *web_anomaly_a4_reason(const web_anomaly_t *a) {
+    if (!a->cfg.oui) return "no vendor table";
+    if (!web_oui_full(a->cfg.oui))
+        return "the vendor table is not the IEEE registry (no oui.csv at "
+               "build time): a miss in a small table is not an unknown vendor";
+    return NULL;
 }
 
 static int is_flow(int m) {
@@ -829,10 +921,50 @@ static void rep_mark(struct web_anom_priv *p, const char *mac, long long t0,
  * restart and when it re-learns an evicted station, so first_seen alone
  * called a device with weeks of history new. 1 old, 0 no evidence, -1
  * not known yet (a store error, or this minute's lookups are spent). */
+/* This pass's sloth.db connection, opened at the first need and closed
+ * at the end of the pass (a2_scan), so no read outlives the minute. */
+static web_sdb_conn_t *a2_sdb(web_anomaly_t *a, long long ts) {
+    struct web_anom_priv *p = a->p;
+    if (!a->cfg.sdb || p->sdb_state < 0) return NULL;
+    if (p->sdb_state == 0) {
+        char err[WEB_SDB_ERR_MAX];
+        p->sdb_state = web_slothdb_open(a->cfg.sdb, &p->sdb, WEB_SDB_PASS_MS,
+                                        ts, err, sizeof(err)) == 0 ? 1 : -1;
+        if (p->sdb_state < 0) {
+            web_slothdb_close(&p->sdb);
+            return NULL;
+        }
+    }
+    return &p->sdb;
+}
+
+/* sloth.db's durable first_seen of mac against the window: 1 older
+ * (not new), 0 within it or not held there, -1 not known (an error, or
+ * the minute's lookups spent). */
+static int a2_sdb_old(web_anomaly_t *a, const char *mac, long long before,
+                      long long ts) {
+    struct web_anom_priv *p = a->p;
+    web_sdb_conn_t *c = a2_sdb(a, ts);
+    if (!c) return 0;
+    if (p->a2_checks >= WEB_ANOM_A2_CHECKS_PER_MIN) return -1;
+    p->a2_checks++;
+    long long fs;
+    int r = web_sdb_first_seen(c, mac, &fs);
+    pthread_mutex_lock(&a->mu);
+    a->st.a2_sdb_queries++;
+    if (r < 0) a->st.a2_sdb_errors++;
+    if (r == 1 && fs < before) a->st.a2_sdb_old++;
+    pthread_mutex_unlock(&a->mu);
+    if (r < 0) return -1;
+    return r == 1 && fs < before;
+}
+
 static int a2_old_evidence(web_anomaly_t *a, const char *mac, long long ts) {
     static const int M[2] = { WM_DEV_PRESENT, WM_DEV_FRAMES };
     struct web_anom_priv *p = a->p;
     long long before = ts - WEB_ANOM_A2_WINDOW_S;
+    int d = a2_sdb_old(a, mac, before, ts);
+    if (d != 0) return d;
     for (int i = 0; i < 2; i++) {
         long long ff;
         if (web_baseline_first_fed(a->cfg.bl, M[i], mac, &ff) == 0 &&
@@ -892,13 +1024,60 @@ static size_t ev_mac(char *ev, size_t cap, size_t o, const char *mac) {
     return o + 1 + n;
 }
 
+/* sloth.db's own new MACs (devices.first_seen in the window) that the
+ * stream did not name, added to the candidates: a wired device's
+ * first_seen is on no stream record. Randomised MACs are left out as on
+ * the stream path. */
+static int a2_sdb_firsts(web_anomaly_t *a, long long ts, int n) {
+    struct web_anom_priv *p = a->p;
+    web_sdb_conn_t *c = a2_sdb(a, ts);
+    if (!c) return n;
+    int k = web_sdb_new_macs(c, ts - WEB_ANOM_A2_WINDOW_S, p->sdb_new,
+                             WEB_ANOM_A2_SDB_NEW);
+    if (k < 0) {
+        pthread_mutex_lock(&a->mu);
+        a->st.a2_sdb_errors++;
+        pthread_mutex_unlock(&a->mu);
+        return n;
+    }
+    int added = 0;
+    for (int i = 0; i < k && n < p->firsts_cap; i++) {
+        uint8_t mac[6];
+        if (web_oui_mac_bytes(p->sdb_new[i].mac, mac) != 0 || (mac[0] & 2))
+            continue;
+        int dup = 0;
+        for (int j = 0; j < n && !dup; j++)
+            dup = !strcmp(p->firsts[j].mac, p->sdb_new[i].mac);
+        if (dup) continue;
+        web_id_new_t *f = &p->firsts[n++];
+        snprintf(f->mac, sizeof(f->mac), "%s", p->sdb_new[i].mac);
+        f->first_seen = p->sdb_new[i].first_seen;
+        snprintf(f->src, sizeof(f->src), "sloth.db");
+        added++;
+    }
+    pthread_mutex_lock(&a->mu);
+    a->st.a2_sdb_new += (unsigned long)added;
+    pthread_mutex_unlock(&a->mu);
+    return n;
+}
+
+static void a2_scan_inner(web_anomaly_t *a, long long ts);
+
 static void a2_scan(web_anomaly_t *a, long long ts) {
+    a2_scan_inner(a, ts);
+    struct web_anom_priv *p = a->p;
+    if (p->sdb_state > 0) web_slothdb_close(&p->sdb);
+    p->sdb_state = 0;
+}
+
+static void a2_scan_inner(web_anomaly_t *a, long long ts) {
     struct web_anom_priv *p = a->p;
     p->a2_checks = 0;
     int n = id_rows(a, web_ident_firsts(a->cfg.ident,
                                         ts - WEB_ANOM_A2_WINDOW_S,
                                         p->firsts, p->firsts_cap),
                     p->firsts_cap);
+    if (a->cfg.sdb) n = a2_sdb_firsts(a, ts, n);
     int nnew = 0;
     unsigned long not_new = 0, deferred = 0;
     for (int i = 0; i < n; i++) {
@@ -1275,8 +1454,11 @@ static void minute_pass(web_anomaly_t *a, long long m, int latest,
         pthread_mutex_unlock(&a->mu);
     }
 
+    int a4_on = web_anomaly_a4_reason(a) == NULL;
+    p->a4_n = 0;
     if (observed) {
         evaluated[WEB_ANOM_A1_RATE] = evaluated[WEB_ANOM_A3_HOURS] = 1;
+        if (a4_on) evaluated[WEB_ANOM_A4_VENDOR] = 1;
         if (a->cfg.store) evaluated[WEB_ANOM_A9_PROTO] = 1;
         for (int k = 0; k < p->idx_n; k++) {
             const agg_t *g = &p->agg[p->idx[k]];
@@ -1285,7 +1467,10 @@ static void minute_pass(web_anomaly_t *a, long long m, int latest,
             const web_metric_t *md = &web_metric_defs[g->metric];
             double v = web_bl_value(g->metric, &pt, 60);
             if (md->kind == WEB_MK_PRESENCE) {
-                if (v >= 0.5) a3_score(a, g->key, t);
+                if (v >= 0.5) {
+                    a3_score(a, g->key, t);
+                    if (a4_on && g->metric == WM_DEV_PRESENT) a4_check(a, g->key);
+                }
                 continue;
             }
             if (md->kclass != WEB_KC_GLOBAL) a1_score(a, g->metric, g->key, t, v);
@@ -1293,6 +1478,7 @@ static void minute_pass(web_anomaly_t *a, long long m, int latest,
                 a9_check(a, g->metric, g->key, t);
             if (g->metric == WM_HOST_CONNS) fan_window(a, g->key, g->max, t);
         }
+        a4_scan(a);
         /* A counter with a baseline and no row counted nothing. */
         p->pairs_n = 0;
         web_baseline_each_counter(a->cfg.bl, collect_counter, p);
@@ -1449,6 +1635,21 @@ static void persist(web_anomaly_t *a) {
                           p->fan_ndel) != 0)
         bad = 1;
     p->fan_ndel = 0;
+    if (a->cfg.ptr) {
+        int np;
+        while ((np = web_ptr_take_dirty(a->cfg.ptr, p->ptr_out, 256)) > 0) {
+            long long gone = 0;
+            int ok = web_store_ptr_put(a->cfg.store, p->ptr_out, np,
+                                       a->cfg.ptr->cap, &gone) == 0;
+            web_ptr_note_persist(a->cfg.ptr, ok, gone);
+            if (!ok) {
+                web_ptr_redirty(a->cfg.ptr, p->ptr_out, np);
+                bad = 1;
+                break;
+            }
+            if (np < 256) break;
+        }
+    }
     if (bad) {
         pthread_mutex_lock(&a->mu);
         a->st.persist_errors++;
@@ -1705,6 +1906,10 @@ int web_anomaly_restore(web_anomaly_t *a, long long now_s) {
                            now_s - WEB_ANOM_A2_WINDOW_S - WEB_ANOM_A2_SKEW_S,
                            restore_rep, a) < 0)
         bad = 1;
+    if (a->cfg.ptr &&
+        web_store_ptr_load(a->cfg.store, a->cfg.ptr->cap, web_ptr_load_row,
+                           a->cfg.ptr) < 0)
+        bad = 1;
     return bad ? -1 : 0;
 }
 
@@ -1840,4 +2045,45 @@ void web_anomaly_stats(web_anomaly_t *a, web_anom_stats_t *out) {
         out->closed_kept += a->ep[i].state == WEB_EP_CLOSED;
     }
     pthread_mutex_unlock(&a->mu);
+}
+
+int web_anomaly_device_z(web_anomaly_t *a, const char *key, long long now_s,
+                         double *z) {
+    struct web_anom_priv *p = a->p;
+    int ok = 0;
+    pthread_mutex_lock(&a->mu);
+    int i = kv_find(&p->zl, 0, key);
+    if (i >= 0 && now_s - p->zl.e[i].t <= WEB_ANOM_Z_FRESH_S) {
+        *z = p->zv[i];
+        ok = 1;
+    }
+    pthread_mutex_unlock(&a->mu);
+    return ok;
+}
+
+int web_anomaly_key_count(web_anomaly_t *a, const char *key, int kind) {
+    int n = 0;
+    pthread_mutex_lock(&a->mu);
+    for (int i = 0; i < a->cap; i++) {
+        const web_anom_ep_t *e = &a->ep[i];
+        if ((e->state == WEB_EP_OPEN || e->state == WEB_EP_CLOSED) &&
+            !strcmp(e->key, key) && (kind < 0 || kind_index(e->rule) == kind))
+            n++;
+    }
+    pthread_mutex_unlock(&a->mu);
+    return n;
+}
+
+int web_anomaly_key_list(web_anomaly_t *a, const char *key,
+                         web_anom_ep_t *out, int max) {
+    int n = 0;
+    pthread_mutex_lock(&a->mu);
+    for (int pass = 0; pass < 2; pass++)
+        for (int i = 0; i < a->cap && n < max; i++) {
+            const web_anom_ep_t *e = &a->ep[i];
+            int want = pass == 0 ? WEB_EP_OPEN : WEB_EP_CLOSED;
+            if (e->state == want && !strcmp(e->key, key)) out[n++] = *e;
+        }
+    pthread_mutex_unlock(&a->mu);
+    return n;
 }

@@ -551,6 +551,21 @@ research-mcp:
 # generated under build/web/ and never committed; it depends only on the
 # web/ui/ bytes, so one copy serves every flag set. The embedder is
 # built with $(CFLAGS) too, so -Werror reaches it.
+#
+# The vendor table (M4, #162) is generated the same way, by
+# web/tools/oui_gen.c into build/web/web_oui_table.c, from the IEEE
+# registry CSVs the developer has fetched into web/data/ (ignored by
+# version control; web/README.md says where they come from). Neither
+# the CSVs nor the table are ever committed. Without them the build
+# still succeeds: the generator reads sloth's own 123-entry table out
+# of src/oui.c as text and /api/health says "vendor_table":"sloth". The
+# table is regenerated when the CSV list or a CSV's checksum changes
+# (the stamp), not only when a CSV is newer than the table.
+#
+# The test binary alone also links src/db_schema.c, sloth's schema as
+# text, so that the sloth.db reader's tests build their sloth.db from
+# sloth's own DDL rather than a fixture or a copy; slothweb itself
+# links no src/ file.
 WEB_MAIN        = web/src/main.c
 WEB_GEN_DIR     = build/web
 WEB_EMBED       = $(WEB_GEN_DIR)/embed
@@ -558,8 +573,16 @@ WEB_ASSETS_C    = $(WEB_GEN_DIR)/web_assets.c
 WEB_UI          = $(wildcard web/ui/*)
 WEB_TOOL_SRCS   = web/tools/sha256.c
 WEB_EMBED_SRCS  = web/tools/embed.c $(WEB_TOOL_SRCS)
-WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C)
-WEB_TEST_SRCS   = $(wildcard web/tests/*.c)
+WEB_OUI_DIR    ?= web/data
+WEB_OUI_CSVS    = $(wildcard $(WEB_OUI_DIR)/oui.csv $(WEB_OUI_DIR)/mam.csv \
+                             $(WEB_OUI_DIR)/oui36.csv $(WEB_OUI_DIR)/iab.csv)
+WEB_OUIGEN      = $(WEB_GEN_DIR)/oui_gen
+WEB_OUIGEN_SRCS = web/tools/oui_gen.c web/tools/oui_csv.c
+WEB_OUI_C       = $(WEB_GEN_DIR)/web_oui_table.c
+WEB_OUI_STAMP   = $(WEB_GEN_DIR)/oui.inputs
+WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C) \
+                  $(WEB_OUI_C)
+WEB_TEST_SRCS   = $(wildcard web/tests/*.c) web/tools/oui_csv.c src/db_schema.c
 WEB_LDLIBS      = -lpthread -lm
 ifeq ($(WITH_SQLITE),1)
     WEB_SQL_DEFS = -DWITH_SQLITE
@@ -579,8 +602,20 @@ $(WEB_ASSETS_C): $(WEB_EMBED) $(WEB_UI)
 	$(WEB_EMBED) web/ui index.html $@.tmp
 	mv $@.tmp $@
 
+$(WEB_OUIGEN): $(WEB_OUIGEN_SRCS) web/tools/oui_csv.h web/src/web_oui.h
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -Iweb/tools -Iweb/src -o $@ $(WEB_OUIGEN_SRCS)
+
+$(WEB_OUI_STAMP): STAMP = $(WEB_OUI_CSVS) $(if $(WEB_OUI_CSVS),$(shell cksum $(WEB_OUI_CSVS)))
+$(WEB_OUI_STAMP): FORCE
+	$(write_stamp)
+
+$(WEB_OUI_C): $(WEB_OUIGEN) $(WEB_OUI_STAMP) $(WEB_OUI_CSVS) src/oui.c
+	$(WEB_OUIGEN) $@.tmp src/oui.c $(WEB_OUI_CSVS)
+	mv $@.tmp $@
+
 .PHONY: web web-test
-web: $(WEB_ASSETS_C)
+web: $(WEB_ASSETS_C) $(WEB_OUI_C)
 	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -o slothweb $(WEB_MAIN) \
 	      $(WEB_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
 
@@ -588,9 +623,9 @@ web: $(WEB_ASSETS_C)
 # only; no host file, no running sloth, no name lookup, no network beyond
 # 127.0.0.1 and ::1. The test links the embedder's
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
-web-test: $(WEB_ASSETS_C)
+web-test: $(WEB_ASSETS_C) $(WEB_OUI_C)
 	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -Iweb/tests -Iweb/tools \
-	      -o slothweb_test \
+	      -Iinclude -o slothweb_test \
 	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
 	./slothweb_test
 

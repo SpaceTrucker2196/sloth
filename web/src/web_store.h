@@ -59,7 +59,7 @@
 #include "web_rollup.h"
 
 /* The version this build writes. */
-#define WEB_STORE_SCHEMA   3
+#define WEB_STORE_SCHEMA   4
 #define WEB_STORE_ERR_MAX  320
 #define WEB_DEFAULT_STORE  "./slothweb.db"
 /* --web-max-mb: the ceiling on the store's used pages. */
@@ -80,7 +80,7 @@
 #define WEB_STORE_EXPIRE_STEPS  256
 #define WEB_STORE_VACUUM_PAGES  256
 
-#define WEB_STORE_AN_STMTS 16
+#define WEB_STORE_AN_STMTS 18
 
 struct sqlite3;
 struct sqlite3_stmt;
@@ -319,6 +319,35 @@ int  web_store_any_before(web_store_t *s, int metric, const char *key,
  * -1. */
 int  web_store_hours_at(web_store_t *s, int metric, const char *key,
                         const long long *ts, int n, web_point_t *out);
+
+/* ── the passive PTR cache (v4, #162) ──────────────────────────────────
+ *
+ * On the writer connection, like the analysis state. A row is an
+ * address (canonical, web_key_ip) and the latest name a PTR answer on
+ * the wire gave it (web_ptr.h). */
+#define WEB_STORE_PTR_NAME_MAX 63
+typedef struct {
+    char      ip[WEB_KEY_MAX + 1];
+    char      name[WEB_STORE_PTR_NAME_MAX + 1];
+    long long first_seen, last_seen;
+} web_store_ptr_t;
+/* The cap most recently seen rows, each to fn (an address that is not
+ * canonical is skipped). Rows, or -1. */
+int  web_store_ptr_load(web_store_t *s, int cap,
+                        void (*fn)(void *ctx, const web_store_ptr_t *r),
+                        void *ctx);
+/* Upsert n rows, then keep only the cap most recently seen, in one
+ * transaction; *evicted gets the rows the bound dropped. 0, or -1. */
+int  web_store_ptr_put(web_store_t *s, const web_store_ptr_t *r, int n,
+                       int cap, long long *evicted);
+
+/* The presence strip of (metric, key) from the minute tier, on the
+ * read-only connection (the HTTP thread): bit i of bits, LSB first, is
+ * OR'd in when a minute row of max >= 0.5 lies in cell i of ncell cells
+ * of cell_s seconds from from. Cells newly set, or -1. */
+int  web_store_presence(web_store_t *s, int metric, const char *key,
+                        long long from, int ncell, int cell_s,
+                        unsigned char *bits);
 
 /* Test seams (web/tests/test_store.c); NULL and 0 in slothweb itself.
  * web_store_test_between_opens runs after the read-only identify and

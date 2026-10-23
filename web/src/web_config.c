@@ -1,5 +1,7 @@
 #include "web_config.h"
 
+#include "web_slothdb.h"
+
 #include "web_anomaly.h"
 #include "web_baseline.h"
 
@@ -130,6 +132,14 @@ long long web_config_store_min_mb(int max_keys) {
 }
 
 int web_config_check(const web_config_t *c, char *err, size_t errsz) {
+    /* sloth.db is read, the store written: one path for both would
+     * have slothweb refuse its own store at best. */
+    if (c->sloth_db[0] && !strcmp(c->sloth_db, c->store_path)) {
+        snprintf(err, errsz, "slothweb: --sloth-db and --store name the same "
+                             "file (%s): sloth.db is sloth's, the store is "
+                             "slothweb's own\n", c->sloth_db);
+        return -1;
+    }
     char where[INET6_ADDRSTRLEN + 16];
     web_format_bind(c->bind_family, c->bind_addr, c->bind_port,
                     where, sizeof(where));
@@ -215,7 +225,7 @@ void web_usage(FILE *out) {
         "usage: slothweb [--socket SPEC] [--web-bind ADDR:PORT]\n"
         "                [--web-allow CIDR]... [--web-allow-remote] [--strict]\n"
         "                [--store PATH] [--web-max-keys N] [--web-max-mb N]\n"
-        "                [--web-retain-days N] [--help]\n"
+        "                [--web-retain-days N] [--sloth-db PATH] [--help]\n"
         "\n"
         "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
         "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
@@ -248,11 +258,18 @@ void web_usage(FILE *out) {
         "                        below their estimate plus a week of hour rows is\n"
         "                        refused at start, naming the minimum.\n"
         "  --web-retain-days N   days of 1 min buckets kept (default 30, 1..400).\n"
+        "  --sloth-db PATH       sloth's own database (sloth --db), opened\n"
+        "                        read-only and never written, migrated or\n"
+        "                        given a side file: the Devices view, the\n"
+        "                        drawer's record and A2's durable first_seen.\n"
+        "                        Without it those say so and the rest runs.\n"
+        "                        Needs a WITH_SQLITE build.\n"
         "  --help                this text.\n"
         "\n"
         "Routes (GET and HEAD): / (the page), /api/health, /api/live,\n"
-        "/api/series, /api/keys, /api/metrics, /api/baseline and\n"
-        "/api/anomalies (JSON), /events (Server-Sent Events). Any other\n"
+        "/api/series, /api/keys, /api/metrics, /api/baseline,\n"
+        "/api/anomalies, /api/devices, /api/device/MAC and /api/lookup\n"
+        "(JSON), /events (Server-Sent Events). Any other\n"
         "path is 404; any\n"
         "other method is 405; a Host that is not localhost or an IP\n"
         "literal is 421; a header block over 8 KB is 431.\n");
@@ -281,6 +298,22 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 fprintf(err, "slothweb: %s\n", msg);
                 return -1;
             }
+        } else if (!strcmp(a, "--sloth-db")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (!v[0] || strlen(v) >= sizeof(c->sloth_db) - 16) {
+                fprintf(err, "slothweb: --sloth-db: empty or too long a path\n");
+                return -1;
+            }
+            if (!web_slothdb_available()) {
+                fprintf(err, "slothweb: --sloth-db needs SQLite; this slothweb "
+                             "was built with WITH_SQLITE=0\n");
+                return -1;
+            }
+            snprintf(c->sloth_db, sizeof(c->sloth_db), "%s", v);
         } else if (!strcmp(a, "--store")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);

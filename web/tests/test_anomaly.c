@@ -27,6 +27,9 @@
 #include "web_live.h"
 #include "web_rollup.h"
 #include "web_store.h"
+#include "sdb_gen.h"
+#include "web_oui.h"
+#include "web_slothdb.h"
 #include "wtest.h"
 
 #define HOUR 3600LL
@@ -490,7 +493,9 @@ static void test_listing_filters(void) {
     WT_LACKS(b, "\"key\":\"10.0.0.2\"");
     WT_ASSERT(web_anomaly_json(&an, 1000, 150, -1, b, sizeof(b)) > 0);
     WT_HAS(b, "\"key\":\"10.0.0.2\"");
-    WT_EQ(web_anomaly_kind_find("vendor"), -1);
+    /* "vendor" is A4's (M4), last so every M3 index stands. */
+    WT_EQ(web_anomaly_kind_find("vendor"), 8);
+    WT_EQ(web_anomaly_kind_find("vendors"), -1);
     fx_done();
 }
 
@@ -1725,6 +1730,201 @@ static void test_memory_only_engine(void) {
     fx_done();
 }
 
+/* ── M4 (#162): A4, A2's durable first_seen, |z| now ─────────────────── */
+
+static oui_build_t g_oui4;
+
+/* The engine again with M4's inputs: an OUI table, a sloth.db. */
+static void engine_m4(const web_oui_tab_t *oui, web_slothdb_t *sdb) {
+    web_anomaly_destroy(&an);
+    web_baseline_destroy(&bl);
+    g_cfg.oui = oui;
+    g_cfg.sdb = sdb;
+    engine();
+}
+
+static void present(const char *mac, long long t) {
+    row(WEB_TIER_MINUTE, WM_DEV_PRESENT, mac, t, 1, 1, 1);
+}
+
+/* A present MAC whose OUI is in no IEEE block is A4's, while it stays;
+ * Apple's OUI, a locally administered MAC and a group address are not.
+ * Seen red with a4_check()'s local/multicast test removed (the LA MAC
+ * opened an episode) and with web_oui_lookup()'s result ignored (every
+ * MAC did). */
+static void test_a4_unknown_vendor(void) {
+    fx(0, NULL);
+    WT_EQ(sdb_oui(&g_oui4, g_dir), 0);
+    engine_m4(&g_oui4.tab, NULL);
+    WT_ASSERT(web_anomaly_a4_reason(&an) == NULL);
+    step(T0);
+    for (int m = 0; m < 3; m++) {
+        present("a8:00:00:00:00:01", T0 + m * 60);
+        present("00:03:93:00:00:02", T0 + m * 60);
+        present("02:00:00:00:00:03", T0 + m * 60);
+        present("01:00:5e:00:00:04", T0 + m * 60);
+        step(T0 + (m + 1) * 60);
+    }
+    web_anom_ep_t *e = ep(WEB_ANOM_A4_VENDOR, "a8:00:00:00:00:01");
+    WT_ASSERT(e->state == WEB_EP_OPEN);
+    WT_EQ(count_rule(WEB_ANOM_A4_VENDOR), 1);
+    const char *j = list(T0 + 180);
+    WT_HAS(j, "\"rule\":\"A4\",\"kind\":\"vendor\"");
+    WT_HAS(j, "a8:00:00:00:00:01 present; its OUI a8:00:00 is in no IEEE");
+    WT_EQ(an.st.a4_checked, 12UL);
+    WT_EQ(an.st.a4_unknown, 3UL);
+    /* Gone two minutes: closed, as A3's presence episodes close. */
+    step(T0 + 240);
+    step(T0 + 300);
+    WT_ASSERT(e->state == WEB_EP_CLOSED);
+    /* The kind filter and the per-key readers. */
+    WT_EQ(web_anomaly_key_count(&an, "a8:00:00:00:00:01", -1), 1);
+    WT_EQ(web_anomaly_key_count(&an, "a8:00:00:00:00:01",
+                                web_anomaly_kind_find("vendor")), 1);
+    WT_EQ(web_anomaly_key_count(&an, "a8:00:00:00:00:01",
+                                web_anomaly_kind_find("rate")), 0);
+    web_anom_ep_t one[2];
+    WT_EQ(web_anomaly_key_list(&an, "a8:00:00:00:00:01", one, 2), 1);
+    oui_build_free(&g_oui4);
+    fx_done();
+}
+
+/* With only sloth's own table (no oui.csv at build time) A4 is off and
+ * says why: a miss in 117 entries is not an unknown vendor. Seen red
+ * with web_anomaly_a4_reason() returning NULL for any table (a8:..
+ * and every other OUI sloth lacks opened). */
+static void test_a4_off_without_the_ieee_table(void) {
+    fx(0, NULL);
+    oui_build_t sl;
+    oui_build_init(&sl);
+    WT_EQ(oui_build_sloth(&sl, "src/oui.c"), 0);
+    WT_EQ(oui_build_finish(&sl, "sloth"), 0);
+    engine_m4(&sl.tab, NULL);
+    WT_ASSERT(web_anomaly_a4_reason(&an) != NULL);
+    WT_HAS(web_anomaly_a4_reason(&an), "not the IEEE registry");
+    step(T0);
+    present("a8:00:00:00:00:01", T0);
+    step(T0 + 60);
+    WT_EQ(count_rule(WEB_ANOM_A4_VENDOR), 0);
+    WT_EQ(an.st.a4_checked, 0UL);
+    engine_m4(NULL, NULL);
+    WT_HAS(web_anomaly_a4_reason(&an), "no vendor table");
+    oui_build_free(&sl);
+    fx_done();
+}
+
+/* Made-up OUIs in a burst are one episode keyed "", not one each.
+ * Seen red with WEB_ANOM_A4_BURST raised to 64 (ten episodes). */
+static void test_a4_burst_is_one_episode(void) {
+    fx(0, NULL);
+    WT_EQ(sdb_oui(&g_oui4, g_dir), 0);
+    engine_m4(&g_oui4.tab, NULL);
+    step(T0);
+    for (int i = 0; i < 10; i++) {
+        char mac[24];
+        snprintf(mac, sizeof(mac), "a8:00:%02x:00:00:01", i);
+        present(mac, T0);
+    }
+    step(T0 + 60);
+    WT_EQ(count_rule(WEB_ANOM_A4_VENDOR), 1);
+    WT_ASSERT(ep(WEB_ANOM_A4_VENDOR, "")->state == WEB_EP_OPEN);
+    WT_HAS(list(T0 + 60), "10 present MACs with an OUI in no IEEE block");
+    oui_build_free(&g_oui4);
+    fx_done();
+}
+
+/* The device |z| the Devices table shows: A1's latest score of a device
+ * key's metric, fresh for WEB_ANOM_Z_FRESH_S; a host key's is not a
+ * device's. Seen red with z_note() not called (no z). */
+static void test_device_z_now(void) {
+    fx(0, NULL);
+    seed(WM_DEV_FRAMES, "00:11:22:33:44:55", T0, FIVE3, 3);
+    seed(WM_HOST_CONNS, "10.0.0.5", T0, FIVE3, 3);
+    step(T0);
+    counter(WM_DEV_FRAMES, "00:11:22:33:44:55", T0, 50);
+    gauge(WM_HOST_CONNS, "10.0.0.5", T0, 500);
+    step(T0 + 60);
+    double z = 0;
+    WT_EQ(web_anomaly_device_z(&an, "00:11:22:33:44:55", T0 + 60, &z), 1);
+    WT_ASSERT(z > 3);
+    WT_EQ(web_anomaly_device_z(&an, "10.0.0.5", T0 + 60, &z), 0);
+    WT_EQ(web_anomaly_device_z(&an, "00:11:22:33:44:55",
+                               T0 + 60 + WEB_ANOM_Z_FRESH_S + 61, &z), 0);
+    fx_done();
+}
+
+#ifdef WITH_SQLITE
+/* A2 with sloth.db: devices.first_seen, which sloth keeps as MIN()
+ * across its own restarts, outlives the stream's. A MAC sloth.db has
+ * known for a month is not new whatever the stream says (and with no
+ * sloth.db it would be: the same stream, the same engine, reported);
+ * one it first saw two hours ago is; one only sloth.db names (a wired
+ * device: no first_seen on the stream) is too; a randomised one never.
+ * Seen red with a2_sdb_old() returning 0 (the month-old MAC reported),
+ * with a2_sdb_firsts() not called (the wired MAC not), and with its
+ * locally-administered test removed (the randomised MAC reported). */
+static void test_a2_durable_first_seen(void) {
+    fx(1, NULL);
+    char p[128];
+    snprintf(p, sizeof(p), "%s/sloth.db", g_dir);
+    WT_EQ(sdb_make(p, 7, 1), 0);
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+             "INSERT INTO devices (mac,first_seen,last_seen) VALUES"
+             " ('00:11:22:33:44:77',%lld,%lld),('00:11:22:33:44:78',%lld,%lld),"
+             " ('00:11:22:33:44:79',%lld,%lld),('02:11:22:33:44:7a',%lld,%lld);",
+             T0 - 30 * 86400, T0, T0 - 2 * HOUR, T0, T0 - 3 * HOUR, T0,
+             T0 - HOUR, T0);
+    WT_EQ(sdb_exec(p, sql), 0);
+    web_slothdb_t sdb;
+    web_slothdb_init(&sdb, p, NULL);
+    engine_m4(NULL, &sdb);
+    step(T0);
+    probe("00:11:22:33:44:77", T0 - 60, T0);
+    probe("00:11:22:33:44:78", T0 - 2 * HOUR, T0);
+    step(T0 + 60);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "00:11:22:33:44:77")->state, WEB_EP_FREE);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "00:11:22:33:44:78")->state, WEB_EP_OPEN);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "00:11:22:33:44:79")->state, WEB_EP_OPEN);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "02:11:22:33:44:7a")->state, WEB_EP_FREE);
+    WT_HAS(list(T0 + 60), "00:11:22:33:44:79 first seen by sloth 181 min ago "
+                          "(sloth.db)");
+    WT_ASSERT(an.st.a2_sdb_old >= 1);
+    WT_EQ(an.st.a2_sdb_new, 1UL);
+    WT_EQ(an.st.a2_sdb_errors, 0UL);
+    /* sloth.db read-only throughout: no side file appeared. */
+    char l[512];
+    sdb_listing(g_dir, l, sizeof(l));
+    WT_LACKS(l, "sloth.db-wal");
+    WT_LACKS(l, "sloth.db-shm");
+    /* The same stream with no sloth.db: the month-old MAC is new. */
+    engine_m4(NULL, NULL);
+    step(T0 + 60);
+    probe("00:11:22:33:44:77", T0 - 60, T0 + 60);
+    step(T0 + 120);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "00:11:22:33:44:77")->state, WEB_EP_OPEN);
+    /* A sloth.db that is not there: the stream path, and the error is
+     * the reader's to report, not A2's. */
+    web_slothdb_t gone;
+    char q[160];
+    snprintf(q, sizeof(q), "%s/absent.db", g_dir);
+    web_slothdb_init(&gone, q, NULL);
+    engine_m4(NULL, &gone);
+    step(T0 + 120);
+    probe("00:11:22:33:44:88", T0 - 60, T0 + 120);
+    step(T0 + 180);
+    WT_EQ(ep(WEB_ANOM_A2_NEW, "00:11:22:33:44:88")->state, WEB_EP_OPEN);
+    web_anomaly_destroy(&an);
+    web_baseline_destroy(&bl);
+    g_cfg.sdb = NULL;
+    engine();
+    web_slothdb_destroy(&gone);
+    web_slothdb_destroy(&sdb);
+    unlink(p);
+    fx_done();
+}
+#endif
+
 void run_anomaly_tests(void) {
     WT_RUN(test_a1_fires_on_sustained_burst);
     WT_RUN(test_a1_two_minutes_never_open);
@@ -1787,4 +1987,11 @@ void run_anomaly_tests(void) {
     WT_RUN(test_a10_silent_while_disconnected);
     WT_RUN(test_a10_silent_before_the_limit);
     WT_RUN(test_memory_only_engine);
+    WT_RUN(test_a4_unknown_vendor);
+    WT_RUN(test_a4_off_without_the_ieee_table);
+    WT_RUN(test_a4_burst_is_one_episode);
+    WT_RUN(test_device_z_now);
+#ifdef WITH_SQLITE
+    WT_RUN(test_a2_durable_first_seen);
+#endif
 }

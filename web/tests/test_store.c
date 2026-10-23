@@ -51,11 +51,12 @@ static void test_schema_text_guardrail(void) {
     const char *v1 = web_store_step_sql(0);
     const char *v2 = web_store_step_sql(1);
     const char *v3 = web_store_step_sql(2);
-    WT_ASSERT(meta && v1 && v2 && v3);
-    WT_ASSERT(web_store_step_sql(3) == NULL);     /* v3 is current */
-    WT_EQ(WEB_STORE_SCHEMA, 3);
-    const char *both[4] = { meta, v1, v2, v3 };
-    for (int k = 0; k < 4; k++) {
+    const char *v4 = web_store_step_sql(3);
+    WT_ASSERT(meta && v1 && v2 && v3 && v4);
+    WT_ASSERT(web_store_step_sql(4) == NULL);     /* v4 is current */
+    WT_EQ(WEB_STORE_SCHEMA, 4);
+    const char *both[5] = { meta, v1, v2, v3, v4 };
+    for (int k = 0; k < 5; k++) {
         for (size_t i = 0; i < NFORBIDDEN; i++) {
             if (!strcmp(FORBIDDEN[i], "mic")) {
                 WT_ASSERT(strstr(both[k], "  mic ") == NULL);
@@ -85,10 +86,19 @@ static void test_schema_text_guardrail(void) {
     for (const char *p = v3; *p; p++) semis += *p == ';';
     WT_EQ(creates, 5);
     WT_EQ(semis, 5);
+    /* v4 (#162): passive_ptr and its index, nothing else. */
+    creates = semis = 0;
+    for (const char *p = v4; (p = strstr(p, "CREATE ")); p++) creates++;
+    for (const char *p = v4; *p; p++) semis += *p == ';';
+    WT_EQ(creates, 2);
+    WT_EQ(semis, 2);
+    WT_HAS(v4, "CREATE TABLE passive_ptr (");
+    WT_HAS(v4, "CREATE INDEX passive_ptr_last ON passive_ptr");
     /* Not IF NOT EXISTS: a step must fail on a name already taken. */
     WT_ASSERT(strstr(v1, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v2, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v3, "IF NOT EXISTS") == NULL);
+    WT_ASSERT(strstr(v4, "IF NOT EXISTS") == NULL);
 }
 
 #ifndef WITH_SQLITE
@@ -225,12 +235,14 @@ static void test_no_column_can_hold_secret_material(void) {
     }
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
-                     " AND UPPER(c.type)='TEXT'"), 14);
+                     " AND UPPER(c.type)='TEXT'"), 16);
     /* meta (name, value), series (metric, key), baseline (metric, key),
-     * episode (kind, metric, key, evidence), fanout (key, hist) and
-     * reported (kind, key): ten of them hold a canonical key, a
-     * catalogue name or numbers; evidence is our own sentence, with
-     * names the stream already carries (web_anomaly.h). */
+     * episode (kind, metric, key, evidence), fanout (key, hist),
+     * reported (kind, key) and passive_ptr (ip, name): all but two hold
+     * a canonical key, a catalogue name or numbers; evidence is our own
+     * sentence, with names the stream already carries (web_anomaly.h),
+     * and a passive_ptr name is a host name a PTR answer on the wire
+     * gave (web_ptr.h). */
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
                      " AND UPPER(c.type)='BLOB'"), 0);
@@ -412,7 +424,8 @@ static void test_v2_file_is_migrated(void) {
     make_v2(p, "");
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 3);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"),
+          WEB_STORE_SCHEMA);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
                      " AND name IN ('baseline','baseline_cell','episode',"
                      "'fanout','reported')"), 5);
@@ -439,6 +452,146 @@ static void test_v2_failed_step_leaves_file_unchanged(void) {
                      "'reported')"), 0);
     WT_EQ(raw_int(p, "SELECT x FROM fanout"), 7);
     WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    rm_store(p);
+}
+
+/* A v3 file as M3 left it: the v2 file and the v3 step, with an
+ * episode and a reported MAC in it. */
+static void make_v3(const char *p, const char *extra) {
+    char sql[8192];
+    snprintf(sql, sizeof(sql),
+             "PRAGMA application_id=%d; %s"
+             "INSERT INTO meta VALUES ('store','slothweb'),"
+             "('schema_version','3'); %s %s %s"
+             "INSERT INTO series VALUES (1,'host.rx_rate','10.0.0.1');"
+             "INSERT INTO minute VALUES (1,960,7,3,1,4);"
+             "INSERT INTO reported VALUES ('A2','02:00:00:00:00:01',100);"
+             "INSERT INTO episode VALUES (5,'A3','dev.present',"
+             "'00:11:22:33:44:55',2,70,70,'kept',10,20,1,0,20); %s",
+             WEB_STORE_APP_ID, web_store_meta_sql(), web_store_step_sql(0),
+             web_store_step_sql(1), web_store_step_sql(2), extra);
+    raw_exec(p, sql);
+}
+
+/* #162: v3 -> v4 adds passive_ptr and changes nothing that was there. */
+static void test_v3_file_is_migrated(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v3.db");
+    make_v3(p, "");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 4);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
+                     " name IN ('passive_ptr','passive_ptr_last')"), 2);
+    WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    WT_EQ(raw_int(p, "SELECT t FROM reported"), 100);
+    WT_EQ(raw_int(p, "SELECT score FROM episode WHERE id=5"), 70);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM passive_ptr"), 0);
+    rm_store(p);
+}
+
+/* The v3 step's failure: a v3 file already holding the name
+ * passive_ptr_last (an index of its own on minute) fails the step at
+ * its second statement, after passive_ptr was made. It stays at v3,
+ * keeps that index and its rows, and is left without passive_ptr: the
+ * step's first statement is rolled back with it. Seen red with the
+ * migration's ROLLBACK replaced by COMMIT (passive_ptr left behind). */
+static void test_v3_failed_step_leaves_file_unchanged(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v3bad.db");
+    make_v3(p, "CREATE INDEX passive_ptr_last ON minute (t);");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), -1);
+    WT_HAS(err, "unchanged from v3");
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 3);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
+                     " name='passive_ptr'"), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
+                     " name='passive_ptr_last' AND tbl_name='minute'"), 1);
+    WT_EQ(raw_int(p, "SELECT t FROM reported"), 100);
+    WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    rm_store(p);
+}
+
+static int g_ptrs;
+static web_store_ptr_t g_ptr_seen[8];
+static void count_ptr(void *ctx, const web_store_ptr_t *r) {
+    (void)ctx;
+    if (g_ptrs < 8) g_ptr_seen[g_ptrs] = *r;
+    g_ptrs++;
+}
+
+/* passive_ptr's own calls: an upsert keeps the first sight of a name
+ * and moves to a new name's, the bound keeps the cap most recently
+ * seen and counts what it dropped, and a row whose address is not
+ * canonical is not read back. Seen red with the prune's OFFSET one
+ * higher, and with the load's canonical check removed. */
+static void test_passive_ptr_rows(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "ptr.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_store_ptr_t r[3] = {
+        { "10.0.0.1", "nas.lan", 100, 100 },
+        { "10.0.0.2", "printer.lan", 110, 110 },
+        { "10.0.0.3", "tv.lan", 120, 120 },
+    };
+    long long gone = -1;
+    WT_EQ(web_store_ptr_put(&S, r, 3, 2, &gone), 0);
+    WT_EQ(gone, 1);                            /* 10.0.0.1, the oldest */
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM passive_ptr"), 2);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM passive_ptr WHERE ip='10.0.0.1'"), 0);
+    web_store_ptr_t again = { "10.0.0.2", "printer.lan", 105, 130 };
+    WT_EQ(web_store_ptr_put(&S, &again, 1, 2, &gone), 0);
+    WT_EQ(gone, 0);
+    WT_EQ(raw_int(p, "SELECT first_seen FROM passive_ptr WHERE ip='10.0.0.2'"), 105);
+    WT_EQ(raw_int(p, "SELECT last_seen FROM passive_ptr WHERE ip='10.0.0.2'"), 130);
+    web_store_ptr_t renamed = { "10.0.0.2", "laser.lan", 140, 140 };
+    WT_EQ(web_store_ptr_put(&S, &renamed, 1, 2, &gone), 0);
+    WT_EQ(raw_int(p, "SELECT first_seen FROM passive_ptr WHERE ip='10.0.0.2'"), 140);
+    web_store_close(&S);
+    raw_exec(p, "INSERT INTO passive_ptr VALUES ('010.0.0.7','x.lan',1,999)");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    g_ptrs = 0;
+    WT_EQ(web_store_ptr_load(&S, 8, count_ptr, NULL), 2);
+    WT_EQ(g_ptrs, 2);
+    WT_ASSERT(!strcmp(g_ptr_seen[0].ip, "10.0.0.2"));
+    WT_ASSERT(!strcmp(g_ptr_seen[0].name, "laser.lan"));
+    web_store_close(&S);
+    rm_store(p);
+}
+
+/* The presence strip's store half: minute rows of dev.present grouped
+ * into 10-minute cells, only rows with max >= 0.5, only the key asked
+ * for, nothing outside the range. Seen red with the max >= 0.5 test
+ * removed. */
+static void test_presence_cells(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "presence.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_qrow_t q[5];
+    memset(q, 0, sizeof(q));
+    const long long T = 1792627200;
+    long long ts[5] = { T, T + 660, T + 1199, T + 3000, T - 60 };
+    double mx[5] = { 1, 1, 1, 0, 1 };
+    for (int i = 0; i < 5; i++) {
+        q[i].tier = WEB_TIER_MINUTE;
+        q[i].metric = WM_DEV_PRESENT;
+        snprintf(q[i].key, sizeof(q[i].key), "00:11:22:33:44:55");
+        q[i].t = ts[i] - ts[i] % 60;
+        q[i].sum = q[i].min = q[i].max = mx[i];
+        q[i].n = 1;
+    }
+    WT_EQ(web_store_write(&S, q, 5), 0);
+    unsigned char bits[18];
+    memset(bits, 0, sizeof(bits));
+    WT_EQ(web_store_presence(&S, WM_DEV_PRESENT, "00:11:22:33:44:55", T, 144,
+                             600, bits), 2);
+    WT_EQ(bits[0], 0x03);                      /* cells 0 and 1 */
+    for (int i = 1; i < 18; i++) WT_EQ(bits[i], 0);
+    memset(bits, 0, sizeof(bits));
+    WT_EQ(web_store_presence(&S, WM_DEV_PRESENT, "00:11:22:33:44:66", T, 144,
+                             600, bits), 0);
+    web_store_close(&S);
     rm_store(p);
 }
 
@@ -571,9 +724,9 @@ static void refused_untouched(const char *p, const char *want) {
  * left exactly as it was. */
 static void test_newer_file_refused(void) {
     char p[128];
-    path_in(p, sizeof(p), "v4.db");
+    path_in(p, sizeof(p), "v5.db");
     raw_exec(p, "CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);"
-                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','4');"
+                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','5');"
                 "CREATE TABLE future (x INTEGER);");
     refused_untouched(p, "newer slothweb");
     rm_store(p);
@@ -1638,6 +1791,10 @@ void run_store_tests(void) {
     WT_RUN(test_v1_failed_step_leaves_file_unchanged);
     WT_RUN(test_v2_file_is_migrated);
     WT_RUN(test_v2_failed_step_leaves_file_unchanged);
+    WT_RUN(test_v3_file_is_migrated);
+    WT_RUN(test_v3_failed_step_leaves_file_unchanged);
+    WT_RUN(test_passive_ptr_rows);
+    WT_RUN(test_presence_cells);
     WT_RUN(test_analysis_state_round_trip);
     WT_RUN(test_newer_file_refused);
     WT_RUN(test_foreign_files_refused);
