@@ -795,6 +795,45 @@ static void test_dropped_counts_every_finding_past_the_cap(void) {
     sloth_clock_test_set(NULL, NULL);
 }
 
+/* #156 item 1: past the group cap, watch_findings() drops one per
+ * (iface, category) GROUP, not one per row. Rows are written straight
+ * into the snapshot so the cap can be filled without a 64-row table:
+ * BLE_FINDINGS_MAX distinct groups take every group slot, then two rows
+ * of one further group and one row of another arrive. Two groups were
+ * lost, so dropped is 2.
+ * Seen to fail: with `if (!seen) (*dropped)++;` made an unconditional
+ * `(*dropped)++;`, dropped reads 3 (the second row of the group counted
+ * again). */
+static void test_watch_drops_count_groups_not_rows_past_the_cap(void) {
+    pin_clocks();
+    memset(&g_s, 0, sizeof(g_s));
+    int n = 0;
+    for (; n < BLE_FINDINGS_MAX; n++) {
+        ble_device_t *d = &g_s.ble_devices[n];
+        addr_n(d->addr, 0x800 + (unsigned)n);
+        d->addr_type = 1;
+        d->last_seen = g_wall - 1;
+        snprintf(d->sensor_iface, sizeof(d->sensor_iface), "%s", BT_MONITOR_DEVICE);
+        snprintf(d->watch_cat, sizeof(d->watch_cat), "cat%d", n);
+    }
+    const char *late[3] = { "late", "late", "later" };
+    for (int j = 0; j < 3; j++, n++) {
+        ble_device_t *d = &g_s.ble_devices[n];
+        addr_n(d->addr, 0x900 + (unsigned)j);
+        d->addr_type = 1;
+        d->last_seen = g_wall - 1;
+        snprintf(d->sensor_iface, sizeof(d->sensor_iface), "%s", BT_MONITOR_DEVICE);
+        snprintf(d->watch_cat, sizeof(d->watch_cat), "%s", late[j]);
+    }
+    g_s.ble_device_count = n;
+    static ble_finding_t f[BLE_FINDINGS_MAX];
+    int dropped = -1;
+    ASSERT_EQ(ble_findings_build(&g_s, g_wall, f, BLE_FINDINGS_MAX, &dropped),
+              BLE_FINDINGS_MAX);
+    ASSERT_EQ(dropped, 2);
+    sloth_clock_test_set(NULL, NULL);
+}
+
 /* ── BLE_WATCHLIST ────────────────────────────────────────────────── */
 
 /* Test fixtures, not shipped rows (see the file comment). */
@@ -1261,6 +1300,7 @@ void run_ble_rules_tests(void) {
     RUN_TEST(test_hid_rotation_ignores_service_only_rows);
     RUN_TEST(test_hid_rotation_first_window_is_per_sensor);
     RUN_TEST(test_dropped_counts_every_finding_past_the_cap);
+    RUN_TEST(test_watch_drops_count_groups_not_rows_past_the_cap);
     RUN_TEST(test_shipped_table_is_empty_and_never_fires);
     RUN_TEST(test_categories_route_from_the_in_test_table);
     RUN_TEST(test_a_row_without_a_source_is_refused);
