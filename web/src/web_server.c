@@ -14,7 +14,7 @@
 
 #include "web_routes.h"
 
-enum { C_FREE = 0, C_READ, C_WRITE, C_LINGER, C_SSE };
+enum { C_FREE = 0, C_READ, C_WRITE, C_LINGER, C_SSE, C_SQL };
 
 /* sse_queue() admits up to WEB_SSE_MAX_UNSENT unsent bytes and then
  * copies them into out[]; an out[] smaller than that would be written
@@ -69,6 +69,7 @@ int web_server_open(web_server_t *s, const web_config_t *cfg,
     s->lfd = -1;
     s->wake[0] = s->wake[1] = -1;
     for (int i = 0; i < WEB_MAX_CONNS; i++) s->conns[i].fd = -1;
+    s->sql_conn = -1;
     s->cfg = *cfg;
     pthread_mutex_init(&s->mu, NULL);
     s->start_ms = now_ms();
@@ -130,6 +131,10 @@ void web_server_set_m4(web_server_t *s, const web_m4_t *m4) {
     s->m4 = m4;
 }
 
+void web_server_set_sqlbox(web_server_t *s, web_sqlbox_t *b) {
+    s->sql = b;
+}
+
 void web_server_stop(web_server_t *s) {
     char b = 1;
     ssize_t r = write(s->wake[1], &b, 1);
@@ -144,6 +149,11 @@ void web_server_stats(web_server_t *s, web_stats_t *out) {
 
 static void conn_close(web_server_t *s, web_conn_t *c) {
     if (c->state == C_SSE && s->sse_count > 0) s->sse_count--;
+    /* A client gone while its statement runs: the box is released when
+     * the answer arrives with nobody to take it (sql_ready()). */
+    if (c->state == C_SQL) s->sql_conn = -1;
+    if (c->sql_hold && s->sql) web_sqlbox_release(s->sql);
+    c->sql_hold = 0;
     if (c->fd >= 0) close(c->fd);
     c->fd = -1;
     c->state = C_FREE;
@@ -188,6 +198,7 @@ static void health_now(web_server_t *s, web_health_t *h) {
     h->wall_s      = (long long)time(NULL);
     h->anomaly     = s->anomaly;
     h->m4          = s->m4;
+    h->sql         = s->sql;
 }
 
 /* Send what a stream has queued. A client that went away is closed and
@@ -329,6 +340,16 @@ static void conn_route(web_server_t *s, web_conn_t *c, const web_req_t *rq) {
         else   sse_flush(s, c);
         return;
     }
+    if (r.kind == WEB_R_SQL) {
+        /* Nothing to write until the box answers; the budget runs from
+         * now, as it would for any other answer, and is the statement's
+         * timeout plus the time to send what it found. */
+        c->state = C_SQL;
+        c->deadline_ms = now_ms() + s->cfg.timeout_ms +
+                         (s->sql ? s->sql->timeout_ms : 0);
+        s->sql_conn = (int)(c - s->conns);
+        return;
+    }
     c->body = r.body;
     c->body_len = r.body_len;
     c->body_off = 0;
@@ -410,6 +431,11 @@ static void conn_write(web_server_t *s, web_conn_t *c) {
         else                         c->body_off += (size_t)n;
     }
     STAT_INC(s, served);
+    /* The SQL box's answer is sent: the box is free for the next one
+     * now, before the client has even seen the end of this one. */
+    if (c->sql_hold && s->sql) web_sqlbox_release(s->sql);
+    c->sql_hold = 0;
+    c->body = NULL;
     /* Half-close and drain: closing with unread request bytes queued
      * (a body, or the tail of an oversize header) makes the kernel send
      * RST, which can destroy the response before the client reads it. */
@@ -465,6 +491,30 @@ static void conn_read(web_server_t *s, web_conn_t *c) {
     conn_write(s, c);
 }
 
+/* The SQL box's pipe said its answer is ready: hand it to the slot that
+ * asked, or release the box when that client has gone. */
+static void sql_ready(web_server_t *s) {
+    const unsigned char *resp;
+    size_t len;
+    int status;
+    if (!web_sqlbox_take(s->sql, &resp, &len, &status)) return;
+    web_conn_t *c = s->sql_conn >= 0 ? &s->conns[s->sql_conn] : NULL;
+    s->sql_conn = -1;
+    if (!c || c->fd < 0 || c->state != C_SQL) {
+        web_sqlbox_release(s->sql);
+        return;
+    }
+    count_status(s, status);
+    c->out_len = c->out_off = 0;
+    c->body = resp;
+    c->body_len = len;
+    c->body_off = 0;
+    c->sql_hold = 1;
+    c->state = C_WRITE;
+    c->deadline_ms = now_ms() + s->cfg.timeout_ms;
+    conn_write(s, c);
+}
+
 static void conn_timeout(web_server_t *s, web_conn_t *c) {
     if (c->state == C_LINGER) { conn_close(s, c); return; }
     STAT_INC(s, timeouts);
@@ -480,8 +530,8 @@ static void conn_timeout(web_server_t *s, web_conn_t *c) {
 }
 
 int web_server_run(web_server_t *s) {
-    struct pollfd pfd[2 + WEB_MAX_CONNS];
-    int           idx[2 + WEB_MAX_CONNS];
+    struct pollfd pfd[3 + WEB_MAX_CONNS];
+    int           idx[3 + WEB_MAX_CONNS];
 
     for (;;) {
         int np = 0;
@@ -497,6 +547,9 @@ int web_server_run(web_server_t *s) {
         pfd[np].fd = paused ? -1 : s->lfd;
         pfd[np].events = POLLIN; idx[np++] = -2;
         if (paused && s->accept_resume_ms < next) next = s->accept_resume_ms;
+        /* The SQL box's pipe; -1 (skipped) without one. */
+        pfd[np].fd = web_sqlbox_fd(s->sql);
+        pfd[np].events = POLLIN; idx[np++] = -3;
         for (int i = 0; i < WEB_MAX_CONNS; i++) {
             web_conn_t *c = &s->conns[i];
             if (c->fd < 0) continue;
@@ -511,6 +564,8 @@ int web_server_run(web_server_t *s) {
             }
             if (c->deadline_ms <= now) { conn_timeout(s, c); continue; }
             if (c->deadline_ms < next) next = c->deadline_ms;
+            /* Waiting on the box: nothing to read or write yet. */
+            if (c->state == C_SQL) continue;
             pfd[np].fd = c->fd;
             pfd[np].events = c->state == C_WRITE ? POLLOUT : POLLIN;
             idx[np++] = i;
@@ -528,7 +583,8 @@ int web_server_run(web_server_t *s) {
             return 0;
         }
         if (pfd[1].revents & POLLIN) accept_ready(s);
-        for (int k = 2; k < np; k++) {
+        if (pfd[2].revents & POLLIN) sql_ready(s);
+        for (int k = 3; k < np; k++) {
             if (!pfd[k].revents) continue;
             web_conn_t *c = &s->conns[idx[k]];
             if (c->fd < 0) continue;

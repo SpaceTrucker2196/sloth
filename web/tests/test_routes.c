@@ -27,7 +27,7 @@ static void inm(web_req_t *rq, const char *v) {
     snprintf(rq->inm, sizeof(rq->inm), "%s", v);
 }
 
-static const web_health_t H = { 42, 2, 17, NULL, 0, NULL, 0, NULL, NULL };
+static const web_health_t H = { 42, 2, 17, NULL, 0, NULL, 0, NULL, NULL, NULL };
 
 /* Case-insensitive search over the first len bytes. */
 static const char *ci_find(const char *hay, size_t len, const char *needle) {
@@ -380,10 +380,10 @@ static void test_health_json(void) {
     WT_EQ(r.kind, WEB_R_ONESHOT);
     WT_ASSERT(r.body == NULL);
     static const char body[] =
-        "{\"service\":\"slothweb\",\"milestone\":\"M4\",\"uptime_s\":42,"
+        "{\"service\":\"slothweb\",\"milestone\":\"M5\",\"uptime_s\":42,"
         "\"socket\":\"none\",\"last_record_age_s\":null,"
         "\"db\":\"none\",\"db_schema\":null,\"db_rows\":null,"
-        "\"db_supported\":[1,7],"
+        "\"db_supported\":[1,7],\"sql\":false,"
         "\"store\":\"none\",\"anomaly\":null,\"sse_clients\":2,"
         "\"tick_seq\":17}\n";
     WT_HAS(out, "Content-Type: application/json\r\n");

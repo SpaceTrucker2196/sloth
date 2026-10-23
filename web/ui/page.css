@@ -148,6 +148,23 @@ input[type=search] { font: inherit; font-size: 12px; color: var(--ink); backgrou
 .lst li .tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 canvas.strip { display: block; width: 100%; height: 18px; margin: 4px 0 var(--gap); }
 .card.go { cursor: pointer; }
+/* WiFi and History (§8.8, §8.10). */
+canvas.wfall { display: block; width: 100%; height: 280px; margin-top: var(--gap); }
+canvas.ovw { display: block; width: 100%; height: 72px; margin-top: var(--gap); cursor: crosshair; }
+.aprow { display: grid; grid-template-columns: 19ch minmax(12ch, 1fr) 4ch 5ch 20ch 12ch 16ch 9ch 11ch; gap: 6px; align-items: center; font-size: 12px; white-space: nowrap; padding: 1px 0; }
+.aprow > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.aprow .warn, .aprow.multi .c-ssid { color: var(--sev-warn); }
+.aphist { padding-left: 21ch; }
+.hrow { display: grid; grid-template-columns: 19ch 16ch minmax(10ch, 1fr) 11ch 11ch 146px; gap: 6px; align-items: center; height: 22px; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.hrow > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.hrow canvas { display: block; width: 144px; height: 12px; }
+.hrow .rnd { color: var(--muted); }
+textarea { font: inherit; font-size: 12px; color: var(--ink); background: var(--bg); border: 1px solid var(--rule-hi); width: 100%; margin-top: var(--gap); }
+.qout { overflow: auto; max-height: 50vh; margin-top: var(--gap); }
+table.qt { border-collapse: collapse; }
+table.qt th { color: var(--muted); font-weight: normal; text-align: left; border-bottom: 1px solid var(--rule); padding: 0 var(--gap); }
+table.qt td { padding: 0 var(--gap); white-space: pre; }
+table.qt td.nul { color: var(--faint); }
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; grid-template-areas: "strip" "side" "main"; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }

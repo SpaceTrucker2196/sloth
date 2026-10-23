@@ -13,16 +13,16 @@
 <body>
 <div class="app" id="app">
   <aside class="side">
-    <div class="brand">SLOTH<small>web <span id="milestone">M4</span></small></div>
+    <div class="brand">SLOTH<small>web <span id="milestone">M5</span></small></div>
     <ol class="views">
       <li class="on" id="nav-overview"><span class="k">1</span>Overview</li>
       <li class="go" id="nav-activity"><span class="k">2</span>Activity</li>
       <li class="go" id="nav-devices"><span class="k">3</span>Devices</li>
       <li class="go" id="nav-anomalies"><span class="k">4</span>Anomalies</li>
-      <li><span class="k">5</span>WiFi</li>
+      <li class="go" id="nav-wifi"><span class="k">5</span>WiFi</li>
       <li><span class="k">6</span>Alerts</li>
       <li><span class="k">7</span>Flows</li>
-      <li><span class="k">8</span>History</li>
+      <li class="go" id="nav-history"><span class="k">8</span>History</li>
       <li class="go" id="nav-lookup"><span class="k">9</span>Lookup</li>
     </ol>
     <div class="foot">
@@ -155,6 +155,88 @@
     <section class="panel">
       <div class="label">card <span class="sub" id="l-src"></span></div>
       <div id="l-card"></div>
+    </section>
+   </div>
+   <div id="v-wifi" hidden>
+    <section class="panel controls" aria-label="wifi controls">
+      <label>cells <select id="w-metric">
+        <option value="ap_count" selected>APs per channel</option>
+        <option value="ctrl_total">control frames</option>
+      </select></label>
+      <label>window <select id="w-win">
+        <option value="3600" selected>1 h</option>
+        <option value="21600">6 h</option>
+        <option value="86400">24 h</option>
+        <option value="604800">7 d</option>
+        <option value="2592000">30 d</option>
+      </select></label>
+      <span class="sub" id="w-note">from slothweb.db's wifi.* series and sloth.db's beacon_aps; nothing is sent</span>
+    </section>
+    <section class="panel">
+      <div class="label">channel x time <span class="sub" id="w-heat-note"></span></div>
+      <canvas class="wfall" id="w-heat" aria-label="channels by time: 2.4, 5 and 6 GHz grouped, a rule between bands"></canvas>
+      <div class="sub">rows: channels, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), a rule between bands; colour: the heat ramp against the busiest cell in view</div>
+    </section>
+    <section class="panel">
+      <div class="label">access points <span class="sub" id="w-aps-count"></span></div>
+      <div class="controls"><label>sort <select id="w-sort">
+        <option value="last" selected>last seen</option>
+        <option value="ssids">ssid count</option>
+        <option value="karma">karma score</option>
+        <option value="bssid">bssid</option>
+      </select></label></div>
+      <div class="aprow dhead" aria-hidden="true"><span>bssid</span><span>ssid</span><span>ch</span><span>dBm</span><span>enc / akm</span><span>mfp</span><span>downgrade</span><span>karma</span><span>last</span></div>
+      <div id="w-aps"></div>
+      <div class="sub">an ssid count above 1 (KARMA, multi-VAP) is in the warning colour with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers</div>
+    </section>
+    <section class="row2">
+      <div class="panel">
+        <div class="label">deauth timeline <span class="sub" id="w-da-note"></span></div>
+        <canvas class="chart" id="w-deauth" aria-label="deauthentication frames per bssid, flood episodes marked"></canvas>
+        <div class="sub">bars: deauth frames per bssid per cell; red behind them: DEAUTH_FLOOD episodes from sloth.db's alerts</div>
+      </div>
+      <div class="panel">
+        <div class="label">probe clients <span class="sub" id="w-pc-note"></span></div>
+        <canvas class="chart" id="w-probe" aria-label="probe clients over time, over their baseline band"></canvas>
+      </div>
+    </section>
+   </div>
+   <div id="v-history" hidden>
+    <section class="panel">
+      <div class="label">the last 30 days <span class="sub" id="h-range"></span></div>
+      <canvas class="ovw" id="h-strip" aria-label="30 days: devices first seen and alerts begun; drag to pick a range"></canvas>
+      <div class="sub">drag to pick a range; top: devices first seen, bottom: alerts begun; white ticks: survey sessions, one click each for what was new</div>
+      <div class="chips" id="h-sessions"></div>
+    </section>
+    <section class="panel">
+      <div class="label">new since the previous session <span class="sub" id="h-new-note"></span></div>
+      <div id="h-new"></div>
+    </section>
+    <section class="panel">
+      <div class="label">who was here <span class="sub" id="h-dev-count"></span></div>
+      <div id="h-devs"></div>
+    </section>
+    <section class="row2">
+      <div class="panel">
+        <div class="label">alerts in the range <span class="sub" id="h-al-count"></span></div>
+        <ol class="alerts" id="h-alerts"></ol>
+      </div>
+      <div class="panel">
+        <div class="label">anomalies in the range</div>
+        <div class="cards" id="h-anoms"></div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="label">flows in the range</div>
+      <ol class="alerts" id="h-flows"></ol>
+    </section>
+    <section class="panel" id="h-sql" hidden>
+      <div class="label">sql over sloth.db, read-only <span class="sub" id="q-note"></span></div>
+      <div class="controls"><label>recipe <select id="q-recipe"></select></label>
+      <button type="button" id="q-run">run</button></div>
+      <textarea id="q-sql" rows="6" spellcheck="false" autocomplete="off" aria-label="one SELECT or WITH statement"></textarea>
+      <div class="sub">one SELECT or WITH statement, 5 s, 10,000 rows; credential columns (usernames, identities, cookies, alert keys and details) are withheld</div>
+      <div class="qout" id="q-out"></div>
     </section>
    </div>
    <div id="v-activity" hidden>

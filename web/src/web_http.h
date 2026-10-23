@@ -20,9 +20,14 @@
  * 200 where a 304 would have done. */
 #define WEB_PATH_MAX 1024
 #define WEB_INM_MAX  512
-/* The query string, kept for the M2 series routes (web_series.h); a
- * longer one is not kept (query_long), and those routes answer 400. */
-#define WEB_QUERY_MAX 512
+/* The query string, kept for the routes that take parameters; a longer
+ * one is not kept (query_long). Sized for the SQL box (M5, #163): a
+ * WEB_SQL_MAX_BYTES statement percent-encoded is longer than any other
+ * route's whole query, and every route but /api/query refuses a query
+ * of WEB_QUERY_ROUTE_MAX bytes or more as "query_too_long", as the
+ * 512-byte buffer once made them. */
+#define WEB_QUERY_MAX       6144
+#define WEB_QUERY_ROUTE_MAX 512
 /* A Host value (or an absolute-form authority) longer than this is not
  * kept: the longest acceptable one, a bracketed IPv6 literal with a
  * port, is 47 bytes. */

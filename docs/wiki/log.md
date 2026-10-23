@@ -4840,3 +4840,12 @@ twin added on 2026-10-22 is gone before it shipped; `ble_adv_reports`,
 sensor's observation count now includes 0x0D events.
 [cli-reference.md](cli-reference.md) — `--bt-monitor` names both
 report events.
+
+- 2026-10-23 — [[slothweb]]: M5 (#163). WiFi view (channel waterfall,
+  AP table with AKM names, downgrade flags, SSID history and KARMA,
+  deauth timeline with DEAUTH_FLOOD episodes, probe clients over their
+  band), History view (30 d strip and range picker, who was here,
+  alerts, anomalies and flows in the range, sessions and `--report`'s
+  new-since), and the SQL box behind `--web-allow-sql` with
+  [[sqlite-schema]]'s recipes extracted at build time; the credential
+  columns withheld from both sloth.db readers, the box included.

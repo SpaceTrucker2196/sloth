@@ -13,11 +13,9 @@
 
 /* ── the query string ────────────────────────────────────────────────── */
 
-typedef struct {
-    const char *name;
-    char        val[WEB_PARAM_MAX + 1];
-    int         seen;
-} param_t;
+typedef web_param_t param_t;
+
+static int parse_secs(const char *s, long long *out);
 
 static int hexv(int c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -70,6 +68,15 @@ static int parse_params(const char *query, param_t *ps, int np, char *err,
         p = amp + 1;
     }
     return 0;
+}
+
+int web_params_parse(const char *query, web_param_t *ps, int np, char *err,
+                     size_t errsz) {
+    return parse_params(query, ps, np, err, errsz);
+}
+
+int web_param_secs(const char *s, long long *out) {
+    return parse_secs(s, out);
 }
 
 static int parse_secs(const char *s, long long *out) {
@@ -146,23 +153,22 @@ static const char *kind_word(int k) {
                                                                   : "gauge";
 }
 
-size_t web_series_json(web_tsdb_t *t, const web_series_q_t *q, char *out,
-                       size_t cap) {
-    const int max = WEB_SERIES_MAX_POINTS;
+int web_series_points(web_tsdb_t *t, int tier, int metric, const char *key,
+                      long long from, long long to, web_point_t *m, int max,
+                      int *more_out, int *store_err) {
     web_point_t *a = malloc((size_t)max * sizeof(*a));
     web_point_t *b = malloc((size_t)max * sizeof(*b));
-    web_point_t *m = malloc((size_t)max * sizeof(*m));
-    if (!a || !b || !m) { free(a); free(b); free(m); return 0; }
-    int na = 0, nb = 0, more_a = 0, more_b = 0, store_err = 0;
-    int use_store = t->store && t->store->rd;
-    if (use_store) {
-        na = web_store_query(t->store, q->tier, q->metric, q->key, q->from,
-                             q->to, a, max, &more_a);
-        if (na < 0) { na = 0; store_err = 1; }
+    *more_out = 0;
+    *store_err = 0;
+    if (!a || !b) { free(a); free(b); return -1; }
+    int na = 0, nb = 0, more_a = 0, more_b = 0;
+    if (t->store && t->store->rd) {
+        na = web_store_query(t->store, tier, metric, key, from, to, a, max,
+                             &more_a);
+        if (na < 0) { na = 0; *store_err = 1; }
     }
-    if (q->tier == WEB_TIER_FINE)
-        nb = web_rollup_fine(t->ru, q->metric, q->key, q->from, q->to, 1,
-                             b, max, &more_b);
+    if (tier == WEB_TIER_FINE)
+        nb = web_rollup_fine(t->ru, metric, key, from, to, 1, b, max, &more_b);
 
     /* Both newest first; one point per bucket, the fuller one when both
      * have it. In one process lifetime the store's row for a bucket is a
@@ -180,6 +186,22 @@ size_t web_series_json(web_tsdb_t *t, const web_series_q_t *q, char *out,
         else { m[n++] = a[i].n >= b[j].n ? a[i] : b[j]; i++; j++; }
     }
     if (i < na || j < nb) more = 1;
+    *more_out = more;
+    free(a);
+    free(b);
+    return n;
+}
+
+size_t web_series_json(web_tsdb_t *t, const web_series_q_t *q, char *out,
+                       size_t cap) {
+    const int max = WEB_SERIES_MAX_POINTS;
+    web_point_t *m = malloc((size_t)max * sizeof(*m));
+    if (!m) return 0;
+    int more = 0, store_err = 0;
+    int use_store = t->store && t->store->rd;
+    int n = web_series_points(t, q->tier, q->metric, q->key, q->from, q->to,
+                              m, max, &more, &store_err);
+    if (n < 0) { free(m); return 0; }
 
     const web_metric_t *md = &web_metric_defs[q->metric];
     web_jw_t w;
@@ -217,7 +239,7 @@ size_t web_series_json(web_tsdb_t *t, const web_series_q_t *q, char *out,
         web_jw_raw(&w, "]");
     }
     web_jw_raw(&w, "]}\n");
-    free(a); free(b); free(m);
+    free(m);
     return w.overflow ? 0 : w.len;
 }
 

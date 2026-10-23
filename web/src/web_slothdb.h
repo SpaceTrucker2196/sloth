@@ -78,6 +78,7 @@
 #include "web_oui.h"
 #include "web_query.h"
 #include "web_rollup.h"
+#include "web_secret.h"
 
 #define WEB_SDB_SCHEMA_MIN 1
 #define WEB_SDB_SCHEMA_MAX 7
@@ -255,6 +256,93 @@ typedef struct {
 } web_sdb_new_t;
 int  web_sdb_new_macs(web_sdb_conn_t *c, long long since, web_sdb_new_t *out,
                       int max);
+
+/* ── M5 reads (#163): the WiFi and History views ─────────────────────── */
+
+/* sloth's ALERT_TYPE_DEAUTH_FLOOD (include/sloth_alerts.def row order;
+ * web/tests/test_wifi.c holds it to sloth's enum). */
+#define WEB_ALERT_DEAUTH_FLOOD 1
+
+typedef struct {
+    char      bssid[WEB_KEY_MAX + 1];
+    char      ssid[WEB_SDB_TEXT_MAX + 1];
+    char      enc[WEB_SDB_TEXT_MAX + 1];
+    char      akm[WEB_SDB_TEXT_MAX + 1];
+    char      vendor[WEB_SDB_TEXT_MAX + 1];
+    char      phy[WEB_SDB_TEXT_MAX + 1];
+    int       has_signal, signal_dbm;
+    long long channel, akm_bits, mfp, downgrade, has_wps;
+    long long first_seen, last_seen;
+    long long ssid_count;            /* beacon_ap_ssids rows */
+    int       has_karma;             /* a karma_candidates row */
+    long long k_score, k_ssids, k_overlap, k_ie_uniform;
+} web_sdb_ap_t;
+
+typedef int (*web_sdb_ap_fn)(void *ctx, const web_sdb_ap_t *a);
+
+enum { WEB_AP_SORT_LAST = 0, WEB_AP_SORT_SSIDS, WEB_AP_SORT_KARMA,
+       WEB_AP_SORT_BSSID, WEB_AP_SORT_COUNT };
+
+/* beacon_aps with each one's SSID count and KARMA score, sorted, at
+ * most limit from offset. Rows given, or -1; 0 when the file has no
+ * beacon_aps with the columns read. */
+int  web_sdb_aps(web_sdb_conn_t *c, int sort, long long limit,
+                 long long offset, web_sdb_ap_fn fn, void *ctx);
+/* The SSIDs bssid has advertised (a = ssid), newest first. */
+int  web_sdb_ap_ssids(web_sdb_conn_t *c, const char *bssid, int max,
+                      web_sdb_item_fn fn, void *ctx);
+/* DEAUTH_FLOOD episodes against bssid overlapping [from, to): n2 = sev,
+ * n3 = count. Matched on alerts.key (predicate-only, a canonical MAC
+ * bound) and the type; oldest first. */
+int  web_sdb_deauth_floods(web_sdb_conn_t *c, const char *bssid,
+                           long long from, long long to, int max,
+                           web_sdb_item_fn fn, void *ctx);
+
+typedef struct {
+    long long id, started, ended;    /* ended -1: never recorded */
+    char      label[WEB_SDB_TEXT_MAX + 1];
+} web_sdb_session_t;
+
+/* Sessions, newest first (by started, then id), at most max into out.
+ * Count, or -1; 0 when the file has no sessions table. */
+int  web_sdb_sessions(web_sdb_conn_t *c, web_sdb_session_t *out, int max);
+/* One session by id, the one before it (sloth's "previous": of the
+ * sessions recorded before it, the latest started) and the next one's
+ * start (-1 none). 1 found (*has_prev set), 0 none, -1. */
+int  web_sdb_session_pair(web_sdb_conn_t *c, long long id,
+                          web_sdb_session_t *s, web_sdb_session_t *prev,
+                          int *has_prev, long long *next_started);
+
+enum { WEB_NEW_AP = 0, WEB_NEW_DEVICE, WEB_NEW_PROBE, WEB_NEW_KINDS };
+/* --report's "New since last survey" (src/db.c db_new_since(), and
+ * db_count_new_since()): the kind's rows with since <= first_seen
+ * (and first_seen <= until, when until >= 0), newest first, at most max
+ * (a = identity, b = label), and their count in *total. Rows, or -1. */
+int  web_sdb_new_since(web_sdb_conn_t *c, int kind, long long since,
+                       long long until, int max, web_sdb_item_fn fn,
+                       void *ctx, long long *total);
+
+/* Devices whose [first_seen, last_seen] overlaps [from, to], newest
+ * last_seen first, at most limit from offset. */
+int  web_sdb_devices_between(web_sdb_conn_t *c, long long from, long long to,
+                             long long limit, long long offset,
+                             web_sdb_dev_fn fn, void *ctx);
+/* Alerts whose episode overlaps [from, to): a = title, b = match_ip,
+ * n1 = type, n2 = sev, n3 = count. Newest first. */
+int  web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
+                            int max, web_sdb_item_fn fn, void *ctx);
+/* Flows (ssh_flows, rdp_flows, smb_sessions, snmp_flows) overlapping
+ * [from, to): a = src, b = dst, n1 = WEB_FLOW_*, n2 = their count
+ * (banners, connect requests, messages, PDUs), n3 = the server port
+ * (smb) or the SNMP version. Newest first. */
+enum { WEB_FLOW_SSH = 0, WEB_FLOW_RDP, WEB_FLOW_SMB, WEB_FLOW_SNMP,
+       WEB_FLOW_KINDS };
+int  web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,
+                           int max, web_sdb_item_fn fn, void *ctx);
+/* Per cell of ncell cells of cell_s seconds from from: devices first
+ * seen in it (devs) and alert episodes begun in it (alerts). 0, or -1. */
+int  web_sdb_overview(web_sdb_conn_t *c, long long from, int cell_s,
+                      int ncell, long long *devs, long long *alerts);
 
 /* Test seams: the flags and the URI mode of the last open
  * (web/tests/test_slothdb.c). */

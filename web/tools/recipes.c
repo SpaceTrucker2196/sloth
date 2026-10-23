@@ -1,0 +1,142 @@
+/* Build-time recipe extractor (#163). Not part of slothweb.
+ *
+ *   recipes IN.md OUT.c
+ *
+ * The SQL box (web_sqlbox.h) offers the query recipes of
+ * docs/wiki/sqlite-schema.md, and they are taken from that page at
+ * build time rather than copied by hand, so the box and the page cannot
+ * drift: a recipe edited in the wiki is the recipe the box offers after
+ * the next build, and web/tests/test_sqlbox.c fails if the two disagree.
+ *
+ * A recipe is a `sqlite3 sloth.db "..."` command inside a ```sh fenced
+ * block. Its SQL is the text between the double quotes, kept byte for
+ * byte (newlines and indentation included); its title is the run of
+ * `#` comment lines just before it. A recipe with a double quote or a
+ * backslash in its SQL, an unterminated one, or a page with none is an
+ * error: the build stops rather than offer a recipe cut short.
+ *
+ * OUT.c is generated under build/ and never committed. */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define MD_MAX     (1024 * 1024)
+#define RECIPE_MAX 64
+#define TITLE_MAX  512
+
+typedef struct {
+    char  title[TITLE_MAX];
+    char *sql;
+} recipe_t;
+
+static const char CMD[] = "sqlite3 sloth.db \"";
+
+/* A C string literal: every byte outside plain printable ASCII as an
+ * octal escape, and '?' escaped so no trigraph can form under -std=c99. */
+static void c_string(FILE *o, const char *s, size_t n) {
+    fputc('"', o);
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '\\' || c == '"' || c == '?') fprintf(o, "\\%c", c);
+        else if (c == '\n') fputs("\\n\"\n    \"", o);
+        else if (c < 0x20 || c >= 0x7f) fprintf(o, "\\%03o", c);
+        else fputc(c, o);
+    }
+    fputc('"', o);
+}
+
+int main(int argc, char **argv) {
+    if (argc != 3) {
+        fprintf(stderr, "usage: recipes IN.md OUT.c\n");
+        return 2;
+    }
+    FILE *f = fopen(argv[1], "rb");
+    if (!f) { fprintf(stderr, "recipes: cannot open %s\n", argv[1]); return 1; }
+    char *md = malloc(MD_MAX + 1);
+    if (!md) { fclose(f); return 1; }
+    size_t n = fread(md, 1, MD_MAX, f);
+    int big = n == MD_MAX;
+    fclose(f);
+    if (big) { fprintf(stderr, "recipes: %s: too large\n", argv[1]); return 1; }
+    md[n] = '\0';
+    if (strlen(md) != n) { fprintf(stderr, "recipes: NUL in %s\n", argv[1]); return 1; }
+
+    static recipe_t R[RECIPE_MAX];
+    int nr = 0, in_sh = 0;
+    char title[TITLE_MAX] = "";
+    size_t pos = 0;
+    while (pos < n) {
+        const char *line = md + pos;
+        const char *nl = strchr(line, '\n');
+        size_t ll = nl ? (size_t)(nl - line) : n - pos;
+        size_t i = 0;
+        while (i < ll && line[i] == ' ') i++;
+        if (ll - i >= 3 && !memcmp(line + i, "```", 3)) {
+            in_sh = !in_sh && ll - i >= 5 && !memcmp(line + i + 3, "sh", 2);
+            title[0] = '\0';
+            pos += ll + (nl ? 1 : 0);
+            continue;
+        }
+        if (in_sh && i < ll && line[i] == '#') {
+            size_t s = i + 1;
+            while (s < ll && line[s] == ' ') s++;
+            size_t tl = strlen(title);
+            if (tl && tl + 1 < sizeof(title)) title[tl++] = ' ';
+            size_t take = ll - s < sizeof(title) - 1 - tl ? ll - s : sizeof(title) - 1 - tl;
+            memcpy(title + tl, line + s, take);
+            title[tl + take] = '\0';
+            pos += ll + (nl ? 1 : 0);
+            continue;
+        }
+        const char *cmd = in_sh ? strstr(line, CMD) : NULL;
+        if (cmd && (size_t)(cmd - line) < ll) {
+            const char *start = cmd + strlen(CMD);
+            const char *end = strchr(start, '"');
+            if (!end) {
+                fprintf(stderr, "recipes: unterminated recipe at offset %zu\n", pos);
+                return 1;
+            }
+            if (memchr(start, '\\', (size_t)(end - start))) {
+                fprintf(stderr, "recipes: a backslash in the recipe at offset %zu\n", pos);
+                return 1;
+            }
+            if (nr == RECIPE_MAX) { fprintf(stderr, "recipes: too many\n"); return 1; }
+            size_t sl = (size_t)(end - start);
+            R[nr].sql = malloc(sl + 1);
+            if (!R[nr].sql) return 1;
+            memcpy(R[nr].sql, start, sl);
+            R[nr].sql[sl] = '\0';
+            snprintf(R[nr].title, sizeof(R[nr].title), "%s",
+                     title[0] ? title : "recipe");
+            nr++;
+            title[0] = '\0';
+            /* Past the closing quote's line. */
+            const char *after = strchr(end, '\n');
+            pos = after ? (size_t)(after - md) + 1 : n;
+            continue;
+        }
+        if (in_sh) title[0] = '\0';
+        pos += ll + (nl ? 1 : 0);
+    }
+    if (nr == 0) { fprintf(stderr, "recipes: no recipe in %s\n", argv[1]); return 1; }
+
+    FILE *o = fopen(argv[2], "w");
+    if (!o) { fprintf(stderr, "recipes: cannot write %s\n", argv[2]); return 1; }
+    fprintf(o, "/* GENERATED by web/tools/recipes.c from %s.\n"
+               " * Do not edit, do not commit: make regenerates it. */\n"
+               "#include \"web_recipes.h\"\n\n"
+               "const char web_recipes_source[] = ", argv[1]);
+    c_string(o, argv[1], strlen(argv[1]));
+    fprintf(o, ";\n\nconst web_recipe_t web_recipes[] = {\n");
+    for (int k = 0; k < nr; k++) {
+        fprintf(o, "  { ");
+        c_string(o, R[k].title, strlen(R[k].title));
+        fprintf(o, ",\n    ");
+        c_string(o, R[k].sql, strlen(R[k].sql));
+        fprintf(o, " },\n");
+        free(R[k].sql);
+    }
+    fprintf(o, "};\nconst size_t web_recipes_n = %d;\n", nr);
+    free(md);
+    return fclose(o) == 0 ? 0 : 1;
+}

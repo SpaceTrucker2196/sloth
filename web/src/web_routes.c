@@ -4,8 +4,11 @@
 #include <string.h>
 
 #include "web_assets.h"
+#include "web_history.h"
 #include "web_json.h"
+#include "web_recipes.h"
 #include "web_series.h"
+#include "web_wifi.h"
 
 /* What every answer carries. no-referrer because nothing on the page
  * should tell anyone where it was; nosniff because every type is
@@ -18,6 +21,12 @@
  * nothing and be framed by nothing. */
 #define CSP_NONE "Content-Security-Policy: default-src 'none'; " \
                  "frame-ancestors 'none'\r\n"
+
+/* A query the routes with parameters refuse whole: one that did not fit
+ * the request's buffer, or one past the length those routes take. */
+static int qlong(const web_req_t *rq) {
+    return rq->query_long || strlen(rq->query) >= WEB_QUERY_ROUTE_MAX;
+}
 
 static int fit(int n, size_t outsz, size_t *len) {
     if (n < 0 || (size_t)n >= outsz) return -1;
@@ -228,13 +237,29 @@ static void analysis_health(web_anomaly_t *a, web_jw_t *w) {
 static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
     web_jw_t w;
     web_jw_init(&w, out, outsz);
-    web_jw_raw(&w, "{\"service\":\"slothweb\",\"milestone\":\"M4\",\"uptime_s\":");
+    web_jw_raw(&w, "{\"service\":\"slothweb\",\"milestone\":\"M5\",\"uptime_s\":");
     web_jw_int(&w, h->uptime_s);
     /* With no data socket the M0 shape stands: "none" and null. Every
      * stream-derived or operator-given string goes through web_jw_str. */
     if (h->live) web_live_health_members(h->live, &w, h->now_ms);
     else         web_jw_raw(&w, ",\"socket\":\"none\",\"last_record_age_s\":null");
     web_m4_health(h->m4, h->wall_s, &w);
+    /* The page shows the SQL box only when this says so. */
+    web_jw_raw(&w, ",\"sql\":");
+    if (!h->sql || !h->sql->enabled) {
+        web_jw_raw(&w, "false");
+    } else {
+        web_sqlbox_stats_t ss;
+        web_sqlbox_stats(h->sql, &ss);
+        web_jw_raw(&w, "{\"row_cap\":");     web_jw_int(&w, h->sql->row_cap);
+        web_jw_raw(&w, ",\"timeout_ms\":");  web_jw_int(&w, h->sql->timeout_ms);
+        web_jw_raw(&w, ",\"queries\":");     web_jw_int(&w, (long long)ss.queries);
+        web_jw_raw(&w, ",\"refused\":");     web_jw_int(&w, (long long)ss.refused);
+        web_jw_raw(&w, ",\"busy\":");        web_jw_int(&w, (long long)ss.busy);
+        web_jw_raw(&w, ",\"timeouts\":");    web_jw_int(&w, (long long)ss.timeouts);
+        web_jw_raw(&w, ",\"truncated\":");   web_jw_int(&w, (long long)ss.truncated);
+        web_jw_raw(&w, "}");
+    }
     web_jw_raw(&w, ",");
     tsdb_health(h->tsdb, &w);
     analysis_health(h->anomaly, &w);
@@ -358,7 +383,7 @@ static int route_series(const web_req_t *rq, const web_health_t *h, int which,
     if (!h->tsdb) {
         status = 503;
         bl = web_series_error_json("no_time_series", body, cap);
-    } else if (rq->query_long) {
+    } else if (qlong(rq)) {
         status = 400;
         bl = web_series_error_json("query_too_long", body, cap);
     } else if (which == SR_SERIES) {
@@ -412,7 +437,7 @@ static int route_anomalies(const web_req_t *rq, const web_health_t *h,
     if (!h->anomaly) {
         status = 503;
         bl = web_series_error_json("no_anomaly_engine", body, cap);
-    } else if (rq->query_long) {
+    } else if (qlong(rq)) {
         status = 400;
         bl = web_series_error_json("query_too_long", body, cap);
     } else if (web_anomalies_parse(rq->query, h->wall_s, &since, &kind, why,
@@ -442,7 +467,7 @@ static int route_baseline(const web_req_t *rq, const web_health_t *h,
     if (!h->anomaly || !h->anomaly->cfg.bl) {
         status = 503;
         bl = web_series_error_json("no_anomaly_engine", body, cap);
-    } else if (rq->query_long) {
+    } else if (qlong(rq)) {
         status = 400;
         bl = web_series_error_json("query_too_long", body, cap);
     } else if (web_baseline_parse(rq->query, &metric, key, why,
@@ -475,7 +500,7 @@ static int route_m4(const web_req_t *rq, const web_health_t *h, int which,
     int status = 200, rc;
     static const web_m4_t none;
     const web_m4_t *m = h->m4 ? h->m4 : &none;
-    if (rq->query_long) {
+    if (qlong(rq)) {
         status = 400;
         bl = web_series_error_json("query_too_long", body, cap);
         rc = bl ? 0 : -1;
@@ -493,6 +518,123 @@ static int route_m4(const web_req_t *rq, const web_health_t *h, int which,
         return r->out_len ? 0 : -1;
     }
     return json_answer(rq, status, bl, out, outsz, r);
+}
+
+enum { M5_CHANNELS, M5_DEAUTH, M5_APS, M5_OVERVIEW, M5_HDEVICES, M5_HALERTS,
+       M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW };
+
+/* The WiFi and History routes (M5, web_wifi.h, web_history.h): the
+ * same shape as route_m4(). */
+static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
+                    char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    static const web_m4_t none;
+    const web_m4_t *m = h->m4 ? h->m4 : &none;
+    typedef int (*fn_t)(const web_m4_t *, const char *, long long, char *,
+                        size_t, size_t *, int *);
+    static const fn_t F[] = {
+        web_wifi_channels_route, web_wifi_deauth_route, web_wifi_aps_route,
+        web_history_overview_route, web_history_devices_route,
+        web_history_alerts_route, web_history_flows_route, web_sessions_route,
+        web_sessions_new_route,
+    };
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = F[which](m, rq->query, h->wall_s, body, cap, &bl, &status);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, status, bl, out, outsz, r);
+}
+
+/* /api/recipes: docs/wiki/sqlite-schema.md's, as built in. */
+static int route_recipes(const web_req_t *rq, char *out, size_t outsz,
+                         web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    int status = 200;
+    size_t bl;
+    if (rq->query[0] || rq->query_long) {
+        status = 400;
+        bl = web_series_error_json("unknown_parameter", body, cap);
+    } else {
+        web_jw_t w;
+        web_jw_init(&w, body, cap);
+        web_jw_raw(&w, "{\"source\":");  web_jw_str(&w, web_recipes_source);
+        web_jw_raw(&w, ",\"recipes\":[");
+        for (size_t i = 0; i < web_recipes_n; i++) {
+            web_jw_raw(&w, i ? ",{\"title\":" : "{\"title\":");
+            web_jw_str(&w, web_recipes[i].title);
+            web_jw_raw(&w, ",\"sql\":");
+            web_jw_str(&w, web_recipes[i].sql);
+            web_jw_raw(&w, "}");
+        }
+        web_jw_raw(&w, "]}\n");
+        bl = w.overflow ? 0 : w.len;
+    }
+    if (bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, status, bl, out, outsz, r);
+}
+
+/* /api/query (web_sqlbox.h). The text is checked here, on the loop's
+ * thread, before anything is queued: a malformed or non-SELECT request
+ * never reaches the box. What needs the statement prepared (one
+ * statement, the authorizer, read-only) is the box thread's. */
+static int route_query(const web_req_t *rq, const web_health_t *h, char *out,
+                       size_t outsz, web_resp_t *r) {
+    if (rq->is_head) {
+        /* GET only: there is no answer to describe without running it. */
+        r->status = 405;
+        return fit(snprintf(out, outsz,
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n"), outsz, &r->out_len);
+    }
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    char sql[WEB_SQL_MAX_BYTES + 1];
+    size_t len = 0;
+    const char *why = NULL;
+    if (rq->query_long) why = "too_long";
+    else if (web_sqlbox_param(rq->query, sql, sizeof(sql), &len, &why) == 0 &&
+             web_sqlbox_precheck(sql, len, &why) == 0)
+        why = NULL;
+    size_t bl;
+    if (why) {
+        bl = web_series_error_json(why, body, cap);
+        if (!bl) return -1;
+        return json_answer(rq, 400, bl, out, outsz, r);
+    }
+    if (web_sqlbox_submit(h->sql, sql, len, h->wall_s) != 0) {
+        bl = web_series_error_json("busy", body, cap);
+        if (!bl) return -1;
+        return json_answer(rq, 503, bl, out, outsz, r);
+    }
+    r->kind = WEB_R_SQL;
+    r->status = 200;
+    r->out_len = 0;
+    return 0;
 }
 
 static int route_events(const web_req_t *rq, int sse_room, char *out,
@@ -570,6 +712,27 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
         if (!strncmp(rq->path, "/api/device/", 12) && rq->path[12] &&
             !strchr(rq->path + 12, '/'))
             return route_m4(rq, h, M4_DEVICE, rq->path + 12, out, outsz, r);
+        static const struct { const char *path; int which; } M5[] = {
+            { "/api/wifi/channels", M5_CHANNELS },
+            { "/api/wifi/deauth", M5_DEAUTH },
+            { "/api/wifi/aps", M5_APS },
+            { "/api/history/overview", M5_OVERVIEW },
+            { "/api/history/devices", M5_HDEVICES },
+            { "/api/history/alerts", M5_HALERTS },
+            { "/api/history/flows", M5_HFLOWS },
+            { "/api/sessions", M5_SESSIONS },
+            { "/api/sessions/new", M5_SESSIONS_NEW },
+        };
+        for (size_t i = 0; i < sizeof(M5) / sizeof(M5[0]); i++)
+            if (!strcmp(rq->path, M5[i].path))
+                return route_m5(rq, h, M5[i].which, out, outsz, r);
+        /* Without --web-allow-sql neither exists: a 404 like any path. */
+        if (h->sql && h->sql->enabled) {
+            if (!strcmp(rq->path, "/api/query"))
+                return route_query(rq, h, out, outsz, r);
+            if (!strcmp(rq->path, "/api/recipes"))
+                return route_recipes(rq, out, outsz, r);
+        }
     }
     r->status = 404;
     r->out_len = web_http_response(404, rq->is_head, out, outsz);

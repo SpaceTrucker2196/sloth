@@ -8,7 +8,14 @@
  * timers, a tick each tick_ms and a ping each ping_ms, until the client
  * leaves or falls WEB_SSE_MAX_UNSENT bytes behind. Each tick also sends
  * the ticker records the ingest thread has added since the last one.
- * The live state has its own lock (web_live.h); this loop only reads it. */
+ * The live state has its own lock (web_live.h); this loop only reads it.
+ *
+ * An /api/query (M5, web_sqlbox.h) is the one answer not made on this
+ * thread: the route hands the statement to the SQL box's thread and the
+ * connection waits, unpolled, until the box's pipe says the answer is
+ * ready, while every other connection is served. The answer is sent
+ * from the box's buffer, and the box is released when the connection
+ * ends, however it ends. */
 #ifndef SLOTHWEB_SERVER_H
 #define SLOTHWEB_SERVER_H
 
@@ -21,6 +28,7 @@
 #include "web_devices.h"
 #include "web_http.h"
 #include "web_live.h"
+#include "web_sqlbox.h"
 #include "web_tsdb.h"
 
 #define WEB_MAX_CONNS 32
@@ -75,6 +83,7 @@ typedef struct {
     char      out[WEB_SSE_MAX_UNSENT];
     const unsigned char *body;    /* static body sent after out */
     size_t    body_len, body_off;
+    int       sql_hold;       /* body is the SQL box's: release at close */
 } web_conn_t;
 
 typedef struct {
@@ -92,6 +101,8 @@ typedef struct {
     web_tsdb_t     *tsdb;     /* NULL: no time series; set before run */
     web_anomaly_t  *anomaly;  /* NULL: no anomaly engine; set before run */
     const web_m4_t *m4;       /* NULL: no Devices or Lookup; set before run */
+    web_sqlbox_t   *sql;      /* NULL: no SQL box; set before run */
+    int             sql_conn; /* the slot waiting on the box, or -1 */
     unsigned long long rec_sent;  /* newest ticker record broadcast */
     unsigned long long anom_sent; /* newest anomaly change broadcast */
     pthread_mutex_t mu;       /* guards stats only */
@@ -131,6 +142,8 @@ void     web_server_set_anomaly(web_server_t *s, web_anomaly_t *anomaly);
 /* Attach the M4 context the Devices and Lookup routes read
  * (web_devices.h). Same rule. */
 void     web_server_set_m4(web_server_t *s, const web_m4_t *m4);
+/* Attach the SQL box (web_sqlbox.h), started. Same rule. */
+void     web_server_set_sqlbox(web_server_t *s, web_sqlbox_t *b);
 
 void     web_server_stats(web_server_t *s, web_stats_t *out);
 uint16_t web_server_port(const web_server_t *s);

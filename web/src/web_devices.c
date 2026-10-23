@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "web_baseline.h"
+#include "web_history.h"
 #include "web_metrics.h"
 #include "web_query.h"
 
@@ -140,20 +141,24 @@ static long long strip_from(long long now_s) {
     return now_s - now_s % WEB_DEV_CELL_S - (WEB_DEV_CELLS - 1) * WEB_DEV_CELL_S;
 }
 
-/* The strips of n MACs: the store's minute tier, then what the ring
- * and the open buckets hold. */
-static void strips(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
-                   int n, long long now_s, unsigned char *bits) {
-    long long from = strip_from(now_s);
+/* The strips of n MACs, WEB_DEV_CELLS cells of cell_s from from: the
+ * store's minute tier, then what the ring and the open buckets hold. */
+static void strips_at(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
+                      int n, long long from, int cell_s, unsigned char *bits) {
     memset(bits, 0, (size_t)n * (WEB_DEV_CELLS / 8));
     if (!m->tsdb) return;
     if (m->tsdb->store && m->tsdb->store->rd)
         for (int i = 0; i < n; i++)
             web_store_presence(m->tsdb->store, WM_DEV_PRESENT, macs[i], from,
-                               WEB_DEV_CELLS, WEB_DEV_CELL_S,
+                               WEB_DEV_CELLS, cell_s,
                                bits + (size_t)i * (WEB_DEV_CELLS / 8));
     web_rollup_presence(m->tsdb->ru, WM_DEV_PRESENT, macs, n, from,
-                        WEB_DEV_CELLS, WEB_DEV_CELL_S, bits);
+                        WEB_DEV_CELLS, cell_s, bits);
+}
+
+static void strips(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
+                   int n, long long now_s, unsigned char *bits) {
+    strips_at(m, macs, n, strip_from(now_s), WEB_DEV_CELL_S, bits);
 }
 
 static const char *vendor_table(const web_m4_t *m) {
@@ -338,6 +343,99 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
     int shown = 0;
     for (int i = 0; i < show; i++) {
         /* Room for this row and the tail, or stop here with "more". */
+        if (w.len + WEB_DEV_ROW_MAX + 96 > cap) break;
+        if (i) web_jw_raw(&w, ",");
+        dev_json(&w, m, &c.rows[i], bits + (size_t)i * (WEB_DEV_CELLS / 8), now_s);
+        shown++;
+    }
+    int more = shown < c.n;
+    web_jw_raw(&w, "],\"count\":");   web_jw_int(&w, shown);
+    web_jw_raw(&w, ",\"more\":");     web_jw_raw(&w, more ? "true" : "false");
+    web_jw_raw(&w, ",\"next_offset\":");
+    if (more) web_jw_int(&w, offset + shown); else web_jw_raw(&w, "null");
+    web_jw_raw(&w, "}\n");
+    free(macs);
+    free(bits);
+    free(c.rows);
+    if (w.overflow) return -1;
+    *len = w.len;
+    *status = 200;
+    return 0;
+}
+
+/* ── /api/history/devices (M5, #163) ────────────────────────────────── */
+
+int web_history_devices_route(const web_m4_t *m, const char *query,
+                              long long now_s, char *body, size_t cap,
+                              size_t *len, int *status) {
+    char err[64] = "";
+    if (!m || !m->sdb || !m->sdb->configured || !web_slothdb_available())
+        return answer_error(503, "no_sloth_db",
+                            "start slothweb with --sloth-db PATH (a WITH_SQLITE build)",
+                            body, cap, len, status);
+    dparam_t ps[4] = {
+        { "from", 11, 0, "", 0 }, { "to", 11, 0, "", 0 },
+        { "limit", 8, 0, "", 0 }, { "offset", 8, 0, "", 0 },
+    };
+    if (dparams(query, ps, 4, err, sizeof(err)) != 0)
+        return answer_error(400, err, NULL, body, cap, len, status);
+    long long from, to;
+    const char *why;
+    if (web_hist_range(ps[0].seen ? ps[0].val : NULL, ps[1].seen ? ps[1].val : NULL,
+                       now_s, &from, &to, &why) != 0)
+        return answer_error(400, why, NULL, body, cap, len, status);
+    long long limit = WEB_DEV_LIMIT, offset = 0;
+    if (ps[2].seen && (decimal(ps[2].val, WEB_DEV_LIMIT_MAX, &limit) != 0 ||
+                       limit < 1))
+        return answer_error(400, "bad_limit", NULL, body, cap, len, status);
+    if (ps[3].seen && decimal(ps[3].val, WEB_DEV_OFFSET_MAX, &offset) != 0)
+        return answer_error(400, "bad_offset", NULL, body, cap, len, status);
+    collect_t c = { calloc((size_t)limit + 1, sizeof(web_sdb_dev_t)), 0,
+                    (int)limit + 1 };
+    if (!c.rows) return -1;
+    web_sdb_conn_t conn;
+    char oerr[WEB_SDB_ERR_MAX];
+    if (web_slothdb_open(m->sdb, &conn, WEB_SDB_HTTP_MS, now_s, oerr,
+                         sizeof(oerr)) != 0) {
+        web_slothdb_close(&conn);
+        free(c.rows);
+        return sdb_unavailable(m, body, cap, len, status, oerr);
+    }
+    int got = web_sdb_devices_between(&conn, from, to, limit + 1, offset,
+                                      collect, &c);
+    int to_out = conn.timed_out, schema = conn.schema;
+    web_slothdb_close(&conn);
+    if (got < 0) {
+        free(c.rows);
+        return answer_error(503, to_out ? "sloth_db_timeout" : "sloth_db_error",
+                            NULL, body, cap, len, status);
+    }
+    /* The strip over the range itself: 144 cells, none finer than the
+     * minute tier the store keeps for that long. */
+    long long span = to - from;
+    long long cell = (span + WEB_DEV_CELLS - 1) / WEB_DEV_CELLS;
+    if (cell < 60) cell = 60;
+    int show = c.n > limit ? (int)limit : c.n;
+    char (*macs)[WEB_KEY_MAX + 1] = calloc((size_t)(show ? show : 1), sizeof(*macs));
+    unsigned char *bits = calloc((size_t)(show ? show : 1), WEB_DEV_CELLS / 8);
+    if (!macs || !bits) { free(macs); free(bits); free(c.rows); return -1; }
+    for (int i = 0; i < show; i++)
+        snprintf(macs[i], sizeof(macs[i]), "%s", c.rows[i].mac);
+    strips_at(m, (const char (*)[WEB_KEY_MAX + 1])macs, show, from, (int)cell, bits);
+    web_jw_t w;
+    web_jw_init(&w, body, cap);
+    web_jw_raw(&w, "{\"now\":");     web_jw_int(&w, now_s);
+    web_jw_raw(&w, ",\"from\":");    web_jw_int(&w, from);
+    web_jw_raw(&w, ",\"to\":");      web_jw_int(&w, to);
+    web_jw_raw(&w, ",\"limit\":");   web_jw_int(&w, limit);
+    web_jw_raw(&w, ",\"offset\":");  web_jw_int(&w, offset);
+    web_jw_raw(&w, ",\"db_schema\":"); web_jw_int(&w, schema);
+    web_jw_raw(&w, ",\"vendor_table\":"); web_jw_str(&w, vendor_table(m));
+    web_jw_raw(&w, ",\"presence_from\":"); web_jw_int(&w, from);
+    web_jw_raw(&w, ",\"presence_cell_s\":"); web_jw_int(&w, cell);
+    web_jw_raw(&w, ",\"rows\":[");
+    int shown = 0;
+    for (int i = 0; i < show; i++) {
         if (w.len + WEB_DEV_ROW_MAX + 96 > cap) break;
         if (i) web_jw_raw(&w, ",");
         dev_json(&w, m, &c.rows[i], bits + (size_t)i * (WEB_DEV_CELLS / 8), now_s);

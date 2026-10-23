@@ -140,6 +140,19 @@ int web_config_check(const web_config_t *c, char *err, size_t errsz) {
                              "slothweb's own\n", c->sloth_db);
         return -1;
     }
+    /* The SQL box is the operator's own sqlite3 in a tab: --strict, the
+     * flag that says "nothing but the defaults", refuses it outright. */
+    if (c->allow_sql && c->strict) {
+        snprintf(err, errsz, "slothweb: --strict refuses --web-allow-sql.\n"
+                             "  The SQL box is a query surface over sloth.db; "
+                             "drop one of the two.\n");
+        return -1;
+    }
+    if (c->allow_sql && !c->sloth_db[0]) {
+        snprintf(err, errsz, "slothweb: --web-allow-sql needs --sloth-db PATH: "
+                             "the box reads sloth.db and nothing else.\n");
+        return -1;
+    }
     char where[INET6_ADDRSTRLEN + 16];
     web_format_bind(c->bind_family, c->bind_addr, c->bind_port,
                     where, sizeof(where));
@@ -225,7 +238,8 @@ void web_usage(FILE *out) {
         "usage: slothweb [--socket SPEC] [--web-bind ADDR:PORT]\n"
         "                [--web-allow CIDR]... [--web-allow-remote] [--strict]\n"
         "                [--store PATH] [--web-max-keys N] [--web-max-mb N]\n"
-        "                [--web-retain-days N] [--sloth-db PATH] [--help]\n"
+        "                [--web-retain-days N] [--sloth-db PATH]\n"
+        "                [--web-allow-sql] [--help]\n"
         "\n"
         "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
         "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
@@ -264,13 +278,22 @@ void web_usage(FILE *out) {
         "                        drawer's record and A2's durable first_seen.\n"
         "                        Without it those say so and the rest runs.\n"
         "                        Needs a WITH_SQLITE build.\n"
+        "  --web-allow-sql       the read-only SQL box (/api/query) over\n"
+        "                        --sloth-db: one SELECT or WITH at a time,\n"
+        "                        5 s, 10,000 rows, credential columns\n"
+        "                        withheld. Off by default; refused by\n"
+        "                        --strict; announced with\n"
+        "                        --web-allow-remote.\n"
         "  --help                this text.\n"
         "\n"
         "Routes (GET and HEAD): / (the page), /api/health, /api/live,\n"
         "/api/series, /api/keys, /api/metrics, /api/baseline,\n"
-        "/api/anomalies, /api/devices, /api/device/MAC and /api/lookup\n"
-        "(JSON), /events (Server-Sent Events). Any other\n"
-        "path is 404; any\n"
+        "/api/anomalies, /api/devices, /api/device/MAC, /api/lookup,\n"
+        "/api/wifi/channels, /api/wifi/aps, /api/wifi/deauth,\n"
+        "/api/history/overview, /api/history/devices, /api/history/alerts,\n"
+        "/api/history/flows, /api/sessions, /api/sessions/new (JSON),\n"
+        "/events (Server-Sent Events); with --web-allow-sql, /api/query\n"
+        "(GET only) and /api/recipes. Any other path is 404; any\n"
         "other method is 405; a Host that is not localhost or an IP\n"
         "literal is 421; a header block over 8 KB is 431.\n");
 }
@@ -289,6 +312,13 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
             c->allow_remote = 1;
         } else if (!strcmp(a, "--strict")) {
             c->strict = 1;
+        } else if (!strcmp(a, "--web-allow-sql")) {
+            if (!web_slothdb_available()) {
+                fprintf(err, "slothweb: --web-allow-sql needs SQLite; this "
+                             "slothweb was built with WITH_SQLITE=0\n");
+                return -1;
+            }
+            c->allow_sql = 1;
         } else if (!strcmp(a, "--socket")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);
@@ -410,6 +440,15 @@ void web_config_announce(const web_config_t *c, FILE *err) {
         fprintf(err, "slothweb: WARNING: admitting non-loopback peers in %s "
                      "(--web-allow, authorised by --web-allow-remote).\n",
                 cidr);
+    }
+    if (c->allow_sql && c->allow_remote) {
+        fprintf(err, "slothweb: WARNING: --web-allow-sql with --web-allow-remote: "
+                     "the SQL box (/api/query)\n"
+                     "  runs any read-only SELECT over sloth.db for every peer "
+                     "the allow list admits,\n"
+                     "  with no authentication and no TLS: every device, "
+                     "name, SSID, flow and finding\n"
+                     "  sloth recorded (credential columns stay withheld).\n");
     }
     if (c->sock.kind && !web_sockspec_is_local(&c->sock)) {
         char sp[INET6_ADDRSTRLEN + 16];

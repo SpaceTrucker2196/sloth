@@ -5,8 +5,20 @@ page tracks what has shipped; the design is
 [`docs/web-ui-spec.md`](../../docs/web-ui-spec.md), whose rulings table
 overrides its body.
 
-**Summary**: slothweb is at M4 (#162) on top of M3 (#161), M2 (#160),
-M1 (#159), M0 (#158) and W0 (#157). M4 reads `sloth.db` strictly
+**Summary**: slothweb is at M5 (#163) on top of M4 (#162), M3 (#161),
+M2 (#160), M1 (#159), M0 (#158) and W0 (#157). M5 adds the WiFi view
+(a channel x time waterfall of `wifi.ap_count` or `wifi.ctrl_total`,
+bands grouped; sloth.db's `beacon_aps` with AKM bits and downgrade flags
+by name, MFP, SSID history and KARMA score; a deauth timeline per bssid
+with DEAUTH_FLOOD episodes; probe clients over their band), the History
+view (a 30 d strip with a drag range picker, who was here with presence
+restricted to the range, the alerts, anomalies and flows in it, survey
+sessions with `--report`'s "new since the previous session" ported),
+and the SQL box: `/api/query` only with `--web-allow-sql` (off by
+default, refused by `--strict`), one read-only `SELECT`/`WITH` at a
+time on its own thread under an authorizer, 5 s, 10,000 rows, the
+credential columns withheld as from every reader, with
+`sqlite-schema.md`'s recipes extracted at build time. M4 reads `sloth.db` strictly
 read-only (`--sloth-db`; `SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW`,
 an immutable open where that is what makes no side file, a column
 allow-list enforced by an authorizer), compiles the §9.1 device query
@@ -48,6 +60,12 @@ on an absolute budget.
 `web/src/web_query.c`, `web/src/web_oui.c`, `web/src/web_ptr.c`,
 `web/src/web_devices.c`, `web/tools/oui_gen.c`, `web/tools/oui_csv.c`,
 `tests/fuzz/fuzz_web_query.c`, `src/db_schema.c` (the tests' sloth.db),
+`web/src/web_wifi.c`, `web/src/web_history.c`, `web/src/web_sqlbox.c`,
+`web/src/web_sqlguard.c`, `web/src/web_secret.c`, `web/tools/recipes.c`,
+`tests/fuzz/fuzz_web_sqlbox.c`, `src/rsn_ie.c` (`rsn_akm_name()`),
+`src/posture.c` and `src/db.c` (`--report`'s new-since section),
+`src/alerts/rules_wifi_mgmt.c` (the DEAUTH_FLOOD key),
+`src/alerts/rules_wired.c` (what an alert's key and detail carry),
 `src/dns_log.c` (what a PTR answer's `answer` holds), `src/oui.c`,
 `tests/test_db.c` (the guardrail the allow-list is held to),
 `web/src/web_baseline.c`,
@@ -62,9 +80,9 @@ on an absolute budget.
 `src/db.c` and `src/secure_file.c` (the open and migration rules M2
 re-implements), `src/top_hosts.c` (what `conn_count` counts),
 `src/probe_pnl.c` (what `mac_random` is), issues #102, #157, #158,
-#159, #160, #161 and #162.
+#159, #160, #161, #162 and #163.
 
-**Last updated**: 2026-10-22 (M4, #162).
+**Last updated**: 2026-10-23 (M5, #163).
 
 ---
 
@@ -93,7 +111,8 @@ resolves a name (its bind address included) and never writes to
 | M2: rollups, `slothweb.db`, `/api/series`, Activity view | #160 | shipped |
 | M3: baselines, anomaly rules and episodes, Anomalies view, heatmaps | #161 | shipped (A4 moved to M4) |
 | M4: sloth.db read-only, query language, OUI table, passive names, A4, durable A2, Devices, drawer, Lookup | #162 | shipped (active reverse DNS cut by the rulings) |
-| M5 and M6 (Wi-Fi and history, flows) | #163 and on | not started |
+| M5: WiFi and History views, sessions and new-since, SQL box behind `--web-allow-sql` | #163 | shipped (two of the eight recipes read a withheld column and are refused) |
+| M6: Flows view, polish, README security section | #164 | not started |
 
 ## W0: the access boundary before any route
 
@@ -575,6 +594,50 @@ The full account is in
   anomaly card, and Lookup. `textContent` only; no request off the
   page's own server.
 
+## M5: WiFi, History and the SQL box
+
+The full account is in
+[`web/README.md`](../../web/README.md#wifi-history-and-the-sql-box-m5).
+In short:
+
+- **WiFi** (§8.8). `/api/wifi/channels`: a channel x time grid of
+  `wifi.ap_count` (mean per cell) or `wifi.ctrl_total` (sum), rows
+  2.4, 5 and 6 GHz by channel with a rule between bands, the finest
+  tier that covers the range, keys from the rollup and the store.
+  `/api/wifi/aps`: `beacon_aps` through the M4 allow-list, AKM bits
+  decoded to suite names (`src/rsn_ie.c`'s), downgrade flags by name
+  (`WPA_DG_*`), MFP, SSID history and count, KARMA score; an SSID count
+  above 1 in `--sev-warn`. `/api/wifi/deauth`: frames per bssid with
+  DEAUTH_FLOOD episodes matched on the predicate-only alert key. Probe
+  clients from `/api/series` over the M3 band.
+- **History** (§8.10). `/api/history/overview` (the 30 d strip: devices
+  first seen and alerts begun per cell, sessions as markers),
+  `/api/history/devices` (who was here: `[first_seen, last_seen]`
+  overlapping the range, presence over the range), `/api/history/alerts`
+  and `/api/history/flows` (no key, detail, cookie or username;
+  `mqtt_flows` not read), `/api/sessions` and `/api/sessions/new`:
+  `--report`'s new APs, devices and probe clients since the previous
+  session's `COALESCE(ended, started)`, the window closed at that
+  visit's end for an older session.
+- **The SQL box.** `--web-allow-sql` (default off; `--strict` refuses
+  it; announced with `--web-allow-remote`). GET only; the text checked
+  (one `sql=`, UTF-8, `SELECT` or `WITH` first) before anything is
+  queued; M4's opener; one statement (the tail must be blank); an
+  authorizer allowing `SELECT`, `READ` and a short function list and
+  denying everything else, and denying `READ` of the withheld columns,
+  `sqlite_dbpage`, `sqlite_stat3/4`, `pragma_*` and anything outside
+  `main`; `sqlite3_stmt_readonly()`; limits; 5 s by a progress handler,
+  10,000 rows, 4 MB; one query at a time on its own thread, a second a
+  `503` `busy`. The withheld columns (`web_secret.h`) are one list for
+  both readers: `tests/test_db.c`'s guardrail words and the credential
+  words on any TEXT/BLOB column, plus `alerts.key`, `alerts.detail`,
+  `cleartext_creds.username`, `mqtt_flows.last_username`,
+  `rogue_radius.last_identity`, `rdp_flows.last_cookie`; deliberately
+  withheld in the box too. The recipes are extracted from
+  [[sqlite-schema]] by `web/tools/recipes.c` at build time; the
+  "Findings by severity" and "Cleartext credential exposures" recipes
+  read a withheld column and are refused naming it.
+
 ## Tests
 
 `make web-test` is self-contained: no host file, loopback ephemeral
@@ -662,6 +725,18 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | A4 and the durable A2 | `test_a4_unknown_vendor`, `test_a4_off_without_the_ieee_table`, `test_a4_burst_is_one_episode`, `test_a2_durable_first_seen`, `test_device_z_now` |
 | routes, strict validation, presence, drawer, Lookup, page | `test_devices.c` |
 
+#163 (M5) maps as follows.
+
+| Acceptance item | Test |
+|---|---|
+| the `sqlite-schema.md` recipes run from the SQL box and match the `sqlite3` output | `test_acceptance` (`test_sqlbox.c`: a sloth.db generated from `src/db_schema.c`, seeded so every recipe has rows; each recipe through `/api/query` over a loopback socket and through the sqlite3 C API on the same file, identical, and through the `sqlite3` shell when on `PATH`; the two recipes reading a withheld column refused naming it), `test_recipes_are_the_pages` |
+| a write statement is refused | `test_writes_refused` (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ATTACH`, `PRAGMA writable_schema`, a temp table, DML-tail CTEs, two statements; the file byte for byte and its directory unchanged), `test_precheck`, `tests/fuzz/fuzz_web_sqlbox.c` |
+| no credential column servable, even in the box | `test_withheld_columns`, `test_writes_refused`'s recipe-shaped queries |
+| behind `--web-allow-sql`, default off; `--strict`; the remote warning | `test_off_by_default`, `test_web_allow_sql_flag` |
+| 5 s, 10,000 rows, bounded output, one at a time | `test_limits`, `test_one_at_a_time` |
+| WiFi: waterfall, AP table, deauth timeline | `test_wifi.c`, `test_parity.c` |
+| History: strip, who was here, sessions, new since | `test_history.c` |
+
 A test cannot connect from a non-loopback address, so the socket-level
 refusals narrow the list and connect from loopback; the list function
 itself is tested on non-loopback sockaddrs. Each absence assertion was
@@ -677,6 +752,6 @@ covers `web/`.
 - [[jsonl-schema]] — the stream M1 consumes.
 - [[sqlite-schema]] — sloth's database, which M4 reads read-only and
   M2's store never touches; its migration rule is the one
-  `slothweb.db` follows.
+  `slothweb.db` follows; its query recipes are the SQL box's (M5).
 - [[cli-reference]] — sloth's own flags; slothweb's are in
   [`web/README.md`](../../web/README.md).

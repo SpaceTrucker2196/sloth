@@ -228,6 +228,13 @@ int web_store_query(web_store_t *s, int tier, int metric, const char *key,
     return -1;
 }
 
+int web_store_keys(web_store_t *s, int tier, int metric, long long from,
+                   long long to, char (*out)[WEB_KEY_MAX + 1], int max) {
+    (void)s; (void)tier; (void)metric; (void)from; (void)to; (void)out;
+    (void)max;
+    return -1;
+}
+
 void web_store_stats(web_store_t *s, web_store_stats_t *out) {
     (void)s;
     memset(out, 0, sizeof(*out));
@@ -1367,6 +1374,48 @@ int web_store_query(web_store_t *s, int tier, int metric, const char *key,
     pthread_mutex_unlock(&s->rmu);
     if (bad) {
         set_err(s, "query", s->rd);
+        return -1;
+    }
+    return n;
+}
+
+int web_store_keys(web_store_t *s, int tier, int metric, long long from,
+                   long long to, char (*out)[WEB_KEY_MAX + 1], int max) {
+    static const char *const TBL[WEB_TIER_COUNT] = { "fine", "minute", "hour" };
+    if (!s->rd || tier < 0 || tier >= WEB_TIER_COUNT || metric < 0 ||
+        metric >= WM_COUNT || max <= 0)
+        return -1;
+    char sql[320];
+    /* The tier's table name is one of three constants; every value is
+     * bound. One range read of the t index, grouped by series. */
+    snprintf(sql, sizeof(sql), "SELECT x.key, max(r.t) m FROM %s r JOIN series x"
+             " ON x.id = r.series WHERE x.metric = ?1 AND r.t >= ?2 AND"
+             " r.t < ?3 GROUP BY x.id ORDER BY m DESC, x.key LIMIT ?4",
+             TBL[tier]);
+    pthread_mutex_lock(&s->rmu);
+    sqlite3_stmt *st = NULL;
+    int rc = sqlite3_prepare_v2(s->rd, sql, -1, &st, NULL);
+    int n = 0;
+    if (rc == SQLITE_OK) {
+        sqlite3_bind_text(st, 1, web_metric_defs[metric].name, -1, SQLITE_STATIC);
+        sqlite3_bind_int64(st, 2, from);
+        sqlite3_bind_int64(st, 3, to);
+        sqlite3_bind_int(st, 4, max);
+        while ((rc = sqlite3_step(st)) == SQLITE_ROW && n < max) {
+            const unsigned char *k = sqlite3_column_text(st, 0);
+            size_t kl = k ? strlen((const char *)k) : 0;
+            /* Written by this store from a canonical key; a longer one
+             * is not ours and is skipped rather than cut. */
+            if (!k || kl == 0 || kl > WEB_KEY_MAX) continue;
+            memcpy(out[n], k, kl + 1);
+            n++;
+        }
+    }
+    int bad = rc != SQLITE_DONE && rc != SQLITE_ROW;
+    sqlite3_finalize(st);
+    pthread_mutex_unlock(&s->rmu);
+    if (bad) {
+        set_err(s, "keys", s->rd);
         return -1;
     }
     return n;

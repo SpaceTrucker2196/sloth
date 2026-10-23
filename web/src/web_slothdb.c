@@ -50,6 +50,40 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "alerts", "sev", 1, 0, 0 },        { "alerts", "title", 1, 0, 0 },
     { "alerts", "match_ip", 1, 0, 0 },   { "alerts", "count", 1, 0, 0 },
     { "alerts", "first_seen", 1, 0, 0 }, { "alerts", "last_seen", 1, 0, 0 },
+    /* M5 (#163): the WiFi view's AP table and the History view. */
+    { "beacon_aps", "bssid", 1, 0, 0 },  { "beacon_aps", "ssid", 1, 0, 0 },
+    { "beacon_aps", "signal_dbm", 1, 0, 0 }, { "beacon_aps", "channel", 1, 0, 0 },
+    { "beacon_aps", "enc", 1, 0, 0 },    { "beacon_aps", "akm", 1, 0, 0 },
+    { "beacon_aps", "akm_bits", 1, 0, 0 }, { "beacon_aps", "mfp", 1, 0, 0 },
+    { "beacon_aps", "downgrade_flags", 1, 0, 0 }, { "beacon_aps", "vendor", 1, 0, 0 },
+    { "beacon_aps", "phy", 1, 0, 0 },    { "beacon_aps", "has_wps", 1, 0, 0 },
+    { "beacon_aps", "first_seen", 1, 0, 0 }, { "beacon_aps", "last_seen", 1, 0, 0 },
+    { "beacon_ap_ssids", "bssid", 1, 0, 0 }, { "beacon_ap_ssids", "ssid", 1, 0, 0 },
+    { "beacon_ap_ssids", "first_seen", 1, 0, 0 },
+    { "beacon_ap_ssids", "last_seen", 1, 0, 0 },
+    { "karma_candidates", "bssid", 1, 0, 0 }, { "karma_candidates", "score", 1, 0, 0 },
+    { "karma_candidates", "ssid_count", 1, 0, 0 },
+    { "karma_candidates", "pnl_overlap", 1, 0, 0 },
+    { "karma_candidates", "ie_uniform", 1, 0, 0 },
+    { "sessions", "id", 1, 0, 0 },       { "sessions", "started", 1, 0, 0 },
+    { "sessions", "ended", 1, 0, 0 },    { "sessions", "site_label", 1, 0, 0 },
+    { "probe_clients", "ssid", 1, 0, 0 },
+    { "ssh_flows", "src_ip", 1, 0, 0 },  { "ssh_flows", "dst_ip", 1, 0, 0 },
+    { "ssh_flows", "banner_count", 1, 0, 0 },
+    { "ssh_flows", "first_seen", 1, 0, 0 }, { "ssh_flows", "last_seen", 1, 0, 0 },
+    { "rdp_flows", "src_ip", 1, 0, 0 },  { "rdp_flows", "dst_ip", 1, 0, 0 },
+    { "rdp_flows", "connect_req_count", 1, 0, 0 },
+    { "rdp_flows", "first_seen", 1, 0, 0 }, { "rdp_flows", "last_seen", 1, 0, 0 },
+    { "smb_sessions", "client_ip", 1, 0, 0 }, { "smb_sessions", "server_ip", 1, 0, 0 },
+    { "smb_sessions", "server_port", 1, 0, 0 },
+    { "smb_sessions", "obs_count", 1, 0, 0 },
+    { "smb_sessions", "first_seen", 1, 0, 0 }, { "smb_sessions", "last_seen", 1, 0, 0 },
+    { "snmp_flows", "src_ip", 1, 0, 0 }, { "snmp_flows", "dst_ip", 1, 0, 0 },
+    { "snmp_flows", "get_count", 1, 0, 0 }, { "snmp_flows", "getnext_count", 1, 0, 0 },
+    { "snmp_flows", "getbulk_count", 1, 0, 0 }, { "snmp_flows", "set_count", 1, 0, 0 },
+    { "snmp_flows", "response_count", 1, 0, 0 },
+    { "snmp_flows", "trap_count", 1, 0, 0 }, { "snmp_flows", "version", 1, 0, 0 },
+    { "snmp_flows", "first_seen", 1, 0, 0 }, { "snmp_flows", "last_seen", 1, 0, 0 },
 };
 const size_t web_sdb_allow_n = sizeof(web_sdb_allow) / sizeof(web_sdb_allow[0]);
 
@@ -166,6 +200,65 @@ int web_sdb_new_macs(web_sdb_conn_t *c, long long since, web_sdb_new_t *out,
     (void)c; (void)since; (void)out; (void)max;
     return -1;
 }
+int web_sdb_aps(web_sdb_conn_t *c, int sort, long long limit,
+                long long offset, web_sdb_ap_fn fn, void *ctx) {
+    (void)c; (void)sort; (void)limit; (void)offset; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_ap_ssids(web_sdb_conn_t *c, const char *bssid, int max,
+                     web_sdb_item_fn fn, void *ctx) {
+    (void)c; (void)bssid; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_deauth_floods(web_sdb_conn_t *c, const char *bssid,
+                          long long from, long long to, int max,
+                          web_sdb_item_fn fn, void *ctx) {
+    (void)c; (void)bssid; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_sessions(web_sdb_conn_t *c, web_sdb_session_t *out, int max) {
+    (void)c; (void)out; (void)max;
+    return -1;
+}
+int web_sdb_session_pair(web_sdb_conn_t *c, long long id,
+                         web_sdb_session_t *s, web_sdb_session_t *prev,
+                         int *has_prev, long long *next_started) {
+    (void)c; (void)id; (void)s; (void)prev;
+    *has_prev = 0;
+    *next_started = -1;
+    return -1;
+}
+int web_sdb_new_since(web_sdb_conn_t *c, int kind, long long since,
+                      long long until, int max, web_sdb_item_fn fn,
+                      void *ctx, long long *total) {
+    (void)c; (void)kind; (void)since; (void)until; (void)max; (void)fn;
+    (void)ctx;
+    *total = 0;
+    return -1;
+}
+int web_sdb_devices_between(web_sdb_conn_t *c, long long from, long long to,
+                            long long limit, long long offset,
+                            web_sdb_dev_fn fn, void *ctx) {
+    (void)c; (void)from; (void)to; (void)limit; (void)offset; (void)fn;
+    (void)ctx;
+    return -1;
+}
+int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
+                           int max, web_sdb_item_fn fn, void *ctx) {
+    (void)c; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,
+                          int max, web_sdb_item_fn fn, void *ctx) {
+    (void)c; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_overview(web_sdb_conn_t *c, long long from, int cell_s,
+                     int ncell, long long *devs, long long *alerts) {
+    (void)c; (void)from; (void)cell_s; (void)ncell; (void)devs; (void)alerts;
+    return -1;
+}
+
 
 #else
 
@@ -186,6 +279,9 @@ static long long mono_ms(void) {
 /* pred_ok: whether a predicate-only column may be read. */
 static int allowed_col(const char *table, const char *col, int pred_ok) {
     if (!table || !col) return 0;
+    /* A withheld column is predicate-only at most, whatever the list
+     * says: the two lists cannot disagree in the open direction. */
+    if (col[0] && web_sdb_is_secret(table, col, NULL) && !pred_ok) return 0;
     for (size_t i = 0; i < web_sdb_allow_n; i++)
         if (!strcmp(web_sdb_allow[i].table, table) &&
             (!col[0] || !strcmp(web_sdb_allow[i].column, col)))
@@ -197,9 +293,10 @@ static int allowed_table(const char *table) {
     return table && allowed_col(table, "", 0);
 }
 
-/* Everything a device statement may call. */
+/* Everything a device statement may call; nullif for --report's own
+ * labels (web_sdb_new_since()). */
 static const char *const FUNCS[] = {
-    "like", "coalesce", "substr", "instr", "min", "max", "count",
+    "like", "coalesce", "substr", "instr", "min", "max", "count", "nullif",
     "web_vendor", "web_z", "web_anoms", "web_ptr", NULL
 };
 
@@ -915,6 +1012,384 @@ int web_sdb_new_macs(web_sdb_conn_t *c, long long since, web_sdb_new_t *out,
     }
     sqlite3_finalize(st);
     return rc == SQLITE_DONE || rc == SQLITE_ROW ? n : -1;
+}
+
+/* ── M5 reads (#163) ──────────────────────────────────────────────────── */
+
+/* Does table carry every column of cols (NULL-ended, at most 31)?
+ * Through PRAGMA table_info, which the authorizer allows for an
+ * allow-listed table. */
+static int have_all(web_sdb_conn_t *c, const char *table,
+                    const char *const *cols) {
+    unsigned have;
+    int n = 0;
+    while (cols[n]) n++;
+    if (n > 31) return 0;
+    return table_cols(c->db, table, cols, &have) > 0 && have == (1u << n) - 1;
+}
+
+static int karma_ok(web_sdb_conn_t *c) {
+    static const char *const k[] = { "bssid", "score", "ssid_count",
+                                     "pnl_overlap", "ie_uniform", NULL };
+    return have_all(c, "karma_candidates", k);
+}
+
+static int ap_ssids_ok(web_sdb_conn_t *c) {
+    static const char *const k[] = { "bssid", "ssid", "first_seen",
+                                     "last_seen", NULL };
+    return have_all(c, "beacon_ap_ssids", k);
+}
+
+int web_sdb_aps(web_sdb_conn_t *c, int sort, long long limit,
+                long long offset, web_sdb_ap_fn fn, void *ctx) {
+    static const char *const want[] = {
+        "bssid", "ssid", "signal_dbm", "channel", "enc", "akm", "akm_bits",
+        "mfp", "downgrade_flags", "vendor", "phy", "has_wps", "first_seen",
+        "last_seen", NULL };
+    if (!have_all(c, "beacon_aps", want)) return 0;
+    static const char *const ORDER[WEB_AP_SORT_COUNT] = {
+        " ORDER BY a.last_seen DESC, a.bssid",
+        " ORDER BY 15 DESC, a.last_seen DESC, a.bssid",
+        " ORDER BY 16 DESC, a.last_seen DESC, a.bssid",
+        " ORDER BY a.bssid",
+    };
+    int km = karma_ok(c), ss = ap_ssids_ok(c);
+    char sql[1400];
+    snprintf(sql, sizeof(sql),
+        "SELECT a.bssid, a.ssid, a.signal_dbm, a.channel, a.enc, a.akm,"
+        " a.akm_bits, a.mfp, a.downgrade_flags, a.vendor, a.phy, a.has_wps,"
+        " a.first_seen, a.last_seen, %s, %s FROM beacon_aps a%s%s LIMIT ?1"
+        " OFFSET ?2",
+        ss ? "(SELECT count(*) FROM beacon_ap_ssids s WHERE s.bssid = a.bssid)"
+           : "0",
+        km ? "k.score, k.ssid_count, k.pnl_overlap, k.ie_uniform" : "NULL, 0, 0, 0",
+        km ? " LEFT JOIN karma_candidates k ON k.bssid = a.bssid" : "",
+        ORDER[sort >= 0 && sort < WEB_AP_SORT_COUNT ? sort : 0]);
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, limit);
+    sqlite3_bind_int64(st, 2, offset);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_ap_t a;
+        memset(&a, 0, sizeof(a));
+        key_text(st, 0, a.bssid);
+        text(st, 1, a.ssid, WEB_SDB_TEXT_MAX);
+        a.has_signal = sqlite3_column_type(st, 2) != SQLITE_NULL;
+        a.signal_dbm = sqlite3_column_int(st, 2);
+        a.channel = sqlite3_column_int64(st, 3);
+        text(st, 4, a.enc, WEB_SDB_TEXT_MAX);
+        text(st, 5, a.akm, WEB_SDB_TEXT_MAX);
+        a.akm_bits = sqlite3_column_int64(st, 6);
+        a.mfp = sqlite3_column_int64(st, 7);
+        a.downgrade = sqlite3_column_int64(st, 8);
+        text(st, 9, a.vendor, WEB_SDB_TEXT_MAX);
+        text(st, 10, a.phy, WEB_SDB_TEXT_MAX);
+        a.has_wps = sqlite3_column_int64(st, 11);
+        a.first_seen = sqlite3_column_int64(st, 12);
+        a.last_seen = sqlite3_column_int64(st, 13);
+        a.ssid_count = sqlite3_column_int64(st, 14);
+        a.has_karma = sqlite3_column_type(st, 15) != SQLITE_NULL;
+        a.k_score = sqlite3_column_int64(st, 15);
+        a.k_ssids = sqlite3_column_int64(st, 16);
+        a.k_overlap = sqlite3_column_int64(st, 17);
+        a.k_ie_uniform = sqlite3_column_int64(st, 18);
+        n++;
+        if (fn(ctx, &a)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_sdb_ap_ssids(web_sdb_conn_t *c, const char *bssid, int max,
+                     web_sdb_item_fn fn, void *ctx) {
+    if (!ap_ssids_ok(c)) return 0;
+    return items(c, "SELECT ssid, first_seen, last_seen FROM beacon_ap_ssids"
+                    " WHERE bssid = ?1 ORDER BY last_seen DESC, ssid LIMIT ?2",
+                 bssid, NULL, max, fn, ctx, 3);
+}
+
+/* One statement of the seven-column item shape: ?1 a text (when p1),
+ * ?2 and ?3 the range, ?4 the cap. */
+static int items_range(web_sdb_conn_t *c, const char *sql, const char *p1,
+                       long long from, long long to, int max,
+                       web_sdb_item_fn fn, void *ctx) {
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    if (p1) sqlite3_bind_text(st, 1, p1, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 2, from);
+    sqlite3_bind_int64(st, 3, to);
+    sqlite3_bind_int(st, 4, max);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_item_t it;
+        memset(&it, 0, sizeof(it));
+        text(st, 0, it.a, WEB_SDB_TEXT_MAX);
+        text(st, 1, it.b, WEB_SDB_TEXT_MAX);
+        it.n1 = sqlite3_column_int64(st, 2);
+        it.n2 = sqlite3_column_int64(st, 3);
+        it.has_n3 = sqlite3_column_type(st, 4) != SQLITE_NULL;
+        it.n3 = sqlite3_column_int64(st, 4);
+        it.first_seen = sqlite3_column_int64(st, 5);
+        it.last_seen = sqlite3_column_int64(st, 6);
+        n++;
+        if (fn(ctx, &it)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_sdb_deauth_floods(web_sdb_conn_t *c, const char *bssid,
+                          long long from, long long to, int max,
+                          web_sdb_item_fn fn, void *ctx) {
+    if (!(c->feats & WEB_QF_ALERTS)) return 0;
+    char sql[400];
+    /* rule_deauth_flood() keys an episode "deauth:<victim>@<bssid>". The
+     * key is in the WHERE only, against the canonical MAC the route
+     * bound; the result columns are constants and the episode's
+     * numbers. */
+    snprintf(sql, sizeof(sql),
+             "SELECT '', '', type, sev, count, first_seen, last_seen FROM"
+             " alerts WHERE type = %d AND instr(key, '@' || ?1) > 0 AND"
+             " last_seen >= ?2 AND first_seen < ?3 ORDER BY first_seen"
+             " LIMIT ?4", WEB_ALERT_DEAUTH_FLOOD);
+    c->pred_ok = 1;
+    int n = items_range(c, sql, bssid, from, to, max, fn, ctx);
+    c->pred_ok = 0;
+    return n;
+}
+
+static int sessions_ok(web_sdb_conn_t *c) {
+    static const char *const k[] = { "id", "started", "ended", "site_label",
+                                     NULL };
+    return have_all(c, "sessions", k);
+}
+
+static void session_row(sqlite3_stmt *st, int k, web_sdb_session_t *s) {
+    memset(s, 0, sizeof(*s));
+    s->id = sqlite3_column_int64(st, k);
+    s->started = sqlite3_column_int64(st, k + 1);
+    s->ended = sqlite3_column_type(st, k + 2) == SQLITE_NULL
+             ? -1 : sqlite3_column_int64(st, k + 2);
+    text(st, k + 3, s->label, WEB_SDB_TEXT_MAX);
+}
+
+int web_sdb_sessions(web_sdb_conn_t *c, web_sdb_session_t *out, int max) {
+    if (!sessions_ok(c)) return 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db, "SELECT id, started, ended, site_label FROM"
+                           " sessions ORDER BY started DESC, id DESC LIMIT ?1",
+                           -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int(st, 1, max);
+    int n = 0, rc = SQLITE_DONE;
+    while (n < max && (rc = sqlite3_step(st)) == SQLITE_ROW)
+        session_row(st, 0, &out[n++]);
+    if (n == max) rc = SQLITE_DONE;
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_sdb_session_pair(web_sdb_conn_t *c, long long id,
+                         web_sdb_session_t *s, web_sdb_session_t *prev,
+                         int *has_prev, long long *next_started) {
+    *has_prev = 0;
+    *next_started = -1;
+    if (!sessions_ok(c)) return 0;
+    sqlite3_stmt *st = NULL;
+    /* sloth's "previous" (src/db.c db_session_begin()): before it
+     * inserts its own row, the session with the latest started, so of
+     * the rows inserted before this one (a smaller AUTOINCREMENT id).
+     * The next one is the row inserted after it. */
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT s.id, s.started, s.ended, s.site_label,"
+            " p.id, p.started, p.ended, p.site_label,"
+            " (SELECT n.started FROM sessions n WHERE n.id > s.id"
+            " ORDER BY n.id LIMIT 1)"
+            " FROM sessions s LEFT JOIN sessions p ON p.id = (SELECT q.id FROM"
+            " sessions q WHERE q.id < s.id ORDER BY q.started DESC, q.id DESC"
+            " LIMIT 1) WHERE s.id = ?1", -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int64(st, 1, id);
+    int rc = sqlite3_step(st), found = 0;
+    if (rc == SQLITE_ROW) {
+        found = 1;
+        session_row(st, 0, s);
+        if (sqlite3_column_type(st, 4) != SQLITE_NULL) {
+            session_row(st, 4, prev);
+            *has_prev = 1;
+        }
+        if (sqlite3_column_type(st, 8) != SQLITE_NULL)
+            *next_started = sqlite3_column_int64(st, 8);
+    }
+    sqlite3_finalize(st);
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) return -1;
+    return found;
+}
+
+int web_sdb_new_since(web_sdb_conn_t *c, int kind, long long since,
+                      long long until, int max, web_sdb_item_fn fn,
+                      void *ctx, long long *total) {
+    /* src/db.c new_since_sql(): (identity, label, first_seen) per kind,
+     * the label exactly as --report builds it. */
+    static const struct { const char *t, *id, *label; } K[WEB_NEW_KINDS] = {
+        { "beacon_aps", "bssid", "COALESCE(NULLIF(ssid,''), '')" },
+        { "devices", "mac", "COALESCE(NULLIF(hostname,''), NULLIF(vendor,''), '')" },
+        { "probe_clients", "mac", "COALESCE(NULLIF(ssid,''), '')" },
+    };
+    *total = 0;
+    if (kind < 0 || kind >= WEB_NEW_KINDS) return -1;
+    const char *want[5] = { K[kind].id, "first_seen", NULL, NULL, NULL };
+    if (kind == WEB_NEW_DEVICE) { want[2] = "hostname"; want[3] = "vendor"; }
+    else want[2] = "ssid";
+    if (!have_all(c, K[kind].t, want)) return 0;
+    char sql[512];
+    snprintf(sql, sizeof(sql), "SELECT count(*) FROM %s WHERE first_seen >= ?1"
+             " AND (?2 < 0 OR first_seen <= ?2)", K[kind].t);
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, since);
+    sqlite3_bind_int64(st, 2, until);
+    int rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW) *total = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    if (rc != SQLITE_ROW) return -1;
+    snprintf(sql, sizeof(sql), "SELECT %s, %s, first_seen FROM %s"
+             " WHERE first_seen >= ?1 AND (?2 < 0 OR first_seen <= ?2)"
+             " ORDER BY first_seen DESC LIMIT ?3", K[kind].id, K[kind].label,
+             K[kind].t);
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, since);
+    sqlite3_bind_int64(st, 2, until);
+    sqlite3_bind_int(st, 3, max);
+    int n = 0;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_item_t it;
+        memset(&it, 0, sizeof(it));
+        text(st, 0, it.a, WEB_SDB_TEXT_MAX);
+        text(st, 1, it.b, WEB_SDB_TEXT_MAX);
+        it.first_seen = sqlite3_column_int64(st, 2);
+        it.last_seen = it.first_seen;
+        n++;
+        if (fn(ctx, &it)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_sdb_devices_between(web_sdb_conn_t *c, long long from, long long to,
+                            long long limit, long long offset,
+                            web_sdb_dev_fn fn, void *ctx) {
+    char sql[2048];
+    if (web_query_row_select(c->feats, NULL, sql, sizeof(sql) - 160) != 0)
+        return -1;
+    strcat(sql, " WHERE d.last_seen >= ?1 AND d.first_seen <= ?2"
+                " ORDER BY d.last_seen DESC, d.mac LIMIT ?3 OFFSET ?4");
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, to);
+    sqlite3_bind_int64(st, 3, limit);
+    sqlite3_bind_int64(st, 4, offset);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_dev_t d;
+        dev_row(st, &d);
+        n++;
+        if (fn(ctx, &d)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
+                           int max, web_sdb_item_fn fn, void *ctx) {
+    if (!(c->feats & WEB_QF_ALERTS)) return 0;
+    return items_range(c, "SELECT COALESCE(title,''), COALESCE(match_ip,''),"
+                          " type, sev, count, first_seen, last_seen FROM alerts"
+                          " WHERE last_seen >= ?2 AND first_seen < ?3"
+                          " ORDER BY last_seen DESC, first_seen DESC LIMIT ?4",
+                       NULL, from, to, max, fn, ctx);
+}
+
+int web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,
+                          int max, web_sdb_item_fn fn, void *ctx) {
+    static const char *const ssh[] = { "src_ip", "dst_ip", "banner_count",
+                                       "first_seen", "last_seen", NULL };
+    static const char *const rdp[] = { "src_ip", "dst_ip", "connect_req_count",
+                                       "first_seen", "last_seen", NULL };
+    static const char *const smb[] = { "client_ip", "server_ip", "server_port",
+                                       "obs_count", "first_seen", "last_seen",
+                                       NULL };
+    static const char *const snmp[] = { "src_ip", "dst_ip", "get_count",
+                                        "getnext_count", "getbulk_count",
+                                        "set_count", "response_count",
+                                        "trap_count", "version", "first_seen",
+                                        "last_seen", NULL };
+    static const char W[] = " WHERE last_seen >= ?2 AND first_seen < ?3";
+    char sql[2048] = "";
+    size_t o = 0;
+    const char *sep = "";
+    if (have_all(c, "ssh_flows", ssh)) {
+        o += (size_t)snprintf(sql + o, sizeof(sql) - o, "%sSELECT src_ip, dst_ip,"
+            " %d, banner_count, NULL, first_seen, last_seen FROM ssh_flows%s",
+            sep, WEB_FLOW_SSH, W);
+        sep = " UNION ALL ";
+    }
+    if (have_all(c, "rdp_flows", rdp)) {
+        o += (size_t)snprintf(sql + o, sizeof(sql) - o, "%sSELECT src_ip, dst_ip,"
+            " %d, connect_req_count, NULL, first_seen, last_seen FROM"
+            " rdp_flows%s", sep, WEB_FLOW_RDP, W);
+        sep = " UNION ALL ";
+    }
+    if (have_all(c, "smb_sessions", smb)) {
+        o += (size_t)snprintf(sql + o, sizeof(sql) - o, "%sSELECT client_ip,"
+            " server_ip, %d, obs_count, server_port, first_seen, last_seen FROM"
+            " smb_sessions%s", sep, WEB_FLOW_SMB, W);
+        sep = " UNION ALL ";
+    }
+    if (have_all(c, "snmp_flows", snmp)) {
+        o += (size_t)snprintf(sql + o, sizeof(sql) - o, "%sSELECT src_ip, dst_ip,"
+            " %d, get_count + getnext_count + getbulk_count + set_count +"
+            " response_count + trap_count, version, first_seen, last_seen FROM"
+            " snmp_flows%s", sep, WEB_FLOW_SNMP, W);
+        sep = " UNION ALL ";
+    }
+    if (!sep[0]) return 0;
+    snprintf(sql + o, sizeof(sql) - o, " ORDER BY 7 DESC, 1, 2 LIMIT ?4");
+    return items_range(c, sql, NULL, from, to, max, fn, ctx);
+}
+
+/* One grouped count per cell: (first_seen - from) / cell_s. */
+static int cells_of(web_sdb_conn_t *c, const char *table, long long from,
+                    int cell_s, int ncell, long long *out) {
+    char sql[256];
+    snprintf(sql, sizeof(sql), "SELECT (first_seen - ?1) / ?2, count(*) FROM %s"
+             " WHERE first_seen >= ?1 AND first_seen < ?3 GROUP BY 1", table);
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int(st, 2, cell_s);
+    sqlite3_bind_int64(st, 3, from + (long long)cell_s * ncell);
+    int rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        long long k = sqlite3_column_int64(st, 0);
+        if (k >= 0 && k < ncell) out[k] = sqlite3_column_int64(st, 1);
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? 0 : -1;
+}
+
+int web_sdb_overview(web_sdb_conn_t *c, long long from, int cell_s,
+                     int ncell, long long *devs, long long *alerts) {
+    if (cell_s <= 0 || ncell <= 0) return -1;
+    memset(devs, 0, (size_t)ncell * sizeof(*devs));
+    memset(alerts, 0, (size_t)ncell * sizeof(*alerts));
+    if (cells_of(c, "devices", from, cell_s, ncell, devs) != 0) return -1;
+    if ((c->feats & WEB_QF_ALERTS) &&
+        cells_of(c, "alerts", from, cell_s, ncell, alerts) != 0)
+        return -1;
+    return 0;
 }
 
 #endif /* WITH_SQLITE */

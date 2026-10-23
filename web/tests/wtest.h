@@ -63,5 +63,9 @@ void run_query_tests(void);
 void run_ptr_tests(void);
 void run_slothdb_tests(void);
 void run_devices_tests(void);
+void run_sqlbox_tests(void);
+void run_wifi_tests(void);
+void run_history_tests(void);
+void run_parity_tests(void);
 
 #endif

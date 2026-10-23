@@ -45,6 +45,22 @@
 #define WEB_KEYS_MAX          256
 #define WEB_PARAM_MAX         63
 
+/* One parameter of a route's query, as every route but /api/query
+ * parses it (the rules above): name=value pairs and nothing else, each
+ * name [a-z]+, one of the route's own and at most once; a value
+ * percent-decoded to 1..WEB_PARAM_MAX bytes of printable ASCII. */
+typedef struct {
+    const char *name;
+    char        val[WEB_PARAM_MAX + 1];
+    int         seen;
+} web_param_t;
+
+/* 0, or -1 with the reason word in err. Shared by the M5 routes. */
+int    web_params_parse(const char *query, web_param_t *ps, int np,
+                        char *err, size_t errsz);
+/* Decimal seconds, 1..11 digits. 0, or -1. */
+int    web_param_secs(const char *s, long long *out);
+
 typedef struct {
     int       metric, tier;
     char      key[WEB_KEY_MAX + 1];
@@ -59,6 +75,15 @@ int    web_series_parse(const char *query, long long now_s, int retain_days,
 /* The answer's JSON into out. 0 if it did not fit. */
 size_t web_series_json(web_tsdb_t *t, const web_series_q_t *q, char *out,
                        size_t cap);
+
+/* The buckets of (metric, key) in tier with from <= t < to, newest
+ * first, at most max into out: the store's and, for the fine tier, the
+ * ring's, one point per bucket (web_series_json()'s merge, shared with
+ * M5's waterfall). *more when max cut it; *store_err when the store
+ * read failed (the ring's are still there). Count, or -1 (memory). */
+int    web_series_points(web_tsdb_t *t, int tier, int metric, const char *key,
+                         long long from, long long to, web_point_t *out,
+                         int max, int *more, int *store_err);
 
 int    web_keys_parse(const char *query, int *metric, char *err, size_t errsz);
 size_t web_keys_json(web_tsdb_t *t, int metric, char *out, size_t cap);

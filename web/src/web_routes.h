@@ -15,6 +15,13 @@
  *   /api/devices  JSON: sloth.db's devices matching ?q= (M4, web_devices.h)
  *   /api/device/{mac} JSON: one device, everything known
  *   /api/lookup   JSON: ?q= a MAC or an IP: vendor, passive names, record
+ *   /api/wifi/channels, /api/wifi/deauth, /api/wifi/aps
+ *                 JSON: the WiFi view (M5, web_wifi.h)
+ *   /api/history/overview, /api/history/devices, /api/history/alerts,
+ *   /api/history/flows, /api/sessions, /api/sessions/new
+ *                 JSON: the History view (M5, web_history.h)
+ *   /api/query    JSON: the SQL box (M5, web_sqlbox.h), GET only, and
+ *   /api/recipes  JSON: its recipes; both 404 unless --web-allow-sql
  *   /events       Server-Sent Events: tick, record, anomaly, ping
  *   anything else 404
  *
@@ -32,6 +39,7 @@
 #include "web_devices.h"
 #include "web_http.h"
 #include "web_live.h"
+#include "web_sqlbox.h"
 #include "web_tsdb.h"
 
 /* EventSource reconnect delay sent at the start of every stream. */
@@ -47,13 +55,17 @@ typedef struct {
     long long     wall_s;     /* unix seconds, for the series routes */
     web_anomaly_t *anomaly;   /* NULL: no baseline/anomaly engine (M3) */
     const web_m4_t *m4;       /* NULL: no Devices or Lookup (M4) */
+    web_sqlbox_t  *sql;       /* NULL or disabled: no SQL box (M5) */
 } web_health_t;
 
 /* /api/live and the series routes are built into the connection's
  * output buffer behind their header; this much is kept free for it. */
 #define WEB_LIVE_HDR_RESERVE 1024
 
-enum { WEB_R_ONESHOT = 0, WEB_R_SSE };
+/* WEB_R_SQL: the statement was handed to the SQL box's thread
+ * (web_sqlbox_submit()); out holds nothing and the server sends the
+ * box's answer when it is ready. */
+enum { WEB_R_ONESHOT = 0, WEB_R_SSE, WEB_R_SQL };
 
 typedef struct {
     int                  kind;      /* WEB_R_ONESHOT or WEB_R_SSE */

@@ -1,9 +1,10 @@
-/* slothweb (#157 W0, #158 M0, #159 M1, #160 M2, #161 M3, #162 M4): the allow
- * list and its refusals, the embedded page, /api/health, /api/live, the
- * /events stream, the data-socket client that feeds them, the time
- * series behind /api/series, and the baselines and anomaly rules behind
- * /api/baseline and /api/anomalies, and the Devices and Lookup routes
- * over a read-only sloth.db. See web/README.md. */
+/* slothweb (#157 W0, #158 M0, #159 M1, #160 M2, #161 M3, #162 M4, #163
+ * M5): the allow list and its refusals, the embedded page, /api/health,
+ * /api/live, the /events stream, the data-socket client that feeds
+ * them, the time series behind /api/series, and the baselines and
+ * anomaly rules behind /api/baseline and /api/anomalies, the Devices
+ * and Lookup routes over a read-only sloth.db, the WiFi and History
+ * routes, and the SQL box behind --web-allow-sql. See web/README.md. */
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +24,7 @@
 #include "web_rollup.h"
 #include "web_server.h"
 #include "web_slothdb.h"
+#include "web_sqlbox.h"
 #include "web_store.h"
 #include "web_tsdb.h"
 
@@ -39,6 +41,7 @@ static web_ident_t    g_ident;
 static web_ptr_t      g_ptr;
 static web_slothdb_t  g_sdb;
 static web_m4_t       g_m4;
+static web_sqlbox_t   g_sql;
 
 static void on_signal(int sig) {
     (void)sig;
@@ -139,6 +142,18 @@ int main(int argc, char **argv) {
     web_server_set_tsdb(&g_srv, &g_tsdb);
     web_server_set_anomaly(&g_srv, &g_anomaly);
     web_server_set_m4(&g_srv, &g_m4);
+    /* The SQL box: its own thread, its own one-answer buffer, only with
+     * --web-allow-sql (web_config_check() refused it under --strict
+     * and without --sloth-db). */
+    err[0] = '\0';
+    if (web_sqlbox_init(&g_sql, &g_sdb, cfg.allow_sql) != 0 ||
+        web_sqlbox_start(&g_sql, err, sizeof(err)) != 0) {
+        fprintf(stderr, "slothweb: SQL box: %s\n",
+                err[0] ? err : "out of memory");
+        web_server_close(&g_srv);
+        return 1;
+    }
+    web_server_set_sqlbox(&g_srv, &g_sql);
     web_ingest_set_metrics(&g_ingest, &g_metrics);
     if (web_tsdb_start(&g_tsdb, err, sizeof(err)) != 0 ||
         web_ingest_start(&g_ingest, &cfg.sock, cfg.sock_backoff_min_ms,
@@ -158,8 +173,14 @@ int main(int argc, char **argv) {
     fprintf(stderr, "slothweb: listening on http://%s/ "
                     "(/, /api/health, /api/live, /api/series, /api/keys, "
                     "/api/metrics, /api/baseline, /api/anomalies, "
-                    "/api/devices, /api/device/MAC, /api/lookup, /events)\n",
-            where);
+                    "/api/devices, /api/device/MAC, /api/lookup, "
+                    "/api/wifi/*, /api/history/*, /api/sessions%s, /events)\n",
+            where, cfg.allow_sql ? ", /api/query, /api/recipes" : "");
+    if (cfg.allow_sql)
+        fprintf(stderr, "slothweb: SQL box on (--web-allow-sql): one "
+                        "read-only SELECT at a time over %s, %d s, %d rows, "
+                        "credential columns withheld\n", cfg.sloth_db,
+                WEB_SQL_TIMEOUT_MS / 1000, WEB_SQL_ROW_CAP);
     const web_oui_tab_t *ot = web_oui_builtin();
     fprintf(stderr, "slothweb: vendor table: %s (%u MA-L, %u MA-M, %u MA-S)%s\n",
             ot->source, ot->counts[WEB_OUI_MAL], ot->counts[WEB_OUI_MAM],
@@ -205,6 +226,7 @@ int main(int argc, char **argv) {
     }
 
     rc = web_server_run(&g_srv);
+    web_sqlbox_stop(&g_sql);
     web_ingest_stop(&g_ingest);
     web_tsdb_stop(&g_tsdb);
 
@@ -215,6 +237,7 @@ int main(int argc, char **argv) {
             st.accepted, st.refused, st.busy, st.served, st.timeouts,
             st.accept_paused);
     web_server_close(&g_srv);
+    web_sqlbox_destroy(&g_sql);
     web_live_destroy(&g_live);
     web_tsdb_destroy(&g_tsdb);
     web_metrics_destroy(&g_metrics);

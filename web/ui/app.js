@@ -1,9 +1,11 @@
-// slothweb M4 client: the Overview view (M1, with M3's baseline band,
+// slothweb M5 client: the Overview view (M1, with M3's baseline band,
 // hour-of-week heatmap and top anomalies), the Activity view (M2, with
-// M3's baseline band), the Anomalies view (M3), and the Devices view,
+// M3's baseline band), the Anomalies view (M3), the Devices view,
 // the device drawer and the Lookup view (M4: /api/devices,
 // /api/device/MAC, /api/lookup; passive only, nothing is ever resolved
-// or sent anywhere but this page's own server). Overview: KPI tiles
+// or sent anywhere but this page's own server), and the WiFi and
+// History views with the SQL box (M5: /api/wifi/*, /api/history/*,
+// /api/sessions, /api/query only when the server says it is on). Overview: KPI tiles
 // and the strip from the /events tick, the record ticker from /events
 // record events, /api/live for the alert list, the sensor detail and the
 // ticker's backlog. Charts: /api/metrics, /api/keys, /api/series and
@@ -233,6 +235,10 @@
       set("db", h.db);
       set("store", h.store);
       set("milestone", h.milestone);
+      // The SQL box exists only when the server was started with
+      // --web-allow-sql; otherwise it is never drawn and never asked.
+      Q.on = !!(h.sql && typeof h.sql === "object");
+      $("h-sql").hidden = !Q.on;
       if (h.anomaly && h.anomaly.persisted === false)
         set("k-anoms-sub", "in memory only: lost at a restart");
       else if (typeof h.a4 === "string" && h.a4 !== "on")
@@ -246,7 +252,7 @@
   setInterval(live, 5000);
 
   // ── views ─────────────────────────────────────────────────────────
-  var VIEWS = ["overview", "activity", "devices", "anomalies", "lookup"];
+  var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "history", "lookup"];
   var view = "overview";
   function show(v) {
     view = v;
@@ -258,12 +264,16 @@
     if (v === "anomalies") anomalies();
     if (v === "overview") overview();
     if (v === "devices") devices();
+    if (v === "wifi") wifi();
+    if (v === "history") history();
     if (v === "lookup") $("l-q").focus();
   }
   $("nav-overview").addEventListener("click", function () { show("overview"); });
   $("nav-activity").addEventListener("click", function () { show("activity"); });
   $("nav-anomalies").addEventListener("click", function () { show("anomalies"); });
   $("nav-devices").addEventListener("click", function () { show("devices"); });
+  $("nav-wifi").addEventListener("click", function () { show("wifi"); });
+  $("nav-history").addEventListener("click", function () { show("history"); });
   $("nav-lookup").addEventListener("click", function () { show("lookup"); });
 
   document.addEventListener("keydown", function (e) {
@@ -274,6 +284,8 @@
     if (e.key === "2") show("activity");
     if (e.key === "3") show("devices");
     if (e.key === "4") show("anomalies");
+    if (e.key === "5") show("wifi");
+    if (e.key === "8") show("history");
     if (e.key === "9") show("lookup");
     // §3: search with /.
     if (e.key === "/") { e.preventDefault(); show("devices"); $("d-q").focus(); }
@@ -1182,6 +1194,475 @@
   }
   $("l-go").addEventListener("click", lookup);
   $("l-q").addEventListener("keydown", function (e) { if (e.key === "Enter") lookup(); });
+
+  // ── WiFi (§8.8, M5) ───────────────────────────────────────────────
+  // The channel waterfall from /api/wifi/channels, the AP table from
+  // /api/wifi/aps (sloth.db through the reader's allow-list), the
+  // deauth timeline from /api/wifi/deauth, and probe clients from
+  // /api/series with its baseline band. Channel keys, BSSIDs and SSIDs
+  // are drawn with fillText or set with textContent, never as markup.
+  var WF = { gen: 0 };
+  var AP_SORTS = { "last": 1, "ssids": 1, "karma": 1, "bssid": 1 };
+  var BAND_WORD = { "2.4": "2.4 GHz", "5": "5 GHz", "6": "6 GHz" };
+
+  function wifiWindow() {
+    var win = Number($("w-win").value) || 3600;
+    var now = Math.floor(Date.now() / 1000);
+    var to = now - now % 10 + 10;
+    return { from: to - win, to: to, win: win };
+  }
+
+  function wifiGridPath(route, metric, r) {
+    var p = "/api/wifi/" + route + "?from=" + r.from + "&to=" + r.to + "&cols=96";
+    if (metric !== "") p += "&metric=" + encodeURIComponent(metric);
+    return p;
+  }
+
+  // Rows are channels, bands grouped with a rule between them; a cell's
+  // colour is the heat ramp against the busiest cell in view.
+  function waterfall(c, j) {
+    var T = theme();
+    var dpr = sizeCanvas(c);
+    var g = c.getContext("2d");
+    var W = c.width, H = c.height;
+    g.clearRect(0, 0, W, H);
+    var rows = j.channels || [];
+    if (!rows.length) return;
+    var max = 0;
+    rows.forEach(function (r) {
+      (r.cells || []).forEach(function (v) { if (num(v) && v > max) max = v; });
+    });
+    var padL = 40 * dpr, rh = Math.max(2 * dpr, Math.floor((H - 2 * dpr) / rows.length));
+    var cw = (W - padL) / Math.max(1, j.cols);
+    g.font = Math.min(10 * dpr, rh) + "px " + css("--font-mono");
+    g.textBaseline = "middle";
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i], y = i * rh;
+      if (i && rows[i - 1].band !== r.band) {
+        g.fillStyle = T.rule;
+        g.fillRect(0, y, W, Math.max(1, dpr));
+      }
+      g.fillStyle = T.muted;
+      g.fillText(String(r.key), 2 * dpr, y + rh / 2);
+      for (var k = 0; k < (r.cells || []).length; k++) {
+        var v = r.cells[k];
+        if (!num(v) || v <= 0) continue;
+        g.fillStyle = heat(max > 0 ? v / max : 0);
+        g.fillRect(padL + k * cw, y + dpr, Math.max(dpr, Math.ceil(cw)), rh - dpr);
+      }
+    }
+  }
+
+  function apRow(a) {
+    var row = el("div", "aprow" + (a.multi_ssid ? " multi" : ""));
+    var bs = el("span", "c-bs");
+    var sw = el("span", "sw");
+    sw.style.background = keyColor(String(a.bssid));
+    bs.appendChild(sw);
+    bs.appendChild(el("span", "", a.bssid));
+    row.appendChild(bs);
+    var ss = el("span", "c-ssid" + (a.multi_ssid ? " warn" : ""),
+                (a.ssid === null ? "(hidden)" : a.ssid) +
+                (a.ssid_count > 1 ? "  +" + (a.ssid_count - 1) + " ssids" : ""));
+    row.appendChild(ss);
+    row.appendChild(el("span", "c-ch", String(a.channel)));
+    row.appendChild(el("span", "c-sig", num(a.signal) ? String(a.signal) : "-"));
+    row.appendChild(el("span", "c-enc", (a.enc === null ? "?" : a.enc) + " " +
+                       (a.akm_names && a.akm_names.length ? a.akm_names.join(",") : "")));
+    row.appendChild(el("span", "c-mfp", "mfp " + a.mfp_word));
+    row.appendChild(el("span", "c-dg" + (a.downgrade ? " warn" : ""),
+                       a.downgrade_names && a.downgrade_names.length
+                         ? a.downgrade_names.join(", ") : "-"));
+    row.appendChild(el("span", "c-km" + (a.karma ? " warn" : ""),
+                       a.karma ? "karma " + a.karma.score : "-"));
+    row.appendChild(el("span", "c-ls", shortStamp(a.last_seen)));
+    var box = el("div", "apbox");
+    box.appendChild(row);
+    if (a.ssid_count > 1 && a.ssids) {
+      var hist = el("div", "sub aphist");
+      hist.textContent = "ssid history: " + a.ssids.map(function (x) {
+        return x.ssid + " (" + shortStamp(x.first_seen) + " to " + shortStamp(x.last_seen) + ")";
+      }).join("; ") + (a.ssids_more ? "; more" : "");
+      box.appendChild(hist);
+    }
+    return box;
+  }
+
+  function wifiAps() {
+    var gen = WF.gen;
+    var sort = $("w-sort").value;
+    if (!Object.prototype.hasOwnProperty.call(AP_SORTS, sort)) sort = "last";
+    getJSON("/api/wifi/aps?limit=100&sort=" + encodeURIComponent(sort)).then(function (j) {
+      if (gen !== WF.gen) return;
+      var box = $("w-aps");
+      while (box.firstChild) box.removeChild(box.firstChild);
+      (j.rows || []).forEach(function (a) { box.appendChild(apRow(a)); });
+      if (!j.rows || !j.rows.length) box.appendChild(el("div", "sub", "no beacon_aps rows"));
+      set("w-aps-count", (j.rows ? j.rows.length : 0) + " shown" + (j.more ? ", more in sloth.db" : ""));
+    }).catch(function (e) {
+      if (gen !== WF.gen) return;
+      var box = $("w-aps");
+      while (box.firstChild) box.removeChild(box.firstChild);
+      set("w-aps-count", errText(e.message));
+    });
+  }
+
+  // Bars per bssid, the frames of each cell against the row's busiest;
+  // flood episodes under them in --sev-crit.
+  function deauthChart(c, j) {
+    var T = theme();
+    var dpr = sizeCanvas(c);
+    var g = c.getContext("2d");
+    var W = c.width, H = c.height;
+    g.clearRect(0, 0, W, H);
+    var rows = (j.bssids || []).slice(0, 12);
+    if (!rows.length) return;
+    var padL = 128 * dpr, rh = Math.floor(H / rows.length);
+    var cw = (W - padL) / Math.max(1, j.cols);
+    var span = j.to - j.from;
+    g.font = Math.min(10 * dpr, rh) + "px " + css("--font-mono");
+    g.textBaseline = "middle";
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i], y = i * rh;
+      g.fillStyle = css("--sev-crit");
+      (r.floods || []).forEach(function (f) {
+        var a = Math.max(j.from, f[0]), b = Math.min(j.to, f[1] + j.col_s);
+        if (b <= a) return;
+        g.globalAlpha = 0.35;
+        g.fillRect(padL + (a - j.from) / span * (W - padL), y, Math.max(dpr, (b - a) / span * (W - padL)), rh);
+        g.globalAlpha = 1;
+      });
+      g.fillStyle = T.muted;
+      g.fillText(String(r.bssid), 2 * dpr, y + rh / 2);
+      var max = 0;
+      (r.cells || []).forEach(function (v) { if (num(v) && v > max) max = v; });
+      g.fillStyle = (r.floods || []).length ? css("--sev-crit") : T.data;
+      for (var k = 0; k < (r.cells || []).length; k++) {
+        var v = r.cells[k];
+        if (!num(v) || v <= 0 || max <= 0) continue;
+        var h = Math.max(dpr, (rh - 2 * dpr) * v / max);
+        g.fillRect(padL + k * cw, y + rh - dpr - h, Math.max(dpr, cw - dpr), h);
+      }
+    }
+  }
+
+  function wifi() {
+    var gen = ++WF.gen;
+    var r = wifiWindow();
+    var metric = $("w-metric").value === "ctrl_total" ? "ctrl_total" : "ap_count";
+    getJSON(wifiGridPath("channels", metric, r)).then(function (j) {
+      if (gen !== WF.gen) return;
+      waterfall($("w-heat"), j);
+      set("w-heat-note", (j.channels || []).length + " channels, " + j.tier + " tier, " +
+          fmt(j.col_s) + " s cells" + (j.more ? ", more channels than shown" : ""));
+    }).catch(function (e) { if (gen === WF.gen) set("w-heat-note", errText(e.message)); });
+    getJSON(wifiGridPath("deauth", "", r)).then(function (j) {
+      if (gen !== WF.gen) return;
+      deauthChart($("w-deauth"), j);
+      var floods = 0;
+      (j.bssids || []).forEach(function (b) { floods += (b.floods || []).length; });
+      set("w-da-note", (j.bssids || []).length + " bssids, " + floods +
+          " flood episode" + (floods === 1 ? "" : "s") + ", sloth.db " + j.db);
+    }).catch(function (e) { if (gen === WF.gen) set("w-da-note", errText(e.message)); });
+    var tier = tierFor(r.win);
+    Promise.all([series("wifi.probe_clients", "", tier, r.from, r.to),
+                 baseline("wifi.probe_clients", "")]).then(function (res) {
+      if (gen !== WF.gen) return;
+      var s = res[0], bl = res[1];
+      draw($("w-probe"), s.points, { from: r.from, to: r.to, step: s.step, kind: s.kind,
+                                     color: theme().ink, axes: true,
+                                     band: bands(s.points, bl, s.kind, s.step) });
+      set("w-pc-note", s.points.length + " buckets, " + s.source +
+          (bl && bl.cells ? ", band = mean ± " + sens.toFixed(1) + " sd" : ", no baseline yet"));
+    }).catch(function (e) { if (gen === WF.gen) set("w-pc-note", errText(e.message)); });
+    wifiAps();
+  }
+  $("w-metric").addEventListener("change", function () { wifi(); });
+  $("w-win").addEventListener("change", function () { wifi(); });
+  $("w-sort").addEventListener("change", function () { wifiAps(); });
+
+  // ── History (§8.10, M5) ───────────────────────────────────────────
+  // A 30 d strip (/api/history/overview) to drag a range on; for the
+  // range, who was here (/api/history/devices, presence restricted to
+  // it), the alerts, anomalies and flows in it; the survey sessions as
+  // markers, each one click from --report's "new since the previous
+  // session" (/api/sessions/new). The SQL box is drawn only when
+  // /api/health says the server was started with --web-allow-sql.
+  var HS = { gen: 0, from: 0, to: 0, ov: null, drag: null, sessions: [] };
+
+  function histPath(route, from, to, extra) {
+    return "/api/history/" + route + "?from=" + from + "&to=" + to + (extra || "");
+  }
+
+  function stripX(c, t) {
+    var o = HS.ov;
+    return (t - o.from) / (o.to - o.from) * c.width;
+  }
+
+  function stripT(c, x) {
+    var o = HS.ov;
+    var t = Math.round(o.from + x / Math.max(1, c.width) * (o.to - o.from));
+    return Math.max(o.from, Math.min(o.to, t));
+  }
+
+  function drawOverview() {
+    var c = $("h-strip"), o = HS.ov;
+    if (!o) return;
+    var T = theme();
+    var dpr = sizeCanvas(c);
+    var g = c.getContext("2d");
+    var W = c.width, H = c.height;
+    g.clearRect(0, 0, W, H);
+    var max = 1;
+    for (var i = 0; i < o.cols; i++) max = Math.max(max, o.devices[i] || 0, o.alerts[i] || 0);
+    var cw = W / Math.max(1, o.cols), h2 = (H - 8 * dpr) / 2;
+    for (i = 0; i < o.cols; i++) {
+      var d = o.devices[i] || 0, a = o.alerts[i] || 0;
+      g.fillStyle = T.data;
+      if (d) g.fillRect(i * cw, h2 - h2 * d / max, Math.max(dpr, cw - dpr), h2 * d / max);
+      g.fillStyle = css("--sev-warn");
+      if (a) g.fillRect(i * cw, h2 + 2 * dpr, Math.max(dpr, cw - dpr), h2 * a / max);
+    }
+    g.fillStyle = T.ink;
+    HS.sessions.forEach(function (s) {
+      var x = stripX(c, s.started);
+      g.fillRect(x, 0, Math.max(dpr, 2 * dpr), H);
+    });
+    var a0 = HS.drag ? Math.min(HS.drag.a, HS.drag.b) : stripX(c, HS.from);
+    var a1 = HS.drag ? Math.max(HS.drag.a, HS.drag.b) : stripX(c, HS.to);
+    g.strokeStyle = T.signal;
+    g.lineWidth = Math.max(1, dpr);
+    g.strokeRect(a0 + 0.5, 0.5, Math.max(dpr, a1 - a0), H - 1);
+  }
+
+  function sessionChips() {
+    var box = $("h-sessions");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    if (!HS.sessions.length) { box.appendChild(el("span", "sub", "no survey sessions in this window")); return; }
+    HS.sessions.forEach(function (s) {
+      var b = el("button", "", "#" + s.id + " " + shortStamp(s.started) +
+                 (s.label === null ? "" : " " + s.label));
+      b.type = "button";
+      b.addEventListener("click", function () { newSince(s.id); });
+      box.appendChild(b);
+    });
+  }
+
+  function newSince(id) {
+    var gen = ++HS.ngen;
+    set("h-new-note", "loading");
+    getJSON("/api/sessions/new?id=" + encodeURIComponent(String(id))).then(function (j) {
+      if (gen !== HS.ngen) return;
+      var box = $("h-new");
+      while (box.firstChild) box.removeChild(box.firstChild);
+      if (!j.previous) {
+        set("h-new-note", "session #" + j.session.id + ": a first visit, nothing to compare with");
+        return;
+      }
+      set("h-new-note", "session #" + j.session.id + " against #" + j.previous.id +
+          ", since " + stamp(j.since) + (num(j.until) ? " until " + stamp(j.until) : ""));
+      [["access points", j.aps], ["devices", j.devices], ["probe clients", j.probe_clients]]
+        .forEach(function (k) {
+          var part = k[1];
+          if (!part) return;
+          box.appendChild(el("div", "label", k[0] + ": " + part.total + " new" +
+                             (part.total > part.listed ? ", " + (part.total - part.listed) + " more not listed" : "")));
+          var ol = el("ol", "lst");
+          (part.rows || []).forEach(function (r) {
+            var li = el("li", "");
+            li.appendChild(el("span", "ts", shortStamp(r.first_seen)));
+            li.appendChild(el("span", "tx", r.ident + "  " + (r.label === null ? "-" : r.label)));
+            ol.appendChild(li);
+          });
+          box.appendChild(ol);
+        });
+    }).catch(function (e) { if (gen === HS.ngen) set("h-new-note", errText(e.message)); });
+  }
+  HS.ngen = 0;
+
+  function histDevRow(d) {
+    var row = el("div", "hrow");
+    var mac = el("span", "c-mac");
+    var sw = el("span", "sw");
+    sw.style.background = keyColor(String(d.mac));
+    mac.appendChild(sw);
+    mac.appendChild(el("span", d.random ? "rnd" : "", (d.random ? "~" : "") + d.mac));
+    row.appendChild(mac);
+    row.appendChild(el("span", "c-ven", d.vendor === null ? "?" : d.vendor));
+    row.appendChild(el("span", "c-nm", d.name === null ? "-" : d.name));
+    row.appendChild(el("span", "c-fs", shortStamp(d.first_seen)));
+    row.appendChild(el("span", "c-ls", shortStamp(d.last_seen)));
+    var cv = document.createElement("canvas");
+    row.appendChild(cv);
+    row.addEventListener("click", function () { openDrawer(d.mac); });
+    $("h-devs").appendChild(row);
+    drawStrip(cv, d.presence);
+  }
+
+  function historyRange() {
+    var gen = ++HS.gen;
+    var from = HS.from, to = HS.to;
+    set("h-range", stamp(from) + " to " + stamp(to));
+    getJSON(histPath("devices", from, to, "&limit=200")).then(function (j) {
+      if (gen !== HS.gen) return;
+      var box = $("h-devs");
+      while (box.firstChild) box.removeChild(box.firstChild);
+      (j.rows || []).forEach(histDevRow);
+      set("h-dev-count", (j.rows || []).length + " overlap the range" +
+          (j.more ? ", more than shown" : "") + "; strip: " + fmt(j.presence_cell_s) + " s cells");
+    }).catch(function (e) { if (gen === HS.gen) set("h-dev-count", errText(e.message)); });
+    getJSON(histPath("alerts", from, to, "&limit=100")).then(function (j) {
+      if (gen !== HS.gen) return;
+      var ol = $("h-alerts");
+      while (ol.firstChild) ol.removeChild(ol.firstChild);
+      (j.alerts || []).forEach(function (a) {
+        var sev = num(a.sev) && a.sev >= 0 && a.sev <= 2 ? a.sev : -1;
+        var li = el("li", sev >= 0 ? "sev" + sev : "");
+        li.appendChild(el("span", "ts", shortStamp(a.last_seen)));
+        li.appendChild(el("span", "ty", sev >= 0 ? SEV_WORD[sev] : "?"));
+        li.appendChild(el("span", "tx", (a.title === null ? "?" : a.title) +
+                          (a.ip === null ? "" : "  " + a.ip) + "  x" + a.count));
+        ol.appendChild(li);
+      });
+      if (!j.alerts || !j.alerts.length) ol.appendChild(el("li", "sub", "none in the range"));
+      set("h-al-count", (j.alerts || []).length + (j.more ? "+" : ""));
+    }).catch(function (e) { if (gen === HS.gen) set("h-al-count", errText(e.message)); });
+    getJSON(histPath("flows", from, to, "&limit=100")).then(function (j) {
+      if (gen !== HS.gen) return;
+      var ol = $("h-flows");
+      while (ol.firstChild) ol.removeChild(ol.firstChild);
+      (j.flows || []).forEach(function (f) {
+        var li = el("li", "");
+        li.appendChild(el("span", "ts", shortStamp(f.last_seen)));
+        li.appendChild(el("span", "ty", f.proto));
+        li.appendChild(el("span", "tx", f.src + " → " + f.dst + "  x" + f.count));
+        ol.appendChild(li);
+      });
+      if (!j.flows || !j.flows.length) ol.appendChild(el("li", "sub", "none in the range"));
+    }).catch(function () { /* the list stands empty */ });
+    getJSON("/api/anomalies?since=" + from).then(function (j) {
+      if (gen !== HS.gen) return;
+      var box = $("h-anoms");
+      while (box.firstChild) box.removeChild(box.firstChild);
+      var list = (j.anomalies || []).filter(function (a) { return num(a.first_seen) && a.first_seen <= to; });
+      list.forEach(function (a) { box.appendChild(card(a)); });
+      if (!list.length) box.appendChild(el("div", "sub", "none kept for the range (episodes are kept a week)"));
+    }).catch(function () { /* the cards stand empty */ });
+  }
+
+  function history() {
+    var now = Math.floor(Date.now() / 1000);
+    var to = now, from = to - 30 * 86400;
+    getJSON("/api/history/overview?from=" + from + "&to=" + to + "&cols=180").then(function (j) {
+      HS.ov = j;
+      HS.sessions = (j.sessions || []).filter(function (s) { return num(s.started) && num(s.id); });
+      if (!HS.to) { HS.to = j.to; HS.from = Math.max(j.from, j.to - 86400); }
+      drawOverview();
+      sessionChips();
+      historyRange();
+      if (HS.sessions.length && !HS.ngen) newSince(HS.sessions[0].id);
+    }).catch(function (e) { set("h-range", errText(e.message)); });
+    if (Q.on) recipes();
+  }
+
+  $("h-strip").addEventListener("mousedown", function (e) {
+    if (!HS.ov) return;
+    var c = $("h-strip"), r = c.getBoundingClientRect();
+    var x = (e.clientX - r.left) * (c.width / Math.max(1, r.width));
+    HS.drag = { a: x, b: x };
+  });
+  $("h-strip").addEventListener("mousemove", function (e) {
+    if (!HS.drag) return;
+    var c = $("h-strip"), r = c.getBoundingClientRect();
+    HS.drag.b = (e.clientX - r.left) * (c.width / Math.max(1, r.width));
+    drawOverview();
+  });
+  window.addEventListener("mouseup", function () {
+    if (!HS.drag) return;
+    var c = $("h-strip"), d = HS.drag;
+    HS.drag = null;
+    var a = stripT(c, Math.min(d.a, d.b)), b = stripT(c, Math.max(d.a, d.b));
+    // A click, not a drag: a session marker under it opens its list.
+    if (Math.abs(d.b - d.a) < 3) {
+      var hit = null;
+      HS.sessions.forEach(function (s) {
+        if (Math.abs(stripX(c, s.started) - d.a) <= 4 * (window.devicePixelRatio || 1)) hit = s;
+      });
+      if (hit) newSince(hit.id);
+      drawOverview();
+      return;
+    }
+    if (b - a < 60) b = a + 60;
+    HS.from = a;
+    HS.to = b;
+    drawOverview();
+    historyRange();
+  });
+
+  // ── the SQL box (§7 /api/query, M5) ───────────────────────────────
+  // Read-only, one statement, 5 s, 10,000 rows; the server refuses
+  // everything else and withholds the credential columns. The recipes
+  // are docs/wiki/sqlite-schema.md's, built into the server. Results
+  // are cells of textContent.
+  var Q = { on: false, gen: 0, recipes: null };
+
+  function recipes() {
+    if (Q.recipes) return;
+    getJSON("/api/recipes").then(function (j) {
+      Q.recipes = j.recipes || [];
+      var sel = $("q-recipe");
+      while (sel.firstChild) sel.removeChild(sel.firstChild);
+      Q.recipes.forEach(function (r, i) {
+        var o = el("option", "", r.title);
+        o.value = String(i);
+        sel.appendChild(o);
+      });
+      if (Q.recipes.length) $("q-sql").value = Q.recipes[0].sql.trim();
+      set("q-note", Q.recipes.length + " recipes from " + j.source);
+    }).catch(function (e) { set("q-note", errText(e.message)); });
+  }
+
+  function cellText(v) {
+    if (v === null) return "NULL";
+    if (typeof v === "object" && typeof v.blob === "string") return "x'" + v.blob + "'";
+    return String(v);
+  }
+
+  function runQuery() {
+    var sql = $("q-sql").value;
+    if (sql.trim() === "") return;
+    var gen = ++Q.gen;
+    set("q-note", "running");
+    fetch("/api/query?sql=" + encodeURIComponent(sql), { cache: "no-store" }).then(function (r) {
+      return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+    }).then(function (res) {
+      if (gen !== Q.gen) return;
+      var box = $("q-out");
+      while (box.firstChild) box.removeChild(box.firstChild);
+      var j = res.j;
+      if (!res.ok) {
+        set("q-note", "refused: " + j.error + (typeof j.detail === "string" ? " (" + j.detail + ")" : ""));
+        return;
+      }
+      var tbl = el("table", "qt");
+      var tr = el("tr", "");
+      (j.columns || []).forEach(function (c) { tr.appendChild(el("th", "", c)); });
+      tbl.appendChild(tr);
+      (j.rows || []).forEach(function (row) {
+        var r = el("tr", "");
+        row.forEach(function (v) { r.appendChild(el("td", v === null ? "nul" : "", cellText(v))); });
+        tbl.appendChild(r);
+      });
+      box.appendChild(tbl);
+      set("q-note", j.row_count + " rows in " + j.elapsed_ms + " ms" +
+          (j.truncated ? ", truncated by " + j.truncated_by : ""));
+    }).catch(function (e) { if (gen === Q.gen) set("q-note", "error: " + e.message); });
+  }
+  $("q-recipe").addEventListener("change", function () {
+    var i = Number($("q-recipe").value);
+    if (Q.recipes && Q.recipes[i]) $("q-sql").value = Q.recipes[i].sql.trim();
+  });
+  $("q-run").addEventListener("click", runQuery);
 
   // The Overview is the first view: learn whether there is a store (for
   // the tier), then draw it, and redraw every minute.

@@ -387,7 +387,63 @@ static void test_sloth_db_flag(void) {
     }
 }
 
+/* --web-allow-sql (#163): off by default; refused by --strict and
+ * without --sloth-db; announced with --web-allow-remote, naming the
+ * exposure, and silent without it. Each refusal seen red with its
+ * condition in web_config_check() replaced by 0, the announcement with
+ * its block removed from web_config_announce(). */
+static void test_web_allow_sql_flag(void) {
+    parsed_t p;
+    parse(&p, NULL);
+    WT_EQ(p.cfg.allow_sql, 0);
+    done(&p);
+    static const char *const on[] = { "--sloth-db", "/tmp/x/sloth.db",
+                                      "--web-allow-sql", NULL };
+    parse(&p, on);
+    if (!web_slothdb_available()) {
+        WT_EQ(p.rc, -1);
+        WT_HAS(p.err, "needs SQLite");
+        done(&p);
+        static const char *const bare[] = { "--web-allow-sql", NULL };
+        parse(&p, bare);
+        WT_EQ(p.rc, -1);
+        WT_HAS(p.err, "--web-allow-sql needs SQLite; this slothweb was built "
+                      "with WITH_SQLITE=0");
+        done(&p);
+        return;
+    }
+    WT_EQ(p.rc, 0);
+    WT_EQ(p.cfg.allow_sql, 1);
+    WT_EQ(strlen(p.ann), 0);                  /* loopback: nothing to announce */
+    done(&p);
+    static const char *const nodb[] = { "--web-allow-sql", NULL };
+    parse(&p, nodb);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--web-allow-sql needs --sloth-db PATH");
+    done(&p);
+    static const char *const strict[] = { "--strict", "--sloth-db", "/tmp/x/sloth.db",
+                                          "--web-allow-sql", NULL };
+    parse(&p, strict);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--strict refuses --web-allow-sql");
+    done(&p);
+    static const char *const remote[] = { "--web-allow-remote", "--sloth-db",
+                                          "/tmp/x/sloth.db", "--web-allow-sql", NULL };
+    parse(&p, remote);
+    WT_EQ(p.rc, 0);
+    WT_HAS(p.ann, "WARNING: --web-allow-sql with --web-allow-remote");
+    WT_HAS(p.ann, "/api/query");
+    WT_HAS(p.ann, "every peer");
+    done(&p);
+    static const char *const remote_only[] = { "--web-allow-remote", NULL };
+    parse(&p, remote_only);
+    WT_EQ(p.rc, 0);
+    WT_LACKS(p.ann, "--web-allow-sql");
+    done(&p);
+}
+
 void run_config_tests(void) {
+    WT_RUN(test_web_allow_sql_flag);
     WT_RUN(test_ceiling_below_minimum_refused);
     WT_RUN(test_socket_flag);
     WT_RUN(test_sloth_db_flag);

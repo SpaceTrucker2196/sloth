@@ -236,6 +236,14 @@ int  web_store_query(web_store_t *s, int tier, int metric, const char *key,
                      long long from, long long to, web_point_t *out, int max,
                      int *more);
 
+/* The keys of metric holding a bucket in tier with from <= t < to (M5's
+ * channel waterfall and deauth timeline: a key the rollup has since
+ * evicted still has its rows here), most recently active first, at most
+ * max into out (each WEB_KEY_MAX + 1). Read-only connection. Count, or
+ * -1. */
+int  web_store_keys(web_store_t *s, int tier, int metric, long long from,
+                    long long to, char (*out)[WEB_KEY_MAX + 1], int max);
+
 void web_store_stats(web_store_t *s, web_store_stats_t *out);
 
 /* Rows in tier, counted now (tests and the recount). -1 on error. */

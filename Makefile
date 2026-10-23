@@ -562,10 +562,15 @@ research-mcp:
 # table is regenerated when the CSV list or a CSV's checksum changes
 # (the stamp), not only when a CSV is newer than the table.
 #
+# The SQL box's recipes (M5, #163) are docs/wiki/sqlite-schema.md's
+# own, extracted by web/tools/recipes.c into build/web/web_recipes.c
+# whenever that page changes: never copied by hand, never committed.
+#
 # The test binary alone also links src/db_schema.c, sloth's schema as
 # text, so that the sloth.db reader's tests build their sloth.db from
-# sloth's own DDL rather than a fixture or a copy; slothweb itself
-# links no src/ file.
+# sloth's own DDL rather than a fixture or a copy, and src/rsn_ie.c, so
+# that the AKM names the WiFi view copies are held to sloth's own
+# (web/tests/test_parity.c); slothweb itself links no src/ file.
 WEB_MAIN        = web/src/main.c
 WEB_GEN_DIR     = build/web
 WEB_EMBED       = $(WEB_GEN_DIR)/embed
@@ -580,9 +585,13 @@ WEB_OUIGEN      = $(WEB_GEN_DIR)/oui_gen
 WEB_OUIGEN_SRCS = web/tools/oui_gen.c web/tools/oui_csv.c
 WEB_OUI_C       = $(WEB_GEN_DIR)/web_oui_table.c
 WEB_OUI_STAMP   = $(WEB_GEN_DIR)/oui.inputs
+WEB_RECIPES_MD  = docs/wiki/sqlite-schema.md
+WEB_RECIPESGEN  = $(WEB_GEN_DIR)/recipes
+WEB_RECIPES_C   = $(WEB_GEN_DIR)/web_recipes.c
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C) \
-                  $(WEB_OUI_C)
-WEB_TEST_SRCS   = $(wildcard web/tests/*.c) web/tools/oui_csv.c src/db_schema.c
+                  $(WEB_OUI_C) $(WEB_RECIPES_C)
+WEB_TEST_SRCS   = $(wildcard web/tests/*.c) web/tools/oui_csv.c src/db_schema.c \
+                  src/rsn_ie.c
 WEB_LDLIBS      = -lpthread -lm
 ifeq ($(WITH_SQLITE),1)
     WEB_SQL_DEFS = -DWITH_SQLITE
@@ -614,8 +623,16 @@ $(WEB_OUI_C): $(WEB_OUIGEN) $(WEB_OUI_STAMP) $(WEB_OUI_CSVS) src/oui.c
 	$(WEB_OUIGEN) $@.tmp src/oui.c $(WEB_OUI_CSVS)
 	mv $@.tmp $@
 
+$(WEB_RECIPESGEN): web/tools/recipes.c
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -o $@ web/tools/recipes.c
+
+$(WEB_RECIPES_C): $(WEB_RECIPESGEN) $(WEB_RECIPES_MD) web/src/web_recipes.h
+	$(WEB_RECIPESGEN) $(WEB_RECIPES_MD) $@.tmp
+	mv $@.tmp $@
+
 .PHONY: web web-test
-web: $(WEB_ASSETS_C) $(WEB_OUI_C)
+web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C)
 	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -o slothweb $(WEB_MAIN) \
 	      $(WEB_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
 
@@ -623,7 +640,7 @@ web: $(WEB_ASSETS_C) $(WEB_OUI_C)
 # only; no host file, no running sloth, no name lookup, no network beyond
 # 127.0.0.1 and ::1. The test links the embedder's
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
-web-test: $(WEB_ASSETS_C) $(WEB_OUI_C)
+web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C)
 	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -Iweb/tests -Iweb/tools \
 	      -Iinclude -o slothweb_test \
 	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)

@@ -48,6 +48,8 @@ typedef struct {
     int      retain_days;          /* --web-retain-days */
     /* M4 (#162): sloth.db, read-only. "" when not given. */
     char     sloth_db[4096];       /* --sloth-db */
+    /* M5 (#163): the SQL box (web_sqlbox.h). Off unless given. */
+    int      allow_sql;            /* --web-allow-sql */
 } web_config_t;
 
 void web_config_defaults(web_config_t *c);
@@ -64,7 +66,9 @@ int  web_parse_bind(const char *s, int *family, uint8_t addr[16],
  *   - strict refuses both, whatever allow_remote says, and a --socket
  *     tcp: address that is not loopback (the stream has no TLS and no
  *     authentication; sloth's own --strict refuses to serve one);
- *   - with a store, a --web-max-mb below web_config_store_min_mb().
+ *   - with a store, a --web-max-mb below web_config_store_min_mb();
+ *   - --web-allow-sql under strict, or without --sloth-db (the box has
+ *     nothing else to read).
  * Pure: no output, no socket. 0, or -1 with the refusal in err. */
 int  web_config_check(const web_config_t *c, char *err, size_t errsz);
 
@@ -82,9 +86,10 @@ int  web_config_parse(web_config_t *c, int argc, char **argv,
                       FILE *out, FILE *err);
 
 /* Print the stderr announcement every authorised remote exposure gets:
- * one for a non-loopback bind, one per non-loopback allow entry, and
- * one for a --socket read from another host. Prints nothing for a
- * loopback-only configuration. */
+ * one for a non-loopback bind, one per non-loopback allow entry, one
+ * for a --socket read from another host, and one for the SQL box served
+ * to remote peers (--web-allow-sql with --web-allow-remote). Prints
+ * nothing for a loopback-only configuration. */
 void web_config_announce(const web_config_t *c, FILE *err);
 
 /* "127.0.0.1:8770" / "[::1]:8770". */
