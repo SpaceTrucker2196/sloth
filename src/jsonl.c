@@ -2111,7 +2111,7 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         uint32_t ble_tx_kind_mask, ble_tx_asserted;
         int      ble_tx_baseline;
         int      ble_controllers;
-        int      ble_multi_any, ble_ext_adv_any, ble_malformed_any;
+        int      ble_ext_adv_any, ble_malformed_any;
         int      ble_ext_evicted_any;
         /* #144 slice 3, the Ubertooth stream: its state, the link type
          * taken or refused, the freshness bucket, and none/some bands
@@ -2213,7 +2213,6 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.ble_tx_asserted   = bt_tx_asserted_mask(bh, now);
     sig.ble_tx_baseline   = bh->tx_baseline;
     sig.ble_controllers   = bh->controllers;
-    sig.ble_multi_any     = bh->multi_rejected > 0;
     sig.ble_ext_adv_any   = bh->ext_adv_undecoded > 0;
     sig.ble_ext_evicted_any = bh->ext_trains_evicted > 0;
     sig.ble_malformed_any = bh->malformed > 0;
@@ -2401,20 +2400,18 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "ble_devices",      s->ble_device_count);
         kv_int(buf, LINEBUF, &off, "ble_records",      (long long)h->records);
         kv_int(buf, LINEBUF, &off, "ble_adv_reports",  (long long)h->adv_reports);
-        /* Refused whole until the multi-report layout is confirmed
-         * against the spec: a rising count here is advertising sloth
-         * heard and did not decode. */
-        kv_int(buf, LINEBUF, &off, "ble_multi_report_rejected",
-               (long long)h->multi_rejected);
+        /* Always 0 since multi-report events are decoded (Core v5.4
+         * Vol 4 Part E §5.2, src/ble_snoop.h). Kept so an archive's
+         * series continues rather than ends; a multi-report event that
+         * does not account for its bytes is ble_records_malformed. */
+        kv_int(buf, LINEBUF, &off, "ble_multi_report_rejected", 0);
         kv_int(buf, LINEBUF, &off, "ble_ext_adv_undecoded",
                (long long)h->ext_adv_undecoded);
-        /* LE Extended Advertising Reports (0x0D slice): decoded, the
-         * two parts of ble_ext_adv_undecoded, and the fragment-train
-         * accounting (docs/wiki/ble.md). */
+        /* LE Extended Advertising Reports (0x0D slice): events decoded,
+         * then the per-report fragment-train accounting
+         * (docs/wiki/ble.md). */
         kv_int(buf, LINEBUF, &off, "ble_ext_adv_reports",
                (long long)h->ext_adv_reports);
-        kv_int(buf, LINEBUF, &off, "ble_ext_multi_report_rejected",
-               (long long)h->ext_multi_rejected);
         kv_int(buf, LINEBUF, &off, "ble_ext_adv_fragments",
                (long long)h->ext_fragments);
         kv_int(buf, LINEBUF, &off, "ble_ext_adv_partial",
@@ -2535,15 +2532,18 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
          * the complete one; two UUID lists): signing any of them wrote a
          * record on every snapshot (#144 slice 4 second review). Those
          * values still go out on every line this emits and on the
-         * heartbeat. */
-        uint8_t b[18] = { d->addr_type, d->sensor_kind, d->sampled,
+         * heartbeat. ext_adv is not signed on its own: it is set exactly
+         * when an EXT_ADV or EXT_SCAN_RSP PDU is heard, which sets that
+         * PDU's pdu_mask bit, so a change in it is already a change in
+         * pdu_mask. */
+        uint8_t b[17] = { d->addr_type, d->sensor_kind, d->sampled,
                           d->pdu_mask, d->has_name, d->has_uuid16,
                           d->has_mfr, d->has_mfr_sub, d->mfr_sub,
                           d->has_svc_data, d->has_appearance, d->hid,
                           d->has_tx_power, d->has_flags,
                           (uint8_t)rssi_bucket(d->has_rssi, d->rssi_best),
                           (uint8_t)(d->watch_cat[0] != '\0'),
-                          (uint8_t)(d->adapter & 0xff), d->ext_adv };
+                          (uint8_t)(d->adapter & 0xff) };
         h = fnv1a(b, sizeof(b), h);
         h = fnv1a(&d->mfr_id, sizeof(d->mfr_id), h);
         if (!jsonl_changed(JD_BLE_DEVICE, key, sizeof(key), h, now)) continue;

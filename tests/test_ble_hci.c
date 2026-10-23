@@ -36,11 +36,10 @@
  *                 opcode LE16 (OGF << 10 | OCF), param len, params
  *     EVENT       HCI event packet, §5.4.4: event code, param len, params
  *
- *   LE Advertising Report (§7.7.65.2), ONE report — the only shape
- *   decoded; for one report the spec's per-field arrays and the kernel's
- *   per-report records are the same bytes:
- *     0x3E plen 0x02 01 Event_Type Address_Type Address[6] Data_Length
- *     Data[Data_Length] RSSI
+ *   LE Advertising Report (§7.7.65.2), Num_Reports consecutive records
+ *   (§5.2's order for arrayed parameters, src/ble_snoop.h):
+ *     0x3E plen 0x02 N { Event_Type Address_Type Address[6] Data_Length
+ *     Data[Data_Length] RSSI } x N
  */
 
 #define TS 1700000000   /* frame clock for device evidence */
@@ -254,32 +253,41 @@ static void test_single_report_creates_a_device(void) {
     ASSERT_EQ(g_s.ble_device_count, 2);
 }
 
-/* Seen to fail: with the Num_Reports > 1 refusal relaxed to > 2, the
- * walker decodes this event and two device rows appear. */
-static void test_multi_report_event_is_rejected_and_counted(void) {
-    /* Two reports, each with an empty Data field. Under the spec's
-     * per-field arrays this is: evt[2] atype[2] addr[2][6] dlen[2] rssi[2]. */
-    uint8_t p[2 + 2 + 2 + 12 + 2 + 2];
+/* A controller may put several reports in one event; each is a row
+ * observation, and the event is one record in one bucket. */
+static void test_multi_report_event_decodes_every_report(void) {
+    uint8_t p[2 + 2 * 10];
     int k = 0;
     p[k++] = 0x02; p[k++] = 2;
-    p[k++] = 0x00; p[k++] = 0x00;                         /* Event_Type[2] */
-    p[k++] = 0x01; p[k++] = 0x01;                         /* Address_Type[2] */
-    memcpy(p + k, ADDR_LE, 6); k += 6;
-    memcpy(p + k, ADDR_LE, 6); p[k] ^= 0x01; k += 6;      /* Address[2] */
-    p[k++] = 0; p[k++] = 0;                               /* Data_Length[2] */
-    p[k++] = (uint8_t)-50; p[k++] = (uint8_t)-51;         /* RSSI[2] */
+    for (int r = 0; r < 2; r++) {
+        p[k++] = 0x03;                                    /* ADV_NONCONN_IND */
+        p[k++] = 0x01;
+        memcpy(p + k, ADDR_LE, 6); p[k] ^= (uint8_t)r; k += 6;
+        p[k++] = 0;                                       /* Data_Length */
+        p[k++] = (uint8_t)(-50 - r);                      /* RSSI */
+    }
     int n = rec_evt(g_rec, 0x3E, p, (uint8_t)k);
-    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_MULTI_REJECTED);
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_ADV);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_device_count, 2);
+    ASSERT_EQ((int)g_s.ble_host.adv_reports, 1);
+    ASSERT_EQ((int)g_s.ble_host.malformed, 0);
+    /* One octet short of the second RSSI: the whole event is refused,
+     * the first report included. Two guards in ble_hci_adv_walk() hold
+     * this, the per-record RSSI bound and `off != len`, and either alone
+     * refuses it, so no single edit isolates the case; seen red (two
+     * rows, verdict ADV) with both removed. */
+    ble_clear();
+    n = rec_evt(g_rec, 0x3E, p, (uint8_t)(k - 1));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_MALFORMED);
     ble_snapshot(&g_s);
     ASSERT_EQ(g_s.ble_device_count, 0);
-    ASSERT_EQ((int)g_s.ble_host.multi_rejected, 1);
-    ASSERT_EQ((int)g_s.ble_host.adv_reports, 0);
 }
 
 /* ── LE Extended Advertising Reports (subevent 0x0D) ────────────────
  *
- * One report per event, §7.7.65.13 (tests/test_ble_snoop.c has the
- * field-by-field layout):
+ * Num_Reports consecutive records, §7.7.65.13 (tests/test_ble_snoop.c
+ * has the field-by-field layout); rec_ext_n() builds one:
  *   0x3E plen 0x0D 01 Event_Type(LE16) Address_Type Address[6]
  *   Primary_PHY Secondary_PHY Advertising_SID TX_Power RSSI
  *   Periodic_Advertising_Interval(LE16) Direct_Address_Type
@@ -367,40 +375,73 @@ static void test_ext_legacy_bit_report_is_the_legacy_row(void) {
     ASSERT_EQ(d->adv_sid, 0xFF);
 }
 
-/* Seen to fail: with the Num_Reports > 1 refusal relaxed to > 2, the
- * verdict is MALFORMED (the single-report length check refuses the
- * event) instead of EXT_MULTI_REJECTED. That the row count stays 0 is
- * not separately isolated: no single edit both lets the event past the
- * refusal and past the length check. */
-static void test_ext_multi_report_is_rejected_and_counted(void) {
-    int n = put_hdr(g_rec, 0, BT_MON_EVENT_PKT);
-    g_rec[n++] = 0x3E;
-    g_rec[n++] = 2 + 24 + 24;
-    g_rec[n++] = 0x0D;
-    g_rec[n++] = 2;
-    for (int r = 0; r < 2; r++) {
-        memset(g_rec + n, 0, 24);
-        g_rec[n + 0] = 0x10;                  /* Legacy ADV_NONCONN_IND */
-        g_rec[n + 2] = 0x01;
-        memcpy(g_rec + n + 3, ADDR_LE, 6);
-        g_rec[n + 3] ^= (uint8_t)r;
-        g_rec[n + 9] = 0x01;
-        g_rec[n + 11] = 0xFF;
-        g_rec[n + 13] = (uint8_t)-50;
-        n += 24;                              /* Data_Length 0 */
-    }
-    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_MULTI_REJECTED);
-    ble_snapshot(&g_s);
-    ASSERT_EQ(g_s.ble_device_count, 0);
-    ASSERT_EQ((int)g_s.ble_host.ext_multi_rejected, 1);
-    ASSERT_EQ((int)g_s.ble_host.ext_adv_undecoded, 1);
-    ASSERT_EQ((int)g_s.ble_host.ext_adv_reports, 0);
-    /* Counted apart from the legacy refusals. */
-    ASSERT_EQ((int)g_s.ble_host.multi_rejected, 0);
+/* Appends one more 0x0D report record (as rec_ext_n() lays it out) to
+ * the event in `b` of length `n`, and fixes Num_Reports and param_len.
+ * Returns the new length. */
+static int ext_append(uint8_t *b, int n, uint16_t et, const uint8_t addr_le[6],
+                      uint8_t sid, const uint8_t *data, uint8_t dlen) {
+    uint8_t tmp[64 + 255];
+    int m = rec_ext_n(tmp, 0, 1, et, 0x01, addr_le, sid, data, dlen, -58);
+    memcpy(b + n, tmp + 8, (size_t)(m - 8));
+    n += m - 8;
+    b[7]++;                                   /* Num_Reports */
+    b[5] = (uint8_t)(n - 6);                  /* param_len */
+    return n;
 }
 
-/* Seen to fail: with the single-report length test relaxed from `!=`
- * to `>`, the first of the two records is decoded and a row appears. */
+/* Several advertisers' reports coalesced into one event (§7.7.65.13:
+ * "The Controller may coalesce multiple advertising reports from the
+ * same or different advertisers into a single
+ * HCI_LE_Extended_Advertising_Report event"). */
+static void test_ext_multi_report_event_decodes_every_report(void) {
+    uint8_t a2[6];
+    memcpy(a2, ADDR_LE, 6); a2[0] ^= 0x01;
+    int n = rec_ext(g_rec, EXT_LEGACY_NONCONN, ADDR_LE, 0xFF, NULL, 0);
+    n = ext_append(g_rec, n, 0x0000, a2, 0x03, NULL, 0);
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    ble_snapshot(&g_s);
+    ASSERT_EQ(g_s.ble_device_count, 2);
+    ASSERT_EQ((int)g_s.ble_host.ext_adv_reports, 1);
+    ASSERT_EQ((int)g_s.ble_host.ext_adv_undecoded, 0);
+    ASSERT_EQ((int)g_s.ble_host.adv_reports, 0);
+}
+
+/* Fragment accounting is per report inside an event: an event holding
+ * an open train's tail and a fresh advertisement is decoded (one row
+ * observation), and one holding only tails reaches no row.
+ *
+ * Seen to fail: with on_ext_report() counting every report as a row
+ * (`c->rows++` unconditional), the tails-only event is EXT_ADV. */
+static void test_ext_multi_report_fragments_are_counted_per_report(void) {
+    const uint8_t f[] = { 0x02, 0x01, 0x06 };
+    uint8_t a2[6];
+    memcpy(a2, ADDR_LE, 6); a2[0] ^= 0x01;
+    /* Two trains open, one per advertiser, in one event. */
+    int n = rec_ext(g_rec, EXT_STATUS_MORE, ADDR_LE, 0x02, f, sizeof(f));
+    n = ext_append(g_rec, n, EXT_STATUS_MORE, a2, 0x02, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    /* Both tails in one event: nothing to walk. */
+    n = rec_ext(g_rec, EXT_STATUS_MORE, ADDR_LE, 0x02, f, sizeof(f));
+    n = ext_append(g_rec, n, EXT_STATUS_MORE, a2, 0x02, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_FRAGMENT);
+    /* The first train's last fragment and a new advertiser. */
+    uint8_t a3[6];
+    memcpy(a3, ADDR_LE, 6); a3[0] ^= 0x02;
+    n = rec_ext(g_rec, 0x0000, ADDR_LE, 0x02, f, sizeof(f));
+    n = ext_append(g_rec, n, 0x0000, a3, 0x02, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    ble_snapshot(&g_s);
+    const ble_host_t *h = &g_s.ble_host;
+    ASSERT_EQ(g_s.ble_device_count, 3);
+    ASSERT_EQ((int)h->ext_adv_reports, 2);
+    ASSERT_EQ((int)h->ext_adv_undecoded, 1);
+    ASSERT_EQ((int)h->ext_fragments, 3);
+    ASSERT_EQ((int)h->ext_adv_partial, 2);
+}
+
+/* Seen to fail: with `if (off != blen) return 0;` removed from
+ * ble_hci_ext_adv_walk(), the first of the two records is decoded and a
+ * row appears. */
 static void test_ext_num_reports_disagreeing_is_malformed(void) {
     uint8_t ad[32];
     int dl = build_ad(ad);
@@ -534,8 +575,9 @@ static void test_ext_trains_are_keyed_per_set(void) {
     ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_FRAGMENT);
 }
 
-/* The train table is fixed: the oldest open train is pushed out and
- * counted, and its tail is then decoded as a fresh report. */
+/* The train table is fixed: the least recently touched open train is
+ * pushed out and counted, and its tail is then decoded as a fresh
+ * report. */
 static void test_ext_full_train_table_evicts_the_oldest(void) {
     const uint8_t f[] = { 0x02, 0x01, 0x06 };
     uint8_t a[6];
@@ -554,6 +596,39 @@ static void test_ext_full_train_table_evicts_the_oldest(void) {
     a[1] = 1;                                 /* the second, still open */
     n = rec_ext(g_rec, 0x0000, a, 0x01, f, sizeof(f));
     ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_FRAGMENT);
+}
+
+/* Eviction is by last touch, not by opening order: a train opened
+ * first but fed a middle fragment since outlives one opened later that
+ * has been idle.
+ *
+ * Seen to fail: with the refresh on a middle fragment
+ * (`g_trains[t].seq = ++g_train_seq;`) removed, train 0 is the one
+ * evicted and its tail decodes as a fresh report. */
+static void test_ext_train_eviction_is_least_recently_touched(void) {
+    const uint8_t f[] = { 0x02, 0x01, 0x06 };
+    uint8_t a[6];
+    for (int i = 0; i < BLE_EXT_TRAINS; i++) {
+        memcpy(a, ADDR_LE, 6);
+        a[1] = (uint8_t)i;
+        int n = rec_ext(g_rec, EXT_STATUS_MORE, a, 0x01, f, sizeof(f));
+        ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    }
+    memcpy(a, ADDR_LE, 6);
+    a[1] = 0;                                 /* oldest opened: touch it */
+    int n = rec_ext(g_rec, EXT_STATUS_MORE, a, 0x01, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_FRAGMENT);
+    a[1] = (uint8_t)BLE_EXT_TRAINS;           /* a seventeenth train */
+    n = rec_ext(g_rec, EXT_STATUS_MORE, a, 0x01, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
+    ble_snapshot(&g_s);
+    ASSERT_EQ((int)g_s.ble_host.ext_trains_evicted, 1);
+    a[1] = 0;                                 /* touched: still open */
+    n = rec_ext(g_rec, 0x0000, a, 0x01, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_FRAGMENT);
+    a[1] = 1;                                 /* idle since opening: evicted */
+    n = rec_ext(g_rec, 0x0000, a, 0x01, f, sizeof(f));
+    ASSERT_EQ((int)ing(g_rec, n, 0), (int)BLE_REC_EXT_ADV);
 }
 
 /* A controller that goes away or is reset drops whatever it was
@@ -579,8 +654,8 @@ static void test_ext_del_index_and_reset_drop_open_trains(void) {
 }
 
 /* Every record lands in exactly one top-level bucket, so they sum to
- * ble_records; ext_multi_rejected and ext_fragments split
- * ext_adv_undecoded and are not buckets of their own. */
+ * ble_records; ext_fragments counts reports, not records, and is not a
+ * bucket (for single-report events it equals ext_adv_undecoded). */
 static void test_ext_buckets_sum_to_records(void) {
     const uint8_t f[] = { 0x02, 0x01, 0x06 };
     int n = rec_ext(g_rec, EXT_STATUS_MORE, ADDR_LE, 0x02, f, sizeof(f));
@@ -600,10 +675,9 @@ static void test_ext_buckets_sum_to_records(void) {
     ASSERT_EQ((int)h->ext_adv_undecoded, 1);
     ASSERT_EQ((int)h->malformed, 1);
     ASSERT_EQ((int)h->adv_reports, 1);
-    ASSERT_EQ((int)h->ext_adv_undecoded,
-              (int)(h->ext_multi_rejected + h->ext_fragments));
+    ASSERT_EQ((int)h->ext_adv_undecoded, (int)h->ext_fragments);
     ASSERT_EQ((int)h->records,
-              (int)(h->index_records + h->adv_reports + h->multi_rejected +
+              (int)(h->index_records + h->adv_reports +
                     h->ext_adv_reports + h->ext_adv_undecoded + h->ignored +
                     h->malformed + h->commands));
 }
@@ -1013,8 +1087,7 @@ static void test_each_persistent_kind_holds_until_its_disable(void) {
 }
 
 /* Several extended sets in one command: their handles are not read
- * (spec arrays and kernel per-set records disagree on where they sit),
- * so a partial disable leaves the state on — the safe side — and only
+ * yet (src/ble_hci.c, OP_LE_SET_EXT_ADV_ENABLE), so a partial disable leaves the state on — the safe side — and only
  * Num_Sets 0 clears it.
  *
  * Seen to fail: with the n == 1 guard dropped from the partial-disable
@@ -1287,7 +1360,12 @@ static void test_sensor_health_carries_the_bluetooth_block(void) {
         ASSERT(strstr(b, "\"ble_own_tx_asserted\":\"\"") != NULL);
         ASSERT(strstr(b, "\"ble_own_tx_baseline\":0") != NULL);
         ASSERT(strstr(b, "\"ble_index_records\":0") != NULL);
-        ASSERT(strstr(b, "\"ble_multi_report_rejected\":1") != NULL);
+        /* Num_Reports 2 with no room for either report: malformed.
+         * The rejected counter is kept, at 0, and its 0x0D twin from
+         * before the multi-report decode never shipped. */
+        ASSERT(strstr(b, "\"ble_multi_report_rejected\":0") != NULL);
+        ASSERT(strstr(b, "\"ble_records_malformed\":1") != NULL);
+        ASSERT(strstr(b, "ble_ext_multi_report_rejected") == NULL);
         ASSERT(strstr(b, "\"ble_records\":2") != NULL);
         ASSERT(strstr(b, "\"ble_host_commands\":1") != NULL);
         ASSERT(strstr(b, "\"evict_ble_device\":") != NULL);
@@ -1479,16 +1557,18 @@ void run_ble_hci_tests(void) {
 #endif
     RUN_TEST(test_new_index_records_the_controller);
     RUN_TEST(test_single_report_creates_a_device);
-    RUN_TEST(test_multi_report_event_is_rejected_and_counted);
+    RUN_TEST(test_multi_report_event_decodes_every_report);
     RUN_TEST(test_ext_report_creates_a_device);
     RUN_TEST(test_ext_legacy_bit_report_is_the_legacy_row);
-    RUN_TEST(test_ext_multi_report_is_rejected_and_counted);
+    RUN_TEST(test_ext_multi_report_event_decodes_every_report);
+    RUN_TEST(test_ext_multi_report_fragments_are_counted_per_report);
     RUN_TEST(test_ext_num_reports_disagreeing_is_malformed);
     RUN_TEST(test_ext_anonymous_advertisers_are_one_row);
     RUN_TEST(test_ext_fragment_train_decodes_only_the_first);
     RUN_TEST(test_ext_truncated_fragment_ends_the_train);
     RUN_TEST(test_ext_trains_are_keyed_per_set);
     RUN_TEST(test_ext_full_train_table_evicts_the_oldest);
+    RUN_TEST(test_ext_train_eviction_is_least_recently_touched);
     RUN_TEST(test_ext_del_index_and_reset_drop_open_trains);
     RUN_TEST(test_ext_buckets_sum_to_records);
     RUN_TEST(test_bad_lengths_are_malformed_not_decoded);

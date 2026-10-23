@@ -37,8 +37,8 @@
  *
  *   NEW_INDEX (monitor opcode 0)       controller announced
  *   DEL_INDEX (monitor opcode 1)       controller removed (no payload)
- *   EVENT 0x3E / subevent 0x02         LE Advertising Report (single report)
- *   EVENT 0x3E / subevent 0x0D         LE Extended Advertising Report (single report)
+ *   EVENT 0x3E / subevent 0x02         LE Advertising Report
+ *   EVENT 0x3E / subevent 0x0D         LE Extended Advertising Report
  *   COMMAND, host's own scan, advertise and connect commands:
  *     0x200B LE Set Scan Parameters        0x2041 LE Set Extended Scan Parameters
  *     0x200C LE Set Scan Enable            0x2042 LE Set Extended Scan Enable
@@ -64,16 +64,17 @@
  *
  * ── Multi-report events ──
  *
- * An LE Advertising Report with Num_Reports > 1 is refused whole and
- * counted (`multi_rejected`). The Core Specification draws the
- * parameters as per-field arrays; the Linux kernel parses them as
- * consecutive per-report records. The two agree for one report and
- * disagree for more, so until the layout is confirmed against a
- * controller sloth decodes none of them rather than half of them wrong.
- * The LE Extended Advertising Report (0x0D) is held to the same rule,
- * for the same reason: §7.7.65.13 draws per-field arrays too, and the
- * two layouts carry the same total length (ble_hci_ext_adv_parse()).
- * Its refusals are counted apart, `ext_multi_rejected`.
+ * Every report of an LE Advertising Report or LE Extended Advertising
+ * Report with Num_Reports > 1 is decoded, as the consecutive per-report
+ * records Core v5.4 Vol 4 Part E §5.2 defines for arrayed parameters
+ * (ble_snoop.h quotes it). A controller may coalesce reports from
+ * several advertisers into one event (§7.7.65.13 says so for 0x0D), so
+ * refusing them would undercount exactly the busy air BLE_ADV_FLOOD
+ * measures. An event whose reports do not fill its parameters exactly,
+ * or holding one report the clause rules out, is refused whole as
+ * malformed: no prefix of it is decoded. The record buckets count
+ * events; `adv_reports` and `ext_adv_reports` are events with at least
+ * one report in the table.
  *
  * ── Fragmented extended reports ──
  *
@@ -91,6 +92,14 @@
  * fragments are then decoded as fresh reports, which is the one way a
  * mid-structure fragment can reach the AD walker, and the counter says
  * when it may have.
+ *
+ * An anonymous report (Address_Type 0xFF) has its address zeroed, so
+ * its key is (adapter, 0xFF, zero, SID, scan-response): two anonymous
+ * advertisers using one SID on one adapter share a train. While the
+ * first one's train is open, the second's first fragment is counted as
+ * the first's tail and not decoded. Nothing in an anonymous report tells
+ * the two apart (there is no AdvA to key on), so this is accepted rather
+ * than guessed around; docs/wiki/ble.md states it for the operator.
  *
  * Thread model: ble_mon_ingest() runs on the capture worker (or the
  * replay/test thread), ble_snapshot() on the poll thread. One module
@@ -125,13 +134,11 @@ typedef enum {
     BLE_REC_MALFORMED = 0,     /* allow-listed type, bad length or snapped */
     BLE_REC_IGNORED,           /* outside the allow-list */
     BLE_REC_NEW_INDEX,
-    BLE_REC_ADV,               /* one advertising report decoded */
-    BLE_REC_MULTI_REJECTED,    /* Num_Reports > 1 */
-    BLE_REC_EXT_FRAGMENT,      /* subevent 0x0D, continuation of an open train */
+    BLE_REC_ADV,               /* advertising report event decoded, every report */
+    BLE_REC_EXT_FRAGMENT,      /* subevent 0x0D, every report a continuation of an open train */
     BLE_REC_COMMAND,           /* allow-listed host command read */
     BLE_REC_DEL_INDEX,         /* controller removed */
-    BLE_REC_EXT_ADV,           /* one extended advertising report decoded */
-    BLE_REC_EXT_MULTI_REJECTED /* subevent 0x0D, Num_Reports > 1 */
+    BLE_REC_EXT_ADV            /* subevent 0x0D, at least one report into the table */
 } ble_rec_verdict_t;
 
 /* 1 for a libpcap raw-HCI device name ("bluetooth" followed by a

@@ -35,10 +35,6 @@
 #define OP_LE_SET_EXT_SCAN_ENABLE   0x2042  /* §7.8.65 */
 #define OP_LE_EXT_CREATE_CONN       0x2043  /* §7.8.66 */
 
-/* The struct-of-arrays fixed fields of one report, for the single-report
- * check before the walker runs. */
-#define ADV_REPORT_MIN_PARAMS       (1 + 1 + 1 + 1 + 6 + 1 + 1)
-
 int bt_dev_is_bluetooth(const char *name) {
     return name && strncmp(name, "bluetooth", 9) == 0;
 }
@@ -452,6 +448,17 @@ static ble_rec_verdict_t ext_report(const ble_adv_report_t *r,
     return BLE_REC_EXT_ADV;
 }
 
+typedef struct {
+    uint16_t adapter;
+    time_t   ts;
+    int      rows;     /* reports of this event that reached the table */
+} ext_ctx_t;
+
+static void on_ext_report(const ble_adv_report_t *r, void *vctx) {
+    ext_ctx_t *c = vctx;
+    if (ext_report(r, c->adapter, c->ts) == BLE_REC_EXT_ADV) c->rows++;
+}
+
 static ble_rec_verdict_t ingest_event(const uint8_t *p, size_t len,
                                       uint16_t adapter, time_t ts) {
     if (len < 2) return BLE_REC_MALFORMED;
@@ -461,27 +468,19 @@ static ble_rec_verdict_t ingest_event(const uint8_t *p, size_t len,
     size_t plen = p[1];
     if (plen < 1 || 2 + plen > len) return BLE_REC_MALFORMED;
     uint8_t sub = p[2];
+    /* Every report of a multi-report event, as consecutive records
+     * (ble_snoop.h): the walkers refuse the whole event unless its
+     * reports fill the parameters exactly, so nothing reaches the table
+     * from an event whose Num_Reports disagrees with its bytes. */
     if (sub == HCI_SUBEV_EXT_ADV_REPORT) {
-        ble_adv_report_t r;
-        switch (ble_hci_ext_adv_parse(p, 2 + plen, &r)) {
-        case BLE_EXT_PARSE_OK:    return ext_report(&r, adapter, ts);
-        case BLE_EXT_PARSE_MULTI: return BLE_REC_EXT_MULTI_REJECTED;
-        default:                  return BLE_REC_MALFORMED;
-        }
+        ext_ctx_t c = { adapter, ts, 0 };
+        if (ble_hci_ext_adv_walk(p, 2 + plen, on_ext_report, &c) == 0)
+            return BLE_REC_MALFORMED;
+        return c.rows ? BLE_REC_EXT_ADV : BLE_REC_EXT_FRAGMENT;
     }
-    if (sub != HCI_SUBEV_ADV_REPORT)     return BLE_REC_IGNORED;
-    if (plen < 2) return BLE_REC_MALFORMED;
-    uint8_t num = p[3];
-    if (num == 0) return BLE_REC_MALFORMED;
-    if (num > 1)  return BLE_REC_MULTI_REJECTED;
-    if (plen < ADV_REPORT_MIN_PARAMS) return BLE_REC_MALFORMED;
-    /* One report: Data_Length is at a fixed offset, and the event must
-     * hold exactly the report — trailing bytes would mean the layout is
-     * not what this decoder thinks it is. */
-    if ((size_t)p[2 + 1 + 1 + 1 + 1 + 6] + ADV_REPORT_MIN_PARAMS != plen)
-        return BLE_REC_MALFORMED;
+    if (sub != HCI_SUBEV_ADV_REPORT) return BLE_REC_IGNORED;
     adv_ctx_t c = { adapter, ts };
-    return ble_hci_adv_walk(p, 2 + plen, on_report, &c) == 1
+    return ble_hci_adv_walk(p, 2 + plen, on_report, &c) > 0
         ? BLE_REC_ADV : BLE_REC_MALFORMED;
 }
 
@@ -611,13 +610,13 @@ static ble_rec_verdict_t ingest_command(const uint8_t *p, size_t len,
         else if (a[0] == 0x00) c->adv_on = 0;
         break;
     case OP_LE_SET_EXT_ADV_ENABLE: {
-        /* Sets are tracked by handle only when Num_Sets is 1: for more,
-         * the spec's per-field arrays and the kernel's per-set records
-         * (struct hci_cp_ext_adv_set) put the handles at different
-         * offsets — the same disagreement as multi-report events. So an
-         * enable of several sets is "on, handles unknown", which only a
-         * disable of all sets (Num_Sets 0) clears; a partial disable of
-         * several sets changes nothing, the safe side. */
+        /* Sets are tracked by handle only when Num_Sets is 1. For more,
+         * the handles are not read yet: Vol 4 Part E §5.2 makes the sets
+         * consecutive records, as the kernel's struct hci_cp_ext_adv_set
+         * does, so they could be. Until then an enable of several sets
+         * is "on, handles unknown", which only a disable of all sets
+         * (Num_Sets 0) clears; a partial disable of several sets changes
+         * nothing, the safe side. */
         uint8_t n = a[1];
         if (a[0] == 0x01) {
             if (n == 1) handle_put(c->ext_adv_sets, a[2], 1);
@@ -756,12 +755,7 @@ ble_rec_verdict_t ble_mon_ingest(const uint8_t *rec, size_t caplen,
     case BLE_REC_NEW_INDEX:
     case BLE_REC_DEL_INDEX:         g_host.index_records++;     break;
     case BLE_REC_ADV:               g_host.adv_reports++;       break;
-    case BLE_REC_MULTI_REJECTED:    g_host.multi_rejected++;    break;
     case BLE_REC_EXT_ADV:           g_host.ext_adv_reports++;   break;
-    case BLE_REC_EXT_MULTI_REJECTED:
-        g_host.ext_multi_rejected++;
-        g_host.ext_adv_undecoded++;
-        break;
     case BLE_REC_EXT_FRAGMENT:      g_host.ext_adv_undecoded++; break;
     case BLE_REC_COMMAND:           g_host.commands++;          break;
     }

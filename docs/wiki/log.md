@@ -4798,6 +4798,7 @@ readable schema is tied to `DB_SCHEMA_VERSION` by a test; `alerts.key`
 is predicate-only; A2's sloth.db new MACs skip random ones before the
 limit; `seen:<=DATE` includes the day; `name:` and `has:name` skip
 NBNS group names.
+
 ## 2026-10-22 — BLE: LE Extended Advertising Report (0x0D) decoded
 
 **Updated**: [ble.md](ble.md) — subevent 0x0D (Core Specification
@@ -4816,3 +4817,26 @@ starts none. [jsonl-schema.md](jsonl-schema.md) — five `ble_ext_*`
 counters in `sensor_health` (`ble_ext_adv_undecoded` narrowed to the
 0x0D records that reached no row), and `ext_adv`, `primary_phy`,
 `secondary_phy`, `adv_sid` on `ble_device`; all additive.
+
+## 2026-10-23 — BLE: multi-report advertising events decoded
+
+**Updated**: [ble.md](ble.md) — LE Advertising Reports (0x02) and LE
+Extended Advertising Reports (0x0D) with `Num_Reports` > 1 are decoded,
+every report, as consecutive per-report records. The refusal they
+replaced rested on reading the clauses' arrayed parameters as per-field
+blocks; Core v5.4 Vol 4 Part E §5.2 defines them as ParameterA[0],
+ParameterB[0], ParameterA[1], ..., and §7.7.65.13 says a controller may
+coalesce reports from several advertisers into one event, so the
+refusal undercounted `BLE_ADV_FLOOD`'s input. An event whose reports do
+not fill it exactly is malformed whole. A Legacy-bit 0x0D report must
+say Primary_PHY LE 1M and Secondary_PHY 0x00 (the clause's "shall") and
+its SID reads none. The anonymous-train collision is documented, and
+eviction is by last touch. [jsonl-schema.md](jsonl-schema.md) —
+`ble_multi_report_rejected` kept at 0 for archive continuity; the 0x0D
+twin added on 2026-10-22 is gone before it shipped; `ble_adv_reports`,
+`ble_ext_adv_reports` and `ble_ext_adv_undecoded` count events and
+`ble_ext_adv_fragments` reports; PHY value 4 (LE Coded S=2, Core v5.4);
+`ext_adv` covered by `pdu_mask` in the change signature. The `ble`
+sensor's observation count now includes 0x0D events.
+[cli-reference.md](cli-reference.md) — `--bt-monitor` names both
+report events.

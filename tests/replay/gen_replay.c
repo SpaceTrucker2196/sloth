@@ -256,6 +256,7 @@ static void build_bt(set_t *s) {
     static const uint8_t CTRL[6] = { 0x01, 0x53, 0x00, 0x5e, 0x00, 0x02 };
     static const uint8_t TAG1[6] = { 0x01, 0x00, 0x00, 0x00, 0x00, 0xC0 };
     static const uint8_t TAG2[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0xC0 };
+    static const uint8_t TAG3[6] = { 0x03, 0x00, 0x00, 0x00, 0x00, 0xC0 };
     fb_t b;
 
     /* NEW_INDEX: primary controller on USB, "hci0". */
@@ -279,18 +280,54 @@ static void build_bt(set_t *s) {
     bt_adv(s, TAG2, "replay-tag-2", -71);
     bt_adv(s, TAG1, "replay-tag-1", -45);
 
-    /* A two-report event: refused whole and counted. */
+    /* A two-report event, as the consecutive records Vol 4 Part E §5.2
+     * orders arrayed parameters in: both reports decoded. */
     next_frame(s, &b);
     bt_hdr(&b, 3);
     fb_u8(&b, 0x3E);
-    fb_u8(&b, 2 + 2 + 2 + 12 + 2 + 2);
+    fb_u8(&b, 2 + 2 * 10);
     fb_u8(&b, 0x02);
     fb_u8(&b, 2);
-    fb_u8(&b, 0x03); fb_u8(&b, 0x03);
-    fb_u8(&b, 0x01); fb_u8(&b, 0x01);
-    fb_bytes(&b, TAG1, 6); fb_bytes(&b, TAG2, 6);
-    fb_u8(&b, 0); fb_u8(&b, 0);
-    fb_u8(&b, (uint8_t)-60); fb_u8(&b, (uint8_t)-61);
+    fb_u8(&b, 0x03); fb_u8(&b, 0x01); fb_bytes(&b, TAG1, 6);
+    fb_u8(&b, 0);    fb_u8(&b, (uint8_t)-60);
+    fb_u8(&b, 0x03); fb_u8(&b, 0x01); fb_bytes(&b, TAG2, 6);
+    fb_u8(&b, 0);    fb_u8(&b, (uint8_t)-61);
+    keep(s, &b);
+
+    /* An LE Extended Advertising Report (§7.7.65.13) holding two
+     * reports: a Legacy-bit ADV_NONCONN_IND from TAG2 (LE 1M, no
+     * secondary PHY, no ADI, as the clause requires of a legacy PDU),
+     * which keys TAG2's legacy row, and an extended PDU from TAG3 on
+     * LE Coded with a 2M secondary, SID 5, carrying a name. */
+    static const char ext_name[] = "replay-ext-3";
+    const int enl = (int)sizeof(ext_name) - 1;
+    next_frame(s, &b);
+    bt_hdr(&b, 3);
+    fb_u8(&b, 0x3E);
+    fb_u8(&b, (uint8_t)(2 + 24 + 24 + 2 + enl));
+    fb_u8(&b, 0x0D);
+    fb_u8(&b, 2);
+    fb_le16(&b, 0x0010);    /* Legacy, ADV_NONCONN_IND, complete */
+    fb_u8(&b, 0x01);
+    fb_bytes(&b, TAG2, 6);
+    fb_u8(&b, 0x01); fb_u8(&b, 0x00); fb_u8(&b, 0xFF);
+    fb_u8(&b, 127);         /* TX_Power not available */
+    fb_u8(&b, (uint8_t)-66);
+    fb_le16(&b, 0);
+    fb_u8(&b, 0); for (int i = 0; i < 6; i++) fb_u8(&b, 0);
+    fb_u8(&b, 0);           /* Data_Length */
+    fb_le16(&b, 0x0000);    /* extended, non-connectable, complete */
+    fb_u8(&b, 0x01);
+    fb_bytes(&b, TAG3, 6);
+    fb_u8(&b, 0x03); fb_u8(&b, 0x02); fb_u8(&b, 0x05);
+    fb_u8(&b, (uint8_t)-4);
+    fb_u8(&b, (uint8_t)-52);
+    fb_le16(&b, 0);
+    fb_u8(&b, 0); for (int i = 0; i < 6; i++) fb_u8(&b, 0);
+    fb_u8(&b, (uint8_t)(2 + enl));
+    fb_u8(&b, (uint8_t)(1 + enl));
+    fb_u8(&b, 0x09);        /* Complete Local Name */
+    fb_bytes(&b, ext_name, enl);
     keep(s, &b);
 
     /* ACL data: outside the allow-list, never read. */

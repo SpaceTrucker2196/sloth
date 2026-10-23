@@ -110,6 +110,10 @@ void ble_ad_parse(const uint8_t *data, size_t len, ble_adv_report_t *out) {
     }
 }
 
+/* One 0x02 report's octets before its Data: Event_Type Address_Type
+ * Address(6) Data_Length. Its RSSI follows the Data. */
+#define ADV_REC_FIXED 9
+
 int ble_hci_adv_walk(const uint8_t *evt, size_t len, ble_report_cb_t cb, void *ctx) {
     if (!evt || len < 4) return 0;
     if (evt[0] != HCI_EV_LE_META) return 0;
@@ -118,54 +122,37 @@ int ble_hci_adv_walk(const uint8_t *evt, size_t len, ble_report_cb_t cb, void *c
     uint8_t num_reports = evt[3];
     if (num_reports == 0) return 0;
 
+    /* Consecutive records (ble_snoop.h), each bounded before an octet
+     * of it is read, and together exactly `len`: a short or overlong
+     * event decodes nothing rather than a prefix of its reports. */
     size_t off = 4;
-    /* Struct-of-arrays fixed fields: Event_Type[N], Address_Type[N],
-     * Address[N*6], Data_Length[N]. Validated as one block before any
-     * pointer into it is trusted. */
-    size_t fixed_len = (size_t)num_reports * (1 + 1 + 6 + 1);
-    if (off + fixed_len > len) return 0;
-
-    const uint8_t *event_type = evt + off;  off += num_reports;
-    const uint8_t *addr_type  = evt + off;  off += num_reports;
-    const uint8_t *addr       = evt + off;  off += (size_t)num_reports * 6;
-    const uint8_t *data_len   = evt + off;  off += num_reports;
-
-    size_t remaining = len - off;
-    size_t total_data = 0;
-    for (uint8_t i = 0; i < num_reports; i++)
-        total_data += data_len[i];
-
-    /* Every report's Data back to back, then one RSSI octet per report.
-     * Checked as a single sum so a short buffer rejects the whole event
-     * rather than decoding a truncated prefix of reports. */
-    if (total_data + (size_t)num_reports > remaining) return 0;
-
-    const uint8_t *data_cursor = evt + off;
-    const uint8_t *rssi = data_cursor + total_data;
-
-    int decoded = 0;
-    const uint8_t *dp = data_cursor;
     for (uint8_t i = 0; i < num_reports; i++) {
+        if (off + ADV_REC_FIXED > len) return 0;
+        size_t dl = evt[off + 8];
+        if (off + ADV_REC_FIXED + dl + 1 > len) return 0;
+        off += ADV_REC_FIXED + dl + 1;
+    }
+    if (off != len) return 0;
+
+    off = 4;
+    for (uint8_t i = 0; i < num_reports; i++) {
+        const uint8_t *r = evt + off;
+        size_t dl = r[8];
         ble_adv_report_t rep;
         memset(&rep, 0, sizeof(rep));
-        rep.event_type = event_type[i];
-        rep.addr_type  = addr_type[i];
-        memcpy(rep.addr, addr + (size_t)i * 6, 6);
-
-        int8_t r = (int8_t)rssi[i];
-        if (r != BLE_RSSI_NOT_AVAILABLE) {
+        rep.event_type = r[0];
+        rep.addr_type  = r[1];
+        memcpy(rep.addr, r + 2, 6);
+        int8_t rssi = (int8_t)r[ADV_REC_FIXED + dl];
+        if (rssi != BLE_RSSI_NOT_AVAILABLE) {
             rep.has_rssi = true;
-            rep.rssi = r;
+            rep.rssi = rssi;
         }
-
-        ble_ad_parse(dp, data_len[i], &rep);
+        ble_ad_parse(r + ADV_REC_FIXED, dl, &rep);
         if (cb) cb(&rep, ctx);
-
-        dp += data_len[i];
-        decoded++;
+        off += ADV_REC_FIXED + dl + 1;
     }
-
-    return decoded;
+    return num_reports;
 }
 
 /* Event_Type bits of a 0x0D report (§7.7.65.13). */
@@ -175,9 +162,13 @@ int ble_hci_adv_walk(const uint8_t *evt, size_t len, ble_report_cb_t cb, void *c
 #define EXT_EVT_SCAN_RSP     0x0008
 #define EXT_EVT_LEGACY       0x0010
 
+#define PHY_LE_1M            0x01
+
 /* The 0x02 Event_Type for a Legacy-bit report, -1 for a combination the
- * clause does not list. Compared on bits 0-6: data status must already
- * be complete, and bits 7-15 are reserved for future use. */
+ * clause does not list. Compared on bits 0-6, data status (bits 5-6)
+ * included, so this is also what refuses a Legacy-bit report claiming
+ * to be a fragment: a legacy PDU is never fragmented. Bits 7-15 are
+ * reserved for future use. */
 static int legacy_code(uint16_t et) {
     switch (et & 0x7F) {
     case 0x13: return 0x00;   /* ADV_IND */
@@ -190,58 +181,27 @@ static int legacy_code(uint16_t et) {
     }
 }
 
-/* Whether `n` reports' Data_Lengths account for exactly the `blen`
- * octets after Num_Reports under at least one of the two layouts
- * (ble_snoop.h): consecutive per-report records, each Data_Length at
- * octet 23 of its record; or per-field arrays, Data_Length[0..n-1] at
- * 23 * n, every Data after every fixed field. A count matching neither
- * is not a multi-report event that could be decoded later, it is a
- * Num_Reports that disagrees with the event. Reads only below `blen`;
- * the caller has checked n * BLE_EXT_REPORT_FIXED <= blen. */
-static int ext_multi_accounts(const uint8_t *b, size_t blen, size_t n) {
-    size_t off = 0, i;
-    for (i = 0; i < n; i++) {
-        if (off + BLE_EXT_REPORT_FIXED > blen) break;
-        off += BLE_EXT_REPORT_FIXED + b[off + 23];
-    }
-    if (i == n && off == blen) return 1;
-    size_t sum = 0;
-    for (i = 0; i < n; i++) sum += b[23 * n + i];
-    return n * BLE_EXT_REPORT_FIXED + sum == blen;
-}
-
-int ble_hci_ext_adv_parse(const uint8_t *evt, size_t len, ble_adv_report_t *out) {
-    if (!evt || !out || len < 4) return BLE_EXT_PARSE_MALFORMED;
-    if (evt[0] != HCI_EV_LE_META) return BLE_EXT_PARSE_MALFORMED;
-    size_t plen = evt[1];
-    if (2 + plen != len || plen < 2) return BLE_EXT_PARSE_MALFORMED;
-    if (evt[2] != HCI_SUBEVT_EXT_ADV_REPORT) return BLE_EXT_PARSE_MALFORMED;
-
-    size_t num = evt[3];
-    if (num == 0) return BLE_EXT_PARSE_MALFORMED;
-    /* Either layout holds num fixed parts and then the Data; a parameter
-     * block too short for the fixed parts alone is no layout at all. */
-    if (2 + num * BLE_EXT_REPORT_FIXED > plen) return BLE_EXT_PARSE_MALFORMED;
-    if (num > 1)
-        return ext_multi_accounts(evt + 4, plen - 2, num)
-            ? BLE_EXT_PARSE_MULTI : BLE_EXT_PARSE_MALFORMED;
-
-    const uint8_t *r = evt + 4;
+/* One report record at `r`: BLE_EXT_REPORT_FIXED octets, then the Data
+ * the caller has already bounded. Fills `out` (zeroed first); 0 for a
+ * record the clause does not allow. */
+static int ext_decode(const uint8_t *r, ble_adv_report_t *out) {
     size_t dlen = r[23];
-    if (2 + BLE_EXT_REPORT_FIXED + dlen != plen) return BLE_EXT_PARSE_MALFORMED;
-
     uint16_t et = (uint16_t)(r[0] | (r[1] << 8));
     uint8_t status = (uint8_t)((et >> 5) & 0x03);
-    if (status == 0x03) return BLE_EXT_PARSE_MALFORMED;   /* reserved */
+    if (status == 0x03) return 0;   /* reserved */
 
+    int legacy = (et & EXT_EVT_LEGACY) != 0;
     int code;
-    if (et & EXT_EVT_LEGACY) {
-        /* A legacy PDU is never fragmented and carries at most 31
-         * octets of AdvData or ScanRspData (Vol 6 Part B §2.3.1). */
-        if (status != BLE_EXT_DATA_COMPLETE || dlen > BLE_LEGACY_ADV_DATA_MAX)
-            return BLE_EXT_PARSE_MALFORMED;
+    if (legacy) {
+        /* At most 31 octets of AdvData or ScanRspData (Vol 6 Part B
+         * §2.3.1). And §7.7.65.13: "If the Event_Type indicates a legacy
+         * PDU (bit 4 = 1), the Primary_PHY parameter shall indicate the
+         * LE 1M PHY and the Secondary_PHY parameter shall be set to
+         * 0x00." A report breaking that is refused like any other
+         * field the clause rules out. */
         code = legacy_code(et);
-        if (code < 0) return BLE_EXT_PARSE_MALFORMED;
+        if (code < 0 || dlen > BLE_LEGACY_ADV_DATA_MAX) return 0;
+        if (r[9] != PHY_LE_1M || r[10] != 0x00) return 0;
     } else {
         code = (et & EXT_EVT_SCAN_RSP) ? BLE_EVT_EXT_SCAN_RSP : BLE_EVT_EXT_ADV;
     }
@@ -255,7 +215,10 @@ int ble_hci_ext_adv_parse(const uint8_t *evt, size_t len, ble_adv_report_t *out)
     if (r[2] != BLE_ADDR_ANONYMOUS) memcpy(out->addr, r + 3, 6);
     out->primary_phy    = r[9];
     out->secondary_phy  = r[10];
-    out->sid            = r[11];
+    /* A legacy PDU has no ADI (Vol 6 Part B §2.3.4: the ADI field is in
+     * the extended header only), so its SID is "no ADI" whatever octet
+     * the controller put in the field; the field is ignored. */
+    out->sid            = legacy ? 0xFF : r[11];
     int8_t tx = (int8_t)r[12];
     if (tx != BLE_TX_POWER_NOT_AVAILABLE) {
         out->has_adv_tx_power = true;
@@ -276,5 +239,40 @@ int ble_hci_ext_adv_parse(const uint8_t *evt, size_t len, ble_adv_report_t *out)
      * whole decodes correctly, and the one the fragment boundary cut
      * sets `truncated` and ends the walk. */
     ble_ad_parse(r + BLE_EXT_REPORT_FIXED, dlen, out);
-    return BLE_EXT_PARSE_OK;
+    return 1;
+}
+
+int ble_hci_ext_adv_walk(const uint8_t *evt, size_t len,
+                         ble_report_cb_t cb, void *ctx) {
+    if (!evt || len < 4) return 0;
+    if (evt[0] != HCI_EV_LE_META) return 0;
+    size_t plen = evt[1];
+    if (2 + plen != len || plen < 2) return 0;
+    if (evt[2] != HCI_SUBEVT_EXT_ADV_REPORT) return 0;
+
+    size_t num = evt[3];
+    /* 0x01..0x0A is the clause's range. A parameter length of at most
+     * 255 cannot hold an eleventh 24-octet header, so the length checks
+     * below already refuse a larger count; this bound is what keeps
+     * `reps` visibly in range, and no test can tell it from them. */
+    if (num == 0 || num > BLE_EXT_REPORTS_MAX) return 0;
+
+    /* Consecutive records (ble_snoop.h). Every one is bounded and
+     * decoded before the first callback, so an event with one bad
+     * report puts none of its reports in the table. */
+    ble_adv_report_t reps[BLE_EXT_REPORTS_MAX];
+    const uint8_t *b = evt + 4;
+    size_t blen = plen - 2, off = 0;
+    for (size_t i = 0; i < num; i++) {
+        if (off + BLE_EXT_REPORT_FIXED > blen) return 0;
+        size_t dlen = b[off + 23];
+        if (off + BLE_EXT_REPORT_FIXED + dlen > blen) return 0;
+        if (!ext_decode(b + off, &reps[i])) return 0;
+        off += BLE_EXT_REPORT_FIXED + dlen;
+    }
+    if (off != blen) return 0;
+
+    for (size_t i = 0; i < num; i++)
+        if (cb) cb(&reps[i], ctx);
+    return (int)num;
 }

@@ -2706,9 +2706,9 @@ typedef struct {
      * once an extended (non-legacy) PDU was heard from the row, sticky;
      * the PHYs and SID are the last 0x0D report's, 0 / 0xFF until one. */
     uint8_t  ext_adv;
-    uint8_t  primary_phy;      /* 0 unknown, 0x01 LE 1M, 0x03 LE Coded */
-    uint8_t  secondary_phy;    /* 0 none or unknown, 0x01 1M, 0x02 2M, 0x03 Coded */
-    uint8_t  adv_sid;          /* 0x00..0x0F, 0xFF none */
+    uint8_t  primary_phy;      /* 0 unknown, 0x01 LE 1M, 0x03 LE Coded (S=8), 0x04 LE Coded S=2 */
+    uint8_t  secondary_phy;    /* 0 none or unknown, 0x01 1M, 0x02 2M, 0x03 Coded (S=8), 0x04 Coded S=2 */
+    uint8_t  adv_sid;          /* 0x00..0x0F, 0xFF none (every legacy PDU) */
 } ble_device_t;
 
 #define BLE_HID_APPEARANCE  0x01
@@ -2861,18 +2861,18 @@ typedef struct {
     /* Record accounting: every record lands in exactly one bucket
      * besides `records`, which counts them all. */
     uint64_t records;              /* every monitor record offered */
-    uint64_t adv_reports;          /* single-report LE Advertising Reports decoded */
-    uint64_t multi_rejected;       /* Num_Reports > 1, refused whole (layout unconfirmed) */
-    uint64_t ext_adv_reports;      /* single-report LE Extended Advertising Reports decoded */
-    /* LE Extended Advertising Reports heard and not put in the table:
-     * ext_multi_rejected + ext_fragments, one bucket between them. */
+    uint64_t adv_reports;          /* LE Advertising Report events decoded, every report */
+    /* LE Extended Advertising Report events with at least one report
+     * put in the table, and those with none (every report the tail of
+     * an open fragment train). */
+    uint64_t ext_adv_reports;
     uint64_t ext_adv_undecoded;
-    uint64_t ext_multi_rejected;   /* 0x0D, Num_Reports > 1, refused whole (as 0x02) */
-    uint64_t ext_fragments;        /* 0x0D continuation fragments of an open train */
-    /* Not buckets: of ext_adv_reports, how many were decoded from a
-     * leading or truncated fragment (data status incomplete), so from
-     * the AD structures the fragment held whole; and how many open
-     * fragment trains were pushed out of the bounded table. */
+    /* Not buckets, counted per report: continuation fragments of an
+     * open train, never walked; reports decoded from a leading or
+     * truncated fragment (data status incomplete), so from the AD
+     * structures the fragment held whole; and open fragment trains
+     * pushed out of the bounded table. */
+    uint64_t ext_fragments;
     uint64_t ext_adv_partial;
     uint64_t ext_trains_evicted;
     uint64_t index_records;        /* NEW_INDEX and DEL_INDEX records */

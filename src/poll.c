@@ -263,7 +263,10 @@ static void st_sensors(sloth_state_t *s, const poll_ctx_t *ctx) {
     if (s->bt_iface[0]) {
         sensor_t *bt = sensor_register(s, SENSOR_BLE, "BLE HCI monitor",
                                        s->bt_iface, ctx->wall);
-        sensor_observe(bt, s->ble_host.adv_reports, ctx->wall);
+        /* Both report events: a stack scanning with the extended
+         * commands delivers everything, legacy PDUs included, as 0x0D. */
+        sensor_observe(bt, s->ble_host.adv_reports + s->ble_host.ext_adv_reports,
+                       ctx->wall);
     }
     /* #144 slice 3: the Ubertooth stream is a second BLE sensor, on its
      * own iface, so the registry keeps the two apart. */
