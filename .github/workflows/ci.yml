@@ -60,6 +60,13 @@ jobs:
           make web
           ! grep -q 'CI Vendor One' build/web/web_oui_table.c
 
+      # The README's five-minute path (#164): the quick-start commands are
+      # read out of web/README.md and run literally in a copy of the tree
+      # against the synthetic demo, so a README that drifts from the build
+      # fails here rather than for the first person who follows it.
+      - name: Follow slothweb's README quick start
+        run: make web-demo && make web-quickstart-check
+
       # The capture path is not in `make test`: sloth_test is built
       # without WITH_PCAP, so on_packet() and every parser it reaches
       # were untested and unsanitised until #95 added this binary.
