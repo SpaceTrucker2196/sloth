@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sqlite3.h>
+#include <pthread.h>
 
 #include "runner.h"
 #include "sloth.h"
@@ -252,6 +253,54 @@ static void test_open_is_defensive_and_still_writes(void) {
     db_close();
     ASSERT_EQ(db_open(db_path), 1);            /* reopen of an existing file */
     ASSERT_EQ(db_is_defensive(), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* Another connection's lock at sloth's start (a reader recovering a
+ * crashed run's WAL, a CLI mid-statement) is waited out for DB_BUSY_MS
+ * rather than failing db_open(), which would stop sloth starting. Seen
+ * red with the sqlite3_busy_timeout() call removed from db_open(). */
+typedef struct {
+    int             held;
+    pthread_mutex_t mu;
+    pthread_cond_t  cv;
+} db_locker_t;
+
+static void *db_locker(void *ud) {
+    db_locker_t *l = ud;
+    sqlite3 *h = NULL;
+    int ok = sqlite3_open(db_path, &h) == SQLITE_OK &&
+             sqlite3_exec(h, "PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE",
+                          NULL, NULL, NULL) == SQLITE_OK;
+    pthread_mutex_lock(&l->mu);
+    l->held = ok ? 1 : -1;
+    pthread_cond_signal(&l->cv);
+    pthread_mutex_unlock(&l->mu);
+    if (ok) {
+        usleep(DB_BUSY_MS * 1000 / 8);
+        sqlite3_exec(h, "COMMIT", NULL, NULL, NULL);
+    }
+    sqlite3_close(h);
+    return NULL;
+}
+
+static void test_open_waits_out_a_brief_lock(void) {
+    fresh_db();
+    db_close();
+    db_locker_t l = { 0, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER };
+    pthread_t t;
+    ASSERT_EQ(pthread_create(&t, NULL, db_locker, &l), 0);
+    pthread_mutex_lock(&l.mu);
+    while (!l.held) pthread_cond_wait(&l.cv, &l.mu);
+    int held = l.held;
+    pthread_mutex_unlock(&l.mu);
+    ASSERT_EQ(held, 1);
+    ASSERT_EQ(db_open(db_path), 1);
+    pthread_join(t, NULL);
+    pthread_mutex_destroy(&l.mu);
+    pthread_cond_destroy(&l.cv);
+    ASSERT_EQ(db_is_open(), 1);
     db_close();
     unlink(db_path);
 }
@@ -3062,6 +3111,7 @@ void run_db_tests(void) {
     RUN_TEST(test_open_refuses_foreign_schema_version);
     RUN_TEST(test_open_is_defensive_and_still_writes);
     RUN_TEST(test_open_bad_path_fails_cleanly);
+    RUN_TEST(test_open_waits_out_a_brief_lock);
     RUN_TEST(test_open_creates_db_and_wal_private_under_permissive_umask);
     RUN_TEST(test_open_refuses_permissive_existing_db);
     RUN_TEST(test_open_refuses_permissive_existing_wal);

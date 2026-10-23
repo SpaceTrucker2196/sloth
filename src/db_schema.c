@@ -760,6 +760,7 @@ static const char MIGRATE_V6_SQL[] =
 
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
+int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
 const char *db_schema_migrate_v1_sql(void) { return MIGRATE_V1_SQL; }
 const char *db_schema_migrate_v2_sql(void) { return MIGRATE_V2_SQL; }
 const char *db_schema_migrate_v3_sql(void) { return MIGRATE_V3_SQL; }

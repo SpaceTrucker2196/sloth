@@ -907,6 +907,7 @@ int db_open(const char *path) {
         g_db = NULL;
         return 0;
     }
+    sqlite3_busy_timeout(g_db, DB_BUSY_MS);
     /* WAL so a reader (the operator's sqlite3 CLI) never blocks the
      * writer mid-capture. synchronous=NORMAL fsyncs at checkpoint
      * rather than per commit — at 1 Hz on an SD card the difference is

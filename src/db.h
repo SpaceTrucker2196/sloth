@@ -83,6 +83,14 @@
  * columns. v4 -> v5 (#90) adds karma_candidates.pnl_best. */
 #define DB_SCHEMA_VERSION 7
 
+/* How long a statement on sloth's connection waits out another
+ * connection's lock before failing busy. A reader of the file (the
+ * sqlite3 CLI, slothweb) can hold one briefly: a WAL reader recovering
+ * a crashed run's -wal, a rollback-mode reader's shared lock. Without
+ * a wait, db_open()'s first PRAGMA meeting one fails the open, and a
+ * --db that cannot be opened stops sloth starting. */
+#define DB_BUSY_MS 1000
+
 /* ── AKM regression (#74 Detector B, temporal half) ──────────────────
  *
  * An SSID that was SAE-only on one BSSID for a sustained window and is
@@ -285,6 +293,11 @@ const char *db_schema_sql(void);
  * than whatever SQL error the rest of the schema happens to hit
  * first. */
 const char *db_schema_meta_sql(void);
+
+/* DB_SCHEMA_VERSION as a function, for a reader that links this one
+ * file and not db.h's callers (slothweb's suite holds its own newest
+ * readable version to it). */
+int db_schema_version(void);
 
 /* v1 -> v2 (#53 retroactive): ALTER TABLE ADD COLUMN only. Exposed for
  * the same guardrail tests as db_schema_sql(). */
