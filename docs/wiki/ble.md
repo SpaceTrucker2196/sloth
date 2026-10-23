@@ -20,13 +20,15 @@ host it listens through was told to transmit.
 `src/ble_snoop.c` (the advertising-report decoder, #144 slice 1),
 `src/alerts/rules_ble.c`, `src/ble_flood.c`, `src/ble_detect.c`,
 `src/ble_watchlist.c`, `src/views/ble.c` (#144 slice 4),
+`src/ble_rotation.c`, `src/siphash.c` (#156 item 2),
+`research/bluetooth/ble-address-rotation.md`,
 `src/capture/capture.c`
 (`capture_fallback_device`), `src/main.c`, `MISSION.md` §1–§2;
 Bluetooth Core Specification v5.4 Vol 4 Part E §5.2 (arrayed parameters), §5.4, §7.1, §7.3.2, §7.3.18,
 §7.7.65.2, §7.7.65.13, §7.8; Vol 6 Part B §2.3.1 (legacy PDU payload); Linux `include/net/bluetooth/hci_mon.h` and
 `net/bluetooth/hci_sock.c`; libpcap `pcap-bt-monitor-linux.c`; #144.
 
-**Last updated**: 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
+**Last updated**: 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
 
 ---
 
@@ -267,6 +269,87 @@ no definition yet. A flood alert from an Ubertooth row says its counts
 are a one-channel sample. Each finding also has a `ble_alert` JSONL
 record built from the same list the rule fires from.
 
+## Address-rotation hints (internal use only)
+
+**Off by default.** `--ble-rotation-hints` (owner ruling 2026-10-23,
+#156 item 2) turns on an internal enrichment of the advertiser table.
+It is ignored, with a notice on stderr, without `--bt-monitor` or
+`--bt-capture` — and so under `--replay` too.
+
+**What it says.** A private address (resolvable or non-resolvable, by
+Address[47:46]) that went silent and another of the same sub-type that
+appeared on the same sensor and adapter may be one advertiser rotating
+its address. In sloth's words: *possible address rotation — the newer
+address may be the same advertiser as the older one, a token carried
+across the change with no overlap; this corroborates, does not confirm,
+and identifies no device or person.* A timing-only hint is weaker still:
+*another advertiser leaving and arriving reads the same.* **These
+records alone are not grounds for personnel action or physical
+identification.**
+
+**Why the spec makes it possible.** Core v5.4 Vol 3 Part C §10.7.1.1
+says advertising-data changes "should be synchronized with any changes
+in private addresses", and §10.7.1 / §10.7.3 that a device "should not
+send the device name or unique data in the advertising data". When a
+vendor does not, a token outlives the address. The rotation interval is
+**a recommended maximum of 15 minutes** (Appendix A,
+T_GAP(private_addr_int)); devices have been observed holding an address
+from seconds to more than four days. Sources and grades:
+`research/bluetooth/ble-address-rotation.md`.
+
+**Grades.**
+
+- **Payload (grade A + B).** A documented token carried across the
+  change: an MS-CDP beacon's Salt + Device_Hash (company 0x0006,
+  Scenario_Type 1); an Apple Handoff body (0x004C, Continuity type 0x0C)
+  — **unverified**, the layout is the papers' and a 2021 study saw it
+  link nothing on iOS 13; Fast Pair account data whose salt did *not*
+  change, which is the vendor ignoring the spec. Tokens are held only as
+  SipHash-2-4 digests.
+- **Timing (grade B + C).** No token: the old address's last report
+  came before the new one's first, within 10 s, the two never
+  interleaved, and the advertising shape (PDU type, payload family, AD
+  structure list and lengths) agrees, with no second arrival in the
+  same seam. Used only to de-duplicate, never as a link.
+- A link is pending for 10 s, then committed. An older address heard
+  again afterwards revokes it.
+
+**Guards.** Static random, public and resolved-identity addresses
+(Address_Type 2/3) are never candidates. A token heard on two
+interleaving addresses is poisoned for 900 s and every link on it is
+revoked. Nothing links while `BLE_ADV_FLOOD`'s fresh-address gate is
+active on the payload key. Never across sensors or adapters. Never a
+Fast Pair discoverable advertisement ("the BLE address shall not be
+rotated"). A chain stops at 8 links and at 2 h from its first address.
+
+**Who reads it.** Internal consumers only: the `[*]` view's estimate
+line ("est. N advertisers for M addresses", stated as an estimate) and
+`BLE_HID_UNEXPECTED`'s rotation form, which then counts advertisers, so
+one keyboard rotating its RPA is not three new HID addresses. The
+deferred stalk-grade CRIT's "non-resident" definition is not built; its
+hook is the hint's chain start (`src/ble_detect.h`).
+
+**Privacy statement.** The feature is itself a tracking capability, so:
+
+- **default off**, and with the flag absent nothing is allocated and
+  every output is byte-identical to a build without it (tested);
+- **keyed per run**: the SipHash key is drawn from `getrandom()` at
+  startup, so no digest means anything outside the run that made it;
+- **never exported**: no row shows a link, no JSONL field names a link,
+  a token or a digest, nothing goes to the database. Token bytes are
+  never stored. What leaves the process is four aggregate
+  `sensor_health` counters — `ble_rot_hints_payload`,
+  `ble_rot_hints_timing`, `ble_rot_poisoned`, `ble_rot_seam_evictions`
+  ([[jsonl-schema]]) — which carry no address;
+- **bounded**: 64 recently heard private addresses per sensor and
+  adapter, oldest dropped first (`ble_rot_seam_evictions`), nothing kept
+  past 2 h of silence.
+
+Receive-only throughout (MISSION §2): no scan request, no connection,
+no GATT read. The advertising interval, which the research grades as a
+corroborator, is not used: the frame clock reaches the table at one
+second.
+
 ## Own transmissions
 
 MISSION §2 holds Bluetooth to the passive absolute. The host stack can
@@ -445,15 +528,17 @@ no capture is committed.
   `Num_Sets` > 1 (held as "handles unknown").
 - LE Periodic Advertising Reports (subevent 0x0F) and the other LE Meta
   subevents — outside the allow-list (`ble_records_ignored`).
-- Address-rotation correlation and the 802.11 crosswalk — split out of
-  #144.
+- The 802.11 crosswalk — split out of #144. Address-rotation hints are
+  built (#156 item 2, internal, off by default; above); a dense-room
+  false-pair measurement and a capture on current Windows, iOS/macOS
+  and Android are not, so every token row keeps its "unverified".
 - Watchlist rows: none shipped; each needs its primary source.
 
 ## Related pages
 
 - [[ubertooth]] — the over-the-air source: `--bt-capture`, and the
   allowed and forbidden Ubertooth tools and flags.
-- [[cli-reference]] — `--bt-monitor` and the `bluetoothN` refusals.
+- [[cli-reference]] — `--bt-monitor`, `--ble-rotation-hints` and the `bluetoothN` refusals.
 - [[jsonl-schema]] — the `btmon_*` / `ble_*` fields of `sensor_health`.
 - [[alerts]] — `BT_OWN_TRANSMIT` and the own-operational-state form;
   `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`.

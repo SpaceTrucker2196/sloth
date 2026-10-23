@@ -112,6 +112,17 @@ typedef struct {
     uint8_t  mfr_data_len;
 
     bool truncated; /* an AD structure's declared length ran past the data blob */
+
+    /* #156: what src/ble_rotation.c needs and nothing else does. The
+     * two clipped flags say the field was longer than the copy above
+     * kept (an extended advertisement can carry more than 27 octets),
+     * so a fixed-layout field is never read from a prefix. ad_shape is
+     * an FNV-1a 32 over the (type, length) pair of every AD structure
+     * walked, in order: the "same AD structure list and lengths" shape
+     * corroborator, with no value octet in it. */
+    bool     mfr_data_clipped;
+    bool     svc_data_clipped;
+    uint32_t ad_shape;
 } ble_adv_report_t;
 
 /* Legacy-PDU codes are the 0x02 Event_Type values 0x00..0x04

@@ -34,6 +34,7 @@
     X(bgp_snoop_clear) \
     X(ble_clear) \
     X(ble_flood_clear) \
+    X(ble_rot_reset) \
     X(ble_watchlist_reset) \
     X(bt_stream_clear) \
     X(btm_clear) \

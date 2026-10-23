@@ -21,6 +21,7 @@
 void ble_ad_parse(const uint8_t *data, size_t len, ble_adv_report_t *out) {
     if (!out || !data || len == 0) return;
 
+    if (out->ad_shape == 0) out->ad_shape = 2166136261u;   /* FNV-1a 32 offset */
     size_t off = 0;
     while (off < len) {
         uint8_t ad_len = data[off];
@@ -32,6 +33,8 @@ void ble_ad_parse(const uint8_t *data, size_t len, ble_adv_report_t *out) {
 
         uint8_t ad_type = data[off + 1];
         const uint8_t *val = data + off + 2;
+        out->ad_shape = (out->ad_shape ^ ad_type) * 16777619u;
+        out->ad_shape = (out->ad_shape ^ ad_len) * 16777619u;
         size_t val_len = (size_t)ad_len - 1; /* ad_len counts the type octet + value */
 
         switch (ad_type) {
@@ -64,6 +67,7 @@ void ble_ad_parse(const uint8_t *data, size_t len, ble_adv_report_t *out) {
                 size_t copy = dl < BLE_SVC_DATA_MAX ? dl : BLE_SVC_DATA_MAX;
                 memcpy(out->svc_data, val + 2, copy);
                 out->svc_data_len = (uint8_t)copy;
+                out->svc_data_clipped = dl > BLE_SVC_DATA_MAX;
             }
             break;
 
@@ -99,6 +103,7 @@ void ble_ad_parse(const uint8_t *data, size_t len, ble_adv_report_t *out) {
                 size_t copy = mfr_len < BLE_MFR_DATA_MAX ? mfr_len : BLE_MFR_DATA_MAX;
                 memcpy(out->mfr_data, val + 2, copy);
                 out->mfr_data_len = (uint8_t)copy;
+                out->mfr_data_clipped = mfr_len > BLE_MFR_DATA_MAX;
             }
             break;
 

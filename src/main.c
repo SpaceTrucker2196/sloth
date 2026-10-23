@@ -309,7 +309,7 @@ static void print_usage(const char *argv0) {
             "       [--data-socket SPEC] [--data-socket-allow-remote]\n"
             "       [--no-discovery] [--out-format FORMAT]\n"
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
-            "       [--bt-monitor] [--bt-capture PATH]\n"
+            "       [--bt-monitor] [--bt-capture PATH] [--ble-rotation-hints]\n"
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
@@ -544,6 +544,17 @@ static void print_usage(const char *argv0) {
             "                     refused. Counts are a sample of one channel\n"
             "                     (docs/wiki/ubertooth.md lists the allowed\n"
             "                     and forbidden tool flags).\n"
+            "  --ble-rotation-hints\n"
+            "                     INTERNAL USE ONLY, off by default: link\n"
+            "                     private BLE addresses that may be one\n"
+            "                     advertiser rotating (a token carried across\n"
+            "                     the change, or timing alone), to de-duplicate\n"
+            "                     the [*] view's total and BLE_HID_UNEXPECTED's\n"
+            "                     rotation form. Keyed per run, bounded, never\n"
+            "                     exported: only four aggregate sensor_health\n"
+            "                     counters. A hint identifies no device or\n"
+            "                     person. Ignored, with a notice, without\n"
+            "                     --bt-monitor or --bt-capture.\n"
             "  --monitor-only     shorthand: restrict the data stream to the\n"
             "                     monitor-mode Wi-Fi interface sloth discovers\n"
             "                     at startup. Fail-closed: if no monitor\n"
@@ -728,6 +739,7 @@ int main(int argc, char **argv) {
     int         monitor_only = 0;        /* --monitor-only (#35) */
     int         bt_monitor   = 0;        /* --bt-monitor (#144 slice 2) */
     const char *bt_capture   = NULL;     /* --bt-capture PATH (#144 slice 3) */
+    int         ble_rotation_hints = 0;  /* --ble-rotation-hints (#156) */
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     time_t      session_start = sloth_wall();
@@ -825,6 +837,8 @@ int main(int argc, char **argv) {
             bt_monitor = 1;
         } else if (!strcmp(argv[i], "--bt-capture") && i + 1 < argc) {
             bt_capture = argv[++i];
+        } else if (!strcmp(argv[i], "--ble-rotation-hints")) {
+            ble_rotation_hints = 1;
         } else if (!strcmp(argv[i], "--hop")) {
             g_hop_enabled = 1;
         } else if (!strcmp(argv[i], "--tune-list")) {
@@ -1076,6 +1090,26 @@ int main(int argc, char **argv) {
                             "savefile; drop one of the two\n");
             return 2;
         }
+    }
+
+    /* #156 item 2 (owner ruling 2026-10-23): internal use only, off by
+     * default. Ignored with a notice, not refused, without a BLE source:
+     * it adds no output of its own beyond four sensor_health counters,
+     * so a run that cannot use it loses nothing by going on, and it is
+     * also ignored under --replay, which takes neither source flag. By
+     * here --replay and WITH_PCAP=0 have refused both source flags. */
+    if (ble_rotation_hints) {
+        if (!bt_monitor && !bt_capture)
+            fprintf(stderr, "sloth: --ble-rotation-hints ignored: it needs "
+                            "--bt-monitor or --bt-capture PATH\n");
+        else if (ble_hci_rotation_enable(1) != 0)
+            fprintf(stderr, "sloth: --ble-rotation-hints: no random key "
+                            "could be drawn; hints stay off\n");
+        else
+            fprintf(stderr, "sloth: BLE address-rotation hints on (internal "
+                            "only: aggregate counters in sensor_health, "
+                            "nothing per address exported; see "
+                            "docs/wiki/ble.md)\n");
     }
 
     /* socket_is_remote is only consulted when have_data_socket is set,

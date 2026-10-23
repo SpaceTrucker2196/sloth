@@ -81,6 +81,7 @@ void run_ble_snoop_tests(void);           /* tests/test_ble_snoop.c (#144 slice 
 void run_ble_hci_tests(void);             /* tests/test_ble_hci.c (#144 slice 2) */
 void run_ubertooth_tests(void);           /* tests/test_ubertooth.c (#144 slice 3) */
 void run_ble_rules_tests(void);           /* tests/test_ble_rules.c (#144 slice 4) */
+void run_ble_rotation_tests(void);        /* tests/test_ble_rotation.c (#156 item 2) */
 void run_deauth_snoop_tests(void);
 void run_flood_window_tests(void);
 void run_clock_seam_tests(void);
@@ -407,6 +408,7 @@ int main(void) {
     run_ble_hci_tests();
     run_ubertooth_tests();
     run_ble_rules_tests();
+    run_ble_rotation_tests();
 
     tui_offscreen_end();
     RUNNER_SUMMARY();

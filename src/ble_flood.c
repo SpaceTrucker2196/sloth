@@ -183,26 +183,46 @@ static void roll(flood_row_t *r, uint64_t now_ms, uint32_t win) {
     r->win_start_ms += n * win;
 }
 
+/* The flood key of one observation; 0 for a report no family keys. */
+static int key_of(const ble_obs_t *o, flood_key_t *k) {
+    const ble_adv_report_t *rep = o->r;
+    memset(k, 0, sizeof(*k));
+    if (rep->has_mfr_data) {
+        k->family  = BLE_FAM_MFR;
+        k->id      = rep->mfr_id;
+        k->subtype = rep->mfr_data_len >= 1 ? rep->mfr_data[0] : -1;
+    } else if (rep->has_svc_data16) {
+        k->family  = BLE_FAM_SVC_DATA;
+        k->id      = rep->svc_data_uuid16;
+        k->subtype = -1;
+    } else {
+        return 0;
+    }
+    k->kind     = o->sensor_kind;
+    k->adv_type = rep->event_type;
+    snprintf(k->iface, sizeof(k->iface), "%s", o->iface ? o->iface : "");
+    return 1;
+}
+
+int ble_flood_fresh_active(const ble_obs_t *o) {
+    if (!o || !o->r) return 0;
+    flood_key_t k;
+    if (!key_of(o, &k)) return 0;
+    long need = tune_val(TUNE_BLE_FLOOD_DISTINCT_ADDRS);
+    pthread_mutex_lock(&g_mu);
+    const flood_row_t *r = stab_find(&g_flood, &k);
+    int on = r && ((long)r->pub.cur.fresh >= need ||
+                   (long)r->pub.prev.fresh >= need);
+    pthread_mutex_unlock(&g_mu);
+    return on;
+}
+
 void ble_flood_note(const ble_obs_t *o, const uint8_t addr[6],
                     uint64_t now_ms) {
     if (!o || !o->r || !addr) return;
     const ble_adv_report_t *rep = o->r;
     flood_key_t k;
-    memset(&k, 0, sizeof(k));
-    if (rep->has_mfr_data) {
-        k.family  = BLE_FAM_MFR;
-        k.id      = rep->mfr_id;
-        k.subtype = rep->mfr_data_len >= 1 ? rep->mfr_data[0] : -1;
-    } else if (rep->has_svc_data16) {
-        k.family  = BLE_FAM_SVC_DATA;
-        k.id      = rep->svc_data_uuid16;
-        k.subtype = -1;
-    } else {
-        return;
-    }
-    k.kind     = o->sensor_kind;
-    k.adv_type = rep->event_type;
-    snprintf(k.iface, sizeof(k.iface), "%s", o->iface ? o->iface : "");
+    if (!key_of(o, &k)) return;
 
     const uint32_t win = window_ms();
     pthread_mutex_lock(&g_mu);

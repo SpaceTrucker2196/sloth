@@ -175,6 +175,11 @@ typedef struct {
 
 void ble_dev_observe(const ble_obs_t *o);
 
+/* #156: turn BLE address-rotation hints (src/ble_rotation.h) on or
+ * off. Off by default; main.c turns them on for --ble-rotation-hints.
+ * Returns -1 when no per-run key could be drawn (they stay off). */
+int ble_hci_rotation_enable(int on);
+
 /* Copy the device table and host state into `s`. */
 void ble_snapshot(sloth_state_t *s);
 

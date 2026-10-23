@@ -2649,6 +2649,29 @@ typedef struct {
  * verbatim (link keys and LTKs travel the same channel). */
 #define MAX_BLE_DEVICES   256
 #define BLE_DEV_NAME_MAX  32
+
+/* #156 item 2: a BLE address-rotation hint on one advertiser row,
+ * src/ble_rotation.h. All zero unless --ble-rotation-hints is on, and
+ * never exported: no view row, JSONL field or database column reads
+ * it. A hypothesis that the row may be the same advertiser as another
+ * row on the same sensor; it corroborates, does not confirm, and
+ * identifies no device or person. */
+typedef enum {
+    BLE_HINT_NONE = 0,
+    BLE_HINT_PAYLOAD,      /* grade A + B: a documented token carried across the seam */
+    BLE_HINT_TIMING        /* grade B + C only: de-duplication, never shown as a link */
+} ble_hint_basis_t;
+typedef struct {
+    uint8_t  basis;        /* ble_hint_basis_t of the committed link INTO this row */
+    uint8_t  confidence;   /* 0..100, under BLE_ROT_CONF_*_MAX */
+    uint8_t  hops;         /* links from the chain's first address */
+    uint32_t chain;        /* per-run chain id, 0 = in no chain; rows sharing one count once */
+    /* First report of the chain's first address (frame clock): the
+     * hook the deferred "non-resident" definition (src/ble_detect.h)
+     * reads instead of first_seen when hints are on. 0 = none. */
+    time_t   root_first;
+} ble_identity_hint_t;
+
 typedef struct {
     uint8_t  addr[6];          /* display order, most significant octet first */
     uint8_t  addr_type;        /* 0 public, 1 random, 2/3 resolved identity */
@@ -2714,7 +2737,19 @@ typedef struct {
     uint8_t  primary_phy;      /* 0 unknown, 0x01 LE 1M, 0x03 LE Coded (S=8), 0x04 LE Coded S=2 */
     uint8_t  secondary_phy;    /* 0 none or unknown, 0x01 1M, 0x02 2M, 0x03 Coded (S=8), 0x04 Coded S=2 */
     uint8_t  adv_sid;          /* 0x00..0x0F, 0xFF none (every legacy PDU) */
+    ble_identity_hint_t hint;  /* #156: internal only, all zero with the flag off */
 } ble_device_t;
+
+/* #156 item 2: the rotation-hint feature's aggregate state, copied by
+ * ble_snapshot(). `enabled` 0 means every field is 0 and sensor_health
+ * carries none of them. No address, token or digest is held here. */
+typedef struct {
+    int      enabled;
+    uint64_t hints_payload;    /* payload links committed, lifetime */
+    uint64_t hints_timing;     /* timing-only links committed, lifetime */
+    uint64_t poisoned;         /* token digests poisoned (heard on interleaving addresses) */
+    uint64_t seam_evictions;   /* seam-table entries dropped on full */
+} ble_rot_stats_t;
 
 #define BLE_HID_APPEARANCE  0x01
 #define BLE_HID_SERVICE     0x02
@@ -3376,6 +3411,7 @@ typedef struct {
     ble_host_t       ble_host;
     ble_device_t     ble_devices[MAX_BLE_DEVICES];
     int              ble_device_count;
+    ble_rot_stats_t  ble_rot;             /* #156: --ble-rotation-hints, aggregates only */
     /* #144 slice 4: advertising-flood windows and the [*] BLE view. */
     ble_flood_row_t  ble_flood[MAX_BLE_FLOOD];
     int              ble_flood_count;

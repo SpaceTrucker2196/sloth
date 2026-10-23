@@ -7,6 +7,7 @@
 #include "sensors.h"
 #include "ble_detect.h"
 #include "ble_flood.h"
+#include "ble_rotation.h"
 #include "views/ble.h"
 
 /* [*] BLE — #144 slice 4.
@@ -27,12 +28,13 @@ static int ble_cols(void) {
 #endif
 }
 
-static int page_rows(void) {
+static int page_rows(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
     int p = LINES - 8;
 #else
     int p = 30;
 #endif
+    if (s->ble_rot.enabled) p -= 3;   /* the rotation-hints estimate */
     return p < 3 ? 3 : p;
 }
 
@@ -224,6 +226,22 @@ void view_ble_draw(const sloth_state_t *s) {
         return;
     }
 
+    /* #156, --ble-rotation-hints only: the de-duplicated total, stated
+     * as an estimate. No row says which addresses it joined. */
+    if (s->ble_rot.enabled) {
+        int est = ble_rot_distinct(s, NULL, NULL);
+        tui_dim();
+        TPRINT(" rotation hints (internal): est. %d advertiser%s for %d "
+               "address%s - possible address rotation;\n",
+               est, est == 1 ? "" : "s", s->ble_device_count,
+               s->ble_device_count == 1 ? "" : "es");
+        TPRINT("   corroborates, does not confirm, and identifies no device "
+               "or person.\n"
+               "   These records alone are not grounds for personnel action "
+               "or physical identification.\n");
+        tui_normal();
+    }
+
     ble_plan_t w = plan_cols(ble_cols());
     tui_dim();
     TPRINT(" %-17s  %c  %-*s  %4s  %6s  %4s  %-3s  %s\n",
@@ -231,7 +249,7 @@ void view_ble_draw(const sloth_state_t *s) {
            "ADVERTISES");
     tui_normal();
 
-    int page = page_rows();
+    int page = page_rows(s);
     int sel = s->ble_sel;
     if (sel >= s->ble_device_count) sel = s->ble_device_count - 1;
     if (sel < 0) sel = 0;

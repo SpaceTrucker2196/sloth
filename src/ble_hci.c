@@ -6,6 +6,7 @@
 #include "ble_snoop.h"
 #include "ble_detect.h"
 #include "ble_flood.h"
+#include "ble_rotation.h"
 #include "ble_watchlist.h"
 #include "sloth_clock.h"
 #include "stab.h"
@@ -377,6 +378,18 @@ static void observe_locked(const ble_obs_t *o) {
     }
 
     ble_flood_note(o, key.addr, sloth_mono_ms());
+    /* #156: the one gate. Without --ble-rotation-hints nothing below
+     * runs, so no seam table is allocated or written. */
+    if (ble_rot_enabled())
+        ble_rot_observe(r, o->sensor_kind, key.iface, o->adapter, key.addr,
+                        o->ts, ble_flood_fresh_active(o));
+}
+
+int ble_hci_rotation_enable(int on) {
+    pthread_mutex_lock(&g_mu);
+    int rc = ble_rot_set_enabled(on);
+    pthread_mutex_unlock(&g_mu);
+    return rc;
 }
 
 void ble_dev_observe(const ble_obs_t *o) {
@@ -769,6 +782,7 @@ void ble_snapshot(sloth_state_t *s) {
     host_init_locked();
     s->ble_host = g_host;
     s->ble_device_count = stab_snapshot(&g_devs, s->ble_devices, MAX_BLE_DEVICES);
+    ble_rot_snapshot(s);
     ble_flood_snapshot(s, sloth_mono_ms());
     pthread_mutex_unlock(&g_mu);
 }
@@ -777,6 +791,7 @@ void ble_clear(void) {
     pthread_mutex_lock(&g_mu);
     stab_clear(&g_devs);
     ble_flood_clear();
+    ble_rot_drop_tables();
     g_host_init = 0;
     host_init_locked();
     pthread_mutex_unlock(&g_mu);

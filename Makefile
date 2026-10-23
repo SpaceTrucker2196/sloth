@@ -216,6 +216,9 @@ CORE_COMMON_SRCS += src/btle_ll.c src/bredr_bb.c src/bt_stream.c
 # #144 slice 4: the flood windows, the watchlist matcher (shipped empty),
 # the three BLE detector lanes and the [*] BLE view. All pure.
 CORE_COMMON_SRCS += src/ble_flood.c src/ble_watchlist.c src/ble_detect.c
+# #156 item 2: address-rotation hints, off unless --ble-rotation-hints, and
+# the keyed hash their digests use. Pure.
+CORE_COMMON_SRCS += src/ble_rotation.c src/siphash.c
 CORE_COMMON_SRCS += src/views/ble.c
 CORE_COMMON_SRCS += src/scan.c
 CORE_COMMON_SRCS += src/alert_key.c

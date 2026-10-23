@@ -38,6 +38,14 @@
 void ble_flood_note(const ble_obs_t *o, const uint8_t addr[6],
                     uint64_t now_ms);
 
+/* 1 when the report's payload key on its sensor has a current or
+ * previous window holding at least ble.flood_distinct_addrs fresh
+ * addresses: BLE_ADV_FLOOD's gate 1 with no baseline condition, the
+ * stricter reading. src/ble_rotation.c refuses every link under it.
+ * Read only: no row is created or rolled. Caller holds ble_hci.c's
+ * mutex, as for ble_flood_note(). */
+int ble_flood_fresh_active(const ble_obs_t *o);
+
 /* Roll every window to `now_ms` and copy the rows into s->ble_flood. */
 void ble_flood_snapshot(sloth_state_t *s, uint64_t now_ms);
 

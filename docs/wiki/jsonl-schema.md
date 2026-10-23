@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-10-23 (#148: `alert.resolve` reasons `displaced`
+**Last updated**: 2026-10-23 (#156: the four `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
 and `drained`; the `beacon-overflow` `BEACONING` finding; IPv4-mapped
 beaconing peers keyed as IPv4), 2026-10-23 (#165 audit: a PTR `answer`
 is whole up to 63 bytes, for a PTR question only; a target that would
@@ -845,6 +845,24 @@ In the change-only signature the stream enters as its state, the link
 type accepted or refused, the freshness bucket and none/some bands for
 `btcap_drop` and `btcap_truncated`; the record and PDU counters move
 with every record and ride the emitted line and the heartbeat instead.
+
+**BLE address-rotation hints** (#156 item 2). Appended after the
+`btcap_*` block **only while `--ble-rotation-hints` is on**; a run
+without the flag writes none of them, byte for byte what it wrote
+before. Aggregate lifetime counters: no address, link, token or digest
+is written anywhere ([[ble]]).
+
+| Field | Meaning |
+|---|---|
+| `ble_rot_hints_payload` | rotation hints committed on a documented token carried across the change (MS-CDP, Apple Handoff, Fast Pair account data), lifetime |
+| `ble_rot_hints_timing` | hints committed on a clean seam and the same advertising shape alone, lifetime; used only for de-duplication |
+| `ble_rot_poisoned` | token digests poisoned for being heard on two interleaving addresses (replay, spam, concurrent addresses) |
+| `ble_rot_seam_evictions` | seam-table entries (64 per sensor and adapter) dropped on full. Not an `evict_*` field, because that breakout is written on every run |
+
+In the change-only signature they enter as on/off and none/some bands.
+A sensor where `ble_rot_hints_payload` stays 0 while `ble_rot_hints_timing`
+climbs is one whose advertisers synchronise payload changes with
+address changes, as the spec asks.
 
 Per-stream block, with `<s>` being `capture` or `monitor` — and `btmon`
 for the Bluetooth host source, whose block is appended after `libs`

@@ -4901,3 +4901,16 @@ report events.
   reasons `displaced` and `drained` ([[jsonl-schema]]); the knob in
   [[cli-reference]]; [[beacon-detection]] now treats an IPv4-mapped
   peer (`::ffff:a.b.c.d`) as its IPv4 address.
+- 2026-10-23 — [[ble]]: address-rotation hints (#156 item 2, owner
+  ruling 2026-10-23: internal use only, off by default). New section
+  with the hypothesis wording ("corroborates, does not confirm, and
+  identifies no device or person"; "These records alone are not
+  grounds for personnel action or physical identification"), the
+  grades, guards and the privacy statement; [[cli-reference]]:
+  `--ble-rotation-hints`, ignored with a notice without a BLE source;
+  [[jsonl-schema]]: four `ble_rot_*` `sensor_health` counters present
+  only with the flag; [[alerts]]: `BLE_HID_UNEXPECTED` form (b) counts
+  advertisers under it. Sources in
+  `research/bluetooth/ble-address-rotation.md`, which also corrects the
+  issue's "RPAs rotate every 5–15 min" (spec: a recommended maximum of
+  15 minutes; observed: seconds to days).

@@ -13,7 +13,12 @@
  * Every finding is WARN. The issue's CRIT ("stalk-grade" watchlist
  * category from a non-resident source) is deferred: "non-resident" has
  * no definition yet, and a CRIT on an undefined term would be a claim
- * the sensor cannot back. Nothing here transmits, connects, or reads
+ * the sensor cannot back. The hook it should read is
+ * ble_identity_hint_t.root_first (#156): a definition built on a row's
+ * first_seen alone calls a resident random-address device new at every
+ * rotation, and with --ble-rotation-hints on, root_first is the first
+ * report of the earliest address chained to the row. It must stand
+ * without the hints too, since they are off by default. Nothing here transmits, connects, or reads
  * GATT: every input is an advertisement some other device broadcast.
  *
  * ── BLE_ADV_FLOOD ──
@@ -66,6 +71,13 @@
  * so on a site busy enough to churn the table a resident random-address
  * keyboard can count as new; evict_ble_device in sensor_health says
  * when that is happening.
+ *
+ * With --ble-rotation-hints (#156, src/ble_rotation.h) form (b)
+ * compares ble.hid_rotate_addrs against advertisers, not addresses:
+ * rows a committed rotation hint chains together count once, so one
+ * keyboard rotating its RPA does not read as N new HID addresses. The
+ * finding's `addrs` stays the address count. Off by default, and then
+ * the gate is the address count, as before.
  *
  * Both are precursors at most. CVE-2023-45866 is an unauthenticated HID
  * peripheral being accepted by a host; sloth sees no pairing and no

@@ -73,6 +73,19 @@ category, never an identity. `Enter` or `Esc` returns.
  T: P public R random p/r resolved   H HID  W watchlist  ~ one-channel sample
 ```
 
+With `--ble-rotation-hints` (#156, internal use only, off by default)
+three lines follow the header — the only place the hints show:
+
+```
+ rotation hints (internal): est. 3 advertisers for 4 addresses - possible address rotation;
+   corroborates, does not confirm, and identifies no device or person.
+   These records alone are not grounds for personnel action or physical identification.
+```
+
+The estimate counts addresses a committed hint chains together once.
+No row, and no detail, says which addresses were joined
+([the BLE operator guide](../wiki/ble.md#address-rotation-hints-internal-use-only) has the grades and guards).
+
 ## What's normal
 
 - Many random addresses, most rotating every few minutes: phones,

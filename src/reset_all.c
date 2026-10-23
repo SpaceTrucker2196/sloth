@@ -12,6 +12,7 @@
 #include "bgp_snoop.h"
 #include "ble_hci.h"
 #include "ble_flood.h"
+#include "ble_rotation.h"
 #include "ble_watchlist.h"
 #include "bt_stream.h"
 #include "capture/capture.h"

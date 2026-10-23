@@ -2,6 +2,7 @@
 #include <string.h>
 #include "ble_detect.h"
 #include "ble_flood.h"
+#include "ble_rotation.h"
 #include "alert_key.h"
 #include "sloth_alert.h"
 #include "tune.h"
@@ -169,6 +170,15 @@ static time_t sensor_first_ts(const ble_host_t *h, const char *ifc) {
     return 0;
 }
 
+typedef struct { const char *ifc; time_t since; } hid_rot_ctx_t;
+
+static int hid_rot_keep(const ble_device_t *d, void *vctx) {
+    const hid_rot_ctx_t *c = vctx;
+    return strcmp(d->sensor_iface, c->ifc) == 0 &&
+           addr_is_random(d->addr_type) &&
+           (d->hid & BLE_HID_APPEARANCE) && d->first_seen > c->since;
+}
+
 static void hid_rotate_findings(const sloth_state_t *s, time_t now,
                                 ble_finding_t *out, int max, int *n,
                                 int *dropped) {
@@ -185,18 +195,21 @@ static void hid_rotate_findings(const sloth_state_t *s, time_t now,
          * --bt-monitor has a first window of its own. */
         time_t first = sensor_first_ts(&s->ble_host, ifs[k]);
         if (first == 0 || first > since) continue;
+        hid_rot_ctx_t c = { ifs[k], since };
         int count = 0;
         const ble_device_t *last = NULL;
         for (int i = 0; i < s->ble_device_count && i < MAX_BLE_DEVICES; i++) {
             const ble_device_t *d = &s->ble_devices[i];
-            if (strcmp(d->sensor_iface, ifs[k]) != 0) continue;
-            if (!addr_is_random(d->addr_type)) continue;
-            if (!(d->hid & BLE_HID_APPEARANCE)) continue;
-            if (d->first_seen <= since) continue;
+            if (!hid_rot_keep(d, &c)) continue;
             count++;
             last = d;
         }
-        if (count < need || !last) continue;
+        /* #156: with --ble-rotation-hints, addresses a committed hint
+         * chains together count once, so one keyboard rotating its RPA
+         * is one advertiser, not N new ones. Without the flag every row
+         * is its own chain and this is `count`. */
+        int advertisers = ble_rot_distinct(s, hid_rot_keep, &c);
+        if (advertisers < need || !last) continue;
 
         ble_finding_t *f = slot(out, max, n, dropped);
         if (!f) continue;               /* counted in *dropped; keep counting */
