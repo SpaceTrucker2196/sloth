@@ -46,6 +46,20 @@ jobs:
       - name: Build and test slothweb without SQLite
         run: make web WITH_SQLITE=0 && make web-test WITH_SQLITE=0
 
+      # The IEEE vendor table (#162) is generated at build time from CSVs
+      # the developer fetches into web/data/, which are never committed, so
+      # no other step builds that path. A two-row generated registry in a
+      # temp dir proves the generator and the generated table compile under
+      # -Werror; the next build without it falls back to sloth's table.
+      - name: Build slothweb with a generated IEEE registry
+        run: |
+          d=$(mktemp -d)
+          printf 'Registry,Assignment,Organization Name,Organization Address\nMA-L,70B3D5,IEEE Registration Authority,x\nMA-L,0017F2,CI Vendor One,x\n' > "$d/oui.csv"
+          make web WEB_OUI_DIR="$d"
+          grep -q 'CI Vendor One' build/web/web_oui_table.c
+          make web
+          ! grep -q 'CI Vendor One' build/web/web_oui_table.c
+
       # The capture path is not in `make test`: sloth_test is built
       # without WITH_PCAP, so on_packet() and every parser it reaches
       # were untested and unsanitised until #95 added this binary.
