@@ -4772,3 +4772,17 @@ history allowance (a week of hour rows per baseline series) beside the
 analysis state, `used <= max(ceiling, analysis + allowance)`
 (`store_ceiling_raised`), and a ceiling below the estimate plus the
 allowance is refused at start.
+
+## 2026-10-22 — slothweb M4: devices and lookup (#162)
+
+**Updated**: [slothweb.md](slothweb.md) — `sloth.db` read read-only
+(`--sloth-db`: `SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW`, immutable
+where that makes no side file, a connection per request, an authorizer
+holding a column allow-list tested against `tests/test_db.c`'s
+guardrail), the §9.1 query language compiled to one bound statement
+and fuzzed, the IEEE vendor table generated at build time from
+uncommitted CSVs (sloth's own table without them), passive names only
+and a passive PTR cache (`slothweb.db` v4; empty until sloth's `dns`
+record carries a PTR target), rule A4 and A2's durable first_seen,
+`/api/devices`, `/api/device/{mac}`, `/api/lookup`, and the Devices
+view, the drawer and the Lookup view.

@@ -5,8 +5,18 @@ page tracks what has shipped; the design is
 [`docs/web-ui-spec.md`](../../docs/web-ui-spec.md), whose rulings table
 overrides its body.
 
-**Summary**: slothweb is at M3 (#161) on top of M2 (#160), M1 (#159),
-M0 (#158) and W0 (#157). M3 keeps 168 local hour-of-week baseline cells
+**Summary**: slothweb is at M4 (#162) on top of M3 (#161), M2 (#160),
+M1 (#159), M0 (#158) and W0 (#157). M4 reads `sloth.db` strictly
+read-only (`--sloth-db`; `SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW`,
+an immutable open where that is what makes no side file, a column
+allow-list enforced by an authorizer), compiles the §9.1 device query
+language to one prepared statement with bound parameters, builds the
+full IEEE vendor table at build time from CSVs the developer fetches
+(never committed; without them, sloth's own table and A4 off), shows
+passive names only (active reverse DNS is cut), adds rule A4 and a
+durable A2 from `devices.first_seen`, and serves `/api/devices`,
+`/api/device/{mac}` and `/api/lookup` behind the Devices view, the
+device drawer and the Lookup view. M3 keeps 168 local hour-of-week baseline cells
 per (metric, key) with the MAD ratio, runs nine of §6's ten anomaly
 rules (A4 moves to M4 with the OUI table) as episodes on the buckets
 that just closed, keeps both in `slothweb.db` (schema v3) across
@@ -34,7 +44,13 @@ tick counter. Every method other than `GET`/`HEAD` is `405` on every
 path, a header block over 8 KB `431`, and idle or slow clients time out
 on an absolute budget.
 
-**Sources**: `web/README.md`, `web/src/web_baseline.c`,
+**Sources**: `web/README.md`, `web/src/web_slothdb.c`,
+`web/src/web_query.c`, `web/src/web_oui.c`, `web/src/web_ptr.c`,
+`web/src/web_devices.c`, `web/tools/oui_gen.c`, `web/tools/oui_csv.c`,
+`tests/fuzz/fuzz_web_query.c`, `src/db_schema.c` (the tests' sloth.db),
+`src/dns_log.c` (what a PTR answer's `answer` holds), `src/oui.c`,
+`tests/test_db.c` (the guardrail the allow-list is held to),
+`web/src/web_baseline.c`,
 `web/src/web_anomaly.c`, `web/src/web_ident.c`, `web/src/web_metrics.c`, `web/src/web_rollup.c`,
 `web/src/web_store.c`, `web/src/web_tsdb.c`, `web/src/web_series.c`,
 `web/src/web_ingest.c`, `web/src/web_jsonl.c`,
@@ -46,9 +62,9 @@ on an absolute budget.
 `src/db.c` and `src/secure_file.c` (the open and migration rules M2
 re-implements), `src/top_hosts.c` (what `conn_count` counts),
 `src/probe_pnl.c` (what `mac_random` is), issues #102, #157, #158,
-#159, #160 and #161.
+#159, #160, #161 and #162.
 
-**Last updated**: 2026-10-22 (M3, #161).
+**Last updated**: 2026-10-22 (M4, #162).
 
 ---
 
@@ -76,7 +92,8 @@ resolves a name (its bind address included) and never writes to
 | M1: data-socket client, live state, `/api/live`, Overview | #159 | shipped |
 | M2: rollups, `slothweb.db`, `/api/series`, Activity view | #160 | shipped |
 | M3: baselines, anomaly rules and episodes, Anomalies view, heatmaps | #161 | shipped (A4 moved to M4) |
-| M4 to M6 (devices and lookup, Wi-Fi and history, flows) | #162 and on | not started |
+| M4: sloth.db read-only, query language, OUI table, passive names, A4, durable A2, Devices, drawer, Lookup | #162 | shipped (active reverse DNS cut by the rulings) |
+| M5 and M6 (Wi-Fi and history, flows) | #163 and on | not started |
 
 ## W0: the access boundary before any route
 
@@ -501,6 +518,53 @@ In short:
   normal" over the baseline band, the hour-of-week heatmap, the top five
   open episodes, and a view-only sensitivity slider.
 
+## M4: devices and lookup
+
+The full account is in
+[`web/README.md`](../../web/README.md#devices-and-lookup-m4). In short:
+
+- **sloth.db, read-only.** Every request (and A2's minute pass) opens
+  its own connection with `SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW`
+  and closes it after, so no snapshot outlives a request. A WAL file
+  with no `-wal`, or a `-wal` and no `-shm`, is opened as an immutable
+  URI, since a plain read-only open would make both side files; with
+  sloth running it is an ordinary WAL reader. `query_only`,
+  `DEFENSIVE`, a 100 ms busy timeout and a progress budget (250 ms a
+  request) mean a slow read is slothweb's `503`, never sloth's stall.
+  Schema v1 to v7 is read (older ones by probing columns); a newer one
+  is refused with a message.
+- **The allow-list.** An authorizer denies any column not on
+  `web_sdb_allow[]` (devices' §8.6 columns, PNL SSIDs, associations,
+  ARP, DHCP, mDNS and NBNS names, alerts without `detail`), any
+  pragma but `table_info`, and anything but a `SELECT`; the test reads
+  `tests/test_db.c`'s guardrail words and fails on a listed column
+  named for a secret or a credential.
+- **Query language** (§9.1): every prefix of the spec, AND, `-`,
+  quotes; bounded (256 bytes, 12 terms, 64 bytes a term) and checked per
+  prefix; one statement from constant fragments, values bound, LIKE
+  escaped; fuzzed by `fuzz_web_query`.
+- **Vendor table** (§9.2): MA-L, MA-M, MA-S and IAB from
+  `web/data/*.csv`, generated into `build/web/`; most specific block
+  first; local and group bits always reported. No CSV: sloth's 117
+  entries, said so on `/api/health` and the Lookup card.
+- **Passive names** (§9.3 minus the active half): sloth.db's and the
+  stream's DHCP, mDNS and NBNS names, sloth's hostname, and a passive
+  PTR cache (`slothweb.db` v4, `passive_ptr`, 4,096 addresses). The
+  cache stays empty today: sloth's `dns` record carries no PTR target
+  (`src/dns_log.c` reads A and AAAA only), a sloth change outside
+  `web/`.
+- **Rules.** A4: a present, globally administered, unicast MAC in no
+  IEEE block, only with the full table (off with a reason otherwise), a
+  burst of more than eight folded into one episode. A2 asks sloth.db's
+  `MIN(first_seen)` first and also takes sloth.db's new MACs (a wired
+  device among them); without sloth.db, M3's stream path.
+- **Page.** Devices (search box, a virtualised table of up to 512 rows
+  with the §8.6 columns, swatch, `~` for random, severity border, 144-
+  cell strip), the drawer (everything `/api/device/{mac}` gives, the
+  strip, the week heatmap, the episodes) opened from a row or an
+  anomaly card, and Lookup. `textContent` only; no request off the
+  page's own server.
+
 ## Tests
 
 `make web-test` is self-contained: no host file, loopback ephemeral
@@ -574,6 +638,20 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | the page's M3 elements and fetches, and the push | `test_page_carries_the_m3_view`, `test_events_carry_anomalies` |
 | bounded identity tables | `test_ident.c` |
 
+#162 (M4) maps as follows.
+
+| Acceptance item | Test |
+|---|---|
+| `vendor:apple random:yes seen:<24h` returns the right rows against a test-generated database | `test_acceptance_query` (`test_slothdb.c`: exactly D1 and D6 of a sloth.db built from `src/db_schema.c`, each term shown to matter), `test_devices_acceptance` (the same over HTTP) |
+| a MAC from a small vendor resolves that sloth's table misses | `test_lookup` (an MA-S MAC through `/api/lookup`, against the test's IEEE-format table and against sloth's own), `test_sloth_fallback`, `test_lookup_by_block` |
+| sloth.db opened read-only, the test asserting it | `test_open_flags`, `test_reading_changes_nothing`, `test_live_wal_reader`, `test_wal_without_shm`, `test_refusals`, `test_older_schema` |
+| no credential or secret column servable | `test_allow_list_against_the_guardrail`, `test_authorizer_denies`, `test_device_drawer` (no user name in the answer) |
+| the query language, bounded, one bound statement, fuzzed | `test_query.c`, `test_query_terms`, `tests/fuzz/fuzz_web_query.c` |
+| OUI table generated, never committed, build without it | `test_oui.c`, `test_builtin_table`; the `web/data/` and CSV ignore rules |
+| passive names, PTR cache, v4 migration | `test_ptr.c`, `test_v3_file_is_migrated`, `test_v3_failed_step_leaves_file_unchanged`, `test_passive_ptr_rows`, `test_newer_file_refused` |
+| A4 and the durable A2 | `test_a4_unknown_vendor`, `test_a4_off_without_the_ieee_table`, `test_a4_burst_is_one_episode`, `test_a2_durable_first_seen`, `test_device_z_now` |
+| routes, strict validation, presence, drawer, Lookup, page | `test_devices.c` |
+
 A test cannot connect from a non-loopback address, so the socket-level
 refusals narrow the list and connect from loopback; the list function
 itself is tested on non-loopback sockaddrs. Each absence assertion was
@@ -587,8 +665,8 @@ covers `web/`.
 
 - [[data-socket-exposure]] — the remote-bind guard this copies.
 - [[jsonl-schema]] — the stream M1 consumes.
-- [[sqlite-schema]] — sloth's database, which later milestones read
-  read-only and M2's store never touches; its migration rule is the one
+- [[sqlite-schema]] — sloth's database, which M4 reads read-only and
+  M2's store never touches; its migration rule is the one
   `slothweb.db` follows.
 - [[cli-reference]] — sloth's own flags; slothweb's are in
   [`web/README.md`](../../web/README.md).

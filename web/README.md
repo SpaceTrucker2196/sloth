@@ -4,7 +4,7 @@ The browser dashboard for sloth data, built in milestones. The spec is
 [`docs/web-ui-spec.md`](../docs/web-ui-spec.md); the rulings table at its
 top overrides the body. Tracker: #102.
 
-**This is M3 (#161), on top of M2 (#160), M1
+**This is M4 (#162), on top of M3 (#161), M2 (#160), M1
 (#159), M0 (#158) and W0 (#157).** W0 is the listener, the
 allowed-peer list and its refusals. M0 added the embedded page,
 `/api/health` and an `/events` stream. M1 added the data-socket
@@ -27,6 +27,17 @@ Overview's band, hour-of-week heatmap and top anomalies. The details,
 and every place this departs from the spec's body and why, are in
 [Baselines and anomalies](#baselines-and-anomalies-m3) below.
 
+**M4 adds devices and lookup** (`web_slothdb.h`, `web_query.h`,
+`web_oui.h`, `web_ptr.h`, `web_devices.h`): `sloth.db` read
+read-only (`--sloth-db`), the device query language of §9.1 compiled
+to one prepared statement with bound parameters, the vendor table
+generated at build time from the IEEE registry CSVs the developer
+fetches (never committed), passive names only (the active reverse DNS
+of §9.3 is cut by the rulings header: slothweb resolves nothing), rule
+A4 and a durable A2, the routes `/api/devices`, `/api/device/{mac}`
+and `/api/lookup`, and the Devices view, the device drawer and the
+Lookup view. See [Devices and lookup](#devices-and-lookup-m4) below.
+
 ## Build and run
 
 ```sh
@@ -36,7 +47,25 @@ make web WITH_SQLITE=0       # a slothweb with no store (10 s tier in memory)
 make web-test WITH_SQLITE=0  # and its tests
 ./slothweb          # listens on 127.0.0.1:8770, reads unix:/run/sloth/sloth.sock,
                     # keeps its time series in ./slothweb.db
+./slothweb --sloth-db /var/lib/sloth/sloth.db   # and reads sloth.db, read-only
 ```
+
+**The vendor table.** `make web` generates `build/web/web_oui_table.c`
+from whichever of these the developer has put in `web/data/` (a
+directory ignored by version control; the files are never committed,
+2026-10-21 OUI ruling): `oui.csv` (MA-L,
+`https://standards-oui.ieee.org/oui/oui.csv`), `mam.csv` (MA-M,
+`.../oui28/mam.csv`), `oui36.csv` (MA-S, `.../oui36/oui36.csv`) and
+`iab.csv` (`.../iab/iab.csv`). Fetching them is a manual step on the
+developer's machine; the build and the sensor never fetch anything.
+With none there the build still succeeds: the generator reads sloth's
+own table out of `src/oui.c` as text (117 entries today; the spec's
+"123" is out of date), `/api/health` says `"vendor_table":"sloth"`, the
+Lookup card says the table is not the full registry, and A4 is off with
+its reason. A malformed CSV fails the build rather than becoming a
+smaller table. The table is regenerated when the list of CSVs or a
+CSV's checksum changes.
+
 
 sloth creates its unix socket `0600`, so slothweb runs as the same user
 as sloth (or one sloth's socket directory admits); the kernel's
@@ -69,6 +98,7 @@ and is never committed; neither is any font. No Python, no Node.
 | `--web-max-keys N` | Device keys tracked by keyed metrics, 16..8192, default 512; host keys get N/2 (256). Least recently seen out first. It also sizes M3's tables: the baseline cap (`web_baseline_cap_for()`), the identity tables (N MACs, N/2 IPs) and A7's hosts (N/2). |
 | `--web-max-mb N` | Ceiling on the store's used size, in MB, default 256. Checked after every 10 s write and at each compaction; over it, the oldest 10 s rows go first, then the 1 min and 1 h rows of keyed series, and the global series' rows last. The baselines and episodes (M3) count towards it but are never dropped, and the time series always keeps a history allowance beside them: a week of hour rows for every series the baselines can hold, at 64 bytes a row (measured), about 51 MB at the default 512 keys and 760 MB at 8,192. So the bound is `used <= max(ceiling, analysis state + allowance)`: when the analysis state (its pages measured with SQLite's `dbstat`, `store_analysis_bytes`) leaves less than the allowance under the ceiling, the time series is trimmed to the allowance, not erased and not left to grow, and the pass is counted in `store_ceiling_raised`. A library without `dbstat` cannot measure the analysis state (`store_analysis_bytes` `-1`) and drops until under the ceiling or out of rows. With a store, a ceiling below the analysis state's estimate plus the allowance is refused at start (exit 2), naming the least that would do: 96 at the default 512 keys, 1,437 at 8,192 (MB here are 2^20 bytes). |
 | `--web-retain-days N` | Days of 1 min buckets kept, 1..400, default 30. |
+| `--sloth-db PATH` | sloth's own database (`sloth --db`), read-only (below). Absent: `/api/devices` is a `503` `no_sloth_db`, the drawer and Lookup answer from the stream and the vendor table, A2 runs on the stream alone, and the page says so. A path that is not there yet, or a file refused, is not fatal: every request opens it afresh. Needs a `WITH_SQLITE` build; the same path as `--store` is refused. |
 | `--help` | Usage. |
 
 Exit status: `0` after `SIGINT`/`SIGTERM`, `1` when the bind fails or
@@ -99,6 +129,9 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/series?...`, `/api/keys?...`, `/api/metrics` | `200` JSON, `Cache-Control: no-store`; `400` with `{"error":"reason"}` for a parameter that does not pass (below); `503` with no time series attached |
    | `GET /api/anomalies?since=&kind=` | `200` JSON, `Cache-Control: no-store`, open episodes and those closed since `since` (below); `400` for a parameter that does not pass; `503` with no anomaly engine |
    | `GET /api/baseline?metric=&key=` | `200` JSON, one series' 168 hour-of-week cells; `400` / `503` as above |
+   | `GET /api/devices?q=&sort=&limit=&offset=` | `200` JSON, a page of sloth.db's devices (M4, below); `400` for a parameter or a query term that does not pass; `503` with no `--sloth-db`, or sloth.db missing, refused, busy or past its budget |
+   | `GET /api/device/{mac}` | `200` JSON, one device; `400` for a MAC that does not pass or any query |
+   | `GET /api/lookup?q=` | `200` JSON, the Lookup card for a MAC or an IP; `400` otherwise |
    | `GET /events` | `200` `text/event-stream`, held open (below) |
    | `GET /events` with 24 streams already open | `503` |
    | `GET` any other path | `404` |
@@ -167,7 +200,7 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
 **`/api/health`** answers
 
 ```json
-{"service":"slothweb","milestone":"M3","uptime_s":12,
+{"service":"slothweb","milestone":"M4","uptime_s":12,
  "socket":"connected","socket_spec":"unix:/run/sloth/sloth.sock",
  "last_record_age_s":0,"socket_attempts":1,"socket_connects":1,
  "socket_reconnects":0,"socket_failures":0,"socket_closes":0,
@@ -177,8 +210,13 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
  "socket_decode_by":{"syntax":0,"utf8":0,"depth":0,"fields":0,
    "not_object":0,"duplicate_key":0,"no_type":0,"overlong":0,"truncated":0},
  "socket_gaps":0,"socket_gap_dropped":0,
- "db":"none","db_schema":null,"db_rows":null,
- "store":"open","store_path":"./slothweb.db","store_schema":3,
+ "db":"open","db_schema":7,"db_rows":42,"db_path":"/var/lib/sloth/sloth.db",
+ "db_mode":"wal","db_error":null,"db_opens":118,"db_timeouts":0,
+ "db_supported":[1,7],"vendor_table":"ieee",
+ "vendor_counts":{"ma_l":38212,"ma_m":5960,"ma_s":6831},"a4":"on",
+ "passive_ptr":{"entries":0,"cap":4096,"seen":31,"stored":0,"empty":31,
+   "refused":0,"evictions":0,"db_evictions":0,"persist_errors":0},
+ "store":"open","store_path":"./slothweb.db","store_schema":4,
  "store_rows":{"fine":42120,"minute":7020,"hour":117},
  "store_bytes":1765376,"store_max_bytes":268435456,"store_batches":360,
  "store_write_errors":0,"store_last_error":null,"store_compactions":2,
@@ -211,8 +249,16 @@ back-off of `socket_retry_ms`). `socket_last_error` is slothweb's own
 text (`connect: No such file or directory`, `peer closed the stream`),
 never anything the peer sent. `socket_gaps` counts sloth's `socket_gap`
 markers and `socket_gap_dropped` the records they say were dropped
-(jsonl-schema, #93). The `db` fields are `sloth.db`'s and stay
-`"none"`/`null` until M4. The `store` fields are M2's (below): `store` is
+(jsonl-schema, #93). The `db` fields are `sloth.db`'s (M4, below):
+`db` is `none` (no `--sloth-db`; then only `db_schema`, `db_rows` and
+`db_supported` follow, as `null`, `null` and the range), `open`,
+`missing`, `refused`, `error` or `unbuilt`, checked afresh for each
+`/api/health`; `db_rows` counts `devices`, `db_mode` is how it was
+opened (`wal`, `immutable`, `rollback`) and `db_error` slothweb's own
+sentence for the last refusal. `vendor_table` and `vendor_counts` are
+the generated table's (`ieee`, `sloth` or `none`), `a4` is `on` or why
+it is off, and `passive_ptr` the cache's size and counters. The
+`store` fields are M2's (below): `store` is
 `open`, or `memory` in a build without SQLite (`store_path`,
 `store_schema` and `store_rows` are then `null`); `store_rows` is the
 rows stored, kept by the writer (a bucket merged into one already on
@@ -525,10 +571,11 @@ state (`baseline`, `baseline_cell`, `episode`, `fanout`, `reported`;
   own version stamp, so a failed step leaves the file at the version it
   last reached, with the step's own changes rolled back. A new file is
   stamped v0 first and takes the same chain, so the chain runs on every
-  first start. Today the chain is three steps: v0 to v1 creates the four
+  first start. Today the chain is four steps: v0 to v1 creates the four
   tables, v1 to v2 indexes each tier on `t`, v2 to v3 creates the five
-  analysis tables (plain `CREATE TABLE` and `CREATE INDEX`: a name
-  already taken fails the step rather than being adopted).
+  analysis tables, v3 to v4 creates `passive_ptr` and its index (M4;
+  plain `CREATE TABLE` and `CREATE INDEX`: a name already taken fails
+  the step rather than being adopted).
 - **No column can hold a credential**: `web/tests/test_store.c` keeps
   sloth's `test_db.c` guardrail (no column named for a password, a
   community, a nonce, a key or a token may be TEXT or BLOB), and scans
@@ -832,8 +879,8 @@ Where this departs from the spec's body, and why:
   trickle or burst is one of the MACs folded into the `""` episode and
   is not reported on its own. The rolling hour is kept in memory and
   starts at 0 after a restart.
-- **A4** (vendor unknown) needs the full IEEE OUI table, which is M4's
-  (#162). Not here.
+- **A4** (vendor unknown) arrived with M4 (#162); see
+  [Devices and lookup](#devices-and-lookup-m4).
 - **A5 and A6** use the names the stream carries: `device.hostname`
   (sloth's copy of the DHCP lease hostname), `dhcp_lease`, `mdns_service`
   and `nbns_name` (suffixes 0x00 and 0x20 only: the others name a group).
@@ -960,8 +1007,8 @@ the key in its hash colour, a score bar in the heat ramp, the evidence,
 the last hour of the metric that fired (from `/api/series`), and first
 and last seen; chips filter by kind, and a window picks how far back
 closed episodes are listed. It re-reads `/api/anomalies` on each
-`anomaly` event, at most once a second. Opening a device or host drawer
-from a card waits for M4's drawers.
+`anomaly` event, at most once a second. A card whose key is a MAC opens
+that device's drawer (M4); a host drawer waits for its milestone.
 
 The Overview (§8.4) gains a throughput tile (the `iface.rx_rate` of the
 interface sloth reported most recently) with its 24 h sparkline over the
@@ -977,12 +1024,264 @@ changes the band drawn and hides `rate` episodes whose |z| is under it.
 It changes nothing stored, and the server fires A1 at 3 sd whatever it
 says, so a setting under 3 shows what 3 shows.
 
+## Devices and lookup (M4)
+
+### sloth.db, read-only
+
+`--sloth-db PATH` is sloth's file, never slothweb's (`web_slothdb.h`).
+Every use opens its own connection and closes it after: a request, or
+the minute pass that asks it for A2. So no read snapshot outlives a
+request and none can pin sloth's WAL past one statement (each runs in
+its own implicit read transaction, ended by its reset), and a sloth
+that starts, stops or checkpoints between two requests is simply seen
+by the next one.
+
+- **Open.** `lstat()` first: a symlink, a directory or a device is
+  refused, and a path with nothing there is `"db":"missing"` (sloth has
+  not made it yet), retried on every request. Then
+  `SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW`, never `READWRITE` or
+  `CREATE` (a test asserts the flags passed). The lessons of the
+  store's identify hold here, harder, since this file is never ours: a
+  read-only connection never checkpoints, so sloth's unflushed WAL is
+  never written into the file; a WAL-mode file with no `-wal`, or with a
+  `-wal` and no `-shm` (no sloth running, nothing checkpointing), is
+  opened as an immutable URI (`mode=ro&immutable=1`), because an
+  ordinary read-only open makes an empty `-wal` and a 32 KB `-shm`
+  beside it; such a read sees the file as of sloth's last checkpoint,
+  and `/api/health` says `"db_mode":"immutable"`. With both present
+  (sloth running) it is a WAL reader like any other, on sloth's own
+  `-shm` (`"wal"`). A rollback-journal file is read with a shared lock
+  per statement (`"rollback"`).
+- **Each connection** gets `SQLITE_DBCONFIG_DEFENSIVE`,
+  `PRAGMA query_only`, a 100 ms busy timeout and a progress handler that
+  interrupts any statement past the caller's budget (250 ms for a
+  request, 200 ms for a minute pass), so a slow read costs slothweb a
+  `503` `sloth_db_timeout`, never sloth a stall
+  (`db_timeouts` on `/api/health`).
+- **Identify.** sloth's `meta` is `(key, value)`; a `schema_version`
+  of 1 to 7 is read (`"db_supported":[1,7]`). A newer one is refused
+  with "written by a newer sloth (schema v8; this slothweb reads
+  v1..v7)": this build does not know its columns. An older one is read
+  by probing its columns with `PRAGMA table_info`: a column the version
+  lacks (`device_class`, `camera_*` before v6, `dhcp_vci` before v7)
+  reads as `0` or `NULL`, and a table that is missing reads as no rows,
+  its query conditions as false. A file with no `devices` table of
+  sloth's shape, a `slothweb.db` (its `meta` is `(name, value)`) or
+  anything else is refused.
+- **The column allow-list.** Every statement names its columns, and an
+  authorizer on every connection denies a read of any `(table,
+  column)` not on `web_sdb_allow[]`, any function but `like`,
+  `coalesce`, `substr`, `instr`, `min`, `max`, `count` and slothweb's
+  four, any pragma but `table_info`, and every statement that is not a
+  `SELECT` (an `ATTACH`, a recursive CTE, a write). A statement naming
+  another column fails to prepare. The list holds `devices` (the
+  §8.6 columns), `pnl_clients`, `pnl_ssids`, `probe_clients` and
+  `assocs` (first seen and the drawer's lists), `arp`, `dhcp_leases`,
+  `mdns_services`, `nbns_names`, `alerts` (key, type, severity,
+  title, match IP, count, times: not `detail`, which can carry a user
+  name) and `meta`. So no credential-bearing column
+  (`cleartext_creds.username`, `rogue_radius.last_identity`,
+  `mqtt_flows.last_username`, anything in `eapol_events`) can be served
+  whatever a later statement says. `test_slothdb.c` reads the guardrail
+  word list out of `tests/test_db.c` itself, plus credential words
+  (`user`, `identity`, `pass`, `token`, `key_material`, ...), and fails
+  if a listed column matches one or is not a column of sloth's live
+  schema.
+
+### The query language (§9.1)
+
+`web_query.h`. Terms are separated by spaces and combine with AND; `-`
+negates one; `"double quotes"` hold a space. `vendor:` (the OUI
+table's name or sloth's own label, substring), `mac:` (prefix, `-` read
+as `:`), `ip:` (prefix, the device's or an ARP binding's), `ssid:`
+(last SSID or a PNL SSID), `name:` (sloth's hostname, DHCP, mDNS host
+or instance, NBNS, a PTR answer seen), `random:yes|no` (the locally
+administered bit), `seen:` and `first:` (`<24h` less than 24 h ago,
+`>7d` more than, `>2026-09-29` at or after that day UTC, `<...` before
+it, a bare date that day; units `s m h d w`), `risk:` (0..3 with
+`= < > <= >=`), `z:` (`|z|` now, below), `src:` (`arp dhcp mdns beacon
+probe sta camera`, sloth's `DEV_SRC_*` bits), `has:` (`pnl alert
+anomaly name ip ssid`) and `anomaly:` (a kind, keyed by the MAC). A
+word before `:` that is no prefix (`b8:27:eb`) is free text, which
+matches the MAC, IP, hostname, either vendor and the last SSID.
+
+Bounded before anything is read: at most 256 bytes, 12 terms, 64 bytes
+a term; text is well-formed UTF-8 with no C0, DEL or C1 byte; every
+other value is checked against its prefix's form; a refusal is a `400`
+naming the reason (`bad_mac`, `bad_time`, `term_too_long`, ...),
+never the value. It compiles to **one** statement whose text is
+assembled only from constant fragments: every value is a bound
+parameter, a LIKE pattern with `\`, `%` and `_` escaped (`ESCAPE '\'`),
+and the statement's shape is the same whatever the values. The vendor
+of the OUI table, `|z|` now, the anomaly count and the passive PTR name
+are SQL functions slothweb registers on the connection, reading its
+own memory. `tests/fuzz/fuzz_web_query.c` fuzzes the parser and the
+compiler (`make fuzz`) and aborts if a statement names a parameter it
+does not bind or holds a byte the constant fragments do not. Results
+are capped (`limit` 1..200, default 100; `offset` 0..100,000), sorted
+by `last` seen (default), `first` seen, `mac` or `risk`.
+
+### The vendor table (§9.2)
+
+`web_oui.h`, generated by `web/tools/oui_gen.c` (Build and run, above).
+An entry is one assignment: a 24-bit MA-L, 28-bit MA-M or 36-bit MA-S
+(or IAB) prefix, the table sorted by `prefix36 << 2 | class`, so each
+class is one exact binary search, most specific first (MA-M and MA-S
+blocks sit inside MA-L assignments registered to the IEEE itself). A
+lookup always reports the locally administered bit (a randomised or
+software MAC) and the group bit, and for a hit its block, registry,
+bits and whether the IEEE lists it as "Private". Names are trimmed,
+cleaned of control bytes and invalid UTF-8, cut to 63 bytes on a
+code-point boundary, and emitted into the generated C as string
+literals with every byte but `[A-Za-z0-9 .,-]` an octal escape, so no
+registry name can end a literal, open a comment or splice a line.
+
+### Passive names (§9.3, without its active half)
+
+The drawer and Lookup list every name already seen, with its source
+and time: `dhcp_leases`, `mdns_services` (host and instance) and
+`nbns_names` (suffixes 0x00 and 0x20) from sloth.db; the same three
+from the stream (`web_ident.h`, current for 15 minutes); and the
+passive PTR cache. A row's name is the best of these, with its glyph:
+`D` DHCP, `m` mDNS, `N` NBNS, `h` sloth's own `devices.hostname` (as
+sloth graded it), `p` a PTR answer seen on the wire.
+
+**The passive PTR cache** (`web_ptr.h`) records a `dns` record with
+`qtype` `PTR`, `is_resp` 1, a reverse name that decodes to an address
+(`in-addr.arpa`, or the 32 nibbles of `ip6.arpa`) and an `answer` that
+is a host name; NXDOMAIN, an address and anything with a byte outside
+`[A-Za-z0-9._-]` are refused (counted). It holds 4,096 addresses, the
+least recently seen out first (counted), and is kept in `slothweb.db`
+(schema v4, `passive_ptr`, below). **The gap, stated:** sloth fills a
+`dns` record's `answer` only from the first A or AAAA record of a
+response (`src/dns_log.c` reads no PTR rdata; `docs/wiki/jsonl-schema.md`
+says "first A/AAAA answer"), so today a PTR answer arrives with an
+empty `answer`, is counted as `passive_ptr.empty`, and the cache stays
+empty. It fills once sloth writes a PTR answer's target there, a change
+to sloth outside `web/`; slothweb does not parse packets to make up
+for it.
+
+### A4, and A2 made durable
+
+- **A4** `vendor`: a MAC present this minute (`dev.present`), globally
+  administered and unicast, whose OUI is in none of the full table's
+  MA-L, MA-M or MA-S blocks. Only with a table built from the IEEE MA-L
+  registry: sloth's 117-entry fallback misses most vendors by design,
+  so with it A4 is off and `/api/health` gives the reason
+  (`"a4":"the vendor table is not the IEEE registry ..."`, or `"on"`).
+  The episode is held while the MAC stays present and closes two
+  observed minutes after it leaves, as A3's do. More than eight such
+  MACs in one minute are one episode keyed `""`: spoofed addresses with
+  made-up OUIs would otherwise take the table. The stated cost: a real
+  unknown-vendor device inside such a burst is folded into it.
+- **A2** with `--sloth-db`: sloth.db's earliest `first_seen` for the
+  MAC (`devices`, `probe_clients`, `pnl_clients`, `assocs`), which sloth
+  keeps as `MIN()` across its own restarts (`src/db.c`), is asked first.
+  Older than 24 h, the MAC is not new whatever the stream's
+  `first_seen` says (`a2_sdb_old`); within it, the M3 judgement stands
+  (slothweb's own baselines and store still have a say). sloth.db also
+  names candidates the stream cannot: a MAC whose `devices.first_seen`
+  is within the window, a wired device learnt from ARP among them (no
+  stream record carries a first_seen for it), at most 64 a minute
+  (`a2_sdb_new`). A MAC sloth.db does not hold, or no sloth.db, is the
+  M3 stream path unchanged. The lookups share A2's 256 a minute, on one
+  connection for the pass.
+
+`|z|` now (the `z` column and `z:` term) is the largest `|z|` A1 scored
+for any metric of the device key in its latest minute, kept for 3
+minutes; a device with no warm baseline has none (`null`).
+
+### slothweb.db v4
+
+`v3 -> v4` adds `passive_ptr (ip, name, first_seen, last_seen)` and its
+index on `last_seen`, in one additive `BEGIN IMMEDIATE` step like the
+others (a name already taken fails the step and leaves the file at v3).
+Each upsert keeps the first sight of the current name; the table is
+kept to the 4,096 most recently seen in the same transaction and what
+the bound drops is counted (`passive_ptr.db_evictions`). It counts
+towards `--web-max-mb` and is measured with the analysis state; at
+about 120 bytes a row it is at most about 0.5 MB, inside the estimate's
+slack, and is not added to the estimate.
+
+### /api/devices, /api/device/{mac}, /api/lookup
+
+```
+GET /api/devices?q=vendor%3Aapple%20random%3Ayes%20seen%3A%3C24h
+{"now":1792627200,"q":"vendor:apple random:yes seen:<24h","sort":"last",
+ "limit":100,"offset":0,"db_schema":7,"vendor_table":"ieee",
+ "presence_from":1792541400,"presence_cell_s":600,
+ "rows":[{"mac":"da:a1:19:00:00:01","random":true,"vendor":"Apple",
+   "vendor_src":"sloth","ip":"10.0.1.11","name":null,"name_src":null,
+   "ssid":"HomeNet","signal":-48,"sources":48,"is_ap":false,"risk":1,
+   "risk_signals":1,"first_seen":1791763200,"last_seen":1792623600,
+   "z":null,"anomalies":0,"presence":"000000000000000000000000000000000000"}],
+ "count":1,"more":false,"next_offset":null}
+```
+
+A row is the §8.6 columns that have a source: the MAC, randomised or
+not, the vendor (`vendor_src` `oui` from the table, `sloth` sloth's own
+label), IP, the best passive name and its glyph, last SSID, signal,
+sloth's `sources` bits, risk level and signals, first and last seen,
+`|z|` now, the device's anomaly episodes (open and kept), and the 24 h
+presence strip: 144 cells of 10 minutes ending with the cell `now` is
+in, as 36 hex digits, cell 0 the oldest and the high bit of the first
+digit, set when a minute row of `dev.present` in slothweb.db, or a 10 s
+bucket still in memory, had the device present. A page stops early,
+with `"more":true` and `next_offset`, when the next row might not fit
+its 64 KB (a row is at most 2,600 bytes with every text member at its
+cut length escaped six-fold; `test_devices.c` builds that case);
+nothing is ever a `503` for size.
+
+`/api/device/{mac}` (the MAC percent-decoded, case and `-` folded)
+answers the drawer: the OUI card, the allow-listed record and its v6/v7
+detail (sloth's hostname, device class, camera vendor and model, DHCP
+vendor class), what the stream knows (IP binding, first seen), every
+passive name, PNL SSIDs (24), associations (12), ARP addresses (8),
+alerts that name it (12, by MAC in their key or its IP as `match_ip`),
+each with a `_more` flag when cut, the presence strip, the 168
+hour-of-week cells of `dev.present` from the baseline (`[share of
+weeks present, n]`, Monday 00:00 local first, with `now_cell` and
+`warm_n`; `null` before any feed) and its anomaly episodes (8, open
+first). `/api/lookup?q=` takes a MAC or an IP: for a MAC the OUI card
+(found, vendor, block, bits, registry, private, local, multicast, the
+table and whether it is the full one) and its ARP addresses; for an IP
+its ARP MACs; for both every passive name and sloth.db's record (an
+IP's through its ARP MAC, or the stream's binding). `"active":false`
+always: there is no active lookup.
+
+### The Devices view, the drawer, Lookup
+
+`3` (or the sidebar) opens Devices: the search box (§9.1; `/` focuses
+it from anywhere; the query is sent 300 ms after typing stops, or on
+Enter), the sort, and the table: the first 512 rows of the answer,
+paged in 200 at a time, drawn virtualised (only the rows in view
+exist, recycled as it scrolls, one fixed row height). Each row: the
+MAC with its hash colour on the swatch only and a muted `~` prefix when
+randomised, vendor, IP, name with its glyph, SSID, signal, source
+glyphs (`A`RP `D`HCP `P`robe `B`eacon `S`TA, `.` absent), risk, first
+and last seen, `z`, anomaly count and the 144-cell strip on Canvas 2D
+(`--phosphor` present, `--bg` absent). A risk level above 0 is a left
+border in its severity colour; text stays `--ink` and `--muted`. A row
+click opens the drawer, as does an Anomalies card keyed by a MAC; Esc
+closes it. The drawer lists everything `/api/device/{mac}` gives, the
+strip, the week heatmap (the Overview's heatmap drawing, by share of
+weeks) and the episodes as cards. `9` opens Lookup: one input, a MAC or
+an IP, and the card. Every value is set with `textContent`; the page
+gained no HTML or code sink (`test_routes.c` scans for them) and makes
+no request but its own server's (the CSP's hashes are recomputed by
+the build).
+
 ## What it never does
 
 - No method that writes, ever (`405` is permanent, not a W0 placeholder).
 - No name resolution of any kind, including its own bind address.
-- No write to `sloth.db`, and no open of it: `--store` pointed at it is
-  refused untouched.
+- No write to `sloth.db`, ever, and no migration of it and no file beside
+  it: `--sloth-db` opens it `SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW`
+  (an immutable URI when that is what makes no side file), and
+  `--store` pointed at it is refused untouched.
+- No active lookup of any kind: no PTR query, no `getnameinfo()`, no
+  WHOIS or GeoIP (the 2026-10-21 rulings). Every name slothweb shows was
+  already on the wire.
 - No write to the data socket, ever: slothweb only reads it.
 - No request off the host from the page: no URL, no font, no script
   from anywhere but the page itself, enforced by the CSP above and
@@ -997,8 +1296,10 @@ says, so a setting under 3 shows what 3 shows.
 `web/src/` modules (not `main.c`). It needs no host file and no running
 sloth, opens only loopback ephemeral ports (`127.0.0.1` and `::1`, port
 0), and unix sockets and SQLite files in fresh `mkdtemp()` directories
-under `/tmp`, and never leaves the host. Every M2 and M3 test runs on a
-pinned clock, and the suite pins the zone (`TZ=UTC0`) too, since a
+under `/tmp`, and never leaves the host. Its sloth.db files are made
+from sloth's own DDL (`src/db_schema.c`, linked into the test binary
+only) and its OUI tables from CSVs it writes itself: nothing is a
+committed fixture. Every M2, M3 and M4 test runs on a pinned clock, and the suite pins the zone (`TZ=UTC0`) too, since a
 baseline cell is a local hour. `make web-test WITH_SQLITE=0` builds and runs the same suite
 against the memory-only build. It is clean under
 `EXTRA_CFLAGS="-Werror -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"`
@@ -1017,12 +1318,17 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_ingest.c` | the client over a real unix socket and loopback TCP, the test playing sloth: `--socket` parsing and its refusals, the back-off bound, **the device count `/api/live` reports matching what the fake sent within 5 s** for 3, 12, 300, 0 and 7 devices (spec §12, M1), markup escaped over HTTP and over `/events`, reconnect after the peer closes, retrying with no peer at the capped interval, no tight loop on a peer that closes at once, a mixed stream of truncated, overlong, invalid-UTF-8 and hostile lines, and that the client never writes to the socket |
 | `test_rollup.c` | bucket boundaries in all three tiers, sum/count/min/max, value by kind, non-finite and huge values, the per-class key caps and LRU eviction with its flush and counters, churn decided on a key's whole life (keys of two and three samples crossing minute and hour boundaries keep only their 10 s rows, a key spanning a minute keeps all), held rows released when a key is established and at shutdown, a host recurring under LRU pressure keeping its minute and hour rows, interface, channel and alert keys established from their first sample and in classes of their own, the ring query's merge and bounds, the full store queue dropping 10 s rows before minute and hour rows and counting them, and every class full at `--web-max-keys` 8192 across an hour boundary and a shutdown with nothing dropped |
 | `test_metrics.c` | hand-written lines through the decoder on a pinned clock: the key canonicalisers, gauges from `%.2f` reals, hostile keys refused, event counters, running totals as deltas floored at zero and first-sight baselines, flows, channels, presence, a probe request counted once though both `probe_client` and `seqnum_client` carry it, rows per pass with gaps and bad lines, the bounded high-water table, an evicted row seen again not counted twice, the evicted-id filter's two generations remembering an id across 8,191 evictions and forgetting it at the next rotation |
-| `test_store.c` | the DDL guardrail in every build; with SQLite: a fresh store, `test_db.c`'s secret-column sweep, secrets fed through the stream absent from the file, a v0, a v1 and a v2 file migrated, a v0, a v1 and a v2 file whose step fails left where they were, the v3 tables through their own calls (a baseline restored into a smaller table with the rest and an invalid row deleted, episodes expired at load, histograms, the reported set pruned, the A9 and MAD reads), a newer file and foreign files (a sloth.db shape, other databases, a file with another program's `application_id` and `user_version` but no table yet, our own `meta` under a foreign `application_id`, not SQLite) refused byte for byte, a WAL-mode sloth.db with an unflushed WAL refused with the file and its WAL byte for byte, a cleanly closed WAL-mode sloth.db refused with its directory listing unchanged, the file rules (symlink, mode, links, side files, a directory; the owner rule is not tested, see below), `DEFENSIVE` refusing a `sqlite_master` write on the store's handle and a library that leaves it off failing the open, a file swapped between the identifying and the writing open refused byte for byte, merged writes counted once in `store_rows` and bound queries, retention, the WAL left empty by the compaction, a start after a long stop expiring everything with the WAL never past one slice, the ceiling dropping the oldest fine rows first and sparing global series, keeping the time series within the history allowance (and rows left) while 80,000 rows arrive with the analysis state alone over it (with `dbstat`; without it, the fallback asserted), re-measuring the baseline tables after `web_store_bl_del()` and the episode table on the next pass, and holding under 200 new keys a second within one flush interval; a new baseline entry taking over its pair's stale row, a restore of 4,000 entries into ten keeping the WAL under 3 MB, the analysis estimate against the default ceiling; churn of two and three samples per key writing no minute or hour row while slothweb runs |
+| `test_store.c` | the DDL guardrail in every build; with SQLite: a fresh store, `test_db.c`'s secret-column sweep, secrets fed through the stream absent from the file, a v0, a v1, a v2 and a v3 file migrated, a v0, a v1, a v2 and a v3 file whose step fails left where they were, `passive_ptr`'s upsert, bound and read-back, the presence cells of the minute tier, the v3 tables through their own calls (a baseline restored into a smaller table with the rest and an invalid row deleted, episodes expired at load, histograms, the reported set pruned, the A9 and MAD reads), a newer file and foreign files (a sloth.db shape, other databases, a file with another program's `application_id` and `user_version` but no table yet, our own `meta` under a foreign `application_id`, not SQLite) refused byte for byte, a WAL-mode sloth.db with an unflushed WAL refused with the file and its WAL byte for byte, a cleanly closed WAL-mode sloth.db refused with its directory listing unchanged, the file rules (symlink, mode, links, side files, a directory; the owner rule is not tested, see below), `DEFENSIVE` refusing a `sqlite_master` write on the store's handle and a library that leaves it off failing the open, a file swapped between the identifying and the writing open refused byte for byte, merged writes counted once in `store_rows` and bound queries, retention, the WAL left empty by the compaction, a start after a long stop expiring everything with the WAL never past one slice, the ceiling dropping the oldest fine rows first and sparing global series, keeping the time series within the history allowance (and rows left) while 80,000 rows arrive with the analysis state alone over it (with `dbstat`; without it, the fallback asserted), re-measuring the baseline tables after `web_store_bl_del()` and the episode table on the next pass, and holding under 200 new keys a second within one flush interval; a new baseline entry taking over its pair's stale row, a restore of 4,000 entries into ten keeping the WAL under 3 MB, the analysis estimate against the default ceiling; churn of two and three samples per key writing no minute or hour row while slothweb runs |
 | `test_series.c` | every parameter rule and its reason, the answer's shape and paging, the routes (`HEAD`, `400` without echo, `query_too_long`, `421` and `405` on all three, `503` without a time series, the health members), the 900-point worst case fitting, the 900-point cap on a store+memory answer of 1,800 buckets and its next page, the store thread running beside reads and writes, and spec §12's M2 acceptance: an hour of records through the framer on a pinned clock, the 24 h request answered with 360 points 10 s apart (from memory, from the store's fine tier, and through `/api/series` again after a restart over the same store), the store under 5 MB on disk with its WAL after every step of the hour |
 | `test_server.c` | real loopback sockets: default bind address, a refused peer over v4 and v6, 405 for POST/PUT/DELETE/PATCH, 431, idle and slow clients timed out, slot exhaustion; the page byte for byte and its `304`, health, a stream's ticks and pings and the client leaving, the first tick at once, a departing client noticed on the read path with no event due, the stream socket's `TCP_NODELAY` and `SO_SNDBUF`, a non-reading stream client dropped at the 64 KB backlog and not past it, the stream cap, `421` for `Host: attacker.example`; an episode that opens reaching a stream client as one `anomaly` event, counted once |
 | `test_baseline.c` | the cell as the local hour of the week, Monday first, and the same cell for the same local hour across a DST change (167 UTC hours apart), a never-fed pair scoring absent and a zero feed making no entry, warming forcing z to 0, an established cell's z, the sd floor (a constant history and one AP more scores 1, not 31,623; 10% of the mean; 1 KiB/s for a byte rate), an hour fed once, zero feeds for counters and presence and none for gauges and not counted as activity, cells independent, the full table evicting the least recently active entry by real feeds only, ageing out with the row id queued for deletion, allocation following the entries, dirty cells out once and back through a restore, the cap at the default and the extremes, NaN and both infinities ignored, the value scale per kind, a minute's sd carrying the within-hour spread (and Poisson for a counter), the delete queue returning 5,000 ids with none lost, refused records held to the next pass, restore refusing values a float cannot hold and keeping `first_fed` |
 | `test_ident.c` | records on a pinned clock: the earliest `first_seen` kept and randomised MACs left out, names cut to 63 bytes on a code-point boundary and NBNS to 15, group NBNS suffixes ignored and names current for their TTL, both tables evicting and counting, the DNS join (an NXDOMAIN answer counted once against the client that asked that qname within 10 s, a late or unknown one unmatched), the normal form |
 | `test_anomaly.c` | every rule from seeded state, rows given to the engine as web_tsdb gives them and the clock moved only through its step: A1 opening on three burst minutes with the evidence `metric[key]` closed, never on two, a gauge gap breaking the streak, a constant history with ±1 jitter firing nothing, a silent counter scored as 0, unobserved minutes not scored, a bucket closed in two parts scored as one, 300 keys all scored (the previous cap was 256); the lifecycle (open after one quiet minute, closed after two, a closed episode listed 59 minutes on and not 61, a recurrence starting a new episode that must earn three minutes, a full table keeping its open episodes, the worst-case listing fitting with `more`, the kind and since filters, the change feed); A2 once per MAC across a restart and never for an old or randomised MAC; A3 at four weeks and not three, and not in normal hours; A5 for the randomised MAC only and not through a reassigned lease; A6's normal form and escaped evidence; A7 far above its p95 and not without history or margin; A8 for the client the answers were joined to, not under 20 queries or at exactly 30%; A9 on first use and not for a host with history across a restart; MAD refuting a return to an old level and confirming a real burst, once per hour per series; baselines and an open episode surviving a restart; A10 for a connection that never sends, not just after a reconnect, not while disconnected, not before the limit; the engine without a store; the newest changes when there are more than asked for; the hour pass learning the within-hour spread; A2 not new after sloth restarts (by the baseline, and by the store's rows), a flood of new MACs as one episode that keeps another rule's history, the slot policy, the reported set evicting its oldest with the new MAC still given its episode and the evicted one not reported again while remembered, re-reports (8) bounded by evictions (32), a burst's and a trickle's evidence counting exactly what was judged new and naming two MACs, a trickle of eight a minute folded into one episode once the hour's sixteen are reported, a scan past 4,096 identity slots; MAD refuted by the within-hour term alone; A3 in a half-hour zone; A7 below its minimum excess and across a restart; a baseline pair evicted and back in one hour, a refused batch written later, restored episode values checked (the episode's own score, and a metric below -1) |
+| `test_oui.c` | the vendor table from registry CSVs the test writes into its own directory (MA-L, MA-M, MA-S, IAB; a BOM, CRLF, quoted fields with commas, quotes and a line break; CID skipped; a duplicate keeps the first): the most specific block first, 28- and 36-bit blocks inside the IEEE's MA-L, the local and group bits on a miss, the generated C (octal escapes, no name ending a literal or a comment), every malformed CSV failing with its row, names cleaned and cut on a code-point boundary, sloth's own `src/oui.c` read as text (every initialiser line, Apple found, an MA-S vendor not), the built-in table's source and order |
+| `test_query.c` | the query language: the acceptance terms, every §9.1 prefix, free text, negation, quotes and MAC fragments as text, every refusal and its reason, the length, term and term-length bounds, the compiled statement holding no byte of the query (an injection attempt and LIKE metacharacters bound and escaped, the text the same whatever the values), the day range, missing tables reading as false, the worst case fitting, the anomaly kinds and `src:` bits held to the engine's and to `include/sloth.h`'s `DEV_SRC_*` |
+| `test_ptr.c` | the passive PTR cache: reverse names per RFC 1035 §3.5 and RFC 3596 §2.5 (and what is not one), what a dns record must be to be recorded (an empty answer, sloth's today, counted), the bound and its eviction, a rename, changed rows out once and back on a failed write, a row read back checked; the identity tables' M4 readers |
+| `test_slothdb.c` | sloth.db generated from `src/db_schema.c`: the open flags (read-only, no-follow, never write or create; a write refused); the file byte for byte and its directory listing after every read, for a rollback-journal file, a cleanly closed WAL file (immutable, no `-wal` or `-shm` made), a WAL file sloth holds open with unflushed frames (read, main file and WAL prefix unchanged, sloth still writing) and a `-wal` with no `-shm`; the refusals (missing, symlink, directory, newer, a slothweb store, no devices table, a bad version, not SQLite, not configured); a v5 file read by probing and a minimal v1 file; the allow-list against `tests/test_db.c`'s guardrail, credential words and the live schema; the authorizer denying every statement off the list; the budget interrupting a slow statement; the acceptance query returning exactly D1 and D6; every other term against the file; the drawer's, Lookup's and A2's reads |
+| `test_devices.c` | the three routes through the route table: no sloth.db (`503`, the drawer and Lookup from the stream), `405` and `421` on the new paths; the acceptance query over HTTP (encoded both ways, `HEAD`); a row's members, the vendor's and name's sources, markup never markup; paging and every `400`; sloth.db missing; the drawer (path forms, lists, the detail, alerts, no credential, a MAC sloth.db lacks, bad MACs); the strip from the store's minute tier and the ring, the week from the baseline, an episode and the `anomaly:` and `has:` terms; Lookup (an MA-S MAC resolved, and not with sloth's own table; an IP's MAC, names and record; refusals); the health members; the worst case stopping with `more` |
 | `test_replay.c` | spec §12's M3 acceptance: a six-week JSONL stream generated in the test (never a fixture) through the framer, decoder, live state, metric derivation, identity tables, rollup, `web_tsdb_step()` and the engine as `main.c` wires them, on pinned clocks: four weeks of routine (noisy gauges, Poisson counts, and an input for every rule: names that agree, a randomised MAC with its own name, a month-old probe client, a steady ssh host), then a quiet 7 d week in which nothing at all fires, slothweb and sloth restarting in the middle of it in an SQLite build, then a 7 d week in which A1 fires for a burst of connections and A3 for a daytime device that appears only at night, while a device that is only ever present at night never fires; and the hour that just closed reaching the baseline at flush phases 0, 3 and 7 (the previous slice fed it only at phase 0); A9 for a new host whose first row the rollup released late, at sloth's real cadence (SQLite); five weeks of a 13:30-14:30 routine in IST firing nothing. Both builds |
 
 A test cannot originate from a non-loopback address, so the refused-peer
@@ -1065,13 +1371,22 @@ web/
     web_baseline.c 168 local hour-of-week cells per (metric, key) (M3)
     web_ident.c    names, MAC/IP bindings, first_seen, the DNS join (M3)
     web_anomaly.c  rows in, the rules, episodes, persistence (M3)
+    web_slothdb.c  sloth.db read-only: open, identify, allow-list, reads (M4)
+    web_query.c    the device query language, compiled to one statement (M4)
+    web_oui.c      the vendor lookup over the generated table (M4)
+    web_ptr.c      the passive PTR cache (M4)
+    web_devices.c  /api/devices, /api/device/{mac}, /api/lookup (M4)
     web_json.c     the JSON writer every outgoing string goes through
     web_assets.h   the generated page's symbols
   ui/              the page sources (index.html, theme.css, page.css, app.js)
   tools/
     embed.c        ui/ -> build/web/web_assets.c (build time only)
+    oui_gen.c      web/data/*.csv -> build/web/web_oui_table.c (build time only)
+    oui_csv.c      the registry CSV reader the generator and the tests share
     sha256.c       SHA-256 and base64 for embed.c and the tests
-  tests/           slothweb_test (make web-test)
+  data/            the developer's IEEE registry CSVs; never committed
+  tests/           slothweb_test (make web-test); sdb_gen.c builds the tests'
+                   sloth.db from src/db_schema.c, the one src/ file it links
 ```
 
 Wiki page: [`docs/wiki/slothweb.md`](../docs/wiki/slothweb.md).
