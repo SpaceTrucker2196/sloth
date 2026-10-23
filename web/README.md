@@ -21,9 +21,9 @@ how each part works.
 
 ### Prerequisites
 
-- Linux (or macOS for the build and the demo), a C99 compiler (`cc`),
+- Linux, a C99 compiler (`cc`),
   `make`, and the SQLite 3 headers and library: `libsqlite3-dev` on
-  Debian and Ubuntu, `sqlite-devel` on Fedora, `sqlite` from Homebrew.
+  Debian and Ubuntu, `sqlite-devel` on Fedora.
   SQLite 3.31 or newer; nothing else is linked but libc, pthreads and
   libm.
 - A browser on the same host, or an SSH tunnel to it.
