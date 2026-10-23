@@ -1867,7 +1867,7 @@ static void test_a2_durable_first_seen(void) {
     fx(1, NULL);
     char p[128];
     snprintf(p, sizeof(p), "%s/sloth.db", g_dir);
-    WT_EQ(sdb_make(p, 7, 1), 0);
+    WT_EQ(sdb_make(p, db_schema_version(), 1), 0);
     char sql[1024];
     snprintf(sql, sizeof(sql),
              "INSERT INTO devices (mac,first_seen,last_seen) VALUES"

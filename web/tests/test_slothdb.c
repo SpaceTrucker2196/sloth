@@ -21,10 +21,13 @@
  *     seen:<24h returns exactly the right rows, and a MAC from an MA-S
  *     block resolves where sloth's own table misses. */
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "sdb_gen.h"
@@ -84,7 +87,7 @@ static void sdb_up(const char *path) {
 /* A seeded v7 file. */
 static void seeded(const char *name, int wal, char *p, size_t sz) {
     path_in(p, sz, name);
-    WT_EQ(sdb_make(p, 7, wal), 0);
+    WT_EQ(sdb_make(p, db_schema_version(), wal), 0);
     WT_EQ(sdb_seed(p), 0);
 }
 
@@ -143,13 +146,22 @@ static void test_open_flags(void) {
     WT_EQ(sqlite3_db_readonly(c.db, "main"), 1);
     WT_ASSERT(sqlite3_exec(c.db, "CREATE TABLE x (y)", NULL, NULL, NULL) != SQLITE_OK);
     WT_ASSERT(sqlite3_exec(c.db, "DELETE FROM devices", NULL, NULL, NULL) != SQLITE_OK);
-    WT_EQ(c.schema, 7);
+    WT_EQ(c.schema, db_schema_version());
     WT_EQ(c.feats, (unsigned)(WEB_QF_PNL | WEB_QF_DHCP | WEB_QF_MDNS | WEB_QF_NBNS |
                               WEB_QF_ALERTS | WEB_QF_ARP));
     WT_EQ(c.opt, (unsigned)(WEB_SDB_OPT_CLASS | WEB_SDB_OPT_VCI));
     web_slothdb_close(&c);
     web_slothdb_destroy(&S);
     rm_db(p);
+}
+
+/* The newest schema this reader knows is the one sloth writes: a bump
+ * of DB_SCHEMA_VERSION (src/db.h) without slothweb learning the new
+ * version would leave slothweb refusing every sloth.db the new sloth
+ * writes, while every file here (stamped db_schema_version()) is
+ * refused too. Seen red with src/db.h's DB_SCHEMA_VERSION set to 8. */
+static void test_schema_max_is_sloths(void) {
+    WT_EQ(WEB_SDB_SCHEMA_MAX, db_schema_version());
 }
 
 /* Every read the routes and A2 make, once. */
@@ -282,6 +294,361 @@ static void test_wal_without_shm(void) {
     rm_db(q);
 }
 
+/* A sloth that crashed: a forked child writes uncheckpointed frames and
+ * _exit()s, leaving sloth.db, -wal and -shm with no process holding
+ * any of them. 0, or -1. */
+static int crash_with_wal(const char *p) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        sqlite3 *h = NULL;
+        int ok = sqlite3_open(p, &h) == SQLITE_OK &&
+                 sqlite3_exec(h, "PRAGMA wal_autocheckpoint=0;"
+                                 "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT"
+                                 " i+1 FROM n WHERE i < 20000) INSERT INTO arp"
+                                 " (ip,mac,first_seen,last_seen) SELECT '10.8.' || i,"
+                                 " 'x', 1, 1 FROM n;", NULL, NULL, NULL) == SQLITE_OK;
+        _exit(ok ? 0 : 1);
+    }
+    int ws = 0;
+    if (waitpid(pid, &ws, 0) != pid) return -1;
+    return WIFEXITED(ws) && WEXITSTATUS(ws) == 0 ? 0 : -1;
+}
+
+typedef struct {
+    unsigned char *b;
+    size_t         n;
+} blob_t;
+
+static int blob_take(const char *path, blob_t *o) {
+    struct stat st;
+    o->b = NULL;
+    o->n = 0;
+    if (stat(path, &st) != 0 || st.st_size <= 0) return -1;
+    o->b = malloc((size_t)st.st_size);
+    if (!o->b) return -1;
+    o->n = sdb_slurp(path, o->b, (size_t)st.st_size);
+    return o->n == (size_t)st.st_size ? 0 : -1;
+}
+
+static void blob_put(const char *path, const blob_t *o) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fwrite(o->b, 1, o->n, f);
+    fclose(f);
+}
+
+typedef struct {
+    volatile int stop;
+    int          opens;
+    pthread_mutex_t mu;
+} hammer_t;
+
+static void *hammer(void *ud) {
+    hammer_t *h = ud;
+    for (;;) {
+        pthread_mutex_lock(&h->mu);
+        int stop = h->stop;
+        pthread_mutex_unlock(&h->mu);
+        if (stop) break;
+        web_sdb_conn_t c;
+        char err[WEB_SDB_ERR_MAX];
+        int rc = web_slothdb_open(&S, &c, 500, SDB_NOW, err, sizeof(err));
+        web_slothdb_close(&c);
+        pthread_mutex_lock(&h->mu);
+        if (rc == 0) h->opens++;
+        pthread_mutex_unlock(&h->mu);
+    }
+    return NULL;
+}
+
+/* A crashed sloth's files and a sloth starting up while slothweb reads
+ * them. sloth's first statements (db_open()'s, with no busy timeout,
+ * the case that matters) must never meet SQLITE_BUSY_RECOVERY: the
+ * reader may not be the connection that runs WAL recovery on sloth's
+ * -shm. Seen red (most of the 60 starts busy, extended code 261) with
+ * the reader's 'wal' open made without readonly_shm. */
+static void test_crashed_sloth_restarts_beside_a_reader(void) {
+    char p[128], w[160], m[160];
+    path_in(p, sizeof(p), "crash.db");
+    snprintf(w, sizeof(w), "%s-wal", p);
+    snprintf(m, sizeof(m), "%s-shm", p);
+    WT_EQ(sdb_make(p, db_schema_version(), 1), 0);
+    WT_EQ(sdb_seed(p), 0);
+    WT_EQ(crash_with_wal(p), 0);
+    blob_t db, wal, shm;
+    int ok = blob_take(p, &db) == 0 && blob_take(w, &wal) == 0 &&
+             blob_take(m, &shm) == 0;
+    WT_ASSERT(ok);
+    if (!ok) { free(db.b); free(wal.b); free(shm.b); rm_db(p); return; }
+    /* Read alone first: nothing beside sloth.db is written (recovery
+     * on the shared -shm would rewrite it), and the crashed sloth's
+     * committed frames are read. Seen red, the -shm's bytes changed,
+     * with readonly_shm dropped from the 'wal' URI. */
+    char l0[512], l1[512];
+    sdb_listing(g_dir, l0, sizeof(l0));
+    read_everything(p);
+    sdb_up(p);
+    web_sdb_conn_t c;
+    char err[WEB_SDB_ERR_MAX];
+    WT_EQ(web_slothdb_open(&S, &c, 500, SDB_NOW, err, sizeof(err)), 0);
+    WT_EQ(web_slothdb_test_immutable, 0);
+    sqlite3_stmt *st = NULL;
+    long long rows = -1;
+    if (sqlite3_prepare_v2(c.db, "SELECT count(*) FROM arp", -1, &st, NULL) ==
+            SQLITE_OK && sqlite3_step(st) == SQLITE_ROW)
+        rows = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    web_slothdb_close(&c);
+    web_slothdb_destroy(&S);
+    WT_ASSERT(rows >= 20000);
+    sdb_listing(g_dir, l1, sizeof(l1));
+    WT_ASSERT(!strcmp(l0, l1));
+    const blob_t *orig[3] = { &db, &wal, &shm };
+    const char *path[3] = { p, w, m };
+    for (int i = 0; i < 3; i++) {
+        blob_t now;
+        int same = blob_take(path[i], &now) == 0 && now.n == orig[i]->n &&
+                   !memcmp(now.b, orig[i]->b, now.n);
+        if (!same) fprintf(stderr, "    %s changed\n", path[i]);
+        WT_ASSERT(same);
+        free(now.b);
+    }
+    sdb_up(p);
+    int busy = 0, starts = 0, opens = 0;
+    for (int it = 0; it < 60; it++) {
+        rm_db(p);
+        blob_put(p, &db);
+        blob_put(w, &wal);
+        blob_put(m, &shm);
+        hammer_t h;
+        memset(&h, 0, sizeof(h));
+        pthread_mutex_init(&h.mu, NULL);
+        pthread_t t;
+        if (pthread_create(&t, NULL, hammer, &h) != 0) {
+            pthread_mutex_destroy(&h.mu);
+            break;
+        }
+        /* Let the reader reach the file first, as it does when sloth
+         * is restarted under a running slothweb. */
+        for (int spin = 0; spin < 2000; spin++) {
+            pthread_mutex_lock(&h.mu);
+            int n = h.opens;
+            pthread_mutex_unlock(&h.mu);
+            if (n > 0) break;
+            usleep(100);
+        }
+        sqlite3 *sloth = NULL;
+        int rc = sqlite3_open_v2(p, &sloth, SQLITE_OPEN_READWRITE |
+                                 SQLITE_OPEN_CREATE | SQLITE_OPEN_NOFOLLOW, NULL);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_exec(sloth, "PRAGMA auto_vacuum=INCREMENTAL", NULL, NULL, NULL);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_exec(sloth, "PRAGMA journal_mode=WAL", NULL, NULL, NULL);
+        if (rc != SQLITE_OK) {
+            if (busy == 0)
+                fprintf(stderr, "    sloth's start: %d (%s)\n",
+                        sqlite3_extended_errcode(sloth), sqlite3_errmsg(sloth));
+            busy++;
+        }
+        starts++;
+        pthread_mutex_lock(&h.mu);
+        h.stop = 1;
+        pthread_mutex_unlock(&h.mu);
+        pthread_join(t, NULL);
+        opens += h.opens;
+        pthread_mutex_destroy(&h.mu);
+        sqlite3_close(sloth);
+    }
+    WT_EQ(starts, 60);
+    WT_ASSERT(opens >= starts);        /* the reader was there each time */
+    WT_EQ(busy, 0);
+    web_slothdb_destroy(&S);
+    free(db.b); free(wal.b); free(shm.b);
+    rm_db(p);
+}
+
+/* The window between the choice of open and the first read: a sloth
+ * closing cleanly in it removes its -wal and -shm, and the WAL reader
+ * chosen for them then finds neither. The read fails and nothing is
+ * made beside sloth.db; the next open reads it immutable. Seen red with
+ * nc_open() passing SQLITE_OPEN_CREATE through (an empty -wal was
+ * left). */
+static void refused(const char *p, int state, const char *want);
+
+static sqlite3 *g_closing;
+static void close_sloth(void) {
+    if (g_closing) sqlite3_close(g_closing);
+    g_closing = NULL;
+}
+
+static void test_sloth_closes_inside_the_open(void) {
+    char p[128], w[160], m[160];
+    seeded("race.db", 1, p, sizeof(p));
+    snprintf(w, sizeof(w), "%s-wal", p);
+    snprintf(m, sizeof(m), "%s-shm", p);
+    WT_EQ(sqlite3_open(p, &g_closing), SQLITE_OK);
+    WT_EQ(sqlite3_exec(g_closing, "PRAGMA wal_autocheckpoint=0;"
+                                  "INSERT INTO devices (mac,first_seen,last_seen) VALUES"
+                                  " ('02:00:00:00:00:97',1,2);", NULL, NULL, NULL),
+          SQLITE_OK);
+    struct stat st;
+    WT_EQ(stat(w, &st), 0);
+    WT_EQ(stat(m, &st), 0);
+    sdb_up(p);
+    web_slothdb_test_before_open = close_sloth;
+    web_sdb_conn_t c;
+    char err[WEB_SDB_ERR_MAX];
+    int rc = web_slothdb_open(&S, &c, 500, SDB_NOW, err, sizeof(err));
+    web_slothdb_close(&c);
+    web_slothdb_test_before_open = NULL;
+    WT_EQ(rc, -1);
+    WT_EQ(web_slothdb_test_immutable, 0);       /* chosen with both there */
+    web_sdb_stats_t ss;
+    web_slothdb_stats(&S, &ss);
+    WT_EQ(ss.state, WEB_SDB_ERROR);
+    WT_EQ(stat(w, &st), -1);
+    WT_EQ(stat(m, &st), -1);
+    WT_EQ(web_slothdb_open(&S, &c, 500, SDB_NOW, err, sizeof(err)), 0);
+    WT_EQ(web_slothdb_test_immutable, 1);
+    char out[64];
+    WT_EQ(run_q(&c, "mac:02:00:00:00:00:97", WEB_QS_LAST, out, sizeof(out)), 1);
+    web_slothdb_close(&c);
+    WT_EQ(stat(w, &st), -1);
+    WT_EQ(stat(m, &st), -1);
+    web_slothdb_destroy(&S);
+    rm_db(p);
+}
+
+/* A sloth that crashed mid-transaction in rollback-journal mode leaves
+ * a hot journal, which a read-only connection cannot roll back. That is
+ * a sloth.db needing sloth, not "not a sloth.db": the error state, not
+ * a refusal, and the file and its journal left as they were. Seen red
+ * with every prepare failure classified as a refusal. */
+static void test_hot_journal_is_an_error(void) {
+    char p[128], j[160], l0[512], l1[512];
+    path_in(p, sizeof(p), "hot.db");
+    snprintf(j, sizeof(j), "%s-journal", p);
+    WT_EQ(sdb_make(p, db_schema_version(), 0), 0);
+    pid_t pid = fork();
+    if (pid == 0) {
+        sqlite3 *h = NULL;
+        if (sqlite3_open(p, &h) != SQLITE_OK) _exit(1);
+        sqlite3_exec(h, "PRAGMA cache_size=1; BEGIN;"
+                        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1"
+                        " FROM n WHERE i < 3000) INSERT INTO arp (ip,mac,first_seen,"
+                        "last_seen) SELECT '10.7.' || i, 'x', 1, 1 FROM n;",
+                     NULL, NULL, NULL);
+        _exit(0);
+    }
+    int ws = 0;
+    WT_EQ(waitpid(pid, &ws, 0), pid);
+    struct stat st;
+    WT_EQ(stat(j, &st), 0);
+    WT_ASSERT(st.st_size > 0);
+    size_t n0 = sdb_slurp(p, g_before, sizeof(g_before));
+    sdb_listing(g_dir, l0, sizeof(l0));
+    refused(p, WEB_SDB_ERROR, "needs recovery by sloth");
+    sdb_up(p);
+    web_sdb_conn_t c;
+    char err[WEB_SDB_ERR_MAX];
+    WT_EQ(web_slothdb_open(&S, &c, 500, SDB_NOW, err, sizeof(err)), -1);
+    WT_LACKS(err, "not a sloth.db");
+    web_sdb_stats_t ss;
+    web_slothdb_stats(&S, &ss);
+    WT_EQ(ss.refusals, 0);
+    WT_EQ(ss.errors, 1);
+    web_slothdb_close(&c);
+    web_slothdb_destroy(&S);
+    WT_EQ(sdb_slurp(p, g_after, sizeof(g_after)), n0);
+    WT_ASSERT(!memcmp(g_before, g_after, n0));
+    sdb_listing(g_dir, l1, sizeof(l1));
+    WT_ASSERT(!strcmp(l0, l1));
+    rm_db(p);
+}
+
+/* The busy timeout: a lock another connection holds briefly is waited
+ * out, and one held past WEB_SDB_BUSY_MS is an error at once, not a
+ * hang. Rollback-journal mode, where a writer's EXCLUSIVE lock does
+ * keep a reader out. The brief case seen red with the
+ * sqlite3_busy_timeout() call removed (the open failed busy at once),
+ * the long one with the timeout made 10 s (the open waited the lock
+ * out). */
+typedef struct {
+    const char     *path;
+    int             hold_ms;
+    int             held;
+    pthread_mutex_t mu;
+    pthread_cond_t  cv;
+} locker_t;
+
+static void *locker(void *ud) {
+    locker_t *l = ud;
+    sqlite3 *h = NULL;
+    int ok = sqlite3_open(l->path, &h) == SQLITE_OK &&
+             sqlite3_exec(h, "BEGIN EXCLUSIVE", NULL, NULL, NULL) == SQLITE_OK;
+    pthread_mutex_lock(&l->mu);
+    l->held = ok ? 1 : -1;
+    pthread_cond_signal(&l->cv);
+    pthread_mutex_unlock(&l->mu);
+    if (ok) {
+        usleep((useconds_t)l->hold_ms * 1000);
+        sqlite3_exec(h, "COMMIT", NULL, NULL, NULL);
+    }
+    sqlite3_close(h);
+    return NULL;
+}
+
+static long long now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static int open_under_lock(const char *p, int hold_ms, long long *took) {
+    locker_t l = { p, hold_ms, 0, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER };
+    pthread_t t;
+    if (pthread_create(&t, NULL, locker, &l) != 0) return -2;
+    pthread_mutex_lock(&l.mu);
+    while (!l.held) pthread_cond_wait(&l.cv, &l.mu);
+    int held = l.held;
+    pthread_mutex_unlock(&l.mu);
+    int rc = -2;
+    if (held == 1) {
+        web_sdb_conn_t c;
+        char err[WEB_SDB_ERR_MAX];
+        long long t0 = now_ms();
+        rc = web_slothdb_open(&S, &c, 2000, SDB_NOW, err, sizeof(err));
+        *took = now_ms() - t0;
+        web_slothdb_close(&c);
+    }
+    pthread_join(t, NULL);
+    pthread_mutex_destroy(&l.mu);
+    pthread_cond_destroy(&l.cv);
+    return rc;
+}
+
+static void test_busy_timeout(void) {
+    char p[128];
+    seeded("busy.db", 0, p, sizeof(p));
+    sdb_up(p);
+    long long took = -1;
+    WT_EQ(open_under_lock(p, WEB_SDB_BUSY_MS / 4, &took), 0);
+    WT_ASSERT(took >= 0 && took < WEB_SDB_BUSY_MS + 400);
+    web_sdb_stats_t ss;
+    web_slothdb_stats(&S, &ss);
+    WT_EQ(ss.state, WEB_SDB_OPEN);
+    took = -1;
+    WT_EQ(open_under_lock(p, WEB_SDB_BUSY_MS * 8, &took), -1);
+    if (took >= WEB_SDB_BUSY_MS * 6) fprintf(stderr, "    waited %lld ms\n", took);
+    WT_ASSERT(took >= WEB_SDB_BUSY_MS / 2 && took < WEB_SDB_BUSY_MS * 6);
+    web_slothdb_stats(&S, &ss);
+    WT_EQ(ss.state, WEB_SDB_ERROR);
+    WT_HAS(ss.err, "locked");
+    web_slothdb_destroy(&S);
+    rm_db(p);
+}
+
 static void refused(const char *p, int state, const char *want) {
     sdb_up(p);
     web_sdb_conn_t c;
@@ -317,11 +684,16 @@ static void test_refusals(void) {
 
     /* A newer sloth's file: refused with a message, untouched. */
     path_in(p, sizeof(p), "newer.db");
-    WT_EQ(sdb_make(p, 7, 1), 0);
-    WT_EQ(sdb_exec(p, "UPDATE meta SET value='8' WHERE key='schema_version'"), 0);
+    WT_EQ(sdb_make(p, db_schema_version(), 1), 0);
+    char up[96], want[96];
+    snprintf(up, sizeof(up), "UPDATE meta SET value='%d' WHERE key='schema_version'",
+             db_schema_version() + 1);
+    WT_EQ(sdb_exec(p, up), 0);
+    snprintf(want, sizeof(want), "newer sloth (schema v%d; this slothweb reads v1..v%d)",
+             db_schema_version() + 1, WEB_SDB_SCHEMA_MAX);
     size_t n0 = sdb_slurp(p, g_before, sizeof(g_before));
     sdb_listing(g_dir, l0, sizeof(l0));
-    refused(p, WEB_SDB_REFUSED, "newer sloth (schema v8; this slothweb reads v1..v7)");
+    refused(p, WEB_SDB_REFUSED, want);
     WT_EQ(sdb_slurp(p, g_after, sizeof(g_after)), n0);
     WT_ASSERT(!memcmp(g_before, g_after, n0));
     sdb_listing(g_dir, l1, sizeof(l1));
@@ -506,7 +878,7 @@ static void test_allow_list_against_the_guardrail(void) {
     /* Against sloth's live schema. */
     char p[128];
     path_in(p, sizeof(p), "schema.db");
-    WT_EQ(sdb_make(p, 7, 0), 0);
+    WT_EQ(sdb_make(p, db_schema_version(), 0), 0);
     sqlite3 *h = NULL;
     WT_EQ(sqlite3_open_v2(p, &h, SQLITE_OPEN_READONLY, NULL), SQLITE_OK);
     for (size_t i = 0; i < web_sdb_allow_n; i++) {
@@ -543,8 +915,11 @@ static void test_allow_list_against_the_guardrail(void) {
 
 /* The authorizer: a statement naming a column off the list does not
  * prepare, whatever it is; nor does SELECT *, a pragma but table_info,
- * a write, an ATTACH, or a function off the list. Seen red with authz()
- * answering SQLITE_OK to SQLITE_READ (the username was read). */
+ * a write, an ATTACH, or a function off the list; nor one naming the
+ * predicate-only alerts.key, in its result or its WHERE, outside the
+ * two statements that may. Seen red with authz() answering SQLITE_OK
+ * to SQLITE_READ (the username was read), and the key statements with
+ * allowed_col() ignoring pred (they prepared). */
 static void test_authorizer_denies(void) {
     char p[128];
     seeded("authz.db", 0, p, sizeof(p));
@@ -556,6 +931,10 @@ static void test_authorizer_denies(void) {
         "SELECT username FROM cleartext_creds",
         "SELECT * FROM cleartext_creds",
         "SELECT detail FROM alerts",
+        "SELECT key FROM alerts",
+        "SELECT substr(key,1,64) FROM alerts",
+        "SELECT max(key) FROM alerts",
+        "SELECT title FROM alerts WHERE instr(key,'alice') > 0",
         "SELECT * FROM devices",
         "SELECT dhcp_prl FROM devices",
         "SELECT last_identity FROM rogue_radius",
@@ -662,11 +1041,14 @@ static void test_query_terms(void) {
         { "name:nas.local", "00:11:22:33:44:55" },        /* mdns host */
         { "name:_smb", "00:11:22:33:44:55" },             /* mdns instance */
         { "name:NAS", "00:11:22:33:44:55" },              /* nbns, hostname */
+        /* A group name is no host's: seen red with the suffix test
+         * dropped from names_exist()'s nbns_names EXISTS. */
+        { "name:WORKGROUP", "" },
         { "name:macbook-d", "00:03:93:00:00:03" },
         { "ssid:CafeFree", "da:a1:19:00:00:01" },         /* pnl_ssids */
         { "ssid:corpwifi", "f2:11:22:00:00:06" },         /* last_ssid */
         { "ip:10.0.9.", "00:03:93:00:00:03" },            /* an ARP binding */
-        { "has:alert", "00:11:22:33:44:55" },
+        { "has:alert", "00:11:22:33:44:55 00:03:93:00:00:03" },  /* match_ip, key */
         { "has:pnl", "da:a1:19:00:00:01" },
         { "src:sta", "da:a1:19:00:00:01" },
         { "risk:2", "f2:11:22:00:00:06" },
@@ -674,6 +1056,13 @@ static void test_query_terms(void) {
         { "mac:70:B3", "70:b3:d5:f2:a1:23" },
         { "-random:yes -vendor:apple -small", "00:11:22:33:44:55" },
         { "\"<b>\"", "00:11:22:33:44:55" },               /* hostile text, matched */
+        /* A date is a whole UTC day: <= takes it in, < stops before it.
+         * Seen red with time_value() ignoring the '=' (the day left out). */
+        { "seen:<=2026-10-20", "da:a1:19:00:00:02" },     /* D2, 18:00 that day */
+        { "seen:<2026-10-20", "" },
+        { "seen:<2026-10-21", "da:a1:19:00:00:02" },
+        { "first:<=2026-09-12", "00:11:22:33:44:55" },    /* D9, 40 d ago */
+        { "first:<2026-09-12", "" },
         { "name:50%", "" },                                /* % is a literal */
         { "name:n_s", "" },                                /* _ is a literal */
         { "alice", "" },                                   /* never readable */
@@ -726,7 +1115,9 @@ static void test_reads(void) {
     WT_ASSERT(!strcmp(d.hostname, "<b>nas</b>"));
     WT_ASSERT(!strcmp(d.dhcp_name, "nas-dhcp"));
     WT_ASSERT(!strcmp(d.mdns_name, "nas.local"));
-    WT_ASSERT(!strcmp(d.nbns_name, "NAS"));      /* not the group name */
+    /* Not the group name, though WORKGROUP's row is the newer: seen red
+     * with the row select's suffix test dropped. */
+    WT_ASSERT(!strcmp(d.nbns_name, "NAS"));
     WT_EQ(d.sources, 7);
     WT_EQ(web_sdb_device(&c, "00:11:22:33:44:56", &d), 0);
     items_t it = { 0 };
@@ -759,8 +1150,123 @@ static void test_reads(void) {
     WT_EQ(web_sdb_first_seen(&c, "00:00:00:00:00:01", &fs), 0);
     web_sdb_new_t nw[16];
     int n = web_sdb_new_macs(&c, SDB_NOW - 86400, nw, 16);
-    WT_EQ(n, 3);                         /* D8, D5, D4 (first seen 24 h ago) */
+    WT_EQ(n, 1);                 /* D8; D5 and D4 are locally administered */
     WT_ASSERT(!strcmp(nw[0].mac, "70:b3:d5:f2:a1:23"));
+    web_slothdb_close(&c);
+    web_slothdb_destroy(&S);
+    rm_db(p);
+}
+
+/* has:name counts an NBNS name only when it names a host (suffix 0 or
+ * 32), as the row's name does. Seen red with the suffix test dropped
+ * from has:name's nbns_names EXISTS (the group-only device joined). */
+static void test_has_name_skips_group_names(void) {
+    char p[128], err[WEB_SDB_ERR_MAX], out[256];
+    path_in(p, sizeof(p), "groups.db");
+    WT_EQ(sdb_make(p, db_schema_version(), 0), 0);
+    WT_EQ(sdb_exec(p, "INSERT INTO devices (mac,ip,first_seen,last_seen) VALUES"
+                      " ('00:11:22:00:00:aa','10.0.2.2',1,2),"
+                      " ('00:11:22:00:00:bb','10.0.2.3',1,3);"
+                      "INSERT INTO nbns_names (name,suffix,ip,first_seen,last_seen)"
+                      " VALUES ('WG',30,'10.0.2.2',1,2), ('HOST',32,'10.0.2.3',1,3);"),
+          0);
+    sdb_up(p);
+    web_sdb_conn_t c;
+    WT_EQ(web_slothdb_open(&S, &c, 500, SDB_NOW, err, sizeof(err)), 0);
+    WT_EQ(run_q(&c, "has:name", WEB_QS_MAC, out, sizeof(out)), 1);
+    WT_ASSERT(!strcmp(out, "00:11:22:00:00:bb"));
+    WT_EQ(run_q(&c, "name:WG", WEB_QS_MAC, out, sizeof(out)), 0);
+    WT_EQ(run_q(&c, "name:HOST", WEB_QS_MAC, out, sizeof(out)), 1);
+    web_slothdb_close(&c);
+    web_slothdb_destroy(&S);
+    rm_db(p);
+}
+
+/* A2's new MACs from sloth.db: more newer random MACs than the window
+ * holds do not push out an older global one. Seen red with the
+ * locally-administered filter removed from web_sdb_new_macs()'s
+ * statement (64 random rows came back, the global one not among them). */
+static void test_new_macs_skip_random_before_the_limit(void) {
+    char p[128], err[WEB_SDB_ERR_MAX];
+    path_in(p, sizeof(p), "newmacs.db");
+    WT_EQ(sdb_make(p, db_schema_version(), 0), 0);
+    const long long N = SDB_NOW;
+    char sql[256];
+    snprintf(sql, sizeof(sql), "INSERT INTO devices (mac,first_seen,last_seen)"
+             " VALUES ('00:11:22:aa:bb:01',%lld,%lld)", N - 1800, N - 1800);
+    WT_EQ(sdb_exec(p, sql), 0);
+    snprintf(sql, sizeof(sql), "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL"
+             " SELECT i+1 FROM n WHERE i < 79) INSERT INTO devices (mac,"
+             "first_seen,last_seen) SELECT printf('da:a1:19:aa:00:%%02x', i),"
+             " %lld + 15 * i, %lld FROM n", N - 1700, N - 10);
+    WT_EQ(sdb_exec(p, sql), 0);
+    sdb_up(p);
+    web_sdb_conn_t c;
+    WT_EQ(web_slothdb_open(&S, &c, 500, SDB_NOW, err, sizeof(err)), 0);
+    web_sdb_new_t nw[64];
+    int n = web_sdb_new_macs(&c, N - 3600, nw, 64);
+    WT_EQ(n, 1);
+    WT_ASSERT(n >= 1 && !strcmp(nw[0].mac, "00:11:22:aa:bb:01"));
+    WT_EQ(nw[0].first_seen, N - 1800);
+    web_slothdb_close(&c);
+    web_slothdb_destroy(&S);
+    rm_db(p);
+}
+
+/* Every result column of every device statement, walked: the
+ * predicate-only alerts.key (here in sloth's cleartext-credential
+ * format, its username "alice-secret-user") is never in one, whatever
+ * the query, has:alert included; nor in the alerts read's. Seen red
+ * with d.mac in web_query_row_select()'s first column replaced by
+ * (SELECT a.key FROM alerts a LIMIT 1). */
+static void test_no_result_column_carries_the_alert_key(void) {
+    char p[128], err[WEB_SDB_ERR_MAX];
+    seeded("predonly.db", 0, p, sizeof(p));
+    sdb_up(p);
+    web_sdb_conn_t c;
+    WT_EQ(web_slothdb_open(&S, &c, 500, SDB_NOW, err, sizeof(err)), 0);
+    static const char *const qs[] = {
+        "", "has:alert", "-has:alert", "alice", "name:alice", "has:alert name:nas",
+        "vendor:apple random:yes seen:<24h",
+    };
+    long long rows = 0;
+    for (size_t i = 0; i < sizeof(qs) / sizeof(qs[0]); i++) {
+        web_query_t wq;
+        WT_EQ(web_query_parse(qs[i], SDB_NOW, &wq, err, sizeof(err)), 0);
+        static web_qsql_t sq;
+        WT_EQ(web_query_compile(&wq, c.feats, WEB_QS_LAST, 50, 0, &sq), 0);
+        sqlite3_stmt *st = NULL;
+        c.pred_ok = 1;                 /* as web_sdb_devices() runs it */
+        WT_EQ(sqlite3_prepare_v2(c.db, sq.sql, -1, &st, NULL), SQLITE_OK);
+        for (int b = 0; st && b < sq.nb; b++) {
+            if (sq.b[b].type == 0)
+                sqlite3_bind_text(st, b + 1, sq.b[b].s, -1, SQLITE_TRANSIENT);
+            else if (sq.b[b].type == 1)
+                sqlite3_bind_int64(st, b + 1, sq.b[b].i);
+            else
+                sqlite3_bind_double(st, b + 1, sq.b[b].d);
+        }
+        while (st && sqlite3_step(st) == SQLITE_ROW) {
+            rows++;
+            for (int k = 0; k < sqlite3_column_count(st); k++) {
+                const char *v = (const char *)sqlite3_column_text(st, k);
+                if (v && (strstr(v, "alice") || strstr(v, "cred:")))
+                    fprintf(stderr, "    %s: column %d is \"%s\"\n", qs[i], k, v);
+                WT_ASSERT(!v || (!strstr(v, "alice") && !strstr(v, "cred:")));
+            }
+        }
+        sqlite3_finalize(st);
+        c.pred_ok = 0;
+    }
+    WT_ASSERT(rows >= 9);
+    items_t it = { 0 };
+    WT_EQ(web_sdb_alerts(&c, "00:11:22:33:44:55", "10.0.1.5", 8, take_item, &it), 1);
+    WT_EQ(web_sdb_alerts(&c, "00:03:93:00:00:03", "", 8, take_item, &it), 1);
+    for (int i = 0; i < it.n; i++) {
+        WT_ASSERT(!strstr(it.a[i], "alice") && !strstr(it.b[i], "alice"));
+        WT_ASSERT(!strstr(it.a[i], "cred:") && !strstr(it.a[i], "evil_twin"));
+    }
+    WT_ASSERT(!strcmp(it.a[1], "Evil twin"));
     web_slothdb_close(&c);
     web_slothdb_destroy(&S);
     rm_db(p);
@@ -771,18 +1277,26 @@ void run_slothdb_tests(void) {
     if (!mkdtemp(g_dir)) { WT_ASSERT(!"mkdtemp"); return; }
     WT_EQ(sdb_oui(&g_oui, g_dir), 0);
     WT_EQ(web_slothdb_available(), 1);
+    WT_RUN(test_schema_max_is_sloths);
     WT_RUN(test_open_flags);
     WT_RUN(test_reading_changes_nothing);
     WT_RUN(test_live_wal_reader);
     WT_RUN(test_wal_without_shm);
+    WT_RUN(test_crashed_sloth_restarts_beside_a_reader);
+    WT_RUN(test_sloth_closes_inside_the_open);
+    WT_RUN(test_busy_timeout);
     WT_RUN(test_refusals);
+    WT_RUN(test_hot_journal_is_an_error);
     WT_RUN(test_older_schema);
     WT_RUN(test_allow_list_against_the_guardrail);
     WT_RUN(test_authorizer_denies);
+    WT_RUN(test_no_result_column_carries_the_alert_key);
     WT_RUN(test_budget_interrupts);
     WT_RUN(test_acceptance_query);
     WT_RUN(test_query_terms);
     WT_RUN(test_reads);
+    WT_RUN(test_new_macs_skip_random_before_the_limit);
+    WT_RUN(test_has_name_skips_group_names);
     oui_build_free(&g_oui);
     rmdir(g_dir);
 }

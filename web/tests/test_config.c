@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "web_config.h"
+#include "web_slothdb.h"
 #include "wtest.h"
 
 typedef struct {
@@ -332,9 +333,64 @@ static void test_ceiling_below_minimum_refused(void) {
     done(&p);
 }
 
+/* --sloth-db: a path, never empty or past the buffer, never the store's
+ * path, and only in a build that can read it. Each refusal seen red
+ * with its condition in web_config.c replaced by 0 (the same-path and
+ * length ones under the default build, the SQLite one under
+ * WITH_SQLITE=0). */
+static void test_sloth_db_flag(void) {
+    parsed_t p;
+    static const char *const ok[] = { "--sloth-db", "/var/lib/sloth/sloth.db", NULL };
+    parse(&p, ok);
+    if (web_slothdb_available()) {
+        WT_EQ(p.rc, 0);
+        WT_ASSERT(!strcmp(p.cfg.sloth_db, "/var/lib/sloth/sloth.db"));
+    } else {
+        WT_EQ(p.rc, -1);
+        WT_HAS(p.err, "--sloth-db needs SQLite; this slothweb was built with "
+                      "WITH_SQLITE=0");
+        WT_EQ(p.cfg.sloth_db[0], '\0');
+    }
+    done(&p);
+
+    static const char *const empty[] = { "--sloth-db", "", NULL };
+    parse(&p, empty);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--sloth-db: empty or too long a path");
+    done(&p);
+    static char longp[sizeof(((web_config_t *)0)->sloth_db)];
+    memset(longp, 'a', sizeof(longp) - 16);
+    longp[0] = '/';
+    longp[sizeof(longp) - 16] = '\0';
+    const char *const toolong[] = { "--sloth-db", longp, NULL };
+    parse(&p, toolong);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--sloth-db: empty or too long a path");
+    done(&p);
+    longp[sizeof(longp) - 17] = '\0';             /* one byte shorter fits */
+    parse(&p, toolong);
+    WT_EQ(p.rc, web_slothdb_available() ? 0 : -1);
+    done(&p);
+
+    if (web_slothdb_available() && web_store_available()) {
+        static const char *const same[] = { "--sloth-db", "/tmp/x/one.db",
+                                            "--store", "/tmp/x/one.db", NULL };
+        parse(&p, same);
+        WT_EQ(p.rc, -1);
+        WT_HAS(p.err, "--sloth-db and --store name the same file (/tmp/x/one.db)");
+        done(&p);
+        static const char *const apart[] = { "--sloth-db", "/tmp/x/one.db",
+                                             "--store", "/tmp/x/two.db", NULL };
+        parse(&p, apart);
+        WT_EQ(p.rc, 0);
+        done(&p);
+    }
+}
+
 void run_config_tests(void) {
     WT_RUN(test_ceiling_below_minimum_refused);
     WT_RUN(test_socket_flag);
+    WT_RUN(test_sloth_db_flag);
     WT_RUN(test_default_bind_is_loopback_8770);
     WT_RUN(test_loopback_binds_need_no_flag);
     WT_RUN(test_remote_bind_refused_without_flag);

@@ -133,6 +133,10 @@ static void test_page_carries_the_m4_views(void) {
     WT_HAS(p, "var MAC_RE = /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/;");
     WT_HAS(p, "if (typeof mac !== \"string\" || !MAC_RE.test(mac)) return;");
     WT_HAS(p, "if (typeof a.key === \"string\" && MAC_RE.test(a.key)) {");
+    /* The two ways in (#162): a card's click and a row's. Each seen red
+     * with its line removed from app.js. */
+    WT_HAS(p, "c.addEventListener(\"click\", function () { openDrawer(a.key); });");
+    WT_HAS(p, "r.el.addEventListener(\"click\", function () { if (r.mac) openDrawer(r.mac); });");
     /* No active lookup anywhere on the page (the 2026-10-21 ruling). */
     WT_LACKS(p, "ACTIVE QUERY");
     WT_LACKS(p, "active-rdns");
@@ -166,7 +170,7 @@ static void up(void) {
     WT_ASSERT(mkdtemp(g_dir) != NULL);
     WT_EQ(sdb_oui(&g_oui, g_dir), 0);
     snprintf(g_db, sizeof(g_db), "%s/sloth.db", g_dir);
-    WT_EQ(sdb_make(g_db, 7, 1), 0);
+    WT_EQ(sdb_make(g_db, db_schema_version(), 1), 0);
     WT_EQ(sdb_seed(g_db), 0);
     char sp[128], err[512];
     snprintf(sp, sizeof(sp), "%s/slothweb.db", g_dir);
@@ -258,6 +262,39 @@ static void test_devices_acceptance(void) {
     WT_EQ(route(&H, "/api/devices", "q=vendor:apple+random:yes+seen:<24h", 1), 200);
     WT_ASSERT(strlen(g_out) < full);
     WT_EQ(strlen(body_of(g_out)), 0);
+}
+
+/* The credential's username is in an alert's key (sloth keys a
+ * cleartext credential by it), and the key is read only as a predicate:
+ * no body names it, the device list matched on it included. The D3 row
+ * shows the key match itself still works. */
+static void test_no_body_names_the_alert_key(void) {
+    static const char *const qs[][2] = {
+        { "", NULL }, { "q=has:alert", "00:03:93:00:00:03" }, { "q=alice", NULL },
+        { "q=name:alice", NULL }, { "q=has:alert&sort=risk", "00:11:22:33:44:55" },
+    };
+    for (size_t i = 0; i < sizeof(qs) / sizeof(qs[0]); i++) {
+        WT_EQ(route(&H, "/api/devices", qs[i][0], 0), 200);
+        const char *b = body_of(g_out);
+        WT_LACKS(b, "secret-user");             /* "q" echoes "alice" */
+        WT_LACKS(b, "cred:");
+        WT_LACKS(b, "evil_twin");
+        if (qs[i][1]) WT_HAS(b, qs[i][1]);
+    }
+    static const char *const macs[] = {
+        "/api/device/00%3A11%3A22%3A33%3A44%3A55", "/api/device/00%3A03%3A93%3A00%3A00%3A03",
+    };
+    for (size_t i = 0; i < sizeof(macs) / sizeof(macs[0]); i++) {
+        WT_EQ(route(&H, macs[i], "", 0), 200);
+        const char *b = body_of(g_out);
+        WT_LACKS(b, "alice");
+        WT_LACKS(b, "cred:");
+        WT_LACKS(b, "evil_twin");
+    }
+    WT_HAS(body_of(g_out), "\"title\":\"Evil twin\"");   /* by its key */
+    WT_EQ(route(&H, "/api/lookup", "q=00:11:22:33:44:55", 0), 200);
+    WT_LACKS(body_of(g_out), "alice");
+    WT_LACKS(body_of(g_out), "cred:");
 }
 
 /* One row's members, the vendor's source, the names' glyphs. Markup
@@ -516,7 +553,7 @@ static void test_health_members(void) {
 static void test_devices_worst_case_fits(void) {
     char p[160];
     snprintf(p, sizeof(p), "%s/worst.db", g_dir);
-    WT_EQ(sdb_make(p, 7, 0), 0);
+    WT_EQ(sdb_make(p, db_schema_version(), 0), 0);
     char lt[64 * 4 + 1];
     lt[0] = '\0';
     for (int i = 0; i < 63; i++) strcat(lt, "<");
@@ -572,6 +609,7 @@ void run_devices_tests(void) {
     up();
     WT_RUN(test_page_fetch_shapes);
     WT_RUN(test_devices_acceptance);
+    WT_RUN(test_no_body_names_the_alert_key);
     WT_RUN(test_device_rows);
     WT_RUN(test_devices_paging_and_refusals);
     WT_RUN(test_devices_db_states);

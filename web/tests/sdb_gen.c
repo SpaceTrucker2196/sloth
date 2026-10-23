@@ -14,7 +14,7 @@
 
 /* src/db_schema.c, sloth's own DDL (src/db.h). Declared here rather
  * than by including db.h: slothweb_test links that one file of sloth's
- * and nothing it needs. */
+ * and nothing it needs (db_schema_version() is in sdb_gen.h). */
 const char *db_schema_sql(void);
 const char *db_schema_meta_sql(void);
 
@@ -76,8 +76,10 @@ int sdb_make(const char *path, int version, int wal) {
  *      "less than 24 h" excludes it
  *   D8 70:b3:d5:f2:a1:23 an MA-S block sloth's table misses (vendor NULL)
  *   D9 00:11:22:33:44:55 a hostname holding markup; DHCP, mDNS and NBNS
- *      names for its IP; an alert naming that IP
- * and, in a table no statement may read, a credential exposure whose
+ *      names for its IP; an alert naming that IP, keyed as sloth keys a
+ *      cleartext credential (its key carries the username)
+ * D3 also has an alert naming it only in its key (no match_ip); and, in
+ * a table no statement may read, the credential exposure itself. The
  * username must never be served. */
 int sdb_seed(const char *path) {
     char sql[8192];
@@ -117,8 +119,11 @@ int sdb_seed(const char *path) {
         " ('aa:bb:cc:dd:ee:ff','da:a1:19:00:00:01','HomeNet',1,1,6,-50,10,%lld,%lld);"
         "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,"
         "technique,match_ip,match_port,count) VALUES"
-        " ('cleartext:10.0.1.5:21',%lld,%lld,12,2,'FTP login in cleartext',"
-        "'user=alice-detail','T1040','10.0.1.5',21,3);"
+        " ('cred:10.0.1.5:10.0.1.1:21:ftp:alice-secret-user:0123456789abcdef',"
+        "%lld,%lld,12,2,'FTP login in cleartext',"
+        "'user=alice-detail','T1040','10.0.1.5',21,3),"
+        " ('evil_twin:00:03:93:00:00:03',%lld,%lld,3,1,'Evil twin',NULL,"
+        "'T1557',NULL,NULL,1);"
         "INSERT INTO cleartext_creds (ts,src,dst,dst_port,protocol,username,"
         "pw_observed,first_seen,last_seen) VALUES"
         " (%lld,'10.0.1.5','10.0.1.1',21,'ftp','alice-secret-user',1,%lld,%lld);",
@@ -127,13 +132,13 @@ int sdb_seed(const char *path) {
         N - 2 * D, N - D, N - H, N - 300, N - 40 * D, N - 10,
         N - 40 * D, N - 10, N - 20 * D, N - 60,
         N - 40 * D, N - 10,
-        N - 40 * D, N - 10, N - 40 * D, N - 10,
+        N - 40 * D, N - 10, N - 40 * D, N - 5,     /* WORKGROUP the newer */
         N - 40 * D, N - 10, N - 20 * D, N - 60,
         N - 10 * D, N - H,
         N - 10 * D, N - H, N - 9 * D, N - 2 * D,
         N - 12 * D, N - H,
         N - 11 * D, N - H,
-        N - 100, N - 50,
+        N - 100, N - 50, N - 200, N - 150,
         N - 100, N - 100, N - 100);
     return sdb_exec(path, sql);
 }

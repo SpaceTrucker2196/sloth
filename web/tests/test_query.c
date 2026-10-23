@@ -66,6 +66,14 @@ static void test_every_prefix(void) {
     WT_EQ(Q.t[3].num, NOW - 86400);
     WT_EQ(Q.t[3].num2, NOW);
     WT_EQ(Q.t[4].op, WEB_QOP_LT);
+    WT_EQ(Q.t[4].num, NOW - 86400);            /* before that day */
+    WT_EQ(parse("seen:<=2026-10-21 seen:>=2026-10-21 first:<=1d", err), 0);
+    WT_EQ(Q.t[0].op, WEB_QOP_LT);              /* to the day's end */
+    WT_EQ(Q.t[0].num, NOW);
+    WT_EQ(Q.t[1].op, WEB_QOP_GE);              /* from its start, as > */
+    WT_EQ(Q.t[1].num, NOW - 86400);
+    WT_EQ(Q.t[2].op, WEB_QOP_GT);
+    WT_EQ(Q.t[2].num, NOW - 86400);
     WT_EQ(parse("risk:<=2 risk:3 z:<1.25 z:2", err), 0);
     WT_EQ(Q.t[0].op, WEB_QOP_LE);
     WT_EQ(Q.t[1].op, WEB_QOP_EQ);

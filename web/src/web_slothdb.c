@@ -19,42 +19,43 @@
  * secret columns are absent by construction and held absent by
  * test_slothdb.c, which reads tests/test_db.c's guardrail list. */
 const web_sdb_col_t web_sdb_allow[] = {
-    { "meta", "key", 1, 0 },          { "meta", "value", 1, 0 },
-    { "devices", "mac", 1, 0 },       { "devices", "ip", 1, 0 },
-    { "devices", "hostname", 1, 0 },  { "devices", "vendor", 1, 0 },
-    { "devices", "last_ssid", 1, 0 }, { "devices", "is_ap", 1, 0 },
-    { "devices", "signal_dbm", 1, 0 },{ "devices", "sources", 1, 0 },
-    { "devices", "risk_signals", 1, 0 }, { "devices", "risk_level", 1, 0 },
-    { "devices", "first_seen", 1, 0 },{ "devices", "last_seen", 1, 0 },
-    { "devices", "device_class", 6, 1 }, { "devices", "camera_vendor", 6, 1 },
-    { "devices", "camera_model", 6, 1 }, { "devices", "dhcp_vci", 7, 1 },
-    { "pnl_clients", "mac", 1, 0 },   { "pnl_clients", "first_seen", 1, 0 },
-    { "pnl_ssids", "mac", 1, 0 },     { "pnl_ssids", "ssid", 1, 0 },
-    { "pnl_ssids", "first_seen", 1, 0 }, { "pnl_ssids", "last_seen", 1, 0 },
-    { "probe_clients", "mac", 1, 0 }, { "probe_clients", "first_seen", 1, 0 },
-    { "assocs", "bssid", 1, 0 },      { "assocs", "sta_mac", 1, 0 },
-    { "assocs", "ssid", 1, 0 },       { "assocs", "source", 1, 0 },
-    { "assocs", "channel", 1, 0 },    { "assocs", "signal_dbm", 1, 0 },
-    { "assocs", "first_seen", 1, 0 }, { "assocs", "last_seen", 1, 0 },
-    { "arp", "ip", 1, 0 },            { "arp", "mac", 1, 0 },
-    { "arp", "first_seen", 1, 0 },    { "arp", "last_seen", 1, 0 },
-    { "dhcp_leases", "ip", 1, 0 },    { "dhcp_leases", "hostname", 1, 0 },
-    { "dhcp_leases", "first_seen", 1, 0 }, { "dhcp_leases", "last_seen", 1, 0 },
-    { "mdns_services", "instance", 1, 0 }, { "mdns_services", "host", 1, 0 },
-    { "mdns_services", "ip", 1, 0 },  { "mdns_services", "first_seen", 1, 0 },
-    { "mdns_services", "last_seen", 1, 0 },
-    { "nbns_names", "name", 1, 0 },   { "nbns_names", "suffix", 1, 0 },
-    { "nbns_names", "ip", 1, 0 },     { "nbns_names", "first_seen", 1, 0 },
-    { "nbns_names", "last_seen", 1, 0 },
-    { "alerts", "key", 1, 0 },        { "alerts", "type", 1, 0 },
-    { "alerts", "sev", 1, 0 },        { "alerts", "title", 1, 0 },
-    { "alerts", "match_ip", 1, 0 },   { "alerts", "count", 1, 0 },
-    { "alerts", "first_seen", 1, 0 }, { "alerts", "last_seen", 1, 0 },
+    { "meta", "key", 1, 0, 0 },          { "meta", "value", 1, 0, 0 },
+    { "devices", "mac", 1, 0, 0 },       { "devices", "ip", 1, 0, 0 },
+    { "devices", "hostname", 1, 0, 0 },  { "devices", "vendor", 1, 0, 0 },
+    { "devices", "last_ssid", 1, 0, 0 }, { "devices", "is_ap", 1, 0, 0 },
+    { "devices", "signal_dbm", 1, 0, 0 },{ "devices", "sources", 1, 0, 0 },
+    { "devices", "risk_signals", 1, 0, 0 }, { "devices", "risk_level", 1, 0, 0 },
+    { "devices", "first_seen", 1, 0, 0 },{ "devices", "last_seen", 1, 0, 0 },
+    { "devices", "device_class", 6, 1, 0 }, { "devices", "camera_vendor", 6, 1, 0 },
+    { "devices", "camera_model", 6, 1, 0 }, { "devices", "dhcp_vci", 7, 1, 0 },
+    { "pnl_clients", "mac", 1, 0, 0 },   { "pnl_clients", "first_seen", 1, 0, 0 },
+    { "pnl_ssids", "mac", 1, 0, 0 },     { "pnl_ssids", "ssid", 1, 0, 0 },
+    { "pnl_ssids", "first_seen", 1, 0, 0 }, { "pnl_ssids", "last_seen", 1, 0, 0 },
+    { "probe_clients", "mac", 1, 0, 0 }, { "probe_clients", "first_seen", 1, 0, 0 },
+    { "assocs", "bssid", 1, 0, 0 },      { "assocs", "sta_mac", 1, 0, 0 },
+    { "assocs", "ssid", 1, 0, 0 },       { "assocs", "source", 1, 0, 0 },
+    { "assocs", "channel", 1, 0, 0 },    { "assocs", "signal_dbm", 1, 0, 0 },
+    { "assocs", "first_seen", 1, 0, 0 }, { "assocs", "last_seen", 1, 0, 0 },
+    { "arp", "ip", 1, 0, 0 },            { "arp", "mac", 1, 0, 0 },
+    { "arp", "first_seen", 1, 0, 0 },    { "arp", "last_seen", 1, 0, 0 },
+    { "dhcp_leases", "ip", 1, 0, 0 },    { "dhcp_leases", "hostname", 1, 0, 0 },
+    { "dhcp_leases", "first_seen", 1, 0, 0 }, { "dhcp_leases", "last_seen", 1, 0, 0 },
+    { "mdns_services", "instance", 1, 0, 0 }, { "mdns_services", "host", 1, 0, 0 },
+    { "mdns_services", "ip", 1, 0, 0 },  { "mdns_services", "first_seen", 1, 0, 0 },
+    { "mdns_services", "last_seen", 1, 0, 0 },
+    { "nbns_names", "name", 1, 0, 0 },   { "nbns_names", "suffix", 1, 0, 0 },
+    { "nbns_names", "ip", 1, 0, 0 },     { "nbns_names", "first_seen", 1, 0, 0 },
+    { "nbns_names", "last_seen", 1, 0, 0 },
+    { "alerts", "key", 1, 0, 1 },     { "alerts", "type", 1, 0, 0 },
+    { "alerts", "sev", 1, 0, 0 },        { "alerts", "title", 1, 0, 0 },
+    { "alerts", "match_ip", 1, 0, 0 },   { "alerts", "count", 1, 0, 0 },
+    { "alerts", "first_seen", 1, 0, 0 }, { "alerts", "last_seen", 1, 0, 0 },
 };
 const size_t web_sdb_allow_n = sizeof(web_sdb_allow) / sizeof(web_sdb_allow[0]);
 
 int web_slothdb_test_flags = 0;
 int web_slothdb_test_immutable = 0;
+void (*web_slothdb_test_before_open)(void) = NULL;
 
 const char *web_slothdb_state_word(int state) {
     switch (state) {
@@ -182,17 +183,18 @@ static long long mono_ms(void) {
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-static int allowed_col(const char *table, const char *col) {
+/* pred_ok: whether a predicate-only column may be read. */
+static int allowed_col(const char *table, const char *col, int pred_ok) {
     if (!table || !col) return 0;
     for (size_t i = 0; i < web_sdb_allow_n; i++)
         if (!strcmp(web_sdb_allow[i].table, table) &&
             (!col[0] || !strcmp(web_sdb_allow[i].column, col)))
-            return 1;
+            return !col[0] || !web_sdb_allow[i].pred || pred_ok;
     return 0;
 }
 
 static int allowed_table(const char *table) {
-    return table && allowed_col(table, "");
+    return table && allowed_col(table, "", 0);
 }
 
 /* Everything a device statement may call. */
@@ -203,14 +205,15 @@ static const char *const FUNCS[] = {
 
 static int authz(void *ud, int action, const char *a1, const char *a2,
                  const char *db, const char *trig) {
-    (void)ud; (void)db; (void)trig;
+    const web_sdb_conn_t *c = ud;
+    (void)db; (void)trig;
     switch (action) {
     case SQLITE_SELECT:
         return SQLITE_OK;
     case SQLITE_READ:
         /* a1 table, a2 column ("" when a table is read for no column,
          * count(*)). */
-        return allowed_col(a1, a2 ? a2 : "") ? SQLITE_OK : SQLITE_DENY;
+        return allowed_col(a1, a2 ? a2 : "", c->pred_ok) ? SQLITE_OK : SQLITE_DENY;
     case SQLITE_FUNCTION:
         for (int i = 0; FUNCS[i]; i++)
             if (a2 && !strcmp(FUNCS[i], a2)) return SQLITE_OK;
@@ -304,6 +307,39 @@ static int fail(web_sdb_conn_t *c, int state, char *err, size_t errsz,
     return -1;
 }
 
+/* The VFS every open here goes through: the default one, but a named
+ * file (sloth.db, its journal, its -wal) is never created. The choice
+ * between immutable and a WAL reader is made from lstat() before the
+ * open, and SQLite opens the -wal only at the first read: a sloth that
+ * closes cleanly in between removes its -wal, and a plain open would
+ * then make an empty one (and a -shm) beside sloth.db. Through this
+ * VFS that read fails instead (SQLITE_CANTOPEN), and the next open
+ * decides again. Temporary files (a sort that spills) are SQLite's own,
+ * unnamed, and keep their create flag. */
+static sqlite3_vfs    g_vfs;
+static sqlite3_vfs   *g_base;
+static int            g_vfs_ok;
+static pthread_once_t g_vfs_once = PTHREAD_ONCE_INIT;
+#define WEB_SDB_VFS "slothweb-nocreate"
+
+static int nc_open(sqlite3_vfs *v, const char *name, sqlite3_file *f,
+                   int flags, int *out) {
+    (void)v;
+    if (flags & (SQLITE_OPEN_MAIN_DB | SQLITE_OPEN_MAIN_JOURNAL | SQLITE_OPEN_WAL))
+        flags &= ~SQLITE_OPEN_CREATE;
+    return g_base->xOpen(g_base, name, f, flags, out);
+}
+
+static void vfs_init(void) {
+    g_base = sqlite3_vfs_find(NULL);
+    if (!g_base) return;
+    g_vfs = *g_base;
+    g_vfs.pNext = NULL;
+    g_vfs.zName = WEB_SDB_VFS;
+    g_vfs.xOpen = nc_open;
+    g_vfs_ok = sqlite3_vfs_register(&g_vfs, 0) == SQLITE_OK;
+}
+
 static int exists(const char *path) {
     struct stat st;
     return lstat(path, &st) == 0;
@@ -322,9 +358,9 @@ static int header_mode(const char *path) {
     return h[18] == 2 && h[19] == 2 ? 2 : 1;
 }
 
-/* path as a read-only immutable URI, every byte that could read as URI
- * syntax percent-encoded (web_store.c does the same). */
-static void immutable_uri(const char *path, char *out, size_t outsz) {
+/* path as a file: URI with the query q, every byte that could read as
+ * URI syntax percent-encoded (web_store.c does the same). */
+static void ro_uri(const char *path, const char *q, char *out, size_t outsz) {
     static const char hex[] = "0123456789ABCDEF";
     size_t o = (size_t)snprintf(out, outsz, "file:");
     for (size_t i = 0; path[i] && o + 4 < outsz; i++) {
@@ -342,7 +378,7 @@ static void immutable_uri(const char *path, char *out, size_t outsz) {
         }
     }
     out[o] = '\0';
-    snprintf(out + o, outsz - o, "?mode=ro&immutable=1");
+    snprintf(out + o, outsz - o, "%s", q);
 }
 
 static int table_cols(sqlite3 *db, const char *table, const char *const *want,
@@ -451,8 +487,16 @@ int web_slothdb_open(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
     char uri[3 * 4096 + 64];
     const char *name = s->path;
     int flags = web_slothdb_open_flags();
-    if (immutable) {
-        immutable_uri(s->path, uri, sizeof(uri));
+    if (hm == 2) {
+        /* readonly_shm: sloth's -shm opened read-only, never created and
+         * never initialised by this connection. With no sloth holding it
+         * SQLite reads the WAL into a private index instead of running
+         * recovery on the shared one, which would make a sloth starting
+         * at that moment fail its first statement with
+         * SQLITE_BUSY_RECOVERY. */
+        ro_uri(s->path, immutable ? "?mode=ro&immutable=1"
+                                  : "?mode=ro&readonly_shm=1",
+               uri, sizeof(uri));
         name = uri;
         flags |= SQLITE_OPEN_URI;
     }
@@ -461,7 +505,12 @@ int web_slothdb_open(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
     web_slothdb_test_flags = flags;
     web_slothdb_test_immutable = immutable;
     pthread_mutex_unlock(&s->mu);
-    if (sqlite3_open_v2(name, &c->db, flags, NULL) != SQLITE_OK)
+    if (web_slothdb_test_before_open) web_slothdb_test_before_open();
+    pthread_once(&g_vfs_once, vfs_init);
+    if (!g_vfs_ok)
+        return fail(c, WEB_SDB_ERROR, err, errsz, "%s: %s",
+                    "the no-create VFS could not be registered");
+    if (sqlite3_open_v2(name, &c->db, flags, WEB_SDB_VFS) != SQLITE_OK)
         return fail(c, WEB_SDB_ERROR, err, errsz, "%s: %s",
                     c->db ? sqlite3_errmsg(c->db) : "cannot open");
     int on = -1;
@@ -490,13 +539,21 @@ int web_slothdb_open(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
     sqlite3_stmt *q = NULL;
     if (sqlite3_prepare_v2(c->db, "SELECT value FROM meta WHERE"
                            " key='schema_version'", -1, &q, NULL) != SQLITE_OK) {
-        int busy = sqlite3_errcode(c->db) == SQLITE_BUSY ||
-                   sqlite3_errcode(c->db) == SQLITE_LOCKED;
+        /* Only a file whose shape is wrong is "not a sloth.db": not a
+         * database (NOTADB), or no meta(key, value) in it (ERROR). A
+         * sloth.db SQLite cannot read now (a hot journal or a WAL only
+         * sloth can recover, READONLY_*; busy; locked; an I/O error) is
+         * sloth's to put right, and is said to be. */
+        int pc = sqlite3_extended_errcode(c->db) & 0xff;
+        int shape = pc == SQLITE_NOTADB || pc == SQLITE_ERROR || pc == SQLITE_AUTH;
         char m[160];
         snprintf(m, sizeof(m), "%s", sqlite3_errmsg(c->db));
-        return busy ? fail(c, WEB_SDB_ERROR, err, errsz, "%s: %s", m)
-                    : fail(c, WEB_SDB_REFUSED, err, errsz,
-                           "%s: not a sloth.db (%s)", m);
+        if (shape)
+            return fail(c, WEB_SDB_REFUSED, err, errsz, "%s: not a sloth.db (%s)", m);
+        if (pc == SQLITE_READONLY)
+            return fail(c, WEB_SDB_ERROR, err, errsz, "%s: needs recovery by "
+                        "sloth, which it does when it next opens it (%s)", m);
+        return fail(c, WEB_SDB_ERROR, err, errsz, "%s: %s", m);
     }
     char ver[16] = "";
     int rc = sqlite3_step(q);
@@ -632,6 +689,11 @@ int web_sdb_devices(web_sdb_conn_t *c, const web_query_t *q, int sort,
     int rc = -1;
     if (web_query_compile(q, c->feats, sort, limit, offset, sq) == 0) {
         sqlite3_stmt *st = NULL;
+        /* has:alert matches alerts.key against d.mac; the result
+         * columns are web_query_row_select()'s constant list. Until the
+         * finalize: a LIKE against a bound value re-prepares the
+         * statement at its first step. */
+        c->pred_ok = 1;
         if (sqlite3_prepare_v2(c->db, sq->sql, -1, &st, NULL) == SQLITE_OK) {
             bind_all(st, sq);
             int n = 0, r;
@@ -645,6 +707,7 @@ int web_sdb_devices(web_sdb_conn_t *c, const web_query_t *q, int sort,
         }
         if (rc < 0 && c->timed_out) *why = "timeout";
         sqlite3_finalize(st);
+        c->pred_ok = 0;
     }
     free(sq);
     return rc;
@@ -783,12 +846,16 @@ int web_sdb_names(web_sdb_conn_t *c, const char *ip, int max,
 int web_sdb_alerts(web_sdb_conn_t *c, const char *mac, const char *ip,
                    int max, web_sdb_item_fn fn, void *ctx) {
     if (!(c->feats & WEB_QF_ALERTS)) return 0;
-    return items(c, "SELECT COALESCE(title,''), '', type, sev, count,"
-                    " first_seen, last_seen FROM alerts WHERE"
-                    " (?1 <> '' AND instr(key, ?1) > 0)"
-                    " OR (?2 <> '' AND match_ip = ?2)"
-                    " ORDER BY last_seen DESC LIMIT ?3",
-                 mac, ip ? ip : "", max, fn, ctx, 7);
+    /* key in the WHERE only, against a canonical MAC (the routes'). */
+    c->pred_ok = 1;
+    int n = items(c, "SELECT COALESCE(title,''), '', type, sev, count,"
+                     " first_seen, last_seen FROM alerts WHERE"
+                     " (?1 <> '' AND instr(key, ?1) > 0)"
+                     " OR (?2 <> '' AND match_ip = ?2)"
+                     " ORDER BY last_seen DESC LIMIT ?3",
+                  mac, ip ? ip : "", max, fn, ctx, 7);
+    c->pred_ok = 0;
+    return n;
 }
 
 int web_sdb_first_seen(web_sdb_conn_t *c, const char *mac, long long *fs) {
@@ -827,8 +894,13 @@ int web_sdb_first_seen(web_sdb_conn_t *c, const char *mac, long long *fs) {
 int web_sdb_new_macs(web_sdb_conn_t *c, long long since, web_sdb_new_t *out,
                      int max) {
     sqlite3_stmt *st = NULL;
+    /* The locally administered ones are left out here, before the
+     * LIMIT: A2 drops them, and a burst of newer random MACs must not
+     * fill the window ahead of a new globally administered one. */
     if (sqlite3_prepare_v2(c->db, "SELECT mac, first_seen FROM devices WHERE"
-                           " first_seen >= ?1 ORDER BY first_seen DESC, mac"
+                           " first_seen >= ?1 AND substr(mac,2,1) NOT IN"
+                           " ('2','3','6','7','a','b','e','f')"
+                           " ORDER BY first_seen DESC, mac"
                            " LIMIT ?2", -1, &st, NULL) != SQLITE_OK)
         return -1;
     sqlite3_bind_int64(st, 1, since);

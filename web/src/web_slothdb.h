@@ -22,11 +22,20 @@
  *     running, so nothing is checkpointing either; such a read sees the
  *     file as of sloth's last checkpoint, and says so ("db_mode":
  *     "immutable");
- *   - with both present (sloth running) it is a WAL reader like any
- *     other, using sloth's own -shm ("wal");
+ *   - with both present it is a WAL reader ("wal") opened
+ *     mode=ro&readonly_shm=1: the -shm is opened read-only and never
+ *     initialised here. With sloth running that is a reader on sloth's
+ *     index; after a crash (both left, nobody holding the -shm) SQLite
+ *     reads the WAL into a private index rather than run recovery on
+ *     the shared one, which would fail a sloth starting at that moment
+ *     with SQLITE_BUSY_RECOVERY;
+ *   - every open goes through a VFS that never creates a named file
+ *     (web_slothdb.c), so a sloth closing cleanly between the lstat()s
+ *     and the first read fails that read instead of leaving a -wal;
  *   - a rollback-journal file is read with a shared lock per statement
  *     ("rollback"); a hot journal is not rolled back (read-only cannot)
- *     and the read fails until sloth opens it.
+ *     and the read fails, WEB_SDB_ERROR, until sloth opens it.
+ *     WEB_SDB_REFUSED is kept for a file of the wrong shape.
  *
  * Each connection gets SQLITE_DBCONFIG_DEFENSIVE, query_only, a busy
  * timeout (WEB_SDB_BUSY_MS) and a progress handler that interrupts a
@@ -48,6 +57,16 @@
  * change to a statement says. web/tests/test_slothdb.c holds the list
  * against tests/test_db.c's secret-column guardrail and sloth's live
  * schema.
+ *
+ * One listed column carries a remote string too: alerts.key, which for
+ * a cleartext credential names the username (rule_cleartext_cred's
+ * akey_remote()). It is predicate-only (web_sdb_col_t.pred): the
+ * authorizer denies it, in a result column or a WHERE alike, to every
+ * statement but the two that set pred_ok around their prepare, whose
+ * result columns are constant text (web_query_row_select()'s, and
+ * web_sdb_alerts()'s) and match it against a canonical MAC only. The
+ * suite seeds a key in that format and holds the username out of every
+ * read and every body.
  *
  * Built without SQLite every open fails ("unbuilt"). */
 #ifndef SLOTHWEB_SLOTHDB_H
@@ -81,6 +100,8 @@ typedef struct {
     const char *table, *column;
     int         since;    /* the first sloth schema with it */
     int         optional; /* read as NULL when the file lacks it */
+    int         pred;     /* predicate-only: readable by the statements
+                             that set web_sdb_conn_t.pred_ok alone */
 } web_sdb_col_t;
 
 extern const web_sdb_col_t web_sdb_allow[];
@@ -124,6 +145,7 @@ typedef struct {
     long long       deadline_ms;
     long long       now_s;
     int             timed_out;
+    int             pred_ok;         /* a predicate-only column may be read */
 } web_sdb_conn_t;
 
 enum {
@@ -225,7 +247,8 @@ int  web_sdb_alerts(web_sdb_conn_t *c, const char *mac, const char *ip,
  * in devices, probe_clients, pnl_clients and assocs. 1 (in *fs), 0 none
  * there, -1. */
 int  web_sdb_first_seen(web_sdb_conn_t *c, const char *mac, long long *fs);
-/* MACs whose devices.first_seen is at or after since, newest first. */
+/* Globally administered MACs whose devices.first_seen is at or after
+ * since, newest first (a locally administered one never fills a slot). */
 typedef struct {
     char      mac[WEB_KEY_MAX + 1];
     long long first_seen;
@@ -237,5 +260,7 @@ int  web_sdb_new_macs(web_sdb_conn_t *c, long long since, web_sdb_new_t *out,
  * (web/tests/test_slothdb.c). */
 extern int web_slothdb_test_flags;
 extern int web_slothdb_test_immutable;
+/* Called, when set, between the choice of open and sqlite3_open_v2(). */
+extern void (*web_slothdb_test_before_open)(void);
 
 #endif

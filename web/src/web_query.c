@@ -127,11 +127,11 @@ static int date_value(const char *s, long long *out) {
 
 /* seen: and first: values. */
 static int time_value(const char *v, long long now_s, web_qterm_t *t) {
-    int op = 0;                                     /* 0 none, '<', '>' */
+    int op = 0, eq = 0;                             /* 0 none, '<', '>' */
     if (v[0] == '<' || v[0] == '>') {
         op = v[0];
         v++;
-        if (v[0] == '=') v++;
+        if (v[0] == '=') { eq = 1; v++; }
     }
     size_t n = strlen(v);
     if (n >= 2 && n <= 7 && digits(v, n - 1)) {
@@ -152,8 +152,10 @@ static int time_value(const char *v, long long now_s, web_qterm_t *t) {
     long long day;
     if (date_value(v, &day) != 0) return -1;
     t->num = day;
+    /* A date names a whole UTC day: >DATE and >=DATE are from its start,
+     * <DATE before it, <=DATE to its end (so including it). */
     if (op == '>') t->op = WEB_QOP_GE;
-    else if (op == '<') t->op = WEB_QOP_LT;
+    else if (op == '<') { t->op = WEB_QOP_LT; if (eq) t->num = day + 86400; }
     else { t->op = WEB_QOP_EQ; t->num2 = day + 86400; }
     return 0;
 }
@@ -369,7 +371,10 @@ static void names_exist(sb_t *b, unsigned f, int n) {
         sb_put(b, "))");
     }
     if (f & WEB_QF_NBNS) {
-        sb_put(b, " OR EXISTS (SELECT 1 FROM nbns_names b WHERE b.ip = d.ip AND ");
+        /* The unique names (suffix 0 workstation, 32 server), as the
+         * row shows: a group registration (WORKGROUP<1E>) names no host. */
+        sb_put(b, " OR EXISTS (SELECT 1 FROM nbns_names b WHERE b.ip = d.ip AND"
+               " b.suffix IN (0, 32) AND ");
         like(b, "b.name", n);
         sb_put(b, ")");
     }
@@ -503,7 +508,8 @@ static void term(sb_t *b, const web_qterm_t *t, unsigned f, web_qsql_t *o) {
                 sb_put(b, " OR EXISTS (SELECT 1 FROM mdns_services m WHERE m.ip = d.ip"
                        " AND COALESCE(m.host,'') <> '')");
             if (f & WEB_QF_NBNS)
-                sb_put(b, " OR EXISTS (SELECT 1 FROM nbns_names b WHERE b.ip = d.ip)");
+                sb_put(b, " OR EXISTS (SELECT 1 FROM nbns_names b WHERE b.ip = d.ip"
+                       " AND b.suffix IN (0, 32))");
             sb_put(b, " OR web_ptr(d.ip) IS NOT NULL)");
             break;
         case WEB_HAS_IP:

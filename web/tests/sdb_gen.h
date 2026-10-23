@@ -10,6 +10,10 @@
 
 #include "oui_csv.h"
 
+/* src/db_schema.c's DB_SCHEMA_VERSION (src/db.h), linked into
+ * slothweb_test in every build: the version sloth writes today. */
+int db_schema_version(void);
+
 /* The suite's pinned clock: 2026-10-22 00:00:00 UTC. */
 #define SDB_NOW 1792627200LL
 

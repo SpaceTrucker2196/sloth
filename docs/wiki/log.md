@@ -4786,3 +4786,15 @@ and a passive PTR cache (`slothweb.db` v4; empty until sloth's `dns`
 record carries a PTR target), rule A4 and A2's durable first_seen,
 `/api/devices`, `/api/device/{mac}`, `/api/lookup`, and the Devices
 view, the drawer and the Lookup view.
+
+## 2026-10-22 — slothweb M4 review fixes (#162)
+
+**Updated**: [slothweb.md](slothweb.md) — the WAL reader opens
+`readonly_shm=1` (a crashed sloth's WAL read into a private index, so
+a restarting sloth never meets `SQLITE_BUSY_RECOVERY`) through a VFS
+that never creates a named file; sloth's `db_open()` gets a 1 s busy
+timeout; a hot journal is an error, not "not a sloth.db"; the newest
+readable schema is tied to `DB_SCHEMA_VERSION` by a test; `alerts.key`
+is predicate-only; A2's sloth.db new MACs skip random ones before the
+limit; `seen:<=DATE` includes the day; `name:` and `has:name` skip
+NBNS group names.

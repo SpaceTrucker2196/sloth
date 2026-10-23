@@ -528,17 +528,27 @@ The full account is in
   and closes it after, so no snapshot outlives a request. A WAL file
   with no `-wal`, or a `-wal` and no `-shm`, is opened as an immutable
   URI, since a plain read-only open would make both side files; with
-  sloth running it is an ordinary WAL reader. `query_only`,
-  `DEFENSIVE`, a 100 ms busy timeout and a progress budget (250 ms a
-  request) mean a slow read is slothweb's `503`, never sloth's stall.
-  Schema v1 to v7 is read (older ones by probing columns); a newer one
-  is refused with a message.
+  both present it is a WAL reader with `readonly_shm=1`, which never
+  initialises sloth's `-shm`: a crashed sloth's WAL is read into a
+  private index rather than recovered on the shared one, so a sloth
+  restarting beside slothweb never meets `SQLITE_BUSY_RECOVERY`. A
+  VFS that never creates a named file covers a sloth closing between
+  the choice and the read. `query_only`, `DEFENSIVE`, a 100 ms busy
+  timeout and a progress budget (250 ms a request) mean a slow read is
+  slothweb's `503`, never sloth's stall; sloth's own `db_open()` waits
+  out another reader's lock for 1 s (`DB_BUSY_MS`). A hot rollback
+  journal is an error that sloth clears, not "not a sloth.db". Schema
+  v1 to v7 is read (older ones by probing columns), the bound held to
+  sloth's `DB_SCHEMA_VERSION` by a test; a newer one is refused with a
+  message.
 - **The allow-list.** An authorizer denies any column not on
   `web_sdb_allow[]` (devices' §8.6 columns, PNL SSIDs, associations,
   ARP, DHCP, mDNS and NBNS names, alerts without `detail`), any
   pragma but `table_info`, and anything but a `SELECT`; the test reads
   `tests/test_db.c`'s guardrail words and fails on a listed column
-  named for a secret or a credential.
+  named for a secret or a credential. `alerts.key`, which names a
+  cleartext credential's username, is predicate-only: readable by the
+  device query and the drawer's alerts read alone, never served.
 - **Query language** (§9.1): every prefix of the spec, AND, `-`,
   quotes; bounded (256 bytes, 12 terms, 64 bytes a term) and checked per
   prefix; one statement from constant fragments, values bound, LIKE

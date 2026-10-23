@@ -1048,10 +1048,26 @@ by the next one.
   opened as an immutable URI (`mode=ro&immutable=1`), because an
   ordinary read-only open makes an empty `-wal` and a 32 KB `-shm`
   beside it; such a read sees the file as of sloth's last checkpoint,
-  and `/api/health` says `"db_mode":"immutable"`. With both present
-  (sloth running) it is a WAL reader like any other, on sloth's own
-  `-shm` (`"wal"`). A rollback-journal file is read with a shared lock
-  per statement (`"rollback"`).
+  and `/api/health` says `"db_mode":"immutable"`. With both present it
+  is a WAL reader (`"wal"`) opened `mode=ro&readonly_shm=1`: sloth's
+  `-shm` is opened read-only and never initialised by slothweb. With
+  sloth running that is an ordinary reader on sloth's index; with
+  sloth crashed (both files left, no process holding the `-shm`)
+  SQLite reads the WAL into a private index instead of running WAL
+  recovery on the shared one, which would make a sloth starting at
+  that moment fail its first statement with `SQLITE_BUSY_RECOVERY`.
+  Every open goes through a VFS that never creates a named file, so a
+  sloth closing cleanly between the choice of open and the first read
+  (its `-wal` and `-shm` gone) fails that read (`"db":"error"`) rather
+  than leaving an empty `-wal` beside sloth.db; the next request reads
+  it immutable. A rollback-journal file is read with a shared lock per
+  statement (`"rollback"`); one with a hot journal (sloth crashed
+  mid-write) cannot be read until sloth rolls it back, and is
+  `"db":"error"` ("needs recovery by sloth"), never "not a sloth.db",
+  which is kept for a file whose shape is wrong.
+- **sloth's side.** `db_open()` sets a 1 s busy timeout
+  (`DB_BUSY_MS`), so a lock another reader holds at sloth's start is
+  waited out rather than failing the open, which stops sloth.
 - **Each connection** gets `SQLITE_DBCONFIG_DEFENSIVE`,
   `PRAGMA query_only`, a 100 ms busy timeout and a progress handler that
   interrupts any statement past the caller's budget (250 ms for a
@@ -1059,7 +1075,9 @@ by the next one.
   `503` `sloth_db_timeout`, never sloth a stall
   (`db_timeouts` on `/api/health`).
 - **Identify.** sloth's `meta` is `(key, value)`; a `schema_version`
-  of 1 to 7 is read (`"db_supported":[1,7]`). A newer one is refused
+  of 1 to 7 is read (`"db_supported":[1,7]`). The upper bound is held
+  to sloth's `DB_SCHEMA_VERSION` by a test, so a schema bump cannot
+  ship with slothweb still refusing the new files. A newer one is refused
   with "written by a newer sloth (schema v8; this slothweb reads
   v1..v7)": this build does not know its columns. An older one is read
   by probing its columns with `PRAGMA table_info`: a column the version
@@ -1082,7 +1100,14 @@ by the next one.
   name) and `meta`. So no credential-bearing column
   (`cleartext_creds.username`, `rogue_radius.last_identity`,
   `mqtt_flows.last_username`, anything in `eapol_events`) can be served
-  whatever a later statement says. `test_slothdb.c` reads the guardrail
+  whatever a later statement says. `alerts.key` carries a remote
+  string too (a cleartext credential's key names its username), so it
+  is predicate-only: denied in a result column and a `WHERE` alike to
+  every statement but the device query and the drawer's alerts read,
+  whose result columns are constant and which match it against a
+  canonical MAC. The test seed keys an alert as sloth keys a
+  credential and holds its username out of every result column and
+  every body. `test_slothdb.c` reads the guardrail
   word list out of `tests/test_db.c` itself, plus credential words
   (`user`, `identity`, `pass`, `token`, `key_material`, ...), and fails
   if a listed column matches one or is not a column of sloth's live
@@ -1098,7 +1123,7 @@ as `:`), `ip:` (prefix, the device's or an ARP binding's), `ssid:`
 or instance, NBNS, a PTR answer seen), `random:yes|no` (the locally
 administered bit), `seen:` and `first:` (`<24h` less than 24 h ago,
 `>7d` more than, `>2026-09-29` at or after that day UTC, `<...` before
-it, a bare date that day; units `s m h d w`), `risk:` (0..3 with
+it, `<=...` on or before it, a bare date that day; units `s m h d w`), `risk:` (0..3 with
 `= < > <= >=`), `z:` (`|z|` now, below), `src:` (`arp dhcp mdns beacon
 probe sta camera`, sloth's `DEV_SRC_*` bits), `has:` (`pnl alert
 anomaly name ip ssid`) and `anomaly:` (a kind, keyed by the MAC). A

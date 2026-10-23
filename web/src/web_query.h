@@ -15,8 +15,9 @@
  *   name:TEXT     hostname, DHCP, mDNS, NBNS or passive PTR  substring
  *   random:yes|no the locally administered bit
  *   seen:<24h     last seen less than 24 h ago; seen:>7d more than 7 d
- *                 ago; seen:>2026-09-29 at or after that day (UTC),
- *                 seen:<2026-09-29 before it, seen:2026-09-29 on it.
+ *                 ago; seen:>2026-09-29 (or >=) at or after that day
+ *                 (UTC), seen:<2026-09-29 before it, seen:<=2026-09-29
+ *                 on or before it, seen:2026-09-29 on it.
  *                 Units s m h d w; no operator means '<'.
  *   first:...     first seen, the same forms
  *   risk:N        risk level 0..3, with = < > <= >= (default =)
