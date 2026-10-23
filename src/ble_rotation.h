@@ -24,10 +24,15 @@
  *
  * ── Who reads it ──
  *
- * Internal consumers only: the [*] view's de-duplicated advertiser
- * estimate (payload and timing chains), and BLE_HID_UNEXPECTED's
- * rotation form (PAYLOAD chains only: see ble_rot_distinct()). No row
- * shows a link, no JSONL field names a link or a token, nothing goes to
+ * One internal consumer: the [*] view's de-duplicated advertiser
+ * estimate over the recent window (payload and timing chains, see
+ * ble_rot_distinct()). No detector reads a hint, and none may: a token
+ * is whatever the advertiser chooses to send, so a link an attacker
+ * can manufacture must never suppress a security finding.
+ * BLE_HID_UNEXPECTED counts addresses with the flag on exactly as with
+ * it off. ble_identity_hint_t.root_first is a documented hook for the
+ * deferred "non-resident" definition (src/ble_detect.h) and has no
+ * consumer. No row shows a link, no JSONL field names a link or a token, nothing goes to
  * the database. What leaves the process is three banded aggregates in
  * sensor_health (ble_rot_hints, ble_rot_poisoned,
  * ble_rot_seam_evictions: "0", "1-9", "10-99", "100-999", "1000+"),
@@ -126,6 +131,12 @@
  * address's first report with the old one silent, then COMMITTED and
  * counted. Only committed links reach the rows.
  *
+ * Links are WINDOW-SCOPED: one exists only while both its entries are
+ * in the seam table. Freeing an entry (evicted, or past retention)
+ * revokes both its links, and a row whose address has no entry carries
+ * no hint at the next snapshot. So no link outlives what could revoke
+ * it, and the estimate covers the recent window only.
+ *
  * ── Bounded state ──
  *
  * BLE_ROT_SENSORS seam tables of BLE_ROT_SEAM entries, allocated on the
@@ -141,15 +152,17 @@
  * runs.
  *
  * Expiry runs on the frame clock carried forward by monotonic time
- * since the sensor's last report, so a quiet radio or an ended capture
- * file still expires. An entry silent BLE_ROT_FORGET_S loses its
- * digests and shape (the research's freshness rule: d_swap after the
- * last report, plus the d_swap a pending link waits); its address and
- * chain fields stay to BLE_ROT_RETAIN_S, because the interleave guard
- * needs to recognise the older address if it speaks again. Expired
- * poison slots are wiped. A committed chain id outlives its entries on
- * the advertiser row it was copied to (ble_rot_update_row()), for the
- * row's life and no longer; turning the feature on or off clears it.
+ * since the sensor's last report (sensor_now()), so a quiet radio or an
+ * ended capture file still expires. An entry no link rests on, silent
+ * BLE_ROT_FORGET_S, loses its digests and shape (the research's
+ * freshness rule: d_swap after the last report, plus the d_swap a
+ * pending link waits). An entry a pending or committed link rests on,
+ * either side, keeps them until the link is revoked or the entry is
+ * freed: the older address heard again must still poison the token the
+ * link rests on. Address and chain fields stay to BLE_ROT_RETAIN_S,
+ * because the interleave guard needs to recognise the older address if
+ * it speaks again. Expired poison slots are wiped. Turning the feature
+ * on or off clears every row's hint.
  *
  * Thread model: every function but the pure ones is called from
  * src/ble_hci.c with its module mutex held. */
@@ -233,18 +246,9 @@ void ble_rot_observe(const ble_adv_report_t *r, uint8_t sensor_kind,
 void ble_rot_tick_all(void);
 
 /* Copy the committed hint onto one live advertiser row (ble_hci.c's
- * table, before its snapshot). A row whose address has no entry keeps
- * the hint it has. No-op with the feature off. */
+ * table, before its snapshot). A random-address row with no entry gets
+ * a zero hint. No-op with the feature off. */
 void ble_rot_update_row(ble_device_t *d);
-
-/* Where an entry's committed hint goes when the entry is freed (evicted
- * or expired), so the row keeps it whether or not a snapshot ran since
- * the commit: ble_hci.c's row table. Called with ble_hci.c's mutex
- * held. `addr` display order; the row is (addr, random, kind, iface). */
-typedef void (*ble_rot_row_sink_t)(uint8_t sensor_kind, const char *iface,
-                                   const uint8_t addr[6],
-                                   const ble_identity_hint_t *h);
-void ble_rot_set_row_sink(ble_rot_row_sink_t fn);
 
 /* The counters into `s->ble_rot`; with the feature off it only zeroes
  * them. */
@@ -259,16 +263,11 @@ void ble_rot_drop_tables(void);
  * flag from another. */
 void ble_rot_reset(void);
 
-/* De-duplicated count over the rows `keep` accepts (all rows when NULL):
- * rows sharing a committed chain count once. With `payload_only`, only
- * payload links join rows: timing-only chains are a corroborator, never
- * a finding, so they may shrink an estimate but must not decide an
- * alert (a lone fast rotator is never ambiguous, and timing alone would
- * suppress the very rotation BLE_HID_UNEXPECTED's form (b) is for).
- * With no hints on the rows this is the plain row count. */
-int ble_rot_distinct(const sloth_state_t *s,
-                     int (*keep)(const ble_device_t *d, void *ctx),
-                     void *ctx, int payload_only);
+/* The [*] view's estimate: rows, with rows sharing a committed chain
+ * (payload or timing) counted once. An estimate over the recent window,
+ * never an input to a detector. With no hints on the rows this is the
+ * plain row count. */
+int ble_rot_distinct(const sloth_state_t *s);
 
 /* Test seams. allocated: 1 once any seam table exists. held: entries,
  * digests, shapes, keys and poison slots still held. digests: digests

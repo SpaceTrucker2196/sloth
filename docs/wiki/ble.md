@@ -28,7 +28,7 @@ Bluetooth Core Specification v5.4 Vol 4 Part E §5.2 (arrayed parameters), §5.4
 §7.7.65.2, §7.7.65.13, §7.8; Vol 6 Part B §2.3.1 (legacy PDU payload); Linux `include/net/bluetooth/hci_mon.h` and
 `net/bluetooth/hci_sock.c`; libpcap `pcap-bt-monitor-linux.c`; #144.
 
-**Last updated**: 2026-10-23 (#156 item 2 review round: sequential-spray poisoning and the flood gate judged at commit; no link under controller duplicate filtering; `BLE_HID_UNEXPECTED` de-duplicates on payload chains only; banded `sensor_health` fields; expiry without frames; 3600 s poison window, full list fails closed; Fast Pair token from a 5-octet filter), 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
+**Last updated**: 2026-10-23 (#156 item 2 integration: hints feed only the `[*]` estimate, `BLE_HID_UNEXPECTED` unchanged by the flag; links window-scoped; a linked entry keeps its digests until the link goes), 2026-10-23 (#156 item 2 review round: sequential-spray poisoning and the flood gate judged at commit; no link under controller duplicate filtering; banded `sensor_health` fields; expiry without frames; 3600 s poison window, full list fails closed; Fast Pair token from a 5-octet filter), 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
 
 ---
 
@@ -317,6 +317,12 @@ from seconds to more than four days. Sources and grades:
   same seam. Used only to de-duplicate, never as a link.
 - A link is pending for 10 s, then committed. An older address heard
   again afterwards revokes it.
+- **Window-scoped.** A link exists only while both its addresses are
+  in the seam table (64 recently heard private addresses per sensor and
+  adapter, each for at most 2 h). When either leaves — evicted, or past
+  retention — the link goes with it, as a revocation would, and both
+  rows carry no hint from the next snapshot. A link therefore never
+  outlives what could revoke it.
 
 **Guards.** Static random, public and resolved-identity addresses
 (Address_Type 2/3) are never candidates. A token heard on two
@@ -348,20 +354,17 @@ The passive-scan procedure below already asks for that:
 same field. Otherwise the feature is silent on that adapter. The
 Ubertooth stream (`--bt-capture`) is raw air and is not filtered.
 
-**Who reads it.** Internal consumers only: the `[*]` view's estimate
-line ("est. N advertisers for M addresses", stated as an estimate,
-with the timing-only caveat whenever a timing hint was committed) and
-`BLE_HID_UNEXPECTED`'s rotation form. **That form counts payload
-chains only**: rows a committed *payload* hint joins count once, so an
-advertiser carrying a documented token across its rotations is one, but
-a timing-only chain never reduces the count. The research grades
-timing a corroborator, never a finding, and a lone fast-rotating HID
-advertiser — the case form (b) exists for — is never ambiguous on
-timing, so letting timing de-duplicate would suppress exactly it. The
-trade: a keyboard rotating its RPA with no token (most of them) is
-still counted per address, as without the flag. The deferred
-stalk-grade CRIT's "non-resident" definition is not built; its hook is
-the hint's chain start (`src/ble_detect.h`).
+**Who reads it.** One internal consumer: the `[*]` view's estimate
+line ("est. N advertisers for M addresses", stated as an estimate over
+the **recent window only**, with the timing-only caveat whenever a
+timing hint was committed). **Hints never weaken a detector.** A token
+is whatever the advertiser chooses to send, so an attacker can carry
+one across its own addresses on purpose; a link it can manufacture must
+not suppress a security finding. `BLE_HID_UNEXPECTED`'s rotation form
+counts addresses with the flag on exactly as with it off. The deferred
+stalk-grade CRIT's "non-resident" definition is not built; the hint's
+chain start is a documented hook for it with no consumer
+(`src/ble_detect.h`).
 
 **Privacy statement.** The feature is itself a tracking capability, so:
 
@@ -390,13 +393,16 @@ the hint's chain start (`src/ble_detect.h`).
   on the frame clock carried forward by monotonic time, so a quiet
   radio or an ended `--bt-capture` file still expires. 20 s of silence
   (d_swap after the last report plus the d_swap a pending link waits)
-  wipes an address's digests and shape; 2 h wipes the address and its
-  chain fields, which the interleave guard needs until then — a
-  deviation from the research's freshness rule, flagged there. Expired
-  poison slots are wiped. A committed chain id stays on the advertiser
-  row it joined for that row's life (internal, never exported), so a
-  link survives the seam table's eviction; turning the flag on or off
-  clears it.
+  wipes the digests and shape of an address **no link rests on**; an
+  address on either side of a pending or committed link keeps them until
+  the link is revoked or the address leaves the table, because the
+  older address speaking again must still poison the token the link
+  rests on. 2 h wipes the address and its chain fields, which the
+  interleave guard needs until then — a deviation from the research's
+  freshness rule, flagged there. Expired poison slots are wiped. A
+  row's hint is refreshed at every snapshot and is zero once its
+  address has left the table; turning the flag on or off clears every
+  row's hint.
 
 Receive-only throughout (MISSION §2): no scan request, no connection,
 no GATT read. The advertising interval, which the research grades as a

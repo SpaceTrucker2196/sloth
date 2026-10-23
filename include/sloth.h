@@ -2655,7 +2655,9 @@ typedef struct {
  * never exported: no view row, JSONL field or database column reads
  * it. A hypothesis that the row may be the same advertiser as another
  * row on the same sensor; it corroborates, does not confirm, and
- * identifies no device or person. */
+ * identifies no device or person. Window-scoped: refreshed at every
+ * snapshot, and zero once either address leaves the seam table. Its
+ * one consumer is the [*] view's estimate; no detector reads it. */
 typedef enum {
     BLE_HINT_NONE = 0,
     BLE_HINT_PAYLOAD,      /* grade A + B: a documented token carried across the seam */
@@ -2666,10 +2668,9 @@ typedef struct {
     uint8_t  confidence;   /* 0..100, under BLE_ROT_CONF_*_MAX */
     uint8_t  hops;         /* links from the chain's first address */
     uint32_t chain;        /* per-run chain id, 0 = in no chain; rows sharing one count once */
-    uint32_t pchain;       /* the same over payload links only (BLE_HID_UNEXPECTED reads it) */
-    /* First report of the chain's first address (frame clock): the
-     * hook the deferred "non-resident" definition (src/ble_detect.h)
-     * reads instead of first_seen when hints are on. 0 = none. */
+    /* First report of the chain's first address (frame clock): a hook
+     * for the deferred "non-resident" definition (src/ble_detect.h),
+     * read by nothing yet. 0 = none. */
     time_t   root_first;
 } ble_identity_hint_t;
 

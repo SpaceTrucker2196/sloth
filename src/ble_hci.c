@@ -397,22 +397,8 @@ static void observe_locked(const ble_obs_t *o) {
     }
 }
 
-/* ble_rotation.c's row sink: a freed entry's hint onto its row. */
-static void rot_row_sink(uint8_t kind, const char *iface,
-                         const uint8_t addr[6], const ble_identity_hint_t *h) {
-    ble_key_t key;
-    memset(&key, 0, sizeof(key));
-    memcpy(key.addr, addr, 6);
-    key.type = 1;
-    key.kind = kind;
-    snprintf(key.iface, sizeof(key.iface), "%s", iface ? iface : "");
-    ble_device_t *d = stab_find(&g_devs, &key);
-    if (d) d->hint = *h;
-}
-
 int ble_hci_rotation_enable(int on) {
     pthread_mutex_lock(&g_mu);
-    ble_rot_set_row_sink(rot_row_sink);
     int rc = ble_rot_set_enabled(on);
     /* Chain ids belong to the run that drew them: none survives a
      * turn on or off on the rows they were copied to. */

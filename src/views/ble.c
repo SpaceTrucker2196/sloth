@@ -35,7 +35,7 @@ static int page_rows(const sloth_state_t *s) {
     int p = 30;
 #endif
     if (s->ble_rot.enabled)           /* the rotation-hints estimate */
-        p -= s->ble_rot.hints_timing ? 4 : 3;
+        p -= s->ble_rot.hints_timing ? 5 : 4;
     return p < 3 ? 3 : p;
 }
 
@@ -228,9 +228,11 @@ void view_ble_draw(const sloth_state_t *s) {
     }
 
     /* #156, --ble-rotation-hints only: the de-duplicated total, stated
-     * as an estimate. No row says which addresses it joined. */
+     * as an estimate over the recent window (a link lasts only while
+     * both its addresses are in the seam table). No row says which
+     * addresses it joined. */
     if (s->ble_rot.enabled) {
-        int est = ble_rot_distinct(s, NULL, NULL, 0);
+        int est = ble_rot_distinct(s);
         tui_dim();
         TPRINT(" rotation hints (internal): est. %d advertiser%s for %d "
                "address%s - possible address rotation;\n",
@@ -239,7 +241,9 @@ void view_ble_draw(const sloth_state_t *s) {
         TPRINT("   corroborates, does not confirm, and identifies no device "
                "or person.\n"
                "   These records alone are not grounds for personnel action "
-               "or physical identification.\n");
+               "or physical identification.\n"
+               "   Links cover the recent window only: an address out of it "
+               "counts on its own.\n");
         /* The research's timing-only wording, whenever the estimate may
          * rest on one. */
         if (s->ble_rot.hints_timing)

@@ -175,6 +175,10 @@ decides.
   and its chain fields for 2 h: **a deviation**, because the
   exclusivity guard has to recognise the older address if it speaks
   again after its successor, and the chain caps read the chain's start.
+  An entry either side of a pending or committed link keeps its digests
+  too, until the link is revoked or the entry leaves the table: the
+  older address speaking again must still poison the token the link
+  rests on. A link lasts only while both entries are held.
 - **Privacy.** The capability is itself longitudinal device correlation.
   Default off, keyed per run, never exported, bounded.
 
@@ -185,8 +189,11 @@ decides.
   person."
 - Timing only: "possible address rotation (timing only) ... Weak: another
   advertiser leaving and arriving reads the same." Timing-only links
-  reach the `[*]` estimate (with this caveat) and never an alert: they
-  do not reduce `BLE_HID_UNEXPECTED`'s count.
+  reach the `[*]` estimate with this caveat.
+- No hint, payload or timing, reaches an alert. A token is whatever the
+  advertiser sends, so an attacker can carry one across its own
+  addresses; a link it can manufacture must not suppress a finding.
+  `BLE_HID_UNEXPECTED` counts addresses with the flag on as with it off.
 - Every surface: "These records alone are not grounds for personnel
   action or physical identification."
 - Never "same device", "tracked", "identified" or "linked to" a person.

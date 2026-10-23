@@ -77,11 +77,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         if (h->basis && !h->chain) abort();
         if (h->hops > BLE_ROT_MAX_HOPS) abort();
         if (g_s.ble_devices[i].addr_type != 1 && h->chain) abort();
-        if (h->pchain && !h->chain) abort();
     }
-    int d = ble_rot_distinct(&g_s, NULL, NULL, 0);
+    int d = ble_rot_distinct(&g_s);
     if (d > rows || (rows > 0 && d < 1)) abort();
-    int p = ble_rot_distinct(&g_s, NULL, NULL, 1);
-    if (p < d || p > rows) abort();
     return 0;
 }

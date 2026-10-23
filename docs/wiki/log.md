@@ -4928,3 +4928,14 @@ report events.
   [[jsonl-schema]]: three decade-banded fields, no signature edge, the
   residual inference stated; the payload-versus-timing reading
   corrected. The `[*]` estimate carries the timing-only caveat.
+- 2026-10-23 — [[ble]]: address-rotation hints, integration (#156).
+  Hints never weaken a detector: tokens are attacker-supplied, so
+  [[alerts]]' `BLE_HID_UNEXPECTED` form (b) counts addresses with the
+  flag on exactly as with it off, and the `[*]` estimate is the one
+  consumer. Links are window-scoped: one lasts only while both its
+  addresses are in the seam table, and neither row keeps a hint once
+  either leaves, so no link outlives what could revoke it (the
+  row-persistence of the review round is gone). An address either side
+  of a link keeps its digests until the link goes, so an older address
+  speaking again after 20 s of silence still poisons the token.
+  [[cli-reference]] and the view say "recent window only".

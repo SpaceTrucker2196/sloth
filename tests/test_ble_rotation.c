@@ -345,7 +345,7 @@ static void test_cdp_carried_across_the_seam_is_a_payload_hint(void) {
     ASSERT_EQ(g_s.ble_rot.enabled, 1);
     ASSERT_EQ(g_s.ble_rot.hints_payload, 1);
     ASSERT_EQ(g_s.ble_rot.hints_timing, 0);
-    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 1);
+    ASSERT_EQ(ble_rot_distinct(&g_s), 1);
     teardown();
 }
 
@@ -779,21 +779,20 @@ static void test_no_link_while_the_controller_may_filter_duplicates(void) {
     teardown();
 }
 
-/* A committed link outlives the seam table: 63 more private addresses
- * evict the departed one (the least recently heard), and the two rows
- * still count once. Both ways the row keeps it: the freed entry's hint
- * pushed to its row when no snapshot ran since the commit, and a row
- * whose entry is gone left as it was when one did. Seen to fail, one
- * mutation at a time: with ent_free()'s row-sink call removed (first
- * half), and with ble_rot_update_row() zeroing the hint before its
- * `e < 0` return (second half). */
+/* Links are window-scoped: 63 more private addresses evict the departed
+ * one (the least recently heard), and the link goes with it, on both
+ * rows, whether or not a snapshot ran since the commit. No link is left
+ * that a later poison could not reach. Seen to fail, one mutation at a
+ * time: with ent_free()'s two rot_revoke() calls removed (B keeps its
+ * chain), and with ble_rot_update_row() returning on `e < 0` instead of
+ * zeroing the hint (A's row keeps the chain its last snapshot copied). */
 static void evict_after(int snap_between) {
     setup(1);
     uint8_t A[6], B[6];
     cdp_rotation(g_wall - 300, A, B);
     if (snap_between) {
         snap();
-        ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 1);
+        ASSERT_EQ(ble_rot_distinct(&g_s), 1);
     }
     for (unsigned i = 0; i < BLE_ROT_SEAM - 1; i++) {
         uint8_t a[6];
@@ -802,23 +801,31 @@ static void evict_after(int snap_between) {
     }
     snap();
     ASSERT_EQ(g_s.ble_rot.seam_evictions, 1);
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 1);            /* lifetime: it did commit */
     ASSERT_EQ(g_s.ble_device_count, BLE_ROT_SEAM + 1);
-    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), BLE_ROT_SEAM);
+    ASSERT_EQ(ble_rot_distinct(&g_s), BLE_ROT_SEAM + 1);
     const ble_device_t *a = row(A), *b = row(B);
-    ASSERT(a && b && a->hint.chain && a->hint.chain == b->hint.chain);
+    ASSERT(a && b);
+    if (a && b) {
+        ASSERT_EQ(a->hint.chain, 0u);
+        ASSERT_EQ(b->hint.chain, 0u);
+        ASSERT_EQ(b->hint.basis, BLE_HINT_NONE);
+    }
     teardown();
 }
 
-static void test_committed_link_outlives_eviction(void) {
+static void test_eviction_ends_the_link_on_both_rows(void) {
     evict_after(0);
     evict_after(1);
 }
 
 /* Expiry without frames: a quiet radio, or a --bt-capture file that
  * ended, still lets go. Twenty seconds of silence wipe the digests and
- * shapes; two hours wipe the entries and poison slots; the rows keep
- * their chain. Seen to fail: with sensor_now() returning S->now (the
- * frame clock alone: nothing is ever freed). */
+ * shapes of unlinked entries; two hours wipe the entries and the
+ * expired poison slots, and the rows lose their chain with them. Seen
+ * to fail, one mutation at a time: with sensor_now() returning S->now
+ * (the frame clock alone: nothing is ever freed), and with tick()'s
+ * expired-poison wipe made a no-op (the slot is still held). */
 static void test_expiry_runs_without_frames(void) {
     setup(1);
     uint8_t A[6], B[6], C[6];
@@ -837,6 +844,9 @@ static void test_expiry_runs_without_frames(void) {
     snap();
     ASSERT_EQ(ble_rot_test_digests(), 0);
     ASSERT(ble_rot_test_held() > 0);
+    g_mono += (uint64_t)(BLE_ROT_RETAIN_S + 1) * 1000u;
+    snap();
+    ASSERT_EQ(ble_rot_test_held(), 0);
     teardown();
 
     setup(1);
@@ -844,13 +854,13 @@ static void test_expiry_runs_without_frames(void) {
     run_addr(B, AD_KBD, sizeof(AD_KBD), t0 + 22, t0 + 40, 2);
     run_addr(C, AD_KBD, sizeof(AD_KBD), t0 + 42, t0 + 60, 2);
     snap();
-    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 1);
+    ASSERT_EQ(ble_rot_distinct(&g_s), 1);
     g_mono += 100000u * 1000u;
     g_wall += 100000;
     snap();
     ASSERT_EQ(ble_rot_test_held(), 0);
     ASSERT_EQ(g_s.ble_device_count, 3);
-    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 1);
+    ASSERT_EQ(ble_rot_distinct(&g_s), 3);
     teardown();
 }
 
@@ -922,16 +932,171 @@ static void test_revoking_a_link_keeps_the_older_half_chained(void) {
     run_addr(B, AD_KBD, sizeof(AD_KBD), t0 + 52, t0 + 80, 2);
     snap();
     ASSERT_EQ(g_s.ble_rot.hints_timing, 2);
-    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 1);
+    ASSERT_EQ(ble_rot_distinct(&g_s), 1);
     obs(A, AD_KBD, sizeof(AD_KBD), t0 + 81);
     snap();
-    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 2);
+    ASSERT_EQ(ble_rot_distinct(&g_s), 2);
     const ble_device_t *x = row(X), *a = row(A), *b = row(B);
     ASSERT(x && a && b);
     if (x && a && b) {
         ASSERT(x->hint.chain && x->hint.chain == a->hint.chain);
         ASSERT_EQ(b->hint.chain, 0u);
     }
+    teardown();
+}
+
+/* ── Integration round: revocation, window, coverage ────────────── */
+
+static void  jsonl_fresh(void);
+static char *jsonl_slurp(void);
+
+/* The older address back after its digests would have gone. A(T) for
+ * 0-20 s, B(T) for 22-40 s (committed), the clock carried to 65 s with
+ * nothing heard, then A(T) at 70 s: the link is revoked AND T poisoned,
+ * so a later clean seam on T gets no payload link. Then a three-address
+ * chain A -> B -> C on T with B silent past BLE_ROT_FORGET_S, poisoned
+ * by C and X interleaving: every link resting on T goes, both hops.
+ * Seen to fail: with ent_forget()'s early return for a linked entry
+ * removed (the 20 s wipe takes the link's digest: no poison, P -> Q
+ * commits, and A -> B survives the second poison). */
+static void test_linked_entries_keep_the_digest_their_link_rests_on(void) {
+    setup(1);
+    uint8_t ad[CDP_LEN], A[6], B[6], C[6], X[6], P[6], Q[6];
+    ad_cdp(ad, 0);
+    rpa(A, 1); rpa(B, 2); rpa(C, 3); rpa(X, 4); rpa(P, 5); rpa(Q, 6);
+    time_t t0 = g_wall - 200;
+    run_addr(A, ad, sizeof(ad), t0, t0 + 20, 2);
+    run_addr(B, ad, sizeof(ad), t0 + 22, t0 + 40, 2);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 1);
+    g_mono += 25 * 1000u;                    /* carried to t0 + 65 */
+    snap();
+    obs(A, ad, sizeof(ad), t0 + 70);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.poisoned, 1);
+    ASSERT_EQ(row(A) ? row(A)->hint.chain : 1u, 0u);
+    ASSERT_EQ(row(B) ? row(B)->hint.chain : 1u, 0u);
+    run_addr(P, ad, sizeof(ad), t0 + 100, t0 + 110, 2);
+    run_addr(Q, ad, sizeof(ad), t0 + 112, t0 + 140, 2);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 1);
+    teardown();
+
+    setup(1);
+    run_addr(A, ad, sizeof(ad), t0, t0 + 20, 2);
+    run_addr(B, ad, sizeof(ad), t0 + 22, t0 + 40, 2);
+    run_addr(C, ad, sizeof(ad), t0 + 42, t0 + 80, 2);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 2);
+    ASSERT_EQ(ble_rot_distinct(&g_s), 1);
+    obs(X, ad, sizeof(ad), t0 + 81);
+    obs(C, ad, sizeof(ad), t0 + 82);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.poisoned, 1);
+    ASSERT_EQ(ble_rot_distinct(&g_s), 4);
+    for (int i = 0; i < g_s.ble_device_count; i++)
+        ASSERT_EQ(g_s.ble_devices[i].hint.chain, 0u);
+    teardown();
+}
+
+/* A commit moves no change-only signature: on a quiet sensor, the line
+ * written before B's link committed is the only one until the heartbeat,
+ * though the band in it went from "0" to "1-9". Seen to fail: with
+ * jsonl.c's `sig.ble_rot_on` taking `+ s->ble_rot.hints_payload` (a
+ * second line, at the commit). */
+static void test_a_commit_writes_no_sensor_health_line(void) {
+    setup(1);
+    uint8_t ad[CDP_LEN], A[6], B[6];
+    ad_cdp(ad, 0);
+    rpa(A, 1); rpa(B, 2);
+    time_t t0 = g_wall - 100;
+    jsonl_fresh();
+    run_addr(A, ad, sizeof(ad), t0, t0 + 20, 2);
+    obs(B, ad, sizeof(ad), t0 + 22);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 0);
+    jsonl_emit_sensor_health(&g_s);
+    run_addr(B, ad, sizeof(ad), t0 + 24, t0 + 40, 2);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 1);
+    g_wall += 1;
+    jsonl_emit_sensor_health(&g_s);
+    char *j = jsonl_slurp();
+    int lines = 0;
+    for (const char *q = j; (q = strstr(q, "\"type\":\"sensor_health\"")); q++) lines++;
+    ASSERT_EQ(lines, 1);
+    ASSERT(strstr(j, "\"ble_rot_hints\":\"0\"") != NULL);
+    free(j);
+    teardown();
+}
+
+/* Two pending links due in one tick, the newer one first: C sits in a
+ * lower slot than B (the slot an expired entry left), so B -> C commits
+ * before A -> B, and the commit of A -> B must carry its chain on to C.
+ * Seen to fail: with commit()'s chain_relabel() call removed (C keeps
+ * the id B had: three advertisers, C at one hop). */
+static void test_an_out_of_order_commit_relabels_the_tail(void) {
+    setup(1);
+    uint8_t A[6], B[6], C[6], F[6];
+    rpa(A, 1); rpa(B, 2); rpa(C, 3); rpa(F, 9);
+    time_t t0 = g_wall - 200;
+    obs(F, AD_KBD, sizeof(AD_KBD), t0 + 22 - BLE_ROT_RETAIN_S - 1);  /* slot 0, expires at B's first report */
+    run_addr(A, AD_KBD, sizeof(AD_KBD), t0, t0 + 20, 2);              /* slot 1 */
+    run_addr(B, AD_KBD, sizeof(AD_KBD), t0 + 22, t0 + 29, 1);         /* slot 2 */
+    obs(C, AD_KBD, sizeof(AD_KBD), t0 + 31);                          /* slot 0 */
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_timing, 0);
+    g_mono += 20 * 1000u;
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_timing, 2);
+    ASSERT_EQ(ble_rot_distinct(&g_s), 2);       /* F, and A -> B -> C */
+    const ble_device_t *a = row(A), *c = row(C);
+    ASSERT(a && c);
+    if (a && c) {
+        ASSERT(a->hint.chain && c->hint.chain == a->hint.chain);
+        ASSERT_EQ(c->hint.hops, 2);
+    }
+    teardown();
+}
+
+/* Proposed nothing while blind: a rotation heard under a filtering scan,
+ * then the filter turned off before the link would fall due, still
+ * commits nothing - the newer address was never proposed. Seen to
+ * fail: with ble_rot_observe()'s `!S->blind &&` removed (B is proposed
+ * under the filter, and the tick after the filter-off enable, no longer
+ * blind, commits it). */
+static void test_no_proposal_under_the_filter_survives_it_going_off(void) {
+    setup_scan(1, 0);
+    scan_on(0, 0x01);
+    uint8_t ad[CDP_LEN], A[6], B[6];
+    ad_cdp(ad, 0);
+    rpa(A, 1); rpa(B, 2);
+    time_t t0 = g_wall - 100;
+    run_addr(A, ad, sizeof(ad), t0, t0 + 20, 2);
+    obs(B, ad, sizeof(ad), t0 + 22);
+    scan_on(0, 0x00);
+    obs_on(PUB, 0, 0x03, AD_KBD, sizeof(AD_KBD), t0 + 40, MON, 0);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 0);
+    ASSERT_EQ(row(B) ? row(B)->hint.chain : 1u, 0u);
+    teardown();
+}
+
+/* Turning the flag off clears every row's hint by itself, with no
+ * ble_clear() to mask it. Seen to fail: with ble_hci_rotation_enable()'s
+ * row-hint memset removed (the rows keep a chain the off run never
+ * refreshes). */
+static void test_turning_the_flag_off_clears_the_rows(void) {
+    setup(1);
+    uint8_t A[6], B[6];
+    cdp_rotation(g_wall - 100, A, B);
+    snap();
+    ASSERT(row(B) && row(B)->hint.chain != 0);
+    ASSERT_EQ(ble_hci_rotation_enable(0), 0);
+    snap();
+    ASSERT_EQ(g_s.ble_device_count, 2);
+    for (int i = 0; i < g_s.ble_device_count; i++)
+        ASSERT_EQ(g_s.ble_devices[i].hint.chain, 0u);
     teardown();
 }
 
@@ -959,7 +1124,8 @@ static int count_type(alert_type_t t) {
 }
 
 /* A HID appearance and Fast Pair account data with an unchanged salt:
- * a HID advertiser carrying a documented token across its rotations. */
+ * a HID advertiser carrying a token across its rotations - which an
+ * attacker cycling HID addresses can do on purpose. */
 #define HID_FP_LEN (sizeof(AD_KBD) + FP_ACCT_LEN)
 static void ad_hid_fp(uint8_t b[HID_FP_LEN]) {
     memcpy(b, AD_KBD, sizeof(AD_KBD));
@@ -981,76 +1147,51 @@ static void hid_fp_rotating_four_times(void) {
     }
 }
 
-/* A lone fast rotator on timing alone still fires with the hints on:
- * timing is a corroborator, never a finding, and must not decide the
- * very rotation form (b) is for. A HID advertiser whose rotations carry
- * a token counts once. Seen to fail, one mutation at a time: with
- * hid_rotate_findings() passing payload_only 0 (the timing keyboard is
- * suppressed), and with it gating on `count` instead of `advertisers`
- * (the payload advertiser fires). */
-static void test_hid_rotation_counts_advertisers_with_hints(void) {
-    setup(0);
-    keyboard_rotating_four_times();
-    snap();
-    alerts_update(&g_s);
-    ASSERT_EQ(count_type(ALERT_TYPE_BLE_HID_UNEXPECTED), 1);
-    teardown();
-    alerts_clear();
-
-    setup(1);
-    keyboard_rotating_four_times();
-    snap();
-    ASSERT_EQ(g_s.ble_rot.hints_timing, 3);
-    ASSERT_EQ(ble_rot_distinct(&g_s, NULL, NULL, 0), 2);   /* the estimate still joins them */
-    alerts_update(&g_s);
-    ASSERT_EQ(count_type(ALERT_TYPE_BLE_HID_UNEXPECTED), 1);
-    teardown();
-    alerts_clear();
-
-    setup(0);
-    hid_fp_rotating_four_times();
-    snap();
-    alerts_update(&g_s);
-    ASSERT_EQ(count_type(ALERT_TYPE_BLE_HID_UNEXPECTED), 1);
-    teardown();
-    alerts_clear();
-
-    setup(1);
-    hid_fp_rotating_four_times();
-    snap();
-    ASSERT_EQ(g_s.ble_rot.hints_payload, 3);
-    alerts_update(&g_s);
-    ASSERT_EQ(count_type(ALERT_TYPE_BLE_HID_UNEXPECTED), 0);
-    teardown();
-    alerts_clear();
+/* What BLE_HID_UNEXPECTED wrote: count, key, title and detail of each. */
+static void hid_outputs(char *out, size_t cap) {
+    size_t off = 0;
+    out[0] = '\0';
+    for (int i = 0; i < g_s.alert_count; i++) {
+        const alert_t *a = &g_s.alerts[i];
+        if (a->type != ALERT_TYPE_BLE_HID_UNEXPECTED) continue;
+        int w = snprintf(out + off, cap - off, "%s|%s|%s\n", a->key, a->title, a->detail);
+        if (w > 0 && (size_t)w < cap - off) off += (size_t)w;
+    }
 }
 
-/* A row whose chain partner is outside the window is not a duplicate of
- * it: the root predates the window (first_seen <= since), so only the
- * newer address and two unrelated HID addresses are new, three, and the
- * form fires. Seen to fail: with ble_rot_distinct()'s `(!keep ||
- * keep(o, ctx))` on the earlier member dropped (the newer address
- * counts as its excluded root, two, no finding). */
-static void test_hid_chain_root_before_the_window_still_counts(void) {
-    setup(1);
-    uint8_t hf[HID_FP_LEN], A[6], B[6];
-    ad_hid_fp(hf);
-    rpa(A, 1); rpa(B, 2);
-    time_t t0 = g_wall - (BLE_HID_ROTATE_WINDOW_S + 100);
-    run_addr(A, hf, sizeof(hf), t0, g_wall - 500, 20);
-    time_t a_last = t0 + ((g_wall - 500 - t0) / 20) * 20;
-    run_addr(B, hf, sizeof(hf), a_last + 2, g_wall - 300, 4);
-    const uint8_t x[6] = { 0xC2, 0, 0, 0, 1, 0x01 }, y[6] = { 0xC2, 0, 0, 0, 1, 0x02 };
-    run_addr(x, AD_KBD, sizeof(AD_KBD), g_wall - 200, g_wall - 100, 10);
-    run_addr(y, AD_KBD, sizeof(AD_KBD), g_wall - 90, g_wall - 10, 10);
-    snap();
-    ASSERT_EQ(g_s.ble_rot.hints_payload, 1);
-    const ble_device_t *a = row(A), *b = row(B);
-    ASSERT(a && b && a->hint.pchain && a->hint.pchain == b->hint.pchain);
-    alerts_update(&g_s);
-    ASSERT_EQ(count_type(ALERT_TYPE_BLE_HID_UNEXPECTED), 1);
-    teardown();
-    alerts_clear();
+/* Hints never weaken a detector: a token is attacker-supplied, so the
+ * rotation form counts addresses with the flag on exactly as with it
+ * off, both for a keyboard rotating on timing alone and for one whose
+ * rotations carry a token and commit payload links. Same count, same
+ * key, title and detail. Seen to fail: with hid_rotate_findings()
+ * gating on `count - (int)s->ble_rot.hints_payload` (the payload
+ * advertiser is suppressed with the flag on). */
+static void test_hints_never_change_ble_hid_unexpected(void) {
+    void (*scen[2])(void) = { keyboard_rotating_four_times, hid_fp_rotating_four_times };
+    for (int k = 0; k < 2; k++) {
+        static char off_out[4096], on_out[4096];
+        setup(0);
+        scen[k]();
+        snap();
+        alerts_update(&g_s);
+        ASSERT_EQ(count_type(ALERT_TYPE_BLE_HID_UNEXPECTED), 1);
+        hid_outputs(off_out, sizeof(off_out));
+        teardown();
+        alerts_clear();
+
+        setup(1);
+        scen[k]();
+        snap();
+        if (k == 0) ASSERT_EQ(g_s.ble_rot.hints_timing, 3);
+        else        ASSERT_EQ(g_s.ble_rot.hints_payload, 3);
+        ASSERT_EQ(ble_rot_distinct(&g_s), 2);   /* the estimate joins them */
+        alerts_update(&g_s);
+        ASSERT_EQ(count_type(ALERT_TYPE_BLE_HID_UNEXPECTED), 1);
+        hid_outputs(on_out, sizeof(on_out));
+        ASSERT_STR(on_out, off_out);
+        teardown();
+        alerts_clear();
+    }
 }
 
 /* Any timing-only hint behind the estimate adds the research's timing
@@ -1090,6 +1231,7 @@ static void test_view_states_the_estimate_and_never_a_link(void) {
     ASSERT_SCREEN_HAS("possible address rotation");
     ASSERT_SCREEN_HAS("corroborates, does not confirm, and identifies no device or person");
     ASSERT_SCREEN_HAS("These records alone are not grounds for personnel action or physical identification.");
+    ASSERT_SCREEN_HAS("Links cover the recent window only: an address out of it counts on its own.");
     /* The never-say words, and no row names another. */
     ASSERT_SCREEN_LACKS("same device");
     ASSERT_SCREEN_LACKS("tracked");
@@ -1359,13 +1501,17 @@ void run_ble_rotation_tests(void) {
     RUN_TEST(test_sequential_token_spray_is_poisoned);
     RUN_TEST(test_link_pending_when_the_flood_gate_trips_is_refused);
     RUN_TEST(test_no_link_while_the_controller_may_filter_duplicates);
-    RUN_TEST(test_committed_link_outlives_eviction);
+    RUN_TEST(test_eviction_ends_the_link_on_both_rows);
     RUN_TEST(test_expiry_runs_without_frames);
     RUN_TEST(test_full_poison_list_fails_closed);
     RUN_TEST(test_poison_lasts_the_token_life);
     RUN_TEST(test_revoking_a_link_keeps_the_older_half_chained);
-    RUN_TEST(test_hid_rotation_counts_advertisers_with_hints);
-    RUN_TEST(test_hid_chain_root_before_the_window_still_counts);
+    RUN_TEST(test_linked_entries_keep_the_digest_their_link_rests_on);
+    RUN_TEST(test_a_commit_writes_no_sensor_health_line);
+    RUN_TEST(test_an_out_of_order_commit_relabels_the_tail);
+    RUN_TEST(test_no_proposal_under_the_filter_survives_it_going_off);
+    RUN_TEST(test_turning_the_flag_off_clears_the_rows);
+    RUN_TEST(test_hints_never_change_ble_hid_unexpected);
     RUN_TEST(test_view_states_the_timing_caveat);
     RUN_TEST(test_view_states_the_estimate_and_never_a_link);
     RUN_TEST(test_off_runs_match_and_carry_nothing);

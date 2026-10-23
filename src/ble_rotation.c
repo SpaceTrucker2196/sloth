@@ -50,9 +50,8 @@ typedef struct {
     uint64_t link_dig;
     /* The link OUT of it. */
     int16_t  succ;
-    /* Chain, set at commit. pchain is the same over payload links
-     * only: the id BLE_HID_UNEXPECTED de-duplicates on. */
-    uint32_t chain, pchain;
+    /* Chain, set at commit. */
+    uint32_t chain;
     uint8_t  hops;
     time_t   root_ts;
 } ent_t;
@@ -81,7 +80,6 @@ static uint8_t   g_key[16];
 static rot_sensor_t *g_tabs;     /* BLE_ROT_SENSORS, allocated on first use while on */
 static uint32_t  g_chain;
 static ble_rot_stats_t g_st;
-static ble_rot_row_sink_t g_sink;
 
 /* ── Pure parts ────────────────────────────────────────────────────── */
 
@@ -304,23 +302,6 @@ static void chain_relabel(rot_sensor_t *S, int start, uint32_t chain) {
     }
 }
 
-/* The same along the committed PAYLOAD successors of `start`. */
-static void pchain_relabel(rot_sensor_t *S, int start, uint32_t pchain) {
-    int cur = start;
-    for (int guard = 0; cur >= 0 && guard < BLE_ROT_SEAM; guard++) {
-        int nx = S->e[cur].succ;
-        if (nx < 0 || S->e[nx].state != LINK_COMMITTED ||
-            S->e[nx].basis != BLE_HINT_PAYLOAD)
-            break;
-        S->e[nx].pchain = pchain;
-        cur = nx;
-    }
-}
-
-static int committed_payload(const ent_t *e) {
-    return e->state == LINK_COMMITTED && e->basis == BLE_HINT_PAYLOAD;
-}
-
 /* Break the link into entry `ei`. A committed one splits its chain: the
  * newer half becomes a chain of its own, or of nothing. */
 static void rot_revoke(rot_sensor_t *S, int ei) {
@@ -328,7 +309,6 @@ static void rot_revoke(rot_sensor_t *S, int ei) {
     if (E->pred < 0) return;
     ent_t *F = &S->e[E->pred];
     int was_committed = E->state == LINK_COMMITTED;
-    int was_payload   = committed_payload(E);
     F->succ = -1;
     E->pred = -1;
     E->basis = BLE_HINT_NONE;
@@ -340,15 +320,6 @@ static void rot_revoke(rot_sensor_t *S, int ei) {
      * its one successor was E. */
     if (F->state != LINK_COMMITTED) {
         F->chain = 0; F->hops = 0; F->root_ts = 0;
-    }
-    if (was_payload) {
-        if (!committed_payload(F)) F->pchain = 0;
-        if (E->succ >= 0 && committed_payload(&S->e[E->succ])) {
-            E->pchain = ++g_chain;
-            pchain_relabel(S, ei, E->pchain);
-        } else {
-            E->pchain = 0;
-        }
     }
     int has_next = E->succ >= 0 && S->e[E->succ].state == LINK_COMMITTED;
     E->hops = 0;
@@ -366,7 +337,6 @@ static void hint_of(const ent_t *E, ble_identity_hint_t *h) {
     memset(h, 0, sizeof(*h));
     if (!E->chain) return;
     h->chain      = E->chain;
-    h->pchain     = E->pchain;
     h->hops       = E->hops;
     h->root_first = E->root_ts;
     if (E->state == LINK_COMMITTED) {
@@ -375,30 +345,16 @@ static void hint_of(const ent_t *E, ble_identity_hint_t *h) {
     }
 }
 
-/* Free entry `i` (evicted or past retention). A link through it is cut
- * without un-chaining what was committed: the chain ids already on the
- * survivors, and on the advertiser rows (ble_rot_update_row() leaves a
- * row whose entry is gone as it was), stay the right grouping. A
- * pending link that loses its predecessor can never commit and is
- * dropped. */
+/* Free entry `i` (evicted or past retention). Links are window-scoped:
+ * one exists only while both its entries are held, so both of X's links
+ * go as a revocation does. The survivors' chains are re-derived, and
+ * ble_rot_update_row() zeroes the row of an address with no entry, so
+ * no hint outlives either side and no link is left that a later poison
+ * could not reach. */
 static void ent_free(rot_sensor_t *S, int i) {
     ent_t *X = &S->e[i];
-    /* Its last word to its row, which may not have seen a snapshot
-     * since the commit. */
-    if (g_sink && X->chain) {
-        ble_identity_hint_t h;
-        hint_of(X, &h);
-        g_sink(S->kind, S->iface, X->addr, &h);
-    }
-    if (X->succ >= 0) {
-        ent_t *N = &S->e[X->succ];
-        if (N->state == LINK_PENDING) {
-            N->basis = BLE_HINT_NONE; N->state = LINK_NONE; N->conf = 0;
-            N->has_link_dig = 0;
-        }
-        N->pred = -1;
-    }
-    if (X->pred >= 0) S->e[X->pred].succ = -1;
+    if (X->pred >= 0) rot_revoke(S, i);
+    if (X->succ >= 0) rot_revoke(S, X->succ);
     wipe(X, sizeof(*X));
     X->pred = X->succ = -1;
 }
@@ -589,20 +545,18 @@ static void commit(rot_sensor_t *S, int ei, time_t now) {
     E->hops    = (uint8_t)(F->hops + 1);
     E->root_ts = F->root_ts;
     chain_relabel(S, ei, E->chain);
-    if (E->basis == BLE_HINT_PAYLOAD) {
-        if (!F->pchain) F->pchain = ++g_chain;
-        E->pchain = F->pchain;
-        pchain_relabel(S, ei, E->pchain);
-    }
 }
 
-/* What an entry silent for BLE_ROT_FORGET_S no longer needs: it can no
- * longer be a seam's older side (gap > d_swap) and every link into it
- * has resolved (pending lasts d_swap from its first report), so its
- * digests, its link's digest and its shape go. Kept until
- * BLE_ROT_RETAIN_S: the address, its arrival bounds and its chain
- * fields, which the interleave guard and the chain caps read. */
+/* What an unlinked entry silent for BLE_ROT_FORGET_S no longer needs:
+ * it can no longer be a seam's older side (gap > d_swap), so its
+ * digests and its shape go. Kept until BLE_ROT_RETAIN_S: the address,
+ * its arrival bounds and its chain fields, which the interleave guard
+ * and the chain caps read. An entry a pending or committed link rests
+ * on, either side, keeps everything until the link goes or ent_free():
+ * the older address heard again must still poison the link's token,
+ * and poison() must still find every link resting on it. */
 static void ent_forget(ent_t *X) {
+    if (X->pred >= 0 || X->succ >= 0) return;
     wipe(X->dig, sizeof(X->dig));
     X->ndig = X->dig_next = 0;
     X->has_link_dig = 0;
@@ -813,15 +767,12 @@ void ble_rot_tick_all(void) {
 void ble_rot_update_row(ble_device_t *d) {
     if (!g_on || !d || d->addr_type != 1) return;
     const rot_sensor_t *S = sensor_find(d->sensor_kind, d->sensor_iface, d->adapter);
-    if (!S) return;
-    int e = ent_find(S, d->addr);
-    /* No entry: evicted or expired. The row keeps what was committed
-     * onto it, so a link outlives the seam table's 64 entries. */
-    if (e < 0) return;
-    hint_of(&S->e[e], &d->hint);
+    int e = S ? ent_find(S, d->addr) : -1;
+    /* No entry (evicted, expired, or never a candidate): no hint. A
+     * link lasts only while both its addresses are in the window. */
+    if (e < 0) memset(&d->hint, 0, sizeof(d->hint));
+    else       hint_of(&S->e[e], &d->hint);
 }
-
-void ble_rot_set_row_sink(ble_rot_row_sink_t fn) { g_sink = fn; }
 
 void ble_rot_snapshot(sloth_state_t *s) {
     if (!s) return;
@@ -833,23 +784,15 @@ void ble_rot_snapshot(sloth_state_t *s) {
     s->ble_rot.enabled = 1;
 }
 
-int ble_rot_distinct(const sloth_state_t *s,
-                     int (*keep)(const ble_device_t *d, void *ctx),
-                     void *ctx, int payload_only) {
+int ble_rot_distinct(const sloth_state_t *s) {
     int n = 0;
     if (!s) return 0;
     for (int i = 0; i < s->ble_device_count && i < MAX_BLE_DEVICES; i++) {
-        const ble_device_t *d = &s->ble_devices[i];
-        if (keep && !keep(d, ctx)) continue;
-        uint32_t id = payload_only ? d->hint.pchain : d->hint.chain;
+        uint32_t id = s->ble_devices[i].hint.chain;
         int dup = 0;
         if (id)
-            for (int j = 0; j < i && !dup; j++) {
-                const ble_device_t *o = &s->ble_devices[j];
-                uint32_t oid = payload_only ? o->hint.pchain : o->hint.chain;
-                if (oid == id && (!keep || keep(o, ctx)))
-                    dup = 1;
-            }
+            for (int j = 0; j < i && !dup; j++)
+                dup = s->ble_devices[j].hint.chain == id;
         if (!dup) n++;
     }
     return n;

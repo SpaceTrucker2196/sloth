@@ -13,12 +13,15 @@
  * Every finding is WARN. The issue's CRIT ("stalk-grade" watchlist
  * category from a non-resident source) is deferred: "non-resident" has
  * no definition yet, and a CRIT on an undefined term would be a claim
- * the sensor cannot back. The hook it should read is
+ * the sensor cannot back. The hook it could read is
  * ble_identity_hint_t.root_first (#156): a definition built on a row's
  * first_seen alone calls a resident random-address device new at every
  * rotation, and with --ble-rotation-hints on, root_first is the first
- * report of the earliest address chained to the row. It must stand
- * without the hints too, since they are off by default. Nothing here transmits, connects, or reads
+ * report of the earliest address chained to the row in the recent
+ * window. Nothing reads it yet. A definition must stand without the
+ * hints, which are off by default, and must not let a hint lower a
+ * severity (tokens are attacker-supplied). Nothing here transmits,
+ * connects, or reads
  * GATT: every input is an advertisement some other device broadcast.
  *
  * ── BLE_ADV_FLOOD ──
@@ -72,18 +75,11 @@
  * keyboard can count as new; evict_ble_device in sensor_health says
  * when that is happening.
  *
- * With --ble-rotation-hints (#156, src/ble_rotation.h) form (b)
- * compares ble.hid_rotate_addrs against advertisers, not addresses:
- * rows a committed PAYLOAD hint chains together count once, so a HID
- * advertiser carrying a documented token across its rotations does not
- * read as N new HID addresses. Timing-only hints never reduce the
- * count. The research grades timing a corroborator, never a finding;
- * a lone fast rotator is never ambiguous on timing, so it would chain
- * completely and suppress the very rotation this form is for. The
- * trade, accepted: a HID advertiser rotating with no token (most
- * keyboards) is counted per address with the flag on, as without it.
- * The finding's `addrs` stays the address count. Off by default, and
- * then the gate is the address count, as before.
+ * --ble-rotation-hints (#156) does not change form (b): it counts
+ * addresses with the flag on exactly as with it off. A rotation hint
+ * rests on tokens the advertiser chooses, so an attacker could link its
+ * own addresses and suppress the finding; hints never weaken a
+ * detector.
  *
  * Both are precursors at most. CVE-2023-45866 is an unauthenticated HID
  * peripheral being accepted by a host; sloth sees no pairing and no
