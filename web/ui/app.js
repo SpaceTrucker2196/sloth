@@ -1564,9 +1564,10 @@
     if (id.length <= maxc) return id;
     for (var i = 1; i < id.length; i++) {
       var c = id.charAt(i);
+      if (c === ":" && id.charAt(i + 1) === ":") continue;
       if ((c === "." || c === ":") && id.length - i + 1 <= maxc) return "\u2026" + id.slice(i);
     }
-    return "\u2026" + id.slice(id.length - maxc + 1);
+    return id.slice(0, maxc - 1) + "\u2026";
   }
 
   // The chord: the nodes the server kept on a circle, busiest first

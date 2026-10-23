@@ -857,6 +857,43 @@ static int js_cell_of(long long t, long long off) {
     return ((wday + 6) % 7) * 24 + hour;
 }
 
+/* The chord label rule, as served and as a C port of it: a label longer
+ * than its room keeps its tail from a separator, after an ellipsis, so
+ * what shows is visibly part of an address and never a whole address it
+ * is not. A cut never starts on the first colon of "::" (the tail would
+ * be a valid compressed IPv6 address), and with no separator that fits
+ * the head is kept instead (a tail cut mid-label, like 8.51.100.1 from
+ * 198.51.100.1, reads as another address). Seen red with the old '~' +
+ * tail rule and with the "::" skip removed. */
+static size_t c_cut_label(const char *id, size_t maxc, char *out, size_t cap) {
+    size_t n = strlen(id);
+    if (n <= maxc) return (size_t)snprintf(out, cap, "%s", id);
+    for (size_t i = 1; i < n; i++) {
+        if (id[i] == ':' && id[i + 1] == ':') continue;
+        if ((id[i] == '.' || id[i] == ':') && n - i + 1 <= maxc)
+            return (size_t)snprintf(out, cap, "...%s", id + i);
+    }
+    return (size_t)snprintf(out, cap, "%.*s...", (int)(maxc - 1), id);
+}
+
+static void test_page_chord_labels(void) {
+    WT_HAS(page(), "      if (c === \":\" && id.charAt(i + 1) === \":\") continue;\n"
+                   "      if ((c === \".\" || c === \":\") && id.length - i + 1 <= maxc) "
+                   "return \"\\u2026\" + id.slice(i);\n"
+                   "    }\n"
+                   "    return id.slice(0, maxc - 1) + \"\\u2026\";");
+    char o[96];
+    c_cut_label("198.51.100.1", 11, o, sizeof(o));
+    WT_EQ(strcmp(o, "....51.100.1"), 0);
+    c_cut_label("2001:db8:cafe::ab:1234", 11, o, sizeof(o));
+    WT_LACKS(o, "...::");
+    WT_EQ(strcmp(o, "...:ab:1234"), 0);
+    c_cut_label("192.0.2.123456789", 6, o, sizeof(o));   /* no separator fits */
+    WT_EQ(strcmp(o, "192.0..."), 0);
+    c_cut_label("10.0.0.1", 11, o, sizeof(o));
+    WT_EQ(strcmp(o, "10.0.0.1"), 0);
+}
+
 static void test_page_cell_matches_the_servers_cell(void) {
     WT_HAS(page(), "function cellOf(t, off) {\n"
                    "    var d = new Date((t - t % 3600 + off) * 1000);\n"
@@ -978,5 +1015,6 @@ void run_routes_tests(void) {
     WT_RUN(test_page_carries_the_m3_view);
     WT_RUN(test_baseline_route_never_prints_inf);
     WT_RUN(test_page_cell_matches_the_servers_cell);
+    WT_RUN(test_page_chord_labels);
     WT_RUN(test_anomaly_event_and_tick);
 }
