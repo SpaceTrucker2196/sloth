@@ -112,8 +112,10 @@ STAB_DECL(g_arp_hist, arp_hist_t, MAX_ARP_ENTRIES, last_seen, STAB_OLDEST,
 
 /* alerts_clear() resets the ARP baseline with the rest of the engine,
  * and the table is file-scope here, beside the one rule that reads it. */
+static void beacon_forget(void);
 void rules_wired_forget(void) {
     stab_clear(&g_arp_hist);
+    beacon_forget();
 }
 
 void rule_arp_spoof(const sloth_state_t *s, time_t now) {
@@ -1217,56 +1219,326 @@ void rule_threat_ip(const sloth_state_t *s, time_t now) {
     }
 }
 
-/* Closure used by bd_each to drive fire(). */
-struct beacon_cb {
-    time_t now;
-};
+/* ── BEACONING: one finding per track, capped (#148) ────────
+ *
+ * Owner ruling 2026-10-23. Each strong (destination, port) track is its
+ * own finding — each C2 candidate its own incident, match_ip/match_port
+ * the destination so per-alert pcap export targets it — but at most
+ * bd.max_findings (BD_MAX_FINDINGS) of them are open at once, and the
+ * strong tracks past that are ONE overflow finding, `beacon-overflow`,
+ * whose detail counts them and names the next few.
+ *
+ * Why a cap and not coalescing: the detector holds BD_MAX_TRACKS (128)
+ * tracks, equal to MAX_ALERTS, so one finding per strong track could
+ * want every engine slot, and fair eviction (8c35974) kept the other
+ * rules' findings only by churning these. Coalescing per source host
+ * was tried and rejected: tracks come only from this machine's own
+ * socket table (bd_update over s->conns), so "per source" was one row
+ * for everything, its pcap export pointed at the sensor itself, and a
+ * new C2 destination joining it was not an incident at all.
+ *
+ * Which tracks get a seat: the strongest, by beacon_stronger(). A seat
+ * changes hands only when a challenger beats the weakest holder by a
+ * margin (beacon_clearly_stronger()); the displaced holder resolves
+ * with reason `displaced` and is counted in the overflow from that
+ * tick. The margin, not a "for one more tick" delay, is the
+ * hysteresis: a track's statistics move only when a sample lands, so
+ * consecutive ticks usually repeat the same comparison, and a delay
+ * would filter nothing between two tracks whose order flips with each
+ * sample. A holder that stopped being strong keeps its open incident
+ * (it resolves on the quiet period, as before) and its seat, but is
+ * the first a strong challenger takes — so it never blocks one, and the
+ * open per-destination count never exceeds the cap. */
 
-static int beacon_cb_fire(const bd_track_t *t, void *ud) {
-    int kind = bd_is_strong(t->remote_ip, t->remote_port);
-    if (!kind) return 0;
-    struct beacon_cb *bc = (struct beacon_cb *)ud;
+/* Overflow destinations named in its detail; the count is always
+ * exact. */
+#define BEACON_OVERFLOW_NAMES 4
+/* The hysteresis margins. v1: jitter/mean lower by five points — a
+ * fifth of the 0.25 v1 band. v2: concentration higher by 0.10 — with at
+ * most 15 gaps one gap moves it by 0.067, so one gap landing inside or
+ * outside the ±30% window can never move a seat on its own. */
+#define BEACON_MARGIN_V1  0.05
+#define BEACON_MARGIN_V2  0.10
 
-    /* A typed address, not %.39s (#112): a 45-byte IPv4-mapped IPv6
-     * literal was cut at 39, so two endpoints differing in their last
-     * octet were one track's worth of findings. */
-    char key[ALERT_KEY_LEN];
-    char detail[ALERT_DETAIL_LEN];
+typedef struct {
+    const bd_track_t *t;
+    int    kind;     /* bd_is_strong(): 1 = v1, 2 = v2 */
+    double period;   /* v1 mean gap, v2 median gap */
+    double spread;   /* v1 stddev, v2 concentration */
+    int    n;
+} beacon_hit_t;
+
+/* One open per-destination finding. Its own copy of the address: a
+ * holder whose track the detector has since dropped still has an
+ * incident to close. */
+typedef struct {
+    char     ip[46];
+    uint16_t port;
+    char     key[ALERT_KEY_LEN];
+} beacon_seat_t;
+
+static beacon_seat_t g_beacon_seats[BD_MAX_FINDINGS_HI];
+static int           g_beacon_seat_n;
+
+static void beacon_forget(void) {
+    memset(g_beacon_seats, 0, sizeof(g_beacon_seats));
+    g_beacon_seat_n = 0;
+}
+
+static double beacon_ratio(const beacon_hit_t *h) {
+    return h->period > 0 ? h->spread / h->period : 0;
+}
+
+/* Strongest first: a v1 match (low jitter) outranks a v2 one; within v1
+ * the lower jitter/mean, within v2 the higher concentration, then more
+ * samples. Address and port last, so the order never depends on the
+ * order the tracks were created in. */
+static int beacon_stronger(const beacon_hit_t *a, const beacon_hit_t *b) {
+    if (a->kind != b->kind) return a->kind < b->kind;
+    if (a->kind == 1) {
+        double ra = beacon_ratio(a), rb = beacon_ratio(b);
+        if (ra != rb) return ra < rb;
+    } else if (a->spread != b->spread) {
+        return a->spread > b->spread;
+    }
+    if (a->n != b->n) return a->n > b->n;
+    int c = strcmp(a->t->remote_ip, b->t->remote_ip);
+    if (c) return c < 0;
+    return a->t->remote_port < b->t->remote_port;
+}
+
+/* Whether `a` outranks `b` by enough to take its seat. Across kinds the
+ * v1 match must sit the v1 margin inside the v1 band: a track at the
+ * jitter boundary flips between v1 and v2 with one sample, and that
+ * must not move a seat either. */
+static int beacon_clearly_stronger(const beacon_hit_t *a,
+                                   const beacon_hit_t *b) {
+    if (a->kind == 1 && b->kind == 1)
+        return beacon_ratio(a) + BEACON_MARGIN_V1 <= beacon_ratio(b);
+    if (a->kind == 2 && b->kind == 2)
+        return a->spread >= b->spread + BEACON_MARGIN_V2;
+    if (a->kind == 1)
+        return beacon_ratio(a) + BEACON_MARGIN_V1 <=
+               (double)tune_val(TUNE_BD_MAX_JITTER_PCT) / 100.0;
+    return 0;
+}
+
+/* An address as a detail shows it: address characters only, anything
+ * else as '?', at most 45 bytes, IPv6 bracketed. Tracks come from the
+ * kernel's socket table, so this is a bound rather than a filter that
+ * fires in practice — but bd_observe takes any string, and the detail
+ * is drawn on a terminal and written to every sink. */
+static void beacon_dest(char *out, size_t n, const bd_track_t *t) {
+    char a[48];
+    size_t j = 0;
+    for (size_t i = 0; t->remote_ip[i] && j < 45; i++) {
+        unsigned char c = (unsigned char)t->remote_ip[i];
+        int ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                 (c >= 'A' && c <= 'F') || c == '.' || c == ':';
+        a[j++] = ok ? (char)c : '?';
+    }
+    a[j] = '\0';
+    if (strchr(a, ':'))
+        snprintf(out, n, "[%s]:%u", a, (unsigned)t->remote_port);
+    else
+        snprintf(out, n, "%s:%u", a, (unsigned)t->remote_port);
+}
+
+/* A typed address, not %.39s (#112): a 45-byte IPv4-mapped IPv6
+ * literal was cut at 39, so two endpoints differing in their last
+ * octet were one track's worth of findings. The shape is unchanged by
+ * #148, so a JSONL or sloth.db consumer keeps each destination's
+ * incident identity across the upgrade. */
+static const char *beacon_key(char key[ALERT_KEY_LEN], const char *ip,
+                              uint16_t port) {
     akey_t k;
-    akey_begin(&k, key, sizeof(key), "beacon");
-    akey_ip(&k, t->remote_ip);
-    akey_u(&k, (unsigned)t->remote_port);
-    if (!akey_end(&k)[0]) return 0;
+    akey_begin(&k, key, ALERT_KEY_LEN, "beacon");
+    akey_ip(&k, ip);
+    akey_u(&k, (unsigned)port);
+    return akey_end(&k);
+}
 
-    if (kind == 1) {
+static void beacon_fire_track(const beacon_hit_t *h, const char *key,
+                              time_t now) {
+    const bd_track_t *t = h->t;
+    char detail[ALERT_DETAIL_LEN];
+    if (h->kind == 1) {
         /* v1 — classic low-jitter detector. */
-        double mean = 0, jitter = 0;
-        int n = bd_stats(t->remote_ip, t->remote_port, &mean, &jitter);
         snprintf(detail, sizeof(detail),
                  "%.39s:%u every %.0fs (jitter=%.1fs, n=%d)",
-                 t->remote_ip, (unsigned)t->remote_port, mean, jitter, n);
+                 t->remote_ip, (unsigned)t->remote_port,
+                 h->period, h->spread, h->n);
     } else {
         /* v2 — gap concentration. Reports the median period and
          * the fraction of gaps within ±30% of it so an operator can
          * tell at a glance how confident the match is. */
-        double period = 0, concentration = 0;
-        int n = bd_autocorr_stats(t->remote_ip, t->remote_port,
-                                  &period, &concentration);
         snprintf(detail, sizeof(detail),
                  "%.39s:%u every ~%.0fs jittered (concentration=%.2f, n=%d)",
                  t->remote_ip, (unsigned)t->remote_port,
-                 period, concentration, n);
+                 h->period, h->spread, h->n);
     }
     fire(ALERT_TYPE_BEACONING, ALERT_SEV_WARN,
          "BEACONING", detail, key,
-         t->remote_ip, t->remote_port, bc->now);
+         t->remote_ip, t->remote_port, now);
+}
+
+/* The strong tracks without a seat, strongest first. No match_ip: the
+ * finding covers many destinations, and the one ranked first when it
+ * opened (all fire() would record) is not where the evidence is. Each
+ * of them gets its own finding, and its pcap, once it wins a seat. */
+static void beacon_fire_overflow(const beacon_hit_t *const *rest, int k,
+                                 int cap, time_t now) {
+    char detail[ALERT_DETAIL_LEN];
+    int len = snprintf(detail, sizeof(detail),
+                       "%d more beaconing track%s past the strongest %d; next:",
+                       k, k == 1 ? "" : "s", cap);
+    if (len < 0) return;
+    size_t used = (size_t)len < sizeof(detail) ? (size_t)len
+                                               : sizeof(detail) - 1;
+    /* Whole entries only, with room kept for the "(+N more)" tail, so a
+     * long IPv6 list stops at an entry boundary instead of mid-address. */
+    const size_t tail_room = sizeof(" (+128 more)");
+    int listed = 0;
+    for (int i = 0; i < k && listed < BEACON_OVERFLOW_NAMES; i++) {
+        char d[64];
+        beacon_dest(d, sizeof(d), rest[i]->t);
+        const char *sep = listed ? ", " : " ";
+        if (used + strlen(sep) + strlen(d) + tail_room > sizeof(detail)) break;
+        used += (size_t)snprintf(detail + used, sizeof(detail) - used,
+                                 "%s%s", sep, d);
+        listed++;
+    }
+    if (listed < k)
+        snprintf(detail + used, sizeof(detail) - used,
+                 " (+%d more)", k - listed);
+    fire(ALERT_TYPE_BEACONING, ALERT_SEV_WARN, "BEACONING", detail,
+         "beacon-overflow", NULL, 0, now);
+}
+
+struct beacon_cb {
+    beacon_hit_t hits[BD_MAX_TRACKS];
+    int          n;
+};
+
+static int beacon_cb_collect(const bd_track_t *t, void *ud) {
+    struct beacon_cb *bc = (struct beacon_cb *)ud;
+    int kind = bd_is_strong(t->remote_ip, t->remote_port);
+    if (!kind || bc->n >= BD_MAX_TRACKS) return 0;
+    beacon_hit_t *h = &bc->hits[bc->n++];
+    h->t    = t;
+    h->kind = kind;
+    if (kind == 1)
+        h->n = bd_stats(t->remote_ip, t->remote_port, &h->period, &h->spread);
+    else
+        h->n = bd_autocorr_stats(t->remote_ip, t->remote_port,
+                                 &h->period, &h->spread);
     return 0;
+}
+
+static int beacon_seat_of(const beacon_hit_t *h) {
+    for (int i = 0; i < g_beacon_seat_n; i++)
+        if (g_beacon_seats[i].port == h->t->remote_port &&
+            strcmp(g_beacon_seats[i].ip, h->t->remote_ip) == 0) return i;
+    return -1;
+}
+
+/* Swap-remove; `held` (the caller's per-seat hit list) moves with it. */
+static void beacon_unseat(int i, const beacon_hit_t **held, time_t now,
+                          const char *reason) {
+    if (reason) alert_key_resolve(g_beacon_seats[i].key, now, reason);
+    int last = --g_beacon_seat_n;
+    g_beacon_seats[i] = g_beacon_seats[last];
+    if (held) held[i] = held[last];
 }
 
 void rule_beaconing(const sloth_state_t *s, time_t now) {
     (void)s;
-    struct beacon_cb bc = { .now = now };
-    bd_each(beacon_cb_fire, &bc);
+    struct beacon_cb bc;          /* ~5 KB: BD_MAX_TRACKS hits */
+    bc.n = 0;
+    bd_each(beacon_cb_collect, &bc);
+
+    /* Insertion sort: n <= BD_MAX_TRACKS. */
+    for (int i = 1; i < bc.n; i++) {
+        beacon_hit_t v = bc.hits[i];
+        int j = i - 1;
+        while (j >= 0 && beacon_stronger(&v, &bc.hits[j])) {
+            bc.hits[j + 1] = bc.hits[j];
+            j--;
+        }
+        bc.hits[j + 1] = v;
+    }
+
+    int cap = (int)tune_val(TUNE_BD_MAX_FINDINGS);
+    if (cap < 1) cap = 1;
+    if (cap > BD_MAX_FINDINGS_HI) cap = BD_MAX_FINDINGS_HI;
+
+    /* A seat whose incident the engine has closed (quiet period,
+     * eviction, `c`) is free again; the track, if still strong, is a
+     * challenger like any other. */
+    for (int i = g_beacon_seat_n - 1; i >= 0; i--)
+        if (!alert_key_open(g_beacon_seats[i].key))
+            beacon_unseat(i, NULL, now, NULL);
+
+    /* Each seat's hit this tick, or NULL for a holder no longer strong. */
+    const beacon_hit_t *held[BD_MAX_FINDINGS_HI];
+    for (int i = 0; i < g_beacon_seat_n; i++) held[i] = NULL;
+    for (int i = 0; i < bc.n; i++) {
+        int seat = beacon_seat_of(&bc.hits[i]);
+        if (seat >= 0) held[seat] = &bc.hits[i];
+    }
+    /* A cap lowered under a running engine: the weakest go first. */
+    while (g_beacon_seat_n > cap) {
+        int w = 0;
+        for (int j = 0; j < g_beacon_seat_n; j++) {
+            if (!held[j]) { w = j; break; }
+            if (beacon_stronger(held[w], held[j])) w = j;
+        }
+        beacon_unseat(w, held, now, "displaced");
+    }
+
+    /* Challengers, strongest first: a free seat, or the weakest holder
+     * if beaten by the margin. A holder no longer strong is the weakest
+     * of all and yields to any strong challenger. */
+    for (int i = 0; i < bc.n; i++) {
+        const beacon_hit_t *c = &bc.hits[i];
+        if (beacon_seat_of(c) >= 0) continue;
+        char key[ALERT_KEY_LEN];
+        if (!beacon_key(key, c->t->remote_ip, c->t->remote_port)[0]) continue;
+        int seat;
+        if (g_beacon_seat_n < cap) {
+            seat = g_beacon_seat_n++;
+        } else {
+            int w = 0;
+            for (int j = 0; j < g_beacon_seat_n; j++) {
+                if (!held[j]) { w = j; break; }
+                if (beacon_stronger(held[w], held[j])) w = j;
+            }
+            if (held[w] && !beacon_clearly_stronger(c, held[w])) continue;
+            alert_key_resolve(g_beacon_seats[w].key, now, "displaced");
+            seat = w;
+        }
+        beacon_seat_t *st = &g_beacon_seats[seat];
+        snprintf(st->ip, sizeof(st->ip), "%s", c->t->remote_ip);
+        st->port = c->t->remote_port;
+        snprintf(st->key, sizeof(st->key), "%s", key);
+        held[seat] = c;
+    }
+
+    /* Fire in strength order, so a tick's records come out in the order
+     * the operator reads them; the unseated are the overflow. */
+    const beacon_hit_t *rest[BD_MAX_TRACKS];
+    int k = 0;
+    for (int i = 0; i < bc.n; i++) {
+        int seat = beacon_seat_of(&bc.hits[i]);
+        if (seat >= 0)
+            beacon_fire_track(&bc.hits[i], g_beacon_seats[seat].key, now);
+        else
+            rest[k++] = &bc.hits[i];
+    }
+    if (k > 0)
+        beacon_fire_overflow(rest, k, cap, now);
+    else
+        alert_key_resolve("beacon-overflow", now, "drained");
 }
 
 /* ── CAM_RTSP_UNAUTH (#106 slice B) ─────────────────────────

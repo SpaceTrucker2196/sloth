@@ -4890,3 +4890,13 @@ report events.
   text `NXDOMAIN`, or one not exactly filling its RDATA is skipped. A
   PTR row's answer stays out of the IP index and the dashboard's IP
   colouring.
+- 2026-10-23 — [[alerts]]: `BEACONING` capped (#148, owner ruling
+  2026-10-23). Still one finding per (destination, port) track, key
+  `beacon:<ip>:<port>` unchanged and `match_ip` the destination, but at
+  most `bd.max_findings` (new `--tune` knob, default 16, 1..64) are
+  open; the strong tracks past them are one `beacon-overflow` finding
+  that counts them and names the next four. Seats change hands only by
+  a margin, so near-equal tracks do not flap. New `alert.resolve`
+  reasons `displaced` and `drained` ([[jsonl-schema]]); the knob in
+  [[cli-reference]]; [[beacon-detection]] now treats an IPv4-mapped
+  peer (`::ffff:a.b.c.d`) as its IPv4 address.

@@ -136,7 +136,7 @@ omitted.
 | `BEACON_FLOOD` | WARN | T1498.001 | ≥ 40 distinct new BSSIDs first-seen in 10 s (mdk3/mdk4-style fake-AP flood) | — (L2 only) |
 | `AUTH_FLOOD` | WARN | T1499     | ≥ 30 802.11 auth frames to one BSSID in 5 s (association-table exhaustion DoS). **CRIT** when the BSSID is `--my-bssid` designated (#52) | — (L2 only) |
 | `ASSOC_FLOOD` | WARN | T1498.001 | ≥ 21 association requests to one BSSID in 60 s (`ASSOC_FLOOD_THRESH` / `ASSOC_FLOOD_WIN_SECS` in `include/sloth.h`) — the missing member of the flood set alongside beacon, deauth, probe and auth. Rate is **per-BSSID**, so a busy AP with many ordinary clients does not trip it; only an outlier does. The distinct-STA count shapes the message rather than gating the alert: few STAs at high rate reads `(few sources)` — a targeted or broken client — and more than three reads `(spoofed-MAC flood)`, which is what the common tooling emits. Gating on either number would blind the rule to the other attack. **CRIT** when the BSSID is `--my-bssid` designated (#52) | — (L2 only) |
-| `BEACONING` | WARN | T1071     | flow with ≥ 5 samples, mean ≥ 10 s, jitter/mean ≤ 0.25 | remote / port |
+| `BEACONING` | WARN | T1071     | flow with ≥ 5 samples, mean ≥ 10 s, jitter/mean ≤ 0.25 (v1), or ≥ 12 samples with ≥ 60% of gaps within ±30% of the median (v2). One finding per (destination, port), at most `bd.max_findings` (16) open; the rest are one `beacon-overflow` finding — see [BEACONING cap](#beaconing-cap-148) | remote / port (overflow: none) |
 | `DGA_DOMAIN` | WARN | T1568.002 | DNS qname matches DGA entropy heuristic | src / 53 |
 | `WEAK_TLS` | WARN | T1600     | TLS 1.0/1.1 or known-weak cipher observed | src / 443 |
 | `NO_MONITOR_MODE` | WARN | —         | ≥1 iface seen but none in monitor mode — WiFi SIGINT views will be empty | — (host posture) |
@@ -219,6 +219,71 @@ omitted.
 | `MQTT_BROKER_BRUTE` | CRIT | T1110.001 | MQTT CONNECT/CONNACK-fail burst (Mirai-class sweep) | src / 1883 |
 | `ROGUE_RA` | CRIT | T1557     | unexpected IPv6 Router Advertisement | src / 0 |
 | `EVIL_TWIN_PROXIMITY` | WARN | T1557     | evil-twin candidate at similar RSSI to the real AP | — (L2 only) |
+
+### BEACONING cap (#148)
+
+**Owner ruling, 2026-10-23.** `BEACONING` stays one finding per
+(destination, port) track: each C2 candidate is its own incident, keyed
+`beacon:<ip>:<port>` exactly as before, with `match_ip`/`match_port` the
+destination so per-alert pcap export captures that flow. What changed is
+that the number of those findings is **capped**:
+
+- At most `bd.max_findings` (`--tune`, default **16**, range 1..64) are
+  open at once — the strongest tracks, in the detector's strength order:
+  a v1 (low-jitter) match before a v2 (gap-concentration) one, then the
+  lower jitter/mean within v1 or the higher concentration within v2,
+  then more samples, then address and port so the order never depends
+  on when a track was created.
+- Every other strong track is counted in **one** overflow finding, key
+  `beacon-overflow`, same type, technique and severity:
+  `112 more beaconing tracks past the strongest 16; next: 198.51.100.1:443, … (+108 more)`.
+  The next (at most four) destinations are named strongest first, as
+  address characters only and cut at a whole entry. It has no
+  `match_ip` — it spans many destinations — and it opens while K > 0
+  and resolves (`reason` `drained`) on the tick K returns to 0.
+- A stronger track **displaces** the weakest holder only when it beats
+  it by a margin: jitter/mean lower by 0.05 within v1, concentration
+  higher by 0.10 within v2, and a v1 track over a v2 one only when the
+  v1 track sits 0.05 inside the v1 band. The displaced finding resolves
+  at once (`reason` `displaced`) and the track joins the overflow count;
+  it opens a new incident of the same key if it wins a place back. A
+  holder that is no longer strong at all yields to any strong
+  challenger, so a stale finding never blocks a live one.
+
+Why this shape:
+
+- **Why a cap.** The detector holds `BD_MAX_TRACKS` (128) tracks and the
+  engine `MAX_ALERTS` (128) slots, so one finding per strong track could
+  want every slot. Fair eviction (8c35974) stopped that costing other
+  rules their findings only by churning `BEACONING`'s own (#96's 16.1M
+  duplicate pcaps came from that churn). With the cap `BEACONING` holds
+  at most 17 slots, so 128 strong tracks beside 100 other findings evict
+  nothing (`tests/test_beacon_detect.c :: test_beacon_cap_128_tracks`).
+- **Why not coalesce per source host.** Tried first and rejected in
+  review: tracks come only from this machine's own socket table
+  (`bd_update` over `s->conns`, fed by `src/platform/linux_parse.c`), so
+  "per source" was one row for everything, its pcap export pointed at
+  the sensor itself, and a new C2 destination joining it was an update,
+  not an incident. Per destination /24 was rejected for the same reason
+  as in #96: it merges unrelated hosts behind one CDN edge.
+- **Why 16.** An eighth of the engine, leaving room for every other
+  rule, and still more C2 candidates than an operator works through at
+  once; the overflow says how many more there are. The ceiling 64 keeps
+  the knob from being raised to "every track" — half the engine is the
+  most one detector may claim by configuration.
+- **Why a margin rather than a delay.** A track's statistics change
+  only when a new sample lands, so consecutive ticks usually repeat the
+  same comparison; "outranked for one more tick" would filter nothing
+  between two tracks whose order flips with each sample. A margin does:
+  two near-equal tracks never swap
+  (`test_beacon_cap_near_equal_do_not_flap`).
+
+Also in #148: a peer a dual-stack socket reports as `::ffff:a.b.c.d` is
+the same track as `a.b.c.d`, so a flow reconnecting over tcp4 and tcp6
+sockets no longer splits into two tracks that each fall short of the
+sample count. Its key is therefore `beacon:a.b.c.d:<port>`. The key
+shape is unchanged for every other destination, so JSONL and `--db`
+consumers keep their incident identity across the upgrade.
 
 ## Cross-panel coloring
 

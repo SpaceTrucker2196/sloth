@@ -1,13 +1,32 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include "beacon_detect.h"
 #include "tune.h"
 
 static bd_track_t tracks[BD_MAX_TRACKS];
 static int        track_count;
 
-static bd_track_t *find(const char *ip, uint16_t port) {
+/* A dual-stack (tcp6) socket connected to an IPv4 peer reports it as
+ * ::ffff:a.b.c.d (linux_parse.c renders tcp6 rows with inet_ntop
+ * AF_INET6), a tcp4 socket as a.b.c.d. A flow that reconnects through
+ * either is one destination, so the mapped form is stored and looked up
+ * as the IPv4 address it is (#148); otherwise its sessions split across
+ * two tracks and neither may reach the sample count. Every entry point
+ * that takes an address goes through find() or upsert(), so callers may
+ * pass either spelling. */
+static void canon(char out[46], const char *ip) {
+    struct in6_addr a6;
+    if (strchr(ip, ':') && strchr(ip, '.') &&
+        inet_pton(AF_INET6, ip, &a6) == 1 && IN6_IS_ADDR_V4MAPPED(&a6) &&
+        inet_ntop(AF_INET, &a6.s6_addr[12], out, 46) != NULL)
+        return;
+    snprintf(out, 46, "%s", ip);
+}
+
+static bd_track_t *find_canon(const char *ip, uint16_t port) {
     for (int i = 0; i < track_count; i++) {
         if (tracks[i].remote_port == port &&
             strcmp(tracks[i].remote_ip, ip) == 0)
@@ -16,8 +35,16 @@ static bd_track_t *find(const char *ip, uint16_t port) {
     return NULL;
 }
 
-static bd_track_t *upsert(const char *ip, uint16_t port) {
-    bd_track_t *t = find(ip, port);
+static bd_track_t *find(const char *ip, uint16_t port) {
+    char c[46];
+    canon(c, ip);
+    return find_canon(c, port);
+}
+
+static bd_track_t *upsert(const char *raw, uint16_t port) {
+    char ip[46];
+    canon(ip, raw);
+    bd_track_t *t = find_canon(ip, port);
     if (t) return t;
     if (track_count >= BD_MAX_TRACKS) {
         int oldest = 0;

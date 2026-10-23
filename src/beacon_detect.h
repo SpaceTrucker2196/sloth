@@ -44,6 +44,16 @@
 #define BD_MIN_CONCENTRATION (BD_MIN_CONCENTRATION_PCT / 100.0)
 #define BD_MIN_SAMPLES_V2     12
 
+/* Open per-destination BEACONING findings at most (#148, owner ruling
+ * 2026-10-23); the strong tracks past them are one overflow finding.
+ * bd.max_findings on --tune. 16 is an eighth of MAX_ALERTS — room for
+ * every other rule beside it — and still more C2 candidates than an
+ * operator works at once. The ceiling, 64, keeps the cap from being
+ * raised to "every track": half the engine is the most one detector
+ * may claim by configuration. */
+#define BD_MAX_FINDINGS       16
+#define BD_MAX_FINDINGS_HI    64
+
 typedef struct {
     char     remote_ip[46];
     uint16_t remote_port;

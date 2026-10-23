@@ -18,6 +18,7 @@ scripts) code against.
 63 bytes, for a PTR question only; a target that would be cut, the root
 name, the text `NXDOMAIN` or one not filling its RDATA is skipped),
 2026-10-23 (#165: `dns.answer` on a PTR response now
+**Last updated**: 2026-10-23 (#148: `alert.resolve` reasons `displaced` and `drained`; the `beacon-overflow` `BEACONING` finding; IPv4-mapped beaconing peers keyed as IPv4), 2026-10-23 (#165: `dns.answer` on a PTR response now
 carries the PTR record's decoded target name instead of staying empty;
 `qname` is unchanged — still the reverse `in-addr.arpa` / `ip6.arpa`
 name), 2026-10-23 (multi-report BLE events decoded: `ble_multi_report_rejected` kept at 0, `ble_adv_reports` / `ble_ext_adv_reports` / `ble_ext_adv_undecoded` count events, `ble_ext_adv_fragments` per report; `primary_phy` / `secondary_phy` value 4; `ext_adv` no longer signed on its own), 2026-10-22 (0x0D slice: `ble_ext_adv_reports`, `ble_ext_adv_fragments`, `ble_ext_adv_partial`, `ble_ext_trains_evicted` in `sensor_health`, `ble_ext_adv_undecoded` narrowed; `ble_device` gained `ext_adv`, `primary_phy`, `secondary_phy`, `adv_sid`, `addr_type` 255, `EXT_*` PDU names); 2026-10-21 (#144 slice 4: `ble_device` and `ble_alert` records, change-only; `evict_ble_flood`; #144 slice 3: the Ubertooth stream block `btcap_*` appended to `sensor_health`; `evict_bredr_lap`; `ble_device` keyed by sensor too; #144 slice 2: the Bluetooth host block appended to `sensor_health` after `libs` — `btmon_*` stream health, `ble_*` decode counters, scan mode / filter policy, own-transmission recency; `evict_ble_device`; #155: `device` gained `cam_score`, `cam_evidence`, `cam_vetoes`, `cam_conflict`, `dhcp_prl`, `dhcp_vci`, `device_class` `"not-camera"`; `evict_lan_role` appended to the `sensor_health` breakout); 2026-10-20 (#106 slice B: `evict_rtsp_exchange` / `evict_rtsp_stream` appended to the `sensor_health` breakout); 2026-10-20 (#92 slice 3: `storage_pcap_failures` / `storage_eapol_failures` also count hashed-manifest failures; the manifest is its own JSONL file, not this stream); 2026-10-20 (#92 slices 1+2: `pcap_path` / `pcap_write_failures` on evidence-citing alerts; review: `-N` suffix on a name an earlier run used); 2026-10-19 (#143: `evict_deauth_obs`, `evict_deauth_victim`; #110: eleven more `evict_*` fields — fragattack and the last hand-written keyed tables; #132: `packet.info` fragment / length labels; `ip_truncated` and `ip_fragment` measured)., #131, #129, #138, #85, #90, #91
@@ -474,6 +475,8 @@ not duration.
 | `expired` | no rule re-asserted the key for 300 s |
 | `evicted` | the engine hit `MAX_ALERTS` (128) and reclaimed this slot. Resolved incidents are evicted first, so a live one is dropped only when all 128 are live |
 | `cleared` | the operator pressed `c` in the TUI. Every open incident closes — leaving them open would strand a consumer waiting for a resolve that can never come |
+| `displaced` | additive, #148 — a per-destination `BEACONING` finding (`beacon:<ip>:<port>`) lost its place among the `bd.max_findings` strongest tracks to a clearly stronger one, or — no longer strong itself — to any strong one, or the cap was lowered under it. The track may still be beaconing: from this record on it is counted in the `beacon-overflow` finding, and if it wins a place back its next `alert.create` is a new incident of the same key (`reopen_count` > 0) |
+| `drained` | additive, #148 — the `beacon-overflow` finding closed because every strong beaconing track has its own finding again (K = 0) |
 
 | Field | Type | Meaning |
 |-------|------|---------|
@@ -509,6 +512,35 @@ still collapse into one incident, because `rule_evil_twin` keys on
 `twin:<ssid>` alone. The lifecycle layer never merges across keys — it
 will produce two incidents the moment the key does — but re-keying the
 twin rules is F07 / issue #89 and was deliberately not done in #98.
+
+#### `BEACONING` overflow (#148)
+
+`BEACONING` keeps one finding per strong (destination, port) track,
+keyed `beacon:<ip>:<port>` — the same shape as before #148, so a
+consumer joining on `key` keeps each destination's incident identity
+across the upgrade. At most `bd.max_findings` (default 16) of those are
+open at once. The strong tracks past the cap are **one** extra finding
+of the same `ty` / `technique`:
+
+```json
+{"type":"alert.create","key":"beacon-overflow","title":"BEACONING","detail":"112 more beaconing tracks past the strongest 16; next: 198.51.100.1:443, 198.51.100.10:443, 198.51.100.100:443, 198.51.100.101:443 (+108 more)","sev":1,"technique":"T1071", ...}
+```
+
+- `key` is the literal `beacon-overflow`; there is at most one open.
+- `detail` gives the exact count K, the cap, and the next (at most
+  four) destinations strongest first, as address characters only and
+  cut at a whole entry, then `(+N more)`. It changes as K changes, so it
+  rides `alert.update` (throttled like any detail change).
+- **No `match_ip` / `match_port`**: the finding spans many
+  destinations, so it has no per-alert pcap. A destination gets its
+  own finding — and its pcap — once it ranks into the cap.
+- It opens while K > 0 and resolves with `reason` `drained` on the tick
+  K returns to 0.
+
+One more change rides along: a peer reported by a dual-stack socket as
+`::ffff:a.b.c.d` is now the same track as `a.b.c.d` (it is the same
+destination), so its key is `beacon:a.b.c.d:<port>`, not
+`beacon:[::ffff:a.b.c.d]:<port>`. Only IPv4-mapped peers are affected.
 
 ### `cleartext_cred`
 

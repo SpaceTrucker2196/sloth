@@ -10,6 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
+**Last updated**: 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
 **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
@@ -127,7 +128,33 @@ holds both shapes for one finding.
 | `EVIL_TWIN` (attack chain) | `twin-chain:<ssid>` | `twin-chain:<ssid, 32 kept>:<hash>` |
 | `ROGUE_DHCP` | `rogue_dhcp:<ip>,<ip>,...` (cut at 191 bytes) | `rogue_dhcp:<server count>:<hash of the sorted set>` |
 | `WPS_PIN_BRUTE` (rotating MAC) | `wpsbrute-uuid:<bssid>:<first 8 UUID-E bytes>` | `wpsbrute-uuid:<bssid>:<all 16 UUID-E bytes, hex>` |
-| `BEACONING` | `beacon:<ip, 39 cut>:<port>` | `beacon:<ip>:<port>` (IPv6 bracketed, never cut) |
+| `BEACONING` | `beacon:<ip, 39 cut>:<port>` | `beacon:<ip>:<port>` (IPv6 bracketed, never cut). Unchanged by #148, which adds the one fixed key `beacon-overflow` and keys an IPv4-mapped peer (`::ffff:a.b.c.d`) as its IPv4 address |
+
+## BEACONING cap (#148)
+
+Owner ruling 2026-10-23. `BEACONING` is one finding per strong
+(destination, port) track — each C2 candidate its own incident, its
+`match_ip`/`match_port` the destination so [[pcap-export]] captures that
+flow — but at most `bd.max_findings` (default 16, `--tune`, 1..64) are
+open. The rest are **one** finding of the same type keyed
+`beacon-overflow`, whose detail counts them (K) and names the next four
+strongest; it has no `match_ip`, opens while K > 0 and resolves with
+`reason` `drained` when K returns to 0. Seats go to the strongest
+tracks (v1 before v2, then jitter/mean or concentration, then samples)
+and change hands only when a challenger wins by a margin — 0.05
+jitter/mean, 0.10 concentration — so two near-equal tracks never flap;
+the displaced finding resolves with `reason` `displaced` and the track
+joins K. A holder that stopped being strong yields to any strong
+challenger.
+
+Why: 128 detector tracks against 128 engine slots meant one busy
+segment could want the whole engine, and fair eviction only moved the
+damage onto `BEACONING`'s own churn. Coalescing per source host was
+tried and rejected — tracks come only from the sensor's own socket
+table, so "per source" was one row aimed at the sensor itself. Full
+reasoning, the choice of 16 and of a margin over a delay:
+`docs/views/alerts.md` § BEACONING cap (#148). See also
+[[beacon-detection]].
 
 ## Incident lifecycle (#98)
 

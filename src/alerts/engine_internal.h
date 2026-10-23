@@ -40,6 +40,13 @@ void fire(alert_type_t type, alert_sev_t sev,
           const char *match_ip, uint16_t match_port,
           time_t now);
 
+/* src/alerts/engine.c — for a rule that caps its own findings (#148):
+ * is `key` an open incident, and close it now with `reason` (an
+ * `alert.resolve` reason, docs/wiki/jsonl-schema.md). A closed or
+ * unknown key is a no-op. */
+int  alert_key_open(const char *key);
+void alert_key_resolve(const char *key, time_t now, const char *reason);
+
 /* src/alerts/engine.c — the tainted-BSSID tracker's writer; the reader
  * is evil_twin_bssid_is_tainted() in src/alerts.h. */
 void taint_mark(const uint8_t bssid[6], time_t now);

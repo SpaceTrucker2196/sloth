@@ -604,6 +604,29 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     event_wake_signal();
 }
 
+/* Whether `key` names an open incident, and a rule-driven close of one.
+ * For a rule that bounds its own findings (rule_beaconing, #148): it
+ * has to know which of the incidents it opened are still open — the
+ * quiet period, an eviction or a clear may have ended one — and it has
+ * to end one the moment it stops being one of the findings it shows,
+ * rather than leave it open for ALERT_RESOLVE_AFTER_S past the cap.
+ * Both look the key up as fire_inv stores it. */
+int alert_key_open(const char *key) {
+    if (!key || !key[0]) return 0;
+    char kbuf[ALERT_KEY_LEN];
+    snprintf(kbuf, sizeof(kbuf), "%s", key);
+    int idx = find_by_key(kbuf, key_hash(kbuf));
+    return idx >= 0 && !engine[idx].resolved;
+}
+
+void alert_key_resolve(const char *key, time_t now, const char *reason) {
+    if (!key || !key[0]) return;
+    char kbuf[ALERT_KEY_LEN];
+    snprintf(kbuf, sizeof(kbuf), "%s", key);
+    int idx = find_by_key(kbuf, key_hash(kbuf));
+    if (idx >= 0) alert_resolve(&engine[idx], now, reason);
+}
+
 /* No inventory consulted, and not a finding about an AP pair. Only the
  * rules that actually read the approved inventory stamp its hash (#89
  * slice 2) and only the twin family classifies a pair (#89 slice 3); a

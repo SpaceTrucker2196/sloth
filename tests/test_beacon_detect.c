@@ -4,6 +4,11 @@
 #include "beacon_detect.h"
 #include "alerts.h"
 #include "tune.h"
+#include "jsonl.h"
+#include "sensor_health.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 /* ── Helpers ─────────────────────────────────────────── */
 
@@ -276,14 +281,15 @@ static void test_alert_does_not_fire_for_weak(void) {
     ASSERT_EQ(found, 0);
 }
 
-/* Two IPv4-mapped IPv6 endpoints at the 45-byte literal limit, equal
- * for their first 44 bytes (#112). The old key cut the address at 39,
- * so both beacons were one finding. */
+/* Two IPv6 endpoints at the 45-byte literal limit, equal for their
+ * first 44 bytes (#112). The old key cut the address at 39, so both
+ * beacons were one finding. ::fffe:, not ::ffff: — since #148 a mapped
+ * address is stored as its IPv4 form, which is not 45 bytes. */
 static void test_beacon_key_distinguishes_long_prefix_pair(void) {
     bd_clear();
     alerts_clear();
-    const char *a = "0000:0000:0000:0000:0000:ffff:192.168.100.201";
-    const char *b = "0000:0000:0000:0000:0000:ffff:192.168.100.202";
+    const char *a = "0000:0000:0000:0000:0000:fffe:192.168.100.201";
+    const char *b = "0000:0000:0000:0000:0000:fffe:192.168.100.202";
     ASSERT_EQ((int)strlen(a), 45);
     time_t base = 1700000000;
     for (int i = 0; i < 5; i++) {
@@ -296,11 +302,497 @@ static void test_beacon_key_distinguishes_long_prefix_pair(void) {
     for (int i = 0; i < s.alert_count; i++) {
         if (s.alerts[i].type != ALERT_TYPE_BEACONING) continue;
         n++;
-        if (strncmp(s.alerts[i].key, "beacon:[0000:0000:0000:0000:0000:ffff:192.168.100.20", 52) == 0 &&
+        if (strncmp(s.alerts[i].key, "beacon:[0000:0000:0000:0000:0000:fffe:192.168.100.20", 52) == 0 &&
             strstr(s.alerts[i].key, "]:443") != NULL) shaped++;
     }
     ASSERT_EQ(n, 2);
     ASSERT_EQ(shaped, 2);
+    alerts_clear();
+    bd_clear();
+}
+
+/* ── #148: one finding per track, capped ─────────────────── */
+
+static void bc_cap(int n) {
+    char spec[48], err[160] = "";
+    snprintf(spec, sizeof(spec), "bd.max_findings=%d", n);
+    ASSERT_EQ(tune_set(spec, err, sizeof(err)), 0);
+}
+
+/* A track from `base` and then these gaps. */
+static void bc_series(const char *ip, uint16_t port, time_t base,
+                      const long *gaps, int ng) {
+    time_t t = base;
+    bd_observe(ip, port, t);
+    for (int i = 0; i < ng; i++) bd_observe(ip, port, t += gaps[i]);
+}
+
+/* v1 with jitter/mean 0 and ~0.0825: the second is still v1 (<= 0.25)
+ * and is beaten by the first by more than the 0.05 margin. */
+static const long BC_PERFECT[4] = { 30, 30, 30, 30 };
+static const long BC_JITTER[4]  = { 30, 30, 30, 36 };
+
+static int bc_find_key(const sloth_state_t *s, const char *key) {
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == ALERT_TYPE_BEACONING &&
+            strcmp(s->alerts[i].key, key) == 0) return i;
+    return -1;
+}
+
+/* Live BEACONING rows: per-destination ones, or the overflow. */
+static int bc_live(const sloth_state_t *s, int overflow) {
+    int n = 0;
+    for (int i = 0; i < s->alert_count; i++) {
+        const alert_t *a = &s->alerts[i];
+        if (a->type != ALERT_TYPE_BEACONING || a->resolved) continue;
+        if ((strcmp(a->key, "beacon-overflow") == 0) == (overflow != 0)) n++;
+    }
+    return n;
+}
+
+static int bc_live_type(const sloth_state_t *s, alert_type_t t) {
+    int n = 0;
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == t && !s->alerts[i].resolved) n++;
+    return n;
+}
+
+/* The JSONL stream, for the resolve reasons only the stream carries. */
+static char bc_path[] = "/tmp/sloth_b148_XXXXXX";
+
+static void bc_jsonl_begin(void) {
+    jsonl_close();
+    alerts_clear();
+    int fd = mkstemp(bc_path);
+    if (fd >= 0) close(fd);
+    unlink(bc_path);
+    ASSERT(jsonl_open(bc_path));
+}
+
+static void bc_jsonl_end(void) {
+    jsonl_close();
+    unlink(bc_path);
+    bc_path[strlen(bc_path) - 6] = '\0';
+    strcat(bc_path, "XXXXXX");
+}
+
+static const char *bc_stream(void) {
+    static char buf[65536];
+    buf[0] = '\0';
+    FILE *fp = fopen(bc_path, "r");
+    if (!fp) return buf;
+    size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+    buf[n] = '\0';
+    fclose(fp);
+    return buf;
+}
+
+/* Whether an alert.resolve for `key` carries `reason`. */
+static int bc_resolved_with(const char *key, const char *reason) {
+    char kneedle[96], rneedle[48];
+    snprintf(kneedle, sizeof(kneedle), "\"key\":\"%s\"", key);
+    snprintf(rneedle, sizeof(rneedle), "\"reason\":\"%s\"", reason);
+    const char *p = bc_stream();
+    for (const char *q = strstr(p, "\"type\":\"alert.resolve\""); q;
+         q = strstr(q + 1, "\"type\":\"alert.resolve\"")) {
+        const char *e = strchr(q, '\n');
+        size_t len = e ? (size_t)(e - q) : strlen(q);
+        char line[2048];
+        if (len >= sizeof(line)) len = sizeof(line) - 1;
+        memcpy(line, q, len);
+        line[len] = '\0';
+        if (strstr(line, kneedle) && strstr(line, rneedle)) return 1;
+    }
+    return 0;
+}
+
+/* The issue's case: the detector full at BD_MAX_TRACKS = MAX_ALERTS =
+ * 128 strong tracks, beside 100 open findings of another rule. Before
+ * #148 that wanted 228 slots and fair eviction resolved the other
+ * rule's findings, BEACONING then being the type holding most. Now:
+ * exactly bd.max_findings per-destination rows, one overflow row with
+ * K = 128 - 16, nothing evicted. The 16 seated are the 16 low-jitter
+ * tracks, which are the HIGHEST addresses — the address tie-break alone
+ * would seat the lowest, so the set is decided by strength.
+ * Seen red with the cap removed (every strong track fired under its own
+ * key): 128 rows, the DGA findings evicted, the delta non-zero. Seen red
+ * with beacon_stronger()'s jitter/mean comparison disabled: the low
+ * addresses took the seats. */
+static void test_beacon_cap_128_tracks(void) {
+    bd_clear();
+    alerts_clear();
+    tune_reset();
+    ASSERT_EQ((long long)tune_val(TUNE_BD_MAX_FINDINGS), 16);
+    time_t base = 1700000000;
+    for (int i = 0; i < BD_MAX_TRACKS; i++) {
+        char dst[46];
+        snprintf(dst, sizeof(dst), "198.51.100.%d", i + 1);
+        bc_series(dst, 443, base, i >= 112 ? BC_PERFECT : BC_JITTER, 4);
+    }
+    for (int i = 0; i < 100; i++) {
+        char key[32];
+        snprintf(key, sizeof(key), "test148:%d", i);
+        alerts_fire_for_test(ALERT_TYPE_DGA_DOMAIN, ALERT_SEV_WARN,
+                             key, "seed", NULL, 0);
+    }
+    uint64_t ev0 = sh_evict_count(SH_EVICT_ALERT);
+
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+
+    ASSERT_EQ(bc_live(&s, 0), 16);
+    ASSERT_EQ(bc_live(&s, 1), 1);
+    ASSERT_EQ(bc_live_type(&s, ALERT_TYPE_BEACONING), 17);
+    ASSERT_EQ(bc_live_type(&s, ALERT_TYPE_DGA_DOMAIN), 100);
+    ASSERT_EQ((long long)(sh_evict_count(SH_EVICT_ALERT) - ev0), 0);
+
+    int seated = 0;
+    for (int i = 113; i <= 128; i++) {
+        char key[64], ip[46];
+        snprintf(ip, sizeof(ip), "198.51.100.%d", i);
+        snprintf(key, sizeof(key), "beacon:%s:443", ip);
+        int j = bc_find_key(&s, key);
+        if (j < 0) continue;
+        seated++;
+        /* pcap export targets the destination, not the sensor. */
+        ASSERT_STR(s.alerts[j].match_ip, ip);
+        ASSERT_EQ((int)s.alerts[j].match_port, 443);
+        ASSERT_STR(s.alerts[j].technique, "T1071");
+        ASSERT_EQ((int)s.alerts[j].sev, (int)ALERT_SEV_WARN);
+    }
+    ASSERT_EQ(seated, 16);
+
+    int o = bc_find_key(&s, "beacon-overflow");
+    ASSERT(o >= 0);
+    if (o >= 0) {
+        ASSERT_STR(s.alerts[o].detail,
+                   "112 more beaconing tracks past the strongest 16; next: "
+                   "198.51.100.1:443, 198.51.100.10:443, 198.51.100.100:443, "
+                   "198.51.100.101:443 (+108 more)");
+        ASSERT_STR(s.alerts[o].match_ip, "");
+        ASSERT_STR(s.alerts[o].technique, "T1071");
+    }
+    alerts_clear();
+    bd_clear();
+}
+
+/* Sixteen samples whose gaps are mostly 60 s with two 10/150 pairs:
+ * stddev/mean ~0.57 fails v1, eleven of fifteen gaps within ±30% of the
+ * median passes v2. */
+static void bc_v2(const char *dst, time_t base) {
+    static const long gap[15] = { 60, 60, 60, 60, 60, 60, 60, 60, 60, 60,
+                                  60, 10, 150, 10, 150 };
+    bc_series(dst, 443, base, gap, 15);
+}
+
+/* A v1 match takes the seat over a v2 one whose address sorts first.
+ * The v1 track sits at jitter/mean 0.233, inside the 0.05 margin of
+ * the v1 band's 0.25 edge, so it is not "clearly stronger" than the v2
+ * one and only the order in which seats are filled decides — a v1 track
+ * well inside the band would win either way, by displacement. Seen red
+ * with the kind order in beacon_stronger() inverted. */
+static const long BC_EDGE[4] = { 23, 37, 23, 37 };
+static void test_beacon_cap_v1_outranks_v2(void) {
+    bd_clear();
+    alerts_clear();
+    tune_reset();
+    bc_cap(1);
+    time_t base = 1700000000;
+    bc_v2("198.51.100.1", base);
+    bc_series("198.51.100.2", 443, base, BC_EDGE, 4);
+    ASSERT_EQ(bd_is_strong("198.51.100.1", 443), 2);
+    ASSERT_EQ(bd_is_strong("198.51.100.2", 443), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+    ASSERT(bc_find_key(&s, "beacon:198.51.100.2:443") >= 0);
+    ASSERT(bc_find_key(&s, "beacon:198.51.100.1:443") < 0);
+    int o = bc_find_key(&s, "beacon-overflow");
+    ASSERT(o >= 0);
+    if (o >= 0)
+        ASSERT_STR(s.alerts[o].detail,
+                   "1 more beaconing track past the strongest 1; next: "
+                   "198.51.100.1:443");
+    tune_reset();
+    alerts_clear();
+    bd_clear();
+}
+
+/* A challenger clearly stronger than the holder (jitter/mean 0 against
+ * ~0.08) takes its seat on the tick it appears: the holder's incident
+ * resolves `displaced` and it is counted in the overflow instead. */
+static void test_beacon_cap_displaces_clearly_stronger(void) {
+    bd_clear();
+    tune_reset();
+    bc_jsonl_begin();
+    bc_cap(1);
+    time_t base = 1700000000;
+    bc_series("198.51.100.20", 443, base, BC_JITTER, 4);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+    int a = bc_find_key(&s, "beacon:198.51.100.20:443");
+    ASSERT(a >= 0);
+    ASSERT(bc_find_key(&s, "beacon-overflow") < 0);
+
+    bc_series("198.51.100.21", 443, base, BC_PERFECT, 4);
+    alerts_update(&s);
+    a = bc_find_key(&s, "beacon:198.51.100.20:443");
+    int b = bc_find_key(&s, "beacon:198.51.100.21:443");
+    int o = bc_find_key(&s, "beacon-overflow");
+    ASSERT(a >= 0 && b >= 0 && o >= 0);
+    if (a >= 0) ASSERT_EQ(s.alerts[a].resolved, 1);
+    if (b >= 0) ASSERT_EQ(s.alerts[b].resolved, 0);
+    if (o >= 0)
+        ASSERT_STR(s.alerts[o].detail,
+                   "1 more beaconing track past the strongest 1; next: "
+                   "198.51.100.20:443");
+    ASSERT_EQ(bc_live(&s, 0), 1);
+    ASSERT_EQ(bc_resolved_with("beacon:198.51.100.20:443", "displaced"), 1);
+    bc_jsonl_end();
+    tune_reset();
+    alerts_clear();
+    bd_clear();
+}
+
+/* Two near-equal tracks whose order flips with each new sample:
+ *   tick 0  A 0        (alone, seated)
+ *   tick 1  A 0.0132   B 0        B ahead by 0.013
+ *   tick 2  A 0.0132   B 0.0263   A ahead
+ *   tick 3  A 0.0360   B 0.0263   B ahead by 0.010
+ * All inside the 0.05 margin, so A keeps its seat and its one incident
+ * throughout and B stays in the overflow. Seen red with
+ * beacon_clearly_stronger() reduced to beacon_stronger() (no
+ * hysteresis): A was displaced on tick 1. */
+static void test_beacon_cap_near_equal_do_not_flap(void) {
+    bd_clear();
+    alerts_clear();
+    tune_reset();
+    bc_cap(1);
+    const char *A = "198.51.100.30", *B = "198.51.100.31";
+    const char *KA = "beacon:198.51.100.30:443";
+    const char *KB = "beacon:198.51.100.31:443";
+    time_t base = 1700000000;
+    bc_series(A, 443, base, BC_PERFECT, 4);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+    int a = bc_find_key(&s, KA);
+    ASSERT(a >= 0);
+    if (a < 0) return;
+    char iid[ALERT_INCIDENT_ID_LEN];
+    snprintf(iid, sizeof(iid), "%s", s.alerts[a].incident_id);
+
+    for (int tick = 1; tick <= 3; tick++) {
+        if (tick == 1) {
+            bc_series(B, 443, base, BC_PERFECT, 4);
+            bd_observe(A, 443, base + 151);
+        } else if (tick == 2) {
+            bd_observe(B, 443, base + 152);
+        } else {
+            bd_observe(A, 443, base + 184);
+        }
+        alerts_update(&s);
+        a = bc_find_key(&s, KA);
+        ASSERT(a >= 0);
+        if (a >= 0) {
+            ASSERT_STR(s.alerts[a].incident_id, iid);
+            ASSERT_EQ(s.alerts[a].resolved, 0);
+        }
+        ASSERT(bc_find_key(&s, KB) < 0);
+        ASSERT_EQ(bc_live(&s, 1), 1);
+    }
+    /* The schedule above is what makes it a flap test: each tick's
+     * leader really did change. */
+    double ma = 0, ja = 0, mb = 0, jb = 0;
+    bd_stats(A, 443, &ma, &ja);
+    bd_stats(B, 443, &mb, &jb);
+    ASSERT(jb / mb < ja / ma);
+    ASSERT(ja / ma - jb / mb < 0.05);
+    tune_reset();
+    alerts_clear();
+    bd_clear();
+}
+
+/* A holder that stopped being strong keeps its seat only until a strong
+ * challenger wants it, margin or not. Seen red with a non-strong holder
+ * treated like any other (it held the seat against B). */
+static void test_beacon_cap_decayed_holder_yields(void) {
+    bd_clear();
+    alerts_clear();
+    tune_reset();
+    bc_cap(1);
+    time_t base = 1700000000;
+    bc_series("198.51.100.40", 443, base, BC_PERFECT, 4);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+    ASSERT(bc_find_key(&s, "beacon:198.51.100.40:443") >= 0);
+    /* A one-second gap: stddev/mean ~0.48, and five samples is under
+     * v2's twelve. */
+    bd_observe("198.51.100.40", 443, base + 121);
+    ASSERT_EQ(bd_is_strong("198.51.100.40", 443), 0);
+    bc_series("198.51.100.41", 443, base, BC_JITTER, 4);
+    alerts_update(&s);
+    int a = bc_find_key(&s, "beacon:198.51.100.40:443");
+    int b = bc_find_key(&s, "beacon:198.51.100.41:443");
+    ASSERT(a >= 0 && b >= 0);
+    if (a >= 0) ASSERT_EQ(s.alerts[a].resolved, 1);
+    if (b >= 0) ASSERT_EQ(s.alerts[b].resolved, 0);
+    ASSERT(bc_find_key(&s, "beacon-overflow") < 0);
+    tune_reset();
+    alerts_clear();
+    bd_clear();
+}
+
+/* No overflow while every strong track has a seat, and the overflow
+ * closes (`drained`) on the tick K returns to 0. Seen red, one at a
+ * time: overflow fired at K = 0 (the first assertion), and the drain
+ * resolve removed (the row stayed open). */
+static void test_beacon_cap_overflow_opens_and_drains(void) {
+    bd_clear();
+    tune_reset();
+    bc_jsonl_begin();
+    time_t base = 1700000000;
+    bc_series("198.51.100.50", 443, base, BC_PERFECT, 4);
+    bc_series("198.51.100.51", 443, base, BC_JITTER, 4);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+    ASSERT_EQ(bc_live(&s, 0), 2);
+    ASSERT(bc_find_key(&s, "beacon-overflow") < 0);
+
+    alerts_clear();
+    bc_cap(1);
+    alerts_update(&s);
+    int o = bc_find_key(&s, "beacon-overflow");
+    ASSERT(o >= 0);
+    if (o >= 0) ASSERT_EQ(s.alerts[o].resolved, 0);
+
+    bd_observe("198.51.100.51", 443, base + 121);      /* decays */
+    ASSERT_EQ(bd_is_strong("198.51.100.51", 443), 0);
+    alerts_update(&s);
+    o = bc_find_key(&s, "beacon-overflow");
+    ASSERT(o >= 0);
+    if (o >= 0) ASSERT_EQ(s.alerts[o].resolved, 1);
+    ASSERT_EQ(bc_live(&s, 0), 1);
+    ASSERT_EQ(bc_resolved_with("beacon-overflow", "drained"), 1);
+    bc_jsonl_end();
+    tune_reset();
+    alerts_clear();
+    bd_clear();
+}
+
+/* The cap lowered under open seats: the weakest are displaced, the
+ * strongest kept. */
+static void test_beacon_cap_lowered_keeps_strongest(void) {
+    bd_clear();
+    alerts_clear();
+    tune_reset();
+    time_t base = 1700000000;
+    bc_series("198.51.100.60", 443, base, BC_JITTER, 4);
+    bc_series("198.51.100.61", 443, base, BC_PERFECT, 4);
+    bc_series("198.51.100.62", 443, base, BC_JITTER, 4);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+    ASSERT_EQ(bc_live(&s, 0), 3);
+    bc_cap(1);
+    alerts_update(&s);
+    ASSERT_EQ(bc_live(&s, 0), 1);
+    int b = bc_find_key(&s, "beacon:198.51.100.61:443");
+    ASSERT(b >= 0);
+    if (b >= 0) ASSERT_EQ(s.alerts[b].resolved, 0);
+    ASSERT_EQ(bc_live(&s, 1), 1);
+    tune_reset();
+    alerts_clear();
+    bd_clear();
+}
+
+/* The overflow names destinations in address characters only. Seen red
+ * with beacon_dest() passing every byte through. */
+static void test_beacon_overflow_detail_escapes_addresses(void) {
+    bd_clear();
+    alerts_clear();
+    tune_reset();
+    bc_cap(1);
+    time_t base = 1700000000;
+    bc_series("198.51.100.70", 443, base, BC_PERFECT, 4);
+    bc_series("\x1b[2J\"evil\n", 443, base, BC_JITTER, 4);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+    int o = bc_find_key(&s, "beacon-overflow");
+    ASSERT(o >= 0);
+    if (o >= 0) {
+        const char *d = s.alerts[o].detail;
+        ASSERT(strchr(d, '\x1b') == NULL);
+        ASSERT(strchr(d, '"')    == NULL);
+        ASSERT(strchr(d, '\n')   == NULL);
+        ASSERT(strstr(d, "next: ??2??e????:443") != NULL);
+    }
+    tune_reset();
+    alerts_clear();
+    bd_clear();
+}
+
+/* 128 destinations at the 45-byte literal limit: the overflow list
+ * stops at a whole entry inside ALERT_DETAIL_LEN and the count stays
+ * exact. */
+static void test_beacon_overflow_detail_bounded(void) {
+    bd_clear();
+    alerts_clear();
+    tune_reset();
+    bc_cap(1);
+    time_t base = 1700000000;
+    for (int i = 0; i < BD_MAX_TRACKS; i++) {
+        char dst[46];
+        snprintf(dst, sizeof(dst),
+                 "0000:0000:0000:0000:0000:fffe:192.168.%03d.%03d",
+                 100 + i / 100, i % 100 + 100);
+        ASSERT_EQ((int)strlen(dst), 45);
+        bc_series(dst, 65535, base, BC_PERFECT, 4);
+    }
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+    ASSERT_EQ(bc_live(&s, 0), 1);
+    int o = bc_find_key(&s, "beacon-overflow");
+    ASSERT(o >= 0);
+    if (o >= 0) {
+        const char *d = s.alerts[o].detail;
+        ASSERT(strlen(d) < ALERT_DETAIL_LEN - 1);
+        ASSERT(strncmp(d, "127 more beaconing tracks", 25) == 0);
+        int listed = 0;
+        for (const char *p = d; (p = strstr(p, "]:65535")) != NULL; p++)
+            listed++;
+        char want[32];
+        snprintf(want, sizeof(want), "(+%d more)", 127 - listed);
+        ASSERT(listed >= 1);
+        const char *tail = strrchr(d, '(');
+        ASSERT(tail != NULL);
+        if (tail) ASSERT_STR(tail, want);
+    }
+    tune_reset();
+    alerts_clear();
+    bd_clear();
+}
+
+/* A flow that reconnects through a tcp4 socket and a dual-stack tcp6
+ * one: the kernel spells the peer 203.0.113.9 and ::ffff:203.0.113.9.
+ * One destination, one track — split, neither half reaches five
+ * samples. Seen red with canon() copying its input through. */
+static void test_bd_update_mapped_peer_is_one_track(void) {
+    bd_clear();
+    alerts_clear();
+    tune_reset();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    for (int i = 0; i < 5; i++) {
+        s.conn_count = 0;
+        seed_conn(&s, (i & 1) ? "::ffff:203.0.113.9" : "203.0.113.9", 443);
+        bd_update(&s, 1700000000 + i * 30);
+    }
+    double mean = 0;
+    ASSERT_EQ(bd_stats("203.0.113.9", 443, &mean, NULL), 5);
+    ASSERT_EQ(bd_stats("::ffff:203.0.113.9", 443, &mean, NULL), 5);
+    s.conn_count = 0;
+    alerts_update(&s);
+    ASSERT_EQ(bc_live(&s, 0), 1);
+    int i = bc_find_key(&s, "beacon:203.0.113.9:443");
+    ASSERT(i >= 0);
+    if (i >= 0) ASSERT_STR(s.alerts[i].match_ip, "203.0.113.9");
     alerts_clear();
     bd_clear();
 }
@@ -512,6 +1004,16 @@ void run_beacon_detect_tests(void) {
     RUN_TEST(test_alert_fires_for_strong_beacon);
     RUN_TEST(test_alert_does_not_fire_for_weak);
     RUN_TEST(test_beacon_key_distinguishes_long_prefix_pair);
+    RUN_TEST(test_beacon_cap_128_tracks);
+    RUN_TEST(test_beacon_cap_v1_outranks_v2);
+    RUN_TEST(test_beacon_cap_displaces_clearly_stronger);
+    RUN_TEST(test_beacon_cap_near_equal_do_not_flap);
+    RUN_TEST(test_beacon_cap_decayed_holder_yields);
+    RUN_TEST(test_beacon_cap_overflow_opens_and_drains);
+    RUN_TEST(test_beacon_cap_lowered_keeps_strongest);
+    RUN_TEST(test_beacon_overflow_detail_escapes_addresses);
+    RUN_TEST(test_beacon_overflow_detail_bounded);
+    RUN_TEST(test_bd_update_mapped_peer_is_one_track);
     RUN_TEST(test_v2_catches_30pct_jitter_beacon);
     RUN_TEST(test_v2_does_not_fire_on_uniform_random);
     RUN_TEST(test_v1_low_jitter_returns_kind_1);

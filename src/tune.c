@@ -196,6 +196,10 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "bd.max_jitter_pct",          BD_MAX_JITTER_PCT, 1, 100, "v1: stddev/mean, percent" },
     { "bd.min_samples_v2",          BD_MIN_SAMPLES_V2, 3, BD_MAX_SAMPLES, "samples before the v2 concentration test" },
     { "bd.min_concentration_pct",   BD_MIN_CONCENTRATION_PCT, 1, 100, "v2: gaps within 30% of the median, percent" },
+    /* #148: a cap on findings, not a threshold — it decides how many
+     * strong tracks get their own incident, never whether one is strong.
+     * Ceiling BD_MAX_FINDINGS_HI; see beacon_detect.h for both numbers. */
+    { "bd.max_findings",            BD_MAX_FINDINGS, 1, BD_MAX_FINDINGS_HI, "open per-destination BEACONING findings; the rest are one overflow finding" },
     { "queue_evict.window_ms",      QUEUE_EVICT_WINDOW_MS, 1, 10000, "ms after a session change that counts as a release" },
     { "queue_evict.min_frames",     QUEUE_EVICT_MIN_FRAMES, 2, 1000, "distinct downlink frames in that window" },
     { "queue_evict.report_secs",    QUEUE_EVICT_REPORT_SECS, 1, 86400, "seconds a release stays reportable" },

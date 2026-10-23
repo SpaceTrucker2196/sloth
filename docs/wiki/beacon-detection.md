@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/packets.md`, `docs/views/connections.md`.
 
-**Last updated**: 2026-05-25.
+**Last updated**: 2026-10-23 (#148: findings capped at `bd.max_findings` plus one overflow; IPv4-mapped peers are one track with their IPv4 form).
 
 ---
 
@@ -58,6 +58,19 @@ additive jitter. The alert detail shows
   additive jitter. Setting it higher (e.g. 0.75) tightens to ~30 %
   but starts missing real Cobalt deployments; lower (0.50) starts
   flagging well-clustered bursty traffic.
+
+## How many findings (#148)
+
+One finding per strong remote IP:port, at most `bd.max_findings`
+(default 16) open; strong tracks past that are counted in one
+`beacon-overflow` finding that names the next few. Seats go to the
+strongest tracks and change hands only by a margin. Owner ruling
+2026-10-23; see [[alerts]] § BEACONING cap.
+
+A tcp6 socket connected to an IPv4 peer reports it as
+`::ffff:a.b.c.d`; the detector stores and looks up that form as
+`a.b.c.d`, so a flow that reconnects over either socket family is one
+track.
 
 ## What this misses
 
