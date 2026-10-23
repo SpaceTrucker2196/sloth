@@ -644,12 +644,14 @@ web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C)
 # administered MACs and example names only; it never touches a network.
 # The db half needs WITH_SQLITE.
 WEB_DEMO        = $(WEB_GEN_DIR)/slothweb-demo
+WEB_DEMO_SRCS   = web/tools/demo.c
+WEB_DEMO_DB_SRCS = src/db_schema.c
 .PHONY: web-demo web-quickstart-check
 web-demo: $(WEB_DEMO)
-$(WEB_DEMO): web/tools/demo.c src/db_schema.c
+$(WEB_DEMO): $(WEB_DEMO_SRCS) $(WEB_DEMO_DB_SRCS)
 	@mkdir -p $(WEB_GEN_DIR)
-	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iinclude -o $@ web/tools/demo.c \
-	      $(if $(filter 1,$(WITH_SQLITE)),src/db_schema.c -lsqlite3,) -lm
+	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iinclude -o $@ $(WEB_DEMO_SRCS) \
+	      $(if $(filter 1,$(WITH_SQLITE)),$(WEB_DEMO_DB_SRCS) -lsqlite3,) -lm
 
 # web/README.md's quick start, followed literally in a temporary copy of
 # the tracked tree (web/tools/quickstart_check.sh): build, start the demo
