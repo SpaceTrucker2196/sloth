@@ -6,6 +6,7 @@
 #include "tune.h"
 #include "jsonl.h"
 #include "sensor_health.h"
+#include "sloth_clock.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -611,6 +612,178 @@ static void test_beacon_cap_near_equal_do_not_flap(void) {
     bd_clear();
 }
 
+/* The v2 margin: two v2 tracks one gap apart in concentration (10/15
+ * against 11/15, 0.067) are inside the 0.10 margin, so the holder keeps
+ * its seat and its incident although the challenger ranks above it.
+ * Seen red with the v2 branch of beacon_clearly_stronger() reduced to a
+ * plain `a->spread > b->spread`: B displaced A on tick 1. */
+static void test_beacon_cap_v2_near_equal_do_not_flap(void) {
+    bd_clear();
+    alerts_clear();
+    tune_reset();
+    bc_cap(1);
+    const char *A = "198.51.100.32", *B = "198.51.100.33";
+    const char *KA = "beacon:198.51.100.32:443";
+    const char *KB = "beacon:198.51.100.33:443";
+    /* bc_v2 with one more gap outside the ±30% window: median still 60,
+     * ten of fifteen gaps in it. */
+    static const long gap[15] = { 60, 60, 60, 60, 60, 60, 60, 60, 60, 60,
+                                  10, 150, 10, 150, 10 };
+    time_t base = 1700000000;
+    bc_series(A, 443, base, gap, 15);
+    ASSERT_EQ(bd_is_strong(A, 443), 2);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+    int a = bc_find_key(&s, KA);
+    ASSERT(a >= 0);
+    if (a < 0) return;
+    char iid[ALERT_INCIDENT_ID_LEN];
+    snprintf(iid, sizeof(iid), "%s", s.alerts[a].incident_id);
+
+    bc_v2(B, base);
+    ASSERT_EQ(bd_is_strong(B, 443), 2);
+    for (int tick = 1; tick <= 2; tick++) {
+        alerts_update(&s);
+        a = bc_find_key(&s, KA);
+        ASSERT(a >= 0);
+        if (a >= 0) {
+            ASSERT_STR(s.alerts[a].incident_id, iid);
+            ASSERT_EQ(s.alerts[a].resolved, 0);
+        }
+        ASSERT(bc_find_key(&s, KB) < 0);
+        ASSERT_EQ(bc_live(&s, 1), 1);
+    }
+    /* B really does rank above A, by one gap's worth. */
+    double pa = 0, ca = 0, pb = 0, cb = 0;
+    bd_autocorr_stats(A, 443, &pa, &ca);
+    bd_autocorr_stats(B, 443, &pb, &cb);
+    ASSERT(cb > ca);
+    ASSERT(cb - ca < 0.10);
+    tune_reset();
+    alerts_clear();
+    bd_clear();
+}
+
+/* The cross-kind margin: a v1 track at jitter/mean 0.233, inside 0.05
+ * of the v1 band's 0.25 edge, outranks a seated v2 holder but does not
+ * take its seat — one sample can flip it to v2. Seen red with the
+ * cross-kind branch of beacon_clearly_stronger() replaced by
+ * `return 1`: E displaced H. */
+static void test_beacon_cap_v1_at_band_edge_keeps_v2_holder(void) {
+    bd_clear();
+    alerts_clear();
+    tune_reset();
+    bc_cap(1);
+    const char *H = "198.51.100.34", *E = "198.51.100.35";
+    const char *KH = "beacon:198.51.100.34:443";
+    const char *KE = "beacon:198.51.100.35:443";
+    time_t base = 1700000000;
+    bc_v2(H, base);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+    int h = bc_find_key(&s, KH);
+    ASSERT(h >= 0);
+    if (h < 0) return;
+    char iid[ALERT_INCIDENT_ID_LEN];
+    snprintf(iid, sizeof(iid), "%s", s.alerts[h].incident_id);
+
+    bc_series(E, 443, base, BC_EDGE, 4);
+    ASSERT_EQ(bd_is_strong(H, 443), 2);
+    ASSERT_EQ(bd_is_strong(E, 443), 1);
+    alerts_update(&s);
+    h = bc_find_key(&s, KH);
+    ASSERT(h >= 0);
+    if (h >= 0) {
+        ASSERT_STR(s.alerts[h].incident_id, iid);
+        ASSERT_EQ(s.alerts[h].resolved, 0);
+    }
+    ASSERT(bc_find_key(&s, KE) < 0);
+    int o = bc_find_key(&s, "beacon-overflow");
+    ASSERT(o >= 0);
+    if (o >= 0)
+        ASSERT_STR(s.alerts[o].detail,
+                   "1 more beaconing track past the strongest 1; next: "
+                   "198.51.100.35:443");
+    tune_reset();
+    alerts_clear();
+    bd_clear();
+}
+
+/* A seat whose incident the engine closed is free again, and goes to
+ * the strongest unseated track. A is seated alone; for one tick nothing
+ * is strong (bd.min_samples raised past every track) while the clock
+ * passes the quiet period, so the engine expires A's incident; then A
+ * and a slightly stronger B — inside the 0.05 margin, so B could not
+ * displace a holder — are both strong. B takes the freed seat, A is the
+ * overflow, and A has no `displaced` resolve: its incident had already
+ * ended `expired`. Expiry stands in for eviction here; both reach the
+ * same alert_key_open() check (a clear also forgets the seats). Seen
+ * red with that check disabled (`if (0 && ...)`): A kept its seat,
+ * re-opened, and B stayed in the overflow. The no-`displaced`
+ * assertion cannot be isolated: a second resolve of an ended incident
+ * is already a no-op in alert_resolve(), so no single mutation of the
+ * rule emits one; it is kept as a guard on the stream, not claimed as
+ * coverage of this path. */
+static uint64_t bc_mono_now;
+static uint64_t bc_mono(void) { return bc_mono_now; }
+static void test_beacon_cap_closed_seat_goes_to_strongest(void) {
+    bd_clear();
+    tune_reset();
+    bc_mono_now = 10000000;
+    sloth_clock_test_set(bc_mono, NULL);
+    bc_jsonl_begin();
+    bc_cap(1);
+    const char *A = "198.51.100.36", *B = "198.51.100.37";
+    const char *KA = "beacon:198.51.100.36:443";
+    const char *KB = "beacon:198.51.100.37:443";
+    static const long a_gap[4] = { 30, 30, 30, 31 };
+    time_t base = 1700000000;
+    bc_series(A, 443, base, a_gap, 4);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alerts_update(&s);
+    ASSERT(bc_find_key(&s, KA) >= 0);
+
+    char err[160] = "";
+    ASSERT_EQ(tune_set("bd.min_samples=16", err, sizeof(err)), 0);
+    ASSERT_EQ(bd_is_strong(A, 443), 0);
+    bc_mono_now += ALERT_RESOLVE_AFTER_MS + 1000;
+    alerts_update(&s);
+    int a = bc_find_key(&s, KA);
+    ASSERT(a >= 0);
+    if (a >= 0) ASSERT_EQ(s.alerts[a].resolved, 1);
+    ASSERT_EQ(bc_resolved_with(KA, "expired"), 1);
+
+    ASSERT_EQ(tune_set("bd.min_samples=5", err, sizeof(err)), 0);
+    bc_series(B, 443, base, BC_PERFECT, 4);
+    ASSERT_EQ(bd_is_strong(A, 443), 1);
+    ASSERT_EQ(bd_is_strong(B, 443), 1);
+    double ma = 0, ja = 0, mb = 0, jb = 0;
+    bd_stats(A, 443, &ma, &ja);
+    bd_stats(B, 443, &mb, &jb);
+    ASSERT(jb / mb < ja / ma);
+    ASSERT(ja / ma - jb / mb < 0.05);
+    bc_mono_now += 1000;
+    alerts_update(&s);
+    int b = bc_find_key(&s, KB);
+    ASSERT(b >= 0);
+    if (b >= 0) ASSERT_EQ(s.alerts[b].resolved, 0);
+    a = bc_find_key(&s, KA);
+    ASSERT(a >= 0);
+    if (a >= 0) ASSERT_EQ(s.alerts[a].resolved, 1);
+    int o = bc_find_key(&s, "beacon-overflow");
+    ASSERT(o >= 0);
+    if (o >= 0)
+        ASSERT_STR(s.alerts[o].detail,
+                   "1 more beaconing track past the strongest 1; next: "
+                   "198.51.100.36:443");
+    ASSERT_EQ(bc_resolved_with(KA, "displaced"), 0);
+    bc_jsonl_end();
+    sloth_clock_test_set(NULL, NULL);
+    tune_reset();
+    alerts_clear();
+    bd_clear();
+}
+
 /* A holder that stopped being strong keeps its seat only until a strong
  * challenger wants it, margin or not. Seen red with a non-strong holder
  * treated like any other (it held the seat against B). */
@@ -1008,6 +1181,9 @@ void run_beacon_detect_tests(void) {
     RUN_TEST(test_beacon_cap_v1_outranks_v2);
     RUN_TEST(test_beacon_cap_displaces_clearly_stronger);
     RUN_TEST(test_beacon_cap_near_equal_do_not_flap);
+    RUN_TEST(test_beacon_cap_v2_near_equal_do_not_flap);
+    RUN_TEST(test_beacon_cap_v1_at_band_edge_keeps_v2_holder);
+    RUN_TEST(test_beacon_cap_closed_seat_goes_to_strongest);
     RUN_TEST(test_beacon_cap_decayed_holder_yields);
     RUN_TEST(test_beacon_cap_overflow_opens_and_drains);
     RUN_TEST(test_beacon_cap_lowered_keeps_strongest);

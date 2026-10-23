@@ -240,13 +240,15 @@ that the number of those findings is **capped**:
   The next (at most four) destinations are named strongest first, as
   address characters only and cut at a whole entry. It has no
   `match_ip` — it spans many destinations — and it opens while K > 0
-  and resolves (`reason` `drained`) on the tick K returns to 0.
+  and resolves (`reason` `drained`) on the tick K returns to 0 — no
+  strong track without its own finding, whether the overflowed tracks
+  won places or stopped being strong.
 - A stronger track **displaces** the weakest holder only when it beats
   it by a margin: jitter/mean lower by 0.05 within v1, concentration
   higher by 0.10 within v2, and a v1 track over a v2 one only when the
   v1 track sits 0.05 inside the v1 band. The displaced finding resolves
-  at once (`reason` `displaced`) and the track joins the overflow count;
-  it opens a new incident of the same key if it wins a place back. A
+  at once (`reason` `displaced`) and the track, while it is still
+  strong, joins the overflow count; it opens a new incident of the same key if it wins a place back. A
   holder that is no longer strong at all yields to any strong
   challenger, so a stale finding never blocks a live one.
 

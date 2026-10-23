@@ -143,8 +143,8 @@ strongest; it has no `match_ip`, opens while K > 0 and resolves with
 tracks (v1 before v2, then jitter/mean or concentration, then samples)
 and change hands only when a challenger wins by a margin — 0.05
 jitter/mean, 0.10 concentration — so two near-equal tracks never flap;
-the displaced finding resolves with `reason` `displaced` and the track
-joins K. A holder that stopped being strong yields to any strong
+the displaced finding resolves with `reason` `displaced` and the track,
+while it is still strong, joins K. A holder that stopped being strong yields to any strong
 challenger.
 
 Why: 128 detector tracks against 128 engine slots meant one busy

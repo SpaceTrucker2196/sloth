@@ -1240,12 +1240,13 @@ void rule_threat_ip(const sloth_state_t *s, time_t now) {
  * Which tracks get a seat: the strongest, by beacon_stronger(). A seat
  * changes hands only when a challenger beats the weakest holder by a
  * margin (beacon_clearly_stronger()); the displaced holder resolves
- * with reason `displaced` and is counted in the overflow from that
- * tick. The margin, not a "for one more tick" delay, is the
- * hysteresis: a track's statistics move only when a sample lands, so
- * consecutive ticks usually repeat the same comparison, and a delay
- * would filter nothing between two tracks whose order flips with each
- * sample. A holder that stopped being strong keeps its open incident
+ * with reason `displaced` and, while it is still strong, is counted in
+ * the overflow from that tick. The margin, not a "for one more tick"
+ * delay, is the hysteresis: a track's statistics move only when a
+ * sample lands, so consecutive ticks usually repeat the same
+ * comparison, and a delay would filter nothing between two tracks
+ * whose order flips with each sample. A holder that stopped being
+ * strong keeps its open incident
  * (it resolves on the quiet period, as before) and its seat, but is
  * the first a strong challenger takes — so it never blocks one, and the
  * open per-destination count never exceeds the cap. */
@@ -1348,7 +1349,8 @@ static void beacon_dest(char *out, size_t n, const bd_track_t *t) {
  * literal was cut at 39, so two endpoints differing in their last
  * octet were one track's worth of findings. The shape is unchanged by
  * #148, so a JSONL or sloth.db consumer keeps each destination's
- * incident identity across the upgrade. */
+ * incident identity across the upgrade — except an IPv4-mapped peer,
+ * which beacon_detect now tracks, and so keys, as its IPv4 address. */
 static const char *beacon_key(char key[ALERT_KEY_LEN], const char *ip,
                               uint16_t port) {
     akey_t k;
