@@ -1154,7 +1154,10 @@ static int wal_collect(pid_t pid, int fd, wal_obs_t *o) {
  * its 300 ms timeout) stays within twice the largest with no reader at
  * all, while the writer appends several times that. Seen red with the
  * worker's rest removed (the -wal grew with every commit, to about
- * what was written). */
+ * what was written). A statement may meet the writer's checkpoint and
+ * answer 503 (the box's reader opens with a busy timeout and gives up
+ * rather than wait on sloth), which is the promised behaviour; any
+ * other status fails. CI's runner showed one 503 in five (382ab40). */
 static void test_box_lets_the_wal_restart(void) {
     char p[160];
     snprintf(p, sizeof(p), "%s/wal.db", g_dir);
@@ -1174,22 +1177,23 @@ static void test_box_lets_the_wal_restart(void) {
     WT_ASSERT(pid > 0);
     WT_EQ(srv_up_at(p, 300, 8000), 0);
     const char *slow = "SELECT count(*) FROM arp a, arp b, arp c, arp d, arp e, arp f";
-    int answers = 0, other = 0;
+    int answers = 0, other = 0, unavail = 0, other_st = 0;
     long long end = t_mono_ms() + ms;
     while (t_mono_ms() < end) {
         const char *b;
         int st = query(slow, &b);
         if (st == 200) answers++;
-        else other++;
+        else if (st == 503) unavail++;
+        else { other++; other_st = st; }
     }
     srv_down();
     WT_EQ(wal_collect(pid, pfd[0], &box), 0);
     close(pfd[0]);
     close(pfd[1]);
     long long written = box.commits * 40000;
-    fprintf(stderr, "    -wal max %lld B alone, %lld B with %d box answers (%d other);"
-            " %lld B written, %lld BUSY\n", ctl.wal_max, box.wal_max, answers, other,
-            written, box.busy);
+    fprintf(stderr, "    -wal max %lld B alone, %lld B with %d box answers (%d 503, %d other"
+            " [last %d]); %lld B written, %lld BUSY\n", ctl.wal_max, box.wal_max,
+            answers, unavail, other, other_st, written, box.busy);
     WT_ASSERT(answers >= 3);
     WT_EQ(other, 0);
     WT_ASSERT(ctl.wal_max > 0);
