@@ -4,14 +4,12 @@
  *
  * Input is sloth's dns record: qtype "PTR", is_resp 1, qname the
  * reverse name ("5.1.0.10.in-addr.arpa", or the 32 nibbles of an
- * ip6.arpa name) and answer the name it pointed to. Today sloth fills
- * answer only from the first A or AAAA record of a response
- * (src/dns_log.c reads no PTR rdata; docs/wiki/jsonl-schema.md says
- * "first A/AAAA answer"), so a PTR answer reaches slothweb with an
- * empty answer and nothing is recorded: the cache fills once sloth
- * writes a PTR answer's target there. That is a sloth change outside
- * web/ and is stated as a gap, not worked around: slothweb does not
- * parse packets.
+ * ip6.arpa name) and answer the name it pointed to. sloth decodes a
+ * PTR response's RDATA into answer (#165, src/dns_log.c, RFC 1035
+ * §3.3.12); before that it filled answer only from the first A or
+ * AAAA record, so a PTR answer reached slothweb with an empty answer
+ * and nothing was recorded. slothweb still does not parse packets
+ * itself — it only reads what sloth's answer field carries.
  *
  * What is recorded is checked as if hostile: the qname must decode to
  * an address web_key_ip() keeps, the answer must be 1..63 bytes of a

@@ -4857,3 +4857,10 @@ report events.
   History presence strip ends at the range's end and reads the hour tier
   for a range older than `--web-retain-days`; a channel sloth labels `?`
   is its own band.
+- 2026-10-23 — [[jsonl-schema]]: `dns.answer` on a PTR response (#165)
+  now carries the PTR record's decoded target name (RFC 1035 §3.3.12,
+  compression per §4.1.4) instead of staying empty — the gap
+  slothweb's `passive_ptr` cache (M4, #162) was built against and
+  documented as unfilled. `qname` is unchanged. `host_cache_add` is no
+  longer fed a PTR record's `(answer, qname)` pair, which is inverted
+  relative to the IP/host shape every other qtype feeds it.

@@ -5,6 +5,7 @@
 #include "sloth.h"
 #include "dns_log.h"
 #include "views/dns_log.h"
+#include "host_cache.h"
 
 /*
  * Hand-crafted DNS messages.
@@ -29,6 +30,27 @@ static const uint8_t NAME_TEST_EXAMPLE[] = {
     0x00
 };
 #define NAME_LEN 18
+
+/* "host.example.net" encoded: 5+8+4+1 = 18 bytes */
+static const uint8_t NAME_HOST_EXAMPLE_NET[] = {
+    0x04,'h','o','s','t',
+    0x07,'e','x','a','m','p','l','e',
+    0x03,'n','e','t',
+    0x00
+};
+#define NAME2_LEN ((int)sizeof(NAME_HOST_EXAMPLE_NET))
+
+/* "1.0.0.10.in-addr.arpa" encoded, a PTR question's reverse name. */
+static const uint8_t NAME_PTR_ARPA[] = {
+    0x01,'1',
+    0x01,'0',
+    0x01,'0',
+    0x02,'1','0',
+    0x07,'i','n','-','a','d','d','r',
+    0x04,'a','r','p','a',
+    0x00
+};
+#define PTR_ARPA_LEN ((int)sizeof(NAME_PTR_ARPA))
 
 /* ── helpers ─────────────────────────────────────────────── */
 
@@ -98,6 +120,143 @@ static int build_nxdomain(uint8_t *buf, int bufsz,
     return off;
 }
 
+/* ── PTR-answer builders (#165) ──────────────────────────────
+ *
+ * Each answer RR's owner name is a compression pointer back to the
+ * question at offset 12 — the same trick build_response_a already
+ * uses, since the owner name is never what these tests are about. */
+
+static int write_dns_header_and_q(uint8_t *buf,
+                                  const uint8_t *qname, int qnamelen,
+                                  uint16_t qtype, uint16_t ancount)
+{
+    buf[0]=0x12; buf[1]=0x34;
+    buf[2]=0x81; buf[3]=0x80;   /* QR=1, RD=1, RA=1, RCODE=0 */
+    buf[4]=0x00; buf[5]=0x01;   /* QDCOUNT=1 */
+    buf[6]=(uint8_t)(ancount>>8); buf[7]=(uint8_t)(ancount&0xff);
+    buf[8]=0x00; buf[9]=0x00;
+    buf[10]=0x00; buf[11]=0x00;
+    memcpy(buf + 12, qname, (size_t)qnamelen);
+    int off = 12 + qnamelen;
+    buf[off++]=(uint8_t)(qtype>>8); buf[off++]=(uint8_t)(qtype&0xff);
+    buf[off++]=0x00; buf[off++]=0x01;  /* QCLASS IN */
+    return off;
+}
+
+/* Appends one RR's fixed 12-byte header (owner-name pointer, type,
+ * class, TTL, RDLENGTH). Caller appends rdlen bytes of RDATA (or
+ * doesn't, for the "RDATA past the message" case). */
+static int append_rr(uint8_t *buf, int off, uint16_t rtype, uint16_t rdlen)
+{
+    buf[off++]=0xc0; buf[off++]=0x0c;              /* name: ptr to Q */
+    buf[off++]=(uint8_t)(rtype>>8); buf[off++]=(uint8_t)(rtype&0xff);
+    buf[off++]=0x00; buf[off++]=0x01;               /* CLASS IN */
+    buf[off++]=0x00; buf[off++]=0x00; buf[off++]=0x01; buf[off++]=0x2c; /* TTL 300 */
+    buf[off++]=(uint8_t)(rdlen>>8); buf[off++]=(uint8_t)(rdlen&0xff);
+    return off;
+}
+
+/* One PTR answer, target name encoded raw (no compression). */
+static int build_response_ptr(uint8_t *buf, int bufsz,
+                              const uint8_t *qname, int qnamelen,
+                              const uint8_t *target, int targetlen)
+{
+    int need = 12 + qnamelen + 4 + 12 + targetlen;
+    if (bufsz < need) return 0;
+    int off = write_dns_header_and_q(buf, qname, qnamelen, 12, 1);
+    off = append_rr(buf, off, 12, (uint16_t)targetlen);
+    memcpy(buf + off, target, (size_t)targetlen);
+    return off + targetlen;
+}
+
+/* One PTR answer whose RDATA is a bare compression pointer back to
+ * the question name at offset 12. */
+static int build_response_ptr_compressed(uint8_t *buf, int bufsz,
+                                         const uint8_t *qname, int qnamelen)
+{
+    int need = 12 + qnamelen + 4 + 12 + 2;
+    if (bufsz < need) return 0;
+    int off = write_dns_header_and_q(buf, qname, qnamelen, 12, 1);
+    off = append_rr(buf, off, 12, 2);
+    buf[off++] = 0xc0; buf[off++] = 0x0c;
+    return off;
+}
+
+/* A malformed PTR RR (RDATA: the 7-byte label "partial" followed by
+ * a reserved label-type octet, 0x40 — top bits 01 — per RFC 1035
+ * §3.1/§4.1.4; see dns_read_name's rejection of (c & 0xC0) != 0 and
+ * != 0xC0) followed by a well-formed PTR RR. dns_read_name has
+ * already written "partial" into its output buffer by the time the
+ * reserved octet reddens the decode, so a careless caller that used
+ * the partial result anyway would leak it into answer; the correct
+ * behaviour is to discard it and keep walking to the next RR. */
+static const uint8_t PTR_RDATA_MALFORMED[] = {
+    0x07,'p','a','r','t','i','a','l', 0x40
+};
+#define PTR_RDATA_MALFORMED_LEN ((int)sizeof(PTR_RDATA_MALFORMED))
+
+static int build_response_ptr_malformed_then_valid(uint8_t *buf, int bufsz,
+                                                    const uint8_t *qname, int qnamelen,
+                                                    const uint8_t *target, int targetlen)
+{
+    int need = 12 + qnamelen + 4
+             + 12 + PTR_RDATA_MALFORMED_LEN
+             + 12 + targetlen;
+    if (bufsz < need) return 0;
+    int off = write_dns_header_and_q(buf, qname, qnamelen, 12, 2);
+    off = append_rr(buf, off, 12, (uint16_t)PTR_RDATA_MALFORMED_LEN);
+    memcpy(buf + off, PTR_RDATA_MALFORMED, (size_t)PTR_RDATA_MALFORMED_LEN);
+    off += PTR_RDATA_MALFORMED_LEN;
+    off = append_rr(buf, off, 12, (uint16_t)targetlen);
+    memcpy(buf + off, target, (size_t)targetlen);
+    return off + targetlen;
+}
+
+/* One PTR answer whose RDLENGTH claims bytes that were never
+ * written, so rdata + rdlen runs past the message. */
+static int build_response_ptr_rdata_past_end(uint8_t *buf, int bufsz,
+                                             const uint8_t *qname, int qnamelen)
+{
+    int need = 12 + qnamelen + 4 + 12;
+    if (bufsz < need) return 0;
+    int off = write_dns_header_and_q(buf, qname, qnamelen, 12, 1);
+    return append_rr(buf, off, 12, 50);
+}
+
+/* A CNAME RR followed by a PTR RR. */
+static int build_response_cname_then_ptr(uint8_t *buf, int bufsz,
+                                         const uint8_t *qname, int qnamelen,
+                                         const uint8_t *cname_target, int cnamelen,
+                                         const uint8_t *ptr_target, int ptrlen)
+{
+    int need = 12 + qnamelen + 4 + 12 + cnamelen + 12 + ptrlen;
+    if (bufsz < need) return 0;
+    int off = write_dns_header_and_q(buf, qname, qnamelen, 12, 2);
+    off = append_rr(buf, off, 5, (uint16_t)cnamelen);
+    memcpy(buf + off, cname_target, (size_t)cnamelen);
+    off += cnamelen;
+    off = append_rr(buf, off, 12, (uint16_t)ptrlen);
+    memcpy(buf + off, ptr_target, (size_t)ptrlen);
+    return off + ptrlen;
+}
+
+/* An A RR followed by a PTR RR. */
+static int build_response_a_then_ptr(uint8_t *buf, int bufsz,
+                                     const uint8_t *qname, int qnamelen,
+                                     const uint8_t ip4[4],
+                                     const uint8_t *ptr_target, int ptrlen)
+{
+    int need = 12 + qnamelen + 4 + 12 + 4 + 12 + ptrlen;
+    if (bufsz < need) return 0;
+    int off = write_dns_header_and_q(buf, qname, qnamelen, 12, 2);
+    off = append_rr(buf, off, 1, 4);
+    memcpy(buf + off, ip4, 4);
+    off += 4;
+    off = append_rr(buf, off, 12, (uint16_t)ptrlen);
+    memcpy(buf + off, ptr_target, (size_t)ptrlen);
+    return off + ptrlen;
+}
+
 /* ── dns_log_parse tests ─────────────────────────────────── */
 
 static void test_parse_query_a(void) {
@@ -152,6 +311,95 @@ static void test_parse_query_ptr(void) {
     dns_log_entry_t e;
     ASSERT_EQ(dns_log_parse(buf, len, "10.0.0.1", &e), 1);
     ASSERT_STR(e.qtype, "PTR");
+}
+
+/* #165: a PTR response's RDATA names its target (RFC 1035 §3.3.12).
+ * qname stays the reverse arpa name; answer is now the decoded
+ * target, where before this it stayed empty. */
+static void test_parse_response_ptr_no_compression(void) {
+    uint8_t buf[96];
+    int len = build_response_ptr(buf, sizeof(buf),
+                                  NAME_PTR_ARPA, PTR_ARPA_LEN,
+                                  NAME_HOST_EXAMPLE_NET, NAME2_LEN);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(buf, len, "8.8.8.8", &e), 1);
+    ASSERT_EQ(e.is_resp, 1);
+    ASSERT_STR(e.qname,  "1.0.0.10.in-addr.arpa");
+    ASSERT_STR(e.qtype,  "PTR");
+    ASSERT_STR(e.answer, "host.example.net");
+}
+
+/* The target name is a bare compression pointer back to the question
+ * — dns_read_name must follow it from this call site too. */
+static void test_parse_response_ptr_compressed_target(void) {
+    uint8_t buf[64];
+    int len = build_response_ptr_compressed(buf, sizeof(buf),
+                                             NAME_TEST_EXAMPLE, NAME_LEN);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(buf, len, "8.8.8.8", &e), 1);
+    ASSERT_STR(e.answer, "test.example.com");
+}
+
+/* A malformed PTR RR must be discarded, not left half-decoded in
+ * answer and not treated as fatal to the walk: the next RR's target
+ * is used instead. Seen to fail (answer reads "partial" and the
+ * second RR is never reached) with the `pn >= 0` guard in
+ * dns_log_parse removed. */
+static void test_parse_response_ptr_malformed_rr_is_skipped(void) {
+    uint8_t buf[128];
+    int len = build_response_ptr_malformed_then_valid(buf, sizeof(buf),
+                                                       NAME_PTR_ARPA, PTR_ARPA_LEN,
+                                                       NAME_HOST_EXAMPLE_NET, NAME2_LEN);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(buf, len, "8.8.8.8", &e), 1);
+    ASSERT_STR(e.answer, "host.example.net");
+}
+
+/* RDLENGTH claiming bytes past the end of the message must not be
+ * read: the RR is discarded and answer stays empty, same as any other
+ * malformed RR (the bound predates #165; this pins it for the PTR
+ * branch specifically). */
+static void test_parse_response_ptr_rdata_past_message(void) {
+    uint8_t buf[64];
+    int len = build_response_ptr_rdata_past_end(buf, sizeof(buf),
+                                                 NAME_PTR_ARPA, PTR_ARPA_LEN);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(buf, len, "8.8.8.8", &e), 1);
+    ASSERT_EQ((int)e.answer[0], 0);
+}
+
+/* A CNAME ahead of the PTR in the answer section must be skipped, not
+ * mistaken for a match. */
+static void test_parse_response_ptr_after_cname(void) {
+    uint8_t buf[128];
+    int len = build_response_cname_then_ptr(buf, sizeof(buf),
+                                             NAME_PTR_ARPA, PTR_ARPA_LEN,
+                                             NAME_TEST_EXAMPLE, NAME_LEN,
+                                             NAME_HOST_EXAMPLE_NET, NAME2_LEN);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(buf, len, "8.8.8.8", &e), 1);
+    ASSERT_STR(e.answer, "host.example.net");
+}
+
+/* An A record ahead of a PTR record in the same answer section: the
+ * existing A/AAAA preference must still win and stop the walk, so
+ * adding the PTR branch must not reorder it. */
+static void test_parse_response_mixed_a_and_ptr_prefers_a(void) {
+    uint8_t buf[128];
+    static const uint8_t ip4[] = {10, 0, 0, 99};
+    int len = build_response_a_then_ptr(buf, sizeof(buf),
+                                        NAME_PTR_ARPA, PTR_ARPA_LEN,
+                                        ip4,
+                                        NAME_HOST_EXAMPLE_NET, NAME2_LEN);
+    ASSERT(len > 0);
+    dns_log_entry_t e;
+    ASSERT_EQ(dns_log_parse(buf, len, "8.8.8.8", &e), 1);
+    ASSERT_STR(e.answer, "10.0.0.99");
 }
 
 static void test_parse_query_mx(void) {
@@ -292,6 +540,23 @@ static void test_record_and_snapshot(void) {
     ASSERT_EQ(s.dns_log_count, 1);
     ASSERT_STR(s.dns_log[0].qname,  "example.com");
     ASSERT_STR(s.dns_log[0].answer, "93.184.216.34");
+}
+
+/* #165: a PTR record's (qname, answer) is (reverse-arpa-name,
+ * target-host), the opposite of host_cache_add's (ip, host) shape.
+ * dns_log_record must not feed it through unchanged, or host_cache
+ * would gain an entry keyed on a host name. Seen to fail
+ * (host_cache_count grows by one) with the qtype guard in
+ * dns_log_record removed. */
+static void test_record_ptr_does_not_feed_host_cache_inverted(void) {
+    dns_log_clear();
+    host_cache_clear();
+    dns_log_entry_t e = make_entry("8.8.8.8", "1.0.0.10.in-addr.arpa",
+                                   "PTR", "host.example.net", 1);
+    dns_log_record(&e);
+    ASSERT_EQ(host_cache_count(), 0);
+    char out[HOST_CACHE_HOSTLEN];
+    ASSERT_EQ(host_cache_lookup("host.example.net", out, sizeof(out)), 0);
 }
 
 static void test_snapshot_newest_first(void) {
@@ -459,6 +724,12 @@ void run_dns_log_tests(void) {
     RUN_TEST(test_parse_nxdomain);
     RUN_TEST(test_parse_query_aaaa);
     RUN_TEST(test_parse_query_ptr);
+    RUN_TEST(test_parse_response_ptr_no_compression);
+    RUN_TEST(test_parse_response_ptr_compressed_target);
+    RUN_TEST(test_parse_response_ptr_malformed_rr_is_skipped);
+    RUN_TEST(test_parse_response_ptr_rdata_past_message);
+    RUN_TEST(test_parse_response_ptr_after_cname);
+    RUN_TEST(test_parse_response_mixed_a_and_ptr_prefers_a);
     RUN_TEST(test_parse_query_mx);
     RUN_TEST(test_parse_unknown_qtype);
     RUN_TEST(test_parse_rejects_short);
@@ -471,6 +742,7 @@ void run_dns_log_tests(void) {
 
     TEST_SUITE("dns_log ring buffer");
     RUN_TEST(test_record_and_snapshot);
+    RUN_TEST(test_record_ptr_does_not_feed_host_cache_inverted);
     RUN_TEST(test_snapshot_newest_first);
     RUN_TEST(test_clear_empties_log);
     RUN_TEST(test_snapshot_clamps_sel);

@@ -86,7 +86,7 @@ int dns_log_parse(const uint8_t *msg, int len,
         off = n + 4;
     }
 
-    /* walk answer RRs for first A / AAAA */
+    /* walk answer RRs for first A / AAAA / PTR */
     for (int i = 0; i < ancount; i++) {
         char rname[DNS_NAME_LEN];
         int n = dns_read_name(msg, len, off, rname, sizeof(rname));
@@ -106,6 +106,19 @@ int dns_log_parse(const uint8_t *msg, int len,
             memcpy(&a6, msg + rdata, 16);
             inet_ntop(AF_INET6, &a6, out->answer, sizeof(out->answer));
             break;
+        } else if (rtype == 12) {
+            /* RDATA is a domain-name (RFC 1035 §3.3.12), compressed
+             * against the whole message like any other name. A
+             * malformed target (e.g. a compression loop) leaves
+             * answer empty rather than aborting the walk — a later
+             * RR may still carry a usable A/AAAA/PTR. */
+            char pname[DNS_NAME_LEN];
+            int  pn = dns_read_name(msg, len, rdata, pname, sizeof(pname));
+            if (pn >= 0) {
+                netstr_copy(out->answer, sizeof(out->answer),
+                           (const uint8_t *)pname, strlen(pname));
+                break;
+            }
         }
         off = rdata + rdlen;
     }
@@ -133,8 +146,13 @@ void dns_log_record(const dns_log_entry_t *e)
     jsonl_emit_dns(e);
     /* Feed the IP->host cache so downstream views can show qnames
      * next to bare IPs (e.g. the packets dst column). host_cache_add
-     * silently drops NXDOMAIN / empty answers. */
-    host_cache_add(e->answer, e->qname);
+     * silently drops NXDOMAIN / empty answers. A PTR record's qname
+     * is the reverse arpa name and its answer is the target host
+     * name — the opposite of host_cache_add's (ip, host) shape, so
+     * feeding it through unchanged would cache an entry keyed on a
+     * host name instead of an IP. */
+    if (strcmp(e->qtype, "PTR") != 0)
+        host_cache_add(e->answer, e->qname);
 }
 
 void dns_log_snapshot(sloth_state_t *s)

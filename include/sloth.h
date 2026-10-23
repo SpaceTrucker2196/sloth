@@ -633,7 +633,8 @@ typedef struct {
     char   src[46];             /* source IP of the DNS packet */
     char   qname[DNS_NAME_LEN]; /* query name (truncated at 63 chars) */
     char   qtype[8];            /* "A", "AAAA", "PTR", "MX", "NS", "CNAME", "TXT", "SRV", "?" */
-    char   answer[46];          /* first A/AAAA IP, "NXDOMAIN", or "" */
+    char   answer[46];          /* first A/AAAA IP, a PTR record's target
+                                    name, "NXDOMAIN", or "" */
     int    is_resp;             /* 0 = query, 1 = response */
     /* 1 when qname holds less than the wire name: cut at 63 bytes, or
      * stopped at a NUL octet inside a label. The stored text is then a

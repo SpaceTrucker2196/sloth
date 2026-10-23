@@ -1199,14 +1199,13 @@ sloth graded it), `p` a PTR answer seen on the wire.
 is a host name; NXDOMAIN, an address and anything with a byte outside
 `[A-Za-z0-9._-]` are refused (counted). It holds 4,096 addresses, the
 least recently seen out first (counted), and is kept in `slothweb.db`
-(schema v4, `passive_ptr`, below). **The gap, stated:** sloth fills a
-`dns` record's `answer` only from the first A or AAAA record of a
-response (`src/dns_log.c` reads no PTR rdata; `docs/wiki/jsonl-schema.md`
-says "first A/AAAA answer"), so today a PTR answer arrives with an
-empty `answer`, is counted as `passive_ptr.empty`, and the cache stays
-empty. It fills once sloth writes a PTR answer's target there, a change
-to sloth outside `web/`; slothweb does not parse packets to make up
-for it.
+(schema v4, `passive_ptr`, below). Sloth decodes a PTR response's
+RDATA into the `dns` record's `answer` (#165; `src/dns_log.c`, RFC
+1035 §3.3.12); before that it filled `answer` only from the first A
+or AAAA record, so every PTR answer arrived empty, counted as
+`passive_ptr.empty`, and the cache never filled. slothweb does not
+parse packets itself — it only reads what sloth's `answer` field now
+carries.
 
 ### A4, and A2 made durable
 
