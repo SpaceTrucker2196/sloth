@@ -66,7 +66,7 @@ tick counter. Every method other than `GET`/`HEAD` is `405` on every
 path, a header block over 8 KB `431`, and idle or slow clients time out
 on an absolute budget.
 
-**Sources**: `web/README.md`, `web/src/web_flows.c`, `web/tools/demo.c`,
+**Sources**: `web/README.md` (Design), `web/ui/theme.css`, `web/ui/page.css`, `web/tools/palette.c`, `web/tests/test_tui_colors.c`, `src/tui.c` (`tui_ip_addstr()`, `tui_ssid_addstr()`, `find_brand()`, `tui_brand_addstr()`, `tui_info_color()`), `src/tui_palette.c`, `src/ip_color.c`, `src/views/dashboard_primitives.c` (`draw_sparkline_at()`), www.river.io/jeff (the Spacetrucker design system), `web/src/web_flows.c`, `web/tools/demo.c`,
 `web/tools/quickstart_check.sh`, `web/tests/test_flows.c`,
 `web/tests/test_readme.c`, `docs/assets/slothweb/`, `include/sloth.h`
 (`smb_session_t`'s dialect), `web/src/web_slothdb.c`,
@@ -95,7 +95,7 @@ re-implements), `src/top_hosts.c` (what `conn_count` counts),
 `src/probe_pnl.c` (what `mac_random` is), issues #102, #157, #158,
 #159, #160, #161, #162, #163 and #164.
 
-**Last updated**: 2026-10-23 (M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
+**Last updated**: 2026-10-23 (the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
 
 ---
 
@@ -707,6 +707,49 @@ The full account is in
   `/api/health` and `/`. The screenshots in `docs/assets/slothweb/` are
   of that demo.
 
+## The restyle: Spacetrucker chrome, TUI data (2026-10-23)
+
+The page took the owner's own design system, Spacetrucker
+(www.river.io/jeff), for its chrome, and sloth's TUI colours for its
+data (owner ruling 2026-10-23: "color code all data the same as the
+sloth cli"). The full account, with the token mapping, the data table
+and the contrast table, is `web/README.md`'s Design section.
+
+- **Chrome.** `web/ui/theme.css` holds the site's tokens (void, panel,
+  ink, dim, the phosphor family, brass, amber, ice, violet, the glows)
+  under slothweb's semantic names (`--bg`, `--panel`, `--ink`,
+  `--muted`, ...). The components are the site's: a brass-edged sticky
+  top bar (title, views, theme toggle), the pill status strip, eyebrow
+  panel titles, brass-bordered rounded cards, the site's buttons and
+  chips, dotted row rules, HUD brackets and a dot grid on the KPI
+  tiles. The side panel is gone: its sock/db/store lines are a footer.
+  Fira Code is named first and used only if installed; still no font
+  file and no request. No motion layer (a page updating every second
+  would retrigger it); the title's cursor blinks, off under reduced
+  motion; the CRT scanlines and vignette are a quarter of the site's
+  strength, under every panel, off in light and under reduced motion.
+- **Data.** Every address, SSID, host name, info string, severity, heat
+  level and sparkline is coloured as the TUI colours it, the dark theme
+  byte for byte: the hash palette (`tui_ip_fg` by `ip_color_index()`),
+  bold for an address seen in two or more sources, SSIDs by their own
+  hash, host names through the brand table (Google's letters in the
+  logo's sequence), info strings in the earth tones, the phosphor
+  pairs, `tui_heat()`'s thresholds, the sparkline's level grading, and
+  802.11 records on the monitor rows' xterm 236. `web/tools/palette.c`
+  generates the colours at build time from `src/tui_palette.c`'s pair
+  table and `src/tui.c`'s brand table (never copied by hand), and
+  `test_tui_colors.c` runs the TUI's own renderer against the page's
+  functions on fixed addresses, SSIDs and host names and requires the
+  same colour for every byte.
+- **Light theme.** The site's cream, behind the toggle; dark is the
+  default whatever the browser prefers, the choice kept in
+  `localStorage` (the page works without it) and applied by the head
+  script before first paint, inside the same CSP hash. The data keep
+  their hues: each TUI colour's HSL lightness is lowered in 0.005 steps
+  until it reads at 4.5:1 on both the light `--bg` and `--panel`.
+  Canvases read their colours from the custom properties and are
+  redrawn on a toggle.
+
 ## Tests
 
 `make web-test` is self-contained: no host file, loopback ephemeral
@@ -814,6 +857,13 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | every start-up message documented | `test_every_start_message_is_documented` (`test_readme.c`) |
 | the security section's points; the screenshots present and small | `test_security_section`, `test_screenshots` |
 | Flows: tabs, SMB1, withheld columns, validation, paging, the chord's fold | `test_flows.c` |
+
+The restyle maps as follows.
+
+| Item | Test |
+|---|---|
+| data coloured as the TUI colours it, byte for byte | `test_tui_colors.c` (`src/tui.c` linked and its output captured) |
+| Fira Code named, never fetched; the chrome tokens | `test_font_is_the_system_monospace_stack`, `test_design_tokens_match_spec` |
 
 A test cannot connect from a non-loopback address, so the socket-level
 refusals narrow the list and connect from loopback; the list function

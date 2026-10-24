@@ -19,9 +19,31 @@
 // characters it is. Stream values never become a class name, an
 // attribute or a URL; record types and anomaly kinds map to fixed
 // class tables.
+//
+// Every data value is coloured as sloth's TUI colours it (owner ruling
+// 2026-10-23): the palette is generated from the TUI's sources into
+// palette.css and palette.js (web/tools/palette.c), and the functions
+// below port the TUI's choices (src/ip_color.c, src/tui.c); the chrome
+// around the data is the Spacetrucker design system (theme.css).
 (function () {
   "use strict";
 
+  // The theme, before the first paint: the script sits in <head>, so
+  // this runs before the body is parsed, and the rest waits for the DOM.
+  // Dark is the default; only a stored "light" changes it, and a blocked
+  // or absent store means dark.
+  var THEME_KEY = "slothweb.theme";
+  var root = document.documentElement;
+  try {
+    if (window.localStorage.getItem(THEME_KEY) === "light") root.dataset.theme = "light";
+  } catch (e) { /* no storage: dark */ }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", main);
+  else main();
+
+  // main()'s body keeps the indentation it had as the module body:
+  // the page tests pin its lines as served.
+  function main() {
   var $ = function (id) { return document.getElementById(id); };
   var TICKER_MAX = 50;
   var NOSQL = false;
@@ -80,6 +102,198 @@
 
   function num(v) { return typeof v === "number" && isFinite(v); }
 
+  // ── data colours, as the TUI ──────────────────────────────────────
+  // Colours are CSS variables (palette.css), set as var() references,
+  // so a theme switch recolours the DOM without a redraw. A value picks
+  // a colour by its index only; it never becomes a class or attribute.
+  var P = SLOTH_PALETTE;
+
+  // A string's UTF-8 bytes: the TUI hashes bytes, not UTF-16 units.
+  function utf8(s) {
+    var out = [];
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c >= 0xd800 && c < 0xdc00 && i + 1 < s.length) {
+        var d = s.charCodeAt(i + 1);
+        if (d >= 0xdc00 && d < 0xe000) { c = 0x10000 + ((c - 0xd800) << 10) + (d - 0xdc00); i++; }
+      }
+      if (c < 0x80) out.push(c);
+      else if (c < 0x800) out.push(0xc0 | c >> 6, 0x80 | c & 63);
+      else if (c < 0x10000) out.push(0xe0 | c >> 12, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+      else out.push(0xf0 | c >> 18, 0x80 | c >> 12 & 63, 0x80 | c >> 6 & 63, 0x80 | c & 63);
+    }
+    return out;
+  }
+
+  // src/ip_color.c ip_color_index(): djb2 over the bytes, modulo
+  // IP_NUM_COLORS; "" is 0. tui_ip_addstr() colours an IP by it,
+  // tui_ssid_addstr() an SSID, tui_info_color() an info string.
+  function ipColorIndex(s) {
+    if (!s) return 0;
+    var b = utf8(s), h = 5381;
+    for (var i = 0; i < b.length; i++) h = (((h << 5) + h) + b[i]) >>> 0;
+    return h % P.ip;
+  }
+
+  // src/tui.c find_brand() and tui_brand_addstr(): from each point the
+  // earliest match of any table entry wins, ASCII case-insensitively, a
+  // tie going to the entry listed first; Google's letters take the
+  // logo's sequence in turn. [start, end, slot], slot -1 for plain text.
+  function lowerAscii(s) {
+    return s.replace(/[A-Z]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) + 32); });
+  }
+  function brandRuns(s) {
+    var low = lowerAscii(s), out = [], at = 0;
+    for (;;) {
+      var best = -1, brand = 0, len = 0;
+      for (var i = 0; i < P.brands.length; i++) {
+        var j = low.indexOf(P.brands[i][1], at);
+        if (j >= 0 && (best < 0 || j < best)) { best = j; brand = P.brands[i][0]; len = P.brands[i][1].length; }
+      }
+      if (best < 0) { if (at < s.length) out.push([at, s.length, -1]); return out; }
+      if (best > at) out.push([at, best, -1]);
+      if (brand === P.google) {
+        for (var k = 0; k < len; k++) out.push([best + k, best + k + 1, P.gseq[k % P.gseq.length]]);
+      } else {
+        out.push([best, best + len, brand]);
+      }
+      at = best + len;
+    }
+  }
+
+  // src/ip_color.h's sources and ip_index_is_cross_panel(): an address
+  // seen in more than one of them is drawn bold, as the dashboard does.
+  // The TUI rebuilds its index every frame from what is on screen; the
+  // page keeps one for its lifetime, at the TUI's 512 addresses.
+  var IP_SRC = { conn: 1, pkt: 2, arp: 4, dns: 8, icmp: 16, alert: 32, dev: 64 };
+  var IP_INDEX_CAP = 512;
+  // The source a ticker record's addresses count toward.
+  var RECORD_SRC = {
+    "t-dns": IP_SRC.dns, "t-icmp": IP_SRC.icmp, "t-arp": IP_SRC.arp,
+    "t-alert": IP_SRC.alert, "t-tls": IP_SRC.pkt, "t-http": IP_SRC.pkt,
+    "t-quic": IP_SRC.pkt, "t-other": IP_SRC.pkt
+  };
+  var IPX = new Map();
+  function crossPanel(m) { return (m & (m - 1)) !== 0; }
+  function ipNote(ip, bit) {
+    var e = IPX.get(ip);
+    if (!e) {
+      if (!bit || IPX.size >= IP_INDEX_CAP) return null;
+      e = { m: 0, els: [] };
+      IPX.set(ip, e);
+    }
+    if (bit && !(e.m & bit)) {
+      var was = crossPanel(e.m);
+      e.m |= bit;
+      // Turned cross-panel: what is already drawn turns bold too.
+      if (!was && crossPanel(e.m)) {
+        e.els.forEach(function (x) { x.classList.add("xb"); });
+        e.els = [];
+      }
+    }
+    return e;
+  }
+
+  var IPV4_RE = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+  function isIPv4(t) { return IPV4_RE.test(t); }
+  function isIPv6(t) {
+    if (!/^[0-9A-Fa-f:.]+$/.test(t)) return false;
+    var parts = t.split("::");
+    if (parts.length > 2) return false;
+    var groups = [];
+    for (var p = 0; p < parts.length; p++) if (parts[p] !== "") groups = groups.concat(parts[p].split(":"));
+    var n = 0;
+    for (var i = 0; i < groups.length; i++) {
+      var g = groups[i];
+      if (i === groups.length - 1 && isIPv4(g)) { n += 2; continue; }
+      if (!/^[0-9A-Fa-f]{1,4}$/.test(g)) return false;
+      n++;
+    }
+    return n >= 1 && (parts.length === 2 ? n <= 7 : n === 8);
+  }
+  function isIP(t) { return typeof t === "string" && (isIPv4(t) || isIPv6(t)); }
+
+  // An address in the TUI's hash colour, bold once cross-panel; bit is
+  // the source it was seen in (0: shown, not counted as a source).
+  function ipSpan(ip, bit) {
+    var sp = el("span", "", ip);
+    sp.style.color = "var(--k-" + ipColorIndex(ip) + ")";
+    var e = ipNote(ip, bit);
+    if (e && crossPanel(e.m)) sp.classList.add("xb");
+    else if (e) {
+      if (e.els.length >= 64) e.els = e.els.filter(function (x) { return x.isConnected; });
+      if (e.els.length < 64) e.els.push(sp);
+    }
+    return sp;
+  }
+
+  // tui_ssid_addstr(): the same palette, its own hash of the SSID.
+  function ssidSpan(ssid) {
+    var sp = el("span", "", ssid);
+    if (ssid !== "") sp.style.color = "var(--k-" + ipColorIndex(ssid) + ")";
+    return sp;
+  }
+
+  // tui_brand_addstr() into parent: brand runs in their colours, the
+  // rest in base (a d-* class: the pair the TUI row would use).
+  function brandText(parent, s, base) {
+    var runs = brandRuns(s);
+    for (var i = 0; i < runs.length; i++) {
+      var r = runs[i], sp = el("span", r[2] < 0 ? base || "" : "", s.slice(r[0], r[1]));
+      if (r[2] >= 0) sp.style.color = "var(--br-" + r[2] + ")";
+      parent.appendChild(sp);
+    }
+    return parent;
+  }
+  function brandSpan(s, base) { return brandText(el("span", ""), s, base); }
+
+  // Free text (a record's summary, an alert's detail): every address in
+  // it as tui_ip_addstr() draws one, the rest through the brand rules.
+  function ipTokens(s) {
+    var out = [], re = /[0-9A-Fa-f:.]+/g, m;
+    while ((m = re.exec(s)) !== null) {
+      var t = m[0], at = m.index;
+      if (at > 0 && /[0-9A-Za-z_]/.test(s.charAt(at - 1))) continue;
+      if (/[0-9A-Za-z_]/.test(s.charAt(at + t.length))) continue;
+      t = t.replace(/[.:]+$/, "");
+      var lead = /^[.:]*/.exec(t)[0].length;
+      if (lead && !(t.charAt(0) === ":" && t.charAt(1) === ":" && isIPv6(t))) {
+        at += lead;
+        t = t.slice(lead);
+      }
+      var port = /^(\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}$/.exec(t);
+      if (port) t = port[1];
+      if (isIP(t)) out.push([at, at + t.length]);
+    }
+    return out;
+  }
+  function richText(parent, s, bit, base) {
+    s = String(s);
+    var toks = ipTokens(s), at = 0;
+    for (var i = 0; i < toks.length; i++) {
+      if (toks[i][0] > at) brandText(parent, s.slice(at, toks[i][0]), base);
+      parent.appendChild(ipSpan(s.slice(toks[i][0], toks[i][1]), bit));
+      at = toks[i][1];
+    }
+    if (at < s.length) brandText(parent, s.slice(at), base);
+    return parent;
+  }
+
+  // tui_info_color(): an earth tone by the string's hash, CP_NORMAL for
+  // an empty one.
+  function infoClass(s) { return s ? "info-" + (ipColorIndex(s) & 7) : "d-normal"; }
+
+  // A series key or episode key: an address as an address, a MAC in
+  // CP_DIM (the TUI's device and station tables), anything else (an
+  // interface, a channel, an alert type) in CP_NORMAL.
+  function keySpan(k) {
+    if (isIP(k)) return ipSpan(k, 0);
+    return el("span", MAC_RE.test(k) ? "d-dim" : "d-normal", k);
+  }
+
+  // The heat ramp's class, tui_heat()'s 0.15 / 0.40 / 0.70.
+  function heatClass(f) { return f < 0.15 ? "h0" : f < 0.40 ? "h1" : f < 0.70 ? "h2" : "h3"; }
+
   // ── sensitivity (§5.3: 1.5 to 4 sd, view only) ────────────────────
   // Kept in this browser only; a blocked or absent store just means the
   // default.
@@ -132,10 +346,19 @@
     if (!num(r.seq) || r.seq <= lastSeq) return;
     lastSeq = r.seq;
     if (paused) { held++; set("tick-note", held + " held"); return; }
-    var li = el("li", typeClass(r.type));
+    var cls = typeClass(r.type);
+    // An 802.11 record interleaved with the IP capture's is a monitor
+    // row, on CP_MON_ROW's ground in its phosphor (src/views/packets.c);
+    // any other record is a packets-band row: its info text in the
+    // earth tone of its hash, every address in it in its own colour.
+    var mon = cls === "t-wifi";
+    var li = el("li", cls + (mon ? " mon" : ""));
     li.appendChild(el("span", "ts", num(r.ts) ? hhmmss(r.ts) : "-"));
     li.appendChild(el("span", "ty", r.type));
-    li.appendChild(el("span", "tx", r.text));
+    var tx = el("span", "tx");
+    if (mon) tx.textContent = String(r.text);
+    else richText(tx, r.text, RECORD_SRC[cls] || IP_SRC.pkt, infoClass(String(r.text)));
+    li.appendChild(tx);
     var list = $("ticker");
     list.insertBefore(li, list.firstChild);
     while (list.childNodes.length > TICKER_MAX) list.removeChild(list.lastChild);
@@ -158,10 +381,22 @@
       var li = el("li", sev >= 0 ? "sev" + sev : "");
       li.appendChild(el("span", "ts", num(a.ts) ? hhmmss(a.ts) : "-"));
       li.appendChild(el("span", "ty", sev >= 0 ? SEV_WORD[sev] : "?"));
-      li.appendChild(el("span", "ty", String(a.type).replace("alert.", "")));
-      li.appendChild(el("span", "tx", a.title + "  " + a.detail));
+      li.appendChild(el("span", "ty d-dim", String(a.type).replace("alert.", "")));
+      li.appendChild(alertText(a.title, a.detail));
       ol.appendChild(li);
     }
+  }
+
+  // src/views/alerts.c: the title in CP_BRIGHT, the detail in
+  // CP_NORMAL, with its addresses in their colours.
+  function alertText(title, detail) {
+    var tx = el("span", "tx");
+    tx.appendChild(el("span", "d-bright", String(title)));
+    if (detail !== undefined && detail !== null && detail !== "") {
+      tx.appendChild(document.createTextNode("  "));
+      richText(tx, detail, IP_SRC.alert, "d-normal");
+    }
+    return tx;
   }
 
   function sensor(s) {
@@ -301,6 +536,27 @@
   $("nav-history").addEventListener("click", function () { show("history"); });
   $("nav-lookup").addEventListener("click", function () { show("lookup"); });
 
+  // ── the theme toggle ──────────────────────────────────────────────
+  // Light or dark on :root's data-theme, the choice kept in this
+  // browser only. The DOM's colours are var() references and follow by
+  // themselves; canvases hold pixels, so the view is drawn again.
+  function themeLabel() {
+    var light = root.dataset.theme === "light";
+    set("theme", light ? "dark theme" : "light theme");
+    $("theme").title = "switch to the " + (light ? "dark" : "light") + " theme";
+  }
+  themeLabel();
+  $("theme").addEventListener("click", function () {
+    var light = root.dataset.theme !== "light";
+    if (light) root.dataset.theme = "light";
+    else delete root.dataset.theme;
+    try { window.localStorage.setItem(THEME_KEY, light ? "light" : "dark"); } catch (e) { /* none */ }
+    TH = null;
+    themeLabel();
+    if (view !== "lookup") show(view);
+    if (!$("drawer").hidden && D.sel) openDrawer(D.sel);
+  });
+
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") { closeDrawer(); return; }
     // A focused row or card opens as a click would.
@@ -337,21 +593,33 @@
   function css(name) {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
+  // Read once per theme: the toggle clears it and redraws.
   var TH = null;
   function theme() {
     if (TH) return TH;
     TH = { ink: css("--ink"), muted: css("--muted"), faint: css("--faint"),
            rule: css("--rule"), data: css("--data"), signal: css("--signal"),
-           bg: css("--bg"), panel: css("--panel"), k: [], heat: [] };
+           bg: css("--bg"), panel: css("--panel"), bright: css("--tui-bright"),
+           normal: css("--tui-normal"), dim: css("--tui-dim"), k: [], heat: [] };
     for (var i = 0; i < 8; i++) TH.k.push(css("--k-" + i));
     for (i = 0; i < 4; i++) TH.heat.push(css("--heat-" + i));
     return TH;
   }
-  // src/ip_color.c ip_color_index(): djb2, modulo 8.
+  // A key's colour from the TUI's hash, for a canvas or a swatch.
   function keyColor(k) {
-    var h = 5381;
-    for (var i = 0; i < k.length; i++) h = (((h << 5) + h) + k.charCodeAt(i)) >>> 0;
-    return theme().k[h % 8];
+    return theme().k[ipColorIndex(k)];
+  }
+  // draw_sparkline_at() (src/views/dashboard_primitives.c): a sample's
+  // level is round(v / max x 8), at least 1 above zero; level 0 is
+  // CP_DIM, 1-2 CP_NORMAL, 3-4 heat mid, 5-6 heat hi, 7-8 peak.
+  function sparkLevel(v, max) {
+    if (!(v > 0) || !(max > 0)) return 0;
+    var l = Math.floor(v / max * 8 + 0.5);
+    return l < 1 ? 1 : l > 8 ? 8 : l;
+  }
+  function sparkColor(l) {
+    var T = theme();
+    return l === 0 ? T.dim : l <= 2 ? T.normal : l <= 4 ? T.heat[1] : l <= 6 ? T.heat[2] : T.heat[3];
   }
   // The heat ramp's thresholds, tui_heat's 0.15 / 0.40 / 0.70.
   function heat(f) {
@@ -536,9 +804,20 @@
     }
     g.globalAlpha = 1;
     g.lineWidth = Math.max(1, dpr);
+    // A sparkline is graded by level, as the TUI's are.
+    var smax = 0;
+    if (opt.spark) for (i = 0; i < pts.length; i++) if (pts[i][1] > smax) smax = pts[i][1];
     for (i = 1; i < pts.length; i++) {
       if (pts[i][0] - pts[i - 1][0] > gapS) continue;
       var col = opt.color, b = band && band[i];
+      if (opt.spark) {
+        g.strokeStyle = sparkColor(sparkLevel(pts[i][1], smax));
+        g.beginPath();
+        g.moveTo(X(pts[i - 1][0]), Y(pts[i - 1][1]));
+        g.lineTo(X(pts[i][0]), Y(pts[i][1]));
+        g.stroke();
+        continue;
+      }
       if (b && b[3] > 0 && (pts[i][1] > b[1] || pts[i][1] < b[0])) {
         var z = Math.abs(pts[i][1] - b[2]) / b[3];
         col = heat(Math.min(1, (z - sens) / 4 + 0.15));
@@ -642,10 +921,12 @@
           var last = s.points.length ? s.points[s.points.length - 1][1] : NaN;
           set("k-tp", fmt(last) + " B/s");
           var opt = { from: from, to: to, step: s.step, kind: s.kind,
-                      color: theme().ink, band: bd };
+                      color: theme().normal, band: bd };
           opt.axes = false;
+          opt.spark = true;
           draw($("k-tp-spark"), s.points, opt);
           opt.axes = true;
+          opt.spark = false;
           draw($("o-nvn"), s.points, opt);
           set("o-nvn-note", "iface.rx_rate " + O.key + ", 24 h, " + tier + " tier" +
               (bd ? "" : "; no baseline yet"));
@@ -695,8 +976,8 @@
     var hd = el("div", "hd");
     hd.appendChild(el("span", "gl", kindGlyph(a.kind)));
     hd.appendChild(el("span", "kd", a.kind + " " + a.rule));
-    var ky = el("span", "ky", a.key !== "" ? a.key : "(sensor)");
-    if (a.key !== "") ky.style.color = keyColor(a.key);
+    var ky = el("span", "ky");
+    ky.appendChild(a.key !== "" ? keySpan(String(a.key)) : el("span", "d-dim", "(sensor)"));
     hd.appendChild(ky);
     c.appendChild(hd);
     var score = num(a.score) ? Math.max(0, Math.min(100, a.score)) : 0;
@@ -706,7 +987,7 @@
     fill.style.background = heat(score / 100);
     bar.appendChild(fill);
     c.appendChild(bar);
-    c.appendChild(el("div", "ev", a.evidence));
+    c.appendChild(richText(el("div", "ev"), a.evidence, 0, "d-normal"));
     if (typeof a.metric === "string") {
       var cv = document.createElement("canvas");
       c.appendChild(cv);
@@ -714,8 +995,7 @@
       var to = now - now % 10 + 10, from = to - 3600;
       getJSON(seriesPath(a.metric, a.key, "fine", from, to)).then(function (j) {
         draw(cv, j.points || [], { from: from, to: to, step: 10, kind: j.kind,
-                                   color: a.key !== "" ? keyColor(a.key) : theme().ink,
-                                   axes: false });
+                                   color: theme().normal, axes: false, spark: true });
       }).catch(function () { /* the card stands without it */ });
     }
     c.appendChild(el("div", "tm", (a.open ? "open" : "closed") + "  score " + score +
@@ -814,7 +1094,7 @@
           (bd ? ", band mean ± " + sens.toFixed(1) + " sd" : ", no baseline yet") +
           (!A.storeOn && Number($("a-win").value) > 86400 ? "; minute and hour tiers need a WITH_SQLITE build" : ""));
       draw($("a-chart"), s.points, { from: from, to: to, step: s.step, kind: s.kind,
-                                     color: theme().ink, axes: true, band: bd });
+                                     color: theme().normal, axes: true, band: bd });
     }).catch(function (e) { set("a-src", "error: " + e.message); });
   }
 
@@ -839,8 +1119,8 @@
       while (box.firstChild) box.removeChild(box.firstChild);
       rows.forEach(function (r) {
         var cell = el("div", "cell" + (A.keys[A.key] === r.key ? " on" : ""));
-        var nm = el("div", "nm", r.key || "(global)");
-        nm.style.color = keyColor(r.key);
+        var nm = el("div", "nm");
+        nm.appendChild(r.key ? keySpan(r.key) : el("span", "d-normal", "(global)"));
         cell.appendChild(nm);
         var cv = document.createElement("canvas");
         cell.appendChild(cv);
@@ -851,7 +1131,7 @@
         });
         box.appendChild(cell);
         draw(cv, r.pts, { from: from, to: to, step: 10, kind: r.kind,
-                          color: keyColor(r.key), axes: false });
+                          color: theme().normal, axes: false, spark: true });
       });
       set("a-multi-note", A.keys.length > 24 ? "the 24 most recently seen of " + A.keys.length : "");
     });
@@ -988,7 +1268,8 @@
 
   // The cells from the server's 36 hex digits, cell 0 the oldest, its
   // bit the high bit of the first digit; present in --phosphor, absent
-  // in --bg (§8.12). n of them across the width: 144 of 10 minutes on
+  // in --bg (§8.12; present is CP_NORMAL's phosphor now, ruling
+  // 2026-10-23). n of them across the width: 144 of 10 minutes on
   // the Devices view and the drawer, History's presence_cells over its
   // range (the rest of the 144 are past it).
   function drawStrip(c, hex, n) {
@@ -1001,7 +1282,7 @@
     if (typeof hex !== "string" || !/^[0-9a-f]{36}$/.test(hex)) return;
     n = num(n) && n >= 1 && n <= 144 ? Math.floor(n) : 144;
     var cw = W / n;
-    g.fillStyle = css("--phosphor");
+    g.fillStyle = theme().normal;
     for (var i = 0; i < n; i++) {
       var v = parseInt(hex.charAt(i >> 2), 16);
       if (v & (8 >> (i & 3))) g.fillRect(Math.floor(i * cw), 0, Math.max(dpr, Math.ceil(cw)), H);
@@ -1033,26 +1314,50 @@
     return r;
   }
 
+  // One cell's content, replaced.
+  function put(cell, node) {
+    while (cell.firstChild) cell.removeChild(cell.firstChild);
+    cell.appendChild(node);
+  }
+
+  // The TUI's device table (src/views/devices.c): the MAC in CP_DIM, a
+  // known vendor and a name in CP_BRIGHT (an unknown one dim), source
+  // and signal dim, the risk heat-graded by level (MED 0.4, HIGH 0.7,
+  // CRIT 1.0, LOW dim), a non-zero count at heat 0.5; the address in
+  // its hash colour, the SSID in its own, the name through the brands.
+  var RISK_HEAT = [-1, 0.4, 0.7, 1.0];
   function fill(r, d) {
     r.mac = typeof d.mac === "string" ? d.mac : "";
     var risk = num(d.risk) && d.risk >= 0 && d.risk <= 3 ? d.risk : 0;
     r.el.className = "drow" + (SEV_CLASS[risk] ? " " + SEV_CLASS[risk] : "") +
                      (r.mac === D.sel ? " on" : "");
     r.sw.style.background = keyColor(r.mac);
-    r.macText.className = d.random ? "rnd" : "";
+    r.macText.className = d.random ? "rnd d-dim" : "d-dim";
     r.macText.textContent = (d.random ? "~" : "") + r.mac;
+    r.cells["c-ven"].className = "c-ven " + (d.vendor === null ? "d-dim" : "d-bright");
     r.cells["c-ven"].textContent = d.vendor === null ? "?" : String(d.vendor);
-    r.cells["c-ip"].textContent = d.ip === null ? "-" : String(d.ip);
+    put(r.cells["c-ip"], isIP(d.ip) ? ipSpan(d.ip, IP_SRC.dev)
+                                    : el("span", "d-normal", d.ip === null ? "-" : String(d.ip)));
     r.glyph.textContent = d.name_src === null ? "" : String(d.name_src) + " ";
-    r.nameText.textContent = d.name === null ? "-" : String(d.name);
-    r.cells["c-ss"].textContent = d.ssid === null ? "-" : String(d.ssid);
+    while (r.nameText.firstChild) r.nameText.removeChild(r.nameText.firstChild);
+    if (d.name === null) r.nameText.appendChild(el("span", "d-normal", "-"));
+    else brandText(r.nameText, String(d.name), "d-bright");
+    put(r.cells["c-ss"], d.ssid === null ? el("span", "d-dim", "-") : ssidSpan(String(d.ssid)));
+    r.cells["c-sig"].className = "c-sig d-dim";
     r.cells["c-sig"].textContent = num(d.signal) ? String(d.signal) : "-";
+    r.cells["c-src"].className = "c-src d-dim";
     r.cells["c-src"].textContent = srcGlyphs(num(d.sources) ? d.sources : 0);
+    r.cells["c-rk"].className = "c-rk " + (RISK_HEAT[risk] > 0 ? heatClass(RISK_HEAT[risk]) : "d-dim");
     r.cells["c-rk"].textContent = String(risk);
+    r.cells["c-fs"].className = "c-fs d-dim";
     r.cells["c-fs"].textContent = shortStamp(d.first_seen);
+    r.cells["c-ls"].className = "c-ls d-dim";
     r.cells["c-ls"].textContent = shortStamp(d.last_seen);
+    r.cells["c-z"].className = "c-z d-normal";
     r.cells["c-z"].textContent = num(d.z) ? d.z.toFixed(1) : "-";
-    r.cells["c-an"].textContent = num(d.anomalies) ? String(d.anomalies) : "0";
+    var an = num(d.anomalies) ? d.anomalies : 0;
+    r.cells["c-an"].className = "c-an " + (an > 0 ? heatClass(0.5) : "d-dim");
+    r.cells["c-an"].textContent = String(an);
     drawStrip(r.cv, d.presence);
   }
 
@@ -1111,15 +1416,33 @@
   }
   $("dr-close").addEventListener("click", closeDrawer);
 
+  // A value is a string (in CP_NORMAL) or a node already coloured.
+  function valNode(cls, v) {
+    if (v instanceof Node) { var w = el("span", cls); w.appendChild(v); return w; }
+    return el("span", cls + " d-normal", v === null || v === undefined ? "-" : v);
+  }
+
   function kvList(box, pairs) {
     var kv = el("div", "kv");
     for (var i = 0; i < pairs.length; i++) {
       if (pairs[i][1] === null || pairs[i][1] === undefined || pairs[i][1] === "") continue;
       kv.appendChild(el("span", "k", pairs[i][0]));
-      kv.appendChild(el("span", "v", pairs[i][1]));
+      kv.appendChild(valNode("v", pairs[i][1]));
     }
     box.appendChild(kv);
   }
+
+  // The drawer's and Lookup's coloured values; null stays null, so the
+  // row is left out as before.
+  function ipVal(v, bit) { return v === null || v === undefined ? null : isIP(String(v)) ? ipSpan(String(v), bit) : String(v); }
+  function hostVal(v, extra) {
+    if (v === null || v === undefined || v === "") return null;
+    var sp = brandSpan(String(v), "d-bright");
+    if (extra) sp.appendChild(el("span", "d-dim", extra));
+    return sp;
+  }
+  function ssidVal(v) { return v === null || v === undefined ? null : ssidSpan(String(v)); }
+  function macVal(v) { return v === null || v === undefined ? null : el("span", "d-dim", String(v)); }
 
   function itemList(box, title, items, line, more) {
     box.appendChild(el("div", "label", title + (more ? " (more than shown)" : "")));
@@ -1128,7 +1451,7 @@
     for (var i = 0; items && i < items.length; i++) {
       var li = el("li", "");
       li.appendChild(el("span", "ts", shortStamp(items[i].last_seen)));
-      li.appendChild(el("span", "tx", line(items[i])));
+      li.appendChild(valNode("tx", line(items[i])));
       ol.appendChild(li);
     }
     box.appendChild(ol);
@@ -1145,7 +1468,7 @@
   }
 
   function nameLine(n) {
-    return n.name + "  (" + n.src + ", " + n.where + ")";
+    return hostVal(n.name, "  (" + n.src + ", " + n.where + ")");
   }
 
   function openDrawer(mac) {
@@ -1160,6 +1483,7 @@
     $("dr-close").focus();
     set("dr-mac", mac);
     $("dr-sw").style.background = keyColor(mac);
+    $("dr-mac").className = "d-dim";
     set("dr-note", "loading");
     getJSON("/api/device/" + encodeURIComponent(mac)).then(function (j) {
       if (gen !== DR.gen) return;
@@ -1169,26 +1493,35 @@
                                      : "sloth.db " + j.db + "; the stream only");
       var r = j.record, dt = r && r.detail ? r.detail : {};
       kvList(box, ouiPairs(j.oui).concat(r ? [
-        ["ip", r.ip], ["name", r.name === null ? null : r.name + " (" + r.name_src + ")"],
-        ["hostname", dt.hostname], ["last ssid", r.ssid],
+        ["ip", ipVal(r.ip, IP_SRC.dev)],
+        ["name", r.name === null ? null : hostVal(r.name, " (" + r.name_src + ")")],
+        ["hostname", hostVal(dt.hostname)], ["last ssid", ssidVal(r.ssid)],
         ["signal", num(r.signal) ? r.signal + " dBm" : null],
         ["sources", srcGlyphs(r.sources)], ["risk", String(r.risk)],
         ["first seen", stamp(r.first_seen)], ["last seen", stamp(r.last_seen)],
         ["z now", num(r.z) ? r.z.toFixed(1) : null],
         ["camera", dt.camera_vendor ? dt.camera_vendor + (dt.camera_model ? " " + dt.camera_model : "") : null],
         ["dhcp vci", dt.dhcp_vci]
-      ] : [["stream ip", j.stream ? j.stream.ip : null],
+      ] : [["stream ip", j.stream ? ipVal(j.stream.ip, IP_SRC.dev) : null],
            ["stream first seen", j.stream && num(j.stream.first_seen) ? stamp(j.stream.first_seen) : null]]));
       itemList(box, "names (passive)", j.names, nameLine, false);
-      itemList(box, "pnl ssids", j.ssids, function (x) { return x.ssid; }, j.ssids_more);
+      itemList(box, "pnl ssids", j.ssids, function (x) { return ssidSpan(String(x.ssid)); }, j.ssids_more);
       itemList(box, "associations", j.assocs, function (x) {
-        return x.bssid + "  " + (x.ssid === null ? "" : x.ssid) + "  ch " + x.channel +
-               (num(x.signal) ? "  " + x.signal + " dBm" : "") + "  source " + x.source;
+        var sp = el("span", "");
+        sp.appendChild(el("span", "d-dim", x.bssid + "  "));
+        if (x.ssid !== null) sp.appendChild(ssidSpan(String(x.ssid)));
+        sp.appendChild(el("span", "d-normal", "  ch " + x.channel +
+                          (num(x.signal) ? "  " + x.signal + " dBm" : "") + "  source " + x.source));
+        return sp;
       }, j.assocs_more);
-      itemList(box, "arp addresses", j.ips, function (x) { return x.addr; }, j.ips_more);
+      itemList(box, "arp addresses", j.ips, function (x) { return ipVal(x.addr, IP_SRC.arp); }, j.ips_more);
       itemList(box, "alerts naming it", j.alerts, function (x) {
-        return (x.sev >= 0 && x.sev <= 2 ? SEV_WORD[x.sev] : "?") + "  " + x.title +
-               "  x" + x.count;
+        var ok = x.sev >= 0 && x.sev <= 2;
+        var sp = el("span", ok ? "sev" + x.sev : "");
+        sp.appendChild(el("span", "ty", ok ? SEV_WORD[x.sev] : "?"));
+        sp.appendChild(el("span", "d-bright", "  " + x.title));
+        sp.appendChild(el("span", x.count > 1 ? heatClass(0.6) : "d-dim", "  x" + x.count));
+        return sp;
       }, j.alerts_more);
       drawStrip($("dr-strip"), j.presence);
       var wk = j.week || {};
@@ -1220,16 +1553,17 @@
       var box = $("l-card");
       while (box.firstChild) box.removeChild(box.firstChild);
       set("l-src", j.kind + " " + j.q + ", sloth.db " + j.db);
-      kvList(box, j.kind === "mac" ? ouiPairs(j.oui) : [["ip", j.q]]);
+      kvList(box, j.kind === "mac" ? ouiPairs(j.oui) : [["ip", ipVal(j.q, 0)]]);
       itemList(box, "names (passive)", j.names, nameLine, false);
       if (j.kind === "mac")
-        itemList(box, "arp addresses", j.ips, function (x) { return x.addr; }, j.ips_more);
+        itemList(box, "arp addresses", j.ips, function (x) { return ipVal(x.addr, IP_SRC.arp); }, j.ips_more);
       else
-        itemList(box, "arp macs", j.macs, function (x) { return x.addr; }, j.macs_more);
+        itemList(box, "arp macs", j.macs, function (x) { return macVal(x.addr); }, j.macs_more);
       var d = j.device;
       if (d) {
-        kvList(box, [["sloth.db", d.mac], ["vendor", d.vendor], ["name", d.name],
-                     ["last seen", stamp(d.last_seen)]]);
+        kvList(box, [["sloth.db", macVal(d.mac)],
+                     ["vendor", d.vendor === null ? null : el("span", "d-bright", String(d.vendor))],
+                     ["name", hostVal(d.name)], ["last seen", stamp(d.last_seen)]]);
         var b = el("button", "", "open the drawer");
         b.type = "button";
         b.addEventListener("click", function () { openDrawer(d.mac); });
@@ -1306,30 +1640,37 @@
     var sw = el("span", "sw");
     sw.style.background = keyColor(String(a.bssid));
     bs.appendChild(sw);
-    bs.appendChild(el("span", "", a.bssid));
+    bs.appendChild(el("span", "d-dim", a.bssid));
     row.appendChild(bs);
-    var ss = el("span", "c-ssid" + (a.multi_ssid ? " warn" : ""),
-                (a.ssid === null ? "(hidden)" : a.ssid) +
-                (a.ssid_count > 1 ? "  +" + (a.ssid_count - 1) + " ssids" : ""));
+    // The SSID in its hash colour; the warning (KARMA, multi-VAP) is
+    // the "+N ssids" after it, at the heat the TUI warns at.
+    var ss = el("span", "c-ssid");
+    ss.appendChild(a.ssid === null ? el("span", "d-dim", "(hidden)") : ssidSpan(String(a.ssid)));
+    if (a.ssid_count > 1) ss.appendChild(el("span", "warn", "  +" + (a.ssid_count - 1) + " ssids"));
     row.appendChild(ss);
-    row.appendChild(el("span", "c-ch", String(a.channel)));
-    row.appendChild(el("span", "c-sig", num(a.signal) ? String(a.signal) : "-"));
-    row.appendChild(el("span", "c-enc", (a.enc === null ? "?" : a.enc) + " " +
+    row.appendChild(el("span", "c-ch d-normal", String(a.channel)));
+    row.appendChild(el("span", "c-sig d-dim", num(a.signal) ? String(a.signal) : "-"));
+    row.appendChild(el("span", "c-enc d-normal", (a.enc === null ? "?" : a.enc) + " " +
                        (a.akm_names && a.akm_names.length ? a.akm_names.join(",") : "")));
-    row.appendChild(el("span", "c-mfp", "mfp " + a.mfp_word));
-    row.appendChild(el("span", "c-dg" + (a.downgrade ? " warn" : ""),
+    row.appendChild(el("span", "c-mfp d-normal", "mfp " + a.mfp_word));
+    row.appendChild(el("span", "c-dg" + (a.downgrade ? " warn" : " d-dim"),
                        a.downgrade_names && a.downgrade_names.length
                          ? a.downgrade_names.join(", ") : "-"));
-    row.appendChild(el("span", "c-km" + (a.karma ? " warn" : ""),
+    row.appendChild(el("span", "c-km" + (a.karma ? " warn" : " d-dim"),
                        a.karma ? "karma " + a.karma.score : "-"));
-    row.appendChild(el("span", "c-ls", shortStamp(a.last_seen)));
+    row.appendChild(el("span", "c-ls d-dim", shortStamp(a.last_seen)));
     var box = el("div", "apbox");
     box.appendChild(row);
     if (a.ssid_count > 1 && a.ssids) {
       var hist = el("div", "sub aphist");
-      hist.textContent = "ssid history: " + a.ssids.map(function (x) {
-        return x.ssid + " (" + shortStamp(x.first_seen) + " to " + shortStamp(x.last_seen) + ")";
-      }).join("; ") + (a.ssids_more ? "; more" : "");
+      hist.appendChild(document.createTextNode("ssid history: "));
+      a.ssids.forEach(function (x, i) {
+        if (i) hist.appendChild(document.createTextNode("; "));
+        hist.appendChild(ssidSpan(String(x.ssid)));
+        hist.appendChild(document.createTextNode(" (" + shortStamp(x.first_seen) + " to " +
+                                                 shortStamp(x.last_seen) + ")"));
+      });
+      if (a.ssids_more) hist.appendChild(document.createTextNode("; more"));
       box.appendChild(hist);
     }
     return box;
@@ -1379,11 +1720,11 @@
         g.fillRect(padL + (a - j.from) / span * (W - padL), y, Math.max(dpr, (b - a) / span * (W - padL)), rh);
         g.globalAlpha = 1;
       });
-      g.fillStyle = T.muted;
+      g.fillStyle = T.dim;
       g.fillText(String(r.bssid), 2 * dpr, y + rh / 2);
       var max = 0;
       (r.cells || []).forEach(function (v) { if (num(v) && v > max) max = v; });
-      g.fillStyle = (r.floods || []).length ? css("--sev-crit") : T.data;
+      g.fillStyle = (r.floods || []).length ? css("--sev-crit") : T.normal;
       for (var k = 0; k < (r.cells || []).length; k++) {
         var v = r.cells[k];
         if (!num(v) || v <= 0 || max <= 0) continue;
@@ -1417,7 +1758,7 @@
       if (gen !== WF.gen) return;
       var s = res[0], bl = res[1];
       draw($("w-probe"), s.points, { from: r.from, to: r.to, step: s.step, kind: s.kind,
-                                     color: theme().ink, axes: true,
+                                     color: theme().normal, axes: true,
                                      band: bands(s.points, bl, s.kind, s.step) });
       set("w-pc-note", s.points.length + " buckets, " + s.source +
           (bl && bl.cells ? ", band = mean ± " + sens.toFixed(1) + " sd" : ", no baseline yet"));
@@ -1477,29 +1818,40 @@
     });
   }
 
+  function flowAddr(a, none, hot) {
+    var sp = el("span", "");
+    if (typeof a !== "string") { sp.className = "d-dim"; sp.textContent = none; return sp; }
+    if (hot || !isIP(a)) { sp.textContent = a; return sp; }
+    sp.appendChild(ipSpan(a, IP_SRC.conn));
+    return sp;
+  }
+
   function flowRow(f, cols) {
     var from = f.src, to = f.dst;
     var row = el("div", f.smb1 === true ? "frow sev2" : "frow");
     // The address columns grow to a full IPv6 address (40ch) when the
     // row has room; narrower, the cell's ellipsis hides the tail, so the
     // whole address is its tooltip.
-    var sc = row.appendChild(el("span", "", typeof from === "string" ? from : "-"));
-    var dc = row.appendChild(el("span", "", typeof to === "string" ? to : "(source only)"));
+    // An SMB1 row is the critical colour throughout, addresses too, as
+    // the TUI's alert-hot override wins over the hash colour.
+    var hot = f.smb1 === true;
+    var sc = row.appendChild(flowAddr(from, "-", hot));
+    var dc = row.appendChild(flowAddr(to, "(source only)", hot));
     if (typeof from === "string") sc.title = from;
     if (typeof to === "string") dc.title = to;
     var counts = (f.counts || []).map(function (v, i) {
       return String(cols[i] || "?").replace(/_count$/, "") + " " + fmt(v);
     }).join("  ");
-    row.appendChild(el("span", "", counts));
-    row.appendChild(el("span", "n", fmt(f.total)));
+    row.appendChild(el("span", hot ? "" : "d-normal", counts));
+    row.appendChild(el("span", hot ? "n" : "n d-bright", fmt(f.total)));
     var extra = "";
     if (num(f.server_port)) extra = ":" + f.server_port;
     if (typeof f.dialect === "string") extra += " " + f.dialect;
     if (num(f.version)) extra = "v" + (f.version === 0 ? "1" : f.version === 1 ? "2c" : f.version === 3 ? "3" : f.version);
     if (num(f.proto_mask)) extra = "mask " + f.proto_mask;
-    row.appendChild(el("span", "", extra || "-"));
-    row.appendChild(el("span", "", num(f.first_seen) ? shortStamp(f.first_seen) : "-"));
-    row.appendChild(el("span", "", num(f.last_seen) ? shortStamp(f.last_seen) : "-"));
+    row.appendChild(el("span", hot ? "" : "d-normal", extra || "-"));
+    row.appendChild(el("span", hot ? "" : "d-dim", num(f.first_seen) ? shortStamp(f.first_seen) : "-"));
+    row.appendChild(el("span", hot ? "" : "d-dim", num(f.last_seen) ? shortStamp(f.last_seen) : "-"));
     if (typeof from === "string") {
       row.classList.add("go");
       row.tabIndex = 0;
@@ -1630,15 +1982,17 @@
     nodes.forEach(function (n, i) {
       var p = pos[i];
       var r = (2 + 4 * Math.sqrt(n.total / maxN)) * dpr;
-      x.fillStyle = keyColor(String(n.id));
+      var id = String(n.id);
+      // A node is an address: its hash colour, bold once cross-panel.
+      var e = isIP(id) ? ipNote(id, IP_SRC.conn) : null;
+      x.fillStyle = keyColor(id);
       x.beginPath();
       x.arc(p.x, p.y, r, 0, 2 * Math.PI);
       x.fill();
       var right = Math.cos(p.a) >= 0;
       x.textAlign = right ? "left" : "right";
       x.textBaseline = "middle";
-      x.fillStyle = T.ink;
-      var id = String(n.id);
+      x.font = (e && crossPanel(e.m) ? "bold " : "") + (11 * dpr) + "px " + css("--font-mono");
       var t = cutLabel(id, narrow ? 11 : 22);
       var lx = p.x + (right ? 1 : -1) * (r + 4 * dpr), ly = p.y;
       x.fillText(t, lx, ly);
@@ -1766,7 +2120,7 @@
     var cw = W / Math.max(1, o.cols), h2 = (H - 8 * dpr) / 2;
     for (i = 0; i < o.cols; i++) {
       var d = o.devices[i] || 0, a = o.alerts[i] || 0;
-      g.fillStyle = T.data;
+      g.fillStyle = T.normal;
       if (d) g.fillRect(i * cw, h2 - h2 * d / max, Math.max(dpr, cw - dpr), h2 * d / max);
       g.fillStyle = css("--sev-warn");
       if (a) g.fillRect(i * cw, h2 + 2 * dpr, Math.max(dpr, cw - dpr), h2 * a / max);
@@ -1819,7 +2173,14 @@
           (part.rows || []).forEach(function (r) {
             var li = el("li", "");
             li.appendChild(el("span", "ts", shortStamp(r.first_seen)));
-            li.appendChild(el("span", "tx", r.ident + "  " + (r.label === null ? "-" : r.label)));
+            // ident: a BSSID or a MAC; label: an AP's or a probe's SSID,
+            // a device's host name (or vendor).
+            var tx = el("span", "tx");
+            tx.appendChild(el("span", "d-dim", r.ident + "  "));
+            if (r.label === null || r.label === "") tx.appendChild(el("span", "d-dim", "-"));
+            else if (k[0] === "devices") brandText(tx, String(r.label), "d-bright");
+            else tx.appendChild(ssidSpan(String(r.label)));
+            li.appendChild(tx);
             ol.appendChild(li);
           });
           box.appendChild(ol);
@@ -1834,12 +2195,16 @@
     var sw = el("span", "sw");
     sw.style.background = keyColor(String(d.mac));
     mac.appendChild(sw);
-    mac.appendChild(el("span", d.random ? "rnd" : "", (d.random ? "~" : "") + d.mac));
+    mac.appendChild(el("span", d.random ? "rnd d-dim" : "d-dim", (d.random ? "~" : "") + d.mac));
     row.appendChild(mac);
-    row.appendChild(el("span", "c-ven", d.vendor === null ? "?" : d.vendor));
-    row.appendChild(el("span", "c-nm", d.name === null ? "-" : d.name));
-    row.appendChild(el("span", "c-fs", shortStamp(d.first_seen)));
-    row.appendChild(el("span", "c-ls", shortStamp(d.last_seen)));
+    row.appendChild(el("span", "c-ven " + (d.vendor === null ? "d-dim" : "d-bright"),
+                       d.vendor === null ? "?" : d.vendor));
+    var nm = el("span", "c-nm");
+    if (d.name === null) nm.appendChild(el("span", "d-normal", "-"));
+    else brandText(nm, String(d.name), "d-bright");
+    row.appendChild(nm);
+    row.appendChild(el("span", "c-fs d-dim", shortStamp(d.first_seen)));
+    row.appendChild(el("span", "c-ls d-dim", shortStamp(d.last_seen)));
     var cv = document.createElement("canvas");
     row.appendChild(cv);
     row.addEventListener("click", function () { openDrawer(d.mac); });
@@ -1870,8 +2235,14 @@
         var li = el("li", sev >= 0 ? "sev" + sev : "");
         li.appendChild(el("span", "ts", shortStamp(a.last_seen)));
         li.appendChild(el("span", "ty", sev >= 0 ? SEV_WORD[sev] : "?"));
-        li.appendChild(el("span", "tx", (a.title === null ? "?" : a.title) +
-                          (a.ip === null ? "" : "  " + a.ip) + "  x" + a.count));
+        var tx = alertText(a.title === null ? "?" : a.title, null);
+        if (a.ip !== null) {
+          tx.appendChild(document.createTextNode("  "));
+          tx.appendChild(isIP(String(a.ip)) ? ipSpan(String(a.ip), IP_SRC.alert)
+                                           : el("span", "d-normal", String(a.ip)));
+        }
+        tx.appendChild(el("span", a.count > 1 ? heatClass(0.6) : "d-dim", "  x" + a.count));
+        li.appendChild(tx);
         ol.appendChild(li);
       });
       if (!j.alerts || !j.alerts.length) ol.appendChild(el("li", "sub", "none in the range"));
@@ -1885,7 +2256,12 @@
         var li = el("li", "");
         li.appendChild(el("span", "ts", shortStamp(f.last_seen)));
         li.appendChild(el("span", "ty", f.proto));
-        li.appendChild(el("span", "tx", f.src + " → " + f.dst + "  x" + f.count));
+        var tx = el("span", "tx");
+        tx.appendChild(flowAddr(f.src, "-", false));
+        tx.appendChild(el("span", "d-dim", " → "));
+        tx.appendChild(flowAddr(f.dst, "-", false));
+        tx.appendChild(el("span", "d-normal", "  x" + f.count));
+        li.appendChild(tx);
         ol.appendChild(li);
       });
       if (!j.flows || !j.flows.length) ol.appendChild(el("li", "sub", "none in the range"));
@@ -2025,4 +2401,5 @@
       else overview();
     });
   setInterval(function () { if (view === "overview") overview(); }, 60000);
+  }
 })();

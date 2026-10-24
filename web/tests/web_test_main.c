@@ -16,6 +16,7 @@ int main(void) {
     run_config_tests();
     run_http_tests();
     run_routes_tests();
+    run_tui_colors_tests();
     run_server_tests();
     run_json_tests();
     run_jsonl_tests();

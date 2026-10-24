@@ -201,14 +201,22 @@ static void test_page_renders_stream_values_as_text(void) {
     WT_HAS(p, "Object.prototype.hasOwnProperty.call(TYPE_CLASS, t)");
 }
 
-/* §8.1 as amended by the 2026-10-21 fonts ruling: the system monospace
- * stack, no font file, no named web font. Seen red with "Fira Code"
- * put back at the head of --font-mono in web/ui/theme.css. */
+/* §8.1 as amended by the 2026-10-21 fonts ruling: no font file and no
+ * font request. The 2026-10-23 restyle (the owner's Spacetrucker
+ * system) names Fira Code first, which is used only where it is
+ * installed: the name appears once, inside --font-mono, and nothing on
+ * the page can fetch it. Seen red with an @font-face block added to
+ * web/ui/theme.css (the "fira" count and the @font-face ban). */
 static void test_font_is_the_system_monospace_stack(void) {
-    WT_HAS(page(), "--font-mono: ui-monospace, \"SF Mono\", Menlo, Consolas, "
-                   "\"DejaVu Sans Mono\", \"Liberation Mono\", monospace;");
+    WT_HAS(page(), "--font-mono: \"Fira Code\", ui-monospace, \"SF Mono\", Menlo, "
+                   "\"DejaVu Sans Mono\", monospace;");
     WT_HAS(page(), "font-family: var(--font-mono);");
-    WT_ASSERT(ci_find(page(), web_page_len, "fira") == NULL);
+    int fira = 0;
+    for (const char *h = page(); (h = ci_find(h, web_page_len - (size_t)(h - page()), "fira"));
+         h += 4)
+        fira++;
+    WT_EQ(fira, 1);
+    WT_ASSERT(ci_find(page(), web_page_len, "@font-face") == NULL);
     WT_ASSERT(ci_find(page(), web_page_len, "woff") == NULL);
     WT_ASSERT(ci_find(page(), web_page_len, ".ttf") == NULL);
     WT_ASSERT(ci_find(page(), web_page_len, ".otf") == NULL);
@@ -229,32 +237,38 @@ static int token(const char *name, char *val, size_t sz) {
     return 0;
 }
 
-/* Every token in docs/web-ui-spec.md §8.1, with its value. */
+/* The chrome tokens as served: §8.1's names, mapped onto the owner's
+ * Spacetrucker system (2026-10-23 restyle; this list replaced §8.1's
+ * old hex values, which the restyle retired). The data colours are not
+ * here: they are generated from the TUI's sources and compared with
+ * the TUI itself in test_tui_colors.c. */
 static void test_design_tokens_match_spec(void) {
     static const struct { const char *name, *value; } tok[] = {
-        { "--bg", "#0a0a0a" },      { "--panel", "#0f0f0f" },
-        { "--rule", "#2a2a2a" },    { "--rule-hi", "#3a3a3a" },
-        { "--ink", "#f2f2f2" },     { "--muted", "#8c8c8c" },
-        { "--faint", "#5c5c5c" },   { "--signal", "#ff5a00" },
-        { "--data", "#00c8ff" },    { "--phosphor", "#00d7af" },
-        { "--phosphor-dim", "#00875f" },
-        { "--sev-low", "#d7af00" }, { "--sev-warn", "#ff8700" },
-        { "--sev-crit", "#ff0000" },
-        { "--heat-0", "#626262" },  { "--heat-1", "#d7af00" },
-        { "--heat-2", "#ff8700" },  { "--heat-3", "#ff0000" },
-        { "--t-dns", "#7fd1ff" },   { "--t-tls", "#b48cff" },
-        { "--t-http", "#ffd166" },  { "--t-quic", "#ff9ecb" },
-        { "--t-icmp", "#9be564" },  { "--t-arp", "#c0c0c0" },
-        { "--t-wifi", "#00d7af" },  { "--t-alert", "#ff5a00" },
-        { "--radius", "0" },        { "--gap", "8px" },
+        { "--void", "#050208" },        { "--void-2", "#0a0512" },
+        { "--dim", "#8a82a0" },         { "--dimmer", "#5a536e" },
+        { "--phosphor-hi", "#d9fff3" }, { "--phosphor-mid", "#43d6a8" },
+        { "--ice", "#4cebff" },         { "--violet", "#996bff" },
+        { "--brass", "#b88c40" },       { "--amber", "#ff8c26" },
+        { "--dusk-teal", "#0f6f7a" },   { "--dusk-magenta", "#ff3fa8" },
+        { "--paper", "#f4f0e6" },
+        { "--bg", "var(--void)" },      { "--panel", "#0e0817" },
+        { "--rule", "#163a30" },        { "--rule-hi", "var(--dimmer)" },
+        { "--ink", "#e8e2f2" },         { "--muted", "var(--dim)" },
+        { "--faint", "var(--dimmer)" }, { "--signal", "var(--amber)" },
+        { "--data", "var(--ice)" },     { "--phosphor", "#6bffcc" },
+        { "--phosphor-dim", "#2b8f74" },
+        { "--sev-low", "var(--heat-1)" }, { "--sev-warn", "var(--heat-2)" },
+        { "--sev-crit", "var(--heat-3)" },
+        { "--radius", "14px" },         { "--gap", "8px" },
     };
     WT_HAS(page(), ":root {");
+    WT_HAS(page(), ":root[data-theme=\"light\"] {");
     for (size_t i = 0; i < sizeof(tok) / sizeof(tok[0]); i++) {
         char v[64];
         int rc = token(tok[i].name, v, sizeof(v));
         WT_EQ(rc, 0);
         if (rc == 0 && strcmp(v, tok[i].value))
-            fprintf(stderr, "    %s is \"%s\", spec says %s\n",
+            fprintf(stderr, "    %s is \"%s\", the design says %s\n",
                     tok[i].name, v, tok[i].value);
         WT_ASSERT(rc == 0 && !strcmp(v, tok[i].value));
     }

@@ -7,14 +7,20 @@
 <meta name="color-scheme" content="dark">
 <title>slothweb</title>
 <style>
+@include palette.css
 @include theme.css
 @include page.css
 </style>
+<script>
+@include palette.js
+@include app.js
+</script>
 </head>
 <body>
 <div class="app" id="app">
-  <aside class="side">
-    <div class="brand">SLOTH<small>web <span id="milestone">M6</span></small></div>
+  <header class="topbar">
+   <div class="in">
+    <div class="brand">sloth<span class="sep"> &#183; </span>web <small><span id="milestone">M6</span></small><span class="cur" aria-hidden="true"></span></div>
     <nav aria-label="views"><ol class="views">
       <li><button type="button" class="on" id="nav-overview" aria-current="page"><span class="k">1</span>Overview</button></li>
       <li><button type="button" class="go" id="nav-activity"><span class="k">2</span>Activity</button></li>
@@ -26,14 +32,12 @@
       <li><button type="button" class="go" id="nav-history"><span class="k">8</span>History</button></li>
       <li><button type="button" class="go" id="nav-lookup"><span class="k">9</span>Lookup</button></li>
     </ol></nav>
-    <div class="foot">
-      <div><span>sock</span><span id="sock">-</span></div>
-      <div><span>db</span><span id="db">-</span></div>
-      <div><span>store</span><span id="store">-</span></div>
-    </div>
-  </aside>
-  <header class="strip">
-    <span><span class="dot wait" id="dot">&#9679;</span> <span id="conn">connecting</span></span>
+    <button type="button" class="themetoggle" id="theme" title="switch to the light theme">light theme</button>
+   </div>
+  </header>
+  <div class="strip" aria-label="status">
+    <span class="dot wait" id="dot">&#9679; <span id="conn">connecting</span></span>
+    <span class="pills">
     <span>sensor <b id="s-sock">-</b></span>
     <span>devs <b id="s-devs">-</b></span>
     <span>alerts <b id="s-alerts">-</b></span>
@@ -42,37 +46,38 @@
     <span>tick <b id="seq">-</b></span>
     <span>up <b id="up">-</b></span>
     <span>clients <b id="clients">-</b></span>
-  </header>
+    </span>
+  </div>
   <main>
    <div id="v-overview">
     <section class="kpis" aria-label="overview">
-      <div class="tile">
+      <div class="tile hud">
         <div class="label">throughput <span id="k-tp-key"></span></div>
         <div class="kpi" id="k-tp">-</div>
         <canvas class="spark" id="k-tp-spark" aria-label="throughput, 24 h, over its baseline band"></canvas>
         <div class="sub" id="k-tp-sub">rx, 24 h, band = mean &#177; k sd</div>
       </div>
-      <div class="tile">
+      <div class="tile hud">
         <div class="label">open anomalies</div>
         <div class="kpi" id="k-anoms">-</div>
         <div class="sub" id="k-anoms-sub">rules A1-A3, A5-A10</div>
       </div>
-      <div class="tile">
+      <div class="tile hud">
         <div class="label">devices</div>
         <div class="kpi" id="k-devs">-</div>
         <div class="sub" id="k-devs-sub">waiting for a device pass</div>
       </div>
-      <div class="tile">
+      <div class="tile hud">
         <div class="label">open alerts</div>
         <div class="kpi"><span class="sev2" id="k-crit">-</span> <span class="sev1" id="k-warn">-</span> <span class="sev0" id="k-low">-</span></div>
         <div class="sub">crit / warn / low, since connect</div>
       </div>
-      <div class="tile">
+      <div class="tile hud">
         <div class="label">records/s</div>
         <div class="kpi" id="k-rate">-</div>
         <div class="sub" id="k-rate-sub">-</div>
       </div>
-      <div class="tile">
+      <div class="tile hud">
         <div class="label">sensor health</div>
         <div class="kpi" id="k-sensor">-</div>
         <div class="sub" id="k-sensor-sub">-</div>
@@ -317,9 +322,12 @@
     <div class="label">anomalies</div>
     <div class="cards" id="dr-anoms"></div>
   </aside>
+  <footer class="foot" aria-label="sources">
+    <span>sock <b id="sock">-</b></span>
+    <span>db <b id="db">-</b></span>
+    <span>store <b id="store">-</b></span>
+    <span class="sub">passive: this page asks its own server and nothing else</span>
+  </footer>
 </div>
-<script>
-@include app.js
-</script>
 </body>
 </html>

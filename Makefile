@@ -596,7 +596,8 @@ WEB_RECIPES_C   = $(WEB_GEN_DIR)/web_recipes.c
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C) \
                   $(WEB_OUI_C) $(WEB_RECIPES_C)
 WEB_TEST_SRCS   = $(wildcard web/tests/*.c) web/tools/oui_csv.c src/db_schema.c \
-                  src/rsn_ie.c
+                  src/rsn_ie.c src/ip_color.c src/tui_palette.c \
+                  src/tui.c src/netstr.c src/view_labels.c
 WEB_LDLIBS      = -lpthread -lm
 ifeq ($(WITH_SQLITE),1)
     WEB_SQL_DEFS = -DWITH_SQLITE
@@ -612,8 +613,35 @@ $(WEB_EMBED): $(WEB_EMBED_SRCS) web/tools/sha256.h
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -Iweb/tools -o $@ $(WEB_EMBED_SRCS)
 
-$(WEB_ASSETS_C): $(WEB_EMBED) $(WEB_UI)
-	$(WEB_EMBED) web/ui index.html $@.tmp
+# The page's data colours (owner ruling 2026-10-23: coloured as the
+# TUI colours them) are generated, never copied: web/tools/palette.c
+# links src/tui_palette.c, asks tui_pair_colors() for each pair, reads
+# find_brand()'s table out of src/tui.c, and writes build/web/palette.css
+# and palette.js, which the embedder takes from build/web/ as @includes.
+WEB_PALGEN      = $(WEB_GEN_DIR)/palette-gen
+WEB_PALGEN_SRCS = web/tools/palette.c src/tui_palette.c
+WEB_PAL_CSS     = $(WEB_GEN_DIR)/palette.css
+WEB_PAL_JS      = $(WEB_GEN_DIR)/palette.js
+
+$(WEB_PALGEN): $(WEB_PALGEN_SRCS) src/tui_palette.h src/tui.h src/ip_color.h
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -Iinclude -Isrc -o $@ $(WEB_PALGEN_SRCS) -lm
+
+$(WEB_PAL_CSS): $(WEB_PALGEN) src/tui.c web/ui/theme.css
+	$(WEB_PALGEN) css src/tui.c web/ui/theme.css $@.tmp
+	mv $@.tmp $@
+
+$(WEB_PAL_JS): $(WEB_PALGEN) src/tui.c
+	$(WEB_PALGEN) js src/tui.c $@.tmp
+	mv $@.tmp $@
+
+# web/README.md's contrast table, printed (Design).
+.PHONY: web-contrast
+web-contrast: $(WEB_PALGEN)
+	@$(WEB_PALGEN) contrast src/tui.c web/ui/theme.css
+
+$(WEB_ASSETS_C): $(WEB_EMBED) $(WEB_UI) $(WEB_PAL_CSS) $(WEB_PAL_JS)
+	$(WEB_EMBED) web/ui index.html $@.tmp $(WEB_GEN_DIR)
 	mv $@.tmp $@
 
 $(WEB_OUIGEN): $(WEB_OUIGEN_SRCS) web/tools/oui_csv.h web/src/web_oui.h
@@ -670,7 +698,7 @@ web-quickstart-check:
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
 web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C)
 	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -Iweb/tests -Iweb/tools \
-	      -Iinclude -o slothweb_test \
+	      -Iinclude -iquote research -o slothweb_test \
 	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
 	./slothweb_test
 

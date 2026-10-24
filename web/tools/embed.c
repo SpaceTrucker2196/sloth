@@ -1,12 +1,15 @@
 /* Build-time page embedder (#158). Not part of slothweb.
  *
- *   embed UI_DIR ROOT OUT.c
+ *   embed UI_DIR ROOT OUT.c [GEN_DIR]
  *
  * Reads UI_DIR/ROOT and replaces every line that is exactly
  * "@include NAME" (leading blanks allowed) with the bytes of UI_DIR/NAME,
  * so the page is one document with its CSS and JS inline and the server
  * has one thing to serve. Includes do not nest, and NAME is a bare file
- * name: the page can only be assembled from web/ui/ itself.
+ * name: the page can only be assembled from web/ui/ itself, and from
+ * GEN_DIR (build/web/) for a NAME web/ui/ does not have, which is where
+ * the build writes the palette generated from sloth's TUI sources
+ * (web/tools/palette.c).
  *
  * The assembled page must hold exactly one <style> and one <script>
  * element, without attributes. Their contents are hashed into the
@@ -92,11 +95,12 @@ static void hash_b64(const char *p, size_t n, char out[64]) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 4) {
-        fprintf(stderr, "usage: embed UI_DIR ROOT OUT.c\n");
+    if (argc != 4 && argc != 5) {
+        fprintf(stderr, "usage: embed UI_DIR ROOT OUT.c [GEN_DIR]\n");
         return 2;
     }
     const char *dir = argv[1];
+    const char *gen = argc == 5 ? argv[4] : NULL;
     size_t rl;
     char *root = slurp(dir, argv[2], &rl);
     if (!root) return 1;
@@ -123,7 +127,11 @@ int main(int argc, char **argv) {
             memcpy(name, nm, nn);
             name[nn] = '\0';
             size_t il;
-            char *inc = slurp(dir, name, &il);
+            char probe[4096];
+            snprintf(probe, sizeof(probe), "%s/%s", dir, name);
+            FILE *pf = gen ? fopen(probe, "rb") : NULL;
+            if (pf) fclose(pf);
+            char *inc = slurp(gen && !pf ? gen : dir, name, &il);
             if (!inc) return 1;
             if (append(page, &pl, inc, il) != 0) return 1;
             if (il && inc[il - 1] != '\n' && append(page, &pl, "\n", 1) != 0)

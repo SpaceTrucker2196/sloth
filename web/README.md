@@ -80,7 +80,7 @@ SRC=$PWD; cd "$(mktemp -d)"
 <!-- quickstart:end -->
 
 Open `http://127.0.0.1:8770/`. The status strip should say `live`, the
-side panel `sock connected`, `db open`, `store open`. Stop with Ctrl-C,
+footer `sock connected`, `db open`, `store open`. Stop with Ctrl-C,
 then `kill %1` for the demo stream. `make web-quickstart-check` runs
 exactly these steps in a temporary copy of the tree and checks the
 answer (`web/tools/quickstart_check.sh`).
@@ -139,8 +139,12 @@ ssh -L 8770:127.0.0.1:8770 user@sensor     # then open http://127.0.0.1:8770/ lo
 ```
 
 Keys: `1`..`9` switch views (`6` is not built yet), `/` searches
-devices, `[` hides the side panel, `Esc` closes the device drawer; the
+devices, `[` hides the view list and the footer, `Esc` closes the device drawer; the
 view is also in the address (`#flows`), so a reload stays on it.
+The button at the right of the top bar switches to the light theme;
+the choice is kept in this browser only (`localStorage`, key
+`slothweb.theme`), dark is the default, and a browser that keeps
+nothing just gets dark ([Design](#design)).
 
 | | |
 |---|---|
@@ -148,6 +152,8 @@ view is also in the address (`#flows`), so a reload stays on it.
 | ![Anomalies](../docs/assets/slothweb/anomalies.png) | ![WiFi](../docs/assets/slothweb/wifi.png) |
 | ![Flows](../docs/assets/slothweb/flows.png) | ![History](../docs/assets/slothweb/history.png) |
 | ![Lookup](../docs/assets/slothweb/lookup.png) | ![Flows at 360 px](../docs/assets/slothweb/flows-narrow.png) |
+| ![Overview, light theme](../docs/assets/slothweb/overview-light.png) | ![Devices, light theme](../docs/assets/slothweb/devices-light.png) |
+| ![Flows, light theme](../docs/assets/slothweb/flows-light.png) | |
 
 All screenshots are of the synthetic demo above, taken by headless
 Chromium; none shows anything captured from a real network.
@@ -240,7 +246,7 @@ migrated to vN`, and in a `WITH_SQLITE=0` build:
 | `slothweb: built without SQLite: time series in memory only (10 s buckets, no minute or hour tier to read back); baselines and anomaly episodes in memory, lost at exit; rules A1 (z only, no MAD), A2, A3, A5-A8 and A10 active (A4 with the IEEE table), A9 needs the store` | What a memory-only build keeps; `make web` (with SQLite) keeps the rest. |
 
 **After start**, the stream's state is in `/api/health`
-(`socket`, `socket_last_error`) and in the side panel: `sock retrying`
+(`socket`, `socket_last_error`) and in the footer: `sock retrying`
 with `connect: No such file or directory` means sloth is not running or
 not with `--data-socket`; `Permission denied` means slothweb runs as
 another user than sloth (above).
@@ -954,7 +960,7 @@ this build serves them.
 
 ### The Activity view
 
-`2` (or the sidebar) opens it; `1` goes back to the Overview. It picks a
+`2` (or the top bar) opens it; `1` goes back to the Overview. It picks a
 metric (from `/api/metrics`), a key (from `/api/keys`) and a window
 (1 h, 6 h and 24 h from the 10 s tier; 7 d and 30 d from 1 min; 400 d
 from 1 h), and draws the series on Canvas 2D: the bucket value as a
@@ -1241,7 +1247,7 @@ never fed.
 
 ### The Anomalies view and the Overview
 
-`4` (or the sidebar) opens the Anomalies view (§8.7): one card per
+`4` (or the top bar) opens the Anomalies view (§8.7): one card per
 episode, open first, each with its kind's glyph (`~` rate, `+` new, `@`
 hours, `=` ident, `<` fanout, `?` dns, `^` proto, `!` sensor) and word,
 the key in its hash colour, a score bar in the heat ramp, the evidence,
@@ -1516,7 +1522,7 @@ always: there is no active lookup.
 
 ### The Devices view, the drawer, Lookup
 
-`3` (or the sidebar) opens Devices: the search box (§9.1; `/` focuses
+`3` (or the top bar) opens Devices: the search box (§9.1; `/` focuses
 it from anywhere; the query is sent 300 ms after typing stops, or on
 Enter), the sort, and the table: the first 512 rows of the answer,
 paged in 200 at a time, drawn virtualised (only the rows in view
@@ -1872,6 +1878,189 @@ names the view (`#flows`), so a reload stays on it; and a
 `WITH_SQLITE=0` build's pages say it cannot read sloth.db rather than
 suggesting a flag it does not have.
 
+## Design
+
+The page is two layers, coloured from two places (owner ruling
+2026-10-23: "color code all data the same as the sloth cli").
+
+**The chrome** (backgrounds, panels, the top bar, type, labels,
+controls) is the owner's Spacetrucker design system
+([www.river.io/jeff](https://www.river.io/jeff/)). `web/ui/theme.css`
+carries its tokens (`--void`, `--void-2`, `--panel`, `--ink`, `--dim`,
+`--dimmer`, `--phosphor` and its `-hi`, `-mid` and `-dim`, `--rule`,
+`--ice`, `--violet`, `--brass`, `--amber`, `--dusk-teal`,
+`--dusk-magenta`, `--paper`, the glows) and maps the page's semantic
+names onto them, so the code still reads `--bg`, `--panel`, `--rule`,
+`--ink`, `--muted`, `--faint`, `--signal`, `--data`, `--phosphor`:
+
+| semantic | Spacetrucker | use |
+|---|---|---|
+| `--bg` | `--void` | the page ground |
+| `--panel`, `--panel-2` | the site's panel, `--void-2` | cards, tiles; cells, chips |
+| `--rule` | the site's rule | dotted row rules |
+| `--ink`, `--muted`, `--faint` | `--ink`, `--dim`, `--dimmer` | text, secondary, disabled |
+| `--signal`, `--data` | `--amber`, `--ice` | selection edge, canvas accent |
+| `--hover` | `--phosphor` (light: `--phosphor-hi`) | hover text, the live pill |
+
+The components are the site's: a sticky top bar on a brass edge with
+the title, the views and the theme toggle; the pill status strip
+(`live`, sensor, devs, alerts, anomalies, rec/s, tick, up, clients);
+eyebrow labels (brass small caps behind a short rule) as panel titles;
+panels as brass-bordered cards (radius 14 px); the site's buttons and
+chips for view controls; dotted row rules in tables; HUD corner
+brackets and a dot grid on the Overview's tiles. Glows only on the title
+and the live pill. The type is `"Fira Code", ui-monospace, "SF Mono",
+Menlo, "DejaVu Sans Mono", monospace`: Fira Code is used where it is
+installed and is never fetched; the page holds no font file and makes
+no request of any kind (the rulings, and the CSP).
+
+There is no motion layer: no boot-in, scramble, typing or beam, which a
+page that updates every second would retrigger. The one animation is
+the blinking cursor after the title, off under
+`prefers-reduced-motion`. The site's CRT layer is kept very faint:
+scanlines at alpha 0.07 and a vignette at 0.16 (the site's are 0.28 and
+0.40), painted on the page ground under every panel, so they never
+cross a chart; both are off in the light theme and under reduced
+motion.
+
+**The data** (every address, SSID, host name, info string, severity,
+heat level and sparkline) is coloured exactly as sloth's TUI colours
+it, in the dark theme byte for byte. Nothing is copied by hand:
+`web/tools/palette.c` links `src/tui_palette.c`, asks
+`tui_pair_colors()` for each pair the page mirrors, turns each xterm-256
+index into hex by the standard formula (16 system colours, the 6x6x6
+cube on 0/95/135/175/215/255, the 24 greys from 8 in steps of 10),
+reads `find_brand()`'s table and the Google letter sequence out of
+`src/tui.c` as text (a table it cannot read fails the build), and
+writes `build/web/palette.css` and `build/web/palette.js`, which the
+embedder takes as `@include`s. `app.js` ports the TUI's choices:
+
+| data | TUI | page |
+|---|---|---|
+| an IP address, everywhere one appears (tables, cards, chord labels and nodes, the drawer, Lookup, alerts, flows, records) | `tui_ip_addstr()`: `ip_color_index()` (djb2 over the bytes, mod 8) into `tui_ip_fg` | `ipColorIndex()` over the UTF-8 bytes into `--k-0`..`--k-7` |
+| an address seen in two or more sources | bold (`ip_index_is_cross_panel()`: more than one `IP_SRC_*` bit) | bold, by the same bits: the page keeps one index for its life (the TUI rebuilds its per frame), at the TUI's 512 addresses, and an address that turns cross-panel turns bold where it is already drawn |
+| an SSID | `tui_ssid_addstr()`: the same hash and palette | `ssidSpan()` |
+| a host name, a device name | `tui_brand_addstr()`: the earliest match of any brand, ASCII case-insensitive, a tie to the first entry; Google's letters in the logo's sequence | `brandRuns()` over the generated table into `--br-0`..`--br-15`, the rest in the row's pair |
+| a record's info text | `tui_info_color()`: the hash into `tui_info_fg`, `CP_NORMAL` when empty | `infoClass()`, `--info-0`..`--info-7`, with every address in it in its own colour |
+| MACs, labels, stamps | `CP_DIM` | `--tui-dim` |
+| values, names | `CP_NORMAL`, `CP_BRIGHT` | `--tui-normal`, `--tui-bright` |
+| severity | `tui_heat(0.3 / 0.5 / 1.0)` for LOW / WARN / CRIT | `--sev-*` on `--heat-1`..`--heat-3` |
+| heat | `tui_heat()`'s 0.15 / 0.40 / 0.70 | `heatClass()`, `heat()` |
+| sparklines | `draw_sparkline_at()`: level round(v / max x 8), 0 dim, 1-2 normal, 3-4 heat mid, 5-6 heat hi, 7-8 peak | `sparkLevel()`, `sparkColor()` |
+| monitor-radio rows | `CP_MON_ROW*` on xterm 236 | `.ticker li.mon` (802.11 records) on `--mon-bg` |
+
+The Flows view's protocol hues (`--f-*`) have no TUI counterpart (the
+TUI has no flow chart); they stay chart colours named beside their
+lines, and SMB1 rows are `--sev-crit` throughout, addresses included,
+as the TUI's alert-hot override wins over the hash colour.
+
+`web/tests/test_tui_colors.c` holds the two together: it links
+`src/tui.c` (the ANSI backend), captures what the TUI writes for 18
+addresses (half of them cross-panel), 12 SSIDs (two of them not ASCII),
+28 host names and 7 info strings, and compares the colour of every byte
+with the colour the page gives it: the page's functions pinned as
+served, a C port of them over the served `SLOTH_PALETTE`, and the
+served custom properties. It was seen red with the generator's cube
+formula changed, with `app.js`'s `IP_SRC` and tie rule changed, and with
+its own port's tie rule changed.
+
+**The light theme** is the site's cream (`--void` `#f4f0e6`), behind
+the toggle in the top bar. Dark is the default whatever the browser
+prefers. The script sits in `<head>` and sets `data-theme="light"` on
+`:root` from `localStorage` before the body is parsed, so there is no
+flash, and the rest waits for the DOM; the read and the write are in
+`try`, and a page that cannot store just stays dark. It is the same
+single `<script>`, so the CSP hash the embedder computes covers it as
+before. The DOM's colours are `var()` references and follow by
+themselves; canvases read their colours from the custom properties
+(`theme()`), so the toggle clears that cache and redraws the open view
+and the drawer.
+
+The data keep their hue mapping in the light theme. The rule, in
+`light_variant()`: keep the TUI colour's HSL hue and saturation, and
+lower its lightness in steps of 0.005 until it reads at 4.5:1 (WCAG AA,
+body text) on both the light `--bg` and the light `--panel`; a colour
+that already does is kept. The monitor rows' ground is the light `--bg`
+scaled toward black until it stands off `--bg` by the same ratio as
+xterm 236 stands off the dark `--bg`, and their text follows the same
+rule against that ground.
+
+Contrast, computed by `make web-contrast` (WCAG 2.x relative luminance;
+`*` marks a ratio under 4.5:1). The dark column is the TUI's own value,
+kept byte for byte even where the TUI's choice reads under 4.5:1 on
+this ground (`--br-8`, `--br-13`, `--info-0`, `--heat-0`, `--tui-dim`
+on `--panel`). `--faint` is for disabled controls only; `--phosphor`,
+`--data` and `--signal` colour no text in the light theme (edges,
+brackets, canvas strokes), and the light theme's hover text and live
+pill use `--hover` instead. Chip text (`--phosphor-mid`) sits on
+`--panel-2` (4.69:1 light).
+
+| token | use | dark | on --bg | on --panel | light | on --bg | on --panel |
+|---|---|---|---|---|---|---|---|
+| `--ink` | body text | `#e8e2f2` | 16.29 | 15.57 | `#29212f` | 13.64 | 15.27 |
+| `--muted` | secondary text | `#8a82a0` | 5.68 | 5.42 | `#6b6176` | 5.13 | 5.74 |
+| `--faint` | disabled controls only | `#5a536e` | 2.84 * | 2.72 * | `#8f8799` | 3.03 * | 3.39 * |
+| `--brass` | eyebrow labels | `#b88c40` | 6.74 | 6.44 | `#8a5f18` | 4.95 | 5.54 |
+| `--phosphor` | chrome accent, no text | `#6bffcc` | 16.49 | 15.76 | `#0b8c6a` | 3.71 * | 4.15 * |
+| `--phosphor-hi` | title | `#d9fff3` | 19.19 | 18.34 | `#06563f` | 7.65 | 8.57 |
+| `--phosphor-mid` | chip text | `#43d6a8` | 11.21 | 10.72 | `#1a7d61` | 4.45 * | 4.98 |
+| `--hover` | hover text, live pill | `#6bffcc` | 16.49 | 15.76 | `#06563f` | 7.65 | 8.57 |
+| `--data` | canvas accent, no text | `#4cebff` | 14.37 | 13.73 | `#1a7ea1` | 4.06 * | 4.55 |
+| `--signal` | selection edge, no text | `#ff8c26` | 8.87 | 8.47 | `#c25f0a` | 3.74 * | 4.19 * |
+| `--k-0` | IP / SSID hash | `#00ffd7` | 15.99 | 15.28 | `#007a67` | 4.64 | 5.19 |
+| `--k-1` | IP / SSID hash | `#5fd7d7` | 11.96 | 11.44 | `#1e7777` | 4.66 | 5.22 |
+| `--k-2` | IP / SSID hash | `#87ffaf` | 16.64 | 15.91 | `#007f2a` | 4.53 | 5.08 |
+| `--k-3` | IP / SSID hash | `#afff87` | 17.16 | 16.40 | `#2a7d00` | 4.58 | 5.12 |
+| `--k-4` | IP / SSID hash | `#d7af00` | 9.84 | 9.40 | `#836b00` | 4.54 | 5.08 |
+| `--k-5` | IP / SSID hash | `#ffaf5f` | 11.34 | 10.84 | `#ab5600` | 4.54 | 5.08 |
+| `--k-6` | IP / SSID hash | `#d78787` | 7.56 | 7.23 | `#c04242` | 4.50 | 5.04 |
+| `--k-7` | IP / SSID hash | `#87afd7` | 8.98 | 8.58 | `#386fa7` | 4.61 | 5.16 |
+| `--br-0` | brand | `#0087ff` | 5.80 | 5.54 | `#006dcf` | 4.51 | 5.05 |
+| `--br-1` | brand | `#d75f5f` | 5.59 | 5.34 | `#cb3333` | 4.54 | 5.09 |
+| `--br-2` | brand | `#ffd700` | 14.70 | 14.05 | `#7f6b00` | 4.61 | 5.16 |
+| `--br-3` | brand | `#00af5f` | 7.16 | 6.85 | `#007c43` | 4.66 | 5.21 |
+| `--br-4` | brand | `#ff8700` | 8.56 | 8.18 | `#a85900` | 4.51 | 5.05 |
+| `--br-5` | brand | `#ff0000` | 5.16 | 4.93 | `#db0000` | 4.60 | 5.15 |
+| `--br-6` | brand | `#808080` | 5.22 | 4.99 | `#6d6d6d` | 4.55 | 5.09 |
+| `--br-7` | brand | `#875fff` | 5.02 | 4.80 | `#7445ff` | 4.57 | 5.12 |
+| `--br-8` | brand | `#005fff` | 4.01 * | 3.83 * | `#005fff` | 4.52 | 5.06 |
+| `--br-9` | brand | `#00d75f` | 10.69 | 10.21 | `#007e38` | 4.57 | 5.11 |
+| `--br-10` | brand | `#af5fff` | 5.80 | 5.54 | `#952cff` | 4.52 | 5.06 |
+| `--br-11` | brand | `#ffaf00` | 11.18 | 10.68 | `#916400` | 4.58 | 5.13 |
+| `--br-12` | brand | `#0087af` | 4.99 | 4.77 | `#007598` | 4.62 | 5.17 |
+| `--br-13` | brand | `#af0000` | 2.77 * | 2.65 * | `#af0000` | 6.54 | 7.32 |
+| `--br-14` | brand | `#ff5f00` | 6.76 | 6.46 | `#bd4600` | 4.57 | 5.11 |
+| `--br-15` | brand | `#d75faf` | 6.03 | 5.77 | `#c13091` | 4.50 | 5.04 |
+| `--info-0` | record info | `#875f5f` | 3.76 * | 3.60 * | `#875f5f` | 4.82 | 5.39 |
+| `--info-1` | record info | `#87875f` | 5.56 | 5.31 | `#6f6f4e` | 4.55 | 5.09 |
+| `--info-2` | record info | `#af875f` | 6.34 | 6.06 | `#896745` | 4.51 | 5.05 |
+| `--info-3` | record info | `#afaf87` | 9.13 | 8.73 | `#6f6f4a` | 4.56 | 5.10 |
+| `--info-4` | record info | `#d7875f` | 7.38 | 7.06 | `#aa552b` | 4.56 | 5.11 |
+| `--info-5` | record info | `#d7af5f` | 10.00 | 9.56 | `#8a6722` | 4.56 | 5.11 |
+| `--info-6` | record info | `#af8787` | 6.52 | 6.23 | `#916060` | 4.56 | 5.11 |
+| `--info-7` | record info | `#878787` | 5.74 | 5.48 | `#6d6d6d` | 4.55 | 5.09 |
+| `--tui-bright` | TUI phosphor | `#00ffaf` | 15.63 | 14.94 | `#007d56` | 4.54 | 5.08 |
+| `--tui-normal` | TUI phosphor | `#00d7af` | 11.13 | 10.64 | `#007b64` | 4.59 | 5.14 |
+| `--tui-dim` | TUI phosphor | `#00875f` | 4.55 | 4.35 * | `#007d58` | 4.53 | 5.07 |
+| `--heat-0` | heat, severity | `#626262` | 3.38 * | 3.23 * | `#626262` | 5.36 | 6.00 |
+| `--heat-1` | heat, severity | `#d7af00` | 9.84 | 9.40 | `#836b00` | 4.54 | 5.08 |
+| `--heat-2` | heat, severity | `#ff8700` | 8.56 | 8.18 | `#a85900` | 4.51 | 5.05 |
+| `--heat-3` | heat, severity | `#ff0000` | 5.16 | 4.93 | `#db0000` | 4.60 | 5.15 |
+| `--f-ssh` | chart hue | `#7fd1ff` | 12.24 | 11.70 | `#0072b2` | 4.56 | 5.10 |
+| `--f-rdp` | chart hue | `#b48cff` | 7.99 | 7.63 | `#803dff` | 4.58 | 5.13 |
+| `--f-smb` | chart hue | `#ffd166` | 14.30 | 13.67 | `#8f6400` | 4.62 | 5.18 |
+| `--f-snmp` | chart hue | `#9be564` | 13.53 | 12.93 | `#407a15` | 4.60 | 5.15 |
+| `--f-bgp` | chart hue | `#ff9ecb` | 10.80 | 10.33 | `#d60063` | 4.57 | 5.11 |
+| `--f-ldap` | chart hue | `#c0c0c0` | 11.33 | 10.83 | `#6d6d6d` | 4.55 | 5.09 |
+| `--f-kerb` | chart hue | `#00d7af` | 11.13 | 10.64 | `#007b64` | 4.59 | 5.14 |
+
+Monitor rows, on `--mon-bg` (`#303030` dark, `#c5c2ba` light):
+
+| token | dark | on --mon-bg | light | on --mon-bg |
+|---|---|---|---|---|
+| `--mon-fg` | `#00d7af` | 7.13 | `#005a49` | 4.61 |
+| `--mon-dim` | `#00875f` | 2.91 * | `#005c40` | 4.53 |
+
 ## What it never does
 
 The [Security](#security) section above is the summary; this is the
@@ -1918,7 +2107,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_acl.c` | the list on hand-built sockaddrs: loopback default, non-loopback v4/v6 refused, prefix boundaries, v4-mapped folding, CIDR parse errors |
 | `test_config.c` | `--web-allow-sql` off by default, refused by `--strict` and without `--sloth-db` (and without SQLite), announced with `--web-allow-remote` and silent without it; default bind, remote bind refused without the flag and announced with it, remote `--web-allow` needs the flag, `--strict`; `--socket` default, parsing, the announcement of a non-loopback `tcp:` and its `--strict` refusal; a `--web-max-mb` below the analysis state's estimate plus the history allowance refused naming the minimum (one MB less refused, the minimum and the defaults accepted, 8,192 keys at the default ceiling refused; nothing refused without SQLite) |
 | `test_http.c` | hand-written request bytes: GET/HEAD routed, 405 for every other method, split reads, 400/505, the 8 KB boundary, path and query, `If-None-Match` collection and weak comparison, `Host` collection and which values are accepted |
-| `test_routes.c` | the route table without a socket: page `200`/`304`/`HEAD`, no external reference in the served page, no HTML or code sink in its script (stream values are `textContent` only), the system font stack, the §8.1 tokens, the CSP hashes recomputed (SHA-256 checked against FIPS 180-4 vectors), health JSON, stream headers, `503`, event formats, `404`, `405` on every route, `421` for a foreign `Host` on every route and `400` for none or two; `/api/anomalies` (`503` without an engine, the JSON byte for byte, `HEAD`, every `400`, the filters, the worst case a `200` with `more`), `/api/baseline` (`503`, every `400`, never fed, a fed cell at its index), the `anomaly` event as one data line, `anomalies_open` in the tick, the M3 health members; the page's M3 element ids and their lookups and the two fetches' literal prefixes, with those query shapes answered `200`; a non-finite cell answered as `null`; the page's `cellOf()` pinned as served and checked against `/api/baseline`'s `now_cell` for every 10 minutes of a week in IST |
+| `test_routes.c` | the route table without a socket: page `200`/`304`/`HEAD`, no external reference in the served page, no HTML or code sink in its script (stream values are `textContent` only), the font stack (Fira Code named once, no font file), the chrome tokens, the CSP hashes recomputed (SHA-256 checked against FIPS 180-4 vectors), health JSON, stream headers, `503`, event formats, `404`, `405` on every route, `421` for a foreign `Host` on every route and `400` for none or two; `/api/anomalies` (`503` without an engine, the JSON byte for byte, `HEAD`, every `400`, the filters, the worst case a `200` with `more`), `/api/baseline` (`503`, every `400`, never fed, a fed cell at its index), the `anomaly` event as one data line, `anomalies_open` in the tick, the M3 health members; the page's M3 element ids and their lookups and the two fetches' literal prefixes, with those query shapes answered `200`; a non-finite cell answered as `null`; the page's `cellOf()` pinned as served and checked against `/api/baseline`'s `now_cell` for every 10 minutes of a week in IST |
 | `test_json.c` | the writer's escaping byte for byte: markup, quotes, controls, C1, U+2028/9, invalid UTF-8 as U+FFFD, the code-point-boundary cut |
 | `test_jsonl.c` | hand-written lines: sloth's shapes, escapes and surrogate pairs, member text inside a string, every truncation of a record, syntax errors, invalid UTF-8 raw and escaped, duplicate members, the depth, member and integer limits |
 | `test_live.c` | the live state and the framer without a socket: the device count per pass, passes cut by a gap, a bad line or a bad type not published, an empty table publishing 0, a reconnect as a new stream, the alert lifecycle counts, type names, records per second, sensor-health states, the recent ring, hostile strings escaped in `/api/live` and in `record` events, the worst-case `/api/live` fitting its buffer, split reads, truncated and overlong lines |
@@ -1941,6 +2130,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_sqlbox.c` | the SQL box: the parameter and text rules; `404` without `--web-allow-sql` and the page's box hidden; spec §12's M5 acceptance (above) over a real socket against the C API and the sqlite3 shell; every write, DDL, PRAGMA, ATTACH, DML-tail CTE and second statement refused with the file byte for byte; every withheld column refused, the guardrail's words on the list, the integer flags read; the row, byte, time and value limits; one at a time (`503` `busy`, free again once answered or once the client leaves), `HEAD` `405`, `/api/recipes`. Both builds |
 | `test_flows.c` | the Flows routes over a generated sloth.db: every tab's row byte for byte, an SMB1 session marked, the columns each tab reads held to the allow-list and the withheld ones held off it, no cookie, banner, MQTT username, community count or preauth count in any body, every `400`, paging, sorting, the `ip` filter, a page that stops early with `more` and the next one, the chord pairs with their fold at three sizes, a table the file lacks; the page's Flows view. Both builds |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
+| `test_tui_colors.c` | the data colours against the TUI itself ([Design](#design)): `src/tui.c`'s ANSI backend linked in and captured, every byte of an address, an SSID, a host name and an info string compared with the page's colour for it (its functions pinned as served, a C port of them over the served `SLOTH_PALETTE`, the served custom properties); the cross-panel bold and the page's `IP_SRC` bits held to `IP_SRC_*`; the phosphor, heat and monitor-row pairs |
 | `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own |
 | `test_replay.c` | spec §12's M3 acceptance: a six-week JSONL stream generated in the test (never a fixture) through the framer, decoder, live state, metric derivation, identity tables, rollup, `web_tsdb_step()` and the engine as `main.c` wires them, on pinned clocks: four weeks of routine (noisy gauges, Poisson counts, and an input for every rule: names that agree, a randomised MAC with its own name, a month-old probe client, a steady ssh host), then a quiet 7 d week in which nothing at all fires, slothweb and sloth restarting in the middle of it in an SQLite build, then a 7 d week in which A1 fires for a burst of connections and A3 for a daytime device that appears only at night, while a device that is only ever present at night never fires; and the hour that just closed reaching the baseline at flush phases 0, 3 and 7 (the previous slice fed it only at phase 0); A9 for a new host whose first row the rollup released late, at sloth's real cadence (SQLite); five weeks of a 13:30-14:30 routine in IST firing nothing. Both builds |
 
@@ -2018,13 +2208,16 @@ web/
     oui_gen.c      web/data/*.csv -> build/web/web_oui_table.c (build time only)
     oui_csv.c      the registry CSV reader the generator and the tests share
     recipes.c      docs/wiki/sqlite-schema.md -> build/web/web_recipes.c (build time only)
+    palette.c      src/tui_palette.c + src/tui.c -> build/web/palette.css, palette.js;
+                   make web-contrast (build time only)
     sha256.c       SHA-256 and base64 for embed.c and the tests
     demo.c         build/web/slothweb-demo: the synthetic sloth.db and stream (M6)
     quickstart_check.sh  the five-minute check, make web-quickstart-check (M6)
   data/            the developer's IEEE registry CSVs; never committed
   tests/           slothweb_test (make web-test); sdb_gen.c builds the tests'
                    sloth.db from src/db_schema.c; src/rsn_ie.c is linked for
-                   test_parity.c
+                   test_parity.c, src/tui.c, tui_palette.c, ip_color.c,
+                   netstr.c and view_labels.c for test_tui_colors.c
 ```
 
 Wiki page: [`docs/wiki/slothweb.md`](../docs/wiki/slothweb.md).

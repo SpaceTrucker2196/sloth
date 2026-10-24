@@ -58,6 +58,7 @@ void run_baseline_tests(void);
 void run_ident_tests(void);
 void run_anomaly_tests(void);
 void run_replay_tests(void);
+void run_tui_colors_tests(void);
 void run_oui_tests(void);
 void run_query_tests(void);
 void run_ptr_tests(void);

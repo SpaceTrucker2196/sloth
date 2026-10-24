@@ -5113,3 +5113,13 @@ report events.
   of anything. `make deploy-test` 262 passed, 0 failed, also with
   `TOOL_SH="busybox sh"` and `"bash --posix"`. CI still does not run
   `make deploy-test` or shellcheck; that needs a `.github/` change.
+- 2026-10-23 — [[slothweb]]: the Spacetrucker restyle. The chrome takes
+  the owner's design system (www.river.io/jeff): tokens under the page's
+  semantic names, a brass-edged top bar, the pill status strip, eyebrow
+  labels, rounded brass cards, HUD tiles; the side panel became a
+  footer. The data take the TUI's colours (owner ruling 2026-10-23),
+  generated at build time from `src/tui_palette.c` and `src/tui.c` by
+  `web/tools/palette.c` and checked against the TUI's own renderer by
+  `web/tests/test_tui_colors.c`. A cream light theme behind a toggle,
+  dark by default; its data colours keep their hues, darkened to 4.5:1.
+  No motion layer; the CRT layer faint and off in light.

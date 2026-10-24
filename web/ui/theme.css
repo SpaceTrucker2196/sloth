@@ -1,59 +1,114 @@
-/* Design tokens, docs/web-ui-spec.md §8.1. The only place colour lives.
- * Font stack per the 2026-10-21 rulings: system monospace only, no font
- * file and no font request. */
+/* Chrome tokens: the owner's Spacetrucker design system
+ * (www.river.io/jeff/, spacetrucker.css), mapped onto slothweb's
+ * semantic names so the page's code still reads --bg, --panel, --ink.
+ * The chrome only: backgrounds, panels, the top bar, type, labels and
+ * controls. Every data colour (IPs, SSIDs, host names, severity, heat,
+ * the TUI's phosphor) is generated from sloth's TUI sources into
+ * palette.css by web/tools/palette.c (ruling 2026-10-23) and is not
+ * written here. Fonts: named only, used if installed; no font file and
+ * no font request (rulings header). */
 :root {
-  /* ground */
-  --bg:        #0a0a0a;
-  --panel:     #0f0f0f;
-  --rule:      #2a2a2a;
-  --rule-hi:   #3a3a3a;
+  /* Spacetrucker: ebonite, brass, violet-ray */
+  --void:         #050208;
+  --void-2:       #0a0512;
+  --dim:          #8a82a0;
+  --dimmer:       #5a536e;
+  --phosphor-hi:  #d9fff3;
+  --phosphor-mid: #43d6a8;
+  --ice:          #4cebff;
+  --violet:       #996bff;
+  --brass:        #b88c40;
+  --amber:        #ff8c26;
+  --dusk-teal:    #0f6f7a;
+  --dusk-magenta: #ff3fa8;
+  --paper:        #f4f0e6;
+  --brass-edge:   rgba(184, 140, 64, 0.45);
+  --brass-soft:   rgba(184, 140, 64, 0.25);
+  --glow-display: 0 0 14px rgba(107, 255, 204, 0.45);
+  --glow-section: 0 0 10px rgba(107, 255, 204, 0.30);
+  --glow-title:   0 0 8px rgba(107, 255, 204, 0.28);
+  --glow-hover:   0 0 8px rgba(107, 255, 204, 0.60);
+  --glow-live:    0 0 12px rgba(107, 255, 204, 0.50);
+  --tint:         rgba(107, 255, 204, 0.08);
+  --dotgrid:      rgba(107, 255, 204, 0.10);
+  --topbar-bg:    rgba(5, 2, 8, 0.88);
+  /* the faint CRT layer, well under the site's .28 and .40 */
+  --scan:         rgba(0, 0, 0, 0.07);
+  --vignette:     rgba(0, 0, 0, 0.16);
 
-  /* type */
-  --ink:       #f2f2f2;
-  --muted:     #8c8c8c;
-  --faint:     #5c5c5c;
+  /* slothweb's semantic names, on the Spacetrucker tokens */
+  --bg:           var(--void);
+  --panel:        #0e0817;
+  --panel-2:      var(--void-2);
+  --rule:         #163a30;
+  --rule-hi:      var(--dimmer);
+  --ink:          #e8e2f2;
+  --muted:        var(--dim);
+  --faint:        var(--dimmer);
+  --signal:       var(--amber);
+  --data:         var(--ice);
+  --phosphor:     #6bffcc;
+  --phosphor-dim: #2b8f74;
+  /* hover text and the live pill: the phosphor itself in the dark;
+   * in the light theme the site's --phosphor reads under 4.5:1 on the
+   * cream, so the darker --phosphor-hi carries it (web/README.md) */
+  --hover:        var(--phosphor);
 
-  /* budgeted accents */
-  --signal:    #ff5a00;
-  --data:      #00c8ff;
-  --phosphor:  #00d7af;
-  --phosphor-dim: #00875f;
+  /* severity: the TUI's alerts view grades LOW, WARN and CRIT with
+   * tui_heat(0.3 / 0.5 / 1.0) (src/views/alerts.c sev_heat()) */
+  --sev-low:      var(--heat-1);
+  --sev-warn:     var(--heat-2);
+  --sev-crit:     var(--heat-3);
 
-  /* severity (matches TUI and sloth-ios) */
-  --sev-low:   #d7af00;
-  --sev-warn:  #ff8700;
-  --sev-crit:  #ff0000;
-
-  /* heat ramp (tui_heat thresholds 0.15 / 0.40 / 0.70) */
-  --heat-0:    #626262;
-  --heat-1:    #d7af00;
-  --heat-2:    #ff8700;
-  --heat-3:    #ff0000;
-
-  /* record-type hues */
-  --t-dns:  #7fd1ff;  --t-tls:  #b48cff;  --t-http: #ffd166;
-  --t-quic: #ff9ecb;  --t-icmp: #9be564;  --t-arp:  #c0c0c0;
-  --t-wifi: #00d7af;  --t-alert:#ff5a00;
-
-  /* key hash colours: the TUI's IP palette (src/tui_palette.c
-   * tui_ip_fg), picked by the same hash (src/ip_color.c), so a key has
-   * one colour in the TUI and here */
-  --k-0: #00ffd7;  --k-1: #5fd7d7;  --k-2: #87ffaf;  --k-3: #afff87;
-  --k-4: #d7af00;  --k-5: #ffaf5f;  --k-6: #d78787;  --k-7: #87afd7;
-
-  /* flow protocol hues (the Flows view, M6): categorical, each named
-   * beside its line in the legend, never colour alone; SMB1 is
-   * --sev-crit over all of them */
+  /* flow protocol hues (the Flows view, M6): a categorical chart
+   * encoding the TUI has no counterpart for, each named beside its line
+   * in the legend, never colour alone; SMB1 is --sev-crit over all of
+   * them. palette.c darkens them for the light theme by the data rule. */
   --f-ssh:  #7fd1ff;  --f-rdp:  #b48cff;  --f-smb:  #ffd166;
   --f-snmp: #9be564;  --f-bgp:  #ff9ecb;  --f-ldap: #c0c0c0;
   --f-kerb: #00d7af;
 
-  /* The page is dark only (spec §8.1, no light theme in the MVP): say
-   * so, so that form controls and scrollbars follow it whatever the
-   * browser's prefers-color-scheme is. */
+  /* Dark is the default, whatever the browser prefers; the toggle
+   * stores a choice of light. */
   color-scheme: dark;
 
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
-  --radius: 0;
+  --font-mono: "Fira Code", ui-monospace, "SF Mono", Menlo, "DejaVu Sans Mono", monospace;
+  --radius: 14px;
+  --radius-sm: 8px;
   --gap: 8px;
+}
+/* The site's cream theme. */
+:root[data-theme="light"] {
+  --void:         #f4f0e6;
+  --void-2:       #faf6ee;
+  --dim:          #6b6176;
+  --dimmer:       #8f8799;
+  --phosphor-hi:  #06563f;
+  --phosphor-mid: #1a7d61;
+  --ice:          #1a7ea1;
+  --violet:       #6742d4;
+  --brass:        #8a5f18;
+  --amber:        #c25f0a;
+  --brass-edge:   rgba(138, 95, 24, 0.45);
+  --brass-soft:   rgba(138, 95, 24, 0.22);
+  --glow-display: none;
+  --glow-section: none;
+  --glow-title:   none;
+  --glow-hover:   none;
+  --glow-live:    none;
+  --tint:         rgba(11, 140, 106, 0.08);
+  --dotgrid:      rgba(11, 140, 106, 0.12);
+  --topbar-bg:    rgba(244, 240, 230, 0.92);
+  --scan:         transparent;
+  --vignette:     transparent;
+
+  --bg:           #f4f0e6;
+  --panel:        #fffdf8;
+  --rule:         #d9d0bf;
+  --ink:          #29212f;
+  --phosphor:     #0b8c6a;
+  --phosphor-dim: #4a9a85;
+  --hover:        var(--phosphor-hi);
+
+  color-scheme: light;
 }
