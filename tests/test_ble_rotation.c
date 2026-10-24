@@ -1372,19 +1372,25 @@ static void unprocess(char *t) {
                 *v = '0';
 }
 
+/* Three payload links, one per token kind, laid out in frame-time
+ * order. Replayed over the same seconds, only the first would link: the
+ * frame clock would already stand past a later pair's older side, so
+ * tick() forgets its digests before its newer address arrives. Each
+ * newer address is heard for BLE_ROT_DSWAP_S past its first report, the
+ * last one up to g_wall, so every link commits. */
 static void rotation_scenario(void) {
     uint8_t A[6], B[6];
     cdp_rotation(g_wall - 100, A, B);
     uint8_t ho[HANDOFF_LEN], C[6], D[6];
     ad_handoff(ho, 0);
     rpa(C, 3); rpa(D, 4);
-    run_addr(C, ho, sizeof(ho), g_wall - 100, g_wall - 80, 2);
-    run_addr(D, ho, sizeof(ho), g_wall - 78, g_wall - 40, 2);
+    run_addr(C, ho, sizeof(ho), g_wall - 38, g_wall - 30, 2);
+    run_addr(D, ho, sizeof(ho), g_wall - 27, g_wall - 15, 2);
     uint8_t fp[FP_ACCT_LEN], E[6], F[6];
     ad_fp_account(fp, 0x01);
     rpa(E, 5); rpa(F, 6);
-    run_addr(E, fp, sizeof(fp), g_wall - 100, g_wall - 80, 2);
-    run_addr(F, fp, sizeof(fp), g_wall - 78, g_wall - 40, 2);
+    run_addr(E, fp, sizeof(fp), g_wall - 14, g_wall - 12, 2);
+    run_addr(F, fp, sizeof(fp), g_wall - 10, g_wall, 2);
 }
 
 /* With the flag absent: no seam table, no `ble_rot_` field, no estimate
@@ -1421,6 +1427,7 @@ static void test_off_runs_match_and_carry_nothing(void) {
     setup(1);
     rotation_scenario();
     char *on = outputs();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 3);
     ASSERT(strstr(on, "\"ble_rot_hints\":\"1-9\"") != NULL);
     ASSERT(strstr(on, "rotation hints") != NULL);
     teardown();
@@ -1462,7 +1469,8 @@ static const uint8_t AD_SWIFT[] = { 0x08, 0xFF, 0x06, 0x00, 0x03, 0x00, 0x80, 'k
  * one window boundary crossed, then BLE_FLOOD_DISTINCT_ADDRS fresh static
  * random addresses (never seam candidates) sending BLE_FLOOD_RATE *
  * BLE_FLOOD_WINDOW_S advertisements between them. On the edge, so a gate
- * moved by any hint count stops it firing. */
+ * moved by any hint counter stops it firing. No address on the flooded
+ * key is hinted: that is flood_on_a_rotated_key(). */
 static void flood_after_a_rotation(void) {
     uint8_t A[6], B[6];
     cdp_rotation(g_wall - 100, A, B);
@@ -1478,6 +1486,35 @@ static void flood_after_a_rotation(void) {
         }
 }
 
+/* A flood on the key a committed link rides, the hinted rows counted
+ * inside it. Fast Pair's 0xFE2C is spam-listed and carries an account
+ * token, so one key does both. The key primed by one resident address,
+ * one window boundary crossed, then the rotation E -> F (both fresh in
+ * the window, linked before the gate trips), then fresh static random
+ * flooders up to exactly BLE_FLOOD_DISTINCT_ADDRS addresses and
+ * BLE_FLOOD_RATE * BLE_FLOOD_WINDOW_S advertisements. The gate tripping
+ * excludes E and F from further links (flood_sweep()) but leaves the
+ * committed one standing, so a lane that counted a chain's addresses
+ * once would lose one fresh address and go quiet. */
+static void flood_on_a_rotated_key(uint8_t E[6], uint8_t F[6]) {
+    uint8_t fp[FP_ACCT_LEN];
+    ad_fp_account(fp, 0x01);
+    const uint8_t home[6] = { 0xC2, 0xFF, 0xFF, 0x00, 0x00, 0x02 };
+    obs_on(home, 1, 0x03, fp, sizeof(fp), g_wall - 101, MON, 0);
+    g_mono += BLE_FLOOD_WINDOW_S * 1000u;
+    rpa(E, 5); rpa(F, 6);
+    run_addr(E, fp, sizeof(fp), g_wall - 100, g_wall - 80, 2);
+    run_addr(F, fp, sizeof(fp), g_wall - 77, g_wall - 40, 2);
+    const unsigned total = BLE_FLOOD_RATE * BLE_FLOOD_WINDOW_S;
+    const unsigned rotated = 11 + 19;                 /* E's and F's reports */
+    const unsigned addrs = BLE_FLOOD_DISTINCT_ADDRS - 2;
+    for (unsigned k = 0; k < total - rotated; k++) {
+        const uint8_t z[6] = { 0xC3, 0, 0, 3, 0, (uint8_t)(k % addrs) };
+        obs_on(z, 1, 0x03, fp, sizeof(fp), g_wall, MON, 0);
+        g_mono += 2;
+    }
+}
+
 /* In-test watchlist rows, fixtures and not shipped rows (src/
  * ble_watchlist.h): the MS-CDP beacon's company ID and Scenario_Type,
  * and Fast Pair's Service Data UUID with version 0x00. */
@@ -1489,10 +1526,8 @@ static const ble_wl_row_t k_rot_rows[] = {
 };
 
 /* A CDP rotation, then a Fast Pair account rotation after it in frame
- * time (rotation_scenario() replays its pairs over the same seconds, and
- * only its first pair links: the frame clock already stands past the
- * later pairs' older sides, so tick() forgets each one's digests before
- * its newer address arrives), then one CDP beacon with its own token on a
+ * time (pairs replayed over the same seconds would not link; see
+ * rotation_scenario()), then one CDP beacon with its own token on a
  * static random address that is never a candidate: both categories hold
  * linked rows, and the cdp category an unlinked one too. All inside
  * BLE_WATCH_RECENT_SECS. */
@@ -1509,16 +1544,21 @@ static void watched_rotations(void) {
 }
 
 /* The same for the other two BLE lanes: no rule reads a hint, so the
- * flag changes nothing BLE_ADV_FLOOD or BLE_WATCHLIST writes. The flood
- * and the watchlist are separate runs, so the flood's addresses never
- * share the 256-row table with the rows the watchlist counts. Each is
- * run with the flag off, then on, the on run first shown to hold
- * committed links on what the rule reads. Seen to fail, one mutation at
- * a time: with flood_findings() skipping a window whose `fresh -
- * s->ble_rot.hints_payload` is under the gate (the edge flood is
- * silenced with the flag on), and with watch_findings() skipping a row
- * with `d->hint.chain` set (the hinted rows drop out of the counts, and
- * the fp category out of the alerts, with the flag on). */
+ * flag changes nothing BLE_ADV_FLOOD or BLE_WATCHLIST writes. The two
+ * floods and the watchlist are separate runs, so no run's addresses
+ * share the 256-row table with another's. Each is run with the flag
+ * off, then on, the on run first shown to hold committed links on what
+ * the rule reads. The first flood has its link on another key, so it
+ * holds the lane's gates to every hint counter; the second has the
+ * link's two rows inside the flood, so it holds the lane to every
+ * per-address hint too. Seen to fail, one mutation at a time: with
+ * flood_findings() skipping a window whose `fresh -
+ * s->ble_rot.hints_payload` is under the gate (both edge floods are
+ * silenced with the flag on); with flood_findings() taking from `fresh`
+ * one per row on the flood's key with `hint.hops` set (the second flood
+ * alone is silenced); and with watch_findings() skipping a row with
+ * `d->hint.chain` set (the hinted rows drop out of the counts, and the
+ * fp category out of the alerts, with the flag on). */
 static void test_hints_never_change_ble_adv_flood_or_ble_watchlist(void) {
     static char off_out[8192], on_out[8192];
 
@@ -1535,6 +1575,34 @@ static void test_hints_never_change_ble_adv_flood_or_ble_watchlist(void) {
     flood_after_a_rotation();
     snap();
     ASSERT_EQ(g_s.ble_rot.hints_payload, 1);
+    alerts_update(&g_s);
+    ASSERT_EQ(count_type(ALERT_TYPE_BLE_ADV_FLOOD), 1);
+    alert_outputs(on_out, sizeof(on_out));
+    ASSERT_STR(on_out, off_out);
+    teardown();
+    alerts_clear();
+
+    uint8_t E[6], F[6];
+    setup(0);
+    flood_on_a_rotated_key(E, F);
+    snap();
+    alerts_update(&g_s);
+    ASSERT_EQ(count_type(ALERT_TYPE_BLE_ADV_FLOOD), 1);
+    alert_outputs(off_out, sizeof(off_out));
+    teardown();
+    alerts_clear();
+
+    setup(1);
+    flood_on_a_rotated_key(E, F);
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 1);
+    const ble_device_t *e = row(E), *f = row(F);
+    ASSERT(e && f);
+    if (e && f) {
+        ASSERT(e->hint.chain != 0);
+        ASSERT_EQ(f->hint.chain, e->hint.chain);
+        ASSERT_EQ(f->hint.basis, BLE_HINT_PAYLOAD);
+    }
     alerts_update(&g_s);
     ASSERT_EQ(count_type(ALERT_TYPE_BLE_ADV_FLOOD), 1);
     alert_outputs(on_out, sizeof(on_out));
@@ -1586,14 +1654,17 @@ static int has_ci(const char *hay, const char *needle) {
  * hex (plain, ':'- and ' '-separated, either case) over its first four
  * octets, and each digest as 16 hex digits and as decimal, signed and
  * unsigned. Seen to fail, one mutation at a time: with
- * ble_rot_snapshot() copying a held digest into `poisoned` (exported in
- * sensor_health), and with ble_hci.c writing manufacturer octets 4..7
- * as hex into the row's watch category (exported in ble_device and
- * shown in the detail). */
+ * ble_rot_update_row() writing a held digest as hex into the row's name
+ * (exported in ble_device and shown in the list), and with ble_hci.c
+ * writing manufacturer octets 4..7 as hex into the row's watch category
+ * (exported in ble_device and shown in the detail). Not with a digest
+ * copied into `poisoned`, as this said before: sensor_health writes
+ * that count as a band, so the copy never reaches an output. */
 static void test_no_digest_or_token_byte_reaches_any_output(void) {
     setup(1);
     rotation_scenario();
     char *all = outputs();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 3);
     ASSERT(strstr(all, "\"ble_rot_hints\":\"1-9\"") != NULL);
 
     uint8_t cdp[CDP_LEN], ho[HANDOFF_LEN], fp[FP_ACCT_LEN];

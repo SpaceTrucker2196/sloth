@@ -4979,3 +4979,10 @@ report events.
   and [[alerts]] says so. Which side of a link leaves first is stated: eviction always takes
   the older address, retention can take the newer one alone after the
   frame clock steps back, and both now have a test.
+- 2026-10-23 — [[ble]]: address-rotation hints, follow-up review (#156).
+  The `BLE_ADV_FLOOD` pin gains a second flood, on Fast Pair's
+  spam-listed key, with a committed link's two addresses counted inside
+  it, so a flood lane that counted a chain's addresses once would fail
+  the suite; the first flood only held the gates to hint counters. The
+  test helper that was meant to make three links made one; it now lays
+  its pairs out in time order and the suite asserts all three commit.

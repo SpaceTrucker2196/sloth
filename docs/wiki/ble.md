@@ -28,7 +28,7 @@ Bluetooth Core Specification v5.4 Vol 4 Part E §5.2 (arrayed parameters), §5.4
 §7.7.65.2, §7.7.65.13, §7.8; Vol 6 Part B §2.3.1 (legacy PDU payload); Linux `include/net/bluetooth/hci_mon.h` and
 `net/bluetooth/hci_sock.c`; libpcap `pcap-bt-monitor-linux.c`; #144.
 
-**Last updated**: 2026-10-23 (#156 item 2 follow-up: `BLE_ADV_FLOOD` and `BLE_WATCHLIST` pinned unchanged by the flag; which side of a link eviction and retention can free), 2026-10-23 (#156 item 2 integration: hints feed only the `[*]` estimate, `BLE_HID_UNEXPECTED` unchanged by the flag; links window-scoped; a linked entry keeps its digests until the link goes), 2026-10-23 (#156 item 2 review round: sequential-spray poisoning and the flood gate judged at commit; no link under controller duplicate filtering; banded `sensor_health` fields; expiry without frames; 3600 s poison window, full list fails closed; Fast Pair token from a 5-octet filter), 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
+**Last updated**: 2026-10-23 (#156 item 2 follow-up: `BLE_ADV_FLOOD` and `BLE_WATCHLIST` pinned unchanged by the flag, the flood also with linked addresses inside it; which side of a link eviction and retention can free), 2026-10-23 (#156 item 2 integration: hints feed only the `[*]` estimate, `BLE_HID_UNEXPECTED` unchanged by the flag; links window-scoped; a linked entry keeps its digests until the link goes), 2026-10-23 (#156 item 2 review round: sequential-spray poisoning and the flood gate judged at commit; no link under controller duplicate filtering; banded `sensor_health` fields; expiry without frames; 3600 s poison window, full list fails closed; Fast Pair token from a 5-octet filter), 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
 
 ---
 
@@ -366,8 +366,9 @@ is whatever the advertiser chooses to send, so an attacker can carry
 one across its own addresses on purpose; a link it can manufacture must
 not suppress a security finding. No rule reads a hint, and the tests
 hold all three BLE lanes to it: `BLE_HID_UNEXPECTED`'s rotation form,
-`BLE_ADV_FLOOD` (a flood exactly at its gates) and `BLE_WATCHLIST`
-(categories holding linked rows) write the same type, severity, key,
+`BLE_ADV_FLOOD` (a flood exactly at its gates, once with the link on
+another key and once with both linked addresses counted inside the
+flood) and `BLE_WATCHLIST` (categories holding linked rows) write the same type, severity, key,
 title and detail with the flag on as with it off. The deferred
 stalk-grade CRIT's "non-resident" definition is not built; the hint's
 chain start is a documented hook for it with no consumer
