@@ -9,15 +9,17 @@ defaults file. The service runs as `sloth`, not root, with exactly
 `CAP_NET_RAW` and `CAP_NET_ADMIN`, from paths only root can write, with
 its state under `/var/lib/sloth`. This page explains why each piece is
 the way it is and how to migrate a sensor that is still running out of a
-build tree.
+build tree: `packaging/bin/sloth-migrate-sensor` (#153) copies its data,
+switches the unit, verifies the result and rolls back on failure.
 
 **Sources**: `packaging/systemd/sloth-sensor.service`,
 `packaging/systemd/sloth.sysusers.conf`, `packaging/bin/sloth-monitor-up`,
-`packaging/default/sloth`, `Makefile` (`install`, `install-service`),
-`tests/test_unit_file.c`, `src/secure_file.c`, `src/data_socket.c`,
-`src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2.
+`packaging/default/sloth`, `packaging/bin/sloth-migrate-sensor`,
+`Makefile` (`install`, `install-service`, `deploy-test`),
+`tests/test_unit_file.c`, `tests/deploy/test_migrate_sensor.sh`,
+`src/secure_file.c`, `src/data_socket.c`, `src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2.
 
-**Last updated**: 2026-10-15 (#140)
+**Last updated**: 2026-10-23 (#153)
 
 ---
 
@@ -287,10 +289,122 @@ host without `/usr/local/bin/sloth` installed yet it warns that the
 command is not executable, which is the expected state before `make
 install`.
 
-## 4. Migration from a build-tree unit
+## 4. Migrating a build-tree sensor
 
 For a sensor still running the hand-written unit (root, out of a
-checkout, state under `data/`):
+checkout, state under `data/`), `packaging/bin/sloth-migrate-sensor`
+(#153) does the whole move and can undo it. The owner runs it, as root,
+on the sensor host; nothing in the repo runs it, and its downtime is the
+owner's to schedule. Dry run first, always:
+
+```sh
+cd /path/to/checkout
+make                                                # as yourself
+sudo make install                                   # binary, helper, research.db
+sudo packaging/bin/sloth-migrate-sensor --dry-run   # prints every action, changes nothing
+sudo packaging/bin/sloth-migrate-sensor             # does them, verifies, or rolls back
+journalctl -u sloth-sensor -f
+```
+
+**Do not run `make install-service` first.** It overwrites
+`/etc/systemd/system/sloth-sensor.service` with no backup, which leaves
+the tool nothing to roll back to; the tool installs the unit, the
+sysusers fragment and `/etc/default/sloth` itself. Run against a unit
+that is already the hardened one (byte-identical to
+`packaging/systemd/sloth-sensor.service` after the `PREFIX`
+substitution), it only re-verifies — so a second run is safe and is
+how to re-check a migrated host.
+
+What it does, in order:
+
+1. **Preflight**, which changes nothing and must pass whole: the
+   installed `sloth`, `sloth-monitor-up` and `research.db` from `make
+   install`; the current unit's single `ExecStart=` and its flags (below);
+   the source data dir, derived from `--db` (override `SRC_DATA=`), holds
+   only regular files and directories (`db.c` refuses symlinks); no
+   drop-ins under `sloth-sensor.service.d/`; `/var/lib/sloth` absent or
+   empty; free space for the copy plus 10 % and 64 MiB.
+2. **Account**: installs `/usr/lib/sysusers.d/sloth.conf` and runs
+   `systemd-sysusers` before anything is stopped.
+3. **Data**: backs up the unit (and `/etc/default/sloth`, if present) as
+   `*.bak-migrate-<stamp>`, stops the service, **copies** (`cp -pR`,
+   never `mv`) the data dir into `/var/lib/sloth`, `chown -R
+   sloth:sloth`, `chmod 0700`, and compares every file's SHA-256 and the
+   directory list against the source. A mismatch rolls back before the
+   unit is touched.
+4. **Unit**: writes `/etc/default/sloth` from `packaging/default/sloth`
+   with the carried `SLOTH_ARGS`, installs the hardened unit,
+   `daemon-reload`, `reenable` (so the device `WantedBy=` link exists),
+   and starts it.
+5. **Verify**: the service is active; `/proc/<MainPID>/status` shows
+   `CapEff: 0000000000001000` (CAP_NET_ADMIN only, because the unit has
+   `--hop`; 0 without) and `NoNewPrivs: 1`; a `sensor_health` record
+   arrives on `unix:/run/sloth/sloth.sock` with `chan_retune_failures`
+   0; and the MainPID is unchanged at the end, so it did not
+   restart-loop. The socket reader starts before the service does,
+   because `sensor_health` is change-only with a 300 s heartbeat, and
+   reconnects until its deadline, because a stale socket left by the
+   old unit refuses the first connect; the budget (`HEALTH_SECS`,
+   default 330) covers a full heartbeat besides.
+
+**Any failure after the stop rolls back**: the previous unit and
+defaults file are restored (a defaults file that did not exist is
+removed), `daemon-reload`, the copy is renamed to
+`/var/lib/sloth.rolled-back-<stamp>` (not deleted — the new sensor may
+have written to it), and the old service is started on its old data
+path. **The old data is never modified, in either outcome**; delete
+`data/` by hand once the migrated sensor has run long enough to
+satisfy you. Exit status: 0 migrated or already migrated, 1 failed and
+rolled back, 2 refused by preflight with nothing changed.
+
+How the old flags are carried. The rule is "refuse rather than guess":
+the hardened unit sandboxes the process (`ProtectHome`,
+`ProtectSystem=strict`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK
+AF_PACKET`), so a flag naming a path under `/home` or a `tcp:` socket
+would fail there, and a silently dropped flag changes what the sensor
+does.
+
+| Old flag | What happens |
+|---|---|
+| `--my-ssid`, `--my-bssid`, `--site-label`, `--site`, `--known-mac`, `--iface`, `--db-interval-secs`, `--db-retain-days`, `--db-max-mb`, `--correlate-retain` | carried verbatim into `SLOTH_ARGS` |
+| `--db`, `--pcap-dir`, `--report`, `--report-json`, `--snapshot-out`, `--baseline-in` | already in the hardened `ExecStart` under `/var/lib/sloth`; accepted only when the old path is the same name under the data dir (`sloth.db`, `pcap`, `report.md`, `report.json`, `snapshot.txt`), so the copy lands where the new unit looks; any other name is refused |
+| `--with-research` | replaced by `$(PREFIX)/share/sloth/research.db` from `make install` |
+| `--data-socket unix:…` (or bare) | replaced by `unix:/run/sloth/sloth.sock`; a different old path is reported so its readers can be repointed |
+| `--headless`, `--hop`, `--no-discovery` | already in the hardened `ExecStart` |
+| `--no-privdrop` | dropped — removing it is the point of #153 |
+| `--data-socket tcp:…`, `-o`/`--out`, `--eapol-dir`, `--collect-handshakes`, `--inventory`, `--allow-active`, anything else | refused, exit 2: each is an owner decision in the hardened profile (§3), not a migration step |
+
+Relative paths resolve against the old unit's `WorkingDirectory=`; a
+path containing `..` is refused.
+Quoting, `$VAR`, `%` specifiers and `;` in the old `ExecStart` are
+refused too: `SLOTH_ARGS` is split on whitespace, so a value with a
+space cannot survive the move, and the tool says so instead of
+mangling it.
+
+Every path and command is an environment variable (`ROOT` prefixes
+every host path; `SYSTEMCTL`, `SYSUSERS`, `GETENT`, `CHOWN`, `CP`,
+`SOCAT`, `TIMEOUT`, `PREFIX`, `SRC_DATA`, `MON_IFACE`, `VERIFY_SECS`,
+`HEALTH_SECS`), which is how `make deploy-test` runs it unprivileged:
+`tests/deploy/test_migrate_sensor.sh` builds a scratch root holding a
+fake build-tree unit (written by the test, never read from `/etc`), a
+data dir, a `/proc/<pid>/status`, and stub `systemctl`,
+`systemd-sysusers`, `getent`, `chown` and `socat` that log every call.
+It covers: a dry run leaves the scratch root's tree hash and the call
+log untouched; the flags above carried exactly, `--no-privdrop` and
+every `/home` path absent; a corrupted copy caught by checksum before
+the unit switches; a failed verify (`chan_retune_failures` 3) rolled
+back to the old unit, defaults and data path; a socket reader that
+reconnects after a refused first connect; a second run that only
+verifies; a rerun after a rollback; and refusals (unknown flag, `-o`,
+`tcp:` socket, quoting, a renamed `--db`, a `..` path, `--eapol-dir`,
+low space, a non-empty target, a missing `make install`, a drop-in),
+each changing nothing. Each absence check was seen to fail under a mutation of the
+tool (`docs/wiki/log.md`, #153 entry). `shellcheck` runs first when it
+is installed.
+
+### 4.1 By hand
+
+The same move without the tool, for a host it refuses:
 
 ```sh
 cd /path/to/checkout
@@ -360,7 +474,8 @@ under a mutation before it shipped (`docs/wiki/log.md`, #139 entry).
   path and `SO_PEERCRED` are the authentication (owner decision
   2026-09-25, #100).
 - It does not chmod or chown anything the operator owns. The migration
-  recipe does that, once, by hand.
+  (§4) does that, once, run by the owner — and to a copy, never to the
+  original `data/`.
 
 ## Related pages
 

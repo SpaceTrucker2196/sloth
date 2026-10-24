@@ -26,7 +26,7 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
+**Last updated**: 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
@@ -457,6 +457,8 @@ make replay-check    # run `sloth --replay` on generated savefiles, diff
 make replay-golden   # rewrite the golden from the current tree (review the diff)
 make bench           # time seqnum correlation + PNL union at full table
                      #   occupancy, -O2 (#91; BENCH_ITERS=n, figures in [[ring-buffers]])
+make deploy-test     # packaging/bin/sloth-migrate-sensor against a scratch root
+                     #   with stub systemctl etc.; unprivileged (#153, [[deployment]] §4)
 ```
 
 All six build variants must be warning-clean; CI enforces `-Werror`

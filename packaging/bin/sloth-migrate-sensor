@@ -1,0 +1,558 @@
+#!/bin/sh
+# sloth-migrate-sensor — move a build-tree sensor onto the hardened unit (#153).
+#
+# The owner runs this as root, once, on the sensor host:
+#
+#   sudo make install                                  # binary, helper, research.db
+#   sudo packaging/bin/sloth-migrate-sensor --dry-run  # read every action first
+#   sudo packaging/bin/sloth-migrate-sensor            # then do them
+#
+# It performs the five steps of #153 in order, and is idempotent: a second
+# run against a migrated host only re-verifies it.
+#
+#   1. preflight: nothing is changed until every check passes — the sloth
+#      account can be created, `make install` placed the binary, helper and
+#      research.db, the source data dir is a plain tree, /var/lib/sloth is
+#      empty, there is room for a copy, and every flag in the current unit's
+#      ExecStart is one this tool knows how to carry. An unknown flag is a
+#      refusal, not a guess: the hardened unit sandboxes the process, and a
+#      flag naming a path under /home or a tcp: socket would fail there.
+#   2. account: install the sysusers fragment and run systemd-sysusers.
+#   3. data: stop the service, COPY (never move) the data dir to
+#      /var/lib/sloth, chown sloth:sloth, chmod 0700, and compare every
+#      file's SHA-256 against the source before anything is switched.
+#   4. unit: back up the current unit and /etc/default/sloth, install the
+#      hardened unit and a defaults file carrying the site's flags, start.
+#   5. verify: active, CapEff only CAP_NET_ADMIN (with --hop; 0 without),
+#      NoNewPrivs 1, a sensor_health record on the data socket with
+#      chan_retune_failures 0, and the same MainPID afterwards (no restart).
+#
+# Any failure after the service is stopped rolls back: the previous unit and
+# defaults file are restored, the copy is renamed aside (never deleted —
+# the sensor may have written to it), and the old service is started again
+# on its old data path. The old data is never touched, in either outcome;
+# delete it by hand once you are satisfied.
+#
+# Every path and command is an environment variable so tests/deploy/ can
+# run this unprivileged against a scratch root with stub commands. Exit
+# status: 0 migrated or already migrated, 1 failed (rolled back), 2 refused
+# by preflight (nothing changed). Recipe: docs/wiki/deployment.md §4.
+set -u
+
+ME=sloth-migrate-sensor
+HERE=$(cd "$(dirname "$0")" && pwd)
+
+# ── Paths (ROOT prefixes every host path the tool reads or writes) ───────
+ROOT=${ROOT:-}
+PREFIX=${PREFIX:-/usr/local}
+SLOTH_SRC=${SLOTH_SRC:-$(cd "$HERE/../.." && pwd)}
+UNIT_NAME=${UNIT_NAME:-sloth-sensor.service}
+UNIT=${UNIT:-$ROOT/etc/systemd/system/$UNIT_NAME}
+DEFAULTS=${DEFAULTS:-$ROOT/etc/default/sloth}
+SYSUSERS_DIR=${SYSUSERS_DIR:-$ROOT/usr/lib/sysusers.d}
+TARGET_HOST=/var/lib/sloth              # the path the unit names; fixed by it
+TARGET=${TARGET:-$ROOT$TARGET_HOST}
+SOCK=${SOCK:-$ROOT/run/sloth/sloth.sock}
+PROC=${PROC:-$ROOT/proc}
+BIN=${BIN:-$ROOT$PREFIX/bin/sloth}
+HELPER=${HELPER:-$ROOT$PREFIX/sbin/sloth-monitor-up}
+RESEARCH=${RESEARCH:-$ROOT$PREFIX/share/sloth/research.db}
+UNIT_TEMPLATE=${UNIT_TEMPLATE:-$SLOTH_SRC/packaging/systemd/sloth-sensor.service}
+SYSUSERS_TEMPLATE=${SYSUSERS_TEMPLATE:-$SLOTH_SRC/packaging/systemd/sloth.sysusers.conf}
+DEFAULTS_TEMPLATE=${DEFAULTS_TEMPLATE:-$SLOTH_SRC/packaging/default/sloth}
+# Host path of the old data dir (no ROOT); derived from the unit's --db.
+SRC_DATA=${SRC_DATA:-}
+# Must match BindsTo= in the unit, which systemd cannot take from a file.
+MON_IFACE=${MON_IFACE:-alfa0}
+STAMP=${STAMP:-$(date +%Y%m%d-%H%M%S)}
+
+# ── Commands ─────────────────────────────────────────────────────────────
+SYSTEMCTL=${SYSTEMCTL:-systemctl}
+SYSUSERS=${SYSUSERS:-systemd-sysusers}
+GETENT=${GETENT:-getent}
+CHOWN=${CHOWN:-chown}
+CP=${CP:-cp}
+SOCAT=${SOCAT:-socat}
+TIMEOUT=${TIMEOUT:-timeout}
+SHA256SUM=${SHA256SUM:-sha256sum}
+SLEEP=${SLEEP:-sleep}
+
+# ── Verify budget ────────────────────────────────────────────────────────
+# sensor_health is change-only with a 300 s heartbeat (src/jsonl.c), so a
+# reader that connects after the first record can wait that long; the
+# reader is started right after `systemctl start` and the default covers
+# a full heartbeat besides.
+VERIFY_SECS=${VERIFY_SECS:-60}
+HEALTH_SECS=${HEALTH_SECS:-330}
+# Free-space headroom on top of the copy itself (KiB). AVAIL_KB overrides
+# the df probe, for tests.
+HEADROOM_KB=${HEADROOM_KB:-65536}
+AVAIL_KB=${AVAIL_KB:-}
+
+DRY=0
+case "${1:-}" in
+    --dry-run|-n) DRY=1 ;;
+    "") ;;
+    -h|--help)
+        sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0 ;;
+    *) echo "$ME: unknown argument '$1' (use --dry-run, or nothing)" >&2; exit 2 ;;
+esac
+
+say()    { echo "$ME: $*"; }
+refuse() { echo "$ME: REFUSED: $*" >&2; echo "$ME: nothing was changed" >&2; exit 2; }
+
+# Every change goes through act(). In a dry run it is printed and not run;
+# read-only probes (is-active, show, getent, sha256sum) run in both modes.
+act() {
+    desc=$1; shift
+    if [ "$DRY" -eq 1 ]; then
+        echo "[dry-run] would: $desc"
+        return 0
+    fi
+    echo "+ $desc"
+    "$@"
+}
+
+# ── Unit-file parsing ────────────────────────────────────────────────────
+# Logical lines: backslash continuations joined, comment lines (# or ;)
+# dropped including those inside a continuation, as systemd does.
+logical_lines() {
+    awk '
+        /^[ \t]*[#;]/ { next }
+        {
+            line = cont ? line " " $0 : $0
+            if (line ~ /\\[ \t]*$/) { sub(/\\[ \t]*$/, "", line); cont = 1; next }
+            cont = 0; print line; line = ""
+        }
+        END { if (cont) print line }
+    ' "$1"
+}
+
+unit_key() {   # unit_key FILE KEY -> every value of KEY=, one per line
+    logical_lines "$1" | sed -n "s/^[ \t]*$2=[ \t]*//p"
+}
+
+# Resolve a path from the old unit to an absolute host path, in $RESOLVED.
+# Not $(resolve ...): a refusal inside a command substitution would exit
+# only the subshell and let the parse carry on with an empty path.
+resolve() {
+    p=$1
+    case "$p" in
+        *..*) refuse "path '$p' contains '..'; spell it out in the unit first" ;;
+    esac
+    case "$p" in
+        /*) ;;
+        *)
+            [ -n "$WORKDIR" ] || refuse "relative path '$p' and no WorkingDirectory= in $UNIT"
+            while :; do case "$p" in ./*) p=${p#./} ;; *) break ;; esac; done
+            p=$WORKDIR/$p ;;
+    esac
+    while :; do case "$p" in */) p=${p%/} ;; *) break ;; esac; done
+    RESOLVED=$p
+}
+
+# The flags the hardened unit already sets with its own /var/lib/sloth path.
+# An old value is accepted only when it is the same file under the old data
+# dir, so the copy lands exactly where the new ExecStart looks; any other
+# name is refused rather than renamed on the operator's behalf.
+check_relocated() {   # FLAG OLDPATH EXPECTED-NAME
+    [ -n "$2" ] || return 0
+    if [ "$2" != "$SRC_DATA/$3" ]; then
+        refuse "$1 $2: the hardened unit uses $TARGET_HOST/$3, which is the copy of $SRC_DATA/$3; rename the file or edit the unit by hand"
+    fi
+}
+
+ARGS=""
+WANT_HOP=0
+OLD_SOCK=""
+parse_exec() {
+    exec_line=$1
+    case "$exec_line" in
+        *\"*|*\'*|*\\*|*\$*|*%*|*\;*)
+            refuse "ExecStart has quoting, a variable, a specifier or ';' — this tool splits on whitespace only and will not guess: $exec_line" ;;
+    esac
+    exec_line=$(printf '%s' "$exec_line" | sed 's/^[-+!:]*//')
+    case "$exec_line" in @*) refuse "ExecStart uses the '@' argv0 prefix; not handled" ;; esac
+    set -f
+    # shellcheck disable=SC2086  # split on whitespace, globbing off: intended
+    set -- $exec_line
+    set +f
+    [ $# -ge 1 ] || refuse "ExecStart in $UNIT is empty"
+    case "$(basename "$1")" in
+        sloth) ;;
+        *) refuse "ExecStart runs '$1', not a sloth binary" ;;
+    esac
+    shift
+    P_DB="" P_PCAP="" P_REPORT="" P_RJSON="" P_SNAP="" P_BASE=""
+    while [ $# -gt 0 ]; do
+        f=$1; shift
+        case "$f" in
+            # absorbed: the hardened ExecStart already carries these
+            --headless|--no-discovery) ;;
+            --hop) WANT_HOP=1 ;;
+            # dropped: the reason this migration exists (#153)
+            --no-privdrop) say "dropping --no-privdrop (the hardened unit relies on the #140 drop)" ;;
+            # absorbed with a value, relocated under /var/lib/sloth
+            --db|--pcap-dir|--report|--report-json|--snapshot-out|--baseline-in|--with-research)
+                [ $# -ge 1 ] && case "$1" in -*) false ;; *) true ;; esac \
+                    || refuse "$f needs a value"
+                resolve "$1"; v=$RESOLVED; shift
+                case "$f" in
+                    --db) P_DB=$v ;;
+                    --pcap-dir) P_PCAP=$v ;;
+                    --report) P_REPORT=$v ;;
+                    --report-json) P_RJSON=$v ;;
+                    --snapshot-out) P_SNAP=$v ;;
+                    --baseline-in) P_BASE=$v ;;
+                    --with-research) say "--with-research $v becomes $PREFIX/share/sloth/research.db (make install)" ;;
+                esac ;;
+            --data-socket)
+                v=""
+                if [ $# -ge 1 ]; then case "$1" in -*) ;; *) v=$1; shift ;; esac; fi
+                case "$v" in
+                    ""|unix:*) OLD_SOCK=${v:-unix:/run/sloth/sloth.sock} ;;
+                    *) refuse "--data-socket $v: the hardened unit allows AF_UNIX only (RestrictAddressFamilies); a tcp: socket is an owner decision, not a migration" ;;
+                esac ;;
+            # carried verbatim into SLOTH_ARGS: site identity and tuning
+            --my-ssid|--my-bssid|--site-label|--site|--known-mac|--iface|\
+            --db-interval-secs|--db-retain-days|--db-max-mb|--correlate-retain)
+                [ $# -ge 1 ] && case "$1" in --*) false ;; *) true ;; esac \
+                    || refuse "$f needs a value"
+                ARGS="${ARGS:+$ARGS }$f $1"; shift ;;
+            *)
+                refuse "flag '$f' in $UNIT is not one this tool carries; move it into $TARGET_HOST terms by hand (docs/wiki/deployment.md §4) rather than have it guessed" ;;
+        esac
+    done
+    if [ -z "$SRC_DATA" ]; then
+        [ -n "$P_DB" ] || refuse "the unit has no --db, so the data dir cannot be derived; set SRC_DATA=/path/to/data"
+        SRC_DATA=$(dirname "$P_DB")
+    fi
+    check_relocated --db           "$P_DB"     sloth.db
+    check_relocated --pcap-dir     "$P_PCAP"   pcap
+    check_relocated --report       "$P_REPORT" report.md
+    check_relocated --report-json  "$P_RJSON"  report.json
+    check_relocated --snapshot-out "$P_SNAP"   snapshot.txt
+    check_relocated --baseline-in  "$P_BASE"   snapshot.txt
+}
+
+render_unit() {   # the same substitution `make install-service` applies
+    sed -e "s|/usr/local/|$PREFIX/|g" "$UNIT_TEMPLATE"
+}
+
+render_defaults() {
+    SM_ARGS=$ARGS SM_IFACE=$MON_IFACE SM_FROM=$UNIT SM_STAMP=$STAMP awk '
+        NR == 1 {
+            print "# Written by sloth-migrate-sensor (" ENVIRON["SM_STAMP"] ") from the flags in"
+            print "# " ENVIRON["SM_FROM"] " (#153). The template is packaging/default/sloth."
+        }
+        /^SLOTH_IFACE=/ { print "SLOTH_IFACE=" ENVIRON["SM_IFACE"]; next }
+        /^SLOTH_ARGS=/  { print "SLOTH_ARGS=" ENVIRON["SM_ARGS"]; next }
+        { print }
+    ' "$DEFAULTS_TEMPLATE"
+}
+
+tree_sums() {   # path-sorted SHA-256 of every regular file under $1
+    (cd "$1" && find . -type f -exec "$SHA256SUM" {} + | LC_ALL=C sort -k2)
+}
+tree_dirs() { (cd "$1" && find . -type d | LC_ALL=C sort); }
+
+dir_empty() { [ -z "$(ls -A "$1" 2>/dev/null)" ]; }
+
+is_active() { "$SYSTEMCTL" is-active --quiet "$UNIT_NAME"; }
+
+# ── Verify (step 5) ──────────────────────────────────────────────────────
+HEALTH_FILE=""
+READER_PID=""
+# Reconnects until the deadline: a stale socket left by the old unit
+# refuses the first connect, and the new one appears only once sloth runs.
+start_health_reader() {
+    HEALTH_FILE=$(mktemp "${TMPDIR:-/tmp}/$ME.health.XXXXXX")
+    (
+        end=$(($(date +%s) + HEALTH_SECS))
+        while now=$(date +%s) && [ "$now" -lt "$end" ]; do
+            [ -e "$SOCK" ] &&
+                "$TIMEOUT" $((end - now)) "$SOCAT" -u "UNIX-CONNECT:$SOCK" STDOUT
+            "$SLEEP" 1
+        done
+    ) >"$HEALTH_FILE" 2>/dev/null &
+    READER_PID=$!
+}
+stop_health_reader() {
+    [ -n "$READER_PID" ] && pkill -P "$READER_PID" 2>/dev/null
+    [ -n "$READER_PID" ] && kill "$READER_PID" 2>/dev/null
+    [ -n "$READER_PID" ] && wait "$READER_PID" 2>/dev/null
+    READER_PID=""
+    [ -n "$HEALTH_FILE" ] && rm -f "$HEALTH_FILE"
+    HEALTH_FILE=""
+}
+
+VERIFY_ERR=""
+verify() {
+    want_cap=0000000000000000
+    [ "$WANT_HOP" -eq 1 ] && want_cap=0000000000001000
+
+    i=0
+    until is_active; do
+        i=$((i + 1))
+        [ "$i" -le "$VERIFY_SECS" ] || { VERIFY_ERR="$UNIT_NAME is not active after ${VERIFY_SECS}s"; return 1; }
+        "$SLEEP" 1
+    done
+    pid=$("$SYSTEMCTL" show -p MainPID --value "$UNIT_NAME")
+    case "$pid" in ''|0|*[!0-9]*) VERIFY_ERR="no MainPID for $UNIT_NAME ('$pid')"; return 1 ;; esac
+
+    # The in-process drop happens once the capture handles are open, so
+    # CapEff is polled rather than read once.
+    i=0
+    while :; do
+        cap=$(sed -n 's/^CapEff:[ \t]*//p' "$PROC/$pid/status" 2>/dev/null)
+        nnp=$(sed -n 's/^NoNewPrivs:[ \t]*//p' "$PROC/$pid/status" 2>/dev/null)
+        [ "$cap" = "$want_cap" ] && [ "$nnp" = 1 ] && break
+        i=$((i + 1))
+        if [ "$i" -gt "$VERIFY_SECS" ]; then
+            VERIFY_ERR="pid $pid: CapEff '$cap' (want $want_cap), NoNewPrivs '$nnp' (want 1)"
+            return 1
+        fi
+        "$SLEEP" 1
+    done
+    say "verify: pid $pid CapEff $cap NoNewPrivs $nnp"
+
+    i=0
+    while :; do
+        line=$(grep -m1 '"type":"sensor_health"' "$HEALTH_FILE" 2>/dev/null)
+        [ -n "$line" ] && break
+        i=$((i + 1))
+        if [ "$i" -gt "$HEALTH_SECS" ]; then
+            VERIFY_ERR="no sensor_health record on $SOCK within ${HEALTH_SECS}s"
+            return 1
+        fi
+        "$SLEEP" 1
+    done
+    rf=$(printf '%s\n' "$line" | sed -n 's/.*"chan_retune_failures":\([0-9-]*\).*/\1/p')
+    if [ "$rf" != 0 ]; then
+        VERIFY_ERR="sensor_health chan_retune_failures is '${rf:-absent}' (want 0)"
+        return 1
+    fi
+    say "verify: sensor_health arrived, chan_retune_failures 0"
+
+    pid2=$("$SYSTEMCTL" show -p MainPID --value "$UNIT_NAME")
+    if ! is_active || [ "$pid2" != "$pid" ]; then
+        VERIFY_ERR="$UNIT_NAME restarted during verification (pid $pid -> ${pid2:-none})"
+        return 1
+    fi
+    return 0
+}
+
+# ── Preflight (step 1) ───────────────────────────────────────────────────
+[ "$DRY" -eq 1 ] && say "dry run: every action is printed, nothing is changed"
+
+for f in "$UNIT_TEMPLATE" "$SYSUSERS_TEMPLATE" "$DEFAULTS_TEMPLATE"; do
+    [ -f "$f" ] || refuse "missing $f (SLOTH_SRC=$SLOTH_SRC)"
+done
+[ -f "$UNIT" ] || refuse "no unit at $UNIT"
+
+# Already migrated? The installed unit is byte-identical to the rendered
+# template: re-verify, change nothing.
+if render_unit | cmp -s - "$UNIT"; then
+    say "$UNIT is already the hardened unit; verifying only"
+    if [ "$DRY" -eq 1 ]; then
+        echo "[dry-run] would: verify $UNIT_NAME (CapEff, NoNewPrivs, sensor_health)"
+        exit 0
+    fi
+    grep -q -- '--hop' "$UNIT" && WANT_HOP=1
+    [ -f "$DEFAULTS" ] && grep -q '^SLOTH_ARGS=.*--hop' "$DEFAULTS" && WANT_HOP=1
+    start_health_reader
+    if verify; then
+        stop_health_reader
+        say "already migrated and verified"
+        exit 0
+    fi
+    stop_health_reader
+    echo "$ME: already migrated, but verify FAILED: $VERIFY_ERR" >&2
+    echo "$ME: nothing was changed; journalctl -u $UNIT_NAME" >&2
+    exit 1
+fi
+
+if [ "$DRY" -eq 0 ] && [ -z "$ROOT" ] && [ "$(id -u)" != 0 ]; then
+    refuse "must run as root (try --dry-run first)"
+fi
+
+if [ -d "$UNIT.d" ] && ! dir_empty "$UNIT.d"; then
+    refuse "$UNIT.d/ holds drop-ins, which would also apply to the hardened unit; review and remove them first"
+fi
+
+n=$(unit_key "$UNIT" ExecStart | grep -c .)
+[ "$n" -eq 1 ] || refuse "expected exactly one ExecStart= in $UNIT, found $n"
+WORKDIR=$(unit_key "$UNIT" WorkingDirectory | tail -n 1 | sed 's/^-//')
+parse_exec "$(unit_key "$UNIT" ExecStart)"
+# The hardened ExecStart has --hop whatever the old one said.
+if [ "$WANT_HOP" -eq 0 ] && render_unit | logical_lines /dev/stdin | grep -q -- '--hop'; then
+    say "note: the old unit had no --hop; the hardened unit hops"
+    WANT_HOP=1
+fi
+case "$OLD_SOCK" in
+    ""|unix:/run/sloth/sloth.sock) ;;
+    *) say "note: the data socket moves from ${OLD_SOCK#unix:} to /run/sloth/sloth.sock; point its readers there" ;;
+esac
+
+SRC=$ROOT$SRC_DATA
+[ -d "$SRC" ] || refuse "source data dir $SRC_DATA does not exist"
+case "$TARGET/" in "$SRC"/*) refuse "target $TARGET is inside the source $SRC" ;; esac
+case "$SRC/" in "$TARGET"/*) refuse "source $SRC is inside the target $TARGET" ;; esac
+odd=$(find "$SRC" ! -type f ! -type d | head -n 1)
+[ -z "$odd" ] || refuse "$odd is not a regular file or directory; db.c refuses symlinks, so the copy will not carry one"
+if [ -e "$TARGET" ] && ! dir_empty "$TARGET"; then
+    refuse "$TARGET already has contents; a previous attempt? Move it aside after checking it"
+fi
+
+[ -x "$BIN" ]      || refuse "no executable $BIN; run 'sudo make install' first"
+[ -x "$HELPER" ]   || refuse "no $HELPER; run 'sudo make install' first"
+[ -f "$RESEARCH" ] || refuse "no $RESEARCH; run 'sudo make install' first"
+for c in "$SYSTEMCTL" "$SYSUSERS" "$GETENT" "$SOCAT" "$TIMEOUT" "$SHA256SUM"; do
+    command -v "$c" >/dev/null 2>&1 || refuse "command '$c' not found"
+done
+
+need_kb=$(du -sk "$SRC" | cut -f1)
+if [ -z "$AVAIL_KB" ]; then
+    d=$TARGET
+    while [ ! -d "$d" ]; do d=$(dirname "$d"); done
+    AVAIL_KB=$(df -Pk "$d" | awk 'NR == 2 { print $4 }')
+fi
+if [ "$AVAIL_KB" -lt $((need_kb + need_kb / 10 + HEADROOM_KB)) ]; then
+    refuse "copying $SRC_DATA needs ${need_kb} KiB plus headroom; ${AVAIL_KB} KiB free at $TARGET"
+fi
+
+if "$GETENT" passwd sloth >/dev/null 2>&1; then have_user=1; else have_user=0; fi
+was_active=0; is_active && was_active=1
+was_enabled=0; "$SYSTEMCTL" is-enabled --quiet "$UNIT_NAME" 2>/dev/null && was_enabled=1
+had_defaults=0; [ -f "$DEFAULTS" ] && had_defaults=1
+
+say "preflight passed"
+say "  unit:        $UNIT (active=$was_active enabled=$was_enabled)"
+say "  data:        $SRC_DATA (${need_kb} KiB) -> $TARGET_HOST, copied; the source stays"
+say "  account:     sloth $([ $have_user -eq 1 ] && echo exists || echo 'will be created')"
+say "  SLOTH_ARGS:  ${ARGS:-(none)}"
+say "  SLOTH_IFACE: $MON_IFACE"
+
+UNIT_BAK=$UNIT.bak-migrate-$STAMP
+DEFAULTS_BAK=$DEFAULTS.bak-migrate-$STAMP
+ASIDE=$TARGET.rolled-back-$STAMP
+target_made=0
+
+# ── Step 2: account (before any downtime) ────────────────────────────────
+act "install $SYSUSERS_DIR/sloth.conf" \
+    install -D -m 644 "$SYSUSERS_TEMPLATE" "$SYSUSERS_DIR/sloth.conf" \
+    || { echo "$ME: could not install the sysusers fragment; the service was not touched" >&2; exit 1; }
+act "$SYSUSERS $SYSUSERS_DIR/sloth.conf" \
+    "$SYSUSERS" "$SYSUSERS_DIR/sloth.conf" || { echo "$ME: systemd-sysusers failed; the service was not touched" >&2; exit 1; }
+if [ "$DRY" -eq 0 ] && ! "$GETENT" passwd sloth >/dev/null 2>&1; then
+    echo "$ME: no sloth account after systemd-sysusers; the service was not touched" >&2
+    exit 1
+fi
+
+rollback() {
+    echo "$ME: FAILED: $1" >&2
+    echo "$ME: rolling back to the previous unit and data path" >&2
+    stop_health_reader
+    "$SYSTEMCTL" stop "$UNIT_NAME" 2>/dev/null
+    rc=0
+    if [ -f "$UNIT_BAK" ]; then
+        cp -p "$UNIT_BAK" "$UNIT" || rc=1
+    fi
+    if [ "$had_defaults" -eq 1 ]; then
+        [ -f "$DEFAULTS_BAK" ] && { cp -p "$DEFAULTS_BAK" "$DEFAULTS" || rc=1; }
+    else
+        rm -f "$DEFAULTS"
+    fi
+    "$SYSTEMCTL" daemon-reload || rc=1
+    if [ "$was_enabled" -eq 1 ]; then
+        "$SYSTEMCTL" reenable "$UNIT_NAME" || rc=1
+    else
+        "$SYSTEMCTL" disable "$UNIT_NAME" 2>/dev/null
+    fi
+    # The copy is set aside, not deleted: the new sensor may have written
+    # to it. The old data dir was never touched.
+    if [ "$target_made" -eq 1 ] && [ -e "$TARGET" ]; then
+        mv "$TARGET" "$ASIDE" && echo "$ME: the copy is at $ASIDE" >&2
+    fi
+    if [ "$was_active" -eq 1 ]; then
+        "$SYSTEMCTL" start "$UNIT_NAME" || rc=1
+        is_active || rc=1
+    fi
+    if [ "$rc" -eq 0 ]; then
+        echo "$ME: rolled back; $UNIT_NAME runs the previous unit on $SRC_DATA" >&2
+    else
+        echo "$ME: ROLLBACK INCOMPLETE — the previous unit is at $UNIT_BAK; restore it by hand" >&2
+    fi
+    exit 1
+}
+
+# ── Step 3: data ─────────────────────────────────────────────────────────
+act "back up $UNIT to $UNIT_BAK" cp -p "$UNIT" "$UNIT_BAK" \
+    || { echo "$ME: could not back up $UNIT; the service was not touched" >&2; exit 1; }
+if [ "$had_defaults" -eq 1 ]; then
+    act "back up $DEFAULTS to $DEFAULTS_BAK" cp -p "$DEFAULTS" "$DEFAULTS_BAK" \
+        || { echo "$ME: could not back up $DEFAULTS; the service was not touched" >&2; exit 1; }
+fi
+act "$SYSTEMCTL stop $UNIT_NAME" "$SYSTEMCTL" stop "$UNIT_NAME" \
+    || rollback "systemctl stop failed"
+
+[ -e "$TARGET" ] || target_made=1
+act "create $TARGET (0700)" install -d -m 700 "$TARGET" \
+    || rollback "could not create $TARGET"
+target_made=1
+act "copy $SRC/. to $TARGET/ (cp -pR; the source is not moved)" \
+    "$CP" -pR "$SRC/." "$TARGET/" || rollback "copy failed"
+act "chown -R sloth:sloth $TARGET" \
+    "$CHOWN" -R sloth:sloth "$TARGET" || rollback "chown failed"
+act "chmod 0700 $TARGET" chmod 700 "$TARGET" || rollback "chmod failed"
+
+if [ "$DRY" -eq 1 ]; then
+    echo "[dry-run] would: compare the SHA-256 of every file in $SRC and $TARGET; any difference rolls back"
+else
+    if [ "$(tree_sums "$SRC")" != "$(tree_sums "$TARGET")" ] \
+       || [ "$(tree_dirs "$SRC")" != "$(tree_dirs "$TARGET")" ]; then
+        rollback "the copy in $TARGET does not match $SRC by checksum"
+    fi
+    [ "$(stat -c %a "$TARGET")" = 700 ] || rollback "$TARGET is not 0700"
+    say "copy verified: $(tree_sums "$SRC" | grep -c .) files match by SHA-256"
+fi
+
+# ── Step 4: unit ─────────────────────────────────────────────────────────
+write_defaults() {
+    mkdir -p "$(dirname "$DEFAULTS")" &&
+    render_defaults > "$DEFAULTS.tmp.$$" && chmod 644 "$DEFAULTS.tmp.$$" &&
+    mv "$DEFAULTS.tmp.$$" "$DEFAULTS"
+}
+write_unit() {
+    render_unit > "$UNIT.tmp.$$" && chmod 644 "$UNIT.tmp.$$" &&
+    mv "$UNIT.tmp.$$" "$UNIT"
+}
+act "write $DEFAULTS (SLOTH_ARGS=${ARGS})" write_defaults \
+    || rollback "could not write $DEFAULTS"
+act "install the hardened unit at $UNIT (from $UNIT_TEMPLATE, PREFIX=$PREFIX)" write_unit \
+    || rollback "could not install the unit"
+act "$SYSTEMCTL daemon-reload" "$SYSTEMCTL" daemon-reload \
+    || rollback "daemon-reload failed"
+act "$SYSTEMCTL reenable $UNIT_NAME" "$SYSTEMCTL" reenable "$UNIT_NAME" \
+    || rollback "reenable failed"
+
+# ── Step 5: start and verify ─────────────────────────────────────────────
+if [ "$DRY" -eq 1 ]; then
+    echo "[dry-run] would: $SYSTEMCTL start $UNIT_NAME"
+    echo "[dry-run] would: verify active, CapEff $([ "$WANT_HOP" -eq 1 ] && echo 0000000000001000 || echo 0000000000000000), NoNewPrivs 1, sensor_health on $SOCK with chan_retune_failures 0"
+    echo "[dry-run] would: on any failure, restore $UNIT_BAK, rename $TARGET aside and restart the old unit"
+    say "dry run complete; nothing was changed"
+    exit 0
+fi
+
+start_health_reader
+"$SYSTEMCTL" start "$UNIT_NAME" || rollback "systemctl start failed"
+verify || rollback "verify: $VERIFY_ERR"
+stop_health_reader
+
+say "migrated: $UNIT_NAME runs as sloth from $TARGET_HOST"
+say "  previous unit:  $UNIT_BAK"
+[ "$had_defaults" -eq 1 ] && say "  previous defaults: $DEFAULTS_BAK"
+say "  old data left in place at $SRC_DATA; delete it by hand once satisfied"
+exit 0

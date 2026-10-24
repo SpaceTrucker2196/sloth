@@ -1214,3 +1214,20 @@ install-service:
 	@echo "installed unit, sysusers fragment and defaults; next:"
 	@echo "  systemd-sysusers && systemctl daemon-reload && systemctl enable --now sloth-sensor"
 	@echo "  (migration from a build-tree unit: docs/wiki/deployment.md)"
+
+# ── Deploy tooling test (#153) ───────────────────────────────────────────────
+# packaging/bin/sloth-migrate-sensor against a scratch root with stub
+# systemctl / systemd-sysusers / chown / socat: unprivileged, touches no
+# real service, reads nothing under /etc. Not a `make test` dependency
+# because it is shell, not the C suite; shellcheck runs when installed.
+DEPLOY_SCRIPTS = packaging/bin/sloth-migrate-sensor packaging/bin/sloth-monitor-up \
+                 tests/deploy/test_migrate_sensor.sh
+
+.PHONY: deploy-test
+deploy-test:
+	@if command -v shellcheck >/dev/null 2>&1; then \
+	  shellcheck -s sh $(DEPLOY_SCRIPTS); \
+	else \
+	  echo "deploy-test: shellcheck not installed, skipping lint"; \
+	fi
+	sh tests/deploy/test_migrate_sensor.sh

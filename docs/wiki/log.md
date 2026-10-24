@@ -4993,3 +4993,39 @@ report events.
   passed the second flood). The count now comes from the runs
   themselves, and an assertion fails when no room is left for every
   flooder to be heard.
+- 2026-10-23 — [[deployment]]: §4 is now "Migrating a build-tree
+  sensor" (#153, repo side only; the live host change stays the
+  owner's). New `packaging/bin/sloth-migrate-sensor`, a POSIX sh tool
+  the owner runs as root after `sudo make install`: `--dry-run` prints
+  every action and changes nothing; the apply mode installs the sysusers
+  fragment and runs `systemd-sysusers`, backs up the unit and
+  `/etc/default/sloth`, stops the service, copies (never moves) `data/`
+  to `/var/lib/sloth` as `sloth:sloth` 0700 and compares SHA-256 per
+  file before switching, installs the hardened unit with the old
+  ExecStart's site flags carried into `SLOTH_ARGS` (`--no-privdrop`
+  dropped; path flags accepted only when they map onto the unit's own
+  `/var/lib/sloth` names; unknown flags, `tcp:` sockets, `-o`,
+  `--eapol-dir` and quoting refused), starts it and verifies CapEff
+  `0000000000001000`, `NoNewPrivs: 1`, active, and a `sensor_health`
+  with `chan_retune_failures` 0 on the data socket; any failure restores
+  the previous unit and defaults, sets the copy aside and restarts the
+  old service on its old data. A hardened unit already in place is only
+  re-verified. The recipe warns against `make install-service` first (it
+  overwrites the unit with no backup). `make deploy-test` runs
+  `tests/deploy/test_migrate_sensor.sh` against a scratch root with
+  stub commands. Absence checks seen red under one mutation each of the
+  tool, restored by the inverse edit: a write in the dry-run branch
+  (tree hash); a `systemctl` call from the dry-run branch (call log);
+  `refuse()` without its `exit 2` (tree hash and call log of the
+  unknown-flag refusal); the checksum comparison short-circuited
+  (unit switched and defaults written after a corrupted copy); the
+  post-verify `rollback` replaced by `exit 1` (hardened unit and
+  defaults left in place); a `systemctl restart` and a write in the
+  already-migrated branch, and a write in its dry run (second run
+  changes nothing); `--no-privdrop` appended to `SLOTH_ARGS`;
+  `--with-research`'s `/home` path appended to `SLOTH_ARGS`; a byte
+  appended to the source after the copy (source untouched); the path
+  resolver moved back into a command substitution, where its refusal
+  exits only the subshell (the `..` refusal changes nothing). The
+  socket reader's reconnect (a stale socket refuses the first connect)
+  was seen red with the retry removed.
