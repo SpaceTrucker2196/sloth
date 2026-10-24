@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b) unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
+**Last updated**: 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
 **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
@@ -511,7 +511,8 @@ sensor: an Ubertooth capture started later has its own).
 addresses with the flag on exactly as with it off. A rotation hint
 rests on tokens the advertiser chooses to send, so an attacker could
 link its own addresses on purpose; hints never weaken a detector
-([[ble]]).
+([[ble]]). `BLE_ADV_FLOOD` and `BLE_WATCHLIST` read no hint either, and
+are tested to write the same alerts with the flag on as off.
 
 **`BLE_WATCHLIST` is a category, never an identity** (the #94
 posture). Finder tags use random addresses that rotate, so the finding

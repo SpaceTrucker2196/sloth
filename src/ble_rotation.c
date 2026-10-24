@@ -350,7 +350,15 @@ static void hint_of(const ent_t *E, ble_identity_hint_t *h) {
  * go as a revocation does. The survivors' chains are re-derived, and
  * ble_rot_update_row() zeroes the row of an address with no entry, so
  * no hint outlives either side and no link is left that a later poison
- * could not reach. */
+ * could not reach.
+ *
+ * Which side goes first depends on the caller. Eviction (ent_alloc())
+ * only ever frees the older side of a live link: F -> E stands only
+ * while F's last report precedes E's first, and the least recently
+ * heard entry is the one taken. Retention (tick()) goes by last_ts,
+ * which a frame clock stepped back can leave earlier on E than on F, so
+ * there the newer side can go alone and the pred-side revoke is what
+ * stops F keeping a succ into a wiped, reusable slot. */
 static void ent_free(rot_sensor_t *S, int i) {
     ent_t *X = &S->e[i];
     if (X->pred >= 0) rot_revoke(S, i);

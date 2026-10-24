@@ -10,6 +10,7 @@
 #include "ble_flood.h"
 #include "ble_detect.h"
 #include "ble_rotation.h"
+#include "ble_watchlist.h"
 #include "jsonl.h"
 #include "sensors.h"
 #include "siphash.h"
@@ -785,7 +786,14 @@ static void test_no_link_while_the_controller_may_filter_duplicates(void) {
  * that a later poison could not reach. Seen to fail, one mutation at a
  * time: with ent_free()'s two rot_revoke() calls removed (B keeps its
  * chain), and with ble_rot_update_row() returning on `e < 0` instead of
- * zeroing the hint (A's row keeps the chain its last snapshot copied). */
+ * zeroing the hint (A's row keeps the chain its last snapshot copied).
+ *
+ * Eviction frees the OLDER side here, and only ever can: a live link
+ * F -> E needs F's last report before E's first (seam_ok()), F heard
+ * again revokes it, and ent_alloc() takes the least recently heard
+ * entry, so E is never evicted while its link stands. This test reaches
+ * the succ-side revoke only; the pred-side one is reached through
+ * retention, by the test below. */
 static void evict_after(int snap_between) {
     setup(1);
     uint8_t A[6], B[6];
@@ -817,6 +825,38 @@ static void evict_after(int snap_between) {
 static void test_eviction_ends_the_link_on_both_rows(void) {
     evict_after(0);
     evict_after(1);
+}
+
+/* Retention frees on last_ts, not on arrival order, so it CAN free the
+ * newer side of a live link first: a frame clock stepped back (an NTP
+ * step under --bt-monitor, an out-of-order --bt-capture) leaves B's last
+ * report stamped before A's. B expires alone, and A must lose the link
+ * with it rather than keep a successor naming a wiped slot that the next
+ * allocation reuses. Seen to fail: with ent_free()'s `if (X->pred >= 0)
+ * rot_revoke(S, i);` removed (A's row keeps the chain). */
+static void test_newer_entry_freed_first_ends_the_link(void) {
+    setup(1);
+    uint8_t A[6], B[6], ad[CDP_LEN];
+    time_t t0 = g_wall - 100;
+    cdp_rotation(t0, A, B);                  /* A to t0+20, B t0+23..t0+59 */
+    ad_cdp(ad, 0);
+    obs(B, ad, sizeof(ad), t0 + 1);          /* stamped before A's last */
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 1);
+    ASSERT(row(A) && row(A)->hint.chain != 0);
+    /* The frame clock (t0+59) carried BLE_ROT_RETAIN_S - 50 s on: B
+     * (last t0+1) is past retention, A (last t0+20) is not. */
+    g_mono += (uint64_t)(BLE_ROT_RETAIN_S - 50) * 1000u;
+    snap();
+    ASSERT_EQ(ble_rot_test_held(), 1);
+    const ble_device_t *a = row(A), *b = row(B);
+    ASSERT(a && b);
+    if (a && b) {
+        ASSERT_EQ(a->hint.chain, 0u);
+        ASSERT_EQ(b->hint.chain, 0u);
+    }
+    ASSERT_EQ(ble_rot_distinct(&g_s), 2);
+    teardown();
 }
 
 /* Expiry without frames: a quiet radio, or a --bt-capture file that
@@ -1396,6 +1436,141 @@ static void test_off_runs_match_and_carry_nothing(void) {
     teardown();
 }
 
+/* Every alert, in order: type, severity, key, title and detail. The
+ * incident id is drawn per incident by the engine, so it is reduced to
+ * whether one is set. */
+static void alert_outputs(char *out, size_t cap) {
+    size_t off = 0;
+    out[0] = '\0';
+    for (int i = 0; i < g_s.alert_count; i++) {
+        const alert_t *a = &g_s.alerts[i];
+        int w = snprintf(out + off, cap - off, "%d|%d|%s|%s|%s|%s\n",
+                         (int)a->type, (int)a->sev, a->key, a->title, a->detail,
+                         a->incident_id[0] ? "<id>" : "");
+        if (w > 0 && (size_t)w < cap - off) off += (size_t)w;
+    }
+}
+
+/* Swift Pair as the BLE Spam tool writes it (research/bluetooth/
+ * ble-spam-flood.md): 0xFF, 06 00, beacon 03, sub-scenario 00, reserved
+ * RSSI 80, then a name. A spam-listed key other than the CDP key the
+ * rotation rides, so the flood gate never touches the rotation. */
+static const uint8_t AD_SWIFT[] = { 0x08, 0xFF, 0x06, 0x00, 0x03, 0x00, 0x80, 'k', 'b' };
+
+/* A Swift Pair flood exactly at BLE_ADV_FLOOD's gates, after a rotation
+ * that commits one payload link: the key primed by one resident address,
+ * one window boundary crossed, then BLE_FLOOD_DISTINCT_ADDRS fresh static
+ * random addresses (never seam candidates) sending BLE_FLOOD_RATE *
+ * BLE_FLOOD_WINDOW_S advertisements between them. On the edge, so a gate
+ * moved by any hint count stops it firing. */
+static void flood_after_a_rotation(void) {
+    uint8_t A[6], B[6];
+    cdp_rotation(g_wall - 100, A, B);
+    const uint8_t home[6] = { 0xC2, 0xFF, 0xFF, 0x00, 0x00, 0x01 };
+    obs_on(home, 1, 0x03, AD_SWIFT, sizeof(AD_SWIFT), g_wall, MON, 0);
+    g_mono += BLE_FLOOD_WINDOW_S * 1000u;
+    const unsigned per = BLE_FLOOD_RATE * BLE_FLOOD_WINDOW_S / BLE_FLOOD_DISTINCT_ADDRS;
+    for (unsigned k = 0; k < per; k++)
+        for (unsigned i = 0; i < BLE_FLOOD_DISTINCT_ADDRS; i++) {
+            const uint8_t z[6] = { 0xC3, 0, 0, 2, 0, (uint8_t)i };
+            obs_on(z, 1, 0x03, AD_SWIFT, sizeof(AD_SWIFT), g_wall, MON, 0);
+            g_mono += 2;
+        }
+}
+
+/* In-test watchlist rows, fixtures and not shipped rows (src/
+ * ble_watchlist.h): the MS-CDP beacon's company ID and Scenario_Type,
+ * and Fast Pair's Service Data UUID with version 0x00. */
+static const ble_wl_row_t k_rot_rows[] = {
+    { "cdp-fixture", BLE_WL_MFR, 0x0006, 0x01, -1, -1,
+      "fixture: [MS-CDP] 2.2.2.2.3 beacon, Scenario_Type 1" },
+    { "fp-fixture", BLE_WL_SVC_DATA, 0xFE2C, 0x00, -1, -1,
+      "fixture: Fast Pair Provider Advertising signal, version 0" },
+};
+
+/* A CDP rotation, then a Fast Pair account rotation after it in frame
+ * time (rotation_scenario() replays its pairs over the same seconds, and
+ * only its first pair links: the frame clock already stands past the
+ * later pairs' older sides, so tick() forgets each one's digests before
+ * its newer address arrives), then one CDP beacon with its own token on a
+ * static random address that is never a candidate: both categories hold
+ * linked rows, and the cdp category an unlinked one too. All inside
+ * BLE_WATCH_RECENT_SECS. */
+static void watched_rotations(void) {
+    uint8_t A[6], B[6], E[6], F[6], fp[FP_ACCT_LEN], ad[CDP_LEN];
+    cdp_rotation(g_wall - 100, A, B);
+    ad_fp_account(fp, 0x01);
+    rpa(E, 5); rpa(F, 6);
+    run_addr(E, fp, sizeof(fp), g_wall - 38, g_wall - 24, 2);
+    run_addr(F, fp, sizeof(fp), g_wall - 21, g_wall - 3, 2);
+    ad_cdp(ad, 9);
+    const uint8_t s[6] = { 0xC2, 0, 0, 0, 0, 0x77 };
+    obs_on(s, 1, 0x03, ad, sizeof(ad), g_wall - 1, MON, 0);
+}
+
+/* The same for the other two BLE lanes: no rule reads a hint, so the
+ * flag changes nothing BLE_ADV_FLOOD or BLE_WATCHLIST writes. The flood
+ * and the watchlist are separate runs, so the flood's addresses never
+ * share the 256-row table with the rows the watchlist counts. Each is
+ * run with the flag off, then on, the on run first shown to hold
+ * committed links on what the rule reads. Seen to fail, one mutation at
+ * a time: with flood_findings() skipping a window whose `fresh -
+ * s->ble_rot.hints_payload` is under the gate (the edge flood is
+ * silenced with the flag on), and with watch_findings() skipping a row
+ * with `d->hint.chain` set (the hinted rows drop out of the counts, and
+ * the fp category out of the alerts, with the flag on). */
+static void test_hints_never_change_ble_adv_flood_or_ble_watchlist(void) {
+    static char off_out[8192], on_out[8192];
+
+    setup(0);
+    flood_after_a_rotation();
+    snap();
+    alerts_update(&g_s);
+    ASSERT_EQ(count_type(ALERT_TYPE_BLE_ADV_FLOOD), 1);
+    alert_outputs(off_out, sizeof(off_out));
+    teardown();
+    alerts_clear();
+
+    setup(1);
+    flood_after_a_rotation();
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 1);
+    alerts_update(&g_s);
+    ASSERT_EQ(count_type(ALERT_TYPE_BLE_ADV_FLOOD), 1);
+    alert_outputs(on_out, sizeof(on_out));
+    ASSERT_STR(on_out, off_out);
+    teardown();
+    alerts_clear();
+
+    ASSERT_EQ(ble_watchlist_set_table(k_rot_rows, 2), 0);
+    setup(0);
+    watched_rotations();
+    snap();
+    alerts_update(&g_s);
+    ASSERT_EQ(count_type(ALERT_TYPE_BLE_WATCHLIST), 2);
+    alert_outputs(off_out, sizeof(off_out));
+    ASSERT(strstr(off_out, "3 addresses matching watched category cdp-fixture") != NULL);
+    ASSERT(strstr(off_out, "2 addresses matching watched category fp-fixture") != NULL);
+    teardown();
+    alerts_clear();
+
+    setup(1);
+    watched_rotations();
+    snap();
+    ASSERT_EQ(g_s.ble_rot.hints_payload, 2);
+    int hinted = 0;
+    for (int i = 0; i < g_s.ble_device_count; i++)
+        if (g_s.ble_devices[i].watch_cat[0] && g_s.ble_devices[i].hint.chain) hinted++;
+    ASSERT_EQ(hinted, 4);
+    alerts_update(&g_s);
+    ASSERT_EQ(count_type(ALERT_TYPE_BLE_WATCHLIST), 2);
+    alert_outputs(on_out, sizeof(on_out));
+    ASSERT_STR(on_out, off_out);
+    teardown();
+    alerts_clear();
+    ble_watchlist_reset();
+}
+
 static int has_ci(const char *hay, const char *needle) {
     size_t n = strlen(needle);
     for (const char *p = hay; *p; p++) {
@@ -1502,6 +1677,7 @@ void run_ble_rotation_tests(void) {
     RUN_TEST(test_link_pending_when_the_flood_gate_trips_is_refused);
     RUN_TEST(test_no_link_while_the_controller_may_filter_duplicates);
     RUN_TEST(test_eviction_ends_the_link_on_both_rows);
+    RUN_TEST(test_newer_entry_freed_first_ends_the_link);
     RUN_TEST(test_expiry_runs_without_frames);
     RUN_TEST(test_full_poison_list_fails_closed);
     RUN_TEST(test_poison_lasts_the_token_life);
@@ -1515,6 +1691,7 @@ void run_ble_rotation_tests(void) {
     RUN_TEST(test_view_states_the_timing_caveat);
     RUN_TEST(test_view_states_the_estimate_and_never_a_link);
     RUN_TEST(test_off_runs_match_and_carry_nothing);
+    RUN_TEST(test_hints_never_change_ble_adv_flood_or_ble_watchlist);
     RUN_TEST(test_no_digest_or_token_byte_reaches_any_output);
     RUN_TEST(test_key_is_drawn_per_run);
 }

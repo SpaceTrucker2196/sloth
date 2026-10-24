@@ -4972,3 +4972,10 @@ report events.
   the page instead of being cut at column 99; the strip's buffer grew
   from 160 to 512 octets, since every fault at once had been truncated
   before it was drawn.
+- 2026-10-23 — [[ble]]: address-rotation hints, follow-up (#156).
+  `BLE_ADV_FLOOD` and `BLE_WATCHLIST` are now pinned, like
+  `BLE_HID_UNEXPECTED`, to write the same alerts with the flag on as
+  off (a flood at its gates; watched categories holding linked rows),
+  and [[alerts]] says so. Which side of a link leaves first is stated: eviction always takes
+  the older address, retention can take the newer one alone after the
+  frame clock steps back, and both now have a test.

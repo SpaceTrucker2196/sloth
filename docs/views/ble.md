@@ -89,8 +89,9 @@ The estimate counts addresses a committed hint, payload or timing,
 chains together once, over the **recent window only**: a link lasts
 while both its addresses are in the 64-entry seam table, so an address
 that has left it counts on its own again. It is the hints' only
-consumer; no detector reads them (`BLE_HID_UNEXPECTED` counts
-addresses with the flag on as with it off).
+consumer; no detector reads them (`BLE_HID_UNEXPECTED`,
+`BLE_ADV_FLOOD` and `BLE_WATCHLIST` write the same with the flag on as
+with it off).
 No row, and no detail, says which addresses were joined
 ([the BLE operator guide](../wiki/ble.md#address-rotation-hints-internal-use-only) has the grades and guards).
 
