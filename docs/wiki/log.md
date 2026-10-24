@@ -4951,3 +4951,13 @@ report events.
   overran by one even under a one-row bar, Interfaces drew its key
   hints over its health strip, Devices left the last row empty. The
   Alerts enrichment says "unknown (not in list)" so the line fits.
+- 2026-10-23 — [[views-catalog]]: #150 review follow-up. The row clip
+  now starts just before each list view's column headers, so status
+  lines and banners above a table wrap again: at 100 columns Conns'
+  `[SCAN ALERT]` banner had lost its fourth address and the `+N more`
+  count, and Deauth's `iface:` and the Alerts filter status were cut
+  the same way. Twins narrows SSID and drops `Last` below 114 columns
+  so a `!*#?` row keeps all four flags (`docs/views/twins.md`). Brand
+  letters and Packets' hex/ASCII bytes now draw through the clip and
+  the bottom-edge drop. The page contract for a new list view is in
+  [[views-catalog]] "Adding a view".

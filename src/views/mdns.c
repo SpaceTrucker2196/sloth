@@ -31,13 +31,12 @@ static void fmt_host(const char *host, char *buf, int sz) {
 }
 
 void view_mdns_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     tui_normal(); TPRINT(" mDNS services: ");
     tui_bright();  TPRINT("%d", s->mdns_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear");
     TPRINT("\n");
 
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-15s  %-22s  %-16s  %-15s  %5s\n",
            "Service", "Instance", "Host", "IP", "Port");

@@ -748,8 +748,6 @@ static void draw_beacon_detail(const sloth_state_t *s) {
 void view_beacon_draw(const sloth_state_t *s) {
     if (s->beacon_detail) { draw_beacon_detail(s); return; }
 
-    tui_clip_rows(1);
-
     tui_normal(); TPRINT(" Passive beacons: ");
     tui_bright();  TPRINT("%d", s->beacon_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear");
@@ -768,6 +766,7 @@ void view_beacon_draw(const sloth_state_t *s) {
     memset(reg_rule, '-', (size_t)reg_w);
     reg_rule[reg_w] = '\0';
 
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-22s  %-17s  %4s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s",
            "SSID", "BSSID", "Sig", "Ch", "Enc",

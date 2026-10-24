@@ -17,14 +17,13 @@ static const char *method_color_class(const char *m) {
 }
 
 void view_http_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     tui_normal(); TPRINT(" HTTP requests: ");
     tui_bright();  TPRINT("%d", s->http_log_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear  (newest first)");
     tui_filter_status(s);
     TPRINT("\n");
 
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-8s  %-15s  %-7s  %-24s  %s\n",
            "Time", "Src", "Method", "Host", "Path");

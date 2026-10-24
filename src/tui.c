@@ -221,7 +221,6 @@ static void t_pair(int pair)      { attrset(COLOR_PAIR(pair)); }
 static void t_pair_bold(int pair) { attrset(COLOR_PAIR(pair) | A_BOLD); }
 static void t_puts(const char *s) { t_emit(s, -1); }
 static void t_putn(const char *s, int n) { t_emit(s, n); }
-static void t_putc(char c)        { addch((chtype)(unsigned char)c); }
 
 #else
 
@@ -243,7 +242,6 @@ static void t_pair(int pair)      { t_pair_attr(pair, 0); }
 static void t_pair_bold(int pair) { t_pair_attr(pair, 1); }
 static void t_puts(const char *s) { tui_fputs_sanitized(stdout, s, -1); }
 static void t_putn(const char *s, int n) { tui_fputs_sanitized(stdout, s, n); }
-static void t_putc(char c)        { fputc(c, stdout); }
 
 #endif /* WITH_NCURSES */
 
@@ -572,7 +570,9 @@ void tui_brand_addstr(const char *text, int cat) {
         for (int i = 0; i < mlen; i++) {
             int slot = gseq[i % 6];
             t_pair(cp_for_brand_on_cat(cat, slot));
-            t_putc(text[start + i]);
+            /* Through t_putn, not addch: a raw addch skips the row clip
+             * and the bottom-edge drop (#150). */
+            t_putn(text + start + i, 1);
         }
     } else {
         t_pair(cp_for_brand_on_cat(cat, brand));

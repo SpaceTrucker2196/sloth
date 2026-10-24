@@ -147,8 +147,6 @@ void view_conns_draw(const sloth_state_t *s) {
     static const char *sort_names[]   = {"STATE", "PROTO", "LPORT", "PID", "BW", "RTT"};
     static const char *filter_names[] = {"ALL", "TCP", "UDP"};
 
-    tui_clip_rows(1);
-
     /* status bar */
     tui_normal(); TPRINT(" Conns: ");
     tui_bright();
@@ -192,6 +190,7 @@ void view_conns_draw(const sloth_state_t *s) {
     }
 
     /* column headers */
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-21s  %-21s  %-2s  %-5s  %-13s  %5s  %-14s  %-16s %-8s  %-7s  %s\n",
            "Local", "Remote", "CC", "Proto", "State", "PID", "Process",

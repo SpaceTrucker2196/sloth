@@ -28,14 +28,13 @@ static int answer_room(void) {
 }
 
 void view_dns_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     tui_normal(); TPRINT(" DNS log: ");
     tui_bright();  TPRINT("%d", s->dns_log_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear  (newest first)");
     tui_filter_status(s);
     TPRINT("\n");
 
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     /* "%-28s    %s": the name, the two-cell DGA-flag slot every row
      * carries after it, then the answer. The header and the selected

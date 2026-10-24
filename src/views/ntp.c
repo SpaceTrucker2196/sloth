@@ -11,14 +11,13 @@
 #define NTP_PAGE 30
 
 void view_ntp_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     tui_normal(); TPRINT(" NTP packets: ");
     tui_bright();  TPRINT("%d", s->ntp_log_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear  (newest first)");
     tui_filter_status(s);
     TPRINT("\n");
 
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-8s  %-15s  %-15s  %-8s  %-3s  %-3s  %s\n",
            "Time", "Src", "Dst", "Mode", "V", "St", "Ref");

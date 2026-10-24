@@ -52,8 +52,6 @@ static int detail_rows(const research_cov_t *c) {
 }
 
 void view_research_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     int cited = 0;
     int citable = research_coverage_ratio(s, &cited);
 
@@ -71,6 +69,7 @@ void view_research_draw(const sloth_state_t *s) {
     }
     TPRINT("\n");
 
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-4s  %-20s  %-4s  %-4s  %s\n",
            "SEV", "ALERT", "HITS", "DOCS", "KIND");

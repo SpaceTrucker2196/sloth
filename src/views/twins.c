@@ -18,14 +18,47 @@
  * legend - the lines saying `?` is not a verdict - off the screen. */
 #define TWINS_LEGEND_ROWS 6
 
+/* Twins' columns at the screen width (#150). In full they take 105
+ * columns plus the age, and the list clip holds back the last one, so
+ * at the 100-column minimum Flags started at column 97: a `!*#?` row
+ * showed `!*`, losing the hash-mismatch mark and the `?` that says
+ * neither half is accused, while the legend under the table still
+ * explained it. Flags is what this view exists to show, so the room
+ * comes out of SSID first (a twin's two halves share it, and the
+ * BSSIDs tell them apart) and then Last, which is only shown whole.
+ * The ANSI build has no width and keeps every column. */
+#define TWINS_SSID_MAX  18
+#define TWINS_SSID_MIN  12
+#define TWINS_LAST_W     8      /* "1234567s": eleven days in seconds */
+/* " " plus everything from BSSID A through Flags, each with its gap. */
+#define TWINS_FIXED_W   (1 + 19 + 19 + 8 + 6 + 10 + 7 + 7 + 8)
+
+typedef struct { int ssid; int last; } twins_plan_t;
+
+static int twins_cols(void) {
+#ifdef WITH_NCURSES
+    return COLS > 0 ? COLS : 100;
+#else
+    return 1 << 12;
+#endif
+}
+
+static twins_plan_t twins_plan(int cols) {
+    int room = cols - 1;        /* the clip keeps the last column */
+    twins_plan_t w;
+    w.ssid = room - TWINS_FIXED_W;
+    if (w.ssid > TWINS_SSID_MAX) w.ssid = TWINS_SSID_MAX;
+    if (w.ssid < TWINS_SSID_MIN) w.ssid = TWINS_SSID_MIN;
+    w.last = TWINS_FIXED_W + w.ssid + 2 + TWINS_LAST_W <= room;
+    return w;
+}
+
 static void fmt_mac(const uint8_t mac[6], char *buf, int sz) {
     snprintf(buf, sz, "%02x:%02x:%02x:%02x:%02x:%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 void view_twins_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     /* Status bar */
     tui_normal(); TPRINT(" Evil-twin episodes: ");
     tui_bright(); TPRINT("%d", s->twin_episode_count);
@@ -48,8 +81,10 @@ void view_twins_draw(const sloth_state_t *s) {
                                ? "active" : "none");
     TPRINT("\n");
 
-    /* Column headers — fixed widths: SSID 18 | A 17 | B 17 |
-     * enc 6 | conf 4 | class 8 | wired 5 | swing 5 | flags 6 | last
+    /* Column headers: SSID | A 17 | B 17 | enc 6 | conf 4 | class 8 |
+     * wired 5 | swing 5 | flags 6 | last. Laid out by twins_plan(), so
+     * a 100-column screen narrows SSID and drops Last rather than
+     * clipping Flags.
      *
      * "BSSID A / B" rather than "Real / Twin" (#89). On a `?`-flagged
      * row nothing has established which half is the impostor and the
@@ -64,15 +99,21 @@ void view_twins_draw(const sloth_state_t *s) {
      * it can never be filled in by anything in this view's data path —
      * separating them is what keeps "impostor" from being read as
      * "rogue on our LAN". */
+    twins_plan_t w = twins_plan(twins_cols());
+    tui_clip_rows(1);   /* the table only: the status line above wraps */
     tui_dim();
-    TPRINT(" %-18s  %-17s  %-17s  %-6s  %-4s  %-8s  %-5s  %-5s  %-6s  %s\n",
-           "SSID", "BSSID A", "BSSID B", "Cipher", "Conf", "Class",
-           "Wired", "Swing", "Flags", "Last");
-    TPRINT(" %-18s  %-17s  %-17s  %-6s  %-4s  %-8s  %-5s  %-5s  %-6s  %s\n",
-           "------------------",
+    TPRINT(" %-*s  %-17s  %-17s  %-6s  %-4s  %-8s  %-5s  %-5s  %-6s",
+           w.ssid, "SSID", "BSSID A", "BSSID B", "Cipher", "Conf", "Class",
+           "Wired", "Swing", "Flags");
+    if (w.last) TPRINT("  %s", "Last");
+    TPRINT("\n");
+    TPRINT(" %-*.*s  %-17s  %-17s  %-6s  %-4s  %-8s  %-5s  %-5s  %-6s",
+           w.ssid, w.ssid, "------------------",
            "-----------------",
            "-----------------",
-           "------", "----", "--------", "-----", "-----", "------", "----");
+           "------", "----", "--------", "-----", "-----", "------");
+    if (w.last) TPRINT("  %s", "----");
+    TPRINT("\n");
     tui_normal();
 
     if (s->twin_episode_count == 0) {
@@ -130,13 +171,15 @@ void view_twins_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
         if (row == s->twin_episode_sel) {
             tui_sel();
-            tui_printf(" %-18.18s  %-17s  %-17s  %-6.6s  %-4s  %-8.8s  %-5.5s"
-                   "  %-5s  %-6s  %s\n",
-                   e->ssid, real_mac, twin_mac, e->enc, conf, cls_s, wired_s,
-                   swing, flags, age);
+            tui_printf(" %-*.*s  %-17s  %-17s  %-6.6s  %-4s  %-8.8s  %-5.5s"
+                   "  %-5s  %-6s",
+                   w.ssid, w.ssid, e->ssid, real_mac, twin_mac, e->enc, conf,
+                   cls_s, wired_s, swing, flags);
+            if (w.last) tui_printf("  %s", age);
+            tui_printf("\n");
             tui_reset();
         } else {
-            tui_bright(); tui_printf(" %-18.18s", e->ssid);
+            tui_bright(); tui_printf(" %-*.*s", w.ssid, w.ssid, e->ssid);
             tui_dim();    tui_printf("  %-17s", real_mac);
             /* Bright on the B column only when the pair is attributed —
              * there it really is the suspected rogue. On an
@@ -161,19 +204,22 @@ void view_twins_draw(const sloth_state_t *s) {
             tui_normal(); tui_printf("  %-5s", swing);
             if (e->attack_in_progress) tui_bright(); else tui_dim();
             tui_printf("  %-6s", flags);
-            tui_dim();    tui_printf("  %s\n", age);
+            tui_dim();
+            if (w.last) tui_printf("  %s", age);
+            tui_printf("\n");
             tui_normal();
         }
 #else
         if (row == s->twin_episode_sel) {
             tui_sel();
-            tui_printf(" %-18.18s  %-17s  %-17s  %-6.6s  %-4s  %-8.8s  %-5.5s"
-                   "  %-5s  %-6s  %s",
-                   e->ssid, real_mac, twin_mac, e->enc, conf, cls_s, wired_s,
-                   swing, flags, age);
+            tui_printf(" %-*.*s  %-17s  %-17s  %-6.6s  %-4s  %-8.8s  %-5.5s"
+                   "  %-5s  %-6s",
+                   w.ssid, w.ssid, e->ssid, real_mac, twin_mac, e->enc, conf,
+                   cls_s, wired_s, swing, flags);
+            if (w.last) tui_printf("  %s", age);
             tui_reset(); tui_printf("\n");
         } else {
-            tui_bright(); tui_printf(" %-18.18s", e->ssid);
+            tui_bright(); tui_printf(" %-*.*s", w.ssid, w.ssid, e->ssid);
             tui_dim();    tui_printf("  %-17s", real_mac);
             if (e->attributed) tui_bright(); else tui_dim();
             tui_printf("  %-17s", twin_mac);
@@ -188,7 +234,9 @@ void view_twins_draw(const sloth_state_t *s) {
             tui_normal(); tui_printf("  %-5s", swing);
             if (e->attack_in_progress) tui_bright(); else tui_dim();
             tui_printf("  %-6s", flags);
-            tui_dim();    tui_printf("  %s\n", age);
+            tui_dim();
+            if (w.last) tui_printf("  %s", age);
+            tui_printf("\n");
             tui_normal();
         }
 #endif

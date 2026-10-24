@@ -374,8 +374,6 @@ void view_procs_draw(const sloth_state_t *s) {
                   ? (s->proc_sel < g_vis_count ? s->proc_sel : g_vis_count - 1)
                   : 0;
 
-    tui_clip_rows(1);
-
     /* status bar */
     tui_normal(); TPRINT(" Processes: ");
     tui_bright();  TPRINT("%d", g_vis_count);
@@ -395,6 +393,7 @@ void view_procs_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     /* column headers */
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-15s %-3s  %6s  %5s  %4s  %4s  %7s  %7s  %s\n",
            "Process", "   ", "PID", "Conns", "TCP", "UDP",

@@ -66,8 +66,6 @@ static void draw_detail_row(const char *title, const char *cve,
 }
 
 void view_fragattack_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     uint32_t total = 0;
     for (int i = 0; i < s->frag_row_count; i++)
         total += findings_total(&s->frag_rows[i]);
@@ -89,6 +87,7 @@ void view_fragattack_draw(const sloth_state_t *s) {
         return;
     }
 
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-18s  %8s  %-38s  %s\n",
            "BSSID", "FINDINGS", "LAST SA -> DA", "AGE");

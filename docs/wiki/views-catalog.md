@@ -15,7 +15,7 @@ generated from — #117), `docs/views/README.md` and all `docs/views/*.md`.
 **Count**: `VIEW_COUNT` = **<!-- count:views -->36<!-- /count -->**. Every key below is a row of
 `include/sloth_views.def`; if the two disagree, the `.def` is right.
 
-**Last updated**: 2026-10-23 (#150: list views size their page from the cursor and clip rows at the edge); 2026-10-21 (#144 slice 4: `*` BLE, the first punctuation view key); 2026-10-15 (#117 — keys and count now generated from `sloth_views.def`).
+**Last updated**: 2026-10-23 (#150: list views size their page from the cursor and clip table rows at the edge, banners above them wrap; Twins keeps Flags whole at 100 columns); 2026-10-21 (#144 slice 4: `*` BLE, the first punctuation view key); 2026-10-15 (#117 — keys and count now generated from `sloth_views.def`).
 
 ---
 
@@ -85,13 +85,21 @@ the screen: the selection could sit below the last row, and a legend
 under the table - Twins' "neither half accused", RADIUS's CVE line -
 was never drawn.
 
-Rows also never wrap. A list view calls `tui_clip_rows(1)`, and every
-row it prints is cut one column short of the screen edge; a row that
-wrapped took two screen lines and pushed the rest of the page down.
+Table rows never wrap. A list view calls `tui_clip_rows(1)` after its
+status and banner lines, just before its column headers, and every
+line it prints from there is cut one column short of the screen edge;
+a row that wrapped took two screen lines and pushed the rest of the
+page down. The lines above the headers are prose and do wrap: Conns'
+`[SCAN ALERT]` banner names attacker addresses, and clipping it hid
+the fourth address and the `+N more` count at 100 columns. A wrapped
+banner costs the page nothing, since the budget is measured after it.
 Tables wider than 100 columns (Connections 136, Beacons 130, WiFi 114,
-Twins 110, Packets' header 143) lose their right-hand columns at the
-minimum and show them on a wider terminal. Text a view draws below the
-last screen row is dropped rather than appended to that row.
+Packets' header 143) lose their right-hand columns at the minimum and
+show them on a wider terminal. Twins is the exception: its Flags column
+is what the legend explains, so below 114 columns it drops `Last` and
+narrows SSID instead, and Flags stays whole. Text a view draws below the
+last screen row is dropped rather than appended to that row; brand
+letters and Packets' hex/ASCII bytes go through the same path.
 
 Under the table, per view: Alerts 2 (blank line and the enrichment
 line), Twins 6 (legend), RADIUS 2 (legend), KARMA 2 (legend), BLE 1
@@ -112,6 +120,14 @@ selection and are not covered yet.
 See `CLAUDE.md` "How to add a new view" — 11-step checklist that keeps
 `VIEW_COUNT` in sync, lays out the file, wires the key, and demands a
 test + a per-view doc.
+
+A new list view also follows the page contract above, which that
+checklist does not yet name: call `view_page_budget(tail, ansi_page)`
+after the column headers, with `tail` the rows drawn under the table
+(name it, as `TWINS_LEGEND_ROWS` does, rather than write a bare
+number); call `tui_clip_rows(1)` just before the headers, never above
+a banner; and add a case to `tests/test_view_fit.c`. A fixed
+`LINES - N` is the bug #150 removed.
 
 ## Related pages
 

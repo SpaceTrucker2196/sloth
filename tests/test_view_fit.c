@@ -332,7 +332,10 @@ static int seed_twins(sloth_state_t *s, time_t now) {
         mac_of(e->real_bssid, 0xfa, i);
         mac_of(e->twin_bssid, 0xfb, i);
         snprintf(e->enc, sizeof(e->enc), "WPA2");
-        e->rssi_swing_dbm = 18; e->confidence = 80; e->attacker_oui = 1;
+        e->rssi_swing_dbm = 18; e->confidence = 80;
+        /* Every flag: the widest Flags cell, `!*#?`. */
+        e->attack_in_progress = 1; e->attacker_oui = 1;
+        e->hash_mismatch = 1; e->attributed = 0;
         e->last_seen = now - 1234567;
     }
     s->twin_episode_sel = s->twin_episode_count - 1;
@@ -707,6 +710,123 @@ static void test_deauth_with_btm_fits_100x33(void) {
     tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
 }
 
+/* ── what the clip must not take ──────────────────────────── */
+
+/* Every row's text, concatenated with nothing between: a line that
+ * wrapped reads back whole. */
+static void screen_joined(char *out, size_t n) {
+    char line[4096];
+    size_t used = 0;
+    out[0] = '\0';
+    for (int y = 0; y < tui_test_rows(); y++) {
+        int len = tui_test_line(y, line, sizeof(line));
+        if (len <= 0) continue;
+        if (used + (size_t)len + 1 > n) break;
+        memcpy(out + used, line, (size_t)len);
+        used += (size_t)len;
+        out[used] = '\0';
+    }
+}
+
+/* The scan banner above Conns' table names attacker addresses, and it
+ * is prose: it has to wrap, not be cut at the edge. With the row clip
+ * switched on at the top of the draw, the 100-column banner stopped at
+ * "203.0.113.202(1002)  203" - the fourth address and "+2 more" were
+ * gone. Red with tui_clip_rows(1) moved back above the status line.
+ * The page still fits: the budget is measured after the banner. */
+static void test_conns_scan_banner_wraps_at_100x33(void) {
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    time_t now = time(NULL);
+    int seeded = seed_conns(&s, now);
+    s.scan_count = 6;
+    for (int i = 0; i < s.scan_count; i++) {
+        scan_entry_t *se = &s.scan_entries[i];
+        snprintf(se->ip, sizeof(se->ip), "203.0.113.%d", 200 + i);
+        se->port_count = 1000 + i;
+        se->flagged = 1;
+        se->first_seen = se->last_seen = now;
+    }
+    s.active_view = VIEW_CONNS;
+
+    ASSERT_EQ(tui_init_offscreen(FIT_ROWS, FIT_COLS), 0);
+    tui_test_erase();
+    tui_draw(&s);
+
+    static char all[FIT_ROWS * 4096];
+    screen_joined(all, sizeof(all));
+    char line[4096];
+    int wide_rows = 0, shown = 0, last_row = -1;
+    for (int y = 0; y < FIT_ROWS; y++) {
+        if (tui_test_line(y, line, sizeof(line)) < 0) break;
+        if (!strstr(line, "10.9.")) continue;
+        shown++;
+        last_row = y;
+        if (line_cells(line) >= FIT_COLS) wide_rows++;
+    }
+    int ok = strstr(all, "203.0.113.203(1003)") && strstr(all, "+2 more");
+    if (!ok || tui_test_overflow() || last_row != FIT_ROWS - 1)
+        tui_test_dump(stderr);
+    ASSERT(strstr(all, "203.0.113.203(1003)") != NULL);
+    ASSERT(strstr(all, "+2 more") != NULL);
+    ASSERT_EQ(tui_test_overflow(), 0);
+    ASSERT_EQ(wide_rows, 0);                /* table rows still clipped */
+    ASSERT_EQ(last_row, FIT_ROWS - 1);
+    ASSERT(selected_row(last_row));
+    ASSERT(shown > 0 && shown < seeded);
+
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
+/* Twins in full is wider than 100 columns, and Flags sat at column
+ * 97: under the row clip a `!*#?` row showed `!*`, dropping the
+ * hash-mismatch mark and the `?` that says neither half is accused.
+ * Every table row has to carry all four. Red with twins_plan()'s SSID
+ * held at its 18-column maximum. */
+static void test_twins_flags_whole_at_100x33(void) {
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    seed_twins(&s, time(NULL));
+    s.active_view = VIEW_TWINS;
+
+    ASSERT_EQ(tui_init_offscreen(FIT_ROWS, FIT_COLS), 0);
+    tui_test_erase();
+    tui_draw(&s);
+
+    char line[4096];
+    int rows = 0, whole = 0;
+    for (int y = 0; y < FIT_ROWS; y++) {
+        if (tui_test_line(y, line, sizeof(line)) < 0) break;
+        if (!strstr(line, "02:fa:")) continue;
+        rows++;
+        if (strstr(line, "!*#?")) whole++;
+    }
+    if (rows == 0 || whole != rows) tui_test_dump(stderr);
+    ASSERT(rows > 0);
+    ASSERT_EQ(whole, rows);
+
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
+/* Text after a newline on the last row has no row to go to. It used
+ * to be appended to the last row (curses leaves the cursor there);
+ * now it is dropped and counted. Red with the drop branch in t_put()
+ * made to addnstr() the segment: row 1 read "bc" and overflow 0. */
+static void test_text_below_the_last_row_is_dropped(void) {
+    ASSERT_EQ(tui_init_offscreen(2, 20), 0);
+    tui_test_erase();
+    tui_addstr("a\nb\nc");
+
+    char line[64];
+    ASSERT(tui_test_line(0, line, sizeof(line)) >= 0);
+    ASSERT(strcmp(line, "a") == 0);
+    ASSERT(tui_test_line(1, line, sizeof(line)) >= 0);
+    ASSERT(strcmp(line, "b") == 0);
+    ASSERT_EQ(tui_test_overflow(), 1);
+
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
 /* ── a large terminal ─────────────────────────────────────── */
 
 /* The same checks at 200 columns and 60 rows (38 for the three tables
@@ -762,5 +882,8 @@ void run_view_fit_tests(void) {
     RUN_TEST(test_devices_fits_100x33);
     RUN_TEST(test_iface_fits_100x33);
     RUN_TEST(test_karma_fits_100x33);
+    RUN_TEST(test_conns_scan_banner_wraps_at_100x33);
+    RUN_TEST(test_twins_flags_whole_at_100x33);
+    RUN_TEST(test_text_below_the_last_row_is_dropped);
     RUN_TEST(test_every_list_view_fills_a_large_terminal);
 }

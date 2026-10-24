@@ -23,13 +23,12 @@ static const char *suffix_label(uint8_t s) {
 }
 
 void view_nbns_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     tui_normal(); TPRINT(" NetBIOS names: ");
     tui_bright();  TPRINT("%d", s->nbns_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear");
     TPRINT("\n");
 
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-15s  %-15s  %-14s  %s\n",
            "Name", "IP", "Type", "Age");

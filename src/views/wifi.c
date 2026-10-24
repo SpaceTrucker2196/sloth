@@ -181,8 +181,6 @@ void view_wifi_draw(const sloth_state_t *s) {
 #else
     if (s->wifi_detail) { draw_wifi_detail(s); return; }
 
-    tui_clip_rows(1);
-
     /* status bar */
     tui_normal(); TPRINT(" WiFi: ");
     tui_bright();  TPRINT("%d AP%s", s->ap_count, s->ap_count == 1 ? "" : "s");
@@ -192,6 +190,7 @@ void view_wifi_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     /* column headers */
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-32s  %-17s  %-12s  %3s  %-14s  %-5s %-10s %-8s\n",
            "SSID", "BSSID", "Vendor", "Ch", "Signal", "Enc", "AKM/MFP",

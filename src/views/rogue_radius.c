@@ -61,8 +61,6 @@ static int order_rows(const sloth_state_t *s, int idx[MAX_ROGUE_RADIUS]) {
 }
 
 void view_rogue_radius_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     int idx[MAX_ROGUE_RADIUS];
     int n = order_rows(s, idx);
 
@@ -88,6 +86,7 @@ void view_rogue_radius_draw(const sloth_state_t *s) {
     /* Columns — BSSID 17 | methods 20 | weak 4 | leaks 5 | TLS? 5 |
      * identity/age. TLS? is the CVE-2023-52160 column (#65): did the
      * AP present a server identity before a client accepted it. */
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-17s  %-20s  %-4s  %-5s  %-5s  %s\n",
            "BSSID", "EAP methods", "weak", "leaks", "TLS?",

@@ -45,8 +45,6 @@ static time_t dhcp_expire(const sloth_state_t *s, const char *ip) {
 /* ── Draw ────────────────────────────────────────────────── */
 
 void view_arp_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     /* status bar */
     tui_normal(); TPRINT(" ARP neighbors: ");
     tui_bright();  TPRINT("%d", s->arp_count);
@@ -60,6 +58,7 @@ void view_arp_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     /* column headers */
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-15s  %-17s  %-16s  %-12s  %-6s  %s\n",
            "IP", "MAC", "Hostname", "Vendor", "Expiry", "Interface");

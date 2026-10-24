@@ -11,14 +11,13 @@
 #define QUIC_PAGE 30
 
 void view_quic_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     tui_normal(); TPRINT(" QUIC sessions: ");
     tui_bright();  TPRINT("%d", s->quic_log_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear  (newest first)");
     tui_filter_status(s);
     TPRINT("\n");
 
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-8s  %-15s  %-15s  %-26s  %s\n",
            "Time", "Src", "Dst", "Host", "Ver");

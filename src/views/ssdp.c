@@ -22,13 +22,12 @@ static const char *short_type(const char *nt) {
 }
 
 void view_ssdp_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     tui_normal(); TPRINT(" UPnP/SSDP devices: ");
     tui_bright();  TPRINT("%d", s->ssdp_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear");
     TPRINT("\n");
 
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-15s  %-7s  %-24s  %s\n",
            "IP", "Status", "Type", "Location");

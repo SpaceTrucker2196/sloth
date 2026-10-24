@@ -24,13 +24,12 @@ static const char *msg_label(uint8_t t) {
 }
 
 void view_dhcp_snoop_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     tui_normal(); TPRINT(" Live DHCP events: ");
     tui_bright();  TPRINT("%d", s->dhcp_event_count);
     tui_dim();     TPRINT("  [up/dn] navigate  [c] clear");
     TPRINT("\n");
 
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-18s  %-15s  %-20s  %-8s  %s\n",
            "MAC", "IP", "Hostname", "Type", "Age");

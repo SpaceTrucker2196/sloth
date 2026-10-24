@@ -404,7 +404,6 @@ static void draw_device_detail(const sloth_state_t *s) {
 
 void view_devices_draw(const sloth_state_t *s) {
     if (s->device_detail) { draw_device_detail(s); return; }
-    tui_clip_rows(1);
 
     int cams = 0;
     for (int i = 0; i < s->device_count; i++)
@@ -420,6 +419,7 @@ void view_devices_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     dev_plan_t w = plan_cols(dev_cols());
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-17s  %-*s  %-6s  %-*.*s  %-*.*s  %-7s  %-4s  %-4s  %-5s\n",
            "MAC", w.ip, "IP", "Class", w.vendor, w.vendor, "Vendor",

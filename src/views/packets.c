@@ -175,8 +175,6 @@ void view_packets_draw(const sloth_state_t *s) {
 #else
     if (s->pkt_detail) { draw_detail(s); return; }
 
-    tui_clip_rows(1);
-
     /* Merged timeline: IP capture + 802.11 monitor frames in one
      * chronological list. Without a monitor radio the mon side is
      * empty and this is exactly the old IP-only view. */
@@ -235,6 +233,7 @@ void view_packets_draw(const sloth_state_t *s) {
      * band so the two views feel like one continuous data surface.
      * Geo column comes from the per-/8 RIR table (US/EU/AP/SA/AF/LO/MC)
      * — non-private IPv4 only; IPv6 + RFC1918 render dim "--". */
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-11s  %-21s     %-21s  %-3s  %-5s  %-5s  %-28s  %s\n",
            "Time", "Source", "Destination", "Geo",
@@ -313,7 +312,7 @@ void view_packets_draw(const sloth_state_t *s) {
             tui_printf(":%-5u", (unsigned)p->src_port);
             src_used = (int)strlen(p->src) + 1 + 5;
         }
-        while (src_used++ < 21) addch(' ');
+        while (src_used++ < 21) tui_addstr(" ");
 
         tui_printf("  " "\xe2\x86\x92" "  "); /* → */
 
@@ -344,7 +343,7 @@ void view_packets_draw(const sloth_state_t *s) {
             tui_printf(":%-5u", (unsigned)p->dst_port);
             dst_used = (int)strlen(p->dst) + 1 + 5;
         }
-        while (dst_used++ < 21) addch(' ');
+        while (dst_used++ < 21) tui_addstr(" ");
 
         /* Region tag — RIR-level geo of the dst IP. Dim for "--"
          * (private / reserved), bright for known. */
@@ -385,16 +384,19 @@ void view_packets_draw(const sloth_state_t *s) {
             else            tui_dim();
             tui_printf("  ");
             for (int b = 0; b < bytes; b++) {
-                unsigned char c = p->raw[b];
-                int printable = (c >= 32 && c < 127);
+                /* tui_addnstr rather than addch, so the bytes go through
+                 * the row clip and the bottom-edge drop like the rest of
+                 * the row (#150). */
+                char c = (char)p->raw[b];
+                int printable = ((unsigned char)c >= 32 && (unsigned char)c < 127);
                 if (row == sel) {
-                    addch(printable ? c : '.');
+                    tui_addnstr(printable ? &c : ".", 1);
                 } else if (printable) {
                     tui_bright();
-                    addch(c);
+                    tui_addnstr(&c, 1);
                 } else {
                     tui_dim();
-                    addch('.');
+                    tui_addstr(".");
                 }
             }
         } else if (hex_room > 0 && p->raw_len > 0) {

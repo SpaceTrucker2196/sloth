@@ -59,8 +59,6 @@ static int sigbar_filled(int8_t dbm) {
 /* ── Draw ────────────────────────────────────────────────── */
 
 void view_probe_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     /* count devices seen in last 5 seconds */
     time_t now = sloth_wall();
     int active = 0;
@@ -92,6 +90,7 @@ void view_probe_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     /* column headers */
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %-8s  %s\n",
            "MAC", "Vendor", "Signal", "Ch", "Seen", "Pkts",

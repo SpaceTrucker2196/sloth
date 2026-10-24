@@ -136,6 +136,13 @@ intact.
         needs controller/switch/DHCP correlation (none registered)
 ```
 
+The mockup is the full layout, 114 columns and wider. Below that the
+table gives up width from the left of Flags rather than clip it (#150):
+`Last` is dropped first, then SSID narrows from 18 to as few as 12, so
+at the 100-column minimum SSID is 14 wide and `Last` is gone, but a
+`!*#?` row still shows all four marks. Flags is the column the legend
+explains, and a `?` cut off at the edge would read as an accusation.
+
 The `Class` column is bright only on `impostor`. A `neighbor` or
 `declared` row is the detector saying "not your problem" and should not
 compete for attention. The `Wired` column is never bright on `?` —

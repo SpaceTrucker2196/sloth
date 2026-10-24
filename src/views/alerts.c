@@ -153,7 +153,6 @@ static void draw_alert_detail(const sloth_state_t *s) {
 
 void view_alerts_draw(const sloth_state_t *s) {
     if (s->alert_detail) { draw_alert_detail(s); return; }
-    tui_clip_rows(1);
 
     /* count by tier for the banner */
     int crits = 0, warns = 0, lows = 0;
@@ -174,6 +173,7 @@ void view_alerts_draw(const sloth_state_t *s) {
     tui_filter_status(s);
     TPRINT("\n");
 
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-8s  %-4s  %-15s  %-3s  %s\n",
            "Time", "Sev", "Title", "n", "Detail");

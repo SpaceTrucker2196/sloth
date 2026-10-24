@@ -61,8 +61,6 @@ static int is_broadcast(const uint8_t *m) {
 }
 
 void view_deauth_draw(const sloth_state_t *s) {
-    tui_clip_rows(1);
-
     tui_normal(); TPRINT(" Deauth/Disassoc events: ");
     tui_bright();  TPRINT("%d", s->deauth_count);
     if (s->btm_steer_count) {
@@ -106,6 +104,7 @@ void view_deauth_draw(const sloth_state_t *s) {
         tui_normal();
     }
 
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-17s  %-17s  %-17s  %-8s  %-13s  %5s  %s\n",
            "Src", "Dst", "BSSID", "Type", "Reason", "Count", "Last");

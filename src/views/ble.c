@@ -197,7 +197,6 @@ static void draw_detail(const sloth_state_t *s) {
 
 void view_ble_draw(const sloth_state_t *s) {
     if (s->ble_detail) { draw_detail(s); return; }
-    tui_clip_rows(1);
 
     int hid = 0, wl = 0;
     for (int i = 0; i < s->ble_device_count; i++) {
@@ -251,6 +250,7 @@ void view_ble_draw(const sloth_state_t *s) {
     }
 
     ble_plan_t w = plan_cols(ble_cols());
+    tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
     TPRINT(" %-17s  %c  %-*s  %4s  %6s  %4s  %-3s  %s\n",
            "ADDRESS", 'T', w.iface, "SENSOR", "RSSI", "ADV", "AGE", "HWS",
