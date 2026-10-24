@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include "sloth.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "dns.h"
 #include "services.h"
 #include "bandwidth.h"
@@ -373,12 +374,7 @@ void view_procs_draw(const sloth_state_t *s) {
                   ? (s->proc_sel < g_vis_count ? s->proc_sel : g_vis_count - 1)
                   : 0;
 
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = PROCS_PAGE;
-#endif
+    tui_clip_rows(1);
 
     /* status bar */
     tui_normal(); TPRINT(" Processes: ");
@@ -413,6 +409,7 @@ void view_procs_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, PROCS_PAGE);
     int top = vis_sel - page / 2;
     if (top + page > g_vis_count) top = g_vis_count - page;
     if (top < 0) top = 0;

@@ -2,6 +2,7 @@
 #include <string.h>
 #include "sloth.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "oui.h"
 #include "util.h"
 #include "views/wifi.h"
@@ -180,12 +181,7 @@ void view_wifi_draw(const sloth_state_t *s) {
 #else
     if (s->wifi_detail) { draw_wifi_detail(s); return; }
 
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = WIFI_PAGE;
-#endif
+    tui_clip_rows(1);
 
     /* status bar */
     tui_normal(); TPRINT(" WiFi: ");
@@ -211,6 +207,7 @@ void view_wifi_draw(const sloth_state_t *s) {
         tui_normal(); return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, WIFI_PAGE);
     int top = s->wifi_sel - page / 2;
     if (top + page > s->ap_count) top = s->ap_count - page;
     if (top < 0) top = 0;

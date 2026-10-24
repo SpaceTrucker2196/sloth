@@ -389,7 +389,8 @@ static void test_view_legend_states_the_corroboration_rule(void) {
  * tool_attribution_format() makes them (a 20-character label).
  *
  * Seen to fail three ways, each then restored: KARMA_CHROME set to 3
- * (the legend uncounted; it lands below the screen), the row's `room`
+ * (the legend uncounted; it lands below the screen; since #150 the same
+ * is KARMA_LEGEND_ROWS set to 0, seen red again), the row's `room`
  * set to 1000 (no fitting; rows reach the last column and wrap), and
  * karma_fit_tail()'s label-shortening branch removed (the bracket is
  * clipped and the "? provisional" marker lost).

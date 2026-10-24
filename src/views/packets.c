@@ -2,6 +2,7 @@
 #include <string.h>
 #include "sloth.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "capture/capture.h"
 #include "dns.h"
 #include "services.h"
@@ -174,12 +175,7 @@ void view_packets_draw(const sloth_state_t *s) {
 #else
     if (s->pkt_detail) { draw_detail(s); return; }
 
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = PKTS_PAGE;
-#endif
+    tui_clip_rows(1);
 
     /* Merged timeline: IP capture + 802.11 monitor frames in one
      * chronological list. Without a monitor radio the mon side is
@@ -256,6 +252,7 @@ void view_packets_draw(const sloth_state_t *s) {
         tui_normal(); return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, PKTS_PAGE);
     int sel = s->pkt_paused ? s->pkt_sel : count - 1;
     if (sel >= count) sel = count - 1;
     if (sel < 0)      sel = 0;

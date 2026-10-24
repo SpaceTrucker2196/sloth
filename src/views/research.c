@@ -2,6 +2,7 @@
 #include <string.h>
 #include "sloth.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/research.h"
 #include "coverage.h"
 
@@ -38,13 +39,20 @@ static void sev_colour(int sev) {
     }
 }
 
+/* Rows the detail pane under the table takes for this selection: the
+ * blank line and the "sources for" rule, then the body view_research_draw
+ * prints for it. The page used to be LINES - 12 whatever the selection
+ * had, which at 100x33 left the pane's tail - the sources themselves -
+ * below the screen. */
+#define RESEARCH_DETAIL_HEAD 2
+#define RESEARCH_NO_SOURCE_ROWS 4    /* either four-line explanation */
+static int detail_rows(const research_cov_t *c) {
+    if (c->doc_count == 0) return RESEARCH_DETAIL_HEAD + RESEARCH_NO_SOURCE_ROWS;
+    return RESEARCH_DETAIL_HEAD + 2 * c->doc_count + (c->docs_truncated ? 1 : 0);
+}
+
 void view_research_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 12;
-    if (page < 3) page = 3;
-#else
-    int page = RESEARCH_PAGE;
-#endif
+    tui_clip_rows(1);
 
     int cited = 0;
     int citable = research_coverage_ratio(s, &cited);
@@ -79,6 +87,8 @@ void view_research_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(detail_rows(&s->research_cov[s->research_sel]),
+                                RESEARCH_PAGE);
     int top = s->research_sel - page / 2;
     if (top + page > s->research_cov_count) top = s->research_cov_count - page;
     if (top < 0) top = 0;

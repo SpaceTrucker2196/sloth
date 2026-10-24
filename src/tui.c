@@ -107,16 +107,83 @@ void tui_fputs_sanitized(FILE *fp, const char *s, int n) {
 }
 
 #ifdef WITH_NCURSES
+/* Row clipping and the bottom edge (#150).
+ *
+ * A list row that reaches the last column wraps onto a second screen
+ * line, and every row under it moves down one: at the 100-column
+ * minimum a table wider than the screen (Conns is 136 columns, WiFi
+ * 114) took twice the rows its page budget counted. With g_clip set, a
+ * row is cut one column short of the edge instead - the last column is
+ * held back because writing it moves the cursor to the next row. A
+ * list view turns this on for its own draw; tui_draw() turns it off
+ * before every view, so views that wrap prose on purpose are untouched.
+ *
+ * A '\n' on the last row has no row to move to, and curses leaves the
+ * cursor where it was, so whatever came next used to be appended to
+ * the end of that row. Now it is dropped, and counted in g_overflow so
+ * the suite can assert that a view drew nothing below the screen.
+ * g_drop_y/x is where that newline failed; any move away clears it. */
+static int g_clip;
+static int g_drop_y = -1, g_drop_x = -1;
+static int g_overflow;
+
+void tui_clip_rows(int on) { g_clip = on; }
+
+static void t_bottom_reset(void) {
+    g_drop_y = g_drop_x = -1;
+    g_overflow = 0;
+}
+
+/* Octets of s[0..len) whose glyphs fit in `room` cells. Every glyph
+ * sloth draws is one cell, so a cell is a non-continuation octet. */
+static size_t t_fit(const char *s, size_t len, int room) {
+    size_t i = 0;
+    int cells = 0;
+    while (i < len) {
+        if (((unsigned char)s[i] & 0xC0) != 0x80) {
+            if (cells >= room) break;
+            cells++;
+        }
+        i++;
+    }
+    return i;
+}
+
+static void t_put(const char *p) {
+    int maxy = getmaxy(stdscr), maxx = getmaxx(stdscr);
+    for (;;) {
+        const char *nl = strchr(p, '\n');
+        size_t seg = nl ? (size_t)(nl - p) : strlen(p);
+        int y, x;
+        getyx(stdscr, y, x);
+        if (y == g_drop_y && x == g_drop_x) {
+            if (seg) g_overflow++;          /* a row below the screen */
+        } else {
+            g_drop_y = g_drop_x = -1;
+            size_t take = g_clip ? t_fit(p, seg, maxx - 1 - x) : seg;
+            if (take) addnstr(p, (int)take);
+            if (nl) {
+                getyx(stdscr, y, x);
+                if (y >= maxy - 1) { g_drop_y = y; g_drop_x = x; }
+                else               addch('\n');
+            }
+        }
+        if (!nl) break;
+        p = nl + 1;
+    }
+}
+
 static void t_emit(const char *s, int n) {
     if (!s) return;
     char buf[T_EMIT_STACK];
     int heap;
     char *p = t_sanitized_copy(s, n, buf, sizeof buf, &heap);
     if (!p) return;
-    addstr(p);
+    t_put(p);
     if (heap) free(p);
 }
 #else
+void tui_clip_rows(int on) { (void)on; }
 static void t_emit(const char *s, int n) { tui_fputs_sanitized(stdout, s, n); }
 #endif
 
@@ -796,7 +863,11 @@ void tui_test_erase(void) {
     erase();
     attrset(A_NORMAL);
     move(0, 0);
+    g_clip = 0;
+    t_bottom_reset();
 }
+
+int tui_test_overflow(void) { return g_off_scr ? g_overflow : -1; }
 
 /* Alternate-charset cells (hline(ACS_HLINE), box()) hold the VT100
  * line-drawing letter, not the glyph the terminal shows; a test reads
@@ -979,6 +1050,8 @@ static int draw_tabbar(const sloth_state_t *s) {
 void tui_draw(const sloth_state_t *s) {
     erase();
     bkgd(COLOR_PAIR(CP_NORMAL));
+    g_clip = 0;
+    t_bottom_reset();
 
     /* The dashboard owns the whole screen — no tab bar above it.
      * Switch into a detail view (Enter on a focused panel, or any
@@ -1063,6 +1136,7 @@ void tui_heat(double frac) {
 int  tui_init_offscreen(int rows, int cols) { (void)rows; (void)cols; return -1; }
 void tui_offscreen_end(void) {}
 void tui_test_erase(void) {}
+int  tui_test_overflow(void) { return -1; }
 int  tui_test_line(int y, char *out, size_t n) {
     (void)y;
     if (out && n) out[0] = '\0';

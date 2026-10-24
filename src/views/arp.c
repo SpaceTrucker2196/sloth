@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "oui.h"
 #include "views/arp.h"
 
@@ -44,12 +45,7 @@ static time_t dhcp_expire(const sloth_state_t *s, const char *ip) {
 /* ── Draw ────────────────────────────────────────────────── */
 
 void view_arp_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = ARP_PAGE;
-#endif
+    tui_clip_rows(1);
 
     /* status bar */
     tui_normal(); TPRINT(" ARP neighbors: ");
@@ -78,6 +74,7 @@ void view_arp_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, ARP_PAGE);
     int top = s->arp_sel - page / 2;
     if (top + page > s->arp_count) top = s->arp_count - page;
     if (top < 0) top = 0;

@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/twins.h"
 /* ../ is required: src/views/alerts.h is the view header and would
  * shadow the rules header on a bare "alerts.h" from this directory.
@@ -12,6 +13,10 @@
 #include "../wired_attach.h"
 
 #define TWINS_PAGE 30
+/* Rows the legend under the table takes: flags, class and wired, two
+ * lines each. Left out of the page budget, a full table pushed the
+ * legend - the lines saying `?` is not a verdict - off the screen. */
+#define TWINS_LEGEND_ROWS 6
 
 static void fmt_mac(const uint8_t mac[6], char *buf, int sz) {
     snprintf(buf, sz, "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -19,12 +24,7 @@ static void fmt_mac(const uint8_t mac[6], char *buf, int sz) {
 }
 
 void view_twins_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = TWINS_PAGE;
-#endif
+    tui_clip_rows(1);
 
     /* Status bar */
     tui_normal(); TPRINT(" Evil-twin episodes: ");
@@ -84,6 +84,7 @@ void view_twins_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(TWINS_LEGEND_ROWS, TWINS_PAGE);
     int top = s->twin_episode_sel - page / 2;
     if (top + page > s->twin_episode_count) top = s->twin_episode_count - page;
     if (top < 0) top = 0;

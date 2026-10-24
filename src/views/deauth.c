@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/deauth.h"
 #include "deauth_snoop.h"
 #include "tune.h"
@@ -45,30 +46,22 @@ static const char *reason_str(uint16_t code) {
 
 static void draw_btm_section(const sloth_state_t *s, int rows);
 
+/* The BTM section's own chrome: blank line, title rule, the two header
+ * lines. Its old budget counted three of these four, so the section was
+ * a row taller than the rows it was given - and a row more again when
+ * the "... N more" line was printed. */
+#define BTM_HEAD_ROWS 4
+/* Fewest rows the section is given when it has anything to show: its
+ * chrome, one steer and the "... N more" line. */
+#define BTM_MIN_ROWS (BTM_HEAD_ROWS + 2)
+
 static int is_broadcast(const uint8_t *m) {
     return m[0]==0xff && m[1]==0xff && m[2]==0xff &&
            m[3]==0xff && m[4]==0xff && m[5]==0xff;
 }
 
 void view_deauth_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 6;
-    if (page < 1) page = 1;
-#else
-    int page = DEAUTH_PAGE;
-#endif
-    /* Split the screen when there is 802.11v steering to show. The BTM
-     * section is capped at a third so a busy steering table can never
-     * push the deauth rows — the view's primary subject — off screen. */
-    int btm_rows = 0;
-    if (s->btm_steer_count > 0) {
-        btm_rows = s->btm_steer_count + 3;      /* blank, title, header */
-        int cap = page / 3;
-        if (cap < 5) cap = 5;
-        if (btm_rows > cap) btm_rows = cap;
-        page -= btm_rows;
-        if (page < 1) page = 1;
-    }
+    tui_clip_rows(1);
 
     tui_normal(); TPRINT(" Deauth/Disassoc events: ");
     tui_bright();  TPRINT("%d", s->deauth_count);
@@ -121,6 +114,23 @@ void view_deauth_draw(const sloth_state_t *s) {
            "--------", "-------------", "-----", "----");
     tui_normal();
 
+    /* Split what is left under the headers when there is 802.11v
+     * steering to show. The BTM section is capped at a third so a busy
+     * steering table can never push the deauth rows - the view's
+     * primary subject - off screen. Measured here rather than at the
+     * top, so the tab bar's wrapped rows and the flood banner are
+     * already spent (#150). */
+    int page = view_page_budget(VIEW_NO_TAIL, DEAUTH_PAGE);
+    int btm_rows = 0;
+    if (s->btm_steer_count > 0) {
+        btm_rows = s->btm_steer_count + BTM_HEAD_ROWS;
+        int cap = page / 3;
+        if (cap < BTM_MIN_ROWS) cap = BTM_MIN_ROWS;
+        if (btm_rows > cap) btm_rows = cap;
+        page -= btm_rows;
+        if (page < 1) page = 1;
+    }
+
     if (s->deauth_count == 0) {
         tui_dim();
         TPRINT("  (no deauth/disassoc frames seen on monitor iface)\n");
@@ -172,9 +182,15 @@ void view_deauth_draw(const sloth_state_t *s) {
             snprintf(dst_buf, sizeof(dst_buf), "%s", mac_str(e->dst));
 
         if (row == s->deauth_sel) {
+            /* Two addresses in one call: mac_str()'s shared buffer
+             * printed the source in the BSSID column of the selected
+             * row (found by tests/test_view_fit.c, #150). */
+            char src_buf[18], bss_buf[18];
+            mac_fmt(src_buf, e->src);
+            mac_fmt(bss_buf, e->bssid);
             tui_sel();
             TPRINT(" %-17.17s  %-17.17s  %-17.17s  %-8.8s  %-13.13s  %5d  %s\n",
-                   mac_str(e->src), dst_buf, mac_str(e->bssid),
+                   src_buf, dst_buf, bss_buf,
                    type_str, rsn_buf, e->count, age_buf);
             tui_reset();
         } else {
@@ -219,7 +235,7 @@ void view_deauth_draw(const sloth_state_t *s) {
  * load balancing is the baseline that makes a forcing row legible, and
  * the imminent count is what separates them. */
 static void draw_btm_section(const sloth_state_t *s, int rows) {
-    if (s->btm_steer_count <= 0 || rows <= 2) return;
+    if (s->btm_steer_count <= 0 || rows <= BTM_HEAD_ROWS) return;
 
     tui_normal();
     TPRINT("\n ── BTM steering (802.11v) ──\n");
@@ -232,7 +248,9 @@ static void draw_btm_section(const sloth_state_t *s, int rows) {
     tui_normal();
 
     time_t now = sloth_wall();
-    int shown = rows - 3;
+    int shown = rows - BTM_HEAD_ROWS;
+    /* The "... N more" line comes out of the same rows. */
+    if (shown < s->btm_steer_count) shown--;
     if (shown > s->btm_steer_count) shown = s->btm_steer_count;
     /* The same knob rule_btm_abuse fires on (#120), so the heat that
      * marks a row as forcing and the alert cannot disagree. */

@@ -3,6 +3,7 @@
 #include <time.h>
 #include "sloth.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/ntp.h"
 #include "ntp_log.h"
 #include "filter.h"
@@ -10,12 +11,7 @@
 #define NTP_PAGE 30
 
 void view_ntp_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = NTP_PAGE;
-#endif
+    tui_clip_rows(1);
 
     tui_normal(); TPRINT(" NTP packets: ");
     tui_bright();  TPRINT("%d", s->ntp_log_count);
@@ -38,6 +34,7 @@ void view_ntp_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, NTP_PAGE);
     int page_top = s->ntp_log_sel - page / 2;
     if (page_top + page > s->ntp_log_count) page_top = s->ntp_log_count - page;
     if (page_top < 0) page_top = 0;

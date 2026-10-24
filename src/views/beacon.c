@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "oui.h"
 #include "views/beacon.h"
 #include "wifi_assess.h"
@@ -747,12 +748,7 @@ static void draw_beacon_detail(const sloth_state_t *s) {
 void view_beacon_draw(const sloth_state_t *s) {
     if (s->beacon_detail) { draw_beacon_detail(s); return; }
 
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = BEACON_PAGE;
-#endif
+    tui_clip_rows(1);
 
     tui_normal(); TPRINT(" Passive beacons: ");
     tui_bright();  TPRINT("%d", s->beacon_count);
@@ -793,6 +789,17 @@ void view_beacon_draw(const sloth_state_t *s) {
         return;
     }
 
+    /* 802.11k survey activity (#61). A footer rather than a column:
+     * it is a property of the airspace over the last few minutes, not
+     * of any one row, and most of the time there is nothing to say.
+     * Counted before the table so the page leaves its row free. */
+    int surveys = 0, reports = 0;
+    for (int i = 0; i < s->rrm_pair_count; i++) {
+        surveys += s->rrm_pairs[i].targeted_reqs;
+        reports += s->rrm_pairs[i].reports_seen;
+    }
+    int rrm_rows = surveys > 0 ? 1 : 0;
+    int page = view_page_budget(rrm_rows, BEACON_PAGE);
     int page_top = s->beacon_sel - page / 2;
     if (page_top + page > s->beacon_count) page_top = s->beacon_count - page;
     if (page_top < 0) page_top = 0;
@@ -990,14 +997,6 @@ void view_beacon_draw(const sloth_state_t *s) {
         }
     }
 
-    /* 802.11k survey activity (#61). A footer rather than a column:
-     * it is a property of the airspace over the last few minutes, not
-     * of any one row, and most of the time there is nothing to say. */
-    int surveys = 0, reports = 0;
-    for (int i = 0; i < s->rrm_pair_count; i++) {
-        surveys += s->rrm_pairs[i].targeted_reqs;
-        reports += s->rrm_pairs[i].reports_seen;
-    }
     if (surveys > 0) {
         tui_dim();
         TPRINT(" RRM surveys: ");

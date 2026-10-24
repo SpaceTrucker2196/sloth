@@ -15,7 +15,7 @@ generated from — #117), `docs/views/README.md` and all `docs/views/*.md`.
 **Count**: `VIEW_COUNT` = **<!-- count:views -->36<!-- /count -->**. Every key below is a row of
 `include/sloth_views.def`; if the two disagree, the `.def` is right.
 
-**Last updated**: 2026-10-21 (#144 slice 4: `*` BLE, the first punctuation view key); 2026-10-15 (#117 — keys and count now generated from `sloth_views.def`).
+**Last updated**: 2026-10-23 (#150: list views size their page from the cursor and clip rows at the edge); 2026-10-21 (#144 slice 4: `*` BLE, the first punctuation view key); 2026-10-15 (#117 — keys and count now generated from `sloth_views.def`).
 
 ---
 
@@ -71,6 +71,41 @@ See [[wifi-sigint]] for the full SIGINT primitives.
 | `e` | EAPOL  | [eapol.md](../views/eapol.md) | PMKID + 4-way handshake capture |
 | `j` | Seqnum | [seqnum.md](../views/seqnum.md) | MAC-randomisation deanonymisation — see [[mac-randomisation]] |
 | `w` | Assoc  | [assoc.md](../views/assoc.md) | confirmed STA ↔ AP associations |
+
+## List views at the 100x33 minimum
+
+The tab bar wraps: at 100 columns it is six rows, at 200 three. A list
+view therefore sizes its page from the row its table starts on, not
+from the top of the screen: `view_page_budget(tail, ansi_page)` in
+`src/views/view_page.h`, called after the view's status and header
+lines, with `tail` the rows the view draws under the table (a legend,
+a footer, a detail pane). Until #150 each view used `LINES - 5` (or 6,
+8, 12, 16) as if the bar were one row, so at 100x33 the page overran
+the screen: the selection could sit below the last row, and a legend
+under the table - Twins' "neither half accused", RADIUS's CVE line -
+was never drawn.
+
+Rows also never wrap. A list view calls `tui_clip_rows(1)`, and every
+row it prints is cut one column short of the screen edge; a row that
+wrapped took two screen lines and pushed the rest of the page down.
+Tables wider than 100 columns (Connections 136, Beacons 130, WiFi 114,
+Twins 110, Packets' header 143) lose their right-hand columns at the
+minimum and show them on a wider terminal. Text a view draws below the
+last screen row is dropped rather than appended to that row.
+
+Under the table, per view: Alerts 2 (blank line and the enrichment
+line), Twins 6 (legend), RADIUS 2 (legend), KARMA 2 (legend), BLE 1
+(legend), Beacons 1 when there is 802.11k survey activity, FragAttacks
+12 (detail pane), Research the selected row's detail pane, Interfaces 2
+(health strip and key hints), Deauth the BTM section when there is
+802.11v steering (capped at a third). The rest draw nothing under it.
+
+Pinned by `tests/test_view_fit.c`: one 100x33 `tui_draw()` test per
+list view (no line reaches column 100, nothing below the screen, the
+selected last row exactly `tail` rows above the bottom) and the same
+checks at 200 columns, so the fit is not bought with a short page.
+PNL, EAPOL, Assoc, Channel and Seqnum draw every row with no page or
+selection and are not covered yet.
 
 ## Adding a view
 

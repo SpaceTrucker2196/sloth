@@ -3,6 +3,7 @@
 #include <time.h>
 #include "sloth.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/quic.h"
 #include "quic_log.h"
 #include "filter.h"
@@ -10,12 +11,7 @@
 #define QUIC_PAGE 30
 
 void view_quic_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = QUIC_PAGE;
-#endif
+    tui_clip_rows(1);
 
     tui_normal(); TPRINT(" QUIC sessions: ");
     tui_bright();  TPRINT("%d", s->quic_log_count);
@@ -38,6 +34,7 @@ void view_quic_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, QUIC_PAGE);
     int page_top = s->quic_log_sel - page / 2;
     if (page_top + page > s->quic_log_count) page_top = s->quic_log_count - page;
     if (page_top < 0) page_top = 0;

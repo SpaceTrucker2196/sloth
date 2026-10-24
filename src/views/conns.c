@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include "sloth.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "bandwidth.h"
 #include "dns.h"
 #include "services.h"
@@ -146,12 +147,7 @@ void view_conns_draw(const sloth_state_t *s) {
     static const char *sort_names[]   = {"STATE", "PROTO", "LPORT", "PID", "BW", "RTT"};
     static const char *filter_names[] = {"ALL", "TCP", "UDP"};
 
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = CONNS_PAGE;
-#endif
+    tui_clip_rows(1);
 
     /* status bar */
     tui_normal(); TPRINT(" Conns: ");
@@ -211,6 +207,7 @@ void view_conns_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, CONNS_PAGE);
     int top = s->conn_sel - page / 2;
     if (top + page > s->conn_idx_count) top = s->conn_idx_count - page;
     if (top < 0) top = 0;

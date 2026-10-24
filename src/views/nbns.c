@@ -3,6 +3,7 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/nbns.h"
 #include "nbns_snoop.h"
 
@@ -22,12 +23,7 @@ static const char *suffix_label(uint8_t s) {
 }
 
 void view_nbns_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = NBNS_PAGE;
-#endif
+    tui_clip_rows(1);
 
     tui_normal(); TPRINT(" NetBIOS names: ");
     tui_bright();  TPRINT("%d", s->nbns_count);
@@ -49,6 +45,7 @@ void view_nbns_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, NBNS_PAGE);
     int page_top = s->nbns_sel - page / 2;
     if (page_top + page > s->nbns_count) page_top = s->nbns_count - page;
     if (page_top < 0) page_top = 0;

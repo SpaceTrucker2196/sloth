@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "oui.h"
 #include "capture/probe.h"
 #include "presence.h"
@@ -58,12 +59,7 @@ static int sigbar_filled(int8_t dbm) {
 /* ── Draw ────────────────────────────────────────────────── */
 
 void view_probe_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = PROBE_PAGE;
-#endif
+    tui_clip_rows(1);
 
     /* count devices seen in last 5 seconds */
     time_t now = sloth_wall();
@@ -115,6 +111,7 @@ void view_probe_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, PROBE_PAGE);
     int page_top = s->probe_sel - page / 2;
     if (page_top + page > s->probe_count) page_top = s->probe_count - page;
     if (page_top < 0) page_top = 0;

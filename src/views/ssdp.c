@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/ssdp.h"
 #include "ssdp_snoop.h"
 
@@ -21,12 +22,7 @@ static const char *short_type(const char *nt) {
 }
 
 void view_ssdp_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = SSDP_PAGE;
-#endif
+    tui_clip_rows(1);
 
     tui_normal(); TPRINT(" UPnP/SSDP devices: ");
     tui_bright();  TPRINT("%d", s->ssdp_count);
@@ -48,6 +44,7 @@ void view_ssdp_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, SSDP_PAGE);
     int page_top = s->ssdp_sel - page / 2;
     if (page_top + page > s->ssdp_count) page_top = s->ssdp_count - page;
     if (page_top < 0) page_top = 0;

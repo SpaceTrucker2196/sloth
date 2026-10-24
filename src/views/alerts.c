@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/alerts.h"
 #include "../alerts.h"
 #include "filter.h"
@@ -11,6 +12,9 @@
 #include "ip_owner.h"
 
 #define ALERTS_PAGE 30
+/* Rows under the table: the blank line and the enrichment line
+ * draw_enrichment() prints for the selection. */
+#define ALERTS_FOOTER_ROWS 2
 
 static const char *sev_label(alert_sev_t sev) {
     switch (sev) {
@@ -70,7 +74,9 @@ static void draw_enrichment(const alert_t *a) {
     if (owner) {
         tui_bright(); TPRINT("%s", owner);
     } else {
-        tui_dim();    TPRINT("(unknown / not in embedded list)");
+        /* Short enough that the line fits 100 columns with a port
+         * and an unknown region (#150). */
+        tui_dim();    TPRINT("unknown (not in list)");
     }
     tui_normal();
     TPRINT("\n");
@@ -147,12 +153,7 @@ static void draw_alert_detail(const sloth_state_t *s) {
 
 void view_alerts_draw(const sloth_state_t *s) {
     if (s->alert_detail) { draw_alert_detail(s); return; }
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = ALERTS_PAGE;
-#endif
+    tui_clip_rows(1);
 
     /* count by tier for the banner */
     int crits = 0, warns = 0, lows = 0;
@@ -188,9 +189,7 @@ void view_alerts_draw(const sloth_state_t *s) {
         return;
     }
 
-    /* Reserve one line at the bottom for the enrichment footer. */
-    if (page > 2) page -= 2;
-
+    int page = view_page_budget(ALERTS_FOOTER_ROWS, ALERTS_PAGE);
     int page_top = s->alert_sel - page / 2;
     if (page_top + page > s->alert_count) page_top = s->alert_count - page;
     if (page_top < 0) page_top = 0;

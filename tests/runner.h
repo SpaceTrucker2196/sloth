@@ -75,6 +75,7 @@ int  tui_test_is_reverse(int y, int x);
 int  tui_test_pair(int y, int x);
 void tui_test_erase(void);
 void tui_test_dump(FILE *fp);
+int  tui_test_overflow(void);
 
 static inline int runner_line_has(int y, const char *needle) {
     char line[4096];

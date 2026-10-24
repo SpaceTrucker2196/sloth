@@ -29,6 +29,12 @@ void tui_printf(const char *fmt, ...);
 void tui_addstr(const char *s);
 void tui_addnstr(const char *s, int n);
 
+/* Cut every row one column short of the screen edge for the rest of
+ * this view's draw instead of letting it wrap (#150). tui_draw() turns
+ * it off before each view; a list view turns it on. No-op in the ANSI
+ * build, which has no width. */
+void tui_clip_rows(int on);
+
 /* The ANSI backend's string sink, compiled in every build so the
  * test binary (built WITH_NCURSES) can drive it: writes at most n
  * octets of s (n < 0: all of it) to fp after display_sanitize(). */
@@ -48,7 +54,9 @@ void tui_cleanup(void);
  *   tui_test_rows       the screen's height, 0 when none is open
  *   tui_test_is_reverse 1 if cell (y, x) is reverse video, 0 if not, -1 off-screen
  *   tui_test_pair       the colour pair of cell (y, x), or -1
- *   tui_test_dump       the non-empty rows, numbered, for a failing test */
+ *   tui_test_dump       the non-empty rows, numbered, for a failing test
+ *   tui_test_overflow   text dropped below the last row since the last
+ *                       erase or tui_draw(); 0 when the draw fit (#150) */
 int  tui_init_offscreen(int rows, int cols);
 void tui_offscreen_end(void);
 void tui_test_erase(void);
@@ -58,6 +66,7 @@ int  tui_test_rows(void);
 int  tui_test_is_reverse(int y, int x);
 int  tui_test_pair(int y, int x);
 void tui_test_dump(FILE *fp);
+int  tui_test_overflow(void);
 void tui_draw(const sloth_state_t *s);
 int  tui_poll_key(int timeout_ms, int wake_fd); /* blocks up to timeout_ms; wake_fd >= 0 breaks the wait early so a redraw happens in response to a non-key event. Returns key on input, 0 on timeout / wake. */
 void tui_bar(double val, double max, int width, char *out); /* block bar; out needs width*3+1 bytes */

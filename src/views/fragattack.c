@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/fragattack.h"
 
 /* FragAttacks tracker — issue #75 slice 5.
@@ -21,6 +22,12 @@
  * This view is a counter table, not an event log. */
 
 #define FRAG_PAGE 20
+/* The detail pane under the table: blank line, title rule, one row per
+ * finding counter (nine), and the protected-frame line. The page was
+ * LINES - 16, which counted this pane but neither the status line nor
+ * the two header lines and assumed a one-row tab bar - so the last row
+ * of the pane was off the screen even then. */
+#define FRAG_DETAIL_ROWS 12
 
 static void fmt_mac(const uint8_t *mac, char *buf, int sz) {
     snprintf(buf, sz, "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -59,12 +66,7 @@ static void draw_detail_row(const char *title, const char *cve,
 }
 
 void view_fragattack_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 16;
-    if (page < 3) page = 3;
-#else
-    int page = FRAG_PAGE;
-#endif
+    tui_clip_rows(1);
 
     uint32_t total = 0;
     for (int i = 0; i < s->frag_row_count; i++)
@@ -95,6 +97,7 @@ void view_fragattack_draw(const sloth_state_t *s) {
            "--------------------------------------", "----");
     tui_normal();
 
+    int page = view_page_budget(FRAG_DETAIL_ROWS, FRAG_PAGE);
     int top = s->frag_sel - page / 2;
     if (top + page > s->frag_row_count) top = s->frag_row_count - page;
     if (top < 0) top = 0;

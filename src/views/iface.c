@@ -3,6 +3,7 @@
 #include <string.h>
 #include "sloth.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "history.h"
 #include "util.h"
 #include "oui.h"
@@ -12,6 +13,13 @@
 /* Matches jsonl.c's JSONL_STALE_SECS so the strip and the export agree
    about when a stream has gone quiet (#91). */
 #define IFACE_STALE_SECS 60
+/* Rows under the interface table: the sensor-health strip, and the
+ * key-hint line pinned to the screen's last row. The page was
+ * getmaxy() - 4, which counted those, the header and one tab-bar row:
+ * even with a one-row bar the health strip landed on the last row and
+ * the hint was drawn over it, and at 100 columns the table ran under
+ * both (#150). */
+#define IFACE_TAIL_ROWS 2
 #include "capture/probe.h"
 #include "capture/capture.h"   /* capture_exit_name() for the health strip */
 #include "sensor_health.h"     /* table-overflow tally (#91 slice 3) */
@@ -533,18 +541,23 @@ void view_iface_draw(const sloth_state_t *s) {
 
 #ifdef WITH_NCURSES
     int sel  = s->iface_sel;
-    int rows = getmaxy(stdscr) - 4;
-
-    static int vp = 0;
-    if (sel < vp) vp = sel;
-    if (sel >= vp + rows) vp = sel - rows + 1;
-    if (vp < 0) vp = 0;
+    tui_clip_rows(1);
 
     tui_dim();
     tui_printf("  %-10s %-4s %-12s %-10s %-10s %-*s %-9s %-9s\n",
            "Interface", "Mode", "Vendor", "RX", "TX",
            HIST_LEN + 2, "RX history", "Total RX", "Total TX");
     tui_normal();
+
+    int rows = view_page_budget(IFACE_TAIL_ROWS, MAX_IFACES);
+    static int vp = 0;
+    if (sel < vp) vp = sel;
+    if (sel >= vp + rows) vp = sel - rows + 1;
+    /* The offset is kept between draws, so after the terminal grows it
+     * would leave rows empty under the table with interfaces above the
+     * top unshown: pull it back until the page is full. */
+    if (vp > s->iface_count - rows) vp = s->iface_count - rows;
+    if (vp < 0) vp = 0;
 
     for (int i = vp; i < s->iface_count && (i - vp) < rows; i++) {
         const iface_stat_t *f = &s->ifaces[i];

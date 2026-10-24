@@ -4,17 +4,20 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/karma.h"
 /* KARMA_PNL_CORROB_MIN — the legend and the PNL highlight must quote
  * the same number the score and the alert gate use. */
 #include "karma_detect.h"
 
 #define KARMA_PAGE 30
-/* Lines the view draws around the candidate rows: status, the two
- * header lines, and the two-line legend. The legend used to be left out
- * of the page budget, so a full page pushed it off the bottom of the
- * screen - the half of the view that says a tool name is a hypothesis. */
-#define KARMA_CHROME 5
+/* Lines the view draws under the candidate rows: the two-line legend.
+ * It used to be left out of the page budget, so a full page pushed it
+ * off the bottom of the screen - the half of the view that says a tool
+ * name is a hypothesis. The status and header lines above the rows are
+ * measured rather than counted: the page is taken after they are
+ * drawn (#150). */
+#define KARMA_LEGEND_ROWS 2
 /* Shortest top-SSID prefix a row keeps before the tool attribution
  * starts giving up its label (the SSID is the observation; the tool is
  * a hypothesis about it). */
@@ -88,16 +91,6 @@ static void karma_fit_tail(const karma_ap_t *k, const char *age, int room,
 }
 
 void view_karma_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    /* Counted from the row the view starts on, under however many rows
-     * the tab bar wrapped onto (several at 100 columns), not from the
-     * top of the screen. */
-    int page = LINES - getcury(stdscr) - KARMA_CHROME;
-    if (page < 1) page = 1;
-#else
-    int page = KARMA_PAGE;
-#endif
-
     /* Status bar */
     tui_normal(); TPRINT(" KARMA/PineAP candidates: ");
     tui_bright(); TPRINT("%d", s->karma_count);
@@ -129,6 +122,7 @@ void view_karma_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(KARMA_LEGEND_ROWS, KARMA_PAGE);
     int top = s->karma_sel - page / 2;
     if (top + page > s->karma_count) top = s->karma_count - page;
     if (top < 0) top = 0;

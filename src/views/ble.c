@@ -4,6 +4,7 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "sensors.h"
 #include "ble_detect.h"
 #include "ble_flood.h"
@@ -28,16 +29,12 @@ static int ble_cols(void) {
 #endif
 }
 
-static int page_rows(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int p = LINES - 8;
-#else
-    int p = 30;
-#endif
-    if (s->ble_rot.enabled)           /* the rotation-hints estimate */
-        p -= s->ble_rot.hints_timing ? 5 : 4;
-    return p < 3 ? 3 : p;
-}
+#define BLE_PAGE 30
+/* The legend line under the table. The rotation-hints block above it
+ * needs no count of its own: the page is measured after it is drawn,
+ * so its four or five rows - and the tab bar's wrapped rows, which the
+ * old LINES - 8 did not know about - are already spent (#150). */
+#define BLE_LEGEND_ROWS 1
 
 /* Address type, one letter: P public, R random, p / r the resolved
  * identity forms (Core Spec v5.4 Vol 4 Part E §7.7.65.2). */
@@ -200,6 +197,7 @@ static void draw_detail(const sloth_state_t *s) {
 
 void view_ble_draw(const sloth_state_t *s) {
     if (s->ble_detail) { draw_detail(s); return; }
+    tui_clip_rows(1);
 
     int hid = 0, wl = 0;
     for (int i = 0; i < s->ble_device_count; i++) {
@@ -259,7 +257,7 @@ void view_ble_draw(const sloth_state_t *s) {
            "ADVERTISES");
     tui_normal();
 
-    int page = page_rows(s);
+    int page = view_page_budget(BLE_LEGEND_ROWS, BLE_PAGE);
     int sel = s->ble_sel;
     if (sel >= s->ble_device_count) sel = s->ble_device_count - 1;
     if (sel < 0) sel = 0;

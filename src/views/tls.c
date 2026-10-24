@@ -3,6 +3,7 @@
 #include <time.h>
 #include "sloth.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/tls.h"
 #include "tls_log.h"
 #include "filter.h"
@@ -10,12 +11,7 @@
 #define TLS_PAGE 30
 
 void view_tls_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = TLS_PAGE;
-#endif
+    tui_clip_rows(1);
 
     tui_normal(); TPRINT(" TLS connections: ");
     tui_bright();  TPRINT("%d", s->tls_log_count);
@@ -39,6 +35,7 @@ void view_tls_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, TLS_PAGE);
     int page_top = s->tls_log_sel - page / 2;
     if (page_top + page > s->tls_log_count) page_top = s->tls_log_count - page;
     if (page_top < 0) page_top = 0;

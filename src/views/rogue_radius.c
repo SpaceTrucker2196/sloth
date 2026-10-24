@@ -4,9 +4,13 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "eap_parse.h"
 #include "views/rogue_radius.h"
 
+/* The two-line legend under the table: what weak, leaks and NONE mean.
+ * Left out of the page budget, a full table pushed it off the screen. */
+#define ROGUE_RADIUS_LEGEND_ROWS 2
 #define ROGUE_RADIUS_PAGE 30
 
 static void fmt_mac(const uint8_t mac[6], char *buf, int sz) {
@@ -57,12 +61,7 @@ static int order_rows(const sloth_state_t *s, int idx[MAX_ROGUE_RADIUS]) {
 }
 
 void view_rogue_radius_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = ROGUE_RADIUS_PAGE;
-#endif
+    tui_clip_rows(1);
 
     int idx[MAX_ROGUE_RADIUS];
     int n = order_rows(s, idx);
@@ -106,6 +105,7 @@ void view_rogue_radius_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(ROGUE_RADIUS_LEGEND_ROWS, ROGUE_RADIUS_PAGE);
     int sel = s->rogue_radius_sel;
     if (sel >= n) sel = n - 1;
     int top = sel - page / 2;

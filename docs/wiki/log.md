@@ -4939,3 +4939,15 @@ report events.
   of a link keeps its digests until the link goes, so an older address
   speaking again after 20 s of silence still poisons the token.
   [[cli-reference]] and the view say "recent window only".
+- 2026-10-23 — [[views-catalog]]: list views fit the 100x33 minimum
+  (#150). Every paged view takes its page from the cursor after its
+  headers, `view_page_budget()` in `src/views/view_page.h`, counting
+  only the rows under its table; the old `LINES - 5` assumed a one-row
+  tab bar, which is six rows at 100 columns. List rows are clipped at
+  the edge instead of wrapping (`tui_clip_rows()`), and text drawn
+  below the last row is dropped. Found on the way: Deauth's selected
+  row printed the source address in the BSSID column (a shared static
+  buffer), its BTM section ran two rows past its budget, FragAttacks
+  overran by one even under a one-row bar, Interfaces drew its key
+  hints over its health strip, Devices left the last row empty. The
+  Alerts enrichment says "unknown (not in list)" so the line fits.

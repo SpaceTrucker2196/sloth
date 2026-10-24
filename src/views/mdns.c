@@ -2,6 +2,7 @@
 #include <string.h>
 #include "sloth.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/mdns.h"
 #include "mdns_snoop.h"
 
@@ -30,12 +31,7 @@ static void fmt_host(const char *host, char *buf, int sz) {
 }
 
 void view_mdns_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = MDNS_PAGE;
-#endif
+    tui_clip_rows(1);
 
     tui_normal(); TPRINT(" mDNS services: ");
     tui_bright();  TPRINT("%d", s->mdns_count);
@@ -57,6 +53,7 @@ void view_mdns_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, MDNS_PAGE);
     int page_top = s->mdns_sel - page / 2;
     if (page_top + page > s->mdns_count) page_top = s->mdns_count - page;
     if (page_top < 0) page_top = 0;

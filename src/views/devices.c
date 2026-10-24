@@ -4,6 +4,7 @@
 #include <time.h>
 #include "sloth.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/devices.h"
 #include "filter.h"
 #include "camera_join.h"
@@ -403,6 +404,7 @@ static void draw_device_detail(const sloth_state_t *s) {
 
 void view_devices_draw(const sloth_state_t *s) {
     if (s->device_detail) { draw_device_detail(s); return; }
+    tui_clip_rows(1);
 
     int cams = 0;
     for (int i = 0; i < s->device_count; i++)
@@ -432,12 +434,9 @@ void view_devices_draw(const sloth_state_t *s) {
         return;
     }
 
-#ifdef WITH_NCURSES
-    int page = rows_left() - 1;
-#else
-    int page = DEV_PAGE;
-#endif
-    if (page < 1) page = 1;
+    /* Nothing is drawn under the table. This was rows_left() - 1, which
+     * left the screen's last row empty under a full page (#150). */
+    int page = view_page_budget(VIEW_NO_TAIL, DEV_PAGE);
 
     int page_top = s->device_sel - page / 2;
     if (page_top + page > s->device_count) page_top = s->device_count - page;

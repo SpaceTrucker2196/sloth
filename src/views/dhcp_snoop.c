@@ -3,6 +3,7 @@
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/dhcp_snoop.h"
 #include "../dhcp_snoop.h"
 
@@ -23,12 +24,7 @@ static const char *msg_label(uint8_t t) {
 }
 
 void view_dhcp_snoop_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = DHCP_PAGE;
-#endif
+    tui_clip_rows(1);
 
     tui_normal(); TPRINT(" Live DHCP events: ");
     tui_bright();  TPRINT("%d", s->dhcp_event_count);
@@ -50,6 +46,7 @@ void view_dhcp_snoop_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, DHCP_PAGE);
     int page_top = s->dhcp_event_sel - page / 2;
     if (page_top + page > s->dhcp_event_count)
         page_top = s->dhcp_event_count - page;

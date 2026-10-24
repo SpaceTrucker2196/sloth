@@ -3,6 +3,7 @@
 #include <time.h>
 #include "sloth.h"
 #include "tui.h"
+#include "views/view_page.h"
 #include "views/http.h"
 #include "captive_portal.h"
 #include "http_log.h"
@@ -16,12 +17,7 @@ static const char *method_color_class(const char *m) {
 }
 
 void view_http_draw(const sloth_state_t *s) {
-#ifdef WITH_NCURSES
-    int page = LINES - 5;
-    if (page < 1) page = 1;
-#else
-    int page = HTTP_PAGE;
-#endif
+    tui_clip_rows(1);
 
     tui_normal(); TPRINT(" HTTP requests: ");
     tui_bright();  TPRINT("%d", s->http_log_count);
@@ -44,6 +40,7 @@ void view_http_draw(const sloth_state_t *s) {
         return;
     }
 
+    int page = view_page_budget(VIEW_NO_TAIL, HTTP_PAGE);
     int page_top = s->http_log_sel - page / 2;
     if (page_top + page > s->http_log_count) page_top = s->http_log_count - page;
     if (page_top < 0) page_top = 0;
