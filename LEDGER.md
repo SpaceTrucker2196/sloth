@@ -269,3 +269,4 @@
 | 70eedb3 | 2026-10-26T16:46:24Z | claude-opus-5-5 | 76 | 17875 | 22931516 | 44449 | 5.2997 | #153 repo side: sloth-migrate-sensor (dry-run, preflight, checksum-verified copy, hardened unit, verify, rollback), deploy-test 262 checks + shellcheck in CI; SC2317 fix for CI's shellcheck 0.9 |
 | 2214b59 | 2026-10-26T17:33:57Z | claude-opus-5-5 | 18 | 7092 | 5731312 | 10373 | 1.3712 | slothweb restyle: Spacetrucker (river.io/jeff) design system for chrome + light theme, all data in the TUI's colours generated from src/tui_palette.c with C-vs-JS parity test |
 | 49893c7 | 2026-10-26T18:12:24Z | claude-opus-5-5 | 76 | 23169 | 26734082 | 34726 | 6.0883 | deploy-test: stub socat counter written atomically (CI race on 2214b59) |
+| dbbb5db | 2026-10-26T20:53:37Z | claude-opus-5-5 | 78 | 68909 | 29943546 | 92504 | 8.1072 | #166: 14-day --pcap-dir age sweep (pcap.retain_days), shared-dir refusal, stale-clock guard |
