@@ -145,6 +145,22 @@ definitive evidence.
 - **`--report`**: an *Association requests* section listing every
   downgrade with what was lost.
 
+## Distance estimate (2026-10-26)
+
+The `AP~m` column, the short form (`~27m↘`). An **estimate from signal strength**: walls and reflections dominate,
+and it is not a location. The median of the row's last 8 RSSI samples
+goes through ITU-R P.1238's indoor log-distance model; the cell reads
+`~27m bldg ↘` — metres, band (`imm` < 1 m, `near` 1–3, `room` 3–10,
+`bldg` 10–30, `far` > 30) and trend (↘ approaching, → steady, ↗
+leaving, blank until enough samples); `-` is no estimate (an RSSI of 0
+is no sample, never 1 m). The typical indoor error is a factor of two,
+five when a body or a wall is in the way. No alert rule reads it. Model,
+sources and knobs: `docs/wiki/rf-distance.md`.
+
+It is the **AP's** distance, not the client's: every frame behind an
+association row — the (re)association response, EAPOL M3 — is one the
+AP sent. The row is now cut at the screen edge rather than wrapping.
+
 ## See also
 
 - [eapol.md](eapol.md) — handshakes that promote rows to `via=EAPOL`

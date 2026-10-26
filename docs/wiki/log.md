@@ -5190,3 +5190,11 @@ report events.
   `-journal`, opens SRC immutable so nothing appears beside it, and run
   as root hands DST to SRC's owner; the swap procedure checks the side
   files and the owner.
+- 2026-10-26 — [[rf-distance]]: new page. The RSSI distance data point
+  (owner request "use rf signal strength to estimate distance as a data
+  point"): ITU-R P.1238-10 eq. (1) solved for distance, P_tx from the
+  TPC Report / Country ceiling / BLE TX power or assumed, median of the
+  last K samples, bands and trend with hysteresis, `--my-bssid`
+  calibration. [[jsonl-schema]] gains `est_dist_m` / `est_dist_band` /
+  `est_dist_trend` / `est_ptx_source`; [[cli-reference]] the five `rf.*`
+  knobs; source document `research/papers/rssi-distance-estimation.md`.

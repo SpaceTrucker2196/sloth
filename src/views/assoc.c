@@ -8,6 +8,7 @@
 #include "assoc_track.h"
 #include "beacon_snoop.h"
 #include "views/assoc.h"
+#include "rf_distance.h"
 
 /* ∆ U+2206 INCREMENT — the downgrade marker. Written as bytes for
  * the same reason the box-drawing macros are: the source stays
@@ -67,14 +68,18 @@ void view_assoc_draw(const sloth_state_t *s) {
     tui_bright(); TPRINT("%d", s->assoc_count);
     tui_dim();    TPRINT("  [up/dn] navigate  [c] clear\n");
 
+    /* The row is 118 columns before the distance cell and wrapped at
+     * 100; cut it at the edge instead, the #150 rule for every table. */
+    tui_clip_rows(1);
     tui_dim();
-    TPRINT(" %-17s  %-16s  %-17s  %-14s  %3s  %3s  %4s  %-8s  %-11s  %4s\n",
+    TPRINT(" %-17s  %-16s  %-17s  %-14s  %3s  %3s  %4s  %-*s  %-8s  %-11s  %4s\n",
            "BSSID", "SSID", "STA", "vendor", "ch", "rnd", "sig",
-           "asked", "via", "age");
-    TPRINT(" %-17s  %-16s  %-17s  %-14s  %3s  %3s  %4s  %-8s  %-11s  %4s\n",
+           RF_CELL_SHORT, "AP~m", "asked", "via", "age");
+    TPRINT(" %-17s  %-16s  %-17s  %-14s  %3s  %3s  %4s  %-*s  %-8s  %-11s  %4s\n",
            "-----------------", "----------------",
            "-----------------", "--------------",
-           "---", "---", "----", "--------", "-----------", "----");
+           "---", "---", "----", RF_CELL_SHORT, "------", "--------",
+           "-----------", "----");
     tui_normal();
 
     if (s->assoc_count == 0) {
@@ -126,8 +131,12 @@ void view_assoc_draw(const sloth_state_t *s) {
         }
 
         tui_dim();
-        TPRINT("  %3d  %-3s  %4d  ", a->channel,
-               a->sta_random ? "Y" : "-", a->signal_dbm);
+        /* The AP's distance, not the client's: every frame behind
+         * this row is one the AP sent (sloth.h, assoc_t). */
+        char dist[24];
+        rf_dist_cell(&a->dist, dist, sizeof(dist), RF_CELL_SHORT);
+        TPRINT("  %3d  %-3s  %4d  %s  ", a->channel,
+               a->sta_random ? "Y" : "-", a->signal_dbm, dist);
 
         /* What the client asked for (#60). The grant carries no RSNE
          * outside FT/OWE (§9.3.3.7), so there is no "granted AKM" to

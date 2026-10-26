@@ -510,10 +510,12 @@ static void test_view_draw_populated(void) {
     int a = runner_screen_find("HomeNet ");
     int b = runner_screen_find("de:ad:be:ef:00:01");
     ASSERT(a >= 0 && b >= 0);
-    ASSERT_LINE_HAS(a, "aa:bb:cc:11:22:33   -55  6        WPA2");
+    /* The distance cell sits between Sig and Ch: -55 dBm at the assumed
+     * 20 dBm on 2437 MHz is 10^((75 - 39.74) / 28) = 18.2 m. */
+    ASSERT_LINE_HAS(a, "aa:bb:cc:11:22:33   -55  ~18m bldg     6        WPA2");
     /* An SSID literally named "Hidden" is a name, not the hidden flag. */
     ASSERT_LINE_HAS(b, "Hidden ");
-    ASSERT_LINE_HAS(b, "-70  11       WPA3");
+    ASSERT_LINE_HAS(b, "-70  ~62m far      11       WPA3");   /* 61.9 m on 2462 MHz */
     ASSERT_SCREEN_LACKS("(hidden)");
 }
 

@@ -149,6 +149,22 @@ three times in two hours, the signature of someone circling. That needs
 episode tracking on top of this and is tracked as S3.2 in
 `docs/personas/wifi-surveyor.md`.
 
+## Distance estimate (2026-10-26)
+
+The `Dist (est)` column, left of the SSID. An **estimate from signal strength**: walls and reflections dominate,
+and it is not a location. The median of the row's last 8 RSSI samples
+goes through ITU-R P.1238's indoor log-distance model; the cell reads
+`~27m bldg ↘` — metres, band (`imm` < 1 m, `near` 1–3, `room` 3–10,
+`bldg` 10–30, `far` > 30) and trend (↘ approaching, → steady, ↗
+leaving, blank until enough samples); `-` is no estimate (an RSSI of 0
+is no sample, never 1 m). The typical indoor error is a factor of two,
+five when a body or a wall is in the way. No alert rule reads it. Model,
+sources and knobs: `docs/wiki/rf-distance.md`.
+
+A probe request names no transmit power, so a probe client's estimate
+always rests on the assumed client 15 dBm (`est_ptx_source: "assumed"`
+in JSONL): read it as a band.
+
 ## See also
 
 - Capture path: [`src/capture/probe.c`](../../src/capture/probe.c).

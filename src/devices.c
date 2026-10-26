@@ -95,6 +95,7 @@ static void merge_beacons(const sloth_state_t *s, device_t *dev, int *n, time_t 
         if (!d) continue;
         d->is_ap     = 1;
         d->signal_dbm = b->signal_dbm;
+        if (b->dist.valid) d->dist = b->dist;
         set_str(d->vendor, sizeof(d->vendor), short_vendor(oui_lookup(b->bssid)));
         d->sources  |= DEV_SRC_BEACON;
         if (b->last_seen > d->last_seen) d->last_seen = b->last_seen;
@@ -111,6 +112,7 @@ static void merge_probes(const sloth_state_t *s, device_t *dev, int *n, time_t n
         if (p->ssid[0])
             snprintf(d->last_ssid, sizeof(d->last_ssid), "%s", p->ssid);
         d->signal_dbm = p->signal_dbm;
+        if (p->dist.valid) d->dist = p->dist;
         set_str(d->vendor, sizeof(d->vendor), short_vendor(oui_lookup(p->mac)));
         d->sources  |= DEV_SRC_PROBE;
         if (p->last_seen > d->last_seen) d->last_seen = p->last_seen;

@@ -16,6 +16,7 @@
 #include "ev_cite.h"
 #include "mle.h"       /* MLE_TYPE_BASIC */
 #include "wifi_freq.h"
+#include "rf_distance.h"
 
 static beacon_ap_t     g_aps[MAX_BEACON_APS];
 static int             g_count = 0;
@@ -882,6 +883,18 @@ static void rssi_ring_push(beacon_ap_t *ap, int8_t signal, time_t now) {
     ap->rssi_max_60s = init ? hi : 0;
 }
 
+/* The distance data point (src/rf_distance.h), after the frame's
+ * regulatory elements are merged so a TPC Report in this very beacon is
+ * the power the estimate uses. 6 GHz only on the HE 6 GHz Operation
+ * Information source, the ap_band_label() rule. */
+static void dist_note(beacon_ap_t *ap, int8_t signal, time_t now) {
+    rf_ctx_t c;
+    rf_ctx_ap(&c, &ap->reg, ap->channel,
+              ap->channel_source == CH_SRC_HE_6GHZ ? WIFI_BAND_6GHZ
+                                                   : WIFI_BAND_UNKNOWN);
+    rf_track_observe(&ap->dist, signal, now, &c);
+}
+
 /* ── Beacon TBTT jitter (#77) ─────────────────────────────────
  *
  * See ap_beacon_timing_t in sloth.h for the derivation. In short: the
@@ -1259,6 +1272,7 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
                  * carried a timestamp. NOP on the managed-mode path. */
                 tbtt_push(&g_aps[i].tbtt, rsn);
             }
+            dist_note(&g_aps[i], signal, now);
             pthread_mutex_unlock(&g_mu);
             return;
         }
@@ -1383,6 +1397,7 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
     if (oui_is_espressif(g_aps[slot].fp.oui))
         g_aps[slot].fp.flags |= AP_FP_FLAG_ESPRESSIF_OUI;
     rssi_ring_push(&g_aps[slot], signal, now);
+    dist_note(&g_aps[slot], signal, now);
 
     pthread_mutex_unlock(&g_mu);
 }

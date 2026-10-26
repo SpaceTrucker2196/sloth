@@ -3,7 +3,7 @@
 **Issue:** [#73](https://github.com/SpaceTrucker2196/sloth/issues/73) ·
 **Built by:** `make research-index` · **Guard:** `tests/test_research_corpus.c`
 
-**Last updated**: 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
+**Last updated**: 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
 
 `agents/AGENTS.md` § Discipline says every detector names its basis. The
 citations exist — in issue bodies, wiki pages and the rule table — but
@@ -398,6 +398,14 @@ HT214035, the PoC README, the SIG appearance and service numbers) and
 SIG member-UUID registry and what each candidate row still needs).
 Each states what it does not establish — chiefly, that no threshold in
 these rules has a cited basis.
+
+The RSSI distance data point (2026-10-26) cites its model in
+`research/papers/rssi-distance-estimation.md` — ITU-R P.1238-10 eq. (1)
+with its Table 2 coefficients and Table 4 shadow fading, P.1238-13's
+site-general fit, the Bluetooth TX Power Level AD type and the extended
+report's TX_Power, and two published measurements of how wrong RSSI
+ranging is indoors — with no `alert_kinds`, because no rule reads the
+estimate. See [[rf-distance]].
 
 ## What is not here yet
 - **Coverage.** 59 of 60 alert kinds have a document, and the sixtieth

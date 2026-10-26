@@ -9,6 +9,7 @@
 #include "filter.h"
 #include "camera_join.h"
 #include "sloth_clock.h"
+#include "rf_distance.h"
 
 #define DEV_PAGE 30
 
@@ -84,11 +85,18 @@ static int rows_left(void) {
  * and whole IPv6 addresses rather than the same 15 characters. */
 #define DEV_FIXED (1 + 17 + 2 + 2 + 6 + 2 + 2 + 2 + 7 + 2 + 4 + 2 + 4 + 2 + 5)
 
-typedef struct { int ip, vendor, name; } dev_plan_t;
+typedef struct { int ip, vendor, name, dist; } dev_plan_t;
 
 static dev_plan_t plan_cols(int cols) {
     dev_plan_t p;
-    int avail = cols - 1 - DEV_FIXED;    /* never the last column */
+    /* The distance cell is the first thing to give way: at 100 columns
+     * the name column's 15 cells are worth more than a signal-strength
+     * estimate the detail page also shows. Short form once the 100-column
+     * plan still fits beside it, full once the name keeps 24. */
+    int base = cols - 1 - DEV_FIXED;
+    p.dist = base - 2 - RF_CELL_FULL >= 15 + 8 + 24 ? RF_CELL_FULL
+           : base - 2 - RF_CELL_SHORT >= 15 + 9 + 15 ? RF_CELL_SHORT : 0;
+    int avail = base - (p.dist ? 2 + p.dist : 0);   /* never the last column */
     if (avail < 24) avail = 24;
     p.ip = 15;
     int rest = avail - p.ip;
@@ -277,6 +285,11 @@ static void draw_device_detail(const sloth_state_t *s) {
     if (mac_zero(d->mac))
         dl(&b, 0, "  Keyed by IP only: no link-layer address was seen for"
            " this camera");
+    if (d->dist.valid) {
+        char dd[96];
+        rf_dist_describe(&d->dist, dd, sizeof(dd));
+        dl(&b, 0, "  Distance %s - from signal strength, not a location", dd);
+    }
 
     {
         cam_reason_t why[12];
@@ -421,10 +434,12 @@ void view_devices_draw(const sloth_state_t *s) {
     dev_plan_t w = plan_cols(dev_cols());
     tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
-    TPRINT(" %-17s  %-*s  %-6s  %-*.*s  %-*.*s  %-7s  %-4s  %-4s  %-5s\n",
+    TPRINT(" %-17s  %-*s  %-6s  %-*.*s  %-*.*s  %-7s  %-4s",
            "MAC", w.ip, "IP", "Class", w.vendor, w.vendor, "Vendor",
-           w.name, w.name, "Hostname / SSID / Model", "Src", "RSI", "Risk",
-           "Hits");
+           w.name, w.name, "Hostname / SSID / Model", "Src", "RSI");
+    if (w.dist)
+        TPRINT("  %-*s", w.dist, w.dist >= RF_CELL_FULL ? "Dist (est)" : "~m");
+    TPRINT("  %-4s  %-5s\n", "Risk", "Hits");
     tui_normal();
 
     if (s->device_count == 0) {
@@ -464,6 +479,11 @@ void view_devices_draw(const sloth_state_t *s) {
         char sig[8];
         if (d->signal_dbm < 0) snprintf(sig, sizeof(sig), "%d", d->signal_dbm);
         else                   snprintf(sig, sizeof(sig), "-");
+        char dist[48] = "";
+        if (w.dist) {
+            dist[0] = ' '; dist[1] = ' ';
+            rf_dist_cell(&d->dist, dist + 2, sizeof(dist) - 2, w.dist);
+        }
 
         char hits_s[12]; hits_cell(d->probe_count, hits_s, sizeof(hits_s));
         int hits = d->probe_count;
@@ -476,10 +496,10 @@ void view_devices_draw(const sloth_state_t *s) {
 
         if (row == s->device_sel) {
             tui_sel();
-            TPRINT(" %-17s  %-*.*s  %-6s  %-*.*s  %-*.*s  %-7s  %-4s  %-4s  %-5s\n",
+            TPRINT(" %-17s  %-*.*s  %-6s  %-*.*s  %-*.*s  %-7s  %-4s%s  %-4s  %-5s\n",
                    mac, w.ip, w.ip, d->ip[0] ? d->ip : "-", cls,
                    w.vendor, w.vendor, vend, w.name, w.name, name,
-                   src, sig, risk, hits_s);
+                   src, sig, dist, risk, hits_s);
             tui_reset();
         } else {
             tui_dim();    TPRINT(" %-17s", mac);
@@ -501,6 +521,7 @@ void view_devices_draw(const sloth_state_t *s) {
 
             tui_dim();    TPRINT("  %-7s", src);
             tui_dim();    TPRINT("  %-4s", sig);
+            tui_dim();    TPRINT("%s", dist);
 
             /* Risk bucket: heat-graded per level so HIGH/CRIT jump out
              * at operator glance. LOW renders dim to stay quiet. */

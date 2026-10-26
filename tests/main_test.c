@@ -206,6 +206,7 @@ void run_inventory_tests(void);
 void run_wired_attach_tests(void);
 void run_db_tests(void);
 void run_presence_tests(void);
+void run_rf_distance_tests(void);
 void run_transit_tests(void);
 void run_radiotap_tests(void);
 void run_wifi_freq_tests(void);
@@ -397,6 +398,7 @@ int main(void) {
     run_wired_attach_tests();
     run_db_tests();
     run_presence_tests();
+    run_rf_distance_tests();
     run_transit_tests();
     run_radiotap_tests();
     run_wifi_freq_tests();

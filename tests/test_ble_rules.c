@@ -1304,9 +1304,10 @@ static void test_view_populated_fits_100x33(void) {
     ASSERT(rows < 40);                    /* paged, not all 40 */
     ASSERT_SCREEN_HAS(">c2:00:00:00:09:05");
     ASSERT_SCREEN_HAS("bluetooth-monitor");
-    /* 100 columns leave the summary 32: the 33-character one is cut
-     * and says so. */
-    ASSERT_SCREEN_HAS("\"a-very-long-name-xx\" mfr 004c/~");
+    /* 100 columns leave the summary 24 beside the short distance cell
+     * (it was 32 before the cell): the 33-character one is cut and
+     * says so. */
+    ASSERT_SCREEN_HAS("\"a-very-long-name-xx\" m~");
     ASSERT_SCREEN_LACKS("mfr 004c/10");
     ASSERT_SCREEN_HAS(" T: P public R random");
     /* At 220 columns the same rows carry the whole name, uncut. */

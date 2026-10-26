@@ -55,6 +55,7 @@
 #include "quic_log.h"
 #include "rdp_snoop.h"
 #include "rtsp_snoop.h"
+#include "rf_distance.h"
 #include "rf_quality.h"
 #include "seqnum_track.h"
 #include "sensor_health.h"

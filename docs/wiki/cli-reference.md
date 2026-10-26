@@ -26,7 +26,7 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
+**Last updated**: 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
@@ -137,6 +137,22 @@ is not a knob.
 | `ble.flood_rate` | 10 | 1..10000 | gate 2: advertisements per second on that key, counted over the whole window (a window in progress is never extrapolated upward) |
 | `ble.hid_rotate_addrs` | 3 | 2..256 | `BLE_HID_UNEXPECTED` rotation form: new random addresses advertising a HID appearance on one sensor inside the window |
 | `ble.hid_rotate_window_s` | 900 | 60..86400 | seconds in the `BLE_HID_UNEXPECTED` rotation window; the form cannot fire on a sensor until that sensor's first advertisement is more than one window old (per sensor: a `--bt-capture` started later has its own first window) |
+
+#### Knobs added 2026-10-26 (RSSI distance data point)
+
+Model coefficients and a calibration distance for [[rf-distance]], not
+detector thresholds: no alert rule reads the estimate. `N` values are
+ITU-R P.1238-10 Table 2's residential column, ×10 because the registry
+is integer-only; the bounds bracket its corridor (~18) and its worst
+rows (~44).
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `rf.path_loss_n_2g` | 28 | 16..60 | distance power loss coefficient N ×10 for 2.4 GHz Wi-Fi **and BLE** |
+| `rf.path_loss_n_5g` | 30 | 16..60 | N ×10 for 5 GHz |
+| `rf.path_loss_n_6g` | 30 | 16..60 | N ×10 for 6 GHz (P.1238 has no row; the 5 GHz value) |
+| `rf.median_k` | 8 | 1..16 | RSSI samples the distance median takes (the newest, within 60 s) |
+| `rf.ref_dist_dm` | 0 | 0..1000 | decimetres from the sensor to the `--my-bssid` AP; non-zero turns on calibration from that AP's measured path loss, per Wi-Fi band, bounded ±20 dB, never applied to BLE. 0 = no calibration |
 
 `--refresh-ms` is deliberately not a knob: it is UI cadence, not a detector or retention decision.
 

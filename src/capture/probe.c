@@ -18,6 +18,7 @@
 #include "dot11_ie.h"            /* dot11_ie_ssid (#127) */
 #include "radiotap.h"
 #include "rf_quality.h"
+#include "rf_distance.h"
 #include "beacon_snoop.h"
 #include "deauth_snoop.h"
 #include "flood_window.h"
@@ -200,6 +201,12 @@ static void client_rssi_push(probe_client_t *c, int8_t signal, time_t now) {
     r->ts [r->head] = now;
     r->head = (r->head + 1) % RSSI_WIN_SAMPLES;
     if (r->count < RSSI_WIN_SAMPLES) r->count++;
+    /* The distance data point. A probe request carries no TPC Report,
+     * Country element or anything else naming its power, so P_tx is
+     * always the assumed client default. */
+    rf_ctx_t ctx;
+    rf_ctx_assumed(&ctx, c->channel, WIFI_BAND_UNKNOWN, RF_PTX_STA_ASSUMED);
+    rf_track_observe(&c->dist, signal, now, &ctx);
 }
 
 static void record_probe(const uint8_t *mac, const char *ssid,

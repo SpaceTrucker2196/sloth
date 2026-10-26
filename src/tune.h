@@ -150,6 +150,14 @@ typedef enum {
     TUNE_BLE_FLOOD_RATE,
     TUNE_BLE_HID_ROTATE_ADDRS,
     TUNE_BLE_HID_ROTATE_WINDOW_S,
+    /* 2026-10-26: the RSSI distance data point (src/rf_distance.h).
+       Model coefficients and a calibration distance, not detector
+       thresholds - no rule reads the estimate. */
+    TUNE_RF_PATH_LOSS_N_2G,
+    TUNE_RF_PATH_LOSS_N_5G,
+    TUNE_RF_PATH_LOSS_N_6G,
+    TUNE_RF_MEDIAN_K,
+    TUNE_RF_REF_DIST_DM,
     TUNE_COUNT
 } tune_id_t;
 

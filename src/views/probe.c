@@ -8,6 +8,7 @@
 #include "oui.h"
 #include "capture/probe.h"
 #include "presence.h"
+#include "rf_distance.h"
 #include "views/probe.h"
 
 #define PROBE_PAGE 30
@@ -92,12 +93,13 @@ void view_probe_draw(const sloth_state_t *s) {
     /* column headers */
     tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
-    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %-8s  %s\n",
+    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %-8s  %-*s  %s\n",
            "MAC", "Vendor", "Signal", "Ch", "Seen", "Pkts",
-           "Presence", "Probing");
-    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %-8s  %s\n",
+           "Presence", RF_CELL_FULL, "Dist (est)", "Probing");
+    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %-8s  %-*s  %s\n",
            "-----------------", "------------", "------", "---",
-           "-----", "-----", "--------", "-------");
+           "-----", "-----", "--------", RF_CELL_FULL, "------------",
+           "-------");
     tui_normal();
 
     if (s->probe_count == 0) {
@@ -125,6 +127,10 @@ void view_probe_draw(const sloth_state_t *s) {
         fmt_age(c->last_seen, age, sizeof(age));
         const char *ssid   = c->ssid[0] ? c->ssid : "(wildcard)";
         const char *vstr   = oui_vendor_label(c->mac, NULL);   /* shared label */
+        /* Distance (est): P_tx is always assumed for a probe request,
+         * which is why the column header says "est". */
+        char dist[48];
+        rf_dist_cell(&c->dist, dist, sizeof(dist), RF_CELL_FULL);
 
         if (row == s->probe_sel) {
             int filled = sigbar_filled(c->signal_dbm);
@@ -132,12 +138,12 @@ void view_probe_draw(const sloth_state_t *s) {
             TPRINT(" %-17s  %-12.12s  ", mac, vstr);
             for (int i = 0; i < 6; i++)
                 TPRINT(i < filled ? "\xe2\x96\x88" : "\xe2\x96\x91");
-            TPRINT("  %3d  %5s  %5d  %-8s  %.32s\n",
+            TPRINT("  %3d  %5s  %5d  %-8s  %s  %.32s\n",
                    c->channel, age, c->frame_count,
                    presence_label(presence_classify(&c->rssi_ring,
                                                     c->first_seen,
                                                     c->last_seen, now)),
-                   ssid);
+                   dist, ssid);
             tui_reset();
         } else {
             /* MAC: intensity by age */
@@ -177,6 +183,9 @@ void view_probe_draw(const sloth_state_t *s) {
             default:                 tui_dim();      break;
             }
             TPRINT("  %-8s", presence_label(pc));
+
+            tui_dim();
+            TPRINT("  %s", dist);
 
             /* SSID: bright for named targets, dim for wildcards */
             if (c->ssid[0]) tui_bright(); else tui_dim();

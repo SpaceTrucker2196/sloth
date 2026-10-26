@@ -32,6 +32,7 @@
 #include "eapol_log.h"
 #include "reg_obs.h"           /* wifi_regulatory (#101 slice B) */
 #include "camera_join.h"       /* device_class_label() (#106 round 2) */
+#include "rf_distance.h"       /* est_dist_* (2026-10-26) */
 
 static FILE           *g_fp;
 /* Open refusal reason and write-failure count (#87), under g_mu. */
@@ -324,6 +325,21 @@ static void start_obj(char *buf, int sz, int *off, const char *type, time_t ts) 
 static void end_obj(char *buf, int sz, int *off) {
     if (*off < sz - 1) buf[(*off)++] = '}';
     buf[*off] = '\0';
+}
+
+/* The RSSI distance data point (src/rf_distance.h), additive on the
+ * records that already carry the RSSI it came from. All four fields are
+ * omitted when the row has no estimate — an absent est_dist_m means
+ * "no estimate", never 0 m. Metres leave quantised (rf_quantise_m): an
+ * estimate of a third party's proximity is not exported finer than it
+ * can honestly be known, and is never put in a change-only signature —
+ * the band and the trend are (see jsonl_emit_ble_devices). */
+static void emit_dist(char *buf, int *off, const rf_track_t *t) {
+    if (!t || !t->valid) return;
+    kv_double(buf, LINEBUF, off, "est_dist_m", rf_quantise_m(t->est_dm / 10.0));
+    kv_str(buf, LINEBUF, off, "est_dist_band",  rf_band_name(t->band));
+    kv_str(buf, LINEBUF, off, "est_dist_trend", rf_trend_name(t->trend));
+    kv_str(buf, LINEBUF, off, "est_ptx_source", rf_ptx_source_name(t->ptx_source));
 }
 
 /* ── emitters ────────────────────────────────────────────── */
@@ -897,6 +913,7 @@ void jsonl_emit_devices(const sloth_state_t *s) {
             kv_str(buf, LINEBUF, &off, "dhcp_prl",     e->dhcp_prl);
             kv_str(buf, LINEBUF, &off, "dhcp_vci",     e->dhcp_vci);
         }
+        emit_dist(buf, &off, &e->dist);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -979,6 +996,7 @@ void jsonl_emit_beacons(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "tbtt_jitter_resets",  (long long)e->tbtt.resets);
         kv_int(buf, LINEBUF, &off, "rssi_min_60s", e->rssi_min_60s);
         kv_int(buf, LINEBUF, &off, "rssi_max_60s", e->rssi_max_60s);
+        emit_dist(buf, &off, &e->dist);
         /* QBSS Load — AP self-reported occupancy (omitted when the IE
          * was absent so consumers can tell "no data" from "0"). */
         if (e->has_qbss) {
@@ -1204,6 +1222,7 @@ void jsonl_emit_probe_clients(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "flood_last",    (long long)e->flood_last);
         kv_int(buf, LINEBUF, &off, "burst_frames",  (long long)e->burst_frames);
         kv_int(buf, LINEBUF, &off, "burst_span_ms", (long long)e->burst_span_ms);
+        emit_dist(buf, &off, &e->dist);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -1540,6 +1559,8 @@ void jsonl_emit_assocs(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "first_seen",  (long long)e->first_seen);
         kv_int(buf, LINEBUF, &off, "last_seen",   (long long)e->last_seen);
         kv_int(buf, LINEBUF, &off, "frame_count", (long long)e->frame_count);
+        /* The AP's distance: every frame behind an assoc row is the AP's. */
+        emit_dist(buf, &off, &e->dist);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }
@@ -2600,14 +2621,28 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
          * when an EXT_ADV or EXT_SCAN_RSP PDU is heard, which sets that
          * PDU's pdu_mask bit, so a change in it is already a change in
          * pdu_mask. */
-        uint8_t b[17] = { d->addr_type, d->sensor_kind, d->sampled,
+        /* The distance enters as its band and trend only, both held by
+         * hysteresis (src/rf_distance.h), never as metres: a moving
+         * figure here would write the record on every snapshot. The
+         * trend is signed as approaching / leaving / neither: a row
+         * gathering its fourth point and turning "unknown" into
+         * "steady" has not changed, and signing that would write one
+         * more record for every advertiser a few seconds in (seen red
+         * with the raw trend signed: tests/test_ble_rules.c's
+         * alternating-PDU and flood cases each gained a record). */
+        uint8_t b[19] = { d->addr_type, d->sensor_kind, d->sampled,
                           d->pdu_mask, d->has_name, d->has_uuid16,
                           d->has_mfr, d->has_mfr_sub, d->mfr_sub,
                           d->has_svc_data, d->has_appearance, d->hid,
                           d->has_tx_power, d->has_flags,
                           (uint8_t)rssi_bucket(d->has_rssi, d->rssi_best),
                           (uint8_t)(d->watch_cat[0] != '\0'),
-                          (uint8_t)(d->adapter & 0xff) };
+                          (uint8_t)(d->adapter & 0xff),
+                          d->dist.valid ? d->dist.band : 0,
+                          (uint8_t)(d->dist.valid &&
+                                    (d->dist.trend == RF_TREND_APPROACHING ||
+                                     d->dist.trend == RF_TREND_LEAVING)
+                                    ? d->dist.trend : 0) };
         h = fnv1a(b, sizeof(b), h);
         h = fnv1a(&d->mfr_id, sizeof(d->mfr_id), h);
         if (!jsonl_changed(JD_BLE_DEVICE, key, sizeof(key), h, now)) continue;
@@ -2647,6 +2682,7 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "adv_sid", d->adv_sid == 0xFF ? -1 : d->adv_sid);
         kv_int(buf, LINEBUF, &off, "first_seen", (long long)d->first_seen);
         kv_int(buf, LINEBUF, &off, "last_seen", (long long)d->last_seen);
+        emit_dist(buf, &off, &d->dist);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
     }

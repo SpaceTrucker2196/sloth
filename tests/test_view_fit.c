@@ -5,6 +5,7 @@
 #include "runner.h"
 #include "tui.h"
 #include "sloth.h"
+#include "rf_distance.h"
 
 /* Every list view's page at the documented minimum terminal, 100x33,
  * drawn through tui_draw() so the tab bar's wrapped rows - six of them
@@ -59,6 +60,16 @@ static void mac_of(uint8_t mac[6], uint8_t second, int i) {
 }
 
 /* ── fixtures ─────────────────────────────────────────────── */
+
+/* A distance estimate with a trend, so every row carries the widest
+ * cell and a three-octet arrow: the clip and the column plans have to
+ * count it as one cell, not three. 27.4 m, building, approaching. */
+static void dist_of(rf_track_t *t) {
+    memset(t, 0, sizeof(*t));
+    t->valid = 1; t->est_dm = 274; t->lo_dm = 120; t->hi_dm = 624;
+    t->band = RF_DIST_BUILDING; t->trend = RF_TREND_APPROACHING;
+    t->ptx_source = RF_PTX_ASSUMED; t->ptx_dbm = 20;
+}
 
 static int seed_ntp(sloth_state_t *s, time_t now) {
     s->ntp_log_count = MAX_NTP_LOG;
@@ -320,6 +331,7 @@ static int seed_probe(sloth_state_t *s, time_t now) {
         snprintf(c->ssid, sizeof(c->ssid), "%s", "A-thirty-two-octet-SSID-name-XYZ");
         c->signal_dbm = -60; c->channel = 6;
         c->first_seen = now - 100; c->last_seen = now; c->frame_count = 12;
+        dist_of(&c->dist);
     }
     s->probe_sel = s->probe_count - 1;
     return s->probe_count;
@@ -353,6 +365,7 @@ static int seed_beacon(sloth_state_t *s, time_t now) {
         snprintf(ap->enc, sizeof(ap->enc), "WPA2");
         snprintf(ap->vendor, sizeof(ap->vendor), "Ubiquiti");
         ap->last_seen = now;
+        dist_of(&ap->dist);
     }
     s->beacon_sel = s->beacon_count - 1;
     /* An 802.11k survey, so the one-line footer under the table is
@@ -437,6 +450,7 @@ static int seed_ble(sloth_state_t *s, time_t now) {
         snprintf(d->sensor_iface, sizeof(d->sensor_iface), "bluetooth-monitor");
         d->adv_count = 40; d->first_seen = now; d->last_seen = now;
         d->has_rssi = 1; d->rssi = -60;
+        dist_of(&d->dist);
     }
     s->ble_sel = s->ble_device_count - 1;
     return s->ble_device_count;
@@ -450,6 +464,7 @@ static int seed_devices(sloth_state_t *s, time_t now) {
         ip_of(d->ip, sizeof(d->ip), i);
         snprintf(d->hostname, sizeof(d->hostname), "workstation-%d", i);
         d->last_seen = now;
+        dist_of(&d->dist);
     }
     s->device_sel = s->device_count - 1;
     return s->device_count;
@@ -1078,6 +1093,95 @@ static void test_iface_health_strip_reads_whole_at_100x33(void) {
     tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
 }
 
+/* ── the distance column (2026-10-26) ─────────────────────── */
+
+/* The selected row's text at rows x cols, for the view `c` names. */
+static int selected_line(const fit_case_t *c, sloth_state_t *s, int rows,
+                         int cols, char *out, size_t n) {
+    memset(s, 0, sizeof(*s));
+    c->seed(s, time(NULL));
+    s->active_view = c->view;
+    if (tui_init_offscreen(rows, cols) != 0) return -1;
+    tui_test_erase();
+    tui_draw(s);
+    for (int y = 0; y < rows; y++) {
+        if (tui_test_line(y, out, n) < 0) break;
+        if (strstr(out, c->marker) && selected_row(y)) return y;
+    }
+    return -1;
+}
+
+/* The estimate is on screen at the 100x33 minimum where the view has
+ * room for it, and in the form that view's plan chose: the full cell
+ * on Probe and Beacons (whose rows are cut at the edge anyway, so the
+ * cell sits left of the cut), the short one on BLE. Devices gives the
+ * cell up first at 100 columns - its name column was 15 cells and stays
+ * 15 - and draws it on a wide terminal. The Devices absence was seen
+ * red with plan_cols() keeping the short cell at any width (the 100-
+ * column row then carried "~27m"). */
+static void test_distance_column_reads_at_100x33(void) {
+    static sloth_state_t s;
+    char line[4096];
+    const char *full  = "~27m bldg \xe2\x86\x98";
+    const char *shrt  = "~27m\xe2\x86\x98";
+    ASSERT(selected_line(&C_PROBE, &s, FIT_ROWS, FIT_COLS, line, sizeof(line)) >= 0);
+    ASSERT(strstr(line, full) != NULL);
+    ASSERT(selected_line(&C_BEACON, &s, FIT_ROWS, FIT_COLS, line, sizeof(line)) >= 0);
+    ASSERT(strstr(line, full) != NULL);
+    ASSERT(selected_line(&C_BLE, &s, FIT_ROWS, FIT_COLS, line, sizeof(line)) >= 0);
+    ASSERT(strstr(line, shrt) != NULL);
+    ASSERT(selected_line(&C_DEVICES, &s, FIT_ROWS, FIT_COLS, line, sizeof(line)) >= 0);
+    ASSERT(strstr(line, "~27m") == NULL);
+    ASSERT(strstr(line, "workstation-") != NULL);
+    /* Wide: BLE and Devices both take the full form. */
+    ASSERT(selected_line(&C_BLE, &s, BIG_ROWS, BIG_COLS, line, sizeof(line)) >= 0);
+    ASSERT(strstr(line, full) != NULL);
+    ASSERT(selected_line(&C_DEVICES, &s, BIG_ROWS, BIG_COLS, line, sizeof(line)) >= 0);
+    ASSERT(strstr(line, full) != NULL);
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
+/* [a] Associations was 118 columns and wrapped at 100 before the
+ * distance cell made it 126; it now cuts at the edge like every other
+ * table (#150), with the cell left of the cut. Seen red with its
+ * tui_clip_rows(1) removed: every row reached column 100. The view
+ * draws every row (MAX_ASSOC_ENTRIES is not paged), so this seeds a
+ * screenful rather than an overfull table. */
+static void test_assoc_rows_cut_at_100_with_distance(void) {
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    time_t now = time(NULL);
+    s.assoc_count = 5;
+    for (int i = 0; i < s.assoc_count; i++) {
+        assoc_t *a = &s.assocs[i];
+        mac_of(a->bssid, 0xfa, i);
+        mac_of(a->sta_mac, 0xfb, i);
+        snprintf(a->ssid, sizeof(a->ssid), "A-sixteen-octet-");
+        a->channel = 6; a->signal_dbm = -60; a->source = ASSOC_SRC_EAPOL;
+        a->first_seen = now; a->last_seen = now;
+        dist_of(&a->dist);
+    }
+    s.active_view = VIEW_ASSOC;
+    ASSERT_EQ(tui_init_offscreen(FIT_ROWS, FIT_COLS), 0);
+    tui_test_erase();
+    tui_draw(&s);
+    char line[4096];
+    int wide = 0, rows = 0, cells = 0;
+    for (int y = 0; y < FIT_ROWS; y++) {
+        if (tui_test_line(y, line, sizeof(line)) < 0) break;
+        if (strncmp(line, "\xe2\x94\x80", 3) == 0) continue;
+        if (line_cells(line) >= FIT_COLS) wide++;
+        if (!strstr(line, "02:fa:")) continue;
+        rows++;
+        if (strstr(line, "~27m\xe2\x86\x98")) cells++;
+    }
+    if (wide || rows != 5 || cells != 5) tui_test_dump(stderr);
+    ASSERT_EQ(wide, 0);
+    ASSERT_EQ(rows, 5);
+    ASSERT_EQ(cells, 5);
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
 /* ── a large terminal ─────────────────────────────────────── */
 
 /* The same checks at 200 columns and 60 rows (38 for the three tables
@@ -1144,5 +1248,7 @@ void run_view_fit_tests(void) {
     RUN_TEST(test_research_uncited_fits_100x33);
     RUN_TEST(test_research_truncated_fits_100x33);
     RUN_TEST(test_iface_health_strip_reads_whole_at_100x33);
+    RUN_TEST(test_distance_column_reads_at_100x33);
+    RUN_TEST(test_assoc_rows_cut_at_100_with_distance);
     RUN_TEST(test_every_list_view_fills_a_large_terminal);
 }

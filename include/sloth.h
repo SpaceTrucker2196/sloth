@@ -10,6 +10,7 @@
  * the type. */
 #include "reg_ie.h"
 #include "reg_6g.h"   /* beacon_ap_t embeds reg_6g_t too (#101 slice B) */
+#include "rf_track.h" /* the distance data point rows embed (2026-10-26) */
 
 /* The view and alert-type lists, each generated from its own .def
  * (#117). Re-included here so every file that took view_t or
@@ -807,6 +808,9 @@ typedef struct {
     int     cam_conflict;
     char    dhcp_prl[96];
     char    dhcp_vci[64];
+    /* Copied from the beacon or probe row signal_dbm came from, the same
+     * last-writer rule; invalid for a record with no monitor-mode row. */
+    rf_track_t dist;
 } device_t;
 
 /* Human-readable bucket name for the alerts view / JSONL. */
@@ -1653,6 +1657,9 @@ typedef struct {
     uint64_t ev_ids[BEACON_EVIDENCE_IDS];
     uint8_t  ev_n, ev_head;
     uint64_t ssid_history_ev[MAX_AP_SSID_HISTORY];
+    /* Distance from signal strength, a data point (src/rf_distance.h):
+     * an estimate, never a location, and no rule reads it. */
+    rf_track_t dist;
 } beacon_ap_t;
 
 /* True when `ap` names `bssid` in its 802.11k Neighbor Report list. */
@@ -1818,6 +1825,7 @@ typedef struct {
     uint32_t burst_span_ms;
     int      flood;       /* threshold met within PROBE_FLOOD_HOLD_SECS (decays) */
     time_t   flood_last;  /* wall time it was last met; 0 = never */
+    rf_track_t dist;      /* distance data point, src/rf_distance.h; P_tx always assumed */
 } probe_client_t;
 
 /* Probe-request flood (#88): at least PROBE_FLOOD_FRAMES requests from
@@ -2009,6 +2017,10 @@ typedef struct {
     time_t  first_seen;
     time_t  last_seen;
     int     frame_count;
+    /* Distance data point (src/rf_distance.h). Every source behind this
+     * row — (re)association response, EAPOL M3 — is a frame the AP sent,
+     * so this is the AP's distance from the sensor, not the client's. */
+    rf_track_t dist;
 } assoc_t;
 
 /* ── Association / reassociation REQUEST (#60) ─────────────
@@ -2754,6 +2766,11 @@ typedef struct {
     uint8_t  secondary_phy;    /* 0 none or unknown, 0x01 1M, 0x02 2M, 0x03 Coded (S=8), 0x04 Coded S=2 */
     uint8_t  adv_sid;          /* 0x00..0x0F, 0xFF none (every legacy PDU) */
     ble_identity_hint_t hint;  /* #156: internal only, all zero with the flag off */
+    /* TX_Power from the 0x0D report header (Core v6.0 Vol 4 Part E
+     * §7.7.65.13), last report that carried one; 0x7F never sets it. */
+    uint8_t  has_ext_tx_power;
+    int8_t   ext_tx_power;
+    rf_track_t dist;           /* distance data point, src/rf_distance.h */
 } ble_device_t;
 
 /* #156 item 2: the rotation-hint feature's aggregate state, copied by

@@ -60,6 +60,7 @@
 #include "beacon_detect.h"
 #include "transit.h"
 #include "presence.h"
+#include "rf_distance.h"
 #include "jsonl.h"
 #include "db.h"
 
@@ -138,6 +139,10 @@ static void st_wifi_snapshots(sloth_state_t *s, const poll_ctx_t *ctx) {
     mle_snapshot(s);
     cp_snapshot(s);
     beacon_snapshot(s);
+    /* The operator's own AP sets the distance calibration (--tune
+     * rf.ref_dist_dm with --my-bssid); the capture threads read it
+     * from the next frame on. */
+    rf_calibration_update(s);
     deauth_snapshot(s);
 }
 

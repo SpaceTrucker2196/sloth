@@ -309,26 +309,27 @@ static void test_list_reg_column_flexes_with_width(void) {
     ASSERT_SCREEN_HAS("US/O TPC17 PC3");
     ASSERT(list_row_on_one_line());
 
-    /* 145 columns leave 145 - 132 = 13 for REG: room for two tokens. */
-    draw_at(40, 145);
+    /* 159 columns leave 159 - 146 = 13 for REG: room for two tokens.
+     * (146: the row before REG gained the 14-cell distance column.) */
+    draw_at(40, 159);
     ASSERT_SCREEN_HAS("US/O TPC17");
     ASSERT_SCREEN_LACKS("PC3");
     ASSERT(list_row_on_one_line());
 
-    /* 136 is the narrowest that fits the 4-cell floor on one line. */
-    draw_at(40, 136);
+    /* 150 is the narrowest that fits the 4-cell floor on one line. */
+    draw_at(40, 150);
     ASSERT_SCREEN_HAS("US/O");
     ASSERT(list_row_on_one_line());
 
     /* Below it the column is dropped, not forced in: rows that fit
-     * without REG (129-135 columns) must not start wrapping because of
+     * without REG (143-149 columns) must not start wrapping because of
      * it. Seen to fail with the floor clamped up (REG drawn at 4 cells)
      * instead of dropped. */
-    draw_at(40, 135);
+    draw_at(40, 149);
     ASSERT_SCREEN_LACKS("US/O");
     ASSERT_SCREEN_LACKS("REG");
     ASSERT(list_row_on_one_line());
-    draw_at(40, 130);
+    draw_at(40, 144);
     ASSERT_SCREEN_LACKS("US/O");
     ASSERT(list_row_on_one_line());
 

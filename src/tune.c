@@ -19,6 +19,7 @@
 #include "db.h"
 #include "eapol_log.h"
 #include "presence.h"
+#include "rf_distance.h"
 #include "queue_evict.h"
 #include "seqnum_track.h"
 #include "transit.h"
@@ -248,6 +249,15 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "ble.flood_rate",             BLE_FLOOD_RATE, 1, 10000, "advertisements per second on that key, over the whole window" },
     { "ble.hid_rotate_addrs",       BLE_HID_ROTATE_ADDRS, 2, MAX_BLE_DEVICES, "new random addresses advertising a HID appearance on one sensor per window" },
     { "ble.hid_rotate_window_s",    BLE_HID_ROTATE_WINDOW_S, 60, 86400, "seconds in the BLE_HID_UNEXPECTED rotation window; also how long a sensor listens before the form can fire" },
+    /* RSSI distance (2026-10-26). N x 10 from ITU-R P.1238-10 Table 2
+     * (residential); the bounds bracket its corridor ~18 and its worst
+     * ~44 rows. ref_dist_dm 0 is "no calibration", which is why it alone
+     * among these may be 0. research/papers/rssi-distance-estimation.md. */
+    { "rf.path_loss_n_2g",          RF_N_2G_X10, RF_N_X10_LO, RF_N_X10_HI, "distance power loss coefficient N x10, 2.4 GHz Wi-Fi and BLE (ITU-R P.1238-10 residential 28)" },
+    { "rf.path_loss_n_5g",          RF_N_5G_X10, RF_N_X10_LO, RF_N_X10_HI, "N x10, 5 GHz (P.1238-10 5.2 GHz residential 30)" },
+    { "rf.path_loss_n_6g",          RF_N_6G_X10, RF_N_X10_LO, RF_N_X10_HI, "N x10, 6 GHz (no P.1238 row; the 5 GHz value)" },
+    { "rf.median_k",                RF_MEDIAN_K, 1, RF_RAW_MAX, "RSSI samples the distance median takes" },
+    { "rf.ref_dist_dm",             0, 0, RF_REF_DIST_DM_HI, "decimetres from the sensor to the --my-bssid AP for distance calibration, 0 for none" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

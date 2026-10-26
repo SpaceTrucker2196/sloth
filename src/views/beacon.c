@@ -19,6 +19,7 @@
 #include "eap_parse.h"   /* WSC_OP_* and wsc_msg_name() */
 #include "tune.h"        /* wps.pixie_silence_s */
 #include "reg_obs.h"     /* REG column + power observation (#101 slice B) */
+#include "rf_distance.h" /* the Dist (est) column */
 
 #define BEACON_PAGE 30
 
@@ -264,7 +265,7 @@ static void draw_detail_stack_measures(const beacon_ap_t *ap) {
  * takes what the terminal has left after them, between a floor that
  * still shows a country and its environment ("US/I") and a ceiling past
  * which the tokens run out. REG_COL_FIXED is the rest of the row: the
- * leading space, the eleven columns before REG with their separators,
+ * leading space, the twelve columns before REG with their separators,
  * REG's own separator, and "  Last". Below the floor the column is not
  * drawn at all (width 0, separator included): forcing it in would wrap
  * a row that fits without it, and the detail screen carries the same
@@ -272,7 +273,7 @@ static void draw_detail_stack_measures(const beacon_ap_t *ap) {
 #define REG_COL_MIN    4
 #define REG_COL_MAX   28
 #define REG_COL_ANSI  14
-#define REG_COL_FIXED (1 + 122 + 2 + 6)
+#define REG_COL_FIXED (1 + 122 + 2 + RF_CELL_FULL + 2 + 6)
 
 static int reg_column_width(void) {
 #ifdef WITH_NCURSES
@@ -503,7 +504,13 @@ static void draw_beacon_detail(const sloth_state_t *s) {
         if (frac > 1) frac = 1;
         tui_heat(frac);
     }
-    TPRINT("%d dBm\n", ap->signal_dbm);
+    TPRINT("%d dBm", ap->signal_dbm);
+    {
+        /* Same line, so the detail page's row budget is unchanged. */
+        char dd[128];
+        rf_dist_describe(&ap->dist, dd, sizeof(dd));
+        tui_dim(); TPRINT("  dist %s\n", dd);
+    }
     tui_dim(); TPRINT("  Beacon intv: "); tui_normal();
     TPRINT("%u ms\n", (unsigned)ap->beacon_ms);
     tui_dim(); TPRINT("  PHY tier:    ");
@@ -768,14 +775,14 @@ void view_beacon_draw(const sloth_state_t *s) {
 
     tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
-    TPRINT(" %-22s  %-17s  %4s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s",
-           "SSID", "BSSID", "Sig", "Ch", "Enc",
+    TPRINT(" %-22s  %-17s  %4s  %-*s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s",
+           "SSID", "BSSID", "Sig", RF_CELL_FULL, "Dist (est)", "Ch", "Enc",
            "Pairwise", "posture", "AKM", "WPS", "Vendor", "PHY");
     if (reg_w) TPRINT("  %-*s", reg_w, "REG");
     TPRINT("  %4s\n", "Last");
-    TPRINT(" %-22s  %-17s  %4s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s",
+    TPRINT(" %-22s  %-17s  %4s  %-*s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s",
            "----------------------", "-----------------",
-           "----", "-------", "-----", "---------", "--------",
+           "----", RF_CELL_FULL, "------------", "-------", "-----", "---------", "--------",
            "----------", "---", "---------", "--------");
     if (reg_w) TPRINT("  %-*s", reg_w, reg_rule);
     TPRINT("  %4s\n", "----");
@@ -860,6 +867,8 @@ void view_beacon_draw(const sloth_state_t *s) {
 
         char sig_buf[8];
         snprintf(sig_buf, sizeof(sig_buf), "%d", ap->signal_dbm);
+        char dist[48];
+        rf_dist_cell(&ap->dist, dist, sizeof(dist), RF_CELL_FULL);
 
         int age = (int)(now - ap->last_seen);
         char age_buf[16];
@@ -908,8 +917,8 @@ void view_beacon_draw(const sloth_state_t *s) {
 
         if (row == s->beacon_sel) {
             tui_sel();
-            TPRINT(" %-22.22s  %-17.17s  %4s  %-7s  %-5.5s  %-9.9s  %-8s  %-10.10s  %-3s  %-9.9s  %-8.8s",
-                   ssid, bssid_str(ap->bssid), sig_buf, ch_buf,
+            TPRINT(" %-22.22s  %-17.17s  %4s  %s  %-7s  %-5.5s  %-9.9s  %-8s  %-10.10s  %-3s  %-9.9s  %-8.8s",
+                   ssid, bssid_str(ap->bssid), sig_buf, dist, ch_buf,
                    ap->enc, pw, mfp_s, akm, wps_s, vend, phy_s);
             if (reg_w) TPRINT("  %-*s", reg_w, reg_buf);
             TPRINT("  %s\n", age_buf);
@@ -926,6 +935,10 @@ void view_beacon_draw(const sloth_state_t *s) {
             double frac = (ap->signal_dbm + 90.0) / 60.0;  /* -90=0.0, -30=1.0 */
             tui_heat(frac);
             TPRINT("  %4s", sig_buf);
+
+            /* An estimate from signal strength, never a location. */
+            tui_dim();
+            TPRINT("  %s", dist);
 
             tui_normal();
             TPRINT("  %-7s", ch_buf);

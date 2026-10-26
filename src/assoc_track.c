@@ -11,6 +11,7 @@
 #include "dot11_frame.h"
 #include "bytes.h"
 #include "ev_cite.h"
+#include "rf_distance.h"
 
 static assoc_t         g_tbl[MAX_ASSOC_ENTRIES];
 static int             g_n   = 0;
@@ -457,6 +458,15 @@ void assoc_observe(const uint8_t bssid[6], const uint8_t sta[6],
     g_tbl[idx].frame_count++;
     g_tbl[idx].signal_dbm = signal;
     if (channel > 0) g_tbl[idx].channel = channel;
+    {
+        /* Every caller hands over a frame the AP sent, so the estimate
+         * is the AP's, at the assumed AP power: the response carries no
+         * TPC Report, and the beacon table's is behind another lock. */
+        rf_ctx_t ctx;
+        rf_ctx_assumed(&ctx, g_tbl[idx].channel, WIFI_BAND_UNKNOWN,
+                       RF_PTX_AP_ASSUMED);
+        rf_track_observe(&g_tbl[idx].dist, signal, now, &ctx);
+    }
     if (source_rank(source) > source_rank(g_tbl[idx].source))
         g_tbl[idx].source = source;
     /* Fill SSID if we don't have it yet — prefer the caller-supplied

@@ -126,5 +126,25 @@ No row, and no detail, says which addresses were joined
 - A row count pinned at 256 with `evict_ble_device` climbing in
   `sensor_health`: an address-rotation spray is churning the table.
 
+## Distance estimate (2026-10-26)
+
+The `DIST` column (short `~27m↘` at 100 columns, full from 106) and a
+`distance (est)` line in the detail. An **estimate from signal strength**: walls and reflections dominate,
+and it is not a location. The median of the row's last 8 RSSI samples
+goes through ITU-R P.1238's indoor log-distance model; the cell reads
+`~27m bldg ↘` — metres, band (`imm` < 1 m, `near` 1–3, `room` 3–10,
+`bldg` 10–30, `far` > 30) and trend (↘ approaching, → steady, ↗
+leaving, blank until enough samples); `-` is no estimate (an RSSI of 0
+is no sample, never 1 m). The typical indoor error is a factor of two,
+five when a body or a wall is in the way. No alert rule reads it. Model,
+sources and knobs: `docs/wiki/rf-distance.md`.
+
+The advertiser's own power is used when it states one — the extended
+report header's TX_Power first, then the TX Power Level AD structure —
+else an assumed 0 dBm. A Wi-Fi calibration never applies here: the BLE
+controller is a different receiver. In JSONL the change-only
+`ble_device` signature takes the band and an approaching / leaving
+trend, never the metres.
+
 See [`alerts.md`](alerts.md) for each rule's gates and the sources they
 rest on, and `research/bluetooth/` for the documents.

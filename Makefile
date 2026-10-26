@@ -39,6 +39,7 @@ CORE_COMMON_SRCS = \
        src/radiotap.c      \
        src/wifi_freq.c     \
        src/rf_quality.c    \
+       src/rf_distance.c   \
        src/db_schema.c     \
        src/history.c       \
        src/bandwidth.c     \

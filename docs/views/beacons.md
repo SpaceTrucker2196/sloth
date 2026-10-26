@@ -612,6 +612,26 @@ never heard tells us nothing about what it does or does not advertise.
 - **Sudden signal jump** (an existing SSID's signal goes from -80 to
   -40) — someone planted a copy of your network closer to the target.
 
+## Distance estimate (2026-10-26)
+
+The `Dist (est)` column, right of `Sig`, and the `dist` text on the
+detail page's Signal line with its interval and power source. An **estimate from signal strength**: walls and reflections dominate,
+and it is not a location. The median of the row's last 8 RSSI samples
+goes through ITU-R P.1238's indoor log-distance model; the cell reads
+`~27m bldg ↘` — metres, band (`imm` < 1 m, `near` 1–3, `room` 3–10,
+`bldg` 10–30, `far` > 30) and trend (↘ approaching, → steady, ↗
+leaving, blank until enough samples); `-` is no estimate (an RSSI of 0
+is no sample, never 1 m). The typical indoor error is a factor of two,
+five when a body or a wall is in the way. No alert rule reads it. Model,
+sources and knobs: `docs/wiki/rf-distance.md`.
+
+The AP's power is the one thing a beacon can state: a TPC Report
+(`Ptx … tpc`) is used first, then the Country element's ceiling less
+any Power Constraint (`ceiling` — an upper bound, so the distance is
+one too), else an assumed 20 dBm. `--my-bssid` with `--tune
+rf.ref_dist_dm=N` calibrates the band from the operator's own AP at
+N/10 m (`cal`).
+
 ## See also
 
 - Parser: [`src/beacon_snoop.c`](../../src/beacon_snoop.c).

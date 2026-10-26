@@ -83,6 +83,7 @@
     X(queue_evict_clear) \
     X(quic_log_clear) \
     X(rdp_snoop_clear) \
+    X(rf_calibration_reset) \
     X(rf_quality_clear) \
     X(rrm_clear) \
     X(rtsp_snoop_clear) \

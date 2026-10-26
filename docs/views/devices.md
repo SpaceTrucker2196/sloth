@@ -260,6 +260,23 @@ breakdown.
   one IP inside the join window, a spoofed answer) or the box is both,
   which is worth knowing too. Read both lists in the detail.
 
+## Distance estimate (2026-10-26)
+
+A `Dist (est)` column (short `~m` form from 108 columns, full from
+122) and a `Distance` line on the detail page, copied from the beacon
+or probe row the record's signal came from. An **estimate from signal strength**: walls and reflections dominate,
+and it is not a location. The median of the row's last 8 RSSI samples
+goes through ITU-R P.1238's indoor log-distance model; the cell reads
+`~27m bldg ↘` — metres, band (`imm` < 1 m, `near` 1–3, `room` 3–10,
+`bldg` 10–30, `far` > 30) and trend (↘ approaching, → steady, ↗
+leaving, blank until enough samples); `-` is no estimate (an RSSI of 0
+is no sample, never 1 m). The typical indoor error is a factor of two,
+five when a body or a wall is in the way. No alert rule reads it. Model,
+sources and knobs: `docs/wiki/rf-distance.md`.
+
+At 100 columns the column is not drawn: the name column keeps its 15
+cells, and the detail page still carries the estimate.
+
 ## See also
 
 - [`arp.md`](arp.md), [`dhcp.md`](dhcp.md), [`beacons.md`](beacons.md),
