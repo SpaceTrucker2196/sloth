@@ -265,6 +265,34 @@ static void test_capture_records_inside_a_pass(void) {
 
 /* ── alerts ───────────────────────────────────────────────────────── */
 
+/* An alert's match_ip reaches /api/live (the page's alert-hot colour),
+ * an address or nothing: markup, a word or one byte over the cap is
+ * dropped, not cut. Seen red with match_ip_ok() accepting any non-empty
+ * string. */
+static void test_alert_match_ip(void) {
+    fresh();
+    feed("{\"type\":\"alert.create\",\"ts\":1,\"incident_id\":\"a\",\"sev\":2,"
+         "\"title\":\"SMB1_USE\",\"detail\":\"d\",\"match_ip\":\"192.0.2.20\"}\n"
+         "{\"type\":\"alert.create\",\"ts\":2,\"incident_id\":\"b\",\"sev\":1,"
+         "\"title\":\"T\",\"detail\":\"d\",\"match_ip\":\"2001:db8::1\"}\n"
+         "{\"type\":\"alert.create\",\"ts\":3,\"incident_id\":\"c\",\"sev\":1,"
+         "\"title\":\"T\",\"detail\":\"d\",\"match_ip\":\"<b>x</b>\"}\n"
+         "{\"type\":\"alert.create\",\"ts\":4,\"incident_id\":\"d\",\"sev\":1,"
+         "\"title\":\"T\",\"detail\":\"d\","
+         "\"match_ip\":\"ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.2555\"}\n"
+         "{\"type\":\"alert.create\",\"ts\":5,\"incident_id\":\"e\",\"sev\":0,"
+         "\"title\":\"T\",\"detail\":\"d\"}\n");
+    const char *j = live_json();
+    WT_HAS(j, "\"ts\":1,\"type\":\"alert.create\",\"sev\":2,\"title\":\"SMB1_USE\","
+              "\"detail\":\"d\",\"incident_id\":\"a\",\"match_ip\":\"192.0.2.20\"}");
+    WT_HAS(j, "\"incident_id\":\"b\",\"match_ip\":\"2001:db8::1\"}");
+    WT_HAS(j, "\"incident_id\":\"c\",\"match_ip\":\"\"}");
+    WT_HAS(j, "\"incident_id\":\"d\",\"match_ip\":\"\"}");
+    WT_HAS(j, "\"incident_id\":\"e\",\"match_ip\":\"\"}");
+    WT_LACKS(j, "<b>");
+    done();
+}
+
 static void test_alert_lifecycle_counts(void) {
     fresh();
     feed("{\"type\":\"alert.create\",\"ts\":1,\"incident_id\":\"aaaa\",\"title\":\"A\",\"detail\":\"a\",\"sev\":2}\n"
@@ -570,8 +598,9 @@ static void test_worst_case_live_fits(void) {
     for (int i = 0; i < WEB_LIVE_ALERTS; i++) {
         snprintf(line, sizeof(line),
                  "{\"type\":\"alert.escalate\",\"ts\":-9223372036854775807,"
-                 "\"incident_id\":\"%.32s\",\"sev\":2,\"title\":\"%s\",\"detail\":\"%s\"}\n",
-                 big, big, big);
+                 "\"incident_id\":\"%.32s\",\"sev\":2,\"title\":\"%s\",\"detail\":\"%s\","
+                 "\"match_ip\":\"%.45s\"}\n",
+                 big, big, big, "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255");
         feed(line);
     }
     for (int i = 0; i < WEB_LIVE_RING; i++) {
@@ -688,6 +717,7 @@ void run_live_tests(void) {
     WT_RUN(test_reconnect_is_a_new_stream);
     WT_RUN(test_capture_records_inside_a_pass);
     WT_RUN(test_alert_lifecycle_counts);
+    WT_RUN(test_alert_match_ip);
     WT_RUN(test_incident_table_cap);
     WT_RUN(test_types_counted_by_plausible_name);
     WT_RUN(test_records_per_second);

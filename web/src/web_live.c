@@ -251,6 +251,23 @@ static int inc_find(const web_live_t *l, const char *id) {
     return -1;
 }
 
+/* An address as sloth writes one (inet_ntop), or nothing: 1 to
+ * WEB_LIVE_IP_MAX bytes of [0-9A-Fa-f:.]. The page colours the address
+ * an alert names (the TUI's alert-hot override, tui_alert_hot_set()),
+ * and checks it again; anything else is not an address and is dropped,
+ * not cut to fit. */
+static int match_ip_ok(const char *s) {
+    size_t n = s ? strlen(s) : 0;
+    if (n == 0 || n > WEB_LIVE_IP_MAX) return 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') ||
+              c == ':' || c == '.'))
+            return 0;
+    }
+    return 1;
+}
+
 static void alert_record(web_live_t *l, const web_jrec_t *r, const char *t,
                          long long ts) {
     const char *id = web_jl_str(r, "incident_id");
@@ -283,6 +300,8 @@ static void alert_record(web_live_t *l, const web_jrec_t *r, const char *t,
     web_utf8_copy(a->title, WEB_LIVE_TITLE_MAX, ti ? ti : "");
     web_utf8_copy(a->detail, WEB_LIVE_DETAIL_MAX, de ? de : "");
     if (id) web_utf8_copy(a->incident, WEB_LIVE_ID_MAX, id);
+    const char *ip = web_jl_str(r, "match_ip");
+    if (match_ip_ok(ip)) snprintf(a->match_ip, sizeof(a->match_ip), "%s", ip);
 }
 
 static void sensor_record(web_live_t *l, const web_jrec_t *r, long long ts,
@@ -555,6 +574,7 @@ size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms) {
         web_jw_raw(&w, ",\"title\":"); web_jw_str(&w, a->title);
         web_jw_raw(&w, ",\"detail\":"); web_jw_str(&w, a->detail);
         web_jw_raw(&w, ",\"incident_id\":"); web_jw_str(&w, a->incident);
+        web_jw_raw(&w, ",\"match_ip\":"); web_jw_str(&w, a->match_ip);
         web_jw_raw(&w, "}");
     }
     web_jw_raw(&w, "]");

@@ -47,13 +47,27 @@
   var $ = function (id) { return document.getElementById(id); };
   var TICKER_MAX = 50;
   var NOSQL = false;
+  // The records src/jsonl.c emits from the monitor radio's state: the
+  // emitters jsonl_emit_state_snapshots() calls from beacons to EAPOL,
+  // less the captive-portal events (body, DNS answer, TLS destination:
+  // the IP capture). Each is a monitor row on the ticker, as packets.c
+  // draws a monitor frame (web/tests/test_tui_colors.c pins the list
+  // against jsonl.c).
+  var MON_TYPES = [
+    "beacon", "wifi_regulatory", "deauth", "probe_client", "pnl_client",
+    "seqnum_client", "seqnum_correlation", "channel_summary", "assoc",
+    "wifi_assoc_req", "btm_request", "wifi_csa_event", "rrm_beacon_request",
+    "wifi_mld", "eapol"
+  ];
   var TYPE_CLASS = {
     "dns": "t-dns", "tls": "t-tls", "http": "t-http", "quic": "t-quic",
-    "icmp": "t-icmp", "arp": "t-arp", "beacon": "t-wifi",
-    "wifi_ap": "t-wifi", "wifi_sta": "t-wifi", "probe_client": "t-wifi",
+    "icmp": "t-icmp", "arp": "t-arp",
+    "wifi_ap": "t-wifi", "wifi_sta": "t-wifi",
     "alert": "t-alert", "alert.create": "t-alert", "alert.update": "t-alert",
     "alert.escalate": "t-alert", "alert.resolve": "t-alert"
   };
+  MON_TYPES.forEach(function (t) { TYPE_CLASS[t] = "t-wifi"; });
+  function isMon(t) { return MON_TYPES.indexOf(t) >= 0; }
   var SEV_WORD = ["low", "warn", "crit"];
   // §6's kinds, each with a glyph so a card reads in greyscale too.
   var KINDS = ["rate", "new", "hours", "ident", "fanout", "dns", "proto",
@@ -170,9 +184,15 @@
   // The source a ticker record's addresses count toward.
   var RECORD_SRC = {
     "t-dns": IP_SRC.dns, "t-icmp": IP_SRC.icmp, "t-arp": IP_SRC.arp,
-    "t-alert": IP_SRC.alert, "t-tls": IP_SRC.pkt, "t-http": IP_SRC.pkt,
+    "t-alert": 0, "t-tls": IP_SRC.pkt, "t-http": IP_SRC.pkt,
     "t-quic": IP_SRC.pkt, "t-other": IP_SRC.pkt
   };
+  // ip_index_build() adds an alert's match_ip under IP_SRC_ALERT and
+  // nothing else of it: the other addresses an alert's text names are
+  // coloured but counted toward no source (alertText(), noteAlertIp()).
+  function recordSrc(cls) {
+    return Object.prototype.hasOwnProperty.call(RECORD_SRC, cls) ? RECORD_SRC[cls] : IP_SRC.pkt;
+  }
   var IPX = new Map();
   function crossPanel(m) { return (m & (m - 1)) !== 0; }
   function ipNote(ip, bit) {
@@ -192,6 +212,44 @@
       }
     }
     return e;
+  }
+
+  // tui_alert_hot_set() / tui_alert_hot_check() (src/tui.c): an address
+  // an alert names as its match_ip is drawn in CP_ALERT_HOT_* by the
+  // alert's severity for ALERT_HOT_TTL_S after the alert was last seen,
+  // over the hash colour and the cross-panel bold; promotion only, the
+  // newest time kept, 256 slots with the oldest replaced.
+  var HOT_TTL_S = 3600;
+  var HOT_CAP = 256;
+  var HOT = new Map();
+  function hotSet(ip, t, sev) {
+    if (!ip) return;
+    if (sev < 0) sev = 0;
+    if (sev > 2) sev = 2;
+    var e = HOT.get(ip);
+    if (e) {
+      if (t > e.t) e.t = t;
+      if (sev > e.sev) e.sev = sev;
+      return;
+    }
+    if (HOT.size >= HOT_CAP) {
+      var old = null;
+      HOT.forEach(function (v, k) { if (old === null || v.t < HOT.get(old).t) old = k; });
+      HOT.delete(old);
+    }
+    HOT.set(ip, { t: t, sev: sev });
+  }
+  function hotCheck(ip) {
+    var e = HOT.get(ip);
+    if (!e) return -1;
+    if (Math.floor(Date.now() / 1000) - e.t > HOT_TTL_S) return -1;
+    return e.sev;
+  }
+  // An alert's match_ip: hot by its severity, and its one IP_SRC_ALERT.
+  function noteAlertIp(ip, t, sev) {
+    if (!isIP(ip) || !num(t) || !num(sev)) return;
+    hotSet(ip, t, sev);
+    ipNote(ip, IP_SRC.alert);
   }
 
   var IPV4_RE = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
@@ -217,8 +275,14 @@
   // the source it was seen in (0: shown, not counted as a source).
   function ipSpan(ip, bit) {
     var sp = el("span", "", ip);
-    sp.style.color = "var(--k-" + ipColorIndex(ip) + ")";
     var e = ipNote(ip, bit);
+    var hot = hotCheck(ip);
+    if (hot >= 0) {
+      sp.style.color = "var(--hot-" + hot + ")";
+      if (hot >= 1) sp.classList.add("xb");
+      return sp;
+    }
+    sp.style.color = "var(--k-" + ipColorIndex(ip) + ")";
     if (e && crossPanel(e.m)) sp.classList.add("xb");
     else if (e) {
       if (e.els.length >= 64) e.els = e.els.filter(function (x) { return x.isConnected; });
@@ -351,13 +415,13 @@
     // row, on CP_MON_ROW's ground in its phosphor (src/views/packets.c);
     // any other record is a packets-band row: its info text in the
     // earth tone of its hash, every address in it in its own colour.
-    var mon = cls === "t-wifi";
+    var mon = isMon(r.type);
     var li = el("li", cls + (mon ? " mon" : ""));
     li.appendChild(el("span", "ts", num(r.ts) ? hhmmss(r.ts) : "-"));
     li.appendChild(el("span", "ty", r.type));
     var tx = el("span", "tx");
     if (mon) tx.textContent = String(r.text);
-    else richText(tx, r.text, RECORD_SRC[cls] || IP_SRC.pkt, infoClass(String(r.text)));
+    else richText(tx, r.text, recordSrc(cls), infoClass(String(r.text)));
     li.appendChild(tx);
     var list = $("ticker");
     list.insertBefore(li, list.firstChild);
@@ -375,6 +439,10 @@
     var ol = $("alerts");
     while (ol.firstChild) ol.removeChild(ol.firstChild);
     if (!list || !list.length) { ol.appendChild(el("li", "sub", "none since connect")); return; }
+    // Hot before any of them is drawn, as st_alert_hot() runs before
+    // the frame.
+    for (var h = 0; h < list.length; h++)
+      noteAlertIp(list[h].match_ip, list[h].ts, list[h].sev);
     for (var i = 0; i < list.length; i++) {
       var a = list[i];
       var sev = num(a.sev) && a.sev >= 0 && a.sev <= 2 ? a.sev : -1;
@@ -394,7 +462,7 @@
     tx.appendChild(el("span", "d-bright", String(title)));
     if (detail !== undefined && detail !== null && detail !== "") {
       tx.appendChild(document.createTextNode("  "));
-      richText(tx, detail, IP_SRC.alert, "d-normal");
+      richText(tx, detail, 0, "d-normal");
     }
     return tx;
   }
@@ -600,9 +668,10 @@
     TH = { ink: css("--ink"), muted: css("--muted"), faint: css("--faint"),
            rule: css("--rule"), data: css("--data"), signal: css("--signal"),
            bg: css("--bg"), panel: css("--panel"), bright: css("--tui-bright"),
-           normal: css("--tui-normal"), dim: css("--tui-dim"), k: [], heat: [] };
+           normal: css("--tui-normal"), dim: css("--tui-dim"), k: [], heat: [], hot: [] };
     for (var i = 0; i < 8; i++) TH.k.push(css("--k-" + i));
     for (i = 0; i < 4; i++) TH.heat.push(css("--heat-" + i));
+    for (i = 0; i < 3; i++) TH.hot.push(css("--hot-" + i));
     return TH;
   }
   // A key's colour from the TUI's hash, for a canvas or a swatch.
@@ -870,7 +939,9 @@
         g.beginPath();
         g.rect(x + 1, y + 1, cw - 2, ch - 2);
         g.clip();
-        g.strokeStyle = T.faint;
+        // The hatch carries the meaning, so it is --muted, 3:1 or more
+        // on --rule and on --panel (web/README.md, the graphics table).
+        g.strokeStyle = T.muted;
         g.lineWidth = 1;
         g.beginPath();
         for (var s = -ch; s < cw; s += 4 * dpr) {
@@ -1635,7 +1706,7 @@
   }
 
   function apRow(a) {
-    var row = el("div", "aprow" + (a.multi_ssid ? " multi" : ""));
+    var row = el("div", "aprow" + (a.multi_ssid ? " many-ssid" : ""));
     var bs = el("span", "c-bs");
     var sw = el("span", "sw");
     sw.style.background = keyColor(String(a.bssid));
@@ -1818,10 +1889,10 @@
     });
   }
 
-  function flowAddr(a, none, hot) {
+  function flowAddr(a, none) {
     var sp = el("span", "");
     if (typeof a !== "string") { sp.className = "d-dim"; sp.textContent = none; return sp; }
-    if (hot || !isIP(a)) { sp.textContent = a; return sp; }
+    if (!isIP(a)) { sp.textContent = a; return sp; }
     sp.appendChild(ipSpan(a, IP_SRC.conn));
     return sp;
   }
@@ -1832,11 +1903,12 @@
     // The address columns grow to a full IPv6 address (40ch) when the
     // row has room; narrower, the cell's ellipsis hides the tail, so the
     // whole address is its tooltip.
-    // An SMB1 row is the critical colour throughout, addresses too, as
-    // the TUI's alert-hot override wins over the hash colour.
+    // An SMB1 row is the critical colour, its addresses as every other
+    // address: the hash colour, or the alert-hot colour while an alert
+    // (SMB1_USE) names one.
     var hot = f.smb1 === true;
-    var sc = row.appendChild(flowAddr(from, "-", hot));
-    var dc = row.appendChild(flowAddr(to, "(source only)", hot));
+    var sc = row.appendChild(flowAddr(from, "-"));
+    var dc = row.appendChild(flowAddr(to, "(source only)"));
     if (typeof from === "string") sc.title = from;
     if (typeof to === "string") dc.title = to;
     var counts = (f.counts || []).map(function (v, i) {
@@ -1983,16 +2055,18 @@
       var p = pos[i];
       var r = (2 + 4 * Math.sqrt(n.total / maxN)) * dpr;
       var id = String(n.id);
-      // A node is an address: its hash colour, bold once cross-panel.
+      // A node is an address: its hash colour, bold once cross-panel;
+      // an alert-hot one in its CP_ALERT_HOT_* colour, bold from WARN.
       var e = isIP(id) ? ipNote(id, IP_SRC.conn) : null;
-      x.fillStyle = keyColor(id);
+      var hot = isIP(id) ? hotCheck(id) : -1;
+      x.fillStyle = hot >= 0 ? theme().hot[hot] : keyColor(id);
       x.beginPath();
       x.arc(p.x, p.y, r, 0, 2 * Math.PI);
       x.fill();
       var right = Math.cos(p.a) >= 0;
       x.textAlign = right ? "left" : "right";
       x.textBaseline = "middle";
-      x.font = (e && crossPanel(e.m) ? "bold " : "") + (11 * dpr) + "px " + css("--font-mono");
+      x.font = (hot >= 1 || (hot < 0 && e && crossPanel(e.m)) ? "bold " : "") + (11 * dpr) + "px " + css("--font-mono");
       var t = cutLabel(id, narrow ? 11 : 22);
       var lx = p.x + (right ? 1 : -1) * (r + 4 * dpr), ly = p.y;
       x.fillText(t, lx, ly);
@@ -2231,6 +2305,9 @@
       var ol = $("h-alerts");
       while (ol.firstChild) ol.removeChild(ol.firstChild);
       (j.alerts || []).forEach(function (a) {
+        if (a.ip !== null) noteAlertIp(String(a.ip), a.last_seen, a.sev);
+      });
+      (j.alerts || []).forEach(function (a) {
         var sev = num(a.sev) && a.sev >= 0 && a.sev <= 2 ? a.sev : -1;
         var li = el("li", sev >= 0 ? "sev" + sev : "");
         li.appendChild(el("span", "ts", shortStamp(a.last_seen)));
@@ -2257,9 +2334,9 @@
         li.appendChild(el("span", "ts", shortStamp(f.last_seen)));
         li.appendChild(el("span", "ty", f.proto));
         var tx = el("span", "tx");
-        tx.appendChild(flowAddr(f.src, "-", false));
+        tx.appendChild(flowAddr(f.src, "-"));
         tx.appendChild(el("span", "d-dim", " → "));
-        tx.appendChild(flowAddr(f.dst, "-", false));
+        tx.appendChild(flowAddr(f.dst, "-"));
         tx.appendChild(el("span", "d-normal", "  x" + f.count));
         li.appendChild(tx);
         ol.appendChild(li);

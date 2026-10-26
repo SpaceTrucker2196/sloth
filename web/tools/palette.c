@@ -10,7 +10,8 @@
  * The colours come from the TUI's colour-pair table itself: this tool
  * links src/tui_palette.c and asks tui_pair_colors() for every pair the
  * page mirrors (CP_IP_BASE_*, CP_BR_*, CP_INFO_BASE, the phosphor and
- * heat pairs, CP_MON_ROW's background), then turns each xterm-256 index
+ * heat pairs, CP_ALERT_HOT_*, CP_MON_ROW and its background), then
+ * turns each xterm-256 index
  * into hex by the standard formula (16 system colours, the 6x6x6 cube
  * on 0/95/135/175/215/255, the 24 greys from 8 in steps of 10). The
  * brand table and the Google letter sequence live inside src/tui.c's
@@ -22,8 +23,10 @@
  * theme keeps each hue and darkens it by one rule (light_variant()),
  * against the light --bg and --panel read out of web/ui/theme.css.
  *
- * "contrast" prints web/README.md's contrast table: every text, data,
- * severity and heat token on --bg and --panel in both themes. */
+ * "contrast" prints web/README.md's contrast tables: every text, data,
+ * severity, heat and alert-hot token on --bg and --panel in both
+ * themes, the graphics that carry meaning, and how far apart the chart
+ * hues are. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +35,10 @@
 #include "ip_color.h"
 #include "tui.h"
 #include "tui_palette.h"
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #define FILE_MAX (1024 * 1024)
 #define MAX_BRANDS 256
@@ -164,12 +171,15 @@ typedef struct {
 static tok_t g_tok[64];
 static int g_ntok;
 
-/* The monitor rows' ground and text (CP_MON_ROW, CP_MON_ROW_DIM): in
- * the light theme the ground follows light_ground(), and the text the
- * data rule against that ground rather than against --bg. */
-static rgb_t g_mon[3][2];      /* bg, fg, dim; dark, light */
-static int g_mon_x[3];
-static const char *const MON_NAME[3] = { "--mon-bg", "--mon-fg", "--mon-dim" };
+/* The monitor rows' ground and text (CP_MON_ROW): in the light theme
+ * the ground follows light_ground(), and the text the data rule against
+ * that ground rather than against --bg. The TUI draws a monitor row's
+ * stamp in CP_MON_ROW too (packets.c draw_mon_row()), so the page has
+ * no CP_MON_ROW_DIM token. */
+#define NMON 2
+static rgb_t g_mon[NMON][2];   /* bg, fg; dark, light */
+static int g_mon_x[NMON];
+static const char *const MON_NAME[NMON] = { "--mon-bg", "--mon-fg" };
 
 static int fg_of(int pair) {
     short f, b;
@@ -234,18 +244,20 @@ static void collect(void) {
     add_tok("--heat-1", fg_of(CP_HEAT_MID), "CP_HEAT_MID");
     add_tok("--heat-2", fg_of(CP_HEAT_HI), "CP_HEAT_HI");
     add_tok("--heat-3", fg_of(CP_HEAT_PEAK), "CP_HEAT_PEAK");
+    /* tui_alert_hot_attr(): LOW, WARN, CRIT */
+    add_tok("--hot-0", fg_of(CP_ALERT_HOT_LOW), "CP_ALERT_HOT_LOW");
+    add_tok("--hot-1", fg_of(CP_ALERT_HOT_WARN), "CP_ALERT_HOT_WARN");
+    add_tok("--hot-2", fg_of(CP_ALERT_HOT_CRIT), "CP_ALERT_HOT_CRIT");
 }
 
 static void mon_pairs(void) {
-    short f, b, df, db;
-    if (!tui_pair_colors(CP_MON_ROW, &f, &b) || b < 0 ||
-        !tui_pair_colors(CP_MON_ROW_DIM, &df, &db) || db != b) {
-        fprintf(stderr, "palette: CP_MON_ROW / CP_MON_ROW_DIM have no shared background\n");
+    short f, b;
+    if (!tui_pair_colors(CP_MON_ROW, &f, &b) || b < 0) {
+        fprintf(stderr, "palette: CP_MON_ROW has no background\n");
         exit(1);
     }
     g_mon_x[0] = b;
     g_mon_x[1] = f;
-    g_mon_x[2] = df;
 }
 
 /* ── files ─────────────────────────────────────────────────────────── */
@@ -428,7 +440,7 @@ static int resolve(const char *name, int light, rgb_t *c, int depth) {
             *c = light ? g_data_light[i] : g_data_dark[i];
             return 0;
         }
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < NMON; i++)
         if (!strcmp(MON_NAME[i], name)) {
             *c = g_mon[i][light];
             return 0;
@@ -463,6 +475,99 @@ static rgb_t need(const char *name, int light) {
 }
 
 
+/* ── how far apart the chart hues are ─────────────────────────────── */
+
+/* CIE L*a*b* (D65) of an sRGB colour, and CIEDE2000 (Sharma, Wu and
+ * Dalal 2005, eq. 1-17) between two of them. */
+typedef struct { double L, a, b; } lab_t;
+
+static double lab_f(double t) { return t > 216.0 / 24389 ? cbrt(t) : (24389.0 / 27 * t + 16) / 116; }
+
+static lab_t to_lab(rgb_t c) {
+    double r = lin(c.r), g = lin(c.g), b = lin(c.b);
+    double X = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047;
+    double Y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    double Z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
+    lab_t o = { 116 * lab_f(Y) - 16, 500 * (lab_f(X) - lab_f(Y)), 200 * (lab_f(Y) - lab_f(Z)) };
+    return o;
+}
+
+static double deg(double r) { return r * 180 / M_PI; }
+static double rad(double d) { return d * M_PI / 180; }
+
+static double de2000(rgb_t x, rgb_t y) {
+    lab_t p = to_lab(x), q = to_lab(y);
+    double C1 = hypot(p.a, p.b), C2 = hypot(q.a, q.b), Cb = (C1 + C2) / 2;
+    double G = 0.5 * (1 - sqrt(pow(Cb, 7) / (pow(Cb, 7) + pow(25, 7))));
+    double a1 = p.a * (1 + G), a2 = q.a * (1 + G);
+    double C1p = hypot(a1, p.b), C2p = hypot(a2, q.b);
+    double h1 = C1p == 0 ? 0 : fmod(deg(atan2(p.b, a1)) + 360, 360);
+    double h2 = C2p == 0 ? 0 : fmod(deg(atan2(q.b, a2)) + 360, 360);
+    double dL = q.L - p.L, dC = C2p - C1p, dh = 0;
+    if (C1p * C2p != 0) {
+        dh = h2 - h1;
+        if (dh > 180) dh -= 360;
+        else if (dh < -180) dh += 360;
+    }
+    double dH = 2 * sqrt(C1p * C2p) * sin(rad(dh / 2));
+    double Lb = (p.L + q.L) / 2, Cbp = (C1p + C2p) / 2, hb = h1 + h2;
+    if (C1p * C2p != 0) {
+        if (fabs(h1 - h2) <= 180) hb = (h1 + h2) / 2;
+        else hb = h1 + h2 < 360 ? (h1 + h2 + 360) / 2 : (h1 + h2 - 360) / 2;
+    }
+    double T = 1 - 0.17 * cos(rad(hb - 30)) + 0.24 * cos(rad(2 * hb)) +
+               0.32 * cos(rad(3 * hb + 6)) - 0.20 * cos(rad(4 * hb - 63));
+    double dth = 30 * exp(-pow((hb - 275) / 25, 2));
+    double RC = 2 * sqrt(pow(Cbp, 7) / (pow(Cbp, 7) + pow(25, 7)));
+    double SL = 1 + 0.015 * pow(Lb - 50, 2) / sqrt(20 + pow(Lb - 50, 2));
+    double SC = 1 + 0.045 * Cbp, SH = 1 + 0.015 * Cbp * T, RT = -sin(rad(2 * dth)) * RC;
+    double l = dL / SL, c = dC / SC, h = dH / SH;
+    return sqrt(l * l + c * c + h * h + RT * c * h);
+}
+
+/* The Flows chord draws each protocol in its hue and SMB1 in --sev-crit
+ * beside them, each named in the legend. Two of them closer than this
+ * (CIEDE2000) fail the build in either theme, so the light theme's rule
+ * cannot pull two hues together unseen. */
+#define CHART_APART_MIN 15.0
+
+static int g_napart;
+static struct { const char *a, *b; double d[2]; } g_apart[64];
+
+static int chart_apart(void) {
+    const char *nm[17];
+    rgb_t c[2][17];
+    int n = 0;
+    for (int k = 0; k < g_nchart && n < 16; k++, n++) {
+        nm[n] = g_dark.d[g_chart[k]].name;
+        if (resolve(nm[n], 0, &c[0][n], 0) != 0) return -1;
+        c[1][n] = g_chart_light[k];
+    }
+    nm[n] = "--sev-crit";
+    c[0][n] = need(nm[n], 0);
+    c[1][n] = need(nm[n], 1);
+    n++;
+    int bad = 0;
+    g_napart = 0;
+    for (int i = 0; i < n; i++)
+        for (int j = i + 1; j < n; j++) {
+            double d0 = de2000(c[0][i], c[0][j]), d1 = de2000(c[1][i], c[1][j]);
+            if (d0 < CHART_APART_MIN || d1 < CHART_APART_MIN) {
+                fprintf(stderr, "palette: %s and %s are %.1f (dark) / %.1f (light) apart, "
+                                "under %.0f\n", nm[i], nm[j], d0, d1, CHART_APART_MIN);
+                bad = 1;
+            }
+            if ((d0 < 30 || d1 < 30) && g_napart < 64) {
+                g_apart[g_napart].a = nm[i];
+                g_apart[g_napart].b = nm[j];
+                g_apart[g_napart].d[0] = d0;
+                g_apart[g_napart].d[1] = d1;
+                g_napart++;
+            }
+        }
+    return bad ? -1 : 0;
+}
+
 static int compute(void) {
     rgb_t lbg = need("--bg", 1), lpanel = need("--panel", 1), dbg = need("--bg", 0);
     for (int i = 0; i < g_ntok; i++) {
@@ -473,18 +578,26 @@ static int compute(void) {
     for (int i = 0; i < g_dark.n && g_nchart < 16; i++) {
         if (strncmp(g_dark.d[i].name, "--f-", 4)) continue;
         rgb_t c;
-        if (parse_hex(g_dark.d[i].val, &c) != 0) {
-            fprintf(stderr, "palette: %s is not a hex colour\n", g_dark.d[i].name);
+        /* A hue that names a data token (var(--tui-normal)) is that
+         * token in both themes; resolve() reaches it before this entry
+         * is counted, so it never finds itself. */
+        if (resolve(g_dark.d[i].name, 0, &c, 0) != 0) {
+            fprintf(stderr, "palette: %s is not a hex colour or a var() of one\n",
+                    g_dark.d[i].name);
             return -1;
         }
-        g_chart_light[g_nchart] = light_variant(c, lbg, lpanel);
+        if (!strncmp(g_dark.d[i].val, "var(", 4)) {
+            if (resolve(g_dark.d[i].name, 1, &g_chart_light[g_nchart], 0) != 0) return -1;
+        } else {
+            g_chart_light[g_nchart] = light_variant(c, lbg, lpanel);
+        }
         g_chart[g_nchart++] = i;
     }
     mon_pairs();
-    for (int i = 0; i < 3; i++) g_mon[i][0] = xterm_rgb(g_mon_x[i]);
+    for (int i = 0; i < NMON; i++) g_mon[i][0] = xterm_rgb(g_mon_x[i]);
     g_mon[0][1] = light_ground(g_mon[0][0], dbg, lbg);
-    for (int i = 1; i < 3; i++) g_mon[i][1] = light_variant(g_mon[i][0], g_mon[0][1], g_mon[0][1]);
-    return 0;
+    for (int i = 1; i < NMON; i++) g_mon[i][1] = light_variant(g_mon[i][0], g_mon[0][1], g_mon[0][1]);
+    return chart_apart();
 }
 
 /* ── output ────────────────────────────────────────────────────────── */
@@ -506,9 +619,8 @@ static int emit_css(FILE *o) {
         fprintf(o, "  %s: %s; /* xterm %d, %s */\n", g_tok[i].name, h, g_tok[i].xterm,
                 g_tok[i].why);
     }
-    static const char *const MON_WHY[3] = {
-        "CP_MON_ROW's background", "CP_MON_ROW", "CP_MON_ROW_DIM" };
-    for (int i = 0; i < 3; i++) {
+    static const char *const MON_WHY[NMON] = { "CP_MON_ROW's background", "CP_MON_ROW" };
+    for (int i = 0; i < NMON; i++) {
         hex(g_mon[i][0], h);
         fprintf(o, "  %s: %s; /* xterm %d, %s */\n", MON_NAME[i], h, g_mon_x[i], MON_WHY[i]);
     }
@@ -522,6 +634,7 @@ static int emit_css(FILE *o) {
     }
     for (int k = 0; k < g_nchart; k++) {
         const decl_t *d = &g_dark.d[g_chart[k]];
+        if (!strncmp(d->val, "var(", 4)) continue;     /* follows its token */
         hex(g_chart_light[k], h);
         fprintf(o, "  %s: %s; /* chart hue, from %s */\n", d->name, h, d->val);
     }
@@ -529,7 +642,7 @@ static int emit_css(FILE *o) {
     hex(g_mon[0][0], h2);
     fprintf(o, "  --mon-bg: %s; /* %s's contrast step off --bg, from the light --bg */\n",
             h, h2);
-    for (int i = 1; i < 3; i++) {
+    for (int i = 1; i < NMON; i++) {
         hex(g_mon[i][1], h);
         hex(g_mon[i][0], h2);
         fprintf(o, "  %s: %s; /* from %s, %.1f:1 on --mon-bg */\n", MON_NAME[i], h, h2,
@@ -589,10 +702,31 @@ static int emit_contrast(void) {
                       : !strncmp(n, "--br-", 5) ? "brand"
                       : !strncmp(n, "--info-", 7) ? "record info"
                       : !strncmp(n, "--heat-", 7) ? "heat, severity"
+                      : !strncmp(n, "--hot-", 6) ? "alert-hot address"
                       : "TUI phosphor";
         row(n, w);
     }
     for (int k = 0; k < g_nchart; k++) row(g_dark.d[g_chart[k]].name, "chart hue");
+    /* Graphics that carry meaning want 3:1 (WCAG 1.4.11); the dotted
+     * rules separate rows that are legible without them. */
+    static const struct { const char *fg, *bg, *w; } gfx[] = {
+        { "--rule", "--bg", "row rules" }, { "--rule", "--panel", "row rules, the warming cell" },
+        { "--muted", "--rule", "the warming hatch, on its cell" },
+        { "--muted", "--panel", "the warming hatch, on the panel" },
+    };
+    printf("\nGraphics (`*` under 3:1):\n\n| graphic | on | use | dark | light |\n"
+           "|---|---|---|---|---|\n");
+    for (size_t i = 0; i < sizeof(gfx) / sizeof(gfx[0]); i++) {
+        double r0 = contrast(need(gfx[i].fg, 0), need(gfx[i].bg, 0));
+        double r1 = contrast(need(gfx[i].fg, 1), need(gfx[i].bg, 1));
+        printf("| `%s` | `%s` | %s | %.2f%s | %.2f%s |\n", gfx[i].fg, gfx[i].bg, gfx[i].w,
+               r0, r0 < 3 ? " *" : "", r1, r1 < 3 ? " *" : "");
+    }
+    printf("\nChart hues closer than 30 (CIEDE2000) in either theme; under %.0f fails "
+           "the build:\n\n| hues | dark | light |\n|---|---|---|\n", CHART_APART_MIN);
+    for (int i = 0; i < g_napart; i++)
+        printf("| `%s`, `%s` | %.1f | %.1f |\n", g_apart[i].a, g_apart[i].b,
+               g_apart[i].d[0], g_apart[i].d[1]);
     printf("\nMonitor rows, on `--mon-bg` (`");
     for (int t = 0; t < 2; t++) {
         char h[8];
@@ -600,7 +734,7 @@ static int emit_contrast(void) {
         printf("%s%s", h, t ? "` light)" : "` dark, `");
     }
     printf(":\n\n| token | dark | on --mon-bg | light | on --mon-bg |\n|---|---|---|---|---|\n");
-    for (int i = 1; i < 3; i++) {
+    for (int i = 1; i < NMON; i++) {
         char a[8], b[8];
         hex(g_mon[i][0], a);
         hex(g_mon[i][1], b);

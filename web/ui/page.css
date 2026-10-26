@@ -46,7 +46,8 @@ td { font-size: 12px; font-variant-ligatures: none; }
 @media (prefers-reduced-motion: reduce) { .cur { animation: none; } }
 .views { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 2px; flex: 1; min-width: 0; }
 .views li { padding: 0; color: var(--faint); }
-.views li.off { display: flex; align-items: center; padding: 5px 9px; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+/* Not a control, so not --faint: a placeholder's text in --muted. */
+.views li.off { display: flex; align-items: center; padding: 5px 9px; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .views li .k { color: var(--brass); margin-right: 5px; }
 /* The view list is buttons, so Tab reaches every view in order. */
 .views button {
@@ -137,8 +138,9 @@ li .ty.d-dim { color: var(--tui-dim); font-weight: 400; }
 .ticker .ty { color: var(--tui-normal); }
 /* A monitor-radio record among the IP capture's: CP_MON_ROW. */
 .ticker li.mon { background: var(--mon-bg); border-top-color: transparent; }
-.ticker li.mon .ts { color: var(--mon-dim); }
-.ticker li.mon .ty, .ticker li.mon .tx { color: var(--mon-fg); }
+/* The whole row, stamp included, in CP_MON_ROW, as packets.c
+ * draw_mon_row() and dashboard_bands.c draw_mon_band_row() draw it. */
+.ticker li.mon .ts, .ticker li.mon .ty, .ticker li.mon .tx { color: var(--mon-fg); }
 
 /* ── controls: the site's buttons and chips ────────────────────────── */
 .controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-top: 0; }
@@ -174,7 +176,7 @@ canvas.wfall { display: block; width: 100%; height: 280px; margin-top: var(--gap
 canvas.ovw { display: block; width: 100%; height: 72px; margin-top: var(--gap); cursor: crosshair; touch-action: none; }
 canvas.chord { display: block; width: 100%; height: 420px; margin-top: var(--gap); cursor: pointer; }
 canvas.strip { display: block; width: 100%; height: 18px; margin: 4px 0 var(--gap); border-radius: 4px; }
-.multi { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--gap); margin-top: var(--gap); }
+#a-multi { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--gap); margin-top: var(--gap); }
 .cell { border: 1px solid var(--rule); border-radius: 10px; padding: 6px; cursor: pointer; min-width: 0; background: var(--panel-2); }
 .cell.on { border-color: var(--signal); }
 .cell .nm { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -187,7 +189,9 @@ canvas.strip { display: block; width: 100%; height: 18px; margin: 4px 0 var(--ga
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--gap); margin-top: var(--gap); }
 .card { border: 1px solid var(--rule); border-radius: 10px; padding: 8px 10px; min-width: 0; background: var(--panel-2); }
 .card.open { border-left: 3px solid var(--sev-warn); }
-.card.closed { opacity: 0.75; }
+/* A closed episode is marked by the chrome alone (a dashed edge, no
+ * severity bar, the word "closed"): its data keep the TUI's colours. */
+.card.closed { border-style: dashed; }
 .card.go { cursor: pointer; }
 .card.go:hover { border-color: var(--brass-edge); }
 .card .hd { display: flex; gap: var(--gap); align-items: baseline; min-width: 0; }
@@ -204,12 +208,15 @@ canvas.strip { display: block; width: 100%; height: 18px; margin: 4px 0 var(--ga
 /* A virtualised table, one fixed row height, its columns sized to fit
  * a 1280 px window (spec §8.3); dotted row rules, a risk level above 0
  * a left border in its severity colour. */
-.drow { display: grid; grid-template-columns: 20ch 12ch 15ch minmax(8ch, 1fr) 12ch 4ch 6ch 4ch 10ch 10ch 4ch 4ch 146px; gap: 4px; align-items: center; height: 22px; padding-left: 4px; border-left: 3px solid transparent; border-bottom: 1px dotted var(--rule); font-size: 12px; white-space: nowrap; }
+.drow { display: grid; grid-template-columns: 20ch 12ch 15ch minmax(8ch, 1fr) 12ch 4ch 6ch 4ch 10ch 10ch 4ch 6ch 146px; gap: 4px; align-items: center; height: 22px; padding-left: 4px; border-left: 3px solid transparent; border-bottom: 1px dotted var(--rule); font-size: 12px; white-space: nowrap; }
 .drow > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 /* The head row keeps the rows' font size, so its ch columns line up
  * with theirs; only the words in it are the eyebrow's size. */
 .dhead, .dhead.drow { color: var(--brass); font-size: 12px; margin-top: var(--gap); border-bottom: 1px solid var(--brass-soft); }
 .dhead > span { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; }
+/* A 4ch column's word, spaced, fills it and runs into the next one;
+ * anom's column is 6ch so its word stands clear of "24 h presence". */
+.dhead > .c-sig, .dhead > .c-rk, .dhead > .c-z, .dhead > .c-an { letter-spacing: 0; }
 .vscroll { position: relative; height: 60vh; overflow: auto; margin-top: 2px; }
 .vspace { width: 1px; }
 .vrows { position: absolute; top: 0; left: 0; right: 0; }
@@ -243,7 +250,7 @@ table.qt td.nul { color: var(--muted); }
 /* Polish (M6): wide row tables scroll inside their own box below their
  * natural width, so a 360 px window never scrolls the page sideways. */
 .hscroll { overflow-x: auto; max-width: 100%; }
-.hscroll > .dhead.drow, .hscroll > .vscroll { min-width: calc(109ch + 210px); }
+.hscroll > .dhead.drow, .hscroll > .vscroll { min-width: calc(111ch + 210px); }
 /* The rows' size, so the two min-widths (in ch) are the same width. */
 .hscroll > .vscroll { font-size: 12px; }
 .hscroll .aprow { min-width: calc(108ch + 60px); }
@@ -285,6 +292,6 @@ table.qt td.nul { color: var(--muted); }
   .controls > label { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; max-width: 100%; }
   .controls input[type=search] { width: 100%; }
   .cards { grid-template-columns: 1fr; }
-  .multi { grid-template-columns: 1fr; }
+  #a-multi { grid-template-columns: 1fr; }
   canvas.chord { height: 280px; }
 }

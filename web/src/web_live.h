@@ -42,6 +42,8 @@
 #define WEB_LIVE_TITLE_MAX  48
 #define WEB_LIVE_DETAIL_MAX 128
 #define WEB_LIVE_ID_MAX     32
+/* An alert's match_ip: INET6_ADDRSTRLEN - 1, address characters only. */
+#define WEB_LIVE_IP_MAX     45
 /* Open incidents tracked; sloth's engine holds MAX_ALERTS (128). */
 #define WEB_LIVE_INCIDENTS  256
 #define WEB_LIVE_SH_STR     32
@@ -72,6 +74,7 @@ typedef struct {
     char      title[WEB_LIVE_TITLE_MAX + 1];
     char      detail[WEB_LIVE_DETAIL_MAX + 1];
     char      incident[WEB_LIVE_ID_MAX + 1];
+    char      match_ip[WEB_LIVE_IP_MAX + 1];
 } web_live_alert_t;
 
 typedef struct {

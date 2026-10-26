@@ -5123,3 +5123,12 @@ report events.
   `web/tests/test_tui_colors.c`. A cream light theme behind a toggle,
   dark by default; its data colours keep their hues, darkened to 4.5:1.
   No motion layer; the CRT layer faint and off in light.
+- 2026-10-26 — [[slothweb]]: the restyle's review. The TUI's alert-hot
+  override is ported (an alert's `match_ip` in `CP_ALERT_HOT_*` for an
+  hour, bold from WARN; `/api/live` carries `match_ip`); every record
+  sloth emits from the monitor radio is a monitor row, stamp included,
+  pinned against `src/jsonl.c`; an alert counts toward the cross-panel
+  index by its `match_ip` alone; closed anomaly cards are marked by a
+  dashed edge, not by dimming; `utf8()` and `lowerAscii()` are pinned
+  and ported. `docs/web-ui-spec.md` §8.1 amended to point at the
+  served tokens.

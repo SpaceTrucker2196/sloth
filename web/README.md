@@ -533,7 +533,7 @@ engine keeps, its bound, and what it has had to drop or evict (below);
    "monitor_iface":"","monitor_open":0,"monitor_running":0,"monitor_exit":"",
    "scope":"none","scope_not_enforced":0},
  "alerts":[{"ts":1792629100,"type":"alert.create","sev":1,"title":"…",
-   "detail":"…","incident_id":"9f2c41ab77e30d58"}],
+   "detail":"…","incident_id":"9f2c41ab77e30d58","match_ip":"192.0.2.20"}],
  "recent":[{"seq":9071,"type":"dns","ts":1792629210,"text":"example.com  10.0.0.5"}]}
 ```
 
@@ -544,7 +544,7 @@ engine keeps, its bound, and what it has had to drop or evict (below);
 | `records`, `records_s` | records decoded since start, and the mean over the five whole seconds before now |
 | `types` | records by `type`, for up to 48 names; the rest are `types_other`. A `type` that is not 1..32 bytes of `[a-z0-9_.]` is `types_invalid` and is not shown |
 | `sensor` | the latest `sensor_health` record and `state`: `unknown` (none yet), `ok`, `degraded` (a capture or monitor handle open with its thread not running, or the launch scope not enforced), `not_observing` (neither handle open), or `stale` (none for 330 s; it is change-only with a 300 s heartbeat) |
-| `alerts` | the last 8 alert lifecycle records, newest first |
+| `alerts` | the last 8 alert lifecycle records, newest first. `match_ip` is the record's address (the page's alert-hot colour, [Design](#design)), or `""` when it has none or what it has is not 1..45 bytes of `[0-9A-Fa-f:.]` |
 | `recent` | the last 50 records of any type, oldest first, each as its `type`, `ts` and a short `text` built from the members a reader looks for first (`qname`, `host`, `ssid`, `mac`, `ip`, `src`, ...), at most 80 bytes |
 
 **`/events`** is a Server-Sent Events stream. It starts with
@@ -1938,7 +1938,8 @@ embedder takes as `@include`s. `app.js` ports the TUI's choices:
 | data | TUI | page |
 |---|---|---|
 | an IP address, everywhere one appears (tables, cards, chord labels and nodes, the drawer, Lookup, alerts, flows, records) | `tui_ip_addstr()`: `ip_color_index()` (djb2 over the bytes, mod 8) into `tui_ip_fg` | `ipColorIndex()` over the UTF-8 bytes into `--k-0`..`--k-7` |
-| an address seen in two or more sources | bold (`ip_index_is_cross_panel()`: more than one `IP_SRC_*` bit) | bold, by the same bits: the page keeps one index for its life (the TUI rebuilds its per frame), at the TUI's 512 addresses, and an address that turns cross-panel turns bold where it is already drawn |
+| an address an alert names | `tui_alert_hot_check()`, before anything else: for `ALERT_HOT_TTL_S` (3600 s) after the alert was last seen, its `match_ip` is `CP_ALERT_HOT_LOW` / `WARN` / `CRIT` by the alert's severity, bold from WARN; promotion only, 256 slots, the oldest replaced | `hotSet()` from each alert's `match_ip` (`/api/live`, the drawer's alerts), `hotCheck()` before the hash in `ipSpan()` and the chord's nodes: `--hot-0`..`--hot-2`, bold from WARN |
+| an address seen in two or more sources | bold (`ip_index_is_cross_panel()`: more than one `IP_SRC_*` bit) | bold, by the same bits: the page keeps one index for its life (the TUI rebuilds its per frame), at the TUI's 512 addresses, and an address that turns cross-panel turns bold where it is already drawn. An alert counts toward `IP_SRC_ALERT` with its `match_ip` alone, as `ip_index_build()` adds it; the other addresses in an alert's text are coloured and counted toward no source |
 | an SSID | `tui_ssid_addstr()`: the same hash and palette | `ssidSpan()` |
 | a host name, a device name | `tui_brand_addstr()`: the earliest match of any brand, ASCII case-insensitive, a tie to the first entry; Google's letters in the logo's sequence | `brandRuns()` over the generated table into `--br-0`..`--br-15`, the rest in the row's pair |
 | a record's info text | `tui_info_color()`: the hash into `tui_info_fg`, `CP_NORMAL` when empty | `infoClass()`, `--info-0`..`--info-7`, with every address in it in its own colour |
@@ -1947,22 +1948,38 @@ embedder takes as `@include`s. `app.js` ports the TUI's choices:
 | severity | `tui_heat(0.3 / 0.5 / 1.0)` for LOW / WARN / CRIT | `--sev-*` on `--heat-1`..`--heat-3` |
 | heat | `tui_heat()`'s 0.15 / 0.40 / 0.70 | `heatClass()`, `heat()` |
 | sparklines | `draw_sparkline_at()`: level round(v / max x 8), 0 dim, 1-2 normal, 3-4 heat mid, 5-6 heat hi, 7-8 peak | `sparkLevel()`, `sparkColor()` |
-| monitor-radio rows | `CP_MON_ROW*` on xterm 236 | `.ticker li.mon` (802.11 records) on `--mon-bg` |
+| monitor-radio rows | `CP_MON_ROW` on xterm 236, stamp included (`draw_mon_row()`, `draw_mon_band_row()`) | `.ticker li.mon` on `--mon-bg`, the whole row in `--mon-fg`: every record type `src/jsonl.c` emits from the monitor radio's state (`MON_TYPES`: beacons to EAPOL, fifteen; not `wifi_ap` / `wifi_sta`, which are the managed interface's scan, nor the captive-portal events) |
 
 The Flows view's protocol hues (`--f-*`) have no TUI counterpart (the
 TUI has no flow chart); they stay chart colours named beside their
-lines, and SMB1 rows are `--sev-crit` throughout, addresses included,
-as the TUI's alert-hot override wins over the hash colour.
+lines. `--f-kerb` is `var(--tui-normal)`, not a copy of its value. The
+generator fails the build if two of the hues, or one and `--sev-crit`,
+come within 15 (CIEDE2000) of each other in either theme, and prints
+every pair under 30 below. An SMB1 row's protocol and counts are
+`--sev-crit`; its addresses are coloured as every other address, so
+they are alert-hot while `SMB1_USE` names one.
 
 `web/tests/test_tui_colors.c` holds the two together: it links
 `src/tui.c` (the ANSI backend), captures what the TUI writes for 18
-addresses (half of them cross-panel), 12 SSIDs (two of them not ASCII),
-28 host names and 7 info strings, and compares the colour of every byte
-with the colour the page gives it: the page's functions pinned as
-served, a C port of them over the served `SLOTH_PALETTE`, and the
-served custom properties. It was seen red with the generator's cube
-formula changed, with `app.js`'s `IP_SRC` and tie rule changed, and with
-its own port's tie rule changed.
+addresses (half of them cross-panel), 8 alert-hot ones (`tui_alert_hot_set()`
+by severity, at and past the TTL, a promotion, a full table), 15 SSIDs
+(five not ASCII: 2-, 3- and 4-byte sequences and a surrogate pair), 32
+host names (5 upper- or mixed-case) and 7 info strings, and compares
+the colour of every byte with the colour the page gives it: the page's
+functions pinned as served (`utf8()`, `ipColorIndex()`, `lowerAscii()`,
+`brandRuns()`, `hotSet()`, `hotCheck()` among them), a C port of them
+over the served `SLOTH_PALETTE`, and the served custom properties. The
+port of `utf8()` encodes each SSID from the UTF-16 units a JS string
+holds, so a non-ASCII SSID is hashed through the page's encoder and not
+through the C string's bytes. The page's `MON_TYPES` is compared with
+the record types `src/jsonl.c` emits from the monitor radio. It was
+seen red with the generator's cube formula changed, with `app.js`'s
+`IP_SRC` and tie rule changed, with its own port's tie rule changed,
+with `utf8()`'s 2-byte lead changed from `0xc0` to `0xc1` (in the page,
+and in the port), with `lowerAscii()`'s `+ 32` made `+ 0` (in both),
+with the page's alert-hot bold moved to CRIT and its TTL made 3599, with
+an alert's free text counted toward `IP_SRC_ALERT`, and with `"eapol"`
+taken out of `MON_TYPES`.
 
 **The light theme** is the site's cream (`--void` `#f4f0e6`), behind
 the toggle in the top bar. Dark is the default whatever the browser
@@ -1989,11 +2006,18 @@ Contrast, computed by `make web-contrast` (WCAG 2.x relative luminance;
 `*` marks a ratio under 4.5:1). The dark column is the TUI's own value,
 kept byte for byte even where the TUI's choice reads under 4.5:1 on
 this ground (`--br-8`, `--br-13`, `--info-0`, `--heat-0`, `--tui-dim`
-on `--panel`). `--faint` is for disabled controls only; `--phosphor`,
+on `--panel`). `--faint` colours disabled controls only (a disabled
+chip); a placeholder that is not a control, such as the nav's
+`Alerts`, is `--muted`. `--phosphor`,
 `--data` and `--signal` colour no text in the light theme (edges,
 brackets, canvas strokes), and the light theme's hover text and live
 pill use `--hover` instead. Chip text (`--phosphor-mid`) sits on
-`--panel-2` (4.69:1 light).
+`--panel-2` (4.69:1 light). The graphics table holds a mark that
+carries meaning to 3:1 (WCAG 1.4.11): the hour-of-week heatmap's
+warming cell is a `--muted` hatch on a `--rule` fill. The dotted row
+rules are under 3:1 on purpose; they separate rows that read without
+them. A closed anomaly card is marked by a dashed edge and the word
+`closed`, never by dimming, so its data keep these ratios.
 
 | token | use | dark | on --bg | on --panel | light | on --bg | on --panel |
 |---|---|---|---|---|---|---|---|
@@ -2046,6 +2070,9 @@ pill use `--hover` instead. Chip text (`--phosphor-mid`) sits on
 | `--heat-1` | heat, severity | `#d7af00` | 9.84 | 9.40 | `#836b00` | 4.54 | 5.08 |
 | `--heat-2` | heat, severity | `#ff8700` | 8.56 | 8.18 | `#a85900` | 4.51 | 5.05 |
 | `--heat-3` | heat, severity | `#ff0000` | 5.16 | 4.93 | `#db0000` | 4.60 | 5.15 |
+| `--hot-0` | alert-hot address | `#ffd700` | 14.70 | 14.05 | `#7f6b00` | 4.61 | 5.16 |
+| `--hot-1` | alert-hot address | `#ff8700` | 8.56 | 8.18 | `#a85900` | 4.51 | 5.05 |
+| `--hot-2` | alert-hot address | `#ff0000` | 5.16 | 4.93 | `#db0000` | 4.60 | 5.15 |
 | `--f-ssh` | chart hue | `#7fd1ff` | 12.24 | 11.70 | `#0072b2` | 4.56 | 5.10 |
 | `--f-rdp` | chart hue | `#b48cff` | 7.99 | 7.63 | `#803dff` | 4.58 | 5.13 |
 | `--f-smb` | chart hue | `#ffd166` | 14.30 | 13.67 | `#8f6400` | 4.62 | 5.18 |
@@ -2054,12 +2081,38 @@ pill use `--hover` instead. Chip text (`--phosphor-mid`) sits on
 | `--f-ldap` | chart hue | `#c0c0c0` | 11.33 | 10.83 | `#6d6d6d` | 4.55 | 5.09 |
 | `--f-kerb` | chart hue | `#00d7af` | 11.13 | 10.64 | `#007b64` | 4.59 | 5.14 |
 
+Graphics (`*` under 3:1):
+
+| graphic | on | use | dark | light |
+|---|---|---|---|---|
+| `--rule` | `--bg` | row rules | 1.65 * | 1.34 * |
+| `--rule` | `--panel` | row rules, the warming cell | 1.58 * | 1.51 * |
+| `--muted` | `--rule` | the warming hatch, on its cell | 3.44 | 3.82 |
+| `--muted` | `--panel` | the warming hatch, on the panel | 5.42 | 5.74 |
+
+Chart hues closer than 30 (CIEDE2000) in either theme; under 15 fails the build:
+
+| hues | dark | light |
+|---|---|---|
+| `--f-ssh`, `--f-rdp` | 27.2 | 25.6 |
+| `--f-ssh`, `--f-ldap` | 19.8 | 21.6 |
+| `--f-ssh`, `--f-kerb` | 29.7 | 30.8 |
+| `--f-rdp`, `--f-bgp` | 21.8 | 30.3 |
+| `--f-rdp`, `--f-ldap` | 27.8 | 31.6 |
+| `--f-smb`, `--f-snmp` | 26.4 | 28.4 |
+| `--f-smb`, `--f-ldap` | 25.8 | 24.4 |
+| `--f-smb`, `--sev-crit` | 44.2 | 29.8 |
+| `--f-snmp`, `--f-ldap` | 27.7 | 25.5 |
+| `--f-snmp`, `--f-kerb` | 20.9 | 18.8 |
+| `--f-bgp`, `--f-ldap` | 24.2 | 27.9 |
+| `--f-bgp`, `--sev-crit` | 35.5 | 23.0 |
+| `--f-ldap`, `--f-kerb` | 25.5 | 23.1 |
+
 Monitor rows, on `--mon-bg` (`#303030` dark, `#c5c2ba` light):
 
 | token | dark | on --mon-bg | light | on --mon-bg |
 |---|---|---|---|---|
 | `--mon-fg` | `#00d7af` | 7.13 | `#005a49` | 4.61 |
-| `--mon-dim` | `#00875f` | 2.91 * | `#005c40` | 4.53 |
 
 ## What it never does
 
@@ -2110,7 +2163,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_routes.c` | the route table without a socket: page `200`/`304`/`HEAD`, no external reference in the served page, no HTML or code sink in its script (stream values are `textContent` only), the font stack (Fira Code named once, no font file), the chrome tokens, the CSP hashes recomputed (SHA-256 checked against FIPS 180-4 vectors), health JSON, stream headers, `503`, event formats, `404`, `405` on every route, `421` for a foreign `Host` on every route and `400` for none or two; `/api/anomalies` (`503` without an engine, the JSON byte for byte, `HEAD`, every `400`, the filters, the worst case a `200` with `more`), `/api/baseline` (`503`, every `400`, never fed, a fed cell at its index), the `anomaly` event as one data line, `anomalies_open` in the tick, the M3 health members; the page's M3 element ids and their lookups and the two fetches' literal prefixes, with those query shapes answered `200`; a non-finite cell answered as `null`; the page's `cellOf()` pinned as served and checked against `/api/baseline`'s `now_cell` for every 10 minutes of a week in IST |
 | `test_json.c` | the writer's escaping byte for byte: markup, quotes, controls, C1, U+2028/9, invalid UTF-8 as U+FFFD, the code-point-boundary cut |
 | `test_jsonl.c` | hand-written lines: sloth's shapes, escapes and surrogate pairs, member text inside a string, every truncation of a record, syntax errors, invalid UTF-8 raw and escaped, duplicate members, the depth, member and integer limits |
-| `test_live.c` | the live state and the framer without a socket: the device count per pass, passes cut by a gap, a bad line or a bad type not published, an empty table publishing 0, a reconnect as a new stream, the alert lifecycle counts, type names, records per second, sensor-health states, the recent ring, hostile strings escaped in `/api/live` and in `record` events, the worst-case `/api/live` fitting its buffer, split reads, truncated and overlong lines |
+| `test_live.c` | the live state and the framer without a socket: the device count per pass, passes cut by a gap, a bad line or a bad type not published, an empty table publishing 0, a reconnect as a new stream, the alert lifecycle counts, an alert's `match_ip` (an address or `""`), type names, records per second, sensor-health states, the recent ring, hostile strings escaped in `/api/live` and in `record` events, the worst-case `/api/live` fitting its buffer, split reads, truncated and overlong lines |
 | `test_ingest.c` | the client over a real unix socket and loopback TCP, the test playing sloth: `--socket` parsing and its refusals, the back-off bound, **the device count `/api/live` reports matching what the fake sent within 5 s** for 3, 12, 300, 0 and 7 devices (spec §12, M1), markup escaped over HTTP and over `/events`, reconnect after the peer closes, retrying with no peer at the capped interval, no tight loop on a peer that closes at once, a mixed stream of truncated, overlong, invalid-UTF-8 and hostile lines, and that the client never writes to the socket |
 | `test_rollup.c` | bucket boundaries in all three tiers, sum/count/min/max, value by kind, non-finite and huge values, the per-class key caps and LRU eviction with its flush and counters, churn decided on a key's whole life (keys of two and three samples crossing minute and hour boundaries keep only their 10 s rows, a key spanning a minute keeps all), held rows released when a key is established and at shutdown, a host recurring under LRU pressure keeping its minute and hour rows, interface, channel and alert keys established from their first sample and in classes of their own, the ring query's merge and bounds, the full store queue dropping 10 s rows before minute and hour rows and counting them, and every class full at `--web-max-keys` 8192 across an hour boundary and a shutdown with nothing dropped |
 | `test_metrics.c` | hand-written lines through the decoder on a pinned clock: the key canonicalisers, gauges from `%.2f` reals, hostile keys refused, event counters, running totals as deltas floored at zero and first-sight baselines, flows, channels, presence, a probe request counted once though both `probe_client` and `seqnum_client` carry it, rows per pass with gaps and bad lines, the bounded high-water table, an evicted row seen again not counted twice, the evicted-id filter's two generations remembering an id across 8,191 evictions and forgetting it at the next rotation |
@@ -2130,7 +2183,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_sqlbox.c` | the SQL box: the parameter and text rules; `404` without `--web-allow-sql` and the page's box hidden; spec §12's M5 acceptance (above) over a real socket against the C API and the sqlite3 shell; every write, DDL, PRAGMA, ATTACH, DML-tail CTE and second statement refused with the file byte for byte; every withheld column refused, the guardrail's words on the list, the integer flags read; the row, byte, time and value limits; one at a time (`503` `busy`, free again once answered or once the client leaves), `HEAD` `405`, `/api/recipes`. Both builds |
 | `test_flows.c` | the Flows routes over a generated sloth.db: every tab's row byte for byte, an SMB1 session marked, the columns each tab reads held to the allow-list and the withheld ones held off it, no cookie, banner, MQTT username, community count or preauth count in any body, every `400`, paging, sorting, the `ip` filter, a page that stops early with `more` and the next one, the chord pairs with their fold at three sizes, a table the file lacks; the page's Flows view. Both builds |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
-| `test_tui_colors.c` | the data colours against the TUI itself ([Design](#design)): `src/tui.c`'s ANSI backend linked in and captured, every byte of an address, an SSID, a host name and an info string compared with the page's colour for it (its functions pinned as served, a C port of them over the served `SLOTH_PALETTE`, the served custom properties); the cross-panel bold and the page's `IP_SRC` bits held to `IP_SRC_*`; the phosphor, heat and monitor-row pairs |
+| `test_tui_colors.c` | the data colours against the TUI itself ([Design](#design)): `src/tui.c`'s ANSI backend linked in and captured, every byte of an address, an SSID, a host name and an info string compared with the page's colour for it (its functions pinned as served, a C port of them over the served `SLOTH_PALETTE`, the served custom properties); the cross-panel bold and the page's `IP_SRC` bits held to `IP_SRC_*`, an alert counted by its `match_ip` alone; the alert-hot override against `tui_alert_hot_set()` (severity, bold from WARN, the TTL's edge, promotion, the full table) and its TTL and cap against `src/tui.c`; the phosphor, heat, alert-hot and monitor-row pairs; `MON_TYPES` against the record types `src/jsonl.c` emits from the monitor radio |
 | `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own |
 | `test_replay.c` | spec §12's M3 acceptance: a six-week JSONL stream generated in the test (never a fixture) through the framer, decoder, live state, metric derivation, identity tables, rollup, `web_tsdb_step()` and the engine as `main.c` wires them, on pinned clocks: four weeks of routine (noisy gauges, Poisson counts, and an input for every rule: names that agree, a randomised MAC with its own name, a month-old probe client, a steady ssh host), then a quiet 7 d week in which nothing at all fires, slothweb and sloth restarting in the middle of it in an SQLite build, then a 7 d week in which A1 fires for a burst of connections and A3 for a daytime device that appears only at night, while a device that is only ever present at night never fires; and the hour that just closed reaching the baseline at flush phases 0, 3 and 7 (the previous slice fed it only at phase 0); A9 for a new host whose first row the rollup released late, at sloth's real cadence (SQLite); five weeks of a 13:30-14:30 routine in IST firing nothing. Both builds |
 

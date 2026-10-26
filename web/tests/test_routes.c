@@ -237,12 +237,13 @@ static int token(const char *name, char *val, size_t sz) {
     return 0;
 }
 
-/* The chrome tokens as served: §8.1's names, mapped onto the owner's
- * Spacetrucker system (2026-10-23 restyle; this list replaced §8.1's
- * old hex values, which the restyle retired). The data colours are not
- * here: they are generated from the TUI's sources and compared with
- * the TUI itself in test_tui_colors.c. */
-static void test_design_tokens_match_spec(void) {
+/* The chrome tokens as served: the page's semantic names, mapped onto
+ * the owner's Spacetrucker system (the 2026-10-23 Design ruling;
+ * docs/web-ui-spec.md §8.1, amended 2026-10-26, points here and at
+ * web/ui/theme.css). The data colours are not here: they are generated
+ * from the TUI's sources and compared with the TUI itself in
+ * test_tui_colors.c. */
+static void test_design_tokens_are_spacetrucker(void) {
     static const struct { const char *name, *value; } tok[] = {
         { "--void", "#050208" },        { "--void-2", "#0a0512" },
         { "--dim", "#8a82a0" },         { "--dimmer", "#5a536e" },
@@ -1011,7 +1012,7 @@ void run_routes_tests(void) {
     WT_RUN(test_page_makes_no_external_reference);
     WT_RUN(test_page_renders_stream_values_as_text);
     WT_RUN(test_font_is_the_system_monospace_stack);
-    WT_RUN(test_design_tokens_match_spec);
+    WT_RUN(test_design_tokens_are_spacetrucker);
     WT_RUN(test_sha256_and_base64_vectors);
     WT_RUN(test_csp_hashes_match_the_page);
     WT_RUN(test_health_json);

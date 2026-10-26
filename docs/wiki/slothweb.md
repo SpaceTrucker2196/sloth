@@ -95,7 +95,7 @@ re-implements), `src/top_hosts.c` (what `conn_count` counts),
 `src/probe_pnl.c` (what `mac_random` is), issues #102, #157, #158,
 #159, #160, #161, #162, #163 and #164.
 
-**Last updated**: 2026-10-23 (the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
+**Last updated**: 2026-10-26 (the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
 
 ---
 
@@ -734,13 +734,19 @@ and the contrast table, is `web/README.md`'s Design section.
   bold for an address seen in two or more sources, SSIDs by their own
   hash, host names through the brand table (Google's letters in the
   logo's sequence), info strings in the earth tones, the phosphor
-  pairs, `tui_heat()`'s thresholds, the sparkline's level grading, and
-  802.11 records on the monitor rows' xterm 236. `web/tools/palette.c`
+  pairs, `tui_heat()`'s thresholds, the sparkline's level grading,
+  every record sloth emits from the monitor radio (beacons to EAPOL) on
+  the monitor rows' xterm 236, and the alert-hot override: for an hour
+  after an alert names an address as its `match_ip`, that address is in
+  `CP_ALERT_HOT_*` by the alert's severity, bold from WARN, over the
+  hash colour. `web/tools/palette.c`
   generates the colours at build time from `src/tui_palette.c`'s pair
   table and `src/tui.c`'s brand table (never copied by hand), and
   `test_tui_colors.c` runs the TUI's own renderer against the page's
-  functions on fixed addresses, SSIDs and host names and requires the
-  same colour for every byte.
+  functions on fixed addresses (alert-hot ones too), SSIDs (non-ASCII
+  ones through the page's own UTF-8 encoder) and host names (upper-case
+  ones through its lower-casing) and requires the same colour for every
+  byte.
 - **Light theme.** The site's cream, behind the toggle; dark is the
   default whatever the browser prefers, the choice kept in
   `localStorage` (the page works without it) and applied by the head
@@ -775,7 +781,7 @@ of #157 maps to it as follows.
 | `/api/health` | `test_health_json`, `test_health_over_socket` |
 | SSE tick counter and ping | `test_event_formats`, `test_events_stream_ticks_and_pings` |
 | slow-client drop | `test_slow_events_client_dropped` |
-| design tokens per §8.1 | `test_design_tokens_match_spec` |
+| the Spacetrucker chrome tokens (§8.1, amended) | `test_design_tokens_are_spacetrucker` |
 | `405` unchanged for writing methods | `test_routes_are_still_405_for_writes`, `test_routes_405_for_writes_over_socket` |
 | first tick at once; stream socket options (`TCP_NODELAY`, `SO_SNDBUF`) | `test_events_first_tick_at_once` |
 | stream client leaving noticed on the read path | `test_events_client_eof_noticed_on_read` |
@@ -863,7 +869,7 @@ The restyle maps as follows.
 | Item | Test |
 |---|---|
 | data coloured as the TUI colours it, byte for byte | `test_tui_colors.c` (`src/tui.c` linked and its output captured) |
-| Fira Code named, never fetched; the chrome tokens | `test_font_is_the_system_monospace_stack`, `test_design_tokens_match_spec` |
+| Fira Code named, never fetched; the chrome tokens | `test_font_is_the_system_monospace_stack`, `test_design_tokens_are_spacetrucker` |
 
 A test cannot connect from a non-loopback address, so the socket-level
 refusals narrow the list and connect from loopback; the list function

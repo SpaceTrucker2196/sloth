@@ -373,11 +373,11 @@ static void pass(long long t, long long start, unsigned long k) {
     if (k % 45 == 7)
         line("{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"demo-%lu\","
              "\"title\":\"PORT_SCAN\",\"detail\":\"203.0.113.50 probed 40 ports on 192.0.2.10"
-             " (demo)\",\"sev\":1,\"ty\":0}", t, k);
+             " (demo)\",\"sev\":1,\"ty\":0,\"match_ip\":\"203.0.113.50\",\"match_port\":0}", t, k);
     if (k % 120 == 30)
         line("{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"demo-smb1-%lu\","
              "\"title\":\"SMB1_USE\",\"detail\":\"192.0.2.20 negotiated SMB1 with 192.0.2.18"
-             " (demo)\",\"sev\":2,\"ty\":10}", t, k);
+             " (demo)\",\"sev\":2,\"ty\":10,\"match_ip\":\"192.0.2.20\",\"match_port\":445}", t, k);
     /* sloth's order (src/jsonl.c): the connections of the tick just
      * before its interfaces, then ARP, DHCP, top hosts, and the device
      * table as one run (slothweb counts devices by the run). */

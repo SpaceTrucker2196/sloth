@@ -63,10 +63,13 @@
   /* flow protocol hues (the Flows view, M6): a categorical chart
    * encoding the TUI has no counterpart for, each named beside its line
    * in the legend, never colour alone; SMB1 is --sev-crit over all of
-   * them. palette.c darkens them for the light theme by the data rule. */
+   * them. palette.c darkens them for the light theme by the data rule,
+   * and fails the build if two of them, or one and --sev-crit, come
+   * within 15 (CIEDE2000) of each other in either theme. Kerberos is
+   * CP_NORMAL itself, by reference, never a copy of its value. */
   --f-ssh:  #7fd1ff;  --f-rdp:  #b48cff;  --f-smb:  #ffd166;
   --f-snmp: #9be564;  --f-bgp:  #ff9ecb;  --f-ldap: #c0c0c0;
-  --f-kerb: #00d7af;
+  --f-kerb: var(--tui-normal);
 
   /* Dark is the default, whatever the browser prefers; the toggle
    * stores a choice of light. */
