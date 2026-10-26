@@ -32,11 +32,12 @@ fetches it from the URLs above with curl (the IEEE answers a plain
 curl with 418, so it sends a browser User-Agent and Accept headers),
 checks that each is a registry CSV with the expected header and rows
 of its registry, and only then replaces the four files and rewrites the
-block below. Review the diff and commit `web/data/` by hand. Nothing in
-`make`, `make web`, the tests or CI runs it: a build never touches the
-network. `web/tests/test_oui.c` checks that the hashes below are the
-committed files', so a CSV edited without this step fails `make
-web-test`.
+block below. When all four come back byte for byte the same, it changes
+nothing, so the date below is when the data last changed. Review the
+diff and commit `web/data/` by hand. Nothing in `make`, `make web`,
+the tests or CI runs it: a build never touches the network.
+`web/tests/test_oui.c` checks that the hashes below are the committed
+files', so a CSV edited without this step fails `make web-test`.
 
 <!-- update-oui:begin -->
 Refreshed 2026-10-26 by `make update-oui`: copied from /usr/share/ieee-data (ieee-data 20260625).

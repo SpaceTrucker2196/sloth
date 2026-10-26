@@ -6,6 +6,7 @@
  * registry CSVs are committed (owner ruling 2026-10-26) the builder is
  * also run on web/data/ itself, under a time bound, and the files are
  * held to web/data/SOURCE.md's hashes. */
+#include <glob.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -483,8 +484,9 @@ static void test_committed_registry_matches_source(void) {
 
 /* The builder on the whole committed registry, in bounded time. Until
  * 2026-10-26 each file had its own name index starting at 4096 slots
- * and rehashed every name so far into it: after oui.csv's ~40,000 names
- * the probe on mam.csv never ended. Seen red (the bound fired) with
+ * and rehashed every name so far into one doubling of 8,192 slots:
+ * with oui.csv's 20,012 distinct names in, the probe on mam.csv never
+ * ended. Seen red (the bound fired) with
  * that per-file index restored. The counts are SOURCE.md's rows: every
  * row is an entry or a later duplicate of one. */
 static void test_committed_registry_builds_in_time(void) {
@@ -565,38 +567,165 @@ static void test_second_file_after_many_names(void) {
     unlink(p);
 }
 
-/* needle's occurrences on lines that are not # comments. */
-static int code_mentions(const char *text, const char *needle) {
-    int n = 0;
-    for (const char *q = text; (q = strstr(q, needle)) != NULL; q++) {
-        const char *bol = q;
-        while (bol > text && bol[-1] != '\n') bol--;
-        while (*bol == ' ' || *bol == '\t') bol++;
-        if (*bol != '#') n++;
-    }
-    return n;
+static int copy_to(const char *from, const char *to) {
+    size_t len;
+    char *buf = slurp_file(from, &len);
+    if (!buf) return -1;
+    FILE *f = fopen(to, "wb");
+    int rc = f && fwrite(buf, 1, len, f) == len ? 0 : -1;
+    if (f && fclose(f) != 0) rc = -1;
+    free(buf);
+    return rc;
 }
 
-/* `make update-oui` is by hand only: outside comments the Makefile
- * names the script once (the rule's recipe) and the target twice (.PHONY
- * and the rule), and CI never mentions either, so no build, test or CI
- * job reaches the network for the registry. Seen red with update-oui
- * added to web's prerequisites, and with a CI step running it. */
+/* update_oui.sh run with web/data/ as its source onto a copy of
+ * web/data/: the same four files come back, so SOURCE.md is not
+ * rewritten and keeps the day the data last changed (its "Refreshed"
+ * line would otherwise become today's run, "copied from web/data").
+ * The second run, with one CSV in the copy changed, must rewrite it,
+ * which shows the comparison can see a rewrite at all. Seen red with
+ * the script's unchanged check removed. */
+static void test_unchanged_refresh_keeps_source(void) {
+    static const char *const names[] = { "oui.csv", "mam.csv", "oui36.csv",
+                                         "iab.csv", "SOURCE.md" };
+    char dir[128], p[256], cmd[512];
+    snprintf(dir, sizeof(dir), "%s/refresh", g_dir);
+    WT_EQ(mkdir(dir, 0700), 0);
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        char from[64];
+        snprintf(from, sizeof(from), "web/data/%s", names[i]);
+        snprintf(p, sizeof(p), "%s/%s", dir, names[i]);
+        WT_EQ(copy_to(from, p), 0);
+    }
+    snprintf(cmd, sizeof(cmd),
+             "sh web/tools/update_oui.sh '%s' web/data >/dev/null 2>&1", dir);
+    size_t want_len, got_len;
+    char *want = slurp_file("web/data/SOURCE.md", &want_len);
+
+    WT_EQ(system(cmd), 0);
+    snprintf(p, sizeof(p), "%s/SOURCE.md", dir);
+    char *got = slurp_file(p, &got_len);
+    WT_ASSERT(want && got && got_len == want_len && !memcmp(got, want, want_len));
+    free(got);
+
+    snprintf(p, sizeof(p), "%s/iab.csv", dir);
+    FILE *f = fopen(p, "ab");
+    WT_ASSERT(f != NULL);
+    if (f) { fputs("IAB,0050C2FFF,Changed,x\n", f); fclose(f); }
+    WT_EQ(system(cmd), 0);
+    snprintf(p, sizeof(p), "%s/SOURCE.md", dir);
+    got = slurp_file(p, &got_len);
+    WT_ASSERT(want && got && !(got_len == want_len && !memcmp(got, want, want_len)));
+    WT_ASSERT(got && strstr(got, "copied from web/data") != NULL);
+    free(got);
+    free(want);
+
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        snprintf(p, sizeof(p), "%s/%s", dir, names[i]);
+        unlink(p);
+    }
+    rmdir(dir);
+}
+
+static int mentions_update_oui(const char *s, size_t n) {
+    for (size_t i = 0; i + 10 <= n; i++)
+        if (!strncmp(s + i, "update-oui", 10) || !strncmp(s + i, "update_oui", 10))
+            return 1;
+    return 0;
+}
+
+/* Lines of the Makefile that would run update-oui from anything but
+ * `make update-oui` itself: a prerequisite naming it, a variable holding
+ * it, or another rule's recipe calling it. Allowed: comments, .PHONY,
+ * the update-oui rule's own header and recipe. A backslash-continued
+ * line keeps the kind of the line it continues. *rule is set when the
+ * update-oui rule exists. */
+static int makefile_violations(const char *mk, int *rule) {
+    enum { K_BLANK, K_COMMENT, K_PHONY, K_OTHER, K_RECIPE } kind = K_BLANK;
+    int bad = 0, in_uo = 0, cont = 0;
+    *rule = 0;
+    for (const char *l = mk; *l; ) {
+        const char *e = strchr(l, '\n');
+        size_t n = e ? (size_t)(e - l) : strlen(l);
+        const char *t = l;
+        while (t < l + n && *t == ' ') t++;
+        size_t tn = n - (size_t)(t - l);
+        if (!cont) {
+            if (n && *l == '\t')                       kind = K_RECIPE;
+            else if (!tn)                              kind = K_BLANK;
+            else if (*t == '#')                        kind = K_COMMENT;
+            else if (tn >= 7 && !strncmp(t, ".PHONY:", 7)) kind = K_PHONY;
+            else                                       kind = K_OTHER;
+        }
+        if (kind == K_RECIPE) {
+            if (!in_uo && mentions_update_oui(l, n)) bad++;
+        } else if (kind == K_OTHER && !cont) {
+            const char *c = memchr(t, ':', tn);
+            const char *q = memchr(t, '=', tn);
+            int header = c && (!q || q > c);
+            in_uo = header && (size_t)(c - t) == 10 && !strncmp(t, "update-oui", 10);
+            if (in_uo) *rule = 1;
+            const char *rest = in_uo ? c + 1 : t;
+            if (mentions_update_oui(rest, (size_t)(l + n - rest))) bad++;
+        } else if (kind == K_OTHER) {
+            if (mentions_update_oui(l, n)) bad++;
+        }
+        cont = n && l[n - 1] == '\\';
+        l = e ? e + 1 : l + n;
+    }
+    return bad;
+}
+
+/* Every regular file in dir (dotfiles aside, as glob leaves them) that
+ * names update-oui or update_oui; the number of files read goes to
+ * *files. */
+static int dir_mentions(const char *dir, int *files) {
+    char pat[256];
+    glob_t g;
+    int hits = 0;
+    *files = 0;
+    snprintf(pat, sizeof(pat), "%s/*", dir);
+    if (glob(pat, 0, NULL, &g) != 0) return -1;
+    for (size_t i = 0; i < g.gl_pathc; i++) {
+        const char *p = g.gl_pathv[i];
+        struct stat st;
+        if (stat(p, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        size_t len;
+        char *txt = slurp_file(p, &len);
+        if (!txt) continue;
+        (*files)++;
+        if (mentions_update_oui(txt, len)) {
+            fprintf(stderr, "  %s runs or names update-oui\n", p);
+            hits++;
+        }
+        free(txt);
+    }
+    globfree(&g);
+    return hits;
+}
+
+/* `make update-oui` is by hand only: in the Makefile no prerequisite,
+ * variable or other rule's recipe names it (only comments, .PHONY and
+ * the rule itself), and no workflow or script under .github/ mentions
+ * it, so no build, test or CI job reaches the network for the registry.
+ * Seen red with update-oui added to web's prerequisites, with a
+ * `$(MAKE) update-oui` line in web-test's recipe, with a step running it
+ * in wiki-sync.yml, and with a call to it in .github/scripts/. */
 static void test_update_oui_is_never_automatic(void) {
     size_t len;
     char *mk = slurp_file("Makefile", &len);
     WT_ASSERT(mk != NULL);
     if (!mk) return;
-    WT_EQ(code_mentions(mk, "update_oui"), 1);
-    WT_EQ(code_mentions(mk, "update-oui"), 2);
-    WT_ASSERT(strstr(mk, "\nupdate-oui:\n") != NULL);
+    int rule = 0;
+    WT_EQ(makefile_violations(mk, &rule), 0);
+    WT_ASSERT(rule);
     free(mk);
-    char *ci = slurp_file(".github/workflows/ci.yml", &len);
-    WT_ASSERT(ci != NULL);
-    if (!ci) return;
-    WT_LACKS(ci, "update-oui");
-    WT_LACKS(ci, "update_oui");
-    free(ci);
+    static const char *const dirs[] = { ".github/workflows", ".github/scripts" };
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        int files = 0;
+        WT_EQ(dir_mentions(dirs[i], &files), 0);
+        WT_ASSERT(files > 0);
+    }
 }
 
 void run_oui_tests(void) {
@@ -616,6 +745,7 @@ void run_oui_tests(void) {
     WT_RUN(test_committed_registry_builds_in_time);
     WT_RUN(test_second_file_after_many_names);
     WT_RUN(test_update_oui_is_never_automatic);
+    WT_RUN(test_unchanged_refresh_keeps_source);
     oui_build_free(&B);
     char p[128];
     path_in(p, sizeof(p), "oui.csv");   unlink(p);

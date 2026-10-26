@@ -120,8 +120,9 @@ static uint32_t name_hash(const char *s) {
  * for the whole build so a second registry file sees the first's names.
  * It is sized for every name it already holds: until 2026-10-26 each
  * file had its own index starting at 4096 slots, the first growth
- * rehashed all of b->names into one doubling, and after oui.csv's
- * ~40,000 names that table was full and the probe never ended. */
+ * rehashed all of b->names into one doubling (8,192 slots), and with
+ * oui.csv's 20,012 distinct names already in, that table was full on
+ * the second file and the probe never ended. */
 static int ix_grow(oui_build_t *b) {
     size_t cap = b->ix_cap ? b->ix_cap : 4096;
     while (cap < 2 * (b->nnames + 1)) cap *= 2;

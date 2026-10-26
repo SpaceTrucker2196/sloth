@@ -14,6 +14,7 @@
 # User-Agent and Accept headers. Every file must be a CSV with the
 # registry header and at least one row of its registry before any of
 # them replaces what DEST holds: a failed refresh leaves DEST unchanged.
+# A refresh that brings back the same four files changes nothing.
 set -eu
 
 dest=${1:-web/data}
@@ -60,6 +61,23 @@ while [ $# -ge 3 ]; do
     *) origin="${origin:+$origin; }$how" ;;
     esac
 done
+
+# Nothing changed: every new file is byte for byte the one in DEST and
+# the one SOURCE.md's block records. Then SOURCE.md is left alone, so
+# its "Refreshed" date stays the day the data last changed, not the
+# day the script last ran.
+same=1
+for name in oui mam oui36 iab; do
+    new=$(sha256sum "$tmp/$name.csv" | cut -d' ' -f1)
+    have=$( { [ -f "$dest/$name.csv" ] && sha256sum "$dest/$name.csv"; } | cut -d' ' -f1)
+    recorded=$(sed -n '/^<!-- update-oui:begin -->$/,/^<!-- update-oui:end -->$/p' "$dest/SOURCE.md" |
+               grep "^| .$name\.csv. |" | sed -n 's/.*\([0-9a-f]\{64\}\).*/\1/p')
+    [ "$new" = "$have" ] && [ "$new" = "$recorded" ] || { same=0; break; }
+done
+if [ "$same" = 1 ]; then
+    echo "update_oui: $dest unchanged ($origin); SOURCE.md left as it is"
+    exit 0
+fi
 
 version=""
 if [ "$src" = /usr/share/ieee-data ] && command -v dpkg-query >/dev/null; then

@@ -5219,8 +5219,9 @@ report events.
   `/usr/share/ieee-data` or fetches from the IEEE, checks each header
   and registry, and rewrites `SOURCE.md`'s block; nothing else runs it.
   Fixed first: `oui_gen` hung on any multi-file registry (a per-file
-  4,096-slot name index rehashing every earlier name; full after
-  `oui.csv`'s 39,627), now one index sized for the build. The default
+  4,096-slot name index rehashing every earlier name into 8,192 slots;
+  full after `oui.csv`'s 20,012 distinct names, from 39,627
+  assignments), now one index sized for the build. The default
   build has the full table, A4 on; `web-test` is told which table to
   expect, and CI's two-row-registry step became a build and test of the
   empty-`WEB_OUI_DIR` fallback. slothweb 0.5 MB to 3.3 MB. Page:

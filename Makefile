@@ -563,7 +563,7 @@ research-mcp:
 # web/data/SOURCE.md says where they come from and their hashes). The
 # generated table is build output and never committed. WEB_OUI_DIR
 # names another directory; one without the CSVs still builds: the
-# generator reads sloth's own 123-entry table out of src/oui.c as text
+# generator reads sloth's own 117-entry table out of src/oui.c as text
 # and /api/health says "vendor_table":"sloth". The table is regenerated
 # when the CSV list or a CSV's checksum changes (the stamp), not only
 # when a CSV is newer than the table. web-test is told which table the

@@ -58,7 +58,17 @@ data/
 # slothweb's vendor table inputs (#162): the IEEE registry CSVs in
 # web/data/ ARE committed (owner ruling 2026-10-26, reversing the
 # 2026-10-21 one that kept them out; web/data/SOURCE.md). The data/ rule
-# above would match web/data/ too, so it is re-included here by name.
+# above would match web/data/ too, so the directory is re-included and
+# then emptied again, and only the five committed files are named back.
+# Re-including the directory alone would re-include everything a sloth
+# run with cwd=web/ writes there (sloth.db, alert pcaps, EAPOL exports),
+# which is exactly what the data/ rule exists to stop.
 # The table generated from them, build/web/web_oui_table.c, is build
 # output and stays ignored under /build/ above.
 !/web/data/
+/web/data/*
+!/web/data/oui.csv
+!/web/data/mam.csv
+!/web/data/oui36.csv
+!/web/data/iab.csv
+!/web/data/SOURCE.md

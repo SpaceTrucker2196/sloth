@@ -602,7 +602,10 @@ The full account is in
   The same day fixed a hang in the generator: each CSV had its own
   4,096-slot name index that rehashed every earlier name, so after
   `oui.csv` the second file never finished; one index for the build,
-  sized for its names, now.
+  sized for its names, now. The demo's MACs are all locally
+  administered, so on the demo no device gets an IEEE vendor and A4
+  never fires; the table shows through Lookup on a globally
+  administered MAC, or on real traffic.
 - **Passive names** (§9.3 minus the active half): sloth.db's and the
   stream's DHCP, mDNS and NBNS names, sloth's hostname, and a passive
   PTR cache (`slothweb.db` v4, `passive_ptr`, 4,096 addresses). The
