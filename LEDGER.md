@@ -263,3 +263,4 @@
 | ab72f65 | 2026-10-23T19:58:34Z | claude-opus-5-5 | 50 | 10325 | 11174018 | 19939 | 2.6010 | slothweb SQL-box WAL-restart test accepts the box's busy 503 and prints every status (CI flake on 382ab40) |
 | 6f9f71d | 2026-10-23T21:04:14Z | claude-opus-5-5 | 76 | 22415 | 18748388 | 41369 | 4.5292 | #156 item 2: BLE address-rotation hints behind --ble-rotation-hints (default off): research corpus doc, SipHash per-run token digests, 64-entry seam table, poisoning/flood/adapter guards; [*] estimate only, no detector consumer, window-scoped links |
 | 40e5116 | 2026-10-26T11:33:20Z | claude-opus-5 | 346 | 179792 | 26956241 | 488984 | 22.8645 | #167: one shared 802.11 band plan (src/wifi_freq) replacing six drifted copies,  |
+| 2083254 | 2026-10-26T13:12:32Z | claude-opus-5 | 462 | 164507 | 27172728 | 1946020 | 37.1615 | release v1.8.5 |
