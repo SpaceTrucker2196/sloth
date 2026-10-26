@@ -5081,3 +5081,35 @@ report events.
   the stub itself holds one. shellcheck is not
   installed here and has still not run; CI does not run `make
   deploy-test`.
+- 2026-10-26 — [[deployment]] §4: second review fixes to
+  `packaging/bin/sloth-migrate-sensor` (#153). The first round's fixes,
+  measured but left uncommitted on cc09283, are committed. Verify now
+  fails only on a retune failure whose `chan_retune_reason` is `EPERM`
+  or `EACCES` (or absent): an `EINVAL` from the regdomain refusing a hop
+  channel happens under the root unit too, and failing on it would roll
+  a healthy sensor back every time; it is printed as a note. Rollback
+  recreates `/run/sloth` with the mode and owner preflight recorded when
+  the old socket lives there, because the hardened unit's
+  `RuntimeDirectory=` removes it on stop and `data_socket.c` never makes
+  it; a socket below it, or a symlinked `/run/sloth`, is refused.
+  `SLOTH_IFACE` comes from the hardened unit's `BindsTo=` device, and a
+  different radio in the old `sloth-monitor-up` line, a `MON_IFACE`
+  override or an `--iface` list without it is refused. Old `[Service]`
+  keys the hardened unit replaces are printed as `not carried`. The
+  rotation is 11 channels, about 22 s, not ~40. A dry run on a migrated
+  host is now checked against the call log, and `mutating_calls` covers
+  `kill`, `mask`, `try-restart` and the reload verbs. shellcheck 0.11.0
+  (fetched into a scratch dir, not installed) found SC2015/SC2329 in the
+  tool and SC2016/SC2034/SC1003/SC2010 in the test; the tool's are
+  fixed, the test's first three are disabled with the reason (eval'd
+  single-quoted checks), and `holders()` reads fd links instead of
+  parsing `ls`. All three scripts are now clean. Seen red under one
+  mutation each, restored by the inverse edit: a `systemctl restart` in
+  the already-migrated dry-run branch (the new call-log check); the
+  monitor-up exclusion removed from the not-carried list; the
+  `/run/sloth` recreate replaced by `if false` (rollback-rundir: the old
+  unit did not come back); `EINVAL` counted as a privilege failure
+  (einval-passes); the `--iface` membership test replaced by a match
+  of anything. `make deploy-test` 262 passed, 0 failed, also with
+  `TOOL_SH="busybox sh"` and `"bash --posix"`. CI still does not run
+  `make deploy-test` or shellcheck; that needs a `.github/` change.

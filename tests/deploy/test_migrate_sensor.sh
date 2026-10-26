@@ -14,7 +14,13 @@
 # the copy keeps no group/other bits, a signal leaves no hardened unit and
 # no socket reader behind, an unstable rollback is not reported as done)
 # were each seen to fail under a mutation of the tool before this file
-# claimed them: docs/wiki/log.md, the two #153 entries, names each one.
+# claimed them: docs/wiki/log.md, the #153 entries, names each one.
+#
+# check() evals its first argument, so the single-quoted expressions are
+# meant not to expand here (SC2016), the variables they read look unused
+# to shellcheck (SC2034), and the extra ExecStart lines passed to setup()
+# end in a literal backslash (SC1003).
+# shellcheck disable=SC2016,SC2034,SC1003
 set -u
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
@@ -94,13 +100,17 @@ setup() {   # setup NAME [extra ExecStart line, ending in a backslash]
     printf 'research' > "$ROOT/usr/local/share/sloth/research.db"
     printf 'Name:\tsloth\nCapEff:\t0000000000001000\nNoNewPrivs:\t1\n' \
         > "$ROOT/proc/4242/status"
+    chmod 750 "$ROOT/run/sloth"
     : > "$ROOT/run/sloth/sloth.sock"
     echo active > "$STATE/active"
     health_line 6 0 > "$STATE/health"
 
     # Knobs, each a file in \$STATE: new_dies (the hardened unit never
     # comes up), old_loops (the old unit restart-loops: a new MainPID on
-    # every show), pids (MainPIDs to report in turn, the last repeated).
+    # every show), pids (MainPIDs to report in turn, the last repeated),
+    # rundir (systemd's RuntimeDirectory=: stopping the hardened unit
+    # removes run/sloth, starting it makes it, and the old unit fails to
+    # start without it, as its bind would).
     cat > "$STUB/systemctl" <<STUBEOF
 #!/bin/sh
 echo "systemctl \$*" >> "$LOG"
@@ -108,10 +118,16 @@ hardened() { grep -q '^User=sloth' "$ROOT/$UNIT_REL"; }
 case "\$1" in
     is-active) [ "\$(cat "$STATE/active")" = active ] ;;
     is-enabled) exit 0 ;;
-    stop) echo inactive > "$STATE/active" ;;
+    stop)
+        [ -e "$STATE/rundir" ] && hardened && rm -rf "$ROOT/run/sloth"
+        echo inactive > "$STATE/active" ;;
     start|restart)
-        if [ -e "$STATE/new_dies" ] && hardened; then echo failed; else echo active; fi \
-            > "$STATE/active" ;;
+        if [ -e "$STATE/rundir" ] && hardened; then
+            mkdir -p "$ROOT/run/sloth" && : > "$ROOT/run/sloth/sloth.sock"
+        fi
+        if [ -e "$STATE/new_dies" ] && hardened; then echo failed
+        elif [ -e "$STATE/rundir" ] && ! hardened && [ ! -d "$ROOT/run/sloth" ]; then echo failed
+        else echo active; fi > "$STATE/active" ;;
     show)
         n=\$(cat "$STATE/show_calls" 2>/dev/null || echo 0)
         n=\$((n + 1)); echo \$n > "$STATE/show_calls"
@@ -169,9 +185,15 @@ run() {   # run [args]; output to $W/out, status in $RC
     RC=$?
 }
 
-# One sensor_health line: chan_confirmed, chan_retune_failures.
+# One sensor_health line: chan_confirmed, chan_retune_failures and
+# chan_retune_reason (default: none for 0 failures, else EPERM, what a
+# missing CAP_NET_ADMIN returns). A reason of '-' leaves the field out.
 health_line() {
-    printf '{"type":"sensor_health","ts":2,"chan_requested":6,"chan_confirmed":%s,"chan_confirmed_ok":1,"chan_retune_failures":%s,"hop_channels":13}\n' "$1" "$2"
+    r=${3:-}
+    [ -n "$r" ] || { [ "$2" -eq 0 ] && r=none || r=EPERM; }
+    rk=",\"chan_retune_reason\":\"$r\""
+    [ "$r" = - ] && rk=""
+    printf '{"type":"sensor_health","ts":2,"chan_requested":6,"chan_confirmed":%s,"chan_confirmed_ok":1,"chan_retune_failures":%s%s,"hop_channels":13}\n' "$1" "$2" "$rk"
 }
 
 tree_hash() {
@@ -183,7 +205,7 @@ tree_hash() {
 file_sums() { (cd "$1" && find . -type f -exec sha256sum {} + | LC_ALL=C sort -k2); }
 
 mutating_calls() {
-    grep -E '^(systemctl (stop|start|restart|daemon-reload|reenable|enable|disable)|systemd-sysusers|chown)' "$LOG"
+    grep -E '^(systemctl (stop|start|restart|try-restart|reload|reload-or-restart|try-reload-or-restart|kill|mask|unmask|daemon-reload|reenable|enable|disable)|systemd-sysusers|chown)' "$LOG"
 }
 
 UNIT_REL=etc/systemd/system/sloth-sensor.service
@@ -202,6 +224,25 @@ check 'grep -q "would: copy " "$W/out"' "copy not announced"
 check 'grep -q "would: install the hardened unit" "$W/out"' "unit install not announced"
 check 'grep -q "would: verify active, CapEff 0000000000001000" "$W/out"' "verify not announced"
 check 'grep -q "SLOTH_ARGS:  --db-interval-secs 1 --db-retain-days 30 --my-ssid TestNet" "$W/out"' "SLOTH_ARGS not shown"
+
+# ── 1b. keys the hardened unit replaces are named, not dropped silently ──
+CASE=not-carried
+setup not-carried
+sed -i "s|^Restart=always|Environment=TZ=UTC\nNice=5\nExecStartPre=/bin/true\nRestart=always|" "$ROOT/$UNIT_REL"
+run --dry-run
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+for k in "Environment=TZ=UTC" "Nice=5" "ExecStartPre=/bin/true"; do
+    K=$k
+    check 'grep -qF "note: not carried (the hardened unit has its own): $K" "$W/out"' "$K not named as dropped: $(cat "$W/out")"
+done
+check '! grep -q "not carried.*sloth-monitor-up" "$W/out"' "the monitor-up ExecStartPre was listed as dropped"
+
+# ── 1c. a carried --iface list that includes the bound radio is kept ─────
+CASE=iface-carried
+setup iface-carried '    --iface eth0 --iface alfa0 \'
+run
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check 'grep -q "^SLOTH_ARGS=.*--iface eth0 --iface alfa0" "$ROOT/etc/default/sloth"' "--iface not carried: $(grep SLOTH_ARGS= "$ROOT/etc/default/sloth" 2>&1)"
 
 # ── 2. apply: flag carry-over, copy, unit, verify ────────────────────────
 CASE=apply
@@ -250,8 +291,11 @@ check 'grep -q "already the hardened unit; verifying only" "$W/out"' "second run
 check 'grep -q "already migrated and verified" "$W/out"' "second run did not verify"
 check '[ "$(tree_hash "$ROOT")" = "$h1" ]' "second run changed the scratch root"
 check '[ -z "$(mutating_calls)" ]' "second run made mutating calls: $(mutating_calls)"
+# A dry run on a migrated host must not touch the live sensor either.
+: > "$LOG"
 STAMP=T3 run --dry-run
 check '[ "$RC" -eq 0 ] && [ "$(tree_hash "$ROOT")" = "$h1" ]' "dry run after migration changed something"
+check '[ -z "$(mutating_calls)" ]' "dry run after migration made mutating calls: $(mutating_calls)"
 
 # ── 4. refusals change nothing ───────────────────────────────────────────
 refusal() {   # refusal NAME EXPECTED-FRAGMENT [extra ExecStart line]
@@ -300,6 +344,18 @@ refusal install-service-first "so the data was never copied to /var/lib/sloth"
 # A backup but no copied db (an interrupted hand migration).
 PREP='cp "$ROOT/$UNIT_REL" "$ROOT/$UNIT_REL.bak-migrate-T0" && cp "$REPO/packaging/systemd/sloth-sensor.service" "$ROOT/$UNIT_REL"'
 refusal backup-no-db "used --db data/sloth.db (WorkingDirectory /home/op/sloth)"
+# The monitor radio has to be the one the hardened unit binds to.
+PREP='sed -i "s|sloth-monitor-up alfa0|sloth-monitor-up wlan1|" "$ROOT/$UNIT_REL"'
+refusal other-radio "puts 'wlan1' into monitor mode, but the hardened unit binds to alfa0"
+PREP='sed -i "s|sloth-monitor-up alfa0|sloth-monitor-up \${SLOTH_IFACE}|" "$ROOT/$UNIT_REL"'
+refusal radio-variable "not a plain interface name"
+PREP=''
+MON_IFACE=wlan1 refusal mon-iface-override "MON_IFACE=wlan1, but the hardened unit binds to alfa0"
+refusal iface-list "--iface list ( eth0 ) does not include alfa0" '    --iface eth0 \'
+PREP='sed -i "s|^Restart=always|ExecStartPre=/usr/local/sbin/sloth-monitor-up wlan1\nRestart=always|" "$ROOT/$UNIT_REL"'
+refusal second-radio "puts 'wlan1' into monitor mode"
+PREP='sed -i "s|unix:/run/sloth.sock|unix:/run/sloth/sub/s.sock|" "$ROOT/$UNIT_REL"'
+refusal socket-below-rundir "is below /run/sloth, which the hardened unit's RuntimeDirectory= removes"
 PREP=''
 
 # ── 5. the copy is verified before the switch ────────────────────────────
@@ -397,10 +453,47 @@ verify_fails never-active "sloth-sensor.service is not active after 2s"
 # EPERM a missing CAP_NET_ADMIN causes shows only in a later one, here
 # 2 s after it, inside a 5 s window.
 PREP='health_line 0 0 > "$STATE/health" && health_line 0 5 > "$STATE/health_late"'
-SETTLE_FOR=5 verify_fails retune-later "chan_retune_failures is '5'"
+SETTLE_FOR=5 verify_fails retune-later "chan_retune_failures is '5', chan_retune_reason 'EPERM'"
+PREP='health_line 6 2 EACCES > "$STATE/health"'
+verify_fails eacces "chan_retune_reason 'EACCES'"
+# A binary that does not say why cannot be told apart from EPERM.
+PREP='health_line 6 2 - > "$STATE/health"'
+verify_fails no-reason "chan_retune_reason 'absent'"
+# EINVAL first, EPERM later: the privilege refusal still fails it.
+PREP='health_line 6 1 EINVAL > "$STATE/health" && health_line 6 9 EPERM > "$STATE/health_late"'
+SETTLE_FOR=5 verify_fails eperm-after-einval "chan_retune_reason 'EPERM'"
 PREP='health_line 0 0 > "$STATE/health"'
 verify_fails never-confirmed "showed a confirmed channel"
 PREP=''
+
+# ── 8b. a channel the regdomain refuses is not a hardening failure ───────
+# EINVAL on a hop-list channel happens under the root unit too
+# (src/jsonl.c, #91); failing on it would roll back a healthy sensor on
+# every attempt.
+CASE=einval-passes
+setup einval-passes
+health_line 6 4 EINVAL > "$STATE/health"
+run
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check 'grep -q "no privilege refusal (EPERM/EACCES)" "$W/out"' "verify did not pass on EINVAL: $(cat "$W/out")"
+check 'grep -q "refused some hop channels with EINVAL" "$W/out"' "the EINVAL refusals were not reported: $(cat "$W/out")"
+check 'cmp -s "$REPO/packaging/systemd/sloth-sensor.service" "$ROOT/$UNIT_REL"' "the hardened unit is not installed"
+
+# ── 8c. a rollback recreates the old socket's /run/sloth ─────────────────
+# The hardened unit's RuntimeDirectory=sloth removes /run/sloth on stop,
+# and an old unit whose socket is there cannot bind without it.
+CASE=rollback-rundir
+setup rollback-rundir
+sed -i "s|unix:/run/sloth.sock|unix:/run/sloth/sloth.sock|" "$ROOT/$UNIT_REL"
+: > "$STATE/rundir"
+printf 'Name:\tsloth\nCapEff:\t0000000000003000\nNoNewPrivs:\t1\n' > "$ROOT/proc/4242/status"
+cp "$ROOT/$UNIT_REL" "$W/old.unit"
+run
+check '[ "$RC" -eq 1 ]' "exit $RC, want 1: $(cat "$W/out")"
+check 'grep -q "rolled back; sloth-sensor.service runs the previous unit" "$W/out"' "rollback not reported: $(cat "$W/out")"
+check '[ "$(cat "$STATE/active")" = active ]' "the old service did not come back"
+check '[ -d "$ROOT/run/sloth" ] && [ "$(stat -c %a "$ROOT/run/sloth")" = 750 ]' "run/sloth not recreated 0750: $(stat -c %a "$ROOT/run/sloth" 2>&1)"
+check 'cmp -s "$W/old.unit" "$ROOT/$UNIT_REL"' "the hardened unit was left installed"
 
 # ── 9. a rollback whose old unit will not stay up says so ────────────────
 CASE=rollback-unstable
@@ -454,7 +547,11 @@ sleep 1
 # left behind (a mutation that drops stop_health_reader does).
 holders() {
     for p in /proc/[0-9]*; do
-        ls -l "$p/fd" 2>/dev/null | grep -qF -- "$W/" && echo "${p#/proc/} $(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)"
+        for fd in "$p"/fd/*; do
+            case "$(readlink "$fd" 2>/dev/null)" in
+                "$W/"*) echo "${p#/proc/} $(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)"; break ;;
+            esac
+        done
     done
 }
 check '[ -z "$(holders)" ]' "the socket reader outlived the tool: $(holders)"

@@ -25,9 +25,11 @@
 #      hardened unit and a defaults file carrying the site's flags, start.
 #   5. verify: active, CapEff only CAP_NET_ADMIN (with --hop; 0 without),
 #      NoNewPrivs 1, sensor_health records on the data socket over a
-#      window covering a full hop rotation, every one with
-#      chan_retune_failures 0 and at least one with a confirmed channel,
-#      and the same MainPID afterwards (no restart).
+#      window covering a full hop rotation, none with a retune failure
+#      for EPERM or EACCES (what a missing CAP_NET_ADMIN returns; a
+#      channel the regdomain refuses is noted, not failed) and at least
+#      one with a confirmed channel, and the same MainPID afterwards (no
+#      restart).
 #
 # Any failure after the service is stopped rolls back: the previous unit and
 # defaults file are restored, the copy is renamed aside (never deleted —
@@ -67,8 +69,10 @@ SYSUSERS_TEMPLATE=${SYSUSERS_TEMPLATE:-$SLOTH_SRC/packaging/systemd/sloth.sysuse
 DEFAULTS_TEMPLATE=${DEFAULTS_TEMPLATE:-$SLOTH_SRC/packaging/default/sloth}
 # Host path of the old data dir (no ROOT); derived from the unit's --db.
 SRC_DATA=${SRC_DATA:-}
-# Must match BindsTo= in the unit, which systemd cannot take from a file.
-MON_IFACE=${MON_IFACE:-alfa0}
+# Must match BindsTo= in the unit, which systemd cannot take from a file;
+# preflight refuses any other value rather than write a defaults file the
+# unit contradicts. Empty: taken from BindsTo=.
+MON_IFACE=${MON_IFACE:-}
 STAMP=${STAMP:-$(date +%Y%m%d-%H%M%S)}
 
 # ── Commands ─────────────────────────────────────────────────────────────
@@ -92,9 +96,11 @@ HEALTH_SECS=${HEALTH_SECS:-330}
 # The first sensor_health is emitted when the reader connects (the client
 # count is in its signature), usually before any retune has been tried,
 # so it proves nothing about CAP_NET_ADMIN. Reading on for one rotation
-# (~40 channels at the 2 s maximum dwell, src/wifi_chanhop.c) does: the
-# first failure and the first confirmed channel each emit a record of
-# their own (retune_fail_any, chan_ever_confirmed in src/jsonl.c).
+# (11 channels (DEFAULT_CHANNELS) at the 2 s maximum dwell, about 22 s,
+# src/wifi_chanhop.c) does: the first failure, each new failure reason
+# and the first confirmed channel each emit a record of their own
+# (retune_fail_any, retune_reason_mask, chan_ever_confirmed in
+# src/jsonl.c).
 SETTLE_SECS=${SETTLE_SECS:-90}
 # After a rollback the old unit must stay up past its restart delay
 # (RestartSec=10 in the hardened unit) before it is reported running.
@@ -109,7 +115,8 @@ case "${1:-}" in
     --dry-run|-n) DRY=1 ;;
     "") ;;
     -h|--help)
-        sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+        # The header comment, however long it grows.
+        awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
         exit 0 ;;
     *) echo "$ME: unknown argument '$1' (use --dry-run, or nothing)" >&2; exit 2 ;;
 esac
@@ -181,6 +188,7 @@ check_relocated() {   # FLAG OLDPATH EXPECTED-NAME
 ARGS=""
 WANT_HOP=0
 OLD_SOCK=""
+OLD_IFACES=""
 parse_exec() {
     exec_line=$1
     case "$exec_line" in
@@ -210,8 +218,8 @@ parse_exec() {
             --no-privdrop) say "dropping --no-privdrop (the hardened unit relies on the #140 drop)" ;;
             # absorbed with a value, relocated under /var/lib/sloth
             --db|--pcap-dir|--report|--report-json|--snapshot-out|--baseline-in|--with-research)
-                [ $# -ge 1 ] && case "$1" in -*) false ;; *) true ;; esac \
-                    || refuse "$f needs a value"
+                [ $# -ge 1 ] || refuse "$f needs a value"
+                case "$1" in -*) refuse "$f needs a value" ;; esac
                 resolve "$1"; v=$RESOLVED; shift
                 case "$f" in
                     --db) P_DB=$v ;;
@@ -232,8 +240,9 @@ parse_exec() {
             # carried verbatim into SLOTH_ARGS: site identity and tuning
             --my-ssid|--my-bssid|--site-label|--site|--known-mac|--iface|\
             --db-interval-secs|--db-retain-days|--db-max-mb|--correlate-retain)
-                [ $# -ge 1 ] && case "$1" in --*) false ;; *) true ;; esac \
-                    || refuse "$f needs a value"
+                [ $# -ge 1 ] || refuse "$f needs a value"
+                case "$1" in --*) refuse "$f needs a value" ;; esac
+                [ "$f" = --iface ] && OLD_IFACES="$OLD_IFACES $1"
                 ARGS="${ARGS:+$ARGS }$f $1"; shift ;;
             *)
                 refuse "flag '$f' in $UNIT is not one this tool carries; move it into $TARGET_HOST terms by hand (docs/wiki/deployment.md §4) rather than have it guessed" ;;
@@ -255,6 +264,7 @@ render_unit() {   # the same substitution `make install-service` applies
     sed -e "s|/usr/local/|$PREFIX/|g" "$UNIT_TEMPLATE"
 }
 
+# shellcheck disable=SC2329  # called through act()
 render_defaults() {
     SM_ARGS=$ARGS SM_IFACE=$MON_IFACE SM_FROM=$UNIT SM_STAMP=$STAMP awk '
         NR == 1 {
@@ -316,25 +326,47 @@ stop_health_reader() {
     HEALTH_FILE=""
 }
 
-# Sets H_N (sensor_health records so far), H_BAD (the first non-zero or
-# absent chan_retune_failures, '-' if none) and H_CONF (1 if any record
-# has chan_confirmed > 0). A line not yet ending in '}' is one the reader
+# Sets H_N (sensor_health records so far), H_BAD (the first record whose
+# retune failures are a privilege refusal or cannot be told apart from
+# one, as 'count:reason'; '-' if none), H_CONF (1 if any record has
+# chan_confirmed > 0) and H_OTHER (the other failure reasons seen, comma
+# separated; '-' if none). A line not yet ending in '}' is one the reader
 # is still writing and is left for the next scan.
+#
+# Only EPERM and EACCES fail verify. They are what a missing
+# CAP_NET_ADMIN returns, and nl80211 checks the capability before it
+# looks at the channel, so without it every retune says so. Any other
+# reason is the regdomain or the driver refusing a channel in the hop
+# list (EINVAL for a channel it will not take is the normal case,
+# src/jsonl.c #91): the root unit it replaces hits the same, so failing
+# on it would roll a healthy sensor back on every attempt. Each new
+# reason emits a record of its own (retune_reason_mask in the
+# signature). An absent count or reason is from a binary that predates
+# them and proves nothing, so it fails as well.
 health_scan() {
-    # shellcheck disable=SC2046  # three whitespace-free fields, intended
+    # shellcheck disable=SC2046  # four whitespace-free fields, intended
     set -- $(awk '
         /"type":"sensor_health"/ && /}[ \t\r]*$/ {
             n++
-            rf = "absent"
+            rf = "absent"; why = "absent"
             if (match($0, /"chan_retune_failures":-?[0-9]+/))
                 rf = substr($0, RSTART + 23, RLENGTH - 23)
-            if (rf != "0" && bad == "") bad = rf
+            if (match($0, /"chan_retune_reason":"[A-Za-z0-9_]*"/))
+                why = substr($0, RSTART + 22, RLENGTH - 23)
+            if (rf != "0") {
+                if (rf == "absent" || why == "absent" || why == "none" ||
+                    why == "EPERM" || why == "EACCES") {
+                    if (bad == "") bad = rf ":" why
+                } else if (index("," other ",", "," why ",") == 0)
+                    other = other == "" ? why : other "," why
+            }
             if (match($0, /"chan_confirmed":[0-9]+/) &&
                 substr($0, RSTART + 17, RLENGTH - 17) + 0 > 0) conf = 1
         }
-        END { print n + 0, (bad == "" ? "-" : bad), conf + 0 }
+        END { print n + 0, (bad == "" ? "-" : bad), conf + 0,
+                    (other == "" ? "-" : other) }
     ' "$HEALTH_FILE" 2>/dev/null)
-    H_N=${1:-0} H_BAD=${2:--} H_CONF=${3:-0}
+    H_N=${1:-0} H_BAD=${2:--} H_CONF=${3:-0} H_OTHER=${4:--}
 }
 
 VERIFY_ERR=""
@@ -387,14 +419,19 @@ verify() {
         health_scan
     done
     if [ "$H_BAD" != - ]; then
-        VERIFY_ERR="sensor_health chan_retune_failures is '$H_BAD' (want 0 in every record; $H_N seen)"
+        VERIFY_ERR="sensor_health chan_retune_failures is '${H_BAD%%:*}', chan_retune_reason '${H_BAD#*:}' (want no EPERM/EACCES retune failure in any record; $H_N seen)"
         return 1
     fi
     if [ "$WANT_HOP" -eq 1 ] && [ "$H_CONF" -eq 0 ]; then
         VERIFY_ERR="no sensor_health in ${SETTLE_SECS}s showed a confirmed channel (chan_confirmed 0 in all $H_N): the hop never retuned"
         return 1
     fi
-    say "verify: $H_N sensor_health records over ${SETTLE_SECS}s, chan_retune_failures 0 in every one"
+    if [ "$H_OTHER" = - ]; then
+        say "verify: $H_N sensor_health records over ${SETTLE_SECS}s, chan_retune_failures 0 in every one"
+    else
+        say "verify: $H_N sensor_health records over ${SETTLE_SECS}s, no privilege refusal (EPERM/EACCES)"
+        say "note: the radio refused some hop channels with $H_OTHER: the regdomain or driver, not the hardening; not a verify failure (docs/wiki/deployment.md §4)"
+    fi
 
     pid2=$("$SYSTEMCTL" show -p MainPID --value "$UNIT_NAME")
     if ! is_active || [ "$pid2" != "$pid" ]; then
@@ -474,6 +511,75 @@ case "$OLD_SOCK" in
     *) say "note: the data socket moves from ${OLD_SOCK#unix:} to /run/sloth/sloth.sock; point its readers there" ;;
 esac
 
+# The hardened unit's RuntimeDirectory=sloth removes /run/sloth when it
+# stops, and src/data_socket.c never creates a socket's directory. An old
+# unit with its socket there, and nothing of its own that makes the
+# directory, could not bind after a rollback and would restart-loop: the
+# one moment it has to come up. So its mode and owner are taken now and
+# put back before the old unit is started again.
+RUNDIR_HOST=/run/sloth
+RUNDIR=${RUNDIR:-$ROOT$RUNDIR_HOST}
+RUNDIR_KEEP=""
+old_sock_dir=$(dirname "${OLD_SOCK#unix:}")
+case "$old_sock_dir" in
+    "$RUNDIR_HOST")
+        if [ -L "$RUNDIR" ]; then
+            refuse "$RUNDIR_HOST is a symlink; the old unit's socket lives under it and a rollback would have to recreate it"
+        elif [ -d "$RUNDIR" ]; then
+            RUNDIR_KEEP=$(stat -c '%a %u %g' "$RUNDIR") \
+                || refuse "cannot stat $RUNDIR_HOST"
+            say "note: the old socket's directory $RUNDIR_HOST (mode, uid, gid: $RUNDIR_KEEP) is removed when the hardened unit stops; a rollback recreates it"
+        fi ;;
+    "$RUNDIR_HOST"/*)
+        refuse "--data-socket ${OLD_SOCK#unix:} is below $RUNDIR_HOST, which the hardened unit's RuntimeDirectory= removes on stop; a rollback could not rebind it. Move the old socket first" ;;
+esac
+
+# The monitor radio. The hardened unit binds to one device by name
+# (BindsTo=), which systemd cannot read from /etc/default/sloth, so the
+# defaults file, the old unit and the template all have to agree on it.
+BOUND=$(render_unit | logical_lines /dev/stdin \
+        | sed -n 's/^[ \t]*BindsTo=.*sys-subsystem-net-devices-\([^ \t]*\)\.device.*/\1/p' \
+        | head -n 1)
+[ -n "$BOUND" ] || refuse "$UNIT_TEMPLATE has no BindsTo=sys-subsystem-net-devices-<if>.device"
+if [ -n "$MON_IFACE" ] && [ "$MON_IFACE" != "$BOUND" ]; then
+    refuse "MON_IFACE=$MON_IFACE, but the hardened unit binds to $BOUND (BindsTo=); the device name in the unit has to change too, by hand"
+fi
+MON_IFACE=$BOUND
+old_mon=$(unit_key "$UNIT" ExecStartPre \
+          | sed -n 's/.*sloth-monitor-up[ \t][ \t]*\([^ \t]*\).*/\1/p')
+for m in $old_mon; do
+    case "$m" in
+        *[!A-Za-z0-9._-]*) refuse "ExecStartPre runs sloth-monitor-up '$m'; not a plain interface name, and this tool will not guess" ;;
+    esac
+    [ "$m" = "$BOUND" ] || refuse "the old unit puts '$m' into monitor mode, but the hardened unit binds to $BOUND (BindsTo=); rename the radio (a .link file, docs/wiki/deployment.md) or edit the unit by hand"
+done
+# A non-empty --iface allow-list that leaves the bound radio out would
+# shut the monitor stream off (cli-reference.md, --iface).
+if [ -n "$OLD_IFACES" ]; then
+    case " $OLD_IFACES " in
+        *" $BOUND "*) ;;
+        *) refuse "the carried --iface list ($OLD_IFACES ) does not include $BOUND, the radio the hardened unit binds to" ;;
+    esac
+fi
+
+# Every other [Service] key of the old unit is replaced by the hardened
+# unit's own. Listed, so neither run drops one without saying so.
+dropped=$(logical_lines "$UNIT" | awk '
+    /^[ \t]*\[/ { sec = $0; gsub(/[ \t]/, "", sec); next }
+    sec != "[Service]" || !/=/ { next }
+    {
+        k = $0; sub(/=.*/, "", k); gsub(/[ \t]/, "", k)
+        if (k == "ExecStart" || k == "WorkingDirectory" || k == "User" ||
+            k == "Group" || k == "Restart") next
+        if (k == "ExecStartPre" && $0 ~ /sloth-monitor-up/) next
+        print
+    }')
+if [ -n "$dropped" ]; then
+    printf '%s\n' "$dropped" | while IFS= read -r l; do
+        say "note: not carried (the hardened unit has its own): $l"
+    done
+fi
+
 SRC=$ROOT$SRC_DATA
 [ -d "$SRC" ] || refuse "source data dir $SRC_DATA does not exist"
 case "$TARGET/" in "$SRC"/*) refuse "target $TARGET is inside the source $SRC" ;; esac
@@ -521,7 +627,7 @@ say "  unit:        $UNIT (active=$was_active enabled=$was_enabled)"
 say "  data:        $SRC_DATA (${need_kb} KiB) -> $TARGET_HOST, copied; the source stays"
 say "  account:     sloth $([ $have_user -eq 1 ] && echo exists || echo 'will be created')"
 say "  SLOTH_ARGS:  ${ARGS:-(none)}"
-say "  SLOTH_IFACE: $MON_IFACE"
+say "  SLOTH_IFACE: $MON_IFACE (the device BindsTo= names)"
 
 UNIT_BAK=$UNIT.bak-migrate-$STAMP
 DEFAULTS_BAK=$DEFAULTS.bak-migrate-$STAMP
@@ -574,6 +680,15 @@ rollback() {
     # to it. The old data dir was never touched.
     if [ "$target_made" -eq 1 ] && [ -e "$TARGET" ]; then
         mv "$TARGET" "$ASIDE" && echo "$ME: the copy is at $ASIDE" >&2
+    fi
+    if [ -n "$RUNDIR_KEEP" ] && [ ! -e "$RUNDIR" ]; then
+        rd_mode=${RUNDIR_KEEP%% *} rd_gid=${RUNDIR_KEEP##* }
+        rd_uid=${RUNDIR_KEEP#* }; rd_uid=${rd_uid%% *}
+        if install -d -m "$rd_mode" -o "$rd_uid" -g "$rd_gid" "$RUNDIR"; then
+            echo "$ME: recreated $RUNDIR_HOST ($rd_mode $rd_uid:$rd_gid) for the old unit's socket" >&2
+        else
+            rc=1
+        fi
     fi
     # Active straight after start proves little with Restart=always: a
     # unit that dies on startup reads active between attempts. It has to
@@ -641,11 +756,13 @@ else
 fi
 
 # ── Step 4: unit ─────────────────────────────────────────────────────────
+# shellcheck disable=SC2329  # called through act()
 write_defaults() {
     mkdir -p "$(dirname "$DEFAULTS")" &&
     render_defaults > "$DEFAULTS.tmp.$$" && chmod 644 "$DEFAULTS.tmp.$$" &&
     mv "$DEFAULTS.tmp.$$" "$DEFAULTS"
 }
+# shellcheck disable=SC2329  # called through act()
 write_unit() {
     render_unit > "$UNIT.tmp.$$" && chmod 644 "$UNIT.tmp.$$" &&
     mv "$UNIT.tmp.$$" "$UNIT"
@@ -662,7 +779,7 @@ act "$SYSTEMCTL reenable $UNIT_NAME" "$SYSTEMCTL" reenable "$UNIT_NAME" \
 # ── Step 5: start and verify ─────────────────────────────────────────────
 if [ "$DRY" -eq 1 ]; then
     echo "[dry-run] would: $SYSTEMCTL start $UNIT_NAME"
-    echo "[dry-run] would: verify active, CapEff $([ "$WANT_HOP" -eq 1 ] && echo 0000000000001000 || echo 0000000000000000), NoNewPrivs 1, sensor_health on $SOCK for ${SETTLE_SECS}s with chan_retune_failures 0 in every record and a confirmed channel"
+    echo "[dry-run] would: verify active, CapEff $([ "$WANT_HOP" -eq 1 ] && echo 0000000000001000 || echo 0000000000000000), NoNewPrivs 1, sensor_health on $SOCK for ${SETTLE_SECS}s with no EPERM/EACCES retune failure in any record and a confirmed channel"
     echo "[dry-run] would: on any failure or HUP/INT/TERM, restore $UNIT_BAK, rename $TARGET aside, restart the old unit and require it up for ${ROLLBACK_SETTLE_SECS}s"
     say "dry run complete; nothing was changed"
     exit 0

@@ -19,7 +19,7 @@ switches the unit, verifies the result and rolls back on failure.
 `tests/test_unit_file.c`, `tests/deploy/test_migrate_sensor.sh`,
 `src/secure_file.c`, `src/data_socket.c`, `src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2.
 
-**Last updated**: 2026-10-23 (#153, review fixes)
+**Last updated**: 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
 
 ---
 
@@ -338,6 +338,22 @@ What it does, in order:
    drop-ins under `sloth-sensor.service.d/`; `/var/lib/sloth` absent or
    empty, and neither it nor `/var/lib` a symlink (the copy would land
    in whatever it names); free space for the copy plus 10 % and 64 MiB.
+   The monitor radio: the device the hardened unit's `BindsTo=` names
+   (`alfa0`) becomes `SLOTH_IFACE`, and the old unit's
+   `ExecStartPre=… sloth-monitor-up <if>` (every one), a `MON_IFACE=`
+   override and a carried `--iface` allow-list must all agree with it —
+   a different radio, an argument that is not a plain name, or an
+   allow-list leaving the radio out is refused, because systemd cannot
+   take the `BindsTo=` device from `/etc/default/sloth` and the defaults
+   file would contradict the unit. Every other `[Service]` key of the
+   old unit (`Environment=`, another `ExecStartPre=`, `Nice=`,
+   `LimitNOFILE=`, …; all but `ExecStart`, `WorkingDirectory`, `User`,
+   `Group`, `Restart` and the monitor-up line) is printed as
+   `not carried`, in the dry run too, since the hardened unit's own
+   replace them. When the old socket is under `/run/sloth`, that
+   directory's mode and owner are recorded for the rollback (below); a
+   socket in a subdirectory of it, or a symlinked `/run/sloth`, is
+   refused.
    Entries with group/other bits are listed as a note: the copy drops
    them (below), the source keeps them.
 2. **Account**: installs `/usr/lib/sysusers.d/sloth.conf` and runs
@@ -359,18 +375,30 @@ What it does, in order:
    `CapEff: 0000000000001000` (CAP_NET_ADMIN only, because the unit has
    `--hop`; 0 without) and `NoNewPrivs: 1`; `sensor_health` records on
    `unix:/run/sloth/sloth.sock` over a further `SETTLE_SECS` (default
-   90) all have `chan_retune_failures` 0, and at least one has a
-   non-zero `chan_confirmed`; and the MainPID is unchanged at the end,
+   90) show no retune failure whose `chan_retune_reason` is `EPERM` or
+   `EACCES` (or is absent, from a binary that cannot say), and at least
+   one has a non-zero `chan_confirmed`; and the MainPID is unchanged at the end,
    so it did not restart-loop. One record is not enough: connecting
    changes `socket_clients`, which is in the record's signature
    (`src/jsonl.c`), so the first record is emitted the moment the
    reader connects, usually before any retune has been tried, and the
    failure this migration risks (no CAP_NET_ADMIN, every retune EPERM)
-   shows only later. The window covers one hop rotation (about 40
-   channels at the 2 s maximum dwell, `src/wifi_chanhop.c`), and the
-   first failure and the first confirmed channel each emit a record of
-   their own (`retune_fail_any` and `chan_ever_confirmed` are in the
-   signature), so neither can hide between heartbeats. The socket
+   shows only later. The window covers one hop rotation (11 channels
+   (`DEFAULT_CHANNELS`) at the 2 s maximum dwell, about 22 s,
+   `src/wifi_chanhop.c`), and the first failure, each new failure
+   reason and the first confirmed channel each emit a record of their
+   own (`retune_fail_any`, `retune_reason_mask` and
+   `chan_ever_confirmed` are in the signature), so none can hide
+   between heartbeats. Why only `EPERM`/`EACCES`: they are what a
+   missing CAP_NET_ADMIN returns, and nl80211 checks the capability
+   before the channel, so without it every retune fails that way. A
+   channel the regdomain or driver will not take fails with `EINVAL`
+   (`src/jsonl.c` calls it the normal case, #91), under the root unit
+   just the same; the default hop list includes 149–161, which some
+   regdomains refuse, so failing on any non-zero count would roll a
+   healthy sensor back on every attempt. Those reasons are printed as
+   a note and do not fail verify; the confirmed-channel check still
+   catches a radio that never retunes at all. The socket
    reader starts before the service does, because `sensor_health` is
    change-only with a 300 s heartbeat, and reconnects until its
    deadline, because a stale socket left by the old unit refuses the
@@ -391,12 +419,15 @@ path. It is reported as rolled back only if it is still active on the
 same MainPID after `ROLLBACK_SETTLE_SECS` (default 15, past the
 hardened unit's `RestartSec=10`): with `Restart=always` a unit that
 dies on startup reads active between attempts. Otherwise the tool
-prints `ROLLBACK INCOMPLETE`. One way that happens: the hardened unit's
-`RuntimeDirectory=sloth` removes `/run/sloth` when it stops, so an old
-unit whose socket lived under `/run/sloth/` without a
-`RuntimeDirectory=` of its own cannot bind it (`src/data_socket.c`
-never creates the directory) and restart-loops; `install -d -m 0750
-/run/sloth` and a restart bring it back. **The old data is never
+prints `ROLLBACK INCOMPLETE`. One way that would happen is handled:
+the hardened unit's `RuntimeDirectory=sloth` removes `/run/sloth` when
+it stops, and `src/data_socket.c` never creates a socket's directory,
+so an old unit whose socket lived there (the bare `--data-socket`
+default since #136) with nothing of its own to make the directory
+could not bind and would restart-loop. The rollback therefore
+recreates `/run/sloth` with the mode and owner preflight recorded
+(`install -d -m <mode> -o <uid> -g <gid>`) before it starts the old
+unit, when the directory existed then and is gone now. **The old data is never
 modified, in either outcome**; delete
 `data/` by hand once the migrated sensor has run long enough to
 satisfy you. Exit status: 0 migrated or already migrated, 1 failed and
@@ -428,7 +459,8 @@ mangling it.
 
 Every path and command is an environment variable (`ROOT` prefixes
 every host path; `SYSTEMCTL`, `SYSUSERS`, `GETENT`, `CHOWN`, `CP`,
-`SOCAT`, `TIMEOUT`, `PREFIX`, `SRC_DATA`, `MON_IFACE`, `VERIFY_SECS`,
+`SOCAT`, `TIMEOUT`, `PREFIX`, `SRC_DATA`, `MON_IFACE` (must equal the
+`BindsTo=` device), `VERIFY_SECS`,
 `HEALTH_SECS`, `SETTLE_SECS`, `ROLLBACK_SETTLE_SECS`), which is how `make deploy-test` runs it unprivileged:
 `tests/deploy/test_migrate_sensor.sh` builds a scratch root holding a
 fake build-tree unit (written by the test, never read from `/etc`), a
@@ -441,11 +473,16 @@ even where the source had 0644/0755, with the source's modes left
 alone; a corrupted copy caught by checksum before the unit switches; a
 failed verify rolled back to the old unit, defaults and data path, the
 old unit re-enabled and its backup renamed, for each check in turn
-(`chan_retune_failures` 3; CapEff `0000000000003000`; `NoNewPrivs` 0;
-a MainPID that changes; a unit never active; a 0 record followed 2 s
-later by a 5; no confirmed channel), with no defaults file left where
-there was none; an old unit that restart-loops after a rollback
-reported as `ROLLBACK INCOMPLETE`; a HUP mid-verify, then a second HUP
+(`chan_retune_failures` 3 `EPERM`; CapEff `0000000000003000`;
+`NoNewPrivs` 0; a MainPID that changes; a unit never active; a 0 record
+followed 2 s later by a 5 `EPERM`; `EACCES`; a count with no reason
+field; `EINVAL` followed by `EPERM`; no confirmed channel), with no
+defaults file left where there was none; `EINVAL` refusals alone
+passing verify with a note; a rollback recreating a `/run/sloth`
+(0750) the hardened unit's stop removed, so an old unit with its
+socket there comes back; an old unit that restart-loops after a
+rollback reported as `ROLLBACK INCOMPLETE`; old `[Service]` keys
+named as not carried; an `--iface` list including `alfa0` carried; a HUP mid-verify, then a second HUP
 during the rollback, rolling back exactly once with the socket reader
 gone; a socket reader that reconnects after a refused first connect; a
 second run that only verifies; a rerun after a rollback; and refusals
@@ -454,11 +491,15 @@ path, `--eapol-dir`, low space, a non-empty target, a missing `make
 install`, a drop-in, two `ExecStart=`, a non-sloth binary, a symlink in
 the data dir, a symlinked target or `/var/lib`, the hardened unit
 placed by `install-service` with no backup, a backup but no copied
-db), each changing nothing. Each absence check was seen to fail under
+db, another radio in `sloth-monitor-up` (in the only or a second
+`ExecStartPre=`), a `${SLOTH_IFACE}` argument, a `MON_IFACE=` override,
+an `--iface` list without `alfa0`, a socket below `/run/sloth/`), each
+changing nothing; a dry run on a migrated host makes no mutating call. Each absence check was seen to fail under
 a mutation of the tool (`docs/wiki/log.md`, #153 entries).
 `TOOL_SH="busybox sh"` or `"bash --posix"` runs the tool under another
-shell. `shellcheck` runs first when it is installed; CI does not run
-`make deploy-test` yet.
+shell. `shellcheck -s sh` runs first when it is installed and is clean
+on all three scripts (0.11.0, 2026-10-26); CI does not run `make
+deploy-test` yet.
 
 ### 4.1 By hand
 
