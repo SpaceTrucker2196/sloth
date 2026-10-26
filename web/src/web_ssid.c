@@ -3,20 +3,36 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Unicode's Default_Ignorable_Code_Point (DerivedCoreProperties.txt):
+ * what a renderer draws as nothing. */
+static int ignorable(unsigned cp) {
+    return cp == 0xad || cp == 0x34f || cp == 0x61c ||
+           (cp >= 0x115f && cp <= 0x1160) || (cp >= 0x17b4 && cp <= 0x17b5) ||
+           (cp >= 0x180b && cp <= 0x180f) || (cp >= 0x200b && cp <= 0x200f) ||
+           (cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2060 && cp <= 0x206f) ||
+           cp == 0x3164 || (cp >= 0xfe00 && cp <= 0xfe0f) || cp == 0xfeff ||
+           cp == 0xffa0 || (cp >= 0xfff0 && cp <= 0xfff8) ||
+           (cp >= 0x1bca0 && cp <= 0x1bca3) || (cp >= 0x1d173 && cp <= 0x1d17a) ||
+           (cp >= 0xe0000 && cp <= 0xe0fff);
+}
+
+/* Blanks other than U+0020 that draw as a space: "home" and a trailing
+ * one of these read as "home " or "home". */
+static int blank_lookalike(unsigned cp) {
+    return cp == 0xa0 || cp == 0x1680 || (cp >= 0x2000 && cp <= 0x200a) ||
+           cp == 0x202f || cp == 0x205f || cp == 0x2800 || cp == 0x3000;
+}
+
 static int printable(unsigned cp) {
     if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)) return 0;
-    if (cp == 0xad || cp == 0x61c || cp == 0x180e) return 0;
-    if (cp >= 0x200b && cp <= 0x200f) return 0;
-    if (cp >= 0x2028 && cp <= 0x202e) return 0;
-    if (cp >= 0x2060 && cp <= 0x2064) return 0;
-    if (cp >= 0x2066 && cp <= 0x206f) return 0;
+    if (ignorable(cp) || blank_lookalike(cp)) return 0;
+    if (cp == 0x180e) return 0;
+    if (cp >= 0x2028 && cp <= 0x2029) return 0;
     if (cp >= 0xe000 && cp <= 0xf8ff) return 0;
     if (cp >= 0xfdd0 && cp <= 0xfdef) return 0;
-    if (cp == 0xfeff) return 0;
     if (cp >= 0xfff9 && cp <= 0xfffb) return 0;
     if (cp == 0xfffd) return 0;
     if ((cp & 0xfffe) == 0xfffe) return 0;
-    if (cp >= 0xe0000 && cp <= 0xe007f) return 0;
     if (cp >= 0xf0000) return 0;
     return 1;
 }
@@ -75,6 +91,13 @@ void web_jw_ssid(web_jw_t *w, const char *s) {
     if (!s || !s[0]) { web_jw_raw(w, "null"); return; }
     char d[WEB_SSID_IN_MAX * WEB_SSID_EXPAND + 1];
     size_t n = web_ssid_escape(s, strnlen(s, WEB_SSID_IN_MAX), d, sizeof(d), NULL);
+    web_jw_strn(w, d, n);
+}
+
+void web_jw_text(web_jw_t *w, const char *s) {
+    char d[WEB_TEXT_IN_MAX * WEB_SSID_EXPAND + 1];
+    if (!s) s = "";
+    size_t n = web_ssid_escape(s, strnlen(s, WEB_TEXT_IN_MAX), d, sizeof(d), NULL);
     web_jw_strn(w, d, n);
 }
 

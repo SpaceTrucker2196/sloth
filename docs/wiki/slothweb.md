@@ -97,7 +97,7 @@ re-implements), `src/top_hosts.c` (what `conn_count` counts),
 `src/probe_pnl.c` (what `mac_random` is), issues #102, #157, #158,
 #159, #160, #161, #162, #163 and #164.
 
-**Last updated**: 2026-10-26 (the History strip on a large sloth.db: its own 1500 ms budget, per-cell counts by sloth's new first_seen indexes or a last_seen-bounded read without them, a 60 s cache per file state, a timeout that names its read; the IEEE registry CSVs committed in `web/data/` by owner ruling, `make update-oui`, the generator's multi-file hang fixed; #170: `/api/history/alerts` and the deauth episodes overlap a range from the latest incident's start; the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
+**Last updated**: 2026-10-26 (the channel mix's review: assoc out of the mix, late transmitters tracked exactly, alert text and blank lookalikes escaped, addresses sorted by number on the server; the History strip on a large sloth.db: its own 1500 ms budget, per-cell counts by sloth's new first_seen indexes or a last_seen-bounded read without them, a 60 s cache per file state, a timeout that names its read; the IEEE registry CSVs committed in `web/data/` by owner ruling, `make update-oui`, the generator's multi-file hang fixed; #170: `/api/history/alerts` and the deauth episodes overlap a range from the latest incident's start; the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
 
 ---
 
@@ -642,14 +642,18 @@ In short:
   above 1 in `--sev-warn`. Since v5 of slothweb.db each cell of the
   grid is also a stacked bar of the five busiest transmitters on the
   channel in it (`/api/wifi/channels?mix=1`, from the frame counts of
-  `beacon`, `probe_client` and `assoc`; APs in their SSID's colour,
-  clients in their MAC's), with a heat strip per row for its busyness
-  and the five listed on hover, tap or the arrow keys. Every SSID is
-  sent in a display form (`\xNN` for any octet that is not printable
-  UTF-8, flagged "non-printable"), coloured over its octets as the TUI
-  colours it. Every table on the page sorts by a column (in place,
-  by the column's type; server-paged ones through the route's checked
-  `sort` word and `dir=asc|desc`) and resizes by its header's edge
+  `beacon` and `probe_client`, a station's on the channel of its latest
+  probe; `assoc` counts both ends' frames and is left out; APs in their
+  SSID's colour, clients in their MAC's), with a heat strip per row for
+  its busyness and the five listed on hover, tap or the arrow keys.
+  Every SSID, and every alert title and detail (sloth writes the SSID
+  into them as it came), is sent in a display form (`\xNN` for any
+  octet that is not printable UTF-8, Default_Ignorable code points and
+  blank lookalikes included, flagged "non-printable"), coloured over its
+  octets as the TUI colours it. Every table on the page sorts by a
+  column (in place, by the column's type; server-paged ones through the
+  route's checked `sort` word and `dir=asc|desc`, addresses by number on
+  the server too) and resizes by its header's edge
   (drag, arrows, double-click to fit), widths kept per table in the
   browser with a `reset columns` control.
   `/api/wifi/deauth`: frames per bssid with

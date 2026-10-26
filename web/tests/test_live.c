@@ -511,7 +511,8 @@ static void test_hostile_strings_are_escaped(void) {
     WT_LACKS(j, "\xe2\x80\xa8");
     WT_HAS(j, "\\u003cimg src=x onerror=alert(1)\\u003e");
     WT_HAS(j, "\\u003c/script\\u003e\\u003cscript\\u003ealert(1)\\u003c/script\\u003e");
-    WT_HAS(j, "a\\u2028b \\u0026 \\u0027c\\u0027 \\\"d\\\"");
+    /* U+2028 in an alert's detail is in the display form (web_ssid.h). */
+    WT_HAS(j, "a\\\\xe2\\\\x80\\\\xa8b \\u0026 \\u0027c\\u0027 \\\"d\\\"");
     WT_HAS(j, "\"capture_iface\":\"\\u003cx\\u003e\"");
 
     /* The ticker's event too. */

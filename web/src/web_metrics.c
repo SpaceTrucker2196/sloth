@@ -394,7 +394,10 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
         double d = hw_delta(m, id, web_jl_int(r, "frame_count", 0),
                             web_jl_int(r, "first_seen", -1));
         count(m, WM_DEV_FRAMES, k, d, now);
-        mix_add(m, r, "sta_mac", WEB_TX_CLIENT, NULL, d, now);
+        /* Not in the channel mix: frame_count counts both ends of the
+         * pair (src/assoc_track.c), the AP's (re)association responses
+         * and EAPOL M1/M3 with the station's M2/M4, so neither one sent
+         * all of it (web_chmix.h). */
     } else if (!strcmp(t, "beacon")) {
         /* The channel mix only: an AP's beacons, by its bssid. No
          * first_seen on the record, so a first sight is a baseline. */

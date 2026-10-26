@@ -573,15 +573,17 @@ int web_query_compile(const web_query_t *q, unsigned feats, int sort,
         " ORDER BY d.mac",
         " ORDER BY d.risk_level DESC, d.last_seen DESC, d.mac",
         " ORDER BY d.vendor IS NULL, d.vendor, d.mac",
-        " ORDER BY d.ip IS NULL, d.ip, d.mac",
+        " ORDER BY web_ipkey(d.ip) IS NULL, web_ipkey(d.ip), d.ip, d.mac",
         " ORDER BY d.last_ssid IS NULL, d.last_ssid, d.mac",
         " ORDER BY d.signal_dbm IS NULL, d.signal_dbm DESC, d.mac",
         " ORDER BY d.sources DESC, d.last_seen DESC, d.mac",
     };
-    /* With a direction: the sort's column, empty last, then the MAC. */
+    /* With a direction: the sort's column, empty last, then the MAC.
+     * An address sorts by its numeric key (web_slothdb.c fn_ipkey()),
+     * as the page compares addresses, not as text. */
     static const char *const KEY[WEB_QS_COUNT] = {
         "d.last_seen", "d.first_seen", "d.mac", "d.risk_level", "d.vendor",
-        "d.ip", "d.last_ssid", "d.signal_dbm", "d.sources",
+        "web_ipkey(d.ip)", "d.last_ssid", "d.signal_dbm", "d.sources",
     };
     int dir = WEB_SORT_DIR(sort);
     sort = WEB_SORT_KEY(sort);

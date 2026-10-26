@@ -469,8 +469,10 @@ static void mix_tx_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *conn,
     web_jw_raw(w, ",\"vendor\":");
     if (hit.found) web_jw_str(w, hit.name); else web_jw_raw(w, "null");
     if (t->kind == WEB_TX_AP) {
-        /* sloth.db's octets first: they are the TUI's (web_ssid.h). */
-        char ssid[WEB_SDB_TEXT_MAX + 1] = "";
+        /* sloth.db's octets first: they are the TUI's (web_ssid.h). The
+         * buffer holds either source's longest. */
+        char ssid[(WEB_SDB_TEXT_MAX > WEB_CHMIX_SSID_MAX ? WEB_SDB_TEXT_MAX
+                                                         : WEB_CHMIX_SSID_MAX) + 1] = "";
         const char *src = NULL;
         if (conn && web_sdb_ap_ssid(conn, mac, ssid) == 1) src = "sloth.db";
         else if (m->tsdb && m->tsdb->mix && web_chmix_ssid(m->tsdb->mix, t->mac, ssid))

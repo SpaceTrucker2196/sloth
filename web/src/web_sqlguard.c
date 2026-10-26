@@ -330,14 +330,22 @@ static void hexblob(web_jw_t *w, const unsigned char *p, int n) {
     web_jw_raw(w, "\"}");
 }
 
-/* A result column whose name holds "ssid" (any case): its text cells
- * are SSIDs, sent in their display form (web_ssid.h), never raw. */
-static int ssid_column(const char *nm) {
-    for (const char *p = nm; p && *p; p++)
-        if ((p[0] | 32) == 's' && (p[1] | 32) == 's' && (p[2] | 32) == 'i' &&
-            (p[3] | 32) == 'd')
-            return 1;
+static int holds(const char *nm, const char *w) {
+    size_t n = strlen(w);
+    for (const char *p = nm; p && *p; p++) {
+        size_t i = 0;
+        while (i < n && p[i] && (p[i] | 32) == w[i]) i++;
+        if (i == n) return 1;
+    }
     return 0;
+}
+
+/* A result column whose name holds "ssid" or "title" (any case): its
+ * text cells are SSIDs, or alert titles sloth wrote an SSID into as it
+ * came (src/alerts/rules_twin.c), sent in their display form
+ * (web_ssid.h), never raw. */
+static int ssid_column(const char *nm) {
+    return holds(nm, "ssid") || holds(nm, "title");
 }
 
 static void ssid_text(web_jw_t *w, const char *t, size_t n) {

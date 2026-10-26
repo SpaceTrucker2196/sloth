@@ -472,6 +472,7 @@ int web_sdb_flow_pairs(web_sdb_conn_t *c, long long from, long long to,
 
 #else
 
+#include <arpa/inet.h>
 #include <sqlite3.h>
 
 int web_slothdb_available(void) { return 1; }
@@ -508,7 +509,7 @@ static int allowed_table(const char *table) {
 static const char *const FUNCS[] = {
     "like", "coalesce", "substr", "instr", "min", "max", "count", "nullif",
     "sum",              /* the Flows view's totals (web_sdb_flow_pairs()) */
-    "web_vendor", "web_z", "web_anoms", "web_ptr", NULL
+    "web_vendor", "web_z", "web_anoms", "web_ptr", "web_ipkey", NULL
 };
 
 static int authz(void *ud, int action, const char *a1, const char *a2,
@@ -558,6 +559,25 @@ static void fn_vendor(sqlite3_context *cx, int n, sqlite3_value **v) {
         return;
     }
     sqlite3_result_text(cx, hit.name, -1, SQLITE_TRANSIENT);
+}
+
+/* An address's sort key, the page's ipKey() (web/ui/app.js) as bytes:
+ * 4 and the four octets, or 6 and the sixteen, so IPv4 sorts before
+ * IPv6 and each numerically, where the text would put 9.9.9.9 after
+ * 10.0.0.1. NULL for anything inet_pton() does not read. */
+static void fn_ipkey(sqlite3_context *cx, int n, sqlite3_value **v) {
+    (void)n;
+    const unsigned char *t = sqlite3_value_text(v[0]);
+    unsigned char k[17];
+    if (t && inet_pton(AF_INET, (const char *)t, k + 1) == 1) {
+        k[0] = 4;
+        sqlite3_result_blob(cx, k, 5, SQLITE_TRANSIENT);
+    } else if (t && inet_pton(AF_INET6, (const char *)t, k + 1) == 1) {
+        k[0] = 6;
+        sqlite3_result_blob(cx, k, 17, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_result_null(cx);
+    }
 }
 
 static void fn_z(sqlite3_context *cx, int n, sqlite3_value **v) {
@@ -877,6 +897,9 @@ static int open_conn(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
     sqlite3_create_function_v2(c->db, "web_anoms", 2, SQLITE_UTF8, c,
                                fn_anoms, NULL, NULL, NULL);
     sqlite3_create_function_v2(c->db, "web_ptr", 1, SQLITE_UTF8, c, fn_ptr,
+                               NULL, NULL, NULL);
+    sqlite3_create_function_v2(c->db, "web_ipkey", 1,
+                               SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL, fn_ipkey,
                                NULL, NULL, NULL);
 
     /* Identify: sloth's meta is (key, value); slothweb.db's is (name,
@@ -1858,7 +1881,7 @@ int web_sdb_flows(web_sdb_conn_t *c, int proto, long long from, long long to,
     if (!ftab_ok(c, proto)) return 0;
     *present = 1;
     const web_sdb_ftab_t *t = &web_sdb_ftab[proto];
-    char sel[1200], where[200] = "", sql[1600];
+    char sel[1200], where[200] = "", sql[1800];
     ftab_select(proto, sel, sizeof(sel));
     if (ip) {
         if (t->dst)
@@ -1876,13 +1899,22 @@ int web_sdb_flows(web_sdb_conn_t *c, int proto, long long from, long long to,
     int dir = WEB_SORT_DIR(sort);
     int s = WEB_SORT_KEY(sort);
     if (s >= WEB_FLOWS_SORT_COUNT) s = 0;
-    char ord[64];
+    char ord[320];
     /* With a direction (web_query.h): the sort's column of
      * ftab_select()'s list (none of which is ever NULL: an absent
      * destination is ''), then source and destination. */
     const int key[WEB_FLOWS_SORT_COUNT] = { WEB_FP_COLS + 7, WEB_FP_COLS + 5, 1, 2,
                                             WEB_FP_COLS + 6 };
-    if (dir == WEB_SORT_ASC || dir == WEB_SORT_DESC)
+    /* The address columns by their numeric key (fn_ipkey()), as the
+     * page compares them, so a page of rows is the start of the order
+     * the page shows; an empty or unreadable one last. */
+    const char *ipcol = s == WEB_FLOWS_SORT_SRC ? t->src
+                        : s == WEB_FLOWS_SORT_DST ? (t->dst ? t->dst : "''") : NULL;
+    if (ipcol)
+        snprintf(ord, sizeof(ord), " ORDER BY web_ipkey(%s) IS NULL, web_ipkey(%s) %s,"
+                 " %s, 1, 2, %d DESC", ipcol, ipcol,
+                 dir == WEB_SORT_DESC ? "DESC" : "ASC", ipcol, WEB_FP_COLS + 7);
+    else if (dir == WEB_SORT_ASC || dir == WEB_SORT_DESC)
         snprintf(ord, sizeof(ord), " ORDER BY %d %s, 1, 2", key[s],
                  dir == WEB_SORT_ASC ? "ASC" : "DESC");
     else if (s == WEB_FLOWS_SORT_TOTAL)

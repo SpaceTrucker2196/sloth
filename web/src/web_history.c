@@ -273,7 +273,9 @@ static int emit_alert(void *ctx, const web_sdb_item_t *it) {
     if (h->w->len + ITEM_JSON_MAX + 96 > h->cap) { h->cut = 1; return 1; }
     web_jw_t *w = h->w;
     web_jw_raw(w, h->n++ ? ",{\"title\":" : "{\"title\":");
-    jw_text_or_null(w, it->a);
+    /* sloth can put an SSID into a title as it came: the display form
+     * (web_ssid.h), as the live alerts list sends it. */
+    if (it->a[0]) web_jw_text(w, it->a); else web_jw_raw(w, "null");
     web_jw_raw(w, ",\"ip\":");     jw_text_or_null(w, it->b);
     web_jw_raw(w, ",\"type\":");   web_jw_int(w, it->n1 & 0xffff);
     web_jw_raw(w, ",\"sev\":");    web_jw_int(w, it->n2 < 0 ? 0 : it->n2 > 2 ? 2 : it->n2);

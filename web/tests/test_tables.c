@@ -20,14 +20,16 @@
 
 /* The compiled statement: a direction changes only the ORDER BY, from
  * the sort's own constant column, empty last; no direction leaves the
- * statement exactly as it was. Seen red with the KEY table's ip entry
- * pointing at d.hostname. */
+ * statement exactly as it was; an address sorts by its numeric key.
+ * Seen red with the KEY table's ip entry pointing at d.hostname. */
 static void test_dir_compiles_from_constants(void) {
     web_query_t q;
     memset(&q, 0, sizeof(q));
     web_qsql_t s;
     WT_EQ(web_query_compile(&q, 0, WEB_SORT_PACK(WEB_QS_IP, WEB_SORT_ASC), 10, 0, &s), 0);
-    WT_HAS(s.sql, " ORDER BY d.ip IS NULL, d.ip ASC, d.mac LIMIT ");
+    WT_HAS(s.sql, " ORDER BY web_ipkey(d.ip) IS NULL, web_ipkey(d.ip) ASC, d.mac LIMIT ");
+    WT_EQ(web_query_compile(&q, 0, WEB_QS_IP, 10, 0, &s), 0);
+    WT_HAS(s.sql, " ORDER BY web_ipkey(d.ip) IS NULL, web_ipkey(d.ip), d.ip, d.mac LIMIT ");
     WT_EQ(web_query_compile(&q, 0, WEB_SORT_PACK(WEB_QS_LAST, WEB_SORT_DESC), 10, 0, &s), 0);
     WT_HAS(s.sql, " ORDER BY d.last_seen IS NULL, d.last_seen DESC, d.mac LIMIT ");
     WT_EQ(web_query_compile(&q, 0, WEB_SORT_PACK(WEB_QS_MAC, WEB_SORT_DESC), 10, 0, &s), 0);
@@ -148,7 +150,7 @@ static void db_up(void) {
         "INSERT INTO ssh_flows (src_ip,dst_ip,banner_count,server_banner,first_seen,"
         "last_seen) VALUES ('10.0.0.1','10.0.0.30',5,'x',1792620000,1792626000),"
         " ('10.0.0.2','10.0.0.20',9,'x',1792610000,1792625000),"
-        " ('10.0.0.3','10.0.0.10',1,'x',1792615000,1792624000);"), 0);
+        " ('10.0.0.3','9.9.9.9',1,'x',1792615000,1792624000);"), 0);
     web_slothdb_init(&sdb, g_db, NULL);
     WT_EQ(web_rollup_init(&ru, 64, 0, e2, sizeof(e2)), 0);
     WT_EQ(web_tsdb_init(&ts, &ru, NULL, 30, 256, NULL, NULL), 0);
@@ -203,7 +205,14 @@ static void test_devices_sorts(void) {
     WT_ASSERT(in_order(body_of(g_out), o1, 3));
     WT_EQ(route(&H, "/api/devices", "sort=ssid&dir=asc"), 200);
     WT_ASSERT(in_order(body_of(g_out), o2, 3));        /* "Alpha" before "beta" */
+    /* Addresses by number, as the page compares them, not as text
+     * (which puts 9.0.0.200 after 10.0.0.10). Seen red with the KEY
+     * table's ip entry back at d.ip. */
     WT_EQ(route(&H, "/api/devices", "sort=ip&dir=desc"), 200);
+    WT_ASSERT(in_order(body_of(g_out), (const char *[]){ A1, A2, A3 }, 3));
+    WT_EQ(route(&H, "/api/devices", "sort=ip&dir=asc"), 200);
+    WT_ASSERT(in_order(body_of(g_out), (const char *[]){ A3, A2, A1 }, 3));
+    WT_EQ(route(&H, "/api/devices", "sort=ip"), 200);
     WT_ASSERT(in_order(body_of(g_out), (const char *[]){ A3, A2, A1 }, 3));
     WT_EQ(route(&H, "/api/devices", "dir=sideways"), 400);
     WT_HAS(body_of(g_out), "{\"error\":\"bad_dir\"}");
@@ -244,8 +253,18 @@ static void test_aps_and_flows_sorts(void) {
     snprintf(q, sizeof(q), "proto=ssh&from=%lld&to=%lld&sort=dst&dir=asc", T - 86400, T);
     WT_EQ(route(&H, "/api/flows", q), 200);
     const char *b = body_of(g_out);
-    WT_ASSERT(in_order(b, (const char *[]){ "\"10.0.0.10\"", "\"10.0.0.20\"", "\"10.0.0.30\"" }, 3));
+    /* By number (9.9.9.9 first), not as text. Seen red with the
+     * address columns ordered by their text. */
+    WT_ASSERT(in_order(b, (const char *[]){ "\"9.9.9.9\"", "\"10.0.0.20\"", "\"10.0.0.30\"" }, 3));
     WT_HAS(b, ",\"dir\":\"asc\"}");
+    snprintf(q, sizeof(q), "proto=ssh&from=%lld&to=%lld&sort=dst&dir=desc", T - 86400, T);
+    WT_EQ(route(&H, "/api/flows", q), 200);
+    WT_ASSERT(in_order(body_of(g_out), (const char *[]){ "\"10.0.0.30\"", "\"10.0.0.20\"",
+                                                        "\"9.9.9.9\"" }, 3));
+    snprintf(q, sizeof(q), "proto=ssh&from=%lld&to=%lld&sort=dst", T - 86400, T);
+    WT_EQ(route(&H, "/api/flows", q), 200);
+    WT_ASSERT(in_order(body_of(g_out), (const char *[]){ "\"9.9.9.9\"", "\"10.0.0.20\"",
+                                                        "\"10.0.0.30\"" }, 3));
     snprintf(q, sizeof(q), "proto=ssh&from=%lld&to=%lld&sort=first", T - 86400, T);
     WT_EQ(route(&H, "/api/flows", q), 200);
     WT_ASSERT(in_order(body_of(g_out), (const char *[]){ "\"10.0.0.1\"", "\"10.0.0.3\"",

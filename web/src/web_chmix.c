@@ -108,6 +108,7 @@ static void close_acc(web_chmix_t *c, web_mix_chan_t *ch, int tier) {
     c->st.rows_closed[tier]++;
     a->t = -1;
     a->n = 0;
+    a->nc = 0;
     a->other = 0;
 }
 
@@ -151,19 +152,43 @@ static void acc_add(web_chmix_t *c, web_mix_acc_t *a, const uint8_t mac[6],
         e->frames = f;
         return;
     }
-    /* Full: the quietest tracked transmitter goes to "other" in this
-     * one's place only when this one already outweighs it. */
+    /* Full: the frames go to "other", and are remembered against this
+     * transmitter in the candidate table, which is how much of "other"
+     * is its. Once what it has sent this bucket outweighs the quietest
+     * tracked one, the two change places, each taking its own frames
+     * out of "other" or into it: a heavy transmitter first heard late
+     * enters on everything it sent, and the named counts stay exact. */
+    c->st.folded++;
+    a->other = sat_add(a->other, f);
+    int k = -1;
+    for (int i = 0; i < a->nc; i++)
+        if (a->cand[i].kind == kind && !memcmp(a->cand[i].mac, mac, 6)) { k = i; break; }
+    if (k >= 0) {
+        a->cand[k].frames = sat_add(a->cand[k].frames, f);
+    } else {
+        /* A new candidate; past WEB_CHMIX_TRACK it takes the quietest
+         * candidate's place, whose frames stay in "other" unnamed, so a
+         * scan of one-frame MACs churns only the one-frame entries. */
+        if (a->nc < WEB_CHMIX_TRACK) {
+            k = a->nc++;
+        } else {
+            k = 0;
+            for (int i = 1; i < a->nc; i++)
+                if (a->cand[i].frames < a->cand[k].frames) k = i;
+        }
+        memcpy(a->cand[k].mac, mac, 6);
+        a->cand[k].kind = (uint8_t)kind;
+        a->cand[k].frames = f;
+    }
     int q = 0;
     for (int i = 1; i < a->n; i++)
         if (a->tx[i].frames < a->tx[q].frames) q = i;
-    c->st.folded++;
-    if (f > a->tx[q].frames) {
-        a->other = sat_add(a->other, a->tx[q].frames);
-        memcpy(a->tx[q].mac, mac, 6);
-        a->tx[q].kind = (uint8_t)kind;
-        a->tx[q].frames = f;
-    } else {
-        a->other = sat_add(a->other, f);
+    if (a->cand[k].frames > a->tx[q].frames) {
+        web_mix_tx_t out = a->tx[q];
+        a->tx[q] = a->cand[k];
+        a->other = a->other >= a->tx[q].frames ? a->other - a->tx[q].frames : 0;
+        a->other = sat_add(a->other, out.frames);
+        a->cand[k] = out;
     }
 }
 
@@ -192,6 +217,8 @@ void web_chmix_add(web_chmix_t *c, const char *chan, const uint8_t mac[6],
 void web_chmix_name(web_chmix_t *c, const uint8_t mac[6], const char *ssid,
                     long long now_s) {
     if (!c || !c->ring || !ssid) return;
+    size_t len = strnlen(ssid, WEB_CHMIX_SSID_MAX + 1);
+    if (len > WEB_CHMIX_SSID_MAX) return;
     pthread_mutex_lock(&c->mu);
     web_mix_name_t *slot = NULL;
     for (int i = 0; i < WEB_CHMIX_NAMES; i++) {
@@ -202,7 +229,8 @@ void web_chmix_name(web_chmix_t *c, const uint8_t mac[6], const char *ssid,
     memcpy(slot->mac, mac, 6);
     slot->used = 1;
     slot->seen = now_s;
-    web_utf8_copy(slot->ssid, WEB_CHMIX_SSID_MAX, ssid);
+    memcpy(slot->ssid, ssid, len);
+    slot->ssid[len] = '\0';
     pthread_mutex_unlock(&c->mu);
 }
 

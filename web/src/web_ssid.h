@@ -15,14 +15,21 @@
  * octet string only. Not printable: an octet that does not start a
  * well-formed RFC 3629 sequence; C0, DEL and C1; U+FFFD itself (what
  * the stream left where an octet was lost); the noncharacters
- * (U+FDD0..U+FDEF, and U+xFFFE / U+xFFFF of every plane); the format
- * and separator characters a reader cannot see (U+00AD, U+061C,
- * U+180E, U+200B..U+200F, U+2028..U+202E, U+2060..U+2064,
- * U+2066..U+206F, U+FEFF, U+FFF9..U+FFFB); the private-use areas
- * (U+E000..U+F8FF, planes 15 and 16) and the tag characters
- * (U+E0000..U+E007F), which no two fonts draw alike. Beside it goes a
- * flag saying something was escaped, which the page shows as a
- * "non-printable" marker.
+ * (U+FDD0..U+FDEF, and U+xFFFE / U+xFFFF of every plane); the
+ * Default_Ignorable_Code_Point set, which a renderer draws as nothing
+ * (U+00AD, U+034F, U+061C, U+115F..U+1160, U+17B4..U+17B5,
+ * U+180B..U+180F, U+200B..U+200F, U+202A..U+202E, U+2060..U+206F,
+ * U+3164, U+FE00..U+FE0F, U+FEFF, U+FFA0, U+FFF0..U+FFF8,
+ * U+1BCA0..U+1BCA3, U+1D173..U+1D17A, U+E0000..U+E0FFF: the bidi
+ * controls, zero-width characters, Hangul fillers, variation selectors
+ * and tags among them); the other separators a reader cannot see
+ * (U+180E, U+2028, U+2029, U+FFF9..U+FFFB); the blanks other than
+ * U+0020 that draw as a space (U+00A0, U+1680, U+2000..U+200A,
+ * U+202F, U+205F, U+2800, U+3000), so "home" with one appended is not
+ * read as "home"; and the private-use areas (U+E000..U+F8FF, planes 15
+ * and 16), which no two fonts draw alike. Beside it goes a flag saying
+ * something was escaped, which the page shows as a "non-printable"
+ * marker.
  *
  * The colour is computed over the octets slothweb was given, never over
  * the display form: src/ip_color.c ip_color_index(), djb2 mod 8, which
@@ -59,6 +66,13 @@ int web_ssid_color(const char *s);
  * caller keeps the order of the members it already had. */
 void web_jw_ssid(web_jw_t *w, const char *s);
 void web_jw_ssid_meta(web_jw_t *w, const char *name, const char *s);
+
+/* Free text a peer could have put a name into: an alert's title or
+ * detail, which sloth writes with the SSID inside as it came
+ * (src/alerts/rules_twin.c). The same display form, as a JSON string,
+ * of s's first WEB_TEXT_IN_MAX octets ("" for NULL). */
+#define WEB_TEXT_IN_MAX 512
+void web_jw_text(web_jw_t *w, const char *s);
 
 /* The most web_jw_ssid() writes for an n-octet SSID: each octet a \xNN,
  * five bytes once JSON has escaped the backslash. */

@@ -1412,9 +1412,13 @@ the statement's own list; `dir=asc` or `dir=desc` sets that column's
 direction, an empty value last either way, then the MAC (without it,
 each sort keeps its own order, and the answer has no `dir` member);
 anything else is a `400` `bad_sort` or `bad_dir` that never echoes it.
-SQLite compares text by its bytes, so the order is locale-free; an
-address is ordered as text there, and numerically by the page within
-the rows it holds ([Tables](#tables-sort-and-resize)).
+SQLite compares text by its bytes, so the order is locale-free. `ip`
+orders by `web_ipkey(d.ip)`, a function slothweb registers on its
+sloth.db connections (IPv4 before IPv6, each by its bytes, an address
+`inet_pton()` cannot read last with the empty ones), so a page of rows
+is the start of the same numeric order the page shows
+([Tables](#tables-sort-and-resize)); `/api/flows` orders `src` and
+`dst` the same way.
 
 ### The vendor table (§9.2)
 
@@ -1500,7 +1504,8 @@ slack, and is not added to the estimate.
 ### The channel mix: slothweb.db v5
 
 `v4 -> v5` adds `chmix (tier, channel, t, tx, kind, frames)`, keyed
-`(tier, channel, t, tx)`, and its index on `(tier, t)`, in one additive
+`(tier, channel, t, tx, kind)` (a MAC that beacons and probes is two
+transmitters, as in memory), and its index on `(tier, t)`, in one additive
 `BEGIN IMMEDIATE` step like the others (a name already taken fails the
 step and leaves the file at v4). A row is one named transmitter of a
 closed minute (`tier` 1) or hour (`tier` 2) bucket of a channel (`tx` a
@@ -1514,7 +1519,10 @@ every compaction (`chmix.store_dropped_expired`); the table holds at
 most 524,288 rows, the oldest minute rows and then the oldest hour rows
 dropped after a write that passes that (`chmix.store_dropped_cap`); and
 under `--web-max-mb` its rows are the second class the ceiling drops,
-after the fine tier and before any keyed minute or hour row. A row is
+after the fine tier and before any keyed minute or hour row. Both cuts
+delete whole buckets, every row of each `(channel, t)` the oldest rows
+fall in, never part of one, which would be drawn as the whole cell with
+its shares wrong. A row is
 about 60 bytes with its index, so the cap is about 32 MB.
 
 ### /api/devices, /api/device/{mac}, /api/lookup
@@ -1643,17 +1651,25 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   A cell is `null` or `[total, other, i, frames, i, frames, ...]`, `i`
   an index into `tx`, the busiest first; `total` is everything heard in
   the cell, so `other` plus the named frames. The samples are the
-  frame-count deltas of the stream records that carry a channel and a
+  frame-count deltas of the stream records that carry a channel and one
   transmitter: `beacon` (the AP by its bssid; on `6gN` when its
-  `channel_source` says the HE 6 GHz element gave the channel),
-  `probe_client` (the station by its mac) and `assoc` (the station by
-  `sta_mac`: the association and EAPOL frames sloth counted for the
-  pair). sloth emits no per-transmitter record for data frames, and
-  control frames carry no transmitter address, so neither is in the mix
+  `channel_source` says the HE 6 GHz element gave the channel) and
+  `probe_client` (the station by its mac). A `probe_client` record has
+  no band and only the channel of the station's latest probe, so its
+  whole delta since the last snapshot is credited to that channel, read
+  in the 2.4 or 5 GHz band its number is in (a station probing on
+  6 GHz lands on the 2.4 or 5 GHz channel of that number). `assoc` is
+  not in the mix: its `frame_count` counts both ends together, the AP's
+  (re)association responses and EAPOL M1/M3 with the station's M2/M4.
+  sloth emits no per-transmitter record for data frames, and control
+  frames carry no transmitter address, so neither is in the mix
   (`web_chmix.h`). Each channel's open bucket in each tier tracks 32
-  transmitters; a further one is folded into the rest unless it already
-  outweighs the quietest tracked one, so a scan of one-frame MACs cannot
-  push the busy ones out. Closed 10 s buckets live in a ring of 49,152
+  transmitters by name; a further one's frames go to the rest and are
+  counted against it in a table of 32 candidates, and once a candidate
+  has sent more in the bucket than the quietest tracked one the two
+  change places with their own frames, so a heavy transmitter first
+  heard late in an hour still enters on all it sent, every named count
+  is exact, and a scan of one-frame MACs cannot push the busy ones out. Closed 10 s buckets live in a ring of 49,152
   rows (about 4.7 MB; `ring_from` says how far back it reaches, and a
   cell before it is drawn from the heat grid, dimmed); closed minute and
   hour buckets go to slothweb.db's `chmix` (v5, below). An answer names
@@ -1662,8 +1678,9 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   `other` (`"folded":true`), and the rows stop at a whole row
   (`"more":true`) before the answer would pass its buffer. An AP's name
   is sloth.db's `beacon_aps.ssid`, the octets sloth stored, or, where
-  sloth.db has no row, the SSID the stream's last beacon carried
-  (`ssid_src`); `vendor` is the vendor table's. `mix` other than `1`
+  sloth.db has no row, the SSID the stream's last beacon carried, whole
+  (`ssid_src`; a slot holds the stream's longest form, 32 octets each
+  U+FFFD); `vendor` is the vendor table's. `mix` other than `1`
   is a `400` `bad_mix`, with `metric` a `400` `mix_takes_no_metric`.
 - **The grid** draws each cell as a stacked bar of those five, each
   band's height its share of the cell's frames, the busiest at the
@@ -1683,11 +1700,17 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   where one was. Every SSID slothweb sends (the AP table and its
   history, the channel mix, the drawer's last SSID, PNL SSIDs and
   associations, the Devices row, History's new APs and probe clients,
-  the ticker, and any SQL box column whose name holds `ssid`) is in a
-  display form (`web_ssid.h`): printable UTF-8 as it is, every octet of
-  anything else as `\xNN` (C0, DEL, C1, U+FFFD, the bidi and zero-width
-  controls, private use, noncharacters, and any octet that starts no
-  well-formed sequence), a backslash doubled. Beside it go `<name>_k`,
+  the ticker, and any SQL box column whose name holds `ssid` or
+  `title`) is in a display form (`web_ssid.h`): printable UTF-8 as it
+  is, every octet of anything else as `\xNN` (C0, DEL, C1, U+FFFD,
+  Unicode's whole Default_Ignorable_Code_Point set (the bidi and
+  zero-width controls, Hangul fillers, variation selectors, tags), the
+  blanks other than U+0020 that draw as a space (U+00A0, U+2000..U+200A
+  and the like), private use, noncharacters, and any octet that starts
+  no well-formed sequence), a backslash doubled. sloth writes an SSID
+  into an alert's title and detail as it came, so those go out in the
+  same form, on `/api/live`'s alerts, on the ticker and on
+  `/api/history/alerts`. Beside it go `<name>_k`,
   the colour hashed over the octets themselves (`src/ip_color.c`'s djb2
   mod 8, what `tui_ssid_addstr()` colours by), and `<name>_np`, true when
   anything was escaped, which the page shows as a "non-printable"
@@ -2057,9 +2080,9 @@ the record ticker and the SQL box's result) is one implementation,
   Flows) asks the server again with the column's sort word and
   `dir=asc|desc`, which the server checks against its list (above); a
   column the server has no word for (a name slothweb computes, z, the
-  anomaly count, a presence strip) is not sortable there. The page then
-  orders the rows it holds by the same comparator, so where the server
-  orders an address as text the page shows it numerically. The view's
+  anomaly count, a presence strip) is not sortable there. The server
+  orders an address numerically too (`web_ipkey()`), so the rows it
+  sends are the start of the order the page shows. The view's
   own `sort` select still works; choosing from it clears the header's
   sort.
 - **Resize.** A column's right edge is a separator: drag it (a mouse,
@@ -2369,7 +2392,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_ingest.c` | the client over a real unix socket and loopback TCP, the test playing sloth: `--socket` parsing and its refusals, the back-off bound, **the device count `/api/live` reports matching what the fake sent within 5 s** for 3, 12, 300, 0 and 7 devices (spec §12, M1), markup escaped over HTTP and over `/events`, reconnect after the peer closes, retrying with no peer at the capped interval, no tight loop on a peer that closes at once, a mixed stream of truncated, overlong, invalid-UTF-8 and hostile lines, and that the client never writes to the socket |
 | `test_rollup.c` | bucket boundaries in all three tiers, sum/count/min/max, value by kind, non-finite and huge values, the per-class key caps and LRU eviction with its flush and counters, churn decided on a key's whole life (keys of two and three samples crossing minute and hour boundaries keep only their 10 s rows, a key spanning a minute keeps all), held rows released when a key is established and at shutdown, a host recurring under LRU pressure keeping its minute and hour rows, interface, channel and alert keys established from their first sample and in classes of their own, the ring query's merge and bounds, the full store queue dropping 10 s rows before minute and hour rows and counting them, and every class full at `--web-max-keys` 8192 across an hour boundary and a shutdown with nothing dropped |
 | `test_metrics.c` | hand-written lines through the decoder on a pinned clock: the key canonicalisers, gauges from `%.2f` reals, hostile keys refused, event counters, running totals as deltas floored at zero and first-sight baselines, flows, channels, presence, a probe request counted once though both `probe_client` and `seqnum_client` carry it, rows per pass with gaps and bad lines, the bounded high-water table, an evicted row seen again not counted twice, the evicted-id filter's two generations remembering an id across 8,191 evictions and forgetting it at the next rotation |
-| `test_store.c` | the DDL guardrail in every build; with SQLite: a fresh store, `test_db.c`'s secret-column sweep, secrets fed through the stream absent from the file, a v0, a v1, a v2, a v3 and a v4 file migrated, a v0, a v1, a v2, a v3 and a v4 file whose step fails left where they were, `chmix`'s merge, tiers and bounded reads, its retention (minute rows three days, hour rows 400) and its row cap (minute rows first, counted), `passive_ptr`'s upsert, bound and read-back, the presence cells of the minute tier, the v3 tables through their own calls (a baseline restored into a smaller table with the rest and an invalid row deleted, episodes expired at load, histograms, the reported set pruned, the A9 and MAD reads), a newer file and foreign files (a sloth.db shape, other databases, a file with another program's `application_id` and `user_version` but no table yet, our own `meta` under a foreign `application_id`, not SQLite) refused byte for byte, a WAL-mode sloth.db with an unflushed WAL refused with the file and its WAL byte for byte, a cleanly closed WAL-mode sloth.db refused with its directory listing unchanged, the file rules (symlink, mode, links, side files, a directory; the owner rule is not tested, see below), `DEFENSIVE` refusing a `sqlite_master` write on the store's handle and a library that leaves it off failing the open, a file swapped between the identifying and the writing open refused byte for byte, merged writes counted once in `store_rows` and bound queries, retention, the WAL left empty by the compaction, a start after a long stop expiring everything with the WAL never past one slice, the ceiling dropping the oldest fine rows first and sparing global series, keeping the time series within the history allowance (and rows left) while 80,000 rows arrive with the analysis state alone over it (with `dbstat`; without it, the fallback asserted), re-measuring the baseline tables after `web_store_bl_del()` and the episode table on the next pass, and holding under 200 new keys a second within one flush interval; a new baseline entry taking over its pair's stale row, a restore of 4,000 entries into ten keeping the WAL under 3 MB, the analysis estimate against the default ceiling; churn of two and three samples per key writing no minute or hour row while slothweb runs |
+| `test_store.c` | the DDL guardrail in every build; with SQLite: a fresh store, `test_db.c`'s secret-column sweep, secrets fed through the stream absent from the file, a v0, a v1, a v2, a v3 and a v4 file migrated, a v0, a v1, a v2, a v3 and a v4 file whose step fails left where they were, `chmix`'s merge, tiers and bounded reads, its retention (minute rows three days, hour rows 400) and its row cap (minute rows first, counted), the cap and the ceiling deleting whole buckets, the kind in the key, `passive_ptr`'s upsert, bound and read-back, the presence cells of the minute tier, the v3 tables through their own calls (a baseline restored into a smaller table with the rest and an invalid row deleted, episodes expired at load, histograms, the reported set pruned, the A9 and MAD reads), a newer file and foreign files (a sloth.db shape, other databases, a file with another program's `application_id` and `user_version` but no table yet, our own `meta` under a foreign `application_id`, not SQLite) refused byte for byte, a WAL-mode sloth.db with an unflushed WAL refused with the file and its WAL byte for byte, a cleanly closed WAL-mode sloth.db refused with its directory listing unchanged, the file rules (symlink, mode, links, side files, a directory; the owner rule is not tested, see below), `DEFENSIVE` refusing a `sqlite_master` write on the store's handle and a library that leaves it off failing the open, a file swapped between the identifying and the writing open refused byte for byte, merged writes counted once in `store_rows` and bound queries, retention, the WAL left empty by the compaction, a start after a long stop expiring everything with the WAL never past one slice, the ceiling dropping the oldest fine rows first and sparing global series, keeping the time series within the history allowance (and rows left) while 80,000 rows arrive with the analysis state alone over it (with `dbstat`; without it, the fallback asserted), re-measuring the baseline tables after `web_store_bl_del()` and the episode table on the next pass, and holding under 200 new keys a second within one flush interval; a new baseline entry taking over its pair's stale row, a restore of 4,000 entries into ten keeping the WAL under 3 MB, the analysis estimate against the default ceiling; churn of two and three samples per key writing no minute or hour row while slothweb runs |
 | `test_series.c` | every parameter rule and its reason, the answer's shape and paging, the routes (`HEAD`, `400` without echo, `query_too_long`, `421` and `405` on all three, `503` without a time series, the health members), the 900-point worst case fitting, the 900-point cap on a store+memory answer of 1,800 buckets and its next page, the store thread running beside reads and writes, and spec §12's M2 acceptance: an hour of records through the framer on a pinned clock, the 24 h request answered with 360 points 10 s apart (from memory, from the store's fine tier, and through `/api/series` again after a restart over the same store), the store under 5 MB on disk with its WAL after every step of the hour |
 | `test_server.c` | real loopback sockets: default bind address, a refused peer over v4 and v6, 405 for POST/PUT/DELETE/PATCH, 431, idle and slow clients timed out, slot exhaustion; the page byte for byte and its `304`, health, a stream's ticks and pings and the client leaving, the first tick at once, a departing client noticed on the read path with no event due, the stream socket's `TCP_NODELAY` and `SO_SNDBUF`, a non-reading stream client dropped at the 64 KB backlog and not past it, the stream cap, `421` for `Host: attacker.example`; an episode that opens reaching a stream client as one `anomaly` event, counted once |
 | `test_baseline.c` | the cell as the local hour of the week, Monday first, and the same cell for the same local hour across a DST change (167 UTC hours apart), a never-fed pair scoring absent and a zero feed making no entry, warming forcing z to 0, an established cell's z, the sd floor (a constant history and one AP more scores 1, not 31,623; 10% of the mean; 1 KiB/s for a byte rate), an hour fed once, zero feeds for counters and presence and none for gauges and not counted as activity, cells independent, the full table evicting the least recently active entry by real feeds only, ageing out with the row id queued for deletion, allocation following the entries, dirty cells out once and back through a restore, the cap at the default and the extremes, NaN and both infinities ignored, the value scale per kind, a minute's sd carrying the within-hour spread (and Poisson for a counter), the delete queue returning 5,000 ids with none lost, refused records held to the next pass, restore refusing values a float cannot hold and keeping `first_fed` |
@@ -2380,8 +2403,8 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_ptr.c` | the passive PTR cache: reverse names per RFC 1035 §3.5 and RFC 3596 §2.5 (and what is not one), what a dns record must be to be recorded (an empty answer, sloth's today, counted), the bound and its eviction, a rename, changed rows out once and back on a failed write, a row read back checked; the identity tables' M4 readers |
 | `test_slothdb.c` | sloth.db generated from `src/db_schema.c`: the open flags (read-only, no-follow, never write or create; a write refused); the file byte for byte and its directory listing after every read, for a rollback-journal file, a cleanly closed WAL file (immutable, no `-wal` or `-shm` made), a WAL file sloth holds open with unflushed frames (read, main file and WAL prefix unchanged, sloth still writing) and a `-wal` with no `-shm`; the refusals (missing, symlink, directory, newer, a slothweb store, no devices table, a bad version, not SQLite, not configured); a v5 file read by probing and a minimal v1 file; the allow-list against `tests/test_db.c`'s guardrail, credential words and the live schema; the authorizer denying every statement off the list; the budget interrupting a slow statement; the acceptance query returning exactly D1 and D6; every other term against the file; the drawer's, Lookup's and A2's reads |
 | `test_devices.c` | the three routes through the route table: no sloth.db (`503`, the drawer and Lookup from the stream), `405` and `421` on the new paths; the acceptance query over HTTP (encoded both ways, `HEAD`); a row's members, the vendor's and name's sources, markup never markup; paging and every `400`; sloth.db missing; the drawer (path forms, lists, the detail, alerts, no credential, a MAC sloth.db lacks, bad MACs); the strip from the store's minute tier and the ring, the week from the baseline, an episode and the `anomaly:` and `has:` terms; Lookup (an MA-S MAC resolved, and not with sloth's own table; an IP's MAC, names and record; refusals); the health members; the worst case stopping with `more` |
-| `test_chmix.c` | the WiFi view's channel mix and the SSID display form: the escaper on printable UTF-8, a backslash, octets that start no sequence, C0, DEL, C1, U+FFFD, a bidi override, a zero width space, private use, a noncharacter, a truncated and an overlong sequence, and its cut; the colour against `src/ip_color.c` over the octets (a case where hashing the display form would differ); a bucket's top five by frames then MAC and the rest, closed when due and not before; the tracking bound (a scan of one-frame MACs cannot push out a busy one, a heavy late one still gets in); the channel bound and the ring's overwrite counted; `beacon`, `probe_client` and `assoc` through the decoder and the metric derivation (deltas, a first sight a baseline, 6 GHz from `channel_source`, the beacon's name); `?mix=1` from memory (band order, a cell merged and cut to five, the tx table, an AP's escaped stream name, empty cells null, the refusals, the plain grid unchanged), the worst case stopping at a whole row with `more` and `folded`, the `chmix` health member, the ticker's SSID escaped; with SQLite, the minute tier from slothweb.db with the AP's octets from sloth.db (escaped, the TUI's colour) and a stream name only where sloth.db has none, and every sloth.db SSID (AP table and history, the drawer's last SSID, PNL SSIDs and associations, the Devices row) escaped, never U+FFFD |
-| `test_tables.c` | sortable, resizable columns: the devices statement with a direction compiled from constant columns only (and unchanged without one), every sort word and the `dir` words accepted and nothing else; over a generated sloth.db the order `/api/devices`, `/api/wifi/aps` and `/api/flows` give for each new word in both directions (text by bytes, an empty value last), `bad_dir` without the value echoed; the page's one `DataTable()` used by every table, its headers no longer `aria-hidden`, its storage in a `try`, the reset control, the direction on every server-paged fetch |
+| `test_chmix.c` | the WiFi view's channel mix and the SSID display form: the escaper on printable UTF-8, a backslash, octets that start no sequence, C0, DEL, C1, U+FFFD, a bidi override, a zero width space, Default_Ignorable code points (a Hangul filler, the grapheme joiner, variation selectors) and blank lookalikes (NBSP, an em space), private use, a noncharacter, a truncated and an overlong sequence, and its cut; the colour against `src/ip_color.c` over the octets (a case where hashing the display form would differ); a bucket's top five by frames then MAC and the rest, closed when due and not before; the tracking bound (a scan of one-frame MACs cannot push out a busy one, a heavy late one still gets in, and one first heard half way through an hour behind 32 others far ahead enters with exactly its frames); the channel bound and the ring's overwrite counted; `beacon` and `probe_client` through the decoder and the metric derivation (deltas, a first sight a baseline, 6 GHz from `channel_source`, the beacon's name, kept whole at the stream's longest form), an `assoc` line in sloth's shape adding nothing; `?mix=1` from memory (band order, a cell merged and cut to five, the tx table, an AP's escaped stream name, empty cells null, the refusals, the plain grid unchanged), the worst case stopping at a whole row with `more` and `folded`, the `chmix` health member, the ticker's SSID escaped, an alert's title and detail escaped on `/api/live` and the ticker; with SQLite, the minute tier from slothweb.db with the AP's octets from sloth.db (escaped, the TUI's colour) and a stream name only where sloth.db has none, and every sloth.db SSID (AP table and history, the drawer's last SSID, PNL SSIDs and associations, the Devices row, `/api/sessions/new`'s APs and probe clients, the SQL box's ssid and title columns) and `/api/history/alerts`' titles escaped, never U+FFFD |
+| `test_tables.c` | sortable, resizable columns: the devices statement with a direction compiled from constant columns only (and unchanged without one), every sort word and the `dir` words accepted and nothing else; over a generated sloth.db the order `/api/devices`, `/api/wifi/aps` and `/api/flows` give for each new word in both directions (text by bytes, an address by number, an empty value last), `bad_dir` without the value echoed; the page's one `DataTable()` used by every table, its headers no longer `aria-hidden`, its storage in a `try`, the reset control, the direction on every server-paged fetch |
 | `test_wifi.c` | the WiFi routes through the route table: the waterfall's band order and channel order, a gauge cell as the mean of its buckets and a counter's as their sum, null for empty, the defaults, 40 channels and `more`, every `400` (`tier_unavailable` past 24 h without a store), `503` without a time series or sloth.db; a channel only the store holds, at the minute and hour tiers; the deauth timeline by frames with its DEAUTH_FLOOD episodes in the range matched on the alert key that no body names, and without sloth.db; the AP table (AKM bits and downgrade flags by name, MFP as a word, the SSID history and count, KARMA, a markup SSID escaped, sorts, paging, refusals) and its worst-case row fitting `WEB_WIFI_AP_ROW_MAX`; the page's WiFi view, its ids and fetches. Both builds |
 | `test_history.c` | the History routes over a generated sloth.db: the strip's cells and session markers, the defaults and refusals; the strip on 600,000 alert episodes and 60,000 devices without the first_seen indexes inside its budget (the time asserted under 250 ms, 4x that under ASan or TSan), its work (progress-handler ticks) under a quarter of a scan's by the last_seen bound, every plan's counts held to a `GROUP BY`'s; the snapshot's shape (867,748 episodes and 31,821 devices, all in the last 30 days, no index: the scan plan) inside the overview's 1500 ms through the route, and a direct count inside 4x that under the sanitizers; the cache served without an open, invalidated by an mtime, a minute, a write, and a write into the `-wal` that leaves the main file's stat unchanged; a timeout naming its read, rows and plan; who was here at the edges of the overlap, the presence strip over the range, paging; the alerts and flows in a range with no key, detail, cookie or MQTT username and no `mqtt_flows`; the sessions; "new since the previous session" for a first visit, a visit after a crash (its window closed at the next start), one whose previous never ended (since its start), and the latest, whose devices are the ones the wiki's own recipe names; the page's History view. Both builds |
 | `test_sqlbox.c` | the SQL box: the parameter and text rules; `404` without `--web-allow-sql` and the page's box hidden; spec §12's M5 acceptance (above) over a real socket against the C API and the sqlite3 shell; every write, DDL, PRAGMA, ATTACH, DML-tail CTE and second statement refused with the file byte for byte; every withheld column refused, the guardrail's words on the list, the integer flags read; the row, byte, time and value limits; one at a time (`503` `busy`, free again once answered or once the client leaves), `HEAD` `405`, `/api/recipes`. Both builds |

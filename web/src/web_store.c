@@ -145,7 +145,9 @@ static const char STEP_V4_SQL[] =
 /* v4 -> v5: the WiFi view's channel mix (web_chmix.h): per channel
  * and closed minute or hour bucket (tier 1 or 2), the frames of each of
  * its top transmitters (tx a canonical MAC, kind 1 an AP, 2 a client)
- * and of the rest (tx '', kind 0). The key is canonical text and the
+ * and of the rest (tx '', kind 0). The kind is in the key, as it is in
+ * memory: a MAC that both beacons and probes is two transmitters, and
+ * neither's frames are added to the other's row. The key is canonical text and the
  * rest are numbers: no SSID, nor any other string a peer chose, is
  * stored. Indexed on (tier, t), which retention, the row cap, the
  * ceiling and the grid all select on. Additive: one new table and its
@@ -158,7 +160,7 @@ static const char STEP_V5_SQL[] =
     "  tx      TEXT NOT NULL,\n"
     "  kind    INTEGER NOT NULL,\n"
     "  frames  INTEGER NOT NULL,\n"
-    "  PRIMARY KEY (tier, channel, t, tx)\n"
+    "  PRIMARY KEY (tier, channel, t, tx, kind)\n"
     ") WITHOUT ROWID;\n"
     "CREATE INDEX chmix_t ON chmix (tier, t);\n";
 
@@ -480,8 +482,11 @@ static const char *const EXP_ANY[WEB_TIER_COUNT] = {
 #define SLICE(tier, cls) \
     "DELETE FROM " tier " WHERE (series,t) IN (SELECT series,t FROM " tier \
     cls " ORDER BY t LIMIT ?1)"
+/* Whole buckets: every row of each (channel, t) the oldest rows fall
+ * in, so a bucket is never left part drawn as a whole cell. That passes
+ * the slice by at most the rest of the buckets at its last t. */
 #define MIX_SLICE(tier) \
-    "DELETE FROM chmix WHERE (tier,channel,t,tx) IN (SELECT tier,channel,t,tx" \
+    "DELETE FROM chmix WHERE tier=" tier " AND (channel,t) IN (SELECT channel,t" \
     " FROM chmix WHERE tier=" tier " ORDER BY t LIMIT ?1)"
 static const char *const CEIL_STEP[] = {
     SLICE("fine", ""),
@@ -1351,15 +1356,19 @@ static long long expire(web_store_t *s, const long long cutoff[WEB_TIER_COUNT]) 
     return bad ? -1 : total;
 }
 
-/* Delete up to limit (at most WEB_STORE_SLICE_ROWS) chmix rows of tier
- * older than before, the oldest first, in one transaction. Rows, or
- * -1. */
+/* Delete the buckets of tier older than before that the oldest limit
+ * (at most WEB_STORE_SLICE_ROWS) rows fall in, whole, in one
+ * transaction: a bucket is up to WEB_CHMIX_TOP + 1 rows sharing one t,
+ * and one left in part would be drawn as a whole cell with its shares
+ * wrong. So it deletes at least limit rows when there are that many,
+ * and passes it by at most the rest of the buckets at its last t.
+ * Rows, or -1. */
 static long long mix_slice(web_store_t *s, int tier, long long before,
                            long long limit) {
     sqlite3_stmt *st = NULL;
     if (sqlite3_prepare_v2(s->db,
-            "DELETE FROM chmix WHERE (tier,channel,t,tx) IN (SELECT tier,"
-            "channel,t,tx FROM chmix WHERE tier=?1 AND t<?2 ORDER BY t LIMIT ?3)",
+            "DELETE FROM chmix WHERE tier=?1 AND (channel,t) IN (SELECT "
+            "channel,t FROM chmix WHERE tier=?1 AND t<?2 ORDER BY t LIMIT ?3)",
             -1, &st, NULL) != SQLITE_OK)
         return -1;
     sqlite3_bind_int(st, 1, tier);
@@ -1526,8 +1535,8 @@ int web_store_mix_write(web_store_t *s, const web_mix_row_t *rows, size_t n) {
         "INSERT OR IGNORE INTO chmix (tier,channel,t,tx,kind,frames)"
         " VALUES (?1,?2,?3,?4,?5,?6)";
     static const char UPD[] =
-        "UPDATE chmix SET frames=MIN(frames+?6,4294967295), kind=?5"
-        " WHERE tier=?1 AND channel=?2 AND t=?3 AND tx=?4";
+        "UPDATE chmix SET frames=MIN(frames+?6,4294967295)"
+        " WHERE tier=?1 AND channel=?2 AND t=?3 AND tx=?4 AND kind=?5";
     char err[WEB_STORE_ERR_MAX];
     sqlite3_stmt *st[2] = { NULL, NULL };
     long long added = 0;

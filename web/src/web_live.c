@@ -220,9 +220,17 @@ static void summarise(const web_jrec_t *r, int is_alert, char *out,
     size_t n = 0;
     tmp[0] = '\0';
     if (is_alert) {
+        /* sloth writes an SSID into an alert's title and detail as it
+         * came (src/alerts/rules_twin.c), so both go out in the display
+         * form too (web_ssid.h). */
         const char *ti = web_jl_str(r, "title");
         const char *de = web_jl_str(r, "detail");
-        snprintf(tmp, sizeof(tmp), "%s %s", ti ? ti : "", de ? de : "");
+        char e1[SUMMARY_TMP / 2 - 1], e2[SUMMARY_TMP / 2 - 1];
+        ti = ti ? ti : "";
+        de = de ? de : "";
+        web_ssid_escape(ti, strnlen(ti, SUMMARY_TMP), e1, sizeof(e1), NULL);
+        web_ssid_escape(de, strnlen(de, SUMMARY_TMP), e2, sizeof(e2), NULL);
+        snprintf(tmp, sizeof(tmp), "%s %s", e1, e2);
     } else {
         int used = 0;
         for (int k = 0; SUMMARY_KEYS[k] && used < 4; k++) {
@@ -306,8 +314,13 @@ static void alert_record(web_live_t *l, const web_jrec_t *r, const char *t,
     snprintf(a->type, sizeof(a->type), "%s", t);
     const char *ti = web_jl_str(r, "title");
     const char *de = web_jl_str(r, "detail");
-    web_utf8_copy(a->title, WEB_LIVE_TITLE_MAX, ti ? ti : "");
-    web_utf8_copy(a->detail, WEB_LIVE_DETAIL_MAX, de ? de : "");
+    /* In the display form (web_ssid.h): sloth puts an SSID into both
+     * as it came. Cut before a whole escape or code point. */
+    ti = ti ? ti : "";
+    de = de ? de : "";
+    web_ssid_escape(ti, strnlen(ti, WEB_SSID_IN_MAX), a->title, sizeof(a->title), NULL);
+    web_ssid_escape(de, strnlen(de, WEB_SSID_IN_MAX * 2), a->detail, sizeof(a->detail),
+                    NULL);
     if (id) web_utf8_copy(a->incident, WEB_LIVE_ID_MAX, id);
     const char *ip = web_jl_str(r, "match_ip");
     if (match_ip_ok(ip)) snprintf(a->match_ip, sizeof(a->match_ip), "%s", ip);

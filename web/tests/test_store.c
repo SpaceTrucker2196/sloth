@@ -700,6 +700,83 @@ static void test_mix_retention_and_cap(void) {
     rm_store(p);
 }
 
+/* Every chmix bucket in p whole: each (tier, channel, t) of rows has
+ * want rows. The number of buckets that are not. */
+static long long part_buckets(const char *p, int want) {
+    char q[200];
+    snprintf(q, sizeof(q), "SELECT COUNT(*) FROM (SELECT COUNT(*) c FROM chmix"
+             " GROUP BY tier,channel,t HAVING c<>%d)", want);
+    return raw_int(p, q);
+}
+
+/* The row cap and the ceiling delete whole buckets, never part of one:
+ * a bucket is its named rows and its rest sharing one t, and a part
+ * left would be drawn as the whole cell. Each seen red with its DELETE
+ * keyed on the oldest rows themselves, (tier,channel,t,tx), as it was. */
+static void test_mix_cut_keeps_buckets_whole(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "mixwhole.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    long long now = 1792627200;
+    web_mix_row_t r[4];
+    for (int i = 0; i < 4; i++)
+        r[i] = mix_row("6", WEB_TIER_MINUTE, now - 600 + i * 60, 2, 50, 5);
+    web_store_test_mix_cap = 7;
+    WT_EQ(web_store_mix_write(&S, r, 4), 0);    /* 12 rows over 7 */
+    web_store_test_mix_cap = 0;
+    WT_EQ(web_store_mix_count(&S), 6);
+    WT_EQ(part_buckets(p, 3), 0);
+    WT_EQ(raw_int(p, "SELECT MIN(t) FROM chmix"), now - 600 + 120);
+    web_store_stats_t st;
+    web_store_stats(&S, &st);
+    WT_EQ(st.mix_dropped_cap, 6ULL);
+    WT_EQ(st.mix_rows, 6);
+    web_store_close(&S);
+    rm_store(p);
+
+    /* The ceiling: two channels' buckets at each t, six rows a t, so a
+     * slice of WEB_STORE_SLICE_ROWS rows ends inside one. */
+    path_in(p, sizeof(p), "mixceil.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    static web_mix_row_t big[2000];
+    for (int round = 0; round < 10; round++) {
+        for (int i = 0; i < 2000; i++)
+            big[i] = mix_row(i % 2 ? "11" : "6", WEB_TIER_MINUTE,
+                             now - 86400 + (round * 1000 + i / 2) * 60, 2, 50, 5);
+        WT_EQ(web_store_mix_write(&S, big, 2000), 0);
+    }
+    WT_EQ(web_store_mix_count(&S), 60000);
+    web_store_stats(&S, &st);
+    const long long cap = st.bytes / 2;
+    WT_EQ(web_store_compact(&S, now, 30, cap), 0);
+    long long left = web_store_mix_count(&S);
+    WT_ASSERT(left > 0 && left < 60000);
+    WT_EQ(part_buckets(p, 3), 0);
+    web_store_close(&S);
+    rm_store(p);
+}
+
+/* The kind is in chmix's key: a MAC that beacons and probes in one
+ * bucket is two rows, each with its own frames, also when the bucket
+ * is merged. Seen red with the key without kind (one row, kind and
+ * frames mixed). */
+static void test_mix_kind_is_in_the_key(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "mixkind.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_mix_row_t r = mix_row("1", WEB_TIER_MINUTE, 600, 2, 30, 0);
+    memcpy(r.tx[1].mac, r.tx[0].mac, 6);          /* the AP's MAC, as a client */
+    WT_EQ(r.tx[0].kind, WEB_TX_AP);
+    WT_EQ(r.tx[1].kind, WEB_TX_CLIENT);
+    WT_EQ(web_store_mix_write(&S, &r, 1), 0);
+    WT_EQ(web_store_mix_write(&S, &r, 1), 0);
+    WT_EQ(web_store_mix_count(&S), 2);
+    WT_EQ(raw_int(p, "SELECT frames FROM chmix WHERE tx='02:00:00:00:00:01' AND kind=1"), 60);
+    WT_EQ(raw_int(p, "SELECT frames FROM chmix WHERE tx='02:00:00:00:00:01' AND kind=2"), 58);
+    web_store_close(&S);
+    rm_store(p);
+}
+
 static int g_ptrs;
 static web_store_ptr_t g_ptr_seen[8];
 static void count_ptr(void *ctx, const web_store_ptr_t *r) {
@@ -1984,6 +2061,8 @@ void run_store_tests(void) {
     WT_RUN(test_v4_failed_step_leaves_file_unchanged);
     WT_RUN(test_mix_rows_round_trip);
     WT_RUN(test_mix_retention_and_cap);
+    WT_RUN(test_mix_cut_keeps_buckets_whole);
+    WT_RUN(test_mix_kind_is_in_the_key);
     WT_RUN(test_passive_ptr_rows);
     WT_RUN(test_presence_cells);
     WT_RUN(test_analysis_state_round_trip);
