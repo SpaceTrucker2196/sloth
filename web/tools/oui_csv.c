@@ -10,6 +10,7 @@ void oui_build_init(oui_build_t *b) { memset(b, 0, sizeof(*b)); }
 void oui_build_free(oui_build_t *b) {
     for (size_t i = 0; i < b->nnames; i++) free(b->names[i]);
     free(b->names);
+    free(b->ix);
     free(b->e);
     memset(b, 0, sizeof(*b));
 }
@@ -115,14 +116,16 @@ static uint32_t name_hash(const char *s) {
     return h;
 }
 
-/* A small open-addressed index over b->names, rebuilt as it grows. */
-typedef struct {
-    uint32_t *slot;   /* name index + 1; 0 empty */
-    size_t    cap;
-} name_ix_t;
-
-static int ix_grow(name_ix_t *ix, const oui_build_t *b) {
-    size_t cap = ix->cap ? ix->cap * 2 : 4096;
+/* An open-addressed index over b->names (name index + 1; 0 empty), one
+ * for the whole build so a second registry file sees the first's names.
+ * It is sized for every name it already holds: until 2026-10-26 each
+ * file had its own index starting at 4096 slots, the first growth
+ * rehashed all of b->names into one doubling, and after oui.csv's
+ * ~40,000 names that table was full and the probe never ended. */
+static int ix_grow(oui_build_t *b) {
+    size_t cap = b->ix_cap ? b->ix_cap : 4096;
+    while (cap < 2 * (b->nnames + 1)) cap *= 2;
+    if (cap == b->ix_cap) return 0;
     uint32_t *s = calloc(cap, sizeof(*s));
     if (!s) return -1;
     for (size_t i = 0; i < b->nnames; i++) {
@@ -130,19 +133,19 @@ static int ix_grow(name_ix_t *ix, const oui_build_t *b) {
         while (s[h]) h = (h + 1) & (cap - 1);
         s[h] = (uint32_t)i + 1;
     }
-    free(ix->slot);
-    ix->slot = s;
-    ix->cap = cap;
+    free(b->ix);
+    b->ix = s;
+    b->ix_cap = cap;
     return 0;
 }
 
-static long name_id(oui_build_t *b, name_ix_t *ix, const char *name) {
-    if ((b->nnames + 1) * 2 > ix->cap && ix_grow(ix, b) != 0) return -1;
-    size_t h = name_hash(name) & (ix->cap - 1);
-    while (ix->slot[h]) {
-        uint32_t k = ix->slot[h] - 1;
+static long name_id(oui_build_t *b, const char *name) {
+    if (ix_grow(b) != 0) return -1;
+    size_t h = name_hash(name) & (b->ix_cap - 1);
+    while (b->ix[h]) {
+        uint32_t k = b->ix[h] - 1;
         if (!strcmp(b->names[k], name)) return (long)k;
-        h = (h + 1) & (ix->cap - 1);
+        h = (h + 1) & (b->ix_cap - 1);
     }
     if (b->nnames == b->names_cap) {
         size_t nc = b->names_cap ? b->names_cap * 2 : 1024;
@@ -155,11 +158,11 @@ static long name_id(oui_build_t *b, name_ix_t *ix, const char *name) {
     if (!copy) return -1;
     memcpy(copy, name, strlen(name) + 1);
     b->names[b->nnames] = copy;
-    ix->slot[h] = (uint32_t)b->nnames + 1;
+    b->ix[h] = (uint32_t)b->nnames + 1;
     return (long)b->nnames++;
 }
 
-static int add(oui_build_t *b, name_ix_t *ix, uint64_t prefix, int cls,
+static int add(oui_build_t *b, uint64_t prefix, int cls,
                const char *name) {
     if (!name[0]) return 0;
     if (b->n == b->cap) {
@@ -169,7 +172,7 @@ static int add(oui_build_t *b, name_ix_t *ix, uint64_t prefix, int cls,
         b->e = ne;
         b->cap = nc;
     }
-    long id = name_id(b, ix, name);
+    long id = name_id(b, name);
     if (id < 0) return -1;
     b->e[b->n].key = web_oui_key(prefix, cls);
     b->e[b->n].name = (uint32_t)id;
@@ -249,10 +252,8 @@ int oui_build_csv(oui_build_t *b, const char *path) {
     size_t len = 0;
     char *buf = slurp(b, path, &len);
     if (!buf) return -1;
-    name_ix_t ix = { NULL, 0 };
-    if (ix_grow(&ix, b) != 0) { free(buf); return fail(b, path, 0, "out of memory"); }
     csv_t *c = malloc(sizeof(*c));
-    if (!c) { free(buf); free(ix.slot); return fail(b, path, 0, "out of memory"); }
+    if (!c) { free(buf); return fail(b, path, 0, "out of memory"); }
     c->p = buf;
     c->end = buf + len;
     /* A UTF-8 byte order mark before the header. */
@@ -277,12 +278,11 @@ int oui_build_csv(oui_build_t *b, const char *path) {
         }
         char name[WEB_OUI_NAME_MAX + 1];
         clean_name(c->f[2], c->fl[2], name);
-        if (add(b, &ix, prefix, cls, name) != 0) { rc = fail(b, path, 0, "out of memory"); break; }
+        if (add(b, prefix, cls, name) != 0) { rc = fail(b, path, 0, "out of memory"); break; }
     }
     if (r < 0 && rc == 0)
         rc = fail(b, path, row + 1, "a field past 4 KiB or an unterminated quote");
     free(c);
-    free(ix.slot);
     free(buf);
     return rc;
 }
@@ -293,8 +293,6 @@ int oui_build_sloth(oui_build_t *b, const char *path) {
     size_t len = 0;
     char *buf = slurp(b, path, &len);
     if (!buf) return -1;
-    name_ix_t ix = { NULL, 0 };
-    if (ix_grow(&ix, b) != 0) { free(buf); return fail(b, path, 0, "out of memory"); }
     int rc = 0;
     for (const char *p = buf; (p = strstr(p, "{ 0x")) != NULL; p += 4) {
         const char *h = p + 4;
@@ -309,9 +307,8 @@ int oui_build_sloth(oui_build_t *b, const char *path) {
         if (!e || (nl && nl < e)) continue;
         char name[WEB_OUI_NAME_MAX + 1];
         clean_name(q + 1, (size_t)(e - q - 1), name);
-        if (add(b, &ix, prefix, WEB_OUI_MAL, name) != 0) { rc = fail(b, path, 0, "out of memory"); break; }
+        if (add(b, prefix, WEB_OUI_MAL, name) != 0) { rc = fail(b, path, 0, "out of memory"); break; }
     }
-    free(ix.slot);
     free(buf);
     return rc;
 }

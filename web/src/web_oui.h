@@ -1,11 +1,12 @@
 /* slothweb vendor lookup (#162, M4): docs/web-ui-spec.md §9.2 as the
- * 2026-10-21 OUI ruling amends it.
+ * 2026-10-26 OUI ruling restores it.
  *
  * The table is generated at build time by web/tools/oui_gen.c from the
- * IEEE registry CSVs the developer has fetched into web/data/ (oui.csv
- * is MA-L, mam.csv MA-M, oui36.csv MA-S, iab.csv the old IAB blocks).
- * Neither a CSV nor the generated build/web/web_oui_table.c is ever
- * committed. A build with no CSV still succeeds: the generator then
+ * IEEE registry CSVs committed in web/data/ (oui.csv is MA-L, mam.csv
+ * MA-M, oui36.csv MA-S, iab.csv the old IAB blocks; owner ruling
+ * 2026-10-26, web/data/SOURCE.md). The generated
+ * build/web/web_oui_table.c is build output, never committed. A build
+ * with no CSV (WEB_OUI_DIR elsewhere) still succeeds: the generator then
  * reads sloth's own 123-entry table out of src/oui.c as text (no src/
  * file is compiled into slothweb) and says so, and with neither it
  * builds an empty table. web_oui_full() is what A4 and the Lookup card

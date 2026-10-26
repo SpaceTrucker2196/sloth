@@ -43,23 +43,23 @@ make web-demo       # build/web/slothweb-demo, the synthetic data for the demo b
 `make web WITH_SQLITE=0` builds a slothweb with no SQLite at all: no
 `--sloth-db`, no `--store`, history in memory only.
 
-**Optional, the full vendor table.** Without it slothweb uses sloth's
-own small table (about 120 vendors) and rule A4 is off. To use the
-IEEE registry instead, fetch the CSVs once into `web/data/` (ignored by
-git, never committed) and build again; neither the build nor slothweb
-ever fetches anything itself:
+**The vendor table.** The IEEE registry CSVs (MA-L, MA-M, MA-S and
+IAB) are committed in `web/data/` (owner ruling 2026-10-26), so `make
+web` builds the full table and rule A4 (vendor unknown) is on by
+default; `/api/health` says `"vendor_table":"ieee"`. Neither the build
+nor slothweb ever fetches anything. `web/data/SOURCE.md` names where
+the files come from, their package version and SHA-256 (`make
+web-test` checks the hashes). `make update-oui` refreshes them by hand,
+from `/usr/share/ieee-data` when Debian's `ieee-data` package is
+installed and otherwise from the IEEE; review and commit the result.
+`make web WEB_OUI_DIR=DIR` builds from another directory, and one
+without the CSVs gives sloth's own small table (about 120 vendors) with
+A4 off.
 
-```sh
-mkdir -p web/data
-curl -fsSL -o web/data/oui.csv   https://standards-oui.ieee.org/oui/oui.csv
-curl -fsSL -o web/data/mam.csv   https://standards-oui.ieee.org/oui28/mam.csv
-curl -fsSL -o web/data/oui36.csv https://standards-oui.ieee.org/oui36/oui36.csv
-curl -fsSL -o web/data/iab.csv   https://standards-oui.ieee.org/iab/iab.csv
-make web
-```
-
-Any subset works (`oui.csv` alone is most of it). `/api/health` then
-says `"vendor_table":"ieee"`.
+The full table costs the binary about 2.8 MB: slothweb is 3.3 MB with
+it and 0.5 MB without (x86-64, `-O2`, measured 2026-10-26); the
+generator itself runs in under 0.1 s, and a clean `make web` takes
+about the same either way (7 to 8 s here).
 
 ### Try it on synthetic data
 
@@ -236,8 +236,9 @@ and the page says why in each view that needs it):
 | `no --sloth-db`, `slothweb was built without SQLite; no sloth.db` | The reason `/api/health` gives (`db_error`) when there is no sloth.db to read. |
 
 **Normal start notices** (not problems): `listening on`, `vendor
-table: ... ; A4 off: build with the IEEE CSVs in web/data/` (see
-Build), `sloth.db ...: schema vN, N devices, read-only`, `reading
+table: ieee (...)`, or `vendor table: sloth (...); A4 off: built
+without the IEEE CSVs in web/data/` for a `WEB_OUI_DIR` build without
+them (see Build), `sloth.db ...: schema vN, N devices, read-only`, `reading
 SPEC`, `time series in`, `baselines (N restored)`, `store schema vN
 migrated to vN`, and in a `WITH_SQLITE=0` build:
 
@@ -460,7 +461,7 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
  "db":"open","db_schema":7,"db_rows":42,"db_path":"/var/lib/sloth/sloth.db",
  "db_mode":"wal","db_error":null,"db_opens":118,"db_timeouts":0,
  "db_supported":[1,7],"vendor_table":"ieee",
- "vendor_counts":{"ma_l":38212,"ma_m":5960,"ma_s":6831},"a4":"on",
+ "vendor_counts":{"ma_l":39627,"ma_m":6451,"ma_s":11639},"a4":"on",
  "passive_ptr":{"entries":0,"cap":4096,"seen":31,"stored":0,"empty":31,
    "refused":0,"evictions":0,"db_evictions":0,"persist_errors":0},
  "store":"open","store_path":"./slothweb.db","store_schema":4,
@@ -2151,7 +2152,10 @@ sloth, opens only loopback ephemeral ports (`127.0.0.1` and `::1`, port
 under `/tmp`, and never leaves the host. Its sloth.db files are made
 from sloth's own DDL (`src/db_schema.c`, linked into the test binary
 only) and its OUI tables from CSVs it writes itself: nothing is a
-committed fixture. Every M2 to M6 test runs on a pinned clock, and the suite pins the zone (`TZ=UTC0`) too, since a
+committed fixture. The one committed input it reads is the registry in
+`web/data/`, which it holds to `SOURCE.md`'s hashes and builds under a
+time bound in a forked child (a generator that never finishes fails
+the test instead of hanging the suite). Every M2 to M6 test runs on a pinned clock, and the suite pins the zone (`TZ=UTC0`) too, since a
 baseline cell is a local hour. `make web-test WITH_SQLITE=0` builds and runs the same suite
 against the memory-only build. It is clean under
 `EXTRA_CFLAGS="-Werror -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"`
@@ -2176,7 +2180,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_baseline.c` | the cell as the local hour of the week, Monday first, and the same cell for the same local hour across a DST change (167 UTC hours apart), a never-fed pair scoring absent and a zero feed making no entry, warming forcing z to 0, an established cell's z, the sd floor (a constant history and one AP more scores 1, not 31,623; 10% of the mean; 1 KiB/s for a byte rate), an hour fed once, zero feeds for counters and presence and none for gauges and not counted as activity, cells independent, the full table evicting the least recently active entry by real feeds only, ageing out with the row id queued for deletion, allocation following the entries, dirty cells out once and back through a restore, the cap at the default and the extremes, NaN and both infinities ignored, the value scale per kind, a minute's sd carrying the within-hour spread (and Poisson for a counter), the delete queue returning 5,000 ids with none lost, refused records held to the next pass, restore refusing values a float cannot hold and keeping `first_fed` |
 | `test_ident.c` | records on a pinned clock: the earliest `first_seen` kept and randomised MACs left out, names cut to 63 bytes on a code-point boundary and NBNS to 15, group NBNS suffixes ignored and names current for their TTL, both tables evicting and counting, the DNS join (an NXDOMAIN answer counted once against the client that asked that qname within 10 s, a late or unknown one unmatched), the normal form |
 | `test_anomaly.c` | every rule from seeded state, rows given to the engine as web_tsdb gives them and the clock moved only through its step: A1 opening on three burst minutes with the evidence `metric[key]` closed, never on two, a gauge gap breaking the streak, a constant history with ±1 jitter firing nothing, a silent counter scored as 0, unobserved minutes not scored, a bucket closed in two parts scored as one, 300 keys all scored (the previous cap was 256); the lifecycle (open after one quiet minute, closed after two, a closed episode listed 59 minutes on and not 61, a recurrence starting a new episode that must earn three minutes, a full table keeping its open episodes, the worst-case listing fitting with `more`, the kind and since filters, the change feed); A2 once per MAC across a restart and never for an old or randomised MAC; A3 at four weeks and not three, and not in normal hours; A5 for the randomised MAC only and not through a reassigned lease; A6's normal form and escaped evidence; A7 far above its p95 and not without history or margin; A8 for the client the answers were joined to, not under 20 queries or at exactly 30%; A9 on first use and not for a host with history across a restart; MAD refuting a return to an old level and confirming a real burst, once per hour per series; baselines and an open episode surviving a restart; A10 for a connection that never sends, not just after a reconnect, not while disconnected, not before the limit; the engine without a store; the newest changes when there are more than asked for; the hour pass learning the within-hour spread; A2 not new after sloth restarts (by the baseline, and by the store's rows), a flood of new MACs as one episode that keeps another rule's history, the slot policy, the reported set evicting its oldest with the new MAC still given its episode and the evicted one not reported again while remembered, re-reports (8) bounded by evictions (32), a burst's and a trickle's evidence counting exactly what was judged new and naming two MACs, a trickle of eight a minute folded into one episode once the hour's sixteen are reported, a scan past 4,096 identity slots; MAD refuted by the within-hour term alone; A3 in a half-hour zone; A7 below its minimum excess and across a restart; a baseline pair evicted and back in one hour, a refused batch written later, restored episode values checked (the episode's own score, and a metric below -1) |
-| `test_oui.c` | the vendor table from registry CSVs the test writes into its own directory (MA-L, MA-M, MA-S, IAB; a BOM, CRLF, quoted fields with commas, quotes and a line break; CID skipped; a duplicate keeps the first): the most specific block first, 28- and 36-bit blocks inside the IEEE's MA-L, the local and group bits on a miss, the generated C (octal escapes, no name ending a literal or a comment), every malformed CSV failing with its row, names cleaned and cut on a code-point boundary, sloth's own `src/oui.c` read as text (every initialiser line, Apple found, an MA-S vendor not), the built-in table's source and order |
+| `test_oui.c` | the vendor table from registry CSVs the test writes into its own directory (MA-L, MA-M, MA-S, IAB; a BOM, CRLF, quoted fields with commas, quotes and a line break; CID skipped; a duplicate keeps the first): the most specific block first, 28- and 36-bit blocks inside the IEEE's MA-L, the local and group bits on a miss, the generated C (octal escapes, no name ending a literal or a comment), every malformed CSV failing with its row, names cleaned and cut on a code-point boundary, sloth's own `src/oui.c` read as text (every initialiser line, Apple found, an MA-S vendor not), the built-in table's source (the one `make web-test` says the build should have: `ieee` by default, `sloth` from an empty `WEB_OUI_DIR`) and order; the committed `web/data/` held to `SOURCE.md`'s hashes and built in a forked child under a time bound, its counts `SOURCE.md`'s rows, and a first file of 6,000 names then a second built under one too (the generator hung there until 2026-10-26); `update-oui` never a build prerequisite or a CI step |
 | `test_query.c` | the query language: the acceptance terms, every §9.1 prefix, free text, negation, quotes and MAC fragments as text, every refusal and its reason, the length, term and term-length bounds, the compiled statement holding no byte of the query (an injection attempt and LIKE metacharacters bound and escaped, the text the same whatever the values), the day range, missing tables reading as false, the worst case fitting, the anomaly kinds and `src:` bits held to the engine's and to `include/sloth.h`'s `DEV_SRC_*` |
 | `test_ptr.c` | the passive PTR cache: reverse names per RFC 1035 §3.5 and RFC 3596 §2.5 (and what is not one), what a dns record must be to be recorded (an empty answer, sloth's today, counted), the bound and its eviction, a rename, changed rows out once and back on a failed write, a row read back checked; the identity tables' M4 readers |
 | `test_slothdb.c` | sloth.db generated from `src/db_schema.c`: the open flags (read-only, no-follow, never write or create; a write refused); the file byte for byte and its directory listing after every read, for a rollback-journal file, a cleanly closed WAL file (immutable, no `-wal` or `-shm` made), a WAL file sloth holds open with unflushed frames (read, main file and WAL prefix unchanged, sloth still writing) and a `-wal` with no `-shm`; the refusals (missing, symlink, directory, newer, a slothweb store, no devices table, a bad version, not SQLite, not configured); a v5 file read by probing and a minimal v1 file; the allow-list against `tests/test_db.c`'s guardrail, credential words and the live schema; the authorizer denying every statement off the list; the budget interrupting a slow statement; the acceptance query returning exactly D1 and D6; every other term against the file; the drawer's, Lookup's and A2's reads |
@@ -2263,13 +2267,14 @@ web/
     embed.c        ui/ -> build/web/web_assets.c (build time only)
     oui_gen.c      web/data/*.csv -> build/web/web_oui_table.c (build time only)
     oui_csv.c      the registry CSV reader the generator and the tests share
+    update_oui.sh  make update-oui: refresh web/data/ by hand (never in a build or CI)
     recipes.c      docs/wiki/sqlite-schema.md -> build/web/web_recipes.c (build time only)
     palette.c      src/tui_palette.c + src/tui.c -> build/web/palette.css, palette.js;
                    make web-contrast (build time only)
     sha256.c       SHA-256 and base64 for embed.c and the tests
     demo.c         build/web/slothweb-demo: the synthetic sloth.db and stream (M6)
     quickstart_check.sh  the five-minute check, make web-quickstart-check (M6)
-  data/            the developer's IEEE registry CSVs; never committed
+  data/            the IEEE registry CSVs, committed (SOURCE.md: origin, hashes, refresh)
   tests/           slothweb_test (make web-test); sdb_gen.c builds the tests'
                    sloth.db from src/db_schema.c; src/rsn_ie.c is linked for
                    test_parity.c, src/tui.c, tui_palette.c, ip_color.c,

@@ -186,8 +186,8 @@ int main(int argc, char **argv) {
     fprintf(stderr, "slothweb: vendor table: %s (%u MA-L, %u MA-M, %u MA-S)%s\n",
             ot->source, ot->counts[WEB_OUI_MAL], ot->counts[WEB_OUI_MAM],
             ot->counts[WEB_OUI_MAS],
-            web_oui_full(ot) ? "" : "; A4 off: build with the IEEE CSVs in "
-                                   "web/data/ for it (web/README.md)");
+            web_oui_full(ot) ? "" : "; A4 off: built without the IEEE CSVs "
+                                   "in web/data/ (web/data/SOURCE.md)");
     if (cfg.sloth_db[0]) {
         int st = web_slothdb_check(&g_sdb, (long long)time(NULL));
         web_sdb_stats_t ss;

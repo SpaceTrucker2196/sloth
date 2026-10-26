@@ -559,13 +559,17 @@ research-mcp:
 #
 # The vendor table (M4, #162) is generated the same way, by
 # web/tools/oui_gen.c into build/web/web_oui_table.c, from the IEEE
-# registry CSVs the developer has fetched into web/data/ (ignored by
-# version control; web/README.md says where they come from). Neither
-# the CSVs nor the table are ever committed. Without them the build
-# still succeeds: the generator reads sloth's own 123-entry table out
-# of src/oui.c as text and /api/health says "vendor_table":"sloth". The
-# table is regenerated when the CSV list or a CSV's checksum changes
-# (the stamp), not only when a CSV is newer than the table.
+# registry CSVs committed in web/data/ (owner ruling 2026-10-26;
+# web/data/SOURCE.md says where they come from and their hashes). The
+# generated table is build output and never committed. WEB_OUI_DIR
+# names another directory; one without the CSVs still builds: the
+# generator reads sloth's own 123-entry table out of src/oui.c as text
+# and /api/health says "vendor_table":"sloth". The table is regenerated
+# when the CSV list or a CSV's checksum changes (the stamp), not only
+# when a CSV is newer than the table. web-test is told which table the
+# build should have (WEB_OUI_EXPECT), so a default build that silently
+# fell back would fail test_builtin_table. `make update-oui` refreshes
+# web/data/ by hand (web/tools/update_oui.sh); nothing else runs it.
 #
 # The SQL box's recipes (M5, #163) are docs/wiki/sqlite-schema.md's
 # own, extracted by web/tools/recipes.c into build/web/web_recipes.c
@@ -665,7 +669,7 @@ $(WEB_RECIPES_C): $(WEB_RECIPESGEN) $(WEB_RECIPES_MD) web/src/web_recipes.h
 	$(WEB_RECIPESGEN) $(WEB_RECIPES_MD) $@.tmp
 	mv $@.tmp $@
 
-.PHONY: web web-test
+.PHONY: web web-test update-oui
 web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C)
 	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -o slothweb $(WEB_MAIN) \
 	      $(WEB_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
@@ -699,9 +703,16 @@ web-quickstart-check:
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
 web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C)
 	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -Iweb/tests -Iweb/tools \
-	      -Iinclude -iquote research -o slothweb_test \
+	      -Iinclude -iquote research -DWEB_OUI_EXPECT='"$(if $(WEB_OUI_CSVS),ieee,sloth)"' \
+	      -DWEB_OUI_DATA='"$(WEB_OUI_DIR)"' -o slothweb_test \
 	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
 	./slothweb_test
+
+# Refresh web/data/ from /usr/share/ieee-data, or from the IEEE when that
+# is absent, and rewrite web/data/SOURCE.md's hashes. By hand only: no
+# build, test or CI step depends on it, so no build touches the network.
+update-oui:
+	sh web/tools/update_oui.sh web/data
 
 # ── Test build ───────────────────────────────────────────────────────────────
 # Built the way the program ships (#116): WITH_NCURSES and WITH_PCAP, the

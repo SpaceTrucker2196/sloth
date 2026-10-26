@@ -46,19 +46,19 @@ jobs:
       - name: Build and test slothweb without SQLite
         run: make web WITH_SQLITE=0 && make web-test WITH_SQLITE=0
 
-      # The IEEE vendor table (#162) is generated at build time from CSVs
-      # the developer fetches into web/data/, which are never committed, so
-      # no other step builds that path. A two-row generated registry in a
-      # temp dir proves the generator and the generated table compile under
-      # -Werror; the next build without it falls back to sloth's table.
-      - name: Build slothweb with a generated IEEE registry
+      # The vendor table (#162). The IEEE registry CSVs are committed in
+      # web/data/ (owner ruling 2026-10-26), so the steps above already
+      # build the full table under -Werror and web-test holds the default
+      # build to it; the two-row generated registry this step used to
+      # build is redundant. What nothing above builds is the fallback a
+      # tree without the CSVs takes: WEB_OUI_DIR at an empty directory,
+      # sloth's own table read out of src/oui.c, and web-test told to
+      # expect "sloth" rather than "ieee".
+      - name: Build and test slothweb on the fallback vendor table
         run: |
           d=$(mktemp -d)
-          printf 'Registry,Assignment,Organization Name,Organization Address\nMA-L,70B3D5,IEEE Registration Authority,x\nMA-L,0017F2,CI Vendor One,x\n' > "$d/oui.csv"
-          make web WEB_OUI_DIR="$d"
-          grep -q 'CI Vendor One' build/web/web_oui_table.c
-          make web
-          ! grep -q 'CI Vendor One' build/web/web_oui_table.c
+          make web WEB_OUI_DIR="$d" && make web-test WEB_OUI_DIR="$d"
+          grep -q '"sloth", {' build/web/web_oui_table.c
 
       # The README's five-minute path (#164): the quick-start commands are
       # read out of web/README.md and run literally in a copy of the tree

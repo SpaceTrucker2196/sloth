@@ -1,7 +1,7 @@
 /* The OUI table builder (#162, M4), build time only: what
  * web/tools/oui_gen.c runs, and what the tests run on a CSV they write
- * themselves. It never reaches the network: the developer fetches the
- * IEEE registry CSVs by hand into web/data/ (see web/README.md).
+ * themselves. It never reaches the network: the IEEE registry CSVs are
+ * committed in web/data/ and refreshed by hand (web/data/SOURCE.md).
  *
  * Input, the IEEE registry CSV (RFC 4180: comma-separated, a field may
  * be double-quoted, "" is a quote inside one, a quoted field may hold a
@@ -26,6 +26,7 @@
 #define SLOTHWEB_OUI_CSV_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include "web_oui.h"
@@ -39,6 +40,8 @@ typedef struct {
     size_t         n, cap;
     char         **names;
     size_t         nnames, names_cap;
+    uint32_t      *ix;           /* the names' hash index, the whole build's */
+    size_t         ix_cap;
     unsigned       counts[WEB_OUI_CLASSES];
     unsigned long  skipped;      /* rows of another registry (CID) */
     unsigned long  duplicates;   /* (class, prefix) seen before */

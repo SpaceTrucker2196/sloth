@@ -2,13 +2,15 @@
  * slothweb is built with (web_oui.h). Build time only; it opens the
  * files it is named and nothing else, and never the network.
  *
- * With one or more registry CSVs (web/data/oui.csv and its MA-M and
- * MA-S siblings, fetched by the developer, never committed), the table
- * is theirs ("ieee"), and a CSV that does not parse fails the build:
- * a malformed registry should not quietly become a smaller table. With
- * none, it is sloth's own 123-entry table read out of src/oui.c as text
- * ("sloth"), and if that is unreadable too, empty ("none"). Either way
- * the build succeeds and /api/health says which. */
+ * With one or more registry CSVs (web/data/oui.csv and its MA-M, MA-S
+ * and IAB siblings, committed since the 2026-10-26 ruling; see
+ * web/data/SOURCE.md), the table is theirs ("ieee"), and a CSV that
+ * does not parse fails the build: a malformed registry should not
+ * quietly become a smaller table. With none (a WEB_OUI_DIR without
+ * them), it is sloth's own 123-entry table read out of src/oui.c as
+ * text ("sloth"), and if that is unreadable too, empty ("none"). Either
+ * way the build succeeds and /api/health says which. The generated C is
+ * build output and never committed. */
 #include <stdio.h>
 #include <string.h>
 
@@ -55,8 +57,8 @@ int main(int argc, char **argv) {
             source, b.counts[0], b.counts[1], b.counts[2], b.skipped,
             b.duplicates,
             !strcmp(source, "ieee") ? ""
-            : "; put the IEEE registry CSVs in web/data/ for the full "
-              "table (web/README.md)");
+            : "; no IEEE registry CSVs in WEB_OUI_DIR: the full table "
+              "is built from web/data/ (web/data/SOURCE.md)");
     oui_build_free(&b);
     return rc == 0 ? 0 : 1;
 }

@@ -33,8 +33,10 @@ read-only (`--sloth-db`; `SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW`,
 an immutable open where that is what makes no side file, a column
 allow-list enforced by an authorizer), compiles the §9.1 device query
 language to one prepared statement with bound parameters, builds the
-full IEEE vendor table at build time from CSVs the developer fetches
-(never committed; without them, sloth's own table and A4 off), shows
+full IEEE vendor table at build time from the registry CSVs committed
+in `web/data/` since the 2026-10-26 ruling (the generated table is
+never committed; a `WEB_OUI_DIR` without them gives sloth's own table
+and A4 off), shows
 passive names only (active reverse DNS is cut), adds rule A4 and a
 durable A2 from `devices.first_seen`, and serves `/api/devices`,
 `/api/device/{mac}` and `/api/lookup` behind the Devices view, the
@@ -95,7 +97,7 @@ re-implements), `src/top_hosts.c` (what `conn_count` counts),
 `src/probe_pnl.c` (what `mac_random` is), issues #102, #157, #158,
 #159, #160, #161, #162, #163 and #164.
 
-**Last updated**: 2026-10-26 (#170: `/api/history/alerts` and the deauth episodes overlap a range from the latest incident's start; the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
+**Last updated**: 2026-10-26 (the IEEE registry CSVs committed in `web/data/` by owner ruling, `make update-oui`, the generator's multi-file hang fixed; #170: `/api/history/alerts` and the deauth episodes overlap a range from the latest incident's start; the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
 
 ---
 
@@ -587,8 +589,20 @@ The full account is in
   escaped; fuzzed by `fuzz_web_query`.
 - **Vendor table** (§9.2): MA-L, MA-M, MA-S and IAB from
   `web/data/*.csv`, generated into `build/web/`; most specific block
-  first; local and group bits always reported. No CSV: sloth's 117
-  entries, said so on `/api/health` and the Lookup card.
+  first; local and group bits always reported. Since the 2026-10-26
+  owner ruling (reversing 2026-10-21's) the four CSVs are committed:
+  Debian's `ieee-data` 20260625, 39,627 MA-L, 6,451 MA-M and 11,639
+  MA-S/IAB assignments, their origin and SHA-256 in
+  `web/data/SOURCE.md`, refreshed by hand with `make update-oui`
+  (`/usr/share/ieee-data`, else the IEEE; never a build or CI step). So
+  the default build has the full table and A4 is on; the binary grows
+  from 0.5 MB to 3.3 MB, the build time barely moves (7 to 8 s clean).
+  A `WEB_OUI_DIR` without CSVs: sloth's 117 entries, said so on
+  `/api/health` and the Lookup card; CI builds and tests that fallback.
+  The same day fixed a hang in the generator: each CSV had its own
+  4,096-slot name index that rehashed every earlier name, so after
+  `oui.csv` the second file never finished; one index for the build,
+  sized for its names, now.
 - **Passive names** (§9.3 minus the active half): sloth.db's and the
   stream's DHCP, mDNS and NBNS names, sloth's hostname, and a passive
   PTR cache (`slothweb.db` v4, `passive_ptr`, 4,096 addresses). The
@@ -696,8 +710,8 @@ The full account is in
   `window.history`: a local `history()` once hid the global and the
   call failed silently), and a memory-only build's pages saying it
   cannot read sloth.db.
-- **The README** (`web/README.md`): prerequisites, build (with the
-  optional IEEE CSV fetch), the demo, running beside sloth (the socket
+- **The README** (`web/README.md`): prerequisites, build (the committed
+  IEEE CSVs and `make update-oui`), the demo, running beside sloth (the socket
   and its permissions, `--sloth-db`, `--store`), opening the page; a
   troubleshooting table of every start-up message, scraped from the
   source by `test_readme.c` so an undocumented one fails the suite; and
@@ -842,7 +856,8 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | sloth.db opened read-only, the test asserting it | `test_open_flags`, `test_reading_changes_nothing`, `test_live_wal_reader`, `test_wal_without_shm`, `test_refusals`, `test_older_schema` |
 | no credential or secret column servable | `test_allow_list_against_the_guardrail`, `test_authorizer_denies`, `test_device_drawer` (no user name in the answer) |
 | the query language, bounded, one bound statement, fuzzed | `test_query.c`, `test_query_terms`, `tests/fuzz/fuzz_web_query.c` |
-| OUI table generated, never committed, build without it | `test_oui.c`, `test_builtin_table`; the `web/data/` and CSV ignore rules |
+| OUI table generated, never committed, build without it | `test_oui.c`, `test_builtin_table` (the default build `ieee`, an empty `WEB_OUI_DIR` `sloth`); `/build/` keeps the generated table out of git |
+| the committed registry (2026-10-26) | `test_committed_registry_matches_source`, `test_committed_registry_builds_in_time`, `test_second_file_after_many_names`, `test_update_oui_is_never_automatic` |
 | passive names, PTR cache, v4 migration | `test_ptr.c`, `test_v3_file_is_migrated`, `test_v3_failed_step_leaves_file_unchanged`, `test_passive_ptr_rows`, `test_newer_file_refused` |
 | A4 and the durable A2 | `test_a4_unknown_vendor`, `test_a4_off_without_the_ieee_table`, `test_a4_burst_is_one_episode`, `test_a2_durable_first_seen`, `test_device_z_now` |
 | routes, strict validation, presence, drawer, Lookup, page | `test_devices.c` |

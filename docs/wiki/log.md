@@ -5207,3 +5207,21 @@ report events.
   take the band from radiotap. Beacons and Probe plan the distance cell
   by width (none at 100 columns). The detail-pane example is one the
   code produces: `~4.5m (2.0-10m) room steady, Ptx 20 assumed`.
+- 2026-10-26 — [[slothweb]]: the IEEE registry CSVs are committed
+  (owner ruling 2026-10-26, reversing the 2026-10-21 one; #162).
+  `web/data/` holds `oui.csv`, `mam.csv`, `oui36.csv` and `iab.csv` from
+  Debian's `ieee-data` 20260625, byte for byte, with `SOURCE.md` (the
+  IEEE URLs, the package version, each file's SHA-256, how to refresh);
+  `.gitignore` re-includes `web/data/` past the `data/` rule and
+  `.gitattributes` keeps the CSVs out of end-of-line conversion. The
+  generated `build/web/web_oui_table.c` stays build output. `make
+  update-oui` (`web/tools/update_oui.sh`) copies from
+  `/usr/share/ieee-data` or fetches from the IEEE, checks each header
+  and registry, and rewrites `SOURCE.md`'s block; nothing else runs it.
+  Fixed first: `oui_gen` hung on any multi-file registry (a per-file
+  4,096-slot name index rehashing every earlier name; full after
+  `oui.csv`'s 39,627), now one index sized for the build. The default
+  build has the full table, A4 on; `web-test` is told which table to
+  expect, and CI's two-row-registry step became a build and test of the
+  empty-`WEB_OUI_DIR` fallback. slothweb 0.5 MB to 3.3 MB. Page:
+  vendor table bullet, README bullet, acceptance rows, Last updated.
