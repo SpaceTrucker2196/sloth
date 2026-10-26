@@ -76,6 +76,15 @@ static const char SCHEMA_SQL[] =
     "  dhcp_vci      TEXT"
     ");\n"
     "CREATE INDEX IF NOT EXISTS idx_devices_last_seen ON devices(last_seen);\n"
+    /* "What arrived when": slothweb's History strip counts rows per
+     * first_seen cell, and without this a range on first_seen is a
+     * scan of the table. An index, like a new table, needs no
+     * DB_SCHEMA_VERSION bump: CREATE INDEX IF NOT EXISTS runs on every
+     * open, so a v7 file written before it gains it on its next open,
+     * and no stored value changes (tests/test_db.c ::
+     * test_current_file_gains_the_first_seen_indexes). The one-time
+     * build is measured in docs/wiki/sqlite-schema.md. */
+    "CREATE INDEX IF NOT EXISTS idx_devices_first_seen ON devices(first_seen);\n"
 
     /* ── PNL — the 15%-of-volume type, as <=2048 rows ─────── *
      * Split client/SSID so the SSID set is queryable: "which devices
@@ -541,6 +550,10 @@ static const char SCHEMA_SQL[] =
     ");\n"
     "CREATE INDEX IF NOT EXISTS idx_alerts_last_seen ON alerts(last_seen);\n"
     "CREATE INDEX IF NOT EXISTS idx_alerts_sev ON alerts(sev);\n"
+    /* Alert episodes begun per History cell; see idx_devices_first_seen.
+     * first_seen never changes on an episode's upsert, so the index
+     * costs an entry per new episode and nothing per tick. */
+    "CREATE INDEX IF NOT EXISTS idx_alerts_first_seen ON alerts(first_seen);\n"
 
     "CREATE TABLE IF NOT EXISTS cleartext_creds ("
     "  ts          INTEGER NOT NULL,"

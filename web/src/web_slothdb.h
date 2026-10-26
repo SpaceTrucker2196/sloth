@@ -84,6 +84,18 @@
 #define WEB_SDB_SCHEMA_MAX 8
 #define WEB_SDB_BUSY_MS    100
 #define WEB_SDB_HTTP_MS    250       /* a request's budget */
+/* /api/history/overview's alone. It counts every device and alert
+ * episode begun in up to 400 days, where every other route reads a
+ * page of rows: on the owner's 254 MB snapshot (867,748 alerts, no
+ * first_seen index) the count took 253 ms as one GROUP BY, past
+ * WEB_SDB_HTTP_MS, and takes 123 ms as web_sdb_overview() reads it now
+ * (32 ms with sloth's idx_alerts_first_seen), on a desktop core with
+ * the file in the page cache. A sensor-class host (a Raspberry Pi 4,
+ * several times slower a core, an SD card cold) is the case the budget
+ * is for: 1500 ms is about 12 times the measured scan, and is the
+ * longest the single HTTP thread stalls, once per WEB_SDB_OVC_TTL_MS
+ * per file state given the cache below. */
+#define WEB_SDB_OVERVIEW_MS 1500
 #define WEB_SDB_PASS_MS    200       /* a minute pass's (A2) */
 #define WEB_SDB_ERR_MAX    200
 #define WEB_SDB_TEXT_MAX   63
@@ -127,14 +139,18 @@ typedef struct {
     char          mode[12];          /* "wal", "immutable", "rollback", "" */
     char          err[WEB_SDB_ERR_MAX];
     unsigned long opens, refusals, errors, timeouts;
+    unsigned long ovw_hits, ovw_misses;  /* the overview cache's */
 } web_sdb_stats_t;
+
+struct web_sdb_ovc;
 
 typedef struct web_slothdb {
     char            path[4096];
     int             configured;
     web_sdb_fns_t   fns;
-    pthread_mutex_t mu;              /* guards st */
+    pthread_mutex_t mu;              /* guards st and ovc */
     web_sdb_stats_t st;
+    struct web_sdb_ovc *ovc;         /* the overview cache, made on first use */
 } web_slothdb_t;
 
 typedef struct {
@@ -147,7 +163,26 @@ typedef struct {
     long long       now_s;
     int             timed_out;
     int             pred_ok;         /* a predicate-only column may be read */
+    /* The progress handler's calls, one per 1000 VM steps: the work a
+     * read did, which the tests compare where a clock would be flaky. */
+    unsigned long   ticks;
+    /* What web_sdb_overview() was reading ("devices", "alerts") and
+     * the rows it had counted, for a timeout's answer; and how it read
+     * each table (WEB_SDB_PLAN_*: [0] devices, [1] alerts). */
+    const char     *what;
+    long long       rows_read;
+    int             plan[2];
 } web_sdb_conn_t;
+
+/* How web_sdb_overview() counted a table. */
+enum {
+    WEB_SDB_PLAN_NONE = 0,
+    WEB_SDB_PLAN_INDEX,              /* per cell over idx_<t>_first_seen */
+    WEB_SDB_PLAN_BOUND,              /* the rows with last_seen >= from,
+                                        by idx_<t>_last_seen */
+    WEB_SDB_PLAN_SCAN,               /* every row */
+    WEB_SDB_PLAN_EMPTY               /* max(last_seen) < from: none */
+};
 
 enum {
     WEB_SDB_OPT_CLASS = 1 << 0,      /* devices.device_class, camera_* (v6) */
@@ -346,9 +381,64 @@ enum { WEB_FLOW_SSH = 0, WEB_FLOW_RDP, WEB_FLOW_SMB, WEB_FLOW_SNMP,
 int  web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,
                            int max, web_sdb_item_fn fn, void *ctx);
 /* Per cell of ncell cells of cell_s seconds from from: devices first
- * seen in it (devs) and alert episodes begun in it (alerts). 0, or -1. */
+ * seen in it (devs) and alert episodes begun in it (alerts). 0, or -1.
+ *
+ * Each table is counted the cheapest way the file allows (c->plan):
+ * with sloth's idx_<t>_first_seen, one count per cell over that index;
+ * without it (a file sloth has not opened since the index was added),
+ * the first_seen of the rows in range, bucketed here rather than by a
+ * GROUP BY, whose sorter was most of its cost. Those rows are found
+ * through idx_<t>_last_seen when most of the table ended before from
+ * (first_seen <= last_seen, so last_seen >= from loses no row), and by
+ * a scan otherwise: for a table that is mostly in range the index
+ * costs about twice the scan per row. "Most" is estimated from
+ * min(last_seen) and max(last_seen), two index probes, as a fraction
+ * of that span: under 2/5 in range, the index. */
 int  web_sdb_overview(web_sdb_conn_t *c, long long from, int cell_s,
                       int ncell, long long *devs, long long *alerts);
+
+/* ── the overview cache ─────────────────────────────────────────────── *
+ *
+ * The overview's counts and sessions, kept per sloth.db state for at
+ * most WEB_SDB_OVC_TTL_MS: an immutable snapshot is counted once a
+ * minute at most, however often the page asks. The state is the main
+ * file's and the -wal's device, inode, mtime and size, read before the
+ * query, so a write during it misses next time; a running sloth
+ * changes its -wal every tick and is in effect not cached. A request
+ * matches an entry with the same state, cell and cell count whose from
+ * falls in the same cell, and is answered with that entry's from and
+ * to. WEB_SDB_OVC_SLOTS entries, made on first use, the oldest
+ * replaced: bounded memory. Thread-safe (web_slothdb_t.mu). */
+#define WEB_SDB_OVC_SLOTS    4
+#define WEB_SDB_OVC_TTL_MS   60000
+#define WEB_SDB_OVC_CELLS    360     /* WEB_HIST_COLS_MAX */
+#define WEB_SDB_OVC_SESSIONS 200     /* WEB_HIST_SESSIONS */
+
+typedef struct {
+    long long dev, ino, mtime_s, mtime_ns, size;
+} web_sdb_fstate_t;
+
+typedef struct {
+    web_sdb_fstate_t main, wal;      /* wal all 0: no -wal */
+} web_sdb_ident_t;
+
+typedef struct {
+    long long         from, to;
+    int               cell_s, ncell;
+    long long         devs[WEB_SDB_OVC_CELLS], alerts[WEB_SDB_OVC_CELLS];
+    int               ns;
+    web_sdb_session_t ss[WEB_SDB_OVC_SESSIONS];
+} web_sdb_ovw_t;
+
+/* The file's state now: 0, or -1 (no file there: nothing to cache). */
+int  web_sdb_ovc_ident(const web_slothdb_t *s, web_sdb_ident_t *id);
+/* 1 and the entry in *out, or 0 (counted as a miss). */
+int  web_sdb_ovc_get(web_slothdb_t *s, const web_sdb_ident_t *id,
+                     long long from, int cell_s, int ncell, web_sdb_ovw_t *out);
+void web_sdb_ovc_put(web_slothdb_t *s, const web_sdb_ident_t *id,
+                     const web_sdb_ovw_t *v);
+/* Test seam: added to the cache's clock, to age an entry. */
+extern long long web_sdb_ovc_test_skew_ms;
 
 /* ── M6 reads (#164): the Flows view ──────────────────────────────────── */
 

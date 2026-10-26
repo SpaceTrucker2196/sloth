@@ -5226,3 +5226,23 @@ report events.
   expect, and CI's two-row-registry step became a build and test of the
   empty-`WEB_OUI_DIR` fallback. slothweb 0.5 MB to 3.3 MB. Page:
   vendor table bullet, README bullet, acceptance rows, Last updated.
+- 2026-10-26 — [[slothweb]], [[sqlite-schema]]: History's "THE LAST 30
+  DAYS" answered "sloth.db was too slow to answer; try again" on the
+  owner's 254 MB snapshot (schema v6, 867,748 alert episodes): its one
+  `GROUP BY` over `alerts.first_seen` had no index and took 253 ms
+  against the 250 ms request budget. sloth now creates
+  `idx_alerts_first_seen` and `idx_devices_first_seen` on every open
+  (no schema bump: an index is a new table's case; a v7 file without
+  them gains them and every row reads the same; the one-time build is
+  276 ms and +4.8 % on that snapshot, 280 ms and +6.9 % for 1M generated
+  alerts, on tmpfs). slothweb counts per cell over that index (32 ms),
+  or without it buckets the rows in range itself, found by
+  `last_seen >= from` when most of the table is older (a scan otherwise:
+  measured, the `last_seen` read costs twice a scan per row when most
+  rows are in range, so the bound is not taken blindly); gives the strip
+  its own 1500 ms budget; caches it 60 s per sloth.db state; and a
+  timeout names the read and the rows it had counted, which the page
+  appends to "try again". Seen red under one mutation each, restored by
+  the inverse edit: the `last_seen` bound dropped (the ticks are a
+  scan's), the cache made to miss, the mtime left out of the state, the
+  old error body, either `CREATE INDEX` removed.

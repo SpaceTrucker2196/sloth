@@ -699,7 +699,11 @@
   function getJSON(path) {
     return fetch(path, { cache: "no-store" }).then(function (r) {
       return r.json().then(function (j) {
-        if (!r.ok) throw new Error(j && typeof j.error === "string" ? j.error : String(r.status));
+        if (!r.ok) {
+          var e = new Error(j && typeof j.error === "string" ? j.error : String(r.status));
+          e.body = j;
+          throw e;
+        }
         return j;
       });
     });
@@ -1282,10 +1286,19 @@
     "sloth_db_error": "sloth.db could not be read just now",
     "sloth_db_timeout": "sloth.db was too slow to answer; try again"
   };
-  function errText(m) {
+  // j: the error's body, when the server said which read failed and how
+  // far it got (/api/history/overview: query, rows_read, budget_ms).
+  function errText(m, j) {
     if (m === "no_sloth_db" && NOSQL)
       return "this slothweb was built without SQLite (WITH_SQLITE=0): it cannot read sloth.db; rebuild with make web";
-    return Object.prototype.hasOwnProperty.call(ERR_TEXT, m) ? ERR_TEXT[m] : "error: " + m;
+    var t = Object.prototype.hasOwnProperty.call(ERR_TEXT, m) ? ERR_TEXT[m] : "error: " + m;
+    if (j && typeof j.query === "string" && (m === "sloth_db_timeout" || m === "sloth_db_error")) {
+      t += " (" + j.query.slice(0, 32);
+      if (num(j.rows_read)) t += ": " + j.rows_read.toLocaleString("en-US") + " rows read";
+      if (m === "sloth_db_timeout" && num(j.budget_ms)) t += " in " + j.budget_ms + " ms";
+      t += ")";
+    }
+    return t;
   }
 
   function devicesPath(q, sort, offset) {
@@ -2364,7 +2377,7 @@
       sessionChips();
       historyRange();
       if (HS.sessions.length && !HS.ngen) newSince(HS.sessions[0].id);
-    }).catch(function (e) { set("h-range", errText(e.message)); });
+    }).catch(function (e) { set("h-range", errText(e.message, e.body)); });
     if (Q.on) recipes();
   }
 

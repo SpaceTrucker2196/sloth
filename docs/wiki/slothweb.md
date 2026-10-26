@@ -97,7 +97,7 @@ re-implements), `src/top_hosts.c` (what `conn_count` counts),
 `src/probe_pnl.c` (what `mac_random` is), issues #102, #157, #158,
 #159, #160, #161, #162, #163 and #164.
 
-**Last updated**: 2026-10-26 (the IEEE registry CSVs committed in `web/data/` by owner ruling, `make update-oui`, the generator's multi-file hang fixed; #170: `/api/history/alerts` and the deauth episodes overlap a range from the latest incident's start; the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
+**Last updated**: 2026-10-26 (the History strip on a large sloth.db: its own 1500 ms budget, per-cell counts by sloth's new first_seen indexes or a last_seen-bounded read without them, a 60 s cache per file state, a timeout that names its read; the IEEE registry CSVs committed in `web/data/` by owner ruling, `make update-oui`, the generator's multi-file hang fixed; #170: `/api/history/alerts` and the deauth episodes overlap a range from the latest incident's start; the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
 
 ---
 
@@ -568,7 +568,8 @@ The full account is in
   restarting beside slothweb never meets `SQLITE_BUSY_RECOVERY`. A
   VFS that never creates a named file covers a sloth closing between
   the choice and the read. `query_only`, `DEFENSIVE`, a 100 ms busy
-  timeout and a progress budget (250 ms a request) mean a slow read is
+  timeout and a progress budget (250 ms a request, 1500 ms for the
+  History strip, which counts every row in its range) mean a slow read is
   slothweb's `503`, never sloth's stall; sloth's own `db_open()` waits
   out another reader's lock for 1 s (`DB_BUSY_MS`). A hot rollback
   journal is an error that sloth clears, not "not a sloth.db". Schema
@@ -642,7 +643,11 @@ In short:
   DEAUTH_FLOOD episodes matched on the predicate-only alert key. Probe
   clients from `/api/series` over the M3 band.
 - **History** (§8.10). `/api/history/overview` (the 30 d strip: devices
-  first seen and alerts begun per cell, sessions as markers),
+  first seen and alerts begun per cell, sessions as markers; counted per
+  cell over sloth's `idx_<t>_first_seen`, or without it bucketed from
+  the rows in range, found by `last_seen` when most of the table is
+  older; cached 60 s per sloth.db state; a timeout names the read and
+  the rows it had counted — see [[sqlite-schema]] and `web/README.md`),
   `/api/history/devices` (who was here: `[first_seen, last_seen]`
   overlapping the range, presence over the range and nothing past it,
   from the hour tier as well for a range older than

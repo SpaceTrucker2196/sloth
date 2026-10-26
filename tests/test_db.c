@@ -2075,6 +2075,107 @@ static void test_btm_requests_in_finding_retention_tier(void) {
 }
 
 
+/* ── first_seen indexes: no bump ─────────────────────────── */
+
+/* Every table's rows as text and the version stamp: the "no recorded
+ * value changed" witness for an open that only adds an index. */
+static void dump_all(char *out, size_t cap) {
+    size_t o = 0;
+    out[0] = '\0';
+    sqlite3 *h = NULL;
+    if (sqlite3_open(db_path, &h) != SQLITE_OK) { sqlite3_close(h); return; }
+    sqlite3_stmt *t = NULL;
+    if (sqlite3_prepare_v2(h, "SELECT name FROM sqlite_master WHERE"
+                           " type='table' AND name NOT LIKE 'sqlite_%'"
+                           " ORDER BY name", -1, &t, NULL) != SQLITE_OK) {
+        sqlite3_close(h);
+        return;
+    }
+    while (sqlite3_step(t) == SQLITE_ROW && o + 64 < cap) {
+        char sql[160];
+        const char *name = (const char *)sqlite3_column_text(t, 0);
+        snprintf(sql, sizeof(sql), "SELECT * FROM \"%s\" ORDER BY rowid", name);
+        o += (size_t)snprintf(out + o, cap - o, "[%s]", name);
+        sqlite3_stmt *r = NULL;
+        if (sqlite3_prepare_v2(h, sql, -1, &r, NULL) != SQLITE_OK) continue;
+        while (sqlite3_step(r) == SQLITE_ROW && o + 64 < cap) {
+            for (int i = 0; i < sqlite3_column_count(r) && o + 64 < cap; i++) {
+                const unsigned char *v = sqlite3_column_text(r, i);
+                o += (size_t)snprintf(out + o, cap - o, "%s|",
+                                      v ? (const char *)v : "NULL");
+            }
+            o += (size_t)snprintf(out + o, cap - o, ";");
+        }
+        sqlite3_finalize(r);
+    }
+    sqlite3_finalize(t);
+    sqlite3_close(h);
+}
+
+static long long n_index(const char *name) {
+    char sql[160];
+    snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM sqlite_master"
+             " WHERE type='index' AND name='%s'", name);
+    return q_int(sql);
+}
+
+/* slothweb's History strip ranges on first_seen. A v7 file written
+ * before these indexes existed is still a v7 file: the next open adds
+ * both, keeps the stamp, and leaves every stored row as it was, which
+ * is why they need no DB_SCHEMA_VERSION bump (an index is a new
+ * table's case in sqlite-schema.md, not a new column's). Seen to fail
+ * with either CREATE INDEX line removed from db_schema.c (that index
+ * stays absent after the open). */
+static void test_current_file_gains_the_first_seen_indexes(void) {
+    fresh_db();
+    ASSERT_EQ(n_index("idx_alerts_first_seen"), 1);
+    ASSERT_EQ(n_index("idx_devices_first_seen"), 1);
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    seed_device(&s, 0x21, "10.0.0.21", 1700000000);
+    alert_t *a = &s.alerts[s.alert_count++];
+    memset(a, 0, sizeof(*a));
+    snprintf(a->key, sizeof(a->key), "portscan:10.0.0.21");
+    snprintf(a->title, sizeof(a->title), "PORT_SCAN");
+    a->type = ALERT_TYPE_PORT_SCAN;
+    a->count = 3;
+    a->first_seen = 1700000000;
+    a->last_seen  = 1700000050;
+    db_tick(&s, 1700000050);
+    db_close();
+    /* The file as a build from before the indexes left it. */
+    insert_at("DROP INDEX idx_alerts_first_seen;"
+              " DROP INDEX idx_devices_first_seen;");
+    ASSERT_EQ(n_index("idx_alerts_first_seen"), 0);
+    ASSERT_EQ(n_index("idx_devices_first_seen"), 0);
+    static char before[16384], after[16384];
+    dump_all(before, sizeof(before));
+    ASSERT(strstr(before, "portscan:10.0.0.21|1700000000|1700000050|") != NULL);
+    ASSERT(strstr(before, "02:00:00:00:00:21|10.0.0.21|") != NULL);
+    char stamp[48];
+    snprintf(stamp, sizeof(stamp), "schema_version|%d|;", DB_SCHEMA_VERSION);
+    ASSERT(strstr(before, stamp) != NULL);
+    ASSERT_EQ(db_open(db_path), 1);
+    ASSERT_EQ(n_index("idx_alerts_first_seen"), 1);
+    ASSERT_EQ(n_index("idx_devices_first_seen"), 1);
+    db_close();
+    dump_all(after, sizeof(after));
+    ASSERT_STR(after, before);
+    /* And the range the strip asks is answered from the index. */
+    sqlite3 *h = NULL;
+    sqlite3_stmt *st = NULL;
+    char plan[256] = "";
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_prepare_v2(h, "EXPLAIN QUERY PLAN SELECT count(*) FROM"
+                                 " alerts WHERE first_seen >= 1 AND"
+                                 " first_seen < 2", -1, &st, NULL), SQLITE_OK);
+    if (sqlite3_step(st) == SQLITE_ROW && sqlite3_column_text(st, 3))
+        snprintf(plan, sizeof(plan), "%s", sqlite3_column_text(st, 3));
+    sqlite3_finalize(st);
+    sqlite3_close(h);
+    ASSERT(strstr(plan, "idx_alerts_first_seen") != NULL);
+    unlink(db_path);
+}
+
 /* ── Schema v4: the batched column bump ──────────────────── */
 
 static void test_schema_version_is_eight(void) {
@@ -3741,6 +3842,7 @@ void run_db_tests(void) {
     TEST_SUITE("db: open / close / versioning");
     RUN_TEST(test_open_creates_and_stamps_version);
     RUN_TEST(test_reopen_is_idempotent);
+    RUN_TEST(test_current_file_gains_the_first_seen_indexes);
     RUN_TEST(test_open_refuses_foreign_schema_version);
     RUN_TEST(test_open_is_defensive_and_still_writes);
     RUN_TEST(test_open_bad_path_fails_cleanly);

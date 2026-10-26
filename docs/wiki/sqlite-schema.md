@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154 and #170.
 
-**Last updated**: 2026-10-26 (#170 review: `alerts.incident_first_seen`, peak `sev` on the live row as on a compacted one, `count` / `reopens` as lower bounds, and `--db-compact-alerts` refusing an un-checkpointed SRC, writing nothing beside it, and handing DST to SRC's owner). 2026-10-26 (#170: schema v8, one `alerts` row per finding rather than per incident — the incident semantics below, the v7 → v8 step, and the opt-in `--db-compact-alerts` copy for the duplicates older builds wrote). 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
+**Last updated**: 2026-10-26 (`idx_alerts_first_seen` and `idx_devices_first_seen`, for slothweb's History strip; an index needs no bump, and the build cost is measured under "Indexes on time"). 2026-10-26 (#170 review: `alerts.incident_first_seen`, peak `sev` on the live row as on a compacted one, `count` / `reopens` as lower bounds, and `--db-compact-alerts` refusing an un-checkpointed SRC, writing nothing beside it, and handing DST to SRC's owner). 2026-10-26 (#170: schema v8, one `alerts` row per finding rather than per incident — the incident semantics below, the v7 → v8 step, and the opt-in `--db-compact-alerts` copy for the duplicates older builds wrote). 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
 
 ---
 
@@ -238,7 +238,13 @@ next bump does not build until its step is written.
 
 **When to bump.** Adding a whole new table is safe without a bump —
 `CREATE TABLE IF NOT EXISTS` runs on every open, so an older file simply
-gains it. Adding a **column to an existing table** is not: that
+gains it. An **index** is the same case: `CREATE INDEX IF NOT EXISTS`
+runs on every open, adds an entry per row, and changes no stored value,
+so `idx_alerts_first_seen` and `idx_devices_first_seen` (2026-10-26,
+below) need no bump and no migration step
+(`tests/test_db.c :: test_current_file_gains_the_first_seen_indexes`:
+a current-version file without them gains both on its next open, keeps its stamp,
+and every row of every table reads the same). Adding a **column to an existing table** is not: that
 statement is a no-op on a table that already exists, and the column
 never appears. **v2** exists because `probe_clients.presence` (#53) was
 added without a bump, so a v1 file failed at schema application with a
@@ -457,6 +463,22 @@ checkpoints, compacts, swaps and reopens.
 `alerts`, `cleartext_creds`, `eapol_events`, `deauth_events`,
 `seqnum_correlations`, `twin_episodes`, `scan_entries` /
 `scan_entry_ports`.
+
+**Indexes on time.** `alerts` and `devices` are indexed on both
+`last_seen` (what is still here, retention) and, since 2026-10-26,
+`first_seen` (what arrived when: slothweb's History strip counts rows
+per `first_seen` cell, and without the index each count was a scan —
+253 ms for 867,748 alert episodes on the owner's snapshot, past
+slothweb's 250 ms budget). The one-time build on the first open of an
+older file, measured on a desktop core with the file on tmpfs:
+867,748 alerts (that snapshot) 276 ms, file 245.4 → 257.1 MB (+4.8 %);
+1,000,000 generated alerts 280 ms, 194.8 → 208.3 MB (+6.9 %); the
+devices index on 32,000 rows 6–7 ms. A reopen with the indexes present
+costs microseconds. A Raspberry Pi on an SD card was not measured; expect
+the one-time build to take several times as long, once, before
+`db_open()` returns and capture starts writing.
+An episode's `first_seen` never changes on its upsert, so after that
+the index costs one entry per new episode, nothing per tick.
 
 `scan_entries` is **flagged-only** (#41): an unflagged entry is one host
 touching a couple of ports — ordinary traffic — and persisting it would

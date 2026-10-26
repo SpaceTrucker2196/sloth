@@ -179,12 +179,131 @@ void web_slothdb_init(web_slothdb_t *s, const char *path,
 }
 
 void web_slothdb_destroy(web_slothdb_t *s) {
+    free(s->ovc);
+    s->ovc = NULL;
     pthread_mutex_destroy(&s->mu);
 }
 
 void web_slothdb_stats(web_slothdb_t *s, web_sdb_stats_t *out) {
     pthread_mutex_lock(&s->mu);
     *out = s->st;
+    pthread_mutex_unlock(&s->mu);
+}
+
+/* ── the overview cache (web_slothdb.h) ──────────────────────────────── */
+
+struct web_sdb_ovc {
+    struct {
+        int             used;
+        long long       at_ms;
+        web_sdb_ident_t id;
+        web_sdb_ovw_t   v;
+    } e[WEB_SDB_OVC_SLOTS];
+};
+
+long long web_sdb_ovc_test_skew_ms = 0;
+
+static long long ovc_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000 +
+           web_sdb_ovc_test_skew_ms;
+}
+
+static int fstate(const char *path, web_sdb_fstate_t *f) {
+    struct stat st;
+    memset(f, 0, sizeof(*f));
+    if (lstat(path, &st) != 0) return -1;
+    f->dev = (long long)st.st_dev;
+    f->ino = (long long)st.st_ino;
+    f->mtime_s = (long long)st.st_mtim.tv_sec;
+    f->mtime_ns = (long long)st.st_mtim.tv_nsec;
+    f->size = (long long)st.st_size;
+    return 0;
+}
+
+int web_sdb_ovc_ident(const web_slothdb_t *s, web_sdb_ident_t *id) {
+    char wal[4200];
+    memset(id, 0, sizeof(*id));
+    if (!s->configured || fstate(s->path, &id->main) != 0) return -1;
+    snprintf(wal, sizeof(wal), "%s-wal", s->path);
+    (void)fstate(wal, &id->wal);
+    return 0;
+}
+
+static int same_ident(const web_sdb_ident_t *a, const web_sdb_ident_t *b) {
+    const web_sdb_fstate_t *f[2][2] = { { &a->main, &a->wal },
+                                        { &b->main, &b->wal } };
+    for (int i = 0; i < 2; i++)
+        if (f[0][i]->dev != f[1][i]->dev || f[0][i]->ino != f[1][i]->ino ||
+            f[0][i]->mtime_s != f[1][i]->mtime_s ||
+            f[0][i]->mtime_ns != f[1][i]->mtime_ns ||
+            f[0][i]->size != f[1][i]->size)
+            return 0;
+    return 1;
+}
+
+/* Floor division: a from before the epoch still buckets by its cell. */
+static long long cell_of(long long t, int cell_s) {
+    long long q = t / cell_s;
+    return (t % cell_s < 0) ? q - 1 : q;
+}
+
+static int ovc_match(const struct web_sdb_ovc *o, int i, const web_sdb_ident_t *id,
+                     long long from, int cell_s, int ncell, long long now) {
+    return o->e[i].used && now - o->e[i].at_ms < WEB_SDB_OVC_TTL_MS &&
+           now >= o->e[i].at_ms && o->e[i].v.cell_s == cell_s &&
+           o->e[i].v.ncell == ncell &&
+           cell_of(o->e[i].v.from, cell_s) == cell_of(from, cell_s) &&
+           same_ident(&o->e[i].id, id);
+}
+
+int web_sdb_ovc_get(web_slothdb_t *s, const web_sdb_ident_t *id,
+                    long long from, int cell_s, int ncell, web_sdb_ovw_t *out) {
+    int hit = 0;
+    if (cell_s <= 0) return 0;
+    long long now = ovc_now_ms();
+    pthread_mutex_lock(&s->mu);
+    for (int i = 0; s->ovc && i < WEB_SDB_OVC_SLOTS && !hit; i++)
+        if (ovc_match(s->ovc, i, id, from, cell_s, ncell, now)) {
+            *out = s->ovc->e[i].v;
+            hit = 1;
+        }
+    if (hit) s->st.ovw_hits++;
+    else     s->st.ovw_misses++;
+    pthread_mutex_unlock(&s->mu);
+    return hit;
+}
+
+void web_sdb_ovc_put(web_slothdb_t *s, const web_sdb_ident_t *id,
+                     const web_sdb_ovw_t *v) {
+    if (v->ncell <= 0 || v->ncell > WEB_SDB_OVC_CELLS || v->ns < 0 ||
+        v->ns > WEB_SDB_OVC_SESSIONS || v->cell_s <= 0)
+        return;
+    long long now = ovc_now_ms();
+    pthread_mutex_lock(&s->mu);
+    if (!s->ovc) s->ovc = calloc(1, sizeof(*s->ovc));
+    if (s->ovc) {
+        /* The same key's slot, else an empty or expired one, else the
+         * oldest. */
+        int slot = -1;
+        for (int i = 0; i < WEB_SDB_OVC_SLOTS && slot < 0; i++)
+            if (ovc_match(s->ovc, i, id, v->from, v->cell_s, v->ncell, now))
+                slot = i;
+        for (int i = 0; i < WEB_SDB_OVC_SLOTS && slot < 0; i++)
+            if (!s->ovc->e[i].used ||
+                now - s->ovc->e[i].at_ms >= WEB_SDB_OVC_TTL_MS)
+                slot = i;
+        if (slot < 0) {
+            slot = 0;
+            for (int i = 1; i < WEB_SDB_OVC_SLOTS; i++)
+                if (s->ovc->e[i].at_ms < s->ovc->e[slot].at_ms) slot = i;
+        }
+        s->ovc->e[slot].used = 1;
+        s->ovc->e[slot].at_ms = now;
+        s->ovc->e[slot].id = *id;
+        s->ovc->e[slot].v = *v;
+    }
     pthread_mutex_unlock(&s->mu);
 }
 
@@ -412,6 +531,7 @@ static int authz(void *ud, int action, const char *a1, const char *a2,
 
 static int progress(void *ud) {
     web_sdb_conn_t *c = ud;
+    c->ticks++;
     if (mono_ms() > c->deadline_ms) {
         c->timed_out = 1;
         return 1;
@@ -1507,21 +1627,88 @@ int web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,
     return items_range(c, sql, NULL, from, to, max, fn, ctx);
 }
 
-/* One grouped count per cell: (first_seen - from) / cell_s. */
-static int cells_of(web_sdb_conn_t *c, const char *table, long long from,
-                    int cell_s, int ncell, long long *out) {
-    char sql[256];
-    snprintf(sql, sizeof(sql), "SELECT (first_seen - ?1) / ?2, count(*) FROM %s"
-             " WHERE first_seen >= ?1 AND first_seen < ?3 GROUP BY 1", table);
+/* With sloth's first_seen index: one count per cell over it, a range
+ * of the index each and no sorter. 1 counted, 0 no such index, -1. */
+static int cells_by_index(web_sdb_conn_t *c, const char *table, long long from,
+                          int cell_s, int ncell, long long *out) {
+    char sql[200];
+    snprintf(sql, sizeof(sql), "SELECT count(*) FROM %s INDEXED BY"
+             " idx_%s_first_seen WHERE first_seen >= ?1 AND first_seen < ?2",
+             table, table);
     sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) {
+        sqlite3_finalize(st);
+        return 0;
+    }
+    for (int i = 0; i < ncell; i++) {
+        sqlite3_bind_int64(st, 1, from + (long long)cell_s * i);
+        sqlite3_bind_int64(st, 2, from + (long long)cell_s * (i + 1));
+        if (sqlite3_step(st) != SQLITE_ROW) { sqlite3_finalize(st); return -1; }
+        out[i] = sqlite3_column_int64(st, 0);
+        c->rows_read += out[i];
+        sqlite3_reset(st);
+    }
+    sqlite3_finalize(st);
+    return 1;
+}
+
+/* The devices first seen, or alert episodes begun, per cell of cell_s
+ * seconds from from (web_slothdb.h says how). */
+static int cells_of(web_sdb_conn_t *c, const char *table, long long from,
+                    int cell_s, int ncell, long long *out, int *plan) {
+    c->what = table;
+    c->rows_read = 0;
+    int r = cells_by_index(c, table, from, cell_s, ncell, out);
+    if (r != 0) {
+        *plan = WEB_SDB_PLAN_INDEX;
+        return r > 0 ? 0 : -1;
+    }
+    char sql[256];
+    sqlite3_stmt *st = NULL;
+    snprintf(sql, sizeof(sql), "SELECT (SELECT min(last_seen) FROM %s),"
+             " (SELECT max(last_seen) FROM %s)", table, table);
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK ||
+        sqlite3_step(st) != SQLITE_ROW) {
+        sqlite3_finalize(st);
+        return -1;
+    }
+    int empty = sqlite3_column_type(st, 1) == SQLITE_NULL;
+    long long lo = sqlite3_column_int64(st, 0), hi = sqlite3_column_int64(st, 1);
+    sqlite3_finalize(st);
+    st = NULL;
+    if (empty || hi < from) {        /* every row ended before from */
+        *plan = WEB_SDB_PLAN_EMPTY;
+        return 0;
+    }
+    /* Under 2/5 of the last_seen span in range: measured, the index
+     * path costs about twice a scan's per row (web_slothdb.h). */
+    int bound = lo < from && (hi - from) * 5 < (hi - lo) * 2;
+    if (bound) {
+        snprintf(sql, sizeof(sql), "SELECT first_seen FROM %s INDEXED BY"
+                 " idx_%s_last_seen WHERE last_seen >= ?1 AND first_seen >= ?1"
+                 " AND first_seen < ?2", table, table);
+        if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) {
+            sqlite3_finalize(st);
+            st = NULL;
+            bound = 0;
+        }
+    }
+    if (!bound) {
+        snprintf(sql, sizeof(sql), "SELECT first_seen FROM %s NOT INDEXED"
+                 " WHERE first_seen >= ?1 AND first_seen < ?2", table);
+        if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) {
+            sqlite3_finalize(st);
+            return -1;
+        }
+    }
+    *plan = bound ? WEB_SDB_PLAN_BOUND : WEB_SDB_PLAN_SCAN;
     sqlite3_bind_int64(st, 1, from);
-    sqlite3_bind_int(st, 2, cell_s);
-    sqlite3_bind_int64(st, 3, from + (long long)cell_s * ncell);
+    sqlite3_bind_int64(st, 2, from + (long long)cell_s * ncell);
     int rc;
     while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
-        long long k = sqlite3_column_int64(st, 0);
-        if (k >= 0 && k < ncell) out[k] = sqlite3_column_int64(st, 1);
+        long long k = (sqlite3_column_int64(st, 0) - from) / cell_s;
+        if (k >= 0 && k < ncell) out[k]++;
+        c->rows_read++;
     }
     sqlite3_finalize(st);
     return rc == SQLITE_DONE ? 0 : -1;
@@ -1532,9 +1719,11 @@ int web_sdb_overview(web_sdb_conn_t *c, long long from, int cell_s,
     if (cell_s <= 0 || ncell <= 0) return -1;
     memset(devs, 0, (size_t)ncell * sizeof(*devs));
     memset(alerts, 0, (size_t)ncell * sizeof(*alerts));
-    if (cells_of(c, "devices", from, cell_s, ncell, devs) != 0) return -1;
+    c->plan[0] = c->plan[1] = WEB_SDB_PLAN_NONE;
+    if (cells_of(c, "devices", from, cell_s, ncell, devs, &c->plan[0]) != 0)
+        return -1;
     if ((c->feats & WEB_QF_ALERTS) &&
-        cells_of(c, "alerts", from, cell_s, ncell, alerts) != 0)
+        cells_of(c, "alerts", from, cell_s, ncell, alerts, &c->plan[1]) != 0)
         return -1;
     return 0;
 }

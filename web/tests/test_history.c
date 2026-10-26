@@ -88,6 +88,14 @@ static void test_page_carries_the_history_view(void) {
     WT_HAS(p, "b.addEventListener(\"click\", function () { newSince(s.id); });");
     WT_HAS(p, "row.addEventListener(\"click\", function () { openDrawer(d.mac); });");
     WT_HAS(p, "if (e.key === \"8\") show(\"history\");");
+    /* The strip's failure keeps "try again" and says which read ran out
+     * and how far it got (overview_failed()'s body). */
+    WT_HAS(p, "\"sloth_db_timeout\": \"sloth.db was too slow to answer; try again\"");
+    WT_HAS(p, "e.body = j;");
+    WT_HAS(p, "t += \" (\" + j.query.slice(0, 32);");
+    WT_HAS(p, "t += \": \" + j.rows_read.toLocaleString(\"en-US\") + \" rows read\";");
+    WT_HAS(p, "t += \" in \" + j.budget_ms + \" ms\";");
+    WT_HAS(p, "set(\"h-range\", errText(e.message, e.body));");
 }
 
 #ifndef WITH_SQLITE
@@ -99,7 +107,10 @@ void run_history_tests(void) {
 
 #else
 
+#include <fcntl.h>
 #include <sqlite3.h>
+#include <sys/stat.h>
+#include <time.h>
 
 static char g_dir[64];
 static char g_db[128];
@@ -594,11 +605,320 @@ static void test_alert_finding_gap_is_not_a_hit(void) {
     WT_EQ(sdb_exec(g_db, "DELETE FROM alerts WHERE key='gap:10.0.0.42';"), 0);
 }
 
+/* ── the overview on a large file, and its cache ─────────────────────── */
+
+/* src/db_schema.c's DDL, as sloth applies it on every open. */
+const char *db_schema_sql(void);
+
+static long long mono_ms_t(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* The sanitizers slow slothweb's own code several-fold (SQLite is the
+ * system library and is not instrumented); the time assertion below is
+ * scaled for them rather than skipped. */
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define OVW_TIME_SCALE 4
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define OVW_TIME_SCALE 4
+#endif
+#endif
+#ifndef OVW_TIME_SCALE
+#define OVW_TIME_SCALE 1
+#endif
+
+#define BIG_ALERTS_OLD    570000
+#define BIG_ALERTS_NEW     30000
+#define BIG_DEVICES_OLD    57000
+#define BIG_DEVICES_NEW     3000
+
+/* A sloth.db as an older v7 sloth left it: no first_seen indexes, and
+ * 600,000 alert episodes and 60,000 devices of which a twentieth are in
+ * the last 30 days, the rest spread over the 370 days before. */
+static int big_db(const char *path) {
+    char sql[2048];
+    if (sdb_make(path, db_schema_version(), 0) != 0) return -1;
+    snprintf(sql, sizeof(sql),
+        "DROP INDEX idx_alerts_first_seen; DROP INDEX idx_devices_first_seen;"
+        "BEGIN;"
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n"
+        " WHERE i < %d - 1)"
+        " INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,count)"
+        " SELECT 'g:' || i, f, f + i %% 900, i %% 90, i %% 3, 'PORT_SCAN', 1 FROM"
+        " (SELECT i, CASE WHEN i < %d THEN %lld + (i * 37) %% %lld"
+        "  ELSE %lld + (i * 37) %% %lld END AS f FROM n);"
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n"
+        " WHERE i < %d - 1)"
+        " INSERT INTO devices (mac,first_seen,last_seen)"
+        " SELECT printf('02:00:%%02x:%%02x:%%02x:%%02x', i / 16777216 %% 256,"
+        " i / 65536 %% 256, i / 256 %% 256, i %% 256), f, f + i %% 600 FROM"
+        " (SELECT i, CASE WHEN i < %d THEN %lld + (i * 53) %% %lld"
+        "  ELSE %lld + (i * 53) %% %lld END AS f FROM n);"
+        "COMMIT;",
+        BIG_ALERTS_OLD + BIG_ALERTS_NEW, BIG_ALERTS_OLD,
+        T - 400 * DY, 369 * DY, T - 30 * DY + 1000, 30 * DY - 2000,
+        BIG_DEVICES_OLD + BIG_DEVICES_NEW, BIG_DEVICES_OLD,
+        T - 400 * DY, 369 * DY, T - 30 * DY + 1000, 30 * DY - 2000);
+    return sdb_exec(path, sql);
+}
+
+/* The cells a plain GROUP BY gives, read by the test's own connection:
+ * what every plan must agree with. */
+static void ref_cells(const char *path, const char *table, long long from,
+                      int cell_s, int ncell, long long *out) {
+    sqlite3 *h = NULL;
+    sqlite3_stmt *st = NULL;
+    char sql[200];
+    memset(out, 0, (size_t)ncell * sizeof(*out));
+    snprintf(sql, sizeof(sql), "SELECT (first_seen - ?1) / ?2, count(*) FROM %s"
+             " WHERE first_seen >= ?1 AND first_seen < ?3 GROUP BY 1", table);
+    if (sqlite3_open_v2(path, &h, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK &&
+        sqlite3_prepare_v2(h, sql, -1, &st, NULL) == SQLITE_OK) {
+        sqlite3_bind_int64(st, 1, from);
+        sqlite3_bind_int(st, 2, cell_s);
+        sqlite3_bind_int64(st, 3, from + (long long)cell_s * ncell);
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            long long k = sqlite3_column_int64(st, 0);
+            if (k >= 0 && k < ncell) out[k] = sqlite3_column_int64(st, 1);
+        }
+    }
+    sqlite3_finalize(st);
+    sqlite3_close(h);
+}
+
+/* The budget of the direct reads below, which hold counts and work, not
+ * time (the route's own budget is asserted above them): a scan of the
+ * 600,000 rows under TSan on a loaded host was seen to pass 1500 ms. */
+#define CHECK_BUDGET_MS 60000
+
+/* One overview on c's file, held to ref_cells(); the plans in plans. */
+static void check_overview(web_slothdb_t *s, const char *path, long long from,
+                           int cell_s, int ncell, int plans[2],
+                           unsigned long *ticks) {
+    static long long d[400], a[400], rd[400], ra[400];
+    web_sdb_conn_t c;
+    char err[WEB_SDB_ERR_MAX];
+    WT_EQ(web_slothdb_open(s, &c, CHECK_BUDGET_MS, T, err, sizeof(err)), 0);
+    c.ticks = 0;
+    WT_EQ(web_sdb_overview(&c, from, cell_s, ncell, d, a), 0);
+    plans[0] = c.plan[0];
+    plans[1] = c.plan[1];
+    if (ticks) *ticks = c.ticks;
+    web_slothdb_close(&c);
+    ref_cells(path, "devices", from, cell_s, ncell, rd);
+    ref_cells(path, "alerts", from, cell_s, ncell, ra);
+    WT_ASSERT(memcmp(d, rd, (size_t)ncell * sizeof(*d)) == 0);
+    WT_ASSERT(memcmp(a, ra, (size_t)ncell * sizeof(*a)) == 0);
+}
+
+/* The work of reading every alert row's first_seen: what the
+ * overview's alert count cost before the last_seen bound. */
+static unsigned long scan_ticks(web_slothdb_t *s, long long from) {
+    web_sdb_conn_t c;
+    char err[WEB_SDB_ERR_MAX];
+    sqlite3_stmt *st = NULL;
+    unsigned long t = 0;
+    WT_EQ(web_slothdb_open(s, &c, CHECK_BUDGET_MS, T, err, sizeof(err)), 0);
+    c.ticks = 0;
+    WT_EQ(sqlite3_prepare_v2(c.db, "SELECT first_seen FROM alerts NOT INDEXED"
+                             " WHERE first_seen >= ?1", -1, &st, NULL), SQLITE_OK);
+    sqlite3_bind_int64(st, 1, from);
+    long long n = 0;
+    while (sqlite3_step(st) == SQLITE_ROW) n++;
+    sqlite3_finalize(st);
+    WT_EQ(n, BIG_ALERTS_NEW);
+    t = c.ticks;
+    web_slothdb_close(&c);
+    return t;
+}
+
+/* The owner's report: "THE LAST 30 DAYS" answered "sloth.db was too
+ * slow to answer" on a sloth.db with 867,748 alert episodes and no
+ * first_seen index. Here 600,000 without the index: the default range
+ * answers within the overview's budget (scaled for the sanitizers,
+ * OVW_TIME_SCALE), and the alert and device counts go by last_seen,
+ * reading a twentieth of the work of a scan. Seen red with the
+ * "last_seen >= ?1" bound removed from cells_of() (the ticks are a
+ * scan's). Each plan's counts are held to a GROUP BY's. */
+static void test_overview_on_a_large_file_without_the_index(void) {
+    char dir[64], path[128], q[128];
+    snprintf(dir, sizeof(dir), "/tmp/slothweb-big-XXXXXX");
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    snprintf(path, sizeof(path), "%s/sloth.db", dir);
+    long long t0 = mono_ms_t();
+    WT_EQ(big_db(path), 0);
+    fprintf(stderr, "    generated %d alerts, %d devices in %lld ms\n",
+            BIG_ALERTS_OLD + BIG_ALERTS_NEW, BIG_DEVICES_OLD + BIG_DEVICES_NEW,
+            mono_ms_t() - t0);
+    web_slothdb_t s;
+    web_slothdb_init(&s, path, NULL);
+    web_m4_t m = m4;
+    m.sdb = &s;
+    web_health_t h = H;
+    h.m4 = &m;
+    /* The page's own request. */
+    snprintf(q, sizeof(q), "from=%lld&to=%lld&cols=180", T - 30 * DY, T);
+    t0 = mono_ms_t();
+    WT_EQ(route(&h, "/api/history/overview", q), 200);
+    long long took = mono_ms_t() - t0;
+    fprintf(stderr, "    overview of the last 30 days: %lld ms (budget %d,"
+            " asserted < %d)\n", took, WEB_SDB_OVERVIEW_MS,
+            WEB_SDB_HTTP_MS * OVW_TIME_SCALE);
+    WT_ASSERT(took < WEB_SDB_HTTP_MS * OVW_TIME_SCALE);
+    WT_ASSERT(took < WEB_SDB_OVERVIEW_MS);
+    char want[96];
+    snprintf(want, sizeof(want), "\"cell_s\":14400,\"devices\":[");
+    WT_HAS(body_of(g_out), want);
+
+    /* The work, which a clock cannot show reliably. */
+    int pl[2];
+    unsigned long ticks = 0, scan = scan_ticks(&s, T - 30 * DY);
+    check_overview(&s, path, T - 30 * DY, 14400, 180, pl, &ticks);
+    WT_EQ(pl[0], WEB_SDB_PLAN_BOUND);
+    WT_EQ(pl[1], WEB_SDB_PLAN_BOUND);
+    fprintf(stderr, "    ticks: %lu bounded, %lu for a scan of alerts\n", ticks,
+            scan);
+    WT_ASSERT(scan > 100);
+    WT_ASSERT(ticks * 4 < scan);
+    /* All 400 days: most rows are in range, and a scan is the cheaper. */
+    check_overview(&s, path, T - 400 * DY, 192000, 180, pl, NULL);
+    WT_EQ(pl[0], WEB_SDB_PLAN_SCAN);
+    WT_EQ(pl[1], WEB_SDB_PLAN_SCAN);
+    /* After every row's last_seen: nothing to read. */
+    check_overview(&s, path, T + DY, 60, 10, pl, NULL);
+    WT_EQ(pl[0], WEB_SDB_PLAN_EMPTY);
+    WT_EQ(pl[1], WEB_SDB_PLAN_EMPTY);
+    /* Once sloth has opened the file: its indexes, one count per cell. */
+    WT_EQ(sdb_exec(path, db_schema_sql()), 0);
+    check_overview(&s, path, T - 30 * DY, 14400, 180, pl, &ticks);
+    WT_EQ(pl[0], WEB_SDB_PLAN_INDEX);
+    WT_EQ(pl[1], WEB_SDB_PLAN_INDEX);
+    WT_ASSERT(ticks * 4 < scan);
+    check_overview(&s, path, T - 400 * DY, 192000, 180, pl, NULL);
+    WT_EQ(pl[1], WEB_SDB_PLAN_INDEX);
+
+    web_slothdb_destroy(&s);
+    unlink(path);
+    rmdir(dir);
+}
+
+/* A repeated overview of an unchanged file is served from the cache,
+ * without opening it (opens, and no new miss); a from in the same cell
+ * is the same answer, the cached from and to with it; a new mtime, or a
+ * minute gone, counts again. Seen red with web_sdb_ovc_get() made to
+ * miss always (no hit, a second open), and with the mtime left out of
+ * same_ident() (the touched file still hits). */
+static void test_overview_cache(void) {
+    char q[160], first[4096];
+    web_sdb_stats_t a, b;
+    snprintf(q, sizeof(q), "from=%lld&to=%lld&cols=90", T - 20 * DY, T);
+    web_slothdb_stats(&sdb, &a);
+    WT_EQ(route(&H, "/api/history/overview", q), 200);
+    snprintf(first, sizeof(first), "%s", body_of(g_out));
+    web_slothdb_stats(&sdb, &b);
+    WT_EQ(b.ovw_misses, a.ovw_misses + 1);
+    WT_EQ(b.opens, a.opens + 1);
+    /* Again, and with from 30 s later: the same cell (cell_s 19200). */
+    WT_EQ(route(&H, "/api/history/overview", q), 200);
+    WT_ASSERT(strcmp(body_of(g_out), first) == 0);
+    snprintf(q, sizeof(q), "from=%lld&to=%lld&cols=90", T - 20 * DY + 30, T + 30);
+    WT_EQ(route(&H, "/api/history/overview", q), 200);
+    WT_ASSERT(strcmp(body_of(g_out), first) == 0);
+    web_slothdb_stats(&sdb, &a);
+    WT_EQ(a.ovw_hits, b.ovw_hits + 2);
+    WT_EQ(a.ovw_misses, b.ovw_misses);
+    WT_EQ(a.opens, b.opens);
+    /* The next cell is another answer. */
+    snprintf(q, sizeof(q), "from=%lld&to=%lld&cols=90", T - 20 * DY + 19200,
+             T + 19200);
+    WT_EQ(route(&H, "/api/history/overview", q), 200);
+    web_slothdb_stats(&sdb, &b);
+    WT_EQ(b.ovw_misses, a.ovw_misses + 1);
+    /* The file touched, content and size as they were. */
+    snprintf(q, sizeof(q), "from=%lld&to=%lld&cols=90", T - 20 * DY, T);
+    struct stat st;
+    WT_EQ(stat(g_db, &st), 0);
+    struct timespec tv[2] = { st.st_atim, st.st_mtim };
+    tv[1].tv_sec += 7;
+    WT_EQ(utimensat(AT_FDCWD, g_db, tv, 0), 0);
+    WT_EQ(route(&H, "/api/history/overview", q), 200);
+    WT_ASSERT(strcmp(body_of(g_out), first) == 0);
+    web_slothdb_stats(&sdb, &a);
+    WT_EQ(a.ovw_misses, b.ovw_misses + 1);
+    WT_EQ(a.opens, b.opens + 1);
+    /* Cached again; then a minute on, counted again. */
+    WT_EQ(route(&H, "/api/history/overview", q), 200);
+    web_slothdb_stats(&sdb, &b);
+    WT_EQ(b.ovw_hits, a.ovw_hits + 1);
+    web_sdb_ovc_test_skew_ms = WEB_SDB_OVC_TTL_MS + 1000;
+    WT_EQ(route(&H, "/api/history/overview", q), 200);
+    web_sdb_ovc_test_skew_ms = 0;
+    web_slothdb_stats(&sdb, &a);
+    WT_EQ(a.ovw_misses, b.ovw_misses + 1);
+    WT_EQ(a.opens, b.opens + 1);
+    /* A row sloth adds is in the next answer. */
+    WT_EQ(sdb_exec(g_db, "INSERT INTO alerts (key,first_seen,last_seen,type,"
+                   "sev,title,count) VALUES ('scan:10.0.0.99',1792626000,"
+                   "1792626100,0,0,'PORT_SCAN',1)"), 0);
+    WT_EQ(route(&H, "/api/history/overview", q), 200);
+    WT_ASSERT(strcmp(body_of(g_out), first) != 0);
+    WT_EQ(sdb_exec(g_db, "DELETE FROM alerts WHERE key='scan:10.0.0.99'"), 0);
+}
+
+/* The overview's 503 names the read that ran out and the rows it had
+ * counted. Seen red with overview_failed() replaced by
+ * web_hist_read_failed() (no query, no rows). */
+static void test_overview_timeout_says_what(void) {
+    char dir[64], path[128];
+    snprintf(dir, sizeof(dir), "/tmp/slothweb-slow-XXXXXX");
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    snprintf(path, sizeof(path), "%s/sloth.db", dir);
+    WT_EQ(big_db(path), 0);
+    web_slothdb_t s;
+    web_slothdb_init(&s, path, NULL);
+    web_m4_t m = m4;
+    m.sdb = &s;
+    web_health_t h = H;
+    h.m4 = &m;
+    /* A budget already spent: the progress handler stops the first
+     * statement that runs long enough to be asked. */
+    web_sdb_conn_t c;
+    char err[WEB_SDB_ERR_MAX];
+    static long long d[200], a[200];
+    WT_EQ(web_slothdb_open(&s, &c, WEB_SDB_OVERVIEW_MS, T, err, sizeof(err)), 0);
+    c.deadline_ms = 0;
+    WT_EQ(web_sdb_overview(&c, T - 400 * DY, 192000, 180, d, a), -1);
+    WT_EQ(c.timed_out, 1);
+    WT_ASSERT(c.what != NULL && !strcmp(c.what, "devices"));
+    web_slothdb_close(&c);
+    /* And through the route, its budget spent once the file is open. */
+    web_hist_test_expire = 1;
+    char q[128];
+    snprintf(q, sizeof(q), "from=%lld&to=%lld", T - 400 * DY, T);
+    WT_EQ(route(&h, "/api/history/overview", q), 503);
+    web_hist_test_expire = 0;
+    const char *b = body_of(g_out);
+    WT_HAS(b, "{\"error\":\"sloth_db_timeout\",\"detail\":\"");
+    WT_HAS(b, "ran past the budget after ");
+    WT_HAS(b, "\"query\":\"");
+    WT_HAS(b, "\"rows_read\":");
+    WT_HAS(b, "\"budget_ms\":1500}");
+    web_slothdb_destroy(&s);
+    unlink(path);
+    rmdir(dir);
+}
+
 void run_history_tests(void) {
     WT_RUN(test_without_sloth_db);
     WT_RUN(test_page_carries_the_history_view);
     up();
     WT_RUN(test_overview);
+    WT_RUN(test_overview_cache);
+    WT_RUN(test_overview_on_a_large_file_without_the_index);
+    WT_RUN(test_overview_timeout_says_what);
     WT_RUN(test_who_was_here);
     WT_RUN(test_presence_inside_the_range);
     WT_RUN(test_presence_from_the_hour_tier);
