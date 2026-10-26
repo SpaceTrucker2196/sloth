@@ -265,3 +265,4 @@
 | 40e5116 | 2026-10-26T11:33:20Z | claude-opus-5 | 346 | 179792 | 26956241 | 488984 | 22.8645 | #167: one shared 802.11 band plan (src/wifi_freq) replacing six drifted copies,  |
 | 2083254 | 2026-10-26T13:12:32Z | claude-opus-5 | 462 | 164507 | 27172728 | 1946020 | 37.1615 | release v1.8.5 |
 | b6a39ea | 2026-10-26T16:11:06Z | claude-opus-5-5 | 18 | 4634 | 4665962 | 1275577 | 11.2306 | #150: list views size pages from the cursor via view_page_budget (27 views), clip wide rows, nothing drawn off-screen; per-view 100x33 fit tests; Deauth/BTM/FragAttacks/Interfaces fixes |
+| ab91626 | 2026-10-26T16:11:22Z | claude-opus-5-5 | 6 | 1027 | 1995121 | 1765 | 0.4337 | #156 follow-up: BLE_ADV_FLOOD and BLE_WATCHLIST pinned identical with rotation hints on/off; three-rotation scenario |
