@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154 and #170.
 
-**Last updated**: 2026-10-26 (#170: schema v8, one `alerts` row per finding rather than per incident — the incident semantics below, the v7 → v8 step, and the opt-in `--db-compact-alerts` copy for the duplicates older builds wrote). 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
+**Last updated**: 2026-10-26 (#170 review: `alerts.incident_first_seen`, peak `sev` on the live row as on a compacted one, `count` / `reopens` as lower bounds, and `--db-compact-alerts` refusing an un-checkpointed SRC, writing nothing beside it, and handing DST to SRC's owner). 2026-10-26 (#170: schema v8, one `alerts` row per finding rather than per incident — the incident semantics below, the v7 → v8 step, and the opt-in `--db-compact-alerts` copy for the duplicates older builds wrote). 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
 
 ---
 
@@ -134,7 +134,7 @@ These are what make the file trustworthy rather than merely present.
 | `sensor_mask`, `proto_mask`, `eap_types_seen` = OR | merge / RDP / RADIUS | Coverage and offered-capability bits accumulate. A radio that heard an entity once still heard it. |
 | SMB `dialect` sticky to `SMB1` | `smb_sessions` | Once a flow has spoken SMB1 that *is* the finding; a later SMB2 negotiation must not erase it. |
 | Evidence flags latch | deauth, twins, karma | A burst that crossed the flood threshold *was* a flood; a twin caught mid-attack was caught mid-attack. |
-| `sev` / `detail` track latest | `alerts` | Matches how `fire()` overwrites them in the live engine. |
+| `sev` = MAX, `detail` the latest at that peak | `alerts` | A row holds every incident of a key (#170), and a LOW reopen must not erase the CRIT before it. The compactor folds rows the same way. |
 | One row per finding; `count` sums incidents, `reopens` counts them | `alerts` | A write continues the key's newest row, so evict-and-refire, a quiet-period reopen and a restart all advance one row (#170). See *Findings and incidents* below. |
 
 ## Schema — 41 tables, v1 → v8
@@ -153,16 +153,18 @@ file from a *newer* build (`schema_version` above 8) is refused.
 `cam_vetoes` (`CAM_VETO_*` mask), `cam_conflict`, `dhcp_prl` and
 `dhcp_vci` (the client's DHCP options 55 / 60, display-only), and
 `device_class` may now hold 3, `not-camera`. **v8** (#170): `alerts`
-gains `reopens`, `incident_id` and `incident_count`, and its rows become
-one per finding — *Findings and incidents* below.
+gains `reopens`, `incident_id`, `incident_count` and
+`incident_first_seen`, and its rows become one per finding — *Findings and incidents* below.
 
-**The v7 → v8 migration.** Three `ALTER TABLE alerts ADD COLUMN`
+**The v7 → v8 migration.** Four `ALTER TABLE alerts ADD COLUMN`
 statements with defaults (`db_schema_migrate_v7_sql()`) and the stamp,
 in one `BEGIN IMMEDIATE` transaction. No v7 value changes — including
 the duplicate rows an older build wrote, which stay exactly as they
 were; folding them is `--db-compact-alerts`, on a copy, never the
 migration. A v7 row reads `reopens` 0, `incident_id` NULL,
-`incident_count` 0, and the first v8 write for its key continues the
+`incident_count` 0, `incident_first_seen` NULL (a reader takes
+`first_seen`, which on a v7 row *was* the incident's start), and the
+first v8 write for its key continues the
 key's newest row as a reopen. Tested on a v7 file holding three rows for
 one key (`test_v7_file_migrates_additively`) and on one whose last ALTER
 fails, which stays v7 with none of the step's columns
@@ -339,11 +341,13 @@ So one row per key in steady state, and:
 |---|---|
 | `first_seen` | the finding's first sighting; never moved by a write |
 | `last_seen` | MAX, as everywhere |
-| `count` | evaluations, **summed across incidents**: a write of the incident already on the row adds what its count moved since the last write; a write of a different incident adds its whole count |
-| `reopens` | incidents after the first that this row absorbed |
+| `count` | evaluations, **summed across incidents**: a write of the incident already on the row adds what its count moved since the last write; a write of a different incident adds its whole count. A lower bound — see below |
+| `reopens` | incidents after the first that this row absorbed. A lower bound — see below |
 | `incident_id` | the latest of them — the join into the JSONL stream |
 | `incident_count` | that incident's own count as last written, so `count` never double-counts the one still open |
-| `sev`, `detail` | the latest write's, as before |
+| `incident_first_seen` | that incident's start (the engine's `first_detected`). `first_seen`..`last_seen` covers every incident *and the quiet gaps between them*, so "was it firing at *t*" reads this column: slothweb's History range reads (`/api/history/alerts`, the deauth episodes) overlap `[COALESCE(incident_first_seen, first_seen), last_seen]` |
+| `sev` | the **peak** across the row's writes, as the compactor folds it. Latest-wins let a LOW reopen leave a CRIT finding reading LOW with the CRIT in no row of the file |
+| `detail` | the latest write at that peak severity (a tie takes the new one, so a steady finding shows its current evidence) |
 | `type`, `title`, `technique`, `match_ip`, `match_port` | the first write's |
 
 How it holds: the engine keeps a key's `first_seen` across every reopen
@@ -357,7 +361,21 @@ test_alert_evict_refire_churn_is_one_row` evicts and re-fires one key
 100 times under enough key pressure that the side table forgets it each
 time, and gets one row with `reopens` 100;
 `test_alert_finding_outlives_a_restart` does it across a close and
-reopen.
+reopen; `test_alert_reopen_keeps_peak_sev` reopens a CRIT incident at
+LOW.
+
+**`count` and `reopens` are lower bounds, sampled at writes.** The
+writer sees the engine's live alerts once per `--db` write (each tick,
+or every `--db-interval-secs`). An incident that opens and closes
+between two writes — resolved, evicted under pressure, or displaced —
+is never on the row, so it adds nothing to either. They are exact when
+every incident outlives a write interval, and fall further behind under
+eviction churn and with a longer interval. The JSONL stream's
+`reopen_count` on `alert.*` is the engine's own count from its side
+table: it sees every incident, but restarts at 0 when the 512-row side
+table forgets the key or the process restarts, while `reopens`
+persists across both. Neither is derived from the other; for an exact
+incident history, count `alert.create` records in the JSONL stream.
 
 Why not one row per (key, incident): the owner's v6 file held
 **867,748 rows for 7,598 keys**. Its rate fell from about 130,000 rows a
@@ -366,8 +384,11 @@ the 12,317 rows written from 2026-10-22 to 10-26, 9,704 were a known key
 back after a gap longer than the 300 s resolve period (most of them
 five minutes to an hour) — the reopens a per-incident row would keep
 producing forever. The gap the old per-episode row
-showed is not lost: it is in the JSONL stream, and `reopens` says how
-many there were. Retention still applies: a key whose row ages out of
+showed is not lost when the sensor also writes the JSONL stream (`-o`):
+it is there, as `alert.resolve` and the next `alert.create`. A
+`--db`-only sensor keeps the latest incident's start
+(`incident_first_seen`) and how many there were (`reopens`, a lower
+bound), not the gaps before it. Retention still applies: a key whose row ages out of
 the finding tier (12× `--db-retain-days`) and fires again starts a new
 row.
 
@@ -381,28 +402,57 @@ offline copy the operator runs and then decides what to do with:
 sloth --db-compact-alerts data/sloth.db data/sloth-compact.db
 ```
 
-- SRC is opened **read-only** and never written; the test holds it
-  byte-identical. A file in WAL mode should be from a stopped sensor
-  (or a snapshot), so the copy includes what its `-wal` holds.
+- SRC is opened **immutable** (`file:SRC?mode=ro&immutable=1`) and
+  nothing is written to it or beside it — not even the `-shm` and empty
+  `-wal` a plain read-only open of a WAL-mode file creates and leaves.
+  The test holds SRC byte-identical and its side files absent.
+- A **non-empty `SRC-wal` or `SRC-journal` refuses the command**: it is
+  what a sensor that was killed rather than stopped leaves, its last
+  writes not yet in the main file. A copy of the main file would miss
+  them, and the swap below would put the copy under that old `-wal`,
+  which SQLite then replays onto pages it never belonged to — a corrupt
+  file (`malformed database schema … orphan index`, reproduced on
+  #170's review). Checkpoint first: start and stop the sensor cleanly,
+  or `sqlite3 SRC 'PRAGMA wal_checkpoint(TRUNCATE)'` as the file's
+  owner.
 - DST must not exist — nor `DST-wal`, `-shm` or `-journal`, which SQLite
   would replay into the copy. It is created `0600`, filled with `VACUUM
   INTO`, migrated to this build's schema, compacted in one transaction
   and `VACUUM`ed. A failure removes it.
 - One row per key: MIN `first_seen`, MAX `last_seen`, summed `count`,
-  **peak** `sev`, `reopens` = rows − 1 (plus any `reopens` a v8 row
-  carried), and the most recent row's `detail`, `title`, `type`,
-  `technique`, `match_*` and incident join. Peak rather than latest
-  severity because a folded row stands for many incidents and the worst
-  of them is what an investigator asks for first.
+  **peak** `sev` with the `detail` of the most recent row at that peak,
+  `reopens` = rows − 1 (plus any `reopens` a v8 row carried), and the
+  most recent row's `title`, `type`, `technique`, `match_*`, incident
+  join and incident start (`incident_first_seen`, or a v7 row's
+  `first_seen`). Peak rather than latest severity because a folded row
+  stands for many incidents and the worst of them is what an
+  investigator asks for first — the live writer's rule too, so a
+  compacted row and a live one mean the same thing.
 - Prints the counts and the time, and exits. Every other table is
   copied as it was.
+- Run as root (reading a `0600` file owned by the `sloth` account
+  usually means sudo), DST is handed to SRC's owner and group. The
+  sensor opens `--db` after dropping to its `--user` account, and
+  `db_open()` refuses a file owned by anyone else, so a root-owned copy
+  swapped in would stop it starting. `sudo -u sloth sloth
+  --db-compact-alerts …` does the same without root writing anything.
 
 On a copy of the owner's 254 MB snapshot (2026-10-26): 867,748 rows for
 7,598 keys → 7,598 rows, file 245 MB → 13.7 MB, 17 s, source checksum
 unchanged. A generated 900,000-row v7 table compacts in 3.5–7 s on the same host
 (`test_compact_alerts_900k_rows` prints its timing). Swapping the
-compacted file in — stop the sensor, move it over `--db`'s path, start
-— is the owner's call, and the original is the backup.
+compacted file in is the owner's call, and the original is the backup:
+
+1. stop the sensor;
+2. confirm `SRC-wal` and `SRC-shm` are absent (or the `-wal` empty) —
+   the command refused a non-empty one, but a sensor started between
+   the compaction and the swap writes a new one;
+3. move SRC aside as the backup, then DST over `--db`'s path;
+4. check the owner (`stat -c %U`) is the sensor's `--user` account;
+5. start the sensor.
+
+`test_compact_refuses_an_uncheckpointed_src` holds the refusal, then
+checkpoints, compacts, swaps and reopens.
 
 `alerts`, `cleartext_creds`, `eapol_events`, `deauth_events`,
 `seqnum_correlations`, `twin_episodes`, `scan_entries` /

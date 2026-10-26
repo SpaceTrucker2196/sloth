@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -537,13 +538,21 @@ static const char *const SQL[ST_COUNT] = {
     "  last_seen=MAX(smb_sessions.last_seen,excluded.last_seen)",
 [ST_ALERT] =
     "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,"
-    "technique,match_ip,match_port,count,incident_id,incident_count)"
-    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?11)"
+    "technique,match_ip,match_port,count,incident_id,incident_count,"
+    "incident_first_seen)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?11,?13)"
     " ON CONFLICT(key,first_seen) DO UPDATE SET"
-    /* An episode's detail and severity are regenerated each tick and
-     * the latest observation wins, matching the live engine. */
     "  last_seen=MAX(alerts.last_seen,excluded.last_seen),"
-    "  sev=excluded.sev, detail=excluded.detail,"
+    /* The finding's peak severity, and the detail of the latest write
+     * at that peak. Latest-wins was the engine's rule for one
+     * incident; once a row holds every incident of a key (#170) it
+     * let a LOW reopen erase the CRIT before it from the file, and
+     * the compactor's MAX(sev) and the live row meant different
+     * things. A tie takes the new detail, so a steady finding still
+     * shows its current evidence. */
+    "  sev=MAX(alerts.sev,excluded.sev),"
+    "  detail=CASE WHEN excluded.sev>=alerts.sev"
+    "    THEN excluded.detail ELSE alerts.detail END,"
     /* One row per finding (#170). The same incident written again moves
      * `count` by what its own count moved since the last write; a
      * different incident on the row (a reopen, or the first write after
@@ -559,7 +568,8 @@ static const char *const SQL[ST_COUNT] = {
     "    ELSE excluded.incident_count END,"
     "  reopens=alerts.reopens+"
     "    (CASE WHEN alerts.incident_id IS excluded.incident_id THEN 0 ELSE 1 END),"
-    "  incident_id=excluded.incident_id",
+    "  incident_id=excluded.incident_id,"
+    "  incident_first_seen=excluded.incident_first_seen",
 /* The key's newest row, which the write above continues instead of
  * starting one under the engine's first_seen (#170). The engine keeps
  * first_seen across a reopen in its side table, but that table is LRU
@@ -761,7 +771,8 @@ static const db_step_t g_steps[] = {
     { 6, db_schema_migrate_v6_sql, TABLES_DEVICES,
       "devices gained camera classifier and DHCP option columns" },
     { 7, db_schema_migrate_v7_sql, TABLES_ALERTS,
-      "alerts gained reopens, incident_id and incident_count" },
+      "alerts gained reopens, incident_id, incident_count and"
+      " incident_first_seen" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -1604,6 +1615,9 @@ static void write_events(const sloth_state_t *s, time_t now) {
          * itself, and is never mistaken for one. */
         if (a->incident_id[0]) bind_txt(st, 12, a->incident_id);
         else                   sqlite3_bind_null(st, 12);
+        /* The incident's own start; first_seen is the finding's. */
+        sqlite3_bind_int64(st, 13, (sqlite3_int64)(a->first_detected
+                ? a->first_detected : (a->first_seen ? a->first_seen : now)));
         step_reset(ST_ALERT);
     }
 
@@ -2141,38 +2155,48 @@ void db_tick(const sloth_state_t *s, time_t now) {
  * seconds under pressure: 867,748 rows for 7,598 keys on the owner's
  * sensor. The v7 -> v8 step leaves those rows alone (it never rewrites
  * a recorded value), so folding them is this command, and it works on
- * a copy: SRC is opened read-only and never written, DST must not
- * exist, and swapping one for the other is the operator's decision. */
+ * a copy: SRC is opened immutable and nothing is written beside it,
+ * DST must not exist, and swapping one for the other is the operator's
+ * decision. */
 
 /* SQL run on DST, after it has been brought to the current schema. One
  * row per key: the earliest first_seen, the latest last_seen, the summed
- * count, the peak severity, and reopens = the rows folded beyond the
- * first plus any reopens a v8 row already carried. Everything that is
- * one observation rather than a total (title, detail, type, technique,
- * match_ip / match_port, the incident join) is the key's most recent
- * row's, as the live writer would have left it. */
+ * count, the peak severity with the detail of the most recent row at
+ * that peak (the live writer's rule, ST_ALERT), and reopens = the rows
+ * folded beyond the first plus any reopens a v8 row already carried.
+ * Everything else that is one observation rather than a total (title,
+ * type, technique, match_ip / match_port, the incident join and the
+ * incident's start) is the key's most recent row's, as the live writer
+ * would have left it. A v7 row's first_seen was its incident's start,
+ * so it stands in for the incident_first_seen a v7 row lacks. */
 static const char COMPACT_SQL[] =
     /* One streaming pass down the primary key for the totals, and for
-     * each key the rowid of its most recent row. A window-function
-     * form of the same query sorted all 900,000 rows and took 10 s
-     * where this takes under one (tests/test_db.c's timing line). */
+     * each key the rowids of its most recent row and of its most
+     * recent row at peak severity. A window-function form of the same
+     * query sorted all 900,000 rows and took 10 s where this takes a
+     * few (tests/test_db.c's timing line). */
     "CREATE TEMP TABLE compact_agg AS"
     " SELECT key, MIN(first_seen) AS fs, MAX(last_seen) AS ls,"
     "  SUM(count) AS cnt, MAX(sev) AS sv,"
     "  COUNT(*) - 1 + SUM(reopens) AS ro,"
     "  (SELECT b.rowid FROM alerts b WHERE b.key = a.key"
-    "    ORDER BY b.last_seen DESC, b.first_seen DESC LIMIT 1) AS rid"
+    "    ORDER BY b.last_seen DESC, b.first_seen DESC LIMIT 1) AS rid,"
+    "  (SELECT b.rowid FROM alerts b WHERE b.key = a.key"
+    "    ORDER BY b.sev DESC, b.last_seen DESC, b.first_seen DESC"
+    "    LIMIT 1) AS pid"
     " FROM alerts a GROUP BY key;\n"
     "CREATE TEMP TABLE compact_alerts AS"
-    " SELECT g.key, g.fs, g.ls, x.type, g.sv, x.title, x.detail,"
+    " SELECT g.key, g.fs, g.ls, x.type, g.sv, x.title, p.detail,"
     "  x.technique, x.match_ip, x.match_port, g.cnt, g.ro, x.incident_id,"
-    "  x.incident_count"
-    " FROM compact_agg g JOIN alerts x ON x.rowid = g.rid;\n"
+    "  x.incident_count, COALESCE(x.incident_first_seen, x.first_seen) AS ifs"
+    " FROM compact_agg g JOIN alerts x ON x.rowid = g.rid"
+    " JOIN alerts p ON p.rowid = g.pid;\n"
     "DELETE FROM alerts;\n"
     "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,"
-    " technique,match_ip,match_port,count,reopens,incident_id,incident_count)"
+    " technique,match_ip,match_port,count,reopens,incident_id,incident_count,"
+    " incident_first_seen)"
     " SELECT key, fs, ls, type, sv, title, detail, technique, match_ip,"
-    "  match_port, cnt, ro, incident_id, incident_count"
+    "  match_port, cnt, ro, incident_id, incident_count, ifs"
     " FROM compact_alerts;\n"
     "DROP TABLE compact_alerts;\n"
     "DROP TABLE compact_agg;\n";
@@ -2200,15 +2224,43 @@ static void unlink_dst(const char *dst) {
     }
 }
 
-/* Open SRC read-only, check it is a sloth file this build can migrate,
+/* "file:" + `path` percent-encoded, with immutable=1: SQLite then
+ * reads SRC as a plain file, taking no lock and creating no -shm or
+ * -wal beside it (a READONLY open of a WAL-mode file creates both and
+ * leaves them, and a stray -wal next to the original is what a swap
+ * would later replay). Safe only because db_compact_alerts() has
+ * already refused a SRC whose -wal or -journal holds anything, so the
+ * main file is the whole database. An absolute path gets the empty
+ * authority ("file:///..."), so a path that itself starts "//" is not
+ * read as a host name. 1 on success, 0 if it does not fit. */
+static int compact_src_uri(const char *path, char *uri, size_t n) {
+    static const char hex[] = "0123456789ABCDEF";
+    size_t o = (size_t)snprintf(uri, n, "file:%s", path[0] == '/' ? "//" : "");
+    for (const unsigned char *c = (const unsigned char *)path; *c; c++) {
+        int plain = (*c >= 'A' && *c <= 'Z') || (*c >= 'a' && *c <= 'z') ||
+                    (*c >= '0' && *c <= '9') || strchr("/._-~", *c);
+        if (o + 4 >= n) return 0;
+        if (plain) uri[o++] = (char)*c;
+        else { uri[o++] = '%'; uri[o++] = hex[*c >> 4]; uri[o++] = hex[*c & 15]; }
+    }
+    int w = snprintf(uri + o, n - o, "?mode=ro&immutable=1");
+    return w > 0 && (size_t)w < n - o;
+}
+
+/* Open SRC immutable, check it is a sloth file this build can migrate,
  * count what it holds, and copy it to the (just created, empty) DST
  * with VACUUM INTO. 1 on success. */
 static int compact_copy(const char *src, const char *dst,
                         db_compact_stats_t *out) {
     sqlite3 *h = NULL;
     int ok = 0;
-    if (sqlite3_open_v2(src, &h, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW,
-                        NULL) != SQLITE_OK) {
+    char uri[8192];
+    if (!compact_src_uri(src, uri, sizeof(uri))) {
+        fprintf(stderr, "sloth: --db-compact-alerts: %s: path too long\n", src);
+        return 0;
+    }
+    if (sqlite3_open_v2(uri, &h, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW |
+                        SQLITE_OPEN_URI, NULL) != SQLITE_OK) {
         fprintf(stderr, "sloth: --db-compact-alerts: cannot open %s: %s\n",
                 src, h ? sqlite3_errmsg(h) : "?");
         sqlite3_close(h);
@@ -2271,6 +2323,35 @@ int db_compact_alerts(const char *src, const char *dst,
             return -1;
         }
     }
+    /* SRC's own owner, for DST below. lstat: compact_copy()'s open
+     * refuses a symlink anyway (NOFOLLOW). */
+    struct stat src_sb;
+    if (lstat(src, &src_sb) != 0 || !S_ISREG(src_sb.st_mode)) {
+        fprintf(stderr, "sloth: --db-compact-alerts: %s: not a regular"
+                " file\n", src);
+        return -1;
+    }
+    /* A sensor that was killed rather than stopped leaves its last
+     * writes in SRC-wal (or, in rollback mode, a hot SRC-journal). The
+     * copy below reads the main file alone (compact_src_uri()), so it
+     * would be missing them - and the swap would put the compacted
+     * file under that old -wal, which SQLite then replays onto pages
+     * it never belonged to: a corrupt database, reproduced on #170's
+     * review. An empty -wal is what a clean close may leave. */
+    static const char *const SRC_LOG[] = { "-wal", "-journal" };
+    for (size_t i = 0; i < sizeof(SRC_LOG) / sizeof(SRC_LOG[0]); i++) {
+        char p[4096];
+        struct stat sb;
+        snprintf(p, sizeof(p), "%s%s", src, SRC_LOG[i]);
+        if (lstat(p, &sb) == 0 && sb.st_size > 0) {
+            fprintf(stderr, "sloth: --db-compact-alerts: %s holds %lld bytes"
+                    " not yet in %s; checkpoint it first (start and stop the"
+                    " sensor cleanly, or run sqlite3 %s"
+                    " 'PRAGMA wal_checkpoint(TRUNCATE)')\n", p,
+                    (long long)sb.st_size, src, src);
+            return -1;
+        }
+    }
     uint64_t t0 = sloth_mono_ms();
     /* Created here, exclusively and 0600, before SQLite sees the path:
      * VACUUM INTO accepts an existing empty file, and creating it first
@@ -2282,11 +2363,14 @@ int db_compact_alerts(const char *src, const char *dst,
         fprintf(stderr, "sloth: --db-compact-alerts: %s\n", err);
         return -1;
     }
-    close(fd);
     /* From here DST is ours, and a failure removes it: a half-built
-     * copy is not something an operator should find and swap in. */
-    if (!compact_copy(src, dst, out)) { unlink_dst(dst); return -1; }
-    if (!db_open(dst)) { unlink_dst(dst); return -1; }
+     * copy is not something an operator should find and swap in. fd
+     * stays open to the end for the fchown below. */
+    if (!compact_copy(src, dst, out) || !db_open(dst)) {
+        close(fd);
+        unlink_dst(dst);
+        return -1;
+    }
     int ok = exec("BEGIN IMMEDIATE", "compact begin");
     if (ok && (!exec(COMPACT_SQL, "compact") ||
                !exec("COMMIT", "compact commit"))) {
@@ -2298,6 +2382,22 @@ int db_compact_alerts(const char *src, const char *dst,
     if (ok) ok = exec("VACUUM", "compact vacuum");
     if (ok) out->rows_after = scalar("SELECT COUNT(*) FROM alerts");
     db_close();
+    /* Reading a 0600 sloth-owned SRC usually means running this as
+     * root, and DST is then root's. The sensor opens --db after it has
+     * dropped to its --user account (main.c, privdrop_apply() before
+     * db_open()), and db_open() refuses a file owned by anyone else, so
+     * a swapped-in root-owned copy would stop the sensor starting. DST
+     * goes to SRC's owner instead: the account that already opens SRC.
+     * After db_close(), because db_open() above runs as root and holds
+     * DST to the same rule. Untested: a test cannot chown without
+     * root. */
+    if (ok && geteuid() == 0 &&
+        fchown(fd, src_sb.st_uid, src_sb.st_gid) != 0) {
+        fprintf(stderr, "sloth: --db-compact-alerts: chown %s to %s's owner:"
+                " %s\n", dst, src, strerror(errno));
+        ok = 0;
+    }
+    close(fd);
     if (!ok || out->rows_after < 0) { unlink_dst(dst); return -1; }
     out->elapsed_ms = (long long)(sloth_mono_ms() - t0);
     printf("sloth: compacted alerts: %lld rows for %lld keys in %s"

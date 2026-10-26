@@ -526,12 +526,17 @@ static const char SCHEMA_SQL[] =
      * absorbed. `incident_id` is the latest of them, the join into
      * that stream, and `incident_count` that incident's own count as
      * last written, which is what lets `count` sum across incidents
-     * without double-counting the one still open. Listed last and in
-     * MIGRATE_V7_SQL's order, so a migrated v7 file and a fresh v8
-     * file have the same column order. */
+     * without double-counting the one still open.
+     * `incident_first_seen` is that incident's start: first_seen..
+     * last_seen spans every incident and the quiet gaps between them,
+     * so a "was it firing at t" question reads this column, not
+     * first_seen. Listed last and in MIGRATE_V7_SQL's order, so a
+     * migrated v7 file and a fresh v8 file have the same column
+     * order. */
     "  reopens        INTEGER NOT NULL DEFAULT 0,"
     "  incident_id    TEXT,"
     "  incident_count INTEGER NOT NULL DEFAULT 0,"
+    "  incident_first_seen INTEGER,"
     "  PRIMARY KEY (key, first_seen)"
     ");\n"
     "CREATE INDEX IF NOT EXISTS idx_alerts_last_seen ON alerts(last_seen);\n"
@@ -772,16 +777,19 @@ static const char MIGRATE_V6_SQL[] =
     "ALTER TABLE devices ADD COLUMN dhcp_vci      TEXT;\n";
 
 /* v7 -> v8 (#170): the alerts table gains the per-finding reopen
- * counter and the incident join. Additive only: a v7 row keeps every
- * value it holds, including the duplicate rows the pre-#170 engine
- * wrote (one per evict-and-refire); folding those is the opt-in
- * offline copy `--db-compact-alerts`, never this step. A v7 row reads
- * as reopens 0, no incident, incident_count 0 - the first v8 write to
- * it is then a new incident on an old finding, which it is. */
+ * counter, the incident join and the incident's start. Additive only:
+ * a v7 row keeps every value it holds, including the duplicate rows
+ * the pre-#170 engine wrote (one per evict-and-refire); folding those
+ * is the opt-in offline copy `--db-compact-alerts`, never this step. A
+ * v7 row reads as reopens 0, no incident, incident_count 0 and no
+ * incident_first_seen (a reader falls back to first_seen, which on a
+ * v7 row WAS the incident's start) - the first v8 write to it is then
+ * a new incident on an old finding, which it is. */
 static const char MIGRATE_V7_SQL[] =
     "ALTER TABLE alerts ADD COLUMN reopens        INTEGER NOT NULL DEFAULT 0;\n"
     "ALTER TABLE alerts ADD COLUMN incident_id    TEXT;\n"
-    "ALTER TABLE alerts ADD COLUMN incident_count INTEGER NOT NULL DEFAULT 0;\n";
+    "ALTER TABLE alerts ADD COLUMN incident_count INTEGER NOT NULL DEFAULT 0;\n"
+    "ALTER TABLE alerts ADD COLUMN incident_first_seen INTEGER;\n";
 
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }

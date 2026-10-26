@@ -151,7 +151,8 @@ typedef struct {
 
 enum {
     WEB_SDB_OPT_CLASS = 1 << 0,      /* devices.device_class, camera_* (v6) */
-    WEB_SDB_OPT_VCI   = 1 << 1       /* devices.dhcp_vci (v7) */
+    WEB_SDB_OPT_VCI   = 1 << 1,      /* devices.dhcp_vci (v7) */
+    WEB_SDB_OPT_INC   = 1 << 2       /* alerts.incident_first_seen (v8) */
 };
 
 int  web_slothdb_available(void);

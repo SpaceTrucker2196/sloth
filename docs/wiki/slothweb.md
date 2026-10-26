@@ -95,7 +95,7 @@ re-implements), `src/top_hosts.c` (what `conn_count` counts),
 `src/probe_pnl.c` (what `mac_random` is), issues #102, #157, #158,
 #159, #160, #161, #162, #163 and #164.
 
-**Last updated**: 2026-10-26 (the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
+**Last updated**: 2026-10-26 (#170: `/api/history/alerts` and the deauth episodes overlap a range from the latest incident's start; the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
 
 ---
 
@@ -629,7 +629,11 @@ In short:
   `/api/history/devices` (who was here: `[first_seen, last_seen]`
   overlapping the range, presence over the range and nothing past it,
   from the hour tier as well for a range older than
-  `--web-retain-days`), `/api/history/alerts`
+  `--web-retain-days`), `/api/history/alerts` (an alert row is a
+  finding since sloth's schema v8, #170: it matches a range from its
+  latest incident's start, `incident_first_seen`, not from the
+  finding's `first_seen`, so a range inside the quiet gap between two
+  incidents does not list it)
   and `/api/history/flows` (no key, detail, cookie or username;
   `mqtt_flows` not read), `/api/sessions` and `/api/sessions/new`:
   `--report`'s new APs, devices and probe clients since the previous

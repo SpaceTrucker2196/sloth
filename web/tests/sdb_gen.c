@@ -34,7 +34,8 @@ int sdb_exec(const char *path, const char *sql) {
 static const char DROP_V8[] =
     "ALTER TABLE alerts DROP COLUMN reopens;"
     "ALTER TABLE alerts DROP COLUMN incident_id;"
-    "ALTER TABLE alerts DROP COLUMN incident_count;";
+    "ALTER TABLE alerts DROP COLUMN incident_count;"
+    "ALTER TABLE alerts DROP COLUMN incident_first_seen;";
 static const char DROP_V7[] =
     "ALTER TABLE devices DROP COLUMN cam_score;"
     "ALTER TABLE devices DROP COLUMN cam_evidence;"

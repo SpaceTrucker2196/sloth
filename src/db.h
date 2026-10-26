@@ -82,10 +82,10 @@
  * beacon_aps.downgrade_flags/akm_bits and four rogue_radius nocert_*
  * columns. v4 -> v5 (#90) adds karma_candidates.pnl_best.
  *
- * Bumped to 8 on 2026-10-26: alerts gained reopens, incident_id and
- * incident_count (#170), the row becoming one per finding rather than
- * one per incident. The v7 -> v8 step adds the three columns and
- * touches no row; the duplicates an older build wrote stay until the
+ * Bumped to 8 on 2026-10-26: alerts gained reopens, incident_id,
+ * incident_count and incident_first_seen (#170), the row becoming one
+ * per finding rather than one per incident. The v7 -> v8 step adds the
+ * four columns and touches no row; the duplicates an older build wrote stay until the
  * operator runs --db-compact-alerts on a copy. */
 #define DB_SCHEMA_VERSION 8
 
@@ -248,10 +248,15 @@ int  db_due(time_t now);
 
 /* --db-compact-alerts SRC DST (#170): write a copy of SRC to DST with
  * the alerts table folded to one row per key (min first_seen, max
- * last_seen, summed count, peak sev, reopens = rows - 1, the latest
- * row's detail), brought to this build's schema. SRC is opened
- * read-only and never written. DST, and DST-wal / -shm / -journal, must
- * not exist; a failure removes the DST it created. Offline: refused
+ * last_seen, summed count, peak sev and that peak's detail, reopens =
+ * rows - 1), brought to this build's schema. SRC is opened immutable
+ * and nothing is written beside it, not even a -shm; a non-empty
+ * SRC-wal or SRC-journal (a sensor that was killed, not stopped)
+ * refuses the command, because a copy without it would be missing
+ * rows and a swap would have SQLite replay it onto the copy. DST, and
+ * DST-wal / -shm / -journal, must not exist; a failure removes the DST
+ * it created. Run as root, DST is handed to SRC's owner, which is the
+ * account a privilege-dropped sensor opens it as. Offline: refused
  * while a --db is open. Returns 0 on success and prints the counts to
  * stdout; -1 with the reason on stderr. `out` may be NULL. */
 typedef struct {

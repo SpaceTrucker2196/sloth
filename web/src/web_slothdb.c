@@ -50,6 +50,10 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "alerts", "sev", 1, 0, 0 },        { "alerts", "title", 1, 0, 0 },
     { "alerts", "match_ip", 1, 0, 0 },   { "alerts", "count", 1, 0, 0 },
     { "alerts", "first_seen", 1, 0, 0 }, { "alerts", "last_seen", 1, 0, 0 },
+    /* #170: first_seen..last_seen of a v8 row spans every incident of
+     * the key and the gaps between them; a range read asks when the
+     * latest incident began. */
+    { "alerts", "incident_first_seen", 8, 1, 0 },
     /* M5 (#163): the WiFi view's AP table and the History view. */
     { "beacon_aps", "bssid", 1, 0, 0 },  { "beacon_aps", "ssid", 1, 0, 0 },
     { "beacon_aps", "signal_dbm", 1, 0, 0 }, { "beacon_aps", "channel", 1, 0, 0 },
@@ -598,8 +602,8 @@ static int table_cols(sqlite3 *db, const char *table, const char *const *want,
     return any;
 }
 
-/* Which tables carry every column a statement here reads, and which
- * optional devices columns the file has. */
+/* Which tables carry every (non-optional) column a statement here
+ * reads, and which optional columns the file has. */
 static int probe(web_sdb_conn_t *c) {
     static const struct { const char *t; unsigned feat; } T[] = {
         { "pnl_ssids", WEB_QF_PNL }, { "dhcp_leases", WEB_QF_DHCP },
@@ -610,7 +614,8 @@ static int probe(web_sdb_conn_t *c) {
         const char *want[32];
         int nw = 0;
         for (size_t i = 0; i < web_sdb_allow_n && nw < 31; i++)
-            if (!strcmp(web_sdb_allow[i].table, T[k].t))
+            if (!strcmp(web_sdb_allow[i].table, T[k].t) &&
+                !web_sdb_allow[i].optional)
                 want[nw++] = web_sdb_allow[i].column;
         want[nw] = NULL;
         unsigned have;
@@ -642,6 +647,10 @@ static int probe(web_sdb_conn_t *c) {
     }
     if (cls) c->opt |= WEB_SDB_OPT_CLASS;
     if (vci) c->opt |= WEB_SDB_OPT_VCI;
+    static const char *const inc[] = { "incident_first_seen", NULL };
+    if ((c->feats & WEB_QF_ALERTS) &&
+        table_cols(c->db, "alerts", inc, &have) > 0 && have == 1)
+        c->opt |= WEB_SDB_OPT_INC;
     /* probe_clients, pnl_clients and assocs are A2's: absent, its
      * statement leaves them out. */
     return 0;
@@ -1263,20 +1272,32 @@ static int items_range(web_sdb_conn_t *c, const char *sql, const char *p1,
     return rc == SQLITE_DONE ? n : -1;
 }
 
+/* The start of the latest incident on an alerts row (#170). On a v8
+ * row first_seen is the finding's, and [first_seen, last_seen] covers
+ * the quiet gaps between its incidents, so an overlap test on it
+ * reports the alert in a window it did not fire in. Earlier incidents
+ * are then out of a range read's reach - the JSONL stream is where
+ * they are - which is the honest side to err on. A v7 row's first_seen
+ * was its incident's, and stands in for the column it lacks. */
+static const char *alert_start(const web_sdb_conn_t *c) {
+    return (c->opt & WEB_SDB_OPT_INC)
+        ? "COALESCE(incident_first_seen, first_seen)" : "first_seen";
+}
+
 int web_sdb_deauth_floods(web_sdb_conn_t *c, const char *bssid,
                           long long from, long long to, int max,
                           web_sdb_item_fn fn, void *ctx) {
     if (!(c->feats & WEB_QF_ALERTS)) return 0;
-    char sql[400];
+    char sql[512];
     /* rule_deauth_flood() keys an episode "deauth:<victim>@<bssid>". The
      * key is in the WHERE only, against the canonical MAC the route
      * bound; the result columns are constants and the episode's
      * numbers. */
     snprintf(sql, sizeof(sql),
-             "SELECT '', '', type, sev, count, first_seen, last_seen FROM"
+             "SELECT '', '', type, sev, count, %s AS fs, last_seen FROM"
              " alerts WHERE type = %d AND instr(key, '@' || ?1) > 0 AND"
-             " last_seen >= ?2 AND first_seen < ?3 ORDER BY first_seen"
-             " LIMIT ?4", WEB_ALERT_DEAUTH_FLOOD);
+             " last_seen >= ?2 AND fs < ?3 ORDER BY fs"
+             " LIMIT ?4", alert_start(c), WEB_ALERT_DEAUTH_FLOOD);
     c->pred_ok = 1;
     int n = items_range(c, sql, bssid, from, to, max, fn, ctx);
     c->pred_ok = 0;
@@ -1429,11 +1450,13 @@ int web_sdb_devices_between(web_sdb_conn_t *c, long long from, long long to,
 int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
                            int max, web_sdb_item_fn fn, void *ctx) {
     if (!(c->feats & WEB_QF_ALERTS)) return 0;
-    return items_range(c, "SELECT COALESCE(title,''), COALESCE(match_ip,''),"
-                          " type, sev, count, first_seen, last_seen FROM alerts"
-                          " WHERE last_seen >= ?2 AND first_seen < ?3"
-                          " ORDER BY last_seen DESC, first_seen DESC LIMIT ?4",
-                       NULL, from, to, max, fn, ctx);
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+             "SELECT COALESCE(title,''), COALESCE(match_ip,''), type, sev,"
+             " count, %s AS fs, last_seen FROM alerts"
+             " WHERE last_seen >= ?2 AND fs < ?3"
+             " ORDER BY last_seen DESC, fs DESC LIMIT ?4", alert_start(c));
+    return items_range(c, sql, NULL, from, to, max, fn, ctx);
 }
 
 int web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,

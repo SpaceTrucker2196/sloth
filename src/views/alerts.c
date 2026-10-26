@@ -114,12 +114,29 @@ static void draw_alert_detail(const sloth_state_t *s) {
     if (localtime_r(&a->last_seen, &tm2))
         strftime(ts2, sizeof(ts2), "%Y-%m-%d %H:%M:%S", &tm2);
     else snprintf(ts2, sizeof(ts2), "?");
-    tui_dim();   TPRINT("  First seen: "); tui_normal(); TPRINT("%s\n", ts1);
+    /* first_seen is the finding's, kept across every reopen (#170), so
+     * last_seen - first_seen spans the quiet gaps between incidents
+     * too. The age and "sustained" are this incident's, from
+     * first_detected; the finding's start and its reopens are shown on
+     * their own line. 0 only in a hand-built state. */
+    time_t inc0 = a->first_detected ? a->first_detected : a->first_seen;
+    char ts0[32];
+    struct tm tm0;
+    if (localtime_r(&inc0, &tm0))
+        strftime(ts0, sizeof(ts0), "%Y-%m-%d %H:%M:%S", &tm0);
+    else snprintf(ts0, sizeof(ts0), "?");
+    tui_dim();   TPRINT("  First seen: "); tui_normal(); TPRINT("%s", ts1);
+    if (a->reopen_count) {
+        tui_dim(); TPRINT("  (reopened %u time%s)", (unsigned)a->reopen_count,
+                          a->reopen_count == 1 ? "" : "s");
+    }
+    TPRINT("\n");
+    tui_dim();   TPRINT("  Incident:   "); tui_normal(); TPRINT("%s\n", ts0);
     tui_dim();   TPRINT("  Last seen:  "); tui_normal(); TPRINT("%s\n", ts2);
 
     time_t now  = sloth_wall();
-    long age_s  = (long)(now - a->first_seen);
-    long span_s = (long)(a->last_seen - a->first_seen);
+    long age_s  = (long)(now - inc0);
+    long span_s = (long)(a->last_seen - inc0);
     tui_dim();   TPRINT("  Age:        "); tui_normal();
     TPRINT("%lds (sustained over %lds)\n", age_s, span_s);
 

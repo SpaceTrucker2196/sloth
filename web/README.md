@@ -1625,7 +1625,10 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   `presence_cells` across the strip. A row opens the drawer.
 - **Alerts, anomalies and flows in the range**: `/api/history/alerts`
   (title, the IP it names, type, severity, count, first and last seen;
-  never the key or the detail), the anomaly episodes slothweb still
+  never the key or the detail). On a v8 sloth.db a row is a finding
+  that may span several incidents, and `first_seen` here is the latest
+  incident's start, so a range inside the gap between two incidents
+  does not list it, the anomaly episodes slothweb still
   holds (`/api/anomalies?since=from`, those begun by `to`; episodes are
   kept a week), and `/api/history/flows` (`ssh_flows`, `rdp_flows`,
   `smb_sessions`, `snmp_flows`: protocol, src, dst, the count each keeps,

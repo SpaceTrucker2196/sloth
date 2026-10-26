@@ -5179,3 +5179,14 @@ report events.
   every reopen. The v7 → v8 step only adds the three columns; the
   owner's 867,748 rows for 7,598 keys are folded by the opt-in offline
   `--db-compact-alerts SRC DST`, which never writes SRC.
+- 2026-10-26 — [[sqlite-schema]]: #170's review. `alerts` gains
+  `incident_first_seen` in the same v7 → v8 step (still unreleased), and
+  slothweb's History range reads and the TUI detail pane's "sustained"
+  time the latest incident from it instead of the finding's
+  `first_seen`. The live row keeps the peak `sev` and that peak's
+  detail, as the compactor does, so a LOW reopen no longer erases a
+  CRIT. `count` and `reopens` are documented as lower bounds sampled at
+  writes. `--db-compact-alerts` refuses a non-empty `SRC-wal` /
+  `-journal`, opens SRC immutable so nothing appears beside it, and run
+  as root hands DST to SRC's owner; the swap procedure checks the side
+  files and the owner.

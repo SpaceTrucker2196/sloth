@@ -149,7 +149,8 @@ static void test_open_flags(void) {
     WT_EQ(c.schema, db_schema_version());
     WT_EQ(c.feats, (unsigned)(WEB_QF_PNL | WEB_QF_DHCP | WEB_QF_MDNS | WEB_QF_NBNS |
                               WEB_QF_ALERTS | WEB_QF_ARP));
-    WT_EQ(c.opt, (unsigned)(WEB_SDB_OPT_CLASS | WEB_SDB_OPT_VCI));
+    WT_EQ(c.opt, (unsigned)(WEB_SDB_OPT_CLASS | WEB_SDB_OPT_VCI |
+                              WEB_SDB_OPT_INC));
     web_slothdb_close(&c);
     web_slothdb_destroy(&S);
     rm_db(p);

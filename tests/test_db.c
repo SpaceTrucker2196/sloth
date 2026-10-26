@@ -972,6 +972,56 @@ static void test_alert_reopen_continues_the_row(void) {
     unlink(db_path);
 }
 
+/* A key's incidents can differ in severity (rule_qevict CRIT/LOW,
+ * karma WARN/CRIT), and since #170 they share a row. A CRIT incident
+ * reopened at LOW keeps the CRIT and the evidence that made it one -
+ * latest-wins left a single row reading LOW, and the CRIT in no row of
+ * the file - while the reopen still moves the incident's own start,
+ * which is what a "was it firing at t" read uses (first_seen spans the
+ * gap). A later write at the peak takes its new detail. Seen red with
+ * ST_ALERT's sev and detail back to excluded.sev / excluded.detail
+ * (sev 0, detail "benign"), and with ?13 bound to a->first_seen
+ * (incident_first_seen 1700000000). */
+static void test_alert_reopen_keeps_peak_sev(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alert_t *a = &s.alerts[s.alert_count++];
+    memset(a, 0, sizeof(*a));
+    snprintf(a->key, sizeof(a->key), "qevict:aa:bb:cc:dd:ee:ff");
+    snprintf(a->incident_id, sizeof(a->incident_id), "00000000000000aa");
+    snprintf(a->detail, sizeof(a->detail), "crit evidence");
+    a->type = ALERT_TYPE_PORT_SCAN;
+    a->sev  = ALERT_SEV_CRIT;
+    a->count = 2;
+    a->first_seen = a->first_detected = 1700000000;
+    a->last_seen  = 1700000010;
+    db_tick(&s, 1700000010);
+
+    snprintf(a->incident_id, sizeof(a->incident_id), "00000000000000bb");
+    snprintf(a->detail, sizeof(a->detail), "benign");
+    a->sev = ALERT_SEV_LOW;
+    a->count = 1;
+    a->first_detected = 1700009000;           /* first_seen kept */
+    a->last_seen      = 1700009010;
+    db_tick(&s, 1700009010);
+    char v[32];
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 1);
+    ASSERT_EQ(q_int("SELECT sev FROM alerts"), ALERT_SEV_CRIT);
+    q_text("SELECT detail FROM alerts", v, sizeof(v));
+    ASSERT_STR(v, "crit evidence");
+    ASSERT_EQ(q_int("SELECT first_seen FROM alerts"), 1700000000);
+    ASSERT_EQ(q_int("SELECT incident_first_seen FROM alerts"), 1700009000);
+
+    snprintf(a->detail, sizeof(a->detail), "crit again");
+    a->sev = ALERT_SEV_CRIT;
+    a->last_seen = 1700009020;
+    db_tick(&s, 1700009020);
+    q_text("SELECT detail FROM alerts", v, sizeof(v));
+    ASSERT_STR(v, "crit again");
+    db_close();
+    unlink(db_path);
+}
+
 /* Frozen clocks for the engine-driven tests below, both advanced
  * together. Sentinel epoch: nothing depends on the host's time. */
 static uint64_t g_ch_mono;
@@ -2788,7 +2838,7 @@ static void write_v7_file(const char *alerts_ddl) {
     sqlite3_close(h);
 }
 
-/* v7 -> v8 adds the three alerts columns with their defaults and
+/* v7 -> v8 adds the four alerts columns with their defaults and
  * changes no value a v7 file holds - its duplicate rows included, which
  * stay until the operator compacts a copy. The first v8 write for the
  * key then continues its newest row as a reopen. Seen to fail with the
@@ -2809,13 +2859,16 @@ static void test_v7_file_migrates_additively(void) {
     q_text("SELECT detail FROM alerts WHERE first_seen=1600000011", v, sizeof(v));
     ASSERT_STR(v, "d3");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts WHERE reopens=0"
-                    " AND incident_id IS NULL AND incident_count=0"), 4);
+                    " AND incident_id IS NULL AND incident_count=0"
+                    " AND incident_first_seen IS NULL"), 4);
     ASSERT_EQ(q_int("SELECT device_class FROM devices"), 2);
     /* Column order matches a fresh v8 file. */
     ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('alerts')"
                     " WHERE name='reopens'"), 11);
     ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('alerts')"
                     " WHERE name='incident_count'"), 13);
+    ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('alerts')"
+                    " WHERE name='incident_first_seen'"), 14);
 
     sloth_state_t s; memset(&s, 0, sizeof(s));
     alert_t *a = &s.alerts[s.alert_count++];
@@ -2833,6 +2886,8 @@ static void test_v7_file_migrates_additively(void) {
     ASSERT_EQ(q_int("SELECT count FROM alerts WHERE first_seen=1600000011"), 12);
     ASSERT_EQ(q_int("SELECT last_seen FROM alerts WHERE first_seen=1600000011"),
               1700000001);
+    ASSERT_EQ(q_int("SELECT incident_first_seen FROM alerts"
+                    " WHERE first_seen=1600000011"), 1700000000);
     /* The older duplicates are recorded values, and stay as they were. */
     ASSERT_EQ(q_int("SELECT count FROM alerts WHERE first_seen=1600000000"), 5);
     ASSERT_EQ(q_int("SELECT last_seen FROM alerts WHERE first_seen=1600000006"),
@@ -2843,19 +2898,20 @@ static void test_v7_file_migrates_additively(void) {
     unlink(db_path);
 }
 
-/* A v7 file on which the last v7 -> v8 ALTER fails (incident_count
- * already there) keeps v7, its rows, and neither column the earlier
+/* A v7 file on which the last v7 -> v8 ALTER fails (incident_first_seen
+ * already there) keeps v7, its rows, and none of the columns the earlier
  * statements of the step added. Seen to fail with migrate_step()'s
  * BEGIN IMMEDIATE dropped (reopens survives the failed step). */
 static void test_v7_migration_failure_leaves_file_unchanged(void) {
-    write_v7_file(V7_ALERTS_DDL(", incident_count INTEGER"));
+    write_v7_file(V7_ALERTS_DDL(", incident_first_seen INTEGER"));
     ASSERT_EQ(db_open(db_path), 0);
     ASSERT_EQ(db_is_open(), 0);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
     ASSERT_STR(v, "7");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alerts')"
-                    " WHERE name IN ('reopens','incident_id')"), 0);
+                    " WHERE name IN ('reopens','incident_id',"
+                    "'incident_count')"), 0);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
     unlink(db_path);
@@ -2868,6 +2924,17 @@ static char g_cmp_src[64], g_cmp_dst[64];
 static void cmp_paths(void) {
     snprintf(g_cmp_src, sizeof(g_cmp_src), "%s.csrc", db_path);
     snprintf(g_cmp_dst, sizeof(g_cmp_dst), "%s.cdst", db_path);
+}
+
+static const char *g_cmp_src_wal(void) {
+    static char p[96];
+    snprintf(p, sizeof(p), "%s-wal", g_cmp_src);
+    return p;
+}
+static const char *g_cmp_src_shm(void) {
+    static char p[96];
+    snprintf(p, sizeof(p), "%s-shm", g_cmp_src);
+    return p;
 }
 
 static void cmp_unlink(const char *p) {
@@ -3004,6 +3071,99 @@ static void test_compact_alerts_900k_rows(void) {
     if (before && after && n0 == n1) ASSERT(memcmp(before, after, n0) == 0);
     free(before);
     free(after);
+    /* Nor anything beside it: SRC was closed cleanly, so it had no
+     * -wal or -shm, and it still has none. Seen red with compact_copy()
+     * opening the plain path READONLY (both created and left). */
+    ASSERT(access(g_cmp_src_wal(), F_OK) != 0);
+    ASSERT(access(g_cmp_src_shm(), F_OK) != 0);
+    cmp_unlink(g_cmp_src);
+    cmp_unlink(g_cmp_dst);
+}
+
+/* A sensor killed rather than stopped leaves its last writes in
+ * SRC-wal. Compacting the main file alone would miss them, and the
+ * swap would put the copy under that -wal, which SQLite replays onto
+ * it: a corrupt file, as reproduced on #170's review. So the command
+ * refuses, and after the checkpoint the operator is told to run, the
+ * copy swaps in and opens with every row. A non-empty rollback
+ * -journal is the same case. Seen red, one at a time, with "-wal" and
+ * then "-journal" dropped from db_compact_alerts()'s SRC_LOG[] (DST
+ * appears). */
+static void test_compact_refuses_an_uncheckpointed_src(void) {
+    db_close();
+    cmp_paths();
+    cmp_unlink(g_cmp_src);
+    cmp_unlink(g_cmp_dst);
+    write_v7_file(V7_ALERTS_DDL(""));
+    ASSERT_EQ(rename(db_path, g_cmp_src), 0);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(g_cmp_src, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_db_config(h, SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, 1,
+                                NULL), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"
+        "WITH RECURSIVE c(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM c"
+        "  WHERE n < 2999)"
+        " INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,"
+        "  detail,technique,match_ip,match_port,count)"
+        " SELECT 'k:' || (n % 50), 1700000000 + n, 1700000000 + n, 19, 1,"
+        "  'RECON', 'd', 'T1595', '10.0.0.1', 0, 1 FROM c;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);                       /* as a kill leaves it */
+    struct stat sb;
+    ASSERT_EQ(stat(g_cmp_src_wal(), &sb), 0);
+    ASSERT(sb.st_size > 0);
+    ASSERT_EQ(db_compact_alerts(g_cmp_src, g_cmp_dst, NULL), -1);
+    ASSERT(access(g_cmp_dst, F_OK) != 0);
+
+    /* The checkpoint the refusal names, then the swap. */
+    ASSERT_EQ(sqlite3_open(g_cmp_src, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h, "PRAGMA wal_checkpoint(TRUNCATE);", NULL, NULL,
+                           NULL), SQLITE_OK);
+    sqlite3_close(h);
+    db_compact_stats_t st;
+    ASSERT_EQ(db_compact_alerts(g_cmp_src, g_cmp_dst, &st), 0);
+    ASSERT_EQ(st.rows_before, 3000 + 4);    /* write_v7_file()'s four */
+    ASSERT(access(g_cmp_src_wal(), F_OK) != 0);
+    ASSERT(access(g_cmp_src_shm(), F_OK) != 0);
+    ASSERT_EQ(rename(g_cmp_dst, g_cmp_src), 0);
+    ASSERT_EQ(db_open(g_cmp_src), 1);
+    db_close();
+    ASSERT_EQ(q_int_at(g_cmp_src, "SELECT COUNT(*) FROM alerts"), 50 + 2);
+    ASSERT_EQ(q_int_at(g_cmp_src, "SELECT SUM(count) FROM alerts"),
+              3000 + 5 + 4 + 10 + 2);
+    /* recon:10.0.0.5's rows were d1 (sev 1), d2 (sev 2), d3 (sev 1):
+     * the peak's detail with it, as the live writer keeps it, and the
+     * latest row's start as the incident's. Seen red, one at a time,
+     * with COMPACT_SQL taking x.detail (d3) and with its ifs taken
+     * from g.fs (1600000000). */
+    char dv[16];
+    sqlite3 *rh = NULL;
+    ASSERT_EQ(sqlite3_open_v2(g_cmp_src, &rh, SQLITE_OPEN_READONLY, NULL),
+              SQLITE_OK);
+    sqlite3_stmt *rs = NULL;
+    ASSERT_EQ(sqlite3_prepare_v2(rh, "SELECT sev, detail, incident_first_seen"
+                                 " FROM alerts WHERE key='recon:10.0.0.5'",
+                                 -1, &rs, NULL), SQLITE_OK);
+    ASSERT_EQ(sqlite3_step(rs), SQLITE_ROW);
+    ASSERT_EQ(sqlite3_column_int(rs, 0), 2);
+    snprintf(dv, sizeof(dv), "%s", (const char *)sqlite3_column_text(rs, 1));
+    ASSERT_STR(dv, "d2");
+    ASSERT_EQ(sqlite3_column_int64(rs, 2), 1600000011);
+    sqlite3_finalize(rs);
+    sqlite3_close(rh);
+    cmp_unlink(g_cmp_src);
+
+    /* A hot rollback journal: refused the same way. */
+    write_v7_file(V7_ALERTS_DDL(""));
+    ASSERT_EQ(rename(db_path, g_cmp_src), 0);
+    char jr[96];
+    snprintf(jr, sizeof(jr), "%s-journal", g_cmp_src);
+    FILE *fp = fopen(jr, "wb");
+    ASSERT(fp != NULL);
+    if (fp) { fputs("not yet rolled back", fp); fclose(fp); }
+    ASSERT_EQ(db_compact_alerts(g_cmp_src, g_cmp_dst, NULL), -1);
+    ASSERT(access(g_cmp_dst, F_OK) != 0);
     cmp_unlink(g_cmp_src);
     cmp_unlink(g_cmp_dst);
 }
@@ -3143,7 +3303,7 @@ static void test_migration_sql_is_add_column_only(void) {
         db_schema_migrate_v5_sql(), db_schema_migrate_v6_sql(),
         db_schema_migrate_v7_sql(),
     };
-    const int want[] = { 1, 0, 7, 1, 5, 6, 3 };
+    const int want[] = { 1, 0, 7, 1, 5, 6, 4 };
     for (int i = 0; i < 7; i++) {
         const char *m = ms[i];
         int alters = 0, adds = 0, semis = 0;
@@ -3618,6 +3778,7 @@ void run_db_tests(void) {
     RUN_TEST(test_v7_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_compact_alerts_900k_rows);
     RUN_TEST(test_compact_refuses_an_existing_dst);
+    RUN_TEST(test_compact_refuses_an_uncheckpointed_src);
     RUN_TEST(test_compact_failure_leaves_no_dst);
     RUN_TEST(test_compact_is_refused_while_a_db_is_open);
     RUN_TEST(test_v5_chain_stops_at_last_whole_step);
@@ -3666,6 +3827,7 @@ void run_db_tests(void) {
     TEST_SUITE("db: event episodes");
     RUN_TEST(test_alert_episode_is_one_row);
     RUN_TEST(test_alert_reopen_continues_the_row);
+    RUN_TEST(test_alert_reopen_keeps_peak_sev);
     RUN_TEST(test_alert_evict_refire_churn_is_one_row);
     RUN_TEST(test_alert_finding_outlives_a_restart);
     RUN_TEST(test_alert_severity_tracks_latest);

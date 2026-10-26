@@ -4932,6 +4932,42 @@ static void test_view_detail_first_seen_is_not_last_seen(void) {
     ASSERT(strstr(buf, line2) != NULL);
 }
 
+/* first_seen is the finding's and survives every reopen (#170), so a
+ * span measured from it covers the quiet gaps between incidents. The
+ * detail pane times "sustained" from this incident's start
+ * (first_detected) and shows the finding's start and its reopens
+ * apart. Seen red with span_s back on a->first_seen ("sustained over
+ * 176400s"). */
+static void test_view_detail_times_the_incident_not_the_finding(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    alert_t *a = &s.alerts[0];
+    a->sev = ALERT_SEV_WARN;
+    snprintf(a->title, sizeof(a->title), "reopened");
+    a->first_seen     = (time_t)1700000000;
+    a->first_detected = a->first_seen + 2 * 86400;
+    a->last_seen      = a->first_detected + 3600;
+    a->reopen_count   = 2;
+    a->count = 3;
+    s.alert_count  = 1;
+    s.alert_sel    = 0;
+    s.alert_detail = 1;
+
+    char want[32], line[64];
+    struct tm tm;
+    ASSERT(localtime_r(&a->first_detected, &tm) != NULL);
+    strftime(want, sizeof(want), "%Y-%m-%d %H:%M:%S", &tm);
+    snprintf(line, sizeof(line), "Incident:   %s", want);
+
+    static char buf[16384];
+    tui_test_erase();
+    view_alerts_draw(&s);
+    tui_test_screen(buf, sizeof(buf));
+    ASSERT(strstr(buf, line) != NULL);
+    ASSERT(strstr(buf, "(reopened 2 times)") != NULL);
+    ASSERT(strstr(buf, "(sustained over 3600s)") != NULL);
+}
+
 static void test_view_key_nav(void) {
     alerts_clear();
     sloth_state_t s; seed_state(&s);
@@ -10718,6 +10754,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_view_draw_empty);
     RUN_TEST(test_view_draw_populated);
     RUN_TEST(test_view_detail_first_seen_is_not_last_seen);
+    RUN_TEST(test_view_detail_times_the_incident_not_the_finding);
     RUN_TEST(test_view_key_nav);
     RUN_TEST(test_view_key_clear);
 

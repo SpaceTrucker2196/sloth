@@ -564,6 +564,36 @@ static void test_sessions(void) {
     WT_EQ(route(&H, "/api/sessions", "x=1"), 400);
 }
 
+/* A v8 alerts row is a finding (#170): first_seen..last_seen runs from
+ * the key's first incident to its latest, quiet gaps included. A range
+ * that falls in the gap is not a window the alert fired in, and the
+ * range read answers from the latest incident's start. Seen red with
+ * alert_start() returning plain first_seen (the gap window lists the
+ * finding, and the hit's first_seen is the finding's). */
+static void test_alert_finding_gap_is_not_a_hit(void) {
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,"
+        "technique,match_ip,match_port,count,reopens,incident_first_seen)"
+        " VALUES ('gap:10.0.0.42',%lld,%lld,0,1,'GAP_FINDING','x','T1046',"
+        "'10.0.0.42',NULL,9,1,%lld);",
+        T - 25 * DY, T - 12 * DY + 60, T - 12 * DY);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    char q[160];
+    snprintf(q, sizeof(q), "from=%lld&to=%lld", T - 20 * DY, T - 19 * DY);
+    WT_EQ(route(&H, "/api/history/alerts", q), 200);
+    WT_LACKS(body_of(g_out), "GAP_FINDING");
+    snprintf(q, sizeof(q), "from=%lld&to=%lld", T - 12 * DY - 10,
+             T - 12 * DY + 100);
+    WT_EQ(route(&H, "/api/history/alerts", q), 200);
+    char want[192];
+    snprintf(want, sizeof(want), "{\"title\":\"GAP_FINDING\",\"ip\":\"10.0.0.42\","
+             "\"type\":0,\"sev\":1,\"count\":9,\"first_seen\":%lld,"
+             "\"last_seen\":%lld}", T - 12 * DY, T - 12 * DY + 60);
+    WT_HAS(body_of(g_out), want);
+    WT_EQ(sdb_exec(g_db, "DELETE FROM alerts WHERE key='gap:10.0.0.42';"), 0);
+}
+
 void run_history_tests(void) {
     WT_RUN(test_without_sloth_db);
     WT_RUN(test_page_carries_the_history_view);
@@ -573,6 +603,7 @@ void run_history_tests(void) {
     WT_RUN(test_presence_inside_the_range);
     WT_RUN(test_presence_from_the_hour_tier);
     WT_RUN(test_alerts_and_flows);
+    WT_RUN(test_alert_finding_gap_is_not_a_hit);
     WT_RUN(test_new_since);
     WT_RUN(test_sessions);
     down();
