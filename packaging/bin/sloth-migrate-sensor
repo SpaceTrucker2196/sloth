@@ -24,14 +24,19 @@
 #   4. unit: back up the current unit and /etc/default/sloth, install the
 #      hardened unit and a defaults file carrying the site's flags, start.
 #   5. verify: active, CapEff only CAP_NET_ADMIN (with --hop; 0 without),
-#      NoNewPrivs 1, a sensor_health record on the data socket with
-#      chan_retune_failures 0, and the same MainPID afterwards (no restart).
+#      NoNewPrivs 1, sensor_health records on the data socket over a
+#      window covering a full hop rotation, every one with
+#      chan_retune_failures 0 and at least one with a confirmed channel,
+#      and the same MainPID afterwards (no restart).
 #
 # Any failure after the service is stopped rolls back: the previous unit and
 # defaults file are restored, the copy is renamed aside (never deleted —
 # the sensor may have written to it), and the old service is started again
-# on its old data path. The old data is never touched, in either outcome;
-# delete it by hand once you are satisfied.
+# on its old data path and must stay up past its restart delay. HUP, INT
+# and TERM roll back too, so a dropped SSH session cannot leave the
+# hardened unit half-verified; run it inside tmux or screen anyway. The
+# old data is never touched, in either outcome; delete it by hand once you
+# are satisfied.
 #
 # Every path and command is an environment variable so tests/deploy/ can
 # run this unprivileged against a scratch root with stub commands. Exit
@@ -84,6 +89,16 @@ SLEEP=${SLEEP:-sleep}
 # a full heartbeat besides.
 VERIFY_SECS=${VERIFY_SECS:-60}
 HEALTH_SECS=${HEALTH_SECS:-330}
+# The first sensor_health is emitted when the reader connects (the client
+# count is in its signature), usually before any retune has been tried,
+# so it proves nothing about CAP_NET_ADMIN. Reading on for one rotation
+# (~40 channels at the 2 s maximum dwell, src/wifi_chanhop.c) does: the
+# first failure and the first confirmed channel each emit a record of
+# their own (retune_fail_any, chan_ever_confirmed in src/jsonl.c).
+SETTLE_SECS=${SETTLE_SECS:-90}
+# After a rollback the old unit must stay up past its restart delay
+# (RestartSec=10 in the hardened unit) before it is reported running.
+ROLLBACK_SETTLE_SECS=${ROLLBACK_SETTLE_SECS:-15}
 # Free-space headroom on top of the copy itself (KiB). AVAIL_KB overrides
 # the df probe, for tests.
 HEADROOM_KB=${HEADROOM_KB:-65536}
@@ -269,22 +284,57 @@ READER_PID=""
 start_health_reader() {
     HEALTH_FILE=$(mktemp "${TMPDIR:-/tmp}/$ME.health.XXXXXX")
     (
-        end=$(($(date +%s) + HEALTH_SECS))
-        while now=$(date +%s) && [ "$now" -lt "$end" ]; do
-            [ -e "$SOCK" ] &&
-                "$TIMEOUT" $((end - now)) "$SOCAT" -u "UNIX-CONNECT:$SOCK" STDOUT
-            "$SLEEP" 1
+        # Each child is backgrounded and waited for, so the TERM from
+        # stop_health_reader is handled at once and takes the current
+        # child with it. Killing the children from outside instead races
+        # the loop, which can start the next socat before its own kill
+        # lands and leave that one orphaned. A TERM between a fork and
+        # the `child=$!` after it finds the old pid; `stop` catches that.
+        child="" stop=0
+        trap 'stop=1; [ -z "$child" ] || kill "$child" 2>/dev/null' TERM
+        # Outlives every wait verify() can make, so the settle window is
+        # still being read at its end.
+        end=$(($(date +%s) + 2 * VERIFY_SECS + HEALTH_SECS + SETTLE_SECS + 5))
+        reap() { child=$!; [ "$stop" -eq 0 ] || kill "$child" 2>/dev/null; wait "$child"; }
+        while [ "$stop" -eq 0 ] && now=$(date +%s) && [ "$now" -lt "$end" ]; do
+            if [ -e "$SOCK" ]; then
+                "$TIMEOUT" $((end - now)) "$SOCAT" -u "UNIX-CONNECT:$SOCK" STDOUT &
+                reap
+            fi
+            [ "$stop" -eq 0 ] || break
+            "$SLEEP" 1 &
+            reap
         done
     ) >"$HEALTH_FILE" 2>/dev/null &
     READER_PID=$!
 }
 stop_health_reader() {
-    [ -n "$READER_PID" ] && pkill -P "$READER_PID" 2>/dev/null
     [ -n "$READER_PID" ] && kill "$READER_PID" 2>/dev/null
     [ -n "$READER_PID" ] && wait "$READER_PID" 2>/dev/null
     READER_PID=""
     [ -n "$HEALTH_FILE" ] && rm -f "$HEALTH_FILE"
     HEALTH_FILE=""
+}
+
+# Sets H_N (sensor_health records so far), H_BAD (the first non-zero or
+# absent chan_retune_failures, '-' if none) and H_CONF (1 if any record
+# has chan_confirmed > 0). A line not yet ending in '}' is one the reader
+# is still writing and is left for the next scan.
+health_scan() {
+    # shellcheck disable=SC2046  # three whitespace-free fields, intended
+    set -- $(awk '
+        /"type":"sensor_health"/ && /}[ \t\r]*$/ {
+            n++
+            rf = "absent"
+            if (match($0, /"chan_retune_failures":-?[0-9]+/))
+                rf = substr($0, RSTART + 23, RLENGTH - 23)
+            if (rf != "0" && bad == "") bad = rf
+            if (match($0, /"chan_confirmed":[0-9]+/) &&
+                substr($0, RSTART + 17, RLENGTH - 17) + 0 > 0) conf = 1
+        }
+        END { print n + 0, (bad == "" ? "-" : bad), conf + 0 }
+    ' "$HEALTH_FILE" 2>/dev/null)
+    H_N=${1:-0} H_BAD=${2:--} H_CONF=${3:-0}
 }
 
 VERIFY_ERR=""
@@ -319,8 +369,8 @@ verify() {
 
     i=0
     while :; do
-        line=$(grep -m1 '"type":"sensor_health"' "$HEALTH_FILE" 2>/dev/null)
-        [ -n "$line" ] && break
+        health_scan
+        [ "$H_N" -gt 0 ] && break
         i=$((i + 1))
         if [ "$i" -gt "$HEALTH_SECS" ]; then
             VERIFY_ERR="no sensor_health record on $SOCK within ${HEALTH_SECS}s"
@@ -328,12 +378,23 @@ verify() {
         fi
         "$SLEEP" 1
     done
-    rf=$(printf '%s\n' "$line" | sed -n 's/.*"chan_retune_failures":\([0-9-]*\).*/\1/p')
-    if [ "$rf" != 0 ]; then
-        VERIFY_ERR="sensor_health chan_retune_failures is '${rf:-absent}' (want 0)"
+    # Every record in the window must hold 0, not just the first; a
+    # failure ends the wait early.
+    i=0
+    while [ "$i" -lt "$SETTLE_SECS" ] && [ "$H_BAD" = - ]; do
+        "$SLEEP" 1
+        i=$((i + 1))
+        health_scan
+    done
+    if [ "$H_BAD" != - ]; then
+        VERIFY_ERR="sensor_health chan_retune_failures is '$H_BAD' (want 0 in every record; $H_N seen)"
         return 1
     fi
-    say "verify: sensor_health arrived, chan_retune_failures 0"
+    if [ "$WANT_HOP" -eq 1 ] && [ "$H_CONF" -eq 0 ]; then
+        VERIFY_ERR="no sensor_health in ${SETTLE_SECS}s showed a confirmed channel (chan_confirmed 0 in all $H_N): the hop never retuned"
+        return 1
+    fi
+    say "verify: $H_N sensor_health records over ${SETTLE_SECS}s, chan_retune_failures 0 in every one"
 
     pid2=$("$SYSTEMCTL" show -p MainPID --value "$UNIT_NAME")
     if ! is_active || [ "$pid2" != "$pid" ]; then
@@ -352,8 +413,26 @@ done
 [ -f "$UNIT" ] || refuse "no unit at $UNIT"
 
 # Already migrated? The installed unit is byte-identical to the rendered
-# template: re-verify, change nothing.
+# template: re-verify, change nothing. A matching unit says nothing about
+# the data, though: `make install-service` or a hand copy places the same
+# bytes, and the sensor then starts on an empty /var/lib/sloth and passes
+# verify with a fresh db. So a migration also needs its record — a
+# $UNIT.bak-migrate-* backup, which a rollback renames away — and the
+# copied db in place.
 if render_unit | cmp -s - "$UNIT"; then
+    bak=""
+    for b in "$UNIT".bak-migrate-*; do [ -f "$b" ] && bak=$b; done
+    if [ -z "$bak" ]; then
+        refuse "$UNIT is the hardened unit, but there is no $UNIT.bak-migrate-* backup: it was placed by 'make install-service' or by hand, not by this tool, so the data was never copied to $TARGET_HOST. Put the build-tree unit back and rerun, or copy the data by hand (docs/wiki/deployment.md §4.1)"
+    fi
+    if [ -d "$TARGET" ] && [ ! -x "$TARGET" ]; then
+        refuse "cannot look inside $TARGET (0700 sloth); run as root"
+    fi
+    if [ ! -f "$TARGET/sloth.db" ]; then
+        old_db=$(unit_key "$bak" ExecStart | sed -n 's/.*--db[ \t][ \t]*\([^ \t]*\).*/\1/p' | head -n 1)
+        old_wd=$(unit_key "$bak" WorkingDirectory | tail -n 1)
+        refuse "$UNIT is the hardened unit, but $TARGET_HOST/sloth.db does not exist: the data was never copied. The unit it replaced ($bak) used --db ${old_db:-?}${old_wd:+ (WorkingDirectory $old_wd)}"
+    fi
     say "$UNIT is already the hardened unit; verifying only"
     if [ "$DRY" -eq 1 ]; then
         echo "[dry-run] would: verify $UNIT_NAME (CapEff, NoNewPrivs, sensor_health)"
@@ -401,6 +480,16 @@ case "$TARGET/" in "$SRC"/*) refuse "target $TARGET is inside the source $SRC" ;
 case "$SRC/" in "$TARGET"/*) refuse "source $SRC is inside the target $TARGET" ;; esac
 odd=$(find "$SRC" ! -type f ! -type d | head -n 1)
 [ -z "$odd" ] || refuse "$odd is not a regular file or directory; db.c refuses symlinks, so the copy will not carry one"
+# install -d, cp and chmod would all write through a link into whatever it
+# names, and only the final mode check would notice, after the downtime.
+for t in "$TARGET" "$(dirname "$TARGET")"; do
+    [ -L "$t" ] && refuse "$t is a symlink; the copy would land in what it points to. Replace it with a real directory first"
+done
+# secure_file.c refuses any file or private dir with group/other bits, and
+# cp -p carries them over, so the copy is chmod go-rwx; the source keeps
+# its modes. Said here so the dry run shows it.
+loose=$(find "$SRC" -perm /077 | grep -c .)
+[ "$loose" -eq 0 ] || say "note: $loose entries under $SRC_DATA have group/other bits; the copy drops them (chmod -R go-rwx), the source is left as is"
 if [ -e "$TARGET" ] && ! dir_empty "$TARGET"; then
     refuse "$TARGET already has contents; a previous attempt? Move it aside after checking it"
 fi
@@ -451,13 +540,24 @@ if [ "$DRY" -eq 0 ] && ! "$GETENT" passwd sloth >/dev/null 2>&1; then
 fi
 
 rollback() {
+    # Runs once: a second HUP (the rest of a dropped session) or a ^C
+    # must not cut the rollback itself short.
+    trap '' HUP INT TERM PIPE
     echo "$ME: FAILED: $1" >&2
     echo "$ME: rolling back to the previous unit and data path" >&2
     stop_health_reader
     "$SYSTEMCTL" stop "$UNIT_NAME" 2>/dev/null
     rc=0
+    restored=0
     if [ -f "$UNIT_BAK" ]; then
-        cp -p "$UNIT_BAK" "$UNIT" || rc=1
+        # Renamed once restored, so a leftover .bak-migrate-* always
+        # means a migration that stood (the already-migrated check).
+        if cp -p "$UNIT_BAK" "$UNIT"; then
+            restored=1
+            mv "$UNIT_BAK" "$UNIT.rolled-back-$STAMP" && UNIT_BAK=$UNIT.rolled-back-$STAMP
+        else
+            rc=1
+        fi
     fi
     if [ "$had_defaults" -eq 1 ]; then
         [ -f "$DEFAULTS_BAK" ] && { cp -p "$DEFAULTS_BAK" "$DEFAULTS" || rc=1; }
@@ -475,12 +575,27 @@ rollback() {
     if [ "$target_made" -eq 1 ] && [ -e "$TARGET" ]; then
         mv "$TARGET" "$ASIDE" && echo "$ME: the copy is at $ASIDE" >&2
     fi
+    # Active straight after start proves little with Restart=always: a
+    # unit that dies on startup reads active between attempts. It has to
+    # still be active, on the same MainPID, past the restart delay.
     if [ "$was_active" -eq 1 ]; then
-        "$SYSTEMCTL" start "$UNIT_NAME" || rc=1
-        is_active || rc=1
+        if "$SYSTEMCTL" start "$UNIT_NAME"; then
+            p1=$("$SYSTEMCTL" show -p MainPID --value "$UNIT_NAME")
+            "$SLEEP" "$ROLLBACK_SETTLE_SECS"
+            p2=$("$SYSTEMCTL" show -p MainPID --value "$UNIT_NAME")
+            case "$p1" in ''|0|*[!0-9]*) p1=none ;; esac
+            if ! is_active || [ "$p1" = none ] || [ "$p2" != "$p1" ]; then
+                echo "$ME: the previous unit did not stay up for ${ROLLBACK_SETTLE_SECS}s (MainPID $p1 -> ${p2:-none}); journalctl -u $UNIT_NAME" >&2
+                rc=1
+            fi
+        else
+            rc=1
+        fi
     fi
     if [ "$rc" -eq 0 ]; then
         echo "$ME: rolled back; $UNIT_NAME runs the previous unit on $SRC_DATA" >&2
+    elif [ "$restored" -eq 1 ]; then
+        echo "$ME: ROLLBACK INCOMPLETE — the previous unit is back at $UNIT (a copy is at $UNIT_BAK), but $UNIT_NAME is not running on it; see journalctl -u $UNIT_NAME and docs/wiki/deployment.md §4" >&2
     else
         echo "$ME: ROLLBACK INCOMPLETE — the previous unit is at $UNIT_BAK; restore it by hand" >&2
     fi
@@ -494,6 +609,11 @@ if [ "$had_defaults" -eq 1 ]; then
     act "back up $DEFAULTS to $DEFAULTS_BAK" cp -p "$DEFAULTS" "$DEFAULTS_BAK" \
         || { echo "$ME: could not back up $DEFAULTS; the service was not touched" >&2; exit 1; }
 fi
+# From here a signal rolls back like any other failure. Set before the
+# stop, not after: a HUP during the stop is acted on once it returns,
+# where without the trap it would leave the sensor stopped. Not in a dry
+# run, which has nothing to undo.
+[ "$DRY" -eq 1 ] || trap 'rollback "interrupted by signal"' HUP INT TERM
 act "$SYSTEMCTL stop $UNIT_NAME" "$SYSTEMCTL" stop "$UNIT_NAME" \
     || rollback "systemctl stop failed"
 
@@ -505,6 +625,8 @@ act "copy $SRC/. to $TARGET/ (cp -pR; the source is not moved)" \
     "$CP" -pR "$SRC/." "$TARGET/" || rollback "copy failed"
 act "chown -R sloth:sloth $TARGET" \
     "$CHOWN" -R sloth:sloth "$TARGET" || rollback "chown failed"
+act "chmod -R go-rwx $TARGET (secure_file.c refuses group/other bits)" \
+    chmod -R go-rwx "$TARGET" || rollback "chmod -R go-rwx failed"
 act "chmod 0700 $TARGET" chmod 700 "$TARGET" || rollback "chmod failed"
 
 if [ "$DRY" -eq 1 ]; then
@@ -540,8 +662,8 @@ act "$SYSTEMCTL reenable $UNIT_NAME" "$SYSTEMCTL" reenable "$UNIT_NAME" \
 # ── Step 5: start and verify ─────────────────────────────────────────────
 if [ "$DRY" -eq 1 ]; then
     echo "[dry-run] would: $SYSTEMCTL start $UNIT_NAME"
-    echo "[dry-run] would: verify active, CapEff $([ "$WANT_HOP" -eq 1 ] && echo 0000000000001000 || echo 0000000000000000), NoNewPrivs 1, sensor_health on $SOCK with chan_retune_failures 0"
-    echo "[dry-run] would: on any failure, restore $UNIT_BAK, rename $TARGET aside and restart the old unit"
+    echo "[dry-run] would: verify active, CapEff $([ "$WANT_HOP" -eq 1 ] && echo 0000000000001000 || echo 0000000000000000), NoNewPrivs 1, sensor_health on $SOCK for ${SETTLE_SECS}s with chan_retune_failures 0 in every record and a confirmed channel"
+    echo "[dry-run] would: on any failure or HUP/INT/TERM, restore $UNIT_BAK, rename $TARGET aside, restart the old unit and require it up for ${ROLLBACK_SETTLE_SECS}s"
     say "dry run complete; nothing was changed"
     exit 0
 fi
@@ -549,6 +671,7 @@ fi
 start_health_reader
 "$SYSTEMCTL" start "$UNIT_NAME" || rollback "systemctl start failed"
 verify || rollback "verify: $VERIFY_ERR"
+trap - HUP INT TERM
 stop_health_reader
 
 say "migrated: $UNIT_NAME runs as sloth from $TARGET_HOST"

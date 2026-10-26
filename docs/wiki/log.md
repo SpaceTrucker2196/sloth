@@ -5029,3 +5029,55 @@ report events.
   exits only the subshell (the `..` refusal changes nothing). The
   socket reader's reconnect (a stale socket refuses the first connect)
   was seen red with the retry removed.
+- 2026-10-23 — [[deployment]] §4/§4.1: review fixes to
+  `packaging/bin/sloth-migrate-sensor` (#153). A HUP, INT or TERM from
+  just before the stop onwards now rolls back (trap set before the stop,
+  further signals ignored while the rollback runs; the doc says to run
+  it in tmux or screen). Verify reads `sensor_health` for `SETTLE_SECS`
+  (90) after the first record, which a reader's connect emits before
+  any retune, and requires `chan_retune_failures` 0 in every record and
+  a confirmed channel; the socket reader now lives past that window,
+  and runs each child in the background under a TERM trap (with a stop
+  flag for a TERM that lands between a fork and its `child=$!`), because
+  `pkill -P` then `kill` raced its loop and could orphan a socat. The
+  fork window is reasoned, not reproduced, and no test isolates it.
+  The already-migrated path requires a `.bak-migrate-*` unit backup
+  (renamed `.rolled-back-*` by a rollback) and `/var/lib/sloth/sloth.db`,
+  and otherwise refuses, so `make install-service` first no longer reads
+  as a migration. Preflight refuses a symlinked `/var/lib/sloth` or
+  `/var/lib`; the copy is `chmod -R go-rwx` because `secure_file.c`
+  refuses group/other bits; a rollback is reported done only if the old
+  unit stays up on one MainPID past `ROLLBACK_SETTLE_SECS` (15), else
+  `ROLLBACK INCOMPLETE` (the `/run/sloth` case is in the doc). §4.1
+  rewritten: unit backup first, no `install-service`, `cp -pR` of the
+  whole data dir, `go-rwx`, a sha256 diff before the switch, old data
+  left in place. Test harness: the refusal message check evaluated
+  `check()`'s own `$2`, which embeds the whole output, so it always
+  matched (`grep -F` takes each line as a pattern); it now checks the
+  expected fragment. Fixture modes are 0600/0700; ROOT is exported and
+  must lie in the scratch dir; `TOOL_SH` runs the tool under another
+  shell. Seen red under one mutation each of the tool, restored by the
+  inverse edit: the signal trap removed (exit 129, hardened unit left);
+  the rollback's signal ignore removed (rollback ran twice on a second
+  HUP); the settle loop disabled, and separately the reader deadline put
+  back to `HEALTH_SECS` (a 0-then-5 stream passed); the confirmed-channel
+  check disabled; the CapEff/NoNewPrivs comparison replaced by `break`;
+  the MainPID check replaced by `if false`; the `until is_active` wait
+  replaced by `until true`; the one-ExecStart refusal, the not-sloth
+  refusal and the odd-file refusal disabled; rollback's `rm -f` of a
+  defaults file it wrote removed; rollback's `reenable` removed; the
+  backup check and the copied-db check of the already-migrated path
+  disabled; the backup rename removed; the symlink refusal disabled;
+  the `chmod -R go-rwx` disabled; the rollback stability check replaced
+  by `if false`; the rollback's `stop_health_reader` removed, and
+  separately the reader's TERM trap removed (each time the held-open
+  socat outlived the tool). `make deploy-test` 197 passed, 0 failed, also with
+  `TOOL_SH="busybox sh"` and `"bash --posix"`. Three runs, each the
+  first after a mutation batch, failed the reader-outlived check; the
+  last one named the process, a reader the `stop_health_reader`
+  mutation had left alive for its 70 s deadline, matched by name. The
+  check now finds processes by an open file under the case's own
+  scratch dir, and the held-open stub `exec`s its sleep so no orphan of
+  the stub itself holds one. shellcheck is not
+  installed here and has still not run; CI does not run `make
+  deploy-test`.

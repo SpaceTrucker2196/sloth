@@ -19,7 +19,7 @@ switches the unit, verifies the result and rolls back on failure.
 `tests/test_unit_file.c`, `tests/deploy/test_migrate_sensor.sh`,
 `src/secure_file.c`, `src/data_socket.c`, `src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2.
 
-**Last updated**: 2026-10-23 (#153)
+**Last updated**: 2026-10-23 (#153, review fixes)
 
 ---
 
@@ -295,12 +295,16 @@ For a sensor still running the hand-written unit (root, out of a
 checkout, state under `data/`), `packaging/bin/sloth-migrate-sensor`
 (#153) does the whole move and can undo it. The owner runs it, as root,
 on the sensor host; nothing in the repo runs it, and its downtime is the
-owner's to schedule. Dry run first, always:
+owner's to schedule. Dry run first, always, and inside `tmux` or
+`screen`: verification can take seven minutes, and although a HUP, INT
+or TERM after the stop rolls back rather than leaving the hardened unit
+half-checked, a session that survives is still better than a rollback.
 
 ```sh
 cd /path/to/checkout
 make                                                # as yourself
 sudo make install                                   # binary, helper, research.db
+tmux new -s migrate                                 # or screen
 sudo packaging/bin/sloth-migrate-sensor --dry-run   # prints every action, changes nothing
 sudo packaging/bin/sloth-migrate-sensor             # does them, verifies, or rolls back
 journalctl -u sloth-sensor -f
@@ -313,7 +317,16 @@ sysusers fragment and `/etc/default/sloth` itself. Run against a unit
 that is already the hardened one (byte-identical to
 `packaging/systemd/sloth-sensor.service` after the `PREFIX`
 substitution), it only re-verifies — so a second run is safe and is
-how to re-check a migrated host.
+how to re-check a migrated host. A matching unit is not proof the data
+moved, though (`install-service` places the same bytes, and the sensor
+then starts on an empty `/var/lib/sloth` and verifies fine with a fresh
+db), so the re-verify also needs a
+`sloth-sensor.service.bak-migrate-<stamp>` backup (a rollback renames
+its backup to `.rolled-back-<stamp>`, so a remaining `.bak-migrate-`
+means a migration that stood) and `/var/lib/sloth/sloth.db`. Without
+both it refuses, exit 2, and says the data was never copied, naming
+the old `--db` from the backup when there is one. If `install-service`
+already ran, put the build-tree unit back and rerun, or follow §4.1.
 
 What it does, in order:
 
@@ -323,36 +336,68 @@ What it does, in order:
    the source data dir, derived from `--db` (override `SRC_DATA=`), holds
    only regular files and directories (`db.c` refuses symlinks); no
    drop-ins under `sloth-sensor.service.d/`; `/var/lib/sloth` absent or
-   empty; free space for the copy plus 10 % and 64 MiB.
+   empty, and neither it nor `/var/lib` a symlink (the copy would land
+   in whatever it names); free space for the copy plus 10 % and 64 MiB.
+   Entries with group/other bits are listed as a note: the copy drops
+   them (below), the source keeps them.
 2. **Account**: installs `/usr/lib/sysusers.d/sloth.conf` and runs
    `systemd-sysusers` before anything is stopped.
 3. **Data**: backs up the unit (and `/etc/default/sloth`, if present) as
    `*.bak-migrate-<stamp>`, stops the service, **copies** (`cp -pR`,
    never `mv`) the data dir into `/var/lib/sloth`, `chown -R
-   sloth:sloth`, `chmod 0700`, and compares every file's SHA-256 and the
-   directory list against the source. A mismatch rolls back before the
-   unit is touched.
+   sloth:sloth`, `chmod -R go-rwx`, `chmod 0700`, and compares every
+   file's SHA-256 and the directory list against the source. A mismatch
+   rolls back before the unit is touched. The `go-rwx` is not tidiness:
+   `cp -p` carries the source modes, and `src/secure_file.c` refuses any
+   file or private directory with group/other bits, so a 0644 report or
+   a 0755 `pcap/` would stop the hardened sensor from starting.
 4. **Unit**: writes `/etc/default/sloth` from `packaging/default/sloth`
    with the carried `SLOTH_ARGS`, installs the hardened unit,
    `daemon-reload`, `reenable` (so the device `WantedBy=` link exists),
    and starts it.
 5. **Verify**: the service is active; `/proc/<MainPID>/status` shows
    `CapEff: 0000000000001000` (CAP_NET_ADMIN only, because the unit has
-   `--hop`; 0 without) and `NoNewPrivs: 1`; a `sensor_health` record
-   arrives on `unix:/run/sloth/sloth.sock` with `chan_retune_failures`
-   0; and the MainPID is unchanged at the end, so it did not
-   restart-loop. The socket reader starts before the service does,
-   because `sensor_health` is change-only with a 300 s heartbeat, and
-   reconnects until its deadline, because a stale socket left by the
-   old unit refuses the first connect; the budget (`HEALTH_SECS`,
+   `--hop`; 0 without) and `NoNewPrivs: 1`; `sensor_health` records on
+   `unix:/run/sloth/sloth.sock` over a further `SETTLE_SECS` (default
+   90) all have `chan_retune_failures` 0, and at least one has a
+   non-zero `chan_confirmed`; and the MainPID is unchanged at the end,
+   so it did not restart-loop. One record is not enough: connecting
+   changes `socket_clients`, which is in the record's signature
+   (`src/jsonl.c`), so the first record is emitted the moment the
+   reader connects, usually before any retune has been tried, and the
+   failure this migration risks (no CAP_NET_ADMIN, every retune EPERM)
+   shows only later. The window covers one hop rotation (about 40
+   channels at the 2 s maximum dwell, `src/wifi_chanhop.c`), and the
+   first failure and the first confirmed channel each emit a record of
+   their own (`retune_fail_any` and `chan_ever_confirmed` are in the
+   signature), so neither can hide between heartbeats. The socket
+   reader starts before the service does, because `sensor_health` is
+   change-only with a 300 s heartbeat, and reconnects until its
+   deadline, because a stale socket left by the old unit refuses the
+   first connect; the budget for the first record (`HEALTH_SECS`,
    default 330) covers a full heartbeat besides.
 
-**Any failure after the stop rolls back**: the previous unit and
-defaults file are restored (a defaults file that did not exist is
-removed), `daemon-reload`, the copy is renamed to
+**Any failure after the stop rolls back**, and so does a HUP, INT or
+TERM from just before the stop onwards (a dropped SSH session is the
+likely one; the trap is set before the stop so that a signal during it
+is acted on once it returns, rather than leaving the sensor stopped,
+and further signals are ignored while the rollback runs): the previous
+unit and defaults file are restored (a defaults file that did not exist
+is removed), the unit backup is renamed `.rolled-back-<stamp>`,
+`daemon-reload` and `reenable`, the copy is renamed to
 `/var/lib/sloth.rolled-back-<stamp>` (not deleted — the new sensor may
 have written to it), and the old service is started on its old data
-path. **The old data is never modified, in either outcome**; delete
+path. It is reported as rolled back only if it is still active on the
+same MainPID after `ROLLBACK_SETTLE_SECS` (default 15, past the
+hardened unit's `RestartSec=10`): with `Restart=always` a unit that
+dies on startup reads active between attempts. Otherwise the tool
+prints `ROLLBACK INCOMPLETE`. One way that happens: the hardened unit's
+`RuntimeDirectory=sloth` removes `/run/sloth` when it stops, so an old
+unit whose socket lived under `/run/sloth/` without a
+`RuntimeDirectory=` of its own cannot bind it (`src/data_socket.c`
+never creates the directory) and restart-loops; `install -d -m 0750
+/run/sloth` and a restart bring it back. **The old data is never
+modified, in either outcome**; delete
 `data/` by hand once the migrated sensor has run long enough to
 satisfy you. Exit status: 0 migrated or already migrated, 1 failed and
 rolled back, 2 refused by preflight with nothing changed.
@@ -384,58 +429,96 @@ mangling it.
 Every path and command is an environment variable (`ROOT` prefixes
 every host path; `SYSTEMCTL`, `SYSUSERS`, `GETENT`, `CHOWN`, `CP`,
 `SOCAT`, `TIMEOUT`, `PREFIX`, `SRC_DATA`, `MON_IFACE`, `VERIFY_SECS`,
-`HEALTH_SECS`), which is how `make deploy-test` runs it unprivileged:
+`HEALTH_SECS`, `SETTLE_SECS`, `ROLLBACK_SETTLE_SECS`), which is how `make deploy-test` runs it unprivileged:
 `tests/deploy/test_migrate_sensor.sh` builds a scratch root holding a
 fake build-tree unit (written by the test, never read from `/etc`), a
 data dir, a `/proc/<pid>/status`, and stub `systemctl`,
 `systemd-sysusers`, `getent`, `chown` and `socat` that log every call.
 It covers: a dry run leaves the scratch root's tree hash and the call
 log untouched; the flags above carried exactly, `--no-privdrop` and
-every `/home` path absent; a corrupted copy caught by checksum before
-the unit switches; a failed verify (`chan_retune_failures` 3) rolled
-back to the old unit, defaults and data path; a socket reader that
-reconnects after a refused first connect; a second run that only
-verifies; a rerun after a rollback; and refusals (unknown flag, `-o`,
-`tcp:` socket, quoting, a renamed `--db`, a `..` path, `--eapol-dir`,
-low space, a non-empty target, a missing `make install`, a drop-in),
-each changing nothing. Each absence check was seen to fail under a mutation of the
-tool (`docs/wiki/log.md`, #153 entry). `shellcheck` runs first when it
-is installed.
+every `/home` path absent; the copy's files 0600 and directories 0700
+even where the source had 0644/0755, with the source's modes left
+alone; a corrupted copy caught by checksum before the unit switches; a
+failed verify rolled back to the old unit, defaults and data path, the
+old unit re-enabled and its backup renamed, for each check in turn
+(`chan_retune_failures` 3; CapEff `0000000000003000`; `NoNewPrivs` 0;
+a MainPID that changes; a unit never active; a 0 record followed 2 s
+later by a 5; no confirmed channel), with no defaults file left where
+there was none; an old unit that restart-loops after a rollback
+reported as `ROLLBACK INCOMPLETE`; a HUP mid-verify, then a second HUP
+during the rollback, rolling back exactly once with the socket reader
+gone; a socket reader that reconnects after a refused first connect; a
+second run that only verifies; a rerun after a rollback; and refusals
+(unknown flag, `-o`, `tcp:` socket, quoting, a renamed `--db`, a `..`
+path, `--eapol-dir`, low space, a non-empty target, a missing `make
+install`, a drop-in, two `ExecStart=`, a non-sloth binary, a symlink in
+the data dir, a symlinked target or `/var/lib`, the hardened unit
+placed by `install-service` with no backup, a backup but no copied
+db), each changing nothing. Each absence check was seen to fail under
+a mutation of the tool (`docs/wiki/log.md`, #153 entries).
+`TOOL_SH="busybox sh"` or `"bash --posix"` runs the tool under another
+shell. `shellcheck` runs first when it is installed; CI does not run
+`make deploy-test` yet.
 
 ### 4.1 By hand
 
-The same move without the tool, for a host it refuses:
+The same move without the tool, for a host it refuses. It follows the
+same rules: back up before changing, stop before copying, **copy, never
+move**, verify the copy before switching, and leave the old data where
+it is.
 
 ```sh
 cd /path/to/checkout
+sudo make install                                    # binary, helper, research.db
+stamp=$(date +%Y%m%d-%H%M%S)
+u=/etc/systemd/system/sloth-sensor.service
+sudo cp -p "$u" "$u.bak-migrate-$stamp"              # the way back
+[ -f /etc/default/sloth ] && sudo cp -p /etc/default/sloth /etc/default/sloth.bak-migrate-$stamp
+sudo install -D -m 644 packaging/systemd/sloth.sysusers.conf /usr/lib/sysusers.d/sloth.conf
+sudo systemd-sysusers                                # creates the sloth account
 sudo systemctl stop sloth-sensor
-sudo make install install-service
-sudo systemd-sysusers                       # creates the sloth account
-sudo install -d -m0700 -o sloth -g sloth /var/lib/sloth /var/lib/sloth/pcap
-sudo mv data/sloth.db* data/snapshot.txt /var/lib/sloth/   # keep history + baseline
+sudo install -d -m 0700 /var/lib/sloth
+sudo cp -pR data/. /var/lib/sloth/                   # the whole dir: db + -wal/-shm, pcap/, report.*, snapshot, v5 backup
 sudo chown -R sloth:sloth /var/lib/sloth
-sudoedit /etc/default/sloth                 # SLOTH_IFACE, --my-ssid/--my-bssid/--site-label
+sudo chmod -R go-rwx /var/lib/sloth                  # secure_file.c refuses group/other bits
+sudo chmod 0700 /var/lib/sloth
+sudo sh -c 'cd data && find . -type f -exec sha256sum {} + | LC_ALL=C sort -k2' > /tmp/src.sums
+sudo sh -c 'cd /var/lib/sloth && find . -type f -exec sha256sum {} + | LC_ALL=C sort -k2' \
+    | diff /tmp/src.sums - && echo "copy verified"   # stop here unless this prints
+sudo install -m 644 packaging/systemd/sloth-sensor.service "$u"   # PREFIX=/usr/local; else sed it as install-service does
+sudo install -m 644 packaging/default/sloth /etc/default/sloth
+sudoedit /etc/default/sloth                          # SLOTH_IFACE, SLOTH_ARGS=--my-ssid/--my-bssid/--site-label
 sudo systemctl daemon-reload
-sudo systemctl enable --now sloth-sensor
+sudo systemctl reenable sloth-sensor
+sudo systemctl start sloth-sensor
 journalctl -u sloth-sensor -f
 ```
 
+Then check it as §5 describes. To go back: `sudo systemctl stop
+sloth-sensor`, copy `$u.bak-migrate-$stamp` (and the defaults backup)
+back, `daemon-reload`, `start`; `data/` was never touched.
+
 Notes:
 
-- `mv` the db **and its `-wal`/`-shm` side files** together (the glob
-  does that); SQLite gives the side files the main file's mode and
-  `db.c` refuses a permissive or symlinked one rather than repairing it
-  (#87, "validated, never repaired").
+- `make install-service` is not used here: it overwrites the unit with
+  no backup. Naming the backup `.bak-migrate-<stamp>` is deliberate —
+  it is what lets a later `sloth-migrate-sensor` run recognise the host
+  as migrated and only re-verify it.
+- Copy with the service stopped, so the db and its `-wal`/`-shm` side
+  files are consistent; copying the whole directory keeps them together.
+  SQLite gives the side files the main file's mode and `db.c` refuses a
+  permissive or symlinked one rather than repairing it (#87, "validated,
+  never repaired"), which is what the `go-rwx` is for.
 - A missed `chown` is loud: the first write fails with `owned by another
   user — refusing` and the unit restarts until you fix it. It does not
   degrade quietly.
-- `/etc/default/sloth` is installed with `install -b`; if you had one,
-  the previous copy is at `/etc/default/sloth~`.
 - The old unit's `ConditionPathExists=` is gone on purpose. If the
   binary is missing the unit now fails and says so, instead of being
   silently skipped.
 - `make clean` in the checkout no longer affects the service. `make
   install` is the deploy step.
+- `data/` stays in place as the fallback. Delete it by hand once the
+  migrated sensor has run long enough to satisfy you.
 
 ## 5. Verifying a deployment
 
