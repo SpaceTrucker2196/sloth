@@ -19,7 +19,13 @@
  * even with a one-row bar the health strip landed on the last row and
  * the hint was drawn over it, and at 100 columns the table ran under
  * both (#150). */
-#define IFACE_TAIL_ROWS 2
+/* Under the table: the sensor-health strip, drawn broken at the edge
+ * (its rows counted per draw), and the key hint on the last row. */
+#define IFACE_STRIP_INDENT 2
+#define IFACE_HINT_ROWS 1
+/* Every fault token at once is well over 300 octets; 160 cut the last
+ * of them in the buffer, before any width came into it. */
+#define IFACE_STRIP_LEN 512
 #include "capture/probe.h"
 #include "capture/capture.h"   /* capture_exit_name() for the health strip */
 #include "sensor_health.h"     /* table-overflow tally (#91 slice 3) */
@@ -549,7 +555,15 @@ void view_iface_draw(const sloth_state_t *s) {
            HIST_LEN + 2, "RX history", "Total RX", "Total TX");
     tui_normal();
 
-    int rows = view_page_budget(IFACE_TAIL_ROWS, MAX_IFACES);
+    /* Sensor health (#91 slice 3) is drawn under the rows, and broken
+     * at the edge rather than clipped (#150): with several faults set it
+     * runs past 100 columns, and the faults at its end are the reason it
+     * exists. Formatted before the budget so its rows are counted. */
+    char hbuf[IFACE_STRIP_LEN];
+    iface_fmt_health_strip(s, hbuf, (int)sizeof(hbuf));
+    int rows = view_page_budget(IFACE_HINT_ROWS +
+                                tui_wrapped_rows(hbuf, IFACE_STRIP_INDENT),
+                                MAX_IFACES);
     static int vp = 0;
     if (sel < vp) vp = sel;
     if (sel >= vp + rows) vp = sel - rows + 1;
@@ -634,14 +648,10 @@ void view_iface_draw(const sloth_state_t *s) {
         tui_dim(); tui_printf("  (no interfaces found)\n"); tui_normal();
     }
 
-    /* Sensor health (#91 slice 3) — under the rows, above the key hints,
-     * because it describes the capture behind every row rather than any
-     * one interface. */
-    {
-        char hbuf[160];
-        iface_fmt_health_strip(s, hbuf, (int)sizeof(hbuf));
-        tui_dim(); tui_printf("%s\n", hbuf); tui_normal();
-    }
+    /* Sensor health — under the rows, above the key hints, because it
+     * describes the capture behind every row rather than any one
+     * interface. */
+    tui_dim(); tui_addstr_wrapped(hbuf, IFACE_STRIP_INDENT); tui_normal();
 
     tui_dim();
     mvprintw(getmaxy(stdscr) - 1, 0,
@@ -733,7 +743,7 @@ void view_iface_draw(const sloth_state_t *s) {
     }
 
     {
-        char hbuf[160];
+        char hbuf[IFACE_STRIP_LEN];
         iface_fmt_health_strip(s, hbuf, (int)sizeof(hbuf));
         tui_dim(); tui_printf("%s\n", hbuf); tui_normal();
     }

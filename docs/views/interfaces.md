@@ -32,6 +32,8 @@ seconds at 1 Hz) history feeds the sparkline graphs.
                  OUI-derived NIC vendor              heat-graded: cool→peak red
 ```
 
+Below the full width rows are cut at the screen edge rather than wrapped (#150): at the 100-column minimum `Total TX` is not shown, and a cut row ends with `›`. The sensor-health strip under the table is not cut: it is broken onto as many rows as it needs, so every fault stays readable.
+
 Monitor-mode rows render bright and carry a trailing `[monitor]`
 marker — the operator can see at a glance whether at least one
 radio is available for WiFi SIGINT. A managed Wi-Fi station carries a

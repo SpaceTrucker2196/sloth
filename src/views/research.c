@@ -39,6 +39,27 @@ static void sev_colour(int sev) {
     }
 }
 
+/* A source's two lines in the detail pane: its title, and its URL with
+ * the retrieval date. Both are drawn broken at the screen edge rather
+ * than clipped (#150): a URL is up to 127 octets, and the table's row
+ * clip cut the corpus's longer ones - and their dates - at column 99,
+ * in the one pane that exists to show the source. */
+#define RESEARCH_TITLE_INDENT 2
+#define RESEARCH_URL_INDENT   4
+static void doc_title_line(const research_doc_t *doc, char *out, size_t n) {
+    snprintf(out, n, "%*s%s", RESEARCH_TITLE_INDENT, "", doc->title);
+}
+static void doc_url_line(const research_doc_t *doc, char *out, size_t n) {
+    if (doc->retrieved[0])
+        snprintf(out, n, "%*s%s  (retrieved %s)", RESEARCH_URL_INDENT, "",
+                 doc->source_url, doc->retrieved);
+    else
+        snprintf(out, n, "%*s%s", RESEARCH_URL_INDENT, "", doc->source_url);
+}
+#define RESEARCH_LINE_LEN \
+    (RESEARCH_URL_INDENT + sizeof(((research_doc_t *)0)->source_url) + \
+     sizeof(((research_doc_t *)0)->retrieved) + 16)
+
 /* Rows the detail pane under the table takes for this selection: the
  * blank line and the "sources for" rule, then the body view_research_draw
  * prints for it. The page used to be LINES - 12 whatever the selection
@@ -48,7 +69,15 @@ static void sev_colour(int sev) {
 #define RESEARCH_NO_SOURCE_ROWS 4    /* either four-line explanation */
 static int detail_rows(const research_cov_t *c) {
     if (c->doc_count == 0) return RESEARCH_DETAIL_HEAD + RESEARCH_NO_SOURCE_ROWS;
-    return RESEARCH_DETAIL_HEAD + 2 * c->doc_count + (c->docs_truncated ? 1 : 0);
+    int rows = RESEARCH_DETAIL_HEAD + (c->docs_truncated ? 1 : 0);
+    char line[RESEARCH_LINE_LEN];
+    for (int d = 0; d < c->doc_count; d++) {
+        doc_title_line(&c->docs[d], line, sizeof line);
+        rows += tui_wrapped_rows(line, RESEARCH_TITLE_INDENT);
+        doc_url_line(&c->docs[d], line, sizeof line);
+        rows += tui_wrapped_rows(line, RESEARCH_URL_INDENT);
+    }
+    return rows;
 }
 
 void view_research_draw(const sloth_state_t *s) {
@@ -147,12 +176,13 @@ void view_research_draw(const sloth_state_t *s) {
         return;
     }
 
+    char line[RESEARCH_LINE_LEN];
     for (int d = 0; d < c->doc_count; d++) {
         const research_doc_t *doc = &c->docs[d];
-        tui_normal(); TPRINT("  %s\n", doc->title);
-        tui_dim();    TPRINT("    %s", doc->source_url);
-        if (doc->retrieved[0]) TPRINT("  (retrieved %s)", doc->retrieved);
-        TPRINT("\n");
+        doc_title_line(doc, line, sizeof line);
+        tui_normal(); tui_addstr_wrapped(line, RESEARCH_TITLE_INDENT);
+        doc_url_line(doc, line, sizeof line);
+        tui_dim();    tui_addstr_wrapped(line, RESEARCH_URL_INDENT);
         tui_normal();
     }
     if (c->docs_truncated) {

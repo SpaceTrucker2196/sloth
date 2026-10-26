@@ -15,7 +15,7 @@ generated from — #117), `docs/views/README.md` and all `docs/views/*.md`.
 **Count**: `VIEW_COUNT` = **<!-- count:views -->36<!-- /count -->**. Every key below is a row of
 `include/sloth_views.def`; if the two disagree, the `.def` is right.
 
-**Last updated**: 2026-10-23 (#150: list views size their page from the cursor and clip table rows at the edge, banners above them wrap; Twins keeps Flags whole at 100 columns); 2026-10-21 (#144 slice 4: `*` BLE, the first punctuation view key); 2026-10-15 (#117 — keys and count now generated from `sloth_views.def`).
+**Last updated**: 2026-10-26 (#150 review: the clip counts wide glyphs as two cells, a cut row ends with `›`, Research's sources and the Interfaces health strip break onto rows instead of being cut); 2026-10-23 (#150: list views size their page from the cursor and clip table rows at the edge, banners above them wrap; Twins keeps Flags whole at 100 columns); 2026-10-21 (#144 slice 4: `*` BLE, the first punctuation view key); 2026-10-15 (#117 — keys and count now generated from `sloth_views.def`).
 
 ---
 
@@ -93,19 +93,34 @@ page down. The lines above the headers are prose and do wrap: Conns'
 `[SCAN ALERT]` banner names attacker addresses, and clipping it hid
 the fourth address and the `+N more` count at 100 columns. A wrapped
 banner costs the page nothing, since the budget is measured after it.
-Tables wider than 100 columns (Connections 136, Beacons 130, WiFi 114,
-Packets' header 143) lose their right-hand columns at the minimum and
-show them on a wider terminal. Twins is the exception: its Flags column
+Width is counted per glyph with `wcwidth()`, so an emoji or CJK
+character in an SSID, hostname or SNI is two cells: counting one per
+glyph let a cut row still reach the edge and wrap. Tables wider than
+100 columns (Connections 136, Beacons 130, WiFi 114, Packets' header
+143) lose their right-hand columns at the minimum and show them on a
+wider terminal; each view's doc names what goes. A row cut through
+anything but padding ends with `›` (U+203A) in its last cell, so a
+hidden column does not read as an empty one. Twins is the exception: its Flags column
 is what the legend explains, so below 114 columns it drops `Last` and
 narrows SSID instead, and Flags stays whole. Text a view draws below the
 last screen row is dropped rather than appended to that row; brand
 letters and Packets' hex/ASCII bytes go through the same path.
 
+Prose under a table that must be read whole is not clipped either: it
+is drawn with `tui_addstr_wrapped(s, indent)`, broken onto rows of at
+most `COLS - 1` cells with each continuation indented, and the view
+counts those rows in its tail with `tui_wrapped_rows()`. Research's
+source titles and URLs use it (a URL is up to 127 octets, and the clip
+had cut the longer ones and their retrieval dates at column 99), and so
+does the Interfaces health strip, whose faults at the end are the ones
+the strip exists for.
+
 Under the table, per view: Alerts 2 (blank line and the enrichment
 line), Twins 6 (legend), RADIUS 2 (legend), KARMA 2 (legend), BLE 1
 (legend), Beacons 1 when there is 802.11k survey activity, FragAttacks
-12 (detail pane), Research the selected row's detail pane, Interfaces 2
-(health strip and key hints), Deauth the BTM section when there is
+12 (detail pane), Research the selected row's detail pane (each title
+and URL counted at the rows it breaks onto), Interfaces the health
+strip's rows plus the key hint, Deauth the BTM section when there is
 802.11v steering (capped at a third). The rest draw nothing under it.
 
 Pinned by `tests/test_view_fit.c`: one 100x33 `tui_draw()` test per
@@ -113,7 +128,10 @@ list view (no line reaches column 100, nothing below the screen, the
 selected last row exactly `tail` rows above the bottom) and the same
 checks at 200 columns, so the fit is not bought with a short page.
 PNL, EAPOL, Assoc, Channel and Seqnum draw every row with no page or
-selection and are not covered yet.
+selection and are not covered yet: at 100x33 their excess rows are
+dropped below the screen, not drawn over the last row, but they cannot
+be scrolled to. Paging them, and narrower column plans for Connections,
+Beacons, WiFi and Packets, are follow-up work.
 
 ## Adding a view
 

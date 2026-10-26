@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -478,6 +479,77 @@ static int seed_karma(sloth_state_t *s, time_t now) {
     return s->karma_count;
 }
 
+/* HTTP with wide glyphs at the end of every path, in the one segment
+ * of the row that crosses the edge: forty octets, "/", thirty ASCII and
+ * three U+5BB6, 37 cells. Counted one cell per glyph the segment fits
+ * in the room left; drawn, it is three cells wider and wraps. A wide
+ * glyph in a segment that ends short of the edge (WiFi's SSID column)
+ * never reaches the clip's count, which is why this is HTTP. */
+static int seed_http_wide(sloth_state_t *s, time_t now) {
+    int n = seed_http(s, now);
+    for (int i = 0; i < s->http_log_count; i++)
+        snprintf(s->http_log[i].path, sizeof(s->http_log[i].path), "/%s%s",
+                 "pppppppppppppppppppppppppppppp",
+                 "\xe5\xae\xb6\xe5\xae\xb6\xe5\xae\xb6");
+    return n;
+}
+
+/* A source URL at the 127-octet cap, longer than the screen is wide:
+ * the corpus has URLs to ~174 characters, cut on load to 127. */
+#define FIT_LONG_URL \
+    "https://www.example.org/standards/ieee-802.11-2020/clause-12/" \
+    "robust-security-network/fourway-handshake/section-12-7-6-4/x"
+static int seed_research_long_url(sloth_state_t *s, time_t now) {
+    int n = seed_research(s, now);
+    for (int i = 0; i < s->research_cov_count; i++) {
+        research_doc_t *d = &s->research_cov[i].docs[0];
+        snprintf(d->source_url, sizeof(d->source_url), "%s", FIT_LONG_URL);
+        snprintf(d->retrieved, sizeof(d->retrieved), "2026-10-01");
+    }
+    return n;
+}
+
+/* No document behind the selected kind, in both of the pane's forms. */
+static int seed_research_no_basis(sloth_state_t *s, time_t now) {
+    int n = seed_research(s, now);
+    research_cov_t *c = &s->research_cov[s->research_sel];
+    c->doc_count = 0; c->no_basis = 1;
+    return n;
+}
+static int seed_research_uncited(sloth_state_t *s, time_t now) {
+    int n = seed_research(s, now);
+    research_cov_t *c = &s->research_cov[s->research_sel];
+    c->doc_count = 0; c->no_basis = 0;
+    return n;
+}
+static int seed_research_truncated(sloth_state_t *s, time_t now) {
+    int n = seed_research(s, now);
+    s->research_cov[s->research_sel].docs_truncated = 1;
+    return n;
+}
+
+/* Every sensor-health fault the strip can carry from state, so it runs
+ * well past 100 columns. */
+static int seed_iface_faults(sloth_state_t *s, time_t now) {
+    int n = seed_iface(s, now);
+    s->cap_health.open = 1; s->cap_health.running = 1;
+    s->mon_health.open = 1; s->mon_health.running = 1;
+    s->cap_health.ps_drop = 123456789ULL; s->cap_health.ps_ifdrop = 23456789ULL;
+    s->mon_health.ps_drop = 345678901ULL; s->mon_health.ps_ifdrop = 4567890ULL;
+    s->mon_health.parse_rejects = 98765ULL;
+    s->chan_retune_failures = 17; s->chan_retune_last_errno = EBUSY;
+    s->hop_activity.channels = 13; s->hop_activity.silent_channels = 4;
+    s->hop_dwell.completed = 10;
+    s->hop_dwell.mean_planned_ms = 200; s->hop_dwell.mean_measured_ms = 900;
+    s->scope_health.state = CAPTURE_SCOPE_STATE_DEGRADED;
+    s->scope_health.enforced = 1; s->scope_health.requested = 2;
+    snprintf(s->probe_err, sizeof(s->probe_err), "%s",
+             "wlan9: SIOCSIWMODE: Device or resource busy");
+    s->cap_health.stale_secs = 61;
+    s->mon_health.stale_secs = 3600;   /* "monitor stale" is the last token */
+    return n;
+}
+
 /* ── the cases ────────────────────────────────────────────── */
 
 static const fit_case_t C_NTP     = { "ntp",     VIEW_NTP,     seed_ntp,     "10.9.", 0, NULL, 0 };
@@ -515,9 +587,27 @@ static const fit_case_t C_DEVICES = { "devices", VIEW_DEVICES, seed_devices, "02
 static const fit_case_t C_IFACE   = { "iface",   VIEW_IFACE,   seed_iface,   "fitif", 2, "navigate", 38 };
 static const fit_case_t C_KARMA   = { "karma",   VIEW_KARMA,   seed_karma,   "02:fa:", 2,
                                       "UNVERIFIED signature", 0 };
+static const fit_case_t C_HTTP_WIDE = { "http-wide", VIEW_HTTP, seed_http_wide, "10.9.", 0, NULL, 0 };
+/* The pane: blank, rule, title, and the URL line broken onto two rows. */
+static const fit_case_t C_RESEARCH_URL = { "research-long-url", VIEW_RESEARCH,
+                                           seed_research_long_url, "fitlabel", 5,
+                                           "(retrieved 2026-10-01)", 0 };
+static const fit_case_t C_RESEARCH_NOBASIS = { "research-no-basis", VIEW_RESEARCH,
+                                               seed_research_no_basis, "fitlabel", 6,
+                                               "which is where that is recorded.", 0 };
+static const fit_case_t C_RESEARCH_UNCITED = { "research-uncited", VIEW_RESEARCH,
+                                               seed_research_uncited, "fitlabel", 6,
+                                               "for how to add one.", 0 };
+static const fit_case_t C_RESEARCH_TRUNC = { "research-truncated", VIEW_RESEARCH,
+                                             seed_research_truncated, "fitlabel", 5,
+                                             "more in the corpus than fit here", 0 };
 
 /* ── the check ────────────────────────────────────────────── */
 
+/* Cells in a read-back line. tui_test_line() reads cell by cell, and
+ * the second cell of a wide glyph reads back as the glyph again (a
+ * U+5BB6 is two in the line), so one glyph read back is one cell -
+ * which is why this can count lead octets and the clip cannot. */
 static int line_cells(const char *line) {
     int cells = 0;
     for (const char *p = line; *p; p++)
@@ -827,6 +917,167 @@ static void test_text_below_the_last_row_is_dropped(void) {
     tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
 }
 
+/* ── wide glyphs, long prose, the cut mark ────────────────── */
+
+/* Seventy U+5BB6 are 140 cells. Counted one cell per lead octet, the
+ * clip let all seventy through: the row filled the screen and wrapped,
+ * and NEXT landed on row 2. Red with t_fit() counting lead octets. */
+static void test_clip_counts_wide_glyphs_as_two_cells(void) {
+    ASSERT_EQ(tui_init_offscreen(4, FIT_COLS), 0);
+    tui_test_erase();
+    tui_clip_rows(1);
+    char text[70 * 3 + 8];
+    size_t o = 0;
+    for (int i = 0; i < 70; i++) { memcpy(text + o, "\xe5\xae\xb6", 3); o += 3; }
+    memcpy(text + o, "\nNEXT", 6);
+    text[o + 6] = '\0';
+    tui_addstr(text);
+
+    char line[4096];
+    int next_row = -1;
+    for (int y = 0; y < 4; y++)
+        if (tui_test_line(y, line, sizeof(line)) >= 0 && strstr(line, "NEXT"))
+            next_row = y;
+    ASSERT(tui_test_line(0, line, sizeof(line)) >= 0);
+    int cells = line_cells(line);
+    if (next_row != 1 || cells >= FIT_COLS) tui_test_dump(stderr);
+    ASSERT_EQ(next_row, 1);
+    ASSERT(cells < FIT_COLS);
+    ASSERT_EQ(tui_test_overflow(), 0);
+
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
+/* HTTP with wide glyphs where the row is cut, at the minimum: red with
+ * t_fit() counting one cell per glyph (every row wrapped; the selection
+ * ran below the screen). */
+static void test_http_wide_path_fits_100x33(void) { fit_min(&C_HTTP_WIDE); }
+
+/* A cut that hides a column ends the row with the mark, in its last
+ * allowed cell; a cut through trailing padding does not. Red with the
+ * mark's addstr() removed (first half) and with t_has_ink() returning 1
+ * unconditionally (second half). */
+static void test_cut_mark_only_when_something_is_hidden(void) {
+    char line[4096];
+    ASSERT_EQ(tui_init_offscreen(4, 20), 0);
+
+    tui_test_erase();
+    tui_clip_rows(1);
+    tui_addstr("0123456789abcdefghijKLMN\n");
+    ASSERT(tui_test_line(0, line, sizeof(line)) >= 0);
+    if (strcmp(line, "0123456789abcdefgh\xe2\x80\xba") != 0) tui_test_dump(stderr);
+    ASSERT(strcmp(line, "0123456789abcdefgh\xe2\x80\xba") == 0);
+
+    /* Cut at a segment boundary: the hidden text arrives in a later
+     * write with no room left, and marks the cell before it. */
+    tui_test_erase();
+    tui_clip_rows(1);
+    tui_addstr("0123456789abcdefghi");
+    tui_addstr("HIDDEN\n");
+    ASSERT(tui_test_line(0, line, sizeof(line)) >= 0);
+    ASSERT(strcmp(line, "0123456789abcdefgh\xe2\x80\xba") == 0);
+
+    tui_test_erase();
+    tui_clip_rows(1);
+    tui_addstr("0123456789                    \n");
+    ASSERT(tui_test_line(0, line, sizeof(line)) >= 0);
+    if (strstr(line, "\xe2\x80\xba")) tui_test_dump(stderr);
+    ASSERT(strstr(line, "\xe2\x80\xba") == NULL);
+    ASSERT(strcmp(line, "0123456789") == 0);
+
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
+/* Every row with its leading spaces dropped, concatenated: text that
+ * was broken onto indented rows reads back whole. */
+static void screen_joined_trimmed(char *out, size_t n) {
+    char line[4096];
+    size_t used = 0;
+    out[0] = '\0';
+    for (int y = 0; y < tui_test_rows(); y++) {
+        int len = tui_test_line(y, line, sizeof(line));
+        if (len <= 0) continue;
+        const char *p = line;
+        while (*p == ' ') p++;
+        size_t k = strlen(p);
+        if (used + k + 1 > n) break;
+        memcpy(out + used, p, k);
+        used += k;
+        out[used] = '\0';
+    }
+}
+
+/* The source URL is longer than the screen is wide. Under the table's
+ * row clip it was cut at column 99 with its retrieval date; now it is
+ * broken onto a second row, and the page still fits with the pane's
+ * extra row counted. Red with the URL line drawn by TPRINT again (the
+ * clip cut it: URL and date not read back), and with detail_rows()
+ * counting it as one row (the table one row too long, overflow 1). */
+static void test_research_long_url_reads_whole_at_100x33(void) {
+    fit_min(&C_RESEARCH_URL);
+
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    seed_research_long_url(&s, time(NULL));
+    s.active_view = VIEW_RESEARCH;
+    ASSERT_EQ(tui_init_offscreen(FIT_ROWS, FIT_COLS), 0);
+    tui_test_erase();
+    tui_draw(&s);
+    static char all[FIT_ROWS * 4096];
+    screen_joined_trimmed(all, sizeof(all));
+    int ok = strstr(all, FIT_LONG_URL "  (retrieved 2026-10-01)") != NULL;
+    if (!ok) tui_test_dump(stderr);
+    ASSERT(ok);
+    ASSERT_EQ(tui_test_overflow(), 0);
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
+/* The pane's other bodies. Red with RESEARCH_NO_SOURCE_ROWS made 3
+ * (both no-source cases: the last line below the screen), and with the
+ * docs_truncated row left out of detail_rows() (the truncated case). */
+static void test_research_no_basis_fits_100x33(void)  { fit_min(&C_RESEARCH_NOBASIS); }
+static void test_research_uncited_fits_100x33(void)   { fit_min(&C_RESEARCH_UNCITED); }
+static void test_research_truncated_fits_100x33(void) { fit_min(&C_RESEARCH_TRUNC); }
+
+/* Every fault on the sensor-health strip: past 100 columns, and under
+ * the row clip its last faults were cut. Broken onto rows instead, with
+ * the rows counted in the page. The tail is the strip's rows plus the
+ * hint, computed here from the strip's length, not from the view's own
+ * count: first row 99 cells, each later one 97 after its indent. Red
+ * with the strip drawn by tui_printf() again (cut: "monitor stale" not
+ * read back, and the table a row short), with the budget's tail fixed
+ * at 2 (overflow), and with the strip buffer at its old 160 octets
+ * (truncated before it was drawn). */
+static void test_iface_health_strip_reads_whole_at_100x33(void) {
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    seed_iface_faults(&s, time(NULL));
+    char strip[1024];
+    iface_fmt_health_strip(&s, strip, (int)sizeof(strip));
+    int len = (int)strlen(strip);
+    int strip_rows = len <= FIT_COLS - 1 ? 1
+                   : 1 + (len - (FIT_COLS - 1) + (FIT_COLS - 4)) / (FIT_COLS - 3);
+    ASSERT(strip_rows >= 3);   /* the fixture really overruns the width */
+
+    fit_case_t c = { "iface-faults", VIEW_IFACE, seed_iface_faults, "fitif",
+                     1 + strip_rows, "navigate", 0 };
+    fit_min(&c);
+
+    memset(&s, 0, sizeof(s));
+    seed_iface_faults(&s, time(NULL));
+    s.active_view = VIEW_IFACE;
+    ASSERT_EQ(tui_init_offscreen(FIT_ROWS, FIT_COLS), 0);
+    tui_test_erase();
+    tui_draw(&s);
+    static char all[FIT_ROWS * 4096];
+    screen_joined_trimmed(all, sizeof(all));
+    int ok = strstr(all, "monitor stale 3600s") && strstr(all, "hop silent 4/13");
+    if (!ok) tui_test_dump(stderr);
+    ASSERT(strstr(all, "monitor stale 3600s") != NULL);
+    ASSERT(strstr(all, "hop silent 4/13") != NULL);
+    tui_init_offscreen(TEST_SCREEN_ROWS, TEST_SCREEN_COLS);
+}
+
 /* ── a large terminal ─────────────────────────────────────── */
 
 /* The same checks at 200 columns and 60 rows (38 for the three tables
@@ -885,5 +1136,13 @@ void run_view_fit_tests(void) {
     RUN_TEST(test_conns_scan_banner_wraps_at_100x33);
     RUN_TEST(test_twins_flags_whole_at_100x33);
     RUN_TEST(test_text_below_the_last_row_is_dropped);
+    RUN_TEST(test_clip_counts_wide_glyphs_as_two_cells);
+    RUN_TEST(test_http_wide_path_fits_100x33);
+    RUN_TEST(test_cut_mark_only_when_something_is_hidden);
+    RUN_TEST(test_research_long_url_reads_whole_at_100x33);
+    RUN_TEST(test_research_no_basis_fits_100x33);
+    RUN_TEST(test_research_uncited_fits_100x33);
+    RUN_TEST(test_research_truncated_fits_100x33);
+    RUN_TEST(test_iface_health_strip_reads_whole_at_100x33);
     RUN_TEST(test_every_list_view_fills_a_large_terminal);
 }

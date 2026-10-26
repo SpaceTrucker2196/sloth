@@ -4961,3 +4961,14 @@ report events.
   letters and Packets' hex/ASCII bytes now draw through the clip and
   the bottom-edge drop. The page contract for a new list view is in
   [[views-catalog]] "Adding a view".
+- 2026-10-26 — [[views-catalog]]: #150 second review. The row clip
+  counted one cell per glyph, so a wide glyph (emoji, CJK) in an SSID,
+  hostname or HTTP path let a cut row reach the edge and wrap; it now
+  counts with `wcwidth()`. A row cut through anything but padding ends
+  with `›`, and the per-view docs for Connections, Beacons, WiFi,
+  Packets and Interfaces name the columns hidden at 100 columns.
+  Research's source titles and URLs, and the Interfaces sensor-health
+  strip, are broken onto rows (`tui_addstr_wrapped()`) and counted in
+  the page instead of being cut at column 99; the strip's buffer grew
+  from 160 to 512 octets, since every fault at once had been truncated
+  before it was drawn.

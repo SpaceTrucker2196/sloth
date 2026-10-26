@@ -28,6 +28,8 @@ sparkline history.
  192.168.1.5:33450      → 192.0.2.66:443            TCP   ESTAB    -    -      ← THREAT_IP alert!
 ```
 
+The mockup is the full width. The table is 136 columns, and below that rows are cut at the screen edge rather than wrapped (#150): at the 100-column minimum the table ends inside `Rate (rx/tx)`, so Rate, Trend, RTT and Retx are not shown. A cut row ends with `›`; widen the terminal to see the hidden columns.
+
 State, sort key, filter:
 
 | Key | Action |

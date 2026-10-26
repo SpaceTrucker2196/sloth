@@ -72,6 +72,8 @@ Both length and fragment cases are also counted in `sensor_health`'s
  0001.130  192.168.1.5:5353      224.0.0.251:5353      17     142  mDNS                          00 00 00 00 ...   ._airpla
 ```
 
+The mockup is the full width. Below it rows are cut at the screen edge rather than wrapped (#150): at the 100-column minimum Info is cut to about half its 28 columns and Hex / ASCII is not shown. A cut row ends with `›`; Enter on a paused packet still opens its hex detail.
+
 The hex column shows as many bytes as the terminal width allows; ASCII
 to the right is the same byte run, printable chars literal and
 non-printable as `.`.

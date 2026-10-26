@@ -466,6 +466,8 @@ every value is in the `wifi_regulatory` JSONL record
  (hidden)                d8:5d:4c:5e:6f:70   -71    6  WPA2   CCMP       cap       PSK         -    ?          Wi-Fi 5   -               9s
 ```
 
+Below the full width, rows are cut at the screen edge rather than wrapped (#150): at the 100-column minimum the table ends after `AKM`, so WPS, Vendor, PHY, REG and Last are not shown. A cut row ends with `›`; widen the terminal, or open the detail screen, for the hidden columns.
+
 SSID names are coloured via the same hash-palette as Probe — same SSID
 gets the same colour wherever it appears.
 

@@ -31,9 +31,23 @@ void tui_addnstr(const char *s, int n);
 
 /* Cut every row one column short of the screen edge for the rest of
  * this view's draw instead of letting it wrap (#150). tui_draw() turns
- * it off before each view; a list view turns it on. No-op in the ANSI
- * build, which has no width. */
+ * it off before each view; a list view turns it on. A cut that hides
+ * anything but padding ends the row with U+203A, so a column dropped
+ * at a narrow width does not read as an empty one. Width is counted
+ * per glyph with wcwidth(), so a wide glyph is two cells. No-op in the
+ * ANSI build, which has no width. */
 void tui_clip_rows(int on);
+
+/* Prose under a clipped table that must be read whole - a source URL,
+ * the sensor-health strip (#150). tui_addstr_wrapped() draws s from the
+ * cursor broken into rows of at most COLS - 1 cells, each after the
+ * first starting with `indent` spaces, and ends with a newline, so the
+ * clip never has anything to cut. tui_wrapped_rows() is the rows that
+ * takes from column 0, for a view's page budget. s is one line: a
+ * newline in it is drawn as a space. The ANSI build has no width: one
+ * row, unbroken. */
+int  tui_wrapped_rows(const char *s, int indent);
+void tui_addstr_wrapped(const char *s, int indent);
 
 /* The ANSI backend's string sink, compiled in every build so the
  * test binary (built WITH_NCURSES) can drive it: writes at most n

@@ -1,6 +1,12 @@
 /* Before any header: the offscreen read-back (#116) uses ncursesw's
  * wide-char API, which curses.h declares only when asked. */
 #define NCURSES_WIDECHAR 1
+/* wcwidth() for the row clip's cell count (#150) is XSI, which
+ * -std=c99 -D_DEFAULT_SOURCE does not declare on glibc. Linux only, the
+ * same guard data_socket.c uses: elsewhere it is declared already. */
+#if defined(__linux__) && !defined(_XOPEN_SOURCE)
+#define _XOPEN_SOURCE 700
+#endif
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -134,19 +140,71 @@ static void t_bottom_reset(void) {
     g_overflow = 0;
 }
 
-/* Octets of s[0..len) whose glyphs fit in `room` cells. Every glyph
- * sloth draws is one cell, so a cell is a non-continuation octet. */
+/* One UTF-8 scalar at s[0..len): its length in octets, and through
+ * *w the cells curses gives it. The text has been through
+ * display_sanitize(), so it is well-formed; an octet that is not is
+ * still taken alone, as one cell, so the walk always moves. wcwidth()
+ * is what curses itself measures with: 2 for East Asian wide and most
+ * emoji, 0 for a combining mark, and -1 for what it will not draw,
+ * which curses shows as one cell or more - counted as one. */
+static size_t t_scalar(const char *s, size_t len, int *w) {
+    uint32_t cp;
+    int k = netstr_utf8_decode((const uint8_t *)s, len, &cp);
+    if (k <= 0) { *w = 1; return 1; }
+    int cw = wcwidth((wchar_t)cp);
+    *w = cw < 0 ? 1 : cw;
+    return (size_t)k;
+}
+
+/* Octets of s[0..len) whose glyphs fit in `room` cells. Counted per
+ * scalar and by width, not one cell per lead octet: a wide glyph in a
+ * network-sourced string (an SSID, an mDNS or DHCP hostname, an SNI)
+ * is two cells, and a row cut by octets still reached the edge and
+ * wrapped - the thing the clip is for. A wide glyph that would straddle
+ * the limit is left out whole. */
 static size_t t_fit(const char *s, size_t len, int room) {
     size_t i = 0;
     int cells = 0;
     while (i < len) {
-        if (((unsigned char)s[i] & 0xC0) != 0x80) {
-            if (cells >= room) break;
-            cells++;
-        }
-        i++;
+        int w;
+        size_t k = t_scalar(s + i, len - i, &w);
+        if (cells + w > room) break;
+        cells += w;
+        i += k;
     }
     return i;
+}
+
+/* The cut mark (#150): the clip drops whole columns at the 100-column
+ * minimum (Conns' Rate and RTT, Beacons' Vendor and PHY), and a row
+ * that simply ends reads as a row that had nothing more. Only a cut
+ * that hides something gets the mark - trailing padding is not a
+ * hidden column. U+203A, one cell. */
+#define T_CUT_MARK "\xe2\x80\xba"
+
+static int t_has_ink(const char *s, size_t len) {
+    for (size_t i = 0; i < len; i++)
+        if (s[i] != ' ') return 1;
+    return 0;
+}
+
+/* One clipped segment at (y, x). The mark takes the last cell the row
+ * is allowed; once a row is cut, every later segment on it has no room
+ * and lands here again, and re-marking the same cell is harmless. */
+static void t_put_clipped(const char *p, size_t seg, int y, int x, int maxx) {
+    int room = maxx - 1 - x;
+    size_t take = t_fit(p, seg, room);
+    if (take == seg || !t_has_ink(p + take, seg - take)) {
+        if (take) addnstr(p, (int)take);
+        return;
+    }
+    if (room >= 1) {
+        take = t_fit(p, seg, room - 1);
+        if (take) addnstr(p, (int)take);
+        addstr(T_CUT_MARK);
+    } else if (x > 0) {
+        mvaddstr(y, x - 1, T_CUT_MARK);
+    }
 }
 
 static void t_put(const char *p) {
@@ -160,8 +218,8 @@ static void t_put(const char *p) {
             if (seg) g_overflow++;          /* a row below the screen */
         } else {
             g_drop_y = g_drop_x = -1;
-            size_t take = g_clip ? t_fit(p, seg, maxx - 1 - x) : seg;
-            if (take) addnstr(p, (int)take);
+            if (g_clip)   t_put_clipped(p, seg, y, x, maxx);
+            else if (seg) addnstr(p, (int)seg);
             if (nl) {
                 getyx(stdscr, y, x);
                 if (y >= maxy - 1) { g_drop_y = y; g_drop_x = x; }
@@ -171,6 +229,75 @@ static void t_put(const char *p) {
         if (!nl) break;
         p = nl + 1;
     }
+}
+
+/* Breaks p into rows of at most maxx - 1 cells: the first from column
+ * x0, each later one after `indent` spaces. Writes the broken text to
+ * out (when not NULL; sized from a first pass) and returns the rows,
+ * the newline after the last included. A row with no room for even one
+ * glyph is skipped once; a glyph that fits on no row at all still
+ * moves the walk, so it ends. */
+static int t_wrap(const char *p, int x0, int indent, int maxx, char *out) {
+    size_t len = strlen(p), o = 0;
+    int rows = 1, x = x0;
+    if (indent > maxx - 2) indent = maxx > 2 ? maxx - 2 : 0;
+    if (indent < 0) indent = 0;
+    for (;;) {
+        size_t take = t_fit(p, len, maxx - 1 - x);
+        if (take == 0 && len && x <= indent) {
+            int w;
+            take = t_scalar(p, len, &w);
+        }
+        if (out) memcpy(out + o, p, take);
+        o += take; p += take; len -= take;
+        if (!len) break;
+        if (out) { out[o] = '\n'; memset(out + o + 1, ' ', (size_t)indent); }
+        o += 1 + (size_t)indent;
+        rows++;
+        x = indent;
+    }
+    if (out) { out[o] = '\n'; out[o + 1] = '\0'; }
+    return rows;
+}
+
+/* The sanitised copy t_wrap measures: what will be drawn, with any
+ * newline made a space, since the text is one logical line. */
+static char *t_wrap_copy(const char *s, char *buf, size_t bufsz, int *heap) {
+    char *p = t_sanitized_copy(s, -1, buf, bufsz, heap);
+    if (p)
+        for (char *q = p; *q; q++)
+            if (*q == '\n') *q = ' ';
+    return p;
+}
+
+int tui_wrapped_rows(const char *s, int indent) {
+    if (!s) return 0;
+    char buf[T_EMIT_STACK];
+    int heap;
+    char *p = t_wrap_copy(s, buf, sizeof buf, &heap);
+    if (!p) return 1;
+    int rows = t_wrap(p, 0, indent, getmaxx(stdscr), NULL);
+    if (heap) free(p);
+    return rows;
+}
+
+void tui_addstr_wrapped(const char *s, int indent) {
+    if (!s) return;
+    char buf[T_EMIT_STACK];
+    int heap;
+    char *p = t_wrap_copy(s, buf, sizeof buf, &heap);
+    if (!p) return;
+    int maxx = getmaxx(stdscr), x0 = getcurx(stdscr);
+    int rows = t_wrap(p, x0, indent, maxx, NULL);
+    if (indent < 0) indent = 0;
+    size_t need = strlen(p) + (size_t)rows * ((size_t)indent + 1) + 2;
+    char *w = malloc(need);
+    if (w) {
+        t_wrap(p, x0, indent, maxx, w);
+        t_put(w);
+        free(w);
+    }
+    if (heap) free(p);
 }
 
 static void t_emit(const char *s, int n) {
@@ -185,6 +312,14 @@ static void t_emit(const char *s, int n) {
 #else
 void tui_clip_rows(int on) { (void)on; }
 static void t_emit(const char *s, int n) { tui_fputs_sanitized(stdout, s, n); }
+/* No width to break at: one row, as the line it always was. */
+int  tui_wrapped_rows(const char *s, int indent) { (void)indent; return s ? 1 : 0; }
+void tui_addstr_wrapped(const char *s, int indent) {
+    (void)indent;
+    if (!s) return;
+    tui_fputs_sanitized(stdout, s, -1);
+    fputc('\n', stdout);
+}
 #endif
 
 void tui_addstr(const char *s)         { t_emit(s, -1); }

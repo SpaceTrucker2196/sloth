@@ -40,6 +40,8 @@ connected duration, RX/TX bytes.
  (hidden)              aa:bb:cc:dd:ee:ff  -71  6   WPA2
 ```
 
+The table is 114 columns at full width. Below that rows are cut at the screen edge rather than wrapped (#150): at the 100-column minimum `AKM/MFP` is cut to its first three characters and PHY is not shown. A cut row ends with `›`.
+
 The associated AP is highlighted; press Enter for the station detail
 (signal history sparkline, RX/TX rate, connected uptime).
 
