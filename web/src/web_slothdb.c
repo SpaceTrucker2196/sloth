@@ -1658,11 +1658,12 @@ static int cells_of(web_sdb_conn_t *c, const char *table, long long from,
                     int cell_s, int ncell, long long *out, int *plan) {
     c->what = table;
     c->rows_read = 0;
+    /* Set before each read, so a timeout's answer names the plan that
+     * ran out (web_history.c). */
+    *plan = WEB_SDB_PLAN_INDEX;
     int r = cells_by_index(c, table, from, cell_s, ncell, out);
-    if (r != 0) {
-        *plan = WEB_SDB_PLAN_INDEX;
-        return r > 0 ? 0 : -1;
-    }
+    if (r != 0) return r > 0 ? 0 : -1;
+    *plan = WEB_SDB_PLAN_NONE;
     char sql[256];
     sqlite3_stmt *st = NULL;
     snprintf(sql, sizeof(sql), "SELECT (SELECT min(last_seen) FROM %s),"

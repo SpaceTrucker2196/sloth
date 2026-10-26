@@ -1597,11 +1597,19 @@ static void write_events(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->alert_count; i++) {
         const alert_t *a = &s->alerts[i];
         sqlite3_stmt *st = g_st[ST_ALERT];
+        /* first_seen <= last_seen is what slothweb's History count
+         * leans on (it finds an episode begun after a time by its
+         * last_seen, web/src/web_slothdb.h). The engine stamps both
+         * from the unclamped wall clock, so across a backward clock
+         * step an episode can arrive with last_seen before the row's
+         * first_seen; it is stored as having ended where it began. */
         sqlite3_int64 fs = alert_row_first_seen(a->key,
                 (sqlite3_int64)(a->first_seen ? a->first_seen : now));
+        sqlite3_int64 ls = (sqlite3_int64)(a->last_seen  ? a->last_seen  : now);
+        if (ls < fs) ls = fs;
         bind_txt(st, 1, a->key);
         sqlite3_bind_int64(st, 2, fs);
-        sqlite3_bind_int64(st, 3, (sqlite3_int64)(a->last_seen  ? a->last_seen  : now));
+        sqlite3_bind_int64(st, 3, ls);
         sqlite3_bind_int(st, 4, (int)a->type);
         sqlite3_bind_int(st, 5, (int)a->sev);
         bind_txt(st, 6, a->title);

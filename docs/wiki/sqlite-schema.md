@@ -469,14 +469,20 @@ checkpoints, compacts, swaps and reopens.
 `first_seen` (what arrived when: slothweb's History strip counts rows
 per `first_seen` cell, and without the index each count was a scan —
 253 ms for 867,748 alert episodes on the owner's snapshot, past
-slothweb's 250 ms budget). The one-time build on the first open of an
-older file, measured on a desktop core with the file on tmpfs:
-867,748 alerts (that snapshot) 276 ms, file 245.4 → 257.1 MB (+4.8 %);
-1,000,000 generated alerts 280 ms, 194.8 → 208.3 MB (+6.9 %); the
-devices index on 32,000 rows 6–7 ms. A reopen with the indexes present
-costs microseconds. A Raspberry Pi on an SD card was not measured; expect
-the one-time build to take several times as long, once, before
-`db_open()` returns and capture starts writing.
+slothweb's 250 ms budget). The one-time build runs in `db_open()` on the
+first open of an older file, before capture starts, so it is that
+start's delay. Measured on a desktop with the file on tmpfs: for
+867,748 alerts (that snapshot, a WAL copy) about 0.65 s of CPU, and
+0.93–1.85 s wall on the same host under load (load average 9–17, other
+builds running). The 276 ms first quoted here was not reproduced: the
+CPU time alone is over twice it. 1,000,000 generated alerts: 280 ms
+idle, as first quoted. File 245.4 → 257.1 MB (+4.8 %) on the snapshot,
+194.8 → 208.3 MB (+6.9 %) generated. The devices index on 32,000 rows:
+6–7 ms idle, 20–60 ms loaded. So a ~1M-row file delays sloth's start
+by roughly 1–2 s on a desktop, once; a Raspberry Pi on an SD card was
+not measured and is likely several seconds. A reader in WAL mode (a
+slothweb beside it) is not blocked by the build, and a reopen with the
+indexes present costs microseconds.
 An episode's `first_seen` never changes on its upsert, so after that
 the index costs one entry per new episode, nothing per tick.
 

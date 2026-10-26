@@ -1625,23 +1625,34 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   episodes) the old single `GROUP BY` took 253 ms, past 250, and the
   page said "sloth.db was too slow to answer". Each table is now counted
   the cheapest way the file allows: with sloth's `idx_<t>_first_seen`
-  one count per cell over the index (32 ms on that snapshot); without it
-  (a file sloth has not opened since), the `first_seen` of the rows in
-  range, bucketed in C rather than through `GROUP BY`'s sorter (123 ms),
-  found through `idx_<t>_last_seen` (`last_seen >= from` loses no row,
-  since `first_seen <= last_seen`) when `min`/`max(last_seen)` say under
-  2/5 of the table is in range, and by a scan otherwise: on a table
-  mostly in range the index read costs twice the scan's per row
-  (measured, 254 ms against 123 ms on the snapshot). The answer is
+  one count per cell over the index (32–320 ms on that snapshot); without
+  it (a file sloth has not opened since), the `first_seen` of the rows in
+  range, bucketed in C rather than through `GROUP BY`'s sorter, found
+  through `idx_<t>_last_seen` when `min`/`max(last_seen)` say under 2/5
+  of the table is in range, and by a scan otherwise: on a table mostly
+  in range the index read costs twice the scan's per row (measured,
+  254 ms against 123 ms on the snapshot). The bound loses no row because
+  sloth stores `first_seen <= last_seen`: the device upsert binds both
+  from one time, and `write_events()` clamps an alert episode the engine
+  stamped across a backward wall-clock step (a file an older sloth wrote
+  across such a step can hold an episode the bound leaves out). The
+  snapshot itself is the scan case, every row in the last 30 days:
+  123–246 ms on an idle desktop core with the file in the page cache,
+  0.3–1.1 s on the same host at load average 17. Those are best-case
+  figures, so 1500 ms is 6–12 times the idle scan but only 1.3–5 times
+  the loaded one; a sensor-class host was not measured. The answer is
   cached for at most 60 s per sloth.db state (device, inode, mtime and
   size of the file and its `-wal`), per cell size and per `from` cell,
   4 entries; a cached answer carries the `from` and `to` it was counted
   for. An immutable snapshot is counted once a minute at most; a running
   sloth changes its `-wal` every tick and is in effect not cached. A
   failure says which read stopped and how far it got:
-  `{"error":"sloth_db_timeout","detail":...,"query":"alerts","rows_read":N,"budget_ms":1500}`,
-  and the page keeps "try again" and appends the query, the rows read
-  and the budget.
+  `{"error":"sloth_db_timeout","detail":...,"query":"alerts","rows_read":N,"plan":"scan","budget_ms":1500}`
+  (`plan` is how that table was being read: `index`, `bound`, `scan`,
+  or null between them, so a slow scan of a file sloth has not
+  reindexed is told apart from a slow index count), and the page keeps
+  "try again" and appends the query, the rows read, the plan and the
+  budget.
 - **Who was here** (`/api/history/devices?from=&to=&limit=&offset=`) is
   the wiki's recipe as a route: devices whose `[first_seen, last_seen]`
   overlaps `[from, to]`, edges included, rendered as `/api/devices`
@@ -2217,7 +2228,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_slothdb.c` | sloth.db generated from `src/db_schema.c`: the open flags (read-only, no-follow, never write or create; a write refused); the file byte for byte and its directory listing after every read, for a rollback-journal file, a cleanly closed WAL file (immutable, no `-wal` or `-shm` made), a WAL file sloth holds open with unflushed frames (read, main file and WAL prefix unchanged, sloth still writing) and a `-wal` with no `-shm`; the refusals (missing, symlink, directory, newer, a slothweb store, no devices table, a bad version, not SQLite, not configured); a v5 file read by probing and a minimal v1 file; the allow-list against `tests/test_db.c`'s guardrail, credential words and the live schema; the authorizer denying every statement off the list; the budget interrupting a slow statement; the acceptance query returning exactly D1 and D6; every other term against the file; the drawer's, Lookup's and A2's reads |
 | `test_devices.c` | the three routes through the route table: no sloth.db (`503`, the drawer and Lookup from the stream), `405` and `421` on the new paths; the acceptance query over HTTP (encoded both ways, `HEAD`); a row's members, the vendor's and name's sources, markup never markup; paging and every `400`; sloth.db missing; the drawer (path forms, lists, the detail, alerts, no credential, a MAC sloth.db lacks, bad MACs); the strip from the store's minute tier and the ring, the week from the baseline, an episode and the `anomaly:` and `has:` terms; Lookup (an MA-S MAC resolved, and not with sloth's own table; an IP's MAC, names and record; refusals); the health members; the worst case stopping with `more` |
 | `test_wifi.c` | the WiFi routes through the route table: the waterfall's band order and channel order, a gauge cell as the mean of its buckets and a counter's as their sum, null for empty, the defaults, 40 channels and `more`, every `400` (`tier_unavailable` past 24 h without a store), `503` without a time series or sloth.db; a channel only the store holds, at the minute and hour tiers; the deauth timeline by frames with its DEAUTH_FLOOD episodes in the range matched on the alert key that no body names, and without sloth.db; the AP table (AKM bits and downgrade flags by name, MFP as a word, the SSID history and count, KARMA, a markup SSID escaped, sorts, paging, refusals) and its worst-case row fitting `WEB_WIFI_AP_ROW_MAX`; the page's WiFi view, its ids and fetches. Both builds |
-| `test_history.c` | the History routes over a generated sloth.db: the strip's cells and session markers, the defaults and refusals; the strip on 600,000 alert episodes and 60,000 devices without the first_seen indexes inside its budget (the time asserted under 250 ms, 4x that under ASan or TSan), its work (progress-handler ticks) under a quarter of a scan's by the last_seen bound, every plan's counts held to a `GROUP BY`'s; the cache served without an open, invalidated by an mtime, a minute or a write; a timeout naming its read and rows; who was here at the edges of the overlap, the presence strip over the range, paging; the alerts and flows in a range with no key, detail, cookie or MQTT username and no `mqtt_flows`; the sessions; "new since the previous session" for a first visit, a visit after a crash (its window closed at the next start), one whose previous never ended (since its start), and the latest, whose devices are the ones the wiki's own recipe names; the page's History view. Both builds |
+| `test_history.c` | the History routes over a generated sloth.db: the strip's cells and session markers, the defaults and refusals; the strip on 600,000 alert episodes and 60,000 devices without the first_seen indexes inside its budget (the time asserted under 250 ms, 4x that under ASan or TSan), its work (progress-handler ticks) under a quarter of a scan's by the last_seen bound, every plan's counts held to a `GROUP BY`'s; the snapshot's shape (867,748 episodes and 31,821 devices, all in the last 30 days, no index: the scan plan) inside the overview's 1500 ms through the route, and a direct count inside 4x that under the sanitizers; the cache served without an open, invalidated by an mtime, a minute, a write, and a write into the `-wal` that leaves the main file's stat unchanged; a timeout naming its read, rows and plan; who was here at the edges of the overlap, the presence strip over the range, paging; the alerts and flows in a range with no key, detail, cookie or MQTT username and no `mqtt_flows`; the sessions; "new since the previous session" for a first visit, a visit after a crash (its window closed at the next start), one whose previous never ended (since its start), and the latest, whose devices are the ones the wiki's own recipe names; the page's History view. Both builds |
 | `test_sqlbox.c` | the SQL box: the parameter and text rules; `404` without `--web-allow-sql` and the page's box hidden; spec §12's M5 acceptance (above) over a real socket against the C API and the sqlite3 shell; every write, DDL, PRAGMA, ATTACH, DML-tail CTE and second statement refused with the file byte for byte; every withheld column refused, the guardrail's words on the list, the integer flags read; the row, byte, time and value limits; one at a time (`503` `busy`, free again once answered or once the client leaves), `HEAD` `405`, `/api/recipes`. Both builds |
 | `test_flows.c` | the Flows routes over a generated sloth.db: every tab's row byte for byte, an SMB1 session marked, the columns each tab reads held to the allow-list and the withheld ones held off it, no cookie, banner, MQTT username, community count or preauth count in any body, every `400`, paging, sorting, the `ip` filter, a page that stops early with `more` and the next one, the chord pairs with their fold at three sizes, a table the file lacks; the page's Flows view. Both builds |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |

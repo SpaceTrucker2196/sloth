@@ -1139,6 +1139,38 @@ static void test_alert_finding_outlives_a_restart(void) {
     unlink(db_path);
 }
 
+/* An episode whose last_seen is before its first_seen, as the engine
+ * can stamp one across a backward wall-clock step (an evicted key's
+ * first_seen restored, then last_seen = now), is stored ending where
+ * it began: no stored episode has first_seen > last_seen, which
+ * slothweb's History count relies on. Seen red with the clamp in
+ * write_events() removed (last_seen 1700000000 stored). */
+static void test_alert_last_seen_never_precedes_first_seen(void) {
+    fresh_db();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alert_t *a = &s.alerts[s.alert_count++];
+    memset(a, 0, sizeof(*a));
+    snprintf(a->key, sizeof(a->key), "portscan:10.0.0.9");
+    a->type = ALERT_TYPE_PORT_SCAN;
+    a->first_seen = 1700000600;
+    a->last_seen  = 1700000000;           /* the clock stepped back */
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 1);
+    ASSERT_EQ(q_int("SELECT first_seen FROM alerts"), 1700000600);
+    ASSERT_EQ(q_int("SELECT last_seen FROM alerts"), 1700000600);
+    /* Later ticks on the stepped clock leave it so; once the clock
+     * passes first_seen again, last_seen advances as usual. */
+    s.alerts[0].last_seen = 1700000100;
+    db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT last_seen FROM alerts"), 1700000600);
+    s.alerts[0].last_seen = 1700000700;
+    db_tick(&s, 1700000700);
+    ASSERT_EQ(q_int("SELECT last_seen FROM alerts"), 1700000700);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts WHERE first_seen > last_seen"), 0);
+    db_close();
+    unlink(db_path);
+}
+
 /* Severity and detail track the live engine — the latest observation
  * wins, matching how fire() overwrites them. */
 static void test_alert_severity_tracks_latest(void) {
@@ -3932,6 +3964,7 @@ void run_db_tests(void) {
     RUN_TEST(test_alert_reopen_keeps_peak_sev);
     RUN_TEST(test_alert_evict_refire_churn_is_one_row);
     RUN_TEST(test_alert_finding_outlives_a_restart);
+    RUN_TEST(test_alert_last_seen_never_precedes_first_seen);
     RUN_TEST(test_alert_severity_tracks_latest);
     RUN_TEST(test_deauth_flood_flag_latches);
     RUN_TEST(test_deauth_undecoded_reason_is_null);

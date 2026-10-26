@@ -1287,7 +1287,7 @@
     "sloth_db_timeout": "sloth.db was too slow to answer; try again"
   };
   // j: the error's body, when the server said which read failed and how
-  // far it got (/api/history/overview: query, rows_read, budget_ms).
+  // far it got (/api/history/overview: query, rows_read, plan, budget_ms).
   function errText(m, j) {
     if (m === "no_sloth_db" && NOSQL)
       return "this slothweb was built without SQLite (WITH_SQLITE=0): it cannot read sloth.db; rebuild with make web";
@@ -1295,6 +1295,7 @@
     if (j && typeof j.query === "string" && (m === "sloth_db_timeout" || m === "sloth_db_error")) {
       t += " (" + j.query.slice(0, 32);
       if (num(j.rows_read)) t += ": " + j.rows_read.toLocaleString("en-US") + " rows read";
+      if (typeof j.plan === "string") t += " by " + j.plan.slice(0, 8);
       if (m === "sloth_db_timeout" && num(j.budget_ms)) t += " in " + j.budget_ms + " ms";
       t += ")";
     }

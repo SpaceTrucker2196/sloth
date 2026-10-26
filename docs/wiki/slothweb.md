@@ -646,8 +646,11 @@ In short:
   first seen and alerts begun per cell, sessions as markers; counted per
   cell over sloth's `idx_<t>_first_seen`, or without it bucketed from
   the rows in range, found by `last_seen` when most of the table is
-  older; cached 60 s per sloth.db state; a timeout names the read and
-  the rows it had counted — see [[sqlite-schema]] and `web/README.md`),
+  older; cached 60 s per sloth.db state, the `-wal`'s included; a
+  timeout names the read, the rows it had counted and how it was
+  reading them (`plan`); 1500 ms is 6–12 times the snapshot's idle
+  desktop scan, 1.3–5 times a loaded one — see [[sqlite-schema]] and
+  `web/README.md`),
   `/api/history/devices` (who was here: `[first_seen, last_seen]`
   overlapping the range, presence over the range and nothing past it,
   from the hour tier as well for a range older than

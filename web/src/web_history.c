@@ -112,15 +112,32 @@ static void session_json(web_jw_t *w, const web_sdb_session_t *s) {
 
 /* ── /api/history/overview ───────────────────────────────────────────── */
 
+static const char *plan_name(int plan) {
+    switch (plan) {
+    case WEB_SDB_PLAN_INDEX: return "index";
+    case WEB_SDB_PLAN_BOUND: return "bound";
+    case WEB_SDB_PLAN_SCAN:  return "scan";
+    case WEB_SDB_PLAN_EMPTY: return "empty";
+    default:                 return NULL;
+    }
+}
+
 /* The overview's 503 says which read failed and how far it got, so
  * "too slow" names the table and the rows it had counted when the
  * budget ran out: {"error", "detail", "query", "rows_read" (null when
- * not counting rows), "budget_ms"}. Closes c. */
+ * not counting rows), "plan" (how that table was read, c->plan, null
+ * when not counting one), "budget_ms"}. Closes c. */
 static int overview_failed(web_sdb_conn_t *c, char *body, size_t cap,
                            size_t *len, int *status) {
     int to = c->timed_out;
     const char *what = c->what ? c->what : "open";
     long long rows = c->rows_read;
+    /* How that table was being read: a slow scan of a file sloth has
+     * not reindexed reads differently from a slow index count. */
+    const char *plan = !c->what ? NULL
+                     : !strcmp(c->what, "devices") ? plan_name(c->plan[0])
+                     : !strcmp(c->what, "alerts")  ? plan_name(c->plan[1])
+                     : NULL;
     web_slothdb_close(c);
     char detail[160];
     if (rows >= 0)
@@ -137,6 +154,8 @@ static int overview_failed(web_sdb_conn_t *c, char *body, size_t cap,
     web_jw_raw(&w, ",\"query\":");      web_jw_str(&w, what);
     web_jw_raw(&w, ",\"rows_read\":");
     if (rows >= 0) web_jw_int(&w, rows); else web_jw_raw(&w, "null");
+    web_jw_raw(&w, ",\"plan\":");
+    if (plan) web_jw_str(&w, plan); else web_jw_raw(&w, "null");
     web_jw_raw(&w, ",\"budget_ms\":");  web_jw_int(&w, WEB_SDB_OVERVIEW_MS);
     web_jw_raw(&w, "}\n");
     if (w.overflow) return -1;

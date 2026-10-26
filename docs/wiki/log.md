@@ -5246,3 +5246,21 @@ report events.
   the inverse edit: the `last_seen` bound dropped (the ticks are a
   scan's), the cache made to miss, the mtime left out of the state, the
   old error body, either `CREATE INDEX` removed.
+- 2026-10-26 — [[slothweb]], [[sqlite-schema]]: the History fix's
+  review. The overview cache's `-wal` half is now tested (a writer with
+  checkpoints off appends to the `-wal`, the main file's stat
+  unchanged, and the next strip is counted again; seen red with the
+  state compared on the main file only). The snapshot's own shape,
+  every row in the last 30 days and so the scan plan, is timed against
+  the 1500 ms budget, and the budget's case is restated as a range:
+  123–246 ms idle, 0.3–1.1 s loaded, 6–12 times the idle scan but
+  1.3–5 times the loaded one; a 503 now carries the `plan` that ran
+  out. The index build is quoted as about 0.65 s CPU and 0.93–1.85 s
+  wall under load on the snapshot (the 276 ms first quoted was not
+  reproduced; the CPU time alone is over twice it): a
+  ~1M-row file delays sloth's start by roughly 1–2 s once on a desktop,
+  likely several seconds on a Pi. sloth now stores an alert episode
+  stamped across a backward clock step (last_seen before first_seen) as
+  ending where it began, so the `last_seen` bound's
+  `first_seen <= last_seen` holds by construction for new rows (seen red
+  with the clamp removed).

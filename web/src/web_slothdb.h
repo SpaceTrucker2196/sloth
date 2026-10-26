@@ -86,15 +86,22 @@
 #define WEB_SDB_HTTP_MS    250       /* a request's budget */
 /* /api/history/overview's alone. It counts every device and alert
  * episode begun in up to 400 days, where every other route reads a
- * page of rows: on the owner's 254 MB snapshot (867,748 alerts, no
- * first_seen index) the count took 253 ms as one GROUP BY, past
- * WEB_SDB_HTTP_MS, and takes 123 ms as web_sdb_overview() reads it now
- * (32 ms with sloth's idx_alerts_first_seen), on a desktop core with
- * the file in the page cache. A sensor-class host (a Raspberry Pi 4,
- * several times slower a core, an SD card cold) is the case the budget
- * is for: 1500 ms is about 12 times the measured scan, and is the
- * longest the single HTTP thread stalls, once per WEB_SDB_OVC_TTL_MS
- * per file state given the cache below. */
+ * page of rows. On the owner's 254 MB snapshot (867,748 alerts, every
+ * one inside the last 30 days, no first_seen index) the count took
+ * 253 ms as one GROUP BY, past WEB_SDB_HTTP_MS. As web_sdb_overview()
+ * reads it now that file takes the scan plan: 123-246 ms on an idle
+ * desktop core with the file in the page cache, 0.3-1.1 s with the
+ * same host at load average 17 (SQLite 3.45.1 and 3.53.4 alike); with
+ * sloth's idx_alerts_first_seen, 32-320 ms over the same span. Those
+ * are best-case figures for a desktop: 1500 ms is 6-12 times the idle
+ * scan but only 1.3-5 times the loaded one. A sensor-class host (a
+ * Raspberry Pi 4, several times slower a core, an SD card cold) is the
+ * case the budget is for and was not measured; a 503 names the plan
+ * that ran out, so a slow scan of a file sloth has not reindexed is
+ * told apart from a slow index count. 1500 ms is also the longest the
+ * single HTTP thread stalls, once per WEB_SDB_OVC_TTL_MS per file
+ * state given the cache below. test_history.c holds a generated file
+ * of the snapshot's shape to it (test_overview_on_the_owners_shape). */
 #define WEB_SDB_OVERVIEW_MS 1500
 #define WEB_SDB_PASS_MS    200       /* a minute pass's (A2) */
 #define WEB_SDB_ERR_MAX    200
@@ -389,7 +396,11 @@ int  web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,
  * the first_seen of the rows in range, bucketed here rather than by a
  * GROUP BY, whose sorter was most of its cost. Those rows are found
  * through idx_<t>_last_seen when most of the table ended before from
- * (first_seen <= last_seen, so last_seen >= from loses no row), and by
+ * (sloth stores first_seen <= last_seen, so last_seen >= from loses no
+ * row: the device upsert binds both from one time and keeps MIN/MAX,
+ * and write_events() clamps an alert episode the engine stamped across
+ * a backward wall-clock step; a file an older sloth wrote across such a
+ * step can hold an episode that the bound leaves out), and by
  * a scan otherwise: for a table that is mostly in range the index
  * costs about twice the scan per row. "Most" is estimated from
  * min(last_seen) and max(last_seen), two index probes, as a fraction

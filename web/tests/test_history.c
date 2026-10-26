@@ -94,6 +94,7 @@ static void test_page_carries_the_history_view(void) {
     WT_HAS(p, "e.body = j;");
     WT_HAS(p, "t += \" (\" + j.query.slice(0, 32);");
     WT_HAS(p, "t += \": \" + j.rows_read.toLocaleString(\"en-US\") + \" rows read\";");
+    WT_HAS(p, "if (typeof j.plan === \"string\") t += \" by \" + j.plan.slice(0, 8);");
     WT_HAS(p, "t += \" in \" + j.budget_ms + \" ms\";");
     WT_HAS(p, "set(\"h-range\", errText(e.message, e.body));");
 }
@@ -805,6 +806,88 @@ static void test_overview_on_a_large_file_without_the_index(void) {
     rmdir(dir);
 }
 
+#define OWN_ALERTS  867748
+#define OWN_DEVICES  31821
+
+/* The owner's own file, in shape: 867,748 alert episodes and 31,821
+ * devices, every one first and last seen in the 12 days before T, and
+ * no first_seen index. Every row is in "THE LAST 30 DAYS", so the
+ * last_seen bound does not apply and the count is a scan: the plan
+ * test_overview_on_a_large_file_without_the_index times only for a
+ * twentieth of its rows. The page's request answers within the
+ * overview's budget (the route's 503 otherwise), and a direct count
+ * within it times OVW_TIME_SCALE. */
+static void test_overview_on_the_owners_shape(void) {
+    char dir[64], path[128], q[128], sql[2048];
+    snprintf(dir, sizeof(dir), "/tmp/slothweb-own-XXXXXX");
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    snprintf(path, sizeof(path), "%s/sloth.db", dir);
+    long long t0 = mono_ms_t();
+    WT_EQ(sdb_make(path, db_schema_version(), 0), 0);
+    snprintf(sql, sizeof(sql),
+        "DROP INDEX idx_alerts_first_seen; DROP INDEX idx_devices_first_seen;"
+        "BEGIN;"
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n"
+        " WHERE i < %d - 1)"
+        " INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,count)"
+        " SELECT 'o:' || i, f, f + i %% 900, i %% 90, i %% 3, 'PORT_SCAN', 1 FROM"
+        " (SELECT i, %lld + (i * 37) %% %lld AS f FROM n);"
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n"
+        " WHERE i < %d - 1)"
+        " INSERT INTO devices (mac,first_seen,last_seen)"
+        " SELECT printf('02:00:%%02x:%%02x:%%02x:%%02x', i / 16777216 %% 256,"
+        " i / 65536 %% 256, i / 256 %% 256, i %% 256), f, f + i %% 600 FROM"
+        " (SELECT i, %lld + (i * 53) %% %lld AS f FROM n);"
+        "COMMIT;",
+        OWN_ALERTS, T - 12 * DY, 12 * DY - 3600,
+        OWN_DEVICES, T - 12 * DY, 12 * DY - 3600);
+    WT_EQ(sdb_exec(path, sql), 0);
+    fprintf(stderr, "    generated %d alerts, %d devices in %lld ms\n",
+            OWN_ALERTS, OWN_DEVICES, mono_ms_t() - t0);
+    web_slothdb_t s;
+    web_slothdb_init(&s, path, NULL);
+    web_m4_t m = m4;
+    m.sdb = &s;
+    web_health_t h = H;
+    h.m4 = &m;
+#if OVW_TIME_SCALE == 1
+    /* The page's own request, under the route's own budget. The
+     * sanitizers' slower slothweb can pass it on a loaded host, which
+     * is not the failure this asserts; they take the direct count. */
+    snprintf(q, sizeof(q), "from=%lld&to=%lld&cols=180", T - 30 * DY, T);
+    t0 = mono_ms_t();
+    WT_EQ(route(&h, "/api/history/overview", q), 200);
+    long long took = mono_ms_t() - t0;
+    fprintf(stderr, "    overview of the last 30 days, all rows in it: %lld ms"
+            " (budget %d)\n", took, WEB_SDB_OVERVIEW_MS);
+    WT_ASSERT(took < WEB_SDB_OVERVIEW_MS);
+#else
+    (void)q;
+    (void)h;
+#endif
+    static long long d[180], a[180];
+    web_sdb_conn_t c;
+    char err[WEB_SDB_ERR_MAX];
+    WT_EQ(web_slothdb_open(&s, &c, WEB_SDB_OVERVIEW_MS * OVW_TIME_SCALE, T,
+                           err, sizeof(err)), 0);
+    t0 = mono_ms_t();
+    WT_EQ(web_sdb_overview(&c, T - 30 * DY, 14400, 180, d, a), 0);
+    long long direct = mono_ms_t() - t0;
+    fprintf(stderr, "    direct count, scan plan: %lld ms (asserted < %d)\n",
+            direct, WEB_SDB_OVERVIEW_MS * OVW_TIME_SCALE);
+    WT_ASSERT(direct < WEB_SDB_OVERVIEW_MS * OVW_TIME_SCALE);
+    WT_EQ(c.plan[0], WEB_SDB_PLAN_SCAN);
+    WT_EQ(c.plan[1], WEB_SDB_PLAN_SCAN);
+    web_slothdb_close(&c);
+    long long nd = 0, na = 0;
+    for (int i = 0; i < 180; i++) { nd += d[i]; na += a[i]; }
+    WT_EQ(nd, OWN_DEVICES);
+    WT_EQ(na, OWN_ALERTS);
+    web_slothdb_destroy(&s);
+    unlink(path);
+    rmdir(dir);
+}
+
 /* A repeated overview of an unchanged file is served from the cache,
  * without opening it (opens, and no new miss); a from in the same cell
  * is the same answer, the cached from and to with it; a new mtime, or a
@@ -868,9 +951,79 @@ static void test_overview_cache(void) {
     WT_EQ(sdb_exec(g_db, "DELETE FROM alerts WHERE key='scan:10.0.0.99'"), 0);
 }
 
+/* The cache's -wal half. A running sloth writes into sloth.db-wal and
+ * leaves the main file alone until a checkpoint, so a cache keyed on
+ * the main file only would serve the counts from before every write
+ * since. Here a writer holds the file open with checkpoints off, as
+ * sloth between checkpoints: its INSERT leaves the main file's stat as
+ * it was, and the next overview is counted again and carries the row.
+ * Seen red with same_ident() comparing the main file only (a hit, the
+ * old body). */
+static void test_overview_cache_follows_the_wal(void) {
+    char dir[64], path[128], side[160], q[160], first[4096], sql[400];
+    snprintf(dir, sizeof(dir), "/tmp/slothweb-wal-XXXXXX");
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    snprintf(path, sizeof(path), "%s/sloth.db", dir);
+    WT_EQ(sdb_make(path, db_schema_version(), 1), 0);
+    sqlite3 *wr = NULL;
+    WT_EQ(sqlite3_open(path, &wr), SQLITE_OK);
+    snprintf(sql, sizeof(sql), "PRAGMA wal_autocheckpoint=0;"
+             "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,count)"
+             " VALUES ('scan:10.0.0.1',%lld,%lld,0,0,'PORT_SCAN',1)",
+             T - 3 * DY, T - 3 * DY + 60);
+    WT_EQ(sqlite3_exec(wr, sql, NULL, NULL, NULL), SQLITE_OK);
+    web_slothdb_t s;
+    web_slothdb_init(&s, path, NULL);
+    web_m4_t m = m4;
+    m.sdb = &s;
+    web_health_t h = H;
+    h.m4 = &m;
+    web_sdb_stats_t a, b;
+    snprintf(q, sizeof(q), "from=%lld&to=%lld&cols=30", T - 30 * DY, T);
+    WT_EQ(route(&h, "/api/history/overview", q), 200);
+    snprintf(first, sizeof(first), "%s", body_of(g_out));
+    web_slothdb_stats(&s, &a);
+    WT_EQ(a.ovw_misses, 1);
+    WT_EQ(a.opens, 1);
+    WT_EQ(strcmp(a.mode, "wal"), 0);
+    /* Unchanged: cached, so the miss below is the write's doing. */
+    WT_EQ(route(&h, "/api/history/overview", q), 200);
+    web_slothdb_stats(&s, &b);
+    WT_EQ(b.ovw_hits, a.ovw_hits + 1);
+    WT_EQ(b.opens, a.opens);
+    struct stat m0, m1, w0, w1;
+    snprintf(side, sizeof(side), "%s-wal", path);
+    WT_EQ(stat(path, &m0), 0);
+    WT_EQ(stat(side, &w0), 0);
+    snprintf(sql, sizeof(sql), "INSERT INTO alerts (key,first_seen,last_seen,"
+             "type,sev,title,count) VALUES ('scan:10.0.0.2',%lld,%lld,0,0,"
+             "'PORT_SCAN',1)", T - 2 * DY, T - 2 * DY + 60);
+    WT_EQ(sqlite3_exec(wr, sql, NULL, NULL, NULL), SQLITE_OK);
+    WT_EQ(stat(path, &m1), 0);
+    WT_EQ(stat(side, &w1), 0);
+    /* The main file as it was; the -wal grew. */
+    WT_EQ((long long)m1.st_size, (long long)m0.st_size);
+    WT_EQ((long long)m1.st_mtim.tv_sec, (long long)m0.st_mtim.tv_sec);
+    WT_EQ((long long)m1.st_mtim.tv_nsec, (long long)m0.st_mtim.tv_nsec);
+    WT_ASSERT(w1.st_size > w0.st_size);
+    WT_EQ(route(&h, "/api/history/overview", q), 200);
+    web_slothdb_stats(&s, &a);
+    WT_EQ(a.ovw_misses, b.ovw_misses + 1);
+    WT_EQ(a.opens, b.opens + 1);
+    WT_ASSERT(strcmp(body_of(g_out), first) != 0);
+    sqlite3_close(wr);
+    web_slothdb_destroy(&s);
+    unlink(side);
+    snprintf(side, sizeof(side), "%s-shm", path);
+    unlink(side);
+    unlink(path);
+    rmdir(dir);
+}
+
 /* The overview's 503 names the read that ran out and the rows it had
- * counted. Seen red with overview_failed() replaced by
- * web_hist_read_failed() (no query, no rows). */
+ * counted, and how it was reading that table. Seen red with
+ * overview_failed() replaced by web_hist_read_failed() (no query, no
+ * rows). */
 static void test_overview_timeout_says_what(void) {
     char dir[64], path[128];
     snprintf(dir, sizeof(dir), "/tmp/slothweb-slow-XXXXXX");
@@ -893,6 +1046,7 @@ static void test_overview_timeout_says_what(void) {
     WT_EQ(web_sdb_overview(&c, T - 400 * DY, 192000, 180, d, a), -1);
     WT_EQ(c.timed_out, 1);
     WT_ASSERT(c.what != NULL && !strcmp(c.what, "devices"));
+    WT_EQ(c.plan[0], WEB_SDB_PLAN_SCAN);
     web_slothdb_close(&c);
     /* And through the route, its budget spent once the file is open. */
     web_hist_test_expire = 1;
@@ -905,7 +1059,7 @@ static void test_overview_timeout_says_what(void) {
     WT_HAS(b, "ran past the budget after ");
     WT_HAS(b, "\"query\":\"");
     WT_HAS(b, "\"rows_read\":");
-    WT_HAS(b, "\"budget_ms\":1500}");
+    WT_HAS(b, "\"plan\":\"scan\",\"budget_ms\":1500}");
     web_slothdb_destroy(&s);
     unlink(path);
     rmdir(dir);
@@ -917,7 +1071,9 @@ void run_history_tests(void) {
     up();
     WT_RUN(test_overview);
     WT_RUN(test_overview_cache);
+    WT_RUN(test_overview_cache_follows_the_wal);
     WT_RUN(test_overview_on_a_large_file_without_the_index);
+    WT_RUN(test_overview_on_the_owners_shape);
     WT_RUN(test_overview_timeout_says_what);
     WT_RUN(test_who_was_here);
     WT_RUN(test_presence_inside_the_range);
