@@ -14,8 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
-**Last updated**: 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
+**Last updated**: 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
 and `drained`; the `beacon-overflow` `BEACONING` finding; IPv4-mapped
 beaconing peers keyed as IPv4), 2026-10-23 (#165 audit: a PTR `answer`
 is whole up to 63 bytes, for a PTR question only; a target that would
