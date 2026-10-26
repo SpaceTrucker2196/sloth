@@ -5132,3 +5132,11 @@ report events.
   dashed edge, not by dimming; `utf8()` and `lowerAscii()` are pinned
   and ported. `docs/web-ui-spec.md` §8.1 amended to point at the
   served tokens.
+- 2026-10-26: [[slothweb]]: `docs/web-viz-spec.md` written and linked, a
+  draft for the owner. A review of every slothweb view outside the
+  theme (twenty findings), a Tufte-derived set of eight glyphs (band
+  sparkline, RSSI range sparkline, channel horizon strip, hour-of-week
+  heat glyph, presence strip, bullet and count bar, event rug, attack
+  chain timeline), the analyst's questions by Endsley level, the seven
+  series the server must add, twelve rules, tests and five delivery
+  slices. Nothing in `web/` changed.

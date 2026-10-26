@@ -13,7 +13,10 @@ never writes to sloth or to `sloth.db`.
 
 The spec is [`docs/web-ui-spec.md`](../docs/web-ui-spec.md) (the
 rulings table at its top overrides the body); the wiki page is
-[`docs/wiki/slothweb.md`](../docs/wiki/slothweb.md). Everything below
+[`docs/wiki/slothweb.md`](../docs/wiki/slothweb.md). The visual
+system the page's graphics should follow, a Tufte-derived glyph set
+with a review of each view, is
+[`docs/web-viz-spec.md`](../docs/web-viz-spec.md) (draft, 2026-10-26). Everything below
 the Security section is reference: the command line, every route, and
 how each part works.
 
