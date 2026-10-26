@@ -51,6 +51,12 @@ int  alert_pcap_enabled(void);
  * redirect a deletion. An artifact name that is not a regular file is
  * left as it is and counted as a sweep error.
  *
+ * Age is mtime against sloth_wall(). Until the process has been up one
+ * whole window by the monotonic clock, a file whose mtime is at or after
+ * the wall time alert_pcap_set_dir() ran at is never deleted: on a
+ * sensor that started on a stale clock and was stepped forward by NTP,
+ * those are the files it wrote minutes ago with past stamps.
+ *
  * A pass starts at the first maintain call (startup) and then at most
  * once per ALERT_PCAP_SWEEP_INTERVAL_S, and each call examines at most
  * a fixed number of directory entries, resuming where the last call
@@ -79,6 +85,13 @@ int  alert_pcap_retain_days(void);
  * a pass resume without creating a thousand files. */
 int  alert_pcap_sweep_step(int budget);
 int  alert_pcap_maintain(void);
+
+/* 1 when --pcap-dir and --eapol-dir are both configured and are the
+ * same directory by dev/ino (#166). eapol_sweep() deletes every *.pcap
+ * and manifest in its directory on the handshake window, so in a shared
+ * directory it would expire alert pcaps whatever pcap.retain_days says,
+ * 0 included; main() refuses the pairing on this. */
+int  alert_pcap_shares_eapol_dir(void);
 
 /* 1 while a pass has entries left to examine. */
 int  alert_pcap_sweep_in_progress(void);

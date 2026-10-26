@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <time.h>
+#include <sys/stat.h>
 #include "sloth.h"
 #include "dot11_frame.h"
 
@@ -265,6 +266,13 @@ void eapol_maintain(time_t now);
  * Returns 0 on success, -1 on refusal/failure with export disabled and
  * the reason in eapol_export_error(). */
 int  eapol_set_output_dir(const char *dir);
+
+/* fstat() of the pinned export directory, for a caller that must know
+ * whether another sink resolved to the same one (#166: --pcap-dir and
+ * --eapol-dir in one directory would put alert pcaps on this module's
+ * sweep). The descriptor itself still never escapes. 0 on success, -1
+ * when no directory is configured. */
+int  eapol_export_dir_stat(struct stat *out);
 
 /* Export failures since the last eapol_set_output_dir(): a refused or
  * unopenable file, a short write, a failed rename. The first is also

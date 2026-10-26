@@ -972,6 +972,13 @@ int eapol_set_output_dir(const char *dir) {
     return rc;
 }
 
+int eapol_export_dir_stat(struct stat *out) {
+    pthread_mutex_lock(&g_mu);
+    int rc = (g_out_fd >= 0 && fstat(g_out_fd, out) == 0) ? 0 : -1;
+    pthread_mutex_unlock(&g_mu);
+    return rc;
+}
+
 /* ── Gated export-directory access for other modules (#92) ─────────── */
 
 /* Create a file in the --collect-handshakes export directory, through

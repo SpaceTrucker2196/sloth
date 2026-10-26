@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`, `src/evidence_manifest.h`, FIPS 180-4 (SHA-256).
 
-**Last updated**: 2026-10-26 (#166: `--pcap-dir` files and manifest are swept after `pcap.retain_days`). Earlier 2026-10-20 (#92 slice 3 review: EAPOL sinks hash after releasing their lock, measured cost; a manifest whose rollback fails is abandoned for `-N`; §5). Earlier 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
+**Last updated**: 2026-10-26 (#166: `--pcap-dir` files and manifest are swept after `pcap.retain_days`, noted in §1 too; one directory for `--pcap-dir` and `--eapol-dir` is refused). Earlier 2026-10-20 (#92 slice 3 review: EAPOL sinks hash after releasing their lock, measured cost; a manifest whose rollback fails is abandoned for `-N`; §5). Earlier 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
 
 ---
 
@@ -26,6 +26,14 @@ type: reference
   `_2`, `_3` … suffix instead of overwriting each other.
 - Clearing alerts (`c` in the Alerts view) resets dedup state, so a
   future hit re-arms and opens a new file.
+- **Deleted after two weeks by default** (#166). These files, and the
+  manifest beside them, are removed once their mtime is older than
+  `--tune pcap.retain_days` (default **14**, `0` = keep forever),
+  swept at startup and hourly. Only the names this section describes
+  are touched; a file of your own in `DIR` is not. `--pcap-dir` and
+  `--eapol-dir` naming the same directory is refused (exit `2`), since
+  the handshake sweep would otherwise expire these on its 7-day
+  window. See [[retention]] §2d.
 - **64 bytes per packet, and the header says so** (#145 owner default).
   The packets come from the wired ring, which stores `min(caplen, 64)`
   bytes of each frame (`src/capture/capture.c`). The file header

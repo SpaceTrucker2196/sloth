@@ -23,11 +23,11 @@ per-alert pcaps in `--pcap-dir` are swept on a 14-day default window
 `src/eapol_log.c` (`eapol_sweep`, `eapol_maintain`), `include/eapol_log.h`
 (`EAPOL_DEFAULT_RETENTION_DAYS`), `tests/test_eapol_log.c` for §2c (#87);
 `src/alert_pcap.c` (`alert_pcap_sweep_step`, `alert_pcap_maintain`,
-`alert_pcap_is_name`), `src/alert_pcap.h`
+`alert_pcap_is_name`, `alert_pcap_shares_eapol_dir`), `src/alert_pcap.h`
 (`ALERT_PCAP_DEFAULT_RETAIN_DAYS`), `tests/test_alert_pcap.c` for §2d
 (#166).
 
-**Last updated**: 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
+**Last updated**: 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
 
 ---
 
@@ -231,7 +231,9 @@ directory, failed stat, non-regular file at an artifact name, failed
 unlink) whenever `--pcap-dir` is set; the change-only signature takes
 their decade bands, not the counts, so a sweep clearing a backlog writes
 a handful of lines, not one per tick ([[jsonl-schema]]). The first
-error is also one stderr line. A sweep error is **not** a write
+error is also one stderr line, `sloth: --pcap-dir retention sweep: …`
+— deliberately not the `… export failed` wording the write path uses,
+so a grep for lost evidence does not match it. A sweep error is **not** a write
 failure: it does not move `storage_pcap_failures` or the `!persist`
 badge, because no evidence was lost.
 
@@ -243,6 +245,33 @@ and `eapol_sweep()` already expires every `*.pcap`, the manifest and
 **`handshake.retention_days` (7 days)**, not on `pcap.retain_days`: the
 frames carry EAPOL/PMKID material, and the owner ruling of 2026-10-08
 put them under the crackable-material policy on purpose.
+
+**One directory for both is refused.** Because `eapol_sweep()` takes
+every `*.pcap` and manifest in its directory, `--pcap-dir` and
+`--eapol-dir` naming the same directory would put the alert pcaps on
+the 7-day handshake window whatever `pcap.retain_days` says — `0`
+included, while startup printed "kept until you delete them". sloth
+pins both, compares the pinned descriptors by dev/ino (so `DIR` and
+`DIR/.` are the same) and exits `2` before either sweep runs
+(`alert_pcap_shares_eapol_dir()`, `test_sweep_detects_a_shared_eapol_dir`).
+Refusal rather than teaching `eapol_sweep()` to skip alert names,
+because the two sinks also write manifests of the same shape and one
+directory cannot keep them apart.
+
+**Age is the wall clock, with one guard.** A file's age is its mtime
+against `sloth_wall()`. A sensor with no RTC that starts on a stale
+clock stamps its alert pcaps in the past, and once NTP steps the clock
+forward they would read as older than the window and go on the next
+pass. So until the process has been up one whole window by the
+monotonic clock, a file whose mtime is at or after the wall time sloth
+started at is not deleted. On a clock that was right all along those
+files are younger than the uptime and would be kept anyway, so the
+guard changes nothing there (`test_sweep_spares_files_written_before_a_clock_step`).
+What it cannot cover: files written on a stale clock by an *earlier*
+run are judged by their stamps alone at the next start, and a start on
+a stale clock spares the previous run's files until the window of
+uptime has passed. The handshake sweep (§2c) has no such guard on
+purpose — for crackable material, expiring early is the safer failure.
 
 **Same known limit as §2c.** Retention is process-local: a run without
 `--pcap-dir` does not know where an earlier run's files are and sweeps

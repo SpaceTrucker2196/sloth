@@ -1389,6 +1389,24 @@ int main(int argc, char **argv) {
         fprintf(stderr, "sloth: --pcap-dir %s\n", alert_pcap_error());
         return 1;
     }
+    if (eapol_dir && eapol_set_output_dir(eapol_dir) != 0) {
+        fprintf(stderr, "sloth: --eapol-dir %s\n", eapol_export_error());
+        return 1;
+    }
+    /* Both pinned before either sweeps (#166): eapol_sweep() expires
+     * every *.pcap and manifest in its directory on the handshake window,
+     * so one directory for both would delete alert pcaps on that window
+     * whatever pcap.retain_days says — 0 included. Compared by dev/ino of
+     * the pinned descriptors, so a second spelling of the path is caught
+     * too, and refused before anything is swept. */
+    if (alert_pcap_shares_eapol_dir()) {
+        fprintf(stderr,
+                "sloth: --pcap-dir %s and --eapol-dir %s are the same "
+                "directory: the handshake sweep would expire alert pcaps on "
+                "its own window. Give each its own directory.\n",
+                pcap_dir, eapol_dir);
+        return 2;
+    }
     if (pcap_dir) {
         /* The first bounded step of the startup pass (#166); the poll
          * loop finishes it. Started here, not left to the first tick, so
@@ -1404,10 +1422,6 @@ int main(int argc, char **argv) {
                     "sloth: --pcap-dir %s — retention disabled "
                     "(pcap.retain_days=0): alert pcaps are kept until you "
                     "delete them\n", pcap_dir);
-    }
-    if (eapol_dir && eapol_set_output_dir(eapol_dir) != 0) {
-        fprintf(stderr, "sloth: --eapol-dir %s\n", eapol_export_error());
-        return 1;
     }
     if (eapol_dir) {
         /* Sweep once here, then daily from the poll loop. At startup

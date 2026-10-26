@@ -16,6 +16,7 @@
 #include "beacon_detect.h"
 #include "tune.h"
 #include "sloth_clock.h"
+#include "eapol_log.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -990,6 +991,104 @@ static void test_sweep_noop_without_a_directory(void) {
     ASSERT_EQ(alert_pcap_sweep_errors(), 0);
 }
 
+/* stderr into a file for the length of one call, so a test can read
+ * the line an operator would grep for. */
+static FILE *sw_err_file;
+static int   sw_err_saved = -1;
+static void sw_err_begin(void) {
+    fflush(stderr);
+    sw_err_file  = tmpfile();
+    sw_err_saved = dup(STDERR_FILENO);
+    ASSERT(sw_err_file != NULL && sw_err_saved >= 0);
+    if (sw_err_file) dup2(fileno(sw_err_file), STDERR_FILENO);
+}
+static void sw_err_end(char *out, size_t n) {
+    out[0] = '\0';
+    fflush(stderr);
+    if (sw_err_saved >= 0) {
+        dup2(sw_err_saved, STDERR_FILENO);
+        close(sw_err_saved);
+        sw_err_saved = -1;
+    }
+    if (!sw_err_file) return;
+    rewind(sw_err_file);
+    size_t got = fread(out, 1, n - 1, sw_err_file);
+    out[got] = '\0';
+    fclose(sw_err_file);
+    sw_err_file = NULL;
+}
+
+static void test_sweep_error_line_is_not_an_export_failure(void) {
+    /* README and retention.md read "export failed" as lost evidence; a
+     * sweep error loses none, so its stderr line must not say it. */
+    sw_setup();
+    sw_file("target.bin", 400 * SW_DAY);
+    char lnk[256];
+    sw_path("alert_20260102_000000_LINK.pcap", lnk, sizeof(lnk));
+    ASSERT_EQ(symlink("target.bin", lnk), 0);
+    char out[512];
+    sw_err_begin();
+    sw_run_pass(ALERT_PCAP_SWEEP_BUDGET);
+    sw_err_end(out, sizeof(out));
+    ASSERT_EQ(alert_pcap_sweep_errors(), 1);
+    ASSERT(strstr(out, "sloth: --pcap-dir retention sweep: ") != NULL);
+    ASSERT(strstr(out, "sensor_health.pcap_sweep_errors") != NULL);
+    ASSERT(strstr(out, "export failed") == NULL);
+    sw_teardown();
+}
+
+static uint64_t sw_mono_ms_now = 0;
+static uint64_t sw_mono(void) { return sw_mono_ms_now; }
+
+static void test_sweep_spares_files_written_before_a_clock_step(void) {
+    /* A sensor with no RTC boots on a 2001 clock and starts sloth. */
+    tune_reset();
+    sw_now = 1000000000;
+    sw_mono_ms_now = 5000;
+    sloth_clock_test_set(sw_mono, sw_wall);
+    snprintf(sw_dir, sizeof(sw_dir), "/tmp/sloth_sweep_XXXXXX");
+    ASSERT(mkdtemp(sw_dir) != NULL);
+    ASSERT_EQ(alert_pcap_set_dir(sw_dir), 0);
+    /* An alert pcap written on the stale clock, before NTP... */
+    sw_file("alert_20010909_014640_STALE.pcap", 0);
+    /* ...and one already older than the window when sloth started. */
+    sw_file("alert_20010801_000000_PREV.pcap", 30 * SW_DAY);
+    /* NTP steps the wall clock forward 25 years; a minute has passed. */
+    sw_mono_ms_now += 60 * 1000;
+    sw_now = 1800000000;
+    ASSERT_EQ(sw_run_pass(ALERT_PCAP_SWEEP_BUDGET), 1);
+    ASSERT(sw_exists("alert_20010909_014640_STALE.pcap"));
+    ASSERT(!sw_exists("alert_20010801_000000_PREV.pcap"));
+    /* Up a whole window by the monotonic clock: the file is now truly
+     * past it, and goes. */
+    sw_mono_ms_now += (uint64_t)14 * SW_DAY * 1000;
+    sw_now += 14 * SW_DAY;
+    ASSERT_EQ(sw_run_pass(ALERT_PCAP_SWEEP_BUDGET), 1);
+    ASSERT(!sw_exists("alert_20010909_014640_STALE.pcap"));
+    sw_teardown();
+}
+
+static void test_sweep_detects_a_shared_eapol_dir(void) {
+    /* eapol_sweep() expires every *.pcap in its directory on the
+     * handshake window; main() refuses one directory for both on this. */
+    sw_setup();
+    ASSERT(!alert_pcap_shares_eapol_dir());          /* no --eapol-dir */
+    eapol_set_collect_enabled(1);
+    char alias[96];
+    snprintf(alias, sizeof(alias), "%s/.", sw_dir);  /* another spelling */
+    ASSERT_EQ(eapol_set_output_dir(alias), 0);
+    ASSERT(alert_pcap_shares_eapol_dir());
+    char other[64];
+    snprintf(other, sizeof(other), "/tmp/sloth_sweep_XXXXXX");
+    ASSERT(mkdtemp(other) != NULL);
+    ASSERT_EQ(eapol_set_output_dir(other), 0);
+    ASSERT(!alert_pcap_shares_eapol_dir());          /* same fs, not dir */
+    eapol_set_output_dir(NULL);
+    eapol_set_collect_enabled(0);
+    rmdir(other);
+    sw_teardown();
+}
+
 void run_alert_pcap_tests(void) {
     TEST_SUITE("alert_pcap dir gating");
     RUN_TEST(test_set_dir_enables_disables);
@@ -1036,4 +1135,7 @@ void run_alert_pcap_tests(void) {
     RUN_TEST(test_sweep_window_follows_the_knob);
     RUN_TEST(test_sweep_counts_a_failed_delete);
     RUN_TEST(test_sweep_noop_without_a_directory);
+    RUN_TEST(test_sweep_error_line_is_not_an_export_failure);
+    RUN_TEST(test_sweep_spares_files_written_before_a_clock_step);
+    RUN_TEST(test_sweep_detects_a_shared_eapol_dir);
 }

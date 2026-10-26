@@ -5144,3 +5144,11 @@ report events.
   `--pcap-dir` is set, decade-banded in the signature. The #92 evidence
   pcaps in `--eapol-dir` were already covered by `eapol_sweep()` on the
   7-day handshake window, and stay there.
+- 2026-10-26 — [[retention]] §2d, [[pcap-export]] §1, [[cli-reference]]:
+  #166 review. `--pcap-dir` and `--eapol-dir` resolving to one
+  directory (dev/ino of the pinned descriptors) exit 2, since
+  `eapol_sweep()` would expire alert pcaps on the 7-day handshake
+  window; a stale-clock guard spares files written since startup until
+  one window of monotonic uptime; a sweep error prints
+  `sloth: --pcap-dir retention sweep:`, not `export failed`. README now
+  says alert pcaps are deleted after `pcap.retain_days`.
