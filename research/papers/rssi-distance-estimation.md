@@ -112,6 +112,16 @@ source is carried in the record as `est_ptx_source`.
   source is `country_max`. Subband triplets step one channel number at
   a time below channel 15 and four above it (the 5 GHz 20 MHz grid);
   that step is the common convention and was not re-read in the clause.
+  Because the true power can only be lower, the interval is widened by
+  the assumed-power term on the **low side only**, and a ceiling above
+  the assumed AP default (20 dBm) is not used at all: US 2.4 GHz allows
+  30 dBm where an AP typically sends about 20, and estimating at 30
+  would put an AP really at 27 m at 62 m. Never used on 6 GHz, where
+  the power limit rides the Transmit Power Envelope instead
+  (`research/ieee/802.11d-country-element.md`: "6 GHz is out of
+  scope here") and the
+  triplets' channel steps are the 2.4 / 5 GHz ones; a 6 GHz AP without
+  a TPC Report takes the assumed default until TPE is parsed.
 - **BLE extended advertising report TX_Power** (Core v6.0 Vol 4 Part E
   §7.7.65.13): "Range: −127 to +20, Units: dBm; 0x7F Tx Power
   information not available." The controller reports the TxPower field
@@ -194,12 +204,23 @@ rows already store for "unseen".
 | building | 10–30 m | 30 m is the upper end of P.1238-13 Table 2's office NLoS fit range (4–30 m) |
 | far | > 30 m | outside every indoor range P.1238 fits; the model is extrapolating |
 
-A band changes only when the estimate crosses its boundary by 25 %
-(about 2.7 dB at N = 28) — sloth's hysteresis, so a device sitting on a
-boundary does not alternate. The band and the trend are what enter the
-JSONL change-only signatures, never raw metres
-(`agents/AGENTS.md`, "Change-only emission must bucket its continuous
-values").
+A band changes only when the estimate is past its boundary by a margin
+and stays past it for 10 s — sloth's hysteresis, so a device sitting on
+a boundary does not alternate. The margin is 3 dB or two standard
+errors of the median (1.2533 × spread / √samples), whichever is larger,
+converted to metres through `N`. A fixed 25 % (about 2.7 dB at N = 28)
+was not enough: the median of eight samples at σ 4–6 dB crossed it for
+a stationary advertiser several times a minute, and a seeded-noise hour
+in `tests/test_rf_distance.c` (10 advertisements/s at σ 6 dB and 1/s at
+σ 8 dB, the mean on a boundary) now stays within four records of the
+300 s heartbeat. These constants are sloth's, sized by that test, not cited.
+
+The band is what enters the JSONL change-only signature, never raw
+metres (`agents/AGENTS.md`, "Change-only emission must bucket its
+continuous values"). The trend is written but not signed: a slope over
+a few medians enters and leaves approaching / leaving under ordinary
+noise one to several times a minute for a device that is not moving
+(about 260 trend changes an hour in the 10/s, σ 6 dB case above).
 
 ## Trend
 

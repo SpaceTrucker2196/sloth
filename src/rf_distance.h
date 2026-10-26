@@ -20,7 +20,9 @@
  * type), else an assumed per-radio default flagged "assumed". RSSI is
  * the median of the last K samples. The interval combines P.1238-10
  * Table 4's shadow-fading sigma, the samples' own spread, and an
- * assumed-power term, in quadrature.
+ * assumed-power term, in quadrature - on both sides for an assumed
+ * P_tx, on the low side only for a Country ceiling, which can only be
+ * too high.
  *
  * Everything that takes numbers is a pure function of its arguments so
  * the tests can pin it with fixed values. The two impure corners are
@@ -105,13 +107,24 @@ typedef enum {
 /* Band boundaries, metres. immediate / near are the iBeacon zones as
  * Zafari et al. arXiv:1709.01015 §III-B describe them (<1 m, 1-3 m);
  * room is sloth's cut; building ends at 30 m, the top of ITU-R
- * P.1238-13 Table 2's office NLoS fit range (4-30 m). A band changes
- * only when the estimate is RF_BAND_HYST beyond the boundary. */
+ * P.1238-13 Table 2's office NLoS fit range (4-30 m).
+ *
+ * A band changes only when the estimate is past the boundary by a
+ * margin in dB, and stays past it for RF_BAND_HOLD_S. The margin is
+ * RF_BAND_HYST_DB or RF_BAND_HYST_SE standard errors of the median
+ * (1.2533 x spread / sqrt(samples)), whichever is larger, so a noisier
+ * row needs a larger move. A fixed 25 % in metres (2.7 dB at N 2.8)
+ * was crossed by the median of a stationary advertiser several times a
+ * minute at sigma 4-6 dB; the band is signed into the change-only
+ * ble_device record, so every crossing was a record. sloth's choices,
+ * sized by the seeded-noise test in tests/test_rf_distance.c. */
 #define RF_BAND_IMMEDIATE_M  1.0
 #define RF_BAND_NEAR_M       3.0
 #define RF_BAND_ROOM_M      10.0
 #define RF_BAND_BUILDING_M  30.0
-#define RF_BAND_HYST         1.25
+#define RF_BAND_HYST_DB      3.0
+#define RF_BAND_HYST_SE      2.0
+#define RF_BAND_HOLD_S      10
 
 /* Trend: one median point per >= STEP s, window WINDOW s, at least
  * MIN_PTS points spanning MIN_SPAN s. Slope in dB per 10 s, enter at
@@ -149,7 +162,10 @@ typedef struct {
 void rf_ctx_wifi(rf_ctx_t *c, int channel, wifi_band_t band);
 
 /* An AP row: TPC Report, else the Country ceiling for `channel` less
- * any Power Constraint, else RF_PTX_AP_ASSUMED. `reg` may be NULL. */
+ * any Power Constraint when it is at most RF_PTX_AP_ASSUMED and the
+ * band is not 6 GHz, else RF_PTX_AP_ASSUMED. `reg` may be NULL. A
+ * ceiling estimate is an upper bound; its interval widens downward
+ * only (rf_track_observe()). */
 void rf_ctx_ap(rf_ctx_t *c, const reg_ie_t *reg, int channel, wifi_band_t band);
 
 /* A row whose transmitter announced nothing: `ptx_dbm` assumed. */
@@ -162,7 +178,9 @@ void rf_ctx_ble(rf_ctx_t *c, int has_ext, int ext_dbm, int has_ad, int ad_dbm);
 
 /* The Country element's ceiling for `channel`, less any Power
  * Constraint: 1 and *dbm on a subband triplet covering the channel, 0
- * otherwise. Triplets step 1 channel below 15 and 4 above. */
+ * otherwise. Triplets step 1 channel below 15 and 4 above: 2.4 and
+ * 5 GHz numbering, so a 6 GHz caller must not ask (rf_ctx_ap() does
+ * not). */
 int rf_country_max_dbm(const reg_ie_t *reg, int channel, int *dbm);
 
 /* ── Pure arithmetic ───────────────────────────────────────────── */
@@ -184,9 +202,17 @@ double rf_distance_m(int ptx_dbm, int rssi_dbm, int freq_mhz, int n_x10,
 int rf_ref_offset_db(int ptx_dbm, int rssi_dbm, int freq_mhz, int n_x10,
                      double ref_m, double *offset);
 
-/* The band `m` lies in, without and with hysteresis against `prev`. */
+/* The band `m` lies in, without and with hysteresis against `prev`:
+ * leaving `prev` needs `m` past the boundary by `hyst_db` of path loss
+ * at exponent n_x10 / 10, a factor of 10 ^ (hyst_db / n_x10) in metres.
+ * No hold: rf_track_observe() adds that. */
 rf_dist_band_t rf_band_of(double m);
-rf_dist_band_t rf_band_hyst(rf_dist_band_t prev, double m);
+rf_dist_band_t rf_band_hyst(rf_dist_band_t prev, double m, double hyst_db,
+                            int n_x10);
+
+/* The margin for a median of `n` samples with spread `spread_db`:
+ * max(RF_BAND_HYST_DB, RF_BAND_HYST_SE x 1.2533 x spread / sqrt(n)). */
+double rf_band_hyst_db(int spread_db, int n);
 
 /* Least-squares slope of dbm[] over ts[], in dB per 10 s. 0 for fewer
  * than two points or no time span. */
@@ -222,7 +248,7 @@ const char *rf_ptx_source_name(int src);    /* "tpc_report" ... "assumed", "" */
  * below; "-" when the track has no estimate. Returns the cells. */
 int rf_dist_cell(const rf_track_t *t, char *buf, size_t n, int width);
 
-/* "~4.5m (2.3-8.8m) room steady, Ptx 20 assumed" for detail panes, at
+/* "~4.5m (2.0-10m) room steady, Ptx 20 assumed" for detail panes, at
  * most 60 octets; "no estimate" when there is none. "ceiling" marks a
  * Country-element P_tx, whose distance is an upper bound. */
 void rf_dist_describe(const rf_track_t *t, char *buf, size_t n);

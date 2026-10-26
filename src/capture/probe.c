@@ -195,7 +195,8 @@ static int find_monitor_iface(char *buf, int sz) { (void)buf; (void)sz; return 0
  * hopping makes a resident heard once look brief. Mirrors
  * beacon_snoop's rssi_ring_push; the projection fields that one derives
  * are AP-only and not needed here. */
-static void client_rssi_push(probe_client_t *c, int8_t signal, time_t now) {
+static void client_rssi_push(probe_client_t *c, int8_t signal, time_t now,
+                             wifi_band_t band) {
     rssi_ring_t *r = &c->rssi_ring;
     r->dbm[r->head] = signal;
     r->ts [r->head] = now;
@@ -203,14 +204,16 @@ static void client_rssi_push(probe_client_t *c, int8_t signal, time_t now) {
     if (r->count < RSSI_WIN_SAMPLES) r->count++;
     /* The distance data point. A probe request carries no TPC Report,
      * Country element or anything else naming its power, so P_tx is
-     * always the assumed client default. */
+     * always the assumed client default. The band is the radiotap
+     * frequency's (#149): a 6 GHz channel number read alone is a
+     * 2.4 or 5 GHz one, or nothing. */
     rf_ctx_t ctx;
-    rf_ctx_assumed(&ctx, c->channel, WIFI_BAND_UNKNOWN, RF_PTX_STA_ASSUMED);
+    rf_ctx_assumed(&ctx, c->channel, band, RF_PTX_STA_ASSUMED);
     rf_track_observe(&c->dist, signal, now, &ctx);
 }
 
 static void record_probe(const uint8_t *mac, const char *ssid,
-                         int8_t signal, int channel) {
+                         int8_t signal, int channel, wifi_band_t band) {
     time_t   now    = sloth_wall();
     uint64_t now_ms = sloth_mono_ms();
 
@@ -221,7 +224,7 @@ static void record_probe(const uint8_t *mac, const char *ssid,
             g_clients[i].channel     = channel;
             g_clients[i].last_seen   = now;
             g_clients[i].frame_count++;
-            client_rssi_push(&g_clients[i], signal, now);
+            client_rssi_push(&g_clients[i], signal, now, band);
             probe_flood_note(&g_clients[i], now_ms, now);
             if (ssid[0])   /* prefer named probe over wildcard */
                 snprintf(g_clients[i].ssid, sizeof(g_clients[i].ssid),
@@ -276,7 +279,7 @@ static void record_probe(const uint8_t *mac, const char *ssid,
     g_clients[slot].first_seen  = now;
     g_clients[slot].last_seen   = now;
     g_clients[slot].frame_count = 1;
-    client_rssi_push(&g_clients[slot], signal, now);
+    client_rssi_push(&g_clients[slot], signal, now, band);
     probe_flood_note(&g_clients[slot], now_ms, now);
 }
 
@@ -466,6 +469,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
                                         ? rt.freq_mhz : 0),
                              signal);
     fr.event_id = ev;
+    fr.band     = (int)band;
 
     if (type == 1) {
         /* Control frames (#64). Dispatched *above* the 24-byte guard
@@ -603,7 +607,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
         if (status_ok && (sub == 1 || sub == 3)) {
             int src = (sub == 1) ? ASSOC_SRC_ASSOC : ASSOC_SRC_REASSOC;
             assoc_observe(bssid_p, sta_p, ssid[0] ? ssid : NULL,
-                          src, signal, channel);
+                          src, signal, channel, band);
             /* frag_note_association (#75 slice 2): the fragment cache
              * should be cleared at exactly this event. Fed from the
              * same status-0 evidence as assoc_observe, not its result —
@@ -712,7 +716,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     dot11_ie_ssid(ie_start, ie_total, ssid, NULL);
 
     pthread_mutex_lock(&g_mu);
-    record_probe(sa, ssid, signal, channel);
+    record_probe(sa, ssid, signal, channel, band);
     pthread_mutex_unlock(&g_mu);
 
     /* OS fingerprint from vendor-specific IEs (strong-signal only). */

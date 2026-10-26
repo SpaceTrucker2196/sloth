@@ -35,6 +35,13 @@ typedef struct {
     int8_t   pt_dbm[RF_PTS_MAX];
     time_t   pt_ts [RF_PTS_MAX];
     uint8_t  pt_head, pt_n;
+    /* A band the estimate has moved to but not yet held for
+     * RF_BAND_HOLD_S (0 for none), and the seconds it has been wanted,
+     * saturating. Two octets that sit in what was padding: the struct
+     * is embedded in four row tables, and a sloth_state_t a test puts
+     * on its stack is close to the 8 MB default limit. */
+    uint8_t  band_cand;
+    uint8_t  band_hold_s;
 
     /* Output. Distances in decimetres, saturating at UINT16_MAX. */
     uint8_t  valid;

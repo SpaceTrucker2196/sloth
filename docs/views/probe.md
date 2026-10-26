@@ -151,7 +151,11 @@ episode tracking on top of this and is tracked as S3.2 in
 
 ## Distance estimate (2026-10-26)
 
-The `Dist (est)` column, left of the SSID. An **estimate from signal strength**: walls and reflections dominate,
+The `Dist (est)` column, left of the SSID, planned by width out of the
+SSID's share: the full cell from 119 columns (the whole SSID still
+beside it), the short `~27m↘` from 105 (the SSID keeps 24 cells), none
+below - at the 100-column minimum the SSID keeps its 27 cells. The band
+is the radiotap frequency's, so a 6 GHz client is estimated at 6 GHz. An **estimate from signal strength**: walls and reflections dominate,
 and it is not a location. The median of the row's last 8 RSSI samples
 goes through ITU-R P.1238's indoor log-distance model; the cell reads
 `~27m bldg ↘` — metres, band (`imm` < 1 m, `near` 1–3, `room` 3–10,

@@ -143,8 +143,9 @@ The advertiser's own power is used when it states one — the extended
 report header's TX_Power first, then the TX Power Level AD structure —
 else an assumed 0 dBm. A Wi-Fi calibration never applies here: the BLE
 controller is a different receiver. In JSONL the change-only
-`ble_device` signature takes the band and an approaching / leaving
-trend, never the metres.
+`ble_device` signature takes the band only, never the metres or the
+trend: the trend is on every record, but under ordinary RSSI noise it
+moves for an advertiser that is not moving.
 
 See [`alerts.md`](alerts.md) for each rule's gates and the sources they
 rest on, and `research/bluetooth/` for the documents.

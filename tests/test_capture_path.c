@@ -28,6 +28,8 @@
 #include "dns_log.h"
 #include "captive_portal.h" /* a PTR name is not an address (#165) */
 #include "rf_quality.h"     /* bad-FCS policy pin (#123) */
+#include "rf_distance.h"    /* the 6 GHz distance case (2026-10-26) */
+#include "tune.h"
 #include "libver.h"         /* loaded-libpcap report (#142) */
 #include "capture/frame_edge.h" /* FRAME_CAPLEN_MAX (#141) */
 #include "http_log.h"       /* IP-layer cases reach the payload parsers (#132) */
@@ -895,6 +897,62 @@ static void test_a_short_assoc_response_records_the_grant(void) {
     ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls2, NULL, NULL, 1), 1);
     ASSERT_EQ(assoc_count(), 0);
     assoc_clear();
+}
+
+/* The distance estimate takes the band from the radiotap frequency,
+ * not from the channel number (#149). 5975 MHz is 6 GHz channel 5; a
+ * bare 5 is 2.4 GHz (2432 MHz), so an estimate that inferred the band
+ * would land on the wrong radio, N and L(1 m). Probe request (client,
+ * assumed 15 dBm) and association response (AP, assumed 20 dBm), both
+ * at -50 dBm, N 3.0 (P.1238-10 has no 6 GHz row; the 5.2 GHz one):
+ *   L(1 m) = 20 log10 5975 - 28 = 47.527 dB
+ *   probe: 10 ^ ((15 + 50 - 47.527) / 30) = 3.82 m   (2.4 GHz: 7.99 m)
+ *   assoc: 10 ^ ((20 + 50 - 47.527) / 30) = 5.60 m
+ * Seen red with WIFI_BAND_UNKNOWN passed back at each rf_ctx_assumed()
+ * call in client_rssi_push() and assoc_observe(): radio 2.4 GHz. */
+static void test_a_6ghz_frame_is_estimated_at_its_own_frequency(void) {
+    tune_reset();
+    rf_calibration_reset();
+    memset(&g_s, 0, sizeof(g_s));
+    probe_clear();
+    assoc_clear();
+    uint8_t f[160];
+    fb_t b; fb_init(&b, f, sizeof f);
+    fb_rt_t rt; memset(&rt, 0, sizeof rt);
+    rt.has_channel = 1; rt.freq_mhz = 5975;
+    rt.has_signal = 1;  rt.dbm = -50;
+    fb_radiotap(&b, &rt);
+    static const uint8_t bc[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+    fb_mgmt(&b, 4, 0, bc, SA_STA, bc, 0x0020, 0);    /* probe request */
+    fb_ssid(&b, "six-ghz-net");
+    ASSERT(fb_ok(&b));
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { b.len };
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    probe_snapshot(&g_s);
+    ASSERT_EQ(g_s.probe_count, 1);
+    const probe_client_t *pc = &g_s.probe_clients[0];
+    ASSERT_EQ(pc->channel, 5);
+    ASSERT_EQ(pc->dist.valid, 1);
+    ASSERT_EQ(pc->dist.radio, RF_RADIO_WIFI_6G);
+    ASSERT_EQ(pc->dist.est_dm, 38);
+
+    uint8_t g[64];
+    fb_init(&b, g, sizeof g);
+    fb_radiotap(&b, &rt);
+    fb_mgmt(&b, 1, 0, SA_STA, SA_BSSID, SA_BSSID, 0x0010, 0);
+    fb_assoc_resp_fixed(&b, 0x0411, 0 /* success */, 0xc001);
+    ASSERT(fb_ok(&b));
+    const uint8_t *gs[1] = { g };
+    int gl[1] = { b.len };
+    ASSERT_EQ(probe_test_dispatch(&g_s, gs, gl, NULL, NULL, 1), 1);
+    assoc_snapshot(&g_s);
+    ASSERT_EQ(g_s.assoc_count, 1);
+    ASSERT_EQ(g_s.assocs[0].dist.valid, 1);
+    ASSERT_EQ(g_s.assocs[0].dist.radio, RF_RADIO_WIFI_6G);
+    ASSERT_EQ(g_s.assocs[0].dist.est_dm, 56);
+    assoc_clear();
+    probe_clear();
 }
 
 /* #126: the (re)association / probe-response SSID walk in
@@ -3664,6 +3722,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_probe_response_wsc_reaches_the_beacon_table);
     RUN_TEST(test_probe_request_pnl_survives_the_htc_bit);
     RUN_TEST(test_a_short_assoc_response_records_the_grant);
+    RUN_TEST(test_a_6ghz_frame_is_estimated_at_its_own_frequency);
     RUN_TEST(test_assoc_response_element_overrun_is_tallied);
     RUN_TEST(test_probe_request_element_overrun_is_tallied_per_walk);
     RUN_TEST(test_probe_request_ssid_33_is_clamped_to_32);

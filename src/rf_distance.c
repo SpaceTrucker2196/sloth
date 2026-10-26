@@ -49,7 +49,17 @@ void rf_ctx_ap(rf_ctx_t *c, const reg_ie_t *reg, int channel, wifi_band_t band) 
     if (reg && reg->tpc_present) {
         c->ptx_dbm    = reg->tpc_tx_power_dbm;
         c->ptx_source = RF_PTX_TPC_REPORT;
-    } else if (rf_country_max_dbm(reg, channel, &p)) {
+    } else if (c->radio != RF_RADIO_WIFI_6G &&
+               rf_country_max_dbm(reg, channel, &p) && p <= RF_PTX_AP_ASSUMED) {
+        /* A ceiling, not the power: the AP transmits at or below it,
+         * so the distance it gives is an upper bound and the interval
+         * is widened below it (rf_track_observe()). A ceiling above
+         * the assumed default says less than the default does - US
+         * 2.4 GHz allows 30 dBm where an AP typically sends 20, which
+         * would put a 27 m AP at 62 m - so it is not used at all.
+         * Never on 6 GHz: there the limit is the Transmit Power
+         * Envelope's, not the Country element's, and the subband
+         * triplets' channel steps are the 2.4 / 5 GHz ones. */
         c->ptx_dbm    = p;
         c->ptx_source = RF_PTX_COUNTRY_MAX;
     } else {
@@ -145,17 +155,56 @@ rf_dist_band_t rf_band_of(double m) {
     return RF_DIST_FAR;
 }
 
-rf_dist_band_t rf_band_hyst(rf_dist_band_t prev, double m) {
+rf_dist_band_t rf_band_hyst(rf_dist_band_t prev, double m, double hyst_db,
+                            int n_x10) {
     rf_dist_band_t raw = rf_band_of(m);
     if (prev == RF_DIST_NONE || raw == RF_DIST_NONE || raw == prev) return raw;
+    if (n_x10 <= 0 || hyst_db < 0) { hyst_db = 0; n_x10 = 1; }
     /* Moving out of `prev` needs the estimate to be past the boundary
-     * by RF_BAND_HYST, so a device sitting on a boundary holds a band. */
+     * by the margin, so a device sitting on a boundary holds a band. */
+    double f = pow(10.0, hyst_db / (double)n_x10);
     if (raw > prev) {
-        rf_dist_band_t b = rf_band_of(m / RF_BAND_HYST);
+        rf_dist_band_t b = rf_band_of(m / f);
         return b > prev ? b : prev;
     }
-    rf_dist_band_t b = rf_band_of(m * RF_BAND_HYST);
+    rf_dist_band_t b = rf_band_of(m * f);
     return b < prev ? b : prev;
+}
+
+double rf_band_hyst_db(int spread_db, int n) {
+    double se = n > 0 ? 1.2533 * (double)spread_db / sqrt((double)n) : 0.0;
+    double h  = RF_BAND_HYST_SE * se;
+    return h > RF_BAND_HYST_DB ? h : RF_BAND_HYST_DB;
+}
+
+/* The band with its margin and its hold. The first estimate takes its
+ * band at once; after that a different band must be wanted on every
+ * sample for RF_BAND_HOLD_S before it is taken, so one noisy median
+ * past the margin is not a move. `dt` is the time since the previous
+ * sample; a clock stepping back adds nothing, so it neither advances
+ * nor stalls the hold. */
+static uint8_t band_step(rf_track_t *t, double m, double hyst_db, int n_x10,
+                         time_t dt) {
+    rf_dist_band_t prev = t->valid ? (rf_dist_band_t)t->band : RF_DIST_NONE;
+    rf_dist_band_t want = rf_band_hyst(prev, m, hyst_db, n_x10);
+    if (prev == RF_DIST_NONE || want == prev) {
+        t->band_cand = RF_DIST_NONE;
+        t->band_hold_s = 0;
+        return (uint8_t)want;
+    }
+    if (t->band_cand != want) {
+        t->band_cand   = (uint8_t)want;
+        t->band_hold_s = 0;
+    } else if (dt > 0) {
+        time_t h = (time_t)t->band_hold_s + dt;
+        t->band_hold_s = (uint8_t)(h > 255 ? 255 : h);
+    }
+    if (t->band_hold_s >= RF_BAND_HOLD_S) {
+        t->band_cand = RF_DIST_NONE;
+        t->band_hold_s = 0;
+        return (uint8_t)want;
+    }
+    return (uint8_t)prev;
 }
 
 double rf_slope_db10(const int8_t *dbm, const time_t *ts, int n) {
@@ -305,6 +354,8 @@ void rf_track_observe(rf_track_t *t, int rssi_dbm, time_t ts, const rf_ctx_t *c)
     if (rssi_dbm == 0 || rssi_dbm < -127 || rssi_dbm > 20) return;
     if (c->freq_mhz <= 0 || c->radio == RF_RADIO_NONE) return;
 
+    time_t dt = t->raw_n
+              ? ts - t->raw_ts[(t->raw_head + RF_RAW_MAX - 1) % RF_RAW_MAX] : 0;
     t->raw_dbm[t->raw_head] = (int8_t)rssi_dbm;
     t->raw_ts [t->raw_head] = ts;
     t->raw_head = (uint8_t)((t->raw_head + 1) % RF_RAW_MAX);
@@ -324,13 +375,21 @@ void rf_track_observe(rf_track_t *t, int rssi_dbm, time_t ts, const rf_ctx_t *c)
     double m = rf_distance_m(c->ptx_dbm, med, c->freq_mhz, n10, off);
     if (m < 0) return;
 
+    /* The interval: model sigma and the samples' spread in quadrature,
+     * plus the assumed-power term on the side it applies to. An assumed
+     * P_tx can be wrong either way. A Country ceiling can only be too
+     * high, so the true distance is at or below the estimate and only
+     * the low side widens. */
     double sig = rf_sigma_db(c->radio);
     double var = sig * sig + (double)spread * spread;
-    if (c->ptx_source == RF_PTX_ASSUMED) var += RF_ASSUMED_SIGMA_DB * RF_ASSUMED_SIGMA_DB;
-    double f = pow(10.0, sqrt(var) / (double)n10);
+    double asm2 = RF_ASSUMED_SIGMA_DB * RF_ASSUMED_SIGMA_DB;
+    double var_lo = var, var_hi = var;
+    if (c->ptx_source == RF_PTX_ASSUMED)     { var_lo += asm2; var_hi += asm2; }
+    if (c->ptx_source == RF_PTX_COUNTRY_MAX) { var_lo += asm2; }
+    double f_lo = pow(10.0, sqrt(var_lo) / (double)n10);
+    double f_hi = pow(10.0, sqrt(var_hi) / (double)n10);
 
-    t->band       = (uint8_t)rf_band_hyst(t->valid ? (rf_dist_band_t)t->band
-                                                   : RF_DIST_NONE, m);
+    t->band       = band_step(t, m, rf_band_hyst_db(spread, n), n10, dt);
     t->valid      = 1;
     t->ptx_source = c->ptx_source;
     t->ptx_dbm    = (int8_t)(c->ptx_dbm < -128 ? -128 : c->ptx_dbm > 127 ? 127 : c->ptx_dbm);
@@ -340,8 +399,8 @@ void rf_track_observe(rf_track_t *t, int rssi_dbm, time_t ts, const rf_ctx_t *c)
     t->calibrated = (uint8_t)cal;
     t->radio      = (uint8_t)c->radio;
     t->est_dm     = to_dm(m);
-    t->lo_dm      = to_dm(m / f);
-    t->hi_dm      = to_dm(m * f);
+    t->lo_dm      = to_dm(m / f_lo);
+    t->hi_dm      = to_dm(m * f_hi);
 
     /* Trend points are medians, one per RF_TREND_STEP_S at most. */
     int pnew = (t->pt_head + RF_PTS_MAX - 1) % RF_PTS_MAX;

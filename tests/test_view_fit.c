@@ -364,6 +364,9 @@ static int seed_beacon(sloth_state_t *s, time_t now) {
         ap->signal_dbm = -70; ap->channel = 149;
         snprintf(ap->enc, sizeof(ap->enc), "WPA2");
         snprintf(ap->vendor, sizeof(ap->vendor), "Ubiquiti");
+        /* Ten octets, the whole AKM column: the distance plan is
+         * checked against its last cell. */
+        snprintf(ap->akm, sizeof(ap->akm), "PSK-SHA256");
         ap->last_seen = now;
         dist_of(&ap->dist);
     }
@@ -1111,29 +1114,52 @@ static int selected_line(const fit_case_t *c, sloth_state_t *s, int rows,
     return -1;
 }
 
-/* The estimate is on screen at the 100x33 minimum where the view has
- * room for it, and in the form that view's plan chose: the full cell
- * on Probe and Beacons (whose rows are cut at the edge anyway, so the
- * cell sits left of the cut), the short one on BLE. Devices gives the
- * cell up first at 100 columns - its name column was 15 cells and stays
- * 15 - and draws it on a wide terminal. The Devices absence was seen
- * red with plan_cols() keeping the short cell at any width (the 100-
- * column row then carried "~27m"). */
+/* Each view plans the cell by width (AGENTS.md: column widths flex
+ * with panel width). At the 100x33 minimum only BLE has room, and
+ * draws the short form; Beacons keeps AKM on screen, Probe keeps the
+ * 27 SSID cells it had, and Devices keeps its 15-cell name, so none of
+ * them draws it. On a wide terminal all four take the full form, and
+ * Beacons and Probe take the short one in between.
+ *
+ * The absences are seen red: Devices with plan_cols() keeping the
+ * short cell at any width (the 100-column row carried "~27m"); Beacons
+ * and Probe with their dist_column_width() returning RF_CELL_SHORT
+ * unconditionally (the cell came back, "PSK-SHA256" lost its last
+ * cells on Beacons and the SSID its last eight on Probe). */
 static void test_distance_column_reads_at_100x33(void) {
     static sloth_state_t s;
     char line[4096];
     const char *full  = "~27m bldg \xe2\x86\x98";
     const char *shrt  = "~27m\xe2\x86\x98";
     ASSERT(selected_line(&C_PROBE, &s, FIT_ROWS, FIT_COLS, line, sizeof(line)) >= 0);
-    ASSERT(strstr(line, full) != NULL);
+    ASSERT(strstr(line, "~27m") == NULL);
+    ASSERT(strstr(line, "A-thirty-two-octet-SSID-nam") != NULL);
     ASSERT(selected_line(&C_BEACON, &s, FIT_ROWS, FIT_COLS, line, sizeof(line)) >= 0);
-    ASSERT(strstr(line, full) != NULL);
+    ASSERT(strstr(line, "~27m") == NULL);
+    ASSERT(strstr(line, "PSK-SHA256") != NULL);
     ASSERT(selected_line(&C_BLE, &s, FIT_ROWS, FIT_COLS, line, sizeof(line)) >= 0);
     ASSERT(strstr(line, shrt) != NULL);
     ASSERT(selected_line(&C_DEVICES, &s, FIT_ROWS, FIT_COLS, line, sizeof(line)) >= 0);
     ASSERT(strstr(line, "~27m") == NULL);
     ASSERT(strstr(line, "workstation-") != NULL);
-    /* Wide: BLE and Devices both take the full form. */
+    /* The plans' edges: Beacons short from 107, Probe from 105, AKM and
+     * 24 SSID cells still on screen. */
+    ASSERT(selected_line(&C_BEACON, &s, FIT_ROWS, 106, line, sizeof(line)) >= 0);
+    ASSERT(strstr(line, "~27m") == NULL);
+    ASSERT(selected_line(&C_BEACON, &s, FIT_ROWS, 107, line, sizeof(line)) >= 0);
+    ASSERT(strstr(line, shrt) != NULL);
+    ASSERT(strstr(line, "PSK-SHA256") != NULL);
+    ASSERT(selected_line(&C_PROBE, &s, FIT_ROWS, 104, line, sizeof(line)) >= 0);
+    ASSERT(strstr(line, "~27m") == NULL);
+    ASSERT(selected_line(&C_PROBE, &s, FIT_ROWS, 105, line, sizeof(line)) >= 0);
+    ASSERT(strstr(line, shrt) != NULL);
+    ASSERT(strstr(line, "A-thirty-two-octet-SSID-") != NULL);
+    /* Wide: every view takes the full form. */
+    ASSERT(selected_line(&C_PROBE, &s, BIG_ROWS, BIG_COLS, line, sizeof(line)) >= 0);
+    ASSERT(strstr(line, full) != NULL);
+    ASSERT(strstr(line, "A-thirty-two-octet-SSID-name-XYZ") != NULL);
+    ASSERT(selected_line(&C_BEACON, &s, BIG_ROWS, BIG_COLS, line, sizeof(line)) >= 0);
+    ASSERT(strstr(line, full) != NULL);
     ASSERT(selected_line(&C_BLE, &s, BIG_ROWS, BIG_COLS, line, sizeof(line)) >= 0);
     ASSERT(strstr(line, full) != NULL);
     ASSERT(selected_line(&C_DEVICES, &s, BIG_ROWS, BIG_COLS, line, sizeof(line)) >= 0);

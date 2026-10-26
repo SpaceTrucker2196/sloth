@@ -83,6 +83,14 @@ typedef struct {
      * dot11_frame_depad() copies the view, so the stamp survives the
      * datapad strip. */
     uint64_t event_id;
+
+    /* The band the radio heard the frame on (wifi_band_t), from the
+     * radiotap frequency. Stamped like event_id: dot11_frame_decode()
+     * leaves it 0, WIFI_BAND_UNKNOWN, and on_probe_frame() sets it, so
+     * an observer that needs the band - the distance estimate's centre
+     * frequency, where 5 and 6 GHz channel numbers overlap (#149) -
+     * reads it here instead of inferring it from a channel number. */
+    int band;
 } dot11_frame_t;
 
 /* Decode the MAC header of the `len` bytes at `p`. `rt` may be NULL.

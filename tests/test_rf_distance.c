@@ -24,6 +24,7 @@
 #include "ownership.h"
 #include "tune.h"
 #include "jsonl.h"
+#include "sloth_clock.h"
 
 #define T0 1700000000L
 
@@ -95,6 +96,33 @@ static void test_ctx_ap_prefers_tpc_then_country_then_assumed(void) {
     rf_ctx_ap(&c, &r, 6, WIFI_BAND_UNKNOWN);
     ASSERT_EQ(c.ptx_source, RF_PTX_TPC_REPORT);
     ASSERT_EQ(c.ptx_dbm, 14);
+
+    /* A ceiling above the assumed default is not used: US 2.4 GHz
+     * allows 30 dBm where an AP typically sends 20, and estimating at
+     * 30 would put every such AP 2.3x too far. Seen red with the
+     * `p <= RF_PTX_AP_ASSUMED` term removed from rf_ctx_ap(). */
+    r.tpc_present = 0;
+    r.triplets[0].max_tx_power_dbm = 30;
+    rf_ctx_ap(&c, &r, 6, WIFI_BAND_UNKNOWN);
+    ASSERT_EQ(c.ptx_source, RF_PTX_ASSUMED);
+    ASSERT_EQ(c.ptx_dbm, RF_PTX_AP_ASSUMED);
+    r.triplets[0].max_tx_power_dbm = 17;
+    rf_ctx_ap(&c, &r, 6, WIFI_BAND_UNKNOWN);
+    ASSERT_EQ(c.ptx_source, RF_PTX_COUNTRY_MAX);
+    ASSERT_EQ(c.ptx_dbm, 17);
+
+    /* Never on 6 GHz, where the limit is the Transmit Power Envelope's
+     * and a 1 x 13 subband read with 2.4 GHz steps would cover 6 GHz
+     * channel 5. Seen red with the RF_RADIO_WIFI_6G term removed. */
+    rf_ctx_ap(&c, &r, 5, WIFI_BAND_6GHZ);
+    ASSERT_EQ(c.radio, RF_RADIO_WIFI_6G);
+    ASSERT_EQ(c.freq_mhz, 5975);
+    ASSERT_EQ(c.ptx_source, RF_PTX_ASSUMED);
+    ASSERT_EQ(c.ptx_dbm, RF_PTX_AP_ASSUMED);
+    /* A TPC Report is the frame's own power on any band. */
+    r.tpc_present = 1;
+    rf_ctx_ap(&c, &r, 5, WIFI_BAND_6GHZ);
+    ASSERT_EQ(c.ptx_source, RF_PTX_TPC_REPORT);
 
     /* An operating triplet carries no power and covers nothing. */
     memset(&r, 0, sizeof(r));
@@ -191,17 +219,76 @@ static void test_band_boundaries(void) {
 }
 
 static void test_band_hysteresis(void) {
-    /* Leaving "room" outward needs 10 x 1.25 = 12.5 m. */
-    ASSERT_EQ(rf_band_hyst(RF_DIST_ROOM, 10.5), RF_DIST_ROOM);
-    ASSERT_EQ(rf_band_hyst(RF_DIST_ROOM, 12.4), RF_DIST_ROOM);
-    ASSERT_EQ(rf_band_hyst(RF_DIST_ROOM, 12.6), RF_DIST_BUILDING);
-    /* Inward needs 10 / 1.25 = 8 m. */
-    ASSERT_EQ(rf_band_hyst(RF_DIST_BUILDING, 9.0), RF_DIST_BUILDING);
-    ASSERT_EQ(rf_band_hyst(RF_DIST_BUILDING, 7.9), RF_DIST_ROOM);
+    /* 3 dB at N = 2.8 is a factor of 10 ^ (3 / 28) = 1.2794: leaving
+     * "room" outward needs 12.79 m, inward from "building" 7.82 m. */
+    ASSERT_EQ(rf_band_hyst(RF_DIST_ROOM, 10.5, 3.0, 28), RF_DIST_ROOM);
+    ASSERT_EQ(rf_band_hyst(RF_DIST_ROOM, 12.7, 3.0, 28), RF_DIST_ROOM);
+    ASSERT_EQ(rf_band_hyst(RF_DIST_ROOM, 12.9, 3.0, 28), RF_DIST_BUILDING);
+    ASSERT_EQ(rf_band_hyst(RF_DIST_BUILDING, 7.9, 3.0, 28), RF_DIST_BUILDING);
+    ASSERT_EQ(rf_band_hyst(RF_DIST_BUILDING, 7.7, 3.0, 28), RF_DIST_ROOM);
+    /* A wider margin holds further: 6 dB is 1.6379, so 12.9 m stays. */
+    ASSERT_EQ(rf_band_hyst(RF_DIST_ROOM, 12.9, 6.0, 28), RF_DIST_ROOM);
+    ASSERT_EQ(rf_band_hyst(RF_DIST_ROOM, 16.5, 6.0, 28), RF_DIST_BUILDING);
     /* A jump lands where it lands, not one band at a time. */
-    ASSERT_EQ(rf_band_hyst(RF_DIST_IMMEDIATE, 50.0), RF_DIST_FAR);
-    ASSERT_EQ(rf_band_hyst(RF_DIST_FAR, 0.5), RF_DIST_IMMEDIATE);
-    ASSERT_EQ(rf_band_hyst(RF_DIST_NONE, 10.5), RF_DIST_BUILDING);
+    ASSERT_EQ(rf_band_hyst(RF_DIST_IMMEDIATE, 50.0, 3.0, 28), RF_DIST_FAR);
+    ASSERT_EQ(rf_band_hyst(RF_DIST_FAR, 0.5, 3.0, 28), RF_DIST_IMMEDIATE);
+    ASSERT_EQ(rf_band_hyst(RF_DIST_NONE, 10.5, 3.0, 28), RF_DIST_BUILDING);
+
+    /* The margin: the floor, until two standard errors of the median
+     * exceed it. spread 6 over 8 samples: 2 x 1.2533 x 6 / 2.8284 =
+     * 5.317 dB; spread 2 over 8 is 1.77, under the 3 dB floor. */
+    ASSERT_NEAR(rf_band_hyst_db(6, 8), 5.317, 0.001);
+    ASSERT_NEAR(rf_band_hyst_db(2, 8), RF_BAND_HYST_DB, 1e-9);
+    ASSERT_NEAR(rf_band_hyst_db(0, 0), RF_BAND_HYST_DB, 1e-9);
+}
+
+/* The hold. K = 1 so each sample is the median and its spread is 0:
+ * the margin is the 3 dB floor and only the hold is under test. At an
+ * AP assumed 20 dBm on channel 6, -60 dBm is 27.4 m (building) and
+ * -44 dBm 7.36 m (room, past the 7.82 m inward margin). */
+static void test_track_band_change_is_held(void) {
+    tune_reset();
+    rf_calibration_reset();
+    char err[160];
+    ASSERT_EQ(tune_set("rf.median_k=1", err, sizeof(err)), 0);
+    rf_ctx_t c;
+    ctx_ap_assumed_6(&c);
+    rf_track_t t;
+    memset(&t, 0, sizeof(t));
+    rf_track_observe(&t, -60, T0, &c);
+    ASSERT_EQ(t.band, RF_DIST_BUILDING);        /* the first takes at once */
+    for (int i = 1; i < RF_BAND_HOLD_S; i++) {
+        rf_track_observe(&t, -44, T0 + i, &c);
+        ASSERT_EQ(t.band, RF_DIST_BUILDING);
+    }
+    rf_track_observe(&t, -44, T0 + RF_BAND_HOLD_S + 1, &c);
+    ASSERT_EQ(t.band, RF_DIST_ROOM);
+    ASSERT_EQ(t.band_cand, RF_DIST_NONE);
+
+    /* One sample back inside the old band restarts the hold. Seen red
+     * with the `want == prev` reset removed from band_step(): the five
+     * seconds before the -60 carried over and the band moved at T0 + 12. */
+    memset(&t, 0, sizeof(t));
+    rf_track_observe(&t, -60, T0, &c);
+    rf_track_observe(&t, -44, T0 + 1, &c);
+    rf_track_observe(&t, -44, T0 + 6, &c);
+    rf_track_observe(&t, -60, T0 + 7, &c);
+    rf_track_observe(&t, -44, T0 + 8, &c);
+    rf_track_observe(&t, -44, T0 + 12, &c);
+    ASSERT_EQ(t.band, RF_DIST_BUILDING);
+    rf_track_observe(&t, -44, T0 + 8 + RF_BAND_HOLD_S, &c);
+    ASSERT_EQ(t.band, RF_DIST_ROOM);
+
+    /* A clock stepping back adds nothing to the hold, and stalls it
+     * neither: the next forward seconds count. */
+    memset(&t, 0, sizeof(t));
+    rf_track_observe(&t, -60, T0 + 100, &c);
+    rf_track_observe(&t, -44, T0 + 101, &c);
+    rf_track_observe(&t, -44, T0 + 50, &c);
+    ASSERT_EQ(t.band, RF_DIST_BUILDING);
+    rf_track_observe(&t, -44, T0 + 50 + RF_BAND_HOLD_S, &c);
+    ASSERT_EQ(t.band, RF_DIST_ROOM);
+    tune_reset();
 }
 
 static void test_slope_and_trend_hysteresis(void) {
@@ -273,6 +360,34 @@ static void test_track_announced_power_narrows_the_interval(void) {
     ASSERT_EQ(t.hi_dm, 106);
     ASSERT_EQ(t.band, RF_DIST_ROOM);
     ASSERT_EQ(t.ptx_source, RF_PTX_TPC_REPORT);
+}
+
+/* A Country ceiling is an upper bound on P_tx, so the distance it
+ * gives is one too: the AP may be nearer, never farther. Channel 6,
+ * ceiling 20 dBm, -60 dBm: 27.41 m as for the assumed case, but only
+ * the low side carries the 6 dB term - hi is 27.41 x 10 ^ (8 / 28) =
+ * 52.92 m where the assumed case reaches 62.39 m; lo stays 12.05 m.
+ * Seen red with the term added to both sides (hi read 624). */
+static void test_track_country_ceiling_widens_downward_only(void) {
+    tune_reset();
+    rf_calibration_reset();
+    reg_ie_t r;
+    memset(&r, 0, sizeof(r));
+    r.country_present = 1;
+    r.triplet_count = 1;
+    r.triplets[0].first_channel = 1;
+    r.triplets[0].num_channels  = 13;
+    r.triplets[0].max_tx_power_dbm = 20;
+    rf_ctx_t c;
+    rf_ctx_ap(&c, &r, 6, WIFI_BAND_UNKNOWN);
+    ASSERT_EQ(c.ptx_source, RF_PTX_COUNTRY_MAX);
+    rf_track_t t;
+    memset(&t, 0, sizeof(t));
+    rf_track_observe(&t, -60, T0, &c);
+    ASSERT_EQ(t.est_dm, 274);
+    ASSERT_EQ(t.lo_dm, 120);
+    ASSERT_EQ(t.hi_dm, 529);
+    ASSERT_EQ(t.ptx_source, RF_PTX_COUNTRY_MAX);
 }
 
 /* RSSI 0 is "unseen" on every Wi-Fi row. It must not enter the ring:
@@ -457,13 +572,31 @@ static void test_cells(void) {
     ASSERT_STR(b, "-     ");
     ASSERT_EQ(rf_dist_cell(NULL, b, sizeof(b), 3), RF_CELL_SHORT);
 
-    fill(&t, 45, RF_DIST_ROOM, RF_TREND_STEADY);
-    t.lo_dm = 23; t.hi_dm = 88;
+    /* The detail line from a real track, not hand-set bounds: an AP
+     * assumed 20 dBm on channel 6 heard steadily at -38 dBm is
+     * 10 ^ (18.263 / 28) = 4.49 m, and the assumed-power interval
+     * (10 dB, x/ 2.2758) is 1.97 .. 10.22 m. */
+    tune_reset();
+    rf_calibration_reset();
+    rf_ctx_t c;
+    ctx_ap_assumed_6(&c);
+    memset(&t, 0, sizeof(t));
+    for (int i = 0; i < 4; i++) rf_track_observe(&t, -38, T0 + 2 * i, &c);
     rf_dist_describe(&t, b, sizeof(b));
-    ASSERT_STR(b, "~4.5m (2.3-8.8m) room steady, Ptx 20 assumed");
-    t.ptx_source = RF_PTX_COUNTRY_MAX; t.calibrated = 1;
+    ASSERT_STR(b, "~4.5m (2.0-10m) room steady, Ptx 20 assumed");
+    reg_ie_t r;
+    memset(&r, 0, sizeof(r));
+    r.country_present = 1;
+    r.triplet_count = 1;
+    r.triplets[0].first_channel = 1;
+    r.triplets[0].num_channels  = 13;
+    r.triplets[0].max_tx_power_dbm = 20;
+    rf_ctx_ap(&c, &r, 6, WIFI_BAND_UNKNOWN);
+    memset(&t, 0, sizeof(t));
+    for (int i = 0; i < 4; i++) rf_track_observe(&t, -38, T0 + 2 * i, &c);
+    t.calibrated = 1;
     rf_dist_describe(&t, b, sizeof(b));
-    ASSERT_STR(b, "~4.5m (2.3-8.8m) room steady, Ptx 20 ceiling cal");
+    ASSERT_STR(b, "~4.5m (2.0-8.7m) room steady, Ptx 20 ceiling cal");
     t.valid = 0;
     rf_dist_describe(&t, b, sizeof(b));
     ASSERT_STR(b, "no estimate");
@@ -576,9 +709,11 @@ static void test_jsonl_beacon_assoc_device_carry_the_fields(void) {
 }
 
 /* ble_device is change-only. The estimate's metres move on every
- * report and must never write a record; its band and trend may.
- * The first half is seen red with d->dist.est_dm added to the
- * signature bytes (a second record per metre change). */
+ * report and must never write a record; nor does its trend, which is
+ * written but not signed. Its band may. The metres half is seen red
+ * with d->dist.est_dm added to the signature bytes (a second record
+ * per metre change); the trend half with the approaching / leaving
+ * byte put back (a record for the trend change). */
 static void test_jsonl_ble_signature_bands_the_distance(void) {
     static sloth_state_t s;
     memset(&s, 0, sizeof(s));
@@ -596,18 +731,120 @@ static void test_jsonl_ble_signature_bands_the_distance(void) {
     jsonl_emit_ble_devices(&s);
     char *out = jl_read();
     ASSERT_EQ(count_str(out, "\"type\":\"ble_device\""), 1);
+    d->dist.trend = RF_TREND_LEAVING;
+    jsonl_emit_ble_devices(&s);
+    d->dist.trend = RF_TREND_APPROACHING;
+    jsonl_emit_ble_devices(&s);
+    out = jl_read();
+    ASSERT_EQ(count_str(out, "\"type\":\"ble_device\""), 1);
 
     d->dist.band = RF_DIST_BUILDING;
     jsonl_emit_ble_devices(&s);
     out = jl_read();
     ASSERT_EQ(count_str(out, "\"type\":\"ble_device\""), 2);
-    d->dist.trend = RF_TREND_LEAVING;
-    jsonl_emit_ble_devices(&s);
-    out = jl_read();
-    ASSERT_EQ(count_str(out, "\"type\":\"ble_device\""), 3);
-    ASSERT(strstr(out, "\"est_dist_trend\":\"leaving\"") != NULL);
+    /* The trend still rides the record the band change wrote. */
+    ASSERT(strstr(out, "\"est_dist_trend\":\"approaching\"") != NULL);
     jsonl_close();
     unlink(g_tmp);
+}
+
+/* A stationary advertiser under ordinary RSSI noise rides the 300 s
+ * heartbeat: one record, then one per heartbeat, over an hour. Each
+ * case sits its mean on a band boundary, where noise moves the median
+ * across the line most often - room/building at 10 m (-67.75 dBm),
+ * near/room at 3 m (-53.08) and building/far at 30 m (-81.11), for a
+ * BLE row with an AD TX power of 0 dBm (L(1 m) at 2440 MHz is 39.75 dB,
+ * N 2.8). 10 advertisements a second, Gaussian sigma 6 dB from a fixed
+ * seed, so the run is the same every time.
+ *
+ * Seen red before the band hysteresis was sized from the median's
+ * spread and held for RF_BAND_HOLD_S, and the trend left the signature:
+ * each 10/s case wrote over 1,300 records in the hour. Each part is
+ * also seen red alone: the trend put back in the signature, ~260 per
+ * case; RF_BAND_HOLD_S 0, ~560; RF_BAND_HYST_SE 0 (the 3 dB floor
+ * only), the two 1/s cases at 18-19 while the 10/s ones held. */
+static uint32_t g_rng;
+static double rng_gauss(void) {
+    /* Irwin-Hall: twelve uniforms less six, sigma 1. */
+    double sum = 0;
+    for (int i = 0; i < 12; i++) {
+        g_rng ^= g_rng << 13; g_rng ^= g_rng >> 17; g_rng ^= g_rng << 5;
+        sum += (double)(g_rng >> 8) / 16777216.0;
+    }
+    return sum - 6.0;
+}
+
+static time_t g_fake_now;
+static time_t fake_wall(void) { return g_fake_now; }
+
+static int count_lines_of(const char *needle) {
+    FILE *fp = fopen(g_tmp, "r");
+    if (!fp) return -1;
+    static char line[16384];
+    int n = 0;
+    while (fgets(line, sizeof(line), fp))
+        if (strstr(line, needle)) n++;
+    fclose(fp);
+    return n;
+}
+
+static int stationary_hour(double mean_dbm, int per_s, double sd_db, uint8_t id) {
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    jl_open();
+    s.ble_device_count = 1;
+    ble_device_t *d = &s.ble_devices[0];
+    d->addr[0] = 0xc2; d->addr[5] = id;
+    d->has_tx_power = 1; d->tx_power = 0;
+    d->has_rssi = 1; d->rssi_best = -40;
+    snprintf(d->sensor_iface, sizeof(d->sensor_iface), "bluetooth-monitor");
+    rf_ctx_t c;
+    rf_ctx_ble(&c, 0, 0, 1, 0);
+    g_rng = 0x9e3779b9u ^ id;
+    for (int sec = 0; sec < 3600; sec++) {
+        g_fake_now = T0 + sec;
+        for (int k = 0; k < per_s; k++) {
+            double x = mean_dbm + sd_db * rng_gauss();
+            int r = (int)(x < 0 ? x - 0.5 : x + 0.5);
+            if (r == 0) r = -1;
+            d->rssi = (int8_t)r;
+            rf_track_observe(&d->dist, r, g_fake_now, &c);
+        }
+        jsonl_emit_ble_devices(&s);
+    }
+    jsonl_close();
+    int n = count_lines_of("\"type\":\"ble_device\"");
+    unlink(g_tmp);
+    return n;
+}
+
+static void test_jsonl_ble_stationary_noise_rides_the_heartbeat(void) {
+    tune_reset();
+    rf_calibration_reset();
+    sloth_clock_test_set(NULL, fake_wall);
+    /* The heartbeat alone writes 12: the first record, then one each
+     * 300 s up to 3300. A few more are allowed, not a rate. */
+    const int beat = 12, budget = beat + 4;
+    int a = stationary_hour(-68.0, 10, 6.0, 1);
+    int b = stationary_hour(-53.0, 10, 6.0, 2);
+    int f = stationary_hour(-81.0, 10, 6.0, 3);
+    /* One advertisement a second at sigma 8: eight samples now span
+     * eight seconds, so consecutive medians share most of their
+     * samples and a noisy excursion can outlast the hold. This is the
+     * case the spread-sized margin is for. */
+    int g = stationary_hour(-81.0, 1, 8.0, 4);
+    int h = stationary_hour(-53.0, 1, 8.0, 5);
+    if (a < beat || a > budget || b < beat || b > budget || f < beat || f > budget ||
+        g < beat || g > budget || h < beat || h > budget)
+        fprintf(stderr, "    stationary hour: 10/s sd 6: room/bldg %d, near/room %d, "
+                "bldg/far %d; 1/s sd 8: bldg/far %d, near/room %d records\n",
+                a, b, f, g, h);
+    ASSERT(a >= beat && a <= budget);
+    ASSERT(b >= beat && b <= budget);
+    ASSERT(f >= beat && f <= budget);
+    ASSERT(g >= beat && g <= budget);
+    ASSERT(h >= beat && h <= budget);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 void run_rf_distance_tests(void) {
@@ -628,10 +865,12 @@ void run_rf_distance_tests(void) {
     TEST_SUITE("rf distance: the per-row track");
     RUN_TEST(test_track_first_sample_fixed_numbers);
     RUN_TEST(test_track_announced_power_narrows_the_interval);
+    RUN_TEST(test_track_country_ceiling_widens_downward_only);
     RUN_TEST(test_track_zero_rssi_is_no_sample);
     RUN_TEST(test_track_without_frequency_is_no_estimate);
     RUN_TEST(test_track_median_k_and_window);
     RUN_TEST(test_track_trend_series);
+    RUN_TEST(test_track_band_change_is_held);
     RUN_TEST(test_calibration_from_my_bssid);
     RUN_TEST(test_tune_knobs_bounded);
 
@@ -641,4 +880,5 @@ void run_rf_distance_tests(void) {
     RUN_TEST(test_jsonl_fields_present_only_with_an_estimate);
     RUN_TEST(test_jsonl_beacon_assoc_device_carry_the_fields);
     RUN_TEST(test_jsonl_ble_signature_bands_the_distance);
+    RUN_TEST(test_jsonl_ble_stationary_noise_rides_the_heartbeat);
 }

@@ -417,7 +417,7 @@ static int source_rank(int s) {
 
 void assoc_observe(const uint8_t bssid[6], const uint8_t sta[6],
                     const char *ssid, int source,
-                    int8_t signal, int channel)
+                    int8_t signal, int channel, wifi_band_t band)
 {
     if (!bssid || !sta) return;
     /* Reject broadcast / null / multicast addresses on either side
@@ -461,9 +461,13 @@ void assoc_observe(const uint8_t bssid[6], const uint8_t sta[6],
     {
         /* Every caller hands over a frame the AP sent, so the estimate
          * is the AP's, at the assumed AP power: the response carries no
-         * TPC Report, and the beacon table's is behind another lock. */
+         * TPC Report, and the beacon table's is behind another lock.
+         * The band is the frame's own, from radiotap: 6 GHz channel 5
+         * is 5975 MHz, not 2432. A frame that names no channel keeps
+         * the row's, and its band says nothing about that channel. */
         rf_ctx_t ctx;
-        rf_ctx_assumed(&ctx, g_tbl[idx].channel, WIFI_BAND_UNKNOWN,
+        rf_ctx_assumed(&ctx, g_tbl[idx].channel,
+                       channel > 0 ? band : WIFI_BAND_UNKNOWN,
                        RF_PTX_AP_ASSUMED);
         rf_track_observe(&g_tbl[idx].dist, signal, now, &ctx);
     }

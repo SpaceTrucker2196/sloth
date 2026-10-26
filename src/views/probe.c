@@ -13,6 +13,28 @@
 
 #define PROBE_PAGE 30
 
+/* The distance cell (2026-10-26) comes out of the SSID's share, never
+ * below the 24 cells BLE's summary keeps: full once the whole 32-octet
+ * SSID still fits beside it (119 columns), short from 105, not drawn
+ * below - at the 100-column minimum the SSID keeps the 27 cells it had.
+ * A cut row (#150) spends its last two columns, the one never drawn
+ * and the marker. PROBE_THRU_PRESENCE is the row up to and including
+ * Presence. The ANSI fallback has no width to ask and keeps the full
+ * form. */
+#define PROBE_THRU_PRESENCE (1 + 17 + 2 + 12 + 2 + 6 + 2 + 3 + 2 + 5 + 2 + 5 + 2 + 8)
+#define PROBE_SSID_MIN 24
+
+static int dist_column_width(void) {
+#ifdef WITH_NCURSES
+    int room = COLS - 2 - PROBE_THRU_PRESENCE - 2;   /* SSID's separator */
+    if (room >= 2 + RF_CELL_FULL + 32)              return RF_CELL_FULL;
+    if (room >= 2 + RF_CELL_SHORT + PROBE_SSID_MIN) return RF_CELL_SHORT;
+    return 0;
+#else
+    return RF_CELL_FULL;
+#endif
+}
+
 /* ── Helpers ─────────────────────────────────────────────── */
 
 static void fmt_mac(const uint8_t *mac, char *buf, int sz) {
@@ -91,15 +113,19 @@ void view_probe_draw(const sloth_state_t *s) {
     TPRINT("\n");
 
     /* column headers */
+    int dist_w = dist_column_width();
     tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
-    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %-8s  %-*s  %s\n",
-           "MAC", "Vendor", "Signal", "Ch", "Seen", "Pkts",
-           "Presence", RF_CELL_FULL, "Dist (est)", "Probing");
-    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %-8s  %-*s  %s\n",
+    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %-8s",
+           "MAC", "Vendor", "Signal", "Ch", "Seen", "Pkts", "Presence");
+    if (dist_w)
+        TPRINT("  %-*s", dist_w, dist_w >= RF_CELL_FULL ? "Dist (est)" : "~Dist");
+    TPRINT("  %s\n", "Probing");
+    TPRINT(" %-17s  %-12s  %6s  %3s  %5s  %5s  %-8s",
            "-----------------", "------------", "------", "---",
-           "-----", "-----", "--------", RF_CELL_FULL, "------------",
-           "-------");
+           "-----", "-----", "--------");
+    if (dist_w) TPRINT("  %.*s", dist_w, "------------");
+    TPRINT("  %s\n", "-------");
     tui_normal();
 
     if (s->probe_count == 0) {
@@ -130,7 +156,8 @@ void view_probe_draw(const sloth_state_t *s) {
         /* Distance (est): P_tx is always assumed for a probe request,
          * which is why the column header says "est". */
         char dist[48];
-        rf_dist_cell(&c->dist, dist, sizeof(dist), RF_CELL_FULL);
+        dist[0] = '\0';
+        if (dist_w) rf_dist_cell(&c->dist, dist, sizeof(dist), dist_w);
 
         if (row == s->probe_sel) {
             int filled = sigbar_filled(c->signal_dbm);
@@ -138,12 +165,13 @@ void view_probe_draw(const sloth_state_t *s) {
             TPRINT(" %-17s  %-12.12s  ", mac, vstr);
             for (int i = 0; i < 6; i++)
                 TPRINT(i < filled ? "\xe2\x96\x88" : "\xe2\x96\x91");
-            TPRINT("  %3d  %5s  %5d  %-8s  %s  %.32s\n",
+            TPRINT("  %3d  %5s  %5d  %-8s",
                    c->channel, age, c->frame_count,
                    presence_label(presence_classify(&c->rssi_ring,
                                                     c->first_seen,
-                                                    c->last_seen, now)),
-                   dist, ssid);
+                                                    c->last_seen, now)));
+            if (dist_w) TPRINT("  %s", dist);
+            TPRINT("  %.32s\n", ssid);
             tui_reset();
         } else {
             /* MAC: intensity by age */
@@ -184,8 +212,10 @@ void view_probe_draw(const sloth_state_t *s) {
             }
             TPRINT("  %-8s", presence_label(pc));
 
-            tui_dim();
-            TPRINT("  %s", dist);
+            if (dist_w) {
+                tui_dim();
+                TPRINT("  %s", dist);
+            }
 
             /* SSID: bright for named targets, dim for wildcards */
             if (c->ssid[0]) tui_bright(); else tui_dim();

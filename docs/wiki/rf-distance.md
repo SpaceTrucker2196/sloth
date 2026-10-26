@@ -21,7 +21,10 @@ no alert rule reads it.
 (every number below, cited), `tests/test_rf_distance.c`.
 
 **Last updated**: 2026-10-26 (owner request: "use rf signal strength to
-estimate distance as a data point"; sloth side, slothweb display later).
+estimate distance as a data point"; sloth side, slothweb display later;
+review round: bands held against noise, trend not signed, a Country
+ceiling one-sided and never on 6 GHz, the band from radiotap on probe
+and association rows, Beacons and Probe plan the cell by width).
 
 ## The model
 
@@ -51,10 +54,18 @@ Shown in the record as `est_ptx_source`, best first:
 | Source | Rows | What it is |
 |---|---|---|
 | `tpc_report` | AP | the 802.11 TPC Report element: the power the AP used for that frame |
-| `country_max` | AP | the Country element's ceiling for the channel, less Power Constraint. **An upper bound** on the power, so the distance is an upper bound too |
+| `country_max` | AP | the Country element's ceiling for the channel, less Power Constraint, when it is at most the assumed 20 dBm. **An upper bound** on the power, so the distance is an upper bound too: the interval widens downward only, and the band can read one farther than the AP is. Not used on 6 GHz (the limit there is the Transmit Power Envelope's) |
 | `ble_ext_tx_power` | BLE | TX_Power from the LE Extended Advertising Report header |
 | `ble_ad_tx_power` | BLE | the advertiser's TX Power Level AD structure |
 | `assumed` | any | nothing announced: AP 20 dBm, Wi-Fi client 15 dBm, BLE 0 dBm. sloth's assumption, and the interval is widened by 6 dB for it |
+
+A ceiling above 20 dBm is not used: US 2.4 GHz allows 30 dBm where an
+AP typically sends about 20, so estimating at the ceiling would put an
+AP really 27 m away at 62 m and call it "far". Such an AP takes the
+assumed default instead. An AP that does use its full ceiling below
+20 dBm is placed right; one that sends less is placed too far, which is
+why the low side of a `country_max` interval carries the 6 dB
+assumed-power term and the high side does not.
 
 A probe request names no power, so probe-client estimates are always
 `assumed`. An **association row's estimate is the AP's distance**, not
@@ -69,7 +80,10 @@ the figure. An RSSI of **0** — what sloth's Wi-Fi rows store for
 "unseen" — or the HCI's "not available" is **no sample**, and a row
 with no usable sample has **no estimate**, never a 1 m one. A row whose
 channel is unknown has no estimate either: computing one at a guessed
-frequency would be a second guess on top of the first.
+frequency would be a second guess on top of the first. The band comes
+from the frame's radiotap frequency on probe and association rows, as
+everywhere since #149: 6 GHz channel 5 is 5975 MHz, where the bare
+number reads as 2.4 GHz.
 
 ## How far to trust it
 
@@ -96,8 +110,13 @@ as "something moved or something came between", not as a measurement.
 | building | 10–30 m | 30 m: the top of P.1238-13's office NLoS fit range |
 | far | > 30 m | outside every indoor range P.1238 fits |
 
-A band changes only once the estimate is 25 % past the boundary, so a
-device sitting on one does not flicker. The trend is the slope of the
+A band changes only once the estimate is past the boundary by a margin
+and has stayed past it for 10 s, so a device sitting on one does not
+flicker. The margin is 3 dB, or two standard errors of the median when
+the samples are noisier than that (a σ 6 dB row over 8 samples needs
+5.3 dB, a factor of 1.55 in metres at N = 2.8). A fixed 25 % was
+crossed by a stationary advertiser's median several times a minute.
+The trend is the slope of the
 median RSSI over 30 s (one point per 2 s, at least four spanning 6 s):
 approaching at +3 dB per 10 s, held until it falls below +1.5; leaving
 mirrors it. Those thresholds are sloth's, not cited.
@@ -118,11 +137,12 @@ A calibrated estimate says so (`cal` on the detail panes).
 
 | Place | Form |
 |---|---|
-| [7] Probe, [b] Beacons | a `Dist (est)` column, `~27m bldg ↘` (↘ approaching, → steady, ↗ leaving, blank unknown) |
+| [b] Beacons | a `Dist (est)` column after `Sig`, `~27m bldg ↘` (↘ approaching, → steady, ↗ leaving, blank unknown), from 113 columns; `~27m↘` from 107; not drawn below, so AKM stays whole at 100 |
+| [7] Probe | the same cell before the SSID: full from 119 columns (the whole SSID beside it), short from 105 (24 SSID cells kept), not drawn below |
 | [*] BLE | `~27m↘` at 100 columns, the full form from 106 |
 | [w] Assoc | `AP~m`, the short form: the AP's distance |
 | [g] Devices | the full or short form from 108 columns; at 100 the name column keeps its 15 cells and the estimate is on the detail page |
-| Detail panes | `~4.5m (2.3-8.8m) room steady, Ptx 20 assumed` |
+| Detail panes | `~4.5m (2.0-10m) room steady, Ptx 20 assumed` (an AP assumed 20 dBm heard steadily at -38 dBm on channel 6) |
 | JSONL | `est_dist_m` (quantised), `est_dist_band`, `est_dist_trend`, `est_ptx_source` — [[jsonl-schema]] |
 
 ## Privacy
@@ -131,8 +151,10 @@ This is an estimate of a third party's physical proximity. It is
 exported only as the four fields above, quantised (0.5 m below 10 m,
 1 m below 100 m, 10 m above), on records that already carried the RSSI
 it was computed from. It is not persisted to `--db`, it identifies no
-one, and a change-only record is written for a change of band or of an
-approaching / leaving trend, never for a change of metres.
+one, and a change-only record is written for a change of band, never
+for a change of metres or of trend: the trend is written on every
+record but signed on none, because under ordinary noise it moves for a
+device that is not moving.
 
 ## Related pages
 

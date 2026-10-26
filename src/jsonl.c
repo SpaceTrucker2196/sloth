@@ -2621,16 +2621,16 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
          * when an EXT_ADV or EXT_SCAN_RSP PDU is heard, which sets that
          * PDU's pdu_mask bit, so a change in it is already a change in
          * pdu_mask. */
-        /* The distance enters as its band and trend only, both held by
-         * hysteresis (src/rf_distance.h), never as metres: a moving
-         * figure here would write the record on every snapshot. The
-         * trend is signed as approaching / leaving / neither: a row
-         * gathering its fourth point and turning "unknown" into
-         * "steady" has not changed, and signing that would write one
-         * more record for every advertiser a few seconds in (seen red
-         * with the raw trend signed: tests/test_ble_rules.c's
-         * alternating-PDU and flood cases each gained a record). */
-        uint8_t b[19] = { d->addr_type, d->sensor_kind, d->sampled,
+        /* The distance enters as its band only, held by a noise-sized
+         * margin and a hold (src/rf_distance.h), never as metres: a
+         * moving figure here would write the record on every snapshot.
+         * The trend is written but not signed. It is a slope over a
+         * few medians, and under ordinary RSSI noise it entered and
+         * left approaching / leaving for a stationary advertiser
+         * several times a minute (tests/test_rf_distance.c's
+         * seeded-noise hour: ~260 records with it signed); a change in
+         * it reaches a consumer on the next record. */
+        uint8_t b[18] = { d->addr_type, d->sensor_kind, d->sampled,
                           d->pdu_mask, d->has_name, d->has_uuid16,
                           d->has_mfr, d->has_mfr_sub, d->mfr_sub,
                           d->has_svc_data, d->has_appearance, d->hid,
@@ -2638,11 +2638,7 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
                           (uint8_t)rssi_bucket(d->has_rssi, d->rssi_best),
                           (uint8_t)(d->watch_cat[0] != '\0'),
                           (uint8_t)(d->adapter & 0xff),
-                          d->dist.valid ? d->dist.band : 0,
-                          (uint8_t)(d->dist.valid &&
-                                    (d->dist.trend == RF_TREND_APPROACHING ||
-                                     d->dist.trend == RF_TREND_LEAVING)
-                                    ? d->dist.trend : 0) };
+                          d->dist.valid ? d->dist.band : 0 };
         h = fnv1a(b, sizeof(b), h);
         h = fnv1a(&d->mfr_id, sizeof(d->mfr_id), h);
         if (!jsonl_changed(JD_BLE_DEVICE, key, sizeof(key), h, now)) continue;

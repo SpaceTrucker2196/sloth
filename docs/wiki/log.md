@@ -5198,3 +5198,12 @@ report events.
   calibration. [[jsonl-schema]] gains `est_dist_m` / `est_dist_band` /
   `est_dist_trend` / `est_ptx_source`; [[cli-reference]] the five `rf.*`
   knobs; source document `research/papers/rssi-distance-estimation.md`.
+- 2026-10-26 — [[rf-distance]] review round: a band is now held by a
+  margin sized from the median's spread (3 dB floor) for 10 s, and the
+  trend left the `ble_device` signature ([[jsonl-schema]]) - a seeded
+  hour of noise on a band boundary wrote over a thousand records and now
+  rides the heartbeat. A Country ceiling widens the interval downward
+  only, is not used above 20 dBm or on 6 GHz. Probe and association rows
+  take the band from radiotap. Beacons and Probe plan the distance cell
+  by width (none at 100 columns). The detail-pane example is one the
+  code produces: `~4.5m (2.0-10m) room steady, Ptx 20 assumed`.

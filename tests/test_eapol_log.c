@@ -17,6 +17,7 @@
 #include "alerts.h"
 #include "assoc_track.h"
 #include "frame_build.h"
+#include "rf_distance.h"
 
 /* Build a synthetic 802.11 data frame (FromDS=1) carrying an EAPOL-Key
  * frame. We construct the lot from byte arrays — no parser feeding its
@@ -538,6 +539,34 @@ static int drive_m3(const uint8_t *anonce) {
     uint8_t frame[256];
     int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
     return eapol_observe_dot11(frame, fn, -50, 6, time(NULL), 0);
+}
+
+/* The M3's association row takes its band from the frame view, which
+ * on_probe_frame() stamps from radiotap (#149): 6 GHz channel 5 is
+ * 5975 MHz, so the AP's assumed 20 dBm at -50 dBm is
+ * 10 ^ ((70 - 47.527) / 30) = 5.60 m on the 6 GHz radio. Seen red with
+ * assoc_observe() handed WIFI_BAND_UNKNOWN here: radio 2.4 GHz. */
+static void test_m3_association_takes_the_frame_band(void) {
+    eapol_clear();
+    assoc_clear();
+    uint8_t eapol[128];
+    uint16_t ki = (1 << 8) | (1 << 7) | (1 << 6) | (1 << 3) | 0x02;
+    int en = build_eapol_key(eapol, ki, ANONCE, M2_MIC, NULL);
+    uint8_t frame[256];
+    int fn = build_frame(frame, eapol, en, /*from_ds=*/1);
+    dot11_frame_t f;
+    dot11_frame_decode(frame, fn, NULL, &f);
+    ASSERT_EQ(f.band, WIFI_BAND_UNKNOWN);       /* the decoder leaves it */
+    f.band = WIFI_BAND_6GHZ;
+    ASSERT_EQ(eapol_observe_frame(&f, -50, 5, time(NULL), 0), 1);
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    assoc_snapshot(&s);
+    ASSERT_EQ(s.assoc_count, 1);
+    ASSERT_EQ(s.assocs[0].dist.radio, RF_RADIO_WIFI_6G);
+    ASSERT_EQ(s.assocs[0].dist.est_dm, 56);
+    eapol_clear();
+    assoc_clear();
 }
 
 static void test_generation_zero_for_unknown_pair(void) {
@@ -2578,6 +2607,7 @@ void run_eapol_log_tests(void) {
     TEST_SUITE("eapol_log: PTK generation, CVE-2020-24587 (#75 slice 4)");
     RUN_TEST(test_generation_zero_for_unknown_pair);
     RUN_TEST(test_generation_bumps_on_first_m3);
+    RUN_TEST(test_m3_association_takes_the_frame_band);
     RUN_TEST(test_generation_bumps_on_first_m3_even_with_a_zero_anonce);
     RUN_TEST(test_generation_ignores_a_retransmitted_m3);
     RUN_TEST(test_generation_bumps_on_a_new_anonce);

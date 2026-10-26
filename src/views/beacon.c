@@ -265,20 +265,43 @@ static void draw_detail_stack_measures(const beacon_ap_t *ap) {
  * takes what the terminal has left after them, between a floor that
  * still shows a country and its environment ("US/I") and a ceiling past
  * which the tokens run out. REG_COL_FIXED is the rest of the row: the
- * leading space, the twelve columns before REG with their separators,
- * REG's own separator, and "  Last". Below the floor the column is not
+ * leading space, the eleven columns before REG with their separators,
+ * REG's own separator, and "  Last"; the distance cell, when drawn, adds
+ * its width and separator. Below the floor the column is not
  * drawn at all (width 0, separator included): forcing it in would wrap
  * a row that fits without it, and the detail screen carries the same
  * claims in full. */
 #define REG_COL_MIN    4
 #define REG_COL_MAX   28
 #define REG_COL_ANSI  14
-#define REG_COL_FIXED (1 + 122 + 2 + RF_CELL_FULL + 2 + 6)
+#define REG_COL_FIXED (1 + 122 + 2 + 6)
 
-static int reg_column_width(void) {
+/* The distance cell (2026-10-26) sits after Sig, and is drawn only
+ * where it leaves AKM whole on screen: the row through AKM is
+ * BEACON_THRU_AKM cells, and the rest of a row is cut at the edge
+ * (#150), which spends the last two columns - the one never drawn and
+ * the cut marker. The full form takes 113 columns, the short one 107;
+ * at the 100-column minimum the cell is not drawn, and the detail page
+ * carries the estimate in full. The ANSI fallback has no width to ask
+ * and keeps the full form, as REG keeps REG_COL_ANSI. */
+#define BEACON_THRU_AKM (1 + 22 + 2 + 17 + 2 + 4 + 2 + 7 + 2 + 5 + 2 + 9 + 2 + 8 + 2 + 10)
+
+static int dist_column_width(void) {
 #ifdef WITH_NCURSES
-    int w = COLS - 1 - REG_COL_FIXED;
+    int room = COLS - 2 - BEACON_THRU_AKM - 2;
+    if (room >= RF_CELL_FULL)  return RF_CELL_FULL;
+    if (room >= RF_CELL_SHORT) return RF_CELL_SHORT;
+    return 0;
 #else
+    return RF_CELL_FULL;
+#endif
+}
+
+static int reg_column_width(int dist_w) {
+#ifdef WITH_NCURSES
+    int w = COLS - 1 - REG_COL_FIXED - (dist_w ? 2 + dist_w : 0);
+#else
+    (void)dist_w;
     int w = REG_COL_ANSI;
 #endif
     if (w < REG_COL_MIN) return 0;
@@ -768,21 +791,25 @@ void view_beacon_draw(const sloth_state_t *s) {
     }
     TPRINT("\n");
 
-    int reg_w = reg_column_width();
+    int dist_w = dist_column_width();
+    int reg_w = reg_column_width(dist_w);
     char reg_rule[REG_COL_MAX + 1];
     memset(reg_rule, '-', (size_t)reg_w);
     reg_rule[reg_w] = '\0';
 
     tui_clip_rows(1);   /* the table only: lines above it wrap */
     tui_dim();
-    TPRINT(" %-22s  %-17s  %4s  %-*s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s",
-           "SSID", "BSSID", "Sig", RF_CELL_FULL, "Dist (est)", "Ch", "Enc",
-           "Pairwise", "posture", "AKM", "WPS", "Vendor", "PHY");
+    TPRINT(" %-22s  %-17s  %4s", "SSID", "BSSID", "Sig");
+    if (dist_w)
+        TPRINT("  %-*s", dist_w, dist_w >= RF_CELL_FULL ? "Dist (est)" : "~Dist");
+    TPRINT("  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s",
+           "Ch", "Enc", "Pairwise", "posture", "AKM", "WPS", "Vendor", "PHY");
     if (reg_w) TPRINT("  %-*s", reg_w, "REG");
     TPRINT("  %4s\n", "Last");
-    TPRINT(" %-22s  %-17s  %4s  %-*s  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s",
-           "----------------------", "-----------------",
-           "----", RF_CELL_FULL, "------------", "-------", "-----", "---------", "--------",
+    TPRINT(" %-22s  %-17s  %4s", "----------------------", "-----------------", "----");
+    if (dist_w) TPRINT("  %.*s", dist_w, "------------");
+    TPRINT("  %-7s  %-5s  %-9s  %-8s  %-10s  %-3s  %-9s  %-8s",
+           "-------", "-----", "---------", "--------",
            "----------", "---", "---------", "--------");
     if (reg_w) TPRINT("  %-*s", reg_w, reg_rule);
     TPRINT("  %4s\n", "----");
@@ -868,7 +895,8 @@ void view_beacon_draw(const sloth_state_t *s) {
         char sig_buf[8];
         snprintf(sig_buf, sizeof(sig_buf), "%d", ap->signal_dbm);
         char dist[48];
-        rf_dist_cell(&ap->dist, dist, sizeof(dist), RF_CELL_FULL);
+        dist[0] = '\0';
+        if (dist_w) rf_dist_cell(&ap->dist, dist, sizeof(dist), dist_w);
 
         int age = (int)(now - ap->last_seen);
         char age_buf[16];
@@ -917,9 +945,10 @@ void view_beacon_draw(const sloth_state_t *s) {
 
         if (row == s->beacon_sel) {
             tui_sel();
-            TPRINT(" %-22.22s  %-17.17s  %4s  %s  %-7s  %-5.5s  %-9.9s  %-8s  %-10.10s  %-3s  %-9.9s  %-8.8s",
-                   ssid, bssid_str(ap->bssid), sig_buf, dist, ch_buf,
-                   ap->enc, pw, mfp_s, akm, wps_s, vend, phy_s);
+            TPRINT(" %-22.22s  %-17.17s  %4s", ssid, bssid_str(ap->bssid), sig_buf);
+            if (dist_w) TPRINT("  %s", dist);
+            TPRINT("  %-7s  %-5.5s  %-9.9s  %-8s  %-10.10s  %-3s  %-9.9s  %-8.8s",
+                   ch_buf, ap->enc, pw, mfp_s, akm, wps_s, vend, phy_s);
             if (reg_w) TPRINT("  %-*s", reg_w, reg_buf);
             TPRINT("  %s\n", age_buf);
             tui_reset();
@@ -937,8 +966,10 @@ void view_beacon_draw(const sloth_state_t *s) {
             TPRINT("  %4s", sig_buf);
 
             /* An estimate from signal strength, never a location. */
-            tui_dim();
-            TPRINT("  %s", dist);
+            if (dist_w) {
+                tui_dim();
+                TPRINT("  %s", dist);
+            }
 
             tui_normal();
             TPRINT("  %-7s", ch_buf);

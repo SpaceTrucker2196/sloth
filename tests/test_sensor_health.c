@@ -312,11 +312,11 @@ static void test_assoc_tables_overflow_is_counted(void) {
     for (int i = 0; i < MAX_ASSOC_ENTRIES + 4; i++) {
         sta[4] = (uint8_t)(i >> 8);
         sta[5] = (uint8_t)i;
-        assoc_observe(bssid, sta, "net", 0, -40, 6);
+        assoc_observe(bssid, sta, "net", 0, -40, 6, WIFI_BAND_UNKNOWN);
     }
     ASSERT_EQ((long long)sh_evict_count(SH_EVICT_ASSOC_PAIR), 4);
     /* Re-observing a resident pair must not evict. */
-    assoc_observe(bssid, sta, "net", 0, -40, 6);
+    assoc_observe(bssid, sta, "net", 0, -40, 6, WIFI_BAND_UNKNOWN);
     ASSERT_EQ((long long)sh_evict_count(SH_EVICT_ASSOC_PAIR), 4);
     assoc_clear();
     sh_evict_reset();

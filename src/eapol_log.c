@@ -840,7 +840,8 @@ int eapol_observe_frame(const dot11_frame_t *f,
     if (ev.assoc_evidence)
         assoc_observe(ev.bssid, ev.sta_mac,
                       ev.ssid[0] ? ev.ssid : NULL,
-                      ASSOC_SRC_EAPOL, signal, channel);
+                      ASSOC_SRC_EAPOL, signal, channel,
+                      (wifi_band_t)f->band);
 
     /* PMKID is single-frame — emit a hashcat-22000 PMKID line
      * immediately if we have a known ESSID for this BSSID.
