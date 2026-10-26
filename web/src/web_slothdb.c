@@ -398,6 +398,11 @@ int web_sdb_ap_ssids(web_sdb_conn_t *c, const char *bssid, int max,
     (void)c; (void)bssid; (void)max; (void)fn; (void)ctx;
     return -1;
 }
+int web_sdb_ap_ssid(web_sdb_conn_t *c, const char *bssid, char *out) {
+    (void)c; (void)bssid;
+    out[0] = '\0';
+    return -1;
+}
 int web_sdb_deauth_floods(web_sdb_conn_t *c, const char *bssid,
                           long long from, long long to, int max,
                           web_sdb_item_fn fn, void *ctx) {
@@ -1360,6 +1365,25 @@ int web_sdb_ap_ssids(web_sdb_conn_t *c, const char *bssid, int max,
     return items(c, "SELECT ssid, first_seen, last_seen FROM beacon_ap_ssids"
                     " WHERE bssid = ?1 ORDER BY last_seen DESC, ssid LIMIT ?2",
                  bssid, NULL, max, fn, ctx, 3);
+}
+
+int web_sdb_ap_ssid(web_sdb_conn_t *c, const char *bssid, char *out) {
+    static const char *const want[] = { "bssid", "ssid", NULL };
+    out[0] = '\0';
+    if (!have_all(c, "beacon_aps", want)) return 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db, "SELECT ssid FROM beacon_aps WHERE bssid = ?1",
+                           -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_text(st, 1, bssid, -1, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(st), found = 0;
+    if (rc == SQLITE_ROW) {
+        text(st, 0, out, WEB_SDB_TEXT_MAX);
+        found = out[0] != '\0';
+        rc = SQLITE_DONE;
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? found : -1;
 }
 
 /* One statement of the seven-column item shape: ?1 a text (when p1),

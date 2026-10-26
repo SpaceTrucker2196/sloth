@@ -181,9 +181,10 @@
       <span class="sub" id="w-note">from slothweb.db's wifi.* series and sloth.db's beacon_aps; nothing is sent</span>
     </section>
     <section class="panel">
-      <div class="label">channel x time <span class="sub" id="w-heat-note"></span></div>
-      <canvas class="wfall" id="w-heat" aria-label="channels by time: 2.4, 5 and 6 GHz grouped, a rule between bands"></canvas>
-      <div class="sub">rows: channels, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), a rule between bands; colour: the heat ramp against the busiest cell in view</div>
+      <div class="label">channel x time <span class="sub" id="w-heat-note"></span> <span class="sub" id="w-mix-note"></span></div>
+      <canvas class="wfall" id="w-heat" aria-label="channels by time: each cell the top five transmitters as stacked bands, 2.4, 5 and 6 GHz grouped; arrow keys pick a cell, the list below names it" aria-describedby="w-mix"></canvas>
+      <div class="sub">rows: channels, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), a rule between bands. A cell: its five busiest transmitters, each band its share of the cell's frames (an AP in its SSID's colour, a client in its MAC's, as the TUI colours them), grey the rest, on the monitor radio's ground; the strip at a row's left: its busyness in the metric above, the heat ramp against the busiest row; a dimmed heat cell: no transmitter detail held for it. Point at, tap or arrow to a cell.</div>
+      <div class="mixd" id="w-mix" aria-live="polite"></div>
     </section>
     <section class="panel">
       <div class="label">access points <span class="sub" id="w-aps-count"></span></div>

@@ -142,6 +142,26 @@ static const char STEP_V4_SQL[] =
     ") WITHOUT ROWID;\n"
     "CREATE INDEX passive_ptr_last ON passive_ptr (last_seen);\n";
 
+/* v4 -> v5: the WiFi view's channel mix (web_chmix.h): per channel
+ * and closed minute or hour bucket (tier 1 or 2), the frames of each of
+ * its top transmitters (tx a canonical MAC, kind 1 an AP, 2 a client)
+ * and of the rest (tx '', kind 0). The key is canonical text and the
+ * rest are numbers: no SSID, nor any other string a peer chose, is
+ * stored. Indexed on (tier, t), which retention, the row cap, the
+ * ceiling and the grid all select on. Additive: one new table and its
+ * index, nothing that exists is changed. */
+static const char STEP_V5_SQL[] =
+    "CREATE TABLE chmix (\n"
+    "  tier    INTEGER NOT NULL,\n"
+    "  channel TEXT NOT NULL,\n"
+    "  t       INTEGER NOT NULL,\n"
+    "  tx      TEXT NOT NULL,\n"
+    "  kind    INTEGER NOT NULL,\n"
+    "  frames  INTEGER NOT NULL,\n"
+    "  PRIMARY KEY (tier, channel, t, tx)\n"
+    ") WITHOUT ROWID;\n"
+    "CREATE INDEX chmix_t ON chmix (tier, t);\n";
+
 typedef struct {
     int         from;
     const char *sql;
@@ -154,6 +174,7 @@ static const web_step_t STEPS[] = {
     { 2, STEP_V3_SQL, "created baseline, baseline_cell, episode, fanout "
                       "and reported" },
     { 3, STEP_V4_SQL, "created passive_ptr" },
+    { 4, STEP_V5_SQL, "created chmix" },
 };
 #define STEP_N ((int)(sizeof(STEPS) / sizeof(STEPS[0])))
 
@@ -347,6 +368,24 @@ int web_store_presence(web_store_t *s, int tier, int metric, const char *key,
     return -1;
 }
 
+int web_store_mix_write(web_store_t *s, const web_mix_row_t *rows, size_t n) {
+    (void)s; (void)rows; (void)n;
+    return -1;
+}
+
+int web_store_mix_query(web_store_t *s, int tier, long long from, long long to,
+                        long long max, web_store_mix_fn fn, void *ctx,
+                        int *more) {
+    (void)s; (void)tier; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
+    *more = 0;
+    return -1;
+}
+
+long long web_store_mix_count(web_store_t *s) {
+    (void)s;
+    return -1;
+}
+
 #else
 
 #include <sqlite3.h>
@@ -426,7 +465,9 @@ static const char *const EXP_ANY[WEB_TIER_COUNT] = {
 };
 /* The ceiling drops the oldest slice of one class of rows at a time,
  * in this order: fine rows (any series; the 24 h tier is the one the
- * spec gives up first), then the minute and hour rows of keyed series,
+ * spec gives up first), then the channel mix's minute and hour rows (a
+ * view's detail, which no baseline reads), then the minute and hour
+ * rows of keyed series,
  * and only then those of the global series (the network-wide totals,
  * one series per metric, which no key churn can multiply). A class is
  * left only once it is empty. A slice is the WEB_STORE_SLICE_ROWS
@@ -439,14 +480,20 @@ static const char *const EXP_ANY[WEB_TIER_COUNT] = {
 #define SLICE(tier, cls) \
     "DELETE FROM " tier " WHERE (series,t) IN (SELECT series,t FROM " tier \
     cls " ORDER BY t LIMIT ?1)"
+#define MIX_SLICE(tier) \
+    "DELETE FROM chmix WHERE (tier,channel,t,tx) IN (SELECT tier,channel,t,tx" \
+    " FROM chmix WHERE tier=" tier " ORDER BY t LIMIT ?1)"
 static const char *const CEIL_STEP[] = {
     SLICE("fine", ""),
+    MIX_SLICE("1"),
+    MIX_SLICE("2"),
     SLICE("minute", " WHERE " KEYED),
     SLICE("hour", " WHERE " KEYED),
     SLICE("minute", " WHERE " GLOBAL),
     SLICE("hour", " WHERE " GLOBAL),
 };
 #undef SLICE
+#undef MIX_SLICE
 #undef KEYED
 #undef GLOBAL
 #define CEIL_STEPS ((int)(sizeof(CEIL_STEP) / sizeof(CEIL_STEP[0])))
@@ -517,6 +564,7 @@ int web_store_available(void) { return 1; }
 
 void (*web_store_test_between_opens)(const char *path) = NULL;
 int    web_store_test_no_defensive = 0;
+long long web_store_test_mix_cap = 0;
 void (*web_store_test_after_commit)(const char *path) = NULL;
 
 static void after_commit(web_store_t *s) {
@@ -729,8 +777,10 @@ static void refresh_size(web_store_t *s) {
 static void recount(web_store_t *s) {
     long long r[WEB_TIER_COUNT];
     for (int t = 0; t < WEB_TIER_COUNT; t++) r[t] = q_int(s->db, COUNT_ROWS[t]);
+    long long mx = q_int(s->db, "SELECT COUNT(*) FROM chmix");
     pthread_mutex_lock(&s->mu);
     for (int t = 0; t < WEB_TIER_COUNT; t++) if (r[t] >= 0) s->st.rows[t] = r[t];
+    if (mx >= 0) s->st.mix_rows = mx;
     pthread_mutex_unlock(&s->mu);
 }
 
@@ -1301,6 +1351,49 @@ static long long expire(web_store_t *s, const long long cutoff[WEB_TIER_COUNT]) 
     return bad ? -1 : total;
 }
 
+/* Delete up to limit (at most WEB_STORE_SLICE_ROWS) chmix rows of tier
+ * older than before, the oldest first, in one transaction. Rows, or
+ * -1. */
+static long long mix_slice(web_store_t *s, int tier, long long before,
+                           long long limit) {
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(s->db,
+            "DELETE FROM chmix WHERE (tier,channel,t,tx) IN (SELECT tier,"
+            "channel,t,tx FROM chmix WHERE tier=?1 AND t<?2 ORDER BY t LIMIT ?3)",
+            -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int(st, 1, tier);
+    sqlite3_bind_int64(st, 2, before);
+    sqlite3_bind_int64(st, 3, limit < WEB_STORE_SLICE_ROWS ? limit
+                                                           : WEB_STORE_SLICE_ROWS);
+    int rc = sqlite3_step(st);
+    sqlite3_finalize(st);
+    if (rc != SQLITE_DONE) return -1;
+    long long d = sqlite3_changes(s->db);
+    after_commit(s);
+    return d;
+}
+
+/* The mix's retention: minute rows to minute_cut, hour rows to
+ * hour_cut, a slice at a time. Rows, or -1. */
+static long long mix_expire(web_store_t *s, long long minute_cut,
+                            long long hour_cut) {
+    long long total = 0;
+    const long long cut[2] = { minute_cut, hour_cut };
+    for (int k = 0; k < 2; k++)
+        for (int guard = 0; guard < 100000; guard++) {
+            long long d = mix_slice(s, WEB_TIER_MINUTE + k, cut[k],
+                                    WEB_STORE_SLICE_ROWS);
+            if (d < 0) return -1;
+            total += d;
+            if (d < WEB_STORE_SLICE_ROWS) break;
+        }
+    pthread_mutex_lock(&s->mu);
+    s->st.mix_rows = s->st.mix_rows > total ? s->st.mix_rows - total : 0;
+    pthread_mutex_unlock(&s->mu);
+    return total;
+}
+
 int web_store_compact(web_store_t *s, long long now_s, int retain_days,
                       long long max_bytes) {
     if (!s->db) return -1;
@@ -1313,6 +1406,9 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     char err[WEB_STORE_ERR_MAX];
     long long expired = expire(s, cutoff);
     if (expired < 0) goto fail;
+    long long mx_exp = mix_expire(s, now_s - WEB_STORE_MIX_MINUTE_KEEP_S,
+                                  cutoff[WEB_TIER_HOUR]);
+    if (mx_exp < 0) goto fail;
     int raised;
     long long ceiling = ceiling_loop(s, max_bytes, &raised);
     if (ceiling < 0) goto fail;
@@ -1328,6 +1424,7 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     pthread_mutex_lock(&s->mu);
     s->st.compactions++;
     s->st.dropped_expired += (unsigned long long)expired;
+    s->st.mix_dropped_expired += (unsigned long long)mx_exp;
     s->st.dropped_ceiling += (unsigned long long)ceiling;
     if (ceiling > 0) s->st.ceiling_runs++;
     if (raised) s->st.ceiling_raised++;
@@ -1419,6 +1516,150 @@ int web_store_keys(web_store_t *s, int tier, int metric, long long from,
         return -1;
     }
     return n;
+}
+
+/* ── the channel mix (v5) ────────────────────────────────────────────── */
+
+int web_store_mix_write(web_store_t *s, const web_mix_row_t *rows, size_t n) {
+    if (!s->db || !n) return s->db ? 0 : -1;
+    static const char INS[] =
+        "INSERT OR IGNORE INTO chmix (tier,channel,t,tx,kind,frames)"
+        " VALUES (?1,?2,?3,?4,?5,?6)";
+    static const char UPD[] =
+        "UPDATE chmix SET frames=MIN(frames+?6,4294967295), kind=?5"
+        " WHERE tier=?1 AND channel=?2 AND t=?3 AND tx=?4";
+    char err[WEB_STORE_ERR_MAX];
+    sqlite3_stmt *st[2] = { NULL, NULL };
+    long long added = 0;
+    if (sqlite3_prepare_v2(s->db, INS, -1, &st[0], NULL) != SQLITE_OK ||
+        sqlite3_prepare_v2(s->db, UPD, -1, &st[1], NULL) != SQLITE_OK) {
+        snprintf(err, sizeof(err), "mix: %s", sqlite3_errmsg(s->db));
+        goto fail_msg;
+    }
+    if (exec(s->db, "BEGIN IMMEDIATE", err, sizeof(err), "mix begin") != 0)
+        goto fail_msg;
+    for (size_t i = 0; i < n; i++) {
+        const web_mix_row_t *r = &rows[i];
+        if (r->tier != WEB_TIER_MINUTE && r->tier != WEB_TIER_HOUR) continue;
+        int nt = r->n < 0 ? 0 : r->n > WEB_CHMIX_TOP ? WEB_CHMIX_TOP : r->n;
+        for (int k = 0; k <= nt; k++) {
+            char tx[18] = "";
+            int kind = WEB_TX_OTHER;
+            long long f;
+            if (k < nt) {
+                web_mix_mac_text(r->tx[k].mac, tx);
+                kind = r->tx[k].kind;
+                f = r->tx[k].frames;
+            } else {
+                f = r->other;
+            }
+            if (f <= 0) continue;
+            for (int u = 0; u < 2; u++) {
+                sqlite3_reset(st[u]);
+                sqlite3_bind_int(st[u], 1, r->tier);
+                sqlite3_bind_text(st[u], 2, r->chan, -1, SQLITE_TRANSIENT);
+                sqlite3_bind_int64(st[u], 3, r->t);
+                sqlite3_bind_text(st[u], 4, tx, -1, SQLITE_TRANSIENT);
+                sqlite3_bind_int(st[u], 5, kind);
+                sqlite3_bind_int64(st[u], 6, f);
+                if (sqlite3_step(st[u]) != SQLITE_DONE) goto fail;
+                if (!u && sqlite3_changes(s->db) == 1) { added++; break; }
+            }
+        }
+    }
+    sqlite3_reset(st[0]);
+    sqlite3_reset(st[1]);
+    if (exec(s->db, "COMMIT", err, sizeof(err), "mix commit") != 0) goto fail_rb;
+    sqlite3_finalize(st[0]);
+    sqlite3_finalize(st[1]);
+    /* The row cap: the oldest minute rows first, then the oldest hour
+     * rows, a slice at a time. */
+    long long have, cut = 0;
+    long long cap = web_store_test_mix_cap > 0 ? web_store_test_mix_cap
+                                               : WEB_STORE_MIX_ROWS;
+    pthread_mutex_lock(&s->mu);
+    s->st.mix_rows += added;
+    have = s->st.mix_rows;
+    pthread_mutex_unlock(&s->mu);
+    for (int tier = WEB_TIER_MINUTE; tier <= WEB_TIER_HOUR; tier++)
+        for (int guard = 0; have > cap && guard < 100000; guard++) {
+            long long d = mix_slice(s, tier, (long long)1 << 62, have - cap);
+            if (d < 0) {
+                snprintf(err, sizeof(err), "mix cap: %s", sqlite3_errmsg(s->db));
+                goto fail_count;
+            }
+            if (d == 0) break;
+            have -= d;
+            cut += d;
+        }
+    pthread_mutex_lock(&s->mu);
+    s->st.mix_rows = have;
+    s->st.mix_dropped_cap += (unsigned long long)cut;
+    pthread_mutex_unlock(&s->mu);
+    refresh_size(s);
+    return 0;
+fail:
+    snprintf(err, sizeof(err), "mix write: %s", sqlite3_errmsg(s->db));
+fail_rb:
+    {
+        char ignore[64];
+        sqlite3_reset(st[0]);
+        sqlite3_reset(st[1]);
+        exec(s->db, "ROLLBACK", ignore, sizeof(ignore), "rollback");
+    }
+fail_msg:
+    sqlite3_finalize(st[0]);
+    sqlite3_finalize(st[1]);
+fail_count:
+    pthread_mutex_lock(&s->mu);
+    s->st.write_errors++;
+    snprintf(s->st.last_error, sizeof(s->st.last_error), "%s", err);
+    pthread_mutex_unlock(&s->mu);
+    return -1;
+}
+
+int web_store_mix_query(web_store_t *s, int tier, long long from, long long to,
+                        long long max, web_store_mix_fn fn, void *ctx,
+                        int *more) {
+    *more = 0;
+    if (!s->rd || (tier != WEB_TIER_MINUTE && tier != WEB_TIER_HOUR) || max <= 0)
+        return -1;
+    pthread_mutex_lock(&s->rmu);
+    sqlite3_stmt *st = NULL;
+    int rc = sqlite3_prepare_v2(s->rd,
+        "SELECT channel,t,tx,kind,frames FROM chmix WHERE tier=?1 AND t>=?2"
+        " AND t<?3 ORDER BY t LIMIT ?4", -1, &st, NULL);
+    long long n = 0;
+    if (rc == SQLITE_OK) {
+        sqlite3_bind_int(st, 1, tier);
+        sqlite3_bind_int64(st, 2, from);
+        sqlite3_bind_int64(st, 3, to);
+        sqlite3_bind_int64(st, 4, max + 1);
+        while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+            if (n >= max) { *more = 1; rc = SQLITE_DONE; break; }
+            const char *ch = (const char *)sqlite3_column_text(st, 0);
+            const char *tx = (const char *)sqlite3_column_text(st, 2);
+            n++;
+            if (fn(ctx, ch ? ch : "", sqlite3_column_int64(st, 1), tx ? tx : "",
+                   sqlite3_column_int(st, 3), sqlite3_column_int64(st, 4))) {
+                rc = SQLITE_DONE;
+                break;
+            }
+        }
+    }
+    int bad = rc != SQLITE_DONE;
+    sqlite3_finalize(st);
+    pthread_mutex_unlock(&s->rmu);
+    if (bad) {
+        set_err(s, "mix", s->rd);
+        return -1;
+    }
+    return (int)n;
+}
+
+long long web_store_mix_count(web_store_t *s) {
+    if (!s->db) return -1;
+    return q_int(s->db, "SELECT COUNT(*) FROM chmix");
 }
 
 void web_store_stats(web_store_t *s, web_store_stats_t *out) {

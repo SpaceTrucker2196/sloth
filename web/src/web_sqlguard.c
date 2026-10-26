@@ -11,6 +11,7 @@
 #include <time.h>
 
 #include "web_json.h"
+#include "web_ssid.h"
 
 /* ── the text (pure) ──────────────────────────────────────────────────── */
 
@@ -329,7 +330,26 @@ static void hexblob(web_jw_t *w, const unsigned char *p, int n) {
     web_jw_raw(w, "\"}");
 }
 
-static void value(web_jw_t *w, sqlite3_stmt *st, int i) {
+/* A result column whose name holds "ssid" (any case): its text cells
+ * are SSIDs, sent in their display form (web_ssid.h), never raw. */
+static int ssid_column(const char *nm) {
+    for (const char *p = nm; p && *p; p++)
+        if ((p[0] | 32) == 's' && (p[1] | 32) == 's' && (p[2] | 32) == 'i' &&
+            (p[3] | 32) == 'd')
+            return 1;
+    return 0;
+}
+
+static void ssid_text(web_jw_t *w, const char *t, size_t n) {
+    char small[256 * WEB_SSID_EXPAND + 1];
+    char *d = n <= 256 ? small : malloc(n * WEB_SSID_EXPAND + 1);
+    if (!d) { web_jw_raw(w, "null"); return; }
+    size_t l = web_ssid_escape(t, n, d, n * WEB_SSID_EXPAND + 1, NULL);
+    web_jw_strn(w, d, l);
+    if (d != small) free(d);
+}
+
+static void value(web_jw_t *w, sqlite3_stmt *st, int i, int ssid) {
     switch (sqlite3_column_type(st, i)) {
     case SQLITE_INTEGER:
         web_jw_int(w, (long long)sqlite3_column_int64(st, i));
@@ -346,7 +366,9 @@ static void value(web_jw_t *w, sqlite3_stmt *st, int i) {
     }
     case SQLITE_TEXT: {
         const char *t = (const char *)sqlite3_column_text(st, i);
-        web_jw_strn(w, t ? t : "", (size_t)sqlite3_column_bytes(st, i));
+        size_t n = (size_t)sqlite3_column_bytes(st, i);
+        if (ssid) ssid_text(w, t ? t : "", t ? n : 0);
+        else web_jw_strn(w, t ? t : "", n);
         break;
     }
     case SQLITE_BLOB:
@@ -406,14 +428,21 @@ size_t web_sqlbox_run_db(sqlite3 *db, const char *sql, size_t len,
         web_jw_t w;
         web_jw_init(&w, out, cap > TAIL ? cap - TAIL : 0);
         int nc = sqlite3_column_count(st);
+        unsigned char *ssid = calloc((size_t)(nc > 0 ? nc : 1), 1);
+        if (!ssid) {
+            res->status = 503;
+            bl = web_sqlbox_error(out, cap, "no_memory", NULL);
+            goto done;
+        }
         web_jw_raw(&w, "{\"columns\":[");
         for (int i = 0; i < nc; i++) {
             if (i) web_jw_raw(&w, ",");
             const char *nm = sqlite3_column_name(st, i);
             web_jw_str(&w, nm ? nm : "");
+            ssid[i] = (unsigned char)ssid_column(nm);
         }
         web_jw_raw(&w, "],\"rows\":[");
-        if (w.overflow) { bl = 0; goto done; }
+        if (w.overflow) { free(ssid); bl = 0; goto done; }
         long long rows = 0;
         int cut = 0;
         while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
@@ -422,7 +451,7 @@ size_t web_sqlbox_run_db(sqlite3 *db, const char *sql, size_t len,
             web_jw_raw(&w, rows ? ",[" : "[");
             for (int i = 0; i < nc; i++) {
                 if (i) web_jw_raw(&w, ",");
-                value(&w, st, i);
+                value(&w, st, i, ssid[i]);
             }
             web_jw_raw(&w, "]");
             if (w.overflow || w.len > lim->out_cap) {
@@ -434,6 +463,7 @@ size_t web_sqlbox_run_db(sqlite3 *db, const char *sql, size_t len,
             }
             rows++;
         }
+        free(ssid);
         if (!cut && rc == SQLITE_INTERRUPT && x->timed_out) cut = 3;
         if (!cut && rc != SQLITE_DONE &&
             (sqlite3_extended_errcode(db) & 0xff) == SQLITE_CANTOPEN) {

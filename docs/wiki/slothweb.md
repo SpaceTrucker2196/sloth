@@ -639,7 +639,15 @@ In short:
   `/api/wifi/aps`: `beacon_aps` through the M4 allow-list, AKM bits
   decoded to suite names (`src/rsn_ie.c`'s), downgrade flags by name
   (`WPA_DG_*`), MFP, SSID history and count, KARMA score; an SSID count
-  above 1 in `--sev-warn`. `/api/wifi/deauth`: frames per bssid with
+  above 1 in `--sev-warn`. Since v5 of slothweb.db each cell of the
+  grid is also a stacked bar of the five busiest transmitters on the
+  channel in it (`/api/wifi/channels?mix=1`, from the frame counts of
+  `beacon`, `probe_client` and `assoc`; APs in their SSID's colour,
+  clients in their MAC's), with a heat strip per row for its busyness
+  and the five listed on hover, tap or the arrow keys. Every SSID is
+  sent in a display form (`\xNN` for any octet that is not printable
+  UTF-8, flagged "non-printable"), coloured over its octets as the TUI
+  colours it. `/api/wifi/deauth`: frames per bssid with
   DEAUTH_FLOOD episodes matched on the predicate-only alert key. Probe
   clients from `/api/series` over the M3 band.
 - **History** (§8.10). `/api/history/overview` (the 30 d strip: devices

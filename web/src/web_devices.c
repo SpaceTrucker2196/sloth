@@ -10,6 +10,7 @@
 #include "web_history.h"
 #include "web_metrics.h"
 #include "web_query.h"
+#include "web_ssid.h"
 
 /* ── parameters ──────────────────────────────────────────────────────── */
 
@@ -221,7 +222,7 @@ static void dev_json(web_jw_t *w, const web_m4_t *m, const web_sdb_dev_t *d,
     const char *name = best_name(m, d, now_s, nbuf, &glyph);
     web_jw_raw(w, ",\"name\":");     jw_text_or_null(w, name);
     web_jw_raw(w, ",\"name_src\":"); jw_text_or_null(w, glyph);
-    web_jw_raw(w, ",\"ssid\":");     jw_text_or_null(w, d->ssid);
+    web_jw_raw(w, ",\"ssid\":");     web_jw_ssid(w, d->ssid);
     web_jw_raw(w, ",\"signal\":");
     if (d->has_signal) web_jw_int(w, d->signal_dbm); else web_jw_raw(w, "null");
     web_jw_raw(w, ",\"sources\":");  web_jw_int(w, d->sources & 0xffff);
@@ -247,6 +248,7 @@ static void dev_json(web_jw_t *w, const web_m4_t *m, const web_sdb_dev_t *d,
     } else {
         web_jw_raw(w, "null");
     }
+    web_jw_ssid_meta(w, "ssid", d->ssid);
     web_jw_raw(w, "}");
 }
 
@@ -503,16 +505,18 @@ static int emit_item(void *ctx, const web_sdb_item_t *it) {
     if (e->n++) web_jw_raw(w, ",");
     switch (e->kind) {
     case EK_SSID:
-        web_jw_raw(w, "{\"ssid\":"); web_jw_str(w, it->a);
+        web_jw_raw(w, "{\"ssid\":"); web_jw_ssid(w, it->a);
+        web_jw_ssid_meta(w, "ssid", it->a);
         break;
     case EK_ASSOC:
         web_jw_raw(w, "{\"bssid\":"); web_jw_str(w, it->a);
-        web_jw_raw(w, ",\"ssid\":");  jw_text_or_null(w, it->b);
+        web_jw_raw(w, ",\"ssid\":");  web_jw_ssid(w, it->b);
         web_jw_raw(w, ",\"source\":"); web_jw_int(w, it->n1 & 0xffff);
         web_jw_raw(w, ",\"channel\":"); web_jw_int(w, it->n2 & 0xffff);
         web_jw_raw(w, ",\"signal\":");
         if (it->has_n3) web_jw_int(w, it->n3 < -200 ? -200 : it->n3 > 50 ? 50 : it->n3);
         else web_jw_raw(w, "null");
+        web_jw_ssid_meta(w, "ssid", it->b);
         break;
     case EK_ADDR:
         web_jw_raw(w, "{\"addr\":"); web_jw_str(w, it->a);
@@ -704,6 +708,7 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
     if (found < 0) found = 0;
     char sip[WEB_KEY_MAX + 1] = "";
     web_id_name_t sdhcp;
+    memset(&sdhcp, 0, sizeof(sdhcp));
     long long sfs = -1;
     if (m->ident) web_ident_mac_info(m->ident, mac, now_s, sip, &sdhcp, &sfs);
     const char *ip = found && d.ip[0] ? d.ip : sip;

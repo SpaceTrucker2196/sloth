@@ -70,5 +70,6 @@ void run_history_tests(void);
 void run_parity_tests(void);
 void run_flows_tests(void);
 void run_readme_tests(void);
+void run_chmix_tests(void);
 
 #endif

@@ -291,11 +291,22 @@
     return sp;
   }
 
-  // tui_ssid_addstr(): the same palette, its own hash of the SSID.
-  function ssidSpan(ssid) {
+  // tui_ssid_addstr(): the same palette, its own hash of the SSID. The
+  // server sends every SSID in its display form (web/src/web_ssid.h:
+  // printable UTF-8 as it is, any other octet as \xNN), never raw, with
+  // the colour it hashed over the octets themselves (k, its *_k member),
+  // which is the TUI's; the page's own hash is for an SSID that came
+  // without one. One that needed escaping (np) carries a marker.
+  function ssidSpan(ssid, k, np) {
     var sp = el("span", "", ssid);
-    if (ssid !== "") sp.style.color = "var(--k-" + ipColorIndex(ssid) + ")";
-    return sp;
+    if (num(k) && k >= 0 && k < P.ip) sp.style.color = "var(--k-" + k + ")";
+    else if (ssid !== "") sp.style.color = "var(--k-" + ipColorIndex(ssid) + ")";
+    if (np !== true) return sp;
+    var w = el("span", "ssid-np");
+    w.appendChild(sp);
+    w.appendChild(el("span", "npm", "non-printable"));
+    w.title = "bytes that are not printable UTF-8 are shown as \\xNN";
+    return w;
   }
 
   // tui_brand_addstr() into parent: brand runs in their colours, the
@@ -668,7 +679,8 @@
     TH = { ink: css("--ink"), muted: css("--muted"), faint: css("--faint"),
            rule: css("--rule"), data: css("--data"), signal: css("--signal"),
            bg: css("--bg"), panel: css("--panel"), bright: css("--tui-bright"),
-           normal: css("--tui-normal"), dim: css("--tui-dim"), k: [], heat: [], hot: [] };
+           normal: css("--tui-normal"), dim: css("--tui-dim"), mon: css("--mon-bg"),
+           monfg: css("--mon-fg"), k: [], heat: [], hot: [] };
     for (var i = 0; i < 8; i++) TH.k.push(css("--k-" + i));
     for (i = 0; i < 4; i++) TH.heat.push(css("--heat-" + i));
     for (i = 0; i < 3; i++) TH.hot.push(css("--hot-" + i));
@@ -1427,7 +1439,7 @@
     while (r.nameText.firstChild) r.nameText.removeChild(r.nameText.firstChild);
     if (d.name === null) r.nameText.appendChild(el("span", "d-normal", "-"));
     else brandText(r.nameText, String(d.name), "d-bright");
-    put(r.cells["c-ss"], d.ssid === null ? el("span", "d-dim", "-") : ssidSpan(String(d.ssid)));
+    put(r.cells["c-ss"], d.ssid === null ? el("span", "d-dim", "-") : ssidSpan(String(d.ssid), d.ssid_k, d.ssid_np));
     r.cells["c-sig"].className = "c-sig d-dim";
     r.cells["c-sig"].textContent = num(d.signal) ? String(d.signal) : "-";
     r.cells["c-src"].className = "c-src d-dim";
@@ -1526,7 +1538,7 @@
     if (extra) sp.appendChild(el("span", "d-dim", extra));
     return sp;
   }
-  function ssidVal(v) { return v === null || v === undefined ? null : ssidSpan(String(v)); }
+  function ssidVal(v, k, np) { return v === null || v === undefined ? null : ssidSpan(String(v), k, np); }
   function macVal(v) { return v === null || v === undefined ? null : el("span", "d-dim", String(v)); }
 
   function itemList(box, title, items, line, more) {
@@ -1580,7 +1592,7 @@
       kvList(box, ouiPairs(j.oui).concat(r ? [
         ["ip", ipVal(r.ip, IP_SRC.dev)],
         ["name", r.name === null ? null : hostVal(r.name, " (" + r.name_src + ")")],
-        ["hostname", hostVal(dt.hostname)], ["last ssid", ssidVal(r.ssid)],
+        ["hostname", hostVal(dt.hostname)], ["last ssid", ssidVal(r.ssid, r.ssid_k, r.ssid_np)],
         ["signal", num(r.signal) ? r.signal + " dBm" : null],
         ["sources", srcGlyphs(r.sources)], ["risk", String(r.risk)],
         ["first seen", stamp(r.first_seen)], ["last seen", stamp(r.last_seen)],
@@ -1590,11 +1602,11 @@
       ] : [["stream ip", j.stream ? ipVal(j.stream.ip, IP_SRC.dev) : null],
            ["stream first seen", j.stream && num(j.stream.first_seen) ? stamp(j.stream.first_seen) : null]]));
       itemList(box, "names (passive)", j.names, nameLine, false);
-      itemList(box, "pnl ssids", j.ssids, function (x) { return ssidSpan(String(x.ssid)); }, j.ssids_more);
+      itemList(box, "pnl ssids", j.ssids, function (x) { return ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np); }, j.ssids_more);
       itemList(box, "associations", j.assocs, function (x) {
         var sp = el("span", "");
         sp.appendChild(el("span", "d-dim", x.bssid + "  "));
-        if (x.ssid !== null) sp.appendChild(ssidSpan(String(x.ssid)));
+        if (x.ssid !== null) sp.appendChild(ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np));
         sp.appendChild(el("span", "d-normal", "  ch " + x.channel +
                           (num(x.signal) ? "  " + x.signal + " dBm" : "") + "  source " + x.source));
         return sp;
@@ -1667,7 +1679,7 @@
   // deauth timeline from /api/wifi/deauth, and probe clients from
   // /api/series with its baseline band. Channel keys, BSSIDs and SSIDs
   // are drawn with fillText or set with textContent, never as markup.
-  var WF = { gen: 0 };
+  var WF = { gen: 0, heat: null, mix: null, rows: [], cur: null, apEls: new Map(), geo: null };
   var AP_SORTS = { "last": 1, "ssids": 1, "karma": 1, "bssid": 1 };
   var BAND_WORD = { "2.4": "2.4 GHz", "5": "5 GHz", "6": "6 GHz" };
 
@@ -1684,22 +1696,104 @@
     return p;
   }
 
-  // Rows are channels, bands grouped with a rule between them; a cell's
-  // colour is the heat ramp against the busiest cell in view.
-  function waterfall(c, j) {
+  // The channel x time grid (owner request 2026-10-26). Rows are
+  // channels, bands grouped with a rule between them. Each cell is a
+  // stacked bar of the busiest five transmitters on that channel in that
+  // cell (/api/wifi/channels?mix=1), each band's height its share of the
+  // cell's frames, the busiest at the bottom and the rest one grey band
+  // on top; an AP in its SSID's hash colour (the server's ssid_k, hashed
+  // over the octets, as tui_ssid_addstr() colours it), a client in its
+  // MAC's, every cell on CP_MON_ROW's ground: all of it was heard by the
+  // monitor radio. A thin strip at each row's left is the row's
+  // busyness in the metric the view shows (APs per channel, control
+  // frames), in the heat ramp against the busiest row. A cell the mix
+  // holds nothing for (the memory ring has moved past it) keeps the
+  // heat ramp, dimmed. Pointer, tap or the arrow keys pick a cell; the
+  // list under the grid names its five.
+  var BAND_RANK = { "2.4": 0, "5": 1, "6": 2 };
+  function bandRank(b) { return Object.prototype.hasOwnProperty.call(BAND_RANK, b) ? BAND_RANK[b] : 3; }
+  function chanNum(k) { return parseInt(String(k).replace(/^6g/, ""), 10) || 0; }
+
+  function gridRows() {
+    var by = new Map(), out = [];
+    function add(r) {
+      var k = String(r.key), e = by.get(k);
+      if (!e) { e = { key: k, band: String(r.band), heat: null, mix: null }; by.set(k, e); out.push(e); }
+      return e;
+    }
+    ((WF.heat && WF.heat.channels) || []).forEach(function (r) { add(r).heat = r; });
+    ((WF.mix && WF.mix.channels) || []).forEach(function (r) { add(r).mix = r; });
+    out.sort(function (a, b) {
+      var d = bandRank(a.band) - bandRank(b.band);
+      if (d) return d;
+      d = chanNum(a.key) - chanNum(b.key);
+      if (d) return d;
+      return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+    });
+    return out;
+  }
+
+  // A row's busyness in the shown metric: a gauge's mean over the cells
+  // it has, a counter's sum.
+  function rowBusy(r) {
+    if (!r.heat || !r.heat.cells) return 0;
+    var s = 0, n = 0;
+    r.heat.cells.forEach(function (v) { if (num(v)) { s += v; n++; } });
+    if (!n) return 0;
+    return WF.heat.kind === "gauge" ? s / n : s;
+  }
+
+  function txOf(i) {
+    var t = WF.mix && WF.mix.tx && WF.mix.tx[i];
+    return t && typeof t.id === "string" ? t : null;
+  }
+
+  // A band's colour: an AP by its SSID's hash (by its BSSID when it has
+  // no name), a client by its MAC's.
+  function txColor(t) {
+    var T = theme();
+    if (!t) return T.heat[0];
+    if (t.kind === "ap" && num(t.ssid_k) && t.ssid !== null && t.ssid_k >= 0 && t.ssid_k < 8)
+      return T.k[t.ssid_k];
+    return keyColor(t.id);
+  }
+
+  function channelGrid() {
+    var c = $("w-heat");
     var T = theme();
     var dpr = sizeCanvas(c);
     var g = c.getContext("2d");
     var W = c.width, H = c.height;
     g.clearRect(0, 0, W, H);
-    var rows = j.channels || [];
-    if (!rows.length) return;
-    var max = 0;
+    var rows = gridRows();
+    WF.rows = rows;
+    var cols = (WF.mix && num(WF.mix.cols)) ? WF.mix.cols : (WF.heat && num(WF.heat.cols)) ? WF.heat.cols : 0;
+    var col_s = (WF.mix && WF.mix.col_s) || (WF.heat && WF.heat.col_s) || 0;
+    var from = (WF.mix && WF.mix.from) || (WF.heat && WF.heat.from) || 0;
+    WF.geo = null;
+    var note = rows.length + " channels";
+    if (WF.heat) note += ", " + WF.heat.tier + " tier, " + fmt(WF.heat.col_s) + " s cells" +
+                         (WF.heat.more ? ", more channels than shown" : "");
+    set("w-heat-note", note);
+    if (WF.mix) {
+      var nm = (WF.mix.tx || []).length;
+      set("w-mix-note", nm + " transmitters, " + WF.mix.source +
+          (WF.mix.folded ? "; some folded into other" : "") +
+          (WF.mix.more ? "; more channels than shown" : "") +
+          (num(WF.mix.ring_from) && WF.mix.ring_from > from
+            ? "; detail held from " + hhmmss(WF.mix.ring_from) : ""));
+    }
+    if (!rows.length || !cols) { mixDetail(); return; }
+    var busy = rows.map(rowBusy), bmax = 0;
+    busy.forEach(function (v) { if (v > bmax) bmax = v; });
+    var hmax = 0;
     rows.forEach(function (r) {
-      (r.cells || []).forEach(function (v) { if (num(v) && v > max) max = v; });
+      ((r.heat && r.heat.cells) || []).forEach(function (v) { if (num(v) && v > hmax) hmax = v; });
     });
-    var padL = 40 * dpr, rh = Math.max(2 * dpr, Math.floor((H - 2 * dpr) / rows.length));
-    var cw = (W - padL) / Math.max(1, j.cols);
+    var padL = 40 * dpr, strip = 6 * dpr, x0 = padL + strip + 2 * dpr;
+    var rh = Math.max(2 * dpr, Math.floor((H - 2 * dpr) / rows.length));
+    var cw = (W - x0) / Math.max(1, cols);
+    WF.geo = { x0: x0, rh: rh, cw: cw, cols: cols, col_s: col_s, from: from, dpr: dpr };
     g.font = Math.min(10 * dpr, rh) + "px " + css("--font-mono");
     g.textBaseline = "middle";
     for (var i = 0; i < rows.length; i++) {
@@ -1709,18 +1803,168 @@
         g.fillRect(0, y, W, Math.max(1, dpr));
       }
       g.fillStyle = T.muted;
-      g.fillText(String(r.key), 2 * dpr, y + rh / 2);
-      for (var k = 0; k < (r.cells || []).length; k++) {
-        var v = r.cells[k];
+      g.fillText(r.key, 2 * dpr, y + rh / 2);
+      g.fillStyle = busy[i] > 0 ? heat(bmax > 0 ? busy[i] / bmax : 0) : T.rule;
+      g.fillRect(padL, y + dpr, strip, rh - dpr);
+      g.fillStyle = T.mon;
+      g.fillRect(x0, y + dpr, W - x0, rh - dpr);
+      for (var k = 0; k < cols; k++) {
+        var x = x0 + k * cw, w = Math.max(dpr, Math.ceil(cw) - (cw > 3 * dpr ? dpr : 0));
+        var m = r.mix && r.mix.cells ? r.mix.cells[k] : null;
+        if (Array.isArray(m) && num(m[0]) && m[0] > 0) {
+          var tot = m[0], yy = y + rh, hh = rh - dpr;
+          for (var e = 2; e + 1 < m.length; e += 2) {
+            var bh = hh * m[e + 1] / tot;
+            g.fillStyle = txColor(txOf(m[e]));
+            yy -= bh;
+            g.fillRect(x, yy, w, bh);
+          }
+          if (num(m[1]) && m[1] > 0) {
+            var oh = hh * m[1] / tot;
+            g.fillStyle = T.heat[0];
+            yy -= oh;
+            g.fillRect(x, yy, w, oh);
+          }
+          continue;
+        }
+        var v = r.heat && r.heat.cells ? r.heat.cells[k] : null;
         if (!num(v) || v <= 0) continue;
-        g.fillStyle = heat(max > 0 ? v / max : 0);
-        g.fillRect(padL + k * cw, y + dpr, Math.max(dpr, Math.ceil(cw)), rh - dpr);
+        g.globalAlpha = 0.45;
+        g.fillStyle = heat(hmax > 0 ? v / hmax : 0);
+        g.fillRect(x, y + dpr, w, rh - dpr);
+        g.globalAlpha = 1;
       }
     }
+    var cur = WF.cur;
+    if (cur && cur.r < rows.length && cur.c < cols) {
+      g.strokeStyle = T.signal;
+      g.lineWidth = Math.max(1, dpr);
+      g.strokeRect(x0 + cur.c * cw + 0.5, cur.r * rh + 0.5, Math.max(dpr, cw - 1), rh - 1);
+    }
+    mixDetail();
   }
+
+  // The list under the grid: the picked cell's five, each a button that
+  // opens the device drawer (a client) or brings its AP's row into view
+  // (an AP), and the rest; on CP_MON_ROW's ground, as monitor rows are.
+  function mixDetail() {
+    var box = $("w-mix");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    var cur = WF.cur, rows = WF.rows, geo = WF.geo;
+    if (!cur || !geo || cur.r >= rows.length || cur.c >= geo.cols) {
+      box.appendChild(el("div", "sub", "point at, tap or arrow to a cell for who was transmitting"));
+      return;
+    }
+    var r = rows[cur.r], t0 = geo.from + cur.c * geo.col_s;
+    var m = r.mix && r.mix.cells ? r.mix.cells[cur.c] : null;
+    var hv = r.heat && r.heat.cells ? r.heat.cells[cur.c] : null;
+    var head = "ch " + r.key + "  " + hhmmss(t0) + " to " + hhmmss(t0 + geo.col_s);
+    if (Array.isArray(m) && num(m[0])) head += "  " + fmt(m[0]) + " frames";
+    if (num(hv)) head += "  (" + (WF.heat.metric === "wifi.ctrl_total" ? "control frames " : "APs ") + fmt(hv) + ")";
+    box.appendChild(el("div", "label", head));
+    if (!Array.isArray(m) || !num(m[0]) || m[0] <= 0) {
+      box.appendChild(el("div", "sub", "no transmitter detail for this cell"));
+      return;
+    }
+    var ol = el("ol", "mixl");
+    function share(f) { return (100 * f / m[0]).toFixed(f * 1000 < m[0] ? 2 : 1) + "%"; }
+    for (var e = 2; e + 1 < m.length; e += 2) {
+      var t = txOf(m[e]);
+      if (!t) continue;
+      var li = el("li", "mon");
+      var b = el("button", "mixgo");
+      b.type = "button";
+      var sw = el("span", "sw");
+      sw.style.background = txColor(t);
+      b.appendChild(sw);
+      var nm = el("span", "nm");
+      if (t.kind === "ap") {
+        nm.appendChild(t.ssid === null || t.ssid === undefined ? el("span", "d-dim", "(no name)")
+                                                                : ssidSpan(String(t.ssid), t.ssid_k, t.ssid_np));
+        nm.appendChild(el("span", "d-dim", "  " + t.id + "  AP"));
+      } else {
+        nm.appendChild(el("span", "d-normal", t.id));
+        nm.appendChild(el("span", "d-dim", (typeof t.vendor === "string" ? "  " + t.vendor : "") + "  client"));
+      }
+      b.appendChild(nm);
+      b.appendChild(el("span", "n d-bright", fmt(m[e + 1])));
+      b.appendChild(el("span", "n d-normal", share(m[e + 1])));
+      b.addEventListener("click", mixGo(t));
+      li.appendChild(b);
+      ol.appendChild(li);
+    }
+    if (num(m[1]) && m[1] > 0) {
+      var lo = el("li", "mon");
+      var row = el("span", "mixgo");
+      var so = el("span", "sw");
+      so.style.background = theme().heat[0];
+      row.appendChild(so);
+      row.appendChild(el("span", "nm d-dim", "other transmitters"));
+      row.appendChild(el("span", "n d-bright", fmt(m[1])));
+      row.appendChild(el("span", "n d-normal", share(m[1])));
+      lo.appendChild(row);
+      ol.appendChild(lo);
+    }
+    box.appendChild(ol);
+  }
+
+  function mixGo(t) {
+    return function () {
+      if (t.kind !== "ap") { openDrawer(t.id); return; }
+      var row = WF.apEls.get(t.id);
+      if (!row) {
+        set("w-mix-note", t.id + " is not among the access points loaded below");
+        return;
+      }
+      WF.apEls.forEach(function (x) { x.classList.remove("hl"); });
+      row.classList.add("hl");
+      row.tabIndex = -1;
+      row.scrollIntoView({ block: "nearest" });
+      row.focus();
+    };
+  }
+
+  function gridPick(ev) {
+    var c = $("w-heat"), geo = WF.geo;
+    if (!geo) return;
+    var b = c.getBoundingClientRect();
+    var px = (ev.clientX - b.left) * (c.width / Math.max(1, b.width));
+    var py = (ev.clientY - b.top) * (c.height / Math.max(1, b.height));
+    var col = Math.floor((px - geo.x0) / geo.cw), row = Math.floor(py / geo.rh);
+    if (col < 0 || col >= geo.cols || row < 0 || row >= WF.rows.length) return;
+    if (WF.cur && WF.cur.r === row && WF.cur.c === col) return;
+    WF.cur = { r: row, c: col };
+    channelGrid();
+  }
+  $("w-heat").tabIndex = 0;
+  $("w-heat").addEventListener("pointermove", function (ev) { if (ev.pointerType === "mouse") gridPick(ev); });
+  $("w-heat").addEventListener("pointerdown", gridPick);
+  $("w-heat").addEventListener("keydown", function (ev) {
+    var geo = WF.geo;
+    if (!geo || !WF.rows.length) return;
+    var cur = WF.cur || { r: 0, c: geo.cols - 1 };
+    var MOVE = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] };
+    var d = Object.prototype.hasOwnProperty.call(MOVE, ev.key) ? MOVE[ev.key] : null;
+    if (d) {
+      ev.preventDefault();
+      cur = { r: Math.max(0, Math.min(WF.rows.length - 1, cur.r + d[0])),
+              c: Math.max(0, Math.min(geo.cols - 1, cur.c + d[1])) };
+      WF.cur = cur;
+      channelGrid();
+      return;
+    }
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      if (!WF.cur) { WF.cur = cur; channelGrid(); }
+      var first = $("w-mix").querySelector("button");
+      if (first) first.focus();
+    }
+  });
+  window.addEventListener("resize", function () { if (view === "wifi" && WF.geo) channelGrid(); });
 
   function apRow(a) {
     var row = el("div", "aprow" + (a.multi_ssid ? " many-ssid" : ""));
+    WF.apEls.set(String(a.bssid), row);
     var bs = el("span", "c-bs");
     var sw = el("span", "sw");
     sw.style.background = keyColor(String(a.bssid));
@@ -1730,7 +1974,7 @@
     // The SSID in its hash colour; the warning (KARMA, multi-VAP) is
     // the "+N ssids" after it, at the heat the TUI warns at.
     var ss = el("span", "c-ssid");
-    ss.appendChild(a.ssid === null ? el("span", "d-dim", "(hidden)") : ssidSpan(String(a.ssid)));
+    ss.appendChild(a.ssid === null ? el("span", "d-dim", "(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
     if (a.ssid_count > 1) ss.appendChild(el("span", "warn", "  +" + (a.ssid_count - 1) + " ssids"));
     row.appendChild(ss);
     row.appendChild(el("span", "c-ch d-normal", String(a.channel)));
@@ -1751,7 +1995,7 @@
       hist.appendChild(document.createTextNode("ssid history: "));
       a.ssids.forEach(function (x, i) {
         if (i) hist.appendChild(document.createTextNode("; "));
-        hist.appendChild(ssidSpan(String(x.ssid)));
+        hist.appendChild(ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np));
         hist.appendChild(document.createTextNode(" (" + shortStamp(x.first_seen) + " to " +
                                                  shortStamp(x.last_seen) + ")"));
       });
@@ -1769,6 +2013,7 @@
       if (gen !== WF.gen) return;
       var box = $("w-aps");
       while (box.firstChild) box.removeChild(box.firstChild);
+      WF.apEls = new Map();
       (j.rows || []).forEach(function (a) { box.appendChild(apRow(a)); });
       if (!j.rows || !j.rows.length) box.appendChild(el("div", "sub", "no beacon_aps rows"));
       set("w-aps-count", (j.rows ? j.rows.length : 0) + " shown" + (j.more ? ", more in sloth.db" : ""));
@@ -1823,12 +2068,22 @@
     var gen = ++WF.gen;
     var r = wifiWindow();
     var metric = $("w-metric").value === "ctrl_total" ? "ctrl_total" : "ap_count";
+    WF.heat = null;
+    WF.mix = null;
     getJSON(wifiGridPath("channels", metric, r)).then(function (j) {
       if (gen !== WF.gen) return;
-      waterfall($("w-heat"), j);
-      set("w-heat-note", (j.channels || []).length + " channels, " + j.tier + " tier, " +
-          fmt(j.col_s) + " s cells" + (j.more ? ", more channels than shown" : ""));
+      WF.heat = j;
+      channelGrid();
     }).catch(function (e) { if (gen === WF.gen) set("w-heat-note", errText(e.message)); });
+    // The transmitters behind each cell, on the same grid.
+    getJSON(wifiGridPath("channels", "", r) + "&mix=1").then(function (j) {
+      if (gen !== WF.gen) return;
+      WF.mix = j;
+      channelGrid();
+    }).catch(function (e) {
+      if (gen !== WF.gen) return;
+      set("w-mix-note", "no transmitter detail: " + errText(e.message));
+    });
     getJSON(wifiGridPath("deauth", "", r)).then(function (j) {
       if (gen !== WF.gen) return;
       deauthChart($("w-deauth"), j);
@@ -2267,7 +2522,7 @@
             tx.appendChild(el("span", "d-dim", r.ident + "  "));
             if (r.label === null || r.label === "") tx.appendChild(el("span", "d-dim", "-"));
             else if (k[0] === "devices") brandText(tx, String(r.label), "d-bright");
-            else tx.appendChild(ssidSpan(String(r.label)));
+            else tx.appendChild(ssidSpan(String(r.label), r.label_k, r.label_np));
             li.appendChild(tx);
             ol.appendChild(li);
           });

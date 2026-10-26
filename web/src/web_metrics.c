@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "web_chmix.h"
 #include "web_ident.h"
 #include "web_live.h"
 
@@ -214,6 +215,23 @@ void web_metrics_set_ident(web_metrics_t *m, struct web_ident *id) {
     m->ident = id;
 }
 
+void web_metrics_set_mix(web_metrics_t *m, struct web_chmix *mix) {
+    m->mix = mix;
+}
+
+/* d frames from the transmitter at field on the record's channel. */
+static void mix_add(web_metrics_t *m, const web_jrec_t *r, const char *field,
+                    int kind, const char *band, double d, long long now) {
+    char ch[WEB_KEY_MAX + 1];
+    uint8_t mac[6];
+    if (!m->mix || !(d > 0)) return;
+    if (web_key_channel(web_jl_int(r, "channel", -1), band, ch) != 0) return;
+    char k[WEB_KEY_MAX + 1];
+    if (web_key_mac(web_jl_str(r, field), k) != 0) return;
+    if (web_mix_mac_bytes(k, mac) != 0) return;
+    web_chmix_add(m->mix, ch, mac, kind, d, now);
+}
+
 static void hw_unlink(web_metrics_t *m, int idx) {
     int *pp = &m->hw_head[hw_hash(m->hw[idx].id) & (unsigned)(m->hw_nhead - 1)];
     while (*pp >= 0 && *pp != idx) pp = &m->hw[*pp].next;
@@ -365,16 +383,32 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
         m->probe_n++;
         if (web_key_mac(web_jl_str(r, "mac"), k) != 0) return;
         snprintf(id, sizeof(id), "pc|%s", k);
-        count(m, WM_DEV_FRAMES, k,
-              hw_delta(m, id, web_jl_int(r, "frame_count", 0),
-                       web_jl_int(r, "first_seen", -1)), now);
+        double d = hw_delta(m, id, web_jl_int(r, "frame_count", 0),
+                            web_jl_int(r, "first_seen", -1));
+        count(m, WM_DEV_FRAMES, k, d, now);
+        mix_add(m, r, "mac", WEB_TX_CLIENT, NULL, d, now);
     } else if (!strcmp(t, "assoc")) {
         if (web_key_mac(web_jl_str(r, "sta_mac"), k) != 0) return;
         if (web_key_mac(web_jl_str(r, "bssid"), k2) != 0) return;
         snprintf(id, sizeof(id), "as|%s|%s", k2, k);
-        count(m, WM_DEV_FRAMES, k,
-              hw_delta(m, id, web_jl_int(r, "frame_count", 0),
-                       web_jl_int(r, "first_seen", -1)), now);
+        double d = hw_delta(m, id, web_jl_int(r, "frame_count", 0),
+                            web_jl_int(r, "first_seen", -1));
+        count(m, WM_DEV_FRAMES, k, d, now);
+        mix_add(m, r, "sta_mac", WEB_TX_CLIENT, NULL, d, now);
+    } else if (!strcmp(t, "beacon")) {
+        /* The channel mix only: an AP's beacons, by its bssid. No
+         * first_seen on the record, so a first sight is a baseline. */
+        if (!m->mix || web_key_mac(web_jl_str(r, "bssid"), k) != 0) return;
+        uint8_t mac[6];
+        const char *ssid = web_jl_str(r, "ssid");
+        if (web_mix_mac_bytes(k, mac) == 0 && ssid && ssid[0])
+            web_chmix_name(m->mix, mac, ssid, now);
+        snprintf(id, sizeof(id), "bc|%s", k);
+        double d = hw_delta(m, id, web_jl_int(r, "frame_count", 0), -1);
+        mix_add(m, r, "bssid", WEB_TX_AP,
+                web_jl_int(r, "channel_source", 0) == WEB_CH_SRC_HE_6GHZ ? "6 GHz"
+                                                                         : NULL,
+                d, now);
     } else if (!strcmp(t, "dns")) {
         if (web_key_ip(web_jl_str(r, "src"), k) != 0) return;
         long long resp = web_jl_int(r, "is_resp", -1);

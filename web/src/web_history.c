@@ -6,6 +6,7 @@
 
 #include "web_json.h"
 #include "web_series.h"
+#include "web_ssid.h"
 
 int web_hist_test_expire = 0;
 
@@ -393,6 +394,7 @@ typedef struct {
     web_jw_t *w;
     size_t    cap;
     int       n, max, cut;
+    int       ssid;       /* the label is an SSID (an AP's, a probe's) */
 } nl_t;
 
 static int emit_new(void *ctx, const web_sdb_item_t *it) {
@@ -402,8 +404,10 @@ static int emit_new(void *ctx, const web_sdb_item_t *it) {
     web_jw_t *w = l->w;
     web_jw_raw(w, l->n++ ? ",{\"ident\":" : "{\"ident\":");
     web_jw_str(w, it->a);
-    web_jw_raw(w, ",\"label\":");  jw_text_or_null(w, it->b);
+    web_jw_raw(w, ",\"label\":");
+    if (l->ssid) web_jw_ssid(w, it->b); else jw_text_or_null(w, it->b);
     web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, it->first_seen);
+    if (l->ssid) web_jw_ssid_meta(w, "label", it->b);
     web_jw_raw(w, "}");
     return 0;
 }
@@ -457,7 +461,7 @@ int web_sessions_new_route(const web_m4_t *m, const char *query,
         web_jw_key(&w, K[k].name);
         if (!has_prev) { web_jw_raw(&w, "null"); continue; }
         web_jw_raw(&w, "{\"rows\":[");
-        nl_t l = { &w, cap, 0, WEB_HIST_NEW, 0 };
+        nl_t l = { &w, cap, 0, WEB_HIST_NEW, 0, K[k].kind != WEB_NEW_DEVICE };
         long long total = 0;
         int got = web_sdb_new_since(&c, K[k].kind, since, until, WEB_HIST_NEW,
                                     emit_new, &l, &total);

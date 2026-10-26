@@ -37,6 +37,7 @@ int main(void) {
     run_devices_tests();
     run_parity_tests();
     run_wifi_tests();
+    run_chmix_tests();
     run_history_tests();
     run_flows_tests();
     run_readme_tests();

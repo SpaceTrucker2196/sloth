@@ -52,11 +52,12 @@ static void test_schema_text_guardrail(void) {
     const char *v2 = web_store_step_sql(1);
     const char *v3 = web_store_step_sql(2);
     const char *v4 = web_store_step_sql(3);
-    WT_ASSERT(meta && v1 && v2 && v3 && v4);
-    WT_ASSERT(web_store_step_sql(4) == NULL);     /* v4 is current */
-    WT_EQ(WEB_STORE_SCHEMA, 4);
-    const char *both[5] = { meta, v1, v2, v3, v4 };
-    for (int k = 0; k < 5; k++) {
+    const char *v5 = web_store_step_sql(4);
+    WT_ASSERT(meta && v1 && v2 && v3 && v4 && v5);
+    WT_ASSERT(web_store_step_sql(5) == NULL);     /* v5 is current */
+    WT_EQ(WEB_STORE_SCHEMA, 5);
+    const char *both[6] = { meta, v1, v2, v3, v4, v5 };
+    for (int k = 0; k < 6; k++) {
         for (size_t i = 0; i < NFORBIDDEN; i++) {
             if (!strcmp(FORBIDDEN[i], "mic")) {
                 WT_ASSERT(strstr(both[k], "  mic ") == NULL);
@@ -94,11 +95,21 @@ static void test_schema_text_guardrail(void) {
     WT_EQ(semis, 2);
     WT_HAS(v4, "CREATE TABLE passive_ptr (");
     WT_HAS(v4, "CREATE INDEX passive_ptr_last ON passive_ptr");
+    /* v5: chmix and its index, nothing else; no SSID column. */
+    creates = semis = 0;
+    for (const char *p = v5; (p = strstr(p, "CREATE ")); p++) creates++;
+    for (const char *p = v5; *p; p++) semis += *p == ';';
+    WT_EQ(creates, 2);
+    WT_EQ(semis, 2);
+    WT_HAS(v5, "CREATE TABLE chmix (");
+    WT_HAS(v5, "CREATE INDEX chmix_t ON chmix (tier, t)");
+    WT_ASSERT(!ci_has(v5, "ssid"));
     /* Not IF NOT EXISTS: a step must fail on a name already taken. */
     WT_ASSERT(strstr(v1, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v2, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v3, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v4, "IF NOT EXISTS") == NULL);
+    WT_ASSERT(strstr(v5, "IF NOT EXISTS") == NULL);
 }
 
 #ifndef WITH_SQLITE
@@ -235,10 +246,11 @@ static void test_no_column_can_hold_secret_material(void) {
     }
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
-                     " AND UPPER(c.type)='TEXT'"), 16);
+                     " AND UPPER(c.type)='TEXT'"), 18);
     /* meta (name, value), series (metric, key), baseline (metric, key),
      * episode (kind, metric, key, evidence), fanout (key, hist),
-     * reported (kind, key) and passive_ptr (ip, name): all but two hold
+     * reported (kind, key), passive_ptr (ip, name) and chmix (channel,
+     * tx: a channel key and a canonical MAC): all but two hold
      * a canonical key, a catalogue name or numbers; evidence is our own
      * sentence, with names the stream already carries (web_anomaly.h),
      * and a passive_ptr name is a host name a PTR answer on the wire
@@ -480,7 +492,8 @@ static void test_v3_file_is_migrated(void) {
     make_v3(p, "");
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 4);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"),
+          WEB_STORE_SCHEMA);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
                      " name IN ('passive_ptr','passive_ptr_last')"), 2);
     WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
@@ -510,6 +523,180 @@ static void test_v3_failed_step_leaves_file_unchanged(void) {
                      " name='passive_ptr_last' AND tbl_name='minute'"), 1);
     WT_EQ(raw_int(p, "SELECT t FROM reported"), 100);
     WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    rm_store(p);
+}
+
+/* A v4 file as M4 left it: the v3 file, the v4 step and a passive_ptr
+ * row, stamped v4. */
+static void make_v4(const char *p, const char *extra) {
+    char sql[4096];
+    snprintf(sql, sizeof(sql), "%s INSERT INTO passive_ptr VALUES"
+             " ('10.0.0.9','nas.lan',50,60);"
+             " UPDATE meta SET value='4' WHERE name='schema_version'; %s",
+             web_store_step_sql(3), extra);
+    make_v3(p, sql);
+}
+
+/* v4 -> v5 adds chmix and its index and changes nothing that was there. */
+static void test_v4_file_is_migrated(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v4.db");
+    make_v4(p, "");
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 4);
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 5);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
+                     " name IN ('chmix','chmix_t')"), 2);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM chmix"), 0);
+    WT_EQ(raw_int(p, "SELECT last_seen FROM passive_ptr WHERE ip='10.0.0.9'"), 60);
+    WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    WT_EQ(raw_int(p, "SELECT score FROM episode WHERE id=5"), 70);
+    rm_store(p);
+}
+
+/* The v4 step's failure: a v4 file already holding the name chmix_t (an
+ * index of its own on minute) fails the step at its second statement,
+ * after chmix was made. It stays at v4, keeps that index and every row,
+ * and is left without chmix: the step's first statement is rolled back
+ * with it. Seen red with the migration's ROLLBACK replaced by COMMIT
+ * (chmix left behind, the file stamped v5 by the next start). */
+static void test_v4_failed_step_leaves_file_unchanged(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v4bad.db");
+    make_v4(p, "CREATE INDEX chmix_t ON minute (t);");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), -1);
+    WT_HAS(err, "unchanged from v4");
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 4);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name='chmix'"), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
+                     " name='chmix_t' AND tbl_name='minute'"), 1);
+    WT_EQ(raw_int(p, "SELECT last_seen FROM passive_ptr WHERE ip='10.0.0.9'"), 60);
+    WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    rm_store(p);
+}
+
+static int g_mix_n;
+static long long g_mix_frames;
+static char g_mix_last[64];
+static int mix_seen(void *ctx, const char *chan, long long t, const char *tx,
+                    int kind, long long frames) {
+    (void)ctx;
+    g_mix_n++;
+    g_mix_frames += frames;
+    snprintf(g_mix_last, sizeof(g_mix_last), "%s|%lld|%s|%d|%lld", chan, t, tx,
+             kind, frames);
+    return 0;
+}
+
+static web_mix_row_t mix_row(const char *chan, int tier, long long t,
+                             int n, uint32_t base, uint32_t other) {
+    web_mix_row_t r;
+    memset(&r, 0, sizeof(r));
+    snprintf(r.chan, sizeof(r.chan), "%s", chan);
+    r.tier = tier;
+    r.t = t;
+    r.other = other;
+    r.n = n;
+    for (int i = 0; i < n; i++) {
+        uint8_t mac[6] = { 0x02, 0, 0, 0, 0, (uint8_t)(i + 1) };
+        memcpy(r.tx[i].mac, mac, 6);
+        r.tx[i].kind = i ? WEB_TX_CLIENT : WEB_TX_AP;
+        r.tx[i].frames = base - (uint32_t)i;
+    }
+    return r;
+}
+
+/* chmix through its own calls: a bucket written twice (a shutdown's
+ * partial close, then the rest) is merged, not doubled in rows; the
+ * rest is one row with tx ''; fine rows are never written; a read is
+ * one tier and range, oldest first, cut at max with "more". Seen red
+ * with the merge's UPDATE dropped (frames 20, not 40) and with the
+ * tier test removed from the write (a fine row on disk). */
+static void test_mix_rows_round_trip(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "mix.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_mix_row_t r[4] = {
+        mix_row("6", WEB_TIER_MINUTE, 600, 2, 20, 5),
+        mix_row("6", WEB_TIER_MINUTE, 600, 2, 20, 5),
+        mix_row("6g37", WEB_TIER_HOUR, 3600, 1, 9, 0),
+        mix_row("11", WEB_TIER_FINE, 610, 1, 3, 0),
+    };
+    WT_EQ(web_store_mix_write(&S, r, 4), 0);
+    WT_EQ(web_store_mix_count(&S), 4);          /* 2 named + other, 1 hour */
+    web_store_stats_t st;
+    web_store_stats(&S, &st);
+    WT_EQ(st.mix_rows, 4);
+    WT_EQ(raw_int(p, "SELECT frames FROM chmix WHERE tx='02:00:00:00:00:01'"
+                     " AND tier=1"), 40);
+    WT_EQ(raw_int(p, "SELECT frames FROM chmix WHERE tx='' AND tier=1"), 10);
+    WT_EQ(raw_int(p, "SELECT kind FROM chmix WHERE tx='02:00:00:00:00:02'"), 2);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM chmix WHERE tier=0"), 0);
+    int more = 0;
+    g_mix_n = 0; g_mix_frames = 0;
+    WT_EQ(web_store_mix_query(&S, WEB_TIER_MINUTE, 0, 1000, 100, mix_seen, NULL,
+                              &more), 3);
+    WT_EQ(g_mix_frames, 40 + 38 + 10);
+    WT_EQ(more, 0);
+    g_mix_n = 0;
+    WT_EQ(web_store_mix_query(&S, WEB_TIER_MINUTE, 0, 1000, 2, mix_seen, NULL,
+                              &more), 2);
+    WT_EQ(more, 1);
+    g_mix_n = 0;
+    WT_EQ(web_store_mix_query(&S, WEB_TIER_HOUR, 0, 7200, 10, mix_seen, NULL,
+                              &more), 1);
+    WT_HAS(g_mix_last, "6g37|3600|02:00:00:00:00:01|1|9");
+    WT_EQ(web_store_mix_query(&S, WEB_TIER_FINE, 0, 7200, 10, mix_seen, NULL,
+                              &more), -1);
+    web_store_close(&S);
+    rm_store(p);
+}
+
+/* Retention and the cap. Minute rows past WEB_STORE_MIX_MINUTE_KEEP_S
+ * and hour rows past 400 days go at a compaction; the newer stay. Past
+ * the row cap (a test seam lowers it) the oldest minute rows go first
+ * and hour rows only once no minute row is left, and what went is
+ * counted. Seen red with mix_expire() not called from the compaction,
+ * and with the cap's tiers taken hour first. */
+static void test_mix_retention_and_cap(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "mixkeep.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    long long now = 1792627200;
+    web_mix_row_t r[4] = {
+        mix_row("1", WEB_TIER_MINUTE, now - 4 * 86400, 1, 5, 0),
+        mix_row("1", WEB_TIER_MINUTE, now - 2 * 86400, 1, 5, 0),
+        mix_row("1", WEB_TIER_HOUR, now - 401 * 86400, 1, 5, 0),
+        mix_row("1", WEB_TIER_HOUR, now - 399 * 86400, 1, 5, 0),
+    };
+    WT_EQ(web_store_mix_write(&S, r, 4), 0);
+    WT_EQ(web_store_compact(&S, now, 30, 0), 0);
+    WT_EQ(web_store_mix_count(&S), 2);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM chmix WHERE tier=1 AND t=1792454400"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM chmix WHERE tier=2"), 1);
+    web_store_stats_t st;
+    web_store_stats(&S, &st);
+    WT_EQ(st.mix_dropped_expired, 2ULL);
+    WT_EQ(st.mix_rows, 2);
+    /* The cap: three more minute rows over a cap of 3 leaves the hour
+     * row and the two newest minute rows. */
+    web_store_test_mix_cap = 3;
+    web_mix_row_t more[3] = {
+        mix_row("6", WEB_TIER_MINUTE, now - 300, 1, 5, 0),
+        mix_row("6", WEB_TIER_MINUTE, now - 240, 1, 5, 0),
+        mix_row("6", WEB_TIER_MINUTE, now - 180, 1, 5, 0),
+    };
+    WT_EQ(web_store_mix_write(&S, more, 3), 0);
+    web_store_test_mix_cap = 0;
+    WT_EQ(web_store_mix_count(&S), 3);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM chmix WHERE tier=2"), 1);
+    WT_EQ(raw_int(p, "SELECT MIN(t) FROM chmix WHERE tier=1"), now - 240);
+    web_store_stats(&S, &st);
+    WT_EQ(st.mix_dropped_cap, 2ULL);
+    WT_EQ(st.mix_rows, 3);
+    web_store_close(&S);
     rm_store(p);
 }
 
@@ -724,9 +911,9 @@ static void refused_untouched(const char *p, const char *want) {
  * left exactly as it was. */
 static void test_newer_file_refused(void) {
     char p[128];
-    path_in(p, sizeof(p), "v5.db");
+    path_in(p, sizeof(p), "v6.db");
     raw_exec(p, "CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);"
-                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','5');"
+                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','6');"
                 "CREATE TABLE future (x INTEGER);");
     refused_untouched(p, "newer slothweb");
     rm_store(p);
@@ -1793,6 +1980,10 @@ void run_store_tests(void) {
     WT_RUN(test_v2_failed_step_leaves_file_unchanged);
     WT_RUN(test_v3_file_is_migrated);
     WT_RUN(test_v3_failed_step_leaves_file_unchanged);
+    WT_RUN(test_v4_file_is_migrated);
+    WT_RUN(test_v4_failed_step_leaves_file_unchanged);
+    WT_RUN(test_mix_rows_round_trip);
+    WT_RUN(test_mix_retention_and_cap);
     WT_RUN(test_passive_ptr_rows);
     WT_RUN(test_presence_cells);
     WT_RUN(test_analysis_state_round_trip);

@@ -339,6 +339,10 @@ int  web_sdb_aps(web_sdb_conn_t *c, int sort, long long limit,
 /* The SSIDs bssid has advertised (a = ssid), newest first. */
 int  web_sdb_ap_ssids(web_sdb_conn_t *c, const char *bssid, int max,
                       web_sdb_item_fn fn, void *ctx);
+/* The SSID beacon_aps holds for bssid, its octets as sloth stored them
+ * (the channel mix's AP names: the octets the TUI colours by), into out
+ * (WEB_SDB_TEXT_MAX + 1). 1, 0 none (or no such table), -1. */
+int  web_sdb_ap_ssid(web_sdb_conn_t *c, const char *bssid, char *out);
 /* DEAUTH_FLOOD episodes against bssid overlapping [from, to): n2 = sev,
  * n3 = count. Matched on alerts.key (predicate-only, a canonical MAC
  * bound) and the type; oldest first. */

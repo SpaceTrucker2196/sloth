@@ -13,6 +13,7 @@
 
 #include "web_anomaly.h"
 #include "web_baseline.h"
+#include "web_chmix.h"
 #include "web_config.h"
 #include "web_devices.h"
 #include "web_ident.h"
@@ -42,6 +43,7 @@ static web_ptr_t      g_ptr;
 static web_slothdb_t  g_sdb;
 static web_m4_t       g_m4;
 static web_sqlbox_t   g_sql;
+static web_chmix_t    g_chmix;
 
 static void on_signal(int sig) {
     (void)sig;
@@ -107,7 +109,8 @@ int main(int argc, char **argv) {
                           web_baseline_cap_for(cfg.max_keys)) != 0 ||
         web_ident_init(&g_ident, cfg.max_keys, cfg.max_keys / 2) != 0 ||
         web_ptr_init(&g_ptr, WEB_PTR_CAP) != 0 ||
-        web_anomaly_init(&g_anomaly, WEB_ANOM_CAP, &acfg) != 0) {
+        web_anomaly_init(&g_anomaly, WEB_ANOM_CAP, &acfg) != 0 ||
+        web_chmix_init(&g_chmix, have_store) != 0) {
         fprintf(stderr, "slothweb: time series: out of memory\n");
         return 1;
     }
@@ -118,6 +121,8 @@ int main(int argc, char **argv) {
                         "episodes could not all be read; starting from what "
                         "was\n");
     web_metrics_set_ident(&g_metrics, &g_ident);
+    web_metrics_set_mix(&g_metrics, &g_chmix);
+    web_tsdb_set_mix(&g_tsdb, &g_chmix);
     web_ident_set_ptr(&g_ident, &g_ptr);
     g_m4.sdb = cfg.sloth_db[0] ? &g_sdb : NULL;
     g_m4.oui = acfg.oui;
@@ -242,6 +247,7 @@ int main(int argc, char **argv) {
     web_live_destroy(&g_live);
     web_tsdb_destroy(&g_tsdb);
     web_metrics_destroy(&g_metrics);
+    web_chmix_destroy(&g_chmix);
     web_rollup_destroy(&g_rollup);
     web_anomaly_destroy(&g_anomaly);
     web_baseline_destroy(&g_baseline);

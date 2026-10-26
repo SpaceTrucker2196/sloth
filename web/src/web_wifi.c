@@ -1,6 +1,7 @@
 #include "web_wifi.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +9,8 @@
 #include "web_json.h"
 #include "web_metrics.h"
 #include "web_series.h"
+#include "web_ssid.h"
+#include "web_chmix.h"
 
 /* ── names ───────────────────────────────────────────────────────────── */
 
@@ -280,6 +283,381 @@ static size_t row_max(const grid_t *g, size_t extra) {
     return 160 + (size_t)g->ncol * 18 + extra;
 }
 
+/* ── /api/wifi/channels?mix=1 ────────────────────────────────────────── */
+
+/* The aggregation behind one answer. Every channel and transmitter the
+ * range holds is folded into the grid's cells: a cell tracks at most
+ * MIX_CELL_TRACK transmitters (a fine cell holds a few closed buckets of
+ * five each; a minute or hour cell a few more), and one past that goes
+ * to "other" as web_chmix.c folds them. Cut to the top WEB_CHMIX_TOP on
+ * the way out. */
+#define MIX_CELL_TRACK 24
+#define MIX_TXD        1024
+#define MIX_TXH        2048          /* a power of two, twice MIX_TXD */
+#define MIX_READ_MAX   250000        /* store rows read for one answer */
+/* The answer's transmitter table: at most this many, in this many bytes
+ * (an AP's entry is at most about 500 bytes: its vendor and its SSID
+ * in their escaped forms). The rest of the answer is the rows. */
+#define MIX_DICT_MAX   160
+#define MIX_DICT_BYTES 20480
+
+typedef struct {
+    int16_t  tx;
+    uint32_t f;
+} mcell_e_t;
+
+typedef struct {
+    uint32_t  other;
+    int       n;
+    mcell_e_t e[MIX_CELL_TRACK];
+} mcell_t;
+
+typedef struct {
+    char      key[WEB_CHMIX_KEY_MAX + 1];
+    int       rank;
+    long      num;
+    unsigned long long total;
+} mchan_t;
+
+typedef struct {
+    uint8_t mac[6];
+    uint8_t kind;
+    int     out;                       /* index in the answer's tx, -1 */
+} mtx_t;
+
+typedef struct {
+    const grid_t *g;
+    mchan_t  ch[WEB_CHMIX_CHANNELS];
+    int      nch, cut_ch;
+    mcell_t *cells;                    /* WEB_CHMIX_CHANNELS x ncol */
+    mtx_t    tx[MIX_TXD];
+    int      ntx, cut_tx;
+    int16_t  hash[MIX_TXH];
+} magg_t;
+
+static uint32_t sat32(uint32_t a, unsigned long long b) {
+    unsigned long long s = (unsigned long long)a + b;
+    return s > 0xffffffffULL ? 0xffffffffu : (uint32_t)s;
+}
+
+static int mix_chan(magg_t *a, const char *key) {
+    for (int i = 0; i < a->nch; i++)
+        if (!strcmp(a->ch[i].key, key)) return i;
+    if (a->nch >= WEB_CHMIX_CHANNELS) { a->cut_ch = 1; return -1; }
+    char canon[WEB_KEY_MAX + 1];
+    /* Read back from the store as if off the wire: a key slothweb did not
+     * write is not shown. */
+    if (web_key_channel_text(key, canon) != 0 || strcmp(canon, key)) return -1;
+    mchan_t *c = &a->ch[a->nch];
+    snprintf(c->key, sizeof(c->key), "%s", key);
+    web_channel_band(key, &c->rank);
+    c->num = strtol(key + (c->rank == 2 ? 2 : 0), NULL, 10);
+    c->total = 0;
+    return a->nch++;
+}
+
+static int mix_tx(magg_t *a, const uint8_t mac[6], int kind) {
+    unsigned h = 2166136261u;
+    for (int i = 0; i < 6; i++) h = (h ^ mac[i]) * 16777619u;
+    h = (h ^ (unsigned)kind) * 16777619u;
+    for (unsigned k = 0; k < MIX_TXH; k++) {
+        unsigned s = (h + k) & (MIX_TXH - 1);
+        int i = a->hash[s];
+        if (i < 0) {
+            if (a->ntx >= MIX_TXD) { a->cut_tx = 1; return -1; }
+            i = a->ntx++;
+            memcpy(a->tx[i].mac, mac, 6);
+            a->tx[i].kind = (uint8_t)kind;
+            a->tx[i].out = -1;
+            a->hash[s] = (int16_t)i;
+            return i;
+        }
+        if (a->tx[i].kind == kind && !memcmp(a->tx[i].mac, mac, 6)) return i;
+    }
+    a->cut_tx = 1;
+    return -1;
+}
+
+/* f frames on chan at t from the transmitter mac (NULL: the rest). */
+static void mix_put(magg_t *a, const char *chan, long long t,
+                    const uint8_t *mac, int kind, unsigned long long f) {
+    const grid_t *g = a->g;
+    if (f == 0 || t < g->from || t >= g->to) return;
+    long long col = (t - g->from) / g->col_s;
+    if (col < 0 || col >= g->ncol) return;
+    int c = mix_chan(a, chan);
+    if (c < 0) return;
+    a->ch[c].total += f;
+    mcell_t *cell = &a->cells[(size_t)c * (size_t)g->ncol + (size_t)col];
+    int x = mac ? mix_tx(a, mac, kind) : -1;
+    if (x < 0) { cell->other = sat32(cell->other, f); return; }
+    for (int i = 0; i < cell->n; i++)
+        if (cell->e[i].tx == x) { cell->e[i].f = sat32(cell->e[i].f, f); return; }
+    if (cell->n < MIX_CELL_TRACK) {
+        cell->e[cell->n].tx = (int16_t)x;
+        cell->e[cell->n].f = sat32(0, f);
+        cell->n++;
+        return;
+    }
+    int q = 0;
+    for (int i = 1; i < cell->n; i++) if (cell->e[i].f < cell->e[q].f) q = i;
+    if (f > cell->e[q].f) {
+        cell->other = sat32(cell->other, cell->e[q].f);
+        cell->e[q].tx = (int16_t)x;
+        cell->e[q].f = sat32(0, f);
+    } else {
+        cell->other = sat32(cell->other, f);
+    }
+}
+
+static int mix_from_ring(void *ctx, const web_mix_row_t *r) {
+    magg_t *a = ctx;
+    for (int i = 0; i < r->n && i < WEB_CHMIX_TOP; i++)
+        mix_put(a, r->chan, r->t, r->tx[i].mac, r->tx[i].kind, r->tx[i].frames);
+    mix_put(a, r->chan, r->t, NULL, 0, r->other);
+    return 0;
+}
+
+static int mix_from_store(void *ctx, const char *chan, long long t,
+                          const char *tx, int kind, long long frames) {
+    magg_t *a = ctx;
+    uint8_t mac[6];
+    if (frames <= 0) return 0;
+    if (!tx[0]) { mix_put(a, chan, t, NULL, 0, (unsigned long long)frames); return 0; }
+    if ((kind != WEB_TX_AP && kind != WEB_TX_CLIENT) ||
+        web_mix_mac_bytes(tx, mac) != 0)
+        return 0;
+    mix_put(a, chan, t, mac, kind, (unsigned long long)frames);
+    return 0;
+}
+
+static int by_cell_f(const void *x, const void *y) {
+    const mcell_e_t *a = x, *b = y;
+    if (a->f != b->f) return a->f > b->f ? -1 : 1;
+    return a->tx - b->tx;
+}
+
+/* qsort() has no context: the frames by_tx_frames() sorts by, set
+ * around the one call on the HTTP thread. */
+static const unsigned long long *g_mix_txf;
+
+static int by_tx_frames(const void *x, const void *y) {
+    int a = *(const int *)x, b = *(const int *)y;
+    if (g_mix_txf[a] != g_mix_txf[b]) return g_mix_txf[a] > g_mix_txf[b] ? -1 : 1;
+    return a - b;
+}
+
+static int by_mix_band(const void *x, const void *y) {
+    const mchan_t *a = x, *b = y;
+    if (a->rank != b->rank) return a->rank - b->rank;
+    if (a->num != b->num) return a->num < b->num ? -1 : 1;
+    return strcmp(a->key, b->key);
+}
+
+/* One transmitter of the answer's tx list. */
+static void mix_tx_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *conn,
+                        const mtx_t *t) {
+    char mac[18];
+    web_mix_mac_text(t->mac, mac);
+    web_jw_raw(w, "{\"id\":");   web_jw_str(w, mac);
+    web_jw_raw(w, ",\"kind\":"); web_jw_str(w, t->kind == WEB_TX_AP ? "ap" : "client");
+    web_oui_hit_t hit;
+    memset(&hit, 0, sizeof(hit));
+    if (m->oui) web_oui_lookup(m->oui, t->mac, &hit);
+    web_jw_raw(w, ",\"vendor\":");
+    if (hit.found) web_jw_str(w, hit.name); else web_jw_raw(w, "null");
+    if (t->kind == WEB_TX_AP) {
+        /* sloth.db's octets first: they are the TUI's (web_ssid.h). */
+        char ssid[WEB_SDB_TEXT_MAX + 1] = "";
+        const char *src = NULL;
+        if (conn && web_sdb_ap_ssid(conn, mac, ssid) == 1) src = "sloth.db";
+        else if (m->tsdb && m->tsdb->mix && web_chmix_ssid(m->tsdb->mix, t->mac, ssid))
+            src = "stream";
+        if (!src) ssid[0] = '\0';
+        web_jw_raw(w, ",\"ssid\":"); web_jw_ssid(w, ssid);
+        web_jw_ssid_meta(w, "ssid", ssid);
+        web_jw_raw(w, ",\"ssid_src\":");
+        if (src && ssid[0]) web_jw_str(w, src); else web_jw_raw(w, "null");
+    }
+    web_jw_raw(w, "}");
+}
+
+static int mix_route(const web_m4_t *m, const grid_t *g, long long now_s,
+                     char *body, size_t cap, size_t *len, int *status) {
+    web_chmix_t *mix = m->tsdb->mix;
+    magg_t *a = calloc(1, sizeof(*a));
+    mcell_t *cells = calloc((size_t)WEB_CHMIX_CHANNELS * (size_t)g->ncol,
+                            sizeof(*cells));
+    char *dict = malloc(cap), *rows = malloc(cap), *row = malloc(cap);
+    if (!a || !cells || !dict || !rows || !row) {
+        free(a); free(cells); free(dict); free(rows); free(row);
+        return -1;
+    }
+    a->g = g;
+    a->cells = cells;
+    for (int i = 0; i < MIX_TXH; i++) a->hash[i] = -1;
+    int read_more = 0;
+    long long nread = 0;
+    const char *source = "memory";
+    if (g->tier == WEB_TIER_FINE) {
+        nread = web_chmix_each_fine(mix, g->from, g->to, mix_from_ring, a);
+    } else if (m->tsdb->store && m->tsdb->store->rd) {
+        source = "store";
+        nread = web_store_mix_query(m->tsdb->store, g->tier, g->from, g->to,
+                                    MIX_READ_MAX, mix_from_store, a, &read_more);
+        if (nread < 0) {
+            free(a); free(cells); free(dict); free(rows); free(row);
+            return answer_error(503, "store_error", NULL, body, cap, len, status);
+        }
+    }
+    /* Band order: the rows move, so each keeps its cells' offset. */
+    int order[WEB_CHMIX_CHANNELS];
+    mchan_t sorted[WEB_CHMIX_CHANNELS];
+    for (int i = 0; i < a->nch; i++) { sorted[i] = a->ch[i]; }
+    qsort(sorted, (size_t)a->nch, sizeof(sorted[0]), by_mix_band);
+    for (int i = 0; i < a->nch; i++)
+        for (int j = 0; j < a->nch; j++)
+            if (!strcmp(sorted[i].key, a->ch[j].key)) { order[i] = j; break; }
+
+    web_sdb_conn_t conn;
+    memset(&conn, 0, sizeof(conn));
+    char oerr[WEB_SDB_ERR_MAX] = "";
+    int have_db = m->sdb && m->sdb->configured &&
+                  web_slothdb_open(m->sdb, &conn, WEB_SDB_HTTP_MS, now_s, oerr,
+                                   sizeof(oerr)) == 0;
+
+    /* The transmitters the answer names: the busiest over the whole
+     * range first, while the table stays within MIX_DICT_BYTES and
+     * MIX_DICT_MAX entries. A cell's five are its busiest among those;
+     * the frames of any other are in its "other" ("folded"). */
+    unsigned long long *txf = calloc((size_t)(a->ntx ? a->ntx : 1), sizeof(*txf));
+    int *byf = malloc((size_t)(a->ntx ? a->ntx : 1) * sizeof(*byf));
+    if (!txf || !byf) {
+        free(txf); free(byf);
+        web_slothdb_close(&conn);
+        free(a); free(cells); free(dict); free(rows); free(row);
+        return -1;
+    }
+    for (size_t k = 0; k < (size_t)WEB_CHMIX_CHANNELS * (size_t)g->ncol; k++)
+        for (int i = 0; i < cells[k].n; i++) txf[cells[k].e[i].tx] += cells[k].e[i].f;
+    for (int i = 0; i < a->ntx; i++) byf[i] = i;
+    g_mix_txf = txf;
+    qsort(byf, (size_t)a->ntx, sizeof(*byf), by_tx_frames);
+    g_mix_txf = NULL;
+    web_jw_t dw, rw;
+    web_jw_init(&dw, dict, cap < MIX_DICT_BYTES ? cap : MIX_DICT_BYTES);
+    web_jw_init(&rw, rows, cap);
+    int nout = 0, folded = a->cut_tx;
+    for (int k = 0; k < a->ntx; k++) {
+        if (nout >= MIX_DICT_MAX) { folded = 1; break; }
+        size_t mark = dw.len;
+        if (nout) web_jw_raw(&dw, ",");
+        mix_tx_json(&dw, m, have_db ? &conn : NULL, &a->tx[byf[k]]);
+        if (dw.overflow) {
+            dw.overflow = 0;
+            dw.len = mark;
+            dict[mark] = '\0';
+            folded = 1;
+            break;
+        }
+        a->tx[byf[k]].out = nout++;
+    }
+    free(txf);
+    free(byf);
+    /* Rows a row at a time, and only while the whole answer still fits. */
+    size_t head_max = 720, tail_max = 160;
+    int shown = 0, rows_cut = 0;
+    for (int oi = 0; oi < a->nch && shown < WEB_WIFI_ROWS; oi++) {
+        int ci = order[oi];
+        const mchan_t *c = &a->ch[ci];
+        web_jw_t r;
+        web_jw_init(&r, row, cap);
+        web_jw_raw(&r, shown ? ",{\"key\":" : "{\"key\":");
+        web_jw_str(&r, c->key);
+        int rank;
+        web_jw_raw(&r, ",\"band\":");  web_jw_str(&r, web_channel_band(c->key, &rank));
+        web_jw_raw(&r, ",\"total\":");
+        web_jw_int(&r, (long long)(c->total > 0x7fffffffffffULL ? 0x7fffffffffffULL
+                                                                 : c->total));
+        web_jw_raw(&r, ",\"cells\":[");
+        for (int col = 0; col < g->ncol; col++) {
+            mcell_t *cell = &cells[(size_t)ci * (size_t)g->ncol + (size_t)col];
+            if (col) web_jw_raw(&r, ",");
+            if (!cell->n && !cell->other) { web_jw_raw(&r, "null"); continue; }
+            qsort(cell->e, (size_t)cell->n, sizeof(cell->e[0]), by_cell_f);
+            unsigned long long other = cell->other, total = cell->other;
+            int keep = 0, pick[WEB_CHMIX_TOP];
+            for (int i = 0; i < cell->n; i++) {
+                total += cell->e[i].f;
+                if (keep < WEB_CHMIX_TOP && a->tx[cell->e[i].tx].out >= 0)
+                    pick[keep++] = i;
+                else
+                    other += cell->e[i].f;
+            }
+            web_jw_raw(&r, "[");
+            web_jw_int(&r, (long long)total);
+            web_jw_raw(&r, ",");
+            web_jw_int(&r, (long long)other);
+            for (int i = 0; i < keep; i++) {
+                web_jw_raw(&r, ",");
+                web_jw_int(&r, a->tx[cell->e[pick[i]].tx].out);
+                web_jw_raw(&r, ",");
+                web_jw_int(&r, (long long)cell->e[pick[i]].f);
+            }
+            web_jw_raw(&r, "]");
+        }
+        web_jw_raw(&r, "]}");
+        if (r.overflow || head_max + dw.len + rw.len + r.len + tail_max > cap) {
+            rows_cut = 1;
+            break;
+        }
+        web_jw_raw(&rw, row);
+        shown++;
+    }
+    web_slothdb_close(&conn);
+    web_jw_t w;
+    web_jw_init(&w, body, cap);
+    web_jw_raw(&w, "{\"metric\":\"wifi.mix\",\"kind\":\"counter\",\"unit\":\"frames\"");
+    web_jw_raw(&w, ",\"tier\":");    web_jw_str(&w, web_tier_name(g->tier));
+    web_jw_raw(&w, ",\"step\":");    web_jw_int(&w, g->step);
+    web_jw_raw(&w, ",\"from\":");    web_jw_int(&w, g->from);
+    web_jw_raw(&w, ",\"to\":");      web_jw_int(&w, g->to);
+    web_jw_raw(&w, ",\"cols\":");    web_jw_int(&w, g->ncol);
+    web_jw_raw(&w, ",\"col_s\":");   web_jw_int(&w, g->col_s);
+    web_jw_raw(&w, ",\"top\":");     web_jw_int(&w, WEB_CHMIX_TOP);
+    web_jw_raw(&w, ",\"source\":");  web_jw_str(&w, source);
+    web_chmix_stats_t ms;
+    web_chmix_stats(mix, &ms);
+    web_jw_raw(&w, ",\"ring_from\":");
+    if (g->tier == WEB_TIER_FINE && ms.ring_oldest >= 0) web_jw_int(&w, ms.ring_oldest);
+    else web_jw_raw(&w, "null");
+    web_sdb_stats_t sst;
+    memset(&sst, 0, sizeof(sst));
+    if (m->sdb) web_slothdb_stats(m->sdb, &sst);
+    web_jw_raw(&w, ",\"db\":");
+    web_jw_str(&w, have_db ? "open" : m->sdb && m->sdb->configured
+                   ? web_slothdb_state_word(sst.state) : "none");
+    web_jw_raw(&w, ",\"total_keys\":"); web_jw_int(&w, a->nch);
+    web_jw_raw(&w, ",\"tx\":[");
+    web_jw_raw(&w, dict);
+    web_jw_raw(&w, "],\"channels\":[");
+    web_jw_raw(&w, rows);
+    web_jw_raw(&w, "],\"shown\":");  web_jw_int(&w, shown);
+    web_jw_raw(&w, ",\"more\":");
+    web_jw_raw(&w, shown < a->nch || rows_cut || a->cut_ch ? "true" : "false");
+    /* What the bounds folded: transmitters past the answer's table, rows
+     * past the read cap. Their frames are in "other" or not read. */
+    web_jw_raw(&w, ",\"folded\":"); web_jw_raw(&w, folded ? "true" : "false");
+    web_jw_raw(&w, ",\"read_cut\":"); web_jw_raw(&w, read_more ? "true" : "false");
+    web_jw_raw(&w, "}\n");
+    (void)nread;
+    free(a); free(cells); free(dict); free(rows); free(row);
+    if (w.overflow) return -1;
+    *len = w.len;
+    *status = 200;
+    return 0;
+}
+
 /* ── /api/wifi/channels ──────────────────────────────────────────────── */
 
 int web_wifi_channels_route(const web_m4_t *m, const char *query,
@@ -287,13 +665,27 @@ int web_wifi_channels_route(const web_m4_t *m, const char *query,
                             size_t *len, int *status) {
     if (!m || !m->tsdb)
         return answer_error(503, "no_time_series", NULL, body, cap, len, status);
-    web_param_t ps[4] = {
+    web_param_t ps[5] = {
         { "from", "", 0 }, { "to", "", 0 }, { "cols", "", 0 },
-        { "metric", "", 0 },
+        { "metric", "", 0 }, { "mix", "", 0 },
     };
     char err[48];
-    if (web_params_parse(query, ps, 4, err, sizeof(err)) != 0)
+    if (web_params_parse(query, ps, 5, err, sizeof(err)) != 0)
         return answer_error(400, err, NULL, body, cap, len, status);
+    if (ps[4].seen) {
+        if (strcmp(ps[4].val, "1"))
+            return answer_error(400, "bad_mix", NULL, body, cap, len, status);
+        if (ps[3].seen)
+            return answer_error(400, "mix_takes_no_metric", NULL, body, cap, len,
+                                status);
+        if (!m->tsdb->mix)
+            return answer_error(503, "no_channel_mix", NULL, body, cap, len, status);
+        grid_t mg;
+        const char *mwhy;
+        if (grid_of(m, ps, now_s, &mg, &mwhy) != 0)
+            return answer_error(400, mwhy, NULL, body, cap, len, status);
+        return mix_route(m, &mg, now_s, body, cap, len, status);
+    }
     int metric = WM_WIFI_AP_COUNT;
     if (ps[3].seen) {
         if (!strcmp(ps[3].val, "ap_count")) metric = WM_WIFI_AP_COUNT;
@@ -472,16 +864,17 @@ static int emit_ssid(void *ctx, const web_sdb_item_t *it) {
     ssids_t *s = ctx;
     if (s->n >= s->max) return 1;
     web_jw_raw(s->w, s->n++ ? ",{\"ssid\":" : "{\"ssid\":");
-    web_jw_str(s->w, it->a);
+    web_jw_ssid(s->w, it->a);
     web_jw_raw(s->w, ",\"first_seen\":"); web_jw_int(s->w, it->first_seen);
     web_jw_raw(s->w, ",\"last_seen\":");  web_jw_int(s->w, it->last_seen);
+    web_jw_ssid_meta(s->w, "ssid", it->a);
     web_jw_raw(s->w, "}");
     return 0;
 }
 
 static void ap_json(web_jw_t *w, web_sdb_conn_t *c, const web_sdb_ap_t *a) {
     web_jw_raw(w, "{\"bssid\":");    web_jw_str(w, a->bssid);
-    web_jw_raw(w, ",\"ssid\":");     jw_text_or_null(w, a->ssid);
+    web_jw_raw(w, ",\"ssid\":");     web_jw_ssid(w, a->ssid);
     web_jw_raw(w, ",\"signal\":");
     if (a->has_signal)
         web_jw_int(w, a->signal_dbm < -200 ? -200 : a->signal_dbm > 50 ? 50
@@ -543,6 +936,7 @@ static void ap_json(web_jw_t *w, web_sdb_conn_t *c, const web_sdb_ap_t *a) {
         web_jw_raw(w, ",\"ie_uniform\":");   web_jw_raw(w, a->k_ie_uniform ? "true" : "false");
         web_jw_raw(w, "}");
     }
+    web_jw_ssid_meta(w, "ssid", a->ssid);
     web_jw_raw(w, "}");
 }
 

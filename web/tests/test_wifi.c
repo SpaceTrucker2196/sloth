@@ -445,13 +445,13 @@ static void test_ap_table(void) {
     WT_HAS(a1, "\"ssid_count\":3,\"multi_ssid\":true,\"ssids\":[{\"ssid\":\"Cafe\",");
     WT_HAS(a1, "{\"ssid\":\"attwifi\",");
     WT_HAS(a1, "\"ssids_more\":false,\"karma\":{\"score\":80,\"ssid_count\":3,"
-               "\"pnl_overlap\":2,\"ie_uniform\":true}}");
+               "\"pnl_overlap\":2,\"ie_uniform\":true},\"ssid_k\":4,\"ssid_np\":false}");
     WT_HAS(a2, "{\"bssid\":\"0a:00:00:00:00:02\",\"ssid\":null,\"signal\":null,"
                "\"channel\":36,\"enc\":\"OPEN\",\"akm\":null,\"akm_bits\":0,"
                "\"akm_names\":[],\"mfp\":0,\"mfp_word\":\"off\",\"downgrade\":0,"
                "\"downgrade_names\":[],");
     WT_HAS(a2, "\"ssid_count\":0,\"multi_ssid\":false,\"ssids\":[],\"ssids_more\":false,"
-               "\"karma\":null}");
+               "\"karma\":null,\"ssid_k\":0,\"ssid_np\":false}");
     WT_HAS(a3, "\"ssid\":\"\\u003cscript\\u003ex\\u003c/script\\u003e\"");
     WT_HAS(a3, "\"mfp_word\":\"required\"");
     WT_LACKS(b, "<script>");

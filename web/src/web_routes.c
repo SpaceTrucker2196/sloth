@@ -136,6 +136,32 @@ static void tsdb_health(web_tsdb_t *t, web_jw_t *w) {
     web_jw_int(w, open ? ss.analysis_bytes : -1);
     web_jw_raw(w, ",\"store_baseline_rows_reused\":");
     web_jw_int(w, (long long)ss.bl_rows_reused);
+    /* The WiFi view's channel mix (web_chmix.h): what it holds and what
+     * its bounds dropped, in memory and in the store. */
+    web_jw_raw(w, ",\"chmix\":");
+    if (t->mix) {
+        web_chmix_stats_t ms;
+        web_chmix_stats(t->mix, &ms);
+        web_jw_raw(w, "{\"channels\":");     web_jw_int(w, ms.channels);
+        web_jw_raw(w, ",\"samples\":");      web_jw_int(w, (long long)ms.samples);
+        web_jw_raw(w, ",\"ring_rows\":");    web_jw_int(w, (long long)ms.ring_rows);
+        web_jw_raw(w, ",\"ring_overwritten\":");
+        web_jw_int(w, (long long)ms.ring_overwritten);
+        web_jw_raw(w, ",\"queue_dropped\":");
+        web_jw_int(w, (long long)ms.queue_dropped);
+        web_jw_raw(w, ",\"folded\":");       web_jw_int(w, (long long)ms.folded);
+        web_jw_raw(w, ",\"channel_evictions\":");
+        web_jw_int(w, (long long)ms.channel_evictions);
+        web_jw_raw(w, ",\"store_rows\":");
+        if (open) web_jw_int(w, ss.mix_rows); else web_jw_raw(w, "null");
+        web_jw_raw(w, ",\"store_dropped_expired\":");
+        web_jw_int(w, (long long)ss.mix_dropped_expired);
+        web_jw_raw(w, ",\"store_dropped_cap\":");
+        web_jw_int(w, (long long)ss.mix_dropped_cap);
+        web_jw_raw(w, "}");
+    } else {
+        web_jw_raw(w, "null");
+    }
     web_jw_raw(w, ",\"retain_days\":");     web_jw_int(w, t->retain_days);
     long long v[WEB_KC_COUNT];
     for (int c = 0; c < WEB_KC_COUNT; c++) v[c] = rs.keys[c];

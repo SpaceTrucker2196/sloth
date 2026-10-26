@@ -28,6 +28,7 @@
 #include "../../src/tui.h"
 #include "../../src/tui_palette.h"
 #include "web_assets.h"
+#include "web_ssid.h"
 #include "wtest.h"
 
 /* ── what src/tui.c links against and this test never calls ─────── */
@@ -397,6 +398,47 @@ static void test_ips_and_ssids_colour_as_the_tui(void) {
     WT_EQ(wide, 5);                     /* 2-, 3- and 4-byte sequences, a surrogate pair */
 }
 
+/* An SSID that is not UTF-8 (sloth keeps its high octets, so sloth.db
+ * holds them): the TUI colours it by its octets; the server sends its
+ * display form with the colour it hashed over those same octets
+ * (web_ssid.h), and the page uses that colour, not a hash of the text
+ * it was given. Seen red with the page's line using ipColorIndex(ssid)
+ * first (the pin), and with web_ssid_color() hashing the display form
+ * (the colour). */
+static void test_non_utf8_ssids_colour_as_the_tui(void) {
+    WT_HAS(page(), "if (num(k) && k >= 0 && k < P.ip) sp.style.color = "
+                   "\"var(--k-\" + k + \")\";\n"
+                   "    else if (ssid !== \"\") sp.style.color = \"var(--k-\" + "
+                   "ipColorIndex(ssid) + \")\";");
+    WT_EQ(read_palette(), 0);
+    static const char *const RAW[] = {
+        "demo-\xff\xfe-legacy", "caf\xe9", "\xa0\xa1\xa2", "x\xc2\x85y",
+        "\xf0\x9f\xa6", "net\xffwork", "\xc0\xaf",
+    };
+    tui_set_color(1);
+    int differ = 0;
+    for (size_t i = 0; i < sizeof(RAW) / sizeof(RAW[0]); i++) {
+        run_t r;
+        WT_EQ(capture(tui_ssid, RAW[i], &r), 0);
+        int k = web_ssid_color(RAW[i]);
+        WT_EQ(k, ip_color_index(RAW[i]));
+        char want[8], got[8], name[16];
+        snprintf(name, sizeof(name), "--k-%d", k);
+        WT_EQ(prop(name, want), 0);
+        WT_ASSERT(r.n > 0);
+        xterm_hex(r.n > 0 ? r.fg[0] : -1, got);
+        if (strcmp(got, want))
+            fprintf(stderr, "    ssid %zu: the TUI wrote %s, the page %s %s\n", i, got, name, want);
+        WT_ASSERT(!strcmp(got, want));
+        char d[64];
+        web_ssid_escape(RAW[i], strlen(RAW[i]), d, sizeof(d), NULL);
+        if (js_ip_color_index(d) != k) differ++;
+    }
+    /* The display form's own hash would have coloured some of them
+     * otherwise: the server's colour is what makes them agree. */
+    WT_ASSERT(differ >= 2);
+}
+
 /* A host name: every byte in its brand's colour, Google's letters in
  * the logo's sequence, the rest in CP_NORMAL, which is what the page's
  * base classes resolve to where the TUI row would use its plain pair. */
@@ -698,6 +740,7 @@ static void test_monitor_rows_are_jsonls_monitor_records(void) {
 
 void run_tui_colors_tests(void) {
     WT_RUN(test_ips_and_ssids_colour_as_the_tui);
+    WT_RUN(test_non_utf8_ssids_colour_as_the_tui);
     WT_RUN(test_host_names_colour_as_the_tui);
     WT_RUN(test_info_strings_colour_as_the_tui);
     WT_RUN(test_pairs_and_heat_as_the_tui);

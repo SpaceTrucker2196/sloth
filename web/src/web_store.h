@@ -56,10 +56,11 @@
 #include <stddef.h>
 
 #include "web_baseline.h"
+#include "web_chmix.h"
 #include "web_rollup.h"
 
 /* The version this build writes. */
-#define WEB_STORE_SCHEMA   4
+#define WEB_STORE_SCHEMA   5
 #define WEB_STORE_ERR_MAX  320
 #define WEB_DEFAULT_STORE  "./slothweb.db"
 /* --web-max-mb: the ceiling on the store's used pages. */
@@ -108,6 +109,11 @@ typedef struct {
                                              took over (a delete that
                                              had not reached the file) */
     long long     last_compact;           /* unix s, 0 never */
+    long long     mix_rows;               /* chmix rows (v5), counted as the
+                                             writer adds and drops them,
+                                             recounted at open and each
+                                             compaction */
+    unsigned long long mix_dropped_expired, mix_dropped_cap;
     char          last_error[WEB_STORE_ERR_MAX];
 } web_store_stats_t;
 
@@ -358,6 +364,39 @@ int  web_store_presence(web_store_t *s, int tier, int metric, const char *key,
                         long long from, long long to, int ncell, int cell_s,
                         unsigned char *bits);
 
+/* ── the channel mix (v5) ───────────────────────────────────────────
+ *
+ * The closed minute and hour buckets of web_chmix.h, one row per named
+ * transmitter and one for the rest. Bounded three ways: minute rows are
+ * kept WEB_STORE_MIX_MINUTE_KEEP_S (the grid reads the minute tier for
+ * a window of at most three days, web_wifi.h) and hour rows the hour
+ * tier's 400 days, at every compaction; the table holds at most
+ * WEB_STORE_MIX_ROWS rows, the oldest minute rows and then the oldest
+ * hour rows dropped after any write that takes it past (counted in
+ * mix_dropped_cap); and under --web-max-mb its rows are the second
+ * class the ceiling drops, after the fine tier and before any keyed
+ * minute or hour row. */
+#define WEB_STORE_MIX_ROWS          524288
+#define WEB_STORE_MIX_MINUTE_KEEP_S (3LL * 86400)
+
+/* Write n closed minute or hour buckets (fine ones are skipped) in one
+ * transaction, merging a (tier, channel, t, tx) already there (a bucket
+ * closed early at a shutdown, then finished); then the row cap. 0, or
+ * -1 (counted, the reason kept). Store thread only. */
+int  web_store_mix_write(web_store_t *s, const web_mix_row_t *rows, size_t n);
+
+/* The chmix rows of tier with from <= t < to, oldest first, at most max,
+ * each to fn (nonzero stops); *more when max cut it. tx is a canonical
+ * MAC or "" for the rest. Read-only connection, every value bound.
+ * Rows, or -1. */
+typedef int (*web_store_mix_fn)(void *ctx, const char *chan, long long t,
+                                const char *tx, int kind, long long frames);
+int  web_store_mix_query(web_store_t *s, int tier, long long from, long long to,
+                         long long max, web_store_mix_fn fn, void *ctx,
+                         int *more);
+/* chmix rows, counted now (tests). -1 on error. */
+long long web_store_mix_count(web_store_t *s);
+
 /* Test seams (web/tests/test_store.c); NULL and 0 in slothweb itself.
  * web_store_test_between_opens runs after the read-only identify and
  * before the read-write open, so a test can swap the file there as
@@ -370,6 +409,10 @@ int  web_store_presence(web_store_t *s, int tier, int metric, const char *key,
 extern void (*web_store_test_between_opens)(const char *path);
 extern int    web_store_test_no_defensive;
 extern void (*web_store_test_after_commit)(const char *path);
+/* web_store_test_mix_cap, when positive, stands in for
+ * WEB_STORE_MIX_ROWS, so a test can reach the cap without writing half
+ * a million rows. */
+extern long long web_store_test_mix_cap;
 
 /* The DDL of the version this build writes, and the step from version
  * from to from + 1 (NULL past the end). For the guardrail tests. */

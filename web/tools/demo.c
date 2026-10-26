@@ -93,15 +93,26 @@ static const demo_dev_t DEV[NDEV] = {
 typedef struct {
     const char *bssid, *ssid, *akm, *enc;
     int         channel, akm_bits, mfp, downgrade, signal;
+    /* The SSID as sloth's stream carries it (src/jsonl.c json_escape():
+     * an octet that is not UTF-8 becomes U+FFFD); NULL: as ssid. */
+    const char *stream_ssid;
+    int         six;                  /* channel_source 3: a 6 GHz channel */
 } ap_t;
 
 static const ap_t AP[] = {
-    { "02:de:00:00:00:a1", "example-home",   "PSK SAE", "WPA3", 6,   0x104, 1, 1, -41 },
-    { "02:de:00:00:00:a2", "example-guest",  "PSK",     "WPA2", 36,  0x4,   0, 0, -43 },
-    { "02:de:00:00:00:a3", "demo-iot",       "PSK",     "WPA2", 1,   0x4,   0, 0, -49 },
-    { "06:de:00:00:00:a4", "FreeWiFi-demo",  "",        "OPEN", 11,  0,     0, 0, -72 },
-    { "02:de:00:00:00:a5", "neighbour-demo", "SAE",     "WPA3", 149, 0x100, 2, 0, -80 },
-    { "02:de:00:00:00:a6", "",               "PSK",     "WPA2", 44,  0x4,   0, 0, -84 },
+    { "02:de:00:00:00:a1", "example-home",   "PSK SAE", "WPA3", 6,   0x104, 1, 1, -41, NULL, 0 },
+    { "02:de:00:00:00:a2", "example-guest",  "PSK",     "WPA2", 36,  0x4,   0, 0, -43, NULL, 0 },
+    { "02:de:00:00:00:a3", "demo-iot",       "PSK",     "WPA2", 1,   0x4,   0, 0, -49, NULL, 0 },
+    { "06:de:00:00:00:a4", "FreeWiFi-demo",  "",        "OPEN", 11,  0,     0, 0, -72, NULL, 0 },
+    { "02:de:00:00:00:a5", "neighbour-demo", "SAE",     "WPA3", 149, 0x100, 2, 0, -80, NULL, 0 },
+    { "02:de:00:00:00:a6", "",               "PSK",     "WPA2", 44,  0x4,   0, 0, -84, NULL, 0 },
+    /* An SSID that is not UTF-8, as an old or misconfigured AP sends
+     * one: sloth.db keeps its octets, the stream carries U+FFFD for
+     * them, and the page shows both escaped (web/src/web_ssid.h). */
+    { "02:de:00:00:00:a7", "demo-\xff\xfe-legacy", "PSK", "WPA2", 11, 0x4, 0, 0, -77,
+      "demo-\\ufffd\\ufffd-legacy", 0 },
+    { "02:de:00:00:00:a8", "example-6e",     "SAE",     "WPA3", 37,  0x100, 2, 0, -58,
+      NULL, 1 },
 };
 #define NAP (int)(sizeof(AP) / sizeof(AP[0]))
 
@@ -444,11 +455,30 @@ static void pass(long long t, long long start, unsigned long k) {
              "\"ctrl_total\":%lu}", t, CH[i].ch, CH[i].band, aps, aps * 2,
              k * (unsigned long)(10 + 7 * i) + rnd(30));
     }
+    /* Each station on its own AP's channel, at its own pace, and every
+     * AP's beacons (frame_count is the beacons heard): what the WiFi
+     * view's channel mix stacks. */
     for (int i = 0; i < NDEV; i++)
-        if (DEV[i].sources & 32)
+        if (DEV[i].sources & 32) {
+            int a = !strcmp(DEV[i].ssid, "demo-iot") ? 2
+                  : !strcmp(DEV[i].ssid, "example-guest") ? 1 : 0;
             line("{\"type\":\"assoc\",\"ts\":%lld,\"bssid\":\"%s\",\"sta_mac\":\"%s\","
-                 "\"ssid\":\"%s\",\"first_seen\":%lld,\"last_seen\":%lld,\"frame_count\":%lu}",
-                 t, AP[0].bssid, DEV[i].mac, DEV[i].ssid, start, t, k * 3);
+                 "\"ssid\":\"%s\",\"channel\":%d,\"first_seen\":%lld,\"last_seen\":%lld,"
+                 "\"frame_count\":%lu}", t, AP[a].bssid, DEV[i].mac, DEV[i].ssid,
+                 AP[a].channel, start, t, k * (unsigned long)(1 + i % 5) + rnd(3));
+        }
+    for (int a = 0; a < NAP; a++)
+        line("{\"type\":\"beacon\",\"ts\":%lld,\"ssid\":\"%s\",\"bssid\":\"%s\","
+             "\"signal_dbm\":%d,\"channel\":%d,\"channel_source\":%d,\"enc\":\"%s\","
+             "\"last_seen\":%lld,\"frame_count\":%lu}", t,
+             AP[a].stream_ssid ? AP[a].stream_ssid : AP[a].ssid, AP[a].bssid,
+             AP[a].signal, AP[a].channel, AP[a].six ? 3 : 1, AP[a].enc, t,
+             k * (unsigned long)(4 + 2 * a) + (k % 120 < 60 && a == 3 ? k : 0));
+    for (int p = 0; p < 6; p++)
+        line("{\"type\":\"probe_client\",\"ts\":%lld,\"mac\":\"0a:de:00:00:02:%02x\","
+             "\"ssid\":\"\",\"signal_dbm\":-80,\"channel\":%d,\"first_seen\":%lld,"
+             "\"last_seen\":%lld,\"frame_count\":%lu}", t, p, p % 3 == 0 ? 1 : p % 3 == 1 ? 36 : 149,
+             start, t, k * (unsigned long)(1 + p));
     line("{\"type\":\"ssh_flow\",\"ts\":%lld,\"src_ip\":\"192.0.2.12\",\"dst_ip\":\"192.0.2.10\","
          "\"banner_count\":%lu,\"first_seen\":%lld,\"last_seen\":%lld}", t, 1 + k / 30, start, t);
     line("{\"type\":\"smb_session\",\"ts\":%lld,\"client_ip\":\"192.0.2.12\","

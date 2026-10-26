@@ -257,6 +257,22 @@ table.qt td.nul { color: var(--muted); }
 .hscroll .aphist { min-width: calc(108ch + 60px); }
 .hscroll .hrow { min-width: calc(69ch + 180px); }
 
+/* The WiFi grid's picked cell (§8.8): its transmitters, each a button,
+ * on CP_MON_ROW's ground as every monitor-radio row is. */
+.mixd { margin-top: var(--gap); min-height: 2.6em; }
+.mixl { list-style: none; margin: 4px 0 0; padding: 0; font-size: 12px; }
+.mixl li.mon { background: var(--mon-bg); border-top: 1px solid var(--bg); }
+.mixl .mixgo { display: grid; grid-template-columns: 14px minmax(0, 1fr) 11ch 7ch; gap: 6px; align-items: center; width: 100%; text-align: left; font-size: 12px; letter-spacing: 0; text-transform: none; color: var(--mon-fg); background: transparent; border: 0; border-radius: 0; padding: 3px 6px; }
+.mixl button.mixgo:hover { background: var(--tint); color: var(--mon-fg); }
+.mixl .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.mixl .n { text-align: right; }
+.aprow.hl { outline: 1px solid var(--signal); outline-offset: -1px; }
+/* An SSID shown escaped (web/src/web_ssid.h): its \xNN forms, then a
+ * marker that says so, in the chrome's muted ink so it never reads as
+ * part of the SSID. */
+.ssid-np { white-space: nowrap; }
+.npm { display: inline-block; margin-left: 6px; padding: 0 4px; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--rule); border-radius: 3px; vertical-align: 1px; }
+
 /* ── the drawer ────────────────────────────────────────────────────── */
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); overflow: auto; background: var(--panel); border-left: 1px solid var(--brass-edge); box-shadow: -12px 0 34px rgba(0, 0, 0, 0.45); padding: 16px; z-index: 30; }
 .dr-hd { display: flex; gap: var(--gap); align-items: baseline; flex-wrap: wrap; margin-bottom: var(--gap); }

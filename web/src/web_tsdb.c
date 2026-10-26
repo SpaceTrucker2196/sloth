@@ -32,7 +32,26 @@ int web_tsdb_init(web_tsdb_t *t, web_rollup_t *ru, web_store_t *store,
 
 void web_tsdb_destroy(web_tsdb_t *t) {
     free(t->batch);
+    free(t->mix_batch);
     t->batch = NULL;
+    t->mix_batch = NULL;
+}
+
+#define MIX_TAKE 512
+
+void web_tsdb_set_mix(web_tsdb_t *t, web_chmix_t *mix) {
+    t->mix = mix;
+    if (!t->mix_batch) t->mix_batch = calloc(MIX_TAKE, sizeof(*t->mix_batch));
+    if (!t->mix_batch) t->mix = NULL;
+}
+
+static void flush_mix(web_tsdb_t *t) {
+    if (!t->mix) return;
+    size_t n;
+    while ((n = web_chmix_take(t->mix, t->mix_batch, MIX_TAKE)) > 0) {
+        if (t->store) web_store_mix_write(t->store, t->mix_batch, n);
+        if (n < MIX_TAKE) break;
+    }
 }
 
 void web_tsdb_set_hook(web_tsdb_t *t, web_tsdb_hook_fn hook, void *ctx) {
@@ -46,6 +65,7 @@ void web_tsdb_set_rows_hook(web_tsdb_t *t, web_tsdb_rows_fn fn, void *ctx) {
 }
 
 static void flush(web_tsdb_t *t) {
+    flush_mix(t);
     if (!t->store && !t->rows_hook) return;
     size_t n;
     int wrote = 0;
@@ -70,6 +90,7 @@ void web_tsdb_step(web_tsdb_t *t, long long now_s) {
         t->next_compact = now_s + WEB_COMPACT_S;
     }
     web_rollup_close_due(t->ru, now_s);
+    if (t->mix) web_chmix_close_due(t->mix, now_s);
     /* Early when the queue is past its high-water mark, so a burst of
      * evictions is written rather than left to fill it; and at every
      * minute boundary when a hook reads the rows, so its minute pass
@@ -98,6 +119,7 @@ void web_tsdb_step(web_tsdb_t *t, long long now_s) {
 void web_tsdb_flush_all(web_tsdb_t *t) {
     flush(t);
     web_rollup_close_all(t->ru);
+    if (t->mix) web_chmix_close_all(t->mix);
     flush(t);
 }
 

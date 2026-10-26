@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "web_ssid.h"
+
 void web_live_init(web_live_t *l, const char *spec) {
     memset(l, 0, sizeof(*l));
     pthread_mutex_init(&l->mu, NULL);
@@ -226,6 +228,13 @@ static void summarise(const web_jrec_t *r, int is_alert, char *out,
         for (int k = 0; SUMMARY_KEYS[k] && used < 4; k++) {
             const char *v = web_jl_str(r, SUMMARY_KEYS[k]);
             if (!v || !*v) continue;
+            /* An SSID in its display form (web_ssid.h), never raw. */
+            char esc[WEB_SSID_IN_MAX * WEB_SSID_EXPAND + 1];
+            if (!strcmp(SUMMARY_KEYS[k], "ssid")) {
+                web_ssid_escape(v, strnlen(v, WEB_SSID_IN_MAX), esc, sizeof(esc),
+                                NULL);
+                v = esc;
+            }
             int w = snprintf(tmp + n, sizeof(tmp) - n, "%s%s",
                              used ? "  " : "", v);
             if (w < 0 || (size_t)w >= sizeof(tmp) - n) break;
