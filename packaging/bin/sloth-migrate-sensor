@@ -264,7 +264,7 @@ render_unit() {   # the same substitution `make install-service` applies
     sed -e "s|/usr/local/|$PREFIX/|g" "$UNIT_TEMPLATE"
 }
 
-# shellcheck disable=SC2329  # called through act()
+# shellcheck disable=SC2317,SC2329  # called through act()
 render_defaults() {
     SM_ARGS=$ARGS SM_IFACE=$MON_IFACE SM_FROM=$UNIT SM_STAMP=$STAMP awk '
         NR == 1 {
@@ -756,13 +756,13 @@ else
 fi
 
 # ── Step 4: unit ─────────────────────────────────────────────────────────
-# shellcheck disable=SC2329  # called through act()
+# shellcheck disable=SC2317,SC2329  # called through act()
 write_defaults() {
     mkdir -p "$(dirname "$DEFAULTS")" &&
     render_defaults > "$DEFAULTS.tmp.$$" && chmod 644 "$DEFAULTS.tmp.$$" &&
     mv "$DEFAULTS.tmp.$$" "$DEFAULTS"
 }
-# shellcheck disable=SC2329  # called through act()
+# shellcheck disable=SC2317,SC2329  # called through act()
 write_unit() {
     render_unit > "$UNIT.tmp.$$" && chmod 644 "$UNIT.tmp.$$" &&
     mv "$UNIT.tmp.$$" "$UNIT"
