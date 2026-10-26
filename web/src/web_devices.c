@@ -873,6 +873,15 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
 
 /* ── health ──────────────────────────────────────────────────────────── */
 
+int web_m4_db_age(const web_m4_t *m, long long now_s, long long *age_s) {
+    if (!m || !m->sdb || !m->sdb->configured) return 0;
+    web_sdb_stats_t st;
+    web_slothdb_stats(m->sdb, &st);
+    if (st.state != WEB_SDB_OPEN || st.mtime <= 0) return 0;
+    *age_s = now_s > st.mtime ? now_s - st.mtime : 0;
+    return 1;
+}
+
 void web_m4_health(const web_m4_t *m, long long now_s, web_jw_t *w) {
     web_jw_raw(w, ",\"db\":");
     if (!m || !m->sdb || !m->sdb->configured) {
@@ -890,6 +899,14 @@ void web_m4_health(const web_m4_t *m, long long now_s, web_jw_t *w) {
         web_jw_raw(w, ",\"db_path\":");
         web_jw_strn(w, m->sdb->path, strnlen(m->sdb->path, 256));
         web_jw_raw(w, ",\"db_mode\":"); jw_text_or_null(w, st.mode);
+        /* #168: what the DB-backed views are as of. */
+        web_jw_raw(w, ",\"sloth_db_mtime\":");
+        if (st.state == WEB_SDB_OPEN && st.mtime > 0) web_jw_int(w, st.mtime);
+        else web_jw_raw(w, "null");
+        web_jw_raw(w, ",\"sloth_db_age_s\":");
+        if (st.state == WEB_SDB_OPEN && st.mtime > 0)
+            web_jw_int(w, now_s > st.mtime ? now_s - st.mtime : 0);
+        else web_jw_raw(w, "null");
         web_jw_raw(w, ",\"db_error\":"); jw_text_or_null(w, st.err);
         web_jw_raw(w, ",\"db_opens\":"); web_jw_int(w, (long long)st.opens);
         web_jw_raw(w, ",\"db_timeouts\":"); web_jw_int(w, (long long)st.timeouts);

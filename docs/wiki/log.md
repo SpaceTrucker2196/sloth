@@ -5264,3 +5264,86 @@ report events.
   ending where it began, so the `last_seen` bound's
   `first_seen <= last_seen` holds by construction for new rows (seen red
   with the clamp removed).
+- 2026-10-26 — [[deployment]] §4.2-§4.4, §6, [[slothweb]], `web/README.md`:
+  the owner's ruling on #153 (the live sensor moves off
+  `--data-socket tcp:127.0.0.1:8765` to the unix socket),
+  `slothweb.service`, and sloth.db freshness on the DB-backed views
+  (#168). `sloth-migrate-sensor` takes options in any order:
+  `--data-socket-unix` turns an old unit's `tcp:` data socket into the
+  hardened unit's `unix:/run/sloth/sloth.sock --no-discovery` (nothing of
+  the `tcp:` spec is carried; verify reads `sensor_health` from the unix
+  socket as the invoking user; a rollback restores the `tcp:` unit byte
+  for byte); without it the refusal is word for word the old one, and
+  `make deploy-test` pins it on the live spec. `--with-slothweb` adds
+  step 6 after the sensor verifies: back up a differing
+  `slothweb.service`, install the shipped one, install
+  `/etc/default/slothweb` only where there is none, enable, restart, and
+  verify active plus `/api/health` on the bound address (asked from
+  `127.0.0.1`/`::1`, a loopback peer the allow-list always admits)
+  saying `"db":"open"`, `db_mode` `wal` or `immutable` and the stream
+  `connected`; a failure there rolls back slothweb alone and exits 3.
+  Its preflight runs with the sensor's and refuses a missing binary or
+  curl, drop-ins, quoting in `SLOTHWEB_ARGS`, a `--socket`/`--sloth-db`/
+  `--store` there, or a busy port with the unit not running; under
+  `--dry-run` the busy port is a printed note instead, because the
+  owner's dry run comes before the hand-started slothweb is stopped
+  (§4.4). `packaging/systemd/slothweb.service`: `User=sloth`, both
+  capability sets empty, `ProtectSystem=strict`, `ProtectHome=yes`,
+  `ReadOnlyPaths=/var/lib/sloth`, `StateDirectory=slothweb` 0700,
+  `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`,
+  `SystemCallFilter=@system-service`, `MemoryMax=512M`;
+  `systemd-analyze verify` clean and `security --offline=true` 1.3 OK
+  on systemd 261 (run locally on a copy; CI has no verify step, and
+  `.github/` is unchanged). `packaging/default/slothweb` ships empty
+  (loopback) with the Tailscale recipe commented, placeholders from
+  `100.64.0.0/24`. `make install` places slothweb (refusing without a
+  prior `make web`), `make install-service` the unit and, no-clobber,
+  the defaults (checked on a DESTDIR stage: an edited file survived a
+  second run). `/api/health` gains `sloth_db_mtime` (the file's, or the
+  newer of it and its `-wal` for a WAL reader; `lstat`, regular files
+  only), `sloth_db_age_s` (never negative), `sloth_db_stale_after_s`
+  (600) and `sloth_db_stale` (older than that while the stream is
+  connected with a record in the last 60 s; `null` when not open; the
+  members appear only with a `--sloth-db`, so the M0 shape stands); the
+  Devices, WiFi AP table, Flows, History and Lookup views show
+  `database as of HH:MM`, in the warning colour when stale.
+  `test_same_uid_reader_beside_a_writing_sloth` holds the deployment's
+  read: a 0700 directory made 0500 for the reads, 0600 files, a writer
+  of the same uid committing between three WAL reads, each commit seen,
+  the listing unchanged. Found while measuring: an unreverted mutation
+  from an interrupted earlier pass (`act()` running its command under
+  `--dry-run`) was in the working tree and is removed; and
+  `test_web_unit_runs_as_sloth_with_no_capabilities` scanned for `CAP_`
+  after `uf_logical_lines()` had cut the buffer, so the scan saw only
+  the first line and passed vacuously; it now runs before the cut. The
+  slothweb dry-run case's "asked nothing" check was vacuous too: with no
+  slothweb running, a stray `web_verify` never reaches curl, so it stayed
+  green under that mutation; the case now has an old slothweb running
+  and went red. Seen
+  red under one unique-match mutation each, restored by the inverse
+  edit and checked byte-identical: the unit given a `/home/` path, a
+  `CAP_` bounding set, no `AmbientCapabilities=`, `AF_PACKET`, a
+  `--web-bind` in `ExecStart`, `ReadWritePaths=/var/lib/sloth`,
+  `StateDirectory=` naming `sloth`, `DynamicUser=`; the Makefile's
+  slothweb defaults with `install -b`, and without the no-clobber
+  guard; the defaults file with a live `--web-allow-remote`, and a
+  non-placeholder address; `web_sdb_is_stale()` without the stream
+  condition, and with `>=`; the route's quiet-stream condition dropped;
+  the `-wal` branch of `web_slothdb_data_mtime()` removed; `lstat`
+  made `stat`; the immutable open forced; the age clamp removed; the
+  unknown case `false` for `null`; the stale class dropped from
+  `dbAge()`; the members emitted without a `--sloth-db`; the mtime
+  emitted for a file not open; the Lookup line removed; and in the tool
+  a `tcp:` socket accepted without the flag, `act()` running under
+  `--dry-run`, the `tcp:` spec carried into `SLOTH_ARGS`, verify on
+  `TCP-CONNECT`, a restart on the already-migrated path, rollback
+  keeping a defaults file it wrote, the slothweb dry run asking health
+  and writing its unit, the slothweb idempotence branch disabled, the
+  slothweb rollback restarting or rolling back the sensor, leaving its
+  unit, its defaults or its enablement, the operator's defaults
+  replaced, the slothweb preflight dropped from the migration path, the
+  dry run refusing a busy port, and the real run accepting one.
+  Measured, parent (dc65af3) to this tree: `make test` 34027 to 34148
+  assertions, `make web-test` 21394 to 21485, `make deploy-test` 262 to
+  394, each 0 failed; shellcheck 0.9.0 and 0.11.0 both clean on the
+  three scripts, and the web suite also against SQLite 3.45.1.

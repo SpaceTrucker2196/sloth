@@ -40,6 +40,8 @@
 #define UF_PATH_HELPER   "packaging/bin/sloth-monitor-up"
 #define UF_PATH_DEFAULTS "packaging/default/sloth"
 #define UF_PATH_WIKI     "docs/wiki/deployment.md"
+#define UF_PATH_WEB_UNIT "packaging/systemd/slothweb.service"
+#define UF_PATH_WEB_DEFAULTS "packaging/default/slothweb"
 #define UF_MAX_LINES     512
 
 static char *uf_slurp(const char *path) {
@@ -584,6 +586,243 @@ static void test_defaults_file_is_an_environment_file(void) {
     free(buf);
 }
 
+/* ── slothweb.service (#153) ──
+ *
+ * The web UI's unit: the same account as the sensor (it reads the
+ * sensor's 0700 state dir and 0600 socket), but nothing the sensor
+ * holds beyond that — no capability at all, no /home, no packet or
+ * netlink socket, and the sensor's directory read-only. Each absence
+ * below was seen red under a one-line mutation of the unit (the #153
+ * log entry names them). */
+
+static void test_web_unit_runs_as_sloth_with_no_capabilities(void) {
+    char *buf = uf_slurp(UF_PATH_WEB_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    /* Raw scans, comments included, as for the sensor's unit, and
+     * before uf_logical_lines(), which cuts buf in place: after it a
+     * strstr() over buf stops at the first line. */
+    ASSERT(strstr(buf, "/home/") == NULL);
+    ASSERT(strstr(buf, "CAP_") == NULL);
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    ASSERT_GT(n, 0);
+    ASSERT_LT(n, UF_MAX_LINES);
+
+    ASSERT_EQ(uf_count(lines, n, "User"), 1);
+    ASSERT_STR(uf_value(lines, n, "User"), "sloth");
+    ASSERT_EQ(uf_count(lines, n, "Group"), 1);
+    ASSERT_STR(uf_value(lines, n, "Group"), "sloth");
+    ASSERT(uf_value(lines, n, "DynamicUser") == NULL);
+
+    /* Present and empty: an absent CapabilityBoundingSet= is the full
+     * set, not none. Given once, since a second line merges in. */
+    const char *bound = uf_value(lines, n, "CapabilityBoundingSet");
+    const char *amb   = uf_value(lines, n, "AmbientCapabilities");
+    ASSERT(bound != NULL);
+    ASSERT(amb != NULL);
+    if (bound && bound[0])
+        fprintf(stderr, "    slothweb unit: CapabilityBoundingSet=%s, want empty\n", bound);
+    ASSERT(bound != NULL && bound[0] == '\0');
+    ASSERT(amb != NULL && amb[0] == '\0');
+    ASSERT_EQ(uf_count(lines, n, "CapabilityBoundingSet"), 1);
+    ASSERT_EQ(uf_count(lines, n, "AmbientCapabilities"), 1);
+    ASSERT_STR(uf_value(lines, n, "NoNewPrivileges"), "true");
+    free(buf);
+}
+
+static void test_web_unit_sandbox(void) {
+    char *buf = uf_slurp(UF_PATH_WEB_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+
+    static const struct { const char *key, *val; } want[] = {
+        { "ProtectSystem",            "strict"    },
+        { "ProtectHome",              "yes"       },
+        { "PrivateTmp",               "true"      },
+        { "PrivateDevices",           "true"      },
+        { "ProtectKernelTunables",    "true"      },
+        { "ProtectKernelModules",     "true"      },
+        { "ProtectKernelLogs",        "true"      },
+        { "ProtectControlGroups",     "true"      },
+        { "RestrictNamespaces",       "true"      },
+        { "RestrictSUIDSGID",         "true"      },
+        { "MemoryDenyWriteExecute",   "true"      },
+        { "SystemCallArchitectures",  "native"    },
+        { "StateDirectory",           "slothweb"  },
+        { "StateDirectoryMode",       "0700"      },
+        { "WorkingDirectory",         "/var/lib/slothweb" },
+        { "UMask",                    "0077"      },
+        { "EnvironmentFile",          "-/etc/default/slothweb" },
+        { "After",                    "sloth-sensor.service" },
+        { "Wants",                    "sloth-sensor.service" },
+    };
+    for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+        const char *v = uf_value(lines, n, want[i].key);
+        if (!v || strcmp(v, want[i].val) != 0)
+            fprintf(stderr, "    slothweb unit: %s=%s wanted, got %s\n",
+                    want[i].key, want[i].val, v ? v : "(absent)");
+        ASSERT(v != NULL && strcmp(v, want[i].val) == 0);
+    }
+    ASSERT_EQ(uf_count(lines, n, "StateDirectory"), 1);
+
+    /* It serves HTTP and reads a unix socket; nothing else. */
+    static const char *const fams[] = { "AF_UNIX", "AF_INET", "AF_INET6" };
+    const char *fam = uf_value(lines, n, "RestrictAddressFamilies");
+    ASSERT(uf_tokens_within(fam, fams, 3));
+    ASSERT(uf_has_token(fam, "AF_UNIX"));
+    ASSERT(uf_has_token(fam, "AF_INET"));
+    ASSERT(!uf_has_token(fam, "AF_PACKET"));
+    ASSERT(!uf_has_token(fam, "AF_NETLINK"));
+    ASSERT_EQ(uf_count(lines, n, "RestrictAddressFamilies"), 1);
+
+    int allow_seen = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (strncmp(l, "SystemCallFilter=", 17) == 0 &&
+            uf_has_token(l + 17, "@system-service")) allow_seen = 1;
+    }
+    ASSERT(allow_seen);
+    ASSERT(uf_value(lines, n, "MemoryMax") != NULL);
+
+    /* The sensor's directory: read-only, and never this unit's state
+     * directory, which systemd would chown and chmod on every start. */
+    ASSERT(uf_has_token(uf_value(lines, n, "ReadOnlyPaths"), "/var/lib/sloth"));
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (strncmp(l, "ReadWritePaths=", 15) == 0)
+            ASSERT(strstr(l, "/var/lib/sloth") == NULL ||
+                   strstr(l, "/var/lib/slothweb") != NULL);
+    }
+    ASSERT(!uf_has_token(uf_value(lines, n, "StateDirectory"), "sloth"));
+    free(buf);
+}
+
+static void test_web_unit_execstart(void) {
+    char *buf = uf_slurp(UF_PATH_WEB_UNIT);
+    char *doc = uf_slurp(UF_PATH_WIKI);
+    ASSERT(buf != NULL);
+    ASSERT(doc != NULL);
+    if (!buf || !doc) { free(buf); free(doc); return; }
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    const char *start = uf_value(lines, n, "ExecStart");
+    ASSERT(start != NULL);
+    ASSERT_EQ(uf_count(lines, n, "ExecStart"), 1);
+    if (start) {
+        ASSERT(strncmp(start, "/usr/local/bin/slothweb ", 24) == 0);
+        ASSERT(strstr(start, "--socket unix:/run/sloth/sloth.sock") != NULL);
+        ASSERT(strstr(start, "--sloth-db /var/lib/sloth/sloth.db") != NULL);
+        ASSERT(strstr(start, "--store /var/lib/slothweb/slothweb.db") != NULL);
+        ASSERT(uf_has_token(start, "$SLOTHWEB_ARGS"));
+        /* Loopback unless the site's file says otherwise: the unit
+         * itself never widens the bind or the peer list. */
+        ASSERT(!uf_has_token(start, "--web-bind"));
+        ASSERT(!uf_has_token(start, "--web-allow-remote"));
+        ASSERT(!uf_has_token(start, "--web-allow"));
+        ASSERT(!uf_has_token(start, "--web-allow-sql"));
+        /* The deployment page names every flag the unit runs with. */
+        static const char *const flags[] = { "--socket", "--sloth-db", "--store" };
+        for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
+            if (!uf_doc_names_flag(doc, flags[i]))
+                fprintf(stderr, "    %s does not name slothweb flag %s\n",
+                        UF_PATH_WIKI, flags[i]);
+            ASSERT(uf_doc_names_flag(doc, flags[i]));
+        }
+    }
+    ASSERT(strstr(doc, "slothweb.service") != NULL);
+    ASSERT(strstr(doc, "--data-socket-unix") != NULL);
+    ASSERT(strstr(doc, "--with-slothweb") != NULL);
+    free(buf);
+    free(doc);
+}
+
+/* An IPv4 literal at p (four dotted octets, not inside a longer token):
+ * its length, or 0. */
+static size_t uf_ipv4_at(const char *p, unsigned char o[4]) {
+    const char *q = p;
+    for (int k = 0; k < 4; k++) {
+        if (!isdigit((unsigned char)*q)) return 0;
+        unsigned v = 0;
+        int d = 0;
+        while (isdigit((unsigned char)*q) && d < 4) { v = v * 10 + (unsigned)(*q - '0'); q++; d++; }
+        if (v > 255 || d > 3) return 0;
+        o[k] = (unsigned char)v;
+        if (k < 3) { if (*q != '.') return 0; q++; }
+    }
+    if (isdigit((unsigned char)*q) || *q == '.') return 0;
+    return (size_t)(q - p);
+}
+
+static void test_web_defaults_file(void) {
+    char *buf = uf_slurp(UF_PATH_WEB_DEFAULTS);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *copy = strdup(buf);
+    ASSERT(copy != NULL);
+    int args = 0, live_remote = 0, ex_remote = 0, ex_allow32 = 0;
+    if (copy) {
+        for (char *l = strtok(copy, "\n"); l; l = strtok(NULL, "\n")) {
+            while (*l == ' ' || *l == '\t') l++;
+            if (*l == '#') {
+                if (strstr(l, "--web-allow-remote")) ex_remote++;
+                if (strstr(l, "--web-allow ") && strstr(l, "/32")) ex_allow32++;
+                continue;
+            }
+            if (*l == '\0') continue;
+            ASSERT(strchr(l, '=') != NULL);
+            ASSERT(strncmp(l, "export ", 7) != 0);
+            ASSERT(strstr(l, "$(") == NULL);
+            ASSERT(strchr(l, '`') == NULL);
+            ASSERT(strchr(l, '"') == NULL);
+            if (strncmp(l, "SLOTHWEB_ARGS=", 14) == 0) {
+                args++;
+                /* Shipped empty: loopback, 127.0.0.1:8770. */
+                ASSERT_STR(l + 14, "");
+            }
+            if (strstr(l, "--web-allow-remote")) live_remote++;
+        }
+        free(copy);
+    }
+    ASSERT_EQ(args, 1);
+    ASSERT_EQ(live_remote, 0);
+    /* The Tailscale recipe is there, commented, with a single /32. */
+    ASSERT_GT(ex_remote, 0);
+    ASSERT_GT(ex_allow32, 0);
+    /* No real host's address: every IPv4 literal is loopback or one of
+     * the placeholders in 100.64.0.0/24. Structural, so the test does
+     * not have to name the addresses it keeps out. */
+    for (const char *p = buf; *p; p++) {
+        if (p > buf && (isdigit((unsigned char)p[-1]) || p[-1] == '.')) continue;
+        unsigned char o[4];
+        size_t k = uf_ipv4_at(p, o);
+        if (!k) continue;
+        int ok = (o[0] == 127) ||
+                 (o[0] == 100 && o[1] == 64 && o[2] == 0) ||
+                 (o[0] == 0 && o[1] == 0 && o[2] == 0 && o[3] == 0);
+        if (!ok)
+            fprintf(stderr, "    %s: %u.%u.%u.%u is not a placeholder\n",
+                    UF_PATH_WEB_DEFAULTS, o[0], o[1], o[2], o[3]);
+        ASSERT(ok);
+        p += k - 1;
+    }
+    free(buf);
+}
+
+static void test_scanner_ipv4_literal(void) {
+    unsigned char o[4];
+    ASSERT_EQ(uf_ipv4_at("100.64.0.10:8770", o), 11);
+    ASSERT(o[0] == 100 && o[1] == 64 && o[2] == 0 && o[3] == 10);
+    ASSERT_EQ(uf_ipv4_at("10.1.2", o), 0);
+    ASSERT_EQ(uf_ipv4_at("1.2.3.4.5", o), 0);
+    ASSERT_EQ(uf_ipv4_at("256.1.1.1", o), 0);
+    ASSERT_EQ(uf_ipv4_at("v1.2.3.4", o), 0);
+}
+
 /* ── the Makefile side ── */
 
 static int uf_is_recipe(const char *line) { return line[0] == '\t'; }
@@ -602,8 +841,9 @@ static void test_makefile_install_targets(void) {
     ASSERT_LT(n, UF_MAX_MAKE_LINES);
 
     int in_install = 0, in_service = 0;
-    int inst_bin = 0, inst_helper = 0, inst_db = 0;
+    int inst_bin = 0, inst_helper = 0, inst_db = 0, inst_web = 0;
     int svc_unit = 0, svc_sysusers = 0, svc_defaults_b = 0;
+    int svc_web_unit = 0, svc_web_defaults_nc = 0, svc_web_defaults_b = 0;
     int recipes_seen = 0;
     for (int i = 0; i < n; i++) {
         const char *l = lines[i];
@@ -627,11 +867,21 @@ static void test_makefile_install_targets(void) {
             if (strstr(l, "$(TARGET)") && strstr(l, "/bin/")) inst_bin = 1;
             if (strstr(l, "packaging/bin/sloth-monitor-up") && strstr(l, "/sbin/")) inst_helper = 1;
             if (strstr(l, "research.db") && strstr(l, "/share/sloth/")) inst_db = 1;
+            if (strstr(l, "install -m 755 slothweb ") && strstr(l, "/bin/slothweb")) inst_web = 1;
         }
         if (in_service) {
             if (strstr(l, "sloth-sensor.service")) svc_unit = 1;
             if (strstr(l, "sloth.sysusers.conf")) svc_sysusers = 1;
-            if (strstr(l, "install -b") && strstr(l, "packaging/default/sloth")) svc_defaults_b = 1;
+            if (strstr(l, "install -b") && strstr(l, "packaging/default/sloth ")) svc_defaults_b = 1;
+            if (strstr(l, "packaging/systemd/slothweb.service")) svc_web_unit = 1;
+            /* No-clobber: installed only behind a test that none is
+             * there, and never with a backup that would let make
+             * replace an operator's bind and peers. */
+            if (strstr(l, "packaging/default/slothweb")) {
+                if (strstr(l, "[ -e $(DESTDIR)$(DEFAULTDIR)/slothweb ] ||"))
+                    svc_web_defaults_nc = 1;
+                if (strstr(l, "install -b")) svc_web_defaults_b = 1;
+            }
         }
     }
     ASSERT_GT(recipes_seen, 0);
@@ -639,11 +889,15 @@ static void test_makefile_install_targets(void) {
     ASSERT(inst_bin);
     ASSERT(inst_helper);
     ASSERT(inst_db);
+    ASSERT(inst_web);
     /* `install-service`: the unit, the account declaration, and the
      * defaults file installed with a backup, never over an edit. */
     ASSERT(svc_unit);
     ASSERT(svc_sysusers);
     ASSERT(svc_defaults_b);
+    ASSERT(svc_web_unit);
+    ASSERT(svc_web_defaults_nc);
+    ASSERT(!svc_web_defaults_b);
     free(buf);
 }
 
@@ -652,6 +906,7 @@ void run_unit_file_tests(void) {
     RUN_TEST(test_scanner_directive_lookup_is_exact);
     RUN_TEST(test_scanner_tokens_are_whole_words);
     RUN_TEST(test_scanner_doc_flag_match_needs_a_boundary);
+    RUN_TEST(test_scanner_ipv4_literal);
     RUN_TEST(test_unit_runs_as_the_sloth_account);
     RUN_TEST(test_unit_executes_installed_paths_only);
     RUN_TEST(test_unit_capabilities_are_exactly_the_two);
@@ -661,5 +916,9 @@ void run_unit_file_tests(void) {
     RUN_TEST(test_sysusers_fragment_declares_a_system_account);
     RUN_TEST(test_monitor_up_helper_is_idempotent_and_root_side);
     RUN_TEST(test_defaults_file_is_an_environment_file);
+    RUN_TEST(test_web_unit_runs_as_sloth_with_no_capabilities);
+    RUN_TEST(test_web_unit_sandbox);
+    RUN_TEST(test_web_unit_execstart);
+    RUN_TEST(test_web_defaults_file);
     RUN_TEST(test_makefile_install_targets);
 }

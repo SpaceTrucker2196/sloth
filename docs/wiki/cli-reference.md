@@ -476,7 +476,18 @@ make bench           # time seqnum correlation + PNL union at full table
                      #   occupancy, -O2 (#91; BENCH_ITERS=n, figures in [[ring-buffers]])
 make deploy-test     # packaging/bin/sloth-migrate-sensor against a scratch root
                      #   with stub systemctl etc.; unprivileged (#153, [[deployment]] §4)
+make install         # sloth, slothweb (`make web` first), the monitor-mode helper and
+                     #   research.db under $(PREFIX) (#139, #153)
+make install-service # sloth-sensor.service, slothweb.service, the sysusers fragment,
+                     #   /etc/default/sloth (install -b) and /etc/default/slothweb (only if absent)
 ```
+
+`packaging/bin/sloth-migrate-sensor` takes `--dry-run`,
+`--data-socket-unix` (move an old unit's `tcp:` data socket to
+`unix:/run/sloth/sloth.sock`; without it a `tcp:` socket is refused) and
+`--with-slothweb` (install, start and verify `slothweb.service` after the
+sensor verifies); exit 0, 1 (rolled back), 2 (refused), 3 (sensor done,
+slothweb rolled back). [[deployment]] §4.2-§4.4.
 
 All six build variants must be warning-clean; CI enforces `-Werror`
 across the matrix (`AGENTS.md` Discipline).

@@ -1215,11 +1215,15 @@ $(STAMPS): FORCE
                     $(FUZZ_PCAP_CORE_OBJS)))
 
 # ── Install (#139) ───────────────────────────────────────────────────────────
-# `install` places what the binary and the shipped unit reference, all
+# `install` places what the binary and the shipped units reference, all
 # root-owned under $(PREFIX): the binary, the monitor-mode helper the unit
 # runs as ExecStartPre (sloth never sets monitor mode itself — MISSION §2),
-# and the research corpus for --with-research (0644: read-only data, opened
-# SQLITE_OPEN_READONLY, so ownership does not matter to secure_file.c).
+# the research corpus for --with-research (0644: read-only data, opened
+# SQLITE_OPEN_READONLY, so ownership does not matter to secure_file.c), and
+# slothweb, which slothweb.service runs (#153). slothweb is not rebuilt
+# here: `web` is phony and would relink it as root inside the checkout,
+# so `make web` comes first, as the build user, and install refuses
+# without it.
 # DESTDIR is honoured throughout so CI can stage into a scratch root and
 # `systemd-analyze verify` the result without touching the runner.
 #
@@ -1228,17 +1232,22 @@ $(STAMPS): FORCE
 # created by `systemd-sysusers`, never by make — a Makefile has no business
 # running useradd. The defaults file goes in with `install -b` so an edited
 # /etc/default/sloth survives as /etc/default/sloth~ rather than being
-# silently replaced. The unit is written for PREFIX=/usr/local; a different
-# prefix is substituted at install time so the text in packaging/ stays the
-# one tests/test_unit_file.c scans.
+# silently replaced. slothweb.service goes in beside it; its
+# /etc/default/slothweb only where there is none (no-clobber: it holds the
+# operator's bind and allowed peers, and has no backup to fall back on).
+# The units are written for PREFIX=/usr/local; a different prefix is
+# substituted at install time so the text in packaging/ stays the one
+# tests/test_unit_file.c scans.
 DESTDIR     ?=
 UNITDIR     ?= /etc/systemd/system
 SYSUSERSDIR ?= /usr/lib/sysusers.d
 DEFAULTDIR  ?= /etc/default
 
 install: $(TARGET)
+	@[ -x slothweb ] || { echo "install: no ./slothweb; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/sbin $(DESTDIR)$(PREFIX)/share/sloth
 	install -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)
+	install -m 755 slothweb $(DESTDIR)$(PREFIX)/bin/slothweb
 	install -m 755 packaging/bin/sloth-monitor-up $(DESTDIR)$(PREFIX)/sbin/sloth-monitor-up
 	install -m 644 research.db $(DESTDIR)$(PREFIX)/share/sloth/research.db
 
@@ -1251,8 +1260,15 @@ install-service:
 	rm -f $(DESTDIR)$(UNITDIR)/sloth-sensor.service.tmp
 	install -m 644 packaging/systemd/sloth.sysusers.conf $(DESTDIR)$(SYSUSERSDIR)/sloth.conf
 	install -b -m 644 packaging/default/sloth $(DESTDIR)$(DEFAULTDIR)/sloth
-	@echo "installed unit, sysusers fragment and defaults; next:"
+	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/slothweb.service \
+	    > $(DESTDIR)$(UNITDIR)/slothweb.service.tmp
+	install -m 644 $(DESTDIR)$(UNITDIR)/slothweb.service.tmp $(DESTDIR)$(UNITDIR)/slothweb.service
+	rm -f $(DESTDIR)$(UNITDIR)/slothweb.service.tmp
+	[ -e $(DESTDIR)$(DEFAULTDIR)/slothweb ] || \
+	    install -m 644 packaging/default/slothweb $(DESTDIR)$(DEFAULTDIR)/slothweb
+	@echo "installed units, sysusers fragment and defaults; next:"
 	@echo "  systemd-sysusers && systemctl daemon-reload && systemctl enable --now sloth-sensor"
+	@echo "  systemctl enable --now slothweb   (reads /etc/default/slothweb; loopback by default)"
 	@echo "  (migration from a build-tree unit: docs/wiki/deployment.md)"
 
 # ── Deploy tooling test (#153) ───────────────────────────────────────────────

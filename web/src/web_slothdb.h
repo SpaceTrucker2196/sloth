@@ -107,6 +107,16 @@
 #define WEB_SDB_ERR_MAX    200
 #define WEB_SDB_TEXT_MAX   63
 
+/* sloth.db freshness (#168). The DB-backed views are as old as the file
+ * they read, which with a --sloth-db snapshot is however long ago it was
+ * taken. Past WEB_SDB_STALE_S, while the stream is current (a record in
+ * the last WEB_SDB_STREAM_CURRENT_S), the page says the database is
+ * stale: the rest of the page updating is what makes an old table look
+ * live. sloth commits every --db-interval-secs (1 s in the shipped unit),
+ * so a live sloth.db is seconds old. */
+#define WEB_SDB_STALE_S          600
+#define WEB_SDB_STREAM_CURRENT_S 60
+
 enum {
     WEB_SDB_NONE = 0,     /* no --sloth-db */
     WEB_SDB_OPEN,         /* last open identified it */
@@ -144,6 +154,9 @@ typedef struct {
     int           schema;            /* 0 unknown */
     long long     rows;              /* devices rows at the last check; -1 */
     char          mode[12];          /* "wal", "immutable", "rollback", "" */
+    long long     mtime;             /* what the last check read is as of,
+                                        unix s (web_slothdb_data_mtime);
+                                        0 unknown */
     char          err[WEB_SDB_ERR_MAX];
     unsigned long opens, refusals, errors, timeouts;
     unsigned long ovw_hits, ovw_misses;  /* the overview cache's */
@@ -220,8 +233,23 @@ int  web_slothdb_open_box(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
                           long long now_s, char *err, size_t errsz);
 void web_slothdb_close(web_sdb_conn_t *c);
 
-/* Open, count devices, close: the health check. The state. */
+/* Open, count devices, close: the health check. The state. It also
+ * records the data's mtime (web_slothdb_data_mtime) in the stats. */
 int  web_slothdb_check(web_slothdb_t *s, long long now_s);
+
+/* The mtime, unix seconds, of the data a read of path in mode sees:
+ * a WAL reader ("wal") reads sloth's -wal as well as the main file, and
+ * sloth's commits land in the -wal until a checkpoint, so it is the newer
+ * of the two; "immutable" and "rollback" read the main file alone (an
+ * immutable open ignores a -wal). 0 when the file is not a regular one.
+ * lstat(), so a symlink is never followed. */
+long long web_slothdb_data_mtime(const char *path, const char *mode);
+
+/* 1 when a database age_s old should be called stale: older than
+ * WEB_SDB_STALE_S while the live stream is current. A stream that is not
+ * current is its own message (the socket state); an unknown age (< 0) is
+ * not stale. */
+int  web_sdb_is_stale(long long age_s, int stream_current);
 void web_slothdb_stats(web_slothdb_t *s, web_sdb_stats_t *out);
 const char *web_slothdb_state_word(int state);
 

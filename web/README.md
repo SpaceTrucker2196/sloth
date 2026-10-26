@@ -136,6 +136,19 @@ sudo -u sloth /usr/local/bin/slothweb --sloth-db /var/lib/sloth/sloth.db --store
   anomaly episodes), default `./slothweb.db` in the directory you start
   it from, which must be one the user slothweb runs as can write. It is created `0600`; never point it at `sloth.db` (refused).
 
+**As a service.** `packaging/systemd/slothweb.service` is all of the
+above as a unit: `User=sloth`, `--socket unix:/run/sloth/sloth.sock
+--sloth-db /var/lib/sloth/sloth.db --store /var/lib/slothweb/slothweb.db`,
+no capability, `/var/lib/sloth` read-only, loopback unless
+`/etc/default/slothweb` says otherwise (a Tailscale bind is documented
+there, commented, with a single `/32` in `--web-allow`). `make install`
+places the binary (after `make web`), `make install-service` the unit
+and, only where there is none, the defaults file;
+`sudo packaging/bin/sloth-migrate-sensor --dry-run --with-slothweb`
+shows what installing it beside a migrated sensor would do, and the
+same without `--dry-run` installs, starts and verifies it, rolling back
+only slothweb if it fails. `docs/wiki/deployment.md` §4.3, §4.4 and §6.
+
 ### Open the page
 
 `http://127.0.0.1:8770/` on the same host. From another machine,
@@ -466,11 +479,13 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
    "not_object":0,"duplicate_key":0,"no_type":0,"overlong":0,"truncated":0},
  "socket_gaps":0,"socket_gap_dropped":0,
  "db":"open","db_schema":7,"db_rows":42,"db_path":"/var/lib/sloth/sloth.db",
- "db_mode":"wal","db_error":null,"db_opens":118,"db_timeouts":0,
+ "db_mode":"wal","sloth_db_mtime":1792627199,"sloth_db_age_s":1,
+ "db_error":null,"db_opens":118,"db_timeouts":0,
  "db_supported":[1,7],"vendor_table":"ieee",
  "vendor_counts":{"ma_l":39627,"ma_m":6451,"ma_s":11639},"a4":"on",
  "passive_ptr":{"entries":0,"cap":4096,"seen":31,"stored":0,"empty":31,
    "refused":0,"evictions":0,"db_evictions":0,"persist_errors":0},
+ "sloth_db_stale_after_s":600,"sloth_db_stale":false,"sql":false,
  "store":"open","store_path":"./slothweb.db","store_schema":5,
  "store_rows":{"fine":42120,"minute":7020,"hour":117},
  "store_bytes":1765376,"store_max_bytes":268435456,"store_batches":360,
@@ -514,7 +529,12 @@ markers and `socket_gap_dropped` the records they say were dropped
 `missing`, `refused`, `error` or `unbuilt`, checked afresh for each
 `/api/health`; `db_rows` counts `devices`, `db_mode` is how it was
 opened (`wal`, `immutable`, `rollback`) and `db_error` slothweb's own
-sentence for the last refusal. `vendor_table` and `vendor_counts` are
+sentence for the last refusal. `sloth_db_mtime` is what the DB-backed
+views are as of (unix seconds; `null` when the file is not open) and
+`sloth_db_age_s` how long ago that is; `sloth_db_stale` is `true` when
+that age is over `sloth_db_stale_after_s` (600) while the stream is
+current, `null` without an open file (below, "How old the database
+is"). `vendor_table` and `vendor_counts` are
 the generated table's (`ieee`, `sloth` or `none`), `a4` is `on` or why
 it is off, and `passive_ptr` the cache's size and counters. The
 `store` fields are M2's (below): `store` is
@@ -1592,6 +1612,48 @@ an IP, and the card. Every value is set with `textContent`; the page
 gained no HTML or code sink (`test_routes.c` scans for them) and makes
 no request but its own server's (the CSP's hashes are recomputed by
 the build).
+
+### How old the database is (#168)
+
+The stream is current to the second; `sloth.db` is as current as the
+file `--sloth-db` names. Read in place beside a running sloth (the
+shipped unit, `"db_mode":"wal"`) that is a second or so, since sloth
+commits every `--db-interval-secs`. Read from a copy, it is as old as
+the copy, and nothing else on the page would say so: the Overview and
+the Activity view keep moving while a Devices table frozen at the copy
+looks live.
+
+So every DB-backed view says how old its data is. Devices, the WiFi
+view's access-point table, Flows, History and Lookup each carry a line
+`database as of HH:MM` (local time), from `/api/health`'s
+`sloth_db_mtime`: the file's mtime, or, for a WAL reader, the newer of
+the file's and its `-wal`'s (sloth's commits sit in the `-wal` until a
+checkpoint; an immutable or rollback read is the main file alone). It
+is read at load, each time one of those views is shown, and every 30 s
+while one is. When the data is older than `sloth_db_stale_after_s`
+(10 minutes) **and** the stream is current (connected, a record in the
+last 60 s), the line turns to the warning colour and says so: `database
+as of 21:06 - stale: 1h52m old while the live stream is current; these
+rows are as old as it is`. The server decides (`sloth_db_stale`), so
+the rule is tested once, in `web/tests/test_devices.c`; with the stream
+down as well, the socket state is the message and the line only gives
+the time.
+
+slothweb opens `--sloth-db` afresh for every request, so a copy
+replaced by `rename(2)` is read from the next request on, without a
+restart. A deployment that reads a copy (because slothweb cannot read
+sloth's own file) has to refresh it, and with a checkpoint-safe copy:
+`cp` of a WAL database can tear. SQLite's online backup, into a
+temporary name in the same directory, then a rename over the old copy:
+
+```sh
+sqlite3 "file:/var/lib/sloth/sloth.db?mode=ro" ".backup /srv/slothweb/sloth-snap.db.tmp" &&
+    mv /srv/slothweb/sloth-snap.db.tmp /srv/slothweb/sloth-snap.db
+```
+
+run as an account that can read sloth's file, every 15 to 30 minutes
+from a systemd timer or cron. The shipped unit needs none of this: it
+runs as `sloth` and reads the live file read-only.
 
 ## WiFi, History and the SQL box (M5)
 

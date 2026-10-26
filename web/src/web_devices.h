@@ -78,6 +78,11 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
  * the passive PTR cache, A4's state. */
 void web_m4_health(const web_m4_t *m, long long now_s, web_jw_t *w);
 
+/* The age in seconds of the sloth.db data the last health check read
+ * (#168): 1 with *age_s set (never negative: an mtime ahead of the clock
+ * reads as 0), or 0 when there is no --sloth-db or it is not open. */
+int  web_m4_db_age(const web_m4_t *m, long long now_s, long long *age_s);
+
 /* The presence strip of mac: 144 cells of 10 minutes ending with the
  * cell now_s is in, as 36 lower-case hex digits (cell 0 the oldest,
  * its bit the high bit of the first digit) into out[37]. For the

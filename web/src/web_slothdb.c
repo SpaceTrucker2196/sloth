@@ -307,6 +307,23 @@ void web_sdb_ovc_put(web_slothdb_t *s, const web_sdb_ident_t *id,
     pthread_mutex_unlock(&s->mu);
 }
 
+long long web_slothdb_data_mtime(const char *path, const char *mode) {
+    struct stat st;
+    if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode)) return 0;
+    long long m = (long long)st.st_mtime;
+    if (mode && !strcmp(mode, "wal")) {
+        char w[4200];
+        snprintf(w, sizeof(w), "%s-wal", path);
+        if (lstat(w, &st) == 0 && S_ISREG(st.st_mode) && (long long)st.st_mtime > m)
+            m = (long long)st.st_mtime;
+    }
+    return m;
+}
+
+int web_sdb_is_stale(long long age_s, int stream_current) {
+    return stream_current && age_s > WEB_SDB_STALE_S;
+}
+
 #ifndef WITH_SQLITE
 
 int web_slothdb_available(void) { return 0; }
@@ -335,6 +352,9 @@ int web_slothdb_check(web_slothdb_t *s, long long now_s) {
     web_sdb_conn_t c;
     char err[8];
     web_slothdb_open(s, &c, 0, now_s, err, sizeof(err));
+    pthread_mutex_lock(&s->mu);
+    s->st.mtime = 0;
+    pthread_mutex_unlock(&s->mu);
     return s->st.state;
 }
 
@@ -1003,13 +1023,21 @@ int web_slothdb_check(web_slothdb_t *s, long long now_s) {
             sqlite3_step(q) == SQLITE_ROW)
             rows = sqlite3_column_int64(q, 0);
         sqlite3_finalize(q);
+        /* After the read, so a commit sloth made while it ran counts. */
+        char mode[sizeof(s->st.mode)];
+        pthread_mutex_lock(&s->mu);
+        snprintf(mode, sizeof(mode), "%s", s->st.mode);
+        pthread_mutex_unlock(&s->mu);
+        long long mt = web_slothdb_data_mtime(s->path, mode);
         pthread_mutex_lock(&s->mu);
         s->st.rows = rows;
+        s->st.mtime = mt;
         pthread_mutex_unlock(&s->mu);
     } else {
         pthread_mutex_lock(&s->mu);
         s->st.rows = -1;
         s->st.mode[0] = '\0';
+        s->st.mtime = 0;
         pthread_mutex_unlock(&s->mu);
     }
     web_slothdb_close(&c);

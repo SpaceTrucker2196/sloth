@@ -3,10 +3,12 @@
  * DDL (sdb_gen.c), the test's own OUI table, slothweb's store, rollup,
  * anomaly engine, identity tables and passive PTR cache, on the pinned
  * clock SDB_NOW. */
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "sdb_gen.h"
@@ -142,6 +144,37 @@ static void test_page_carries_the_m4_views(void) {
     WT_LACKS(p, "ACTIVE QUERY");
     WT_LACKS(p, "active-rdns");
     WT_HAS(p, "<span id=\"milestone\">M6</span>");
+}
+
+
+/* #168: every DB-backed view (Devices, WiFi's AP table, Flows, History,
+ * Lookup) carries the freshness line, and the page fills it from
+ * /api/health, in the warning style when the server says stale. Seen
+ * red with h-dbage renamed in index.html, with the stale class dropped
+ * from dbAge() in app.js, and with the .dbage.stale rule removed from
+ * page.css. */
+static void test_page_shows_db_freshness(void) {
+    const char *p = (const char *)web_page;
+    static const char *const ids[] = {
+        "d-dbage", "w-dbage", "f-dbage", "h-dbage", "l-dbage",
+    };
+    for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        char want[96];
+        snprintf(want, sizeof(want), "<span class=\"sub dbage\" id=\"%s\"></span>", ids[i]);
+        WT_HAS(p, want);
+    }
+    WT_HAS(p, "var DB_VIEWS = [\"devices\", \"wifi\", \"flows\", \"history\", \"lookup\"];");
+    WT_HAS(p, "var DB_AGE_IDS = [\"d-dbage\", \"w-dbage\", \"f-dbage\", \"h-dbage\", \"l-dbage\"];");
+    WT_HAS(p, "var t = \"database as of \" + hhmm(h.sloth_db_mtime);");
+    WT_HAS(p, "if (h.sloth_db_stale === true)\n"
+              "      t += \" - stale: \" + dur(h.sloth_db_age_s) + \" old while the live stream is current; these rows are as old as it is\";");
+    WT_HAS(p, "e.className = stale ? \"sub dbage stale\" : \"sub dbage\";");
+    WT_HAS(p, ".dbage.stale { color: var(--sev-warn); font-weight: bold; }");
+    /* Filled at load, on showing a DB-backed view, and every 30 s while
+     * one is shown. */
+    WT_HAS(p, "      dbAge(h);\n");
+    WT_HAS(p, "if (DB_VIEWS.indexOf(v) >= 0) dbFresh();");
+    WT_HAS(p, "setInterval(function () { if (DB_VIEWS.indexOf(view) >= 0) dbFresh(); }, 30000);");
 }
 
 #ifdef WITH_SQLITE
@@ -547,6 +580,90 @@ static void test_health_members(void) {
     WT_HAS(b, "\"passive_ptr\":{\"entries\":1,\"cap\":16,\"seen\":1,\"stored\":1,");
 }
 
+/* #168: what the DB-backed views are as of, and when the page calls
+ * that stale. g_db is a WAL file closed cleanly, read immutable, so its
+ * own mtime is the data's. Stale needs both halves: older than
+ * WEB_SDB_STALE_S, and a stream that is current. The two "false" cases
+ * with an old file (no stream, a stream gone quiet) were seen red with
+ * the stream condition dropped from web_sdb_is_stale(); the boundary
+ * (600 s, false) with its ">" made ">=". */
+static void db_mtime_at(long long t) {
+    struct timespec ts[2];
+    ts[0].tv_sec = (time_t)t; ts[0].tv_nsec = 0;
+    ts[1] = ts[0];
+    WT_EQ(utimensat(AT_FDCWD, g_db, ts, 0), 0);
+}
+
+static void health_has(const char *want) {
+    WT_EQ(route(&H, "/api/health", "", 0), 200);
+    const char *b = body_of(g_out);
+    if (!strstr(b, want)) fprintf(stderr, "    want %s in\n    %s\n", want, b);
+    WT_HAS(b, want);
+}
+
+static void test_health_db_freshness(void) {
+    WT_EQ(web_sdb_is_stale(601, 1), 1);
+    WT_EQ(web_sdb_is_stale(600, 1), 0);
+    WT_EQ(web_sdb_is_stale(86400, 0), 0);
+    WT_EQ(web_sdb_is_stale(-1, 1), 0);
+
+    db_mtime_at(SDB_NOW - 700);
+    /* No data socket: the age is said, but it is not "stale". */
+    health_has("\"db_mode\":\"immutable\",\"sloth_db_mtime\":1792626500,"
+               "\"sloth_db_age_s\":700,");
+    health_has("\"sloth_db_stale_after_s\":600,\"sloth_db_stale\":false");
+
+    web_live_t lv;
+    web_live_init(&lv, "unix:/run/sloth/sloth.sock");
+    H.live = &lv;
+    H.now_ms = 1000000;
+    web_live_sock_connected(&lv, H.now_ms - 5000);
+    static web_jrec_t r;
+    static const char rec[] = "{\"type\":\"heartbeat\",\"ts\":1792627190}";
+    WT_EQ(web_jl_parse(rec, strlen(rec), &r), WEB_JL_OK);
+    web_live_apply(&lv, &r, H.now_ms - 2000);
+    health_has("\"sloth_db_stale\":true");
+
+    /* The stream gone quiet as well: that is the socket's message. */
+    H.now_ms += (WEB_SDB_STREAM_CURRENT_S + 1) * 1000LL;
+    health_has("\"sloth_db_stale\":false");
+    H.now_ms -= (WEB_SDB_STREAM_CURRENT_S + 1) * 1000LL;
+
+    db_mtime_at(SDB_NOW - WEB_SDB_STALE_S);
+    health_has("\"sloth_db_age_s\":600,");
+    health_has("\"sloth_db_stale\":false");
+    db_mtime_at(SDB_NOW - WEB_SDB_STALE_S - 1);
+    health_has("\"sloth_db_stale\":true");
+    db_mtime_at(SDB_NOW - 30);
+    health_has("\"sloth_db_age_s\":30,");
+    health_has("\"sloth_db_stale\":false");
+    /* A clock behind the file's: 0, not negative. */
+    db_mtime_at(SDB_NOW + 100);
+    health_has("\"sloth_db_mtime\":1792627300,\"sloth_db_age_s\":0,");
+
+    H.live = NULL;
+    H.now_ms = 0;
+    web_live_destroy(&lv);
+}
+
+/* A file that is not open has no age, and says so with null. */
+static void test_health_db_freshness_unknown(void) {
+    web_slothdb_t s;
+    web_m4_t m = g_m4;
+    char p[192];
+    snprintf(p, sizeof(p), "%s/absent.db", g_dir);
+    web_slothdb_init(&s, p, NULL);
+    m.sdb = &s;
+    web_health_t h = H;
+    h.m4 = &m;
+    WT_EQ(route(&h, "/api/health", "", 0), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"db\":\"missing\"");
+    WT_HAS(b, "\"sloth_db_mtime\":null,\"sloth_db_age_s\":null");
+    WT_HAS(b, "\"sloth_db_stale\":null");
+    web_slothdb_destroy(&s);
+}
+
 /* The worst case: rows whose every text member is at its cut length and
  * escapes six-fold. The page stops early with "more" rather than not
  * fit; nothing is a 503. Seen red with the room check in
@@ -607,6 +724,7 @@ static void test_page_fetch_shapes(void) {
 void run_devices_tests(void) {
     WT_RUN(test_without_sloth_db);
     WT_RUN(test_page_carries_the_m4_views);
+    WT_RUN(test_page_shows_db_freshness);
     up();
     WT_RUN(test_page_fetch_shapes);
     WT_RUN(test_devices_acceptance);
@@ -618,6 +736,8 @@ void run_devices_tests(void) {
     WT_RUN(test_drawer_presence_week_anomalies);
     WT_RUN(test_lookup);
     WT_RUN(test_health_members);
+    WT_RUN(test_health_db_freshness);
+    WT_RUN(test_health_db_freshness_unknown);
     WT_RUN(test_devices_worst_case_fits);
     down();
 }
@@ -627,6 +747,7 @@ void run_devices_tests(void) {
 void run_devices_tests(void) {
     WT_RUN(test_without_sloth_db);
     WT_RUN(test_page_carries_the_m4_views);
+    WT_RUN(test_page_shows_db_freshness);
 }
 
 #endif

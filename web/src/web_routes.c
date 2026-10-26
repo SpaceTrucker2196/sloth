@@ -271,6 +271,28 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
     if (h->live) web_live_health_members(h->live, &w, h->now_ms);
     else         web_jw_raw(&w, ",\"socket\":\"none\",\"last_record_age_s\":null");
     web_m4_health(h->m4, h->wall_s, &w);
+    /* #168: whether the DB-backed views are stale, decided here rather
+     * than in the page so the one rule is tested in one place. Only with
+     * a --sloth-db: the M0 shape stands without one. */
+    if (h->m4 && h->m4->sdb && h->m4->sdb->configured) {
+        long long age;
+        web_jw_raw(&w, ",\"sloth_db_stale_after_s\":");
+        web_jw_int(&w, WEB_SDB_STALE_S);
+        web_jw_raw(&w, ",\"sloth_db_stale\":");
+        if (web_m4_db_age(h->m4, h->wall_s, &age)) {
+            int current = 0;
+            if (h->live) {
+                web_live_sum_t ls;
+                web_live_summary(h->live, &ls, h->now_ms);
+                current = ls.sock_state == WEB_SOCK_CONNECTED &&
+                          ls.last_record_age_ms >= 0 &&
+                          ls.last_record_age_ms <= WEB_SDB_STREAM_CURRENT_S * 1000LL;
+            }
+            web_jw_raw(&w, web_sdb_is_stale(age, current) ? "true" : "false");
+        } else {
+            web_jw_raw(&w, "null");
+        }
+    }
     /* The page shows the SQL box only when this says so. */
     web_jw_raw(&w, ",\"sql\":");
     if (!h->sql || !h->sql->enabled) {

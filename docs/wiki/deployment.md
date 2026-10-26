@@ -10,16 +10,22 @@ defaults file. The service runs as `sloth`, not root, with exactly
 its state under `/var/lib/sloth`. This page explains why each piece is
 the way it is and how to migrate a sensor that is still running out of a
 build tree: `packaging/bin/sloth-migrate-sensor` (#153) copies its data,
-switches the unit, verifies the result and rolls back on failure.
+switches the unit, verifies the result and rolls back on failure. Since
+the owner's ruling of 2026-10-26 it also moves a `tcp:` data socket to
+the unit's unix socket when told to (`--data-socket-unix`, §4.2), and
+installs `slothweb.service` (§6), the web UI as the same `sloth` account
+with no capability at all, once the sensor verifies
+(`--with-slothweb`, §4.3).
 
 **Sources**: `packaging/systemd/sloth-sensor.service`,
 `packaging/systemd/sloth.sysusers.conf`, `packaging/bin/sloth-monitor-up`,
-`packaging/default/sloth`, `packaging/bin/sloth-migrate-sensor`,
+`packaging/default/sloth`, `packaging/systemd/slothweb.service`,
+`packaging/default/slothweb`, `packaging/bin/sloth-migrate-sensor`,
 `Makefile` (`install`, `install-service`, `deploy-test`),
 `tests/test_unit_file.c`, `tests/deploy/test_migrate_sensor.sh`,
 `src/secure_file.c`, `src/data_socket.c`, `src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2.
 
-**Last updated**: 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
+**Last updated**: 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
 
 ---
 
@@ -67,9 +73,12 @@ depth on top of this, not a prerequisite for it.
 | `install` | `sloth` | `/usr/local/bin/sloth` | 0755 | root-owned, so the running binary cannot be swapped by the build user |
 | `install` | `packaging/bin/sloth-monitor-up` | `/usr/local/sbin/sloth-monitor-up` | 0755 | the only thing that touches link state; runs as root from `ExecStartPre=+` |
 | `install` | `research.db` | `/usr/local/share/sloth/research.db` | 0644 | `--with-research` opens it `SQLITE_OPEN_READONLY`; read-only data, so `secure_file.c`'s ownership rule does not apply |
+| `install` | `slothweb` (`make web` first, as yourself) | `/usr/local/bin/slothweb` | 0755 | what `slothweb.service` runs (§6); `install` refuses without it rather than relink it as root |
 | `install-service` | `packaging/systemd/sloth-sensor.service` | `/etc/systemd/system/sloth-sensor.service` | 0644 | the unit below, with `/usr/local/` rewritten to `$(PREFIX)/` if you changed it |
 | `install-service` | `packaging/systemd/sloth.sysusers.conf` | `/usr/lib/sysusers.d/sloth.conf` | 0644 | declares the `sloth` account; `systemd-sysusers` creates it, make never does |
 | `install-service` | `packaging/default/sloth` | `/etc/default/sloth` | 0644, `install -b` | site settings; an existing copy is kept as `/etc/default/sloth~` |
+| `install-service` | `packaging/systemd/slothweb.service` | `/etc/systemd/system/slothweb.service` | 0644 | §6, with `/usr/local/` rewritten as for the sensor's |
+| `install-service` | `packaging/default/slothweb` | `/etc/default/slothweb` | 0644, only if absent | slothweb's bind and allowed peers; never replaced, so it has no backup either |
 
 Both targets honour `DESTDIR`, so `make install install-service
 DESTDIR=/tmp/stage` lays the whole tree out under a scratch root for
@@ -309,6 +318,14 @@ sudo packaging/bin/sloth-migrate-sensor --dry-run   # prints every action, chang
 sudo packaging/bin/sloth-migrate-sensor             # does them, verifies, or rolls back
 journalctl -u sloth-sensor -f
 ```
+
+Two options, each opt-in and each printed by the dry run:
+`--data-socket-unix` (§4.2) moves an old `tcp:` data socket to the
+unit's unix socket, and `--with-slothweb` (§4.3) installs, starts and
+verifies `slothweb.service` after the sensor. Exit status: 0 migrated
+(or already migrated), 1 failed and rolled back, 2 refused with nothing
+changed, 3 the sensor migrated and verified but slothweb failed and was
+rolled back alone. The reference host's exact sequence is §4.4.
 
 **Do not run `make install-service` first.** It overwrites
 `/etc/systemd/system/sloth-sensor.service` with no backup, which leaves
@@ -561,6 +578,150 @@ Notes:
 - `data/` stays in place as the fallback. Delete it by hand once the
   migrated sensor has run long enough to satisfy you.
 
+### 4.2 A `tcp:` data socket: `--data-socket-unix`
+
+The hardened unit streams on `--data-socket unix:/run/sloth/sloth.sock
+--no-discovery` only (`RestrictAddressFamilies=AF_UNIX AF_NETLINK
+AF_PACKET`; the socket is `0600 sloth` in the `0750 sloth`
+`RuntimeDirectory`, and `SO_PEERCRED` is the authentication). An old
+unit that streams on `tcp:` — the reference host's
+`--data-socket tcp:127.0.0.1:8765`, which every local account could
+read — is therefore refused by default, with the message it has always
+had:
+
+```
+sloth-migrate-sensor: REFUSED: --data-socket tcp:127.0.0.1:8765: the hardened unit allows AF_UNIX only (RestrictAddressFamilies); a tcp: socket is an owner decision, not a migration
+```
+
+The owner made that decision on 2026-10-26 (#153): the live sensor
+moves to the unix socket. `--data-socket-unix` is how it is made on the
+command line, not guessed by the tool:
+
+- the `tcp:` spec is not carried anywhere: the hardened `ExecStart`
+  already names `unix:/run/sloth/sloth.sock` and keeps `--no-discovery`
+  (the bare `--data-socket` default, spelled out), and nothing of it
+  reaches `SLOTH_ARGS`;
+- the dry run prints the conversion (`data socket: --data-socket
+  tcp:127.0.0.1:8765 becomes --data-socket unix:/run/sloth/sloth.sock
+  --no-discovery`) and the summary line (`socket: tcp:127.0.0.1:8765 ->
+  unix:/run/sloth/sloth.sock`);
+- verify reads `sensor_health` from the new unix socket, as the user
+  running the tool — root, or `sloth`, the only two the `0600` socket
+  admits — never from `tcp:`;
+- a rollback restores the old unit byte for byte, `tcp:` socket and
+  all, from `sloth-sensor.service.bak-migrate-<stamp>`;
+- a second run on the migrated host, with or without the flag, only
+  re-verifies.
+
+Every reader of the old stream has to move with it: `slothweb --socket
+tcp:127.0.0.1:8765` loses its stream, and a slothweb running as another
+account cannot read the new socket at all. `--with-slothweb` (§4.3)
+installs one that can.
+
+### 4.3 slothweb: `--with-slothweb`
+
+`--with-slothweb` adds a sixth step, run only once the sensor has
+verified: install `slothweb.service` (§6), start it and verify it. Its
+preflight runs with the sensor's, before anything changes, and refuses
+(exit 2) when `make install` did not place `/usr/local/bin/slothweb`,
+when `curl` is missing, when `slothweb.service.d/` holds drop-ins, when
+`SLOTHWEB_ARGS` uses quoting or variables or names `--socket`,
+`--sloth-db` or `--store` (the unit fixes those three; a second one
+would win, and the sandbox admits no other path), or when something
+already listens on the port and `slothweb.service` is not running — a
+slothweb started by hand, which reads the old socket; stop it first.
+That last one is the only refusal a dry run does not make: the dry run
+comes before the hand-started slothweb is stopped (§4.4), so it prints
+`note: a real run would REFUSE: port … already has a listener` and
+carries on, and the real run refuses if it is still there.
+
+The step:
+
+1. back up an existing `slothweb.service` that differs from the shipped
+   one (`.bak-migrate-<stamp>`), install the shipped one;
+2. install `/etc/default/slothweb` from `packaging/default/slothweb`
+   **only if there is none** — an existing one, with the operator's
+   bind and allowed peers, is used as it is and never replaced;
+3. `daemon-reload`, `enable`, `restart`;
+4. verify: active; `/api/health` on the bound address answers within
+   60 s with `"db":"open"`, `db_mode` `wal` or `immutable` (slothweb, as
+   `sloth`, opened the sensor's `sloth.db` read-only — `wal` with the
+   sensor running) and `"socket":"connected"` (it reads the unix
+   socket); the same MainPID at the end. The request is made from
+   `127.0.0.1` (`curl --interface 127.0.0.1`, or `::1` for a v6 bind):
+   a connection from loopback to one of the host's own addresses is a
+   loopback peer, which slothweb's allow-list always admits, so a
+   Tailscale bind with a single `/32` in `--web-allow` verifies with no
+   extra entry.
+
+A failure in step 6 rolls back **slothweb only**: it is stopped, its
+previous unit is put back (or the one installed is removed), a defaults
+file this run wrote is removed, and its enabled and active state are
+restored. The sensor, verified already, is not stopped, restored or
+restarted. Exit status 3 says exactly that: the sensor migrated, slothweb
+did not. A second run with `--with-slothweb` verifies an installed,
+enabled, active slothweb and changes nothing.
+
+`make deploy-test` covers both flags against the scratch root: the
+`tcp:` refusal without the flag, word for word; the dry run printing the
+conversion and changing nothing; the conversion (unit, `SLOTH_ARGS`
+without `tcp:`, verify on the unix socket and never `TCP`); a rollback
+restoring the `tcp:` unit verbatim; the idempotent second run; the
+slothweb dry run; the install with its order after the sensor's start
+and the health request from loopback; the idempotent slothweb rerun;
+five slothweb failures (db not open, stream not connected, a
+`rollback` db_mode, never active, no answer) each rolled back alone
+with the sensor untouched after its verify; an operator's unit and
+defaults put back and kept, the Tailscale bind asked on its own
+address; and four refusals (no binary, the port busy, a fixed path in
+`SLOTHWEB_ARGS`, quoting), the busy port said but not refused by a
+dry run.
+
+### 4.4 The reference host, command by command
+
+The live sensor today runs the build-tree unit with
+`--data-socket tcp:127.0.0.1:8765`, and slothweb runs by hand as the
+login user, reading that socket and a `sloth-snap.db` copy (#168). The
+owner's commands, on that host, in order — every `sudo` step is the
+owner's, and nothing in the repo runs them:
+
+```sh
+cd /path/to/checkout
+make && make web                                    # as yourself
+sudo make install                                   # sloth, slothweb, helper, research.db
+tmux new -s migrate
+
+# Only for the Tailscale bind (otherwise slothweb is loopback-only and
+# the tool installs the template): write the site file first, from the
+# template, and fill in the two addresses.
+sudo install -m 644 packaging/default/slothweb /etc/default/slothweb
+sudoedit /etc/default/slothweb
+#   SLOTHWEB_ARGS=--web-bind <this host's tailscale ip>:8770 --web-allow-remote --web-allow <the viewer's tailscale ip>/32
+
+# 1. Dry run. Read every line: the socket conversion, the copy, the
+#    unit, the slothweb unit and the URL its health is read on. With
+#    the slothweb started by hand still up, it also says the real run
+#    would refuse until that one is stopped (it holds the port).
+sudo packaging/bin/sloth-migrate-sensor --dry-run --data-socket-unix --with-slothweb
+
+# 2. Stop the slothweb started by hand (its stream goes away with the
+#    tcp: socket, and it holds the port the unit binds).
+pkill -x slothweb
+
+# 3. The migration.
+sudo packaging/bin/sloth-migrate-sensor --data-socket-unix --with-slothweb
+echo "exit $?"     # 0 done; 1 sensor rolled back; 2 refused; 3 sensor done, slothweb rolled back
+
+journalctl -u sloth-sensor -u slothweb -f
+```
+
+Afterwards the snapshot is not needed: slothweb reads
+`/var/lib/sloth/sloth.db` in place as a WAL reader, and its DB-backed
+views say "database as of HH:MM" from the file's own mtime (#168).
+`~/sloth-snap.db` and the old `slothweb.db` in the home directory can be
+deleted by hand once the new one has filled; the old `data/` stays
+until you delete it, as §4 says.
+
 ## 5. Verifying a deployment
 
 ```sh
@@ -587,7 +748,89 @@ record, the helper's idempotency check preceding its `iw` call, and the
 Makefile never calling `useradd`. Each absence check was seen to fail
 under a mutation before it shipped (`docs/wiki/log.md`, #139 entry).
 
-## 6. What this does not do
+## 6. slothweb.service
+
+`packaging/systemd/slothweb.service` runs the web UI beside the sensor.
+`make install-service` installs it with the sensor's unit;
+`sloth-migrate-sensor --with-slothweb` (§4.3) installs, starts and
+verifies it on a migrated host.
+
+```ini
+User=sloth
+Group=sloth
+Environment=SLOTHWEB_ARGS=
+EnvironmentFile=-/etc/default/slothweb
+StateDirectory=slothweb             # /var/lib/slothweb, 0700
+ExecStart=/usr/local/bin/slothweb \
+    --socket unix:/run/sloth/sloth.sock \
+    --sloth-db /var/lib/sloth/sloth.db \
+    --store /var/lib/slothweb/slothweb.db \
+    $SLOTHWEB_ARGS
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths=/var/lib/sloth
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+```
+
+| Key | Why |
+|---|---|
+| `User=sloth`, `Group=sloth` | The sensor's state is `/var/lib/sloth`, `0700 sloth`, and its stream `/run/sloth/sloth.sock`, `0600 sloth`. slothweb reads both, so it is that account rather than a second one granted access to them; the sensor's files keep their modes. |
+| `After=`, `Wants=sloth-sensor.service` | Starting slothweb starts the sensor; `Wants=`, not `Requires=`, so a sensor restart (or its radio unplugged) leaves the UI serving history and saying the stream is retrying. |
+| `--socket unix:/run/sloth/sloth.sock` | The sensor's unix socket (§4.2). `connect()` on a socket in a read-only mount works: the read-only check covers files, directories and links, not sockets. |
+| `--sloth-db /var/lib/sloth/sloth.db` | Read in place, never copied. With the sensor running both `-wal` and `-shm` exist, so slothweb opens it as a WAL reader with `readonly_shm=1` and never creates a file beside it (`web/src/web_slothdb.h`); `/api/health` says `"db_mode":"wal"`. `web/tests/test_slothdb.c :: test_same_uid_reader_beside_a_writing_sloth` holds the deployment's shape: a `0700` directory made read-only for the reads, `0600` files, a writer of the same uid committing between them, each commit seen. |
+| `--store /var/lib/slothweb/slothweb.db` | slothweb's own file, in its own `StateDirectory`, never inside the sensor's. |
+| `$SLOTHWEB_ARGS` | From `/etc/default/slothweb`: the bind and the allowed peers. Empty (the shipped file), slothweb listens on `127.0.0.1:8770` and admits loopback only. The three paths above are not overridable there: the sandbox admits no others. |
+| `CapabilityBoundingSet=`, `AmbientCapabilities=` (empty) | No capability at all: it binds a port above 1024 and never captures. An absent `CapabilityBoundingSet=` would be the full set, so the empty one is written out. |
+| `NoNewPrivileges=true` | Nothing it executes can gain privilege. |
+| `ProtectSystem=strict`, `ReadOnlyPaths=/var/lib/sloth`, `ProtectHome=yes` | Everything read-only but `/var/lib/slothweb`. `/var/lib/sloth` is read-only under `strict` already; `ReadOnlyPaths=` says so, so a later `ReadWritePaths=` cannot widen it by accident. No `/home` at all. |
+| `PrivateTmp`, `PrivateDevices`, `ProtectKernel*`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `ProtectProc=invisible` | As for the sensor (§3.4). |
+| `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6` | The data socket and HTTP; no packet or netlink socket. |
+| `SystemCallFilter=@system-service`, `~@privileged @resources`, `MemoryDenyWriteExecute`, `LockPersonality` | As for the sensor, without the sensor's `capset` exception: slothweb holds nothing to shed. |
+| `MemoryMax=512M`, `TasksMax=32` | Four threads, two SQLite page caches and the HTTP buffers; the store is capped on disk by `--web-max-mb` (256 MB by default). |
+| `Restart=on-failure` | A refused start (a bad `SLOTHWEB_ARGS`) stops, and says why in the journal, instead of looping. |
+
+`/etc/default/slothweb` (`packaging/default/slothweb`) documents the
+Tailscale bind with its example values commented out and placeholder
+addresses from `100.64.0.0/24`, never a real host's:
+
+```sh
+SLOTHWEB_ARGS=--web-bind 100.64.0.10:8770 --web-allow-remote --web-allow 100.64.0.20/32
+```
+
+Each of the three is needed and each is refused alone: a non-loopback
+`--web-bind` needs `--web-allow-remote`, and `--web-allow-remote` admits
+no peer that `--web-allow` does not name. Name one viewer, as a `/32`.
+No `tailscale serve`, no funnel. `make install-service` installs the
+file only where there is none (`[ -e … ] || install`), so an edited one
+is never replaced and needs no backup; `tests/test_unit_file.c` holds
+both the guard and the absence of `install -b` on that line.
+
+Checking it:
+
+```sh
+systemctl show -p User,CapabilityBoundingSet,AmbientCapabilities slothweb
+# User=sloth
+# CapabilityBoundingSet=
+# AmbientCapabilities=
+grep -E 'CapEff|NoNewPrivs' /proc/$(systemctl show -p MainPID --value slothweb)/status
+# CapEff: 0000000000000000
+# NoNewPrivs: 1
+curl -s --interface 127.0.0.1 http://127.0.0.1:8770/api/health | grep -o '"db_mode":"[a-z]*"\|"socket":"[a-z]*"\|"sloth_db_age_s":[0-9]*'
+systemd-analyze security slothweb
+```
+
+`tests/test_unit_file.c` scans the shipped unit: `User=sloth` and
+`Group=sloth` once each, both capability sets present and empty, no
+`CAP_` anywhere, no `/home/` anywhere, the sandbox keys, the address
+families exactly within `AF_UNIX AF_INET AF_INET6`, `ReadOnlyPaths=`
+naming `/var/lib/sloth` and `StateDirectory=` not naming it, the
+`ExecStart` paths and no `--web-bind`, `--web-allow`,
+`--web-allow-remote` or `--web-allow-sql` in it; and the defaults file:
+`SLOTHWEB_ARGS` once and empty, no live `--web-allow-remote`, the
+commented recipe present with a `/32`, every IPv4 literal loopback or a
+`100.64.0.0/24` placeholder.
+
+## 7. What this does not do
 
 - It does not shed `CAP_NET_ADMIN` while `--hop` is on. Every retune
   opens a fresh nl80211 socket, so the capability is needed for the
@@ -610,3 +853,4 @@ under a mutation before it shipped (`docs/wiki/log.md`, #139 entry).
 - [[posture-report]] — what `SIGTERM` writes before exit
 - [[inventory]] — why `--my-ssid`/`--my-bssid` are configuration
 - [[cli-reference]] — every flag in the `ExecStart`
+- [[slothweb]], `web/README.md` — the web UI `slothweb.service` runs, and the sloth.db freshness its DB-backed views show (#168)

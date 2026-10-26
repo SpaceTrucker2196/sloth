@@ -94,10 +94,12 @@ on an absolute budget.
 `src/jsonl.c` (`jsonl_emit_devices()`, `jsonl_emit_state_snapshots()`),
 `src/db.c` and `src/secure_file.c` (the open and migration rules M2
 re-implements), `src/top_hosts.c` (what `conn_count` counts),
-`src/probe_pnl.c` (what `mac_random` is), issues #102, #157, #158,
-#159, #160, #161, #162, #163 and #164.
+`src/probe_pnl.c` (what `mac_random` is),
+`packaging/systemd/slothweb.service`, `packaging/default/slothweb`,
+`packaging/bin/sloth-migrate-sensor`, `tests/test_unit_file.c`, issues
+#102, #153, #157, #158, #159, #160, #161, #162, #163, #164 and #168.
 
-**Last updated**: 2026-10-26 (the channel mix's review: assoc out of the mix, late transmitters tracked exactly, alert text and blank lookalikes escaped, addresses sorted by number on the server; the History strip on a large sloth.db: its own 1500 ms budget, per-cell counts by sloth's new first_seen indexes or a last_seen-bounded read without them, a 60 s cache per file state, a timeout that names its read; the IEEE registry CSVs committed in `web/data/` by owner ruling, `make update-oui`, the generator's multi-file hang fixed; #170: `/api/history/alerts` and the deauth episodes overlap a range from the latest incident's start; the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
+**Last updated**: 2026-10-26 (#153: `slothweb.service` and `--with-slothweb`; #168: sloth.db freshness on the DB-backed views; the channel mix's review: assoc out of the mix, late transmitters tracked exactly, alert text and blank lookalikes escaped, addresses sorted by number on the server; the History strip on a large sloth.db: its own 1500 ms budget, per-cell counts by sloth's new first_seen indexes or a last_seen-bounded read without them, a 60 s cache per file state, a timeout that names its read; the IEEE registry CSVs committed in `web/data/` by owner ruling, `make update-oui`, the generator's multi-file hang fixed; #170: `/api/history/alerts` and the deauth episodes overlap a range from the latest incident's start; the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
 
 ---
 
@@ -801,6 +803,37 @@ and the contrast table, is `web/README.md`'s Design section.
   until it reads at 4.5:1 on both the light `--bg` and `--panel`.
   Canvases read their colours from the custom properties and are
   redrawn on a toggle.
+
+## Deployment and freshness (#153, #168)
+
+- **The unit.** `packaging/systemd/slothweb.service` runs slothweb as
+  `sloth`, the sensor's own account (its state dir is `0700 sloth`,
+  its socket `0600 sloth`), with both capability sets empty,
+  `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=yes`,
+  `/var/lib/sloth` in `ReadOnlyPaths=`, `RestrictAddressFamilies=AF_UNIX
+  AF_INET AF_INET6` and its own `StateDirectory=slothweb`. `ExecStart`
+  fixes `--socket unix:/run/sloth/sloth.sock`, `--sloth-db
+  /var/lib/sloth/sloth.db` and `--store /var/lib/slothweb/slothweb.db`;
+  `/etc/default/slothweb` adds the bind (loopback when empty; the
+  Tailscale recipe with `--web-allow-remote` and a single `/32` is in
+  the file, commented, with placeholder addresses). `make install`
+  places the binary, `make install-service` the unit and, no-clobber,
+  the defaults. `sloth-migrate-sensor --with-slothweb` installs, starts
+  and verifies it after the sensor ([[deployment]] §4.3, §6).
+- **The live file, read in place.** As `sloth`, beside a running
+  sensor, slothweb opens `sloth.db` as a WAL reader (`readonly_shm=1`)
+  and makes no file beside it; `test_same_uid_reader_beside_a_writing_sloth`
+  holds that with the directory made read-only for the reads and a
+  writer of the same uid committing between them.
+- **How old the database is.** `/api/health` carries `sloth_db_mtime`
+  (the file's, or for a WAL reader the newer of the file's and its
+  `-wal`'s) and `sloth_db_age_s`, and `sloth_db_stale` (older than
+  `sloth_db_stale_after_s`, 600 s, while the stream is current). The
+  Devices, WiFi access-point, Flows, History and Lookup views each say
+  `database as of HH:MM`, in the warning colour with the age when
+  stale. A `--sloth-db` copy replaced by `rename(2)` is read from the
+  next request; `web/README.md` gives the checkpoint-safe refresh
+  (`sqlite3 ... ".backup"`, then a rename).
 
 ## Tests
 

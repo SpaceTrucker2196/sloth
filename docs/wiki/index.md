@@ -140,7 +140,9 @@ the Wi-Fi it watches:
 - [[deployment]] — `make install` + `make install-service` (#139): the
   shipped hardened unit, why it runs as `sloth` and not root, what each
   sandbox key costs, and `sloth-migrate-sensor` (#153), the dry-run-first,
-  checksum-verified, self-rolling-back migration off a build-tree unit.
+  checksum-verified, self-rolling-back migration off a build-tree unit,
+  with the owner-ruled `tcp:` to unix socket move (`--data-socket-unix`)
+  and `slothweb.service` (`--with-slothweb`).
 - [[sqlite-schema]] — the `--db` retained artifact: 38-table schema,
   retention tiers, MISSION §2 guardrails, query recipes.
 - [[ring-buffers]] — bounded-history pattern shared by every per-protocol log file.

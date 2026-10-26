@@ -144,6 +144,7 @@
         <option value="risk">risk</option>
       </select></label>
       <span class="sub" id="d-note"></span>
+      <span class="sub dbage" id="d-dbage"></span>
     </section>
     <section class="panel">
       <div class="label">devices <span class="sub" id="d-count"></span> <span class="dt-tools" id="d-tools"></span></div>
@@ -162,6 +163,7 @@
       <label>mac or ip <input type="search" id="l-q" maxlength="45" spellcheck="false" autocomplete="off" placeholder="b8:27:eb:12:34:56 or 192.168.1.20"></label>
       <button type="button" id="l-go">look up</button>
       <span class="sub" id="l-note">passive only: the vendor table and names already seen; nothing is sent</span>
+      <span class="sub dbage" id="l-dbage"></span>
     </section>
     <section class="panel">
       <div class="label">card <span class="sub" id="l-src"></span></div>
@@ -190,7 +192,7 @@
       <div class="mixd" id="w-mix" aria-live="polite"></div>
     </section>
     <section class="panel">
-      <div class="label">access points <span class="sub" id="w-aps-count"></span> <span class="dt-tools" id="w-aps-tools"></span></div>
+      <div class="label">access points <span class="sub" id="w-aps-count"></span> <span class="sub dbage" id="w-dbage"></span> <span class="dt-tools" id="w-aps-tools"></span></div>
       <div class="controls"><label>sort <select id="w-sort">
         <option value="last" selected>last seen</option>
         <option value="ssids">ssid count</option>
@@ -230,6 +232,7 @@
       </select></label>
       <label>ip <input type="search" id="f-ip" maxlength="45" spellcheck="false" autocomplete="off" placeholder="192.0.2.10"></label>
       <span class="sub" id="f-note">sloth.db's protocol tables, read-only</span>
+      <span class="sub dbage" id="f-dbage"></span>
     </section>
     <section class="panel">
       <div class="label">source &#8594; destination, by protocol <span class="sub" id="f-fold"></span></div>
@@ -250,7 +253,7 @@
    </div>
    <div id="v-history" hidden>
     <section class="panel">
-      <div class="label">the last 30 days <span class="sub" id="h-range"></span></div>
+      <div class="label">the last 30 days <span class="sub" id="h-range"></span> <span class="sub dbage" id="h-dbage"></span></div>
       <canvas class="ovw" id="h-strip" aria-label="30 days: devices first seen and alerts begun; drag to pick a range"></canvas>
       <div class="sub">drag to pick a range; top: devices first seen, bottom: alerts begun; white ticks: survey sessions, one click each for what was new</div>
       <div class="chips" id="h-sessions"></div>

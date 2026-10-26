@@ -7,8 +7,19 @@
 #   sudo packaging/bin/sloth-migrate-sensor --dry-run  # read every action first
 #   sudo packaging/bin/sloth-migrate-sensor            # then do them
 #
+# Options (any order; each one is opt-in):
+#
+#   --dry-run, -n         print every action, change nothing
+#   --data-socket-unix    the old unit streams on a tcp: --data-socket;
+#                         move it to the hardened unit's unix socket,
+#                         /run/sloth/sloth.sock (owner ruling 2026-10-26
+#                         on #153). Without it a tcp: socket is refused.
+#   --with-slothweb       once the sensor verifies, install, start and
+#                         verify slothweb.service as well (step 6)
+#
 # It performs the five steps of #153 in order, and is idempotent: a second
-# run against a migrated host only re-verifies it.
+# run against a migrated host only re-verifies it (and, with
+# --with-slothweb, installs slothweb if it is not yet there).
 #
 #   1. preflight: nothing is changed until every check passes — the sloth
 #      account can be created, `make install` placed the binary, helper and
@@ -24,12 +35,22 @@
 #   4. unit: back up the current unit and /etc/default/sloth, install the
 #      hardened unit and a defaults file carrying the site's flags, start.
 #   5. verify: active, CapEff only CAP_NET_ADMIN (with --hop; 0 without),
-#      NoNewPrivs 1, sensor_health records on the data socket over a
-#      window covering a full hop rotation, none with a retune failure
-#      for EPERM or EACCES (what a missing CAP_NET_ADMIN returns; a
-#      channel the regdomain refuses is noted, not failed) and at least
-#      one with a confirmed channel, and the same MainPID afterwards (no
-#      restart).
+#      NoNewPrivs 1, sensor_health records on the unix data socket
+#      /run/sloth/sloth.sock (read as the invoking user: root, or sloth,
+#      the only two the 0600 socket admits) over a window covering a
+#      full hop rotation, none with a retune failure for EPERM or EACCES
+#      (what a missing CAP_NET_ADMIN returns; a channel the regdomain
+#      refuses is noted, not failed) and at least one with a confirmed
+#      channel, and the same MainPID afterwards (no restart).
+#   6. slothweb (--with-slothweb only, after 5 passed): back up any
+#      slothweb.service, install the hardened one and, only where there
+#      is none, /etc/default/slothweb; enable and (re)start it; verify it
+#      is active and that /api/health on its bound address (asked from
+#      127.0.0.1 or ::1, a loopback peer its allow-list always admits)
+#      says "db":"open" with db_mode wal or immutable and the stream
+#      "connected". A failure here rolls back slothweb only — its unit,
+#      the defaults file this run wrote, its enabled/active state — and
+#      leaves the verified sensor as it is (exit 3).
 #
 # Any failure after the service is stopped rolls back: the previous unit and
 # defaults file are restored, the copy is renamed aside (never deleted —
@@ -43,7 +64,8 @@
 # Every path and command is an environment variable so tests/deploy/ can
 # run this unprivileged against a scratch root with stub commands. Exit
 # status: 0 migrated or already migrated, 1 failed (rolled back), 2 refused
-# by preflight (nothing changed). Recipe: docs/wiki/deployment.md §4.
+# by preflight (nothing changed), 3 the sensor migrated and verified but
+# slothweb failed and was rolled back. Recipe: docs/wiki/deployment.md §4.
 set -u
 
 ME=sloth-migrate-sensor
@@ -67,6 +89,13 @@ RESEARCH=${RESEARCH:-$ROOT$PREFIX/share/sloth/research.db}
 UNIT_TEMPLATE=${UNIT_TEMPLATE:-$SLOTH_SRC/packaging/systemd/sloth-sensor.service}
 SYSUSERS_TEMPLATE=${SYSUSERS_TEMPLATE:-$SLOTH_SRC/packaging/systemd/sloth.sysusers.conf}
 DEFAULTS_TEMPLATE=${DEFAULTS_TEMPLATE:-$SLOTH_SRC/packaging/default/sloth}
+# slothweb (--with-slothweb)
+WEB_UNIT_NAME=${WEB_UNIT_NAME:-slothweb.service}
+WEB_UNIT=${WEB_UNIT:-$ROOT/etc/systemd/system/$WEB_UNIT_NAME}
+WEB_DEFAULTS=${WEB_DEFAULTS:-$ROOT/etc/default/slothweb}
+WEB_BIN=${WEB_BIN:-$ROOT$PREFIX/bin/slothweb}
+WEB_UNIT_TEMPLATE=${WEB_UNIT_TEMPLATE:-$SLOTH_SRC/packaging/systemd/slothweb.service}
+WEB_DEFAULTS_TEMPLATE=${WEB_DEFAULTS_TEMPLATE:-$SLOTH_SRC/packaging/default/slothweb}
 # Host path of the old data dir (no ROOT); derived from the unit's --db.
 SRC_DATA=${SRC_DATA:-}
 # Must match BindsTo= in the unit, which systemd cannot take from a file;
@@ -85,6 +114,8 @@ SOCAT=${SOCAT:-socat}
 TIMEOUT=${TIMEOUT:-timeout}
 SHA256SUM=${SHA256SUM:-sha256sum}
 SLEEP=${SLEEP:-sleep}
+CURL=${CURL:-curl}
+SS=${SS:-ss}
 
 # ── Verify budget ────────────────────────────────────────────────────────
 # sensor_health is change-only with a 300 s heartbeat (src/jsonl.c), so a
@@ -109,17 +140,27 @@ ROLLBACK_SETTLE_SECS=${ROLLBACK_SETTLE_SECS:-15}
 # the df probe, for tests.
 HEADROOM_KB=${HEADROOM_KB:-65536}
 AVAIL_KB=${AVAIL_KB:-}
+# slothweb's start (the store open, the first stream connect, a sloth.db
+# read) takes about a second; the budget covers a slow disk and the
+# stream's first reconnect back-off.
+WEB_VERIFY_SECS=${WEB_VERIFY_SECS:-60}
 
 DRY=0
-case "${1:-}" in
-    --dry-run|-n) DRY=1 ;;
-    "") ;;
-    -h|--help)
-        # The header comment, however long it grows.
-        awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
-        exit 0 ;;
-    *) echo "$ME: unknown argument '$1' (use --dry-run, or nothing)" >&2; exit 2 ;;
-esac
+SOCK_UNIX=0
+WITH_WEB=0
+for a in "$@"; do
+    case "$a" in
+        --dry-run|-n) DRY=1 ;;
+        --data-socket-unix) SOCK_UNIX=1 ;;
+        --with-slothweb) WITH_WEB=1 ;;
+        "") ;;
+        -h|--help)
+            # The header comment, however long it grows.
+            awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
+            exit 0 ;;
+        *) echo "$ME: unknown argument '$a' (use --dry-run, --data-socket-unix, --with-slothweb, or nothing)" >&2; exit 2 ;;
+    esac
+done
 
 say()    { echo "$ME: $*"; }
 refuse() { echo "$ME: REFUSED: $*" >&2; echo "$ME: nothing was changed" >&2; exit 2; }
@@ -188,6 +229,7 @@ check_relocated() {   # FLAG OLDPATH EXPECTED-NAME
 ARGS=""
 WANT_HOP=0
 OLD_SOCK=""
+TCP_SOCK=""
 OLD_IFACES=""
 parse_exec() {
     exec_line=$1
@@ -235,6 +277,15 @@ parse_exec() {
                 if [ $# -ge 1 ]; then case "$1" in -*) ;; *) v=$1; shift ;; esac; fi
                 case "$v" in
                     ""|unix:*) OLD_SOCK=${v:-unix:/run/sloth/sloth.sock} ;;
+                    # The owner's decision, made on the command line: the
+                    # tcp: stream becomes the hardened unit's unix socket.
+                    # Nothing of the tcp: spec is carried; the old unit,
+                    # and with it the tcp: socket, is what a rollback
+                    # restores.
+                    tcp:*)
+                        [ "$SOCK_UNIX" -eq 1 ] \
+                            || refuse "--data-socket $v: the hardened unit allows AF_UNIX only (RestrictAddressFamilies); a tcp: socket is an owner decision, not a migration"
+                        TCP_SOCK=$v ;;
                     *) refuse "--data-socket $v: the hardened unit allows AF_UNIX only (RestrictAddressFamilies); a tcp: socket is an owner decision, not a migration" ;;
                 esac ;;
             # carried verbatim into SLOTH_ARGS: site identity and tuning
@@ -441,6 +492,255 @@ verify() {
     return 0
 }
 
+# ── slothweb (step 6, --with-slothweb) ───────────────────────────────────
+render_web_unit() { sed -e "s|/usr/local/|$PREFIX/|g" "$WEB_UNIT_TEMPLATE"; }
+
+web_active() { "$SYSTEMCTL" is-active --quiet "$WEB_UNIT_NAME"; }
+
+# The unit's state now, for step 6 and its rollback.
+web_state() {
+    web_had_unit=0; [ -f "$WEB_UNIT" ] && web_had_unit=1
+    web_same=0
+    [ "$web_had_unit" -eq 1 ] && render_web_unit | cmp -s - "$WEB_UNIT" && web_same=1
+    web_had_defaults=0; [ -f "$WEB_DEFAULTS" ] && web_had_defaults=1
+    web_was_active=0; web_active && web_was_active=1
+    web_was_enabled=0
+    "$SYSTEMCTL" is-enabled --quiet "$WEB_UNIT_NAME" 2>/dev/null && web_was_enabled=1
+    return 0
+}
+
+# Everything step 6 needs, checked before the sensor is touched: a
+# refusal here is a refusal of the whole run.
+WEB_ARGS="" WEB_BIND="" WEB_URL="" WEB_SRC_IP="" WEB_PORT=""
+web_preflight() {
+    for f in "$WEB_UNIT_TEMPLATE" "$WEB_DEFAULTS_TEMPLATE"; do
+        [ -f "$f" ] || refuse "missing $f (SLOTH_SRC=$SLOTH_SRC)"
+    done
+    [ -x "$WEB_BIN" ] || refuse "no executable $WEB_BIN; run 'sudo make install' first (it places slothweb as well)"
+    command -v "$CURL" >/dev/null 2>&1 || refuse "command '$CURL' not found; --with-slothweb reads /api/health with it"
+    if [ -d "$WEB_UNIT.d" ] && ! dir_empty "$WEB_UNIT.d"; then
+        refuse "$WEB_UNIT.d/ holds drop-ins, which would also apply to the hardened slothweb unit; review and remove them first"
+    fi
+    # The defaults in effect afterwards: the operator's file when there
+    # is one (never replaced), the template's otherwise.
+    wd=$WEB_DEFAULTS
+    [ -f "$wd" ] || wd=$WEB_DEFAULTS_TEMPLATE
+    n=$(grep -c '^[ \t]*SLOTHWEB_ARGS=' "$wd")
+    [ "$n" -le 1 ] || refuse "$wd sets SLOTHWEB_ARGS $n times"
+    WEB_ARGS=$(sed -n 's/^[ \t]*SLOTHWEB_ARGS=//p' "$wd")
+    case "$WEB_ARGS" in
+        *\"*|*\'*|*\\*|*\$*|*%*)
+            refuse "SLOTHWEB_ARGS in $wd has quoting, a variable or a specifier; this tool splits on whitespace only and will not guess: $WEB_ARGS" ;;
+    esac
+    WEB_BIND=127.0.0.1:8770
+    set -f
+    # shellcheck disable=SC2086  # split on whitespace, globbing off: intended
+    set -- $WEB_ARGS
+    set +f
+    while [ $# -gt 0 ]; do
+        f=$1; shift
+        case "$f" in
+            --socket|--sloth-db|--store)
+                refuse "SLOTHWEB_ARGS in $wd gives $f; slothweb.service fixes it (its sandbox admits no other path) and a second one would win: remove it" ;;
+            --web-bind)
+                [ $# -ge 1 ] || refuse "--web-bind in $wd needs a value"
+                WEB_BIND=$1; shift ;;
+        esac
+    done
+    # Asked from loopback: a connection from 127.0.0.1 (or ::1) to one of
+    # the host's own addresses is a loopback peer, which slothweb's
+    # allow-list always admits, so a Tailscale bind needs no extra
+    # --web-allow entry for this check.
+    case "$WEB_BIND" in
+        \[*\]:*)
+            host=${WEB_BIND%\]:*}; host=${host#\[}; WEB_PORT=${WEB_BIND##*\]:}
+            [ "$host" = :: ] && host=::1
+            WEB_URL="http://[$host]:$WEB_PORT/api/health"; WEB_SRC_IP=::1 ;;
+        *:*)
+            host=${WEB_BIND%:*}; WEB_PORT=${WEB_BIND##*:}
+            [ "$host" = 0.0.0.0 ] && host=127.0.0.1
+            WEB_URL="http://$host:$WEB_PORT/api/health"; WEB_SRC_IP=127.0.0.1 ;;
+        *) refuse "--web-bind $WEB_BIND in $wd: want A.B.C.D:PORT or [V6]:PORT" ;;
+    esac
+    case "$WEB_PORT" in ''|*[!0-9]*) refuse "--web-bind $WEB_BIND in $wd: bad port" ;; esac
+    web_state
+    # A slothweb started by hand (the pre-#153 deployment) holds the port
+    # and reads the old socket: the unit could not bind, and would be
+    # rolled back after the sensor's downtime for nothing.
+    if [ "$web_was_active" -eq 0 ]; then
+        if command -v "$SS" >/dev/null 2>&1; then
+            busy=$("$SS" -Hltn "sport = :$WEB_PORT" 2>/dev/null)
+            why="port $WEB_PORT already has a listener and $WEB_UNIT_NAME is not running (a slothweb started by hand?); stop it first, it reads the old data socket"
+            # The dry run is read before that slothweb is stopped
+            # (deployment.md §4.4), so it says so and goes on; the real
+            # run refuses.
+            if [ -n "$busy" ]; then
+                [ "$DRY" -eq 1 ] || refuse "$why"
+                say "note: a real run would REFUSE: $why"
+            fi
+        else
+            say "note: no '$SS'; cannot check that port $WEB_PORT is free"
+        fi
+    fi
+}
+
+# One member of an /api/health body, as JSON text, for a message.
+web_field() {
+    printf '%s' "$1" | sed -n "s/.*\"$2\":\(\"[^\"]*\"\|null\).*/\1/p" | head -n 1
+}
+# Sets WEB_WHY (why not) and WEB_MODE from one /api/health body.
+web_health_ok() {
+    case "$1" in
+        *'"service":"slothweb"'*) ;;
+        *) WEB_WHY="no slothweb health answer"; return 1 ;;
+    esac
+    case "$1" in
+        *'"db":"open"'*) ;;
+        *) WEB_WHY="sloth.db is not open (db $(web_field "$1" db), db_error $(web_field "$1" db_error))"; return 1 ;;
+    esac
+    case "$1" in
+        *'"db_mode":"wal"'*) WEB_MODE=wal ;;
+        *'"db_mode":"immutable"'*) WEB_MODE=immutable ;;
+        *) WEB_WHY="db_mode $(web_field "$1" db_mode), not wal or immutable"; return 1 ;;
+    esac
+    case "$1" in
+        *'"socket":"connected"'*) ;;
+        *) WEB_WHY="the stream is not connected (socket $(web_field "$1" socket), socket_last_error $(web_field "$1" socket_last_error))"; return 1 ;;
+    esac
+    return 0
+}
+
+WEB_ERR=""
+web_verify() {
+    i=0
+    until web_active; do
+        i=$((i + 1))
+        [ "$i" -le "$WEB_VERIFY_SECS" ] || { WEB_ERR="$WEB_UNIT_NAME is not active after ${WEB_VERIFY_SECS}s"; return 1; }
+        "$SLEEP" 1
+    done
+    wpid=$("$SYSTEMCTL" show -p MainPID --value "$WEB_UNIT_NAME")
+    i=0
+    WEB_WHY="no answer"
+    while :; do
+        if body=$("$CURL" -fsS --max-time 5 --interface "$WEB_SRC_IP" "$WEB_URL" 2>/dev/null); then
+            web_health_ok "$body" && break
+        else
+            WEB_WHY="no answer"
+        fi
+        i=$((i + 1))
+        if [ "$i" -gt "$WEB_VERIFY_SECS" ]; then
+            WEB_ERR="$WEB_URL after ${WEB_VERIFY_SECS}s: $WEB_WHY"
+            return 1
+        fi
+        "$SLEEP" 1
+    done
+    wpid2=$("$SYSTEMCTL" show -p MainPID --value "$WEB_UNIT_NAME")
+    if ! web_active || [ "$wpid2" != "$wpid" ]; then
+        WEB_ERR="$WEB_UNIT_NAME restarted during verification (pid $wpid -> ${wpid2:-none})"
+        return 1
+    fi
+    return 0
+}
+
+# Undoes step 6 alone. The sensor verified before step 6 began and is
+# not touched: not stopped, not restored, not restarted.
+web_rollback() {
+    trap '' HUP INT TERM PIPE
+    echo "$ME: slothweb FAILED: $1" >&2
+    echo "$ME: rolling back slothweb only; $UNIT_NAME stays migrated and verified" >&2
+    rc=0
+    "$SYSTEMCTL" stop "$WEB_UNIT_NAME" 2>/dev/null
+    if [ "$web_had_unit" -eq 1 ] && [ "$web_same" -eq 0 ]; then
+        if [ -f "$WEB_UNIT_BAK" ] && cp -p "$WEB_UNIT_BAK" "$WEB_UNIT"; then
+            mv "$WEB_UNIT_BAK" "$WEB_UNIT.rolled-back-$STAMP"
+        else
+            rc=1
+        fi
+    elif [ "$web_had_unit" -eq 0 ]; then
+        rm -f "$WEB_UNIT"
+    fi
+    [ "$web_wrote_defaults" -eq 1 ] && rm -f "$WEB_DEFAULTS"
+    "$SYSTEMCTL" daemon-reload || rc=1
+    if [ "$web_was_enabled" -eq 1 ]; then
+        "$SYSTEMCTL" reenable "$WEB_UNIT_NAME" || rc=1
+    else
+        "$SYSTEMCTL" disable "$WEB_UNIT_NAME" 2>/dev/null
+    fi
+    if [ "$web_was_active" -eq 1 ]; then
+        "$SYSTEMCTL" start "$WEB_UNIT_NAME" || rc=1
+    fi
+    if [ "$rc" -eq 0 ]; then
+        echo "$ME: slothweb rolled back to its state before this run; journalctl -u $WEB_UNIT_NAME" >&2
+    else
+        echo "$ME: slothweb ROLLBACK INCOMPLETE; see $WEB_UNIT and $WEB_UNIT_BAK, and journalctl -u $WEB_UNIT_NAME" >&2
+    fi
+    exit 3
+}
+
+# shellcheck disable=SC2317,SC2329  # called through act()
+write_web_unit() {
+    render_web_unit > "$WEB_UNIT.tmp.$$" && chmod 644 "$WEB_UNIT.tmp.$$" &&
+    mv "$WEB_UNIT.tmp.$$" "$WEB_UNIT"
+}
+# shellcheck disable=SC2317,SC2329  # called through act()
+write_web_defaults() {
+    mkdir -p "$(dirname "$WEB_DEFAULTS")" &&
+    cp "$WEB_DEFAULTS_TEMPLATE" "$WEB_DEFAULTS.tmp.$$" && chmod 644 "$WEB_DEFAULTS.tmp.$$" &&
+    mv "$WEB_DEFAULTS.tmp.$$" "$WEB_DEFAULTS"
+}
+
+WEB_UNIT_BAK=""
+web_wrote_defaults=0
+web_apply() {
+    web_state
+    WEB_UNIT_BAK=$WEB_UNIT.bak-migrate-$STAMP
+    if [ "$web_same" -eq 1 ] && [ "$web_was_active" -eq 1 ] && [ "$web_was_enabled" -eq 1 ]; then
+        say "$WEB_UNIT is already the hardened slothweb unit, enabled and active; verifying only"
+        if [ "$DRY" -eq 1 ]; then
+            echo "[dry-run] would: verify $WEB_UNIT_NAME (active; $WEB_URL asked from $WEB_SRC_IP: db open, wal or immutable, stream connected)"
+            return 0
+        fi
+        if web_verify; then
+            say "slothweb: verified: $WEB_URL answers, sloth.db $WEB_MODE, stream connected"
+            return 0
+        fi
+        echo "$ME: slothweb is installed, but verify FAILED: $WEB_ERR" >&2
+        echo "$ME: nothing was changed; journalctl -u $WEB_UNIT_NAME" >&2
+        exit 3
+    fi
+    [ "$DRY" -eq 1 ] || trap 'web_rollback "interrupted by signal"' HUP INT TERM
+    if [ "$web_same" -eq 0 ]; then
+        if [ "$web_had_unit" -eq 1 ]; then
+            act "back up $WEB_UNIT to $WEB_UNIT_BAK" cp -p "$WEB_UNIT" "$WEB_UNIT_BAK" \
+                || web_rollback "could not back up $WEB_UNIT"
+        fi
+        act "install the slothweb unit at $WEB_UNIT (from $WEB_UNIT_TEMPLATE, PREFIX=$PREFIX)" write_web_unit \
+            || web_rollback "could not install $WEB_UNIT"
+    fi
+    if [ "$web_had_defaults" -eq 1 ]; then
+        say "slothweb: keeping $WEB_DEFAULTS as it is (SLOTHWEB_ARGS=${WEB_ARGS})"
+    else
+        act "install $WEB_DEFAULTS from $WEB_DEFAULTS_TEMPLATE (SLOTHWEB_ARGS=${WEB_ARGS})" write_web_defaults \
+            || web_rollback "could not write $WEB_DEFAULTS"
+        [ "$DRY" -eq 1 ] || web_wrote_defaults=1
+    fi
+    act "$SYSTEMCTL daemon-reload" "$SYSTEMCTL" daemon-reload || web_rollback "daemon-reload failed"
+    act "$SYSTEMCTL enable $WEB_UNIT_NAME" "$SYSTEMCTL" enable "$WEB_UNIT_NAME" || web_rollback "enable failed"
+    act "$SYSTEMCTL restart $WEB_UNIT_NAME" "$SYSTEMCTL" restart "$WEB_UNIT_NAME" || web_rollback "restart failed"
+    if [ "$DRY" -eq 1 ]; then
+        echo "[dry-run] would: verify $WEB_UNIT_NAME active and $WEB_URL (asked from $WEB_SRC_IP) answering \"db\":\"open\", db_mode wal or immutable, the stream connected"
+        echo "[dry-run] would: on any slothweb failure, roll back slothweb only (its unit, a defaults file this run wrote, its enabled/active state); the sensor stays migrated (exit 3)"
+        return 0
+    fi
+    web_verify || web_rollback "verify: $WEB_ERR"
+    trap - HUP INT TERM
+    say "slothweb: $WEB_UNIT_NAME runs as sloth; $WEB_URL answers, sloth.db $WEB_MODE, stream connected"
+    if [ "$web_had_unit" -eq 1 ] && [ "$web_same" -eq 0 ]; then
+        say "  previous slothweb unit: $WEB_UNIT_BAK"
+    fi
+    return 0
+}
+
 # ── Preflight (step 1) ───────────────────────────────────────────────────
 [ "$DRY" -eq 1 ] && say "dry run: every action is printed, nothing is changed"
 
@@ -470,9 +770,11 @@ if render_unit | cmp -s - "$UNIT"; then
         old_wd=$(unit_key "$bak" WorkingDirectory | tail -n 1)
         refuse "$UNIT is the hardened unit, but $TARGET_HOST/sloth.db does not exist: the data was never copied. The unit it replaced ($bak) used --db ${old_db:-?}${old_wd:+ (WorkingDirectory $old_wd)}"
     fi
+    [ "$WITH_WEB" -eq 1 ] && web_preflight
     say "$UNIT is already the hardened unit; verifying only"
     if [ "$DRY" -eq 1 ]; then
         echo "[dry-run] would: verify $UNIT_NAME (CapEff, NoNewPrivs, sensor_health)"
+        [ "$WITH_WEB" -eq 1 ] && web_apply
         exit 0
     fi
     grep -q -- '--hop' "$UNIT" && WANT_HOP=1
@@ -481,6 +783,7 @@ if render_unit | cmp -s - "$UNIT"; then
     if verify; then
         stop_health_reader
         say "already migrated and verified"
+        [ "$WITH_WEB" -eq 1 ] && web_apply
         exit 0
     fi
     stop_health_reader
@@ -510,6 +813,12 @@ case "$OLD_SOCK" in
     ""|unix:/run/sloth/sloth.sock) ;;
     *) say "note: the data socket moves from ${OLD_SOCK#unix:} to /run/sloth/sloth.sock; point its readers there" ;;
 esac
+if [ -n "$TCP_SOCK" ]; then
+    say "data socket: --data-socket $TCP_SOCK becomes --data-socket unix:/run/sloth/sloth.sock --no-discovery (--data-socket-unix)"
+    say "note: the socket is 0600 sloth in a 0750 sloth directory: a reader of $TCP_SOCK (slothweb's --socket) must become --socket unix:/run/sloth/sloth.sock and run as sloth or root; --with-slothweb installs one that does"
+elif [ "$SOCK_UNIX" -eq 1 ]; then
+    say "note: --data-socket-unix given, but the old unit has no tcp: data socket; nothing to convert"
+fi
 
 # The hardened unit's RuntimeDirectory=sloth removes /run/sloth when it
 # stops, and src/data_socket.c never creates a socket's directory. An old
@@ -617,6 +926,8 @@ if [ "$AVAIL_KB" -lt $((need_kb + need_kb / 10 + HEADROOM_KB)) ]; then
     refuse "copying $SRC_DATA needs ${need_kb} KiB plus headroom; ${AVAIL_KB} KiB free at $TARGET"
 fi
 
+[ "$WITH_WEB" -eq 1 ] && web_preflight
+
 if "$GETENT" passwd sloth >/dev/null 2>&1; then have_user=1; else have_user=0; fi
 was_active=0; is_active && was_active=1
 was_enabled=0; "$SYSTEMCTL" is-enabled --quiet "$UNIT_NAME" 2>/dev/null && was_enabled=1
@@ -628,6 +939,10 @@ say "  data:        $SRC_DATA (${need_kb} KiB) -> $TARGET_HOST, copied; the sour
 say "  account:     sloth $([ $have_user -eq 1 ] && echo exists || echo 'will be created')"
 say "  SLOTH_ARGS:  ${ARGS:-(none)}"
 say "  SLOTH_IFACE: $MON_IFACE (the device BindsTo= names)"
+if [ -n "$TCP_SOCK" ]; then
+    say "  socket:      $TCP_SOCK -> unix:/run/sloth/sloth.sock (--data-socket-unix; rollback restores $TCP_SOCK)"
+fi
+[ "$WITH_WEB" -eq 1 ] && say "  slothweb:    $WEB_UNIT_NAME after the sensor verifies, checked at $WEB_URL"
 
 UNIT_BAK=$UNIT.bak-migrate-$STAMP
 DEFAULTS_BAK=$DEFAULTS.bak-migrate-$STAMP
@@ -781,6 +1096,7 @@ if [ "$DRY" -eq 1 ]; then
     echo "[dry-run] would: $SYSTEMCTL start $UNIT_NAME"
     echo "[dry-run] would: verify active, CapEff $([ "$WANT_HOP" -eq 1 ] && echo 0000000000001000 || echo 0000000000000000), NoNewPrivs 1, sensor_health on $SOCK for ${SETTLE_SECS}s with no EPERM/EACCES retune failure in any record and a confirmed channel"
     echo "[dry-run] would: on any failure or HUP/INT/TERM, restore $UNIT_BAK, rename $TARGET aside, restart the old unit and require it up for ${ROLLBACK_SETTLE_SECS}s"
+    [ "$WITH_WEB" -eq 1 ] && web_apply
     say "dry run complete; nothing was changed"
     exit 0
 fi
@@ -795,4 +1111,5 @@ say "migrated: $UNIT_NAME runs as sloth from $TARGET_HOST"
 say "  previous unit:  $UNIT_BAK"
 [ "$had_defaults" -eq 1 ] && say "  previous defaults: $DEFAULTS_BAK"
 say "  old data left in place at $SRC_DATA; delete it by hand once satisfied"
+[ "$WITH_WEB" -eq 1 ] && web_apply
 exit 0

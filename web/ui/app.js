@@ -740,6 +740,43 @@
     return s;
   }
 
+  // ── sloth.db freshness (#168) ─────────────────────────────────────
+  // Every DB-backed view says what its sloth.db is as of: a --sloth-db
+  // snapshot is as old as the moment it was taken, and with the rest of
+  // the page updating from the stream a frozen table otherwise looks
+  // live. The server decides "stale" (/api/health sloth_db_stale: older
+  // than sloth_db_stale_after_s while the stream is current); the page
+  // only says so.
+  var DB_VIEWS = ["devices", "wifi", "flows", "history", "lookup"];
+  var DB_AGE_IDS = ["d-dbage", "w-dbage", "f-dbage", "h-dbage", "l-dbage"];
+  function hhmm(ts) {
+    var d = new Date(ts * 1000);
+    function two(n) { return (n < 10 ? "0" : "") + n; }
+    return two(d.getHours()) + ":" + two(d.getMinutes());
+  }
+  function dbAgeText(h) {
+    if (!num(h.sloth_db_mtime)) return h.db && h.db !== "none" ? "database time unknown (sloth.db " + h.db + ")" : "";
+    var t = "database as of " + hhmm(h.sloth_db_mtime);
+    if (h.sloth_db_stale === true)
+      t += " - stale: " + dur(h.sloth_db_age_s) + " old while the live stream is current; these rows are as old as it is";
+    return t;
+  }
+  function dbAge(h) {
+    var t = dbAgeText(h);
+    var stale = h.sloth_db_stale === true && num(h.sloth_db_mtime);
+    for (var i = 0; i < DB_AGE_IDS.length; i++) {
+      var e = $(DB_AGE_IDS[i]);
+      e.textContent = t;
+      e.className = stale ? "sub dbage stale" : "sub dbage";
+    }
+  }
+  function dbFresh() {
+    fetch("/api/health", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(dbAge)
+      .catch(function () {});
+  }
+
   // ── sensitivity (§5.3: 1.5 to 4 sd, view only) ────────────────────
   // Kept in this browser only; a blocked or absent store just means the
   // default.
@@ -960,6 +997,7 @@
       // no --sloth-db to suggest.
       NOSQL = h.store === "memory";
       set("milestone", h.milestone);
+      dbAge(h);
       // The SQL box exists only when the server was started with
       // --web-allow-sql; otherwise it is never drawn and never asked.
       Q.on = !!(h.sql && typeof h.sql === "object");
@@ -975,6 +1013,8 @@
 
   live();
   setInterval(live, 5000);
+  // A shown DB-backed view's freshness line, kept current.
+  setInterval(function () { if (DB_VIEWS.indexOf(view) >= 0) dbFresh(); }, 30000);
 
   // ── views ─────────────────────────────────────────────────────────
   var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "flows", "history",
@@ -997,6 +1037,7 @@
     if (v === "flows") flows();
     if (v === "history") historyView();
     if (v === "lookup") $("l-q").focus();
+    if (DB_VIEWS.indexOf(v) >= 0) dbFresh();
     // The view is in the address (#flows), so a reload or a link opens
     // it again; replaceState, so Back leaves the page as before.
     // Only a sandboxed frame's refusal is expected; anything else is a

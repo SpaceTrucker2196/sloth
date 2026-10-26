@@ -95,8 +95,10 @@ setup() {   # setup NAME [extra ExecStart line, ending in a backslash]
     printf 'snapshot' > "$D/snapshot.txt"
     find "$D" -type f -exec chmod 600 {} +
     printf '#!/bin/sh\n' > "$ROOT/usr/local/bin/sloth"
+    printf '#!/bin/sh\n' > "$ROOT/usr/local/bin/slothweb"
     printf '#!/bin/sh\n' > "$ROOT/usr/local/sbin/sloth-monitor-up"
-    chmod 755 "$ROOT/usr/local/bin/sloth" "$ROOT/usr/local/sbin/sloth-monitor-up"
+    chmod 755 "$ROOT/usr/local/bin/sloth" "$ROOT/usr/local/bin/slothweb" \
+              "$ROOT/usr/local/sbin/sloth-monitor-up"
     printf 'research' > "$ROOT/usr/local/share/sloth/research.db"
     printf 'Name:\tsloth\nCapEff:\t0000000000001000\nNoNewPrivs:\t1\n' \
         > "$ROOT/proc/4242/status"
@@ -104,6 +106,7 @@ setup() {   # setup NAME [extra ExecStart line, ending in a backslash]
     : > "$ROOT/run/sloth/sloth.sock"
     echo active > "$STATE/active"
     health_line 6 0 > "$STATE/health"
+    web_health wal connected > "$STATE/web_health"
 
     # Knobs, each a file in \$STATE: new_dies (the hardened unit never
     # comes up), old_loops (the old unit restart-loops: a new MainPID on
@@ -111,10 +114,26 @@ setup() {   # setup NAME [extra ExecStart line, ending in a backslash]
     # rundir (systemd's RuntimeDirectory=: stopping the hardened unit
     # removes run/sloth, starting it makes it, and the old unit fails to
     # start without it, as its bind would).
+    # slothweb.service keeps its own state: web_active, web_enabled,
+    # web_dies (it never comes up).
     cat > "$STUB/systemctl" <<STUBEOF
 #!/bin/sh
 echo "systemctl \$*" >> "$LOG"
 hardened() { grep -q '^User=sloth' "$ROOT/$UNIT_REL"; }
+for u; do :; done
+if [ "\$u" = slothweb.service ]; then
+    case "\$1" in
+        is-active) [ -e "$STATE/web_active" ] ;;
+        is-enabled) [ -e "$STATE/web_enabled" ] ;;
+        enable|reenable) : > "$STATE/web_enabled" ;;
+        disable) rm -f "$STATE/web_enabled" ;;
+        stop) rm -f "$STATE/web_active" ;;
+        start|restart) [ -e "$STATE/web_dies" ] || : > "$STATE/web_active" ;;
+        show) echo 777 ;;
+        *) exit 0 ;;
+    esac
+    exit
+fi
 case "\$1" in
     is-active) [ "\$(cat "$STATE/active")" = active ] ;;
     is-enabled) exit 0 ;;
@@ -155,6 +174,7 @@ STUBEOF
     # would be: the tool has to reconnect, not give up.
     cat > "$STUB/socat" <<STUBEOF
 #!/bin/sh
+echo "socat \$*" >> "$LOG"
 # The tool kills its reader at the end of a verify window; a plain
 # "echo > file" killed between its truncate and its write leaves the
 # counter empty (seen in CI on 2214b59), so it is written aside and
@@ -170,6 +190,20 @@ cat "$STATE/health"
 [ -e "$STATE/socat_holds" ] && exec sleep 8
 exit 0
 STUBEOF
+    # slothweb's /api/health, as $STATE/web_health holds it; no file, no
+    # answer. ss reports a listener when $STATE/ss holds one.
+    cat > "$STUB/curl" <<STUBEOF
+#!/bin/sh
+echo "curl \$*" >> "$LOG"
+[ -e "$STATE/web_active" ] && [ -f "$STATE/web_health" ] || exit 7
+cat "$STATE/web_health"
+STUBEOF
+    cat > "$STUB/ss" <<STUBEOF
+#!/bin/sh
+echo "ss \$*" >> "$LOG"
+[ -f "$STATE/ss" ] && cat "$STATE/ss"
+exit 0
+STUBEOF
     chmod 755 "$STUB"/*
 }
 
@@ -181,6 +215,7 @@ run() {   # run [args]; output to $W/out, status in $RC
     ROLLBACK_SETTLE_SECS=1 TMPDIR=$W \
     SYSTEMCTL=$STUB/systemctl SYSUSERS=$STUB/systemd-sysusers \
     GETENT=$STUB/getent CHOWN=$STUB/chown SOCAT=$STUB/socat \
+    CURL=$STUB/curl SS=$STUB/ss WEB_VERIFY_SECS=2 \
     CP=${CP_CMD:-cp} \
     $TOOL_SH "$TOOL" "$@" > "$W/out" 2>&1 &
     TOOL_PID=$!
@@ -200,10 +235,24 @@ health_line() {
     printf '{"type":"sensor_health","ts":2,"chan_requested":6,"chan_confirmed":%s,"chan_confirmed_ok":1,"chan_retune_failures":%s%s,"hop_channels":13}\n' "$1" "$2" "$rk"
 }
 
+# One /api/health body: db_mode (wal, immutable, or null) and socket
+# (connected, retrying, ...), the members step 6 reads.
+web_health() {
+    m="\"$1\""; [ "$1" = null ] && m=null
+    db='"db":"open","db_schema":7,"db_rows":9,"db_path":"/var/lib/sloth/sloth.db"'
+    [ "$1" = null ] && db='"db":"error","db_schema":null,"db_rows":null,"db_path":"/var/lib/sloth/sloth.db"'
+    printf '{"service":"slothweb","milestone":"M6","uptime_s":3,"socket":"%s","socket_spec":"unix:/run/sloth/sloth.sock",%s,"db_mode":%s,"db_error":null}\n' "$2" "$db" "$m"
+}
+
 tree_hash() {
     (cd "$1" && { find . -printf '%p %y %m %s\n' | LC_ALL=C sort;
                   find . -type f -exec sha256sum {} + | LC_ALL=C sort -k2; }) \
         | sha256sum | cut -d' ' -f1
+}
+
+# The unit's ExecStart as systemd reads it: continuations joined.
+logical_execstart() {
+    awk '{ if (sub(/\\$/, "")) printf "%s ", $0; else print }' "$1" | grep '^ExecStart='
 }
 
 file_sums() { (cd "$1" && find . -type f -exec sha256sum {} + | LC_ALL=C sort -k2); }
@@ -559,6 +608,219 @@ holders() {
     done
 }
 check '[ -z "$(holders)" ]' "the socket reader outlived the tool: $(holders)"
+
+# ── 11. --data-socket-unix: the owner's tcp: -> unix: move (#153) ────────
+# The reference host streams on tcp:127.0.0.1:8765 for slothweb. Without
+# the flag that stays a refusal, word for word (the refusal cases above,
+# and this one on the real spec); with it the hardened unit's unix socket
+# replaces it and a rollback brings the tcp: unit back byte for byte.
+TCP_PREP='sed -i "s|--data-socket unix:/run/sloth.sock --no-discovery|--data-socket tcp:127.0.0.1:8765 --no-discovery|" "$ROOT/$UNIT_REL"'
+PREP=$TCP_PREP
+refusal tcp-live-spec "REFUSED: --data-socket tcp:127.0.0.1:8765: the hardened unit allows AF_UNIX only (RestrictAddressFamilies); a tcp: socket is an owner decision, not a migration"
+PREP=''
+
+CASE=tcp-dry-run
+setup tcp-dry
+eval "$TCP_PREP"
+h0=$(tree_hash "$ROOT")
+run --dry-run --data-socket-unix
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check '[ "$(tree_hash "$ROOT")" = "$h0" ]' "the scratch root changed under --dry-run --data-socket-unix"
+check '[ -z "$(mutating_calls)" ]' "mutating calls under --dry-run: $(mutating_calls)"
+check 'grep -qF "data socket: --data-socket tcp:127.0.0.1:8765 becomes --data-socket unix:/run/sloth/sloth.sock --no-discovery (--data-socket-unix)" "$W/out"' "the conversion is not printed: $(cat "$W/out")"
+check 'grep -qF "socket:      tcp:127.0.0.1:8765 -> unix:/run/sloth/sloth.sock" "$W/out"' "the preflight summary lacks the socket move: $(cat "$W/out")"
+
+CASE=tcp-convert
+setup tcp-convert
+eval "$TCP_PREP"
+cp "$ROOT/$UNIT_REL" "$W/old.unit"
+run --data-socket-unix
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check 'cmp -s "$REPO/packaging/systemd/sloth-sensor.service" "$ROOT/$UNIT_REL"' "installed unit differs from packaging/"
+check 'logical_execstart "$ROOT/$UNIT_REL" | grep -qF -- "--data-socket unix:/run/sloth/sloth.sock --no-discovery"' "the hardened ExecStart lacks the unix socket and --no-discovery"
+check '! logical_execstart "$ROOT/$UNIT_REL" | grep -q "tcp:" && ! grep -v "^#" "$ROOT/etc/default/sloth" | grep -q "tcp:"' "a tcp: spec was carried: $(grep -v "^#" "$ROOT/etc/default/sloth" | grep "tcp:")"
+check 'grep -qx -- "$EXPECT_ARGS" "$ROOT/etc/default/sloth"' "SLOTH_ARGS line: $(grep SLOTH_ARGS= "$ROOT/etc/default/sloth" 2>&1)"
+check 'cmp -s "$W/old.unit" "$ROOT/$UNIT_REL.bak-migrate-T1"' "the tcp: unit was not backed up verbatim"
+# Verified on the new unix socket, as the invoking user, never on tcp:.
+check 'grep -qx "socat -u UNIX-CONNECT:$ROOT/run/sloth/sloth.sock STDOUT" "$LOG"' "verify did not read the unix socket: $(grep ^socat "$LOG")"
+check '! grep -q "^socat .*TCP" "$LOG"' "verify read a tcp: socket: $(grep ^socat "$LOG")"
+check 'grep -q "verify: [0-9]* sensor_health records over 2s" "$W/out"' "health not verified: $(cat "$W/out")"
+check 'grep -qF "must become --socket unix:/run/sloth/sloth.sock and run as sloth or root" "$W/out"' "the reader move is not said: $(cat "$W/out")"
+
+CASE=tcp-idempotent
+h1=$(tree_hash "$ROOT")
+: > "$LOG"
+STAMP=T2 run --data-socket-unix
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check 'grep -q "already migrated and verified" "$W/out"' "second run did not verify: $(cat "$W/out")"
+check '[ "$(tree_hash "$ROOT")" = "$h1" ]' "second run changed the scratch root"
+check '[ -z "$(mutating_calls)" ]' "second run made mutating calls: $(mutating_calls)"
+
+CASE=tcp-rollback
+setup tcp-rollback
+eval "$TCP_PREP"
+health_line 6 3 > "$STATE/health"
+cp "$ROOT/$UNIT_REL" "$W/old.unit"
+run --data-socket-unix
+check '[ "$RC" -eq 1 ]' "exit $RC, want 1: $(cat "$W/out")"
+check 'cmp -s "$W/old.unit" "$ROOT/$UNIT_REL"' "the tcp: unit was not restored verbatim"
+check 'grep -qF -- "--data-socket tcp:127.0.0.1:8765" "$ROOT/$UNIT_REL"' "the restored unit lost its tcp: socket"
+check '[ ! -e "$ROOT/etc/default/sloth" ]' "a defaults file was left where there was none"
+check '[ "$(cat "$STATE/active")" = active ]' "the old service was not restarted"
+check 'grep -q "rolled back; sloth-sensor.service runs the previous unit" "$W/out"' "rollback not reported: $(cat "$W/out")"
+
+# ── 12. --with-slothweb (#153 part B) ────────────────────────────────────
+WEB_REL=etc/systemd/system/slothweb.service
+web_calls() { grep -E '^systemctl [a-z-]+ .*slothweb\.service' "$LOG"; }
+sensor_after_verify() {   # sensor unit calls after its verify passed
+    awk '/^systemctl show -p MainPID/ { seen = 1 } seen' "$LOG" \
+        | grep -E '^systemctl (stop|start|restart|daemon-reload|reenable|enable|disable) sloth-sensor\.service'
+}
+
+CASE=web-dry-run
+setup web-dry
+eval "$TCP_PREP"
+# An old slothweb running, so a health request the dry run made would
+# be answered and logged; with none running it would never reach curl
+# and the check below would pass for nothing.
+mkdir -p "$ROOT/etc/systemd/system"
+printf '[Service]\nExecStart=/opt/old/slothweb\n' > "$ROOT/$WEB_REL"
+: > "$STATE/web_active"; : > "$STATE/web_enabled"
+h0=$(tree_hash "$ROOT")
+run --dry-run --data-socket-unix --with-slothweb
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check '[ "$(tree_hash "$ROOT")" = "$h0" ]' "the scratch root changed under --dry-run --with-slothweb"
+check '[ -z "$(mutating_calls)" ]' "mutating calls under --dry-run: $(mutating_calls)"
+check 'grep -q "would: install the slothweb unit at $ROOT/$WEB_REL" "$W/out"' "slothweb install not announced: $(cat "$W/out")"
+check 'grep -q "would: install $ROOT/etc/default/slothweb from" "$W/out"' "slothweb defaults not announced"
+check 'grep -qF "would: verify slothweb.service active and http://127.0.0.1:8770/api/health (asked from 127.0.0.1)" "$W/out"' "slothweb verify not announced: $(cat "$W/out")"
+check '! grep -q "^curl" "$LOG"' "a dry run asked slothweb"
+
+CASE=web-apply
+setup web-apply
+eval "$TCP_PREP"
+run --data-socket-unix --with-slothweb
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check 'cmp -s "$REPO/packaging/systemd/sloth-sensor.service" "$ROOT/$UNIT_REL"' "the sensor unit is not the hardened one"
+check 'cmp -s "$REPO/packaging/systemd/slothweb.service" "$ROOT/$WEB_REL"' "installed slothweb unit differs from packaging/"
+check 'cmp -s "$REPO/packaging/default/slothweb" "$ROOT/etc/default/slothweb"' "slothweb defaults not installed from packaging/"
+check '[ -e "$STATE/web_active" ] && [ -e "$STATE/web_enabled" ]' "slothweb not enabled and active"
+check 'grep -qx "curl -fsS --max-time 5 --interface 127.0.0.1 http://127.0.0.1:8770/api/health" "$LOG"' "health not asked on the loopback bind: $(grep ^curl "$LOG")"
+check 'grep -q "slothweb: slothweb.service runs as sloth; http://127.0.0.1:8770/api/health answers, sloth.db wal, stream connected" "$W/out"' "slothweb not verified: $(cat "$W/out")"
+# The sensor first: slothweb is touched only after the sensor verified.
+first_web=$(grep -n "slothweb.service" "$LOG" | grep -v "is-active\|is-enabled" | head -n 1 | cut -d: -f1)
+sensor_start=$(grep -n "^systemctl start sloth-sensor.service" "$LOG" | tail -n 1 | cut -d: -f1)
+check '[ -n "$first_web" ] && [ -n "$sensor_start" ] && [ "$first_web" -gt "$sensor_start" ]' "slothweb changed before the sensor started: $(tr '\n' , < "$LOG")"
+
+CASE=web-idempotent
+h1=$(tree_hash "$ROOT")
+: > "$LOG"
+STAMP=T2 run --data-socket-unix --with-slothweb
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check 'grep -q "already the hardened slothweb unit, enabled and active; verifying only" "$W/out"' "second run did not detect slothweb: $(cat "$W/out")"
+check 'grep -q "slothweb: verified: " "$W/out"' "second run did not verify slothweb: $(cat "$W/out")"
+check '[ "$(tree_hash "$ROOT")" = "$h1" ]' "second run changed the scratch root"
+check '[ -z "$(mutating_calls)" ]' "second run made mutating calls: $(mutating_calls)"
+
+# A failed slothweb is rolled back alone: its unit and the defaults this
+# run wrote go, it is left disabled and stopped as it was, and the
+# sensor, verified already, is neither stopped nor restarted.
+web_fails() {   # web_fails NAME EXPECTED-FRAGMENT (PREP sets it up)
+    CASE=web-fails-$1
+    setup "web-fails-$1"
+    eval "$PREP"
+    run --with-slothweb
+    check '[ "$RC" -eq 3 ]' "exit $RC, want 3: $(cat "$W/out")"
+    WANT=$2
+    check 'grep -qF -- "$WANT" "$W/out"' "message lacks '$WANT': $(cat "$W/out")"
+    check 'grep -q "rolling back slothweb only; sloth-sensor.service stays migrated and verified" "$W/out"' "not a slothweb-only rollback: $(cat "$W/out")"
+    check 'cmp -s "$REPO/packaging/systemd/sloth-sensor.service" "$ROOT/$UNIT_REL"' "the sensor's hardened unit was rolled back too"
+    check '[ "$(cat "$STATE/active")" = active ]' "the sensor is not running"
+    check '[ -z "$(sensor_after_verify)" ]' "the sensor was touched after it verified: $(sensor_after_verify)"
+    check '[ ! -e "$ROOT/$WEB_REL" ]' "a slothweb unit was left where there was none"
+    check '[ ! -e "$ROOT/etc/default/slothweb" ]' "a slothweb defaults file was left where there was none"
+    check '[ ! -e "$STATE/web_active" ] && [ ! -e "$STATE/web_enabled" ]' "slothweb left enabled or running"
+    check 'grep -q "slothweb rolled back to its state before this run" "$W/out"' "slothweb rollback not reported: $(cat "$W/out")"
+}
+PREP='web_health null connected > "$STATE/web_health"'
+web_fails db-not-open "sloth.db is not open (db \"error\""
+PREP='web_health wal retrying > "$STATE/web_health"'
+web_fails stream-down "the stream is not connected (socket \"retrying\""
+PREP='web_health rollback connected > "$STATE/web_health"'
+web_fails db-mode "db_mode \"rollback\", not wal or immutable"
+PREP=': > "$STATE/web_dies"'
+web_fails never-active "slothweb.service is not active after 2s"
+PREP='rm "$STATE/web_health"'
+web_fails no-answer "http://127.0.0.1:8770/api/health after 2s: no answer"
+PREP=''
+
+# An operator's slothweb unit and defaults are put back, and the defaults
+# are never replaced, in success or failure. The Tailscale bind is asked
+# on its own address, from loopback.
+CASE=web-keeps-defaults
+setup web-keeps
+mkdir -p "$ROOT/etc/default"
+printf 'SLOTHWEB_ARGS=--web-bind 100.64.0.10:8770 --web-allow-remote --web-allow 100.64.0.20/32\n' > "$ROOT/etc/default/slothweb"
+printf '[Service]\nExecStart=/opt/old/slothweb\n' > "$ROOT/$WEB_REL"
+cp "$ROOT/etc/default/slothweb" "$W/old.defaults"
+cp "$ROOT/$WEB_REL" "$W/old.web"
+: > "$STATE/web_active"; : > "$STATE/web_enabled"
+web_health wal retrying > "$STATE/web_health"
+run --with-slothweb
+check '[ "$RC" -eq 3 ]' "exit $RC, want 3: $(cat "$W/out")"
+check 'grep -qx "curl -fsS --max-time 5 --interface 127.0.0.1 http://100.64.0.10:8770/api/health" "$LOG"' "health not asked on the bound address from loopback: $(grep ^curl "$LOG")"
+check 'cmp -s "$W/old.web" "$ROOT/$WEB_REL"' "the previous slothweb unit was not restored"
+check 'cmp -s "$W/old.defaults" "$ROOT/etc/default/slothweb"' "the operator's slothweb defaults were changed"
+check '[ -e "$STATE/web_active" ] && [ -e "$STATE/web_enabled" ]' "the previous slothweb was not started again"
+check '[ -f "$ROOT/$WEB_REL.rolled-back-T1" ] && [ ! -e "$ROOT/$WEB_REL.bak-migrate-T1" ]' "the slothweb backup was not renamed once restored"
+CASE=web-keeps-defaults-rerun
+web_health immutable connected > "$STATE/web_health"
+: > "$LOG"
+STAMP=T5 run --with-slothweb
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check 'cmp -s "$W/old.defaults" "$ROOT/etc/default/slothweb"' "the operator's slothweb defaults were replaced"
+check 'grep -qF "keeping $ROOT/etc/default/slothweb as it is (SLOTHWEB_ARGS=--web-bind 100.64.0.10:8770" "$W/out"' "keeping the defaults not said: $(cat "$W/out")"
+check 'cmp -s "$REPO/packaging/systemd/slothweb.service" "$ROOT/$WEB_REL"' "slothweb unit not installed on the rerun"
+check 'cmp -s "$W/old.web" "$ROOT/$WEB_REL.bak-migrate-T5"' "the previous slothweb unit was not backed up"
+check 'grep -q "sloth.db immutable, stream connected" "$W/out"' "immutable not accepted: $(cat "$W/out")"
+
+# Refused in preflight, before the sensor is touched.
+web_refusal() {   # web_refusal NAME EXPECTED-FRAGMENT (PREP sets it up)
+    CASE=web-refuse-$1
+    setup "web-refuse-$1"
+    eval "$PREP"
+    h=$(tree_hash "$ROOT")
+    run --with-slothweb
+    check '[ "$RC" -eq 2 ]' "exit $RC, want 2: $(cat "$W/out")"
+    WANT=$2
+    check 'grep -qF -- "$WANT" "$W/out"' "message lacks '$WANT': $(cat "$W/out")"
+    check '[ "$(tree_hash "$ROOT")" = "$h" ]' "a refusal changed the scratch root"
+    check '[ -z "$(mutating_calls)" ]' "a refusal made mutating calls: $(mutating_calls)"
+}
+PREP='rm "$ROOT/usr/local/bin/slothweb"'
+web_refusal no-binary "no executable $SCRATCH/web-refuse-no-binary/root/usr/local/bin/slothweb"
+PREP='echo "LISTEN 0 64 127.0.0.1:8770 0.0.0.0:*" > "$STATE/ss"'
+web_refusal port-busy "port 8770 already has a listener and slothweb.service is not running"
+PREP='mkdir -p "$ROOT/etc/default" && echo "SLOTHWEB_ARGS=--socket tcp:127.0.0.1:8765" > "$ROOT/etc/default/slothweb"'
+web_refusal fixed-path "gives --socket; slothweb.service fixes it"
+PREP='mkdir -p "$ROOT/etc/default" && echo "SLOTHWEB_ARGS=\"--web-bind 127.0.0.1:8770\"" > "$ROOT/etc/default/slothweb"'
+web_refusal quoted "has quoting, a variable or a specifier"
+PREP=''
+
+# The dry run comes before the hand-started slothweb is stopped
+# (deployment.md §4.4): a busy port is said, as the refusal the real run
+# would make, and the dry run goes on, changing nothing.
+CASE=web-dry-port-busy
+setup web-dry-port-busy
+eval "$TCP_PREP"
+echo "LISTEN 0 64 127.0.0.1:8770 0.0.0.0:*" > "$STATE/ss"
+h0=$(tree_hash "$ROOT")
+run --dry-run --data-socket-unix --with-slothweb
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check 'grep -qF "note: a real run would REFUSE: port 8770 already has a listener and slothweb.service is not running" "$W/out"' "the busy port is not said: $(cat "$W/out")"
+check 'grep -q "dry run complete; nothing was changed" "$W/out"' "the dry run did not finish: $(cat "$W/out")"
+check '[ "$(tree_hash "$ROOT")" = "$h0" ]' "the scratch root changed under --dry-run with the port busy"
+check '[ -z "$(mutating_calls)" ]' "mutating calls under --dry-run: $(mutating_calls)"
 
 echo "deploy-test: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

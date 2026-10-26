@@ -99,6 +99,8 @@ main { padding: 14px 16px; min-width: 0; flex: 1; }
 .kpi { font-size: 26px; color: var(--tui-bright); line-height: 1.25; overflow-wrap: anywhere; }
 .kpi.stale { color: var(--muted); }
 .sub { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+/* #168: a DB-backed view whose sloth.db is older than the stream. */
+.dbage.stale { color: var(--sev-warn); font-weight: bold; }
 .health-ok { color: var(--tui-bright); }
 .health-unknown { color: var(--muted); }
 .health-bad { color: var(--sev-warn); }
