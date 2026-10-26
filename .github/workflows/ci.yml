@@ -67,6 +67,16 @@ jobs:
       - name: Follow slothweb's README quick start
         run: make web-demo && make web-quickstart-check
 
+      # packaging/bin/sloth-migrate-sensor (#153) runs as root on the
+      # owner's sensor and moves its evidence; its shell tests drive it
+      # against a fake root with stub systemctl/sysusers, and shellcheck
+      # lints all three scripts. The Makefile skips the lint when
+      # shellcheck is absent, so CI installs it to make the lint real.
+      - name: Test the sensor migration tool
+        run: |
+          sudo apt-get install -y shellcheck
+          make deploy-test
+
       # The capture path is not in `make test`: sloth_test is built
       # without WITH_PCAP, so on_packet() and every parser it reaches
       # were untested and unsanitised until #95 added this binary.
