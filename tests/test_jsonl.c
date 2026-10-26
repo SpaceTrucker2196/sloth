@@ -1208,6 +1208,71 @@ static void test_emit_sensor_health_measures_a_configured_pcap_dir(void) {
     alert_pcap_set_dir(NULL);
 }
 
+/* #166: the --pcap-dir age sweep's counters. Present only with a
+ * --pcap-dir, so a run without one writes exactly what it wrote before
+ * (the replay golden has none). */
+static time_t sweep_fixed_wall(void) { return 1800000000; }
+
+static void test_emit_sensor_health_omits_sweep_without_pcap_dir(void) {
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    alert_pcap_set_dir(NULL);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    ASSERT(contains(body, "\"pcap_dir_free_mb\":-1"));   /* the record ran */
+    ASSERT(!contains(body, "\"pcap_retain_days\""));
+    ASSERT(!contains(body, "\"pcap_swept\""));
+    ASSERT(!contains(body, "\"pcap_sweep_errors\""));
+}
+
+/* A sweep clearing a backlog moves its count on every step. The record
+ * says so on the first removal (a band crossing) and not again while
+ * the count stays in its decade. */
+static void test_sensor_health_sweep_count_does_not_churn(void) {
+    sloth_clock_test_set(NULL, sweep_fixed_wall);
+    char dir[] = "/tmp/sloth_swh_XXXXXX";
+    ASSERT(mkdtemp(dir) != NULL);
+    ASSERT_EQ(alert_pcap_set_dir(dir), 0);
+    for (int i = 0; i < 5; i++) {
+        char p[128];
+        snprintf(p, sizeof(p), "%s/alert_20261001_00000%d_X.pcap", dir, i);
+        int fd = open(p, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        ASSERT(fd >= 0);
+        if (fd >= 0) close(fd);
+        struct timespec ts[2];
+        ts[0].tv_sec = ts[1].tv_sec = sweep_fixed_wall() - 30 * 86400;
+        ts[0].tv_nsec = ts[1].tv_nsec = 0;
+        ASSERT_EQ(utimensat(AT_FDCWD, p, ts, 0), 0);
+    }
+    open_fresh();
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    jsonl_emit_sensor_health(&s);                 /* line 1 */
+    unsigned long long last = 0;
+    for (int i = 0; i < 100 && alert_pcap_swept() < 5; i++) {
+        alert_pcap_sweep_step(1);                 /* one entry per step */
+        if (alert_pcap_swept() != last) {
+            last = alert_pcap_swept();
+            jsonl_emit_sensor_health(&s);         /* 0 -> 1 only is news */
+        }
+    }
+    jsonl_close();
+    ASSERT_EQ((long long)alert_pcap_swept(), 5);
+    ASSERT_EQ(count_file_lines(tmp_path), 2);
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (body) {
+        ASSERT(contains(body, "\"pcap_retain_days\":14"));
+        ASSERT(contains(body, "\"pcap_swept\":0"));
+        ASSERT(contains(body, "\"pcap_sweep_errors\":0"));
+        ASSERT_EQ(count_occ(body, "\"pcap_swept\":"), 2);
+    }
+    alert_pcap_set_dir(NULL);
+    rmdir(dir);
+    sloth_clock_test_set(NULL, NULL);
+}
+
 static void test_emit_sensor_health_channel_fields(void) {
     /* Slice 1's requested-vs-confirmed pair reaching a consumer: the
      * record must carry the CONFIRMED (old) channel and a failure count,
@@ -2746,6 +2811,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_emit_sensor_health_on_empty_state);
     RUN_TEST(test_emit_sensor_health_reports_pcap_dir_headroom);
     RUN_TEST(test_emit_sensor_health_measures_a_configured_pcap_dir);
+    RUN_TEST(test_emit_sensor_health_omits_sweep_without_pcap_dir);
+    RUN_TEST(test_sensor_health_sweep_count_does_not_churn);
     RUN_TEST(test_emit_sensor_health_channel_fields);
     RUN_TEST(test_emit_sensor_health_confirmed_channel_is_ok);
     RUN_TEST(test_emit_sensor_health_retune_reason);

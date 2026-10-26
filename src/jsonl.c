@@ -2052,6 +2052,15 @@ static const char *count_band(uint64_t n) {
     return "1000+";
 }
 
+/* A count as its decade, 0 for none and 1 for 1-9 up to 7 for a
+ * million and more: the shape a monotonic tally enters the change-only
+ * signature in. A crossing is news; the next file swept is not. */
+static int decade_band(unsigned long long n) {
+    int b = 0;
+    while (n > 0 && b < 7) { b++; n /= 10; }
+    return b;
+}
+
 void jsonl_emit_sensor_health(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
     time_t now = sloth_wall();
@@ -2133,6 +2142,12 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * so a link committing never writes a line at that moment (the
          * moment would tell a consumer which address pair it was). */
         int      ble_rot_on;
+        /* #166, the --pcap-dir age sweep: decade bands of the removed
+         * and error tallies, never the counts. A sweep clearing a
+         * backlog removes up to a budget's worth of files per tick, so
+         * the raw count would sign a new line on every one of them. -1
+         * without --pcap-dir. */
+        int      pcap_swept_band, pcap_sweep_err_band;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -2237,6 +2252,10 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.btcap_drop_any      = s->btcap.drop > 0;
     sig.btcap_truncated_any = s->btcap.truncated > 0;
     sig.ble_rot_on           = s->ble_rot.enabled != 0;
+    const int pcap_on = alert_pcap_enabled();
+    sig.pcap_swept_band     = pcap_on ? decade_band(alert_pcap_swept()) : -1;
+    sig.pcap_sweep_err_band = pcap_on
+        ? decade_band((unsigned long long)alert_pcap_sweep_errors()) : -1;
 
     /* Singleton: one fixed key, so the slot is this record's alone. */
     static const char health_key[] = "sensor";
@@ -2504,6 +2523,18 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
                count_band(r->hints_payload + r->hints_timing));
         kv_str(buf, LINEBUF, &off, "ble_rot_poisoned",       count_band(r->poisoned));
         kv_str(buf, LINEBUF, &off, "ble_rot_seam_evictions", count_band(r->seam_evictions));
+    }
+    /* #166: the --pcap-dir age sweep, ONLY while --pcap-dir is set, so
+     * a run without it writes exactly what it wrote before. The exact
+     * counts ride every line; the signature above carries their decade.
+     * pcap_retain_days 0 is "kept forever" (pcap.retain_days=0), which is
+     * why the window is here and not only in `tuned`: a consumer needs
+     * to see the sweep is off, not infer it from a missing knob.
+     * Appended. */
+    if (pcap_on) {
+        kv_int(buf, LINEBUF, &off, "pcap_retain_days",  alert_pcap_retain_days());
+        kv_int(buf, LINEBUF, &off, "pcap_swept",        (long long)alert_pcap_swept());
+        kv_int(buf, LINEBUF, &off, "pcap_sweep_errors", alert_pcap_sweep_errors());
     }
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);

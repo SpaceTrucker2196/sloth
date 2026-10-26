@@ -5132,3 +5132,15 @@ report events.
   dashed edge, not by dimming; `utf8()` and `lowerAscii()` are pinned
   and ported. `docs/web-ui-spec.md` §8.1 amended to point at the
   served tokens.
+- 2026-10-26 — [[retention]] §2d, [[cli-reference]], [[jsonl-schema]],
+  [[pcap-export]]: the `--pcap-dir` age sweep (#166, owner ruling
+  2026-10-26: keep alert pcaps two weeks). `--tune pcap.retain_days`
+  (default 14, 0..3650, 0 = forever); swept at startup and hourly, at
+  most 1024 directory entries per poll tick with the pass resuming on
+  the next; only `alert_YYYYMMDD_HHMMSS_<slug>[_N].pcap` and the
+  manifest, regular files by `fstatat(AT_SYMLINK_NOFOLLOW)`, removed by
+  `unlinkat()` on the pinned dirfd. `sensor_health` gains
+  `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` while
+  `--pcap-dir` is set, decade-banded in the signature. The #92 evidence
+  pcaps in `--eapol-dir` were already covered by `eapol_sweep()` on the
+  7-day handshake window, and stay there.

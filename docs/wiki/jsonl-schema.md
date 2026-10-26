@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
+**Last updated**: 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
 and `drained`; the `beacon-overflow` `BEACONING` finding; IPv4-mapped
 beaconing peers keyed as IPv4), 2026-10-23 (#165 audit: a PTR `answer`
 is whole up to 63 bytes, for a PTR question only; a target that would
@@ -764,7 +764,7 @@ does not know the type ignores it, as it would any other.
 | `storage_failures` | total write failures across every on-disk sink, lifetime (#92) — "I detected something but could not persist the evidence", which used to be stderr-only or, for EAPOL, a view-header count nobody piping this stream would ever see |
 | `storage_jsonl_failures`, `storage_pcap_failures`, `storage_eapol_failures` | the same total broken out per sink: the `-o` log, per-alert pcap export, and the EAPOL 22000/handshake-pcap export. Since #92 slice 3 the pcap and EAPOL counts also include a failed append to that directory's hashed manifest ([[pcap-export]] §5) — the record of the evidence failed, the evidence itself did not. No new field |
 | `pcap_dir_free_mb` | MB free on the filesystem holding `--pcap-dir`, or **-1 for not measured** (no `--pcap-dir`, or `fstatvfs` failed). -1 rather than 0 on purpose: 0 free would read as a full filesystem on every sensor that exports no pcaps, which is most of them (#96) |
-| `pcap_dir_free_inodes` | free inodes on that same filesystem, or **-1 for not measured** — which here also covers a filesystem with no fixed inode table (btrfs and most network filesystems report `f_files == 0`, which is not the same as "none left"). **Read this before `pcap_dir_free_mb`, not after.** `--pcap-dir` is the only operator-named sink with no cap and no sweep: `alert_pcap_dump()` writes one file per firing and never removes one. It therefore exhausts *inodes* long before bytes, and inode exhaustion surfaces as `ENOSPC` with free space still showing. Measured on the author's own monitor host, 2026-10-13: 15,919,490 alert pcaps, 77 GB, ~93% of the filesystem's inodes consumed — while `df -h` read 39% used the whole time. A consumer alerting on the MB figure alone would have called that sensor healthy (#96) |
+| `pcap_dir_free_inodes` | free inodes on that same filesystem, or **-1 for not measured** — which here also covers a filesystem with no fixed inode table (btrfs and most network filesystems report `f_files == 0`, which is not the same as "none left"). **Read this before `pcap_dir_free_mb`, not after.** Before #166 `--pcap-dir` was the only operator-named sink with no cap and no sweep: `alert_pcap_dump()` wrote one file per firing and never removed one. It therefore exhausted *inodes* long before bytes, and inode exhaustion surfaces as `ENOSPC` with free space still showing. Measured on the author's own monitor host, 2026-10-13: 15,919,490 alert pcaps, 77 GB, ~93% of the filesystem's inodes consumed — while `df -h` read 39% used the whole time. A consumer alerting on the MB figure alone would have called that sensor healthy (#96) |
 | `scope` | launch-time capture scope (#85): `none` (no `--iface`/`--monitor-only`), `enforced` (every requested interface pinned and still the same interface), `no_capture` (scope requested, no live data-stream worker: no handle, or the capture thread has exited — `capture_exit` says why; before 2026-10-19 a worker that died behind a still-open handle read `enforced`), `degraded` (at least one requested interface failed closed) |
 | `scope_not_enforced` | `1` when a scope was requested and `scope` is not `enforced`. This flag means in-scope traffic is not being observed. **It does not mean nothing out of scope was collected.** The allow-list governs the **IP capture stream only**; the 802.11 monitor stream is deliberately outside it (owner decision, 2026-10-04), so `probe_open()` opens whatever monitor radio it discovers at startup regardless of `--iface`, and 802.11 frames from that radio are collected and exported whatever this flag says. The one place the allow-list does reach the radio is an interactive `[m]` retarget, which is refused for an interface outside a non-empty list (#85). A consumer that needs "only these interfaces" must therefore scope the monitor radio out of band — `--monitor-only`, or no monitor-capable adapter present |
 | `scope_requested` | allow-list entries (`--iface` names plus the `--monitor-only` radio) |
@@ -868,6 +868,22 @@ still says some link committed in that interval. What a band cannot say
 is which pair, or whether it rested on a token; exact counts could,
 matched against the `ble_device` records' `first_seen` (a link commits
 10 s after the newer address's first report).
+
+**`--pcap-dir` age sweep** (#166). Appended last, **only while
+`--pcap-dir` is set**; a run without it writes none of them (the replay
+golden has no `--pcap-dir`).
+
+| Field | Meaning |
+|---|---|
+| `pcap_retain_days` | the `pcap.retain_days` window in days; **0 = the sweep is off** and alert pcaps are kept forever |
+| `pcap_swept` | alert pcaps (and `--pcap-dir` manifests) the sweep has deleted this run |
+| `pcap_sweep_errors` | entries the sweep could not honour the window for: unreadable directory, failed stat, a non-regular file at an artifact name (left in place, never followed), a failed unlink. Not a write failure, so not in `storage_pcap_failures` |
+
+The signature takes the two counts as decade bands (0, 1-9, 10-99, …
+1M+), not as themselves: a sweep clearing a backlog removes up to 1024
+entries a tick, and the raw count would write a line on every one. The
+exact counts ride every emitted line and the heartbeat. See
+[[retention]] §2d.
 
 The hints are not a census of synchronising advertisers. Payload links
 come only from MS-CDP, Apple Handoff and Fast Pair account data, so few

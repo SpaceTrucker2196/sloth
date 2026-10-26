@@ -11,6 +11,7 @@
  * drift apart. */
 #include "sloth.h"
 #include "action_snoop.h"
+#include "alert_pcap.h"
 #include "camera_join.h"
 #include "beacon_detect.h"
 #include "ble_detect.h"
@@ -118,6 +119,13 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
      * captures a day instead of 86,400. 0 disables it. */
     { "pcap.min_severity",          2,   0,   2,      "0=any alert, 1=WARN and up, 2=CRIT only" },
     { "pcap.key_cooldown_secs",     3600, 0, 86400,   "seconds before the same alert key exports again, 0 for none" },
+    /* #166, owner ruling 2026-10-26: alert pcaps are kept two weeks.
+     * Retention, not a detector threshold. 0 keeps them forever — the
+     * pre-#166 behaviour, and the same meaning 0 has on
+     * handshake.retention_days, so the two sweeps read alike. The cap is
+     * ten years: a window longer than that is "forever" said less
+     * clearly, and 0 already says it. */
+    { "pcap.retain_days",           ALERT_PCAP_DEFAULT_RETAIN_DAYS, 0, ALERT_PCAP_MAX_RETAIN_DAYS, "days alert pcaps in --pcap-dir are kept, 0 for forever" },
     /* Data-socket hygiene (#135). Neither is a detector threshold.
      *
      * max_per_peer bounds how many of the listener's 16 client slots one

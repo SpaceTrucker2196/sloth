@@ -333,7 +333,10 @@ static void print_usage(const char *argv0) {
             "                     pcap file under DIR. CRIT only and once per\n"
             "                     finding per hour by default; --tune\n"
             "                     pcap.min_severity / pcap.key_cooldown_secs\n"
-            "                     widen it to a full capture\n"
+            "                     widen it to a full capture. Files sloth\n"
+            "                     wrote there are deleted after 14 days,\n"
+            "                     swept hourly; --tune pcap.retain_days=N,\n"
+            "                     0 keeps them forever\n"
             "  --eapol-dir DIR    append captured EAPOL PMKIDs / 4-way\n"
             "                     handshakes to DIR/eapol.22000 in hashcat\n"
             "                     mixed format (22000), AND write a\n"
@@ -1386,6 +1389,22 @@ int main(int argc, char **argv) {
         fprintf(stderr, "sloth: --pcap-dir %s\n", alert_pcap_error());
         return 1;
     }
+    if (pcap_dir) {
+        /* The first bounded step of the startup pass (#166); the poll
+         * loop finishes it. Started here, not left to the first tick, so
+         * a sensor restarted more often than hourly still ages files out,
+         * and said here so the window being applied is on record. */
+        alert_pcap_maintain();
+        if (alert_pcap_retain_days() > 0)
+            fprintf(stderr,
+                    "sloth: --pcap-dir %s — alert pcaps kept %d day(s), "
+                    "swept hourly\n", pcap_dir, alert_pcap_retain_days());
+        else
+            fprintf(stderr,
+                    "sloth: --pcap-dir %s — retention disabled "
+                    "(pcap.retain_days=0): alert pcaps are kept until you "
+                    "delete them\n", pcap_dir);
+    }
     if (eapol_dir && eapol_set_output_dir(eapol_dir) != 0) {
         fprintf(stderr, "sloth: --eapol-dir %s\n", eapol_export_error());
         return 1;
@@ -1592,6 +1611,10 @@ int main(int argc, char **argv) {
          * comparison on every poll until the window rolls over; a no-op
          * entirely when nothing is being collected. */
         eapol_maintain(sloth_wall());
+        /* Hourly age sweep over --pcap-dir (#166), one bounded step per
+         * tick so a directory of millions of files cannot stall the loop.
+         * A no-op without --pcap-dir or with pcap.retain_days=0. */
+        alert_pcap_maintain();
         /* Version check-in — cheap-when-idle; only re-reads the
          * manifest on mtime change or after UPDATER_CHECK_INTERVAL_S. */
         updater_tick(sloth_wall());

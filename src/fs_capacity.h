@@ -6,10 +6,11 @@
 
 /* ── Filesystem headroom for the unbounded output sink (#96) ──────
  *
- * `--pcap-dir` is the one operator-named sink with no cap, no sweep and
- * no retention: src/alert_pcap.c writes a new file per firing and never
- * removes one (its only unlinkat is the cleanup after a failed write).
- * src/eapol_log.c has eapol_sweep(); this has nothing.
+ * `--pcap-dir` was the one operator-named sink with no cap, no sweep
+ * and no retention: src/alert_pcap.c wrote a new file per firing and
+ * never removed one. Since #166 it has an age sweep (two weeks by
+ * default, alert_pcap_maintain()); this module is still what holds the
+ * line inside a burst, which a sweep measured in days cannot.
  *
  * That is not theoretical. Measured on the owner's own monitor host,
  * 2026-10-13: 15,919,490 files, 77 GB, against a filesystem whose total
@@ -36,10 +37,11 @@
  *
  * Deliberately NOT here: deleting anything. An alert pcap is the
  * operator's forensic evidence and the retention window for evidence is
- * a policy call, not an engineering one — eapol_sweep()'s age policy
- * exists because #87 gave crackable material a stated short default,
- * which alert pcaps do not have. A guard that refuses to write is
- * non-destructive and reversible; a sweep is neither. */
+ * a policy call, not an engineering one. That call was made on #166
+ * (owner ruling 2026-10-26: two weeks), and the deletion it allows
+ * lives beside the writer in src/alert_pcap.c, not in a probe. A guard
+ * that refuses to write is non-destructive and reversible; a sweep is
+ * neither, which is why the two stay separate. */
 
 typedef struct {
     uint64_t free_bytes;

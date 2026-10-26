@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`, `src/evidence_manifest.h`, FIPS 180-4 (SHA-256).
 
-**Last updated**: 2026-10-20 (#92 slice 3 review: EAPOL sinks hash after releasing their lock, measured cost; a manifest whose rollback fails is abandoned for `-N`; §5). Earlier 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
+**Last updated**: 2026-10-26 (#166: `--pcap-dir` files and manifest are swept after `pcap.retain_days`). Earlier 2026-10-20 (#92 slice 3 review: EAPOL sinks hash after releasing their lock, measured cost; a manifest whose rollback fails is abandoned for `-N`; §5). Earlier 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
 
 ---
 
@@ -352,7 +352,9 @@ working directory and is not in any manifest.
   every file it lists has — and it names BSSID/STA pairs that should not
   outlive the files. A manifest swept mid-run is replaced by a fresh one
   (same name) on the next commit, not appended to as an unlinked inode.
-  `--pcap-dir` has no sweep; its manifest stays.
+  Under `--pcap-dir` the manifest is swept by the alert pcap age sweep
+  (#166, `pcap.retain_days`, 14 days by default) on the same mtime rule
+  ([[retention]] §2d).
 - **SHA-256 is embedded** (`src/sha256.c`, the `md5.c` house style;
   sloth links no crypto library, and CI enforces that). Verified against
   the FIPS 180-4 / NIST CAVP example vectors — empty string, `abc`, the

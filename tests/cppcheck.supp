@@ -61,6 +61,11 @@ readdirCalled:src/eapol_log.c
 # #121's fd count: count_fds() opendir()s /proc/self/fd into a local DIR*
 # and closedir()s it before returning; nothing else ever sees that stream.
 readdirCalled:src/sensor_health.c
+# #166's --pcap-dir age sweep: the module's one DIR* (a dup of the
+# pinned dirfd) spans poll ticks so a pass can resume, but it is only
+# ever opened, read and closed on the main thread (startup, then the
+# poll loop's alert_pcap_maintain()); no second thread sees it.
+readdirCalled:src/alert_pcap.c
 readdirCalled:research/ingest/main.c
 # #160's clean-WAL refusal test: dir_list() opendir()s its own temporary
 # directory into a local DIR* and closedir()s it before returning, on
