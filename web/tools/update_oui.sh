@@ -8,10 +8,12 @@
 #   web/tools/update_oui.sh [DEST [SRC]]
 #
 # DEST defaults to web/data. Each file is copied from SRC (default
-# /usr/share/ieee-data, Debian's ieee-data package) when it is there,
-# and otherwise fetched from standards-oui.ieee.org with curl. The IEEE
-# server answers a plain curl with 418, so the fetch sends a browser
-# User-Agent and Accept headers. Every file must be a CSV with the
+# /usr/share/ieee-data, Debian's ieee-data package). There is no
+# network fetch: the IEEE server refuses scripted downloads (it answers
+# 418), and this script does not work around that. Without the
+# package, install it (apt install ieee-data) or download the four
+# files from https://standards-oui.ieee.org/ in a browser into a
+# directory and pass it as SRC. Every file must be a CSV with the
 # registry header and at least one row of its registry before any of
 # them replaces what DEST holds: a failed refresh leaves DEST unchanged.
 # A refresh that brings back the same four files changes nothing.
@@ -19,7 +21,6 @@ set -eu
 
 dest=${1:-web/data}
 src=${2:-/usr/share/ieee-data}
-ua='Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0'
 bom=$(printf '\357\273\277')
 header='Registry,Assignment,Organization Name,Organization Address'
 
@@ -38,18 +39,14 @@ while [ $# -ge 3 ]; do
     name=$1 path=$2 reg=$3
     shift 3
     out="$tmp/$name.csv"
-    if [ -r "$src/$name.csv" ]; then
-        cp "$src/$name.csv" "$out"
-        how="copied from $src"
-    else
-        command -v curl >/dev/null || { echo "update_oui: no $src/$name.csv and no curl" >&2; exit 1; }
-        curl -fsSL --retry 2 -A "$ua" \
-             -H 'Accept: text/csv,text/plain;q=0.9,*/*;q=0.8' \
-             -H 'Accept-Language: en-US,en;q=0.5' \
-             -o "$out" "https://standards-oui.ieee.org/$path" ||
-            { echo "update_oui: fetching $path failed" >&2; exit 1; }
-        how="fetched from https://standards-oui.ieee.org/"
+    if [ ! -r "$src/$name.csv" ]; then
+        echo "update_oui: no $src/$name.csv. Install Debian's ieee-data" >&2
+        echo "  package, or download https://standards-oui.ieee.org/$path in a" >&2
+        echo "  browser into a directory and run: $0 $dest DIR" >&2
+        exit 1
     fi
+    cp "$src/$name.csv" "$out"
+    how="copied from $src"
     first=$(head -n 1 "$out" | tr -d '\r')
     first=${first#"$bom"}
     [ "$first" = "$header" ] ||
@@ -72,7 +69,7 @@ for name in oui mam oui36 iab; do
     have=$( { [ -f "$dest/$name.csv" ] && sha256sum "$dest/$name.csv"; } | cut -d' ' -f1)
     recorded=$(sed -n '/^<!-- update-oui:begin -->$/,/^<!-- update-oui:end -->$/p' "$dest/SOURCE.md" |
                grep "^| .$name\.csv. |" | sed -n 's/.*\([0-9a-f]\{64\}\).*/\1/p')
-    [ "$new" = "$have" ] && [ "$new" = "$recorded" ] || { same=0; break; }
+    if [ "$new" != "$have" ] || [ "$new" != "$recorded" ]; then same=0; break; fi
 done
 if [ "$same" = 1 ]; then
     echo "update_oui: $dest unchanged ($origin); SOURCE.md left as it is"
@@ -104,9 +101,11 @@ block="$tmp/block"
     done
     echo '<!-- update-oui:end -->'
 } > "$block"
-grep -q '^<!-- update-oui:begin -->$' "$dest/SOURCE.md" &&
-    grep -q '^<!-- update-oui:end -->$' "$dest/SOURCE.md" ||
-    { echo "update_oui: $dest/SOURCE.md has no update-oui markers" >&2; exit 1; }
+if ! grep -q '^<!-- update-oui:begin -->$' "$dest/SOURCE.md" ||
+   ! grep -q '^<!-- update-oui:end -->$' "$dest/SOURCE.md"; then
+    echo "update_oui: $dest/SOURCE.md has no update-oui markers" >&2
+    exit 1
+fi
 awk -v blk="$block" '
     /^<!-- update-oui:begin -->$/ { while ((getline l < blk) > 0) print l; skip = 1; next }
     /^<!-- update-oui:end -->$/   { skip = 0; next }

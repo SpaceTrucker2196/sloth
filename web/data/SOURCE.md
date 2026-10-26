@@ -27,10 +27,11 @@ stamp reads 1721654721, 2024-07-22, and is the package's, not when the
 IEEE last changed a row). The bytes are the package's, unmodified.
 
 **Refreshing.** `make update-oui` (`web/tools/update_oui.sh`) copies
-each file from `/usr/share/ieee-data` when it is there and otherwise
-fetches it from the URLs above with curl (the IEEE answers a plain
-curl with 418, so it sends a browser User-Agent and Accept headers),
-checks that each is a registry CSV with the expected header and rows
+each file from `/usr/share/ieee-data` (Debian's `ieee-data` package),
+or from a directory given as its second argument. It never fetches:
+the IEEE refuses scripted downloads (418), and the script does not
+work around that, so without the package download the four files from
+the URLs above in a browser and pass their directory. It checks that each is a registry CSV with the expected header and rows
 of its registry, and only then replaces the four files and rewrites the
 block below. When all four come back byte for byte the same, it changes
 nothing, so the date below is when the data last changed. Review the
