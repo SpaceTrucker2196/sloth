@@ -538,9 +538,9 @@ static void test_health_members(void) {
     WT_EQ(route(&H, "/api/health", "", 0), 200);
     const char *b = body_of(g_out);
     WT_HAS(b, "\"milestone\":\"M6\"");
-    WT_HAS(b, "\"db\":\"open\",\"db_schema\":7,\"db_rows\":9,\"db_path\":");
+    WT_HAS(b, "\"db\":\"open\",\"db_schema\":8,\"db_rows\":9,\"db_path\":");
     WT_HAS(b, "\"db_mode\":\"immutable\"");
-    WT_HAS(b, "\"db_supported\":[1,7]");
+    WT_HAS(b, "\"db_supported\":[1,8]");
     WT_HAS(b, "\"vendor_table\":\"ieee\",\"vendor_counts\":{\"ma_l\":3,"
               "\"ma_m\":0,\"ma_s\":1}");
     WT_HAS(b, "\"a4\":\"on\"");

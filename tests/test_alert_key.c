@@ -152,25 +152,33 @@ static void test_reopen_count_counts_earlier_incidents(void) {
     alerts_clear();
 }
 
-/* Expiry is the condition ending. The re-fire is a new episode and
- * keeps its own first_seen. Mutation-proved: restoring first_seen on
- * every reopen (dropping the `evicted` condition) reddens this. */
-static void test_first_seen_is_fresh_after_expiry(void) {
+/* Expiry ends the incident, not the finding (#170). The re-fire is a
+ * new incident - its own first_detected and id - on a finding that keeps
+ * its first_seen, which is what keeps it one `--db` row. #112 restored
+ * first_seen after an eviction only, and reopens after the resolve
+ * period were most of the owner's duplicate rows after that. Mutation-proved: dropping the
+ * restore in fire_inv() reddens the first_seen check. */
+static void test_first_seen_survives_expiry(void) {
     alerts_clear();
     k_clock();
     time_t t0 = g_wall;
     alerts_fire_for_test(ALERT_TYPE_THREAT_IP, ALERT_SEV_CRIT, SIDE_KEY, "x", NULL, 0);
+    snap();
+    char first[ALERT_INCIDENT_ID_LEN] = "";
+    int i = find_key(SIDE_KEY);
+    if (i >= 0) snprintf(first, sizeof(first), "%s", g_s.alerts[i].incident_id);
     k_advance(ALERT_RESOLVE_AFTER_S + 1);
     snap();
     time_t t1 = g_wall;
     alerts_fire_for_test(ALERT_TYPE_THREAT_IP, ALERT_SEV_CRIT, SIDE_KEY, "x", NULL, 0);
     snap();
-    int i = find_key(SIDE_KEY);
+    i = find_key(SIDE_KEY);
     ASSERT(i >= 0);
     if (i >= 0) {
-        ASSERT_EQ((long)g_s.alerts[i].first_seen, (long)t1);
-        ASSERT(g_s.alerts[i].first_seen != t0);
+        ASSERT_EQ((long)g_s.alerts[i].first_seen, (long)t0);
         ASSERT_EQ((long)g_s.alerts[i].first_detected, (long)t1);
+        ASSERT(strcmp(g_s.alerts[i].incident_id, first) != 0);
+        ASSERT_EQ((int)g_s.alerts[i].reopen_count, 1);
     }
     sloth_clock_test_set(NULL, NULL);
     alerts_clear();
@@ -376,7 +384,7 @@ void run_alert_key_tests(void) {
 
     TEST_SUITE("alert identity: incident side state (#112)");
     RUN_TEST(test_reopen_count_counts_earlier_incidents);
-    RUN_TEST(test_first_seen_is_fresh_after_expiry);
+    RUN_TEST(test_first_seen_survives_expiry);
     RUN_TEST(test_first_seen_survives_eviction);
     RUN_TEST(test_clear_forgets_the_side_state);
 

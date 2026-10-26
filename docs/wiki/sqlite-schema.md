@@ -1,6 +1,6 @@
 ---
 name: sqlite-schema
-description: The --db SQLite sink — why it exists, the schema and its v1 → v7 migration chain, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
+description: The --db SQLite sink — why it exists, the schema and its v1 → v8 migration chain, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
 type: reference
 ---
 
@@ -12,9 +12,9 @@ and findings, upserted per entity rather than appended per tick, so a
 month of operation costs megabytes instead of a terabyte.
 
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
-`tests/test_db.c`, issues #42, #56 and #154.
+`tests/test_db.c`, issues #42, #56, #154 and #170.
 
-**Last updated**: 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
+**Last updated**: 2026-10-26 (#170: schema v8, one `alerts` row per finding rather than per incident — the incident semantics below, the v7 → v8 step, and the opt-in `--db-compact-alerts` copy for the duplicates older builds wrote). 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
 
 ---
 
@@ -135,15 +135,16 @@ These are what make the file trustworthy rather than merely present.
 | SMB `dialect` sticky to `SMB1` | `smb_sessions` | Once a flow has spoken SMB1 that *is* the finding; a later SMB2 negotiation must not erase it. |
 | Evidence flags latch | deauth, twins, karma | A burst that crossed the flood threshold *was* a flood; a twin caught mid-attack was caught mid-attack. |
 | `sev` / `detail` track latest | `alerts` | Matches how `fire()` overwrites them in the live engine. |
+| One row per finding; `count` sums incidents, `reopens` counts them | `alerts` | A write continues the key's newest row, so evict-and-refire, a quiet-period reopen and a restart all advance one row (#170). See *Findings and incidents* below. |
 
-## Schema — 41 tables, v1 → v7
+## Schema — 41 tables, v1 → v8
 
-`meta` holds `schema_version`, currently **7**. `db_open()` checks it
+`meta` holds `schema_version`, currently **8**. `db_open()` checks it
 *before* applying the rest of the schema, so a mismatch produces the
 clear version message rather than whatever SQL error the schema happens
-to hit first. Since #154 the chain covers the full **v1 → v7**: any
+to hit first. Since #154 the chain covers the full **v1 → v8**: any
 file this build has ever written opens and migrates forward. Only a
-file from a *newer* build (`schema_version` above 7) is refused.
+file from a *newer* build (`schema_version` above 8) is refused.
 
 **v5** (#90): `karma_candidates.pnl_best`. **v6** (#106 round 2):
 `devices` gains `device_class`, `camera_vendor`, `camera_model`,
@@ -151,7 +152,21 @@ file from a *newer* build (`schema_version` above 7) is refused.
 `devices` gains `cam_score`, `cam_evidence` (`CAM_EV_*` mask),
 `cam_vetoes` (`CAM_VETO_*` mask), `cam_conflict`, `dhcp_prl` and
 `dhcp_vci` (the client's DHCP options 55 / 60, display-only), and
-`device_class` may now hold 3, `not-camera`.
+`device_class` may now hold 3, `not-camera`. **v8** (#170): `alerts`
+gains `reopens`, `incident_id` and `incident_count`, and its rows become
+one per finding — *Findings and incidents* below.
+
+**The v7 → v8 migration.** Three `ALTER TABLE alerts ADD COLUMN`
+statements with defaults (`db_schema_migrate_v7_sql()`) and the stamp,
+in one `BEGIN IMMEDIATE` transaction. No v7 value changes — including
+the duplicate rows an older build wrote, which stay exactly as they
+were; folding them is `--db-compact-alerts`, on a copy, never the
+migration. A v7 row reads `reopens` 0, `incident_id` NULL,
+`incident_count` 0, and the first v8 write for its key continues the
+key's newest row as a reopen. Tested on a v7 file holding three rows for
+one key (`test_v7_file_migrates_additively`) and on one whose last ALTER
+fails, which stays v7 with none of the step's columns
+(`test_v7_migration_failure_leaves_file_unchanged`).
 
 **The v6 → v7 migration.** Six `ALTER TABLE devices ADD COLUMN`
 statements with defaults (`db_schema_migrate_v6_sql()`) and the stamp,
@@ -162,9 +177,9 @@ ALTER fails, which stays v6 with none of the step's columns
 (`test_v6_migration_failure_leaves_file_unchanged`).
 
 **The chain.** `src/db.c`'s `g_steps[]` lists one entry per step (`from`
-1 through 6) and runs every one from the file's version up, each in its
+1 through 7) and runs every one from the file's version up, each in its
 own transaction with its own stamp, so a v1 file opened by this build
-goes v1 → v2 → v3 → v4 → v5 → v6 → v7 in one `db_open()` call. A step
+goes v1 → v2 → v3 → v4 → v5 → v6 → v7 → v8 in one `db_open()` call. A step
 that fails leaves the file at the last version it fully reached — a v3
 file whose next step fails is a v4 file, never half of v5
 (`test_v3_chain_stops_at_last_whole_step`) — and `db_open()` refuses the
@@ -203,7 +218,7 @@ version stamp, in one `BEGIN IMMEDIATE` transaction. No existing value
 is rewritten, so a v5 forensic record reads the same afterwards; a
 statement that fails rolls the whole step back and the file stays v5
 (`tests/test_db.c :: test_v5_migration_failure_leaves_file_unchanged`).
-Only a file newer than v7 is refused.
+Only a file newer than v8 is refused.
 
 **Migration path, by design** (owner ruling 2026-10-21, replacing the
 earlier "no migration path by design"). Every schema bump ships its
@@ -298,10 +313,96 @@ Aggregates per endpoint pair, not per packet.
 ### Events — "what fired"
 
 Keyed by **episode**, not by tick: an alert that persists for an hour is
-one row whose `count` and `last_seen` advance, not 3600 rows. A second
-episode under the same key *is* a new row, because `first_seen` is part
-of the identity and merging would erase the gap between them — which is
-the interesting part for an investigator.
+one row whose `count` and `last_seen` advance, not 3600 rows. For
+`alerts` the episode is the *finding*, below.
+
+#### Findings and incidents (`alerts`, #170)
+
+Two units, deliberately different:
+
+- An **incident** (#98) is one continuous run of a dedup key in the
+  engine: it opens with `alert.create`, carries one `incident_id`, and
+  closes with exactly one `alert.resolve` — after
+  `ALERT_RESOLVE_AFTER_S` (300 s) with no rule re-asserting it, when the
+  engine evicts it for room, or when its rule clears it. A key that
+  fires again opens a **new** incident with a new id. Incidents are the
+  JSONL lifecycle stream's unit ([[jsonl-schema]]), and that stream is
+  where the gaps between them are recorded.
+- A **finding** is every incident of one key, for as long as its row is
+  retained. It is the `alerts` row's unit: a re-fire of the key — after
+  an eviction, after a quiet period, or in a later process — advances
+  the key's newest row rather than starting one.
+
+So one row per key in steady state, and:
+
+| Column | Meaning |
+|---|---|
+| `first_seen` | the finding's first sighting; never moved by a write |
+| `last_seen` | MAX, as everywhere |
+| `count` | evaluations, **summed across incidents**: a write of the incident already on the row adds what its count moved since the last write; a write of a different incident adds its whole count |
+| `reopens` | incidents after the first that this row absorbed |
+| `incident_id` | the latest of them — the join into the JSONL stream |
+| `incident_count` | that incident's own count as last written, so `count` never double-counts the one still open |
+| `sev`, `detail` | the latest write's, as before |
+| `type`, `title`, `technique`, `match_ip`, `match_port` | the first write's |
+
+How it holds: the engine keeps a key's `first_seen` across every reopen
+in its side table (`alert_side_t`, #112 — before #170 only across an
+eviction), and the writer looks up the key's newest row
+(`ST_ALERT_ROW`, a seek on the primary key's prefix) and writes to that
+`first_seen` whatever the engine says. The second is the guarantee: the
+side table is 512 rows LRU and dies with the process, and the owner's
+sensor had 7,598 keys. `tests/test_db.c ::
+test_alert_evict_refire_churn_is_one_row` evicts and re-fires one key
+100 times under enough key pressure that the side table forgets it each
+time, and gets one row with `reopens` 100;
+`test_alert_finding_outlives_a_restart` does it across a close and
+reopen.
+
+Why not one row per (key, incident): the owner's v6 file held
+**867,748 rows for 7,598 keys**. Its rate fell from about 130,000 rows a
+day to about 2,500 on 2026-10-21, the eviction churn #112 addressed; of
+the 12,317 rows written from 2026-10-22 to 10-26, 9,704 were a known key
+back after a gap longer than the 300 s resolve period (most of them
+five minutes to an hour) — the reopens a per-incident row would keep
+producing forever. The gap the old per-episode row
+showed is not lost: it is in the JSONL stream, and `reopens` says how
+many there were. Retention still applies: a key whose row ages out of
+the finding tier (12× `--db-retain-days`) and fires again starts a new
+row.
+
+#### Compacting an older file (`--db-compact-alerts`)
+
+The migration never rewrites a recorded value, so the duplicates a
+pre-#170 build wrote stay in the file. Folding them is an explicit,
+offline copy the operator runs and then decides what to do with:
+
+```bash
+sloth --db-compact-alerts data/sloth.db data/sloth-compact.db
+```
+
+- SRC is opened **read-only** and never written; the test holds it
+  byte-identical. A file in WAL mode should be from a stopped sensor
+  (or a snapshot), so the copy includes what its `-wal` holds.
+- DST must not exist — nor `DST-wal`, `-shm` or `-journal`, which SQLite
+  would replay into the copy. It is created `0600`, filled with `VACUUM
+  INTO`, migrated to this build's schema, compacted in one transaction
+  and `VACUUM`ed. A failure removes it.
+- One row per key: MIN `first_seen`, MAX `last_seen`, summed `count`,
+  **peak** `sev`, `reopens` = rows − 1 (plus any `reopens` a v8 row
+  carried), and the most recent row's `detail`, `title`, `type`,
+  `technique`, `match_*` and incident join. Peak rather than latest
+  severity because a folded row stands for many incidents and the worst
+  of them is what an investigator asks for first.
+- Prints the counts and the time, and exits. Every other table is
+  copied as it was.
+
+On a copy of the owner's 254 MB snapshot (2026-10-26): 867,748 rows for
+7,598 keys → 7,598 rows, file 245 MB → 13.7 MB, 17 s, source checksum
+unchanged. A generated 900,000-row v7 table compacts in 3.5–7 s on the same host
+(`test_compact_alerts_900k_rows` prints its timing). Swapping the
+compacted file in — stop the sensor, move it over `--db`'s path, start
+— is the owner's call, and the original is the backup.
 
 `alerts`, `cleartext_creds`, `eapol_events`, `deauth_events`,
 `seqnum_correlations`, `twin_episodes`, `scan_entries` /

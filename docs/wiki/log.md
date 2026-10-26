@@ -5171,3 +5171,11 @@ report events.
   associated station, or the sensor's Wi-Fi link only for events on it)
   instead of whichever single station was heard. The alert carries
   T1557; T1557.004 is the kit rows' research basis.
+- 2026-10-26 — [[sqlite-schema]]: schema v8 (#170). The `alerts` table
+  is one row per finding, not per incident: a key's re-fire after an
+  eviction, a quiet period or a restart advances its newest row, `count`
+  sums the incidents, `reopens` counts them, `incident_id` joins the
+  latest back to the JSONL stream. The engine keeps `first_seen` across
+  every reopen. The v7 → v8 step only adds the three columns; the
+  owner's 867,748 rows for 7,598 keys are folded by the opt-in offline
+  `--db-compact-alerts SRC DST`, which never writes SRC.

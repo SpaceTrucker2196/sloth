@@ -898,7 +898,10 @@ typedef struct {
                                            * rule ticks, not incidents. Kept
                                            * because the TUI, the --db `alerts`
                                            * table and JSONL consumers read it. */
-    time_t       first_seen;              /* == first_detected */
+    /* The *finding's* first sighting: the key's earliest incident the
+     * engine's side table remembers (#112, every reopen since #170).
+     * The incident's own start is first_detected. */
+    time_t       first_seen;
     time_t       last_seen;               /* == last_evaluated */
     /* Optional pcap export criteria — set by rules that have a concrete
      * (ip[, port]) the alert is *about*. Empty for rules where the alert

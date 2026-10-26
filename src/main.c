@@ -322,6 +322,7 @@ static void print_usage(const char *argv0) {
             "       [--headless] [--no-color] [--version]\n"
             "       [--with-research research.db]\n"
             "       [--db FILE] [--db-interval-secs N]\n"
+            "       [--db-compact-alerts SRC DST]\n"
             "       [--db-retain-days N] [--db-max-mb N]\n"
             "       [--replay FILE[,FILE]] [--ticks N]\n"
             "  -o, --out FILE     append JSONL forensic log of all observed\n"
@@ -583,6 +584,13 @@ static void print_usage(const char *argv0) {
             "                     sloth exposes no query surface (MISSION 4).\n"
             "                     Independent of -o and --data-socket, which\n"
             "                     remain the wire format and are unchanged.\n"
+            "  --db-compact-alerts SRC DST\n"
+            "                     offline: copy the database SRC to DST with\n"
+            "                     the alerts table folded to one row per key\n"
+            "                     (duplicates an older build wrote, #170).\n"
+            "                     SRC is only read; DST must not exist. Prints\n"
+            "                     the row counts and exits. Swapping DST in\n"
+            "                     for SRC is left to the operator.\n"
             "  --db-interval-secs N\n"
             "                     seconds between database write ticks.\n"
             "                     Default 1. Raise it on slow storage.\n"
@@ -896,6 +904,18 @@ int main(int argc, char **argv) {
             no_discovery = 1;
         } else if (!strcmp(argv[i], "--db") && i + 1 < argc) {
             db_path = argv[++i];
+        } else if (!strcmp(argv[i], "--db-compact-alerts") && i + 2 < argc) {
+            /* Offline and immediate, like --tune-list: it reads one file
+             * and writes another, and nothing else on the command line
+             * applies to it (#170). */
+#ifdef WITH_SQLITE
+            return db_compact_alerts(argv[i + 1], argv[i + 2], NULL) == 0
+                   ? 0 : 1;
+#else
+            fprintf(stderr, "sloth: --db-compact-alerts needs a build with"
+                    " SQLite (WITH_SQLITE=1)\n");
+            return 2;
+#endif
         } else if (!strcmp(argv[i], "--db-interval-secs") && i + 1 < argc) {
             /* atoi() before #120: "abc" read as 0, which db_set_* turned
              * into the default without a word. Now a startup error. */

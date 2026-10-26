@@ -15,6 +15,7 @@ scripts) code against.
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
 **Last updated**: 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
+**Last updated**: 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
 and `drained`; the `beacon-overflow` `BEACONING` finding; IPv4-mapped
 beaconing peers keyed as IPv4), 2026-10-23 (#165 audit: a PTR `answer`
 is whole up to 63 bytes, for a PTR question only; a target that would
@@ -421,6 +422,20 @@ exactly one `alert.create`, carries one `incident_id` through every
 the identity is not. What belongs to the *key* rather than the incident
 (the pcap export state and `reopen_count`) survives the slot reuse in
 a side table (#112).
+
+**Incidents are not `--db` rows** (#170). The stream's unit is the
+incident and it is unchanged: every reopen is a new `alert.create` with
+a new `incident_id`, and the gap between two incidents of one key is
+the `alert.resolve` of the first and the `alert.create` of the second.
+The SQLite `alerts` table's unit is the *finding* — every incident of a
+key while its row is retained — so one row advances across reopens,
+sums their `count`, counts them in `reopens`, and holds the latest
+`incident_id` as the join back to this stream. A consumer that wants
+per-incident history reads it here, not from the file; [[sqlite-schema]]
+→ *Findings and incidents*. No field in this stream changed with #170:
+the record that would have — `first_seen`, which the engine now keeps
+across every reopen rather than only an eviction — is not emitted on
+any `alert*` record, whose incident start is `first_detected`.
 
 | Record | Fires when |
 |--------|-----------|

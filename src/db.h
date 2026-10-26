@@ -80,8 +80,14 @@
  * was taken for a table that needed none, which is why it has no SQL
  * here. v3 -> v4 (#60/#62/#65, batched) adds pnl_clients.phy_confirmed,
  * beacon_aps.downgrade_flags/akm_bits and four rogue_radius nocert_*
- * columns. v4 -> v5 (#90) adds karma_candidates.pnl_best. */
-#define DB_SCHEMA_VERSION 7
+ * columns. v4 -> v5 (#90) adds karma_candidates.pnl_best.
+ *
+ * Bumped to 8 on 2026-10-26: alerts gained reopens, incident_id and
+ * incident_count (#170), the row becoming one per finding rather than
+ * one per incident. The v7 -> v8 step adds the three columns and
+ * touches no row; the duplicates an older build wrote stay until the
+ * operator runs --db-compact-alerts on a copy. */
+#define DB_SCHEMA_VERSION 8
 
 /* How long a statement on sloth's connection waits out another
  * connection's lock before failing busy. A reader of the file (the
@@ -240,7 +246,31 @@ int db_akm_regressions(db_akm_regression_t *out, int max);
  * Kept here rather than in main.c so the cadence is testable. */
 int  db_due(time_t now);
 
+/* --db-compact-alerts SRC DST (#170): write a copy of SRC to DST with
+ * the alerts table folded to one row per key (min first_seen, max
+ * last_seen, summed count, peak sev, reopens = rows - 1, the latest
+ * row's detail), brought to this build's schema. SRC is opened
+ * read-only and never written. DST, and DST-wal / -shm / -journal, must
+ * not exist; a failure removes the DST it created. Offline: refused
+ * while a --db is open. Returns 0 on success and prints the counts to
+ * stdout; -1 with the reason on stderr. `out` may be NULL. */
+typedef struct {
+    long long rows_before;   /* alerts rows in SRC */
+    long long rows_after;    /* alerts rows in DST */
+    long long keys;          /* distinct keys in SRC */
+    long long elapsed_ms;
+} db_compact_stats_t;
+int db_compact_alerts(const char *src, const char *dst,
+                      db_compact_stats_t *out);
+
 #else
+
+typedef struct {
+    long long rows_before, rows_after, keys, elapsed_ms;
+} db_compact_stats_t;
+static inline int db_compact_alerts(const char *s, const char *d,
+                                    db_compact_stats_t *o)
+       { (void)s; (void)d; (void)o; return -1; }
 
 static inline int  db_open(const char *path) { (void)path; return 0; }
 static inline void db_close(void)            {}
@@ -316,5 +346,7 @@ const char *db_schema_migrate_v4_sql(void);
 const char *db_schema_migrate_v5_sql(void);
 /* v6 -> v7 (#155): ALTER TABLE ... ADD COLUMN only, like v5 -> v6. */
 const char *db_schema_migrate_v6_sql(void);
+/* v7 -> v8 (#170): ALTER TABLE alerts ADD COLUMN only. */
+const char *db_schema_migrate_v7_sql(void);
 
 #endif /* SLOTH_DB_H */

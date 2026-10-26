@@ -224,9 +224,17 @@ static int find_by_key(const char *key, uint64_t h) {
  *   - first_seen, half of the `--db` alerts table's primary key. A key
  *     evicted under pressure and re-fired a tick later is the same
  *     finding, and minting a new first_seen gave it a new row per
- *     eviction. Restored only when the previous incident was closed by
- *     eviction: a key whose evidence went quiet for the full resolve
- *     period and then came back IS a new episode, and keeps its own.
+ *     eviction. Restored on every reopen since #170, whatever closed the
+ *     previous incident: first_seen is when the *finding* was first
+ *     seen, and the incident's own start is first_detected. #112
+ *     restored it after an eviction only, on the reasoning that a key
+ *     quiet for the resolve period and back is a new episode - which it
+ *     is, as an incident, and still is (new incident_id, alert.create).
+ *     As a row it was not: of the 12,317 rows the owner's sensor wrote
+ *     from 2026-10-22 to 10-26, 9,704 were a known key back after a gap
+ *     longer than the resolve period, each its own row. The db writer continues the key's newest row even
+ *     when this table has forgotten the key (LRU, restart), so this is
+ *     the in-memory half of the same rule, not its only guarantee.
  *   - how many incidents the key has had (`reopen_count`), which a
  *     consumer otherwise has to reconstruct by joining create events.
  *
@@ -252,7 +260,6 @@ typedef struct {
     char     last_incident_id[ALERT_INCIDENT_ID_LEN];
     time_t   last_first_seen;
     uint32_t reopen_count;
-    uint8_t  evicted;               /* last incident closed by eviction */
     uint64_t touch;                 /* LRU stamp */
 } alert_side_t;
 
@@ -377,11 +384,9 @@ static int evict_oldest(time_t now) {
          * the caller's contract (it indexes the result) if that ever
          * stops being true. */
         if (slot < 0) slot = 0;
-        alert_resolve(&engine[slot], now, "evicted");
         /* The finding did not end; the engine ran out of room. A
          * re-fire of this key restores its first_seen (side table). */
-        alert_side_t *sd = side_find(engine[slot].key, engine_hash[slot]);
-        if (sd) sd->evicted = 1;
+        alert_resolve(&engine[slot], now, "evicted");
     }
     /* Counted whichever class was picked: a resolved incident dropped
      * early is still an observation the consumer will not see again
@@ -582,14 +587,13 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     alert_side_t *sd = side_get(a->key, kh);
     if (sd) {
         if (sd->last_incident_id[0]) sd->reopen_count++;
-        if (sd->evicted && sd->last_first_seen) a->first_seen = sd->last_first_seen;
+        if (sd->last_first_seen) a->first_seen = sd->last_first_seen;
         a->reopen_count        = sd->reopen_count;
         a->pcap_write_failures = sd->pcap_write_failures;
         snprintf(a->pcap_path, sizeof(a->pcap_path), "%s", sd->pcap_path);
         snprintf(sd->last_incident_id, sizeof(sd->last_incident_id), "%s",
                  a->incident_id);
         sd->last_first_seen = a->first_seen;
-        sd->evicted         = 0;
     }
     /* New alert keys are interesting enough to log AND to break the
      * TUI's blocking wait so the dashboard updates immediately

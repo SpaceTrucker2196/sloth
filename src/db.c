@@ -10,6 +10,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sqlite3.h>
 
 /* The side-file checks in db_prepare_private() are advisory — a
@@ -25,6 +26,7 @@
 #include "ownership.h"
 #include "presence.h"
 #include "secure_file.h"
+#include "sloth_clock.h"
 #include "tune.h"
 
 /* Maintenance is hourly: pruning is a scan over every table, and the
@@ -118,7 +120,7 @@ enum {
     ST_WIFI_MERGED, ST_ARP, ST_DHCP_LEASE, ST_TOP_HOST,
     ST_MDNS, ST_NBNS, ST_SSDP, ST_NDP_RA, ST_NDP_PREFIX, ST_SENSOR,
     ST_BGP, ST_SSH, ST_RDP, ST_SNMP, ST_MQTT, ST_LDAP, ST_KERB, ST_SMB,
-    ST_ALERT, ST_CRED, ST_EAPOL, ST_DEAUTH, ST_SEQCORR, ST_TWIN,
+    ST_ALERT, ST_ALERT_ROW, ST_CRED, ST_EAPOL, ST_DEAUTH, ST_SEQCORR, ST_TWIN,
     ST_SCAN, ST_SCAN_PORT, ST_KARMA, ST_ROGUE_RADIUS,
     ST_COUNT
 };
@@ -535,13 +537,37 @@ static const char *const SQL[ST_COUNT] = {
     "  last_seen=MAX(smb_sessions.last_seen,excluded.last_seen)",
 [ST_ALERT] =
     "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,"
-    "technique,match_ip,match_port,count) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
+    "technique,match_ip,match_port,count,incident_id,incident_count)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?11)"
     " ON CONFLICT(key,first_seen) DO UPDATE SET"
     /* An episode's detail and severity are regenerated each tick and
      * the latest observation wins, matching the live engine. */
     "  last_seen=MAX(alerts.last_seen,excluded.last_seen),"
     "  sev=excluded.sev, detail=excluded.detail,"
-    "  count=MAX(alerts.count,excluded.count)",
+    /* One row per finding (#170). The same incident written again moves
+     * `count` by what its own count moved since the last write; a
+     * different incident on the row (a reopen, or the first write after
+     * a restart or a v7 migration, where the stored id is someone
+     * else's or NULL) adds its whole count and is one more reopen.
+     * Every SET expression reads the row as it was, so the CASEs agree
+     * with each other. */
+    "  count=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    THEN alerts.count+MAX(excluded.incident_count-alerts.incident_count,0)"
+    "    ELSE alerts.count+excluded.incident_count END,"
+    "  incident_count=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    THEN MAX(alerts.incident_count,excluded.incident_count)"
+    "    ELSE excluded.incident_count END,"
+    "  reopens=alerts.reopens+"
+    "    (CASE WHEN alerts.incident_id IS excluded.incident_id THEN 0 ELSE 1 END),"
+    "  incident_id=excluded.incident_id",
+/* The key's newest row, which the write above continues instead of
+ * starting one under the engine's first_seen (#170). The engine keeps
+ * first_seen across a reopen in its side table, but that table is LRU
+ * bounded and dies with the process; the file is what survives both. A
+ * key prefix of the primary key, so an index seek. */
+[ST_ALERT_ROW] =
+    "SELECT first_seen FROM alerts WHERE key=?1"
+    " ORDER BY first_seen DESC LIMIT 1",
 [ST_CRED] =
     "INSERT INTO cleartext_creds (ts,src,dst,dst_port,protocol,username,"
     "pw_observed,first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)"
@@ -719,6 +745,7 @@ static const char *const TABLES_V3_BATCH[]      =
     { "pnl_clients", "beacon_aps", "rogue_radius", NULL };
 static const char *const TABLES_KARMA[]    = { "karma_candidates", NULL };
 static const char *const TABLES_DEVICES[]  = { "devices", NULL };
+static const char *const TABLES_ALERTS[]   = { "alerts", NULL };
 
 static const db_step_t g_steps[] = {
     { 1, db_schema_migrate_v1_sql, TABLES_PROBE_CLIENTS,
@@ -733,6 +760,8 @@ static const db_step_t g_steps[] = {
       "devices gained camera columns" },
     { 6, db_schema_migrate_v6_sql, TABLES_DEVICES,
       "devices gained camera classifier and DHCP option columns" },
+    { 7, db_schema_migrate_v7_sql, TABLES_ALERTS,
+      "alerts gained reopens, incident_id and incident_count" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -1532,15 +1561,35 @@ static void write_proto_flows(const sloth_state_t *s, time_t now) {
     }
 }
 
-/* Event episodes. Keyed by episode identity, so an alert that persists
- * for an hour is one row whose count and last_seen advance rather than
- * 3600 rows. */
+/* The first_seen of `key`'s newest alerts row, or `fallback` when it
+ * has none. A lookup error disables the sink like a write error. */
+static sqlite3_int64 alert_row_first_seen(const char *key,
+                                          sqlite3_int64 fallback) {
+    sqlite3_stmt *st = g_st[ST_ALERT_ROW];
+    if (!st) return fallback;
+    sqlite3_int64 v = fallback;
+    bind_txt(st, 1, key);
+    int rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW) v = sqlite3_column_int64(st, 0);
+    else if (rc != SQLITE_DONE) db_fail("alert row lookup");
+    sqlite3_reset(st);
+    sqlite3_clear_bindings(st);
+    return v;
+}
+
+/* Event episodes. Keyed by finding, so an alert that persists for an
+ * hour is one row whose count and last_seen advance rather than 3600
+ * rows, and a key that is evicted and re-fires, goes quiet and comes
+ * back, or outlives a restart is still that one row (#170):
+ * docs/wiki/sqlite-schema.md has the incident semantics. */
 static void write_events(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->alert_count; i++) {
         const alert_t *a = &s->alerts[i];
         sqlite3_stmt *st = g_st[ST_ALERT];
+        sqlite3_int64 fs = alert_row_first_seen(a->key,
+                (sqlite3_int64)(a->first_seen ? a->first_seen : now));
         bind_txt(st, 1, a->key);
-        sqlite3_bind_int64(st, 2, (sqlite3_int64)(a->first_seen ? a->first_seen : now));
+        sqlite3_bind_int64(st, 2, fs);
         sqlite3_bind_int64(st, 3, (sqlite3_int64)(a->last_seen  ? a->last_seen  : now));
         sqlite3_bind_int(st, 4, (int)a->type);
         sqlite3_bind_int(st, 5, (int)a->sev);
@@ -1550,6 +1599,11 @@ static void write_events(const sloth_state_t *s, time_t now) {
         bind_txt(st, 9, a->match_ip);
         sqlite3_bind_int(st, 10, (int)a->match_port);
         sqlite3_bind_int(st, 11, a->count);
+        /* NULL, not "", for an alert with no incident (only a state a
+         * test built by hand): "no incident" then compares equal to
+         * itself, and is never mistaken for one. */
+        if (a->incident_id[0]) bind_txt(st, 12, a->incident_id);
+        else                   sqlite3_bind_null(st, 12);
         step_reset(ST_ALERT);
     }
 
@@ -2077,6 +2131,181 @@ void db_tick(const sloth_state_t *s, time_t now) {
      * observation it was triggered by. */
     if (g_last_maint == 0) g_last_maint = now;
     else if (now - g_last_maint >= DB_MAINT_INTERVAL_S) db_maintain(now);
+}
+
+
+/* ── --db-compact-alerts (#170) ──────────────────────────────
+ *
+ * The offline half of #170. A pre-#170 build wrote one alerts row per
+ * incident, and an evicted key re-fired as a new incident every few
+ * seconds under pressure: 867,748 rows for 7,598 keys on the owner's
+ * sensor. The v7 -> v8 step leaves those rows alone (it never rewrites
+ * a recorded value), so folding them is this command, and it works on
+ * a copy: SRC is opened read-only and never written, DST must not
+ * exist, and swapping one for the other is the operator's decision. */
+
+/* SQL run on DST, after it has been brought to the current schema. One
+ * row per key: the earliest first_seen, the latest last_seen, the summed
+ * count, the peak severity, and reopens = the rows folded beyond the
+ * first plus any reopens a v8 row already carried. Everything that is
+ * one observation rather than a total (title, detail, type, technique,
+ * match_ip / match_port, the incident join) is the key's most recent
+ * row's, as the live writer would have left it. */
+static const char COMPACT_SQL[] =
+    /* One streaming pass down the primary key for the totals, and for
+     * each key the rowid of its most recent row. A window-function
+     * form of the same query sorted all 900,000 rows and took 10 s
+     * where this takes under one (tests/test_db.c's timing line). */
+    "CREATE TEMP TABLE compact_agg AS"
+    " SELECT key, MIN(first_seen) AS fs, MAX(last_seen) AS ls,"
+    "  SUM(count) AS cnt, MAX(sev) AS sv,"
+    "  COUNT(*) - 1 + SUM(reopens) AS ro,"
+    "  (SELECT b.rowid FROM alerts b WHERE b.key = a.key"
+    "    ORDER BY b.last_seen DESC, b.first_seen DESC LIMIT 1) AS rid"
+    " FROM alerts a GROUP BY key;\n"
+    "CREATE TEMP TABLE compact_alerts AS"
+    " SELECT g.key, g.fs, g.ls, x.type, g.sv, x.title, x.detail,"
+    "  x.technique, x.match_ip, x.match_port, g.cnt, g.ro, x.incident_id,"
+    "  x.incident_count"
+    " FROM compact_agg g JOIN alerts x ON x.rowid = g.rid;\n"
+    "DELETE FROM alerts;\n"
+    "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,"
+    " technique,match_ip,match_port,count,reopens,incident_id,incident_count)"
+    " SELECT key, fs, ls, type, sv, title, detail, technique, match_ip,"
+    "  match_port, cnt, ro, incident_id, incident_count"
+    " FROM compact_alerts;\n"
+    "DROP TABLE compact_alerts;\n"
+    "DROP TABLE compact_agg;\n";
+
+static long long scalar_on(sqlite3 *h, const char *sql) {
+    sqlite3_stmt *st = NULL;
+    long long v = -1;
+    if (sqlite3_prepare_v2(h, sql, -1, &st, NULL) == SQLITE_OK &&
+        sqlite3_step(st) == SQLITE_ROW)
+        v = sqlite3_column_int64(st, 0);
+    sqlite3_finalize(st);
+    return v;
+}
+
+/* DST and the side files SQLite would read beside it. A stale DST-wal
+ * left from some other run would be replayed into the copy, so its
+ * presence refuses the command as firmly as DST's own. */
+static const char *const DB_SIDE[] = { "", "-wal", "-shm", "-journal" };
+
+static void unlink_dst(const char *dst) {
+    for (size_t i = 0; i < sizeof(DB_SIDE) / sizeof(DB_SIDE[0]); i++) {
+        char p[4096];
+        snprintf(p, sizeof(p), "%s%s", dst, DB_SIDE[i]);
+        unlink(p);
+    }
+}
+
+/* Open SRC read-only, check it is a sloth file this build can migrate,
+ * count what it holds, and copy it to the (just created, empty) DST
+ * with VACUUM INTO. 1 on success. */
+static int compact_copy(const char *src, const char *dst,
+                        db_compact_stats_t *out) {
+    sqlite3 *h = NULL;
+    int ok = 0;
+    if (sqlite3_open_v2(src, &h, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW,
+                        NULL) != SQLITE_OK) {
+        fprintf(stderr, "sloth: --db-compact-alerts: cannot open %s: %s\n",
+                src, h ? sqlite3_errmsg(h) : "?");
+        sqlite3_close(h);
+        return 0;
+    }
+    int defensive = -1;
+    sqlite3_db_config(h, SQLITE_DBCONFIG_DEFENSIVE, 1, &defensive);
+    sqlite3_busy_timeout(h, DB_BUSY_MS);
+    long long ver = scalar_on(h, "SELECT CAST(value AS INTEGER) FROM meta"
+                              " WHERE key='schema_version'");
+    long long has = scalar_on(h, "SELECT COUNT(*) FROM sqlite_master"
+                              " WHERE type='table' AND name='alerts'");
+    if (defensive != 1) {
+        fprintf(stderr, "sloth: --db-compact-alerts: DEFENSIVE refused\n");
+    } else if (ver < 1 || ver > DB_SCHEMA_VERSION || has != 1) {
+        fprintf(stderr, "sloth: --db-compact-alerts: %s is not a sloth"
+                " database this build reads (schema v%lld, alerts table"
+                " %s)\n", src, ver, has == 1 ? "present" : "missing");
+    } else {
+        out->rows_before = scalar_on(h, "SELECT COUNT(*) FROM alerts");
+        out->keys        = scalar_on(h, "SELECT COUNT(DISTINCT key) FROM alerts");
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(h, "VACUUM INTO ?1", -1, &st, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(st, 1, dst, -1, SQLITE_STATIC);
+            ok = sqlite3_step(st) == SQLITE_DONE;
+        }
+        if (!ok)
+            fprintf(stderr, "sloth: --db-compact-alerts: copy to %s failed:"
+                    " %s\n", dst, sqlite3_errmsg(h));
+        sqlite3_finalize(st);
+    }
+    sqlite3_close(h);
+    return ok && out->rows_before >= 0 && out->keys >= 0;
+}
+
+int db_compact_alerts(const char *src, const char *dst,
+                      db_compact_stats_t *out) {
+    db_compact_stats_t local;
+    if (!out) out = &local;
+    memset(out, 0, sizeof(*out));
+    out->rows_before = out->rows_after = out->keys = -1;
+    if (!src || !src[0] || !dst || !dst[0]) return -1;
+    if (g_db) {
+        fprintf(stderr, "sloth: --db-compact-alerts runs offline, without"
+                " --db\n");
+        return -1;
+    }
+    char floor_err[96];
+    if (libver_sqlite_refuse(floor_err, sizeof(floor_err)) != 0) {
+        fprintf(stderr, "sloth: --db-compact-alerts: %s\n", floor_err);
+        return -1;
+    }
+    for (size_t i = 0; i < sizeof(DB_SIDE) / sizeof(DB_SIDE[0]); i++) {
+        char p[4096];
+        struct stat sb;
+        snprintf(p, sizeof(p), "%s%s", dst, DB_SIDE[i]);
+        if (lstat(p, &sb) == 0) {
+            fprintf(stderr, "sloth: --db-compact-alerts: %s exists; refusing"
+                    " to overwrite it (pick a new DST)\n", p);
+            return -1;
+        }
+    }
+    uint64_t t0 = sloth_mono_ms();
+    /* Created here, exclusively and 0600, before SQLite sees the path:
+     * VACUUM INTO accepts an existing empty file, and creating it first
+     * is what gives the copy db_open()'s private mode and closes the
+     * window in which another process could plant the name. */
+    char err[SFILE_ERR_MAX];
+    int fd = sfile_open(AT_FDCWD, dst, SFILE_EXCL, err, sizeof(err));
+    if (fd < 0) {
+        fprintf(stderr, "sloth: --db-compact-alerts: %s\n", err);
+        return -1;
+    }
+    close(fd);
+    /* From here DST is ours, and a failure removes it: a half-built
+     * copy is not something an operator should find and swap in. */
+    if (!compact_copy(src, dst, out)) { unlink_dst(dst); return -1; }
+    if (!db_open(dst)) { unlink_dst(dst); return -1; }
+    int ok = exec("BEGIN IMMEDIATE", "compact begin");
+    if (ok && (!exec(COMPACT_SQL, "compact") ||
+               !exec("COMMIT", "compact commit"))) {
+        exec("ROLLBACK", "compact rollback");
+        ok = 0;
+    }
+    /* The DELETE freed every page the duplicates held; VACUUM returns
+     * them, which is most of why the operator is running this. */
+    if (ok) ok = exec("VACUUM", "compact vacuum");
+    if (ok) out->rows_after = scalar("SELECT COUNT(*) FROM alerts");
+    db_close();
+    if (!ok || out->rows_after < 0) { unlink_dst(dst); return -1; }
+    out->elapsed_ms = (long long)(sloth_mono_ms() - t0);
+    printf("sloth: compacted alerts: %lld rows for %lld keys in %s"
+            " -> %lld rows in %s (%lld folded, %.2f s); %s is unchanged\n",
+            out->rows_before, out->keys, src, out->rows_after, dst,
+            out->rows_before - out->rows_after,
+            (double)out->elapsed_ms / 1000.0, src);
+    return 0;
 }
 
 #endif /* WITH_SQLITE */

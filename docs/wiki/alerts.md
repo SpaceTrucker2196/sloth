@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
+**Last updated**: 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
 **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
@@ -71,11 +71,14 @@ type: reference
   `MAX_ALERTS`) keeps, per key: the last real pcap export time and path
   (the cooldown, formerly `pcap_cool[]`), `pcap_write_failures`,
   `reopen_count`, and the last incident's `first_seen`. `first_seen` is
-  restored **only** when the previous incident was closed by eviction —
-  the engine ran out of room, the finding did not end — so the `--db`
-  row keyed on `(key, first_seen)` stays one row across evict→refire
-  churn. After an `expired` resolve the re-fire is a new episode with
-  its own `first_seen`. The side table bounds memory, not cardinality:
+  the *finding's* and is restored on **every** reopen (#170; #112 did it
+  after an eviction only): an `expired` re-fire is still a new incident,
+  with a new `incident_id` and its own `first_detected`, but the same
+  finding, and the `--db` `alerts` row is one per finding — the writer
+  continues the key's newest row even when this table has forgotten
+  the key, so a restart or LRU loss does not split it either
+  ([[sqlite-schema]] → *Findings and incidents*). The side table bounds
+  memory, not cardinality:
   per-type fair eviction (below) still decides which findings hold
   slots. Dropping a row that held an export is tallied as
   `evict_pcap_cooldown` on the `sensor_health` record, as before.

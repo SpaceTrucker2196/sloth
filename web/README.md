@@ -1322,14 +1322,14 @@ by the next one.
   `503` `sloth_db_timeout`, never sloth a stall
   (`db_timeouts` on `/api/health`).
 - **Identify.** sloth's `meta` is `(key, value)`; a `schema_version`
-  of 1 to 7 is read (`"db_supported":[1,7]`). The upper bound is held
+  of 1 to 8 is read (`"db_supported":[1,8]`). The upper bound is held
   to sloth's `DB_SCHEMA_VERSION` by a test, so a schema bump cannot
   ship with slothweb still refusing the new files. A newer one is refused
-  with "written by a newer sloth (schema v8; this slothweb reads
-  v1..v7)": this build does not know its columns. An older one is read
+  with "written by a newer sloth (schema v9; this slothweb reads
+  v1..v8)": this build does not know its columns. An older one is read
   by probing its columns with `PRAGMA table_info`: a column the version
-  lacks (`device_class`, `camera_*` before v6, `dhcp_vci` before v7)
-  reads as `0` or `NULL`, and a table that is missing reads as no rows,
+  lacks (`device_class`, `camera_*` before v6, `dhcp_vci` before v7,
+  `alerts.reopens` before v8) reads as `0` or `NULL`, and a table that is missing reads as no rows,
   its query conditions as false. A file with no `devices` table of
   sloth's shape, a `slothweb.db` (its `meta` is `(name, value)`) or
   anything else is refused.

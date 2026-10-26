@@ -81,7 +81,7 @@
 #include "web_secret.h"
 
 #define WEB_SDB_SCHEMA_MIN 1
-#define WEB_SDB_SCHEMA_MAX 7
+#define WEB_SDB_SCHEMA_MAX 8
 #define WEB_SDB_BUSY_MS    100
 #define WEB_SDB_HTTP_MS    250       /* a request's budget */
 #define WEB_SDB_PASS_MS    200       /* a minute pass's (A2) */
