@@ -8,7 +8,7 @@
 
 typedef struct {
     int             channel;
-    radiotap_band_t band;     /* #149: part of the key, see rf_quality.h */
+    wifi_band_t band;     /* #149: part of the key, see rf_quality.h */
     uint32_t        frames;
     uint32_t        retries;
     uint32_t        bad_fcs;
@@ -26,7 +26,7 @@ static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static rf_chan_t       g_ch[MAX_RF_CHANNELS];
 static int             g_n;
 
-static rf_chan_t *find(int channel, radiotap_band_t band) {
+static rf_chan_t *find(int channel, wifi_band_t band) {
     for (int i = 0; i < g_n; i++)
         if (g_ch[i].channel == channel && g_ch[i].band == band) return &g_ch[i];
     return NULL;
@@ -46,7 +46,7 @@ static void roll_if_stale(rf_chan_t *c, time_t now) {
     }
 }
 
-void rf_quality_observe(int channel, radiotap_band_t band,
+void rf_quality_observe(int channel, wifi_band_t band,
                         int retry, int bad_fcs, time_t now) {
     if (channel <= 0) return;             /* unmapped frequency */
 
@@ -114,21 +114,21 @@ static int pct_locked(rf_chan_t *c, time_t now, int want_fcs) {
     return (int)((hits * 100u) / c->frames);
 }
 
-static int pct_of(int channel, radiotap_band_t band, time_t now, int want_fcs) {
+static int pct_of(int channel, wifi_band_t band, time_t now, int want_fcs) {
     pthread_mutex_lock(&g_mu);
     int pct = pct_locked(find(channel, band), now, want_fcs);
     pthread_mutex_unlock(&g_mu);
     return pct;
 }
 
-int rf_quality_retry_pct(int channel, radiotap_band_t band, time_t now) {
+int rf_quality_retry_pct(int channel, wifi_band_t band, time_t now) {
     return pct_of(channel, band, now, 0);
 }
-int rf_quality_badfcs_pct(int channel, radiotap_band_t band, time_t now) {
+int rf_quality_badfcs_pct(int channel, wifi_band_t band, time_t now) {
     return pct_of(channel, band, now, 1);
 }
 
-int rf_quality_is_degraded(int channel, radiotap_band_t band, time_t now) {
+int rf_quality_is_degraded(int channel, wifi_band_t band, time_t now) {
     int pct = rf_quality_retry_pct(channel, band, now);
     return pct >= RF_RETRY_DEGRADED_PCT;   /* -1 (unknown) is not degraded */
 }

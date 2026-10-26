@@ -21,6 +21,7 @@
 #include "observe.h"
 #include "platform/linux_wifi.h"
 #include "sloth_clock.h"
+#include "wifi_freq.h"
 
 /* ── Netlink attribute helpers ───────────────────────────── */
 
@@ -114,16 +115,6 @@ static int get_nl80211_id(int fd) {
         na = na_next(na, &rem);
     }
     return -1;
-}
-
-/* ── Frequency → channel number ──────────────────────────── */
-
-static int freq_to_channel(uint32_t mhz) {
-    if (mhz >= 2412 && mhz <= 2472) return (int)(mhz - 2407) / 5;
-    if (mhz == 2484)                 return 14;
-    if (mhz >= 5180 && mhz <= 5900) return (int)(mhz - 5000) / 5;
-    if (mhz >= 5955 && mhz <= 7115) return (int)(mhz - 5950) / 5;
-    return 0;
 }
 
 /* ── 802.11 IE parsing: delegated to the shared parser ───── *
@@ -235,7 +226,11 @@ static int parse_scan_msg(const struct nlmsghdr *nlh,
                  "%02x:%02x:%02x:%02x:%02x:%02x",
                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
         ap->signal_dbm = sig_mbm / 100;
-        ap->channel    = freq_to_channel(freq);
+        /* #167: this path carried its own copy of the converter that
+         * accepted 5180..5900 where the monitor path accepted
+         * 5160..5895, so the same AP could be channel 0 to a managed
+         * scan and a channel to a capture. One converter now. */
+        ap->channel    = wifi_freq_channel((int)freq, NULL);
 
         if (ies && ies_len > 0)
             parse_ies(ies, ies_len, cap, ap);

@@ -21,6 +21,8 @@
 
 #include <stdint.h>
 
+#include "wifi_freq.h"   /* wifi_band_t, and the band plan both calls below use */
+
 /* Present-bitmap bits this parser understands. */
 #define RT_BIT_TSFT           0
 #define RT_BIT_FLAGS          1
@@ -57,23 +59,20 @@ typedef struct {
  * failed parse leaves usable defaults rather than garbage. */
 int radiotap_parse(const uint8_t *buf, int len, radiotap_info_t *out);
 
-/* Frequency (MHz) to 802.11 channel number across 2.4 / 5 / 6 GHz.
- * Shared so a monitor capture and a managed-mode scan cannot disagree
- * about what channel an AP is on. Returns 0 for anything unmapped. */
-int radiotap_freq_to_channel(int mhz);
-
-/* Which band a frequency falls in. A channel NUMBER alone cannot say
- * this — 5 GHz and 6 GHz channel numbers overlap (see sloth.h's
- * ap_band_label comment) — but the radio frequency radiotap reports
- * never does, so this is the one place band is unambiguous rather
- * than a heuristic over an IE that may or may not be present (#149). */
-typedef enum {
-    RT_BAND_UNKNOWN = 0,
-    RT_BAND_2GHZ    = 1,
-    RT_BAND_5GHZ    = 2,
-    RT_BAND_6GHZ    = 3,
-} radiotap_band_t;
-
-radiotap_band_t radiotap_freq_to_band(int mhz);
+/* The monitor-capture path's entry points into the band plan.
+ *
+ * Both are now one-line delegations to wifi_freq.h, which is the single
+ * converter (#167). Until then this header claimed the mapping was
+ * "shared so a monitor capture and a managed-mode scan cannot disagree"
+ * while src/platform/linux_wifi.c carried its own copy accepting a
+ * different 5 GHz range — the claim is true as of #167 and
+ * tests/test_wifi_freq.c asserts it rather than asserting it in prose.
+ *
+ * They are kept as named entry points rather than inlined at the two
+ * call sites precisely so that agreement is checkable from a test: a
+ * wrapper that stopped delegating would redden
+ * test_monitor_and_shared_converter_agree_across_bands. */
+int         radiotap_freq_to_channel(int mhz);
+wifi_band_t radiotap_freq_to_band(int mhz);
 
 #endif /* SLOTH_RADIOTAP_H */

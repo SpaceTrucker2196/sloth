@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "sloth.h"
+#include "wifi_freq.h"
 
 /* Adaptive passive channel scheduler (issue #22).
  *
@@ -31,6 +32,11 @@
 
 typedef struct {
     int      channel;    /* 802.11 channel number */
+    /* Which band that number means (#167). A bare channel number cannot
+     * carry a 6 GHz slot — 6 GHz runs 1-233, so every 2.4 and 5 GHz
+     * number has a 6 GHz twin — so the band is stored alongside it and
+     * freq_mhz below is derived from the pair, never from the number. */
+    wifi_band_t band;
     int      freq_mhz;   /* center frequency (for nl80211 SET_CHANNEL) */
     uint32_t activity;   /* rolling observation count; decays each cycle */
     /* Lifetime hop-activity accounting (#91). `activity` above is the
@@ -79,13 +85,36 @@ typedef struct {
     uint64_t measured_total_ms;
 } chanhop_t;
 
-/* Map an 802.11 channel to its center frequency in MHz (0 if unknown).
- * Covers 2.4 GHz (1-14) and 5 GHz (>=36). */
+/* Map a BAND-QUALIFIED 802.11 channel to its center frequency in MHz
+ * (0 if the pair names no channel). This is the form that can express
+ * 6 GHz: chanhop_band_freq(WIFI_BAND_6GHZ, 1) is 5955 MHz, which no
+ * bare channel number could ever have meant (#167). */
+int chanhop_band_freq(wifi_band_t band, int channel);
+
+/* The same, for a bare channel number, with the band inferred the way
+ * every pre-#167 caller meant it: 1-14 is 2.4 GHz and 32-177 is 5 GHz.
+ * Returns 0 for anything else — including every 6 GHz-only channel,
+ * because a bare number cannot distinguish one. Use
+ * chanhop_band_freq() when the band is known. */
 int chanhop_freq(int channel);
 
 /* Initialise with an explicit channel list. Channels that don't map to a
- * known frequency are skipped. Returns the number accepted (0 = none). */
+ * known frequency are skipped. Returns the number accepted (0 = none).
+ * Bare numbers, so 2.4/5 GHz only — see chanhop_init_bands(). */
 int chanhop_init(chanhop_t *h, const int *channels, int n);
+
+/* A band-qualified channel for chanhop_init_bands(). */
+typedef struct {
+    wifi_band_t band;
+    int         channel;
+} chanhop_chan_t;
+
+/* Initialise with a band-qualified list, the only form that can hold a
+ * 6 GHz channel. Same skipping and return convention as chanhop_init(),
+ * which is this function with the band inferred — they share one
+ * slot-filling path so the band cannot be set by one and missed by the
+ * other. */
+int chanhop_init_bands(chanhop_t *h, const chanhop_chan_t *chans, int n);
 
 /* Initialise with the built-in safe 2.4/5 GHz list (1,6,11 + common UNII). */
 int chanhop_init_default(chanhop_t *h);
@@ -165,10 +194,15 @@ void chanhop_confirm_retune(chanhop_t *h, int ok, uint64_t now_ms);
  * why chanhop_export() and frame attribution key on `tuned`. */
 int chanhop_current_channel(const chanhop_t *h);
 int chanhop_current_freq(const chanhop_t *h);
+/* Which band that channel number is in; WIFI_BAND_UNKNOWN on an empty
+ * scheduler. Needed to report the current channel unambiguously once a
+ * rotation can hold 6 GHz (#167). */
+wifi_band_t chanhop_current_band(const chanhop_t *h);
 
 /* The channel chanhop_tick() is asking for; 0 when nothing is pending. */
 int chanhop_target_channel(const chanhop_t *h);
 int chanhop_target_freq(const chanhop_t *h);
+wifi_band_t chanhop_target_band(const chanhop_t *h);
 
 /* Copy the channel list (channel numbers) into out[max]; return the count.
  * *cur_idx receives the index of the channel currently dwelt on (-1 if

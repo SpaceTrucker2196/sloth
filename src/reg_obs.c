@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "reg_obs.h"
+#include "wifi_freq.h"
 
 int reg_obs_any(const reg_ie_t *r, const reg_6g_t *g) {
     if (r && (r->country_present || r->power_constraint_present ||
@@ -94,17 +95,15 @@ double reg_obs_fspl_1m_db(int freq_mhz) {
 }
 
 int reg_obs_freq_mhz(int channel, uint8_t channel_source) {
-    if (channel <= 0) return 0;
-    if (channel_source == CH_SRC_HE_6GHZ) {
-        /* 802.11ax-2021 Annex E: 6 GHz channel n centres at 5950 + 5n
-         * MHz; channel 2 is the 5935 MHz exception. */
-        if (channel == 2) return 5935;
-        return channel <= 233 ? 5950 + 5 * channel : 0;
-    }
-    if (channel == 14) return 2484;
-    if (channel >= 1 && channel <= 13) return 2407 + 5 * channel;
-    if (channel >= 32 && channel <= 177) return 5000 + 5 * channel;
-    return 0;
+    /* #167: this used to carry its own copy of the band plan, which is
+     * how the 5 GHz span here (32..177) came to disagree with the two
+     * reverse converters (5160..5895 and 5180..5900). The IE the
+     * channel came from is the only band knowledge this path has that
+     * wifi_freq.h cannot derive, so that is all it supplies. */
+    wifi_band_t band = channel_source == CH_SRC_HE_6GHZ
+                     ? WIFI_BAND_6GHZ
+                     : wifi_freq_infer_band(channel);
+    return wifi_freq_mhz(band, channel);
 }
 
 int reg_obs_power(const beacon_ap_t *ap, reg_power_obs_t *out) {

@@ -17,8 +17,29 @@ Two independent signals feed it:
   Frame Control retry bit and the radiotap FCS-failed flag.
 
 Frequency-to-channel mapping is shared with the managed-mode nl80211
-path (`radiotap_freq_to_channel()`), so a monitor capture and a scan
-cannot disagree about what channel an AP is on. 2.4, 5 and 6 GHz.
+path, so a monitor capture and a scan cannot disagree about what channel
+an AP is on. 2.4, 5 and 6 GHz.
+
+**That sharing is real only since #167**, and this paragraph used to
+assert it while it was false: `src/platform/linux_wifi.c` carried its
+own copy of the converter accepting 5180-5900 MHz against the monitor
+path's 5160-5895, so the two disagreed by 20 MHz at the bottom and 5 at
+the top. Both now call `src/wifi_freq.c`, which is the only place in
+`src/` where a band's frequency or channel range is written down, and
+`tests/test_wifi_freq.c` asserts the two entry points agree across all
+three bands rather than leaving it to a comment.
+
+The reconciled 5 GHz span is **channel 32 (5160 MHz) to channel 177
+(5885 MHz)** — the assignable 20 MHz centres of 802.11-2020 Annex E
+Table E-4, and neither of the two bounds that disagreed. 5160 is the
+lowest centre the table assigns, so the old 5180 floor reported channel
+0 for an AP on 5160 or on 5170 (channel 34, the 802.11j legacy centre);
+5885 is the highest, being U-NII-4's top 20 MHz channel spanning
+5875-5895, so the old 5895 and 5900 ceilings were band *edges* and
+answered with channel numbers (179, 180) no 802.11 device can report.
+Those frequencies now map to no channel. This is a numbering converter,
+not a regulatory validator — naming a channel says nothing about
+whether a radio may sit on it (see `docs/wiki/regulatory-table.md`).
 
 **The channel number alone does not say which band (#91).** 5 GHz and
 6 GHz channel numbers overlap — 37, 149 and others name a real channel

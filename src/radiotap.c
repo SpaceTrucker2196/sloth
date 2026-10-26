@@ -7,20 +7,11 @@
 #define RT_PAD(o, a)  (((o) + ((a)-1)) & ~((a)-1))
 
 int radiotap_freq_to_channel(int mhz) {
-    if (mhz >= 2412 && mhz <= 2472) return (mhz - 2407) / 5;
-    if (mhz == 2484)                return 14;          /* Japan, ch 14 */
-    if (mhz >= 5160 && mhz <= 5895) return (mhz - 5000) / 5;
-    if (mhz >= 5955 && mhz <= 7115) return (mhz - 5950) / 5;   /* 6 GHz */
-    return 0;
+    return wifi_freq_channel(mhz, NULL);
 }
 
-/* Same ranges as radiotap_freq_to_channel, read as a band rather than a
- * number, so the two can never disagree about where a frequency sits. */
-radiotap_band_t radiotap_freq_to_band(int mhz) {
-    if ((mhz >= 2412 && mhz <= 2472) || mhz == 2484) return RT_BAND_2GHZ;
-    if (mhz >= 5160 && mhz <= 5895)                  return RT_BAND_5GHZ;
-    if (mhz >= 5955 && mhz <= 7115)                  return RT_BAND_6GHZ;
-    return RT_BAND_UNKNOWN;
+wifi_band_t radiotap_freq_to_band(int mhz) {
+    return wifi_freq_band(mhz);
 }
 
 int radiotap_parse(const uint8_t *buf, int len, radiotap_info_t *out) {

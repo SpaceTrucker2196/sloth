@@ -333,7 +333,7 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     int    channel = rt.channel;
     /* Band from the radio's own frequency, never from a channel number
      * alone (#149: 5 GHz and 6 GHz channel numbers overlap). */
-    const radiotap_band_t band = radiotap_freq_to_band(rt.freq_mhz);
+    const wifi_band_t band = radiotap_freq_to_band(rt.freq_mhz);
 
     /* ── One clock for this frame (#92) ──────────────────────────
      *

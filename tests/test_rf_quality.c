@@ -14,10 +14,10 @@
 #define T0 1700000000L
 
 /* Every pre-#149 test feeds and reads a single band consistently, so
- * using RT_BAND_UNKNOWN throughout reproduces exactly the old
+ * using WIFI_BAND_UNKNOWN throughout reproduces exactly the old
  * single-bucket-per-channel behaviour; only the band-separation tests
  * below mix bands on one channel number. */
-#define B RT_BAND_UNKNOWN
+#define B WIFI_BAND_UNKNOWN
 
 /* Feed `n` frames, of which `retries` carry the retry bit. */
 static void feed(int ch, int n, int retries, int badfcs, time_t at) {
@@ -25,7 +25,7 @@ static void feed(int ch, int n, int retries, int badfcs, time_t at) {
         rf_quality_observe(ch, B, i < retries, i < badfcs, at);
 }
 
-static void feed_band(int ch, radiotap_band_t band, int n, int retries,
+static void feed_band(int ch, wifi_band_t band, int n, int retries,
                        int badfcs, time_t at) {
     for (int i = 0; i < n; i++)
         rf_quality_observe(ch, band, i < retries, i < badfcs, at);
@@ -201,13 +201,13 @@ static void test_table_full_eviction_is_counted(void) {
  * reading its own. */
 static void test_same_channel_number_different_bands_tracked_separately(void) {
     rf_quality_clear();
-    feed_band(149, RT_BAND_5GHZ, 200, 180, 0, T0);   /* 90% retries */
-    feed_band(149, RT_BAND_6GHZ, 200,   0, 0, T0);   /*  0% retries */
+    feed_band(149, WIFI_BAND_5GHZ, 200, 180, 0, T0);   /* 90% retries */
+    feed_band(149, WIFI_BAND_6GHZ, 200,   0, 0, T0);   /*  0% retries */
 
-    ASSERT_EQ(rf_quality_retry_pct(149, RT_BAND_5GHZ, T0), 90);
-    ASSERT_EQ(rf_quality_retry_pct(149, RT_BAND_6GHZ, T0), 0);
-    ASSERT_EQ(rf_quality_is_degraded(149, RT_BAND_5GHZ, T0), 1);
-    ASSERT_EQ(rf_quality_is_degraded(149, RT_BAND_6GHZ, T0), 0);
+    ASSERT_EQ(rf_quality_retry_pct(149, WIFI_BAND_5GHZ, T0), 90);
+    ASSERT_EQ(rf_quality_retry_pct(149, WIFI_BAND_6GHZ, T0), 0);
+    ASSERT_EQ(rf_quality_is_degraded(149, WIFI_BAND_5GHZ, T0), 1);
+    ASSERT_EQ(rf_quality_is_degraded(149, WIFI_BAND_6GHZ, T0), 0);
 }
 
 /* The harder bug #149 named: a shared bucket's window was kept
@@ -217,15 +217,15 @@ static void test_same_channel_number_different_bands_tracked_separately(void) {
  * Each band must age out on its own schedule. */
 static void test_one_bands_window_rolling_does_not_touch_the_other(void) {
     rf_quality_clear();
-    feed_band(149, RT_BAND_5GHZ, 200, 180, 0, T0);   /* degraded, then silent */
+    feed_band(149, WIFI_BAND_5GHZ, 200, 180, 0, T0);   /* degraded, then silent */
 
     time_t later = T0 + RF_WINDOW_SECS + 60;
-    feed_band(149, RT_BAND_6GHZ, RF_MIN_FRAMES, 0, 0, later);  /* unrelated, fresh */
+    feed_band(149, WIFI_BAND_6GHZ, RF_MIN_FRAMES, 0, 0, later);  /* unrelated, fresh */
 
     /* The 5 GHz bucket's own window has aged out: unknown, not the
      * stale 90%, and never refreshed by the 6 GHz feed above. */
-    ASSERT_EQ(rf_quality_retry_pct(149, RT_BAND_5GHZ, later), -1);
-    ASSERT_EQ(rf_quality_retry_pct(149, RT_BAND_6GHZ, later), 0);
+    ASSERT_EQ(rf_quality_retry_pct(149, WIFI_BAND_5GHZ, later), -1);
+    ASSERT_EQ(rf_quality_retry_pct(149, WIFI_BAND_6GHZ, later), 0);
 }
 
 /* The channel view keys by channel NUMBER only (channel.c's own,
@@ -239,8 +239,8 @@ static void test_snapshot_sums_every_band_sharing_a_channel_number(void) {
     s.channels[0].channel = 149;
     s.channel_count = 1;
 
-    feed_band(149, RT_BAND_5GHZ, 200, 180, 0, T0);
-    feed_band(149, RT_BAND_6GHZ, 200,   0, 0, T0);
+    feed_band(149, WIFI_BAND_5GHZ, 200, 180, 0, T0);
+    feed_band(149, WIFI_BAND_6GHZ, 200,   0, 0, T0);
     rf_quality_snapshot(&s, T0);
 
     ASSERT_EQ((int)s.channels[0].frames, 400);

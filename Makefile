@@ -37,6 +37,7 @@ CORE_COMMON_SRCS = \
        src/presence.c      \
        src/transit.c       \
        src/radiotap.c      \
+       src/wifi_freq.c     \
        src/rf_quality.c    \
        src/db_schema.c     \
        src/history.c       \

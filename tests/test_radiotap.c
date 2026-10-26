@@ -255,8 +255,18 @@ static void test_field_past_header_end_not_read(void) {
 
 /* ── frequency mapping ───────────────────────────────────── */
 
-/* Shared with the nl80211 path so a monitor capture and a managed-mode
- * scan cannot disagree about a channel number. */
+/* These cover the monitor path's entry point only.
+ *
+ * This comment used to claim the mapping was "shared with the nl80211
+ * path so a monitor capture and a managed-mode scan cannot disagree
+ * about a channel number". That was false for as long as it stood:
+ * src/platform/linux_wifi.c carried its own copy accepting 5180..5900
+ * against this path's 5160..5895, so the two disagreed by 20 MHz at the
+ * bottom and 5 at the top, and the comment is what made the duplication
+ * look deliberate and covered. #167 made it true by deleting the copy —
+ * and the property is now ASSERTED, in
+ * tests/test_wifi_freq.c :: test_monitor_and_shared_converter_agree_across_bands,
+ * rather than claimed in prose here. */
 static void test_freq_to_channel_all_bands(void) {
     ASSERT_EQ(radiotap_freq_to_channel(2412), 1);
     ASSERT_EQ(radiotap_freq_to_channel(2437), 6);
@@ -282,22 +292,22 @@ static void test_freq_to_channel_unmapped_is_zero(void) {
  * the point #149 is about: the frequency tells the two apart even
  * though radiotap_freq_to_channel() maps them to the same number. */
 static void test_freq_to_band_all_bands(void) {
-    ASSERT_EQ(radiotap_freq_to_band(2412), RT_BAND_2GHZ);
-    ASSERT_EQ(radiotap_freq_to_band(2472), RT_BAND_2GHZ);
-    ASSERT_EQ(radiotap_freq_to_band(2484), RT_BAND_2GHZ);   /* Japan ch 14 */
-    ASSERT_EQ(radiotap_freq_to_band(5180), RT_BAND_5GHZ);
-    ASSERT_EQ(radiotap_freq_to_band(5745), RT_BAND_5GHZ);   /* ch 149, 5 GHz */
-    ASSERT_EQ(radiotap_freq_to_band(5955), RT_BAND_6GHZ);
-    ASSERT_EQ(radiotap_freq_to_band(6175), RT_BAND_6GHZ);   /* ch 149, 6 GHz */
-    ASSERT_EQ(radiotap_freq_to_band(7115), RT_BAND_6GHZ);
+    ASSERT_EQ(radiotap_freq_to_band(2412), WIFI_BAND_2GHZ);
+    ASSERT_EQ(radiotap_freq_to_band(2472), WIFI_BAND_2GHZ);
+    ASSERT_EQ(radiotap_freq_to_band(2484), WIFI_BAND_2GHZ);   /* Japan ch 14 */
+    ASSERT_EQ(radiotap_freq_to_band(5180), WIFI_BAND_5GHZ);
+    ASSERT_EQ(radiotap_freq_to_band(5745), WIFI_BAND_5GHZ);   /* ch 149, 5 GHz */
+    ASSERT_EQ(radiotap_freq_to_band(5955), WIFI_BAND_6GHZ);
+    ASSERT_EQ(radiotap_freq_to_band(6175), WIFI_BAND_6GHZ);   /* ch 149, 6 GHz */
+    ASSERT_EQ(radiotap_freq_to_band(7115), WIFI_BAND_6GHZ);
 }
 
 static void test_freq_to_band_unmapped_is_unknown(void) {
-    ASSERT_EQ(radiotap_freq_to_band(0),    RT_BAND_UNKNOWN);
-    ASSERT_EQ(radiotap_freq_to_band(900),  RT_BAND_UNKNOWN);
-    ASSERT_EQ(radiotap_freq_to_band(2400), RT_BAND_UNKNOWN);
-    ASSERT_EQ(radiotap_freq_to_band(5000), RT_BAND_UNKNOWN);
-    ASSERT_EQ(radiotap_freq_to_band(9000), RT_BAND_UNKNOWN);
+    ASSERT_EQ(radiotap_freq_to_band(0),    WIFI_BAND_UNKNOWN);
+    ASSERT_EQ(radiotap_freq_to_band(900),  WIFI_BAND_UNKNOWN);
+    ASSERT_EQ(radiotap_freq_to_band(2400), WIFI_BAND_UNKNOWN);
+    ASSERT_EQ(radiotap_freq_to_band(5000), WIFI_BAND_UNKNOWN);
+    ASSERT_EQ(radiotap_freq_to_band(9000), WIFI_BAND_UNKNOWN);
 }
 
 void run_radiotap_tests(void) {

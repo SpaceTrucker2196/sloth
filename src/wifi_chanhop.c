@@ -8,11 +8,19 @@
  * the adapter may not be permitted to sit on. */
 static const int DEFAULT_CHANNELS[] = { 1, 6, 11, 36, 40, 44, 48, 149, 153, 157, 161 };
 
+int chanhop_band_freq(wifi_band_t band, int channel) {
+    return wifi_freq_mhz(band, channel);
+}
+
 int chanhop_freq(int channel) {
-    if (channel >= 1 && channel <= 13) return 2407 + channel * 5;
-    if (channel == 14)                 return 2484;
-    if (channel >= 36 && channel <= 177) return 5000 + channel * 5;
-    return 0;
+    /* #167: this used to be a fourth copy of the band plan, and the only
+     * one with no 6 GHz case at all — 5955 MHz was unreachable through
+     * the whole scheduler because a bare channel number cannot say which
+     * band it means. The inference is kept for the bare-number callers;
+     * the band-qualified entry point above is the one that can express
+     * 6 GHz. Widens 5 GHz from 36-177 to the band plan's 32-177, so an
+     * explicit --hop 34 now tunes instead of being silently dropped. */
+    return wifi_freq_mhz(wifi_freq_infer_band(channel), channel);
 }
 
 static uint32_t dwell_for(const chanhop_t *h, uint32_t activity) {
@@ -22,8 +30,9 @@ static uint32_t dwell_for(const chanhop_t *h, uint32_t activity) {
     return (uint32_t)d;
 }
 
-int chanhop_init(chanhop_t *h, const int *channels, int n) {
-    if (!h) return 0;
+/* Reset to defaults with no slots. Split out so the bare-number and
+ * band-qualified initialisers cannot drift in what they zero. */
+static void chanhop_reset(chanhop_t *h) {
     /* Zero the whole scheduler, not field by field. This used to name
      * the handful of members that existed at the time, and every field
      * added since (#91's per-slot visit/frame counters, then the dwell
@@ -35,15 +44,36 @@ int chanhop_init(chanhop_t *h, const int *channels, int n) {
     h->max_dwell_ms  = 2000;
     h->ms_per_obs    = 8;
     h->pending       = -1;
+}
 
+/* The one slot-filling path (#167). Both initialisers come through here
+ * so a slot's band and its frequency are always set together. */
+static int chanhop_add(chanhop_t *h, wifi_band_t band, int channel) {
+    int f = chanhop_band_freq(band, channel);
+    if (!f) return 0;                   /* skip channels we can't tune */
+    if (h->count >= CHANHOP_MAX) return 0;
+    h->slots[h->count].channel  = channel;
+    h->slots[h->count].band     = band;
+    h->slots[h->count].freq_mhz = f;
+    h->count++;
+    return 1;
+}
+
+int chanhop_init(chanhop_t *h, const int *channels, int n) {
+    if (!h) return 0;
+    chanhop_reset(h);
     if (!channels) return 0;
-    for (int i = 0; i < n && h->count < CHANHOP_MAX; i++) {
-        int f = chanhop_freq(channels[i]);
-        if (!f) continue;               /* skip channels we can't tune */
-        h->slots[h->count].channel  = channels[i];
-        h->slots[h->count].freq_mhz = f;
-        h->count++;
-    }
+    for (int i = 0; i < n && h->count < CHANHOP_MAX; i++)
+        chanhop_add(h, wifi_freq_infer_band(channels[i]), channels[i]);
+    return h->count;
+}
+
+int chanhop_init_bands(chanhop_t *h, const chanhop_chan_t *chans, int n) {
+    if (!h) return 0;
+    chanhop_reset(h);
+    if (!chans) return 0;
+    for (int i = 0; i < n && h->count < CHANHOP_MAX; i++)
+        chanhop_add(h, chans[i].band, chans[i].channel);
     return h->count;
 }
 
@@ -172,6 +202,11 @@ int chanhop_current_freq(const chanhop_t *h) {
     return h->slots[h->cur].freq_mhz;
 }
 
+wifi_band_t chanhop_current_band(const chanhop_t *h) {
+    if (!h || h->count == 0) return WIFI_BAND_UNKNOWN;
+    return h->slots[h->cur].band;
+}
+
 int chanhop_target_channel(const chanhop_t *h) {
     if (!h || h->count == 0 || h->pending < 0) return 0;
     return h->slots[h->pending].channel;
@@ -180,6 +215,11 @@ int chanhop_target_channel(const chanhop_t *h) {
 int chanhop_target_freq(const chanhop_t *h) {
     if (!h || h->count == 0 || h->pending < 0) return 0;
     return h->slots[h->pending].freq_mhz;
+}
+
+wifi_band_t chanhop_target_band(const chanhop_t *h) {
+    if (!h || h->count == 0 || h->pending < 0) return WIFI_BAND_UNKNOWN;
+    return h->slots[h->pending].band;
 }
 
 int chanhop_export(const chanhop_t *h, int *out, int max, int *cur_idx) {

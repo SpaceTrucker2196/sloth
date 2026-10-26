@@ -24,7 +24,7 @@
 #define SLOTH_RF_QUALITY_H
 
 #include "sloth.h"
-#include "radiotap.h"   /* radiotap_band_t */
+#include "radiotap.h"   /* wifi_band_t */
 
 /* Channels tracked concurrently. 2.4 GHz has 14, 5 GHz ~25 usable,
  * 6 GHz 59 — but a single radio only ever visits a hop list, so this
@@ -59,19 +59,19 @@
  * comes from radiotap_freq_to_band() at the one call site that has a
  * real frequency (capture/probe.c) — it is a fact about the radio, not
  * a guess from an IE that may or may not be present. */
-void rf_quality_observe(int channel, radiotap_band_t band,
+void rf_quality_observe(int channel, wifi_band_t band,
                         int retry, int bad_fcs, time_t now);
 
 /* Retry percentage for `channel`/`band` over the window, or -1 when
  * fewer than RF_MIN_FRAMES have been seen (i.e. "not enough to say"). */
-int rf_quality_retry_pct(int channel, radiotap_band_t band, time_t now);
+int rf_quality_retry_pct(int channel, wifi_band_t band, time_t now);
 
 /* FCS-failure percentage, same contract. */
-int rf_quality_badfcs_pct(int channel, radiotap_band_t band, time_t now);
+int rf_quality_badfcs_pct(int channel, wifi_band_t band, time_t now);
 
 /* True when channel/band has enough traffic to judge and its retry
  * ratio is at or above RF_RETRY_DEGRADED_PCT. */
-int rf_quality_is_degraded(int channel, radiotap_band_t band, time_t now);
+int rf_quality_is_degraded(int channel, wifi_band_t band, time_t now);
 
 /* Merge the live counters into `s->channels[]`, which the [m] Channel
  * view renders. Rows for channels with no beacon are not created —

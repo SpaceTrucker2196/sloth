@@ -15,6 +15,7 @@
 #include "wifi_oui_attacker.h"
 #include "ev_cite.h"
 #include "mle.h"       /* MLE_TYPE_BASIC */
+#include "wifi_freq.h"
 
 static beacon_ap_t     g_aps[MAX_BEACON_APS];
 static int             g_count = 0;
@@ -1555,17 +1556,19 @@ int ap_infrastructure_peers(const beacon_ap_t *a, const beacon_ap_t *b)
            ap_advertises_neighbor(b, a->bssid);
 }
 
-/* Contract in sloth.h. The two numeric ranges below are otherwise
- * exactly what a prior, now-replaced band_for() in two view files
- * used — kept here so the single shared answer agrees with both. The
- * old 181-233 "6 GHz" range was never reachable from a real channel
- * number (6 GHz runs 1-233, the same numbers 5 GHz and 2.4 GHz use) and
- * is dropped rather than carried forward as dead, misleading code. */
+/* Contract in sloth.h. The numeric ranges this used to carry — a third
+ * copy of the band plan, after a prior now-replaced band_for() in two
+ * view files — are gone as of #167: the spans live in wifi_freq.h and
+ * this function is only the labelling. (The old 181-233 "6 GHz" range
+ * was never reachable from a real channel number, since 6 GHz runs
+ * 1-233, the same numbers 5 GHz and 2.4 GHz use.) */
 const char *ap_band_label(int channel, uint8_t channel_source)
 {
     if (channel <= 0) return "?";
     if (channel_source == CH_SRC_HE_6GHZ) return "6 GHz";
-    if (channel >= 1  && channel <= 14)  return "2.4 GHz";
-    if (channel >= 32 && channel <= 177) return "5 GHz";
-    return "?";
+    switch (wifi_freq_infer_band(channel)) {
+    case WIFI_BAND_2GHZ: return "2.4 GHz";
+    case WIFI_BAND_5GHZ: return "5 GHz";
+    default:             return "?";
+    }
 }
