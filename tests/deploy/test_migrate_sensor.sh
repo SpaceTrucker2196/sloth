@@ -155,8 +155,12 @@ STUBEOF
     # would be: the tool has to reconnect, not give up.
     cat > "$STUB/socat" <<STUBEOF
 #!/bin/sh
-n=\$(cat "$STATE/socat_calls" 2>/dev/null || echo 0)
-echo \$((n + 1)) > "$STATE/socat_calls"
+# The tool kills its reader at the end of a verify window; a plain
+# "echo > file" killed between its truncate and its write leaves the
+# counter empty (seen in CI on 2214b59), so it is written aside and
+# renamed into place, which a kill cannot tear.
+n=\$(cat "$STATE/socat_calls" 2>/dev/null); n=\${n:-0}
+echo \$((n + 1)) > "$STATE/socat_calls.\$\$" && mv "$STATE/socat_calls.\$\$" "$STATE/socat_calls"
 [ "\$n" -eq 0 ] && exit 1
 echo '{"type":"heartbeat","ts":1}'
 cat "$STATE/health"
