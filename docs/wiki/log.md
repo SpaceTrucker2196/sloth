@@ -4986,3 +4986,10 @@ report events.
   the suite; the first flood only held the gates to hint counters. The
   test helper that was meant to make three links made one; it now lays
   its pairs out in time order and the suite asserts all three commit.
+- 2026-10-26 — [[ble]]: no page change (#156 review). The second
+  `BLE_ADV_FLOOD` pin hard-coded its rotated addresses' report count,
+  so a change to those runs could move the flood off its gates while
+  the suite stayed green (seen: F's run lengthened, a shifted rate gate
+  passed the second flood). The count now comes from the runs
+  themselves, and an assertion fails when no room is left for every
+  flooder to be heard.

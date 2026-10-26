@@ -103,10 +103,13 @@ static void obs(const uint8_t a[6], const uint8_t *ad, size_t len, time_t ts) {
     obs_on(a, 1, 0x03, ad, len, ts, MON, 0);
 }
 
-/* `a` heard every `step` seconds over [from, to]. */
-static void run_addr(const uint8_t a[6], const uint8_t *ad, size_t len,
-                     time_t from, time_t to, time_t step) {
-    for (time_t t = from; t <= to; t += step) obs(a, ad, len, t);
+/* `a` heard every `step` seconds over [from, to]; returns how many
+ * reports that was, for a caller that has to land on a count. */
+static unsigned run_addr(const uint8_t a[6], const uint8_t *ad, size_t len,
+                         time_t from, time_t to, time_t step) {
+    unsigned n = 0;
+    for (time_t t = from; t <= to; t += step, n++) obs(a, ad, len, t);
+    return n;
 }
 
 static void rpa(uint8_t a[6], unsigned n) {
@@ -1503,11 +1506,15 @@ static void flood_on_a_rotated_key(uint8_t E[6], uint8_t F[6]) {
     obs_on(home, 1, 0x03, fp, sizeof(fp), g_wall - 101, MON, 0);
     g_mono += BLE_FLOOD_WINDOW_S * 1000u;
     rpa(E, 5); rpa(F, 6);
-    run_addr(E, fp, sizeof(fp), g_wall - 100, g_wall - 80, 2);
-    run_addr(F, fp, sizeof(fp), g_wall - 77, g_wall - 40, 2);
+    /* Counted, not written down: a hard-coded count would let a change
+     * to these runs move the flood off the edge with nothing going red. */
+    const unsigned rotated = run_addr(E, fp, sizeof(fp), g_wall - 100, g_wall - 80, 2) +
+                             run_addr(F, fp, sizeof(fp), g_wall - 77, g_wall - 40, 2);
     const unsigned total = BLE_FLOOD_RATE * BLE_FLOOD_WINDOW_S;
-    const unsigned rotated = 11 + 19;                 /* E's and F's reports */
     const unsigned addrs = BLE_FLOOD_DISTINCT_ADDRS - 2;
+    /* Room left for every flooder to be heard, or the edge is unreachable. */
+    ASSERT(rotated + addrs <= total);
+    if (rotated + addrs > total) return;
     for (unsigned k = 0; k < total - rotated; k++) {
         const uint8_t z[6] = { 0xC3, 0, 0, 3, 0, (uint8_t)(k % addrs) };
         obs_on(z, 1, 0x03, fp, sizeof(fp), g_wall, MON, 0);
