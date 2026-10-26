@@ -264,3 +264,4 @@
 | 6f9f71d | 2026-10-23T21:04:14Z | claude-opus-5-5 | 76 | 22415 | 18748388 | 41369 | 4.5292 | #156 item 2: BLE address-rotation hints behind --ble-rotation-hints (default off): research corpus doc, SipHash per-run token digests, 64-entry seam table, poisoning/flood/adapter guards; [*] estimate only, no detector consumer, window-scoped links |
 | 40e5116 | 2026-10-26T11:33:20Z | claude-opus-5 | 346 | 179792 | 26956241 | 488984 | 22.8645 | #167: one shared 802.11 band plan (src/wifi_freq) replacing six drifted copies,  |
 | 2083254 | 2026-10-26T13:12:32Z | claude-opus-5 | 462 | 164507 | 27172728 | 1946020 | 37.1615 | release v1.8.5 |
+| b6a39ea | 2026-10-26T16:11:06Z | claude-opus-5-5 | 18 | 4634 | 4665962 | 1275577 | 11.2306 | #150: list views size pages from the cursor via view_page_budget (27 views), clip wide rows, nothing drawn off-screen; per-view 100x33 fit tests; Deauth/BTM/FragAttacks/Interfaces fixes |
