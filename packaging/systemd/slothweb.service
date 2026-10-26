@@ -11,6 +11,15 @@
 # data_socket.c, SO_PEERCRED). slothweb reads both, so it is the same
 # account, not a second one granted access to them. It holds no
 # capability: it binds a port above 1024 and never captures.
+#
+# What the shared uid still allows, and why it is accepted: a process of
+# the same uid may signal the sensor, and a compromised slothweb could
+# SIGSTOP or SIGKILL it and end capture. The signal syscalls are denied
+# below (slothweb signals nothing, not even itself); ptrace is already
+# refused, because the sensor keeps a capability in its permitted set;
+# and the read-only mounts keep it from writing sloth.db or /run/sloth.
+# The lasting fix is a slothweb account in group sloth, with the socket
+# 0660 and a group-readable view of sloth.db (deployment.md §6).
 
 [Unit]
 Description=slothweb read-only web UI for the sloth sensor
@@ -61,9 +70,12 @@ NoNewPrivileges=true
 # ── Filesystem ───────────────────────────────────────────────────────────
 # Everything read-only but the state directory. /var/lib/sloth is
 # read-only already under strict; ReadOnlyPaths= says so explicitly, so a
-# later ReadWritePaths= cannot widen it by accident.
+# later ReadWritePaths= cannot widen it by accident. The '-': on a host
+# where the sensor has never started the directory is not there yet, and
+# without it the namespace setup fails (226/NAMESPACE) instead of
+# slothweb starting and saying sloth.db is missing.
 ProtectSystem=strict
-ReadOnlyPaths=/var/lib/sloth
+ReadOnlyPaths=-/var/lib/sloth
 ProtectHome=yes
 PrivateTmp=true
 PrivateDevices=true
@@ -87,6 +99,11 @@ MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+# No signal to any process: the shared uid (above) would let slothweb
+# stop or kill the sensor. tgkill goes too, since tgkill(pid, pid, sig)
+# reaches any process; it costs only a self-signal slothweb never sends
+# (its shutdown is a write to a pipe; abort() still ends the process).
+SystemCallFilter=~kill tkill tgkill rt_sigqueueinfo rt_tgsigqueueinfo pidfd_send_signal
 SystemCallErrorNumber=EPERM
 
 # ── Resources ────────────────────────────────────────────────────────────

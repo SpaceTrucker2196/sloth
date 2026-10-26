@@ -1223,7 +1223,9 @@ $(STAMPS): FORCE
 # slothweb, which slothweb.service runs (#153). slothweb is not rebuilt
 # here: `web` is phony and would relink it as root inside the checkout,
 # so `make web` comes first, as the build user, and install refuses
-# without it.
+# without it, or when any of its inputs is newer than it: a pull
+# followed by `make` and `sudo make install` would otherwise install the
+# old slothweb beside the new unit and UI.
 # DESTDIR is honoured throughout so CI can stage into a scratch root and
 # `systemd-analyze verify` the result without touching the runner.
 #
@@ -1245,6 +1247,8 @@ DEFAULTDIR  ?= /etc/default
 
 install: $(TARGET)
 	@[ -x slothweb ] || { echo "install: no ./slothweb; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
+	@new=$$(find web/src web/ui web/tools web/data $(WEB_RECIPES_MD) Makefile -type f -newer slothweb 2>/dev/null | head -n 1); \
+	  [ -z "$$new" ] || { echo "install: ./slothweb is older than $$new; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
 	install -d $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/sbin $(DESTDIR)$(PREFIX)/share/sloth
 	install -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)
 	install -m 755 slothweb $(DESTDIR)$(PREFIX)/bin/slothweb

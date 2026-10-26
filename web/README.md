@@ -1625,7 +1625,9 @@ looks live.
 
 So every DB-backed view says how old its data is. Devices, the WiFi
 view's access-point table, Flows, History and Lookup each carry a line
-`database as of HH:MM` (local time), from `/api/health`'s
+`database as of HH:MM` (local time; `YYYY-MM-DD HH:MM` when that is not
+today, so a snapshot days old never reads as this afternoon even with
+the stream down, when "stale" is not said), from `/api/health`'s
 `sloth_db_mtime`: the file's mtime, or, for a WAL reader, the newer of
 the file's and its `-wal`'s (sloth's commits sit in the `-wal` until a
 checkpoint; an immutable or rollback read is the main file alone). It

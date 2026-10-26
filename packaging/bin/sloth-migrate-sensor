@@ -650,13 +650,15 @@ web_rollback() {
     echo "$ME: rolling back slothweb only; $UNIT_NAME stays migrated and verified" >&2
     rc=0
     "$SYSTEMCTL" stop "$WEB_UNIT_NAME" 2>/dev/null
-    if [ "$web_had_unit" -eq 1 ] && [ "$web_same" -eq 0 ]; then
+    # Only a unit this run replaced is put back: a failed backup comes
+    # before the replacement, and leaves the operator's unit as it was.
+    if [ "$web_unit_written" -eq 1 ] && [ "$web_had_unit" -eq 1 ]; then
         if [ -f "$WEB_UNIT_BAK" ] && cp -p "$WEB_UNIT_BAK" "$WEB_UNIT"; then
             mv "$WEB_UNIT_BAK" "$WEB_UNIT.rolled-back-$STAMP"
         else
             rc=1
         fi
-    elif [ "$web_had_unit" -eq 0 ]; then
+    elif [ "$web_unit_written" -eq 1 ]; then
         rm -f "$WEB_UNIT"
     fi
     [ "$web_wrote_defaults" -eq 1 ] && rm -f "$WEB_DEFAULTS"
@@ -680,7 +682,7 @@ web_rollback() {
 # shellcheck disable=SC2317,SC2329  # called through act()
 write_web_unit() {
     render_web_unit > "$WEB_UNIT.tmp.$$" && chmod 644 "$WEB_UNIT.tmp.$$" &&
-    mv "$WEB_UNIT.tmp.$$" "$WEB_UNIT"
+    mv "$WEB_UNIT.tmp.$$" "$WEB_UNIT" && web_unit_written=1
 }
 # shellcheck disable=SC2317,SC2329  # called through act()
 write_web_defaults() {
@@ -691,6 +693,7 @@ write_web_defaults() {
 
 WEB_UNIT_BAK=""
 web_wrote_defaults=0
+web_unit_written=0
 web_apply() {
     web_state
     WEB_UNIT_BAK=$WEB_UNIT.bak-migrate-$STAMP

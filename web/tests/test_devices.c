@@ -165,7 +165,12 @@ static void test_page_shows_db_freshness(void) {
     }
     WT_HAS(p, "var DB_VIEWS = [\"devices\", \"wifi\", \"flows\", \"history\", \"lookup\"];");
     WT_HAS(p, "var DB_AGE_IDS = [\"d-dbage\", \"w-dbage\", \"f-dbage\", \"h-dbage\", \"l-dbage\"];");
-    WT_HAS(p, "var t = \"database as of \" + hhmm(h.sloth_db_mtime);");
+    WT_HAS(p, "var t = \"database as of \" + dbWhen(h.sloth_db_mtime);");
+    /* The date when it is not today's (a days-old snapshot with the
+     * stream down is not "stale" and must not read as today). Seen red
+     * with the date line removed from dbWhen(). */
+    WT_HAS(p, "if (d.toDateString() === now.toDateString()) return t;\n"
+              "    return d.getFullYear() + \"-\" + two(d.getMonth() + 1) + \"-\" + two(d.getDate()) + \" \" + t;");
     WT_HAS(p, "if (h.sloth_db_stale === true)\n"
               "      t += \" - stale: \" + dur(h.sloth_db_age_s) + \" old while the live stream is current; these rows are as old as it is\";");
     WT_HAS(p, "e.className = stale ? \"sub dbage stale\" : \"sub dbage\";");

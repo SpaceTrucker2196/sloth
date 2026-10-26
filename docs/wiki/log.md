@@ -5347,3 +5347,43 @@ report events.
   assertions, `make web-test` 21394 to 21485, `make deploy-test` 262 to
   394, each 0 failed; shellcheck 0.9.0 and 0.11.0 both clean on the
   three scripts, and the web suite also against SQLite 3.45.1.
+- 2026-10-26 — [[deployment]] §2, §6, [[slothweb]], `web/README.md`:
+  the third review of #153 / #168. slothweb shares the sensor's uid,
+  and a process may signal any process of its own uid, so a
+  compromised slothweb could `SIGSTOP` or `SIGKILL` the sensor; §6 now
+  says so and why it is accepted (the `0600` socket and `0700`
+  directory), and the unit denies `kill tkill tgkill rt_sigqueueinfo
+  rt_tgsigqueueinfo pidfd_send_signal`. `tgkill` goes with the rest,
+  since `tgkill(pid, pid, sig)` reaches any process; slothweb sends no
+  signal (its handler writes to a pipe), and under a scratch seccomp
+  launcher denying the six it served `/api/health`, `/` and
+  `/api/devices` over the demo stream and exited 0 on `SIGTERM`. The
+  lasting fix, a `slothweb` account in group `sloth`, is named, not
+  done. `ReadOnlyPaths=-/var/lib/sloth`: without the `-` a host whose
+  sensor never started fails slothweb with `226/NAMESPACE`. `make
+  install` refuses a `./slothweb` older than any file under `web/src`,
+  `web/ui`, `web/tools`, `web/data`, the recipes page or the
+  `Makefile` (checked on a `DESTDIR` stage, refused then accepted after
+  `make web`). The freshness line carries the date when it is not
+  today's, since "stale" is said only while the stream is current.
+  `test_same_uid_reader_beside_a_writing_sloth` makes `sloth.db`, its
+  `-wal` and `-shm` `0400` for the reads, and says it does not pin
+  `readonly_shm` (green without it, as under the real mount;
+  `test_crashed_sloth_restarts_beside_a_reader` red). The unit test's
+  `ReadWritePaths=` check tokenises the value, so
+  `/var/lib/sloth /var/lib/slothweb` is refused. `sloth-migrate-sensor`
+  restores the slothweb unit only once it has replaced it: a failed
+  backup no longer reports `ROLLBACK INCOMPLETE` for a unit never
+  touched. Seen red under one unique-match mutation each, restored by
+  the inverse edit and checked byte-identical: `tgkill` dropped from
+  the deny line, the `-` dropped, a `ReadWritePaths=/var/lib/sloth
+  /var/lib/slothweb` line added, the path-boundary test in
+  `uf_path_under()` made `1`, the Makefile's freshness check pointed at
+  a missing file, the date dropped from `dbWhen()`, and the rollback's
+  old condition restored (the new `web-backup-fails` case).
+  `systemd-analyze verify` clean and `security --offline=true` 1.3 OK
+  on a copy; CI has no verify step and `.github/` is unchanged.
+  Measured, parent (14193e9) to this tree: `make test` 34148 to 34170
+  assertions, `make web-test` 21485 to 21494 (21495 against SQLite 3.45.1),
+  `make deploy-test` 394 to 401 under shellcheck 0.9.0 and 0.11.0, each
+  0 failed; `make test` under ASan + UBSan 34168.

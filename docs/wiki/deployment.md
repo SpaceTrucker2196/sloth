@@ -25,7 +25,7 @@ with no capability at all, once the sensor verifies
 `tests/test_unit_file.c`, `tests/deploy/test_migrate_sensor.sh`,
 `src/secure_file.c`, `src/data_socket.c`, `src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2.
 
-**Last updated**: 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
+**Last updated**: 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
 
 ---
 
@@ -73,7 +73,7 @@ depth on top of this, not a prerequisite for it.
 | `install` | `sloth` | `/usr/local/bin/sloth` | 0755 | root-owned, so the running binary cannot be swapped by the build user |
 | `install` | `packaging/bin/sloth-monitor-up` | `/usr/local/sbin/sloth-monitor-up` | 0755 | the only thing that touches link state; runs as root from `ExecStartPre=+` |
 | `install` | `research.db` | `/usr/local/share/sloth/research.db` | 0644 | `--with-research` opens it `SQLITE_OPEN_READONLY`; read-only data, so `secure_file.c`'s ownership rule does not apply |
-| `install` | `slothweb` (`make web` first, as yourself) | `/usr/local/bin/slothweb` | 0755 | what `slothweb.service` runs (§6); `install` refuses without it rather than relink it as root |
+| `install` | `slothweb` (`make web` first, as yourself) | `/usr/local/bin/slothweb` | 0755 | what `slothweb.service` runs (§6); `install` refuses without it rather than relink it as root, and refuses one older than any file under `web/src`, `web/ui`, `web/tools`, `web/data`, the recipes page or the `Makefile`, so a pull followed by `make` alone does not install the old slothweb beside the new unit and UI |
 | `install-service` | `packaging/systemd/sloth-sensor.service` | `/etc/systemd/system/sloth-sensor.service` | 0644 | the unit below, with `/usr/local/` rewritten to `$(PREFIX)/` if you changed it |
 | `install-service` | `packaging/systemd/sloth.sysusers.conf` | `/usr/lib/sysusers.d/sloth.conf` | 0644 | declares the `sloth` account; `systemd-sysusers` creates it, make never does |
 | `install-service` | `packaging/default/sloth` | `/etc/default/sloth` | 0644, `install -b` | site settings; an existing copy is kept as `/etc/default/sloth~` |
@@ -717,7 +717,8 @@ journalctl -u sloth-sensor -u slothweb -f
 
 Afterwards the snapshot is not needed: slothweb reads
 `/var/lib/sloth/sloth.db` in place as a WAL reader, and its DB-backed
-views say "database as of HH:MM" from the file's own mtime (#168).
+views say "database as of HH:MM" from the file's own mtime, with the
+date in front when it is not today's (#168).
 `~/sloth-snap.db` and the old `slothweb.db` in the home directory can be
 deleted by hand once the new one has filled; the old `data/` stays
 until you delete it, as §4 says.
@@ -768,24 +769,27 @@ ExecStart=/usr/local/bin/slothweb \
     $SLOTHWEB_ARGS
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadOnlyPaths=/var/lib/sloth
+ReadOnlyPaths=-/var/lib/sloth
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=~kill tkill tgkill rt_sigqueueinfo rt_tgsigqueueinfo pidfd_send_signal
 ```
 
 | Key | Why |
 |---|---|
 | `User=sloth`, `Group=sloth` | The sensor's state is `/var/lib/sloth`, `0700 sloth`, and its stream `/run/sloth/sloth.sock`, `0600 sloth`. slothweb reads both, so it is that account rather than a second one granted access to them; the sensor's files keep their modes. |
+| What the shared uid costs | A process may signal any process of its own uid, so a compromised slothweb — it serves HTTP, and may be reachable over Tailscale — could `SIGSTOP` or `SIGKILL` the sensor and end capture. Accepted for now because the `0600` socket and the `0700` state directory admit only that account, and a second account needs both widened. It is narrowed rather than left open: the signal syscalls are denied (`SystemCallFilter=~kill …`, below); ptrace is already refused, because the sensor keeps `CAP_NET_ADMIN` in its permitted set; and the read-only mounts keep slothweb from writing `sloth.db` or `/run/sloth`. The lasting fix is a `slothweb` account in group `sloth`, the socket `0660` and a group-readable view of `sloth.db`. |
 | `After=`, `Wants=sloth-sensor.service` | Starting slothweb starts the sensor; `Wants=`, not `Requires=`, so a sensor restart (or its radio unplugged) leaves the UI serving history and saying the stream is retrying. |
 | `--socket unix:/run/sloth/sloth.sock` | The sensor's unix socket (§4.2). `connect()` on a socket in a read-only mount works: the read-only check covers files, directories and links, not sockets. |
-| `--sloth-db /var/lib/sloth/sloth.db` | Read in place, never copied. With the sensor running both `-wal` and `-shm` exist, so slothweb opens it as a WAL reader with `readonly_shm=1` and never creates a file beside it (`web/src/web_slothdb.h`); `/api/health` says `"db_mode":"wal"`. `web/tests/test_slothdb.c :: test_same_uid_reader_beside_a_writing_sloth` holds the deployment's shape: a `0700` directory made read-only for the reads, `0600` files, a writer of the same uid committing between them, each commit seen. |
+| `--sloth-db /var/lib/sloth/sloth.db` | Read in place, never copied. With the sensor running both `-wal` and `-shm` exist, so slothweb opens it as a WAL reader with `readonly_shm=1` and never creates a file beside it (`web/src/web_slothdb.h`); `/api/health` says `"db_mode":"wal"`. `web/tests/test_slothdb.c :: test_same_uid_reader_beside_a_writing_sloth` holds the deployment's shape: a `0700` directory and `0600` files, made `0500` and `0400` for the reads (the read-only mount, by mode), a writer of the same uid committing between them, each commit seen. It does not pin `readonly_shm`: with the `-shm` unwritable SQLite opens it read-only either way, as under the mount; `test_crashed_sloth_restarts_beside_a_reader` goes red without it. |
 | `--store /var/lib/slothweb/slothweb.db` | slothweb's own file, in its own `StateDirectory`, never inside the sensor's. |
 | `$SLOTHWEB_ARGS` | From `/etc/default/slothweb`: the bind and the allowed peers. Empty (the shipped file), slothweb listens on `127.0.0.1:8770` and admits loopback only. The three paths above are not overridable there: the sandbox admits no others. |
 | `CapabilityBoundingSet=`, `AmbientCapabilities=` (empty) | No capability at all: it binds a port above 1024 and never captures. An absent `CapabilityBoundingSet=` would be the full set, so the empty one is written out. |
 | `NoNewPrivileges=true` | Nothing it executes can gain privilege. |
-| `ProtectSystem=strict`, `ReadOnlyPaths=/var/lib/sloth`, `ProtectHome=yes` | Everything read-only but `/var/lib/slothweb`. `/var/lib/sloth` is read-only under `strict` already; `ReadOnlyPaths=` says so, so a later `ReadWritePaths=` cannot widen it by accident. No `/home` at all. |
+| `ProtectSystem=strict`, `ReadOnlyPaths=-/var/lib/sloth`, `ProtectHome=yes` | Everything read-only but `/var/lib/slothweb`. `/var/lib/sloth` is read-only under `strict` already; `ReadOnlyPaths=` says so, so a later `ReadWritePaths=` cannot widen it by accident. The `-`: where the sensor has never started, `/var/lib/sloth` is not there, and without it the start fails with `226/NAMESPACE` instead of slothweb serving its own history and saying `sloth.db` is missing. No `/home` at all. |
 | `PrivateTmp`, `PrivateDevices`, `ProtectKernel*`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `ProtectProc=invisible` | As for the sensor (§3.4). |
 | `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6` | The data socket and HTTP; no packet or netlink socket. |
 | `SystemCallFilter=@system-service`, `~@privileged @resources`, `MemoryDenyWriteExecute`, `LockPersonality` | As for the sensor, without the sensor's `capset` exception: slothweb holds nothing to shed. |
+| `SystemCallFilter=~kill tkill tgkill rt_sigqueueinfo rt_tgsigqueueinfo pidfd_send_signal` | No signal to any process (the shared uid, above). `tgkill` is denied with the rest because `tgkill(pid, pid, sig)` reaches any process, not only a thread of slothweb; slothweb sends no signal, not even to itself (its shutdown is a write to a pipe from the handler), and `abort()` still ends the process when its `raise()` is refused. A future `pthread_kill()` or `raise()` would get `EPERM`. |
 | `MemoryMax=512M`, `TasksMax=32` | Four threads, two SQLite page caches and the HTTP buffers; the store is capped on disk by `--web-max-mb` (256 MB by default). |
 | `Restart=on-failure` | A refused start (a bad `SLOTHWEB_ARGS`) stops, and says why in the journal, instead of looping. |
 
@@ -822,8 +826,10 @@ systemd-analyze security slothweb
 `tests/test_unit_file.c` scans the shipped unit: `User=sloth` and
 `Group=sloth` once each, both capability sets present and empty, no
 `CAP_` anywhere, no `/home/` anywhere, the sandbox keys, the address
-families exactly within `AF_UNIX AF_INET AF_INET6`, `ReadOnlyPaths=`
-naming `/var/lib/sloth` and `StateDirectory=` not naming it, the
+families exactly within `AF_UNIX AF_INET AF_INET6`, the six signal
+syscalls denied, `ReadOnlyPaths=` naming `-/var/lib/sloth`, no
+`ReadWritePaths=` token at or under `/var/lib/sloth` and
+`StateDirectory=` not naming it, the
 `ExecStart` paths and no `--web-bind`, `--web-allow`,
 `--web-allow-remote` or `--web-allow-sql` in it; and the defaults file:
 `SLOTHWEB_ARGS` once and empty, no live `--web-allow-remote`, the

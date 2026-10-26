@@ -784,6 +784,25 @@ check 'cmp -s "$REPO/packaging/systemd/slothweb.service" "$ROOT/$WEB_REL"' "slot
 check 'cmp -s "$W/old.web" "$ROOT/$WEB_REL.bak-migrate-T5"' "the previous slothweb unit was not backed up"
 check 'grep -q "sloth.db immutable, stream connected" "$W/out"' "immutable not accepted: $(cat "$W/out")"
 
+# A backup of the operator's slothweb unit that fails comes before the
+# unit is replaced: the rollback leaves the unit as it is and says so,
+# rather than finding no backup and calling itself incomplete. The
+# backup path is a dangling link, which cp refuses as root too.
+CASE=web-backup-fails
+setup web-backup-fails
+printf '[Service]\nExecStart=/opt/old/slothweb\n' > "$ROOT/$WEB_REL"
+cp "$ROOT/$WEB_REL" "$W/old.web"
+: > "$STATE/web_active"; : > "$STATE/web_enabled"
+ln -s "$W/no-such-dir/unit" "$ROOT/$WEB_REL.bak-migrate-T1"
+run --with-slothweb
+check '[ "$RC" -eq 3 ]' "exit $RC, want 3: $(cat "$W/out")"
+check 'grep -qF "slothweb FAILED: could not back up $ROOT/$WEB_REL" "$W/out"' "the failed backup not said: $(cat "$W/out")"
+check 'cmp -s "$W/old.web" "$ROOT/$WEB_REL"' "the operator's slothweb unit changed"
+check '! grep -q "ROLLBACK INCOMPLETE" "$W/out"' "an untouched unit was reported as an incomplete rollback: $(cat "$W/out")"
+check 'grep -q "slothweb rolled back to its state before this run" "$W/out"' "slothweb rollback not reported: $(cat "$W/out")"
+check '[ -e "$STATE/web_active" ] && [ -e "$STATE/web_enabled" ]' "the previous slothweb was not started again"
+check '[ ! -e "$ROOT/$WEB_REL.rolled-back-T1" ]' "a unit never replaced was renamed as rolled back"
+
 # Refused in preflight, before the sensor is touched.
 web_refusal() {   # web_refusal NAME EXPECTED-FRAGMENT (PREP sets it up)
     CASE=web-refuse-$1

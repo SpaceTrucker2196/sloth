@@ -158,6 +158,28 @@ static int uf_tokens_within(const char *value, const char *const allow[],
     return seen > 0;
 }
 
+/* A token of a path list (ReadWritePaths= and kin) at or under `dir`,
+ * after the '-' and '+' prefixes systemd allows. `/var/lib/slothweb`
+ * is not under `/var/lib/sloth`; `/var/lib/sloth/` and
+ * `-/var/lib/sloth/x` are. */
+static int uf_path_under(const char *value, const char *dir) {
+    if (!value) return 0;
+    size_t k = strlen(dir);
+    const char *p = value;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        const char *e = p;
+        while (*e && *e != ' ' && *e != '\t') e++;
+        const char *t = p;
+        while (t < e && (*t == '-' || *t == '+')) t++;
+        if ((size_t)(e - t) >= k && strncmp(t, dir, k) == 0 &&
+            (t + k == e || t[k] == '/')) return 1;
+        p = e;
+    }
+    return 0;
+}
+
 /* A flag is "named" by a document when it appears followed by something
  * that cannot continue a flag name — so a page listing only
  * `--db-interval-secs` does not get credit for `--db`. */
@@ -221,6 +243,19 @@ static void test_scanner_tokens_are_whole_words(void) {
     /* Emptied-out directive is not a subset, it is a missing directive. */
     ASSERT(!uf_tokens_within("", caps, 2));
     ASSERT(!uf_tokens_within(NULL, caps, 2));
+
+    ASSERT(uf_path_under("/var/lib/sloth", "/var/lib/sloth"));
+    ASSERT(uf_path_under("/var/lib/sloth/", "/var/lib/sloth"));
+    ASSERT(uf_path_under("/var/lib/sloth/x", "/var/lib/sloth"));
+    ASSERT(uf_path_under("-/var/lib/sloth", "/var/lib/sloth"));
+    ASSERT(uf_path_under("+/var/lib/sloth/x", "/var/lib/sloth"));
+    ASSERT(uf_path_under("/var/lib/sloth /var/lib/slothweb", "/var/lib/sloth"));
+    ASSERT(uf_path_under("/var/lib/slothweb /var/lib/sloth", "/var/lib/sloth"));
+    ASSERT(!uf_path_under("/var/lib/slothweb", "/var/lib/sloth"));
+    ASSERT(!uf_path_under("/var/lib/slothweb/x /tmp/var/lib/sloth", "/var/lib/sloth"));
+    ASSERT(!uf_path_under("/var/lib/slot", "/var/lib/sloth"));
+    ASSERT(!uf_path_under("", "/var/lib/sloth"));
+    ASSERT(!uf_path_under(NULL, "/var/lib/sloth"));
 }
 
 static void test_scanner_doc_flag_match_needs_a_boundary(void) {
@@ -688,15 +723,39 @@ static void test_web_unit_sandbox(void) {
     ASSERT(allow_seen);
     ASSERT(uf_value(lines, n, "MemoryMax") != NULL);
 
+    /* No signal to another process: the same uid could otherwise stop or
+     * kill the sensor. tgkill with the rest, since it reaches any
+     * process (deployment.md §6). Each name on a deny ('~') line. */
+    static const char *const sigs[] = {
+        "kill", "tkill", "tgkill", "rt_sigqueueinfo", "rt_tgsigqueueinfo",
+        "pidfd_send_signal",
+    };
+    for (size_t s = 0; s < sizeof(sigs) / sizeof(sigs[0]); s++) {
+        int denied = 0;
+        for (int i = 0; i < n; i++) {
+            const char *l = lines[i];
+            while (*l == ' ' || *l == '\t') l++;
+            if (strncmp(l, "SystemCallFilter=~", 18) == 0 &&
+                uf_has_token(l + 18, sigs[s])) denied = 1;
+        }
+        if (!denied)
+            fprintf(stderr, "    slothweb unit: %s not denied\n", sigs[s]);
+        ASSERT(denied);
+    }
+
     /* The sensor's directory: read-only, and never this unit's state
-     * directory, which systemd would chown and chmod on every start. */
-    ASSERT(uf_has_token(uf_value(lines, n, "ReadOnlyPaths"), "/var/lib/sloth"));
+     * directory, which systemd would chown and chmod on every start.
+     * The '-' so a host whose sensor never started (no /var/lib/sloth)
+     * still starts slothweb rather than failing 226/NAMESPACE. */
+    ASSERT(uf_has_token(uf_value(lines, n, "ReadOnlyPaths"), "-/var/lib/sloth"));
     for (int i = 0; i < n; i++) {
         const char *l = lines[i];
         while (*l == ' ' || *l == '\t') l++;
-        if (strncmp(l, "ReadWritePaths=", 15) == 0)
-            ASSERT(strstr(l, "/var/lib/sloth") == NULL ||
-                   strstr(l, "/var/lib/slothweb") != NULL);
+        if (strncmp(l, "ReadWritePaths=", 15) == 0) {
+            if (uf_path_under(l + 15, "/var/lib/sloth"))
+                fprintf(stderr, "    slothweb unit: %s\n", l);
+            ASSERT(!uf_path_under(l + 15, "/var/lib/sloth"));
+        }
     }
     ASSERT(!uf_has_token(uf_value(lines, n, "StateDirectory"), "sloth"));
     free(buf);
@@ -842,6 +901,7 @@ static void test_makefile_install_targets(void) {
 
     int in_install = 0, in_service = 0;
     int inst_bin = 0, inst_helper = 0, inst_db = 0, inst_web = 0;
+    int inst_web_fresh = 0;
     int svc_unit = 0, svc_sysusers = 0, svc_defaults_b = 0;
     int svc_web_unit = 0, svc_web_defaults_nc = 0, svc_web_defaults_b = 0;
     int recipes_seen = 0;
@@ -868,6 +928,10 @@ static void test_makefile_install_targets(void) {
             if (strstr(l, "packaging/bin/sloth-monitor-up") && strstr(l, "/sbin/")) inst_helper = 1;
             if (strstr(l, "research.db") && strstr(l, "/share/sloth/")) inst_db = 1;
             if (strstr(l, "install -m 755 slothweb ") && strstr(l, "/bin/slothweb")) inst_web = 1;
+            /* An old ./slothweb is refused, not installed beside a new
+             * unit and UI: its sources and the Makefile are its inputs. */
+            if (strstr(l, "find web/src web/ui ") && strstr(l, " -newer slothweb") &&
+                strstr(l, "exit 1")) inst_web_fresh = 1;
         }
         if (in_service) {
             if (strstr(l, "sloth-sensor.service")) svc_unit = 1;
@@ -890,6 +954,7 @@ static void test_makefile_install_targets(void) {
     ASSERT(inst_helper);
     ASSERT(inst_db);
     ASSERT(inst_web);
+    ASSERT(inst_web_fresh);
     /* `install-service`: the unit, the account declaration, and the
      * defaults file installed with a backup, never over an edit. */
     ASSERT(svc_unit);

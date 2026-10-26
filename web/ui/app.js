@@ -749,14 +749,19 @@
   // only says so.
   var DB_VIEWS = ["devices", "wifi", "flows", "history", "lookup"];
   var DB_AGE_IDS = ["d-dbage", "w-dbage", "f-dbage", "h-dbage", "l-dbage"];
-  function hhmm(ts) {
-    var d = new Date(ts * 1000);
+  // The date as well when it is not today's: a snapshot days old must not
+  // read as this afternoon, and "stale" is said only while the stream is
+  // current, so the time alone carries it when the stream is down.
+  function dbWhen(ts) {
+    var d = new Date(ts * 1000), now = new Date();
     function two(n) { return (n < 10 ? "0" : "") + n; }
-    return two(d.getHours()) + ":" + two(d.getMinutes());
+    var t = two(d.getHours()) + ":" + two(d.getMinutes());
+    if (d.toDateString() === now.toDateString()) return t;
+    return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate()) + " " + t;
   }
   function dbAgeText(h) {
     if (!num(h.sloth_db_mtime)) return h.db && h.db !== "none" ? "database time unknown (sloth.db " + h.db + ")" : "";
-    var t = "database as of " + hhmm(h.sloth_db_mtime);
+    var t = "database as of " + dbWhen(h.sloth_db_mtime);
     if (h.sloth_db_stale === true)
       t += " - stale: " + dur(h.sloth_db_age_s) + " old while the live stream is current; these rows are as old as it is";
     return t;

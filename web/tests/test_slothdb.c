@@ -304,23 +304,32 @@ static void test_data_mtime(void) {
 
 /* The deployment the hardened units make: sloth.db in a 0700 directory
  * of the account both run as, files 0600 (UMask=0077), and slothweb
- * given the directory read-only (ReadOnlyPaths=/var/lib/sloth). Here the
- * directory is made 0500 for the reads, so a reader that needed to make
- * anything beside sloth.db could not, while "sloth" (a connection of the
- * same uid, its -wal and -shm already open) keeps committing between
- * them. Each read is a WAL reader that sees the commit before it, and
- * the health check's age follows the -wal. The listing staying as it
- * was is held by the open's choice (both side files exist, so nothing
- * is created) and is not claimed for a single mutation; the reads
- * themselves fail with the immutable condition forced on (they miss
- * the uncheckpointed rows), seen red. */
+ * given the directory read-only (ReadOnlyPaths=-/var/lib/sloth). The
+ * mount is modelled by mode: for the reads the directory is made 0500
+ * and sloth.db, its -wal and its -shm 0400, so a reader could neither
+ * make a file beside sloth.db nor open one of them for writing, while
+ * "sloth" (a connection of the same uid, its descriptors already open
+ * read-write) keeps committing between them. Each read is a WAL reader
+ * that sees the commit before it, and the health check's age follows
+ * the -wal.
+ *
+ * What this does not pin: readonly_shm itself. With the -shm unwritable
+ * SQLite falls back to a read-only -shm whether the URI asks or not, as
+ * it does under the real read-only mount, so dropping readonly_shm
+ * stays green here; test_crashed_sloth_restarts_beside_a_reader, whose
+ * -shm is writable, is the test that goes red for it. The listing
+ * staying as it was is held by the open's choice (both side files
+ * exist, so nothing is created) and is not claimed for a single
+ * mutation; the reads themselves fail with the immutable condition
+ * forced on (they miss the uncheckpointed rows), seen red. */
 static void test_same_uid_reader_beside_a_writing_sloth(void) {
-    char d[128], p[160], w[176], l0[512], l1[512];
+    char d[128], p[160], w[176], m[176], l0[512], l1[512];
     path_in(d, sizeof(d), "varlibsloth");
     mode_t um = umask(077);
     WT_EQ(mkdir(d, 0700), 0);
     snprintf(p, sizeof(p), "%s/sloth.db", d);
     snprintf(w, sizeof(w), "%s-wal", p);
+    snprintf(m, sizeof(m), "%s-shm", p);
     WT_EQ(sdb_make(p, db_schema_version(), 1), 0);
     WT_EQ(sdb_seed(p), 0);
     sqlite3 *sloth = NULL;
@@ -335,7 +344,12 @@ static void test_same_uid_reader_beside_a_writing_sloth(void) {
     WT_EQ((int)(st.st_mode & 0777), 0600);
     WT_EQ(stat(w, &st), 0);
     WT_EQ((int)(st.st_mode & 0777), 0600);
+    WT_EQ(stat(m, &st), 0);
+    WT_EQ((int)(st.st_mode & 0777), 0600);
     sdb_listing(d, l0, sizeof(l0));
+    WT_EQ(chmod(p, 0400), 0);
+    WT_EQ(chmod(w, 0400), 0);
+    WT_EQ(chmod(m, 0400), 0);
     WT_EQ(chmod(d, 0500), 0);
 
     sdb_up(p);
@@ -370,6 +384,9 @@ static void test_same_uid_reader_beside_a_writing_sloth(void) {
     if (strcmp(l0, l1)) fprintf(stderr, "    before: %s\n    after:  %s\n", l0, l1);
     WT_ASSERT(!strcmp(l0, l1));
     WT_EQ(chmod(d, 0700), 0);
+    WT_EQ(chmod(p, 0600), 0);
+    WT_EQ(chmod(w, 0600), 0);
+    WT_EQ(chmod(m, 0600), 0);
     sqlite3_close(sloth);
     rm_db(p);
     rmdir(d);
