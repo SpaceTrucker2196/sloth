@@ -272,3 +272,4 @@
 | dbbb5db | 2026-10-26T20:53:37Z | claude-opus-5-5 | 78 | 68909 | 29943546 | 92504 | 8.1072 | #166: 14-day --pcap-dir age sweep (pcap.retain_days), shared-dir refusal, stale-clock guard |
 | 58b8b42 | 2026-10-26T20:54:35Z | claude-opus-5-5 | 12 | 3493 | 5220856 | 7248 | 1.1721 | #170: one alerts row per finding across reopens (schema v8), --db-compact-alerts copy; integration header merges |
 | 7da345b | 2026-10-26T21:47:25Z | claude-opus-5-5 | 68 | 18462 | 25933756 | 36320 | 5.8468 | RSSI distance estimate as a data point: log-distance model with announced P_tx (TPC/Country/BLE), median RSSI, banded interval and trend on Wi-Fi/BLE rows, TUI column, banded JSONL; research doc (ITU-R P.1238) |
+| ab5fcb2 | 2026-10-26T22:06:45Z | claude-opus-5-5 | 28 | 5708 | 11006495 | 8592 | 2.3843 | IEEE OUI registry CSVs committed to web/data (owner ruling), oui_gen multi-file infinite loop fixed with regression tests, make update-oui (copy only, no scripted fetch) |
