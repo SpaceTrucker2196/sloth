@@ -1512,6 +1512,11 @@ void jsonl_emit_cp_events(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "kind",     e->kind);
         kv_str(buf, LINEBUF, &off, "kind_label", cp_kind_label(e->kind));
         kv_str(buf, LINEBUF, &off, "evidence", e->evidence);
+        /* #169: who answered, so a consumer can join the event to the
+         * flow, and which named kit's page it was ("" for none). */
+        kv_str(buf, LINEBUF, &off, "server",   e->server);
+        kv_int(buf, LINEBUF, &off, "server_port", e->server_port);
+        kv_str(buf, LINEBUF, &off, "kit",      cp_kit_name(e->kit));
         kv_int(buf, LINEBUF, &off, "ts",       (long long)e->ts);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);

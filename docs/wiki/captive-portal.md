@@ -1,8 +1,13 @@
 # Captive-portal interception
 
-**Issue:** [#69](https://github.com/SpaceTrucker2196/sloth/issues/69) ·
+**Issue:** [#69](https://github.com/SpaceTrucker2196/sloth/issues/69),
+graded and extended by [#169](https://github.com/SpaceTrucker2196/sloth/issues/169) ·
 **Alert:** `ALERT_TYPE_CAPTIVE_PORTAL` · **Surfaces in:** `[h]` HTTP,
-`[v]` Alerts
+`[v]` Alerts · **Last updated:** 2026-10-26 (#169)
+
+**Sources:** `research/mitre/T1557.md`, `research/mitre/T1557-004.md`,
+`research/tools/connectivity-check-sentinels.md`,
+`research/tools/captive-portal-kits.md`.
 
 Every modern OS probes a fixed URL to decide whether it is behind a
 captive portal, and expects a published, byte-exact answer:
@@ -11,8 +16,10 @@ captive portal, and expects a published, byte-exact answer:
 |---|---|---|
 | Apple | `captive.apple.com/hotspot-detect.html` | `<HTML>…<BODY>Success</BODY></HTML>` |
 | Microsoft | `www.msftconnecttest.com/connecttest.txt` | `Microsoft Connect Test` |
+| Microsoft, Windows 8.1 and earlier (#169) | `www.msftncsi.com/ncsi.txt` | `Microsoft NCSI` |
 | Firefox | `detectportal.firefox.com/success.txt` | `success\n` |
-| Android / Chrome | `connectivitycheck.gstatic.com/generate_204` | HTTP 204, no body |
+| Android / Chrome | `connectivitycheck.gstatic.com/generate_204` (also `www.gstatic.com`, `connectivitycheck.android.com`) | HTTP 204, no body |
+| Android 5.x and older (#169) | `clients3.google.com/generate_204` | HTTP 204, no body |
 
 That probe is **deliberately unauthenticated and deliberately
 plaintext**. It has to be — the whole point is to work before the user
@@ -36,10 +43,79 @@ there are three rather than one good one.
 | `CP_KIND_DNS_UNEXPECTED` | it resolves to a public address outside the range that host is known to use |
 | `CP_KIND_TLS_MITM` | a TLS ClientHello for a sentinel host goes to a private address |
 
-`DNS_UNEXPECTED` is deliberately the soft one — WARN, not CRIT. These
-are large operators whose addressing changes, and being wrong about a
-CDN range must not produce a CRIT. The other three are unambiguous: a
-connectivity-check host does not resolve to `192.168.1.1` by accident.
+`DNS_UNEXPECTED` is deliberately the soft one, one grade below the
+others at every step (below). These are large operators whose addressing
+changes, and being wrong about a CDN range must not produce a CRIT.
+
+## Grading (#169)
+
+That the answer is *wrong* is not a heuristic. That a wrong answer is an
+*attack* is: a hotel, airport or guest-Wi-Fi portal answers the probe in
+exactly the same way, because answering it is what a captive portal is
+for. #69 shipped every interception as CRIT, which made a hotel lobby
+read as the worst finding sloth has. Since #169:
+
+| Context | `HIJACK`, `DNS_SPOOF`, `TLS_MITM` | `DNS_UNEXPECTED` |
+|---|---|---|
+| nothing else known | **LOW** — detail ends "legitimate captive portals do this too" | LOW |
+| the network is the operator's own (`--my-ssid` / `--my-bssid`) | **CRIT** — "on your own network" | WARN |
+| the client's BSS, or the sensor's own link, is a live evil-twin finding | **CRIT** — "AP … is a known evil twin" | WARN |
+| the same client was served a named kit's page (below) in the last 10 min | **CRIT** — "client was served fluxion" | WARN |
+
+"The network" is resolved two ways, both stated rather than guessed:
+the single associated client in the monitor table (the event is keyed
+by IP, the table by MAC, so only an unambiguous one-client table
+resolves — two clients and nothing escalates), and the sensor's own
+station link, which is the network its capture interface is on. An
+operator's AP that is merely *in range* does not count.
+
+The own-network rule is the DET0379 shape (`research/mitre/T1557-004.md`):
+a portal is suspicious relative to a baseline of known networks, and the
+operator's own network should have none. DET0379 does not name the OS
+connectivity probes; the probe mechanism is cited from the vendors.
+
+## Attack-kit portal pages (#169)
+
+A second finding on the same alert type, keyed
+`portalkit:<kit>:<server>`: a response on **any** host whose first
+segment matches the default portal of a public evil-twin kit. Every row
+needs two features from the kit's own source, all present; one feature
+alone (a Tornado banner, a "Plugin Manager" title, a 307) occurs on
+ordinary sites and is never enough.
+
+| Kit | Row | Features (both required) |
+|---|---|---|
+| wifiphisher | firmware-upgrade, oauth-login, plugin_update, wifi_connect | `Server: TornadoServer/` **and** that scenario's title or credit line |
+| WiFi Pineapple Evil Portal | default page | `<title>Evil Portal</title>` **and** `This is the default Evil Portal page.` |
+| WiFi Pineapple PortalAuth | injection set | `#pa_overlay-back {` **and** `/captiveportal/index.php` |
+| airgeddon | captive portal | its `portal.css` link **and** its `check.htm` login form tag |
+| fluxion | redirect | status 307 **and** `Location: http://captive.gateway.lan/` |
+| fluxion | emulated Apple check | its add-on-injected `_gaUserPrefs` script **and** `<title>Success</title>` |
+| fluxion | login page | `<title>Wireless Protected Access: Login</title>` **and** `jquery.mobile-1.4.5.min.css` |
+
+Repository URLs, pinned commits and line numbers for every feature are
+in `research/tools/captive-portal-kits.md`. T1557.004 is the step these
+pages are: a user who joins the impostor "may be directed to a fake login
+page or captive portal webpage to capture the victim's credentials".
+
+- **Always CRIT.** No innocent network serves wifiphisher's
+  firmware-upgrade page. The benign trigger is someone running the kit
+  on purpose — a lab, a training, an authorised test — and the operator
+  should know that is happening in range either way.
+- **One kit on one server is one finding**, however many clients and
+  hosts it answers: the kit serves its page to every URL. For the same
+  reason a repeat (same kit, server and client) refreshes its one slot
+  in the 64-event ring instead of taking a new one, so a fluxion 307 on
+  every host a phone touches cannot evict the probe events it
+  escalates.
+- **Nothing is kept from the page** beyond the matched row's label, and
+  nothing a client sent is read. No form field, no POST body.
+- **First segment only.** sloth does not reassemble TCP (#71). A feature
+  past the first segment is missed; PortalAuth's injection in particular
+  follows the cloned page's own head and reaches the first segment only
+  when that head is small. A portal behind TLS shows none of this.
+- **Trivially edited.** A match is strong evidence of the kit; no match
+  is no evidence of absence.
 
 ## The gate everything rests on
 
@@ -86,9 +162,9 @@ That independence is the reason for three signals.
 
 - **A real captive portal you are deliberately using.** A hotel or
   airport network *is* a captive portal; intercepting the check is what
-  it is for. The alert is correct and uninteresting — which is why the
-  BSSID matters, and why the detail says whether the AP is also a known
-  evil twin.
+  it is for. The alert is correct and uninteresting, which is why it is
+  LOW unless something else is known (Grading, above), and why the
+  detail says so in as many words.
 - **A DNS filter or a Pi-hole-style resolver** answering for the
   sentinel host from local space. `DNS_SPOOF` fires. It is doing the
   same thing a portal does, by design.
@@ -118,8 +194,13 @@ eleven-step addition.
 ## Export
 
 - **JSONL**: `captive_portal_event` with `host`, `src`, `kind`,
-  `kind_label` and `evidence`.
-- **`[v]` Alerts**: one `ALERT_TYPE_CAPTIVE_PORTAL` per (host, kind).
+  `kind_label`, `evidence` and, since #169, `server` / `server_port`
+  (the responder; `""` / `0` for a DNS-sourced event) and `kit`
+  (`wifiphisher`, `pineapple-evilportal`, `pineapple-portalauth`,
+  `airgeddon`, `fluxion`, or `""`).
+- **`[v]` Alerts**: one `ALERT_TYPE_CAPTIVE_PORTAL` per (host, kind),
+  plus one per (kit, server). Both carry the responder as `match_ip` /
+  `match_port` since #169, so per-alert pcap export works.
 
 ## References
 
@@ -127,7 +208,12 @@ eleven-step addition.
   Portal API. [RFC 8910](https://datatracker.ietf.org/doc/html/rfc8910)
   — the DHCP/RA option 114 that would supply the cross-check above.
 - [MITRE ATT&CK T1557](https://attack.mitre.org/techniques/T1557/) —
-  Adversary-in-the-Middle.
+  Adversary-in-the-Middle, the alert type's tag: a wrong probe answer is
+  AiTM whether or not an evil twin is the middle.
+- [MITRE ATT&CK T1557.004](https://attack.mitre.org/techniques/T1557/004/)
+  — Evil Twin, and its detection strategy
+  [DET0379](https://attack.mitre.org/detectionstrategies/DET0379/), for
+  the kit findings and the own-network grading.
 - [MITRE ATT&CK T1056.003](https://attack.mitre.org/techniques/T1056/003/)
   — Web Portal Capture, for the credential-harvest stage.
 - [CISA — Securing Wireless Networks](https://www.cisa.gov/news-events/news/securing-wireless-networks)

@@ -122,7 +122,7 @@ holds both shapes for one finding.
 |------|--------|-------|
 | `DGA_DOMAIN` | `dga:<qname>` | `dga:<qname, 40 kept>:<hash>` |
 | `CLEARTEXT_CRED` | `cred:<src>-><dst>:<port>:<proto>:<user>` | `cred:<src>:<dst>:<port>:<proto>:<user, 32 kept>:<hash>` (IPv6 bracketed) |
-| `CAPTIVE_PORTAL` | `portal:<host, 30 cut>:<kind>` | `portal:<host, 40 kept>:<hash>:<kind>` |
+| `CAPTIVE_PORTAL` | `portal:<host, 30 cut>:<kind>` | `portal:<host, 40 kept>:<hash>:<kind>`; since #169 also `portalkit:<kit id>:<server ip>` for a kit page |
 | `SAE_PSK_SPLIT` | `saesplit:<ssid>` | `saesplit:<ssid, 32 kept>:<hash>` |
 | `SSID_CONFUSION` | `ssidconf:<ssid, 30 cut>:<weak bssid>` | `ssidconf:<ssid, 32 kept>:<hash>:<weak bssid>` |
 | `EVIL_TWIN` (attack chain) | `twin-chain:<ssid>` | `twin-chain:<ssid, 32 kept>:<hash>` |
@@ -409,6 +409,10 @@ the headline rules per tier:
   `COUNTRY_ABSENT`, `DFS_MASKING` (both WARN on corroboration)
 - **WARN**: `DEAUTH_FLOOD`, `BEACONING`, `DGA_DOMAIN`, `WEAK_TLS`,
   `SURV_CLOUD_SNI`
+- **Graded by context**: `CAPTIVE_PORTAL` (#169) is LOW for a wrong
+  connectivity-check answer alone — hotel and guest portals do it too —
+  and CRIT on the operator's own network, from a live evil-twin BSS, or
+  for a named kit's portal page; see [[captive-portal]]
 - **CRIT**: `THREAT_DOMAIN`, `THREAT_IP`, `ARP_SPOOF`, `ROGUE_DHCP`,
   `EVIL_TWIN`, `KARMA_AP`, `DNS_TUNNEL`, `ATTACK_TOOL_UA`,
   `ATTACK_PATH`, `WPS_PIN_BRUTE`, `WPS_PBC_RACE`,

@@ -3556,6 +3556,59 @@ static int i165_v4_dns_resp(uint8_t *f, int cap, const uint8_t *msg, int n) {
     return fb_ok(&b) ? b.len : -1;
 }
 
+/* #169: a kit's portal page reaches the captive-portal ring through the
+ * real capture path, with its responder. fluxion's default lighttpd
+ * answer (research/tools/captive-portal-kits.md): RFC 9112 status line
+ * and fields, carried in one TCP segment from port 80 (RFC 9293 §3.1).
+ * The plain 302 is the control — the same path, no kit — and its
+ * zero count was seen red with capture.c's `if (kit)` made `if (1)`. */
+static const char I169_FLUXION[] =
+    "HTTP/1.1 307 Temporary Redirect\r\n"
+    "Location: http://captive.gateway.lan/\r\n"
+    "Content-Length: 0\r\n"
+    "\r\n";
+static const char I169_PLAIN[] =
+    "HTTP/1.1 302 Found\r\n"
+    "Location: http://login.hotel.example/\r\n"
+    "Content-Length: 0\r\n"
+    "\r\n";
+
+static int i169_v4_http_resp(uint8_t *f, int cap, const char *msg) {
+    const int n = (int)strlen(msg);
+    fb_t b; fb_init(&b, f, cap);
+    fb_eth(&b, I132_MAC_A, I132_MAC_B, 0x0800);
+    i132_ipv4(&b, 20 + 20 + n, 0, 6);
+    i132_tcp(&b, 80, 51000, 0, msg, n);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static void test_kit_page_reaches_the_portal_ring(void) {
+    uint8_t f[256];
+    int n = i169_v4_http_resp(f, sizeof f, I169_PLAIN);
+    ASSERT(n > 0);
+    cp_clear();
+    http_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(i132_http_records(), 1);
+    ASSERT_EQ(cp_event_count(), 0);                /* control */
+
+    n = i169_v4_http_resp(f, sizeof f, I169_FLUXION);
+    ASSERT(n > 0);
+    cp_clear();
+    http_log_clear();
+    ASSERT_EQ(i132_dispatch(f, n, n), 1);
+    ASSERT_EQ(cp_event_count(), 1);
+    cp_snapshot(&g_s);
+    ASSERT_EQ(g_s.cp_events[0].kind, CP_KIND_KIT);
+    ASSERT_EQ(g_s.cp_events[0].kit, CP_KIT_FLUXION);
+    ASSERT_STR(g_s.cp_events[0].server, "192.168.1.10");
+    ASSERT_EQ(g_s.cp_events[0].server_port, 80);
+    ASSERT_STR(g_s.cp_events[0].src, "192.168.1.1");
+    ASSERT_STR(g_s.cp_events[0].evidence, "fluxion redirect");
+    cp_clear();
+    http_log_clear();
+}
+
 static void test_ptr_name_is_not_a_captive_portal_address(void) {
     uint8_t f[256];
     int n = i165_v4_dns_resp(f, sizeof f, I165_A_RESP, (int)sizeof I165_A_RESP);
@@ -3697,6 +3750,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_ipv4_zero_total_length_is_read_as_unstated);
     RUN_TEST(test_tcp_data_offset_is_honoured_once);
     RUN_TEST(test_ptr_name_is_not_a_captive_portal_address);
+    RUN_TEST(test_kit_page_reaches_the_portal_ring);
     RUN_TEST(test_ipv6_hop_by_hop_is_walked_to_udp);
     RUN_TEST(test_ipv6_routing_then_destination_options_are_walked);
     RUN_TEST(test_ipv6_ah_length_is_in_four_octet_units);

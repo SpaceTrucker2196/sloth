@@ -71,7 +71,8 @@ the Wi-Fi it watches:
   habit (#73): one document per source, FTS5-indexed, guarded.
 - [[captive-portal]] — connectivity-check interception (#69): the
   rogue portal that answers your OS's probe, and the three
-  independent signals that catch it.
+  independent signals that catch it; graded by network context and
+  extended with evil-twin kit page fingerprints in #169.
 - [[fragattacks]] — the Vanhoef 2021 family (#75): eight of the twelve
   CVEs shipped across seven detectors, why the A-MSDU detector as
   usually described cannot work, why the gate is per-station and

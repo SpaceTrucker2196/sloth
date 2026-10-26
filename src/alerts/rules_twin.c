@@ -345,7 +345,60 @@ static void twin_pair_axes_note(char *out, size_t n, twin_class_t cls,
 }
 
 
-/* Captive-portal interception (#69).
+/* What sloth knows about the network a portal event happened on (#169).
+ *
+ * Two routes to a BSS, both stated rather than guessed: the single
+ * associated client in the monitor table (the event is keyed by IP and
+ * the table by MAC, so only an unambiguous table resolves), and the
+ * sensor's own station link, which is the network its capture
+ * interface is attached to. */
+typedef struct {
+    char bss[20];      /* the client's BSS when resolved, "" otherwise */
+    int  on_twin;      /* that BSS, or the sensor's link, is an evil twin */
+    int  own_net;      /* ... or is a --my-ssid / --my-bssid network */
+} cp_ctx_t;
+
+static void cp_context(const sloth_state_t *s, cp_ctx_t *c) {
+    memset(c, 0, sizeof(*c));
+    if (s->assoc_count == 1) {
+        const assoc_t *a = &s->assocs[0];
+        if (a->sta_mac[0] || a->sta_mac[5]) {
+            mac_to_str(a->bssid, c->bss, sizeof(c->bss));
+            if (btm_candidate_is_twin(s, a->bssid)) c->on_twin = 1;
+            if (ownership_is_my_bssid(a->bssid) ||
+                (a->ssid[0] && ownership_is_my_ssid(a->ssid)))
+                c->own_net = 1;
+        }
+    }
+    for (int i = 0; i < s->ap_count && i < MAX_WIFI_APS; i++) {
+        const wifi_ap_t *ap = &s->aps[i];
+        if (ap->status != WIFI_STATUS_ASSOC) continue;
+        uint8_t mac[6];
+        int have_mac = ownership_parse_mac(ap->bssid, mac);
+        if (have_mac && btm_candidate_is_twin(s, mac)) c->on_twin = 1;
+        if ((have_mac && ownership_is_my_bssid(mac)) ||
+            (ap->ssid[0] && ownership_is_my_ssid(ap->ssid)))
+            c->own_net = 1;
+        if (!c->bss[0] && have_mac)
+            snprintf(c->bss, sizeof(c->bss), "%.17s", ap->bssid);
+        break;
+    }
+}
+
+/* Did the same client receive a named kit's page in the window? */
+static const cp_event_t *cp_kit_for(const sloth_state_t *s,
+                                    const char *client, time_t now) {
+    if (!client || !client[0]) return NULL;
+    for (int i = 0; i < s->cp_event_count; i++) {
+        const cp_event_t *k = &s->cp_events[i];
+        if (k->kind != CP_KIND_KIT || !k->kit) continue;
+        if (k->ts && now - k->ts > 600) continue;
+        if (strcmp(k->src, client) == 0) return k;
+    }
+    return NULL;
+}
+
+/* Captive-portal interception (#69), graded since #169.
  *
  * Every modern OS probes a fixed URL to decide whether it is behind a
  * captive portal, and expects a published, byte-exact answer. That
@@ -354,40 +407,81 @@ static void twin_pair_axes_note(char *out, size_t n, twin_class_t cls,
  * answers with something else, and the victim's OS obligingly opens a
  * browser at the attacker's page.
  *
- * This is not a heuristic. The expected answer is documented and fixed,
- * so anything else on that host and path is an interception. The only
- * hard part is knowing whether the whole answer was seen, which is what
- * #71's body_complete is for.
+ * Whether the answer is the published one is not a heuristic. Whether
+ * that means an *attack* is: a hotel, airport or guest-Wi-Fi portal
+ * answers the check in exactly the same way, because answering it is
+ * what a captive portal is for, and a local DNS filter does the same to
+ * the DNS signal. #69 shipped every interception as CRIT, which made a
+ * hotel lobby read as the worst finding sloth has. #169 grades it:
  *
- * One alert type with a kind bitfield rather than the seven types the
- * issue proposes, following ALERT_TYPE_WPA_DOWNGRADE: seven types for
- * one detector would put seven rows in the rule table for what an
- * operator reads as a single finding, and the dedup key already
- * separates them per host. Flagged as a §4.2 departure. */
+ *   LOW   the answer was wrong, and nothing else is known. This is the
+ *         hotel and the coffee shop, and the attacker on an open AP
+ *         looks identical on the wire — the detail says so.
+ *   CRIT  the same answer on a network the operator declared their own
+ *         (--my-ssid / --my-bssid: their own network has no portal),
+ *         or from a BSS that is a live evil-twin finding, or to a
+ *         client that was served a named kit's page (below).
+ *
+ * DNS_UNEXPECTED is weaker than the rest (CDN ranges change) and sits
+ * one step lower at both ends: LOW alone, WARN in the same contexts.
+ *
+ * One alert type with a kind bitfield rather than the seven types #69
+ * proposed, following ALERT_TYPE_WPA_DOWNGRADE: seven rows in the rule
+ * table for what an operator reads as a single finding, and the dedup
+ * key already separates them per host.
+ *
+ * ── Kit pages (#169) ──
+ *
+ * A named evil-twin kit's default portal page is the same finding taken
+ * one step further — T1557.004 says it in so many words: a user who
+ * joins the impostor "may be directed to a fake login page or captive
+ * portal webpage to capture the victim's credentials". It rides this type rather than a new one
+ * (#169 proposed CNA_HIJACK; the triage on the issue argued against two
+ * kinds for one finding, and this follows it), with its own key prefix
+ * because it is keyed by kit and responder, not by probed host: one kit
+ * on one server is one finding however many clients and hosts it
+ * answers, since the kit serves its page to every URL.
+ *
+ * Always CRIT. Unlike a wrong connectivity-check answer, no innocent
+ * network serves wifiphisher's firmware-upgrade page; the benign
+ * trigger is someone running the kit on purpose — a lab, a training, an
+ * authorised test — and the operator should know that is happening in
+ * range either way. Nothing from the page is kept beyond the matched
+ * row's label, and nothing a client sent is read. */
+static void cp_fire_kit(const cp_event_t *e, time_t now) {
+    char key[ALERT_KEY_LEN];
+    char detail[ALERT_DETAIL_LEN];
+    akey_t k;
+    akey_begin(&k, key, sizeof(key), "portalkit");
+    akey_u(&k, e->kit);
+    akey_ip(&k, e->server[0] ? e->server : "?");
+    if (!akey_end(&k)[0]) return;
+    snprintf(detail, sizeof(detail),
+             "%.46s served the %.40s page to %.46s%s%.40s - %s",
+             e->server[0] ? e->server : "?",
+             e->evidence[0] ? e->evidence : cp_kit_name(e->kit),
+             e->src[0] ? e->src : "?",
+             e->host[0] ? " for " : "", e->host,
+             cp_kind_label(e->kind));
+    fire(ALERT_TYPE_CAPTIVE_PORTAL, ALERT_SEV_CRIT, "CAPTIVE_PORTAL", detail,
+         key, e->server[0] ? e->server : NULL, e->server_port, now);
+}
+
 void rule_captive_portal(const sloth_state_t *s, time_t now) {
+    cp_ctx_t ctx;
+    cp_context(s, &ctx);
     for (int i = 0; i < s->cp_event_count; i++) {
         const cp_event_t *e = &s->cp_events[i];
         if (!e->kind) continue;
         /* Events are a rolling ring; only recent ones are findings. */
         if (e->ts && now - e->ts > 600) continue;
-
-        /* Which BSSID is the client on? A portal is hosted by whatever
-         * the client associated to, and naming it turns "someone
-         * intercepted this" into "that AP intercepted this". */
-        char bss[20] = "";
-        int  on_twin = 0;
-        for (int a = 0; a < s->assoc_count; a++) {
-            if (!s->assocs[a].sta_mac[0] && !s->assocs[a].sta_mac[5]) continue;
-            /* The association table is keyed by MAC and the portal
-             * event by IP, so this only resolves when a single client
-             * is associated — enough to name the AP in the common
-             * single-client-under-test case, and silent otherwise
-             * rather than guessing. */
-            if (s->assoc_count != 1) break;
-            mac_to_str(s->assocs[a].bssid, bss, sizeof(bss));
-            on_twin = btm_candidate_is_twin(s, s->assocs[a].bssid);
-            break;
+        if (e->kind == CP_KIND_KIT) {
+            if (e->kit) cp_fire_kit(e, now);
+            continue;
         }
+
+        const cp_event_t *kit = cp_kit_for(s, e->src, now);
+        int escalated = ctx.own_net || ctx.on_twin || kit != NULL;
 
         /* host came off the wire (#112): a remote component, so two
          * hosts sharing a 30-byte prefix are no longer one finding. */
@@ -398,6 +492,20 @@ void rule_captive_portal(const sloth_state_t *s, time_t now) {
         akey_remote(&k, e->host, 40);
         akey_u(&k, e->kind);
         if (!akey_end(&k)[0]) continue;
+
+        char why[96];
+        if (ctx.own_net)
+            snprintf(why, sizeof(why), " - on your own network%s%s",
+                     ctx.bss[0] ? " " : "", ctx.bss);
+        else if (ctx.on_twin)
+            snprintf(why, sizeof(why), " - AP %s is a known evil twin",
+                     ctx.bss[0] ? ctx.bss : "?");
+        else if (kit)
+            snprintf(why, sizeof(why), " - client was served %s",
+                     cp_kit_name(kit->kit));
+        else
+            snprintf(why, sizeof(why),
+                     " - legitimate captive portals do this too");
         snprintf(detail, sizeof(detail),
                  "%.30s intercepted for %.15s - %s%s%s%s%s",
                  e->host, e->src[0] ? e->src : "?",
@@ -405,17 +513,15 @@ void rule_captive_portal(const sloth_state_t *s, time_t now) {
                  e->evidence[0] ? " (" : "",
                  e->evidence[0] ? e->evidence : "",
                  e->evidence[0] ? ")" : "",
-                 on_twin ? " - AP is a known evil twin" : "");
+                 why);
 
-        /* DNS_UNEXPECTED is the soft one: these operators' addressing
-         * changes, and being wrong about a CDN range must not produce a
-         * CRIT. Everything else is unambiguous — a sentinel resolving
-         * into private space or answering with the wrong bytes is not
-         * something that happens by accident. */
-        alert_sev_t sev = (e->kind == CP_KIND_DNS_UNEXPECTED)
-                          ? ALERT_SEV_WARN : ALERT_SEV_CRIT;
-        fire(ALERT_TYPE_CAPTIVE_PORTAL, sev,
-             "CAPTIVE_PORTAL", detail, key, NULL, 0, now);
+        alert_sev_t sev;
+        if (e->kind == CP_KIND_DNS_UNEXPECTED)
+            sev = escalated ? ALERT_SEV_WARN : ALERT_SEV_LOW;
+        else
+            sev = escalated ? ALERT_SEV_CRIT : ALERT_SEV_LOW;
+        fire(ALERT_TYPE_CAPTIVE_PORTAL, sev, "CAPTIVE_PORTAL", detail, key,
+             e->server[0] ? e->server : NULL, e->server_port, now);
     }
 }
 

@@ -2103,6 +2103,11 @@ typedef enum {
     CP_KIND_DNS_SPOOF      = 1 << 1,  /* sentinel host -> RFC1918 / CGNAT */
     CP_KIND_DNS_UNEXPECTED = 1 << 2,  /* -> outside the known ranges      */
     CP_KIND_TLS_MITM       = 1 << 3,  /* sentinel SNI -> private address  */
+    /* A response on any host whose headers and body prefix match a
+     * named attack kit's default portal (#169). Not a sentinel check:
+     * the kit serves its page to every URL, so this one is keyed by
+     * the server that sent it (alert key `portalkit:`), not by host. */
+    CP_KIND_KIT            = 1 << 4,
 } cp_kind_t;
 
 #define CP_MAX_EVENTS 64
@@ -2111,7 +2116,13 @@ typedef struct {
     char     host[64];        /* the sentinel that was interfered with */
     char     src[46];         /* the client that probed                */
     char     evidence[80];    /* what was seen instead                 */
+    /* The responder (#169): the address that answered the probe or
+     * served the kit page, "" for a DNS-sourced event. It is what lets
+     * an alert carry match_ip for per-alert pcap export. */
+    char     server[46];
+    uint16_t server_port;
     uint8_t  kind;            /* cp_kind_t                             */
+    uint8_t  kit;             /* cp_kit_t (captive_portal.h), 0 = none */
     time_t   ts;
 } cp_event_t;
 

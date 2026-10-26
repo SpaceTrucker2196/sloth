@@ -602,7 +602,18 @@ static void try_http(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
             char ev[80];
             snprintf(ev, sizeof(ev), "HTTP %u, %d body bytes",
                      entry.status, entry.resp_body_len);
-            cp_record((uint8_t)cp, entry.host, pkt->dst, ev, sloth_wall());
+            cp_record_ex((uint8_t)cp, 0, entry.host, pkt->dst, pkt->src,
+                         pkt->src_port, ev, sloth_wall());
+        }
+        /* A named kit's default portal page, on any host (#169). Read
+         * from the segment as it arrived; only the kit's label is
+         * kept, never the page. */
+        {
+            const char *kl = "";
+            int kit = cp_match_kit(pay, pay_len, &kl);
+            if (kit)
+                cp_record_ex(CP_KIND_KIT, (uint8_t)kit, entry.host, pkt->dst,
+                             pkt->src, pkt->src_port, kl, sloth_wall());
         }
         snprintf(pkt->info, sizeof(pkt->info), "HTTP %u %.40s",
                  entry.status, entry.host[0] ? entry.host : "");
@@ -663,8 +674,8 @@ static void try_sni(const uint8_t *pay, int pay_len, packet_info_t *pkt) {
      * a rogue that chunks its HTTP answer still has to do this. */
     {
         int cp = cp_check_tls(entry.host, pkt->dst);
-        if (cp) cp_record((uint8_t)cp, entry.host, pkt->src, pkt->dst,
-                          sloth_wall());
+        if (cp) cp_record_ex((uint8_t)cp, 0, entry.host, pkt->src,
+                             pkt->dst, pkt->dst_port, pkt->dst, sloth_wall());
     }
     snprintf(pkt->info, sizeof(pkt->info), "%s %.46s",
              entry.tls_ver, entry.host[0] ? entry.host : pkt->dst);

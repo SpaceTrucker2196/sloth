@@ -5152,3 +5152,14 @@ report events.
   one window of monotonic uptime; a sweep error prints
   `sloth: --pcap-dir retention sweep:`, not `export failed`. README now
   says alert pcaps are deleted after `pcap.retain_days`.
+- 2026-10-26 — [[captive-portal]]: #169. Graded: a wrong
+  connectivity-check answer alone is LOW ("legitimate captive portals do
+  this too"), CRIT on a `--my-ssid`/`--my-bssid` network, from a live
+  evil-twin BSS, or to a client served a kit page. Two sentinels added
+  (`www.msftncsi.com/ncsi.txt`, `clients3.google.com/generate_204`).
+  New `portalkit:` findings for the default pages of wifiphisher,
+  Pineapple Evil Portal / PortalAuth, airgeddon and fluxion, from their
+  public source at pinned commits (`research/tools/captive-portal-kits.md`);
+  T1557.004 and DET0379 in `research/mitre/T1557-004.md`. Alerts carry
+  the responder as `match_ip`; the JSONL record gains `server`,
+  `server_port` and `kit`.
