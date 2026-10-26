@@ -37,15 +37,22 @@ static void mk_resp(http_log_entry_t *e, const char *host, const char *path,
     e->body_complete = complete;
 }
 
+/* The page as captive.apple.com served it on 2026-10-26: 69 bytes,
+ * ending in one LF (research/tools/connectivity-check-sentinels.md). */
 static const char *APPLE_OK =
-    "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>";
+    "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>\n";
 
 /* ── the body check ── */
 
+/* The genuine answer is quiet. An absence claim: seen red with the
+ * table row's trailing "\n" removed, which is the shape that read every
+ * real Apple answer as a hijack. */
 static void test_correct_apple_sentinel_is_quiet(void) {
     http_log_entry_t e;
+    ASSERT_EQ((int)strlen(APPLE_OK), 69);
     mk_resp(&e, "captive.apple.com", "/hotspot-detect.html", 200,
             APPLE_OK, 1);
+    ASSERT_EQ(e.content_length, 69);
     ASSERT_EQ(cp_check_response(&e), 0);
 }
 
@@ -262,6 +269,67 @@ static void test_ncsi_and_clients3_sentinels(void) {
     ASSERT_EQ(cp_is_sentinel_host("clients3.google.com"), 1);
 }
 
+/* NCSI's IPv6 probe hosts. The quiet cases are absence claims: seen red
+ * with each row's body given a trailing newline in turn. Before these
+ * rows the host was not a sentinel at all, so a hijacked v6 probe was
+ * missed by all three checks; the DNS and TLS asserts pin that. */
+static void test_ncsi_ipv6_sentinels(void) {
+    http_log_entry_t e;
+    mk_resp(&e, "ipv6.msftconnecttest.com", "/connecttest.txt", 200,
+            "Microsoft Connect Test", 1);
+    ASSERT_EQ(cp_check_response(&e), 0);
+    mk_resp(&e, "ipv6.msftconnecttest.com", "/connecttest.txt", 302, "", 1);
+    ASSERT_EQ(cp_check_response(&e), CP_KIND_HIJACK);
+    mk_resp(&e, "ipv6.msftncsi.com", "/ncsi.txt", 200, "Microsoft NCSI", 1);
+    ASSERT_EQ(cp_check_response(&e), 0);
+    mk_resp(&e, "ipv6.msftncsi.com", "/ncsi.txt", 200,
+            "<html>Please sign in</html>", 1);
+    ASSERT_EQ(cp_check_response(&e), CP_KIND_HIJACK);
+    ASSERT_EQ(cp_check_dns("ipv6.msftconnecttest.com", "fd00::1"),
+              CP_KIND_DNS_SPOOF);
+    ASSERT_EQ(cp_check_tls("ipv6.msftncsi.com", "fe80::1"),
+              CP_KIND_TLS_MITM);
+    /* Deliberately not a sentinel: its expected answer is a ULA. */
+    ASSERT_EQ(cp_is_sentinel_host("dns.msftncsi.com"), 0);
+}
+
+/* Firefox's captive-portal service, both generations: canonical.html on
+ * detectportal (ESR 115 to 140) and the empty 204 on
+ * firefox-portal-detection.com (release). The quiet cases are absence
+ * claims, seen red with the canonical row's body given a trailing
+ * newline and, separately, the new host's 204 row set to 200. */
+static const char FIREFOX_CANONICAL[] =
+    "<meta http-equiv=\"refresh\" "
+    "content=\"0;url=https://support.mozilla.org/kb/captive-portal\"/>";
+
+static void test_firefox_canonical_sentinels(void) {
+    http_log_entry_t e;
+    ASSERT_EQ((int)strlen(FIREFOX_CANONICAL), 90);
+    mk_resp(&e, "detectportal.firefox.com", "/canonical.html", 200,
+            FIREFOX_CANONICAL, 1);
+    ASSERT_EQ(cp_check_response(&e), 0);
+    mk_resp(&e, "detectportal.firefox.com", "/canonical.html", 200,
+            "<html>Sign in to continue</html>", 1);
+    ASSERT_EQ(cp_check_response(&e), CP_KIND_HIJACK);
+    /* success.txt's body on the canonical URL is still the wrong body. */
+    mk_resp(&e, "detectportal.firefox.com", "/canonical.html", 200,
+            "success\n", 1);
+    ASSERT_EQ(cp_check_response(&e), CP_KIND_HIJACK);
+
+    mk_resp(&e, "firefox-portal-detection.com", "/generate_204", 204,
+            NULL, 1);
+    ASSERT_EQ(cp_check_response(&e), 0);
+    mk_resp(&e, "firefox-portal-detection.com", "/generate_204", 302,
+            NULL, 1);
+    ASSERT_EQ(cp_check_response(&e), CP_KIND_HIJACK);
+    mk_resp(&e, "firefox-portal-detection.com", "/success.txt?ipv6", 200,
+            "success\n", 1);
+    ASSERT_EQ(cp_check_response(&e), 0);
+    mk_resp(&e, "firefox-portal-detection.com", "/success.txt?ipv6", 200,
+            "<html>portal</html>", 1);
+    ASSERT_EQ(cp_check_response(&e), CP_KIND_HIJACK);
+}
+
 /* ── #169: request and response off the wire, per vendor ──
  *
  * The bytes a client sends and a server answers, in RFC 9112 message
@@ -301,9 +369,9 @@ static const char REQ_APPLE[] =
 static const char RESP_APPLE_OK[] =
     "HTTP/1.0 200 OK\r\n"
     "Content-Type: text/html\r\n"
-    "Content-Length: 68\r\n"
+    "Content-Length: 69\r\n"
     "\r\n"
-    "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>";
+    "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>\n";
 /* The hotel shape: the portal answers the probe with a redirect to its
  * own sign-in page and no body. */
 static const char RESP_HOTEL_302[] =
@@ -377,6 +445,26 @@ static const char RESP_FIREFOX_OK[] =
     "\r\n"
     "success\n";
 
+static const char REQ_FIREFOX_CANONICAL[] =
+    "GET /canonical.html HTTP/1.1\r\n"
+    "Host: detectportal.firefox.com\r\n"
+    "Cache-Control: no-cache\r\n"
+    "\r\n";
+static const char RESP_FIREFOX_CANONICAL_OK[] =
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/html\r\n"
+    "Content-Length: 90\r\n"
+    "\r\n"
+    "<meta http-equiv=\"refresh\" "
+    "content=\"0;url=https://support.mozilla.org/kb/captive-portal\"/>";
+
+static const char REQ_MSFT_V6[] =
+    "GET /connecttest.txt HTTP/1.1\r\n"
+    "Connection: Close\r\n"
+    "User-Agent: Microsoft NCSI\r\n"
+    "Host: ipv6.msftconnecttest.com\r\n"
+    "\r\n";
+
 static void test_wire_apple(void) {
     ASSERT_EQ(wire_check(REQ_APPLE, RESP_APPLE_OK), 0);
     ASSERT_EQ(wire_check(REQ_APPLE, RESP_HOTEL_302), CP_KIND_HIJACK);
@@ -388,6 +476,8 @@ static void test_wire_microsoft(void) {
     ASSERT_EQ(wire_check(REQ_NCSI, RESP_NCSI_OK), 0);
     /* connecttest's body on the NCSI URL is still the wrong body. */
     ASSERT_EQ(wire_check(REQ_NCSI, RESP_MSFT_OK), CP_KIND_HIJACK);
+    ASSERT_EQ(wire_check(REQ_MSFT_V6, RESP_MSFT_OK), 0);
+    ASSERT_EQ(wire_check(REQ_MSFT_V6, RESP_MSFT_PORTAL), CP_KIND_HIJACK);
 }
 
 static void test_wire_google(void) {
@@ -401,10 +491,13 @@ static void test_wire_google(void) {
 static void test_wire_firefox(void) {
     ASSERT_EQ(wire_check(REQ_FIREFOX, RESP_FIREFOX_OK), 0);
     ASSERT_EQ(wire_check(REQ_FIREFOX, RESP_HOTEL_302), CP_KIND_HIJACK);
+    ASSERT_EQ(wire_check(REQ_FIREFOX_CANONICAL, RESP_FIREFOX_CANONICAL_OK), 0);
+    ASSERT_EQ(wire_check(REQ_FIREFOX_CANONICAL, RESP_HOTEL_302),
+              CP_KIND_HIJACK);
 }
 
 static void test_wire_truncated_body_never_judged(void) {
-    /* Content-Length promises 68, the segment carries 20: a segment
+    /* Content-Length promises 69, the segment carries 20: a segment
      * boundary, not an interception. The cut is real bytes off
      * RESP_APPLE_OK, not a hand-picked prefix. */
     char cut[sizeof(RESP_APPLE_OK)];
@@ -688,11 +781,43 @@ static void cps_event(uint8_t kind, uint8_t kitid, const char *host,
 static const uint8_t BSS_A[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
 static const uint8_t STA_A[6] = { 0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x01 };
 
+static const uint8_t STA_B[6] = { 0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x02 };
+
 static void cps_assoc(const char *ssid) {
     assoc_t *a = &g_cps.assocs[g_cps.assoc_count++];
     memcpy(a->bssid, BSS_A, 6);
     memcpy(a->sta_mac, STA_A, 6);
     snprintf(a->ssid, sizeof(a->ssid), "%s", ssid);
+}
+
+/* A row in the sensor's neighbour table: what ties an event's client IP
+ * to a MAC the monitor table can have heard associating. */
+static void cps_neigh(const char *ip, const uint8_t mac[6],
+                      const char *iface) {
+    arp_entry_t *n = &g_cps.arp_entries[g_cps.arp_count++];
+    snprintf(n->ip, sizeof(n->ip), "%s", ip);
+    memcpy(n->mac, mac, 6);
+    snprintf(n->iface, sizeof(n->iface), "%s", iface);
+}
+
+static void cps_iface(const char *name, iface_mode_t mode) {
+    iface_stat_t *f = &g_cps.ifaces[g_cps.iface_count++];
+    snprintf(f->name, sizeof(f->name), "%s", name);
+    f->mode = mode;
+}
+
+/* The sensor's own station link, on `bssid`. */
+static void cps_link(const char *bssid, int status) {
+    wifi_ap_t *ap = &g_cps.aps[g_cps.ap_count++];
+    snprintf(ap->ssid, sizeof(ap->ssid), "Whatever");
+    snprintf(ap->bssid, sizeof(ap->bssid), "%s", bssid);
+    ap->status = status;
+}
+
+static void cps_twin_a(void) {
+    g_cps.twin_episode_count = 1;
+    memcpy(g_cps.twin_episodes[0].twin_bssid, BSS_A, 6);
+    g_cps.twin_episodes[0].attributed = 1;
 }
 
 /* A CAPTIVE_PORTAL alert by key prefix: "portal:" is a probe finding,
@@ -703,6 +828,11 @@ static int cps_find_key(const char *prefix) {
         if (g_cps.alerts[i].type == ALERT_TYPE_CAPTIVE_PORTAL &&
             strncmp(g_cps.alerts[i].key, prefix, n) == 0) return i;
     return -1;
+}
+
+static int cps_portal_sev(void) {
+    int i = cps_find_key("portal:");
+    return i >= 0 ? (int)g_cps.alerts[i].sev : -1;
 }
 
 static void test_hotel_redirect_is_graded_low(void) {
@@ -730,6 +860,7 @@ static void test_hijack_on_own_network_is_crit(void) {
     cps_reset();
     ASSERT_EQ(ownership_add_ssid("HomeNet"), 1);
     cps_assoc("HomeNet");
+    cps_neigh(CLI, STA_A, "eth0");     /* the client is that station */
     cps_event(CP_KIND_HIJACK, 0, "captive.apple.com", CLI, "192.168.1.1",
               "HTTP 302, 0 body bytes");
     alerts_update(&g_cps);
@@ -742,18 +873,46 @@ static void test_hijack_on_own_network_is_crit(void) {
     cps_reset();
 
     /* --my-bssid, through the sensor's own station link rather than the
-     * monitor table: the sensor is on the operator's AP. */
+     * monitor table: the sensor is on the operator's AP and the client
+     * is a neighbour on that Wi-Fi link. */
     ASSERT_EQ(ownership_add_bssid("02:11:22:33:44:55"), 1);
-    wifi_ap_t *ap = &g_cps.aps[g_cps.ap_count++];
-    snprintf(ap->ssid, sizeof(ap->ssid), "Whatever");
-    snprintf(ap->bssid, sizeof(ap->bssid), "02:11:22:33:44:55");
-    ap->status = WIFI_STATUS_ASSOC;
+    cps_link("02:11:22:33:44:55", WIFI_STATUS_ASSOC);
+    cps_iface("wlan0", IFACE_MODE_WIFI);
+    cps_neigh(CLI, STA_B, "wlan0");
     cps_event(CP_KIND_DNS_SPOOF, 0, "captive.apple.com", CLI, "",
               "192.168.1.1");
     alerts_update(&g_cps);
-    i = cps_find_key("portal:");
-    ASSERT(i >= 0);
-    if (i >= 0) ASSERT_EQ(g_cps.alerts[i].sev, ALERT_SEV_CRIT);
+    ASSERT_EQ(cps_portal_sev(), ALERT_SEV_CRIT);
+    cps_reset();
+
+    /* The same link reached through the responder instead: the portal
+     * that answered is a neighbour on the sensor's Wi-Fi link. */
+    ASSERT_EQ(ownership_add_bssid("02:11:22:33:44:55"), 1);
+    cps_link("02:11:22:33:44:55", WIFI_STATUS_ASSOC);
+    cps_iface("wlan0", IFACE_MODE_WIFI);
+    cps_neigh("192.168.1.1", BSS_A, "wlan0");
+    cps_event(CP_KIND_HIJACK, 0, "captive.apple.com", CLI, "192.168.1.1",
+              "HTTP 302, 0 body bytes");
+    alerts_update(&g_cps);
+    ASSERT_EQ(cps_portal_sev(), ALERT_SEV_CRIT);
+    cps_reset();
+}
+
+/* The station link says nothing about an event that did not happen on
+ * it: a wired client answered by a wired portal, while the sensor's
+ * Wi-Fi happens to be on the operator's AP. Seen red with the
+ * cp_on_wifi_link() gate in cp_context() removed. */
+static void test_station_link_needs_the_event_on_that_link(void) {
+    cps_reset();
+    ASSERT_EQ(ownership_add_bssid("02:11:22:33:44:55"), 1);
+    cps_link("02:11:22:33:44:55", WIFI_STATUS_ASSOC);
+    cps_iface("wlan0", IFACE_MODE_WIFI);
+    cps_iface("eth0", IFACE_MODE_ETHER);
+    cps_neigh(CLI, STA_B, "eth0");
+    cps_neigh("10.0.0.1", BSS_A, "eth0");
+    cps_event(CP_KIND_HIJACK, 0, "captive.apple.com", CLI, "10.0.0.1", "");
+    alerts_update(&g_cps);
+    ASSERT_EQ(cps_portal_sev(), ALERT_SEV_LOW);
     cps_reset();
 }
 
@@ -763,9 +922,9 @@ static void test_link_not_associated_is_not_own_network(void) {
      * cp_context() removed. */
     cps_reset();
     ASSERT_EQ(ownership_add_bssid("02:11:22:33:44:55"), 1);
-    wifi_ap_t *ap = &g_cps.aps[g_cps.ap_count++];
-    snprintf(ap->bssid, sizeof(ap->bssid), "02:11:22:33:44:55");
-    ap->status = WIFI_STATUS_NONE;
+    cps_link("02:11:22:33:44:55", WIFI_STATUS_NONE);
+    cps_iface("wlan0", IFACE_MODE_WIFI);
+    cps_neigh(CLI, STA_B, "wlan0");
     cps_event(CP_KIND_HIJACK, 0, "captive.apple.com", CLI, "10.0.0.1", "");
     alerts_update(&g_cps);
     int i = cps_find_key("portal:");
@@ -777,9 +936,8 @@ static void test_link_not_associated_is_not_own_network(void) {
 static void test_hijack_from_evil_twin_is_crit(void) {
     cps_reset();
     cps_assoc("CoffeeShop");
-    g_cps.twin_episode_count = 1;
-    memcpy(g_cps.twin_episodes[0].twin_bssid, BSS_A, 6);
-    g_cps.twin_episodes[0].attributed = 1;
+    cps_neigh(CLI, STA_A, "eth0");
+    cps_twin_a();
     cps_event(CP_KIND_TLS_MITM, 0, "captive.apple.com", CLI, "10.0.0.1",
               "10.0.0.1");
     alerts_update(&g_cps);
@@ -792,22 +950,71 @@ static void test_hijack_from_evil_twin_is_crit(void) {
     cps_reset();
 }
 
-static void test_ambiguous_assoc_table_does_not_escalate(void) {
-    /* Two clients associated: the IP-keyed event cannot be tied to
-     * either BSS, so a twin among them proves nothing about this one.
-     * Seen red with cp_context()'s `assoc_count == 1` relaxed to `>= 1`. */
+/* A station heard associating with an evil twin is not the event's
+ * client unless something says it is. #169 first escalated every event
+ * from the one heard station's BSS, whoever the client was.
+ *   no neighbour row for the client      -- the old pinned shape; seen
+ *                                           red against that cp_context()
+ *   the client is a different MAC        -- red against it too, and with
+ *                                           the sta_mac memcmp() in this
+ *                                           cp_context() removed
+ *   two stations, neither the client     -- LOW before and after; kept
+ *                                           so the join cannot regress it */
+static void test_unlinked_station_does_not_escalate(void) {
     cps_reset();
     cps_assoc("CoffeeShop");
-    cps_assoc("CoffeeShop");
-    g_cps.assocs[1].sta_mac[5] = 0x02;
-    g_cps.twin_episode_count = 1;
-    memcpy(g_cps.twin_episodes[0].twin_bssid, BSS_A, 6);
-    g_cps.twin_episodes[0].attributed = 1;
+    cps_twin_a();
     cps_event(CP_KIND_HIJACK, 0, "captive.apple.com", CLI, "10.0.0.1", "");
     alerts_update(&g_cps);
-    int i = cps_find_key("portal:");
-    ASSERT(i >= 0);
-    if (i >= 0) ASSERT_EQ(g_cps.alerts[i].sev, ALERT_SEV_LOW);
+    ASSERT_EQ(cps_portal_sev(), ALERT_SEV_LOW);
+    cps_reset();
+
+    cps_assoc("CoffeeShop");
+    cps_twin_a();
+    cps_neigh(CLI, STA_B, "eth0");
+    cps_event(CP_KIND_HIJACK, 0, "captive.apple.com", CLI, "10.0.0.1", "");
+    alerts_update(&g_cps);
+    ASSERT_EQ(cps_portal_sev(), ALERT_SEV_LOW);
+    cps_reset();
+
+    cps_assoc("CoffeeShop");
+    cps_assoc("CoffeeShop");
+    g_cps.assocs[1].sta_mac[5] = 0x03;
+    cps_twin_a();
+    cps_event(CP_KIND_HIJACK, 0, "captive.apple.com", CLI, "10.0.0.1", "");
+    alerts_update(&g_cps);
+    ASSERT_EQ(cps_portal_sev(), ALERT_SEV_LOW);
+    cps_reset();
+}
+
+/* A station that roamed is on the BSS it joined last: an old
+ * association with the twin does not grade a probe made from the
+ * network it moved to. Seen red with the last_seen comparison in
+ * cp_context() inverted. */
+static void test_newest_association_wins(void) {
+    cps_reset();
+    cps_assoc("CoffeeShop");                 /* twin BSS_A, older */
+    g_cps.assocs[0].last_seen = 100;
+    cps_assoc("CoffeeShop");
+    g_cps.assocs[1].bssid[5] = 0x66;         /* another BSS, newer */
+    g_cps.assocs[1].last_seen = 200;
+    cps_twin_a();
+    cps_neigh(CLI, STA_A, "eth0");
+    cps_event(CP_KIND_HIJACK, 0, "captive.apple.com", CLI, "10.0.0.1", "");
+    alerts_update(&g_cps);
+    ASSERT_EQ(cps_portal_sev(), ALERT_SEV_LOW);
+    cps_reset();
+
+    cps_assoc("CoffeeShop");
+    g_cps.assocs[0].last_seen = 200;
+    cps_assoc("CoffeeShop");
+    g_cps.assocs[1].bssid[5] = 0x66;
+    g_cps.assocs[1].last_seen = 100;
+    cps_twin_a();
+    cps_neigh(CLI, STA_A, "eth0");
+    cps_event(CP_KIND_HIJACK, 0, "captive.apple.com", CLI, "10.0.0.1", "");
+    alerts_update(&g_cps);
+    ASSERT_EQ(cps_portal_sev(), ALERT_SEV_CRIT);
     cps_reset();
 }
 
@@ -894,6 +1101,7 @@ static void test_dns_unexpected_stays_soft(void) {
      * with the DNS_UNEXPECTED branch removed (falls to the CRIT arm). */
     ASSERT_EQ(ownership_add_ssid("HomeNet"), 1);
     cps_assoc("HomeNet");
+    cps_neigh(CLI, STA_A, "eth0");
     cps_event(CP_KIND_DNS_UNEXPECTED, 0, "captive.apple.com", CLI, "",
               "93.184.216.34");
     alerts_update(&g_cps);
@@ -1025,6 +1233,8 @@ void run_captive_portal_tests(void) {
 
     TEST_SUITE("captive-portal sentinels and wire bytes (#169)");
     RUN_TEST(test_ncsi_and_clients3_sentinels);
+    RUN_TEST(test_ncsi_ipv6_sentinels);
+    RUN_TEST(test_firefox_canonical_sentinels);
     RUN_TEST(test_wire_apple);
     RUN_TEST(test_wire_microsoft);
     RUN_TEST(test_wire_google);
@@ -1048,7 +1258,9 @@ void run_captive_portal_tests(void) {
     RUN_TEST(test_hijack_on_own_network_is_crit);
     RUN_TEST(test_link_not_associated_is_not_own_network);
     RUN_TEST(test_hijack_from_evil_twin_is_crit);
-    RUN_TEST(test_ambiguous_assoc_table_does_not_escalate);
+    RUN_TEST(test_station_link_needs_the_event_on_that_link);
+    RUN_TEST(test_unlinked_station_does_not_escalate);
+    RUN_TEST(test_newest_association_wins);
     RUN_TEST(test_kit_page_escalates_the_same_client_only);
     RUN_TEST(test_kit_event_is_not_also_a_probe_finding);
     RUN_TEST(test_one_kit_on_one_server_is_one_finding);

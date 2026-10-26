@@ -14,10 +14,12 @@ captive portal, and expects a published, byte-exact answer:
 
 | OS | URL | Expected |
 |---|---|---|
-| Apple | `captive.apple.com/hotspot-detect.html` | `<HTML>…<BODY>Success</BODY></HTML>` |
-| Microsoft | `www.msftconnecttest.com/connecttest.txt` | `Microsoft Connect Test` |
-| Microsoft, Windows 8.1 and earlier (#169) | `www.msftncsi.com/ncsi.txt` | `Microsoft NCSI` |
+| Apple | `captive.apple.com/hotspot-detect.html` | `<HTML>…<BODY>Success</BODY></HTML>\n` (69 bytes, one trailing LF) |
+| Microsoft | `www.msftconnecttest.com/connecttest.txt` (and the IPv6 probe, `ipv6.msftconnecttest.com`) | `Microsoft Connect Test` |
+| Microsoft, Windows 8.1 and earlier (#169) | `www.msftncsi.com/ncsi.txt` (and `ipv6.msftncsi.com`) | `Microsoft NCSI` |
 | Firefox | `detectportal.firefox.com/success.txt` | `success\n` |
+| Firefox up to ESR 140 (captive-portal service) | `detectportal.firefox.com/canonical.html` | the 90-byte `<meta http-equiv="refresh" …/>` page |
+| Firefox release | `firefox-portal-detection.com/generate_204`, `/success.txt` | HTTP 204, no body; `success\n` |
 | Android / Chrome | `connectivitycheck.gstatic.com/generate_204` (also `www.gstatic.com`, `connectivitycheck.android.com`) | HTTP 204, no body |
 | Android 5.x and older (#169) | `clients3.google.com/generate_204` | HTTP 204, no body |
 
@@ -62,12 +64,21 @@ read as the worst finding sloth has. Since #169:
 | the client's BSS, or the sensor's own link, is a live evil-twin finding | **CRIT** — "AP … is a known evil twin" | WARN |
 | the same client was served a named kit's page (below) in the last 10 min | **CRIT** — "client was served fluxion" | WARN |
 
-"The network" is resolved two ways, both stated rather than guessed:
-the single associated client in the monitor table (the event is keyed
-by IP, the table by MAC, so only an unambiguous one-client table
-resolves — two clients and nothing escalates), and the sensor's own
-station link, which is the network its capture interface is on. An
-operator's AP that is merely *in range* does not count.
+"The network" is resolved per event, two ways, both stated rather than
+guessed. The event is keyed by the client's IP and the monitor table by
+MAC, so the first route joins them through the sensor's neighbour (ARP)
+table: the client's MAC, then the BSS that MAC was last heard associated
+with. A station heard on a twin that is *not* the event's client proves
+nothing about it, and nothing escalates. The second route is the
+sensor's own station link, used only when the client or the responder is
+a neighbour on a Wi-Fi station interface, so a wired client is never
+graded by what the sensor's Wi-Fi is attached to. An operator's AP that
+is merely *in range* does not count.
+
+Neither route resolves the sensor's own probe answered from a public
+address (a portal that DNATs the sentinel's own IP): sloth keeps no list
+of its own addresses, and such an event stays LOW rather than being
+guessed into CRIT.
 
 The own-network rule is the DET0379 shape (`research/mitre/T1557-004.md`):
 a portal is suspicious relative to a baseline of known networks, and the

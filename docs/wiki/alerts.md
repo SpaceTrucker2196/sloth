@@ -411,8 +411,10 @@ the headline rules per tier:
   `SURV_CLOUD_SNI`
 - **Graded by context**: `CAPTIVE_PORTAL` (#169) is LOW for a wrong
   connectivity-check answer alone — hotel and guest portals do it too —
-  and CRIT on the operator's own network, from a live evil-twin BSS, or
-  for a named kit's portal page; see [[captive-portal]]
+  and CRIT on the operator's own network or from a live evil-twin BSS
+  (either tied to the event's own client, never borrowed from another
+  station in range), or for a named kit's portal page; see
+  [[captive-portal]]
 - **CRIT**: `THREAT_DOMAIN`, `THREAT_IP`, `ARP_SPOOF`, `ROGUE_DHCP`,
   `EVIL_TWIN`, `KARMA_AP`, `DNS_TUNNEL`, `ATTACK_TOOL_UA`,
   `ATTACK_PATH`, `WPS_PIN_BRUTE`, `WPS_PBC_RACE`,

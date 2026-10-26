@@ -21,12 +21,37 @@ typedef struct {
 } cp_sentinel_t;
 
 static const cp_sentinel_t SENTINELS[] = {
+    /* 69 bytes: the page ends in one LF, and the comparison is exact,
+     * so a table without it read every genuine answer as a hijack.
+     * Bytes as served on 2026-10-26, in
+     * research/tools/connectivity-check-sentinels.md. */
     { "captive.apple.com", "/hotspot-detect.html",
-      "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>",
+      "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>\n",
       200 },
     { "www.msftconnecttest.com", "/connecttest.txt",
       "Microsoft Connect Test", 200 },
+    /* NCSI probes IPv4 and IPv6 in parallel (Microsoft, "Overview of
+     * NCSI"); the v6 probe has its own host, listed under NCSI in
+     * Microsoft's Windows 11 endpoint list, and answers with the same
+     * file. The legacy v6 host answers with ncsi.txt's. Not
+     * dns.msftncsi.com: its expected answer is a ULA, which the
+     * private-space DNS check would call a spoof. */
+    { "ipv6.msftconnecttest.com", "/connecttest.txt",
+      "Microsoft Connect Test", 200 },
+    { "ipv6.msftncsi.com", "/ncsi.txt", "Microsoft NCSI", 200 },
     { "detectportal.firefox.com", "/success.txt", "success\n", 200 },
+    /* What Firefox's captive-portal service actually fetches up to ESR
+     * 140: captivedetect.canonicalURL, answered with
+     * captivedetect.canonicalContent (90 bytes, no trailing LF). */
+    { "detectportal.firefox.com", "/canonical.html",
+      "<meta http-equiv=\"refresh\" "
+      "content=\"0;url=https://support.mozilla.org/kb/captive-portal\"/>",
+      200 },
+    /* Firefox release since the move off detectportal: the same two
+     * prefs now name an empty 204, and the connectivity service the
+     * same success.txt on a new host. */
+    { "firefox-portal-detection.com", "/generate_204", NULL, 204 },
+    { "firefox-portal-detection.com", "/success.txt", "success\n", 200 },
     { "connectivitycheck.gstatic.com", "/generate_204", NULL, 204 },
     { "www.gstatic.com",               "/generate_204", NULL, 204 },
     { "connectivitycheck.android.com", "/generate_204", NULL, 204 },

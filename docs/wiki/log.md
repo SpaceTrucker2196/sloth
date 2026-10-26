@@ -5163,3 +5163,11 @@ report events.
   T1557.004 and DET0379 in `research/mitre/T1557-004.md`. Alerts carry
   the responder as `match_ip`; the JSONL record gains `server`,
   `server_port` and `kit`.
+- 2026-10-26 — [[captive-portal]]: #169 review. The Apple sentinel is
+  the 69-byte page Apple serves (one trailing LF); without it every
+  genuine answer read as a hijack. Sentinels added for NCSI's IPv6 hosts
+  and for Firefox's `canonical.html` and `firefox-portal-detection.com`.
+  The CRIT grade is now tied to the event's own client (ARP join to the
+  associated station, or the sensor's Wi-Fi link only for events on it)
+  instead of whichever single station was heard. The alert carries
+  T1557; T1557.004 is the kit rows' research basis.

@@ -347,29 +347,73 @@ static void twin_pair_axes_note(char *out, size_t n, twin_class_t cls,
 
 /* What sloth knows about the network a portal event happened on (#169).
  *
- * Two routes to a BSS, both stated rather than guessed: the single
- * associated client in the monitor table (the event is keyed by IP and
- * the table by MAC, so only an unambiguous table resolves), and the
- * sensor's own station link, which is the network its capture
- * interface is attached to. */
+ * Per event, never per tick: the grade is a claim about *this* client's
+ * network, so each route has to tie the event to a BSS first. An
+ * escalation borrowed from some other station heard in the same window
+ * would make a hotel guest's LOW read as CRIT "on your own network".
+ *
+ *   monitor table  the event's client IP resolved to a MAC through the
+ *                  sensor's neighbour (ARP) table, and that MAC seen
+ *                  associated over the air. The newest association
+ *                  wins: a station that roamed is on the BSS it joined
+ *                  last.
+ *   station link   the sensor's own association, used only when the
+ *                  client or the responder is a neighbour on a Wi-Fi
+ *                  station interface, i.e. the event happened on the
+ *                  link the sensor is attached through.
+ *
+ * Neither route resolves the sensor's own probes when the answer comes
+ * from a public address: sloth holds no list of its own addresses, and
+ * such an event stays ungraded rather than being guessed into CRIT. */
 typedef struct {
     char bss[20];      /* the client's BSS when resolved, "" otherwise */
     int  on_twin;      /* that BSS, or the sensor's link, is an evil twin */
     int  own_net;      /* ... or is a --my-ssid / --my-bssid network */
 } cp_ctx_t;
 
-static void cp_context(const sloth_state_t *s, cp_ctx_t *c) {
+/* The ARP row for `ip`, or NULL. */
+static const arp_entry_t *cp_neigh(const sloth_state_t *s, const char *ip) {
+    if (!ip || !ip[0]) return NULL;
+    for (int i = 0; i < s->arp_count && i < MAX_ARP_ENTRIES; i++)
+        if (strcmp(s->arp_entries[i].ip, ip) == 0) return &s->arp_entries[i];
+    return NULL;
+}
+
+/* Is `ip` a neighbour on a Wi-Fi station-mode interface? */
+static int cp_on_wifi_link(const sloth_state_t *s, const char *ip) {
+    const arp_entry_t *n = cp_neigh(s, ip);
+    if (!n || !n->iface[0]) return 0;
+    for (int i = 0; i < s->iface_count && i < MAX_IFACES; i++)
+        if (strcmp(s->ifaces[i].name, n->iface) == 0)
+            return s->ifaces[i].mode == IFACE_MODE_WIFI;
+    return 0;
+}
+
+static void cp_context(const sloth_state_t *s, const cp_event_t *e,
+                       cp_ctx_t *c) {
+    static const uint8_t zero[6];
     memset(c, 0, sizeof(*c));
-    if (s->assoc_count == 1) {
-        const assoc_t *a = &s->assocs[0];
-        if (a->sta_mac[0] || a->sta_mac[5]) {
-            mac_to_str(a->bssid, c->bss, sizeof(c->bss));
-            if (btm_candidate_is_twin(s, a->bssid)) c->on_twin = 1;
-            if (ownership_is_my_bssid(a->bssid) ||
-                (a->ssid[0] && ownership_is_my_ssid(a->ssid)))
+
+    const arp_entry_t *n = cp_neigh(s, e->src);
+    if (n && memcmp(n->mac, zero, 6) != 0) {
+        const assoc_t *best = NULL;
+        for (int i = 0; i < s->assoc_count && i < MAX_ASSOC_ENTRIES; i++) {
+            const assoc_t *a = &s->assocs[i];
+            if (memcmp(a->sta_mac, n->mac, 6) != 0) continue;
+            if (!best || a->last_seen > best->last_seen) best = a;
+        }
+        if (best) {
+            mac_to_str(best->bssid, c->bss, sizeof(c->bss));
+            if (btm_candidate_is_twin(s, best->bssid)) c->on_twin = 1;
+            if (ownership_is_my_bssid(best->bssid) ||
+                (best->ssid[0] && ownership_is_my_ssid(best->ssid)))
                 c->own_net = 1;
+            return;
         }
     }
+
+    if (!cp_on_wifi_link(s, e->src) && !cp_on_wifi_link(s, e->server))
+        return;
     for (int i = 0; i < s->ap_count && i < MAX_WIFI_APS; i++) {
         const wifi_ap_t *ap = &s->aps[i];
         if (ap->status != WIFI_STATUS_ASSOC) continue;
@@ -379,7 +423,7 @@ static void cp_context(const sloth_state_t *s, cp_ctx_t *c) {
         if ((have_mac && ownership_is_my_bssid(mac)) ||
             (ap->ssid[0] && ownership_is_my_ssid(ap->ssid)))
             c->own_net = 1;
-        if (!c->bss[0] && have_mac)
+        if (have_mac)
             snprintf(c->bss, sizeof(c->bss), "%.17s", ap->bssid);
         break;
     }
@@ -468,8 +512,6 @@ static void cp_fire_kit(const cp_event_t *e, time_t now) {
 }
 
 void rule_captive_portal(const sloth_state_t *s, time_t now) {
-    cp_ctx_t ctx;
-    cp_context(s, &ctx);
     for (int i = 0; i < s->cp_event_count; i++) {
         const cp_event_t *e = &s->cp_events[i];
         if (!e->kind) continue;
@@ -480,6 +522,8 @@ void rule_captive_portal(const sloth_state_t *s, time_t now) {
             continue;
         }
 
+        cp_ctx_t ctx;
+        cp_context(s, e, &ctx);
         const cp_event_t *kit = cp_kit_for(s, e->src, now);
         int escalated = ctx.own_net || ctx.on_twin || kit != NULL;
 
