@@ -18,7 +18,7 @@
 #include "sloth_view.h"
 #include "sloth_alert.h"
 
-#define SLOTH_VERSION "1.8.4"
+#define SLOTH_VERSION "1.8.5"
 
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
