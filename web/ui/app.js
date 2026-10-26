@@ -481,30 +481,70 @@
       for (var i = 0; i < t.cols.length; i++) if (t.cols[i].k === k) return t.cols[i];
       return null;
     };
-    t.min = function (c) { return Math.round((num(c.min) ? c.min : 4) * chPx()); };
+    // The narrowest a column goes: its min (ch), and never less than
+    // its header's label, the sort triangle and the cell's right
+    // padding (page.css .dt-th, .dt-lab: 10 px capitals, 0.1em apart;
+    // the SQL box's 12 px as they are), so no label is cut to "…".
+    t.labPx = function (c) {
+      var n = String(c.label || "").length;
+      if (!n) return 0;
+      var per = o.table ? chPx() : chPx() * 10 / 12 + 1;
+      return Math.ceil(n * per) + 8 + (t.sortable(c) ? 4 + 9 : 0);
+    };
+    t.min = function (c) {
+      return Math.max(Math.round((num(c.min) ? c.min : 4) * chPx()), t.labPx(c));
+    };
+    // The width the user set, or null.
+    t.set = function (c) {
+      return own.call(t.w, c.k) && num(t.w[c.k]) && t.w[c.k] >= t.min(c) && t.w[c.k] <= 4000
+        ? Math.round(t.w[c.k]) : null;
+    };
+    // The column's own width: the user's, or its default, at least its
+    // minimum.
+    t.base = function (c) {
+      var v = t.set(c);
+      if (v !== null) return v;
+      return Math.max(t.min(c), num(c.px) ? c.px : Math.round((num(c.w) ? c.w : 10) * chPx()));
+    };
+    // The width drawn. A flex column the user has not set takes its
+    // share of the row (minmax(base, 1fr)), so its drawn width is
+    // measured: a drag or an arrow starts from what is on the screen.
     t.px = function (c) {
-      if (own.call(t.w, c.k) && num(t.w[c.k]) && t.w[c.k] >= t.min(c) && t.w[c.k] <= 4000)
-        return Math.round(t.w[c.k]);
-      return num(c.px) ? c.px : Math.round((num(c.w) ? c.w : 10) * chPx());
+      var i = t.cols.indexOf(c), b = t.base(c);
+      if (!c.flex || t.set(c) !== null || !t.th[i]) return b;
+      var wd = Math.round(t.th[i].getBoundingClientRect().width);
+      return wd > b ? wd : b;
     };
     t.sortable = function (c) {
       return !!c.type && c.type !== "none" && (!o.server || !!c.srv);
     };
+    // A flex column keeps its share of the row until the user sets its
+    // width; from then it is that many px, the edge under the pointer,
+    // and any flex column still unset takes up the rest.
     t.apply = function () {
       var tracks = [], sum = 0;
       t.cols.forEach(function (c, i) {
-        var px = t.px(c);
+        var px = t.base(c);
         sum += px;
-        tracks.push(c.flex ? "minmax(" + px + "px, 1fr)" : px + "px");
+        tracks.push(c.flex && t.set(c) === null ? "minmax(" + px + "px, 1fr)" : px + "px");
         if (o.table && t.th[i]) t.th[i].style.width = px + "px";
-        if (t.rs[i]) t.rs[i].ariaValueNow = String(px);
       });
-      if (o.table) {
-        o.table.style.width = sum + "px";
-        return;
+      if (o.table) o.table.style.width = sum + "px";
+      else {
+        o.box.style.setProperty("--dt-cols", tracks.join(" "));
+        o.box.style.setProperty("--dt-minw", (sum + DT_GAP * (t.cols.length - 1) + 12) + "px");
       }
-      o.box.style.setProperty("--dt-cols", tracks.join(" "));
-      o.box.style.setProperty("--dt-minw", (sum + DT_GAP * (t.cols.length - 1) + 12) + "px");
+      for (var i = 0; i < t.cols.length; i++) t.value(i);
+    };
+    // The separator's value: the width drawn, in px, within its range.
+    t.value = function (i) {
+      var rs = t.rs[i], c = t.cols[i];
+      if (!rs) return;
+      var px = Math.min(4000, t.px(c));
+      rs.ariaValueMin = String(t.min(c));
+      rs.ariaValueMax = "4000";
+      rs.ariaValueNow = String(px);
+      rs.ariaValueText = px + " px";
     };
     t.setWidth = function (c, px) {
       t.w[c.k] = Math.max(t.min(c), Math.min(4000, Math.round(px)));
@@ -551,10 +591,13 @@
       var c = t.key ? t.col(t.key) : null;
       return c && c.srv && t.dir ? { sort: c.srv, dir: t.dir > 0 ? "asc" : "desc" } : null;
     };
-    // rows in the order the header says: a stable sort of a copy.
-    t.sort = function (rows) {
+    // rows in the order the header says: a stable sort of a copy. A
+    // server-paged table's rows are already in the server's order; it
+    // is applied again only when complete says every row is held, since
+    // a prefix sorted again could lose the rows that belong first.
+    t.sort = function (rows, complete) {
       var c = t.key ? t.col(t.key) : null;
-      if (!c || !t.dir || !c.val) return rows.slice();
+      if (!c || !t.dir || !c.val || (o.server && !complete)) return rows.slice();
       var d = rows.map(function (r, i) { return { r: r, i: i, k: sortKey(c.type, c.val(r)) }; });
       d.sort(function (a, b) {
         if (a.k === null || b.k === null) {
@@ -615,7 +658,9 @@
         rs.ariaOrientation = "vertical";
         rs.ariaLabel = "width of " + (c.label || c.k) + ": arrows resize, Enter fits";
         rs.ariaValueMin = String(t.min(c));
+        rs.ariaValueMax = "4000";
         rs.title = "drag to resize, double-click to fit";
+        rs.addEventListener("focus", function () { t.value(i); });
         rs.addEventListener("pointerdown", function (e) {
           e.preventDefault();
           var x0 = e.clientX, w0 = t.px(c);
@@ -652,6 +697,30 @@
       t.apply();
       t.paint();
     };
+    // ARIA's table: every row the builders put in the box a row of
+    // cells, and what holds rows between the box and them a rowgroup,
+    // so a screen reader reads the body and not a one-row table.
+    t.aria = function (node) {
+      if (o.table || !(node instanceof Element)) return;
+      var rows = node.classList.contains("dt-row") ? [node] : node.querySelectorAll(".dt-row");
+      for (var r = 0; r < rows.length; r++) {
+        var row = rows[r];
+        if (row !== o.head) {
+          row.role = "row";
+          for (var k = 0; k < row.children.length; k++)
+            if (!row.children[k].role) row.children[k].role = "cell";
+        }
+        for (var p = row.parentNode; p && p !== o.box; p = p.parentNode)
+          if (!p.role) p.role = "rowgroup";
+      }
+    };
+    if (!o.table && typeof MutationObserver === "function") {
+      new MutationObserver(function (ms) {
+        ms.forEach(function (m) {
+          for (var n = 0; n < m.addedNodes.length; n++) t.aria(m.addedNodes[n]);
+        });
+      }).observe(o.box, { childList: true, subtree: true });
+    }
     if (o.reset) {
       var rb = el("button", "dt-reset", "reset columns");
       rb.type = "button";
@@ -1741,7 +1810,7 @@
         rows = rows.concat(j.rows || []);
         var more = !!j.more;
         if (more && num(j.next_offset) && rows.length < DEV_MAX) return page(j.next_offset);
-        D.rows = DTD.sort(rows.slice(0, DEV_MAX));
+        D.rows = DTD.sort(rows.slice(0, DEV_MAX), !more && rows.length <= DEV_MAX);
         set("d-count", D.rows.length + " shown" +
             (more || rows.length > DEV_MAX ? "; the first " + D.rows.length + ", narrow the search" : ""));
         set("d-note", "vendor table " + j.vendor_table + ", sloth.db schema v" + j.db_schema);
@@ -2464,7 +2533,7 @@
       var box = $("w-aps");
       while (box.firstChild) box.removeChild(box.firstChild);
       WF.apEls = new Map();
-      DTA.sort(j.rows || []).forEach(function (a) { box.appendChild(apRow(a)); });
+      DTA.sort(j.rows || [], !j.more).forEach(function (a) { box.appendChild(apRow(a)); });
       if (!j.rows || !j.rows.length) box.appendChild(el("div", "sub", "no beacon_aps rows"));
       set("w-aps-count", (j.rows ? j.rows.length : 0) + " shown" + (j.more ? ", more in sloth.db" : ""));
     }).catch(function (e) {
@@ -2687,7 +2756,7 @@
       while (box.firstChild) box.removeChild(box.firstChild);
       flowHead(j);
       F.rows = F.rows.concat(j.rows || []);
-      DTF.sort(F.rows).forEach(function (f) { box.appendChild(flowRow(f, j.columns || [])); });
+      DTF.sort(F.rows, !j.more).forEach(function (f) { box.appendChild(flowRow(f, j.columns || [])); });
       F.offset += num(j.count) ? j.count : 0;
       $("f-more").hidden = !j.more;
       var shown = F.offset;
@@ -3245,11 +3314,31 @@
       tbl.appendChild(thead);
       tbl.appendChild(tbody);
       var rowsQ = j.rows || [];
-      // A column of numbers (and NULLs) sorts as numbers, any other as
-      // its text's bytes.
+      // A column of numbers (and NULLs) sorts as numbers, one of
+      // addresses or of MACs as those, any other as its text's bytes.
+      // Widths are kept by the column's name (the n-th of that name), so
+      // one query's widths go to the same column of the next, not to
+      // whatever is in its place.
+      var seen = {};
       var cols = (j.columns || []).map(function (c, i) {
-        var allNum = rowsQ.every(function (row) { return row[i] === null || typeof row[i] === "number"; });
-        return { k: "c" + i, label: String(c), w: allNum ? 10 : 24, type: allNum ? "num" : "text",
+        function all(f) {
+          var any = false;
+          var ok = rowsQ.every(function (row) {
+            if (row[i] === null) return true;
+            any = true;
+            return f(row[i]);
+          });
+          return ok && any;
+        }
+        var allNum = all(function (v) { return typeof v === "number"; }) ||
+                     rowsQ.every(function (row) { return row[i] === null; });
+        var type = allNum ? "num" : all(isIP) ? "ip"
+                 : all(function (v) { return typeof v === "string" && MAC_RE.test(v.toLowerCase()); }) ? "mac"
+                 : "text";
+        var nm = String(c);
+        seen[nm] = (seen[nm] || 0) + 1;
+        return { k: "n:" + nm + (seen[nm] > 1 ? "#" + seen[nm] : ""), label: nm,
+                 w: allNum ? 10 : type === "ip" ? 16 : type === "mac" ? 18 : 24, type: type,
                  num: allNum, val: function (row) { return row[i] === null ? null : cellText(row[i]); } };
       });
       var qtools = el("span", "dt-tools");

@@ -286,6 +286,10 @@ table.qt td.nul { color: var(--muted); }
 .dt .dt-row > .n { text-align: right; }
 .dt .dhead { color: var(--brass); font-size: 12px; margin-top: var(--gap); border-bottom: 1px solid var(--brass-soft); cursor: default; }
 .dt .dhead:hover { background: none; }
+/* The list tables' rows are li with 4 px each side (.alerts li,
+ * .ticker li): their headers take the same, so a cell and the edge that
+ * resizes it sit over the header that names them. */
+.dt > .dhead.alrow, .dt > .dhead.tkrow, .dt > .dhead.halrow, .dt > .dhead.hflrow { padding-left: 4px; padding-right: 4px; }
 .dt .dhead > .dt-th, table.qt th.dt-th { position: relative; overflow: visible; display: flex; align-items: center; min-width: 0; padding-right: 8px; }
 table.qt th.dt-th { display: table-cell; }
 .dt-lab { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

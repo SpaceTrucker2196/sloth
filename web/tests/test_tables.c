@@ -84,6 +84,31 @@ static void test_page_tables(void) {
     WT_HAS(p, "getJSON(\"/api/wifi/aps?limit=100&sort=\" + encodeURIComponent(sort) + \"&dir=\" + wd.dir)");
     WT_HAS(p, "if (wd) p += \"&dir=\" + wd.dir;");
     WT_HAS(p, ".dt .dt-row { display: grid; grid-template-columns: var(--dt-cols);");
+    /* The review's fixes, each pinned where it lives: a flex column the
+     * user sized drawn at that size, its drag and arrows seeded from the
+     * drawn width; a floor at the header's label; the separator's
+     * maximum and text; body rows and cells in ARIA's table; a
+     * server-paged prefix not sorted again; the SQL box's widths by
+     * column name and its address and MAC columns typed; the list
+     * tables' headers padded as their li rows. Each seen red with the
+     * line removed. */
+    WT_HAS(p, "tracks.push(c.flex && t.set(c) === null ? \"minmax(\" + px + \"px, 1fr)\" : px + \"px\");");
+    WT_HAS(p, "var wd = Math.round(t.th[i].getBoundingClientRect().width);");
+    WT_HAS(p, "var x0 = e.clientX, w0 = t.px(c);");
+    WT_HAS(p, "return Math.max(Math.round((num(c.min) ? c.min : 4) * chPx()), t.labPx(c));");
+    WT_HAS(p, "rs.ariaValueMax = \"4000\";");
+    WT_HAS(p, "rs.ariaValueText = px + \" px\";");
+    WT_HAS(p, "if (!row.children[k].role) row.children[k].role = \"cell\";");
+    WT_HAS(p, "if (!p.role) p.role = \"rowgroup\";");
+    WT_HAS(p, "}).observe(o.box, { childList: true, subtree: true });");
+    WT_HAS(p, "if (!c || !t.dir || !c.val || (o.server && !complete)) return rows.slice();");
+    WT_HAS(p, "D.rows = DTD.sort(rows.slice(0, DEV_MAX), !more && rows.length <= DEV_MAX);");
+    WT_HAS(p, "DTF.sort(F.rows, !j.more)");
+    WT_HAS(p, "DTA.sort(j.rows || [], !j.more)");
+    WT_HAS(p, "return { k: \"n:\" + nm + (seen[nm] > 1 ? \"#\" + seen[nm] : \"\"), label: nm,");
+    WT_HAS(p, "var type = allNum ? \"num\" : all(isIP) ? \"ip\"");
+    WT_LACKS(p, "k: \"c\" + i");
+    WT_HAS(p, ".dt > .dhead.alrow, .dt > .dhead.tkrow, .dt > .dhead.halrow, .dt > .dhead.hflrow { padding-left: 4px; padding-right: 4px; }");
 }
 
 #ifdef WITH_SQLITE
