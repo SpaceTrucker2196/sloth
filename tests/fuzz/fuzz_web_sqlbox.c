@@ -33,6 +33,7 @@
  * second statement accepted, each planted on purpose. */
 #include "../../web/src/web_json.c"
 #include "../../web/src/web_secret.c"
+#include "../../web/src/web_ssid.c"
 #include "../../web/src/web_sqlguard.c"
 
 const char *db_schema_sql(void);
