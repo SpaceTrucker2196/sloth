@@ -946,20 +946,23 @@ int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
         return answer_error(503, "no_sloth_db",
                             "start slothweb with --sloth-db PATH (a WITH_SQLITE build)",
                             body, cap, len, status);
-    web_param_t ps[3] = { { "sort", "", 0 }, { "limit", "", 0 },
-                          { "offset", "", 0 } };
+    web_param_t ps[4] = { { "sort", "", 0 }, { "limit", "", 0 },
+                          { "offset", "", 0 }, { "dir", "", 0 } };
     char err[48];
-    if (web_params_parse(query, ps, 3, err, sizeof(err)) != 0)
+    if (web_params_parse(query, ps, 4, err, sizeof(err)) != 0)
         return answer_error(400, err, NULL, body, cap, len, status);
     static const char *const SORT[WEB_AP_SORT_COUNT] = { "last", "ssids",
-                                                         "karma", "bssid" };
-    int sort = WEB_AP_SORT_LAST;
+        "karma", "bssid", "ssid", "channel", "signal", "enc", "mfp",
+        "downgrade", "first" };
+    int sort = WEB_AP_SORT_LAST, dir = WEB_SORT_DEFAULT;
     if (ps[0].seen) {
         sort = -1;
         for (int i = 0; i < WEB_AP_SORT_COUNT; i++)
             if (!strcmp(ps[0].val, SORT[i])) sort = i;
         if (sort < 0) return answer_error(400, "bad_sort", NULL, body, cap, len, status);
     }
+    if (ps[3].seen && (dir = web_sort_dir_find(ps[3].val)) < 0)
+        return answer_error(400, "bad_dir", NULL, body, cap, len, status);
     long long limit = WEB_WIFI_AP_LIMIT, offset = 0;
     if (ps[1].seen && decimal(ps[1].val, 1, WEB_WIFI_AP_MAX, &limit) != 0)
         return answer_error(400, "bad_limit", NULL, body, cap, len, status);
@@ -980,7 +983,8 @@ int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
     apcol_t c = { calloc((size_t)limit + 1, sizeof(web_sdb_ap_t)), 0,
                   (int)limit + 1 };
     if (!c.rows) { web_slothdb_close(&conn); return -1; }
-    int got = web_sdb_aps(&conn, sort, limit + 1, offset, collect_ap, &c);
+    int got = web_sdb_aps(&conn, WEB_SORT_PACK(sort, dir), limit + 1, offset,
+                          collect_ap, &c);
     if (got < 0) {
         int to = conn.timed_out;
         web_slothdb_close(&conn);
@@ -1010,6 +1014,9 @@ int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
     web_jw_raw(&w, ",\"more\":");     web_jw_raw(&w, more ? "true" : "false");
     web_jw_raw(&w, ",\"next_offset\":");
     if (more) web_jw_int(&w, offset + shown); else web_jw_raw(&w, "null");
+    /* Only when asked for: an answer without dir is as it always was. */
+    if (dir != WEB_SORT_DEFAULT)
+        web_jw_raw(&w, dir == WEB_SORT_ASC ? ",\"dir\":\"asc\"" : ",\"dir\":\"desc\"");
     web_jw_raw(&w, "}\n");
     free(c.rows);
     if (w.overflow) return -1;

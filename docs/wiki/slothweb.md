@@ -647,7 +647,12 @@ In short:
   and the five listed on hover, tap or the arrow keys. Every SSID is
   sent in a display form (`\xNN` for any octet that is not printable
   UTF-8, flagged "non-printable"), coloured over its octets as the TUI
-  colours it. `/api/wifi/deauth`: frames per bssid with
+  colours it. Every table on the page sorts by a column (in place,
+  by the column's type; server-paged ones through the route's checked
+  `sort` word and `dir=asc|desc`) and resizes by its header's edge
+  (drag, arrows, double-click to fit), widths kept per table in the
+  browser with a `reset columns` control.
+  `/api/wifi/deauth`: frames per bssid with
   DEAUTH_FLOOD episodes matched on the predicate-only alert key. Probe
   clients from `/api/series` over the M3 band.
 - **History** (§8.10). `/api/history/overview` (the 30 d strip: devices

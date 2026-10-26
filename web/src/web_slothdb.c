@@ -1310,8 +1310,36 @@ int web_sdb_aps(web_sdb_conn_t *c, int sort, long long limit,
         " ORDER BY 15 DESC, a.last_seen DESC, a.bssid",
         " ORDER BY 16 DESC, a.last_seen DESC, a.bssid",
         " ORDER BY a.bssid",
+        " ORDER BY a.ssid IS NULL, a.ssid, a.bssid",
+        " ORDER BY a.channel IS NULL, a.channel, a.bssid",
+        " ORDER BY a.signal_dbm IS NULL, a.signal_dbm DESC, a.bssid",
+        " ORDER BY a.enc IS NULL, a.enc, a.bssid",
+        " ORDER BY a.mfp IS NULL, a.mfp DESC, a.bssid",
+        " ORDER BY a.downgrade_flags IS NULL, a.downgrade_flags DESC, a.bssid",
+        " ORDER BY a.first_seen DESC, a.bssid",
     };
     int km = karma_ok(c), ss = ap_ssids_ok(c);
+    /* With a direction (web_query.h): the sort's column, empty last,
+     * then the BSSID. 15 and 16 are the SSID count and the KARMA score,
+     * the last two columns; the score is NULL for an AP that is none,
+     * and so is the column without karma_candidates. */
+    static const char *const KEY[WEB_AP_SORT_COUNT] = {
+        "a.last_seen", "15", "16", "a.bssid", "a.ssid", "a.channel",
+        "a.signal_dbm", "a.enc", "a.mfp", "a.downgrade_flags", "a.first_seen",
+    };
+    int dir = WEB_SORT_DIR(sort);
+    sort = WEB_SORT_KEY(sort);
+    if (sort >= WEB_AP_SORT_COUNT) sort = WEB_AP_SORT_LAST;
+    char ord[160];
+    if (dir == WEB_SORT_ASC || dir == WEB_SORT_DESC) {
+        const char *k = sort == WEB_AP_SORT_KARMA ? (km ? "k.score" : "NULL") : KEY[sort];
+        snprintf(ord, sizeof(ord), " ORDER BY %s IS NULL, %s %s%s",
+                 sort == WEB_AP_SORT_SSIDS ? "0" : k, k,
+                 dir == WEB_SORT_ASC ? "ASC" : "DESC",
+                 sort == WEB_AP_SORT_BSSID ? "" : ", a.bssid");
+    } else {
+        snprintf(ord, sizeof(ord), "%s", ORDER[sort]);
+    }
     char sql[1400];
     snprintf(sql, sizeof(sql),
         "SELECT a.bssid, a.ssid, a.signal_dbm, a.channel, a.enc, a.akm,"
@@ -1322,7 +1350,7 @@ int web_sdb_aps(web_sdb_conn_t *c, int sort, long long limit,
            : "0",
         km ? "k.score, k.ssid_count, k.pnl_overlap, k.ie_uniform" : "NULL, 0, 0, 0",
         km ? " LEFT JOIN karma_candidates k ON k.bssid = a.bssid" : "",
-        ORDER[sort >= 0 && sort < WEB_AP_SORT_COUNT ? sort : 0]);
+        ord);
     sqlite3_stmt *st = NULL;
     if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
     sqlite3_bind_int64(st, 1, limit);
@@ -1842,12 +1870,25 @@ int web_sdb_flows(web_sdb_conn_t *c, int proto, long long from, long long to,
     /* Column numbers of ftab_select()'s list, 1-based for ORDER BY. */
     static const char *const ORDER[WEB_FLOWS_SORT_COUNT] = {
         " ORDER BY %d DESC, 1, 2", " ORDER BY %d DESC, %d DESC, 1, 2",
-        " ORDER BY 1, 2, %d DESC",
+        " ORDER BY 1, 2, %d DESC", " ORDER BY 2, 1, %d DESC",
+        " ORDER BY %d DESC, 1, 2",
     };
-    int s = sort >= 0 && sort < WEB_FLOWS_SORT_COUNT ? sort : 0;
+    int dir = WEB_SORT_DIR(sort);
+    int s = WEB_SORT_KEY(sort);
+    if (s >= WEB_FLOWS_SORT_COUNT) s = 0;
     char ord[64];
-    if (s == WEB_FLOWS_SORT_TOTAL)
+    /* With a direction (web_query.h): the sort's column of
+     * ftab_select()'s list (none of which is ever NULL: an absent
+     * destination is ''), then source and destination. */
+    const int key[WEB_FLOWS_SORT_COUNT] = { WEB_FP_COLS + 7, WEB_FP_COLS + 5, 1, 2,
+                                            WEB_FP_COLS + 6 };
+    if (dir == WEB_SORT_ASC || dir == WEB_SORT_DESC)
+        snprintf(ord, sizeof(ord), " ORDER BY %d %s, 1, 2", key[s],
+                 dir == WEB_SORT_ASC ? "ASC" : "DESC");
+    else if (s == WEB_FLOWS_SORT_TOTAL)
         snprintf(ord, sizeof(ord), ORDER[s], WEB_FP_COLS + 5, WEB_FP_COLS + 7);
+    else if (s == WEB_FLOWS_SORT_FIRST)
+        snprintf(ord, sizeof(ord), ORDER[s], WEB_FP_COLS + 6);
     else
         snprintf(ord, sizeof(ord), ORDER[s], WEB_FP_COLS + 7);
     snprintf(sql, sizeof(sql), "%s%s%s LIMIT ?3 OFFSET ?4", sel, where, ord);

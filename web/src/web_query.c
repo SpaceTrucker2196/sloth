@@ -284,8 +284,15 @@ int web_query_parse(const char *q, long long now_s, web_query_t *out,
 }
 
 int web_query_sort_find(const char *s) {
-    static const char *const SORTS[] = { "last", "first", "mac", "risk", NULL };
+    static const char *const SORTS[] = { "last", "first", "mac", "risk",
+        "vendor", "ip", "ssid", "signal", "sources", NULL };
     return s ? word_index(SORTS, s) : -1;
+}
+
+int web_sort_dir_find(const char *s) {
+    if (s && !strcmp(s, "asc")) return WEB_SORT_ASC;
+    if (s && !strcmp(s, "desc")) return WEB_SORT_DESC;
+    return -1;
 }
 
 /* ── the statement ───────────────────────────────────────────────────── */
@@ -565,7 +572,19 @@ int web_query_compile(const web_query_t *q, unsigned feats, int sort,
         " ORDER BY d.first_seen DESC, d.mac",
         " ORDER BY d.mac",
         " ORDER BY d.risk_level DESC, d.last_seen DESC, d.mac",
+        " ORDER BY d.vendor IS NULL, d.vendor, d.mac",
+        " ORDER BY d.ip IS NULL, d.ip, d.mac",
+        " ORDER BY d.last_ssid IS NULL, d.last_ssid, d.mac",
+        " ORDER BY d.signal_dbm IS NULL, d.signal_dbm DESC, d.mac",
+        " ORDER BY d.sources DESC, d.last_seen DESC, d.mac",
     };
+    /* With a direction: the sort's column, empty last, then the MAC. */
+    static const char *const KEY[WEB_QS_COUNT] = {
+        "d.last_seen", "d.first_seen", "d.mac", "d.risk_level", "d.vendor",
+        "d.ip", "d.last_ssid", "d.signal_dbm", "d.sources",
+    };
+    int dir = WEB_SORT_DIR(sort);
+    sort = WEB_SORT_KEY(sort);
     memset(out, 0, sizeof(*out));
     if (web_query_row_select(feats, NULL, out->sql, sizeof(out->sql)) != 0)
         return -1;
@@ -575,7 +594,17 @@ int web_query_compile(const web_query_t *q, unsigned feats, int sort,
         sb_put(&b, q->t[i].neg ? " AND NOT " : " AND ");
         term(&b, &q->t[i], feats, out);
     }
-    sb_put(&b, ORDER[sort >= 0 && sort < WEB_QS_COUNT ? sort : WEB_QS_LAST]);
+    if (sort < 0 || sort >= WEB_QS_COUNT) sort = WEB_QS_LAST;
+    if (dir == WEB_SORT_ASC || dir == WEB_SORT_DESC) {
+        sb_put(&b, " ORDER BY ");
+        sb_put(&b, KEY[sort]);
+        sb_put(&b, " IS NULL, ");
+        sb_put(&b, KEY[sort]);
+        sb_put(&b, dir == WEB_SORT_ASC ? " ASC" : " DESC");
+        if (sort != WEB_QS_MAC) sb_put(&b, ", d.mac");
+    } else {
+        sb_put(&b, ORDER[sort]);
+    }
     sb_put(&b, " LIMIT ");
     param(&b, bind_int(out, limit));
     sb_put(&b, " OFFSET ");

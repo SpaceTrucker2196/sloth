@@ -85,7 +85,8 @@ static int emit_row(void *ctx, const web_sdb_flow_t *f) {
     return 0;
 }
 
-static const char *const SORTS[WEB_FLOWS_SORT_COUNT] = { "last", "total", "src" };
+static const char *const SORTS[WEB_FLOWS_SORT_COUNT] = { "last", "total", "src",
+                                                          "dst", "first" };
 
 static int withheld(const char *v, char *body, size_t cap, size_t *len,
                     int *status) {
@@ -99,12 +100,13 @@ static int withheld(const char *v, char *body, size_t cap, size_t *len,
 int web_flows_route(const web_m4_t *m, const char *query, long long now_s,
                     char *body, size_t cap, size_t *len, int *status) {
     if (!web_hist_configured(m)) return web_hist_no_db(body, cap, len, status);
-    web_param_t ps[7] = {
+    web_param_t ps[8] = {
         { "proto", "", 0 }, { "from", "", 0 }, { "to", "", 0 }, { "ip", "", 0 },
         { "sort", "", 0 }, { "limit", "", 0 }, { "offset", "", 0 },
+        { "dir", "", 0 },
     };
     char err[48];
-    if (web_params_parse(query, ps, 7, err, sizeof(err)) != 0)
+    if (web_params_parse(query, ps, 8, err, sizeof(err)) != 0)
         return web_hist_error(400, err, NULL, body, cap, len, status);
     if (!ps[0].seen)
         return web_hist_error(400, "missing_proto", NULL, body, cap, len, status);
@@ -128,6 +130,9 @@ int web_flows_route(const web_m4_t *m, const char *query, long long now_s,
         if (sort == WEB_FLOWS_SORT_COUNT)
             return web_hist_error(400, "bad_sort", NULL, body, cap, len, status);
     }
+    int dir = WEB_SORT_DEFAULT;
+    if (ps[7].seen && (dir = web_sort_dir_find(ps[7].val)) < 0)
+        return web_hist_error(400, "bad_dir", NULL, body, cap, len, status);
     if (ps[5].seen && decimal(ps[5].val, 1, WEB_FLOWS_LIMIT_MAX, &limit) != 0)
         return web_hist_error(400, "bad_limit", NULL, body, cap, len, status);
     if (ps[6].seen && decimal(ps[6].val, 0, WEB_FLOWS_OFFSET_MAX, &offset) != 0)
@@ -157,8 +162,9 @@ int web_flows_route(const web_m4_t *m, const char *query, long long now_s,
     fl_t l = { &w, cap, 0, 0 };
     int present = 0;
     long long total = 0;
-    int got = web_sdb_flows(&c, proto, from, to, ps[3].seen ? ip : NULL, sort,
-                            limit, offset, emit_row, &l, &present, &total);
+    int got = web_sdb_flows(&c, proto, from, to, ps[3].seen ? ip : NULL,
+                            WEB_SORT_PACK(sort, dir), limit, offset, emit_row, &l,
+                            &present, &total);
     if (got < 0) return web_hist_read_failed(&c, body, cap, len, status);
     web_slothdb_close(&c);
     web_jw_raw(&w, "],\"present\":"); web_jw_raw(&w, present ? "true" : "false");
@@ -166,6 +172,9 @@ int web_flows_route(const web_m4_t *m, const char *query, long long now_s,
     web_jw_raw(&w, ",\"total\":");    web_jw_int(&w, total);
     web_jw_raw(&w, ",\"more\":");
     web_jw_raw(&w, l.cut || offset + l.n < total ? "true" : "false");
+    /* Only when asked for: an answer without dir is as it always was. */
+    if (dir != WEB_SORT_DEFAULT)
+        web_jw_raw(&w, dir == WEB_SORT_ASC ? ",\"dir\":\"asc\"" : ",\"dir\":\"desc\"");
     web_jw_raw(&w, "}\n");
     return answer(&w, len, status);
 }

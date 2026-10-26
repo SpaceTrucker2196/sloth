@@ -282,15 +282,18 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
         return answer_error(503, "no_sloth_db",
                             "start slothweb with --sloth-db PATH (a WITH_SQLITE build)",
                             body, cap, len, status);
-    dparam_t ps[4] = {
+    dparam_t ps[5] = {
         { "q", WEB_Q_LEN, 1, "", 0 }, { "sort", 8, 0, "", 0 },
         { "limit", 8, 0, "", 0 }, { "offset", 8, 0, "", 0 },
+        { "dir", 8, 0, "", 0 },
     };
-    if (dparams(query, ps, 4, err, sizeof(err)) != 0)
+    if (dparams(query, ps, 5, err, sizeof(err)) != 0)
         return answer_error(400, err, NULL, body, cap, len, status);
-    int sort = WEB_QS_LAST;
+    int sort = WEB_QS_LAST, dir = WEB_SORT_DEFAULT;
     if (ps[1].seen && (sort = web_query_sort_find(ps[1].val)) < 0)
         return answer_error(400, "bad_sort", NULL, body, cap, len, status);
+    if (ps[4].seen && (dir = web_sort_dir_find(ps[4].val)) < 0)
+        return answer_error(400, "bad_dir", NULL, body, cap, len, status);
     long long limit = WEB_DEV_LIMIT, offset = 0;
     if (ps[2].seen && (decimal(ps[2].val, WEB_DEV_LIMIT_MAX, &limit) != 0 ||
                        limit < 1))
@@ -316,8 +319,8 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
         return sdb_unavailable(m, body, cap, len, status, oerr);
     }
     const char *fail_why = "error";
-    int got = web_sdb_devices(&conn, q, sort, limit + 1, offset, collect, &c,
-                              &fail_why);
+    int got = web_sdb_devices(&conn, q, WEB_SORT_PACK(sort, dir), limit + 1,
+                              offset, collect, &c, &fail_why);
     int schema = conn.schema;
     web_slothdb_close(&conn);      /* before any rendering: no held read */
     free(q);
@@ -339,7 +342,8 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
     web_jw_init(&w, body, cap);
     web_jw_raw(&w, "{\"now\":");     web_jw_int(&w, now_s);
     web_jw_raw(&w, ",\"q\":");       web_jw_str(&w, ps[0].val);
-    static const char *const SORT[] = { "last", "first", "mac", "risk" };
+    static const char *const SORT[WEB_QS_COUNT] = { "last", "first", "mac",
+        "risk", "vendor", "ip", "ssid", "signal", "sources" };
     web_jw_raw(&w, ",\"sort\":");    web_jw_str(&w, SORT[sort]);
     web_jw_raw(&w, ",\"limit\":");   web_jw_int(&w, limit);
     web_jw_raw(&w, ",\"offset\":");  web_jw_int(&w, offset);
@@ -361,6 +365,9 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
     web_jw_raw(&w, ",\"more\":");     web_jw_raw(&w, more ? "true" : "false");
     web_jw_raw(&w, ",\"next_offset\":");
     if (more) web_jw_int(&w, offset + shown); else web_jw_raw(&w, "null");
+    /* Only when asked for: an answer without dir is as it always was. */
+    if (dir != WEB_SORT_DEFAULT)
+        web_jw_raw(&w, dir == WEB_SORT_ASC ? ",\"dir\":\"asc\"" : ",\"dir\":\"desc\"");
     web_jw_raw(&w, "}\n");
     free(macs);
     free(bits);

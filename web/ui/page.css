@@ -273,6 +273,48 @@ table.qt td.nul { color: var(--muted); }
 .ssid-np { white-space: nowrap; }
 .npm { display: inline-block; margin-left: 6px; padding: 0 4px; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--rule); border-radius: 3px; vertical-align: 1px; }
 
+/* ── data tables: sortable, resizable columns (owner request
+ * 2026-10-26) ─────────────────────────────────────────────────────────
+ * One rule set for every table (app.js DataTable()): a row is a grid on
+ * the columns' tracks (--dt-cols, set from the widths), at least their
+ * sum wide (--dt-minw), inside its .hscroll box, so a narrow window
+ * scrolls the table and never the page. */
+.dt .dt-row { display: grid; grid-template-columns: var(--dt-cols); column-gap: 6px; align-items: center; min-width: var(--dt-minw); white-space: nowrap; }
+.hscroll.dt > .vscroll, .hscroll.dt > .dhead.drow { min-width: var(--dt-minw); }
+.dt .dt-row > span, .dt .dt-row > .tx { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.dt .dt-row > .ty { min-width: 0; }
+.dt .dt-row > .n { text-align: right; }
+.dt .dhead { color: var(--brass); font-size: 12px; margin-top: var(--gap); border-bottom: 1px solid var(--brass-soft); cursor: default; }
+.dt .dhead:hover { background: none; }
+.dt .dhead > .dt-th, table.qt th.dt-th { position: relative; overflow: visible; display: flex; align-items: center; min-width: 0; padding-right: 8px; }
+table.qt th.dt-th { display: table-cell; }
+.dt-lab { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+table.qt .dt-lab { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.dt-th.n { justify-content: flex-end; }
+button.dt-sort { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; padding: 0; color: inherit; background: none; border: 0; border-radius: 0; font: inherit; letter-spacing: 0; text-transform: none; cursor: pointer; }
+button.dt-sort:hover { color: var(--hover); background: none; }
+.dt-ind { color: var(--signal); font-size: 9px; flex: none; }
+/* The separator: a 9 px target on the column's right edge, its rule
+ * 1 px until it is pointed at, dragged or focused. */
+.dt-rs { position: absolute; top: -2px; bottom: -2px; right: -5px; width: 9px; cursor: col-resize; touch-action: none; z-index: 2; }
+.dt-rs::after { content: ""; position: absolute; left: 4px; top: 3px; bottom: 3px; width: 1px; background: var(--rule); }
+.dt-rs:hover::after, .dt-rs.on::after, .dt-rs:focus-visible::after { left: 3px; width: 3px; background: var(--signal); }
+.dt-rs:focus-visible { outline: none; }
+/* The last column's edge stays inside its row, so a table that fits
+ * its box shows no scrollbar. */
+.dt-th:last-child > .dt-rs { right: 0; }
+.dt-tools { display: inline-flex; margin-left: auto; }
+button.dt-reset { font-size: 9px; letter-spacing: 0.1em; padding: 1px 7px; color: var(--muted); }
+.dt .aphist { min-width: var(--dt-minw); }
+.dt .alrow, .dt .halrow, .dt .hflrow, .dt .tkrow, .dt .lsrow, .dt .nwrow, .dt .anrow { font-size: 12px; }
+.dt .anrow { padding: 2px 0; border-bottom: 1px dotted var(--rule); }
+.dt .anrow.go { cursor: pointer; }
+.dt .anrow.go:hover { background: var(--tint); }
+.dt .lsrow, .dt .nwrow { border-top: 1px dotted var(--rule); padding: 1px 0; }
+.dt .lsrow.dhead, .dt .nwrow.dhead { border-top: 0; }
+table.qt.dt-fixed { table-layout: fixed; }
+table.qt.dt-fixed td { overflow: hidden; text-overflow: ellipsis; }
+
 /* ── the drawer ────────────────────────────────────────────────────── */
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); overflow: auto; background: var(--panel); border-left: 1px solid var(--brass-edge); box-shadow: -12px 0 34px rgba(0, 0, 0, 0.45); padding: 16px; z-index: 30; }
 .dr-hd { display: flex; gap: var(--gap); align-items: baseline; flex-wrap: wrap; margin-bottom: var(--gap); }

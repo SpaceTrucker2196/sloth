@@ -96,7 +96,23 @@ enum {
     WEB_QF_ARP    = 1 << 5      /* arp */
 };
 
-enum { WEB_QS_LAST = 0, WEB_QS_FIRST, WEB_QS_MAC, WEB_QS_RISK, WEB_QS_COUNT };
+enum { WEB_QS_LAST = 0, WEB_QS_FIRST, WEB_QS_MAC, WEB_QS_RISK, WEB_QS_VENDOR,
+       WEB_QS_IP, WEB_QS_SSID, WEB_QS_SIGNAL, WEB_QS_SOURCES, WEB_QS_COUNT };
+
+/* A sort's direction (the page's sortable columns, owner request
+ * 2026-10-26): WEB_SORT_DEFAULT keeps the sort's own order, ASC and
+ * DESC set its first key's, an empty value last either way. Every
+ * server-paged sort (/api/devices, /api/wifi/aps, /api/flows) takes it
+ * as dir=asc|desc and passes it packed with the sort's index, which no
+ * sort list reaches: WEB_SORT_PACK(sort, dir). The key itself is always
+ * a constant column of the route's own list; nothing from the request
+ * is ever part of the SQL. */
+enum { WEB_SORT_DEFAULT = 0, WEB_SORT_ASC = 1, WEB_SORT_DESC = 2 };
+#define WEB_SORT_PACK(s, d) ((s) | (d) << 8)
+#define WEB_SORT_KEY(p)     ((p) & 0xff)
+#define WEB_SORT_DIR(p)     (((p) >> 8) & 3)
+/* "asc" or "desc" -> WEB_SORT_ASC or WEB_SORT_DESC, else -1. */
+int web_sort_dir_find(const char *s);
 
 typedef struct {
     int       type;            /* 0 text, 1 integer, 2 real */
@@ -117,7 +133,8 @@ typedef struct {
 int web_query_compile(const web_query_t *q, unsigned feats, int sort,
                       long long limit, long long offset, web_qsql_t *out);
 
-/* "last", "first", "mac", "risk" -> WEB_QS_*, or -1. */
+/* "last", "first", "mac", "risk", "vendor", "ip", "ssid", "signal",
+ * "sources" -> WEB_QS_*, or -1. */
 int web_query_sort_find(const char *s);
 
 /* The anomaly kind names, in web_anomaly_kind_find()'s order. */

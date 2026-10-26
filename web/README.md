@@ -374,14 +374,14 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/series?...`, `/api/keys?...`, `/api/metrics` | `200` JSON, `Cache-Control: no-store`; `400` with `{"error":"reason"}` for a parameter that does not pass (below); `503` with no time series attached |
    | `GET /api/anomalies?since=&kind=` | `200` JSON, `Cache-Control: no-store`, open episodes and those closed since `since` (below); `400` for a parameter that does not pass; `503` with no anomaly engine |
    | `GET /api/baseline?metric=&key=` | `200` JSON, one series' 168 hour-of-week cells; `400` / `503` as above |
-   | `GET /api/devices?q=&sort=&limit=&offset=` | `200` JSON, a page of sloth.db's devices (M4, below); `400` for a parameter or a query term that does not pass; `503` with no `--sloth-db`, or sloth.db missing, refused, busy or past its budget |
+   | `GET /api/devices?q=&sort=&dir=&limit=&offset=` | `200` JSON, a page of sloth.db's devices (M4, below); `400` for a parameter or a query term that does not pass; `503` with no `--sloth-db`, or sloth.db missing, refused, busy or past its budget |
    | `GET /api/device/{mac}` | `200` JSON, one device; `400` for a MAC that does not pass or any query |
    | `GET /api/lookup?q=` | `200` JSON, the Lookup card for a MAC or an IP; `400` otherwise |
    | `GET /api/wifi/channels?metric=&from=&to=&cols=`, `/api/wifi/deauth?from=&to=&cols=` | `200` JSON, the channel waterfall and the deauth timeline (M5, below); `400` for a parameter that does not pass; `503` with no time series |
-   | `GET /api/wifi/aps?sort=&limit=&offset=` | `200` JSON, a page of sloth.db's beacon_aps; `400`; `503` with no `--sloth-db` or sloth.db unreadable |
+   | `GET /api/wifi/aps?sort=&dir=&limit=&offset=` | `200` JSON, a page of sloth.db's beacon_aps; `400`; `503` with no `--sloth-db` or sloth.db unreadable |
    | `GET /api/history/overview`, `/api/history/devices`, `/api/history/alerts`, `/api/history/flows` (`?from=&to=` and their own) | `200` JSON, the History view's reads of sloth.db; `400`; `503` as above |
    | `GET /api/sessions`, `/api/sessions/new?id=` | `200` JSON, the survey sessions and one's "new since the previous session"; `404` for a session sloth.db does not have |
-   | `GET /api/flows?proto=&from=&to=&ip=&sort=&limit=&offset=` | `200` JSON, one protocol table of sloth.db (M6, below); `400` for a parameter that does not pass, `proto=mqtt` included (`proto_withheld`); `503` as above |
+   | `GET /api/flows?proto=&from=&to=&ip=&sort=&dir=&limit=&offset=` | `200` JSON, one protocol table of sloth.db (M6, below); `400` for a parameter that does not pass, `proto=mqtt` included (`proto_withheld`); `503` as above |
    | `GET /api/flows/graph?from=&to=&nodes=&edges=` | `200` JSON, the chord diagram's pairs with the fold stated; `400`; `503` as above |
    | `GET /api/query?sql=` | only with `--web-allow-sql` (otherwise `404`): `200` JSON, the statement's result; `400` with `{"error":"reason"}` for a refused statement; `503` `busy` while another runs, or sloth.db unreadable |
    | `HEAD /api/query` | `405`, `Allow: GET`: nothing to describe without running it |
@@ -1406,7 +1406,15 @@ own memory. `tests/fuzz/fuzz_web_query.c` fuzzes the parser and the
 compiler (`make fuzz`) and aborts if a statement names a parameter it
 does not bind or holds a byte the constant fragments do not. Results
 are capped (`limit` 1..200, default 100; `offset` 0..100,000), sorted
-by `last` seen (default), `first` seen, `mac` or `risk`.
+by `last` seen (default), `first` seen, `mac`, `risk`, `vendor`, `ip`,
+`ssid` (the last SSID), `signal` or `sources`, each a constant column of
+the statement's own list; `dir=asc` or `dir=desc` sets that column's
+direction, an empty value last either way, then the MAC (without it,
+each sort keeps its own order, and the answer has no `dir` member);
+anything else is a `400` `bad_sort` or `bad_dir` that never echoes it.
+SQLite compares text by its bytes, so the order is locale-free; an
+address is ordered as text there, and numerically by the page within
+the rows it holds ([Tables](#tables-sort-and-resize)).
 
 ### The vendor table (§9.2)
 
@@ -1687,7 +1695,9 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   (`test_tui_colors.c`); one from the stream has lost the octets U+FFFD
   replaced, and its colour is that of what the stream carried.
 - **The AP table** is sloth.db's `beacon_aps` (100 rows, `sort=` last,
-  ssids, karma or bssid, `limit`, `offset`, `"more"`): SSID, channel,
+  ssids, karma, bssid, ssid, channel, signal, enc, mfp, downgrade or
+  first, `dir=asc|desc` as `/api/devices` takes it, `limit`, `offset`,
+  `"more"`): SSID, channel,
   signal, sloth's `enc` and `akm` text, the AKM bits decoded to the
   802.11 suite names (`src/rsn_ie.c`'s `rsn_akm_name()`, copied and
   held to it by `test_parity.c`; a bit it does not name reads
@@ -1963,7 +1973,8 @@ by default, at most 400): `src`, `dst` (`null` for the per-source
 `total`, the SMB `server_port` and `dialect` with `smb1`, the RDP
 `proto_mask`, the SNMP `version`, `first_seen` and `last_seen`.
 `proto` is required. `ip` is a literal address, canonicalised, matched
-against either end. `sort` is `last` (default), `total` or `src`;
+against either end. `sort` is `last` (default), `total`, `src`, `dst`
+or `first`, with `dir=asc|desc` as `/api/devices` takes it;
 `limit` 1..200 (default 50) and `offset` 0..1,000,000. `total` counts
 every matching row; a page that would not fit its 64 KB answer stops
 early with `"more":true`, and the next page starts at `offset +
@@ -2025,6 +2036,48 @@ names the view (`#flows`), so a reload stays on it; and a
 suggesting a flag it does not have.
 
 ## Design
+
+### Tables: sort and resize
+
+Every table on the page (owner request 2026-10-26: the Devices table,
+the AP table, each Flows tab, History's who was here, alerts, flows
+and new-since lists, the drawer's and Lookup's lists, the Anomalies
+view as a table (its `table` button), the Overview's latest alerts,
+the record ticker and the SQL box's result) is one implementation,
+`DataTable()` in `web/ui/app.js`, with one rule set in `page.css`:
+
+- **Sort.** A sortable column's header is a button: a click or Enter
+  cycles ascending, descending and off, the header cell's `aria-sort`
+  says which and a triangle shows it. A table whose rows the page
+  holds sorts them in place, stably, by the column's type: an address
+  numerically (IPv4 before IPv6, each by its bytes, `::` expanded), a
+  MAC by its six octets, a time, a count, a dBm, a score or a severity
+  by number, text by its UTF-8 bytes (no locale), an empty value last
+  in either direction. A server-paged table (Devices, the AP table,
+  Flows) asks the server again with the column's sort word and
+  `dir=asc|desc`, which the server checks against its list (above); a
+  column the server has no word for (a name slothweb computes, z, the
+  anomaly count, a presence strip) is not sortable there. The page then
+  orders the rows it holds by the same comparator, so where the server
+  orders an address as text the page shows it numerically. The view's
+  own `sort` select still works; choosing from it clears the header's
+  sort.
+- **Resize.** A column's right edge is a separator: drag it (a mouse,
+  a pen or a finger), or focus it with Tab and use the arrow keys (8
+  px, 40 px with Shift; Home for the minimum), or double-click it (or
+  Enter) to fit the column to its widest drawn cell. No column goes
+  below its minimum (4 ch unless the column says otherwise).
+- **Kept.** The widths are kept per table in this browser
+  (`localStorage`, `slothweb.cols.<table>`), read and written inside a
+  `try`: a private window or blocked storage just means the defaults.
+  The sort is not kept. Each table's `reset columns` forgets its widths
+  and its sort.
+- **Narrow windows.** A table is at least its columns' width and sits
+  in its own `.hscroll` box, so at 360 px it scrolls inside the box and
+  the page never scrolls sideways. Both themes use the chrome tokens:
+  the separator is `--rule` until pointed at, dragged or focused, then
+  `--signal`.
+
 
 The page is two layers, coloured from two places (owner ruling
 2026-10-23: "color code all data the same as the sloth cli").
@@ -2328,6 +2381,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_slothdb.c` | sloth.db generated from `src/db_schema.c`: the open flags (read-only, no-follow, never write or create; a write refused); the file byte for byte and its directory listing after every read, for a rollback-journal file, a cleanly closed WAL file (immutable, no `-wal` or `-shm` made), a WAL file sloth holds open with unflushed frames (read, main file and WAL prefix unchanged, sloth still writing) and a `-wal` with no `-shm`; the refusals (missing, symlink, directory, newer, a slothweb store, no devices table, a bad version, not SQLite, not configured); a v5 file read by probing and a minimal v1 file; the allow-list against `tests/test_db.c`'s guardrail, credential words and the live schema; the authorizer denying every statement off the list; the budget interrupting a slow statement; the acceptance query returning exactly D1 and D6; every other term against the file; the drawer's, Lookup's and A2's reads |
 | `test_devices.c` | the three routes through the route table: no sloth.db (`503`, the drawer and Lookup from the stream), `405` and `421` on the new paths; the acceptance query over HTTP (encoded both ways, `HEAD`); a row's members, the vendor's and name's sources, markup never markup; paging and every `400`; sloth.db missing; the drawer (path forms, lists, the detail, alerts, no credential, a MAC sloth.db lacks, bad MACs); the strip from the store's minute tier and the ring, the week from the baseline, an episode and the `anomaly:` and `has:` terms; Lookup (an MA-S MAC resolved, and not with sloth's own table; an IP's MAC, names and record; refusals); the health members; the worst case stopping with `more` |
 | `test_chmix.c` | the WiFi view's channel mix and the SSID display form: the escaper on printable UTF-8, a backslash, octets that start no sequence, C0, DEL, C1, U+FFFD, a bidi override, a zero width space, private use, a noncharacter, a truncated and an overlong sequence, and its cut; the colour against `src/ip_color.c` over the octets (a case where hashing the display form would differ); a bucket's top five by frames then MAC and the rest, closed when due and not before; the tracking bound (a scan of one-frame MACs cannot push out a busy one, a heavy late one still gets in); the channel bound and the ring's overwrite counted; `beacon`, `probe_client` and `assoc` through the decoder and the metric derivation (deltas, a first sight a baseline, 6 GHz from `channel_source`, the beacon's name); `?mix=1` from memory (band order, a cell merged and cut to five, the tx table, an AP's escaped stream name, empty cells null, the refusals, the plain grid unchanged), the worst case stopping at a whole row with `more` and `folded`, the `chmix` health member, the ticker's SSID escaped; with SQLite, the minute tier from slothweb.db with the AP's octets from sloth.db (escaped, the TUI's colour) and a stream name only where sloth.db has none, and every sloth.db SSID (AP table and history, the drawer's last SSID, PNL SSIDs and associations, the Devices row) escaped, never U+FFFD |
+| `test_tables.c` | sortable, resizable columns: the devices statement with a direction compiled from constant columns only (and unchanged without one), every sort word and the `dir` words accepted and nothing else; over a generated sloth.db the order `/api/devices`, `/api/wifi/aps` and `/api/flows` give for each new word in both directions (text by bytes, an empty value last), `bad_dir` without the value echoed; the page's one `DataTable()` used by every table, its headers no longer `aria-hidden`, its storage in a `try`, the reset control, the direction on every server-paged fetch |
 | `test_wifi.c` | the WiFi routes through the route table: the waterfall's band order and channel order, a gauge cell as the mean of its buckets and a counter's as their sum, null for empty, the defaults, 40 channels and `more`, every `400` (`tier_unavailable` past 24 h without a store), `503` without a time series or sloth.db; a channel only the store holds, at the minute and hour tiers; the deauth timeline by frames with its DEAUTH_FLOOD episodes in the range matched on the alert key that no body names, and without sloth.db; the AP table (AKM bits and downgrade flags by name, MFP as a word, the SSID history and count, KARMA, a markup SSID escaped, sorts, paging, refusals) and its worst-case row fitting `WEB_WIFI_AP_ROW_MAX`; the page's WiFi view, its ids and fetches. Both builds |
 | `test_history.c` | the History routes over a generated sloth.db: the strip's cells and session markers, the defaults and refusals; the strip on 600,000 alert episodes and 60,000 devices without the first_seen indexes inside its budget (the time asserted under 250 ms, 4x that under ASan or TSan), its work (progress-handler ticks) under a quarter of a scan's by the last_seen bound, every plan's counts held to a `GROUP BY`'s; the snapshot's shape (867,748 episodes and 31,821 devices, all in the last 30 days, no index: the scan plan) inside the overview's 1500 ms through the route, and a direct count inside 4x that under the sanitizers; the cache served without an open, invalidated by an mtime, a minute, a write, and a write into the `-wal` that leaves the main file's stat unchanged; a timeout naming its read, rows and plan; who was here at the edges of the overlap, the presence strip over the range, paging; the alerts and flows in a range with no key, detail, cookie or MQTT username and no `mqtt_flows`; the sessions; "new since the previous session" for a first visit, a visit after a crash (its window closed at the next start), one whose previous never ended (since its start), and the latest, whose devices are the ones the wiki's own recipe names; the page's History view. Both builds |
 | `test_sqlbox.c` | the SQL box: the parameter and text rules; `404` without `--web-allow-sql` and the page's box hidden; spec §12's M5 acceptance (above) over a real socket against the C API and the sqlite3 shell; every write, DDL, PRAGMA, ATTACH, DML-tail CTE and second statement refused with the file byte for byte; every withheld column refused, the guardrail's words on the list, the integer flags read; the row, byte, time and value limits; one at a time (`503` `busy`, free again once answered or once the client leaves), `HEAD` `405`, `/api/recipes`. Both builds |

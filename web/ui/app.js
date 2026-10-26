@@ -369,6 +369,308 @@
   // The heat ramp's class, tui_heat()'s 0.15 / 0.40 / 0.70.
   function heatClass(f) { return f < 0.15 ? "h0" : f < 0.40 ? "h1" : f < 0.70 ? "h2" : "h3"; }
 
+  // ── data tables (owner request 2026-10-26) ────────────────────────
+  // Every table on the page is one of these, one implementation: a
+  // header of columns over rows whose cells line up under them (each
+  // row a CSS grid on the columns' tracks, or, for the SQL box, a
+  // fixed-layout <table>). A sortable column's header is a button: a
+  // click or Enter cycles ascending, descending and off, and the header
+  // says which in aria-sort. Its right edge is a separator to drag (a
+  // mouse, a pen or a finger), to move with the arrow keys once it has
+  // the focus (Shift for bigger steps, Home for the minimum) or to
+  // double-click (or Enter) to fit the column to its widest cell. A
+  // column never goes below its minimum. The widths are kept per table
+  // in this browser (localStorage; the page works the same without it);
+  // "reset columns" forgets them and the sort.
+  //
+  // A table whose rows the page holds sorts them in place, stably, by
+  // the column's type: an address numerically (IPv4 before IPv6, each
+  // by its bytes), a MAC by its six octets, a time, a count, a dBm or a
+  // severity by number, text by its UTF-8 bytes (no locale), an empty
+  // value last in either direction. A table the server pages instead
+  // asks its view to fetch again with the column's own sort word and a
+  // direction, both checked by the server against its list; a column
+  // with no word there is not sortable, and the page then orders the
+  // rows it holds by the same comparator, so the server picks the rows
+  // and the page the order of the bytes within them (an address read as
+  // text by SQL, numerically here).
+  var DT_STORE = "slothweb.cols.";
+  var DT_GAP = 6;
+  var CH_PX = 0;
+  function chPx() {
+    if (CH_PX) return CH_PX;
+    var p = el("span", "", "0000000000");
+    p.style.position = "absolute";
+    p.style.visibility = "hidden";
+    p.style.fontSize = "12px";
+    p.style.fontFamily = "var(--font-mono)";
+    document.body.appendChild(p);
+    CH_PX = p.getBoundingClientRect().width / 10 || 7.2;
+    document.body.removeChild(p);
+    return CH_PX;
+  }
+
+  // Sort keys, one comparable array per value; null sorts last.
+  function bytesKey(s) { return utf8(String(s)); }
+  function ipKey(s) {
+    s = String(s);
+    if (isIPv4(s)) return [4].concat(s.split(".").map(Number));
+    if (!isIPv6(s)) return null;
+    var parts = s.split("::"), head = [], tail = [];
+    function groups(t) {
+      var out = [];
+      if (t === "") return out;
+      t.split(":").forEach(function (g) {
+        if (isIPv4(g)) {
+          var b = g.split(".").map(Number);
+          out.push(b[0] * 256 + b[1], b[2] * 256 + b[3]);
+        } else out.push(parseInt(g, 16));
+      });
+      return out;
+    }
+    head = groups(parts[0]);
+    if (parts.length === 2) tail = groups(parts[1]);
+    var fill = 8 - head.length - tail.length, k = [6];
+    head.concat(new Array(Math.max(0, fill)).fill(0), tail).forEach(function (g) { k.push(g >> 8, g & 255); });
+    return k;
+  }
+  function macKey(s) {
+    var m = /([0-9a-f]{2}(?::[0-9a-f]{2}){5})/i.exec(String(s));
+    return m ? m[1].split(":").map(function (h) { return parseInt(h, 16); }) : null;
+  }
+  function sortKey(type, v) {
+    if (v === null || v === undefined || v === "") return null;
+    if (type === "num" || type === "time" || type === "sev") {
+      var n = Number(v);
+      return isFinite(n) ? [n] : null;
+    }
+    if (type === "ip") return ipKey(v) || [99].concat(bytesKey(v));
+    if (type === "mac") return macKey(v) || [999].concat(bytesKey(v));
+    return bytesKey(v);
+  }
+  function cmpKey(a, b) {
+    for (var i = 0; i < a.length && i < b.length; i++)
+      if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+    return a.length - b.length;
+  }
+
+  function loadWidths(id) {
+    try {
+      var v = JSON.parse(window.localStorage.getItem(DT_STORE + id) || "null");
+      return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+    } catch (e) { return {}; }
+  }
+  function saveWidths(id, w) {
+    try {
+      if (Object.keys(w).length) window.localStorage.setItem(DT_STORE + id, JSON.stringify(w));
+      else window.localStorage.removeItem(DT_STORE + id);
+    } catch (e) { /* no storage: the widths last until the page goes */ }
+  }
+
+  // o: { id, box, head, cols, table (a <table>: the SQL box), server
+  //      (fetch again: server-paged), redraw (draw the rows again:
+  //      held rows), reset (an element the "reset columns" button goes
+  //      in) }. A column: { k, label, w (ch) or px, min (ch), flex,
+  //      type (num, time, sev, ip, mac, text; none: not sortable),
+  //      srv (its server sort word), val (row -> the value sorted by),
+  //      num (right-aligned) }.
+  function DataTable(o) {
+    var t = { o: o, cols: o.cols, w: loadWidths(o.id), key: null, dir: 0, th: [], rs: [] };
+    var own = Object.prototype.hasOwnProperty;
+    t.col = function (k) {
+      for (var i = 0; i < t.cols.length; i++) if (t.cols[i].k === k) return t.cols[i];
+      return null;
+    };
+    t.min = function (c) { return Math.round((num(c.min) ? c.min : 4) * chPx()); };
+    t.px = function (c) {
+      if (own.call(t.w, c.k) && num(t.w[c.k]) && t.w[c.k] >= t.min(c) && t.w[c.k] <= 4000)
+        return Math.round(t.w[c.k]);
+      return num(c.px) ? c.px : Math.round((num(c.w) ? c.w : 10) * chPx());
+    };
+    t.sortable = function (c) {
+      return !!c.type && c.type !== "none" && (!o.server || !!c.srv);
+    };
+    t.apply = function () {
+      var tracks = [], sum = 0;
+      t.cols.forEach(function (c, i) {
+        var px = t.px(c);
+        sum += px;
+        tracks.push(c.flex ? "minmax(" + px + "px, 1fr)" : px + "px");
+        if (o.table && t.th[i]) t.th[i].style.width = px + "px";
+        if (t.rs[i]) t.rs[i].ariaValueNow = String(px);
+      });
+      if (o.table) {
+        o.table.style.width = sum + "px";
+        return;
+      }
+      o.box.style.setProperty("--dt-cols", tracks.join(" "));
+      o.box.style.setProperty("--dt-minw", (sum + DT_GAP * (t.cols.length - 1) + 12) + "px");
+    };
+    t.setWidth = function (c, px) {
+      t.w[c.k] = Math.max(t.min(c), Math.min(4000, Math.round(px)));
+      saveWidths(o.id, t.w);
+      t.apply();
+    };
+    // The widest cell of column i among the rows drawn, and its header.
+    t.fit = function (i) {
+      var c = t.cols[i], best = 0;
+      if (num(c.px)) return;
+      var rows = o.box.querySelectorAll(".dt-row");
+      for (var r = 0; r < rows.length; r++) {
+        var cell = rows[r].children[i];
+        if (!cell || cell.hidden) continue;
+        var wd = cell.scrollWidth;
+        if (rows[r] === o.head || rows[r].contains(t.th[i])) {
+          var lab = t.th[i].querySelector(".dt-lab");
+          wd = (lab ? lab.scrollWidth : wd) + 18;
+        }
+        if (wd > best) best = wd;
+      }
+      if (best > 0) t.setWidth(c, best + 4);
+    };
+    t.paint = function () {
+      t.cols.forEach(function (c, i) {
+        var th = t.th[i];
+        if (!th) return;
+        var on = t.key === c.k && t.dir !== 0;
+        th.ariaSort = t.sortable(c) ? (on ? (t.dir > 0 ? "ascending" : "descending") : "none") : null;
+        var ind = th.querySelector(".dt-ind");
+        if (ind) ind.textContent = on ? (t.dir > 0 ? "▲" : "▼") : "";
+      });
+    };
+    t.cycle = function (c) {
+      if (t.key !== c.k) { t.key = c.k; t.dir = 1; }
+      else if (t.dir === 1) t.dir = -1;
+      else { t.key = null; t.dir = 0; }
+      t.paint();
+      if (o.server) o.server(); else if (o.redraw) o.redraw();
+    };
+    t.clear = function () { t.key = null; t.dir = 0; t.paint(); };
+    // The server's sort word and direction, or null for its default.
+    t.word = function () {
+      var c = t.key ? t.col(t.key) : null;
+      return c && c.srv && t.dir ? { sort: c.srv, dir: t.dir > 0 ? "asc" : "desc" } : null;
+    };
+    // rows in the order the header says: a stable sort of a copy.
+    t.sort = function (rows) {
+      var c = t.key ? t.col(t.key) : null;
+      if (!c || !t.dir || !c.val) return rows.slice();
+      var d = rows.map(function (r, i) { return { r: r, i: i, k: sortKey(c.type, c.val(r)) }; });
+      d.sort(function (a, b) {
+        if (a.k === null || b.k === null) {
+          if (a.k === null && b.k === null) return a.i - b.i;
+          return a.k === null ? 1 : -1;
+        }
+        var x = cmpKey(a.k, b.k) * t.dir;
+        return x || a.i - b.i;
+      });
+      return d.map(function (e) { return e.r; });
+    };
+    t.label = function (k, text) {
+      var i = t.cols.indexOf(t.col(k));
+      if (i < 0 || !t.th[i]) return;
+      t.cols[i].label = text;
+      var lab = t.th[i].querySelector(".dt-lab");
+      if (lab) lab.textContent = text;
+    };
+    t.reset = function () {
+      t.w = {};
+      saveWidths(o.id, t.w);
+      t.key = null;
+      t.dir = 0;
+      t.apply();
+      t.paint();
+      if (o.server) o.server(); else if (o.redraw) o.redraw();
+    };
+    t.build = function () {
+      var h = o.head;
+      while (h.firstChild) h.removeChild(h.firstChild);
+      if (!o.table) {
+        h.classList.add("dt-row");
+        h.role = "row";
+        h.ariaHidden = null;
+        o.box.classList.add("dt");
+        o.box.role = "table";
+        o.box.ariaLabel = o.label || o.id;
+      }
+      t.th = [];
+      t.rs = [];
+      t.cols.forEach(function (c, i) {
+        var th = el(o.table ? "th" : "span", "dt-th" + (c.num ? " n" : ""));
+        th.role = "columnheader";
+        if (t.sortable(c)) {
+          var b = el("button", "dt-sort");
+          b.type = "button";
+          b.appendChild(el("span", "dt-lab", c.label));
+          b.appendChild(el("span", "dt-ind", ""));
+          b.title = "sort by " + (c.label || c.k);
+          b.addEventListener("click", function () { t.cycle(c); });
+          th.appendChild(b);
+        } else {
+          th.appendChild(el("span", "dt-lab", c.label));
+        }
+        var rs = el("span", "dt-rs");
+        rs.tabIndex = 0;
+        rs.role = "separator";
+        rs.ariaOrientation = "vertical";
+        rs.ariaLabel = "width of " + (c.label || c.k) + ": arrows resize, Enter fits";
+        rs.ariaValueMin = String(t.min(c));
+        rs.title = "drag to resize, double-click to fit";
+        rs.addEventListener("pointerdown", function (e) {
+          e.preventDefault();
+          var x0 = e.clientX, w0 = t.px(c);
+          rs.setPointerCapture(e.pointerId);
+          rs.classList.add("on");
+          function mv(ev) { t.setWidth(c, w0 + ev.clientX - x0); }
+          function up() {
+            rs.classList.remove("on");
+            rs.removeEventListener("pointermove", mv);
+            rs.removeEventListener("pointerup", up);
+            rs.removeEventListener("pointercancel", up);
+          }
+          rs.addEventListener("pointermove", mv);
+          rs.addEventListener("pointerup", up);
+          rs.addEventListener("pointercancel", up);
+        });
+        rs.addEventListener("dblclick", function (e) { e.preventDefault(); t.fit(i); });
+        rs.addEventListener("click", function (e) { e.stopPropagation(); });
+        rs.addEventListener("keydown", function (e) {
+          var step = e.shiftKey ? 40 : 8;
+          if (e.key === "ArrowLeft") t.setWidth(c, t.px(c) - step);
+          else if (e.key === "ArrowRight") t.setWidth(c, t.px(c) + step);
+          else if (e.key === "Home") t.setWidth(c, t.min(c));
+          else if (e.key === "Enter") t.fit(i);
+          else return;
+          e.preventDefault();
+          e.stopPropagation();
+        });
+        th.appendChild(rs);
+        t.th.push(th);
+        t.rs.push(rs);
+        h.appendChild(th);
+      });
+      t.apply();
+      t.paint();
+    };
+    if (o.reset) {
+      var rb = el("button", "dt-reset", "reset columns");
+      rb.type = "button";
+      rb.title = "forget this table's column widths and sort";
+      rb.addEventListener("click", t.reset);
+      o.reset.appendChild(rb);
+    }
+    t.build();
+    return t;
+  }
+
+  // A cell of a held-rows table: a span with its column's class.
+  function dtCell(cls, node) {
+    var s = el("span", cls || "");
+    if (node instanceof Node) s.appendChild(node);
+    else if (node !== undefined && node !== null) s.textContent = String(node);
+    return s;
+  }
+
   // ── sensitivity (§5.3: 1.5 to 4 sd, view only) ────────────────────
   // Kept in this browser only; a blocked or absent store just means the
   // default.
@@ -417,26 +719,51 @@
   var lastSeq = 0;
   var held = 0;
 
+  // The ticker is a table: held rows, newest first unless a header says
+  // otherwise; sorted, it is drawn again at most twice a second.
+  var TK = { rows: [], timer: 0 };
+  var DTT = DataTable({ id: "ticker", label: "records", box: $("ticker-box"), head: $("ticker-head"),
+    reset: $("ticker-tools"), redraw: tickerDraw, cols: [
+      { k: "ts", label: "time", w: 9, type: "time", val: function (r) { return r.ts; } },
+      { k: "ty", label: "type", w: 14, type: "text", val: function (r) { return r.type; } },
+      { k: "tx", label: "record", w: 30, flex: true, type: "text", val: function (r) { return r.text; } }
+    ] });
+  function tickerDraw() {
+    var list = $("ticker");
+    while (list.firstChild) list.removeChild(list.firstChild);
+    DTT.sort(TK.rows).forEach(function (r) { list.appendChild(tickRow(r)); });
+  }
+
   function addRecord(r) {
     if (!num(r.seq) || r.seq <= lastSeq) return;
     lastSeq = r.seq;
     if (paused) { held++; set("tick-note", held + " held"); return; }
+    TK.rows.unshift(r);
+    if (TK.rows.length > TICKER_MAX) TK.rows.length = TICKER_MAX;
+    if (DTT.key) {
+      if (!TK.timer) TK.timer = setTimeout(function () { TK.timer = 0; tickerDraw(); }, 500);
+      return;
+    }
+    var list = $("ticker");
+    list.insertBefore(tickRow(r), list.firstChild);
+    while (list.childNodes.length > TICKER_MAX) list.removeChild(list.lastChild);
+  }
+
+  function tickRow(r) {
     var cls = typeClass(r.type);
     // An 802.11 record interleaved with the IP capture's is a monitor
     // row, on CP_MON_ROW's ground in its phosphor (src/views/packets.c);
     // any other record is a packets-band row: its info text in the
     // earth tone of its hash, every address in it in its own colour.
     var mon = isMon(r.type);
-    var li = el("li", cls + (mon ? " mon" : ""));
+    var li = el("li", cls + (mon ? " mon" : "") + " tkrow dt-row");
     li.appendChild(el("span", "ts", num(r.ts) ? hhmmss(r.ts) : "-"));
     li.appendChild(el("span", "ty", r.type));
     var tx = el("span", "tx");
     if (mon) tx.textContent = String(r.text);
     else richText(tx, r.text, recordSrc(cls), infoClass(String(r.text)));
     li.appendChild(tx);
-    var list = $("ticker");
-    list.insertBefore(li, list.firstChild);
-    while (list.childNodes.length > TICKER_MAX) list.removeChild(list.lastChild);
+    return li;
   }
 
   $("pause").addEventListener("click", function () {
@@ -446,7 +773,16 @@
   });
 
   // ── /api/live ─────────────────────────────────────────────────────
+  var AL = { list: [] };
+  var DTL = DataTable({ id: "alerts", label: "latest alerts", box: $("alerts-box"), head: $("alerts-head"),
+    reset: $("alerts-tools"), redraw: function () { alerts(AL.list); }, cols: [
+      { k: "ts", label: "time", w: 9, type: "time", val: function (a) { return a.ts; } },
+      { k: "sev", label: "sev", w: 6, min: 3, type: "sev", val: function (a) { return a.sev; } },
+      { k: "ty", label: "kind", w: 9, type: "text", val: function (a) { return String(a.type).replace("alert.", ""); } },
+      { k: "tx", label: "alert", w: 24, flex: true, type: "text", val: function (a) { return a.title; } }
+    ] });
   function alerts(list) {
+    AL.list = list || [];
     var ol = $("alerts");
     while (ol.firstChild) ol.removeChild(ol.firstChild);
     if (!list || !list.length) { ol.appendChild(el("li", "sub", "none since connect")); return; }
@@ -454,10 +790,11 @@
     // the frame.
     for (var h = 0; h < list.length; h++)
       noteAlertIp(list[h].match_ip, list[h].ts, list[h].sev);
+    list = DTL.sort(list);
     for (var i = 0; i < list.length; i++) {
       var a = list[i];
       var sev = num(a.sev) && a.sev >= 0 && a.sev <= 2 ? a.sev : -1;
-      var li = el("li", sev >= 0 ? "sev" + sev : "");
+      var li = el("li", (sev >= 0 ? "sev" + sev : "") + " alrow dt-row");
       li.appendChild(el("span", "ts", num(a.ts) ? hhmmss(a.ts) : "-"));
       li.appendChild(el("span", "ty", sev >= 0 ? SEV_WORD[sev] : "?"));
       li.appendChild(el("span", "ty d-dim", String(a.type).replace("alert.", "")));
@@ -642,7 +979,8 @@
     var t = e.target;
     if ((e.key === "Enter" || e.key === " ") && t && t.tabIndex === 0 && t.classList &&
         (t.classList.contains("drow") || t.classList.contains("hrow") ||
-         t.classList.contains("frow") || t.classList.contains("card"))) {
+         t.classList.contains("frow") || t.classList.contains("card") ||
+         t.classList.contains("anrow"))) {
       e.preventDefault();
       t.click();
       return;
@@ -1096,6 +1434,55 @@
     return c;
   }
 
+  // The Anomalies view's episodes as a table too (the "table" button):
+  // the same list, sortable and resizable.
+  N.table = false;
+  N.list = [];
+  function anv(k) { return function (a) { return a[k]; }; }
+  var DTN = DataTable({ id: "anoms", label: "anomaly episodes", box: $("n-tbox"), head: $("n-head"),
+    reset: $("n-tools"), redraw: function () { anomTable(); }, cols: [
+      { k: "st", label: "state", w: 7, type: "text", val: function (a) { return a.open ? "open" : "closed"; } },
+      { k: "kd", label: "kind", w: 8, type: "text", val: anv("kind") },
+      { k: "ru", label: "rule", w: 6, type: "text", val: anv("rule") },
+      { k: "ky", label: "key", w: 20, flex: true, type: "text", val: anv("key") },
+      { k: "sc", label: "score", w: 7, num: true, type: "num", val: anv("score") },
+      { k: "fs", label: "first", w: 20, type: "time", val: anv("first_seen") },
+      { k: "ls", label: "last", w: 20, type: "time", val: anv("last_seen") }
+    ] });
+  function anomTable() {
+    var box = $("n-rows");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    DTN.sort(N.list).forEach(function (a) {
+      var row = el("div", "anrow dt-row" + (a.open ? " open" : ""));
+      row.appendChild(el("span", a.open ? "warn" : "d-dim", a.open ? "open" : "closed"));
+      row.appendChild(el("span", "d-normal", kindGlyph(a.kind) + " " + a.kind));
+      row.appendChild(el("span", "d-dim", a.rule));
+      var ky = el("span", "");
+      ky.appendChild(a.key !== "" ? keySpan(String(a.key)) : el("span", "d-dim", "(sensor)"));
+      row.appendChild(ky);
+      var score = num(a.score) ? Math.max(0, Math.min(100, a.score)) : 0;
+      row.appendChild(el("span", "n " + heatClass(score / 100), String(score)));
+      row.appendChild(el("span", "d-dim", stamp(a.first_seen)));
+      row.appendChild(el("span", "d-dim", stamp(a.last_seen)));
+      if (typeof a.key === "string" && MAC_RE.test(a.key)) {
+        row.classList.add("go");
+        row.tabIndex = 0;
+        row.addEventListener("click", function () { openDrawer(a.key); });
+      }
+      box.appendChild(row);
+    });
+    if (!N.list.length) box.appendChild(el("div", "sub", "nothing in this window"));
+  }
+  $("n-mode").addEventListener("click", function () {
+    N.table = !N.table;
+    $("n-mode").ariaPressed = N.table ? "true" : "false";
+    set("n-mode", N.table ? "cards" : "table");
+    $("n-cards").hidden = N.table;
+    $("n-tbox").hidden = !N.table;
+    $("n-tools").hidden = !N.table;
+    if (N.table) anomTable();
+  });
+
   function anomalies() {
     var gen = ++N.gen;
     var now = Math.floor(Date.now() / 1000);
@@ -1105,6 +1492,8 @@
     getJSON(p).then(function (j) {
       if (gen !== N.gen) return;
       var list = (j.anomalies || []).filter(shown);
+      N.list = list;
+      if (N.table) anomTable();
       var box = $("n-cards");
       while (box.firstChild) box.removeChild(box.firstChild);
       list.forEach(function (a) { box.appendChild(card(a)); });
@@ -1314,24 +1703,45 @@
     return t;
   }
 
-  function devicesPath(q, sort, offset) {
+  // dir is the header's direction, "asc" or "desc", or none.
+  function devicesPath(q, sort, offset, dir) {
     var p = "/api/devices?limit=" + DEV_PAGE + "&offset=" + offset +
             "&sort=" + encodeURIComponent(sort);
     if (q !== "") p += "&q=" + encodeURIComponent(q);
+    if (dir === "asc" || dir === "desc") p += "&dir=" + dir;
     return p;
   }
 
+  function dv(k) { return function (d) { return d[k]; }; }
+  var DTD = DataTable({ id: "devices", label: "devices table", box: $("d-box"), head: $("d-head"),
+    reset: $("d-tools"), server: function () { devices(); }, cols: [
+      { k: "mac", label: "mac", w: 20, min: 8, type: "mac", srv: "mac", val: dv("mac") },
+      { k: "ven", label: "vendor", w: 12, type: "text", srv: "vendor", val: dv("vendor") },
+      { k: "ip", label: "ip", w: 15, type: "ip", srv: "ip", val: dv("ip") },
+      { k: "nm", label: "name", w: 8, flex: true },
+      { k: "ss", label: "ssid", w: 12, type: "text", srv: "ssid", val: dv("ssid") },
+      { k: "sig", label: "dBm", w: 4, min: 3, num: true, type: "num", srv: "signal", val: dv("signal") },
+      { k: "src", label: "src", w: 6, min: 3, type: "num", srv: "sources", val: dv("sources") },
+      { k: "rk", label: "risk", w: 4, min: 3, type: "sev", srv: "risk", val: dv("risk") },
+      { k: "fs", label: "first", w: 10, type: "time", srv: "first", val: dv("first_seen") },
+      { k: "ls", label: "last", w: 10, type: "time", srv: "last", val: dv("last_seen") },
+      { k: "z", label: "z", w: 4, min: 3 },
+      { k: "an", label: "anom", w: 6, min: 3 },
+      { k: "pr", label: "24 h presence", px: 146 }
+    ] });
+
   function devices() {
     var gen = ++D.gen;
-    var q = $("d-q").value.trim(), sort = $("d-sort").value;
+    var wd = DTD.word();
+    var q = $("d-q").value.trim(), sort = wd ? wd.sort : $("d-sort").value, dir = wd ? wd.dir : "";
     var rows = [];
     function page(off) {
-      return getJSON(devicesPath(q, sort, off)).then(function (j) {
+      return getJSON(devicesPath(q, sort, off, dir)).then(function (j) {
         if (gen !== D.gen) return;
         rows = rows.concat(j.rows || []);
         var more = !!j.more;
         if (more && num(j.next_offset) && rows.length < DEV_MAX) return page(j.next_offset);
-        D.rows = rows.slice(0, DEV_MAX);
+        D.rows = DTD.sort(rows.slice(0, DEV_MAX));
         set("d-count", D.rows.length + " shown" +
             (more || rows.length > DEV_MAX ? "; the first " + D.rows.length + ", narrow the search" : ""));
         set("d-note", "vendor table " + j.vendor_table + ", sloth.db schema v" + j.db_schema);
@@ -1387,7 +1797,8 @@
   }
 
   function rowEl() {
-    var r = { el: el("div", "drow"), k: -1, mac: "" };
+    var r = { el: el("div", "drow dt-row"), k: -1, mac: "" };
+    r.el.role = "row";
     var cols = ["c-mac", "c-ven", "c-ip", "c-nm", "c-ss", "c-sig", "c-src",
                 "c-rk", "c-fs", "c-ls", "c-z", "c-an"];
     r.sw = el("span", "sw");
@@ -1426,7 +1837,7 @@
   function fill(r, d) {
     r.mac = typeof d.mac === "string" ? d.mac : "";
     var risk = num(d.risk) && d.risk >= 0 && d.risk <= 3 ? d.risk : 0;
-    r.el.className = "drow" + (SEV_CLASS[risk] ? " " + SEV_CLASS[risk] : "") +
+    r.el.className = "drow dt-row" + (SEV_CLASS[risk] ? " " + SEV_CLASS[risk] : "") +
                      (r.mac === D.sel ? " on" : "");
     r.sw.style.background = keyColor(r.mac);
     r.macText.className = d.random ? "rnd d-dim" : "d-dim";
@@ -1496,7 +1907,7 @@
   $("d-q").addEventListener("keydown", function (e) {
     if (e.key === "Enter") { if (D.timer) clearTimeout(D.timer); D.timer = 0; devices(); }
   });
-  $("d-sort").addEventListener("change", function () { devices(); });
+  $("d-sort").addEventListener("change", function () { DTD.clear(); devices(); });
 
   // ── the drawer (§8.6) ─────────────────────────────────────────────
   // Everything /api/device/MAC knows about one device. The MAC reaches
@@ -1541,17 +1952,37 @@
   function ssidVal(v, k, np) { return v === null || v === undefined ? null : ssidSpan(String(v), k, np); }
   function macVal(v) { return v === null || v === undefined ? null : el("span", "d-dim", String(v)); }
 
+  // The drawer's and Lookup's lists are tables too: when, and what,
+  // the value sorted as its kind is.
+  var ITEM_SORT = {
+    "names (passive)": ["text", "name"], "pnl ssids": ["text", "ssid"],
+    "associations": ["mac", "bssid"], "arp addresses": ["ip", "addr"],
+    "arp macs": ["mac", "addr"], "alerts naming it": ["text", "title"]
+  };
   function itemList(box, title, items, line, more) {
-    box.appendChild(el("div", "label", title + (more ? " (more than shown)" : "")));
-    var ol = el("ol", "lst");
-    if (!items || !items.length) ol.appendChild(el("li", "sub", "none"));
-    for (var i = 0; items && i < items.length; i++) {
-      var li = el("li", "");
-      li.appendChild(el("span", "ts", shortStamp(items[i].last_seen)));
-      li.appendChild(valNode("tx", line(items[i])));
-      ol.appendChild(li);
+    var lab = el("div", "label", title + (more ? " (more than shown)" : ""));
+    var tools = el("span", "dt-tools");
+    lab.appendChild(tools);
+    box.appendChild(lab);
+    var how = Object.prototype.hasOwnProperty.call(ITEM_SORT, title) ? ITEM_SORT[title] : ["text", "name"];
+    var wrap = el("div", "hscroll"), head = el("div", "lsrow dhead"), ol = el("ol", "lst");
+    wrap.appendChild(head);
+    wrap.appendChild(ol);
+    box.appendChild(wrap);
+    function draw() {
+      while (ol.firstChild) ol.removeChild(ol.firstChild);
+      if (!items || !items.length) { ol.appendChild(el("li", "sub", "none")); return; }
+      t.sort(items).forEach(function (it) {
+        var li = el("li", "lsrow dt-row");
+        li.appendChild(el("span", "ts", shortStamp(it.last_seen)));
+        li.appendChild(valNode("tx", line(it)));
+        ol.appendChild(li);
+      });
     }
-    box.appendChild(ol);
+    var t = DataTable({ id: "item." + title, label: title, box: wrap, head: head, reset: tools, redraw: draw,
+      cols: [{ k: "ls", label: "last", w: 10, type: "time", val: function (x) { return x.last_seen; } },
+             { k: "v", label: title, w: 24, flex: true, type: how[0], val: function (x) { return x[how[1]]; } }] });
+    draw();
   }
 
   function ouiPairs(o) {
@@ -1962,8 +2393,23 @@
   });
   window.addEventListener("resize", function () { if (view === "wifi" && WF.geo) channelGrid(); });
 
+  function av(k) { return function (a) { return a[k]; }; }
+  var DTA = DataTable({ id: "aps", label: "access points", box: $("w-aps-box"), head: $("w-aps-head"),
+    reset: $("w-aps-tools"), server: function () { wifiAps(); }, cols: [
+      { k: "bs", label: "bssid", w: 19, min: 8, type: "mac", srv: "bssid", val: av("bssid") },
+      { k: "ss", label: "ssid", w: 12, flex: true, type: "text", srv: "ssid", val: av("ssid") },
+      { k: "ch", label: "ch", w: 4, min: 3, type: "num", srv: "channel", val: av("channel") },
+      { k: "sig", label: "dBm", w: 5, min: 3, type: "num", srv: "signal", val: av("signal") },
+      { k: "enc", label: "enc / akm", w: 20, type: "text", srv: "enc", val: av("enc") },
+      { k: "mfp", label: "mfp", w: 12, type: "num", srv: "mfp", val: av("mfp") },
+      { k: "dg", label: "downgrade", w: 16, type: "num", srv: "downgrade", val: av("downgrade") },
+      { k: "km", label: "karma", w: 9, type: "num", srv: "karma",
+        val: function (a) { return a.karma ? a.karma.score : null; } },
+      { k: "ls", label: "last", w: 11, type: "time", srv: "last", val: av("last_seen") }
+    ] });
+
   function apRow(a) {
-    var row = el("div", "aprow" + (a.multi_ssid ? " many-ssid" : ""));
+    var row = el("div", "aprow dt-row" + (a.multi_ssid ? " many-ssid" : ""));
     WF.apEls.set(String(a.bssid), row);
     var bs = el("span", "c-bs");
     var sw = el("span", "sw");
@@ -2009,12 +2455,16 @@
     var gen = WF.gen;
     var sort = $("w-sort").value;
     if (!Object.prototype.hasOwnProperty.call(AP_SORTS, sort)) sort = "last";
-    getJSON("/api/wifi/aps?limit=100&sort=" + encodeURIComponent(sort)).then(function (j) {
+    // A header's sort: its word and direction, which the server checks.
+    var wd = DTA.word();
+    if (wd) sort = wd.sort;
+    (wd ? getJSON("/api/wifi/aps?limit=100&sort=" + encodeURIComponent(sort) + "&dir=" + wd.dir)
+        : getJSON("/api/wifi/aps?limit=100&sort=" + encodeURIComponent(sort))).then(function (j) {
       if (gen !== WF.gen) return;
       var box = $("w-aps");
       while (box.firstChild) box.removeChild(box.firstChild);
       WF.apEls = new Map();
-      (j.rows || []).forEach(function (a) { box.appendChild(apRow(a)); });
+      DTA.sort(j.rows || []).forEach(function (a) { box.appendChild(apRow(a)); });
       if (!j.rows || !j.rows.length) box.appendChild(el("div", "sub", "no beacon_aps rows"));
       set("w-aps-count", (j.rows ? j.rows.length : 0) + " shown" + (j.more ? ", more in sloth.db" : ""));
     }).catch(function (e) {
@@ -2107,7 +2557,7 @@
   }
   $("w-metric").addEventListener("change", function () { wifi(); });
   $("w-win").addEventListener("change", function () { wifi(); });
-  $("w-sort").addEventListener("change", function () { wifiAps(); });
+  $("w-sort").addEventListener("change", function () { DTA.clear(); wifiAps(); });
 
   // ── Flows (§8.9, M6) ──────────────────────────────────────────────
   // sloth.db's protocol tables, one tab each (/api/flows, paged), and a
@@ -2166,9 +2616,22 @@
     return sp;
   }
 
+  function fv(k) { return function (f) { return f[k]; }; }
+  var DTF = DataTable({ id: "flows", label: "flows", box: $("f-box"), head: $("f-head"),
+    reset: $("f-tools"), server: function () { flowRows(true); }, cols: [
+      { k: "s", label: "source", w: 24, min: 8, type: "ip", srv: "src", val: fv("src") },
+      { k: "d", label: "destination", w: 24, min: 8, type: "ip", srv: "dst", val: fv("dst") },
+      { k: "c", label: "counts", w: 14, flex: true },
+      { k: "t", label: "total", w: 9, num: true, type: "num", srv: "total", val: fv("total") },
+      { k: "x", label: "", w: 11 },
+      { k: "fs", label: "first", w: 11, type: "time", srv: "first", val: fv("first_seen") },
+      { k: "ls", label: "last", w: 11, type: "time", srv: "last", val: fv("last_seen") }
+    ] });
+
   function flowRow(f, cols) {
     var from = f.src, to = f.dst;
     var row = el("div", f.smb1 === true ? "frow sev2" : "frow");
+    row.classList.add("dt-row");
     // The address columns grow to a full IPv6 address (40ch) when the
     // row has room; narrower, the cell's ellipsis hides the tail, so the
     // whole address is its tooltip.
@@ -2202,12 +2665,10 @@
   }
 
   function flowHead(j) {
-    var h = $("f-head");
-    while (h.firstChild) h.removeChild(h.firstChild);
     var x = j.proto === "smb" ? "port, dialect" : j.proto === "snmp" ? "version"
           : j.proto === "rdp" ? "protocols" : "";
-    ["source", j.per_source ? "" : "destination", "counts", "total", x, "first", "last"]
-      .forEach(function (t, i) { h.appendChild(el("span", i === 3 ? "n" : "", t)); });
+    DTF.label("d", j.per_source ? "" : "destination");
+    DTF.label("x", x);
   }
 
   function flowRows(fresh) {
@@ -2215,15 +2676,18 @@
     if (fresh) { F.rows = []; F.offset = 0; }
     var r = flowRange();
     var ip = $("f-ip").value.trim();
-    var p = "&from=" + r.from + "&to=" + r.to + "&sort=" + encodeURIComponent($("f-sort").value) +
+    var wd = DTF.word();
+    var p = "&from=" + r.from + "&to=" + r.to + "&sort=" + encodeURIComponent(wd ? wd.sort : $("f-sort").value) +
             "&limit=" + FLOW_PAGE + "&offset=" + F.offset;
+    if (wd) p += "&dir=" + wd.dir;
     if (ip !== "") p += "&ip=" + encodeURIComponent(ip);
     getJSON("/api/flows?proto=" + encodeURIComponent(F.proto) + p).then(function (j) {
       if (gen !== F.gen) return;
       var box = $("f-rows");
-      if (fresh) while (box.firstChild) box.removeChild(box.firstChild);
+      while (box.firstChild) box.removeChild(box.firstChild);
       flowHead(j);
-      (j.rows || []).forEach(function (f) { box.appendChild(flowRow(f, j.columns || [])); });
+      F.rows = F.rows.concat(j.rows || []);
+      DTF.sort(F.rows).forEach(function (f) { box.appendChild(flowRow(f, j.columns || [])); });
       F.offset += num(j.count) ? j.count : 0;
       $("f-more").hidden = !j.more;
       var shown = F.offset;
@@ -2402,7 +2866,7 @@
     flowRows(true);
   }
   $("f-win").addEventListener("change", flows);
-  $("f-sort").addEventListener("change", function () { flowRows(true); });
+  $("f-sort").addEventListener("change", function () { DTF.clear(); flowRows(true); });
   $("f-more").addEventListener("click", function () { flowRows(false); });
   var fipTimer = 0;
   $("f-ip").addEventListener("input", function () {
@@ -2433,7 +2897,8 @@
   // markers, each one click from --report's "new since the previous
   // session" (/api/sessions/new). The SQL box is drawn only when
   // /api/health says the server was started with --web-allow-sql.
-  var HS = { gen: 0, from: 0, to: 0, ov: null, drag: null, sessions: [] };
+  var HS = { gen: 0, from: 0, to: 0, ov: null, drag: null, sessions: [], devs: [], cells: 144,
+             alerts: [], flows: [] };
 
   function histPath(route, from, to, extra) {
     return "/api/history/" + route + "?from=" + from + "&to=" + to + (extra || "");
@@ -2512,28 +2977,78 @@
           if (!part) return;
           box.appendChild(el("div", "label", k[0] + ": " + part.total + " new" +
                              (part.total > part.listed ? ", " + (part.total - part.listed) + " more not listed" : "")));
-          var ol = el("ol", "lst");
-          (part.rows || []).forEach(function (r) {
-            var li = el("li", "");
+          var tools = el("span", "dt-tools");
+          box.lastChild.appendChild(tools);
+          var wrap = el("div", "hscroll"), head = el("div", "nwrow dhead"), ol = el("ol", "lst");
+          wrap.appendChild(head);
+          wrap.appendChild(ol);
+          var rowsOf = part.rows || [];
+          var nt = DataTable({ id: "hnew." + k[0], label: "new " + k[0], box: wrap, head: head, reset: tools,
+            redraw: function () { drawNew(); }, cols: [
+              { k: "fs", label: "first", w: 10, type: "time", val: function (x) { return x.first_seen; } },
+              { k: "id", label: k[0] === "access points" ? "bssid" : "mac", w: 20, type: "mac",
+                val: function (x) { return x.ident; } },
+              { k: "lb", label: k[0] === "devices" ? "name" : "ssid", w: 20, flex: true, type: "text",
+                val: function (x) { return x.label; } }
+            ] });
+          var drawNew = function () {
+          while (ol.firstChild) ol.removeChild(ol.firstChild);
+          nt.sort(rowsOf).forEach(function (r) {
+            var li = el("li", "nwrow dt-row");
             li.appendChild(el("span", "ts", shortStamp(r.first_seen)));
             // ident: a BSSID or a MAC; label: an AP's or a probe's SSID,
             // a device's host name (or vendor).
+            li.appendChild(el("span", "d-dim", r.ident));
             var tx = el("span", "tx");
-            tx.appendChild(el("span", "d-dim", r.ident + "  "));
             if (r.label === null || r.label === "") tx.appendChild(el("span", "d-dim", "-"));
             else if (k[0] === "devices") brandText(tx, String(r.label), "d-bright");
             else tx.appendChild(ssidSpan(String(r.label), r.label_k, r.label_np));
             li.appendChild(tx);
             ol.appendChild(li);
           });
-          box.appendChild(ol);
+          };
+          drawNew();
+          box.appendChild(wrap);
         });
     }).catch(function (e) { if (gen === HS.ngen) set("h-new-note", errText(e.message)); });
   }
   HS.ngen = 0;
 
+  function hv(k) { return function (d) { return d[k]; }; }
+  var DTH = DataTable({ id: "hdevs", label: "who was here", box: $("h-devs-box"), head: $("h-devs-head"),
+    reset: $("h-devs-tools"), redraw: function () { histDevs(); }, cols: [
+      { k: "mac", label: "mac", w: 21, min: 8, type: "mac", val: hv("mac") },
+      { k: "ven", label: "vendor", w: 16, type: "text", val: hv("vendor") },
+      { k: "nm", label: "name", w: 10, flex: true, type: "text", val: hv("name") },
+      { k: "fs", label: "first", w: 11, type: "time", val: hv("first_seen") },
+      { k: "ls", label: "last", w: 11, type: "time", val: hv("last_seen") },
+      { k: "pr", label: "presence in the range", px: 146 }
+    ] });
+  function histDevs() {
+    var box = $("h-devs");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    DTH.sort(HS.devs).forEach(function (d) { histDevRow(d, HS.cells); });
+  }
+  function hal(k) { return function (a) { return a[k]; }; }
+  var DTHA = DataTable({ id: "halerts", label: "alerts in the range", box: $("h-alerts-box"),
+    head: $("h-alerts-head"), reset: $("h-alerts-tools"), redraw: function () { histAlerts(); }, cols: [
+      { k: "ts", label: "last", w: 10, type: "time", val: hal("last_seen") },
+      { k: "sev", label: "sev", w: 6, min: 3, type: "sev", val: hal("sev") },
+      { k: "ti", label: "alert", w: 16, flex: true, type: "text", val: hal("title") },
+      { k: "ip", label: "ip", w: 15, type: "ip", val: hal("ip") },
+      { k: "n", label: "count", w: 7, num: true, type: "num", val: hal("count") }
+    ] });
+  var DTHF = DataTable({ id: "hflows", label: "flows in the range", box: $("h-flows-box"),
+    head: $("h-flows-head"), reset: $("h-flows-tools"), redraw: function () { histFlows(); }, cols: [
+      { k: "ts", label: "last", w: 10, type: "time", val: hal("last_seen") },
+      { k: "pr", label: "proto", w: 7, type: "text", val: hal("proto") },
+      { k: "s", label: "source", w: 18, flex: true, type: "ip", val: hal("src") },
+      { k: "d", label: "destination", w: 18, flex: true, type: "ip", val: hal("dst") },
+      { k: "n", label: "count", w: 7, num: true, type: "num", val: hal("count") }
+    ] });
+
   function histDevRow(d, cells) {
-    var row = el("div", "hrow");
+    var row = el("div", "hrow dt-row");
     var mac = el("span", "c-mac");
     var sw = el("span", "sw");
     sw.style.background = keyColor(String(d.mac));
@@ -2556,61 +3071,67 @@
     drawStrip(cv, d.presence, cells);
   }
 
+  function histAlerts() {
+    var ol = $("h-alerts");
+    while (ol.firstChild) ol.removeChild(ol.firstChild);
+    DTHA.sort(HS.alerts).forEach(function (a) {
+      var sev = num(a.sev) && a.sev >= 0 && a.sev <= 2 ? a.sev : -1;
+      var li = el("li", (sev >= 0 ? "sev" + sev : "") + " halrow dt-row");
+      li.appendChild(el("span", "ts", shortStamp(a.last_seen)));
+      li.appendChild(el("span", "ty", sev >= 0 ? SEV_WORD[sev] : "?"));
+      li.appendChild(alertText(a.title === null ? "?" : a.title, null));
+      var ip = el("span", "tx");
+      if (a.ip !== null)
+        ip.appendChild(isIP(String(a.ip)) ? ipSpan(String(a.ip), IP_SRC.alert)
+                                         : el("span", "d-normal", String(a.ip)));
+      li.appendChild(ip);
+      li.appendChild(el("span", "n " + (a.count > 1 ? heatClass(0.6) : "d-dim"), "x" + a.count));
+      ol.appendChild(li);
+    });
+    if (!HS.alerts.length) ol.appendChild(el("li", "sub", "none in the range"));
+  }
+
+  function histFlows() {
+    var ol = $("h-flows");
+    while (ol.firstChild) ol.removeChild(ol.firstChild);
+    DTHF.sort(HS.flows).forEach(function (f) {
+      var li = el("li", "hflrow dt-row");
+      li.appendChild(el("span", "ts", shortStamp(f.last_seen)));
+      li.appendChild(el("span", "ty", f.proto));
+      li.appendChild(flowAddr(f.src, "-"));
+      li.appendChild(flowAddr(f.dst, "-"));
+      li.appendChild(el("span", "n d-normal", "x" + f.count));
+      ol.appendChild(li);
+    });
+    if (!HS.flows.length) ol.appendChild(el("li", "sub", "none in the range"));
+  }
+
   function historyRange() {
     var gen = ++HS.gen;
     var from = HS.from, to = HS.to;
     set("h-range", stamp(from) + " to " + stamp(to));
     getJSON(histPath("devices", from, to, "&limit=200")).then(function (j) {
       if (gen !== HS.gen) return;
-      var box = $("h-devs");
-      while (box.firstChild) box.removeChild(box.firstChild);
-      (j.rows || []).forEach(function (d) { histDevRow(d, j.presence_cells); });
+      HS.devs = j.rows || [];
+      HS.cells = j.presence_cells;
+      histDevs();
       set("h-dev-count", (j.rows || []).length + " overlap the range" +
           (j.more ? ", more than shown" : "") + "; strip: " + fmt(j.presence_cells) +
           " cells of " + fmt(j.presence_cell_s) + " s");
     }).catch(function (e) { if (gen === HS.gen) set("h-dev-count", errText(e.message)); });
     getJSON(histPath("alerts", from, to, "&limit=100")).then(function (j) {
       if (gen !== HS.gen) return;
-      var ol = $("h-alerts");
-      while (ol.firstChild) ol.removeChild(ol.firstChild);
       (j.alerts || []).forEach(function (a) {
         if (a.ip !== null) noteAlertIp(String(a.ip), a.last_seen, a.sev);
       });
-      (j.alerts || []).forEach(function (a) {
-        var sev = num(a.sev) && a.sev >= 0 && a.sev <= 2 ? a.sev : -1;
-        var li = el("li", sev >= 0 ? "sev" + sev : "");
-        li.appendChild(el("span", "ts", shortStamp(a.last_seen)));
-        li.appendChild(el("span", "ty", sev >= 0 ? SEV_WORD[sev] : "?"));
-        var tx = alertText(a.title === null ? "?" : a.title, null);
-        if (a.ip !== null) {
-          tx.appendChild(document.createTextNode("  "));
-          tx.appendChild(isIP(String(a.ip)) ? ipSpan(String(a.ip), IP_SRC.alert)
-                                           : el("span", "d-normal", String(a.ip)));
-        }
-        tx.appendChild(el("span", a.count > 1 ? heatClass(0.6) : "d-dim", "  x" + a.count));
-        li.appendChild(tx);
-        ol.appendChild(li);
-      });
-      if (!j.alerts || !j.alerts.length) ol.appendChild(el("li", "sub", "none in the range"));
+      HS.alerts = j.alerts || [];
+      histAlerts();
       set("h-al-count", (j.alerts || []).length + (j.more ? "+" : ""));
     }).catch(function (e) { if (gen === HS.gen) set("h-al-count", errText(e.message)); });
     getJSON(histPath("flows", from, to, "&limit=100")).then(function (j) {
       if (gen !== HS.gen) return;
-      var ol = $("h-flows");
-      while (ol.firstChild) ol.removeChild(ol.firstChild);
-      (j.flows || []).forEach(function (f) {
-        var li = el("li", "");
-        li.appendChild(el("span", "ts", shortStamp(f.last_seen)));
-        li.appendChild(el("span", "ty", f.proto));
-        var tx = el("span", "tx");
-        tx.appendChild(flowAddr(f.src, "-"));
-        tx.appendChild(el("span", "d-dim", " → "));
-        tx.appendChild(flowAddr(f.dst, "-"));
-        tx.appendChild(el("span", "d-normal", "  x" + f.count));
-        li.appendChild(tx);
-        ol.appendChild(li);
-      });
-      if (!j.flows || !j.flows.length) ol.appendChild(el("li", "sub", "none in the range"));
+      HS.flows = j.flows || [];
+      histFlows();
     }).catch(function () { /* the list stands empty */ });
     getJSON("/api/anomalies?since=" + from).then(function (j) {
       if (gen !== HS.gen) return;
@@ -2717,15 +3238,33 @@
         set("q-note", "refused: " + j.error + (typeof j.detail === "string" ? " (" + j.detail + ")" : ""));
         return;
       }
-      var tbl = el("table", "qt");
-      var tr = el("tr", "");
-      (j.columns || []).forEach(function (c) { tr.appendChild(el("th", "", c)); });
-      tbl.appendChild(tr);
-      (j.rows || []).forEach(function (row) {
-        var r = el("tr", "");
-        row.forEach(function (v) { r.appendChild(el("td", v === null ? "nul" : "", cellText(v))); });
-        tbl.appendChild(r);
+      var tbl = el("table", "qt dt-fixed");
+      var thead = el("thead", ""), tbody = el("tbody", "");
+      var tr = el("tr", "dt-row");
+      thead.appendChild(tr);
+      tbl.appendChild(thead);
+      tbl.appendChild(tbody);
+      var rowsQ = j.rows || [];
+      // A column of numbers (and NULLs) sorts as numbers, any other as
+      // its text's bytes.
+      var cols = (j.columns || []).map(function (c, i) {
+        var allNum = rowsQ.every(function (row) { return row[i] === null || typeof row[i] === "number"; });
+        return { k: "c" + i, label: String(c), w: allNum ? 10 : 24, type: allNum ? "num" : "text",
+                 num: allNum, val: function (row) { return row[i] === null ? null : cellText(row[i]); } };
       });
+      var qtools = el("span", "dt-tools");
+      var qt = DataTable({ id: "sql", label: "query result", table: tbl, box: box, head: tr, cols: cols,
+                           reset: qtools, redraw: function () { drawQ(); } });
+      var drawQ = function () {
+        while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+        qt.sort(rowsQ).forEach(function (row) {
+          var r = el("tr", "dt-row");
+          row.forEach(function (v) { r.appendChild(el("td", v === null ? "nul" : "", cellText(v))); });
+          tbody.appendChild(r);
+        });
+      };
+      drawQ();
+      box.appendChild(qtools);
       box.appendChild(tbl);
       set("q-note", j.row_count + " rows in " + j.elapsed_ms + " ms" +
           (j.truncated ? ", truncated by " + j.truncated_by : ""));

@@ -329,7 +329,9 @@ typedef struct {
 typedef int (*web_sdb_ap_fn)(void *ctx, const web_sdb_ap_t *a);
 
 enum { WEB_AP_SORT_LAST = 0, WEB_AP_SORT_SSIDS, WEB_AP_SORT_KARMA,
-       WEB_AP_SORT_BSSID, WEB_AP_SORT_COUNT };
+       WEB_AP_SORT_BSSID, WEB_AP_SORT_SSID, WEB_AP_SORT_CHANNEL,
+       WEB_AP_SORT_SIGNAL, WEB_AP_SORT_ENC, WEB_AP_SORT_MFP,
+       WEB_AP_SORT_DOWNGRADE, WEB_AP_SORT_FIRST, WEB_AP_SORT_COUNT };
 
 /* beacon_aps with each one's SSID count and KARMA score, sorted, at
  * most limit from offset. Rows given, or -1; 0 when the file has no
@@ -497,7 +499,7 @@ typedef struct {
 typedef int (*web_sdb_flow_fn)(void *ctx, const web_sdb_flow_t *f);
 
 enum { WEB_FLOWS_SORT_LAST = 0, WEB_FLOWS_SORT_TOTAL, WEB_FLOWS_SORT_SRC,
-       WEB_FLOWS_SORT_COUNT };
+       WEB_FLOWS_SORT_DST, WEB_FLOWS_SORT_FIRST, WEB_FLOWS_SORT_COUNT };
 
 /* One tab's rows overlapping [from, to), sorted, at most limit from
  * offset; ip, when not NULL, matches src or dst. *present 0 when the

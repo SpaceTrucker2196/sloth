@@ -105,13 +105,15 @@
         <div class="cards" id="o-anoms"></div>
       </div>
       <div class="panel">
-        <div class="label">latest alerts</div>
-        <ol class="alerts" id="alerts"></ol>
+        <div class="label">latest alerts <span class="dt-tools" id="alerts-tools"></span></div>
+        <div class="hscroll" id="alerts-box"><div class="alrow dhead" id="alerts-head"></div>
+        <ol class="alerts" id="alerts"></ol></div>
       </div>
     </section>
     <section class="panel">
-      <div class="label">records <button type="button" id="pause">pause</button> <span class="sub" id="tick-note"></span></div>
-      <ol class="ticker" id="ticker"></ol>
+      <div class="label">records <button type="button" id="pause">pause</button> <span class="sub" id="tick-note"></span> <span class="dt-tools" id="ticker-tools"></span></div>
+      <div class="hscroll" id="ticker-box"><div class="tkrow dhead" id="ticker-head"></div>
+      <ol class="ticker" id="ticker"></ol></div>
     </section>
    </div>
    <div id="v-anomalies" hidden>
@@ -122,11 +124,14 @@
         <option value="21600">6 h</option>
         <option value="86400">24 h</option>
       </select></label>
+      <button type="button" id="n-mode" aria-pressed="false">table</button>
       <span class="sub" id="n-note"></span>
     </section>
     <section class="panel">
       <div class="label">open first, then closed <span class="sub" id="n-count"></span></div>
       <div class="cards" id="n-cards"></div>
+      <div class="hscroll" id="n-tbox" hidden><div class="anrow dhead" id="n-head"></div><div id="n-rows"></div></div>
+      <div class="dt-tools" id="n-tools" hidden></div>
     </section>
    </div>
    <div id="v-devices" hidden>
@@ -141,17 +146,15 @@
       <span class="sub" id="d-note"></span>
     </section>
     <section class="panel">
-      <div class="label">devices <span class="sub" id="d-count"></span></div>
-      <div class="hscroll">
-      <div class="drow dhead" aria-hidden="true">
-        <span class="c-mac">mac</span><span class="c-ven">vendor</span><span class="c-ip">ip</span><span class="c-nm">name</span><span class="c-ss">ssid</span><span class="c-sig">dBm</span><span class="c-src">src</span><span class="c-rk">risk</span><span class="c-fs">first</span><span class="c-ls">last</span><span class="c-z">z</span><span class="c-an">anom</span><span class="c-pr">24 h presence</span>
-      </div>
+      <div class="label">devices <span class="sub" id="d-count"></span> <span class="dt-tools" id="d-tools"></span></div>
+      <div class="hscroll" id="d-box">
+      <div class="drow dhead" id="d-head"></div>
       <div class="vscroll" id="d-scroll" tabindex="0" aria-label="devices table">
         <div class="vspace" id="d-space"></div>
         <div class="vrows" id="d-rows"></div>
       </div>
       </div>
-      <div class="sub">src: A arp, D dhcp, P probe, B beacon, S station; name: D dhcp, m mdns, N nbns, h sloth's hostname, p PTR seen on the wire; ~ a randomised (locally administered) mac. Click a row for everything known.</div>
+      <div class="sub">src: A arp, D dhcp, P probe, B beacon, S station; name: D dhcp, m mdns, N nbns, h sloth's hostname, p PTR seen on the wire; ~ a randomised (locally administered) mac. Click a row for everything known. A column header sorts (the server picks the rows, by mac, vendor, ip, ssid, dBm, src, risk, first or last); drag, arrow or double-click its right edge to resize.</div>
     </section>
    </div>
    <div id="v-lookup" hidden>
@@ -187,15 +190,15 @@
       <div class="mixd" id="w-mix" aria-live="polite"></div>
     </section>
     <section class="panel">
-      <div class="label">access points <span class="sub" id="w-aps-count"></span></div>
+      <div class="label">access points <span class="sub" id="w-aps-count"></span> <span class="dt-tools" id="w-aps-tools"></span></div>
       <div class="controls"><label>sort <select id="w-sort">
         <option value="last" selected>last seen</option>
         <option value="ssids">ssid count</option>
         <option value="karma">karma score</option>
         <option value="bssid">bssid</option>
       </select></label></div>
-      <div class="hscroll">
-      <div class="aprow dhead" aria-hidden="true"><span>bssid</span><span>ssid</span><span>ch</span><span>dBm</span><span>enc / akm</span><span>mfp</span><span>downgrade</span><span>karma</span><span>last</span></div>
+      <div class="hscroll" id="w-aps-box">
+      <div class="aprow dhead" id="w-aps-head"></div>
       <div id="w-aps"></div>
       </div>
       <div class="sub">an ssid count above 1 (KARMA, multi-VAP) is in the warning colour with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers</div>
@@ -235,10 +238,10 @@
       <div class="sub">each line runs from a source to a destination (the arrowhead), its width by its count, its colour by protocol and named in the legend; red: an SMB1 session. ldap and kerb record a source only and are not drawn. Click an address to filter the table by it.</div>
     </section>
     <section class="panel">
-      <div class="label">flows <span class="sub" id="f-count"></span></div>
+      <div class="label">flows <span class="sub" id="f-count"></span> <span class="dt-tools" id="f-tools"></span></div>
       <div class="chips" id="f-tabs" role="tablist" aria-label="protocol tables"></div>
-      <div class="hscroll">
-        <div class="frow dhead" id="f-head" aria-hidden="true"></div>
+      <div class="hscroll" id="f-box">
+        <div class="frow dhead" id="f-head"></div>
         <div id="f-rows"></div>
       </div>
       <button type="button" id="f-more" hidden>more</button>
@@ -257,13 +260,14 @@
       <div id="h-new"></div>
     </section>
     <section class="panel">
-      <div class="label">who was here <span class="sub" id="h-dev-count"></span></div>
-      <div class="hscroll"><div id="h-devs"></div></div>
+      <div class="label">who was here <span class="sub" id="h-dev-count"></span> <span class="dt-tools" id="h-devs-tools"></span></div>
+      <div class="hscroll" id="h-devs-box"><div class="hrow dhead" id="h-devs-head"></div><div id="h-devs"></div></div>
     </section>
     <section class="row2">
       <div class="panel">
-        <div class="label">alerts in the range <span class="sub" id="h-al-count"></span></div>
-        <ol class="alerts" id="h-alerts"></ol>
+        <div class="label">alerts in the range <span class="sub" id="h-al-count"></span> <span class="dt-tools" id="h-alerts-tools"></span></div>
+        <div class="hscroll" id="h-alerts-box"><div class="halrow dhead" id="h-alerts-head"></div>
+        <ol class="alerts" id="h-alerts"></ol></div>
       </div>
       <div class="panel">
         <div class="label">anomalies in the range</div>
@@ -271,8 +275,9 @@
       </div>
     </section>
     <section class="panel">
-      <div class="label">flows in the range</div>
-      <ol class="alerts" id="h-flows"></ol>
+      <div class="label">flows in the range <span class="dt-tools" id="h-flows-tools"></span></div>
+      <div class="hscroll" id="h-flows-box"><div class="hflrow dhead" id="h-flows-head"></div>
+      <ol class="alerts" id="h-flows"></ol></div>
     </section>
     <section class="panel" id="h-sql" hidden>
       <div class="label">sql over sloth.db, read-only <span class="sub" id="q-note"></span></div>
