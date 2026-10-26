@@ -18,40 +18,6 @@
 
 #define T SDB_NOW
 
-static char g_out[65536];
-
-static const char *body_of(const char *out) {
-    const char *sep = strstr(out, "\r\n\r\n");
-    return sep ? sep + 4 : "";
-}
-
-static int route(const web_health_t *h, const char *path, const char *query) {
-    web_req_t rq;
-    web_resp_t r;
-    memset(&rq, 0, sizeof(rq));
-    snprintf(rq.path, sizeof(rq.path), "%s", path);
-    snprintf(rq.query, sizeof(rq.query), "%s", query);
-    snprintf(rq.host, sizeof(rq.host), "127.0.0.1:8770");
-    rq.host_count = 1;
-    if (web_route(&rq, h, 1, g_out, sizeof(g_out), &r) != 0) return -1;
-    g_out[r.out_len] = '\0';
-    return r.status;
-}
-
-/* 1 when every needle is in b, in the order given. */
-static int in_order(const char *b, const char *const *n, int k) {
-    const char *at = b;
-    for (int i = 0; i < k; i++) {
-        const char *p = strstr(at, n[i]);
-        if (!p) {
-            fprintf(stderr, "    \"%s\" not after the previous\n", n[i]);
-            return 0;
-        }
-        at = p + 1;
-    }
-    return 1;
-}
-
 /* The compiled statement: a direction changes only the ORDER BY, from
  * the sort's own constant column, empty last; no direction leaves the
  * statement exactly as it was. Seen red with the KEY table's ip entry
@@ -119,6 +85,40 @@ static void test_page_tables(void) {
 }
 
 #ifdef WITH_SQLITE
+
+static char g_out[65536];
+
+static const char *body_of(const char *out) {
+    const char *sep = strstr(out, "\r\n\r\n");
+    return sep ? sep + 4 : "";
+}
+
+static int route(const web_health_t *h, const char *path, const char *query) {
+    web_req_t rq;
+    web_resp_t r;
+    memset(&rq, 0, sizeof(rq));
+    snprintf(rq.path, sizeof(rq.path), "%s", path);
+    snprintf(rq.query, sizeof(rq.query), "%s", query);
+    snprintf(rq.host, sizeof(rq.host), "127.0.0.1:8770");
+    rq.host_count = 1;
+    if (web_route(&rq, h, 1, g_out, sizeof(g_out), &r) != 0) return -1;
+    g_out[r.out_len] = '\0';
+    return r.status;
+}
+
+/* 1 when every needle is in b, in the order given. */
+static int in_order(const char *b, const char *const *n, int k) {
+    const char *at = b;
+    for (int i = 0; i < k; i++) {
+        const char *p = strstr(at, n[i]);
+        if (!p) {
+            fprintf(stderr, "    \"%s\" not after the previous\n", n[i]);
+            return 0;
+        }
+        at = p + 1;
+    }
+    return 1;
+}
 
 static char g_dir[64];
 static char g_db[128];

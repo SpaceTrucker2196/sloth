@@ -314,6 +314,7 @@ typedef struct {
 
 typedef struct {
     char      key[WEB_CHMIX_KEY_MAX + 1];
+    int       idx;                     /* its place in magg_t's ch[] */
     int       rank;
     long      num;
     unsigned long long total;
@@ -350,6 +351,7 @@ static int mix_chan(magg_t *a, const char *key) {
     if (web_key_channel_text(key, canon) != 0 || strcmp(canon, key)) return -1;
     mchan_t *c = &a->ch[a->nch];
     snprintf(c->key, sizeof(c->key), "%s", key);
+    c->idx = a->nch;
     web_channel_band(key, &c->rank);
     c->num = strtol(key + (c->rank == 2 ? 2 : 0), NULL, 10);
     c->total = 0;
@@ -513,11 +515,10 @@ static int mix_route(const web_m4_t *m, const grid_t *g, long long now_s,
     /* Band order: the rows move, so each keeps its cells' offset. */
     int order[WEB_CHMIX_CHANNELS];
     mchan_t sorted[WEB_CHMIX_CHANNELS];
-    for (int i = 0; i < a->nch; i++) { sorted[i] = a->ch[i]; }
+    memset(sorted, 0, sizeof(sorted));
+    memcpy(sorted, a->ch, (size_t)a->nch * sizeof(sorted[0]));
     qsort(sorted, (size_t)a->nch, sizeof(sorted[0]), by_mix_band);
-    for (int i = 0; i < a->nch; i++)
-        for (int j = 0; j < a->nch; j++)
-            if (!strcmp(sorted[i].key, a->ch[j].key)) { order[i] = j; break; }
+    for (int i = 0; i < a->nch; i++) order[i] = sorted[i].idx;
 
     web_sdb_conn_t conn;
     memset(&conn, 0, sizeof(conn));
@@ -585,7 +586,8 @@ static int mix_route(const web_m4_t *m, const grid_t *g, long long now_s,
             if (col) web_jw_raw(&r, ",");
             if (!cell->n && !cell->other) { web_jw_raw(&r, "null"); continue; }
             qsort(cell->e, (size_t)cell->n, sizeof(cell->e[0]), by_cell_f);
-            unsigned long long other = cell->other, total = cell->other;
+            unsigned long long other = cell->other;
+            unsigned long long total = other;
             int keep = 0, pick[WEB_CHMIX_TOP];
             for (int i = 0; i < cell->n; i++) {
                 total += cell->e[i].f;
