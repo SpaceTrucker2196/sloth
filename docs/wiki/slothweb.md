@@ -103,7 +103,11 @@ and for the Alerts page, `web/src/web_alerts.c`, `web/src/web_alertdb.c`,
 detail formats audited), `include/sloth_alerts.def`,
 `docs/views/alerts.md`, `research/` and [[alert-remediation]].
 
-**Last updated**: 2026-10-26 (the capture scope: Monitor, Hybrid and Local
+**Last updated**: 2026-10-27 (the capture scope's review: the host's
+ARP table, leases and scan entries stay Local, scoped anomaly counts, z
+and open-anomalies tile, the Records view's scoped counts, the WiFi
+view's Local half from `/api/wifi/local`, [[capture-scope]]),
+2026-10-26 (the capture scope: Monitor, Hybrid and Local
 in the top bar, [[capture-scope]]), 2026-10-26 (the Alerts page on the current tree: its
 titles and details in the display form beside the gate, its lists
 sortable and resizable, its incident totals tested, the drawer's
@@ -933,11 +937,17 @@ capture path, so `web/src/web_scope.c` places each by what it is, in
 one table the tests hold to the files it classifies; every `/api` route
 takes `scope=`, the server counts, pages and filters, and the page
 keeps the scope's records on its ticker. A device seen both ways is in
-both scopes with each scope's own fields; the WiFi view is empty under
-Local, the Flows under Monitor, each saying why; the SQL box is
-unscoped. sloth's `sensor_health` gained `capture_linktype` and
-`monitor_only` so the stream's IP records can count as Monitor's while
-the IP capture is itself a radio. The whole of it, view by view:
+both scopes with each scope's own fields; under Local the WiFi view is
+the managed card's own scan and link (`/api/wifi/local`, sloth.db's
+`wifi_aps` and `wifi_stas`) with the radio's panels not drawn, the Flows
+are empty under Monitor saying why; the SQL box is unscoped. sloth's
+`sensor_health` gained `capture_linktype`, so the stream's IP-capture
+records can count as Monitor's while the IP capture is itself a radio
+(the host's own ARP table, leases and scan entries never do), and
+`monitor_only`, reported but not used to tag (an `any` handle's
+allow-list can hold wired interfaces too). An `/api` answer without
+`scope=` is as before; `/events` records gained `sc` (and a device
+row's Monitor line, `text_m`). The whole of it, view by view:
 [[capture-scope]]. `web/tests/test_scope.c` asks every route under
 each scope against one fixture with a MAC seen both ways, each absence
 seen red under a named mutation.

@@ -429,7 +429,9 @@ a.tile:focus-visible { outline-offset: 2px; }
 /* A view the scope holds nothing of: the reason, and none of its panels. */
 .scope-empty { display: none; }
 .scoped-out > .scope-empty { display: block; }
-.scoped-out > section:not(.scope-empty), .scoped-out > .filterbar { display: none; }
+.scoped-out > section:not(.scope-empty):not(.card-local), .scoped-out > .filterbar { display: none; }
+/* The WiFi view's card panels are Local's: not Monitor's to show. */
+.card-out > section.card-local { display: none; }
 
 @media (max-width: 480px) {
   /* The views a line of their own under the title, as before the

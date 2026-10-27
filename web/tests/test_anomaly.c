@@ -1850,6 +1850,16 @@ static void test_device_z_now(void) {
     WT_EQ(web_anomaly_device_z(&an, "10.0.0.5", T0 + 60, &z), 0);
     WT_EQ(web_anomaly_device_z(&an, "00:11:22:33:44:55",
                                T0 + 60 + WEB_ANOM_Z_FRESH_S + 61, &z), 0);
+    /* Under a capture scope, the scope's own metrics only: dev.frames is
+     * the monitor radio's, so Monitor has the z and Local none. Seen red
+     * with z_note() keeping every metric's z in the scoped slots. */
+    WT_EQ(web_anomaly_device_z_scoped(&an, "00:11:22:33:44:55", T0 + 60,
+                                      WEB_SCOPE_MONITOR, &z), 1);
+    WT_ASSERT(z > 3);
+    WT_EQ(web_anomaly_device_z_scoped(&an, "00:11:22:33:44:55", T0 + 60,
+                                      WEB_SCOPE_LOCAL, &z), 0);
+    WT_EQ(web_anomaly_device_z_scoped(&an, "00:11:22:33:44:55", T0 + 60,
+                                      WEB_SCOPE_HYBRID, &z), 1);
     fx_done();
 }
 

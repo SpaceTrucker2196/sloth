@@ -48,15 +48,21 @@ static const struct { const char *t; int tag; } RTYPES[] = {
     { "ble_device", M }, { "ble_alert", M },
     /* the IP capture (src/capture/capture.c) */
     { "dns", LI }, { "tls", LI }, { "quic", LI }, { "http", LI }, { "ntp", LI },
-    { "icmp", LI }, { "packet", LI }, { "arp", LI }, { "dhcp_lease", LI },
+    { "icmp", LI }, { "packet", LI },
     { "top_host", LI }, { "mdns_service", LI }, { "nbns_name", LI },
-    { "ssdp_device", LI }, { "onvif_device", LI }, { "scan_entry", LI },
+    { "ssdp_device", LI }, { "onvif_device", LI },
     { "ndp_ra", LI }, { "smb_session", LI }, { "kerb_event", LI },
     { "ldap_event", LI }, { "bgp_session", LI }, { "ssh_flow", LI },
     { "rdp_flow", LI }, { "snmp_flow", LI }, { "mqtt_flow", LI },
     { "captive_portal_event", LI }, { "cleartext_cred", LI },
-    /* the host itself: /proc and the managed Wi-Fi card's nl80211 */
+    /* the host itself: /proc, the lease files and the managed Wi-Fi
+     * card's nl80211. Never off the IP capture, so never Monitor's even
+     * while that capture is a radio: arp is /proc/net/arp
+     * (src/platform/linux.c), dhcp_lease the host's dhclient and
+     * systemd-networkd leases (linux_dhcp.c), scan_entry the inbound
+     * peers of the /proc sockets (src/scan.c). */
     { "connections", L }, { "process", L }, { "wifi_sta", L }, { "wifi_ap", L },
+    { "arp", L }, { "dhcp_lease", L }, { "scan_entry", L },
     /* by the record */
     { "iface", BK }, { "device", BK },
     /* sloth's own state */
@@ -73,10 +79,13 @@ int web_scope_record(const char *type) {
 /* ── alert types, in include/sloth_alerts.def's order ────────────────── */
 
 const web_scope_alert_t web_scope_alerts[] = {
-    { "PORT_SCAN", LI }, { "DEAUTH_FLOOD", M }, { "NXDOMAIN_BURST", LI },
+    { "PORT_SCAN", L },             /* scan_entries: the /proc sockets */
+    { "DEAUTH_FLOOD", M }, { "NXDOMAIN_BURST", LI },
     { "THREAT_DOMAIN", LI }, { "THREAT_IP", LI },
     { "BEACONING", LI },            /* C2 beaconing over IP, not 802.11 */
-    { "DGA_DOMAIN", LI }, { "ARP_SPOOF", LI }, { "ROGUE_DHCP", LI },
+    { "DGA_DOMAIN", LI },
+    { "ARP_SPOOF", L },             /* arp_entries: /proc/net/arp */
+    { "ROGUE_DHCP", LI },           /* dhcp_events: DHCP snooped off the capture */
     { "ROGUE_RA", LI }, { "SMB1_USE", LI }, { "KERB_PREAUTH_BURST", LI },
     { "LDAP_SEARCH_FLOOD", LI }, { "BGP_NOTIFICATION_BURST", LI },
     { "SSH_BRUTE_FORCE", LI }, { "RDP_BRUTE_FORCE", LI },
@@ -215,10 +224,11 @@ long long web_scope_risk_mask(int scope) {
     }
 }
 
+const int web_scope_risk_w[6] = { 1, 1, 1, 1, 3, 3 };
+
 int web_scope_risk_level(long long sig) {
-    static const int W[6] = { 1, 1, 1, 1, 3, 3 };
     int score = 0;
-    for (int b = 0; b < 6; b++) if (sig & (1LL << b)) score += W[b];
+    for (int b = 0; b < 6; b++) if (sig & (1LL << b)) score += web_scope_risk_w[b];
     return score >= 5 ? 3 : score >= 3 ? 2 : score >= 1 ? 1 : 0;
 }
 

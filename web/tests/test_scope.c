@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "sdb_gen.h"
@@ -82,7 +83,7 @@ static void test_alert_table_is_the_def(void) {
     int meta = 0;
     for (int i = 0; i < web_scope_alerts_n; i++) {
         int t = web_scope_alerts[i].tag;
-        WT_ASSERT(t == WEB_SC_M || t == WEB_SC_META ||
+        WT_ASSERT(t == WEB_SC_M || t == WEB_SC_META || t == WEB_SC_L ||
                   t == (WEB_SC_L | WEB_SC_IPCAP));
         if (t == WEB_SC_META) {
             meta++;
@@ -161,7 +162,17 @@ static void test_record_types_are_classified(void) {
     WT_EQ(web_scope_record("ble_device"), WEB_SC_M);
     WT_EQ(web_scope_record("wifi_sta"), WEB_SC_L);
     WT_EQ(web_scope_record("wifi_ap"), WEB_SC_L);
-    WT_EQ(web_scope_record("arp"), WEB_SC_L | WEB_SC_IPCAP);
+    WT_EQ(web_scope_record("dns"), WEB_SC_L | WEB_SC_IPCAP);
+    /* The host's own tables are never the IP capture's, so they stay
+     * Local while that capture is a monitor radio. Seen red with arp,
+     * dhcp_lease and scan_entry tagged LI again. */
+    static const char *const host[] = { "arp", "dhcp_lease", "scan_entry",
+                                        "connections", "wifi_sta" };
+    for (size_t i = 0; i < sizeof(host) / sizeof(host[0]); i++) {
+        if (web_scope_eff(web_scope_record(host[i]), 1) != WEB_SC_L)
+            fprintf(stderr, "    %s leaves Local on a radio\n", host[i]);
+        WT_EQ(web_scope_eff(web_scope_record(host[i]), 1), WEB_SC_L);
+    }
     WT_EQ(web_scope_record("sensor_health"), WEB_SC_META);
     WT_EQ(web_scope_record("iface"), WEB_SC_BYKEY);
     WT_EQ(web_scope_record("device"), WEB_SC_BYKEY);
@@ -169,8 +180,9 @@ static void test_record_types_are_classified(void) {
 }
 
 /* sloth's risk weights and buckets (src/device_risk.c), read from the
- * source, are the ones the scopes recompute with. Seen red with
- * ALERT_TAGGED's weight in web_scope.c set to 2. */
+ * source, are the ones the scopes recompute with: web_scope_risk_w[],
+ * which web_query.c's scoped risk SQL sums. Seen red with ALERT_TAGGED's
+ * weight in web_scope_risk_w[] set to 2. */
 static void test_risk_weights_are_sloths(void) {
     char *src = slurp("src/device_risk.c");
     WT_ASSERT(src != NULL);
@@ -185,6 +197,8 @@ static void test_risk_weights_are_sloths(void) {
         WT_ASSERT(s != NULL);
         if (!s) continue;
         int w = atoi(s + 9);
+        /* The table web_query.c's scoped SQL sums. */
+        WT_EQ(web_scope_risk_w[b], w);
         /* The weight alone decides the level of a device with only it. */
         WT_EQ(web_scope_risk_level(1LL << b), w >= 5 ? 3 : w >= 3 ? 2 : w >= 1 ? 1 : 0);
     }
@@ -266,7 +280,13 @@ static void test_tags(void) {
     int nh = web_scope_alert_types(WEB_SCOPE_HYBRID, 0, ty, 128);
     WT_EQ(nh, web_scope_alerts_n);
     WT_EQ(nm + nl, web_scope_alerts_n + 2);   /* the two own-state types twice */
-    WT_EQ(web_scope_alert_types(WEB_SCOPE_LOCAL, 1, ty, 128), 2);  /* radio: META only */
+    /* On a radio Local keeps the own-state types and the two rules over
+     * the host's own tables: PORT_SCAN (scan_entries, the /proc sockets)
+     * and ARP_SPOOF (/proc/net/arp). Seen red with both tagged LI. */
+    WT_EQ(web_scope_alert_types(WEB_SCOPE_LOCAL, 1, ty, 128), 4);
+    WT_EQ(ty[0], 0);    /* PORT_SCAN */
+    WT_EQ(ty[1], 7);    /* ARP_SPOOF */
+    WT_EQ(web_scope_eff(web_scope_alert(8), 1), WEB_SC_M);   /* ROGUE_DHCP: snooped */
 }
 
 /* The shared parser's scope step: the pair out, the rest byte for byte,
@@ -337,7 +357,8 @@ static void live_up(web_live_t *l) {
     feed("{\"type\":\"device\",\"ts\":100,\"mac\":\"02:00:00:00:00:c1\","
          "\"ip\":\"10.0.2.20\",\"sources\":1,\"last_seen\":100}");
     feed("{\"type\":\"device\",\"ts\":100,\"mac\":\"02:00:00:00:00:b0\","
-         "\"ip\":\"10.0.2.10\",\"sources\":17,\"last_seen\":100}");
+         "\"ip\":\"10.0.2.10\",\"hostname\":\"both-host\",\"last_ssid\":\"BothNet\","
+         "\"sources\":17,\"last_seen\":100}");
     feed("{\"type\":\"beacon\",\"ts\":100,\"bssid\":\"02:00:00:00:00:a1\","
          "\"ssid\":\"RadioOnlyNet\"}");
     feed("{\"type\":\"dns\",\"ts\":101,\"src\":\"10.0.2.20\",\"qname\":"
@@ -386,6 +407,22 @@ static void test_live_scoped(void) {
     WT_LACKS(b, "\"dns\":");
     WT_HAS(b, "\"scope_facts\":{\"ip_on_radio\":false,\"capture_linktype\":1,"
               "\"monitor_only\":false,\"monitor_ifaces\":[\"wlan0mon\"]}");
+    /* The device seen both ways is in Monitor's ticker by its radio
+     * columns: no address, no hostname. Seen red with the recent loop
+     * sending text whatever the scope. */
+    WT_HAS(b, "\"text\":\"02:00:00:00:00:b0  BothNet\"");
+    WT_LACKS(b, "10.0.2.10");
+    WT_LACKS(b, "both-host");
+    /* The Records view's tables: each type's Monitor records (an iface
+     * by its radio, an alert record by its type, sloth's own state in
+     * both), none of the table's overflow or malformed names, and the
+     * scope's record count. Seen red with count_type() not given the
+     * tag (every scoped count 0) and with the Hybrid counts reported. */
+    WT_HAS(b, "\"records\":7,");
+    WT_HAS(b, "\"types\":{\"sensor_health\":1,\"iface\":1,\"device\":2,"
+              "\"beacon\":1,\"alert.create\":2}");
+    WT_LACKS(b, "types_other");
+    WT_LACKS(b, "types_invalid");
     WT_ASSERT(live_json(WEB_SCOPE_LOCAL, b, sizeof(b)) > 0);
     WT_HAS(b, "\"devices\":2,");
     WT_HAS(b, "\"alerts_open\":{\"low\":1,\"warn\":1,\"crit\":0,");
@@ -395,6 +432,11 @@ static void test_live_scoped(void) {
     WT_LACKS(b, "RadioOnlyNet");
     WT_LACKS(b, "Deauth flood RADIO");
     WT_LACKS(b, "\"beacon\":");
+    WT_HAS(b, "02:00:00:00:00:b0  10.0.2.10  both-host");
+    WT_LACKS(b, "BothNet");
+    WT_HAS(b, "\"records\":8,");
+    WT_HAS(b, "\"types\":{\"sensor_health\":1,\"iface\":2,\"device\":2,"
+              "\"dns\":1,\"alert.create\":2}");
     /* Hybrid: everything, and the answer without a scope is as it was. */
     static char h0[65536];
     size_t n0 = web_live_json(&g_live, h0, sizeof(h0), 104000);
@@ -427,20 +469,81 @@ static void test_live_ip_on_radio(void) {
          "\"capture_open\":1,\"capture_running\":1,\"monitor_iface\":\"wlan0mon\","
          "\"monitor_open\":1,\"monitor_running\":1}");
     feed("{\"type\":\"dns\",\"ts\":121,\"src\":\"10.9.9.9\",\"qname\":\"off-the-air.example\"}");
+    /* The host's own neighbour table and a rule over it are not the IP
+     * capture's: they stay Local on a radio. Seen red with arp and
+     * ARP_SPOOF tagged LI again. */
+    feed("{\"type\":\"arp\",\"ts\":121,\"ip\":\"10.9.9.1\",\"mac\":"
+         "\"02:00:00:00:00:e1\",\"iface\":\"eth0\"}");
+    feed("{\"type\":\"alert.create\",\"ts\":122,\"incident_id\":\"aa04\",\"sev\":2,"
+         "\"ty\":7,\"key\":\"arp:10.9.9.1\",\"title\":\"ARP spoof HOSTTABLE\"}");
     g_feed_to = &g_live;
     static char b[65536];
     WT_ASSERT(live_json_of(&g_live2, WEB_SCOPE_MONITOR, b, sizeof(b)) > 0);
     WT_HAS(b, "off-the-air.example");
     WT_HAS(b, "\"ip_on_radio\":true");
+    WT_LACKS(b, "02:00:00:00:00:e1");
+    WT_LACKS(b, "ARP spoof HOSTTABLE");
     WT_ASSERT(live_json_of(&g_live2, WEB_SCOPE_LOCAL, b, sizeof(b)) > 0);
     WT_LACKS(b, "off-the-air.example");
+    WT_HAS(b, "02:00:00:00:00:e1");
+    WT_HAS(b, "ARP spoof HOSTTABLE");
     /* The open incidents' IP-capture types follow the radio of now (a
      * record already in the ticker keeps the tag it came with): Local
-     * keeps sloth's own state alone. */
-    WT_HAS(b, "\"alerts_open\":{\"low\":1,\"warn\":0,\"crit\":0,");
-    WT_ASSERT(live_json_of(&g_live2, WEB_SCOPE_MONITOR, b, sizeof(b)) > 0);
+     * keeps sloth's own state, PORT_SCAN (the /proc sockets) and
+     * ARP_SPOOF (/proc/net/arp). */
     WT_HAS(b, "\"alerts_open\":{\"low\":1,\"warn\":1,\"crit\":1,");
+    WT_ASSERT(live_json_of(&g_live2, WEB_SCOPE_MONITOR, b, sizeof(b)) > 0);
+    WT_HAS(b, "\"alerts_open\":{\"low\":1,\"warn\":0,\"crit\":1,");
     web_live_destroy(&g_live2);
+}
+
+/* An interface's scope is told by the radios this connection named.
+ * Before any are known an iface record is neither scope's (seen red with
+ * rec_tag() not asking sc_known: the radio's first rows stood under
+ * Local); a new connection forgets the old one's radios (seen red with
+ * web_live_sock_connected() keeping the radios the `sensor` records
+ * named: the card that was a radio in the earlier run stayed Monitor's). */
+static void test_live_iface_radios(void) {
+    static web_live_t l3;
+    static char b[65536];
+    g_feed_to = &l3;
+    web_live_init(&l3, "unix:/test.sock");
+    web_live_sock_connected(&l3, 1000);
+    feed("{\"type\":\"iface\",\"ts\":100,\"name\":\"wlan1\",\"rx_rate\":1}");
+    WT_ASSERT(live_json_of(&l3, WEB_SCOPE_LOCAL, b, sizeof(b)) > 0);
+    WT_LACKS(b, "wlan1");
+    WT_ASSERT(live_json_of(&l3, WEB_SCOPE_MONITOR, b, sizeof(b)) > 0);
+    WT_LACKS(b, "wlan1");
+    feed("{\"type\":\"sensor_health\",\"ts\":101,\"capture_iface\":\"eth0\","
+         "\"capture_open\":1,\"monitor_iface\":\"wlan1\",\"monitor_open\":1}");
+    feed("{\"type\":\"sensor\",\"ts\":101,\"kind\":\"wifi\",\"iface\":\"wlan1\"}");
+    feed("{\"type\":\"iface\",\"ts\":102,\"name\":\"wlan1\",\"rx_rate\":1}");
+    WT_ASSERT(live_json_of(&l3, WEB_SCOPE_MONITOR, b, sizeof(b)) > 0);
+    WT_HAS(b, "\"iface\":1");
+    WT_ASSERT(live_json_of(&l3, WEB_SCOPE_LOCAL, b, sizeof(b)) > 0);
+    WT_LACKS(b, "\"iface\":");
+    /* sloth again, with wlan1 the managed card now. */
+    web_live_sock_connected(&l3, 2000);
+    feed("{\"type\":\"sensor_health\",\"ts\":200,\"capture_iface\":\"wlan1\","
+         "\"capture_open\":1,\"monitor_iface\":\"\",\"monitor_open\":0}");
+    feed("{\"type\":\"iface\",\"ts\":201,\"name\":\"wlan1\",\"rx_rate\":1}");
+    WT_ASSERT(live_json_of(&l3, WEB_SCOPE_LOCAL, b, sizeof(b)) > 0);
+    WT_HAS(b, "\"iface\":1");
+    WT_HAS(b, "\"monitor_ifaces\":[]");
+    WT_ASSERT(live_json_of(&l3, WEB_SCOPE_MONITOR, b, sizeof(b)) > 0);
+    WT_HAS(b, "\"iface\":1");
+    /* Without a sensor_health, the second snapshot batch: the first one's
+     * sensor records name the radios. */
+    web_live_sock_connected(&l3, 3000);
+    feed("{\"type\":\"iface\",\"ts\":300,\"name\":\"wlan7\",\"rx_rate\":1}");
+    feed("{\"type\":\"sensor\",\"ts\":300,\"kind\":\"wifi\",\"iface\":\"wlan7\"}");
+    feed("{\"type\":\"iface\",\"ts\":301,\"name\":\"wlan7\",\"rx_rate\":1}");
+    WT_ASSERT(live_json_of(&l3, WEB_SCOPE_MONITOR, b, sizeof(b)) > 0);
+    WT_HAS(b, "\"iface\":2");
+    WT_ASSERT(live_json_of(&l3, WEB_SCOPE_LOCAL, b, sizeof(b)) > 0);
+    WT_HAS(b, "\"iface\":1");
+    g_feed_to = &g_live;
+    web_live_destroy(&l3);
 }
 
 /* ── the routes ─────────────────────────────────────────────────────── */
@@ -623,6 +726,10 @@ static void test_anomalies_scoped(void) {
     episode(an, 4, "A1", WM_DNS_QUERIES, "10.0.2.20", "EV-DNS-RATE", now);
     episode(an, 5, "A1", WM_WIFI_DEAUTH, "02:00:00:00:00:a1", "EV-DEAUTH-RATE", now);
     episode(an, 6, "A3", WM_DEV_PRESENT, "02:00:00:00:00:a1", "EV-HOURS-RADIO", now);
+    /* A2 on a MAC sloth.db learnt from ARP alone, and A2's keyless burst. */
+    web_rollup_add(ru, WM_DEV_PRESENT_LOC, "02:00:00:00:00:c1", 1, now);
+    episode(an, 7, "A2", -1, "02:00:00:00:00:c1", "EV-NEW-WIRED", now);
+    episode(an, 8, "A2", -1, "", "EV-NEW-BURST", now);
     web_health_t h;
     memset(&h, 0, sizeof(h));
     h.live = &g_live;
@@ -638,6 +745,20 @@ static void test_anomalies_scoped(void) {
     WT_HAS(b, "EV-HOURS-RADIO");
     WT_LACKS(b, "EV-NAMES-WIRED");
     WT_LACKS(b, "EV-DNS-RATE");
+    /* A2 by the presence of its MAC, like A3; its burst is every scope's.
+     * Seen red with A2 tagged Monitor's whatever the MAC. */
+    WT_LACKS(b, "EV-NEW-WIRED");
+    WT_HAS(b, "EV-NEW-BURST");
+    /* The open-anomalies tile's count under the scope rides /api/live,
+     * every open episode of the scope's whatever the list's window or
+     * kind (5 of 8). Seen red with live_body() not adding it, and with
+     * count_scoped() not asking the tag (8). */
+    WT_EQ(route(&h, "/api/live", "scope=monitor"), 200);
+    WT_HAS(body_of(g_out), "\"anomalies_open\":5}");
+    WT_EQ(route(&h, "/api/live", "scope=local"), 200);
+    WT_HAS(body_of(g_out), "\"anomalies_open\":5}");
+    WT_EQ(route(&h, "/api/live", ""), 200);
+    WT_LACKS(body_of(g_out), "anomalies_open");
     WT_EQ(route(&h, "/api/anomalies", "scope=local"), 200);
     b = body_of(g_out);
     WT_HAS(b, "EV-NAMES-WIRED");
@@ -646,6 +767,8 @@ static void test_anomalies_scoped(void) {
     WT_LACKS(b, "EV-NEW-PROBE");
     WT_LACKS(b, "EV-DEAUTH-RATE");
     WT_LACKS(b, "EV-HOURS-RADIO");
+    WT_HAS(b, "EV-NEW-WIRED");
+    WT_HAS(b, "EV-NEW-BURST");
     WT_EQ(route(&h, "/api/anomalies", ""), 200);
     b = body_of(g_out);
     WT_HAS(b, "EV-NEW-PROBE");
@@ -907,6 +1030,102 @@ static void test_devices_scoped(void) {
     WT_HAS(body_of(g_out), "\"pass_size\":3,");
 }
 
+/* A device row's anomaly count and the has:anomaly / anomaly: terms
+ * count the episodes the scope shows, as the drawer lists them: B has
+ * one of each scope's and one of Hybrid's alone, L one of the radio's.
+ * Seen red with dev_json() and web_anoms() counting every episode of
+ * the key (B's 3 in each scope; L matched has:anomaly under Local). */
+static void test_devices_anomalies_scoped(void) {
+    char err[64], row[4096];
+    web_rollup_t *ru = calloc(1, sizeof(*ru));
+    web_tsdb_t *ts = calloc(1, sizeof(*ts));
+    web_baseline_t *bl = calloc(1, sizeof(*bl));
+    web_anomaly_t *an = calloc(1, sizeof(*an));
+    WT_ASSERT(ru && ts && bl && an);
+    if (!ru || !ts || !bl || !an) { free(ru); free(ts); free(bl); free(an); return; }
+    WT_EQ(web_rollup_init(ru, 64, 0, err, sizeof(err)), 0);
+    WT_EQ(web_tsdb_init(ts, ru, NULL, 30, 256, NULL, NULL), 0);
+    WT_EQ(web_baseline_init(bl, 256), 0);
+    web_anom_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.bl = bl;
+    WT_EQ(web_anomaly_init(an, 32, &cfg), 0);
+    const long long now = SDB_NOW;
+    episode(an, 1, "A1", WM_WIFI_DEAUTH, "02:00:00:00:00:b0", "B-RADIO", now);
+    episode(an, 2, "A1", WM_DEV_PRESENT_LOC, "02:00:00:00:00:b0", "B-LOCAL", now);
+    episode(an, 3, "A1", WM_DEV_PRESENT, "02:00:00:00:00:b0", "B-EVERY", now);
+    episode(an, 4, "A1", WM_WIFI_DEAUTH, "02:00:00:00:00:c1", "L-RADIO", now);
+    g_m4.anomaly = an;
+    g_m4.tsdb = ts;
+    g_sdb.fns.an = an;
+    WT_EQ(route(&H, "/api/devices", "scope=monitor"), 200);
+    row_of(body_of(g_out), "02:00:00:00:00:b0", row, sizeof(row));
+    WT_HAS(row, "\"anomalies\":1,");
+    WT_EQ(route(&H, "/api/devices", "scope=local"), 200);
+    row_of(body_of(g_out), "02:00:00:00:00:b0", row, sizeof(row));
+    WT_HAS(row, "\"anomalies\":1,");
+    row_of(body_of(g_out), "02:00:00:00:00:c1", row, sizeof(row));
+    WT_HAS(row, "\"anomalies\":0,");
+    WT_EQ(route(&H, "/api/devices", ""), 200);
+    row_of(body_of(g_out), "02:00:00:00:00:b0", row, sizeof(row));
+    WT_HAS(row, "\"anomalies\":3,");
+    WT_EQ(route(&H, "/api/devices", "scope=local&q=has%3Aanomaly"), 200);
+    WT_HAS(body_of(g_out), "02:00:00:00:00:b0");
+    WT_LACKS(body_of(g_out), "02:00:00:00:00:c1");
+    WT_EQ(route(&H, "/api/devices", "scope=local&q=anomaly%3Arate"), 200);
+    WT_HAS(body_of(g_out), "\"count\":1");
+    WT_EQ(route(&H, "/api/devices", "q=has%3Aanomaly"), 200);
+    WT_HAS(body_of(g_out), "\"count\":2");
+    g_sdb.fns.an = NULL;
+    g_m4.anomaly = NULL;
+    g_m4.tsdb = NULL;
+    web_anomaly_destroy(an);
+    web_baseline_destroy(bl);
+    web_tsdb_destroy(ts);
+    web_rollup_destroy(ru);
+    free(an); free(bl); free(ts); free(ru);
+}
+
+/* The camera source bit and PROBE_ONLY under a scope, from the scope's
+ * own evidence. D1 was heard probing, but its camera verdict is SSDP's
+ * (IP): Monitor shows no camera bit, Local does, and src:camera says the
+ * same. D2 probes and sits in the managed card's station dump, so sloth
+ * cleared PROBE_ONLY (src/device_risk.c); the radio alone sees a client
+ * that only probes, and Monitor's risk has the bit again. Seen red with
+ * the camera bit kept whatever the evidence (dcols()'s CASE answering
+ * WEB_SRC_CAMERA in its ELSE, each scope in turn), and with Monitor's
+ * risk signals the stored bits masked ("d.risk_signals & 11"). */
+static void test_devices_camera_and_probe_only_scoped(void) {
+    char row[4096], sql[1024];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO devices (mac,vendor,sources,cam_signals,risk_signals,risk_level,"
+        "first_seen,last_seen) VALUES"
+        " ('02:00:00:00:00:d1','CamCo',81,8,0,0,%lld,%lld),"
+        " ('02:00:00:00:00:d2','StaCo',48,0,1,1,%lld,%lld);",
+        (long long)SDB_NOW - 3600, (long long)SDB_NOW - 60,
+        (long long)SDB_NOW - 3600, (long long)SDB_NOW - 60);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    WT_EQ(route(&H, "/api/devices", "scope=monitor"), 200);
+    row_of(body_of(g_out), "02:00:00:00:00:d1", row, sizeof(row));
+    WT_HAS(row, "\"sources\":16,");
+    row_of(body_of(g_out), "02:00:00:00:00:d2", row, sizeof(row));
+    WT_HAS(row, "\"risk\":1,\"risk_signals\":9,");
+    WT_EQ(route(&H, "/api/devices", "scope=local"), 200);
+    row_of(body_of(g_out), "02:00:00:00:00:d1", row, sizeof(row));
+    WT_HAS(row, "\"sources\":65,");
+    row_of(body_of(g_out), "02:00:00:00:00:d2", row, sizeof(row));
+    WT_HAS(row, "\"risk_signals\":1,");
+    WT_EQ(route(&H, "/api/devices", "scope=monitor&q=src%3Acamera"), 200);
+    WT_LACKS(body_of(g_out), "02:00:00:00:00:d1");
+    WT_EQ(route(&H, "/api/devices", "scope=local&q=src%3Acamera"), 200);
+    WT_HAS(body_of(g_out), "02:00:00:00:00:d1");
+    WT_EQ(route(&H, "/api/devices", ""), 200);
+    row_of(body_of(g_out), "02:00:00:00:00:d2", row, sizeof(row));
+    WT_HAS(row, "\"risk\":1,\"risk_signals\":1,");
+    WT_EQ(sdb_exec(g_db, "DELETE FROM devices WHERE mac IN"
+                         " ('02:00:00:00:00:d1','02:00:00:00:00:d2');"), 0);
+}
+
 /* One device, each list in its own scope. Seen red: the SSIDs under
  * Local with the !loc test on the ssids list removed; the ARP address
  * under Monitor with the !mon test on the ips list removed; M's
@@ -1039,6 +1258,17 @@ static void test_alerts_history_scoped(void) {
     WT_EQ(route(&H, "/api/wifi/aps", "scope=monitor"), 200);
     WT_HAS(body_of(g_out), "RadioOnlyNet");
     WT_EQ(route(&H, "/api/wifi/aps", "scope=local&sort=bogus"), 400);   /* still checked */
+    /* ...and nothing is read for an answer thrown away: sloth.db is not
+     * opened. Seen red with route_m5() running the route whole (its
+     * check_only copy left 0). */
+    web_sdb_stats_t st0, st1;
+    web_slothdb_stats(&g_sdb, &st0);
+    WT_EQ(route(&H, "/api/wifi/aps", "scope=local"), 200);
+    WT_EQ(route(&H, "/api/flows", "scope=monitor&proto=ssh"), 200);
+    WT_EQ(route(&H, "/api/history/flows", "scope=monitor&from=1791000000"), 200);
+    web_slothdb_stats(&g_sdb, &st1);
+    WT_EQ(st1.opens, st0.opens);
+    WT_EQ(route(&H, "/api/flows", "scope=monitor&proto=bogus"), 400);
     WT_EQ(route(&H, "/api/flows", "scope=monitor&proto=ssh"), 200);
     b = body_of(g_out);
     WT_HAS(b, "\"out_of_scope\":true");
@@ -1049,6 +1279,44 @@ static void test_alerts_history_scoped(void) {
     WT_HAS(body_of(g_out), "\"out_of_scope\":true");
     same_as_hybrid(&H, "/api/flows", "proto=ssh");
     same_as_hybrid(&H, "/api/wifi/aps", "");
+}
+
+/* The WiFi view's Local half: the managed card's own scan (wifi_aps)
+ * and its link (wifi_stas), Wi-Fi through the host's own network. Shown
+ * under Local and Hybrid; under Monitor out of scope, the parameters
+ * checked first. Seen red with the router's Monitor test for
+ * /api/wifi/local removed (HomeNet under Monitor). */
+static void test_wifi_card_scoped(void) {
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO wifi_aps (bssid,ssid,signal_dbm,channel,enc,status,first_seen,"
+        "last_seen) VALUES ('02:00:00:00:00:f0','HomeNet',-50,36,'WPA2',1,%lld,%lld),"
+        " ('02:00:00:00:00:f1','Neighbour',-80,6,'WPA3',-1,%lld,%lld);",
+        (long long)SDB_NOW - 7200, (long long)SDB_NOW - 30,
+        (long long)SDB_NOW - 7200, (long long)SDB_NOW - 300);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    WT_EQ(route(&H, "/api/wifi/local", "scope=local"), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "{\"scope\":\"local\",\"now\":");
+    WT_HAS(b, "\"bssid\":\"02:00:00:00:00:f0\",\"ssid\":\"HomeNet\",\"signal\":-50,"
+              "\"channel\":36,\"enc\":\"WPA2\",\"status\":\"associated\"");
+    WT_HAS(b, "\"ssid\":\"Neighbour\",\"signal\":-80,\"channel\":6,\"enc\":\"WPA3\","
+              "\"status\":null");
+    WT_HAS(b, "\"stas\":[{\"mac\":\"02:00:00:00:00:b0\",\"signal\":-33,");
+    WT_HAS(b, "\"aps_more\":false");
+    WT_EQ(route(&H, "/api/wifi/local", "scope=local&limit=1"), 200);
+    WT_HAS(body_of(g_out), "\"aps_more\":true");
+    WT_LACKS(body_of(g_out), "Neighbour");
+    WT_EQ(route(&H, "/api/wifi/local", "scope=monitor"), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"out_of_scope\":true");
+    WT_LACKS(b, "HomeNet");
+    WT_EQ(route(&H, "/api/wifi/local", "scope=monitor&limit=0"), 400);
+    WT_EQ(route(&H, "/api/wifi/local", "limit=x"), 400);
+    WT_EQ(route(&H, "/api/wifi/local", ""), 200);
+    WT_HAS(body_of(g_out), "HomeNet");
+    same_as_hybrid(&H, "/api/wifi/local", "");
+    WT_EQ(sdb_exec(g_db, "DELETE FROM wifi_aps;"), 0);
 }
 
 #endif
@@ -1069,7 +1337,107 @@ static void test_page_carries_the_switch(void) {
     WT_HAS(p, "return fetch(scoped(path), { cache: \"no-store\" })");
     WT_HAS(p, "fetch(scoped(\"/api/live\"), { cache: \"no-store\" })");
     WT_HAS(p, "if (!scopeKeeps(r.sc)) return;");
+    /* The review's fixes, as text (the suite runs no script): a live()
+     * answer from before a scope change is dropped, an untagged record is
+     * not kept under a scope, a device row's Monitor line is the one
+     * held, the open-anomalies tile follows /api/live's scoped count and
+     * not the Anomalies list's window and chips, and the WiFi view reads
+     * the managed card under Local and Hybrid. Each seen red with its
+     * line taken out of app.js. */
+    WT_HAS(p, "if (gen !== liveGen || asked !== SCOPE ||");
+    WT_HAS(p, "    liveGen++;\n");
+    WT_HAS(p, "if (typeof sc !== \"number\") return false;");
+    WT_HAS(p, "r = { seq: r.seq, type: r.type, ts: r.ts, text: recText(r), sc: r.sc };");
+    WT_HAS(p, "if (SCOPE !== \"hybrid\" && num(l.anomalies_open)) {");
+    WT_LACKS(p, "var nOpen =");
+    WT_HAS(p, "if (SCOPE !== \"monitor\") wifiCard(gen);");
+    WT_HAS(p, "getJSON(\"/api/wifi/local\")");
+    WT_HAS(p, "<section class=\"panel card-local\">");
 }
+
+#ifdef WITH_SQLITE
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define SC_TIME_SCALE 4
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define SC_TIME_SCALE 4
+#endif
+#endif
+#ifndef SC_TIME_SCALE
+#define SC_TIME_SCALE 1
+#endif
+
+static long long sc_mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+#define BIG_DEVS 32840
+#define BIG_ARP   5000
+
+/* The scoped device reads on a busy LAN's sloth.db: 32,840 devices and
+ * 5,000 ARP rows. Each scope's Devices view, History devices and the
+ * overview answer inside their budgets (scaled for the sanitizers),
+ * not sloth_db_timeout. Seen red (each Local read a 503) with dcols()'s
+ * ARP columns the correlated subqueries again, one scan of arp per
+ * device: arp is keyed (ip, mac), and nothing indexes mac. */
+static void test_scoped_reads_on_a_large_file(void) {
+    char dir[64], path[128], sql[2048], q[160];
+    snprintf(dir, sizeof(dir), "/tmp/slothweb-scbig-XXXXXX");
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    snprintf(path, sizeof(path), "%s/sloth.db", dir);
+    WT_EQ(sdb_make(path, db_schema_version(), 0), 0);
+    const long long N = SDB_NOW;
+    snprintf(sql, sizeof(sql),
+        "BEGIN;"
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n"
+        " WHERE i < %d - 1)"
+        " INSERT INTO devices (mac,ip,sources,first_seen,last_seen)"
+        " SELECT printf('02:00:%%02x:%%02x:%%02x:%%02x', i / 16777216 %% 256,"
+        " i / 65536 %% 256, i / 256 %% 256, i %% 256),"
+        " CASE WHEN i < %d THEN printf('10.%%d.%%d.%%d', i / 65536, i / 256 %% 256,"
+        " i %% 256) END, CASE WHEN i < %d THEN 1 ELSE 16 END,"
+        " %lld - i, %lld - i %% 600 FROM n;"
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n"
+        " WHERE i < %d - 1)"
+        " INSERT INTO arp (ip,mac,iface,first_seen,last_seen)"
+        " SELECT printf('10.%%d.%%d.%%d', i / 65536, i / 256 %% 256, i %% 256),"
+        " printf('02:00:%%02x:%%02x:%%02x:%%02x', i / 16777216 %% 256,"
+        " i / 65536 %% 256, i / 256 %% 256, i %% 256), 'eth0', %lld - i, %lld FROM n;"
+        "COMMIT;",
+        BIG_DEVS, BIG_ARP, BIG_ARP, N - 86400, N, BIG_ARP, N - 3 * 86400, N - 60);
+    WT_EQ(sdb_exec(path, sql), 0);
+    web_slothdb_t s;
+    web_slothdb_init(&s, path, NULL);
+    web_m4_t m = g_m4;
+    m.sdb = &s;
+    web_health_t h = H;
+    h.m4 = &m;
+    static const struct { const char *path, *q; int budget; } R[] = {
+        { "/api/devices", "scope=local", WEB_SDB_HTTP_MS },
+        { "/api/devices", "scope=local&sort=first", WEB_SDB_HTTP_MS },
+        { "/api/devices", "scope=monitor", WEB_SDB_HTTP_MS },
+        { "/api/history/devices", "scope=local&from=%lld", WEB_SDB_HTTP_MS },
+        { "/api/history/overview", "scope=local&from=%lld&cols=24", WEB_SDB_OVERVIEW_MS },
+    };
+    for (size_t i = 0; i < sizeof(R) / sizeof(R[0]); i++) {
+        snprintf(q, sizeof(q), R[i].q, N - 2 * 86400);
+        long long t0 = sc_mono_ms();
+        int st = route(&h, R[i].path, q);
+        long long took = sc_mono_ms() - t0;
+        fprintf(stderr, "    %s?%s: %d in %lld ms (budget %d)\n", R[i].path, q, st,
+                took, R[i].budget);
+        WT_EQ(st, 200);
+        WT_ASSERT(took < (long long)R[i].budget * SC_TIME_SCALE);
+    }
+    WT_EQ(route(&h, "/api/devices", "scope=local&limit=1&sort=mac"), 200);
+    WT_HAS(body_of(g_out), "\"first_seen\":1792368000");   /* ARP's, N - 3 d */
+    web_slothdb_destroy(&s);
+    unlink(path);
+    rmdir(dir);
+}
+#endif
 
 void run_scope_tests(void) {
     WT_RUN(test_alert_table_is_the_def);
@@ -1080,6 +1448,7 @@ void run_scope_tests(void) {
     live_up(&g_live);
     WT_RUN(test_live_scoped);
     WT_RUN(test_live_ip_on_radio);
+    WT_RUN(test_live_iface_radios);
     WT_RUN(test_router);
     WT_RUN(test_series_scoped);
     WT_RUN(test_presence_split);
@@ -1087,8 +1456,12 @@ void run_scope_tests(void) {
 #ifdef WITH_SQLITE
     WT_EQ(sdb_up(), 0);
     WT_RUN(test_devices_scoped);
+    WT_RUN(test_devices_anomalies_scoped);
+    WT_RUN(test_devices_camera_and_probe_only_scoped);
     WT_RUN(test_device_scoped);
     WT_RUN(test_alerts_history_scoped);
+    WT_RUN(test_wifi_card_scoped);
+    WT_RUN(test_scoped_reads_on_a_large_file);
     sdb_down();
 #endif
     WT_RUN(test_page_carries_the_switch);

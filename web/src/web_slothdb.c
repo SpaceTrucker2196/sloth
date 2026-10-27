@@ -37,6 +37,16 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "probe_clients", "signal_dbm", 1, 0, 0 }, { "probe_clients", "last_seen", 1, 0, 0 },
     { "wifi_stas", "mac", 1, 0, 0 },     { "wifi_stas", "signal_dbm", 1, 0, 0 },
     { "wifi_stas", "first_seen", 1, 0, 0 }, { "wifi_stas", "last_seen", 1, 0, 0 },
+    /* The WiFi view under Local (web_wifi.h): the managed card's own
+     * scan and station dump. Link rates, counters and NL80211 BSS
+     * status: no secret in any. */
+    { "wifi_stas", "tx_rate_kbps", 1, 0, 0 }, { "wifi_stas", "rx_rate_kbps", 1, 0, 0 },
+    { "wifi_stas", "connected_secs", 1, 0, 0 }, { "wifi_stas", "inactive_ms", 1, 0, 0 },
+    { "wifi_stas", "tx_bytes", 1, 0, 0 },  { "wifi_stas", "rx_bytes", 1, 0, 0 },
+    { "wifi_aps", "bssid", 1, 0, 0 },      { "wifi_aps", "ssid", 1, 0, 0 },
+    { "wifi_aps", "signal_dbm", 1, 0, 0 }, { "wifi_aps", "channel", 1, 0, 0 },
+    { "wifi_aps", "enc", 1, 0, 0 },        { "wifi_aps", "status", 1, 0, 0 },
+    { "wifi_aps", "first_seen", 1, 0, 0 }, { "wifi_aps", "last_seen", 1, 0, 0 },
     { "devices", "cam_signals", 6, 1, 0 },
     { "pnl_ssids", "mac", 1, 0, 0 },     { "pnl_ssids", "ssid", 1, 0, 0 },
     { "pnl_ssids", "first_seen", 1, 0, 0 }, { "pnl_ssids", "last_seen", 1, 0, 0 },
@@ -436,6 +446,16 @@ int web_sdb_ap_ssids(web_sdb_conn_t *c, const char *bssid, int max,
     (void)c; (void)bssid; (void)max; (void)fn; (void)ctx;
     return -1;
 }
+int web_sdb_card_aps(web_sdb_conn_t *c, long long limit, web_sdb_card_ap_fn fn,
+                     void *ctx) {
+    (void)c; (void)limit; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_card_stas(web_sdb_conn_t *c, long long limit, web_sdb_card_sta_fn fn,
+                      void *ctx) {
+    (void)c; (void)limit; (void)fn; (void)ctx;
+    return -1;
+}
 int web_sdb_ap_ssid(web_sdb_conn_t *c, const char *bssid, char *out) {
     (void)c; (void)bssid;
     out[0] = '\0';
@@ -649,8 +669,10 @@ static void fn_z(sqlite3_context *cx, int n, sqlite3_value **v) {
     web_sdb_conn_t *c = sqlite3_user_data(cx);
     const unsigned char *m = sqlite3_value_text(v[0]);
     double z;
+    /* Under a scope, the |z| of its own metrics only. */
     if (!m || !c->s->fns.an ||
-        !web_anomaly_device_z(c->s->fns.an, (const char *)m, c->now_s, &z)) {
+        !web_anomaly_device_z_scoped(c->s->fns.an, (const char *)m, c->now_s,
+                                     c->scope, &z)) {
         sqlite3_result_null(cx);
         return;
     }
@@ -662,8 +684,18 @@ static void fn_anoms(sqlite3_context *cx, int n, sqlite3_value **v) {
     web_sdb_conn_t *c = sqlite3_user_data(cx);
     const unsigned char *m = sqlite3_value_text(v[0]);
     int kind = sqlite3_value_int(v[1]);
+    /* Under a scope, the episodes it shows (web_anomaly_ep_tag()), as
+     * the device's drawer lists them. */
+    web_scope_ctx_t hy;
+    const web_scope_ctx_t *sc = c->sc;
+    if (c->scope && !sc) {
+        memset(&hy, 0, sizeof(hy));
+        hy.scope = c->scope;
+        sc = &hy;
+    }
     sqlite3_result_int(cx, m && c->s->fns.an
-        ? web_anomaly_key_count(c->s->fns.an, (const char *)m, kind) : 0);
+        ? web_anomaly_key_count_scoped(c->s->fns.an, (const char *)m, kind,
+                                       c->scope ? sc : NULL, c->ru) : 0);
 }
 
 static void fn_ptr(sqlite3_context *cx, int n, sqlite3_value **v) {
@@ -1217,9 +1249,12 @@ int web_sdb_device(web_sdb_conn_t *c, const char *mac, web_sdb_dev_t *out) {
                  (c->opt & WEB_SDB_OPT_VCI) && c->scope != WEB_SCOPE_MONITOR
                      ? "d.dhcp_vci" : "NULL");
     } else {
-        const char *in = c->scope == WEB_SCOPE_MONITOR
-                       ? "(d.cam_signals & 18) <> 0"
-                       : "((d.cam_signals & 45) <> 0 OR d.device_class = 3)";
+        char in[96];
+        if (c->scope == WEB_SCOPE_MONITOR)
+            snprintf(in, sizeof(in), "(d.cam_signals & %d) <> 0", WEB_CAM_MONITOR);
+        else
+            snprintf(in, sizeof(in), "((d.cam_signals & %d) <> 0 OR d.device_class = 3)",
+                     WEB_CAM_LOCAL);
         snprintf(extra, sizeof(extra),
                  "CASE WHEN %s THEN d.device_class ELSE 0 END,"
                  " CASE WHEN %s THEN d.camera_vendor END,"
@@ -1680,6 +1715,76 @@ int web_sdb_aps(web_sdb_conn_t *c, int sort, long long limit,
         a.k_ssids = sqlite3_column_int64(st, 16);
         a.k_overlap = sqlite3_column_int64(st, 17);
         a.k_ie_uniform = sqlite3_column_int64(st, 18);
+        n++;
+        if (fn(ctx, &a)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_sdb_card_aps(web_sdb_conn_t *c, long long limit, web_sdb_card_ap_fn fn,
+                     void *ctx) {
+    static const char *const want[] = { "bssid", "ssid", "signal_dbm", "channel",
+                                        "enc", "status", "first_seen", "last_seen",
+                                        NULL };
+    if (!have_all(c, "wifi_aps", want)) return 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT bssid, ssid, signal_dbm, channel, enc, status, first_seen,"
+            " last_seen FROM wifi_aps ORDER BY last_seen DESC, bssid LIMIT ?1",
+            -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int64(st, 1, limit);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_card_ap_t a;
+        memset(&a, 0, sizeof(a));
+        key_text(st, 0, a.bssid);
+        text(st, 1, a.ssid, WEB_SDB_TEXT_MAX);
+        a.has_signal = sqlite3_column_type(st, 2) != SQLITE_NULL;
+        a.signal_dbm = sqlite3_column_int(st, 2);
+        a.channel = sqlite3_column_int64(st, 3);
+        text(st, 4, a.enc, WEB_SDB_TEXT_MAX);
+        a.has_status = sqlite3_column_type(st, 5) != SQLITE_NULL;
+        a.status = sqlite3_column_int64(st, 5);
+        a.first_seen = sqlite3_column_int64(st, 6);
+        a.last_seen = sqlite3_column_int64(st, 7);
+        n++;
+        if (fn(ctx, &a)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_sdb_card_stas(web_sdb_conn_t *c, long long limit, web_sdb_card_sta_fn fn,
+                      void *ctx) {
+    static const char *const want[] = { "mac", "signal_dbm", "tx_rate_kbps",
+                                        "rx_rate_kbps", "connected_secs",
+                                        "inactive_ms", "tx_bytes", "rx_bytes",
+                                        "first_seen", "last_seen", NULL };
+    if (!have_all(c, "wifi_stas", want)) return 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT mac, signal_dbm, tx_rate_kbps, rx_rate_kbps, connected_secs,"
+            " inactive_ms, tx_bytes, rx_bytes, first_seen, last_seen FROM wifi_stas"
+            " ORDER BY last_seen DESC, mac LIMIT ?1", -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int64(st, 1, limit);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_card_sta_t a;
+        memset(&a, 0, sizeof(a));
+        key_text(st, 0, a.mac);
+        a.has_signal = sqlite3_column_type(st, 1) != SQLITE_NULL;
+        a.signal_dbm = sqlite3_column_int(st, 1);
+        a.tx_kbps = sqlite3_column_int64(st, 2);
+        a.rx_kbps = sqlite3_column_int64(st, 3);
+        a.connected_s = sqlite3_column_int64(st, 4);
+        a.inactive_ms = sqlite3_column_int64(st, 5);
+        a.tx_bytes = sqlite3_column_int64(st, 6);
+        a.rx_bytes = sqlite3_column_int64(st, 7);
+        a.first_seen = sqlite3_column_int64(st, 8);
+        a.last_seen = sqlite3_column_int64(st, 9);
         n++;
         if (fn(ctx, &a)) { rc = SQLITE_DONE; break; }
     }

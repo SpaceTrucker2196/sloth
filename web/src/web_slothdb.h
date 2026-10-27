@@ -78,6 +78,7 @@
 #include "web_oui.h"
 #include "web_query.h"
 #include "web_rollup.h"
+#include "web_scope.h"
 #include "web_secret.h"
 
 #define WEB_SDB_SCHEMA_MIN 1
@@ -199,6 +200,11 @@ typedef struct {
     /* The capture scope the reads answer for (web_scope.h WEB_SCOPE_*),
      * set by the route after the open; 0 (Hybrid) reads as before. */
     int             scope;
+    /* What web_z() and web_anoms() tag with under that scope: the
+     * request's facts (the radios, web_scope.h) and the rollup the
+     * presence tags read. Either may be NULL. */
+    const web_scope_ctx_t *sc;
+    web_rollup_t   *ru;
 } web_sdb_conn_t;
 
 /* How web_sdb_overview() counted a table. */
@@ -380,6 +386,33 @@ typedef struct {
 } web_sdb_ap_t;
 
 typedef int (*web_sdb_ap_fn)(void *ctx, const web_sdb_ap_t *a);
+
+/* The managed Wi-Fi card's own view (web_scope.h: Local's): its nl80211
+ * scan (wifi_aps) and its station dump (wifi_stas, its link to the AP
+ * it is associated with). status is NL80211_BSS_STATUS_* (sloth.h
+ * WIFI_STATUS_*: -1 not current, 0 authenticated, 1 associated, 2 IBSS
+ * joined). */
+typedef struct {
+    char      bssid[WEB_KEY_MAX + 1];
+    char      ssid[WEB_SDB_TEXT_MAX + 1];
+    char      enc[WEB_SDB_TEXT_MAX + 1];
+    int       has_signal, signal_dbm, has_status;
+    long long channel, status, first_seen, last_seen;
+} web_sdb_card_ap_t;
+typedef struct {
+    char      mac[WEB_KEY_MAX + 1];
+    int       has_signal, signal_dbm;
+    long long tx_kbps, rx_kbps, connected_s, inactive_ms, tx_bytes, rx_bytes;
+    long long first_seen, last_seen;
+} web_sdb_card_sta_t;
+typedef int (*web_sdb_card_ap_fn)(void *ctx, const web_sdb_card_ap_t *a);
+typedef int (*web_sdb_card_sta_fn)(void *ctx, const web_sdb_card_sta_t *a);
+/* Up to limit rows each, the latest seen first; the count, 0 when the
+ * file has no such table, -1. */
+int web_sdb_card_aps(web_sdb_conn_t *c, long long limit, web_sdb_card_ap_fn fn,
+                     void *ctx);
+int web_sdb_card_stas(web_sdb_conn_t *c, long long limit, web_sdb_card_sta_fn fn,
+                      void *ctx);
 
 enum { WEB_AP_SORT_LAST = 0, WEB_AP_SORT_SSIDS, WEB_AP_SORT_KARMA,
        WEB_AP_SORT_BSSID, WEB_AP_SORT_SSID, WEB_AP_SORT_CHANNEL,

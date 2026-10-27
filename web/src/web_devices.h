@@ -66,7 +66,15 @@ typedef struct {
     /* The request's capture scope (web_scope.h); NULL is Hybrid. Set by
      * the router on its own copy, never on the shared one. */
     const web_scope_ctx_t *sc;
+    /* Validate the query and stop, reading nothing (the router's copy,
+     * for a view the scope holds nothing of): WEB_M4_CHECKED(). */
+    int                  check_only;
 } web_m4_t;
+
+/* In a route, once its parameters are checked: under check_only, an
+ * empty 200 and no read. */
+#define WEB_M4_CHECKED(m, len, status) \
+    do { if ((m)->check_only) { *(len) = 0; *(status) = 200; return 0; } } while (0)
 
 /* The routes. Each renders its JSON body into body (cap bytes) and sets
  * *status; 0, or -1 when even an error did not fit. */

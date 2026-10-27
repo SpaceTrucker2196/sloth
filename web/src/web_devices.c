@@ -251,12 +251,17 @@ static void dev_json(web_jw_t *w, const web_m4_t *m, const web_sdb_dev_t *d,
     web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, d->last_seen);
     double z;
     web_jw_raw(w, ",\"z\":");
-    if (m->anomaly && web_anomaly_device_z(m->anomaly, d->mac, now_s, &z))
+    /* Under a scope (web_scope.h), the |z| of its own metrics and the
+     * episodes it shows, as the drawer lists them. */
+    if (m->anomaly && web_anomaly_device_z_scoped(m->anomaly, d->mac, now_s,
+                                                  scope_of(m), &z))
         jw_real1(w, z);
     else
         web_jw_raw(w, "null");
     web_jw_raw(w, ",\"anomalies\":");
-    web_jw_int(w, m->anomaly ? web_anomaly_key_count(m->anomaly, d->mac, -1) : 0);
+    web_jw_int(w, m->anomaly ? web_anomaly_key_count_scoped(m->anomaly, d->mac, -1,
+                                   scope_of(m) ? m->sc : NULL,
+                                   m->tsdb ? m->tsdb->ru : NULL) : 0);
     web_jw_raw(w, ",\"presence\":");
     if (bits) {
         char hx[WEB_DEV_CELLS / 4 + 1];
@@ -336,6 +341,8 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
         return sdb_unavailable(m, body, cap, len, status, oerr);
     }
     conn.scope = scope_of(m);
+    conn.sc = m->sc;
+    conn.ru = m->tsdb ? m->tsdb->ru : NULL;
     const char *fail_why = "error";
     int got = web_sdb_devices(&conn, q, WEB_SORT_PACK(sort, dir), limit + 1,
                               offset, collect, &c, &fail_why);
@@ -450,6 +457,8 @@ int web_history_devices_route(const web_m4_t *m, const char *query,
         return sdb_unavailable(m, body, cap, len, status, oerr);
     }
     conn.scope = scope_of(m);
+    conn.sc = m->sc;
+    conn.ru = m->tsdb ? m->tsdb->ru : NULL;
     int got = web_sdb_devices_between(&conn, from, to, limit + 1, offset,
                                       collect, &c);
     int to_out = conn.timed_out, schema = conn.schema;
@@ -763,7 +772,11 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
      * the host's own interfaces'), and so is the stream's binding. */
     int scope = scope_of(m);
     int mon = scope == WEB_SCOPE_MONITOR, loc = scope == WEB_SCOPE_LOCAL;
-    if (have_db) conn.scope = scope;
+    if (have_db) {
+        conn.scope = scope;
+        conn.sc = m->sc;
+        conn.ru = m->tsdb ? m->tsdb->ru : NULL;
+    }
     int found = have_db ? web_sdb_device(&conn, mac, &d) : 0;
     if (found < 0) found = 0;
     char sip[WEB_KEY_MAX + 1] = "";
@@ -903,7 +916,11 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
      * MACs and the names behind it are all the host's own interfaces'.
      * The device record is the scope's (web_sdb_device()). */
     int scope = scope_of(m), mon = scope == WEB_SCOPE_MONITOR;
-    if (have_db) conn.scope = scope;
+    if (have_db) {
+        conn.scope = scope;
+        conn.sc = m->sc;
+        conn.ru = m->tsdb ? m->tsdb->ru : NULL;
+    }
     char mac[WEB_KEY_MAX + 1] = "", ip[WEB_KEY_MAX + 1] = "";
     if (is_mac) {
         snprintf(mac, sizeof(mac), "%s", key);

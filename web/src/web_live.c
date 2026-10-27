@@ -102,6 +102,13 @@ void web_live_sock_connected(web_live_t *l, long long now_ms) {
      * could over-count for good. */
     l->ninc = 0;
     l->inc_overflow = 0;
+    /* Which interfaces are monitor radios is the new stream's to say. */
+    l->sh_mon[0] = '\0';
+    l->nsens_mon = 0;
+    l->sc.nmon = 0;
+    l->sc.radio = 0;
+    l->sc_known = 0;
+    l->batches_conn = 0;
     pthread_mutex_unlock(&l->mu);
 }
 
@@ -138,11 +145,21 @@ static int type_ok(const char *t) {
     return 1;
 }
 
-static void count_type(web_live_t *l, const char *t, long long now_ms) {
+static void type_scope_tick(web_live_type_t *e, int sc, long long now_ms) {
+    for (int k = 0; k < 2; k++)
+        if (sc & (k ? WEB_SC_L : WEB_SC_M)) {
+            e->n_sc[k]++;
+            ring_tick(&e->rate_sc[k], now_ms);
+        }
+}
+
+/* One record of type t, whose scope tag is sc. */
+static void count_type(web_live_t *l, const char *t, int sc, long long now_ms) {
     for (int i = 0; i < l->ntypes; i++)
         if (!strcmp(l->types[i].name, t)) {
             l->types[i].n++;
             ring_tick(&l->types[i].rate, now_ms);
+            type_scope_tick(&l->types[i], sc, now_ms);
             return;
         }
     if (l->ntypes >= WEB_LIVE_TYPES) {
@@ -151,10 +168,14 @@ static void count_type(web_live_t *l, const char *t, long long now_ms) {
         return;
     }
     web_live_type_t *e = &l->types[l->ntypes++];
+    memset(e, 0, sizeof(*e));
     snprintf(e->name, sizeof(e->name), "%s", t);
     e->n = 1;
     ring_init(&e->rate);
+    ring_init(&e->rate_sc[0]);
+    ring_init(&e->rate_sc[1]);
     ring_tick(&e->rate, now_ms);
+    type_scope_tick(e, sc, now_ms);
 }
 
 static void rate_tick(web_live_t *l, long long now_ms) {
@@ -262,6 +283,9 @@ static void devices_step(web_live_t *l, const web_jrec_t *r, const char *t,
         if (l->batch_open && !l->batch_saw_dev && !l->batch_taint)
             publish(l, 0, ts);
         l->batch_open = 1;
+        /* The second batch on this connection: the first one's sensor
+         * records have all been read, so the radios are known. */
+        if (++l->batches_conn >= 2) l->sc_known = 1;
         l->batch_saw_dev = 0;
         l->batch_taint = 0;
         /* Anything dropped before this point came before the batch. */
@@ -365,6 +389,24 @@ static void summarise(const web_jrec_t *r, int is_alert, char *out,
      * short of that, so the ragged tail never reaches out. That holds
      * while cap stays under sizeof(tmp) - 1: SUMMARY_TMP_FITS fails the
      * build otherwise. */
+    web_utf8_copy(out, cap, tmp);
+}
+
+/* A device row's ticker line under Monitor: its MAC and last SSID (the
+ * display form), the radio's columns. Its address and hostname are the
+ * host's own interfaces' (web_scope.h), so summarise()'s line, which
+ * leads with them, is Local's and Hybrid's only. */
+static void device_text_m(const web_jrec_t *r, char *out, size_t cap) {
+    char tmp[SUMMARY_TMP];
+    const char *mac = web_jl_str(r, "mac");
+    const char *ss = web_jl_str(r, "last_ssid");
+    /* web_ssid_escape() cuts before a whole escape; with the MAC and
+     * the gap the line fits tmp. */
+    char esc[SUMMARY_TMP - 24] = "";
+    if (ss && *ss) web_ssid_escape(ss, strnlen(ss, WEB_SSID_IN_MAX), esc, sizeof(esc), NULL);
+    if (!mac || strlen(mac) > 17) mac = "";
+    snprintf(tmp, sizeof(tmp), "%s%s%s", mac, esc[0] && *mac ? "  " : "", esc);
+    /* As in summarise(): tmp is cut only when full, far past cap. */
     web_utf8_copy(out, cap, tmp);
 }
 
@@ -553,6 +595,22 @@ static void alert_record(web_live_t *l, const web_jrec_t *r, const char *t,
     if (match_ip_ok(ip)) snprintf(a->match_ip, sizeof(a->match_ip), "%s", ip);
 }
 
+/* sc.mon from this connection's two sources of radio names. */
+static void mon_rebuild(web_live_t *l) {
+    l->sc.nmon = 0;
+    web_scope_note_mon(&l->sc, l->sh_mon);
+    for (int i = 0; i < l->nsens_mon; i++) web_scope_note_mon(&l->sc, l->sens_mon[i]);
+}
+
+static void sens_mon_add(web_live_t *l, const char *name) {
+    if (!name || !name[0] || strlen(name) > WEB_SCOPE_IFNAME) return;
+    for (int i = 0; i < l->nsens_mon; i++)
+        if (!strcmp(l->sens_mon[i], name)) return;
+    if (l->nsens_mon >= WEB_SCOPE_MON_MAX) return;
+    snprintf(l->sens_mon[l->nsens_mon++], WEB_SCOPE_IFNAME + 1, "%s", name);
+    mon_rebuild(l);
+}
+
 static void sensor_record(web_live_t *l, const web_jrec_t *r, long long ts,
                           long long now_ms) {
     l->sh_seen = 1;
@@ -574,7 +632,14 @@ static void sensor_record(web_live_t *l, const web_jrec_t *r, long long ts,
     l->cap_linktype = web_jl_int(r, "capture_linktype", -1);
     if (l->cap_linktype < -1 || l->cap_linktype > 65535) l->cap_linktype = -1;
     l->monitor_only = web_jl_int(r, "monitor_only", 0) == 1;
-    web_scope_note_mon(&l->sc, l->mon_iface);
+    /* Replaced, not added to: a radio this sloth no longer names is not
+     * one. */
+    if (strlen(l->mon_iface) <= WEB_SCOPE_IFNAME)
+        snprintf(l->sh_mon, sizeof(l->sh_mon), "%s", l->mon_iface);
+    else
+        l->sh_mon[0] = '\0';
+    l->sc_known = 1;
+    mon_rebuild(l);
     l->sc.radio = l->cap_open &&
                   web_scope_ip_on_radio(l->cap_linktype, l->cap_iface, l->mon_iface);
 }
@@ -585,7 +650,8 @@ static int rec_tag(web_live_t *l, const web_jrec_t *r, const char *t) {
     if (!strcmp(t, "alert") || !strncmp(t, "alert.", 6))
         tag = web_scope_alert((int)web_jl_int(r, "ty", -1));
     else if (!strcmp(t, "iface"))
-        tag = web_scope_iface(web_jl_str(r, "name"), &l->sc);
+        /* Until the radios are known an interface is neither scope's. */
+        tag = l->sc_known ? web_scope_iface(web_jl_str(r, "name"), &l->sc) : 0;
     else if (!strcmp(t, "device"))
         tag = web_scope_device(web_jl_int(r, "sources", 0),
                                web_jl_int(r, "cam_signals", -1),
@@ -613,8 +679,6 @@ void web_live_apply(web_live_t *l, const web_jrec_t *r, long long now_ms) {
         pthread_mutex_unlock(&l->mu);
         return;
     }
-    count_type(l, t, now_ms);
-
     if (!strcmp(t, "socket_gap")) {
         l->gaps++;
         long long d = web_jl_int(r, "dropped", 0);
@@ -631,11 +695,12 @@ void web_live_apply(web_live_t *l, const web_jrec_t *r, long long now_ms) {
      * the monitor radios, and only them, as SENSOR_WIFI). */
     if (!strcmp(t, "sensor")) {
         const char *k = web_jl_str(r, "kind");
-        if (k && !strcmp(k, "wifi")) web_scope_note_mon(&l->sc, web_jl_str(r, "iface"));
+        if (k && !strcmp(k, "wifi")) sens_mon_add(l, web_jl_str(r, "iface"));
     }
     int sc = rec_tag(l, r, t);
-    if (sc & WEB_SC_M) ring_tick(&l->rate_scope[0], now_ms);
-    if (sc & WEB_SC_L) ring_tick(&l->rate_scope[1], now_ms);
+    count_type(l, t, sc, now_ms);
+    if (sc & WEB_SC_M) { ring_tick(&l->rate_scope[0], now_ms); l->records_sc[0]++; }
+    if (sc & WEB_SC_L) { ring_tick(&l->rate_scope[1], now_ms); l->records_sc[1]++; }
 
     web_live_rec_t *e = &l->ring[l->seq % WEB_LIVE_RING];
     l->seq++;
@@ -644,6 +709,8 @@ void web_live_apply(web_live_t *l, const web_jrec_t *r, long long now_ms) {
     e->sc = sc;
     snprintf(e->type, sizeof(e->type), "%s", t);
     summarise(r, is_alert || !strcmp(t, "alert"), e->text, WEB_LIVE_TEXT_MAX);
+    e->text_m[0] = '\0';
+    if (!strcmp(t, "device")) device_text_m(r, e->text_m, WEB_LIVE_TEXT_MAX);
     pthread_mutex_unlock(&l->mu);
 }
 
@@ -821,18 +888,9 @@ static void scope_sum(const web_live_t *l, const web_scope_ctx_t *sc,
         if (web_scope_pass(sc->scope, web_live_inc_tag(sc, &l->inc[i])))
             s->alerts[l->inc[i].sev]++;
     s->rate10 = web_live_rate10(&l->rate_scope[mon ? 0 : 1], now_ms);
+    s->records = l->records_sc[mon ? 0 : 1];
 }
 
-/* A type's row in the by-type tables: every record of a type a scope
- * can hold (an iface, a device, an alert lifecycle record can be
- * either). */
-static int type_in_scope(const web_scope_ctx_t *sc, const char *t) {
-    if (!sc || sc->scope == WEB_SCOPE_HYBRID) return 1;
-    if (!strcmp(t, "alert") || !strncmp(t, "alert.", 6)) return 1;
-    int tag = web_scope_record(t);
-    if (tag == WEB_SC_BYKEY) return 1;
-    return web_scope_pass(sc->scope, web_scope_eff(tag, sc->radio));
-}
 
 size_t web_live_json_scoped(web_live_t *l, const web_scope_ctx_t *sc,
                             char *out, size_t cap, long long now_ms) {
@@ -864,31 +922,43 @@ size_t web_live_json_scoped(web_live_t *l, const web_scope_ctx_t *sc,
     web_jw_raw(&w, ",\"records_s\":"); jw_rate(&w, s.rate10);
     web_jw_raw(&w, ",\"last_record_age_s\":"); jw_age(&w, s.last_record_age_ms);
 
+    /* By type. Under a scope, each type's records of that scope (their
+     * tags as they came: an iface, a device or an alert record is
+     * counted by its own), and only the types that have any; the table
+     * overflow and the malformed names are no scope's, so they are left
+     * out, and the rates of the types then sum to records_s exactly. */
+    int k_sc = scoped ? (sc->scope == WEB_SCOPE_MONITOR ? 0 : 1) : -1;
     web_jw_raw(&w, ",\"types\":{");
     for (int i = 0, k = 0; i < l->ntypes; i++) {
-        if (!type_in_scope(sc, l->types[i].name)) continue;
+        const web_live_type_t *ty = &l->types[i];
+        if (k_sc >= 0 && !ty->n_sc[k_sc]) continue;
         if (k++) web_jw_raw(&w, ",");
-        web_jw_key(&w, l->types[i].name);
-        web_jw_int(&w, (long long)l->types[i].n);
+        web_jw_key(&w, ty->name);
+        web_jw_int(&w, (long long)(k_sc >= 0 ? ty->n_sc[k_sc] : ty->n));
     }
-    web_jw_raw(&w, "},\"types_other\":"); web_jw_int(&w, (long long)l->types_other);
-    web_jw_raw(&w, ",\"types_invalid\":"); web_jw_int(&w, (long long)l->types_invalid);
+    web_jw_raw(&w, "}");
+    if (!scoped) {
+        web_jw_raw(&w, ",\"types_other\":"); web_jw_int(&w, (long long)l->types_other);
+        web_jw_raw(&w, ",\"types_invalid\":"); web_jw_int(&w, (long long)l->types_invalid);
+    }
     /* Records/s by type, over the same five seconds as records_s: the
      * rates of the types, types_other and types_invalid sum to it
-     * exactly (the Records view, the records/s tile's drill-down).
-     * Under a scope, the types it can hold: an iface, a device or an
-     * alert type is either, so there they count every record. */
+     * exactly (the Records view, the records/s tile's drill-down). */
     web_jw_raw(&w, ",\"types_rate\":{");
     for (int i = 0, k = 0; i < l->ntypes; i++) {
-        if (!type_in_scope(sc, l->types[i].name)) continue;
+        const web_live_type_t *ty = &l->types[i];
+        if (k_sc >= 0 && !ty->n_sc[k_sc]) continue;
         if (k++) web_jw_raw(&w, ",");
-        web_jw_key(&w, l->types[i].name);
-        jw_rate(&w, web_live_rate10(&l->types[i].rate, now_ms));
+        web_jw_key(&w, ty->name);
+        jw_rate(&w, web_live_rate10(k_sc >= 0 ? &ty->rate_sc[k_sc] : &ty->rate, now_ms));
     }
-    web_jw_raw(&w, "},\"types_other_rate\":");
-    jw_rate(&w, web_live_rate10(&l->rate_other, now_ms));
-    web_jw_raw(&w, ",\"types_invalid_rate\":");
-    jw_rate(&w, web_live_rate10(&l->rate_invalid, now_ms));
+    web_jw_raw(&w, "}");
+    if (!scoped) {
+        web_jw_raw(&w, ",\"types_other_rate\":");
+        jw_rate(&w, web_live_rate10(&l->rate_other, now_ms));
+        web_jw_raw(&w, ",\"types_invalid_rate\":");
+        jw_rate(&w, web_live_rate10(&l->rate_invalid, now_ms));
+    }
 
     web_jw_raw(&w, ",\"sensor\":{\"state\":"); web_jw_str(&w, s.sensor);
     if (l->sh_seen) {
@@ -949,7 +1019,9 @@ size_t web_live_json_scoped(web_live_t *l, const web_scope_ctx_t *sc,
         web_jw_raw(&w, "{\"seq\":"); web_jw_int(&w, (long long)e->seq);
         web_jw_raw(&w, ",\"type\":"); web_jw_str(&w, e->type);
         web_jw_raw(&w, ",\"ts\":"); web_jw_int(&w, e->ts);
-        web_jw_raw(&w, ",\"text\":"); web_jw_str(&w, e->text);
+        /* Under Monitor a device row's own line: no address, no name. */
+        int use_m = scoped && sc->scope == WEB_SCOPE_MONITOR && !strcmp(e->type, "device");
+        web_jw_raw(&w, ",\"text\":"); web_jw_str(&w, use_m ? e->text_m : e->text);
         if (scoped) { web_jw_raw(&w, ",\"sc\":"); web_jw_int(&w, e->sc); }
         web_jw_raw(&w, "}");
     }

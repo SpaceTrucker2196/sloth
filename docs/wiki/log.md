@@ -5584,3 +5584,21 @@ report events.
   is unscoped and labelled so. sloth's `sensor_health` gains
   `capture_linktype` and `monitor_only`, so the stream's IP records
   count as Monitor's while the IP capture is itself a radio.
+- 2026-10-27 — [[capture-scope]], [[slothweb]]: the capture scope's
+  review. The host's own tables (`arp` from `/proc/net/arp`,
+  `dhcp_lease` from the lease files, `scan_entry` from the `/proc`
+  sockets) and the rules over them (`PORT_SCAN`, `ARP_SPOOF`) stay Local
+  while the IP capture is a radio. A device row's anomaly count, z,
+  `has:anomaly`, `anomaly:`, `z:`, camera source bit and Monitor
+  PROBE_ONLY follow the scope's own evidence; A2 is placed by its MAC's
+  presence. The open-anomalies tile and strip take the scope's count
+  from `/api/live`; the Records view counts each type's scoped records;
+  a device row's ticker line under Monitor carries no address or
+  hostname; an interface is no scope's until the connection has named
+  its radios, and a new connection forgets the old one's. The WiFi view
+  under Local is the managed card's own scan and link
+  (`/api/wifi/local`). Local's device reads join `arp` once per
+  statement (7.2 s to 33 ms at 32,840 devices and 5,000 ARP rows). An
+  out-of-scope view is checked but not read. The ring and store cost of
+  the presence split is measured and stated. `monitor_only` is reported,
+  not used to tag.

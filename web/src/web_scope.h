@@ -118,6 +118,7 @@ void        web_scope_note_mon(web_scope_ctx_t *c, const char *name);
  * discovery). */
 #define WEB_SRC_LOCAL   (1 | 2 | 4 | 32)
 #define WEB_SRC_MONITOR (8 | 16)
+#define WEB_SRC_CAMERA  64
 #define WEB_CAM_MONITOR (2 | 16)
 #define WEB_CAM_LOCAL   (1 | 4 | 8 | 32)
 int         web_scope_device(long long sources, long long cam_signals,
@@ -132,7 +133,9 @@ int         web_scope_device(long long sources, long long cam_signals,
 #define WEB_RISK_MONITOR 8
 long long   web_scope_risk_mask(int scope);
 /* The weights and buckets, device_risk.c's: 1,1,1,1,3,3; 0 LOW, 1-2
- * MED, 3-4 HIGH, 5+ CRIT. */
+ * MED, 3-4 HIGH, 5+ CRIT. web_query.c's scoped SQL sums the same
+ * table, so the test that reads device_risk.c holds both. */
+extern const int web_scope_risk_w[6];
 int         web_scope_risk_level(long long signals);
 
 /* What the IP capture is, from sensor_health: a monitor radio when its

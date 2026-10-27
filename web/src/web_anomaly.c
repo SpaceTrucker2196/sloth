@@ -254,7 +254,8 @@ struct web_anom_priv {
     int         a4_n, a4_cap;
 
     kvtab_t     zl;             /* |z| now per device key, under a->mu */
-    double     *zv;
+    double     *zv;             /* three a key: every metric's, then the
+                                   Monitor and the Local metrics' (-1 none) */
 
     web_store_ptr_t *ptr_out;   /* the passive PTR rows to write */
 
@@ -365,7 +366,7 @@ int web_anomaly_init(web_anomaly_t *a, int cap, const web_anom_cfg_t *cfg) {
     p->sdb_new = calloc(WEB_ANOM_A2_SDB_NEW, sizeof(*p->sdb_new));
     p->a4_cap = mk;
     p->a4_keys = calloc((size_t)p->a4_cap, sizeof(*p->a4_keys));
-    p->zv = calloc((size_t)mk, sizeof(*p->zv));
+    p->zv = calloc((size_t)mk * 3, sizeof(*p->zv));
     p->ptr_out = calloc(256, sizeof(*p->ptr_out));
     if (!p->agg || !p->agg_head || !p->fan || !p->fan_del || !p->rep_new ||
         !p->cand || !p->ep_del || !p->ep_out || !p->firsts || !p->named ||
@@ -691,7 +692,16 @@ static void z_note(web_anomaly_t *a, int metric, const char *key, long long t,
     pthread_mutex_lock(&a->mu);
     int made;
     int i = kv_get(&p->zl, 0, key, t, &made, NULL);
-    if (made || p->zl.e[i].t != t || fabs(z) > p->zv[i]) p->zv[i] = fabs(z);
+    double *v = &p->zv[(size_t)i * 3];
+    if (made || p->zl.e[i].t != t) v[0] = v[1] = v[2] = -1;
+    /* A device metric's scope is its own, not its key's (web_scope.h):
+     * dev.frames and wifi.deauth are the radio's, dev.present.local the
+     * host's, dev.present every source's (Hybrid's alone). */
+    int tag = web_scope_metric(metric);
+    double az = fabs(z);
+    if (az > v[0]) v[0] = az;
+    if ((tag & WEB_SC_M) && az > v[1]) v[1] = az;
+    if ((tag & WEB_SC_L) && az > v[2]) v[2] = az;
     p->zl.e[i].t = t;
     pthread_mutex_unlock(&a->mu);
 }
@@ -1965,11 +1975,13 @@ int web_anomaly_ep_tag(const web_anom_ep_t *e, const web_scope_ctx_t *sc,
     case WEB_ANOM_A1_RATE:
         return web_scope_metric_key(e->metric, e->key, sc);
     case WEB_ANOM_A2_NEW:
-        return WEB_SC_M;          /* a probe, PNL or association first seen */
     case WEB_ANOM_A3_HOURS:
     case WEB_ANOM_A4_VENDOR: {
-        /* Scored on every source's presence; shown where the MAC has
-         * presence of the scope's own. A4's burst names no MAC. */
+        /* Scored on every source's presence, or (A2) on a MAC new to
+         * sloth whichever way it was heard: a probe, an association, an
+         * ARP row (web_sdb_new_macs()). Shown where the MAC has presence
+         * of the scope's own; until it has any, Hybrid alone. A2's burst
+         * and A4's name no MAC: they are every scope's. */
         if (!e->key[0]) return WEB_SC_META;
         int tag = 0;
         if (web_rollup_has(ru, WM_DEV_PRESENT_MON, e->key)) tag |= WEB_SC_M;
@@ -2090,29 +2102,66 @@ void web_anomaly_stats(web_anomaly_t *a, web_anom_stats_t *out) {
 
 int web_anomaly_device_z(web_anomaly_t *a, const char *key, long long now_s,
                          double *z) {
+    return web_anomaly_device_z_scoped(a, key, now_s, WEB_SCOPE_HYBRID, z);
+}
+
+int web_anomaly_device_z_scoped(web_anomaly_t *a, const char *key,
+                                long long now_s, int scope, double *z) {
     struct web_anom_priv *p = a->p;
     int ok = 0;
+    int k = scope == WEB_SCOPE_MONITOR ? 1 : scope == WEB_SCOPE_LOCAL ? 2 : 0;
     pthread_mutex_lock(&a->mu);
     int i = kv_find(&p->zl, 0, key);
-    if (i >= 0 && now_s - p->zl.e[i].t <= WEB_ANOM_Z_FRESH_S) {
-        *z = p->zv[i];
+    if (i >= 0 && now_s - p->zl.e[i].t <= WEB_ANOM_Z_FRESH_S &&
+        p->zv[(size_t)i * 3 + k] >= 0) {
+        *z = p->zv[(size_t)i * 3 + k];
         ok = 1;
     }
     pthread_mutex_unlock(&a->mu);
     return ok;
 }
 
-int web_anomaly_key_count(web_anomaly_t *a, const char *key, int kind) {
-    int n = 0;
-    pthread_mutex_lock(&a->mu);
-    for (int i = 0; i < a->cap; i++) {
-        const web_anom_ep_t *e = &a->ep[i];
-        if ((e->state == WEB_EP_OPEN || e->state == WEB_EP_CLOSED) &&
-            !strcmp(e->key, key) && (kind < 0 || kind_index(e->rule) == kind))
-            n++;
+/* The episodes matching (key, kind, open_only), counted under sc: they
+ * are copied out a few at a time, because a tag can read the rollup
+ * (A2-A4's presence), and that is not done under a->mu. */
+static int count_scoped(web_anomaly_t *a, const char *key, int kind, int open_only,
+                        const web_scope_ctx_t *sc, web_rollup_t *ru) {
+    enum { CHUNK = 8 };
+    web_anom_ep_t buf[CHUNK];
+    int n = 0, at = 0;
+    for (;;) {
+        int got = 0;
+        pthread_mutex_lock(&a->mu);
+        for (; at < a->cap && got < CHUNK; at++) {
+            const web_anom_ep_t *e = &a->ep[at];
+            if (e->state != WEB_EP_OPEN && (open_only || e->state != WEB_EP_CLOSED))
+                continue;
+            if (key && strcmp(e->key, key)) continue;
+            if (kind >= 0 && kind_index(e->rule) != kind) continue;
+            buf[got++] = *e;
+        }
+        pthread_mutex_unlock(&a->mu);
+        for (int i = 0; i < got; i++)
+            if (!sc || sc->scope == WEB_SCOPE_HYBRID ||
+                web_scope_pass(sc->scope, web_anomaly_ep_tag(&buf[i], sc, ru)))
+                n++;
+        if (got < CHUNK) break;
     }
-    pthread_mutex_unlock(&a->mu);
     return n;
+}
+
+int web_anomaly_key_count(web_anomaly_t *a, const char *key, int kind) {
+    return count_scoped(a, key, kind, 0, NULL, NULL);
+}
+
+int web_anomaly_key_count_scoped(web_anomaly_t *a, const char *key, int kind,
+                                 const web_scope_ctx_t *sc, web_rollup_t *ru) {
+    return count_scoped(a, key, kind, 0, sc, ru);
+}
+
+int web_anomaly_open_count_scoped(web_anomaly_t *a, const web_scope_ctx_t *sc,
+                                  web_rollup_t *ru) {
+    return count_scoped(a, NULL, -1, 1, sc, ru);
 }
 
 int web_anomaly_key_list(web_anomaly_t *a, const char *key,

@@ -688,6 +688,7 @@ int web_wifi_channels_route(const web_m4_t *m, const char *query,
         const char *mwhy;
         if (grid_of(m, ps, now_s, &mg, &mwhy) != 0)
             return answer_error(400, mwhy, NULL, body, cap, len, status);
+        WEB_M4_CHECKED(m, len, status);
         return mix_route(m, &mg, now_s, body, cap, len, status);
     }
     int metric = WM_WIFI_AP_COUNT;
@@ -701,6 +702,7 @@ int web_wifi_channels_route(const web_m4_t *m, const char *query,
     const char *why;
     if (grid_of(m, ps, now_s, &g, &why) != 0)
         return answer_error(400, why, NULL, body, cap, len, status);
+    WEB_M4_CHECKED(m, len, status);
     gbuf_t b;
     if (gbuf_alloc(&b) != 0) { gbuf_free(&b); return -1; }
     int nk = grid_keys(m, metric, &g, b.keys);
@@ -779,6 +781,7 @@ int web_wifi_deauth_route(const web_m4_t *m, const char *query,
     const char *why;
     if (grid_of(m, ps, now_s, &g, &why) != 0)
         return answer_error(400, why, NULL, body, cap, len, status);
+    WEB_M4_CHECKED(m, len, status);
     const int metric = WM_WIFI_DEAUTH;
     gbuf_t b;
     if (gbuf_alloc(&b) != 0) { gbuf_free(&b); return -1; }
@@ -972,6 +975,7 @@ int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
         return answer_error(400, "bad_limit", NULL, body, cap, len, status);
     if (ps[2].seen && decimal(ps[2].val, 0, WEB_DEV_OFFSET_MAX, &offset) != 0)
         return answer_error(400, "bad_offset", NULL, body, cap, len, status);
+    WEB_M4_CHECKED(m, len, status);
 
     web_sdb_conn_t conn;
     char oerr[WEB_SDB_ERR_MAX];
@@ -1023,6 +1027,117 @@ int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
         web_jw_raw(&w, dir == WEB_SORT_ASC ? ",\"dir\":\"asc\"" : ",\"dir\":\"desc\"");
     web_jw_raw(&w, "}\n");
     free(c.rows);
+    if (w.overflow) return -1;
+    *len = w.len;
+    *status = 200;
+    return 0;
+}
+
+/* ── /api/wifi/local ─────────────────────────────────────────────────── */
+
+typedef struct {
+    web_jw_t *w;
+    size_t    cap;
+    int       n, max, cut;
+} cardw_t;
+
+/* Room for one more row of max: else cut, and the read stops. */
+static int card_room(cardw_t *k) {
+    if (k->n >= k->max || k->w->len + WEB_WIFI_AP_ROW_MAX + 256 > k->cap) {
+        k->cut = 1;
+        return 0;
+    }
+    if (k->n++) web_jw_raw(k->w, ",");
+    return 1;
+}
+
+static int emit_card_ap(void *ctx, const web_sdb_card_ap_t *a) {
+    cardw_t *k = ctx;
+    if (!card_room(k)) return 1;
+    web_jw_t *w = k->w;
+    /* NL80211_BSS_STATUS_* (sloth.h WIFI_STATUS_*): the BSS the card is
+     * on now, if any. */
+    static const char *const ST[3] = { "authenticated", "associated", "ibss_joined" };
+    web_jw_raw(w, "{\"bssid\":");  web_jw_str(w, a->bssid);
+    web_jw_raw(w, ",\"ssid\":");   web_jw_ssid(w, a->ssid);
+    web_jw_raw(w, ",\"signal\":");
+    if (a->has_signal) web_jw_int(w, a->signal_dbm); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"channel\":"); web_jw_int(w, a->channel);
+    web_jw_raw(w, ",\"enc\":");    jw_text_or_null(w, a->enc);
+    web_jw_raw(w, ",\"status\":");
+    if (a->has_status && a->status >= 0 && a->status <= 2) web_jw_str(w, ST[a->status]);
+    else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, a->first_seen);
+    web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, a->last_seen);
+    web_jw_ssid_meta(w, "ssid", a->ssid);
+    web_jw_raw(w, "}");
+    return 0;
+}
+
+static int emit_card_sta(void *ctx, const web_sdb_card_sta_t *a) {
+    cardw_t *k = ctx;
+    if (!card_room(k)) return 1;
+    web_jw_t *w = k->w;
+    web_jw_raw(w, "{\"mac\":");    web_jw_str(w, a->mac);
+    web_jw_raw(w, ",\"signal\":");
+    if (a->has_signal) web_jw_int(w, a->signal_dbm); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"tx_kbps\":");     web_jw_int(w, a->tx_kbps);
+    web_jw_raw(w, ",\"rx_kbps\":");     web_jw_int(w, a->rx_kbps);
+    web_jw_raw(w, ",\"connected_s\":"); web_jw_int(w, a->connected_s);
+    web_jw_raw(w, ",\"inactive_ms\":"); web_jw_int(w, a->inactive_ms);
+    web_jw_raw(w, ",\"tx_bytes\":");    web_jw_int(w, a->tx_bytes);
+    web_jw_raw(w, ",\"rx_bytes\":");    web_jw_int(w, a->rx_bytes);
+    web_jw_raw(w, ",\"first_seen\":");  web_jw_int(w, a->first_seen);
+    web_jw_raw(w, ",\"last_seen\":");   web_jw_int(w, a->last_seen);
+    web_jw_raw(w, "}");
+    return 0;
+}
+
+int web_wifi_local_route(const web_m4_t *m, const char *query, long long now_s,
+                         char *body, size_t cap, size_t *len, int *status) {
+    if (!m || !m->sdb || !m->sdb->configured || !web_slothdb_available())
+        return answer_error(503, "no_sloth_db",
+                            "start slothweb with --sloth-db PATH (a WITH_SQLITE build)",
+                            body, cap, len, status);
+    web_param_t ps[1] = { { "limit", "", 0 } };
+    char err[48];
+    if (web_params_parse(query, ps, 1, err, sizeof(err)) != 0)
+        return answer_error(400, err, NULL, body, cap, len, status);
+    long long limit = WEB_WIFI_AP_MAX;
+    if (ps[0].seen && decimal(ps[0].val, 1, WEB_WIFI_AP_MAX, &limit) != 0)
+        return answer_error(400, "bad_limit", NULL, body, cap, len, status);
+    WEB_M4_CHECKED(m, len, status);
+    web_sdb_conn_t conn;
+    char oerr[WEB_SDB_ERR_MAX];
+    if (web_slothdb_open(m->sdb, &conn, WEB_SDB_HTTP_MS, now_s, oerr,
+                         sizeof(oerr)) != 0) {
+        web_slothdb_close(&conn);
+        web_sdb_stats_t st;
+        web_slothdb_stats(m->sdb, &st);
+        char r[48];
+        snprintf(r, sizeof(r), "sloth_db_%s", web_slothdb_state_word(st.state));
+        return answer_error(503, r, oerr, body, cap, len, status);
+    }
+    web_jw_t w;
+    web_jw_init(&w, body, cap);
+    web_jw_raw(&w, "{\"now\":");       web_jw_int(&w, now_s);
+    web_jw_raw(&w, ",\"limit\":");     web_jw_int(&w, limit);
+    web_jw_raw(&w, ",\"db_schema\":"); web_jw_int(&w, conn.schema);
+    web_jw_raw(&w, ",\"aps\":[");
+    cardw_t ka = { &w, cap, 0, (int)limit, 0 };
+    int na = web_sdb_card_aps(&conn, limit + 1, emit_card_ap, &ka);
+    web_jw_raw(&w, "],\"stas\":[");
+    cardw_t ks = { &w, cap, 0, WEB_WIFI_STA_MAX, 0 };
+    int ns = na < 0 ? -1 : web_sdb_card_stas(&conn, WEB_WIFI_STA_MAX + 1, emit_card_sta, &ks);
+    int to = conn.timed_out;
+    web_slothdb_close(&conn);
+    if (na < 0 || ns < 0)
+        return answer_error(503, to ? "sloth_db_timeout" : "sloth_db_error", NULL,
+                            body, cap, len, status);
+    web_jw_raw(&w, "],\"aps_more\":");
+    web_jw_raw(&w, ka.cut ? "true" : "false");
+    web_jw_raw(&w, ",\"stas_more\":"); web_jw_raw(&w, ks.cut ? "true" : "false");
+    web_jw_raw(&w, "}\n");
     if (w.overflow) return -1;
     *len = w.len;
     *status = 200;

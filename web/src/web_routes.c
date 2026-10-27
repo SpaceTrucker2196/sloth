@@ -363,7 +363,23 @@ static int route_health(const web_req_t *rq, const web_health_t *h,
 }
 
 static size_t live_body(const web_health_t *h, char *out, size_t cap) {
-    if (h->live) return web_live_json_scoped(h->live, h->sc, out, cap, h->now_ms);
+    if (h->live) {
+        size_t n = web_live_json_scoped(h->live, h->sc, out, cap, h->now_ms);
+        /* Under a scope the tick's anomalies_open (every scope's) will
+         * not do: the scope's own count of open episodes rides here, so
+         * the page's 2 s scoped refresh keeps the tile and the strip. */
+        if (n >= 2 && h->anomaly && h->sc && h->sc->scope != WEB_SCOPE_HYBRID &&
+            out[n - 2] == '}' && out[n - 1] == '\n') {
+            char t[48];
+            int k = snprintf(t, sizeof(t), ",\"anomalies_open\":%d}\n",
+                             web_anomaly_open_count_scoped(h->anomaly, h->sc,
+                                                           h->tsdb ? h->tsdb->ru : NULL));
+            if (k < 0 || n - 2 + (size_t)k + 1 > cap) return 0;
+            memcpy(out + n - 2, t, (size_t)k + 1);
+            n = n - 2 + (size_t)k;
+        }
+        return n;
+    }
     static const char none[] =
         "{\"socket\":\"none\",\"devices\":null,\"devices_stale\":true,"
         "\"alerts_open\":null,\"records\":0,\"records_s\":null,"
@@ -604,7 +620,7 @@ static int route_m4(const web_req_t *rq, const web_health_t *h, int which,
 }
 
 enum { M5_CHANNELS, M5_DEAUTH, M5_APS, M5_OVERVIEW, M5_HDEVICES, M5_HALERTS,
-       M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW, M6_FLOWS, M6_GRAPH };
+       M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW, M6_FLOWS, M6_GRAPH, M5_WLOCAL };
 
 /* The WiFi and History routes (M5, web_wifi.h, web_history.h) and the
  * Flows routes (M6, web_flows.h): the same shape as route_m4(). */
@@ -624,18 +640,26 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         web_history_overview_route, web_history_devices_route,
         web_history_alerts_route, web_history_flows_route, web_sessions_route,
         web_sessions_new_route, web_flows_route, web_flows_graph_route,
+        web_wifi_local_route,
     };
     /* A view a capture scope holds nothing of (web_scope.h): the WiFi
-     * view is all the monitor radio's, the flows all the IP capture's
-     * (sloth.db keeps no capture path, so its flow rows are Local's).
+     * view's channels, deauths and APs are the monitor radio's, its card
+     * panels (/api/wifi/local) the managed card's own scan and link, the
+     * flows all the IP capture's (sloth.db keeps no capture path, so its
+     * flow rows are Local's).
      * Said once, here, rather than as an empty answer that looks like a
-     * quiet network. The parameters are still checked first. */
+     * quiet network. The parameters are still checked first, by the
+     * route's own parser on a check-only copy that reads nothing. */
     int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
     const char *none_here =
         sc == WEB_SCOPE_LOCAL && (which == M5_CHANNELS || which == M5_DEAUTH ||
                                   which == M5_APS)
-            ? "the WiFi view is the passive monitor radio's beacons, probes and "
-              "deauths; the host's own interfaces carried none of it"
+            ? "the WiFi view's channels, deauths and access points are the passive "
+              "monitor radio's; the host's own interfaces carried none of it (the "
+              "managed card's own scan and link are /api/wifi/local)"
+        : sc == WEB_SCOPE_MONITOR && which == M5_WLOCAL
+            ? "the managed Wi-Fi card's own scan and station dump are the host's "
+              "own interface's; the monitor radio heard none of it"
         : sc == WEB_SCOPE_MONITOR && (which == M6_FLOWS || which == M6_GRAPH ||
                                       which == M5_HFLOWS)
             ? "flows are the IP capture's (sloth.db keeps no capture path, so "
@@ -646,7 +670,9 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         bl = web_series_error_json("query_too_long", body, cap);
         rc = bl ? 0 : -1;
     } else {
-        rc = F[which](m, rq->query, h->wall_s, body, cap, &bl, &status);
+        web_m4_t mc = *m;
+        mc.check_only = none_here != NULL;
+        rc = F[which](&mc, rq->query, h->wall_s, body, cap, &bl, &status);
         if (rc == 0 && none_here && status == 200) {
             web_jw_t w;
             web_jw_init(&w, body, cap);
@@ -904,6 +930,7 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             { "/api/wifi/channels", M5_CHANNELS },
             { "/api/wifi/deauth", M5_DEAUTH },
             { "/api/wifi/aps", M5_APS },
+            { "/api/wifi/local", M5_WLOCAL },
             { "/api/history/overview", M5_OVERVIEW },
             { "/api/history/devices", M5_HDEVICES },
             { "/api/history/alerts", M5_HALERTS },
@@ -973,7 +1000,7 @@ size_t web_sse_tick(char *out, size_t outsz, unsigned long seq, long long ts,
 size_t web_sse_record(char *out, size_t outsz, const web_live_rec_t *e) {
     /* The escaped JSON holds no raw CR or LF (web_jw_strn escapes both),
      * so it is one SSE data line whatever the record said. */
-    char data[(WEB_LIVE_TYPE_MAX + WEB_LIVE_TEXT_MAX) * WEB_JW_EXPAND + 128];
+    char data[(WEB_LIVE_TYPE_MAX + 2 * WEB_LIVE_TEXT_MAX) * WEB_JW_EXPAND + 160];
     web_jw_t w;
     web_jw_init(&w, data, sizeof(data));
     web_jw_raw(&w, "{\"seq\":");  web_jw_int(&w, (long long)e->seq);
@@ -983,6 +1010,13 @@ size_t web_sse_record(char *out, size_t outsz, const web_live_rec_t *e) {
     /* Its capture-scope tag (web_scope.h): the page's ticker keeps the
      * records of the scope it shows. */
     web_jw_raw(&w, ",\"sc\":");   web_jw_int(&w, e->sc);
+    /* A device row's Monitor line (web_live_rec_t), which the page shows
+     * in place of text under Monitor. The stream goes to every page
+     * whatever its scope, so both lines travel; the scope is a view of
+     * one viewer's data, not a boundary between viewers. */
+    if (!strcmp(e->type, "device")) {
+        web_jw_raw(&w, ",\"text_m\":"); web_jw_str(&w, e->text_m);
+    }
     web_jw_raw(&w, "}");
     if (w.overflow) return 0;
     int n = snprintf(out, outsz, "event: record\ndata: %s\n\n", data);

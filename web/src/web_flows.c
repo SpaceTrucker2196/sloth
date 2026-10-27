@@ -137,6 +137,7 @@ int web_flows_route(const web_m4_t *m, const char *query, long long now_s,
         return web_hist_error(400, "bad_limit", NULL, body, cap, len, status);
     if (ps[6].seen && decimal(ps[6].val, 0, WEB_FLOWS_OFFSET_MAX, &offset) != 0)
         return web_hist_error(400, "bad_offset", NULL, body, cap, len, status);
+    WEB_M4_CHECKED(m, len, status);
     web_sdb_conn_t c;
     int o = web_hist_open(m, &c, now_s, body, cap, len, status);
     if (o) return o > 0 ? 0 : -1;
@@ -241,6 +242,7 @@ int web_flows_graph_route(const web_m4_t *m, const char *query,
         return web_hist_error(400, "bad_nodes", NULL, body, cap, len, status);
     if (ps[3].seen && decimal(ps[3].val, 1, WEB_FLOWS_EDGES_MAX, &ne) != 0)
         return web_hist_error(400, "bad_edges", NULL, body, cap, len, status);
+    WEB_M4_CHECKED(m, len, status);
     pairs_t p = { calloc(WEB_FLOWS_EDGES_MAX, sizeof(web_sdb_flow_t)), 0, (int)ne };
     node_t *nd = calloc(2 * WEB_FLOWS_EDGES_MAX, sizeof(node_t));
     if (!p.e || !nd) { free(p.e); free(nd); return -1; }

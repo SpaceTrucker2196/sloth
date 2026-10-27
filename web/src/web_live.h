@@ -70,6 +70,10 @@ typedef struct {
     long long ts;
     char      type[WEB_LIVE_TYPE_MAX + 1];
     char      text[WEB_LIVE_TEXT_MAX + 1];
+    /* A device row's line as Monitor shows it (its MAC and last SSID:
+     * no address, no hostname); "" for every other type, whose one line
+     * is every scope's. */
+    char      text_m[WEB_LIVE_TEXT_MAX + 1];
     int       sc;     /* its capture-scope tag, resolved when it came:
                          WEB_SC_M, WEB_SC_L, both, or 0 (web_scope.h) */
 } web_live_rec_t;
@@ -96,6 +100,10 @@ typedef struct {
     char               name[WEB_LIVE_TYPE_MAX + 1];
     unsigned long long n;
     web_live_rate_t    rate;
+    /* The same by capture scope, [0] Monitor, [1] Local: the records of
+     * the type whose tag (resolved when each came) holds the scope. */
+    unsigned long long n_sc[2];
+    web_live_rate_t    rate_sc[2];
 } web_live_type_t;
 
 /* One incident as the lifecycle records have told it (alert.create,
@@ -222,8 +230,21 @@ typedef struct web_live_s {
     web_scope_ctx_t  sc;
     long long        cap_linktype;
     int              monitor_only;
-    /* records/s by scope: [0] Monitor, [1] Local */
+    /* records/s and records by scope: [0] Monitor, [1] Local */
     web_live_rate_t  rate_scope[2];
+    unsigned long long records_sc[2];
+    /* The monitor radios as this connection has named them: the latest
+     * sensor_health's monitor_iface and every `sensor` of kind wifi
+     * (sc.mon is the two together). Cleared on a connect, a new stream
+     * being maybe a new sloth with other radios. Until sc_known, an
+     * interface cannot be told apart and an iface record is Hybrid's
+     * alone: set by this connection's first sensor_health, or by its
+     * second snapshot batch (the first batch's sensor records read). */
+    char             sh_mon[WEB_SCOPE_IFNAME + 1];
+    int              nsens_mon;
+    char             sens_mon[WEB_SCOPE_MON_MAX][WEB_SCOPE_IFNAME + 1];
+    int              sc_known;
+    unsigned long    batches_conn;
 
     /* sensor_health */
     int       sh_seen;

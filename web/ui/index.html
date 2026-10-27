@@ -201,7 +201,23 @@
     </section>
    </div>
    <div id="v-wifi" hidden>
-    <section class="panel scope-empty" id="w-scope-empty"><div class="label">WiFi</div><p>Nothing here under Local. This view is the passive monitor radio's: its beacons, probes, associations, deauths and channel mix, none of which the host's own interfaces carried. The managed card's own scans and station dump are Local's, but slothweb does not read them here. Switch to Monitor or Hybrid to see it.</p></section>
+    <section class="panel scope-empty" id="w-scope-empty"><div class="label">WiFi</div><p>Under Local this view is the managed Wi-Fi card's own: its scan and its link, below, Wi-Fi through the host's own network. The passive monitor radio's beacons, probes, associations, deauths and channel mix are not Local's, so they are not drawn; switch to Monitor or Hybrid to see them.</p></section>
+    <section class="panel card-local">
+      <div class="label">the card's link <span class="sub" id="w-sta-count"></span> <span class="dt-tools" id="w-sta-tools"></span></div>
+      <div class="hscroll" id="w-sta-box">
+      <div class="dhead" id="w-sta-head"></div>
+      <div id="w-sta"></div>
+      </div>
+      <div class="sub">the managed card's nl80211 station dump (sloth.db wifi_stas): the AP it is associated with, as the card reports it; nothing is sent</div>
+    </section>
+    <section class="panel card-local">
+      <div class="label">the card's scan <span class="sub" id="w-scan-count"></span> <span class="dt-tools" id="w-scan-tools"></span></div>
+      <div class="hscroll" id="w-scan-box">
+      <div class="dhead" id="w-scan-head"></div>
+      <div id="w-scan"></div>
+      </div>
+      <div class="sub">the access points the managed card's own scan found (sloth.db wifi_aps), newest first; status: the BSS the card is on now</div>
+    </section>
     <section class="panel controls" aria-label="wifi controls">
       <label>cells <select id="w-metric">
         <option value="ap_count" selected>APs per channel</option>

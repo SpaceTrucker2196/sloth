@@ -268,7 +268,7 @@ static void send_records(web_server_t *s) {
     int n = web_live_recent_after(s->live, s->rec_sent, recs,
                                   WEB_SSE_RECORDS_PER_TICK, &latest);
     s->rec_sent = latest;
-    char ev[(WEB_LIVE_TYPE_MAX + WEB_LIVE_TEXT_MAX) * WEB_JW_EXPAND + 256];
+    char ev[(WEB_LIVE_TYPE_MAX + 2 * WEB_LIVE_TEXT_MAX) * WEB_JW_EXPAND + 288];
     for (int i = 0; i < n; i++) {
         size_t len = web_sse_record(ev, sizeof(ev), &recs[i]);
         if (!len) continue;

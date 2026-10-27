@@ -109,9 +109,17 @@
     return path + (path.indexOf("?") >= 0 ? "&" : "?") + "scope=" + SCOPE;
   }
   // Does the scope keep a record tagged sc (1 Monitor, 2 Local, 3 both)?
+  // A record with no tag is an answer from before the scope was picked:
+  // Hybrid's alone.
   function scopeKeeps(sc) {
-    if (SCOPE === "hybrid" || typeof sc !== "number") return true;
+    if (SCOPE === "hybrid") return true;
+    if (typeof sc !== "number") return false;
     return (sc & SCOPE_WANT[SCOPE]) !== 0;
+  }
+  // A ticker record's line in the scope shown: a device row's own
+  // Monitor line under Monitor (no address, no hostname).
+  function recText(r) {
+    return SCOPE === "monitor" && typeof r.text_m === "string" ? r.text_m : r.text;
   }
 
   function set(id, text) { $(id).textContent = String(text); }
@@ -893,6 +901,9 @@
     // A record of another capture scope is passed over, its number
     // counted, so the backlog is not asked for again.
     if (!scopeKeeps(r.sc)) return;
+    // Held and drawn as the scope's line; the rows start again with the
+    // scope (setScope()).
+    r = { seq: r.seq, type: r.type, ts: r.ts, text: recText(r), sc: r.sc };
     if (paused) { held++; set("tick-note", held + " held"); return; }
     TK.rows.unshift(r);
     if (TK.rows.length > TICKER_MAX) TK.rows.length = TICKER_MAX;
@@ -987,10 +998,17 @@
   }
 
   var first = true;
+  // Each call is stamped with the scope it asked in; an answer that
+  // lands after the viewer picked another (setScope() bumps liveGen) is
+  // dropped, so a Hybrid answer never fills a scoped ticker or tiles.
+  var liveGen = 0;
   function live() {
+    var gen = liveGen, asked = SCOPE;
     fetch(scoped("/api/live"), { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (l) {
+        if (gen !== liveGen || asked !== SCOPE ||
+            (SCOPE !== "hybrid" && l.scope !== SCOPE)) return;
         kpis({ socket: l.socket, devices: l.devices,
                devices_stale: l.devices_stale, records: l.records,
                records_s: l.records_s,
@@ -998,6 +1016,12 @@
                alerts_open: l.alerts_open
                  ? [l.alerts_open.low, l.alerts_open.warn, l.alerts_open.crit]
                  : null });
+        // The scope's own count of open episodes (the tick's is every
+        // scope's).
+        if (SCOPE !== "hybrid" && num(l.anomalies_open)) {
+          set("k-anoms", l.anomalies_open);
+          set("s-anoms", l.anomalies_open);
+        }
         alerts(l.alerts);
         sensor(l.sensor);
         if (first && l.recent) {
@@ -1205,7 +1229,7 @@
     "monitor": "Monitor: only what the passive monitor radio (and BLE) heard over the air; " +
                "nothing the connected Wi-Fi or Ethernet carried.",
     "local": "Local: only what the host's own Ethernet and Wi-Fi interfaces carried, " +
-             "the card's own scans included; never the monitor radio."
+             "the managed card's own scan and link included (the WiFi view); never the monitor radio."
   };
   function scopeBar() {
     var bar = $("scopebar"), f = SC.facts || {};
@@ -1250,6 +1274,7 @@
     }
     set("s-scope", SCOPE);
     $("v-wifi").classList.toggle("scoped-out", SCOPE === "local");
+    $("v-wifi").classList.toggle("card-out", SCOPE === "monitor");
     $("v-flows").classList.toggle("scoped-out", SCOPE === "monitor");
     scopeBar();
     scopeView(view);
@@ -1261,7 +1286,11 @@
     try { window.localStorage.setItem(SCOPE_KEY, s); } catch (e) { /* this load only */ }
     SC.facts = null;
     scopeUI();
-    // The ticker and the tiles start again in the new scope.
+    // The ticker and the tiles start again in the new scope; an answer
+    // still in flight from the old one is dropped (live()).
+    liveGen++;
+    set("k-anoms", "-");
+    set("s-anoms", "-");
     TK.rows = [];
     tickerDraw();
     lastSeq = 0;
@@ -1839,13 +1868,6 @@
       var list = (j.anomalies || []).filter(openOnly
         ? function (a) { return a.open === true && (!N.kind || a.kind === N.kind); } : shown);
       N.list = list;
-      // Under a scope the open-anomalies tile counts the scope's open
-      // episodes (the tick's count is Hybrid's).
-      if (SCOPE !== "hybrid") {
-        var nOpen = (j.anomalies || []).filter(function (a) { return a.open === true; }).length;
-        set("k-anoms", nOpen + (j.more ? "+" : ""));
-        set("s-anoms", nOpen + (j.more ? "+" : ""));
-      }
       if (N.table) anomTable();
       var box = $("n-cards");
       while (box.firstChild) box.removeChild(box.firstChild);
@@ -2894,9 +2916,105 @@
     }
   }
 
+  // ── the managed card's own scan and link (/api/wifi/local) ────────
+  // Local's half of the view, and Hybrid's too: Wi-Fi through the
+  // host's own network, never the passive radio. Small lists, held
+  // whole, so their headers sort here.
+  var WC = { aps: [], stas: [] };
+  function bytesText(n) {
+    if (!num(n)) return "-";
+    var u = ["B", "KB", "MB", "GB", "TB"], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(1) : String(n)) + " " + u[i];
+  }
+  function rateText(k) { return num(k) && k > 0 ? (k / 1000).toFixed(1) + " Mb/s" : "-"; }
+  var DTWS = DataTable({ id: "cardsta", label: "the card's link", box: $("w-sta-box"),
+    head: $("w-sta-head"), reset: $("w-sta-tools"), redraw: cardStaDraw, cols: [
+      { k: "mac", label: "bssid", w: 19, min: 8, type: "mac", val: av("mac") },
+      { k: "sig", label: "dBm", w: 5, min: 3, num: true, type: "num", val: av("signal") },
+      { k: "tx", label: "tx rate", w: 10, num: true, type: "num", val: av("tx_kbps") },
+      { k: "rx", label: "rx rate", w: 10, num: true, type: "num", val: av("rx_kbps") },
+      { k: "up", label: "connected", w: 10, num: true, type: "num", val: av("connected_s") },
+      { k: "txb", label: "tx", w: 10, num: true, type: "num", val: av("tx_bytes") },
+      { k: "rxb", label: "rx", w: 10, num: true, type: "num", val: av("rx_bytes") },
+      { k: "ls", label: "last", w: 11, type: "time", val: av("last_seen") }
+    ] });
+  var DTWC = DataTable({ id: "cardscan", label: "the card's scan", box: $("w-scan-box"),
+    head: $("w-scan-head"), reset: $("w-scan-tools"), redraw: cardScanDraw, cols: [
+      { k: "bs", label: "bssid", w: 19, min: 8, type: "mac", val: av("bssid") },
+      { k: "ss", label: "ssid", w: 14, flex: true, type: "text", val: av("ssid") },
+      { k: "ch", label: "ch", w: 4, min: 3, num: true, type: "num", val: av("channel") },
+      { k: "sig", label: "dBm", w: 5, min: 3, num: true, type: "num", val: av("signal") },
+      { k: "enc", label: "enc", w: 12, type: "text", val: av("enc") },
+      { k: "st", label: "status", w: 13, type: "text", val: av("status") },
+      { k: "ls", label: "last", w: 11, type: "time", val: av("last_seen") }
+    ] });
+  // A MAC with its swatch, as the AP table and the TUI colour one.
+  function macCell(mac) {
+    var c = el("span", "");
+    var sw = el("span", "sw");
+    sw.style.background = keyColor(String(mac));
+    c.appendChild(sw);
+    c.appendChild(el("span", "d-dim", String(mac)));
+    return c;
+  }
+  function cardStaDraw() {
+    var box = clear("w-sta");
+    DTWS.sort(WC.stas).forEach(function (a) {
+      var row = el("div", "dt-row");
+      row.appendChild(macCell(a.mac));
+      row.appendChild(el("span", "n d-dim", num(a.signal) ? String(a.signal) : "-"));
+      row.appendChild(el("span", "n d-normal", rateText(a.tx_kbps)));
+      row.appendChild(el("span", "n d-normal", rateText(a.rx_kbps)));
+      row.appendChild(el("span", "n d-dim", num(a.connected_s) ? dur(a.connected_s) : "-"));
+      row.appendChild(el("span", "n d-dim", bytesText(a.tx_bytes)));
+      row.appendChild(el("span", "n d-dim", bytesText(a.rx_bytes)));
+      row.appendChild(el("span", "d-dim", shortStamp(a.last_seen)));
+      box.appendChild(row);
+    });
+    if (!WC.stas.length) box.appendChild(el("div", "sub", "no wifi_stas rows: the card is on no AP sloth has seen"));
+  }
+  function cardScanDraw() {
+    var box = clear("w-scan");
+    DTWC.sort(WC.aps).forEach(function (a) {
+      var row = el("div", "dt-row");
+      row.appendChild(macCell(a.bssid));
+      var ss = el("span", "");
+      ss.appendChild(a.ssid === null ? el("span", "d-dim", "(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
+      row.appendChild(ss);
+      row.appendChild(el("span", "n d-normal", String(a.channel)));
+      row.appendChild(el("span", "n d-dim", num(a.signal) ? String(a.signal) : "-"));
+      row.appendChild(el("span", "d-normal", a.enc === null ? "?" : String(a.enc)));
+      row.appendChild(el("span", a.status === "associated" ? "d-normal" : "d-dim",
+                         a.status === null ? "-" : String(a.status).replace("_", " ")));
+      row.appendChild(el("span", "d-dim", shortStamp(a.last_seen)));
+      box.appendChild(row);
+    });
+    if (!WC.aps.length) box.appendChild(el("div", "sub", "no wifi_aps rows"));
+  }
+  function wifiCard(gen) {
+    getJSON("/api/wifi/local").then(function (j) {
+      if (gen !== WF.gen) return;
+      WC.aps = j.aps || [];
+      WC.stas = j.stas || [];
+      cardStaDraw();
+      cardScanDraw();
+      set("w-sta-count", WC.stas.length + " shown" + (j.stas_more ? ", more in sloth.db" : ""));
+      set("w-scan-count", WC.aps.length + " shown" + (j.aps_more ? ", more in sloth.db" : ""));
+    }).catch(function (e) {
+      if (gen !== WF.gen) return;
+      clear("w-sta");
+      clear("w-scan");
+      set("w-sta-count", errText(e.message));
+      set("w-scan-count", errText(e.message));
+    });
+  }
+
   function wifi() {
     var gen = ++WF.gen;
-    // The monitor radio's view: under Local its empty state says why.
+    // The managed card's panels: Local's and Hybrid's, not Monitor's.
+    if (SCOPE !== "monitor") wifiCard(gen);
+    // The monitor radio's panels: under Local its empty state says why.
     if (SCOPE === "local") return;
     var r = wifiWindow();
     var metric = $("w-metric").value === "ctrl_total" ? "ctrl_total" : "ap_count";
@@ -4233,7 +4351,10 @@
         });
       RC.total = { r10: sum10, c: l.records };
       recordsDraw();
-      set("rc-note", "the rates sum to the tile's " + l.records_s + " records/s");
+      // Under a scope each type's own records of it: the table's
+      // overflow and the malformed names are no scope's and not listed.
+      set("rc-note", "the rates sum to the tile's " + l.records_s + " records/s" +
+          (SCOPE === "hybrid" ? "" : ", each type's " + SCOPE_WORD[SCOPE] + " records only"));
       var recent = (l.recent || []).filter(function (r) { return !RC.type || r.type === RC.type; });
       RC.recent = recent.slice().reverse();
       RC.seen = (l.recent || []).length;

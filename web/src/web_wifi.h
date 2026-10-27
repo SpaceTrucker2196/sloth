@@ -66,6 +66,15 @@ int web_wifi_deauth_route(const web_m4_t *m, const char *query,
                           size_t *len, int *status);
 int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
                        char *body, size_t cap, size_t *len, int *status);
+/* /api/wifi/local?limit=: the managed Wi-Fi card's own scan (sloth.db
+ * wifi_aps, newest first, limit rows, default and most
+ * WEB_WIFI_AP_MAX) and its station dump (wifi_stas, its link to the AP
+ * it is associated with, at most WEB_WIFI_STA_MAX): Wi-Fi through the
+ * host's own network, not the passive radio, so the WiFi view's Local
+ * half (web_scope.h). The router answers out_of_scope under Monitor. */
+#define WEB_WIFI_STA_MAX 32
+int web_wifi_local_route(const web_m4_t *m, const char *query, long long now_s,
+                         char *body, size_t cap, size_t *len, int *status);
 
 /* The 802.11 AKM suite name of type t (IEEE 802.11-2020 Table 9-151),
  * src/rsn_ie.c rsn_akm_name()'s, "?" when it names none. */

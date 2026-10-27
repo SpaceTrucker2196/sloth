@@ -396,6 +396,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/lookup?q=` | `200` JSON, the Lookup card for a MAC or an IP; `400` otherwise |
    | `GET /api/wifi/channels?metric=&from=&to=&cols=`, `/api/wifi/deauth?from=&to=&cols=` | `200` JSON, the channel waterfall and the deauth timeline (M5, below); `400` for a parameter that does not pass; `503` with no time series |
    | `GET /api/wifi/aps?sort=&dir=&limit=&offset=` | `200` JSON, a page of sloth.db's beacon_aps; `400`; `503` with no `--sloth-db` or sloth.db unreadable |
+   | `GET /api/wifi/local?limit=` | `200` JSON, the managed Wi-Fi card's own scan (sloth.db `wifi_aps`, newest first, at most 100) and link (`wifi_stas`, at most 32); out of scope under Monitor; `400`; `503` as above |
    | `GET /api/history/overview`, `/api/history/devices`, `/api/history/alerts`, `/api/history/flows` (`?from=&to=` and their own) | `200` JSON, the History view's reads of sloth.db; `400`; `503` as above |
    | `GET /api/sessions`, `/api/sessions/new?id=` | `200` JSON, the survey sessions and one's "new since the previous session"; `404` for a session sloth.db does not have |
    | `GET /api/flows?proto=&from=&to=&ip=&sort=&dir=&limit=&offset=` | `200` JSON, one protocol table of sloth.db (M6, below); `400` for a parameter that does not pass, `proto=mqtt` included (`proto_withheld`); `503` as above |
@@ -2321,7 +2322,7 @@ switch filters every view by how the data was captured
 |---|---|
 | Hybrid | everything: the default, and every view as it was before the switch |
 | Monitor | what the passive monitor-mode radio heard over the air (beacons, probes, associations, EAPOL, deauths, the channel mix, the 802.11 detectors) and the BLE receivers (`--bt-monitor`, `--bt-capture`), which are receive-only radio too; nothing the connected Wi-Fi or Ethernet carried |
-| Local | what the host's own interfaces carried: the IP capture on Ethernet and the associated Wi-Fi card, ARP, DHCP, DNS, mDNS, NBNS, the flows, `/proc`, the interfaces' throughput, and the managed card's own station dump and scans; never the monitor radio |
+| Local | what the host's own interfaces carried: the IP capture on Ethernet and the associated Wi-Fi card, ARP, DHCP, DNS, mDNS, NBNS, the flows, `/proc`, the interfaces' throughput, and the managed card's own station dump and scan (the WiFi view under Local, `/api/wifi/local`); never the monitor radio |
 
 sloth's records carry no capture path, so each datum is placed by what
 it is: its record type, its alert type (the rule's input, whatever file
@@ -2334,18 +2335,24 @@ under Local no SSID, AP bit or PNL; its signal, first and last seen and
 risk (sloth's weights over the scope's signals) are the scope's own.
 While sloth says its IP capture is itself a monitor radio
 (`sensor_health.capture_linktype`, or `capture_iface == monitor_iface`
-from an older sloth) the stream's IP records count as Monitor's;
-sloth.db's IP tables keep no capture path and stay Local's. The WiFi
-view is empty under Local and Flows under Monitor, each saying why.
-The SQL box is unscoped and says so.
+from an older sloth) the stream's IP-capture records count as
+Monitor's; the host's own ARP table, DHCP leases and scan entries
+(`/proc`, the lease files) never do, nor `PORT_SCAN` and `ARP_SPOOF`,
+which read them. sloth.db's IP tables keep no capture path and stay
+Local's. Under Local the WiFi view is the managed card's own scan and
+link; Flows are empty under Monitor, saying why. The SQL box is
+unscoped and says so. A device row's anomaly count and z, the
+open-anomalies tile and the Records view are counted in the scope.
 
 Every `/api` route but `/api/health` and `/api/query` takes
 `scope=monitor|hybrid|local` beside its own parameters; the router
 takes it out (`web_scope_take()`) before the route's parser runs.
 Anything else is a 400 `bad_scope`. Without it the answer is
-Hybrid's, byte for byte as before; with it the answer's first member is
-`"scope"`, and a view the scope holds nothing of answers
-`{"out_of_scope":true,"reason":...}`. The page sends the scope on every
+Hybrid's, byte for byte as before (the `/events` stream is not an
+`/api` answer: its records gained `sc`, and a device row's `text_m`);
+with it the answer's first member is `"scope"`, and a view the scope
+holds nothing of answers `{"out_of_scope":true,"reason":...}`, its
+query checked but nothing read. The page sends the scope on every
 fetch, keeps it in the address (`#devices?scope=monitor`, Hybrid left
 out) and in this browser (`slothweb.scope`), and a chip at the top of
 every view, the status strip and a bar under it say which scope is
@@ -2789,7 +2796,7 @@ web/
     web_ptr.c      the passive PTR cache (M4)
     web_devices.c  /api/devices, /api/device/{mac}, /api/lookup (M4),
                    /api/history/devices (M5)
-    web_wifi.c     /api/wifi/channels, /api/wifi/deauth, /api/wifi/aps (M5)
+    web_wifi.c     /api/wifi/channels, /api/wifi/deauth, /api/wifi/aps, /api/wifi/local (M5)
     web_history.c  /api/history/*, /api/sessions, /api/sessions/new (M5)
     web_flows.c    /api/flows, /api/flows/graph (M6)
     web_alerts.c   /api/alerts, /api/alert: the Alerts page, an alert's page

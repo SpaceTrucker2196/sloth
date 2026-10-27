@@ -377,6 +377,16 @@ int    web_anomaly_open_count(web_anomaly_t *a);
 int    web_anomaly_device_z(web_anomaly_t *a, const char *key, long long now_s,
                             double *z);
 int    web_anomaly_key_count(web_anomaly_t *a, const char *key, int kind);
+/* The same under a capture scope (sc NULL or Hybrid: as above): z over
+ * the scope's own metrics only (none: 0), and the episodes whose tag
+ * (web_anomaly_ep_tag()) the scope passes. */
+int    web_anomaly_device_z_scoped(web_anomaly_t *a, const char *key,
+                                   long long now_s, int scope, double *z);
+int    web_anomaly_key_count_scoped(web_anomaly_t *a, const char *key, int kind,
+                                    const web_scope_ctx_t *sc, web_rollup_t *ru);
+/* The open episodes the scope passes (the open-anomalies tile). */
+int    web_anomaly_open_count_scoped(web_anomaly_t *a, const web_scope_ctx_t *sc,
+                                     web_rollup_t *ru);
 int    web_anomaly_key_list(web_anomaly_t *a, const char *key,
                             web_anom_ep_t *out, int max);
 

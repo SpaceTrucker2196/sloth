@@ -382,16 +382,20 @@ static const char *op_text(int op) {
  * (probe_clients, then beacon_aps; wifi_stas), first and last seen over
  * the scope's tables (the row's own when they hold none), the sources
  * and risk signals masked to the scope's bits and the risk level summed
- * again from those with sloth's weights (web_scope_risk_level()). Each
- * fragment is constant text of this file's, chosen by the scope and by
- * which tables the file has. */
+ * again from those with sloth's weights (web_scope_risk_w[]). Every
+ * mask is built from web_scope.h's WEB_SRC_*, WEB_CAM_* and
+ * web_scope_risk_mask(), the ones web_scope_device() and the tests use.
+ * Each fragment is constant text of this file's, chosen by the scope and
+ * by which tables the file has. */
 
 #define BIGT "9000000000000000000"
 
 typedef struct {
     int  scope;
-    char ip[64], host[64], ssid[64], is_ap[32], sources[48], rsig[48];
-    char risk[1024], signal[512], first[1536], last[1536], member[1536];
+    char ip[64], host[64], ssid[64], is_ap[32], sources[192], rsig[192];
+    char risk[4096], signal[512], first[1536], last[1536], member[1536];
+    /* The FROM clause's joins after "FROM devices d" ("" none). */
+    char join[256];
     unsigned f;
 } dcols_t;
 
@@ -403,12 +407,11 @@ static void cat(char *dst, size_t cap, const char *s) {
 
 /* The risk level from masked signals S, with sloth's weights. */
 static void risk_case(char *out, size_t cap, const char *s, long long mask) {
-    static const int W[6] = { 1, 1, 1, 1, 3, 3 };
-    char sum[640] = "(0";
+    char sum[1280] = "(0";
     for (int b = 0; b < 6; b++) {
         if (!(mask & (1LL << b))) continue;
-        char t[96];
-        snprintf(t, sizeof(t), " + %d * ((%s & %d) <> 0)", W[b], s, 1 << b);
+        char t[320];
+        snprintf(t, sizeof(t), " + %d * ((%s & %d) <> 0)", web_scope_risk_w[b], s, 1 << b);
         cat(sum, sizeof(sum), t);
     }
     cat(sum, sizeof(sum), ")");
@@ -425,9 +428,25 @@ static void dcols(unsigned f, int scope, dcols_t *c) {
         snprintf(c->host, sizeof(c->host), "NULL");
         snprintf(c->ssid, sizeof(c->ssid), "d.last_ssid");
         snprintf(c->is_ap, sizeof(c->is_ap), "d.is_ap");
-        snprintf(c->sources, sizeof(c->sources), "(d.sources & 88)");
-        snprintf(c->rsig, sizeof(c->rsig), "(d.risk_signals & 11)");
-        risk_case(c->risk, sizeof(c->risk), "d.risk_signals", 11);
+        /* The camera bit only when a camera signal is the radio's (a
+         * setup SSID, a setup OUI on a beacon), as web_sdb_device()
+         * gates the camera columns; without cam_signals, not at all. */
+        if (f & WEB_QF_CAMSIG)
+            snprintf(c->sources, sizeof(c->sources),
+                     "((d.sources & %d) | CASE WHEN (d.cam_signals & %d) <> 0"
+                     " THEN %d ELSE 0 END)", WEB_SRC_MONITOR, WEB_CAM_MONITOR,
+                     WEB_SRC_CAMERA);
+        else
+            snprintf(c->sources, sizeof(c->sources), "(d.sources & %d)", WEB_SRC_MONITOR);
+        /* PROBE_ONLY recomputed over the radio's sources: sloth clears
+         * its bit for a device in the managed card's station dump (STA,
+         * Local's), which Monitor does not see. */
+        snprintf(c->rsig, sizeof(c->rsig),
+                 "((d.risk_signals & %lld) | CASE WHEN (d.sources & 16) <> 0 AND"
+                 " (d.sources & 8) = 0 THEN %d ELSE 0 END)",
+                 web_scope_risk_mask(WEB_SCOPE_MONITOR) & ~(long long)WEB_RISK_MONITOR,
+                 WEB_RISK_MONITOR);
+        risk_case(c->risk, sizeof(c->risk), c->rsig, web_scope_risk_mask(WEB_SCOPE_MONITOR));
         snprintf(c->signal, sizeof(c->signal), "COALESCE(%s, %s)",
                  (f & WEB_QF_PROBE)
                      ? "(SELECT p.signal_dbm FROM probe_clients p WHERE p.mac = d.mac)"
@@ -459,7 +478,9 @@ static void dcols(unsigned f, int scope, dcols_t *c) {
         const unsigned FT[4] = { WEB_QF_PROBE, WEB_QF_BEACON, WEB_QF_ASSOC, WEB_QF_PNLC };
         cat(c->first, sizeof(c->first), "COALESCE(NULLIF(min(" BIGT ", " BIGT);
         cat(c->last, sizeof(c->last), "COALESCE(NULLIF(max(-1, -1");
-        cat(c->member, sizeof(c->member), "((d.sources & 24) <> 0");
+        char t[64];
+        snprintf(t, sizeof(t), "((d.sources & %d) <> 0", WEB_SRC_MONITOR);
+        cat(c->member, sizeof(c->member), t);
         for (int i = 0; i < 4; i++) {
             if (!(f & FT[i])) continue;
             cat(c->first, sizeof(c->first), ", COALESCE(");
@@ -471,8 +492,10 @@ static void dcols(unsigned f, int scope, dcols_t *c) {
             cat(c->member, sizeof(c->member), " OR ");
             cat(c->member, sizeof(c->member), EX[i]);
         }
-        if (f & WEB_QF_CAMSIG)
-            cat(c->member, sizeof(c->member), " OR (d.cam_signals & 18) <> 0");
+        if (f & WEB_QF_CAMSIG) {
+            snprintf(t, sizeof(t), " OR (d.cam_signals & %d) <> 0", WEB_CAM_MONITOR);
+            cat(c->member, sizeof(c->member), t);
+        }
         cat(c->first, sizeof(c->first), "), " BIGT "), d.first_seen)");
         cat(c->last, sizeof(c->last), "), -1), d.last_seen)");
         cat(c->member, sizeof(c->member), ")");
@@ -481,33 +504,53 @@ static void dcols(unsigned f, int scope, dcols_t *c) {
         snprintf(c->host, sizeof(c->host), "d.hostname");
         snprintf(c->ssid, sizeof(c->ssid), "NULL");
         snprintf(c->is_ap, sizeof(c->is_ap), "0");
-        snprintf(c->sources, sizeof(c->sources), "(d.sources & 103)");
-        snprintf(c->rsig, sizeof(c->rsig), "(d.risk_signals & 55)");
-        risk_case(c->risk, sizeof(c->risk), "d.risk_signals", 55);
+        if (f & WEB_QF_CAMSIG)
+            snprintf(c->sources, sizeof(c->sources),
+                     "((d.sources & %d) | CASE WHEN (d.cam_signals & %d) <> 0"
+                     " THEN %d ELSE 0 END)", WEB_SRC_LOCAL, WEB_CAM_LOCAL,
+                     WEB_SRC_CAMERA);
+        else
+            snprintf(c->sources, sizeof(c->sources), "(d.sources & %d)", WEB_SRC_LOCAL);
+        snprintf(c->rsig, sizeof(c->rsig), "(d.risk_signals & %lld)",
+                 web_scope_risk_mask(WEB_SCOPE_LOCAL));
+        risk_case(c->risk, sizeof(c->risk), "d.risk_signals",
+                  web_scope_risk_mask(WEB_SCOPE_LOCAL));
         snprintf(c->signal, sizeof(c->signal), "%s",
                  (f & WEB_QF_STA)
                      ? "(SELECT w.signal_dbm FROM wifi_stas w WHERE w.mac = d.mac)"
                      : "NULL");
+        /* ARP once per statement, not once per device: arp is keyed
+         * (ip, mac) and nothing indexes mac, so a correlated subquery
+         * scanned the table for every row (7.2 s for 32,840 devices and
+         * 5,000 ARP rows). The grouped derived table is read once and
+         * joined by an automatic index. */
+        if (f & WEB_QF_ARP)
+            snprintf(c->join, sizeof(c->join),
+                     " LEFT JOIN (SELECT a.mac AS mac, min(a.first_seen) AS f,"
+                     " max(a.last_seen) AS l FROM arp a GROUP BY a.mac) am"
+                     " ON am.mac = d.mac");
         static const char *const FS[3] = {
-            "(SELECT min(a.first_seen) FROM arp a WHERE a.mac = d.mac)",
+            "am.f",
             "(SELECT w.first_seen FROM wifi_stas w WHERE w.mac = d.mac)",
             "(SELECT min(l.first_seen) FROM dhcp_leases l WHERE l.ip = d.ip)",
         };
         static const char *const LS[3] = {
-            "(SELECT max(a.last_seen) FROM arp a WHERE a.mac = d.mac)",
+            "am.l",
             "(SELECT w.last_seen FROM wifi_stas w WHERE w.mac = d.mac)",
             "(SELECT max(l.last_seen) FROM dhcp_leases l WHERE l.ip = d.ip)",
         };
         static const char *const EX[3] = {
-            "EXISTS (SELECT 1 FROM arp a WHERE a.mac = d.mac)",
+            "am.mac IS NOT NULL",
             "EXISTS (SELECT 1 FROM wifi_stas w WHERE w.mac = d.mac)",
             NULL,
         };
         const unsigned FT[3] = { WEB_QF_ARP, WEB_QF_STA, WEB_QF_DHCP };
         cat(c->first, sizeof(c->first), "COALESCE(NULLIF(min(" BIGT ", " BIGT);
         cat(c->last, sizeof(c->last), "COALESCE(NULLIF(max(-1, -1");
-        cat(c->member, sizeof(c->member),
-            "((d.sources & 39) <> 0 OR COALESCE(d.ip,'') <> ''");
+        char t[64];
+        snprintf(t, sizeof(t), "((d.sources & %d) <> 0", WEB_SRC_LOCAL);
+        cat(c->member, sizeof(c->member), t);
+        cat(c->member, sizeof(c->member), " OR COALESCE(d.ip,'') <> ''");
         for (int i = 0; i < 3; i++) {
             if (!(f & FT[i])) continue;
             cat(c->first, sizeof(c->first), ", COALESCE(");
@@ -521,8 +564,10 @@ static void dcols(unsigned f, int scope, dcols_t *c) {
                 cat(c->member, sizeof(c->member), EX[i]);
             }
         }
-        if (f & WEB_QF_CAMSIG)
-            cat(c->member, sizeof(c->member), " OR (d.cam_signals & 45) <> 0");
+        if (f & WEB_QF_CAMSIG) {
+            snprintf(t, sizeof(t), " OR (d.cam_signals & %d) <> 0", WEB_CAM_LOCAL);
+            cat(c->member, sizeof(c->member), t);
+        }
         cat(c->first, sizeof(c->first), "), " BIGT "), d.first_seen)");
         cat(c->last, sizeof(c->last), "), -1), d.last_seen)");
         cat(c->member, sizeof(c->member), ")");
@@ -840,6 +885,7 @@ static int row_select(const dcols_t *c, const char *extra, char *out, size_t cap
             : "NULL");
     if (extra) { sb_put(&b, ", "); sb_put(&b, extra); }
     sb_put(&b, " FROM devices d");
+    sb_put(&b, c->join);
     return b.over ? -1 : 0;
 }
 

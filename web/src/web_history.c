@@ -81,6 +81,8 @@ static int hist_open_budget(const web_m4_t *m, web_sdb_conn_t *c, int budget_ms,
     if (web_slothdb_open(m->sdb, c, budget_ms, now_s, err, sizeof(err)) == 0) {
         /* Every read on it answers for the request's capture scope. */
         c->scope = m->sc ? m->sc->scope : WEB_SCOPE_HYBRID;
+        c->sc = m->sc;
+        c->ru = m->tsdb ? m->tsdb->ru : NULL;
         return 0;
     }
     web_slothdb_close(c);
@@ -334,6 +336,7 @@ static int list_route(const web_m4_t *m, const char *query, long long now_s,
         return web_hist_error(400, why, NULL, body, cap, len, status);
     if (ps[2].seen && decimal(ps[2].val, 1, WEB_HIST_LIMIT_MAX, &limit) != 0)
         return web_hist_error(400, "bad_limit", NULL, body, cap, len, status);
+    WEB_M4_CHECKED(m, len, status);
     web_sdb_conn_t c;
     int o = web_hist_open(m, &c, now_s, body, cap, len, status);
     if (o) return o > 0 ? 0 : -1;
