@@ -79,6 +79,7 @@ td { font-size: 12px; font-variant-ligatures: none; }
 .dot.ok #conn, .dot #conn { color: inherit; }
 .foot { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; padding: 14px 16px 22px; margin-top: auto; border-top: 1px solid var(--brass-edge); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
 .foot .sub { letter-spacing: 0.04em; text-transform: none; }
+.foot #prefs-reset { margin-left: auto; }
 
 /* ── panels, tiles, labels ─────────────────────────────────────────── */
 main { padding: 14px 16px; min-width: 0; flex: 1; }

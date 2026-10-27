@@ -1353,7 +1353,7 @@ static void test_page_carries_the_switch(void) {
     WT_HAS(p, "id=\"sc-hybrid\"");
     WT_HAS(p, "id=\"sc-local\"");
     WT_HAS(p, "id=\"scope-legend\"");
-    WT_HAS(p, "var SCOPE_KEY = \"slothweb.scope\";");
+    WT_HAS(p, "  var savedScope = prefGet(\"scope\");");
     WT_HAS(p, "function scoped(path) {");
     WT_HAS(p, "return fetch(scoped(path), { cache: \"no-store\" })");
     WT_HAS(p, "fetch(scoped(\"/api/live\"), { cache: \"no-store\" })");

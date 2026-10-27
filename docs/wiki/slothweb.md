@@ -103,7 +103,10 @@ and for the Alerts page, `web/src/web_alerts.c`, `web/src/web_alertdb.c`,
 detail formats audited), `include/sloth_alerts.def`,
 `docs/views/alerts.md`, `research/` and [[alert-remediation]].
 
-**Last updated**: 2026-10-27 (the capture scope's review: the host's
+**Last updated**: 2026-10-27 (kept settings: every control a viewer
+can change kept per browser under `slothweb.v1.*`, each table's widths
+and sort among them, the address still winning, a reset per table and
+one for everything; the capture scope's review: the host's
 ARP table, leases and scan entries stay Local, scoped anomaly counts, z
 and open-anomalies tile, the Records view's scoped counts, the WiFi
 view's Local half from `/api/wifi/local`, [[capture-scope]]),
@@ -673,8 +676,9 @@ In short:
   column (in place, by the column's type; server-paged ones through the
   route's checked `sort` word and `dir=asc|desc`, addresses by number on
   the server too) and resizes by its header's edge
-  (drag, arrows, double-click to fit), widths kept per table in the
-  browser with a `reset columns` control.
+  (drag, arrows, double-click to fit), widths and sort kept per table
+  in the browser with a `reset columns` control ([Kept
+  settings](#kept-settings-2026-10-27)).
   `/api/wifi/deauth`: frames per bssid with
   DEAUTH_FLOOD episodes matched on the predicate-only alert key. Probe
   clients from `/api/series` over the M3 band.
@@ -952,6 +956,36 @@ row's Monitor line, `text_m`). The whole of it, view by view:
 [[capture-scope]]. `web/tests/test_scope.c` asks every route under
 each scope against one fixture with a MAC seen both ways, each absence
 seen red under a named mutation.
+
+## Kept settings (2026-10-27)
+
+Owner request: "the web interfaces columns should remember sorting and
+sizeing the whole UI should keep settings between launches where it is
+changeable". Every control a viewer can change is kept per browser in
+`localStorage`, one JSON value per setting under one versioned
+namespace, `slothweb.v1.<name>`; no server state and no endpoint. The
+view (a tab's), theme, scope, sensitivity, each table's column widths
+and sort (by the table's id, through the one `DataTable()`), the
+ticker's pause, the collapsed chrome, the Anomalies chip and mode, the
+Activity metric and each metric's key, and every view's filters,
+windows, sorts and search boxes, the SQL box's draft included. An
+address that names a view, a filter or a scope wins, and a filter it
+sets is not kept, so a link reproduces what it names; the kept values
+are what the bare address and a tab click open on. A kept width for a
+column a table no longer has is ignored, one under the column's floor
+is drawn at it; a kept sort on a column that is gone or no longer sorts
+is left off. Blocked or cleared storage is the defaults, never an
+error. The keys of the build before (`slothweb.theme`,
+`slothweb.scope`, `slothweb.sensitivity`, `slothweb.cols.<table>`) are
+moved into `v1` on the first load. Each table keeps its `reset
+columns`; `reset settings` in the footer forgets everything and loads
+the bare address again. What is deliberately not kept (the History
+range, the Records type pick, the drawer, the recipe picker) and why,
+setting by setting: [`web/README.md`](../../web/README.md#kept-settings).
+`web/tests/test_prefs.c` holds it by the page's text, and fails on a new
+form control that is neither kept nor listed as not kept; the behaviour
+(sort and resize, relaunch, still there; reset; storage that throws)
+was driven in headless Chromium.
 
 ## Tests
 

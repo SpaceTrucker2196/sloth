@@ -56,6 +56,7 @@ int main(void) {
     SUITE(run_alerts_tests);
     SUITE(run_sqlbox_tests);
     SUITE(run_scope_tests);
+    SUITE(run_prefs_tests);
     printf("slothweb tests: %d passed, %d failed\n", wt_pass, wt_fail);
     return wt_fail ? 1 : 0;
 }

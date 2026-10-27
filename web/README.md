@@ -166,8 +166,10 @@ drill-down. Every Overview tile is a link to the view of what it
 counts ([Alerts](#alerts)).
 The button at the right of the top bar switches to the light theme;
 the choice is kept in this browser only (`localStorage`, key
-`slothweb.theme`), dark is the default, and a browser that keeps
-nothing just gets dark ([Design](#design)).
+`slothweb.v1.theme`), dark is the default, and a browser that keeps
+nothing just gets dark ([Design](#design)). So is every other setting
+a viewer can change, from each table's columns to the view the page
+opens on ([Kept settings](#kept-settings)).
 
 | | |
 |---|---|
@@ -2354,10 +2356,71 @@ with it the answer's first member is `"scope"`, and a view the scope
 holds nothing of answers `{"out_of_scope":true,"reason":...}`, its
 query checked but nothing read. The page sends the scope on every
 fetch, keeps it in the address (`#devices?scope=monitor`, Hybrid left
-out) and in this browser (`slothweb.scope`), and a chip at the top of
+out) and in this browser (`slothweb.v1.scope`), and a chip at the top of
 every view, the status strip and a bar under it say which scope is
 shown; `?` beside the switch is the legend. A tile's drill-down opens
 in the scope in force, the one its count was taken in.
+
+## Kept settings
+
+Owner request 2026-10-27: "the whole UI should keep settings between
+launches where it is changeable". Every control a viewer can change is
+kept per browser, in `localStorage`, one JSON value per setting under
+one versioned namespace, `slothweb.v1.<name>`. Nothing reaches the
+server and there is no endpoint for it: a second browser, or a second
+viewer, starts from the defaults. A private window, blocked or full
+storage, or a value that does not parse is the default, never an error
+(every read and write is in a `try`, and the page was driven with
+storage that throws on every touch). A later change of shape takes a
+`v2` namespace and moves or drops `v1`; the keys of the build before
+this one (`slothweb.theme`, `slothweb.scope`, `slothweb.sensitivity`,
+`slothweb.cols.<table>`) are moved into `v1` on the first load and
+removed.
+
+**The address wins.** A link that names a view, a filter or a scope
+(`#alerts?state=open`, `#devices?q=pass:latest`, `?scope=monitor`)
+opens on what it names, and a filter the address sets is not kept. The
+kept values are what the page opens on at the bare address, or when a
+tab is clicked: an Alerts or Devices address with no filter opens on the
+kept filters, and leaving a drill-down puts the kept search back.
+
+| Setting | Kept as | Notes |
+|---|---|---|
+| the view | `view` | a tab's view only (Overview to Lookup, Alerts); an alert's page, the records and the health need the link they came from |
+| theme | `theme` | applied before the first paint, as before |
+| capture scope | `scope` | as before; an address's scope wins and, followed in the page, is kept |
+| sensitivity | `sens` | 1.5 to 4 sd, checked as read |
+| each table's column widths and sort | `table.<id>` | every table, by the one `DataTable()`: a width for a column the table no longer has is ignored, one under the column's floor (or over 4000 px) drawn at it, a sort on a column that is gone or no longer sorts left off |
+| the ticker's pause | `paused` | it opens paused and says so |
+| the hidden view list and footer (`[`) | `collapsed` | |
+| Anomalies: kind chip, cards or table | `anom.kind`, `anom.table` | |
+| Anomalies: closed-in window | `ctl.n-win` | |
+| Activity: metric, its key, window | `act.metric`, `act.keys`, `ctl.a-win` | the metric by name, each metric's key by itself |
+| Devices: search, sort | `ctl.d-q`, `ctl.d-sort` | |
+| Lookup: the query box | `ctl.l-q` | kept, not run |
+| WiFi: cells, window, AP sort | `ctl.w-metric`, `ctl.w-win`, `ctl.w-sort` | |
+| Alerts: state, severity, type, search, window | `ctl.al-*` | the type put back once the server's list of types is in |
+| Flows: protocol tab, window, sort, address | `flows.proto`, `ctl.f-win`, `ctl.f-sort`, `ctl.f-ip` | an address picked from a row or the chord is kept as if typed |
+| the SQL box's text | `ctl.q-sql` | the draft; the first recipe no longer replaces it |
+
+A select's kept value is put back only when it is one of its options,
+a text only within the box's `maxlength`.
+
+**Not kept, by decision:** the recipe picker (it fills the SQL box,
+whose text is kept); the History range (absolute times, stale on the
+next launch) and its session markers; the Records view's type pick (a
+row of a list that changes every 2 s: kept, a type that stopped
+arriving would hide every record with no row left to unpick); the
+device drawer, the scope legend, the WiFi grid's picked cell, an alert's
+page's id (each a moment, or the address's); the `more` pages (no page
+size is a control: the pages are fixed). `web/tests/test_prefs.c`
+fails on any new `select`, `input` or `textarea` that is neither kept
+nor listed here.
+
+**Reset.** Each table's `reset columns` forgets its widths and sort.
+`reset settings` at the right of the footer (a second click within 4 s
+does it) forgets every kept setting and loads the page again at the
+bare address, on the defaults.
 
 ## Design
 
@@ -2409,12 +2472,14 @@ and the SQL box's result) is one implementation,
 - **Read as tables.** The box is `role="table"`, the header a row of
   `columnheader`s, every body row `role="row"` of `cell`s, and what
   holds the rows a `rowgroup`, set as rows are drawn.
-- **Kept.** The widths are kept per table in this browser
-  (`localStorage`, `slothweb.cols.<table>`; the SQL box's by column
-  name, so one query's widths reach only the same-named column of the
-  next), read and written inside a `try`: a private window or blocked storage just means the defaults.
-  The sort is not kept. Each table's `reset columns` forgets its widths
-  and its sort.
+- **Kept.** The widths and the sort are kept per table in this
+  browser (`slothweb.v1.table.<table>`, [Kept settings](#kept-settings);
+  the SQL box's widths by column name, so one query's widths reach only
+  the same-named column of the next), read and written inside a `try`:
+  a private window or blocked storage just means the defaults. A kept
+  width is drawn within the column's floor and 4000 px; a kept sort
+  whose column is gone, or no longer sorts, is left off. Each table's
+  `reset columns` forgets its widths and its sort.
 - **Narrow windows.** A table is at least its columns' width and sits
   in its own `.hscroll` box, so at 360 px it scrolls inside the box and
   the page never scrolls sideways. Both themes use the chrome tokens:
@@ -2724,6 +2789,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_slothdb.c` | sloth.db generated from `src/db_schema.c`: the open flags (read-only, no-follow, never write or create; a write refused); the file byte for byte and its directory listing after every read, for a rollback-journal file, a cleanly closed WAL file (immutable, no `-wal` or `-shm` made), a WAL file sloth holds open with unflushed frames (read, main file and WAL prefix unchanged, sloth still writing) and a `-wal` with no `-shm`; the refusals (missing, symlink, directory, newer, a slothweb store, no devices table, a bad version, not SQLite, not configured); a v5 file read by probing and a minimal v1 file; the allow-list against `tests/test_db.c`'s guardrail, credential words and the live schema; the authorizer denying every statement off the list; the budget interrupting a slow statement; the acceptance query returning exactly D1 and D6; every other term against the file; the drawer's, Lookup's and A2's reads |
 | `test_devices.c` | the three routes through the route table: no sloth.db (`503`, the drawer and Lookup from the stream), `405` and `421` on the new paths; the acceptance query over HTTP (encoded both ways, `HEAD`); a row's members, the vendor's and name's sources, markup never markup; paging and every `400`; sloth.db missing; the drawer (path forms, lists, the detail, alerts, no credential, a MAC sloth.db lacks, bad MACs); the strip from the store's minute tier and the ring, the week from the baseline, an episode and the `anomaly:` and `has:` terms; Lookup (an MA-S MAC resolved, and not with sloth's own table; an IP's MAC, names and record; refusals); the health members; the worst case stopping with `more` |
 | `test_chmix.c` | the WiFi view's channel mix and the SSID display form: the escaper on printable UTF-8, a backslash, octets that start no sequence, C0, DEL, C1, U+FFFD, a bidi override, a zero width space, Default_Ignorable code points (a Hangul filler, the grapheme joiner, variation selectors) and blank lookalikes (NBSP, an em space), private use, a noncharacter, a truncated and an overlong sequence, and its cut; the colour against `src/ip_color.c` over the octets (a case where hashing the display form would differ); a bucket's top five by frames then MAC and the rest, closed when due and not before; the tracking bound (a scan of one-frame MACs cannot push out a busy one, a heavy late one still gets in, and one first heard half way through an hour behind 32 others far ahead enters with exactly its frames); the channel bound and the ring's overwrite counted; `beacon` and `probe_client` through the decoder and the metric derivation (deltas, a first sight a baseline, 6 GHz from `channel_source`, the beacon's name, kept whole at the stream's longest form), an `assoc` line in sloth's shape adding nothing; `?mix=1` from memory (band order, a cell merged and cut to five, the tx table, an AP's escaped stream name, empty cells null, the refusals, the plain grid unchanged), the worst case stopping at a whole row with `more` and `folded`, the `chmix` health member, the ticker's SSID escaped, an alert's title and detail escaped on `/api/live` and the ticker; with SQLite, the minute tier from slothweb.db with the AP's octets from sloth.db (escaped, the TUI's colour) and a stream name only where sloth.db has none, and every sloth.db SSID (AP table and history, the drawer's last SSID, PNL SSIDs and associations, the Devices row, `/api/sessions/new`'s APs and probe clients, the SQL box's ssid and title columns) and `/api/history/alerts`' titles escaped, never U+FFFD |
+| `test_prefs.c` | the kept settings, by the page's text (the suite runs no script; the behaviour was driven in headless Chromium): no `localStorage` outside the store's functions, each in a `try`, one `slothweb.v1.` namespace, the old keys moved; every table's widths and sort read through `DataTable()`, a width clamped to the column's floor, a sort only on a column that still sorts, written on each change and forgotten by `reset columns`; every `select`, `input` and `textarea` on the page kept or listed as not kept; the address over a kept view, scope and filters; `reset settings`. Each absence seen red under a named mutation |
 | `test_tables.c` | sortable, resizable columns: the devices statement with a direction compiled from constant columns only (and unchanged without one), every sort word and the `dir` words accepted and nothing else; over a generated sloth.db the order `/api/devices`, `/api/wifi/aps` and `/api/flows` give for each new word in both directions (text by bytes, an address by number, an empty value last), `bad_dir` without the value echoed; the page's one `DataTable()` used by every table, its headers no longer `aria-hidden`, its storage in a `try`, the reset control, the direction on every server-paged fetch; the review's fixes pinned (a set flex column drawn fixed and seeded from its drawn width, the label floor, the separator's maximum and text, ARIA rows, cells and rowgroups, a server-paged prefix not sorted again, the SQL box's widths by name and typed columns, the list headers' padding) |
 | `test_wifi.c` | the WiFi routes through the route table: the waterfall's band order and channel order, a gauge cell as the mean of its buckets and a counter's as their sum, null for empty, the defaults, 40 channels and `more`, every `400` (`tier_unavailable` past 24 h without a store), `503` without a time series or sloth.db; a channel only the store holds, at the minute and hour tiers; the deauth timeline by frames with its DEAUTH_FLOOD episodes in the range matched on the alert key that no body names, and without sloth.db; the AP table (AKM bits and downgrade flags by name, MFP as a word, the SSID history and count, KARMA, a markup SSID escaped, sorts, paging, refusals) and its worst-case row fitting `WEB_WIFI_AP_ROW_MAX`; the page's WiFi view, its ids and fetches. Both builds |
 | `test_history.c` | the History routes over a generated sloth.db: the strip's cells and session markers, the defaults and refusals; the strip on 600,000 alert episodes and 60,000 devices without the first_seen indexes inside its budget (the time asserted under 250 ms, 4x that under ASan or TSan), its work (progress-handler ticks) under a quarter of a scan's by the last_seen bound, every plan's counts held to a `GROUP BY`'s; the snapshot's shape (867,748 episodes and 31,821 devices, all in the last 30 days, no index: the scan plan) inside the overview's 1500 ms through the route, and a direct count inside 4x that under the sanitizers; the cache served without an open, invalidated by an mtime, a minute, a write, and a write into the `-wal` that leaves the main file's stat unchanged; a timeout naming its read, rows and plan; who was here at the edges of the overlap, the presence strip over the range, paging; the alerts and flows in a range with no key, detail, cookie or MQTT username and no `mqtt_flows`; the sessions; "new since the previous session" for a first visit, a visit after a crash (its window closed at the next start), one whose previous never ended (since its start), and the latest, whose devices are the ones the wiki's own recipe names; the page's History view. Both builds |

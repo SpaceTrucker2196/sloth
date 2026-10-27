@@ -5602,3 +5602,10 @@ report events.
   out-of-scope view is checked but not read. The ring and store cost of
   the presence split is measured and stated. `monitor_only` is reported,
   not used to tag.
+- 2026-10-27 — [[slothweb]]: kept settings. Every control a viewer can
+  change is kept per browser under one versioned `localStorage`
+  namespace, `slothweb.v1.*`: each table's column widths and sort, the
+  view, theme, scope, sensitivity, the ticker's pause, and every view's
+  filters, windows and search boxes. The address still wins over a kept
+  value; a reset per table and one for everything; the previous build's
+  keys moved in on the first load. No server state.

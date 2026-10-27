@@ -32,15 +32,71 @@
 (function () {
   "use strict";
 
+  // ── settings kept in this browser (owner request 2026-10-27) ──────
+  // Every control a viewer can change is kept per browser, in
+  // localStorage, one JSON value per setting under one versioned
+  // namespace, slothweb.v1.<name>; nothing reaches the server. A later
+  // change of shape takes a v2 namespace and moves or drops v1 here.
+  // A blocked, cleared or full store, or a value that does not parse,
+  // is the default and never an error: every read and write is in a
+  // try. An address that names a view, a filter or a scope still wins
+  // over a kept one (a link reproduces what it names); a kept value is
+  // what the page opens on when the address names nothing.
+  var PREF = "slothweb.v1.";
+  function prefGet(name) {
+    try {
+      var s = window.localStorage.getItem(PREF + name);
+      return s === null ? null : JSON.parse(s);
+    } catch (e) { return null; }
+  }
+  function prefSet(name, v) {
+    try {
+      if (v === null || v === undefined) window.localStorage.removeItem(PREF + name);
+      else window.localStorage.setItem(PREF + name, JSON.stringify(v));
+    } catch (e) { /* no storage: this load only */ }
+  }
+  // Every key of the page's, kept or from before the namespace, gone:
+  // "reset settings".
+  function prefClear() {
+    try {
+      var ls = window.localStorage, ks = [];
+      for (var i = 0; i < ls.length; i++) {
+        var k = ls.key(i);
+        if (k && k.indexOf("slothweb.") === 0) ks.push(k);
+      }
+      ks.forEach(function (k) { ls.removeItem(k); });
+    } catch (e) { /* no storage: nothing kept */ }
+  }
+  // The keys from before the namespace (the theme, the scope, the
+  // sensitivity, each table's widths) moved into it once, and any other
+  // un-namespaced slothweb.* key dropped.
+  (function prefMigrate() {
+    try {
+      var ls = window.localStorage, old = [];
+      for (var i = 0; i < ls.length; i++) {
+        var k = ls.key(i);
+        if (k && k.indexOf("slothweb.") === 0 && k.indexOf(PREF) !== 0) old.push(k);
+      }
+      old.forEach(function (k) {
+        var v = ls.getItem(k), to = null, val = null;
+        if (k === "slothweb.theme") { to = "theme"; val = v; }
+        else if (k === "slothweb.scope") { to = "scope"; val = v; }
+        else if (k === "slothweb.sensitivity") { to = "sens"; val = Number(v); }
+        else if (k.indexOf("slothweb.cols.") === 0) {
+          to = "table." + k.slice(14);
+          try { val = { w: JSON.parse(v) }; } catch (e) { val = null; }
+        }
+        if (to && val !== null && ls.getItem(PREF + to) === null) ls.setItem(PREF + to, JSON.stringify(val));
+        ls.removeItem(k);
+      });
+    } catch (e) { /* no storage: nothing to move */ }
+  })();
+
   // The theme, before the first paint: the script sits in <head>, so
   // this runs before the body is parsed, and the rest waits for the DOM.
-  // Dark is the default; only a stored "light" changes it, and a blocked
-  // or absent store means dark.
-  var THEME_KEY = "slothweb.theme";
+  // Dark is the default; only a kept "light" changes it.
   var root = document.documentElement;
-  try {
-    if (window.localStorage.getItem(THEME_KEY) === "light") root.dataset.theme = "light";
-  } catch (e) { /* no storage: dark */ }
+  if (prefGet("theme") === "light") root.dataset.theme = "light";
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", main);
   else main();
@@ -91,15 +147,12 @@
   // the empty states. The choice is in the address (#devices?scope=
   // monitor; Hybrid left out) and kept in this browser for an address
   // that names none; a blocked or absent store means Hybrid.
-  var SCOPE_KEY = "slothweb.scope";
   var SCOPES = ["monitor", "hybrid", "local"];
   var SCOPE_WANT = { "monitor": 1, "local": 2 };
   var SCOPE_WORD = { "monitor": "Monitor", "hybrid": "Hybrid", "local": "Local" };
   var SCOPE = "hybrid";
-  try {
-    var savedScope = window.localStorage.getItem(SCOPE_KEY);
-    if (SCOPES.indexOf(savedScope) >= 0) SCOPE = savedScope;
-  } catch (e) { /* no storage: Hybrid */ }
+  var savedScope = prefGet("scope");
+  if (SCOPES.indexOf(savedScope) >= 0) SCOPE = savedScope;
   // An address that names one wins, before the first fetch.
   var hashScope = /[?&]scope=(monitor|hybrid|local)(&|$)/.exec(String(location.hash || ""));
   if (hashScope) SCOPE = hashScope[1];
@@ -422,9 +475,12 @@
   // mouse, a pen or a finger), to move with the arrow keys once it has
   // the focus (Shift for bigger steps, Home for the minimum) or to
   // double-click (or Enter) to fit the column to its widest cell. A
-  // column never goes below its minimum. The widths are kept per table
-  // in this browser (localStorage; the page works the same without it);
-  // "reset columns" forgets them and the sort.
+  // column never goes below its minimum. The widths and the sort are
+  // kept per table in this browser (prefGet(), keyed by the table's id;
+  // the page works the same without it): a kept width for a column the
+  // table no longer has is ignored, one below the column's floor (or
+  // above 4000 px) drawn at it, a kept sort on a column that is gone or
+  // no longer sortable left off. "reset columns" forgets both.
   //
   // A table whose rows the page holds sorts them in place, stably, by
   // the column's type: an address numerically (IPv4 before IPv6, each
@@ -437,7 +493,6 @@
   // rows it holds by the same comparator, so the server picks the rows
   // and the page the order of the bytes within them (an address read as
   // text by SQL, numerically here).
-  var DT_STORE = "slothweb.cols.";
   var DT_GAP = 6;
   var CH_PX = 0;
   function chPx() {
@@ -497,17 +552,21 @@
     return a.length - b.length;
   }
 
-  function loadWidths(id) {
-    try {
-      var v = JSON.parse(window.localStorage.getItem(DT_STORE + id) || "null");
-      return v && typeof v === "object" && !Array.isArray(v) ? v : {};
-    } catch (e) { return {}; }
+  // A table's kept state, slothweb.v1.table.<id>: { w: { column: px },
+  // sort: column, dir: 1 | -1 }, each part checked as read.
+  function dtLoad(id) {
+    var v = prefGet("table." + id), out = { w: {}, key: null, dir: 0 };
+    if (!v || typeof v !== "object" || Array.isArray(v)) return out;
+    if (v.w && typeof v.w === "object" && !Array.isArray(v.w))
+      Object.keys(v.w).forEach(function (k) { if (num(v.w[k])) out.w[k] = v.w[k]; });
+    if (typeof v.sort === "string" && (v.dir === 1 || v.dir === -1)) { out.key = v.sort; out.dir = v.dir; }
+    return out;
   }
-  function saveWidths(id, w) {
-    try {
-      if (Object.keys(w).length) window.localStorage.setItem(DT_STORE + id, JSON.stringify(w));
-      else window.localStorage.removeItem(DT_STORE + id);
-    } catch (e) { /* no storage: the widths last until the page goes */ }
+  function dtSave(t) {
+    var v = {};
+    if (Object.keys(t.w).length) v.w = t.w;
+    if (t.key && t.dir) { v.sort = t.key; v.dir = t.dir; }
+    prefSet("table." + t.o.id, Object.keys(v).length ? v : null);
   }
 
   // o: { id, box, head, cols, table (a <table>: the SQL box), server
@@ -518,7 +577,8 @@
   //      srv (its server sort word), val (row -> the value sorted by),
   //      num (right-aligned) }.
   function DataTable(o) {
-    var t = { o: o, cols: o.cols, w: loadWidths(o.id), key: null, dir: 0, th: [], rs: [] };
+    var kept = dtLoad(o.id);
+    var t = { o: o, cols: o.cols, w: kept.w, key: null, dir: 0, th: [], rs: [] };
     var own = Object.prototype.hasOwnProperty;
     t.col = function (k) {
       for (var i = 0; i < t.cols.length; i++) if (t.cols[i].k === k) return t.cols[i];
@@ -537,10 +597,11 @@
     t.min = function (c) {
       return Math.max(Math.round((num(c.min) ? c.min : 4) * chPx()), t.labPx(c));
     };
-    // The width the user set, or null.
+    // The width the user set, within the column's floor and 4000 px,
+    // or null.
     t.set = function (c) {
-      return own.call(t.w, c.k) && num(t.w[c.k]) && t.w[c.k] >= t.min(c) && t.w[c.k] <= 4000
-        ? Math.round(t.w[c.k]) : null;
+      if (!own.call(t.w, c.k) || !num(t.w[c.k])) return null;
+      return Math.max(t.min(c), Math.min(4000, Math.round(t.w[c.k])));
     };
     // The column's own width: the user's, or its default, at least its
     // minimum.
@@ -591,7 +652,7 @@
     };
     t.setWidth = function (c, px) {
       t.w[c.k] = Math.max(t.min(c), Math.min(4000, Math.round(px)));
-      saveWidths(o.id, t.w);
+      dtSave(t);
       t.apply();
     };
     // The widest cell of column i among the rows drawn, and its header.
@@ -625,10 +686,11 @@
       if (t.key !== c.k) { t.key = c.k; t.dir = 1; }
       else if (t.dir === 1) t.dir = -1;
       else { t.key = null; t.dir = 0; }
+      dtSave(t);
       t.paint();
       if (o.server) o.server(); else if (o.redraw) o.redraw();
     };
-    t.clear = function () { t.key = null; t.dir = 0; t.paint(); };
+    t.clear = function () { t.key = null; t.dir = 0; dtSave(t); t.paint(); };
     // The server's sort word and direction, or null for its default.
     t.word = function () {
       var c = t.key ? t.col(t.key) : null;
@@ -661,9 +723,9 @@
     };
     t.reset = function () {
       t.w = {};
-      saveWidths(o.id, t.w);
       t.key = null;
       t.dir = 0;
+      dtSave(t);
       t.apply();
       t.paint();
       if (o.server) o.server(); else if (o.redraw) o.redraw();
@@ -767,13 +829,46 @@
     if (o.reset) {
       var rb = el("button", "dt-reset", "reset columns");
       rb.type = "button";
-      rb.title = "forget this table's column widths and sort";
+      rb.title = "forget this table's column widths and sort, here and in this browser";
       rb.addEventListener("click", t.reset);
       o.reset.appendChild(rb);
     }
+    // The kept sort, while its column is there and still sorts.
+    var kc = kept.key ? t.col(kept.key) : null;
+    if (kc && t.sortable(kc)) { t.key = kept.key; t.dir = kept.dir; }
     t.build();
     return t;
   }
+
+  // ── a control kept by value ───────────────────────────────────────
+  // A select, a search box or the SQL box, slothweb.v1.ctl.<id>: the
+  // kept value put back when the control can hold it (a select's own
+  // option, a text within its maxlength), saved on every change the
+  // viewer makes. A value the page itself sets (a drill-down's filter)
+  // fires no event and is not kept.
+  function ctlFits(c, v) {
+    if (typeof v !== "string") return false;
+    if (c.tagName === "SELECT") {
+      for (var i = 0; i < c.options.length; i++) if (c.options[i].value === v) return true;
+      return false;
+    }
+    return v.length <= (c.maxLength > 0 ? c.maxLength : 65536);
+  }
+  // The kept value if the control can hold it, else dflt.
+  function ctlKept(id, dflt) {
+    var v = prefGet("ctl." + id);
+    return ctlFits($(id), v) ? v : dflt;
+  }
+  function ctlSave(id) { prefSet("ctl." + id, $(id).value); }
+  function keepCtl(id) {
+    var c = $(id);
+    c.value = ctlKept(id, c.value);
+    c.addEventListener(c.tagName === "SELECT" ? "change" : "input", function () { ctlSave(id); });
+  }
+  ["n-win", "a-win", "d-q", "d-sort", "l-q", "w-metric", "w-win", "w-sort", "al-state", "al-sev",
+   "al-q", "al-win", "f-win", "f-sort", "f-ip", "q-sql"].forEach(keepCtl);
+  // Filled from the server's answer, so put back where it is filled.
+  $("al-type").addEventListener("change", function () { ctlSave("al-type"); });
 
   // A cell of a held-rows table: a span with its column's class.
   function dtCell(cls, node) {
@@ -828,12 +923,9 @@
   // ── sensitivity (§5.3: 1.5 to 4 sd, view only) ────────────────────
   // Kept in this browser only; a blocked or absent store just means the
   // default.
-  var SENS_KEY = "slothweb.sensitivity";
   var sens = 2;
-  try {
-    var saved = Number(window.localStorage.getItem(SENS_KEY));
-    if (saved >= 1.5 && saved <= 4) sens = saved;
-  } catch (e) { /* no storage: the default */ }
+  var savedSens = prefGet("sens");
+  if (num(savedSens) && savedSens >= 1.5 && savedSens <= 4) sens = savedSens;
   $("sens").value = String(sens);
   set("sens-v", sens.toFixed(1));
 
@@ -876,7 +968,7 @@
   }
 
   // ── the ticker ────────────────────────────────────────────────────
-  var paused = false;
+  var paused = prefGet("paused") === true;
   var lastSeq = 0;
   var held = 0;
 
@@ -935,9 +1027,12 @@
 
   $("pause").addEventListener("click", function () {
     paused = !paused;
+    prefSet("paused", paused || null);
     set("pause", paused ? "resume" : "pause");
     if (!paused) { held = 0; set("tick-note", ""); }
   });
+  // Paused when the page was left: it opens paused, and says so.
+  if (paused) { set("pause", "resume"); set("tick-note", "paused"); }
 
   // ── /api/live ─────────────────────────────────────────────────────
   var AL = { list: [] };
@@ -1146,6 +1241,10 @@
     if (v === "health") healthView();
     if (DB_VIEWS.indexOf(v) >= 0) dbFresh();
     scopeView(v);
+    // A tab's view is kept, for an address that names none; a
+    // drill-down's (an alert's page, the records, the health) needs the
+    // link it came from.
+    if (NAV.indexOf(v) >= 0) prefSet("view", v);
     // The view is in the address (#flows, #alerts?state=open), so a
     // reload or a link opens it again; replaceState, so Back leaves the
     // page as before. Only a sandboxed frame's refusal is expected;
@@ -1188,6 +1287,23 @@
     if (r && r.scope) setScope(r.scope);
     if (r) show(r.v, r.p);
   });
+  // "reset settings": every kept setting forgotten and the page loaded
+  // again on its defaults, at the bare address (a scope or a view in it
+  // would win over the defaults). A second click within 4 s does it, so
+  // a stray one does not.
+  var resetArm = 0;
+  $("prefs-reset").addEventListener("click", function () {
+    if (!resetArm) {
+      set("prefs-reset", "click again to reset");
+      resetArm = setTimeout(function () { resetArm = 0; set("prefs-reset", "reset settings"); }, 4000);
+      return;
+    }
+    clearTimeout(resetArm);
+    prefClear();
+    try { window.history.replaceState(null, "", location.pathname + location.search); }
+    catch (e) { if (e.name !== "SecurityError") throw e; }
+    location.reload();
+  });
   $("nav-overview").addEventListener("click", function () { show("overview"); });
   $("nav-activity").addEventListener("click", function () { show("activity"); });
   $("nav-anomalies").addEventListener("click", function () { show("anomalies"); });
@@ -1212,7 +1328,7 @@
     var light = root.dataset.theme !== "light";
     if (light) root.dataset.theme = "light";
     else delete root.dataset.theme;
-    try { window.localStorage.setItem(THEME_KEY, light ? "light" : "dark"); } catch (e) { /* none */ }
+    prefSet("theme", light ? "light" : "dark");
     TH = null;
     themeLabel();
     // Redrawn with its parameters: an alert's page keeps its id, a
@@ -1283,7 +1399,7 @@
   function setScope(s) {
     if (SCOPES.indexOf(s) < 0 || s === SCOPE) return 0;
     SCOPE = s;
-    try { window.localStorage.setItem(SCOPE_KEY, s); } catch (e) { /* this load only */ }
+    prefSet("scope", s);
     SC.facts = null;
     scopeUI();
     // The ticker and the tiles start again in the new scope; an answer
@@ -1330,6 +1446,7 @@
     $("scope-info").focus();
   });
   scopeUI();
+  if (prefGet("collapsed") === true) $("app").classList.add("collapsed");
 
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") { closeDrawer(); scopeLegend(false); return; }
@@ -1345,7 +1462,7 @@
       return;
     }
     if (e.target !== document.body) return;
-    if (e.key === "[") $("app").classList.toggle("collapsed");
+    if (e.key === "[") prefSet("collapsed", $("app").classList.toggle("collapsed") || null);
     if (e.key === "1") show("overview");
     if (e.key === "2") show("activity");
     if (e.key === "3") show("devices");
@@ -1479,7 +1596,7 @@
     return out;
   }
 
-  var A = { metrics: [], storeOn: false, keys: [], metric: -1, key: 0,
+  var A = { metrics: [], storeOn: false, keys: [], metric: -1, key: -1,
             last: null, timer: 0, gen: 0 };
 
   function tierFor(win) {
@@ -1737,11 +1854,14 @@
   (function chips() {
     var box = $("n-chips");
     var all = ["all"].concat(KINDS);
+    var kk = prefGet("anom.kind");
+    if (KINDS.indexOf(kk) >= 0) N.kind = kk;
     all.forEach(function (k) {
-      var b = el("button", k === "all" ? "on" : "", (k === "all" ? "" : kindGlyph(k) + " ") + k);
+      var b = el("button", k === (N.kind || "all") ? "on" : "", (k === "all" ? "" : kindGlyph(k) + " ") + k);
       b.type = "button";
       b.addEventListener("click", function () {
         N.kind = k === "all" ? "" : k;
+        prefSet("anom.kind", N.kind || null);
         for (var i = 0; i < box.childNodes.length; i++) box.childNodes[i].className = "";
         b.className = "on";
         anomalies();
@@ -1841,15 +1961,20 @@
     });
     if (!N.list.length) box.appendChild(el("div", "sub", "nothing in this window"));
   }
-  $("n-mode").addEventListener("click", function () {
-    N.table = !N.table;
+  function anomMode(on) {
+    N.table = on;
     $("n-mode").ariaPressed = N.table ? "true" : "false";
     set("n-mode", N.table ? "cards" : "table");
     $("n-cards").hidden = N.table;
     $("n-tbox").hidden = !N.table;
     $("n-tools").hidden = !N.table;
     if (N.table) anomTable();
+  }
+  $("n-mode").addEventListener("click", function () {
+    anomMode(!N.table);
+    prefSet("anom.table", N.table || null);
   });
+  if (prefGet("anom.table") === true) anomMode(true);
 
   function anomalies() {
     // The open-anomalies tile's view: every open episode, whatever the
@@ -1887,7 +2012,7 @@
   $("sens").addEventListener("input", function () {
     sens = Number($("sens").value) || 2;
     set("sens-v", sens.toFixed(1));
-    try { window.localStorage.setItem(SENS_KEY, String(sens)); } catch (e) { /* none */ }
+    prefSet("sens", sens);
     if (view === "overview") overview();
     if (view === "activity") refresh();
     if (view === "anomalies") anomalies();
@@ -1903,6 +2028,7 @@
     if (!m) return Promise.resolve();
     if (m.keykind === "") {
       A.keys = [""];
+      A.key = 0;
       var o = el("option", "", "(global)");
       o.value = "0";
       sel.appendChild(o);
@@ -1917,6 +2043,8 @@
         op.value = String(i);
         sel.appendChild(op);
       }
+      // -1: the metric was just picked; its kept key, or the first.
+      if (A.key < 0) A.key = Math.max(0, A.keys.indexOf(actKey(m.name)));
       if (A.key >= A.keys.length) A.key = 0;
       sel.value = String(A.key);
       set("a-note", A.keys.length ? (j.total > A.keys.length ? A.keys.length + " of " + j.total + " keys" : "")
@@ -1978,7 +2106,7 @@
         cell.appendChild(el("div", "v", fmt(r.cur) + " " + m.unit));
         cell.addEventListener("click", function () {
           var i = A.keys.indexOf(r.key);
-          if (i >= 0) { A.key = i; $("a-key").value = String(i); refresh(); }
+          if (i >= 0) { A.key = i; $("a-key").value = String(i); actKeep(); refresh(); }
         });
         box.appendChild(cell);
         draw(cv, r.pts, { from: from, to: to, step: 10, kind: r.kind,
@@ -2012,13 +2140,28 @@
            : "  (warming: no baseline for this hour yet)"));
   });
 
+  // The key kept for each metric (slothweb.v1.act.keys: { metric:
+  // key }), so a metric picked again opens on the key it was left on.
+  function actKey(name) {
+    var ks = prefGet("act.keys");
+    return ks && typeof ks === "object" && typeof ks[name] === "string" ? ks[name] : null;
+  }
+  function actKeep() {
+    var m = selMetric(), ks = prefGet("act.keys");
+    if (!m || !A.keys.length) return;
+    if (!ks || typeof ks !== "object" || Array.isArray(ks)) ks = {};
+    ks[m.name] = A.keys[A.key] || "";
+    prefSet("act.keys", ks);
+  }
   $("a-metric").addEventListener("change", function () {
     A.metric = Number($("a-metric").value) || 0;
-    A.key = 0;
+    A.key = -1;
+    if (selMetric()) prefSet("act.metric", selMetric().name);
     fillKeys().then(refresh);
   });
   $("a-key").addEventListener("change", function () {
     A.key = Number($("a-key").value) || 0;
+    actKeep();
     refresh();
   });
   $("a-win").addEventListener("change", refresh);
@@ -2032,13 +2175,15 @@
       A.storeOn = !!j.store;
       A.metrics = j.metrics || [];
       var sel = $("a-metric");
-      var pick = 0;
+      var pick = 0, km = prefGet("act.metric"), kept = -1;
       for (var i = 0; i < A.metrics.length; i++) {
         var o = el("option", "", A.metrics[i].name);
         o.value = String(i);
         sel.appendChild(o);
         if (A.metrics[i].name === "iface.rx_rate") pick = i;
+        if (A.metrics[i].name === km) kept = i;
       }
+      if (kept >= 0) pick = kept;
       A.metric = pick;
       sel.value = String(pick);
       return fillKeys();
@@ -2112,7 +2257,7 @@
     // named in the bar above it; the view without one clears it.
     if (view === "devices") {
       if (typeof VP.q === "string") { $("d-q").value = VP.q; D.drill = VP.q; }
-      else if (D.drill !== undefined) { if ($("d-q").value === D.drill) $("d-q").value = ""; D.drill = undefined; }
+      else if (D.drill !== undefined) { if ($("d-q").value === D.drill) $("d-q").value = ctlKept("d-q", ""); D.drill = undefined; }
       $("d-filter").hidden = typeof VP.q !== "string";
       if (VP.q === "pass:latest")
         set("d-filter-t", "filtered: pass:latest, the devices in sloth's latest pass, the " +
@@ -3073,6 +3218,7 @@
   var FLOW_PAGE = 50;
   var F = { proto: "ssh", gen: 0, ggen: 0, rows: [], offset: 0, graph: null,
             tabs: null, hits: [] };
+  if (FLOW_TABS.indexOf(prefGet("flows.proto")) >= 0) F.proto = prefGet("flows.proto");
 
   function flowHue(p) {
     return Object.prototype.hasOwnProperty.call(FLOW_LABEL, p) ? css("--f-" + p) : css("--muted");
@@ -3100,6 +3246,7 @@
         b.ariaSelected = p === F.proto ? "true" : "false";
         b.addEventListener("click", function () {
           F.proto = p;
+          prefSet("flows.proto", p);
           flowTabs();
           flowRows(true);
         });
@@ -3159,7 +3306,7 @@
     if (typeof from === "string") {
       row.classList.add("go");
       row.tabIndex = 0;
-      row.addEventListener("click", function () { $("f-ip").value = from; flowRows(true); });
+      row.addEventListener("click", function () { $("f-ip").value = from; ctlSave("f-ip"); flowRows(true); });
     }
     return row;
   }
@@ -3383,6 +3530,7 @@
       var h = F.hits[i];
       if ((px - h.x) * (px - h.x) + (py - h.y) * (py - h.y) <= h.r * h.r) {
         $("f-ip").value = h.id;
+        ctlSave("f-ip");
         flowRows(true);
         return;
       }
@@ -3725,7 +3873,7 @@
         o.value = String(i);
         sel.appendChild(o);
       });
-      if (Q.recipes.length) $("q-sql").value = Q.recipes[0].sql.trim();
+      if (Q.recipes.length && !ctlKept("q-sql", "")) $("q-sql").value = Q.recipes[0].sql.trim();
       set("q-note", Q.recipes.length + " recipes from " + j.source);
     }).catch(function (e) { set("q-note", errText(e.message)); });
   }
@@ -3806,7 +3954,7 @@
   }
   $("q-recipe").addEventListener("change", function () {
     var i = Number($("q-recipe").value);
-    if (Q.recipes && Q.recipes[i]) $("q-sql").value = Q.recipes[i].sql.trim();
+    if (Q.recipes && Q.recipes[i]) { $("q-sql").value = Q.recipes[i].sql.trim(); ctlSave("q-sql"); }
   });
   $("q-run").addEventListener("click", runQuery);
 
@@ -3860,13 +4008,16 @@
 
   function alertsView() {
     // A drill-down's filter (the open-alerts tile: state=open) set in
-    // the controls, so the filter applied is the one on screen.
-    $("al-state").value = STATE_SET[VP.state] ? VP.state : "all";
-    $("al-sev").value = typeof VP.sev === "string" && SEV_SET[VP.sev] ? VP.sev : "";
+    // the controls, so the filter applied is the one on screen; an
+    // address that names no filter opens on the kept ones.
+    var named = ["state", "sev", "type", "q"].some(function (k) { return typeof VP[k] === "string"; });
+    $("al-state").value = STATE_SET[VP.state] ? VP.state : named ? "all" : ctlKept("al-state", "all");
+    $("al-sev").value = typeof VP.sev === "string" && SEV_SET[VP.sev] ? VP.sev : named ? "" : ctlKept("al-sev", "");
     if (typeof VP.q === "string") $("al-q").value = VP.q;
-    else if (ALP.drillQ !== undefined) { $("al-q").value = ""; }
+    else if (ALP.drillQ !== undefined) { $("al-q").value = ctlKept("al-q", ""); }
     ALP.drillQ = VP.q;
-    ALP.wantType = typeof VP.type === "string" ? VP.type : "";
+    var kt = prefGet("ctl.al-type");
+    ALP.wantType = typeof VP.type === "string" ? VP.type : !named && typeof kt === "string" ? kt : "";
     // The drill-down as asked, to tell when the controls have left it.
     ALP.drill = (STATE_SET[VP.state] && VP.state !== "all") || (VP.sev && SEV_SET[VP.sev]) ||
                ALP.wantType || (typeof VP.q === "string" && VP.q)
@@ -4488,7 +4639,8 @@
   getJSON("/api/metrics").then(function (j) { A.storeOn = !!j.store; })
     .catch(function () { /* fine tier only */ })
     .then(function () {
-      var r = hashRoute();
+      var r = hashRoute(), kv = prefGet("view");
+      if (!r && NAV.indexOf(kv) >= 0) r = { v: kv, p: {} };
       if (r && r.v !== "overview") show(r.v, r.p);
       else overview();
     });

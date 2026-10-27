@@ -58,8 +58,8 @@ static void test_page_tables(void) {
     const char *p = (const char *)web_page;
     WT_HAS(p, "  function DataTable(o) {");
     WT_HAS(p, "th.ariaSort = t.sortable(c) ? (on ? (t.dir > 0 ? \"ascending\" : \"descending\") : \"none\") : null;");
-    WT_HAS(p, "      var v = JSON.parse(window.localStorage.getItem(DT_STORE + id) || \"null\");");
-    WT_HAS(p, "    } catch (e) { /* no storage: the widths last until the page goes */ }");
+    WT_HAS(p, "    var v = prefGet(\"table.\" + id), out = { w: {}, key: null, dir: 0 };");
+    WT_HAS(p, "    prefSet(\"table.\" + t.o.id, Object.keys(v).length ? v : null);");
     WT_HAS(p, "el(\"button\", \"dt-reset\", \"reset columns\")");
     WT_HAS(p, "rs.role = \"separator\";");
     WT_HAS(p, "rs.addEventListener(\"dblclick\"");
