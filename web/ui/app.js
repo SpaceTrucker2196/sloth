@@ -958,7 +958,9 @@
 
   // ── KPIs ──────────────────────────────────────────────────────────
   function kpis(t) {
-    if (typeof t.socket === "string") { set("sock", t.socket); set("s-sock", t.socket); }
+    // F5: the stream's state is the footer's, once. The strip used to
+    // carry it as "sensor" as well, which is the same fact twice.
+    if (typeof t.socket === "string") set("sock", t.socket);
     // A tick's figures are Hybrid's: under a scope only /api/live's
     // (asked for with the scope) set the tiles, and a tick passes
     // without them.
@@ -1373,6 +1375,7 @@
     else delete root.dataset.theme;
     prefSet("theme", light ? "light" : "dark");
     TH = null;
+    TOK = null;
     themeLabel();
     // Redrawn with its parameters: an alert's page keeps its id, a
     // drill-down its filter.
@@ -1544,6 +1547,17 @@
     for (i = 0; i < 3; i++) TH.hot.push(css("--hot-" + i));
     return TH;
   }
+  // The glyph painter's resolver (glyph.js): a mark carries a token
+  // name, never a colour, so the geometry stays a pure function. Read
+  // through a table, because a mark list is drawn whole and
+  // getComputedStyle() on every mark is a CSSOM walk per mark; the
+  // theme toggle clears it beside TH.
+  var TOK = null;
+  function tok(name) {
+    if (!TOK) TOK = {};
+    if (!(name in TOK)) TOK[name] = css(name);
+    return TOK[name];
+  }
   // A key's colour from the TUI's hash, for a canvas or a swatch.
   function keyColor(k) {
     return theme().k[ipColorIndex(k)];
@@ -1707,8 +1721,18 @@
       g.fillText(fmt(lo), 2 * dpr, y0);
       g.textBaseline = "top";
       g.fillText(hhmmss(opt.from), x0, y0 + 2 * dpr);
+      // R4: a band chart carries at least three time labels and a now
+      // mark, so one minute of data in a 24 h window cannot read as a
+      // full day with both ends at the same time (F2).
+      var midTxt = hhmmss(Math.round((opt.from + opt.to) / 2));
+      g.fillText(midTxt, (x0 + x1 - g.measureText(midTxt).width) / 2, y0 + 2 * dpr);
       var endTxt = hhmmss(opt.to);
       g.fillText(endTxt, x1 - g.measureText(endTxt).width, y0 + 2 * dpr);
+      if (num(opt.now) && opt.now >= opt.from && opt.now <= opt.to) {
+        g.fillStyle = T.signal;
+        g.fillRect(X(opt.now), y1, Math.max(1, dpr), y0 - y1);
+        g.fillStyle = T.muted;
+      }
     }
     var gapS = opt.step * 2.5;
     if (opt.kind === "presence") {
@@ -1873,16 +1897,28 @@
           var bd = bands(s.points, bl, s.kind, s.step);
           var last = s.points.length ? s.points[s.points.length - 1][1] : NaN;
           set("k-tp", fmt(last) + " B/s");
-          var opt = { from: from, to: to, step: s.step, kind: s.kind,
-                      color: theme().normal, band: bd };
-          opt.axes = false;
-          opt.spark = true;
-          draw($("k-tp-spark"), s.points, opt);
-          opt.axes = true;
-          opt.spark = false;
+          // R4: a window the data covers less than a tenth of shrinks
+          // to the data, and the caption says so (F2). Both the tile's
+          // G1 and the chart draw the same window.
+          var gw = glyph.win(s.points, from, to);
+          var banded = false;
+          for (var bi = 0; bd && bi < bd.length; bi++) if (bd[bi]) banded = true;
+          var sp = $("k-tp-spark");
+          O.scale = glyph.scale(s.points, bd, O.scale || null);
+          glyph.paint(sp, glyph.g1(s.points, bd,
+              { w: sp.clientWidth, h: sp.clientHeight, from: gw.from, to: gw.to,
+                step: s.step, sens: sens, scale: O.scale }), tok);
+          var opt = { from: gw.from, to: gw.to, step: s.step, kind: s.kind,
+                      color: theme().normal, band: bd, now: now,
+                      axes: true, spark: false };
           draw($("o-nvn"), s.points, opt);
-          set("o-nvn-note", "iface.rx_rate " + O.key + ", 24 h, " + tier + " tier" +
-              (bd ? "" : "; no baseline yet"));
+          // R9: source, window, tier, scale, n, then the state.
+          set("o-nvn-note", glyph.caption({
+            source: "iface.rx_rate " + O.key, window: "24 h", tier: tier,
+            scale: "band ±" + sens.toFixed(1) + " sd",
+            n: s.points.length,
+            state: !s.points.length ? "no data" : gw.shrunk ? gw.text
+                   : banded ? "" : "warming" }));
           heatmap($("o-heat"), bl);
           set("o-heat-note", bl && bl.cells ? "iface.rx_rate " + O.key +
               ", mean B/s by local hour of the sensor host" : "no baseline yet");
@@ -2122,12 +2158,24 @@
       if (gen !== A.gen) return;
       var s = r[0];
       var bd = bands(s.points, r[1], s.kind, s.step);
-      A.last = { pts: s.points, from: from, to: to, step: s.step, kind: s.kind, band: bd };
-      set("a-src", tier + " tier, " + s.points.length + " buckets, " + s.source +
-          (bd ? ", band mean ± " + sens.toFixed(1) + " sd" : ", no baseline yet") +
+      // R4 for the window, R9 for the caption, F18 for the band's own
+      // width in it: the same grammar the Overview's chart carries.
+      var gw = glyph.win(s.points, from, to);
+      var banded = false;
+      for (var bi = 0; bd && bi < bd.length; bi++) if (bd[bi]) banded = true;
+      A.last = { pts: s.points, from: gw.from, to: gw.to, step: s.step,
+                 kind: s.kind, band: bd };
+      set("a-src", glyph.caption({
+            source: m.name + (key ? " " + key : "") + ", " + s.source,
+            window: glyph.dur(win), tier: tier,
+            scale: banded ? "band ±" + sens.toFixed(1) + " sd" : "",
+            n: s.points.length,
+            state: !s.points.length ? "no data" : gw.shrunk ? gw.text
+                   : banded ? "" : "warming" }) +
           (!A.storeOn && Number($("a-win").value) > 86400 ? "; minute and hour tiers need a WITH_SQLITE build" : ""));
-      draw($("a-chart"), s.points, { from: from, to: to, step: s.step, kind: s.kind,
-                                     color: theme().normal, axes: true, band: bd });
+      draw($("a-chart"), s.points, { from: gw.from, to: gw.to, step: s.step, kind: s.kind,
+                                     color: theme().normal, axes: true, band: bd,
+                                     now: now });
     }).catch(function (e) { set("a-src", "error: " + e.message); });
   }
 
@@ -2362,27 +2410,17 @@
     return out;
   }
 
-  // The cells from the server's 36 hex digits, cell 0 the oldest, its
-  // bit the high bit of the first digit; present in --phosphor, absent
-  // in --bg (§8.12; present is CP_NORMAL's phosphor now, ruling
-  // 2026-10-23). n of them across the width: 144 of 10 minutes on
-  // the Devices view and the drawer, History's presence_cells over its
-  // range (the rest of the 144 are past it).
+  // G5 (glyph.js): the cells from the server's 36 hex digits, cell 0
+  // the oldest, its bit the high bit of the first digit; present in
+  // --phosphor, absent on the page's ground (§8.12; present is
+  // CP_NORMAL's phosphor now, ruling 2026-10-23). n of them across the
+  // width: 144 of 10 minutes on the Devices view and the drawer,
+  // History's presence_cells over its range (the rest of the 144 are
+  // past it). A strip the server could not answer draws R5's dash.
   function drawStrip(c, hex, n) {
-    var T = theme();
-    var dpr = sizeCanvas(c);
-    var g = c.getContext("2d");
-    var W = c.width, H = c.height;
-    g.fillStyle = T.bg;
-    g.fillRect(0, 0, W, H);
-    if (typeof hex !== "string" || !/^[0-9a-f]{36}$/.test(hex)) return;
-    n = num(n) && n >= 1 && n <= 144 ? Math.floor(n) : 144;
-    var cw = W / n;
-    g.fillStyle = theme().normal;
-    for (var i = 0; i < n; i++) {
-      var v = parseInt(hex.charAt(i >> 2), 16);
-      if (v & (8 >> (i & 3))) g.fillRect(Math.floor(i * cw), 0, Math.max(dpr, Math.ceil(cw)), H);
-    }
+    var cells = glyph.cellsFromHex(hex, n);
+    glyph.paint(c, glyph.g5(cells, { w: c.clientWidth, h: c.clientHeight,
+                                     first: -1, ground: "--bg" }), tok);
   }
 
   function rowEl() {
@@ -3246,11 +3284,20 @@
                  baseline("wifi.probe_clients", "")]).then(function (res) {
       if (gen !== WF.gen) return;
       var s = res[0], bl = res[1];
-      draw($("w-probe"), s.points, { from: r.from, to: r.to, step: s.step, kind: s.kind,
-                                     color: theme().normal, axes: true,
-                                     band: bands(s.points, bl, s.kind, s.step) });
-      set("w-pc-note", s.points.length + " buckets, " + s.source +
-          (bl && bl.cells ? ", band = mean ± " + sens.toFixed(1) + " sd" : ", no baseline yet"));
+      var pbd = bands(s.points, bl, s.kind, s.step);
+      var pbanded = false;
+      for (var pi = 0; pbd && pi < pbd.length; pi++) if (pbd[pi]) pbanded = true;
+      var pw = glyph.win(s.points, r.from, r.to);
+      draw($("w-probe"), s.points, { from: pw.from, to: pw.to, step: s.step, kind: s.kind,
+                                     color: theme().normal, axes: true, band: pbd,
+                                     now: Math.floor(Date.now() / 1000) });
+      set("w-pc-note", glyph.caption({
+            source: "wifi.probe_clients, " + s.source,
+            window: glyph.dur(r.win), tier: tier,
+            scale: pbanded ? "band ±" + sens.toFixed(1) + " sd" : "",
+            n: s.points.length,
+            state: !s.points.length ? "no data" : pw.shrunk ? pw.text
+                   : pbanded ? "" : "warming" }));
     }).catch(function (e) { if (gen === WF.gen) set("w-pc-note", errText(e.message)); });
     wifiAps();
   }

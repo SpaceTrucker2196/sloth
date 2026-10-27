@@ -5641,3 +5641,14 @@ report events.
   left is opened up first. `make bench` runs inside the outer directory
   and honours `$TMPDIR`. `test_data_socket.c`'s `spec[80]` truncated the
   socket path under a longer `TMPDIR`. New `tests/test_tmp_dir.c`.
+- 2026-10-27 — [[slothweb]]: the glyph layer, slice V0 of
+  `docs/web-visual-spec.md`. G1 (band sparkline), G5 (binary presence
+  strip) and G6 (bullet and count bar) as pure mark-list functions plus
+  painters in `web/ui/glyph.js`; rules R1 to R12, the caption grammar
+  (R9), the three empty states (R5) and the honest-window rule (R4) in
+  `web/README.md`; the status strip reduced to the network's facts with
+  every slothweb fact in the footer (F5). The geometry is ported into C
+  in `web/tests/test_glyph.c` and the JS pinned verbatim out of the
+  served page, so `make web-test` holds both sides with no node and no
+  new dependency (owner ruling 2 of 2026-10-26). No new data: no new
+  series, no route payload changed.

@@ -13,6 +13,7 @@
 </style>
 <script>
 @include palette.js
+@include glyph.js
 @include app.js
 </script>
 </head>
@@ -61,18 +62,18 @@
       <li>The SQL box is unscoped: it runs the raw sloth.db statement it is given, whatever the switch says.</li>
     </ul>
   </section>
+  <!-- F5: the strip is the network's facts only. Every fact about
+       slothweb itself (sock, db, store, tick, up, clients) is in the
+       footer, one row each, never mixed. The dot is the page's own
+       liveness, which is what aria-label="status" names. -->
   <div class="strip" aria-label="status">
     <span class="dot wait" id="dot">&#9679; <span id="conn">connecting</span></span>
     <span class="pills">
     <span>scope <b id="s-scope">hybrid</b></span>
-    <span>sensor <b id="s-sock">-</b></span>
     <span>devs <b id="s-devs">-</b></span>
     <span>alerts <b id="s-alerts">-</b></span>
     <span>anomalies <b id="s-anoms">-</b></span>
     <span>rec/s <b id="s-rate">-</b></span>
-    <span>tick <b id="seq">-</b></span>
-    <span>up <b id="up">-</b></span>
-    <span>clients <b id="clients">-</b></span>
     </span>
   </div>
   <div class="scopebar" id="scopebar" role="status" hidden><span id="scopebar-t"></span> <button type="button" id="scopebar-legend">what each scope holds</button></div>
@@ -484,10 +485,13 @@
     <div class="label">anomalies</div>
     <div class="cards" id="dr-anoms"></div>
   </aside>
-  <footer class="foot" aria-label="sources">
+  <footer class="foot" aria-label="slothweb">
     <span>sock <b id="sock">-</b></span>
     <span>db <b id="db">-</b></span>
     <span>store <b id="store">-</b></span>
+    <span>tick <b id="seq">-</b></span>
+    <span>up <b id="up">-</b></span>
+    <span>clients <b id="clients">-</b></span>
     <span class="sub">passive: this page asks its own server and nothing else</span>
     <button type="button" class="dt-reset" id="prefs-reset" title="forget every setting this browser keeps for this page: the view, the theme, the scope, the filters, each table's columns and sort">reset settings</button>
   </footer>

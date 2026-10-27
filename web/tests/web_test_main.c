@@ -95,6 +95,7 @@ int main(void) {
     SUITE(run_sqlbox_tests);
     SUITE(run_scope_tests);
     SUITE(run_prefs_tests);
+    SUITE(run_glyph_tests);
     /* The leak guard, under WT_ONLY too: a path still here is one a
      * suite made and did not remove. */
     if (tmp_run_dir_check(g_run_dir, "slothweb_test") != 0) wt_fail++;

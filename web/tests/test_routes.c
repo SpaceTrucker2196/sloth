@@ -1028,7 +1028,44 @@ static void test_anomaly_event_and_tick(void) {
     eng_down(&e);
 }
 
+/* F5 (docs/web-visual-spec.md §2): the status strip holds the
+ * network's facts and the footer holds slothweb's own, one row each
+ * and never mixed, so a reader can tell a fact about the subject from
+ * a fact about the instrument. Seen red with `tick` left in the strip,
+ * and with `devs` moved into the footer. */
+static void test_the_strip_and_the_footer_are_split(void) {
+    const char *p = page();
+    const char *strip = strstr(p, "<div class=\"strip\" aria-label=\"status\">");
+    const char *foot = strstr(p, "<footer class=\"foot\"");
+    WT_ASSERT(strip && foot && strip < foot);
+    if (!strip || !foot) return;
+    char srow[2048], frow[2048];
+    size_t slen = (size_t)(strstr(strip, "</div>") - strip);
+    size_t flen = (size_t)(strstr(foot, "</footer>") - foot);
+    WT_ASSERT(slen < sizeof(srow) && flen < sizeof(frow));
+    if (slen >= sizeof(srow) || flen >= sizeof(frow)) return;
+    memcpy(srow, strip, slen); srow[slen] = '\0';
+    memcpy(frow, foot, flen); frow[flen] = '\0';
+    static const char *const net[] = { "s-devs", "s-alerts", "s-anoms", "s-rate" };
+    static const char *const own[] = { "sock", "db", "store", "seq", "up", "clients" };
+    for (size_t i = 0; i < sizeof(net) / sizeof(net[0]); i++) {
+        char want[32];
+        snprintf(want, sizeof(want), "id=\"%s\"", net[i]);
+        WT_HAS(srow, want);
+        WT_LACKS(frow, want);
+    }
+    for (size_t i = 0; i < sizeof(own) / sizeof(own[0]); i++) {
+        char want[32];
+        snprintf(want, sizeof(want), "id=\"%s\"", own[i]);
+        WT_HAS(frow, want);
+        WT_LACKS(srow, want);
+    }
+    /* The stream's state was in both; it is the footer's alone now. */
+    WT_LACKS(p, "s-sock");
+}
+
 void run_routes_tests(void) {
+    WT_RUN(test_the_strip_and_the_footer_are_split);
     WT_RUN(test_page_is_200_with_etag_and_csp);
     WT_RUN(test_page_304_on_matching_validator);
     WT_RUN(test_page_makes_no_external_reference);

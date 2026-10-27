@@ -2436,6 +2436,99 @@ bare address, on the defaults.
 
 ## Design
 
+### The glyph layer
+
+The page's data graphics are a small, fixed set of glyphs, specified in
+[`docs/web-visual-spec.md`](../docs/web-visual-spec.md) (its rulings
+table of 2026-10-26 overrides its body). Three of the eight are built
+(slice V0): **G1** the band sparkline, **G5** the binary presence
+strip, **G6** the bullet and count bar. G2 (range sparkline), G3
+(horizon strip), G4 (hour-of-week heat glyph), G7 (event rug) and G8
+(chain timeline) are later slices and are not in `glyph.js` yet; the
+hour-of-week heatmap on the Overview is still `heatmap()` in `app.js`,
+its own drawing, until G4 lands.
+
+**Two halves.** Each glyph is a *pure function* from data and a size to
+a list of marks, plus a *painter* that draws the list. A mark is
+`[kind, x, y, w, h, token]`: a kind (`band`, `line`, `gap`, `dot`,
+`max`, `min`, `last`, `cell`, `first`, `tick`, `now`, `range`, `bar`,
+`dash`), a rectangle in CSS pixels, and a colour **token** name — never
+a colour. Nothing in the pure half reads the DOM, the canvas or the
+theme, so what a glyph *says* can be read without a browser, which is
+what `web/tests/test_glyph.c` does: the C there is a port of
+`web/ui/glyph.js` line for line, and the JS it ports is pinned verbatim
+out of the served page, so a change on either side fails `make
+web-test`. That keeps the suite free of node and of any other
+dependency (owner ruling 2 of 2026-10-26), by the same mechanism
+`test_tui_colors.c` already uses for the TUI's colours.
+`web/tools/palette.c` is the other shape in this tree and does not fit
+here: a palette is static data a tool can emit into `palette.js`, while
+a glyph's geometry is a function of data the page only has at run time.
+
+**The rules.** Every glyph and every panel follows these; a review of a
+slothweb change checks the change against the list
+(`docs/web-visual-spec.md` §8).
+
+- **R1. One ink.** A line is `--tui-normal`. The band is `--data` at 12
+  percent. Grey (`--rule`, `--faint`, `--muted`) carries structure.
+  Colour carries only out of band (the heat ramp), severity (the
+  `--sev-*` tokens, on alerts and chain bars only), identity (the hash
+  hues on addresses and SSIDs) and the one accent (`--signal`, once per
+  panel). **The exception is G1's line** (owner ruling 1 of
+  2026-10-26): it keeps the level grading of the TUI's
+  `draw_sparkline_at()`, so a web sparkline and a TUI sparkline of the
+  same data are the same picture. Out of band is still said by the
+  band and by the last-value dot, which is where a reader looks for it.
+- **R2. Fixed heights, data-driven widths.** A glyph's height is set by
+  the text line it sits in (14 px in a table, 18 px in a tile); its
+  width follows the container. Never the other way round.
+- **R3. Shared scales inside a set.** Small multiples share a y-scale
+  by default and say so. `own scale` is a toggle and prints each cell's
+  maximum. RSSI is always on the fixed −95 to −20 dBm scale.
+- **R4. Honest windows.** When the data covers less than a tenth of the
+  window, the glyph shrinks the window to the data and the caption says
+  `6 min of 24 h` (`glyph.win()`). A band chart carries at least three
+  time labels and a now mark.
+- **R5. Three empty states.** `no data` (a `--faint` dash across the
+  middle, and nothing else, so it cannot be read as a flat line at
+  zero), `warming` (the line with no band drawn, the word in the
+  caption) and a gap (a break in the line, its own `gap` mark, which
+  the painter draws as absence of ink). They never look alike. An
+  empty panel collapses to its caption.
+- **R6. Fewer than five points draw dots.** A line through three
+  buckets claims a shape the data does not have.
+- **R7. The last value is marked and written.** A `last` mark on the
+  line and the number beside it, always. Min and max dots only where
+  there is no band, because then the range is the only reference.
+- **R8. No hatching, no gradients, no shadows, no rounded bars.** The
+  chrome's radius applies to panels, not to data.
+- **R9. The caption line.** Every panel ends with one `--muted` line:
+  source, window, tier, scale, n, in that order, and then the state
+  when there is one (`glyph.caption()`). Example: `ap.rssi
+  02:de:00:00:00:a1, 1 h, fine, -95 to -20 dBm, n=360`.
+- **R10. Greyscale must still read.** Every colour meaning is also a
+  position, a shape or a word. A heat-coloured segment is also above
+  the band; a severity bar also carries its word; the last value is its
+  own kind of mark, not a dot like any other.
+- **R11. Scales do not jump.** A glyph that refreshes every tick keeps
+  its y-range until the data leaves it, and then grows it; it never
+  shrinks on a refresh (`glyph.scale()` takes the previous range). A
+  reader must be able to look away and back.
+- **R12. The TUI form exists.** A glyph with no character-cell form is
+  not added — parity is the test that keeps the web honest. The three
+  built here:
+
+| Glyph | What it answers | TUI form |
+|---|---|---|
+| G1 band sparkline | what is the value now, and is it normal | the `▁▂▃▄▅▆▇█` sparkline of `draw_sparkline_at()` in `CP_NORMAL`, graded by level, with the last cell in `CP_HEAT_*` when out of band; the band is the `±` number after it |
+| G5 binary presence strip | when was it here | the Devices view's 24 cells, one an hour, as `▮` and `·`, with `◆` at a first-seen cell inside the window |
+| G6 bullet and count bar | how big is this score or count, against its range | `▐████▌░░░` in `CP_NORMAL`, eight cells, the measure filled and the rest dotted |
+
+**Where they are drawn.** G1 paints the Overview's tile sparklines and
+the presence strips go through G5 (`drawStrip()`); G6's placements (the
+risk, karma, anomaly-score and count columns) land with slice V2, so
+its painter is in the page before its first caller.
+
 ### Tables: sort and resize
 
 Every table on the page (owner request 2026-10-26: the Devices table,
@@ -2524,7 +2617,11 @@ names onto them, so the code still reads `--bg`, `--panel`, `--rule`,
 
 The components are the site's: a sticky top bar on a brass edge with
 the title, the views and the theme toggle; the pill status strip
-(`live`, sensor, devs, alerts, anomalies, rec/s, tick, up, clients);
+(`live`, scope, devs, alerts, anomalies, rec/s — the network's facts
+only, F5: every fact about slothweb itself is in the footer, `sock db
+store tick up clients`, and the two rows are never mixed; the dot stays
+in the strip because it is the page's own liveness, which is what the
+strip's `aria-label` names);
 eyebrow labels (brass small caps behind a short rule) as panel titles;
 panels as brass-bordered cards (radius 14 px); the site's buttons and
 chips for view controls; dotted row rules in tables; HUD corner
@@ -2813,6 +2910,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_alerts.c` | the Alerts page and an alert's page over a generated sloth.db and a fed stream: the collapse (sloth.db's rows and the stream's incidents, a key once), the order, every filter, paging, every `400`/`404`/`405`, the six sections, runs, the device by MAC and by address, no key, username, community or sloth `incident_id` in any body, every type's page within the buffer, the 20,000-row bound on 30,000 rows (500,000 with `SLOTHWEB_ALERTS_BENCH`), filters, History's figures and the drawer reaching past it, and the tiles against their views on the demo's data; the page's views and links |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
 | `test_tui_colors.c` | the data colours against the TUI itself ([Design](#design)): `src/tui.c`'s ANSI backend linked in and captured, every byte of an address, an SSID, a host name and an info string compared with the page's colour for it (its functions pinned as served, a C port of them over the served `SLOTH_PALETTE`, the served custom properties); the cross-panel bold and the page's `IP_SRC` bits held to `IP_SRC_*`, an alert counted by its `match_ip` alone; the alert-hot override against `tui_alert_hot_set()` (severity, bold from WARN, the TTL's edge, promotion, the full table) and its TTL and cap against `src/tui.c`; the phosphor, heat, alert-hot and monitor-row pairs; `MON_TYPES` against the record types `src/jsonl.c` emits from the monitor radio |
+| `test_glyph.c` | the glyph layer's geometry ([the glyph layer](#the-glyph-layer)): a C port of `web/ui/glyph.js` with the JS pinned verbatim out of the served page, so a change on either side fails. For G1, G5 and G6: empty, warming, one point, four points as dots (R6), a gap (R5), in band, out of band (and in again once the band is widened), G1's line graded as `draw_sparkline_at()` grades it (ruling 1), min and max dots only without a band (R7), a scale that grows and never shrinks (R11), the window rule and its words (R4), the caption grammar and the three states in it (R9), the presence cells from the server's hex, the ruler's midnight and now ticks in a shifted zone (F10), the first-seen mark (F15), the bullet's ranges, threshold tick and severity, the count bar's shared scale, and each glyph's list read with every token flattened to one grey (R10); each glyph's TUI form named in the README (R12). Nineteen mutations, each naming the test it reddened |
 | `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own |
 | `test_replay.c` | spec §12's M3 acceptance: a six-week JSONL stream generated in the test (never a fixture) through the framer, decoder, live state, metric derivation, identity tables, rollup, `web_tsdb_step()` and the engine as `main.c` wires them, on pinned clocks: four weeks of routine (noisy gauges, Poisson counts, and an input for every rule: names that agree, a randomised MAC with its own name, a month-old probe client, a steady ssh host), then a quiet 7 d week in which nothing at all fires, slothweb and sloth restarting in the middle of it in an SQLite build, then a 7 d week in which A1 fires for a burst of connections and A3 for a daytime device that appears only at night, while a device that is only ever present at night never fires; and the hour that just closed reaching the baseline at flush phases 0, 3 and 7 (the previous slice fed it only at phase 0); A9 for a new host whose first row the rollup released late, at sloth's real cadence (SQLite); five weeks of a 13:30-14:30 routine in IST firing nothing. Both builds |
 

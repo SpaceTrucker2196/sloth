@@ -996,6 +996,57 @@ nor listed as not kept; the behaviour
 (sort and resize, relaunch, still there; reset; storage that throws)
 was driven in headless Chromium.
 
+## The glyph layer (2026-10-27)
+
+[`docs/web-visual-spec.md`](../web-visual-spec.md) specifies the
+glyph set for the page's data graphics, and the rules every glyph and
+panel follows; its rulings table of 2026-10-26 overrides its body.
+Slice V0 builds the first three of them — **G1** the band sparkline, **G5** the binary presence
+strip, **G6** the bullet and count bar — and writes the rules down in
+[`web/README.md`](../../web/README.md#the-glyph-layer): R1 to R12, the
+caption grammar (R9: source, window, tier, scale, n), the three empty
+states (R5: `no data`, `warming`, a gap, which never look alike) and
+the honest-window rule (R4: data covering less than a tenth of the
+window shrinks the window to the data and says `6 min of 24 h`). It
+adds no data: no new series, no changed route payload.
+
+Each glyph is a pure function from data and a size to a list of marks
+(`[kind, x, y, w, h, token]`, CSS pixels and a colour *token*, never a
+colour) plus a painter that draws the list. That split is what makes
+the page's canvas code testable: `web/tests/test_glyph.c` ports the
+geometry into C line for line and pins the JS verbatim out of the
+served page, so a change on either side fails `make web-test` — the
+mechanism `test_tui_colors.c` already uses for the TUI's colours, and
+the one the owner chose (ruling 2 of 2026-10-26) so the suite stays
+free of node. `web/tools/palette.c`'s generator is the other shape in
+this tree and does not fit: a palette is static data a tool can emit,
+a glyph's geometry is a function of data the page only has at run time.
+
+Two rulings of 2026-10-26 shape G1. Ruling 1 keeps **TUI parity for
+the sparkline's ink**: R1's "one ink" holds for every glyph except
+G1's line, which grades by level exactly as
+`src/views/dashboard_primitives.c :: draw_sparkline_at()` does, with
+out of band still said by the band and by the last-value dot. Ruling 3
+keeps G2's −67 dBm reference line, captioned as a field rule of thumb
+(G2 is slice V2). R12 is why each of the three names its character-cell
+form in the README: a glyph with no TUI form is not added.
+
+Finding F5 lands with it: the status strip holds the network's facts
+(`devs alerts anomalies rec/s`, with the scope control and the page's
+own live dot) and the footer holds every fact about slothweb
+(`sock db store tick up clients`), one row each and never mixed. The
+strip's `sensor` pill is gone — it was the footer's `sock` under
+another name. `web/tests/test_routes.c ::
+test_the_strip_and_the_footer_are_split` holds the two rows apart by
+element id.
+
+**Sources**: `docs/web-visual-spec.md` (§2 F1-F20, §5, §8, §10),
+`web/ui/glyph.js`, `web/tests/test_glyph.c`, `web/README.md` (Design),
+`src/views/dashboard_primitives.c` (`draw_sparkline_at()`),
+`web/tests/test_tui_colors.c` (the pinning mechanism),
+`web/tools/palette.c` (the generator shape, for contrast).
+**Last updated**: 2026-10-27.
+
 ## Tests
 
 `make web-test` is self-contained: no host file, loopback ephemeral
