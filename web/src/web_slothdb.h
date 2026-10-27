@@ -196,6 +196,9 @@ typedef struct {
     long long       rows_read;
     int             plan[2];
     int             detail_ok;       /* alerts.detail may be read (web_alertdb.h) */
+    /* The capture scope the reads answer for (web_scope.h WEB_SCOPE_*),
+     * set by the route after the open; 0 (Hybrid) reads as before. */
+    int             scope;
 } web_sdb_conn_t;
 
 /* How web_sdb_overview() counted a table. */
@@ -330,6 +333,12 @@ int  web_sdb_names(web_sdb_conn_t *c, const char *ip, int max,
  * more than WEB_SDB_ALERT_RESERVE_MS left; *reached is 0 when it read
  * the whole table, else the last_seen it reached back to (the figures
  * then count the rows read). */
+/* " AND <col> IN (...)": the alert types c's capture scope holds, as
+ * integers of slothweb's own table (web_scope.h), for a statement's
+ * text; "" under Hybrid. sloth.db rows carry no link type, so an IP
+ * capture's alert is Local there whatever the stream says now. */
+void web_sdb_scope_types(const web_sdb_conn_t *c, const char *col, char *out,
+                         size_t cap);
 #define WEB_SDB_ALERT_SCAN 20000
 #define WEB_SDB_ALERT_RESERVE_MS 80
 int  web_sdb_alerts(web_sdb_conn_t *c, const char *mac, const char *ip,

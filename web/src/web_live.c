@@ -42,6 +42,9 @@ void web_live_init(web_live_t *l, const char *spec) {
     for (int i = 0; i < 8; i++) l->rate_sec[i] = -1;
     ring_init(&l->rate_other);
     ring_init(&l->rate_invalid);
+    ring_init(&l->rate_scope[0]);
+    ring_init(&l->rate_scope[1]);
+    l->cap_linktype = -1;
     /* The handles' nonce. It only keeps a link saved before a restart
      * from naming another incident after it; that a handle says nothing
      * of the key rests on the counter, so a weak fallback costs nothing
@@ -181,6 +184,8 @@ static void publish(web_live_t *l, long n, long long ts) {
     l->dev_ts = ts;
     l->dev_gen = l->conn_gen;
     l->dev_rounds++;
+    l->dev_count_m = n > 0 ? l->round_n_m : 0;
+    l->dev_count_l = n > 0 ? l->round_n_l : 0;
     int k = n > 0 ? l->round_nmac : 0;
     memcpy(l->pass_macs, l->round_macs, (size_t)k * sizeof(l->pass_macs[0]));
     qsort(l->pass_macs, (size_t)k, sizeof(l->pass_macs[0]), mac_cmp);
@@ -272,17 +277,27 @@ static void devices_step(web_live_t *l, const web_jrec_t *r, const char *t,
             l->pending_taint = 0;
             l->round_nmac = 0;
             l->round_mac_more = 0;
+            l->round_n_m = l->round_n_l = 0;
         }
         l->round_n++;
+        /* The row's scope, as the TUI's device_count is the rows: a row
+         * seen both ways counts in both. */
+        int tag = web_scope_device(web_jl_int(r, "sources", 0),
+                                   web_jl_int(r, "cam_signals", -1),
+                                   web_jl_str(r, "ip"));
+        if (tag & WEB_SC_M) l->round_n_m++;
+        if (tag & WEB_SC_L) l->round_n_l++;
         char mac[18];
         if (canon_mac(web_jl_str(r, "mac"), mac)) {
-            int dup = 0;
-            for (int i = 0; i < l->round_nmac && !dup; i++)
-                dup = !strcmp(l->round_macs[i], mac);
-            if (dup) {
+            int dup = -1;
+            for (int i = 0; i < l->round_nmac && dup < 0; i++)
+                if (!strcmp(l->round_macs[i], mac)) dup = i;
+            if (dup >= 0) {
                 /* counted by the pass, one row in the set */
+                l->round_macs[dup][18] = (char)(l->round_macs[dup][18] | tag);
             } else if (l->round_nmac < WEB_LIVE_PASS_MAX) {
-                memcpy(l->round_macs[l->round_nmac++], mac, 18);
+                memcpy(l->round_macs[l->round_nmac], mac, 18);
+                l->round_macs[l->round_nmac++][18] = (char)tag;
             } else {
                 l->round_mac_more = 1;
             }
@@ -554,6 +569,30 @@ static void sensor_record(web_live_t *l, const web_jrec_t *r, long long ts,
     s = web_jl_str(r, "capture_exit");  web_utf8_copy(l->cap_exit,  WEB_LIVE_SH_STR, s ? s : "");
     s = web_jl_str(r, "monitor_exit");  web_utf8_copy(l->mon_exit,  WEB_LIVE_SH_STR, s ? s : "");
     s = web_jl_str(r, "scope");         web_utf8_copy(l->scope,     WEB_LIVE_SH_STR, s ? s : "");
+    /* The capture scope's facts: absent fields (an older sloth) are
+     * -1 and 0, and the radio test falls back to the interface names. */
+    l->cap_linktype = web_jl_int(r, "capture_linktype", -1);
+    if (l->cap_linktype < -1 || l->cap_linktype > 65535) l->cap_linktype = -1;
+    l->monitor_only = web_jl_int(r, "monitor_only", 0) == 1;
+    web_scope_note_mon(&l->sc, l->mon_iface);
+    l->sc.radio = l->cap_open &&
+                  web_scope_ip_on_radio(l->cap_linktype, l->cap_iface, l->mon_iface);
+}
+
+/* A record's scope tag, resolved with the radio of now. */
+static int rec_tag(web_live_t *l, const web_jrec_t *r, const char *t) {
+    int tag;
+    if (!strcmp(t, "alert") || !strncmp(t, "alert.", 6))
+        tag = web_scope_alert((int)web_jl_int(r, "ty", -1));
+    else if (!strcmp(t, "iface"))
+        tag = web_scope_iface(web_jl_str(r, "name"), &l->sc);
+    else if (!strcmp(t, "device"))
+        tag = web_scope_device(web_jl_int(r, "sources", 0),
+                               web_jl_int(r, "cam_signals", -1),
+                               web_jl_str(r, "ip"));
+    else
+        tag = web_scope_record(t);
+    return web_scope_eff(tag, l->sc.radio);
 }
 
 void web_live_apply(web_live_t *l, const web_jrec_t *r, long long now_ms) {
@@ -588,11 +627,21 @@ void web_live_apply(web_live_t *l, const web_jrec_t *r, long long now_ms) {
     int is_alert = !strncmp(t, "alert.", 6);
     if (is_alert) alert_record(l, r, t, ts);
     if (!strcmp(t, "sensor_health")) sensor_record(l, r, ts, now_ms);
+    /* A Wi-Fi sensor is a monitor-mode adapter (src/poll.c registers
+     * the monitor radios, and only them, as SENSOR_WIFI). */
+    if (!strcmp(t, "sensor")) {
+        const char *k = web_jl_str(r, "kind");
+        if (k && !strcmp(k, "wifi")) web_scope_note_mon(&l->sc, web_jl_str(r, "iface"));
+    }
+    int sc = rec_tag(l, r, t);
+    if (sc & WEB_SC_M) ring_tick(&l->rate_scope[0], now_ms);
+    if (sc & WEB_SC_L) ring_tick(&l->rate_scope[1], now_ms);
 
     web_live_rec_t *e = &l->ring[l->seq % WEB_LIVE_RING];
     l->seq++;
     e->seq = l->seq;
     e->ts = ts;
+    e->sc = sc;
     snprintf(e->type, sizeof(e->type), "%s", t);
     summarise(r, is_alert || !strcmp(t, "alert"), e->text, WEB_LIVE_TEXT_MAX);
     pthread_mutex_unlock(&l->mu);
@@ -744,11 +793,56 @@ void web_live_health_members(web_live_t *l, web_jw_t *w, long long now_ms) {
 }
 
 size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms) {
+    return web_live_json_scoped(l, NULL, out, cap, now_ms);
+}
+
+int web_live_inc_tag(const web_scope_ctx_t *sc, const web_live_inc_t *e) {
+    return web_scope_eff(web_scope_alert(e->type), sc ? sc->radio : 0);
+}
+
+void web_live_scope_ctx(web_live_t *l, web_scope_ctx_t *sc) {
+    int scope = sc->scope, given = sc->given;
+    pthread_mutex_lock(&l->mu);
+    *sc = l->sc;
+    pthread_mutex_unlock(&l->mu);
+    sc->scope = scope;
+    sc->given = given;
+}
+
+/* What a scope keeps of the open-incident counts, the device count and
+ * the records/s figure. */
+static void scope_sum(const web_live_t *l, const web_scope_ctx_t *sc,
+                      web_live_sum_t *s, long long now_ms) {
+    if (!sc || sc->scope == WEB_SCOPE_HYBRID) return;
+    int mon = sc->scope == WEB_SCOPE_MONITOR;
+    s->devices = mon ? l->dev_count_m : l->dev_count_l;
+    s->alerts[0] = s->alerts[1] = s->alerts[2] = 0;
+    for (int i = 0; i < l->ninc; i++)
+        if (web_scope_pass(sc->scope, web_live_inc_tag(sc, &l->inc[i])))
+            s->alerts[l->inc[i].sev]++;
+    s->rate10 = web_live_rate10(&l->rate_scope[mon ? 0 : 1], now_ms);
+}
+
+/* A type's row in the by-type tables: every record of a type a scope
+ * can hold (an iface, a device, an alert lifecycle record can be
+ * either). */
+static int type_in_scope(const web_scope_ctx_t *sc, const char *t) {
+    if (!sc || sc->scope == WEB_SCOPE_HYBRID) return 1;
+    if (!strcmp(t, "alert") || !strncmp(t, "alert.", 6)) return 1;
+    int tag = web_scope_record(t);
+    if (tag == WEB_SC_BYKEY) return 1;
+    return web_scope_pass(sc->scope, web_scope_eff(tag, sc->radio));
+}
+
+size_t web_live_json_scoped(web_live_t *l, const web_scope_ctx_t *sc,
+                            char *out, size_t cap, long long now_ms) {
     web_jw_t w;
     web_jw_init(&w, out, cap);
     pthread_mutex_lock(&l->mu);
     web_live_sum_t s;
     summary_locked(l, &s, now_ms);
+    scope_sum(l, sc, &s, now_ms);
+    int scoped = sc && sc->scope != WEB_SCOPE_HYBRID;
 
     web_jw_raw(&w, "{\"socket\":"); web_jw_str(&w, web_live_sock_word(s.sock_state));
     web_jw_raw(&w, ",\"devices\":");
@@ -771,8 +865,9 @@ size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms) {
     web_jw_raw(&w, ",\"last_record_age_s\":"); jw_age(&w, s.last_record_age_ms);
 
     web_jw_raw(&w, ",\"types\":{");
-    for (int i = 0; i < l->ntypes; i++) {
-        if (i) web_jw_raw(&w, ",");
+    for (int i = 0, k = 0; i < l->ntypes; i++) {
+        if (!type_in_scope(sc, l->types[i].name)) continue;
+        if (k++) web_jw_raw(&w, ",");
         web_jw_key(&w, l->types[i].name);
         web_jw_int(&w, (long long)l->types[i].n);
     }
@@ -780,10 +875,13 @@ size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms) {
     web_jw_raw(&w, ",\"types_invalid\":"); web_jw_int(&w, (long long)l->types_invalid);
     /* Records/s by type, over the same five seconds as records_s: the
      * rates of the types, types_other and types_invalid sum to it
-     * exactly (the Records view, the records/s tile's drill-down). */
+     * exactly (the Records view, the records/s tile's drill-down).
+     * Under a scope, the types it can hold: an iface, a device or an
+     * alert type is either, so there they count every record. */
     web_jw_raw(&w, ",\"types_rate\":{");
-    for (int i = 0; i < l->ntypes; i++) {
-        if (i) web_jw_raw(&w, ",");
+    for (int i = 0, k = 0; i < l->ntypes; i++) {
+        if (!type_in_scope(sc, l->types[i].name)) continue;
+        if (k++) web_jw_raw(&w, ",");
         web_jw_key(&w, l->types[i].name);
         jw_rate(&w, web_live_rate10(&l->types[i].rate, now_ms));
     }
@@ -811,10 +909,11 @@ size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms) {
 
     /* Newest first, as the page lists them. */
     web_jw_raw(&w, ",\"alerts\":[");
-    for (int k = 0; k < l->alert_n; k++) {
+    for (int k = 0, nk = 0; k < l->alert_n; k++) {
         int i = (l->alert_next - 1 - k + 2 * WEB_LIVE_ALERTS) % WEB_LIVE_ALERTS;
         const web_live_alert_t *a = &l->alerts[i];
-        if (k) web_jw_raw(&w, ",");
+        if (scoped && !web_scope_ok(sc, web_scope_alert(a->ty))) continue;
+        if (nk++) web_jw_raw(&w, ",");
         web_jw_raw(&w, "{\"ts\":"); web_jw_int(&w, a->ts);
         web_jw_raw(&w, ",\"type\":"); web_jw_str(&w, a->type);
         web_jw_raw(&w, ",\"ty\":");
@@ -842,16 +941,38 @@ size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms) {
     web_jw_raw(&w, ",\"recent\":[");
     unsigned long long hi = l->seq;
     unsigned long long lo = hi > WEB_LIVE_RING ? hi - WEB_LIVE_RING + 1 : 1;
+    int nr = 0;
     for (unsigned long long q = lo; hi && q <= hi; q++) {
         const web_live_rec_t *e = &l->ring[(q - 1) % WEB_LIVE_RING];
-        if (q != lo) web_jw_raw(&w, ",");
+        if (scoped && !web_scope_pass(sc->scope, e->sc)) continue;
+        if (nr++) web_jw_raw(&w, ",");
         web_jw_raw(&w, "{\"seq\":"); web_jw_int(&w, (long long)e->seq);
         web_jw_raw(&w, ",\"type\":"); web_jw_str(&w, e->type);
         web_jw_raw(&w, ",\"ts\":"); web_jw_int(&w, e->ts);
         web_jw_raw(&w, ",\"text\":"); web_jw_str(&w, e->text);
+        if (scoped) { web_jw_raw(&w, ",\"sc\":"); web_jw_int(&w, e->sc); }
         web_jw_raw(&w, "}");
     }
-    web_jw_raw(&w, "]}\n");
+    web_jw_raw(&w, "]");
+    /* What the page needs to scope what it draws itself: the monitor
+     * radios (the throughput tile's interface), whether the IP capture
+     * is one, and sloth's own word for it. Only under Monitor or
+     * Local, so Hybrid's answer is as it was, the echo aside. */
+    if (scoped) {
+        web_jw_raw(&w, ",\"scope_facts\":{\"ip_on_radio\":");
+        web_jw_raw(&w, l->sc.radio ? "true" : "false");
+        web_jw_raw(&w, ",\"capture_linktype\":");
+        if (l->cap_linktype < 0) web_jw_raw(&w, "null");
+        else web_jw_int(&w, l->cap_linktype);
+        web_jw_raw(&w, ",\"monitor_only\":"); web_jw_raw(&w, l->monitor_only ? "true" : "false");
+        web_jw_raw(&w, ",\"monitor_ifaces\":[");
+        for (int i = 0; i < l->sc.nmon; i++) {
+            if (i) web_jw_raw(&w, ",");
+            web_jw_str(&w, l->sc.mon[i]);
+        }
+        web_jw_raw(&w, "]}");
+    }
+    web_jw_raw(&w, "}\n");
     pthread_mutex_unlock(&l->mu);
     return w.overflow ? 0 : w.len;
 }
@@ -901,6 +1022,24 @@ int web_live_pass_has(web_live_t *l, const char *mac) {
                       mac_cmp) != NULL;
     pthread_mutex_unlock(&l->mu);
     return hit;
+}
+
+int web_live_pass_tag(web_live_t *l, const char *mac) {
+    pthread_mutex_lock(&l->mu);
+    const char *hit = bsearch(mac, l->pass_macs, (size_t)l->pass_nmac,
+                              sizeof(l->pass_macs[0]), mac_cmp);
+    int tag = hit ? (unsigned char)hit[18] : -1;
+    pthread_mutex_unlock(&l->mu);
+    return tag;
+}
+
+int web_live_pass_count(web_live_t *l, int want) {
+    pthread_mutex_lock(&l->mu);
+    int n = 0;
+    for (int i = 0; i < l->pass_nmac; i++)
+        if ((unsigned char)l->pass_macs[i][18] & want) n++;
+    pthread_mutex_unlock(&l->mu);
+    return n;
 }
 
 int web_live_pass_size(web_live_t *l, int *more) {

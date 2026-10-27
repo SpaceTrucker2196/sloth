@@ -345,6 +345,16 @@ int         web_anomaly_kind_find(const char *kind);
  * smaller than that. */
 size_t web_anomaly_json(web_anomaly_t *a, long long now_s, long long since,
                         int kind, char *out, size_t cap);
+/* The episodes a capture scope holds (web_scope.h): A1 by its metric and
+ * key, A2 Monitor (a probe, PNL or association), A3 and A4 where the
+ * MAC has presence of the scope's own in ru (they score every source's,
+ * and say so), A5-A9 Local, A10 every scope. sc NULL is Hybrid. */
+size_t web_anomaly_json_scoped(web_anomaly_t *a, long long now_s,
+                               long long since, int kind,
+                               const web_scope_ctx_t *sc, web_rollup_t *ru,
+                               char *out, size_t cap);
+int    web_anomaly_ep_tag(const web_anom_ep_t *e, const web_scope_ctx_t *sc,
+                          web_rollup_t *ru);
 
 /* One episode as JSON (the SSE "anomaly" event's data). */
 void   web_anomaly_ep_json(web_jw_t *w, const web_anom_ep_t *e);

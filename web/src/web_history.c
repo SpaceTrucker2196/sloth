@@ -78,8 +78,11 @@ static int hist_open_budget(const web_m4_t *m, web_sdb_conn_t *c, int budget_ms,
                             long long now_s, char *body, size_t cap,
                             size_t *len, int *status) {
     char err[WEB_SDB_ERR_MAX];
-    if (web_slothdb_open(m->sdb, c, budget_ms, now_s, err, sizeof(err)) == 0)
+    if (web_slothdb_open(m->sdb, c, budget_ms, now_s, err, sizeof(err)) == 0) {
+        /* Every read on it answers for the request's capture scope. */
+        c->scope = m->sc ? m->sc->scope : WEB_SCOPE_HYBRID;
         return 0;
+    }
     web_slothdb_close(c);
     web_sdb_stats_t st;
     web_slothdb_stats(m->sdb, &st);
@@ -187,7 +190,9 @@ int web_history_overview_route(const web_m4_t *m, const char *query,
     web_sdb_ovw_t *v = calloc(1, sizeof(*v));
     if (!v || ncell > WEB_SDB_OVC_CELLS) { free(v); return -1; }
     web_sdb_ident_t id;
-    int cacheable = web_sdb_ovc_ident(m->sdb, &id) == 0;
+    /* The cache holds Hybrid's counts only: a scoped overview is read
+     * each time (web_sdb_overview()). */
+    int cacheable = !(m->sc && m->sc->scope) && web_sdb_ovc_ident(m->sdb, &id) == 0;
     if (!cacheable || !web_sdb_ovc_get(m->sdb, &id, from, (int)cell, ncell, v)) {
         web_sdb_conn_t c;
         int o = hist_open_budget(m, &c, WEB_SDB_OVERVIEW_MS, now_s, body, cap,

@@ -387,7 +387,59 @@ a.tile:focus-visible { outline-offset: 2px; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   canvas.chord { height: 320px; }
 }
+/* ── the capture scope (web_scope.h): Monitor / Hybrid / Local ─────── */
+/* A segmented control beside the theme toggle. Monitor, when chosen,
+ * wears the monitor radio's own ground (CP_MON_ROW, the ticker's
+ * monitor rows), so the switch and the rows it keeps read as one. */
+.scope { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--brass-edge); border-radius: 999px; white-space: nowrap; margin-left: auto; }
+.scope + .themetoggle { margin-left: 0; }
+/* The view list takes what the bar has left and wraps inside it, so the
+ * switch and the theme toggle keep one line together at 1280. */
+.topbar .in > nav { flex: 1 1 0; min-width: 0; }
+.scope-g { display: inline-flex; align-items: center; gap: 2px; }
+.scope button { font: inherit; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 999px; padding: 4px 10px; cursor: pointer; }
+.scope button:hover { color: var(--hover); }
+.scope button:focus-visible { outline: 1px solid var(--hover); outline-offset: 1px; }
+.scope button.sc-h[aria-checked="true"] { color: var(--bg); background: var(--hover); border-color: var(--hover); }
+.scope button.sc-m[aria-checked="true"] { color: var(--mon-fg); background: var(--mon-bg); border-color: var(--mon-fg); }
+.scope button.sc-l[aria-checked="true"] { color: var(--bg); background: var(--data); border-color: var(--data); }
+.scope .sc-q { padding: 4px 8px; color: var(--brass); }
+.scope .sc-q[aria-expanded="true"] { color: var(--hover); border-color: var(--brass-edge); }
+.scope-legend { background: var(--panel); border: 1px solid var(--brass-edge); border-radius: var(--radius); padding: 12px 16px; margin: 10px 16px 0; font-size: 12px; color: var(--ink); }
+.scope-legend dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0; }
+.scope-legend dt { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; padding-top: 2px; }
+.scope-legend dt.sc-h { color: var(--hover); }
+.scope-legend dt.sc-m { color: var(--mon-fg); }
+.scope-legend dt.sc-l { color: var(--data); }
+.scope-legend dd { margin: 0; color: var(--muted); }
+.scope-legend ul { margin: 6px 0 0; padding-left: 18px; }
+.scope-legend li { margin: 3px 0; }
+.scope-legend .label button { margin-left: auto; }
+/* The scope a view shows, said at its top and in the status pill. */
+.scopebar { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; margin: 10px 16px 0; padding: 7px 12px; border: 1px solid var(--brass-edge); border-radius: var(--radius-sm); background: var(--panel-2); font-size: 12px; color: var(--ink); }
+.scopebar.sc-m { border-color: var(--mon-fg); }
+.scopebar.sc-l { border-color: var(--data); }
+.scopebar.radio { border-color: var(--sev-warn); }
+.scopeline { margin-top: 12px; }
+.scopeline .scopechip { margin-left: 0; }
+.scopechip { display: inline-block; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; padding: 1px 7px; border: 1px solid var(--brass-edge); border-radius: 999px; color: var(--muted); margin-left: 6px; vertical-align: 1px; white-space: nowrap; }
+.scopechip.sc-m { color: var(--mon-fg); background: var(--mon-bg); border-color: var(--mon-fg); }
+.scopechip.sc-l { color: var(--data); border-color: var(--data); }
+.scopechip.unscoped { color: var(--sev-warn); border-color: var(--sev-warn); }
+/* A view the scope holds nothing of: the reason, and none of its panels. */
+.scope-empty { display: none; }
+.scoped-out > .scope-empty { display: block; }
+.scoped-out > section:not(.scope-empty), .scoped-out > .filterbar { display: none; }
+
 @media (max-width: 480px) {
+  /* The views a line of their own under the title, as before the
+   * switch; the switch left, the theme toggle right, on the next. */
+  .topbar .in > nav { flex: 1 1 100%; }
+  .scope { margin-left: 0; }
+  .scope + .themetoggle { margin-left: auto; }
+  .scope button { padding: 4px 7px; }
+  .scope-legend, .scopebar { margin: 8px 16px 0; }
+  .scope-legend dl { grid-template-columns: 1fr; }
   .topbar .in { padding: 8px 16px; }
   main { padding: 10px 16px; }
   .panel { padding: 10px 12px 12px; }

@@ -1467,7 +1467,10 @@ static void minute_pass(web_anomaly_t *a, long long m, int latest,
             const web_metric_t *md = &web_metric_defs[g->metric];
             double v = web_bl_value(g->metric, &pt, 60);
             if (md->kind == WEB_MK_PRESENCE) {
-                if (v >= 0.5) {
+                /* A3 and A4 read every source's presence; the scoped
+                 * splits (dev.present.monitor, .local) are for the
+                 * views and would score each device three times. */
+                if (v >= 0.5 && g->metric == WM_DEV_PRESENT) {
                     a3_score(a, g->key, t);
                     if (a4_on && g->metric == WM_DEV_PRESENT) a4_check(a, g->key);
                 }
@@ -1953,6 +1956,37 @@ static int cmp_listed(const void *x, const void *y) {
 
 size_t web_anomaly_json(web_anomaly_t *a, long long now_s, long long since,
                         int kind, char *out, size_t cap) {
+    return web_anomaly_json_scoped(a, now_s, since, kind, NULL, NULL, out, cap);
+}
+
+int web_anomaly_ep_tag(const web_anom_ep_t *e, const web_scope_ctx_t *sc,
+                       web_rollup_t *ru) {
+    switch (e->rule) {
+    case WEB_ANOM_A1_RATE:
+        return web_scope_metric_key(e->metric, e->key, sc);
+    case WEB_ANOM_A2_NEW:
+        return WEB_SC_M;          /* a probe, PNL or association first seen */
+    case WEB_ANOM_A3_HOURS:
+    case WEB_ANOM_A4_VENDOR: {
+        /* Scored on every source's presence; shown where the MAC has
+         * presence of the scope's own. A4's burst names no MAC. */
+        if (!e->key[0]) return WEB_SC_META;
+        int tag = 0;
+        if (web_rollup_has(ru, WM_DEV_PRESENT_MON, e->key)) tag |= WEB_SC_M;
+        if (web_rollup_has(ru, WM_DEV_PRESENT_LOC, e->key)) tag |= WEB_SC_L;
+        return tag;
+    }
+    case WEB_ANOM_A10_SENSOR:
+        return WEB_SC_META;
+    default:                      /* A5-A9: names, fan-out, DNS, flows */
+        return web_scope_eff(WEB_SC_L | WEB_SC_IPCAP, sc ? sc->radio : 0);
+    }
+}
+
+size_t web_anomaly_json_scoped(web_anomaly_t *a, long long now_s,
+                               long long since, int kind,
+                               const web_scope_ctx_t *sc, web_rollup_t *ru,
+                               char *out, size_t cap) {
     if (cap < WEB_ANOM_EP_JSON_MAX + 128) return 0;
     web_anom_ep_t *list = malloc((size_t)a->cap * sizeof(*list));
     if (!list) return 0;
@@ -1966,6 +2000,13 @@ size_t web_anomaly_json(web_anomaly_t *a, long long now_s, long long since,
         list[n++] = *e;
     }
     pthread_mutex_unlock(&a->mu);
+    if (sc && sc->scope != WEB_SCOPE_HYBRID) {
+        int o = 0;
+        for (int i = 0; i < n; i++)
+            if (web_scope_pass(sc->scope, web_anomaly_ep_tag(&list[i], sc, ru)))
+                list[o++] = list[i];
+        n = o;
+    }
     qsort(list, (size_t)n, sizeof(*list), cmp_listed);
     web_jw_t w;
     web_jw_init(&w, out, cap);

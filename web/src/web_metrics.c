@@ -10,6 +10,7 @@
 #include "web_chmix.h"
 #include "web_ident.h"
 #include "web_live.h"
+#include "web_scope.h"
 
 /* ── keys ────────────────────────────────────────────────────────────── */
 
@@ -299,6 +300,22 @@ static void presence(web_metrics_t *m, const web_jrec_t *r, const char *field,
     long long ls = web_jl_int(r, "last_seen", -1);
     if (ls >= 0 && ts >= 0 && ts - ls > WEB_FINE_S) return;
     web_rollup_add(m->ru, WM_DEV_PRESENT, k, 1, now);
+    /* The same, split by what heard it (web_scope.h). A device row is
+     * either, both or neither by its sources; any other record by its
+     * type. The IP capture's records count as Local here even while it
+     * is a monitor radio: the split is kept for good in the store,
+     * where the radio flag of the moment would not hold. */
+    const char *t = web_jl_str(r, "type");
+    int tag = web_scope_record(t);
+    if (tag == WEB_SC_BYKEY)
+        tag = t && !strcmp(t, "device")
+            ? web_scope_device(web_jl_int(r, "sources", 0),
+                               web_jl_int(r, "cam_signals", -1),
+                               web_jl_str(r, "ip"))
+            : 0;
+    tag = web_scope_eff(tag, 0);
+    if (tag & WEB_SC_M) web_rollup_add(m->ru, WM_DEV_PRESENT_MON, k, 1, now);
+    if (tag & WEB_SC_L) web_rollup_add(m->ru, WM_DEV_PRESENT_LOC, k, 1, now);
 }
 
 static void batch_start(web_metrics_t *m, long long now) {

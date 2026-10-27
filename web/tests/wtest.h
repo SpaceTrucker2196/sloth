@@ -75,5 +75,6 @@ void run_tables_tests(void);
 void run_alertfmt_tests(void);
 void run_alertkb_tests(void);
 void run_alerts_tests(void);
+void run_scope_tests(void);
 
 #endif

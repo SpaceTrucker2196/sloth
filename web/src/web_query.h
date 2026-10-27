@@ -48,7 +48,7 @@
 #define WEB_Q_LEN       256
 #define WEB_Q_TERMS     12
 #define WEB_Q_TERM_LEN  64
-#define WEB_Q_SQL_MAX   8192
+#define WEB_Q_SQL_MAX   32768   /* a scoped statement (web_scope.h) is the long one */
 #define WEB_Q_BINDS     (2 * WEB_Q_TERMS + 2)
 #define WEB_Q_BIND_TEXT (WEB_Q_TERM_LEN * 2 + 3)
 
@@ -95,7 +95,15 @@ enum {
     WEB_QF_MDNS   = 1 << 2,     /* mdns_services */
     WEB_QF_NBNS   = 1 << 3,     /* nbns_names */
     WEB_QF_ALERTS = 1 << 4,     /* alerts */
-    WEB_QF_ARP    = 1 << 5      /* arp */
+    WEB_QF_ARP    = 1 << 5,     /* arp */
+    /* The capture scope's tables (web_scope.h): which a scoped
+     * statement may name for membership, signal and first/last seen. */
+    WEB_QF_PROBE  = 1 << 6,     /* probe_clients */
+    WEB_QF_BEACON = 1 << 7,     /* beacon_aps */
+    WEB_QF_ASSOC  = 1 << 8,     /* assocs */
+    WEB_QF_PNLC   = 1 << 9,     /* pnl_clients */
+    WEB_QF_STA    = 1 << 10,    /* wifi_stas */
+    WEB_QF_CAMSIG = 1 << 11     /* devices.cam_signals (v6) */
 };
 
 enum { WEB_QS_LAST = 0, WEB_QS_FIRST, WEB_QS_MAC, WEB_QS_RISK, WEB_QS_VENDOR,
@@ -134,6 +142,12 @@ typedef struct {
  * (the text did not fit: a bug, not an input). */
 int web_query_compile(const web_query_t *q, unsigned feats, int sort,
                       long long limit, long long offset, web_qsql_t *out);
+/* The same for a capture scope (web_scope.h WEB_SCOPE_*): only the
+ * scope's devices, each column the scope's own (web_query.c says which
+ * table each comes from). Hybrid (0) is web_query_compile() exactly. */
+int web_query_compile_scoped(const web_query_t *q, unsigned feats, int scope,
+                             int sort, long long limit, long long offset,
+                             web_qsql_t *out);
 
 /* "last", "first", "mac", "risk", "vendor", "ip", "ssid", "signal",
  * "sources" -> WEB_QS_*, or -1. */
@@ -157,5 +171,10 @@ enum {
  * constant of the caller's, or NULL) adds columns after WEB_QCOL_COUNT. */
 int web_query_row_select(unsigned feats, const char *extra, char *out,
                          size_t cap);
+int web_query_row_select_scoped(unsigned feats, int scope, const char *extra,
+                                char *out, size_t cap);
+/* A scope's membership predicate over `devices d` into out: "" for
+ * Hybrid. 0, or -1 when it did not fit. */
+int web_query_member(unsigned feats, int scope, char *out, size_t cap);
 
 #endif

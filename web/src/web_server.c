@@ -199,6 +199,7 @@ static void health_now(web_server_t *s, web_health_t *h) {
     h->anomaly     = s->anomaly;
     h->m4          = s->m4;
     h->sql         = s->sql;
+    h->sc          = NULL;    /* web_route() sets a request's own */
 }
 
 /* Send what a stream has queued. A client that went away is closed and

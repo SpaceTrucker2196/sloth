@@ -640,6 +640,34 @@ static void test_worst_case_live_fits(void) {
     fprintf(stderr, "    worst-case /api/live: %zu bytes of %d\n", n,
             WEB_SSE_MAX_UNSENT - WEB_LIVE_HDR_RESERVE);
     WT_LACKS(g_json, "<");
+    /* And under a capture scope (web_scope.h): each record's tag and
+     * the scope's facts, every monitor radio's name at its cap. The
+     * router keeps 64 bytes back for the echo (web_routes.c). */
+    for (int i = 0; i < WEB_SCOPE_MON_MAX; i++) {
+        snprintf(line, sizeof(line), "{\"type\":\"sensor\",\"ts\":1,\"kind\":\"wifi\","
+                 "\"iface\":\"%02d%.30s\"}\n", i, big);
+        feed(line);
+    }
+    /* Monitor's records, so the ticker's backlog is all kept. */
+    for (int i = 0; i < WEB_LIVE_RING; i++) {
+        snprintf(line, sizeof(line), "{\"type\":\"beacon\",\"ts\":-9223372036854775807,"
+                                     "\"qname\":\"%s\",\"host\":\"%s\"}\n", big, big);
+        feed(line);
+    }
+    web_scope_ctx_t sc;
+    memset(&sc, 0, sizeof(sc));
+    sc.scope = WEB_SCOPE_MONITOR;
+    sc.given = 1;
+    web_live_scope_ctx(&g_live, &sc);
+    WT_EQ(sc.nmon, WEB_SCOPE_MON_MAX);
+    n = web_live_json_scoped(&g_live, &sc, g_json,
+                             WEB_SSE_MAX_UNSENT - WEB_LIVE_HDR_RESERVE - 64, 1000);
+    WT_ASSERT(n > 0);
+    fprintf(stderr, "    worst-case /api/live?scope=monitor: %zu bytes of %d\n", n,
+            WEB_SSE_MAX_UNSENT - WEB_LIVE_HDR_RESERVE - 64);
+    WT_HAS(g_json, "\"scope_facts\":");
+    WT_HAS(g_json, "\"type\":\"beacon\"");
+    WT_LACKS(g_json, "<");
 
     char hbuf[4096];
     web_jw_t w;

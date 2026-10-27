@@ -27,7 +27,7 @@ static void inm(web_req_t *rq, const char *v) {
     snprintf(rq->inm, sizeof(rq->inm), "%s", v);
 }
 
-static const web_health_t H = { 42, 2, 17, NULL, 0, NULL, 0, NULL, NULL, NULL };
+static const web_health_t H = { 42, 2, 17, NULL, 0, NULL, 0, NULL, NULL, NULL, NULL };
 
 /* Case-insensitive search over the first len bytes. */
 static const char *ci_find(const char *hay, size_t len, const char *needle) {
@@ -184,7 +184,10 @@ static void test_page_makes_no_external_reference(void) {
      * relative paths. */
     WT_HAS(p, "new EventSource(\"/events\")");
     WT_HAS(p, "fetch(\"/api/health\"");
-    WT_HAS(p, "fetch(\"/api/live\"");
+    /* /api/live through scoped(), which only ever adds "scope=" and one
+     * of three constant words to the same relative path. */
+    WT_HAS(p, "fetch(scoped(\"/api/live\")");
+    WT_HAS(p, "return path + (path.indexOf(\"?\") >= 0 ? \"&\" : \"?\") + \"scope=\" + SCOPE;");
 }
 
 /* #159: stream strings (hostnames, SSIDs, alert details) are shown as

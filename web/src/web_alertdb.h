@@ -53,6 +53,8 @@ typedef struct {
     const char *exclude[WEB_ADB_EXCLUDE];   /* keys left out (bound) */
     int       nexclude;
     long long scan_cap;
+    int       scope;                 /* capture scope (web_scope.h): its
+                                        types only, the facets too; 0 all */
 } web_adb_filter_t;
 
 typedef struct {

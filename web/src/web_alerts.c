@@ -308,6 +308,20 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
                          sizeof(*rows));
     if (!inc || !rows) { free(inc); free(rows); return -1; }
     int nopen = 0, ninc = live ? web_live_incidents(live, inc, INC_MAX, &nopen) : 0;
+    /* A capture scope (web_scope.h) keeps its own alert types only, each
+     * by its rule's input; the counts are then the scope's. The open
+     * incidents lead inc[], so the order is kept. */
+    if (m && m->sc && m->sc->scope) {
+        int o = 0, op = 0;
+        for (int i = 0; i < ninc; i++) {
+            if (!web_scope_pass(m->sc->scope, web_live_inc_tag(m->sc, &inc[i])))
+                continue;
+            if (i < nopen) op++;
+            inc[o++] = inc[i];
+        }
+        ninc = o;
+        nopen = op;
+    }
 
     /* The stream's, filtered, one row per key: inc[] holds the open
      * ones first, then the closed, each newest change first, so the
@@ -370,6 +384,7 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
                 if (inc[i].key[0] && !dup) f.exclude[f.nexclude++] = inc[i].key;
             }
             f.scan_cap = WEB_ADB_SCAN_CAP;
+            f.scope = c.scope;        /* the request's capture scope */
             gl_t gl = { rows + nr, 0, (int)want };
             ngroups = web_adb_groups(&c, &f, want, 0, take_group, &gl, &st);
             if (ngroups < 0) {
@@ -727,6 +742,15 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
     if (kind == 's') snprintf(id, sizeof(id), "s%s", sid);
     else snprintf(id, sizeof(id), "d%lld", rid);
     web_jw_raw(&w, "{\"id\":");       web_jw_str(&w, id);
+    if (m && m->sc && m->sc->scope) {
+        /* A link names one alert whatever the scope: the page is
+         * answered, and says whether the scope holds its type
+         * (web_scope.h; a sloth.db row's IP capture is Local's). */
+        int tag = web_scope_eff(web_scope_alert(type),
+                                have_inc ? m->sc->radio : 0);
+        web_jw_raw(&w, ",\"in_scope\":");
+        web_jw_raw(&w, web_scope_pass(m->sc->scope, tag) ? "true" : "false");
+    }
     web_jw_raw(&w, ",\"db\":");       web_jw_str(&w, db);
     web_jw_raw(&w, ",\"state\":");
     web_jw_str(&w, have_inc ? (e->closed_ts < 0 ? "open" : "closed") : "recorded");

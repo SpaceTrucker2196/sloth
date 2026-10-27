@@ -28,6 +28,14 @@
  * Before the table: no Host, or two, is 400; a Host (or absolute-form
  * authority) that is not localhost or an IP literal is 421.
  *
+ * The capture scope (web_scope.h): every /api route but /api/health and
+ * /api/query takes scope=monitor|hybrid|local beside its own
+ * parameters, taken out of the query before the route's own parser
+ * sees it. Anything else is a 400 "bad_scope". Without it the answer is
+ * Hybrid's, byte for byte as before; with it (hybrid included) a JSON
+ * answer's first member is "scope". /api/query is never scoped: the SQL
+ * box runs what it is given.
+ *
  * Only GET and HEAD reach the router; web_http.c has already answered
  * every other method 405. */
 #ifndef SLOTHWEB_ROUTES_H
@@ -56,6 +64,8 @@ typedef struct {
     web_anomaly_t *anomaly;   /* NULL: no baseline/anomaly engine (M3) */
     const web_m4_t *m4;       /* NULL: no Devices or Lookup (M4) */
     web_sqlbox_t  *sql;       /* NULL or disabled: no SQL box (M5) */
+    const web_scope_ctx_t *sc; /* the request's capture scope; NULL Hybrid
+                                  (set by web_route() itself) */
 } web_health_t;
 
 /* /api/live and the series routes are built into the connection's

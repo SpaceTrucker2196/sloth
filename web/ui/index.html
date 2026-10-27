@@ -32,12 +32,39 @@
       <li><button type="button" class="go" id="nav-history"><span class="k">8</span>History</button></li>
       <li><button type="button" class="go" id="nav-lookup"><span class="k">9</span>Lookup</button></li>
     </ol></nav>
+    <div class="scope">
+      <div class="scope-g" id="scope" role="radiogroup" aria-label="capture scope: what the views show, by how it was captured">
+        <button type="button" role="radio" class="sc-m" id="sc-monitor" aria-checked="false" tabindex="-1" title="the passive monitor radio (and BLE) only">Monitor</button>
+        <button type="button" role="radio" class="sc-h" id="sc-hybrid" aria-checked="true" tabindex="0" title="everything sloth captured">Hybrid</button>
+        <button type="button" role="radio" class="sc-l" id="sc-local" aria-checked="false" tabindex="-1" title="the host's own Ethernet and Wi-Fi interfaces only">Local</button>
+      </div>
+      <button type="button" class="sc-q" id="scope-info" aria-expanded="false" aria-controls="scope-legend" aria-label="what each capture scope holds" title="what each scope holds">?</button>
+    </div>
     <button type="button" class="themetoggle" id="theme" title="switch to the light theme">light theme</button>
    </div>
   </header>
+  <section class="scope-legend" id="scope-legend" aria-label="what each capture scope holds" hidden>
+    <div class="label">capture scope <button type="button" id="scope-legend-close">close</button></div>
+    <dl>
+      <dt class="sc-h">Hybrid</dt>
+      <dd>everything sloth captured, as before the switch: the default.</dd>
+      <dt class="sc-m">Monitor</dt>
+      <dd>only what the passive monitor-mode radio heard over the air (beacons, probes, associations, EAPOL, deauths, the channel mix, the 802.11 detectors) and the BLE receivers (<code>--bt-monitor</code>, <code>--bt-capture</code>), which are passive radio too. Nothing the connected Wi-Fi or Ethernet carried: no IP, ARP, DHCP, DNS, mDNS, NBNS, flows or top hosts. Monitor rows keep the monitor radio's dark-grey ground.</dd>
+      <dt class="sc-l">Local</dt>
+      <dd>only what the host's own connected interfaces carried: Ethernet and the associated Wi-Fi card in managed mode (the IP capture, ARP, DHCP, DNS, mDNS, NBNS, flows, <code>/proc</code>, the interfaces' throughput), and that card's own station dump and scans (Wi-Fi through the local network, not passive). Never the monitor radio.</dd>
+    </dl>
+    <ul class="sub">
+      <li>A device seen both ways appears in both scopes, and in each shows only the fields that scope captured: under Monitor no address, hostname or DHCP, mDNS or NBNS name; under Local no SSID, AP bit or probe signal. Its signal, first and last seen and risk are the scope's own (sloth's risk weights over the scope's signals).</li>
+      <li>An alert is in the scope of its rule's input, whatever file the rule is in (CAPTIVE_PORTAL reads DNS, HTTP and TLS: Local). sloth's own-state alerts (NO_MONITOR_MODE, BT_OWN_TRANSMIT) appear in every scope.</li>
+      <li>While sloth says its IP capture is itself a monitor radio (a radiotap link type, or the capture interface is the monitor interface), the stream's IP records count as Monitor's; a banner says so. sloth.db's rows carry no capture path, so its IP tables stay Local.</li>
+      <li>An anomaly is in the scope of what it scored: A2 Monitor, A5-A9 Local, A1 by its metric and key, A3 and A4 (scored on every source's presence) where the device has presence of the scope's own; A10 every scope.</li>
+      <li>The SQL box is unscoped: it runs the raw sloth.db statement it is given, whatever the switch says.</li>
+    </ul>
+  </section>
   <div class="strip" aria-label="status">
     <span class="dot wait" id="dot">&#9679; <span id="conn">connecting</span></span>
     <span class="pills">
+    <span>scope <b id="s-scope">hybrid</b></span>
     <span>sensor <b id="s-sock">-</b></span>
     <span>devs <b id="s-devs">-</b></span>
     <span>alerts <b id="s-alerts">-</b></span>
@@ -48,6 +75,7 @@
     <span>clients <b id="clients">-</b></span>
     </span>
   </div>
+  <div class="scopebar" id="scopebar" role="status" hidden><span id="scopebar-t"></span> <button type="button" id="scopebar-legend">what each scope holds</button></div>
   <main>
    <div id="v-overview">
     <section class="kpis" aria-label="overview">
@@ -173,6 +201,7 @@
     </section>
    </div>
    <div id="v-wifi" hidden>
+    <section class="panel scope-empty" id="w-scope-empty"><div class="label">WiFi</div><p>Nothing here under Local. This view is the passive monitor radio's: its beacons, probes, associations, deauths and channel mix, none of which the host's own interfaces carried. The managed card's own scans and station dump are Local's, but slothweb does not read them here. Switch to Monitor or Hybrid to see it.</p></section>
     <section class="panel controls" aria-label="wifi controls">
       <label>cells <select id="w-metric">
         <option value="ap_count" selected>APs per channel</option>
@@ -318,6 +347,7 @@
     </section>
    </div>
    <div id="v-flows" hidden>
+    <section class="panel scope-empty" id="f-scope-empty"><div class="label">Flows</div><p>Nothing here under Monitor. The flows (SSH, RDP, SMB, SNMP, LDAP, Kerberos, BGP) are the IP capture's, on the host's own interfaces; sloth.db keeps no capture path, so its flow tables count as Local even when sloth captured IP off the air. Switch to Local or Hybrid to see them.</p></section>
     <section class="panel controls" aria-label="flow controls">
       <label>window <select id="f-win">
         <option value="3600">1 h</option>
@@ -383,7 +413,7 @@
       <ol class="alerts" id="h-flows"></ol></div>
     </section>
     <section class="panel" id="h-sql" hidden>
-      <div class="label">sql over sloth.db, read-only <span class="sub" id="q-note"></span></div>
+      <div class="label">sql over sloth.db, read-only <span class="scopechip unscoped">unscoped: raw sloth.db</span> <span class="sub" id="q-note"></span></div>
       <div class="controls"><label>recipe <select id="q-recipe"></select></label>
       <button type="button" id="q-run">run</button></div>
       <textarea id="q-sql" rows="6" spellcheck="false" autocomplete="off" aria-label="one SELECT or WITH statement"></textarea>

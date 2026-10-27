@@ -149,7 +149,9 @@ static void test_open_flags(void) {
     WT_ASSERT(sqlite3_exec(c.db, "DELETE FROM devices", NULL, NULL, NULL) != SQLITE_OK);
     WT_EQ(c.schema, db_schema_version());
     WT_EQ(c.feats, (unsigned)(WEB_QF_PNL | WEB_QF_DHCP | WEB_QF_MDNS | WEB_QF_NBNS |
-                              WEB_QF_ALERTS | WEB_QF_ARP));
+                              WEB_QF_ALERTS | WEB_QF_ARP | WEB_QF_PROBE |
+                              WEB_QF_BEACON | WEB_QF_ASSOC | WEB_QF_PNLC |
+                              WEB_QF_STA | WEB_QF_CAMSIG));
     WT_EQ(c.opt, (unsigned)(WEB_SDB_OPT_CLASS | WEB_SDB_OPT_VCI |
                               WEB_SDB_OPT_INC));
     web_slothdb_close(&c);

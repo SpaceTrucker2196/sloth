@@ -559,11 +559,14 @@ static void test_flush_all_writes_backlog_first(void) {
  * pinned clock. Per pass: 15 connections, 2 interfaces, 20 top hosts,
  * 30 devices, 10 probe clients (frame_count rising), 3 channels, one
  * DNS query from one of 5 hosts in turn, and sensor_health. That is
- * 117 series that each get a sample in every 10 s bucket. */
+ * 117 series that each get a sample in every 10 s bucket, and the 40 of
+ * the capture-scope presence split (web_scope.h): the 30 ARP devices'
+ * dev.present.local and the 10 probe clients' dev.present.monitor. 157,
+ * still under 5 MB. */
 static long long g_now;
 static long long pinned(void *ctx) { (void)ctx; return g_now; }
 
-#define ACC_SERIES 117
+#define ACC_SERIES 157
 
 static size_t pass(char *b, size_t cap, long long t, int k) {
     size_t o = 0;

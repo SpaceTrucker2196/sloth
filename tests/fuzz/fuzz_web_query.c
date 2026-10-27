@@ -8,7 +8,8 @@
  *
  * slothweb is a separate binary whose sources libsloth_core.a does not
  * carry (and must not: no web/ file is part of sloth), so the two
- * translation units the parser needs are included here directly. Both
+ * translation units the parser needs are included here directly, with
+ * web_scope.c (the capture scope's tables the compiler reads). All
  * are pure (no SQLite, no lock, no clock): the parser takes the time
  * as an argument.
  *
@@ -20,6 +21,7 @@
  * which libFuzzer reports as a crash. */
 #include "../../web/src/web_json.c"
 #include "../../web/src/web_query.c"
+#include "../../web/src/web_scope.c"
 
 static unsigned char g_alphabet[256];
 static int g_ready;
@@ -39,11 +41,18 @@ static void learn_alphabet(void) {
     for (int k = 0; k < 2; k++) {
         if (web_query_parse(k ? q2 : q, 1792627200LL, &wq, err, sizeof(err)) != 0)
             abort();
-        for (int sort = 0; sort < WEB_QS_COUNT; sort++) {
-            if (web_query_compile(&wq, ~0u, sort, 200, 100000, &s) != 0) abort();
-            for (const unsigned char *p = (const unsigned char *)s.sql; *p; p++)
-                g_alphabet[*p] = 1;
-        }
+        /* Every capture scope (web_scope.h), each in both directions:
+         * the scoped statements' fragments are the compiler's too. */
+        for (int scope = 0; scope < 3; scope++)
+            for (int sort = 0; sort < WEB_QS_COUNT; sort++)
+                for (int dir = 0; dir < 3; dir++) {
+                    if (web_query_compile_scoped(&wq, ~0u, scope,
+                                                 WEB_SORT_PACK(sort, dir), 200,
+                                                 100000, &s) != 0)
+                        abort();
+                    for (const unsigned char *p = (const unsigned char *)s.sql; *p; p++)
+                        g_alphabet[*p] = 1;
+                }
     }
     /* Digits of every parameter number. */
     for (int c = '0'; c <= '9'; c++) g_alphabet[c] = 1;
@@ -60,8 +69,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     static web_qsql_t s;
     char err[64];
     unsigned feats = size ? data[0] : 0;
+    if (size > 1) feats |= (unsigned)data[1] << 8;
     if (web_query_parse(q, 1792627200LL, &wq, err, sizeof(err)) != 0) return 0;
-    if (web_query_compile(&wq, feats, (int)(size % WEB_QS_COUNT), 200, 7, &s) != 0)
+    if (web_query_compile_scoped(&wq, feats, (int)(size % 3),
+                                 (int)(size % WEB_QS_COUNT), 200, 7, &s) != 0)
         abort();
     for (const char *p = s.sql; (p = strchr(p, '?')) != NULL; p++) {
         int n = 0;

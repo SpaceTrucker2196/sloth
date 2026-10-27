@@ -33,6 +33,7 @@
 
 #include "web_json.h"
 #include "web_jsonl.h"
+#include "web_scope.h"
 
 #define WEB_LIVE_TYPES      48   /* distinct record types counted by name */
 #define WEB_LIVE_TYPE_MAX   32
@@ -69,6 +70,8 @@ typedef struct {
     long long ts;
     char      type[WEB_LIVE_TYPE_MAX + 1];
     char      text[WEB_LIVE_TEXT_MAX + 1];
+    int       sc;     /* its capture-scope tag, resolved when it came:
+                         WEB_SC_M, WEB_SC_L, both, or 0 (web_scope.h) */
 } web_live_rec_t;
 
 typedef struct {
@@ -143,8 +146,11 @@ typedef struct {
 } web_live_inc_t;
 
 /* The devices of sloth's latest published pass, by MAC, for the
- * Devices view's pass:latest filter (the Overview's devices tile). */
+ * Devices view's pass:latest filter (the Overview's devices tile). A
+ * row is the MAC's 17 characters, its NUL, and the device's scope tag
+ * after it: the sort and the search compare the string only. */
 #define WEB_LIVE_PASS_MAX   2048
+#define WEB_LIVE_PASS_ROW   19
 
 typedef struct web_live_s {
     pthread_mutex_t mu;
@@ -202,10 +208,22 @@ typedef struct web_live_s {
     int              alert_next, alert_n;
 
     /* the latest pass's MACs: round_* while one is read, pass_* published */
-    char             round_macs[WEB_LIVE_PASS_MAX][18];
+    char             round_macs[WEB_LIVE_PASS_MAX][WEB_LIVE_PASS_ROW];
     int              round_nmac, round_mac_more;
-    char             pass_macs[WEB_LIVE_PASS_MAX][18];   /* sorted */
+    char             pass_macs[WEB_LIVE_PASS_MAX][WEB_LIVE_PASS_ROW];   /* sorted */
     int              pass_nmac, pass_mac_more;
+    /* The pass's devices by capture scope (web_scope_device()): the
+     * round's while it is read, and the published pass's. */
+    long             round_n_m, round_n_l, dev_count_m, dev_count_l;
+
+    /* The capture scope's facts (web_scope.h): the monitor radios named
+     * so far, whether the IP capture is one, and sloth's own words for
+     * it (sensor_health capture_linktype, -1 absent; monitor_only). */
+    web_scope_ctx_t  sc;
+    long long        cap_linktype;
+    int              monitor_only;
+    /* records/s by scope: [0] Monitor, [1] Local */
+    web_live_rate_t  rate_scope[2];
 
     /* sensor_health */
     int       sh_seen;
@@ -267,6 +285,22 @@ int  web_live_recent_after(web_live_t *l, unsigned long long after,
 
 /* The /api/live document. Returns its length, 0 if it did not fit. */
 size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms);
+/* The same for one capture scope (web_scope.h): the device count is the
+ * pass's devices of that scope, the open alerts and the alert list
+ * those of its types, records/s and the ticker's backlog its records.
+ * Hybrid is web_live_json() byte for byte. */
+size_t web_live_json_scoped(web_live_t *l, const web_scope_ctx_t *sc,
+                            char *out, size_t cap, long long now_ms);
+/* The stream's scope facts for a request: the monitor radios named so
+ * far and whether the IP capture is one; scope and given are left as
+ * the caller set them. */
+void   web_live_scope_ctx(web_live_t *l, web_scope_ctx_t *sc);
+/* The scope tag of mac in the latest pass, or -1 when it is not in it. */
+int    web_live_pass_tag(web_live_t *l, const char *mac);
+/* The latest pass's MACs whose tag has a bit of want (WEB_SC_M, _L). */
+int    web_live_pass_count(web_live_t *l, int want);
+/* An incident's tag (its alert type's, the radio of now applied). */
+int    web_live_inc_tag(const web_scope_ctx_t *sc, const web_live_inc_t *e);
 
 /* The socket members of /api/health, each preceded by a comma. */
 void web_live_health_members(web_live_t *l, web_jw_t *w, long long now_ms);

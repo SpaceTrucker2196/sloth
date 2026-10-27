@@ -60,6 +60,12 @@ const web_metric_t web_metric_defs[WM_COUNT] = {
     [WM_FLOW_MQTT] = { "flow.mqtt", WEB_MK_COUNTER, WEB_KC_HOST, "ip",
                        "mqtt_flow connect+subscribe+publish delta, by src_ip",
                        "packets" },
+    [WM_DEV_PRESENT_MON] = { "dev.present.monitor", WEB_MK_PRESENCE, WEB_KC_DEV,
+                             "mac", "dev.present from the monitor radio's "
+                             "records (and BLE)", "0/1" },
+    [WM_DEV_PRESENT_LOC] = { "dev.present.local", WEB_MK_PRESENCE, WEB_KC_DEV,
+                             "mac", "dev.present from the host's own "
+                             "interfaces' records", "0/1" },
 };
 
 static const int TIER_STEP[WEB_TIER_COUNT] = { WEB_FINE_S, WEB_MINUTE_S, WEB_HOUR_S };
@@ -646,6 +652,16 @@ static int cmp_key_desc(const void *a, const void *b) {
     const web_keyinfo_t *x = a, *y = b;
     if (x->last_seen != y->last_seen) return x->last_seen < y->last_seen ? 1 : -1;
     return strcmp(x->key, y->key);
+}
+
+int web_rollup_has(web_rollup_t *ru, int metric, const char *key) {
+    if (!ru || metric < 0 || metric >= WM_COUNT || !key) return 0;
+    pthread_mutex_lock(&ru->mu);
+    const web_kclass_t *c = &ru->cls[web_metric_defs[metric].kclass];
+    int i = c->nhead ? key_find(c, key) : -1;
+    int has = i >= 0 && c->k[i].used && c->k[i].sid[metric];
+    pthread_mutex_unlock(&ru->mu);
+    return has;
 }
 
 int web_rollup_keys(web_rollup_t *ru, int metric, web_keyinfo_t *out,

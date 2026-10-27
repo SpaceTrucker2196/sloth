@@ -131,6 +131,10 @@ enum {
     WM_WIFI_AP_COUNT, WM_WIFI_CTRL_TOTAL, WM_WIFI_DEAUTH, WM_WIFI_PROBE_CLIENTS,
     WM_CONNS_TOTAL,
     WM_FLOW_SSH, WM_FLOW_RDP, WM_FLOW_SMB, WM_FLOW_SNMP, WM_FLOW_MQTT,
+    /* dev.present split by capture scope (web_scope.h): the records
+     * the monitor radio heard, and the ones the host's own interfaces
+     * carried. dev.present stays every source's. */
+    WM_DEV_PRESENT_MON, WM_DEV_PRESENT_LOC,
     WM_COUNT
 };
 
@@ -307,6 +311,8 @@ void web_rollup_presence(web_rollup_t *ru, int metric,
  * most max. *total gets how many there are. */
 int  web_rollup_keys(web_rollup_t *ru, int metric, web_keyinfo_t *out,
                      int max, int *total);
+/* Does key hold a series of metric now? */
+int  web_rollup_has(web_rollup_t *ru, int metric, const char *key);
 
 void web_rollup_stats(web_rollup_t *ru, web_rollup_stats_t *st);
 /* Rows waiting in the store queue. */

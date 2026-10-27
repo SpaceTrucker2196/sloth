@@ -43,6 +43,7 @@
 #include "web_json.h"
 #include "web_oui.h"
 #include "web_ptr.h"
+#include "web_scope.h"
 #include "web_slothdb.h"
 #include "web_tsdb.h"
 
@@ -62,6 +63,9 @@ typedef struct {
     web_ident_t         *ident;
     web_anomaly_t       *anomaly;
     web_tsdb_t          *tsdb;
+    /* The request's capture scope (web_scope.h); NULL is Hybrid. Set by
+     * the router on its own copy, never on the shared one. */
+    const web_scope_ctx_t *sc;
 } web_m4_t;
 
 /* The routes. Each renders its JSON body into body (cap bytes) and sets

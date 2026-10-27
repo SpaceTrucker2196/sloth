@@ -35,6 +35,7 @@
 
 #include "web_baseline.h"
 #include "web_rollup.h"
+#include "web_scope.h"
 #include "web_tsdb.h"
 
 /* A point is at most 69 bytes: a 10-digit t, three %.7g values of at
@@ -61,10 +62,24 @@ int    web_params_parse(const char *query, web_param_t *ps, int np,
 /* Decimal seconds, 1..11 digits. 0, or -1. */
 int    web_param_secs(const char *s, long long *out);
 
+/* The capture scope's step (web_scope.h), run by the router before any
+ * route's own parser: query with its scope=... pair taken out into rest
+ * (restsz bytes, the other pairs byte for byte), the value decoded as
+ * every parameter is. *scope is Hybrid when there is none; *given says
+ * whether there was. 0, or -1 with a reason word in err
+ * ("repeated_parameter", "bad_scope", "empty_value", "bad_query",
+ * "query_too_long", or the decoder's own). */
+int    web_scope_take(const char *query, char *rest, size_t restsz,
+                      int *scope, int *given, char *err, size_t errsz);
+
 typedef struct {
     int       metric, tier;
     char      key[WEB_KEY_MAX + 1];
     long long from, to;
+    /* The capture scope (web_scope.h), NULL Hybrid; the parser leaves it
+     * NULL. A series the scope does not hold answers no points and
+     * "out_of_scope":true. */
+    const web_scope_ctx_t *sc;
 } web_series_q_t;
 
 /* 0, or -1 with a short reason ("unknown_parameter", "bad_key", ...) in
@@ -87,10 +102,21 @@ int    web_series_points(web_tsdb_t *t, int tier, int metric, const char *key,
 
 int    web_keys_parse(const char *query, int *metric, char *err, size_t errsz);
 size_t web_keys_json(web_tsdb_t *t, int metric, char *out, size_t cap);
+/* The keys the scope holds (an interface by its radio, an alert type by
+ * its rule's input); "total" is then the scope's among those listed.
+ * NULL is web_keys_json(). */
+size_t web_keys_json_scoped(web_tsdb_t *t, int metric,
+                            const web_scope_ctx_t *sc, char *out, size_t cap);
 
 /* Only an empty query is accepted. */
 int    web_metrics_parse(const char *query, char *err, size_t errsz);
 size_t web_metrics_json(web_tsdb_t *t, char *out, size_t cap);
+/* The catalogue a scope offers: its own metrics, and those whose keys
+ * are either (iface.*, alerts.fired). Under Monitor or Local each metric
+ * says which scope holds it ("scope": "monitor", "local", "key" or
+ * "hybrid"). NULL is web_metrics_json(). */
+size_t web_metrics_json_scoped(web_tsdb_t *t, const web_scope_ctx_t *sc,
+                               char *out, size_t cap);
 
 /* {"error":"reason"} */
 size_t web_series_error_json(const char *reason, char *out, size_t cap);

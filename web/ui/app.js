@@ -83,6 +83,37 @@
   // A canonical MAC, as the server writes one: what may open a drawer.
   var MAC_RE = /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/;
 
+  // ── the capture scope (web/src/web_scope.h) ───────────────────────
+  // Monitor / Hybrid / Local in the top bar: which captured data every
+  // view shows. The server does the filtering (every /api route takes
+  // scope=, and counts, pages and tiles are its own); the page keeps the
+  // scope's records on the ticker (each carries its tag, sc) and draws
+  // the empty states. The choice is in the address (#devices?scope=
+  // monitor; Hybrid left out) and kept in this browser for an address
+  // that names none; a blocked or absent store means Hybrid.
+  var SCOPE_KEY = "slothweb.scope";
+  var SCOPES = ["monitor", "hybrid", "local"];
+  var SCOPE_WANT = { "monitor": 1, "local": 2 };
+  var SCOPE_WORD = { "monitor": "Monitor", "hybrid": "Hybrid", "local": "Local" };
+  var SCOPE = "hybrid";
+  try {
+    var savedScope = window.localStorage.getItem(SCOPE_KEY);
+    if (SCOPES.indexOf(savedScope) >= 0) SCOPE = savedScope;
+  } catch (e) { /* no storage: Hybrid */ }
+  // An address that names one wins, before the first fetch.
+  var hashScope = /[?&]scope=(monitor|hybrid|local)(&|$)/.exec(String(location.hash || ""));
+  if (hashScope) SCOPE = hashScope[1];
+  // A same-origin API path with the scope added; Hybrid's is the path.
+  function scoped(path) {
+    if (SCOPE === "hybrid") return path;
+    return path + (path.indexOf("?") >= 0 ? "&" : "?") + "scope=" + SCOPE;
+  }
+  // Does the scope keep a record tagged sc (1 Monitor, 2 Local, 3 both)?
+  function scopeKeeps(sc) {
+    if (SCOPE === "hybrid" || typeof sc !== "number") return true;
+    return (sc & SCOPE_WANT[SCOPE]) !== 0;
+  }
+
   function set(id, text) { $(id).textContent = String(text); }
 
   function el(tag, cls, text) {
@@ -801,13 +832,20 @@
   // ── KPIs ──────────────────────────────────────────────────────────
   function kpis(t) {
     if (typeof t.socket === "string") { set("sock", t.socket); set("s-sock", t.socket); }
-    var devs = num(t.devices) ? String(t.devices) : "-";
-    set("k-devs", devs);
-    set("s-devs", devs);
-    $("k-devs").className = "kpi" + (t.devices_stale ? " stale" : "");
-    set("k-devs-sub", !num(t.devices) ? "waiting for a device pass"
-                      : t.devices_stale ? "last known; stream not live"
-                      : "in sloth's latest pass");
+    // A tick's figures are Hybrid's: under a scope only /api/live's
+    // (asked for with the scope) set the tiles, and a tick passes
+    // without them.
+    if (Object.prototype.hasOwnProperty.call(t, "devices")) {
+      var devs = num(t.devices) ? String(t.devices) : "-";
+      set("k-devs", devs);
+      set("s-devs", devs);
+      $("k-devs").className = "kpi" + (t.devices_stale ? " stale" : "");
+      set("k-devs-sub", !num(t.devices) ? "waiting for a device pass"
+                        : t.devices_stale ? "last known; stream not live"
+                        : SCOPE === "monitor" ? "the monitor radio's, in sloth's latest pass"
+                        : SCOPE === "local" ? "the host's interfaces', in sloth's latest pass"
+                        : "in sloth's latest pass");
+    }
     var a = t.alerts_open;
     if (a && num(a[0]) && num(a[1]) && num(a[2])) {
       set("k-low", a[0]); set("k-warn", a[1]); set("k-crit", a[2]);
@@ -852,6 +890,9 @@
   function addRecord(r) {
     if (!num(r.seq) || r.seq <= lastSeq) return;
     lastSeq = r.seq;
+    // A record of another capture scope is passed over, its number
+    // counted, so the backlog is not asked for again.
+    if (!scopeKeeps(r.sc)) return;
     if (paused) { held++; set("tick-note", held + " held"); return; }
     TK.rows.unshift(r);
     if (TK.rows.length > TICKER_MAX) TK.rows.length = TICKER_MAX;
@@ -947,7 +988,7 @@
 
   var first = true;
   function live() {
-    fetch("/api/live", { cache: "no-store" })
+    fetch(scoped("/api/live"), { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (l) {
         kpis({ socket: l.socket, devices: l.devices,
@@ -963,9 +1004,12 @@
           for (var i = 0; i < l.recent.length; i++) addRecord(l.recent[i]);
         }
         first = false;
+        scopeFacts(l.scope_facts);
       })
       .catch(function () { set("sock", "?"); });
+    lastLive = Date.now();
   }
+  var lastLive = 0;
 
   // ── /events ───────────────────────────────────────────────────────
   var es = new EventSource("/events");
@@ -984,7 +1028,9 @@
     set("seq", t.seq);
     set("up", dur(t.uptime_s));
     set("clients", t.sse_clients);
-    kpis(t);
+    kpis(SCOPE === "hybrid" ? t : { socket: t.socket, sensor: t.sensor });
+    // Under a scope the tiles are /api/live's: asked again every 2 s.
+    if (SCOPE !== "hybrid" && Date.now() - lastLive >= 2000) live();
   });
   es.addEventListener("record", function (ev) {
     var r;
@@ -1047,6 +1093,8 @@
     for (var i = 0; i < keys.length; i++)
       if (p && typeof p[keys[i]] === "string" && p[keys[i]] !== "")
         out.push(encodeURIComponent(keys[i]) + "=" + encodeURIComponent(p[keys[i]]));
+    // The capture scope, every view's, outside PARAMS; Hybrid unsaid.
+    if (SCOPE !== "hybrid") out.push("scope=" + SCOPE);
     return out.length ? "?" + out.join("&") : "";
   }
   function show(v, p) {
@@ -1073,6 +1121,7 @@
     if (v === "records") recordsView();
     if (v === "health") healthView();
     if (DB_VIEWS.indexOf(v) >= 0) dbFresh();
+    scopeView(v);
     // The view is in the address (#flows, #alerts?state=open), so a
     // reload or a link opens it again; replaceState, so Back leaves the
     // page as before. Only a sandboxed frame's refusal is expected;
@@ -1089,15 +1138,17 @@
     var h = String(location.hash || "").replace(/^#/, "");
     var at = h.indexOf("?"), v = at < 0 ? h : h.slice(0, at), p = {};
     if (VIEWS.indexOf(v) < 0) return null;
+    var sc = null;
     if (at >= 0) h.slice(at + 1).split("&").forEach(function (kv) {
       var eq = kv.indexOf("=");
       if (eq <= 0) return;
       try {
         var k = decodeURIComponent(kv.slice(0, eq));
         if ((PARAMS[v] || []).indexOf(k) >= 0) p[k] = decodeURIComponent(kv.slice(eq + 1));
+        if (k === "scope" && SCOPES.indexOf(kv.slice(eq + 1)) >= 0) sc = kv.slice(eq + 1);
       } catch (e) { /* a malformed escape: the parameter is left out */ }
     });
-    return { v: v, p: p };
+    return { v: v, p: p, scope: sc };
   }
   function hashView() { var r = hashRoute(); return r ? r.v : ""; }
   // To a view with parameters, as a new entry in the history, so Back
@@ -1109,6 +1160,8 @@
   }
   window.addEventListener("hashchange", function () {
     var r = hashRoute();
+    // An address without a scope keeps the one in force.
+    if (r && r.scope) setScope(r.scope);
     if (r) show(r.v, r.p);
   });
   $("nav-overview").addEventListener("click", function () { show("overview"); });
@@ -1144,8 +1197,113 @@
     if (!$("drawer").hidden && D.sel) openDrawer(D.sel);
   });
 
+  // ── the capture-scope switch ──────────────────────────────────────
+  // A radio group: a click or an arrow key picks one; the views, the
+  // tiles, the ticker and an open drawer are drawn again for it.
+  var SC = { facts: null };
+  var SCOPE_SAYS = {
+    "monitor": "Monitor: only what the passive monitor radio (and BLE) heard over the air; " +
+               "nothing the connected Wi-Fi or Ethernet carried.",
+    "local": "Local: only what the host's own Ethernet and Wi-Fi interfaces carried, " +
+             "the card's own scans included; never the monitor radio."
+  };
+  function scopeBar() {
+    var bar = $("scopebar"), f = SC.facts || {};
+    var radio = f.ip_on_radio === true;
+    bar.hidden = SCOPE === "hybrid";
+    bar.className = "scopebar sc-" + SCOPE.charAt(0) + (radio ? " radio" : "");
+    set("scopebar-t", SCOPE === "hybrid" ? "" : SCOPE_SAYS[SCOPE] + (radio
+      ? " sloth's IP capture is itself a monitor radio now, so the stream's IP records count as Monitor's."
+      : ""));
+  }
+  function scopeFacts(f) {
+    SC.facts = f && typeof f === "object" ? f : null;
+    scopeBar();
+  }
+  // A tile's drill-down (#devices?q=pass:latest) names no scope, so it
+  // opens in the scope in force, the one its count was taken in, and
+  // show() writes that scope into the address. No link is rewritten:
+  // the page writes no attribute (test_routes.c).
+  // Each view's first line names the scope it shows: a line of its own
+  // above the view's panels, made once per view.
+  function scopeView(v) {
+    var box = $("v-" + v);
+    if (!box) return;
+    var line = box.firstElementChild;
+    if (!line || !line.classList.contains("scopeline")) {
+      line = el("div", "scopeline");
+      line.appendChild(el("span", "scopechip"));
+      box.insertBefore(line, box.firstChild);
+    }
+    var chip = line.firstChild;
+    // sloth's own state is every scope's.
+    var all = v === "health";
+    chip.className = "scopechip" + (SCOPE === "hybrid" || all ? "" : " sc-" + SCOPE.charAt(0));
+    chip.textContent = all ? "every scope: sloth's own state" : "scope: " + SCOPE_WORD[SCOPE];
+  }
+  function scopeUI() {
+    for (var i = 0; i < SCOPES.length; i++) {
+      var b = $("sc-" + SCOPES[i]), on = SCOPES[i] === SCOPE;
+      // ARIA reflection, not an attribute write: the page has none.
+      b.ariaChecked = on ? "true" : "false";
+      b.tabIndex = on ? 0 : -1;
+    }
+    set("s-scope", SCOPE);
+    $("v-wifi").classList.toggle("scoped-out", SCOPE === "local");
+    $("v-flows").classList.toggle("scoped-out", SCOPE === "monitor");
+    scopeBar();
+    scopeView(view);
+  }
+  // 1 when the scope changed.
+  function setScope(s) {
+    if (SCOPES.indexOf(s) < 0 || s === SCOPE) return 0;
+    SCOPE = s;
+    try { window.localStorage.setItem(SCOPE_KEY, s); } catch (e) { /* this load only */ }
+    SC.facts = null;
+    scopeUI();
+    // The ticker and the tiles start again in the new scope.
+    TK.rows = [];
+    tickerDraw();
+    lastSeq = 0;
+    held = 0;
+    set("tick-note", "");
+    first = true;
+    live();
+    return 1;
+  }
+  function pickScope(s) {
+    if (!setScope(s)) return;
+    show(view, VP);
+    if (view === "lookup") lookup();
+    if (!$("drawer").hidden && D.sel) openDrawer(D.sel);
+  }
+  SCOPES.forEach(function (s, i) {
+    var b = $("sc-" + s);
+    b.addEventListener("click", function () { pickScope(s); });
+    b.addEventListener("keydown", function (e) {
+      var d = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1
+            : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+      if (!d) return;
+      e.preventDefault();
+      var n = SCOPES[(i + d + SCOPES.length) % SCOPES.length];
+      pickScope(n);
+      $("sc-" + n).focus();
+    });
+  });
+  function scopeLegend(open) {
+    $("scope-legend").hidden = !open;
+    $("scope-info").ariaExpanded = open ? "true" : "false";
+  }
+  $("scope-info").addEventListener("click", function () { scopeLegend($("scope-legend").hidden); });
+  $("scopebar-legend").addEventListener("click", function () { scopeLegend(true); });
+  $("scope-legend-close").addEventListener("click", function () {
+    scopeLegend(false);
+    $("scope-info").focus();
+  });
+  scopeUI();
+
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") { closeDrawer(); return; }
+    if (e.key === "Escape") { closeDrawer(); scopeLegend(false); return; }
     // A focused row or card opens as a click would.
     var t = e.target;
     if ((e.key === "Enter" || e.key === " ") && t && t.tabIndex === 0 && t.classList &&
@@ -1220,7 +1378,7 @@
   }
 
   function getJSON(path) {
-    return fetch(path, { cache: "no-store" }).then(function (r) {
+    return fetch(scoped(path), { cache: "no-store" }).then(function (r) {
       return r.json().then(function (j) {
         if (!r.ok) {
           var e = new Error(j && typeof j.error === "string" ? j.error : String(r.status));
@@ -1500,12 +1658,20 @@
     var gen = ++O.gen;
     getJSON("/api/keys?metric=iface.rx_rate").then(function (j) {
       var ks = j.keys || [];
+      // The keys are the scope's (the server's /api/keys): under
+      // Monitor the monitor radio, whose rx is frames heard on the air;
+      // under Local the host's own interfaces.
       if (!ks.length || typeof ks[0].key !== "string") {
-        set("o-nvn-note", "no interface seen yet");
+        set("o-nvn-note", SCOPE === "hybrid" ? "no interface seen yet"
+                          : "no " + SCOPE_WORD[SCOPE] + " interface seen yet");
+        set("k-tp", "-");
+        set("k-tp-key", "");
         return null;
       }
       O.key = ks[0].key;
       set("k-tp-key", O.key);
+      set("k-tp-sub", SCOPE === "monitor" ? "the monitor radio's rx (frames heard), 24 h, band = mean ± k sd"
+                      : "rx, 24 h, band = mean ± k sd");
       var now = Math.floor(Date.now() / 1000);
       var tier = A.storeOn ? "minute" : "fine";
       var step = tier === "minute" ? 60 : 10;
@@ -1673,6 +1839,13 @@
       var list = (j.anomalies || []).filter(openOnly
         ? function (a) { return a.open === true && (!N.kind || a.kind === N.kind); } : shown);
       N.list = list;
+      // Under a scope the open-anomalies tile counts the scope's open
+      // episodes (the tick's count is Hybrid's).
+      if (SCOPE !== "hybrid") {
+        var nOpen = (j.anomalies || []).filter(function (a) { return a.open === true; }).length;
+        set("k-anoms", nOpen + (j.more ? "+" : ""));
+        set("s-anoms", nOpen + (j.more ? "+" : ""));
+      }
       if (N.table) anomTable();
       var box = $("n-cards");
       while (box.firstChild) box.removeChild(box.firstChild);
@@ -2214,8 +2387,10 @@
       if (gen !== DR.gen) return;
       var box = $("dr-body");
       while (box.firstChild) box.removeChild(box.firstChild);
-      set("dr-note", j.db === "open" ? "sloth.db record" + (j.record ? "" : ": none")
-                                     : "sloth.db " + j.db + "; the stream only");
+      set("dr-note", (j.db === "open" ? "sloth.db record" + (j.record ? "" : ": none")
+                                      : "sloth.db " + j.db + "; the stream only") +
+          (j.in_scope === false ? "; not heard in the " + SCOPE_WORD[SCOPE] + " scope" : "") +
+          (SCOPE !== "hybrid" ? "; " + SCOPE_WORD[SCOPE] + "'s fields and presence only" : ""));
       var r = j.record, dt = r && r.detail ? r.detail : {};
       kvList(box, ouiPairs(j.oui).concat(r ? [
         ["ip", ipVal(r.ip, IP_SRC.dev)],
@@ -2284,7 +2459,8 @@
       if (gen !== L.gen) return;
       var box = $("l-card");
       while (box.firstChild) box.removeChild(box.firstChild);
-      set("l-src", j.kind + " " + j.q + ", sloth.db " + j.db);
+      set("l-src", j.kind + " " + j.q + ", sloth.db " + j.db + (j.ip_in_scope === false
+        ? "; Monitor holds no addresses: an IP is the host's own interfaces' (Local)" : ""));
       kvList(box, j.kind === "mac" ? ouiPairs(j.oui) : [["ip", ipVal(j.q, 0)]]);
       itemList(box, "names (passive)", j.names, nameLine, false);
       if (j.kind === "mac")
@@ -2720,6 +2896,8 @@
 
   function wifi() {
     var gen = ++WF.gen;
+    // The monitor radio's view: under Local its empty state says why.
+    if (SCOPE === "local") return;
     var r = wifiWindow();
     var metric = $("w-metric").value === "ctrl_total" ? "ctrl_total" : "ap_count";
     WF.heat = null;
@@ -3065,6 +3243,8 @@
   }
 
   function flows() {
+    // The IP capture's view: under Monitor its empty state says why.
+    if (SCOPE === "monitor") return;
     flowTabs();
     flowGraph();
     flowRows(true);
@@ -3312,7 +3492,8 @@
       li.appendChild(el("span", "n d-normal", "x" + f.count));
       ol.appendChild(li);
     });
-    if (!HS.flows.length) ol.appendChild(el("li", "sub", "none in the range"));
+    if (!HS.flows.length) ol.appendChild(el("li", "sub", SCOPE === "monitor"
+      ? "none under Monitor: the flows are the IP capture's (Local)" : "none in the range"));
   }
 
   function historyRange() {
@@ -3820,7 +4001,12 @@
   function alertPage(j) {
     var sev = sevOf(j.sev), k = j.kb || null;
     set("ad-head", (j.type_name || j.title) + ": " + j.state + ", from " + j.source);
-    set("ad-note", "sloth.db " + j.db);
+    // A link opens its alert whatever the scope; the page says when the
+    // scope does not hold its type (the rule's input is the other's).
+    set("ad-note", "sloth.db " + j.db + (j.in_scope === false
+      ? "; not in the " + SCOPE_WORD[SCOPE] + " scope: its rule reads what the " +
+        (SCOPE === "monitor" ? "host's own interfaces carried" : "monitor radio heard")
+      : ""));
     var t = $("ad-title");
     t.appendChild(el("span", "ty " + (sev >= 0 ? "sev" + sev : ""), sev >= 0 ? SEV_WORD[sev] : "?"));
     t.appendChild(el("span", "d-bright", String(j.title)));

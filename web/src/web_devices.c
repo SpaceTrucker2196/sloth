@@ -148,18 +148,33 @@ static long long strip_from(long long now_s) {
  * from from, nothing at or past to: the store's minute tier, and its
  * hour tier too when hour is set (cells of whole hours, so an hour row
  * belongs to one cell), then what the ring and the open buckets hold. */
+/* The presence a scope shows (web_scope.h): every source's under
+ * Hybrid, the scope's own split otherwise. */
+static int scope_of(const web_m4_t *m) {
+    return m && m->sc ? m->sc->scope : WEB_SCOPE_HYBRID;
+}
+
+static int presence_metric(const web_m4_t *m) {
+    switch (scope_of(m)) {
+    case WEB_SCOPE_MONITOR: return WM_DEV_PRESENT_MON;
+    case WEB_SCOPE_LOCAL:   return WM_DEV_PRESENT_LOC;
+    default:                return WM_DEV_PRESENT;
+    }
+}
+
 static void strips_at(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
                       int n, long long from, long long to, int ncell,
                       int cell_s, int hour, unsigned char *bits) {
     memset(bits, 0, (size_t)n * (WEB_DEV_CELLS / 8));
     if (!m->tsdb) return;
+    int pm = presence_metric(m);
     if (m->tsdb->store && m->tsdb->store->rd)
         for (int i = 0; i < n; i++)
             for (int t = WEB_TIER_MINUTE; t <= (hour ? WEB_TIER_HOUR : WEB_TIER_MINUTE); t++)
-                web_store_presence(m->tsdb->store, t, WM_DEV_PRESENT, macs[i],
+                web_store_presence(m->tsdb->store, t, pm, macs[i],
                                    from, to, ncell, cell_s,
                                    bits + (size_t)i * (WEB_DEV_CELLS / 8));
-    web_rollup_presence(m->tsdb->ru, WM_DEV_PRESENT, macs, n, from, to,
+    web_rollup_presence(m->tsdb->ru, pm, macs, n, from, to,
                         ncell, cell_s, bits);
 }
 
@@ -320,6 +335,7 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
         free(c.rows);
         return sdb_unavailable(m, body, cap, len, status, oerr);
     }
+    conn.scope = scope_of(m);
     const char *fail_why = "error";
     int got = web_sdb_devices(&conn, q, WEB_SORT_PACK(sort, dir), limit + 1,
                               offset, collect, &c, &fail_why);
@@ -358,7 +374,13 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
     web_jw_raw(&w, ",\"pass_size\":");
     if (m->sdb && m->sdb->fns.live) {
         int pm = 0;
-        web_jw_int(&w, web_live_pass_size(m->sdb->fns.live, &pm));
+        /* Under a scope, the pass's devices of that scope (the devices
+         * tile's count). */
+        int sc = scope_of(m);
+        web_jw_int(&w, sc ? web_live_pass_count(m->sdb->fns.live,
+                                                sc == WEB_SCOPE_MONITOR ? WEB_SC_M
+                                                                        : WEB_SC_L)
+                          : web_live_pass_size(m->sdb->fns.live, &pm));
     } else {
         web_jw_raw(&w, "null");
     }
@@ -427,6 +449,7 @@ int web_history_devices_route(const web_m4_t *m, const char *query,
         free(c.rows);
         return sdb_unavailable(m, body, cap, len, status, oerr);
     }
+    conn.scope = scope_of(m);
     int got = web_sdb_devices_between(&conn, from, to, limit + 1, offset,
                                       collect, &c);
     int to_out = conn.timed_out, schema = conn.schema;
@@ -670,7 +693,7 @@ static void week_member(web_jw_t *w, const web_m4_t *m, const char *mac,
     web_jw_raw(w, ",\"cells\":");
     web_baseline_t *bl = m->anomaly ? m->anomaly->cfg.bl : NULL;
     web_bl_cell_t *cells = bl ? malloc(WEB_BL_CELLS * sizeof(*cells)) : NULL;
-    if (!cells || web_baseline_cells(bl, WM_DEV_PRESENT, mac, cells) != 0) {
+    if (!cells || web_baseline_cells(bl, presence_metric(m), mac, cells) != 0) {
         web_jw_raw(w, "null}");
         free(cells);
         return;
@@ -733,13 +756,21 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
                   web_slothdb_open(m->sdb, &conn, WEB_SDB_HTTP_MS, now_s, oerr,
                                    sizeof(oerr)) == 0;
     web_sdb_dev_t d;
+    /* Under a capture scope (web_scope.h) the record is the scope's
+     * columns, or absent when the scope never heard the MAC; the lists
+     * are each in their own scope only (PNL SSIDs and associations are
+     * the monitor radio's, ARP bindings and the names behind an address
+     * the host's own interfaces'), and so is the stream's binding. */
+    int scope = scope_of(m);
+    int mon = scope == WEB_SCOPE_MONITOR, loc = scope == WEB_SCOPE_LOCAL;
+    if (have_db) conn.scope = scope;
     int found = have_db ? web_sdb_device(&conn, mac, &d) : 0;
     if (found < 0) found = 0;
     char sip[WEB_KEY_MAX + 1] = "";
     web_id_name_t sdhcp;
     memset(&sdhcp, 0, sizeof(sdhcp));
     long long sfs = -1;
-    if (m->ident) web_ident_mac_info(m->ident, mac, now_s, sip, &sdhcp, &sfs);
+    if (m->ident && !mon) web_ident_mac_info(m->ident, mac, now_s, sip, &sdhcp, &sfs);
     const char *ip = found && d.ip[0] ? d.ip : sip;
 
     web_jw_t w;
@@ -775,11 +806,11 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
     web_jw_raw(&w, ",\"hostname\":");       jw_text_or_null(&w, sdhcp.name);
     web_jw_raw(&w, "}");
     names_member(&w, m, have_db ? &conn : NULL, ip, now_s);
-    sdb_list(&w, "ssids", have_db ? &conn : NULL, EK_SSID, DEV_SSIDS,
+    sdb_list(&w, "ssids", have_db && !loc ? &conn : NULL, EK_SSID, DEV_SSIDS,
              web_sdb_ssids, mac);
-    sdb_list(&w, "assocs", have_db ? &conn : NULL, EK_ASSOC, DEV_ASSOCS,
+    sdb_list(&w, "assocs", have_db && !loc ? &conn : NULL, EK_ASSOC, DEV_ASSOCS,
              web_sdb_assocs, mac);
-    sdb_list(&w, "ips", have_db ? &conn : NULL, EK_ADDR, DEV_IPS,
+    sdb_list(&w, "ips", have_db && !mon ? &conn : NULL, EK_ADDR, DEV_IPS,
              web_sdb_arp_mac, mac);
     web_jw_raw(&w, ",\"alerts\":[");
     emit_t ea = { &w, 0, DEV_ALERTS, EK_ALERT, NULL };
@@ -808,12 +839,22 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
     if (m->anomaly) {
         web_anom_ep_t eps[DEV_ANOMS];
         int ne = web_anomaly_key_list(m->anomaly, mac, eps, DEV_ANOMS);
-        for (int i = 0; i < ne; i++) {
-            if (i) web_jw_raw(&w, ",");
+        for (int i = 0, k = 0; i < ne; i++) {
+            if (scope && !web_scope_pass(scope, web_anomaly_ep_tag(
+                    &eps[i], m->sc, m->tsdb ? m->tsdb->ru : NULL)))
+                continue;
+            if (k++) web_jw_raw(&w, ",");
             web_anomaly_ep_json(&w, &eps[i]);
         }
     }
-    web_jw_raw(&w, "]}\n");
+    web_jw_raw(&w, "]");
+    if (scope) {
+        /* Whether the scope heard this MAC at all: the page says so
+         * rather than show an empty record as if it had. */
+        web_jw_raw(&w, ",\"in_scope\":");
+        web_jw_raw(&w, found ? "true" : "false");
+    }
+    web_jw_raw(&w, "}\n");
     if (w.overflow) return -1;
     *len = w.len;
     *status = 200;
@@ -858,25 +899,30 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
                    ? web_slothdb_state_word(sst.state) : "none");
     web_jw_raw(&w, ",\"active\":false");   /* there is no active lookup */
 
+    /* Under Monitor (web_scope.h) there are no addresses: an IP, its ARP
+     * MACs and the names behind it are all the host's own interfaces'.
+     * The device record is the scope's (web_sdb_device()). */
+    int scope = scope_of(m), mon = scope == WEB_SCOPE_MONITOR;
+    if (have_db) conn.scope = scope;
     char mac[WEB_KEY_MAX + 1] = "", ip[WEB_KEY_MAX + 1] = "";
     if (is_mac) {
         snprintf(mac, sizeof(mac), "%s", key);
         oui_member(&w, m, mac);
-        sdb_list(&w, "ips", have_db ? &conn : NULL, EK_ADDR, DEV_IPS,
+        sdb_list(&w, "ips", have_db && !mon ? &conn : NULL, EK_ADDR, DEV_IPS,
                  web_sdb_arp_mac, mac);
     } else {
-        snprintf(ip, sizeof(ip), "%s", key);
+        if (!mon) snprintf(ip, sizeof(ip), "%s", key);
         web_jw_raw(&w, ",\"oui\":null");
-        sdb_list(&w, "macs", have_db ? &conn : NULL, EK_ADDR, DEV_IPS,
+        sdb_list(&w, "macs", have_db && !mon ? &conn : NULL, EK_ADDR, DEV_IPS,
                  web_sdb_arp_ip, ip);
     }
     /* The device: by MAC, or the IP's ARP MAC (sloth.db's, else the
      * stream's binding). */
     web_sdb_dev_t d;
     int found = 0;
-    if (!is_mac && have_db)
+    if (!is_mac && have_db && !mon)
         web_sdb_arp_ip(&conn, ip, 1, first_addr, mac);
-    if (!is_mac && !mac[0]) {
+    if (!is_mac && !mac[0] && !mon) {
         web_id_name_t nm[WEB_ID_SRC_COUNT];
         char smac[WEB_KEY_MAX + 1] = "";
         if (m->ident) web_ident_ip_info(m->ident, ip, now_s, smac, nm);
@@ -884,7 +930,7 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
     }
     if (have_db && mac[0]) found = web_sdb_device(&conn, mac, &d) == 1;
     if (is_mac && found && d.ip[0]) snprintf(ip, sizeof(ip), "%s", d.ip);
-    if (is_mac && !ip[0] && m->ident) {
+    if (is_mac && !ip[0] && m->ident && !mon) {
         web_id_name_t dh;
         long long fs;
         web_ident_mac_info(m->ident, mac, now_s, ip, &dh, &fs);
@@ -893,6 +939,7 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
     web_slothdb_close(&conn);
     web_jw_raw(&w, ",\"device\":");
     if (found) dev_json(&w, m, &d, NULL, now_s); else web_jw_raw(&w, "null");
+    if (mon && !is_mac) web_jw_raw(&w, ",\"ip_in_scope\":false");
     web_jw_raw(&w, "}\n");
     if (w.overflow) return -1;
     *len = w.len;

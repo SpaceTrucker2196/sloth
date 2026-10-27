@@ -577,7 +577,8 @@ static void pass(long long t, long long start, unsigned long k) {
          "\"server_ip\":\"192.0.2.10\",\"server_port\":445,\"dialect\":\"SMB2\",\"count\":%lu,"
          "\"first_seen\":%lld,\"last_seen\":%lld}", t, 1 + k / 10, start, t);
     line("{\"type\":\"sensor_health\",\"ts\":%lld,\"capture_iface\":\"eth0\","
-         "\"monitor_iface\":\"wlan0mon\",\"capture_open\":1,\"capture_running\":1,"
+         "\"capture_linktype\":1,\"monitor_only\":0,\"monitor_iface\":\"wlan0mon\","
+         "\"capture_open\":1,\"capture_running\":1,"
          "\"monitor_open\":1,\"monitor_running\":1,\"scope\":\"demo\","
          "\"scope_not_enforced\":0}", t);
 }

@@ -492,7 +492,7 @@ static void test_events_carry_escaped_records(void) {
         buf[len] = '\0';
         WT_HAS(buf, "event: record\ndata: {\"seq\":1,\"type\":\"dns\",\"ts\":5,"
                     "\"text\":\"\\u003cscript\\u003ealert(1)\\u003c/script\\u003e.example"
-                    "  10.0.0.9\"}\n\n");
+                    "  10.0.0.9\",\"sc\":2}\n\n");
         WT_LACKS(buf, "<script");
         WT_HAS(buf, "\"socket\":\"connected\"");
     }

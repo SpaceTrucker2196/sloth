@@ -31,6 +31,13 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "devices", "device_class", 6, 1, 0 }, { "devices", "camera_vendor", 6, 1, 0 },
     { "devices", "camera_model", 6, 1, 0 }, { "devices", "dhcp_vci", 7, 1, 0 },
     { "pnl_clients", "mac", 1, 0, 0 },   { "pnl_clients", "first_seen", 1, 0, 0 },
+    /* The capture scope (web_scope.h): a device's Monitor last seen and
+     * signal, its Local signal and first and last seen. */
+    { "pnl_clients", "last_seen", 1, 0, 0 },
+    { "probe_clients", "signal_dbm", 1, 0, 0 }, { "probe_clients", "last_seen", 1, 0, 0 },
+    { "wifi_stas", "mac", 1, 0, 0 },     { "wifi_stas", "signal_dbm", 1, 0, 0 },
+    { "wifi_stas", "first_seen", 1, 0, 0 }, { "wifi_stas", "last_seen", 1, 0, 0 },
+    { "devices", "cam_signals", 6, 1, 0 },
     { "pnl_ssids", "mac", 1, 0, 0 },     { "pnl_ssids", "ssid", 1, 0, 0 },
     { "pnl_ssids", "first_seen", 1, 0, 0 }, { "pnl_ssids", "last_seen", 1, 0, 0 },
     { "probe_clients", "mac", 1, 0, 0 }, { "probe_clients", "first_seen", 1, 0, 0 },
@@ -506,6 +513,11 @@ int web_sdb_flow_pairs(web_sdb_conn_t *c, long long from, long long to,
     memset(sum, 0, sizeof(*sum));
     return -1;
 }
+void web_sdb_scope_types(const web_sdb_conn_t *c, const char *col, char *out,
+                         size_t cap) {
+    (void)c; (void)col;
+    if (cap) out[0] = '\0';
+}
 
 
 #else
@@ -676,9 +688,17 @@ static void fn_detail_ok(sqlite3_context *cx, int n, sqlite3_value **v) {
 
 /* web_inpass(mac): was mac in sloth's latest published device pass? */
 static void fn_inpass(sqlite3_context *cx, int n, sqlite3_value **v) {
-    (void)n;
     web_sdb_conn_t *c = sqlite3_user_data(cx);
     const unsigned char *m = sqlite3_value_text(v[0]);
+    if (n == 2) {
+        /* web_inpass(mac, scope): in the pass as a row of that scope's
+         * (web_live_pass_tag(), web_scope.h). */
+        int want = sqlite3_value_int(v[1]) == 1 ? WEB_SC_M : WEB_SC_L;
+        int tag = m && c->s->fns.live
+                ? web_live_pass_tag(c->s->fns.live, (const char *)m) : -1;
+        sqlite3_result_int(cx, tag >= 0 && (tag & want));
+        return;
+    }
     sqlite3_result_int(cx, m && c->s->fns.live &&
                            web_live_pass_has(c->s->fns.live, (const char *)m));
 }
@@ -822,6 +842,9 @@ static int probe(web_sdb_conn_t *c) {
         { "pnl_ssids", WEB_QF_PNL }, { "dhcp_leases", WEB_QF_DHCP },
         { "mdns_services", WEB_QF_MDNS }, { "nbns_names", WEB_QF_NBNS },
         { "alerts", WEB_QF_ALERTS }, { "arp", WEB_QF_ARP },
+        { "probe_clients", WEB_QF_PROBE }, { "beacon_aps", WEB_QF_BEACON },
+        { "assocs", WEB_QF_ASSOC }, { "pnl_clients", WEB_QF_PNLC },
+        { "wifi_stas", WEB_QF_STA },
     };
     for (size_t k = 0; k < sizeof(T) / sizeof(T[0]); k++) {
         const char *want[32];
@@ -859,6 +882,7 @@ static int probe(web_sdb_conn_t *c) {
         if (optbit[i] == WEB_SDB_OPT_VCI && !(have & (1u << i))) vci = 0;
     }
     if (cls) c->opt |= WEB_SDB_OPT_CLASS;
+    if (cls) c->feats |= WEB_QF_CAMSIG;   /* cam_signals is one of the v6 group */
     if (vci) c->opt |= WEB_SDB_OPT_VCI;
     static const char *const inc[] = { "incident_first_seen", "reopens", NULL };
     if ((c->feats & WEB_QF_ALERTS) &&
@@ -973,6 +997,8 @@ static int open_conn(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
                                SQLITE_UTF8 | SQLITE_DETERMINISTIC, c,
                                fn_detail_ok, NULL, NULL, NULL);
     sqlite3_create_function_v2(c->db, "web_inpass", 1, SQLITE_UTF8, c,
+                               fn_inpass, NULL, NULL, NULL);
+    sqlite3_create_function_v2(c->db, "web_inpass", 2, SQLITE_UTF8, c,
                                fn_inpass, NULL, NULL, NULL);
 
     /* Identify: sloth's meta is (key, value); slothweb.db's is (name,
@@ -1146,7 +1172,8 @@ int web_sdb_devices(web_sdb_conn_t *c, const web_query_t *q, int sort,
     web_qsql_t *sq = malloc(sizeof(*sq));
     if (!sq) return -1;
     int rc = -1;
-    if (web_query_compile(q, c->feats, sort, limit, offset, sq) == 0) {
+    if (web_query_compile_scoped(q, c->feats, c->scope, sort, limit, offset,
+                                 sq) == 0) {
         sqlite3_stmt *st = NULL;
         /* has:alert matches alerts.key against d.mac; the result
          * columns are web_query_row_select()'s constant list. Until the
@@ -1173,20 +1200,55 @@ int web_sdb_devices(web_sdb_conn_t *c, const web_query_t *q, int sort,
 }
 
 int web_sdb_device(web_sdb_conn_t *c, const char *mac, web_sdb_dev_t *out) {
-    char sql[2048];
-    char extra[160];
+    char *sql = malloc(WEB_Q_SQL_MAX + 2048);
+    if (!sql) return -1;
+    char extra[512];
     /* The drawer's own columns after the row's, or NULL for a version
-     * that lacks them. */
-    snprintf(extra, sizeof(extra), "%s, %s",
-             (c->opt & WEB_SDB_OPT_CLASS)
-                 ? "d.device_class, d.camera_vendor, d.camera_model"
-                 : "0, NULL, NULL",
-             (c->opt & WEB_SDB_OPT_VCI) ? "d.dhcp_vci" : "NULL");
-    if (web_query_row_select(c->feats, extra, sql, sizeof(sql) - 32) != 0)
+     * that lacks them. Under a capture scope (web_scope.h) the camera
+     * identity is shown where the scope has a camera signal of its own
+     * (the setup SSID and OUI are beacons; ONVIF, SSDP, mDNS and RTSP
+     * are IP), a not-camera verdict (from the IP vetoes) under Local
+     * only, and the DHCP vendor class under Local only. */
+    if (!c->scope || !(c->opt & WEB_SDB_OPT_CLASS)) {
+        snprintf(extra, sizeof(extra), "%s, %s",
+                 (c->opt & WEB_SDB_OPT_CLASS)
+                     ? "d.device_class, d.camera_vendor, d.camera_model"
+                     : "0, NULL, NULL",
+                 (c->opt & WEB_SDB_OPT_VCI) && c->scope != WEB_SCOPE_MONITOR
+                     ? "d.dhcp_vci" : "NULL");
+    } else {
+        const char *in = c->scope == WEB_SCOPE_MONITOR
+                       ? "(d.cam_signals & 18) <> 0"
+                       : "((d.cam_signals & 45) <> 0 OR d.device_class = 3)";
+        snprintf(extra, sizeof(extra),
+                 "CASE WHEN %s THEN d.device_class ELSE 0 END,"
+                 " CASE WHEN %s THEN d.camera_vendor END,"
+                 " CASE WHEN %s THEN d.camera_model END, %s", in, in, in,
+                 (c->opt & WEB_SDB_OPT_VCI) && c->scope != WEB_SCOPE_MONITOR
+                     ? "d.dhcp_vci" : "NULL");
+    }
+    if (web_query_row_select_scoped(c->feats, c->scope, extra, sql,
+                                    WEB_Q_SQL_MAX) != 0) {
+        free(sql);
         return -1;
+    }
     strcat(sql, " WHERE d.mac = ?1");
+    /* A device the scope never heard is not found in it. */
+    if (c->scope) {
+        char *mem = malloc(WEB_Q_SQL_MAX);
+        if (!mem || web_query_member(c->feats, c->scope, mem, WEB_Q_SQL_MAX) != 0) {
+            free(mem);
+            free(sql);
+            return -1;
+        }
+        strcat(sql, " AND ");
+        strcat(sql, mem);
+        free(mem);
+    }
     sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    int prc = sqlite3_prepare_v2(c->db, sql, -1, &st, NULL);
+    free(sql);
+    if (prc != SQLITE_OK) return -1;
     sqlite3_bind_text(st, 1, mac, -1, SQLITE_TRANSIENT);
     int rc = sqlite3_step(st);
     int found = 0;
@@ -1308,6 +1370,19 @@ int web_sdb_names(web_sdb_conn_t *c, const char *ip, int max,
 
 /* A v8 row holds 1 + reopens incidents (#170); a row of an earlier
  * file is one. */
+void web_sdb_scope_types(const web_sdb_conn_t *c, const char *col, char *out,
+                         size_t cap) {
+    out[0] = '\0';
+    if (!c->scope || cap < 32) return;
+    int ty[128];
+    int n = web_scope_alert_types(c->scope, 0, ty, 128);
+    size_t o = (size_t)snprintf(out, cap, " AND %s IN (-1", col);
+    for (int i = 0; i < n && o + 8 < cap; i++)
+        o += (size_t)snprintf(out + o, cap - o, ",%d", ty[i]);
+    if (o + 2 < cap) { out[o++] = ')'; out[o] = '\0'; }
+    else snprintf(out, cap, " AND 0");   /* never cut a list: say none */
+}
+
 static const char *alert_incidents(const web_sdb_conn_t *c) {
     return (c->opt & WEB_SDB_OPT_INC) ? "sum(1 + reopens)" : "count(*)";
 }
@@ -1355,14 +1430,15 @@ int web_sdb_alerts(web_sdb_conn_t *c, const char *mac, const char *ip,
         if (empty) return 0;
         *reached = newest + 1;               /* the walk starts at the newest */
     }
-    char sql[1024];
+    char sql[2048], tys[640];
+    web_sdb_scope_types(c, "type", tys, sizeof(tys));
     snprintf(sql, sizeof(sql),
              "SELECT COALESCE(title,''), '', type, max(sev), sum(count),"
              " min(first_seen), max(last_seen),"
              " (SELECT max(x.rowid) FROM alerts x WHERE x.key = w.key), %s"
              " FROM alerts w WHERE last_seen < ?3 AND last_seen >= ?4 AND"
-             " ((?1 <> '' AND instr(key, ?1) > 0) OR (?2 <> '' AND match_ip = ?2))"
-             " GROUP BY key ORDER BY max(last_seen) DESC", alert_incidents(c));
+             " ((?1 <> '' AND instr(key, ?1) > 0) OR (?2 <> '' AND match_ip = ?2))%s"
+             " GROUP BY key ORDER BY max(last_seen) DESC", alert_incidents(c), tys);
     sqlite3_stmt *st = NULL;
     c->pred_ok = 1;
     if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) { c->pred_ok = 0; return -1; }
@@ -1772,6 +1848,62 @@ int web_sdb_session_pair(web_sdb_conn_t *c, long long id,
     return found;
 }
 
+/* --report's new devices, under a capture scope: the scope's devices by
+ * the scope's own first seen, labelled as src/db.c labels one (the
+ * hostname, else the vendor) from the scope's columns. */
+static int new_devices_scoped(web_sdb_conn_t *c, long long since,
+                              long long until, int max, web_sdb_item_fn fn,
+                              void *ctx, long long *total) {
+    char *sql = malloc(4 * WEB_Q_SQL_MAX);
+    if (!sql) return -1;
+    char *inner = sql + 2 * WEB_Q_SQL_MAX;
+    if (web_query_row_select_scoped(c->feats, c->scope, NULL, inner,
+                                    WEB_Q_SQL_MAX) != 0) {
+        free(sql);
+        return -1;
+    }
+    strcat(inner, " WHERE ");
+    size_t o = strlen(inner);
+    if (web_query_member(c->feats, c->scope, inner + o, WEB_Q_SQL_MAX - o - 256) != 0) {
+        free(sql);
+        return -1;
+    }
+    strcat(inner, " AND s_first >= ?1 AND (?2 < 0 OR s_first <= ?2)");
+    snprintf(sql, 2 * WEB_Q_SQL_MAX, "SELECT count(*) FROM (%.*s)",
+             (int)(2 * WEB_Q_SQL_MAX - 64), inner);
+    sqlite3_stmt *st = NULL;
+    int rc = sqlite3_prepare_v2(c->db, sql, -1, &st, NULL);
+    if (rc == SQLITE_OK) {
+        sqlite3_bind_int64(st, 1, since);
+        sqlite3_bind_int64(st, 2, until);
+        rc = sqlite3_step(st);
+        if (rc == SQLITE_ROW) *total = sqlite3_column_int64(st, 0);
+    }
+    sqlite3_finalize(st);
+    if (rc != SQLITE_ROW) { free(sql); return -1; }
+    strcat(inner, " ORDER BY s_first DESC LIMIT ?3");
+    rc = sqlite3_prepare_v2(c->db, inner, -1, &st, NULL);
+    free(sql);
+    if (rc != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 1, since);
+    sqlite3_bind_int64(st, 2, until);
+    sqlite3_bind_int(st, 3, max);
+    int n = 0;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_dev_t d;
+        dev_row(st, &d);
+        web_sdb_item_t it;
+        memset(&it, 0, sizeof(it));
+        snprintf(it.a, sizeof(it.a), "%s", d.mac);
+        snprintf(it.b, sizeof(it.b), "%s", d.hostname[0] ? d.hostname : d.vendor);
+        it.first_seen = it.last_seen = d.first_seen;
+        n++;
+        if (fn(ctx, &it)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
 int web_sdb_new_since(web_sdb_conn_t *c, int kind, long long since,
                       long long until, int max, web_sdb_item_fn fn,
                       void *ctx, long long *total) {
@@ -1784,6 +1916,11 @@ int web_sdb_new_since(web_sdb_conn_t *c, int kind, long long since,
     };
     *total = 0;
     if (kind < 0 || kind >= WEB_NEW_KINDS) return -1;
+    /* A capture scope (web_scope.h): beacons and probes are Monitor's,
+     * and a device is new where the scope first heard it. */
+    if (c->scope == WEB_SCOPE_LOCAL && kind != WEB_NEW_DEVICE) return 0;
+    if (c->scope && kind == WEB_NEW_DEVICE)
+        return new_devices_scoped(c, since, until, max, fn, ctx, total);
     const char *want[5] = { K[kind].id, "first_seen", NULL, NULL, NULL };
     if (kind == WEB_NEW_DEVICE) { want[2] = "hostname"; want[3] = "vendor"; }
     else want[2] = "ssid";
@@ -1825,13 +1962,32 @@ int web_sdb_new_since(web_sdb_conn_t *c, int kind, long long since,
 int web_sdb_devices_between(web_sdb_conn_t *c, long long from, long long to,
                             long long limit, long long offset,
                             web_sdb_dev_fn fn, void *ctx) {
-    char sql[2048];
-    if (web_query_row_select(c->feats, NULL, sql, sizeof(sql) - 160) != 0)
+    char *sql = malloc(2 * WEB_Q_SQL_MAX);
+    if (!sql) return -1;
+    if (web_query_row_select_scoped(c->feats, c->scope, NULL, sql,
+                                    WEB_Q_SQL_MAX) != 0) {
+        free(sql);
         return -1;
-    strcat(sql, " WHERE d.last_seen >= ?1 AND d.first_seen <= ?2"
-                " ORDER BY d.last_seen DESC, d.mac LIMIT ?3 OFFSET ?4");
+    }
+    if (!c->scope) {
+        strcat(sql, " WHERE d.last_seen >= ?1 AND d.first_seen <= ?2"
+                    " ORDER BY d.last_seen DESC, d.mac LIMIT ?3 OFFSET ?4");
+    } else {
+        /* The scope's devices over the scope's own first and last seen
+         * (the select list's aliases, web_query.c). */
+        strcat(sql, " WHERE ");
+        size_t o = strlen(sql);
+        if (web_query_member(c->feats, c->scope, sql + o, WEB_Q_SQL_MAX - 256) != 0) {
+            free(sql);
+            return -1;
+        }
+        strcat(sql, " AND s_last >= ?1 AND s_first <= ?2"
+                    " ORDER BY s_last DESC, d.mac LIMIT ?3 OFFSET ?4");
+    }
     sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    int prc = sqlite3_prepare_v2(c->db, sql, -1, &st, NULL);
+    free(sql);
+    if (prc != SQLITE_OK) return -1;
     sqlite3_bind_int64(st, 1, from);
     sqlite3_bind_int64(st, 2, to);
     sqlite3_bind_int64(st, 3, limit);
@@ -1861,12 +2017,14 @@ int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
      * lower bound, since a v8 row's earlier incidents may fall in the
      * range too and their starts are not kept. */
     const char *fs = alert_start(c);
-    char sql[2048];
+    char sql[3072], tys[640];
+    /* A capture scope's types only (web_scope.h): a key is one type. */
+    web_sdb_scope_types(c, "type", tys, sizeof(tys));
     /* g: the keys shown, from the scan. Then one pass over each shown
      * key's rows in the range, joined through the primary key. */
     snprintf(sql, sizeof(sql),
              "WITH w AS (SELECT rowid AS rid, key, type, title, match_ip, last_seen,"
-             " %s AS fs FROM alerts WHERE last_seen >= ?2 AND fs < ?3"
+             " %s AS fs FROM alerts WHERE last_seen >= ?2 AND fs < ?3%s"
              " ORDER BY last_seen DESC LIMIT %d),"
              " g AS (SELECT COALESCE(title,'') AS t, COALESCE(match_ip,'') AS ip, type AS ty,"
              " max(last_seen) AS ls, max(rid) AS rid FROM w GROUP BY key"
@@ -1875,7 +2033,7 @@ int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
              " count(*) FROM g JOIN alerts a ON a.key = (SELECT x.key FROM alerts x"
              " WHERE x.rowid = g.rid) WHERE a.last_seen >= ?2 AND %s < ?3"
              " GROUP BY g.rid ORDER BY g.ls DESC, g.rid DESC",
-             fs, WEB_SDB_ALERT_SCAN, fs, fs);
+             fs, tys, WEB_SDB_ALERT_SCAN, fs, fs);
     c->pred_ok = 1;
     int n = items_range(c, sql, NULL, from, to, max, fn, ctx);
     c->pred_ok = 0;
@@ -1887,11 +2045,13 @@ int web_sdb_alerts_scan(web_sdb_conn_t *c, long long from, long long to,
     *rows = 0;
     *oldest = 0;
     if (!(c->feats & WEB_QF_ALERTS)) return 0;
-    char sql[512];
+    char sql[1280], tys[640];
+    web_sdb_scope_types(c, "type", tys, sizeof(tys));
     snprintf(sql, sizeof(sql),
              "SELECT count(*), min(last_seen) FROM (SELECT last_seen, %s AS fs"
-             " FROM alerts WHERE last_seen >= ?2 AND fs < ?3"
-             " ORDER BY last_seen DESC LIMIT %d)", alert_start(c), WEB_SDB_ALERT_SCAN);
+             " FROM alerts WHERE last_seen >= ?2 AND fs < ?3%s"
+             " ORDER BY last_seen DESC LIMIT %d)", alert_start(c), tys,
+             WEB_SDB_ALERT_SCAN);
     sqlite3_stmt *st = NULL;
     if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
     sqlite3_bind_int64(st, 2, from);
@@ -1920,6 +2080,8 @@ int web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,
                                         "trap_count", "version", "first_seen",
                                         "last_seen", NULL };
     static const char W[] = " WHERE last_seen >= ?2 AND first_seen < ?3";
+    /* The flow tables are the IP capture's: Local's (web_scope.h). */
+    if (c->scope == WEB_SCOPE_MONITOR) return 0;
     char sql[2048] = "";
     size_t o = 0;
     const char *sep = "";
@@ -2041,12 +2203,69 @@ static int cells_of(web_sdb_conn_t *c, const char *table, long long from,
     return rc == SQLITE_DONE ? 0 : -1;
 }
 
+/* One time per row of sql (column col), bucketed into out. */
+static int cells_scan(web_sdb_conn_t *c, const char *sql, int col,
+                      long long from, int cell_s, int ncell, long long *out) {
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) {
+        sqlite3_finalize(st);
+        return -1;
+    }
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, from + (long long)cell_s * ncell);
+    int rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        long long k = (sqlite3_column_int64(st, col) - from) / cell_s;
+        if (k >= 0 && k < ncell) out[k]++;
+        c->rows_read++;
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? 0 : -1;
+}
+
+/* The overview under a capture scope (web_scope.h): the scope's devices
+ * by the scope's own first seen, and the alerts of the scope's types.
+ * Read by a scan, never cached (web_history.c), so a scoped overview
+ * costs a scan of devices with its subqueries each time it is asked. */
+static int overview_scoped(web_sdb_conn_t *c, long long from, int cell_s,
+                           int ncell, long long *devs, long long *alerts) {
+    char *sql = malloc(2 * WEB_Q_SQL_MAX);
+    if (!sql) return -1;
+    c->what = "devices";
+    c->rows_read = 0;
+    c->plan[0] = WEB_SDB_PLAN_SCAN;
+    int rc = web_query_row_select_scoped(c->feats, c->scope, NULL, sql,
+                                         WEB_Q_SQL_MAX);
+    if (rc == 0) {
+        strcat(sql, " WHERE ");
+        size_t o = strlen(sql);
+        rc = web_query_member(c->feats, c->scope, sql + o, WEB_Q_SQL_MAX - 128);
+    }
+    if (rc == 0) {
+        strcat(sql, " AND s_first >= ?1 AND s_first < ?2");
+        rc = cells_scan(c, sql, WEB_QCOL_FIRST, from, cell_s, ncell, devs);
+    }
+    if (rc == 0 && (c->feats & WEB_QF_ALERTS)) {
+        char tys[640];
+        web_sdb_scope_types(c, "type", tys, sizeof(tys));
+        c->what = "alerts";
+        c->rows_read = 0;
+        c->plan[1] = WEB_SDB_PLAN_SCAN;
+        snprintf(sql, WEB_Q_SQL_MAX, "SELECT first_seen FROM alerts WHERE"
+                 " first_seen >= ?1 AND first_seen < ?2%s", tys);
+        rc = cells_scan(c, sql, 0, from, cell_s, ncell, alerts);
+    }
+    free(sql);
+    return rc;
+}
+
 int web_sdb_overview(web_sdb_conn_t *c, long long from, int cell_s,
                      int ncell, long long *devs, long long *alerts) {
     if (cell_s <= 0 || ncell <= 0) return -1;
     memset(devs, 0, (size_t)ncell * sizeof(*devs));
     memset(alerts, 0, (size_t)ncell * sizeof(*alerts));
     c->plan[0] = c->plan[1] = WEB_SDB_PLAN_NONE;
+    if (c->scope) return overview_scoped(c, from, cell_s, ncell, devs, alerts);
     if (cells_of(c, "devices", from, cell_s, ncell, devs, &c->plan[0]) != 0)
         return -1;
     if ((c->feats & WEB_QF_ALERTS) &&

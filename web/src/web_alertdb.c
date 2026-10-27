@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "web_json.h"
+#include "web_scope.h"
 
 #ifndef WITH_SQLITE
 
@@ -41,7 +42,7 @@ int web_adb_device(web_sdb_conn_t *c, long long rid, const char *key,
 /* ── a statement with its binds, assembled from constant fragments ── */
 
 #define SQL_MAX   (12 * 1024)
-#define BINDS_MAX (WEB_ADB_EXCLUDE + 2 * WEB_ADB_TYPES + 16)
+#define BINDS_MAX (WEB_ADB_EXCLUDE + 3 * WEB_ADB_TYPES + 48)
 
 typedef struct {
     char        sql[SQL_MAX];
@@ -128,6 +129,16 @@ static void window_rows(sqlb_t *b, const web_adb_filter_t *f, int type_filter,
     if (type_filter && f->ntypes) {
         add(b, " AND type IN (-1");
         for (int i = 0; i < f->ntypes; i++) { add(b, ","); bind_i(b, f->types[i]); }
+        add(b, ")");
+    }
+    if (f->scope) {
+        /* The scope's types, the facets' read as well: a scope's
+         * dropdown lists its own types only. sloth.db rows carry no
+         * link type, so radio 0 (web_scope.h). */
+        int ty[WEB_ADB_TYPES + 32];
+        int n = web_scope_alert_types(f->scope, 0, ty, WEB_ADB_TYPES + 32);
+        add(b, " AND type IN (-1");
+        for (int i = 0; i < n; i++) { add(b, ","); bind_i(b, ty[i]); }
         add(b, ")");
     }
     if (f->q[0]) {
