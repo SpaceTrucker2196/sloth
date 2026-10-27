@@ -184,6 +184,8 @@ static void test_page_shows_db_freshness(void) {
 
 #ifdef WITH_SQLITE
 
+#include <sqlite3.h>
+
 static char g_dir[64];
 static oui_build_t g_oui;
 static web_slothdb_t g_sdb;
@@ -726,6 +728,51 @@ static void test_page_fetch_shapes(void) {
         WT_EQ(route(&H, q[i][0], q[i][1], 0), 200);
 }
 
+/* A device sloth saw by MAC alone has ip '' in sloth.db, and so can an
+ * mDNS host, an NBNS name or a lease whose address it never learned.
+ * '' = '' is true in SQL, so a join on the address named every such
+ * device after the newest such record (the reference host showed one
+ * laptop's mDNS name on 32,000 devices). Run last: it adds rows. Seen
+ * red with NULLIF(d.ip,'') put back to d.ip in the row's mDNS and DHCP
+ * names, in has:name and in a name: search. The drawer's names were
+ * never at risk: its caller skips an empty address. */
+static void test_empty_ip_names_nothing(void) {
+    sqlite3 *h = NULL;
+    WT_EQ(sqlite3_open(g_db, &h), SQLITE_OK);
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO devices (mac,ip,hostname,vendor,last_ssid,is_ap,signal_dbm,"
+        "probe_count,sources,risk_signals,risk_level,first_seen,last_seen) VALUES"
+        " ('da:a1:19:00:00:0f','',NULL,'Apple',NULL,0,-60,0,16,0,0,%lld,%lld);"
+        "INSERT INTO mdns_services (instance,service,host,ip,port,first_seen,last_seen)"
+        " VALUES ('Laptop._companion-link._tcp.local','_companion-link._tcp',"
+        "'laptop-mdns.local','',0,%lld,%lld);"
+        "INSERT INTO nbns_names (name,suffix,ip,first_seen,last_seen) VALUES"
+        " ('LAPTOPNBNS',0,'',%lld,%lld);"
+        "INSERT INTO dhcp_leases (ip,hostname,expire,first_seen,last_seen) VALUES"
+        " ('','laptop-dhcp',0,%lld,%lld);",
+        (long long)SDB_NOW - 60, (long long)SDB_NOW - 10,
+        (long long)SDB_NOW - 60, (long long)SDB_NOW - 5,
+        (long long)SDB_NOW - 60, (long long)SDB_NOW - 5,
+        (long long)SDB_NOW - 60, (long long)SDB_NOW - 5);
+    WT_EQ(sqlite3_exec(h, sql, NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    static const char *const nm[] = { "laptop-mdns", "LAPTOPNBNS", "laptop-dhcp",
+                                      "Laptop._companion" };
+    WT_EQ(route(&H, "/api/devices", "q=mac:da:a1:19:00:00:0f", 0), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"mac\":\"da:a1:19:00:00:0f\"");
+    WT_HAS(b, "\"name\":null,\"name_src\":null");
+    for (size_t i = 0; i < sizeof(nm) / sizeof(nm[0]); i++) WT_LACKS(b, nm[i]);
+    WT_EQ(route(&H, "/api/device/da:a1:19:00:00:0f", "", 0), 200);
+    for (size_t i = 0; i < sizeof(nm) / sizeof(nm[0]); i++) WT_LACKS(g_out, nm[i]);
+    /* Nor does a search by those names or for a named device find it. */
+    WT_EQ(route(&H, "/api/devices", "q=name:laptop", 0), 200);
+    WT_LACKS(body_of(g_out), "\"mac\":\"da:a1:19:00:00:0f\"");
+    WT_EQ(route(&H, "/api/devices", "q=mac:da:a1:19:00:00:0f%20has:name", 0), 200);
+    WT_HAS(body_of(g_out), "\"rows\":[],\"count\":0");
+}
+
 void run_devices_tests(void) {
     WT_RUN(test_without_sloth_db);
     WT_RUN(test_page_carries_the_m4_views);
@@ -744,6 +791,7 @@ void run_devices_tests(void) {
     WT_RUN(test_health_db_freshness);
     WT_RUN(test_health_db_freshness_unknown);
     WT_RUN(test_devices_worst_case_fits);
+    WT_RUN(test_empty_ip_names_nothing);
     down();
 }
 

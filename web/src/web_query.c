@@ -371,12 +371,12 @@ static const char *op_text(int op) {
 
 static void names_exist(sb_t *b, unsigned f, int n) {
     if (f & WEB_QF_DHCP) {
-        sb_put(b, " OR EXISTS (SELECT 1 FROM dhcp_leases l WHERE l.ip = d.ip AND ");
+        sb_put(b, " OR EXISTS (SELECT 1 FROM dhcp_leases l WHERE l.ip = NULLIF(d.ip, '') AND ");
         like(b, "COALESCE(l.hostname,'')", n);
         sb_put(b, ")");
     }
     if (f & WEB_QF_MDNS) {
-        sb_put(b, " OR EXISTS (SELECT 1 FROM mdns_services m WHERE m.ip = d.ip AND (");
+        sb_put(b, " OR EXISTS (SELECT 1 FROM mdns_services m WHERE m.ip = NULLIF(d.ip, '') AND (");
         like(b, "COALESCE(m.host,'')", n);
         sb_put(b, " OR ");
         like(b, "COALESCE(m.instance,'')", n);
@@ -385,7 +385,7 @@ static void names_exist(sb_t *b, unsigned f, int n) {
     if (f & WEB_QF_NBNS) {
         /* The unique names (suffix 0 workstation, 32 server), as the
          * row shows: a group registration (WORKGROUP<1E>) names no host. */
-        sb_put(b, " OR EXISTS (SELECT 1 FROM nbns_names b WHERE b.ip = d.ip AND"
+        sb_put(b, " OR EXISTS (SELECT 1 FROM nbns_names b WHERE b.ip = NULLIF(d.ip, '') AND"
                " b.suffix IN (0, 32) AND ");
         like(b, "b.name", n);
         sb_put(b, ")");
@@ -514,13 +514,13 @@ static void term(sb_t *b, const web_qterm_t *t, unsigned f, web_qsql_t *o) {
         case WEB_HAS_NAME:
             sb_put(b, "(COALESCE(d.hostname,'') <> ''");
             if (f & WEB_QF_DHCP)
-                sb_put(b, " OR EXISTS (SELECT 1 FROM dhcp_leases l WHERE l.ip = d.ip"
+                sb_put(b, " OR EXISTS (SELECT 1 FROM dhcp_leases l WHERE l.ip = NULLIF(d.ip, '')"
                        " AND COALESCE(l.hostname,'') <> '')");
             if (f & WEB_QF_MDNS)
-                sb_put(b, " OR EXISTS (SELECT 1 FROM mdns_services m WHERE m.ip = d.ip"
+                sb_put(b, " OR EXISTS (SELECT 1 FROM mdns_services m WHERE m.ip = NULLIF(d.ip, '')"
                        " AND COALESCE(m.host,'') <> '')");
             if (f & WEB_QF_NBNS)
-                sb_put(b, " OR EXISTS (SELECT 1 FROM nbns_names b WHERE b.ip = d.ip"
+                sb_put(b, " OR EXISTS (SELECT 1 FROM nbns_names b WHERE b.ip = NULLIF(d.ip, '')"
                        " AND b.suffix IN (0, 32))");
             sb_put(b, " OR web_ptr(d.ip) IS NOT NULL)");
             break;
@@ -557,15 +557,15 @@ int web_query_row_select(unsigned f, const char *extra, char *out,
             " d.signal_dbm, d.sources, d.risk_signals, d.risk_level,"
             " d.first_seen, d.last_seen, d.is_ap, ");
     sb_put(&b, (f & WEB_QF_DHCP)
-            ? "(SELECT l.hostname FROM dhcp_leases l WHERE l.ip = d.ip AND"
+            ? "(SELECT l.hostname FROM dhcp_leases l WHERE l.ip = NULLIF(d.ip, '') AND"
               " COALESCE(l.hostname,'') <> '' ORDER BY l.last_seen DESC LIMIT 1), "
             : "NULL, ");
     sb_put(&b, (f & WEB_QF_MDNS)
-            ? "(SELECT m.host FROM mdns_services m WHERE m.ip = d.ip AND"
+            ? "(SELECT m.host FROM mdns_services m WHERE m.ip = NULLIF(d.ip, '') AND"
               " COALESCE(m.host,'') <> '' ORDER BY m.last_seen DESC LIMIT 1), "
             : "NULL, ");
     sb_put(&b, (f & WEB_QF_NBNS)
-            ? "(SELECT b.name FROM nbns_names b WHERE b.ip = d.ip AND"
+            ? "(SELECT b.name FROM nbns_names b WHERE b.ip = NULLIF(d.ip, '') AND"
               " b.suffix IN (0, 32) ORDER BY b.last_seen DESC LIMIT 1)"
             : "NULL");
     if (extra) { sb_put(&b, ", "); sb_put(&b, extra); }
