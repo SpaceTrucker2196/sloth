@@ -580,6 +580,10 @@ static void inc_fill(web_live_inc_t *e, const web_jrec_t *r, long long ts,
         if (b[0] && strlen(b) < sizeof(e->pcap_name))
             memcpy(e->pcap_name, b, strlen(b) + 1);
     }
+    /* sloth stamps an incident once, where it opened, and repeats the
+     * stamp on every record of it: the first valid one is kept. */
+    web_loc_t lc;
+    if (!e->loc.has && web_loc_from_jrec(r, &lc)) e->loc = lc;
 }
 
 /* Into the closed ring, newest last. */

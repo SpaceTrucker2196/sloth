@@ -2245,9 +2245,19 @@ static void test_page_module(void) {
         "id=\"frrs-drawer\"", "id=\"k-alerts-triaged\"", "id=\"al-triage\"", "id=\"bundle-btn-tacdb\"",
     };
     for (size_t i = 0; i < sizeof(IDS) / sizeof(IDS[0]); i++) WT_HAS(p, IDS[i]);
-    /* The location slice's elements are not this module's. */
-    WT_LACKS(p, "id=\"loc-alert\"");
-    WT_LACKS(p, "id=\"loc-drawer\"");
+    /* The location slice's elements are not this module's, but sit
+     * beside its own: loc-alert after frrs-alert and above the proof
+     * (whose capture stays the page's last), loc-drawer after
+     * frrs-drawer. */
+    WT_EQ(count_of(p, "id=\"loc-alert\""), 1);
+    WT_EQ(count_of(p, "id=\"loc-drawer\""), 1);
+    const char *fa = strstr(p, "id=\"frrs-alert\"");
+    const char *la = strstr(p, "id=\"loc-alert\"");
+    const char *ea = strstr(p, "id=\"ev-alert\"");
+    WT_ASSERT(fa && la && ea && fa < la && la < ea);
+    const char *fd = strstr(p, "id=\"frrs-drawer\"");
+    const char *ld = strstr(p, "id=\"loc-drawer\"");
+    WT_ASSERT(fd && ld && fd < ld);
 }
 
 /* The ledger is bounded: past its BSSIDs the least recently seen goes,

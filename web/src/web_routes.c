@@ -16,6 +16,7 @@
 #include "web_scope.h"
 #include "web_series.h"
 #include "web_wifi.h"
+#include "web_positions.h"
 
 static int route_scoped(const web_req_t *rq, const web_health_t *h,
                         int sse_room, char *out, size_t outsz, web_resp_t *r);
@@ -739,6 +740,67 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+/* /api/positions (web_positions.h): GET only, as /api/alerts. JSON,
+ * GeoJSON or GPX; the two exports are attachments, so a browser saves
+ * them rather than rendering an XML document under this origin. */
+static int route_positions(const web_req_t *rq, const web_health_t *h,
+                           char *out, size_t outsz, web_resp_t *r) {
+    if (rq->is_head) {
+        r->status = 405;
+        return fit(snprintf(out, outsz,
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n"), outsz, &r->out_len);
+    }
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc, fmt = WEB_POS_JSON;
+    static const web_m4_t none;
+    const web_m4_t *m = h->m4 ? h->m4 : &none;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_positions_route(m, rq->query, h->wall_s, body, cap, &bl,
+                                 &status, &fmt);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (fmt == WEB_POS_JSON || status != 200)
+        return json_answer(rq, h, status, bl, out, outsz, r);
+    char hdr[WEB_LIVE_HDR_RESERVE];
+    size_t hl;
+    if (fit(snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Disposition: attachment; filename=\"sloth-positions.%s\"\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", web_positions_ctype(fmt), web_positions_ext(fmt), bl),
+        sizeof(hdr), &hl) != 0)
+        return -1;
+    if (hl + bl > outsz) return -1;
+    r->status = 200;
+    memmove(out + hl, body, bl);
+    memcpy(out, hdr, hl);
+    r->out_len = hl + bl;
+    return 0;
+}
+
 enum { BLE_DEVICES, BLE_ALERTS, BLE_DEVICE };
 
 /* /api/ble, /api/ble/alerts, /api/ble/{addr} (web_ble.h): slothweb's
@@ -1247,6 +1309,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_pcap(rq, h, 1, out, outsz, r);
         if (!strcmp(rq->path, "/api/bundle"))
             return route_bundle(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/positions"))
+            return route_positions(rq, h, out, outsz, r);
         /* Without --web-allow-sql neither exists: a 404 like any path. */
         if (h->sql && h->sql->enabled) {
             if (!strcmp(rq->path, "/api/query"))

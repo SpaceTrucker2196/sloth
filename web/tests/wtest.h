@@ -77,6 +77,7 @@ void run_alertfmt_tests(void);
 void run_alertkb_tests(void);
 void run_vendorkb_tests(void);
 void run_alerts_tests(void);
+void run_loc_tests(void);
 void run_scope_tests(void);
 void run_prefs_tests(void);
 void run_glyph_tests(void);

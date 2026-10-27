@@ -21,7 +21,9 @@
  *   - a string "type" member.
  *
  * Top-level scalar members are kept (strings decoded, integers parsed);
- * nested arrays and objects are checked and skipped. Nothing is
+ * nested arrays and objects are checked and skipped, except one: a
+ * top-level "loc" object (sloth's location stamp, 2026-10-27) keeps its
+ * scalar members as fields named "loc.lat", "loc.src", ... Nothing is
  * allocated: the record holds its own decoded text. */
 #ifndef SLOTHWEB_JSONL_H
 #define SLOTHWEB_JSONL_H

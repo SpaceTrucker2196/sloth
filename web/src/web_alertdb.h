@@ -35,6 +35,7 @@
 #define SLOTHWEB_ALERTDB_H
 
 #include "web_slothdb.h"
+#include "web_loc.h"
 
 #define WEB_ADB_SCAN_CAP   20000
 #define WEB_ADB_INCIDENTS  2000
@@ -111,6 +112,7 @@ typedef struct {
     long long count, first_seen, last_seen;
     int       has_detail;            /* the type's detail is audited */
     char      detail[324];           /* sloth's ALERT_DETAIL_LEN, cut */
+    web_loc_t loc;                   /* v9: the incident's stamp; has 0 none */
 } web_adb_row_t;
 
 /* One row by rowid: 1, 0 none, -1. */

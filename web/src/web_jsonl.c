@@ -243,6 +243,46 @@ static int value(jp_t *j, int depth, web_jfield_t *f) {
     return 0;
 }
 
+/* One level of one named object kept (2026-10-27): sloth's alert
+ * records carry the sensor's position as "loc":{...}, and its scalar
+ * members are kept as top-level fields named "loc.<member>" (nested
+ * containers inside it are still checked and skipped). Only "loc", and
+ * that is what keeps the text bound: a composite key "loc.<m>" plus its
+ * NUL is never longer than the member's source `"<m>":v,`, so the
+ * record's text still fits the line. The duplicate check covers the
+ * composites too, so a hostile top-level "loc.lat" cannot shadow one. */
+static int flatten_loc(jp_t *j, web_jrec_t *r) {
+    j->p++;                                   /* the '{' */
+    ws(j);
+    if (j->p < j->end && *j->p == '}') { j->p++; return 0; }
+    for (;;) {
+        ws(j);
+        if (j->p >= j->end || *j->p != '"') return fail(j, WEB_JL_ESYNTAX);
+        if (r->n >= WEB_JL_MAX_FIELDS) return fail(j, WEB_JL_EFIELDS);
+        web_jfield_t *f = &r->f[r->n];
+        size_t kstart = r->tlen;
+        emit(j, 1, (const unsigned char *)"loc.", 4);
+        const char *member;
+        size_t ml;
+        if (string(j, 1, &member, &ml) != 0) return -1;
+        const char *key = r->text + kstart;
+        for (int k = 0; k < r->n; k++)
+            if (!strcmp(r->f[k].key, key)) return fail(j, WEB_JL_EDUP);
+        ws(j);
+        if (j->p >= j->end || *j->p != ':') return fail(j, WEB_JL_ESYNTAX);
+        j->p++;
+        ws(j);
+        if (value(j, 2, f) != 0) return -1;
+        f->key = key;
+        r->n++;
+        ws(j);
+        if (j->p >= j->end) return fail(j, WEB_JL_ESYNTAX);
+        if (*j->p == ',') { j->p++; continue; }
+        if (*j->p == '}') { j->p++; return 0; }
+        return fail(j, WEB_JL_ESYNTAX);
+    }
+}
+
 int web_jl_parse(const char *line, size_t len, web_jrec_t *r) {
     jp_t j;
     j.p = (const unsigned char *)line;
@@ -274,9 +314,16 @@ int web_jl_parse(const char *line, size_t len, web_jrec_t *r) {
             j.p++;
             ws(&j);
             const char *key = f->key;
-            if (value(&j, 1, f) != 0) return j.err;
-            f->key = key;
-            r->n++;
+            if (!strcmp(key, "loc") && j.p < j.end && *j.p == '{') {
+                f->kind = WEB_J_NEST;
+                f->str = NULL; f->slen = 0; f->i = 0; f->d = 0;
+                r->n++;
+                if (flatten_loc(&j, r) != 0) return j.err;
+            } else {
+                if (value(&j, 1, f) != 0) return j.err;
+                f->key = key;
+                r->n++;
+            }
             ws(&j);
             if (j.p >= j.end) return WEB_JL_ESYNTAX;
             if (*j.p == ',') { j.p++; continue; }

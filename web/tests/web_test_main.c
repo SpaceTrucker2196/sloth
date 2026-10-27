@@ -118,6 +118,7 @@ int main(void) {
     SUITE(run_alertkb_tests);
     SUITE(run_vendorkb_tests);
     SUITE(run_alerts_tests);
+    SUITE(run_loc_tests);
     SUITE(run_sqlbox_tests);
     SUITE(run_scope_tests);
     SUITE(run_prefs_tests);

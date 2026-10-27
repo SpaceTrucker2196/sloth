@@ -336,6 +336,20 @@ static void row_of(sqlite3_stmt *s, web_adb_row_t *r) {
     r->last_seen = sqlite3_column_int64(s, 9);
     r->has_detail = sqlite3_column_type(s, 10) != SQLITE_NULL;
     text_col(s, 10, r->detail, sizeof(r->detail));
+    /* v9's stamp, read only where the file has it (ROW_COLS_LOC). */
+    if (sqlite3_column_count(s) >= 17 &&
+        sqlite3_column_type(s, 11) != SQLITE_NULL &&
+        sqlite3_column_type(s, 12) != SQLITE_NULL) {
+        char src[16];
+        text_col(s, 15, src, sizeof(src));
+        web_loc_set(&r->loc, sqlite3_column_double(s, 11),
+                    sqlite3_column_double(s, 12),
+                    sqlite3_column_type(s, 13) != SQLITE_NULL,
+                    sqlite3_column_double(s, 13),
+                    sqlite3_column_type(s, 14) != SQLITE_NULL,
+                    sqlite3_column_double(s, 14), src,
+                    sqlite3_column_int64(s, 16));
+    }
 }
 
 /* The one place alerts.detail is read: through web_detail_ok(type). */
@@ -344,12 +358,23 @@ static const char ROW_COLS[] =
     " COALESCE(match_port,-1), COALESCE(technique,''), count, first_seen,"
     " last_seen, CASE WHEN web_detail_ok(type) THEN COALESCE(detail,'') END"
     " FROM alerts WHERE ";
+/* The same with v9's location stamp (web_loc.h), for a file that has it. */
+static const char ROW_COLS_LOC[] =
+    "SELECT rowid, type, sev, COALESCE(title,''), COALESCE(match_ip,''),"
+    " COALESCE(match_port,-1), COALESCE(technique,''), count, first_seen,"
+    " last_seen, CASE WHEN web_detail_ok(type) THEN COALESCE(detail,'') END,"
+    " lat, lon, alt_m, acc_m, COALESCE(loc_src,''), COALESCE(loc_ts,0)"
+    " FROM alerts WHERE ";
+
+static const char *row_cols(const web_sdb_conn_t *c) {
+    return (c->opt & WEB_SDB_OPT_LOC) ? ROW_COLS_LOC : ROW_COLS;
+}
 
 int web_adb_row(web_sdb_conn_t *c, long long rid, web_adb_row_t *out) {
     if (!have_alerts(c)) return 0;
     sqlb_t b;
     memset(&b, 0, sizeof(b));
-    add(&b, ROW_COLS);
+    add(&b, row_cols(c));
     add(&b, "rowid = ");
     bind_i(&b, rid);
     c->detail_ok = 1;
@@ -369,7 +394,7 @@ int web_adb_incidents(web_sdb_conn_t *c, long long rid, const char *key,
     if (max < 1 || max > WEB_ADB_INCIDENTS) max = WEB_ADB_INCIDENTS;
     sqlb_t b;
     memset(&b, 0, sizeof(b));
-    add(&b, ROW_COLS);
+    add(&b, row_cols(c));
     key_is(&b, rid, key);
     add(&b, " ORDER BY first_seen DESC LIMIT ");
     bind_i(&b, max);

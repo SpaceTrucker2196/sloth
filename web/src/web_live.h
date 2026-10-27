@@ -33,6 +33,7 @@
 
 #include "web_json.h"
 #include "web_jsonl.h"
+#include "web_loc.h"
 #include "web_scope.h"
 
 #define WEB_LIVE_TYPES      48   /* distinct record types counted by name */
@@ -169,6 +170,7 @@ typedef struct {
     int       nsev;                    /* changes seen, all of them */
     web_live_sevh_t sevh[WEB_LIVE_SEVH];  /* the latest WEB_LIVE_SEVH, oldest first */
     unsigned long long seq;            /* when it last changed: newest first */
+    web_loc_t loc;                     /* sloth's location stamp (web_loc.h) */
 } web_live_inc_t;
 
 /* The devices of sloth's latest published pass, by MAC, for the

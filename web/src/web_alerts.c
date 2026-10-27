@@ -888,6 +888,13 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
     else if (have_inc && detail == e->detail) web_jw_str(&w, detail);
     else web_jw_text(&w, detail);
     web_jw_raw(&w, ",\"detail_shown\":"); web_jw_raw(&w, shown_ok ? "true" : "false");
+    /* Where the sensor was as the incident opened (web_loc.h): the
+     * stream's stamp, else the sloth.db row's (the newest of the key's
+     * when the page opened on a stream id); null when none has one. */
+    web_jw_raw(&w, ",\"loc\":");
+    web_loc_json(&w, have_inc && e->loc.has ? &e->loc
+                   : have_row && row.loc.has ? &row.loc
+                   : nh > 0 && hist[0].loc.has ? &hist[0].loc : NULL);
     web_jw_raw(&w, ",\"sev_history\":[");
     if (have_inc) {
         int nk = e->nsev < WEB_LIVE_SEVH ? e->nsev : WEB_LIVE_SEVH;

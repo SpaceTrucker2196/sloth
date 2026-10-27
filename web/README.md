@@ -497,6 +497,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/pcap?id=&n=` | `200` the same file's bytes, `Content-Type: application/vnd.tcpdump.pcap`, `Content-Disposition: attachment; filename="<its name>"`, `X-Sloth-SHA256: verified`, `mismatch` or `no_manifest_entry` (the check of the bytes served), `Cache-Control: no-store`; the errors as above, as JSON |
    | `GET /api/bundle?kind=device\|alert\|lookup\|ble\|platform&id=` | `200` JSON, a detail view's whole answer for its "copy JSON" button ([Copy JSON: the analysis bundle](#copy-json-the-analysis-bundle)); `400` for a kind, an id or a parameter that does not pass; `404` and `503` as the route it splices (`not_found` for a BLE address no sensor heard, `no_such_platform`, `no_store`); `413` `bundle_too_large` |
    | `HEAD /api/alerts`, `HEAD /api/alert`, `HEAD /api/pcap`, `HEAD /api/pcap/frames`, `HEAD /api/bundle` | `405`, `Allow: GET`, as `/api/query` |
+   | `GET /api/positions?mac=&format=json\|geojson\|gpx&since=&until=` | `200`, sloth.db v9's `device_positions` for one MAC (where the sensor was when it heard it, not the device's position) and the sensor's track over the same span, newest first, at most 200 of each, `"more"` when there were more ([Sensor location](#sensor-location)); `json` is `application/json`, `geojson` (RFC 7946) `application/geo+json` and `gpx` (GPX 1.1) `application/gpx+xml`, both as attachments; `400` for a parameter that does not pass (`bad_mac`, `bad_format`, `bad_range`); `503` with no `--sloth-db` or sloth.db unreadable. A file before v9 answers empty lists. `HEAD` is `405` |
    | `GET /api/query?sql=` | only with `--web-allow-sql` (otherwise `404`): `200` JSON, the statement's result; `400` with `{"error":"reason"}` for a refused statement; `503` `busy` while another runs, or sloth.db unreadable |
    | `HEAD /api/query` | `405`, `Allow: GET`: nothing to describe without running it |
    | `GET /api/recipes` | only with `--web-allow-sql`: `200` JSON, the box's recipes |
@@ -744,6 +745,33 @@ its own after the `retry` delay. Every accepted socket has
 `TCP_NODELAY` (spec §10.2): events are small and should not wait for
 the previous one's ACK. At most 24 streams are held, so 8 of
 the 32 connection slots stay free for the page and the API.
+
+## Sensor location
+
+sloth stamps each new alert incident with where the sensor was
+(`--location`, `--gps`; [location](../docs/wiki/location.md)). slothweb
+reads the stamp from two places and shows the same object either way:
+the stream's alert records carry it as `"loc":{...}`, the one nested
+object `web_jl_parse()` keeps (as `loc.lat`, `loc.src`, ... fields: a
+composite key and its NUL are never longer than the member's source,
+so the record's text still fits the line, and the duplicate check
+covers them), and a schema-v9 sloth.db carries it in six alerts
+columns on the allow-list. A value outside -90..90 / -180..180, or a
+source other than `gps` or `fixed`, is no location, never a clamped
+one. `/api/alert` answers `"loc"`, the stream's stamp first, then the
+row's, `null` when neither has one.
+
+`/api/positions` reads `device_positions` and `sensor_positions` (v9,
+allow-listed; a file before v9 answers empty lists). The page draws
+them in the device drawer as a Canvas 2D scatter on a local
+equirectangular projection centred on the samples' mean, coloured by
+RSSI in the palette's heat, the sensor's track as a line, and offers
+GeoJSON and GPX as attachments of the same route. No tiles and no
+third-party map: the page still asks its own server and nothing else.
+`web/ui/location.js` is the whole of it, behind two hooks app.js calls
+(`window.SlothLocation.alert(j)` on an alert's page, `.drawer(mac)`
+when the drawer opens) and two containers, `#loc-alert` and
+`#loc-drawer`.
 
 ## The data socket (M1)
 
@@ -3931,6 +3959,8 @@ web/
     web_bundle.c   /api/bundle: a detail view's answers spliced into one document
     web_alertdb.c  sloth.db's alerts: groups by key, a key's incidents, its device
     web_alertfmt.c the types whose alert detail is shown, audited
+    web_loc.c      sloth's location stamp: range-checked, from the stream or sloth.db
+    web_positions.c /api/positions: JSON, GeoJSON, GPX
     web_alertkb.h  the generated alert knowledge table's symbols
     web_alertasm.c the assessments by type, over the generated table
     web_evidence.c /api/alert's proof members, /api/pcap/frames, /api/pcap
@@ -3945,8 +3975,9 @@ web/
     web_json.c     the JSON writer every outgoing string goes through
     web_assets.h   the generated page's symbols
   ui/              the page sources (index.html, theme.css, page.css, app.js,
-                   glyph.js, evidence.js, and bundle.js the copy-JSON
-                   control)
+                   glyph.js, evidence.js, bundle.js the copy-JSON
+                   control, and location.js and location.css: where
+                   the sensor was)
   tools/
     embed.c        ui/ -> build/web/web_assets.c (build time only)
     oui_gen.c      web/data/*.csv -> build/web/web_oui_table.c (build time only)

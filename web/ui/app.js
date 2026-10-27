@@ -2764,6 +2764,7 @@
     $("dr-sw").style.background = keyColor(mac);
     $("dr-mac").className = "d-dim";
     set("dr-note", "loading");
+    if (window.SlothLocation) window.SlothLocation.drawer(mac);
     getJSON("/api/device/" + encodeURIComponent(mac)).then(function (j) {
       if (gen !== DR.gen) return;
       var box = $("dr-body");
@@ -4502,6 +4503,7 @@
     var gen = ++AD.gen;
     ["ad-title", "ad-what-b", "ad-why-b", "ad-fix-b", "ad-evidence-b", "ad-history-b",
      "ad-device-b", "ad-dev-alerts", "ad-dev-anoms"].forEach(clear);
+    if (window.SlothLocation) window.SlothLocation.alert(null);
     drawStrip($("ad-strip"), null);
     if (typeof id !== "string" || !ALERT_ID_RE.test(id)) {
       set("ad-head", "no alert named");
@@ -4635,7 +4637,9 @@
     // (f) the device it names
     alertDevice(j);
     if (window.SlothFrrs) SlothFrrs.mountAlert(j);
-    // (g) the proof: evidence, assessment, capture (web/ui/evidence.js)
+    // (g) where the sensor was (location.js)
+    if (window.SlothLocation) window.SlothLocation.alert(j);
+    // (h) the proof: evidence, assessment, capture (web/ui/evidence.js)
     if (window.SlothEvidence) window.SlothEvidence.alert(j);
   }
 

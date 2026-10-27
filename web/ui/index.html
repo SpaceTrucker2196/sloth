@@ -14,6 +14,7 @@
 @include theme.css
 @include page.css
 @include frrs.css
+@include location.css
 </style>
 <script>
 @include palette.js
@@ -22,6 +23,7 @@
 @include evidence.js
 @include bundle.js
 @include app.js
+@include location.js
 </script>
 </head>
 <body>
@@ -418,6 +420,7 @@
       <div class="cards" id="ad-dev-anoms"></div>
     </section>
     <div id="frrs-alert"></div>
+    <section class="panel" id="loc-alert" hidden aria-label="where the sensor was"></section>
     <!-- The proof (web/ui/evidence.js): the alert page's last section,
          the packet capture last in it. Another slice's section for this
          page goes above it, never below. -->
@@ -680,6 +683,7 @@
     <div class="label">anomalies</div>
     <div class="cards" id="dr-anoms"></div>
     <div id="frrs-drawer"></div>
+    <div id="loc-drawer" hidden></div>
   </aside>
   <aside class="drawer" id="bdrawer" hidden aria-label="ble advertiser">
     <div class="dr-hd">

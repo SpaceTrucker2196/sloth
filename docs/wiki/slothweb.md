@@ -111,7 +111,7 @@ the vendor research section, `web/data/vendors/*.md`,
 listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
-reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (an alert's proof: `--pcap-dir`, the capture decoded and hash-checked, the assessment and bibliography, the drawer's rows as tap targets); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
+reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (sensor location: the alert page's "where the sensor was", the drawer's scatter, `/api/positions` with GeoJSON and GPX, the stream decoder keeping sloth's `loc` object, sloth.db v9 read; [[location]]); 2026-10-27 (an alert's proof: `--pcap-dir`, the capture decoded and hash-checked, the assessment and bibliography, the drawer's rows as tap targets); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
 research section under the drawer's and Lookup's OUI card, one cited Markdown file per OUI holder
 in `web/data/vendors/` compiled in at build time, `{found:false}` and
 "no research yet" for a vendor without one, [[vendor-research]]; the
@@ -995,6 +995,24 @@ long name can cut so that `192.0.2.123` reads `192.0.2.12`.
 copy works on plain http (a hidden textarea and `execCommand`) where
 `navigator.clipboard` does not exist. Detail in
 [`web/README.md`](../../web/README.md#copy-json-the-analysis-bundle).
+
+## Sensor location (2026-10-27)
+
+sloth's `--location` / `--gps` stamp ([[location]]) reaches the page in
+two places. An alert's page gains a "where the sensor was" section
+(`#loc-alert`): the coordinates, the accuracy estimate, the altitude,
+the source and the fix's time, and a copy button. The device drawer
+gains a scatter (`#loc-drawer`) of where the **sensor** was each time
+it heard the device, coloured by RSSI, with the sensor's track, drawn
+on a local projection with no map tiles, and GeoJSON / GPX exports.
+Both come from `web/ui/location.js` (`window.SlothLocation`), one hook
+per view, so the rest of the page is unchanged. Server side:
+`web/src/web_loc.c` (the stamp, range-checked, from the stream's `loc`
+object or sloth.db v9's alerts columns) and `web/src/web_positions.c`
+(`/api/positions`, at most 200 samples an answer so the widest
+rendering fits the 64 KiB response). slothweb reads schema v1..v9;
+`device_positions`, `sensor_positions` and the six stamp columns are on
+the allow-list. Details: `web/README.md` *Sensor location*.
 
 ## Capture scope (2026-10-26)
 
