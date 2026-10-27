@@ -4330,8 +4330,10 @@
     if (!RC.timer) RC.timer = setInterval(function () { if (view === "records") recordsLoad(); }, 2000);
   }
   function recordsLoad() {
+    // An answer asked for under another scope is not drawn (as live()).
+    var asked = SCOPE;
     getJSON("/api/live").then(function (l) {
-      if (view !== "records") return;
+      if (view !== "records" || asked !== SCOPE) return;
       var rates = l.types_rate || {}, counts = l.types || {};
       var names = Object.keys(counts).sort(function (a, b) {
         return (Number(rates[b]) || 0) - (Number(rates[a]) || 0) || (counts[b] - counts[a]);
@@ -4366,11 +4368,11 @@
 
   // ── the sensor's health: the sensor-health tile's view ─────────────
   function healthView() {
-    var box = clear("hl-rows");
+    var box = clear("hl-rows"), asked = SCOPE;
     Promise.all([getJSON("/api/live"), getJSON("/api/health"),
                  getJSON("/api/devices?limit=1&offset=0&sort=last").catch(function () { return null; })])
       .then(function (r) {
-        if (view !== "health") return;
+        if (view !== "health" || asked !== SCOPE) return;
         var l = r[0], h = r[1], d = r[2], s = l.sensor || {};
         var word = el("span", "health-" + (s.state === "ok" ? "ok" : s.state === "unknown" ? "unknown" : "bad"),
                       String(s.state));

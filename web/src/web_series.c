@@ -394,12 +394,23 @@ size_t web_metrics_json_scoped(web_tsdb_t *t, const web_scope_ctx_t *sc,
         web_jw_raw(&w, "}");
     }
     web_jw_raw(&w, "],\"metrics\":[");
+    /* Under a scope a per-key metric counts only the keys in it, as
+     * /api/keys lists them; the other scope's interfaces are not its. */
+    web_keyinfo_t *kb = NULL;
     for (int i = 0, k = 0; i < WM_COUNT; i++) {
         if (!metric_in(i, sc)) continue;
         const web_metric_t *md = &web_metric_defs[i];
         web_keyinfo_t one;
         int total = 0;
-        web_rollup_keys(t->ru, i, &one, 1, &total);
+        if (sc && sc->scope != WEB_SCOPE_HYBRID &&
+            web_scope_metric(i) == WEB_SC_BYKEY &&
+            (kb || (kb = malloc(WEB_KEYS_MAX * sizeof(*kb))) != NULL)) {
+            int n = web_rollup_keys(t->ru, i, kb, WEB_KEYS_MAX, &total);
+            total = 0;
+            for (int j = 0; j < n; j++) total += key_in(i, kb[j].key, sc);
+        } else {
+            web_rollup_keys(t->ru, i, &one, 1, &total);
+        }
         web_jw_raw(&w, k++ ? ",{\"name\":" : "{\"name\":");
         web_jw_str(&w, md->name);
         web_jw_raw(&w, ",\"kind\":");    web_jw_str(&w, kind_word(md->kind));
@@ -413,6 +424,7 @@ size_t web_metrics_json_scoped(web_tsdb_t *t, const web_scope_ctx_t *sc,
         }
         web_jw_raw(&w, "}");
     }
+    free(kb);
     web_jw_raw(&w, "]}\n");
     return w.overflow ? 0 : w.len;
 }

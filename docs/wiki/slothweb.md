@@ -943,7 +943,8 @@ the managed card's own scan and link (`/api/wifi/local`, sloth.db's
 are empty under Monitor saying why; the SQL box is unscoped. sloth's
 `sensor_health` gained `capture_linktype`, so the stream's IP-capture
 records can count as Monitor's while the IP capture is itself a radio
-(the host's own ARP table, leases and scan entries never do), and
+(the host's own ARP table, leases, scan entries and socket table, with
+the top hosts, THREAT_IP and BEACONING read from it, never do), and
 `monitor_only`, reported but not used to tag (an `any` handle's
 allow-list can hold wired interfaces too). An `/api` answer without
 `scope=` is as before; `/events` records gained `sc` (and a device

@@ -49,7 +49,8 @@ static const struct { const char *t; int tag; } RTYPES[] = {
     /* the IP capture (src/capture/capture.c) */
     { "dns", LI }, { "tls", LI }, { "quic", LI }, { "http", LI }, { "ntp", LI },
     { "icmp", LI }, { "packet", LI },
-    { "top_host", LI }, { "mdns_service", LI }, { "nbns_name", LI },
+    { "top_host", L },   /* /proc sockets (top_hosts.c), not the capture */
+    { "mdns_service", LI }, { "nbns_name", LI },
     { "ssdp_device", LI }, { "onvif_device", LI },
     { "ndp_ra", LI }, { "smb_session", LI }, { "kerb_event", LI },
     { "ldap_event", LI }, { "bgp_session", LI }, { "ssh_flow", LI },
@@ -81,8 +82,8 @@ int web_scope_record(const char *type) {
 const web_scope_alert_t web_scope_alerts[] = {
     { "PORT_SCAN", L },             /* scan_entries: the /proc sockets */
     { "DEAUTH_FLOOD", M }, { "NXDOMAIN_BURST", LI },
-    { "THREAT_DOMAIN", LI }, { "THREAT_IP", LI },
-    { "BEACONING", LI },            /* C2 beaconing over IP, not 802.11 */
+    { "THREAT_DOMAIN", LI }, { "THREAT_IP", L },     /* walks s->conns, the /proc socket table */
+    { "BEACONING", L },             /* C2 beaconing over IP, from s->conns */
     { "DGA_DOMAIN", LI },
     { "ARP_SPOOF", L },             /* arp_entries: /proc/net/arp */
     { "ROGUE_DHCP", LI },           /* dhcp_events: DHCP snooped off the capture */
@@ -147,7 +148,9 @@ int web_scope_metric(int metric) {
     switch (metric) {
     case WM_IFACE_RX: case WM_IFACE_TX:          return BK;
     case WM_ALERTS_FIRED:                        return BK;
-    case WM_HOST_RX: case WM_HOST_TX: case WM_HOST_CONNS:
+    /* host.* are top_host's, from the /proc socket table: Local even
+     * while the IP capture is a radio. */
+    case WM_HOST_RX: case WM_HOST_TX: case WM_HOST_CONNS: return L;
     case WM_DNS_QUERIES: case WM_DNS_NXDOMAIN:
     case WM_TLS_HANDSHAKES: case WM_HTTP_REQUESTS:
     case WM_FLOW_SSH: case WM_FLOW_RDP: case WM_FLOW_SMB: case WM_FLOW_SNMP:

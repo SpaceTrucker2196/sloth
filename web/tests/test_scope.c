@@ -167,7 +167,7 @@ static void test_record_types_are_classified(void) {
      * Local while that capture is a monitor radio. Seen red with arp,
      * dhcp_lease and scan_entry tagged LI again. */
     static const char *const host[] = { "arp", "dhcp_lease", "scan_entry",
-                                        "connections", "wifi_sta" };
+                                        "connections", "wifi_sta", "top_host" };
     for (size_t i = 0; i < sizeof(host) / sizeof(host[0]); i++) {
         if (web_scope_eff(web_scope_record(host[i]), 1) != WEB_SC_L)
             fprintf(stderr, "    %s leaves Local on a radio\n", host[i]);
@@ -177,6 +177,18 @@ static void test_record_types_are_classified(void) {
     WT_EQ(web_scope_record("iface"), WEB_SC_BYKEY);
     WT_EQ(web_scope_record("device"), WEB_SC_BYKEY);
     WT_EQ(web_scope_record("not_a_type_yet"), 0);
+    /* So do the alerts and metrics read from it (rules_wired.c walks
+     * s->conns for both). Seen red with each tagged LI again. */
+    int seen = 0;
+    for (int ty = 0; ty < web_scope_alerts_n; ty++)
+        if (!strcmp(web_scope_alerts[ty].name, "THREAT_IP") ||
+            !strcmp(web_scope_alerts[ty].name, "BEACONING")) {
+            WT_EQ(web_scope_eff(web_scope_alert(ty), 1), WEB_SC_L);
+            seen++;
+        }
+    WT_EQ(seen, 2);
+    WT_EQ(web_scope_eff(web_scope_metric(WM_HOST_RX), 1), WEB_SC_L);
+    WT_EQ(web_scope_eff(web_scope_metric(WM_HOST_CONNS), 1), WEB_SC_L);
 }
 
 /* sloth's risk weights and buckets (src/device_risk.c), read from the
@@ -280,12 +292,15 @@ static void test_tags(void) {
     int nh = web_scope_alert_types(WEB_SCOPE_HYBRID, 0, ty, 128);
     WT_EQ(nh, web_scope_alerts_n);
     WT_EQ(nm + nl, web_scope_alerts_n + 2);   /* the two own-state types twice */
-    /* On a radio Local keeps the own-state types and the two rules over
-     * the host's own tables: PORT_SCAN (scan_entries, the /proc sockets)
-     * and ARP_SPOOF (/proc/net/arp). Seen red with both tagged LI. */
-    WT_EQ(web_scope_alert_types(WEB_SCOPE_LOCAL, 1, ty, 128), 4);
+    /* On a radio Local keeps the own-state types and the four rules over
+     * the host's own tables: PORT_SCAN (scan_entries, the /proc sockets),
+     * THREAT_IP and BEACONING (s->conns) and ARP_SPOOF (/proc/net/arp).
+     * Seen red with each tagged LI. */
+    WT_EQ(web_scope_alert_types(WEB_SCOPE_LOCAL, 1, ty, 128), 6);
     WT_EQ(ty[0], 0);    /* PORT_SCAN */
-    WT_EQ(ty[1], 7);    /* ARP_SPOOF */
+    WT_EQ(ty[1], 4);    /* THREAT_IP */
+    WT_EQ(ty[2], 5);    /* BEACONING */
+    WT_EQ(ty[3], 7);    /* ARP_SPOOF */
     WT_EQ(web_scope_eff(web_scope_alert(8), 1), WEB_SC_M);   /* ROGUE_DHCP: snooped */
 }
 
@@ -663,6 +678,12 @@ static void test_series_scoped(void) {
     WT_LACKS(b, "{\"name\":\"dns.queries\"");
     WT_LACKS(b, "{\"name\":\"dev.present\",");
     WT_LACKS(b, "{\"name\":\"dev.present.local\"");
+    /* Its interface count is the scope's own, as /api/keys lists them:
+     * wlan0mon alone, not eth0 as well. Seen red counting every key. */
+    const char *ir = strstr(b, "{\"name\":\"iface.rx_rate\"");
+    const char *ie = ir ? strchr(ir, '}') : NULL;
+    const char *ik = ir ? strstr(ir, "\"keys\":") : NULL;
+    WT_ASSERT(ir && ie && ik && ik < ie && !strncmp(ik, "\"keys\":1,", 9));
     WT_EQ(route(&h, "/api/metrics", "scope=local"), 200);
     b = body_of(g_out);
     WT_HAS(b, "{\"name\":\"dns.queries\"");
@@ -1346,6 +1367,10 @@ static void test_page_carries_the_switch(void) {
      * line taken out of app.js. */
     WT_HAS(p, "if (gen !== liveGen || asked !== SCOPE ||");
     WT_HAS(p, "    liveGen++;\n");
+    /* Records and Health drop an answer asked for under another scope.
+     * Seen red with either guard removed. */
+    WT_HAS(p, "if (view !== \"records\" || asked !== SCOPE) return;");
+    WT_HAS(p, "if (view !== \"health\" || asked !== SCOPE) return;");
     WT_HAS(p, "if (typeof sc !== \"number\") return false;");
     WT_HAS(p, "r = { seq: r.seq, type: r.type, ts: r.ts, text: recText(r), sc: r.sc };");
     WT_HAS(p, "if (SCOPE !== \"hybrid\" && num(l.anomalies_open)) {");

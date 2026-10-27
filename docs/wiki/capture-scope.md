@@ -19,7 +19,10 @@ row's a `text_m` line).
 `src/device_risk.c`, `include/sloth.h` (`DEV_SRC_*`, `CAM_SIG_*`),
 `include/sloth_alerts.def`, owner request 2026-10-26.
 
-**Last updated**: 2026-10-27 (the review's fixes: the host's own
+**Last updated**: 2026-10-27 (the verify pass: top hosts, `THREAT_IP`,
+`BEACONING` and `host.*` from the `/proc` socket table stay Local on a
+radio, `/api/metrics` counts a scope's own keys, Records and Health drop
+an answer asked under another scope; the review's fixes: the host's own
 tables stay Local on a radio, scoped anomaly counts and z, the Records
 view's scoped counts, the WiFi view's Local half, the ARP read once per
 statement; first version 2026-10-26).
@@ -50,8 +53,9 @@ tag is decided by what the record is:
   `/proc/net/arp` (`src/platform/linux.c`), `dhcp_lease` the host's
   dhclient and systemd-networkd lease files (`linux_dhcp.c`),
   `scan_entry` the inbound peers of the `/proc` sockets
-  (`src/scan.c`), and with `connections`, `process`, `wifi_sta` and
-  `wifi_ap` they stay Local even while the IP capture is a radio
+  (`src/scan.c`), `top_host` the `/proc` sockets with their bandwidth
+  (`src/top_hosts.c`), and with `connections`, `process`, `wifi_sta`
+  and `wifi_ap` they stay Local even while the IP capture is a radio
   (below).
   `web/tests/test_scope.c` reads `web_live.c`'s `POLL_TYPES` and
   app.js's `MON_TYPES` from the source and fails on a type left out.
@@ -60,9 +64,10 @@ tag is decided by what the record is:
   `.def` row by row. `CAPTIVE_PORTAL` sits in `rules_twin.c` but reads
   DNS, HTTP and TLS (Local); `CAM_SETUP_OUI` sits in `rules_camera.c`
   but reads beacon BSSIDs (Monitor); `BEACONING` is C2 beaconing over IP
-  (Local); `PORT_SCAN` reads the `/proc` sockets' scan entries and
-  `ARP_SPOOF` `/proc/net/arp`, so both are the host's own (Local on a
-  radio too), while `ROGUE_DHCP` reads DHCP snooped off the IP capture.
+  (Local); `PORT_SCAN` reads the `/proc` sockets' scan entries,
+  `THREAT_IP` and `BEACONING` walk the `/proc` socket table
+  (`s->conns`) and `ARP_SPOOF` reads `/proc/net/arp`, so all four are
+  the host's own (Local on a radio too), as are the `host.*` metrics, while `ROGUE_DHCP` reads DHCP snooped off the IP capture.
 - **Interface.** Monitor when its name has been named as a monitor
   radio: `sensor_health.monitor_iface`, or a `sensor` record of kind
   `wifi` (`src/poll.c` registers only the monitor adapters as
