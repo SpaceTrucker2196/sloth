@@ -1510,16 +1510,20 @@ void capture_open(sloth_state_t *s) {
      * just becomes a no-op on those datalinks. */
     g_handle = pcap_create("any", errbuf);
     if (g_handle) {
-        pcap_set_snaplen(g_handle, 65535);
-        pcap_set_promisc(g_handle, 1);
-        pcap_set_timeout(g_handle, 100);
-        if (capture_activate_failed(pcap_activate(g_handle))) {
+        /* A setter refused before activation leaves a handle configured
+         * other than asked; the open_live path below is the fallback. */
+        if (pcap_set_snaplen(g_handle, 65535) != 0 ||
+            pcap_set_promisc(g_handle, 1) != 0 ||
+            pcap_set_timeout(g_handle, 100) != 0 ||
+            capture_activate_failed(pcap_activate(g_handle))) {
             pcap_close(g_handle);
             g_handle = NULL;
         } else {
-            /* Try to switch to SLL2; ignore errors (older libpcap
-             * doesn't know the DLT, some kernels reject it). */
-            (void)pcap_set_datalink(g_handle, MY_DLT_LINUX_SLL2);
+            /* SLL2 may be refused (older libpcap doesn't know the DLT,
+             * some kernels reject it): the handle stays on the DLT it
+             * activated with and the per-iface filter is a no-op. */
+            int sll2 = pcap_set_datalink(g_handle, MY_DLT_LINUX_SLL2);
+            (void)sll2;
             snprintf(s->pkt_iface, sizeof(s->pkt_iface), "any");
         }
     }
@@ -1603,9 +1607,13 @@ int capture_set_filter(const char *expr, char *errbuf, int errsz) {
             snprintf(errbuf, errsz, "%s", pcap_geterr(g_handle));
         return -1;
     }
-    pcap_setfilter(g_handle, &fp);
+    /* A refused filter used to be reported as applied, leaving the
+     * operator believing a capture was narrowed that was not. */
+    int rc = pcap_setfilter(g_handle, &fp);
+    if (rc != 0 && errbuf && errsz > 0)
+        snprintf(errbuf, errsz, "%s", pcap_geterr(g_handle));
     pcap_freecode(&fp);
-    return 0;
+    return rc != 0 ? -1 : 0;
 }
 
 #endif /* WITH_PCAP */

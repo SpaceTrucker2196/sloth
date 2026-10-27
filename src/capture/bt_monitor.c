@@ -68,9 +68,9 @@ int bt_monitor_open(sloth_state_t *s) {
                  BT_MONITOR_DEVICE, errbuf);
         return -1;
     }
-    pcap_set_snaplen(h, BT_MONITOR_SNAPLEN);
-    pcap_set_timeout(h, 100);
-    int rc = pcap_activate(h);
+    int rc = pcap_set_snaplen(h, BT_MONITOR_SNAPLEN);
+    if (rc == 0) rc = pcap_set_timeout(h, 100);
+    if (rc == 0) rc = pcap_activate(h);
     if (capture_activate_failed(rc)) {
         snprintf(s->bt_err, sizeof(s->bt_err), "pcap(%s): %.40s",
                  BT_MONITOR_DEVICE, pcap_geterr(h));
