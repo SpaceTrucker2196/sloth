@@ -5,6 +5,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include <errno.h>
+#include <sys/poll.h>  /* not <poll.h>: -Isrc puts src/poll.h first */
 #include <pthread.h>
 #include <pcap.h>
 
@@ -84,6 +86,17 @@ int bt_monitor_open(sloth_state_t *s) {
                  BT_MONITOR_DEVICE, dlt, BT_DLT_LINUX_MONITOR);
         return -1;
     }
+    /* The monitor channel's read blocks until a frame arrives and
+     * ignores the timeout, and pcap_breakloop() does not wake it: a
+     * quiet controller kept bt_monitor_stop() joining forever, and
+     * systemd killed the sensor at its stop timeout. Non-blocking plus
+     * bt_thread()'s poll() bounds every wait. */
+    if (pcap_setnonblock(h, 1, errbuf) != 0 || pcap_get_selectable_fd(h) < 0) {
+        snprintf(s->bt_err, sizeof(s->bt_err), "%s: nonblock: %.40s",
+                 BT_MONITOR_DEVICE, errbuf[0] ? errbuf : pcap_geterr(h));
+        pcap_close(h);
+        return -1;
+    }
     g_bh = h;
     snprintf(s->bt_iface, sizeof(s->bt_iface), "%s", BT_MONITOR_DEVICE);
     return 0;
@@ -94,7 +107,13 @@ int bt_monitor_is_open(void) { return g_bh != NULL; }
 static void *bt_thread(void *arg) {
     (void)arg;
     int r = 0;
+    int fd = pcap_get_selectable_fd(g_bh);
     while (capture_run_flag_get(&g_running)) {
+        /* At most 100 ms between looks at the run flag. */
+        struct pollfd pf = { fd, POLLIN, 0 };
+        int pr = poll(&pf, 1, 100);
+        if (pr == 0 || (pr < 0 && errno == EINTR)) continue;
+        if (pr < 0) { r = PCAP_ERROR; break; }
         r = pcap_dispatch(g_bh, 32, on_bt_frame, NULL);
         if (r < 0) break;
     }
