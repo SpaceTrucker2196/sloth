@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include "runner.h"
 #include "ble_scan/ble_scan_cmd.h"
 
@@ -640,6 +641,234 @@ static void test_helper_is_not_linked_into_sloth(void) {
     }
 }
 
+/* ── every write passes the gate ──
+ *
+ * main.c's only route to the socket is bles_send() with a writer. These
+ * drive bles_send() and bles_write_gated() with a writer that records
+ * what it was handed, so a gate dropped from the path, or a byte changed
+ * between the build and the write, shows up as bytes the controller
+ * would have seen. */
+
+typedef struct {
+    int     calls;
+    uint8_t got[BLES_CMD_MAX + 8];
+    size_t  len;
+    ssize_t ret;      /* what to report; -2 means "all of it" */
+} bs_rec_t;
+
+static ssize_t bs_rec_write(void *ctx, const uint8_t *pkt, size_t len) {
+    bs_rec_t *r = ctx;
+    r->calls++;
+    r->len = len < sizeof(r->got) ? len : sizeof(r->got);
+    memcpy(r->got, pkt, r->len);
+    return r->ret == -2 ? (ssize_t)len : r->ret;
+}
+
+static void bs_rec_init(bs_rec_t *r) {
+    memset(r, 0, sizeof(*r));
+    r->ret = -2;
+}
+
+static void test_send_writes_exactly_the_built_packet(void) {
+    for (int c = 0; c < BLES_CMD_COUNT; c++) {
+        uint8_t want[BLES_CMD_MAX];
+        size_t wn = bles_build(c, want, sizeof(want));
+        ASSERT_GT(wn, 0);
+        bs_rec_t r;
+        bs_rec_init(&r);
+        ASSERT_EQ(bles_send(c, bs_rec_write, &r), BLES_SEND_OK);
+        ASSERT_EQ(r.calls, 1);
+        ASSERT_EQ(r.len, wn);
+        if (r.len != wn || memcmp(r.got, want, wn) != 0) {
+            fprintf(stderr, "    bles_send(%d) wrote", c);
+            for (size_t i = 0; i < r.len; i++) fprintf(stderr, " %02x", r.got[i]);
+            fprintf(stderr, "\n");
+        }
+        ASSERT(r.len == wn && memcmp(r.got, want, wn) == 0);
+        ASSERT(bles_cmd_allowed(r.got, r.len));
+    }
+    /* And the one that matters, from the spec rather than the builder:
+     * LE Set Scan Parameters with LE_Scan_Type 0x00 (§7.8.10). */
+    static const uint8_t passive[] = {
+        0x01, 0x0B, 0x20, 0x07, 0x00, 0x60, 0x00, 0x60, 0x00, 0x00, 0x00
+    };
+    bs_rec_t r;
+    bs_rec_init(&r);
+    ASSERT_EQ(bles_send(BLES_CMD_LE_SCAN_PARAMS, bs_rec_write, &r), BLES_SEND_OK);
+    ASSERT(r.len == sizeof(passive) && memcmp(r.got, passive, sizeof(passive)) == 0);
+}
+
+static void test_send_refuses_without_writing(void) {
+    bs_rec_t r;
+    /* Outside the vocabulary: nothing built, nothing written. */
+    bs_rec_init(&r);
+    ASSERT_EQ(bles_send(-1, bs_rec_write, &r), BLES_SEND_REFUSED);
+    ASSERT_EQ(bles_send(BLES_CMD_COUNT, bs_rec_write, &r), BLES_SEND_REFUSED);
+    ASSERT_EQ(r.calls, 0);
+
+    /* Built elsewhere and handed to the write path: the gate, not the
+     * builder, is what stops it. */
+    static const uint8_t active[] = {          /* §7.8.10, LE_Scan_Type 0x01 */
+        0x01, 0x0B, 0x20, 0x07, 0x01, 0x60, 0x00, 0x60, 0x00, 0x00, 0x00
+    };
+    static const uint8_t adv_on[] = {          /* §7.8.9 LE Set Advertising Enable */
+        0x01, 0x0A, 0x20, 0x01, 0x01
+    };
+    static const uint8_t inquiry[] = {         /* §7.1.1 Inquiry */
+        0x01, 0x01, 0x04, 0x05, 0x33, 0x8B, 0x9E, 0x08, 0x00
+    };
+    static const uint8_t ext_active[] = {      /* §7.8.64, 1M PHY active */
+        0x01, 0x41, 0x20, 0x08, 0x00, 0x00, 0x01, 0x01, 0x60, 0x00, 0x60, 0x00
+    };
+    const struct { const uint8_t *p; size_t n; } bad[] = {
+        { active, sizeof(active) }, { adv_on, sizeof(adv_on) },
+        { inquiry, sizeof(inquiry) }, { ext_active, sizeof(ext_active) },
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        bs_rec_init(&r);
+        ASSERT_EQ(bles_write_gated(bad[i].p, bad[i].n, bs_rec_write, &r), BLES_SEND_REFUSED);
+        if (r.calls) fprintf(stderr, "    bad[%zu] reached the writer\n", i);
+        ASSERT_EQ(r.calls, 0);
+    }
+
+    /* An admitted packet goes through unchanged, once. */
+    static const uint8_t passive[] = {
+        0x01, 0x0B, 0x20, 0x07, 0x00, 0x60, 0x00, 0x60, 0x00, 0x00, 0x00
+    };
+    bs_rec_init(&r);
+    ASSERT_EQ(bles_write_gated(passive, sizeof(passive), bs_rec_write, &r), BLES_SEND_OK);
+    ASSERT_EQ(r.calls, 1);
+    ASSERT(r.len == sizeof(passive) && memcmp(r.got, passive, sizeof(passive)) == 0);
+
+    /* No writer is a refusal, not a crash. */
+    ASSERT_EQ(bles_send(BLES_CMD_RESET, NULL, NULL), BLES_SEND_REFUSED);
+}
+
+static void test_send_reports_a_failed_or_short_write(void) {
+    bs_rec_t r;
+    bs_rec_init(&r);
+    r.ret = -1;
+    ASSERT_EQ(bles_send(BLES_CMD_RESET, bs_rec_write, &r), BLES_SEND_IO);
+    ASSERT_EQ(r.calls, 1);
+    bs_rec_init(&r);
+    r.ret = 3;
+    ASSERT_EQ(bles_send(BLES_CMD_LE_SCAN_PARAMS, bs_rec_write, &r), BLES_SEND_IO);
+}
+
+/* main.c, comments and literals blanked, so prose and messages that say
+ * "send" or "write" do not count. */
+static void bs_strip_c(char *s) {
+    for (char *p = s; *p; ) {
+        if (p[0] == '/' && p[1] == '*') {
+            char *e = strstr(p + 2, "*/");
+            char *end = e ? e + 2 : p + strlen(p);
+            for (; p < end; p++) if (*p != '\n') *p = ' ';
+        } else if (p[0] == '/' && p[1] == '/') {
+            for (; *p && *p != '\n'; p++) *p = ' ';
+        } else if (*p == '"' || *p == '\'') {
+            char q = *p++;
+            for (; *p && *p != q; p++) {
+                if (*p == '\\' && p[1]) *p++ = ' ';
+                if (*p != '\n') *p = ' ';
+            }
+            if (*p) p++;
+        } else {
+            p++;
+        }
+    }
+}
+
+static int bs_ident(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+/* Every call of `name` (an identifier followed by `(`), offsets into
+ * out[]. */
+static int bs_calls(const char *s, const char *name, size_t out[], int max) {
+    size_t k = strlen(name);
+    int n = 0;
+    for (const char *p = s; (p = strstr(p, name)) != NULL; p += k) {
+        if (p > s && bs_ident(p[-1])) continue;
+        if (bs_ident(p[k])) continue;
+        const char *q = p + k;
+        while (*q == ' ' || *q == '\t' || *q == '\n') q++;
+        if (*q != '(') continue;
+        if (n < max) out[n] = (size_t)(p - s);
+        n++;
+    }
+    return n;
+}
+
+/* The one send() in the helper sits inside the writer handed to
+ * bles_send(), and nothing else in main.c writes to a descriptor. */
+static void test_helper_writes_only_through_bles_send(void) {
+    char *s = bs_slurp("src/ble_scan/main.c");
+    ASSERT(s != NULL);
+    if (!s) return;
+    bs_strip_c(s);
+
+    static const char *const other[] = {
+        "write", "writev", "pwrite", "pwritev", "sendto", "sendmsg",
+        "sendmmsg", "sendfile", "splice", "vmsplice", "ioctl"
+    };
+    for (size_t i = 0; i < sizeof(other) / sizeof(other[0]); i++) {
+        size_t at[4];
+        int c = bs_calls(s, other[i], at, 4);
+        /* The one ioctl is HCIDEVDOWN in do_down(), which sends no
+         * packet; it is counted so a second one cannot appear. */
+        int allowed = strcmp(other[i], "ioctl") == 0 ? 1 : 0;
+        if (c != allowed) fprintf(stderr, "    main.c: %d call(s) of %s()\n", c, other[i]);
+        ASSERT_EQ(c, allowed);
+    }
+
+    size_t sends[4];
+    int ns = bs_calls(s, "send", sends, 4);
+    if (ns != 1) fprintf(stderr, "    main.c: %d send() calls, want 1\n", ns);
+    ASSERT_EQ(ns, 1);
+
+    /* The writer is bles_send()'s second argument, at its one call. */
+    size_t bs[4];
+    int nb = bs_calls(s, "bles_send", bs, 4);
+    ASSERT_EQ(nb, 1);
+    if (ns != 1 || nb != 1) { free(s); return; }
+    const char *a = strchr(s + bs[0], '(');
+    const char *comma = a ? strchr(a, ',') : NULL;
+    ASSERT(comma != NULL);
+    if (!comma) { free(s); return; }
+    comma++;
+    while (*comma == ' ' || *comma == '\t' || *comma == '\n') comma++;
+    char wr[64];
+    size_t wl = 0;
+    while (bs_ident(comma[wl]) && wl + 1 < sizeof(wr)) { wr[wl] = comma[wl]; wl++; }
+    wr[wl] = '\0';
+    ASSERT_GT(wl, 0);
+
+    /* Its definition: `name(` followed by a body `{ ... }`. */
+    size_t defs[4];
+    int nd = bs_calls(s, wr, defs, 4);
+    const char *body = NULL, *end = NULL;
+    for (int i = 0; i < nd && i < 4 && !body; i++) {
+        const char *p = strchr(s + defs[i], ')');
+        if (!p) continue;
+        p++;
+        while (*p == ' ' || *p == '\t' || *p == '\n') p++;
+        if (*p != '{') continue;
+        int depth = 0;
+        for (const char *q = p; *q; q++) {
+            if (*q == '{') depth++;
+            else if (*q == '}' && --depth == 0) { end = q; break; }
+        }
+        body = p;
+    }
+    ASSERT(body != NULL && end != NULL);
+    const char *at = s + sends[0];
+    if (!(body && end && at > body && at < end))
+        fprintf(stderr, "    main.c: send() is not inside %s(), the writer bles_send() is given\n", wr);
+    ASSERT(body && end && at > body && at < end);
+    free(s);
+}
+
 void run_ble_scan_tests(void) {
     TEST_SUITE("sloth-ble-scan: passive-only HCI command set");
     RUN_TEST(test_builder_bytes_match_the_spec);
@@ -659,4 +888,8 @@ void run_ble_scan_tests(void) {
     RUN_TEST(test_bind_waits_only_for_a_controller_not_ready);
     RUN_TEST(test_args);
     RUN_TEST(test_helper_is_not_linked_into_sloth);
+    RUN_TEST(test_send_writes_exactly_the_built_packet);
+    RUN_TEST(test_send_refuses_without_writing);
+    RUN_TEST(test_send_reports_a_failed_or_short_write);
+    RUN_TEST(test_helper_writes_only_through_bles_send);
 }

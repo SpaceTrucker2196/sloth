@@ -130,6 +130,19 @@ int bles_cmd_allowed(const uint8_t *pkt, size_t len) {
     }
 }
 
+int bles_write_gated(const uint8_t *pkt, size_t len, bles_writer_t wr, void *ctx) {
+    if (!wr || !bles_cmd_allowed(pkt, len)) return BLES_SEND_REFUSED;
+    ssize_t w = wr(ctx, pkt, len);
+    return w == (ssize_t)len ? BLES_SEND_OK : BLES_SEND_IO;
+}
+
+int bles_send(int c, bles_writer_t wr, void *ctx) {
+    uint8_t b[BLES_CMD_MAX];
+    size_t n = bles_build(c, b, sizeof(b));
+    if (n == 0) return BLES_SEND_REFUSED;
+    return bles_write_gated(b, n, wr, ctx);
+}
+
 bles_ev_kind_t bles_parse_event(const uint8_t *p, size_t n, bles_ev_t *ev) {
     bles_ev_t e;
     memset(&e, 0, sizeof(e));

@@ -19,6 +19,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #define BLES_H4_CMD   0x01
 #define BLES_H4_EVENT 0x04
@@ -73,6 +74,27 @@ uint16_t bles_opcode(int c);
  * one — is passive. Anything else, an active scan, advertising,
  * connection, inquiry or vendor (OGF 0x3F) command included, is 0. */
 int bles_cmd_allowed(const uint8_t *pkt, size_t len);
+
+/* ── the one way a packet reaches the controller ──
+ *
+ * main.c owns the socket but not the decision: it hands bles_send() a
+ * writer, and the writer is the only place in the helper that may call
+ * send() (tests/test_ble_scan.c checks main.c for exactly that). Every
+ * packet the writer is given has passed bles_cmd_allowed() first, and
+ * is the gate's own buffer, so nothing can change it between the check
+ * and the write. */
+typedef ssize_t (*bles_writer_t)(void *ctx, const uint8_t *pkt, size_t len);
+
+#define BLES_SEND_OK       0
+#define BLES_SEND_IO      (-1)  /* the writer failed or wrote short */
+#define BLES_SEND_REFUSED (-2)  /* not built, or the gate said no: nothing written */
+
+/* Gates pkt[0..len) and, only if bles_cmd_allowed() admits it, calls
+ * `wr` exactly once with those bytes. */
+int bles_write_gated(const uint8_t *pkt, size_t len, bles_writer_t wr, void *ctx);
+
+/* Builds command `c` and passes it to bles_write_gated(). */
+int bles_send(int c, bles_writer_t wr, void *ctx);
 
 typedef enum {
     BLES_EV_MALFORMED = 0,  /* not an H4 event, or lengths disagree */

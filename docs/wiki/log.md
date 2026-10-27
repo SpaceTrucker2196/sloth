@@ -5540,3 +5540,31 @@ report events.
   than defaulted to hci0. Not run on hardware here. Measured, parent
   (4b87d52) to this tree: `make test` 35379 to 35582 assertions, `make
   deploy-test` 403 to 409, each 0 failed.
+- 2026-10-26 — [[deployment]] §2, §4.4, §7.1, [[ble]], [[cli-reference]]:
+  `sloth-ble-scan` integrated onto main (8b938ff, after the libpcap
+  setter checks and the non-blocking monitor poll) with the review's
+  findings fixed. `make install-service` put `packaging/default/sloth`
+  over `/etc/default/sloth` with `install -b`, so §7.1's own `sudo make
+  install install-service` would have run the sensor without the site's
+  `SLOTH_ARGS` (confirmed with `DESTDIR`); it is now no-clobber like
+  slothweb's (`[ -e … ] ||`), and the units, the sysusers fragment and
+  the inert drop-in are still replaced, being the shipped artefact.
+  Build, gate and write are one `bles_send()` with a writer `main.c`
+  supplies, the helper's only `send()`, tested with a recording writer
+  and a scan of `main.c`. `tests/test_unit_file.c`'s lookups are
+  NULL-safe (a missing key had made `strcmp(NULL)` end the suite with
+  SIGSEGV, seen on the old scanner with `NoNewPrivileges=` deleted), and
+  the scan unit's `[Service]` is an allow-list with one `Environment=`.
+  The reference host's hand-made `10-bluetooth-monitor.conf` is removed
+  in §7.1, and after a §4.4 migration, so one drop-in grants
+  `AF_BLUETOOTH`. Seen red under one mutation each, restored
+  byte-identical (sha256 checked): `install -b` restored on
+  `/etc/default/sloth` (2 failed); the gate dropped from
+  `bles_write_gated()` (8); a byte flipped between the build and the
+  gate in `bles_send()` (24); a second `send()` in `disable()` (1);
+  `hci_write()` calling `write()` (2); `NoNewPrivileges=` deleted from
+  the scan unit (2 failed, rc 2, the key named, not rc 139);
+  `DeviceAllow=/dev/mem rw` added (1); `Environment=LD_PRELOAD=…` added
+  (2). Measured, parent (8b938ff) to this tree: `make test` 35157 to
+  35681 (35585 with the two slice commits alone), `make web-test` 84650
+  to 84650, `make deploy-test` 401 to 409, each 0 failed.

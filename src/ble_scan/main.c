@@ -89,17 +89,22 @@ static int bt_socket(void) {
     return socket(AF_BLUETOOTH, SOCK_RAW | SOCK_CLOEXEC, BLES_BTPROTO_HCI);
 }
 
-/* Builds, gates and writes one command. The gate failing is a bug in
- * this file, so it is fatal, not a skip. */
+/* The helper's only write to the controller. It is reached only as the
+ * writer bles_send() calls after the gate, and must stay the one send()
+ * in this file: tests/test_ble_scan.c fails otherwise. */
+static ssize_t hci_write(void *ctx, const uint8_t *pkt, size_t len) {
+    return send(*(const int *)ctx, pkt, len, MSG_NOSIGNAL);
+}
+
+/* One command, built, gated and written by bles_send(). A refusal is a
+ * bug in the builder or the gate, so it is fatal, not a skip. */
 static int send_cmd(int fd, int c) {
-    uint8_t b[BLES_CMD_MAX];
-    size_t n = bles_build(c, b, sizeof(b));
-    if (n == 0 || !bles_cmd_allowed(b, n)) {
+    int r = bles_send(c, hci_write, &fd);
+    if (r == BLES_SEND_REFUSED) {
         fprintf(stderr, ME ": internal: command %d refused by the allow-list\n", c);
         abort();
     }
-    ssize_t w = send(fd, b, n, MSG_NOSIGNAL);
-    return w == (ssize_t)n ? 0 : -1;
+    return r == BLES_SEND_OK ? 0 : -1;
 }
 
 /* Reads events until the step function has an answer for the command

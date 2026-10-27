@@ -28,7 +28,7 @@ sensor runs, installed but never enabled by make.
 `src/secure_file.c`, `src/data_socket.c`, `src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2,
 `packaging/systemd/sloth-ble-scan.service`, `src/ble_scan/main.c`, `src/ble_scan/ble_scan_cmd.c`, `tests/test_ble_scan.c`.
 
-**Last updated**: 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
+**Last updated**: 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
 
 ---
 
@@ -79,12 +79,22 @@ depth on top of this, not a prerequisite for it.
 | `install` | `slothweb` (`make web` first, as yourself) | `/usr/local/bin/slothweb` | 0755 | what `slothweb.service` runs (§6); `install` refuses without it rather than relink it as root, and refuses one older than any file under `web/src`, `web/ui`, `web/tools`, `web/data`, the recipes page or the `Makefile`, so a pull followed by `make` alone does not install the old slothweb beside the new unit and UI |
 | `install-service` | `packaging/systemd/sloth-sensor.service` | `/etc/systemd/system/sloth-sensor.service` | 0644 | the unit below, with `/usr/local/` rewritten to `$(PREFIX)/` if you changed it |
 | `install-service` | `packaging/systemd/sloth.sysusers.conf` | `/usr/lib/sysusers.d/sloth.conf` | 0644 | declares the `sloth` account; `systemd-sysusers` creates it, make never does |
-| `install-service` | `packaging/default/sloth` | `/etc/default/sloth` | 0644, `install -b` | site settings; an existing copy is kept as `/etc/default/sloth~` |
+| `install-service` | `packaging/default/sloth` | `/etc/default/sloth` | 0644, only if absent | the site's `SLOTH_ARGS`; never replaced, so a later `make install-service` (§7.1) keeps the flags. A new default in `packaging/default/sloth` is merged by hand |
 | `install-service` | `packaging/systemd/slothweb.service` | `/etc/systemd/system/slothweb.service` | 0644 | §6, with `/usr/local/` rewritten as for the sensor's |
 | `install-service` | `packaging/default/slothweb` | `/etc/default/slothweb` | 0644, only if absent | slothweb's bind and allowed peers; never replaced, so it has no backup either |
 | `install` | `sloth-ble-scan` (built by `make` on Linux) | `/usr/local/sbin/sloth-ble-scan` | 0755 | the passive-scan helper `sloth-ble-scan.service` runs (§7); an operator tool like `sloth-monitor-up`, never started by sloth |
 | `install-service` | `packaging/systemd/sloth-ble-scan.service` | `/etc/systemd/system/sloth-ble-scan.service` | 0644 | §7, rewritten as for the others; installed, **not enabled** |
 | `install-service` | `packaging/systemd/sloth-sensor.service.d/bt-monitor.conf` | `/usr/local/share/sloth/sloth-sensor-bt-monitor.conf` | 0644 | the sensor's `AF_BLUETOOTH` for `--bt-monitor` (§7); placed **inert**, copied into `sloth-sensor.service.d/` only by the operator or by `sloth-migrate-sensor` for a unit with the flag |
+
+The units, the sysusers fragment and the inert drop-in are the shipped
+artefact and are replaced on every `make install-service`: a site's
+change to a unit belongs in a drop-in (`systemctl edit`), which make
+never touches. The two defaults files are the site's and are written
+only where there is none (`[ -e … ] || install`). `/etc/default/sloth`
+used to go in with `install -b`, which put the stock file over the
+site's and kept the edit only as `sloth~`: the next restart ran the
+sensor without its flags. `tests/test_unit_file.c` holds the guard and
+the absence of `install -b` on both lines.
 
 Both targets honour `DESTDIR`, so `make install install-service
 DESTDIR=/tmp/stage` lays the whole tree out under a scratch root for
@@ -730,6 +740,27 @@ date in front when it is not today's (#168).
 deleted by hand once the new one has filled; the old `data/` stays
 until you delete it, as §4 says.
 
+**The hand-made Bluetooth drop-in.** This host also has
+`/etc/systemd/system/sloth-sensor.service.d/10-bluetooth-monitor.conf`
+(`RestrictAddressFamilies=AF_BLUETOOTH`), made by hand and not from the
+repo. The migration replaces the unit but not its drop-in directory, so
+that file survives it. When the migrated `SLOTH_ARGS` carries
+`--bt-monitor` the tool writes `bt-monitor.conf` beside it, granting
+the same family; after an exit 0, remove the hand-made one so there is
+exactly one drop-in to undo:
+
+```sh
+sudo rm /etc/systemd/system/sloth-sensor.service.d/10-bluetooth-monitor.conf
+sudo systemctl daemon-reload      # the family is still granted: no restart needed
+systemctl show -p DropInPaths sloth-sensor.service    # bt-monitor.conf the only sloth-sensor.service.d/ file
+```
+
+Not before the migration: a rollback restores the old unit and removes
+`bt-monitor.conf`, and the old sensor's `--bt-monitor` needs the family
+from somewhere. Without `--bt-monitor` in the migrated arguments remove
+it all the same, and restart the sensor so the family is dropped. §7.1
+does this as one of its steps.
+
 ## 5. Verifying a deployment
 
 ```sh
@@ -919,6 +950,8 @@ the latter: the helper is stopped with SIGTERM and sends Scan Enable
 
 ```sh
 # Build as yourself, install as root (binary, helper, both new units).
+# install-service replaces the three units and leaves /etc/default/sloth
+# and /etc/default/slothweb as they are (only written where absent).
 make && make web
 sudo make install install-service
 sudo systemctl daemon-reload
@@ -934,11 +967,24 @@ sudo systemctl mask --now bluetooth.service
 #   SLOTH_ARGS=--site-label sloth-sensor --bt-monitor
 sudoedit /etc/default/sloth
 
+# Reference host only: it carries a hand-made drop-in,
+# sloth-sensor.service.d/10-bluetooth-monitor.conf
+# (RestrictAddressFamilies=AF_BLUETOOTH), that is not from the repo.
+# Remove it with this step, so bt-monitor.conf is the one drop-in that
+# grants the family and the one "Undoing it" below removes. -f: a host
+# without it has nothing to remove.
+sudo rm -f /etc/systemd/system/sloth-sensor.service.d/10-bluetooth-monitor.conf
+
 # AF_BLUETOOTH for the sensor, which --bt-monitor needs and nothing else
 # does (the shipped unit leaves it out on purpose, §7 above).
 sudo install -D -m 644 /usr/local/share/sloth/sloth-sensor-bt-monitor.conf \
     /etc/systemd/system/sloth-sensor.service.d/bt-monitor.conf
 sudo systemctl daemon-reload
+# Exactly one drop-in, and the family from it:
+systemctl show -p DropInPaths -p RestrictAddressFamilies sloth-sensor.service
+#   DropInPaths: bt-monitor.conf is the only sloth-sensor.service.d/ file
+#     (a distribution's own service.d/ drop-ins may be listed too)
+#   RestrictAddressFamilies: AF_UNIX AF_NETLINK AF_PACKET AF_BLUETOOTH, in any order
 
 # Enable the scan and restart the sensor; the sensor's start pulls the
 # scan in through WantedBy= (PartOf= only carries stops and restarts).
@@ -991,7 +1037,9 @@ capability sets exactly `CAP_NET_ADMIN`, no `/home/`, exactly the two
 last of a single-value key, so a second line would override the one
 read); `RestrictAddressFamilies` exactly `AF_BLUETOOTH`; exactly the two
 `SystemCallFilter=` lines and no empty reset; no `PrivateNetwork=` or
-`PrivateUsers=`; `Conflicts=bluetooth.service`; `After=` / `PartOf=` on
+`PrivateUsers=`; `[Service]` an allow-list of keys (a `DeviceAllow=` or
+any other key nobody refused by name is red), with one `Environment=`,
+`SLOTH_BLE_HCI=` and nothing else; `Conflicts=bluetooth.service`; `After=` / `PartOf=` on
 the sensor and an `[Install]` allow-list — `WantedBy=` naming only the
 sensor, no `RequiredBy=`, `UpheldBy=`, `Alias=` or `Also=` — and nothing
 in the sensor's unit depending on the scan. It checks the sensor's unit

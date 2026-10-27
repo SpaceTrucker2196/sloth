@@ -1292,11 +1292,16 @@ $(STAMPS): FORCE
 # `install-service` is separate because it writes outside $(PREFIX): the
 # unit, the sysusers fragment and the site defaults. The sloth account is
 # created by `systemd-sysusers`, never by make — a Makefile has no business
-# running useradd. The defaults file goes in with `install -b` so an edited
-# /etc/default/sloth survives as /etc/default/sloth~ rather than being
-# silently replaced. slothweb.service goes in beside it; its
-# /etc/default/slothweb only where there is none (no-clobber: it holds the
-# operator's bind and allowed peers, and has no backup to fall back on).
+# running useradd. The units and the sysusers fragment are the shipped
+# artefact and are replaced on every install: a site's changes to a unit
+# belong in a drop-in (`systemctl edit`), which make never touches. The
+# defaults files are the site's, not the artefact's, so each goes in only
+# where there is none (no-clobber): /etc/default/sloth holds SLOTH_ARGS,
+# /etc/default/slothweb the bind and allowed peers. `install -b` used to
+# put the shipped /etc/default/sloth over an edited one, keeping the edit
+# only as sloth~ — the next restart ran the sensor with the stock
+# arguments, which is a silent loss of the site's flags, not a backup.
+# A new default in packaging/default/ is the operator's to merge by hand.
 # sloth-ble-scan.service is installed like the other two units and is
 # never enabled here: it takes the controller away from bluetoothd, which
 # is the operator's decision (docs/wiki/deployment.md §7). It
@@ -1332,7 +1337,8 @@ install-service:
 	install -m 644 $(DESTDIR)$(UNITDIR)/sloth-sensor.service.tmp $(DESTDIR)$(UNITDIR)/sloth-sensor.service
 	rm -f $(DESTDIR)$(UNITDIR)/sloth-sensor.service.tmp
 	install -m 644 packaging/systemd/sloth.sysusers.conf $(DESTDIR)$(SYSUSERSDIR)/sloth.conf
-	install -b -m 644 packaging/default/sloth $(DESTDIR)$(DEFAULTDIR)/sloth
+	[ -e $(DESTDIR)$(DEFAULTDIR)/sloth ] || \
+	    install -m 644 packaging/default/sloth $(DESTDIR)$(DEFAULTDIR)/sloth
 	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/slothweb.service \
 	    > $(DESTDIR)$(UNITDIR)/slothweb.service.tmp
 	install -m 644 $(DESTDIR)$(UNITDIR)/slothweb.service.tmp $(DESTDIR)$(UNITDIR)/slothweb.service
@@ -1345,7 +1351,7 @@ install-service:
 	    $(DESTDIR)$(PREFIX)/share/sloth/sloth-sensor-bt-monitor.conf
 	[ -e $(DESTDIR)$(DEFAULTDIR)/slothweb ] || \
 	    install -m 644 packaging/default/slothweb $(DESTDIR)$(DEFAULTDIR)/slothweb
-	@echo "installed units, sysusers fragment and defaults; next:"
+	@echo "installed units and sysusers fragment; /etc/default/sloth{,web} only where absent; next:"
 	@echo "  systemd-sysusers && systemctl daemon-reload && systemctl enable --now sloth-sensor"
 	@echo "  systemctl enable --now slothweb   (reads /etc/default/slothweb; loopback by default)"
 	@echo "  sloth-ble-scan.service is installed, not enabled; --bt-monitor's AF_BLUETOOTH drop-in"

@@ -106,6 +106,19 @@ static const char *uf_value(char *lines[], int n, const char *key) {
     return NULL;
 }
 
+/* uf_value() for a key the caller then compares: never NULL. A missing
+ * key prints its name and yields a value no expected one equals, so
+ * ASSERT_STR() and strncmp() fail an assertion naming the key instead
+ * of handing strcmp() a NULL (which ended the whole suite with
+ * SIGSEGV). */
+#define UF_ABSENT "\x01(absent)"
+static const char *uf_req(char *lines[], int n, const char *key) {
+    const char *v = uf_value(lines, n, key);
+    if (v) return v;
+    fprintf(stderr, "    %s= absent\n", key);
+    return UF_ABSENT;
+}
+
 /* Number of directives with this key — a key given twice is how
  * SystemCallFilter accumulates, and how User= could be overridden. */
 static int uf_count(char *lines[], int n, const char *key) {
@@ -216,14 +229,14 @@ static void test_scanner_directive_lookup_is_exact(void) {
     ASSERT(!uf_is_directive("[Service]"));
     ASSERT(!uf_is_directive("# User=root in a comment"));
     ASSERT(uf_is_directive("User=sloth"));
-    ASSERT_STR(uf_value(lines, n, "User"), "sloth");
-    ASSERT_STR(uf_value(lines, n, "UserNS"), "no");
+    ASSERT_STR(uf_req(lines, n, "User"), "sloth");
+    ASSERT_STR(uf_req(lines, n, "UserNS"), "no");
     ASSERT(uf_value(lines, n, "Group") == NULL);
     /* The continuation joined into the one ExecStart systemd sees. */
-    ASSERT(strncmp(uf_value(lines, n, "ExecStart"), "/usr/local/bin/sloth", 20) == 0);
+    ASSERT(strncmp(uf_req(lines, n, "ExecStart"), "/usr/local/bin/sloth", 20) == 0);
     ASSERT(uf_has_token(uf_value(lines, n, "ExecStart"), "--db"));
     ASSERT(uf_has_token(uf_value(lines, n, "ExecStart"), "--headless"));
-    ASSERT(strncmp(uf_value(lines, n, "ExecStartPre"), "+/usr/local/sbin/", 17) == 0);
+    ASSERT(strncmp(uf_req(lines, n, "ExecStartPre"), "+/usr/local/sbin/", 17) == 0);
     ASSERT_EQ(uf_count(lines, n, "SystemCallFilter"), 2);
     ASSERT_EQ(uf_count(lines, n, "User"), 1);
 }
@@ -282,17 +295,17 @@ static void test_unit_runs_as_the_sloth_account(void) {
     /* The whole point of the slice. Given once, so a later User= cannot
      * quietly win. */
     ASSERT_EQ(uf_count(lines, n, "User"), 1);
-    ASSERT_STR(uf_value(lines, n, "User"), "sloth");
-    ASSERT_STR(uf_value(lines, n, "Group"), "sloth");
+    ASSERT_STR(uf_req(lines, n, "User"), "sloth");
+    ASSERT_STR(uf_req(lines, n, "Group"), "sloth");
     ASSERT(uf_value(lines, n, "DynamicUser") == NULL);
 
     /* State lives where systemd creates it for that account, not in a
      * checkout. */
-    ASSERT_STR(uf_value(lines, n, "StateDirectory"), "sloth");
-    ASSERT_STR(uf_value(lines, n, "StateDirectoryMode"), "0700");
-    ASSERT_STR(uf_value(lines, n, "RuntimeDirectory"), "sloth");
-    ASSERT_STR(uf_value(lines, n, "WorkingDirectory"), "/var/lib/sloth");
-    ASSERT_STR(uf_value(lines, n, "UMask"), "0077");
+    ASSERT_STR(uf_req(lines, n, "StateDirectory"), "sloth");
+    ASSERT_STR(uf_req(lines, n, "StateDirectoryMode"), "0700");
+    ASSERT_STR(uf_req(lines, n, "RuntimeDirectory"), "sloth");
+    ASSERT_STR(uf_req(lines, n, "WorkingDirectory"), "/var/lib/sloth");
+    ASSERT_STR(uf_req(lines, n, "UMask"), "0077");
     free(buf);
 }
 
@@ -362,7 +375,7 @@ static void test_unit_capabilities_are_exactly_the_two(void) {
     ASSERT(uf_has_token(amb, "CAP_NET_ADMIN"));
     ASSERT(uf_has_token(bound, "CAP_NET_RAW"));
     ASSERT(uf_has_token(bound, "CAP_NET_ADMIN"));
-    ASSERT_STR(uf_value(lines, n, "NoNewPrivileges"), "true");
+    ASSERT_STR(uf_req(lines, n, "NoNewPrivileges"), "true");
     free(buf);
 }
 
@@ -656,9 +669,9 @@ static void test_web_unit_runs_as_sloth_with_no_capabilities(void) {
     ASSERT_LT(n, UF_MAX_LINES);
 
     ASSERT_EQ(uf_count(lines, n, "User"), 1);
-    ASSERT_STR(uf_value(lines, n, "User"), "sloth");
+    ASSERT_STR(uf_req(lines, n, "User"), "sloth");
     ASSERT_EQ(uf_count(lines, n, "Group"), 1);
-    ASSERT_STR(uf_value(lines, n, "Group"), "sloth");
+    ASSERT_STR(uf_req(lines, n, "Group"), "sloth");
     ASSERT(uf_value(lines, n, "DynamicUser") == NULL);
 
     /* Present and empty: an absent CapabilityBoundingSet= is the full
@@ -673,7 +686,7 @@ static void test_web_unit_runs_as_sloth_with_no_capabilities(void) {
     ASSERT(amb != NULL && amb[0] == '\0');
     ASSERT_EQ(uf_count(lines, n, "CapabilityBoundingSet"), 1);
     ASSERT_EQ(uf_count(lines, n, "AmbientCapabilities"), 1);
-    ASSERT_STR(uf_value(lines, n, "NoNewPrivileges"), "true");
+    ASSERT_STR(uf_req(lines, n, "NoNewPrivileges"), "true");
     free(buf);
 }
 
@@ -952,7 +965,7 @@ static void test_ble_scan_unit_privilege(void) {
 
     /* A transient uid, not the sloth account that owns the sensor's
      * data. Given once; no User= that could name a real account. */
-    ASSERT_STR(uf_value(lines, n, "DynamicUser"), "yes");
+    ASSERT_STR(uf_req(lines, n, "DynamicUser"), "yes");
     ASSERT_EQ(uf_count(lines, n, "DynamicUser"), 1);
     ASSERT(uf_value(lines, n, "User") == NULL);
 
@@ -971,7 +984,7 @@ static void test_ble_scan_unit_privilege(void) {
     ASSERT(uf_has_token(amb, "CAP_NET_ADMIN"));
     ASSERT_EQ(uf_count(lines, n, "CapabilityBoundingSet"), 1);
     ASSERT_EQ(uf_count(lines, n, "AmbientCapabilities"), 1);
-    ASSERT_STR(uf_value(lines, n, "NoNewPrivileges"), "true");
+    ASSERT_STR(uf_req(lines, n, "NoNewPrivileges"), "true");
     /* Single-value keys: systemd applies the last assignment, so a
      * second line would override the first one this reads. */
     ASSERT_EQ(uf_count(lines, n, "NoNewPrivileges"), 1);
@@ -1092,6 +1105,63 @@ static void test_ble_scan_unit_sandbox(void) {
     ASSERT(deny_seen);
     ASSERT(!empty);
     ASSERT_EQ(uf_count(lines, n, "SystemCallFilter"), 2);
+    free(buf);
+}
+
+/* [Service] is an allow-list, like [Install]: the checks above pin the
+ * keys they know, and a key nobody thought to refuse — `DeviceAllow=
+ * /dev/mem rw`, `LD_PRELOAD` through Environment=, a `BindPaths=` this
+ * test does not list — would otherwise pass every one of them. A new
+ * key is added here deliberately, with the reason it is safe. */
+static void test_ble_scan_unit_service_keys_are_allow_listed(void) {
+    char *buf = uf_slurp(UF_PATH_BLE_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    static const char *const keys[] = {
+        "Type", "DynamicUser", "Environment", "ExecStartPre", "ExecStart",
+        "AmbientCapabilities", "CapabilityBoundingSet", "NoNewPrivileges",
+        "ProtectSystem", "ProtectHome", "PrivateTmp", "PrivateDevices",
+        "ProtectKernelTunables", "ProtectKernelModules", "ProtectKernelLogs",
+        "ProtectControlGroups", "ProtectClock", "ProtectHostname",
+        "ProtectProc", "ProcSubset", "UMask", "RestrictAddressFamilies",
+        "IPAddressDeny", "RestrictNamespaces", "RestrictRealtime",
+        "RestrictSUIDSGID", "LockPersonality", "MemoryDenyWriteExecute",
+        "SystemCallArchitectures", "SystemCallFilter",
+        "SystemCallErrorNumber", "MemoryMax", "TasksMax", "KillSignal",
+        "TimeoutStopSec", "Restart", "RestartSec", "RestartPreventExitStatus"
+    };
+    int in_service = 0, seen = 0, unknown = 0, env = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (*l == '[') { in_service = strncmp(l, "[Service]", 9) == 0; continue; }
+        if (!in_service || !uf_is_directive(l)) continue;
+        seen++;
+        size_t k = (size_t)(strchr(l, '=') - l);
+        int ok = 0;
+        for (size_t j = 0; j < sizeof(keys) / sizeof(keys[0]); j++)
+            if (strlen(keys[j]) == k && strncmp(l, keys[j], k) == 0) ok = 1;
+        if (!ok) {
+            fprintf(stderr, "    ble-scan unit: [Service] key not allowed: %s\n", l);
+            unknown++;
+        }
+        /* The one variable is the controller's name. Anything else in
+         * the helper's environment (LD_PRELOAD, LD_LIBRARY_PATH) runs
+         * code inside the CAP_NET_ADMIN process before main(). */
+        if (strncmp(l, "Environment=", 12) == 0) {
+            env++;
+            const char *v = l + 12;
+            if (strncmp(v, "SLOTH_BLE_HCI=", 14) != 0 || strchr(v, ' ') || strchr(v, '\t')) {
+                fprintf(stderr, "    ble-scan unit: %s\n", l);
+                unknown++;
+            }
+        }
+    }
+    ASSERT_GT(seen, 0);
+    ASSERT_EQ(unknown, 0);
+    ASSERT_EQ(env, 1);
     free(buf);
 }
 
@@ -1244,7 +1314,7 @@ static void test_makefile_install_targets(void) {
     int in_install = 0, in_service = 0;
     int inst_bin = 0, inst_helper = 0, inst_db = 0, inst_web = 0;
     int inst_web_fresh = 0;
-    int svc_unit = 0, svc_sysusers = 0, svc_defaults_b = 0;
+    int svc_unit = 0, svc_sysusers = 0, svc_defaults_nc = 0, svc_defaults_b = 0;
     int svc_web_unit = 0, svc_web_defaults_nc = 0, svc_web_defaults_b = 0;
     int recipes_seen = 0;
     for (int i = 0; i < n; i++) {
@@ -1278,7 +1348,14 @@ static void test_makefile_install_targets(void) {
         if (in_service) {
             if (strstr(l, "sloth-sensor.service")) svc_unit = 1;
             if (strstr(l, "sloth.sysusers.conf")) svc_sysusers = 1;
-            if (strstr(l, "install -b") && strstr(l, "packaging/default/sloth ")) svc_defaults_b = 1;
+            /* No-clobber, like slothweb's below: /etc/default/sloth is
+             * the site's SLOTH_ARGS, and `install -b` replaced it with
+             * the stock file (the edit survived only as sloth~). */
+            if (strstr(l, "packaging/default/sloth ")) {
+                if (strstr(l, "[ -e $(DESTDIR)$(DEFAULTDIR)/sloth ] ||"))
+                    svc_defaults_nc = 1;
+                if (strstr(l, "install -b")) svc_defaults_b = 1;
+            }
             if (strstr(l, "packaging/systemd/slothweb.service")) svc_web_unit = 1;
             /* No-clobber: installed only behind a test that none is
              * there, and never with a backup that would let make
@@ -1297,11 +1374,12 @@ static void test_makefile_install_targets(void) {
     ASSERT(inst_db);
     ASSERT(inst_web);
     ASSERT(inst_web_fresh);
-    /* `install-service`: the unit, the account declaration, and the
-     * defaults file installed with a backup, never over an edit. */
+    /* `install-service`: the unit, the account declaration, and each
+     * defaults file only where there is none, never over an edit. */
     ASSERT(svc_unit);
     ASSERT(svc_sysusers);
-    ASSERT(svc_defaults_b);
+    ASSERT(svc_defaults_nc);
+    ASSERT(!svc_defaults_b);
     ASSERT(svc_web_unit);
     ASSERT(svc_web_defaults_nc);
     ASSERT(!svc_web_defaults_b);
@@ -1332,6 +1410,7 @@ void run_unit_file_tests(void) {
     RUN_TEST(test_sensor_bt_monitor_dropin);
     RUN_TEST(test_ble_scan_unit_privilege);
     RUN_TEST(test_ble_scan_unit_sandbox);
+    RUN_TEST(test_ble_scan_unit_service_keys_are_allow_listed);
     RUN_TEST(test_ble_scan_unit_relationships);
     RUN_TEST(test_makefile_installs_ble_scan_without_enabling);
 }
