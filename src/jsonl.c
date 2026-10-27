@@ -2174,10 +2174,17 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * the raw count would sign a new line on every one of them. -1
          * without --pcap-dir. */
         int      pcap_swept_band, pcap_sweep_err_band;
+        /* What the IP stream is: its pcap link type while it is open
+         * (-1 otherwise) and --monitor-only. Both discrete and set at
+         * start; a change is a reopen, which is news. */
+        int      cap_linktype, monitor_only;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
     sig.cap_run     = s->cap_health.running;
+    const int cap_linktype = s->cap_health.open ? s->pkt_linktype : -1;
+    sig.cap_linktype = cap_linktype;
+    sig.monitor_only = s->monitor_only != 0;
     sig.cap_exit    = s->cap_health.exit_reason;
     sig.mon_open    = s->mon_health.open;
     sig.mon_run     = s->mon_health.running;
@@ -2292,6 +2299,13 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     char buf[LINEBUF]; int off = 0;
     start_obj(buf, LINEBUF, &off, "sensor_health", now);
     kv_str(buf, LINEBUF, &off, "capture_iface",        s->pkt_iface);
+    /* The IP stream's pcap DLT (1 Ethernet, 113/276 Linux cooked, 127
+     * radiotap: IP decoded from 802.11 data frames heard on the air,
+     * #72), -1 while it is not open; and --monitor-only, the monitor
+     * radio on its allow-list. Raw facts: a consumer (slothweb's
+     * capture scope) decides what counts as heard off the air. */
+    kv_int(buf, LINEBUF, &off, "capture_linktype",     cap_linktype);
+    kv_int(buf, LINEBUF, &off, "monitor_only",         s->monitor_only ? 1 : 0);
     kv_str(buf, LINEBUF, &off, "monitor_iface",        s->probe_iface);
     kv_str(buf, LINEBUF, &off, "monitor_err",          s->probe_err);
     /* #92: frames whose capture timestamp was <= 0. Nothing is

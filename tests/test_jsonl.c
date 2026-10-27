@@ -1169,6 +1169,38 @@ static void test_emit_sensor_health_on_empty_state(void) {
     ASSERT(contains(body, "\"capture_exit\":\"none\""));
 }
 
+/* What the IP stream is, for a consumer telling IP heard off the air
+ * from the host's own (slothweb's capture scope): its link type while
+ * open, -1 while not, and --monitor-only. Raw facts. Discrete and set
+ * at open, so a second identical tick writes nothing. Seen to fail with
+ * the open test dropped (the closed capture reported its stale DLT) and
+ * with cap_linktype left out of the signature (the radiotap reopen
+ * wrote no line). */
+static void test_emit_sensor_health_reports_the_ip_stream_link_type(void) {
+    open_fresh();
+    sloth_state_t s; seed_health(&s);
+    s.pkt_linktype = 1;
+    jsonl_emit_sensor_health(&s);
+    jsonl_emit_sensor_health(&s);                 /* unchanged: suppressed */
+    s.pkt_linktype = 127;                          /* reopened on a radio: */
+    jsonl_emit_sensor_health(&s);                 /* the DLT alone is news */
+    s.monitor_only = 1;
+    jsonl_emit_sensor_health(&s);
+    s.cap_health.open = 0;
+    s.cap_health.running = 0;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT_EQ(count_lines(body), 4);
+    ASSERT(contains(body, "\"capture_iface\":\"any\",\"capture_linktype\":1,"
+                          "\"monitor_only\":0,"));
+    ASSERT(contains(body, "\"capture_linktype\":127,\"monitor_only\":0,"));
+    ASSERT(contains(body, "\"capture_linktype\":127,\"monitor_only\":1,"));
+    ASSERT(contains(body, "\"capture_linktype\":-1,\"monitor_only\":1,"));
+}
+
 static void test_emit_sensor_health_reports_pcap_dir_headroom(void) {
     /* #96. With no --pcap-dir configured both fields must be -1, which
        is "not measured" and not "zero left" — reporting 0 free would
@@ -2809,6 +2841,7 @@ void run_jsonl_tests(void) {
 
     TEST_SUITE("jsonl sensor_health record (#91 slice 3)");
     RUN_TEST(test_emit_sensor_health_on_empty_state);
+    RUN_TEST(test_emit_sensor_health_reports_the_ip_stream_link_type);
     RUN_TEST(test_emit_sensor_health_reports_pcap_dir_headroom);
     RUN_TEST(test_emit_sensor_health_measures_a_configured_pcap_dir);
     RUN_TEST(test_emit_sensor_health_omits_sweep_without_pcap_dir);

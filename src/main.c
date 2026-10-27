@@ -1335,6 +1335,8 @@ int main(int argc, char **argv) {
     /* probe_iface is set synchronously by probe_open(). */
     if (monitor_only && g_state.probe_iface[0])
         iface_allow_add(&g_state, g_state.probe_iface);
+    /* Reported in sensor_health beside the IP stream's link type. */
+    g_state.monitor_only = monitor_only && g_state.probe_iface[0];
     {
         /* #57 tests the datalink end state, not the routes to it (an
          * older libpcap refusing SLL2, the open_live fallback, ...).

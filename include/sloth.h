@@ -3218,6 +3218,11 @@ typedef struct {
     int  pkt_linktype;         /* pcap DLT link type (set by capture_start) */
     char pkt_export_msg[80];   /* last pcap export result shown in status */
     char pkt_iface[32];        /* pcap capture interface, "" if none */
+    int  monitor_only;         /* --monitor-only (#35): the monitor radio is on
+                                  the IP stream's allow-list; sensor_health
+                                  says so, with pkt_linktype, so a consumer
+                                  can tell IP heard off the air (slothweb's
+                                  capture scope) */
 
     int           proc_sel;    /* selected row in procs view */
     int           proc_detail; /* non-zero = detail panel open */
