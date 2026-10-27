@@ -2396,11 +2396,11 @@ and forgets the kept ones, so it does show all.
 
 | Setting | Kept as | Notes |
 |---|---|---|
-| the view | `view` | a tab's view only (Overview to Lookup, Alerts); an alert's page, the records and the health need the link they came from |
+| the view | `view` | a tab's view only (Overview to Lookup, Alerts), however it was reached, a link included (the link's filters and scope are not kept); an alert's page, the records and the health need the link they came from |
 | theme | `theme` | applied before the first paint, as before |
 | capture scope | `scope` | a pick in the switch (click or arrows); an address's scope wins for that view and is not kept |
 | sensitivity | `sens` | 1.5 to 4 sd, checked as read |
-| each table's column widths and sort | `table.<id>` | every table, by the one `DataTable()`: a width for a column the table no longer has is ignored and dropped at the next save (the SQL box's one `sql` id keeps only the current result's), one under the column's floor (or over 4000 px) drawn at it, a sort on a column that is gone or no longer sorts left off |
+| each table's column widths and sort | `table.<id>` | every table, by the one `DataTable()`: a width for a column the table no longer has is ignored and dropped at the next save (the SQL box's one `sql` id keeps only the current result's), one under the column's floor drawn at it, one over 4000 px (no drag makes one) ignored, a sort on a column that is gone or no longer sorts left off |
 | the ticker's pause | `paused` | it opens paused and says so |
 | the hidden view list and footer (`[`) | `collapsed` | |
 | Anomalies: kind chip, cards or table | `anom.kind`, `anom.table` | the chip narrows the Anomalies list only: the Overview's open top five and the open-anomalies tile's drill-down are every kind |
@@ -2409,7 +2409,7 @@ and forgets the kept ones, so it does show all.
 | Devices: search, sort | `ctl.d-q`, `ctl.d-sort` | |
 | Lookup: the query box | `ctl.l-q` | kept, not run |
 | WiFi: cells, window, AP sort | `ctl.w-metric`, `ctl.w-win`, `ctl.w-sort` | |
-| Alerts: state, severity, type, search, window | `ctl.al-*` | the type put back once the server's list of types is in |
+| Alerts: state, severity, type, search, window | `ctl.al-*` | the type put back once the server's list of types is in; a kept type the server answers `bad_type` for (renamed, corrupt) is dropped and the list reloaded without it |
 | Flows: protocol tab, window, sort, address | `flows.proto`, `ctl.f-win`, `ctl.f-sort`, `ctl.f-ip` | an address picked from a row or the chord is kept as if typed |
 | the SQL box's text | `ctl.q-sql` | the draft; the first recipe no longer replaces it |
 
@@ -2489,7 +2489,8 @@ and the SQL box's result) is one implementation,
   the SQL box's widths by column name, so one query's widths reach only
   the same-named column of the next), read and written inside a `try`:
   a private window or blocked storage just means the defaults. A kept
-  width is drawn within the column's floor and 4000 px; a kept sort
+  width under the column's floor is drawn at it, one over 4000 px is
+  ignored as corrupt; a kept sort
   whose column is gone, or no longer sorts, is left off. Each table's
   `reset columns` forgets its widths and its sort.
 - **Narrow windows.** A table is at least its columns' width and sits

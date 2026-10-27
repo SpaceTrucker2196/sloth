@@ -606,9 +606,11 @@
     };
     // The width the user set, within the column's floor and 4000 px,
     // or null.
+    // A kept width under the floor is raised to it; one past 4000 px,
+    // which no drag can make, is corrupt and ignored (the default).
     t.set = function (c) {
-      if (!own.call(t.w, c.k) || !num(t.w[c.k])) return null;
-      return Math.max(t.min(c), Math.min(4000, Math.round(t.w[c.k])));
+      if (!own.call(t.w, c.k) || !num(t.w[c.k]) || t.w[c.k] > 4000) return null;
+      return Math.max(t.min(c), Math.round(t.w[c.k]));
     };
     // The column's own width: the user's, or its default, at least its
     // minimum.
@@ -4057,6 +4059,10 @@
     $("al-win").value = named ? ctlDefault("al-win") : ctlKept("al-win", ctlDefault("al-win"));
     var kt = prefGet("ctl.al-type");
     ALP.wantType = typeof VP.type === "string" ? VP.type : !named && typeof kt === "string" ? kt : "";
+    // A kept type is a hint until the server has taken it: one it does
+    // not know (a type since renamed, a corrupt value) is dropped, not
+    // sent on every launch for a bad_type answer.
+    ALP.typeKept = typeof VP.type !== "string" && ALP.wantType !== "";
     if (named && typeof VP.type !== "string") $("al-type").value = "";
     // The drill-down as the address asked it, to tell when the controls
     // have left it; a kept type is the viewer's filter, not a drill-down.
@@ -4175,6 +4181,7 @@
     if (ALP.wantType) typeOptions([]);
     getJSON("/api/alerts?" + alertsQuery(ALP.offset)).then(function (j) {
       if (gen !== ALP.gen) return;
+      ALP.typeKept = false;
       if (fresh) ALP.rows = [];
       ALP.rows = ALP.rows.concat(j.rows || []);
       ALP.more = !!j.more;
@@ -4194,6 +4201,14 @@
               (num(sc.oldest) ? stamp(sc.oldest) : "?") + ": narrow the window or the filters to reach older ones" : "") : ""));
     }).catch(function (e) {
       if (gen !== ALP.gen) return;
+      if (ALP.typeKept && e.message === "bad_type") {
+        ALP.typeKept = false;
+        prefSet("ctl.al-type", null);
+        ALP.wantType = "";
+        $("al-type").value = "";
+        alertsLoad(true);
+        return;
+      }
       set("al-count", "");
       set("al-note", errText(e.message));
     });

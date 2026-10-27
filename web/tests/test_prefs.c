@@ -95,10 +95,12 @@ static void test_tables_keep_widths_and_sort(void) {
     WT_HAS(p, "if (typeof v.sort === \"string\" && (v.dir === 1 || v.dir === -1)) { out.key = v.sort; out.dir = v.dir; }");
     WT_HAS(p, "    prefSet(\"table.\" + t.o.id, Object.keys(v).length ? v : null);");
     WT_HAS(p, "    var kept = dtLoad(o.id);");
-    /* A kept width clamped to the column's floor and 4000 px; a width
-     * for a column the table no longer has is never asked for. */
-    WT_HAS(p, "      if (!own.call(t.w, c.k) || !num(t.w[c.k])) return null;\n"
-              "      return Math.max(t.min(c), Math.min(4000, Math.round(t.w[c.k])));");
+    /* A kept width raised to the column's floor; one past 4000 px,
+     * which no drag makes, ignored as corrupt rather than drawn 4000 px
+     * wide (seen red with the > 4000 test removed); a width for a column
+     * the table no longer has is never asked for. */
+    WT_HAS(p, "      if (!own.call(t.w, c.k) || !num(t.w[c.k]) || t.w[c.k] > 4000) return null;\n"
+              "      return Math.max(t.min(c), Math.round(t.w[c.k]));");
     /* A kept sort only on a column that is there and sorts. */
     WT_HAS(p, "    var kc = kept.key ? t.col(kept.key) : null;\n"
               "    if (kc && t.sortable(kc)) { t.key = kept.key; t.dir = kept.dir; }");
@@ -427,6 +429,13 @@ static void test_what_is_written_and_cleared(void) {
     WT_HAS(p, "        if (k && k.indexOf(PREF) === 0) ks.push(k);");
     WT_LACKS(p, "k.indexOf(PREF) !== 0");
     WT_LACKS(p, "if (k && k.indexOf(\"slothweb.\") === 0)");
+    /* A kept alert type the server does not know is dropped and the list
+     * asked again without it, once; a type the address names is shown
+     * refused as before. Seen red with the drop removed. */
+    WT_HAS(p, "    ALP.typeKept = typeof VP.type !== \"string\" && ALP.wantType !== \"\";");
+    WT_HAS(p, "      if (ALP.typeKept && e.message === \"bad_type\") {\n"
+              "        ALP.typeKept = false;\n"
+              "        prefSet(\"ctl.al-type\", null);");
 }
 
 void run_prefs_tests(void) {
