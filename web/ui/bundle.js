@@ -12,6 +12,12 @@
 // agreed with the slices that share these views.
 // Every node is built with createElement and textContent: the bundle is
 // data, never markup. No setting is kept: there is nothing to keep.
+// The clipboard wants the write inside the click: Firefox's execCommand
+// and Safari's writeText refuse one made after an awaited fetch. So the
+// bundle is fetched when the pointer or focus reaches the button, and a
+// click that finds it ready copies at once; one that does not hands
+// ClipboardItem the fetch as a promise where it exists, and otherwise
+// fetches and asks for a second click.
 window.SlothBundle = (function () {
   "use strict";
 
@@ -107,20 +113,57 @@ window.SlothBundle = (function () {
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
   }
 
-  // The bundle for st, fetched once per id and kept on the control.
-  function load(st) {
-    if (st.text !== null) return Promise.resolve(st);
+  // A fetched bundle is copied as is for this long, then fetched again:
+  // the views re-render live, and a copy is of the view now.
+  var FRESH_MS = 10000;
+
+  // The control's request now: kind, id and the scope in effect, so a
+  // scope switch on the same id is a different bundle.
+  function pathOf(st) {
     var path = "/api/bundle?kind=" + encodeURIComponent(st.kind) + "&id=" + encodeURIComponent(st.id);
     if (typeof st.scoped === "function") path = st.scoped(path);
-    return fetchBundle(path).then(function (j) {
+    return path;
+  }
+
+  // The kept text when it answers the control's request now and is
+  // fresh, else null.
+  function ready(st) {
+    return st.text !== null && st.path === pathOf(st) && Date.now() - st.at < FRESH_MS
+      ? st.text : null;
+  }
+
+  // The bundle for the control's request now: the kept one while ready,
+  // the one in flight for the same request, or a new fetch. An answer
+  // for a request the control has moved past is refused ("stale").
+  function load(st) {
+    if (ready(st) !== null) return Promise.resolve(st);
+    var path = pathOf(st);
+    if (st.pending && st.pendingPath === path) return st.pending;
+    st.pendingPath = path;
+    st.pending = fetchBundle(path).then(function (j) {
+      if (st.pendingPath === path) st.pending = null;
+      if (pathOf(st) !== path) throw new Error("stale");
       if (!j.page || typeof j.page !== "object") j.page = {};
       j.page.url = location.href;
       j.page.view = viewWord();
       // Indented: a person and Claude read it; size is not the constraint.
       st.text = JSON.stringify(j, null, 1);
+      st.path = path;
+      st.at = Date.now();
       st.ts = j.generated_at && typeof j.generated_at.unix === "number" ? j.generated_at.unix : 0;
       return st;
+    }, function (e) {
+      if (st.pendingPath === path) st.pending = null;
+      throw e;
     });
+    return st.pending;
+  }
+
+  // ClipboardItem with a promised body keeps the click's activation
+  // across the fetch (Safari, Chromium); a secure context only.
+  function canClipItem() {
+    return typeof window.ClipboardItem === "function" && navigator.clipboard &&
+      typeof navigator.clipboard.write === "function";
   }
 
   var SLOT = { device: "drawer", alert: "alert", lookup: "lookup" };
@@ -132,13 +175,15 @@ window.SlothBundle = (function () {
       if (host.children[i].className === "bundle") { box = host.children[i]; break; }
     var st;
     if (box && box.bundleState) {
+      // A mount is the view drawn again: nothing kept is reused.
       st = box.bundleState;
-      if (st.kind !== kind || st.id !== id) { st.text = null; st.ts = 0; }
       st.kind = kind; st.id = id; st.scoped = scoped;
+      st.text = null; st.path = ""; st.at = 0; st.ts = 0;
       st.note.textContent = "";
       return;
     }
-    st = { kind: kind, id: id, scoped: scoped, text: null, ts: 0, note: null, busy: false };
+    st = { kind: kind, id: id, scoped: scoped, text: null, path: "", at: 0, ts: 0,
+           pending: null, pendingPath: "", note: null, busy: false };
     box = el("span", "bundle");
     var copy = el("button", "", "copy JSON");
     copy.type = "button";
@@ -155,34 +200,66 @@ window.SlothBundle = (function () {
 
     function fail(e) {
       st.busy = false;
-      st.note.textContent = errText(e && e.message ? e.message : String(e));
+      var m = e && e.message ? e.message : String(e);
+      st.note.textContent = m === "stale" ? "" : errText(m);
     }
+    function copied(text, ok) {
+      st.busy = false;
+      if (ok) {
+        st.note.textContent = "copied (" + kb(text) + " KB)";
+      } else {
+        st.note.textContent = "copy failed, download instead";
+        dl.focus();
+      }
+    }
+    // Fetched ahead, so the click finds it ready; an error waits for
+    // the click to say it.
+    function prefetch() {
+      if (!st.busy && ready(st) === null) load(st).catch(function () {});
+    }
+    copy.addEventListener("pointerenter", prefetch);
+    copy.addEventListener("focus", prefetch);
     copy.addEventListener("click", function () {
+      var text = ready(st);
+      if (text !== null) {
+        // Still inside the click: the clipboard call is made now.
+        copyText(text).then(function (ok) { copied(text, ok); });
+        return;
+      }
       if (st.busy) return;
       st.busy = true;
       st.note.textContent = "fetching";
-      var mine = st.id;
-      load(st).then(function () {
-        if (st.id !== mine) { st.busy = false; return; }
-        return copyText(st.text).then(function (ok) {
-          st.busy = false;
-          if (ok) {
-            st.note.textContent = "copied (" + kb(st.text) + " KB)";
-          } else {
-            st.note.textContent = "copy failed, download instead";
-            dl.focus();
-          }
+      var mine = pathOf(st);
+      if (canClipItem()) {
+        var body = load(st).then(function (s) {
+          if (pathOf(s) !== mine) throw new Error("stale");
+          return new Blob([s.text], { type: "text/plain" });
         });
+        navigator.clipboard.write([new window.ClipboardItem({ "text/plain": body })]).then(function () {
+          copied(st.text, true);
+        }, function () {
+          body.then(function () {
+            st.busy = false;
+            st.note.textContent = "ready: click copy again";
+          }, fail);
+        });
+        return;
+      }
+      load(st).then(function () {
+        st.busy = false;
+        if (pathOf(st) !== mine) return;
+        st.note.textContent = "ready: click copy again";
+        copy.focus();
       }).catch(fail);
     });
     dl.addEventListener("click", function () {
       if (st.busy) return;
       st.busy = true;
       st.note.textContent = "fetching";
-      var mine = st.id;
+      var mine = pathOf(st);
       load(st).then(function () {
         st.busy = false;
-        if (st.id !== mine) return;
+        if (pathOf(st) !== mine) return;
         download(st.text, fileName(st.kind, st.id, st.ts));
         st.note.textContent = "downloaded (" + kb(st.text) + " KB)";
       }).catch(fail);

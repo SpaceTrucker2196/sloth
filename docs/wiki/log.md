@@ -5685,6 +5685,14 @@ report events.
   the limits; `web/ui/bundle.js` copies it (clipboard, or a hidden
   textarea and `execCommand` on plain http) and offers it as a
   download. The body is the route's own heap buffer, 512 KB at most.
+- 2026-10-27 — [[slothweb]]: copy JSON review fixes. The records
+  sections follow the scope (Monitor's device lines carry no address or
+  name) and match whole addresses; `sensor` counts are the scope's; no
+  host name in `server`; the glossary's `risk` is sloth's 0..3 level;
+  nested reads report `no_data` / `too_large` / `read_error` in their
+  own words; the markers are reserved under the cap; the page fetches
+  ahead so the clipboard write stays inside the click, keys what it
+  keeps on the scoped request and expires it.
 - 2026-11-01 — [[wiki-maintenance]]: `wiki_sync.sh` flattens a
   `docs/wiki/<dir>/` subdirectory onto the flat GitHub wiki
   (`<dir>-<page>`, `<dir>/README.md` as `<dir>`), rewriting the links

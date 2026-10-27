@@ -2694,24 +2694,34 @@ Around the splices:
 
 - **envelope**: `bundle_schema` (semver; fields only added within a
   major), `kind`, `id`, `generated_at` (`iso`, `unix`), `server`
-  (time zone and UTC offset, host, sloth's version, the page's ETag,
-  uptime), `sensor` (the socket, sensor health and its age, the capture
-  and monitor handles, sloth's launch scope, records/s, the open alerts
-  by severity), `sloth_db` (as `/api/health`), `scope_in_effect` with a
+  (time zone and UTC offset, slothweb's version, the page's ETag,
+  uptime; no host name: no page shows it, and a bundle is made to be
+  pasted into someone else's service), `sensor` (the socket, sensor
+  health and its age, the capture and monitor handles, sloth's launch
+  scope, and records/s, the device count and the open alerts by
+  severity under the scope in effect, as `/api/live` counts them),
+  `sloth_db` (as `/api/health`), `scope_in_effect` with a
   sentence saying what it excludes, `page` (`url` and `view`, filled
   by the browser before copying; the server never echoes an address),
   and `withheld`, naming what was left out and why.
 - **optional sections**, one registry row each in `web_bundle.c`:
   `records_recent` / `records_around` (the ticker ring's newest 50
-  records that name the device or address: a stopgap, said so),
+  records that name the device or address: a stopgap, said so; only
+  the records the scope in effect holds, each line as the page's ticker
+  shows it under that scope, a device row's under Monitor without its
+  address or name; matched on whole addresses, so `10.0.0.1` is not
+  named by a record of `10.0.0.12`),
   `observed_vs_thresholds`, `records_by_type_global`, and for the
   slices still in flight `vendor_research`, `frrs`, `comint_report`,
   `triage`, `assessment`, `evidence`, `location`, `signal_history`,
   `distance`. A section without data is
   `{"available": false, "reason": ...}`, the reason one of `not_built`
   (this build has no such feature), `no_data`, `too_large`,
-  `withheld`, `budget`, `no_sloth_db`, `not_kept` (the stream carries
-  it, slothweb does not keep it). A slice adds its row and a fill
+  `withheld`, `budget` (a sloth.db read timed out), `no_sloth_db`,
+  `not_kept` (the stream carries it, slothweb does not keep it),
+  `read_error` (a read failed). A nested drawer or card that did not
+  answer says which in its route's own words: a 400 or 404 is
+  `no_data`, a body over the route's cap `too_large`. A slice adds its row and a fill
   function; the page needs no change.
 - **analysis aids**: `glossary` (every field and unit), `prompt` (a
   suggested prompt that tells the reader the sensor is passive and one
@@ -2724,6 +2734,9 @@ envelope, the primary splice and the aids are required; the optional
 sections are measured against what is left and rolled back to
 `too_large`, named in `limits.truncated_sections`, when they would
 cross it; a required part that cannot fit is `413 bundle_too_large`.
+The room held back for the required part counts every optional row's
+name and its longest marker, so a cap the required part fits never
+overflows on the markers.
 Each sloth.db read keeps its own 250 ms budget, at most three serial
 reads a bundle. A `scope=` rides along as on every route.
 
@@ -2735,7 +2748,17 @@ call per view; the copy buttons are `#bundle-btn-drawer`,
 https) and otherwise, on plain http over a tunnel or Tailscale where
 `navigator.clipboard` does not exist, through a selected hidden
 `<textarea>` and `document.execCommand("copy")`; when both fail it says
-so and focuses the download. The download is a Blob URL of the
+so and focuses the download. A browser takes the clipboard write only
+inside the click (Firefox's `execCommand`, Safari's `writeText`), not
+after an awaited fetch, so the bundle is fetched when the pointer or
+focus reaches the button and a click that finds it ready copies at
+once; one that does not hands `ClipboardItem` the fetch as a promise
+where it exists (a secure context), and otherwise fetches and says
+"ready: click copy again". What is kept is keyed on the scoped request
+(a scope switch on the same id fetches again), expires after 10 s, and
+is dropped whenever the view mounts the control again. The alert
+page's control lives inside its heading, which loading and an error
+rewrite, so it never names the alert before. The download is a Blob URL of the
 document's own bytes: the one `.href =` on the page, and the only
 `url(` forms the no-external-reference test admits
 (`createObjectURL(` and `revokeObjectURL(`). The policy is unchanged.

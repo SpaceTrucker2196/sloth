@@ -343,6 +343,7 @@ table.qt.dt-fixed td { overflow: hidden; text-overflow: ellipsis; }
 .bundle button { font-size: 10px; letter-spacing: 0.1em; padding: 2px 8px; }
 .dr-hd .bundle { margin-left: auto; }
 .dr-hd .bundle button { margin-left: 0; }
+#ad-head .bundle { margin-left: var(--gap); }
 .bundle-note { min-width: 0; }
 .kv { display: grid; grid-template-columns: 14ch 1fr; gap: 2px var(--gap); font-size: 12px; margin: var(--gap) 0 14px; }
 .kv .k { color: var(--muted); }

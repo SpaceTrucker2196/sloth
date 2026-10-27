@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
 
 #include "web_alerts.h"
 #include "web_assets.h"
@@ -111,16 +110,17 @@ static void note_read(web_bundle_ctx_t *c, const char *what, long long ms, int s
 }
 
 enum { R_DEVICE, R_ALERT, R_LOOKUP };
+enum { SPLICE_TOO_LARGE = -1, SPLICE_NO_MEMORY = -2 };
 
 /* One route, rendered into a fresh scratch of the routes' own cap, its
  * trailing newline dropped. *out is the body (malloc'd; the caller
- * frees it even for an error status) and the return the status, or -1
- * when the route could not even render an error (memory, or a body
- * that overflowed its cap). */
+ * frees it even for an error status) and the return the status, or
+ * SPLICE_TOO_LARGE when the route could not render into its cap, or
+ * SPLICE_NO_MEMORY. */
 static int splice_read(web_bundle_ctx_t *c, const char *what, int which,
                        const char *arg, char **out, size_t *outlen) {
     char *buf = malloc(WEB_BUNDLE_SCRATCH);
-    if (!buf) return -1;
+    if (!buf) return SPLICE_NO_MEMORY;
     size_t bl = 0;
     int st = 0, rc;
     long long t0 = mono_ms();
@@ -135,7 +135,7 @@ static int splice_read(web_bundle_ctx_t *c, const char *what, int which,
     if (rc != 0 || bl == 0) {
         free(buf);
         note_read(c, what, ms, 503);
-        return -1;
+        return SPLICE_TOO_LARGE;
     }
     if (buf[bl - 1] == '\n') bl--;
     buf[bl] = '\0';
@@ -153,23 +153,62 @@ static void unavailable(web_jw_t *w, const char *reason) {
 
 /* ── the optional sections ─────────────────────────────────────────── */
 
+/* A bare substring would give 10.0.0.1 every record of 10.0.0.10-19
+ * and 10.0.0.100-199, and an IPv6 prefix a longer address. */
+static int is_hex(char ch) {
+    return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
+}
+int web_bundle_names_addr(const char *text, const char *key) {
+    size_t n = strlen(key);
+    int colon = strchr(key, ':') != NULL;
+    for (const char *p = text; (p = strstr(p, key)) != NULL; p++) {
+        char b = p > text ? p[-1] : '\0', a = p[n];
+        int cont_b = colon ? (is_hex(b) || b == ':' || b == '.')
+                           : ((b >= '0' && b <= '9') || b == '.');
+        int cont_a = colon ? (is_hex(a) || a == ':' || a == '.')
+                           : ((a >= '0' && a <= '9') || a == '.');
+        if (!cont_b && !cont_a) return 1;
+    }
+    return 0;
+}
+
+/* The record's line as the page's ticker shows it under the scope in
+ * effect (web_live_json_scoped()), or NULL when the scope holds it
+ * not: under Monitor a device row's own line, no address, no name. */
+static const char *rec_line(const web_bundle_ctx_t *c, const web_live_rec_t *r) {
+    const web_scope_ctx_t *sc = c->h->sc;
+    if (!sc || sc->scope == WEB_SCOPE_HYBRID) return r->text;
+    if (!web_scope_pass(sc->scope, r->sc)) return NULL;
+    if (sc->scope == WEB_SCOPE_MONITOR && !strcmp(r->type, "device")) return r->text_m;
+    return r->text;
+}
+
+/* The line of the record when the scope holds it and it names one of
+ * keys, else NULL. */
+static const char *rec_match(const web_bundle_ctx_t *c, const web_live_rec_t *r,
+                             const char *const keys[3]) {
+    const char *t = rec_line(c, r);
+    if (!t) return NULL;
+    for (int k = 0; k < 3; k++)
+        if (keys[k] && web_bundle_names_addr(t, keys[k])) return t;
+    return NULL;
+}
+
 /* The ticker records that name the bundle's device or address, newest
- * first, by type. 0 when the stream has nothing (no socket). */
+ * first, by type, as the scope in effect shows them. 0 when the stream
+ * has nothing (no socket). */
 static size_t fill_records(const web_bundle_ctx_t *c, web_jw_t *w) {
     if (!c->h->live) return 0;
     size_t start = w->len;
-    const char *keys[3] = { c->mac[0] ? c->mac : NULL, c->ip[0] ? c->ip : NULL,
-                            c->ip2[0] ? c->ip2 : NULL };
+    const char *const keys[3] = { c->mac[0] ? c->mac : NULL, c->ip[0] ? c->ip : NULL,
+                                  c->ip2[0] ? c->ip2 : NULL };
     int matched = 0;
     /* The types of the matched records and their counts. */
     struct { const char *name; int n; } by[WEB_LIVE_TYPES];
     int nby = 0;
     for (int i = c->nrecs - 1; i >= 0; i--) {
         const web_live_rec_t *r = &c->recs[i];
-        int hit = 0;
-        for (int k = 0; k < 3 && !hit; k++)
-            if (keys[k] && strstr(r->text, keys[k])) hit = 1;
-        if (!hit) continue;
+        if (!rec_match(c, r, keys)) continue;
         matched++;
         int j = 0;
         while (j < nby && strcmp(by[j].name, r->type)) j++;
@@ -181,8 +220,9 @@ static size_t fill_records(const web_bundle_ctx_t *c, web_jw_t *w) {
         window = c->recs[c->nrecs - 1].ts - c->recs[0].ts;
     web_jw_raw(w, "{\"available\":true,\"source\":\"ticker ring: the newest ");
     web_jw_int(w, WEB_BUNDLE_RECORDS);
-    web_jw_raw(w, " records of every type the stream carried, matched on the "
-                  "device's MAC and addresses in their one-line summary\"");
+    web_jw_raw(w, " records of every type the stream carried, those the scope in "
+                  "effect holds, matched on the device's MAC and whole addresses in "
+                  "their one-line summary as the page's ticker shows it\"");
     web_jw_raw(w, ",\"ring_records\":");  web_jw_int(w, c->nrecs);
     web_jw_raw(w, ",\"ring_full\":");
     web_jw_raw(w, c->latest > (unsigned long long)WEB_BUNDLE_RECORDS ? "true" : "false");
@@ -198,15 +238,13 @@ static size_t fill_records(const web_bundle_ctx_t *c, web_jw_t *w) {
     int k = 0;
     for (int i = c->nrecs - 1; i >= 0; i--) {
         const web_live_rec_t *r = &c->recs[i];
-        int hit = 0;
-        for (int q = 0; q < 3 && !hit; q++)
-            if (keys[q] && strstr(r->text, keys[q])) hit = 1;
-        if (!hit) continue;
+        const char *line = rec_match(c, r, keys);
+        if (!line) continue;
         web_jw_raw(w, k++ ? ",{\"seq\":" : "{\"seq\":");
         web_jw_int(w, (long long)r->seq);
         web_jw_raw(w, ",\"type\":"); web_jw_str(w, r->type);
         web_jw_raw(w, ",\"ts\":");   web_jw_int(w, r->ts);
-        web_jw_raw(w, ",\"text\":"); web_jw_str(w, r->text);
+        web_jw_raw(w, ",\"text\":"); web_jw_str(w, line);
         web_jw_raw(w, ",\"sc\":");   web_jw_int(w, r->sc);
         web_jw_raw(w, "}");
     }
@@ -251,6 +289,17 @@ static size_t fill_observed(const web_bundle_ctx_t *c, web_jw_t *w) {
     return w->overflow ? 0 : w->len - start;
 }
 
+const char *web_bundle_nested_reason(int status, const char *body) {
+    char word[48];
+    if (status == SPLICE_TOO_LARGE) return "too_large";
+    if (status == 400 || status == 404) return "no_data";
+    if (status == 503 && body && jstr_after(body, "\"error\":", word, sizeof(word))) {
+        if (!strcmp(word, "no_sloth_db")) return "no_sloth_db";
+        if (!strcmp(word, "sloth_db_timeout")) return "budget";
+    }
+    return "read_error";
+}
+
 /* The drawer of the device the alert or the Lookup card names. */
 static size_t fill_nested_device(const web_bundle_ctx_t *c, web_jw_t *w) {
     if (c->nested_status == 200 && c->nested) {
@@ -258,8 +307,7 @@ static size_t fill_nested_device(const web_bundle_ctx_t *c, web_jw_t *w) {
         return c->nested_len;
     }
     if (c->nested_status == 0) return 0;          /* no MAC to read */
-    unavailable(w, c->nested_status == 503 && c->nested &&
-                   strstr(c->nested, "no_sloth_db") ? "no_sloth_db" : "budget");
+    unavailable(w, web_bundle_nested_reason(c->nested_status, c->nested));
     return 1;
 }
 
@@ -270,7 +318,7 @@ static size_t fill_nested_lookup(const web_bundle_ctx_t *c, web_jw_t *w) {
         return c->lookup_len;
     }
     if (c->lookup_status == 0) return 0;
-    unavailable(w, "budget");
+    unavailable(w, web_bundle_nested_reason(c->lookup_status, c->lookup));
     return 1;
 }
 
@@ -320,6 +368,7 @@ const size_t web_bundle_sections_n = sizeof(web_bundle_sections) / sizeof(web_bu
 
 const char *const web_bundle_reasons[] = {
     "not_built", "no_data", "too_large", "withheld", "budget", "no_sloth_db", "not_kept",
+    "read_error",
 };
 const size_t web_bundle_reasons_n = sizeof(web_bundle_reasons) / sizeof(web_bundle_reasons[0]);
 
@@ -340,7 +389,7 @@ static const struct { const char *key, *text; } GLOSSARY[] = {
     { "mac", "lower-case xx:xx:xx:xx:xx:xx" },
     { "random", "true when the MAC's locally-administered bit is set: a randomised (privacy) or software-assigned address; the OUI then names no vendor" },
     { "sources", "bitmask of where sloth saw the device: 1 ARP (A), 2 DHCP (D), 4 mDNS, 8 beacon (B), 16 probe request (P), 32 associated station (S), 64 camera signal. The page's glyph string is A D P B S in that order" },
-    { "risk", "sloth's device risk level 0..9 (0 low, 1-2 medium, 3-4 high, 5+ critical) from risk_signals weighted 1,1,1,1,3,3" },
+    { "risk", "sloth's device risk level: 0 LOW, 1 MED, 2 HIGH, 3 CRIT, from the weighted sum of risk_signals (weights 1,1,1,1,3,3 in bit order; >=1 MED, >=3 HIGH, >=5 CRIT)" },
     { "risk_signals", "bitmask: 1 random MAC, 2 unknown vendor, 4 no hostname from DHCP/mDNS/NBNS, 8 probe-only (never associated), 16 a cleartext credential was attributed to it, 32 an alert's match_ip was its IP" },
     { "name_src", "D DHCP hostname, m mDNS host, N NBNS name, h sloth's own hostname field, p a PTR answer seen on the wire (passive); names[].where says which store it came from: sloth.db, stream (slothweb's identity table, last 15 min), wire (passive PTR cache)" },
     { "ssid", "display form: printable UTF-8 as is, anything else as \\xNN per octet and a backslash as \\\\; ssid_np 1 means something was escaped (non-printable); ssid_k is the display colour index 0..7 and carries no meaning" },
@@ -363,7 +412,7 @@ static const struct { const char *key, *text; } GLOSSARY[] = {
     { "detail_shown", "false: the alert type's detail text can carry a credential or free text and is withheld everywhere" },
     { "oui", "IEEE registry lookup of the MAC's first 24/28/36 bits: registry MA-L/MA-M/MA-S, private = a private registration, local/multicast = the address bits" },
     { "records_recent / records_around", "the last records the live stream carried that mention this device or address, from a ring of the newest 50 of every type; a stopgap, not a per-device history; sc is the record's capture-scope tag (1 monitor, 2 local, 3 both)" },
-    { "available:false", "the section's data is not in this bundle; reason: not_built (that feature is not in this build), no_data (built, nothing for this id), too_large (over its cap), withheld (policy), budget (the read ran out of time), no_sloth_db (needs --sloth-db), not_kept (the stream carries it but slothweb does not retain it)" },
+    { "available:false", "the section's data is not in this bundle; reason: not_built (that feature is not in this build), no_data (built, nothing for this id), too_large (over its cap), withheld (policy), budget (the read ran out of time), no_sloth_db (needs --sloth-db), not_kept (the stream carries it but slothweb does not retain it), read_error (the read failed: sloth.db could not answer)" },
     { "limits", "every cap applied to this bundle and whether it cut anything" },
 };
 
@@ -423,15 +472,11 @@ static void write_envelope(const web_bundle_ctx_t *c, web_jw_t *w) {
     tzset();
     const char *tz = tzname[0];
     if (localtime_r(&tt, &lt) && lt.tm_isdst > 0) tz = tzname[1];
-    char host[256] = "";
-    if (gethostname(host, sizeof(host)) != 0) host[0] = '\0';
-    host[sizeof(host) - 1] = '\0';
     web_jw_raw(w, ",\"server\":{\"timezone\":{\"name\":"); web_jw_str(w, tz ? tz : "");
     web_jw_raw(w, ",\"utc_offset_s\":"); web_jw_int(w, web_utc_offset(h->wall_s));
-    web_jw_raw(w, "},\"host\":"); web_jw_strn(w, host, strnlen(host, 64));
-    web_jw_raw(w, ",\"host_is\":\"slothweb host: the sensor host when slothweb runs "
-                  "beside sloth\"");
-    web_jw_raw(w, ",\"slothweb\":{\"version\":\"" SLOTHWEB_VERSION "\",\"milestone\":\"M6\","
+    /* No host name: no page shows it, and a bundle is made to be
+     * pasted elsewhere (a site or owner name often rides in it). */
+    web_jw_raw(w, "},\"slothweb\":{\"version\":\"" SLOTHWEB_VERSION "\",\"milestone\":\"M6\","
                   "\"page_etag\":");
     /* The ETag's hex, without the quotes the header form carries. */
     size_t el = strlen(web_page_etag);
@@ -809,8 +854,6 @@ int web_bundle_route(const web_health_t *h, const char *query,
             }
         }
     }
-    if (c->nested_status < 0) c->nested_status = 503;
-    if (c->lookup_status < 0) c->lookup_status = 503;
 
     /* The ticker ring, once. */
     if (h->live) {
@@ -832,7 +875,13 @@ int web_bundle_route(const web_health_t *h, const char *query,
     web_jw_t tw;
     web_jw_init(&tw, tail, 16384);
     write_aids(&tw);
-    size_t reserve = tw.len + WEB_BUNDLE_LIMITS_MAX + 2;
+    /* Held back as well: every optional row's member name and the
+     * longest marker it can roll back to, written past the fills'
+     * budget; and the kind's close and the body's. */
+    size_t reserve = tw.len + WEB_BUNDLE_LIMITS_MAX + 3;
+    for (size_t i = 0; i < web_bundle_sections_n; i++)
+        if (!strcmp(web_bundle_sections[i].kind, KIND_WORD[kind]))
+            reserve += strlen(web_bundle_sections[i].name) + 4 + WEB_BUNDLE_MARKER_MAX;
 
     web_jw_t w;
     web_jw_init(&w, buf, web_bundle_max + 1);

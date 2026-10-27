@@ -120,7 +120,10 @@ static void test_page_carries_the_control(void) {
     WT_HAS(p, "window.SlothBundle = (function () {");
     WT_HAS(p, "  return { mount: mount, fileName: fileName };");
     WT_HAS(p, "    SlothBundle.mount($(\"dr-hd\"), \"device\", mac, scoped);");
-    WT_HAS(p, "    SlothBundle.mount($(\"ad-head\").parentNode, \"alert\", j.id, scoped);");
+    /* Inside ad-head, which loading and an error rewrite: no control is
+     * left naming the alert before. */
+    WT_HAS(p, "    SlothBundle.mount($(\"ad-head\"), \"alert\", j.id, scoped);");
+    WT_LACKS(p, "SlothBundle.mount($(\"ad-head\").parentNode");
     WT_HAS(p, "      SlothBundle.mount($(\"l-src\"), \"lookup\", j.q, scoped);");
     WT_HAS(p, "<div class=\"dr-hd\" id=\"dr-hd\">");
     /* Before app.js, so a view app.js opens while the script first runs
@@ -137,8 +140,19 @@ static void test_page_carries_the_control(void) {
     WT_HAS(p, "\"/api/bundle?kind=\" + encodeURIComponent(st.kind) + \"&id=\" + encodeURIComponent(st.id)");
     WT_HAS(p, "navigator.clipboard.writeText(text)");
     WT_HAS(p, "document.execCommand(\"copy\")");
-    WT_HAS(p, "\"copied (\" + kb(st.text) + \" KB)\"");
+    WT_HAS(p, "\"copied (\" + kb(text) + \" KB)\"");
     WT_HAS(p, "\"copy failed, download instead\"");
+    /* The clipboard write stays inside the click: fetched ahead on
+     * pointer or focus, a promised ClipboardItem otherwise, else a
+     * second click; what is kept is keyed on the scoped path, expires,
+     * and is dropped on every mount. */
+    WT_HAS(p, "copy.addEventListener(\"pointerenter\", prefetch);");
+    WT_HAS(p, "copy.addEventListener(\"focus\", prefetch);");
+    WT_HAS(p, "navigator.clipboard.write([new window.ClipboardItem({ \"text/plain\": body })])");
+    WT_HAS(p, "\"ready: click copy again\"");
+    WT_HAS(p, "var FRESH_MS = 10000;");
+    WT_HAS(p, "st.path === pathOf(st) && Date.now() - st.at < FRESH_MS");
+    WT_HAS(p, "st.text = null; st.path = \"\"; st.at = 0; st.ts = 0;");
     WT_HAS(p, "a.download = name;");
     WT_HAS(p, "st.text = JSON.stringify(j, null, 1);");
     WT_HAS(p, "j.page.url = location.href;");
@@ -444,7 +458,11 @@ static void test_device_bundle_shape(void) {
     WT_HAS(b, "{\"bundle_schema\":\"" WEB_BUNDLE_SCHEMA "\",\"kind\":\"device\","
               "\"id\":\"02:00:00:00:00:12\",\"generated_at\":{\"iso\":\"2026-10-22T00:00:00Z\","
               "\"unix\":1792627200},\"server\":{\"timezone\":{\"name\":\"UTC\",\"utc_offset_s\":0},"
-              "\"host\":");
+              "\"slothweb\":{");
+    /* No host name: no page shows it, and a bundle is made to be pasted
+     * into a third party's service (seen red with server.host and
+     * host_is written back). */
+    WT_LACKS(b, "\"host_is\":");
     /* sloth's version, as include/sloth.h has it, and the page's build. */
     WT_HAS(b, "\"slothweb\":{\"version\":\"" SLOTH_VERSION "\",\"milestone\":\"M6\",\"page_etag\":");
     WT_HAS(b, "\"uptime_s\":42}");
@@ -660,9 +678,10 @@ static void test_every_section_is_present_or_marked(void) {
     }
     WT_EQ(rows, (int)web_bundle_sections_n);
     /* The reasons list is the documented one. */
-    WT_EQ(web_bundle_reasons_n, 7);
+    WT_EQ(web_bundle_reasons_n, 8);
     WT_ASSERT(!strcmp(web_bundle_reasons[0], "not_built") &&
-              !strcmp(web_bundle_reasons[6], "not_kept"));
+              !strcmp(web_bundle_reasons[6], "not_kept") &&
+              !strcmp(web_bundle_reasons[7], "read_error"));
 }
 
 /* test_alerts.c's credential and incident-id tests, against the
@@ -744,6 +763,16 @@ static void test_caps_are_proven(void) {
     WT_HAS(b, "\"truncated_sections\":[]");
 }
 
+/* What the bundle holds back for the kind's optional rows' names and
+ * markers (web_bundle.c). */
+static size_t marker_reserve(const char *kind) {
+    size_t n = 0;
+    for (size_t i = 0; i < web_bundle_sections_n; i++)
+        if (!strcmp(web_bundle_sections[i].kind, kind))
+            n += strlen(web_bundle_sections[i].name) + 4 + WEB_BUNDLE_MARKER_MAX;
+    return n;
+}
+
 /* The hard cap: optional sections that would cross it are rolled back
  * to too_large and named, the required part stands; a cap the required
  * part cannot meet is a 413. Seen red with the rollback's w->len
@@ -770,7 +799,8 @@ static void test_size_cap(void) {
     const char *li = strstr(b, ",\"limits\":{");
     WT_ASSERT(dv && gl && li && dv < gl && gl < li);
     if (!dv || !gl || !li) { free(page); return; }
-    size_t capb = (size_t)(dv - b) + 200 + (size_t)(li - gl) + WEB_BUNDLE_LIMITS_MAX + 2;
+    size_t capb = (size_t)(dv - b) + 200 + (size_t)(li - gl) + WEB_BUNDLE_LIMITS_MAX + 3 +
+                  marker_reserve("alert");
     /* The drawer is longer than the 200 bytes left for it. */
     const char *dl = strstr(dv, "\"anomalies\":[");
     WT_ASSERT(dl && dl - dv > 400);
@@ -819,6 +849,204 @@ static void test_scope_is_carried_through(void) {
     WT_HAS(answer(), "\"excludes\":\"nothing: every source\"");
 }
 
+/* ── the review's findings (2026-10-27) ────────────────────────────── */
+
+/* The records section of a device bundle: from its member to the next
+ * row's (vendor_research), so a name the drawer itself carries is not
+ * mistaken for one the records carry. */
+static char *records_of(const char *b) {
+    const char *r = b ? strstr(b, ",\"records_recent\":{") : NULL;
+    const char *e = r ? strstr(r, ",\"vendor_research\":") : NULL;
+    if (!r || !e) return NULL;
+    char *o = malloc((size_t)(e - r) + 1);
+    if (o) { memcpy(o, r, (size_t)(e - r)); o[e - r] = '\0'; }
+    return o;
+}
+
+/* The ticker records follow the scope as the page's ticker does: only
+ * the scope's records, and under Monitor a device row's own line (its
+ * MAC and SSID; no address, no name). A device row with an ARP and a
+ * probe source is both scopes'; the DNS query is Local's, the probe
+ * Monitor's. Seen red with the scope skip removed from rec_line() (the
+ * probe under Local) and with r->text written in place of text_m (the
+ * address and name under Monitor). The Local DNS line under Monitor is
+ * asserted, not claimed: Monitor's drawer holds no address, so no key
+ * matches it whatever the skip does. */
+static void test_records_follow_the_scope(void) {
+    char line[512];
+    snprintf(line, sizeof(line),
+             "{\"type\":\"device\",\"ts\":%lld,\"mac\":\"02:00:00:00:00:12\","
+             "\"ip\":\"192.0.2.12\",\"hostname\":\"laptop-hn\",\"sources\":17,"
+             "\"last_ssid\":\"HomeNet\"}\n", T - 6);
+    feed(line);
+    /* Hybrid: the device row's line has its address and name. */
+    WT_EQ(route(&H, "/api/bundle", "kind=device&id=02:00:00:00:00:12"), 200);
+    char *r = records_of(answer());
+    WT_ASSERT(r != NULL);
+    if (!r) return;
+    WT_HAS(r, "\"type\":\"device\"");
+    WT_HAS(r, "laptop-hn");
+    WT_HAS(r, "laptop.example.org");
+    WT_HAS(r, "\"text\":\"HomeNet  02:00:00:00:00:12\"");
+    free(r);
+
+    WT_EQ(route(&H, "/api/bundle", "scope=monitor&kind=device&id=02:00:00:00:00:12"), 200);
+    r = records_of(answer());
+    WT_ASSERT(r != NULL);
+    if (!r) return;
+    WT_HAS(r, "\"type\":\"device\"");
+    WT_HAS(r, "\"text\":\"02:00:00:00:00:12  HomeNet\"");
+    WT_HAS(r, "\"text\":\"HomeNet  02:00:00:00:00:12\"");
+    WT_LACKS(r, "laptop-hn");
+    WT_LACKS(r, "192.0.2.12");
+    WT_LACKS(r, "laptop.example.org");
+    WT_LACKS(r, "\"type\":\"dns\"");
+    free(r);
+
+    WT_EQ(route(&H, "/api/bundle", "scope=local&kind=device&id=02:00:00:00:00:12"), 200);
+    r = records_of(answer());
+    WT_ASSERT(r != NULL);
+    if (!r) return;
+    WT_HAS(r, "laptop.example.org");
+    WT_HAS(r, "laptop-hn");
+    WT_LACKS(r, "\"type\":\"probe_client\"");
+    WT_LACKS(r, "HomeNet  02:00:00:00:00:12");
+    free(r);
+}
+
+/* A record is matched on a whole address: 192.0.2.12 is not named by a
+ * record of 192.0.2.120 or 192.0.2.125, but is by one of 192.0.2.12:443.
+ * Seen red with web_bundle_names_addr() reduced to strstr() (the .120
+ * and .125 queries listed). */
+static void test_records_match_whole_addresses(void) {
+    feed("{\"type\":\"dns\",\"ts\":1792627195,\"qname\":\"q120.example.org\","
+         "\"src\":\"192.0.2.120\"}\n"
+         "{\"type\":\"dns\",\"ts\":1792627196,\"qname\":\"q125.example.org\","
+         "\"src\":\"192.0.2.125\"}\n");
+    WT_EQ(route(&H, "/api/bundle", "kind=device&id=02:00:00:00:00:12"), 200);
+    char *r = records_of(answer());
+    WT_ASSERT(r != NULL);
+    if (!r) return;
+    WT_HAS(r, "laptop.example.org");
+    WT_LACKS(r, "q120.example.org");
+    WT_LACKS(r, "q125.example.org");
+    free(r);
+    /* The rule itself, against a line of each shape. */
+    static const struct { const char *text, *key; int want; } M[] = {
+        { "laptop.example.org  192.0.2.12", "192.0.2.12", 1 },
+        { "q  192.0.2.120", "192.0.2.12", 0 },
+        { "q  10.192.0.2.12", "192.0.2.12", 0 },
+        { "flow 192.0.2.12:443", "192.0.2.12", 1 },
+        { "x 192.0.2.120 then 192.0.2.12", "192.0.2.12", 1 },
+        { "fe80::1:2", "fe80::1", 0 },
+        { "fe80::1 up", "fe80::1", 1 },
+        { "02:00:00:00:00:123", "02:00:00:00:00:12", 0 },
+        { "HomeNet  02:00:00:00:00:12", "02:00:00:00:00:12", 1 },
+    };
+    for (size_t i = 0; i < sizeof(M) / sizeof(M[0]); i++) {
+        int got = web_bundle_names_addr(M[i].text, M[i].key);
+        if (got != M[i].want) fprintf(stderr, "    ?%s / %s: %d\n", M[i].text, M[i].key, got);
+        WT_EQ(got, M[i].want);
+    }
+}
+
+/* sensor's counts are the scope's, as /api/live's under the same scope.
+ * Seen red with scope_sum() left out of web_live_bundle_sensor() (the
+ * whole sensor's two open warnings under Monitor). */
+static void test_sensor_counts_follow_the_scope(void) {
+    static const char *const sc[] = { "monitor", "local", "hybrid" };
+    for (int i = 0; i < 3; i++) {
+        char q[96];
+        snprintf(q, sizeof(q), "scope=%s", sc[i]);
+        WT_EQ(route(&H, "/api/live", q), 200);
+        const char *live = body_of(g_out);
+        const char *ao = strstr(live, "\"alerts_open\":{");
+        const char *ae = ao ? strchr(ao, '}') : NULL;
+        WT_ASSERT(ao && ae);
+        if (!ao || !ae) return;
+        char want[160];
+        snprintf(want, sizeof(want), "%.*s", (int)(ae + 1 - ao), ao);
+        snprintf(q, sizeof(q), "scope=%s&kind=device&id=02:00:00:00:00:12", sc[i]);
+        WT_EQ(route(&H, "/api/bundle", q), 200);
+        const char *sen = strstr(answer(), ",\"sensor\":{\"socket\":");
+        WT_ASSERT(sen != NULL);
+        if (sen) WT_HAS(sen, want);
+        if (i == 0) WT_HAS(want, "\"warn\":0");     /* both warnings are Local's */
+        if (i == 2) WT_HAS(want, "\"warn\":2");
+    }
+}
+
+static void reason_is(int status, const char *body, const char *want) {
+    const char *got = web_bundle_nested_reason(status, body);
+    if (strcmp(got, want)) fprintf(stderr, "    ?%d %s: %s\n", status, body ? body : "-", got);
+    WT_ASSERT(!strcmp(got, want));
+}
+
+/* A nested read that did not answer says why in its route's words. Seen
+ * red with the old mapping (everything but no_sloth_db "budget"). */
+static void test_nested_reasons(void) {
+    reason_is(404, "{\"error\":\"no_such_device\"}", "no_data");
+    reason_is(400, "{\"error\":\"bad_mac\"}", "no_data");
+    reason_is(-1, NULL, "too_large");
+    reason_is(-2, NULL, "read_error");
+    reason_is(503, "{\"error\":\"no_sloth_db\",\"detail\":\"x\"}", "no_sloth_db");
+    reason_is(503, "{\"error\":\"sloth_db_timeout\"}", "budget");
+    reason_is(503, "{\"error\":\"sloth_db_error\"}", "read_error");
+    /* A detail naming another word does not decide it. */
+    reason_is(503, "{\"error\":\"sloth_db_error\",\"detail\":\"no_sloth_db\"}", "read_error");
+}
+
+/* The glossary's risk is sloth's device_risk_level_t, 0..3, with the
+ * thresholds of web_scope_risk_level() (the page's own clamp). */
+static void test_glossary_risk_is_the_level(void) {
+    WT_EQ(route(&H, "/api/bundle", "kind=device&id=02:00:00:00:00:12"), 200);
+    WT_HAS(answer(), "\"risk\":\"sloth\\u0027s device risk level: 0 LOW, 1 MED, 2 HIGH, "
+                     "3 CRIT, from the weighted sum of risk_signals (weights 1,1,1,1,3,3 in "
+                     "bit order; \\u003e=1 MED, \\u003e=3 HIGH, \\u003e=5 CRIT)\"");
+    WT_EQ(DEV_RISK_LOW, 0);
+    WT_EQ(DEV_RISK_CRIT, 3);
+    WT_EQ(web_scope_risk_level(1), 1);
+    WT_EQ(web_scope_risk_level(1 | 2 | 4), 2);
+    WT_EQ(web_scope_risk_level(16 | 1 | 2), 3);
+}
+
+/* Every cap from the least the required part needs up: a 200 that ends
+ * whole, or a 413 below the first 200; never a 413 above one, which is
+ * a body that overflowed once the optional rows' markers were written
+ * past the fills' budget. The markers (886 bytes for an alert) are
+ * absorbed today by WEB_BUNDLE_LIMITS_MAX's slack (4096 held, 1061
+ * written here), so leaving their reserve out alone stays green; seen
+ * red with it left out and WEB_BUNDLE_LIMITS_MAX cut to 1200 (a 413
+ * above a 200), and green with 1200 and the reserve in. */
+static void test_markers_fit_under_every_cap(void) {
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10"), 200);
+    const char *b = answer();
+    const char *o = strstr(b, ",\"observed_vs_thresholds\":");
+    const char *gl = strstr(b, ",\"glossary\":{");
+    const char *li = strstr(b, ",\"limits\":{");
+    WT_ASSERT(o && gl && li);
+    if (!o || !gl || !li) return;
+    size_t lo = (size_t)(o - b) + (size_t)(li - gl) + WEB_BUNDLE_LIMITS_MAX;
+    size_t hi = lo + marker_reserve("alert") + 512;
+    int seen200 = 0, bad = 0;
+    for (size_t cap = lo; cap <= hi; cap += 8) {
+        web_bundle_max = cap;
+        int st = route(&H, "/api/bundle", "kind=alert&id=d10");
+        if (st == 200) {
+            seen200 = 1;
+            if (g_body_len > cap || g_body_len < 2 || strcmp(answer() + g_body_len - 2, "}\n"))
+                bad++;
+        } else if (st != 413 || seen200) {
+            if (!bad) fprintf(stderr, "    cap %zu: %d %s\n", cap, st, answer());
+            bad++;
+        }
+    }
+    web_bundle_max = WEB_BUNDLE_MAX;
+    WT_EQ(bad, 0);
+    WT_ASSERT(seen200);
+}
+
+
 void run_bundle_tests(void) {
     WT_RUN(test_page_carries_the_control);
     WT_RUN(test_rawn_has_one_caller);
@@ -832,6 +1060,14 @@ void run_bundle_tests(void) {
     WT_RUN(test_scope_is_carried_through);
     WT_RUN(test_size_cap);
     WT_RUN(test_caps_are_proven);
+    down();
+    up();
+    WT_RUN(test_records_follow_the_scope);
+    WT_RUN(test_records_match_whole_addresses);
+    WT_RUN(test_sensor_counts_follow_the_scope);
+    WT_RUN(test_nested_reasons);
+    WT_RUN(test_glossary_risk_is_the_level);
+    WT_RUN(test_markers_fit_under_every_cap);
     down();
 }
 

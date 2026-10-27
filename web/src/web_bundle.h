@@ -35,8 +35,9 @@
  * {"available":false,"reason":<its reason>} ("not_built" for a feature
  * no build has yet, "not_kept" for a stream field slothweb does not
  * retain); a fill that returns 0 as "no_data"; one that overflows its
- * cap, or the bundle's, is rolled back to "too_large"; a sub-read that
- * failed makes "budget" or "no_sloth_db". The reason words are fixed
+ * cap, or the bundle's, is rolled back to "too_large"; a nested
+ * sub-read that failed says why in its own route's words
+ * (web_bundle_nested_reason()). The reason words are fixed
  * (WEB_BUNDLE_REASONS) so the prompt can tell "slothweb cannot know"
  * from "this build has not got it yet". A slice that lands after this
  * one adds its row and function; one that lands before changes
@@ -69,6 +70,12 @@
 /* The room held back for "limits" (its most, with every list named)
  * when the optional sections are measured against the cap. */
 #define WEB_BUNDLE_LIMITS_MAX 4096
+/* The longest unavailable marker an optional row can roll back to (the
+ * too_large one, its cap at 20 digits): held back for every row of the
+ * kind, beside its member name, since markers are written past the
+ * fills' budget. */
+#define WEB_BUNDLE_MARKER_MAX \
+    (sizeof("{\"available\":false,\"reason\":\"too_large\",\"cap_bytes\":}") + 20)
 /* The ticker ring: the most records_recent / records_around can hold. */
 #define WEB_BUNDLE_RECORDS 50
 /* The cap each spliced route renders into: what a route gets behind
@@ -100,6 +107,20 @@ extern const size_t           web_bundle_sections_n;
 /* The fixed reason words an unavailable section may carry. */
 extern const char *const web_bundle_reasons[];
 extern const size_t      web_bundle_reasons_n;
+
+/* Does text name key as a whole address: an occurrence with nothing
+ * before or after it that continues the address? An IPv4 key may be
+ * followed by ":port"; a key with a ':' (a MAC, an IPv6 address) by
+ * nothing in [0-9A-Fa-f:.]. The records sections' match. */
+int web_bundle_names_addr(const char *text, const char *key);
+
+/* The reason word for a nested sub-read (an alert's or a Lookup card's
+ * device drawer, an alert's Lookup card) that did not answer 200:
+ * status is the route's, or a negative when it could not render
+ * (-1 its body overflowed its cap, -2 memory), body its answer or NULL.
+ * 400 / 404 are "no_data", a sloth.db timeout "budget", no sloth.db
+ * "no_sloth_db", an overflow "too_large", anything else "read_error". */
+const char *web_bundle_nested_reason(int status, const char *body);
 
 /* The route. query is the request's (scope already taken out by the
  * router). On 0 *body is a malloc'd JSON body of *len bytes (the

@@ -872,11 +872,16 @@ size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms) {
 
 static void jw_bool(web_jw_t *w, int v) { web_jw_raw(w, v ? "true" : "false"); }
 
+static void scope_sum(const web_live_t *l, const web_scope_ctx_t *sc,
+                      web_live_sum_t *s, long long now_ms);
+
 void web_live_bundle_sensor(web_live_t *l, const web_scope_ctx_t *sc,
                             web_jw_t *w, long long now_ms) {
     pthread_mutex_lock(&l->mu);
     web_live_sum_t s;
     summary_locked(l, &s, now_ms);
+    /* The counts under the request's scope, as /api/live gives them. */
+    scope_sum(l, sc, &s, now_ms);
     web_jw_raw(w, "{\"socket\":");      web_jw_str(w, web_live_sock_word(l->sock_state));
     web_jw_raw(w, ",\"socket_spec\":"); web_jw_str(w, l->spec);
     web_jw_raw(w, ",\"state\":");       web_jw_str(w, s.sensor);

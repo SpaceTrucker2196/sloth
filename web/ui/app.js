@@ -4522,7 +4522,7 @@
   function alertPage(j) {
     var sev = sevOf(j.sev), k = j.kb || null;
     set("ad-head", (j.type_name || j.title) + ": " + j.state + ", from " + j.source);
-    SlothBundle.mount($("ad-head").parentNode, "alert", j.id, scoped);
+    SlothBundle.mount($("ad-head"), "alert", j.id, scoped);
     // A link opens its alert whatever the scope; the page says when the
     // scope does not hold its type (the rule's input is the other's).
     set("ad-note", "sloth.db " + j.db + (j.in_scope === false
