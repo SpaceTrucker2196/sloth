@@ -2301,7 +2301,7 @@ never leaves SQLite.
 | Tile | Opens | The number it shows is |
 |---|---|---|
 | throughput | `#activity?focus=throughput`: each interface's rx (over its band) and tx, 24 h, and the top hosts | the first interface's last rx bucket, drawn first |
-| open anomalies | `#anomalies?state=open`: every open episode, the sensitivity not applied | the count of the cards |
+| open anomalies | `#anomalies?state=open`: every open episode, the sensitivity and the kind chip not applied | the count of the cards |
 | devices | `#devices?q=pass:latest`: sloth.db's devices whose MAC was in sloth's latest pass on the stream (`pass:latest`, a query term) | the stream's pass; the note says how many of them sloth.db holds |
 | open alerts | `#alerts?state=open` | the rows |
 | records/s | `#records`: records by type over the same five seconds, and the ticker of one type or all | the sum of the per-type rates (`/api/live`'s `types_rate`) |
@@ -2372,28 +2372,38 @@ viewer, starts from the defaults. A private window, blocked or full
 storage, or a value that does not parse is the default, never an error
 (every read and write is in a `try`, and the page was driven with
 storage that throws on every touch). A later change of shape takes a
-`v2` namespace and moves or drops `v1`; the keys of the build before
-this one (`slothweb.theme`, `slothweb.scope`, `slothweb.sensitivity`,
+`v2` namespace; the keys of the build before this one
+(`slothweb.theme`, `slothweb.scope`, `slothweb.sensitivity`,
 `slothweb.cols.<table>`) are moved into `v1` on the first load and
-removed.
+removed, and no other key is touched, so opening this build after a
+newer one on the same host:port leaves the newer one's `slothweb.v2.*`
+as it was (`reset settings` clears `slothweb.v1.*` only, for the same
+reason).
 
 **The address wins.** A link that names a view, a filter or a scope
 (`#alerts?state=open`, `#devices?q=pass:latest`, `?scope=monitor`)
-opens on what it names, and a filter the address sets is not kept. The
-kept values are what the page opens on at the bare address, or when a
-tab is clicked: an Alerts or Devices address with no filter opens on the
-kept filters, and leaving a drill-down puts the kept search back.
+opens on what it names, and a filter or a scope the address sets is not
+kept. An Alerts address that names any filter sets every other one to
+its default, the search and the window included, so
+`#alerts?state=open` lists what the open-alerts tile counts and not
+that with a search word kept from last week. The kept values are what
+the page opens on at the bare address, or when a tab is clicked: an
+Alerts or Devices address with no filter opens on the kept filters,
+and leaving a drill-down puts the kept search back. A kept filter is
+the viewer's own, not a drill-down, so it never raises the drill-down
+bar; that bar's `show all` sets the view's filters to their defaults
+and forgets the kept ones, so it does show all.
 
 | Setting | Kept as | Notes |
 |---|---|---|
 | the view | `view` | a tab's view only (Overview to Lookup, Alerts); an alert's page, the records and the health need the link they came from |
 | theme | `theme` | applied before the first paint, as before |
-| capture scope | `scope` | as before; an address's scope wins and, followed in the page, is kept |
+| capture scope | `scope` | a pick in the switch (click or arrows); an address's scope wins for that view and is not kept |
 | sensitivity | `sens` | 1.5 to 4 sd, checked as read |
-| each table's column widths and sort | `table.<id>` | every table, by the one `DataTable()`: a width for a column the table no longer has is ignored, one under the column's floor (or over 4000 px) drawn at it, a sort on a column that is gone or no longer sorts left off |
+| each table's column widths and sort | `table.<id>` | every table, by the one `DataTable()`: a width for a column the table no longer has is ignored and dropped at the next save (the SQL box's one `sql` id keeps only the current result's), one under the column's floor (or over 4000 px) drawn at it, a sort on a column that is gone or no longer sorts left off |
 | the ticker's pause | `paused` | it opens paused and says so |
 | the hidden view list and footer (`[`) | `collapsed` | |
-| Anomalies: kind chip, cards or table | `anom.kind`, `anom.table` | |
+| Anomalies: kind chip, cards or table | `anom.kind`, `anom.table` | the chip narrows the Anomalies list only: the Overview's open top five and the open-anomalies tile's drill-down are every kind |
 | Anomalies: closed-in window | `ctl.n-win` | |
 | Activity: metric, its key, window | `act.metric`, `act.keys`, `ctl.a-win` | the metric by name, each metric's key by itself |
 | Devices: search, sort | `ctl.d-q`, `ctl.d-sort` | |
@@ -2414,8 +2424,10 @@ arriving would hide every record with no row left to unpick); the
 device drawer, the scope legend, the WiFi grid's picked cell, an alert's
 page's id (each a moment, or the address's); the `more` pages (no page
 size is a control: the pages are fixed). `web/tests/test_prefs.c`
-fails on any new `select`, `input` or `textarea` that is neither kept
-nor listed here.
+fails on any new `select`, `input` or `textarea` (its attributes in
+any order; one with no id fails too) that is neither kept nor listed
+here, and on any toggle button, radio or tab set carrying ARIA state,
+in the page or set by the script, that is not listed as kept.
 
 **Reset.** Each table's `reset columns` forgets its widths and sort.
 `reset settings` at the right of the footer (a second click within 4 s

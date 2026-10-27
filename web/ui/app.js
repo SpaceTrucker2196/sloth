@@ -55,27 +55,30 @@
       else window.localStorage.setItem(PREF + name, JSON.stringify(v));
     } catch (e) { /* no storage: this load only */ }
   }
-  // Every key of the page's, kept or from before the namespace, gone:
-  // "reset settings".
+  // Every key this namespace has, gone: "reset settings". A later
+  // build's namespace (slothweb.v2.*) is that build's to clear.
   function prefClear() {
     try {
       var ls = window.localStorage, ks = [];
       for (var i = 0; i < ls.length; i++) {
         var k = ls.key(i);
-        if (k && k.indexOf("slothweb.") === 0) ks.push(k);
+        if (k && k.indexOf(PREF) === 0) ks.push(k);
       }
       ks.forEach(function (k) { ls.removeItem(k); });
     } catch (e) { /* no storage: nothing kept */ }
   }
   // The keys from before the namespace (the theme, the scope, the
-  // sensitivity, each table's widths) moved into it once, and any other
-  // un-namespaced slothweb.* key dropped.
+  // sensitivity, each table's widths) moved into it once. Only those
+  // four: any other slothweb.* key, a later build's slothweb.v2.* above
+  // all, is left as it is, so opening this build after a newer one on
+  // the same host:port does not wipe the newer one's settings.
+  var PREF_OLD = ["slothweb.theme", "slothweb.scope", "slothweb.sensitivity"];
   (function prefMigrate() {
     try {
       var ls = window.localStorage, old = [];
       for (var i = 0; i < ls.length; i++) {
         var k = ls.key(i);
-        if (k && k.indexOf("slothweb.") === 0 && k.indexOf(PREF) !== 0) old.push(k);
+        if (k && (PREF_OLD.indexOf(k) >= 0 || k.indexOf("slothweb.cols.") === 0)) old.push(k);
       }
       old.forEach(function (k) {
         var v = ls.getItem(k), to = null, val = null;
@@ -562,9 +565,13 @@
     if (typeof v.sort === "string" && (v.dir === 1 || v.dir === -1)) { out.key = v.sort; out.dir = v.dir; }
     return out;
   }
+  // Only the widths of columns the table has now: a column gone (a
+  // query's result through the one "sql" id above all) is dropped, not
+  // carried from save to save without end.
   function dtSave(t) {
-    var v = {};
-    if (Object.keys(t.w).length) v.w = t.w;
+    var v = {}, w = {};
+    Object.keys(t.w).forEach(function (k) { if (t.col(k)) w[k] = t.w[k]; });
+    if (Object.keys(w).length) v.w = w;
     if (t.key && t.dir) { v.sort = t.key; v.dir = t.dir; }
     prefSet("table." + t.o.id, Object.keys(v).length ? v : null);
   }
@@ -860,6 +867,20 @@
     return ctlFits($(id), v) ? v : dflt;
   }
   function ctlSave(id) { prefSet("ctl." + id, $(id).value); }
+  // The control's value as the page ships it: a select's selected
+  // option (its first if none is marked), an input's value attribute.
+  function ctlDefault(id) {
+    var c = $(id);
+    if (c.tagName !== "SELECT") return c.defaultValue;
+    for (var i = 0; i < c.options.length; i++) if (c.options[i].defaultSelected) return c.options[i].value;
+    return c.options.length ? c.options[0].value : "";
+  }
+  // "show all" on a drill-down's bar: the view's filters back to the
+  // page's defaults and forgotten, so the link shows all rather than
+  // the filters kept from before; the link's own address does the rest.
+  function showAll(ids) {
+    ids.forEach(function (id) { $(id).value = ctlDefault(id); prefSet("ctl." + id, null); });
+  }
   function keepCtl(id) {
     var c = $(id);
     c.value = ctlKept(id, c.value);
@@ -869,6 +890,10 @@
    "al-q", "al-win", "f-win", "f-sort", "f-ip", "q-sql"].forEach(keepCtl);
   // Filled from the server's answer, so put back where it is filled.
   $("al-type").addEventListener("change", function () { ctlSave("al-type"); });
+  // Each drill-down bar's "show all" (its href the bare view).
+  $("al-all").addEventListener("click", function () { showAll(["al-state", "al-sev", "al-type", "al-q", "al-win"]); });
+  $("d-all").addEventListener("click", function () { showAll(["d-q"]); });
+  $("n-all").addEventListener("click", function () { N.pick(""); });
 
   // A cell of a held-rows table: a span with its column's class.
   function dtCell(cls, node) {
@@ -1283,8 +1308,10 @@
   }
   window.addEventListener("hashchange", function () {
     var r = hashRoute();
-    // An address without a scope keeps the one in force.
-    if (r && r.scope) setScope(r.scope);
+    // An address without a scope keeps the one in force; one with a
+    // scope applies it without keeping it, as a filter in the address
+    // is not kept: only a viewer's pick (pickScope) is.
+    if (r && r.scope) setScope(r.scope, true);
     if (r) show(r.v, r.p);
   });
   // "reset settings": every kept setting forgotten and the page loaded
@@ -1395,11 +1422,11 @@
     scopeBar();
     scopeView(view);
   }
-  // 1 when the scope changed.
-  function setScope(s) {
+  // 1 when the scope changed. noKeep: from the address, not kept.
+  function setScope(s, noKeep) {
     if (SCOPES.indexOf(s) < 0 || s === SCOPE) return 0;
     SCOPE = s;
-    prefSet("scope", s);
+    if (!noKeep) prefSet("scope", s);
     SC.facts = null;
     scopeUI();
     // The ticker and the tiles start again in the new scope; an answer
@@ -1851,6 +1878,15 @@
   // ── Anomalies (§8.7) ──────────────────────────────────────────────
   var N = { kind: "", gen: 0 };
 
+  // A chip picked: kept, the chips redrawn, the list read again.
+  N.pick = function (k) {
+    N.kind = KINDS.indexOf(k) >= 0 ? k : "";
+    prefSet("anom.kind", N.kind || null);
+    var box = $("n-chips");
+    for (var i = 0; i < box.childNodes.length; i++)
+      box.childNodes[i].className = box.childNodes[i].dataset.kind === (N.kind || "all") ? "on" : "";
+    anomalies();
+  };
   (function chips() {
     var box = $("n-chips");
     var all = ["all"].concat(KINDS);
@@ -1859,13 +1895,8 @@
     all.forEach(function (k) {
       var b = el("button", k === (N.kind || "all") ? "on" : "", (k === "all" ? "" : kindGlyph(k) + " ") + k);
       b.type = "button";
-      b.addEventListener("click", function () {
-        N.kind = k === "all" ? "" : k;
-        prefSet("anom.kind", N.kind || null);
-        for (var i = 0; i < box.childNodes.length; i++) box.childNodes[i].className = "";
-        b.className = "on";
-        anomalies();
-      });
+      b.dataset.kind = k;
+      b.addEventListener("click", function () { N.pick(k); });
       box.appendChild(b);
     });
   })();
@@ -1981,17 +2012,22 @@
     // sensitivity or the chips say, so the count is the tile's.
     var openOnly = view === "anomalies" && VP.state === "open";
     $("n-filter").hidden = !openOnly;
-    if (openOnly) set("n-filter-t", "filtered: open episodes only, every one, the sensitivity not applied: the " +
+    if (openOnly) set("n-filter-t", "filtered: open episodes only, every one, the sensitivity and the kind chip not applied: the " +
                       $("k-anoms").textContent + " the Overview's open-anomalies tile counts");
     var gen = ++N.gen;
     var now = Math.floor(Date.now() / 1000);
     var win = Number($("n-win").value) || 3600;
     var p = "/api/anomalies?since=" + (now - win);
-    if (N.kind) p += "&kind=" + encodeURIComponent(N.kind);
+    // The chip is the Anomalies list's own filter: the tile's drill-down
+    // and the Overview's top five are every kind, so a chip kept from a
+    // launch before does not narrow them unsaid. ("closed in" leaves
+    // open episodes alone: the server drops only closed ones by it.)
+    var kind = view === "anomalies" && !openOnly ? N.kind : "";
+    if (kind) p += "&kind=" + encodeURIComponent(kind);
     getJSON(p).then(function (j) {
       if (gen !== N.gen) return;
       var list = (j.anomalies || []).filter(openOnly
-        ? function (a) { return a.open === true && (!N.kind || a.kind === N.kind); } : shown);
+        ? function (a) { return a.open === true; } : shown);
       N.list = list;
       if (N.table) anomTable();
       var box = $("n-cards");
@@ -2000,7 +2036,9 @@
       set("n-count", list.length + " shown" + (j.more ? ", " + j.omitted + " more on the server" : ""));
       set("n-note", list.length ? "" : "nothing in this window");
       // Overview's top five: open ones, highest score first (the
-      // server's order), whatever the chips say.
+      // server's order), whatever the chips say: drawn only from an
+      // answer the chip did not narrow.
+      if (kind) return;
       var top = $("o-anoms");
       while (top.firstChild) top.removeChild(top.firstChild);
       var open = (j.anomalies || []).filter(function (a) { return a.open && shown(a); });
@@ -4010,17 +4048,20 @@
     // A drill-down's filter (the open-alerts tile: state=open) set in
     // the controls, so the filter applied is the one on screen; an
     // address that names no filter opens on the kept ones.
+    // Every filter, the search and the window included: a link shows
+    // what it names, not that with a kept search word or window added.
     var named = ["state", "sev", "type", "q"].some(function (k) { return typeof VP[k] === "string"; });
     $("al-state").value = STATE_SET[VP.state] ? VP.state : named ? "all" : ctlKept("al-state", "all");
     $("al-sev").value = typeof VP.sev === "string" && SEV_SET[VP.sev] ? VP.sev : named ? "" : ctlKept("al-sev", "");
-    if (typeof VP.q === "string") $("al-q").value = VP.q;
-    else if (ALP.drillQ !== undefined) { $("al-q").value = ctlKept("al-q", ""); }
-    ALP.drillQ = VP.q;
+    $("al-q").value = typeof VP.q === "string" ? VP.q : named ? "" : ctlKept("al-q", "");
+    $("al-win").value = named ? ctlDefault("al-win") : ctlKept("al-win", ctlDefault("al-win"));
     var kt = prefGet("ctl.al-type");
     ALP.wantType = typeof VP.type === "string" ? VP.type : !named && typeof kt === "string" ? kt : "";
-    // The drill-down as asked, to tell when the controls have left it.
+    if (named && typeof VP.type !== "string") $("al-type").value = "";
+    // The drill-down as the address asked it, to tell when the controls
+    // have left it; a kept type is the viewer's filter, not a drill-down.
     ALP.drill = (STATE_SET[VP.state] && VP.state !== "all") || (VP.sev && SEV_SET[VP.sev]) ||
-               ALP.wantType || (typeof VP.q === "string" && VP.q)
+               (typeof VP.type === "string" && VP.type) || (typeof VP.q === "string" && VP.q)
       ? { state: $("al-state").value, sev: $("al-sev").value, type: ALP.wantType,
           q: typeof VP.q === "string" ? (VP.q.trim().split(/\s+/)[0] || "") : "" }
       : null;

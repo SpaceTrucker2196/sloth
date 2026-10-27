@@ -17,7 +17,22 @@
  * index.html (it names the control); the page's kept list with "al-win"
  * taken out of app.js's keepCtl list; the old key names with SCOPE_KEY
  * put back. The kept sort's sortable check and the address over a kept
- * view were each seen red with the guard taken out. */
+ * view were each seen red with the guard taken out.
+ *
+ * The review's (2026-10-27), each seen red and restored byte-identical:
+ * the census with <select class="x" id="al-new"> (attributes in another
+ * order) and with an <input type="text"> with no id; the toggle census
+ * with an undecided aria-pressed button and with an ariaPressed set on
+ * #pause; the named-filter rule with al-q's old drillQ branch and with
+ * al-win kept unconditionally; the drill-down with ALP.wantType back in
+ * it; the no-save rule with a ctlSave in alertsView and in the devices
+ * drill-down; the address scope with setScope's no-keep flag dropped;
+ * the chip's own list with &kind from N.kind and with the open-only
+ * filter narrowed by it again; dtSave writing every width; the
+ * migration's and the reset's catch-all over slothweb.* put back. The
+ * behaviour (a link's filters and scope applied, not kept; show all;
+ * the chip's fetches; v2 keys surviving the move and the reset; a gone
+ * column's width dropped) was driven in headless Chromium. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -119,22 +134,40 @@ static int listed(const char *id, const char *const *l, size_t n) {
 }
 #define N_OF(a) (sizeof(a) / sizeof((a)[0]))
 
+/* The id inside the tag that starts at q (its '<'), wherever in the
+ * tag the attribute is; 0 when the tag has none or it does not fit. */
+static int tag_id(const char *q, char *id, size_t cap) {
+    const char *gt = strchr(q, '>');
+    if (!gt) return 0;
+    for (const char *a = q; a + 4 < gt; a++) {
+        if ((a[0] == ' ' || a[0] == '\n' || a[0] == '\t') && strncmp(a + 1, "id=\"", 4) == 0) {
+            const char *v = a + 5, *e = strchr(v, '"');
+            if (!e || e > gt || (size_t)(e - v) >= cap) return 0;
+            memcpy(id, v, (size_t)(e - v));
+            id[e - v] = '\0';
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void test_every_control_is_decided(void) {
     const char *p = (const char *)web_page;
-    static const char *const TAG[] = { "<select id=\"", "<textarea id=\"", "<input type=\"" };
+    /* Every <select, <textarea and <input tag, its attributes in any
+     * order; a control with no id cannot be kept, so it fails too. */
+    static const char *const TAG[] = { "<select", "<textarea", "<input" };
     int seen = 0;
     for (size_t t = 0; t < N_OF(TAG); t++) {
+        size_t tl = strlen(TAG[t]);
         for (const char *q = strstr(p, TAG[t]); q; q = strstr(q + 1, TAG[t])) {
-            const char *idp = strstr(q, "id=\"");
-            const char *gt = strchr(q, '>');
-            if (!idp || !gt || idp > gt) { WT_ASSERT(0); continue; }
-            idp += 4;
-            const char *e = strchr(idp, '"');
+            char c = q[tl];
+            if (c != ' ' && c != '\n' && c != '\t' && c != '>' && c != '/') continue;
             char id[64];
-            size_t n = e ? (size_t)(e - idp) : 0;
-            if (!e || n >= sizeof(id)) { WT_ASSERT(0); continue; }
-            memcpy(id, idp, n);
-            id[n] = '\0';
+            if (!tag_id(q, id, sizeof(id))) {
+                fprintf(stderr, "  control without an id: %.60s\n", q);
+                WT_ASSERT(0);
+                continue;
+            }
             seen++;
             int k = listed(id, KEPT, N_OF(KEPT)) + listed(id, KEPT_ELSEWHERE, N_OF(KEPT_ELSEWHERE)) +
                     listed(id, NOT_KEPT, N_OF(NOT_KEPT));
@@ -189,7 +222,7 @@ static void test_the_rest_and_the_address(void) {
     const char *ks = strstr(p, "  var savedScope = prefGet(\"scope\");");
     const char *hs = strstr(p, "  if (hashScope) SCOPE = hashScope[1];");
     WT_ASSERT(ks != NULL && hs != NULL && ks < hs);
-    WT_HAS(p, "    prefSet(\"scope\", s);");
+    WT_HAS(p, "    if (!noKeep) prefSet(\"scope\", s);");
     /* An address naming an alerts filter sets the others to defaults,
      * not to the kept ones: the link reproduces what it names. */
     WT_HAS(p, "$(\"al-state\").value = STATE_SET[VP.state] ? VP.state : named ? \"all\" : ctlKept(\"al-state\", \"all\");");
@@ -198,7 +231,7 @@ static void test_the_rest_and_the_address(void) {
     WT_HAS(p, "    prefSet(\"paused\", paused || null);");
     WT_HAS(p, "if (e.key === \"[\") prefSet(\"collapsed\", $(\"app\").classList.toggle(\"collapsed\") || null);");
     WT_HAS(p, "  if (prefGet(\"collapsed\") === true) $(\"app\").classList.add(\"collapsed\");");
-    WT_HAS(p, "        prefSet(\"anom.kind\", N.kind || null);");
+    WT_HAS(p, "    prefSet(\"anom.kind\", N.kind || null);");
     WT_HAS(p, "  if (prefGet(\"anom.table\") === true) anomMode(true);");
     WT_HAS(p, "          prefSet(\"flows.proto\", p);");
     WT_HAS(p, "  if (FLOW_TABS.indexOf(prefGet(\"flows.proto\")) >= 0) F.proto = prefGet(\"flows.proto\");");
@@ -213,9 +246,196 @@ static void test_the_rest_and_the_address(void) {
     WT_HAS(p, "    location.reload();");
 }
 
+/* The controls that are buttons: a toggle, a radio group, a chip set, a
+ * tab set. Each is kept (its save line named) or not: one with ARIA
+ * state in the page, or ARIA state set by the script, that is not here
+ * fails. A chip set that only swaps a class escapes the scan, which is
+ * why n-chips is listed by hand. */
+struct toggle { const char *id; const char *save; };
+static const struct toggle TOGGLES[] = {
+    { "theme",      "    prefSet(\"theme\", light ? \"light\" : \"dark\");" },
+    { "pause",      "    prefSet(\"paused\", paused || null);" },
+    { "sc-monitor", "    b.addEventListener(\"click\", function () { pickScope(s); });" },
+    { "sc-hybrid",  "    b.addEventListener(\"click\", function () { pickScope(s); });" },
+    { "sc-local",   "    b.addEventListener(\"click\", function () { pickScope(s); });" },
+    { "n-mode",     "    prefSet(\"anom.table\", N.table || null);" },
+    { "n-chips",    "    prefSet(\"anom.kind\", N.kind || null);" },
+    { "f-tabs",     "          prefSet(\"flows.proto\", p);" },
+};
+static const char *const TOGGLE_JS[] = {   /* the script's ARIA state, each a listed toggle's */
+    "      b.ariaChecked = on ? \"true\" : \"false\";",
+    "    $(\"n-mode\").ariaPressed = N.table ? \"true\" : \"false\";",
+    "        b.ariaSelected = p === F.proto ? \"true\" : \"false\";",
+};
+
+static void test_every_toggle_is_decided(void) {
+    const char *p = (const char *)web_page;
+    for (size_t i = 0; i < N_OF(TOGGLES); i++) {
+        char want[80];
+        snprintf(want, sizeof(want), "id=\"%s\"", TOGGLES[i].id);
+        WT_HAS(p, want);
+        WT_HAS(p, TOGGLES[i].save);
+    }
+    static const char *const ATTR[] = { "aria-pressed=", "aria-checked=", "aria-selected=",
+                                        "role=\"radio\"", "role=\"tab\"", "role=\"tablist\"",
+                                        "role=\"switch\"", "role=\"checkbox\"" };
+    int seen = 0;
+    for (size_t a = 0; a < N_OF(ATTR); a++) {
+        for (const char *q = strstr(p, ATTR[a]); q; q = strstr(q + 1, ATTR[a])) {
+            if (q > p && q[-1] == '[') continue;     /* a stylesheet's selector */
+            const char *lt = q;
+            while (lt > p && *lt != '<' && *lt != '>') lt--;
+            char id[64];
+            if (*lt != '<' || !tag_id(lt, id, sizeof(id))) {
+                fprintf(stderr, "  toggle without an id: %.60s\n", lt);
+                WT_ASSERT(0);
+                continue;
+            }
+            int k = 0;
+            for (size_t i = 0; i < N_OF(TOGGLES); i++) if (strcmp(id, TOGGLES[i].id) == 0) k = 1;
+            if (!k) fprintf(stderr, "  toggle #%s is not decided (kept or not)\n", id);
+            WT_EQ(k, 1);
+            seen++;
+        }
+    }
+    WT_ASSERT(seen >= 8);
+    static const char *const PROP[] = { "ariaPressed", "ariaChecked", "ariaSelected" };
+    for (size_t a = 0; a < N_OF(PROP); a++) {
+        for (const char *q = strstr(p, PROP[a]); q; q = strstr(q + 1, PROP[a])) {
+            const char *ls = q;
+            while (ls > p && ls[-1] != '\n') ls--;
+            int k = 0;
+            for (size_t i = 0; i < N_OF(TOGGLE_JS); i++)
+                if (strncmp(ls, TOGGLE_JS[i], strlen(TOGGLE_JS[i])) == 0) k = 1;
+            if (!k) fprintf(stderr, "  ARIA state set by an undecided line: %.70s\n", ls);
+            WT_EQ(k, 1);
+        }
+    }
+    WT_LACKS(p, "setAttribute(\"aria-");
+    WT_LACKS(p, "setAttribute(\"role\"");
+}
+
+/* The body of the function whose first line is head: up to the next
+ * line that closes a function at the same two-space indent. */
+static char *body_of(const char *p, const char *head) {
+    const char *a = strstr(p, head);
+    const char *b = a ? strstr(a, "\n  }\n") : NULL;
+    if (!a || !b) return NULL;
+    char *out = malloc((size_t)(b - a) + 1);
+    if (!out) return NULL;
+    memcpy(out, a, (size_t)(b - a));
+    out[b - a] = '\0';
+    return out;
+}
+static int count_of(const char *s, const char *w) {
+    int n = 0;
+    for (const char *q = strstr(s, w); q; q = strstr(q + 1, w)) n++;
+    return n;
+}
+
+/* A link shows what it names. The alerts view's every filter, search
+ * and window are the defaults under an address that names any filter;
+ * a kept type is the viewer's filter, never a drill-down; no drill-down
+ * path keeps what the address set; each bar's "show all" clears the
+ * view's filters; a scope in an address is applied, not kept. */
+static void test_a_link_shows_what_it_names(void) {
+    const char *p = (const char *)web_page;
+    char *av = body_of(p, "  function alertsView() {");
+    WT_ASSERT(av != NULL);
+    if (av) {
+        WT_HAS(av, "    $(\"al-q\").value = typeof VP.q === \"string\" ? VP.q : named ? \"\" : ctlKept(\"al-q\", \"\");");
+        WT_HAS(av, "    $(\"al-win\").value = named ? ctlDefault(\"al-win\") : ctlKept(\"al-win\", ctlDefault(\"al-win\"));");
+        WT_HAS(av, "    if (named && typeof VP.type !== \"string\") $(\"al-type\").value = \"\";");
+        /* Every kept value read here is read only when the address
+         * names no filter. */
+        int lines = 0;
+        for (const char *q = strstr(av, "ctlKept("); q; q = strstr(q + 1, "ctlKept(")) {
+            const char *ls = q, *le = strchr(q, '\n');
+            while (ls > av && ls[-1] != '\n') ls--;
+            int ok = 0;
+            for (const char *r = ls; r < (le ? le : q); r++) if (strncmp(r, "named ?", 7) == 0) ok = 1;
+            if (!ok) fprintf(stderr, "  a kept value read under a named filter: %.70s\n", ls);
+            WT_ASSERT(ok);
+            lines++;
+        }
+        WT_ASSERT(lines >= 4);
+        /* The drill-down is the address's: the kept type is not in it. */
+        const char *d = strstr(av, "    ALP.drill = (");
+        const char *e = d ? strstr(d, "      ? {") : NULL;
+        WT_ASSERT(d != NULL && e != NULL);
+        if (d && e) {
+            int bad = 0;
+            for (const char *q = strstr(d, "wantType"); q && q < e; q = strstr(q + 1, "wantType")) bad++;
+            WT_EQ(bad, 0);
+        }
+        WT_HAS(av, "(typeof VP.type === \"string\" && VP.type)");
+        /* A filter the address set is not kept. */
+        WT_EQ(count_of(av, "ctlSave"), 0);
+        WT_EQ(count_of(av, "prefSet"), 0);
+        WT_EQ(count_of(av, "dispatchEvent"), 0);
+        free(av);
+    }
+    char *dv = body_of(p, "  function devices() {");
+    WT_ASSERT(dv != NULL);
+    if (dv) {
+        WT_EQ(count_of(dv, "ctlSave"), 0);
+        WT_EQ(count_of(dv, "prefSet"), 0);
+        WT_EQ(count_of(dv, "dispatchEvent"), 0);
+        free(dv);
+    }
+    /* "show all": the view's filters to the page's defaults, forgotten. */
+    WT_HAS(p, "    ids.forEach(function (id) { $(id).value = ctlDefault(id); prefSet(\"ctl.\" + id, null); });");
+    WT_HAS(p, "  $(\"al-all\").addEventListener(\"click\", function () { showAll([\"al-state\", \"al-sev\", \"al-type\", \"al-q\", \"al-win\"]); });");
+    WT_HAS(p, "  $(\"d-all\").addEventListener(\"click\", function () { showAll([\"d-q\"]); });");
+    WT_HAS(p, "  $(\"n-all\").addEventListener(\"click\", function () { N.pick(\"\"); });");
+    WT_HAS(p, "<a href=\"#alerts\" id=\"al-all\">show all</a>");
+    WT_HAS(p, "<a href=\"#devices\" id=\"d-all\">show all</a>");
+    WT_HAS(p, "<a href=\"#anomalies\" id=\"n-all\">show all</a>");
+    /* A scope in an address applied, not kept; a viewer's pick kept. */
+    WT_HAS(p, "    if (r && r.scope) setScope(r.scope, true);");
+    WT_LACKS(p, "setScope(r.scope);");
+    WT_HAS(p, "    if (!setScope(s)) return;");
+}
+
+/* The kind chip is the Anomalies list's own filter: the tile's
+ * drill-down and the Overview's top five are every kind. */
+static void test_the_chip_narrows_only_its_list(void) {
+    const char *p = (const char *)web_page;
+    char *an = body_of(p, "  function anomalies() {");
+    WT_ASSERT(an != NULL);
+    if (!an) return;
+    WT_HAS(an, "    var kind = view === \"anomalies\" && !openOnly ? N.kind : \"\";");
+    WT_HAS(an, "    if (kind) p += \"&kind=\" + encodeURIComponent(kind);");
+    WT_HAS(an, "      if (kind) return;\n      var top = $(\"o-anoms\");");
+    /* N.kind read once, in that line: nothing else here narrows by it. */
+    WT_EQ(count_of(an, "N.kind"), 1);
+    free(an);
+}
+
+/* What the page writes back and what it clears. A table writes only the
+ * widths of the columns it has, so a gone column's (every query's
+ * through the one "sql" id) does not pile up; the move from the build
+ * before touches only that build's four keys, and "reset settings" only
+ * this namespace, so a later build's slothweb.v2.* survives both. */
+static void test_what_is_written_and_cleared(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "    Object.keys(t.w).forEach(function (k) { if (t.col(k)) w[k] = t.w[k]; });\n"
+              "    if (Object.keys(w).length) v.w = w;");
+    WT_LACKS(p, "v.w = t.w;");
+    WT_HAS(p, "  var PREF_OLD = [\"slothweb.theme\", \"slothweb.scope\", \"slothweb.sensitivity\"];");
+    WT_HAS(p, "        if (k && (PREF_OLD.indexOf(k) >= 0 || k.indexOf(\"slothweb.cols.\") === 0)) old.push(k);");
+    WT_HAS(p, "        if (k && k.indexOf(PREF) === 0) ks.push(k);");
+    WT_LACKS(p, "k.indexOf(PREF) !== 0");
+    WT_LACKS(p, "if (k && k.indexOf(\"slothweb.\") === 0)");
+}
+
 void run_prefs_tests(void) {
     WT_RUN(test_one_namespace_one_door);
     WT_RUN(test_tables_keep_widths_and_sort);
     WT_RUN(test_every_control_is_decided);
     WT_RUN(test_the_rest_and_the_address);
+    WT_RUN(test_every_toggle_is_decided);
+    WT_RUN(test_a_link_shows_what_it_names);
+    WT_RUN(test_the_chip_narrows_only_its_list);
+    WT_RUN(test_what_is_written_and_cleared);
 }

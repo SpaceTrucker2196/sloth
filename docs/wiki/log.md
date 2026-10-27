@@ -5609,3 +5609,12 @@ report events.
   filters, windows and search boxes. The address still wins over a kept
   value; a reset per table and one for everything; the previous build's
   keys moved in on the first load. No server state.
+- 2026-10-27 — [[slothweb]]: kept settings, review. A link that names
+  an Alerts filter sets the search and window to their defaults too; a
+  kept alert type is no longer taken for a drill-down; each drill-down
+  bar's `show all` clears the kept filters; a scope in an address is
+  applied, not kept; the Anomalies kind chip narrows only its list, not
+  the Overview's top five or the tile's drill-down; a table writes back
+  only its current columns' widths; the move from the build before
+  touches only that build's four keys. `test_prefs.c`'s census reads a
+  control's id in any attribute order and covers the toggle buttons.

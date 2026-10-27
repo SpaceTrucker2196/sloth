@@ -848,7 +848,7 @@ static void test_page_carries_the_m3_view(void) {
     }
     WT_HAS(p, "\"anomalies\"");               /* in the views it shows */
     WT_HAS(p, "\"/api/anomalies?since=\" + (now - win)");
-    WT_HAS(p, "p += \"&kind=\" + encodeURIComponent(N.kind)");
+    WT_HAS(p, "p += \"&kind=\" + encodeURIComponent(kind)");
     WT_HAS(p, "\"/api/baseline?metric=\" + encodeURIComponent(m)");
     WT_HAS(p, "p += \"&key=\" + encodeURIComponent(key)");
 

@@ -106,7 +106,9 @@ detail formats audited), `include/sloth_alerts.def`,
 **Last updated**: 2026-10-27 (kept settings: every control a viewer
 can change kept per browser under `slothweb.v1.*`, each table's widths
 and sort among them, the address still winning, a reset per table and
-one for everything; the capture scope's review: the host's
+one for everything, and its review: a link's filters and scope applied
+but not kept, `show all` clearing, the kind chip on its own list only,
+no other build's keys touched; the capture scope's review: the host's
 ARP table, leases and scan entries stay Local, scoped anomaly counts, z
 and open-anomalies tile, the Records view's scoped counts, the WiFi
 view's Local half from `/api/wifi/local`, [[capture-scope]]),
@@ -970,20 +972,27 @@ ticker's pause, the collapsed chrome, the Anomalies chip and mode, the
 Activity metric and each metric's key, and every view's filters,
 windows, sorts and search boxes, the SQL box's draft included. An
 address that names a view, a filter or a scope wins, and a filter it
-sets is not kept, so a link reproduces what it names; the kept values
-are what the bare address and a tab click open on. A kept width for a
+or scope it sets is not kept, so a link reproduces what it names: an
+Alerts address naming any filter sets the others, the search and the
+window included, to their defaults; a kept filter never raises a
+drill-down bar, and the bar's `show all` clears the kept filters; the
+Anomalies kind chip narrows its own list, never the Overview's top
+five or the tile's drill-down. The kept values are what the bare
+address and a tab click open on. A kept width for a
 column a table no longer has is ignored, one under the column's floor
 is drawn at it; a kept sort on a column that is gone or no longer sorts
 is left off. Blocked or cleared storage is the defaults, never an
 error. The keys of the build before (`slothweb.theme`,
 `slothweb.scope`, `slothweb.sensitivity`, `slothweb.cols.<table>`) are
-moved into `v1` on the first load. Each table keeps its `reset
+moved into `v1` on the first load, and no other key is touched (a
+later build's `slothweb.v2.*` survives this one, and its reset). Each table keeps its `reset
 columns`; `reset settings` in the footer forgets everything and loads
 the bare address again. What is deliberately not kept (the History
 range, the Records type pick, the drawer, the recipe picker) and why,
 setting by setting: [`web/README.md`](../../web/README.md#kept-settings).
 `web/tests/test_prefs.c` holds it by the page's text, and fails on a new
-form control that is neither kept nor listed as not kept; the behaviour
+form control (any attribute order) or ARIA toggle that is neither kept
+nor listed as not kept; the behaviour
 (sort and resize, relaunch, still there; reset; storage that throws)
 was driven in headless Chromium.
 
