@@ -1,4 +1,5 @@
 #include "web_live.h"
+#include "web_pcapdir.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -509,7 +510,13 @@ static void inc_fill(web_live_inc_t *e, const web_jrec_t *r, long long ts,
     c = web_jl_int(r, "reopen_count", -1);
     if (c >= 0) e->reopen = c;
     s = web_jl_str(r, "pcap_path");
-    if (s && *s) e->pcap = 1;
+    if (s && *s) {
+        e->pcap = 1;
+        char b[WEB_PCAP_NAME_MAX + 1];
+        web_pcapdir_basename(s, b);
+        if (b[0] && strlen(b) < sizeof(e->pcap_name))
+            memcpy(e->pcap_name, b, strlen(b) + 1);
+    }
 }
 
 /* Into the closed ring, newest last. */

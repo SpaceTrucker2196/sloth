@@ -147,6 +147,11 @@ typedef struct {
     long long first_ts, last_ts, closed_ts;   /* closed_ts -1 open */
     long long count, observations, reopen;
     int       pcap;                    /* sloth wrote a pcap of it */
+    /* That pcap's file name: the basename of the record's pcap_path,
+     * kept only when it is exactly sloth's alert-pcap name
+     * (web_pcapdir_name_ok()); "" otherwise. A lookup key for the alert
+     * page's capture (web_pcapdir.h), with no directory part. */
+    char      pcap_name[80];
     char      reason[WEB_LIVE_REASON_MAX + 1];
     int       nsev;                    /* changes seen, all of them */
     web_live_sevh_t sevh[WEB_LIVE_SEVH];  /* the latest WEB_LIVE_SEVH, oldest first */

@@ -20,6 +20,9 @@
  *   /api/history/overview, /api/history/devices, /api/history/alerts,
  *   /api/history/flows, /api/sessions, /api/sessions/new
  *                 JSON: the History view (M5, web_history.h)
+ *   /api/alerts, /api/alert JSON: the Alerts view (web_alerts.h), GET only
+ *   /api/pcap/frames JSON: an alert's capture decoded, and
+ *   /api/pcap     its bytes, an attachment (web_evidence.h), GET only
  *   /api/query    JSON: the SQL box (M5, web_sqlbox.h), GET only, and
  *   /api/recipes  JSON: its recipes; both 404 unless --web-allow-sql
  *   /api/ble, /api/ble/alerts, /api/ble/{addr}
@@ -93,6 +96,10 @@ typedef struct {
     const unsigned char *body;      /* a static body sent after out, or NULL */
     size_t               body_len;
     int                  body_free; /* body is malloc'd: the caller frees it */
+    /* body is this heap block, the route's to give away: the server
+     * frees it when the connection is done with it (a pcap download,
+     * too large for out). NULL for a static body. */
+    unsigned char       *body_owned;
 } web_resp_t;
 
 /* Route rq. sse_room is 0 when every event-stream slot is in use, which

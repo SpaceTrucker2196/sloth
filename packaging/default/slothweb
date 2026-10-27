@@ -31,6 +31,14 @@
 #
 # Do not add `tailscale serve` or a funnel in front of it.
 #
+# The alert page's packet capture (web/README.md "An alert's proof"):
+# the sensor's --pcap-dir, read in place. /var/lib/sloth is already
+# read-only in the unit's sandbox, so nothing else needs widening. Only
+# files named as sloth names alert pcaps are opened, never a handshake
+# pcap or eapol.22000.
+#   --pcap-dir /var/lib/sloth/pcap
+#
 # Example:
 #   SLOTHWEB_ARGS=--web-bind 100.64.0.10:8770 --web-allow-remote --web-allow 100.64.0.20/32
+#   SLOTHWEB_ARGS=--pcap-dir /var/lib/sloth/pcap
 SLOTHWEB_ARGS=

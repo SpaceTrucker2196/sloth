@@ -487,3 +487,41 @@ a.tile:focus-visible { outline-offset: 2px; }
   #a-multi, #a-hosts { grid-template-columns: 1fr; }
   canvas.chord { height: 280px; }
 }
+
+/* The alert page's proof and the drawer's alert rows (web/ui/evidence.js). */
+#ev-alert .ev-h { font-size: 11px; color: var(--brass); margin: 10px 0 2px; }
+/* Unnumbered by the list: each entry carries its own [n], and the
+ * assessments number with gaps (1, 2, 3, 7). */
+#ev-alert .ev-bib { margin: 4px 0 12px; padding-left: 0; list-style: none; font-size: 12px; color: var(--ink); }
+#ev-alert .ev-bib li { margin: 2px 0; overflow-wrap: anywhere; }
+#ev-alert .ev-files li { cursor: pointer; flex-wrap: wrap; }
+#ev-alert .ev-files li.on { background: var(--tint); }
+.ev-hash { font-size: 12px; margin: 6px 0; overflow-wrap: anywhere; }
+.ev-badge { display: inline-block; padding: 0 6px; border: 1px solid currentColor; border-radius: var(--radius-sm); font-weight: 600; }
+.ev-ok { color: var(--phosphor); }
+.ev-warn { color: var(--signal); }
+.ev-bad { color: var(--sev-crit); }
+.ev-tools { display: flex; flex-wrap: wrap; gap: var(--gap); align-items: center; margin: 6px 0; }
+.ev-tools input[type=search] { flex: 1 1 18ch; min-width: 0; }
+.ev-frames { font-size: 12px; margin: 4px 0 10px; }
+.ev-frame { border-top: 1px dotted var(--rule); }
+.ev-frow { display: flex; gap: var(--gap); align-items: baseline; cursor: pointer; padding: 1px 0; min-width: 0; }
+.ev-frow:hover { background: var(--tint); }
+.ev-frow .n { flex: none; min-width: 5ch; text-align: right; }
+.ev-frow .ev-kind { flex: none; min-width: 10ch; }
+.ev-frow .tx { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-frow .ev-cut { flex: none; color: var(--signal); font-size: 11px; }
+.ev-fbody { padding: 2px 0 8px 2ch; }
+.ev-hex { margin: 4px 0; padding: 6px; overflow-x: auto; font-size: 11px; line-height: 1.35; color: var(--tui-bright); background: var(--tint); border-radius: var(--radius-sm); }
+#ev-drawer li.go::after { content: "\203A"; margin-left: auto; padding-left: var(--gap); color: var(--brass); }
+#ev-drawer li.go:focus-visible { outline-offset: -1px; }
+@media (pointer: coarse) {
+  #ev-drawer li.go { min-height: 44px; align-items: center; }
+  .ev-frow { min-height: 36px; align-items: center; }
+}
+@media (max-width: 480px) {
+  .ev-frow { flex-wrap: wrap; }
+  .ev-frow .ev-kind { min-width: 0; }
+  .ev-frow .n:nth-child(3) { display: none; }
+  .ev-frow .tx { order: 5; flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; padding-left: 6ch; }
+}

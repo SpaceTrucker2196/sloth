@@ -242,7 +242,7 @@ void web_usage(FILE *out) {
         "                [--store PATH] [--web-max-keys N] [--web-max-mb N]\n"
         "                [--web-retain-days N] [--sloth-db PATH]\n"
         "                [--web-allow-sql] [--web-read-only]\n"
-        "                [--web-assessments DIR] [--help]\n"
+        "                [--web-assessments DIR] [--pcap-dir DIR]... [--help]\n"
         "\n"
         "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
         "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
@@ -298,6 +298,13 @@ void web_usage(FILE *out) {
         "                        no recommendation yet. slothweb.service\n"
         "                        passes the installed copy,\n"
         "                        $PREFIX/share/sloth/alert-assessments.\n"
+        "  --pcap-dir DIR        the sensor's --pcap-dir (and, a second time,\n"
+        "                        its --eapol-dir), read-only: the alert page's\n"
+        "                        packet capture, decoded, hash-checked against\n"
+        "                        sloth's manifests and downloadable. Only\n"
+        "                        files named as sloth names alert pcaps are\n"
+        "                        opened, never a handshake pcap or\n"
+        "                        eapol.22000; 16 MB a file at most.\n"
         "  --help                this text.\n"
         "\n"
         "Routes (GET and HEAD): / (the page), /api/health, /api/live,\n"
@@ -309,6 +316,8 @@ void web_usage(FILE *out) {
         "/api/history/flows, /api/sessions, /api/sessions/new (JSON),\n"
         "/api/frrs/* (triage, the FRRS record, the TACDB), /api/ble,\n"
         "/api/ble/alerts, /api/ble/ADDR (the BLE view),\n"
+        "/api/alerts, /api/alert, /api/pcap/frames and /api/pcap (GET\n"
+        "only),\n"
         "/events (Server-Sent Events); with --web-allow-sql, /api/query\n"
         "(GET only) and /api/recipes. POST only to the six /api/frrs\n"
         "write routes, same-origin, unless --web-read-only. Any other\n"
@@ -368,6 +377,27 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 fprintf(err, "slothweb: %s\n", msg);
                 return -1;
             }
+        } else if (!strcmp(a, "--pcap-dir")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            if (!v[0] || strlen(v) >= sizeof(c->pcap_dir[0]) - 16) {
+                fprintf(err, "slothweb: --pcap-dir: empty or too long a path\n");
+                return -1;
+            }
+            if (c->npcap_dir >= WEB_PCAP_DIRS) {
+                fprintf(err, "slothweb: --pcap-dir: at most %d (the sensor's "
+                             "--pcap-dir and its --eapol-dir)\n", WEB_PCAP_DIRS);
+                return -1;
+            }
+            for (int k = 0; k < c->npcap_dir; k++)
+                if (!strcmp(c->pcap_dir[k], v)) {
+                    fprintf(err, "slothweb: --pcap-dir %s given twice\n", v);
+                    return -1;
+                }
+            snprintf(c->pcap_dir[c->npcap_dir++], sizeof(c->pcap_dir[0]), "%s", v);
         } else if (!strcmp(a, "--sloth-db")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);

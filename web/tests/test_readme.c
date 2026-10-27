@@ -226,7 +226,8 @@ static void test_security_section(void) {
     WT_ASSERT(a && b && c && d && a < b && b < c && c < d);
     /* The quick start the check follows. */
     WT_HAS(doc, "<!-- quickstart:begin -->\n```sh\nmake web web-demo\n");
-    WT_HAS(doc, "--sloth-db sloth.db --store slothweb.db\n```\n<!-- quickstart:end -->");
+    WT_HAS(doc, "--sloth-db sloth.db --store slothweb.db --pcap-dir pcap\n```\n<!-- quickstart:end -->");
+    WT_HAS(doc, "\"$SRC/build/web/slothweb-demo\" pcaps pcap\n");
     free(doc);
 }
 

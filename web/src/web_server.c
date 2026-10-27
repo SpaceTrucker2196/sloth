@@ -154,6 +154,17 @@ void web_server_stats(web_server_t *s, web_stats_t *out) {
     pthread_mutex_unlock(&s->mu);
 }
 
+/* The body is done with: a route's own heap copy (a pcap download,
+ * body_owned; the FRRS export, body_free) is freed, a static one only
+ * forgotten. */
+static void body_drop(web_conn_t *c) {
+    free(c->body_owned);
+    c->body_owned = NULL;
+    if (c->body_free) free((void *)c->body);
+    c->body_free = 0;
+    c->body = NULL;
+}
+
 static void conn_close(web_server_t *s, web_conn_t *c) {
     if (c->state == C_SSE && s->sse_count > 0) s->sse_count--;
     /* A client gone while its statement runs: the box is released when
@@ -170,9 +181,7 @@ static void conn_close(web_server_t *s, web_conn_t *c) {
     if (c->fd >= 0) close(c->fd);
     c->fd = -1;
     c->state = C_FREE;
-    if (c->body_free) free((void *)c->body);
-    c->body_free = 0;
-    c->body = NULL;
+    body_drop(c);
     c->out_len = c->out_off = c->body_len = c->body_off = 0;
 }
 
@@ -198,7 +207,7 @@ static void conn_respond(web_server_t *s, web_conn_t *c, int status,
                          int is_head) {
     c->out_len = web_http_response(status, is_head, c->out, sizeof(c->out));
     c->out_off = 0;
-    c->body = NULL;
+    body_drop(c);
     c->body_len = c->body_off = 0;
     c->state = C_WRITE;
     c->deadline_ms = now_ms() + s->cfg.timeout_ms;
@@ -371,7 +380,9 @@ static void conn_route(web_server_t *s, web_conn_t *c, const web_req_t *rq) {
         s->sql_conn = (int)(c - s->conns);
         return;
     }
+    body_drop(c);
     c->body = r.body;
+    c->body_owned = r.body_owned;
     c->body_len = r.body_len;
     c->body_free = r.body_free;
     c->body_off = 0;
@@ -476,9 +487,7 @@ static void conn_write(web_server_t *s, web_conn_t *c) {
      * now, before the client has even seen the end of this one. */
     if (c->sql_hold && s->sql) web_sqlbox_release(s->sql);
     c->sql_hold = 0;
-    if (c->body_free) free((void *)c->body);
-    c->body_free = 0;
-    c->body = NULL;
+    body_drop(c);
     /* A 413 (a POST body over its bound): the answer is out and the
      * socket closes now. Draining a quarter megabyte from a peer that
      * promised one is the cost the bound exists to avoid; the RST a

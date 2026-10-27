@@ -108,8 +108,9 @@ invented: documentation addresses (`192.0.2.0/24`, `198.51.100.0/24`,
 make web web-demo
 SRC=$PWD; cd "$(mktemp -d)"
 "$SRC/build/web/slothweb-demo" db sloth.db
+"$SRC/build/web/slothweb-demo" pcaps pcap
 "$SRC/build/web/slothweb-demo" feed unix:sloth.sock &
-"$SRC/slothweb" --socket unix:sloth.sock --sloth-db sloth.db --store slothweb.db
+"$SRC/slothweb" --socket unix:sloth.sock --sloth-db sloth.db --store slothweb.db --pcap-dir pcap
 ```
 <!-- quickstart:end -->
 
@@ -118,6 +119,12 @@ footer `sock connected`, `db open`, `store open`. Stop with Ctrl-C,
 then `kill %1` for the demo stream. `make web-quickstart-check` runs
 exactly these steps in a temporary copy of the tree and checks the
 answer (`web/tools/quickstart_check.sh`).
+
+`pcap` is a made-up `--pcap-dir`: the capture sloth would save for the
+demo's SMB1 alert once it escalates to CRIT (a few minutes in) and the
+802.11 evidence of its first deauth flood, with their manifest, so an
+alert's page shows its capture decoded and hash-checked ([An alert's
+proof](#an-alerts-proof)).
 
 The time series start empty and fill at 10 s a bucket; baselines need
 three weeks of a given hour before they draw a band, so a fresh store
@@ -248,7 +255,9 @@ thread fails; slothweb is not running after either.
 | `slothweb: --socket SPEC: want unix:PATH or tcp:ADDR:PORT`, `want tcp:A.B.C.D:PORT or tcp:[V6]:PORT`, `want tcp:[V6]:PORT`, `bad address`, `bad port` | `--socket unix:/run/sloth/sloth.sock` or `--socket tcp:127.0.0.1:8765`. |
 | `slothweb: --socket SPEC: not a literal IPv4 address (names are not resolved)` | A literal address, never a name. |
 | `slothweb: --socket SPEC: the path must be 1..N bytes` | A unix socket path is limited to 107 bytes by the kernel: use a shorter path, or a relative one from the directory you start in. |
-| `slothweb: --sloth-db: empty or too long a path`, `--store: empty or too long a path` | Give a path, shorter than 4,080 bytes. |
+| `slothweb: --sloth-db: empty or too long a path`, `--store: empty or too long a path`, `--pcap-dir: empty or too long a path` | Give a path, shorter than 4,080 bytes. |
+| `slothweb: --pcap-dir: at most N (the sensor's --pcap-dir and its --eapol-dir)` | Two directories at most: the sensor's `--pcap-dir`, and its `--eapol-dir` when it runs `--collect-handshakes`. |
+| `slothweb: --pcap-dir PATH given twice` | Name each directory once. |
 | `slothweb: --sloth-db needs SQLite; this slothweb was built with WITH_SQLITE=0`, `--store needs SQLite; this slothweb was built with WITH_SQLITE=0`, `--web-allow-sql needs SQLite; this slothweb was built with WITH_SQLITE=0` | Rebuild with `make web` (SQLite is the default), or drop the flag. |
 | `slothweb: --sloth-db and --store name the same file (PATH): sloth.db is sloth's, the store is slothweb's own` | Point `--store` somewhere else. |
 | `slothweb: --web-allow-sql needs --sloth-db PATH: the box reads sloth.db and nothing else.` | Add `--sloth-db`, or drop `--web-allow-sql`. |
@@ -284,6 +293,7 @@ thread fails; slothweb is not running after either.
 | `slothweb: store: the saved baselines or anomaly episodes could not all be read; starting from what was` | Runs on (no exit): the rows that could not be read are skipped. |
 | `slothweb: store: the saved BLE advertisers could not all be read; starting from what was` | Runs on (no exit): the BLE view starts from the stream alone; the v7 tables are read again at the next start. |
 | `slothweb: time series: out of memory` | Lower `--web-max-keys`. |
+| `slothweb: --pcap-dir: out of memory` | The manifest index (4,096 entries, about 1.3 MB) could not be allocated; free memory and start again. |
 | `slothweb: SQL box: cannot start its thread`, `slothweb: pipe: ERR`, `slothweb: pthread_create failed` | Out of threads or descriptors: check `ulimit -u` and `ulimit -n`. |
 
 **sloth.db** (not fatal; slothweb runs and retries on every request,
@@ -301,6 +311,14 @@ and the page says why in each view that needs it):
 | `no --sloth-db`, `slothweb was built without SQLite; no sloth.db` | The reason `/api/health` gives (`db_error`) when there is no sloth.db to read. |
 | `--web-assessments: empty or too long a path`, `--web-assessments PATH: not a directory` | Give the directory holding the research assessments (`<TYPE>.md` with front matter), or leave the flag out: "follow recommended" then says "no recommendation yet". A path that is not there is accepted and means the same (`slothweb: follow recommended: PATH: no such directory, no recommendation yet`); `make install` puts them in `$(PREFIX)/share/sloth/alert-assessments`. |
 | `triage: ERR`, `the store is not open`, `PATH: changed while it was being opened; refused` | The triage and TACDB writer (a third connection to the store, [Triage and the FRRS record](#triage-and-the-frrs-record)) could not open what the store thread had just opened: the file was replaced or locked in between. Start again; exit 1. |
+
+**The alert pcaps** (not fatal; each directory is opened afresh per
+request, so one the sensor creates later is read once it exists):
+
+| Message | Meaning |
+|---|---|
+| `slothweb: alert pcaps from PATH (read-only, opened per request; sloth's alert pcap names only, never a handshake pcap or eapol.22000)` | One line per `--pcap-dir`. Why a capture is missing is on the alert's page (`captures_note`, `why_no_capture`), not here. |
+| `slothweb: no --pcap-dir: the alert page's packet capture is off` | Add `--pcap-dir /var/lib/sloth/pcap` (the sensor's own `--pcap-dir`) to see and download an alert's capture. |
 
 **Normal start notices** (not problems): `listening on`, `vendor
 table: ieee (...)`, or `vendor table: sloth (...); A4 off: built
@@ -426,6 +444,7 @@ milestone (W0, M0 to M6; tracker #102).
 | `--web-allow-sql` | The SQL box (M5, below): `/api/query` and `/api/recipes`, and the box on the History view. Off by default; without it both paths are `404` and the page never draws the box. Needs `--sloth-db` and a `WITH_SQLITE` build. `--strict` refuses it (exit 2). With `--web-allow-remote` it is announced on stderr, naming what every admitted peer can then read. |
 | `--web-read-only` | No write route: every POST is `405` `Allow: GET, HEAD` before a header is checked, the surface before triage existed. The triage states and the TACDB still read; the page draws no button and says why. Default off: an admitted peer may write (the owner's open question Q10 asks whether `--web-allow-remote` should imply it). |
 | `--web-assessments DIR` | Where "follow recommended" reads each alert type's research assessment, `DIR/<TYPE>.md` (front matter `false_positive_risk`, `noise_verdict`, `severity_assessment`; [Triage](#triage-and-the-frrs-record)). The type name comes from the alert table, never from a request; each file read until its front matter closes, at most 32 KiB. Unset, or a path not there: every type says "no recommendation yet". Something there that is not a directory is refused (exit 2). `slothweb.service` passes `/usr/local/share/sloth/alert-assessments`, where `make install` copies `docs/wiki/alert-assessments/*.md`. |
+| `--pcap-dir DIR` | The sensor's `--pcap-dir`, read-only, for the alert page's packet capture ([An alert's proof](#an-alerts-proof)). Repeatable once more for its `--eapol-dir` (at most two; the same path twice is refused). Only a file named as sloth names an alert pcap is ever opened (`alert_YYYYMMDD_HHMMSS_<slug>.pcap`, or `<incident_id>-<event>-<RULE>[-N].pcap`), through the directory's descriptor, not following a symlink, a regular file of at most 16 MiB; never a handshake pcap or `eapol.22000`, whatever directory they sit in. Absent: the page says "slothweb was not given --pcap-dir". |
 | `--help` | Usage. |
 
 Exit status: `0` after `SIGINT`/`SIGTERM`, `1` when the bind fails or
@@ -468,7 +487,9 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/flows/graph?from=&to=&nodes=&edges=` | `200` JSON, the chord diagram's pairs with the fold stated; `400`; `503` as above |
    | `GET /api/alerts?state=&sev=&type=&q=&window=&limit=&offset=` | `200` JSON, the Alerts page: the stream's open incidents, then the closed ones and sloth.db's rows, one row per alert key ([Alerts](#alerts)); `400` for a parameter that does not pass; sloth.db missing or refused leaves the stream's rows and says so (`"db"`) |
    | `GET /api/alert?id=` | `200` JSON, everything an alert's page shows; `400` for an id that is not `s<handle>` or `d<rowid>`; `404` for one neither source has; `503` with no `--sloth-db` for a `d` id, or sloth.db unreadable |
-   | `HEAD /api/alerts`, `HEAD /api/alert` | `405`, `Allow: GET`, as `/api/query` |
+   | `GET /api/pcap/frames?id=&n=&offset=` | `200` JSON: capture `n` of alert `id` (an index into `/api/alert`'s `captures`; a name or path is never taken), its SHA-256 recomputed against the manifest (`hash.says`: `hash verified`, `HASH MISMATCH` or `no manifest entry`), its file header, and 24 decoded frames from `offset` (0..4095) with each one's hex dump; `400` for a parameter that does not pass; `404` `no_such_alert`, `no_such_capture`, `no_pcap_dir`, `not_found`; `403` `not_regular`; `413` `too_large` (over 16 MiB); `415` `pcapng_not_supported` or `not_pcap` with a `message` |
+   | `GET /api/pcap?id=&n=` | `200` the same file's bytes, `Content-Type: application/vnd.tcpdump.pcap`, `Content-Disposition: attachment; filename="<its name>"`, `Cache-Control: no-store`; the errors as above, as JSON |
+   | `HEAD /api/alerts`, `HEAD /api/alert`, `HEAD /api/pcap`, `HEAD /api/pcap/frames` | `405`, `Allow: GET`, as `/api/query` |
    | `GET /api/query?sql=` | only with `--web-allow-sql` (otherwise `404`): `200` JSON, the statement's result; `400` with `{"error":"reason"}` for a refused statement; `503` `busy` while another runs, or sloth.db unreadable |
    | `HEAD /api/query` | `405`, `Allow: GET`: nothing to describe without running it |
    | `GET /api/recipes` | only with `--web-allow-sql`: `200` JSON, the box's recipes |
@@ -2441,6 +2462,11 @@ naming it. `/api/alert?id=` answers all six sections:
   stopped it first (the drawer says so), `null` when it read the table
   to its end.
 
+- **The proof** (the page's last section, `web/ui/evidence.js`):
+  observed against threshold, the type's assessment and bibliography,
+  and the packet capture with every frame decoded and its bytes. Its
+  own section below.
+
 The first three are built in at compile time: `web/tools/alertkb.c`
 reads `include/sloth_alerts.def`, `docs/views/alerts.md`,
 `docs/wiki/alerts.md`, every `research/` document and
@@ -2464,6 +2490,124 @@ unlisted type (so `/api/live` and the ticker show the title alone), and
 sloth.db's `alerts.detail` is read by one statement only, as
 `CASE WHEN web_detail_ok(type) THEN detail END`, so a withheld detail
 never leaves SQLite.
+
+### An alert's proof
+
+Owner requests of 2026-10-27: "show the full packet capture in alerts
+at the bottom as well", and the drawer's alert rows tapped for "full
+verbose details of the alert, include bibliography, when possible prove
+the alert with evidence". `/api/alert` carries four more members and
+the page draws them last, the capture last of all:
+
+- **`evidence`**: what was observed (`count (evaluations)`, the
+  observations, the span, and the `name=value` numerals of the detail,
+  only for a type whose detail is audited, above) beside the threshold
+  where it is known: the assessment's front matter keys naming a
+  threshold, a window or a count, and its `tuning` list. Neither
+  counter counts frames or requests, and `reading the counts` says so
+  on every answer: `count` is one per poll (at least 4 a second) while
+  the condition stands, and `observations` follows it once the detail
+  moves, because the engine re-takes the detail only on a severity
+  change or past its 60 s update floor (`src/alerts/engine.c`,
+  `fire_inv()`). The assessment's own `count_semantics` follows as
+  `count_semantics (assessment)`. With no capture, `why_no_capture` says why in
+  sloth's own terms, first match wins: no `--pcap-dir`; a rule that
+  names no target address (the rule table's `match_ip` cell is `—`), so
+  sloth's `--pcap-dir` export can never hold one; below
+  `pcap.min_severity` (default CRIT); sloth's record says it wrote none
+  (the key inside `pcap.key_cooldown_secs`, default an hour, of its
+  last capture, or no packet in the 256-packet ring to or from the
+  address); the record names a file the directory no longer holds
+  (`pcap.retain_days`, default 14). So "none saved" never reads as
+  "nothing happened".
+- **`assessment`**: `docs/wiki/alert-assessments/<TYPE>.md`, built in
+  by `web/tools/alertasm.c` into `build/web/web_alertasm_table.c`
+  (generated, never committed; lookup `web/src/web_alertasm.h`): its
+  front matter as written, its sections in order (words, code spans
+  and `[n]` marks kept), its Bibliography as text entries. Wiki header
+  lines (`**Summary**`, `**Sources**`, `**Last updated**`) before the
+  first `---` are read past; `## Related pages` is not shown; a
+  numbered entry `7. text` is entry `[7]` (the assessments number with
+  gaps). The build stops on a file whose stem is not an alert type, or
+  on a `[n]` with no Bibliography entry outside `## Verification
+  notes` (which names the sources' own reference numbers). 72 of the
+  90 types have one; for the rest (the `pending` list of
+  `tests/test_alert_assessments.c`) the answer is `null` and the page
+  says "no assessment yet". A document too long for what is left of
+  the answer's 64 KiB (8 KiB kept for the history behind it), measured
+  by writing it, is sent as `{"path":...,"too_large":true}`, never cut.
+- **`captures`**: the alert's files, newest first, at most 8, each
+  `n` (what the routes take), `file`, `sink`, `size`, `sha256`,
+  `written_at`, `rule` and `matched_by`: `incident` (the manifest's
+  `incident_id` is the stream incident's), `record` (the file the
+  alert's own lifecycle record names in `pcap_path`, which may have no
+  manifest line), or, only when neither found one, `rule_time` (the
+  same rule written between `first_seen - 60 s` and `last_seen + 1 h`:
+  the manifest names no address, so the page says to check it is this
+  alert's). A sloth.db row (`d` id) has only `rule_time`. Never the
+  `incident_id` (it inverts to the key's hash, [Alerts](#alerts)), the
+  manifest's session or a directory path. `captures_note` says why the
+  list may be short: `no --pcap-dir`, `directory unreadable: ENOENT`
+  (or `EACCES`, ...), `index partial`.
+- **The capture** (`/api/pcap/frames`): the file read whole through
+  the directory's descriptor (`openat`, `O_NOFOLLOW`, a regular file,
+  at most 16 MiB), its SHA-256 (FIPS 180-4) recomputed over the bytes
+  read and compared with the manifest's: `hash verified` says these
+  are the bytes sloth hashed when it wrote the line, and no more
+  (`docs/wiki/pcap-export.md` says what a hash does not establish).
+  The reader is libpcap-free (`web/src/web_pcap.c`): classic pcap in
+  either byte order, microsecond or nanosecond magic, per
+  draft-ietf-opsawg-pcap; pcapng is refused with "convert it with
+  `editcap -F pcap`" (sloth never writes it). 802.11 frames (link types
+  105 and 127) are read by sloth's own parsers, linked in from `src/`
+  (`radiotap.c`, `dot11_frame.c`, `dot11_ie.c`, `wifi_freq.c`,
+  `dns_wire.c`, `netstr.c`): radiotap channel, signal and flags; the
+  type and subtype by IEEE Std 802.11-2020 Table 9-1; the four
+  addresses with their roles (RA, TA, DA, SA, BSSID, Table 9-26);
+  sequence and fragment; a deauthentication's or disassociation's
+  reason (Table 9-49), an authentication's algorithm and status, an
+  association response's status (Table 9-50); a beacon's or probe's
+  SSID (an over-long element said to be invalid), DS channel, RSN and
+  PHY tier. Ethernet, Linux SLL and SLL2 go through slothweb's own
+  bounded summary decoder (sloth's are static inside the capture path):
+  VLAN tags, ARP, IPv4 and IPv6 (one extension-header chain), TCP flags,
+  UDP, ICMP and ICMPv6, DNS (the name walk is sloth's `dns_wire.c`),
+  HTTP request line, `Host` and `User-Agent`, TLS record and handshake
+  type and a ClientHello's SNI, QUIC, NTP, DHCP, SSDP and WS-Discovery.
+  sloth's `--pcap-dir` files keep 64 bytes of a packet (snaplen 64), so
+  most frames end inside their payload: every such frame says
+  `truncated at snaplen 64` and its decode stops where the bytes do,
+  never reporting an uncaptured field as absent. 24 frames a page,
+  each with its hex dump (256 bytes at most inline, the rest in the
+  download), a filter over the page's frames, "next frames" for the
+  rest (the first 4,096 records of a file are indexed).
+- **The download** (`/api/pcap`): the file's bytes, as an attachment.
+  The page starts it with `window.location.assign("/api/pcap?id=...")`,
+  every value encoded: the one place it leaves its own view, and to its
+  own server.
+
+**What is never served.** The per-handshake pcaps (`<bssid>_<sta>.pcap`)
+and `eapol.22000` that share an `--eapol-dir` are crackable material.
+Their names pass neither alert-pcap grammar and their manifest sinks
+(`handshake_pcap`, `hashcat_22000`) are not indexed, so neither route
+can open them, by index, by record or by rule. A request never carries
+a file name: `n` indexes the alert's own list, so a file the alert's
+lookup does not return is a `404` whatever the directory holds.
+
+**The index.** Manifests are `sloth-manifest-*.jsonl` in the directory,
+read newest session first, at most 32 of 1 MiB each, every
+newline-terminated line parsed and an unterminated tail dropped (sloth
+truncates a failed append, so a tail is a crash's, never a committed
+line); at most 4,096 entries from at most 8,192 directory entries.
+Rescanned on a request when the directory's mtime or the newest
+manifest's size moved, at most every 2 s.
+
+**The drawer's alert rows** are tap targets that say so: a `›` at the
+row's end, a 44 px row on a touch screen (`pointer: coarse`), and a
+tap (or Enter) opens the alert's page and closes the drawer, which at
+phone width covers the page it opens. Checked at 360 px with touch
+emulation by `web/tools/tap_check.py` (Chromium's DevTools protocol;
+not run by CI, loopback only).
 
 ### The tiles' views
 
@@ -3017,7 +3161,8 @@ next launch) and its session markers; the Records view's type pick (a
 row of a list that changes every 2 s: kept, a type that stopped
 arriving would hide every record with no row left to unpick); the
 device drawer, the scope legend, the WiFi grid's picked cell, an alert's
-page's id (each a moment, or the address's); the `more` pages (no page
+page's id (each a moment, or the address's); the frame filter of an
+alert's capture (`ev-filter`: one file's frames, not a view's); the `more` pages (no page
 size is a control: the pages are fixed). `web/tests/test_prefs.c`
 fails on any new `select`, `input` or `textarea` (its attributes in
 any order; one with no id fails too) that is neither kept nor listed
@@ -3513,6 +3658,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_ble.c` | the BLE view ([BLE](#ble)) from hand-built `ble_device`, `ble_alert`, `alert.resolve` and `sensor_health` lines in the emitter's exact shape: two rows for one address heard by two sensors, a heartbeat updating in place (the sticky masks OR-ed, the earlier first_seen kept, the rate from two points), the hostile strings (a control byte escaped and flagged, an over-long name cut back to a code-point boundary, a category that is not sloth's slug dropped and counted, an unknown iface `other`, a bad record kept nowhere), the record's absent values null and an anonymous all-zero address a row, the estimate's four fields with the TUI's cell and description, the LRU at 1025 rows evicting the oldest, the findings (standing, the resolve of the key, the time-out, the day's listing, the key never rendered, a `hid_oui` finding under its address), the `sensor_health` block and its rotation bands; the two metrics only while a Bluetooth source is configured; every route through the table (the sort words and both directions, each refusal a word never echoing the value, the search, paging, HEAD, Monitor and Hybrid serving, Local `out_of_scope` with the query still checked, `/api/live`'s `ble` member and `/api/health`'s counters, the M0 shape without the tables, the BLE incident typed and Monitor's on the Alerts page); the page's lines pinned as served; with SQLite the store round trip through the store thread's flush, a changed row upserted once, the seed on reopen with the name's display form and the estimate, every field of a seeded finding (a flood's fresh count, rate, window and citation, a `hid_oui` finding's address and the drawer's match on it), a resolve on a seeded finding updating its stored row in place, a seeded row's presence strip shifting on with fresh traffic, retention at compaction, a failed write (a trigger aborting it mid-transaction) rolled back whole and its batch written by the next flush, the row caps (the oldest gone, a flagged row kept past newer unflagged ones, counted) and a non-canonical stored address not seeded; every sort word in both directions with an empty key last (`mfr`'s three tiers fixed in either direction); a name cut back to a code-point boundary; `ble.devices` with an Ubertooth alone and `ble.adv_rate` only with the host stream; `/api/live`'s `ble` member with every string at its cut and escaped six-fold; without a store the tables still ingest and serve. Each absence seen red under a named mutation |
 | `test_btsig.c` | the Bluetooth SIG table this binary was built with (`WEB_BTSIG_EXPECT`): sorted, the names printable and within the cut, the lookups answering the SIG's names for Apple, Microsoft, Google, Ericsson, Battery, Human Interface Device, the keyboard appearance and the generic forms, a miss and the bounds null; the committed CSVs byte for byte the ones `web/data/btsig/SOURCE.md` hashes, with its row counts; `update_btsig.sh` run by the `update-btsig` target alone and named by no workflow; the generator run on a name holding every trigraph's opening, a quote and a backslash, its literal decoded back byte-identical and no `??` left in its output |
 | `test_replay.c` | spec §12's M3 acceptance: a six-week JSONL stream generated in the test (never a fixture) through the framer, decoder, live state, metric derivation, identity tables, rollup, `web_tsdb_step()` and the engine as `main.c` wires them, on pinned clocks: four weeks of routine (noisy gauges, Poisson counts, and an input for every rule: names that agree, a randomised MAC with its own name, a month-old probe client, a steady ssh host), then a quiet 7 d week in which nothing at all fires, slothweb and sloth restarting in the middle of it in an SQLite build, then a 7 d week in which A1 fires for a burst of connections and A3 for a daytime device that appears only at night, while a device that is only ever present at night never fires; and the hour that just closed reaching the baseline at flush phases 0, 3 and 7 (the previous slice fed it only at phase 0); A9 for a new host whose first row the rollup released late, at sloth's real cadence (SQLite); five weeks of a 13:30-14:30 routine in IST firing nothing. Both builds |
+| `test_evidence.c` | an alert's proof, every pcap written at run time from byte arrays built per their clause (no capture is committed): the file header in both byte orders and both resolutions, pcapng and junk refused by name, the record walk (orig_len raised to incl_len, a caplen past the snaplen, a file cut inside a record); the decoders on Ethernet/IPv4/TCP with a ClientHello cut at 64 bytes (no SNI claimed), a DNS query whole and cut, a compression pointer to itself, SLL2/ICMP, SLL/ARP, radiotap deauthentication (reason 7, Table 9-26 roles, channel and signal), a beacon (SSID, DS channel, RSN, a 33-octet SSID called invalid), an authentication status 0; the hex dump; a page of 24 frames, the next page, the worst case stopping with `more` inside its buffer, a cut file; both alert-pcap name grammars and what they refuse (a handshake pcap's name, `eapol.22000`, a path, a near miss of each); the manifest line in `src/evidence_manifest.c`'s shape and every sink and shape it refuses; a directory: newest first, a handshake line and an unterminated tail not indexed, the three joins and the fallback only when they find nothing, hash verified, mismatched by a byte and by a length, no entry; a symlink, a FIFO, a name off the gate and a 16 MiB + 1 file refused; a missing directory; the routes: `captures` with no `incident_id`, session or path in the answer, `hash verified`, `no manifest entry`, `HASH MISMATCH` after a byte changed, `404` past the list, `400` for a file name or a bad `n`, `405` on `HEAD`, the download's headers and bytes, `415` for pcapng, `why_no_capture` for an L2-only rule and with no `--pcap-dir`; the assessment generator run on documents it writes (header lines, front matter, sections, bibliography, Related pages left out) and its two build stops; the page's hooks, the download's one form and the section's place, last |
 
 A test cannot originate from a non-loopback address, so the refused-peer
 socket tests narrow the list instead (only `127.0.0.2`, or only IPv4)
@@ -3582,13 +3728,20 @@ web/
     web_alertdb.c  sloth.db's alerts: groups by key, a key's incidents, its device
     web_alertfmt.c the types whose alert detail is shown, audited
     web_alertkb.h  the generated alert knowledge table's symbols
+    web_alertasm.c the assessments by type, over the generated table
+    web_evidence.c /api/alert's proof members, /api/pcap/frames, /api/pcap
+    web_pcap.c     the libpcap-free pcap reader and the frame decoders
+    web_pcapdir.c  --pcap-dir: the name gate, the manifest index, the hash check
+    web_dot11_names.c  IEEE 802.11-2020 subtype, reason and status names
+    web_sh_stub.c  the one sensor-health call dot11_ie.c makes, answered
     web_secret.c   the withheld columns both sloth.db readers refuse (M5)
     web_sqlguard.c the SQL box's text rules, authorizer, limits, runner (M5)
     web_sqlbox.c   the SQL box's thread, its one answer, busy (M5)
     web_recipes.h  the generated recipes' symbols (M5)
     web_json.c     the JSON writer every outgoing string goes through
     web_assets.h   the generated page's symbols
-  ui/              the page sources (index.html, theme.css, page.css, app.js)
+  ui/              the page sources (index.html, theme.css, page.css, app.js,
+                   glyph.js, evidence.js)
   tools/
     embed.c        ui/ -> build/web/web_assets.c (build time only)
     oui_gen.c      web/data/*.csv -> build/web/web_oui_table.c (build time only)
@@ -3599,6 +3752,10 @@ web/
                    docs/wiki/alert-remediation.md -> build/web/web_alertkb.c (build time only)
     vendorkb.c     web/data/vendors/*.md -> build/web/web_vendorkb_table.c (build time only);
                    refuses a file with a dangling [n] or a missing field, naming it
+    alertasm.c     docs/wiki/alert-assessments/*.md -> build/web/web_alertasm_table.c
+                   (build time only)
+    tap_check.py   the drawer's alert rows tapped at 360 px under touch emulation
+                   (Chromium's DevTools protocol; by hand, loopback only)
     palette.c      src/tui_palette.c + src/tui.c -> build/web/palette.css, palette.js;
                    make web-contrast (build time only)
     sha256.c       SHA-256 and base64 for embed.c and the tests

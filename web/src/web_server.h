@@ -89,6 +89,7 @@ typedef struct {
     char      out[WEB_SSE_MAX_UNSENT];
     const unsigned char *body;    /* static body sent after out */
     size_t    body_len, body_off;
+    unsigned char *body_owned;    /* body is this heap copy: freed at close */
     int       sql_hold;       /* body is the SQL box's: release at close */
     /* A POST (docs/web-frrs-spec.md §5.3): the peer's address as the
      * row records it, the body read so far and how much is promised.

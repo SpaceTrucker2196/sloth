@@ -57,6 +57,8 @@ readdirCalled:src/platform/linux_dhcp.c
 # detail audit test reads src/alerts/, each a single-threaded program
 # with a local DIR* closed in the same function.
 readdirCalled:web/tools/alertkb.c
+readdirCalled:web/tools/alertasm.c
+readdirCalled:web/src/web_pcapdir.c
 readdirCalled:web/tests/test_alertfmt.c
 # The test suites' temporary-file helpers (test_rm_tree, the leak
 # guard's walk): each recursion level opendir()s its own local DIR* and

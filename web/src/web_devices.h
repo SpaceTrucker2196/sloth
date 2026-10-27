@@ -42,6 +42,7 @@
 #include "web_ident.h"
 #include "web_json.h"
 #include "web_oui.h"
+#include "web_pcapdir.h"
 #include "web_ptr.h"
 #include "web_scope.h"
 #include "web_slothdb.h"
@@ -65,6 +66,9 @@ typedef struct {
     web_ident_t         *ident;
     web_anomaly_t       *anomaly;
     web_tsdb_t          *tsdb;
+    /* The sensor's pcap directories (web_pcapdir.h), for the alert
+     * page's packet capture; NULL or none configured: no capture. */
+    web_pcapdir_t       *pcap;
     /* The request's capture scope (web_scope.h); NULL is Hybrid. Set by
      * the router on its own copy, never on the shared one. */
     const web_scope_ctx_t *sc;

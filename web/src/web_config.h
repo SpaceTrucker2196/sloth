@@ -7,6 +7,7 @@
 
 #include "web_acl.h"
 #include "web_ingest.h"
+#include "web_pcapdir.h"
 #include "web_rollup.h"
 #include "web_store.h"
 
@@ -56,6 +57,10 @@ typedef struct {
      * <TYPE>.md's front matter, "" unset. */
     int      read_only;            /* --web-read-only */
     char     assess_dir[4096];     /* --web-assessments */
+    /* The alert page's packet capture (web_pcapdir.h): the sensor's
+     * --pcap-dir and, optionally, its --eapol-dir. None by default. */
+    char     pcap_dir[WEB_PCAP_DIRS][4096];   /* --pcap-dir, repeatable */
+    int      npcap_dir;
 } web_config_t;
 
 void web_config_defaults(web_config_t *c);

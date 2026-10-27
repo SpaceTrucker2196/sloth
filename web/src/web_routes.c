@@ -6,6 +6,7 @@
 
 #include "web_alerts.h"
 #include "web_assets.h"
+#include "web_evidence.h"
 #include "web_flows.h"
 #include "web_frrs.h"
 #include "web_history.h"
@@ -899,6 +900,74 @@ static int route_frrs(const web_req_t *rq, const web_health_t *h, char *out, siz
     return 0;
 }
 
+/* /api/pcap/frames and /api/pcap (web_evidence.h): GET only, as
+ * /api/alert, whose capture they read. The download is the one answer
+ * whose body is the route's own heap copy (web_resp_t.body_owned): a
+ * pcap is up to WEB_PCAP_FILE_MAX, past any connection buffer. */
+static int route_pcap(const web_req_t *rq, const web_health_t *h, int download,
+                      char *out, size_t outsz, web_resp_t *r) {
+    if (rq->is_head) {
+        r->status = 405;
+        return fit(snprintf(out, outsz,
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n"), outsz, &r->out_len);
+    }
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    static const web_m4_t none;
+    const web_m4_t *m = h->m4 ? h->m4 : &none;
+    unsigned char *data = NULL;
+    size_t dn = 0;
+    char name[WEB_PCAP_NAME_MAX + 1] = "";
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else if (download) {
+        rc = web_pcap_download_route(m, h->live, rq->query, h->wall_s, &data, &dn, name,
+                                     sizeof(name), body, cap, &bl, &status);
+    } else {
+        rc = web_pcap_frames_route(m, h->live, rq->query, h->wall_s, body, cap, &bl, &status);
+    }
+    if (rc == 0 && data) {
+        /* The name passed sloth's own grammar ([A-Za-z0-9_.-] only,
+         * web_pcapdir_name_ok()), so it needs no quoting. */
+        if (fit(snprintf(out, outsz,
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: application/vnd.tcpdump.pcap\r\n"
+            "Content-Disposition: attachment; filename=\"%s\"\r\n"
+            "Content-Length: %zu\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n", name, dn), outsz, &r->out_len) != 0) {
+            free(data);
+            return -1;
+        }
+        r->status = 200;
+        r->body = data;
+        r->body_owned = data;
+        r->body_len = dn;
+        return 0;
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
 /* /api/recipes: docs/wiki/sqlite-schema.md's, as built in. */
 static int route_recipes(const web_req_t *rq, const web_health_t *h, char *out, size_t outsz,
                          web_resp_t *r) {
@@ -1125,6 +1194,10 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
         if (!strncmp(rq->path, "/api/ble/", 9) && rq->path[9] &&
             !strchr(rq->path + 9, '/'))
             return route_ble(rq, h, BLE_DEVICE, rq->path + 9, out, outsz, r);
+        if (!strcmp(rq->path, "/api/pcap/frames"))
+            return route_pcap(rq, h, 0, out, outsz, r);
+        if (!strcmp(rq->path, "/api/pcap"))
+            return route_pcap(rq, h, 1, out, outsz, r);
         /* Without --web-allow-sql neither exists: a 404 like any path. */
         if (h->sql && h->sql->enabled) {
             if (!strcmp(rq->path, "/api/query"))

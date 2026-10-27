@@ -111,7 +111,7 @@ the vendor research section, `web/data/vendors/*.md`,
 listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
-reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
+reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (an alert's proof: `--pcap-dir`, the capture decoded and hash-checked, the assessment and bibliography, the drawer's rows as tap targets); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
 research section under the drawer's and Lookup's OUI card, one cited Markdown file per OUI holder
 in `web/data/vendors/` compiled in at build time, `{found:false}` and
 "no research yet" for a vendor without one, [[vendor-research]]; the
@@ -1184,6 +1184,69 @@ recommendation read against the assessments' real vocabulary, the
 import's header and end checks and its transaction, the bounds on
 deleted rows and imported triage, the suggestion rules as §7 states
 them); 2026-11-01.
+## An alert's proof: its capture, assessment and bibliography (2026-10-27)
+
+Owner requests of 2026-10-27: "show the full packet capture in alerts
+at the bottom as well", and the device drawer's alert rows tapped for
+"full verbose details of the alert, include bibliography, when possible
+prove the alert with evidence". The alert's page gains a last section,
+drawn by its own module (`web/ui/evidence.js`, one hook in
+`alertPage()` and one in `openDrawer()`, so the slices editing
+`app.js` in parallel merge beside it):
+
+- **Observed against threshold**: the incident's count, observations
+  and span (labelled for what they are: `count` is evaluations, one per
+  poll while the condition stands, and `observations` follows it once
+  the detail moves, so neither counts frames or requests), the `name=value` numerals of an audited detail, beside the
+  thresholds the type's assessment states; with no capture, why not,
+  in sloth's own terms (no `--pcap-dir`; an L2-only rule, which the
+  `--pcap-dir` export can never hold; under `pcap.min_severity`, CRIT
+  by default; inside `pcap.key_cooldown_secs`; swept by
+  `pcap.retain_days`). So "none saved" does not read as "nothing
+  happened".
+- **The assessment and its bibliography**: each
+  `docs/wiki/alert-assessments/<TYPE>.md`, built in at compile time by
+  `web/tools/alertasm.c` (lookup `web/src/web_alertasm.h`), front
+  matter (its `count_semantics` and `noise_verdict` as written),
+  sections and Bibliography entries as text. 72 of the 90 types have
+  one; for the others the page says "no assessment yet". The build
+  stops on a stem that is not an alert type or a `[n]` with no
+  Bibliography entry.
+- **The packet capture**, last: with `slothweb --pcap-dir DIR` (the
+  sensor's own, read in place), every file the alert has, found through
+  sloth's manifests ([[pcap-export]] §5, §6) by `incident_id`, the
+  record's `pcap_path`, or, labelled, rule and time; its SHA-256
+  recomputed over the bytes read (`hash verified`, `HASH MISMATCH`,
+  `no manifest entry`); every frame decoded with its fields and hex
+  dump, 24 a page, a filter, and the file downloadable. 802.11 frames
+  are read with sloth's own parsers linked from `src/`
+  (`radiotap.c`, `dot11_frame.c`, `dot11_ie.c`, `wifi_freq.c`,
+  `dns_wire.c`, `netstr.c`; the first `src/` code in the slothweb
+  binary, leaf files that include no `sloth.h`), with the IEEE Std
+  802.11-2020 subtype, reason (Table 9-49) and status (Table 9-50)
+  names; Ethernet, SLL and SLL2 by slothweb's bounded summary decoder.
+  The sensor keeps 64 bytes of a packet, so a decode stops where the
+  bytes do and every such frame says `truncated at snaplen 64`.
+- **The drawer's alert rows** carry a `›`, are 44 px tall on a touch
+  screen, and a tap opens the alert's page and closes the drawer, which
+  at phone width covers it. Checked at 360 px under touch emulation by
+  `web/tools/tap_check.py` (by hand: it needs Chromium).
+
+Never served: a handshake pcap or `eapol.22000`, which can share an
+`--eapol-dir` and are crackable material: their names pass neither
+alert-pcap grammar, their manifest sinks are not indexed, and a request
+never names a file (the routes take an index into the alert's own
+list). The demo writes a made-up `--pcap-dir` for its SMB1 and deauth
+incidents (`slothweb-demo pcaps DIR`, in the quick start).
+
+**Sources**: owner requests 2026-10-27; `web/src/web_evidence.h`,
+`web_pcap.h`, `web_pcapdir.h`, `web_alertasm.h`, `web_dot11_names.h`,
+`web/ui/evidence.js`, `web/tests/test_evidence.c`,
+`tests/fuzz/fuzz_web_pcap.c`; `src/alert_pcap.c`,
+`src/evidence_export.c`, `src/evidence_manifest.c`; IETF
+draft-ietf-opsawg-pcap; tcpdump.org link-layer types; radiotap.org;
+IEEE Std 802.11-2020 Tables 9-1, 9-26, 9-49, 9-50.
+**Last updated**: 2026-10-27.
 
 ## The BLE view (2026-11-02)
 
@@ -1403,6 +1466,7 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | every start-up message documented | `test_every_start_message_is_documented` (`test_readme.c`) |
 | the security section's points; the screenshots present and small | `test_security_section`, `test_screenshots` |
 | Flows: tabs, SMB1, withheld columns, validation, paging, the chord's fold | `test_flows.c` |
+| An alert's proof: pcap reader and decoders on hand-built frames, the name gate, the manifest index, hash verified and mismatched, the routes, the download, the assessment generator's build stops | `test_evidence.c`; `tests/fuzz/fuzz_web_pcap.c` |
 
 The restyle maps as follows.
 

@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`, `src/evidence_manifest.h`, FIPS 180-4 (SHA-256).
 
-**Last updated**: 2026-10-26 (#166: `--pcap-dir` files and manifest are swept after `pcap.retain_days`, noted in §1 too; one directory for `--pcap-dir` and `--eapol-dir` is refused). Earlier 2026-10-20 (#92 slice 3 review: EAPOL sinks hash after releasing their lock, measured cost; a manifest whose rollback fails is abandoned for `-N`; §5). Earlier 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
+**Last updated**: 2026-10-27 (§6: slothweb reads the manifests back, joins by `incident_id`, verifies the SHA-256, never opens a handshake sink's file). Earlier 2026-10-26 (#166: `--pcap-dir` files and manifest are swept after `pcap.retain_days`, noted in §1 too; one directory for `--pcap-dir` and `--eapol-dir` is refused). Earlier 2026-10-20 (#92 slice 3 review: EAPOL sinks hash after releasing their lock, measured cost; a manifest whose rollback fails is abandoned for `-N`; §5). Earlier 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
 
 ---
 
@@ -428,6 +428,36 @@ through).
 Nothing the 2026-10-19 plan (#145) named. Caveats that stand:
 reconstructed handshakes stay replace-latest; the wired ring stays 64 B
 per entry; the manifest is unsigned (above).
+
+## 6. Read back by slothweb (2026-10-27)
+
+`slothweb --pcap-dir DIR` (repeatable once, for an `--eapol-dir`) shows
+an alert's files at the bottom of its page in the web UI: listed,
+decoded frame by frame with each frame's bytes, hash-checked and
+downloadable. It reads this section's manifests and nothing else to
+find them, and verifies by recomputing SHA-256 over the bytes it read:
+`hash verified`, `HASH MISMATCH`, or `no manifest entry` for a file
+the alert's own record names that no manifest line lists.
+
+- **The join** is the manifest's `incident_id`, which the stream's
+  lifecycle records carry; then the record's own `pcap_path` basename;
+  and only when neither finds a file, the `rule` with `written_at`
+  inside the alert's time, labelled on the page as a weaker match
+  (the manifest carries no address). A sloth.db row has only the last.
+- **Only the alert sinks are read.** Lines with sink `alert_pcap` or
+  `evidence_pcap`, whose `file` is exactly one of the two alert-pcap
+  names (§1's `alert_pcap_is_name()`, §4's
+  `evidence_export_alert_name()`); `handshake_pcap` and
+  `hashcat_22000` lines are never indexed, and their files never opened
+  by any route, whatever directory they share. An unterminated last
+  line is dropped, as this section's writer promises it never commits
+  one.
+- **The 64-byte depth** of §1's files is stated on every frame it cuts
+  (`truncated at snaplen 64`): a field the decode cannot reach was not
+  captured, which is not the same as absent.
+
+The page, its routes and its limits: `web/README.md`, "An alert's
+proof"; [[slothweb]].
 
 ## File writer
 

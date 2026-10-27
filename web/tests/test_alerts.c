@@ -578,7 +578,10 @@ static void test_incident_ids_never_served(void) {
             if (strstr(b, ids[k])) fprintf(stderr, "    %s?%s carries %s\n", qs[i][0], qs[i][1], ids[k]);
             WT_LACKS(b, ids[k]);
         }
-        WT_LACKS(b, "incident_id");
+        /* As a key: the alert's assessment (docs/wiki/alert-assessments)
+         * is prose that names the field, and the values above are the
+         * guarantee. */
+        WT_LACKS(b, "\"incident_id\"");
     }
     /* The handles are what the list links by. */
     WT_EQ(route(&H, "/api/alerts", ""), 200);

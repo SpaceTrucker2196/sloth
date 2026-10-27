@@ -2802,6 +2802,8 @@
           sp.appendChild(el("span", heatClass(0.6), "  " + x.incidents + " incidents"));
         return sp;
       }, j.alerts_more, function (x) { return typeof x.id === "string" ? x.id : ""; });
+      // Its alert rows, tap targets that open the alert's page (web/ui/evidence.js).
+      if (window.SlothEvidence) window.SlothEvidence.drawer(box);
       // The request's budget stopped sloth.db's walk short of the table's
       // end: the list and its figures are of the rows back to here.
       if (num(j.alerts_reached))
@@ -4602,7 +4604,10 @@
                 ["count", fmt(j.count) + " evaluations, every incident of the key" +
                   (num(j.latest_count) && j.latest_count !== j.count ? " (" + fmt(j.latest_count) +
                    " in the one this page opened on)" : "")],
-                ["observations", num(j.observations) ? fmt(j.observations) : null],
+                ["observations", num(j.observations) ? fmt(j.observations) +
+                  " polls whose detail moved; not frames or requests (it follows the count" +
+                  " once the detail changes: the engine re-takes the detail only on a" +
+                  " severity change or after 60 s)" : null],
                 ["incidents", String(j.incidents)],
                 ["pcap", pcap], ["detail", detail],
                 ["also", j.stream_id && j.db_id && j.id !== j.db_id ? "sloth.db's rows of it: " + j.db_id : null]]);
@@ -4620,6 +4625,8 @@
     // (f) the device it names
     alertDevice(j);
     if (window.SlothFrrs) SlothFrrs.mountAlert(j);
+    // (g) the proof: evidence, assessment, capture (web/ui/evidence.js)
+    if (window.SlothEvidence) window.SlothEvidence.alert(j);
   }
 
   function alertDevice(j) {

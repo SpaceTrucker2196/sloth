@@ -5716,6 +5716,19 @@ report events.
   containing `rule_`, the Bibliography has an entry and the index has a
   row; seen red by deleting `PORT_SCAN.md` and by moving ARP_SPOOF's
   `rule_file` off its line.
+- 2026-10-27 — [[slothweb]] *An alert's proof*, [[pcap-export]] §6,
+  [[cli-reference]] (slothweb pointer), [[deployment]] §6: `slothweb
+  --pcap-dir DIR` shows an alert's capture at the bottom of its page,
+  found through sloth's manifests (`incident_id`, then the record's
+  `pcap_path`, then rule and time, labelled), SHA-256 recomputed
+  (`hash verified` / `HASH MISMATCH` / `no manifest entry`), decoded
+  frame by frame (802.11 by sloth's own `src/` parsers, the IP layers by
+  a bounded summary decoder, `truncated at snaplen 64` stated) and
+  downloadable; handshake pcaps and `eapol.22000` never served. The
+  type's assessment and bibliography from
+  `docs/wiki/alert-assessments/<TYPE>.md` when written ("no assessment
+  yet" until then). The drawer's alert rows are tap targets, checked at
+  360 px under touch emulation.
 - 2026-11-01 — [[slothweb]]: alert triage and the FRRS emitter record
   (`docs/web-frrs-spec.md`, owner request 2026-10-27). Triage buttons
   (false, noise, incident, follow recommended) on every alert row,
@@ -5890,3 +5903,11 @@ report events.
   the monitor-radio and Bluetooth capture paths, `sloth-ble-scan`, the
   compiled knowledge (assessments, vendor research, registries) and the
   triage/TACDB store.
+- 2026-11-02 — [[slothweb]]: the alert page reads the 72 written
+  `docs/wiki/alert-assessments/` files (the 18 pending say "no
+  assessment yet"): a numbered Bibliography item `7. ` is entry `[7]`,
+  `## Verification notes` is not citation-checked, an assessment is
+  measured by writing it rather than priced at the worst-case escape
+  (which had sent every real one as `too_large`), and the counters are
+  labelled for what they are: `count (evaluations)`, `observations`
+  following it once the detail moves, never frames or requests.

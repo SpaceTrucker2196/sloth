@@ -54,6 +54,7 @@ static web_ble_t      g_ble;
  * starts (the restore runs on the store's writer connection). */
 static void seed_dev(void *ctx, const web_store_bdev_t *r) { web_ble_seed(ctx, r); }
 static void seed_alert(void *ctx, const web_store_balert_t *r) { web_ble_seed_alert(ctx, r); }
+static web_pcapdir_t  g_pcap;
 
 static void on_signal(int sig) {
     (void)sig;
@@ -153,6 +154,15 @@ int main(int argc, char **argv) {
     g_m4.ident = &g_ident;
     g_m4.anomaly = &g_anomaly;
     g_m4.tsdb = &g_tsdb;
+    {
+        const char *dirs[WEB_PCAP_DIRS];
+        for (int i = 0; i < cfg.npcap_dir; i++) dirs[i] = cfg.pcap_dir[i];
+        if (web_pcapdir_init(&g_pcap, dirs, cfg.npcap_dir) != 0) {
+            fprintf(stderr, "slothweb: --pcap-dir: out of memory\n");
+            return 1;
+        }
+        g_m4.pcap = &g_pcap;
+    }
     web_anomaly_attach(&g_anomaly, &g_tsdb);
     /* Triage and the TACDB (web_frrs.h): the operator's state in the
      * store, written over the HTTP thread's own connection; without a
@@ -220,7 +230,8 @@ int main(int argc, char **argv) {
                     "/api/devices, /api/device/MAC, /api/lookup, "
                     "/api/wifi/*, /api/history/*, /api/sessions, /api/flows, "
                     "/api/flows/graph, /api/frrs/*, /api/ble, /api/ble/alerts, "
-                    "/api/ble/ADDR%s, /events)\n",
+                    "/api/ble/ADDR, /api/alerts, /api/alert, /api/pcap, "
+                    "/api/pcap/frames%s, /events)\n",
             where, cfg.allow_sql ? ", /api/query, /api/recipes" : "");
     if (cfg.allow_sql)
         fprintf(stderr, "slothweb: SQL box on (--web-allow-sql): one "
@@ -251,6 +262,13 @@ int main(int argc, char **argv) {
                         "drawer's sloth.db record are off; Lookup answers from "
                         "the stream and the vendor table\n");
     }
+    for (int i = 0; i < cfg.npcap_dir; i++)
+        fprintf(stderr, "slothweb: alert pcaps from %s (read-only, opened per "
+                        "request; sloth's alert pcap names only, never a "
+                        "handshake pcap or eapol.22000)\n", cfg.pcap_dir[i]);
+    if (!cfg.npcap_dir)
+        fprintf(stderr, "slothweb: no --pcap-dir: the alert page's packet "
+                        "capture is off\n");
     fprintf(stderr, "slothweb: reading %s (read-only; reconnects on its "
                     "own)\n", spec);
     if (cfg.read_only)
@@ -320,6 +338,7 @@ int main(int argc, char **argv) {
     web_ptr_destroy(&g_ptr);
     web_slothdb_destroy(&g_sdb);
     web_frrs_destroy(&g_frrs);
+    web_pcapdir_destroy(&g_pcap);
     web_store_close(&g_store);
     return rc == 0 ? 0 : 1;
 }

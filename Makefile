@@ -564,9 +564,9 @@ research-mcp:
 
 # ── slothweb (#157, #158, #159, #160) ───────────────────────────────────────
 # The browser dashboard's server, docs/web-ui-spec.md. A separate binary
-# on purpose: nothing here is in `all` or `embedded`, no sloth source is
-# compiled into it, and nothing in src/ references web/ (spec §4.2). It
-# links libc and pthreads, and libsqlite3 when WITH_SQLITE=1 (M2's
+# on purpose: nothing here is in `all` or `embedded`, no sloth source but
+# the leaf parsers of WEB_CORE_SRCS is compiled into it, and nothing in
+# src/ references web/ (spec §4.2). It links libc and pthreads, and libsqlite3 when WITH_SQLITE=1 (M2's
 # slothweb.db), and nothing else.
 #
 # M0 serves one embedded page, /api/health and an /events stream behind
@@ -614,8 +614,15 @@ research-mcp:
 # text, so that the sloth.db reader's tests build their sloth.db from
 # sloth's own DDL rather than a fixture or a copy, and src/rsn_ie.c, so
 # that the AKM names the WiFi view copies are held to sloth's own
-# (web/tests/test_parity.c); slothweb itself links no src/ file. It
-# links web/tools/demo.c as well, built -DSLOTHWEB_DEMO_LIB (no main), so
+# (web/tests/test_parity.c). slothweb itself links the leaf parsers in
+# WEB_CORE_SRCS and nothing that includes sloth.h: the alert page's
+# packet capture (web/src/web_pcap.c) reads an 802.11 frame's radiotap
+# and MAC header, its elements and a DNS name with sloth's own code, so
+# the page and the sensor cannot disagree about a frame. Each file there
+# includes only its own header and the leaf headers beside it; the one
+# call out of them, dot11_ie.c's sh_parse_fault_note(), is answered by
+# web/src/web_sh_stub.c (slothweb keeps no sensor-health counters). The
+# test binary links web/tools/demo.c as well, built -DSLOTHWEB_DEMO_LIB (no main), so
 # that the Overview tiles are held to their views on the demo's own data
 # (web/tests/test_alerts.c).
 WEB_MAIN        = web/src/main.c
@@ -678,11 +685,25 @@ WEB_VKBGEN      = $(WEB_GEN_DIR)/vendorkb
 WEB_VKBGEN_SRCS = web/tools/vendorkb.c
 WEB_VKB_C       = $(WEB_GEN_DIR)/web_vendorkb_table.c
 WEB_VKB_STAMP   = $(WEB_GEN_DIR)/vendorkb.inputs
+# The alert assessments (owner request 2026-10-27): each
+# docs/wiki/alert-assessments/<TYPE>.md, when the directory exists, read
+# by web/tools/alertasm.c into build/web/web_alertasm_table.c (never
+# committed). No directory, or an empty one, builds an empty table and
+# the page says "no assessment yet".
+WEB_ASM_DIR     = docs/wiki/alert-assessments
+WEB_ASM_MD      = $(wildcard $(WEB_ASM_DIR)/*.md)
+WEB_ASMGEN      = $(WEB_GEN_DIR)/alertasm
+WEB_ASMGEN_SRCS = web/tools/alertasm.c
+WEB_ASM_C       = $(WEB_GEN_DIR)/web_alertasm_table.c
+WEB_ASM_STAMP   = $(WEB_GEN_DIR)/alertasm.inputs
+# sloth's leaf parsers, linked into slothweb (see above).
+WEB_CORE_SRCS   = src/dot11_frame.c src/radiotap.c src/wifi_freq.c src/dns_wire.c \
+                  src/dot11_ie.c src/netstr.c
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C) \
-                  $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C)
+                  $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C)
 WEB_TEST_SRCS   = $(wildcard web/tests/*.c) web/tools/oui_csv.c web/tools/demo.c src/db_schema.c \
                   src/rsn_ie.c src/ip_color.c src/tui_palette.c \
-                  src/tui.c src/netstr.c src/view_labels.c
+                  src/tui.c src/view_labels.c
 WEB_LDLIBS      = -lpthread -lm
 ifeq ($(WITH_SQLITE),1)
     WEB_SQL_DEFS = -DWITH_SQLITE
@@ -787,9 +808,24 @@ $(WEB_VKB_C): $(WEB_VKBGEN) $(WEB_VKB_STAMP) $(WEB_VKB_MDS)
 web-vendorkb: $(WEB_VKB_C)
 
 .PHONY: web web-test update-oui update-btsig
-web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C)
-	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -o slothweb $(WEB_MAIN) \
-	      $(WEB_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
+$(WEB_ASMGEN): $(WEB_ASMGEN_SRCS)
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -o $@ $(WEB_ASMGEN_SRCS)
+
+# Regenerated when a document is added or removed, not only when one is
+# newer than the table (the stamp, as the vendor table's).
+$(WEB_ASM_STAMP): STAMP = $(WEB_ASM_MD)
+$(WEB_ASM_STAMP): FORCE
+	$(write_stamp)
+
+$(WEB_ASM_C): $(WEB_ASMGEN) $(WEB_ASM_STAMP) $(WEB_ASM_MD) include/sloth_alerts.def \
+              web/src/web_alertasm.h
+	$(WEB_ASMGEN) $@.tmp include/sloth_alerts.def $(WEB_ASM_DIR)
+	mv $@.tmp $@
+
+web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C)
+	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -iquote src -o slothweb $(WEB_MAIN) \
+	      $(WEB_SRCS) $(WEB_CORE_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
 
 # The demo data (M6, #164): build/web/slothweb-demo writes a synthetic
 # sloth.db from sloth's own DDL and serves a generated JSONL stream on a
@@ -798,7 +834,7 @@ web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $
 # administered MACs and example names only; it never touches a network.
 # The db half needs WITH_SQLITE.
 WEB_DEMO        = $(WEB_GEN_DIR)/slothweb-demo
-WEB_DEMO_SRCS   = web/tools/demo.c
+WEB_DEMO_SRCS   = web/tools/demo.c web/tools/sha256.c
 WEB_DEMO_DB_SRCS = src/db_schema.c
 .PHONY: web-demo web-quickstart-check
 web-demo: $(WEB_DEMO)
@@ -818,13 +854,14 @@ web-quickstart-check:
 # only; no host file, no running sloth, no name lookup, no network beyond
 # 127.0.0.1 and ::1. The test links the embedder's
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
-web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C)
+web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C) $(WEB_ASMGEN)
 	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) -DSLOTHWEB_DEMO_LIB -Iweb/src -Iweb/tests -Iweb/tools \
-	      -Iinclude -iquote research -DWEB_OUI_EXPECT='"$(if $(WEB_OUI_CSVS),ieee,sloth)"' \
+	      -Iinclude -iquote web/tools -iquote src -iquote research -DWEB_OUI_EXPECT='"$(if $(WEB_OUI_CSVS),ieee,sloth)"' \
 	      -DWEB_OUI_DATA='"$(WEB_OUI_DIR)"' \
 	      -DWEB_BTSIG_EXPECT='"$(if $(WEB_BTSIG_CSVS),sig,none)"' \
-	      -DWEB_BTSIG_DATA='"$(WEB_BTSIG_DIR)"' -DWEB_VKBGEN_BIN='"$(WEB_VKBGEN)"' -o slothweb_test \
-	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
+	      -DWEB_BTSIG_DATA='"$(WEB_BTSIG_DIR)"' -DWEB_VKBGEN_BIN='"$(WEB_VKBGEN)"' \
+	      -DWEB_ASMGEN='"$(WEB_ASMGEN)"' -o slothweb_test \
+	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_CORE_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
 	@$(call TEST_IN_TMPDIR,./slothweb_test)
 
 # Refresh web/data/ from /usr/share/ieee-data, or from the IEEE when that

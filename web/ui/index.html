@@ -19,6 +19,7 @@
 @include palette.js
 @include glyph.js
 @include frrs.js
+@include evidence.js
 @include app.js
 </script>
 </head>
@@ -416,6 +417,22 @@
       <div class="cards" id="ad-dev-anoms"></div>
     </section>
     <div id="frrs-alert"></div>
+    <!-- The proof (web/ui/evidence.js): the alert page's last section,
+         the packet capture last in it. Another slice's section for this
+         page goes above it, never below. -->
+    <section class="panel" id="ev-alert" aria-label="the alert's proof: evidence, assessment and packet capture">
+      <div class="label">proof: observed against threshold</div>
+      <div id="ev-proof"></div>
+      <div class="label">assessment and bibliography <span class="sub" id="ev-asm-note"></span></div>
+      <div id="ev-asm"></div>
+      <div class="label">packet capture <span class="sub" id="ev-cap-note"></span></div>
+      <div id="ev-caps"></div>
+      <div class="ev-hash" id="ev-hash"></div>
+      <div class="ev-tools"><input type="search" id="ev-filter" maxlength="63" placeholder="filter the frames shown" aria-label="filter the frames shown"> <button type="button" id="ev-dl" hidden>download the pcap</button></div>
+      <div class="ev-frames" id="ev-frames"></div>
+      <button type="button" id="ev-more" hidden>next frames</button>
+      <div class="sub">sloth's --pcap-dir files keep 64 bytes of each packet: a decode stops where the bytes do, and says so. 802.11 headers are read by sloth's own parsers (src/radiotap.c, src/dot11_frame.c, src/dot11_ie.c); the IP layers by slothweb's summary decoder. Click a frame for its fields and bytes.</div>
+    </section>
    </div>
    <div id="v-records" hidden>
     <div class="filterbar"><span id="rc-filter-t">records by type, over the five seconds the records/s tile counts</span> <a href="#overview">back to the overview</a></div>

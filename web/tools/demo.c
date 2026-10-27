@@ -40,6 +40,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../tools/sha256.h"
+
 #ifdef WITH_SQLITE
 #include <sqlite3.h>
 const char *db_schema_sql(void);
@@ -476,7 +478,8 @@ static void lifecycle(long long t, unsigned long k) {
                  SMB, "192.0.2.18", 445, t, 1, ",\"match_port\":445");
     if (p == 36)
         alert_ev("alert.escalate", t, id, 10, 2, "SMB1_USE", "smb1:192.0.2.20->192.0.2.18:445",
-                 SMB, "192.0.2.18", 445, t - 6, 7, ",\"match_port\":445,\"prev_sev\":1");
+                 SMB, "192.0.2.18", 445, t - 6, 7, ",\"match_port\":445,\"prev_sev\":1,"
+                 "\"pcap_path\":\"/var/lib/sloth/pcap/alert_20261027_120000_SMB1_USE.pcap\"");
     if (p == 100)
         alert_ev("alert.resolve", t, id, 10, 2, "SMB1_USE", "smb1:192.0.2.20->192.0.2.18:445",
                  SMB, "192.0.2.18", 445, t - 70, 71, ",\"match_port\":445,\"reason\":\"expired\"");
@@ -922,9 +925,159 @@ static int feed(const char *spec, long long seconds) {
     return 0;
 }
 
+/* ── pcaps DIR: the sensor's --pcap-dir, made up ───────────────────
+ * The files sloth's alert pcap sinks would write for the demo's own
+ * incidents, with the manifest beside them (src/evidence_manifest.c's
+ * line, its SHA-256 over each file), so the alert page's capture has
+ * something to decode, check and download: SMB1_USE's CRIT escalation
+ * (the --pcap-dir sink: Ethernet, snaplen 64, the packets to or from
+ * match_ip 192.0.2.18), and the first DEAUTH_FLOOD's 802.11 evidence
+ * (the --eapol-dir sink's shape: radiotap, whole frames). Every frame
+ * is built here from its clause; documentation addresses and locally
+ * administered MACs only. */
+typedef struct {
+    unsigned char b[16384];
+    size_t        n;
+} pbuf_t;
+
+static void p32(pbuf_t *f, unsigned long v) {
+    for (int i = 0; i < 4; i++) f->b[f->n++] = (unsigned char)(v >> (8 * i));
+}
+
+static void p_hdr(pbuf_t *f, unsigned long snaplen, unsigned long dlt) {
+    f->n = 0;
+    p32(f, 0xa1b2c3d4ul);
+    f->b[f->n++] = 2; f->b[f->n++] = 0; f->b[f->n++] = 4; f->b[f->n++] = 0;
+    p32(f, 0); p32(f, 0); p32(f, snaplen); p32(f, dlt);
+}
+
+static void p_rec(pbuf_t *f, long long t, unsigned long us, const unsigned char *d,
+                  size_t caplen, size_t len) {
+    p32(f, (unsigned long)t); p32(f, us); p32(f, caplen); p32(f, len);
+    memcpy(f->b + f->n, d, caplen);
+    f->n += caplen;
+}
+
+/* Ethernet II, IPv4 (IHL 5, total tot), TCP (doff 5): the 54 header
+ * bytes of one packet between 192.0.2.20 and 192.0.2.18:445. */
+static size_t smb_frame(unsigned char *o, int to_srv, unsigned flags, unsigned long seq,
+                        unsigned tot) {
+    static const unsigned char cli[6] = { 0x02, 0xde, 0, 0, 0, 0x14 }, srv[6] = { 0x02, 0xde, 0, 0, 0, 0x12 };
+    size_t n = 0;
+    memcpy(o + n, to_srv ? srv : cli, 6); n += 6;
+    memcpy(o + n, to_srv ? cli : srv, 6); n += 6;
+    o[n++] = 0x08; o[n++] = 0x00;
+    unsigned char ip[20] = { 0x45, 0, (unsigned char)(tot >> 8), (unsigned char)tot, 0, 0, 0x40, 0,
+                             64, 6, 0, 0, 192, 0, 2, 20, 192, 0, 2, 18 };
+    if (!to_srv) { ip[15] = 18; ip[19] = 20; }
+    memcpy(o + n, ip, 20); n += 20;
+    unsigned sp = to_srv ? 49200 : 445, dp = to_srv ? 445 : 49200;
+    unsigned char tcp[20] = { (unsigned char)(sp >> 8), (unsigned char)sp, (unsigned char)(dp >> 8),
+                              (unsigned char)dp, (unsigned char)(seq >> 24), (unsigned char)(seq >> 16),
+                              (unsigned char)(seq >> 8), (unsigned char)seq, 0, 0, 0, 1, 0x50,
+                              (unsigned char)flags, 0xfa, 0xf0, 0, 0, 0, 0 };
+    memcpy(o + n, tcp, 20); n += 20;
+    return n;
+}
+
+static int write_bytes(const char *dir, const char *name, const unsigned char *b, size_t n) {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    FILE *f = fopen(path, "wb");
+    if (!f) { fprintf(stderr, "slothweb-demo: %s: %s\n", path, strerror(errno)); return -1; }
+    size_t w = fwrite(b, 1, n, f);
+    if (fclose(f) != 0 || w != n) { fprintf(stderr, "slothweb-demo: %s: write failed\n", path); return -1; }
+    chmod(path, 0600);
+    return 0;
+}
+
+/* The sloth run the manifest is of: one session for every line. */
+static long long g_session;
+
+static void manifest_add(FILE *m, int seq, const char *file, const pbuf_t *f, const char *sink,
+                         const char *inc, const char *rule, long long t) {
+    unsigned char d[32];
+    char hex[65];
+    web_sha256(f->b, f->n, d);
+    for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", d[i]);
+    struct tm tmv, s0;
+    time_t tt = (time_t)t, ts0 = (time_t)g_session;
+    gmtime_r(&tt, &tmv);
+    gmtime_r(&ts0, &s0);
+    fprintf(m, "{\"v\":1,\"session\":\"%04d%02d%02dT%02d%02d%02dZ-00000000000000de\",\"seq\":%d,"
+               "\"file\":\"%s\",\"size\":%zu,\"sha256\":\"%s\",\"sink\":\"%s\","
+               "\"incident_id\":\"%s\",\"rule\":\"%s\",\"reconstructed\":false,"
+               "\"written_at\":\"%04d-%02d-%02dT%02d:%02d:%02dZ\",\"written_at_epoch\":%lld}\n",
+            s0.tm_year + 1900, s0.tm_mon + 1, s0.tm_mday, s0.tm_hour, s0.tm_min, s0.tm_sec,
+            seq, file, f->n, hex, sink, inc, rule, tmv.tm_year + 1900, tmv.tm_mon + 1,
+            tmv.tm_mday, tmv.tm_hour, tmv.tm_min, tmv.tm_sec, t);
+}
+
+static int make_pcaps(const char *dir) {
+    if (mkdir(dir, 0700) != 0 && errno != EEXIST) {
+        fprintf(stderr, "slothweb-demo: %s: %s\n", dir, strerror(errno));
+        return 1;
+    }
+    long long t0 = now_s() - 600;
+    g_session = t0 - 3600;
+    static pbuf_t f;
+    unsigned char fr[320];
+    char mpath[4096];
+    snprintf(mpath, sizeof(mpath), "%s/sloth-manifest-20261027T120000Z-00000000000000de.jsonl", dir);
+    FILE *m = fopen(mpath, "w");
+    if (!m) { fprintf(stderr, "slothweb-demo: %s: %s\n", mpath, strerror(errno)); return 1; }
+    chmod(mpath, 0600);
+
+    /* SMB1_USE: a handshake, then NetBIOS session service (RFC 1002
+     * §4.3.1) carrying an SMB1 NEGOTIATE ("\xffSMB", command 0x72,
+     * [MS-CIFS] §2.2.4.52), and its answer; 64 bytes of each kept. */
+    p_hdr(&f, 64, 1);
+    size_t n = smb_frame(fr, 1, 0x02, 1000, 40);
+    p_rec(&f, t0, 1000, fr, n, 54);
+    n = smb_frame(fr, 0, 0x12, 5000, 40);
+    p_rec(&f, t0, 1400, fr, n, 54);
+    n = smb_frame(fr, 1, 0x10, 1001, 40);
+    p_rec(&f, t0, 1600, fr, n, 54);
+    for (int i = 0; i < 4; i++) {
+        n = smb_frame(fr, i % 2 == 0, 0x18, 1001 + (unsigned long)i * 137, 177);
+        static const unsigned char neg[10] = { 0x00, 0x00, 0x00, 0x89, 0xff, 'S', 'M', 'B', 0x72, 0x00 };
+        memcpy(fr + n, neg, sizeof(neg));
+        if (i % 2) fr[n + 9] = 0x00;
+        p_rec(&f, t0 + 1 + i, 2000 + (unsigned long)i * 50, fr, 64, 191);
+    }
+    const char *smb = "alert_20261027_120000_SMB1_USE.pcap";
+    if (write_bytes(dir, smb, f.b, f.n) != 0) { fclose(m); return 1; }
+    manifest_add(m, 1, smb, &f, "alert_pcap", "d0000000000b0000", "SMB1_USE", t0 + 6);
+
+    /* DEAUTH_FLOOD's evidence: radiotap (version 0, Channel 2437 MHz,
+     * dBm signal) + Deauthentication frames (IEEE Std 802.11-2020
+     * §9.3.3.12), reason 7, from the BSSID to the victim, sequence
+     * numbers stepping, whole frames. */
+    p_hdr(&f, 262144, 127);
+    for (int i = 0; i < 12; i++) {
+        static const unsigned char rt[13] = { 0, 0, 13, 0, 0x28, 0, 0, 0, 0x85, 0x09, 0xa0, 0x00, 0xc4 };
+        unsigned char *o = fr;
+        memcpy(o, rt, 13);
+        o[12] = (unsigned char)(0xc4 - (i % 3));
+        static const unsigned char hdr[22] = { 0xc0, 0x00, 0x3a, 0x01,
+            0x02, 0xde, 0, 0, 0, 0x12, 0x02, 0xde, 0, 0, 0, 0xa1, 0x02, 0xde, 0, 0, 0, 0xa1 };
+        memcpy(o + 13, hdr, 22);
+        unsigned sc = (unsigned)(100 + i) << 4;
+        o[35] = (unsigned char)sc; o[36] = (unsigned char)(sc >> 8);
+        o[37] = 0x07; o[38] = 0x00;
+        p_rec(&f, t0 + 300, (unsigned long)i * 400000ul, fr, 39, 39);
+    }
+    const char *dea = "d0000000000c0000-1-DEAUTH_FLOOD.pcap";
+    if (write_bytes(dir, dea, f.b, f.n) != 0) { fclose(m); return 1; }
+    manifest_add(m, 2, dea, &f, "evidence_pcap", "d0000000000c0000", "DEAUTH_FLOOD", t0 + 305);
+    if (fclose(m) != 0) return 1;
+    return 0;
+}
+
 static void usage(FILE *o) {
     fprintf(o, "usage: slothweb-demo db PATH\n"
                "       slothweb-demo feed unix:PATH [--seconds N]\n"
+               "       slothweb-demo pcaps DIR\n"
                "Synthetic data only: documentation addresses, locally administered\n"
                "MACs, example names. See web/README.md.\n");
 }
@@ -946,6 +1099,7 @@ size_t demo_pass(long long t, long long start, unsigned long k, char *out, size_
     /* The stream's server half is the binary's, not the test's. */
     (void)feed;
     (void)usage;
+    (void)make_pcaps;
     size_t n = g_len < cap ? g_len : cap;
     memcpy(out, g_buf, n);
     g_len = 0;
@@ -954,6 +1108,7 @@ size_t demo_pass(long long t, long long start, unsigned long k, char *out, size_
 #else
 int main(int argc, char **argv) {
     if (argc == 3 && !strcmp(argv[1], "db")) return make_db(argv[2]);
+    if (argc == 3 && !strcmp(argv[1], "pcaps")) return make_pcaps(argv[2]);
     if ((argc == 3 || argc == 5) && !strcmp(argv[1], "feed")) {
         long long secs = 0;
         if (argc == 5) {

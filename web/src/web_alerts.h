@@ -71,4 +71,28 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
                     long long now_s, char *body, size_t cap, size_t *len,
                     int *status);
 
+/* An alert named by its page's id ("s<handle>" or "d<rowid>"), reduced
+ * to what its packet capture is looked up by (web_evidence.h). The
+ * incident_id is a lookup key only (web_live.h says why it is never
+ * rendered); a sloth.db row has none here, so its files are found by
+ * rule and time. */
+typedef struct {
+    char      id[48];               /* as the page names it */
+    int       type, sev;
+    char      rule[64];             /* the type's name: the manifest's "rule" */
+    char      incident_id[WEB_LIVE_ID_MAX + 1];
+    char      pcap_name[80];        /* the record's pcap_path basename, or "" */
+    int       pcap;                 /* -1 not known, 0 none, 1 sloth wrote one */
+    long long first_seen, last_seen;
+    char      ip[64];
+    int       stream;               /* the stream's incident */
+    char      detail[324];          /* only for a type web_alert_detail_ok() admits */
+    long long count, observations;
+} web_alert_tgt_t;
+
+/* 1 found (*t filled), 0 none (*why "bad_id" or "no_such_alert"), -1
+ * sloth.db could not be read for a "d" id. */
+int web_alert_locate(const web_m4_t *m, web_live_t *live, const char *id,
+                     long long now_s, web_alert_tgt_t *t, const char **why);
+
 #endif

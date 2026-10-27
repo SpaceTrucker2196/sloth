@@ -9,6 +9,7 @@
 #include "web_alertfmt.h"
 #include "web_alertkb.h"
 #include "web_frrs.h"
+#include "web_evidence.h"
 #include "web_history.h"
 #include "web_json.h"
 #include "web_series.h"
@@ -668,12 +669,19 @@ static void runs_json(web_jw_t *w, const web_adb_row_t *r, int n, size_t cap,
 }
 
 /* id: "s<handle>" (web_live_inc_t.hid) or "d<rowid>". */
+static int id_of(const char *v, int *kind, char *sid, long long *rid, char *err,
+                 size_t errsz);
+
 static int parse_id(const char *query, int *kind, char *sid, long long *rid,
                     char *err, size_t errsz) {
     web_param_t ps[1] = { { "id", "", 0 } };
     if (web_params_parse(query, ps, 1, err, errsz) != 0) return -1;
     if (!ps[0].seen) { snprintf(err, errsz, "missing_id"); return -1; }
-    const char *v = ps[0].val;
+    return id_of(ps[0].val, kind, sid, rid, err, errsz);
+}
+
+static int id_of(const char *v, int *kind, char *sid, long long *rid, char *err,
+                 size_t errsz) {
     if (v[0] == 'd' && decimal(v + 1, 1, 9223372036854775806LL, rid) == 0) {
         *kind = 'd';
         return 0;
@@ -897,6 +905,31 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
     web_jw_raw(&w, ",\"ip\":");             jw_str_or_null(&w, ip);
     web_jw_raw(&w, "}");
     kb_json(&w, web_akb_get(type));
+    {
+        /* The capture, the evidence and the assessment (web_evidence.h),
+         * looked up by what this page already holds. */
+        web_alert_tgt_t *t = calloc(1, sizeof(*t));
+        if (!t) { free(e); free(hist); return -1; }
+        snprintf(t->id, sizeof(t->id), "%s", id);
+        t->type = type;
+        t->sev = sev;
+        const web_akb_t *kk = web_akb_get(type);
+        if (kk) snprintf(t->rule, sizeof(t->rule), "%s", kk->name);
+        if (have_inc) {
+            memcpy(t->incident_id, e->id, sizeof(t->incident_id));
+            memcpy(t->pcap_name, e->pcap_name, sizeof(t->pcap_name));
+        }
+        t->pcap = have_inc ? (e->pcap ? 1 : 0) : -1;
+        t->first_seen = have_inc && e->first_ts > 0 ? e->first_ts : first;
+        t->last_seen = last;
+        snprintf(t->ip, sizeof(t->ip), "%s", ip ? ip : "");
+        t->stream = have_inc;
+        if (detail) snprintf(t->detail, sizeof(t->detail), "%s", detail);
+        t->count = have_inc ? e->count : row.count;
+        t->observations = have_inc ? e->observations : 0;
+        web_evidence_alert_json(&w, m, t);
+        free(t);
+    }
     web_jw_raw(&w, ",\"history\":{\"gap_s\":"); web_jw_int(&w, WEB_ALERT_RUN_GAP_S);
     web_jw_raw(&w, ",\"incidents_read\":");   web_jw_int(&w, nh);
     web_jw_raw(&w, ",\"incidents_cap\":");    web_jw_int(&w, WEB_ADB_INCIDENTS);
@@ -912,4 +945,64 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
     *len = w.len;
     *status = 200;
     return 0;
+}
+
+int web_alert_locate(const web_m4_t *m, web_live_t *live, const char *id,
+                     long long now_s, web_alert_tgt_t *t, const char **why) {
+    memset(t, 0, sizeof(*t));
+    t->type = -1;
+    t->pcap = -1;
+    *why = NULL;
+    int kind = 0;
+    char sid[WEB_LIVE_HID_MAX + 1] = "", err[48];
+    long long rid = 0;
+    if (!id || id_of(id, &kind, sid, &rid, err, sizeof(err)) != 0) { *why = "bad_id"; return 0; }
+    if (kind == 's') {
+        web_live_inc_t *e = calloc(1, sizeof(*e));
+        if (!e) return -1;
+        if (!live || !web_live_incident(live, sid, e)) {
+            free(e);
+            *why = "no_such_alert";
+            return 0;
+        }
+        snprintf(t->id, sizeof(t->id), "s%s", sid);
+        t->type = e->type;
+        t->sev = sev_clamp(e->sev);
+        memcpy(t->incident_id, e->id, sizeof(t->incident_id));
+        memcpy(t->pcap_name, e->pcap_name, sizeof(t->pcap_name));
+        t->pcap = e->pcap ? 1 : 0;
+        t->first_seen = e->first_ts;
+        t->last_seen = e->last_ts;
+        snprintf(t->ip, sizeof(t->ip), "%s", e->match_ip);
+        t->stream = 1;
+        if (web_alert_detail_ok(e->type)) snprintf(t->detail, sizeof(t->detail), "%s", e->detail);
+        t->count = e->count;
+        t->observations = e->observations;
+        free(e);
+    } else {
+        if (!web_hist_configured(m)) { *why = "no_such_alert"; return 0; }
+        web_sdb_conn_t c;
+        char scratch[512];
+        size_t sl = 0;
+        int st = 0;
+        if (web_hist_open(m, &c, now_s, scratch, sizeof(scratch), &sl, &st) != 0) return -1;
+        web_adb_row_t *row = calloc(1, sizeof(*row));
+        if (!row) { web_slothdb_close(&c); return -1; }
+        int got = web_adb_row(&c, rid, row);
+        web_slothdb_close(&c);
+        if (got < 0) { free(row); return -1; }
+        if (got == 0) { free(row); *why = "no_such_alert"; return 0; }
+        snprintf(t->id, sizeof(t->id), "d%lld", rid);
+        t->type = row->type;
+        t->sev = sev_clamp(row->sev);
+        t->first_seen = row->first_seen;
+        t->last_seen = row->last_seen;
+        snprintf(t->ip, sizeof(t->ip), "%s", row->ip);
+        if (row->has_detail) snprintf(t->detail, sizeof(t->detail), "%s", row->detail);
+        t->count = row->count;
+        free(row);
+    }
+    const web_akb_t *k = web_akb_get(t->type);
+    if (k) snprintf(t->rule, sizeof(t->rule), "%s", k->name);
+    return 1;
 }
