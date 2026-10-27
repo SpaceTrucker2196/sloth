@@ -8,6 +8,7 @@
 #include "posture.h"
 #include "sloth_clock.h"
 #include "query.h"
+#include "tmp_dir.h"
 
 /* Roadmap #16 phase 5 — posture report export.
  *
@@ -237,7 +238,8 @@ static void test_uncited_alert_produces_no_block(void) {
      * sandbox included: libsqlite3-dev ships the library, not the
      * binary). A skip that executes no ASSERT is indistinguishable from
      * a pass until something makes it visible. */
-    const char *tmp = "/tmp/sloth_posture_sparse.db";
+    char tmp[TEST_TMP_MAX];
+    test_tmp_path(tmp, sizeof(tmp), "sloth_posture_sparse.db");
     unlink(tmp);
     sqlite3 *db = NULL;
     ASSERT_EQ(sqlite3_open(tmp, &db), SQLITE_OK);

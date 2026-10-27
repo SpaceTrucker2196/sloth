@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include "tmp_dir.h"
 
 /* The service file lands in a directory sloth does not own, as root,
  * so publish goes through secure_file (#134). A fresh mkdtemp (0700,
@@ -13,11 +14,11 @@
  * sfile_system_dir()'s owner/mode rule, and a bare mkstemp path in a
  * 1777 /tmp — which the older tests used — is exactly what that rule
  * refuses. */
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 static char g_path[128];
 
 static void fresh_dir(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/sloth_disc_XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/sloth_disc_XXXXXX", test_tmpdir());
     ASSERT(mkdtemp(g_dir) != NULL);
     snprintf(g_path, sizeof(g_path), "%s/sloth.service", g_dir);
 }
@@ -250,17 +251,20 @@ static void test_publish_replaces_a_stale_tmp_without_following_it(void) {
 
 /* A directory anyone can write into is refused outright, because the
  * name sloth renames onto could be replanted between its checks and
- * the rename. /tmp is the canonical case. */
+ * the rename. /tmp is the canonical case; the test makes its own 01777
+ * directory with /tmp's mode rather than writing into the host's /tmp,
+ * so the run directory (tests/tmp_dir.h) holds everything it touches. */
 static void test_publish_refuses_a_shared_directory(void) {
-    char path[] = "/tmp/sloth_disc_shared_XXXXXX";
-    int fd = mkstemp(path);
-    ASSERT(fd >= 0);
-    close(fd);
-    unlink(path);   /* start absent */
+    char dir[TEST_TMP_MAX], path[TEST_TMP_MAX + 32];
+    test_tmp_path(dir, sizeof(dir), "sloth_disc_shared_XXXXXX");
+    ASSERT(mkdtemp(dir) != NULL);
+    ASSERT_EQ(chmod(dir, 01777), 0);
+    snprintf(path, sizeof(path), "%s/sloth.service", dir);
 
     ASSERT_EQ(discovery_publish("tcp:192.168.1.50:8765", path), -1);
     ASSERT(access(path, F_OK) != 0);
     discovery_unpublish();   /* nothing to remove */
+    ASSERT_EQ(rmdir(dir), 0);
 }
 
 /* ── Strict observation suppresses the carve-out (#84) ───── */

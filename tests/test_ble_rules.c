@@ -17,6 +17,7 @@
 #include "tui.h"
 #include "tune.h"
 #include "views/ble.h"
+#include "tmp_dir.h"
 
 /*
  * The BLE detector lanes, the [*] BLE view and the ble_device /
@@ -1034,10 +1035,10 @@ static void test_watchlist_match_heard_long_ago_does_not_fire(void) {
 
 /* ── JSONL ble_device / ble_alert ─────────────────────────────────── */
 
-static char g_tmp[64];
+static char g_tmp[TEST_TMP_MAX];
 
 static void jsonl_fresh(void) {
-    snprintf(g_tmp, sizeof(g_tmp), "/tmp/sloth_blerules_XXXXXX");
+    snprintf(g_tmp, sizeof(g_tmp), "%s/sloth_blerules_XXXXXX", test_tmpdir());
     int fd = mkstemp(g_tmp);
     if (fd >= 0) close(fd);
     jsonl_close();

@@ -5618,3 +5618,15 @@ report events.
   only its current columns' widths; the move from the build before
   touches only that build's four keys. `test_prefs.c`'s census reads a
   control's id in any attribute order and covers the toggle buttons.
+- 2026-10-27 — [[architecture]] *Test discipline → Temporary files*:
+  `make test` and `make web-test` clean up after themselves. Every test
+  path goes under `$TMPDIR` (`tests/tmp_dir.h`, `web/tests/wt_tmp.h`);
+  each runner points `TMPDIR` at a private run directory, removes it at
+  exit and fails the run on anything left in it (`LEAK: <path>`); the
+  make recipes wrap that in an outer `mktemp -d` for crashes. Fixed the
+  leaks the guard found: 13 entries a passing run used to leave in
+  `/tmp` (the shared `sloth_db_*`, `sloth_jsonl_*`, `sloth_regjsonl_*`,
+  `sloth_snap_*`, `sloth_alert_inv_*` files, the `sloth_pcap_*` and
+  `sloth_cap_*` directories, and five export directories cleaned by name
+  that the #92 slice 3 manifest kept from emptying, including the fixed
+  `/tmp/sloth_evexport_test`, now an `mkdtemp` name). No `src/` change.

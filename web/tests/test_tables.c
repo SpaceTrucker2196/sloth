@@ -15,6 +15,7 @@
 #include "web_store.h"
 #include "web_tsdb.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 #define T SDB_NOW
 
@@ -159,7 +160,7 @@ static int in_order(const char *b, const char *const *n, int k) {
     return 1;
 }
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 static char g_db[128];
 static web_rollup_t ru;
 static web_tsdb_t ts;
@@ -168,7 +169,7 @@ static web_m4_t m4;
 static web_health_t H;
 
 static void db_up(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-tables-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-tables-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(g_dir) != NULL);
     char e2[64];
     snprintf(g_db, sizeof(g_db), "%s/sloth.db", g_dir);

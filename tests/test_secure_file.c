@@ -10,6 +10,7 @@
 #include "secure_file.h"
 #include "evidence_export.h"
 #include "eapol_log.h"
+#include "tmp_dir.h"
 
 /* ── secure_file (#87) hardening (#134) ─────────────────────────────
  *
@@ -25,13 +26,13 @@
  *     accepted → red.
  *
  * Every directory is a fresh mkdtemp (0700, euid-owned) so the tests
- * neither depend on nor disturb anything already under /tmp. */
+ * neither depend on nor disturb anything already under $TMPDIR. */
 
-static char g_parent[64];   /* mkdtemp root */
-static char g_child[96];    /* g_parent/d — the directory we pin */
+static char g_parent[TEST_TMP_MAX];   /* mkdtemp root */
+static char g_child[TEST_TMP_MAX + 8];    /* g_parent/d — the directory we pin */
 
 static void fresh_dirs(void) {
-    snprintf(g_parent, sizeof(g_parent), "/tmp/sloth_sfile_XXXXXX");
+    snprintf(g_parent, sizeof(g_parent), "%s/sloth_sfile_XXXXXX", test_tmpdir());
     ASSERT(mkdtemp(g_parent) != NULL);
     snprintf(g_child, sizeof(g_child), "%s/d", g_parent);
     ASSERT_EQ(mkdir(g_child, 0700), 0);

@@ -30,6 +30,7 @@
 #include "web_slothdb.h"
 #include "web_tsdb.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 static char *slurp(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -860,13 +861,13 @@ static void test_presence_split(void) {
  * Alerts: DEAUTH_FLOOD on M (Monitor's), PORT_SCAN on L's address
  * (Local's), NO_MONITOR_MODE (sloth's own, both). A beacon_aps row, an
  * SSH flow (Local's). */
-static char g_dir[64], g_db[128];
+static char g_dir[TEST_TMP_MAX], g_db[128];
 static web_slothdb_t g_sdb;
 static web_m4_t g_m4;
 static web_health_t H;
 
 static int sdb_up(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-scope-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-scope-XXXXXX", test_tmpdir());
     if (!mkdtemp(g_dir)) return -1;
     snprintf(g_db, sizeof(g_db), "%s/sloth.db", g_dir);
     if (sdb_make(g_db, db_schema_version(), 1) != 0) return -1;
@@ -1408,8 +1409,8 @@ static long long sc_mono_ms(void) {
  * ARP columns the correlated subqueries again, one scan of arp per
  * device: arp is keyed (ip, mac), and nothing indexes mac. */
 static void test_scoped_reads_on_a_large_file(void) {
-    char dir[64], path[128], sql[2048], q[160];
-    snprintf(dir, sizeof(dir), "/tmp/slothweb-scbig-XXXXXX");
+    char dir[TEST_TMP_MAX], path[128], sql[2048], q[160];
+    snprintf(dir, sizeof(dir), "%s/slothweb-scbig-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(dir) != NULL);
     snprintf(path, sizeof(path), "%s/sloth.db", dir);
     WT_EQ(sdb_make(path, db_schema_version(), 0), 0);

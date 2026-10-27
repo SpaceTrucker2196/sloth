@@ -1,6 +1,7 @@
 /* Embedded SQLite sink (#42).
  *
- * These run against a real SQLite file in /tmp, not a mock — per the
+ * These run against a real SQLite file under $TMPDIR (tests/tmp_dir.h),
+ * not a mock — per the
  * repo rule about not mocking real-data interfaces. The sink's whole
  * value is that the rows are queryable afterwards, so the tests query
  * them back with SQL, which is also how the operator will. */
@@ -21,13 +22,14 @@
 #include "beacon_snoop.h"
 #include "alerts.h"
 #include "sloth_clock.h"
+#include "tmp_dir.h"
 
-static char db_path[] = "/tmp/sloth_db_XXXXXX";
+static char db_path[TEST_TMP_MAX];
 
 static void fresh_db(void) {
     db_close();
-    if (db_path[strlen(db_path) - 1] == 'X') {
-        int fd = mkstemp(db_path);
+    if (!db_path[0] || db_path[strlen(db_path) - 1] == 'X') {
+        int fd = mkstemp(test_tmp_tpl(db_path, sizeof(db_path), "sloth_db_XXXXXX"));
         if (fd >= 0) close(fd);
     }
     unlink(db_path);
@@ -2541,7 +2543,7 @@ static void test_akm_regression_is_silent_without_a_file(void) {
  * and refuses anything already there that is not private. */
 
 static void d87_path(char *out, size_t sz, const char *suffix) {
-    snprintf(out, sz, "/tmp/sloth_test_db87_%d.db%s", (int)getpid(), suffix);
+    snprintf(out, sz, "%s/sloth_test_db87_%d.db%s", test_tmpdir(), (int)getpid(), suffix);
 }
 
 static int d87_mode(const char *path) {
@@ -3052,20 +3054,33 @@ static void test_v7_migration_failure_leaves_file_unchanged(void) {
 
 /* ── --db-compact-alerts (#170) ─────────────────────────── */
 
-static char g_cmp_src[64], g_cmp_dst[64];
+static char g_cmp_src[TEST_TMP_MAX + 8], g_cmp_dst[TEST_TMP_MAX + 8];
 
 static void cmp_paths(void) {
     snprintf(g_cmp_src, sizeof(g_cmp_src), "%s.csrc", db_path);
     snprintf(g_cmp_dst, sizeof(g_cmp_dst), "%s.cdst", db_path);
 }
 
+/* db_path and every file SQLite or the compaction tests put beside it. */
+static void db_unlink_all(void) {
+    static const char *const sfx[] = { "", "-wal", "-shm", "-journal",
+        ".csrc", ".csrc-wal", ".csrc-shm", ".csrc-journal",
+        ".cdst", ".cdst-wal", ".cdst-shm", ".cdst-journal" };
+    char p[TEST_TMP_MAX + 16];
+    if (!db_path[0]) return;
+    for (size_t i = 0; i < sizeof(sfx) / sizeof(sfx[0]); i++) {
+        snprintf(p, sizeof(p), "%s%s", db_path, sfx[i]);
+        unlink(p);
+    }
+}
+
 static const char *g_cmp_src_wal(void) {
-    static char p[96];
+    static char p[TEST_TMP_MAX + 16];
     snprintf(p, sizeof(p), "%s-wal", g_cmp_src);
     return p;
 }
 static const char *g_cmp_src_shm(void) {
-    static char p[96];
+    static char p[TEST_TMP_MAX + 16];
     snprintf(p, sizeof(p), "%s-shm", g_cmp_src);
     return p;
 }
@@ -3290,7 +3305,7 @@ static void test_compact_refuses_an_uncheckpointed_src(void) {
     /* A hot rollback journal: refused the same way. */
     write_v7_file(V7_ALERTS_DDL(""));
     ASSERT_EQ(rename(db_path, g_cmp_src), 0);
-    char jr[96];
+    char jr[TEST_TMP_MAX + 24];
     snprintf(jr, sizeof(jr), "%s-journal", g_cmp_src);
     FILE *fp = fopen(jr, "wb");
     ASSERT(fp != NULL);
@@ -3324,7 +3339,7 @@ static void test_compact_refuses_an_existing_dst(void) {
     ASSERT_EQ((long long)sb.st_size, 0);          /* not written to */
     unlink(g_cmp_dst);
 
-    char wal[96];
+    char wal[TEST_TMP_MAX + 16];
     snprintf(wal, sizeof(wal), "%s-wal", g_cmp_dst);
     fd = open(wal, O_WRONLY | O_CREAT | O_EXCL, 0600);
     ASSERT(fd >= 0);
@@ -4016,4 +4031,9 @@ void run_db_tests(void) {
     RUN_TEST(test_akm_regression_is_per_bssid);
     RUN_TEST(test_akm_regression_covers_the_families);
     RUN_TEST(test_akm_regression_is_silent_without_a_file);
+
+    /* The tests above share one file and recreate it; the last ones
+     * leave it, its WAL companions and the compaction side files. */
+    db_close();
+    db_unlink_all();
 }

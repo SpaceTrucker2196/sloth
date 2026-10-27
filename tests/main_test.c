@@ -1,5 +1,9 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 #include "runner.h"
+#include "tmp_dir.h"
 #include "reset_all.h"
 #include "sloth_clock.h"
 #include "tui.h"
@@ -36,6 +40,27 @@ const char *__lsan_default_suppressions(void);
 const char *__lsan_default_suppressions(void) {
     return "leak:libncursesw.so\n"
            "leak:libtinfo.so\n";
+}
+
+/* The run directory: every temporary path a test makes lands here
+ * (tests/tmp_dir.h). Removed at exit by the process that made it only —
+ * a fork child that returns through exit() must not take it away from
+ * the suite still running in its parent. SLOTH_TEST_KEEP_TMP=1 keeps it
+ * and prints where, for looking at what a failing test wrote. */
+static char  g_run_dir[TEST_TMP_MAX];
+static pid_t g_run_owner;
+
+static void run_dir_cleanup(void) {
+    if (getpid() == g_run_owner) tmp_run_dir_close(g_run_dir, "sloth_test");
+}
+
+static int run_dir_open(void) {
+    if (tmp_run_dir_open(g_run_dir, sizeof(g_run_dir), "sloth_test",
+                         "sloth_test") != 0)
+        return -1;
+    g_run_owner = getpid();
+    atexit(run_dir_cleanup);
+    return 0;
 }
 
 void run_parse_tests(void);
@@ -223,6 +248,8 @@ void run_replay_tests(void);              /* tests/test_replay.c (#119) */
 int main(void) {
     printf("sloth test suite\n");
     printf("===============\n");
+
+    if (run_dir_open() != 0) return 2;
 
     /* Views draw through the shipped renderer (#116): an ncurses SCREEN
      * whose output goes to /dev/null, read back with tui_test_line().
@@ -419,6 +446,11 @@ int main(void) {
     run_ble_scan_tests();
 
     tui_offscreen_end();
+    /* The leak guard: a path still in the run directory after the last
+     * suite is one a test made and did not remove. It fails the run
+     * here, because the directory is about to be deleted and nobody
+     * would see it otherwise. */
+    if (tmp_run_dir_check(g_run_dir, "sloth_test") != 0) g_fail++;
     RUNNER_SUMMARY();
     return g_fail > 0 ? 1 : 0;
 }

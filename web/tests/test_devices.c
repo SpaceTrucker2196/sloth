@@ -185,8 +185,9 @@ static void test_page_shows_db_freshness(void) {
 #ifdef WITH_SQLITE
 
 #include <sqlite3.h>
+#include "wt_tmp.h"
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 static oui_build_t g_oui;
 static web_slothdb_t g_sdb;
 static web_store_t g_store;
@@ -207,7 +208,7 @@ static void feed(const char *line, long long now) {
 }
 
 static void up(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-dev-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-dev-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(g_dir) != NULL);
     WT_EQ(sdb_oui(&g_oui, g_dir), 0);
     snprintf(g_db, sizeof(g_db), "%s/sloth.db", g_dir);

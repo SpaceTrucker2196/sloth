@@ -17,14 +17,15 @@
 #include "tune.h"
 #include "sloth_clock.h"
 #include "eapol_log.h"
+#include "tmp_dir.h"
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
-static char tmp_dir[] = "/tmp/sloth_pcap_XXXXXX";
+static char tmp_dir[TEST_TMP_MAX];
 
 static void ensure_tmp_dir(void) {
     /* mkdtemp creates the directory and writes the final name back. */
-    char *d = mkdtemp(tmp_dir);
+    char *d = mkdtemp(test_tmp_tpl(tmp_dir, sizeof(tmp_dir), "sloth_pcap_XXXXXX"));
     (void)d;
     alert_pcap_set_dir(tmp_dir);
 }
@@ -154,7 +155,7 @@ static void test_dump_skips_alert_without_match_ip(void) {
  * when a CLEARTEXT_CREDS flow matches. They get the same private-dir /
  * private-file guarantee as the handshake export. */
 
-static char g_ap87[80];
+static char g_ap87[TEST_TMP_MAX];
 
 static int ap87_mode(const char *path) {
     struct stat st;
@@ -196,7 +197,7 @@ static void ap87_cleanup(void) {
 }
 
 static void ap87_setup(void) {
-    snprintf(g_ap87, sizeof(g_ap87), "/tmp/sloth_test_ap87_%d", (int)getpid());
+    snprintf(g_ap87, sizeof(g_ap87), "%s/sloth_test_ap87_%d", test_tmpdir(), (int)getpid());
     ap87_cleanup();
 }
 
@@ -728,7 +729,7 @@ static void test_dump_succeeds_on_a_healthy_filesystem_by_default(void) {
 static time_t sw_now = 1800000000;          /* 2027-01-15, pinned */
 static time_t sw_wall(void) { return sw_now; }
 
-static char sw_dir[64];
+static char sw_dir[TEST_TMP_MAX];
 
 /* A fresh private directory per test, so one test's leftovers cannot
  * be another's "kept" file. */
@@ -736,7 +737,7 @@ static void sw_setup(void) {
     tune_reset();
     sw_now = 1800000000;
     sloth_clock_test_set(NULL, sw_wall);
-    snprintf(sw_dir, sizeof(sw_dir), "/tmp/sloth_sweep_XXXXXX");
+    snprintf(sw_dir, sizeof(sw_dir), "%s/sloth_sweep_XXXXXX", test_tmpdir());
     ASSERT(mkdtemp(sw_dir) != NULL);
     ASSERT_EQ(alert_pcap_set_dir(sw_dir), 0);
 }
@@ -1046,7 +1047,7 @@ static void test_sweep_spares_files_written_before_a_clock_step(void) {
     sw_now = 1000000000;
     sw_mono_ms_now = 5000;
     sloth_clock_test_set(sw_mono, sw_wall);
-    snprintf(sw_dir, sizeof(sw_dir), "/tmp/sloth_sweep_XXXXXX");
+    snprintf(sw_dir, sizeof(sw_dir), "%s/sloth_sweep_XXXXXX", test_tmpdir());
     ASSERT(mkdtemp(sw_dir) != NULL);
     ASSERT_EQ(alert_pcap_set_dir(sw_dir), 0);
     /* An alert pcap written on the stale clock, before NTP... */
@@ -1074,12 +1075,12 @@ static void test_sweep_detects_a_shared_eapol_dir(void) {
     sw_setup();
     ASSERT(!alert_pcap_shares_eapol_dir());          /* no --eapol-dir */
     eapol_set_collect_enabled(1);
-    char alias[96];
+    char alias[TEST_TMP_MAX + 8];
     snprintf(alias, sizeof(alias), "%s/.", sw_dir);  /* another spelling */
     ASSERT_EQ(eapol_set_output_dir(alias), 0);
     ASSERT(alert_pcap_shares_eapol_dir());
-    char other[64];
-    snprintf(other, sizeof(other), "/tmp/sloth_sweep_XXXXXX");
+    char other[TEST_TMP_MAX];
+    snprintf(other, sizeof(other), "%s/sloth_sweep_XXXXXX", test_tmpdir());
     ASSERT(mkdtemp(other) != NULL);
     ASSERT_EQ(eapol_set_output_dir(other), 0);
     ASSERT(!alert_pcap_shares_eapol_dir());          /* same fs, not dir */
@@ -1138,4 +1139,9 @@ void run_alert_pcap_tests(void) {
     RUN_TEST(test_sweep_error_line_is_not_an_export_failure);
     RUN_TEST(test_sweep_spares_files_written_before_a_clock_step);
     RUN_TEST(test_sweep_detects_a_shared_eapol_dir);
+
+    /* The suite's capture directory: the dumps and the evidence
+     * manifests (#92 slice 3) the tests above wrote into it. */
+    alert_pcap_set_dir(NULL);
+    test_rm_tree(tmp_dir);
 }

@@ -9,6 +9,7 @@
 #include "sloth_clock.h"
 #include "jsonl.h"
 #include <unistd.h>
+#include "tmp_dir.h"
 
 /*
  * Captive-portal interception — issue #69.
@@ -1164,8 +1165,8 @@ static void test_repeated_kit_page_does_not_flood_the_ring(void) {
  * DNS-sourced event says it has neither rather than leaving the fields
  * out, so a consumer sees one record shape. */
 static void test_jsonl_carries_responder_and_kit(void) {
-    static char tmp[] = "/tmp/sloth_cp_XXXXXX";
-    int fd = mkstemp(tmp);
+    static char tmp[TEST_TMP_MAX];
+    int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_cp_XXXXXX"));
     if (fd >= 0) close(fd);
     jsonl_close();
     unlink(tmp);

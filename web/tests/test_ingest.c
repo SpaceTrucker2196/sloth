@@ -23,6 +23,7 @@
 #include "web_live.h"
 #include "web_server.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 static long long mono_ms(void) {
     struct timespec ts;
@@ -40,11 +41,11 @@ static web_ingest_t g_ing;
 
 /* ── the fake sloth's end ─────────────────────────────────────────── */
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 static char g_path[128];
 
 static int tmp_dir(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-test-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-test-XXXXXX", test_tmpdir());
     if (!mkdtemp(g_dir)) return -1;
     snprintf(g_path, sizeof(g_path), "%s/sloth.sock", g_dir);
     return 0;

@@ -51,6 +51,7 @@
 #include "web_server.h"
 #include "web_sqlbox.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 /* ── the text (every build) ─────────────────────────────────────────── */
 
@@ -208,7 +209,7 @@ void run_sqlbox_tests(void) {
 
 #include <sqlite3.h>
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 static char g_db[128];
 
 /* 2026-07-28 02:00 and 04:00 UTC: the "who was here" recipe's window. */
@@ -1211,7 +1212,7 @@ void run_sqlbox_tests(void) {
     WT_RUN(test_off_by_default);
     WT_RUN(test_page_carries_the_box);
     WT_RUN(test_recipes_are_the_pages);
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-sql-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-sql-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(g_dir) != NULL);
     snprintf(g_db, sizeof(g_db), "%s/sloth.db", g_dir);
     WT_EQ(sdb_make(g_db, db_schema_version(), 0), 0);

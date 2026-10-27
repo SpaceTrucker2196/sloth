@@ -19,6 +19,7 @@
 #include "sha256.h"
 #include "web_oui.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 /* The table `make web-test` says this build should have: "ieee" when
  * WEB_OUI_DIR held the CSVs, "sloth" when it did not. */
@@ -26,7 +27,7 @@
 #define WEB_OUI_EXPECT NULL
 #endif
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 
 static void path_in(char *out, size_t sz, const char *name) {
     snprintf(out, sz, "%s/%s", g_dir, name);
@@ -729,7 +730,7 @@ static void test_update_oui_is_never_automatic(void) {
 }
 
 void run_oui_tests(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-oui-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-oui-XXXXXX", test_tmpdir());
     if (!mkdtemp(g_dir)) { WT_ASSERT(!"mkdtemp"); return; }
     write_file("oui.csv", OUI_CSV);
     write_file("mam.csv", MAM_CSV);

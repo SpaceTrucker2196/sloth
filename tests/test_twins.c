@@ -12,6 +12,7 @@
 #include "ownership.h"
 #include "inventory.h"
 #include "wired_attach.h"
+#include "tmp_dir.h"
 
 /* Tests are state-driven only — twins_snapshot reads beacon_ap_t and
  * the taint tracker. add_beacon mirrors the helper from test_alerts.c. */
@@ -379,10 +380,10 @@ static void test_twins_designated_bssid_is_always_real(void) {
  * declared radio here is the closer one, which the pre-#89 view would
  * have called the rogue. */
 static void test_twins_inventory_approved_bssid_is_never_the_impostor(void) {
-    static char tmp[] = "/tmp/sloth_twins_inv_XXXXXX";
+    static char tmp[TEST_TMP_MAX];
     static int  made;
     alerts_clear(); ownership_clear(); inventory_clear();
-    if (!made) { int fd = mkstemp(tmp); if (fd >= 0) close(fd); made = 1; }
+    if (!made) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_twins_inv_XXXXXX")); if (fd >= 0) close(fd); made = 1; }
     FILE *f = fopen(tmp, "w");
     ASSERT(f != NULL);
     if (!f) return;
@@ -422,10 +423,10 @@ static void test_twins_inventory_approved_bssid_is_never_the_impostor(void) {
  * candidate pair left to materialise. The [x] Twins view and the alert
  * share one scorer and must agree about that. */
 static void test_twins_both_inventory_approved_no_episode(void) {
-    static char tmp[] = "/tmp/sloth_twins_inv2_XXXXXX";
+    static char tmp[TEST_TMP_MAX];
     static int  made;
     alerts_clear(); ownership_clear(); inventory_clear();
-    if (!made) { int fd = mkstemp(tmp); if (fd >= 0) close(fd); made = 1; }
+    if (!made) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_twins_inv2_XXXXXX")); if (fd >= 0) close(fd); made = 1; }
     FILE *f = fopen(tmp, "w");
     ASSERT(f != NULL);
     if (!f) return;
@@ -529,10 +530,10 @@ static void test_twins_no_inventory_class_is_unknown_and_nothing_lost(void) {
  * claim available, and the only one an attacker cannot reach — it comes
  * out of a file a human wrote, not out of a frame. */
 static void test_twins_inventory_mismatch_classifies_impersonator(void) {
-    static char tmp[] = "/tmp/sloth_twins_cls1_XXXXXX";
+    static char tmp[TEST_TMP_MAX];
     static int  made;
     alerts_clear(); ownership_clear(); inventory_clear(); wired_attach_clear();
-    if (!made) { int fd = mkstemp(tmp); if (fd >= 0) close(fd); made = 1; }
+    if (!made) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_twins_cls1_XXXXXX")); if (fd >= 0) close(fd); made = 1; }
     load_inventory(tmp, "{\"networks\":[{\"ssid\":\"CorpWiFi\","
                         "\"bssids\":[\"aa:bb:cc:01:02:03\"]}]}");
 
@@ -558,10 +559,10 @@ static void test_twins_inventory_mismatch_classifies_impersonator(void) {
  * anything the operator owns. Needs the inventory; see the no-inventory
  * test above for the same geometry staying UNKNOWN. */
 static void test_twins_ssid_outside_declared_estate_is_neighbor(void) {
-    static char tmp[] = "/tmp/sloth_twins_cls2_XXXXXX";
+    static char tmp[TEST_TMP_MAX];
     static int  made;
     alerts_clear(); ownership_clear(); inventory_clear(); wired_attach_clear();
-    if (!made) { int fd = mkstemp(tmp); if (fd >= 0) close(fd); made = 1; }
+    if (!made) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_twins_cls2_XXXXXX")); if (fd >= 0) close(fd); made = 1; }
     load_inventory(tmp, "{\"networks\":[{\"ssid\":\"CorpWiFi\","
                         "\"bssids\":[\"aa:bb:cc:01:02:03\"]}]}");
 
@@ -601,10 +602,10 @@ static void test_twins_attacker_oui_is_impersonator_without_inventory(void) {
  * rogue naming the AP it is impersonating — the exact erase-the-finding
  * move the issue describes. */
 static void test_twins_spoofed_neighbor_does_not_downgrade_class(void) {
-    static char tmp[] = "/tmp/sloth_twins_cls3_XXXXXX";
+    static char tmp[TEST_TMP_MAX];
     static int  made;
     alerts_clear(); ownership_clear(); inventory_clear(); wired_attach_clear();
-    if (!made) { int fd = mkstemp(tmp); if (fd >= 0) close(fd); made = 1; }
+    if (!made) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_twins_cls3_XXXXXX")); if (fd >= 0) close(fd); made = 1; }
     load_inventory(tmp, "{\"networks\":[{\"ssid\":\"CorpWiFi\","
                         "\"bssids\":[\"aa:bb:cc:01:02:03\"]}]}");
 
@@ -633,10 +634,10 @@ static wired_attach_t twin_is_on_the_wire(const uint8_t bssid[6], void *ctx) {
  * controller/switch/DHCP integration fills, and the only path by which
  * `wired_attach` can ever become non-UNKNOWN. */
 static void test_twins_registered_correlator_reaches_the_episode(void) {
-    static char tmp[] = "/tmp/sloth_twins_cls4_XXXXXX";
+    static char tmp[TEST_TMP_MAX];
     static int  made;
     alerts_clear(); ownership_clear(); inventory_clear(); wired_attach_clear();
-    if (!made) { int fd = mkstemp(tmp); if (fd >= 0) close(fd); made = 1; }
+    if (!made) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_twins_cls4_XXXXXX")); if (fd >= 0) close(fd); made = 1; }
     load_inventory(tmp, "{\"networks\":[{\"ssid\":\"CorpWiFi\","
                         "\"bssids\":[\"aa:bb:cc:01:02:03\"]}]}");
 
@@ -689,10 +690,10 @@ static void test_twins_unattributed_pair_gets_no_wired_verdict(void) {
  * sole suppressor, the bug class this whole issue opened on. The
  * episode survives with its confidence intact. */
 static void test_twins_neighbor_class_does_not_suppress_the_episode(void) {
-    static char tmp[] = "/tmp/sloth_twins_cls5_XXXXXX";
+    static char tmp[TEST_TMP_MAX];
     static int  made;
     alerts_clear(); ownership_clear(); inventory_clear(); wired_attach_clear();
-    if (!made) { int fd = mkstemp(tmp); if (fd >= 0) close(fd); made = 1; }
+    if (!made) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_twins_cls5_XXXXXX")); if (fd >= 0) close(fd); made = 1; }
     load_inventory(tmp, "{\"networks\":[{\"ssid\":\"CorpWiFi\","
                         "\"bssids\":[\"aa:bb:cc:01:02:03\"]}]}");
 

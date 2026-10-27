@@ -35,6 +35,7 @@
 #include "assoc_track.h"
 #include "action_snoop.h"
 #include "ev_cite.h"
+#include "tmp_dir.h"
 
 TEST_STATE(g_s);
 
@@ -54,10 +55,10 @@ static int find_alert(const sloth_state_t *s, alert_type_t type) {
 
 /* ── JSONL sink ─────────────────────────────────────────── */
 
-static char g_jpath[] = "/tmp/sloth_evcite_XXXXXX";
+static char g_jpath[TEST_TMP_MAX];
 
 static void jsonl_fresh(void) {
-    int fd = mkstemp(g_jpath);
+    int fd = mkstemp(test_tmp_tpl(g_jpath, sizeof(g_jpath), "sloth_evcite_XXXXXX"));
     if (fd >= 0) close(fd);
     jsonl_close();
     unlink(g_jpath);

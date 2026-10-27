@@ -9,6 +9,7 @@
 #include "jsonl.h"
 #include "reg_obs.h"
 #include "views/beacon.h"
+#include "tmp_dir.h"
 
 /*
  * Regulatory readings for the operator — issue #101 slice B: the REG
@@ -491,10 +492,10 @@ static void test_detail_worst_case_does_not_wrap(void) {
 
 /* ── wifi_regulatory JSONL ───────────────────────────────── */
 
-static char g_path[] = "/tmp/sloth_regjsonl_XXXXXX";
+static char g_path[TEST_TMP_MAX];
 
 static void open_fresh(void) {
-    int fd = mkstemp(g_path);
+    int fd = mkstemp(test_tmp_tpl(g_path, sizeof(g_path), "sloth_regjsonl_XXXXXX"));
     if (fd >= 0) close(fd);
     jsonl_close();
     unlink(g_path);
@@ -722,4 +723,7 @@ void run_reg_obs_tests(void) {
     RUN_TEST(test_jsonl_change_only_on_claims);
     RUN_TEST(test_jsonl_malformed_counts_do_not_churn);
     RUN_TEST(test_jsonl_full_table_does_not_ping_pong);
+
+    jsonl_close();
+    unlink(g_path);
 }

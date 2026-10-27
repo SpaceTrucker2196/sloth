@@ -763,7 +763,7 @@ web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C)
 	      -Iinclude -iquote research -DWEB_OUI_EXPECT='"$(if $(WEB_OUI_CSVS),ieee,sloth)"' \
 	      -DWEB_OUI_DATA='"$(WEB_OUI_DIR)"' -o slothweb_test \
 	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
-	./slothweb_test
+	@$(call TEST_IN_TMPDIR,./slothweb_test)
 
 # Refresh web/data/ from /usr/share/ieee-data, or from the IEEE when that
 # is absent, and rewrite web/data/SOURCE.md's hashes. By hand only: no
@@ -837,9 +837,21 @@ $(TEST_CORE_LIB): $(TEST_CORE_OBJS) $(TEST_OBJDIR)/.members
 
 TEST_BIN = sloth_test
 
+# Temporary files (docs/wiki/architecture.md, "Temporary files"): each
+# runner makes a private run directory under $TMPDIR, points TMPDIR at
+# it, removes it at exit and fails the run on anything a test left in
+# it. This outer directory
+# is for the exit atexit() never sees - a sanitizer abort, a SIGSEGV, a
+# timeout's SIGKILL - so a crash cannot leave files in a shared /tmp
+# either. SLOTH_TEST_KEEP_TMP=1 keeps both and says where.
+TEST_IN_TMPDIR = d=$$(mktemp -d "$${TMPDIR:-/tmp}/sloth_mk.XXXXXX") || exit 1; \
+	echo "TMPDIR=$$d $(1)"; TMPDIR=$$d $(1); rc=$$?; \
+	if [ -n "$$SLOTH_TEST_KEEP_TMP" ] && [ "$$SLOTH_TEST_KEEP_TMP" != 0 ]; \
+	then echo "kept $$d (SLOTH_TEST_KEEP_TMP)"; else rm -rf "$$d"; fi; exit $$rc
+
 .PHONY: test test-capture-path
 test: $(TEST_BIN)
-	./$(TEST_BIN)
+	@$(call TEST_IN_TMPDIR,./$(TEST_BIN))
 
 # The capture-path suite used to be its own binary, sloth_test_pcap,
 # because sloth_test had no WITH_PCAP. It is part of `make test` now

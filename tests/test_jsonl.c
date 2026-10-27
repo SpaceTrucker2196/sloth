@@ -24,15 +24,16 @@
 #include "wifi_chanhop.h"
 #include "fake_platform.h"
 #include "jsonl_ptr_fixture.h"
+#include "tmp_dir.h"
 
 /* Each test opens a fresh temp file, exercises the emitter, then reads
  * the file back and asserts on the recorded line(s). */
 
-static char tmp_path[] = "/tmp/sloth_jsonl_XXXXXX";
+static char tmp_path[TEST_TMP_MAX];
 
 static void open_fresh(void) {
     /* Build a unique path; close immediately so jsonl_open can append. */
-    int fd = mkstemp(tmp_path);
+    int fd = mkstemp(test_tmp_tpl(tmp_path, sizeof(tmp_path), "sloth_jsonl_XXXXXX"));
     if (fd >= 0) close(fd);
     jsonl_close();
     /* Drop any previous content. jsonl_open recreates the file 0600; a
@@ -1223,7 +1224,8 @@ static void test_emit_sensor_health_measures_a_configured_pcap_dir(void) {
        "present and not -1" rather than against a number, because the
        number belongs to whatever host runs the suite — pinning it would
        make this pass or fail by accident. */
-    char dir[] = "/tmp/sloth_cap_XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "sloth_cap_XXXXXX");
     ASSERT(mkdtemp(dir) != NULL);
     ASSERT_EQ(alert_pcap_set_dir(dir), 0);
     open_fresh();
@@ -1239,6 +1241,7 @@ static void test_emit_sensor_health_measures_a_configured_pcap_dir(void) {
        would fail on btrfs for a correct build. */
     ASSERT(contains(body, "\"pcap_dir_free_inodes\":"));
     alert_pcap_set_dir(NULL);
+    ASSERT_EQ(rmdir(dir), 0);
 }
 
 /* #166: the --pcap-dir age sweep's counters. Present only with a
@@ -1265,7 +1268,8 @@ static void test_emit_sensor_health_omits_sweep_without_pcap_dir(void) {
  * the count stays in its decade. */
 static void test_sensor_health_sweep_count_does_not_churn(void) {
     sloth_clock_test_set(NULL, sweep_fixed_wall);
-    char dir[] = "/tmp/sloth_swh_XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "sloth_swh_XXXXXX");
     ASSERT(mkdtemp(dir) != NULL);
     ASSERT_EQ(alert_pcap_set_dir(dir), 0);
     for (int i = 0; i < 5; i++) {
@@ -2013,7 +2017,8 @@ static void test_sensor_health_new_table_kinds_move_the_signature(void) {
  * would report last tick's count instead of this one's). */
 
 static void test_emit_sensor_health_reports_pcap_export_failures(void) {
-    char dir[] = "/tmp/sloth_sh_pcap_XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "sloth_sh_pcap_XXXXXX");
     char *d = mkdtemp(dir);
     ASSERT(d != NULL);
     if (!d) return;
@@ -2557,7 +2562,7 @@ static void test_btm_steer_empty_emits_nothing(void) {
  * that is not private, or a symlink, is refused and left untouched. */
 
 static void j87_path(char *out, size_t sz) {
-    snprintf(out, sz, "/tmp/sloth_test_jsonl87_%d.jsonl", (int)getpid());
+    snprintf(out, sz, "%s/sloth_test_jsonl87_%d.jsonl", test_tmpdir(), (int)getpid());
 }
 
 static int j87_mode(const char *path) {
@@ -2904,4 +2909,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_btm_steer_empty_emits_nothing);
     RUN_TEST(test_json_escape_output_is_valid_utf8);
     RUN_TEST(test_json_escape_keeps_text_escapes_line_separators);
+
+    /* The suite's shared sink file, which the tests above reopen. */
+    jsonl_close();
+    unlink(tmp_path);
 }

@@ -31,13 +31,14 @@
 #include "web_oui.h"
 #include "web_slothdb.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 #define HOUR 3600LL
 #define WEEK (168LL * HOUR)
 #define THU0 1792627200LL                 /* Thursday 2026-10-22 00:00 UTC */
 #define T0   (THU0 + 14 * HOUR)           /* "now": Thursday 14:00 */
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 static web_store_t    st;
 static int            have_st;
 static web_baseline_t bl;
@@ -59,7 +60,7 @@ static void engine(void) {
 /* store: open a slothweb.db (in an SQLite build); live: NULL counts
  * every minute as observed. */
 static void fx(int store, web_live_t *live) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-anomaly-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-anomaly-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(g_dir) != NULL);
     have_st = 0;
     if (store && web_store_available()) {

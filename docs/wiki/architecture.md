@@ -8,9 +8,9 @@ type: reference
 
 **Summary**: How sloth's source is organised: header → CLI → platform vtable → capture pipeline → per-protocol parsers → state → views.
 
-**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
+**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `tests/tmp_dir.h`, `tests/main_test.c`, `web/tests/wt_tmp.h`, `web/tests/web_test_main.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-19 (#95, #118, #141, #132, #130, #109)
+**Last updated**: 2026-10-27 (temporary files and the leak guard; #95, #118, #141, #132, #130, #109)
 
 ---
 
@@ -365,6 +365,68 @@ owner, not something this page decides.
   `tests/test_docs_consistency.c` fails until it has.
 - Parser tests use raw byte arrays built from RFCs — no parser-feeds-itself
   circular tests.
+
+### Temporary files
+
+`make test` and `make web-test` leave nothing behind in `$TMPDIR`
+(`/tmp` when unset), and a test that does fails the run. Before
+2026-10-27 every test helper wrote under a hard-coded `/tmp/...`; on
+the development host 47,082 `/tmp/sloth_*` entries (2.8 GB) had piled
+up in a 7.4 GB RAM-backed `/tmp` since 2026-10-19 and turned
+`test_compact_alerts_900k_rows` red for want of space. Most came from
+two causes: suites that never removed their shared file
+(`sloth_db_*`, 438 KB a run), and directories cleaned name by name that
+stopped emptying when #92 slice 3 added a
+`sloth-manifest-<ts>-<rand>.jsonl` beside the export.
+
+Three layers, outermost first:
+
+1. **Make.** The `test` and `web-test` recipes run the binary with
+   `TMPDIR` set to a fresh `mktemp -d "${TMPDIR:-/tmp}/sloth_mk.XXXXXX"`
+   and remove it afterwards whatever the exit status — the case
+   `atexit()` never sees (a sanitizer abort, SIGSEGV, SIGKILL).
+2. **Runner.** `tests/main_test.c` and `web/tests/web_test_main.c`
+   make `<TMPDIR>/sloth_test.XXXXXX` (`slothweb_test.XXXXXX`), 0700,
+   point `TMPDIR` at it before the first suite (SQLite's own temp files
+   follow), and remove it recursively at exit — only from the process
+   that made it, so a fork child leaving through `exit()` cannot take it
+   from the parent. A `TMPDIR` longer than `TEST_TMP_DIR_MAX` (56) falls
+   back to `/tmp` with a note on stderr, so no test path is truncated.
+3. **Leak guard.** After the last suite, and under `WT_ONLY` too, the
+   runner walks the run directory. Anything there is printed as
+   `LEAK: <path>` (at most 20, then `...and N more`), counted as a
+   failure, and the run exits non-zero. Seen red on 2026-10-27 under
+   three mutations, each restored byte-identical: dropping the
+   `test_rm_tree(tmp_dir)` at the end of `run_alert_pcap_tests` (9
+   paths: `sloth_pcap_*` with its four `alert_*.pcap` and four
+   manifests), putting back the old `rmdir(EXP_DIR)` in
+   `test_evidence_export.c` (3 paths, naming the
+   `sloth-manifest-*.jsonl`), and dropping `rmdir(R.dir)` in
+   web `test_replay.c`'s `rig_down` (6 `slothweb-replay-*`).
+
+Rules for a test that makes a file:
+
+- Build the path with `test_tmp_path(buf, sizeof(buf), "sloth_x_XXXXXX")`
+  or, for a file-scope template, `mkstemp(test_tmp_tpl(buf, sizeof(buf),
+  "sloth_x_XXXXXX"))` on a `static char buf[TEST_TMP_MAX]`. Never a
+  `"/tmp/..."` literal: it bypasses the run directory and the guard.
+- Remove what you made, in the test or at the end of the suite;
+  `test_rm_tree()` removes a directory with whatever an exporter wrote
+  into it. The run directory is the backstop, not the cleanup.
+- A refusal check that needs a world-writable parent makes a 01777
+  subdirectory of its own (`test_discovery.c`), not a file in the
+  host's `/tmp`. A literal `"/tmp"` passed only to be refused, and
+  parse-only strings such as `unix:/tmp/x`, are fine.
+- Size path buffers from `TEST_TMP_MAX` (96), not a round number:
+  `-Wformat-truncation` holds the derived `"<dir>/<file>"` buffers to it.
+
+`SLOTH_TEST_KEEP_TMP=1` keeps both directories and prints where they
+are, for reading what a failing test wrote. `make deploy-test` and
+`make web-quickstart-check` already worked in a `mktemp -d` under
+`$TMPDIR` with an EXIT trap (`KEEP=1` keeps the deploy tree); an
+interrupt now exits through that trap instead of resuming.
+`make replay-check` keeps `build/replay/run` in the tree on purpose,
+and the fuzz harnesses write nothing.
 
 ## Generated lists (#117)
 

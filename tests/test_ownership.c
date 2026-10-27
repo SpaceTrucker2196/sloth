@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include "ownership.h"
+#include "tmp_dir.h"
 
 /* ── SSID designation ────────────────────────────────────── */
 
@@ -220,7 +221,8 @@ static void write_roster(const char *path, const char *body) {
 
 static void test_roster_file_parses(void) {
     ownership_clear();
-    const char *path = "/tmp/sloth_roster_ok.txt";
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_roster_ok.txt");
     write_roster(path,
         "# office laptops\n"
         "aa:bb:cc:00:00:01\n"
@@ -239,7 +241,8 @@ static void test_roster_file_parses(void) {
  * roster of 200 good entries. The good ones still load. */
 static void test_roster_file_skips_bad_lines(void) {
     ownership_clear();
-    const char *path = "/tmp/sloth_roster_bad.txt";
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_roster_bad.txt");
     write_roster(path,
         "aa:bb:cc:00:00:01\n"
         "not-a-mac\n"
@@ -263,7 +266,8 @@ static void test_roster_file_missing_is_error(void) {
  * is a valid roster, distinct from a missing file. */
 static void test_roster_file_empty_is_zero_not_error(void) {
     ownership_clear();
-    const char *path = "/tmp/sloth_roster_empty.txt";
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_roster_empty.txt");
     write_roster(path, "# nothing yet\n\n   \n");
     ASSERT_EQ(ownership_load_known_macs(path), 0);
     ASSERT_EQ(ownership_known_count(), 0);
@@ -274,7 +278,8 @@ static void test_roster_file_empty_is_zero_not_error(void) {
  * both normal. */
 static void test_roster_file_load_is_idempotent(void) {
     ownership_clear();
-    const char *path = "/tmp/sloth_roster_twice.txt";
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_roster_twice.txt");
     write_roster(path, "aa:bb:cc:00:00:01\naa:bb:cc:00:00:02\n");
     ownership_load_known_macs(path);
     ownership_load_known_macs(path);
@@ -329,7 +334,11 @@ static size_t capture_stderr(void (*fn)(void), char *buf, size_t cap) {
     return n;
 }
 
-static const char *HOSTILE_ROSTER = "/tmp/sloth_roster_hostile.txt";
+static const char *hostile_roster(void) {
+    static char p[TEST_TMP_MAX];
+    return test_tmp_tpl(p, sizeof(p), "sloth_roster_hostile.txt");
+}
+#define HOSTILE_ROSTER hostile_roster()
 
 static void load_hostile_roster(void) {
     ownership_load_known_macs(HOSTILE_ROSTER);

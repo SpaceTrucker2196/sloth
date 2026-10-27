@@ -2,10 +2,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "wtest.h"
+#include "wt_tmp.h"
 
 int wt_pass, wt_fail;
+
+/* The run directory (wt_tmp.h): every temporary path a suite makes lands
+ * here, and what is left after the last suite fails the run. Removed at
+ * exit only by the process that made it, so a fork child that leaves
+ * through exit() cannot take it from the parent still testing.
+ * SLOTH_TEST_KEEP_TMP=1 keeps it. */
+static char  g_run_dir[TEST_TMP_MAX];
+static pid_t g_run_owner;
+
+static void run_dir_cleanup(void) {
+    if (getpid() == g_run_owner) tmp_run_dir_close(g_run_dir, "slothweb_test");
+}
 
 /* WT_ONLY=alerts runs the suites whose name holds it: a developer's
  * shortcut, never how the gate runs. */
@@ -21,6 +35,11 @@ int main(void) {
      * zone, as it pins the clock, so a cell is the same on every host. */
     setenv("TZ", "UTC0", 1);
     tzset();
+    if (tmp_run_dir_open(g_run_dir, sizeof(g_run_dir), "slothweb_test",
+                         "slothweb_test") != 0)
+        return 2;
+    g_run_owner = getpid();
+    atexit(run_dir_cleanup);
     SUITE(run_acl_tests);
     SUITE(run_config_tests);
     SUITE(run_http_tests);
@@ -57,6 +76,9 @@ int main(void) {
     SUITE(run_sqlbox_tests);
     SUITE(run_scope_tests);
     SUITE(run_prefs_tests);
+    /* The leak guard, under WT_ONLY too: a path still here is one a
+     * suite made and did not remove. */
+    if (tmp_run_dir_check(g_run_dir, "slothweb_test") != 0) wt_fail++;
     printf("slothweb tests: %d passed, %d failed\n", wt_pass, wt_fail);
     return wt_fail ? 1 : 0;
 }

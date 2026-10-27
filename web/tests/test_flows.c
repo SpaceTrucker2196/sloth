@@ -16,6 +16,7 @@
 #include "web_routes.h"
 #include "web_slothdb.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 #define T SDB_NOW
 #define HR 3600LL
@@ -177,7 +178,7 @@ void run_flows_tests(void) {
 
 #else
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 static char g_db[128];
 static web_slothdb_t sdb;
 static web_m4_t m4;
@@ -219,7 +220,7 @@ static int seed(void) {
 }
 
 static void up(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-flows-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-flows-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(g_dir) != NULL);
     snprintf(g_db, sizeof(g_db), "%s/sloth.db", g_dir);
     WT_EQ(sdb_make(g_db, db_schema_version(), 0), 0);

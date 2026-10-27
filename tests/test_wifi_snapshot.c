@@ -9,10 +9,11 @@
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
+#include "tmp_dir.h"
 
-static char tmp[] = "/tmp/sloth_snap_XXXXXX";
+static char tmp[TEST_TMP_MAX];
 
-static void mktmp(void) { int fd = mkstemp(tmp); if (fd >= 0) close(fd); }
+static void mktmp(void) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_snap_XXXXXX")); if (fd >= 0) close(fd); }
 
 static void seed_ap(sloth_state_t *s, int i, const uint8_t *bssid,
                     const char *ssid, const char *enc, int ch, int mfp) {
@@ -74,7 +75,7 @@ static void test_missing_baseline(void) {
  * snapshot stays the normal case (repeat site survey). */
 
 static void s87_path(char *out, size_t sz) {
-    snprintf(out, sz, "/tmp/sloth_test_snap87_%d.txt", (int)getpid());
+    snprintf(out, sz, "%s/sloth_test_snap87_%d.txt", test_tmpdir(), (int)getpid());
 }
 
 static int s87_mode(const char *path) {
@@ -164,7 +165,8 @@ static void test_write_reports_failure_after_open(void) {
 /* The repeat-survey workflow: re-pointing --snapshot-out at your own
  * previous snapshot overwrites it. */
 static void test_write_succeeds_over_private_existing_file(void) {
-    char prev_path[] = "/tmp/sloth_snap87_prev_XXXXXX";
+    char prev_path[TEST_TMP_MAX];
+    test_tmp_path(prev_path, sizeof(prev_path), "sloth_snap87_prev_XXXXXX");
     int fd = mkstemp(prev_path);
     ASSERT_GE(fd, 0);
     if (fd >= 0) { (void)!write(fd, "stale snapshot\n", 15); close(fd); }
@@ -188,7 +190,7 @@ static void test_write_succeeds_over_private_existing_file(void) {
  * to the baseline the next run reads back. */
 
 static void e_path(char *out, size_t sz) {
-    snprintf(out, sz, "/tmp/sloth_test_snap137_%d.txt", (int)getpid());
+    snprintf(out, sz, "%s/sloth_test_snap137_%d.txt", test_tmpdir(), (int)getpid());
 }
 
 static int data_lines(const char *path) {
@@ -370,4 +372,6 @@ void run_wifi_snapshot_tests(void) {
     RUN_TEST(test_label_newline_adds_no_row);
     RUN_TEST(test_pre_escape_v1_file_parses_as_before);
     RUN_TEST(test_out_of_range_numbers_reject_the_row);
+
+    unlink(tmp);
 }

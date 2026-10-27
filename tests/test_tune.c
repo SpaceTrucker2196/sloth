@@ -15,6 +15,7 @@
 #include "queue_evict.h"
 #include "seqnum_track.h"
 #include "transit.h"
+#include "tmp_dir.h"
 
 /* ── Operator-tunable thresholds — issue #82 ──────────────────
  *
@@ -250,7 +251,8 @@ static void test_reset_restores_every_default(void) {
 
 static void test_print_list_covers_every_knob(void) {
     tune_reset();
-    char path[] = "/tmp/sloth_tune_list_test.txt";
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_tune_list_test.txt");
     FILE *f = fopen(path, "w");
     ASSERT(f != NULL);
     tune_print_list(f);

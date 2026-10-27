@@ -49,6 +49,7 @@
 #include "web_store.h"
 #include "web_tsdb.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 #define HOUR  3600LL
 #define DAY   86400LL
@@ -60,7 +61,7 @@ static long long wall_fn(void *c) { (void)c; return g_now; }
 static long long mono_fn(void *c) { (void)c; return (g_now - START) * 1000 + 1000; }
 
 typedef struct {
-    char           dir[64];
+    char           dir[TEST_TMP_MAX];
     web_store_t    st;
     int            have_st;
     web_rollup_t   ru;
@@ -78,11 +79,11 @@ static rig_t R;
 /* Everything up, on the store in R.dir (a new one when fresh), as
  * main.c starts it: the store, the rollup, the engine, the restore. */
 static void rig_open(int fresh) {
-    char dir[64];
+    char dir[TEST_TMP_MAX];
     if (!fresh) memcpy(dir, R.dir, sizeof(dir));
     memset(&R, 0, sizeof(R));
     if (fresh) {
-        snprintf(R.dir, sizeof(R.dir), "/tmp/slothweb-replay-XXXXXX");
+        snprintf(R.dir, sizeof(R.dir), "%s/slothweb-replay-XXXXXX", test_tmpdir());
         WT_ASSERT(mkdtemp(R.dir) != NULL);
     } else {
         memcpy(R.dir, dir, sizeof(dir));

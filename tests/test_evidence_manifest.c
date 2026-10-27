@@ -20,6 +20,7 @@
 #include "manifest_check.h"
 #include "sha256.h"
 #include <fcntl.h>
+#include "tmp_dir.h"
 
 /* ── The per-session hashed manifest (#92 slice 3) ──────────────────
  *
@@ -40,7 +41,7 @@
  * and frames are hand-built byte arrays; nothing is read from a
  * capture. */
 
-static char   g_dir[64];
+static char   g_dir[TEST_TMP_MAX];
 static time_t g_wall = 1700000000;           /* 2023-11-14T22:13:20Z */
 static time_t   em_wall(void) { return g_wall; }
 static uint64_t em_mono(void) { return (uint64_t)g_wall * 1000u; }
@@ -61,7 +62,7 @@ static void rm_dir(const char *dir) {
 }
 
 static void setup(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/sloth_manifest_XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/sloth_manifest_XXXXXX", test_tmpdir());
     ASSERT(mkdtemp(g_dir) != NULL);
     g_wall = 1700000000;
     sloth_clock_test_set(em_mono, em_wall);
@@ -555,8 +556,8 @@ static void test_one_directory_one_manifest(void) {
 /* Two directories, two manifests, each naming only its own files. */
 static void test_each_directory_lists_its_own_files(void) {
     setup();
-    char edir[64];
-    snprintf(edir, sizeof(edir), "/tmp/sloth_manifest_e_XXXXXX");
+    char edir[TEST_TMP_MAX];
+    snprintf(edir, sizeof(edir), "%s/sloth_manifest_e_XXXXXX", test_tmpdir());
     ASSERT(mkdtemp(edir) != NULL);
     open_eapol(edir);
     char p[512], used[160], err[SFILE_ERR_MAX];

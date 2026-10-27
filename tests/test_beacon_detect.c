@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include "tmp_dir.h"
 
 /* ── Helpers ─────────────────────────────────────────── */
 
@@ -359,12 +360,12 @@ static int bc_live_type(const sloth_state_t *s, alert_type_t t) {
 }
 
 /* The JSONL stream, for the resolve reasons only the stream carries. */
-static char bc_path[] = "/tmp/sloth_b148_XXXXXX";
+static char bc_path[TEST_TMP_MAX];
 
 static void bc_jsonl_begin(void) {
     jsonl_close();
     alerts_clear();
-    int fd = mkstemp(bc_path);
+    int fd = mkstemp(test_tmp_tpl(bc_path, sizeof(bc_path), "sloth_b148_XXXXXX"));
     if (fd >= 0) close(fd);
     unlink(bc_path);
     ASSERT(jsonl_open(bc_path));

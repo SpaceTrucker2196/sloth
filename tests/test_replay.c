@@ -10,6 +10,7 @@
 #include "capture/replay.h"
 #include "capture/capture.h"
 #include "capture/probe.h"
+#include "tmp_dir.h"
 
 /*
  * --replay (#119). The savefiles here are written at test time, into a
@@ -35,7 +36,7 @@ static const uint8_t D_IP[4]  = { 198, 51, 100, 53 };
 /* The reader needs libpcap; the link-only no-flag build
  * (sloth_test_noflags, #116) keeps the pure and builder cases only. */
 #ifdef WITH_PCAP
-static char g_dir[] = "/tmp/sloth_replay_XXXXXX";
+static char g_dir[TEST_TMP_MAX];
 static int  g_dir_ok;
 static sloth_state_t g_rs;
 
@@ -361,7 +362,7 @@ void run_replay_tests(void) {
     RUN_TEST(test_ipv4_header_checksum_matches_a_worked_example);
     RUN_TEST(test_transport_checksums_verify_as_a_receiver_would);
 #ifdef WITH_PCAP
-    g_dir_ok = mkdtemp(g_dir) != NULL;
+    g_dir_ok = mkdtemp(test_tmp_tpl(g_dir, sizeof(g_dir), "sloth_replay_XXXXXX")) != NULL;
     RUN_TEST(test_check_routes_by_the_file_datalink);
     RUN_TEST(test_wired_replay_dispatches_every_record);
     RUN_TEST(test_wired_replay_keeps_capture_time_and_wire_length);

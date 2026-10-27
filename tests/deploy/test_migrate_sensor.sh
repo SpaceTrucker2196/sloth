@@ -29,8 +29,12 @@ TOOL=$REPO/packaging/bin/sloth-migrate-sensor
 # checks it stays POSIX.
 TOOL_SH=${TOOL_SH:-sh}
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/sloth-deploy-test.XXXXXX") || exit 1
-# KEEP=1 leaves the scratch tree behind for inspection.
-[ -n "${KEEP:-}" ] || trap 'rm -rf "$SCRATCH"' EXIT INT TERM
+# KEEP=1 leaves the scratch tree behind for inspection. An interrupt
+# exits (and so runs the EXIT trap) rather than resuming the cases with
+# the scratch tree already gone.
+[ -n "${KEEP:-}" ] || trap 'rm -rf "$SCRATCH"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 PASS=0
 FAIL=0

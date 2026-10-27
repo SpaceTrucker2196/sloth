@@ -15,13 +15,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "tmp_dir.h"
 
-static char tmp[] = "/tmp/sloth_inv_XXXXXX";
+static char tmp[TEST_TMP_MAX];
 static int  tmp_made;
 
 static void write_tmp(const char *body) {
     if (!tmp_made) {
-        int fd = mkstemp(tmp);
+        int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_inv_XXXXXX"));
         if (fd >= 0) close(fd);
         tmp_made = 1;
     }
@@ -452,7 +453,7 @@ static void test_nul_byte_in_file_rejected(void) {
     static const char body[] = "{\"networks\":[]}\0{\"networks\":[]}";
     inventory_clear();
     ownership_clear();
-    if (!tmp_made) { int fd = mkstemp(tmp); if (fd >= 0) close(fd); tmp_made = 1; }
+    if (!tmp_made) { int fd = mkstemp(test_tmp_tpl(tmp, sizeof(tmp), "sloth_inv_XXXXXX")); if (fd >= 0) close(fd); tmp_made = 1; }
     FILE *f = fopen(tmp, "w");
     ASSERT(f != NULL);
     if (!f) return;

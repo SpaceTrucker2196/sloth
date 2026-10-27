@@ -36,6 +36,7 @@
 #include "tune.h"
 #include "dns_log.h"
 #include "threat_intel.h"
+#include "tmp_dir.h"
 
 /* Helpers — build state with the exact preconditions a rule needs. */
 
@@ -954,7 +955,7 @@ static const char *INV_CORP =
     "\"security_profile\":\"wpa2-enterprise\","
     "\"bssids\":[\"aa:bb:cc:00:11:22\",\"11:22:33:44:55:66\"]}]}";
 
-static char inv_tmp[] = "/tmp/sloth_alert_inv_XXXXXX";
+static char inv_tmp[TEST_TMP_MAX];
 static int  inv_tmp_made;
 
 /* Load `body` as the active inventory. Returns 1 on success. */
@@ -962,7 +963,7 @@ static int use_inventory(const char *body) {
     inventory_clear();
     ownership_clear();
     if (!inv_tmp_made) {
-        int fd = mkstemp(inv_tmp);
+        int fd = mkstemp(test_tmp_tpl(inv_tmp, sizeof(inv_tmp), "sloth_alert_inv_XXXXXX"));
         if (fd >= 0) close(fd);
         inv_tmp_made = 1;
     }
@@ -6490,7 +6491,8 @@ static void test_sae_psk_regression_fires(void) {
     /* The first alert rule that reads from the database. It cannot be
      * driven from sloth_state_t at all: the evidence is what this BSSID
      * looked like yesterday. */
-    char path[] = "/tmp/sloth_akmreg_XXXXXX";
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_akmreg_XXXXXX");
     int fd = mkstemp(path);
     if (fd >= 0) close(fd);
     unlink(path);
@@ -9372,7 +9374,7 @@ static time_t   g_lc_wall;
 static uint64_t lc_mono(void) { return g_lc_mono; }
 static time_t   lc_wall(void) { return g_lc_wall; }
 
-static char lc_path[] = "/tmp/sloth_lifecycle_XXXXXX";
+static char lc_path[TEST_TMP_MAX];
 
 /* Fresh sink + frozen clocks. Wall starts at a fixed epoch so record
  * timestamps are reproducible. */
@@ -9382,7 +9384,7 @@ static void lc_begin(void) {
      * test's stream, not this one. */
     jsonl_close();
     alerts_clear();
-    int fd = mkstemp(lc_path);
+    int fd = mkstemp(test_tmp_tpl(lc_path, sizeof(lc_path), "sloth_lifecycle_XXXXXX"));
     if (fd >= 0) close(fd);
     unlink(lc_path);              /* jsonl_open recreates it 0600 (#87) */
     ASSERT(jsonl_open(lc_path));
@@ -10979,4 +10981,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_recurring_transit_threshold_is_tunable);
     RUN_TEST(test_recurring_transit_window_is_tunable);
     RUN_TEST(test_queue_evict_report_window_is_tunable);
+
+    /* The inventory file the threat-intel tests share. */
+    if (inv_tmp_made) { unlink(inv_tmp); inv_tmp_made = 0; inv_tmp[0] = '\0'; }
 }

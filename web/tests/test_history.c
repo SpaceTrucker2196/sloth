@@ -112,8 +112,9 @@ void run_history_tests(void) {
 #include <sqlite3.h>
 #include <sys/stat.h>
 #include <time.h>
+#include "wt_tmp.h"
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 static char g_db[128];
 static web_store_t st;
 static web_rollup_t ru;
@@ -175,7 +176,7 @@ static int seed(void) {
 }
 
 static void up(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-hist-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-hist-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(g_dir) != NULL);
     char p[160], err[512], e2[64];
     snprintf(p, sizeof(p), "%s/slothweb.db", g_dir);
@@ -747,8 +748,8 @@ static unsigned long scan_ticks(web_slothdb_t *s, long long from) {
  * "last_seen >= ?1" bound removed from cells_of() (the ticks are a
  * scan's). Each plan's counts are held to a GROUP BY's. */
 static void test_overview_on_a_large_file_without_the_index(void) {
-    char dir[64], path[128], q[128];
-    snprintf(dir, sizeof(dir), "/tmp/slothweb-big-XXXXXX");
+    char dir[TEST_TMP_MAX], path[128], q[128];
+    snprintf(dir, sizeof(dir), "%s/slothweb-big-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(dir) != NULL);
     snprintf(path, sizeof(path), "%s/sloth.db", dir);
     long long t0 = mono_ms_t();
@@ -820,8 +821,8 @@ static void test_overview_on_a_large_file_without_the_index(void) {
  * overview's budget (the route's 503 otherwise), and a direct count
  * within it times OVW_TIME_SCALE. */
 static void test_overview_on_the_owners_shape(void) {
-    char dir[64], path[128], q[128], sql[2048];
-    snprintf(dir, sizeof(dir), "/tmp/slothweb-own-XXXXXX");
+    char dir[TEST_TMP_MAX], path[128], q[128], sql[2048];
+    snprintf(dir, sizeof(dir), "%s/slothweb-own-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(dir) != NULL);
     snprintf(path, sizeof(path), "%s/sloth.db", dir);
     long long t0 = mono_ms_t();
@@ -962,8 +963,8 @@ static void test_overview_cache(void) {
  * Seen red with same_ident() comparing the main file only (a hit, the
  * old body). */
 static void test_overview_cache_follows_the_wal(void) {
-    char dir[64], path[128], side[160], q[160], first[4096], sql[400];
-    snprintf(dir, sizeof(dir), "/tmp/slothweb-wal-XXXXXX");
+    char dir[TEST_TMP_MAX], path[128], side[160], q[160], first[4096], sql[400];
+    snprintf(dir, sizeof(dir), "%s/slothweb-wal-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(dir) != NULL);
     snprintf(path, sizeof(path), "%s/sloth.db", dir);
     WT_EQ(sdb_make(path, db_schema_version(), 1), 0);
@@ -1027,8 +1028,8 @@ static void test_overview_cache_follows_the_wal(void) {
  * overview_failed() replaced by web_hist_read_failed() (no query, no
  * rows). */
 static void test_overview_timeout_says_what(void) {
-    char dir[64], path[128];
-    snprintf(dir, sizeof(dir), "/tmp/slothweb-slow-XXXXXX");
+    char dir[TEST_TMP_MAX], path[128];
+    snprintf(dir, sizeof(dir), "%s/slothweb-slow-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(dir) != NULL);
     snprintf(path, sizeof(path), "%s/sloth.db", dir);
     WT_EQ(big_db(path), 0);

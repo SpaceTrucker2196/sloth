@@ -58,6 +58,12 @@ readdirCalled:src/platform/linux_dhcp.c
 # with a local DIR* closed in the same function.
 readdirCalled:web/tools/alertkb.c
 readdirCalled:web/tests/test_alertfmt.c
+# The test suites' temporary-file helpers (test_rm_tree, the leak
+# guard's walk): each recursion level opendir()s its own local DIR* and
+# closes it before returning; a test that calls them from a thread it
+# started walks a tree no other thread is reading.
+readdirCalled:tests/tmp_dir.h
+readdirCalled:web/tests/wt_tmp.h
 # The #87 retention sweep: sweep_locked() fdopendir()s a dup of the pinned
 # export directory descriptor into a local DIR* and closedir()s it before
 # returning. Reached only from the main thread (startup, then the poll

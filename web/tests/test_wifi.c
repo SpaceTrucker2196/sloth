@@ -16,6 +16,7 @@
 #include "web_tsdb.h"
 #include "web_wifi.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 #define T SDB_NOW
 
@@ -263,13 +264,13 @@ void run_wifi_tests(void) {
 
 #else
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 static char g_db[128];
 static web_store_t st;
 static web_slothdb_t sdb;
 
 static void db_up(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-wifi-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-wifi-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(g_dir) != NULL);
     char p[160], err[512], e2[64];
     snprintf(p, sizeof(p), "%s/slothweb.db", g_dir);

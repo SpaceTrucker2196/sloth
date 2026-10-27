@@ -23,6 +23,7 @@
 #include "web_store.h"
 #include "web_tsdb.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 static const long long T = 1792627200;   /* a whole hour, unix seconds */
 
@@ -306,7 +307,8 @@ static void test_routes(void) {
 #ifdef WITH_SQLITE
 /* The answer's worst case fits: 900 points, every number at its widest. */
 static void test_worst_case_fits(void) {
-    char dir[64] = "/tmp/slothweb-series-XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "slothweb-series-XXXXXX");
     WT_ASSERT(mkdtemp(dir) != NULL);
     char p[128], err[512];
     snprintf(p, sizeof(p), "%s/w.db", dir);
@@ -369,7 +371,8 @@ static int count_points(const char *b, long long *oldest, long long *newest) {
  * returned bucket; the page below it is the store's 900. Seen red with
  * the merge loop's cap raised to 2 * max (1800 points came back). */
 static void test_merged_answer_capped(void) {
-    char dir[64] = "/tmp/slothweb-merge-XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "slothweb-merge-XXXXXX");
     WT_ASSERT(mkdtemp(dir) != NULL);
     char p[128], err[512], e2[64], why[48];
     snprintf(p, sizeof(p), "%s/m.db", dir);
@@ -442,7 +445,8 @@ static void test_merged_answer_capped(void) {
  * the next flush is nine seconds off. Seen red with the high-water
  * clause taken out of web_tsdb_step() (19,744 rows still queued). */
 static void test_queue_high_water_flushes_early(void) {
-    char dir[64] = "/tmp/slothweb-high-XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "slothweb-high-XXXXXX");
     WT_ASSERT(mkdtemp(dir) != NULL);
     char p[128], err[512], e2[64];
     snprintf(p, sizeof(p), "%s/h.db", dir);
@@ -508,7 +512,8 @@ static size_t sample_all_keys(long long now) {
  * removed from web_tsdb_flush_all(): queue_dropped 74,050, and the
  * fine tier 296,200 rows of 370,250 (every series' open one lost). */
 static void test_flush_all_writes_backlog_first(void) {
-    char dir[64] = "/tmp/slothweb-fall-XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "slothweb-fall-XXXXXX");
     WT_ASSERT(mkdtemp(dir) != NULL);
     char p[128], err[512], e2[64];
     snprintf(p, sizeof(p), "%s/f.db", dir);
@@ -613,7 +618,8 @@ static web_feed_t g_feed;
 static web_live_t g_live;
 
 static void test_acceptance_one_hour(void) {
-    char dir[64] = "/tmp/slothweb-hour-XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "slothweb-hour-XXXXXX");
     WT_ASSERT(mkdtemp(dir) != NULL);
     char p[128], wal[160], shm[160], err[512];
     snprintf(p, sizeof(p), "%s/slothweb.db", dir);
@@ -811,7 +817,8 @@ static long long locked_clock(void *ctx) {
 }
 
 static void test_store_thread(void) {
-    char dir[64] = "/tmp/slothweb-thread-XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "slothweb-thread-XXXXXX");
     WT_ASSERT(mkdtemp(dir) != NULL);
     char p[128], s2[160], err[512], e2[64];
     snprintf(p, sizeof(p), "%s/t.db", dir);

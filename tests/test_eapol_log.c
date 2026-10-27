@@ -18,6 +18,7 @@
 #include "assoc_track.h"
 #include "frame_build.h"
 #include "rf_distance.h"
+#include "tmp_dir.h"
 
 /* Build a synthetic 802.11 data frame (FromDS=1) carrying an EAPOL-Key
  * frame. We construct the lot from byte arrays — no parser feeding its
@@ -379,14 +380,12 @@ static void test_clear_resets_state(void) {
 static void test_pmkid_emits_pcap_when_eapol_dir_set(void) {
     eapol_clear();
     /* Pick a deterministic temp dir, recreate it. */
-    char dir[64];
-    snprintf(dir, sizeof(dir), "/tmp/sloth_test_eapol_%d", (int)getpid());
-    /* best-effort cleanup of prior file */
+    char dir[TEST_TMP_MAX];
+    snprintf(dir, sizeof(dir), "%s/sloth_test_eapol_%d", test_tmpdir(), (int)getpid());
     char pcap_path[160];
     snprintf(pcap_path, sizeof(pcap_path),
              "%s/00aabbccddee_102030405060.pcap", dir);
-    unlink(pcap_path);
-    rmdir(dir);
+    test_rm_tree(dir);
     mkdir(dir, 0700);   /* private: a permissive dir is refused (#87) */
     /* Export is crackable material and gated on the opt-in (#87); a test
      * of the export path has to ask for it like an operator does. */
@@ -416,13 +415,10 @@ static void test_pmkid_emits_pcap_when_eapol_dir_set(void) {
         fclose(f);
     }
 
-    /* Cleanup. */
+    /* Cleanup: the whole directory, because the export also writes a
+     * sloth-manifest-*.jsonl (#92 slice 3) beside the named files. */
     eapol_set_output_dir(NULL);
-    unlink(pcap_path);
-    char eapol22[128];
-    snprintf(eapol22, sizeof(eapol22), "%s/eapol.22000", dir);
-    unlink(eapol22);
-    rmdir(dir);
+    test_rm_tree(dir);
 }
 
 /* Helper for the provenance tests: drive a PMKID-bearing M1 against
@@ -447,15 +443,13 @@ static int slurp_file(const char *path, char *buf, int sz) {
  * caller can clean up. */
 static void drive_pmkid_m1(char *out_buf, int out_sz,
                            char *dir_out, int dir_sz) {
-    snprintf(dir_out, dir_sz, "/tmp/sloth_test_taint_%d", (int)getpid());
+    snprintf(dir_out, dir_sz, "%s/sloth_test_taint_%d", test_tmpdir(), (int)getpid());
     /* rebuild the dir so prior runs don't bleed in */
     char pcap_path[160], txt_path[160];
     snprintf(pcap_path, sizeof(pcap_path),
              "%s/00aabbccddee_102030405060.pcap", dir_out);
     snprintf(txt_path, sizeof(txt_path), "%s/eapol.22000", dir_out);
-    unlink(pcap_path);
-    unlink(txt_path);
-    rmdir(dir_out);
+    test_rm_tree(dir_out);
     mkdir(dir_out, 0700);
     eapol_set_collect_enabled(1);
     eapol_set_output_dir(dir_out);
@@ -472,13 +466,10 @@ static void drive_pmkid_m1(char *out_buf, int out_sz,
     /* leave files in place — caller asserts then cleans */
 }
 
+/* The whole tree: the export's manifest (#92 slice 3) sits beside the
+ * pcap and eapol.22000 under a name only the writer knows. */
 static void cleanup_taint_dir(const char *dir) {
-    char p[160];
-    snprintf(p, sizeof(p), "%s/00aabbccddee_102030405060.pcap", dir);
-    unlink(p);
-    snprintf(p, sizeof(p), "%s/eapol.22000", dir);
-    unlink(p);
-    rmdir(dir);
+    test_rm_tree(dir);
 }
 
 /* When the EAPOL handshake's BSSID is currently tainted, the .22000
@@ -490,7 +481,7 @@ static void test_eapol_tainted_bssid_emits_provenance_comment(void) {
     evil_twin_taint_mark_for_test(TAINT_BSSID);
     ASSERT_EQ(evil_twin_bssid_is_tainted(TAINT_BSSID), 1);
 
-    char body[4096], dir[80];
+    char body[4096], dir[TEST_TMP_MAX];
     drive_pmkid_m1(body, sizeof(body), dir, sizeof(dir));
 
     ASSERT(strstr(body, "# provenance=tainted-evil-twin") != NULL);
@@ -510,7 +501,7 @@ static void test_eapol_clean_bssid_no_provenance_comment(void) {
     evil_twin_taint_clear();
     ASSERT_EQ(evil_twin_bssid_is_tainted(TAINT_BSSID), 0);
 
-    char body[4096], dir[80];
+    char body[4096], dir[TEST_TMP_MAX];
     drive_pmkid_m1(body, sizeof(body), dir, sizeof(dir));
 
     ASSERT(strstr(body, "WPA*01*")                  != NULL);
@@ -680,7 +671,7 @@ static void set_kdl(uint8_t *eapol, int kdl) {
 #define KI_M1 ((1 << 7) | (1 << 3) | 0x02)
 #define KI_M2 ((1 << 8) | (1 << 3) | 0x02)
 
-static char g_bounds_dir[64];
+static char g_bounds_dir[TEST_TMP_MAX];
 
 static void bounds_path(char *out, size_t sz, const char *leaf) {
     snprintf(out, sz, "%s/%s", g_bounds_dir, leaf);
@@ -705,7 +696,7 @@ static int bounds_file_exists(const char *leaf) {
 
 static void bounds_setup(void) {
     snprintf(g_bounds_dir, sizeof(g_bounds_dir),
-             "/tmp/sloth_test_eapol83_%d", (int)getpid());
+             "%s/sloth_test_eapol83_%d", test_tmpdir(), (int)getpid());
     mkdir(g_bounds_dir, 0700);
     eapol_set_collect_enabled(1);
     eapol_set_output_dir(g_bounds_dir);
@@ -714,7 +705,7 @@ static void bounds_setup(void) {
 static void bounds_teardown(void) {
     bounds_reset();
     eapol_set_output_dir(NULL);
-    rmdir(g_bounds_dir);
+    test_rm_tree(g_bounds_dir);   /* and the manifests (#92 slice 3) */
 }
 
 /* Seed a valid M1 (no PMKID, so no export on its own), then feed the
@@ -1060,7 +1051,7 @@ static int feed_m4(uint64_t rc, time_t now) {
     return feed_msg(KI_M4, rc, NULL, M2_MIC, NULL, /*from_ds=*/0, now);
 }
 
-static char g_pair_dir[64];
+static char g_pair_dir[TEST_TMP_MAX];
 
 static void pair_path(char *out, size_t sz, const char *leaf) {
     snprintf(out, sz, "%s/%s", g_pair_dir, leaf);
@@ -1068,7 +1059,7 @@ static void pair_path(char *out, size_t sz, const char *leaf) {
 
 static void pair_setup(void) {
     snprintf(g_pair_dir, sizeof(g_pair_dir),
-             "/tmp/sloth_test_eapol97_%d", (int)getpid());
+             "%s/sloth_test_eapol97_%d", test_tmpdir(), (int)getpid());
     mkdir(g_pair_dir, 0700);
     char p[160];
     pair_path(p, sizeof(p), "eapol.22000");           unlink(p);
@@ -1084,7 +1075,7 @@ static void pair_teardown(void) {
     eapol_set_output_dir(NULL);
     pair_path(p, sizeof(p), "eapol.22000");           unlink(p);
     pair_path(p, sizeof(p), HS_PCAP_97);              unlink(p);
-    rmdir(g_pair_dir);
+    test_rm_tree(g_pair_dir);     /* and the manifests (#92 slice 3) */
     eapol_clear();
     assoc_clear();
 }
@@ -1707,7 +1698,7 @@ static void test_direction_mismatched_frames_are_inert(void) {
 
 #define HS_PCAP "00aabbccddee_102030405060.pcap"
 
-static char g_perm_dir[80];
+static char g_perm_dir[TEST_TMP_MAX];
 
 static void perm_path(char *out, size_t sz, const char *leaf) {
     snprintf(out, sz, "%s/%s", g_perm_dir, leaf);
@@ -1734,7 +1725,7 @@ static void perm_cleanup(void) {
 
 static void perm_setup(void) {
     snprintf(g_perm_dir, sizeof(g_perm_dir),
-             "/tmp/sloth_test_eapol87_%d", (int)getpid());
+             "%s/sloth_test_eapol87_%d", test_tmpdir(), (int)getpid());
     perm_cleanup();
     /* These tests are about how the export file is created, so they run
      * with the collect gate open; the gate itself is tested below. */
@@ -1829,8 +1820,8 @@ static void test_export_refuses_symlinked_dir(void) {
 
 /* A dir that cannot be created is reported, not ignored. */
 static void test_export_dir_creation_failure_reported(void) {
-    char bad[120];
-    snprintf(bad, sizeof(bad), "/tmp/sloth_no_parent_%d/eapol", (int)getpid());
+    char bad[TEST_TMP_MAX];
+    snprintf(bad, sizeof(bad), "%s/sloth_no_parent_%d/eapol", test_tmpdir(), (int)getpid());
     eapol_set_collect_enabled(1);
     ASSERT_EQ(eapol_set_output_dir(bad), -1);
     ASSERT(strstr(eapol_export_error(), "could not create") != NULL);
@@ -2147,7 +2138,8 @@ static void test_export_failure_reaches_sensor_health(void) {
     signal(SIGXFSZ, prev);
     ASSERT_GE(eapol_export_failures(), 1);
 
-    char jpath[] = "/tmp/sloth_eapol_sh_XXXXXX";
+    char jpath[TEST_TMP_MAX];
+    test_tmp_path(jpath, sizeof(jpath), "sloth_eapol_sh_XXXXXX");
     int jfd = mkstemp(jpath);
     ASSERT(jfd >= 0);
     if (jfd >= 0) close(jfd);
@@ -2186,7 +2178,7 @@ static void test_export_failure_reaches_sensor_health(void) {
  * utimensat, so the sweep's window is exercised exactly rather than by
  * waiting. */
 
-static char g_gate_dir[80];
+static char g_gate_dir[TEST_TMP_MAX];
 
 static void gate_path(char *out, size_t sz, const char *leaf) {
     snprintf(out, sz, "%s/%s", g_gate_dir, leaf);
@@ -2225,7 +2217,7 @@ static void gate_cleanup(void) {
  * export open says so. */
 static void gate_setup(void) {
     snprintf(g_gate_dir, sizeof(g_gate_dir),
-             "/tmp/sloth_test_eapol87g_%d", (int)getpid());
+             "%s/sloth_test_eapol87g_%d", test_tmpdir(), (int)getpid());
     gate_cleanup();
 }
 

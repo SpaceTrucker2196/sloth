@@ -1,7 +1,8 @@
 /* slothweb.db (#160, M2): the schema guardrail copied from sloth's
  * tests/test_db.c, the identification and migration rules (the
  * 2026-10-21 owner rule), the file rules, writes, compaction and the
- * ceiling. Every file lives in a fresh mkdtemp() directory under /tmp. */
+ * ceiling. Every file lives in a fresh mkdtemp() directory under
+ * $TMPDIR (wt_tmp.h). */
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -22,6 +23,7 @@
 #ifdef WITH_SQLITE
 #include <sqlite3.h>
 #endif
+#include "wt_tmp.h"
 
 static int ci_has(const char *hay, const char *needle) {
     size_t n = strlen(needle);
@@ -133,10 +135,10 @@ void run_store_tests(void) {
 
 #else
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 
 static int mkdir_tmp(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-store-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-store-XXXXXX", test_tmpdir());
     return mkdtemp(g_dir) ? 0 : -1;
 }
 
@@ -1265,7 +1267,7 @@ static int dir_list(const char *dir, char *out, size_t outsz) {
 }
 
 static void test_clean_wal_refused_leaves_dir_unchanged(void) {
-    char dir[96], p[160], err[512];
+    char dir[TEST_TMP_MAX + 16], p[TEST_TMP_MAX + 32], err[512];
     snprintf(dir, sizeof(dir), "%s/cleanwal", g_dir);
     WT_EQ(mkdir(dir, 0700), 0);
     snprintf(p, sizeof(p), "%s/sloth.db", dir);

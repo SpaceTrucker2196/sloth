@@ -10,6 +10,7 @@
 #include "query.h"
 #include "views/research.h"
 #include "alerts.h"
+#include "tmp_dir.h"
 
 /*
  * Research corpus view — issue #73 slice 3.
@@ -236,7 +237,8 @@ static void test_uncovered_kinds_still_get_a_row(void) {
     /* The whole argument for this view. A kind with no sources must be
      * visible, not filtered out — an operator deciding whether to act
      * on a CRIT needs to know the threshold has no cited basis. */
-    const char *tmp = "/tmp/sloth_cov_sparse.db";
+    char tmp[TEST_TMP_MAX];
+    test_tmp_path(tmp, sizeof(tmp), "sloth_cov_sparse.db");
     rq_handle_t *h = sparse_corpus(tmp);
     ASSERT(h != NULL);
     if (!h) { unlink(tmp); return; }
@@ -338,7 +340,8 @@ static void test_more_documents_than_fit_are_reported(void) {
      * calls returned non-zero and silently skipped the whole test,
      * with zero assertions run, on any host without that CLI
      * installed. */
-    const char *tmp = "/tmp/sloth_cov_trunc.db";
+    char tmp[TEST_TMP_MAX];
+    test_tmp_path(tmp, sizeof(tmp), "sloth_cov_trunc.db");
     unlink(tmp);
     sqlite3 *db = NULL;
     ASSERT_EQ(sqlite3_open(tmp, &db), SQLITE_OK);

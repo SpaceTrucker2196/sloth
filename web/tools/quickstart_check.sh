@@ -28,7 +28,11 @@ cleanup() {
     sleep 0.3
     rm -rf "$base"
 }
-trap cleanup EXIT INT TERM
+# An interrupt exits, which runs cleanup once through EXIT, rather than
+# carrying on against a removed tree.
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # The tree as git sees it, on disk now: tracked files with their
 # uncommitted edits, and new files git does not ignore. Nothing built.

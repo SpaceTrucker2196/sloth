@@ -27,6 +27,7 @@
 #include "web_tsdb.h"
 #include "web_wifi.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 #define T SDB_NOW
 
@@ -566,7 +567,7 @@ static void test_mix_on_health(void) {
 
 #ifdef WITH_SQLITE
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 static web_store_t st;
 static web_slothdb_t sdb;
 
@@ -577,7 +578,7 @@ static web_slothdb_t sdb;
  * sloth.db does not know falls back to the stream's name. Seen red
  * with mix_tx_json() preferring the stream's name. */
 static void test_mix_route_from_the_store(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-chmix-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-chmix-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(g_dir) != NULL);
     char p[160], db[160], err[512];
     snprintf(p, sizeof(p), "%s/slothweb.db", g_dir);
@@ -654,7 +655,7 @@ static void test_mix_route_from_the_store(void) {
  * every label through it, with ssid_column() answering 0, and with
  * emit_alert() writing the title through it. */
 static void test_every_db_ssid_is_escaped(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-ssid-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-ssid-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(g_dir) != NULL);
     char db[160], p[160];
     snprintf(db, sizeof(db), "%s/sloth.db", g_dir);

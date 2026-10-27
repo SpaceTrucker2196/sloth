@@ -25,6 +25,7 @@
 #include "tune.h"
 #include "jsonl.h"
 #include "sloth_clock.h"
+#include "tmp_dir.h"
 
 #define T0 1700000000L
 
@@ -634,10 +635,10 @@ static void test_tune_knobs_bounded(void) {
 
 /* ── JSONL ───────────────────────────────────────────────── */
 
-static char g_tmp[] = "/tmp/sloth_rfdist_XXXXXX";
+static char g_tmp[TEST_TMP_MAX];
 
 static void jl_open(void) {
-    int fd = mkstemp(g_tmp);
+    int fd = mkstemp(test_tmp_tpl(g_tmp, sizeof(g_tmp), "sloth_rfdist_XXXXXX"));
     if (fd >= 0) close(fd);
     jsonl_close();
     unlink(g_tmp);

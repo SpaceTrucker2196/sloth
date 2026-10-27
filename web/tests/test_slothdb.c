@@ -62,8 +62,9 @@ void run_slothdb_tests(void) {
 #else
 
 #include <sqlite3.h>
+#include "wt_tmp.h"
 
-static char g_dir[64];
+static char g_dir[TEST_TMP_MAX];
 static oui_build_t g_oui;
 
 static void path_in(char *out, size_t sz, const char *name) {
@@ -1416,7 +1417,7 @@ static void test_no_result_column_carries_the_alert_key(void) {
 }
 
 void run_slothdb_tests(void) {
-    snprintf(g_dir, sizeof(g_dir), "/tmp/slothweb-sdb-XXXXXX");
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-sdb-XXXXXX", test_tmpdir());
     if (!mkdtemp(g_dir)) { WT_ASSERT(!"mkdtemp"); return; }
     WT_EQ(sdb_oui(&g_oui, g_dir), 0);
     WT_EQ(web_slothdb_available(), 1);

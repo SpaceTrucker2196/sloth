@@ -12,6 +12,7 @@
 #include "reset_all.h"
 #include "beacon_snoop.h"
 #include "transit.h"
+#include "tmp_dir.h"
 
 /* poll_tick() and its phase table (#113).
  *
@@ -35,10 +36,10 @@ static uint64_t sentinel_mono(void) { return 5000000ULL; }
 static int g_chanhop_calls;
 static void count_chanhop(sloth_state_t *s) { (void)s; g_chanhop_calls++; }
 
-static char poll_tmp[64];
+static char poll_tmp[TEST_TMP_MAX];
 
 static void sink_open(void) {
-    snprintf(poll_tmp, sizeof(poll_tmp), "/tmp/sloth_poll_XXXXXX");
+    snprintf(poll_tmp, sizeof(poll_tmp), "%s/sloth_poll_XXXXXX", test_tmpdir());
     int fd = mkstemp(poll_tmp);
     if (fd >= 0) close(fd);
     jsonl_close();

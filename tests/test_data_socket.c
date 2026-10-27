@@ -23,12 +23,13 @@
 #include "formatter.h"
 #include "tool_fingerprint.h"
 #include "tune.h"
+#include "tmp_dir.h"
 
 static void ds_seed_pnl(sloth_state_t *s);
 
 static const char *sock_path(void) {
-    static char path[64];
-    snprintf(path, sizeof(path), "/tmp/sloth-test-ds-%d.sock", (int)getpid());
+    static char path[TEST_TMP_MAX];
+    snprintf(path, sizeof(path), "%s/sloth-test-ds-%d.sock", test_tmpdir(), (int)getpid());
     return path;
 }
 
@@ -717,10 +718,10 @@ static void test_middle_client_disconnect_compacts(void) {
  * count what a snapshot pass actually emits — the socket client is a
  * dup'd fd nothing reads, only its acceptance matters. */
 
-static char ds_jsonl_path[] = "/tmp/sloth_ds_jsonl_XXXXXX";
+static char ds_jsonl_path[TEST_TMP_MAX];
 
 static void ds_open_jsonl(void) {
-    int fd = mkstemp(ds_jsonl_path);
+    int fd = mkstemp(test_tmp_tpl(ds_jsonl_path, sizeof(ds_jsonl_path), "sloth_ds_jsonl_XXXXXX"));
     if (fd >= 0) close(fd);
     jsonl_close();
     unlink(ds_jsonl_path);   /* jsonl_open recreates it 0600 (#87) */
@@ -1944,7 +1945,8 @@ static void test_default_spec_is_unix_and_never_falls_back(void) {
  * without root, so that refusal is covered by sfile_system_dir's own
  * tests (test_secure_file.c), not claimed here. */
 static void test_default_dir_check(void) {
-    char dir[] = "/tmp/sloth_ds_rundir_XXXXXX";
+    char dir[TEST_TMP_MAX];
+    test_tmp_path(dir, sizeof(dir), "sloth_ds_rundir_XXXXXX");
     ASSERT(mkdtemp(dir) != NULL);
     char err[256];
 
