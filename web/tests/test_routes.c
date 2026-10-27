@@ -183,6 +183,12 @@ static void test_page_makes_no_external_reference(void) {
     /* The two places the page does talk to the server: same-origin,
      * relative paths. */
     WT_HAS(p, "new EventSource(\"/events\")");
+    /* A page left closes its stream: one kept open by the browser's
+     * back/forward cache held a connection per reload, and at the fifth
+     * Chromium's six per host were gone and the new page's requests
+     * never left (measured; seen red with the close removed). */
+    WT_HAS(p, "  window.addEventListener(\"pagehide\", function () { if (es) { es.close(); es = null; } });");
+    WT_HAS(p, "    if (e.persisted && !es) { openEvents(); live(); }");
     WT_HAS(p, "fetch(\"/api/health\"");
     /* /api/live through scoped(), which only ever adds "scope=" and one
      * of three constant words to the same relative path. */

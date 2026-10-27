@@ -1158,37 +1158,51 @@
   var lastLive = 0;
 
   // ── /events ───────────────────────────────────────────────────────
-  var es = new EventSource("/events");
-  state("wait", "connecting");
-  es.onopen = function () { state("ok", "live"); };
-  es.onerror = function () { state("down", "retrying"); };
+  // A page left for another (a reload, a link, Back) closes its
+  // stream: a browser that keeps the old page in its back/forward cache
+  // keeps the EventSource open with it, and six of them on one host fill
+  // the browser's connection pool, so the new page's /api requests wait
+  // forever (seen at the fifth reload in Chromium). A page restored from
+  // that cache opens a new stream and asks again.
+  var es = null;
   var lastTick = 0;
-  es.addEventListener("tick", function (ev) {
-    var t;
-    try { t = JSON.parse(ev.data); } catch (e) { return; }
-    // A tick counting from lower than before is a restarted server,
-    // whose record numbers start again too.
-    if (num(t.seq) && t.seq < lastTick) { lastSeq = 0; first = true; live(); }
-    if (num(t.seq)) lastTick = t.seq;
-    state("ok", "live");
-    set("seq", t.seq);
-    set("up", dur(t.uptime_s));
-    set("clients", t.sse_clients);
-    kpis(SCOPE === "hybrid" ? t : { socket: t.socket, sensor: t.sensor });
-    // Under a scope the tiles are /api/live's: asked again every 2 s.
-    if (SCOPE !== "hybrid" && Date.now() - lastLive >= 2000) live();
-  });
-  es.addEventListener("record", function (ev) {
-    var r;
-    try { r = JSON.parse(ev.data); } catch (e) { return; }
-    addRecord(r);
-  });
-  // An episode opened, advanced or closed: the lists are re-read, at
-  // most once a second however many arrive.
   var anomTimer = 0;
-  es.addEventListener("anomaly", function () {
-    if (anomTimer) return;
-    anomTimer = setTimeout(function () { anomTimer = 0; anomalies(); }, 1000);
+  function openEvents() {
+    es = new EventSource("/events");
+    state("wait", "connecting");
+    es.onopen = function () { state("ok", "live"); };
+    es.onerror = function () { state("down", "retrying"); };
+    es.addEventListener("tick", function (ev) {
+      var t;
+      try { t = JSON.parse(ev.data); } catch (e) { return; }
+      // A tick counting from lower than before is a restarted server,
+      // whose record numbers start again too.
+      if (num(t.seq) && t.seq < lastTick) { lastSeq = 0; first = true; live(); }
+      if (num(t.seq)) lastTick = t.seq;
+      state("ok", "live");
+      set("seq", t.seq);
+      set("up", dur(t.uptime_s));
+      set("clients", t.sse_clients);
+      kpis(SCOPE === "hybrid" ? t : { socket: t.socket, sensor: t.sensor });
+      // Under a scope the tiles are /api/live's: asked again every 2 s.
+      if (SCOPE !== "hybrid" && Date.now() - lastLive >= 2000) live();
+    });
+    es.addEventListener("record", function (ev) {
+      var r;
+      try { r = JSON.parse(ev.data); } catch (e) { return; }
+      addRecord(r);
+    });
+    // An episode opened, advanced or closed: the lists are re-read, at
+    // most once a second however many arrive.
+    es.addEventListener("anomaly", function () {
+      if (anomTimer) return;
+      anomTimer = setTimeout(function () { anomTimer = 0; anomalies(); }, 1000);
+    });
+  }
+  openEvents();
+  window.addEventListener("pagehide", function () { if (es) { es.close(); es = null; } });
+  window.addEventListener("pageshow", function (e) {
+    if (e.persisted && !es) { openEvents(); live(); }
   });
 
   fetch("/api/health", { cache: "no-store" })
