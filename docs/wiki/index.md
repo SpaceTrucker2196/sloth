@@ -138,6 +138,10 @@ the Wi-Fi it watches:
   Devices, WiFi, History and the SQL box; M6 (#164) the Flows view and
   the five-minute README (`web/README.md`) with its troubleshooting
   table and security section.
+- [[capture-scope]] — slothweb's Monitor / Hybrid / Local switch: what
+  the passive monitor radio heard, what the host's own interfaces
+  carried, or both; how each record, alert, metric, interface and
+  device is placed, and what a device seen both ways shows in each.
 - [[deployment]] — `make install` + `make install-service` (#139): the
   shipped hardened unit, why it runs as `sloth` and not root, what each
   sandbox key costs, and `sloth-migrate-sensor` (#153), the dry-run-first,

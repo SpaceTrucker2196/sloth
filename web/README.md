@@ -453,7 +453,9 @@ Paths match exactly, and an absolute-form target (`GET
 http://127.0.0.1:8770/ HTTP/1.1`) routes by its path. The query string
 is ignored except by the routes that take parameters, which validate it
 whole; each of them but `/api/query` refuses a query string of 512
-bytes or more as `query_too_long`.
+bytes or more as `query_too_long`. Every `/api` route but
+`/api/health` and `/api/query` also takes `scope=monitor|hybrid|local`
+([Capture scope](#capture-scope)).
 
 **`/`** is the one page: `web/ui/index.html` with `theme.css`,
 `page.css` and `app.js` inline. The `ETag` is the first 128 bits of the
@@ -2307,6 +2309,48 @@ way back. `test_alerts.c` asserts the counts on the demo's own data
 (`web/tools/demo.c`, linked into the test binary): 23 devices and 23
 rows, the open alerts and the Alerts page's open rows, the open
 episodes and the open cards, the records/s and the rates' sum.
+
+## Capture scope
+
+Owner request 2026-10-26. The top bar's **Monitor | Hybrid | Local**
+switch filters every view by how the data was captured
+(`web/src/web_scope.h`; the whole of it, view by view, is
+[docs/wiki/capture-scope.md](../docs/wiki/capture-scope.md)):
+
+| Scope | Shows |
+|---|---|
+| Hybrid | everything: the default, and every view as it was before the switch |
+| Monitor | what the passive monitor-mode radio heard over the air (beacons, probes, associations, EAPOL, deauths, the channel mix, the 802.11 detectors) and the BLE receivers (`--bt-monitor`, `--bt-capture`), which are receive-only radio too; nothing the connected Wi-Fi or Ethernet carried |
+| Local | what the host's own interfaces carried: the IP capture on Ethernet and the associated Wi-Fi card, ARP, DHCP, DNS, mDNS, NBNS, the flows, `/proc`, the interfaces' throughput, and the managed card's own station dump and scans; never the monitor radio |
+
+sloth's records carry no capture path, so each datum is placed by what
+it is: its record type, its alert type (the rule's input, whatever file
+the rule is in), its metric, an interface's name (Monitor when sloth
+has named it a monitor radio), a device's `DEV_SRC_*` bits and camera
+signals. sloth's own state, and its two own-state alerts, are in every
+scope. A device seen both ways appears in both, and in each shows only
+what that scope captured: under Monitor no address or name behind it,
+under Local no SSID, AP bit or PNL; its signal, first and last seen and
+risk (sloth's weights over the scope's signals) are the scope's own.
+While sloth says its IP capture is itself a monitor radio
+(`sensor_health.capture_linktype`, or `capture_iface == monitor_iface`
+from an older sloth) the stream's IP records count as Monitor's;
+sloth.db's IP tables keep no capture path and stay Local's. The WiFi
+view is empty under Local and Flows under Monitor, each saying why.
+The SQL box is unscoped and says so.
+
+Every `/api` route but `/api/health` and `/api/query` takes
+`scope=monitor|hybrid|local` beside its own parameters; the router
+takes it out (`web_scope_take()`) before the route's parser runs.
+Anything else is a 400 `bad_scope`. Without it the answer is
+Hybrid's, byte for byte as before; with it the answer's first member is
+`"scope"`, and a view the scope holds nothing of answers
+`{"out_of_scope":true,"reason":...}`. The page sends the scope on every
+fetch, keeps it in the address (`#devices?scope=monitor`, Hybrid left
+out) and in this browser (`slothweb.scope`), and a chip at the top of
+every view, the status strip and a bar under it say which scope is
+shown; `?` beside the switch is the legend. A tile's drill-down opens
+in the scope in force, the one its count was taken in.
 
 ## Design
 

@@ -5568,3 +5568,19 @@ report events.
   (2). Measured, parent (8b938ff) to this tree: `make test` 35157 to
   35681 (35585 with the two slice commits alone), `make web-test` 84650
   to 84650, `make deploy-test` 401 to 409, each 0 failed.
+- 2026-10-26 — [[capture-scope]] (new), [[slothweb]], [[jsonl-schema]]:
+  slothweb's top bar has a Monitor | Hybrid | Local switch (owner
+  request). Every `/api` route but `/api/health` and `/api/query` takes
+  `scope=`, taken out by the shared parameter parser; Hybrid's answer is
+  unchanged without it. Each datum is placed by what it is, in one
+  table held to `include/sloth_alerts.def`, `web_live.c`'s poll types,
+  app.js's monitor-row types and `src/device_risk.c`'s weights: alerts
+  by the rule's input, interfaces by whether sloth named them a monitor
+  radio, devices by their sources and camera signals. A device seen
+  both ways is in both, with each scope's own address or SSID, signal,
+  first and last seen and recomputed risk; presence splits into
+  `dev.present.monitor` and `dev.present.local`. The WiFi view is empty
+  under Local and the Flows under Monitor, each saying why; the SQL box
+  is unscoped and labelled so. sloth's `sensor_health` gains
+  `capture_linktype` and `monitor_only`, so the stream's IP records
+  count as Monitor's while the IP capture is itself a radio.

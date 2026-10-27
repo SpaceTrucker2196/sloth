@@ -103,7 +103,8 @@ and for the Alerts page, `web/src/web_alerts.c`, `web/src/web_alertdb.c`,
 detail formats audited), `include/sloth_alerts.def`,
 `docs/views/alerts.md`, `research/` and [[alert-remediation]].
 
-**Last updated**: 2026-10-26 (the Alerts page on the current tree: its
+**Last updated**: 2026-10-26 (the capture scope: Monitor, Hybrid and Local
+in the top bar, [[capture-scope]]), 2026-10-26 (the Alerts page on the current tree: its
 titles and details in the display form beside the gate, its lists
 sortable and resizable, its incident totals tested, the drawer's
 slices newest first; the Alerts page's review: one row per key
@@ -920,6 +921,27 @@ type, sensor health to a health view (capture, monitor, the stream,
 sloth.db and its freshness), each with its filter named and a way back.
 A test asserts each count on the demo's own data.
 
+## Capture scope (2026-10-26)
+
+Owner request: a Monitor | Hybrid | Local switch in the top bar that
+filters every view by where and how the data was captured. Hybrid is
+everything, as before; Monitor is the passive monitor radio (and the
+BLE receivers, passive radio too) with nothing from the connected Wi-Fi
+or Ethernet; Local is the host's own interfaces, the managed card's own
+scans included, never the passive radio. sloth's records carry no
+capture path, so `web/src/web_scope.c` places each by what it is, in
+one table the tests hold to the files it classifies; every `/api` route
+takes `scope=`, the server counts, pages and filters, and the page
+keeps the scope's records on its ticker. A device seen both ways is in
+both scopes with each scope's own fields; the WiFi view is empty under
+Local, the Flows under Monitor, each saying why; the SQL box is
+unscoped. sloth's `sensor_health` gained `capture_linktype` and
+`monitor_only` so the stream's IP records can count as Monitor's while
+the IP capture is itself a radio. The whole of it, view by view:
+[[capture-scope]]. `web/tests/test_scope.c` asks every route under
+each scope against one fixture with a MAC seen both ways, each absence
+seen red under a named mutation.
+
 ## Tests
 
 `make web-test` is self-contained: no host file, loopback ephemeral
@@ -1054,5 +1076,6 @@ covers `web/`.
   `slothweb.db` follows; its query recipes are the SQL box's (M5).
 - [[alert-remediation]] — the investigate-and-fix steps an alert's page shows.
 - [[alerts]] — the engine and the rules the Alerts page lists.
+- [[capture-scope]] — the Monitor / Hybrid / Local switch and how each datum is placed.
 - [[cli-reference]] — sloth's own flags; slothweb's are in
   [`web/README.md`](../../web/README.md).

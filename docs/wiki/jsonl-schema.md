@@ -778,7 +778,7 @@ does not know the type ignores it, as it would any other.
 | Field | Meaning |
 |-------|---------|
 | `capture_iface` | device the IP data-stream handle is bound to (`any`, or a fallback device name); `""` = capture never opened; `replay` = an Ethernet/Linux-cooked `--replay` file is the source (#119) |
-| `capture_linktype` | additive, 2026-10-26 — the IP data stream's pcap link type (DLT) while it is open: `1` Ethernet, `113` / `276` Linux cooked (`any`), `127` radiotap (IP decoded from 802.11 data frames heard on the air, #72); `-1` while the stream is not open. Set at open, so it is in the change-only signature as itself. A raw fact: slothweb's capture scope reads it to tell IP records heard off the air from the host's own interfaces'; sloth classifies nothing |
+| `capture_linktype` | additive, 2026-10-26 — the IP data stream's pcap link type (DLT) while it is open: `1` Ethernet, `113` / `276` Linux cooked (`any`), `127` radiotap (IP decoded from 802.11 data frames heard on the air, #72); `-1` while the stream is not open. Set at open, so it is in the change-only signature as itself. A raw fact: slothweb's capture scope reads it to tell IP records heard off the air from the host's own interfaces' ([capture scope](capture-scope.md)); sloth classifies nothing |
 | `monitor_only` | additive, 2026-10-26 — `1` when `--monitor-only` put the monitor radio on the IP stream's allow-list (#35), else `0` |
 | `monitor_iface` | the 802.11 monitor radio; `""` = none found; `replay` = a radiotap `--replay` file is the source (#119) |
 | `monitor_err` | last monitor open/retarget error, `""` = none |

@@ -18,6 +18,7 @@
 > | Port, name, language | `8770`, `slothweb`, C99 in-tree server (decided under decide-and-flag; no objection across three rounds). | §13.1–13.3 |
 > | Baseline half-life | Four weeks (§13.6 default stands until the owner says otherwise). | — |
 > | Milestones | One child issue per milestone (W0 allow-list, then M0–M6); #102 is the tracker. | §12 |
+> | Capture scope | **2026-10-26 (owner request):** a Monitor / Hybrid / Local switch in the top bar filters every view by how the data was captured: Monitor the passive monitor radio (and BLE), Local the host's own interfaces (managed Wi-Fi scans included), Hybrid everything (the default). Every `/api` route but `/api/health` and `/api/query` takes `scope=`; a datum's scope is decided by its type in `web/src/web_scope.c`; a device seen both ways shows each scope's own fields; the SQL box is unscoped. `sensor_health` gains `capture_linktype` and `monitor_only`. `docs/wiki/capture-scope.md` is the reference. | §7, §8 (every view) |
 
 # sloth web UI: specification
 
