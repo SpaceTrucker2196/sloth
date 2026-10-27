@@ -103,7 +103,7 @@ and for the Alerts page, `web/src/web_alerts.c`, `web/src/web_alertdb.c`,
 detail formats audited), `include/sloth_alerts.def`,
 `docs/views/alerts.md`, `research/` and [[alert-remediation]].
 
-**Last updated**: 2026-10-27 (kept settings: every control a viewer
+**Last updated**: 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (kept settings: every control a viewer
 can change kept per browser under `slothweb.v1.*`, each table's widths
 and sort among them, the address still winning, a reset per table and
 one for everything, and its review: a link's filters and scope applied
@@ -267,8 +267,9 @@ generated file is never committed, and the embedder is C99 built with
 the same compiler, so the build gains no tool.
 
 The policy is `default-src 'none'` with `script-src` and `style-src`
-naming the SHA-256 of the page's one `<script>` and one `<style>`, and
-`connect-src 'self'` for the health read and the stream. A browser
+naming the SHA-256 of the page's one `<script>` and one `<style>`, `img-src data:` for the two inline PNGs (the sloth in the header, the
+favicon: bytes in the page, never a fetch), and `connect-src 'self'`
+for the health read and the stream. A browser
 therefore refuses any fetch the page did not already make, and an
 injected inline block would not run either. `'unsafe-inline'` is never
 used.

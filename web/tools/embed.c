@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
     fprintf(o, "\\\"\";\n");
     fprintf(o, "const char web_page_csp[] =\n"
                "    \"default-src 'none'; script-src 'sha256-%s'; \"\n"
-               "    \"style-src 'sha256-%s'; connect-src 'self'; \"\n"
+               "    \"style-src 'sha256-%s'; img-src data:; connect-src 'self'; \"\n"
                "    \"base-uri 'none'; form-action 'none'; frame-ancestors 'none'\";\n",
             script_h, style_h);
     if (fclose(o) != 0) return 1;

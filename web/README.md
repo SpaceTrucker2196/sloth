@@ -468,11 +468,15 @@ policy is
 
 ```
 default-src 'none'; script-src 'sha256-…'; style-src 'sha256-…';
-connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+img-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
 ```
 
 so the browser itself refuses any request the page did not hash, other
-than same-origin `fetch` and `EventSource`. The fonts are the system
+than same-origin `fetch` and `EventSource`. The two images, the sloth
+in the header and the favicon, are `data:` PNGs inline in the page
+(`web/ui/icon-64.b64`, `web/ui/icon-32.b64`; the owner's art at every
+size in `docs/assets/slothweb/icon/`): bytes, not requests, which
+`img-src data:` admits and nothing else. The fonts are the system
 monospace stack (`ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans
 Mono", "Liberation Mono", monospace`); no font file exists. Colours are
 the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.

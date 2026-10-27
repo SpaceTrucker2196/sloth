@@ -133,6 +133,9 @@ static void test_page_304_on_matching_validator(void) {
     WT_EQ(r.status, 200);
 }
 
+/* Defined with the CSP test below. */
+static int count(const char *needle);
+
 /* docs/web-ui-spec.md §12, M0 acceptance: no external request of any
  * kind. The page is checked as the bytes the server sends, not as the
  * web/ui/ sources, so an @include cannot smuggle anything past it.
@@ -159,19 +162,45 @@ static void test_page_makes_no_external_reference(void) {
         "importScripts", "new Worker", "sendBeacon", "XMLHttpRequest",
         "WebSocket", "<script ", "<style ",
     };
+    /* The two images are bytes in the page, not requests: the sloth
+     * in the header and the favicon, each a data: PNG the CSP admits
+     * with img-src data:. Exactly these forms and no other <img>,
+     * <link> or src=. Seen red with <img src="/icon.png"> added and
+     * with <link rel="stylesheet" href="x.css"> added. */
+    static const char *const inline_ok[] = {
+        "<img class=\"icon\" alt=\"\" width=\"22\" height=\"22\" src=\"data:image/png;base64,",
+        "<link rel=\"icon\" type=\"image/png\" sizes=\"32x32\" href=\"data:image/png;base64,",
+        " src=\"data:image/png;base64,",
+    };
     for (size_t i = 0; i < sizeof(banned) / sizeof(banned[0]); i++) {
-        const char *hit = ci_find(p, n, banned[i]);
-        if (hit)
-            fprintf(stderr, "    page contains \"%s\" at byte %zu\n",
-                    banned[i], (size_t)(hit - p));
-        WT_ASSERT(hit == NULL);
+        size_t bl = strlen(banned[i]);
+        for (const char *hit = ci_find(p, n, banned[i]); hit; ) {
+            int ok = 0;
+            for (size_t k = 0; k < sizeof(inline_ok) / sizeof(inline_ok[0]); k++)
+                if (!strncmp(hit, inline_ok[k], strlen(inline_ok[k]))) ok = 1;
+            if (!ok)
+                fprintf(stderr, "    page contains \"%s\" at byte %zu\n",
+                        banned[i], (size_t)(hit - p));
+            WT_ASSERT(ok);
+            if (!ok) break;
+            size_t at = (size_t)(hit - p) + bl;
+            hit = at < n ? ci_find(hit + bl, n - at, banned[i]) : NULL;
+        }
     }
+    WT_EQ(count("<img"), 1);
+    WT_EQ(count("<link"), 1);
+    /* Each decodes to a PNG of the stated size: the IHDR of a 64x64 and
+     * a 32x32 image, base64 (the included files are base64 -w0 text). */
+    WT_HAS(p, "src=\"data:image/png;base64,\niVBORw0KGgoAAAANSUhEUgAAAEAAAABA");
+    WT_HAS(p, "href=\"data:image/png;base64,\niVBORw0KGgoAAAANSUhEUgAAACAAAAAg");
     /* A link names a view of this page, a fragment, and fetches
-     * nothing: href="#..." and no other. Seen red with a tile's href
-     * made "/api/live". */
+     * nothing: href="#..." and no other (the favicon's data: href is
+     * the one exception, bytes not a fetch). Seen red with a tile's
+     * href made "/api/live". */
     int links = 0;
     for (const char *h = ci_find(p, n, " href="); h; ) {
-        int frag = !strncmp(h, " href=\"#", 8);
+        int frag = !strncmp(h, " href=\"#", 8) ||
+                   !strncmp(h, " href=\"data:image/png;base64,", 28);
         if (!frag) fprintf(stderr, "    a link that is not a fragment at byte %zu\n", (size_t)(h - p));
         WT_ASSERT(frag);
         links++;
@@ -372,6 +401,10 @@ static void test_csp_hashes_match_the_page(void) {
     WT_LACKS(csp, "*");
     WT_HAS(csp, "connect-src 'self'");
     WT_HAS(csp, "frame-ancestors 'none'");
+    /* Images: inline data: bytes only, never a fetch. Seen red with
+     * img-src dropped from the embedder's policy. */
+    WT_HAS(csp, "img-src data:;");
+    WT_LACKS(csp, "img-src 'self'");
 
     WT_EQ(count("<script"), 1);
     WT_EQ(count("</script>"), 1);

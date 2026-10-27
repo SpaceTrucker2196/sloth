@@ -5652,3 +5652,9 @@ report events.
   served page, so `make web-test` holds both sides with no node and no
   new dependency (owner ruling 2 of 2026-10-26). No new data: no new
   series, no route payload changed.
+- 2026-10-27 — [[slothweb]]: the owner's sloth icon in the page header and
+  as the favicon, two inline `data:` PNGs (`web/ui/icon-64.b64`,
+  `web/ui/icon-32.b64`; sources in `docs/assets/slothweb/icon/`); the
+  page's CSP gains `img-src data:` and nothing else; the no-external-
+  reference test admits exactly those two forms (seen red with an
+  `<img src="/icon.png">` and with a stylesheet `<link>`).

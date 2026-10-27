@@ -40,6 +40,10 @@ td { font-size: 12px; font-variant-ligatures: none; }
 .topbar .in { display: flex; align-items: center; gap: 6px 18px; flex-wrap: wrap; padding: 8px 16px; }
 .brand { font-size: 15px; font-weight: 700; letter-spacing: 0.06em; color: var(--phosphor-hi); text-shadow: var(--glow-title); white-space: nowrap; }
 .brand .sep { color: var(--brass); font-weight: 400; }
+/* The sloth (owner art, 2026-10-27; docs/assets/slothweb/icon/): a 64 px
+ * PNG inline as a data: URI, drawn at 22 px, so the page still loads
+ * nothing. */
+.brand img.icon { width: 22px; height: 22px; vertical-align: -6px; margin-right: 7px; }
 .brand small { font-size: 11px; font-weight: 400; color: var(--brass); letter-spacing: 0.16em; margin-left: 2px; }
 .cur { display: inline-block; width: 0.6ch; height: 1em; background: var(--phosphor); vertical-align: -0.15em; margin-left: 0.3ch; animation: blink 1.15s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }

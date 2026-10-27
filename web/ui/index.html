@@ -6,6 +6,9 @@
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
 <title>slothweb</title>
+<link rel="icon" type="image/png" sizes="32x32" href="data:image/png;base64,
+@include icon-32.b64
+">
 <style>
 @include palette.css
 @include theme.css
@@ -21,7 +24,9 @@
 <div class="app" id="app">
   <header class="topbar">
    <div class="in">
-    <div class="brand">sloth<span class="sep"> &#183; </span>web <small><span id="milestone">M6</span></small><span class="cur" aria-hidden="true"></span></div>
+    <div class="brand"><img class="icon" alt="" width="22" height="22" src="data:image/png;base64,
+@include icon-64.b64
+">sloth<span class="sep"> &#183; </span>web <small><span id="milestone">M6</span></small><span class="cur" aria-hidden="true"></span></div>
     <nav aria-label="views"><ol class="views">
       <li><button type="button" class="on" id="nav-overview" aria-current="page"><span class="k">1</span>Overview</button></li>
       <li><button type="button" class="go" id="nav-activity"><span class="k">2</span>Activity</button></li>
