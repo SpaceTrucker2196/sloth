@@ -196,6 +196,7 @@ static inline void tmp_run_dir_signal_rm(const char *dir) {
     pid_t pid = vfork();
     if (pid == 0) {
         execv("/bin/rm", argv);
+        execv("/usr/bin/rm", argv);     /* a host with no /bin/rm */
         _exit(127);
     }
     if (pid > 0) {

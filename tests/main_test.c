@@ -55,8 +55,12 @@ static int   g_run_keep;
  * suites all passed: _exit() from an atexit handler sets the status. */
 static void run_dir_cleanup(void) {
     if (getpid() == g_run_owner &&
-        tmp_run_dir_close(g_run_dir, "sloth_test") != 0)
+        tmp_run_dir_close(g_run_dir, "sloth_test") != 0) {
+        /* _exit() skips stdio's flush: the summary line would be lost
+         * on a pipe in exactly the run that fails for this. */
+        fflush(NULL);
         _exit(1);
+    }
 }
 
 /* Ctrl-C, or a TERM from make or timeout(1), skips atexit(): remove the

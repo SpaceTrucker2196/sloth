@@ -21,7 +21,9 @@ top=$(pwd)
 [ -f "$top/web/README.md" ] || { echo "quickstart_check: run from the top of the tree" >&2; exit 2; }
 command -v curl >/dev/null || { echo "quickstart_check: needs curl" >&2; exit 2; }
 
-base=$(mktemp -d "${TMPDIR:-/tmp}/slothweb-qs.XXXXXX")
+# Absolute, so the run below (which cds into it) works under a relative
+# TMPDIR too.
+base=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/slothweb-qs.XXXXXX")" && pwd)
 pids=""
 cleanup() {
     for p in $pids; do kill "$p" 2>/dev/null || true; done
