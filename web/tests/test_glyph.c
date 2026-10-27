@@ -125,7 +125,7 @@ static void gl_scale(const double (*pts)[2], int n, const double (*band)[4],
     for (int i = 0; i < n; i++) {
         if (pts[i][1] > *hi) *hi = pts[i][1];
         if (pts[i][1] < *lo) *lo = pts[i][1];
-        if (band && has[i]) {
+        if (band && has && has[i]) {
             if (band[i][1] > *hi) *hi = band[i][1];
             if (band[i][0] < *lo) *lo = band[i][0];
         }
@@ -177,8 +177,8 @@ static void gl_g1(const double (*pts)[2], int n, const double (*band)[4],
 #define GX(t) (to > from ? ((t) - from) / (to - from) * w : 0)
 #define GY(v) (h - ((v) - lo) / (hi - lo) * h)
     int any = 0, i;
-    for (i = 0; band && i < n; i++) if (has[i]) any = 1;
-    for (i = 0; any && i < n; i++) {
+    for (i = 0; band && has && i < n; i++) if (has[i]) any = 1;
+    for (i = 0; any && has && i < n; i++) {
         if (!has[i]) continue;
         double bx = GX(pts[i][0]);
         double bw = GX(pts[i][0] + step) - bx;
@@ -219,7 +219,7 @@ static void gl_g1(const double (*pts)[2], int n, const double (*band)[4],
     }
     int k = n - 1;
     const char *tok = "--ink";
-    if (any && has[k] && band[k][3] > 0 &&
+    if (any && has && band && has[k] && band[k][3] > 0 &&
         (pts[k][1] > band[k][1] || pts[k][1] < band[k][0])) {
         double sens = o->sens > 0 ? o->sens : 2;
         double z = fabs(pts[k][1] - band[k][2]) / band[k][3];
