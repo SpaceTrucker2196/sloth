@@ -1190,10 +1190,11 @@ static void test_emit_sensor_health_reports_the_ip_stream_link_type(void) {
     s.cap_health.running = 0;
     jsonl_emit_sensor_health(&s);
     jsonl_close();
-    char *body = slurp(tmp_path);
-    ASSERT(body != NULL);
-    if (!body) return;
-    ASSERT_EQ(count_lines(body), 4);
+    /* Four records of ~3.3 KB: past slurp()'s 16 KiB window, so the
+     * file's own lines are counted and the whole of it read. */
+    ASSERT_EQ(count_file_lines(tmp_path), 4);
+    size_t n;
+    const char *body = slurp_big(tmp_path, &n);
     ASSERT(contains(body, "\"capture_iface\":\"any\",\"capture_linktype\":1,"
                           "\"monitor_only\":0,"));
     ASSERT(contains(body, "\"capture_linktype\":127,\"monitor_only\":0,"));
