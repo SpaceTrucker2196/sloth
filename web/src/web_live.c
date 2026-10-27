@@ -870,6 +870,60 @@ size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms) {
     return web_live_json_scoped(l, NULL, out, cap, now_ms);
 }
 
+static void jw_bool(web_jw_t *w, int v) { web_jw_raw(w, v ? "true" : "false"); }
+
+void web_live_bundle_sensor(web_live_t *l, const web_scope_ctx_t *sc,
+                            web_jw_t *w, long long now_ms) {
+    pthread_mutex_lock(&l->mu);
+    web_live_sum_t s;
+    summary_locked(l, &s, now_ms);
+    web_jw_raw(w, "{\"socket\":");      web_jw_str(w, web_live_sock_word(l->sock_state));
+    web_jw_raw(w, ",\"socket_spec\":"); web_jw_str(w, l->spec);
+    web_jw_raw(w, ",\"state\":");       web_jw_str(w, s.sensor);
+    web_jw_raw(w, ",\"health_age_s\":");
+    if (l->sh_seen) web_jw_int(w, (now_ms - l->sh_ms) / 1000); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"health_ts\":");
+    if (l->sh_seen) web_jw_int(w, l->sh_ts); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"capture\":{\"iface\":"); web_jw_str(w, l->cap_iface);
+    web_jw_raw(w, ",\"linktype\":");
+    if (l->cap_linktype < 0) web_jw_raw(w, "null"); else web_jw_int(w, l->cap_linktype);
+    web_jw_raw(w, ",\"open\":");    web_jw_int(w, l->cap_open);
+    web_jw_raw(w, ",\"running\":"); web_jw_int(w, l->cap_running);
+    web_jw_raw(w, ",\"exit\":");    web_jw_str(w, l->cap_exit);
+    web_jw_raw(w, "},\"monitor\":{\"iface\":"); web_jw_str(w, l->mon_iface);
+    web_jw_raw(w, ",\"open\":");    web_jw_int(w, l->mon_open);
+    web_jw_raw(w, ",\"running\":"); web_jw_int(w, l->mon_running);
+    web_jw_raw(w, ",\"exit\":");    web_jw_str(w, l->mon_exit);
+    web_jw_raw(w, ",\"monitor_only\":"); jw_bool(w, l->monitor_only);
+    web_jw_raw(w, ",\"ip_capture_on_radio\":"); jw_bool(w, l->sc.radio);
+    /* The radios the request's scope context names (web_live_scope_ctx()
+     * filled it from this same state), or this state's own. */
+    const web_scope_ctx_t *c = sc ? sc : &l->sc;
+    web_jw_raw(w, ",\"radios\":[");
+    for (int i = 0; i < c->nmon; i++) {
+        if (i) web_jw_raw(w, ",");
+        web_jw_str(w, c->mon[i]);
+    }
+    web_jw_raw(w, "]},\"launch_scope\":{\"scope\":"); web_jw_str(w, l->scope);
+    web_jw_raw(w, ",\"not_enforced\":"); web_jw_int(w, l->scope_ne);
+    /* sensor_health carries ble_scan_mode, ble_scan_filter,
+     * ble_scan_enabled and btmon_iface; this state does not keep them
+     * yet (the BLE tab's slice owns those fields). */
+    web_jw_raw(w, "},\"ble_scan\":{\"available\":false,\"reason\":\"not_kept\"}");
+    web_jw_raw(w, ",\"records_s\":"); jw_rate(w, s.rate10);
+    web_jw_raw(w, ",\"records\":");   web_jw_int(w, (long long)s.records);
+    web_jw_raw(w, ",\"last_record_age_s\":"); jw_age(w, s.last_record_age_ms);
+    web_jw_raw(w, ",\"devices_in_pass\":");
+    if (s.dev_known) web_jw_int(w, s.devices); else web_jw_raw(w, "null");
+    web_jw_raw(w, ",\"devices_stale\":"); jw_bool(w, s.dev_stale);
+    web_jw_raw(w, ",\"alerts_open\":{\"low\":"); web_jw_int(w, (long long)s.alerts[0]);
+    web_jw_raw(w, ",\"warn\":"); web_jw_int(w, (long long)s.alerts[1]);
+    web_jw_raw(w, ",\"crit\":"); web_jw_int(w, (long long)s.alerts[2]);
+    web_jw_raw(w, ",\"overflow\":"); jw_bool(w, s.alerts_overflow);
+    web_jw_raw(w, "}}");
+    pthread_mutex_unlock(&l->mu);
+}
+
 int web_live_inc_tag(const web_scope_ctx_t *sc, const web_live_inc_t *e) {
     return web_scope_eff(web_scope_alert(e->type), sc ? sc->radio : 0);
 }

@@ -1,0 +1,838 @@
+/* /api/bundle (web_bundle.h) through the route table, without a
+ * socket: a sloth.db generated from sloth's own DDL (sdb_gen.c) on the
+ * pinned clock, seeded as test_alerts.c seeds its own (a device named
+ * by a deauth flood's key, one holding an alert's address, a cleartext
+ * credential whose key and detail carry the username, an SNMP brute
+ * force whose detail carries the community), and a live state fed
+ * lifecycle records in the shape src/jsonl.c writes them.
+ *
+ * What the bundle promises and this file holds it to:
+ *   - every parameter refused whole, in a word of slothweb's own;
+ *   - the spliced members are the routes' bytes, compared byte for
+ *     byte, so the bundle cannot carry what the page would not show;
+ *   - every registry section is present with data or marked
+ *     {"available":false,"reason":<a fixed word>};
+ *   - the credential and incident-id tests of test_alerts.c, rerun
+ *     against every kind, with the "withheld" entries present. Seen red
+ *     under one-line mutants, each restored byte-identical: the alert
+ *     page writing e->key as a "key" member (the bundle carried
+ *     "alice", "cred:" and a "key" member), writing e->id for e->hid
+ *     (it carried an incident_id), and the detail gate opened (it
+ *     carried "alice" and "community-secret"). sloth.db's key
+ *     ("snmp-brute:...") is a column no reader selects, so no one-line
+ *     mutant reaches it; its absence is asserted, not claimed as tested;
+ *   - the caps: a device whose address 10,000 records name gets the
+ *     ring's 50 and "limits" says the ring was full; the hard cap rolls
+ *     optional sections back to too_large and names them, and refuses
+ *     the bundle (413) when the required part cannot fit;
+ *   - the scope echo and in_scope carried through, page.url null from
+ *     the server, and the page's control built from text only. */
+#include <dirent.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "sloth.h"
+#include "web_assets.h"
+#include "web_bundle.h"
+#include "web_ingest.h"
+#include "web_live.h"
+#include "web_routes.h"
+#include "wtest.h"
+
+#define T SDB_NOW_T
+#define SDB_NOW_T 1792627200LL
+#define HR 3600LL
+#define DY 86400LL
+
+static char g_out[65536];
+/* The bundle's own body (web_resp_t.body_owned), copied out of the
+ * route's answer; a route with a static body leaves it empty. */
+static char *g_body;
+static size_t g_body_len;
+
+static const char *body_of(const char *out) {
+    const char *sep = strstr(out, "\r\n\r\n");
+    return sep ? sep + 4 : "";
+}
+
+static int route_m(const web_health_t *h, const char *path, const char *query, int head) {
+    web_req_t rq;
+    web_resp_t r;
+    memset(&rq, 0, sizeof(rq));
+    snprintf(rq.path, sizeof(rq.path), "%s", path);
+    snprintf(rq.query, sizeof(rq.query), "%s", query);
+    snprintf(rq.host, sizeof(rq.host), "127.0.0.1:8770");
+    rq.host_count = 1;
+    rq.is_head = head;
+    free(g_body);
+    g_body = NULL;
+    g_body_len = 0;
+    if (web_route(&rq, h, 1, g_out, sizeof(g_out), &r) != 0) return -1;
+    g_out[r.out_len < sizeof(g_out) ? r.out_len : sizeof(g_out) - 1] = '\0';
+    if (r.body_owned) {
+        g_body = malloc(r.body_len + 1);
+        if (g_body) {
+            memcpy(g_body, r.body_owned, r.body_len);
+            g_body[r.body_len] = '\0';
+            g_body_len = r.body_len;
+        }
+        free(r.body_owned);
+    }
+    return r.status;
+}
+
+static int route(const web_health_t *h, const char *path, const char *query) {
+    return route_m(h, path, query, 0);
+}
+
+/* The answer's body, wherever it was sent from. */
+static const char *answer(void) { return g_body ? g_body : body_of(g_out); }
+
+/* The value of the first member named key after from: the bytes after
+ * "key": (NULL when absent). */
+static const char *member(const char *from, const char *key) {
+    char k[96];
+    snprintf(k, sizeof(k), "\"%s\":", key);
+    const char *p = from ? strstr(from, k) : NULL;
+    return p ? p + strlen(k) : NULL;
+}
+
+/* The alert's own page: "page" alone would find the envelope's. */
+static const char *alert_page(const char *b) {
+    return member(b ? strstr(b, "\"alert\":{\"page\":") : NULL, "page");
+}
+
+static int count_of(const char *s, const char *needle) {
+    int n = 0;
+    for (const char *p = s; (p = strstr(p, needle)) != NULL; p += strlen(needle)) n++;
+    return n;
+}
+
+/* ── the page ──────────────────────────────────────────────────────── */
+
+/* The control is its own module, included after app.js into the one
+ * script, with one call per detail view; it builds nodes from text and
+ * copies through the clipboard or the selected-textarea fallback. */
+static void test_page_carries_the_control(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "window.SlothBundle = (function () {");
+    WT_HAS(p, "  return { mount: mount, fileName: fileName };");
+    WT_HAS(p, "    SlothBundle.mount($(\"dr-hd\"), \"device\", mac, scoped);");
+    WT_HAS(p, "    SlothBundle.mount($(\"ad-head\").parentNode, \"alert\", j.id, scoped);");
+    WT_HAS(p, "      SlothBundle.mount($(\"l-src\"), \"lookup\", j.q, scoped);");
+    WT_HAS(p, "<div class=\"dr-hd\" id=\"dr-hd\">");
+    /* Before app.js, so a view app.js opens while the script first runs
+     * (an address naming a device) finds the module defined. */
+    const char *mod = strstr(p, "window.SlothBundle = (function () {");
+    const char *app = strstr(p, "SlothBundle.mount($(\"dr-hd\")");
+    WT_ASSERT(mod && app && mod < app);
+    /* The copy buttons' ids, as agreed with the slices sharing the views:
+     * bundle-btn-drawer, bundle-btn-alert, bundle-btn-lookup. */
+    WT_HAS(p, "var SLOT = { device: \"drawer\", alert: \"alert\", lookup: \"lookup\" };");
+    WT_HAS(p, "copy.id = \"bundle-btn-\" + (");
+    WT_HAS(p, "el(\"button\", \"\", \"copy JSON\")");
+    WT_HAS(p, "el(\"button\", \"\", \"download .json\")");
+    WT_HAS(p, "\"/api/bundle?kind=\" + encodeURIComponent(st.kind) + \"&id=\" + encodeURIComponent(st.id)");
+    WT_HAS(p, "navigator.clipboard.writeText(text)");
+    WT_HAS(p, "document.execCommand(\"copy\")");
+    WT_HAS(p, "\"copied (\" + kb(st.text) + \" KB)\"");
+    WT_HAS(p, "\"copy failed, download instead\"");
+    WT_HAS(p, "a.download = name;");
+    WT_HAS(p, "st.text = JSON.stringify(j, null, 1);");
+    WT_HAS(p, "j.page.url = location.href;");
+    WT_HAS(p, "j.page.view = viewWord();");
+    WT_HAS(p, "\"slothweb-\" + kind + \"-\" + safe + \"-\" + ts + \".json\"");
+    /* Text only: the module's nodes are made and filled, never parsed. */
+    const char *m = strstr(p, "window.SlothBundle = (function () {");
+    WT_ASSERT(m != NULL);
+    if (m) {
+        WT_LACKS(m, "innerHTML");
+        WT_LACKS(m, "insertAdjacentHTML");
+        WT_LACKS(m, "setAttribute(");
+        WT_HAS(m, "e.textContent = String(text);");
+    }
+}
+
+/* web_jw_rawn() is for our own writers' output only: the bundle is its
+ * one caller. Seen red with a web_jw_rawn(w, "", 0) added to
+ * web_live.c. */
+static void test_rawn_has_one_caller(void) {
+    DIR *d = opendir("web/src");
+    WT_ASSERT(d != NULL);
+    if (!d) return;
+    struct dirent *e;
+    int callers = 0;
+    while ((e = readdir(d)) != NULL) {
+        size_t n = strlen(e->d_name);
+        if (n < 3 || strcmp(e->d_name + n - 2, ".c")) continue;
+        char path[300];
+        snprintf(path, sizeof(path), "web/src/%s", e->d_name);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        char line[1024];
+        while (fgets(line, sizeof(line), f))
+            if (strstr(line, "web_jw_rawn(") && !strstr(line, "void web_jw_rawn(")) {
+                if (strcmp(e->d_name, "web_bundle.c")) {
+                    fprintf(stderr, "    %s: %s", e->d_name, line);
+                    callers++;
+                }
+            }
+        fclose(f);
+    }
+    closedir(d);
+    WT_EQ(callers, 0);
+}
+
+#ifndef WITH_SQLITE
+
+/* Without SQLite the stream alone answers; sloth.db is "unbuilt". */
+void run_bundle_tests(void) {
+    WT_RUN(test_page_carries_the_control);
+    WT_RUN(test_rawn_has_one_caller);
+    web_live_t *l = calloc(1, sizeof(*l));
+    WT_ASSERT(l != NULL);
+    if (!l) return;
+    web_live_init(l, "unix:/t/s.sock");
+    web_live_sock_connected(l, 0);
+    web_feed_t f;
+    memset(&f, 0, sizeof(f));
+    web_feed_reset(&f);
+    const char rec[] = "{\"type\":\"alert.create\",\"ts\":1,\"incident_id\":\"aaaa\","
+                       "\"ty\":0,\"sev\":1,\"title\":\"PORT_SCAN\",\"key\":\"scan:x\","
+                       "\"match_ip\":\"192.0.2.9\"}\n"
+                       "{\"type\":\"dns\",\"ts\":2,\"qname\":\"a.example.org\",\"src\":\"192.0.2.9\"}\n";
+    web_feed_bytes(&f, l, rec, strlen(rec), 1000);
+    web_health_t h;
+    memset(&h, 0, sizeof(h));
+    h.wall_s = 100;
+    h.live = l;
+    WT_EQ(route(&h, "/api/bundle", "kind=device&id=02:00:00:00:00:12"), 200);
+    WT_HAS(answer(), "{\"bundle_schema\":\"1.0.0\",\"kind\":\"device\",\"id\":\"02:00:00:00:00:12\"");
+    WT_HAS(answer(), "\"sloth_db\":{\"state\":\"none\"");
+    WT_HAS(answer(), "\"device\":{\"drawer\":{\"mac\":\"02:00:00:00:00:12\"");
+    WT_HAS(answer(), "\"records_recent\":{\"available\":true,");
+    char q[64];
+    snprintf(q, sizeof(q), "kind=alert&id=s%s", l->inc[0].hid);
+    WT_EQ(route(&h, "/api/bundle", q), 200);
+    WT_HAS(answer(), "\"alert\":{\"page\":{\"id\":\"s");
+    WT_LACKS(answer(), "aaaa");
+    WT_HAS(answer(), "\"lookup\":{\"q\":\"192.0.2.9\"");
+    WT_EQ(route(&h, "/api/bundle", "kind=alert&id=d4"), 503);
+    WT_HAS(answer(), "{\"error\":\"no_sloth_db\"}");
+    web_live_destroy(l);
+    free(l);
+}
+
+#else
+
+#include <sqlite3.h>
+#include "sdb_gen.h"
+#include "wt_tmp.h"
+
+static char g_dir[TEST_TMP_MAX];
+static char g_db[128];
+static web_slothdb_t sdb;
+static web_m4_t m4;
+static web_health_t H;
+static web_live_t *g_live;
+static web_feed_t g_feed;
+
+static void feed(const char *s) {
+    web_feed_bytes(&g_feed, g_live, s, strlen(s), 1000);
+}
+
+/* sloth's incident_ids in the stream below: never on the wire. */
+#define IA "a1f0c3e5d7b9a201"
+#define IB "b2e4c6a8f0d1b302"
+#define IC "c3d5e7f9a1b3c403"
+
+/* The page's id of a stream incident ("s" and slothweb's handle), by
+ * sloth's incident_id, read off web_live_t. */
+static const char *S(const char *incident_id) {
+    static char buf[4][WEB_LIVE_HID_MAX + 2];
+    static int k;
+    char *o = buf[k++ % 4];
+    o[0] = '\0';
+    for (int i = 0; i < g_live->ninc; i++)
+        if (!strcmp(g_live->inc[i].id, incident_id))
+            snprintf(o, WEB_LIVE_HID_MAX + 2, "s%s", g_live->inc[i].hid);
+    for (int i = 0; !o[0] && i < g_live->closed_n; i++)
+        if (!strcmp(g_live->closed[i].id, incident_id))
+            snprintf(o, WEB_LIVE_HID_MAX + 2, "s%s", g_live->closed[i].hid);
+    return o;
+}
+
+static const char CRED_KEY[] = "cred:10.0.0.1:10.0.0.9:21:FTP:alice-secret-user:0123456789abcdef";
+
+/* The rows, by rowid, as test_alerts.c has them:
+ *   3-7   scan:192.0.2.50 today
+ *   10    deauth:02:00:00:00:00:12@02:00:00:00:00:a1: device ...:12
+ *   11    smb1:192.0.2.18, match_ip 192.0.2.18: device ...:18 by address
+ *   20-21 CLEARTEXT_CRED, the username in the key and the detail
+ *   22    SNMP_COMMUNITY_BRUTE, the community in the detail */
+static int seed(void) {
+    char sql[8192];
+    int n = snprintf(sql, sizeof(sql),
+        "INSERT INTO devices (mac,ip,hostname,vendor,first_seen,last_seen) VALUES"
+        " ('02:00:00:00:00:12','192.0.2.12','laptop',NULL,%lld,%lld),"
+        " ('02:00:00:00:00:18','192.0.2.18','nas',NULL,%lld,%lld);"
+        "INSERT INTO arp (ip,mac,iface,first_seen,last_seen) VALUES"
+        " ('192.0.2.18','02:00:00:00:00:18','eth0',%lld,%lld);"
+        "INSERT INTO alerts (rowid,key,first_seen,last_seen,type,sev,title,detail,technique,"
+        "match_ip,match_port,count) VALUES"
+        " (3,'scan:192.0.2.50',%lld,%lld,0,0,'PORT_SCAN','192.0.2.50 scanned 8 distinct ports',"
+        "'T1046','192.0.2.50',0,8),"
+        " (4,'scan:192.0.2.50',%lld,%lld,0,1,'PORT_SCAN','192.0.2.50 scanned 8 distinct ports',"
+        "'T1046','192.0.2.50',0,8),"
+        " (7,'scan:192.0.2.50',%lld,%lld,0,1,'PORT_SCAN','192.0.2.50 scanned 12 distinct ports',"
+        "'T1046','192.0.2.50',0,12),"
+        " (10,'deauth:02:00:00:00:00:12@02:00:00:00:00:a1',%lld,%lld,1,2,'DEAUTH_FLOOD',"
+        "'victim=02:00:00:00:00:12 bssid=02:00:00:00:00:a1 observed 40 frames','T1498.001',"
+        "NULL,NULL,40),"
+        " (11,'smb1:192.0.2.18',%lld,%lld,10,2,'SMB1_USE','SMBv1 traffic 192.0.2.20 -> "
+        "192.0.2.18:445 (count=3).','T1210','192.0.2.18',445,3),"
+        " (20,'%s',%lld,%lld,27,1,'CLEARTEXT_CRED','FTP user alice-secret-user in the clear on"
+        " FTP -> 10.0.0.9:21','T1040','10.0.0.1',21,2),"
+        " (21,'%s',%lld,%lld,27,1,'CLEARTEXT_CRED','FTP user alice-secret-user in the clear on"
+        " FTP -> 10.0.0.9:21','T1040','10.0.0.1',21,1),"
+        " (22,'snmp-brute:10.0.0.7->10.0.0.8',%lld,%lld,16,2,'SNMP_COMMUNITY_BRUTE',"
+        "'10.0.0.7->10.0.0.8: 9 SNMP communities tried (last=community-secret-x)','T1110.001',"
+        "'10.0.0.7',161,9);",
+        T - 10 * DY, T - 60, T - 10 * DY, T - 60,
+        T - 10 * DY, T - 60,
+        T - 5 * HR, T - 5 * HR + 300, T - 5 * HR + 900, T - 5 * HR + 1200,
+        T - 5 * HR + 3600, T - 5 * HR + 3900,
+        T - 2 * HR, T - HR,
+        T - 4 * HR, T - 1800,
+        CRED_KEY, T - 2 * DY, T - 2 * DY + 60, CRED_KEY, T - HR, T - 30 * 60,
+        T - 900, T - 600);
+    if (n < 0 || (size_t)n >= sizeof(sql)) return -1;
+    return sdb_exec(g_db, sql);
+}
+
+/* The stream: a scan open (not in sloth.db), the deauth flood resolved
+ * with a pcap (in sloth.db too), a cleartext credential open with the
+ * username in its key and detail, then sensor_health and a few records
+ * naming device ...:12 and its address. */
+static void stream(void) {
+    char b[4096];
+    snprintf(b, sizeof(b),
+        "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"" IA "\",\"key\":"
+        "\"scan:192.0.2.77\",\"title\":\"PORT_SCAN\",\"detail\":\"192.0.2.77 scanned 12"
+        " distinct ports\",\"sev\":1,\"ty\":0,\"count\":3,\"observations\":2,"
+        "\"first_detected\":%lld,\"technique\":\"T1046\",\"match_ip\":\"192.0.2.77\","
+        "\"match_port\":0}\n"
+        "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"" IB "\",\"key\":"
+        "\"deauth:02:00:00:00:00:12@02:00:00:00:00:a1\",\"title\":\"DEAUTH_FLOOD\","
+        "\"detail\":\"victim=02:00:00:00:00:12 bssid=02:00:00:00:00:a1 observed 6 frames\","
+        "\"sev\":1,\"ty\":1,\"count\":1}\n"
+        "{\"type\":\"alert.escalate\",\"ts\":%lld,\"incident_id\":\"" IB "\",\"key\":"
+        "\"deauth:02:00:00:00:00:12@02:00:00:00:00:a1\",\"title\":\"DEAUTH_FLOOD\","
+        "\"detail\":\"victim=02:00:00:00:00:12 bssid=02:00:00:00:00:a1 observed 40 frames\","
+        "\"sev\":2,\"prev_sev\":1,\"ty\":1,\"count\":5,"
+        "\"pcap_path\":\"/var/lib/sloth/pcap/x.pcap\"}\n"
+        "{\"type\":\"alert.resolve\",\"ts\":%lld,\"incident_id\":\"" IB "\",\"key\":"
+        "\"deauth:02:00:00:00:00:12@02:00:00:00:00:a1\",\"title\":\"DEAUTH_FLOOD\","
+        "\"sev\":2,\"ty\":1,\"count\":6,\"reason\":\"expired\"}\n"
+        "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"" IC "\",\"key\":\"%s\","
+        "\"title\":\"CLEARTEXT_CRED\",\"detail\":\"FTP user alice-secret-user in the clear on"
+        " FTP -> 10.0.0.9:21\",\"sev\":1,\"ty\":27,\"count\":1,\"match_ip\":\"10.0.0.1\","
+        "\"match_port\":21}\n"
+        "{\"type\":\"sensor_health\",\"ts\":%lld,\"capture_iface\":\"eth0\",\"capture_open\":1,"
+        "\"capture_running\":1,\"capture_linktype\":1,\"monitor_iface\":\"wlan1mon\","
+        "\"monitor_open\":1,\"monitor_running\":1,\"scope\":\"all\",\"scope_not_enforced\":0}\n"
+        "{\"type\":\"dns\",\"ts\":%lld,\"qname\":\"laptop.example.org\",\"src\":\"192.0.2.12\"}\n"
+        "{\"type\":\"probe_client\",\"ts\":%lld,\"mac\":\"02:00:00:00:00:12\",\"ssid\":\"HomeNet\"}\n"
+        "{\"type\":\"dns\",\"ts\":%lld,\"qname\":\"other.example.org\",\"src\":\"192.0.2.99\"}\n",
+        T - 600, T - 700, T - 3600, T - 3000, T - 120, T - 300, CRED_KEY,
+        T - 10, T - 9, T - 8, T - 7);
+    feed(b);
+}
+
+static void up(void) {
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-bundle-XXXXXX", test_tmpdir());
+    WT_ASSERT(mkdtemp(g_dir) != NULL);
+    snprintf(g_db, sizeof(g_db), "%s/sloth.db", g_dir);
+    WT_EQ(sdb_make(g_db, db_schema_version(), 0), 0);
+    WT_EQ(seed(), 0);
+    g_live = calloc(1, sizeof(*g_live));
+    WT_ASSERT(g_live != NULL);
+    web_live_init(g_live, "unix:/test/sloth.sock");
+    web_live_sock_connected(g_live, 0);
+    web_feed_reset(&g_feed);
+    stream();
+    web_sdb_fns_t fns = { NULL, NULL, NULL, g_live };
+    web_slothdb_init(&sdb, g_db, &fns);
+    memset(&m4, 0, sizeof(m4));
+    m4.sdb = &sdb;
+    memset(&H, 0, sizeof(H));
+    H.wall_s = T;
+    H.uptime_s = 42;
+    H.now_ms = 1000;
+    H.m4 = &m4;
+    H.live = g_live;
+}
+
+static void down(void) {
+    web_slothdb_destroy(&sdb);
+    web_live_destroy(g_live);
+    free(g_live);
+    free(g_body);
+    g_body = NULL;
+    char p[192];
+    snprintf(p, sizeof(p), "%s/sloth.db", g_dir);
+    unlink(p);
+    rmdir(g_dir);
+}
+
+/* Every parameter checked before anything is read, each refusal a word
+ * of slothweb's own; a HEAD a 405 as /api/alert's. */
+static void test_parameters_refused_whole(void) {
+    static const struct { const char *query; int status; const char *word; } R[] = {
+        { "", 400, "missing_kind" },
+        { "id=1", 400, "missing_kind" },
+        { "kind=x&id=1", 400, "bad_kind" },
+        { "kind=ble&id=1", 400, "kind_not_built" },
+        { "kind=platform&id=1", 400, "kind_not_built" },
+        { "kind=device", 400, "missing_id" },
+        { "kind=device&id=zz", 400, "bad_mac" },
+        { "kind=device&id=02:00:00:00:00:1g", 400, "bad_mac" },
+        { "kind=alert&id=x1", 400, "bad_id" },
+        { "kind=alert&id=d0", 400, "bad_id" },
+        { "kind=alert&id=s", 400, "bad_id" },
+        { "kind=lookup&id=nope", 400, "bad_lookup" },
+        { "kind=device&id=02:00:00:00:00:12&x=1", 400, "unknown_parameter" },
+        { "kind=device&kind=device&id=02:00:00:00:00:12", 400, "repeated_parameter" },
+        { "kind=&id=02:00:00:00:00:12", 400, "empty_value" },
+        { "kind=alert&id=s0", 404, "no_such_alert" },
+        { "kind=alert&id=d99999", 404, "no_such_alert" },
+        { "scope=bogus&kind=device&id=02:00:00:00:00:12", 400, "bad_scope" },
+    };
+    for (size_t i = 0; i < sizeof(R) / sizeof(R[0]); i++) {
+        int st = route(&H, "/api/bundle", R[i].query);
+        char want[80];
+        snprintf(want, sizeof(want), "\"error\":\"%s\"", R[i].word);
+        if (st != R[i].status || !strstr(answer(), want))
+            fprintf(stderr, "    ?%s: %d %s\n", R[i].query, st, answer());
+        WT_EQ(st, R[i].status);
+        WT_HAS(answer(), want);
+        /* The bundle's own heap body, its errors too; a bad scope is
+         * the router's, refused before the bundle runs. */
+        if (strcmp(R[i].word, "bad_scope")) WT_ASSERT(g_body != NULL);
+    }
+    char longq[600];
+    memset(longq, 'a', sizeof(longq) - 1);
+    memcpy(longq, "kind=", 5);
+    longq[sizeof(longq) - 1] = '\0';
+    WT_EQ(route(&H, "/api/bundle", longq), 400);
+    WT_HAS(answer(), "\"error\":\"query_too_long\"");
+    WT_EQ(route_m(&H, "/api/bundle", "kind=device&id=02:00:00:00:00:12", 1), 405);
+    WT_HAS(g_out, "HTTP/1.1 405 Method Not Allowed\r\nAllow: GET\r\n");
+}
+
+/* The envelope, in order, then the kind's section, then the aids. */
+static void test_device_bundle_shape(void) {
+    WT_EQ(route(&H, "/api/bundle", "kind=device&id=02-00-00-00-00-12"), 200);
+    const char *b = answer();
+    WT_HAS(g_out, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n");
+    WT_HAS(g_out, "Cache-Control: no-store\r\n");
+    char cl[64];
+    snprintf(cl, sizeof(cl), "Content-Length: %zu\r\n", g_body_len);
+    WT_HAS(g_out, cl);
+    WT_HAS(b, "{\"bundle_schema\":\"" WEB_BUNDLE_SCHEMA "\",\"kind\":\"device\","
+              "\"id\":\"02:00:00:00:00:12\",\"generated_at\":{\"iso\":\"2026-10-22T00:00:00Z\","
+              "\"unix\":1792627200},\"server\":{\"timezone\":{\"name\":\"UTC\",\"utc_offset_s\":0},"
+              "\"host\":");
+    /* sloth's version, as include/sloth.h has it, and the page's build. */
+    WT_HAS(b, "\"slothweb\":{\"version\":\"" SLOTH_VERSION "\",\"milestone\":\"M6\",\"page_etag\":");
+    WT_HAS(b, "\"uptime_s\":42}");
+    WT_HAS(b, web_page_etag);        /* carries its own quotes */
+    WT_HAS(b, ",\"sensor\":{\"socket\":\"connected\",\"socket_spec\":\"unix:/test/sloth.sock\","
+              "\"state\":\"ok\",\"health_age_s\":0,\"health_ts\":");
+    WT_HAS(b, "\"capture\":{\"iface\":\"eth0\",\"linktype\":1,\"open\":1,\"running\":1,\"exit\":\"\"},"
+              "\"monitor\":{\"iface\":\"wlan1mon\",\"open\":1,\"running\":1,\"exit\":\"\","
+              "\"monitor_only\":false,\"ip_capture_on_radio\":false,\"radios\":[\"wlan1mon\"]},"
+              "\"launch_scope\":{\"scope\":\"all\",\"not_enforced\":0},"
+              "\"ble_scan\":{\"available\":false,\"reason\":\"not_kept\"}");
+    WT_HAS(b, "\"alerts_open\":{\"low\":0,\"warn\":2,\"crit\":0,\"overflow\":false}}");
+    WT_HAS(b, ",\"sloth_version\":{\"available\":false,\"reason\":\"not_kept\"");
+    WT_HAS(b, ",\"site_label\":{\"available\":false,\"reason\":\"not_built\"");
+    WT_HAS(b, ",\"sloth_db\":{\"state\":\"open\",\"schema\":");
+    WT_HAS(b, "\"stale_after_s\":600}");
+    WT_HAS(b, ",\"scope_in_effect\":{\"scope\":\"hybrid\",\"given\":false,"
+              "\"ip_capture_on_radio\":false,\"monitor_ifaces\":[\"wlan1mon\"],"
+              "\"excludes\":\"nothing: every source\"}");
+    WT_HAS(b, ",\"page\":{\"url\":null,\"view\":null}");
+    WT_HAS(b, ",\"withheld\":[{\"field\":\"alert.key, alert.incident_id\",");
+    WT_HAS(b, "{\"field\":\"device.drawer.alerts[].detail\",");
+    WT_HAS(b, ",\"device\":{\"drawer\":{\"mac\":\"02:00:00:00:00:12\",\"now\":1792627200,"
+              "\"db\":\"open\",");
+    /* The optional sections, in registry order, after the drawer. */
+    const char *d = strstr(b, "\"drawer\":");
+    WT_ASSERT(d != NULL);
+    if (!d) return;
+    const char *s1 = strstr(d, ",\"signal_history\":{\"available\":false,\"reason\":\"not_built\"}");
+    const char *s2 = strstr(d, ",\"distance\":{\"available\":false,\"reason\":\"not_kept\"}");
+    const char *s3 = strstr(d, ",\"records_recent\":{\"available\":true,\"source\":\"ticker ring");
+    const char *s4 = strstr(d, ",\"vendor_research\":{\"available\":false,\"reason\":\"not_built\"}");
+    const char *s5 = strstr(d, ",\"frrs\":{\"available\":false,\"reason\":\"not_built\"}");
+    const char *s6 = strstr(d, ",\"triage\":{\"available\":false,\"reason\":\"not_built\"}");
+    WT_ASSERT(s1 && s2 && s3 && s4 && s5 && s6);
+    WT_ASSERT(s1 && s2 && s3 && s4 && s5 && s6 && s1 < s2 && s2 < s3 && s3 < s4 &&
+              s4 < s5 && s5 < s6);
+    /* The records naming the device: its MAC and its address, newest
+     * first; the other host's query is not among them (seen red with
+     * every record listed). */
+    WT_HAS(b, "\"matched\":4,\"by_type\":{\"probe_client\":1,\"dns\":1,\"alert.escalate\":1,"
+              "\"alert.create\":1},\"records\":[{\"seq\":8,\"type\":\"probe_client\",");
+    WT_HAS(b, "\"text\":\"HomeNet  02:00:00:00:00:12\"");
+    WT_HAS(b, "\"text\":\"laptop.example.org  192.0.2.12\"");
+    WT_LACKS(b, "other.example.org");
+    /* The aids, last. */
+    const char *g = strstr(b, ",\"glossary\":{\"bundle_schema\":");
+    const char *pr = strstr(b, ",\"prompt\":\"You are analysing a JSON bundle copied from slothweb");
+    const char *li = strstr(b, ",\"limits\":{\"hard_cap_bytes\":524288,");
+    WT_ASSERT(g && pr && li && g < pr && pr < li);
+    WT_HAS(b, "\"read_budget_ms_per_read\":250,\"reads\":[{\"what\":\"device\",\"ms\":");
+    WT_HAS(b, "{\"name\":\"device.drawer.ssids\",\"cap\":24,\"cut\":false}");
+    WT_HAS(b, "{\"name\":\"device.drawer.alerts\",\"cap\":12,\"cut\":false,\"reached\":null}");
+    WT_HAS(b, "{\"name\":\"device.records_recent\",\"cap\":50,\"cut\":false,\"ring_records\":");
+    WT_HAS(b, "\"nesting\":\"alert.device and lookup.device are the drawer answer only");
+    WT_ASSERT(g_body_len >= 2 && !strcmp(b + g_body_len - 2, "}\n"));
+    /* Every glossary key is a string: the aid is a flat object. */
+    const char *gl = member(b, "glossary");
+    WT_ASSERT(gl && gl[0] == '{');
+    WT_HAS(gl, "\"sev\":\"0 low, 1 warn, 2 crit (sloth\\u0027s severity)\"");
+    WT_HAS(gl, "\"available:false\":\"the section\\u0027s data is not in this bundle; reason: not_built");
+}
+
+/* The spliced members are the routes' bytes: /api/device/{mac},
+ * /api/alert?id= and /api/lookup?q= answered on their own, their
+ * trailing newline dropped, are found verbatim in the bundle. Seen red
+ * with the splice re-rendering "now" (a copy made a second later). */
+static void test_spliced_answers_are_byte_identical(void) {
+    char *dev = NULL, *al = NULL, *lk = NULL, *dev18 = NULL;
+    WT_EQ(route(&H, "/api/device/02:00:00:00:00:12", ""), 200);
+    dev = strdup(body_of(g_out));
+    WT_EQ(route(&H, "/api/alert", "id=d10"), 200);
+    al = strdup(body_of(g_out));
+    WT_EQ(route(&H, "/api/lookup", "q=02:00:00:00:00:18"), 200);
+    lk = strdup(body_of(g_out));
+    WT_EQ(route(&H, "/api/device/02:00:00:00:00:18", ""), 200);
+    dev18 = strdup(body_of(g_out));
+    WT_ASSERT(dev && al && lk && dev18);
+    if (!dev || !al || !lk || !dev18) { free(dev); free(al); free(lk); free(dev18); return; }
+    size_t nd = strlen(dev) - 1, na = strlen(al) - 1, nl = strlen(lk) - 1, n18 = strlen(dev18) - 1;
+    WT_ASSERT(dev[nd] == '\n' && al[na] == '\n' && lk[nl] == '\n');
+
+    WT_EQ(route(&H, "/api/bundle", "kind=device&id=02:00:00:00:00:12"), 200);
+    const char *v = member(answer(), "drawer");
+    WT_ASSERT(v && !memcmp(v, dev, nd) && v[nd] == ',');
+
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10"), 200);
+    v = alert_page(answer());
+    WT_ASSERT(v && !memcmp(v, al, na) && v[na] == ',');
+    /* The alert names device ...:12 by its key: its drawer, nested,
+     * after the page (the page's own "device" member is inside it). */
+    const char *nested = v ? member(v + na, "device") : NULL;
+    WT_ASSERT(nested && !memcmp(nested, dev, nd) && nested[nd] == ',');
+    WT_HAS(answer(), "\"reads\":[{\"what\":\"alert\",\"ms\":");
+    WT_HAS(answer(), "},{\"what\":\"alert.device\",\"ms\":");
+    WT_HAS(answer(), "{\"name\":\"alert.page.history.runs\",\"cap\":100,\"cut\":false}");
+    WT_HAS(answer(), "{\"name\":\"alert.device.alerts\",\"cap\":12,");
+    /* No bundle inside a bundle: the nested drawer has no sections
+     * (seen red with a records_recent row added to the alert kind). */
+    WT_EQ(count_of(answer(), "\"records_recent\":"), 0);
+    WT_EQ(count_of(answer(), "\"records_around\":"), 1);
+    WT_EQ(count_of(answer(), "\"glossary\":"), 1);
+
+    WT_EQ(route(&H, "/api/bundle", "kind=lookup&id=02-00-00-00-00-18"), 200);
+    WT_HAS(answer(), "\"kind\":\"lookup\",\"id\":\"02:00:00:00:00:18\",");
+    v = member(answer(), "card");
+    WT_ASSERT(v && !memcmp(v, lk, nl) && v[nl] == ',');
+    nested = v ? member(v + nl, "device") : NULL;
+    WT_ASSERT(nested && !memcmp(nested, dev18, n18) && nested[n18] == '}');
+    /* An address no device holds: the card alone, the drawer marked. */
+    WT_EQ(route(&H, "/api/bundle", "kind=lookup&id=192.0.2.99"), 200);
+    WT_HAS(answer(), "\"lookup\":{\"card\":{\"q\":\"192.0.2.99\",\"kind\":\"ip\",");
+    v = member(answer(), "card");
+    const char *dv = v ? strstr(v, ",\"device\":null") : NULL;
+    WT_ASSERT(dv != NULL);
+    WT_HAS(answer(), "},\"device\":{\"available\":false,\"reason\":\"no_data\"}},\"glossary\":{");
+    free(dev); free(al); free(lk); free(dev18);
+}
+
+/* An alert that names an address and no MAC: the Lookup card of the
+ * address rides in place of a drawer. */
+static void test_alert_with_an_address_only(void) {
+    WT_EQ(route(&H, "/api/alert", "id=d7"), 200);
+    WT_HAS(body_of(g_out), "\"device\":{\"mac\":null,\"ip\":\"192.0.2.50\"}");
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d7"), 200);
+    const char *v = alert_page(answer());
+    const char *after = v ? strstr(v, "\"history\":{") : NULL;
+    WT_ASSERT(after != NULL);
+    if (!after) return;
+    WT_HAS(after, ",\"device\":{\"available\":false,\"reason\":\"no_data\"}");
+    WT_HAS(after, ",\"lookup\":{\"q\":\"192.0.2.50\",\"kind\":\"ip\",");
+    WT_HAS(answer(), "},{\"what\":\"alert.lookup\",\"ms\":");
+    /* The observed values beside the trigger prose. */
+    WT_HAS(after, ",\"observed_vs_thresholds\":{\"observed\":{\"sev\":1,\"count\":");
+    WT_HAS(after, "\"thresholds\":{\"available\":false,\"reason\":\"not_built\",");
+    WT_HAS(after, ",\"records_by_type_global\":{");
+    /* A stream incident with a MAC in its key: the drawer, nested. */
+    char q[64];
+    snprintf(q, sizeof(q), "kind=alert&id=%s", S(IB));
+    WT_EQ(route(&H, "/api/bundle", q), 200);
+    v = alert_page(answer());
+    after = v ? strstr(v, "\"history\":{") : NULL;
+    WT_ASSERT(after != NULL);
+    if (after) WT_HAS(after, ",\"device\":{\"mac\":\"02:00:00:00:00:12\",\"now\":");
+    /* Copied from the page: the key is in sloth.db too, so count is
+     * the larger source's and latest_count the stream incident's. */
+    WT_HAS(answer(), "\"sev\":2,\"technique\":\"T1498.001\"");
+    WT_HAS(answer(), "\"count\":40,\"latest_count\":6,\"observations\":0,");
+    WT_HAS(answer(), "\"observed\":{\"sev\":2,\"count\":40,\"latest_count\":6,\"observations\":0,"
+                     "\"incidents\":1,\"sev_changes\":3,\"duration_s\":7080,");
+    WT_HAS(answer(), ",\"state\":\"closed\",\"reason\":\"expired\"}");
+}
+
+/* Every row of the registry is in its kind's section, with data or
+ * marked unavailable with a reason from the fixed list, once. Seen red
+ * with a row added to the table with no fill and a reason of its own
+ * ("later"). */
+static void test_every_section_is_present_or_marked(void) {
+    static const struct { const char *kind, *query; } K[] = {
+        { "device", "kind=device&id=02:00:00:00:00:12" },
+        { "alert", "kind=alert&id=d10" },
+        { "lookup", "kind=lookup&id=02:00:00:00:00:18" },
+    };
+    static const char *const primary[] = { "drawer", "page", "card" };
+    int rows = 0;
+    for (size_t k = 0; k < 3; k++) {
+        WT_EQ(route(&H, "/api/bundle", K[k].query), 200);
+        const char *v = member(answer(), primary[k]);
+        WT_ASSERT(v != NULL);
+        if (!v) continue;
+        /* Past the primary splice (its members are the route's): the
+         * close of the object that starts at v, strings skipped. */
+        const char *from = v;
+        int depth = 0;
+        for (const char *p = v; *p; p++) {
+            if (*p == '"') {
+                p++;
+                while (*p && *p != '"') { if (*p == '\\' && p[1]) p++; p++; }
+                if (!*p) break;
+                continue;
+            }
+            if (*p == '{') depth++;
+            if (*p == '}' && --depth == 0) { from = p + 1; break; }
+        }
+        const char *sect_end = strstr(from, ",\"glossary\":{");
+        WT_ASSERT(sect_end != NULL);
+        if (!sect_end) continue;
+        for (size_t i = 0; i < web_bundle_sections_n; i++) {
+            const web_bundle_sec_t *s = &web_bundle_sections[i];
+            if (strcmp(s->kind, K[k].kind)) continue;
+            rows++;
+            char key[96];
+            snprintf(key, sizeof(key), ",\"%s\":", s->name);
+            const char *at = strstr(from, key);
+            if (!at || at > sect_end) fprintf(stderr, "    %s: no %s\n", K[k].kind, s->name);
+            WT_ASSERT(at && at < sect_end);
+            if (!at) continue;
+            const char *val = at + strlen(key);
+            if (!strncmp(val, "{\"available\":false,\"reason\":\"", 29)) {
+                char word[32] = "";
+                sscanf(val + 29, "%31[a-z_]", word);
+                int known = 0;
+                for (size_t r = 0; r < web_bundle_reasons_n; r++)
+                    if (!strcmp(word, web_bundle_reasons[r])) known = 1;
+                if (!known) fprintf(stderr, "    %s.%s: reason %s\n", K[k].kind, s->name, word);
+                WT_ASSERT(known);
+                if (!s->fill) WT_ASSERT(!strcmp(word, s->reason));
+            } else {
+                WT_ASSERT(val[0] == '{' || val[0] == '[');
+                WT_ASSERT(s->fill != NULL);
+            }
+        }
+    }
+    WT_EQ(rows, (int)web_bundle_sections_n);
+    /* The reasons list is the documented one. */
+    WT_EQ(web_bundle_reasons_n, 7);
+    WT_ASSERT(!strcmp(web_bundle_reasons[0], "not_built") &&
+              !strcmp(web_bundle_reasons[6], "not_kept"));
+}
+
+/* test_alerts.c's credential and incident-id tests, against the
+ * bundle: the username-bearing key, the community in a withheld detail
+ * and sloth's incident_ids are seeded in both sources, and no bundle
+ * carries them, while "withheld" says what was left out. */
+static void test_withheld_and_opaque_ids(void) {
+    static const char *const ids[] = { IA, IB, IC };
+    const char *qs[8] = {
+        "kind=device&id=02:00:00:00:00:12", "kind=device&id=02:00:00:00:00:18",
+        "kind=alert&id=d20", "kind=alert&id=d21", "kind=alert&id=d22",
+        "kind=lookup&id=10.0.0.1", "kind=lookup&id=02:00:00:00:00:12", NULL,
+    };
+    char qc[64];
+    snprintf(qc, sizeof(qc), "kind=alert&id=%s", S(IC));
+    qs[7] = qc;
+    for (size_t i = 0; i < 8; i++) {
+        int st = route(&H, "/api/bundle", qs[i]);
+        if (st != 200) fprintf(stderr, "    ?%s: %d\n", qs[i], st);
+        WT_EQ(st, 200);
+        const char *b = answer();
+        if (strstr(b, "alice") || strstr(b, "community-secret") || strstr(b, "cred:"))
+            fprintf(stderr, "    ?%s carries it\n", qs[i]);
+        WT_LACKS(b, "alice");
+        WT_LACKS(b, "community-secret");
+        WT_LACKS(b, "cred:");
+        WT_LACKS(b, "snmp-brute:");
+        WT_LACKS(b, "\"key\":");
+        WT_LACKS(b, "\"incident_id\":");
+        for (int k = 0; k < 3; k++) {
+            if (strstr(b, ids[k])) fprintf(stderr, "    ?%s carries %s\n", qs[i], ids[k]);
+            WT_LACKS(b, ids[k]);
+        }
+        WT_HAS(b, "{\"field\":\"alert.key, alert.incident_id\",\"why\":\"opaque ids only:");
+        WT_HAS(b, "{\"field\":\"sloth.db columns\",\"why\":\"credential-bearing columns");
+        WT_HAS(b, "{\"field\":\"page.url\",\"why\":\"filled by the browser, not the server\"}");
+    }
+    /* Withheld, and said to be, on the credential's and the brute
+     * force's pages. */
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d22"), 200);
+    WT_HAS(answer(), "\"detail\":null,\"detail_shown\":false");
+    WT_HAS(answer(), "{\"field\":\"alert.page.detail\",\"why\":\"this alert type's detail is "
+                     "not audited");
+    WT_EQ(route(&H, "/api/bundle", qc), 200);
+    WT_HAS(answer(), "\"detail\":null,\"detail_shown\":false");
+    WT_HAS(answer(), "{\"field\":\"alert.page.detail\",");
+    /* And not on a page whose detail is shown. */
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10"), 200);
+    WT_HAS(answer(), "\"detail_shown\":true");
+    /* Seen red with the entry written whatever detail_shown says. */
+    WT_LACKS(answer(), "{\"field\":\"alert.page.detail\",");
+}
+
+/* The caps. A device whose address ten thousand records name gets the
+ * ring's fifty, newest first, and "limits" says the ring was full.
+ * Seen red with WEB_LIVE_RING and WEB_BUNDLE_RECORDS both raised to 60
+ * (q9949 listed, 60 records). */
+static void test_caps_are_proven(void) {
+    char line[160];
+    for (int i = 0; i < 10000; i++) {
+        snprintf(line, sizeof(line),
+                 "{\"type\":\"dns\",\"ts\":%lld,\"qname\":\"q%d.example.org\",\"src\":\"192.0.2.12\"}\n",
+                 T - 5 + i / 2000, i);
+        feed(line);
+    }
+    WT_EQ(route(&H, "/api/bundle", "kind=device&id=02:00:00:00:00:12"), 200);
+    const char *b = answer();
+    WT_HAS(b, "\"ring_records\":50,\"ring_full\":true,");
+    WT_HAS(b, "\"matched\":50,\"by_type\":{\"dns\":50},\"records\":[");
+    WT_EQ(count_of(b, "{\"seq\":"), 50);
+    WT_HAS(b, "\"text\":\"q9999.example.org");
+    WT_LACKS(b, "\"text\":\"q9949.example.org");
+    WT_HAS(b, "{\"name\":\"device.records_recent\",\"cap\":50,\"cut\":true,\"ring_records\":50}");
+    /* Newest first: the first record listed is the newest. */
+    const char *r = strstr(b, "\"records\":[{\"seq\":");
+    WT_ASSERT(r != NULL);
+    if (r) WT_HAS(r, "\"text\":\"q9999.example.org");
+    WT_ASSERT(g_body_len < (size_t)web_bundle_max);
+    WT_HAS(b, "\"truncated_sections\":[]");
+}
+
+/* The hard cap: optional sections that would cross it are rolled back
+ * to too_large and named, the required part stands; a cap the required
+ * part cannot meet is a 413. Seen red with the rollback's w->len
+ * restore removed (a truncated member's bytes stayed). */
+static void test_size_cap(void) {
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10"), 200);
+    size_t full = g_body_len;
+    char *page = NULL;
+    const char *v = alert_page(answer());
+    const char *pe = v ? strstr(v, "\"history\":{") : NULL;
+    pe = pe ? strstr(pe, "}}") : NULL;
+    if (v && pe) {
+        page = malloc((size_t)(pe + 2 - v) + 1);
+        if (page) { memcpy(page, v, (size_t)(pe + 2 - v)); page[pe + 2 - v] = '\0'; }
+    }
+    WT_ASSERT(page != NULL);
+    /* Room for the page and every section before the nested drawer,
+     * and 200 bytes of it: the glossary, the prompt and the limits'
+     * reserve are held back, so the cap is measured from them. */
+    const char *b = answer();
+    /* The nested drawer, past the page (whose own "device" names it). */
+    const char *dv = v && page ? strstr(v + strlen(page), ",\"device\":{\"mac\":") : NULL;
+    const char *gl = strstr(b, ",\"glossary\":{");
+    const char *li = strstr(b, ",\"limits\":{");
+    WT_ASSERT(dv && gl && li && dv < gl && gl < li);
+    if (!dv || !gl || !li) { free(page); return; }
+    size_t capb = (size_t)(dv - b) + 200 + (size_t)(li - gl) + WEB_BUNDLE_LIMITS_MAX + 2;
+    /* The drawer is longer than the 200 bytes left for it. */
+    const char *dl = strstr(dv, "\"anomalies\":[");
+    WT_ASSERT(dl && dl - dv > 400);
+    web_bundle_max = capb;
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10"), 200);
+    WT_ASSERT(g_body_len <= capb && g_body_len < full);
+    WT_HAS(answer(), ",\"device\":{\"available\":false,\"reason\":\"too_large\",\"cap_bytes\":");
+    WT_HAS(answer(), "\"truncated_sections\":[\"device\"]");
+    char cap[64];
+    snprintf(cap, sizeof(cap), "\"limits\":{\"hard_cap_bytes\":%zu,", capb);
+    WT_HAS(answer(), cap);
+    v = alert_page(answer());
+    if (page) WT_ASSERT(v && !strncmp(v, page, strlen(page)));
+    WT_ASSERT(g_body_len >= 2 && !strcmp(answer() + g_body_len - 2, "}\n"));
+    /* No room for the page: refused whole. */
+    web_bundle_max = 4096;
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10"), 413);
+    WT_HAS(answer(), "{\"error\":\"bundle_too_large\"}");
+    web_bundle_max = WEB_BUNDLE_MAX;
+    free(page);
+}
+
+/* A named scope is the first member, the sub-answers say in_scope, the
+ * scope in effect is reported and the excluded lists named. */
+static void test_scope_is_carried_through(void) {
+    WT_EQ(route(&H, "/api/bundle", "scope=monitor&kind=device&id=02:00:00:00:00:12"), 200);
+    const char *b = answer();
+    WT_HAS(b, "{\"scope\":\"monitor\",\"bundle_schema\":");
+    WT_HAS(b, ",\"scope_in_effect\":{\"scope\":\"monitor\",\"given\":true,");
+    WT_HAS(b, "\"excludes\":\"everything the host\\u0027s own interfaces carried:");
+    WT_HAS(b, "{\"field\":\"device.drawer.ips, device.drawer.stream,");
+    WT_HAS(b, "\"ips\":[],\"ips_more\":false");
+    WT_HAS(b, ",\"in_scope\":false}");          /* no monitor source on the row */
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10&scope=local"), 200);
+    b = answer();
+    WT_HAS(b, "{\"scope\":\"local\",\"bundle_schema\":");
+    WT_HAS(b, "\"alert\":{\"page\":{\"id\":\"d10\",\"in_scope\":false,");
+    WT_HAS(b, "{\"field\":\"device.drawer.ssids, device.drawer.assocs\",");
+    /* An error names the scope too, as every route's does. */
+    WT_EQ(route(&H, "/api/bundle", "scope=local&kind=device"), 400);
+    WT_HAS(answer(), "{\"scope\":\"local\",\"error\":\"missing_id\"}");
+    /* Hybrid, named: echoed, excluding nothing. */
+    WT_EQ(route(&H, "/api/bundle", "scope=hybrid&kind=lookup&id=192.0.2.18"), 200);
+    WT_HAS(answer(), "{\"scope\":\"hybrid\",\"bundle_schema\":");
+    WT_HAS(answer(), "\"given\":true,");
+    WT_HAS(answer(), "\"excludes\":\"nothing: every source\"");
+}
+
+void run_bundle_tests(void) {
+    WT_RUN(test_page_carries_the_control);
+    WT_RUN(test_rawn_has_one_caller);
+    up();
+    WT_RUN(test_parameters_refused_whole);
+    WT_RUN(test_device_bundle_shape);
+    WT_RUN(test_spliced_answers_are_byte_identical);
+    WT_RUN(test_alert_with_an_address_only);
+    WT_RUN(test_every_section_is_present_or_marked);
+    WT_RUN(test_withheld_and_opaque_ids);
+    WT_RUN(test_scope_is_carried_through);
+    WT_RUN(test_size_cap);
+    WT_RUN(test_caps_are_proven);
+    down();
+}
+
+#endif

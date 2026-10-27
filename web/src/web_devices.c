@@ -748,24 +748,13 @@ static void oui_member(web_jw_t *w, const web_m4_t *m, const char *mac) {
     research_member(w, hit.found ? hit.name : NULL);
 }
 
-/* Seconds east of UTC at t (tm_gmtoff is not C99), as web_series.c. */
-static long long utc_offset(long long t) {
-    time_t tt = (time_t)t;
-    struct tm lt, gt;
-    if (!localtime_r(&tt, &lt) || !gmtime_r(&tt, &gt)) return 0;
-    long long d = lt.tm_yday - gt.tm_yday;
-    if (lt.tm_year != gt.tm_year) d = lt.tm_year > gt.tm_year ? 1 : -1;
-    return ((d * 24 + (lt.tm_hour - gt.tm_hour)) * 60 +
-            (lt.tm_min - gt.tm_min)) * 60 + (lt.tm_sec - gt.tm_sec);
-}
-
 /* The 168 hour-of-week cells of dev.present for mac, [share, n] each
  * (the share of weeks it was present in that local hour), or null. */
 static void week_member(web_jw_t *w, const web_m4_t *m, const char *mac,
                         long long now_s) {
     web_jw_raw(w, ",\"week\":{\"now_cell\":");
     web_jw_int(w, web_bl_cell_index(now_s - now_s % 3600));
-    web_jw_raw(w, ",\"utc_offset_s\":"); web_jw_int(w, utc_offset(now_s));
+    web_jw_raw(w, ",\"utc_offset_s\":"); web_jw_int(w, web_utc_offset(now_s));
     web_jw_raw(w, ",\"warm_n\":");       web_jw_int(w, WEB_BL_WARM_N);
     web_jw_raw(w, ",\"cells\":");
     web_baseline_t *bl = m->anomaly ? m->anomaly->cfg.bl : NULL;
@@ -790,7 +779,7 @@ static void week_member(web_jw_t *w, const web_m4_t *m, const char *mac,
     free(cells);
 }
 
-static int canon_mac(const char *in, char *out) {
+int web_dev_canon_mac(const char *in, char *out) {
     char t[24];
     size_t n = strlen(in);
     if (n != 17) return -1;
@@ -823,7 +812,7 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
     }
     raw[o] = '\0';
     char mac[WEB_KEY_MAX + 1];
-    if (canon_mac(raw, mac) != 0)
+    if (web_dev_canon_mac(raw, mac) != 0)
         return answer_error(400, "bad_mac", NULL, body, cap, len, status);
 
     web_sdb_conn_t conn;
@@ -957,7 +946,7 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
         return answer_error(400, err, NULL, body, cap, len, status);
     if (!ps[0].seen) return answer_error(400, "missing_q", NULL, body, cap, len, status);
     char key[WEB_KEY_MAX + 1];
-    int is_mac = canon_mac(ps[0].val, key) == 0;
+    int is_mac = web_dev_canon_mac(ps[0].val, key) == 0;
     if (!is_mac && web_key_ip(ps[0].val, key) != 0)
         return answer_error(400, "bad_lookup", NULL, body, cap, len, status);
 

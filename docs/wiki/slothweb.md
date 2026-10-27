@@ -111,7 +111,7 @@ the vendor research section, `web/data/vendors/*.md`,
 listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
-reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (an alert's proof: `--pcap-dir`, the capture decoded and hash-checked, the assessment and bibliography, the drawer's rows as tap targets); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
+reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (copy JSON: `/api/bundle` and a copy and download button on every detail view); 2026-10-27 (an alert's proof: `--pcap-dir`, the capture decoded and hash-checked, the assessment and bibliography, the drawer's rows as tap targets); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
 research section under the drawer's and Lookup's OUI card, one cited Markdown file per OUI holder
 in `web/data/vendors/` compiled in at build time, `{found:false}` and
 "no research yet" for a vendor without one, [[vendor-research]]; the
@@ -962,6 +962,26 @@ rows, open anomalies to every open episode, records/s to the records by
 type, sensor health to a health view (capture, monitor, the stream,
 sloth.db and its freshness), each with its filter named and a way back.
 A test asserts each count on the demo's own data.
+
+## Copy JSON: the analysis bundle (2026-10-27)
+
+Owner request 2026-10-27: a **copy JSON** button (and **download
+.json**) on every detail view (the device drawer, an alert's page, the
+Lookup card) that captures the view's data as one JSON document to
+paste into Claude for analysis. `/api/bundle?kind=device|alert|lookup&id=`
+answers it. The bundle splices the detail routes' own answers in
+verbatim rather than re-rendering them, so it carries exactly what the
+page shows and nothing it withholds (alert key, `incident_id`,
+unaudited detail, credential columns); around them an envelope (schema,
+time, server and time zone, sensor health, sloth.db, the capture scope
+in effect and what it excludes, a `withheld` list), optional sections
+that read `{"available": false, "reason": ...}` until the slices that
+own them land (vendor research, FRRS, COMINT report, triage,
+assessment, evidence, location), a glossary, a suggested prompt and the
+limits applied. 512 KB hard cap, optional sections dropped first. The
+copy works on plain http (a hidden textarea and `execCommand`) where
+`navigator.clipboard` does not exist. Detail in
+[`web/README.md`](../../web/README.md#copy-json-the-analysis-bundle).
 
 ## Capture scope (2026-10-26)
 

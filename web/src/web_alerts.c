@@ -672,8 +672,8 @@ static void runs_json(web_jw_t *w, const web_adb_row_t *r, int n, size_t cap,
 static int id_of(const char *v, int *kind, char *sid, long long *rid, char *err,
                  size_t errsz);
 
-static int parse_id(const char *query, int *kind, char *sid, long long *rid,
-                    char *err, size_t errsz) {
+int web_alert_parse_id(const char *query, int *kind, char *sid, long long *rid,
+                       char *err, size_t errsz) {
     web_param_t ps[1] = { { "id", "", 0 } };
     if (web_params_parse(query, ps, 1, err, errsz) != 0) return -1;
     if (!ps[0].seen) { snprintf(err, errsz, "missing_id"); return -1; }
@@ -708,7 +708,7 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
     char sid[WEB_LIVE_HID_MAX + 1] = "";
     long long rid = 0;
     char err[48];
-    if (parse_id(query, &kind, sid, &rid, err, sizeof(err)) != 0)
+    if (web_alert_parse_id(query, &kind, sid, &rid, err, sizeof(err)) != 0)
         return web_hist_error(400, err, NULL, body, cap, len, status);
 
     web_live_inc_t *e = calloc(1, sizeof(*e));

@@ -5677,6 +5677,14 @@ report events.
   holds every entry to the committed registry. The research set (the
   reference host's 163 vendors and the ~120 commonest) follows in later
   slices.
+- 2026-10-27 — [[slothweb]]: copy JSON on every detail view (owner
+  request). `/api/bundle?kind=device|alert|lookup&id=` splices the
+  detail routes' own answers verbatim (`web/src/web_bundle.c`) inside
+  an envelope, a registry of optional sections marked
+  `available: false` until their slices land, a glossary, a prompt and
+  the limits; `web/ui/bundle.js` copies it (clipboard, or a hidden
+  textarea and `execCommand` on plain http) and offers it as a
+  download. The body is the route's own heap buffer, 512 KB at most.
 - 2026-11-01 — [[wiki-maintenance]]: `wiki_sync.sh` flattens a
   `docs/wiki/<dir>/` subdirectory onto the flat GitHub wiki
   (`<dir>-<page>`, `<dir>/README.md` as `<dir>`), rewriting the links

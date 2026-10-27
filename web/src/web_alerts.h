@@ -62,6 +62,13 @@
 #define WEB_ALERT_RUN_GAP_S    1800
 #define WEB_ALERT_RUNS         100
 
+/* /api/alert's id, out of a query: *kind 's' with the handle in
+ * sid[WEB_LIVE_HID_MAX + 1], or 'd' with the rowid in *rid. 0, or -1
+ * with the reason word ("missing_id", "bad_id", or the parser's) in
+ * err. Shared with the bundle (web_bundle.c). */
+int web_alert_parse_id(const char *query, int *kind, char *sid, long long *rid,
+                       char *err, size_t errsz);
+
 /* The routes: the body into body (cap bytes), *status set; 0, or -1
  * when not even an error fit. live may be NULL (no data socket). */
 int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,

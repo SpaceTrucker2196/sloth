@@ -321,6 +321,13 @@ size_t web_live_json_scoped(web_live_t *l, const web_scope_ctx_t *sc,
  * far and whether the IP capture is one; scope and given are left as
  * the caller set them. */
 void   web_live_scope_ctx(web_live_t *l, web_scope_ctx_t *sc);
+/* The bundle's "sensor" object (web_bundle.c): the socket, the
+ * sensor_health liveness word and age, the capture and monitor handles
+ * with the monitor radios of sc (NULL: this state's own), sloth's
+ * launch scope, the stream rate and the pass's device count, and the
+ * open alerts by severity. One object value, read under the lock. */
+void   web_live_bundle_sensor(web_live_t *l, const web_scope_ctx_t *sc,
+                              web_jw_t *w, long long now_ms);
 /* The scope tag of mac in the latest pass, or -1 when it is not in it. */
 int    web_live_pass_tag(web_live_t *l, const char *mac);
 /* The latest pass's MACs whose tag has a bit of want (WEB_SC_M, _L). */

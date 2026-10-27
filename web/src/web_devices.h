@@ -103,6 +103,11 @@ void web_m4_health(const web_m4_t *m, long long now_s, web_jw_t *w);
  * reads as 0), or 0 when there is no --sloth-db or it is not open. */
 int  web_m4_db_age(const web_m4_t *m, long long now_s, long long *age_s);
 
+/* /api/device/{mac}'s fold of a MAC: 17 characters, '-' as ':', then
+ * web_key_mac()'s canonical lower case into out[WEB_KEY_MAX + 1]. 0,
+ * or -1. Shared with the bundle (web_bundle.c). */
+int  web_dev_canon_mac(const char *in, char *out);
+
 /* The presence strip of mac: 144 cells of 10 minutes ending with the
  * cell now_s is in, as 36 lower-case hex digits (cell 0 the oldest,
  * its bit the high bit of the first digit) into out[37]. For the

@@ -83,5 +83,6 @@ void run_glyph_tests(void);
 void run_frrs_tests(void);
 void run_ble_tests(void);
 void run_btsig_tests(void);
+void run_bundle_tests(void);
 
 #endif

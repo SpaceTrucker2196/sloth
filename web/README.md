@@ -495,7 +495,8 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/alert?id=` | `200` JSON, everything an alert's page shows; `400` for an id that is not `s<handle>` or `d<rowid>`; `404` for one neither source has; `503` with no `--sloth-db` for a `d` id, or sloth.db unreadable |
    | `GET /api/pcap/frames?id=&n=&offset=` | `200` JSON: capture `n` of alert `id` (an index into `/api/alert`'s `captures`; a name or path is never taken), its SHA-256 recomputed against the manifest (`hash.says`: `hash verified`, `HASH MISMATCH` or `no manifest entry`), its file header, and 24 decoded frames from `offset` (0..4095) with each one's hex dump; `400` for a parameter that does not pass; `404` `no_such_alert`, `no_such_capture`, `no_pcap_dir`, `not_found`; `403` `not_regular`, `withheld_evidence_pcap` (an evidence pcap without `--web-serve-evidence-pcap`); `413` `too_large` (over 16 MiB); `415` `pcapng_not_supported` or `not_pcap` with a `message` |
    | `GET /api/pcap?id=&n=` | `200` the same file's bytes, `Content-Type: application/vnd.tcpdump.pcap`, `Content-Disposition: attachment; filename="<its name>"`, `X-Sloth-SHA256: verified`, `mismatch` or `no_manifest_entry` (the check of the bytes served), `Cache-Control: no-store`; the errors as above, as JSON |
-   | `HEAD /api/alerts`, `HEAD /api/alert`, `HEAD /api/pcap`, `HEAD /api/pcap/frames` | `405`, `Allow: GET`, as `/api/query` |
+   | `GET /api/bundle?kind=device\|alert\|lookup&id=` | `200` JSON, a detail view's whole answer for its "copy JSON" button ([Copy JSON: the analysis bundle](#copy-json-the-analysis-bundle)); `400` for a kind, an id or a parameter that does not pass (`kind_not_built` for `ble` and `platform`); `404` and `503` as the route it splices; `413` `bundle_too_large` |
+   | `HEAD /api/alerts`, `HEAD /api/alert`, `HEAD /api/pcap`, `HEAD /api/pcap/frames`, `HEAD /api/bundle` | `405`, `Allow: GET`, as `/api/query` |
    | `GET /api/query?sql=` | only with `--web-allow-sql` (otherwise `404`): `200` JSON, the statement's result; `400` with `{"error":"reason"}` for a refused statement; `503` `busy` while another runs, or sloth.db unreadable |
    | `HEAD /api/query` | `405`, `Allow: GET`: nothing to describe without running it |
    | `GET /api/recipes` | only with `--web-allow-sql`: `200` JSON, the box's recipes |
@@ -2666,6 +2667,79 @@ phone width covers the page it opens. Checked at 360 px with touch
 emulation by `web/tools/tap_check.py` (Chromium's DevTools protocol;
 not run by CI, loopback only).
 
+### Copy JSON: the analysis bundle
+
+Owner request 2026-10-27: every detail view (the device drawer, an
+alert's page, the Lookup card) carries a **copy JSON** button and a
+**download .json** button, so the view's data can be pasted into Claude
+(or anything else) for analysis. Both fetch one document,
+`/api/bundle?kind=device|alert|lookup&id=`, the id as the view's own
+route takes it (a MAC; `s<handle>` or `d<rowid>`; a MAC or an IP).
+
+**It re-renders nothing.** Every detail route writes its JSON straight
+into a buffer and keeps no struct, and what it withholds (an unaudited
+alert detail, the alert key, sloth's `incident_id`, the lists a capture
+scope empties) lives in that rendering. So `web_bundle.c` calls the
+route functions themselves and splices their bodies in verbatim:
+`device.drawer` is `/api/device/{mac}`, `alert.page` is
+`/api/alert?id=`, `lookup.card` is `/api/lookup?q=`, and `alert.device`
+/ `lookup.device` the drawer of the device they name (an alert naming
+an address and no MAC carries the address's Lookup card as
+`alert.lookup` instead). A bundle can carry nothing the page would not
+show. `test_bundle.c` compares the spliced bytes with the routes' own
+answers and reruns the alert routes' credential and incident-id checks
+against every kind.
+
+Around the splices:
+
+- **envelope**: `bundle_schema` (semver; fields only added within a
+  major), `kind`, `id`, `generated_at` (`iso`, `unix`), `server`
+  (time zone and UTC offset, host, sloth's version, the page's ETag,
+  uptime), `sensor` (the socket, sensor health and its age, the capture
+  and monitor handles, sloth's launch scope, records/s, the open alerts
+  by severity), `sloth_db` (as `/api/health`), `scope_in_effect` with a
+  sentence saying what it excludes, `page` (`url` and `view`, filled
+  by the browser before copying; the server never echoes an address),
+  and `withheld`, naming what was left out and why.
+- **optional sections**, one registry row each in `web_bundle.c`:
+  `records_recent` / `records_around` (the ticker ring's newest 50
+  records that name the device or address: a stopgap, said so),
+  `observed_vs_thresholds`, `records_by_type_global`, and for the
+  slices still in flight `vendor_research`, `frrs`, `comint_report`,
+  `triage`, `assessment`, `evidence`, `location`, `signal_history`,
+  `distance`. A section without data is
+  `{"available": false, "reason": ...}`, the reason one of `not_built`
+  (this build has no such feature), `no_data`, `too_large`,
+  `withheld`, `budget`, `no_sloth_db`, `not_kept` (the stream carries
+  it, slothweb does not keep it). A slice adds its row and a fill
+  function; the page needs no change.
+- **analysis aids**: `glossary` (every field and unit), `prompt` (a
+  suggested prompt that tells the reader the sensor is passive and one
+  vantage point, and asks for observed versus inferred), `limits`
+  (every cap, whether it cut, each sloth.db read's time).
+
+Bounds: the body is the route's own heap buffer (`web_resp_t
+.body_owned`, freed with the connection) of at most 512 KB. The
+envelope, the primary splice and the aids are required; the optional
+sections are measured against what is left and rolled back to
+`too_large`, named in `limits.truncated_sections`, when they would
+cross it; a required part that cannot fit is `413 bundle_too_large`.
+Each sloth.db read keeps its own 250 ms budget, at most three serial
+reads a bundle. A `scope=` rides along as on every route.
+
+The page: `web/ui/bundle.js` (`window.SlothBundle`, included before
+`app.js` into the one hashed script) with one `SlothBundle.mount()`
+call per view; the copy buttons are `#bundle-btn-drawer`,
+`#bundle-btn-alert` and `#bundle-btn-lookup`. It copies with
+`navigator.clipboard` where the page is a secure context (localhost,
+https) and otherwise, on plain http over a tunnel or Tailscale where
+`navigator.clipboard` does not exist, through a selected hidden
+`<textarea>` and `document.execCommand("copy")`; when both fail it says
+so and focuses the download. The download is a Blob URL of the
+document's own bytes: the one `.href =` on the page, and the only
+`url(` forms the no-external-reference test admits
+(`createObjectURL(` and `revokeObjectURL(`). The policy is unchanged.
+
 ### The tiles' views
 
 | Tile | Opens | The number it shows is |
@@ -3782,6 +3856,7 @@ web/
     web_history.c  /api/history/*, /api/sessions, /api/sessions/new (M5)
     web_flows.c    /api/flows, /api/flows/graph (M6)
     web_alerts.c   /api/alerts, /api/alert: the Alerts page, an alert's page
+    web_bundle.c   /api/bundle: a detail view's answers spliced into one document
     web_alertdb.c  sloth.db's alerts: groups by key, a key's incidents, its device
     web_alertfmt.c the types whose alert detail is shown, audited
     web_alertkb.h  the generated alert knowledge table's symbols
@@ -3798,7 +3873,8 @@ web/
     web_json.c     the JSON writer every outgoing string goes through
     web_assets.h   the generated page's symbols
   ui/              the page sources (index.html, theme.css, page.css, app.js,
-                   glyph.js, evidence.js)
+                   glyph.js, evidence.js, and bundle.js the copy-JSON
+                   control)
   tools/
     embed.c        ui/ -> build/web/web_assets.c (build time only)
     oui_gen.c      web/data/*.csv -> build/web/web_oui_table.c (build time only)

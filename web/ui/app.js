@@ -2760,6 +2760,7 @@
     $("drawer").hidden = false;
     $("dr-close").focus();
     set("dr-mac", mac);
+    SlothBundle.mount($("dr-hd"), "device", mac, scoped);
     $("dr-sw").style.background = keyColor(mac);
     $("dr-mac").className = "d-dim";
     set("dr-note", "loading");
@@ -2848,6 +2849,7 @@
       while (box.firstChild) box.removeChild(box.firstChild);
       set("l-src", j.kind + " " + j.q + ", sloth.db " + j.db + (j.ip_in_scope === false
         ? "; Monitor holds no addresses: an IP is the host's own interfaces' (Local)" : ""));
+      SlothBundle.mount($("l-src"), "lookup", j.q, scoped);
       kvList(box, j.kind === "mac" ? ouiPairs(j.oui) : [["ip", ipVal(j.q, 0)]]);
       if (j.kind === "mac") vendorResearch(box, j.vendor_research, j.oui);
       itemList(box, "names (passive)", j.names, nameLine, false);
@@ -4520,6 +4522,7 @@
   function alertPage(j) {
     var sev = sevOf(j.sev), k = j.kb || null;
     set("ad-head", (j.type_name || j.title) + ": " + j.state + ", from " + j.source);
+    SlothBundle.mount($("ad-head").parentNode, "alert", j.id, scoped);
     // A link opens its alert whatever the scope; the page says when the
     // scope does not hold its type (the rule's input is the other's).
     set("ad-note", "sloth.db " + j.db + (j.in_scope === false

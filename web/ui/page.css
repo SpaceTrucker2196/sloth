@@ -337,6 +337,13 @@ table.qt.dt-fixed td { overflow: hidden; text-overflow: ellipsis; }
 .dr-hd { display: flex; gap: var(--gap); align-items: baseline; flex-wrap: wrap; margin-bottom: var(--gap); }
 .dr-hd b { font-size: 15px; }
 .dr-hd button { margin-left: auto; }
+/* The copy-JSON control (bundle.js): two buttons and a note, inline in
+ * a header; in the drawer it sits with the close button at the right. */
+.bundle { display: inline-flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.bundle button { font-size: 10px; letter-spacing: 0.1em; padding: 2px 8px; }
+.dr-hd .bundle { margin-left: auto; }
+.dr-hd .bundle button { margin-left: 0; }
+.bundle-note { min-width: 0; }
 .kv { display: grid; grid-template-columns: 14ch 1fr; gap: 2px var(--gap); font-size: 12px; margin: var(--gap) 0 14px; }
 .kv .k { color: var(--muted); }
 .kv .v { overflow-wrap: anywhere; }

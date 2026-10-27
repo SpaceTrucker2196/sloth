@@ -7,6 +7,7 @@
 #include "web_alerts.h"
 #include "web_assets.h"
 #include "web_evidence.h"
+#include "web_bundle.h"
 #include "web_flows.h"
 #include "web_frrs.h"
 #include "web_history.h"
@@ -970,6 +971,59 @@ static int route_pcap(const web_req_t *rq, const web_health_t *h, int download,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+/* /api/bundle (web_bundle.h): GET only, like /api/alert. The body is
+ * the bundle's own heap buffer (it can outgrow out), handed to the
+ * server as r->body_owned behind a header built here; the scope echo
+ * is the bundle's own first member, so none is spliced in. */
+static int route_bundle(const web_req_t *rq, const web_health_t *h, char *out,
+                        size_t outsz, web_resp_t *r) {
+    if (rq->is_head) {
+        r->status = 405;
+        return fit(snprintf(out, outsz,
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n"), outsz, &r->out_len);
+    }
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = NULL;
+    size_t bl = 0;
+    int status = 200;
+    if (qlong(rq)) {
+        bl = web_series_error_json("query_too_long", out + WEB_LIVE_HDR_RESERVE,
+                                   outsz - WEB_LIVE_HDR_RESERVE);
+        if (!bl) return -1;
+        return json_answer(rq, h, 400, bl, out, outsz, r);
+    }
+    if (web_bundle_route(h, rq->query, &body, &bl, &status) != 0 || !body || bl == 0) {
+        free(body);
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (fit(snprintf(out, outsz,
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", status, web_http_reason(status), bl), outsz, &r->out_len) != 0) {
+        free(body);
+        return -1;
+    }
+    r->status = status;
+    r->body = (const unsigned char *)body;
+    r->body_owned = (unsigned char *)body;
+    r->body_len = bl;
+    return 0;
+}
+
 /* /api/recipes: docs/wiki/sqlite-schema.md's, as built in. */
 static int route_recipes(const web_req_t *rq, const web_health_t *h, char *out, size_t outsz,
                          web_resp_t *r) {
@@ -1200,6 +1254,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_pcap(rq, h, 0, out, outsz, r);
         if (!strcmp(rq->path, "/api/pcap"))
             return route_pcap(rq, h, 1, out, outsz, r);
+        if (!strcmp(rq->path, "/api/bundle"))
+            return route_bundle(rq, h, out, outsz, r);
         /* Without --web-allow-sql neither exists: a 404 like any path. */
         if (h->sql && h->sql->enabled) {
             if (!strcmp(rq->path, "/api/query"))

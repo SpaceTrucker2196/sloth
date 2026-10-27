@@ -471,18 +471,6 @@ int web_baseline_parse(const char *query, int *metric, char *key,
     return 0;
 }
 
-/* Seconds east of UTC at t, from the calendar fields alone (tm_gmtoff
- * is not C99). */
-static long long utc_offset(long long t) {
-    time_t tt = (time_t)t;
-    struct tm lt, gt;
-    if (!localtime_r(&tt, &lt) || !gmtime_r(&tt, &gt)) return 0;
-    long long d = lt.tm_yday - gt.tm_yday;
-    if (lt.tm_year != gt.tm_year) d = lt.tm_year > gt.tm_year ? 1 : -1;
-    return ((d * 24 + (lt.tm_hour - gt.tm_hour)) * 60 +
-            (lt.tm_min - gt.tm_min)) * 60 + (lt.tm_sec - gt.tm_sec);
-}
-
 size_t web_baseline_json(web_baseline_t *b, int metric, const char *key,
                          long long now_s, char *out, size_t cap) {
     web_bl_cell_t *cells = malloc(WEB_BL_CELLS * sizeof(*cells));
@@ -503,7 +491,7 @@ size_t web_baseline_json(web_baseline_t *b, int metric, const char *key,
     /* The cell a score of now reads: its UTC hour bucket's. */
     web_jw_raw(&w, ",\"now_cell\":");
     web_jw_int(&w, web_bl_cell_index(now_s - now_s % 3600));
-    web_jw_raw(&w, ",\"utc_offset_s\":"); web_jw_int(&w, utc_offset(now_s));
+    web_jw_raw(&w, ",\"utc_offset_s\":"); web_jw_int(&w, web_utc_offset(now_s));
     int fed = b && web_baseline_cells(b, metric, key, cells) == 0;
     web_jw_raw(&w, ",\"fed\":"); web_jw_raw(&w, fed ? "true" : "false");
     web_jw_raw(&w, ",\"cells\":");

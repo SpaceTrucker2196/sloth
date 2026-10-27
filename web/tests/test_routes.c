@@ -174,6 +174,29 @@ static void test_page_makes_no_external_reference(void) {
     };
     for (size_t i = 0; i < sizeof(banned) / sizeof(banned[0]); i++) {
         size_t bl = strlen(banned[i]);
+        if (!strcmp(banned[i], "url(")) {
+            /* "url(" has one sanctioned shape: the Blob URL the copy-JSON
+             * control (web/ui/bundle.js) hands the browser as a download,
+             * created and revoked, from which nothing is fetched. Every
+             * other "url(" is a CSS or script fetch and stays banned.
+             * Seen red with a "url(x.png)" added to page.css. */
+            int blob = 0, other = 0;
+            for (const char *h = ci_find(p, n, "url("); h; ) {
+                if (h - p >= 12 && (!memcmp(h - 12, "createObject", 12) ||
+                                    !memcmp(h - 12, "revokeObject", 12))) {
+                    blob++;
+                } else {
+                    other++;
+                    fprintf(stderr, "    page contains \"url(\" at byte %zu\n",
+                            (size_t)(h - p));
+                }
+                size_t at = (size_t)(h - p) + 4;
+                h = at < n ? ci_find(h + 4, n - at, "url(") : NULL;
+            }
+            WT_EQ(blob, 2);
+            WT_EQ(other, 0);
+            continue;
+        }
         for (const char *hit = ci_find(p, n, banned[i]); hit; ) {
             int ok = 0;
             for (size_t k = 0; k < sizeof(inline_ok) / sizeof(inline_ok[0]); k++)
@@ -241,6 +264,30 @@ static void test_page_renders_stream_values_as_text(void) {
     };
     for (size_t i = 0; i < sizeof(sinks) / sizeof(sinks[0]); i++) {
         const char *hit = ci_find(p, n, sinks[i]);
+        if (!strcmp(sinks[i], ".href =")) {
+            /* The one sanctioned sink: the copy-JSON control's download
+             * (web/ui/bundle.js) gives an anchor a Blob URL of the
+             * bundle's own bytes, on a line that says so; the download
+             * name is set as a property, never through setAttribute. No
+             * other ".href =" anywhere. Seen red with a second
+             * "a.href = u" added to bundle.js, and with the comment
+             * dropped from the sanctioned line. */
+            static const char line[] =
+                "    a.href = URL.createObjectURL(blob); /* sink: blob url, constant origin */\n";
+            int count = 0;
+            for (const char *h = hit; h; ) {
+                count++;
+                int ok = h - p >= 5 && (size_t)(n - (h - p) + 5) >= sizeof(line) - 1 &&
+                         !memcmp(h - 5, line, sizeof(line) - 1);
+                if (!ok) fprintf(stderr, "    page contains \".href =\" at byte %zu\n",
+                                 (size_t)(h - p));
+                WT_ASSERT(ok);
+                size_t at = (size_t)(h - p) + 7;
+                h = at < n ? ci_find(h + 7, n - at, ".href =") : NULL;
+            }
+            WT_EQ(count, 1);
+            continue;
+        }
         if (hit)
             fprintf(stderr, "    page contains \"%s\" at byte %zu\n",
                     sinks[i], (size_t)(hit - p));

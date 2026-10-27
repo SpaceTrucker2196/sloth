@@ -27,6 +27,8 @@
  *   /api/recipes  JSON: its recipes; both 404 unless --web-allow-sql
  *   /api/ble, /api/ble/alerts, /api/ble/{addr}
  *                 JSON: the BLE view (web_ble.h); out_of_scope under Local
+ *   /api/bundle   JSON: a detail view's whole answer for the page's
+ *                 "copy JSON" (web_bundle.h), GET only; a heap body
  *   /events       Server-Sent Events: tick, record, anomaly, ping
  *   anything else 404
  *

@@ -701,6 +701,11 @@ WEB_CORE_SRCS   = src/dot11_frame.c src/radiotap.c src/wifi_freq.c src/dns_wire.
                   src/dot11_ie.c src/netstr.c
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C) \
                   $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C)
+# slothweb has no version of its own: the bundle's envelope
+# (web/src/web_bundle.c) names sloth's, read out of include/sloth.h
+# here because web/ never includes sloth.h (it links a few leaf
+# sources from src/, not sloth's state).
+WEB_VERSION_DEF = -DSLOTHWEB_VERSION='"$(shell sed -n 's/^\#define SLOTH_VERSION "\(.*\)"/\1/p' include/sloth.h)"'
 WEB_TEST_SRCS   = $(wildcard web/tests/*.c) web/tools/oui_csv.c web/tools/demo.c src/db_schema.c \
                   src/rsn_ie.c src/ip_color.c src/tui_palette.c \
                   src/tui.c src/view_labels.c
@@ -824,7 +829,7 @@ $(WEB_ASM_C): $(WEB_ASMGEN) $(WEB_ASM_STAMP) $(WEB_ASM_MD) include/sloth_alerts.
 	mv $@.tmp $@
 
 web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C)
-	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -iquote src -o slothweb $(WEB_MAIN) \
+	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) $(WEB_VERSION_DEF) -Iweb/src -iquote src -o slothweb $(WEB_MAIN) \
 	      $(WEB_SRCS) $(WEB_CORE_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
 
 # The demo data (M6, #164): build/web/slothweb-demo writes a synthetic
@@ -855,7 +860,7 @@ web-quickstart-check:
 # 127.0.0.1 and ::1. The test links the embedder's
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
 web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C) $(WEB_ASMGEN)
-	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) -DSLOTHWEB_DEMO_LIB -Iweb/src -Iweb/tests -Iweb/tools \
+	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) $(WEB_VERSION_DEF) -DSLOTHWEB_DEMO_LIB -Iweb/src -Iweb/tests -Iweb/tools \
 	      -Iinclude -iquote web/tools -iquote src -iquote research -DWEB_OUI_EXPECT='"$(if $(WEB_OUI_CSVS),ieee,sloth)"' \
 	      -DWEB_OUI_DATA='"$(WEB_OUI_DIR)"' \
 	      -DWEB_BTSIG_EXPECT='"$(if $(WEB_BTSIG_CSVS),sig,none)"' \
