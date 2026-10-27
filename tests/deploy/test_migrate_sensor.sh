@@ -297,6 +297,15 @@ run
 check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
 check 'grep -q "^SLOTH_ARGS=.*--iface eth0 --iface alfa0" "$ROOT/etc/default/sloth"' "--iface not carried: $(grep SLOTH_ARGS= "$ROOT/etc/default/sloth" 2>&1)"
 
+# ── 1d. --bt-monitor is carried, not refused ─────────────────────────────
+# The hardened unit lists AF_BLUETOOTH for it; before that it was an
+# unknown flag and the migration refused the whole unit.
+CASE=bt-monitor-carried
+setup bt-monitor-carried '    --bt-monitor \'
+run
+check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
+check 'grep -q "^SLOTH_ARGS=.*--bt-monitor" "$ROOT/etc/default/sloth"' "--bt-monitor not carried: $(grep SLOTH_ARGS= "$ROOT/etc/default/sloth" 2>&1)"
+
 # ── 2. apply: flag carry-over, copy, unit, verify ────────────────────────
 CASE=apply
 setup apply

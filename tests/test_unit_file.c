@@ -42,6 +42,7 @@
 #define UF_PATH_WIKI     "docs/wiki/deployment.md"
 #define UF_PATH_WEB_UNIT "packaging/systemd/slothweb.service"
 #define UF_PATH_WEB_DEFAULTS "packaging/default/slothweb"
+#define UF_PATH_BLE_UNIT "packaging/systemd/sloth-ble-scan.service"
 #define UF_MAX_LINES     512
 
 static char *uf_slurp(const char *path) {
@@ -471,6 +472,16 @@ static void test_unit_flag_pairs_are_consistent(void) {
     ASSERT(uf_has_token(fam, "AF_UNIX"));
     ASSERT(uf_has_token(fam, "AF_NETLINK"));
     ASSERT(uf_has_token(fam, "AF_PACKET"));
+    /* --bt-monitor, given in SLOTH_ARGS, opens libpcap's
+     * bluetooth-monitor: an AF_BLUETOOTH socket, refused with
+     * EAFNOSUPPORT without this token (measured 2026-10-26). The flag
+     * arrives through the defaults file, which this test cannot see, so
+     * the family is always listed. */
+    ASSERT(uf_has_token(fam, "AF_BLUETOOTH"));
+    static const char *const fams[] = {
+        "AF_UNIX", "AF_NETLINK", "AF_PACKET", "AF_BLUETOOTH", "AF_INET", "AF_INET6"
+    };
+    ASSERT(uf_tokens_within(fam, fams, 6));
 
     /* The data socket is a unix: path under the RuntimeDirectory, so
      * SO_PEERCRED is the authentication and nothing listens on a port. */
@@ -891,6 +902,227 @@ static int uf_is_recipe(const char *line) { return line[0] == '\t'; }
  * reason unrelated to the install targets. */
 #define UF_MAX_MAKE_LINES 4096
 
+/* ── sloth-ble-scan.service ──
+ *
+ * The passive-scan holder for --bt-monitor. What has to stay true: it
+ * holds CAP_NET_ADMIN and nothing else, reaches AF_BLUETOOTH and
+ * nothing else, displaces bluetoothd rather than fighting it, runs
+ * inside its sandbox including the step that brings hciN down, lives
+ * and dies with the sensor without the sensor depending on it, and is
+ * installed but never enabled by make. Each absence below was seen red
+ * under a one-line mutation (docs/wiki/log.md, the 2026-10-26
+ * sloth-ble-scan entry, names them). */
+
+/* Any directive `key=` carrying `tok` — After= and kin may be given on
+ * several lines, and uf_value() reads only the first. */
+static int uf_any_has(char *lines[], int n, const char *key, const char *tok) {
+    size_t k = strlen(key);
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (!uf_is_directive(l)) continue;
+        if (strncmp(l, key, k) == 0 && l[k] == '=' && uf_has_token(l + k + 1, tok))
+            return 1;
+    }
+    return 0;
+}
+
+static void test_scanner_any_has_reads_every_line(void) {
+    char src[] = "[Unit]\nAfter=a.service\nAfter=b.service c.service\n"
+                 "# After=d.service\nAfterX=e.service\n";
+    char *lines[16];
+    int n = uf_logical_lines(src, lines, 16);
+    ASSERT(uf_any_has(lines, n, "After", "a.service"));
+    ASSERT(uf_any_has(lines, n, "After", "c.service"));
+    ASSERT(!uf_any_has(lines, n, "After", "d.service"));
+    ASSERT(!uf_any_has(lines, n, "After", "e.service"));
+    ASSERT(!uf_any_has(lines, n, "Before", "a.service"));
+}
+
+static void test_ble_scan_unit_privilege(void) {
+    char *buf = uf_slurp(UF_PATH_BLE_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    ASSERT(strstr(buf, "/home/") == NULL);
+    ASSERT(strstr(buf, "ConditionPathExists=") == NULL);
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    ASSERT_GT(n, 0);
+    ASSERT_LT(n, UF_MAX_LINES);
+
+    /* A transient uid, not the sloth account that owns the sensor's
+     * data. Given once; no User= that could name a real account. */
+    ASSERT_STR(uf_value(lines, n, "DynamicUser"), "yes");
+    ASSERT_EQ(uf_count(lines, n, "DynamicUser"), 1);
+    ASSERT(uf_value(lines, n, "User") == NULL);
+
+    /* Exactly CAP_NET_ADMIN: the kernel's check for HCI_CHANNEL_USER and
+     * HCIDEVDOWN. Not CAP_NET_RAW — that is the monitor channel's, and
+     * the monitor channel is sloth's. */
+    static const char *const allow[] = { "CAP_NET_ADMIN" };
+    const char *bound = uf_value(lines, n, "CapabilityBoundingSet");
+    const char *amb   = uf_value(lines, n, "AmbientCapabilities");
+    if (!uf_tokens_within(bound, allow, 1))
+        fprintf(stderr, "    ble-scan unit: CapabilityBoundingSet=%s, want CAP_NET_ADMIN\n",
+                bound ? bound : "(absent)");
+    ASSERT(uf_tokens_within(bound, allow, 1));
+    ASSERT(uf_tokens_within(amb, allow, 1));
+    ASSERT(uf_has_token(bound, "CAP_NET_ADMIN"));
+    ASSERT(uf_has_token(amb, "CAP_NET_ADMIN"));
+    ASSERT_EQ(uf_count(lines, n, "CapabilityBoundingSet"), 1);
+    ASSERT_EQ(uf_count(lines, n, "AmbientCapabilities"), 1);
+    ASSERT_STR(uf_value(lines, n, "NoNewPrivileges"), "true");
+
+    /* The installed helper, inside the sandbox, both steps: no `+`,
+     * `!` or `-` prefix on either. */
+    const char *start = uf_value(lines, n, "ExecStart");
+    const char *pre   = uf_value(lines, n, "ExecStartPre");
+    ASSERT(start != NULL && strncmp(start, "/usr/local/sbin/sloth-ble-scan ", 31) == 0);
+    ASSERT(pre != NULL && strncmp(pre, "/usr/local/sbin/sloth-ble-scan --down ", 38) == 0);
+    ASSERT_EQ(uf_count(lines, n, "ExecStart"), 1);
+    ASSERT_EQ(uf_count(lines, n, "ExecStartPre"), 1);
+    free(buf);
+}
+
+static void test_ble_scan_unit_sandbox(void) {
+    char *buf = uf_slurp(UF_PATH_BLE_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+
+    static const struct { const char *key, *val; } want[] = {
+        { "ProtectSystem",            "strict"    },
+        { "ProtectHome",              "true"      },
+        { "PrivateTmp",               "true"      },
+        { "PrivateDevices",           "true"      },
+        { "ProtectKernelTunables",    "true"      },
+        { "ProtectKernelModules",     "true"      },
+        { "ProtectKernelLogs",        "true"      },
+        { "ProtectControlGroups",     "true"      },
+        { "ProtectClock",             "true"      },
+        { "ProtectHostname",          "true"      },
+        { "ProtectProc",              "invisible" },
+        { "RestrictNamespaces",       "true"      },
+        { "RestrictRealtime",         "true"      },
+        { "RestrictSUIDSGID",         "true"      },
+        { "LockPersonality",          "true"      },
+        { "MemoryDenyWriteExecute",   "true"      },
+        { "SystemCallArchitectures",  "native"    },
+        { "SystemCallErrorNumber",    "EPERM"     },
+        { "MemoryMax",                "16M"       },
+        { "Restart",                  "on-failure" },
+        { "KillSignal",               "SIGTERM"   },
+    };
+    for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+        const char *v = uf_value(lines, n, want[i].key);
+        if (!v || strcmp(v, want[i].val) != 0)
+            fprintf(stderr, "    ble-scan unit: %s=%s wanted, got %s\n",
+                    want[i].key, want[i].val, v ? v : "(absent)");
+        ASSERT(v != NULL && strcmp(v, want[i].val) == 0);
+    }
+
+    /* AF_BLUETOOTH and nothing else, given once. */
+    static const char *const fams[] = { "AF_BLUETOOTH" };
+    const char *fam = uf_value(lines, n, "RestrictAddressFamilies");
+    if (!uf_tokens_within(fam, fams, 1))
+        fprintf(stderr, "    ble-scan unit: RestrictAddressFamilies=%s, want AF_BLUETOOTH\n",
+                fam ? fam : "(absent)");
+    ASSERT(uf_tokens_within(fam, fams, 1));
+    ASSERT_EQ(uf_count(lines, n, "RestrictAddressFamilies"), 1);
+
+    /* Either would break it rather than harden it: AF_BLUETOOTH exists
+     * only in the initial network namespace, and a capability held in a
+     * private user namespace does not pass the kernel's check. */
+    ASSERT(uf_value(lines, n, "PrivateNetwork") == NULL);
+    ASSERT(uf_value(lines, n, "PrivateUsers") == NULL);
+
+    int allow_seen = 0, deny_seen = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (strncmp(l, "SystemCallFilter=", 17) != 0) continue;
+        if (uf_has_token(l + 17, "@system-service")) allow_seen = 1;
+        if (uf_has_token(l + 17, "~@privileged")) deny_seen = 1;
+    }
+    ASSERT(allow_seen);
+    ASSERT(deny_seen);
+    free(buf);
+}
+
+static void test_ble_scan_unit_relationships(void) {
+    char *buf = uf_slurp(UF_PATH_BLE_UNIT);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+
+    /* bluetoothd holds the controller; the user channel is refused while
+     * it does. */
+    ASSERT(uf_any_has(lines, n, "Conflicts", "bluetooth.service"));
+    /* After the sensor, so sloth sees the Reset and the parameters;
+     * PartOf it, so it lives as long as the sensor; pulled in by the
+     * sensor once enabled. */
+    ASSERT(uf_any_has(lines, n, "After", "sloth-sensor.service"));
+    ASSERT(uf_any_has(lines, n, "PartOf", "sloth-sensor.service"));
+    ASSERT(uf_any_has(lines, n, "WantedBy", "sloth-sensor.service"));
+    /* Not started at boot on its own, and never ordered before the
+     * sensor. */
+    ASSERT(!uf_any_has(lines, n, "WantedBy", "multi-user.target"));
+    ASSERT(!uf_any_has(lines, n, "Before", "sloth-sensor.service"));
+    free(buf);
+
+    /* The sensor must start without it: nothing in the sensor's unit
+     * requires, binds to or waits on the scan. */
+    char *sb = uf_slurp(UF_PATH_UNIT);
+    ASSERT(sb != NULL);
+    if (!sb) return;
+    char *sl[UF_MAX_LINES];
+    int sn = uf_logical_lines(sb, sl, UF_MAX_LINES);
+    static const char *const deps[] = {
+        "Requires", "Requisite", "BindsTo", "Wants", "After", "Upholds"
+    };
+    for (size_t i = 0; i < sizeof(deps) / sizeof(deps[0]); i++) {
+        if (uf_any_has(sl, sn, deps[i], "sloth-ble-scan.service"))
+            fprintf(stderr, "    sensor unit: %s=sloth-ble-scan.service\n", deps[i]);
+        ASSERT(!uf_any_has(sl, sn, deps[i], "sloth-ble-scan.service"));
+    }
+    free(sb);
+}
+
+/* make installs the helper and the unit, and enables nothing: taking
+ * the controller from bluetoothd is the operator's decision. Recipe
+ * lines only; the closing @echo hints may name systemctl. */
+static void test_makefile_installs_ble_scan_without_enabling(void) {
+    char *buf = uf_slurp("Makefile");
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    static char *lines[UF_MAX_MAKE_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_MAKE_LINES);
+    int in_install = 0, in_service = 0, bin = 0, unit = 0, enables = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        if (!uf_is_recipe(l)) {
+            in_install = strncmp(l, "install:", 8) == 0;
+            in_service = strncmp(l, "install-service:", 16) == 0;
+            if (in_install) ASSERT(strstr(l, "sloth-ble-scan") != NULL);
+            continue;
+        }
+        if (in_install && strstr(l, "install -m 755 sloth-ble-scan ") &&
+            strstr(l, "$(DESTDIR)$(PREFIX)/sbin/sloth-ble-scan")) bin = 1;
+        if (in_service && strstr(l, "packaging/systemd/sloth-ble-scan.service")) unit = 1;
+        if ((in_install || in_service) && strncmp(l, "\t@echo", 6) != 0 &&
+            strstr(l, "systemctl")) {
+            fprintf(stderr, "    Makefile install recipe runs systemctl: %s\n", l);
+            enables = 1;
+        }
+    }
+    ASSERT(bin);
+    ASSERT(unit);
+    ASSERT(!enables);
+    free(buf);
+}
+
 static void test_makefile_install_targets(void) {
     char *buf = uf_slurp("Makefile");
     ASSERT(buf != NULL);
@@ -986,4 +1218,9 @@ void run_unit_file_tests(void) {
     RUN_TEST(test_web_unit_execstart);
     RUN_TEST(test_web_defaults_file);
     RUN_TEST(test_makefile_install_targets);
+    RUN_TEST(test_scanner_any_has_reads_every_line);
+    RUN_TEST(test_ble_scan_unit_privilege);
+    RUN_TEST(test_ble_scan_unit_sandbox);
+    RUN_TEST(test_ble_scan_unit_relationships);
+    RUN_TEST(test_makefile_installs_ble_scan_without_enabling);
 }

@@ -29,6 +29,9 @@ sloth-research-mcp
 /slothweb
 /slothweb_test
 
+# The passive-scan helper (src/ble_scan/), built by `make` on Linux.
+/sloth-ble-scan
+
 
 # libFuzzer writes its reproducers into the working directory, so a
 # `make fuzz` that finds something leaves crash-/leak-/timeout- files

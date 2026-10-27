@@ -12,7 +12,9 @@ HCI monitor channel — libpcap's `bluetooth-monitor` device, link type
 advertising reports, and the host's own scan, advertise and connect
 commands. The channel is receive-only by construction. sloth sends no
 HCI or MGMT command; **the operator starts a passive scan** with their
-own stack, and sloth reports in `sensor_health` whether the scan it saw
+own stack — or, where nothing else uses Bluetooth, with
+`sloth-ble-scan.service`, which holds one through the HCI user channel
+for the life of the sensor — and sloth reports in `sensor_health` whether the scan it saw
 configured was in fact passive, and raises `BT_OWN_TRANSMIT` when the
 host it listens through was told to transmit.
 
@@ -26,9 +28,13 @@ host it listens through was told to transmit.
 (`capture_fallback_device`), `src/main.c`, `MISSION.md` §1–§2;
 Bluetooth Core Specification v5.4 Vol 4 Part E §5.2 (arrayed parameters), §5.4, §7.1, §7.3.2, §7.3.18,
 §7.7.65.2, §7.7.65.13, §7.8; Vol 6 Part B §2.3.1 (legacy PDU payload); Linux `include/net/bluetooth/hci_mon.h` and
-`net/bluetooth/hci_sock.c`; libpcap `pcap-bt-monitor-linux.c`; #144.
+`net/bluetooth/hci_sock.c`; libpcap `pcap-bt-monitor-linux.c`; #144;
+`src/ble_scan/main.c`, `src/ble_scan/ble_scan_cmd.c`, `tests/test_ble_scan.c`,
+`packaging/systemd/sloth-ble-scan.service` (the passive-scan helper);
+Core Spec v5.4 Vol 4 Part E §7.3.1, §7.7.14–§7.7.16, §7.8.1, §7.8.10,
+§7.8.11, §7.8.64, §7.8.65; Vol 6 Part B §4.4.3.1 (passive scanning).
 
-**Last updated**: 2026-10-23 (#156 item 2 follow-up: `BLE_ADV_FLOOD` and `BLE_WATCHLIST` pinned unchanged by the flag, the flood also with linked addresses inside it; which side of a link eviction and retention can free), 2026-10-23 (#156 item 2 integration: hints feed only the `[*]` estimate, `BLE_HID_UNEXPECTED` unchanged by the flag; links window-scoped; a linked entry keeps its digests until the link goes), 2026-10-23 (#156 item 2 review round: sequential-spray poisoning and the flood gate judged at commit; no link under controller duplicate filtering; banded `sensor_health` fields; expiry without frames; 3600 s poison window, full list fails closed; Fast Pair token from a 5-octet filter), 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
+**Last updated**: 2026-10-26 (`sloth-ble-scan`: a passive LE scan held over the HCI user channel for the life of the sensor, its command set and why it is consistent with MISSION §2), 2026-10-23 (#156 item 2 follow-up: `BLE_ADV_FLOOD` and `BLE_WATCHLIST` pinned unchanged by the flag, the flood also with linked addresses inside it; which side of a link eviction and retention can free), 2026-10-23 (#156 item 2 integration: hints feed only the `[*]` estimate, `BLE_HID_UNEXPECTED` unchanged by the flag; links window-scoped; a linked entry keeps its digests until the link goes), 2026-10-23 (#156 item 2 review round: sequential-spray poisoning and the flood gate judged at commit; no link under controller duplicate filtering; banded `sensor_health` fields; expiry without frames; 3600 s poison window, full list fails closed; Fast Pair token from a 5-octet filter), 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
 
 ---
 
@@ -524,8 +530,12 @@ the point of sloth's fields is that it checks itself.
    desktop Bluetooth panel's device search and MGMT Start Discovery all
    run an **active** scan in the Linux kernel. Do not use them.
 3. **Start a passive LE scan** with a tool that sets `LE_Scan_Type` =
-   passive. BlueZ's deprecated `hcitool` does it directly:
-   `hcitool -i hci0 lescan --passive --duplicates`. It uses the legacy
+   passive. On a host where nothing else uses Bluetooth,
+   `sloth-ble-scan.service` does it for the life of the sensor (below,
+   and [[deployment]] §7); it starts after sloth, so step 1's order
+   holds. BlueZ's deprecated `hcitool` does it directly:
+   `hcitool -i hci0 lescan --passive --duplicates`, where the kernel
+   lets it (on the reference host it fails with an I/O error). It uses the legacy
    scan commands, so reports arrive as subevent 0x02. Another scanner on
    the same controller (bluetoothd's own) can make it fail with an I/O
    error; stop that first. On a **BT 5 controller** the legacy commands
@@ -562,6 +572,90 @@ the point of sloth's fields is that it checks itself.
    `ble_ext_adv_undecoded` is extended report events that reached no
    row: every report in them the tail of a fragmented advertisement
    (`ble_ext_adv_fragments`).
+
+### Holding the scan: `sloth-ble-scan`
+
+`sloth-ble-scan` (`src/ble_scan/`, installed to `/usr/local/sbin` by
+`make install`) is the operator's tool for step 3 on a host where
+nothing else uses Bluetooth; `sloth-ble-scan.service` runs it for the
+life of the sensor ([[deployment]] §7). It exists because BlueZ has no
+passive scan a service can hold: `bluetoothctl scan on` and MGMT
+discovery are active, and on the reference host (kernel 7.0, Intel
+8087:0aaa, BlueZ 5.87) `hcitool lescan --passive` fails with
+`Set scan parameters failed: Input/output error` even with bluetoothd
+masked — `btmon` shows the command never reached the controller,
+because the kernel refuses raw commands on the normal HCI socket while
+it manages the device.
+
+The helper takes the controller over the **HCI user channel** instead:
+with bluetoothd masked and `hciN` down (`sloth-ble-scan --down hciN`,
+the `HCIDEVDOWN` ioctl), it binds an AF_BLUETOOTH socket to
+`HCI_CHANNEL_USER`, which the kernel grants to one holder at a time and
+only with `CAP_NET_ADMIN`. It then sends exactly:
+
+| Command | Opcode | Parameters (Core Spec v5.4 Vol 4 Part E) |
+|---|---|---|
+| HCI_Reset | 0x0C03 | none (§7.3.2) |
+| Set Event Mask | 0x0C01 | `ff ff ff ff ff ff bf 3d` — LE Meta (bit 61) and Hardware Error (bit 15) on (§7.3.1) |
+| LE Set Event Mask | 0x2001 | `02 10 00 00 00 00 00 00` — LE Advertising Report and LE Extended Advertising Report only (§7.8.1) |
+| LE Set Scan Parameters | 0x200B | `LE_Scan_Type` **0x00 passive**, interval = window = 0x0060 (60 ms), own address public, filter policy 0 (§7.8.10) |
+| LE Set Scan Enable | 0x200C | `01 00` to hold, `00 00` on SIGTERM/SIGINT (§7.8.11) |
+
+A controller that refuses the legacy parameters as Unknown HCI Command
+(0x01) or Unsupported Feature or Parameter Value (0x11) gets the
+extended pair instead — LE Set Extended Scan Parameters (0x2041, 1M PHY,
+`Scan_Type` 0x00, §7.8.64) and LE Set Extended Scan Enable (0x2042,
+Duration and Period 0, §7.8.65) — under the same passive rule. After a
+Reset no extended command has been issued, so a controller that has
+both accepts the legacy set; the reference host's did (7489 legacy
+advertising reports from 74 addresses in 60 s, all of them seen by a
+concurrent `sloth --bt-monitor` as `ble_adv_reports` 7489 with
+`ble_own_tx` `never` and no `BT_OWN_TRANSMIT`).
+
+It reads every event and discards it unopened — the socket has to be
+drained or the controller stalls — and never prints advertising
+content: sloth is the decoder. A Hardware Error event (§7.7.16), or the
+unprompted Command Complete for opcode 0x0000 a controller sends when it
+restarts (§7.7.14), re-runs the whole sequence, at most five times a
+minute; a controller that goes away ends the process for systemd to
+restart. It logs one line at start and one per re-establish. A bind
+refused with `EBUSY` says what to do: mask `bluetooth.service` and
+bring `hciN` down.
+
+**Why this is consistent with MISSION §2.** The rule is that a receiver
+is used only to receive, and that a host controller is listened to
+"through a passive scan the operator started".
+
+- A passive scan puts no frame on the air: in passive scanning the Link
+  Layer only receives and sends no SCAN_REQ (Core Spec v5.4 Vol 6 Part B
+  §4.4.3.1). `LE_Scan_Type` is a constant of the command builder, which
+  takes no scan-type argument; every packet then passes
+  `bles_cmd_allowed()`, an independent check of opcode, length and
+  scan type with its own spelling of "passive", before it is written,
+  and a packet refused there aborts the helper. `tests/test_ble_scan.c`
+  pins every command byte for byte against hand-built arrays, proves the
+  builder cannot emit a scan type other than 0x00 over every input, and
+  proves the gate refuses an active scan (legacy and per PHY),
+  advertising, connection, inquiry, page, Write Scan Enable and vendor
+  commands — each seen red under a mutation of the guard.
+- sloth itself still sends no HCI command. The builder is compiled into
+  the helper and the test binary only; `tests/test_ble_scan.c ::
+  test_helper_is_not_linked_into_sloth` fails if any list `sloth` is
+  built from names it.
+- The helper is an operator tool, like `sloth-monitor-up` for the
+  802.11 radio: a separate binary, run by a unit the operator enables.
+  And sloth checks it: every command the helper sends crosses the
+  monitor channel, so the Reset sets `ble_own_tx_baseline` to `1`, the
+  parameters set `ble_scan_mode` to `passive`, and any transmitting
+  state would raise `BT_OWN_TRANSMIT`.
+
+What the helper does not control: binding the user channel opens the
+device and releasing it closes it, which runs the kernel driver's own
+open and shutdown path (`hci_dev_open`, the vendor shutdown). None of it
+is an over-the-air transmission, and none of it is a command the helper
+chose. Nothing else on the host can use the controller while the
+helper holds it, which is why the unit conflicts with
+`bluetooth.service`.
 
 ### Warnings
 
@@ -612,3 +706,5 @@ no capture is committed.
 - [[non-ip-sensors]] — the sensor-family roadmap BLE came from.
 - [[monitor-mode]] — the 802.11 counterpart: sloth reads a monitor
   interface and never configures one.
+- [[deployment]] §7 — `sloth-ble-scan.service`: installing, enabling and
+  verifying the passive-scan holder.

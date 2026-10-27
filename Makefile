@@ -405,7 +405,7 @@ $(LINK_STAMP):      STAMP = $(OBJDIR) $(CC) $(CFLAGS) $(LDFLAGS)
 
 .PHONY: all clean install embedded check-deps sbom
 
-all: check-deps $(TARGET)
+all: check-deps $(TARGET) $(BLE_SCAN_BIN)
 
 # ── Dependency floors (#142) ────────────────────────────────────────────────
 # The minimum library versions, checked before compiling rather than
@@ -484,6 +484,24 @@ $(OBJDIR)/%.o: %.c $(OBJDIR)/.flags
 	$(CC) $(CFLAGS) -MMD -MP -Iinclude -Isrc -Iresearch -c -o $@ $<
 
 $(CORE_LIB): $(CORE_OBJS) $(OBJDIR)/.members
+
+# ── sloth-ble-scan ─────────────────────────────────────────────────────────
+# The operator's passive-scan helper for --bt-monitor (docs/wiki/ble.md):
+# holds a PASSIVE LE scan on hciN through the HCI user channel. A separate
+# binary on purpose, like sloth-monitor-up: sloth sends no HCI command
+# (MISSION.md §2), so nothing under src/ble_scan/ is in any list `sloth`
+# links, and tests/test_ble_scan.c checks that it stays out. Linux only
+# (AF_BLUETOOTH); in `all` there so every matrix config compiles it under
+# -Werror. Rebuilt when the config's flag stamp moves, like an object,
+# so a warm tree cannot hand -Werror a binary it never compiled.
+BLE_SCAN_SRCS = src/ble_scan/main.c src/ble_scan/ble_scan_cmd.c src/sloth_clock.c
+BLE_SCAN_HDRS = src/ble_scan/ble_scan_cmd.h src/sloth_clock.h
+ifeq ($(UNAME),Linux)
+    BLE_SCAN_BIN = sloth-ble-scan
+endif
+
+sloth-ble-scan: $(BLE_SCAN_SRCS) $(BLE_SCAN_HDRS) $(OBJDIR)/.flags
+	$(CC) $(CFLAGS) -iquote src -o $@ $(BLE_SCAN_SRCS) $(filter -pie -Wl%,$(LDFLAGS))
 
 # Minimal build for embedded targets (no ncurses, no pcap, no sqlite)
 embedded:
@@ -781,7 +799,7 @@ endif
 # TEST_CFLAGS is not CFLAGS. TEST_INCS is the include set every test-build
 # translation unit has always been compiled with.
 TEST_SRCS        = $(wildcard tests/*.c)
-TEST_ONLY_SRCS   = src/reset_all.c \
+TEST_ONLY_SRCS   = src/reset_all.c src/ble_scan/ble_scan_cmd.c \
                    $(filter-out %/main.c research/query.c src/libver.c,$(RESEARCH_SRCS) $(MCP_SRCS))
 TEST_CORE_SRCS   = $(CORE_SRCS_ALL) src/tui.c $(TEST_ONLY_SRCS)
 TEST_INCS        = -Iinclude -Isrc -Itests -Iresearch/ingest -Iresearch -Iresearch/mcp
@@ -1210,7 +1228,7 @@ mutate:
 clean:
 	rm -rf build
 	rm -f $(TARGET) $(TEST_BIN) $(NOFLAGS_BIN) research_ingest sloth-research-mcp
-	rm -f slothweb slothweb_test
+	rm -f slothweb slothweb_test sloth-ble-scan
 	rm -f sloth_test_pcap   # the pre-#116 capture-path binary
 	rm -f $(patsubst %.c,%.o,$(CORE_SRCS_ALL) $(APP_SRCS) $(TEST_ONLY_SRCS) $(wildcard tests/*.c))
 
@@ -1247,7 +1265,10 @@ $(STAMPS): FORCE
 # so `make web` comes first, as the build user, and install refuses
 # without it, or when any of its inputs is newer than it: a pull
 # followed by `make` and `sudo make install` would otherwise install the
-# old slothweb beside the new unit and UI.
+# old slothweb beside the new unit and UI. sloth-ble-scan, the
+# passive-scan helper sloth-ble-scan.service runs, goes to sbin beside
+# sloth-monitor-up: both are operator tools that prepare a receiver, and
+# neither is ever started by sloth.
 # DESTDIR is honoured throughout so CI can stage into a scratch root and
 # `systemd-analyze verify` the result without touching the runner.
 #
@@ -1259,6 +1280,10 @@ $(STAMPS): FORCE
 # silently replaced. slothweb.service goes in beside it; its
 # /etc/default/slothweb only where there is none (no-clobber: it holds the
 # operator's bind and allowed peers, and has no backup to fall back on).
+# sloth-ble-scan.service is installed like the other two units and is
+# never enabled here: it takes the controller away from bluetoothd, which
+# is the operator's decision (docs/wiki/deployment.md §7). It
+# has no defaults file; its one setting is a drop-in.
 # The units are written for PREFIX=/usr/local; a different prefix is
 # substituted at install time so the text in packaging/ stays the one
 # tests/test_unit_file.c scans.
@@ -1267,7 +1292,7 @@ UNITDIR     ?= /etc/systemd/system
 SYSUSERSDIR ?= /usr/lib/sysusers.d
 DEFAULTDIR  ?= /etc/default
 
-install: $(TARGET)
+install: $(TARGET) sloth-ble-scan
 	@[ -x slothweb ] || { echo "install: no ./slothweb; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
 	@new=$$(find web/src web/ui web/tools web/data $(WEB_RECIPES_MD) Makefile -type f -newer slothweb 2>/dev/null | head -n 1); \
 	  [ -z "$$new" ] || { echo "install: ./slothweb is older than $$new; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
@@ -1275,6 +1300,7 @@ install: $(TARGET)
 	install -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)
 	install -m 755 slothweb $(DESTDIR)$(PREFIX)/bin/slothweb
 	install -m 755 packaging/bin/sloth-monitor-up $(DESTDIR)$(PREFIX)/sbin/sloth-monitor-up
+	install -m 755 sloth-ble-scan $(DESTDIR)$(PREFIX)/sbin/sloth-ble-scan
 	install -m 644 research.db $(DESTDIR)$(PREFIX)/share/sloth/research.db
 
 .PHONY: install-service
@@ -1290,11 +1316,16 @@ install-service:
 	    > $(DESTDIR)$(UNITDIR)/slothweb.service.tmp
 	install -m 644 $(DESTDIR)$(UNITDIR)/slothweb.service.tmp $(DESTDIR)$(UNITDIR)/slothweb.service
 	rm -f $(DESTDIR)$(UNITDIR)/slothweb.service.tmp
+	sed -e 's|/usr/local/|$(PREFIX)/|g' packaging/systemd/sloth-ble-scan.service \
+	    > $(DESTDIR)$(UNITDIR)/sloth-ble-scan.service.tmp
+	install -m 644 $(DESTDIR)$(UNITDIR)/sloth-ble-scan.service.tmp $(DESTDIR)$(UNITDIR)/sloth-ble-scan.service
+	rm -f $(DESTDIR)$(UNITDIR)/sloth-ble-scan.service.tmp
 	[ -e $(DESTDIR)$(DEFAULTDIR)/slothweb ] || \
 	    install -m 644 packaging/default/slothweb $(DESTDIR)$(DEFAULTDIR)/slothweb
 	@echo "installed units, sysusers fragment and defaults; next:"
 	@echo "  systemd-sysusers && systemctl daemon-reload && systemctl enable --now sloth-sensor"
 	@echo "  systemctl enable --now slothweb   (reads /etc/default/slothweb; loopback by default)"
+	@echo "  sloth-ble-scan.service is installed, not enabled: docs/wiki/deployment.md §7"
 	@echo "  (migration from a build-tree unit: docs/wiki/deployment.md)"
 
 # ── Deploy tooling test (#153) ───────────────────────────────────────────────

@@ -15,7 +15,9 @@ the owner's ruling of 2026-10-26 it also moves a `tcp:` data socket to
 the unit's unix socket when told to (`--data-socket-unix`, §4.2), and
 installs `slothweb.service` (§6), the web UI as the same `sloth` account
 with no capability at all, once the sensor verifies
-(`--with-slothweb`, §4.3).
+(`--with-slothweb`, §4.3). For BLE capture, `sloth-ble-scan.service`
+(§7) holds a passive LE scan for `--bt-monitor` for as long as the
+sensor runs, installed but never enabled by make.
 
 **Sources**: `packaging/systemd/sloth-sensor.service`,
 `packaging/systemd/sloth.sysusers.conf`, `packaging/bin/sloth-monitor-up`,
@@ -23,9 +25,10 @@ with no capability at all, once the sensor verifies
 `packaging/default/slothweb`, `packaging/bin/sloth-migrate-sensor`,
 `Makefile` (`install`, `install-service`, `deploy-test`),
 `tests/test_unit_file.c`, `tests/deploy/test_migrate_sensor.sh`,
-`src/secure_file.c`, `src/data_socket.c`, `src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2.
+`src/secure_file.c`, `src/data_socket.c`, `src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2,
+`packaging/systemd/sloth-ble-scan.service`, `src/ble_scan/main.c`, `src/ble_scan/ble_scan_cmd.c`, `tests/test_ble_scan.c`.
 
-**Last updated**: 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
+**Last updated**: 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
 
 ---
 
@@ -79,6 +82,8 @@ depth on top of this, not a prerequisite for it.
 | `install-service` | `packaging/default/sloth` | `/etc/default/sloth` | 0644, `install -b` | site settings; an existing copy is kept as `/etc/default/sloth~` |
 | `install-service` | `packaging/systemd/slothweb.service` | `/etc/systemd/system/slothweb.service` | 0644 | §6, with `/usr/local/` rewritten as for the sensor's |
 | `install-service` | `packaging/default/slothweb` | `/etc/default/slothweb` | 0644, only if absent | slothweb's bind and allowed peers; never replaced, so it has no backup either |
+| `install` | `sloth-ble-scan` (built by `make` on Linux) | `/usr/local/sbin/sloth-ble-scan` | 0755 | the passive-scan helper `sloth-ble-scan.service` runs (§7); an operator tool like `sloth-monitor-up`, never started by sloth |
+| `install-service` | `packaging/systemd/sloth-ble-scan.service` | `/etc/systemd/system/sloth-ble-scan.service` | 0644 | §7, rewritten as for the others; installed, **not enabled** |
 
 Both targets honour `DESTDIR`, so `make install install-service
 DESTDIR=/tmp/stage` lays the whole tree out under a scratch root for
@@ -243,7 +248,7 @@ the process views — fine headless, where no view is drawn.
 
 | Key | Value | Why |
 |---|---|---|
-| `RestrictAddressFamilies=` | `AF_UNIX AF_NETLINK AF_PACKET` | capture, rtnetlink/nl80211/INET_DIAG, the data socket. **No `AF_INET`**: the db-only profile opens no Internet socket. Add `AF_INET AF_INET6` only for a `tcp:` `--data-socket` or `--allow-active`; the test enforces that pairing in both directions |
+| `RestrictAddressFamilies=` | `AF_UNIX AF_NETLINK AF_PACKET AF_BLUETOOTH` | capture, rtnetlink/nl80211/INET_DIAG, the data socket, and the HCI monitor channel for `--bt-monitor` in `SLOTH_ARGS` (§7; unused without the flag). **No `AF_INET`**: the db-only profile opens no Internet socket. Add `AF_INET AF_INET6` only for a `tcp:` `--data-socket` or `--allow-active`; the test enforces that pairing in both directions |
 | `SystemCallFilter=` | `@system-service`, then `~@privileged @resources`, then `capset` | the standard service allow-list minus privilege changes and resource-limit calls, with `capset` alone re-allowed for the in-process drop (#140). A later allow line adds back to the filter. `capset` can only shed here: it never grows the permitted set, and growing the inheritable set needs `CAP_SETPCAP`, which the bounding set excludes. The test asserts the re-allow sits after the deny |
 | `SystemCallErrorNumber=` | `EPERM` | a blocked call fails with an error sloth already handles, instead of `SIGSYS` |
 | `SystemCallArchitectures=` | `native` | no 32-bit syscall table |
@@ -460,6 +465,7 @@ does.
 | Old flag | What happens |
 |---|---|
 | `--my-ssid`, `--my-bssid`, `--site-label`, `--site`, `--known-mac`, `--iface`, `--db-interval-secs`, `--db-retain-days`, `--db-max-mb`, `--correlate-retain` | carried verbatim into `SLOTH_ARGS` |
+| `--bt-monitor` | carried into `SLOTH_ARGS` (the hardened unit lists `AF_BLUETOOTH` for it, §7); the scan it reads is `sloth-ble-scan.service`'s, which the migration does not enable |
 | `--db`, `--pcap-dir`, `--report`, `--report-json`, `--snapshot-out`, `--baseline-in` | already in the hardened `ExecStart` under `/var/lib/sloth`; accepted only when the old path is the same name under the data dir (`sloth.db`, `pcap`, `report.md`, `report.json`, `snapshot.txt`), so the copy lands where the new unit looks; any other name is refused |
 | `--with-research` | replaced by `$(PREFIX)/share/sloth/research.db` from `make install` |
 | `--data-socket unix:…` (or bare) | replaced by `unix:/run/sloth/sloth.sock`; a different old path is reported so its readers can be repointed |
@@ -836,7 +842,114 @@ syscalls denied, `ReadOnlyPaths=` naming `-/var/lib/sloth`, no
 commented recipe present with a `/32`, every IPv4 literal loopback or a
 `100.64.0.0/24` placeholder.
 
-## 7. What this does not do
+## 7. BLE capture: `sloth-ble-scan.service`
+
+The owner's request of 2026-10-26: BLE capture for the whole life of the
+sensor, on a host where nothing else uses Bluetooth, so `bluetoothd` may
+stay off. `sloth --bt-monitor` only listens to the HCI monitor channel
+and sends no HCI command ([[ble]]); something else has to hold the
+**passive** scan it decodes. BlueZ has no passive scan a service can
+hold — `bluetoothctl scan on` and MGMT discovery are active, and on the
+reference host (kernel 7.0, Intel 8087:0aaa) `hcitool lescan --passive`
+fails with `Input/output error` even with `bluetoothd` masked, because
+the kernel refuses raw commands on the normal HCI socket while it
+manages the device. `sloth-ble-scan` takes the controller over the HCI
+user channel instead and sends it a fixed, passive-only command set
+([[ble]], "Holding the scan: sloth-ble-scan").
+
+`packaging/systemd/sloth-ble-scan.service`, installed by `make
+install-service` and **not enabled** by it:
+
+| Key | Why |
+|---|---|
+| `DynamicUser=yes` | The helper owns and reads no file. A transient uid can reach nothing of the `sloth` account's (`/var/lib/sloth`: the db, the pcaps); `User=sloth` would have handed it all of that for no use. |
+| `AmbientCapabilities=`, `CapabilityBoundingSet=CAP_NET_ADMIN` | The kernel's check for binding `HCI_CHANNEL_USER` and for `HCIDEVDOWN` (`net/bluetooth/hci_sock.c`). Not `CAP_NET_RAW`: that is the monitor channel's, and the monitor channel is sloth's. |
+| `ExecStartPre=/usr/local/sbin/sloth-ble-scan --down ${SLOTH_BLE_HCI}` | The user channel is refused (`EBUSY`) while the device is up. The helper's own `HCIDEVDOWN` ioctl — what `hciconfig hciN down` did — rather than `hciconfig` (deprecated, gone from current BlueZ packaging) or `btmgmt power off` (a MGMT client a host may not ship), so no external tool can be missing. It needs only `CAP_NET_ADMIN`, which the sandbox grants, so it runs inside it, without the `+` that would make it full root. A device already down is not an error. |
+| `ExecStart=… --delay 3 ${SLOTH_BLE_HCI}` | Three seconds for a sensor started in the same transaction to open its monitor channel, so sloth sees the Reset and the passive parameters. |
+| `Environment=SLOTH_BLE_HCI=hci0` | The controller; `systemctl edit sloth-ble-scan` to change it. There is no defaults file. |
+| `Conflicts=bluetooth.service` | bluetoothd holds the controller; starting this unit stops it. Because bluetoothd is D-Bus activated, a stop alone is undone within the second, so the recipe below also masks it. |
+| `After=sloth-sensor.service`, `PartOf=sloth-sensor.service`, `WantedBy=sloth-sensor.service` | Enabled, the scan is pulled in by the sensor's start, after it, and stops and restarts with it: "for the duration of the sloth daemon". The sensor names the scan nowhere, so it starts and runs without it. |
+| `RestrictAddressFamilies=AF_BLUETOOTH` | Nothing else. No `PrivateNetwork=` and no `PrivateUsers=`: AF_BLUETOOTH exists only in the initial network namespace (`bt_sock_create` returns `EAFNOSUPPORT` elsewhere; measured under `PrivateNetwork=yes`), and a capability held in a private user namespace does not satisfy the kernel's check. |
+| `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`, `ProtectKernel*`, `ProtectClock`, `ProtectHostname`, `ProtectProc=invisible`, `ProcSubset=pid`, `NoNewPrivileges`, `SystemCallFilter=@system-service` then `~@privileged @resources`, `MemoryDenyWriteExecute`, `IPAddressDeny=any` | As for the sensor, without its `capset` exception: the helper sheds nothing. `systemd-analyze security --offline=true`: 1.3 OK. |
+| `MemoryMax=16M`, `TasksMax=4` | One thread, one socket, a 1 KiB read buffer. |
+| `Restart=on-failure`, `RestartPreventExitStatus=2` | A lost controller or a scan lost five times in a minute exits 1 and restarts (bounded by the start limit); a usage error does not loop. |
+
+The sensor's own unit lists `AF_BLUETOOTH` in `RestrictAddressFamilies=`
+for `--bt-monitor` (§3.5): libpcap's `bluetooth-monitor` is an
+AF_BLUETOOTH socket, refused with `EAFNOSUPPORT` without it (measured
+2026-10-26 with `systemd-run --user` under the old and new lists). Its
+bind needs `CAP_NET_RAW`, which the unit already grants and sloth holds
+until the #140 drop: `bt_monitor_open()` runs before `privdrop_apply()`
+in `src/main.c`, and the bound socket keeps receiving afterwards.
+`sloth-migrate-sensor` carries `--bt-monitor` into `SLOTH_ARGS` rather
+than refusing it.
+
+### 7.1 The owner's commands
+
+```sh
+# Build as yourself, install as root (binary, helper, both new units).
+make && make web
+sudo make install install-service
+sudo systemctl daemon-reload
+
+# bluetoothd off for good: masked, so D-Bus activation cannot bring it
+# back. (`mask --runtime` would undo itself at the next boot.)
+sudo systemctl mask --now bluetooth.service
+
+# --bt-monitor in the site file, beside the flags already there:
+#   SLOTH_ARGS=--site-label sloth-sensor --bt-monitor
+sudoedit /etc/default/sloth
+
+# Enable the scan (the sensor pulls it in from now on) and restart the
+# sensor; PartOf= starts the scan after it.
+sudo systemctl enable sloth-ble-scan.service
+sudo systemctl restart sloth-sensor.service
+```
+
+Verifying it:
+
+```sh
+systemctl is-active sloth-sensor sloth-ble-scan        # active, active
+journalctl -u sloth-ble-scan -b --no-pager | tail -n 3
+# sloth-ble-scan: hci0 is down
+# sloth-ble-scan: passive LE scan held on hci0 (legacy commands, interval = window = 60 ms; passive: no SCAN_REQ is sent)
+journalctl -u sloth-sensor -b --no-pager | grep 'Bluetooth HCI monitor open'
+# One sensor_health record: a new client changes socket_clients, which
+# is in the record's signature, so one arrives within a tick of
+# connecting. Run it twice, ten seconds apart: ble_adv_reports climbing,
+# ble_own_tx "never", ble_scan_mode "passive", ble_own_tx_baseline 1.
+sudo timeout 15 socat -u UNIX-CONNECT:/run/sloth/sloth.sock STDOUT \
+  | grep -m 1 '"type":"sensor_health"' \
+  | grep -o '"ble_adv_reports":[0-9]*\|"ble_own_tx":"[a-z]*"\|"ble_scan_mode":"[a-z]*"\|"ble_own_tx_baseline":[0-9]*'
+```
+
+`ble_own_tx_baseline` = `1` and `ble_scan_mode` = `passive` need sloth to
+have seen the helper's Reset and parameters, which the ordering and the
+three-second delay arrange. A sensor that restarts on its own (its
+`Restart=always`) reopens the monitor channel under a scan already
+running, and reads `unknown` / `0` until the scan is re-sent:
+`sudo systemctl restart sloth-ble-scan`. Reports keep arriving either
+way. If `ble_scan_mode` ever reads `active` or `BT_OWN_TRANSMIT` fires,
+something other than this helper is driving the controller.
+
+Undoing it:
+
+```sh
+sudo systemctl disable --now sloth-ble-scan.service
+sudo systemctl unmask bluetooth.service && sudo systemctl start bluetooth.service
+# and drop --bt-monitor from /etc/default/sloth if the sensor should stop listening
+```
+
+`tests/test_unit_file.c` scans the unit: `DynamicUser=yes` and no
+`User=`, both capability sets exactly `CAP_NET_ADMIN`, no `/home/`, both
+`Exec` lines the installed helper with no prefix, the sandbox keys,
+`RestrictAddressFamilies` exactly `AF_BLUETOOTH`, no `PrivateNetwork=` or
+`PrivateUsers=`, `Conflicts=bluetooth.service`, the `After=` / `PartOf=`
+/ `WantedBy=` on the sensor and nothing in the sensor's unit depending on
+the scan; and the Makefile: the helper to `sbin`, the unit installed, no
+`systemctl` in either install recipe.
+
+## 8. What this does not do
 
 - It does not shed `CAP_NET_ADMIN` while `--hop` is on. Every retune
   opens a fresh nl80211 socket, so the capability is needed for the
@@ -854,6 +967,7 @@ commented recipe present with a `/32`, every IPv4 literal loopback or a
 
 - [[data-socket-exposure]] — the `unix:` trust boundary the unit relies on
 - [[monitor-mode]] — what `sloth-monitor-up` prepares and why sloth never does
+- [[ble]] — what `--bt-monitor` decodes, and why `sloth-ble-scan` is consistent with MISSION §2
 - [[sqlite-schema]], [[retention]] — the `--db` artefact under `/var/lib/sloth`
 - [[pcap-export]] — the `--pcap-dir` contents
 - [[posture-report]] — what `SIGTERM` writes before exit

@@ -288,6 +288,10 @@ parse_exec() {
                         TCP_SOCK=$v ;;
                     *) refuse "--data-socket $v: the hardened unit allows AF_UNIX only (RestrictAddressFamilies); a tcp: socket is an owner decision, not a migration" ;;
                 esac ;;
+            # carried into SLOTH_ARGS, no value: the hardened unit lists
+            # AF_BLUETOOTH for it, and the scan it reads is
+            # sloth-ble-scan.service's (docs/wiki/deployment.md §7)
+            --bt-monitor) ARGS="${ARGS:+$ARGS }$f" ;;
             # carried verbatim into SLOTH_ARGS: site identity and tuning
             --my-ssid|--my-bssid|--site-label|--site|--known-mac|--iface|\
             --db-interval-secs|--db-retain-days|--db-max-mb|--correlate-retain)

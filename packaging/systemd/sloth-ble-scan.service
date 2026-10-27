@@ -1,0 +1,128 @@
+# sloth-ble-scan.service — hold a PASSIVE LE scan for sloth --bt-monitor.
+#
+# Installed by `sudo make install-service` to /etc/systemd/system, never
+# enabled by it; the helper is placed by `sudo make install`. Recipe:
+# docs/wiki/deployment.md, "BLE capture"; why it exists and why it is
+# consistent with MISSION.md §2: docs/wiki/ble.md and the header of
+# src/ble_scan/main.c.
+#
+# sloth --bt-monitor only listens; it sends no HCI command, so someone
+# has to hold the scan it decodes. This unit does, through the HCI user
+# channel, which takes the controller away from the kernel's Bluetooth
+# stack for as long as it runs: nothing else on the host can use hciN
+# meanwhile. Enable it only where nothing else needs Bluetooth.
+#
+# The scan is passive (Core Spec v5.4 Vol 6 Part B §4.4.3.1: no SCAN_REQ
+# is sent), and sloth checks that itself: every command the helper sends
+# crosses the monitor channel, so ble_scan_mode reads `passive` and
+# BT_OWN_TRANSMIT stays quiet, or the operator is told.
+
+[Unit]
+Description=sloth passive BLE scan holder (for --bt-monitor)
+Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/ble
+Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/deployment
+
+# bluetoothd powers the controller and scans actively on request; with it
+# running the user channel is refused (EBUSY). Conflicts= stops it when
+# this unit starts. bluetoothd is D-Bus activated, so the deployment page
+# masks it as well — a stop alone is undone within the second.
+Conflicts=bluetooth.service
+After=bluetooth.service
+
+# Started after the sensor so sloth's monitor channel is open first and
+# sees the Reset and the passive parameters (ble_own_tx_baseline 1,
+# ble_scan_mode passive); --delay below covers sloth's own start-up.
+# PartOf= ties its life to the sensor's: stopping or restarting the
+# sensor does the same here, which is "for the duration of the sloth
+# daemon". The sensor does not depend on this unit: it starts, and runs,
+# without it. WantedBy= below is how enabling this unit makes the
+# sensor's start pull it in.
+After=sloth-sensor.service
+PartOf=sloth-sensor.service
+
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+
+# A transient account rather than User=sloth: the helper owns no file
+# and reads none, and the sloth account owns /var/lib/sloth (the db,
+# pcaps, handshakes). A dynamic uid that exists only while this runs can
+# reach none of it, whatever the helper does.
+DynamicUser=yes
+
+# The controller to hold. Override with `systemctl edit sloth-ble-scan`
+# ([Service] Environment=SLOTH_BLE_HCI=hci1); there is no defaults file.
+Environment=SLOTH_BLE_HCI=hci0
+
+# Bring hciN down so the user channel can take it (the kernel refuses
+# the bind while the device is up). The helper's own --down mode — the
+# HCIDEVDOWN ioctl, what `hciconfig hciN down` did — rather than
+# hciconfig (deprecated, absent from current BlueZ packaging) or
+# `btmgmt power off` (a MGMT client the host may not ship): no external
+# tool to be missing. It needs CAP_NET_ADMIN and nothing else, which the
+# sandbox below already grants, so it runs inside it, not as `+` root.
+# Idempotent: a device already down is not an error.
+ExecStartPre=/usr/local/sbin/sloth-ble-scan --down ${SLOTH_BLE_HCI}
+ExecStart=/usr/local/sbin/sloth-ble-scan --delay 3 ${SLOTH_BLE_HCI}
+
+# ── Privilege ────────────────────────────────────────────────────────────
+# CAP_NET_ADMIN is the kernel's check for binding HCI_CHANNEL_USER and
+# for HCIDEVDOWN (net/bluetooth/hci_sock.c). Nothing else.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=true
+
+# ── Filesystem ───────────────────────────────────────────────────────────
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0077
+
+# ── Kernel surface ───────────────────────────────────────────────────────
+# AF_BLUETOOTH only; the journal is reached through the stdout socket
+# systemd hands over, which needs no socket(). No PrivateNetwork= and no
+# PrivateUsers=: AF_BLUETOOTH exists only in the initial network
+# namespace (bt_sock_create returns EAFNOSUPPORT elsewhere; measured under
+# PrivateNetwork=yes on 2026-10-26), and a capability held in a private
+# user namespace does not satisfy the kernel's CAP_NET_ADMIN check.
+RestrictAddressFamilies=AF_BLUETOOTH
+IPAddressDeny=any
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+# ── Resources ────────────────────────────────────────────────────────────
+# One thread, one socket, a 1 KiB read buffer.
+MemoryMax=16M
+TasksMax=4
+
+# SIGTERM: the helper disables the scan (so the disable crosses sloth's
+# monitor channel) and releases the controller.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# A failure (controller gone, the scan lost too often) restarts; a usage
+# error (exit 2) does not.
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=2
+
+[Install]
+WantedBy=sloth-sensor.service

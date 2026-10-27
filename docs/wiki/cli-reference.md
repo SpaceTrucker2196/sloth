@@ -26,7 +26,7 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
+**Last updated**: 2026-10-26 (`sloth-ble-scan`, its `--down` and `--delay`, and the units `make install-service` adds); 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
@@ -179,7 +179,7 @@ init, so the audience is journald / `--headless`. →
 
 | Flag | Argument | Default | Effect |
 |---|---|---|---|
-| `--bt-monitor` | — | off | Also open libpcap's `bluetooth-monitor` device (Linux HCI monitor channel, DLT 254) and decode an allow-list of it: controller announcements (NEW_INDEX), LE Advertising Reports and LE Extended Advertising Reports (every report of each), and the host's own scan, advertise and connect commands. **Receive-only**: the kernel gives the monitor socket no transmit path, and sloth sends no HCI or MGMT command — the operator starts a *passive* scan with their own stack ([[ble]]). Opened before the privilege drop beside the IP handle (binding the channel needs `CAP_NET_RAW`); a failure to open is announced on stderr and in `sensor_health.btmon_err`, and the run continues. Registers sensor kind `ble`. Nothing read off the channel is written verbatim anywhere — link keys and LTKs cross it. Refused (exit 2) with `--replay` and in a `WITH_PCAP=0` build. |
+| `--bt-monitor` | — | off | Also open libpcap's `bluetooth-monitor` device (Linux HCI monitor channel, DLT 254) and decode an allow-list of it: controller announcements (NEW_INDEX), LE Advertising Reports and LE Extended Advertising Reports (every report of each), and the host's own scan, advertise and connect commands. **Receive-only**: the kernel gives the monitor socket no transmit path, and sloth sends no HCI or MGMT command — the operator starts a *passive* scan with their own stack, or with `sloth-ble-scan.service` ([[ble]], [[deployment]] §7). Opened before the privilege drop beside the IP handle (binding the channel needs `CAP_NET_RAW`); a failure to open is announced on stderr and in `sensor_health.btmon_err`, and the run continues. Registers sensor kind `ble`. Nothing read off the channel is written verbatim anywhere — link keys and LTKs cross it. Refused (exit 2) with `--replay` and in a `WITH_PCAP=0` build. |
 | `--bt-capture` | `PATH` | off | Read an Ubertooth capture the operator produces: a **classic pcap** file or FIFO written by `ubertooth-btle -q` (link type 256, BLE LL with pseudo-header), `ubertooth-btle -c` (192, PPI around 251) or `ubertooth-rx -q` (255, BR/EDR baseband). **sloth never drives the dongle** — no libubertooth, no USB request, no child process; the operator runs the tool, with the receive-only flags [[ubertooth]] lists. `PATH` is checked with `stat()` at startup (missing, a directory, a device node or a socket exits 2) and opened **once**, on its own worker after the privilege drop, so a FIFO with no writer yet never holds startup and is never reopened; the account sloth runs as must be able to read it. Any other link type, and pcapng, is refused with a message in `sensor_health.btcap_err`. A regular file is read to its end; a FIFO until its writer closes it (`btcap_state` `eof`). Advertisers land in the BLE device table as `sensor_iface` `ubertooth`, a separate row from the same address heard by `--bt-monitor`; BR/EDR is kept as LAP only. **Counts are a sample of one channel** (`btcap_sampling`). Registers a second sensor of kind `ble`. Refused (exit 2) with `--replay` and in a `WITH_PCAP=0` build. |
 | `--ble-rotation-hints` | — | off | **Internal use only** (owner ruling 2026-10-23, #156). Link private BLE addresses (resolvable or non-resolvable, by Address[47:46]; never static, public or resolved-identity addresses) that may be one advertiser rotating: a documented token carried across the change (MS-CDP Salt + Device_Hash; Apple Handoff, unverified; Fast Pair account data with an unchanged salt), or a clean seam and the same advertising shape alone. Used only to de-duplicate the `[*]` view's total, an estimate line over the recent window only (a link lasts while both addresses are in the seam table). **No detector reads a hint**: tokens are attacker-supplied, so `BLE_HID_UNEXPECTED` counts addresses with the flag on exactly as with it off. **No link is shown per row, no JSONL field names a link or a token, nothing reaches the database**: what leaves the process is three `sensor_health` decade bands (`"0"`, `"1-9"`, ...), `ble_rot_hints`, `ble_rot_poisoned` and `ble_rot_seam_evictions`, present only while the flag is on and in no change-only signature. Tokens are held only as SipHash-2-4 digests under a key drawn from `getrandom()` per run, never written; tables are bounded (64 recent addresses per sensor and adapter) and expire without frames. Timing-only links carry their caveat on the estimate line. **Silent on an HCI adapter whose scan filters duplicates** (`Filter_Duplicates` on, or no scan enable seen): use `hcitool lescan --passive --duplicates` as [[ble]]'s procedure says. Without the flag nothing is allocated and no field appears; `make replay-check` holds the output to the golden from before the feature. **Ignored, with a stderr notice, without `--bt-monitor` or `--bt-capture`** (so also under `--replay`, which takes neither) — chosen over a refusal because the flag adds no output a run without a BLE source could miss. A hint corroborates; it does not confirm, and identifies no device or person ([[ble]]). |
 
@@ -476,11 +476,28 @@ make bench           # time seqnum correlation + PNL union at full table
                      #   occupancy, -O2 (#91; BENCH_ITERS=n, figures in [[ring-buffers]])
 make deploy-test     # packaging/bin/sloth-migrate-sensor against a scratch root
                      #   with stub systemctl etc.; unprivileged (#153, [[deployment]] §4)
-make install         # sloth, slothweb (`make web` first), the monitor-mode helper and
-                     #   research.db under $(PREFIX) (#139, #153)
-make install-service # sloth-sensor.service, slothweb.service, the sysusers fragment,
+make install         # sloth, slothweb (`make web` first), the monitor-mode helper,
+                     #   sloth-ble-scan and research.db under $(PREFIX) (#139, #153)
+make install-service # sloth-sensor.service, slothweb.service, sloth-ble-scan.service
+                     #   (installed, not enabled), the sysusers fragment,
                      #   /etc/default/sloth (install -b) and /etc/default/slothweb (only if absent)
 ```
+
+`make` on Linux also builds `sloth-ble-scan`, the operator's
+passive-scan helper for `--bt-monitor` ([[ble]], [[deployment]] §7). It
+is not part of `sloth` and sloth never runs it:
+
+```sh
+sloth-ble-scan [--delay SECS] [hciN]  # take hciN's HCI user channel and hold a PASSIVE
+                                      #   LE scan until SIGTERM/SIGINT/SIGHUP (default hci0;
+                                      #   --delay 0..60 waits before taking the channel)
+sloth-ble-scan --down [hciN]          # bring hciN down (HCIDEVDOWN), so the channel can be taken
+```
+
+Needs `CAP_NET_ADMIN`; refuses with `EBUSY` while bluetoothd or the
+kernel holds the device. Exit 0 stopped by a signal, 1 failure (the
+channel could not be taken, the controller went away, the scan was
+lost five times in a minute), 2 usage.
 
 `packaging/bin/sloth-migrate-sensor` takes `--dry-run`,
 `--data-socket-unix` (move an old unit's `tcp:` data socket to

@@ -5432,3 +5432,49 @@ report events.
   rows before the window, and the drawer keeping a slice's newest keys
   (its read now orders them so); the last two unconditioned "locate and
   remove" steps are conditional on the premises.
+- 2026-10-26 — [[ble]], [[deployment]] §7, [[cli-reference]]:
+  `sloth-ble-scan`, the operator's passive-scan holder for
+  `--bt-monitor`, and `sloth-ble-scan.service`, which runs it for the
+  life of the sensor (owner request: nothing else on the sensor host
+  uses Bluetooth). On the reference host `hcitool lescan --passive`
+  fails with EIO even with bluetoothd masked; the HCI user channel
+  worked (7489 reports from 74 addresses in 60 s, all seen by a
+  concurrent `sloth --bt-monitor`, `ble_own_tx` `never`). The helper
+  (`src/ble_scan/`, not linked into `sloth`) sends only HCI_Reset, Set
+  Event Mask, LE Set Event Mask, LE Set Scan Parameters with the scan
+  type a builder constant 0x00, and LE Set Scan Enable, falling back to
+  the extended pair only on 0x01/0x11; every packet passes an
+  independent gate first. MISSION §2 checked first, and agrees: a
+  passive scan sends no SCAN_REQ (Core Spec v5.4 Vol 6 Part B
+  §4.4.3.1), sloth still sends no HCI command, and the helper is an
+  operator tool like `sloth-monitor-up`; nothing in `research/` says
+  otherwise. The unit: `DynamicUser=yes`, `CAP_NET_ADMIN` only,
+  `AF_BLUETOOTH` only, `Conflicts=bluetooth.service`, `After=` and
+  `PartOf=sloth-sensor.service`, `WantedBy=sloth-sensor.service`; hciN
+  is brought down by the helper's own `--down` (HCIDEVDOWN) inside the
+  sandbox, not by `hciconfig`/`btmgmt` as `+` root. Installed by `make
+  install-service`, never enabled. The sensor's unit gains
+  `AF_BLUETOOTH` (measured: `socket(AF_BLUETOOTH, SOCK_RAW,
+  BTPROTO_HCI)` is `EAFNOSUPPORT` under the old list via `systemd-run
+  --user`, succeeds under the new one; `PrivateNetwork=yes` also
+  `EAFNOSUPPORT`, so the helper's unit has none); the monitor bind's
+  `CAP_NET_RAW` is held, since `bt_monitor_open()` precedes
+  `privdrop_apply()` in `src/main.c`. `sloth-migrate-sensor` carries
+  `--bt-monitor` instead of refusing it. Seen red under one mutation
+  each, restored byte-identical (sha256 checked): the builder's
+  `BLES_SCAN_TYPE_PASSIVE` set to 0x01 (two builder tests); the
+  gate's legacy scan-type check dropped, and separately its per-PHY
+  check (`test_gate_refuses_every_transmitting_command`);
+  `src/ble_scan/ble_scan_cmd.c` appended to `CORE_COMMON_SRCS`
+  (`test_helper_is_not_linked_into_sloth`); in the unit
+  `CAP_NET_RAW` added to the bounding set, `AF_INET` to the families,
+  a `PrivateNetwork=true` line, a `+` on `ExecStartPre`, `/home/` in a
+  comment, `Conflicts=` removed, `WantedBy=multi-user.target`; in the
+  sensor's unit a `Requires=sloth-ble-scan.service` line and
+  `AF_BLUETOOTH` removed; a `systemctl enable` recipe line in
+  `install-service`; and the `--bt-monitor` branch removed from the
+  migration (the new `bt-monitor-carried` deploy case, exit 2).
+  `systemd-analyze verify` clean and `security --offline=true` 1.3 OK
+  on a copy. Not run on hardware here: the host test is the owner's.
+  Measured, parent (49adbb0) to this tree: `make test` 35154 to 35379
+  assertions, `make deploy-test` 401 to 403, each 0 failed.
