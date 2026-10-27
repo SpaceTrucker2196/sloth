@@ -6,6 +6,8 @@
 #include <time.h>
 #include <pthread.h>
 #include "jsonl.h"
+#include "gps.h"
+#include "position_track.h"
 #include "sloth_clock.h"
 #include "netstr.h"
 #include "tune.h"
@@ -509,6 +511,16 @@ static void emit_evidence(char *buf, int *off, const alert_t *a) {
     }
 }
 
+/* Where the sensor was as the incident opened (2026-10-27): one nested
+ * `loc` object, omitted entirely when unstamped. Formatted by
+ * gps_loc_json() without printf's %f, so the TUI's setlocale() cannot
+ * put a decimal comma into it. Additive per docs/wiki/jsonl-schema.md. */
+static void emit_loc(char *buf, int *off, const alert_t *a) {
+    char lj[256];
+    if (gps_loc_json(&a->loc, lj, sizeof(lj)) > 0)
+        appendf(buf, LINEBUF, off, ",%s", lj);
+}
+
 void jsonl_emit_alert(const alert_t *a) {
     if (!any_sink() || !a) return;
     char  buf[LINEBUF]; int off = 0;
@@ -549,6 +561,7 @@ void jsonl_emit_alert(const alert_t *a) {
      * plus one field it can ignore. */
     if (a->incident_id[0])
         kv_str(buf, LINEBUF, &off, "incident_id", a->incident_id);
+    emit_loc(buf, &off, a);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }
@@ -619,6 +632,7 @@ void jsonl_emit_alert_event(const alert_t *a, const char *event, time_t ts,
             kv_int(buf, LINEBUF, &off, "pcap_write_failures",
                    a->pcap_write_failures);
     }
+    emit_loc(buf, &off, a);
     if (reason && reason[0])
         kv_str(buf, LINEBUF, &off, "reason", reason);
     end_obj(buf, LINEBUF, &off);
@@ -2178,6 +2192,14 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * (-1 otherwise) and --monitor-only. Both discrete and set at
          * start; a change is a reopen, which is news. */
         int      cap_linktype, monitor_only;
+        /* --location / --gps (2026-10-27): the arbitration state, the
+         * fix's age as a three-state bucket (never / within
+         * gps.max_fix_age_s / older), and none/some bands for the
+         * checksum and parse tallies and the error. Never the age in
+         * seconds, the satellite count or HDOP: each moves every second
+         * a receiver is talking, and would sign a line per tick. */
+        int      gps_configured, gps_state, gps_age_bucket;
+        int      gps_bad_any, gps_err_any;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -2285,6 +2307,12 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.btcap_drop_any      = s->btcap.drop > 0;
     sig.btcap_truncated_any = s->btcap.truncated > 0;
     sig.ble_rot_on           = s->ble_rot.enabled != 0;
+    sig.gps_configured = s->gps.configured;
+    sig.gps_state      = s->gps.state;
+    sig.gps_age_bucket = s->gps.fix_age_s < 0 ? -1
+        : (s->gps.fix_age_s > tune_val(TUNE_GPS_MAX_FIX_AGE_S) ? 1 : 0);
+    sig.gps_bad_any    = (s->gps.bad_checksum + s->gps.parse_errors) > 0;
+    sig.gps_err_any    = s->gps.err[0] != '\0';
     const int pcap_on = alert_pcap_enabled();
     sig.pcap_swept_band     = pcap_on ? decade_band(alert_pcap_swept()) : -1;
     sig.pcap_sweep_err_band = pcap_on
@@ -2575,6 +2603,30 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "pcap_retain_days",  alert_pcap_retain_days());
         kv_int(buf, LINEBUF, &off, "pcap_swept",        (long long)alert_pcap_swept());
         kv_int(buf, LINEBUF, &off, "pcap_sweep_errors", alert_pcap_sweep_errors());
+    }
+    /* --location / --gps (2026-10-27), ONLY while one of them is given,
+     * so a run without either writes exactly what it wrote before. The
+     * exact figures ride every line; the signature above carries their
+     * state and buckets. The position itself is not here: it is on the
+     * alerts it stamps. gps_hdop is written without %f (locale).
+     * Appended. */
+    if (s->gps.configured) {
+        const gps_health_t *g = &s->gps;
+        char hd[24];
+        gps_fmt_fixed(hd, sizeof(hd), g->hdop, 1);
+        kv_str(buf, LINEBUF, &off, "gps_state", gps_state_name(g->state));
+        kv_str(buf, LINEBUF, &off, "gps_src", g->src);
+        kv_int(buf, LINEBUF, &off, "gps_fix_age_s", g->fix_age_s);
+        kv_int(buf, LINEBUF, &off, "gps_quality", g->quality);
+        kv_int(buf, LINEBUF, &off, "gps_sats", g->sats);
+        appendf(buf, LINEBUF, &off, ",\"gps_hdop\":%s", hd);
+        kv_int(buf, LINEBUF, &off, "gps_sentences",    (long long)g->sentences);
+        kv_int(buf, LINEBUF, &off, "gps_bad_checksum", (long long)g->bad_checksum);
+        kv_int(buf, LINEBUF, &off, "gps_parse_errors", (long long)g->parse_errors);
+        kv_int(buf, LINEBUF, &off, "gps_reconnects",   (long long)g->reconnects);
+        kv_int(buf, LINEBUF, &off, "gps_positions_dropped",
+               (long long)postrack_dropped());
+        kv_str(buf, LINEBUF, &off, "gps_err", g->err);
     }
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);

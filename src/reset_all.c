@@ -5,6 +5,8 @@
 #include "action_snoop.h"
 #include "alerts.h"
 #include "assoc_track.h"
+#include "gps.h"
+#include "position_track.h"
 #include "auth_track.h"
 #include "bandwidth.h"
 #include "beacon_detect.h"

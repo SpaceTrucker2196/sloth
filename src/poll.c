@@ -7,6 +7,8 @@
 #include "bt_stream.h"
 #include "ble_hci.h"
 #include "persist_health.h"
+#include "gps.h"
+#include "position_track.h"
 #include "history.h"
 #include "bandwidth.h"
 #include "views/conns.h"
@@ -90,13 +92,15 @@ static void st_platform_net(sloth_state_t *s, const poll_ctx_t *ctx) {
 }
 
 static void st_health(sloth_state_t *s, const poll_ctx_t *ctx) {
-    (void)ctx;
     /* #91 slice 2: both capture workers' liveness and pcap_stats(). Both
      * calls self-stub without WITH_PCAP, where "off" is the honest health
      * state rather than a missing one. */
     capture_health_poll(&s->cap_health);
     probe_health_poll(&s->mon_health);
     bt_monitor_health_poll(&s->bt_health);   /* #144 slice 2 */
+    /* --location / --gps (2026-10-27): the reader's state into s->gps,
+     * before anything this tick stamps a position. */
+    gps_health_poll(s, ctx->wall);
     /* #96: per-sink write-failure counts, for the cannot-persist badge. */
     persist_health_poll(&s->persist_health);
     /* #85: re-check each pinned ifindex still names its interface; a
@@ -327,6 +331,13 @@ static void st_devices_hosts(sloth_state_t *s, const poll_ctx_t *ctx) {
     top_hosts_update(s);
 }
 
+/* --gps (2026-10-27): after devices_update(), so the sample reads this
+ * tick's last_seen and signal. A no-op without a fresh GPS fix and a
+ * --db to drain the queue. */
+static void st_positions(sloth_state_t *s, const poll_ctx_t *ctx) {
+    postrack_tick(s, ctx->wall);
+}
+
 static void st_chanhop(sloth_state_t *s, const poll_ctx_t *ctx) {
     if (ctx->chanhop) ctx->chanhop(s);
 }
@@ -387,6 +398,7 @@ const poll_stage_t g_poll_stages[] = {
     { "karma",             PH_POST,     st_karma             },
     { "alert_hot",         PH_POST,     st_alert_hot         },
     { "devices_hosts",     PH_POST,     st_devices_hosts     },
+    { "positions",         PH_POST,     st_positions         },
     { "chanhop",           PH_POST,     st_chanhop           },
 
     { "jsonl",             PH_EMIT,     st_jsonl             },

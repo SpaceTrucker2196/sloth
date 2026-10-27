@@ -100,6 +100,7 @@ void run_arp_tests(void);
 void run_pcap_write_tests(void);
 void run_iface_graph_tests(void);
 void run_geo_tests(void);
+void run_gps_tests(void);
 void run_dhcp_tests(void);
 void run_rtt_tests(void);
 void run_tree_tests(void);
@@ -302,6 +303,7 @@ int main(void) {
     run_pcap_write_tests();
     run_iface_graph_tests();
     run_geo_tests();
+    run_gps_tests();
     run_dhcp_tests();
     run_rtt_tests();
     run_tree_tests();

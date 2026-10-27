@@ -264,6 +264,7 @@ typedef struct {
     evm_sink_t  sink[MF_OWED_MAX];
     const char *incident_id[MF_OWED_MAX];
     const char *rule[MF_OWED_MAX];
+    const loc_stamp_t *loc[MF_OWED_MAX];
 } mf_owed_t;
 
 /* Caller holds g_mu, so g_out_fd is the pinned directory the file was
@@ -273,7 +274,8 @@ typedef struct {
  * and leaves the file it describes alone. `incident_id` and `rule` must
  * outlive manifest_settle(). */
 static void manifest_note(mf_owed_t *q, const char *name, evm_sink_t sink,
-                          const char *incident_id, const char *rule) {
+                          const char *incident_id, const char *rule,
+                          const loc_stamp_t *loc) {
     if (g_out_fd < 0) return;
     char err[SFILE_ERR_MAX];
     if (q->n >= MF_OWED_MAX) {
@@ -293,6 +295,7 @@ static void manifest_note(mf_owed_t *q, const char *name, evm_sink_t sink,
     q->sink[q->n] = sink;
     q->incident_id[q->n] = incident_id;
     q->rule[q->n] = rule;
+    q->loc[q->n] = loc;
     q->n++;
 }
 
@@ -302,7 +305,8 @@ static void manifest_note(mf_owed_t *q, const char *name, evm_sink_t sink,
 static void manifest_settle(mf_owed_t *q) {
     for (int i = 0; i < q->n; i++) {
         char err[SFILE_ERR_MAX];
-        evm_meta_t m = { q->sink[i], q->incident_id[i], q->rule[i] };
+        evm_meta_t m = { q->sink[i], q->incident_id[i], q->rule[i],
+                         q->loc[i] };
         if (evidence_manifest_record_pinned(&q->pin[i], &m,
                                             err, sizeof(err)) != 0) {
             pthread_mutex_lock(&g_mu);
@@ -389,7 +393,7 @@ static void append_22000_line_for_bssid(const char *line,
      * statement a hash of it can make (#92 slice 3). A failed append was
      * rolled back above and gets no line. */
     if (!bad) manifest_note(owed, "eapol.22000", EVM_SINK_HASHCAT_22000,
-                            NULL, NULL);
+                            NULL, NULL, NULL);
 }
 
 /* ── Per-handshake pcap writer ───────────────────────────── */
@@ -461,7 +465,7 @@ static void write_handshake_pcap(const pending_t *p, mf_owed_t *owed) {
      * not frames in the order they were heard. Replace-latest (#145
      * default) means a later line for the same name supersedes this one,
      * and the earlier hash then names bytes no longer on disk. */
-    manifest_note(owed, name, EVM_SINK_HANDSHAKE_PCAP, NULL, NULL);
+    manifest_note(owed, name, EVM_SINK_HANDSHAKE_PCAP, NULL, NULL, NULL);
 }
 
 /* ── EAPOL-Key parser ────────────────────────────────────── */
@@ -1035,6 +1039,7 @@ static int bare_name(const char *n) {
 
 int eapol_export_commit(const char *tmp, const char *name,
                         const char *incident_id, const char *rule,
+                        const loc_stamp_t *loc,
                         char *err, size_t errsz) {
     if (!bare_name(tmp) || !bare_name(name)) {
         if (err && errsz) snprintf(err, errsz, "not a bare file name");
@@ -1067,7 +1072,8 @@ int eapol_export_commit(const char *tmp, const char *name,
          * unlisted; hashed after it, so the capture thread is not
          * waiting on g_mu while this file is read and the manifest
          * fsync'ed. */
-        manifest_note(&owed, name, EVM_SINK_EVIDENCE_PCAP, incident_id, rule);
+        manifest_note(&owed, name, EVM_SINK_EVIDENCE_PCAP, incident_id, rule,
+                      loc);
     }
     pthread_mutex_unlock(&g_mu);
     manifest_settle(&owed);

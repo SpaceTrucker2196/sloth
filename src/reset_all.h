@@ -59,6 +59,7 @@
     X(evidence_manifest_reset) \
     X(evil_twin_taint_clear) \
     X(frag_clear) \
+    X(gps_location_reset) \
     X(host_cache_clear) \
     X(http_log_clear) \
     X(icmp_log_clear) \
@@ -66,6 +67,7 @@
     X(ip_index_clear) \
     X(jsonl_dedup_reset) \
     X(lan_role_clear) \
+    X(postrack_clear) \
     X(kerb_snoop_clear) \
     X(ldap_snoop_clear) \
     X(linux_wifi_scan_trigger_reset) \

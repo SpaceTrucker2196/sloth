@@ -23,6 +23,8 @@
 #include "alerts.h"
 #include "sloth_clock.h"
 #include "tmp_dir.h"
+#include "gps.h"
+#include "position_track.h"
 
 static char db_path[TEST_TMP_MAX];
 
@@ -181,7 +183,12 @@ static void test_schema_tables_have_seen_columns(void) {
      * observed. Named explicitly so adding an entity table without the
      * columns fails, while adding bookkeeping is a deliberate edit
      * here — a bare "tables - N" would silently absorb the mistake. */
-    static const char *const exempt[] = { "meta (", "sessions (" };
+    /* device_positions / sensor_positions (--gps, 2026-10-27) are point
+     * samples, not entities: one time per row, named last_seen so the
+     * retention sweep ages them, and no span for a first_seen to open. */
+    static const char *const exempt[] = { "meta (", "sessions (",
+                                          "device_positions (",
+                                          "sensor_positions (" };
 
     int tables = 0, entities = 0, with_both = 0;
     for (const char *p = strstr(sql, "CREATE TABLE"); p;
@@ -2212,11 +2219,11 @@ static void test_current_file_gains_the_first_seen_indexes(void) {
 
 /* ── Schema v4: the batched column bump ──────────────────── */
 
-static void test_schema_version_is_eight(void) {
+static void test_schema_version_is_nine(void) {
     fresh_db();
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "8");
+    ASSERT_STR(v, "9");
     db_close();
     unlink(db_path);
 }
@@ -2795,7 +2802,7 @@ static void test_v5_file_migrates_additively(void) {
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
     /* The chain runs on: v5 -> v6 -> v7 -> v8 in one open (#155, #170). */
-    ASSERT_STR(v, "8");
+    ASSERT_STR(v, "9");
     ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('devices')"
                     " WHERE name='dhcp_vci'"), 23);
     q_text("SELECT hostname FROM devices WHERE mac='02:00:00:00:00:77'",
@@ -2848,7 +2855,7 @@ static void test_v5_file_without_devices_migrates(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "8");
+    ASSERT_STR(v, "9");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
                     " WHERE name='cam_signals'"), 1);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
@@ -2888,7 +2895,7 @@ static void test_v6_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "8");
+    ASSERT_STR(v, "9");
     q_text("SELECT hostname FROM devices", v, sizeof(v));
     ASSERT_STR(v, "old-host");
     ASSERT_EQ(q_int("SELECT device_class FROM devices"), 2);
@@ -2986,7 +2993,7 @@ static void test_v7_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "8");
+    ASSERT_STR(v, "9");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts WHERE key='recon:10.0.0.5'"),
               19);
@@ -3049,6 +3056,189 @@ static void test_v7_migration_failure_leaves_file_unchanged(void) {
                     "'incident_count')"), 0);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
+    unlink(db_path);
+}
+
+/* ── Schema v9: the location stamp (2026-10-27) ──────────── */
+
+/* A v8 file: write_v7_file()'s four rows under the v8 alerts columns,
+ * the newest recon row carrying an incident, stamped 8. `extra` lands
+ * after the v8 columns so a test can make the v8 -> v9 step fail. */
+#define V8_ALERTS_COLS(extra) \
+    ", reopens INTEGER NOT NULL DEFAULT 0, incident_id TEXT," \
+    " incident_count INTEGER NOT NULL DEFAULT 0," \
+    " incident_first_seen INTEGER" extra
+
+static void write_v8_file(const char *alerts_ddl) {
+    write_v7_file(alerts_ddl);
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "UPDATE meta SET value='8' WHERE key='schema_version';"
+        "UPDATE alerts SET incident_id='00000000000000a1', incident_count=10,"
+        "  incident_first_seen=1600000011 WHERE first_seen=1600000011;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+}
+
+/* v8 -> v9 adds the six location columns, NULL on every existing row,
+ * and changes no recorded value. Seen to fail with the { 8, ... } step
+ * removed from g_steps[] (the static chain check refuses the build) and,
+ * for the cid positions, with MIGRATE_V8_SQL's lat and lon swapped. */
+static void test_v8_file_migrates_additively(void) {
+    write_v8_file(V7_ALERTS_DDL(V8_ALERTS_COLS("")));
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "9");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
+    ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
+    q_text("SELECT incident_id FROM alerts WHERE first_seen=1600000011", v, sizeof(v));
+    ASSERT_STR(v, "00000000000000a1");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts WHERE lat IS NULL AND lon IS NULL"
+                    " AND alt_m IS NULL AND acc_m IS NULL AND loc_src IS NULL"
+                    " AND loc_ts IS NULL"), 4);
+    /* Column order matches a fresh v9 file. */
+    ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('alerts') WHERE name='lat'"), 15);
+    ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('alerts') WHERE name='lon'"), 16);
+    ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('alerts') WHERE name='loc_ts'"), 20);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name IN ('device_positions','sensor_positions')"), 2);
+
+    /* The first v9 write of the same incident stamps the row. */
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    alert_t *a = &s.alerts[s.alert_count++];
+    snprintf(a->key, sizeof(a->key), "recon:10.0.0.5");
+    snprintf(a->incident_id, sizeof(a->incident_id), "00000000000000a1");
+    a->type = (alert_type_t)19;
+    a->sev  = ALERT_SEV_LOW;
+    a->count = 11;
+    a->first_seen = 1600000011;
+    a->first_detected = 1600000011;
+    a->last_seen  = 1700000001;
+    a->loc.src = LOC_SRC_GPS;
+    a->loc.lat = 51.50074; a->loc.lon = -0.12469;
+    a->loc.has_acc = 1; a->loc.acc_m = 4.5;
+    a->loc.ts = 1700000000;
+    db_tick(&s, 1700000001);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
+    ASSERT_EQ(q_int("SELECT CAST(ROUND(lat*1e5) AS INTEGER) FROM alerts"
+                    " WHERE first_seen=1600000011"), 5150074);
+    q_text("SELECT loc_src FROM alerts WHERE first_seen=1600000011", v, sizeof(v));
+    ASSERT_STR(v, "gps");
+    ASSERT_EQ(q_int("SELECT alt_m IS NULL FROM alerts WHERE first_seen=1600000011"), 1);
+    ASSERT_EQ(q_int("SELECT loc_ts FROM alerts WHERE first_seen=1600000011"), 1700000000);
+    ASSERT_EQ(q_int("SELECT count FROM alerts WHERE first_seen=1600000011"), 11);
+    /* The older duplicates stay unstamped. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts WHERE loc_src IS NULL"), 3);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v8 file on which the last v8 -> v9 ALTER fails (loc_ts already
+ * there) keeps v8, its rows, and none of the five columns the earlier
+ * statements added. Seen to fail with migrate_step()'s BEGIN IMMEDIATE
+ * dropped (lat survives the failed step). */
+static void test_v8_migration_failure_leaves_file_unchanged(void) {
+    write_v8_file(V7_ALERTS_DDL(V8_ALERTS_COLS(", loc_ts INTEGER")));
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "8");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alerts')"
+                    " WHERE name IN ('lat','lon','alt_m','acc_m','loc_src')"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
+    ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
+    q_text("SELECT incident_id FROM alerts WHERE first_seen=1600000011", v, sizeof(v));
+    ASSERT_STR(v, "00000000000000a1");
+    unlink(db_path);
+}
+
+/* Within one incident a recorded stamp is never overwritten (a restart
+ * re-writing the incident with no fix must not erase where it was
+ * made); a new incident on the row brings its own stamp, NULL included.
+ * Seen red with the ST_ALERT lat/lon/... CASEs replaced by
+ * `excluded.<col>` (the second write blanks the stamp). */
+static void test_alert_stamp_kept_within_incident(void) {
+    fresh_db();
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    alert_t *a = &s.alerts[s.alert_count++];
+    snprintf(a->key, sizeof(a->key), "scan:192.0.2.9");
+    snprintf(a->incident_id, sizeof(a->incident_id), "00000000000000b1");
+    a->type = (alert_type_t)19;
+    a->sev  = ALERT_SEV_WARN;
+    a->count = 1;
+    a->first_seen = a->first_detected = 1700000000;
+    a->last_seen = 1700000000;
+    a->loc.src = LOC_SRC_FIXED;
+    a->loc.lat = 10.0; a->loc.lon = 20.0;
+    a->loc.has_alt = 1; a->loc.alt_m = 30.0;
+    a->loc.ts = 1700000000;
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT CAST(lat AS INTEGER) FROM alerts"), 10);
+
+    /* Same incident, written again without a stamp. */
+    memset(&a->loc, 0, sizeof(a->loc));
+    a->count = 2;
+    a->last_seen = 1700000005;
+    db_tick(&s, 1700000005);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 1);
+    ASSERT_EQ(q_int("SELECT CAST(lat AS INTEGER) FROM alerts"), 10);
+    ASSERT_EQ(q_int("SELECT CAST(lon AS INTEGER) FROM alerts"), 20);
+    ASSERT_EQ(q_int("SELECT CAST(alt_m AS INTEGER) FROM alerts"), 30);
+    ASSERT_EQ(q_int("SELECT loc_ts FROM alerts"), 1700000000);
+
+    /* A new incident on the key, unstamped: the row is now its. */
+    snprintf(a->incident_id, sizeof(a->incident_id), "00000000000000b2");
+    a->count = 1;
+    a->first_detected = 1700000100;
+    a->last_seen = 1700000100;
+    db_tick(&s, 1700000100);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 1);
+    ASSERT_EQ(q_int("SELECT reopens FROM alerts"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts WHERE lat IS NULL AND lon IS NULL"
+                    " AND alt_m IS NULL AND loc_src IS NULL AND loc_ts IS NULL"), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* The --gps sampler's queues land in their tables and age with the
+ * observation tier (1x db.retain_days). */
+static void test_position_tables_written(void) {
+    fresh_db();
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    gpsd_msg_t m;
+    memset(&m, 0, sizeof(m));
+    m.cls = GPSD_CLS_TPV; m.mode = 3;
+    m.has_lat = m.has_lon = m.has_alt = m.has_eph = 1;
+    m.lat = 48.5; m.lon = 11.25; m.alt_m = 500; m.eph = 7;
+    gps_location_feed_gpsd(&m, 1700000000);
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    device_t *d = &s.devices[s.device_count++];
+    uint8_t mac[6] = { 0x02, 0x00, 0x5e, 0x00, 0x53, 0x07 };
+    memcpy(d->mac, mac, 6);
+    d->last_seen = 1700000000;
+    d->signal_dbm = -55;
+    gps_health_poll(&s, 1700000000);
+    postrack_tick(&s, 1700000000);
+    db_tick(&s, 1700000000);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM device_positions"), 1);
+    char v[64];
+    q_text("SELECT mac FROM device_positions", v, sizeof(v));
+    ASSERT_STR(v, "02:00:5e:00:53:07");
+    ASSERT_EQ(q_int("SELECT rssi FROM device_positions"), -55);
+    ASSERT_EQ(q_int("SELECT CAST(acc_m AS INTEGER) FROM device_positions"), 7);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sensor_positions"), 1);
+    ASSERT_EQ(q_int("SELECT CAST(alt_m AS INTEGER) FROM sensor_positions"), 500);
+    q_text("SELECT loc_src FROM sensor_positions", v, sizeof(v));
+    ASSERT_STR(v, "gps");
+    db_close();
     unlink(db_path);
 }
 
@@ -3188,7 +3378,7 @@ static void test_compact_alerts_900k_rows(void) {
     ASSERT_EQ(db_is_open(), 0);
 
     ASSERT_EQ(q_int_at(g_cmp_dst, "SELECT CAST(value AS INTEGER) FROM meta"
-                                  " WHERE key='schema_version'"), 8);
+                                  " WHERE key='schema_version'"), 9);
     ASSERT_EQ(q_int_at(g_cmp_dst, "SELECT COUNT(*) FROM alerts"), CMP_KEYS);
     ASSERT_EQ(q_int_at(g_cmp_dst, "SELECT COUNT(DISTINCT key) FROM alerts"),
               CMP_KEYS);
@@ -3529,7 +3719,7 @@ static void test_v1_file_migrates_to_current(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "8");
+    ASSERT_STR(v, "9");
     ASSERT_EQ(q_int("SELECT presence FROM probe_clients"
                     " WHERE mac='02:00:00:00:00:51'"), 0);
     q_text("SELECT ssid FROM probe_clients WHERE mac='02:00:00:00:00:51'",
@@ -3574,7 +3764,7 @@ static void test_v1_file_without_probe_clients_migrates(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "8");
+    ASSERT_STR(v, "9");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('probe_clients')"
                     " WHERE name='presence'"), 1);
     db_close();
@@ -3627,7 +3817,7 @@ static void test_v2_file_migrates_to_current(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "8");
+    ASSERT_STR(v, "9");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master"
                     " WHERE type='table' AND name='assoc_reqs'"), 1);
     db_close();
@@ -3679,7 +3869,7 @@ static void test_v3_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "8");
+    ASSERT_STR(v, "9");
     ASSERT_EQ(q_int("SELECT phy_confirmed FROM pnl_clients"
                     " WHERE mac='02:00:00:00:00:53'"), 0);
     ASSERT_EQ(q_int("SELECT probe_count FROM pnl_clients"
@@ -3833,7 +4023,7 @@ static void test_v4_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "8");
+    ASSERT_STR(v, "9");
     ASSERT_EQ(q_int("SELECT pnl_best FROM karma_candidates"
                     " WHERE bssid='aa:bb:cc:dd:ee:55'"), 0);
     ASSERT_EQ(q_int("SELECT score FROM karma_candidates"
@@ -3914,7 +4104,11 @@ void run_db_tests(void) {
     RUN_TEST(test_btm_requests_first_seen_does_not_move);
     RUN_TEST(test_btm_requests_forcing_index_exists);
     RUN_TEST(test_btm_requests_in_finding_retention_tier);
-    RUN_TEST(test_schema_version_is_eight);
+    RUN_TEST(test_schema_version_is_nine);
+    RUN_TEST(test_v8_file_migrates_additively);
+    RUN_TEST(test_v8_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_alert_stamp_kept_within_incident);
+    RUN_TEST(test_position_tables_written);
     RUN_TEST(test_device_ip_joined_camera_columns_follow_latest);
     RUN_TEST(test_device_mac_keyed_camera_columns_are_sticky);
     RUN_TEST(test_ip_only_camera_record_is_not_persisted);

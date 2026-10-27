@@ -2178,7 +2178,10 @@ static void test_evil_twin_same_oui_attacker_tool_fires_crit(void) {
 static void test_evil_twin_confidence_is_independent_of_severity(void) {
     /* CRIT on a hard signal, no deductions — high confidence. */
     alerts_clear();
-    sloth_state_t s; seed_state(&s);
+    /* static: three ~2.8 MB states in one frame sat within 40 KB of the
+     * 8 MB main-thread stack, and alert_t's location stamp (2026-10-27)
+     * tipped it over. seed_state() zeroes each before use. */
+    static sloth_state_t s; seed_state(&s);
     uint8_t legit[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t hak5[6]  = {0x00,0x13,0x37,0x44,0x55,0x66};
     add_beacon(&s, "Net", legit, "WPA2");
@@ -2192,7 +2195,7 @@ static void test_evil_twin_confidence_is_independent_of_severity(void) {
     /* CRIT on a soft signal against a same-OUI pair — same severity,
      * much lower confidence. */
     alerts_clear();
-    sloth_state_t t; seed_state(&t);
+    static sloth_state_t t; seed_state(&t);
     uint8_t p[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x01};
     uint8_t q[6] = {0xaa,0xbb,0xcc,0x00,0x00,0x02};
     add_beacon(&t, "Net", p, "WPA2");
@@ -2212,7 +2215,7 @@ static void test_evil_twin_confidence_is_independent_of_severity(void) {
      * dragging confidence below it. A single ranked scale could not
      * represent this pair of findings. */
     alerts_clear();
-    sloth_state_t u; seed_state(&u);
+    static sloth_state_t u; seed_state(&u);
     uint8_t x[6] = {0xaa,0xbb,0xcc,0x01,0x02,0x03};
     uint8_t y[6] = {0x11,0x22,0x33,0x44,0x55,0x66};
     add_beacon(&u, "Net", x, "WPA2");
@@ -7320,7 +7323,10 @@ static int fair_count(const sloth_state_t *s, alert_type_t t) {
 static void fair_flood_scans(int keys, void (*extra)(sloth_state_t *)) {
     int made = 0;
     while (made < keys) {
-        sloth_state_t f; seed_state(&f);
+        /* static: inlined into a caller that holds two states of its
+         * own, three ~2.8 MB frames outgrew the 8 MB stack once alert_t
+         * gained the location stamp (2026-10-27). */
+        static sloth_state_t f; seed_state(&f);
         if (extra) extra(&f);
         for (int i = 0; i < MAX_SCAN_ENTRIES && made < keys; i++, made++) {
             char ip[32];

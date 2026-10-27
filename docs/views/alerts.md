@@ -325,6 +325,20 @@ happened (see "Counters and timestamps" above).
 The footer below the table shows enrichment for the selected alert:
 RIR region (from the `/8` table) and embedded hosting-org lookup.
 
+**Location** (2026-10-27). With `--location` or `--gps`, Enter's
+detail panel carries one more line, where the sensor was as the
+incident opened:
+
+```
+  ATT&CK:     T1046
+  Location:   51.5007400, -0.1246900  +/-5 m  alt 12 m  (gps, fix 3 s before)
+```
+
+`(fixed)` for a `--location` stamp; `(not stamped: no fix younger than
+gps.max_fix_age_s)` when neither source had one as it opened. The
+stamp is taken once and not refreshed while the incident stays open.
+See [location](../wiki/location.md).
+
 ## Keybindings
 
 `↑`/`↓` navigate. `c` clears all alerts and their pcap-dumped state

@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
             w += n;
         }
         fclose(f);
-        evm_meta_t m = { EVM_SINK_HASHCAT_22000, NULL, NULL };
+        evm_meta_t m = { EVM_SINK_HASHCAT_22000, NULL, NULL, NULL };
         for (int i = 0; i < iters; i++) {
             evm_pin_t pin;
             double a = now_ms();

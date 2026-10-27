@@ -258,6 +258,13 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "rf.path_loss_n_6g",          RF_N_6G_X10, RF_N_X10_LO, RF_N_X10_HI, "N x10, 6 GHz (no P.1238 row; the 5 GHz value)" },
     { "rf.median_k",                RF_MEDIAN_K, 1, RF_RAW_MAX, "RSSI samples the distance median takes" },
     { "rf.ref_dist_dm",             0, 0, RF_REF_DIST_DM_HI, "decimetres from the sensor to the --my-bssid AP for distance calibration, 0 for none" },
+    /* --location / --gps (2026-10-27, src/gps.h). A device position is
+     * sampled when the fix has moved min_move_m since the device's last
+     * sample or sample_s have elapsed; a fix older than max_fix_age_s
+     * stamps nothing (a fixed --location then stands in, if given). */
+    { "gps.min_move_m",             5, 0, 100000, "metres the GPS fix must move before a device position is sampled again" },
+    { "gps.sample_s",               60, 1, 86400, "seconds between device position samples at rest" },
+    { "gps.max_fix_age_s",          30, 1, 3600, "seconds after which a GPS fix is stale and stamps nothing" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

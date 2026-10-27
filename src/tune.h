@@ -158,6 +158,12 @@ typedef enum {
     TUNE_RF_PATH_LOSS_N_6G,
     TUNE_RF_MEDIAN_K,
     TUNE_RF_REF_DIST_DM,
+    /* 2026-10-27: --location / --gps (src/gps.h). Sampling and
+       freshness knobs for the position stamp, not detector thresholds:
+       no rule reads a position. */
+    TUNE_GPS_MIN_MOVE_M,
+    TUNE_GPS_SAMPLE_S,
+    TUNE_GPS_MAX_FIX_AGE_S,
     TUNE_COUNT
 } tune_id_t;
 

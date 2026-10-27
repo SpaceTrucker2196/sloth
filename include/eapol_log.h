@@ -200,6 +200,7 @@ int  eapol_export_create(const char *name, char *err, size_t errsz);
 #define EAPOL_COMMIT_EXISTS (-2)
 int  eapol_export_commit(const char *tmp, const char *name,
                          const char *incident_id, const char *rule,
+                         const loc_stamp_t *loc,
                          char *err, size_t errsz);
 void eapol_export_discard(const char *tmp);
 int  eapol_export_ready(void);

@@ -26,7 +26,7 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-11-02 (slothweb's `--web-serve-evidence-pcap[=remote]`); 2026-10-27 (a pointer to slothweb's flags, `--pcap-dir` among them); 2026-10-26 (`make install-service` writes `/etc/default/sloth` only where absent); 2026-10-26 (`sloth-ble-scan` review: the bind wait, `--down` on an unregistered hciN, exit 1 causes); 2026-10-26 (`sloth-ble-scan`, its `--down` and `--delay`, and the units `make install-service` adds); 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
+**Last updated**: 2026-11-02 (slothweb's `--web-serve-evidence-pcap[=remote]`); 2026-10-27 (a pointer to slothweb's flags, `--pcap-dir` among them); 2026-10-27 (`--location`, `--gps`, `--gps-allow-remote`, `--gps-baud`, the `gps.*` knobs, the exit-2 refusals); 2026-10-26 (`make install-service` writes `/etc/default/sloth` only where absent); 2026-10-26 (`sloth-ble-scan` review: the bind wait, `--down` on an unregistered hciN, exit 1 causes); 2026-10-26 (`sloth-ble-scan`, its `--down` and `--delay`, and the units `make install-service` adds); 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
@@ -154,6 +154,16 @@ rows (~44).
 | `rf.median_k` | 8 | 1..16 | RSSI samples the distance median takes (the newest, within 60 s) |
 | `rf.ref_dist_dm` | 0 | 0..1000 | decimetres from the sensor to the `--my-bssid` AP; non-zero turns on calibration from that AP's measured path loss, per Wi-Fi band, bounded ±20 dB, never applied to BLE. 0 = no calibration |
 
+#### Knobs added 2026-10-27 (sensor position, `--gps`)
+
+Sampling and freshness for the position stamp; no rule reads a position. → [[location]]
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `gps.min_move_m` | 5 | 0..100000 | metres the GPS fix must move before a device's position sample (and the sensor's track) is taken again |
+| `gps.sample_s` | 60 | 1..86400 | seconds between samples of a device still being heard while the sensor is at rest |
+| `gps.max_fix_age_s` | 30 | 1..3600 | a GPS fix older than this stamps nothing; `--location`, when given, stands in |
+
 `--refresh-ms` is deliberately not a knob: it is UI cadence, not a detector or retention decision.
 
 
@@ -198,6 +208,18 @@ page-scanning before then is not in it until `ble_own_tx_baseline`
 reads `1` (power-cycle the adapter with sloth running). `ble_scan_mode` is `unknown` until a
 scan-parameter command has actually been seen — start sloth before the
 scan, or restart the scan, to have it recorded. → [[ble]]
+
+### Location — where the sensor is (2026-10-27)
+
+Both opt-in; neither is a network the sensor monitors, and neither puts
+a frame on one. Each is announced on stderr at startup. → [[location]]
+
+| Flag | Arg | Default | Effect |
+|------|-----|---------|--------|
+| `--location` | `LAT,LON[,ALT]` | off | The sensor's fixed position, WGS84 decimal degrees and metres above mean sea level (`51.50074,-0.12469,12`). Every new alert incident is stamped with it: the JSONL `alert` / `alert.*` records' `loc` object, the `--db` alerts row's `lat`/`lon`/`alt_m`/`loc_src`/`loc_ts`, the evidence manifests' `loc`. A latitude outside -90..90, a longitude outside -180..180, an altitude outside -1000..20000 or anything that is not a decimal number exits 2. Allowed with `--replay` (the files were captured somewhere; say where). |
+| `--gps` | `SPEC` | off | Read the sensor's position from a receiver. `SPEC` is `/dev/ttyXXX` — NMEA 0183 GGA, RMC and GSA off a serial device, checksum verified, opened read-only (`O_RDONLY`; sloth never writes a byte to the receiver) **before** the privilege drop, because the drop clears supplementary groups and the device is usually group `dialout`, and read on a worker after it — or `gpsd://[HOST[:PORT]]`, gpsd's JSON stream over TCP (default `127.0.0.1:2947`), dialled after the drop; sloth sends gpsd exactly one line, `?WATCH={"enable":true,"json":true}`, then only reads. There is no `gpsd://PATH`: gpsd has no Unix-socket data transport (its `-F` socket takes device add/remove commands only). A fix younger than `gps.max_fix_age_s` stamps as `loc_src` `gps` and wins over `--location`; an older one, or a receiver reporting no fix, stamps nothing (or the `--location` value). Fix quality 6 (dead reckoning), 7 (manual) and 8 (simulation) never stamp. With `--db`, a moving sensor also records `device_positions` and `sensor_positions`. `sensor_health` carries `gps_*`; the interface view's health strip carries `gps <state>`. Refused (exit 2) with `--replay`, for a malformed SPEC, a host name (numeric addresses only: no resolver), a device that cannot be opened, and a non-loopback gpsd without `--gps-allow-remote`. |
+| `--gps-allow-remote` | — | off | Permit `--gps gpsd://HOST` outside 127.0.0.0/8 and `::1`. The stream is unauthenticated and unencrypted. `--strict` refuses a remote gpsd regardless: a lock another flag can override is not a lock. Ignored, with a notice, without `--gps`. |
+| `--gps-baud` | `N` | 9600 | Serial speed for `--gps /dev/...`: 4800, 9600, 19200, 38400, 57600 or 115200. Anything else, or the flag with a gpsd SPEC or without `--gps`, exits 2. |
 
 ### Privilege — dropping root after capture opens
 
@@ -451,7 +473,7 @@ only a configured `storage.*` floor refuses anything in advance. See
 |------|---------|
 | `0` | Clean exit (incl. `--version`, `--help`, and the end of a `--ticks N` run). |
 | `1` | A `--replay` file that cannot be opened, is not a savefile, has a datalink with no route, or is damaged part-way (#119). |
-| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, `--pcap-dir` and `--eapol-dir` naming one directory (#166), a `--handshake-retention` value outside `0..36500`, a `--correlate-retain`/`--db-*`/`--wps-*` value that is not an integer inside its knob's range (#120), a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back, `--iface` naming a raw HCI device `bluetoothN`, `--bt-monitor` with `--replay` or in a `WITH_PCAP=0` build). |
+| `2` | Bad argument, or a fail-closed refusal (`--monitor-only` with no monitor iface, malformed `--inventory`/`--known-macs`, a refused output path, `--strict --allow-active`, `--strict` with a routable `--data-socket`, `--eapol-dir` without `--collect-handshakes`, `--pcap-dir` and `--eapol-dir` naming one directory (#166), a `--handshake-retention` value outside `0..36500`, a `--correlate-retain`/`--db-*`/`--wps-*` value that is not an integer inside its knob's range (#120), a `--user` naming no account or needing root it does not have, `--user` with `--no-privdrop`, a privilege drop that failed or did not read back, `--iface` naming a raw HCI device `bluetoothN`, `--bt-monitor` with `--replay` or in a `WITH_PCAP=0` build, a `--location` outside its ranges, a malformed `--gps` SPEC, `--gps` with `--replay`, a `--gps` device that cannot be opened, a non-loopback gpsd without `--gps-allow-remote` or under `--strict`, a `--gps-baud` outside its list). |
 
 ## slothweb
 

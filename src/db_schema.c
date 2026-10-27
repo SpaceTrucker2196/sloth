@@ -546,6 +546,18 @@ static const char SCHEMA_SQL[] =
     "  incident_id    TEXT,"
     "  incident_count INTEGER NOT NULL DEFAULT 0,"
     "  incident_first_seen INTEGER,"
+    /* Schema v9 (2026-10-27, --location / --gps): where the sensor was
+     * when the row's CURRENT incident opened. WGS84 decimal degrees,
+     * alt_m above mean sea level, acc_m an estimate of horizontal error
+     * (HDOP x 5 m, or gpsd's eph), loc_src 'gps' or 'fixed', loc_ts the
+     * fix's wall time. All NULL when unstamped - never 0,0, which is a
+     * real place. Listed last and in MIGRATE_V8_SQL's order. */
+    "  lat     REAL,"
+    "  lon     REAL,"
+    "  alt_m   REAL,"
+    "  acc_m   REAL,"
+    "  loc_src TEXT,"
+    "  loc_ts  INTEGER,"
     "  PRIMARY KEY (key, first_seen)"
     ");\n"
     "CREATE INDEX IF NOT EXISTS idx_alerts_last_seen ON alerts(last_seen);\n"
@@ -705,6 +717,36 @@ static const char SCHEMA_SQL[] =
     ");\n"
 
     /* ── passive sensor registry (#28) ───────────────────── */
+    /* --gps (2026-10-27, src/position_track.h). Where the SENSOR was
+     * when it heard a device: one row per sample, taken when the fix
+     * moved gps.min_move_m or gps.sample_s passed. Not the device's
+     * position - sloth has no bearing. rssi is the device's last Wi-Fi
+     * signal in dBm, NULL when none. Observation tier. */
+    /* The sample's time is `last_seen` so the retention sweep, which
+     * ages every table by that column, covers both tables unchanged. */
+    "CREATE TABLE IF NOT EXISTS device_positions ("
+    "  mac       TEXT NOT NULL,"
+    "  last_seen INTEGER NOT NULL,"
+    "  lat   REAL NOT NULL,"
+    "  lon   REAL NOT NULL,"
+    "  acc_m REAL,"
+    "  rssi  INTEGER,"
+    "  PRIMARY KEY (mac, last_seen)"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_device_positions_last_seen"
+    " ON device_positions(last_seen);\n"
+    /* The sensor's own track on the same sampling rule. */
+    "CREATE TABLE IF NOT EXISTS sensor_positions ("
+    "  last_seen INTEGER PRIMARY KEY,"
+    "  lat     REAL NOT NULL,"
+    "  lon     REAL NOT NULL,"
+    "  alt_m   REAL,"
+    "  acc_m   REAL,"
+    "  loc_src TEXT NOT NULL,"
+    "  sats    INTEGER,"
+    "  hdop    REAL"
+    ");\n"
+
     "CREATE TABLE IF NOT EXISTS sensors ("
     "  kind       INTEGER NOT NULL,"
     "  iface      TEXT NOT NULL,"
@@ -804,6 +846,17 @@ static const char MIGRATE_V7_SQL[] =
     "ALTER TABLE alerts ADD COLUMN incident_count INTEGER NOT NULL DEFAULT 0;\n"
     "ALTER TABLE alerts ADD COLUMN incident_first_seen INTEGER;\n";
 
+/* v8 -> v9 (2026-10-27): the alerts table gains the location stamp.
+ * Additive only, every column nullable with no default: a v8 row reads
+ * as unstamped, which it was. */
+static const char MIGRATE_V8_SQL[] =
+    "ALTER TABLE alerts ADD COLUMN lat     REAL;\n"
+    "ALTER TABLE alerts ADD COLUMN lon     REAL;\n"
+    "ALTER TABLE alerts ADD COLUMN alt_m   REAL;\n"
+    "ALTER TABLE alerts ADD COLUMN acc_m   REAL;\n"
+    "ALTER TABLE alerts ADD COLUMN loc_src TEXT;\n"
+    "ALTER TABLE alerts ADD COLUMN loc_ts  INTEGER;\n";
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -814,3 +867,4 @@ const char *db_schema_migrate_v4_sql(void) { return MIGRATE_V4_SQL; }
 const char *db_schema_migrate_v5_sql(void) { return MIGRATE_V5_SQL; }
 const char *db_schema_migrate_v6_sql(void) { return MIGRATE_V6_SQL; }
 const char *db_schema_migrate_v7_sql(void) { return MIGRATE_V7_SQL; }
+const char *db_schema_migrate_v8_sql(void) { return MIGRATE_V8_SQL; }

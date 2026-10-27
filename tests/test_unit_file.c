@@ -1308,6 +1308,43 @@ static void test_makefile_installs_ble_scan_without_enabling(void) {
     free(buf);
 }
 
+/* --gps's drop-in (2026-10-27) is inert as shipped: every directive is
+ * commented, so a copy nobody edited changes nothing, and the two blocks
+ * the operator chooses between say what they claim — the serial block
+ * keeps the device allow-list closed and read-only, the gpsd block adds
+ * only the IP families. make installs it to share/sloth, never to the
+ * unit directory (test_makefile_installs_ble_scan_without_enabling
+ * already fails on any .service.d install into $(UNITDIR)). Seen red
+ * with `#` removed from the serial block's `#[Service]`. */
+static void test_gps_dropin_is_inert_and_scoped(void) {
+    char *buf = uf_slurp("packaging/systemd/sloth-sensor.service.d/gps.conf");
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    int live = 0, pd = 0, policy = 0, allow_r = 0, groups = 0, fam = 0;
+    for (char *l = strtok(buf, "\n"); l; l = strtok(NULL, "\n")) {
+        if (l[0] != '#' && l[0] != '\0') {
+            fprintf(stderr, "    gps.conf has a live line: %s\n", l);
+            live++;
+        }
+        if (!strcmp(l, "#PrivateDevices=false")) pd = 1;
+        if (!strcmp(l, "#DevicePolicy=closed")) policy = 1;
+        if (!strncmp(l, "#DeviceAllow=/dev/tty", 21) &&
+            !strcmp(l + strlen(l) - 2, " r")) allow_r = 1;
+        if (!strcmp(l, "#SupplementaryGroups=dialout")) groups = 1;
+        if (!strcmp(l, "#RestrictAddressFamilies=AF_INET AF_INET6")) fam = 1;
+    }
+    ASSERT_EQ(live, 0);
+    ASSERT(pd && policy && allow_r && groups && fam);
+    free(buf);
+
+    char *mk = uf_slurp("Makefile");
+    ASSERT(mk != NULL);
+    if (!mk) return;
+    ASSERT(strstr(mk, "packaging/systemd/sloth-sensor.service.d/gps.conf \\\n"
+                      "\t    $(DESTDIR)$(PREFIX)/share/sloth/sloth-sensor-gps.conf") != NULL);
+    free(mk);
+}
+
 static void test_makefile_install_targets(void) {
     char *buf = uf_slurp("Makefile");
     ASSERT(buf != NULL);
@@ -1428,4 +1465,5 @@ void run_unit_file_tests(void) {
     RUN_TEST(test_ble_scan_unit_service_keys_are_allow_listed);
     RUN_TEST(test_ble_scan_unit_relationships);
     RUN_TEST(test_makefile_installs_ble_scan_without_enabling);
+    RUN_TEST(test_gps_dropin_is_inert_and_scoped);
 }

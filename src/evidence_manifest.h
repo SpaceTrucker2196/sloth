@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <time.h>
 
+struct loc_stamp;   /* include/sloth.h: loc_stamp_t */
+
 /* ── Per-session hashed manifest (#92 slice 3, plan #145) ─────────
  *
  * One JSON Lines file per sloth run per output directory, listing every
@@ -97,6 +99,11 @@ typedef struct {
     evm_sink_t  sink;
     const char *incident_id;   /* NULL or "" when the file has no alert */
     const char *rule;          /* NULL or "" likewise                   */
+    /* Where the sensor was when the alert opened (2026-10-27). NULL, or
+     * a stamp with src LOC_SRC_NONE, writes no `loc` key: a classic
+     * pcap has no field for it, so the manifest line is where a
+     * capture's location lives. */
+    const struct loc_stamp *loc;
 } evm_meta_t;
 
 /* "alert_pcap", "evidence_pcap", "handshake_pcap", "hashcat_22000". */

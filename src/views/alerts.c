@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include "gps.h"
 #include "sloth.h"
 #include "sloth_clock.h"
 #include "tui.h"
@@ -145,6 +146,16 @@ static void draw_alert_detail(const sloth_state_t *s) {
     if (a->technique[0]) {
         tui_dim();   TPRINT("  ATT&CK:     "); tui_bright();
         TPRINT("%s\n", a->technique);
+    }
+    /* Where the sensor was as this incident opened (--location / --gps,
+     * 2026-10-27). Shown whenever either flag is given, so an unstamped
+     * incident says so rather than leaving the operator to wonder. */
+    if (a->loc.src != LOC_SRC_NONE || s->gps.configured) {
+        char lt[160];
+        gps_loc_text(&a->loc, inc0, lt, sizeof(lt));
+        tui_dim();   TPRINT("  Location:   ");
+        if (lt[0]) { tui_normal(); TPRINT("%s\n", lt); }
+        else       { tui_dim();    TPRINT("(not stamped: no fix younger than gps.max_fix_age_s)\n"); }
     }
 
     tui_dim();   TPRINT("\n \xe2\x94\x80\xe2\x94\x80 FLOW IDENTIFIER \xe2\x94\x80\xe2\x94\x80\n");

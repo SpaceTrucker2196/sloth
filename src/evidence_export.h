@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+struct loc_stamp;   /* include/sloth.h: loc_stamp_t */
+
 /* ── Gated evidence export (#92) ──────────────────────────────────
  *
  * Writes raw 802.11 frames out of the in-memory evidence ring as a
@@ -141,6 +143,7 @@ int evidence_export_pcap_unique(const char *name,
                                 const uint64_t *ids, int n,
                                 int *skipped,
                                 const char *incident_id, const char *rule,
+                                const struct loc_stamp *loc,
                                 char *name_out, size_t name_outsz,
                                 char *err, size_t errsz);
 

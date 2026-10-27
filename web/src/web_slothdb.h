@@ -82,7 +82,7 @@
 #include "web_secret.h"
 
 #define WEB_SDB_SCHEMA_MIN 1
-#define WEB_SDB_SCHEMA_MAX 8
+#define WEB_SDB_SCHEMA_MAX 9
 #define WEB_SDB_BUSY_MS    100
 #define WEB_SDB_HTTP_MS    250       /* a request's budget */
 /* /api/history/overview's alone. It counts every device and alert
@@ -220,7 +220,9 @@ enum {
 enum {
     WEB_SDB_OPT_CLASS = 1 << 0,      /* devices.device_class, camera_* (v6) */
     WEB_SDB_OPT_VCI   = 1 << 1,      /* devices.dhcp_vci (v7) */
-    WEB_SDB_OPT_INC   = 1 << 2       /* alerts.incident_first_seen, reopens (v8) */
+    WEB_SDB_OPT_INC   = 1 << 2,      /* alerts.incident_first_seen, reopens (v8) */
+    WEB_SDB_OPT_LOC   = 1 << 3,      /* alerts.lat .. loc_ts (v9, web_loc.h) */
+    WEB_SDB_OPT_POS   = 1 << 4       /* device_positions, sensor_positions (v9) */
 };
 
 int  web_slothdb_available(void);

@@ -128,6 +128,8 @@
 #include "capture/replay.h"    /* --replay / --ticks (#119) */
 #include "capture/bt_monitor.h" /* --bt-monitor (#144 slice 2) */
 #include "capture/bt_capture.h" /* --bt-capture (#144 slice 3) */
+#include "capture/gps_reader.h" /* --gps (2026-10-27) */
+#include "gps.h"                 /* --location (2026-10-27) */
 #include "ble_hci.h"
 
 static sloth_state_t g_state;
@@ -310,6 +312,8 @@ static void print_usage(const char *argv0) {
             "       [--no-discovery] [--out-format FORMAT]\n"
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
             "       [--bt-monitor] [--bt-capture PATH] [--ble-rotation-hints]\n"
+            "       [--location LAT,LON[,ALT]] [--gps SPEC] [--gps-allow-remote]\n"
+            "       [--gps-baud N]\n"
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
@@ -548,6 +552,29 @@ static void print_usage(const char *argv0) {
             "                     refused. Counts are a sample of one channel\n"
             "                     (docs/wiki/ubertooth.md lists the allowed\n"
             "                     and forbidden tool flags).\n"
+            "  --location LAT,LON[,ALT]\n"
+            "                     the sensor's fixed position (WGS84 decimal\n"
+            "                     degrees, ALT metres above sea level). Every\n"
+            "                     new alert incident is stamped with it in the\n"
+            "                     JSONL log, --db and the evidence manifests.\n"
+            "                     A fresh --gps fix takes precedence.\n"
+            "  --gps SPEC         read the sensor's position from a receiver:\n"
+            "                       /dev/ttyXXX          NMEA 0183 (GGA/RMC/GSA)\n"
+            "                                            off a serial device,\n"
+            "                                            opened read-only before\n"
+            "                                            the privilege drop;\n"
+            "                                            nothing is written to it\n"
+            "                       gpsd://[HOST[:PORT]] gpsd's JSON stream over\n"
+            "                                            TCP, default\n"
+            "                                            127.0.0.1:2947; sloth\n"
+            "                                            sends one ?WATCH line\n"
+            "                     A fix older than gps.max_fix_age_s stamps\n"
+            "                     nothing (--location then stands in). Refused\n"
+            "                     with --replay. gpsd has no Unix data socket.\n"
+            "  --gps-allow-remote permit a gpsd:// HOST outside loopback.\n"
+            "                     --strict refuses a remote gpsd regardless.\n"
+            "  --gps-baud N       serial speed for --gps /dev/... (4800, 9600\n"
+            "                     (default), 19200, 38400, 57600, 115200).\n"
             "  --ble-rotation-hints\n"
             "                     INTERNAL USE ONLY, off by default: link\n"
             "                     private BLE addresses that may be one\n"
@@ -752,6 +779,10 @@ int main(int argc, char **argv) {
     int         bt_monitor   = 0;        /* --bt-monitor (#144 slice 2) */
     const char *bt_capture   = NULL;     /* --bt-capture PATH (#144 slice 3) */
     int         ble_rotation_hints = 0;  /* --ble-rotation-hints (#156) */
+    const char *location_arg = NULL;     /* --location LAT,LON[,ALT] (2026-10-27) */
+    const char *gps_arg      = NULL;     /* --gps SPEC (2026-10-27) */
+    int         gps_allow_remote = 0;    /* --gps-allow-remote */
+    int         gps_baud     = 0;        /* --gps-baud N; 0 = 9600 */
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     time_t      session_start = sloth_wall();
@@ -851,6 +882,21 @@ int main(int argc, char **argv) {
             bt_capture = argv[++i];
         } else if (!strcmp(argv[i], "--ble-rotation-hints")) {
             ble_rotation_hints = 1;
+        } else if (!strcmp(argv[i], "--location") && i + 1 < argc) {
+            location_arg = argv[++i];
+        } else if (!strcmp(argv[i], "--gps") && i + 1 < argc) {
+            gps_arg = argv[++i];
+        } else if (!strcmp(argv[i], "--gps-allow-remote")) {
+            gps_allow_remote = 1;
+        } else if (!strcmp(argv[i], "--gps-baud") && i + 1 < argc) {
+            char *end = NULL;
+            long b = strtol(argv[++i], &end, 10);
+            if (!end || *end || !gps_reader_baud_ok((int)b)) {
+                fprintf(stderr, "sloth: --gps-baud %s: want 4800, 9600, "
+                                "19200, 38400, 57600 or 115200\n", argv[i]);
+                return 2;
+            }
+            gps_baud = (int)b;
         } else if (!strcmp(argv[i], "--hop")) {
             g_hop_enabled = 1;
         } else if (!strcmp(argv[i], "--tune-list")) {
@@ -1080,6 +1126,57 @@ int main(int argc, char **argv) {
         return 2;
     }
 #endif
+    /* 2026-10-27: --location is validated here so a mistyped position
+     * exits before anything opens; --gps is checked for shape and
+     * scope here and opened just before the privilege drop. */
+    if (location_arg) {
+        char lerr[160];
+        if (gps_location_parse_fixed(location_arg, lerr, sizeof(lerr)) != 0) {
+            fprintf(stderr, "sloth: --location %s: %s\n", location_arg, lerr);
+            return 2;
+        }
+        fprintf(stderr, "sloth: --location fixed sensor position %s (WGS84): "
+                        "stamped on new alert incidents in the JSONL log, "
+                        "--db and the evidence manifests\n", location_arg);
+    }
+    if (gps_baud && !gps_arg) {
+        fprintf(stderr, "sloth: --gps-baud needs --gps /dev/...\n");
+        return 2;
+    }
+    if (gps_arg) {
+        gps_spec_t gsp;
+        char gerr[160];
+        if (gps_spec_parse(gps_arg, &gsp, gerr, sizeof(gerr)) != 0) {
+            fprintf(stderr, "sloth: --gps %s: %s\n", gps_arg, gerr);
+            return 2;
+        }
+        if (replay_arg) {
+            fprintf(stderr, "sloth: --replay reads savefiles, not a live "
+                            "receiver: --gps does not apply (--location "
+                            "does)\n");
+            return 2;
+        }
+        if (gps_spec_is_remote(&gsp) && strict_lock) {
+            fprintf(stderr, "sloth: --strict refuses a remote gpsd (%s): "
+                            "use gpsd://127.0.0.1 or a serial device, or "
+                            "drop --strict\n", gsp.host);
+            return 2;
+        }
+        if (gps_spec_is_remote(&gsp) && !gps_allow_remote) {
+            fprintf(stderr, "sloth: --gps %s is not loopback; pass "
+                            "--gps-allow-remote to read a remote gpsd\n",
+                    gps_arg);
+            return 2;
+        }
+        if (gps_baud && gsp.kind != GPS_SPEC_SERIAL) {
+            fprintf(stderr, "sloth: --gps-baud applies to a serial "
+                            "--gps /dev/... only\n");
+            return 2;
+        }
+    } else if (gps_allow_remote) {
+        fprintf(stderr, "sloth: --gps-allow-remote ignored: no --gps\n");
+    }
+
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
     int  replay_count = 0;
     if (replay_arg) {
@@ -1367,6 +1464,35 @@ int main(int argc, char **argv) {
             fprintf(stderr, "sloth: %s\n", capture_scope_reason(v));
     }
 
+    /* 2026-10-27: --gps. A serial receiver is opened here, before the
+     * drop, because the drop clears supplementary groups and the device
+     * is usually group dialout; gpsd is only recorded here and dialled
+     * by the worker after the drop. Read-only either way except for the
+     * one ?WATCH line gpsd needs, which is announced. */
+    if (gps_arg) {
+        char gerr[320];
+        if (gps_reader_configure(gps_arg, gps_allow_remote, gps_baud,
+                                 gerr, sizeof(gerr)) != 0) {
+            fprintf(stderr, "sloth: --gps %s\n", gerr);
+#ifdef WITH_PCAP
+            probe_stop();
+            capture_stop();
+            bt_monitor_stop();
+            bt_capture_stop();
+#endif
+            g_platform.cleanup();
+            return 2;
+        }
+        if (gps_arg[0] == '/')
+            fprintf(stderr, "sloth: --gps reading NMEA 0183 from %s "
+                            "(receive-only: nothing is written to the "
+                            "device)\n", gps_arg);
+        else
+            fprintf(stderr, "sloth: --gps connecting to gpsd at %s over TCP "
+                            "after the privilege drop; sloth sends one "
+                            "?WATCH line, then only reads\n", gps_arg + 7);
+    }
+
     /* #140: drop here — every handle that needs CAP_NET_RAW is open,
      * the scope is sealed, and no thread exists yet (capset and
      * no_new_privs are per-thread, so a worker started earlier would
@@ -1387,6 +1513,7 @@ int main(int argc, char **argv) {
             bt_monitor_stop();
             bt_capture_stop();
 #endif
+            gps_reader_stop();
             g_platform.cleanup();
             return 2;
         }
@@ -1606,6 +1733,7 @@ int main(int argc, char **argv) {
     bt_monitor_run();
     bt_capture_run();   /* after the drop: opens as the run's account */
 #endif
+    gps_reader_run();   /* after the drop: gpsd is dialled from here */
     event_wake_init();
     updater_init(check_manifest);
     if (headless) {
@@ -1675,6 +1803,7 @@ int main(int argc, char **argv) {
     }
 
     if (!headless) tui_cleanup();
+    gps_reader_stop();
 #ifdef WITH_PCAP
     probe_stop();
     capture_stop();

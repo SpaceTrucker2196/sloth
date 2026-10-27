@@ -1,6 +1,8 @@
 /* Embedded SQLite sink. Contract in db.h, schema in db_schema.c (#42). */
 
 #include "db.h"
+#include "gps.h"
+#include "position_track.h"
 #include "beacon_snoop.h"   /* RSN_AKM_*_FAMILY */
 
 #ifdef WITH_SQLITE
@@ -67,6 +69,9 @@ static const char *const TIER_OBSERVATION[] = {
     "ldap_events", "kerb_events", "smb_sessions",
     "deauth_events", "seqnum_correlations", "twin_episodes",
     "eapol_events", "scan_entries", "scan_entry_ports",
+    /* --gps (2026-10-27): a moving sensor's samples, the bulkiest
+     * thing it writes per hour of driving. */
+    "device_positions", "sensor_positions",
 };
 
 /* 3x — the inventory. "Which devices were on this network in March"
@@ -123,6 +128,7 @@ enum {
     ST_BGP, ST_SSH, ST_RDP, ST_SNMP, ST_MQTT, ST_LDAP, ST_KERB, ST_SMB,
     ST_ALERT, ST_ALERT_ROW, ST_CRED, ST_EAPOL, ST_DEAUTH, ST_SEQCORR, ST_TWIN,
     ST_SCAN, ST_SCAN_PORT, ST_KARMA, ST_ROGUE_RADIUS,
+    ST_DEV_POS, ST_SENSOR_POS,
     ST_COUNT
 };
 
@@ -539,8 +545,9 @@ static const char *const SQL[ST_COUNT] = {
 [ST_ALERT] =
     "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,"
     "technique,match_ip,match_port,count,incident_id,incident_count,"
-    "incident_first_seen)"
-    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?11,?13)"
+    "incident_first_seen,lat,lon,alt_m,acc_m,loc_src,loc_ts)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?11,?13,"
+    "?14,?15,?16,?17,?18,?19)"
     " ON CONFLICT(key,first_seen) DO UPDATE SET"
     "  last_seen=MAX(alerts.last_seen,excluded.last_seen),"
     /* The finding's peak severity, and the detail of the latest write
@@ -569,7 +576,31 @@ static const char *const SQL[ST_COUNT] = {
     "  reopens=alerts.reopens+"
     "    (CASE WHEN alerts.incident_id IS excluded.incident_id THEN 0 ELSE 1 END),"
     "  incident_id=excluded.incident_id,"
-    "  incident_first_seen=excluded.incident_first_seen",
+    "  incident_first_seen=excluded.incident_first_seen,"
+    /* Schema v9: the location stamp is the current incident's. Within
+     * one incident a recorded stamp is never overwritten (the engine
+     * stamps once, at open, so a later write carries the same one; a
+     * restart re-writing the incident with no fix must not erase it);
+     * a different incident brings its own, NULL included. The six move
+     * together under one condition. */
+    "  lat=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    AND alerts.loc_src IS NOT NULL THEN alerts.lat ELSE excluded.lat END,"
+    "  lon=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    AND alerts.loc_src IS NOT NULL THEN alerts.lon ELSE excluded.lon END,"
+    "  alt_m=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    AND alerts.loc_src IS NOT NULL THEN alerts.alt_m ELSE excluded.alt_m END,"
+    "  acc_m=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    AND alerts.loc_src IS NOT NULL THEN alerts.acc_m ELSE excluded.acc_m END,"
+    "  loc_ts=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    AND alerts.loc_src IS NOT NULL THEN alerts.loc_ts ELSE excluded.loc_ts END,"
+    "  loc_src=CASE WHEN alerts.incident_id IS excluded.incident_id"
+    "    AND alerts.loc_src IS NOT NULL THEN alerts.loc_src ELSE excluded.loc_src END",
+[ST_DEV_POS] =
+    "INSERT OR IGNORE INTO device_positions (mac,last_seen,lat,lon,acc_m,rssi)"
+    " VALUES (?1,?2,?3,?4,?5,?6)",
+[ST_SENSOR_POS] =
+    "INSERT OR IGNORE INTO sensor_positions (last_seen,lat,lon,alt_m,acc_m,"
+    "loc_src,sats,hdop) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
 /* The key's newest row, which the write above continues instead of
  * starting one under the engine's first_seen (#170). The engine keeps
  * first_seen across a reopen in its side table, but that table is LRU
@@ -773,6 +804,9 @@ static const db_step_t g_steps[] = {
     { 7, db_schema_migrate_v7_sql, TABLES_ALERTS,
       "alerts gained reopens, incident_id, incident_count and"
       " incident_first_seen" },
+    { 8, db_schema_migrate_v8_sql, TABLES_ALERTS,
+      "alerts gained the location stamp (lat, lon, alt_m, acc_m, loc_src,"
+      " loc_ts)" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -988,10 +1022,12 @@ int db_open(const char *path) {
     g_last_maint = 0;
     g_session_id = 0;
     g_over_ceiling_reported = 0;
+    postrack_set_sink(1);   /* --gps samples now have somewhere to go */
     return 1;
 }
 
 void db_close(void) {
+    postrack_set_sink(0);
     for (int i = 0; i < ST_COUNT; i++) {
         if (g_st[i]) { sqlite3_finalize(g_st[i]); g_st[i] = NULL; }
     }
@@ -1593,6 +1629,41 @@ static sqlite3_int64 alert_row_first_seen(const char *key,
  * rows, and a key that is evicted and re-fires, goes quiet and comes
  * back, or outlives a restart is still that one row (#170):
  * docs/wiki/sqlite-schema.md has the incident semantics. */
+/* --gps (2026-10-27): drain src/position_track.c's queues. INSERT OR
+ * IGNORE: the key is (mac, last_seen) / last_seen and a sample is one observation, so
+ * a duplicate is the same fact. */
+static void write_positions(void) {
+    static postrack_sample_t dv[256];
+    static postrack_sensor_t sv[64];
+    int n;
+    while ((n = postrack_drain_devices(dv, (int)(sizeof(dv) / sizeof(dv[0])))) > 0) {
+        for (int i = 0; i < n; i++) {
+            sqlite3_stmt *st = g_st[ST_DEV_POS];
+            bind_txt(st, 1, dv[i].mac);
+            sqlite3_bind_int64(st, 2, (sqlite3_int64)dv[i].ts);
+            sqlite3_bind_double(st, 3, dv[i].lat);
+            sqlite3_bind_double(st, 4, dv[i].lon);
+            if (dv[i].has_acc) sqlite3_bind_double(st, 5, dv[i].acc_m);
+            if (dv[i].rssi)    sqlite3_bind_int(st, 6, dv[i].rssi);
+            step_reset(ST_DEV_POS);
+        }
+    }
+    while ((n = postrack_drain_sensor(sv, (int)(sizeof(sv) / sizeof(sv[0])))) > 0) {
+        for (int i = 0; i < n; i++) {
+            sqlite3_stmt *st = g_st[ST_SENSOR_POS];
+            sqlite3_bind_int64(st, 1, (sqlite3_int64)sv[i].ts);
+            sqlite3_bind_double(st, 2, sv[i].lat);
+            sqlite3_bind_double(st, 3, sv[i].lon);
+            if (sv[i].has_alt) sqlite3_bind_double(st, 4, sv[i].alt_m);
+            if (sv[i].has_acc) sqlite3_bind_double(st, 5, sv[i].acc_m);
+            bind_txt(st, 6, "gps");
+            if (sv[i].sats > 0) sqlite3_bind_int(st, 7, sv[i].sats);
+            if (sv[i].hdop > 0) sqlite3_bind_double(st, 8, sv[i].hdop);
+            step_reset(ST_SENSOR_POS);
+        }
+    }
+}
+
 static void write_events(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->alert_count; i++) {
         const alert_t *a = &s->alerts[i];
@@ -1626,6 +1697,15 @@ static void write_events(const sloth_state_t *s, time_t now) {
         /* The incident's own start; first_seen is the finding's. */
         sqlite3_bind_int64(st, 13, (sqlite3_int64)(a->first_detected
                 ? a->first_detected : (a->first_seen ? a->first_seen : now)));
+        /* ?14..?19 stay NULL (clear_bindings) for an unstamped alert. */
+        if (a->loc.src == LOC_SRC_GPS || a->loc.src == LOC_SRC_FIXED) {
+            sqlite3_bind_double(st, 14, a->loc.lat);
+            sqlite3_bind_double(st, 15, a->loc.lon);
+            if (a->loc.has_alt) sqlite3_bind_double(st, 16, a->loc.alt_m);
+            if (a->loc.has_acc) sqlite3_bind_double(st, 17, a->loc.acc_m);
+            bind_txt(st, 18, gps_loc_src_name(a->loc.src));
+            sqlite3_bind_int64(st, 19, (sqlite3_int64)a->loc.ts);
+        }
         step_reset(ST_ALERT);
     }
 
@@ -2134,6 +2214,7 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_proto_flows    (s, now);
     write_events         (s, now);
     write_detector_evidence(s, now);
+    write_positions      ();
 
     if (g_disabled) {
         exec("ROLLBACK", "rollback");
@@ -2196,15 +2277,17 @@ static const char COMPACT_SQL[] =
     "CREATE TEMP TABLE compact_alerts AS"
     " SELECT g.key, g.fs, g.ls, x.type, g.sv, x.title, p.detail,"
     "  x.technique, x.match_ip, x.match_port, g.cnt, g.ro, x.incident_id,"
-    "  x.incident_count, COALESCE(x.incident_first_seen, x.first_seen) AS ifs"
+    "  x.incident_count, COALESCE(x.incident_first_seen, x.first_seen) AS ifs,"
+    "  x.lat, x.lon, x.alt_m, x.acc_m, x.loc_src, x.loc_ts"
     " FROM compact_agg g JOIN alerts x ON x.rowid = g.rid"
     " JOIN alerts p ON p.rowid = g.pid;\n"
     "DELETE FROM alerts;\n"
     "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,"
     " technique,match_ip,match_port,count,reopens,incident_id,incident_count,"
-    " incident_first_seen)"
+    " incident_first_seen,lat,lon,alt_m,acc_m,loc_src,loc_ts)"
     " SELECT key, fs, ls, type, sv, title, detail, technique, match_ip,"
-    "  match_port, cnt, ro, incident_id, incident_count, ifs"
+    "  match_port, cnt, ro, incident_id, incident_count, ifs,"
+    "  lat, lon, alt_m, acc_m, loc_src, loc_ts"
     " FROM compact_alerts;\n"
     "DROP TABLE compact_alerts;\n"
     "DROP TABLE compact_agg;\n";

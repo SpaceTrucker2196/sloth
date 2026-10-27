@@ -231,6 +231,10 @@ CORE_COMMON_SRCS += src/camera_join.c
 CORE_COMMON_SRCS += src/lan_role.c
 CORE_COMMON_SRCS += src/privdrop.c
 CORE_COMMON_SRCS += src/poll.c
+# --location / --gps (2026-10-27): the parsers and the arbitration state
+# are pure; the reader opens a serial device or a gpsd TCP stream and
+# needs neither libpcap nor SQLite, so it is common too.
+CORE_COMMON_SRCS += src/gps.c src/capture/gps_reader.c src/position_track.c
 
 # Feature-gated core sources, grouped by the flag that gates them.
 # CORE_SRCS_ALL is their union with the common list: the test and fuzz
@@ -1073,6 +1077,15 @@ replay-check: replay-run
 	@./$(TARGET) --headless --replay /nonexistent.pcap --bt-capture /nonexistent >/dev/null 2>&1; \
 	  rc=$$?; if [ $$rc -ne 2 ]; then \
 	    echo "replay-check: --replay --bt-capture exited $$rc, want 2 (refused)" >&2; exit 1; fi
+	@./$(TARGET) --headless --replay /nonexistent.pcap --gps gpsd:// >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then \
+	    echo "replay-check: --replay --gps exited $$rc, want 2 (refused)" >&2; exit 1; fi
+	@./$(TARGET) --headless --ticks 1 --no-privdrop --gps gpsd://192.0.2.1 >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then \
+	    echo "replay-check: --gps to a remote gpsd exited $$rc, want 2 (refused)" >&2; exit 1; fi
+	@./$(TARGET) --headless --ticks 1 --no-privdrop --location 91,0 >/dev/null 2>&1; \
+	  rc=$$?; if [ $$rc -ne 2 ]; then \
+	    echo "replay-check: --location 91,0 exited $$rc, want 2 (refused)" >&2; exit 1; fi
 	@./$(TARGET) --headless --ticks 1 --no-privdrop --bt-capture $(REPLAY_RUN) >/dev/null 2>&1; \
 	  rc=$$?; if [ $$rc -ne 2 ]; then \
 	    echo "replay-check: --bt-capture DIR exited $$rc, want 2 (not a file or FIFO)" >&2; exit 1; fi
@@ -1492,6 +1505,8 @@ install-service:
 	rm -f $(DESTDIR)$(UNITDIR)/sloth-ble-scan.service.tmp
 	install -D -m 644 packaging/systemd/sloth-sensor.service.d/bt-monitor.conf \
 	    $(DESTDIR)$(PREFIX)/share/sloth/sloth-sensor-bt-monitor.conf
+	install -D -m 644 packaging/systemd/sloth-sensor.service.d/gps.conf \
+	    $(DESTDIR)$(PREFIX)/share/sloth/sloth-sensor-gps.conf
 	[ -e $(DESTDIR)$(DEFAULTDIR)/slothweb ] || \
 	    install -m 644 packaging/default/slothweb $(DESTDIR)$(DEFAULTDIR)/slothweb
 	@echo "installed units and sysusers fragment; /etc/default/sloth{,web} only where absent; next:"
@@ -1499,6 +1514,8 @@ install-service:
 	@echo "  systemctl enable --now slothweb   (reads /etc/default/slothweb; loopback by default)"
 	@echo "  sloth-ble-scan.service is installed, not enabled; --bt-monitor's AF_BLUETOOTH drop-in"
 	@echo "  is at $(PREFIX)/share/sloth/sloth-sensor-bt-monitor.conf, not active: docs/wiki/deployment.md §7"
+	@echo "  --gps's device/AF_INET drop-in is at $(PREFIX)/share/sloth/sloth-sensor-gps.conf, inert"
+	@echo "  until edited and copied: docs/wiki/deployment.md §7.2"
 	@echo "  (migration from a build-tree unit: docs/wiki/deployment.md)"
 
 # ── Deploy tooling test (#153) ───────────────────────────────────────────────

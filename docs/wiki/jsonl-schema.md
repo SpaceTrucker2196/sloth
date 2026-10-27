@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-10-26 (`capture_linktype` and `monitor_only` in `sensor_health`, for slothweb's capture scope), 2026-10-26 (RSSI distance data point: `est_dist_m`, `est_dist_band`, `est_dist_trend`, `est_ptx_source` on `beacon`, `probe_client`, `assoc`, `device` and `ble_device`, present only with an estimate; `ble_device` signs the band only, never metres or the trend), 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
+**Last updated**: 2026-10-27 ([[location]]: the `loc` object on `alert` and every `alert.*` record of a stamped incident; the `gps_*` block in `sensor_health`, present only with `--location` or `--gps`), 2026-10-26 (`capture_linktype` and `monitor_only` in `sensor_health`, for slothweb's capture scope), 2026-10-26 (RSSI distance data point: `est_dist_m`, `est_dist_band`, `est_dist_trend`, `est_ptx_source` on `beacon`, `probe_client`, `assoc`, `device` and `ble_device`, present only with an estimate; `ble_device` signs the band only, never metres or the trend), 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
 and `drained`; the `beacon-overflow` `BEACONING` finding; IPv4-mapped
 beaconing peers keyed as IPv4), 2026-10-23 (#165 audit: a PTR `answer`
 is whole up to 63 bytes, for a PTR question only; a target that would
@@ -307,6 +307,7 @@ signal the `ICMP_TUNNEL` rule keys on (added #40; older records omit it).
 | `evidence_count` | int | additive, #92 — how many evidence-ring frame IDs this incident cites, below. **Omitted** when the rule cited none. Populated by the no-IP wireless rules whose triggering frames are monitor frames (#92 slice 4; [[pcap-export]] § Which alerts cite frames is the list, and says what each rule cites) — because a frame with no IP has no flow to export on, so the ring's own frames are the only path from the alert back to the bytes that caused it |
 | `evidence_id_0` .. `evidence_id_7` | int | additive, #92 — the cited frames' evidence-ring IDs, oldest first, present for `0 .. evidence_count-1` only. Opaque and **not** the same thing as this record's own `event_id` below — look one up with the evidence-ring retrieval path, never by assuming it is a byte offset or a packet count. Refreshed on every evaluation: a long-running incident cites the IDs still resolvable in the ring, not the first ones it opened with, which the ring may since have evicted |
 | `incident_id` | string | additive, #98 — 16 hex chars identifying the incident this record opens. Join key into the `alert.*` lifecycle records below |
+| `loc` | object | additive, 2026-10-27 — where the sensor was as the incident opened ([[location]]): `{"lat":51.5007400,"lon":-0.1246900[,"alt_m":11.6][,"acc_m":4.5],"src":"gps","ts":1800000000}`. `lat`/`lon` WGS84 decimal degrees to 7 places, `alt_m` metres above mean sea level, `acc_m` an **estimate** of horizontal error (HDOP x 5 m, or gpsd's `eph`) omitted when the source gave none, `src` `"gps"` (a fix no older than `gps.max_fix_age_s`, `ts` the fix's time) or `"fixed"` (`--location`, `ts` the stamp time). Stamped once, when the incident opens, never refreshed. **Omitted entirely** when nothing was known — never `0,0`. The only nested object on this record; written without `%f`, so a decimal-comma locale cannot reach it |
 
 `ts` for alerts is the `last_seen` time of the dedup key, not the
 first observation.
@@ -512,6 +513,7 @@ not duration.
 | `first_observed` | int | wall clock of the first counted observation (== `first_detected`) |
 | `last_observed` | int | wall clock of the most recent counted observation |
 | `reason` | string | resolve cause; `alert.resolve` only |
+| `loc` | object | additive, 2026-10-27 — the incident's location stamp, the same object and the same omission rule as on the `alert` record; identical on every record of one incident |
 
 These are ordinary records: they go to `-o FILE` and every
 `--data-socket` client alike, and under `--out-format cef` or `syslog`
@@ -922,6 +924,33 @@ The signature takes the two counts as decade bands (0, 1-9, 10-99, …
 entries a tick, and the raw count would write a line on every one. The
 exact counts ride every emitted line and the heartbeat. See
 [[retention]] §2d.
+
+**Sensor position** (2026-10-27, [[location]]). Appended, and present
+**only** while `--location` or `--gps` is given, so a run with neither
+writes exactly what it wrote before (the replay golden has neither).
+The position itself is not here; it is on the alerts it stamps.
+
+| Field | Meaning |
+|---|---|
+| `gps_state` | `fixed` (`--location` alone), `searching` (a `--gps` source with no usable fix, or one that reported losing it), `fix` (a fix no older than `gps.max_fix_age_s`), `stale` (the newest fix is older; stamps fall back to `--location`, or to nothing) |
+| `gps_src` | `fixed`, `nmea:/dev/ttyACM0` or `gpsd:127.0.0.1:2947` |
+| `gps_fix_age_s` | seconds since the newest usable fix, -1 before any |
+| `gps_quality` | the newest GGA fix quality (0..8) or gpsd TPV mode (0..3); -1 none yet |
+| `gps_sats` | satellites in use (GGA, or gpsd `SKY` `uSat`); 0 unknown |
+| `gps_hdop` | horizontal dilution of precision, one decimal; 0 unknown |
+| `gps_sentences` | NMEA sentences / gpsd objects parsed, every type |
+| `gps_bad_checksum` | NMEA sentences refused for their checksum |
+| `gps_parse_errors` | lines refused otherwise: over length, malformed fields, not JSON |
+| `gps_reconnects` | reopens of the serial device / reconnects to gpsd after a loss |
+| `gps_positions_dropped` | device and track samples dropped because their queue was full before the `--db` writer drained it |
+| `gps_err` | the reader's last open, read or connect failure; `""` when none |
+
+The change-only signature takes `gps_state`, the fix's age as three
+states (never, within `gps.max_fix_age_s`, older), and none/some bands
+of the two refusal counters and of `gps_err`: a receiver talking moves
+the age, the satellites and the counters every second, and signing
+those would write a line a tick. A stale fix crossing the limit is one
+line; ten seconds of a fresh fix are none.
 
 The hints are not a census of synchronising advertisers. Payload links
 come only from MS-CDP, Apple Handoff and Fast Pair account data, so few

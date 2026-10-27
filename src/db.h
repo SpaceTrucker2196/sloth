@@ -87,7 +87,12 @@
  * per finding rather than one per incident. The v7 -> v8 step adds the
  * four columns and touches no row; the duplicates an older build wrote stay until the
  * operator runs --db-compact-alerts on a copy. */
-#define DB_SCHEMA_VERSION 8
+/* Bumped to 9 on 2026-10-27 (--location / --gps): alerts gained the
+ * location stamp (lat, lon, alt_m, acc_m, loc_src, loc_ts), all
+ * nullable, NULL meaning "not stamped". The v8 -> v9 step adds the six
+ * columns and touches no row. device_positions and sensor_positions
+ * are new tables and ride the unconditional schema. */
+#define DB_SCHEMA_VERSION 9
 
 /* How long a statement on sloth's connection waits out another
  * connection's lock before failing busy. A reader of the file (the
@@ -353,5 +358,7 @@ const char *db_schema_migrate_v5_sql(void);
 const char *db_schema_migrate_v6_sql(void);
 /* v7 -> v8 (#170): ALTER TABLE alerts ADD COLUMN only. */
 const char *db_schema_migrate_v7_sql(void);
+/* v8 -> v9 (2026-10-27): ALTER TABLE alerts ADD COLUMN only. */
+const char *db_schema_migrate_v8_sql(void);
 
 #endif /* SLOTH_DB_H */

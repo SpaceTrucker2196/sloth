@@ -22,6 +22,7 @@
 #include "sloth_clock.h"
 #include "rules.h"
 #include "engine_internal.h"
+#include "gps.h"
 
 /* Engine state: deduped alert ring.
  *
@@ -581,6 +582,12 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
     a->match_port = match_port;
     snprintf(a->technique, sizeof(a->technique), "%s", alert_technique(type));
     incident_id_make(a, now);
+    /* Where the sensor was as this incident opened (2026-10-27): once,
+     * here, never on re-evaluation, because the stamp records where the
+     * finding was MADE. A reopen comes back through this branch and is
+     * stamped afresh. LOC_SRC_NONE when neither --location nor a fix
+     * younger than gps.max_fix_age_s exists; every export then omits it. */
+    gps_location_current(&a->loc, now);
     a->event_seq = 1;
     /* Hand back what belongs to the key, before alert.create goes out
      * so the opening record already carries it. */
@@ -788,6 +795,7 @@ static int dump_alert_evidence(const alert_t *a, char *path, size_t pathsz) {
     char used[sizeof(name) + 8];
     int written = evidence_export_pcap_unique(name, a->evidence_ids, n,
                                               NULL, a->incident_id, rule,
+                                              &a->loc,
                                               used, sizeof(used),
                                               err, sizeof(err));
     if (written > 0 && evidence_export_path(used, path, pathsz) != 0)

@@ -234,7 +234,7 @@ int alert_pcap_dump(const sloth_state_t *s, const alert_t *a,
          * `rule` rather than carry a placeholder (engine.c's evidence
          * sink follows the same rule). */
         snprintf(rule, sizeof(rule), "%s", tn ? tn : "");
-        evm_meta_t m = { EVM_SINK_ALERT_PCAP, a->incident_id, rule };
+        evm_meta_t m = { EVM_SINK_ALERT_PCAP, a->incident_id, rule, &a->loc };
         if (evidence_manifest_record(g_dirfd, name, &m, err, sizeof(err)) != 0)
             sfile_fail(&g_fail, "alert pcap manifest", err);
     }

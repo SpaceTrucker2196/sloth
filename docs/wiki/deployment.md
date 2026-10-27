@@ -28,7 +28,7 @@ sensor runs, installed but never enabled by make.
 `src/secure_file.c`, `src/data_socket.c`, `src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2,
 `packaging/systemd/sloth-ble-scan.service`, `src/ble_scan/main.c`, `src/ble_scan/ble_scan_cmd.c`, `tests/test_ble_scan.c`.
 
-**Last updated**: 2026-11-02 (§6: `slothweb.service` passes `--web-assessments` the copy `make install` puts in `share/sloth/alert-assessments`); 2026-10-27 (§6: `--pcap-dir /var/lib/sloth/pcap` for the alert page's capture, an example in `/etc/default/slothweb`); 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
+**Last updated**: 2026-11-02 (§6: `slothweb.service` passes `--web-assessments` the copy `make install` puts in `share/sloth/alert-assessments`); 2026-10-27 (§6: `--pcap-dir /var/lib/sloth/pcap` for the alert page's capture, an example in `/etc/default/slothweb`); 2026-10-27 (§7.2: the inert `gps.conf` drop-in for `--gps`, why `PrivateDevices=true` hides the receiver, `dialout`, the gpsd variant); 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
 
 ---
 
@@ -85,6 +85,7 @@ depth on top of this, not a prerequisite for it.
 | `install` | `sloth-ble-scan` (built by `make` on Linux) | `/usr/local/sbin/sloth-ble-scan` | 0755 | the passive-scan helper `sloth-ble-scan.service` runs (§7); an operator tool like `sloth-monitor-up`, never started by sloth |
 | `install-service` | `packaging/systemd/sloth-ble-scan.service` | `/etc/systemd/system/sloth-ble-scan.service` | 0644 | §7, rewritten as for the others; installed, **not enabled** |
 | `install-service` | `packaging/systemd/sloth-sensor.service.d/bt-monitor.conf` | `/usr/local/share/sloth/sloth-sensor-bt-monitor.conf` | 0644 | the sensor's `AF_BLUETOOTH` for `--bt-monitor` (§7); placed **inert**, copied into `sloth-sensor.service.d/` only by the operator or by `sloth-migrate-sensor` for a unit with the flag |
+| `install-service` | `packaging/systemd/sloth-sensor.service.d/gps.conf` | `/usr/local/share/sloth/sloth-sensor-gps.conf` | 0644 | the serial device or `AF_INET` for `--gps` (§7.2); every directive commented, so even a copy nobody edited changes nothing |
 
 The units, the sysusers fragment and the inert drop-in are the shipped
 artefact and are replaced on every `make install-service`: a site's
@@ -1051,6 +1052,60 @@ Makefile: the helper to `sbin` on Linux only, the unit installed, the
 drop-in to `share/sloth` and never into a `.service.d`, no `systemctl`
 in either install recipe.
 
+### 7.2 `--gps`: the `gps.conf` drop-in
+
+`--location LAT,LON[,ALT]` needs nothing: add it to `SLOTH_ARGS`. `--gps`
+needs one of two openings the shipped unit does not have ([[location]]).
+
+**A serial NMEA receiver** (`--gps /dev/ttyACM0`; the no-network
+option, and the one to prefer). The unit's `PrivateDevices=true` gives
+the service a private `/dev` holding only the pseudo-devices: the
+receiver's node does not exist inside it, so `DeviceAllow=` alone
+cannot help. The drop-in turns that off and keeps the cgroup's device
+allow-list closed and read-only to the one device:
+
+```ini
+[Service]
+PrivateDevices=false
+DevicePolicy=closed
+DeviceAllow=/dev/ttyACM0 r
+SupplementaryGroups=dialout
+```
+
+The unit runs `User=sloth` from the start, so the open needs the
+device's group; check it with `ls -l /dev/ttyACM0`. sloth opens the
+device before its own privilege drop, `O_RDONLY`, and never writes to
+it. A receiver that enumerates under a different name on each plug-in
+wants a udev symlink (`/dev/gps0`), named in both `DeviceAllow=` and
+`--gps`.
+
+**gpsd** (`--gps gpsd://`, loopback port 2947 by default). gpsd has
+no Unix data socket, so the drop-in adds the IP families; the unit sets
+no `IPAddressDeny=`, and sloth itself refuses a non-loopback gpsd
+without `--gps-allow-remote` (and under `--strict`, always):
+
+```ini
+[Service]
+RestrictAddressFamilies=AF_INET AF_INET6
+```
+
+To enable either:
+
+```sh
+sudo install -D -m 644 /usr/local/share/sloth/sloth-sensor-gps.conf \
+    /etc/systemd/system/sloth-sensor.service.d/gps.conf
+sudoedit /etc/systemd/system/sloth-sensor.service.d/gps.conf   # uncomment ONE block
+sudoedit /etc/default/sloth          # SLOTH_ARGS gains --gps /dev/ttyACM0
+sudo systemctl daemon-reload && sudo systemctl restart sloth-sensor
+journalctl -u sloth-sensor -n 20 | grep -- '--gps'
+```
+
+The startup line names what was opened (`sloth: --gps reading NMEA
+0183 from /dev/ttyACM0 (receive-only: ...)`); `sensor_health`'s
+`gps_state` reads `fix` once the receiver has one. `sloth-migrate-sensor`
+does not carry `--gps`: a unit with it is refused and moved by hand,
+because the drop-in needs the device name only the operator knows.
+
 ## 8. What this does not do
 
 - It does not shed `CAP_NET_ADMIN` while `--hop` is on. Every retune
@@ -1075,4 +1130,5 @@ in either install recipe.
 - [[posture-report]] — what `SIGTERM` writes before exit
 - [[inventory]] — why `--my-ssid`/`--my-bssid` are configuration
 - [[cli-reference]] — every flag in the `ExecStart`
+- [[location]] — `--location`, `--gps` and what §7.2's drop-in opens
 - [[slothweb]], `web/README.md` — the web UI `slothweb.service` runs, and the sloth.db freshness its DB-backed views show (#168)

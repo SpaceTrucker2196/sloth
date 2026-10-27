@@ -892,6 +892,29 @@ typedef enum {
 /* alert_type_t, ALERT_TYPE_COUNT, alert_technique() and alert_type_name()
  * live in sloth_alert.h, generated from sloth_alerts.def (#117). */
 
+/* ── Location stamp (2026-10-27, --location / --gps) ──────────
+ * Where the sensor was when a finding was made, as the sensor knew
+ * it: a fixed --location, or the newest GPS fix younger than
+ * gps.max_fix_age_s. src is LOC_SRC_NONE when nothing was known, and
+ * every consumer (JSONL, the --db alerts row, the manifest line, the
+ * views) then writes nothing — absence, not a zero at Null Island.
+ * WGS84 decimal degrees; alt_m above mean sea level; acc_m an
+ * ESTIMATE of horizontal error (HDOP x 5 m for NMEA, gpsd's eph where
+ * it gives one), never a guarantee. ts is the fix's wall time, or the
+ * stamp time for a fixed sensor. Plain fields, no module header:
+ * sloth.h is the shared header. src/gps.h owns the arbitration. */
+typedef enum { LOC_SRC_NONE = 0, LOC_SRC_FIXED, LOC_SRC_GPS } loc_src_t;
+
+typedef struct loc_stamp {
+    uint8_t src;        /* loc_src_t */
+    uint8_t has_alt;
+    uint8_t has_acc;
+    double  lat, lon;
+    double  alt_m;
+    double  acc_m;
+    time_t  ts;
+} loc_stamp_t;
+
 typedef struct {
     alert_type_t type;
     alert_sev_t  sev;
@@ -1060,6 +1083,13 @@ typedef struct {
      * bounded, so a key quiet for long enough under pressure starts
      * again at 0. */
     uint32_t     reopen_count;
+    /* Where the sensor was when this incident opened (2026-10-27):
+     * stamped once in fire_inv()'s new-incident branch from
+     * gps_location_current() and never refreshed, because the stamp is
+     * where the finding was MADE; a reopen is a new incident and gets a
+     * new stamp. src LOC_SRC_NONE on every rule when neither --location
+     * nor a fresh --gps fix exists, and the exports then omit it. */
+    loc_stamp_t  loc;
 } alert_t;
 
 /* ── ICMP log ───────────────────────────────────────────── */
@@ -2987,6 +3017,41 @@ typedef enum {
     BT_CAP_STOPPED      /* sloth stopped the worker */
 } bt_cap_state_t;
 
+/* --location / --gps health (2026-10-27). One struct for both sources
+ * so the strip and sensor_health have one thing to read. `state`:
+ *   GPS_NONE        neither flag given (configured 0)
+ *   GPS_FIXED_ONLY  --location alone: the stamp is the fixed position
+ *   GPS_SEARCHING   a --gps source is open but has not produced a fix
+ *                   younger than gps.max_fix_age_s yet (or lost one and
+ *                   a --location fallback is not configured)
+ *   GPS_FIX         a fix younger than gps.max_fix_age_s is in hand
+ *   GPS_STALE       the newest fix is older than gps.max_fix_age_s;
+ *                   stamps fall back to --location, or to nothing
+ * fix_age_s is -1 before any fix. src names the source as the CLI gave
+ * it ("fixed", "nmea:/dev/ttyUSB0", "gpsd:127.0.0.1:2947"). err is the
+ * reader's last open/read failure, "" when none. The counters are the
+ * reader's lifetime tallies; sensor_health bands them. */
+typedef enum {
+    GPS_NONE = 0, GPS_FIXED_ONLY, GPS_SEARCHING, GPS_FIX, GPS_STALE
+} gps_state_t;
+
+typedef struct {
+    int      configured;       /* --location or --gps given */
+    int      has_gps;          /* a --gps reader exists */
+    int      has_fixed;        /* a --location was given */
+    int      state;            /* gps_state_t */
+    int      sats;             /* satellites in use, 0 unknown */
+    double   hdop;             /* 0 unknown */
+    int      fix_age_s;        /* -1 never */
+    int      quality;          /* GGA quality / gpsd mode of the newest fix */
+    char     src[48];
+    char     err[96];
+    uint64_t sentences;        /* NMEA sentences / gpsd objects parsed */
+    uint64_t bad_checksum;     /* NMEA checksum failures */
+    uint64_t parse_errors;     /* malformed lines, both sources */
+    uint64_t reconnects;       /* reopen / reconnect attempts after a loss */
+} gps_health_t;
+
 typedef struct {
     int      configured;       /* --bt-capture given */
     int      state;            /* bt_cap_state_t */
@@ -3461,6 +3526,10 @@ typedef struct {
     char             ble_detail_iface[24];
     /* Ubertooth capture stream (#144 slice 3): --bt-capture PATH. */
     bt_capture_health_t btcap;
+    /* Sensor position (2026-10-27): --location and --gps. Filled once
+     * per poll by gps_health_poll() from src/gps.c; exported by
+     * sensor_health (only while configured) and the iface health strip. */
+    gps_health_t     gps;
     bredr_lap_t      bredr_laps[MAX_BREDR_LAPS];
     int              bredr_lap_count;
 

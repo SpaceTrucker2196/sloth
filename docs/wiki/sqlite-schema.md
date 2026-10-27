@@ -1,6 +1,6 @@
 ---
 name: sqlite-schema
-description: The --db SQLite sink — why it exists, the schema and its v1 → v8 migration chain, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
+description: The --db SQLite sink — why it exists, the schema and its v1 → v9 migration chain, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
 type: reference
 ---
 
@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154 and #170.
 
-**Last updated**: 2026-10-26 (`idx_alerts_first_seen` and `idx_devices_first_seen`, for slothweb's History strip; an index needs no bump, and the build cost is measured under "Indexes on time"). 2026-10-26 (#170 review: `alerts.incident_first_seen`, peak `sev` on the live row as on a compacted one, `count` / `reopens` as lower bounds, and `--db-compact-alerts` refusing an un-checkpointed SRC, writing nothing beside it, and handing DST to SRC's owner). 2026-10-26 (#170: schema v8, one `alerts` row per finding rather than per incident — the incident semantics below, the v7 → v8 step, and the opt-in `--db-compact-alerts` copy for the duplicates older builds wrote). 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
+**Last updated**: 2026-10-27 ([[location]]: schema v9, the alerts location stamp `lat`/`lon`/`alt_m`/`acc_m`/`loc_src`/`loc_ts`, the v8 → v9 step, `device_positions` and `sensor_positions` in the observation tier, the stamp's upsert rule and `--db-compact-alerts` carrying it). 2026-10-26 (`idx_alerts_first_seen` and `idx_devices_first_seen`, for slothweb's History strip; an index needs no bump, and the build cost is measured under "Indexes on time"). 2026-10-26 (#170 review: `alerts.incident_first_seen`, peak `sev` on the live row as on a compacted one, `count` / `reopens` as lower bounds, and `--db-compact-alerts` refusing an un-checkpointed SRC, writing nothing beside it, and handing DST to SRC's owner). 2026-10-26 (#170: schema v8, one `alerts` row per finding rather than per incident — the incident semantics below, the v7 → v8 step, and the opt-in `--db-compact-alerts` copy for the duplicates older builds wrote). 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
 
 ---
 
@@ -137,14 +137,14 @@ These are what make the file trustworthy rather than merely present.
 | `sev` = MAX, `detail` the latest at that peak | `alerts` | A row holds every incident of a key (#170), and a LOW reopen must not erase the CRIT before it. The compactor folds rows the same way. |
 | One row per finding; `count` sums incidents, `reopens` counts them | `alerts` | A write continues the key's newest row, so evict-and-refire, a quiet-period reopen and a restart all advance one row (#170). See *Findings and incidents* below. |
 
-## Schema — 41 tables, v1 → v8
+## Schema — 43 tables, v1 → v9
 
-`meta` holds `schema_version`, currently **8**. `db_open()` checks it
+`meta` holds `schema_version`, currently **9**. `db_open()` checks it
 *before* applying the rest of the schema, so a mismatch produces the
 clear version message rather than whatever SQL error the schema happens
-to hit first. Since #154 the chain covers the full **v1 → v8**: any
+to hit first. Since #154 the chain covers the full **v1 → v9**: any
 file this build has ever written opens and migrates forward. Only a
-file from a *newer* build (`schema_version` above 8) is refused.
+file from a *newer* build (`schema_version` above 9) is refused.
 
 **v5** (#90): `karma_candidates.pnl_best`. **v6** (#106 round 2):
 `devices` gains `device_class`, `camera_vendor`, `camera_model`,
@@ -155,6 +155,46 @@ file from a *newer* build (`schema_version` above 8) is refused.
 `device_class` may now hold 3, `not-camera`. **v8** (#170): `alerts`
 gains `reopens`, `incident_id`, `incident_count` and
 `incident_first_seen`, and its rows become one per finding — *Findings and incidents* below.
+**v9** (2026-10-27, [[location]]): `alerts` gains `lat`, `lon`,
+`alt_m`, `acc_m`, `loc_src` and `loc_ts`, where the sensor was when the
+row's current incident opened, and two new tables, `device_positions`
+and `sensor_positions`.
+
+**The v8 → v9 migration.** Six `ALTER TABLE alerts ADD COLUMN`
+statements, every column nullable with no default
+(`db_schema_migrate_v8_sql()`), and the stamp, in one `BEGIN IMMEDIATE`
+transaction. No v8 value changes; a v8 row reads as unstamped (all six
+NULL), which it was. The two tables need no `ALTER`: they ride the
+unconditional schema. Tested on a v8 file (`test_v8_file_migrates_additively`:
+the four rows and their incident unchanged, the six columns NULL at
+cids 15..20, then a v9 write stamping the current incident's row) and
+on one whose last ALTER fails (`test_v8_migration_failure_leaves_file_unchanged`:
+it stays v8, none of the five earlier columns present, every row as it
+was).
+
+**The location stamp's upsert.** The six columns move together under
+one rule: within one incident (`incident_id` unchanged) a recorded
+stamp is never overwritten — sloth stamps an incident once, as it
+opens, so a later write carries the same one, and a restart re-writing
+the incident with no fix must not erase it; a different incident on
+the row brings its own stamp, NULL included, so the row always holds
+its *current* incident's (`test_alert_stamp_kept_within_incident`).
+`--db-compact-alerts` carries the newest row's stamp onto the folded
+row, like the other per-incident columns.
+
+**`device_positions` and `sensor_positions`.** Written only with
+`--gps` and a fix no older than `gps.max_fix_age_s` (never from
+`--location`). `device_positions (mac, last_seen, lat, lon, acc_m, rssi)`,
+key `(mac, last_seen)`: where the **sensor** was when it heard the
+device — not the device's position, sloth has no bearing — sampled when
+the fix moved `gps.min_move_m` or `gps.sample_s` passed; `rssi` the
+device's last Wi-Fi signal, NULL without one. `sensor_positions
+(last_seen, lat, lon, alt_m, acc_m, loc_src, sats, hdop)`, key
+`last_seen`: the sensor's own track on the same rule. The sample's time
+is named `last_seen` so the retention sweep, which ages every table by
+that column, covers both; they are point samples, so they have no
+`first_seen` (`test_schema_tables_have_seen_columns` names them as the
+exception). Written `INSERT OR IGNORE`: a sample is one fact.
 
 **The v7 → v8 migration.** Four `ALTER TABLE alerts ADD COLUMN`
 statements with defaults (`db_schema_migrate_v7_sql()`) and the stamp,
@@ -179,9 +219,9 @@ ALTER fails, which stays v6 with none of the step's columns
 (`test_v6_migration_failure_leaves_file_unchanged`).
 
 **The chain.** `src/db.c`'s `g_steps[]` lists one entry per step (`from`
-1 through 7) and runs every one from the file's version up, each in its
+1 through 8) and runs every one from the file's version up, each in its
 own transaction with its own stamp, so a v1 file opened by this build
-goes v1 → v2 → v3 → v4 → v5 → v6 → v7 → v8 in one `db_open()` call. A step
+goes v1 → v2 → v3 → v4 → v5 → v6 → v7 → v8 → v9 in one `db_open()` call. A step
 that fails leaves the file at the last version it fully reached — a v3
 file whose next step fails is a v4 file, never half of v5
 (`test_v3_chain_stops_at_last_whole_step`) — and `db_open()` refuses the
@@ -220,7 +260,7 @@ version stamp, in one `BEGIN IMMEDIATE` transaction. No existing value
 is rewritten, so a v5 forensic record reads the same afterwards; a
 statement that fails rolls the whole step back and the file stays v5
 (`tests/test_db.c :: test_v5_migration_failure_leaves_file_unchanged`).
-Only a file newer than v8 is refused.
+Only a file newer than v9 is refused.
 
 **Migration path, by design** (owner ruling 2026-10-21, replacing the
 earlier "no migration path by design"). Every schema bump ships its
@@ -539,7 +579,7 @@ rows. Entities keep **3×**, findings keep **12×**.
 
 | Tier | Window | Contents |
 |---|---|---|
-| observation | 1× | protocol flows, deauths, twins, EAPOL, scans, seqnum correlations |
+| observation | 1× | protocol flows, deauths, twins, EAPOL, scans, seqnum correlations, `device_positions`, `sensor_positions` |
 | entity | 3× | devices, PNL, beacons, assocs, ARP, leases, discovery, sensors |
 | finding | 12× | `alerts`, `cleartext_creds`, `karma_candidates`, `rogue_radius`, `btm_requests` |
 

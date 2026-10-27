@@ -5965,3 +5965,15 @@ report events.
   and `vendor_research`, `assessment` and `evidence` lifted whole out
   of the drawer's and the alert page's own answers; a new reason word,
   `no_store`, for an FRRS route without slothweb.db.
+- 2026-10-27 — [[location]] (new): `--location LAT,LON[,ALT]` and
+  `--gps /dev/ttyXXX | gpsd://[HOST[:PORT]]` (with
+  `--gps-allow-remote`, `--gps-baud`). Every new alert incident is
+  stamped once, as it opens: JSONL `loc` on `alert` / `alert.*`, the
+  `sloth.db` alerts row (schema v9, the v8 → v9 step adds six nullable
+  columns), the manifest line of every pcap it writes. A fix older than
+  `gps.max_fix_age_s` stamps nothing. `device_positions` and
+  `sensor_positions` for a moving sensor; `sensor_health` `gps_*`; the
+  TUI's alert detail and health strip; slothweb's alert page, drawer
+  scatter and `/api/positions` (JSON, GeoJSON, GPX); the inert
+  `gps.conf` drop-in. Pages touched: [[cli-reference]], [[jsonl-schema]],
+  [[sqlite-schema]], [[pcap-export]], [[deployment]], [[slothweb]].

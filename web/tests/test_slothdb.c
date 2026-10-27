@@ -154,7 +154,8 @@ static void test_open_flags(void) {
                               WEB_QF_BEACON | WEB_QF_ASSOC | WEB_QF_PNLC |
                               WEB_QF_STA | WEB_QF_CAMSIG));
     WT_EQ(c.opt, (unsigned)(WEB_SDB_OPT_CLASS | WEB_SDB_OPT_VCI |
-                              WEB_SDB_OPT_INC));
+                              WEB_SDB_OPT_INC | WEB_SDB_OPT_LOC |
+                              WEB_SDB_OPT_POS));
     web_slothdb_close(&c);
     web_slothdb_destroy(&S);
     rm_db(p);

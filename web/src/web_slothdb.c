@@ -80,6 +80,25 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "alerts", "incident_first_seen", 8, 1, 0 },
     /* The incidents a v8 row absorbed after its first (#170). */
     { "alerts", "reopens", 8, 1, 0 },
+    /* v9 (sloth --location / --gps, 2026-10-27): where the sensor was
+     * when the row's current incident opened (web_loc.h). Numbers and a
+     * two-word source; nothing a sender chose. */
+    { "alerts", "lat", 9, 1, 0 },     { "alerts", "lon", 9, 1, 0 },
+    { "alerts", "alt_m", 9, 1, 0 },   { "alerts", "acc_m", 9, 1, 0 },
+    { "alerts", "loc_src", 9, 1, 0 }, { "alerts", "loc_ts", 9, 1, 0 },
+    /* v9: the sensor's position when it heard a device, and its own
+     * track (web_positions.h). */
+    { "device_positions", "mac", 9, 1, 0 },
+    { "device_positions", "last_seen", 9, 1, 0 },
+    { "device_positions", "lat", 9, 1, 0 },
+    { "device_positions", "lon", 9, 1, 0 },
+    { "device_positions", "acc_m", 9, 1, 0 },
+    { "device_positions", "rssi", 9, 1, 0 },
+    { "sensor_positions", "last_seen", 9, 1, 0 },
+    { "sensor_positions", "lat", 9, 1, 0 },
+    { "sensor_positions", "lon", 9, 1, 0 },
+    { "sensor_positions", "alt_m", 9, 1, 0 },
+    { "sensor_positions", "acc_m", 9, 1, 0 },
     /* M5 (#163): the WiFi view's AP table and the History view. */
     { "beacon_aps", "bssid", 1, 0, 0 },  { "beacon_aps", "ssid", 1, 0, 0 },
     { "beacon_aps", "signal_dbm", 1, 0, 0 }, { "beacon_aps", "channel", 1, 0, 0 },
@@ -966,6 +985,19 @@ static int probe(web_sdb_conn_t *c) {
     if ((c->feats & WEB_QF_ALERTS) &&
         table_cols(c->db, "alerts", inc, &have) > 0 && have == 3)
         c->opt |= WEB_SDB_OPT_INC;
+    static const char *const loc[] = { "lat", "lon", "alt_m", "acc_m",
+                                       "loc_src", "loc_ts", NULL };
+    if ((c->feats & WEB_QF_ALERTS) &&
+        table_cols(c->db, "alerts", loc, &have) > 0 && have == 0x3f)
+        c->opt |= WEB_SDB_OPT_LOC;
+    static const char *const dpos[] = { "mac", "last_seen", "lat", "lon",
+                                        "acc_m", "rssi", NULL };
+    static const char *const spos[] = { "last_seen", "lat", "lon", "alt_m",
+                                        "acc_m", NULL };
+    unsigned have2 = 0;
+    if (table_cols(c->db, "device_positions", dpos, &have) > 0 && have == 0x3f &&
+        table_cols(c->db, "sensor_positions", spos, &have2) > 0 && have2 == 0x1f)
+        c->opt |= WEB_SDB_OPT_POS;
     /* probe_clients, pnl_clients and assocs are A2's: absent, its
      * statement leaves them out. */
     return 0;
