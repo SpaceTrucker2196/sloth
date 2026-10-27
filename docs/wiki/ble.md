@@ -34,7 +34,7 @@ Bluetooth Core Specification v5.4 Vol 4 Part E §5.2 (arrayed parameters), §5.4
 Core Spec v5.4 Vol 4 Part E §7.3.1, §7.7.14–§7.7.16, §7.8.1, §7.8.10,
 §7.8.11, §7.8.64, §7.8.65; Vol 6 Part B §4.4.3.1 (passive scanning).
 
-**Last updated**: 2026-10-26 (`sloth-ble-scan`: a passive LE scan held over the HCI user channel for the life of the sensor, its command set and why it is consistent with MISSION §2), 2026-10-23 (#156 item 2 follow-up: `BLE_ADV_FLOOD` and `BLE_WATCHLIST` pinned unchanged by the flag, the flood also with linked addresses inside it; which side of a link eviction and retention can free), 2026-10-23 (#156 item 2 integration: hints feed only the `[*]` estimate, `BLE_HID_UNEXPECTED` unchanged by the flag; links window-scoped; a linked entry keeps its digests until the link goes), 2026-10-23 (#156 item 2 review round: sequential-spray poisoning and the flood gate judged at commit; no link under controller duplicate filtering; banded `sensor_health` fields; expiry without frames; 3600 s poison window, full list fails closed; Fast Pair token from a 5-octet filter), 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
+**Last updated**: 2026-10-26 (`sloth-ble-scan` review: a No-Op is flow control, not a restart; a Hardware Error mid-sequence retries in-process; the boot-time bind wait; the decisions as a pure step function; the link-time check that sloth carries no HCI builder; what stopping bluetoothd sends, and Conflicts= in both directions), 2026-10-26 (`sloth-ble-scan`: a passive LE scan held over the HCI user channel for the life of the sensor, its command set and why it is consistent with MISSION §2), 2026-10-23 (#156 item 2 follow-up: `BLE_ADV_FLOOD` and `BLE_WATCHLIST` pinned unchanged by the flag, the flood also with linked addresses inside it; which side of a link eviction and retention can free), 2026-10-23 (#156 item 2 integration: hints feed only the `[*]` estimate, `BLE_HID_UNEXPECTED` unchanged by the flag; links window-scoped; a linked entry keeps its digests until the link goes), 2026-10-23 (#156 item 2 review round: sequential-spray poisoning and the flood gate judged at commit; no link under controller duplicate filtering; banded `sensor_health` fields; expiry without frames; 3600 s poison window, full list fails closed; Fast Pair token from a 5-octet filter), 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
 
 ---
 
@@ -614,13 +614,31 @@ concurrent `sloth --bt-monitor` as `ble_adv_reports` 7489 with
 
 It reads every event and discards it unopened — the socket has to be
 drained or the controller stalls — and never prints advertising
-content: sloth is the decoder. A Hardware Error event (§7.7.16), or the
-unprompted Command Complete for opcode 0x0000 a controller sends when it
-restarts (§7.7.14), re-runs the whole sequence, at most five times a
-minute; a controller that goes away ends the process for systemd to
-restart. It logs one line at start and one per re-establish. A bind
-refused with `EBUSY` says what to do: mask `bluetooth.service` and
-bring `hciN` down.
+content: sloth is the decoder. A Hardware Error event (§7.7.16) re-runs
+the whole sequence from the Reset, at most five times a minute, and so
+does one that arrives while the sequence itself is running (the usual
+shape: a second Hardware Error while the host resets after the first),
+rather than exiting into systemd's slower and start-limited restart. A
+Command Complete for opcode 0x0000 is **not** a restart: §7.7.14 makes
+it a No-Op a controller may send at any time to update
+Num_HCI_Command_Packets, and the kernel treats `HCI_OP_NOP` as flow
+control only. Reading it as "controller restarted" — the first version
+did — would let a controller that sends No-Ops in normal running, or one
+late after the Reset, make the helper reset itself out of its own scan
+and spend the budget. A controller that goes away ends the process for
+systemd to restart. At start, a bind refused with `ENODEV` (hciN not
+registered yet, at boot) or `EBUSY` (a USB controller still in setup)
+is retried once a second for up to 30 s; an `EBUSY` that outlasts it
+says what to do: mask `bluetooth.service` and bring `hciN` down. It
+logs one line at start and one per re-establish.
+
+The sequence and its decisions — which answer moves to the extended
+pair (0x01 and 0x11 only; 0x0C or anything else fails), which disable
+matches the set the scan was enabled with, what a Hardware Error
+mid-sequence does, the re-arm budget, the argv rules — are a pure step
+function in `src/ble_scan/ble_scan_cmd.c`, driven in
+`tests/test_ble_scan.c` with hand-built Command Complete, Command Status
+and Hardware Error events; `main.c` only does the I/O.
 
 **Why this is consistent with MISSION §2.** The rule is that a receiver
 is used only to receive, and that a host controller is listened to
@@ -639,9 +657,13 @@ is used only to receive, and that a host controller is listened to
   advertising, connection, inquiry, page, Write Scan Enable and vendor
   commands — each seen red under a mutation of the guard.
 - sloth itself still sends no HCI command. The builder is compiled into
-  the helper and the test binary only; `tests/test_ble_scan.c ::
-  test_helper_is_not_linked_into_sloth` fails if any list `sloth` is
-  built from names it.
+  the helper and the test binary only, and the `sloth` link recipe
+  checks the result in every configuration: the build fails, and
+  deletes the binary, if `nm sloth` lists any `bles_` symbol or any
+  source `sloth` is built from names the builder. A Makefile text scan
+  (`tests/test_ble_scan.c :: test_helper_is_not_linked_into_sloth`) is
+  the second line; on its own it missed `CORE_COMMON_SRCS +=
+  $(BLE_SCAN_SRCS)`.
 - The helper is an operator tool, like `sloth-monitor-up` for the
   802.11 radio: a separate binary, run by a unit the operator enables.
   And sloth checks it: every command the helper sends crosses the
@@ -656,6 +678,21 @@ is an over-the-air transmission, and none of it is a command the helper
 chose. Nothing else on the host can use the controller while the
 helper holds it, which is why the unit conflicts with
 `bluetooth.service`.
+
+What stopping bluetoothd does is not transmission-free in general, and
+it is bluetoothd's, not the helper's: on SIGTERM bluetoothd powers its
+adapters off (MGMT Set Powered 0), and the kernel's power-off path then
+sends HCI_Disconnect for every live link and stops any advertising,
+which puts LL_TERMINATE_IND / LMP_detach on the air. It happens only if
+links exist. On a host with paired devices connected, disconnect or
+unpair them before the unit (or `systemctl mask --now
+bluetooth.service`) first stops bluetoothd. The owner's host has none.
+
+Conflicts= also runs the other way: starting bluetoothd — including by
+D-Bus activation from any `org.bluez` client — stops the scan, cleanly,
+so it does not restart until the sensor next starts; and the sensor's
+next start pulls the scan in again and stops that bluetoothd
+([[deployment]] §7).
 
 ### Warnings
 

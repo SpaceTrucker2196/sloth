@@ -1,5 +1,6 @@
 #include "ble_scan/ble_scan_cmd.h"
 
+#include <errno.h>
 #include <string.h>
 
 /* Contract in ble_scan_cmd.h. Every multi-octet HCI parameter is
@@ -173,13 +174,74 @@ bles_ev_kind_t bles_parse_event(const uint8_t *p, size_t n, bles_ev_t *ev) {
 }
 
 int bles_ev_lost_scan(const bles_ev_t *ev) {
-    if (!ev) return 0;
-    if (ev->kind == BLES_EV_HW_ERROR) return 1;
-    return ev->kind == BLES_EV_CMD_COMPLETE && ev->opcode == 0x0000;
+    return ev && ev->kind == BLES_EV_HW_ERROR;
 }
 
 int bles_status_wants_extended(uint8_t status) {
     return status == 0x01 || status == 0x11;
+}
+
+void bles_est_begin(bles_est_t *est) {
+    if (!est) return;
+    est->cmd    = BLES_CMD_RESET;
+    est->mode   = BLES_MODE_LEGACY;
+    est->status = 0;
+}
+
+/* The command after `c` answered with status 0, or -1 when `c` ends the
+ * sequence. */
+static int est_next(int c) {
+    switch (c) {
+    case BLES_CMD_RESET:              return BLES_CMD_SET_EVENT_MASK;
+    case BLES_CMD_SET_EVENT_MASK:     return BLES_CMD_LE_SET_EVENT_MASK;
+    case BLES_CMD_LE_SET_EVENT_MASK:  return BLES_CMD_LE_SCAN_PARAMS;
+    case BLES_CMD_LE_SCAN_PARAMS:     return BLES_CMD_LE_SCAN_ENABLE;
+    case BLES_CMD_LE_EXT_SCAN_PARAMS: return BLES_CMD_LE_EXT_SCAN_ENABLE;
+    default:                          return -1;
+    }
+}
+
+bles_step_t bles_est_feed(bles_est_t *est, const bles_ev_t *ev) {
+    if (!est || !ev) return BLES_STEP_WAIT;
+    if (ev->kind == BLES_EV_HW_ERROR) {
+        est->status = ev->hw_code;
+        return BLES_STEP_HW_ERROR;
+    }
+    uint8_t st;
+    if (ev->kind == BLES_EV_CMD_COMPLETE)
+        st = ev->has_status ? ev->status : 0;
+    else if (ev->kind == BLES_EV_CMD_STATUS && ev->status != 0)
+        st = ev->status;
+    else
+        return BLES_STEP_WAIT;
+    uint16_t op = bles_opcode(est->cmd);
+    if (op == 0 || ev->opcode != op) return BLES_STEP_WAIT;
+
+    est->status = st;
+    if (st != 0) {
+        if (est->cmd == BLES_CMD_LE_SCAN_PARAMS && bles_status_wants_extended(st)) {
+            est->cmd = BLES_CMD_LE_EXT_SCAN_PARAMS;
+            return BLES_STEP_SEND;
+        }
+        return BLES_STEP_FAIL;
+    }
+    if (est->cmd == BLES_CMD_LE_SCAN_ENABLE) {
+        est->mode = BLES_MODE_LEGACY;
+        return BLES_STEP_DONE;
+    }
+    if (est->cmd == BLES_CMD_LE_EXT_SCAN_ENABLE) {
+        est->mode = BLES_MODE_EXTENDED;
+        return BLES_STEP_DONE;
+    }
+    int next = est_next(est->cmd);
+    if (next < 0) return BLES_STEP_FAIL;   /* a cmd the sequence never sends */
+    est->cmd = next;
+    return BLES_STEP_SEND;
+}
+
+int bles_disable_cmd(bles_mode_t mode) {
+    return mode == BLES_MODE_EXTENDED ? BLES_CMD_LE_EXT_SCAN_DISABLE
+                                      : BLES_CMD_LE_SCAN_DISABLE;
 }
 
 int bles_rearm_take(bles_rearm_t *b, uint64_t now_ms) {
@@ -191,4 +253,58 @@ int bles_rearm_take(bles_rearm_t *b, uint64_t now_ms) {
     if (b->n >= BLES_REARM_MAX) return 0;
     b->at[b->n++] = now_ms;
     return 1;
+}
+
+bles_next_t bles_after_establish(bles_step_t r, bles_rearm_t *b, uint64_t now_ms) {
+    if (r == BLES_STEP_DONE) return BLES_NEXT_HOLD;
+    if (r == BLES_STEP_HW_ERROR && bles_rearm_take(b, now_ms)) return BLES_NEXT_RETRY;
+    return BLES_NEXT_EXIT;
+}
+
+int bles_bind_transient(int err) {
+    return err == ENODEV || err == EBUSY;
+}
+
+int bles_parse_dev(const char *s) {
+    if (!s) return -1;
+    if (strncmp(s, "hci", 3) == 0) s += 3;
+    if (!*s) return -1;
+    long v = 0;
+    for (const char *p = s; *p; p++) {
+        if (*p < '0' || *p > '9') return -1;
+        v = v * 10 + (*p - '0');
+        if (v > 0xfffe) return -1;   /* HCI_DEV_NONE is 0xffff */
+    }
+    return (int)v;
+}
+
+bles_args_rc_t bles_parse_args(int argc, char *const argv[], bles_args_t *a) {
+    bles_args_t r = { 0, 0, 0 };
+    int have_dev = 0;
+    for (int i = 1; i < argc; i++) {
+        const char *s = argv[i];
+        if (!strcmp(s, "--down")) {
+            r.down = 1;
+        } else if (!strcmp(s, "--delay")) {
+            if (i + 1 >= argc) return BLES_ARGS_USAGE;
+            const char *v = argv[++i];
+            long d = 0;
+            if (!*v) return BLES_ARGS_BAD_DELAY;
+            for (const char *p = v; *p; p++) {
+                if (*p < '0' || *p > '9') return BLES_ARGS_BAD_DELAY;
+                d = d * 10 + (*p - '0');
+                if (d > BLES_DELAY_MAX) return BLES_ARGS_BAD_DELAY;
+            }
+            r.delay = (int)d;
+        } else if (!strcmp(s, "-h") || !strcmp(s, "--help")) {
+            return BLES_ARGS_HELP;
+        } else if (!have_dev && s[0] != '-' && bles_parse_dev(s) >= 0) {
+            r.dev = bles_parse_dev(s);
+            have_dev = 1;
+        } else {
+            return BLES_ARGS_USAGE;
+        }
+    }
+    if (a) *a = r;
+    return BLES_ARGS_RUN;
 }

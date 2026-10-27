@@ -26,7 +26,7 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-10-26 (`sloth-ble-scan`, its `--down` and `--delay`, and the units `make install-service` adds); 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
+**Last updated**: 2026-10-26 (`sloth-ble-scan` review: the bind wait, `--down` on an unregistered hciN, exit 1 causes); 2026-10-26 (`sloth-ble-scan`, its `--down` and `--delay`, and the units `make install-service` adds); 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
@@ -494,10 +494,14 @@ sloth-ble-scan [--delay SECS] [hciN]  # take hciN's HCI user channel and hold a 
 sloth-ble-scan --down [hciN]          # bring hciN down (HCIDEVDOWN), so the channel can be taken
 ```
 
-Needs `CAP_NET_ADMIN`; refuses with `EBUSY` while bluetoothd or the
-kernel holds the device. Exit 0 stopped by a signal, 1 failure (the
-channel could not be taken, the controller went away, the scan was
-lost five times in a minute), 2 usage.
+Needs `CAP_NET_ADMIN`. A bind refused with `ENODEV` (hciN not
+registered yet) or `EBUSY` (still in setup, or bluetoothd holding it) is
+retried once a second for up to 30 s, then fails; `--down` on an
+unregistered hciN succeeds with nothing to do. `hciN` is one argument:
+an empty one is a usage error, not hci0. Exit 0 stopped by a signal, 1
+failure (the channel could not be taken, a refused command, the
+controller went away, a Hardware Error five times in a minute), 2
+usage.
 
 `packaging/bin/sloth-migrate-sensor` takes `--dry-run`,
 `--data-socket-unix` (move an old unit's `tcp:` data socket to

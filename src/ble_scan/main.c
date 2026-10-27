@@ -85,19 +85,6 @@ static void usage(void) {
             "       " ME " --down [hciN]           bring hciN down\n");
 }
 
-/* "hci3" or "3" → 3; -1 when it is neither. */
-static int parse_dev(const char *s) {
-    if (strncmp(s, "hci", 3) == 0) s += 3;
-    if (!*s) return -1;
-    long v = 0;
-    for (const char *p = s; *p; p++) {
-        if (*p < '0' || *p > '9') return -1;
-        v = v * 10 + (*p - '0');
-        if (v > 0xfffe) return -1;
-    }
-    return (int)v;
-}
-
 static int bt_socket(void) {
     return socket(AF_BLUETOOTH, SOCK_RAW | SOCK_CLOEXEC, BLES_BTPROTO_HCI);
 }
@@ -115,106 +102,97 @@ static int send_cmd(int fd, int c) {
     return w == (ssize_t)n ? 0 : -1;
 }
 
-/* Waits for the Command Complete or Command Status answering `op`,
- * discarding everything else. 0 and *status on an answer, -1 on a read
- * error or timeout, -2 when a Hardware Error arrives first. */
-static int await(int fd, uint16_t op, uint8_t *status) {
+/* Reads events until the step function has an answer for the command
+ * in flight, or CMD_TIMEOUT_MS passes. The decision is
+ * bles_est_feed()'s; this only does the I/O. */
+static bles_step_t await_step(int fd, bles_est_t *est) {
     uint64_t end = sloth_mono_ms() + CMD_TIMEOUT_MS;
     uint8_t buf[1100];
     for (;;) {
         uint64_t now = sloth_mono_ms();
-        if (now >= end) { errno = ETIMEDOUT; return -1; }
+        if (now >= end) { errno = ETIMEDOUT; return BLES_STEP_IO_ERROR; }
         struct pollfd pf = { fd, POLLIN, 0 };
         int r = poll(&pf, 1, (int)(end - now));
-        if (r < 0) { if (errno == EINTR) continue; return -1; }
+        if (r < 0) { if (errno == EINTR) continue; return BLES_STEP_IO_ERROR; }
         if (r == 0) continue;
         ssize_t got = recv(fd, buf, sizeof(buf), 0);
         if (got < 0) {
             if (errno == EINTR || errno == EAGAIN) continue;
-            return -1;
+            return BLES_STEP_IO_ERROR;
         }
         bles_ev_t ev;
-        switch (bles_parse_event(buf, (size_t)got, &ev)) {
-        case BLES_EV_CMD_COMPLETE:
-            if (ev.opcode == op) { *status = ev.has_status ? ev.status : 0; return 0; }
-            break;
-        case BLES_EV_CMD_STATUS:
-            if (ev.opcode == op) { *status = ev.status; return 0; }
-            break;
-        case BLES_EV_HW_ERROR:
-            *status = ev.hw_code;
-            return -2;
+        (void)bles_parse_event(buf, (size_t)got, &ev);
+        bles_step_t st = bles_est_feed(est, &ev);
+        if (st != BLES_STEP_WAIT) return st;
+    }
+}
+
+static const char *cmd_name(int c) {
+    switch (c) {
+    case BLES_CMD_RESET:               return "HCI_Reset";
+    case BLES_CMD_SET_EVENT_MASK:      return "Set Event Mask";
+    case BLES_CMD_LE_SET_EVENT_MASK:   return "LE Set Event Mask";
+    case BLES_CMD_LE_SCAN_PARAMS:      return "LE Set Scan Parameters";
+    case BLES_CMD_LE_SCAN_ENABLE:      return "LE Set Scan Enable";
+    case BLES_CMD_LE_SCAN_DISABLE:     return "LE Set Scan Enable (disable)";
+    case BLES_CMD_LE_EXT_SCAN_PARAMS:  return "LE Set Extended Scan Parameters";
+    case BLES_CMD_LE_EXT_SCAN_ENABLE:  return "LE Set Extended Scan Enable";
+    case BLES_CMD_LE_EXT_SCAN_DISABLE: return "LE Set Extended Scan Enable (disable)";
+    default:                           return "?";
+    }
+}
+
+/* Runs the sequence in ble_scan_cmd.h to its end. */
+static bles_step_t establish(int fd, bles_mode_t *mode) {
+    bles_est_t est;
+    bles_est_begin(&est);
+    for (;;) {
+        if (send_cmd(fd, est.cmd) != 0) {
+            fprintf(stderr, ME ": %s: send: %s\n", cmd_name(est.cmd), strerror(errno));
+            return BLES_STEP_IO_ERROR;
+        }
+        bles_step_t st = await_step(fd, &est);
+        switch (st) {
+        case BLES_STEP_SEND:
+            continue;
+        case BLES_STEP_DONE:
+            *mode = est.mode;
+            return st;
+        case BLES_STEP_FAIL:
+            fprintf(stderr, ME ": %s: status 0x%02x\n", cmd_name(est.cmd), est.status);
+            return st;
+        case BLES_STEP_HW_ERROR:
+            fprintf(stderr, ME ": %s: Hardware Error 0x%02x\n", cmd_name(est.cmd), est.status);
+            return st;
         default:
-            break;
+            fprintf(stderr, ME ": %s: no answer: %s\n", cmd_name(est.cmd), strerror(errno));
+            return BLES_STEP_IO_ERROR;
         }
     }
 }
 
-/* One command, answered with status 0. Returns the controller status
- * (>0), or -1 on I/O failure, -2 on Hardware Error. */
-static int run_cmd(int fd, int c, const char *what) {
-    uint8_t st = 0;
-    if (send_cmd(fd, c) != 0) {
-        fprintf(stderr, ME ": %s: send: %s\n", what, strerror(errno));
-        return -1;
+/* The disable, answered or not: closing the socket ends the scan anyway. */
+static void disable(int fd, bles_mode_t mode) {
+    int c = bles_disable_cmd(mode);
+    if (send_cmd(fd, c) != 0) return;
+    uint64_t end = sloth_mono_ms() + CMD_TIMEOUT_MS;
+    uint16_t op = bles_opcode(c);
+    uint8_t buf[1100];
+    while (sloth_mono_ms() < end) {
+        struct pollfd pf = { fd, POLLIN, 0 };
+        if (poll(&pf, 1, 100) <= 0) continue;
+        ssize_t got = recv(fd, buf, sizeof(buf), 0);
+        if (got < 0) { if (errno == EINTR || errno == EAGAIN) continue; return; }
+        bles_ev_t ev;
+        if (bles_parse_event(buf, (size_t)got, &ev) == BLES_EV_CMD_COMPLETE &&
+            ev.opcode == op) return;
     }
-    int r = await(fd, bles_opcode(c), &st);
-    if (r == -1) {
-        fprintf(stderr, ME ": %s: no answer: %s\n", what, strerror(errno));
-        return -1;
-    }
-    if (r == -2) {
-        fprintf(stderr, ME ": %s: Hardware Error 0x%02x\n", what, st);
-        return -2;
-    }
-    return st;
 }
 
-typedef enum { MODE_LEGACY, MODE_EXTENDED } scan_mode_t;
-
-/* Reset → event masks → passive parameters → enable. Legacy commands
- * first: after a Reset no extended command has been issued, so a
- * controller that has both accepts them (it may not mix the two sets
- * between resets, Vol 4 Part E §3.1.1), and only one that refuses the
- * legacy parameters as unknown or unsupported is moved to the extended
- * pair. 0 on success. */
-static int establish(int fd, scan_mode_t *mode) {
-    static const struct { int c; const char *what; } pre[] = {
-        { BLES_CMD_RESET,             "HCI_Reset" },
-        { BLES_CMD_SET_EVENT_MASK,    "Set Event Mask" },
-        { BLES_CMD_LE_SET_EVENT_MASK, "LE Set Event Mask" },
-    };
-    for (size_t i = 0; i < sizeof(pre) / sizeof(pre[0]); i++) {
-        int st = run_cmd(fd, pre[i].c, pre[i].what);
-        if (st != 0) {
-            if (st > 0) fprintf(stderr, ME ": %s: status 0x%02x\n", pre[i].what, st);
-            return -1;
-        }
-    }
-    int st = run_cmd(fd, BLES_CMD_LE_SCAN_PARAMS, "LE Set Scan Parameters");
-    if (st == 0) {
-        st = run_cmd(fd, BLES_CMD_LE_SCAN_ENABLE, "LE Set Scan Enable");
-        if (st == 0) { *mode = MODE_LEGACY; return 0; }
-        if (st > 0) fprintf(stderr, ME ": LE Set Scan Enable: status 0x%02x\n", st);
-        return -1;
-    }
-    if (st < 0) return -1;
-    if (!bles_status_wants_extended((uint8_t)st)) {
-        fprintf(stderr, ME ": LE Set Scan Parameters: status 0x%02x\n", st);
-        return -1;
-    }
-    st = run_cmd(fd, BLES_CMD_LE_EXT_SCAN_PARAMS, "LE Set Extended Scan Parameters");
-    if (st == 0)
-        st = run_cmd(fd, BLES_CMD_LE_EXT_SCAN_ENABLE, "LE Set Extended Scan Enable");
-    if (st == 0) { *mode = MODE_EXTENDED; return 0; }
-    if (st > 0) fprintf(stderr, ME ": extended scan: status 0x%02x\n", st);
-    return -1;
-}
-
-static void announce(int dev, scan_mode_t mode, const char *why) {
+static void announce(int dev, bles_mode_t mode, const char *why) {
     fprintf(stderr, ME ": passive LE scan %s on hci%d (%s commands, "
             "interval = window = %d ms; passive: no SCAN_REQ is sent)\n",
-            why, dev, mode == MODE_LEGACY ? "legacy" : "extended",
+            why, dev, mode == BLES_MODE_LEGACY ? "legacy" : "extended",
             BLES_SCAN_INTERVAL * 5 / 8);
 }
 
@@ -233,8 +211,26 @@ static int take_channel(int dev) {
     a.hci_family  = AF_BLUETOOTH;
     a.hci_dev     = (unsigned short)dev;
     a.hci_channel = BLES_HCI_CHANNEL_USER;
-    if (bind(fd, (struct sockaddr *)&a, sizeof(a)) == 0) return fd;
-    int e = errno;
+    /* At boot the sensor, and so this, can start before hciN registers
+     * (ENODEV) or while the kernel still sets a USB controller up
+     * (EBUSY). Waited out here, bounded, rather than through systemd's
+     * Restart=, whose StartLimitBurst would leave the unit failed with
+     * nothing to restart it before the sensor next does. */
+    uint64_t end = sloth_mono_ms() + (uint64_t)BLES_BIND_WAIT_S * 1000u;
+    int e, waited = 0;
+    for (;;) {
+        if (bind(fd, (struct sockaddr *)&a, sizeof(a)) == 0) {
+            if (waited) fprintf(stderr, ME ": hci%d is ready\n", dev);
+            return fd;
+        }
+        e = errno;
+        if (g_stop || !bles_bind_transient(e) || sloth_mono_ms() >= end) break;
+        if (!waited)
+            fprintf(stderr, ME ": hci%d not ready (%s); waiting up to %d s\n",
+                    dev, strerror(e), BLES_BIND_WAIT_S);
+        waited = 1;
+        (void)poll(NULL, 0, 1000);
+    }
     close(fd);
     switch (e) {
     case EBUSY:
@@ -279,9 +275,12 @@ static int do_down(int dev) {
     }
     if (e == EBUSY)
         fprintf(stderr, ME ": hci%d: its user channel is held by another process\n", dev);
-    else if (e == ENODEV)
-        fprintf(stderr, ME ": no controller hci%d\n", dev);
-    else if (e == EPERM || e == EACCES)
+    else if (e == ENODEV) {
+        /* Not registered yet (boot): nothing to bring down, and the
+         * main run waits BLES_BIND_WAIT_S for it, then names it. */
+        fprintf(stderr, ME ": no controller hci%d yet; nothing to bring down\n", dev);
+        return 0;
+    } else if (e == EPERM || e == EACCES)
         fprintf(stderr, ME ": bringing hci%d down needs CAP_NET_ADMIN\n", dev);
     else
         fprintf(stderr, ME ": HCIDEVDOWN hci%d: %s\n", dev, strerror(e));
@@ -289,31 +288,22 @@ static int do_down(int dev) {
 }
 
 int main(int argc, char **argv) {
-    int dev = 0, down = 0;
-    long delay = 0;
-    int have_dev = 0;
-    for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--down")) {
-            down = 1;
-        } else if (!strcmp(argv[i], "--delay") && i + 1 < argc) {
-            char *end = NULL;
-            delay = strtol(argv[++i], &end, 10);
-            if (!end || *end || delay < 0 || delay > 60) {
-                fprintf(stderr, ME ": --delay takes 0..60 seconds\n");
-                return 2;
-            }
-        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            usage();
-            return 0;
-        } else if (!have_dev && argv[i][0] != '-' && parse_dev(argv[i]) >= 0) {
-            dev = parse_dev(argv[i]);
-            have_dev = 1;
-        } else {
-            usage();
-            return 2;
-        }
+    bles_args_t args;
+    switch (bles_parse_args(argc, argv, &args)) {
+    case BLES_ARGS_RUN:
+        break;
+    case BLES_ARGS_HELP:
+        usage();
+        return 0;
+    case BLES_ARGS_BAD_DELAY:
+        fprintf(stderr, ME ": --delay takes 0..%d seconds\n", BLES_DELAY_MAX);
+        return 2;
+    default:
+        usage();
+        return 2;
     }
-    if (down) return do_down(dev);
+    int dev = args.dev;
+    if (args.down) return do_down(dev);
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -325,8 +315,8 @@ int main(int argc, char **argv) {
 
     /* Lets a sensor started in the same transaction open the monitor
      * channel first, so it sees the Reset and the passive parameters. */
-    if (delay > 0) {
-        uint64_t end = sloth_mono_ms() + (uint64_t)delay * 1000u;
+    if (args.delay > 0) {
+        uint64_t end = sloth_mono_ms() + (uint64_t)args.delay * 1000u;
         while (!g_stop) {
             uint64_t now = sloth_mono_ms();
             if (now >= end) break;
@@ -336,21 +326,32 @@ int main(int argc, char **argv) {
     }
 
     int fd = take_channel(dev);
-    if (fd < 0) return 1;
-
-    scan_mode_t mode = MODE_LEGACY;
-    if (establish(fd, &mode) != 0) {
-        fprintf(stderr, ME ": could not establish the scan on hci%d\n", dev);
-        close(fd);
-        return 1;
-    }
-    announce(dev, mode, "held");
+    if (fd < 0) return g_stop ? 0 : 1;
 
     bles_rearm_t budget;
     memset(&budget, 0, sizeof(budget));
+    bles_mode_t mode = BLES_MODE_LEGACY;
+    int held = 0, rc = 0, first = 1;
     uint8_t buf[1100];
-    int rc = 0;
     while (!g_stop) {
+        if (!held) {
+            bles_step_t r = establish(fd, &mode);
+            bles_next_t next = bles_after_establish(r, &budget, sloth_mono_ms());
+            if (next == BLES_NEXT_HOLD) {
+                announce(dev, mode, first ? "held" : "re-established");
+                held = 1;
+                first = 0;
+                continue;
+            }
+            if (next == BLES_NEXT_RETRY) {
+                fprintf(stderr, ME ": hci%d: retrying from HCI_Reset\n", dev);
+                continue;
+            }
+            fprintf(stderr, ME ": could not %s the scan on hci%d\n",
+                    first ? "establish" : "re-establish", dev);
+            rc = 1;
+            break;
+        }
         struct pollfd pf = { fd, POLLIN, 0 };
         int r = poll(&pf, 1, 1000);
         if (r < 0) {
@@ -371,32 +372,22 @@ int main(int argc, char **argv) {
         }
         bles_ev_t ev;
         (void)bles_parse_event(buf, (size_t)got, &ev);
-        if (!bles_ev_lost_scan(&ev)) continue;   /* reports: discarded */
-        if (ev.kind == BLES_EV_HW_ERROR)
-            fprintf(stderr, ME ": hci%d Hardware Error 0x%02x\n", dev, ev.hw_code);
-        else
-            fprintf(stderr, ME ": hci%d controller restarted\n", dev);
+        if (!bles_ev_lost_scan(&ev)) continue;   /* reports, No-Ops: discarded */
+        fprintf(stderr, ME ": hci%d Hardware Error 0x%02x\n", dev, ev.hw_code);
         if (!bles_rearm_take(&budget, sloth_mono_ms())) {
             fprintf(stderr, ME ": hci%d lost the scan %d times in %u s; giving up\n",
                     dev, BLES_REARM_MAX, BLES_REARM_WINDOW_MS / 1000u);
             rc = 1;
             break;
         }
-        if (establish(fd, &mode) != 0) {
-            fprintf(stderr, ME ": could not re-establish the scan on hci%d\n", dev);
-            rc = 1;
-            break;
-        }
-        announce(dev, mode, "re-established");
+        held = 0;
     }
 
     /* Disable before release. Closing the socket would end the scan
      * anyway (the kernel closes the device), but the disable crossing
      * the monitor channel is what tells sloth the scan stopped. */
-    if (rc == 0) {
-        (void)run_cmd(fd, mode == MODE_LEGACY ? BLES_CMD_LE_SCAN_DISABLE
-                                              : BLES_CMD_LE_EXT_SCAN_DISABLE,
-                      "scan disable");
+    if (rc == 0 && held) {
+        disable(fd, mode);
         fprintf(stderr, ME ": scan disabled, hci%d released\n", dev);
     }
     close(fd);

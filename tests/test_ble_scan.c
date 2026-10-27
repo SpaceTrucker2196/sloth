@@ -1,3 +1,5 @@
+#include <errno.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,7 +27,22 @@
  *     dropped from the LE_SCAN_PARAMS case of bles_cmd_allowed(), and,
  *     separately, the per-PHY check from the extended case;
  *   - test_helper_is_not_linked_into_sloth: src/ble_scan/ble_scan_cmd.c
- *     appended to CORE_COMMON_SRCS in the Makefile.
+ *     appended to CORE_COMMON_SRCS in the Makefile. That test reads
+ *     Makefile text, which cannot see `CORE_COMMON_SRCS +=
+ *     $(BLE_SCAN_SRCS)` or an include from any file it does not list, so
+ *     it is the second line. The first is check_no_hci_builder in the
+ *     `sloth` link recipe: no `bles_` symbol in the linked binary and no
+ *     sloth source naming the builder, in every configuration. Seen red
+ *     (2026-10-26, docs/wiki/log.md) with ble_scan_cmd.c added to
+ *     CORE_COMMON_SRCS plus a bare bles_build reference in src/main.c,
+ *     and separately with the header included from src/alerts/rules_ble.c;
+ *   - test_nop_never_restarts_the_scan: the opcode-0x0000 clause put back
+ *     in bles_ev_lost_scan();
+ *   - the 0x03 / 0x07 Scanning_PHYs cases: `(phys & ~0x05u)` dropped
+ *     from the gate;
+ *   - test_establish_ignores_what_is_not_its_answer: a Command Status
+ *     0x00 accepted as an answer;
+ *   - test_args: the empty-device check removed from bles_parse_dev().
  */
 
 /* ── the builder, byte for byte ── */
@@ -165,6 +182,19 @@ static void test_gate_refuses_every_transmitting_command(void) {
     static const uint8_t x2m[] = { 0x01, 0x41, 0x20, 0x08,
         0x00, 0x00, 0x02, 0x00, 0x60, 0x00, 0x60, 0x00 };
     ASSERT(!bles_cmd_allowed(x2m, sizeof(x2m)));
+    /* x2m is also refused by the length check (2M counts no record, so
+     * plen 8 disagrees). These two pass every check but the reserved-PHY
+     * one: 0x03 is 1M plus the reserved bit 1 with exactly the one
+     * passive record 1M implies, and 0x07 is 1M, bit 1 and Coded with
+     * the two records 1M and Coded imply. */
+    static const uint8_t x1m2m[] = { 0x01, 0x41, 0x20, 0x08,
+        0x00, 0x00, 0x03, 0x00, 0x60, 0x00, 0x60, 0x00 };
+    ASSERT(!bles_cmd_allowed(x1m2m, sizeof(x1m2m)));
+    static const uint8_t xall[] = { 0x01, 0x41, 0x20, 0x0D,
+        0x00, 0x00, 0x07,
+        0x00, 0x60, 0x00, 0x60, 0x00,
+        0x00, 0x60, 0x00, 0x60, 0x00 };
+    ASSERT(!bles_cmd_allowed(xall, sizeof(xall)));
     static const uint8_t xnone[] = { 0x01, 0x41, 0x20, 0x03, 0x00, 0x00, 0x00 };
     ASSERT(!bles_cmd_allowed(xnone, sizeof(xnone)));
     static const uint8_t xshort[] = { 0x01, 0x41, 0x20, 0x08,
@@ -227,13 +257,13 @@ static void test_event_parser_command_complete_and_status(void) {
     ASSERT(!bles_status_wants_extended(0x00));
     ASSERT(!bles_status_wants_extended(0x0C));   /* Command Disallowed */
     ASSERT(!bles_status_wants_extended(0x12));   /* Invalid Parameters */
-    /* The unprompted NOP a controller sends when it (re)starts:
-     * opcode 0x0000, no return parameters. */
+    /* A No-Op (§7.7.14): opcode 0x0000, no return parameters. Parsed
+     * as a Command Complete; test_nop_never_restarts_the_scan says what
+     * it does not mean. */
     static const uint8_t nop[] = { 0x04, 0x0E, 0x03, 0x01, 0x00, 0x00 };
     ASSERT_EQ(bles_parse_event(nop, sizeof(nop), &ev), BLES_EV_CMD_COMPLETE);
     ASSERT_EQ(ev.opcode, 0x0000);
     ASSERT_EQ(ev.has_status, 0);
-    ASSERT(bles_ev_lost_scan(&ev));
     /* Command Status (§7.7.15): Status 0x0C, Num 1, opcode 0x200C. */
     static const uint8_t cs[] = { 0x04, 0x0F, 0x04, 0x0C, 0x01, 0x0C, 0x20 };
     ASSERT_EQ(bles_parse_event(cs, sizeof(cs), &ev), BLES_EV_CMD_STATUS);
@@ -298,6 +328,261 @@ static void test_rearm_budget(void) {
     ASSERT(!bles_rearm_take(NULL, t));
 }
 
+/* ── the No-Op is flow control, not a restart ── */
+
+/* Core Spec v5.4 Vol 4 Part E §7.7.14: a Command Complete with
+ * Command_Opcode 0x0000 is a No-Op the controller may send at any time
+ * to update Num_HCI_Command_Packets. In steady state it must not count
+ * as a lost scan (that would Reset the controller out of its own scan
+ * and spend the re-arm budget), and one arriving late inside a
+ * sequence — some controllers send it after HCI_Reset completes — must
+ * not answer the command in flight. */
+static void test_nop_never_restarts_the_scan(void) {
+    static const uint8_t nop1[] = { 0x04, 0x0E, 0x03, 0x01, 0x00, 0x00 };
+    static const uint8_t nop5[] = { 0x04, 0x0E, 0x03, 0x05, 0x00, 0x00 };
+    bles_ev_t ev;
+    ASSERT_EQ(bles_parse_event(nop1, sizeof(nop1), &ev), BLES_EV_CMD_COMPLETE);
+    ASSERT_EQ(ev.ncmd, 1);
+    ASSERT(!bles_ev_lost_scan(&ev));
+    ASSERT_EQ(bles_parse_event(nop5, sizeof(nop5), &ev), BLES_EV_CMD_COMPLETE);
+    ASSERT(!bles_ev_lost_scan(&ev));
+
+    bles_est_t est;
+    bles_est_begin(&est);
+    ASSERT_EQ(bles_est_feed(&est, &ev), BLES_STEP_WAIT);
+    ASSERT_EQ(est.cmd, BLES_CMD_RESET);
+}
+
+/* ── the establish sequence, driven by hand-built events ── */
+
+/* A Command Complete (§7.7.14), Num_HCI_Command_Packets 1, for `op`
+ * with Status `st`, parsed as main.c would. */
+static bles_ev_t cc(uint16_t op, uint8_t st) {
+    uint8_t p[7] = { 0x04, 0x0E, 0x04, 0x01,
+                     (uint8_t)(op & 0xff), (uint8_t)(op >> 8), st };
+    bles_ev_t ev;
+    (void)bles_parse_event(p, sizeof(p), &ev);
+    return ev;
+}
+
+/* Command Status (§7.7.15): Status, Num 1, opcode. */
+static bles_ev_t cs(uint16_t op, uint8_t st) {
+    uint8_t p[7] = { 0x04, 0x0F, 0x04, st, 0x01,
+                     (uint8_t)(op & 0xff), (uint8_t)(op >> 8) };
+    bles_ev_t ev;
+    (void)bles_parse_event(p, sizeof(p), &ev);
+    return ev;
+}
+
+/* Feeds the answer `st` to the command in flight, asserting that
+ * command's opcode first; returns the step. */
+static bles_step_t answer(bles_est_t *est, uint16_t want_op, uint8_t st) {
+    ASSERT_EQ(bles_opcode(est->cmd), want_op);
+    bles_ev_t ev = cc(want_op, st);
+    return bles_est_feed(est, &ev);
+}
+
+static void test_establish_legacy(void) {
+    bles_est_t est;
+    bles_est_begin(&est);
+    ASSERT_EQ(answer(&est, 0x0C03, 0x00), BLES_STEP_SEND);   /* Reset */
+    ASSERT_EQ(answer(&est, 0x0C01, 0x00), BLES_STEP_SEND);   /* Set Event Mask */
+    ASSERT_EQ(answer(&est, 0x2001, 0x00), BLES_STEP_SEND);   /* LE Set Event Mask */
+    ASSERT_EQ(answer(&est, 0x200B, 0x00), BLES_STEP_SEND);   /* LE Set Scan Parameters */
+    ASSERT_EQ(answer(&est, 0x200C, 0x00), BLES_STEP_DONE);   /* LE Set Scan Enable */
+    ASSERT_EQ(est.mode, BLES_MODE_LEGACY);
+    /* The disable for that set: 0x200C, LE_Scan_Enable 0x00. */
+    uint8_t b[BLES_CMD_MAX];
+    size_t n = bles_build(bles_disable_cmd(est.mode), b, sizeof(b));
+    static const uint8_t want[] = { 0x01, 0x0C, 0x20, 0x02, 0x00, 0x00 };
+    ASSERT(n == sizeof(want) && memcmp(b, want, n) == 0);
+}
+
+/* Unknown HCI Command (0x01) and Unsupported Feature or Parameter
+ * Value (0x11) on the legacy parameters move to the extended pair. */
+static void test_establish_falls_back_to_extended(void) {
+    static const uint8_t refusals[] = { 0x01, 0x11 };
+    for (size_t i = 0; i < sizeof(refusals); i++) {
+        bles_est_t est;
+        bles_est_begin(&est);
+        ASSERT_EQ(answer(&est, 0x0C03, 0x00), BLES_STEP_SEND);
+        ASSERT_EQ(answer(&est, 0x0C01, 0x00), BLES_STEP_SEND);
+        ASSERT_EQ(answer(&est, 0x2001, 0x00), BLES_STEP_SEND);
+        ASSERT_EQ(answer(&est, 0x200B, refusals[i]), BLES_STEP_SEND);
+        ASSERT_EQ(answer(&est, 0x2041, 0x00), BLES_STEP_SEND);   /* LE Set Ext Scan Params */
+        ASSERT_EQ(answer(&est, 0x2042, 0x00), BLES_STEP_DONE);   /* LE Set Ext Scan Enable */
+        ASSERT_EQ(est.mode, BLES_MODE_EXTENDED);
+        /* Disabled with the extended command (§3.1.1: the legacy one is
+         * Command Disallowed now), Enable 0x00, Duration/Period 0. */
+        uint8_t b[BLES_CMD_MAX];
+        size_t n = bles_build(bles_disable_cmd(est.mode), b, sizeof(b));
+        static const uint8_t want[] = { 0x01, 0x42, 0x20, 0x06,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+        ASSERT(n == sizeof(want) && memcmp(b, want, n) == 0);
+    }
+    /* A refusal of the legacy parameters by Command Status is the same
+     * answer (§7.7.15 permits either for Unknown HCI Command). */
+    bles_est_t est;
+    bles_est_begin(&est);
+    (void)answer(&est, 0x0C03, 0x00);
+    (void)answer(&est, 0x0C01, 0x00);
+    (void)answer(&est, 0x2001, 0x00);
+    bles_ev_t ev = cs(0x200B, 0x01);
+    ASSERT_EQ(bles_est_feed(&est, &ev), BLES_STEP_SEND);
+    ASSERT_EQ(est.cmd, BLES_CMD_LE_EXT_SCAN_PARAMS);
+}
+
+static void test_establish_fails_on_any_other_refusal(void) {
+    /* Command Disallowed (0x0C) on the legacy parameters is not "use the
+     * extended commands": it fails, and nothing else is sent. */
+    bles_est_t est;
+    bles_est_begin(&est);
+    (void)answer(&est, 0x0C03, 0x00);
+    (void)answer(&est, 0x0C01, 0x00);
+    (void)answer(&est, 0x2001, 0x00);
+    ASSERT_EQ(answer(&est, 0x200B, 0x0C), BLES_STEP_FAIL);
+    ASSERT_EQ(est.status, 0x0C);
+    ASSERT_EQ(est.cmd, BLES_CMD_LE_SCAN_PARAMS);
+    /* Invalid HCI Command Parameters (0x12) likewise. */
+    bles_est_begin(&est);
+    (void)answer(&est, 0x0C03, 0x00);
+    (void)answer(&est, 0x0C01, 0x00);
+    (void)answer(&est, 0x2001, 0x00);
+    ASSERT_EQ(answer(&est, 0x200B, 0x12), BLES_STEP_FAIL);
+    /* 0x01 on any other command is a failure, not a fallback. */
+    bles_est_begin(&est);
+    ASSERT_EQ(answer(&est, 0x0C03, 0x01), BLES_STEP_FAIL);
+    bles_est_begin(&est);
+    (void)answer(&est, 0x0C03, 0x00);
+    (void)answer(&est, 0x0C01, 0x00);
+    (void)answer(&est, 0x2001, 0x00);
+    (void)answer(&est, 0x200B, 0x00);
+    ASSERT_EQ(answer(&est, 0x200C, 0x01), BLES_STEP_FAIL);
+    /* The extended pair refused: no third set to fall back to. */
+    bles_est_begin(&est);
+    (void)answer(&est, 0x0C03, 0x00);
+    (void)answer(&est, 0x0C01, 0x00);
+    (void)answer(&est, 0x2001, 0x00);
+    (void)answer(&est, 0x200B, 0x11);
+    ASSERT_EQ(answer(&est, 0x2041, 0x11), BLES_STEP_FAIL);
+}
+
+static void test_establish_ignores_what_is_not_its_answer(void) {
+    bles_est_t est;
+    bles_est_begin(&est);
+    /* Another opcode's Command Complete, a pending Command Status, an
+     * advertising report: none answers the Reset in flight. */
+    bles_ev_t ev = cc(0x200B, 0x00);
+    ASSERT_EQ(bles_est_feed(&est, &ev), BLES_STEP_WAIT);
+    ev = cs(0x0C03, 0x00);
+    ASSERT_EQ(bles_est_feed(&est, &ev), BLES_STEP_WAIT);
+    static const uint8_t adv[] = { 0x04, 0x3E, 0x0C, 0x02, 0x01, 0x00, 0x00,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x00, 0xC4 };
+    (void)bles_parse_event(adv, sizeof(adv), &ev);
+    ASSERT_EQ(bles_est_feed(&est, &ev), BLES_STEP_WAIT);
+    ASSERT_EQ(est.cmd, BLES_CMD_RESET);
+    /* A Command Complete with no Status octet for the command in flight
+     * is read as success (the shape of a parameterless return). */
+    static const uint8_t bare[] = { 0x04, 0x0E, 0x03, 0x01, 0x03, 0x0C };
+    (void)bles_parse_event(bare, sizeof(bare), &ev);
+    ASSERT_EQ(bles_est_feed(&est, &ev), BLES_STEP_SEND);
+    ASSERT_EQ(est.cmd, BLES_CMD_SET_EVENT_MASK);
+    ASSERT_EQ(bles_est_feed(NULL, &ev), BLES_STEP_WAIT);
+    ASSERT_EQ(bles_est_feed(&est, NULL), BLES_STEP_WAIT);
+}
+
+static void test_hardware_error_mid_sequence_retries_within_budget(void) {
+    static const uint8_t hw[] = { 0x04, 0x10, 0x01, 0x03 };
+    bles_ev_t ev;
+    (void)bles_parse_event(hw, sizeof(hw), &ev);
+    bles_est_t est;
+    bles_est_begin(&est);
+    (void)answer(&est, 0x0C03, 0x00);
+    ASSERT_EQ(bles_est_feed(&est, &ev), BLES_STEP_HW_ERROR);
+    ASSERT_EQ(est.status, 0x03);
+
+    /* The decision after it: retry, from the budget, five times in the
+     * window; then exit. The first run and a re-establish share it. */
+    bles_rearm_t b;
+    memset(&b, 0, sizeof(b));
+    uint64_t t = 5000000;
+    for (int i = 0; i < BLES_REARM_MAX; i++)
+        ASSERT_EQ(bles_after_establish(BLES_STEP_HW_ERROR, &b, t + (uint64_t)i), BLES_NEXT_RETRY);
+    ASSERT_EQ(bles_after_establish(BLES_STEP_HW_ERROR, &b, t + 10), BLES_NEXT_EXIT);
+    /* Success holds whatever the budget; a refusal or a socket failure
+     * exits and spends nothing. */
+    ASSERT_EQ(bles_after_establish(BLES_STEP_DONE, &b, t + 11), BLES_NEXT_HOLD);
+    bles_rearm_t fresh;
+    memset(&fresh, 0, sizeof(fresh));
+    ASSERT_EQ(bles_after_establish(BLES_STEP_FAIL, &fresh, t), BLES_NEXT_EXIT);
+    ASSERT_EQ(bles_after_establish(BLES_STEP_IO_ERROR, &fresh, t), BLES_NEXT_EXIT);
+    ASSERT_EQ(fresh.n, 0);
+}
+
+/* ── bind errors worth waiting out (boot ordering) ── */
+static void test_bind_waits_only_for_a_controller_not_ready(void) {
+    ASSERT(bles_bind_transient(ENODEV));
+    ASSERT(bles_bind_transient(EBUSY));
+    ASSERT(!bles_bind_transient(EUSERS));
+    ASSERT(!bles_bind_transient(EPERM));
+    ASSERT(!bles_bind_transient(ERFKILL));
+    ASSERT(!bles_bind_transient(EAFNOSUPPORT));
+    ASSERT(!bles_bind_transient(0));
+}
+
+/* ── argv ── */
+static bles_args_rc_t args(bles_args_t *a, int argc, ...) {
+    char *v[8] = { "sloth-ble-scan" };
+    va_list ap;
+    va_start(ap, argc);
+    for (int i = 1; i < argc && i < 8; i++) v[i] = va_arg(ap, char *);
+    va_end(ap);
+    memset(a, 0x5A, sizeof(*a));
+    return bles_parse_args(argc, v, a);
+}
+
+static void test_args(void) {
+    bles_args_t a;
+    ASSERT_EQ(args(&a, 1), BLES_ARGS_RUN);
+    ASSERT_EQ(a.dev, 0); ASSERT_EQ(a.down, 0); ASSERT_EQ(a.delay, 0);
+    /* --down with no device is hci0. */
+    ASSERT_EQ(args(&a, 2, "--down"), BLES_ARGS_RUN);
+    ASSERT_EQ(a.dev, 0); ASSERT_EQ(a.down, 1);
+    ASSERT_EQ(args(&a, 3, "--down", "hci2"), BLES_ARGS_RUN);
+    ASSERT_EQ(a.dev, 2); ASSERT_EQ(a.down, 1);
+    ASSERT_EQ(args(&a, 4, "--delay", "3", "hci1"), BLES_ARGS_RUN);
+    ASSERT_EQ(a.dev, 1); ASSERT_EQ(a.delay, 3); ASSERT_EQ(a.down, 0);
+    ASSERT_EQ(args(&a, 3, "--delay", "0"), BLES_ARGS_RUN);
+    ASSERT_EQ(a.delay, 0);
+    ASSERT_EQ(args(&a, 3, "--delay", "60"), BLES_ARGS_RUN);
+    ASSERT_EQ(a.delay, 60);
+    ASSERT_EQ(args(&a, 2, "7"), BLES_ARGS_RUN);
+    ASSERT_EQ(a.dev, 7);
+    /* --delay bounds. */
+    ASSERT_EQ(args(&a, 3, "--delay", "61"), BLES_ARGS_BAD_DELAY);
+    ASSERT_EQ(args(&a, 3, "--delay", "-1"), BLES_ARGS_BAD_DELAY);
+    ASSERT_EQ(args(&a, 3, "--delay", "3s"), BLES_ARGS_BAD_DELAY);
+    ASSERT_EQ(args(&a, 3, "--delay", ""), BLES_ARGS_BAD_DELAY);
+    ASSERT_EQ(args(&a, 3, "--delay", "99999999999999999999"), BLES_ARGS_BAD_DELAY);
+    ASSERT_EQ(args(&a, 2, "--delay"), BLES_ARGS_USAGE);
+    /* Devices: one, by number, below HCI_DEV_NONE (0xffff). The unit
+     * passes ${SLOTH_BLE_HCI} as exactly one argument, so an empty
+     * setting is "" — a usage error (exit 2, not restarted), not hci0. */
+    ASSERT_EQ(args(&a, 2, ""), BLES_ARGS_USAGE);
+    ASSERT_EQ(args(&a, 3, "--down", ""), BLES_ARGS_USAGE);
+    ASSERT_EQ(args(&a, 2, "hci"), BLES_ARGS_USAGE);
+    ASSERT_EQ(args(&a, 2, "hcix"), BLES_ARGS_USAGE);
+    ASSERT_EQ(args(&a, 2, "hci-1"), BLES_ARGS_USAGE);
+    ASSERT_EQ(args(&a, 2, "65535"), BLES_ARGS_USAGE);
+    ASSERT_EQ(args(&a, 2, "65534"), BLES_ARGS_RUN);
+    ASSERT_EQ(args(&a, 3, "hci0", "hci1"), BLES_ARGS_USAGE);
+    ASSERT_EQ(args(&a, 2, "--passive"), BLES_ARGS_USAGE);
+    ASSERT_EQ(args(&a, 2, "-h"), BLES_ARGS_HELP);
+    ASSERT_EQ(args(&a, 3, "hci0", "--help"), BLES_ARGS_HELP);
+    ASSERT_EQ(bles_parse_dev("hci12"), 12);
+    ASSERT_EQ(bles_parse_dev(NULL), -1);
+}
+
 /* ── the helper stays out of sloth ── */
 
 static char *bs_slurp(const char *path) {
@@ -317,7 +602,9 @@ static char *bs_slurp(const char *path) {
 /* MISSION §2: sloth sends no HCI command, so the only code that can
  * build one is linked into the helper and the tests, never into any
  * list `sloth` is built from. A Makefile scan: every line that names
- * src/ble_scan/ must be the helper's own list or the tests'. */
+ * src/ble_scan/ must be the helper's own list or the tests'. Text only,
+ * and so the second line behind the link-time check_no_hci_builder in
+ * the Makefile (see the header of this file). */
 static void test_helper_is_not_linked_into_sloth(void) {
     char *mk = bs_slurp("Makefile");
     ASSERT(mk != NULL);
@@ -363,5 +650,13 @@ void run_ble_scan_tests(void) {
     RUN_TEST(test_event_parser_hardware_error_and_reports);
     RUN_TEST(test_event_parser_rejects_bad_lengths);
     RUN_TEST(test_rearm_budget);
+    RUN_TEST(test_nop_never_restarts_the_scan);
+    RUN_TEST(test_establish_legacy);
+    RUN_TEST(test_establish_falls_back_to_extended);
+    RUN_TEST(test_establish_fails_on_any_other_refusal);
+    RUN_TEST(test_establish_ignores_what_is_not_its_answer);
+    RUN_TEST(test_hardware_error_mid_sequence_retries_within_budget);
+    RUN_TEST(test_bind_waits_only_for_a_controller_not_ready);
+    RUN_TEST(test_args);
     RUN_TEST(test_helper_is_not_linked_into_sloth);
 }

@@ -297,14 +297,27 @@ run
 check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
 check 'grep -q "^SLOTH_ARGS=.*--iface eth0 --iface alfa0" "$ROOT/etc/default/sloth"' "--iface not carried: $(grep SLOTH_ARGS= "$ROOT/etc/default/sloth" 2>&1)"
 
-# ── 1d. --bt-monitor is carried, not refused ─────────────────────────────
-# The hardened unit lists AF_BLUETOOTH for it; before that it was an
-# unknown flag and the migration refused the whole unit.
+# ── 1d. --bt-monitor is carried, not refused, with its drop-in ──────────
+# The hardened unit has no AF_BLUETOOTH; the opt-in drop-in adds it, and
+# the migration writes that drop-in for a unit with the flag, and only
+# then (case 2 checks a unit without it gets none).
 CASE=bt-monitor-carried
 setup bt-monitor-carried '    --bt-monitor \'
 run
 check '[ "$RC" -eq 0 ]' "exit $RC: $(cat "$W/out")"
 check 'grep -q "^SLOTH_ARGS=.*--bt-monitor" "$ROOT/etc/default/sloth"' "--bt-monitor not carried: $(grep SLOTH_ARGS= "$ROOT/etc/default/sloth" 2>&1)"
+check 'cmp -s "$REPO/packaging/systemd/sloth-sensor.service.d/bt-monitor.conf" "$ROOT/$UNIT_REL.d/bt-monitor.conf"' "the AF_BLUETOOTH drop-in was not installed: $(ls -la "$ROOT/$UNIT_REL.d" 2>&1)"
+check '[ "$(stat -c %a "$ROOT/$UNIT_REL.d/bt-monitor.conf" 2>/dev/null)" = 644 ]' "the drop-in is not 0644"
+
+# ── 1e. a rollback removes the drop-in it wrote ─────────────────────────
+CASE=bt-monitor-rollback
+setup bt-monitor-rollback '    --bt-monitor \'
+health_line 6 3 > "$STATE/health"
+cp "$ROOT/$UNIT_REL" "$W/old.unit"
+run
+check '[ "$RC" -eq 1 ]' "exit $RC, want 1: $(cat "$W/out")"
+check 'cmp -s "$W/old.unit" "$ROOT/$UNIT_REL"' "the hardened unit was left installed"
+check '[ ! -e "$ROOT/$UNIT_REL.d" ]' "the drop-in survived the rollback: $(ls -la "$ROOT/$UNIT_REL.d" 2>&1)"
 
 # ── 2. apply: flag carry-over, copy, unit, verify ────────────────────────
 CASE=apply
@@ -322,6 +335,7 @@ check 'grep -qx "SLOTH_IFACE=alfa0" "$ROOT/etc/default/sloth"' "SLOTH_IFACE miss
 check '! grep -q -- "--no-privdrop" "$ROOT/etc/default/sloth"' "--no-privdrop carried into the defaults"
 check '! grep -q -- "/home/" "$ROOT/etc/default/sloth"' "a /home path was carried into the defaults"
 check 'cmp -s "$REPO/packaging/systemd/sloth-sensor.service" "$ROOT/$UNIT_REL"' "installed unit differs from packaging/"
+check '[ ! -e "$ROOT/$UNIT_REL.d" ]' "a unit without --bt-monitor got a drop-in: $(ls -la "$ROOT/$UNIT_REL.d" 2>&1)"
 check 'cmp -s "$W/old.unit" "$ROOT/$UNIT_REL.bak-migrate-T1"' "old unit not backed up"
 check '[ "$(tree_hash "$ROOT/home/op/sloth/data")" = "$src_h" ]' "the source data dir was modified"
 check '[ "$(file_sums "$ROOT/home/op/sloth/data")" = "$(file_sums "$ROOT/var/lib/sloth")" ]' "copy differs from source"

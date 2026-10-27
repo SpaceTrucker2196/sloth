@@ -89,6 +89,10 @@ RESEARCH=${RESEARCH:-$ROOT$PREFIX/share/sloth/research.db}
 UNIT_TEMPLATE=${UNIT_TEMPLATE:-$SLOTH_SRC/packaging/systemd/sloth-sensor.service}
 SYSUSERS_TEMPLATE=${SYSUSERS_TEMPLATE:-$SLOTH_SRC/packaging/systemd/sloth.sysusers.conf}
 DEFAULTS_TEMPLATE=${DEFAULTS_TEMPLATE:-$SLOTH_SRC/packaging/default/sloth}
+# --bt-monitor's AF_BLUETOOTH drop-in: written only for a unit that has
+# the flag (docs/wiki/deployment.md §7).
+BT_DROPIN_TEMPLATE=${BT_DROPIN_TEMPLATE:-$SLOTH_SRC/packaging/systemd/sloth-sensor.service.d/bt-monitor.conf}
+BT_DROPIN=${BT_DROPIN:-$UNIT.d/bt-monitor.conf}
 # slothweb (--with-slothweb)
 WEB_UNIT_NAME=${WEB_UNIT_NAME:-slothweb.service}
 WEB_UNIT=${WEB_UNIT:-$ROOT/etc/systemd/system/$WEB_UNIT_NAME}
@@ -228,6 +232,7 @@ check_relocated() {   # FLAG OLDPATH EXPECTED-NAME
 
 ARGS=""
 WANT_HOP=0
+WANT_BT=0
 OLD_SOCK=""
 TCP_SOCK=""
 OLD_IFACES=""
@@ -288,10 +293,10 @@ parse_exec() {
                         TCP_SOCK=$v ;;
                     *) refuse "--data-socket $v: the hardened unit allows AF_UNIX only (RestrictAddressFamilies); a tcp: socket is an owner decision, not a migration" ;;
                 esac ;;
-            # carried into SLOTH_ARGS, no value: the hardened unit lists
-            # AF_BLUETOOTH for it, and the scan it reads is
-            # sloth-ble-scan.service's (docs/wiki/deployment.md §7)
-            --bt-monitor) ARGS="${ARGS:+$ARGS }$f" ;;
+            # carried into SLOTH_ARGS, no value, with the drop-in that
+            # gives the hardened unit AF_BLUETOOTH for it; the scan it
+            # reads is sloth-ble-scan.service's (docs/wiki/deployment.md §7)
+            --bt-monitor) ARGS="${ARGS:+$ARGS }$f"; WANT_BT=1 ;;
             # carried verbatim into SLOTH_ARGS: site identity and tuning
             --my-ssid|--my-bssid|--site-label|--site|--known-mac|--iface|\
             --db-interval-secs|--db-retain-days|--db-max-mb|--correlate-retain)
@@ -955,6 +960,7 @@ UNIT_BAK=$UNIT.bak-migrate-$STAMP
 DEFAULTS_BAK=$DEFAULTS.bak-migrate-$STAMP
 ASIDE=$TARGET.rolled-back-$STAMP
 target_made=0
+dropin_made=0
 
 # ── Step 2: account (before any downtime) ────────────────────────────────
 act "install $SYSUSERS_DIR/sloth.conf" \
@@ -991,6 +997,12 @@ rollback() {
         [ -f "$DEFAULTS_BAK" ] && { cp -p "$DEFAULTS_BAK" "$DEFAULTS" || rc=1; }
     else
         rm -f "$DEFAULTS"
+    fi
+    # Preflight refused a non-empty $UNIT.d, so the drop-in is the only
+    # thing this run can have put there.
+    if [ "$dropin_made" -eq 1 ]; then
+        rm -f "$BT_DROPIN" || rc=1
+        rmdir "$UNIT.d" 2>/dev/null
     fi
     "$SYSTEMCTL" daemon-reload || rc=1
     if [ "$was_enabled" -eq 1 ]; then
@@ -1093,6 +1105,12 @@ act "write $DEFAULTS (SLOTH_ARGS=${ARGS})" write_defaults \
     || rollback "could not write $DEFAULTS"
 act "install the hardened unit at $UNIT (from $UNIT_TEMPLATE, PREFIX=$PREFIX)" write_unit \
     || rollback "could not install the unit"
+if [ "$WANT_BT" -eq 1 ]; then
+    dropin_made=1
+    act "install $BT_DROPIN (AF_BLUETOOTH for --bt-monitor)" \
+        install -D -m 644 "$BT_DROPIN_TEMPLATE" "$BT_DROPIN" \
+        || rollback "could not install $BT_DROPIN"
+fi
 act "$SYSTEMCTL daemon-reload" "$SYSTEMCTL" daemon-reload \
     || rollback "daemon-reload failed"
 act "$SYSTEMCTL reenable $UNIT_NAME" "$SYSTEMCTL" reenable "$UNIT_NAME" \

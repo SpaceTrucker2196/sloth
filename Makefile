@@ -478,6 +478,23 @@ sbom:
 # member is pulled in only to satisfy a reference already seen.
 $(TARGET): $(OBJS) $(LINK_STAMP)
 	$(CC) $(CFLAGS) -o $@ $(filter-out $(LINK_STAMP),$^) $(LDFLAGS)
+	$(check_no_hci_builder)
+
+# MISSION.md §2: sloth sends no HCI command, so sloth-ble-scan's builder
+# (src/ble_scan/, every symbol `bles_`) must never be in it. Checked on
+# the linked binary, in every configuration that links one: a Makefile
+# text scan cannot see `CORE_COMMON_SRCS += $$(BLE_SCAN_SRCS)` or a
+# source that includes the header, and an archive member nothing calls
+# is not linked anyway, so what matters is what `nm` finds. The source
+# scan beside it catches an include before any call exists. A failure
+# deletes the binary, so the next `make` cannot call it up to date.
+define check_no_hci_builder
+	@syms=$$(nm $@) || { echo "$@: nm failed; cannot check for the HCI builder" >&2; rm -f $@; exit 1; }; \
+	 bad=$$(printf '%s\n' "$$syms" | awk '$$NF ~ /^_?bles_/ { print $$NF }' | head -n 3 | tr '\n' ' '); \
+	 [ -z "$$bad" ] || { echo "$@: links sloth-ble-scan's HCI builder ($$bad); MISSION.md §2: sloth sends no HCI command" >&2; rm -f $@; exit 1; }; \
+	 inc=$$(grep -lE 'ble_scan_cmd|ble_scan/' $(APP_SRCS) $(CORE_SRCS) /dev/null); \
+	 [ -z "$$inc" ] || { echo "$@: $$inc names sloth-ble-scan's builder; MISSION.md §2: sloth sends no HCI command" >&2; rm -f $@; exit 1; }
+endef
 
 $(OBJDIR)/%.o: %.c $(OBJDIR)/.flags
 	@mkdir -p $(@D)
@@ -1283,7 +1300,11 @@ $(STAMPS): FORCE
 # sloth-ble-scan.service is installed like the other two units and is
 # never enabled here: it takes the controller away from bluetoothd, which
 # is the operator's decision (docs/wiki/deployment.md §7). It
-# has no defaults file; its one setting is a drop-in.
+# has no defaults file; its one setting is a drop-in. The sensor's
+# AF_BLUETOOTH drop-in for --bt-monitor goes to share/sloth, inert: only
+# the operator, or sloth-migrate-sensor for a unit with the flag, puts
+# it in sloth-sensor.service.d/, because the family lets a compromised
+# sensor make hciN transmit.
 # The units are written for PREFIX=/usr/local; a different prefix is
 # substituted at install time so the text in packaging/ stays the one
 # tests/test_unit_file.c scans.
@@ -1292,7 +1313,7 @@ UNITDIR     ?= /etc/systemd/system
 SYSUSERSDIR ?= /usr/lib/sysusers.d
 DEFAULTDIR  ?= /etc/default
 
-install: $(TARGET) sloth-ble-scan
+install: $(TARGET) $(BLE_SCAN_BIN)
 	@[ -x slothweb ] || { echo "install: no ./slothweb; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
 	@new=$$(find web/src web/ui web/tools web/data $(WEB_RECIPES_MD) Makefile -type f -newer slothweb 2>/dev/null | head -n 1); \
 	  [ -z "$$new" ] || { echo "install: ./slothweb is older than $$new; run 'make web' first (as yourself, not under sudo)" >&2; exit 1; }
@@ -1300,7 +1321,7 @@ install: $(TARGET) sloth-ble-scan
 	install -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)
 	install -m 755 slothweb $(DESTDIR)$(PREFIX)/bin/slothweb
 	install -m 755 packaging/bin/sloth-monitor-up $(DESTDIR)$(PREFIX)/sbin/sloth-monitor-up
-	install -m 755 sloth-ble-scan $(DESTDIR)$(PREFIX)/sbin/sloth-ble-scan
+	[ -z "$(BLE_SCAN_BIN)" ] || install -m 755 sloth-ble-scan $(DESTDIR)$(PREFIX)/sbin/sloth-ble-scan
 	install -m 644 research.db $(DESTDIR)$(PREFIX)/share/sloth/research.db
 
 .PHONY: install-service
@@ -1320,12 +1341,15 @@ install-service:
 	    > $(DESTDIR)$(UNITDIR)/sloth-ble-scan.service.tmp
 	install -m 644 $(DESTDIR)$(UNITDIR)/sloth-ble-scan.service.tmp $(DESTDIR)$(UNITDIR)/sloth-ble-scan.service
 	rm -f $(DESTDIR)$(UNITDIR)/sloth-ble-scan.service.tmp
+	install -D -m 644 packaging/systemd/sloth-sensor.service.d/bt-monitor.conf \
+	    $(DESTDIR)$(PREFIX)/share/sloth/sloth-sensor-bt-monitor.conf
 	[ -e $(DESTDIR)$(DEFAULTDIR)/slothweb ] || \
 	    install -m 644 packaging/default/slothweb $(DESTDIR)$(DEFAULTDIR)/slothweb
 	@echo "installed units, sysusers fragment and defaults; next:"
 	@echo "  systemd-sysusers && systemctl daemon-reload && systemctl enable --now sloth-sensor"
 	@echo "  systemctl enable --now slothweb   (reads /etc/default/slothweb; loopback by default)"
-	@echo "  sloth-ble-scan.service is installed, not enabled: docs/wiki/deployment.md §7"
+	@echo "  sloth-ble-scan.service is installed, not enabled; --bt-monitor's AF_BLUETOOTH drop-in"
+	@echo "  is at $(PREFIX)/share/sloth/sloth-sensor-bt-monitor.conf, not active: docs/wiki/deployment.md §7"
 	@echo "  (migration from a build-tree unit: docs/wiki/deployment.md)"
 
 # ── Deploy tooling test (#153) ───────────────────────────────────────────────

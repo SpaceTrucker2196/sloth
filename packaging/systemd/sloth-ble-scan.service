@@ -23,20 +23,32 @@ Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/ble
 Documentation=https://github.com/SpaceTrucker2196/sloth/wiki/deployment
 
 # bluetoothd powers the controller and scans actively on request; with it
-# running the user channel is refused (EBUSY). Conflicts= stops it when
-# this unit starts. bluetoothd is D-Bus activated, so the deployment page
-# masks it as well — a stop alone is undone within the second.
+# running the user channel is refused (EBUSY). Conflicts= works in both
+# directions (systemd.unit(5); measured on systemd 262, 2026-10-26):
+# starting this unit stops bluetooth.service, and starting
+# bluetooth.service stops this unit. bluetoothd is D-Bus activated
+# (org.bluez → dbus-org.bluez.service, bluetooth.service's alias), so
+# any org.bluez client — bluetoothctl, a desktop applet — would start
+# it and silently end the scan. That stop is a clean one (exit 0 on
+# SIGTERM), so Restart=on-failure does not bring the scan back. Hence
+# the deployment page masks bluetooth.service: required, not
+# belt-and-braces.
 Conflicts=bluetooth.service
 After=bluetooth.service
 
 # Started after the sensor so sloth's monitor channel is open first and
 # sees the Reset and the passive parameters (ble_own_tx_baseline 1,
 # ble_scan_mode passive); --delay below covers sloth's own start-up.
-# PartOf= ties its life to the sensor's: stopping or restarting the
-# sensor does the same here, which is "for the duration of the sloth
-# daemon". The sensor does not depend on this unit: it starts, and runs,
-# without it. WantedBy= below is how enabling this unit makes the
-# sensor's start pull it in.
+# WantedBy= below is what pulls the scan in whenever the sensor starts
+# or is restarted, once this unit is enabled. PartOf= only passes the
+# sensor's stop and restart on, including systemd's own automatic
+# restart of it (measured on systemd 262: a SIGSEGV'd PartOf target's
+# Restart= restarts this too). The sensor does not depend on this unit:
+# it starts, and runs, without it.
+#
+# No ordering on the controller: at boot hciN may not be registered yet
+# (ENODEV) or may still be in setup (EBUSY). The helper waits those out
+# itself, up to 30 s, rather than spending StartLimitBurst on them.
 After=sloth-sensor.service
 PartOf=sloth-sensor.service
 
@@ -63,7 +75,8 @@ Environment=SLOTH_BLE_HCI=hci0
 # `btmgmt power off` (a MGMT client the host may not ship): no external
 # tool to be missing. It needs CAP_NET_ADMIN and nothing else, which the
 # sandbox below already grants, so it runs inside it, not as `+` root.
-# Idempotent: a device already down is not an error.
+# Idempotent: a device already down, or not registered yet, is not an
+# error.
 ExecStartPre=/usr/local/sbin/sloth-ble-scan --down ${SLOTH_BLE_HCI}
 ExecStart=/usr/local/sbin/sloth-ble-scan --delay 3 ${SLOTH_BLE_HCI}
 

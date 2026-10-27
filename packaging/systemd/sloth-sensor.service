@@ -114,13 +114,11 @@ ProtectProc=invisible
 # AF_PACKET for capture, AF_NETLINK for rtnetlink/nl80211/INET_DIAG,
 # AF_UNIX for the data socket. Add AF_INET AF_INET6 only for a tcp:
 # --data-socket or --allow-active; the db-only profile needs neither.
-# AF_BLUETOOTH for --bt-monitor in SLOTH_ARGS: libpcap's
-# bluetooth-monitor device is an AF_BLUETOOTH socket bound to the HCI
-# monitor channel, refused with EAFNOSUPPORT without it (measured
-# 2026-10-26). That bind is receive-only and the kernel checks
-# CAP_NET_RAW for it, which sloth opens with before the #140 drop. Unused
-# on a run without the flag. The scan itself is sloth-ble-scan.service.
-RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_PACKET AF_BLUETOOTH
+# Not AF_BLUETOOTH: --bt-monitor needs it, and gets it from the opt-in
+# drop-in sloth-sensor.service.d/bt-monitor.conf (docs/wiki/deployment.md
+# §7), because with the family allowed a compromised sensor could make
+# an hciN transmit. The scan itself is sloth-ble-scan.service.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_PACKET
 RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true

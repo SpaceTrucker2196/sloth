@@ -43,6 +43,7 @@
 #define UF_PATH_WEB_UNIT "packaging/systemd/slothweb.service"
 #define UF_PATH_WEB_DEFAULTS "packaging/default/slothweb"
 #define UF_PATH_BLE_UNIT "packaging/systemd/sloth-ble-scan.service"
+#define UF_PATH_BT_DROPIN "packaging/systemd/sloth-sensor.service.d/bt-monitor.conf"
 #define UF_MAX_LINES     512
 
 static char *uf_slurp(const char *path) {
@@ -472,16 +473,15 @@ static void test_unit_flag_pairs_are_consistent(void) {
     ASSERT(uf_has_token(fam, "AF_UNIX"));
     ASSERT(uf_has_token(fam, "AF_NETLINK"));
     ASSERT(uf_has_token(fam, "AF_PACKET"));
-    /* --bt-monitor, given in SLOTH_ARGS, opens libpcap's
-     * bluetooth-monitor: an AF_BLUETOOTH socket, refused with
-     * EAFNOSUPPORT without this token (measured 2026-10-26). The flag
-     * arrives through the defaults file, which this test cannot see, so
-     * the family is always listed. */
-    ASSERT(uf_has_token(fam, "AF_BLUETOOTH"));
+    /* Not AF_BLUETOOTH. --bt-monitor needs it, but with the family
+     * allowed a compromised sensor could bind a raw HCI socket or an
+     * L2CAP one and make an up hciN transmit; it comes from the opt-in
+     * drop-in (test_sensor_bt_monitor_dropin) instead. */
+    ASSERT(!uf_has_token(fam, "AF_BLUETOOTH"));
     static const char *const fams[] = {
-        "AF_UNIX", "AF_NETLINK", "AF_PACKET", "AF_BLUETOOTH", "AF_INET", "AF_INET6"
+        "AF_UNIX", "AF_NETLINK", "AF_PACKET", "AF_INET", "AF_INET6"
     };
-    ASSERT(uf_tokens_within(fam, fams, 6));
+    ASSERT(uf_tokens_within(fam, fams, 5));
 
     /* The data socket is a unix: path under the RuntimeDirectory, so
      * SO_PEERCRED is the authentication and nothing listens on a port. */
@@ -972,6 +972,37 @@ static void test_ble_scan_unit_privilege(void) {
     ASSERT_EQ(uf_count(lines, n, "CapabilityBoundingSet"), 1);
     ASSERT_EQ(uf_count(lines, n, "AmbientCapabilities"), 1);
     ASSERT_STR(uf_value(lines, n, "NoNewPrivileges"), "true");
+    /* Single-value keys: systemd applies the last assignment, so a
+     * second line would override the first one this reads. */
+    ASSERT_EQ(uf_count(lines, n, "NoNewPrivileges"), 1);
+
+    /* No account or group membership, and nothing writable: the
+     * transient uid is the whole identity and the helper writes no
+     * file. */
+    static const char *const absent[] = {
+        "Group", "SupplementaryGroups", "ReadWritePaths", "BindPaths",
+        "StateDirectory", "RuntimeDirectory", "LogsDirectory",
+        "CacheDirectory", "ConfigurationDirectory"
+    };
+    for (size_t i = 0; i < sizeof(absent) / sizeof(absent[0]); i++) {
+        if (uf_count(lines, n, absent[i]) != 0)
+            fprintf(stderr, "    ble-scan unit: %s= present\n", absent[i]);
+        ASSERT_EQ(uf_count(lines, n, absent[i]), 0);
+    }
+
+    /* Only the two Exec lines below. Any other Exec key runs a command
+     * too, and with a `+` or `!` prefix it runs outside the sandbox with
+     * full privilege — what the prefix check on ExecStartPre exists to
+     * stop. */
+    static const char *const no_exec[] = {
+        "ExecStartPost", "ExecStop", "ExecStopPost", "ExecReload",
+        "ExecCondition"
+    };
+    for (size_t i = 0; i < sizeof(no_exec) / sizeof(no_exec[0]); i++) {
+        if (uf_count(lines, n, no_exec[i]) != 0)
+            fprintf(stderr, "    ble-scan unit: %s= present\n", no_exec[i]);
+        ASSERT_EQ(uf_count(lines, n, no_exec[i]), 0);
+    }
 
     /* The installed helper, inside the sandbox, both steps: no `+`,
      * `!` or `-` prefix on either. */
@@ -1020,6 +1051,13 @@ static void test_ble_scan_unit_sandbox(void) {
             fprintf(stderr, "    ble-scan unit: %s=%s wanted, got %s\n",
                     want[i].key, want[i].val, v ? v : "(absent)");
         ASSERT(v != NULL && strcmp(v, want[i].val) == 0);
+        /* Read once and given once: systemd applies the last of a
+         * single-value key, so `ProtectSystem=false` appended below
+         * would win over the line read above. */
+        if (uf_count(lines, n, want[i].key) != 1)
+            fprintf(stderr, "    ble-scan unit: %s= given %d times\n",
+                    want[i].key, uf_count(lines, n, want[i].key));
+        ASSERT_EQ(uf_count(lines, n, want[i].key), 1);
     }
 
     /* AF_BLUETOOTH and nothing else, given once. */
@@ -1037,16 +1075,23 @@ static void test_ble_scan_unit_sandbox(void) {
     ASSERT(uf_value(lines, n, "PrivateNetwork") == NULL);
     ASSERT(uf_value(lines, n, "PrivateUsers") == NULL);
 
-    int allow_seen = 0, deny_seen = 0;
+    /* The two filter lines and no others. An empty `SystemCallFilter=`
+     * resets every line before it, so it is refused wherever it sits. */
+    int allow_seen = 0, deny_seen = 0, empty = 0;
     for (int i = 0; i < n; i++) {
         const char *l = lines[i];
         while (*l == ' ' || *l == '\t') l++;
         if (strncmp(l, "SystemCallFilter=", 17) != 0) continue;
+        const char *v = l + 17;
+        while (*v == ' ' || *v == '\t') v++;
+        if (!*v) empty = 1;
         if (uf_has_token(l + 17, "@system-service")) allow_seen = 1;
         if (uf_has_token(l + 17, "~@privileged")) deny_seen = 1;
     }
     ASSERT(allow_seen);
     ASSERT(deny_seen);
+    ASSERT(!empty);
+    ASSERT_EQ(uf_count(lines, n, "SystemCallFilter"), 2);
     free(buf);
 }
 
@@ -1066,9 +1111,30 @@ static void test_ble_scan_unit_relationships(void) {
     ASSERT(uf_any_has(lines, n, "After", "sloth-sensor.service"));
     ASSERT(uf_any_has(lines, n, "PartOf", "sloth-sensor.service"));
     ASSERT(uf_any_has(lines, n, "WantedBy", "sloth-sensor.service"));
-    /* Not started at boot on its own, and never ordered before the
-     * sensor. */
-    ASSERT(!uf_any_has(lines, n, "WantedBy", "multi-user.target"));
+    /* Not started on its own — at boot, or with bluetooth.target, or
+     * by anything but the sensor — and never ordered before the sensor.
+     * [Install] is an allow-list: every WantedBy= line names only the
+     * sensor, and nothing else installs a link to the unit. */
+    static const char *const by[] = { "sloth-sensor.service" };
+    int wb = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (!uf_is_directive(l) || strncmp(l, "WantedBy=", 9) != 0) continue;
+        wb++;
+        if (!uf_tokens_within(l + 9, by, 1))
+            fprintf(stderr, "    ble-scan unit: %s\n", l);
+        ASSERT(uf_tokens_within(l + 9, by, 1));
+    }
+    ASSERT_GE(wb, 1);
+    static const char *const no_install[] = {
+        "RequiredBy", "UpheldBy", "Alias", "Also", "DefaultInstance"
+    };
+    for (size_t i = 0; i < sizeof(no_install) / sizeof(no_install[0]); i++) {
+        if (uf_count(lines, n, no_install[i]) != 0)
+            fprintf(stderr, "    ble-scan unit: %s= present\n", no_install[i]);
+        ASSERT_EQ(uf_count(lines, n, no_install[i]), 0);
+    }
     ASSERT(!uf_any_has(lines, n, "Before", "sloth-sensor.service"));
     free(buf);
 
@@ -1090,6 +1156,33 @@ static void test_ble_scan_unit_relationships(void) {
     free(sb);
 }
 
+/* The opt-in drop-in that gives the sensor AF_BLUETOOTH for
+ * --bt-monitor: one [Service] directive, the family and nothing else —
+ * not a deny list (`~`), not a reset (empty), not any other key. */
+static void test_sensor_bt_monitor_dropin(void) {
+    char *buf = uf_slurp(UF_PATH_BT_DROPIN);
+    ASSERT(buf != NULL);
+    if (!buf) return;
+    char *lines[UF_MAX_LINES];
+    int n = uf_logical_lines(buf, lines, UF_MAX_LINES);
+    int directives = 0, sections = 0, service = 0;
+    for (int i = 0; i < n; i++) {
+        const char *l = lines[i];
+        while (*l == ' ' || *l == '\t') l++;
+        if (*l == '[') {
+            sections++;
+            if (strcmp(l, "[Service]") == 0) service = 1;
+        }
+        if (uf_is_directive(l)) directives++;
+    }
+    ASSERT_EQ(sections, 1);
+    ASSERT(service);
+    ASSERT_EQ(directives, 1);
+    const char *fam = uf_value(lines, n, "RestrictAddressFamilies");
+    ASSERT(fam != NULL && strcmp(fam, "AF_BLUETOOTH") == 0);
+    free(buf);
+}
+
 /* make installs the helper and the unit, and enables nothing: taking
  * the controller from bluetoothd is the operator's decision. Recipe
  * lines only; the closing @echo hints may name systemctl. */
@@ -1100,17 +1193,32 @@ static void test_makefile_installs_ble_scan_without_enabling(void) {
     static char *lines[UF_MAX_MAKE_LINES];
     int n = uf_logical_lines(buf, lines, UF_MAX_MAKE_LINES);
     int in_install = 0, in_service = 0, bin = 0, unit = 0, enables = 0;
+    int dropin = 0, active_dropin = 0;
     for (int i = 0; i < n; i++) {
         const char *l = lines[i];
         if (!uf_is_recipe(l)) {
             in_install = strncmp(l, "install:", 8) == 0;
             in_service = strncmp(l, "install-service:", 16) == 0;
-            if (in_install) ASSERT(strstr(l, "sloth-ble-scan") != NULL);
+            if (in_install) ASSERT(strstr(l, "$(BLE_SCAN_BIN)") != NULL);
             continue;
         }
         if (in_install && strstr(l, "install -m 755 sloth-ble-scan ") &&
+            strstr(l, "[ -z \"$(BLE_SCAN_BIN)\" ] ||") &&
             strstr(l, "$(DESTDIR)$(PREFIX)/sbin/sloth-ble-scan")) bin = 1;
         if (in_service && strstr(l, "packaging/systemd/sloth-ble-scan.service")) unit = 1;
+        /* The sensor's AF_BLUETOOTH drop-in goes to share/sloth, inert;
+         * placed in sloth-sensor.service.d/ it would give every sensor
+         * the family. */
+        if (in_service && strstr(l, "sloth-sensor.service.d/bt-monitor.conf") &&
+            strstr(l, "$(DESTDIR)$(PREFIX)/share/sloth/sloth-sensor-bt-monitor.conf"))
+            dropin = 1;
+        if ((in_install || in_service) && strstr(l, ".service.d")) {
+            const char *u = strstr(l, "$(UNITDIR)");
+            if (u && strstr(u, ".service.d")) {
+                fprintf(stderr, "    Makefile installs a drop-in into the unit dir: %s\n", l);
+                active_dropin = 1;
+            }
+        }
         if ((in_install || in_service) && strncmp(l, "\t@echo", 6) != 0 &&
             strstr(l, "systemctl")) {
             fprintf(stderr, "    Makefile install recipe runs systemctl: %s\n", l);
@@ -1120,6 +1228,8 @@ static void test_makefile_installs_ble_scan_without_enabling(void) {
     ASSERT(bin);
     ASSERT(unit);
     ASSERT(!enables);
+    ASSERT(dropin);
+    ASSERT(!active_dropin);
     free(buf);
 }
 
@@ -1219,6 +1329,7 @@ void run_unit_file_tests(void) {
     RUN_TEST(test_web_defaults_file);
     RUN_TEST(test_makefile_install_targets);
     RUN_TEST(test_scanner_any_has_reads_every_line);
+    RUN_TEST(test_sensor_bt_monitor_dropin);
     RUN_TEST(test_ble_scan_unit_privilege);
     RUN_TEST(test_ble_scan_unit_sandbox);
     RUN_TEST(test_ble_scan_unit_relationships);

@@ -5478,3 +5478,65 @@ report events.
   on a copy. Not run on hardware here: the host test is the owner's.
   Measured, parent (49adbb0) to this tree: `make test` 35154 to 35379
   assertions, `make deploy-test` 401 to 403, each 0 failed.
+- 2026-10-26 — [[ble]], [[deployment]] §2/§3.5/§7, [[cli-reference]]:
+  the `sloth-ble-scan` review. **AF_BLUETOOTH leaves the sensor's
+  shipped unit**: with the family allowed, a compromised sensor with no
+  capabilities could bind a raw HCI socket (Inquiry and Remote Name
+  Request pass `hci_sec_filter`) or connect an L2CAP one and make an up
+  hciN transmit, so it moves to the opt-in drop-in
+  `packaging/systemd/sloth-sensor.service.d/bt-monitor.conf`, which
+  `make install-service` places inert in `share/sloth`, §7.1 copies
+  into place, and `sloth-migrate-sensor` writes (and removes on
+  rollback) only for a unit carrying `--bt-monitor`; that the list
+  merges was measured on systemd 262 with AF_INET. **A No-Op is not a
+  restart**: Command Complete for opcode 0x0000 (§7.7.14) no longer
+  re-arms; only a Hardware Error does. A Hardware Error during the
+  sequence itself now retries from the Reset within the 5-per-60 s
+  budget instead of exiting. The decisions — the sequence, the 0x01 /
+  0x11 fallback and nothing else, the disable per mode, the re-arm
+  decision, argv — are a pure step function in `ble_scan_cmd.c`, tested
+  with hand-built events. At start an `ENODEV` / `EBUSY` bind is retried
+  for 30 s (boot ordering), and `--down` on an unregistered hciN is not
+  an error. The `sloth` link recipe now fails, and deletes the binary,
+  if `nm` finds a `bles_` symbol or a sloth source names the builder;
+  the Makefile text test missed `CORE_COMMON_SRCS += $(BLE_SCAN_SRCS)`.
+  `make install` installs the helper on Linux only. Docs: `Conflicts=`
+  runs both ways — starting bluetoothd, including by D-Bus activation,
+  stops the scan cleanly and it does not restart, so the mask is
+  required (measured with two user units on systemd 262); stopping
+  bluetoothd with links up sends their disconnects; `WantedBy=` pulls
+  the scan in, `PartOf=` only carries stops and restarts, and an
+  automatic restart of a crashed `Restart=always` unit restarted its
+  `PartOf=` dependant (measured, SIGSEGV, systemd 262); the journal
+  check greps the helper's lines. The unit tests now count every
+  single-value hardening key (the last assignment wins), allow only
+  the two Exec lines, refuse `Group=` / `SupplementaryGroups=` /
+  writable paths and an empty `SystemCallFilter=`, and make `[Install]`
+  an allow-list. Seen red under one mutation each, restored
+  byte-identical (sha256): the 0x0000 clause put back
+  (`test_nop_never_restarts_the_scan`); `(phys & ~0x05u)` dropped (the
+  new 0x03 and 0x07 cases); 0x0C added to the fallback statuses; the
+  extended disable swapped for the legacy one; the HW-error retry
+  removed from `bles_after_establish`; ENODEV dropped from
+  `bles_bind_transient`; the `--delay` bound moved to 61; the empty-dev
+  check removed; a Command Status 0x00 accepted as an answer; the link
+  check, with `ble_scan_cmd.c` in `CORE_COMMON_SRCS` plus a bare
+  `bles_build` reference in `src/main.c`, and separately with the header
+  included from `src/alerts/rules_ble.c`; in the scan unit, each
+  appended: `ProtectSystem=false`, `NoNewPrivileges=false`,
+  `PrivateDevices=false`, `ExecStartPost=+/bin/sh -c true`,
+  `ExecStopPost=!/usr/bin/hciconfig hci0 up`, `SupplementaryGroups=sloth`,
+  `ReadWritePaths=/var/lib/sloth`, an empty `SystemCallFilter=`,
+  `Group=sloth`, `WantedBy=bluetooth.target`, `WantedBy=sloth-sensor.service
+  multi-user.target`, `RequiredBy=sloth-sensor.service`,
+  `Alias=bt-scan.service`; `AF_BLUETOOTH` back in the sensor's list; a
+  second key in the drop-in, and the drop-in as a deny list; the
+  Makefile installing the drop-in into the unit dir, and the
+  helper's install line unguarded; in the migration, the flag not
+  recorded, the rollback keeping the drop-in, and the drop-in written
+  for every unit. Judged wrong in part: the `SLOTH_BLE_HCI`-empty case —
+  `${VAR}` is always exactly one argument, so an empty setting is `""`,
+  a usage error (exit 2, not restarted), which is now tested rather
+  than defaulted to hci0. Not run on hardware here. Measured, parent
+  (4b87d52) to this tree: `make test` 35379 to 35582 assertions, `make
+  deploy-test` 403 to 409, each 0 failed.
