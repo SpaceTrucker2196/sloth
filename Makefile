@@ -792,6 +792,7 @@ TEST_CFLAGS = -O0 -g -Wall -Wextra -std=c99 -D_DEFAULT_SOURCE $(TEST_FEATURES)
 ifeq ($(UNAME),Linux)
     TEST_CFLAGS += -DPLATFORM_LINUX
 endif
+TEST_CFLAGS += -DTEST_TMP_DIR_MAX=$(TEST_TMP_DIR_MAX)
 TEST_CFLAGS += $(EXTRA_CFLAGS)
 TEST_SHIP_DEFS = -DWITH_NCURSES -DWITH_PCAP
 ifeq ($(UNAME),Darwin)
@@ -839,15 +840,28 @@ TEST_BIN = sloth_test
 
 # Temporary files (docs/wiki/architecture.md, "Temporary files"): each
 # runner makes a private run directory under $TMPDIR, points TMPDIR at
-# it, removes it at exit and fails the run on anything a test left in
-# it. This outer directory
-# is for the exit atexit() never sees - a sanitizer abort, a SIGSEGV, a
-# timeout's SIGKILL - so a crash cannot leave files in a shared /tmp
-# either. SLOTH_TEST_KEEP_TMP=1 keeps both and says where.
-TEST_IN_TMPDIR = d=$$(mktemp -d "$${TMPDIR:-/tmp}/sloth_mk.XXXXXX") || exit 1; \
-	echo "TMPDIR=$$d $(1)"; TMPDIR=$$d $(1); rc=$$?; \
+# it, removes it at exit (and on SIGINT/SIGTERM/SIGHUP) and fails the run
+# on anything a test left in it. This outer directory is for the exits
+# the binary never sees - a sanitizer abort, a SIGSEGV, a SIGKILL - and
+# its trap removes it when the recipe shell itself is interrupted with
+# the binary (Ctrl-C reaches the whole process group). A second Ctrl-C
+# may make make SIGKILL the recipe, and nothing survives that.
+#
+# The runner falls back to /tmp when $TMPDIR plus "/slothweb_test.XXXXXX"
+# (21) is over TEST_TMP_DIR_MAX, which would put its directory outside
+# this one. So the outer base is $TMPDIR only when it leaves room for
+# "/sloth_mk.XXXXXX" (16) as well, else /tmp: the runner's directory is
+# always inside the outer one. TEST_TMP_DIR_MAX reaches the runners as
+# -D, so the two checks cannot drift. SLOTH_TEST_KEEP_TMP=1 keeps both.
+TEST_TMP_DIR_MAX = 56
+TEST_IN_TMPDIR = base=$${TMPDIR:-/tmp}; \
+	[ $$(printf %s "$$base" | wc -c) -le $$(( $(TEST_TMP_DIR_MAX) - 37 )) ] || base=/tmp; \
+	d=$$(mktemp -d "$$base/sloth_mk.XXXXXX") || exit 1; \
 	if [ -n "$$SLOTH_TEST_KEEP_TMP" ] && [ "$$SLOTH_TEST_KEEP_TMP" != 0 ]; \
-	then echo "kept $$d (SLOTH_TEST_KEEP_TMP)"; else rm -rf "$$d"; fi; exit $$rc
+	then trap 'echo "kept $$d (SLOTH_TEST_KEEP_TMP)"' EXIT; \
+	else trap 'rm -rf "$$d"' EXIT; fi; \
+	trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP; \
+	echo "TMPDIR=$$d $(1)"; TMPDIR=$$d $(1); rc=$$?; exit $$rc
 
 .PHONY: test test-capture-path
 test: $(TEST_BIN)
@@ -888,7 +902,7 @@ $(OBJDIR)/bench/%: tests/bench/%.c $(BENCH_OBJS) $(CORE_LIB) $(OBJDIR)/.flags
 
 .PHONY: bench
 bench: $(BENCH_BINS)
-	@for b in $(BENCH_BINS); do ./$$b $(BENCH_ITERS) || exit 1; done
+	@$(call TEST_IN_TMPDIR,sh -c 'for b in $(BENCH_BINS); do ./$$b $(BENCH_ITERS) || exit 1; done')
 
 # ── Headless replay integration (#119) ──────────────────────────────────────
 # The one gate that runs the shipped `sloth` binary: main()'s argv

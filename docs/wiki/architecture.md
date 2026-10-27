@@ -8,9 +8,9 @@ type: reference
 
 **Summary**: How sloth's source is organised: header → CLI → platform vtable → capture pipeline → per-protocol parsers → state → views.
 
-**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `tests/tmp_dir.h`, `tests/main_test.c`, `web/tests/wt_tmp.h`, `web/tests/web_test_main.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
+**Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `tests/tmp_dir.h`, `tests/test_tmp_dir.c`, `tests/main_test.c`, `web/tests/wt_tmp.h`, `web/tests/web_test_main.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-27 (temporary files and the leak guard; #95, #118, #141, #132, #130, #109)
+**Last updated**: 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
 
 ---
 
@@ -381,17 +381,37 @@ stopped emptying when #92 slice 3 added a
 
 Three layers, outermost first:
 
-1. **Make.** The `test` and `web-test` recipes run the binary with
-   `TMPDIR` set to a fresh `mktemp -d "${TMPDIR:-/tmp}/sloth_mk.XXXXXX"`
-   and remove it afterwards whatever the exit status — the case
-   `atexit()` never sees (a sanitizer abort, SIGSEGV, SIGKILL).
+1. **Make.** The `test`, `web-test` and `bench` recipes run the binary
+   with `TMPDIR` set to a fresh `mktemp -d "<base>/sloth_mk.XXXXXX"`,
+   removed by an `EXIT` trap whatever the exit status, for the exits
+   the binary never sees (a sanitizer abort, SIGSEGV, SIGKILL). The
+   recipe traps INT, TERM and HUP into an exit, so a Ctrl-C (which
+   reaches the whole process group, the recipe shell included) or a TERM
+   from `timeout` still runs that trap. `<base>` is `$TMPDIR` only when
+   it is at most `TEST_TMP_DIR_MAX` − 37 = 19 characters, room for
+   `/sloth_mk.XXXXXX` and the runner's `/slothweb_test.XXXXXX` both;
+   otherwise `/tmp`. So the runner below never falls back, and its
+   directory is always inside this one. `TEST_TMP_DIR_MAX` is a
+   Makefile variable passed to the runners as `-D`, so the two checks
+   cannot disagree. A second Ctrl-C can make make SIGKILL the recipe,
+   and nothing removes anything then.
 2. **Runner.** `tests/main_test.c` and `web/tests/web_test_main.c`
    make `<TMPDIR>/sloth_test.XXXXXX` (`slothweb_test.XXXXXX`), 0700,
    point `TMPDIR` at it before the first suite (SQLite's own temp files
    follow), and remove it recursively at exit — only from the process
    that made it, so a fork child leaving through `exit()` cannot take it
-   from the parent. A `TMPDIR` longer than `TEST_TMP_DIR_MAX` (56) falls
-   back to `/tmp` with a note on stderr, so no test path is truncated.
+   from the parent. A directory that cannot be removed fails the run
+   (`_exit(1)` from the atexit handler), and a directory of our own that
+   a failed refusal test left at 0500 or 0000 is opened up to 0700
+   first. SIGINT, SIGTERM and SIGHUP remove it too, then re-raise, so
+   `./sloth_test` run by hand and interrupted leaves nothing either;
+   the handler hands the tree to `rm -rf` in a `vfork()` child, because
+   `fork()` in a handler took glibc's malloc lock and hung on a futex
+   when the signal landed inside `malloc()`. Run by hand with `TMPDIR`
+   longer than `TEST_TMP_DIR_MAX` (56) less `/<prefix>.XXXXXX` (37 for
+   `sloth_test`, 34 for `slothweb_test`), the runner falls back to
+   `/tmp` with a note rather than truncate a test path; then only the
+   atexit and signal handlers stand between a crash and `/tmp`.
 3. **Leak guard.** After the last suite, and under `WT_ONLY` too, the
    runner walks the run directory. Anything there is printed as
    `LEAK: <path>` (at most 20, then `...and N more`), counted as a
@@ -418,15 +438,34 @@ Rules for a test that makes a file:
   host's `/tmp`. A literal `"/tmp"` passed only to be refused, and
   parse-only strings such as `unix:/tmp/x`, are fine.
 - Size path buffers from `TEST_TMP_MAX` (96), not a round number:
-  `-Wformat-truncation` holds the derived `"<dir>/<file>"` buffers to it.
+  `-Wformat-truncation` holds the derived `"<dir>/<file>"` buffers to it,
+  but not a buffer filled from a runtime string. `test_data_socket.c`'s
+  `char spec[80]` for `"unix:<run dir>/sloth-test-ds-<pid>.sock"`
+  passed under `/tmp` and truncated the socket path under a 19-character
+  `TMPDIR`, failing 141 assertions; it is `TEST_TMP_MAX + 8` now.
 
 `SLOTH_TEST_KEEP_TMP=1` keeps both directories and prints where they
 are, for reading what a failing test wrote. `make deploy-test` and
 `make web-quickstart-check` already worked in a `mktemp -d` under
 `$TMPDIR` with an EXIT trap (`KEEP=1` keeps the deploy tree); an
 interrupt now exits through that trap instead of resuming.
-`make replay-check` keeps `build/replay/run` in the tree on purpose,
-and the fuzz harnesses write nothing.
+`make bench` writes its manifest bench files (up to 16 MB) under
+`$BENCH_DIR`, else `$TMPDIR`, inside the same outer directory.
+`make replay-check` keeps `build/replay/run` in the tree on purpose:
+it is under `build/`, not `/tmp`, replaced on the next run, and what a
+failing diff is read against. The fuzz harnesses write nothing.
+
+`tests/test_tmp_dir.c` covers what a passing run never reaches: a 0500
+and a 0000 directory removed, a close that cannot remove reported, and
+a SIGINT and a SIGTERM that remove the tree and still kill the process.
+Seen red on 2026-10-27, each restored byte-identical: without the
+`chmod(path, 0700)` (both mode cases), without `rc = -1` in
+`tmp_run_dir_close` (the close case), without the `execv` of `rm`
+(both signal cases). The Makefile trap and the runner's handler were
+checked by interrupting a run in its own session: without
+`trap 'exit 130' INT` a Ctrl-C under `make test` left `sloth_mk.*`;
+without `tmp_run_dir_trap_signals()` a Ctrl-C to `./sloth_test` left
+`sloth_test.*` with a live SQLite file and its `-wal` and `-shm`.
 
 ## Generated lists (#117)
 

@@ -11,7 +11,8 @@
  * what the capture thread still pays per handshake and what it no
  * longer pays with the lock held.
  *
- * The directory is a fresh mkdtemp() under $BENCH_DIR (default /tmp),
+ * The directory is a fresh mkdtemp() under $BENCH_DIR (default $TMPDIR,
+ * then /tmp; `make bench` sets TMPDIR to its own directory),
  * removed at the end; point BENCH_DIR at the sensor's --eapol-dir
  * filesystem to measure its fsync rather than tmpfs's. Times, asserts
  * nothing about speed; exits non-zero only if a record fails.
@@ -65,9 +66,10 @@ int main(int argc, char **argv) {
     int iters = argc > 1 ? atoi(argv[1]) : 50;
     if (iters < 1) iters = 1;
     const char *root = getenv("BENCH_DIR");
+    if (!root || !*root) root = getenv("TMPDIR");
+    if (!root || !*root) root = "/tmp";
     char dir[400];
-    snprintf(dir, sizeof(dir), "%s/sloth_bench_manifest_XXXXXX",
-             root && *root ? root : "/tmp");
+    snprintf(dir, sizeof(dir), "%s/sloth_bench_manifest_XXXXXX", root);
     if (!mkdtemp(dir)) { perror("bench: mkdtemp"); return 2; }
     char err[SFILE_ERR_MAX];
     int dfd = sfile_private_dir(dir, err, sizeof(err));
@@ -75,11 +77,17 @@ int main(int argc, char **argv) {
     double *pin_ms = calloc((size_t)iters, sizeof(double));
     double *rec_ms = calloc((size_t)iters, sizeof(double));
     char *chunk = malloc(65536);
-    if (!pin_ms || !rec_ms || !chunk) { fprintf(stderr, "bench: oom\n"); return 2; }
+    if (!pin_ms || !rec_ms || !chunk) {
+        fprintf(stderr, "bench: oom\n");
+        close(dfd);
+        rm_dir(dir);
+        free(pin_ms); free(rec_ms); free(chunk);
+        return 2;
+    }
     memset(chunk, 'a', 65536);
 
     printf("sloth manifest bench (#92 slice 3), %d iterations, dir %s\n",
-           iters, root && *root ? root : "/tmp");
+           iters, root);
     static const long sizes[] = { 4L << 10, 1L << 20, 16L << 20 };
     int fail = 0;
     for (size_t z = 0; z < sizeof(sizes) / sizeof(sizes[0]); z++) {

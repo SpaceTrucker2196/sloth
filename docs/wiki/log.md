@@ -5630,3 +5630,14 @@ report events.
   `sloth_cap_*` directories, and five export directories cleaned by name
   that the #92 slice 3 manifest kept from emptying, including the fixed
   `/tmp/sloth_evexport_test`, now an `mkdtemp` name). No `src/` change.
+- 2026-10-27 — [[architecture]] *Temporary files*, review fixes: an
+  interrupted run cleans up (the make recipes trap INT/TERM/HUP into
+  their EXIT trap; both runners remove their directory on SIGINT,
+  SIGTERM and SIGHUP through a `vfork()`ed `rm`, after `fork()` hung in
+  a handler). A long `TMPDIR` no longer puts the run directory outside
+  make's: the outer base is `$TMPDIR` only up to 19 characters, from
+  one `TEST_TMP_DIR_MAX` passed to the runners as `-D`. A run directory
+  that cannot be removed fails the run; a 0500 directory a failed test
+  left is opened up first. `make bench` runs inside the outer directory
+  and honours `$TMPDIR`. `test_data_socket.c`'s `spec[80]` truncated the
+  socket path under a longer `TMPDIR`. New `tests/test_tmp_dir.c`.

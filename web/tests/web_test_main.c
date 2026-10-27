@@ -16,9 +16,22 @@ int wt_pass, wt_fail;
  * SLOTH_TEST_KEEP_TMP=1 keeps it. */
 static char  g_run_dir[TEST_TMP_MAX];
 static pid_t g_run_owner;
+static int   g_run_keep;
 
+/* A run directory that cannot be removed fails the run, even one whose
+ * suites all passed: _exit() from an atexit handler sets the status. */
 static void run_dir_cleanup(void) {
-    if (getpid() == g_run_owner) tmp_run_dir_close(g_run_dir, "slothweb_test");
+    if (getpid() == g_run_owner &&
+        tmp_run_dir_close(g_run_dir, "slothweb_test") != 0)
+        _exit(1);
+}
+
+/* Ctrl-C, or a TERM from make or timeout(1), skips atexit(): remove the
+ * tree here, then die of the same signal so the caller sees it. */
+static void run_dir_on_signal(int sig) {
+    if (getpid() == g_run_owner && !g_run_keep)
+        tmp_run_dir_signal_rm(g_run_dir);
+    raise(sig);
 }
 
 /* WT_ONLY=alerts runs the suites whose name holds it: a developer's
@@ -39,7 +52,9 @@ int main(void) {
                          "slothweb_test") != 0)
         return 2;
     g_run_owner = getpid();
+    g_run_keep  = tmp_run_dir_keep();
     atexit(run_dir_cleanup);
+    tmp_run_dir_trap_signals(run_dir_on_signal);
     SUITE(run_acl_tests);
     SUITE(run_config_tests);
     SUITE(run_http_tests);

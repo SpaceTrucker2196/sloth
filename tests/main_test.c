@@ -49,9 +49,22 @@ const char *__lsan_default_suppressions(void) {
  * and prints where, for looking at what a failing test wrote. */
 static char  g_run_dir[TEST_TMP_MAX];
 static pid_t g_run_owner;
+static int   g_run_keep;
 
+/* A run directory that cannot be removed fails the run, even one whose
+ * suites all passed: _exit() from an atexit handler sets the status. */
 static void run_dir_cleanup(void) {
-    if (getpid() == g_run_owner) tmp_run_dir_close(g_run_dir, "sloth_test");
+    if (getpid() == g_run_owner &&
+        tmp_run_dir_close(g_run_dir, "sloth_test") != 0)
+        _exit(1);
+}
+
+/* Ctrl-C, or a TERM from make or timeout(1), skips atexit(): remove the
+ * tree here, then die of the same signal so the caller sees it. */
+static void run_dir_on_signal(int sig) {
+    if (getpid() == g_run_owner && !g_run_keep)
+        tmp_run_dir_signal_rm(g_run_dir);
+    raise(sig);
 }
 
 static int run_dir_open(void) {
@@ -59,7 +72,9 @@ static int run_dir_open(void) {
                          "sloth_test") != 0)
         return -1;
     g_run_owner = getpid();
+    g_run_keep  = tmp_run_dir_keep();
     atexit(run_dir_cleanup);
+    tmp_run_dir_trap_signals(run_dir_on_signal);
     return 0;
 }
 
@@ -108,6 +123,7 @@ void run_ubertooth_tests(void);           /* tests/test_ubertooth.c (#144 slice 
 void run_ble_rules_tests(void);           /* tests/test_ble_rules.c (#144 slice 4) */
 void run_ble_rotation_tests(void);        /* tests/test_ble_rotation.c (#156 item 2) */
 void run_ble_scan_tests(void);            /* tests/test_ble_scan.c (sloth-ble-scan) */
+void run_tmp_dir_tests(void);             /* tests/test_tmp_dir.c */
 void run_deauth_snoop_tests(void);
 void run_flood_window_tests(void);
 void run_clock_seam_tests(void);
@@ -444,6 +460,7 @@ int main(void) {
     run_ble_rules_tests();
     run_ble_rotation_tests();
     run_ble_scan_tests();
+    run_tmp_dir_tests();
 
     tui_offscreen_end();
     /* The leak guard: a path still in the run directory after the last

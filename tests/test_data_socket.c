@@ -64,7 +64,7 @@ static void test_init_bad_spec(void) {
 
 static void test_unix_roundtrip_single_client(void) {
     const char *path = sock_path();
-    char spec[80];
+    char spec[TEST_TMP_MAX + 8];
     snprintf(spec, sizeof(spec), "unix:%s", path);
 
     ASSERT_EQ(data_socket_init(spec), 0);
@@ -92,7 +92,7 @@ static void test_unix_roundtrip_single_client(void) {
 
 static void test_unix_broadcast_to_multiple_clients(void) {
     const char *path = sock_path();
-    char spec[80];
+    char spec[TEST_TMP_MAX + 8];
     snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
@@ -117,7 +117,7 @@ static void test_unix_broadcast_to_multiple_clients(void) {
 
 static void test_disconnected_client_is_harvested(void) {
     const char *path = sock_path();
-    char spec[80];
+    char spec[TEST_TMP_MAX + 8];
     snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
@@ -145,7 +145,7 @@ static void test_disconnected_client_is_harvested(void) {
  * "" then a real line and checking only the real line arrives. */
 static void test_emit_empty_payload_is_skipped(void) {
     const char *path = sock_path();
-    char spec[80];
+    char spec[TEST_TMP_MAX + 8];
     snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
@@ -267,7 +267,7 @@ static time_t io_clock(void) { return io_now; }
 
 static int ds_open_one(void) {
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     if (data_socket_init(spec) != 0) return -1;
     int c = connect_client(path);
     data_socket_tick();
@@ -542,7 +542,7 @@ static void test_slow_client_progress_resets_stall(void) {
  * record whole. Only one send() for payload + delimiter together. */
 static void test_send_eagain_keeps_client(void) {
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
     int c = connect_client(path);
     ASSERT(c >= 0);
@@ -579,7 +579,7 @@ static void test_send_eagain_keeps_client(void) {
  * abandoned, more means bytes were re-sent. */
 static void test_send_partial_is_resumed(void) {
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
     int c = connect_client(path);
     ASSERT(c >= 0);
@@ -629,7 +629,7 @@ static int fake_accept(int fd, struct sockaddr *addr, socklen_t *addrlen) {
 
 static void test_tick_caps_at_max_clients(void) {
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
     /* Premise update (#135): the dup'd listener fds this fake hands
@@ -670,7 +670,7 @@ static void test_tick_caps_at_max_clients(void) {
  * the still-connected client. */
 static void test_middle_client_disconnect_compacts(void) {
     const char *path = sock_path();
-    char spec[80];
+    char spec[TEST_TMP_MAX + 8];
     snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
@@ -754,7 +754,7 @@ static void ds_seed_pnl(sloth_state_t *s) {
  * the just-connected client never learns this device exists. */
 static void test_accept_reemits_baseline(void) {
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
     sloth_state_t s; ds_seed_pnl(&s);
@@ -783,7 +783,7 @@ static void test_accept_reemits_baseline(void) {
  * exactly the volume #42 removed. */
 static void test_tick_without_accept_keeps_cache(void) {
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
     sloth_state_t s; ds_seed_pnl(&s);
@@ -810,7 +810,7 @@ static void test_tick_without_accept_keeps_cache(void) {
  * though other clients are already attached. */
 static void test_second_client_also_reemits(void) {
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
     sloth_state_t s; ds_seed_pnl(&s);
@@ -845,7 +845,7 @@ static void test_second_client_also_reemits(void) {
  * through the real socket and reads the bytes off the wire. */
 static void test_alert_escalation_reaches_a_socket_consumer(void) {
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
     int c = connect_client(path);
@@ -902,7 +902,7 @@ static void test_unverified_signature_reaches_a_socket_consumer(void) {
         if (!sig || !sig->unverified) continue;
 
         const char *path = sock_path();
-        char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+        char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
         ASSERT_EQ(data_socket_init(spec), 0);
         int c = connect_client(path);
         ASSERT(c >= 0);
@@ -1001,7 +1001,7 @@ static void test_refuses_to_replace_regular_file(void) {
     fputs("not a socket", fp);
     fclose(fp);
 
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT(data_socket_init(spec) != 0);
 
     fp = fopen(path, "r");
@@ -1030,7 +1030,7 @@ static void test_refuses_to_replace_symlink(void) {
     fclose(fp);
     ASSERT_EQ(symlink(target, path), 0);
 
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT(data_socket_init(spec) != 0);
 
     /* The symlink itself must still be there (lstat, not stat/access —
@@ -1065,7 +1065,7 @@ static void test_refuses_to_replace_live_socket(void) {
     ASSERT_EQ(bind(live, (struct sockaddr *)&addr, sizeof(addr)), 0);
     ASSERT_EQ(listen(live, 4), 0);
 
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT(data_socket_init(spec) != 0);
 
     /* The pre-existing listener must still accept — proof nothing about
@@ -1095,7 +1095,7 @@ static void test_replaces_stale_socket(void) {
     ASSERT_EQ(listen(dead, 4), 0);
     close(dead);            /* orphaned file, nothing behind it */
 
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
     int c = connect_client(path);
@@ -1126,7 +1126,7 @@ static int fail_nonblock(int fd) { (void)fd; errno = EBADF; return -1; }
 static void test_nonblock_failure_on_listener_aborts_init(void) {
     const char *path = sock_path();
     unlink_quiet(path);
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
 
     data_socket_test_set_nonblock_fn(fail_nonblock);
     ASSERT(data_socket_init(spec) != 0);
@@ -1144,7 +1144,7 @@ static void test_nonblock_failure_on_listener_aborts_init(void) {
  * shared mutex. */
 static void test_nonblock_failure_on_accept_drops_client(void) {
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);   /* listener set up normally */
 
     int c = connect_client(path);
@@ -1184,7 +1184,7 @@ static int record_cloexec_nonblock(int fd) {
 static void test_unix_listener_is_cloexec(void) {
     const char *path = sock_path();
     unlink_quiet(path);
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
 
     cloexec_seen_n = cloexec_seen_ok = 0;
     data_socket_test_set_nonblock_fn(record_cloexec_nonblock);
@@ -1216,7 +1216,7 @@ static void test_tcp_listener_is_cloexec(void) {
 static void test_accepted_clients_are_cloexec(void) {
     const char *path = sock_path();
     unlink_quiet(path);
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
     int c1 = connect_client(path);
@@ -1283,7 +1283,7 @@ static void test_stale_socket_probe_is_cloexec(void) {
     ASSERT_EQ(bind(live, (struct sockaddr *)&addr, sizeof(addr)), 0);
     ASSERT_EQ(listen(live, 4), 0);
 
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     socket_seen_n = socket_seen_cloexec = socket_seen_nonblock = 0;
     data_socket_test_set_socket_fn(record_cloexec_socket);
     ASSERT(data_socket_init(spec) != 0);      /* somebody is home */
@@ -1314,7 +1314,7 @@ static void test_probe_and_listener_differ_only_in_nonblock(void) {
     ASSERT_EQ(listen(dead, 4), 0);
     close(dead);              /* orphaned file, nothing behind it */
 
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     socket_seen_n = socket_seen_cloexec = socket_seen_nonblock = 0;
     data_socket_test_set_socket_fn(record_cloexec_socket);
     ASSERT_EQ(data_socket_init(spec), 0);
@@ -1535,7 +1535,7 @@ static void test_loopback_tcp_bind_needs_no_optin(void) {
 static void test_unix_bind_unaffected_by_guard(void) {
     const char *path = sock_path();
     unlink_quiet(path);
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
 
     ASSERT_EQ(data_socket_init(spec), 0);
     int c = connect_client(path);
@@ -1557,7 +1557,7 @@ static void test_unix_bind_unaffected_by_guard(void) {
 static void test_unix_socket_is_created_private(void) {
     const char *path = sock_path();
     unlink_quiet(path);
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
 
     mode_t old = umask(0);            /* worst case: a permissive umask */
     int rc = data_socket_init(spec);
@@ -1605,7 +1605,7 @@ static void test_per_peer_cap_refuses_the_extra_connection(void) {
     tune_reset();
     ASSERT_EQ(tune_set("socket.max_per_peer=2", NULL, 0), 0);
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
     unsigned long long refused_before = data_socket_peer_refused_total();
@@ -1649,7 +1649,7 @@ static void test_per_peer_cap_default_is_four(void) {
     tune_reset();
     ASSERT_EQ((long long)tune_val(TUNE_SOCKET_MAX_PER_PEER), 4);
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
     unsigned long long refused_before = data_socket_peer_refused_total();
@@ -1673,7 +1673,7 @@ static void test_per_peer_cap_frees_with_the_slot(void) {
     tune_reset();
     ASSERT_EQ(tune_set("socket.max_per_peer=1", NULL, 0), 0);
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
     int a = connect_client(path); ASSERT(a >= 0);
@@ -1731,7 +1731,7 @@ static void test_unknown_peers_share_one_capped_bucket(void) {
     tune_reset();
     ASSERT_EQ(tune_set("socket.max_per_peer=2", NULL, 0), 0);
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
     unsigned long long refused_before = data_socket_peer_refused_total();
@@ -1771,7 +1771,7 @@ static void test_peer_buckets_are_independent(void) {
     tune_reset();
     ASSERT_EQ(tune_set("socket.max_per_peer=2", NULL, 0), 0);
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
 
     unsigned long long refused_before = data_socket_peer_refused_total();
@@ -1877,7 +1877,7 @@ static void test_idle_zero_disables_the_rule(void) {
 static void test_sensor_health_carries_socket_fields(void) {
     tune_reset();
     const char *path = sock_path();
-    char spec[80]; snprintf(spec, sizeof(spec), "unix:%s", path);
+    char spec[TEST_TMP_MAX + 8]; snprintf(spec, sizeof(spec), "unix:%s", path);
     ASSERT_EQ(data_socket_init(spec), 0);
     int c = connect_client(path);
     ASSERT(c >= 0);

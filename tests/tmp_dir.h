@@ -22,8 +22,10 @@
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #ifndef PATH_MAX
@@ -37,7 +39,12 @@
  * derived "<dir>/<file>" buffer need not be 4 KB to stay
  * -Wformat-truncation clean. */
 #define TEST_TMP_MAX     96
+/* The Makefile passes its own TEST_TMP_DIR_MAX, which it also uses to
+ * pick the outer directory's base (TEST_IN_TMPDIR), so the two cannot
+ * disagree about when a $TMPDIR is too long. */
+#ifndef TEST_TMP_DIR_MAX
 #define TEST_TMP_DIR_MAX 56
+#endif
 
 static inline const char *test_tmpdir(void) {
     const char *t = getenv("TMPDIR");
@@ -62,12 +69,16 @@ static inline char *test_tmp_tpl(char *buf, size_t sz, const char *name) {
 }
 
 /* rm -rf without following symlinks. ENOENT is success. Recursion depth
- * is the tree's depth, which in a test is two or three. */
+ * is the tree's depth, which in a test is two or three. A directory of
+ * our own left at 0500 or 0000 (a refusal test that failed before it
+ * restored the mode) is made 0700 first, so it can still be emptied. */
 static inline int test_rm_tree(const char *path) {
     struct stat st;
     if (lstat(path, &st) != 0) return errno == ENOENT ? 0 : -1;
     if (!S_ISDIR(st.st_mode))
         return (unlink(path) == 0 || errno == ENOENT) ? 0 : -1;
+    if (st.st_uid == getuid() && (st.st_mode & 0700) != 0700)
+        (void)chmod(path, 0700);
     int rc = 0;
     DIR *d = opendir(path);
     if (d) {
@@ -124,8 +135,12 @@ static inline long tmp_run_dir_check(const char *dir, const char *who) {
 /* Makes the run directory "<tmpdir>/<prefix>.XXXXXX" (0700) into dir
  * and points $TMPDIR at it, so every test_tmp_path() after this, and
  * SQLite's own temporary files, land inside it. A $TMPDIR too long to
- * leave room for the tests' names under TEST_TMP_MAX falls back to
- * /tmp, said on stderr, rather than truncating paths later. */
+ * leave room for the tests' names under TEST_TMP_MAX (base plus
+ * "/<prefix>.XXXXXX" over TEST_TMP_DIR_MAX) falls back to /tmp, said on
+ * stderr, rather than truncating paths later. Under make that never
+ * fires: TEST_IN_TMPDIR picks an outer base short enough for it. Run
+ * by hand with a long $TMPDIR, the run directory is in /tmp, and only
+ * atexit() and the signal handler (tmp_run_dir_signal_rm) remove it. */
 static inline int tmp_run_dir_open(char *dir, size_t sz, const char *prefix,
                                    const char *who) {
     const char *base = test_tmpdir();
@@ -144,17 +159,64 @@ static inline int tmp_run_dir_open(char *dir, size_t sz, const char *prefix,
     return setenv("TMPDIR", dir, 1);
 }
 
-/* The atexit half: remove the run directory, unless
- * SLOTH_TEST_KEEP_TMP is set (then say where it is). */
-static inline void tmp_run_dir_close(char *dir, const char *who) {
-    if (!dir[0]) return;
+static inline int tmp_run_dir_keep(void) {
     const char *keep = getenv("SLOTH_TEST_KEEP_TMP");
-    if (keep && *keep && strcmp(keep, "0") != 0) {
+    return keep && *keep && strcmp(keep, "0") != 0;
+}
+
+/* The atexit half: remove the run directory, unless
+ * SLOTH_TEST_KEEP_TMP is set (then say where it is). Returns -1 when
+ * the directory could not be removed, which the runner turns into a
+ * failed run: a passing run that leaves a directory behind is a leak
+ * the guard, having run before atexit(), did not see. */
+static inline int tmp_run_dir_close(char *dir, const char *who) {
+    if (!dir[0]) return 0;
+    int rc = 0;
+    if (tmp_run_dir_keep()) {
         fprintf(stderr, "%s: kept %s (SLOTH_TEST_KEEP_TMP)\n", who, dir);
     } else if (test_rm_tree(dir) != 0) {
         fprintf(stderr, "%s: could not remove %s\n", who, dir);
+        rc = -1;
     }
     dir[0] = '\0';
+    return rc;
+}
+
+/* The signal half, for SIGINT/SIGTERM/SIGHUP: a runner interrupted by
+ * hand never reaches atexit(). Only async-signal-safe calls: opendir()
+ * may allocate, so the tree goes to rm(1) in a child rather than to
+ * test_rm_tree(). vfork(), not fork(): glibc's fork() runs its atfork
+ * handlers and takes the malloc and stdio locks, and a SIGTERM that
+ * landed inside malloc() hung there on a futex (seen 2026-10-27, the
+ * first version of this). The vfork child only calls execv() and
+ * _exit(). The caller re-raises the signal afterwards. */
+static inline void tmp_run_dir_signal_rm(const char *dir) {
+    if (!dir[0]) return;
+    char *argv[] = { "rm", "-rf", "--", (char *)dir, NULL };
+    pid_t pid = vfork();
+    if (pid == 0) {
+        execv("/bin/rm", argv);
+        _exit(127);
+    }
+    if (pid > 0) {
+        int st;
+        while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    }
+}
+
+/* Installs h for the signals that end a run by hand or by a timeout.
+ * SA_RESETHAND|SA_NODEFER: the handler runs once, and a second Ctrl-C
+ * while it is removing the tree kills the process outright instead of
+ * waiting behind it. */
+static inline void tmp_run_dir_trap_signals(void (*h)(int)) {
+    static const int sigs[] = { SIGINT, SIGTERM, SIGHUP };
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = h;
+    sa.sa_flags = SA_RESETHAND | SA_NODEFER;
+    sigemptyset(&sa.sa_mask);
+    for (size_t i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++)
+        sigaction(sigs[i], &sa, NULL);
 }
 
 #endif /* SLOTH_TESTS_TMP_DIR_H */
