@@ -193,6 +193,16 @@ var glyph = (function () {
     if (gnum(opt.first) && opt.first >= 0 && opt.first < n)
       m.push(["first", Math.floor(opt.first * cw), 0, Math.max(1, Math.ceil(cw)), h,
               "--signal"]);
+    // An anomaly episode underlines the cells it covers, 1 px, so the
+    // strip says when the device was here and when it was odd without
+    // either reading changing the other (R1: colour for out of band).
+    var ep = opt.episodes || [];
+    for (i = 0; i < ep.length; i++) {
+      var a = ep[i][0] < 0 ? 0 : ep[i][0], b = ep[i][1] > n - 1 ? n - 1 : ep[i][1];
+      if (b < a) continue;
+      m.push(["anom", Math.floor(a * cw), h - 1,
+              Math.max(1, Math.ceil((b - a + 1) * cw)), 1, "--heat-2"]);
+    }
     return m;
   }
 

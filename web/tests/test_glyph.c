@@ -233,7 +233,7 @@ static void gl_g1(const double (*pts)[2], int n, const double (*band)[4],
 
 /* G5, the binary presence strip. cells: 1 present, 0 absent, -1 a gap. */
 static void gl_g5(const int *cells, int n, double w, double h, int first,
-                  gmarks_t *g) {
+                  const int (*ep)[2], int nep, gmarks_t *g) {
     memset(g, 0, sizeof(*g));
     if (n <= 0) { gl_dash(g, w, h); return; }
     double cw = w / n;
@@ -247,6 +247,13 @@ static void gl_g5(const int *cells, int n, double w, double h, int first,
         double cwi = ceil(cw);
         if (cwi < 1) cwi = 1;
         gm_push(g, "first", floor(first * cw), 0, cwi, h, "--signal");
+    }
+    for (int i = 0; i < nep; i++) {
+        int a = ep[i][0] < 0 ? 0 : ep[i][0], b = ep[i][1] > n - 1 ? n - 1 : ep[i][1];
+        if (b < a) continue;
+        double wd = ceil((b - a + 1) * cw);
+        if (wd < 1) wd = 1;
+        gm_push(g, "anom", floor(a * cw), h - 1, wd, 1, "--heat-2");
     }
 }
 
@@ -329,6 +336,20 @@ static void test_the_page_carries_the_ported_js(void) {
               "      else if (cells[i] > 0) m.push([\"cell\", x, 0, cwi, h, "
               "\"--tui-normal\"]);");
     WT_HAS(p, "    var first = Math.ceil((from + off) / 86400) * 86400 - off;");
+    WT_HAS(p, "      m.push([\"anom\", Math.floor(a * cw), h - 1,\n"
+              "              Math.max(1, Math.ceil((b - a + 1) * cw)), 1, \"--heat-2\"]);");
+    /* R4's other half, which is drawing and not a mark list: the band
+     * chart's third time label and its now mark, in app.js, and that
+     * every band chart on the page is given one. */
+    WT_HAS(p, "      var midTxt = hhmmss(Math.round((opt.from + opt.to) / 2));");
+    WT_HAS(p, "      if (num(opt.now) && opt.now >= opt.from && opt.now <= opt.to) {\n"
+              "        g.fillStyle = T.signal;\n"
+              "        g.fillRect(X(opt.now), y1, Math.max(1, dpr), y0 - y1);");
+    WT_HAS(p, "color: theme().normal, band: bd, now: now,");
+    WT_HAS(p, "color: theme().normal, axes: true, band: bd,\n"
+              "                                     now: now });");
+    WT_HAS(p, "color: theme().normal, axes: true, band: pbd,\n"
+              "                                     now: Math.floor(Date.now() / 1000) });");
     WT_HAS(p, "    m.push([\"bar\", 0, h * 0.25, w * Math.max(0, Math.min(1, v / max)), "
               "h * 0.5,\n"
               "            opt.count ? \"--rule\" : hot ? \"--sev-warn\" : \"--ink\"]);");
@@ -601,7 +622,7 @@ static void test_g5_cells_from_the_servers_hex(void) {
     WT_EQ(cells[1], 0);
     WT_EQ(cells[143], 1);
     gmarks_t g;
-    gl_g5(cells, 144, 144, 12, -1, &g);
+    gl_g5(cells, 144, 144, 12, -1, NULL, 0, &g);
     WT_EQ(gm_count(&g, "cell"), 2);
     WT_ASSERT(near(gm_get(&g, "cell").x, 0));
 }
@@ -609,33 +630,33 @@ static void test_g5_cells_from_the_servers_hex(void) {
 static void test_g5_states(void) {
     gmarks_t g;
     /* Empty: a dash, never an empty box. */
-    gl_g5(NULL, 0, 144, 12, -1, &g);
+    gl_g5(NULL, 0, 144, 12, -1, NULL, 0, &g);
     WT_EQ(gm_count(&g, "dash"), 1);
     WT_EQ(gm_count(&g, "cell"), 0);
     /* Warming: cells drawn, nothing else; the word is the caption's. */
     int warm[4] = {0, 1, 1, 0};
-    gl_g5(warm, 4, 100, 12, -1, &g);
+    gl_g5(warm, 4, 100, 12, -1, NULL, 0, &g);
     WT_EQ(gm_count(&g, "cell"), 2);
     WT_EQ(gm_count(&g, "gap"), 0);
     WT_EQ(gm_count(&g, "first"), 0);
     /* One cell. */
     int one[1] = {1};
-    gl_g5(one, 1, 100, 12, -1, &g);
+    gl_g5(one, 1, 100, 12, -1, NULL, 0, &g);
     WT_EQ(gm_count(&g, "cell"), 1);
     WT_ASSERT(near(gm_get(&g, "cell").w, 100));
     /* A gap is its own kind, so it reads as unobserved and not absent. */
     int gapped[4] = {1, -1, -1, 1};
-    gl_g5(gapped, 4, 100, 12, -1, &g);
+    gl_g5(gapped, 4, 100, 12, -1, NULL, 0, &g);
     WT_EQ(gm_count(&g, "cell"), 2);
     WT_EQ(gm_count(&g, "gap"), 2);
     WT_ASSERT(!strcmp(gm_get(&g, "gap").tok, "--faint"));
     /* The first-seen mark, when it falls inside the window (F15). */
     int four[4] = {0, 1, 1, 1};
-    gl_g5(four, 4, 100, 12, 1, &g);
+    gl_g5(four, 4, 100, 12, 1, NULL, 0, &g);
     WT_EQ(gm_count(&g, "first"), 1);
     WT_ASSERT(near(gm_get(&g, "first").x, 25));
     WT_ASSERT(!strcmp(gm_get(&g, "first").tok, "--signal"));
-    gl_g5(four, 4, 100, 12, -1, &g);
+    gl_g5(four, 4, 100, 12, -1, NULL, 0, &g);
     WT_EQ(gm_count(&g, "first"), 0);
 }
 
@@ -659,12 +680,38 @@ static void test_g5_ruler(void) {
     WT_EQ(g.n, 0);
 }
 
+/* An anomaly episode underlines the cells it covers, clipped to the
+ * strip, and leaves the presence reading above it alone. Seen red with
+ * the underline left out of the port. */
+static void test_g5_anomaly_underline(void) {
+    int cells[4] = {1, 1, 1, 1};
+    static const int ep[2][2] = { {1, 2}, {3, 9} };
+    gmarks_t g;
+    gl_g5(cells, 4, 100, 12, -1, ep, 2, &g);
+    WT_EQ(gm_count(&g, "cell"), 4);
+    WT_EQ(gm_count(&g, "anom"), 2);
+    gmark_t a = gm_get(&g, "anom");
+    WT_ASSERT(near(a.x, 25));
+    WT_ASSERT(near(a.w, 50));
+    WT_ASSERT(near(a.y, 11));
+    WT_ASSERT(near(a.h, 1));
+    WT_ASSERT(!strcmp(a.tok, "--heat-2"));
+    /* Clipped to the last cell, never past the strip. */
+    gmark_t b = gm_last(&g, "anom");
+    WT_ASSERT(near(b.x, 75));
+    WT_ASSERT(near(b.w, 25));
+    /* An episode that ends before it starts draws nothing. */
+    static const int past[1][2] = { {9, 4} };
+    gl_g5(cells, 4, 100, 12, -1, past, 1, &g);
+    WT_EQ(gm_count(&g, "anom"), 0);
+}
+
 /* R10 for G5: grey everywhere still tells present from the first-seen
  * mark and from a gap, because each is its own kind and place. */
 static void test_g5_reads_in_greyscale(void) {
     int cells[4] = {1, -1, 1, 1};
     gmarks_t g;
-    gl_g5(cells, 4, 100, 12, 2, &g);
+    gl_g5(cells, 4, 100, 12, 2, NULL, 0, &g);
     gm_grey(&g);
     WT_ASSERT(gm_all_grey(&g));
     WT_EQ(gm_count(&g, "cell"), 3);
@@ -784,6 +831,7 @@ void run_glyph_tests(void) {
     WT_RUN(test_g5_cells_from_the_servers_hex);
     WT_RUN(test_g5_states);
     WT_RUN(test_g5_ruler);
+    WT_RUN(test_g5_anomaly_underline);
     WT_RUN(test_g5_reads_in_greyscale);
     WT_RUN(test_g6_bullet);
     WT_RUN(test_g6_count_bar);
