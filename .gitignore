@@ -80,3 +80,10 @@ data/
 # subdirectory is re-included whole because nothing but its four files
 # is ever written there.
 !/web/data/btsig/
+# The vendor research entries (owner request 2026-10-27,
+# docs/wiki/vendor-research.md) sit beside the registry: the directory
+# is named back and emptied the same way, and only its .md files are
+# committed, so a sloth run writing under it stays out of git too.
+!/web/data/vendors/
+/web/data/vendors/*
+!/web/data/vendors/*.md

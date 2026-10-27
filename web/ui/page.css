@@ -340,6 +340,11 @@ table.qt.dt-fixed td { overflow: hidden; text-overflow: ellipsis; }
 .kv { display: grid; grid-template-columns: 14ch 1fr; gap: 2px var(--gap); font-size: 12px; margin: var(--gap) 0 14px; }
 .kv .k { color: var(--muted); }
 .kv .v { overflow-wrap: anywhere; }
+/* the vendor research section: the summary's paragraphs, the sources
+   as plain lines (never links) */
+.vr p { font-size: 12px; margin: 0 0 8px; overflow-wrap: anywhere; }
+.vr-src { font-size: 11px; color: var(--muted); margin: 0 0 14px; padding: 0; list-style: none; overflow-wrap: anywhere; }
+.vr-src li { margin: 0 0 3px; }
 .lst { list-style: none; margin: 4px 0 14px; padding: 0; font-size: 12px; }
 .lst li { display: flex; gap: var(--gap); min-width: 0; border-top: 1px dotted var(--rule); padding: 1px 0; }
 .lst li:first-child { border-top: 0; }

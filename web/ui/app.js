@@ -2687,6 +2687,55 @@
     return hostVal(n.name, "  (" + n.src + ", " + n.where + ")");
   }
 
+  // ── vendor research (owner request 2026-10-27) ────────────────────
+  // What web/data/vendors/ documents about the OUI's holder, compiled
+  // into the server (web/tools/vendorkb.c): the fields as a kv list
+  // with the confidence word the entry gives each, the summary as
+  // prose with its [n] marks, the sources as plain text lines. Every
+  // value is set with textContent and a source is never a link: the
+  // page fetches nothing, and nothing an entry says becomes markup.
+  // Shown only under a found OUI; a vendor with no entry yet says so.
+  var VR_CONF = { "country": "country", "silicon": "silicon", "radios": "radios",
+                  "found in": "found_in", "randomization": "randomization" };
+  function vendorResearch(box, vr, oui) {
+    if (!oui || !oui.found) return;
+    box.appendChild(el("div", "label", "vendor research"));
+    if (!vr || !vr.found) {
+      box.appendChild(el("div", "sub", "no research yet for " + oui.vendor));
+      return;
+    }
+    var c = vr.confidence || {};
+    function val(label, v) {
+      if (v === null || v === undefined || v === "" || (v instanceof Array && !v.length)) return null;
+      var sp = el("span", "");
+      sp.appendChild(el("span", "d-normal", v instanceof Array ? v.join("; ") : String(v)));
+      var ck = Object.prototype.hasOwnProperty.call(VR_CONF, label) ? VR_CONF[label] : "";
+      if (ck && typeof c[ck] === "string") sp.appendChild(el("span", "d-dim", "  " + c[ck]));
+      return sp;
+    }
+    var rows = [["name", vr.name], ["also spelt", vr.aliases], ["kind", vr.kind],
+                ["country", vr.country], ["parent", vr.parent], ["founded", vr.founded],
+                ["devices", vr.device_classes], ["found in", vr.found_in],
+                ["radios", vr.radios], ["silicon", vr.silicon],
+                ["fcc grantee", vr.fcc_grantee], ["randomization", vr.randomization],
+                ["security", vr.security_notes],
+                ["researched", vr.researched + "  " + vr.file]];
+    var pairs = [];
+    for (var i = 0; i < rows.length; i++) pairs.push([rows[i][0], val(rows[i][0], rows[i][1])]);
+    kvList(box, pairs);
+    var sum = el("div", "vr");
+    String(vr.summary || "").split("\n\n").forEach(function (p) {
+      if (p) sum.appendChild(el("p", "", p));
+    });
+    box.appendChild(sum);
+    var ol = el("ol", "vr-src");
+    (vr.sources || []).forEach(function (s) {
+      ol.appendChild(el("li", "", s.n + ". " + s.title + " - " + s.url +
+                        " (accessed " + s.accessed + ")"));
+    });
+    box.appendChild(ol);
+  }
+
   function openDrawer(mac) {
     if (typeof mac !== "string" || !MAC_RE.test(mac)) return;
     var gen = ++DR.gen;
@@ -2722,6 +2771,7 @@
         ["dhcp vci", dt.dhcp_vci]
       ] : [["stream ip", j.stream ? ipVal(j.stream.ip, IP_SRC.dev) : null],
            ["stream first seen", j.stream && num(j.stream.first_seen) ? stamp(j.stream.first_seen) : null]]));
+      vendorResearch(box, j.vendor_research, j.oui);
       itemList(box, "names (passive)", j.names, nameLine, false);
       itemList(box, "pnl ssids", j.ssids, function (x) { return ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np); }, j.ssids_more);
       itemList(box, "associations", j.assocs, function (x) {
@@ -2781,6 +2831,7 @@
       set("l-src", j.kind + " " + j.q + ", sloth.db " + j.db + (j.ip_in_scope === false
         ? "; Monitor holds no addresses: an IP is the host's own interfaces' (Local)" : ""));
       kvList(box, j.kind === "mac" ? ouiPairs(j.oui) : [["ip", ipVal(j.q, 0)]]);
+      if (j.kind === "mac") vendorResearch(box, j.vendor_research, j.oui);
       itemList(box, "names (passive)", j.names, nameLine, false);
       if (j.kind === "mac")
         itemList(box, "arp addresses", j.ips, function (x) { return ipVal(x.addr, IP_SRC.arp); }, j.ips_more);

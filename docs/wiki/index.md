@@ -72,6 +72,11 @@ the Wi-Fi it watches:
   what `DFS_MASKING` reads its DFS set from.
 - [[research-corpus]] — the machine-readable side of the cite-sources
   habit (#73): one document per source, FTS5-indexed, guarded.
+- [[vendor-research]] — slothweb's "vendor research" section under the
+  OUI card: one cited Markdown file per OUI holder in
+  `web/data/vendors/`, compiled in at build time, every claim with a
+  source and a confidence; the file format and the rules the build
+  enforces.
 - [[captive-portal]] — connectivity-check interception (#69): the
   rogue portal that answers your OS's probe, and the three
   independent signals that catch it; graded by network context and

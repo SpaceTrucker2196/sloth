@@ -665,8 +665,21 @@ WEB_BTSIG_STAMP = $(WEB_GEN_DIR)/btsig.inputs
 WEB_BTSIG_ARGS  = $(if $(wildcard $(WEB_BTSIG_DIR)/company_identifiers.csv),--company $(WEB_BTSIG_DIR)/company_identifiers.csv,) \
                   $(if $(wildcard $(WEB_BTSIG_DIR)/service_uuids.csv),--service $(WEB_BTSIG_DIR)/service_uuids.csv,) \
                   $(if $(wildcard $(WEB_BTSIG_DIR)/appearance_values.csv),--appearance $(WEB_BTSIG_DIR)/appearance_values.csv,)
+# The vendor research table (owner request 2026-10-27): one Markdown
+# file per researched OUI holder under web/data/vendors/, read by
+# web/tools/vendorkb.c into build/web/web_vendorkb_table.c (never
+# committed) whenever one changes, or one is added or removed (the
+# stamp). A file with a dangling [n], a missing field or a name not its
+# file's slug fails the build naming the file; `make web-vendorkb`
+# runs just that check. The format: docs/wiki/vendor-research.md.
+WEB_VKB_DIR     = web/data/vendors
+WEB_VKB_MDS     = $(wildcard $(WEB_VKB_DIR)/*.md)
+WEB_VKBGEN      = $(WEB_GEN_DIR)/vendorkb
+WEB_VKBGEN_SRCS = web/tools/vendorkb.c
+WEB_VKB_C       = $(WEB_GEN_DIR)/web_vendorkb_table.c
+WEB_VKB_STAMP   = $(WEB_GEN_DIR)/vendorkb.inputs
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C) \
-                  $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C)
+                  $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C)
 WEB_TEST_SRCS   = $(wildcard web/tests/*.c) web/tools/oui_csv.c web/tools/demo.c src/db_schema.c \
                   src/rsn_ie.c src/ip_color.c src/tui_palette.c \
                   src/tui.c src/netstr.c src/view_labels.c
@@ -758,8 +771,23 @@ $(WEB_AKB_C): $(WEB_AKBGEN) $(WEB_AKB_INPUTS) $(WEB_AKB_CORPUS) web/src/web_aler
 	    docs/wiki/alerts.md docs/wiki/alert-remediation.md research
 	mv $@.tmp $@
 
+$(WEB_VKBGEN): $(WEB_VKBGEN_SRCS) web/src/web_vendorkb.h
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -Iweb/src -o $@ $(WEB_VKBGEN_SRCS)
+
+$(WEB_VKB_STAMP): STAMP = $(WEB_VKB_MDS)
+$(WEB_VKB_STAMP): FORCE
+	$(write_stamp)
+
+$(WEB_VKB_C): $(WEB_VKBGEN) $(WEB_VKB_STAMP) $(WEB_VKB_MDS)
+	$(WEB_VKBGEN) $@.tmp $(WEB_VKB_DIR)
+	mv $@.tmp $@
+
+.PHONY: web-vendorkb
+web-vendorkb: $(WEB_VKB_C)
+
 .PHONY: web web-test update-oui update-btsig
-web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C)
+web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C)
 	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -o slothweb $(WEB_MAIN) \
 	      $(WEB_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
 
@@ -790,7 +818,7 @@ web-quickstart-check:
 # only; no host file, no running sloth, no name lookup, no network beyond
 # 127.0.0.1 and ::1. The test links the embedder's
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
-web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C)
+web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C)
 	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) -DSLOTHWEB_DEMO_LIB -Iweb/src -Iweb/tests -Iweb/tools \
 	      -Iinclude -iquote research -DWEB_OUI_EXPECT='"$(if $(WEB_OUI_CSVS),ieee,sloth)"' \
 	      -DWEB_OUI_DATA='"$(WEB_OUI_DIR)"' \

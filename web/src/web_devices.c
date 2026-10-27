@@ -13,6 +13,7 @@
 #include "web_metrics.h"
 #include "web_query.h"
 #include "web_ssid.h"
+#include "web_vendorkb.h"
 
 /* ── parameters ──────────────────────────────────────────────────────── */
 
@@ -658,11 +659,70 @@ static void names_member(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *c,
     web_jw_raw(w, "]");
 }
 
+static void jw_list(web_jw_t *w, const char *key, const char *const *v, int n) {
+    web_jw_raw(w, ",\"");
+    web_jw_raw(w, key);
+    web_jw_raw(w, "\":[");
+    for (int i = 0; i < n; i++) {
+        if (i) web_jw_raw(w, ",");
+        web_jw_str(w, v[i]);
+    }
+    web_jw_raw(w, "]");
+}
+
+/* The vendor research section (web_vendorkb.h) for the OUI's holder:
+ * the entry web/data/vendors/ has for the name, every field as text
+ * with its [n] marks and the sources as plain records, or
+ * {"found":false} for a vendor with no file yet (the page then says
+ * "no research yet for <name>") and for no vendor at all. Every value
+ * is a string through web_jw_str(): a source title or a summary is
+ * never markup in the bytes we send. */
+static void research_member(web_jw_t *w, const char *vendor) {
+    const web_vkb_t *e = vendor ? web_vendorkb_find(vendor) : NULL;
+    web_jw_raw(w, ",\"vendor_research\":{\"found\":");
+    if (!e) { web_jw_raw(w, "false}"); return; }
+    web_jw_raw(w, "true,\"file\":");  web_jw_str(w, e->file);
+    web_jw_raw(w, ",\"name\":");       web_jw_str(w, e->name);
+    jw_list(w, "aliases", e->aliases, e->naliases);
+    web_jw_raw(w, ",\"kind\":");       web_jw_str(w, e->kind);
+    web_jw_raw(w, ",\"country\":");    web_jw_str(w, e->country);
+    web_jw_raw(w, ",\"parent\":");     web_jw_str(w, e->parent);
+    web_jw_raw(w, ",\"founded\":");    web_jw_str(w, e->founded);
+    jw_list(w, "device_classes", e->device_classes, e->ndevice_classes);
+    jw_list(w, "found_in", e->found_in, e->nfound_in);
+    jw_list(w, "radios", e->radios, e->nradios);
+    jw_list(w, "silicon", e->silicon, e->nsilicon);
+    jw_list(w, "fcc_grantee", e->fcc_grantee, e->nfcc_grantee);
+    web_jw_raw(w, ",\"randomization\":"); web_jw_str(w, e->randomization);
+    jw_list(w, "security_notes", e->security_notes, e->nsecurity_notes);
+    web_jw_raw(w, ",\"confidence\":{\"country\":"); web_jw_str(w, e->conf_country);
+    web_jw_raw(w, ",\"silicon\":");       web_jw_str(w, e->conf_silicon);
+    web_jw_raw(w, ",\"radios\":");        web_jw_str(w, e->conf_radios);
+    web_jw_raw(w, ",\"found_in\":");      web_jw_str(w, e->conf_found_in);
+    web_jw_raw(w, ",\"randomization\":"); web_jw_str(w, e->conf_randomization);
+    web_jw_raw(w, "},\"summary\":");      web_jw_str(w, e->summary);
+    web_jw_raw(w, ",\"sources\":[");
+    for (int i = 0; i < e->nsources; i++) {
+        web_jw_raw(w, i ? ",{\"n\":" : "{\"n\":");
+        web_jw_int(w, i + 1);
+        web_jw_raw(w, ",\"title\":");    web_jw_str(w, e->sources[i].title);
+        web_jw_raw(w, ",\"url\":");      web_jw_str(w, e->sources[i].url);
+        web_jw_raw(w, ",\"accessed\":"); web_jw_str(w, e->sources[i].accessed);
+        web_jw_raw(w, "}");
+    }
+    web_jw_raw(w, "],\"researched\":"); web_jw_str(w, e->researched);
+    web_jw_raw(w, "}");
+}
+
 static void oui_member(web_jw_t *w, const web_m4_t *m, const char *mac) {
     uint8_t b[6];
     web_oui_hit_t hit;
     web_jw_raw(w, ",\"oui\":");
-    if (web_oui_mac_bytes(mac, b) != 0) { web_jw_raw(w, "null"); return; }
+    if (web_oui_mac_bytes(mac, b) != 0) {
+        web_jw_raw(w, "null");
+        research_member(w, NULL);
+        return;
+    }
     web_oui_lookup(m->oui, b, &hit);
     static const char *const REG[] = { "MA-L", "MA-M", "MA-S" };
     web_jw_raw(w, "{\"found\":");     web_jw_raw(w, hit.found ? "true" : "false");
@@ -678,6 +738,7 @@ static void oui_member(web_jw_t *w, const web_m4_t *m, const char *mac) {
     web_jw_raw(w, ",\"table\":");     web_jw_str(w, vendor_table(m));
     web_jw_raw(w, ",\"full\":");      web_jw_raw(w, web_oui_full(m->oui) ? "true" : "false");
     web_jw_raw(w, "}");
+    research_member(w, hit.found ? hit.name : NULL);
 }
 
 /* Seconds east of UTC at t (tm_gmtoff is not C99), as web_series.c. */
@@ -930,6 +991,7 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
     } else {
         if (!mon) snprintf(ip, sizeof(ip), "%s", key);
         web_jw_raw(&w, ",\"oui\":null");
+        research_member(&w, NULL);
         sdb_list(&w, "macs", have_db && !mon ? &conn : NULL, EK_ADDR, DEV_IPS,
                  web_sdb_arp_ip, ip);
     }

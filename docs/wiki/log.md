@@ -5658,6 +5658,25 @@ report events.
   page's CSP gains `img-src data:` and nothing else; the no-external-
   reference test admits exactly those two forms (seen red with an
   `<img src="/icon.png">` and with a stylesheet `<link>`).
+- 2026-10-27 — [[vendor-research]] (new page), [[slothweb]], `web/README.md`,
+  `web/data/SOURCE.md`: the drawer's and Lookup's "vendor research"
+  section under the OUI card (owner request 2026-10-27). One cited
+  Markdown file per OUI holder in `web/data/vendors/` (front matter,
+  summary, numbered sources, a confidence word per field, `unknown`
+  where nothing is documented), compiled into the binary by
+  `web/tools/vendorkb.c` into `build/web/web_vendorkb_table.c` (never
+  committed); the build refuses a file with a dangling `[n]`, a missing
+  field or a name not its file's, naming the file. Lookup by the IEEE
+  name with spelling folded (`web_vkb_norm()`), `/api/device/{mac}` and
+  `/api/lookup` gain `"vendor_research"`, `web/ui/app.js` draws it as
+  text with sources as plain lines (no link). Three sample entries
+  (Murata Manufacturing, AMPAK Technology, Tesla) written from the
+  companies' own pages, Wikipedia, board documentation, iFixit and NCC
+  Group; FCC grantee codes left `unknown` because the FCC ID databases
+  were not reachable from the session. `web/tests/test_vendorkb.c`
+  holds every entry to the committed registry. The research set (the
+  reference host's 163 vendors and the ~120 commonest) follows in later
+  slices.
 - 2026-11-01 — [[wiki-maintenance]]: `wiki_sync.sh` flattens a
   `docs/wiki/<dir>/` subdirectory onto the flat GitHub wiki
   (`<dir>-<page>`, `<dir>/README.md` as `<dir>`), rewriting the links

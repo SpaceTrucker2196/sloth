@@ -64,6 +64,20 @@ SRC=DIR` from a directory of the SIG's YAML (never a fetch), and
 (`"sig":"none"` in `/api/health`'s `ble` member; the page shows the
 numbers alone).
 
+**Vendor research.** Under the OUI card the drawer and the Lookup card
+show what `web/data/vendors/` documents about the block's holder (owner
+request 2026-10-27): kind, country, parent, founded, the device classes
+a MAC in its blocks usually is, products found carrying it, radios,
+the silicon documented in its modules and products, FCC grantee codes,
+randomisation, security notes, a summary and numbered sources, each
+field with a confidence word and every claim with a `[n]`. One Markdown
+file per vendor, compiled in at build time by `web/tools/vendorkb.c`
+(`make web-vendorkb` checks the files alone); a file with a dangling
+`[n]`, a missing field or a name not its file's fails the build naming
+the file. A vendor with no file shows "no research yet for <name>".
+Sources are plain text, never links. Format and rules:
+[`docs/wiki/vendor-research.md`](../docs/wiki/vendor-research.md).
+
 The full table costs the binary about 2.8 MB: slothweb is 3.3 MB with
 it and 0.5 MB without (x86-64, `-O2`, measured 2026-10-26); the
 generator itself runs in under 0.1 s, and a clean `make web` takes
@@ -1722,7 +1736,10 @@ cut length escaped six-fold; `test_devices.c` builds that case);
 nothing is ever a `503` for size.
 
 `/api/device/{mac}` (the MAC percent-decoded, case and `-` folded)
-answers the drawer: the OUI card, the allow-listed record and its v6/v7
+answers the drawer: the OUI card, the vendor research section
+(`"vendor_research"`: the `web/data/vendors/` entry for the OUI's
+holder as fields, summary and sources, or `{"found":false}`; see
+Vendor research, above), the allow-listed record and its v6/v7
 detail (sloth's hostname, device class, camera vendor and model, DHCP
 vendor class), what the stream knows (IP binding, first seen), every
 passive name, PNL SSIDs (24), associations (12), ARP addresses (8),
@@ -1733,7 +1750,8 @@ weeks present, n]`, Monday 00:00 local first, with `now_cell` and
 `warm_n`; `null` before any feed) and its anomaly episodes (8, open
 first). `/api/lookup?q=` takes a MAC or an IP: for a MAC the OUI card
 (found, vendor, block, bits, registry, private, local, multicast, the
-table and whether it is the full one) and its ARP addresses; for an IP
+table and whether it is the full one), the same vendor research section
+and its ARP addresses; for an IP
 its ARP MACs; for both every passive name and sloth.db's record (an
 IP's through its ARP MAC, or the stream's binding). `"active":false`
 always: there is no active lookup.
@@ -3446,6 +3464,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_sqlbox.c` | the SQL box: the parameter and text rules; `404` without `--web-allow-sql` and the page's box hidden; spec §12's M5 acceptance (above) over a real socket against the C API and the sqlite3 shell; every write, DDL, PRAGMA, ATTACH, DML-tail CTE and second statement refused with the file byte for byte; every withheld column refused, the guardrail's words on the list, the integer flags read; the row, byte, time and value limits; one at a time (`503` `busy`, free again once answered or once the client leaves), `HEAD` `405`, `/api/recipes`. Both builds |
 | `test_flows.c` | the Flows routes over a generated sloth.db: every tab's row byte for byte, an SMB1 session marked, the columns each tab reads held to the allow-list and the withheld ones held off it, no cookie, banner, MQTT username, community count or preauth count in any body, every `400`, paging, sorting, the `ip` filter, a page that stops early with `more` and the next one, the chord pairs with their fold at three sizes, a table the file lacks; the page's Flows view. Both builds |
 | `test_alertfmt.c` | the detail audit read from `src/alerts/`: every listed type's every `fire()` site found and its formats' string fields approved; the credential-bearing types off the list and refused by the checker |
+| `test_vendorkb.c` | the vendor research table against `web/data/vendors/` and the registry: every `.md` an entry and every entry a file named for its name, every `[n]` resolving and every cited field carrying one, the name and each alias exact `Organization Name` strings of the committed CSVs (a dead entry is red), the lookup folding case, white space and punctuation and matching no prefix, the drawer and Lookup carrying `"vendor_research"` for a researched vendor and `{found:false}` for one without and for an IP, the page drawing it through one function with no `href` and no markup sink |
 | `test_alertkb.c` | the alert knowledge table against its sources: an entry per `.def` row in order with its technique, a trigger, sources and steps for each, plain text, and every remediation source a corpus document that cites the type |
 | `test_alerts.c` | the Alerts page and an alert's page over a generated sloth.db and a fed stream: the collapse (sloth.db's rows and the stream's incidents, a key once), the order, every filter, paging, every `400`/`404`/`405`, the six sections, runs, the device by MAC and by address, no key, username, community or sloth `incident_id` in any body, every type's page within the buffer, the 20,000-row bound on 30,000 rows (500,000 with `SLOTHWEB_ALERTS_BENCH`), filters, History's figures and the drawer reaching past it, and the tiles against their views on the demo's data; the page's views and links |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
@@ -3512,6 +3531,8 @@ web/
     web_slothdb.c  sloth.db read-only: open, identify, allow-list, reads (M4)
     web_query.c    the device query language, compiled to one statement (M4)
     web_oui.c      the vendor lookup over the generated table (M4)
+    web_vendorkb.c the vendor research lookup over the generated table, spelling folded
+    web_vendorkb.h its symbols and the key normaliser the generator and tests share
     web_ptr.c      the passive PTR cache (M4)
     web_devices.c  /api/devices, /api/device/{mac}, /api/lookup (M4),
                    /api/history/devices (M5)
@@ -3537,13 +3558,16 @@ web/
     recipes.c      docs/wiki/sqlite-schema.md -> build/web/web_recipes.c (build time only)
     alertkb.c      the .def, the rule table, the wiki, research/ and
                    docs/wiki/alert-remediation.md -> build/web/web_alertkb.c (build time only)
+    vendorkb.c     web/data/vendors/*.md -> build/web/web_vendorkb_table.c (build time only);
+                   refuses a file with a dangling [n] or a missing field, naming it
     palette.c      src/tui_palette.c + src/tui.c -> build/web/palette.css, palette.js;
                    make web-contrast (build time only)
     sha256.c       SHA-256 and base64 for embed.c and the tests
     demo.c         build/web/slothweb-demo: the synthetic sloth.db and stream (M6);
                    linked into slothweb_test too (-DSLOTHWEB_DEMO_LIB)
     quickstart_check.sh  the five-minute check, make web-quickstart-check (M6)
-  data/            the IEEE registry CSVs, committed (SOURCE.md: origin, hashes, refresh)
+  data/            the IEEE registry CSVs, committed (SOURCE.md: origin, hashes, refresh);
+                   vendors/ the vendor research, one .md per OUI holder (docs/wiki/vendor-research.md)
   tests/           slothweb_test (make web-test); sdb_gen.c builds the tests'
                    sloth.db from src/db_schema.c; src/rsn_ie.c is linked for
                    test_parity.c, src/tui.c, tui_palette.c, ip_color.c,

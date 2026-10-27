@@ -116,6 +116,7 @@ int main(void) {
     SUITE(run_readme_tests);
     SUITE(run_alertfmt_tests);
     SUITE(run_alertkb_tests);
+    SUITE(run_vendorkb_tests);
     SUITE(run_alerts_tests);
     SUITE(run_sqlbox_tests);
     SUITE(run_scope_tests);

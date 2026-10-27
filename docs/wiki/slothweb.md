@@ -101,9 +101,18 @@ re-implements), `src/top_hosts.c` (what `conn_count` counts),
 and for the Alerts page, `web/src/web_alerts.c`, `web/src/web_alertdb.c`,
 `web/src/web_alertfmt.c`, `web/tools/alertkb.c`, `src/alerts/` (the
 detail formats audited), `include/sloth_alerts.def`,
-`docs/views/alerts.md`, `research/` and [[alert-remediation]].
+`docs/views/alerts.md`, `research/` and [[alert-remediation]]; and for
+the vendor research section, `web/data/vendors/*.md`,
+`web/tools/vendorkb.c`, `web/src/web_vendorkb.h`,
+`web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
+[[vendor-research]].
 
-**Last updated**: 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)), 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (kept settings: every control a viewer
+**Last updated**: 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)), 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor research section under the
+drawer's and Lookup's OUI card, one cited Markdown file per OUI holder
+in `web/data/vendors/` compiled in at build time, `{found:false}` and
+"no research yet" for a vendor without one, [[vendor-research]]; the
+glyph layer, slice V0 of `docs/web-visual-spec.md`, below; kept
+settings: every control a viewer
 can change kept per browser under `slothweb.v1.*`, each table's widths
 and sort among them, the address still winning, a reset per table and
 one for everything, and its review: a link's filters and scope applied
@@ -650,6 +659,16 @@ The full account is in
   strip, the week heatmap, the episodes) opened from a row or an
   anomaly card, and Lookup. `textContent` only; no request off the
   page's own server.
+- **Vendor research (2026-10-27).** Under the OUI card, in the drawer
+  and on the Lookup card: what `web/data/vendors/` documents about the
+  block's holder (kind, country, parent, founded, device classes,
+  products found carrying it, radios, documented silicon, FCC grantee
+  codes, randomisation, security notes, summary, numbered sources),
+  each field with a confidence word and every claim with a `[n]`,
+  compiled in by `web/tools/vendorkb.c`; `"vendor_research"` on both
+  routes, `{found:false}` and "no research yet for <name>" for a
+  vendor without a file. Sources as plain text lines, never links.
+  [[vendor-research]] has the format and the rules the build enforces.
 
 ## M5: WiFi, History and the SQL box
 
@@ -1047,7 +1066,6 @@ element id.
 `src/views/dashboard_primitives.c` (`draw_sparkline_at()`),
 `web/tests/test_tui_colors.c` (the pinning mechanism),
 `web/tools/palette.c` (the generator shape, for contrast).
-**Last updated**: 2026-10-27.
 
 ## Triage and the FRRS record (2026-11-01)
 
@@ -1329,6 +1347,7 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | the query language, bounded, one bound statement, fuzzed | `test_query.c`, `test_query_terms`, `tests/fuzz/fuzz_web_query.c` |
 | OUI table generated, never committed, build without it | `test_oui.c`, `test_builtin_table` (the default build `ieee`, an empty `WEB_OUI_DIR` `sloth`); `/build/` keeps the generated table out of git |
 | the committed registry (2026-10-26) | `test_committed_registry_matches_source`, `test_committed_registry_builds_in_time`, `test_second_file_after_many_names`, `test_update_oui_is_never_automatic` |
+| vendor research under the OUI card (2026-10-27) | `test_vendorkb.c`: every entry complete, cited and named for an exact registry `Organization Name`; the lookup folding spelling; `"vendor_research"` on the drawer and Lookup, `{found:false}` without a file; the page drawing it as text |
 | passive names, PTR cache, v4 migration | `test_ptr.c`, `test_v3_file_is_migrated`, `test_v3_failed_step_leaves_file_unchanged`, `test_passive_ptr_rows`, `test_newer_file_refused` |
 | A4 and the durable A2 | `test_a4_unknown_vendor`, `test_a4_off_without_the_ieee_table`, `test_a4_burst_is_one_episode`, `test_a2_durable_first_seen`, `test_device_z_now` |
 | routes, strict validation, presence, drawer, Lookup, page | `test_devices.c` |

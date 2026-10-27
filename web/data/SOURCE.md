@@ -40,6 +40,18 @@ the tests or CI runs it: a build never touches the network.
 `web/tests/test_oui.c` checks that the hashes below are the committed
 files', so a CSV edited without this step fails `make web-test`.
 
+**`vendors/`.** Beside the registry, one Markdown file per researched
+OUI holder (`vendors/<slug>.md`): who the registrant is, what a MAC in
+its blocks usually is, documented silicon, radios, FCC grantee codes,
+randomisation, security notes, a summary and numbered sources, every
+claim cited. `web/tools/vendorkb.c` compiles them into
+`build/web/web_vendorkb_table.c` (build output, never committed) for
+the drawer's "vendor research" section; `web/tests/test_vendorkb.c`
+holds every entry's name and aliases to exact `Organization Name`
+strings of the four CSVs here. The format and rules are
+`docs/wiki/vendor-research.md`. These files are written by hand from
+cited sources and are not touched by `make update-oui`.
+
 <!-- update-oui:begin -->
 Refreshed 2026-10-26 by `make update-oui`: copied from /usr/share/ieee-data (ieee-data 20260625).
 
