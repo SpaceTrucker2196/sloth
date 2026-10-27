@@ -42,6 +42,10 @@
 #define WEB_LIVE_TITLE_MAX  48
 #define WEB_LIVE_DETAIL_MAX 128
 #define WEB_LIVE_ID_MAX     32
+/* The handle slothweb names an incident by on the wire, in place of
+ * sloth's incident_id (see web_live_inc_t): 8 hex digits of a
+ * per-process nonce and up to 16 of a counter. */
+#define WEB_LIVE_HID_MAX    24
 /* An alert's match_ip: INET6_ADDRSTRLEN - 1, address characters only. */
 #define WEB_LIVE_IP_MAX     45
 /* Open incidents tracked; sloth's engine holds MAX_ALERTS (128). */
@@ -70,24 +74,79 @@ typedef struct {
 typedef struct {
     long long ts;
     int       sev;
+    int       ty;                      /* the record's ty, -1 none */
     char      type[WEB_LIVE_TYPE_MAX + 1];
     char      title[WEB_LIVE_TITLE_MAX + 1];
     char      detail[WEB_LIVE_DETAIL_MAX + 1];
-    char      incident[WEB_LIVE_ID_MAX + 1];
+    char      hid[WEB_LIVE_HID_MAX + 1];   /* the incident's handle, "" none */
     char      match_ip[WEB_LIVE_IP_MAX + 1];
 } web_live_alert_t;
+
+/* A per-second count over the last eight seconds of the monotonic
+ * clock, as the records/s figure is kept. */
+typedef struct {
+    long long sec[8];
+    unsigned  n[8];
+} web_live_rate_t;
 
 typedef struct {
     char               name[WEB_LIVE_TYPE_MAX + 1];
     unsigned long long n;
+    web_live_rate_t    rate;
 } web_live_type_t;
 
+/* One incident as the lifecycle records have told it (alert.create,
+ * .update, .escalate, .resolve). key is sloth's dedup key, kept so the
+ * alert routes can bind it as a predicate against sloth.db's alerts.key
+ * (web_alertdb.h); like alerts.key it can carry a remote string (for a
+ * cleartext credential, the username), so it is never rendered, by any
+ * route. detail is kept only for a type web_alert_detail_ok() admits.
+ *
+ * id, sloth's incident_id, is never rendered either. sloth derives it
+ * by FNV-1a64 over the key, then the creation time, then a small
+ * counter (src/alerts/engine.c incident_id_make()), and every FNV step
+ * inverts: strip the time (first_seen) and the counter (a few thousand
+ * guesses) and what is left is the key's unsalted hash, which a
+ * dictionary of usernames turns back into CLEARTEXT_CRED's username.
+ * The routes name an incident by hid instead: a nonce drawn at startup
+ * and a counter of the incidents this process has seen, which says
+ * nothing about the key. */
+#define WEB_LIVE_KEY_MAX    191
+#define WEB_LIVE_SEVH       8
+#define WEB_LIVE_CLOSED     64
+#define WEB_LIVE_REASON_MAX 15
+#define WEB_LIVE_TECH_MAX   15
 typedef struct {
-    char id[WEB_LIVE_ID_MAX + 1];
-    int  sev;
-} web_live_inc_t;
+    long long ts;
+    int       sev;
+    char      ev;                      /* 'c' create 'u' update 'e' escalate 'r' resolve */
+} web_live_sevh_t;
 
 typedef struct {
+    char      id[WEB_LIVE_ID_MAX + 1];
+    char      hid[WEB_LIVE_HID_MAX + 1];
+    char      key[WEB_LIVE_KEY_MAX + 1];
+    int       sev;
+    int       type;                    /* the record's ty, -1 none */
+    char      title[WEB_LIVE_TITLE_MAX + 1];
+    char      detail[WEB_LIVE_DETAIL_MAX + 1];
+    char      technique[WEB_LIVE_TECH_MAX + 1];
+    char      match_ip[WEB_LIVE_IP_MAX + 1];
+    int       match_port;
+    long long first_ts, last_ts, closed_ts;   /* closed_ts -1 open */
+    long long count, observations, reopen;
+    int       pcap;                    /* sloth wrote a pcap of it */
+    char      reason[WEB_LIVE_REASON_MAX + 1];
+    int       nsev;                    /* changes seen, all of them */
+    web_live_sevh_t sevh[WEB_LIVE_SEVH];  /* the latest WEB_LIVE_SEVH, oldest first */
+    unsigned long long seq;            /* when it last changed: newest first */
+} web_live_inc_t;
+
+/* The devices of sloth's latest published pass, by MAC, for the
+ * Devices view's pass:latest filter (the Overview's devices tile). */
+#define WEB_LIVE_PASS_MAX   2048
+
+typedef struct web_live_s {
     pthread_mutex_t mu;
 
     /* the socket */
@@ -113,9 +172,11 @@ typedef struct {
     unsigned long long types_other;       /* table full */
     unsigned long long types_invalid;     /* not a plausible type name */
 
-    /* records per second, by second of the monotonic clock */
+    /* records per second, by second of the monotonic clock: all of
+     * them, and the ones counted as types_other and types_invalid */
     long long rate_sec[8];
     unsigned  rate_n[8];
+    web_live_rate_t rate_other, rate_invalid;
 
     /* devices */
     int           dev_known;
@@ -132,8 +193,19 @@ typedef struct {
     int              ninc;
     web_live_inc_t   inc[WEB_LIVE_INCIDENTS];
     int              inc_overflow;
+    web_live_inc_t   closed[WEB_LIVE_CLOSED];   /* a ring, newest at closed_next - 1 */
+    int              closed_next, closed_n;
+    unsigned long long inc_seq;
+    unsigned           hid_nonce;           /* drawn at init */
+    unsigned long long hid_seq;             /* handles given out */
     web_live_alert_t alerts[WEB_LIVE_ALERTS];
     int              alert_next, alert_n;
+
+    /* the latest pass's MACs: round_* while one is read, pass_* published */
+    char             round_macs[WEB_LIVE_PASS_MAX][18];
+    int              round_nmac, round_mac_more;
+    char             pass_macs[WEB_LIVE_PASS_MAX][18];   /* sorted */
+    int              pass_nmac, pass_mac_more;
 
     /* sensor_health */
     int       sh_seen;
@@ -209,5 +281,21 @@ int  web_live_is_poll_type(const char *t);
 /* "ok", "degraded", "not_observing", "stale" or "unknown": the
  * sensor_health liveness, from the latest record and its age. */
 const char *web_live_sensor_word(web_live_t *l, long long now_ms);
+
+/* The incidents, for the alert routes: the open ones first (the
+ * Overview's open-alerts count, exactly), then the recently closed,
+ * each group newest change first; at most max into out. Their count;
+ * *nopen of them open. */
+int web_live_incidents(web_live_t *l, web_live_inc_t *out, int max, int *nopen);
+/* One incident by its handle (web_live_inc_t.hid), open or recently
+ * closed: 1 found. */
+int web_live_incident(web_live_t *l, const char *hid, web_live_inc_t *out);
+/* Is mac (canonical, lower case) in the latest published device pass? */
+int web_live_pass_has(web_live_t *l, const char *mac);
+/* The latest pass's MAC count, and whether more were in it than kept. */
+int web_live_pass_size(web_live_t *l, int *more);
+/* A records/s figure, times ten, of one rate ring (the same five whole
+ * seconds the summary's records_s uses). */
+long web_live_rate10(const web_live_rate_t *r, long long now_ms);
 
 #endif

@@ -51,6 +51,9 @@ int db_schema_version(void);
 #define NCLI   16
 
 static unsigned g_rng = 20261023u;
+/* The clock: time(NULL), or the one a test set (demo_now). */
+static long long g_now_fixed;
+static long long now_s(void) { return g_now_fixed ? g_now_fixed : (long long)time(NULL); }
 static unsigned rnd(unsigned n) {
     g_rng = g_rng * 1103515245u + 12345u;
     return n ? ((g_rng >> 8) & 0xffffffu) % n : 0;
@@ -161,7 +164,7 @@ static int make_db(const char *path) {
         sqlite3_close(g_db);
         return 1;
     }
-    long long now = (long long)time(NULL), D = 86400, H = 3600;
+    long long now = now_s(), D = 86400, H = 3600;
     ex("PRAGMA journal_mode=WAL");
     raw(db_schema_meta_sql());
     raw(db_schema_sql());
@@ -237,26 +240,48 @@ static int make_db(const char *path) {
     ex("INSERT INTO karma_candidates (bssid,ssid_count,pnl_overlap,pnl_best,ie_uniform,"
        "score,top_ssid,first_seen,last_seen) VALUES ('%s',4,3,2,1,82,'demo-cafe',%lld,%lld)",
        AP[3].bssid, now - 3 * H, now - 30);
-    /* Alert episodes, oldest first; type is sloth_alerts.def's row. */
+    /* Alert episodes, oldest first; type is sloth_alerts.def's row, the
+     * detail in the format the rule writes (src/alerts/). sloth upserts
+     * one row per (key, first_seen), so a finding that comes and goes is
+     * many rows of one key: runs is how many incidents, every gap apart,
+     * the Alerts page collapses them into one row. */
     static const struct {
-        int type, sev; const char *title, *key, *ip; long long ago, len; int count;
+        int type, sev; const char *title, *key, *ip; int port;
+        long long ago, len; int count, runs; long long gap; const char *detail;
     } AL[] = {
-        { 0,  1, "PORT_SCAN",        "scan:203.0.113.50",                         "203.0.113.50", 18 * 86400, 600, 41 },
-        { 10, 2, "SMB1_USE",         "smb1:192.0.2.18",                           "192.0.2.18",   9 * 86400,  7200, 12 },
-        { 2,  0, "NXDOMAIN_BURST",   "nxdomain:192.0.2.17",                       "192.0.2.17",   4 * 86400,  900, 30 },
-        { 14, 1, "SSH_BRUTE_FORCE",  "sshbf:203.0.113.77",                        "192.0.2.10",   2 * 86400,  1800, 64 },
-        { 1,  2, "DEAUTH_FLOOD",     "deauth:02:de:00:00:00:12@02:de:00:00:00:a1", "",            5 * 3600,   240, 380 },
-        { 20, 2, "KARMA_AP",         "karma:06:de:00:00:00:a4",                   "",             3 * 3600,   10000, 9 },
-        { 0,  1, "PORT_SCAN",        "scan:192.0.2.21",                           "192.0.2.21",   50 * 60,    300, 22 },
+        { 0,  1, "PORT_SCAN",       "scan:203.0.113.50",                          "203.0.113.50", 0,
+          18 * 86400, 600, 41, 24, 6 * 3600, "203.0.113.50 scanned 41 distinct ports" },
+        { 10, 2, "SMB1_USE",        "smb1:192.0.2.20->192.0.2.18:445",            "192.0.2.18", 445,
+          9 * 86400, 7200, 12, 3, 86400,
+          "SMBv1 traffic 192.0.2.20 -> 192.0.2.18:445 (count=12). SMBv1 has been deprecated"
+          " since 2017 (EternalBlue / WannaCry); the endpoint serving v1 should be patched"
+          " or v1 disabled." },
+        { 2,  0, "NXDOMAIN_BURST",  "nxdomain:192.0.2.17",                        "192.0.2.17", 53,
+          4 * 86400, 900, 30, 1, 0, "192.0.2.17 saw 30 NXDOMAIN responses in 60s" },
+        { 14, 1, "SSH_BRUTE_FORCE", "sshbf:203.0.113.77->192.0.2.10",             "203.0.113.77", 22,
+          2 * 86400, 1800, 64, 2, 1200, "203.0.113.77->192.0.2.10: 64 SSH banners (brute-force; SSH-2.0-demo)" },
+        { 1,  2, "DEAUTH_FLOOD",    "deauth:02:de:00:00:00:12@02:de:00:00:00:a1", NULL, 0,
+          5 * 3600, 240, 380, 6, 3 * 3600,
+          "victim=02:de:00:00:00:12 bssid=02:de:00:00:00:a1 observed 380 frames, peak 41 in 5s,"
+          " reason=7, 1 stream; sender unverified, disruption not confirmed" },
+        { 20, 2, "KARMA_AP",        "karma:06:de:00:00:00:a4",                    NULL, 0,
+          3 * 3600, 10000, 9, 1, 0, "KARMA BSSID 06:de:00:00:00:a4: 4 SSIDs, conf 82%" },
+        { 27, 1, "CLEARTEXT_CRED",  "cred:192.0.2.16:192.0.2.10:21:FTP:demo-user:00c0ffee00c0ffee",
+          "192.0.2.16", 21, 26 * 3600, 600, 2, 1, 0,
+          "FTP user demo-user in the clear on FTP -> 192.0.2.10:21" },
+        { 0,  1, "PORT_SCAN",       "scan:192.0.2.21",                            "192.0.2.21", 0,
+          50 * 60, 300, 22, 1, 0, "192.0.2.21 scanned 22 distinct ports" },
     };
     for (size_t i = 0; i < sizeof(AL) / sizeof(AL[0]); i++) {
-        long long fs = now - AL[i].ago, ls = fs + AL[i].len;
-        if (ls > now) ls = now - 10;
-        ex("INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,technique,"
-           "match_ip,match_port,count) VALUES ('%s',%lld,%lld,%d,%d,'%s','demo episode',"
-           "NULL,%s%s%s,NULL,%d)", AL[i].key, fs, ls, AL[i].type, AL[i].sev, AL[i].title,
-           AL[i].ip[0] ? "'" : "", AL[i].ip[0] ? AL[i].ip : "NULL", AL[i].ip[0] ? "'" : "",
-           AL[i].count);
+        for (int r = AL[i].runs - 1; r >= 0; r--) {
+            long long fs = now - AL[i].ago - (long long)r * (AL[i].len + AL[i].gap), ls = fs + AL[i].len;
+            if (ls > now) ls = now - 10;
+            ex("INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,technique,"
+               "match_ip,match_port,count) VALUES ('%s',%lld,%lld,%d,%d,'%s','%s',NULL,%s%s%s,%d,%d)",
+               AL[i].key, fs, ls, AL[i].type, AL[i].sev, AL[i].title, AL[i].detail,
+               AL[i].ip ? "'" : "", AL[i].ip ? AL[i].ip : "NULL", AL[i].ip ? "'" : "",
+               AL[i].port, AL[i].count);
+        }
     }
     /* Protocol flows. */
     long long fs = now - 3 * D, ls = now - 120;
@@ -361,6 +386,80 @@ static const char *const QN[] = {
     "updates.example.net", "mail.example.org", "files.example.com", "demo.test",
 };
 
+/* One lifecycle record (src/jsonl.c jsonl_emit_alert_event()). */
+static void alert_ev(const char *ev, long long t, const char *id, int ty, int sev,
+                     const char *title, const char *key, const char *detail,
+                     const char *ip, int port, long long first, long long count,
+                     const char *extra) {
+    line("{\"type\":\"%s\",\"ts\":%lld,\"event_id\":\"%s-0001\",\"incident_id\":\"%s\","
+         "\"key\":\"%s\",\"title\":\"%s\",\"detail\":\"%s\",\"sev\":%d,\"ty\":%d,"
+         "\"observations\":%lld,\"evaluations\":%lld,\"count\":%lld,\"first_detected\":%lld,"
+         "\"last_observed\":%lld%s%s%s%s}", ev, t, id, id, key, title, detail, sev, ty,
+         count, count, count, first, t, ip ? ",\"match_ip\":\"" : "", ip ? ip : "",
+         ip ? "\"" : "", extra);
+    (void)port;
+}
+
+/* The demo's incidents: a port scan that opens and closes every 45
+ * passes, an SMB1 session that escalates, a deauth flood with its pcap
+ * during the burst, and two that stay open: a KARMA AP (sloth.db has
+ * its key too) and a cleartext credential, whose detail and key carry a
+ * username slothweb never shows. */
+static void lifecycle(long long t, unsigned long k) {
+    char id[32], d[200];
+    unsigned long n = k / 45, p = k % 45;
+    snprintf(id, sizeof(id), "d0000000000a%04lx", n & 0xffff);
+    snprintf(d, sizeof(d), "203.0.113.50 scanned %lu distinct ports", 8 + p);
+    if (p == 7)
+        alert_ev("alert.create", t, id, 0, 1, "PORT_SCAN", "scan:203.0.113.50", d,
+                 "203.0.113.50", 0, t, 1, ",\"match_port\":0");
+    if (p == 20)
+        alert_ev("alert.update", t, id, 0, 1, "PORT_SCAN", "scan:203.0.113.50", d,
+                 "203.0.113.50", 0, t - 13, 14, ",\"match_port\":0");
+    if (p == 40)
+        alert_ev("alert.resolve", t, id, 0, 1, "PORT_SCAN", "scan:203.0.113.50", d,
+                 "203.0.113.50", 0, t - 33, 34, ",\"match_port\":0,\"reason\":\"expired\"");
+    n = k / 120;
+    p = k % 120;
+    snprintf(id, sizeof(id), "d0000000000b%04lx", n & 0xffff);
+    static const char SMB[] = "SMBv1 traffic 192.0.2.20 -> 192.0.2.18:445 (count=4). SMBv1 has"
+                              " been deprecated since 2017 (EternalBlue / WannaCry); the endpoint"
+                              " serving v1 should be patched or v1 disabled.";
+    if (p == 30)
+        alert_ev("alert.create", t, id, 10, 1, "SMB1_USE", "smb1:192.0.2.20->192.0.2.18:445",
+                 SMB, "192.0.2.18", 445, t, 1, ",\"match_port\":445");
+    if (p == 36)
+        alert_ev("alert.escalate", t, id, 10, 2, "SMB1_USE", "smb1:192.0.2.20->192.0.2.18:445",
+                 SMB, "192.0.2.18", 445, t - 6, 7, ",\"match_port\":445,\"prev_sev\":1");
+    if (p == 100)
+        alert_ev("alert.resolve", t, id, 10, 2, "SMB1_USE", "smb1:192.0.2.20->192.0.2.18:445",
+                 SMB, "192.0.2.18", 445, t - 70, 71, ",\"match_port\":445,\"reason\":\"expired\"");
+    n = k / 600;
+    p = k % 600;
+    snprintf(id, sizeof(id), "d0000000000c%04lx", n & 0xffff);
+    snprintf(d, sizeof(d), "victim=02:de:00:00:00:12 bssid=02:de:00:00:00:a1 observed %lu frames,"
+             " peak 41 in 5s, reason=7, 1 stream; sender unverified, disruption not confirmed",
+             p >= 300 ? (p - 299) * 12 : 0);
+    static const char DK[] = "deauth:02:de:00:00:00:12@02:de:00:00:00:a1";
+    if (p == 302)
+        alert_ev("alert.create", t, id, 1, 1, "DEAUTH_FLOOD", DK, d, NULL, 0, t, 1, "");
+    if (p == 310)
+        alert_ev("alert.escalate", t, id, 1, 2, "DEAUTH_FLOOD", DK, d, NULL, 0, t - 8, 9,
+                 ",\"prev_sev\":1,\"pcap_path\":\"/var/lib/sloth/pcap/demo-deauth.pcap\"");
+    if (p == 400)
+        alert_ev("alert.resolve", t, id, 1, 2, "DEAUTH_FLOOD", DK, d, NULL, 0, t - 98, 99,
+                 ",\"pcap_path\":\"/var/lib/sloth/pcap/demo-deauth.pcap\",\"reason\":\"expired\"");
+    if (k == 2)
+        alert_ev("alert.create", t, "d000000000000001", 20, 2, "KARMA_AP",
+                 "karma:06:de:00:00:00:a4", "KARMA BSSID 06:de:00:00:00:a4: 4 SSIDs, conf 82%",
+                 NULL, 0, t - 3 * 3600, 9, "");
+    if (k == 3)
+        alert_ev("alert.create", t, "d000000000000002", 27, 1, "CLEARTEXT_CRED",
+                 "cred:192.0.2.16:192.0.2.10:21:FTP:demo-user:00c0ffee00c0ffee",
+                 "FTP user demo-user in the clear on FTP -> 192.0.2.10:21", "192.0.2.16", 21,
+                 t - 26 * 3600, 2, ",\"match_port\":21");
+}
+
 /* One snapshot pass at t (sloth's order: interfaces first, sensor
  * health last), with the capture thread's records before it. */
 static void pass(long long t, long long start, unsigned long k) {
@@ -381,14 +480,7 @@ static void pass(long long t, long long start, unsigned long k) {
     if (rnd(3) == 0)
         line("{\"type\":\"http\",\"ts\":%lld,\"src\":\"%s\",\"host\":\"demo.test\","
              "\"method\":\"GET\",\"path\":\"/status\"}", t, DEV[7].ip);
-    if (k % 45 == 7)
-        line("{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"demo-%lu\","
-             "\"title\":\"PORT_SCAN\",\"detail\":\"203.0.113.50 probed 40 ports on 192.0.2.10"
-             " (demo)\",\"sev\":1,\"ty\":0,\"match_ip\":\"203.0.113.50\",\"match_port\":0}", t, k);
-    if (k % 120 == 30)
-        line("{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"demo-smb1-%lu\","
-             "\"title\":\"SMB1_USE\",\"detail\":\"192.0.2.20 negotiated SMB1 with 192.0.2.18"
-             " (demo)\",\"sev\":2,\"ty\":10,\"match_ip\":\"192.0.2.20\",\"match_port\":445}", t, k);
+    lifecycle(t, k);
     /* sloth's order (src/jsonl.c): the connections of the tick just
      * before its interfaces, then ARP, DHCP, top hosts, and the device
      * table as one run (slothweb counts devices by the run). */
@@ -528,7 +620,7 @@ static int feed(const char *spec, long long seconds) {
     for (int i = 0; i < MAXC; i++) g_cl[i] = -1;
     fprintf(stderr, "slothweb-demo: serving a synthetic stream on unix:%s%s\n", path,
             seconds > 0 ? "" : " until SIGINT");
-    long long start = (long long)time(NULL), next = start;
+    long long start = now_s(), next = start;
     unsigned long k = 0;
     while (!g_stop && (seconds <= 0 || (long long)time(NULL) - start < seconds)) {
         struct pollfd p = { ls, POLLIN, 0 };
@@ -562,6 +654,29 @@ static void usage(FILE *o) {
                "MACs, example names. See web/README.md.\n");
 }
 
+#ifdef SLOTHWEB_DEMO_LIB
+/* The test suite's door (web/tests/test_alerts.c): the same database
+ * and the same passes, on a clock it sets, into a buffer it reads. */
+int demo_make_db(const char *path, long long now) {
+    g_now_fixed = now;
+    g_rng = 20261023u;
+    int rc = make_db(path);
+    g_now_fixed = 0;
+    return rc;
+}
+
+size_t demo_pass(long long t, long long start, unsigned long k, char *out, size_t cap) {
+    g_len = 0;
+    pass(t, start, k);
+    /* The stream's server half is the binary's, not the test's. */
+    (void)feed;
+    (void)usage;
+    size_t n = g_len < cap ? g_len : cap;
+    memcpy(out, g_buf, n);
+    g_len = 0;
+    return n;
+}
+#else
 int main(int argc, char **argv) {
     if (argc == 3 && !strcmp(argv[1], "db")) return make_db(argv[2]);
     if ((argc == 3 || argc == 5) && !strcmp(argv[1], "feed")) {
@@ -583,3 +698,4 @@ int main(int argc, char **argv) {
     usage(stderr);
     return 2;
 }
+#endif

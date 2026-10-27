@@ -72,5 +72,8 @@ void run_flows_tests(void);
 void run_readme_tests(void);
 void run_chmix_tests(void);
 void run_tables_tests(void);
+void run_alertfmt_tests(void);
+void run_alertkb_tests(void);
+void run_alerts_tests(void);
 
 #endif

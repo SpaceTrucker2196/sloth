@@ -271,7 +271,7 @@ static void test_capture_records_inside_a_pass(void) {
  * string. */
 static void test_alert_match_ip(void) {
     fresh();
-    feed("{\"type\":\"alert.create\",\"ts\":1,\"incident_id\":\"a\",\"sev\":2,"
+    feed("{\"type\":\"alert.create\",\"ts\":1,\"incident_id\":\"a\",\"sev\":2,\"ty\":10,"
          "\"title\":\"SMB1_USE\",\"detail\":\"d\",\"match_ip\":\"192.0.2.20\"}\n"
          "{\"type\":\"alert.create\",\"ts\":2,\"incident_id\":\"b\",\"sev\":1,"
          "\"title\":\"T\",\"detail\":\"d\",\"match_ip\":\"2001:db8::1\"}\n"
@@ -283,12 +283,30 @@ static void test_alert_match_ip(void) {
          "{\"type\":\"alert.create\",\"ts\":5,\"incident_id\":\"e\",\"sev\":0,"
          "\"title\":\"T\",\"detail\":\"d\"}\n");
     const char *j = live_json();
-    WT_HAS(j, "\"ts\":1,\"type\":\"alert.create\",\"sev\":2,\"title\":\"SMB1_USE\","
-              "\"detail\":\"d\",\"incident_id\":\"a\",\"match_ip\":\"192.0.2.20\"}");
-    WT_HAS(j, "\"incident_id\":\"b\",\"match_ip\":\"2001:db8::1\"}");
-    WT_HAS(j, "\"incident_id\":\"c\",\"match_ip\":\"\"}");
-    WT_HAS(j, "\"incident_id\":\"d\",\"match_ip\":\"\"}");
-    WT_HAS(j, "\"incident_id\":\"e\",\"match_ip\":\"\"}");
+    /* Each record names its incident by slothweb's handle (web_live.h:
+     * sloth's incident_id inverts to the key's hash), the handle of the
+     * incident the routes know. */
+    char aid[5][WEB_LIVE_HID_MAX + 2];
+    for (int i = 0; i < 5; i++) {
+        char id[2] = { (char)('a' + i), 0 };
+        aid[i][0] = '\0';
+        for (int k = 0; k < g_live.ninc; k++)
+            if (!strcmp(g_live.inc[k].id, id))
+                snprintf(aid[i], sizeof(aid[i]), "s%s", g_live.inc[k].hid);
+        WT_ASSERT(aid[i][1] != '\0');
+    }
+    char want[192];
+    snprintf(want, sizeof(want), "\"ts\":1,\"type\":\"alert.create\",\"ty\":10,\"sev\":2,"
+             "\"title\":\"SMB1_USE\",\"detail\":\"d\",\"alert_id\":\"%s\","
+             "\"match_ip\":\"192.0.2.20\"}", aid[0]);
+    WT_HAS(j, want);
+    snprintf(want, sizeof(want), "\"alert_id\":\"%s\",\"match_ip\":\"2001:db8::1\"}", aid[1]);
+    WT_HAS(j, want);
+    for (int i = 2; i < 5; i++) {
+        snprintf(want, sizeof(want), "\"alert_id\":\"%s\",\"match_ip\":\"\"}", aid[i]);
+        WT_HAS(j, want);
+    }
+    WT_LACKS(j, "incident_id");
     WT_LACKS(j, "<b>");
     done();
 }
@@ -319,8 +337,8 @@ static void test_alert_lifecycle_counts(void) {
     const char *j = live_json();
     WT_HAS(j, "\"alerts_open\":{\"low\":1,\"warn\":1,\"crit\":1,\"overflow\":false}");
     /* newest first, the last WEB_LIVE_ALERTS of them */
-    WT_HAS(j, "\"alerts\":[{\"ts\":9,\"type\":\"alert.create\",\"sev\":2,");
-    WT_HAS(j, "{\"ts\":8,\"type\":\"alert.create\",\"sev\":null,");
+    WT_HAS(j, "\"alerts\":[{\"ts\":9,\"type\":\"alert.create\",\"ty\":null,\"sev\":2,");
+    WT_HAS(j, "{\"ts\":8,\"type\":\"alert.create\",\"ty\":null,\"sev\":null,");
     WT_LACKS(j, "{\"ts\":1,\"type\":\"alert.create\"");   /* fell out: 9 records */
 
     /* The severity indexes the summary's alerts[3], so its bound is
@@ -332,12 +350,12 @@ static void test_alert_lifecycle_counts(void) {
     s = sum();
     WT_EQ(s.alerts[0] + s.alerts[1] + s.alerts[2], 3);
     WT_EQ(s.alerts_overflow, 0);
-    WT_HAS(live_json(), "{\"ts\":10,\"type\":\"alert.create\",\"sev\":null,");
+    WT_HAS(live_json(), "{\"ts\":10,\"type\":\"alert.create\",\"ty\":null,\"sev\":null,");
     WT_HAS(live_json(), "\"alerts_open\":{\"low\":1,\"warn\":1,\"crit\":1,\"overflow\":false}");
     feed("{\"type\":\"alert.create\",\"ts\":11,\"incident_id\":\"gggg\",\"sev\":-1}\n");
     s = sum();
     WT_EQ(s.alerts[0] + s.alerts[1] + s.alerts[2], 3);
-    WT_HAS(live_json(), "{\"ts\":11,\"type\":\"alert.create\",\"sev\":null,");
+    WT_HAS(live_json(), "{\"ts\":11,\"type\":\"alert.create\",\"ty\":null,\"sev\":null,");
     /* An incident_id one byte over WEB_LIVE_ID_MAX is not tracked, not
      * cut to fit (two such ids could then collide). Seen red (crit 2)
      * with the strlen test removed from alert_record(). */
@@ -501,7 +519,7 @@ static void test_hostile_strings_are_escaped(void) {
     feed("{\"type\":\"device\",\"ts\":1,\"mac\":\"02:00:00:00:00:01\","
          "\"hostname\":\"<img src=x onerror=alert(1)>\"}\n"
          "{\"type\":\"beacon\",\"ts\":1,\"ssid\":\"</script><script>alert(1)</script>\"}\n"
-         "{\"type\":\"alert.create\",\"ts\":2,\"incident_id\":\"<i>\",\"sev\":2,"
+         "{\"type\":\"alert.create\",\"ts\":2,\"incident_id\":\"<i>\",\"sev\":2,\"ty\":0,"
          "\"title\":\"<b>T</b>\",\"detail\":\"a\\u2028b & 'c' \\\"d\\\"\"}\n"
          "{\"type\":\"sensor_health\",\"ts\":3,\"capture_iface\":\"<x>\",\"capture_open\":1}\n");
     const char *j = live_json();

@@ -158,9 +158,12 @@ forward the port rather than exposing it:
 ssh -L 8770:127.0.0.1:8770 user@sensor     # then open http://127.0.0.1:8770/ locally
 ```
 
-Keys: `1`..`9` switch views (`6` is not built yet), `/` searches
+Keys: `1`..`9` switch views (`6` is the Alerts page), `/` searches
 devices, `[` hides the view list and the footer, `Esc` closes the device drawer; the
-view is also in the address (`#flows`), so a reload stays on it.
+view is also in the address (`#flows`, `#alerts?state=open`,
+`#alert?id=d42`), so a reload stays on it and Back returns from a
+drill-down. Every Overview tile is a link to the view of what it
+counts ([Alerts](#alerts)).
 The button at the right of the top bar switches to the light theme;
 the choice is kept in this browser only (`localStorage`, key
 `slothweb.theme`), dark is the default, and a browser that keeps
@@ -173,7 +176,8 @@ nothing just gets dark ([Design](#design)).
 | ![Flows](../docs/assets/slothweb/flows.png) | ![History](../docs/assets/slothweb/history.png) |
 | ![Lookup](../docs/assets/slothweb/lookup.png) | ![Flows at 360 px](../docs/assets/slothweb/flows-narrow.png) |
 | ![Overview, light theme](../docs/assets/slothweb/overview-light.png) | ![Devices, light theme](../docs/assets/slothweb/devices-light.png) |
-| ![Flows, light theme](../docs/assets/slothweb/flows-light.png) | |
+| ![Flows, light theme](../docs/assets/slothweb/flows-light.png) | ![Alerts](../docs/assets/slothweb/alerts.png) |
+| ![An alert's page](../docs/assets/slothweb/alert.png) | ![An alert's page, light theme](../docs/assets/slothweb/alert-light.png) |
 
 All screenshots are of the synthetic demo above, taken by headless
 Chromium; none shows anything captured from a real network.
@@ -396,6 +400,9 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/sessions`, `/api/sessions/new?id=` | `200` JSON, the survey sessions and one's "new since the previous session"; `404` for a session sloth.db does not have |
    | `GET /api/flows?proto=&from=&to=&ip=&sort=&dir=&limit=&offset=` | `200` JSON, one protocol table of sloth.db (M6, below); `400` for a parameter that does not pass, `proto=mqtt` included (`proto_withheld`); `503` as above |
    | `GET /api/flows/graph?from=&to=&nodes=&edges=` | `200` JSON, the chord diagram's pairs with the fold stated; `400`; `503` as above |
+   | `GET /api/alerts?state=&sev=&type=&q=&window=&limit=&offset=` | `200` JSON, the Alerts page: the stream's open incidents, then the closed ones and sloth.db's rows, one row per alert key ([Alerts](#alerts)); `400` for a parameter that does not pass; sloth.db missing or refused leaves the stream's rows and says so (`"db"`) |
+   | `GET /api/alert?id=` | `200` JSON, everything an alert's page shows; `400` for an id that is not `s<handle>` or `d<rowid>`; `404` for one neither source has; `503` with no `--sloth-db` for a `d` id, or sloth.db unreadable |
+   | `HEAD /api/alerts`, `HEAD /api/alert` | `405`, `Allow: GET`, as `/api/query` |
    | `GET /api/query?sql=` | only with `--web-allow-sql` (otherwise `404`): `200` JSON, the statement's result; `400` with `{"error":"reason"}` for a refused statement; `503` `busy` while another runs, or sloth.db unreadable |
    | `HEAD /api/query` | `405`, `Allow: GET`: nothing to describe without running it |
    | `GET /api/recipes` | only with `--web-allow-sql`: `200` JSON, the box's recipes |
@@ -565,7 +572,7 @@ engine keeps, its bound, and what it has had to drop or evict (below);
    "monitor_iface":"","monitor_open":0,"monitor_running":0,"monitor_exit":"",
    "scope":"none","scope_not_enforced":0},
  "alerts":[{"ts":1792629100,"type":"alert.create","sev":1,"title":"…",
-   "detail":"…","incident_id":"9f2c41ab77e30d58","match_ip":"192.0.2.20"}],
+   "detail":"…","alert_id":"s3fa9c2d11a","match_ip":"192.0.2.20"}],
  "recent":[{"seq":9071,"type":"dns","ts":1792629210,"text":"example.com  10.0.0.5"}]}
 ```
 
@@ -573,6 +580,7 @@ engine keeps, its bound, and what it has had to drop or evict (below);
 |---|---|
 | `devices` | the number of `device` records in sloth's latest snapshot pass: the TUI's device count (below). `null` until a pass has been seen. `devices_stale` is `true` while the socket is down and until the current connection delivers a pass |
 | `alerts_open` | incidents open now, by severity (0 LOW, 1 WARN, 2 CRIT), from the `alert.create` / `.update` / `.escalate` / `.resolve` records. Starts empty on each connection (below). `overflow` once more than 256 are open |
+| `alerts` | the latest eight lifecycle records, newest first; `alert_id` is the link to the incident's page (`/api/alert?id=`), slothweb's own handle, never sloth's `incident_id` (below, [Alerts](#alerts)); `null` for a record of an incident slothweb is not tracking |
 | `records`, `records_s` | records decoded since start, and the mean over the five whole seconds before now |
 | `types` | records by `type`, for up to 48 names; the rest are `types_other`. A `type` that is not 1..32 bytes of `[a-z0-9_.]` is `types_invalid` and is not shown |
 | `sensor` | the latest `sensor_health` record and `state`: `unknown` (none yet), `ok`, `degraded` (a capture or monitor handle open with its thread not running, or the launch scope not enforced), `not_observing` (neither handle open), or `stale` (none for 330 s; it is change-only with a 300 s heartbeat) |
@@ -1864,11 +1872,20 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   cells; those past `presence_cells` are 0, and the page spreads
   `presence_cells` across the strip. A row opens the drawer.
 - **Alerts, anomalies and flows in the range**: `/api/history/alerts`
-  (title, the IP it names, type, severity, count, first and last seen;
-  never the key or the detail). On a v8 sloth.db a row is a finding
-  that may span several incidents, and `first_seen` here is the latest
+  (title, the IP it names, type, the highest severity, the summed count,
+  first and last seen, one row per alert key with its `incidents` in
+  the range and the `id` of its page; never the key or the detail). The
+  keys listed come from the range's newest 20,000 rows; each listed
+  key's figures are then its own over every row of it in the range,
+  read through the primary key, so a key whose older rows fall past
+  that bound is not undercounted, and `"scan"` says whether the bound
+  was reached and the oldest last seen it covered (the page names it).
+  `incidents` counts the key's rows in the range, each at least one
+  incident there: a lower bound on a v8 file, whose row may hold
+  earlier incidents too. On a v8 sloth.db a row is a finding that may
+  span several incidents, and the range test reads the latest
   incident's start, so a range inside the gap between two incidents
-  does not list it, the anomaly episodes slothweb still
+  does not list it; the anomaly episodes slothweb still
   holds (`/api/anomalies?since=from`, those begun by `to`; episodes are
   kept a week), and `/api/history/flows` (`ssh_flows`, `rdp_flows`,
   `smb_sessions`, `snmp_flows`: protocol, src, dst, the count each keeps,
@@ -2122,6 +2139,175 @@ names the view (`#flows`), so a reload stays on it; and a
 `WITH_SQLITE=0` build's pages say it cannot read sloth.db rather than
 suggesting a flag it does not have.
 
+## Alerts
+
+Owner requests 2026-10-23..26. The Alerts page (`6`), an alert's own
+page, and the Overview's tiles as links to the views of what they
+count. `web_alerts.h` (the routes), `web_alertdb.h` (the sloth.db
+reads), `web_alertfmt.h` (whose detail is shown), `web_alertkb.h` (what
+each type is, why it matters, how to fix it).
+
+### The Alerts page
+
+`/api/alerts` merges two sources. The stream's lifecycle records
+(`alert.create`, `.update`, `.escalate`, `.resolve`, docs/wiki/jsonl-schema.md)
+are kept per incident in `web_live.c`: the open ones (256 at most, as
+before: the open-alerts tile counts exactly these) and the 64 most
+recently resolved, each with its severity history, counts, first and
+last seen, and whether sloth wrote a pcap of it. Before schema v8
+sloth.db's `alerts` table held one row per `(key, first_seen)`: a
+finding that comes and goes is many rows of one key, about 114 on the
+owner's host (#170, 868k rows); a v8 file keeps one row per finding,
+its `reopens` counting the incidents after the first, and the rows
+recorded before the upgrade stay as they were. The page has one row per
+alert key, from either source: sloth.db's rows of a key grouped, the
+stream's incidents of a key shown as its open one (else its newest
+closed one) with the others counted in, and a key the stream has shown
+once, as the stream's (`"source":"both"`). A row's `"incidents"` and
+`"count"` are the key's, all time: sloth.db's totals over every row of
+the key (`1 + reopens` a v8 row, one an older row) or the stream's,
+whichever is larger, since either can lag the other; the alert's page
+shows the same two (and `"latest_count"`, the one incident's). Open
+incidents come first, highest severity then newest change; then the
+closed ones, newest last seen first.
+
+Filters: state (open, closed, all), severity, type (by name or
+number; the dropdown is the facets, groups per type in the window),
+`q` (one word: a substring of the title, the address or the type's
+name), and the window (default 7 d; open incidents are listed whatever
+their age). 50 a page, `more` for the next.
+
+**alerts.key stays predicate-only.** Its text can carry a remote string
+(for a cleartext credential, the username), so the reads match on it
+and group by it with `pred_ok` set, and no result column carries it.
+A sloth.db group is named by the rowid of its newest row (`d<rowid>`,
+which sloth's upsert keeps and its incremental vacuum does not
+renumber), a stream incident by slothweb's handle for it (`s<handle>`);
+a stream key is kept in memory to bind as a predicate and is never
+rendered. `test_alerts.c` walks every route with a username in both
+sources' keys and details and finds it in no body.
+
+**sloth's `incident_id` is not served either.** sloth derives it by
+FNV-1a64 over the key, then the creation time, then a small counter
+(`src/alerts/engine.c`, `incident_id_make()`), and every FNV step
+inverts: undo the time (the incident's first seen) and the counter (a
+few thousand guesses) and what remains is the key's unsalted hash,
+which a dictionary of usernames turns back into a `CLEARTEXT_CRED`
+username. slothweb names a stream incident by a handle of its own, 8
+hex digits drawn from `/dev/urandom` at startup and a counter of the
+incidents this process has seen, in `/api/alerts`, `/api/alert` (`id`,
+`stream_id`), the page's `#alert?id=` links and `/api/live`'s
+`alert_id`. The handle says nothing of the key; the nonce only keeps a
+link saved before a restart from naming another incident after it.
+`test_alerts.c` feeds incident_ids in sloth's shape and finds none in
+any body.
+
+**Bounded.** Every list reads at most 20,000 rows of its window, newest
+last seen first through `idx_alerts_last_seen`, with its filters
+applied inside that read: the bound counts rows that match, so an old
+alert of a rare type, title or address is found by asking for it, and
+its type is among the facets. One walk answers the page, the facets
+(with no type filter; a type filter costs a second walk for the
+facets, which leave it out) and the `"scan"` member: how many matching
+rows were read, whether the read stopped at the bound, and `"oldest"`,
+how far back it reached when it did (the page says so). A filter that
+matches little walks the window to find what there is, under the
+request's 250 ms budget, and a `503 sloth_db_timeout` says when the
+window was too wide for it. A key's own reads go through the primary
+key's index, at most 2,000 incidents. Measured: on a generated table of
+500,000 rows on 4,386 keys of 114 rows (`SLOTHWEB_ALERTS_BENCH=1
+WT_ONLY=alerts ./slothweb_test`, the `-O0` test build), `/api/alerts`
+33 to 114 ms for every filter and page tried, `/api/alert` 1.2 ms,
+History's 30-day list 33 ms. On the owner's 868k-row (schema v6)
+sloth.db, read through an immutable URI with the sqlite3 shell: the
+default list's statement 55 ms and its page's key totals 70 ms; a
+search word matching nothing over the default 7 days 115 ms; a rare
+type over the whole 400-day window 370 ms, past the budget (a 503,
+where the parent answered from the newest 20,000 rows and missed the
+row); History's 30-day list 240 ms. `--db-compact-alerts` (#170) folds
+that file to 7,598 rows, where every one of these is a few
+milliseconds.
+
+### An alert's page
+
+Opened from any alert anywhere: the Alerts page, the Overview's latest
+alerts, History's alerts in the range, the device drawer's alerts
+naming it. `/api/alert?id=` answers all six sections:
+
+- **What it is**: the first sentence of the rule table's trigger
+  (`docs/views/alerts.md`), its issue references dropped and at most
+  280 bytes, with the whole cell, its engineering history included,
+  folded under "details" and its code spans set as code; the rule's
+  severity and the alert's now, the ATT&CK technique, what `match_ip`
+  names, and the paragraphs of `docs/wiki/alerts.md` about it.
+- **Why it matters**: every research corpus document whose
+  `alert_kinds` list the type, with its citation, source URL (as text:
+  the page links nowhere), lead paragraph and the paragraphs that name
+  the type.
+- **How to investigate and fix**: the type's section of
+  [`docs/wiki/alert-remediation.md`](../docs/wiki/alert-remediation.md),
+  written for all 90 types, each step resting on a corpus document
+  that cites the type, "none; mitigate by ..." where no vendor fix
+  exists.
+- **Evidence**: severity history, count and observations, incidents,
+  first and last seen, when and why it closed, whether sloth saved a
+  pcap (only the stream says), and the detail text, for an audited
+  type only (below).
+- **History of this alert**: every incident of the key, newest first,
+  incidents less than 30 minutes apart folded into one run, each run a
+  link to its newest incident.
+- **The device**: the device the key names by MAC, or the one holding
+  the address, with its presence strip, its other alerts and anomalies,
+  and the drawer a click away. The drawer's alerts naming a device are
+  read with the device test inside the read, walking `last_seen` newest
+  first a slice at a time (a day, then twice as far back each time)
+  while the request's budget has 80 ms left, so a device's month-old
+  alert is reached however much newer traffic other devices made;
+  `"alerts_reached"` is the last seen it got back to when the budget
+  stopped it first (the drawer says so), `null` when it read the table
+  to its end.
+
+The first three are built in at compile time: `web/tools/alertkb.c`
+reads `include/sloth_alerts.def`, `docs/views/alerts.md`,
+`docs/wiki/alerts.md`, every `research/` document and
+`docs/wiki/alert-remediation.md` into `build/web/web_alertkb.c`
+(generated, never committed), so an edit to any of them is what the
+page shows after the next build. `test_alertkb.c` fails when a type has
+no entry, no trigger, no source or no steps, or when a remediation
+section cites a document whose `alert_kinds` do not list the type.
+
+**The detail is withheld unless audited.** An alert's detail is the
+text its rule wrote, and for several rules it carries what the wire said:
+CLEARTEXT_CRED's username, SNMP_COMMUNITY_BRUTE's community,
+RDP_BRUTE_FORCE's cookie, MQTT_BROKER_BRUTE's username, a banner, a
+host or query name. `web_alertfmt.c` lists the 50 types whose every
+`snprintf()` into the detail formats only numbers, literals,
+addresses, MACs, BSSIDs and SSIDs; `test_alertfmt.c` reads
+`src/alerts/` on every run and fails if a listed type's format gains
+any other string field, and refuses the credential-bearing types.
+Every path asks the list: the stream's detail is not even kept for an
+unlisted type (so `/api/live` and the ticker show the title alone), and
+sloth.db's `alerts.detail` is read by one statement only, as
+`CASE WHEN web_detail_ok(type) THEN detail END`, so a withheld detail
+never leaves SQLite.
+
+### The tiles' views
+
+| Tile | Opens | The number it shows is |
+|---|---|---|
+| throughput | `#activity?focus=throughput`: each interface's rx (over its band) and tx, 24 h, and the top hosts | the first interface's last rx bucket, drawn first |
+| open anomalies | `#anomalies?state=open`: every open episode, the sensitivity not applied | the count of the cards |
+| devices | `#devices?q=pass:latest`: sloth.db's devices whose MAC was in sloth's latest pass on the stream (`pass:latest`, a query term) | the stream's pass; the note says how many of them sloth.db holds |
+| open alerts | `#alerts?state=open` | the rows |
+| records/s | `#records`: records by type over the same five seconds, and the ticker of one type or all | the sum of the per-type rates (`/api/live`'s `types_rate`) |
+| sensor health | `#health`: capture, monitor, the stream, sloth.db and its freshness | the state word at its top |
+
+Each opens with the filter it applies named in a bar above it, and a
+way back. `test_alerts.c` asserts the counts on the demo's own data
+(`web/tools/demo.c`, linked into the test binary): 23 devices and 23
+rows, the open alerts and the Alerts page's open rows, the open
+episodes and the open cards, the records/s and the rates' sum.
+
 ## Design
 
 ### Tables: sort and resize
@@ -2130,7 +2316,9 @@ Every table on the page (owner request 2026-10-26: the Devices table,
 the AP table, each Flows tab, History's who was here, alerts, flows
 and new-since lists, the drawer's and Lookup's lists, the Anomalies
 view as a table (its `table` button), the Overview's latest alerts,
-the record ticker and the SQL box's result) is one implementation,
+the record ticker, the Alerts page's list, an alert's history of runs
+and its device's other alerts, the records view's types and records,
+and the SQL box's result) is one implementation,
 `DataTable()` in `web/ui/app.js`, with one rule set in `page.css`:
 
 - **Sort.** A sortable column's header is a button: a click or Enter
@@ -2151,7 +2339,9 @@ the record ticker and the SQL box's result) is one implementation,
   loaded by `more` lands after the rows above it). The SQL box types
   each result column from its values: numbers, addresses and MACs sort
   as such, anything else as text. The view's own `sort` select still
-  works; choosing from it clears the header's sort.
+  works; choosing from it clears the header's sort. The Alerts page's
+  list has no server sort: a header sorts the rows loaded so far (open
+  first, then the newest change, until one does), `more` adding to them.
 - **Resize.** A column's right edge is a separator: drag it (a mouse,
   a pen or a finger), or focus it with Tab and use the arrow keys (8
   px, 40 px with Shift; Home for the minimum), or double-click it (or
@@ -2488,6 +2678,9 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_history.c` | the History routes over a generated sloth.db: the strip's cells and session markers, the defaults and refusals; the strip on 600,000 alert episodes and 60,000 devices without the first_seen indexes inside its budget (the time asserted under 250 ms, 4x that under ASan or TSan), its work (progress-handler ticks) under a quarter of a scan's by the last_seen bound, every plan's counts held to a `GROUP BY`'s; the snapshot's shape (867,748 episodes and 31,821 devices, all in the last 30 days, no index: the scan plan) inside the overview's 1500 ms through the route, and a direct count inside 4x that under the sanitizers; the cache served without an open, invalidated by an mtime, a minute, a write, and a write into the `-wal` that leaves the main file's stat unchanged; a timeout naming its read, rows and plan; who was here at the edges of the overlap, the presence strip over the range, paging; the alerts and flows in a range with no key, detail, cookie or MQTT username and no `mqtt_flows`; the sessions; "new since the previous session" for a first visit, a visit after a crash (its window closed at the next start), one whose previous never ended (since its start), and the latest, whose devices are the ones the wiki's own recipe names; the page's History view. Both builds |
 | `test_sqlbox.c` | the SQL box: the parameter and text rules; `404` without `--web-allow-sql` and the page's box hidden; spec §12's M5 acceptance (above) over a real socket against the C API and the sqlite3 shell; every write, DDL, PRAGMA, ATTACH, DML-tail CTE and second statement refused with the file byte for byte; every withheld column refused, the guardrail's words on the list, the integer flags read; the row, byte, time and value limits; one at a time (`503` `busy`, free again once answered or once the client leaves), `HEAD` `405`, `/api/recipes`. Both builds |
 | `test_flows.c` | the Flows routes over a generated sloth.db: every tab's row byte for byte, an SMB1 session marked, the columns each tab reads held to the allow-list and the withheld ones held off it, no cookie, banner, MQTT username, community count or preauth count in any body, every `400`, paging, sorting, the `ip` filter, a page that stops early with `more` and the next one, the chord pairs with their fold at three sizes, a table the file lacks; the page's Flows view. Both builds |
+| `test_alertfmt.c` | the detail audit read from `src/alerts/`: every listed type's every `fire()` site found and its formats' string fields approved; the credential-bearing types off the list and refused by the checker |
+| `test_alertkb.c` | the alert knowledge table against its sources: an entry per `.def` row in order with its technique, a trigger, sources and steps for each, plain text, and every remediation source a corpus document that cites the type |
+| `test_alerts.c` | the Alerts page and an alert's page over a generated sloth.db and a fed stream: the collapse (sloth.db's rows and the stream's incidents, a key once), the order, every filter, paging, every `400`/`404`/`405`, the six sections, runs, the device by MAC and by address, no key, username, community or sloth `incident_id` in any body, every type's page within the buffer, the 20,000-row bound on 30,000 rows (500,000 with `SLOTHWEB_ALERTS_BENCH`), filters, History's figures and the drawer reaching past it, and the tiles against their views on the demo's data; the page's views and links |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
 | `test_tui_colors.c` | the data colours against the TUI itself ([Design](#design)): `src/tui.c`'s ANSI backend linked in and captured, every byte of an address, an SSID, a host name and an info string compared with the page's colour for it (its functions pinned as served, a C port of them over the served `SLOTH_PALETTE`, the served custom properties); the cross-panel bold and the page's `IP_SRC` bits held to `IP_SRC_*`, an alert counted by its `match_ip` alone; the alert-hot override against `tui_alert_hot_set()` (severity, bold from WARN, the TTL's edge, promotion, the full table) and its TTL and cap against `src/tui.c`; the phosphor, heat, alert-hot and monitor-row pairs; `MON_TYPES` against the record types `src/jsonl.c` emits from the monitor radio |
 | `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own |
@@ -2555,6 +2748,10 @@ web/
     web_wifi.c     /api/wifi/channels, /api/wifi/deauth, /api/wifi/aps (M5)
     web_history.c  /api/history/*, /api/sessions, /api/sessions/new (M5)
     web_flows.c    /api/flows, /api/flows/graph (M6)
+    web_alerts.c   /api/alerts, /api/alert: the Alerts page, an alert's page
+    web_alertdb.c  sloth.db's alerts: groups by key, a key's incidents, its device
+    web_alertfmt.c the types whose alert detail is shown, audited
+    web_alertkb.h  the generated alert knowledge table's symbols
     web_secret.c   the withheld columns both sloth.db readers refuse (M5)
     web_sqlguard.c the SQL box's text rules, authorizer, limits, runner (M5)
     web_sqlbox.c   the SQL box's thread, its one answer, busy (M5)
@@ -2568,10 +2765,13 @@ web/
     oui_csv.c      the registry CSV reader the generator and the tests share
     update_oui.sh  make update-oui: refresh web/data/ by hand (never in a build or CI)
     recipes.c      docs/wiki/sqlite-schema.md -> build/web/web_recipes.c (build time only)
+    alertkb.c      the .def, the rule table, the wiki, research/ and
+                   docs/wiki/alert-remediation.md -> build/web/web_alertkb.c (build time only)
     palette.c      src/tui_palette.c + src/tui.c -> build/web/palette.css, palette.js;
                    make web-contrast (build time only)
     sha256.c       SHA-256 and base64 for embed.c and the tests
-    demo.c         build/web/slothweb-demo: the synthetic sloth.db and stream (M6)
+    demo.c         build/web/slothweb-demo: the synthetic sloth.db and stream (M6);
+                   linked into slothweb_test too (-DSLOTHWEB_DEMO_LIB)
     quickstart_check.sh  the five-minute check, make web-quickstart-check (M6)
   data/            the IEEE registry CSVs, committed (SOURCE.md: origin, hashes, refresh)
   tests/           slothweb_test (make web-test); sdb_gen.c builds the tests'

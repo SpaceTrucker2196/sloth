@@ -68,6 +68,9 @@ static void test_page_tables(void) {
         "id: \"devices\"", "id: \"aps\"", "id: \"flows\"", "id: \"hdevs\"",
         "id: \"halerts\"", "id: \"hflows\"", "id: \"alerts\"", "id: \"ticker\"",
         "id: \"sql\"", "id: \"anoms\"", "id: \"item.\" + title", "id: \"hnew.\" + k[0]",
+        /* the Alerts page, an alert's page and the records view */
+        "id: \"alertspage\"", "id: \"alertruns\"", "id: \"alertdev\"", "id: \"rectypes\"",
+        "id: \"rectick\"",
     };
     for (size_t i = 0; i < sizeof(ID) / sizeof(ID[0]); i++) WT_HAS(p, ID[i]);
     static const char *const EL[] = {
@@ -76,10 +79,19 @@ static void test_page_tables(void) {
         "id=\"h-flows-head\"", "id=\"alerts-head\"", "id=\"ticker-head\"", "id=\"n-head\"",
         "id=\"n-mode\"", "id=\"d-rows\"", "id=\"w-aps\"", "id=\"f-rows\"", "id=\"h-devs\"",
         "id=\"h-alerts\"", "id=\"h-flows\"", "id=\"alerts\"", "id=\"ticker\"",
+        "id=\"al-head\"", "id=\"al-box\"", "id=\"ad-history-head\"", "id=\"ad-history-box\"",
+        "id=\"ad-dev-alerts-head\"", "id=\"ad-dev-alerts-box\"", "id=\"rc-head\"", "id=\"rc-box\"",
+        "id=\"rc-thead\"", "id=\"rc-tbox\"",
     };
     for (size_t i = 0; i < sizeof(EL) / sizeof(EL[0]); i++) WT_HAS(p, EL[i]);
     WT_LACKS(p, "class=\"drow dhead\" aria-hidden");
     WT_LACKS(p, "class=\"aprow dhead\" aria-hidden");
+    WT_LACKS(p, "class=\"alrow dhead\" aria-hidden");
+    WT_LACKS(p, "class=\"rcrow dhead\" aria-hidden");
+    /* The Overview's latest alerts are .alrow, a table's tracks: the
+     * Alerts page's rows are a class of their own, no grid of theirs
+     * laid over the Overview's (it was, before the two met). */
+    WT_LACKS(p, ".alrow { display: grid;");
     WT_HAS(p, "if (dir === \"asc\" || dir === \"desc\") p += \"&dir=\" + dir;");
     WT_HAS(p, "getJSON(\"/api/wifi/aps?limit=100&sort=\" + encodeURIComponent(sort) + \"&dir=\" + wd.dir)");
     WT_HAS(p, "if (wd) p += \"&dir=\" + wd.dir;");

@@ -282,6 +282,14 @@ static int emit_alert(void *ctx, const web_sdb_item_t *it) {
     web_jw_raw(w, ",\"count\":");  web_jw_int(w, it->has_n3 && it->n3 > 0 ? it->n3 : 0);
     web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, it->first_seen);
     web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, it->last_seen);
+    /* The rows of one key in the range collapsed into one (each at
+     * least one incident there), and the opaque id of its detail page
+     * (web_alerts.h). */
+    web_jw_raw(w, ",\"incidents\":"); web_jw_int(w, it->rows > 0 ? it->rows : 1);
+    char id[32];
+    snprintf(id, sizeof(id), "d%lld", it->rid);
+    web_jw_raw(w, ",\"id\":");
+    if (it->rid > 0) web_jw_str(w, id); else web_jw_raw(w, "null");
     web_jw_raw(w, "}");
     return 0;
 }
@@ -335,9 +343,25 @@ static int list_route(const web_m4_t *m, const char *query, long long now_s,
         ? web_sdb_flows_between(&c, from, to, (int)limit + 1, emit_flow, &h)
         : web_sdb_alerts_between(&c, from, to, (int)limit + 1, emit_alert, &h);
     if (got < 0) return web_hist_read_failed(&c, body, cap, len, status);
+    long long scanned = 0, oldest = 0;
+    if (!flows && web_sdb_alerts_scan(&c, from, to, &scanned, &oldest) < 0)
+        return web_hist_read_failed(&c, body, cap, len, status);
     web_slothdb_close(&c);
     web_jw_raw(&w, "],\"count\":");  web_jw_int(&w, h.n);
     web_jw_raw(&w, ",\"more\":");    web_jw_raw(&w, h.cut ? "true" : "false");
+    if (!flows) {
+        /* The keys listed come from the range's newest rows, at most
+         * WEB_SDB_ALERT_SCAN; when that cap was reached, a key seen only
+         * before oldest is not listed (each listed key's figures are
+         * its own over the whole range). */
+        int capped = scanned >= WEB_SDB_ALERT_SCAN;
+        web_jw_raw(&w, ",\"scan\":{\"rows\":"); web_jw_int(&w, scanned);
+        web_jw_raw(&w, ",\"cap\":");    web_jw_int(&w, WEB_SDB_ALERT_SCAN);
+        web_jw_raw(&w, ",\"capped\":"); web_jw_raw(&w, capped ? "true" : "false");
+        web_jw_raw(&w, ",\"oldest\":");
+        if (capped) web_jw_int(&w, oldest); else web_jw_raw(&w, "null");
+        web_jw_raw(&w, "}");
+    }
     web_jw_raw(&w, "}\n");
     if (w.overflow) return -1;
     *len = w.len;

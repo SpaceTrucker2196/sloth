@@ -53,6 +53,11 @@ checkLevelNormal:src/main.c
 readdirCalled:src/capture/probe.c
 readdirCalled:src/platform/linux_pid.c
 readdirCalled:src/platform/linux_dhcp.c
+# The alert knowledge generator walks research/ at build time and the
+# detail audit test reads src/alerts/, each a single-threaded program
+# with a local DIR* closed in the same function.
+readdirCalled:web/tools/alertkb.c
+readdirCalled:web/tests/test_alertfmt.c
 # The #87 retention sweep: sweep_locked() fdopendir()s a dup of the pinned
 # export directory descriptor into a local DIR* and closedir()s it before
 # returning. Reached only from the main thread (startup, then the poll

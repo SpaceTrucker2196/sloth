@@ -97,9 +97,21 @@ re-implements), `src/top_hosts.c` (what `conn_count` counts),
 `src/probe_pnl.c` (what `mac_random` is),
 `packaging/systemd/slothweb.service`, `packaging/default/slothweb`,
 `packaging/bin/sloth-migrate-sensor`, `tests/test_unit_file.c`, issues
-#102, #153, #157, #158, #159, #160, #161, #162, #163, #164 and #168.
+#102, #153, #157, #158, #159, #160, #161, #162, #163, #164 and #168;
+and for the Alerts page, `web/src/web_alerts.c`, `web/src/web_alertdb.c`,
+`web/src/web_alertfmt.c`, `web/tools/alertkb.c`, `src/alerts/` (the
+detail formats audited), `include/sloth_alerts.def`,
+`docs/views/alerts.md`, `research/` and [[alert-remediation]].
 
-**Last updated**: 2026-10-26 (#153 third review: signal syscalls denied, `ReadOnlyPaths=-`; #168: the date on a freshness line that is not today's; #153: `slothweb.service` and `--with-slothweb`; #168: sloth.db freshness on the DB-backed views; the channel mix's review: assoc out of the mix, late transmitters tracked exactly, alert text and blank lookalikes escaped, addresses sorted by number on the server; the History strip on a large sloth.db: its own 1500 ms budget, per-cell counts by sloth's new first_seen indexes or a last_seen-bounded read without them, a 60 s cache per file state, a timeout that names its read; the IEEE registry CSVs committed in `web/data/` by owner ruling, `make update-oui`, the generator's multi-file hang fixed; #170: `/api/history/alerts` and the deauth episodes overlap a range from the latest incident's start; the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
+**Last updated**: 2026-10-26 (the Alerts page on the current tree: its
+titles and details in the display form beside the gate, its lists
+sortable and resizable, its incident totals tested, the drawer's
+slices newest first; the Alerts page's review: one row per key
+from the stream too, slothweb's own incident handle in place of sloth's
+invertible `incident_id`, the filters inside the bounded reads, History
+and the drawer counting past the scan, one count on the list and the
+alert's page, a short "what it is"; before it the Alerts page, an
+alert's page, the Overview's tiles as links; earlier the same day #153 third review: signal syscalls denied, `ReadOnlyPaths=-`; #168: the date on a freshness line that is not today's; #153: `slothweb.service` and `--with-slothweb`; #168: sloth.db freshness on the DB-backed views; the channel mix's review: assoc out of the mix, late transmitters tracked exactly, alert text and blank lookalikes escaped, addresses sorted by number on the server; the History strip on a large sloth.db: its own 1500 ms budget, per-cell counts by sloth's new first_seen indexes or a last_seen-bounded read without them, a 60 s cache per file state, a timeout that names its read; the IEEE registry CSVs committed in `web/data/` by owner ruling, `make update-oui`, the generator's multi-file hang fixed; #170: `/api/history/alerts` and the deauth episodes overlap a range from the latest incident's start; the restyle's review: the alert-hot override, every monitor-radio record on the monitor rows, closed anomaly cards at full contrast, the spec's §8.1 amended; 2026-10-23 the Spacetrucker restyle: the owner's design system for the chrome, the TUI's colours for the data, a light theme behind a toggle; before it the same day M6, #164: the Flows view, the polish pass, the README's five minutes, troubleshooting and security, the demo data and screenshots).
 
 ---
 
@@ -843,6 +855,71 @@ and the contrast table, is `web/README.md`'s Design section.
   next request; `web/README.md` gives the checkpoint-safe refresh
   (`sqlite3 ... ".backup"`, then a rename).
 
+## The Alerts page and an alert's page (2026-10-26)
+
+Owner requests 2026-10-23..26: the `6 Alerts` tab was a placeholder.
+It is now the Alerts page: the stream's open incidents first (the
+open-alerts tile counts exactly these), then the recently resolved ones
+and sloth.db's rows, one row per alert key from both sources (sloth.db's
+rows of a key grouped, about 114 a key on the owner's pre-v8 host,
+#170; the stream's incidents of a key shown as its open one, else its
+newest closed one), each with the key's incidents and count, the same
+two the alert's page shows, filtered by state, severity, type and a
+search word.
+`/api/alerts` and `/api/alert` are GET only and validated whole.
+
+Any alert, wherever it is listed (the Alerts page, the Overview's
+latest alerts, History's alerts in the range, the device drawer), opens
+its own page: what it is (the rule table's trigger in one sentence,
+the whole entry folded under "details", severity, ATT&CK),
+why it matters (every research corpus document that cites the type),
+how to investigate and fix it ([[alert-remediation]], written for all
+90 types), the evidence (severity history, counts, first and last seen,
+whether sloth saved a pcap, the detail text), every incident of its key
+as runs, and the device it names. The first three are extracted at
+build time by `web/tools/alertkb.c` from the files themselves, never
+copied, and `web/tests/test_alertkb.c` holds every type to having them.
+
+M4's rules hold. `alerts.key` stays predicate-only: the reads
+group by it and match on it, a list row is named by an opaque
+`d<rowid>` or `s<handle>`, and a stream incident's key is kept in
+memory as a bound predicate, never rendered. sloth's `incident_id` is
+not served either: FNV-1a64 over the key, the creation time and a small
+counter, it inverts to the key's unsalted hash, and from there a
+dictionary recovers a `CLEARTEXT_CRED` username. slothweb names an
+incident by its own handle (a startup nonce and a counter), in the
+list, the alert's page, its links and `/api/live`'s `alert_id`. And credential material
+stays off the page: an alert's detail is shown only for the 50 types
+whose every detail format `web/tests/test_alertfmt.c` audits from
+`src/alerts/` on every run to carry numbers, addresses, ports,
+channels and network names only; the stream's detail of any other type
+is not kept, and sloth.db's is read through `web_detail_ok(type)` inside
+SQLite.
+
+The lists are bounded: each reads at most 20,000 rows that its filters
+match, newest first through `idx_alerts_last_seen`, the filters inside
+the bounded read so an old row of a rare type or address is reached by
+asking for it, and says when it stopped there and how far back it got.
+A filter that matches little walks the window under the 250 ms budget;
+on the owner's uncompacted 868k-row file a rare type over the full
+400-day window is past it (a 503 that says so), the default views are
+inside it, and `--db-compact-alerts` (#170) makes every one a few
+milliseconds. History's alerts in the range collapse by key the same
+way, each listed key counted over all of its rows in the range through
+the primary key, with the scan's bound reported; the drawer's alerts
+naming a device walk the table newest first a slice at a time, the
+device test inside the read, until the budget, and say how far back
+they got when it stopped them.
+
+Every Overview tile is a link (keyboard and focus included) to the view
+of what it counts: throughput to Activity's per-interface rx and tx and
+top hosts, devices to the Devices view under `pass:latest` (the latest
+pass's MACs, a new query term), open alerts to the Alerts page's open
+rows, open anomalies to every open episode, records/s to the records by
+type, sensor health to a health view (capture, monitor, the stream,
+sloth.db and its freshness), each with its filter named and a way back.
+A test asserts each count on the demo's own data.
+
 ## Tests
 
 `make web-test` is self-contained: no host file, loopback ephemeral
@@ -975,5 +1052,7 @@ covers `web/`.
 - [[sqlite-schema]] — sloth's database, which M4 reads read-only and
   M2's store never touches; its migration rule is the one
   `slothweb.db` follows; its query recipes are the SQL box's (M5).
+- [[alert-remediation]] — the investigate-and-fix steps an alert's page shows.
+- [[alerts]] — the engine and the rules the Alerts page lists.
 - [[cli-reference]] — sloth's own flags; slothweb's are in
   [`web/README.md`](../../web/README.md).

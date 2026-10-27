@@ -5387,3 +5387,48 @@ report events.
   assertions, `make web-test` 21485 to 21494 (21495 against SQLite 3.45.1),
   `make deploy-test` 394 to 401 under shellcheck 0.9.0 and 0.11.0, each
   0 failed; `make test` under ASan + UBSan 34168.
+- 2026-10-26 — [[slothweb]], new page [[alert-remediation]]: the Alerts
+  page (open incidents first, then closed, one row per alert key with its
+  incidents; filters by severity, type and search), an alert's page
+  (what it is, why it matters with its corpus sources, how to
+  investigate and fix it, evidence, the key's incidents as runs, the
+  device), both built in from the rule table, the wiki, `research/` and
+  the new remediation page by `web/tools/alertkb.c`; the detail shown
+  only for the 50 types whose formats `test_alertfmt.c` audits; History
+  and the drawer collapse by key too; every Overview tile a link to the
+  view of what it counts. [[alert-remediation]] linked from [[index]].
+- 2026-10-26 — [[slothweb]], [[alert-remediation]]: the Alerts page's
+  review. The stream's incidents are one row per key (the open one, else
+  the newest closed, the rest counted in), and a row's incidents and
+  count are the key's on the list and the alert's page alike. sloth's
+  `incident_id` (FNV-1a64 over the key, time and counter, invertible to
+  the key's hash) is no longer served: slothweb names an incident by a
+  startup nonce and a counter, and `/api/live`'s `incident_id` became
+  `alert_id`. The Alerts list's filters sit inside its bounded read and
+  the capped note names how far back it reached; History counts each
+  listed key over its rows in the range and reports its scan; the
+  drawer's alerts walk the table by slices under the budget instead of
+  filtering the newest 20,000 rows of every device. "What it is" is the
+  trigger's first sentence, the whole cell under details with its code
+  spans as code. The detail audit refuses every appearance of the
+  detail it cannot follow (aliases, helper arguments). The rule table's
+  six brute-force rows say CRIT, as their `fire()` sites do, and four
+  floods say WARN/CRIT, held by a test against `src/alerts/`. WEAK_TLS's
+  remediation, trigger cell and `research/rfc/8996.md` are about the
+  client's ClientHello; on-device steps are conditional on the device
+  being the operator's; ROGUE_DHCP and ROGUE_RA ask first whether more
+  than one is by design. The theme toggle redraws a view with its
+  parameters (it dropped an alert page's id and a drill-down's filter).
+- 2026-10-26 — [[slothweb]], [[alert-remediation]]: the Alerts page on
+  the current tree. The stream's alert titles and details, and sloth.db's
+  on the Alerts list, an alert's page and the drawer, go out in the
+  display form, the detail gated before it is escaped so a withheld one
+  is never kept; the Alerts list, an alert's runs and its device's other
+  alerts, and the records view's two lists are sortable, resizable
+  tables, and History's alerts in the range gain an incidents column and
+  their links; the Alerts page's rows took a class of their own (they
+  had laid their grid over the Overview's latest alerts). Tests now hold
+  a v8 row's 1 + reopens on the list and the page, a key counted over
+  rows before the window, and the drawer keeping a slice's newest keys
+  (its read now orders them so); the last two unconditioned "locate and
+  remove" steps are conditional on the premises.

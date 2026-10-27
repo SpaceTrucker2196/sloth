@@ -1,7 +1,34 @@
 #include "web_live.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "web_alertfmt.h"
+
+static void ring_init(web_live_rate_t *r) {
+    for (int i = 0; i < 8; i++) { r->sec[i] = -1; r->n[i] = 0; }
+}
+
+static void ring_tick(web_live_rate_t *r, long long now_ms) {
+    long long sec = now_ms / 1000;
+    int i = (int)(sec % 8);
+    if (r->sec[i] != sec) { r->sec[i] = sec; r->n[i] = 0; }
+    r->n[i]++;
+}
+
+long web_live_rate10(const web_live_rate_t *r, long long now_ms) {
+    /* The five whole seconds before this one, as rate10() counts. */
+    long long sec = now_ms / 1000;
+    unsigned long sum = 0;
+    for (long long s = sec - 5; s < sec; s++) {
+        int i = (int)(((s % 8) + 8) % 8);
+        if (r->sec[i] == s) sum += r->n[i];
+    }
+    return (long)(sum * 2);
+}
 
 #include "web_ssid.h"
 
@@ -13,6 +40,16 @@ void web_live_init(web_live_t *l, const char *spec) {
     l->last_error_ms = -1;
     l->last_record_ms = -1;
     for (int i = 0; i < 8; i++) l->rate_sec[i] = -1;
+    ring_init(&l->rate_other);
+    ring_init(&l->rate_invalid);
+    /* The handles' nonce. It only keeps a link saved before a restart
+     * from naming another incident after it; that a handle says nothing
+     * of the key rests on the counter, so a weak fallback costs nothing
+     * there. */
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (!f || fread(&l->hid_nonce, sizeof(l->hid_nonce), 1, f) != 1)
+        l->hid_nonce = (unsigned)time(NULL) ^ ((unsigned)getpid() << 16);
+    if (f) fclose(f);
 }
 
 void web_live_destroy(web_live_t *l) { pthread_mutex_destroy(&l->mu); }
@@ -98,13 +135,23 @@ static int type_ok(const char *t) {
     return 1;
 }
 
-static void count_type(web_live_t *l, const char *t) {
+static void count_type(web_live_t *l, const char *t, long long now_ms) {
     for (int i = 0; i < l->ntypes; i++)
-        if (!strcmp(l->types[i].name, t)) { l->types[i].n++; return; }
-    if (l->ntypes >= WEB_LIVE_TYPES) { l->types_other++; return; }
+        if (!strcmp(l->types[i].name, t)) {
+            l->types[i].n++;
+            ring_tick(&l->types[i].rate, now_ms);
+            return;
+        }
+    if (l->ntypes >= WEB_LIVE_TYPES) {
+        l->types_other++;
+        ring_tick(&l->rate_other, now_ms);
+        return;
+    }
     web_live_type_t *e = &l->types[l->ntypes++];
     snprintf(e->name, sizeof(e->name), "%s", t);
     e->n = 1;
+    ring_init(&e->rate);
+    ring_tick(&e->rate, now_ms);
 }
 
 static void rate_tick(web_live_t *l, long long now_ms) {
@@ -122,12 +169,37 @@ static void taint(web_live_t *l) {
     l->batch_taint = 1;
 }
 
+static int mac_cmp(const void *a, const void *b) {
+    return strcmp((const char *)a, (const char *)b);
+}
+
+/* The pass's MACs published with its count; an empty batch (n 0)
+ * publishes none. */
 static void publish(web_live_t *l, long n, long long ts) {
     l->dev_known = 1;
     l->dev_count = n;
     l->dev_ts = ts;
     l->dev_gen = l->conn_gen;
     l->dev_rounds++;
+    int k = n > 0 ? l->round_nmac : 0;
+    memcpy(l->pass_macs, l->round_macs, (size_t)k * sizeof(l->pass_macs[0]));
+    qsort(l->pass_macs, (size_t)k, sizeof(l->pass_macs[0]), mac_cmp);
+    l->pass_nmac = k;
+    l->pass_mac_more = n > 0 && l->round_mac_more;
+}
+
+/* A device record's mac, canonical (lower case, colons), or 0. */
+static int canon_mac(const char *m, char out[18]) {
+    if (!m || strlen(m) != 17) return 0;
+    for (int i = 0; i < 17; i++) {
+        char c = m[i];
+        if (i % 3 == 2) { if (c != ':') return 0; out[i] = ':'; continue; }
+        if (c >= 'A' && c <= 'F') c = (char)(c - 'A' + 'a');
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return 0;
+        out[i] = c;
+    }
+    out[17] = '\0';
+    return 1;
 }
 
 static void close_round(web_live_t *l) {
@@ -173,7 +245,8 @@ int web_live_is_poll_type(const char *t) {
 }
 
 /* The device-count bookkeeping for one record of type t. */
-static void devices_step(web_live_t *l, const char *t, long long ts) {
+static void devices_step(web_live_t *l, const web_jrec_t *r, const char *t,
+                         long long ts) {
     if (!web_live_is_poll_type(t)) return;
     int is_dev = !strcmp(t, "device");
     int is_iface = !strcmp(t, "iface");
@@ -197,8 +270,25 @@ static void devices_step(web_live_t *l, const char *t, long long ts) {
             l->round_ts = ts;
             l->round_taint = l->pending_taint;
             l->pending_taint = 0;
+            l->round_nmac = 0;
+            l->round_mac_more = 0;
         }
         l->round_n++;
+        char mac[18];
+        if (canon_mac(web_jl_str(r, "mac"), mac)) {
+            int dup = 0;
+            for (int i = 0; i < l->round_nmac && !dup; i++)
+                dup = !strcmp(l->round_macs[i], mac);
+            if (dup) {
+                /* counted by the pass, one row in the set */
+            } else if (l->round_nmac < WEB_LIVE_PASS_MAX) {
+                memcpy(l->round_macs[l->round_nmac++], mac, 18);
+            } else {
+                l->round_mac_more = 1;
+            }
+        } else {
+            l->round_mac_more = 1;
+        }
         l->batch_saw_dev = 1;
     }
 }
@@ -225,12 +315,15 @@ static void summarise(const web_jrec_t *r, int is_alert, char *out,
          * form too (web_ssid.h). */
         const char *ti = web_jl_str(r, "title");
         const char *de = web_jl_str(r, "detail");
-        char e1[SUMMARY_TMP / 2 - 1], e2[SUMMARY_TMP / 2 - 1];
+        char e1[SUMMARY_TMP / 2 - 1], e2[SUMMARY_TMP / 2 - 1] = "";
+        /* The detail of an unaudited type can carry a credential or a
+         * remote's free text (web_alertfmt.h): the ticker shows the
+         * title alone. Gated first, so only what is kept is escaped. */
+        if (!web_alert_detail_ok(web_jl_int(r, "ty", -1))) de = NULL;
         ti = ti ? ti : "";
-        de = de ? de : "";
         web_ssid_escape(ti, strnlen(ti, SUMMARY_TMP), e1, sizeof(e1), NULL);
-        web_ssid_escape(de, strnlen(de, SUMMARY_TMP), e2, sizeof(e2), NULL);
-        snprintf(tmp, sizeof(tmp), "%s %s", e1, e2);
+        if (de) web_ssid_escape(de, strnlen(de, SUMMARY_TMP), e2, sizeof(e2), NULL);
+        snprintf(tmp, sizeof(tmp), "%s%s%s", e1, de ? " " : "", de ? e2 : "");
     } else {
         int used = 0;
         for (int k = 0; SUMMARY_KEYS[k] && used < 4; k++) {
@@ -285,22 +378,136 @@ static int match_ip_ok(const char *s) {
     return 1;
 }
 
+/* An incident_id as the routes accept one back (web_alerts.h): 1 to
+ * WEB_LIVE_ID_MAX of [0-9A-Za-z_-]. sloth writes 16 hex digits. */
+static int id_ok(const char *s) {
+    size_t n = s ? strlen(s) : 0;
+    if (n == 0 || n > WEB_LIVE_ID_MAX) return 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+              (c >= 'A' && c <= 'Z') || c == '-' || c == '_'))
+            return 0;
+    }
+    return 1;
+}
+
+/* A handle for an incident first seen now. */
+static void hid_give(web_live_t *l, web_live_inc_t *e) {
+    snprintf(e->hid, sizeof(e->hid), "%08x%llx", l->hid_nonce, ++l->hid_seq);
+}
+
+static void sev_note(web_live_inc_t *e, long long ts, int sev, char ev) {
+    /* A change of severity, or the record that opened or closed it. */
+    if (e->nsev && ev != 'c' && ev != 'r') {
+        int last = e->nsev < WEB_LIVE_SEVH ? e->nsev - 1 : WEB_LIVE_SEVH - 1;
+        if (e->sevh[last].sev == sev) return;
+    }
+    if (e->nsev >= WEB_LIVE_SEVH)
+        memmove(e->sevh, e->sevh + 1, (WEB_LIVE_SEVH - 1) * sizeof(e->sevh[0]));
+    int at = e->nsev < WEB_LIVE_SEVH ? e->nsev : WEB_LIVE_SEVH - 1;
+    e->sevh[at].ts = ts;
+    e->sevh[at].sev = sev;
+    e->sevh[at].ev = ev;
+    e->nsev++;
+}
+
+/* The incident's fields from one lifecycle record. */
+static void inc_fill(web_live_inc_t *e, const web_jrec_t *r, long long ts,
+                     long long sev) {
+    const char *s;
+    long long ty = web_jl_int(r, "ty", -1);
+    e->type = ty >= 0 && ty < 65536 ? (int)ty : -1;
+    e->sev = (int)sev;
+    if ((s = web_jl_str(r, "key")) != NULL) web_utf8_copy(e->key, WEB_LIVE_KEY_MAX, s);
+    /* Both in the display form (web_ssid.h), as the alerts list keeps
+     * them: sloth writes an SSID into each as it came. */
+    if ((s = web_jl_str(r, "title")) != NULL)
+        web_ssid_escape(s, strnlen(s, WEB_SSID_IN_MAX), e->title, sizeof(e->title), NULL);
+    s = web_jl_str(r, "detail");
+    /* Not even kept for a type whose detail is not audited. */
+    if (s && web_alert_detail_ok(e->type))
+        web_ssid_escape(s, strnlen(s, WEB_SSID_IN_MAX * 2), e->detail,
+                        sizeof(e->detail), NULL);
+    else
+        e->detail[0] = '\0';
+    if ((s = web_jl_str(r, "technique")) != NULL)
+        web_utf8_copy(e->technique, WEB_LIVE_TECH_MAX, s);
+    s = web_jl_str(r, "match_ip");
+    if (match_ip_ok(s)) {
+        snprintf(e->match_ip, sizeof(e->match_ip), "%s", s);
+        long long p = web_jl_int(r, "match_port", 0);
+        e->match_port = p >= 0 && p <= 65535 ? (int)p : 0;
+    }
+    long long fd = web_jl_int(r, "first_detected", 0);
+    long long lo = web_jl_int(r, "last_observed", 0);
+    if (!e->first_ts) e->first_ts = fd > 0 ? fd : ts;
+    else if (fd > 0 && fd < e->first_ts) e->first_ts = fd;
+    long long last = lo > 0 ? lo : ts;
+    if (last > e->last_ts) e->last_ts = last;
+    long long c = web_jl_int(r, "count", -1);
+    if (c >= 0) e->count = c;
+    c = web_jl_int(r, "observations", -1);
+    if (c >= 0) e->observations = c;
+    c = web_jl_int(r, "reopen_count", -1);
+    if (c >= 0) e->reopen = c;
+    s = web_jl_str(r, "pcap_path");
+    if (s && *s) e->pcap = 1;
+}
+
+/* Into the closed ring, newest last. */
+static void closed_push(web_live_t *l, const web_live_inc_t *e) {
+    l->closed[l->closed_next] = *e;
+    l->closed_next = (l->closed_next + 1) % WEB_LIVE_CLOSED;
+    if (l->closed_n < WEB_LIVE_CLOSED) l->closed_n++;
+}
+
 static void alert_record(web_live_t *l, const web_jrec_t *r, const char *t,
                          long long ts) {
     const char *id = web_jl_str(r, "incident_id");
     long long sev = web_jl_int(r, "sev", -1);
-    if (id && *id && strlen(id) <= WEB_LIVE_ID_MAX && sev_ok(sev)) {
+    char hid[WEB_LIVE_HID_MAX + 1] = "";
+    if (id_ok(id) && sev_ok(sev)) {
         int k = inc_find(l, id);
-        if (!strcmp(t, "alert.resolve")) {
-            if (k >= 0) l->inc[k] = l->inc[--l->ninc];
+        char ev = !strcmp(t, "alert.create") ? 'c' : !strcmp(t, "alert.escalate") ? 'e'
+                : !strcmp(t, "alert.resolve") ? 'r' : 'u';
+        if (ev == 'r') {
+            web_live_inc_t e;
+            if (k >= 0) {
+                e = l->inc[k];
+                l->inc[k] = l->inc[--l->ninc];
+            } else {
+                /* Opened before this connection: closed all the same. */
+                memset(&e, 0, sizeof(e));
+                snprintf(e.id, sizeof(e.id), "%s", id);
+                hid_give(l, &e);
+            }
+            inc_fill(&e, r, ts, sev);
+            const char *why = web_jl_str(r, "reason");
+            web_utf8_copy(e.reason, WEB_LIVE_REASON_MAX, why ? why : "");
+            e.closed_ts = ts;
+            sev_note(&e, ts, (int)sev, 'r');
+            e.seq = ++l->inc_seq;
+            memcpy(hid, e.hid, sizeof(hid));
+            closed_push(l, &e);
         } else if (k >= 0) {
-            l->inc[k].sev = (int)sev;
+            web_live_inc_t *e = &l->inc[k];
+            inc_fill(e, r, ts, sev);
+            sev_note(e, ts, (int)sev, ev);
+            e->seq = ++l->inc_seq;
+            memcpy(hid, e->hid, sizeof(hid));
         } else if (l->ninc < WEB_LIVE_INCIDENTS) {
             /* An update or escalate for an incident opened before this
              * connection is still an open incident. */
-            snprintf(l->inc[l->ninc].id, sizeof(l->inc[0].id), "%s", id);
-            l->inc[l->ninc].sev = (int)sev;
-            l->ninc++;
+            web_live_inc_t *e = &l->inc[l->ninc++];
+            memset(e, 0, sizeof(*e));
+            snprintf(e->id, sizeof(e->id), "%s", id);
+            hid_give(l, e);
+            e->closed_ts = -1;
+            inc_fill(e, r, ts, sev);
+            sev_note(e, ts, (int)sev, ev);
+            e->seq = ++l->inc_seq;
+            memcpy(hid, e->hid, sizeof(hid));
         } else {
             l->inc_overflow = 1;
         }
@@ -311,17 +518,22 @@ static void alert_record(web_live_t *l, const web_jrec_t *r, const char *t,
     memset(a, 0, sizeof(*a));
     a->ts = ts;
     a->sev = sev_ok(sev) ? (int)sev : -1;
+    long long ty = web_jl_int(r, "ty", -1);
+    a->ty = ty >= 0 && ty < 65536 ? (int)ty : -1;
     snprintf(a->type, sizeof(a->type), "%s", t);
     const char *ti = web_jl_str(r, "title");
     const char *de = web_jl_str(r, "detail");
     /* In the display form (web_ssid.h): sloth puts an SSID into both
-     * as it came. Cut before a whole escape or code point. */
+     * as it came. Cut before a whole escape or code point. The detail
+     * of a type it is not audited for is not kept (web_alertfmt.h). */
     ti = ti ? ti : "";
-    de = de ? de : "";
     web_ssid_escape(ti, strnlen(ti, WEB_SSID_IN_MAX), a->title, sizeof(a->title), NULL);
-    web_ssid_escape(de, strnlen(de, WEB_SSID_IN_MAX * 2), a->detail, sizeof(a->detail),
-                    NULL);
-    if (id) web_utf8_copy(a->incident, WEB_LIVE_ID_MAX, id);
+    if (de && web_alert_detail_ok(a->ty))
+        web_ssid_escape(de, strnlen(de, WEB_SSID_IN_MAX * 2), a->detail,
+                        sizeof(a->detail), NULL);
+    else
+        a->detail[0] = '\0';
+    memcpy(a->hid, hid, sizeof(a->hid));
     const char *ip = web_jl_str(r, "match_ip");
     if (match_ip_ok(ip)) snprintf(a->match_ip, sizeof(a->match_ip), "%s", ip);
 }
@@ -355,13 +567,14 @@ void web_live_apply(web_live_t *l, const web_jrec_t *r, long long now_ms) {
     rate_tick(l, now_ms);
     if (!type_ok(t)) {
         l->types_invalid++;
+        ring_tick(&l->rate_invalid, now_ms);
         /* Unknown, so it could have stood for anything, a device row
          * included. */
         taint(l);
         pthread_mutex_unlock(&l->mu);
         return;
     }
-    count_type(l, t);
+    count_type(l, t, now_ms);
 
     if (!strcmp(t, "socket_gap")) {
         l->gaps++;
@@ -369,7 +582,7 @@ void web_live_apply(web_live_t *l, const web_jrec_t *r, long long now_ms) {
         if (d > 0) l->gap_dropped += (unsigned long long)d;
         taint(l);
     } else {
-        devices_step(l, t, ts);
+        devices_step(l, r, t, ts);
     }
 
     int is_alert = !strncmp(t, "alert.", 6);
@@ -565,6 +778,19 @@ size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms) {
     }
     web_jw_raw(&w, "},\"types_other\":"); web_jw_int(&w, (long long)l->types_other);
     web_jw_raw(&w, ",\"types_invalid\":"); web_jw_int(&w, (long long)l->types_invalid);
+    /* Records/s by type, over the same five seconds as records_s: the
+     * rates of the types, types_other and types_invalid sum to it
+     * exactly (the Records view, the records/s tile's drill-down). */
+    web_jw_raw(&w, ",\"types_rate\":{");
+    for (int i = 0; i < l->ntypes; i++) {
+        if (i) web_jw_raw(&w, ",");
+        web_jw_key(&w, l->types[i].name);
+        jw_rate(&w, web_live_rate10(&l->types[i].rate, now_ms));
+    }
+    web_jw_raw(&w, "},\"types_other_rate\":");
+    jw_rate(&w, web_live_rate10(&l->rate_other, now_ms));
+    web_jw_raw(&w, ",\"types_invalid_rate\":");
+    jw_rate(&w, web_live_rate10(&l->rate_invalid, now_ms));
 
     web_jw_raw(&w, ",\"sensor\":{\"state\":"); web_jw_str(&w, s.sensor);
     if (l->sh_seen) {
@@ -591,11 +817,22 @@ size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms) {
         if (k) web_jw_raw(&w, ",");
         web_jw_raw(&w, "{\"ts\":"); web_jw_int(&w, a->ts);
         web_jw_raw(&w, ",\"type\":"); web_jw_str(&w, a->type);
+        web_jw_raw(&w, ",\"ty\":");
+        if (a->ty < 0) web_jw_raw(&w, "null"); else web_jw_int(&w, a->ty);
         web_jw_raw(&w, ",\"sev\":");
         if (a->sev < 0) web_jw_raw(&w, "null"); else web_jw_int(&w, a->sev);
         web_jw_raw(&w, ",\"title\":"); web_jw_str(&w, a->title);
         web_jw_raw(&w, ",\"detail\":"); web_jw_str(&w, a->detail);
-        web_jw_raw(&w, ",\"incident_id\":"); web_jw_str(&w, a->incident);
+        /* The page's link to the incident (web_live_inc_t: never
+         * sloth's incident_id). */
+        web_jw_raw(&w, ",\"alert_id\":");
+        if (a->hid[0]) {
+            char aid[WEB_LIVE_HID_MAX + 2];
+            snprintf(aid, sizeof(aid), "s%s", a->hid);
+            web_jw_str(&w, aid);
+        } else {
+            web_jw_raw(&w, "null");
+        }
         web_jw_raw(&w, ",\"match_ip\":"); web_jw_str(&w, a->match_ip);
         web_jw_raw(&w, "}");
     }
@@ -617,4 +854,59 @@ size_t web_live_json(web_live_t *l, char *out, size_t cap, long long now_ms) {
     web_jw_raw(&w, "]}\n");
     pthread_mutex_unlock(&l->mu);
     return w.overflow ? 0 : w.len;
+}
+
+/* ── the alert routes' reads ─────────────────────────────────────────── */
+
+static int by_seq_desc(const void *a, const void *b) {
+    unsigned long long x = ((const web_live_inc_t *)a)->seq;
+    unsigned long long y = ((const web_live_inc_t *)b)->seq;
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+
+int web_live_incidents(web_live_t *l, web_live_inc_t *out, int max, int *nopen) {
+    pthread_mutex_lock(&l->mu);
+    int n = 0;
+    for (int i = 0; i < l->ninc && n < max; i++) out[n++] = l->inc[i];
+    int o = n;
+    for (int k = 0; k < l->closed_n && n < max; k++) {
+        int i = (l->closed_next - 1 - k + 2 * WEB_LIVE_CLOSED) % WEB_LIVE_CLOSED;
+        out[n++] = l->closed[i];
+    }
+    pthread_mutex_unlock(&l->mu);
+    qsort(out, (size_t)o, sizeof(*out), by_seq_desc);
+    qsort(out + o, (size_t)(n - o), sizeof(*out), by_seq_desc);
+    if (nopen) *nopen = o;
+    return n;
+}
+
+int web_live_incident(web_live_t *l, const char *hid, web_live_inc_t *out) {
+    int found = 0;
+    pthread_mutex_lock(&l->mu);
+    for (int i = 0; !found && i < l->ninc; i++)
+        if (!strcmp(l->inc[i].hid, hid)) { *out = l->inc[i]; found = 1; }
+    /* A handle is given once; the closed copy is the incident's last
+     * state. */
+    for (int j = 0; !found && j < l->closed_n; j++) {
+        int i = (l->closed_next - 1 - j + 2 * WEB_LIVE_CLOSED) % WEB_LIVE_CLOSED;
+        if (!strcmp(l->closed[i].hid, hid)) { *out = l->closed[i]; found = 1; }
+    }
+    pthread_mutex_unlock(&l->mu);
+    return found;
+}
+
+int web_live_pass_has(web_live_t *l, const char *mac) {
+    pthread_mutex_lock(&l->mu);
+    int hit = bsearch(mac, l->pass_macs, (size_t)l->pass_nmac, sizeof(l->pass_macs[0]),
+                      mac_cmp) != NULL;
+    pthread_mutex_unlock(&l->mu);
+    return hit;
+}
+
+int web_live_pass_size(web_live_t *l, int *more) {
+    pthread_mutex_lock(&l->mu);
+    int n = l->pass_nmac;
+    if (more) *more = l->pass_mac_more;
+    pthread_mutex_unlock(&l->mu);
+    return n;
 }

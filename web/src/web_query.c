@@ -31,7 +31,7 @@ static const struct { const char *p; int kind; } PREFIX[] = {
     { "random", WEB_QT_RANDOM }, { "seen", WEB_QT_SEEN },
     { "first", WEB_QT_FIRST }, { "risk", WEB_QT_RISK }, { "z", WEB_QT_Z },
     { "src", WEB_QT_SRC }, { "has", WEB_QT_HAS },
-    { "anomaly", WEB_QT_ANOMALY }, { NULL, 0 }
+    { "anomaly", WEB_QT_ANOMALY }, { "pass", WEB_QT_PASS }, { NULL, 0 }
 };
 
 static int fail(char *err, size_t errsz, const char *why) {
@@ -225,6 +225,11 @@ static int value(web_qterm_t *t, const char *v, long long now_s, char *err,
     case WEB_QT_ANOMALY:
         t->num = word_index(web_query_anomaly_kinds, v);
         return t->num >= 0 ? 0 : fail(err, errsz, "bad_anomaly");
+    case WEB_QT_PASS:
+        /* The one pass slothweb keeps: sloth's latest. */
+        if (strcmp(v, "latest")) return fail(err, errsz, "bad_pass");
+        t->num = 0;
+        return 0;
     default:
         return fail(err, errsz, "bad_text");
     }
@@ -534,6 +539,9 @@ static void term(sb_t *b, const web_qterm_t *t, unsigned f, web_qsql_t *o) {
         sb_put(b, "(web_anoms(d.mac,");
         param(b, bind_int(o, t->num));
         sb_put(b, ") > 0)");
+        break;
+    case WEB_QT_PASS:
+        sb_put(b, "(web_inpass(d.mac) = 1)");
         break;
     default:
         sb_put(b, "(0)");

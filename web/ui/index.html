@@ -27,7 +27,7 @@
       <li><button type="button" class="go" id="nav-devices"><span class="k">3</span>Devices</button></li>
       <li><button type="button" class="go" id="nav-anomalies"><span class="k">4</span>Anomalies</button></li>
       <li><button type="button" class="go" id="nav-wifi"><span class="k">5</span>WiFi</button></li>
-      <li class="off" title="not built: the Overview lists the latest alerts"><span class="k">6</span>Alerts</li>
+      <li><button type="button" class="go" id="nav-alerts"><span class="k">6</span>Alerts</button></li>
       <li><button type="button" class="go" id="nav-flows"><span class="k">7</span>Flows</button></li>
       <li><button type="button" class="go" id="nav-history"><span class="k">8</span>History</button></li>
       <li><button type="button" class="go" id="nav-lookup"><span class="k">9</span>Lookup</button></li>
@@ -51,37 +51,37 @@
   <main>
    <div id="v-overview">
     <section class="kpis" aria-label="overview">
-      <div class="tile hud">
+      <a class="tile hud" id="t-tp" href="#activity?focus=throughput">
         <div class="label">throughput <span id="k-tp-key"></span></div>
         <div class="kpi" id="k-tp">-</div>
         <canvas class="spark" id="k-tp-spark" aria-label="throughput, 24 h, over its baseline band"></canvas>
         <div class="sub" id="k-tp-sub">rx, 24 h, band = mean &#177; k sd</div>
-      </div>
-      <div class="tile hud">
+      </a>
+      <a class="tile hud" id="t-anoms" href="#anomalies?state=open">
         <div class="label">open anomalies</div>
         <div class="kpi" id="k-anoms">-</div>
         <div class="sub" id="k-anoms-sub">rules A1-A3, A5-A10</div>
-      </div>
-      <div class="tile hud">
+      </a>
+      <a class="tile hud" id="t-devs" href="#devices?q=pass:latest">
         <div class="label">devices</div>
         <div class="kpi" id="k-devs">-</div>
         <div class="sub" id="k-devs-sub">waiting for a device pass</div>
-      </div>
-      <div class="tile hud">
+      </a>
+      <a class="tile hud" id="t-alerts" href="#alerts?state=open">
         <div class="label">open alerts</div>
         <div class="kpi"><span class="sev2" id="k-crit">-</span> <span class="sev1" id="k-warn">-</span> <span class="sev0" id="k-low">-</span></div>
         <div class="sub">crit / warn / low, since connect</div>
-      </div>
-      <div class="tile hud">
+      </a>
+      <a class="tile hud" id="t-rate" href="#records">
         <div class="label">records/s</div>
         <div class="kpi" id="k-rate">-</div>
         <div class="sub" id="k-rate-sub">-</div>
-      </div>
-      <div class="tile hud">
+      </a>
+      <a class="tile hud" id="t-sensor" href="#health">
         <div class="label">sensor health</div>
         <div class="kpi" id="k-sensor">-</div>
         <div class="sub" id="k-sensor-sub">-</div>
-      </div>
+      </a>
     </section>
     <section class="panel controls" aria-label="sensitivity">
       <label>sensitivity <input type="range" id="sens" min="1.5" max="4" step="0.5" value="2"></label>
@@ -117,6 +117,7 @@
     </section>
    </div>
    <div id="v-anomalies" hidden>
+    <div class="filterbar" id="n-filter" hidden><span id="n-filter-t"></span> <a href="#anomalies">show all</a> <a href="#overview">back to the overview</a></div>
     <section class="panel controls" aria-label="anomaly filters">
       <span class="chips" id="n-chips"></span>
       <label>closed in <select id="n-win">
@@ -135,6 +136,7 @@
     </section>
    </div>
    <div id="v-devices" hidden>
+    <div class="filterbar" id="d-filter" hidden><span id="d-filter-t"></span> <a href="#devices">show all</a> <a href="#overview">back to the overview</a></div>
     <section class="panel controls" aria-label="device search">
       <label>search <input type="search" id="d-q" maxlength="256" spellcheck="false" autocomplete="off" placeholder="vendor:apple random:yes seen:&lt;24h"></label>
       <label>sort <select id="d-sort">
@@ -217,6 +219,104 @@
       </div>
     </section>
    </div>
+   <div id="v-alerts" hidden>
+    <div class="filterbar" id="al-filter" hidden><span id="al-filter-t"></span> <a href="#alerts">show all</a> <a href="#overview">back to the overview</a></div>
+    <section class="panel controls" aria-label="alert filters">
+      <label>state <select id="al-state">
+        <option value="all" selected>open, then closed</option>
+        <option value="open">open</option>
+        <option value="closed">closed</option>
+      </select></label>
+      <label>severity <select id="al-sev">
+        <option value="" selected>any</option>
+        <option value="crit">crit</option>
+        <option value="warn,crit">warn and crit</option>
+        <option value="warn">warn</option>
+        <option value="low">low</option>
+      </select></label>
+      <label>type <select id="al-type"><option value="" selected>any</option></select></label>
+      <label>search <input type="search" id="al-q" maxlength="63" spellcheck="false" autocomplete="off" placeholder="192.0.2.10 or SMB1"></label>
+      <label>window <select id="al-win">
+        <option value="86400">24 h</option>
+        <option value="604800" selected>7 d</option>
+        <option value="2592000">30 d</option>
+        <option value="34560000">400 d</option>
+      </select></label>
+      <span class="sub" id="al-note"></span>
+    </section>
+    <section class="panel">
+      <div class="label">open first, then closed <span class="sub" id="al-count"></span> <span class="dt-tools" id="al-tools"></span></div>
+      <div class="hscroll" id="al-box"><div class="alprow dhead" id="al-head"></div>
+        <div id="al-rows"></div>
+      </div>
+      <button type="button" id="al-more" hidden>more</button>
+      <div class="sub">open: from the live stream; closed: the stream's resolved incidents and sloth.db's rows, every row of one alert key collapsed into one with its count of incidents. Click a row for what it is, why it matters and how to fix it.</div>
+    </section>
+   </div>
+   <div id="v-alert" hidden>
+    <div class="filterbar"><span id="ad-head"></span> <a href="#alerts" id="ad-back">back to the alerts</a> <a href="#overview">the overview</a></div>
+    <section class="panel">
+      <div class="label">alert <span class="sub" id="ad-note"></span></div>
+      <div class="adtitle" id="ad-title"></div>
+    </section>
+    <section class="row2">
+      <div class="panel" id="ad-what">
+        <div class="label">what it is</div>
+        <div id="ad-what-b"></div>
+      </div>
+      <div class="panel" id="ad-why">
+        <div class="label">why it matters</div>
+        <div id="ad-why-b"></div>
+      </div>
+    </section>
+    <section class="panel" id="ad-fix">
+      <div class="label">how to investigate and fix <span class="sub">docs/wiki/alert-remediation.md, built in</span></div>
+      <div id="ad-fix-b"></div>
+    </section>
+    <section class="row2">
+      <div class="panel" id="ad-evidence">
+        <div class="label">evidence</div>
+        <div id="ad-evidence-b"></div>
+      </div>
+      <div class="panel" id="ad-history">
+        <div class="label">history of this alert <span class="sub" id="ad-history-note"></span> <span class="dt-tools" id="ad-history-tools"></span></div>
+        <div class="hscroll" id="ad-history-box"><div class="arnrow dhead" id="ad-history-head"></div>
+        <ol class="alerts" id="ad-history-b"></ol></div>
+      </div>
+    </section>
+    <section class="panel" id="ad-device">
+      <div class="label">the device <span class="sub" id="ad-device-note"></span></div>
+      <div id="ad-device-b"></div>
+      <canvas class="strip" id="ad-strip" aria-label="the device's presence over the last 24 hours"></canvas>
+      <div class="label">its other alerts <span class="dt-tools" id="ad-dev-alerts-tools"></span></div>
+      <div class="hscroll" id="ad-dev-alerts-box"><div class="adarow dhead" id="ad-dev-alerts-head"></div>
+      <ol class="alerts" id="ad-dev-alerts"></ol></div>
+      <div class="label">its anomalies</div>
+      <div class="cards" id="ad-dev-anoms"></div>
+    </section>
+   </div>
+   <div id="v-records" hidden>
+    <div class="filterbar"><span id="rc-filter-t">records by type, over the five seconds the records/s tile counts</span> <a href="#overview">back to the overview</a></div>
+    <section class="panel">
+      <div class="label">records by type <span class="sub" id="rc-note"></span> <span class="dt-tools" id="rc-tools"></span></div>
+      <div class="hscroll" id="rc-box"><div class="rcrow dhead" id="rc-head"></div>
+        <div id="rc-rows"></div>
+      </div>
+      <div class="sub">click a type to show only its records below</div>
+    </section>
+    <section class="panel">
+      <div class="label">records <span class="sub" id="rc-tick-note"></span> <span class="dt-tools" id="rc-ttools"></span></div>
+      <div class="hscroll" id="rc-tbox"><div class="tkrow dhead" id="rc-thead"></div>
+      <ol class="ticker" id="rc-ticker"></ol></div>
+    </section>
+   </div>
+   <div id="v-health" hidden>
+    <div class="filterbar"><span>sensor health: capture, monitor, stream, sloth.db</span> <a href="#overview">back to the overview</a></div>
+    <section class="panel">
+      <div class="label">health <span class="sub" id="hl-note"></span></div>
+      <div id="hl-rows"></div>
+    </section>
+   </div>
    <div id="v-flows" hidden>
     <section class="panel controls" aria-label="flow controls">
       <label>window <select id="f-win">
@@ -292,6 +392,13 @@
     </section>
    </div>
    <div id="v-activity" hidden>
+    <div class="filterbar" id="a-focus-bar" hidden><span id="a-focus-t"></span> <a href="#activity">every metric</a> <a href="#overview">back to the overview</a></div>
+    <section class="panel" id="a-focus" hidden aria-label="throughput by interface">
+      <div class="label">throughput by interface, 24 h <span class="sub" id="a-focus-note"></span></div>
+      <div id="a-ifaces"></div>
+      <div class="label">top hosts, last hour <span class="sub" id="a-hosts-note"></span></div>
+      <div class="multi" id="a-hosts"></div>
+    </section>
     <section class="panel controls" aria-label="activity controls">
       <label>metric <select id="a-metric"></select></label>
       <label>key <select id="a-key"></select></label>

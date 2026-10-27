@@ -768,18 +768,23 @@ static void test_ticker_ssid_escaped(void) {
 }
 
 /* An alert's title and detail, which sloth writes an SSID into as it
- * came (src/alerts/rules_twin.c OPEN_SETUP_AP), reach the alerts list
- * and the ticker in the display form: the stream's U+202E, U+FFFD and
- * a Hangul filler escaped, never raw. Seen red with alert_record()
- * copying title and detail as they were and, apart, with summarise()
- * joining them unescaped. */
+ * came (src/alerts/rules_twin.c), reach the alerts list and the ticker
+ * in the display form: the stream's U+202E, U+FFFD and a Hangul filler
+ * escaped, never raw. The detail is kept only for an audited type
+ * (web_alertfmt.h), so the record names one; test_alert_detail_withheld
+ * below has the other side. Seen red with alert_record() copying title
+ * and detail as they were and, apart, with summarise() joining them
+ * unescaped. */
 static void test_alert_text_escaped(void) {
     web_live_t l;
     web_live_init(&l, "unix:/x");
     static web_jrec_t r2;
-    const char *s = "{\"type\":\"alert.create\",\"ts\":5,\"incident_id\":\"i1\",\"sev\":1,"
-                    "\"title\":\"Open setup AP home\xe3\x85\xa4\","
-                    "\"detail\":\"ssid=evil\xe2\x80\xae" "cod\\ufffd\"}";
+    char s[512];
+    snprintf(s, sizeof(s),
+             "{\"type\":\"alert.create\",\"ts\":5,\"incident_id\":\"i1\",\"sev\":1,"
+             "\"ty\":%d,\"title\":\"Open setup AP home\xe3\x85\xa4\","
+             "\"detail\":\"ssid=evil\xe2\x80\xae" "cod\\ufffd\"}",
+             (int)ALERT_TYPE_EVIL_TWIN_PROXIMITY);
     WT_EQ(web_jl_parse(s, strlen(s), &r2), WEB_JL_OK);
     web_live_apply(&l, &r2, 1000);
     static char j[65536];
@@ -803,6 +808,40 @@ static void test_alert_text_escaped(void) {
     web_live_destroy(&l);
 }
 
+/* The same record for a type whose detail is not audited
+ * (OPEN_SETUP_AP): the title still in the display form, the detail
+ * neither kept nor in the ticker, escaped or raw. Seen red with
+ * alert_record() and summarise() escaping the detail before the gate. */
+static void test_alert_detail_withheld(void) {
+    web_live_t l;
+    web_live_init(&l, "unix:/x");
+    static web_jrec_t r2;
+    char s[512];
+    snprintf(s, sizeof(s),
+             "{\"type\":\"alert.create\",\"ts\":5,\"incident_id\":\"i1\",\"sev\":1,"
+             "\"ty\":%d,\"title\":\"Open setup AP home\xe3\x85\xa4\","
+             "\"detail\":\"ssid=evil\xe2\x80\xae" "cod\\ufffd\"}",
+             (int)ALERT_TYPE_OPEN_SETUP_AP);
+    WT_EQ(web_jl_parse(s, strlen(s), &r2), WEB_JL_OK);
+    web_live_apply(&l, &r2, 1000);
+    static char j[65536];
+    size_t n = web_live_json(&l, j, sizeof(j), 1000);
+    WT_ASSERT(n > 0);
+    if (!n) j[0] = '\0';
+    WT_HAS(j, "\"title\":\"Open setup AP home\\\\xe3\\\\x85\\\\xa4\"");
+    WT_HAS(j, "\"detail\":\"\"");
+    WT_LACKS(j, "ssid=evil");
+    web_live_rec_t recs[4];
+    unsigned long long latest = 0;
+    int k = web_live_recent_after(&l, 0, recs, 4, &latest);
+    WT_EQ(k, 1);
+    if (k == 1) {
+        WT_ASSERT(!strcmp(recs[0].text, "Open setup AP home\\xe3\\x85\\xa4"));
+        WT_ASSERT(!strstr(recs[0].text, "ssid"));
+    }
+    web_live_destroy(&l);
+}
+
 void run_chmix_tests(void) {
     WT_RUN(test_ssid_display_form);
     WT_RUN(test_ssid_colour_is_the_tuis);
@@ -816,6 +855,7 @@ void run_chmix_tests(void) {
     WT_RUN(test_mix_on_health);
     WT_RUN(test_ticker_ssid_escaped);
     WT_RUN(test_alert_text_escaped);
+    WT_RUN(test_alert_detail_withheld);
 #ifdef WITH_SQLITE
     WT_RUN(test_mix_route_from_the_store);
     WT_RUN(test_every_db_ssid_is_escaped);

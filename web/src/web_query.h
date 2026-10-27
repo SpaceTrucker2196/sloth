@@ -26,6 +26,8 @@
  *   has:WORD      pnl alert anomaly name ip ssid
  *   anomaly:KIND  an episode of that kind (rate new hours vendor ident
  *                 fanout dns proto sensor) keyed by the MAC
+ *   pass:latest   in the device pass sloth sent last on the stream: the
+ *                 set the Overview's devices tile counts
  *
  * Bounded: the query is at most WEB_Q_LEN bytes, WEB_Q_TERMS terms of
  * at most WEB_Q_TERM_LEN bytes; text is well-formed UTF-8 with no
@@ -53,7 +55,7 @@
 enum {
     WEB_QT_FREE = 0, WEB_QT_VENDOR, WEB_QT_MAC, WEB_QT_IP, WEB_QT_SSID,
     WEB_QT_NAME, WEB_QT_RANDOM, WEB_QT_SEEN, WEB_QT_FIRST, WEB_QT_RISK,
-    WEB_QT_Z, WEB_QT_SRC, WEB_QT_HAS, WEB_QT_ANOMALY, WEB_QT_COUNT
+    WEB_QT_Z, WEB_QT_SRC, WEB_QT_HAS, WEB_QT_ANOMALY, WEB_QT_PASS, WEB_QT_COUNT
 };
 
 enum { WEB_QOP_EQ = 0, WEB_QOP_LT, WEB_QOP_GT, WEB_QOP_LE, WEB_QOP_GE };
@@ -80,7 +82,7 @@ typedef struct {
 /* Parse q against now_s (for the relative times). 0, or -1 with a
  * reason in err ("query_too_long", "too_many_terms", "term_too_long",
  * "bad_text", "bad_mac", "bad_ip", "bad_random", "bad_time", "bad_risk",
- * "bad_z", "bad_src", "bad_has", "bad_anomaly", "empty_value",
+ * "bad_z", "bad_src", "bad_has", "bad_anomaly", "bad_pass", "empty_value",
  * "bad_quote"). */
 int web_query_parse(const char *q, long long now_s, web_query_t *out,
                     char *err, size_t errsz);

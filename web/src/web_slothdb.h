@@ -130,8 +130,10 @@ typedef struct {
     const char *table, *column;
     int         since;    /* the first sloth schema with it */
     int         optional; /* read as NULL when the file lacks it */
-    int         pred;     /* predicate-only: readable by the statements
-                             that set web_sdb_conn_t.pred_ok alone */
+    int         pred;     /* 1 predicate-only: readable by the statements
+                             that set web_sdb_conn_t.pred_ok alone; 2
+                             typed-detail: by those that set detail_ok
+                             alone (alerts.detail, web_alertdb.h) */
 } web_sdb_col_t;
 
 extern const web_sdb_col_t web_sdb_allow[];
@@ -147,6 +149,7 @@ typedef struct {
     const web_oui_tab_t *oui;
     struct web_anomaly  *an;
     struct web_ptr      *ptr;
+    struct web_live_s   *live;   /* web_inpass(mac): the latest pass */
 } web_sdb_fns_t;
 
 typedef struct {
@@ -192,6 +195,7 @@ typedef struct {
     const char     *what;
     long long       rows_read;
     int             plan[2];
+    int             detail_ok;       /* alerts.detail may be read (web_alertdb.h) */
 } web_sdb_conn_t;
 
 /* How web_sdb_overview() counted a table. */
@@ -207,7 +211,7 @@ enum {
 enum {
     WEB_SDB_OPT_CLASS = 1 << 0,      /* devices.device_class, camera_* (v6) */
     WEB_SDB_OPT_VCI   = 1 << 1,      /* devices.dhcp_vci (v7) */
-    WEB_SDB_OPT_INC   = 1 << 2       /* alerts.incident_first_seen (v8) */
+    WEB_SDB_OPT_INC   = 1 << 2       /* alerts.incident_first_seen, reopens (v8) */
 };
 
 int  web_slothdb_available(void);
@@ -295,6 +299,8 @@ typedef struct {
     int       has_n3;
     long long n3;                        /* assoc signal; alert count */
     long long first_seen, last_seen;
+    long long rid, rows;                 /* an alert key's newest rowid and
+                                            its rows read (web_alertdb.h) */
 } web_sdb_item_t;
 
 typedef int (*web_sdb_item_fn)(void *ctx, const web_sdb_item_t *it);
@@ -315,10 +321,20 @@ int  web_sdb_arp_ip(web_sdb_conn_t *c, const char *ip, int max,
  * "mdns-instance" or "nbns". */
 int  web_sdb_names(web_sdb_conn_t *c, const char *ip, int max,
                    web_sdb_item_fn fn, void *ctx);
-/* Alerts naming mac (in their key) or ip (match_ip): a = title, n1 =
- * type, n2 = sev, n3 = count. Newest first. */
+/* Alerts naming mac (in their key) or ip (match_ip), one item per key
+ * (its rows collapsed: rid the key's newest rowid, rows its incidents,
+ * 1 + reopens a v8 row): a = title, n1 = type, n2 = the highest sev,
+ * n3 = the sum of count. Newest first, at most max; returns one more
+ * than given when there were more. The walk goes back through the
+ * table newest first a slice at a time while the request's budget has
+ * more than WEB_SDB_ALERT_RESERVE_MS left; *reached is 0 when it read
+ * the whole table, else the last_seen it reached back to (the figures
+ * then count the rows read). */
+#define WEB_SDB_ALERT_SCAN 20000
+#define WEB_SDB_ALERT_RESERVE_MS 80
 int  web_sdb_alerts(web_sdb_conn_t *c, const char *mac, const char *ip,
-                    int max, web_sdb_item_fn fn, void *ctx);
+                    int max, web_sdb_item_fn fn, void *ctx,
+                    long long *reached);
 
 /* A2 (web_anomaly.c): the earliest first_seen sloth.db holds for mac
  * in devices, probe_clients, pnl_clients and assocs. 1 (in *fs), 0 none
@@ -409,10 +425,18 @@ int  web_sdb_new_since(web_sdb_conn_t *c, int kind, long long since,
 int  web_sdb_devices_between(web_sdb_conn_t *c, long long from, long long to,
                              long long limit, long long offset,
                              web_sdb_dev_fn fn, void *ctx);
-/* Alerts whose episode overlaps [from, to): a = title, b = match_ip,
- * n1 = type, n2 = sev, n3 = count. Newest first. */
+/* Alerts whose latest incident overlaps [from, to), one item per key,
+ * the keys among the WEB_SDB_ALERT_SCAN newest rows of the range, each
+ * key's figures over all of its rows in the range (through the primary
+ * key): a = title, b = match_ip, n1 = type, n2 = the highest sev, n3 =
+ * the sum of count, rid its newest rowid in the range, rows its rows
+ * there (each at least one incident). Newest first. */
 int  web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
                             int max, web_sdb_item_fn fn, void *ctx);
+/* The rows of the range web_sdb_alerts_between() took its keys from (at
+ * most WEB_SDB_ALERT_SCAN) and the oldest last_seen among them. 0, -1. */
+int  web_sdb_alerts_scan(web_sdb_conn_t *c, long long from, long long to,
+                         long long *rows, long long *oldest);
 /* Flows (ssh_flows, rdp_flows, smb_sessions, snmp_flows) overlapping
  * [from, to): a = src, b = dst, n1 = WEB_FLOW_*, n2 = their count
  * (banners, connect requests, messages, PDUs), n3 = the server port

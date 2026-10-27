@@ -155,7 +155,7 @@ static void test_page_makes_no_external_reference(void) {
         /* anything that makes the browser fetch a subresource */
         "<link", "<img", "<iframe", "<object", "<embed", "<base",
         "<source", "<video", "<audio", "<form",
-        " src=", " href=", "srcset", "@import", "url(", "@font-face",
+        " src=", "srcset", "@import", "url(", "@font-face",
         "importScripts", "new Worker", "sendBeacon", "XMLHttpRequest",
         "WebSocket", "<script ", "<style ",
     };
@@ -166,6 +166,19 @@ static void test_page_makes_no_external_reference(void) {
                     banned[i], (size_t)(hit - p));
         WT_ASSERT(hit == NULL);
     }
+    /* A link names a view of this page, a fragment, and fetches
+     * nothing: href="#..." and no other. Seen red with a tile's href
+     * made "/api/live". */
+    int links = 0;
+    for (const char *h = ci_find(p, n, " href="); h; ) {
+        int frag = !strncmp(h, " href=\"#", 8);
+        if (!frag) fprintf(stderr, "    a link that is not a fragment at byte %zu\n", (size_t)(h - p));
+        WT_ASSERT(frag);
+        links++;
+        size_t at = (size_t)(h - p) + 6;
+        h = at < n ? ci_find(h + 6, n - at, " href=") : NULL;
+    }
+    WT_ASSERT(links >= 6);
 
     /* The two places the page does talk to the server: same-origin,
      * relative paths. */

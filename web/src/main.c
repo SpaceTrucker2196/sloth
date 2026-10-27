@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
     acfg.oui = web_oui_builtin();
     acfg.sdb = cfg.sloth_db[0] ? &g_sdb : NULL;
     acfg.ptr = &g_ptr;
-    web_sdb_fns_t fns = { acfg.oui, &g_anomaly, &g_ptr };
+    web_sdb_fns_t fns = { acfg.oui, &g_anomaly, &g_ptr, &g_live };
     web_slothdb_init(&g_sdb, cfg.sloth_db, &fns);
     if (web_rollup_init(&g_rollup, cfg.max_keys,
                         have_store ? 1 : WEB_ROLLUP_Q_LONG, err,

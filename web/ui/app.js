@@ -1,4 +1,8 @@
-// slothweb M6 client: the Flows view (M6: /api/flows, /api/flows/graph,
+// slothweb client. The Alerts page and an alert's page (/api/alerts,
+// /api/alert), the record ticker by type and the sensor's health, and
+// the Overview's tiles as links to the views of what they count
+// (#alerts?state=open, #devices?q=pass:latest, ...), on top of the M6
+// client: the Flows view (M6: /api/flows, /api/flows/graph,
 // a chord diagram on Canvas 2D) and, before it, the M5 client: the Overview view (M1, with M3's baseline band,
 // hour-of-week heatmap and top anomalies), the Activity view (M2, with
 // M3's baseline band), the Anomalies view (M3), the Devices view,
@@ -910,6 +914,9 @@
       li.appendChild(el("span", "ty", sev >= 0 ? SEV_WORD[sev] : "?"));
       li.appendChild(el("span", "ty d-dim", String(a.type).replace("alert.", "")));
       li.appendChild(alertText(a.title, a.detail));
+      // slothweb's handle for the incident, never sloth's incident_id
+      // (web/src/web_live.h).
+      if (typeof a.alert_id === "string") alertLink(li, a.alert_id);
       ol.appendChild(li);
     }
   }
@@ -1024,15 +1031,34 @@
   // ── views ─────────────────────────────────────────────────────────
   var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "flows", "history",
                "lookup"];
-  var view = "overview";
-  function show(v) {
+  // The views with a tab, and the drill-downs: the Alerts page (6),
+  // an alert's page, the record ticker by type, the sensor's health.
+  var NAV = VIEWS.concat(["alerts"]);
+  VIEWS = NAV.concat(["alert", "records", "health"]);
+  // The tab lit for a view without one of its own.
+  var NAV_OF = { "alert": "alerts", "records": "overview", "health": "overview" };
+  // The parameters each view takes from the address, and nothing else:
+  // what a drill-down link (an Overview tile) or a reload hands it.
+  var PARAMS = { "alerts": ["state", "sev", "type", "q"], "alert": ["id"],
+                 "devices": ["q"], "anomalies": ["state"], "activity": ["focus"] };
+  var view = "overview", VP = {};
+  function hashQuery(v, p) {
+    var keys = PARAMS[v] || [], out = [];
+    for (var i = 0; i < keys.length; i++)
+      if (p && typeof p[keys[i]] === "string" && p[keys[i]] !== "")
+        out.push(encodeURIComponent(keys[i]) + "=" + encodeURIComponent(p[keys[i]]));
+    return out.length ? "?" + out.join("&") : "";
+  }
+  function show(v, p) {
     view = v;
-    for (var i = 0; i < VIEWS.length; i++) {
-      $("v-" + VIEWS[i]).hidden = v !== VIEWS[i];
-      var nb = $("nav-" + VIEWS[i]);
-      nb.className = v === VIEWS[i] ? "on" : "go";
+    VP = p || {};
+    var lit = NAV_OF[v] || v;
+    for (var i = 0; i < VIEWS.length; i++) $("v-" + VIEWS[i]).hidden = v !== VIEWS[i];
+    for (i = 0; i < NAV.length; i++) {
+      var nb = $("nav-" + NAV[i]);
+      nb.className = lit === NAV[i] ? "on" : "go";
       // ARIA reflection, not an attribute write: the page has none.
-      nb.ariaCurrent = v === VIEWS[i] ? "page" : null;
+      nb.ariaCurrent = lit === NAV[i] ? "page" : null;
     }
     if (v === "activity") activity();
     if (v === "anomalies") anomalies();
@@ -1042,21 +1068,48 @@
     if (v === "flows") flows();
     if (v === "history") historyView();
     if (v === "lookup") $("l-q").focus();
+    if (v === "alerts") alertsView();
+    if (v === "alert") alertView();
+    if (v === "records") recordsView();
+    if (v === "health") healthView();
     if (DB_VIEWS.indexOf(v) >= 0) dbFresh();
-    // The view is in the address (#flows), so a reload or a link opens
-    // it again; replaceState, so Back leaves the page as before.
-    // Only a sandboxed frame's refusal is expected; anything else is a
-    // bug and is left to surface rather than be swallowed here.
-    try { window.history.replaceState(null, "", "#" + v); } catch (e) { if (e.name !== "SecurityError") throw e; }
+    // The view is in the address (#flows, #alerts?state=open), so a
+    // reload or a link opens it again; replaceState, so Back leaves the
+    // page as before. Only a sandboxed frame's refusal is expected;
+    // anything else is a bug and is left to surface rather than be
+    // swallowed here.
+    var hq = hashQuery(v, VP);
+    try {
+      if (hq) window.history.replaceState(null, "", "#" + v + hq);
+      else window.history.replaceState(null, "", "#" + v);
+    } catch (e) { if (e.name !== "SecurityError") throw e; }
   }
-  // The view named in the address, if it is one.
-  function hashView() {
+  // The view named in the address, if it is one, and its parameters.
+  function hashRoute() {
     var h = String(location.hash || "").replace(/^#/, "");
-    return VIEWS.indexOf(h) >= 0 ? h : "";
+    var at = h.indexOf("?"), v = at < 0 ? h : h.slice(0, at), p = {};
+    if (VIEWS.indexOf(v) < 0) return null;
+    if (at >= 0) h.slice(at + 1).split("&").forEach(function (kv) {
+      var eq = kv.indexOf("=");
+      if (eq <= 0) return;
+      try {
+        var k = decodeURIComponent(kv.slice(0, eq));
+        if ((PARAMS[v] || []).indexOf(k) >= 0) p[k] = decodeURIComponent(kv.slice(eq + 1));
+      } catch (e) { /* a malformed escape: the parameter is left out */ }
+    });
+    return { v: v, p: p };
+  }
+  function hashView() { var r = hashRoute(); return r ? r.v : ""; }
+  // To a view with parameters, as a new entry in the history, so Back
+  // returns to where the link was followed from.
+  function go(v, p) {
+    var h = "#" + v + hashQuery(v, p);
+    if (location.hash === h) show(v, p);
+    else location.hash = h;
   }
   window.addEventListener("hashchange", function () {
-    var h = hashView();
-    if (h && h !== view) show(h);
+    var r = hashRoute();
+    if (r) show(r.v, r.p);
   });
   $("nav-overview").addEventListener("click", function () { show("overview"); });
   $("nav-activity").addEventListener("click", function () { show("activity"); });
@@ -1066,6 +1119,7 @@
   $("nav-flows").addEventListener("click", function () { show("flows"); });
   $("nav-history").addEventListener("click", function () { show("history"); });
   $("nav-lookup").addEventListener("click", function () { show("lookup"); });
+  $("nav-alerts").addEventListener("click", function () { show("alerts"); });
 
   // ── the theme toggle ──────────────────────────────────────────────
   // Light or dark on :root's data-theme, the choice kept in this
@@ -1084,7 +1138,9 @@
     try { window.localStorage.setItem(THEME_KEY, light ? "light" : "dark"); } catch (e) { /* none */ }
     TH = null;
     themeLabel();
-    if (view !== "lookup") show(view);
+    // Redrawn with its parameters: an alert's page keeps its id, a
+    // drill-down its filter.
+    if (view !== "lookup") show(view, VP);
     if (!$("drawer").hidden && D.sel) openDrawer(D.sel);
   });
 
@@ -1095,7 +1151,8 @@
     if ((e.key === "Enter" || e.key === " ") && t && t.tabIndex === 0 && t.classList &&
         (t.classList.contains("drow") || t.classList.contains("hrow") ||
          t.classList.contains("frow") || t.classList.contains("card") ||
-         t.classList.contains("anrow"))) {
+         t.classList.contains("anrow") || t.classList.contains("alprow") ||
+         t.classList.contains("rcrow") || t.classList.contains("go"))) {
       e.preventDefault();
       t.click();
       return;
@@ -1107,6 +1164,7 @@
     if (e.key === "3") show("devices");
     if (e.key === "4") show("anomalies");
     if (e.key === "5") show("wifi");
+    if (e.key === "6") show("alerts");
     if (e.key === "7") show("flows");
     if (e.key === "8") show("history");
     if (e.key === "9") show("lookup");
@@ -1599,6 +1657,12 @@
   });
 
   function anomalies() {
+    // The open-anomalies tile's view: every open episode, whatever the
+    // sensitivity or the chips say, so the count is the tile's.
+    var openOnly = view === "anomalies" && VP.state === "open";
+    $("n-filter").hidden = !openOnly;
+    if (openOnly) set("n-filter-t", "filtered: open episodes only, every one, the sensitivity not applied: the " +
+                      $("k-anoms").textContent + " the Overview's open-anomalies tile counts");
     var gen = ++N.gen;
     var now = Math.floor(Date.now() / 1000);
     var win = Number($("n-win").value) || 3600;
@@ -1606,7 +1670,8 @@
     if (N.kind) p += "&kind=" + encodeURIComponent(N.kind);
     getJSON(p).then(function (j) {
       if (gen !== N.gen) return;
-      var list = (j.anomalies || []).filter(shown);
+      var list = (j.anomalies || []).filter(openOnly
+        ? function (a) { return a.open === true && (!N.kind || a.kind === N.kind); } : shown);
       N.list = list;
       if (N.table) anomTable();
       var box = $("n-cards");
@@ -1765,6 +1830,7 @@
 
   var started = false;
   function activity() {
+    activityFocus();
     if (started) { fillKeys().then(refresh); return; }
     started = true;
     getJSON("/api/metrics").then(function (j) {
@@ -1846,6 +1912,18 @@
     ] });
 
   function devices() {
+    // A drill-down's query (the devices tile: pass:latest) is put in
+    // the search box, so the filter applied is the one on screen, and
+    // named in the bar above it; the view without one clears it.
+    if (view === "devices") {
+      if (typeof VP.q === "string") { $("d-q").value = VP.q; D.drill = VP.q; }
+      else if (D.drill !== undefined) { if ($("d-q").value === D.drill) $("d-q").value = ""; D.drill = undefined; }
+      $("d-filter").hidden = typeof VP.q !== "string";
+      if (VP.q === "pass:latest")
+        set("d-filter-t", "filtered: pass:latest, the devices in sloth's latest pass, the " +
+            $("k-devs").textContent + " the Overview's devices tile counts");
+      else if (typeof VP.q === "string") set("d-filter-t", "filtered: " + VP.q);
+    }
     var gen = ++D.gen;
     var wd = DTD.word();
     var q = $("d-q").value.trim(), sort = wd ? wd.sort : $("d-sort").value, dir = wd ? wd.dir : "";
@@ -1858,7 +1936,9 @@
         if (more && num(j.next_offset) && rows.length < DEV_MAX) return page(j.next_offset);
         D.rows = DTD.sort(rows.slice(0, DEV_MAX), !more && rows.length <= DEV_MAX);
         set("d-count", D.rows.length + " shown" +
-            (more || rows.length > DEV_MAX ? "; the first " + D.rows.length + ", narrow the search" : ""));
+            (more || rows.length > DEV_MAX ? "; the first " + D.rows.length + ", narrow the search" : "") +
+            (q.indexOf("pass:latest") >= 0 && num(j.pass_size)
+              ? "; " + j.pass_size + " in the latest pass, " + D.rows.length + " of them in sloth.db" : ""));
         set("d-note", "vendor table " + j.vendor_table + ", sloth.db schema v" + j.db_schema);
         layout();
       });
@@ -2074,7 +2154,8 @@
     "associations": ["mac", "bssid"], "arp addresses": ["ip", "addr"],
     "arp macs": ["mac", "addr"], "alerts naming it": ["text", "title"]
   };
-  function itemList(box, title, items, line, more) {
+  // link, when given, names an item's alert page ("" for none).
+  function itemList(box, title, items, line, more, link) {
     var lab = el("div", "label", title + (more ? " (more than shown)" : ""));
     var tools = el("span", "dt-tools");
     lab.appendChild(tools);
@@ -2091,6 +2172,7 @@
         var li = el("li", "lsrow dt-row");
         li.appendChild(el("span", "ts", shortStamp(it.last_seen)));
         li.appendChild(valNode("tx", line(it)));
+        if (link && link(it)) alertLink(li, link(it));
         ol.appendChild(li);
       });
     }
@@ -2164,8 +2246,15 @@
         sp.appendChild(el("span", "ty", ok ? SEV_WORD[x.sev] : "?"));
         sp.appendChild(el("span", "d-bright", "  " + x.title));
         sp.appendChild(el("span", x.count > 1 ? heatClass(0.6) : "d-dim", "  x" + x.count));
+        if (num(x.incidents) && x.incidents > 1)
+          sp.appendChild(el("span", heatClass(0.6), "  " + x.incidents + " incidents"));
         return sp;
-      }, j.alerts_more);
+      }, j.alerts_more, function (x) { return typeof x.id === "string" ? x.id : ""; });
+      // The request's budget stopped sloth.db's walk short of the table's
+      // end: the list and its figures are of the rows back to here.
+      if (num(j.alerts_reached))
+        box.appendChild(el("div", "sub", "alerts read back to " + stamp(j.alerts_reached) +
+                           " only (the request's time budget)"));
       drawStrip($("dr-strip"), j.presence);
       var wk = j.week || {};
       var cells = null;
@@ -3151,7 +3240,9 @@
       { k: "sev", label: "sev", w: 6, min: 3, type: "sev", val: hal("sev") },
       { k: "ti", label: "alert", w: 16, flex: true, type: "text", val: hal("title") },
       { k: "ip", label: "ip", w: 15, type: "ip", val: hal("ip") },
-      { k: "n", label: "count", w: 7, num: true, type: "num", val: hal("count") }
+      { k: "n", label: "count", w: 7, num: true, type: "num", val: hal("count") },
+      // One row per alert key: its incidents in the range, collapsed.
+      { k: "in", label: "incidents", w: 9, num: true, type: "num", val: hal("incidents") }
     ] });
   var DTHF = DataTable({ id: "hflows", label: "flows in the range", box: $("h-flows-box"),
     head: $("h-flows-head"), reset: $("h-flows-tools"), redraw: function () { histFlows(); }, cols: [
@@ -3201,6 +3292,9 @@
                                          : el("span", "d-normal", String(a.ip)));
       li.appendChild(ip);
       li.appendChild(el("span", "n " + (a.count > 1 ? heatClass(0.6) : "d-dim"), "x" + a.count));
+      li.appendChild(el("span", "n " + (num(a.incidents) && a.incidents > 1 ? heatClass(0.6) : "d-dim"),
+                        num(a.incidents) ? String(a.incidents) : "-"));
+      if (typeof a.id === "string") alertLink(li, a.id);
       ol.appendChild(li);
     });
     if (!HS.alerts.length) ol.appendChild(el("li", "sub", "none in the range"));
@@ -3241,7 +3335,13 @@
       });
       HS.alerts = j.alerts || [];
       histAlerts();
-      set("h-al-count", (j.alerts || []).length + (j.more ? "+" : ""));
+      // The keys come from the range's newest rows; capped, a key seen
+      // only before sc.oldest is not listed (each listed key is counted
+      // over the whole range).
+      var hs = j.scan || {};
+      set("h-al-count", (j.alerts || []).length + (j.more ? "+" : "") +
+          (hs.capped ? "; keys from the newest " + hs.cap + " rows, back to " +
+            (num(hs.oldest) ? stamp(hs.oldest) : "?") : ""));
     }).catch(function (e) { if (gen === HS.gen) set("h-al-count", errText(e.message)); });
     getJSON(histPath("flows", from, to, "&limit=100")).then(function (j) {
       if (gen !== HS.gen) return;
@@ -3411,13 +3511,676 @@
   });
   $("q-run").addEventListener("click", runQuery);
 
+  // ── the Alerts page and an alert's page (owner request 2026-10-23..26)
+  // /api/alerts: the stream's open incidents first, then the closed
+  // ones and sloth.db's rows, every row of one alert key collapsed into
+  // one with its count of incidents. /api/alert?id=: what it is, why it
+  // matters, how to investigate and fix it (built in from the rule
+  // table, the wiki, the research corpus and the remediation page), the
+  // evidence, the key's incidents as runs, the device it names. An id is
+  // the server's opaque "s<handle>" or "d<rowid>", checked here before
+  // it goes anywhere; it is never alerts.key nor sloth's incident_id.
+  var ALERT_ID_RE = /^[sd][0-9A-Za-z]{1,24}$/;
+  var SEV_SET = { "": 1, "crit": 1, "warn": 1, "low": 1, "warn,crit": 1 };
+  var STATE_SET = { "all": 1, "open": 1, "closed": 1 };
+  var EV_WORD = { "create": "opened", "update": "updated", "escalate": "escalated", "resolve": "closed" };
+  var ALP = { gen: 0, offset: 0, timer: 0, types: [], rows: [], more: false };
+
+  function sevOf(v) { return num(v) && v >= 0 && v <= 2 ? v : -1; }
+
+  function openAlert(id) {
+    if (typeof id !== "string" || !ALERT_ID_RE.test(id)) return;
+    go("alert", { id: id });
+  }
+
+  // An item that opens an alert's page, by click or by Enter.
+  function alertLink(li, id) {
+    if (typeof id !== "string" || !ALERT_ID_RE.test(id)) return;
+    li.classList.add("go");
+    li.tabIndex = 0;
+    li.role = "link";
+    li.addEventListener("click", function () { openAlert(id); });
+  }
+
+  function alertsQuery(off) {
+    var p = [];
+    var st = $("al-state").value;
+    if (st !== "all") p.push("state=" + encodeURIComponent(st));
+    var sv = $("al-sev").value;
+    if (sv) p.push("sev=" + encodeURIComponent(sv));
+    var ty = $("al-type").value;
+    if (ty) p.push("type=" + encodeURIComponent(ty));
+    // One word: the server's parameters take no space.
+    var q = $("al-q").value.trim().split(/\s+/)[0] || "";
+    if (q) p.push("q=" + encodeURIComponent(q));
+    p.push("window=" + encodeURIComponent($("al-win").value));
+    p.push("limit=50");
+    if (off) p.push("offset=" + off);
+    return p.join("&");
+  }
+
+  function alertsView() {
+    // A drill-down's filter (the open-alerts tile: state=open) set in
+    // the controls, so the filter applied is the one on screen.
+    $("al-state").value = STATE_SET[VP.state] ? VP.state : "all";
+    $("al-sev").value = typeof VP.sev === "string" && SEV_SET[VP.sev] ? VP.sev : "";
+    if (typeof VP.q === "string") $("al-q").value = VP.q;
+    else if (ALP.drillQ !== undefined) { $("al-q").value = ""; }
+    ALP.drillQ = VP.q;
+    ALP.wantType = typeof VP.type === "string" ? VP.type : "";
+    // The drill-down as asked, to tell when the controls have left it.
+    ALP.drill = (STATE_SET[VP.state] && VP.state !== "all") || (VP.sev && SEV_SET[VP.sev]) ||
+               ALP.wantType || (typeof VP.q === "string" && VP.q)
+      ? { state: $("al-state").value, sev: $("al-sev").value, type: ALP.wantType,
+          q: typeof VP.q === "string" ? (VP.q.trim().split(/\s+/)[0] || "") : "" }
+      : null;
+    $("al-filter").hidden = true;
+    alertsLoad(true);
+    if (!ALP.timer) ALP.timer = setInterval(function () { if (view === "alerts" && !ALP.offset) alertsLoad(true); }, 10000);
+  }
+
+  function alertRow(a) {
+    var sev = sevOf(a.sev);
+    var row = el("div", "alprow dt-row" + (a.state === "open" ? " open" : ""));
+    row.appendChild(el("span", "ty " + (sev >= 0 ? "sev" + sev : ""), sev >= 0 ? SEV_WORD[sev] : "?"));
+    var t = el("span", "");
+    t.appendChild(el("span", "d-bright", String(a.title)));
+    if (typeof a.type_name === "string" && a.type_name !== a.title)
+      t.appendChild(el("span", "d-dim", "  " + a.type_name));
+    t.appendChild(el("span", "d-dim", "  " + (a.state === "recorded" ? "sloth.db" : a.state)));
+    row.appendChild(t);
+    row.appendChild(el("span", "d-normal", a.technique === null ? "-" : String(a.technique)));
+    var host = el("span", "");
+    if (typeof a.ip === "string" && isIP(a.ip)) {
+      noteAlertIp(a.ip, a.last_seen, sev);
+      host.appendChild(ipSpan(a.ip, IP_SRC.alert));
+      if (num(a.port) && a.port > 0) host.appendChild(el("span", "d-dim", ":" + a.port));
+    } else {
+      host.appendChild(el("span", "d-dim", "-"));
+    }
+    row.appendChild(host);
+    row.appendChild(el("span", "d-dim", shortStamp(a.first_seen)));
+    row.appendChild(el("span", "d-dim", shortStamp(a.last_seen)));
+    row.appendChild(el("span", "n d-normal", fmt(a.count)));
+    row.appendChild(el("span", "n " + (num(a.incidents) && a.incidents > 1 ? heatClass(0.6) : "d-dim"),
+                       num(a.incidents) ? String(a.incidents) : "-"));
+    row.tabIndex = 0;
+    row.role = "link";
+    var id = a.id;
+    row.addEventListener("click", function () { openAlert(id); });
+    return row;
+  }
+
+  // The list is a table: the rows held, in the server's order (open
+  // first, then the newest change) until a header sorts them.
+  var DTALP = DataTable({ id: "alertspage", label: "alerts", box: $("al-box"), head: $("al-head"),
+    reset: $("al-tools"), redraw: alertsDraw, cols: [
+      { k: "sev", label: "sev", w: 5, min: 3, type: "sev", val: function (a) { return a.sev; } },
+      { k: "ti", label: "title / type", w: 24, flex: true, type: "text", val: function (a) { return a.title; } },
+      { k: "te", label: "ATT&CK", w: 10, type: "text", val: function (a) { return a.technique; } },
+      { k: "ip", label: "host", w: 18, type: "ip", val: function (a) { return a.ip; } },
+      { k: "fs", label: "first", w: 11, type: "time", val: function (a) { return a.first_seen; } },
+      { k: "ls", label: "last", w: 11, type: "time", val: function (a) { return a.last_seen; } },
+      { k: "n", label: "count", w: 7, num: true, type: "num", val: function (a) { return a.count; } },
+      { k: "in", label: "incidents", w: 9, num: true, type: "num", val: function (a) { return a.incidents; } }
+    ] });
+  function alertsDraw() {
+    var box = $("al-rows");
+    while (box.firstChild) box.removeChild(box.firstChild);
+    DTALP.sort(ALP.rows || [], !ALP.more).forEach(function (a) { box.appendChild(alertRow(a)); });
+    if (!(ALP.rows || []).length) box.appendChild(el("div", "sub", "no alert matches"));
+  }
+
+  function typeOptions(types) {
+    var sel = $("al-type"), keep = ALP.wantType || sel.value;
+    while (sel.firstChild) sel.removeChild(sel.firstChild);
+    var any = el("option", "", "any");
+    any.value = "";
+    sel.appendChild(any);
+    var seen = false;
+    (types || []).forEach(function (t) {
+      if (typeof t.name !== "string") return;
+      var o = el("option", "", t.name + " (" + t.n + ")");
+      o.value = t.name;
+      if (t.name === keep) seen = true;
+      sel.appendChild(o);
+    });
+    if (keep && !seen) {
+      var o = el("option", "", keep + " (0)");
+      o.value = keep;
+      sel.appendChild(o);
+    }
+    sel.value = keep || "";
+    ALP.wantType = "";
+  }
+
+  // The drill-down's banner, from the controls as they stand and the
+  // answer just read: rebuilt on every load, gone once a control has
+  // moved off the drill-down (the list then says what it shows itself).
+  function alertsBanner(j) {
+    var d = ALP.drill, ty = $("al-type").value;
+    var q = $("al-q").value.trim().split(/\s+/)[0] || "";
+    if (!d || $("al-state").value !== d.state || $("al-sev").value !== d.sev ||
+        (d.type && ty !== d.type) || (!d.type && ty) || q !== d.q) {
+      ALP.drill = null;
+      $("al-filter").hidden = true;
+      return;
+    }
+    var filt = [];
+    if (d.state === "open")
+      filt.push("open incidents only, " + j.open + " of the " + j.open_all +
+                " the Overview's open-alerts tile counts");
+    else if (d.state !== "all") filt.push("state " + d.state);
+    if (d.sev) filt.push("severity " + d.sev);
+    if (d.type) filt.push("type " + d.type);
+    if (d.q) filt.push("search " + d.q);
+    $("al-filter").hidden = !filt.length;
+    set("al-filter-t", "filtered: " + filt.join(", "));
+  }
+
+  function alertsLoad(fresh) {
+    var gen = ++ALP.gen;
+    if (fresh) ALP.offset = 0;
+    if (ALP.wantType) typeOptions([]);
+    getJSON("/api/alerts?" + alertsQuery(ALP.offset)).then(function (j) {
+      if (gen !== ALP.gen) return;
+      if (fresh) ALP.rows = [];
+      ALP.rows = ALP.rows.concat(j.rows || []);
+      ALP.more = !!j.more;
+      alertsDraw();
+      ALP.offset += num(j.count) ? j.count : 0;
+      $("al-more").hidden = !j.more || !num(j.next_offset);
+      if (fresh) typeOptions(j.types);
+      alertsBanner(j);
+      set("al-count", ALP.offset + " of " + j.total + (j.total_more ? "+" : "") + " shown, " +
+          j.open + " open");
+      var sc = j.scan || {};
+      // The filters are applied inside sloth.db's bounded read, so a
+      // capped answer is the newest matching rows, back to sc.oldest.
+      set("al-note", "stream " + j.stream + ", sloth.db " + j.db +
+          (num(sc.rows) && $("al-state").value !== "open" ? "; " + sc.rows + " matching sloth.db rows read" +
+            (sc.capped ? ", the newest " + sc.cap + " only, back to " +
+              (num(sc.oldest) ? stamp(sc.oldest) : "?") + ": narrow the window or the filters to reach older ones" : "") : ""));
+    }).catch(function (e) {
+      if (gen !== ALP.gen) return;
+      set("al-count", "");
+      set("al-note", errText(e.message));
+    });
+  }
+  ["al-state", "al-sev", "al-type", "al-win"].forEach(function (id) {
+    $(id).addEventListener("change", function () { alertsLoad(true); });
+  });
+  $("al-q").addEventListener("input", function () {
+    if (ALP.qt) clearTimeout(ALP.qt);
+    ALP.qt = setTimeout(function () { ALP.qt = 0; alertsLoad(true); }, 300);
+  });
+  $("al-more").addEventListener("click", function () { alertsLoad(false); });
+
+  function prose(box, text, cls) {
+    if (typeof text !== "string" || text === "") return;
+    text.split("\n\n").forEach(function (para) { box.appendChild(el("div", "prose" + (cls ? " " + cls : ""), para)); });
+  }
+
+  // Text whose `code spans` are set as code: split on the backticks,
+  // every piece by textContent.
+  function codeProse(box, text, cls) {
+    if (typeof text !== "string" || text === "") return;
+    var d = el("div", "prose" + (cls ? " " + cls : ""));
+    text.split("`").forEach(function (part, i) {
+      if (part === "") return;
+      d.appendChild(i % 2 ? el("code", "", part) : document.createTextNode(part));
+    });
+    box.appendChild(d);
+  }
+
+  function steps(box, title, list) {
+    box.appendChild(el("div", "label", title));
+    var ol = el("ol", "steps");
+    (list || []).forEach(function (t) { ol.appendChild(el("li", "", String(t))); });
+    if (!list || !list.length) ol.appendChild(el("li", "sub", "none written"));
+    box.appendChild(ol);
+  }
+
+  function clear(id) {
+    var b = $(id);
+    while (b.firstChild) b.removeChild(b.firstChild);
+    return b;
+  }
+
+  var AD = { gen: 0, runs: [], runsOf: "", others: [] };
+  // The key's incidents as runs, and the device's other alerts: tables,
+  // newest first until a header sorts them.
+  var DTRUN = DataTable({ id: "alertruns", label: "history of this alert", box: $("ad-history-box"),
+    head: $("ad-history-head"), reset: $("ad-history-tools"), redraw: runsDraw, cols: [
+      { k: "fr", label: "from", w: 10, type: "time", val: function (r) { return r.from; } },
+      { k: "sev", label: "sev", w: 6, min: 3, type: "sev", val: function (r) { return r.sev; } },
+      { k: "sp", label: "span", w: 24, flex: true, type: "time", val: function (r) { return r.to; } },
+      { k: "in", label: "incidents", w: 9, num: true, type: "num", val: function (r) { return r.incidents; } },
+      { k: "n", label: "count", w: 8, num: true, type: "num", val: function (r) { return r.count; } }
+    ] });
+  var DTADA = DataTable({ id: "alertdev", label: "its other alerts", box: $("ad-dev-alerts-box"),
+    head: $("ad-dev-alerts-head"), reset: $("ad-dev-alerts-tools"), redraw: othersDraw, cols: [
+      { k: "ls", label: "last", w: 10, type: "time", val: function (x) { return x.last_seen; } },
+      { k: "sev", label: "sev", w: 6, min: 3, type: "sev", val: function (x) { return x.sev; } },
+      { k: "ti", label: "alert", w: 24, flex: true, type: "text", val: function (x) { return x.title; } },
+      { k: "in", label: "incidents", w: 9, num: true, type: "num", val: function (x) { return x.incidents; } }
+    ] });
+  function runsDraw() {
+    var ol = clear("ad-history-b");
+    DTRUN.sort(AD.runs).forEach(function (r) {
+      var s3 = sevOf(r.sev);
+      var li = el("li", (s3 >= 0 ? "sev" + s3 : "") + " arnrow dt-row");
+      li.appendChild(el("span", "ts", shortStamp(r.from)));
+      li.appendChild(el("span", "ty", s3 >= 0 ? SEV_WORD[s3] : "?"));
+      li.appendChild(el("span", "tx d-normal", stamp(r.from) + " to " + stamp(r.to)));
+      li.appendChild(el("span", "n " + (r.incidents > 1 ? heatClass(0.6) : "d-dim"), String(r.incidents)));
+      li.appendChild(el("span", "n d-dim", "x" + fmt(r.count)));
+      if (r.id !== AD.runsOf) alertLink(li, r.id);
+      ol.appendChild(li);
+    });
+    if (!AD.runs.length) ol.appendChild(el("li", "sub", AD.runsNone || "none"));
+  }
+  function othersDraw() {
+    var ol = clear("ad-dev-alerts");
+    DTADA.sort(AD.others).forEach(function (x) {
+      var s4 = sevOf(x.sev);
+      var li = el("li", (s4 >= 0 ? "sev" + s4 : "") + " adarow dt-row");
+      li.appendChild(el("span", "ts", shortStamp(x.last_seen)));
+      li.appendChild(el("span", "ty", s4 >= 0 ? SEV_WORD[s4] : "?"));
+      li.appendChild(el("span", "tx d-bright", String(x.title)));
+      li.appendChild(el("span", "n " + (num(x.incidents) && x.incidents > 1 ? heatClass(0.6) : "d-dim"),
+                        num(x.incidents) ? String(x.incidents) : "-"));
+      if (typeof x.id === "string") alertLink(li, x.id);
+      ol.appendChild(li);
+    });
+    if (!AD.others.length) ol.appendChild(el("li", "sub", AD.othersNone || "none"));
+  }
+  function alertView() {
+    var id = VP.id;
+    var gen = ++AD.gen;
+    ["ad-title", "ad-what-b", "ad-why-b", "ad-fix-b", "ad-evidence-b", "ad-history-b",
+     "ad-device-b", "ad-dev-alerts", "ad-dev-anoms"].forEach(clear);
+    drawStrip($("ad-strip"), null);
+    if (typeof id !== "string" || !ALERT_ID_RE.test(id)) {
+      set("ad-head", "no alert named");
+      set("ad-note", "");
+      return;
+    }
+    set("ad-head", "loading");
+    getJSON("/api/alert?id=" + encodeURIComponent(id)).then(function (j) {
+      if (gen !== AD.gen) return;
+      alertPage(j);
+    }).catch(function (e) {
+      if (gen !== AD.gen) return;
+      set("ad-head", e.message === "no_such_alert" ? "no such alert: it may have closed and left the stream"
+                                                   : errText(e.message));
+    });
+  }
+
+  function alertPage(j) {
+    var sev = sevOf(j.sev), k = j.kb || null;
+    set("ad-head", (j.type_name || j.title) + ": " + j.state + ", from " + j.source);
+    set("ad-note", "sloth.db " + j.db);
+    var t = $("ad-title");
+    t.appendChild(el("span", "ty " + (sev >= 0 ? "sev" + sev : ""), sev >= 0 ? SEV_WORD[sev] : "?"));
+    t.appendChild(el("span", "d-bright", String(j.title)));
+    if (typeof j.type_name === "string" && j.type_name !== j.title)
+      t.appendChild(el("span", "d-dim", "  " + j.type_name));
+    if (typeof j.ip === "string" && isIP(j.ip)) {
+      noteAlertIp(j.ip, j.last_seen, sev);
+      t.appendChild(document.createTextNode("  "));
+      t.appendChild(ipSpan(j.ip, IP_SRC.alert));
+    }
+
+    // (a) what it is
+    var w = $("ad-what-b");
+    if (k) {
+      prose(w, k.summary || k.what);
+      // The rule table's whole entry, its engineering history included,
+      // folded away: the page leads with the one sentence above.
+      if (k.what && k.what !== k.summary) {
+        var dt = el("details", "kbfull");
+        dt.appendChild(el("summary", "", "details: the rule table's full entry (docs/views/alerts.md)"));
+        codeProse(dt, k.what, "dim");
+        w.appendChild(dt);
+      }
+      kvList(w, [["severity now", sev >= 0 ? el("span", "sev" + sev, SEV_WORD[sev]) : null],
+                 ["the rule's", k.sev],
+                 ["ATT&CK", j.technique || k.technique || "none: not an adversary technique (agents/AGENTS.md)"],
+                 ["names", k.match]]);
+      if (k.context) {
+        w.appendChild(el("div", "label", "in sloth's docs (docs/wiki/alerts.md)"));
+        prose(w, k.context, "dim");
+      }
+    } else {
+      w.appendChild(el("div", "sub", "an alert type this build does not know"));
+    }
+
+    // (b) why it matters: the corpus documents that cite it
+    var y = $("ad-why-b");
+    if (k && k.sources && k.sources.length) {
+      k.sources.forEach(function (s) {
+        var d = el("div", "src");
+        d.appendChild(el("div", "cit", String(s.citation)));
+        prose(d, s.lead);
+        prose(d, s.excerpt, "dim");
+        d.appendChild(el("div", "path", String(s.path)));
+        // A source's address as text to copy, not a link: the page
+        // sends nothing anywhere but its own server.
+        if (s.url) d.appendChild(el("div", "url", String(s.url)));
+        y.appendChild(d);
+      });
+    } else {
+      y.appendChild(el("div", "sub", "no corpus document: this reports sloth's own operational state, which has no outside source to cite (agents/AGENTS.md)"));
+    }
+
+    // (c) how to investigate and fix it
+    var f = $("ad-fix-b");
+    if (k) {
+      steps(f, "investigate", k.investigate);
+      steps(f, "fix", k.fix);
+      kvList(f, [["vendor fix", k.vendor_fix], ["rests on", (k.fix_sources || []).join(", ")]]);
+    }
+
+    // (d) the evidence
+    var ev = $("ad-evidence-b");
+    var hist = el("span", "");
+    (j.sev_history || []).forEach(function (h, i) {
+      var s2 = sevOf(h.sev);
+      if (i) hist.appendChild(el("span", "d-dim", ", "));
+      hist.appendChild(el("span", s2 >= 0 ? "sev" + s2 : "", (EV_WORD[h.ev] || "?") + " " +
+                          (s2 >= 0 ? SEV_WORD[s2] : "?")));
+      hist.appendChild(el("span", "d-dim", " " + stamp(h.ts)));
+    });
+    var pcap = j.pcap === true ? "sloth saved a pcap of this alert's frames (on the sensor, --pcap-dir)"
+             : j.pcap === false ? "none saved" : "not known: only the stream's records say";
+    var detail;
+    if (typeof j.detail === "string") detail = richText(el("span", ""), j.detail, 0, "d-normal");
+    else if (j.detail_shown === false)
+      detail = el("span", "d-dim", "withheld: this type's detail can carry a credential or free text (web/src/web_alertfmt.h)");
+    else detail = "-";
+    kvList(ev, [["state", j.state + (j.reason ? ", " + j.reason : "")],
+                ["severity", (j.sev_history || []).length ? hist : (sev >= 0 ? SEV_WORD[sev] : "?")],
+                ["first seen", stamp(j.first_seen)], ["last seen", stamp(j.last_seen)],
+                ["closed", num(j.closed_at) ? stamp(j.closed_at) : null],
+                ["count", fmt(j.count) + " evaluations, every incident of the key" +
+                  (num(j.latest_count) && j.latest_count !== j.count ? " (" + fmt(j.latest_count) +
+                   " in the one this page opened on)" : "")],
+                ["observations", num(j.observations) ? fmt(j.observations) : null],
+                ["incidents", String(j.incidents)],
+                ["pcap", pcap], ["detail", detail],
+                ["also", j.stream_id && j.db_id && j.id !== j.db_id ? "sloth.db's rows of it: " + j.db_id : null]]);
+
+    // (e) the history of this alert: every incident of its key, as runs
+    var h2 = j.history || {};
+    AD.runs = h2.runs || [];
+    AD.runsOf = j.id;
+    AD.runsNone = j.db === "open" ? "no sloth.db row yet" : "sloth.db is " + j.db;
+    runsDraw();
+    set("ad-history-note", (num(h2.incidents_read) ? h2.incidents_read + " incidents read" : "") +
+        (num(h2.gap_s) ? "; incidents less than " + Math.round(h2.gap_s / 60) + " min apart are one run" : "") +
+        (h2.more ? "; more than shown" : ""));
+
+    // (f) the device it names
+    alertDevice(j);
+  }
+
+  function alertDevice(j) {
+    var dev = j.device || {}, box = $("ad-device-b"), gen = AD.gen;
+    if (typeof dev.mac === "string" && MAC_RE.test(dev.mac)) {
+      var mac = dev.mac;
+      set("ad-device-note", "sloth.db's record of " + mac);
+      getJSON("/api/device/" + encodeURIComponent(mac)).then(function (d) {
+        if (gen !== AD.gen) return;
+        var r = d.record || {};
+        kvList(box, [["mac", macVal(mac)], ["vendor", d.oui && d.oui.found ? d.oui.vendor : null],
+                     ["ip", ipVal(r.ip, IP_SRC.dev)], ["name", hostVal(r.name)],
+                     ["first seen", num(r.first_seen) ? stamp(r.first_seen) : null],
+                     ["last seen", num(r.last_seen) ? stamp(r.last_seen) : null]]);
+        var b = el("button", "", "open the device drawer");
+        b.type = "button";
+        b.addEventListener("click", function () { openDrawer(mac); });
+        box.appendChild(b);
+        drawStrip($("ad-strip"), d.presence);
+        AD.others = (d.alerts || []).filter(function (x) { return x.id !== j.id && x.id !== j.db_id; });
+        AD.othersNone = "none";
+        othersDraw();
+        var an = $("ad-dev-anoms");
+        (d.anomalies || []).forEach(function (a) { an.appendChild(card(a)); });
+        if (!(d.anomalies || []).length) an.appendChild(el("div", "sub", "none"));
+      }).catch(function (e) { if (gen === AD.gen) set("ad-device-note", errText(e.message)); });
+    } else if (typeof dev.ip === "string" && isIP(dev.ip)) {
+      var ip = dev.ip;
+      set("ad-device-note", "the address it names; no sloth.db device holds it");
+      getJSON("/api/lookup?q=" + encodeURIComponent(ip)).then(function (l) {
+        if (gen !== AD.gen) return;
+        kvList(box, [["ip", ipVal(ip, IP_SRC.alert)], ["arp macs", (l.macs || []).map(function (m) { return m.addr; }).join(", ") || null]]);
+        itemList(box, "names (passive)", l.names, nameLine, false);
+        if (l.device && MAC_RE.test(l.device.mac)) {
+          var b = el("button", "", "open the device drawer");
+          b.type = "button";
+          b.addEventListener("click", function () { openDrawer(l.device.mac); });
+          box.appendChild(b);
+        }
+      }).catch(function (e) { if (gen === AD.gen) set("ad-device-note", errText(e.message)); });
+      AD.others = [];
+      AD.othersNone = "-";
+      othersDraw();
+    } else {
+      set("ad-device-note", "this alert names no device or address");
+      AD.others = [];
+      AD.othersNone = "-";
+      othersDraw();
+    }
+  }
+
+  // ── records by type: the records/s tile's view ─────────────────────
+  // /api/live's per-type rates, over the same five seconds as the tile's
+  // records/s, so they sum to it; and the ticker, one type or all.
+  var RC = { type: "", timer: 0, rows: [], extra: [], total: null, recent: [] };
+  // Both are tables: the types by rate until a header sorts them, the
+  // other-type and total rows kept under them; the records as the
+  // Overview's ticker draws them, newest first.
+  var DTRC = DataTable({ id: "rectypes", label: "records by type", box: $("rc-box"), head: $("rc-head"),
+    reset: $("rc-tools"), redraw: recordsDraw, cols: [
+      { k: "ty", label: "type", w: 16, flex: true, type: "text", val: function (x) { return x.n; } },
+      { k: "r", label: "records/s", w: 11, num: true, type: "num", val: function (x) { return x.r10; } },
+      { k: "c", label: "since connect", w: 14, num: true, type: "num", val: function (x) { return x.c; } }
+    ] });
+  var DTRT = DataTable({ id: "rectick", label: "records", box: $("rc-tbox"), head: $("rc-thead"),
+    reset: $("rc-ttools"), redraw: recordsTickDraw, cols: [
+      { k: "ts", label: "time", w: 9, type: "time", val: function (r) { return r.ts; } },
+      { k: "ty", label: "type", w: 14, type: "text", val: function (r) { return r.type; } },
+      { k: "tx", label: "record", w: 30, flex: true, type: "text", val: function (r) { return r.text; } }
+    ] });
+  function rcRow(cls, a, b, c) {
+    var row = el("div", "rcrow dt-row" + (cls ? " " + cls : ""));
+    row.appendChild(a);
+    row.appendChild(el("span", "n d-normal", b));
+    row.appendChild(el("span", "n d-dim", c));
+    return row;
+  }
+  function recordsDraw() {
+    var box = clear("rc-rows");
+    DTRC.sort(RC.rows).forEach(function (x) {
+      var row = rcRow(RC.type === x.n ? "on" : "", el("span", typeClass(x.n), x.n),
+                      (x.r10 / 10).toFixed(1), String(x.c));
+      row.tabIndex = 0;
+      row.addEventListener("click", function () { RC.type = RC.type === x.n ? "" : x.n; recordsLoad(); });
+      box.appendChild(row);
+    });
+    RC.extra.forEach(function (x) {
+      box.appendChild(rcRow("", el("span", "d-dim", x.n), (x.r10 / 10).toFixed(1), String(x.c)));
+    });
+    if (RC.total)
+      box.appendChild(rcRow("total", el("span", "", "all records"), (RC.total.r10 / 10).toFixed(1),
+                            String(RC.total.c)));
+  }
+  function recordsTickDraw() {
+    var ol = clear("rc-ticker");
+    DTRT.sort(RC.recent).forEach(function (r) { ol.appendChild(tickRow(r)); });
+    if (!RC.recent.length) ol.appendChild(el("li", "sub", "none in the last " + RC.seen + " records"));
+  }
+  function recordsView() {
+    recordsLoad();
+    if (!RC.timer) RC.timer = setInterval(function () { if (view === "records") recordsLoad(); }, 2000);
+  }
+  function recordsLoad() {
+    getJSON("/api/live").then(function (l) {
+      if (view !== "records") return;
+      var rates = l.types_rate || {}, counts = l.types || {};
+      var names = Object.keys(counts).sort(function (a, b) {
+        return (Number(rates[b]) || 0) - (Number(rates[a]) || 0) || (counts[b] - counts[a]);
+      });
+      var sum10 = 0;
+      RC.rows = names.map(function (n) {
+        var r10 = Math.round((Number(rates[n]) || 0) * 10);
+        sum10 += r10;
+        return { n: n, r10: r10, c: counts[n] };
+      });
+      RC.extra = [];
+      [["(other types)", l.types_other_rate, l.types_other], ["(not a type)", l.types_invalid_rate, l.types_invalid]]
+        .forEach(function (x) {
+          var r10 = Math.round((Number(x[1]) || 0) * 10);
+          sum10 += r10;
+          if (x[2]) RC.extra.push({ n: x[0], r10: r10, c: x[2] });
+        });
+      RC.total = { r10: sum10, c: l.records };
+      recordsDraw();
+      set("rc-note", "the rates sum to the tile's " + l.records_s + " records/s");
+      var recent = (l.recent || []).filter(function (r) { return !RC.type || r.type === RC.type; });
+      RC.recent = recent.slice().reverse();
+      RC.seen = (l.recent || []).length;
+      recordsTickDraw();
+      set("rc-tick-note", (RC.type ? RC.type + " only, " : "every type, ") + "of the last " +
+          (l.recent || []).length + " records");
+    }).catch(function (e) { set("rc-note", errText(e.message)); });
+  }
+
+  // ── the sensor's health: the sensor-health tile's view ─────────────
+  function healthView() {
+    var box = clear("hl-rows");
+    Promise.all([getJSON("/api/live"), getJSON("/api/health"),
+                 getJSON("/api/devices?limit=1&offset=0&sort=last").catch(function () { return null; })])
+      .then(function (r) {
+        if (view !== "health") return;
+        var l = r[0], h = r[1], d = r[2], s = l.sensor || {};
+        var word = el("span", "health-" + (s.state === "ok" ? "ok" : s.state === "unknown" ? "unknown" : "bad"),
+                      String(s.state));
+        var now = Math.floor(Date.now() / 1000);
+        var newest = d && d.rows && d.rows.length && num(d.rows[0].last_seen) ? d.rows[0].last_seen : null;
+        box.appendChild(el("div", "label", "the sensor (its sensor_health records)"));
+        kvList(box, [["state", word],
+                     ["report", num(s.age_s) ? dur(s.age_s) + " ago" : "no sensor_health yet"],
+                     ["capture", s.capture_iface ? s.capture_iface + (s.capture_open ? (s.capture_running ? " running" : " stopped") : " not open") +
+                                 (s.capture_exit ? ", " + s.capture_exit : "") : null],
+                     ["monitor", s.monitor_iface ? s.monitor_iface + (s.monitor_open ? (s.monitor_running ? " running" : " stopped") : " not open") +
+                                 (s.monitor_exit ? ", " + s.monitor_exit : "") : null],
+                     ["scope", s.scope ? s.scope + (s.scope_not_enforced ? ", not enforced" : "") : null]]);
+        box.appendChild(el("div", "label", "the stream (the data socket)"));
+        kvList(box, [["socket", h.socket + (h.socket_spec ? ", " + h.socket_spec : "")],
+                     ["last record", num(h.last_record_age_s) ? dur(h.last_record_age_s) + " ago" : "none yet"],
+                     ["records", String(h.socket_records)], ["decode errors", String(h.socket_decode_errors)],
+                     ["gaps", String(h.socket_gaps)], ["reconnects", String(h.socket_reconnects)],
+                     ["last error", h.socket_last_error]]);
+        box.appendChild(el("div", "label", "sloth.db"));
+        kvList(box, [["db", String(h.db) + (h.db_mode ? ", " + h.db_mode : "")],
+                     ["schema", num(h.db_schema) ? "v" + h.db_schema : null],
+                     ["devices", num(h.db_rows) ? String(h.db_rows) : null],
+                     ["freshness", newest !== null ? "newest device row seen " + dur(Math.max(0, now - newest)) + " ago" : "no device row to read"],
+                     ["error", h.db_error]]);
+        box.appendChild(el("div", "label", "slothweb.db"));
+        kvList(box, [["store", String(h.store)], ["path", h.store_path]]);
+        set("hl-note", "the tile's word is the state above");
+      }).catch(function (e) { set("hl-note", errText(e.message)); });
+  }
+
+  // ── Activity's throughput drill-down ───────────────────────────────
+  // The throughput tile's view: each interface's rx and tx over 24 h,
+  // rx over its baseline band, and the top hosts; the first interface's
+  // last rx bucket is the tile's number.
+  var AF = { gen: 0 };
+  function activityFocus() {
+    var on = VP.focus === "throughput";
+    $("a-focus").hidden = !on;
+    $("a-focus-bar").hidden = !on;
+    if (!on) return;
+    set("a-focus-t", "focused: throughput, every interface's rx and tx, and the top hosts: the tile shows the first interface's rx");
+    var gen = ++AF.gen;
+    var box = clear("a-ifaces");
+    var now = Math.floor(Date.now() / 1000);
+    var tier = A.storeOn ? "minute" : "fine";
+    var step = tier === "minute" ? 60 : 10;
+    var to = now - now % step + step, from = to - 86400;
+    getJSON("/api/keys?metric=iface.rx_rate").then(function (j) {
+      if (gen !== AF.gen) return;
+      var ks = (j.keys || []).filter(function (k) { return typeof k.key === "string"; }).slice(0, 8);
+      set("a-focus-note", ks.length ? ks.length + " interfaces, " + tier + " tier" : "no interface seen yet");
+      ks.forEach(function (k) {
+        var key = k.key;
+        var lab = el("div", "label", "");
+        lab.appendChild(keySpan(key));
+        var val = el("span", "sub", "");
+        lab.appendChild(val);
+        box.appendChild(lab);
+        var rx = document.createElement("canvas"), tx = document.createElement("canvas");
+        rx.className = "chart";
+        tx.className = "spark";
+        box.appendChild(rx);
+        box.appendChild(el("div", "sub", "tx"));
+        box.appendChild(tx);
+        Promise.all([series("iface.rx_rate", key, tier, from, to), baseline("iface.rx_rate", key),
+                     series("iface.tx_rate", key, tier, from, to)]).then(function (r) {
+          if (gen !== AF.gen) return;
+          var s = r[0], t = r[2];
+          var bd = bands(s.points, r[1], s.kind, s.step);
+          var lr = s.points.length ? s.points[s.points.length - 1][1] : NaN;
+          var lt = t.points.length ? t.points[t.points.length - 1][1] : NaN;
+          val.textContent = "rx " + fmt(lr) + " B/s, tx " + fmt(lt) + " B/s" + (bd ? "" : "; no baseline yet");
+          draw(rx, s.points, { from: from, to: to, step: s.step, kind: s.kind, color: theme().normal,
+                               axes: true, band: bd });
+          draw(tx, t.points, { from: from, to: to, step: t.step, kind: t.kind, color: theme().normal,
+                               axes: false, spark: true });
+        });
+      });
+    }).catch(function (e) { set("a-focus-note", errText(e.message)); });
+    var hosts = clear("a-hosts");
+    var hto = now - now % 10 + 10, hfrom = hto - 3600;
+    getJSON("/api/keys?metric=host.rx_rate").then(function (j) {
+      if (gen !== AF.gen) return;
+      var ks = (j.keys || []).filter(function (k) { return typeof k.key === "string"; }).slice(0, 12);
+      set("a-hosts-note", ks.length ? "host.rx_rate, the " + ks.length + " most recently seen" : "no top host seen yet");
+      return Promise.all(ks.map(function (k) {
+        return getJSON(seriesPath("host.rx_rate", k.key, "fine", hfrom, hto))
+          .then(function (s) { return { key: k.key, pts: s.points || [], kind: s.kind }; })
+          .catch(function () { return { key: k.key, pts: [], kind: "gauge" }; });
+      })).then(function (rows) {
+        if (gen !== AF.gen) return;
+        rows.forEach(function (r) { r.cur = r.pts.length ? r.pts[r.pts.length - 1][1] : 0; });
+        rows.sort(function (a, b) { return b.cur - a.cur; });
+        rows.forEach(function (r) {
+          var cell = el("div", "cell");
+          var nm = el("div", "nm");
+          nm.appendChild(keySpan(r.key));
+          cell.appendChild(nm);
+          var cv = document.createElement("canvas");
+          cell.appendChild(cv);
+          cell.appendChild(el("div", "v", fmt(r.cur) + " B/s rx"));
+          hosts.appendChild(cell);
+          draw(cv, r.pts, { from: hfrom, to: hto, step: 10, kind: r.kind, color: theme().normal,
+                            axes: false, spark: true });
+        });
+      });
+    }).catch(function (e) { set("a-hosts-note", errText(e.message)); });
+  }
+
   // The Overview is the first view: learn whether there is a store (for
   // the tier), then draw it, and redraw every minute.
   getJSON("/api/metrics").then(function (j) { A.storeOn = !!j.store; })
     .catch(function () { /* fine tier only */ })
     .then(function () {
-      var h = hashView();
-      if (h && h !== "overview") show(h);
+      var r = hashRoute();
+      if (r && r.v !== "overview") show(r.v, r.p);
       else overview();
     });
   setInterval(function () { if (view === "overview") overview(); }, 60000);

@@ -36,6 +36,7 @@ the Wi-Fi it watches:
 ## Engines
 
 - [[alerts]] — alert engine internals and the <!-- count:rules -->90<!-- /count --> rules.
+- [[alert-remediation]] — how to investigate and fix every alert type, each step grounded in the research corpus; shown on slothweb's alert detail page.
 - [[beacon-detection]] — periodicity detector for C2 / implants.
 - [[threat-intel]] — embedded IOC matcher (synthetic demo data, not a feed).
 - [[retention]] — what `--db` actually deletes, and what nothing deletes.

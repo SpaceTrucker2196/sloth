@@ -441,13 +441,15 @@ static void test_alerts_and_flows(void) {
     const char *b = body_of(g_out);
     char want[256];
     snprintf(want, sizeof(want), "\"alerts\":[{\"title\":\"CLEARTEXT_CRED\",\"ip\":\"10.0.0.1\","
-             "\"type\":12,\"sev\":1,\"count\":2,\"first_seen\":%lld,\"last_seen\":%lld}],"
-             "\"count\":1,\"more\":false}", T - 3 * HR, T - 2 * HR);
+             "\"type\":12,\"sev\":1,\"count\":2,\"first_seen\":%lld,\"last_seen\":%lld,"
+             "\"incidents\":1,\"id\":\"d1\"}],"
+             "\"count\":1,\"more\":false,\"scan\":{\"rows\":1,\"cap\":20000,"
+             "\"capped\":false,\"oldest\":null}}", T - 3 * HR, T - 2 * HR);
     WT_HAS(b, want);
     WT_LACKS(b, "carol");
     WT_LACKS(b, "cred:");
     WT_EQ(route(&H, "/api/history/alerts", "limit=1"), 200);   /* the last 30 d */
-    WT_HAS(body_of(g_out), "\"count\":1,\"more\":true}");
+    WT_HAS(body_of(g_out), "\"count\":1,\"more\":true,\"scan\":");
     WT_EQ(route(&H, "/api/history/flows", q), 200);
     b = body_of(g_out);
     WT_HAS(b, "{\"proto\":\"ssh\",\"src\":\"10.0.0.1\",\"dst\":\"10.0.0.2\",\"count\":3,"
@@ -601,7 +603,7 @@ static void test_alert_finding_gap_is_not_a_hit(void) {
     char want[192];
     snprintf(want, sizeof(want), "{\"title\":\"GAP_FINDING\",\"ip\":\"10.0.0.42\","
              "\"type\":0,\"sev\":1,\"count\":9,\"first_seen\":%lld,"
-             "\"last_seen\":%lld}", T - 12 * DY, T - 12 * DY + 60);
+             "\"last_seen\":%lld,\"incidents\":1,", T - 12 * DY, T - 12 * DY + 60);
     WT_HAS(body_of(g_out), want);
     WT_EQ(sdb_exec(g_db, "DELETE FROM alerts WHERE key='gap:10.0.0.42';"), 0);
 }

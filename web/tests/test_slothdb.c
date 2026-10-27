@@ -81,7 +81,7 @@ static void rm_db(const char *p) {
 static web_slothdb_t S;
 
 static void sdb_up(const char *path) {
-    web_sdb_fns_t f = { &g_oui.tab, NULL, NULL };
+    web_sdb_fns_t f = { &g_oui.tab, NULL, NULL, NULL };
     web_slothdb_init(&S, path, &f);
 }
 
@@ -1237,6 +1237,9 @@ static int take_item(void *ctx, const web_sdb_item_t *it) {
     return 0;
 }
 
+/* web_sdb_alerts()'s reach: the tests' tables are read whole (0). */
+static long long reached;
+
 /* The drawer's and Lookup's reads, and A2's. An empty MAC names no
  * alert: seen red with the alerts statement's ?1 <> '' guard removed
  * (instr(key, '') matched every row). */
@@ -1274,11 +1277,11 @@ static void test_reads(void) {
     memset(&it, 0, sizeof(it));
     WT_EQ(web_sdb_names(&c, "10.0.1.5", 8, take_item, &it), 4);
     memset(&it, 0, sizeof(it));
-    WT_EQ(web_sdb_alerts(&c, "00:11:22:33:44:55", "10.0.1.5", 8, take_item, &it), 1);
+    WT_EQ(web_sdb_alerts(&c, "00:11:22:33:44:55", "10.0.1.5", 8, take_item, &it, &reached), 1);
     WT_ASSERT(!strcmp(it.a[0], "FTP login in cleartext"));
     WT_EQ(it.n3[0], 3);
     memset(&it, 0, sizeof(it));
-    WT_EQ(web_sdb_alerts(&c, "", "", 8, take_item, &it), 0);   /* "" names nothing */
+    WT_EQ(web_sdb_alerts(&c, "", "", 8, take_item, &it, &reached), 0);   /* "" names nothing */
     /* A2: the earliest first_seen of any table. */
     long long fs = 0;
     WT_EQ(web_sdb_first_seen(&c, "00:11:22:33:44:55", &fs), 1);
@@ -1398,8 +1401,8 @@ static void test_no_result_column_carries_the_alert_key(void) {
     }
     WT_ASSERT(rows >= 9);
     items_t it = { 0 };
-    WT_EQ(web_sdb_alerts(&c, "00:11:22:33:44:55", "10.0.1.5", 8, take_item, &it), 1);
-    WT_EQ(web_sdb_alerts(&c, "00:03:93:00:00:03", "", 8, take_item, &it), 1);
+    WT_EQ(web_sdb_alerts(&c, "00:11:22:33:44:55", "10.0.1.5", 8, take_item, &it, &reached), 1);
+    WT_EQ(web_sdb_alerts(&c, "00:03:93:00:00:03", "", 8, take_item, &it, &reached), 1);
     for (int i = 0; i < it.n; i++) {
         WT_ASSERT(!strstr(it.a[i], "alice") && !strstr(it.b[i], "alice"));
         WT_ASSERT(!strstr(it.a[i], "cred:") && !strstr(it.a[i], "evil_twin"));

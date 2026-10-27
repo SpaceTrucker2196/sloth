@@ -1,5 +1,7 @@
 #include "web_devices.h"
 
+#include "web_live.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -351,6 +353,15 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
     web_jw_raw(&w, ",\"vendor_table\":"); web_jw_str(&w, vendor_table(m));
     web_jw_raw(&w, ",\"presence_from\":"); web_jw_int(&w, strip_from(now_s));
     web_jw_raw(&w, ",\"presence_cell_s\":"); web_jw_int(&w, WEB_DEV_CELL_S);
+    /* pass:latest's set (the devices tile's): its size, which a page
+     * compares with the rows sloth.db holds of it. */
+    web_jw_raw(&w, ",\"pass_size\":");
+    if (m->sdb && m->sdb->fns.live) {
+        int pm = 0;
+        web_jw_int(&w, web_live_pass_size(m->sdb->fns.live, &pm));
+    } else {
+        web_jw_raw(&w, "null");
+    }
     web_jw_raw(&w, ",\"rows\":[");
     int shown = 0;
     for (int i = 0; i < show; i++) {
@@ -534,10 +545,21 @@ static int emit_item(void *ctx, const web_sdb_item_t *it) {
         web_jw_raw(w, ",\"where\":\"sloth.db\"");
         break;
     default:
-        web_jw_raw(w, "{\"title\":"); web_jw_str(w, it->a);
+        /* An SSID in a title as it came: the display form (web_ssid.h). */
+        web_jw_raw(w, "{\"title\":"); web_jw_text(w, it->a);
         web_jw_raw(w, ",\"type\":");  web_jw_int(w, it->n1 & 0xffff);
         web_jw_raw(w, ",\"sev\":");   web_jw_int(w, it->n2 < 0 ? 0 : it->n2 > 3 ? 3 : it->n2);
         web_jw_raw(w, ",\"count\":"); web_jw_int(w, it->has_n3 && it->n3 > 0 ? it->n3 : 0);
+        /* The key's rows collapsed into one, and the opaque id of the
+         * alert detail page (web_alerts.h): never the key. */
+        web_jw_raw(w, ",\"incidents\":"); web_jw_int(w, it->rows > 0 ? it->rows : 1);
+        if (it->rid > 0) {
+            char id[32];
+            snprintf(id, sizeof(id), "d%lld", it->rid);
+            web_jw_raw(w, ",\"id\":"); web_jw_str(w, id);
+        } else {
+            web_jw_raw(w, ",\"id\":null");
+        }
         break;
     }
     web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, it->first_seen);
@@ -761,9 +783,16 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
              web_sdb_arp_mac, mac);
     web_jw_raw(&w, ",\"alerts\":[");
     emit_t ea = { &w, 0, DEV_ALERTS, EK_ALERT, NULL };
-    int ga = have_db ? web_sdb_alerts(&conn, mac, ip, DEV_ALERTS + 1, emit_item, &ea) : 0;
+    long long reached = 0;
+    int ga = have_db ? web_sdb_alerts(&conn, mac, ip, DEV_ALERTS + 1, emit_item, &ea,
+                                      &reached) : 0;
     web_jw_raw(&w, "],\"alerts_more\":");
     web_jw_raw(&w, ga > DEV_ALERTS ? "true" : "false");
+    /* How far back sloth.db's alerts were read, when the request's
+     * budget stopped the walk before the table's end: null when it read
+     * them all (or could not read them). */
+    web_jw_raw(&w, ",\"alerts_reached\":");
+    if (ga >= 0 && reached > 0) web_jw_int(&w, reached); else web_jw_raw(&w, "null");
     web_slothdb_close(&conn);
 
     unsigned char bits[WEB_DEV_CELLS / 8];

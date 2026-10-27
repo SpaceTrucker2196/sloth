@@ -9,8 +9,10 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "web_alertfmt.h"
 #include "web_anomaly.h"
 #include "web_json.h"
+#include "web_live.h"
 #include "web_metrics.h"
 #include "web_ptr.h"
 
@@ -50,10 +52,17 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "alerts", "sev", 1, 0, 0 },        { "alerts", "title", 1, 0, 0 },
     { "alerts", "match_ip", 1, 0, 0 },   { "alerts", "count", 1, 0, 0 },
     { "alerts", "first_seen", 1, 0, 0 }, { "alerts", "last_seen", 1, 0, 0 },
+    /* The Alerts and alert detail pages (web_alertdb.h). detail is
+     * typed-detail (pred 2): readable only by the one statement that
+     * sets detail_ok, and there only through web_detail_ok(type). */
+    { "alerts", "technique", 1, 0, 0 }, { "alerts", "match_port", 1, 0, 0 },
+    { "alerts", "detail", 1, 0, 2 },
     /* #170: first_seen..last_seen of a v8 row spans every incident of
      * the key and the gaps between them; a range read asks when the
      * latest incident began. */
     { "alerts", "incident_first_seen", 8, 1, 0 },
+    /* The incidents a v8 row absorbed after its first (#170). */
+    { "alerts", "reopens", 8, 1, 0 },
     /* M5 (#163): the WiFi view's AP table and the History view. */
     { "beacon_aps", "bssid", 1, 0, 0 },  { "beacon_aps", "ssid", 1, 0, 0 },
     { "beacon_aps", "signal_dbm", 1, 0, 0 }, { "beacon_aps", "channel", 1, 0, 0 },
@@ -395,8 +404,10 @@ int web_sdb_names(web_sdb_conn_t *c, const char *ip, int max,
     return -1;
 }
 int web_sdb_alerts(web_sdb_conn_t *c, const char *mac, const char *ip,
-                   int max, web_sdb_item_fn fn, void *ctx) {
+                   int max, web_sdb_item_fn fn, void *ctx,
+                   long long *reached) {
     (void)c; (void)mac; (void)ip; (void)max; (void)fn; (void)ctx;
+    *reached = 0;
     return -1;
 }
 int web_sdb_first_seen(web_sdb_conn_t *c, const char *mac, long long *fs) {
@@ -461,6 +472,13 @@ int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
     (void)c; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
     return -1;
 }
+int web_sdb_alerts_scan(web_sdb_conn_t *c, long long from, long long to,
+                        long long *rows, long long *oldest) {
+    (void)c; (void)from; (void)to;
+    *rows = 0;
+    *oldest = 0;
+    return -1;
+}
 int web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,
                           int max, web_sdb_item_fn fn, void *ctx) {
     (void)c; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
@@ -507,21 +525,31 @@ static long long mono_ms(void) {
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* pred_ok: whether a predicate-only column may be read. */
-static int allowed_col(const char *table, const char *col, int pred_ok) {
+/* pred_ok: whether a predicate-only column may be read; detail_ok
+ * whether a typed-detail one may (web_sdb_col_t.pred 2). */
+static int allowed_col(const char *table, const char *col, int pred_ok,
+                       int detail_ok) {
     if (!table || !col) return 0;
+    /* An alert's rowid: the opaque id of web_alertdb.h, a number that
+     * names nothing. Not on web_sdb_allow[], whose rows are columns
+     * PRAGMA table_info lists (the probe and the schema test read it). */
+    if (!strcmp(table, "alerts") && !strcmp(col, "ROWID")) return 1;
     /* A withheld column is predicate-only at most, whatever the list
      * says: the two lists cannot disagree in the open direction. */
-    if (col[0] && web_sdb_is_secret(table, col, NULL) && !pred_ok) return 0;
+    int secret = col[0] && web_sdb_is_secret(table, col, NULL);
     for (size_t i = 0; i < web_sdb_allow_n; i++)
         if (!strcmp(web_sdb_allow[i].table, table) &&
-            (!col[0] || !strcmp(web_sdb_allow[i].column, col)))
-            return !col[0] || !web_sdb_allow[i].pred || pred_ok;
+            (!col[0] || !strcmp(web_sdb_allow[i].column, col))) {
+            if (!col[0]) return 1;
+            if (web_sdb_allow[i].pred == 2) return detail_ok;
+            if (web_sdb_allow[i].pred || secret) return pred_ok;
+            return 1;
+        }
     return 0;
 }
 
 static int allowed_table(const char *table) {
-    return table && allowed_col(table, "", 0);
+    return table && allowed_col(table, "", 0, 0);
 }
 
 /* Everything a device statement may call; nullif for --report's own
@@ -529,7 +557,10 @@ static int allowed_table(const char *table) {
 static const char *const FUNCS[] = {
     "like", "coalesce", "substr", "instr", "min", "max", "count", "nullif",
     "sum",              /* the Flows view's totals (web_sdb_flow_pairs()) */
-    "web_vendor", "web_z", "web_anoms", "web_ptr", "web_ipkey", NULL
+    "web_vendor", "web_z", "web_anoms", "web_ptr", "web_ipkey",
+    "web_detail_ok",    /* the alert detail's gate (web_alertdb.h) */
+    "web_inpass",       /* pass:latest (web_query.h) */
+    NULL
 };
 
 static int authz(void *ud, int action, const char *a1, const char *a2,
@@ -542,7 +573,8 @@ static int authz(void *ud, int action, const char *a1, const char *a2,
     case SQLITE_READ:
         /* a1 table, a2 column ("" when a table is read for no column,
          * count(*)). */
-        return allowed_col(a1, a2 ? a2 : "", c->pred_ok) ? SQLITE_OK : SQLITE_DENY;
+        return allowed_col(a1, a2 ? a2 : "", c->pred_ok, c->detail_ok)
+               ? SQLITE_OK : SQLITE_DENY;
     case SQLITE_FUNCTION:
         for (int i = 0; FUNCS[i]; i++)
             if (a2 && !strcmp(FUNCS[i], a2)) return SQLITE_OK;
@@ -633,6 +665,22 @@ static void fn_ptr(sqlite3_context *cx, int n, sqlite3_value **v) {
         return;
     }
     sqlite3_result_text(cx, name, -1, SQLITE_TRANSIENT);
+}
+
+/* web_detail_ok(type): is this type's detail shown (web_alertfmt.h)? */
+static void fn_detail_ok(sqlite3_context *cx, int n, sqlite3_value **v) {
+    (void)n;
+    sqlite3_result_int(cx, sqlite3_value_type(v[0]) == SQLITE_INTEGER &&
+                           web_alert_detail_ok(sqlite3_value_int64(v[0])));
+}
+
+/* web_inpass(mac): was mac in sloth's latest published device pass? */
+static void fn_inpass(sqlite3_context *cx, int n, sqlite3_value **v) {
+    (void)n;
+    web_sdb_conn_t *c = sqlite3_user_data(cx);
+    const unsigned char *m = sqlite3_value_text(v[0]);
+    sqlite3_result_int(cx, m && c->s->fns.live &&
+                           web_live_pass_has(c->s->fns.live, (const char *)m));
 }
 
 /* ── open ─────────────────────────────────────────────────────────── */
@@ -812,9 +860,9 @@ static int probe(web_sdb_conn_t *c) {
     }
     if (cls) c->opt |= WEB_SDB_OPT_CLASS;
     if (vci) c->opt |= WEB_SDB_OPT_VCI;
-    static const char *const inc[] = { "incident_first_seen", NULL };
+    static const char *const inc[] = { "incident_first_seen", "reopens", NULL };
     if ((c->feats & WEB_QF_ALERTS) &&
-        table_cols(c->db, "alerts", inc, &have) > 0 && have == 1)
+        table_cols(c->db, "alerts", inc, &have) > 0 && have == 3)
         c->opt |= WEB_SDB_OPT_INC;
     /* probe_clients, pnl_clients and assocs are A2's: absent, its
      * statement leaves them out. */
@@ -921,6 +969,11 @@ static int open_conn(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
     sqlite3_create_function_v2(c->db, "web_ipkey", 1,
                                SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL, fn_ipkey,
                                NULL, NULL, NULL);
+    sqlite3_create_function_v2(c->db, "web_detail_ok", 1,
+                               SQLITE_UTF8 | SQLITE_DETERMINISTIC, c,
+                               fn_detail_ok, NULL, NULL, NULL);
+    sqlite3_create_function_v2(c->db, "web_inpass", 1, SQLITE_UTF8, c,
+                               fn_inpass, NULL, NULL, NULL);
 
     /* Identify: sloth's meta is (key, value); slothweb.db's is (name,
      * value), and anything else has neither. */
@@ -1173,7 +1226,11 @@ static int items(web_sdb_conn_t *c, const char *sql, const char *p1,
             it.n3 = sqlite3_column_int64(st, k++);
         }
         it.first_seen = sqlite3_column_int64(st, k++);
-        it.last_seen = sqlite3_column_int64(st, k);
+        it.last_seen = sqlite3_column_int64(st, k++);
+        if (sqlite3_column_count(st) >= k + 2) {
+            it.rid = sqlite3_column_int64(st, k);
+            it.rows = sqlite3_column_int64(st, k + 1);
+        }
         n++;
         if (fn(ctx, &it)) { rc = SQLITE_DONE; break; }
     }
@@ -1249,19 +1306,135 @@ int web_sdb_names(web_sdb_conn_t *c, const char *ip, int max,
     return items(c, sql, ip, NULL, max, fn, ctx, 4);
 }
 
+/* A v8 row holds 1 + reopens incidents (#170); a row of an earlier
+ * file is one. */
+static const char *alert_incidents(const web_sdb_conn_t *c) {
+    return (c->opt & WEB_SDB_OPT_INC) ? "sum(1 + reopens)" : "count(*)";
+}
+
+/* The drawer's alerts naming a device, merged per key across slices. */
+typedef struct {
+    web_sdb_item_t it;
+} dev_group_t;
+
 int web_sdb_alerts(web_sdb_conn_t *c, const char *mac, const char *ip,
-                   int max, web_sdb_item_fn fn, void *ctx) {
+                   int max, web_sdb_item_fn fn, void *ctx,
+                   long long *reached) {
+    *reached = 0;
     if (!(c->feats & WEB_QF_ALERTS)) return 0;
-    /* key in the WHERE only, against a canonical MAC (the routes'). */
+    if (max < 1) max = 1;
+    if (max > 64) max = 64;
+    /* key in the WHERE and the GROUP BY only, against a canonical MAC
+     * (the routes'); a group is named by its key's newest rowid,
+     * found through the primary key, never by the key. The device test
+     * sits inside each read, which walks last_seen newest first through
+     * idx_alerts_last_seen a slice at a time (a day, then twice as far
+     * back each time): a device's old alert is reached however much
+     * other traffic is newer, and the walk is bounded by time, not by a
+     * row count of every device's alerts. It stops once max + 1 keys are
+     * in hand at the end of a slice (any key first met further back is
+     * older than all of them), at the end of the table, or when the
+     * request's budget is down to WEB_SDB_ALERT_RESERVE_MS, saying in
+     * *reached how far back it got (0: all of it). A slice's groups come
+     * newest first, so when one holds more keys than g, those kept are
+     * its newest, not the first in key order. */
+    long long oldest = 0;
+    {
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(c->db, "SELECT min(last_seen), max(last_seen) FROM alerts",
+                               -1, &st, NULL) != SQLITE_OK) return -1;
+        int rc = sqlite3_step(st);
+        long long newest = 0;
+        if (rc == SQLITE_ROW) {
+            oldest = sqlite3_column_int64(st, 0);
+            newest = sqlite3_column_int64(st, 1);
+        }
+        int empty = rc == SQLITE_ROW && sqlite3_column_type(st, 0) == SQLITE_NULL;
+        sqlite3_finalize(st);
+        if (rc != SQLITE_ROW) return -1;
+        if (empty) return 0;
+        *reached = newest + 1;               /* the walk starts at the newest */
+    }
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+             "SELECT COALESCE(title,''), '', type, max(sev), sum(count),"
+             " min(first_seen), max(last_seen),"
+             " (SELECT max(x.rowid) FROM alerts x WHERE x.key = w.key), %s"
+             " FROM alerts w WHERE last_seen < ?3 AND last_seen >= ?4 AND"
+             " ((?1 <> '' AND instr(key, ?1) > 0) OR (?2 <> '' AND match_ip = ?2))"
+             " GROUP BY key ORDER BY max(last_seen) DESC", alert_incidents(c));
+    sqlite3_stmt *st = NULL;
     c->pred_ok = 1;
-    int n = items(c, "SELECT COALESCE(title,''), '', type, sev, count,"
-                     " first_seen, last_seen FROM alerts WHERE"
-                     " (?1 <> '' AND instr(key, ?1) > 0)"
-                     " OR (?2 <> '' AND match_ip = ?2)"
-                     " ORDER BY last_seen DESC LIMIT ?3",
-                  mac, ip ? ip : "", max, fn, ctx, 7);
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) { c->pred_ok = 0; return -1; }
+    dev_group_t g[65];
+    int ng = 0;
+    long long hi = *reached, span = 86400;
+    int complete = 0;
+    for (;;) {
+        long long lo = hi - span;
+        if (lo <= oldest) lo = oldest;
+        sqlite3_reset(st);
+        sqlite3_bind_text(st, 1, mac ? mac : "", -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 2, ip ? ip : "", -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(st, 3, hi);
+        sqlite3_bind_int64(st, 4, lo);
+        int rc;
+        while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+            web_sdb_item_t it;
+            memset(&it, 0, sizeof(it));
+            text(st, 0, it.a, WEB_SDB_TEXT_MAX);
+            it.n1 = sqlite3_column_int64(st, 2);
+            it.n2 = sqlite3_column_int64(st, 3);
+            it.has_n3 = 1;
+            it.n3 = sqlite3_column_int64(st, 4);
+            it.first_seen = sqlite3_column_int64(st, 5);
+            it.last_seen = sqlite3_column_int64(st, 6);
+            it.rid = sqlite3_column_int64(st, 7);
+            it.rows = sqlite3_column_int64(st, 8);
+            int k = 0;
+            while (k < ng && g[k].it.rid != it.rid) k++;
+            if (k < ng) {
+                /* The key again, further back: its rows add up. */
+                web_sdb_item_t *o = &g[k].it;
+                if (it.n2 > o->n2) o->n2 = it.n2;
+                o->n3 += it.n3;
+                if (it.first_seen < o->first_seen) o->first_seen = it.first_seen;
+                o->rows += it.rows;
+            } else if (ng < (int)(sizeof(g) / sizeof(g[0]))) {
+                g[ng++].it = it;
+            }
+        }
+        if (rc == SQLITE_INTERRUPT && c->timed_out) {
+            /* The budget ran out inside this slice, before any of its
+             * groups came back (they come after its whole walk): what
+             * the earlier slices found stands, and reaches back to hi. */
+            break;
+        }
+        if (rc != SQLITE_DONE) { sqlite3_finalize(st); c->pred_ok = 0; return -1; }
+        hi = lo;
+        if (lo <= oldest) { complete = 1; break; }
+        if (ng > max) break;
+        if (mono_ms() > c->deadline_ms - WEB_SDB_ALERT_RESERVE_MS) break;
+        span *= 2;
+    }
+    sqlite3_finalize(st);
     c->pred_ok = 0;
-    return n;
+    *reached = complete ? 0 : hi;
+    /* Newest first. */
+    for (int i = 1; i < ng; i++)
+        for (int j = i; j > 0 && (g[j].it.last_seen > g[j - 1].it.last_seen ||
+                                  (g[j].it.last_seen == g[j - 1].it.last_seen &&
+                                   g[j].it.rid > g[j - 1].it.rid)); j--) {
+            dev_group_t t = g[j];
+            g[j] = g[j - 1];
+            g[j - 1] = t;
+        }
+    int n = 0;
+    for (int i = 0; i < ng && n < max; i++) {
+        n++;
+        if (fn(ctx, &g[i].it)) break;
+    }
+    return n < ng ? n + 1 : n;
 }
 
 int web_sdb_first_seen(web_sdb_conn_t *c, const char *mac, long long *fs) {
@@ -1488,6 +1661,10 @@ static int items_range(web_sdb_conn_t *c, const char *sql, const char *p1,
         it.n3 = sqlite3_column_int64(st, 4);
         it.first_seen = sqlite3_column_int64(st, 5);
         it.last_seen = sqlite3_column_int64(st, 6);
+        if (sqlite3_column_count(st) >= 9) {
+            it.rid = sqlite3_column_int64(st, 7);
+            it.rows = sqlite3_column_int64(st, 8);
+        }
         n++;
         if (fn(ctx, &it)) { rc = SQLITE_DONE; break; }
     }
@@ -1673,13 +1850,59 @@ int web_sdb_devices_between(web_sdb_conn_t *c, long long from, long long to,
 int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
                            int max, web_sdb_item_fn fn, void *ctx) {
     if (!(c->feats & WEB_QF_ALERTS)) return 0;
+    /* One item per key: the GROUP BY reads it, no result column does.
+     * The keys come from the range's newest WEB_SDB_ALERT_SCAN rows; each
+     * shown key's figures are then its own, over every row of it that
+     * overlaps the range, read through the primary key's (key,
+     * first_seen) index, so a key whose older rows fell past the cap is
+     * not undercounted. The range test is on the latest incident's
+     * start (alert_start). A row that overlaps is at least one incident
+     * in the range (on v8 its latest), so "incidents" counts rows: a
+     * lower bound, since a v8 row's earlier incidents may fall in the
+     * range too and their starts are not kept. */
+    const char *fs = alert_start(c);
+    char sql[2048];
+    /* g: the keys shown, from the scan. Then one pass over each shown
+     * key's rows in the range, joined through the primary key. */
+    snprintf(sql, sizeof(sql),
+             "WITH w AS (SELECT rowid AS rid, key, type, title, match_ip, last_seen,"
+             " %s AS fs FROM alerts WHERE last_seen >= ?2 AND fs < ?3"
+             " ORDER BY last_seen DESC LIMIT %d),"
+             " g AS (SELECT COALESCE(title,'') AS t, COALESCE(match_ip,'') AS ip, type AS ty,"
+             " max(last_seen) AS ls, max(rid) AS rid FROM w GROUP BY key"
+             " ORDER BY max(last_seen) DESC, max(rid) DESC LIMIT ?4)"
+             " SELECT g.t, g.ip, g.ty, max(a.sev), sum(a.count), min(%s), g.ls, g.rid,"
+             " count(*) FROM g JOIN alerts a ON a.key = (SELECT x.key FROM alerts x"
+             " WHERE x.rowid = g.rid) WHERE a.last_seen >= ?2 AND %s < ?3"
+             " GROUP BY g.rid ORDER BY g.ls DESC, g.rid DESC",
+             fs, WEB_SDB_ALERT_SCAN, fs, fs);
+    c->pred_ok = 1;
+    int n = items_range(c, sql, NULL, from, to, max, fn, ctx);
+    c->pred_ok = 0;
+    return n;
+}
+
+int web_sdb_alerts_scan(web_sdb_conn_t *c, long long from, long long to,
+                        long long *rows, long long *oldest) {
+    *rows = 0;
+    *oldest = 0;
+    if (!(c->feats & WEB_QF_ALERTS)) return 0;
     char sql[512];
     snprintf(sql, sizeof(sql),
-             "SELECT COALESCE(title,''), COALESCE(match_ip,''), type, sev,"
-             " count, %s AS fs, last_seen FROM alerts"
-             " WHERE last_seen >= ?2 AND fs < ?3"
-             " ORDER BY last_seen DESC, fs DESC LIMIT ?4", alert_start(c));
-    return items_range(c, sql, NULL, from, to, max, fn, ctx);
+             "SELECT count(*), min(last_seen) FROM (SELECT last_seen, %s AS fs"
+             " FROM alerts WHERE last_seen >= ?2 AND fs < ?3"
+             " ORDER BY last_seen DESC LIMIT %d)", alert_start(c), WEB_SDB_ALERT_SCAN);
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_int64(st, 2, from);
+    sqlite3_bind_int64(st, 3, to);
+    int rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW) {
+        *rows = sqlite3_column_int64(st, 0);
+        *oldest = sqlite3_column_int64(st, 1);
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_ROW ? 0 : -1;
 }
 
 int web_sdb_flows_between(web_sdb_conn_t *c, long long from, long long to,

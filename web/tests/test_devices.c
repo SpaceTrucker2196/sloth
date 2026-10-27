@@ -229,7 +229,7 @@ static void up(void) {
     c.oui = &g_oui.tab;
     c.ptr = &g_ptr;
     WT_EQ(web_anomaly_init(&g_an, 64, &c), 0);
-    web_sdb_fns_t f = { &g_oui.tab, &g_an, &g_ptr };
+    web_sdb_fns_t f = { &g_oui.tab, &g_an, &g_ptr, NULL };
     web_slothdb_init(&g_sdb, g_db, &f);
     g_m4.sdb = &g_sdb;
     g_m4.oui = &g_oui.tab;
@@ -691,7 +691,7 @@ static void test_devices_worst_case_fits(void) {
                               i ? "," : "", i / 256, i % 256, lt, lt, lt, 1000 + i);
     WT_EQ(sdb_exec(p, sql), 0);
     web_slothdb_t s;
-    web_sdb_fns_t f = { &g_oui.tab, &g_an, &g_ptr };
+    web_sdb_fns_t f = { &g_oui.tab, &g_an, &g_ptr, NULL };
     web_slothdb_init(&s, p, &f);
     web_m4_t m = g_m4;
     m.sdb = &s;

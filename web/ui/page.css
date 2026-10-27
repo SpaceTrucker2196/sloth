@@ -138,6 +138,10 @@ li .ty.d-dim { color: var(--tui-dim); font-weight: 400; }
 .ts { color: var(--tui-dim); flex: none; }
 .ty { flex: none; min-width: 9ch; color: var(--tui-normal); }
 .ticker .ty { color: var(--tui-normal); }
+/* A severity word on its own (the Alerts page, an alert's title). */
+.ty.sev0 { color: var(--sev-low); }
+.ty.sev1 { color: var(--sev-warn); font-weight: 700; }
+.ty.sev2 { color: var(--sev-crit); font-weight: 700; }
 /* A monitor-radio record among the IP capture's: CP_MON_ROW. */
 .ticker li.mon { background: var(--mon-bg); border-top-color: transparent; }
 /* The whole row, stamp included, in CP_MON_ROW, as packets.c
@@ -292,6 +296,7 @@ table.qt td.nul { color: var(--muted); }
  * .ticker li): their headers take the same, so a cell and the edge that
  * resizes it sit over the header that names them. */
 .dt > .dhead.alrow, .dt > .dhead.tkrow, .dt > .dhead.halrow, .dt > .dhead.hflrow { padding-left: 4px; padding-right: 4px; }
+.dt > .dhead.arnrow, .dt > .dhead.adarow { padding-left: 4px; padding-right: 4px; }
 .dt .dhead > .dt-th, table.qt th.dt-th { position: relative; overflow: visible; display: flex; align-items: center; min-width: 0; padding-right: 8px; }
 table.qt th.dt-th { display: table-cell; }
 .dt-lab { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -313,6 +318,7 @@ button.dt-sort:hover { color: var(--hover); background: none; }
 button.dt-reset { font-size: 9px; letter-spacing: 0.1em; padding: 1px 7px; color: var(--muted); }
 .dt .aphist { min-width: var(--dt-minw); }
 .dt .alrow, .dt .halrow, .dt .hflrow, .dt .tkrow, .dt .lsrow, .dt .nwrow, .dt .anrow { font-size: 12px; }
+.dt .arnrow, .dt .adarow { font-size: 12px; }
 .dt .anrow { padding: 2px 0; border-bottom: 1px dotted var(--rule); }
 .dt .anrow.go { cursor: pointer; }
 .dt .anrow.go:hover { background: var(--tint); }
@@ -333,6 +339,48 @@ table.qt.dt-fixed td { overflow: hidden; text-overflow: ellipsis; }
 .lst li { display: flex; gap: var(--gap); min-width: 0; border-top: 1px dotted var(--rule); padding: 1px 0; }
 .lst li:first-child { border-top: 0; }
 .lst li .tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* ── the tiles as links, the drill-downs' filter bar ────────────────── */
+/* A tile is a link to the view of what it counts: it keeps the tile's
+ * look, takes the focus ring, and says it can be followed. */
+a.tile { display: block; color: inherit; text-decoration: none; }
+a.tile:hover { border-color: var(--hover); }
+a.tile:focus-visible { outline-offset: 2px; }
+.filterbar { display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; margin-top: 14px; padding: 8px 12px; border: 1px solid var(--brass); border-radius: var(--radius-sm); background: var(--panel-2); font-size: 12px; color: var(--ink); }
+.filterbar a { color: var(--phosphor-hi); }
+.filterbar + .panel.controls { margin-top: 14px; }
+.filterbar a:hover { color: var(--hover); }
+
+/* ── the Alerts page and an alert's page ───────────────────────────── */
+/* The Alerts page's rows: a table (.dt .dt-row has the tracks), an
+ * open incident marked on its left edge. Not .alrow, the Overview's
+ * latest alerts. */
+.alprow { font-size: 12px; padding: 3px 0 3px 4px; border-left: 3px solid transparent; border-bottom: 1px dotted var(--rule); cursor: pointer; }
+.alprow.dhead { cursor: default; }
+.alprow.open { border-left-color: var(--sev-warn); }
+.alprow:not(.dhead):hover { background: var(--tint); }
+.alprow:focus-visible { outline-offset: -1px; }
+.adtitle { font-size: 18px; color: var(--tui-bright); overflow-wrap: anywhere; }
+.adtitle .ty { font-size: 13px; margin-right: 8px; }
+.prose { font-size: 12px; color: var(--ink); overflow-wrap: anywhere; margin: 4px 0 10px; }
+.prose.dim { color: var(--muted); }
+.prose code { font-family: inherit; color: var(--tui-bright); }
+.kbfull { margin: 0 0 10px; font-size: 12px; }
+.kbfull > summary { cursor: pointer; color: var(--muted); }
+.steps { margin: 4px 0 10px; padding-left: 3ch; font-size: 12px; color: var(--ink); }
+.steps li { margin: 2px 0; overflow-wrap: anywhere; }
+.src { border-top: 1px dotted var(--rule); padding: 6px 0; font-size: 12px; overflow-wrap: anywhere; }
+.src:first-child { border-top: 0; }
+.src .cit { color: var(--tui-bright); }
+.src .url, .src .path { color: var(--muted); font-size: 11px; }
+.alerts li.go, .lst li.go { cursor: pointer; }
+.alerts li.go:hover, .lst li.go:hover { background: var(--tint); }
+.rcrow { font-size: 12px; padding: 2px 4px; border-bottom: 1px dotted var(--rule); cursor: pointer; }
+.rcrow.dhead { cursor: default; }
+.rcrow.on { background: var(--tint); }
+.rcrow.total { color: var(--tui-bright); border-top: 1px solid var(--brass-soft); cursor: default; }
+#a-ifaces .label { margin-top: var(--gap); }
+#a-hosts { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--gap); margin-top: var(--gap); }
 
 @media (max-width: 900px) {
   .row2 { grid-template-columns: 1fr; }
@@ -356,6 +404,6 @@ table.qt.dt-fixed td { overflow: hidden; text-overflow: ellipsis; }
   .controls > label { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; max-width: 100%; }
   .controls input[type=search] { width: 100%; }
   .cards { grid-template-columns: 1fr; }
-  #a-multi { grid-template-columns: 1fr; }
+  #a-multi, #a-hosts { grid-template-columns: 1fr; }
   canvas.chord { height: 280px; }
 }

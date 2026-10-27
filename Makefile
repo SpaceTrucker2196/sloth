@@ -579,7 +579,10 @@ research-mcp:
 # text, so that the sloth.db reader's tests build their sloth.db from
 # sloth's own DDL rather than a fixture or a copy, and src/rsn_ie.c, so
 # that the AKM names the WiFi view copies are held to sloth's own
-# (web/tests/test_parity.c); slothweb itself links no src/ file.
+# (web/tests/test_parity.c); slothweb itself links no src/ file. It
+# links web/tools/demo.c as well, built -DSLOTHWEB_DEMO_LIB (no main), so
+# that the Overview tiles are held to their views on the demo's own data
+# (web/tests/test_alerts.c).
 WEB_MAIN        = web/src/main.c
 WEB_GEN_DIR     = build/web
 WEB_EMBED       = $(WEB_GEN_DIR)/embed
@@ -598,9 +601,19 @@ WEB_RECIPES_MD  = docs/wiki/sqlite-schema.md
 WEB_RECIPESGEN  = $(WEB_GEN_DIR)/recipes
 WEB_RECIPES_SRCS = web/tools/recipes.c
 WEB_RECIPES_C   = $(WEB_GEN_DIR)/web_recipes.c
+# The alert knowledge table (owner request 2026-10-23..26): the rule
+# table, the wiki, the research corpus and the remediation page, read by
+# web/tools/alertkb.c into build/web/web_alertkb.c (never committed)
+# whenever any of them changes.
+WEB_AKB_INPUTS  = include/sloth_alerts.def docs/views/alerts.md docs/wiki/alerts.md \
+                  docs/wiki/alert-remediation.md
+WEB_AKB_CORPUS  = $(wildcard research/*.md research/*/*.md research/*/*/*.md)
+WEB_AKBGEN      = $(WEB_GEN_DIR)/alertkb
+WEB_AKBGEN_SRCS = web/tools/alertkb.c
+WEB_AKB_C       = $(WEB_GEN_DIR)/web_alertkb.c
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C) \
-                  $(WEB_OUI_C) $(WEB_RECIPES_C)
-WEB_TEST_SRCS   = $(wildcard web/tests/*.c) web/tools/oui_csv.c src/db_schema.c \
+                  $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C)
+WEB_TEST_SRCS   = $(wildcard web/tests/*.c) web/tools/oui_csv.c web/tools/demo.c src/db_schema.c \
                   src/rsn_ie.c src/ip_color.c src/tui_palette.c \
                   src/tui.c src/netstr.c src/view_labels.c
 WEB_LDLIBS      = -lpthread -lm
@@ -669,8 +682,17 @@ $(WEB_RECIPES_C): $(WEB_RECIPESGEN) $(WEB_RECIPES_MD) web/src/web_recipes.h
 	$(WEB_RECIPESGEN) $(WEB_RECIPES_MD) $@.tmp
 	mv $@.tmp $@
 
+$(WEB_AKBGEN): $(WEB_AKBGEN_SRCS)
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -o $@ $(WEB_AKBGEN_SRCS)
+
+$(WEB_AKB_C): $(WEB_AKBGEN) $(WEB_AKB_INPUTS) $(WEB_AKB_CORPUS) web/src/web_alertkb.h
+	$(WEB_AKBGEN) $@.tmp include/sloth_alerts.def docs/views/alerts.md \
+	    docs/wiki/alerts.md docs/wiki/alert-remediation.md research
+	mv $@.tmp $@
+
 .PHONY: web web-test update-oui
-web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C)
+web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C)
 	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -o slothweb $(WEB_MAIN) \
 	      $(WEB_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
 
@@ -701,8 +723,8 @@ web-quickstart-check:
 # only; no host file, no running sloth, no name lookup, no network beyond
 # 127.0.0.1 and ::1. The test links the embedder's
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
-web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C)
-	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -Iweb/tests -Iweb/tools \
+web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C)
+	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) -DSLOTHWEB_DEMO_LIB -Iweb/src -Iweb/tests -Iweb/tools \
 	      -Iinclude -iquote research -DWEB_OUI_EXPECT='"$(if $(WEB_OUI_CSVS),ieee,sloth)"' \
 	      -DWEB_OUI_DATA='"$(WEB_OUI_DIR)"' -o slothweb_test \
 	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)

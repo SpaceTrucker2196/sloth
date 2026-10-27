@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "web_alerts.h"
 #include "web_assets.h"
 #include "web_flows.h"
 #include "web_history.h"
@@ -606,6 +607,46 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
     return json_answer(rq, status, bl, out, outsz, r);
 }
 
+/* /api/alerts and /api/alert (web_alerts.h): GET only. A HEAD has no
+ * answer to describe without reading sloth.db, as /api/query's. */
+static int route_alerts(const web_req_t *rq, const web_health_t *h, int one,
+                        char *out, size_t outsz, web_resp_t *r) {
+    if (rq->is_head) {
+        r->status = 405;
+        return fit(snprintf(out, outsz,
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n"), outsz, &r->out_len);
+    }
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    static const web_m4_t none;
+    const web_m4_t *m = h->m4 ? h->m4 : &none;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else if (one) {
+        rc = web_alert_route(m, h->live, rq->query, h->wall_s, body, cap, &bl, &status);
+    } else {
+        rc = web_alerts_route(m, h->live, rq->query, h->wall_s, body, cap, &bl, &status);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, status, bl, out, outsz, r);
+}
+
 /* /api/recipes: docs/wiki/sqlite-schema.md's, as built in. */
 static int route_recipes(const web_req_t *rq, char *out, size_t outsz,
                          web_resp_t *r) {
@@ -777,6 +818,10 @@ int web_route(const web_req_t *rq, const web_health_t *h, int sse_room,
         for (size_t i = 0; i < sizeof(M5) / sizeof(M5[0]); i++)
             if (!strcmp(rq->path, M5[i].path))
                 return route_m5(rq, h, M5[i].which, out, outsz, r);
+        if (!strcmp(rq->path, "/api/alerts"))
+            return route_alerts(rq, h, 0, out, outsz, r);
+        if (!strcmp(rq->path, "/api/alert"))
+            return route_alerts(rq, h, 1, out, outsz, r);
         /* Without --web-allow-sql neither exists: a 404 like any path. */
         if (h->sql && h->sql->enabled) {
             if (!strcmp(rq->path, "/api/query"))
