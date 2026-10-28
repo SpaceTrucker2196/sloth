@@ -1,0 +1,85 @@
+---
+type: DGA_DOMAIN
+technique: T1568.002
+rule_file: src/alerts/rules_wired.c:1147 rule_dga_domain()
+count_semantics: per rule evaluation - one increment per alerts_update() tick (poll.c:296; the wait between ticks is at most POLL_MS 250 ms, include/sloth.h:28 - the loop wakes early on alert fires and --refresh-ms can shorten it, so 4 ticks/s is a floor, not a fixed cadence) for every dns_log ring entry whose qname trips dga_is_suspicious(); a name present in k of the 256 ring slots adds k per tick for as long as those slots survive, so count measures ring residency x ticks, not lookups
+severity_assessment: agree - WARN is right for a heuristic on a single name with no corroboration; the code comment (rules_wired.c:78-79) already positions it above the LOW NXDOMAIN_BURST and below the CRIT threat-intel matchers
+false_positive_risk: high - any 10+ char label with two of {entropy > 3.0, consonant run >= 4, >= 30% digits} fires; CDN, telemetry, hash-labelled and browser-probe names routinely qualify
+noise_verdict: quiet in findings, very noisy in count on the reference host - 376,004,384 fires on 11 keys is 11 distinct names over the host's life (keys are per qname) but ~34.2M evaluations each; at 4 ticks/s a name resident in 2 ring slots (query + response) accrues 8/s, so 34.2M is at most ~49 days of ring residency per name (less if the loop woke faster than 4/s, and far less for a name re-queried often); recommend the alert page show `observations` (or the dns_log hit count) and never `count`, and consider a `dga.*` knob pair for the label length and entropy floor so an operator on a CDN-heavy segment can raise them
+prevalence: common - 43 DGA families reimplemented and 18M generated domains studied by Plohmann et al. [4]; MITRE names Conficker, QakBot, ShadowPad, Ursnif and Grandoreiro as DGA users [2]
+tuning: []
+researched: 2026-10-27
+---
+## What the rule checks
+
+Input is the DNS log ring, `s->dns_log[0..dns_log_count)` (`MAX_DNS_LOG` 256, `include/sloth.h:630`), which holds one entry per DNS query **and** one per response (`is_resp`, `include/sloth.h:643`). The rule walks every entry each tick (`src/alerts/rules_wired.c:1148-1151`), skips empty names, and calls `dga_is_suspicious(e->qname)`.
+
+`dga_is_suspicious()` (`src/dga.c:81-102`) scores only the **leftmost label**, lower-cased:
+
+- label shorter than 10 characters: never suspicious (`src/dga.c:86`);
+- three signals: Shannon entropy over a-z/0-9/- strictly above 3.0 bits per character (`src/dga.c:96`, computed at `src/dga.c:24-51`), a run of 4 or more consonants where y counts as a vowel (`src/dga.c:97`, `:56-72`), and digits making up 30% or more of the label (`src/dga.c:98`);
+- fires when **any two** of the three hold (`src/dga.c:101`).
+
+The thresholds are compile-time constants; there is no `--tune` row for them (`src/tune.c` has no `dga.*` entry). The comment at `src/dga.c:92-95` says they were calibrated against rockyou-style random strings versus hostnames like `amazonaws` and `anthropic`, which sit at 2.5-2.9 bits/char.
+
+Dedup key: `akey_begin("dga")` + `akey_remote(qname, 40)` (`src/alerts/rules_wired.c:1159-1161`), i.e. `dga:<first 40 bytes of qname>:<16-hex hash of the whole name>` (`docs/wiki/alerts.md:126`; proved by `tests/test_alerts.c:9131-9156`). The key is the **name only** - two hosts querying the same name share one incident, and the detail then shows whichever source the latest ring entry carried. The qname in the ring is cut at 63 bytes (`include/sloth.h:635`), and unlike `rule_threat_domain` (`:1183`) this rule does not skip `qname_trunc` rows; that is sound, because the leftmost label is whole in any 63-byte prefix (`docs/wiki/threat-intel.md:120`).
+
+Detail: `"<src, 30 chars> queried <qname, 30 chars> (entropy %.2f bits/char)"` (`src/alerts/rules_wired.c:1162-1165`); the entropy printed is `dga_label_entropy()` of the same name. Severity is fixed WARN; `match_ip` is the asking host, `match_port` 53 (`:1166-1167`). There is no escalation path. The incident resolves when no tick re-asserts the key for `ALERT_RESOLVE_AFTER_S` = 300 s (`include/sloth.h:860`), i.e. about five minutes after the last ring entry with that name is overwritten.
+
+Count semantics follow from the engine: every `fire()` on an open key does `a->evaluations++; a->count = evaluations` (`src/alerts/engine.c:478-479`), and `observations` moves only when the rendered detail changes (`:485-488`). Because the rule re-fires for every matching ring slot on every tick, `count` is (ring slots holding the name) x (ticks those slots survived). A tick is one pass of the poll pipeline (`src/poll.c:294-296` runs `alerts_update`); the main loop waits at most `poll_ms` between passes and is woken early by alert fires (`src/main.c:1666`, `:1671`; `include/sloth.h:28`), so ticks per second is at least 4 at the default and can be higher.
+
+## The attack
+
+Malware that hard-codes its command-and-control hostname loses that channel the day the name is seized. A domain generation algorithm instead derives a stream of candidate names from a seed - commonly the date - and the operator registers one or a few of them ahead of time; there can be thousands of candidate names the malware checks for instructions, which is what defeats blocking or seizing any one of them [2]. MITRE lists Conficker, QakBot, ShadowPad, Ursnif and Grandoreiro among families using DGAs for primary or fallback C2 [2]. Plohmann et al. reimplemented 43 DGA families and variants and examined 18 million generated domains for their registration status, finding that the approach is used across the malware ecosystem rather than by one family [4]. Because the names are generated rather than chosen, most of them do not exist, so a DGA-infected host produces a tail of NXDOMAIN answers - the observation Antonakakis et al. built their detector on [3]. Generated names also tend to be long and character-random, which is the shape sloth's heuristic scores [1]. There is no CVE or standards clause: a DGA is a design pattern, not a vulnerability, and the citation basis is the ATT&CK entry and the two measurement papers.
+
+## Evidence that proves it
+
+What sloth records for this type:
+
+- the `alert` / `alert.create` / `alert.update` / `alert.resolve` JSONL records under the `dga:` key, with `detail` naming the source host, the name (30 chars) and the label entropy, and `observations` versus `evaluations` (`docs/wiki/jsonl-schema.md:297`, `:507-508`);
+- the `dns` records (`docs/wiki/jsonl-schema.md:187`) for the same `qname`: the query type, the answer (`NXDOMAIN`, an address, or empty), and the timestamps;
+- a per-alert pcap only if `--pcap-dir` is set **and** `pcap.min_severity` is lowered to 1 or 0, because the default 2 exports CRIT only (`src/tune.c:121`; `docs/wiki/cli-reference.md:76`) and this rule is WARN. When it does export, the filter is `match_ip == src or dst` plus port 53 either side (`src/alert_pcap.c:102-111`), so the file holds the asking host's DNS traffic that was still in the packet ring at fire time;
+- `sensor_health.evict_dns_log` (`src/sensor_health.h:70`) says how hard the 256-slot ring is churning, which bounds how long any name could have stayed resident.
+
+What makes it real: the same source host producing **several** distinct `dga:` keys over minutes to hours, most of their `dns` answers `NXDOMAIN`, under a handful of second-level domains or TLDs, with a `NXDOMAIN_BURST` on the same host (`docs/wiki/alert-remediation.md:189-199`) - that is the Antonakakis shape, generated names mostly failing to resolve [3]. A single name that resolves to a CDN address and is queried once is not that shape.
+
+What refutes it: one or three names only, queried once at browser start, 7-15 lowercase letters with no digits, single-label (no dot) - that is Chromium's interception probe [5]; a name whose entropy comes from a hex hash or a numeric id under a well-known telemetry or CDN parent; a name the host resolves successfully and then connects to over TLS with a certificate for that parent. The `dns` record's answer field and the following `tls` SNI record decide it.
+
+## Benign causes
+
+- **Chromium's DNS-interception probes.** Every Chromium-based browser issues three random single-label names of 7-15 letters (older builds exactly 10) at startup and on network change, to detect NXDOMAIN hijacking; Verisign measured them at 45.8% of root DNS traffic on the day analysed and about half over the longer series in 2020 [5]. A 10-letter random label trips the length floor and, with its consonant clusters, usually two signals. These arrive in groups of three, once, and NXDOMAIN.
+- **Hash- and id-labelled service hostnames.** The repo's own corpus note says long high-entropy names are also how several content-delivery and anti-abuse systems work normally, and that a DGA score is not a verdict [1]. The 30%-digit signal is tripped by any label that is a numeric or hex identifier of 10+ characters.
+- **Wordlist DGAs score well.** The same note warns the inverse: some real DGAs concatenate dictionary words and pass the heuristic [1], [2].
+- **Shared key across hosts.** Because the key is the name alone, a name that is popular on the segment accrues count and detail churn from every host; that is not multiple infections.
+
+## Assessment
+
+The severity is right. A single heuristic hit is a lead, not a finding; WARN is what the engine uses for "worth a look", and the rule's own comment places it deliberately between LOW `NXDOMAIN_BURST` and the CRIT list matchers (`src/alerts/rules_wired.c:77-78`).
+
+Prevalence is real: DGAs are a standard C2-resilience technique across dozens of families [2], [4]. But the base rate on a home or office segment is low and the heuristic's base rate of benign hits is high, so a lone `DGA_DOMAIN` is more often a browser or a CDN than malware.
+
+Reference host: 376,004,384 fires on 11 keys, max severity WARN. The key is per name, so eleven distinct names were ever flagged - a quiet detector by findings. The count is another matter: ~34.2M per key. With a tick at most 250 ms apart (`include/sloth.h:28`) the rule evaluates each matching ring slot at least 4 times a second; a name present as a query and its response occupies 2 slots and accrues ~8 per second, so 34.2M corresponds to at most about 49 days of continuous ring residency per name - less if the loop was woken faster, and proportionally less for a name re-queried often (each repeat adds slots). Either way the number says nothing about how many lookups happened. Recommendation: the alert detail page should surface `observations` and a count of `dns` records for the name, and label `count` as evaluations; and the three `dga.c` constants deserve `--tune` rows (`dga.min_label_len`, `dga.entropy_x100`) so a segment with a hash-labelled CDN can raise them without a rebuild.
+
+Is the evidence sufficient to act on alone? No. It is sufficient to pivot: a responder should (1) read the `dns` records for the name - answer, qtype, how many times, from how many hosts; (2) list every `dga:` key the same host has produced and whether `NXDOMAIN_BURST` fired for it (`docs/wiki/alert-remediation.md:187-204`); (3) check whether the name resolved and what the host then connected to. Several generated-looking names from one host, mostly NXDOMAIN, is the point to isolate the host [1], [3].
+
+## Bibliography
+
+1. research/mitre/T1071-004.md - repo corpus document citing `ALERT_TYPE_DGA_DOMAIN` (source: https://attack.mitre.org/techniques/T1071/004/, retrieved 2026-09-07) (accessed 2026-10-27)
+2. MITRE ATT&CK, Dynamic Resolution: Domain Generation Algorithms, T1568.002 - https://attack.mitre.org/techniques/T1568/002/ (accessed 2026-10-27)
+3. M. Antonakakis, R. Perdisci, Y. Nadji, N. Vasiloglou, S. Abu-Nimeh, W. Lee, D. Dagon, "From Throw-Away Traffic to Bots: Detecting the Rise of DGA-Based Malware", USENIX Security 2012 - https://www.usenix.org/conference/usenixsecurity12/technical-sessions/presentation/antonakakis (accessed 2026-10-27)
+4. D. Plohmann, K. Yakdan, M. Klatt, J. Bader, E. Gerhards-Padilla, "A Comprehensive Measurement Study of Domain Generating Malware", USENIX Security 2016 - https://www.usenix.org/conference/usenixsecurity16/technical-sessions/presentation/plohmann (accessed 2026-10-27)
+5. M. Thomas (Verisign), "Chromium's impact on root DNS traffic", APNIC Blog, 2020-08-21 - https://blog.apnic.net/2020/08/21/chromiums-impact-on-root-dns-traffic/ (accessed 2026-10-27)
+
+## Verification notes
+
+Verified 2026-10-27 against the working tree (HEAD c5650a3) and by fetching every external source.
+
+- Code: `rule_dga_domain()` at `src/alerts/rules_wired.c:1147` re-read; loop, empty-name skip, `dga_is_suspicious()`, `akey_begin("dga")`/`akey_remote(qname, 40)` key, detail format, WARN, `match_ip`/`match_port` all as stated. `src/dga.c` thresholds (label >= 10, entropy > 3.0, consonant run >= 4, digits >= 30%, any two) confirmed. Engine `evaluations++`/`count = evaluations` at `src/alerts/engine.c:478-479`, `observations++` at `:488`. Line anchors corrected: rule comment `:78-79` (was 77-78); `dga.c` ranges 81-102, 24-51, 56-72, 92-95; key build `:1159-1161`, detail `:1162-1165`, fire `:1166-1167`; test `:9131-9156`.
+- Count semantics: the tick is the poll pipeline pass, and `POLL_MS` is an upper bound on the wait between passes (the loop wakes early on alert fires, `src/main.c:1666`/`:1671`), so the "~49 days per name" figure is now stated as an upper bound; the division 376,004,384 / 11 = 34.18M and 34.18M / 8 per s = 49.5 days re-checked.
+- Sources: [2] T1568.002 fetched, names all five families; the "tries candidates until one resolves" paraphrase replaced with what the page says (thousands of candidates the malware can check). [3] and [4] USENIX pages fetched; the 43 families / 18M domains and NXDOMAIN-insight quotes confirmed. [5] APNIC fetched: 7-15 letters, exactly 10 before Feb 2014, 45.80% on the analysed day and about half longitudinally; the "45-50%" wording tightened to that. [1] `research/mitre/T1071-004.md` exists and lists `ALERT_TYPE_DGA_DOMAIN` in `alert_kinds`.
+
+Re-verified 2026-10-27 at HEAD 0d60387 (one web-only commit after c5650a3; no source line moved).
+
+- Code anchors re-checked and unchanged: `rule_dga_domain()` `:1147`, key `:1159-1161`, detail `:1162-1165`, fire `:1166-1167`; `src/dga.c` `:81-102`, `:86`, `:96-101`, `:24-51`, `:56-72`, comment `:93-95`; `src/alerts/engine.c:478-479`, `:485-488`; `tests/test_alerts.c:9131`; `MAX_DNS_LOG` 256 at `include/sloth.h:630`, `qname[DNS_NAME_LEN]` at `:635`, `ALERT_RESOLVE_AFTER_S` 300 at `:860`, `POLL_MS` at `:28`.
+- Arithmetic re-checked: 376,004,384 / 11 = 34,182,217; / 8 per s = 4,272,777 s = 49.5 days, upper bound.
+- All five external sources re-fetched by this pass: [2] names Conficker, QakBot, ShadowPad, Ursnif, Grandoreiro and "thousands of domains that malware can check for instructions"; [3] abstract: "most of the DGA-generated (random) domains that a bot queries would result in Non-Existent Domain (NXDomain) responses"; [4] abstract: "43 DGA-based malware families and variants" and "over 18 million DGA domains"; [5]: "7-15 characters in length", older builds "always 10 characters", about 45.8% of root traffic on the analysed day and "half of the DNS root server traffic". No text change needed.

@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
+**Last updated**: 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
 **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
@@ -898,6 +898,8 @@ the rule fires on an unfamiliar IP.
 
 ## Related pages
 
+- [Alert assessments](alert-assessments/README.md) — per-type research: what each rule checks, its count semantics, evidence, benign causes, severity, noise verdict and bibliography.
+- [[alert-remediation]] — investigation and fix steps per alert type.
 - [[threat-intel]] — IOC list format, suffix matching, swap-in.
 - [[beacon-detection]] — periodicity math.
 - [[pcap-export]] — `--pcap-dir` mechanics.

@@ -1,0 +1,87 @@
+---
+type: MLD_MAC_COLLISION
+technique: T1669
+rule_file: src/alerts/rules_mle.c:119 of rule_mld_mac_collision()
+count_semantics: per poll tick while sloth_mld_t.mac_collision_total > 0. fire() at rules_mle.c:136 runs on every alerts_update() pass (src/poll.c:296; one per poll tick: POLL_MS = 250 ms default, include/sloth.h:28, overridable with --refresh-ms, and the loop also wakes early on an escalation (main.c:1628-1671, src/event_wake.h)) for as long as the MLD entry survives in the 64-slot roster, and mac_collision_total is never cleared (src/mle.c:395-408). count = ticks of residence, not frames; the per-frame figure is the "%u such frame(s) seen" field in the detail.
+severity_assessment: too high - the finding is one (MLD MAC, link_id) pair reported with two affiliated addresses, which is either impersonation or a benign client that re-associated with rotated per-link addresses; since #129 client MLDs are evaluated too and the second case is ordinary, so CRIT with no corroboration overstates certainty. WARN, escalating to CRIT when the MLD MAC is operator-designated (--my-bssid) or both addresses are seen beaconing concurrently, would match the evidence.
+false_positive_risk: medium - a non-AP MLD that keeps its MLD MAC across re-associations but changes its link addresses (documented in docs/views/alerts.md:194 as a benign trigger) produces the exact shape; an AP MLD does not.
+noise_verdict: not seen on the reference host - host:null. The site has either no Wi-Fi 7 MLDs in range or none that changed an address under a stable MLD MAC. If it fires, expect one key per MLD MAC that re-fires every tick indefinitely (sticky lifetime counter, no recency bound); recommend a recency bound on mac_collision_last_seen and a client/AP split before the severity is chosen.
+prevalence: no public literature on MLD identity cloning beyond the clause was located in this pass (web-search budget exhausted; direct fetches only). Wi-Fi 7 deployment is wide (233 M devices forecast for 2024 [7]); the attack is a Wi-Fi 7 restatement of long-standing BSSID/MAC spoofing, but no tool advertising MLD-MAC cloning was found.
+tuning: [none specific; --my-bssid is NOT consulted by this rule (it could be); --iface <monitor radio> / --hop supply the frames; --pcap-dir never applies (match_ip NULL); no evidence IDs are cited, so --collect-handshakes writes nothing for it]
+researched: 2026-10-27
+---
+## What the rule checks
+
+**Input.** `s->mlds[]`, the roster `src/mle.c :: mle_observe()` builds from every Basic Multi-Link Element decoded from Beacons / Probe Responses (`src/beacon_snoop.c`) and, since #129, from (Re)Association Requests (`src/assoc_track.c`), so both AP and client MLDs are in the table.
+
+**Condition.** `rule_mld_mac_collision()` (rules_mle.c:119-139) fires for every roster entry with `mac_collision_total != 0`. The detection is in the merge at mle.c:395-408: for each link `(link_id, link_mac)` in the newly parsed frame, if the address is already bound to the MLD it is `known` and skipped; if the address is new but the same `link_id` is already bound to a *different* address, it is a `conflict`: `mac_collision_total++`, `collision_link_id`, `collision_mac` (the newcomer) and `mac_collision_last_seen` are recorded, and the first-seen binding is kept authoritative - the conflicting address is never merged in. No threshold, no time window.
+
+Which addresses count: only Per-STA Profiles with STA Control bit 5 (MAC Address Present, mask 0x0020), `info_len >= 7`, `slen >= 9`, and a usable (unicast, non-zero) address (mle.c:238-249). A `link_id` of 15 or a repeat within one frame sets `malformed_link_id` for `MLE_INVALID_LINK_ID` (mle.c:181-186), but the loop does **not** skip that profile: its address is still stored under that link_id (mle.c:238-249), so it can also take part in a collision - the two rules are not mutually exclusive. That includes a single frame: a repeated link_id with two different addresses puts both into the parsed frame's link list (mle.c:241-244), `mle_observe()` merges the first and counts the second as a conflict against it (mle.c:395-408), so one such frame fires `MLE_INVALID_LINK_ID` (WARN) and `MLD_MAC_COLLISION` (CRIT) together without a second radio being involved. Up to `SLOTH_MLD_MAX_LINKS` = 3 links are stored per MLD (include/sloth.h:2158); a fourth address under a new link_id sets `links_truncated` and is not a collision, but one under an already-bound link_id still is, because the conflict test runs before the capacity check (mle.c:397-408).
+
+**Key.** `"mld_mac_collision:<mld_mac>"` (rules_mle.c:128), one incident per MLD identity regardless of how many addresses contest it.
+
+**Detail.** `"MLD <mld_mac> link_id <collision_link_id> was bound to one affiliated address, then reported with a different one (<collision_mac>) - two radios claiming one Multi-Link identity (<total> such frame(s) seen) - IEEE 802.11be 9.4.2.312"` (rules_mle.c:129-135). It names only the *latest* conflicting address; the *first-bound* one is not in the text (it is in the `wifi_mld` record).
+
+**Severity.** CRIT unconditionally (rules_mle.c:136). No ownership check, no confidence.
+
+**Escalation / resolution.** None. The detail's frame count moves with each new conflicting frame → `alert.update` at most once per 60 s. The alert persists as long as the MLD stays in the roster (LRU over 64 entries, mle.c:369-377).
+
+**Sensor health.** Nothing specific: a collision is not a parse fault, so `parse_fault_mle_malformed` does not move.
+
+## The attack
+
+A Multi-Link Device has one stable identity, the MLD MAC address, and one hardware radio per affiliated link; the Basic Multi-Link Element's Per-STA Profile binds a 4-bit Link ID to that radio's own address [2][5]. The binding is what lets a receiver treat several radios as one device for the association's life - and what `mle_observe()` relies on to merge the subsets of links a device advertises on different bands into one roster row (#67) [2].
+
+If a second transmitter puts the same MLD MAC on the air with a different address under an already-bound Link ID, it is claiming to be that device. For an AP MLD that is the Wi-Fi 7 form of an evil twin: a rogue reuses the victim AP MLD's identity so that clients steering between links, or performing multi-link setup, can be drawn to a radio the adversary controls. MITRE maps it under T1669 Wi-Fi Networks (Initial Access), the same technique the sibling MLE rules use - a crafted or cloned management-frame identity as the access vector [2][6]; T1557.004 Evil Twin is the collection-stage framing of the same act [6]. No tool advertising MLD-MAC cloning was located; the standard text is paywalled and was not read, so the invariant is taken from the repo's clause summary [2] and the amendment's dates from IEEE [5].
+
+## Evidence that proves it
+
+**What sloth records.** `alert` / `alert.create` with `title=MLD_MAC_COLLISION`, `sev=2`, `technique=T1669`, key and detail above; `count` = ticks, not frames (jsonl-schema.md:297, 390). The `wifi_mld` record for `mld_mac` holds the *authoritative* (first-seen) `link_0_mac … link_n_mac` (jsonl-schema.md:711); the conflicting address is only in the alert detail. `beacon` records (if the collider beacons) for both the first-bound address and `collision_mac` give channel, RSSI, SSID and capabilities per side.
+
+**No pcap, no evidence IDs.** `fire()` with `match_ip = NULL` (rules_mle.c:136-137); no `--pcap-dir` export, no `evidence_count`.
+
+**What makes it real.** Two Beacon streams, each carrying a Basic Multi-Link Element with the same MLD MAC and the same Link ID but different per-link addresses, with *overlapping* `beacon.last_seen` windows, typically on different channels or with clearly different RSSI, and only one matching the operator's inventory / `--my-bssid`. A rising "such frame(s) seen" count while the first-bound address is still beaconing means two live transmitters. Strengthening signals on the same MLD or its links: `EVIL_TWIN` on an SSID the legitimate MLD serves, `DEAUTH_FLOOD` against its clients, `MLE_PR_BEACON_DIFF` / `MLE_RECONFIG_NO_MLO` from the same BSSIDs.
+
+**What refutes it.** The first-bound address *stopping* (no `beacon` / `assoc` records) before `collision_mac` appears, with the MLD MAC present in an (Re)Association Request rather than a Beacon: that is one client that re-associated with new per-link addresses, not two radios. Also refuting: a locally-administered MLD MAC on a client (bit 0x02 of the first octet), the hallmark of a randomised identity that may be re-derived.
+
+## Benign causes
+
+- **A client MLD rotating per-link addresses across re-associations.** Since #129 client MLDs from (Re)Association Requests are in the roster, and `docs/views/alerts.md:194` names exactly this benign trigger: a station keeps its MLD MAC but presents new link addresses next time it associates, which shows as a contested `(MLD MAC, link_id)`. The rule does not distinguish AP from client MLDs. Stated from the repo [1]; no vendor documentation of the behaviour was fetched in this pass.
+- **A partially learned entry.** If an entry's first frame carried a corrupt address, every later honest frame reads as a "conflict". Fingerprint: the detail's `collision_mac` is the address you see beaconing and the `wifi_mld` first-bound one is never seen on the air.
+- **Two unrelated devices colliding on an MLD MAC.** Theoretically possible with locally-administered addresses, vanishingly unlikely with burned-in OUIs. The repo's clause summary lists it as the second reading [2].
+- **A capture artefact.** A monitor radio hearing one AP through two paths does not change the bytes and cannot cause this; a driver mangling addresses could, which is unknown.
+
+## Assessment
+
+**Severity.** The rule's comment (rules_mle.c:107-118) defends CRIT because the identity is "actively contested" rather than merely shaped to crash a parser. That holds for an AP MLD. It does not hold for a client MLD, where the same observation is an ordinary re-association with fresh addresses, and the rule has evaluated client MLDs since #129 without changing severity. **Too high as written**: the honest severity is WARN, with CRIT when `ownership_is_my_bssid()` matches the MLD MAC or a bound link address (the function is already linked in `rules_wifi_mgmt.c`), or when both addresses are observed beaconing concurrently. This mirrors `PM_FORGE` (WARN, CRIT only on ownership).
+
+**Prevalence.** Unknown and probably rare today: Wi-Fi 7 MLD identity cloning has no public write-up this pass could find, and the general evil-twin threat it restates is implemented against SSIDs/BSSIDs, not MLD MACs. Wi-Fi 7 device counts make the surface real [7].
+
+**Reference host.** `host:null`. Not seen, which given the client-rotation false positive suggests the site has few or no Wi-Fi 7 clients re-associating in the monitor radio's range, or the radio is not dwelling on their channels. If it does fire, count grows ~4/s per key for the roster entry's life; **recommend** a recency bound on `mac_collision_last_seen` (QUEUE_EVICT's pattern) so the incident resolves after the contest ends.
+
+**Is the evidence sufficient?** It identifies the contested identity and one of the two addresses, enough to start, but it does not say which frame type carried the collision (Beacon vs Association Request - the decisive AP-vs-client question), does not cite the frames, and names no channel. Recording frame-type context (as `rule_mle_reconfig_no_mlo` does with `reconfig_no_mlo_subtype`, rules_mle.c:234) would make the client case self-evident.
+
+**Responder's first steps.** (1) Decide AP or client: look for `beacon` records from `collision_mac` and from the `wifi_mld` first-bound addresses. Two beaconing sets → treat as AP impersonation. (2) If an AP: which is yours? Use `--my-bssid`, the inventory, RSSI and uptime; then locate the other transmitter on premises you control and remove it, or report it; do not probe or join it (MISSION §2) [8]. (3) If a client: a re-association with rotated addresses; confirm with its `assoc` records and consider it closed. (4) Either way, the clause: the per-link address is meant to be stable for the association [2].
+
+## Bibliography
+
+1. sloth, `docs/views/alerts.md` row `MLD_MAC_COLLISION` (line 194) - the #129 client-MLD benign trigger (in-repo 2026-10-27).
+2. sloth research corpus, `research/ieee/802.11be-9.4.2.312-mld-identity.md` - IEEE 802.11be §9.4.2.312, the link_id-to-address binding as the identity claim (in-repo 2026-10-27).
+3. sloth research corpus, `research/cve/2026-58374.md` - the sibling MLE parsing rules and why link_id 15 is illegal (in-repo 2026-10-27).
+4. sloth, `docs/wiki/alert-remediation.md` §`MLD_MAC_COLLISION` (line 1381) (in-repo 2026-10-27).
+5. IEEE 802.11be-2024, Amendment 2: Enhancements for Extremely High Throughput (EHT), approved 2024-09-26, published 2025-07-22 - https://standards.ieee.org/ieee/802.11be/7516/ (accessed 2026-10-27). Clause text paywalled; not read.
+6. MITRE ATT&CK, T1669 Wi-Fi Networks - https://attack.mitre.org/techniques/T1669/ ; T1557 Adversary-in-the-Middle, T1557.004 Evil Twin - https://attack.mitre.org/techniques/T1557/ (both accessed 2026-10-27)
+7. Wi-Fi Alliance, "Wi-Fi Alliance introduces Wi-Fi CERTIFIED 7", 2024-01-08 - https://www.wi-fi.org/news-events/newsroom/wi-fi-alliance-introduces-wi-fi-certified-7 (accessed 2026-10-27)
+8. sloth, `MISSION.md` §2 (passive only; never inject) (in-repo 2026-10-27).
+
+No public literature beyond the clause was located for MLD-identity cloning specifically.
+
+## Verification notes
+
+Verified 2026-10-27 against the working tree (HEAD 0d60387) and every external source re-fetched.
+
+**Code (all confirmed).** `rule_mld_mac_collision()` at rules_mle.c:119, `fire()` at :136 with `ALERT_SEV_CRIT`, key `mld_mac_collision:<mld_mac>` at :128, detail :129-135 verbatim, `match_ip NULL`. Collision logic at mle.c:395-408 (first binding kept, newcomer counted into `mac_collision_total` / `collision_link_id` / `collision_mac` / `mac_collision_last_seen`), lifetime counter never cleared. Count-is-ticks follows from engine.c:478-479. Changed: (a) the claim that a `link_id` of 15 / a repeat "goes to `MLE_INVALID_LINK_ID` instead" was wrong - mle.c:181-186 flags it but does not `continue`, and mle.c:238-249 still stores that profile's address, so such a link can also collide; the text now says so. (b) Address-storage preconditions now include `slen >= 9` (mle.c:238). (c) Line cites tightened (mle.c:238-249, 181-186, 369-377; rules_mle.c:234 for the subtype). (d) Tick cadence now notes `--refresh-ms` and early wake. `ownership_is_my_bssid()` is indeed linked in rules_wifi_mgmt.c (:1108, :1208) and not consulted here.
+
+**Sources.** [1] docs/views/alerts.md:194 states the #129 client-MLD benign trigger verbatim - confirmed. [2] `research/ieee/802.11be-9.4.2.312-mld-identity.md` exists, names `ALERT_TYPE_MLD_MAC_COLLISION`, and gives the "two readings" - confirmed. [3] `research/cve/2026-58374.md` exists. [4] alert-remediation.md:1381 is the `MLD_MAC_COLLISION` heading - confirmed. [5] IEEE page dates confirmed. [6] T1669 (Initial Access, created 2025-02-25) and T1557 with sub-technique T1557.004 Evil Twin - confirmed. [7] 233 M devices - confirmed. No source struck.
+
+**Second pass (2026-10-27, HEAD d70d394, which differs from 0d60387 only in LEDGER.md).** Code re-read (rules_mle.c:119-139; mle.c:181-186, 238-249, 362-449). **Changed:** (a) key cite was rules_mle.c:127; the key `snprintf` is at :128. (b) Added that one malformed frame repeating a link_id with two addresses fires this rule by itself: both addresses enter the parsed frame's link list and `mle_observe()` counts the second as a conflict with the first. That is a third benign-or-other reading the severity argument has to cover (a crafted frame, not two radios), and it strengthens the "too high" verdict. (c) The capacity caveat is now precise: a fourth address under a new link_id is truncated, one under a bound link_id is still a collision. Severity, count semantics, key, detail and `match_ip NULL` confirmed unchanged. Sources re-fetched: [5] IEEE 802.11be-2024 dates, [6] T1669 (Initial Access, created 2025-02-25) and T1557 with .001-.004 including .004 Evil Twin, [7] 233 M devices in 2024 (2024-01-08); all confirmed. `research/ieee/802.11be-9.4.2.312-mld-identity.md` names `ALERT_TYPE_MLD_MAC_COLLISION` (it is the only corpus file that does); alerts.md:194 and alert-remediation.md:1381 confirmed.

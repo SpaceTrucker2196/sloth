@@ -5671,3 +5671,29 @@ report events.
   wiki) to its `blob/main` URL; [[slothweb]]'s link to
   `../web-visual-spec.md` had been published broken. Seen red with the
   rule removed (2 of 22 checks).
+- 2026-10-27 — Alert assessments: `docs/wiki/alert-assessments/`, one
+  research file per alert type for the alert detail page, linked from
+  [[alerts]] and the index. 72 of the 90 alert types assessed; the other
+  18 (LDAP_SEARCH_FLOOD, BGP_NOTIFICATION_BURST, SSH_BRUTE_FORCE,
+  RDP_BRUTE_FORCE, SNMP_COMMUNITY_BRUTE, MQTT_BROKER_BRUTE, ATTACK_PATH,
+  WEAK_TLS, NO_MONITOR_MODE, CLEARTEXT_CRED, BEACON_FLOOD, AUTH_FLOOD,
+  FRAG_AMSDU_EAPOL, FRAG_MIXKEY, FRAG_PN_GAP, FRAG_EAPOL_RELAY,
+  SA_QUERY_FLOOD, MFP_UNPROTECTED) are pinned as pending in
+  `tests/test_alert_assessments.c`. Each file's front matter carries
+  `rule_file` (file:line of the `rule_*()`), `count_semantics`,
+  `severity_assessment`, `false_positive_risk` and `noise_verdict`; the
+  body has the evidence that proves or refutes a firing, benign causes,
+  a bibliography and the verification notes. Noise verdicts across the
+  72: 43 not seen, 7 quiet, 14 noisy, 5 very noisy and 3 mixed
+  (quiet in incidents, noisy in `count`). The five noisiest on the
+  reference host, all per-evaluation counting of a standing condition
+  rather than that many events: ATTACK_TOOL_UA 3,136,284,897 fires on
+  2 keys; WPA_DOWNGRADE 672,230,373 on 794; MY_NETWORK_RECON
+  541,307,682 on 5,558; MGMT_FUZZ 501,455,737 on 403; KARMA_AP
+  415,695,109 on 60. `README.md` there is generated from the front
+  matter by `docs/wiki/alert-assessments/gen_index.sh`. The new test
+  checks, for every assessed type, that the front matter parses, `type`
+  and `technique` match the compiled table, `rule_file` names a line
+  containing `rule_`, the Bibliography has an entry and the index has a
+  row; seen red by deleting `PORT_SCAN.md` and by moving ARP_SPOOF's
+  `rule_file` off its line.
