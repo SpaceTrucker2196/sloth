@@ -1,6 +1,7 @@
 ---
 name: "Ubee Interactive Co., Limited"
 aliases: ["Ubee Interactive co, Limited."]
+affiliates: []
 country: TW [2]
 parent: unknown
 founded: 1991 [2]
@@ -24,7 +25,6 @@ A MAC in a Ubee block is almost always an operator-supplied cable modem or gatew
 Parent company and randomisation behaviour are unknown, the FCC databases themselves refused the session that wrote this entry, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Ubee Interactive - Wikipedia - https://en.wikipedia.org/wiki/Ubee_Interactive (accessed 2026-10-27)
 3. Ubee Interactive home page - https://www.ubeeinteractive.com/ (accessed 2026-10-27)

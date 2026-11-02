@@ -1,6 +1,7 @@
 ---
 name: Signify B.V.
 aliases: []
+affiliates: []
 country: NL [1]
 parent: unknown
 founded: unknown
@@ -22,7 +23,6 @@ Signify is the Eindhoven lighting company formerly called Philips Lighting N.V.,
 A MAC in a Signify block is most likely Philips Hue equipment, which Signify makes [3]. The Hue Bridge connects over wired Ethernet and relays commands to bulbs over a Zigbee mesh, the 2025 Hue Bridge Pro adds built-in Wi-Fi and Matter, and since 2019 bulbs also speak Bluetooth [3]; which Signify products carry these particular blocks is not documented, so found_in and radios are inferred. NVD records CVE-2020-6007, a heap overflow in Hue Bridge 2.x firmware reachable over Zigbee commissioning that gives remote code execution [4], and Wikipedia records a resolved 2016 flaw that let bulbs be reflashed from up to 70 m [3]. Silicon, FCC grantee codes and randomization are not listed: the FCC ID databases refused access from the session that wrote this entry, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Signify N.V. - Wikipedia - https://en.wikipedia.org/wiki/Signify_N.V. (accessed 2026-10-27)
 3. Philips Hue - Wikipedia - https://en.wikipedia.org/wiki/Philips_Hue (accessed 2026-10-27)

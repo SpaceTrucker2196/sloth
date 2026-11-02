@@ -1,6 +1,7 @@
 ---
 name: "Shenzhen Skyworth Digital  Technology  CO., Ltd"
 aliases: ["Skyworth Digital Technology(Shenzhen) Co.,Ltd"]
+affiliates: []
 country: CN [1][2]
 parent: Skyworth Group [1][2]
 founded: 1997 [2]
@@ -24,7 +25,6 @@ A MAC in a Skyworth Digital block is most likely a set-top box or a broadband ho
 Silicon and FCC grantee codes are not listed: the FCC ID databases refused requests from this session and no teardown was found, and nothing is filled in from memory. Randomization behaviour is not documented.
 
 ## Sources
-
 1. Skyworth - Wikipedia - https://en.wikipedia.org/wiki/Skyworth (accessed 2026-10-27)
 2. Skyworth Digital - https://www.skyworthdigital.com/ (accessed 2026-10-27)
 3. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)

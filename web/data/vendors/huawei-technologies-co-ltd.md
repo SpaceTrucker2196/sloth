@@ -1,6 +1,7 @@
 ---
 name: "HUAWEI TECHNOLOGIES CO.,LTD"
 aliases: ["Huawei Technologies Co., Ltd."]
+affiliates: []
 country: CN [1][2]
 parent: independent; Huawei states it is employee-owned, with a trade union committee holding most shares, a point in dispute [1]
 founded: 1987 [1]
@@ -24,7 +25,6 @@ A MAC in these blocks may be a Huawei phone or consumer device or a piece of ope
 CVE-2017-17215 is a remote code execution flaw in customized HG532 firmware reached through port 37215 [5]. Australian and US intelligence concluded in 2012 that a hack on Australia's telecom networks ran through Huawei, and in November 2022 the US FCC banned sales or import of Huawei equipment on national security grounds [1]. Randomization behaviour is not documented by the sources consulted; the FCC ID databases (fccid.io, fcc.report, apps.fcc.gov) refused automated access from this session.
 
 ## Sources
-
 1. Huawei - Wikipedia - https://en.wikipedia.org/wiki/Huawei (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Huawei - WikiDevi - https://wikidevi.wi-cat.ru/Huawei (accessed 2026-10-27)

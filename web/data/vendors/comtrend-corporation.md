@@ -1,6 +1,7 @@
 ---
 name: Comtrend Corporation
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: unknown
 founded: 1990 [2]
@@ -24,7 +25,6 @@ A MAC in a Comtrend block is most likely an operator-supplied gateway or a G.hn 
 Parent company, FCC grantee codes and randomisation behaviour are unknown: the English Wikipedia has no article, the FCC databases refused the session that wrote this entry, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Comtrend corporate profile - https://www.comtrend.com/corporate-profile.html (accessed 2026-10-27)
 3. Comtrend - DeviWiki - https://deviwiki.com/wiki/Comtrend (accessed 2026-10-27)

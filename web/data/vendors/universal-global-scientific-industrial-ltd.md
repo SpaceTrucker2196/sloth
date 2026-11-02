@@ -1,6 +1,7 @@
 ---
 name: "Universal Global Scientific Industrial., Ltd"
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: ASE Technology Holding Co., Ltd., through the USI group [3][4]
 founded: 2010 [5]
@@ -24,7 +25,6 @@ USI has made Wi-Fi and Bluetooth modules since 2003 and WWAN modules since 2008 
 Randomization depends on the host product and is not documented. No security advisory naming USI was found.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. ASE Industrial Holding, exhibit 8 list of subsidiaries - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1122411/000095010316012959/dp65112_ex08.htm (accessed 2026-10-27)
 3. Our Companies - USI - https://www.usiglobal.com/en/our-companies (accessed 2026-10-27)

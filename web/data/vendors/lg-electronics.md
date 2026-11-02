@@ -1,6 +1,7 @@
 ---
 name: LG Electronics
 aliases: [LG ELECTRONICS, LG Electronics Inc., LG ELECTRONICS INC, LG Electronics (Mobile Communications)]
+affiliates: []
 country: KR [1][2]
 parent: LG Corporation (about 33 percent) [2]
 founded: 1958 [2]
@@ -24,7 +25,6 @@ LG makes televisions and soundbars, home appliances, air conditioning, laptops a
 webOS versions 4 to 7 carried a prompt bypass in the secondscreen.gateway service (CVE-2023-6317) [4], one of the bugs a security firm disclosed in April 2024 that let attackers take over tens of thousands of LG TVs; LG patched them on 22 March 2024 [2]. Silicon and the FCC grantee code are not listed: the module documentation and FCC ID databases refused this session's requests. No source in hand documents MAC randomization for LG TVs or phones, so it is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. LG Electronics - Wikipedia - https://en.wikipedia.org/wiki/LG_Electronics (accessed 2026-10-27)
 3. LG OLED55A3PSA specifications - LG Singapore - https://www.lg.com/sg/tvs-soundbars/lg-oled55a3psa (accessed 2026-10-27)

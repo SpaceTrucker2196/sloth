@@ -1,6 +1,7 @@
 ---
 name: "SAMSUNG ELECTRO MECHANICS CO., LTD."
 aliases: []
+affiliates: []
 country: KR [1][2]
 parent: Samsung Group (Samsung Electronics holds 23.69 percent) [2]
 founded: 1973 [2]
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely a network module made by Samsung Electro-Me
 SOLUM was spun off from Samsung Electro-Mechanics in 2015 [5]. No CVE naming the company was found in NVD [6]. The company's site returned errors and the FCC ID databases refused automated access, so the E2X grantee name and any newer modules are not confirmed, and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Samsung Electro-Mechanics - Wikipedia - https://en.wikipedia.org/wiki/Samsung_Electro-Mechanics (accessed 2026-10-27)
 3. Samsung SWL-2210M - DeviWiki - https://deviwiki.com/wiki/Samsung_SWL-2210M (accessed 2026-10-27)

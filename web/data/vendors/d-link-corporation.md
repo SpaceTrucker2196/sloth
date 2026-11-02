@@ -1,6 +1,7 @@
 ---
 name: D-Link Corporation
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: Taiwan Steel Group, which holds 67% and which D-Link joined in June 2020 [1]
 founded: 1986 [1][3]
@@ -24,7 +25,6 @@ DeviWiki lists D-Link FCC IDs under the KA2 prefix and documents the silicon in 
 D-Link's security history is long: the FTC sued it in January 2017 over router and camera security and settled in July 2019, a backdoor shipped in DIR-100 revA firmware in 2013, and in April 2024 it declined to fix a flaw in four end-of-life NAS models [1], tracked as CVE-2024-3273 [5]. Its advisory page continues to post vulnerabilities in products past end of support [6]. Address randomization is not documented by the sources consulted, and the FCC grantee search was not reachable from this session, so the grantee code rests on DeviWiki.
 
 ## Sources
-
 1. D-Link - Wikipedia - https://en.wikipedia.org/wiki/D-Link (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. History of D-Link - D-Link - https://www.dlink.com/uk/en/about/history-of-d-link (accessed 2026-10-27)

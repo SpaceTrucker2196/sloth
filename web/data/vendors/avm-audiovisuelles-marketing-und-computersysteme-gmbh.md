@@ -1,6 +1,7 @@
 ---
 name: AVM Audiovisuelles Marketing und Computersysteme GmbH
 aliases: ["AVM GmbH"]
+affiliates: []
 country: DE [1][2]
 parent: unknown
 founded: 1986 [1]
@@ -24,7 +25,6 @@ FRITZ!Box models carry an 802.11b/g/n radio at 2.4 GHz and in newer models 802.1
 RedTeam Pentesting showed (CVE-2014-8886) that FRITZ!OS before 6.30 extracted a firmware image before verifying its signature, so a crafted image could run code; 6.30 fixed it [6]. Parent ownership, FCC grantee codes and address randomization are not documented by the sources consulted: the FCC ID databases and AVM's security-notice page were not reachable from this session, and nothing is filled in from memory.
 
 ## Sources
-
 1. Fritz (company) - Wikipedia - https://en.wikipedia.org/wiki/Fritz_(company) (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Fritz!Box - Wikipedia - https://en.wikipedia.org/wiki/Fritz!Box (accessed 2026-10-27)

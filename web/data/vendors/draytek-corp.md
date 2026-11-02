@@ -1,6 +1,7 @@
 ---
 name: DrayTek Corp.
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: unknown
 founded: 1997 [2]
@@ -24,7 +25,6 @@ A MAC in a DrayTek block is most likely a Vigor router at a small-business or br
 Wikipedia records severe vulnerabilities in DrayTek products in recent years, citing reports of hijacked routers in 2023, over 700,000 exposed routers open to remote hijacking in 2024 and a critical RCE across 29 models [2]. CVE-2024-41592 is one of them: a stack-based overflow in query-string handling on the Vigor3910 through firmware 4.3.2.6 [4]. Parent company and randomization are not documented by the sources consulted, and DrayTek's own about page refused the session that wrote this entry.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. DrayTek - Wikipedia - https://en.wikipedia.org/wiki/DrayTek (accessed 2026-10-27)
 3. DrayTek - WikiDevi - https://wikidevi.wi-cat.ru/DrayTek (accessed 2026-10-27)

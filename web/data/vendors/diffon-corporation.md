@@ -1,6 +1,7 @@
 ---
 name: Diffon Corporation
 aliases: []
+affiliates: []
 country: KR [1]
 parent: "Franklin Wireless Corp. (acquired ~50.6% of Diffon's capital stock, October 2009) [3]"
 founded: unknown

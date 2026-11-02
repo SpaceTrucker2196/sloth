@@ -1,6 +1,7 @@
 ---
 name: "Beijing InHand Networking Technology Co.,Ltd."
 aliases: []
+affiliates: []
 country: CN [1]
 parent: unknown
 founded: 2001 [3]

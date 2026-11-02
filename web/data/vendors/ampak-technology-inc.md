@@ -1,6 +1,7 @@
 ---
 name: "AMPAK Technology,Inc."
 aliases: ["AMPAK Technology, Inc.", "AMPAK Technology Inc."]
+affiliates: []
 country: TW [1]
 parent: independent (listed, stock symbol 6546) [1]
 founded: 2000 [1]

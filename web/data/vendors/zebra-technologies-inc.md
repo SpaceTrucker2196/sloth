@@ -1,6 +1,7 @@
 ---
 name: Zebra Technologies Inc
 aliases: ["Zebra Technologies Inc.", "Zebra Technologies Corp."]
+affiliates: []
 country: US [1][2]
 parent: independent; publicly traded on Nasdaq as ZBRA since 1991 [1]
 founded: 1969 [1]
@@ -24,7 +25,6 @@ A MAC in a Zebra block is most likely a warehouse or retail handheld, a label pr
 Android 10 and later use a randomized per-network MAC by default [5], and Zebra's Android devices can have it disabled fleet-wide through a MACRandomization setting in Zebra OEMConfig, so a managed Zebra fleet may show its real Zebra address or a random one [6]. NVD lists CVE-2023-4957, an authentication bypass on a ZT410 printer's web page [7].
 
 ## Sources
-
 1. Zebra Technologies - Wikipedia - https://en.wikipedia.org/wiki/Zebra_Technologies (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. TC52x/TC57x spec sheet - Zebra - https://www.zebra.com/us/en/products/spec-sheets/mobile-computers/handheld/tc52x-tc57x.html (accessed 2026-10-27)

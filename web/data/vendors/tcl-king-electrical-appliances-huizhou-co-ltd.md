@@ -1,6 +1,7 @@
 ---
 name: "TCL King Electrical Appliances(Huizhou)Co.,Ltd"
 aliases: ["TCL King Electrical Appliances (Huizhou) Co., Ltd"]
+affiliates: []
 country: CN [1][2]
 parent: unknown
 founded: unknown
@@ -22,7 +23,6 @@ TCL King Electrical Appliances (Huizhou) is a TCL television manufacturing compa
 A MAC in one of these blocks is most likely a TCL-branded smart TV like the 65P7K [2]. That declaration lists ETSI EN 300 328 and ETSI EN 301 893 among its radio standards [2], the harmonised standards for wideband data transmission in the 2.4 GHz band and for 5 GHz RLAN [6][7], so expect a dual-band Wi-Fi client. NVD records CVE-2020-27403 against TCL Android Smart TV firmware by TCL Technology Group, an unauthenticated file-listing web server on port 7989 reachable from the adjacent network [4]; NVD does not say which manufacturing company built those sets, so the firmware lines are not listed as products in these blocks. Silicon, FCC grantee codes and randomization behaviour are not listed: the FCC ID databases refused access from the session that wrote this entry, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. EU Declaration of Conformity, TCL 65P7K (65P7KX9) - https://www.yettel.bg/sites/default/files/2026-04/TV_TCL_65P7KX9_DOC.pdf (accessed 2026-10-27)
 3. TCL Technology - Wikipedia - https://en.wikipedia.org/wiki/TCL_Technology (accessed 2026-10-27)

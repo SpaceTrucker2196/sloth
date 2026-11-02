@@ -1,6 +1,7 @@
 ---
 name: Palo Alto Networks
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: public company, Nasdaq-listed (PANW) [1]
 founded: 2005 [1]
@@ -24,7 +25,6 @@ A MAC in a Palo Alto Networks block is most likely a firewall interface, physica
 Silicon and FCC grantee codes are not listed: the FCC ID databases refused requests from this session and no teardown was found, and nothing is filled in from memory. Randomization behaviour is not documented.
 
 ## Sources
-
 1. Palo Alto Networks - Wikipedia - https://en.wikipedia.org/wiki/Palo_Alto_Networks (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Palo Alto Networks next-generation firewall hardware - https://www.paloaltonetworks.com/network-security/next-generation-firewall-hardware (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: "Inseego Wireless, Inc"
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: unknown
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in an Inseego block is most likely the Wi-Fi side of a carrier-branded cel
 The only advisory found is for the predecessor's MiFi 2352, whose firmware 11.47.17 could let an authenticated attacker obtain passwords from backup copies of its configuration file (exploit-db, 2010, no CVE) [5]. Randomization behaviour and FCC grantee codes are not documented by the sources that could be consulted; the FCC ID databases were not reachable when this entry was verified [2].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Inseego Corp. Form 10-K for fiscal year 2020 - SEC EDGAR - https://www.sec.gov/Archives/edgar/data/1022652/000102265221000017/insg-20201231.htm (accessed 2026-10-27)
 3. Inseego unveils new 5G mobile hotspot, launches first with Verizon - Telecompaper - https://www.telecompaper.com/news/inseego-unveils-new-5g-mobile-hotspot-launches-first-with-verizon--1353284 (accessed 2026-10-27)

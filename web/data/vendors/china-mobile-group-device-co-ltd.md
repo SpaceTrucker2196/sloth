@@ -1,6 +1,7 @@
 ---
 name: "China Mobile Group Device Co.,Ltd."
 aliases: []
+affiliates: []
 country: CN [1]
 parent: China Mobile, as one of its first specialised subsidiaries [2]
 founded: 2011 [2]
@@ -24,7 +25,6 @@ A MAC in one of these blocks is most likely operator-supplied home equipment: Op
 No FCC grantee code is listed: the FCC ID databases refused requests from the session that wrote this entry, and the products found are sold in China. No advisories naming the company were found, and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. China Mobile Group Device Co., Ltd. - Tsinghua University Career Development Center - https://career.tsinghua.edu.cn/careeren/info/1008/1079.htm (accessed 2026-10-27)
 3. CMCC RAX3000M - OpenWrt Table of Hardware - https://openwrt.org/toh/cmcc/rax3000m (accessed 2026-10-27)

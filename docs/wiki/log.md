@@ -5830,3 +5830,28 @@ report events.
   `COVERAGE.md` by name; the entry count is a `count:vendors` marker
   that `make docs-counts` rewrites and `tests/test_docs_consistency.c`
   checks.
+- 2026-11-02 — [[vendor-research]], [[slothweb]], `web/README.md`: the
+  research set's review. A source line now ends at its access date and
+  a source marked as not reached or not supporting its claim is refused:
+  the notes never reached the drawer, which showed 92 such sources as
+  accessed. A source no `[n]` cites is refused, not noted: the 86 such
+  sources (every one of them among the 92) were dropped and the lists
+  renumbered, and the other six, cited registry sources checked against
+  the committed `oui.csv`, now cite that copy (each claim re-checked
+  against it). A new `affiliates`
+  field holds separate companies of an entry's group that registered
+  blocks under their own names (34 strings moved from `aliases`, among
+  them AUMOVIO's European and Malaysian entities, the Raspberry Pi
+  Foundation, Shenzhen Tenda and Technicolor (China)); a MAC found
+  through one is flagged `"affiliate":true` and its country, parent and
+  founded go out as `unknown`. Content fixes after fetching the cited
+  pages: Amazon Fire 7 SoCs by generation, SparkLAN's Bluetooth version
+  (stated only for WPEA-152GN(BT)), Mitsumi DWM-W028's Foxconn ODM and
+  AR6014G, Vantiva's Quantenna and Marvell parts, Murata's Type-to-chip
+  pairs, Bilian's TS16949, HUMAX Networks' sister-company silicon and
+  CVEs out of its fields. `REFERENCE_HOST.txt` and `COVERAGE.md` keep
+  names only, no device counts; the coverage test checks every
+  reference name against the registry, the Have paths and the count
+  line; `test_generator_refuses_each_defect` runs the built generator
+  over fixtures. Each new check seen red under a named mutation, the
+  files restored byte for byte.

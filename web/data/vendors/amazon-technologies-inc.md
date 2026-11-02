@@ -1,6 +1,7 @@
 ---
 name: Amazon Technologies Inc.
 aliases: []
+affiliates: []
 country: US [2]
 parent: Amazon.com, Inc. [3][4]
 founded: unknown
@@ -8,7 +9,7 @@ kind: brand
 device_classes: [speaker, tv, tablet, smart-home, camera, ap/router]
 found_in: ["Amazon Echo family: Echo, Echo Dot, Echo Show, Echo Spot, Echo Plus, Echo Flex, Echo Studio, Echo Pop, Echo Auto [3]", "Amazon Fire TV sticks, boxes and Cubes [5]", "Amazon Fire tablets (discontinued 2026) [9]", "Amazon Kindle e-readers [10]", "Ring doorbells, cameras and Ring Alarm (Amazon subsidiary since 2018) [6]", "eero mesh Wi-Fi (Amazon subsidiary since 2019) [7]"]
 radios: ["Wi-Fi 4 (dual-band 802.11a/b/g/n on first Echo and first Fire TV) [3][5]", "Wi-Fi 5 (802.11ac on Fire TV 2nd gen onward, Fire tablets, eero 2016) [5][7][9]", "Wi-Fi 6 (802.11ax on Fire TV Cube 2nd gen, Stick 4K Max, Stick 3rd gen; eero 6) [5][7]", "Wi-Fi 6E (Fire TV Cube 3rd gen 2022, eero Pro 6E) [5][7]", "Wi-Fi 7 (eero Max 7, 2023) [7]", "2.4 GHz [3]", "5 GHz [3]", "6 GHz [5][7]", "BT Classic (A2DP/AVRCP audio on Echo; Bluetooth 3.0 to 5.2 on Fire TV) [3][5]", "BLE 4.x/5.x (Fire tablets Bluetooth 5.0 LE; Sidewalk BLE) [4][9]", "Thread/Zigbee (802.15.4): Zigbee hub in Echo Plus and 4th-gen Echo, Thread/Matter on recent eero [3][7]", "LoRa (Amazon Sidewalk 900 MHz LoRa and FSK) [4]", "900 MHz (902-928 MHz radio shipped in Ring Alarm Pro) [6]"]
-silicon: ["Texas Instruments DM3725 Cortex-A8 in original Echo [3]", "Qualcomm Snapdragon 600 APQ8064T in first Fire TV [5]", "Broadcom BCM28155 in original Fire TV Stick [5]", "MediaTek MT8173C, MT8127D, MT8695, MT8696, MT8698 across Fire TV generations [5]", "Amlogic S905Z (Fire TV pendant) and Amlogic POP1-G (Fire TV Cube 3rd gen, 2022) [5]", "MediaTek MT8163V/B (Fire 7 9th gen) and MT8168V/B (Fire 7 12th gen) [9]", "NXP i.MX7D (Kindle Oasis 2/3) and MediaTek MT8113 (Kindle 11, 2022) [10]"]
+silicon: ["Texas Instruments DM3725 Cortex-A8 in original Echo [3]", "Qualcomm Snapdragon 600 APQ8064T in first Fire TV [5]", "Broadcom BCM28155 in original Fire TV Stick [5]", "MediaTek MT8173C, MT8127D, MT8695, MT8696, MT8698 across Fire TV generations [5]", "Amlogic S905Z (Fire TV pendant) and Amlogic POP1-G (Fire TV Cube 3rd gen, 2022) [5]", "MediaTek MT8163V/B (Fire 7 7th gen) and MT8168V/B (Fire 7 9th and 12th gen) [9]", "NXP i.MX7D (Kindle Oasis 2/3) and MediaTek MT8113 (Kindle 11, 2022) [10]"]
 fcc_grantee: []
 randomization: unknown
 security_notes: ["Amazon Sidewalk is enabled by default on Echo devices without informing the owner; it is disabled manually in the Alexa app [4]", "Ring: FTC settlement May 2023 (USD 5.8 million) over employee and contractor access to customer video; December 2019 camera takeovers in which intruders spoke through Ring devices [6]", "Alexa: about 1,700 recordings of one customer sent to an unrelated user in 2018; Checkmarx demonstrated an eavesdropping skill in 2018 [8]"]

@@ -1,6 +1,7 @@
 ---
 name: HMD Global Oy
 aliases: []
+affiliates: []
 country: FI [1][2]
 parent: independent, with Nokia holding a stake and Smart Connect LP as backer [1]
 founded: 2016 [1]
@@ -24,7 +25,6 @@ A MAC in an HMD block is most likely a Nokia- or HMD-branded phone [1][2]. The N
 In March 2019 a batch of Nokia 7 Plus phones was reported to send location, SIM card number and serial number unencrypted to a Chinese server; HMD said it fixed the error in a January software update and that no identifying personal data was sent, and Finland's data protection ombudsman opened an investigation [7]. FCC grantee codes are not listed because the FCC ID databases refused automated access from the session that wrote this entry; nothing is filled in from memory.
 
 ## Sources
-
 1. HMD Global - Wikipedia - https://en.wikipedia.org/wiki/HMD_Global (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. HMD global site - https://www.hmd.com/ (accessed 2026-10-27)

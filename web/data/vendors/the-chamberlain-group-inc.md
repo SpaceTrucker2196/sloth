@@ -1,6 +1,7 @@
 ---
 name: "The Chamberlain Group, Inc"
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: "Blackstone Inc. (acquired from The Duchossois Group in 2021) [1]"
 founded: 1954 [1]
@@ -20,6 +21,6 @@ The Chamberlain Group is a garage-door-opener and access-control company founded
 ## Sources
 1. Chamberlain Group - Wikipedia - https://en.wikipedia.org/wiki/Chamberlain_Group (accessed 2026-10-27)
 2. The Chamberlain Group, Inc MAC address blocks - maclookup.app - https://maclookup.app/vendors/the-chamberlain-group-inc (accessed 2026-10-27)
-3. IEEE Registration Authority MA-L public listing (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27) (not reachable 2026-10-27, HTTP 418; the claims were checked against the copy shipped in sloth web/data/oui.csv)
+3. IEEE Registration Authority MA-L registry, the copy committed in sloth as web/data/oui.csv (Debian ieee-data 20260625) - https://github.com/SpaceTrucker2196/sloth/blob/main/web/data/oui.csv (accessed 2026-11-02)
 4. myQ Smart Home Products - Chamberlain Group - https://www.myq.com/products (accessed 2026-10-27)
 5. Removal of the myQ integration - Home Assistant blog, 2023-11-06 - https://www.home-assistant.io/blog/2023/11/06/removal-of-myq-integration/ (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: "Meta Platforms, Inc."
 aliases: ["Facebook Inc"]
+affiliates: []
 country: US [1][2]
 parent: independent [2]
 founded: 2004 [2]
@@ -22,7 +23,6 @@ Meta Platforms is the US company founded in February 2004 as TheFacebook, rename
 The Quest 3, released in October 2023, runs a Qualcomm Snapdragon XR2 Gen 2 with Wi-Fi 6E and Bluetooth 5.2 [3]. The first Ray-Ban Stories glasses carried a Qualcomm Snapdragon processor with 802.11ac Wi-Fi and Bluetooth 5.0, and the 2023 Ray-Ban Meta uses a Snapdragon AR1 Gen 1; the glasses draw privacy criticism over their small, removable recording LED and data retention, and the Irish Data Protection Commission has pressed for GDPR compliance [4]. The Oculus Browser accepted HTML injection into its UI in versions 5.2.7 to 5.7.11 (CVE-2019-3562) [5]. FCC grantee codes are not listed because the FCC ID databases refused automated access from the session that wrote this entry, and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Meta Platforms - Wikipedia - https://en.wikipedia.org/wiki/Meta_Platforms (accessed 2026-10-27)
 3. Meta Quest 3 - Wikipedia - https://en.wikipedia.org/wiki/Meta_Quest_3 (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: Microchip Technology Inc.
 aliases: ["Microchip Technologies Inc"]
+affiliates: []
 country: US [1][2]
 parent: independent, public on Nasdaq as MCHP [1]
 founded: 1989 [1]
@@ -40,7 +41,6 @@ FCC ID databases and Microchip's own product pages refused the session
 that wrote this entry, and nothing is filled in from memory.
 
 ## Sources
-
 1. Microchip Technology - Wikipedia - https://en.wikipedia.org/wiki/Microchip_Technology (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Adafruit ATWINC1500 WiFi Breakout - Adafruit - https://www.adafruit.com/product/2999 (accessed 2026-10-27)

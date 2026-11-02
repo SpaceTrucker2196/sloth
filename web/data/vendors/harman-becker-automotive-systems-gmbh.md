@@ -1,6 +1,7 @@
 ---
 name: Harman/Becker Automotive Systems GmbH
 aliases: []
+affiliates: []
 country: DE [1]
 parent: Harman International, a Samsung Electronics subsidiary since 2017 [3][4]
 founded: 1949 [3]
@@ -22,7 +23,6 @@ Harman Becker Automotive Systems grew out of a repair workshop founded in Pforzh
 A MAC in these blocks is most likely a car head unit: Harman Becker has supplied Mercedes-Benz from its earliest days and also lists Audi, Peugeot, Hyundai, Ferrari, Rolls-Royce, Porsche, BMW and MINI as customers [3]. Expect it on the air when a vehicle offers a hotspot or phone pairing, but the sources consulted document neither its radios nor its silicon, so both are empty rather than assumed. FCC grantee codes are not listed because the FCC ID databases refused access from the session that wrote this entry; no advisory naming this company was found, and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. IEEE Registration Authority, IAB assignments (iab.csv) - https://standards-oui.ieee.org/iab/iab.csv (accessed 2026-10-27)
 3. Harman Becker Automotive Systems - Wikipedia - https://en.wikipedia.org/wiki/Harman_Becker_Automotive_Systems (accessed 2026-10-27)

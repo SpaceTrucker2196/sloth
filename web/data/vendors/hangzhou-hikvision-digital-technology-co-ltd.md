@@ -1,6 +1,7 @@
 ---
 name: "Hangzhou Hikvision Digital Technology Co.,Ltd."
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: China Electronics Technology HIK Group, a subsidiary of state-owned China Electronics Technology Group (CETC) [1]
 founded: 2001 [1]
@@ -43,7 +44,6 @@ not listed because the FCC ID databases and Hikvision's own site
 refused the session that wrote this entry.
 
 ## Sources
-
 1. Hikvision - Wikipedia - https://en.wikipedia.org/wiki/Hikvision (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. CVE-2017-7921 - CVE Program record - https://cveawg.mitre.org/api/cve/CVE-2017-7921 (accessed 2026-10-27)

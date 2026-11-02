@@ -1,6 +1,7 @@
 ---
 name: Panasonic Automotive Systems Company of America
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: Panasonic Corporation of North America, of which it is a division [2]
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely a car's head unit or connected-car module [
 Founding year, randomization and security history are not documented by the sources consulted; the FCC ID databases refused automated access from this session, so no filing under ACJ was checked.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Panasonic Automotive Systems Company of America selects QNX CAR platform - QNX News Releases - https://www.qnx.com/news/pr_5657_1.html (accessed 2026-10-27)
 3. Deep Dive Teardown of the Panasonic Toyota Tundra Head Unit 86100-0C381 Automotive - TechInsights - https://www.techinsights.com/blog/deep-dive-teardown-panasonic-toyota-tundra-head-unit-86100-0c381-automotive (accessed 2026-10-27)

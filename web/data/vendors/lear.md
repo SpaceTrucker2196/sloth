@@ -1,6 +1,7 @@
 ---
 name: LEAR
-aliases: ["Lear Corporation", "Lear Corporation GmbH"]
+aliases: [Lear Corporation]
+affiliates: ["Lear Corporation GmbH [3]"]
 country: US [1]
 parent: independent, listed on the NYSE as LEA [1]
 founded: 1917 [1]
@@ -38,7 +39,6 @@ ID databases refused the session that wrote this entry, so no grantee
 code or silicon is listed.
 
 ## Sources
-
 1. Lear Corporation - Wikipedia - https://en.wikipedia.org/wiki/Lear_Corporation (accessed 2026-10-27)
 2. E-Systems - Lear Corporation - https://www.lear.com/technology/e-systems (accessed 2026-10-27)
 3. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)

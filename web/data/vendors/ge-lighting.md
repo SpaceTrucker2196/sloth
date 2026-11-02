@@ -1,6 +1,7 @@
 ---
 name: GE Lighting
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: Savant Systems, which acquired GE Lighting on 1 July 2020 [2][3]
 founded: 1911 [2]
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely a Cync smart-home device: Cync, formerly C 
 No CVE naming Cync or GE Lighting smart products was found in NVD [7]. The FCC ID databases refused automated access and no teardown was reached, so silicon, FCC grantee codes and the Wi-Fi band are not listed and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. GE Lighting - Wikipedia - https://en.wikipedia.org/wiki/GE_Lighting (accessed 2026-10-27)
 3. Savant Systems - Wikipedia - https://en.wikipedia.org/wiki/Savant_Systems (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: "Barrot Technology Co.,LTD"
 aliases: ["Barrot Technology Co.,Ltd."]
+affiliates: []
 country: CN [1][2]
 parent: unknown
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely a Bluetooth or Wi-Fi module inside someone 
 Parent company, founding year, FCC grantee codes, randomization and security history are not documented by the sources consulted; the FCC ID databases refused automated access from this session.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Barrot Technology Co., Ltd - https://en.barrot.com.cn/ (accessed 2026-10-27)
 3. Barrot Technology Co., Ltd exhibitor profile - IOTE EXPO China - https://eng.iotexpo.com.cn/exhibitor/barrot-technology-co-ltd (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: Hand Held Products Inc
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: Honeywell (acquired 2007) [2][3]
 founded: 1981 [2]
@@ -24,7 +25,6 @@ The company made imaging barcode scanners, rugged mobile computers, image kiosks
 Silicon, the FCC grantee code and MAC randomization behaviour are unknown: the FCC ID databases refused this session's requests, the user manual's regulatory pages were not reachable, and nothing is filled in from memory. No advisory naming Hand Held Products hardware was found.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Hand Held Products - Wikipedia - https://en.wikipedia.org/wiki/Hand_Held_Products (accessed 2026-10-27)
 3. Honeywell to acquire Hand Held Products - Vision Systems Design - https://www.vision-systems.com/factory/consumer-packaged-goods/article/16750200/honeywell-to-acquire-hand-held-products (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: ADB Broadband Italia
 aliases: ["ADB Italia "]
+affiliates: []
 country: IT [1]
 parent: Advanced Digital Broadcast (ADB Group), inferred from the registrant name; ADB bought Pirelli Broadband Solutions in 2010 [2][3]
 founded: unknown
@@ -22,7 +23,6 @@ The IEEE registry lists 24 MA-L blocks to "ADB Broadband Italia" and two to "ADB
 The security history matters for an operator watching the air: on the P.DGA4001N, and possibly other routers, the default WPA key is derived from a constant and the device's MAC address (CVE-2015-0558), so a heard BSSID can give away the key [5]. All epiCentro-based ADB gateways were affected in 2018 by a local root jailbreak, an authorization bypass of ISP-locked settings and a CLI privilege escalation (CVE-2018-13108 to 13110) [6]. Silicon, FCC grantee codes and founding year of the Italian unit are not documented by the sources consulted (the FCC ID databases and DeviWiki pages were not reachable), and randomization is unknown [4].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Advanced Digital Broadcast - Wikipedia - https://en.wikipedia.org/wiki/Advanced_Digital_Broadcast (accessed 2026-10-27)
 3. ADB - Our History - https://www.adbglobal.com/our-history/ (accessed 2026-10-27)

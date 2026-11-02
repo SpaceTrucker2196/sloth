@@ -1,6 +1,7 @@
 ---
 name: "Dreamtech Co., Ltd"
 aliases: []
+affiliates: []
 country: KR [1][2]
 parent: unknown
 founded: 1998 [3]
@@ -24,7 +25,6 @@ No source consulted says what carries this block, and the Cheonan address differ
 Products, radios, silicon and FCC grantee codes are not documented by the sources consulted: Dreamtech's own site refused connections and the FCC ID databases refused automated access from this session. Randomization is unknown, and no security advisory was found.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L and MA-M assignments (oui.csv, mam.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Dreamtech Co Ltd (XKRX:192650) - Morningstar - https://www.morningstar.com.au/investments/security/XKRX/192650 (accessed 2026-10-27)
 3. Dreamtech - PatSnap Discovery company profile - https://discovery.patsnap.com/company/dreamtech/ (accessed 2026-10-27)

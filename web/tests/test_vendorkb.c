@@ -1,17 +1,21 @@
 /* The vendor research table (web_vendorkb.h) held to the files it is
  * generated from and to the registry it keys into, read again here:
  * every .md under web/data/vendors/ is an entry and every entry a file named
- * for its name; every [n] in every field resolves to a source; the name
- * and each alias are exact IEEE "Organization Name" strings in the
- * committed registry (an entry no OUI can reach is dead, and red); the
- * lookup folds case, white space and punctuation; the drawer and
- * Lookup carry the section and {"found":false} for a vendor without
- * one; and the page shows it as text, with no link. Runs from the top
- * of the tree, as the suite does. */
+ * for its name; every [n] in every field resolves to a source; the name,
+ * each alias and each affiliate are exact IEEE "Organization Name"
+ * strings in the committed registry (an entry no OUI can reach is dead,
+ * and red); the lookup folds case, white space and punctuation and
+ * tells an affiliate from a spelling; the drawer and Lookup carry the
+ * section, without the entry's country, parent and founded for an
+ * affiliate, and {"found":false} for a vendor without one; the page
+ * shows it as text, with no link; the generator refuses each defect the
+ * format names; and COVERAGE.md is held to the reference host's list.
+ * Runs from the top of the tree, as the suite does. */
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "oui_csv.h"
@@ -128,6 +132,7 @@ static void test_every_entry_is_complete_and_cited(void) {
             if (k < 4) WT_ASSERT(!strcmp(scalars[k], "unknown") || strchr(scalars[k], '['));
         }
         check_texts(e, e->aliases, e->naliases, "aliases");
+        check_texts(e, e->affiliates, e->naffiliates, "affiliates");
         check_texts(e, e->device_classes, e->ndevice_classes, "device_classes");
         check_texts(e, e->found_in, e->nfound_in, "found_in");
         check_texts(e, e->radios, e->nradios, "radios");
@@ -173,7 +178,9 @@ static int in_registry(const char *const *csv, int ncsv, const char *name) {
 }
 
 /* Seen red with tesla-inc.md's name written "Tesla, Inc" (a spelling
- * the registry does not hold; restored byte for byte). */
+ * the registry does not hold; restored byte for byte), and with the
+ * generator writing every key's affiliate flag as 0 (the affiliates
+ * of aumovio-systems-inc.md found their entry as spellings). */
 static void test_every_entry_names_an_ieee_vendor(void) {
     static const char *const files[] = { "web/data/oui.csv", "web/data/mam.csv",
                                          "web/data/oui36.csv", "web/data/iab.csv" };
@@ -194,8 +201,29 @@ static void test_every_entry_names_an_ieee_vendor(void) {
             WT_ASSERT(ok);
             /* and it is another spelling of the same name, not a second
              * vendor: the alias finds this entry */
-            WT_ASSERT(web_vendorkb_find(e->aliases[a]) == e);
+            int aff = -1;
+            WT_ASSERT(web_vendorkb_lookup(e->aliases[a], &aff) == e);
+            WT_EQ(aff, 0);
         }
+        /* an affiliate: the registry string before its [n], a company
+         * of its own that finds this entry flagged as one */
+        for (int a = 0; a < e->naffiliates; a++) {
+            char bare[512];
+            snprintf(bare, sizeof(bare), "%s", e->affiliates[a]);
+            char *c = strstr(bare, " [");
+            WT_ASSERT(c != NULL);
+            if (c) *c = '\0';
+            ok = in_registry((const char *const *)csv, 4, bare);
+            if (!ok) fprintf(stderr, "    %s: affiliate \"%s\" is no registry Organization Name\n",
+                             e->file, bare);
+            WT_ASSERT(ok);
+            int aff = 0;
+            WT_ASSERT(web_vendorkb_lookup(bare, &aff) == e);
+            WT_EQ(aff, 1);
+        }
+        int aff = -1;
+        WT_ASSERT(web_vendorkb_lookup(e->name, &aff) == e);
+        WT_EQ(aff, 0);
         WT_ASSERT(web_vendorkb_find(e->name) == e);
     }
     for (int i = 0; i < 4; i++) free(csv[i]);
@@ -253,7 +281,8 @@ static void test_drawer_and_lookup_carry_the_section(void) {
     FILE *f = fdopen(fd, "w");
     fputs("Registry,Assignment,Organization Name,Organization Address\n"
           "MA-L,98ED5C,\"Tesla,Inc.\",3500 Deer Creek Road Palo Alto CA US 94304\n"
-          "MA-L,0000FE,Example Unresearched Ltd,1 Nowhere Road XX\n", f);
+          "MA-L,0000FE,Example Unresearched Ltd,1 Nowhere Road XX\n"
+          "MA-L,B827EB,Raspberry Pi Foundation,Mitchell Wood House Caldecote Cambridgeshire GB CB23 7NU\n", f);
     fclose(f);
     oui_build_t b;
     oui_build_init(&b);
@@ -269,9 +298,9 @@ static void test_drawer_and_lookup_carry_the_section(void) {
     WT_EQ(status, 200);
     WT_HAS(g_body, "\"oui\":{\"found\":true,\"vendor\":\"Tesla,Inc.\"");
     WT_HAS(g_body, "\"vendor_research\":{\"found\":true,\"file\":\"web/data/vendors/tesla-inc.md\","
-                   "\"name\":\"Tesla,Inc.\",\"aliases\":[\"Tesla Inc\"],\"kind\":\"automotive\","
-                   "\"country\":\"US [1]\"");
-    WT_HAS(g_body, "\"fcc_grantee\":[\"2AEIM (attested by FCC ID 2AEIM-QCA6234) [7]\"]");
+                   "\"name\":\"Tesla,Inc.\",\"aliases\":[\"Tesla Inc\"],\"affiliates\":[],"
+                   "\"affiliate\":false,\"kind\":\"automotive\",\"country\":\"US [1]\"");
+    WT_HAS(g_body, "\"fcc_grantee\":[\"2AEIM (attested by FCC ID 2AEIM-QCA6234) [2]\"]");
     WT_HAS(g_body, "\"confidence\":{\"country\":\"documented\",\"silicon\":\"documented\","
                    "\"radios\":\"documented\",\"found_in\":\"documented\",\"randomization\":\"unknown\"}");
     WT_HAS(g_body, "\"summary\":\"Tesla, Inc. is the Austin, Texas electric-vehicle");
@@ -279,6 +308,20 @@ static void test_drawer_and_lookup_carry_the_section(void) {
                    "\"https://en.wikipedia.org/wiki/Tesla,_Inc.\",\"accessed\":\"2026-10-27\"}");
     WT_HAS(g_body, "\"researched\":\"2026-10-27\"}");
     WT_HAS(g_body, "\"record\":null");
+    /* An affiliate: the Foundation, a charity, reaches the Trading
+     * Ltd's entry, whose country, parent and founded are not its own.
+     * Seen red with research_member() writing e->country, e->parent
+     * and e->founded whatever the flag. */
+    WT_EQ(web_device_route(&m, "b8:27:eb:00:00:01", "", 1792627200, g_body, sizeof(g_body),
+                           &len, &status), 0);
+    WT_HAS(g_body, "\"vendor\":\"Raspberry Pi Foundation\"");
+    WT_HAS(g_body, "\"file\":\"web/data/vendors/raspberry-pi-trading-ltd.md\",\"name\":"
+                   "\"Raspberry Pi Trading Ltd\"");
+    WT_HAS(g_body, "\"affiliates\":[\"Raspberry Pi Foundation [1]\"],\"affiliate\":true,");
+    WT_HAS(g_body, "\"country\":\"unknown\",\"parent\":\"unknown\",\"founded\":\"unknown\"");
+    WT_HAS(g_body, "\"confidence\":{\"country\":\"unknown\"");
+    WT_LACKS(g_body, "\"country\":\"GB [1]\"");
+    WT_LACKS(g_body, "\"founded\":\"2012 [1]\"");
     /* a vendor with no entry */
     WT_EQ(web_device_route(&m, "00:00:fe:aa:bb:cc", "", 1792627200, g_body, sizeof(g_body),
                            &len, &status), 0);
@@ -319,6 +362,8 @@ static void test_page_shows_research_as_text(void) {
     memcpy(body, fn, n);
     body[n] = '\0';
     WT_HAS(body, "\"no research yet for \" + oui.vendor");
+    WT_HAS(body, "if (vr.affiliate) box.appendChild(el(\"div\", \"sub\", oui.vendor + \" is a separate company; \"");
+    WT_HAS(body, "[\"same group\", vr.affiliates]");
     WT_HAS(body, "el(\"li\", \"\", s.n + \". \" + s.title + \" - \" + s.url +");
     WT_LACKS(body, "href");
     WT_LACKS(body, "\"a\"");
@@ -333,14 +378,147 @@ static void test_page_shows_research_as_text(void) {
     WT_HAS(p, ".vr-src { ");
 }
 
+/* ── the generator's refusals ── */
+
+/* A fixture entry, valid as written; each case below changes one
+ * thing. The name holds no comma, so it is bare; the file is its slug. */
+static const char FIX_OK[] =
+    "---\n"
+    "name: Fixture Vendor Ltd\n"
+    "aliases: [FIXTURE VENDOR LTD.]\n"
+    "affiliates: [\"Fixture Vendor GmbH [1]\"]\n"
+    "country: GB [1]\n"
+    "parent: unknown\n"
+    "founded: 1999 [1]\n"
+    "kind: brand\n"
+    "device_classes: [phone]\n"
+    "found_in: [\"Fixture phones [1]\"]\n"
+    "radios: [\"Wi-Fi 4 [2]\"]\n"
+    "silicon: []\n"
+    "fcc_grantee: []\n"
+    "randomization: unknown\n"
+    "security_notes: []\n"
+    "confidence: {country: documented, silicon: unknown, radios: documented, found_in: documented, randomization: unknown}\n"
+    "researched: 2026-11-02\n"
+    "---\n"
+    "## Summary\n"
+    "Fixture Vendor makes phones [1] with Wi-Fi 4 radios [2].\n"
+    "## Sources\n"
+    "1. Fixture page - https://example.org/a (accessed 2026-11-02)\n"
+    "2. Fixture radio page - https://example.org/b (accessed 2026-11-02)\n";
+
+static int put_file(const char *dir, const char *name, const char *text) {
+    char p[TEST_TMP_MAX + 128];
+    snprintf(p, sizeof(p), "%s/%s", dir, name);
+    FILE *f = fopen(p, "w");
+    if (!f) return -1;
+    fputs(text, f);
+    return fclose(f);
+}
+
+/* FIX_OK with its first occurrence of from replaced by to. */
+static char *fix_with(const char *from, const char *to) {
+    const char *at = strstr(FIX_OK, from);
+    WT_ASSERT(at != NULL);
+    if (!at) return NULL;
+    size_t n = strlen(FIX_OK) + strlen(to) + 1;
+    char *t = malloc(n);
+    if (!t) return NULL;
+    snprintf(t, n, "%.*s%s%s", (int)(at - FIX_OK), FIX_OK, to, at + strlen(from));
+    return t;
+}
+
+/* Run the generator over dir; its exit status, and its stderr in err. */
+static int run_gen(const char *dir, char *err, size_t cap) {
+    char out[TEST_TMP_MAX + 64], log[TEST_TMP_MAX + 64], cmd[3 * TEST_TMP_MAX + 256];
+    snprintf(out, sizeof(out), "%s/table.c", dir);
+    snprintf(log, sizeof(log), "%s/stderr.txt", dir);
+    snprintf(cmd, sizeof(cmd), "%s '%s' '%s/in' 2>'%s'", WEB_VKBGEN_BIN, out, dir, log);
+    int r = system(cmd);
+    char *t = slurp(log);
+    snprintf(err, cap, "%s", t ? t : "");
+    free(t);
+    unlink(out);
+    unlink(log);
+    return r;
+}
+
+/* Each refusal the format promises, with the message naming it, from
+ * the generator the build runs (WEB_VKBGEN_BIN), over a directory that
+ * holds the valid fixture and one defect. The valid fixture is run
+ * first, so a refusal below is the defect's and not the fixture's.
+ * Seen red, each restored byte for byte after: the cross-file key
+ * check in web/tools/vendorkb.c's main() deleted (the collision case
+ * built a table: exit 0); the "never cited" refusal turned back into a
+ * note (exit 0); and the text-after-the-date refusal deleted (exit 0). */
+static void test_generator_refuses_each_defect(void) {
+    char dir[TEST_TMP_MAX + 32], in[TEST_TMP_MAX + 40], err[4096];
+    snprintf(dir, sizeof(dir), "%s/vkb-gen-XXXXXX", test_tmpdir());
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    snprintf(in, sizeof(in), "%s/in", dir);
+    WT_EQ(mkdir(in, 0700), 0);
+
+    WT_EQ(put_file(in, "fixture-vendor-ltd.md", FIX_OK), 0);
+    int r = run_gen(dir, err, sizeof(err));
+    if (r) fprintf(stderr, "    the valid fixture was refused: %s", err);
+    WT_EQ(r, 0);
+
+    static const struct { const char *from, *to, *says; } cases[] = {
+        { "country: GB [1]", "country: GB", "country is \"GB\" with no [n]" },
+        { "radios: [\"Wi-Fi 4 [2]\"]", "radios: [\"Wi-Fi 4 [3]\"]", "cites [3], which has no source line" },
+        { "kind: brand", "kind: maker", "kind \"maker\" is not one of the kinds" },
+        { ", randomization: unknown}", "}", "confidence lacks randomization" },
+        { "example.org/b (accessed 2026-11-02)\n", "example.org/b (accessed 2026-11-02)\n3. Uncited page - https://example.org/c (accessed 2026-11-02)\n", "source 3 is never cited" },
+        { "(accessed 2026-11-02)\n2.", "(accessed 2026-11-02) (via a mirror)\n2.", "text after the access date" },
+        { "1. Fixture page", "1. Fixture page (not reachable 2026-11-02)", "a source marked as not read" },
+        { "[\"Fixture Vendor GmbH [1]\"]", "[\"Fixture Vendor GmbH\"]", "affiliates item \"Fixture Vendor GmbH\" has no [n]" },
+        { "[\"Fixture Vendor GmbH [1]\"]", "[\"Fixture-Vendor Ltd [1]\"]", "is a spelling of this entry's name" },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char *t = fix_with(cases[i].from, cases[i].to);
+        if (!t) continue;
+        WT_EQ(put_file(in, "fixture-vendor-ltd.md", t), 0);
+        free(t);
+        r = run_gen(dir, err, sizeof(err));
+        if (!r || !strstr(err, cases[i].says))
+            fprintf(stderr, "    case %zu: exit %d, wanted \"%s\", got: %s\n", i, r, cases[i].says, err);
+        WT_ASSERT(r != 0);
+        WT_HAS(err, cases[i].says);
+        WT_HAS(err, "fixture-vendor-ltd.md");
+    }
+
+    /* Two files folding to one key: a second entry whose alias is the
+     * first's name with its punctuation changed. */
+    WT_EQ(put_file(in, "fixture-vendor-ltd.md", FIX_OK), 0);
+    char *t1 = fix_with("name: Fixture Vendor Ltd\naliases: [FIXTURE VENDOR LTD.]\n"
+                        "affiliates: [\"Fixture Vendor GmbH [1]\"]",
+                        "name: Other Fixture Co\naliases: [\"Fixture Vendor, Ltd\"]\naffiliates: []");
+    if (t1) {
+        WT_EQ(put_file(in, "other-fixture-co.md", t1), 0);
+        free(t1);
+    }
+    r = run_gen(dir, err, sizeof(err));
+    if (!r) fprintf(stderr, "    two files with one key were accepted\n");
+    WT_ASSERT(r != 0);
+    WT_HAS(err, "the same name once spelling is folded");
+
+    char p[TEST_TMP_MAX + 64];
+    snprintf(p, sizeof(p), "%s/fixture-vendor-ltd.md", in);
+    unlink(p);
+    snprintf(p, sizeof(p), "%s/other-fixture-co.md", in);
+    unlink(p);
+    rmdir(in);
+    rmdir(dir);
+}
+
 /* ── coverage of the reference host ── */
 
 #define REF_MAX 512
 
-typedef struct { char name[256]; int devices; int seen; } ref_t;
+typedef struct { char name[256]; int seen; } ref_t;
 
-/* REFERENCE_HOST.txt: "#" comment lines, then "NAME<TAB>DEVICES" per
- * line, NAME exactly as the registry spells it (a trailing space kept). */
+/* REFERENCE_HOST.txt: "#" comment lines, then one NAME per line, exactly
+ * as the registry spells it (a trailing space kept). */
 static int read_reference(ref_t *r, int cap) {
     char *t = slurp(VKB_DIR "/REFERENCE_HOST.txt");
     WT_ASSERT(t != NULL);
@@ -350,12 +528,9 @@ static int read_reference(ref_t *r, int cap) {
         char *nl = strchr(l, '\n');
         if (nl) *nl = '\0';
         if (*l && *l != '#') {
-            char *tab = strchr(l, '\t');
-            WT_ASSERT(tab != NULL);
-            if (tab && n < cap && (size_t)(tab - l) < sizeof(r[n].name)) {
-                memcpy(r[n].name, l, (size_t)(tab - l));
-                r[n].name[tab - l] = '\0';
-                r[n].devices = atoi(tab + 1);
+            WT_ASSERT(strchr(l, '\t') == NULL);       /* names only, no counts */
+            if (n < cap && strlen(l) < sizeof(r[n].name)) {
+                snprintf(r[n].name, sizeof(r[n].name), "%s", l);
                 r[n].seen = 0;
                 n++;
             }
@@ -372,23 +547,46 @@ static ref_t *ref_find(ref_t *r, int n, const char *name) {
 }
 
 /* COVERAGE.md's two lists, "## Have" and "## Pending", each line
- *   - "NAME" - N device[s] - <the entry's file | why it is pending>
+ *   - "NAME" - <the entry's file [ (affiliate)] | why it is pending>
  * held to REFERENCE_HOST.txt (together exactly its names, each once,
- * with its device count) and to the table (a Have name finds the file
- * the line names, a Pending name finds none). Seen red with
+ * every one a registry Organization Name) and to the table (a Have name
+ * finds the file the line names, "(affiliate)" exactly when it reaches
+ * it as an affiliate; a Pending name finds none), and its count line
+ * ("Reference host: N vendor names; H have an entry (A of them through
+ * an affiliate), P are pending.") to the lists. Seen red with
  * web/data/vendors/wnc-corporation.md moved out of the tree ("WNC
  * Corporation" under Have found no entry), with the "SJIT Co., Ltd."
- * line deleted from Pending (a reference name in neither list), and
- * with "Ring LLC" copied into Pending (a name twice, and a Pending
- * name that resolves); each file restored byte for byte. */
+ * line deleted from Pending (a reference name in neither list), with
+ * "Ring LLC" copied into Pending (a name twice, and a Pending name that
+ * resolves), with the "LG Innotek" line's file written lg-innotek-x.md
+ * (the path mismatch), with "SJIT Co., Ltd." respelt "SJIT Co.,Ltd." in
+ * both files (no registry name), and with the count line's 160 written
+ * 161; each file restored byte for byte. */
 static void test_coverage_matches_reference_and_entries(void) {
+    static const char *const files[] = { "web/data/oui.csv", "web/data/mam.csv",
+                                         "web/data/oui36.csv", "web/data/iab.csv" };
+    char *csv[4];
+    for (int i = 0; i < 4; i++) csv[i] = slurp(files[i]);
     static ref_t ref[REF_MAX];
     int nref = read_reference(ref, REF_MAX);
     WT_ASSERT(nref >= 100);
+    for (int i = 0; i < nref; i++) {
+        int ok = in_registry((const char *const *)csv, 4, ref[i].name);
+        if (!ok) fprintf(stderr, "    REFERENCE_HOST.txt: \"%s\" is no registry Organization Name\n",
+                         ref[i].name);
+        WT_ASSERT(ok);
+    }
+    for (int i = 0; i < 4; i++) free(csv[i]);
     char *t = slurp(VKB_DIR "/" WEB_VKB_COVERAGE);
     WT_ASSERT(t != NULL);
     if (!t) return;
-    int section = 0, have = 0, pending = 0, have_devices = 0, total = 0;
+    int c_ref = -1, c_have = -1, c_aff = -1, c_pend = -1;
+    const char *cl = strstr(t, "Reference host: ");
+    WT_ASSERT(cl != NULL);
+    if (cl) WT_EQ(sscanf(cl, "Reference host: %d vendor names; %d have an entry (%d of them "
+                             "through an affiliate), %d are pending.",
+                         &c_ref, &c_have, &c_aff, &c_pend), 4);
+    int section = 0, have = 0, pending = 0, affiliates = 0;
     for (char *l = t; l && *l; ) {
         char *nl = strchr(l, '\n');
         if (nl) *nl = '\0';
@@ -400,10 +598,7 @@ static void test_coverage_matches_reference_and_entries(void) {
             WT_ASSERT(q != NULL);
             if (q) {
                 *q = '\0';
-                char *rest = q + 4;
-                int dev = atoi(rest);
-                char *tail = strstr(rest, " - ");
-                WT_ASSERT(tail != NULL);
+                char *tail = q + 4;
                 ref_t *r = ref_find(ref, nref, name);
                 if (!r) fprintf(stderr, "    COVERAGE.md: \"%s\" is not in REFERENCE_HOST.txt\n", name);
                 WT_ASSERT(r != NULL);
@@ -411,15 +606,19 @@ static void test_coverage_matches_reference_and_entries(void) {
                     if (r->seen) fprintf(stderr, "    COVERAGE.md: \"%s\" is listed twice\n", name);
                     WT_EQ(r->seen, 0);
                     r->seen = 1;
-                    WT_EQ(dev, r->devices);
                 }
-                const web_vkb_t *e = web_vendorkb_find(name);
+                int aff = 0;
+                const web_vkb_t *e = web_vendorkb_lookup(name, &aff);
                 if (section == 1) {
                     have++;
-                    have_devices += dev;
+                    affiliates += aff;
                     if (!e) fprintf(stderr, "    COVERAGE.md: \"%s\" is under Have and has no entry\n", name);
                     WT_ASSERT(e != NULL);
-                    if (e && tail) WT_ASSERT(!strcmp(e->file, tail + 3));
+                    char want[512];
+                    if (e) snprintf(want, sizeof(want), "%s%s", e->file, aff ? " (affiliate)" : "");
+                    if (e && strcmp(want, tail))
+                        fprintf(stderr, "    COVERAGE.md: \"%s\" names %s, finds %s\n", name, tail, want);
+                    if (e) WT_ASSERT(!strcmp(want, tail));
                 } else {
                     pending++;
                     if (e) fprintf(stderr, "    COVERAGE.md: \"%s\" is under Pending and has %s\n",
@@ -434,10 +633,15 @@ static void test_coverage_matches_reference_and_entries(void) {
     for (int i = 0; i < nref; i++) {
         if (!ref[i].seen) fprintf(stderr, "    COVERAGE.md: \"%s\" is in neither list\n", ref[i].name);
         WT_ASSERT(ref[i].seen);
-        total += ref[i].devices;
     }
     WT_EQ(have + pending, nref);
-    WT_ASSERT(have > 0 && pending >= 0 && have_devices <= total);
+    if (c_ref != nref || c_have != have || c_aff != affiliates || c_pend != pending)
+        fprintf(stderr, "    COVERAGE.md's count line says %d/%d/%d/%d, the lists %d/%d/%d/%d\n",
+                c_ref, c_have, c_aff, c_pend, nref, have, affiliates, pending);
+    WT_EQ(c_ref, nref);
+    WT_EQ(c_have, have);
+    WT_EQ(c_aff, affiliates);
+    WT_EQ(c_pend, pending);
 }
 
 void run_vendorkb_tests(void) {
@@ -446,5 +650,6 @@ void run_vendorkb_tests(void) {
     WT_RUN(test_find_folds_spelling);
     WT_RUN(test_drawer_and_lookup_carry_the_section);
     WT_RUN(test_page_shows_research_as_text);
+    WT_RUN(test_generator_refuses_each_defect);
     WT_RUN(test_coverage_matches_reference_and_entries);
 }

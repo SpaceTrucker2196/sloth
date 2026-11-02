@@ -1,6 +1,7 @@
 ---
 name: Quanta Computer Inc.
 aliases: []
+affiliates: []
 country: TW [1]
 parent: independent, listed on the Taiwan Stock Exchange [1][2]
 founded: 1988 [1][2]
@@ -24,7 +25,6 @@ The registry holds 20 MA-L blocks under the spelling Quanta Computer Inc., all a
 No wireless silicon, radios or FCC grantee codes are documented: the FCC ID databases (fccid.io, fcc.report, the FCC grantee search) refused the session that wrote this entry, and nothing is filled in from memory. The NVD records naming Quanta Computer concern its QOCA aim AI Medical Cloud Platform, server software rather than a device on the air: an authorization bypass (CVE-2024-13040) and missing authorization, path traversal, SQL injection and arbitrary file upload flaws (CVE-2025-15235 to CVE-2025-15240) [4]. Randomization is the host operating system's behaviour and is unknown here.
 
 ## Sources
-
 1. Quanta Computer - Wikipedia - https://en.wikipedia.org/wiki/Quanta_Computer (accessed 2026-10-27)
 2. Quanta Computer company profile - https://www.quantatw.com/Quanta/english/about/company.aspx (accessed 2026-10-27)
 3. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)

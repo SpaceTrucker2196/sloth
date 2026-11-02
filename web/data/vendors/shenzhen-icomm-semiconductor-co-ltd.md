@@ -1,6 +1,7 @@
 ---
 name: "Shenzhen iComm Semiconductor CO.,LTD"
 aliases: []
+affiliates: []
 country: CN [1]
 parent: unknown
 founded: 2018 [2]

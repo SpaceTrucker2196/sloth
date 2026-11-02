@@ -1,6 +1,7 @@
 ---
 name: "Cambridge Industries(Group) Co.,Ltd."
 aliases: ["Cambridge Industries Group (CIG)"]
+affiliates: []
 country: CN [1]
 parent: unknown
 founded: unknown
@@ -24,6 +25,5 @@ That gateway has a Realtek RTL8192CE 2x2 802.11b/g/n radio, four gigabit LAN por
 Founding year, parent, the company's own product list and FCC grantee codes are unknown: the company's site did not resolve, Wikipedia has no article under the names tried, and the FCC ID databases refused the session's requests. NVD returned no records under the company's name, so no security notes are listed. Randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Adtran Total Access 324RG - DeviWiki - https://deviwiki.com/wiki/Adtran_Total_Access_324RG (accessed 2026-10-27)

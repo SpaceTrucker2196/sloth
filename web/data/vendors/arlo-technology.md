@@ -1,6 +1,7 @@
 ---
 name: Arlo Technology
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: unknown
 founded: 2014 [2]
@@ -24,7 +25,6 @@ TechInsights' teardown of the Arlo Video Doorbell AVD1001 found a SigmaStar came
 The Arlo Base Station had a network misconfiguration allowing file upload and download through restricted interfaces (CVE-2019-3949) and hard-coded root credentials on its serial port (CVE-2019-3950) [5][6]; the Arlo Q Plus accepted hard-coded SSH credentials in a special boot mode (CVE-2021-31505) [7]. Netgear's present stake is not stated in the source, so the parent is left unknown. Arlo's FCC grantee code is not listed because the FCC ID databases (fccid.io, fcc.report, apps.fcc.gov) refused this session's requests, and no source in hand documents MAC randomization either way, so it is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Arlo Technologies - Wikipedia - https://en.wikipedia.org/wiki/Arlo_Technologies (accessed 2026-10-27)
 3. Arlo Video Doorbell AVD1001 teardown - TechInsights - https://www.techinsights.com/ja/node/31307 (accessed 2026-10-27)

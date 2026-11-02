@@ -1,6 +1,7 @@
 ---
 name: Qisda Corporation
 aliases: []
+affiliates: []
 country: TW [1]
 parent: "independent (listed, Taiwan Stock Exchange 2352; BenQ is its subsidiary) [1][2]"
 founded: 1984 [1]
@@ -20,4 +21,4 @@ Qisda Corporation was founded on 21 April 1984 within the Acer group, launched t
 ## Sources
 1. 佳世達 (Qisda) - Chinese Wikipedia - https://zh.wikipedia.org/wiki/佳世達 (accessed 2026-10-27)
 2. BenQ - Wikipedia - https://en.wikipedia.org/wiki/BenQ (accessed 2026-10-27)
-3. IEEE MA-L (OUI) public listing (not reachable 2026-10-27, HTTP 418; the blocks were checked against the copy shipped in sloth web/data/oui.csv) - https://standards-oui.ieee.org/oui/oui.txt (accessed 2026-10-27)
+3. IEEE Registration Authority MA-L registry, the copy committed in sloth as web/data/oui.csv (Debian ieee-data 20260625) - https://github.com/SpaceTrucker2196/sloth/blob/main/web/data/oui.csv (accessed 2026-11-02)

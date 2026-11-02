@@ -1,6 +1,7 @@
 ---
 name: FN-LINK TECHNOLOGY Ltd.
 aliases: ["FN-LINK TECHNOLOGY LIMITED"]
+affiliates: []
 country: CN [1][2]
 parent: independent [1]
 founded: 2015 [1]

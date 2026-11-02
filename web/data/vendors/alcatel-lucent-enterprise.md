@@ -1,6 +1,7 @@
 ---
 name: Alcatel-Lucent Enterprise
 aliases: []
+affiliates: []
 country: FR [2]
 parent: China Huaxin Post and Telecom Technologies [2]
 founded: 2014 [2]
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely enterprise network equipment: an OmniAccess
 NVD records a command injection in the ALE 8008 Cloud Edition deskphone, older OmniPCX Enterprise and IP Touch flaws, and OmniSwitch management-interface flaws from 2015 [4][5]. Silicon, FCC grantee codes and randomization are unknown: no teardown was found on DeviWiki and the FCC ID databases refused the session's requests.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Alcatel-Lucent Enterprise - Wikipedia - https://en.wikipedia.org/wiki/Alcatel-Lucent_Enterprise (accessed 2026-10-27)
 3. WLAN products - Alcatel-Lucent Enterprise - https://www.al-enterprise.com/en/products/wlan (accessed 2026-10-27)

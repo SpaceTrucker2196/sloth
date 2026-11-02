@@ -1,6 +1,7 @@
 ---
 name: Wingtech Mobile Communications Co.,Ltd
 aliases: ["Wingtech Mobile Communications Co., Ltd.", "Wingtech Mobile Communications Co.,Ltd.", "Wingtech Mobile Communications  Co.,Ltd."]
+affiliates: []
 country: CN [1][2]
 parent: unknown
 founded: unknown
@@ -26,7 +27,6 @@ Wingtech was added to the US Entity List in December 2024 [3]. In March 2025 it 
 Radios, silicon, FCC grantee codes and randomization are not listed: the FCC ID databases refused requests from the session that wrote this entry, no teardown naming a Wingtech-built handset was read, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-M assignments (mam.csv) - https://standards-oui.ieee.org/oui28/mam.csv (accessed 2026-10-27)
 3. Wingtech - Wikipedia - https://en.wikipedia.org/wiki/Wingtech (accessed 2026-10-27)

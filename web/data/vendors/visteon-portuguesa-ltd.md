@@ -1,6 +1,7 @@
 ---
 name: "Visteon Portuguesa, Ltd"
 aliases: []
+affiliates: []
 country: PT [1]
 parent: Visteon Corporation, the Ford spin-off with facilities in Portugal (inferred from the name) [2][3]
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in this block is most likely a car's infotainment head unit, audio unit or
 Founding year and FCC grantee codes are unknown: no source in hand describes the Portuguese subsidiary's history, and the FCC ID databases refused automated access from this session. Randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Visteon - Wikipedia - https://en.wikipedia.org/wiki/Visteon (accessed 2026-10-27)
 3. Visteon Palmela investment - Eurofound European Restructuring Monitor - https://apps.eurofound.europa.eu/restructuring-events/detail/203466 (accessed 2026-10-27)

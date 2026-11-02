@@ -1,6 +1,7 @@
 ---
 name: Cambium Networks Limited
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: Univastu India Limited, which completed its acquisition on 14 October 2026 [1]
 founded: 2011 [1]
@@ -24,7 +25,6 @@ A MAC in a Cambium block is most likely outdoor fixed-wireless gear used by broa
 NVD lists firmware flaws in ePMP and cnPilot, including an undocumented root web shell in cnPilot 4.3.2-R4 and earlier, and a remote code execution flaw in the ePMP Force 300-25 [6][7][8][9][10]. Silicon and FCC grantee codes are not listed: the FCC ID databases refused requests from this session and no teardown was found, and nothing is filled in from memory. Randomization is unknown because these are infrastructure devices with no documented behaviour.
 
 ## Sources
-
 1. Cambium Networks - Wikipedia - https://en.wikipedia.org/wiki/Cambium_Networks (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. About Cambium Networks - https://www.cambiumnetworks.com/about-cambium/ (accessed 2026-10-27)

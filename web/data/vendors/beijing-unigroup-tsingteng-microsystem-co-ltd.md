@@ -1,6 +1,7 @@
 ---
 name: "Beijing Unigroup Tsingteng Microsystem Co., LTD."
 aliases: []
+affiliates: []
 country: CN [1]
 parent: unknown
 founded: unknown
@@ -24,7 +25,6 @@ The Common Criteria records list THD89 secure microcontroller certificates at EA
 Why a secure-element and NFC chip designer holds an OUI is not documented in the sources consulted; a MAC in this block could be a development board, a reference design or a product built on its chips, so device class is unknown. Founding year, FCC grantee codes and randomization are not listed: the company's own site returned no readable content and the FCC ID databases refused requests from the session that wrote this entry, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. 紫光同芯 THD89 passes SOGIS CC EAL6+ - ITHome - https://www.ithome.com/0/495/550.htm (accessed 2026-10-27)
 3. THD89 1.0.3 Secure Element version 1.0 - sec-certs.org - https://sec-certs.org/cc/f030b4c2adc03fa7/ (accessed 2026-10-27)

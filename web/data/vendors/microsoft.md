@@ -1,6 +1,7 @@
 ---
 name: Microsoft
 aliases: ["Microsoft Corp.", "MICROSOFT CORP."]
+affiliates: []
 country: US [1][2]
 parent: independent [2]
 founded: 1975 [2]
@@ -26,7 +27,6 @@ iFixit's Surface Pro 2 teardown names a Marvell Avastar 88W8797 2x2 WLAN/Bluetoo
 Windows offers random hardware addresses, for all networks or for one network, on Wi-Fi hardware that supports it, and Microsoft's page does not say whether it is on by default [8]. Newer Surface silicon was not documented by any source reachable from this session, since the FCC ID databases refused automated access.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) and IAB assignments (iab.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Microsoft - Wikipedia - https://en.wikipedia.org/wiki/Microsoft (accessed 2026-10-27)
 3. Surface regulatory information - Microsoft Support - https://support.microsoft.com/zh-tw/surface/surface-%E6%B3%95%E8%A6%8F%E8%B3%87%E8%A8%8A-95f836fc-fcaa-4a06-96de-a04902d2889f (accessed 2026-10-27)

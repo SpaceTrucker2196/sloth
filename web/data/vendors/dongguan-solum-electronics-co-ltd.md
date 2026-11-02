@@ -1,6 +1,7 @@
 ---
 name: "DONGGUAN SOLUM ELECTRONICS CO.,LTD"
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: unknown
 founded: unknown
@@ -24,7 +25,6 @@ The shared name and those trading partners suggest a factory of the Korean SOLUM
 What a MAC in this block is cannot be stated from the sources reached: the Panjiva commodity text is redacted, SOLUM's own pages do not name its sites, and the FCC ID databases refused automated access, so radios, silicon, FCC grantee codes and randomization are unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Dongguan Solum Electronics Co Ltd - Panjiva - https://es.panjiva.com/Dongguan-Solum-Electronics-Co-Ltd/37354157 (accessed 2026-10-27)
 3. The Company - SOLUM - https://www.solum-group.com/the-company (accessed 2026-10-27)

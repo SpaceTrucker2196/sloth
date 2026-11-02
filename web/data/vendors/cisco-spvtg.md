@@ -1,6 +1,7 @@
 ---
 name: Cisco SPVTG
 aliases: []
+affiliates: []
 country: US [1]
 parent: Cisco Systems, inferred from the registry name and from Cisco's 2006 purchase of Lawrenceville-based Scientific Atlanta [1][2]
 founded: unknown
@@ -24,7 +25,6 @@ Cisco sold its television set-top box and cable modem business to Technicolor fo
 WikiDevi lists LDK, UDX and PKW as Cisco's FCC grantee codes and VUI prefixes on the DPC gateways, but none is tied to this block by a source, so no grantee code is listed [4]. No security advisory naming SPVTG was found, and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Scientific Atlanta - Wikipedia - https://en.wikipedia.org/wiki/Scientific_Atlanta (accessed 2026-10-27)
 3. Technicolor SA - Wikipedia - https://en.wikipedia.org/wiki/Technicolor_SA (accessed 2026-10-27)

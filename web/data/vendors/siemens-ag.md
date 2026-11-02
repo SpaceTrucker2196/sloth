@@ -1,6 +1,7 @@
 ---
 name: Siemens AG
 aliases: ["SIEMENS AG", "Siemens AG,"]
+affiliates: []
 country: DE [1]
 parent: independent [4]
 founded: 1847 [4]
@@ -22,7 +23,6 @@ Siemens is a German technology company founded in Berlin on 1 October 1847 by We
 A MAC in these blocks is most likely industrial automation equipment: SIMATIC is Siemens' PLC and automation family, whose S7-1200 controllers carry integrated Profinet and Ethernet interfaces and whose S7-1500 CPUs carry Profinet interfaces as standard [5]. Which products sit in which block is not documented by the sources consulted, so found_in is inferred and radios and silicon are empty. NVD records CVE-2022-38465, an insufficiently protected global private key across SIMATIC S7-1200, S7-1500 and related CPUs that lets an attacker who extracts it from one CPU attack legacy PG/PC and HMI communication of the family [6]. FCC grantee codes are not listed because the FCC ID databases refused access from the session that wrote this entry, and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-M assignments (mam.csv) - https://standards-oui.ieee.org/oui28/mam.csv (accessed 2026-10-27)
 3. IEEE Registration Authority, MA-S assignments (oui36.csv) - https://standards-oui.ieee.org/oui36/oui36.csv (accessed 2026-10-27)

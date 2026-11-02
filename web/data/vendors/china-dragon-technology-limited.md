@@ -1,6 +1,7 @@
 ---
 name: CHINA DRAGON TECHNOLOGY LIMITED
 aliases: ["China Dragon Technology Limited"]
+affiliates: []
 country: CN [1][2]
 parent: unknown
 founded: unknown

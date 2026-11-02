@@ -1,6 +1,7 @@
 ---
 name: "YAMAHA MOTOR CO.,LTD"
 aliases: []
+affiliates: []
 country: JP [1][2]
 parent: unknown
 founded: 1955 [2]
@@ -24,7 +25,6 @@ No source consulted says what equipment carries this one block, so device classe
 Yamaha Corporation, the musical instrument and audio company, is a separate registrant and is not covered here [2]. Silicon, FCC grantee codes and security history are not documented by the sources consulted, and the FCC ID databases refused automated access from this session. Randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Yamaha Motor Company - Wikipedia - https://en.wikipedia.org/wiki/Yamaha_Motor_Company (accessed 2026-10-27)
 3. Y-Connect, smartphone connectivity - Yamaha Motor - https://global.yamaha-motor.com/business/mc/connectivity/yconnect/sccu.html (accessed 2026-10-27)

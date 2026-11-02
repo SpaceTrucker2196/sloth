@@ -1,6 +1,7 @@
 ---
 name: D-Link International
 aliases: []
+affiliates: []
 country: SG [1][3]
 parent: D-Link Corporation, the Taipei networking company that opened D-Link International Pte. Ltd. in Singapore in 1994 [2][4]
 founded: 1994 [4]
@@ -24,7 +25,6 @@ The IEEE registry lists 60 MA-L blocks under "D-Link International", nearly all 
 Security history is heavy: the US FTC sued in 2017 over router and camera security and the case settled in 2019, a backdoor was found in DIR-100 firmware in 2013, and in 2024 D-Link declined to patch a NAS flaw because the models were end of life [2]. That flaw, CVE-2024-3273, is an unauthenticated command injection in nas_sharing.cgi [6]. D-Link's advisory portal continues to post end-of-life and end-of-service vulnerability notices [8]. Randomization is not documented.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. D-Link - Wikipedia - https://en.wikipedia.org/wiki/D-Link (accessed 2026-10-27)
 3. D-LINK INTERNATIONAL PTE LTD - Bloomberg LEI record - https://lei.bloomberg.com/leis/view/254900ENTYLQJ0BTRN90 (accessed 2026-10-27)

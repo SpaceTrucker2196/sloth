@@ -676,18 +676,25 @@ static void jw_list(web_jw_t *w, const char *key, const char *const *v, int n) {
  * {"found":false} for a vendor with no file yet (the page then says
  * "no research yet for <name>") and for no vendor at all. Every value
  * is a string through web_jw_str(): a source title or a summary is
- * never markup in the bytes we send. */
+ * never markup in the bytes we send. A vendor found through one of the
+ * entry's affiliates is a different company from the one the entry
+ * describes: "affiliate" says so, and its country, parent and founded
+ * go out as "unknown" (with country's confidence) so no reader of the
+ * JSON takes the entry's for the registrant's. */
 static void research_member(web_jw_t *w, const char *vendor) {
-    const web_vkb_t *e = vendor ? web_vendorkb_find(vendor) : NULL;
+    int aff = 0;
+    const web_vkb_t *e = vendor ? web_vendorkb_lookup(vendor, &aff) : NULL;
     web_jw_raw(w, ",\"vendor_research\":{\"found\":");
     if (!e) { web_jw_raw(w, "false}"); return; }
     web_jw_raw(w, "true,\"file\":");  web_jw_str(w, e->file);
     web_jw_raw(w, ",\"name\":");       web_jw_str(w, e->name);
     jw_list(w, "aliases", e->aliases, e->naliases);
+    jw_list(w, "affiliates", e->affiliates, e->naffiliates);
+    web_jw_raw(w, aff ? ",\"affiliate\":true" : ",\"affiliate\":false");
     web_jw_raw(w, ",\"kind\":");       web_jw_str(w, e->kind);
-    web_jw_raw(w, ",\"country\":");    web_jw_str(w, e->country);
-    web_jw_raw(w, ",\"parent\":");     web_jw_str(w, e->parent);
-    web_jw_raw(w, ",\"founded\":");    web_jw_str(w, e->founded);
+    web_jw_raw(w, ",\"country\":");    web_jw_str(w, aff ? "unknown" : e->country);
+    web_jw_raw(w, ",\"parent\":");     web_jw_str(w, aff ? "unknown" : e->parent);
+    web_jw_raw(w, ",\"founded\":");    web_jw_str(w, aff ? "unknown" : e->founded);
     jw_list(w, "device_classes", e->device_classes, e->ndevice_classes);
     jw_list(w, "found_in", e->found_in, e->nfound_in);
     jw_list(w, "radios", e->radios, e->nradios);
@@ -695,7 +702,7 @@ static void research_member(web_jw_t *w, const char *vendor) {
     jw_list(w, "fcc_grantee", e->fcc_grantee, e->nfcc_grantee);
     web_jw_raw(w, ",\"randomization\":"); web_jw_str(w, e->randomization);
     jw_list(w, "security_notes", e->security_notes, e->nsecurity_notes);
-    web_jw_raw(w, ",\"confidence\":{\"country\":"); web_jw_str(w, e->conf_country);
+    web_jw_raw(w, ",\"confidence\":{\"country\":"); web_jw_str(w, aff ? "unknown" : e->conf_country);
     web_jw_raw(w, ",\"silicon\":");       web_jw_str(w, e->conf_silicon);
     web_jw_raw(w, ",\"radios\":");        web_jw_str(w, e->conf_radios);
     web_jw_raw(w, ",\"found_in\":");      web_jw_str(w, e->conf_found_in);

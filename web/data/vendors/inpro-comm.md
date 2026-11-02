@@ -1,6 +1,7 @@
 ---
 name: InPro Comm
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: MediaTek (acquired early 2005) [2]
 founded: 2002 [2]
@@ -24,7 +25,6 @@ Inprocomm made IEEE 802.11b, g and a/g chips with reference designs for PCI, min
 If the identification holds, a MAC from this block is most likely a mid-2000s 802.11b/g card or router built on an Inprocomm reference design [2]. Such hardware predates MAC randomization, but no source in hand states its behaviour, so the field is unknown. No FCC grantee code or security advisory was found for the company.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Inprocomm - Wikipedia - https://en.wikipedia.org/wiki/Inprocomm (accessed 2026-10-27)
 3. Taiwan's InProcomm readies 802.11g, .11a/g chips - Design and Reuse (EE Times) - https://us.design-reuse.com/news/5901/taiwan-inprocomm-readies-802-11g-11a-g-chips.html (accessed 2026-10-27)

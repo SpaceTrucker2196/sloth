@@ -1,6 +1,7 @@
 ---
 name: FUJITSU LIMITED
 aliases: [Fujitsu Limited]
+affiliates: []
 country: JP [1]
 parent: Furukawa Group [1]
 founded: 1935 [1]
@@ -24,6 +25,5 @@ The registry holds 21 MA-L blocks as FUJITSU LIMITED and three as Fujitsu Limite
 No radios, silicon, FCC grantee codes or advisories are listed: the FCC ID databases refused the session that wrote this entry and no Fujitsu security advisory was consulted, so nothing is filled in from memory. Randomization is the host operating system's behaviour and is unknown here.
 
 ## Sources
-
 1. Fujitsu - Wikipedia - https://en.wikipedia.org/wiki/Fujitsu (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)

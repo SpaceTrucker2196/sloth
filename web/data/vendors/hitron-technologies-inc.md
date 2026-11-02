@@ -1,6 +1,7 @@
 ---
 name: Hitron Technologies. Inc
 aliases: ["Hitron Technology, Inc."]
+affiliates: []
 country: TW [1]
 parent: unknown
 founded: unknown
@@ -22,7 +23,6 @@ Hitron Technologies registers 31 MA-L blocks as "Hitron Technologies. Inc" at Hs
 DeviWiki documents the silicon: Intel Puma cable SoCs (DHCE2652, DNCE2500GU, FHCE2712M, Puma 7) paired with Qualcomm Atheros QCA9880 or QCA9984, Ralink or MediaTek Wi-Fi, and lists FCC IDs under the U4P and 2AHKM prefixes, for example U4P-CGNM and 2AHKM-CODA4589 [3]. Founding year, parent company, address randomization and security advisories are not documented by the sources consulted: Hitron's about page, a Wikipedia article and the FCC grantee search were not reachable from this session, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Hitron Technologies - https://www.hitrontech.com/ (accessed 2026-10-27)
 3. Hitron - DeviWiki - https://deviwiki.com/wiki/Hitron (accessed 2026-10-27)

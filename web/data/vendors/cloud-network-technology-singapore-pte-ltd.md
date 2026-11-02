@@ -1,6 +1,7 @@
 ---
 name: CLOUD NETWORK TECHNOLOGY SINGAPORE PTE. LTD.
-aliases: ["Cloud Network Technology (Samoa) Limited"]
+aliases: []
+affiliates: ["Cloud Network Technology (Samoa) Limited [1]"]
 country: CN [2]
 parent: Hon Hai Precision Industry (Foxconn) (inferred from community OUI-to-vendor mappings; no filing found) [3][4]
 founded: unknown

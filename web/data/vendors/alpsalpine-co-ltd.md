@@ -1,6 +1,7 @@
 ---
 name: "ALPSALPINE CO,.LTD"
 aliases: ["ALPSALPINE CO.,LTD."]
+affiliates: []
 country: JP [1][11]
 parent: independent (Alps Alpine Co., Ltd., formed by the 2019 integration of Alps Electric and Alpine Electronics) [1]
 founded: 1948 [1][3]

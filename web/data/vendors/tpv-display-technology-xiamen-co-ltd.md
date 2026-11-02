@@ -1,6 +1,7 @@
 ---
 name: "TPV Display Technology (Xiamen) Co.,Ltd."
 aliases: ["TPV Display Technology(Xiamen) Co.,Ltd."]
+affiliates: []
 country: CN [1][2]
 parent: TPV Technology [2]
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely the network interface of a TV or monitor bu
 No FCC grantee code, radio or silicon record naming this subsidiary was found, and the FCC ID databases refused automated access from this session, so those fields are empty and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. About TPV - TPV Technology - https://tpv-tech.com/en/info.html (accessed 2026-10-27)
 3. TPV Technology - Wikipedia - https://en.wikipedia.org/wiki/TPV_Technology (accessed 2026-10-27)

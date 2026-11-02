@@ -1,6 +1,7 @@
 ---
 name: "CradlePoint, Inc"
 aliases: []
+affiliates: []
 country: US [1][2][3]
 parent: Ericsson (acquired September 2020) [2]
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in a Cradlepoint block is most likely a 4G or 5G WWAN router, adapter or a
 Founding year, chipsets, FCC grantee codes, Wi-Fi generations and randomisation are unknown: Wikipedia's Cradlepoint article redirects to Ericsson, the FCC databases refused the session that wrote this entry, no teardown was found, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Cradlepoint (redirects to Ericsson) - Wikipedia - https://en.wikipedia.org/wiki/Cradlepoint (accessed 2026-10-27)
 3. Ericsson Enterprise Wireless Solutions (Cradlepoint) home page - https://cradlepoint.ericsson.com/ (accessed 2026-10-27)

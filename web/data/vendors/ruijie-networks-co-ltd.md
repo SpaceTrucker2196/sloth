@@ -1,6 +1,7 @@
 ---
 name: "Ruijie Networks Co.,LTD"
 aliases: []
+affiliates: []
 country: CN [1]
 parent: unknown
 founded: 2000 [2]
@@ -24,7 +25,6 @@ A MAC in a Ruijie block is most likely an enterprise or Reyee access point, rout
 In December 2024 Claroty's Team82 disclosed ten vulnerabilities in the Reyee cloud platform and Reyee OS devices before 2.260.0.1329 that could have let an attacker run code on about 50,000 cloud-connected devices; because the access points broadcast their serial number in Wi-Fi beacons, an attacker near one could take a shell on it without the Wi-Fi password, and Ruijie fixed the issues in its cloud [3]. No source consulted documents whether these devices randomise their addresses, so randomization is unknown. Wikipedia had no article at the expected title and the FCC ID databases refused automated access from this session, so parent company is unknown and the grantee code rests on TechInfoDepot.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. About Ruijie Networks - Ruijie Networks - https://www.ruijie.com/en-global/about/news/8199 (accessed 2026-10-27)
 3. The Insecure IoT Cloud Strikes Again: RCE on Ruijie Cloud-Connected Devices - Claroty Team82 - https://claroty.com/team82/research/the-insecure-iot-cloud-strikes-again-rce-on-ruijie-cloud-connected-devices (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: Sercomm Corporation.
 aliases: []
+affiliates: []
 country: TW [1]
 parent: none named; listed on the Taiwan Stock Exchange (TWSE 5388) [2]
 founded: 1992 [2]
@@ -24,7 +25,6 @@ A MAC in a Sercomm block is most likely an operator-supplied gateway, router, re
 In 2014 Eloi Vanderbeken found that the TCP 32764 backdoor, earlier reported in Linksys, Netgear, Cisco and Diamond routers made by SerComm, was still present in Netgear DGN1000 firmware 1.1.0.55 after the patch and could be re-enabled from the local network by a crafted raw-Ethernet packet [4]. No teardown naming silicon and no randomization documentation was found, and the FCC ID databases could not be consulted, so no grantee code is listed [2][3].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Sercomm: About Sercomm - https://www.sercomm.com/en/company (accessed 2026-10-27)
 3. Sercomm - Pioneering Broadband Solutions - https://www.sercomm.com/ (accessed 2026-10-27)

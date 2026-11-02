@@ -1,6 +1,7 @@
 ---
 name: HP Inc.
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: independent, a public company (NYSE: HPQ) and the legal successor of Hewlett-Packard after the 2015 split [2]
 founded: 1939 [2]
@@ -24,7 +25,6 @@ Printers that raise their own Wi-Fi Direct network are worth a look: CERT/CC dis
 Silicon and the FCC grantee code are not listed because the FCC ID databases (fccid.io, fcc.report, device.report, apps.fcc.gov) refused this session's requests and no teardown was consulted. HP PCs take their MAC behaviour from the operating system, and no source in hand documents it, so randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. HP Inc. - Wikipedia - https://en.wikipedia.org/wiki/HP_Inc. (accessed 2026-10-27)
 3. VU#828543 HP Deskjet 2800 Printer Series Webservers contain Missing Authorization Vulnerability - CERT/CC - https://kb.cert.org/vuls/id/828543 (accessed 2026-10-27)

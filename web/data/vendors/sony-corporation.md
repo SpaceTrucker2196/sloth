@@ -1,6 +1,7 @@
 ---
 name: Sony Corporation
 aliases: []
+affiliates: []
 country: JP [1][2]
 parent: Sony Group Corporation [1]
 founded: 1946 [1]
@@ -46,7 +47,6 @@ this entry, and nothing is filled in from memory. No security advisory
 was consulted, so security_notes is empty rather than clean.
 
 ## Sources
-
 1. Sony - Wikipedia - https://en.wikipedia.org/wiki/Sony (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Sony Mobile - Wikipedia - https://en.wikipedia.org/wiki/Sony_Mobile (accessed 2026-10-27)

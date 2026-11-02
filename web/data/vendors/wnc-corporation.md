@@ -1,6 +1,7 @@
 ---
 name: WNC Corporation
 aliases: []
+affiliates: []
 country: TW [2][3]
 parent: Wistron Corporation [3]
 founded: 1996 [3]

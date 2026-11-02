@@ -1,6 +1,7 @@
 ---
 name: FREEBOX SAS
 aliases: []
+affiliates: []
 country: FR [1]
 parent: unknown
 founded: unknown
@@ -22,7 +23,6 @@ The IEEE registry lists 13 MA-L blocks to "FREEBOX SAS" at rue de la Ville l'Eve
 French Wikipedia documents each generation: the Revolution (2010) with 802.11n and later 802.11ac on 5 GHz, Broadcom BCM6368 and Marvell Kirkwood 88F6281 in the Server and an Intel CE4150 in the Player; the Mini 4K (2015) with a Broadcom BCM7252 Player; the Delta (2018) with tri-band 802.11ac, a Marvell Armada 8040 Server and a Qualcomm APQ8098 Devialet Player; the Pop (2020) with a Broadcom BCM63158 Server and Amlogic S905X2 Player, moving to Wi-Fi 6 in 2022 and Wi-Fi 7 with 6 GHz in 2024; and the Ultra (2024) with Wi-Fi 7 on a Qualcomm Networking Pro 820 (IPQ9574) [2]. FCC grantee codes, address randomization and security advisories are not documented by the sources consulted from this session, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Freebox - Wikipedia (French) - https://fr.wikipedia.org/wiki/Freebox (accessed 2026-10-27)
 3. Free (ISP) - Wikipedia - https://en.wikipedia.org/wiki/Free_(ISP) (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: "iRobot Corporation "
 aliases: ["iRobot Corporation"]
+affiliates: []
 country: US [1][2]
 parent: Shenzhen Picea Robotics, named as acquirer under the restructuring that accompanied the December 2025 Chapter 11 filing [2]
 founded: 1990 [2]
@@ -26,7 +27,6 @@ In 2020 images taken by development versions of the Roomba J7 were posted to soc
 The FCC ID databases (fccid.io, fcc.report, apps.fcc.gov) refused automated access from this session and no teardown naming the Wi-Fi chip was reachable, so silicon and FCC grantee codes are not listed and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. iRobot - Wikipedia - https://en.wikipedia.org/wiki/IRobot (accessed 2026-10-27)
 3. Which Wi-Fi networks can my robot connect to - iRobot support - https://homesupport.irobot.com/articles/en_US/Knowledge/17734 (accessed 2026-10-27)

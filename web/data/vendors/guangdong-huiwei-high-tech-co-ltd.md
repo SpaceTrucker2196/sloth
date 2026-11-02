@@ -1,6 +1,7 @@
 ---
 name: "Guangdong Huiwei High-tech Co., Ltd."
 aliases: []
+affiliates: []
 country: CN [1]
 parent: unknown
 founded: unknown
@@ -22,7 +23,6 @@ The IEEE registry lists one MA-L block, 7C:0C:F6, to "Guangdong Huiwei High-tech
 No company website, product, FCC grantee code or teardown naming this registrant could be found by web searches in English and Chinese, so what a device in this block is, its radios and its silicon are all unknown, and the kind is given as other for want of any documented product line. Nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. 7C:0C:F6 MAC address lookup - maclookup.app - https://maclookup.app/macaddress/7c0cf6 (accessed 2026-10-27)
 3. MAC address lookup results for prefix 7C:0C:FA - maclookup.app - https://maclookup.app/macaddress/7c0cfa (accessed 2026-10-27)

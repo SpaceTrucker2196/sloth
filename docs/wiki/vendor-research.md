@@ -17,7 +17,11 @@ enforces, and how the section reaches the page.
 `web/src/web_devices.c` (`research_member()`), `web/ui/app.js`
 (`vendorResearch()`), `web/tests/test_vendorkb.c`, `web/data/SOURCE.md`.
 
-**Last updated**: 2026-11-01 (the research set:
+**Last updated**: 2026-11-02 (the review pass: `affiliates` for
+separate companies the registry lists under their own names, every
+listed source cited and read, a source line ending at its date, the
+generator's refusals tested, the reference list without device
+counts); 2026-11-01 (the research set:
 <!-- count:vendors -->277<!-- /count --> entries, covering 160 of the
 reference host's 163 vendor names, three pending; before it, the
 pipeline and three sample entries; owner request of 2026-10-27).
@@ -37,12 +41,15 @@ search budget was spent, so verification fetched only URLs the entries
 already cite.
 
 The set leads with the reference host's vendors: every distinct IEEE
-name the MACs on that host resolved to, 163 names over 1672 devices,
-listed in `web/data/vendors/REFERENCE_HOST.txt`. `COVERAGE.md` beside
-the entries splits that list in two. Under Have are the 160 names (1667
-devices) that find an entry, each with the file it finds. Under Pending
-are three names (5 devices) that have no entry, because no public page,
-filing or teardown was found tying them to a company or a product:
+name the MACs on that host resolved to, listed in
+`web/data/vendors/REFERENCE_HOST.txt` by name only (how many devices
+carried each is not kept in the repository). `COVERAGE.md` beside the
+entries splits that list in two and states the totals on one count
+line the test holds to the lists. Under Have are the names that find an
+entry, each with the file it finds and `(affiliate)` when it reaches
+that file as a separate company. Under Pending are the names with no
+entry, because no public page, filing or teardown was found tying them
+to a company or a product; at the time of writing they are:
 
 - `SJI Industry Company` and `SJIT Co., Ltd.` - the registry gives the
   same Hwaseong-si (KR) street address it gives Seongji Industry Company,
@@ -94,7 +101,8 @@ generator refuses a file not named for its `name` field.
 ```
 ---
 name: <the exact IEEE "Organization Name" string, quoted when it holds a comma>
-aliases: [<the registry's other spellings of the same company, exact; may be empty>]
+aliases: [<the registry's other spellings of the same legal entity, exact; may be empty>]
+affiliates: [<"<exact registry string> [n]": a separate company of the same group; may be empty>]
 country: <ISO 3166 alpha-2 and a source index, "JP [1]", or unknown>
 parent: <"independent [n]", a parent company with [n], or unknown>
 founded: <"1944 [1]" or unknown>
@@ -129,8 +137,26 @@ separated by commas or spaces, `]`: `[3]`, `[2][5]` and `[2, 5]` all
 work. The summary is plain text: no Markdown link, emphasis or code
 marks (the page sets it with `textContent`, so markup would show as
 markup). A source line is `N. title - URL (accessed YYYY-MM-DD)`, one
-per line, numbered 1, 2, ... in order; an indented line continues the
-one above.
+per line, numbered 1, 2, ... in order, and ends at the date; an
+indented line continues the one above. Only a page that was read and
+that supports what cites it is a source: one that could not be fetched,
+or that turned out not to say what it was cited for, is dropped with
+its claim, not listed with a note (a note after the date never reached
+the drawer, which showed the page as accessed).
+
+**Aliases and affiliates.** An alias is another spelling of the
+entry's own legal entity: case, punctuation or spacing, a department
+or division suffix (`Ericsson, EAB/RWI/K`, `Samsung Electronics Co.,
+Ltd. ARTIK`), or a straight rename (`Facebook Inc` for `Meta
+Platforms, Inc.`). A subsidiary, branch, parent, predecessor or other
+company in the group that registered blocks under its own name is an
+affiliate: it carries the `[n]` that ties it to the entry, and a MAC
+whose block is registered to it finds the entry flagged as one, so the
+section shows the entry's products and radios but not its country,
+parent or founding year, which belong to another company
+(`AUMOVIO Germany GmbH` under `AUMOVIO Systems, Inc.`, `Raspberry Pi
+Foundation` under `Raspberry Pi Trading Ltd`). When the tie is only
+inferred (a shared name or address), the summary says so.
 
 ## The rules the build enforces
 
@@ -146,60 +172,80 @@ stops the build, naming the file and the defect, when:
   `documented`, `inferred`, `unknown`; `researched` is not a date;
 - a `[n]` anywhere names no source line n;
 - `country`, `parent`, `founded` or `randomization` is not `unknown` and
-  carries no `[n]`; an item of `found_in`, `radios`, `silicon`,
-  `fcc_grantee` or `security_notes` carries no `[n]`; the summary cites
-  nothing;
+  carries no `[n]`; an item of `affiliates`, `found_in`, `radios`,
+  `silicon`, `fcc_grantee` or `security_notes` carries no `[n]`; the
+  summary cites nothing;
 - the source list is not numbered 1..n in order, a line lacks
-  ` - <URL>` or `(accessed YYYY-MM-DD)`, or anything other than a source
-  line follows `## Sources`;
+  ` - <URL>` or `(accessed YYYY-MM-DD)`, has text after the date, or
+  says the page was not reachable or does not support the claim, or
+  anything other than a source line follows `## Sources`;
+- a source is never cited (the drawer lists every source as backing
+  the entry);
 - the file is not named for its `name` field;
-- a name or alias, once spelling is folded, is already another file's.
+- a name, alias or affiliate, once spelling is folded, is already
+  another file's, or an affiliate folds onto its own entry's name or an
+  alias (it is then a spelling, and belongs under `aliases`).
 
-A source that is never cited is noted on stderr, not refused.
 `COVERAGE.md` is passed over by name (`WEB_VKB_COVERAGE` in
 `web_vendorkb.h`): it is about the entries, not one.
 
 ## How the page finds an entry
 
 The generated table (`build/web/web_vendorkb_table.c`, never committed)
-keys each entry by its name and each alias after `web_vkb_norm()`
+keys each entry by its name, each alias and each affiliate (flagged)
+after `web_vkb_norm()`
 (`web/src/web_vendorkb.h`): ASCII letters lower-cased, digits and bytes
 outside ASCII kept, every run of anything else one space, trimmed. So
 `FLEXTRONICS`, `Flextronics` and `Flextronics, Inc.` meet, and the
 registry's `AMPAK Technology,Inc.`, `AMPAK Technology, Inc.` and
-`AMPAK Technology Inc.` all find one file. `web_vendorkb_find()` is a
-binary search over the sorted keys; `research_member()` in
-`web_devices.c` calls it with the OUI card's vendor and writes the
-`"vendor_research"` member of `/api/device/{mac}` and `/api/lookup`
-(for a MAC): `{found, file, name, aliases, kind, country, parent,
+`AMPAK Technology Inc.` all find one file. `web_vendorkb_lookup()` is
+a binary search over the sorted keys that also says whether the key
+was an affiliate's (`web_vendorkb_find()` is the same without the
+flag); `research_member()` in `web_devices.c` calls it with the OUI
+card's vendor and writes the `"vendor_research"` member of
+`/api/device/{mac}` and `/api/lookup` (for a MAC): `{found, file, name,
+aliases, affiliates, affiliate, kind, country, parent,
 founded, device_classes, found_in, radios, silicon, fcc_grantee,
 randomization, security_notes, confidence, summary, sources [{n, title,
 url, accessed}], researched}`, or `{"found":false}` when the vendor has
-no file, when the OUI is in no block, and for an IP. Every value goes
-through the JSON writer like any other string.
+no file, when the OUI is in no block, and for an IP. With `affiliate`
+true, `country`, `parent` and `founded` (and country's confidence) are
+sent as `unknown`, so no reader of the JSON takes the entry's for the
+registrant's. Every value goes through the JSON writer like any other
+string.
 
 `vendorResearch()` in `web/ui/app.js` draws the section under the OUI
 card in the drawer and on the Lookup card: the fields as a kv list with
 the confidence word beside the five fields that carry one, the summary
 as paragraphs with its `[n]` marks, the sources as plain text lines
-(`n. title - URL (accessed date)`). A source is never a link: the page
+(`n. title - URL (accessed date)`). Found through an affiliate, it
+says first that the registrant is a separate company and whose entry
+this is; the affiliates are a `same group` row. A source is never a link: the page
 holds no `href` but fragments (`test_routes.c`) and fetches nothing.
 
 ## Tests
 
 `web/tests/test_vendorkb.c`: every `.md` is an entry and every entry a
 file named for its name; every `[n]` resolves and every cited field
-carries one; the name and each alias are exact `Organization Name`
-strings in the committed registry (`web/data/oui.csv`, `mam.csv`,
+carries one; the name, each alias and each affiliate are exact
+`Organization Name` strings in the committed registry (`web/data/oui.csv`, `mam.csv`,
 `oui36.csv`, `iab.csv`), else the entry is dead and the test red; the
-lookup folds spelling and matches no prefix; the drawer and Lookup
-carry the section for a researched vendor and `{"found":false}` for one
-without; the page draws it through one function with no `href` and no
-markup sink; and `COVERAGE.md` matches `REFERENCE_HOST.txt` (its two
-lists together are exactly the reference names, each once, with its
-device count), every name under Have finding the file it names and
-every name under Pending finding none, so deleting an entry turns the
-test red. `tests/test_docs_consistency.c` holds every
+lookup folds spelling, matches no prefix and flags an affiliate (and
+only an affiliate); the drawer and Lookup carry the section for a
+researched vendor, without the entry's country, parent and founded for
+an affiliate, and `{"found":false}` for one without; the page draws it
+through one function with no `href` and no markup sink;
+`test_generator_refuses_each_defect` runs the built generator over a
+valid fixture and then over one defect at a time (a scalar with no
+`[n]`, a dangling `[n]`, an unknown kind, a missing confidence key, an
+uncited source, text after the date, a source marked not reached, an
+affiliate with no `[n]`, an affiliate that is a spelling, two files
+folding to one key) and wants a refusal naming each; and `COVERAGE.md`
+matches `REFERENCE_HOST.txt` (its two lists together are exactly the
+reference names, each once and each a registry name), every name under
+Have finding the file it names, `(affiliate)` exactly when it reaches it
+as one, every name under Pending finding none, and its count line equal
+to the lists, so deleting an entry turns the test red. `tests/test_docs_consistency.c` holds every
 `count:vendors` marker to the number of entry files. Each
 absence assertion was seen red under a named mutation (in the test's
 comments) and the files restored byte for byte.
@@ -207,8 +253,10 @@ comments) and the files restored byte for byte.
 ## Adding or refreshing an entry
 
 1. Name the file for the IEEE spelling you lead with; list the
-   registry's other spellings under `aliases` (each must be an exact
-   registry string, or `test_vendorkb.c` is red).
+   registry's other spellings of the same entity under `aliases` and
+   separately registered group companies under `affiliates`, each with
+   its `[n]` (each must be an exact registry string, or
+   `test_vendorkb.c` is red).
 2. Fill every field; write `unknown` or `[]` where nothing is
    documented, and say in the summary what could not be consulted.
    Prefer the vendor's own pages, the FCC ID databases for grantee codes
@@ -218,7 +266,8 @@ comments) and the files restored byte for byte.
 3. `make web-vendorkb` to check the file alone; `make web-test` for the
    registry check and the rest. If the vendor is one of the reference
    host's, move its line in `COVERAGE.md` from Pending to Have with the
-   file it finds; `make docs-counts` for the entry count.
+   file it finds and update the count line; `make docs-counts` for the
+   entry count.
 4. The registry CSVs beside the entries are the IEEE's and are refreshed
    only by `make update-oui` (`web/data/SOURCE.md`); an entry is never a
    reason to edit them.

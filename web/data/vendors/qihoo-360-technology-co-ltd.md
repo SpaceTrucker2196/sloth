@@ -1,6 +1,7 @@
 ---
 name: "Qihoo  360  Technology Co.,Ltd"
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: none named; listed on the Shanghai Stock Exchange [2]
 founded: 2005 [2]
@@ -24,7 +25,6 @@ A MAC in this block is most likely a 360-branded consumer device such as a 360 W
 No teardown naming silicon was found, the FCC ID databases refused this session's requests so no grantee code is listed, and no source documents MAC randomization.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Qihoo 360 - Wikipedia - https://en.wikipedia.org/wiki/Qihoo_360 (accessed 2026-10-27)
 3. CVE-2018-19031 record - CVE Program - https://cveawg.mitre.org/api/cve/CVE-2018-19031 (accessed 2026-10-27)

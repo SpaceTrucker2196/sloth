@@ -1,6 +1,7 @@
 ---
 name: Ford Motor Company
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: independent (public; Ford family holds ~2% equity and 40% voting power) [1]
 founded: 1903 [1]

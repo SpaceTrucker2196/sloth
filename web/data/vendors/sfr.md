@@ -1,6 +1,7 @@
 ---
 name: SFR
 aliases: []
+affiliates: []
 country: FR [1][2]
 parent: Altice France [2]
 founded: 1987 [2]
@@ -24,7 +25,6 @@ As an operator rather than a hardware maker, SFR's own blocks most plausibly sit
 Chipsets, FCC grantee codes and randomisation are unknown: the article names no chip vendor, a French operator's boxes are not expected in the FCC databases, and those databases refused the session in any case. An NVD keyword search for neufbox returned no CVEs [4].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. SFR (company) - Wikipedia - https://en.wikipedia.org/wiki/SFR_(company) (accessed 2026-10-27)
 3. Neuf Box - Wikipedia (French) - https://fr.wikipedia.org/wiki/Neuf_Box (accessed 2026-10-27)

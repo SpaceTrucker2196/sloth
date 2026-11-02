@@ -1,6 +1,7 @@
 ---
 name: Juniper Networks
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: Hewlett Packard Enterprise, whose acquisition closed on 2 July 2025 [2]
 founded: 1996 [2]
@@ -24,7 +25,6 @@ A MAC in a Juniper block is most likely infrastructure: MX, PTX or ACX routers, 
 In December 2015 Juniper issued an emergency patch after finding unauthorized code in ScreenOS: a root password backdoor and a change to the Dual_EC_DRBG generator that could let an attacker decrypt traffic [2]. CVE-2015-7755 records the administrative-access half of it [5]. Randomization is unknown; the FCC ID databases refused the session that wrote this entry.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Juniper Networks - Wikipedia - https://en.wikipedia.org/wiki/Juniper_Networks (accessed 2026-10-27)
 3. Mist Systems AP43 - WikiDevi - https://wikidevi.wi-cat.ru/Mist_Systems_AP43 (accessed 2026-10-27)

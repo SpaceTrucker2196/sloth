@@ -1,6 +1,7 @@
 ---
 name: Sony Interactive Entertainment Inc.
 aliases: []
+affiliates: []
 country: JP [1]
 parent: Sony Group Corporation [2]
 founded: 1993 [2]
@@ -24,7 +25,6 @@ The PlayStation 5 uses Sony's own J20H100 wireless module, certified under FCC I
 In April 2011 an intrusion into the PlayStation Network compromised personal details from about 77 million accounts, and Sony took the network down for about 24 days [5]. Whether PlayStation consoles randomise their Wi-Fi address is not documented by any source consulted, so randomization is unknown. The FCC ID databases (fccid.io, fcc.report) refused automated access from this session, so the grantee code is given only as it appears in the cited module certification.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Sony Interactive Entertainment - Wikipedia - https://en.wikipedia.org/wiki/Sony_Interactive_Entertainment (accessed 2026-10-27)
 3. PlayStation 5 wireless LAN speed (J20H100 module, FCC ID AK8M19DFR1) - 24wireless.info - https://24wireless.info/playstation-5-wlan-speed (accessed 2026-10-27)

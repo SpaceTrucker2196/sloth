@@ -1,6 +1,7 @@
 ---
 name: "Huawei Device Co., Ltd."
 aliases: []
+affiliates: []
 country: CN [1]
 parent: Huawei; the consumer privacy statement is issued by Huawei Device Co., Ltd. and its global affiliates as "Huawei" [2]
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in a Huawei Device block is therefore most likely a Huawei phone, tablet, 
 Huawei publishes monthly security bulletins for its phones and tablets; the August 2026 bulletin lists 33 CVEs including a Wi-Fi enhancement module flaw, CVE-2026-49305 [5]. In November 2022 the US FCC banned sales and imports of Huawei equipment [6]. The founding year of this legal entity, FCC grantee codes and randomization behaviour are not documented here: the FCC ID databases refused requests from the session that wrote this entry.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Huawei Consumer Business Privacy Statement - https://consumer.huawei.com/minisite/legal/privacy/common/b0/latest/statement.htm (accessed 2026-10-27)
 3. HUAWEI Mate X6 specifications - https://consumer.huawei.com/en/phones/mate-x6/specs/ (accessed 2026-10-27)

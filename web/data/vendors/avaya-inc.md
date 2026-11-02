@@ -1,6 +1,7 @@
 ---
 name: Avaya Inc
 aliases: [Avaya LLC]
+affiliates: []
 country: US [1][2]
 parent: privately owned by its former creditors since the 2023 restructuring [1]
 founded: 2000 [1]
@@ -24,7 +25,6 @@ A MAC in an Avaya block is most likely an IP desk phone such as the 1100 or 9600
 The sources consulted document no Wi-Fi or Bluetooth radios, silicon or FCC grantee codes for Avaya devices: the FCC ID databases refused requests from this session and Avaya's device pages were not reachable, and nothing is filled in from memory. Randomization behaviour is not documented.
 
 ## Sources
-
 1. Avaya - Wikipedia - https://en.wikipedia.org/wiki/Avaya (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Extreme Networks - Wikipedia - https://en.wikipedia.org/wiki/Extreme_Networks (accessed 2026-10-27)

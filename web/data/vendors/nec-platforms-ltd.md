@@ -1,6 +1,7 @@
 ---
 name: "NEC Platforms, Ltd."
 aliases: ["NEC Platforms, Ltd"]
+affiliates: []
 country: JP [1][2]
 parent: NEC Corporation (100 percent) [2]
 founded: 1918 [2]
@@ -22,7 +23,6 @@ NEC Platforms is a wholly owned NEC Corporation subsidiary with its head office 
 A MAC in these blocks is most likely an NEC Aterm Wi-Fi home router, repeater or mobile router, a line whose new model is the Wi-Fi 7 tri-band Aterm 19000T12BE and whose product site also describes the 6 GHz band of Wi-Fi 6E [3]. DeviWiki lists the Aterm MR03LN mobile hotspot on a Qualcomm MDM9225 and the RG-G201L wireless router and IoT hub on a Mindspeed Comcerto 2000 with an Atheros AR9382, both with FCC IDs under 2AA5W [4]. NVD records 2026 Aterm-series flaws attributed to NEC Platforms, including path traversal, OS command injection and a hidden function that enables telnet [5], further XSS and command injection in Aterm [5], and older CSRF in several Aterm models [6]. Randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. NEC Platforms - Japanese Wikipedia - https://ja.wikipedia.org/wiki/NEC%E3%83%97%E3%83%A9%E3%83%83%E3%83%88%E3%83%95%E3%82%A9%E3%83%BC%E3%83%A0%E3%82%BA (accessed 2026-10-27)
 3. Aterm - NEC Wi-Fi and mobile router product site - https://www.aterm.jp/ (accessed 2026-10-27)

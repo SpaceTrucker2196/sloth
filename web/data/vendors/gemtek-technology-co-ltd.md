@@ -1,6 +1,7 @@
 ---
 name: "Gemtek Technology Co., Ltd."
 aliases: []
+affiliates: []
 country: TW [1]
 parent: unknown
 founded: 1988 [2]
@@ -22,7 +23,6 @@ Gemtek Technology is a Taiwanese manufacturer; the IEEE registry lists 15 MA-L b
 DeviWiki gives Gemtek the FCC grantee code MXF and documents silicon from every major Wi-Fi vendor, for example Qualcomm IPQ4019 with QCA9984 in the Razer Sila, MediaTek MT7620A with MT7612E in the Buffalo WHR-1166D and MediaTek MT7688AN in the Belkin WeMo Mini smart plug [3]. NVD records CVE-2020-24365, authenticated command execution as root on the Gemtek WRTM-127ACN and WRTM-127x9 [4]. Parent company and randomization behaviour are not documented by the sources consulted [2][3].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. About Gemtek - https://www.gemteks.com/en/about (accessed 2026-10-27)
 3. Gemtek - DeviWiki - https://deviwiki.com/wiki/Gemtek (accessed 2026-10-27)

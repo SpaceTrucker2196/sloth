@@ -1,6 +1,7 @@
 ---
 name: Jabil Circuit de Chihuahua
 aliases: []
+affiliates: []
 country: MX [4]
 parent: Jabil Inc. [3][5]
 founded: unknown

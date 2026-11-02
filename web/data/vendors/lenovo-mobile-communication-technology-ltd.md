@@ -1,6 +1,7 @@
 ---
 name: Lenovo Mobile Communication Technology Ltd.
 aliases: []
+affiliates: []
 country: CN [2]
 parent: Lenovo (inferred from the name; Lenovo lists Xiamen among its research sites) [1][2]
 founded: unknown
@@ -41,7 +42,6 @@ consulted names this entity directly, and the FCC ID databases refused
 the session that wrote this entry.
 
 ## Sources
-
 1. Lenovo - Wikipedia - https://en.wikipedia.org/wiki/Lenovo (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Lenovo smartphones - Wikipedia - https://en.wikipedia.org/wiki/Lenovo_smartphones (accessed 2026-10-27)

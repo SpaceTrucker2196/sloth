@@ -1,6 +1,7 @@
 ---
 name: CyberTAN Technology Inc.
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: unknown
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in a CyberTAN block is most likely a router or access point sold under ano
 Founding year and parent are not listed: the company site and the directory consulted do not state them, and the directory's parent field is paywalled [2][3]. No security advisory naming CyberTAN itself was found, since the NVD search pages did not render for the session that wrote this entry; advisories for the products it built are filed under the brand on the box [4]. Randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. CyberTAN Technology home page - https://www.cybertan.com.tw/ (accessed 2026-10-27)
 3. CyberTAN Technology Inc company profile - Plunkett Research - https://www.plunkettresearch.com/company-profile/cybertan-technology-inc/ (accessed 2026-10-27)

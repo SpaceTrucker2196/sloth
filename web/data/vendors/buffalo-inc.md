@@ -1,6 +1,7 @@
 ---
 name: BUFFALO.INC
 aliases: []
+affiliates: []
 country: JP [1][2]
 parent: Melco Holdings Inc. [1]
 founded: unknown
@@ -22,7 +23,6 @@ Buffalo is the best-known brand of Melco Holdings, a Japanese family business fo
 DeviWiki records FCC grantee code FDI for Buffalo and the silicon in several routers: MediaTek MT7620A in the WHR-300HP2, Broadcom BCM4708A0 in the WZR-1750DHP, MediaTek MT7621AT in the WSR-1166DHP and Realtek RTL8881AM in the WMR-433 [3]. CVE-2021-20090 is a path traversal in the web interface of the WSR-2533DHPL2 and WSR-2533DHP3 that lets an unauthenticated remote attacker bypass the login [4]. Buffalo's own founding year is not given by the sources consulted (the 1975 date is Melco's), address randomization is not documented either, and nothing is filled in from memory.
 
 ## Sources
-
 1. Buffalo Inc. - Wikipedia - https://en.wikipedia.org/wiki/Buffalo_Inc. (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Buffalo - DeviWiki - https://deviwiki.com/wiki/Buffalo (accessed 2026-10-27)

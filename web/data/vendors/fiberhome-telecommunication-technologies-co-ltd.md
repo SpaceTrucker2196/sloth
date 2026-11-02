@@ -1,6 +1,7 @@
 ---
 name: "Fiberhome Telecommunication Technologies Co.,LTD"
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: unknown
 founded: 1999 [2][3]
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely an ISP-supplied fibre ONT or home gateway, 
 The HG6245D GPON gateway shipped, through firmware RP2613, with many hardcoded ISP credentials, a telnet backdoor enabled by a value computed from the MAC, cleartext Wi-Fi passwords and no IPv6 firewall rules by default [5]. AN5506 ONUs carry an authenticated command injection and a web-service stack overflow [6]. The US Commerce Department put FiberHome on its Entity List in May 2020 [2]. Randomization is unknown; FCC grantee codes are not listed because the FCC ID databases (fccid.io, fcc.report, apps.fcc.gov) refused the session's requests.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. FiberHome - Wikipedia - https://en.wikipedia.org/wiki/FiberHome (accessed 2026-10-27)
 3. FiberHome official site - https://www.fiberhome.com/ (accessed 2026-10-27)

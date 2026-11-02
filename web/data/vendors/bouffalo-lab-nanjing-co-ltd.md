@@ -1,6 +1,7 @@
 ---
 name: "Bouffalo Lab (Nanjing) Co., Ltd."
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: unknown
 founded: 2016 [2]
@@ -36,7 +37,6 @@ the FCC ID databases refused the session that wrote this entry, and
 nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Bouffalo Lab company site - https://en.bouffalolab.com/ (accessed 2026-10-27)
 3. BL602/BL604 RISC-V WiFi and Bluetooth 5.0 LE SoC will sell at ESP8266 price point - CNX Software - https://www.cnx-software.com/2020/10/24/bl602-bl604-risc-v-wifi-bluetooth-5-0-le-soc-will-sell-at-esp8266-price-point/ (accessed 2026-10-27)

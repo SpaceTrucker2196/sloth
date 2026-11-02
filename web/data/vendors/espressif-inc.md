@@ -1,6 +1,7 @@
 ---
 name: Espressif Inc.
-aliases: ["Espressif Systems (Singapore) Pte. Ltd"]
+aliases: []
+affiliates: ["Espressif Systems (Singapore) Pte. Ltd [2]"]
 country: CN [1]
 parent: independent (listed on the Shanghai Stock Exchange STAR Market since July 2019) [1]
 founded: 2008 [1]

@@ -1,6 +1,7 @@
 ---
 name: "Qingdao Intelligent&Precise Electronics Co.,Ltd."
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: unknown
 founded: unknown
@@ -22,6 +23,5 @@ The IEEE registry lists a large set of MA-L blocks (10:B2:32, 10:C7:53, 30:32:35
 Searches in English and Chinese for the company name and the Qianwangang Road address found no company site, no Wikipedia article, no product or teardown and no security advisory, and the FCC ID databases (fccid.io, fcc.report, apps.fcc.gov) refused this session's requests, so the parent, founding year, products, radios, silicon, FCC grantee code and randomization are all unknown. Any link to a larger Qingdao electronics group is not documented by a source consulted and is not assumed here; kind is recorded as other for that reason.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. MAC address 10:B2:32 - maclookup.app - https://maclookup.app/macaddress/10b232 (accessed 2026-10-27)

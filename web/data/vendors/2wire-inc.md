@@ -1,6 +1,7 @@
 ---
 name: 2Wire Inc
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: Pace plc, which agreed to buy 2Wire in 2010; Arris is named as successor [1]
 founded: 1998 [1]
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely an ISP-supplied DSL gateway, and the 3800HG
 CVE-2007-4389 is a cross-site request forgery flaw in the /xslt handler of the 1701HG, 1800HW and 2071 gateways that lets a remote attacker create DNS mappings and poison DNS [5]. Randomization behaviour is not documented by the sources consulted; the FCC ID databases refused automated access from this session.
 
 ## Sources
-
 1. 2Wire - Wikipedia - https://en.wikipedia.org/wiki/2Wire (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. 2Wire - WikiDevi - https://wikidevi.wi-cat.ru/2Wire (accessed 2026-10-27)

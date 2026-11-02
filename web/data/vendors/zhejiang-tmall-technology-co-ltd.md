@@ -1,6 +1,7 @@
 ---
 name: "Zhejiang Tmall Technology Co., Ltd."
 aliases: []
+affiliates: []
 country: CN [1]
 parent: Alibaba Group, inferred from the Tmall name, which Alibaba operates [3]
 founded: unknown
@@ -37,7 +38,6 @@ and web search were unavailable to the session that wrote this entry,
 and nothing is filled in from memory [1].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Tmall Genie - Wikipedia - https://en.wikipedia.org/wiki/Tmall_Genie (accessed 2026-10-27)
 3. Tmall - Wikipedia - https://en.wikipedia.org/wiki/Tmall (accessed 2026-10-27)

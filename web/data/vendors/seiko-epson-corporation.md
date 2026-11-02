@@ -1,6 +1,7 @@
 ---
 name: Seiko Epson Corporation
 aliases: []
+affiliates: []
 country: JP [1][2]
 parent: independent [2]
 founded: 1942 [2]
@@ -45,7 +46,6 @@ the FCC ID databases and web search were unavailable to the session
 that wrote this entry [1].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Seiko Epson - Wikipedia - https://en.wikipedia.org/wiki/Seiko_Epson (accessed 2026-10-27)
 3. Askey WLU6117-D69 - DeviWiki - https://deviwiki.com/wiki/Askey_WLU6117-D69 (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: MitraStar Technology Corp.
 aliases: []
+affiliates: []
 country: TW [1]
 parent: unknown
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in a MitraStar block is therefore most likely an ISP-supplied fibre or DSL
 Founding year, current ownership and randomisation behaviour are unknown: the company's English about page returned an error and the Chinese one states none of them, the FCC databases refused the session, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. MitraStar Technology Corp. home page - https://www.mitrastar.com/ (accessed 2026-10-27)
 3. MitraStar - DeviWiki - https://deviwiki.com/wiki/MitraStar (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: "Shenzhen SuperElectron Technology Co.,Ltd."
 aliases: []
+affiliates: []
 country: CN [1]
 parent: unknown
 founded: unknown
@@ -28,6 +29,5 @@ fetched source, so every other field is unknown rather than guessed
 [1][2].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. E8:26:8D - MAC Address Lookup - https://maclookup.app/macaddress/E8268D (accessed 2026-10-27)

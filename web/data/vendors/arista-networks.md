@@ -1,6 +1,7 @@
 ---
 name: Arista Networks
 aliases: ["Arista Network, Inc.", "Arista Networks, Inc."]
+affiliates: []
 country: US [1][2]
 parent: public company, NYSE-listed (ANET) [1]
 founded: 2008 [1]
@@ -24,7 +25,6 @@ A MAC in an Arista block is most likely a data-center or campus switch running A
 Silicon and FCC grantee codes are not listed: the FCC ID databases and Arista's own product pages refused requests from this session, and nothing is filled in from memory. Wikipedia flags its Arista article as possibly containing machine-generated text, so its product claims are used here only for broad product lines [1]. Randomization behaviour is not documented.
 
 ## Sources
-
 1. Arista Networks - Wikipedia - https://en.wikipedia.org/wiki/Arista_Networks (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. NVD CVE-2026-73438 - https://nvd.nist.gov/vuln/detail/CVE-2026-73438 (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: FLEXTRONICS TECHNOLOGIES MEXICO S DE RL DE CV
 aliases: []
+affiliates: []
 country: MX [2][3]
 parent: "Flex Ltd. (formerly Flextronics International Ltd.) - inferred from the name and the Jalisco registrant address, not stated by a source [1][2][3]"
 founded: unknown

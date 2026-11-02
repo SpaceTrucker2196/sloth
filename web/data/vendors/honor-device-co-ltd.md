@@ -1,6 +1,7 @@
 ---
 name: "Honor Device Co., Ltd."
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: majority-owned by Shenzhen Zhixin New Information Technology Co. Ltd. since Huawei sold Honor in November 2020 [1]
 founded: 2013 [1]
@@ -24,7 +25,6 @@ A MAC in an Honor block is most likely an Honor phone, tablet or laptop [1][2]. 
 Honor's site has a security bulletin page and invites vulnerability reports [6]. NVD lists 52 CVEs from 2023 to 2026 from one numbering authority whose records name Honor products, most describing unnamed "some Honor products" affected by incorrect privilege assignment, information leaks, signature management or type confusion [7]. FCC grantee codes are not listed because the FCC ID databases refused automated access from the session that wrote this entry; nothing is filled in from memory.
 
 ## Sources
-
 1. Honor (brand) - Wikipedia - https://en.wikipedia.org/wiki/Honor_(brand) (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. HONOR global site - https://www.honor.com/global/ (accessed 2026-10-27)

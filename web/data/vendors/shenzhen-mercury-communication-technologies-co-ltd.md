@@ -1,6 +1,7 @@
 ---
 name: "SHENZHEN MERCURY COMMUNICATION TECHNOLOGIES CO.,LTD."
 aliases: ["MERCURY COMMUNICATION TECHNOLOGIES CO.,LTD."]
+affiliates: []
 country: CN [1]
 parent: TP-Link [2]
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely a Mercury home router or IP camera on a Chi
 NVD records a directory traversal on the MAC1200R [7], a PPTP command execution on the MER1200 and stack overflows on the D196G shared with TP-Link and Fast firmware [5], plus remote code execution on the MIPC451-4 camera and a series of RTSP authentication flaws on the MIPC252W [6]. Founding year, FCC grantee codes and randomization are unknown; the FCC ID databases refused the session's requests.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Mercury (disambiguation) - Wikipedia - https://en.wikipedia.org/wiki/Mercury_(company) (accessed 2026-10-27)
 3. Mercury official site - https://www.mercurycom.com.cn/ (accessed 2026-10-27)

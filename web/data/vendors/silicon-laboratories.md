@@ -1,6 +1,7 @@
 ---
 name: Silicon Laboratories
 aliases: []
+affiliates: []
 country: US [1]
 parent: independent, listed on Nasdaq [1]
 founded: 1996 [1]
@@ -24,7 +25,6 @@ The registry holds 146 MA-L blocks as Silicon Laboratories, all at US addresses 
 NVD records over-the-air buffer overflows in the Bluetooth LE SDK before 2.13.3 on EFR32 SoCs and modules in the Central or Observer role, allowing code execution or denial of service, a memory leak in the EFR32 Bluetooth stack that halts all Bluetooth operations when notifying several clients, a use-after-free in the Bluetooth SDK through 8.0.0 that can let a precisely timed attacker intercept a few packets, and an oversized-LMP crash of the WT32i module in the Bluetooth Classic stack of iWRAP 6.3.0 and earlier [3]. silabs.com and the FCC ID databases refused the session that wrote this entry, so specific part numbers beyond those and FCC grantee codes are not listed and nothing is filled in from memory. Randomization is the firmware's or host's behaviour and is unknown here.
 
 ## Sources
-
 1. Silicon Labs - Wikipedia - https://en.wikipedia.org/wiki/Silicon_Labs (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. NVD CVE API, keyword Silicon Labs Bluetooth - https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=Silicon%20Labs%20Bluetooth&resultsPerPage=20 (accessed 2026-10-27)

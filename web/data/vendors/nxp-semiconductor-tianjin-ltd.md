@@ -1,6 +1,7 @@
 ---
 name: NXP Semiconductor (Tianjin) LTD.
 aliases: []
+affiliates: []
 country: CN [1]
 parent: NXP Semiconductors N.V., Eindhoven, which lists Tianjin among its test and assembly sites [2]
 founded: unknown
@@ -39,7 +40,6 @@ not listed because the FCC ID databases refused the session that wrote
 this entry.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. NXP Semiconductors - Wikipedia - https://en.wikipedia.org/wiki/NXP_Semiconductors (accessed 2026-10-27)
 3. IW612 product page - NXP - https://www.nxp.com/products/IW612 (accessed 2026-10-27)

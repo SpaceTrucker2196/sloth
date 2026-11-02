@@ -1,6 +1,7 @@
 ---
 name: CIG SHANGHAI CO LTD
 aliases: []
+affiliates: []
 country: CN [2][3]
 parent: independent; listed on the Shanghai Stock Exchange as 603083 since November 2017 [1][2]
 founded: 2005 [1]
@@ -22,7 +23,6 @@ CIG ShangHai Co., Ltd. is a China-based maker of information and communications 
 CIG describes itself as a supplier of PON ONTs, home and enterprise Wi-Fi equipment, routers, gateways and LTE/5G small cells alongside optical transceivers [4]. Much of that ships under operators' or other vendors' brands: WikiDevi records the Nokia XS-010X-Q XGS-PON ONU as CIG's XG-99YF, built on a Cortina Systems CA8271A [5], and the Google Fiber Jack GFLT210 SFP module as CIG-made on a Realtek RTL9601CI [6]. A MAC in a CIG block is therefore most likely a fibre ONT, gateway or Wi-Fi CPE handed out by an ISP rather than a personal device [4][5]. No FCC grantee code is listed because the FCC ID databases refused requests from the session that wrote this entry, and nothing is filled in from memory; no security advisories are listed, and randomization is unknown.
 
 ## Sources
-
 1. CIG - Company - https://www.cigtech.com/Company (accessed 2026-10-27)
 2. CIG ShangHai Co., Ltd. company profile - MarketScreener - https://in.marketscreener.com/quote/stock/CIG-SHANGHAI-CO-LTD-42613334/company/ (accessed 2026-10-27)
 3. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)

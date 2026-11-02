@@ -1,6 +1,7 @@
 ---
 name: CANON INC.
 aliases: []
+affiliates: []
 country: JP [1][2]
 parent: independent, listed on the Tokyo Stock Exchange [2]
 founded: 1937 [2]
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely a camera or a printer on the local network 
 Randomization is not documented by the sources consulted, and the FCC ID databases refused automated access from this session, so no filing under AZD was checked.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Canon Inc. - Wikipedia - https://en.wikipedia.org/wiki/Canon_Inc. (accessed 2026-10-27)
 3. Hack of a Canon EOS 80D DSLR - Threatpost - https://threatpost.com/hack-of-a-canon-eos-80d-dslr/147214 (accessed 2026-10-27)

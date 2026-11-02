@@ -1,6 +1,7 @@
 ---
 name: "Samsung Electronics Co.,Ltd"
 aliases: ["Samsung Electronics Co., Ltd.", "Samsung Electronics Co., Ltd", "Samsung Electronics Co., Ltd. ARTIK", "Samsung Electronics Co., Ltd., Memory Division"]
+affiliates: []
 country: KR [1]
 parent: Samsung Group [1]
 founded: 1969 [1]

@@ -1,6 +1,7 @@
 ---
 name: Texas Instruments
 aliases: []
+affiliates: []
 country: US [1]
 parent: "none (publicly traded, Nasdaq: TXN) [1]"
 founded: 1951 [1]

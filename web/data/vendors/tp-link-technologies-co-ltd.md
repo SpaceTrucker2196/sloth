@@ -1,6 +1,7 @@
 ---
 name: "TP-LINK TECHNOLOGIES CO.,LTD."
 aliases: []
+affiliates: []
 country: CN [1]
 parent: "privately held; from 2022 to May 2024 split into China-based TP-LINK Technologies Co., Ltd. (Shenzhen) and TP-Link Systems Inc. (Irvine, California) for international operations [1]"
 founded: 1996 [1]

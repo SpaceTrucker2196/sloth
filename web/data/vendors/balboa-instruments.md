@@ -1,6 +1,7 @@
 ---
 name: Balboa Instruments
 aliases: []
+affiliates: []
 country: US [1]
 parent: Helios Technologies, which acquired BWG Holdings I Corp. (Balboa Water Group) on 6 November 2020 (inferred to be the same company) [2][3]
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in this block is almost certainly that bwa Wi-Fi module on a hot tub: comm
 Founding year, chipset and FCC grantee codes are not documented by the sources consulted; the FCC ID databases refused automated access from this session. Randomization is unknown, and no security advisory for the module was found.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Helios Technologies Form 10-Q, Q2 FY2021, acquisition note - https://www.sec.gov/Archives/edgar/data/1024795/000156459021042912/R8.htm (accessed 2026-10-27)
 3. Spa Control - BWA - App Store - https://apps.apple.com/app/id469882268 (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: "GD Midea Air-Conditioning Equipment Co.,Ltd."
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: Midea Group, inferred: Midea Group lists GD Midea as a wholly owned subsidiary and the registry address is the Midea Global Innovation Center [1][2]
 founded: unknown
@@ -46,7 +47,6 @@ wrote this entry, web search was unavailable, and nothing is filled in
 from memory [1].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Midea Group - Wikipedia - https://en.wikipedia.org/wiki/Midea_Group (accessed 2026-10-27)
 3. Midea Air Conditioner - ESPHome - https://esphome.io/components/climate/midea/ (accessed 2026-10-27)

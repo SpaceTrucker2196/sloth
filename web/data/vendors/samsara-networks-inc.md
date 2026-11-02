@@ -1,6 +1,7 @@
 ---
 name: SAMSARA NETWORKS INC
 aliases: []
+affiliates: []
 country: US [1]
 parent: independent (NYSE-listed since December 2021) [1]
 founded: 2015 [1]

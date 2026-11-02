@@ -1,6 +1,7 @@
 ---
 name: Nokia
 aliases: ["Nokia Corporation"]
+affiliates: []
 country: FI [2]
 parent: independent; public company listed on Nasdaq Helsinki and the New York Stock Exchange [2]
 founded: 1865 [2]
@@ -24,7 +25,6 @@ Which device a MAC in the "Nokia" blocks is cannot be read from the sources cons
 NVD records a stored XSS in the G-120W-F gateway [6] and, for the FastMile fixed-wireless gateways, a privilege escalation, a path traversal, a hardcoded admin account on units shipped by Optus and outdated Bluetooth pairing on the 5G receiver [7]. Randomization is unknown; Nokia's own product pages and the FCC ID databases refused the session's requests.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Nokia - Wikipedia - https://en.wikipedia.org/wiki/Nokia (accessed 2026-10-27)
 3. Nokia A-020W-A - DeviWiki - https://deviwiki.com/wiki/Nokia_A-020W-A (accessed 2026-10-27)

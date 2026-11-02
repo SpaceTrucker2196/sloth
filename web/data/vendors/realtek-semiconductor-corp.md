@@ -1,6 +1,7 @@
 ---
 name: REALTEK SEMICONDUCTOR CORP.
 aliases: ["Realtek Semiconductor Corp."]
+affiliates: []
 country: TW [1][2]
 parent: independent [2]
 founded: 1987 [2]

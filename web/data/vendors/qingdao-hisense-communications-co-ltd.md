@@ -1,6 +1,7 @@
 ---
 name: "Qingdao Hisense Communications Co.,Ltd."
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: Hisense Group [2]
 founded: 2001 [2]
@@ -40,7 +41,6 @@ were unavailable to the session that wrote this entry, and nothing is
 filled in from memory [1].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Hisense - Wikipedia - https://en.wikipedia.org/wiki/Hisense (accessed 2026-10-27)
 3. CVE-2019-15360 - NVD - https://nvd.nist.gov/vuln/detail/CVE-2019-15360 (accessed 2026-10-27)

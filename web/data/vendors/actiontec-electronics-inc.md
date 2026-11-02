@@ -1,6 +1,7 @@
 ---
 name: "Actiontec Electronics, Inc"
 aliases: ["Actiontec Electronics Inc."]
+affiliates: []
 country: US [2]
 parent: unknown
 founded: unknown

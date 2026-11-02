@@ -1,6 +1,7 @@
 ---
 name: Hui Zhou Gaoshengda Technology Co.,LTD
 aliases: []
+affiliates: []
 country: CN [1][3]
 parent: unknown
 founded: 1999 [1]

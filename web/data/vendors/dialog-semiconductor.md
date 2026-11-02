@@ -1,6 +1,7 @@
 ---
 name: Dialog Semiconductor
 aliases: []
+affiliates: []
 country: GB [2]
 parent: Renesas Electronics, since 2021 [2]
 founded: 1985 [2]
@@ -24,7 +25,6 @@ A MAC in this block is most likely a battery-powered IoT device built on a Dialo
 FCC grantee codes and randomization are not documented by the sources consulted; the FCC ID databases refused automated access from this session.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Dialog Semiconductor - Wikipedia - https://en.wikipedia.org/wiki/Dialog_Semiconductor (accessed 2026-10-27)
 3. Dialog to Acquire FCI, Silicon Motion's Mobile Communications Business - Microwave Journal - https://microwavejournal.com/articles/31921-dialog-to-acquire-fci-silicon-motions-mobile-communications-business (accessed 2026-10-27)

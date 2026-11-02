@@ -1,9 +1,10 @@
 ---
 name: "Tenda Technology Co.,Ltd.Dongguan branch"
-aliases: ["SHEN ZHEN TENDA TECHNOLOGY CO.,LTD", "Tenda Technology Co., Ltd."]
+aliases: []
+affiliates: ["SHEN ZHEN TENDA TECHNOLOGY CO.,LTD [1][2]", "Tenda Technology Co., Ltd. [1][2]"]
 country: CN [1]
 parent: Shenzhen Tenda Technology Co., Ltd. (inferred from the registrant name) [1][2]
-founded: 1999 [2]
+founded: unknown
 kind: brand [2]
 device_classes: [ap/router [2][3], camera [3], switch [2][3]]
 found_in: ["Tenda AC-series routers (AC6, AC9, AC10, AC15) [4]", "Tenda Wi-Fi 6 and Wi-Fi 7 routers, IP cameras, USB adapters, outdoor CPE and 4G/5G routers [3]"]
@@ -22,7 +23,6 @@ The IEEE registry lists 11 MA-L blocks to "Tenda Technology Co.,Ltd.Dongguan bra
 DeviWiki gives Tenda the FCC grantee code V7T, the prefix of every Tenda FCC ID it lists, and documents its routers on Broadcom and Realtek silicon, for example the AC15 on a Broadcom BCM4708A0 with a BCM4360 radio and the AC10 on a Realtek RTL8197FS with an RTL8812BRH 5 GHz radio [4][5]. Tenda routers have a poor security record: CVE-2020-10987, remote command execution through goform/setUsbUnload on the AC15, is in CISA's Known Exploited Vulnerabilities catalog [6], CVE-2018-5767 gave unauthenticated remote code execution on the same model [7], and CVE-2026-24101 is a further goform command injection in AC15 firmware [8]. Randomization is unknown, as no source consulted documents it.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. About Tenda - https://www.tendacn.com/about (accessed 2026-10-27)
 3. Tenda - home page product range - https://www.tendacn.com/ (accessed 2026-10-27)

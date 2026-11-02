@@ -1,6 +1,7 @@
 ---
 name: "Cisco-Linksys, LLC"
-aliases: ["The Linksys Group, Inc.", "Linksys USA, Inc"]
+aliases: []
+affiliates: ["The Linksys Group, Inc. [1][2]", "Linksys USA, Inc [1][2]"]
 country: US [1][2]
 parent: Fortinet, which made Linksys wholly owned in January 2025 (earlier Cisco 2003, Belkin 2013, Foxconn 2018) [1]
 founded: 1988 [1]
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely a home router, range extender, USB adapter 
 In February 2014 the SANS Internet Storm Center described TheMoon, a worm spreading among Linksys routers that read the router model over HNAP and then exploited a CGI script needing no authentication; SANS listed the E900 to E4200 as possibly vulnerable depending on firmware [6]. Randomization behaviour is not documented by the sources consulted; the FCC ID databases refused automated access from this session.
 
 ## Sources
-
 1. Linksys - Wikipedia - https://en.wikipedia.org/wiki/Linksys (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Linksys - WikiDevi - https://wikidevi.wi-cat.ru/Linksys (accessed 2026-10-27)

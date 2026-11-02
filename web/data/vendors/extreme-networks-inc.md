@@ -1,6 +1,7 @@
 ---
 name: "Extreme Networks, Inc."
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: independent, Nasdaq-listed (EXTR) [1]
 founded: 1996 [1]
@@ -22,7 +23,6 @@ Extreme Networks is a US maker of wired and wireless network infrastructure, fou
 Its products are sold as ExtremeSwitching, ExtremeRouting, ExtremeWireless, ExtremeXOS and ExtremeCloud IQ [1]. The radios and silicon in Extreme's own access points, FCC grantee codes, address randomization and security advisories are not documented by the sources consulted: Extreme's datasheet and advisory pages and the FCC ID databases were not reachable from this session, and nothing is filled in from memory.
 
 ## Sources
-
 1. Extreme Networks - Wikipedia - https://en.wikipedia.org/wiki/Extreme_Networks (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Aerohive Networks - Wikipedia - https://en.wikipedia.org/wiki/Aerohive_Networks (accessed 2026-10-27)

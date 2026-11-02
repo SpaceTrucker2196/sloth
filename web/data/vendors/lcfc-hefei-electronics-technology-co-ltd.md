@@ -1,6 +1,7 @@
 ---
 name: "LCFC(Hefei) Electronics Technology co., ltd"
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: Lenovo (a Lenovo-Compal joint venture, Lenovo holding 51 percent at formation; Compal was negotiating in 2017 to sell its 49 percent to Lenovo) [3][4]
 founded: 2011 [4]
@@ -39,7 +40,6 @@ not listed: the FCC ID databases refused the session that wrote this
 entry, and nothing is filled in from memory.
 
 ## Sources
-
 1. LCFC (Hefei) Electronics Technology - company site - https://www.lcfc.com.cn/ (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Lenovo, Compal To Set Up $300M China JV - Institutional Investor - https://institutionalinvestor.com/article/2bszqkz8xbozp67kwwhds/innovation/lenovo-compal-to-set-up-300m-china-jv (accessed 2026-10-27)

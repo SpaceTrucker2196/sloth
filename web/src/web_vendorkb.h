@@ -18,8 +18,15 @@
  * missing, naming the file: the build fails rather than ship a guess.
  *
  * Entries are keyed by the IEEE "Organization Name" as the registry
- * spells it, and by each alias (the registry's other spellings of the
- * same company). The lookup folds spelling: web_vkb_norm() lower-cases
+ * spells it, by each alias (the registry's other spellings of the same
+ * legal entity: case, punctuation, spacing, a department suffix, or a
+ * straight rename such as Facebook Inc to Meta Platforms, Inc.), and by
+ * each affiliate: a separate legal entity with its own registration (a
+ * subsidiary, branch, parent or predecessor) that a cited source ties
+ * to the entry. A registrant found through an affiliate is not the
+ * company the entry describes, so the lookup says so and the drawer
+ * shows its country, parent and founded as unknown rather than the
+ * entry's. The lookup folds spelling: web_vkb_norm() lower-cases
  * ASCII letters, keeps digits and bytes >= 0x80, and turns every run
  * of anything else (spaces, punctuation) into one space, trimmed, so
  * "FLEXTRONICS", "Flextronics" and "Flextronics, Inc." meet and
@@ -56,6 +63,8 @@ typedef struct {
     const char *name;          /* the IEEE Organization Name, exactly */
     const char *const *aliases;
     int                naliases;
+    const char *const *affiliates;  /* "Registry String [n]" */
+    int                naffiliates;
     const char *country;       /* "JP [1]" or "unknown" */
     const char *parent;        /* "independent [1]", a company, "unknown" */
     const char *founded;       /* "1944 [1]" or "unknown" */
@@ -85,8 +94,9 @@ typedef struct {
 } web_vkb_t;
 
 typedef struct {
-    const char *key;           /* web_vkb_norm() of a name or alias */
+    const char *key;           /* web_vkb_norm() of a name, alias or affiliate */
     int         entry;         /* index into web_vkb */
+    int         affiliate;     /* 1: the key is an affiliate's */
 } web_vkb_key_t;
 
 /* The generated table: entries in file-name order, keys sorted by
@@ -96,7 +106,11 @@ extern const int            web_vkb_n;
 extern const web_vkb_key_t  web_vkb_keys[];
 extern const int            web_vkb_nkeys;
 
-/* The entry for an IEEE organisation name, spelling folded, or NULL. */
+/* The entry for an IEEE organisation name, spelling folded, or NULL;
+ * *affiliate (when not NULL) is set to 1 when the name is one of the
+ * entry's affiliates, a different company, and 0 otherwise. */
+const web_vkb_t *web_vendorkb_lookup(const char *ieee_name, int *affiliate);
+/* web_vendorkb_lookup() without the flag. */
 const web_vkb_t *web_vendorkb_find(const char *ieee_name);
 
 /* Normalise s into out (cap bytes, cap >= 1): ASCII letters lower-cased,

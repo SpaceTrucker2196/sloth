@@ -1,6 +1,7 @@
 ---
 name: Adtran Inc
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: ADTRAN Holding, listed on Nasdaq (ADTN) and Frankfurt [1]
 founded: 1985 [1]
@@ -24,7 +25,6 @@ A MAC in an Adtran block is most likely carrier access equipment or customer pre
 Radio details are sparse: the sources consulted name Wi-Fi 7 as a product area and show that the 834-5 gateway broadcasts a BSSID, but give no band or chipset data [3][6]. Silicon and FCC grantee codes are not listed: the FCC ID databases refused requests from this session and no teardown was found, and nothing is filled in from memory. Randomization behaviour is not documented.
 
 ## Sources
-
 1. Adtran - Wikipedia - https://en.wikipedia.org/wiki/Adtran (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Adtran products and services - https://www.adtran.com/en/products-and-services (accessed 2026-10-27)

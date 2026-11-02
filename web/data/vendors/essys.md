@@ -1,6 +1,7 @@
 ---
 name: ESSYS
 aliases: ["eSSys Co.,Ltd"]
+affiliates: []
 country: KR [1][6]
 parent: unknown
 founded: unknown

@@ -1,6 +1,7 @@
 ---
 name: Thomson Telecom Belgium
 aliases: []
+affiliates: []
 country: BE [1]
 parent: Thomson, renamed Technicolor in 2010 and Vantiva in 2022, which keeps an office in Edegem (inferred from the name and address) [2]
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely a SpeedTouch or Thomson Gateway DSL router 
 Chipsets, founding year and FCC grantee codes are not documented by the sources consulted; the FCC ID databases refused automated access from this session.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Vantiva - Wikipedia - https://en.wikipedia.org/wiki/Vantiva (accessed 2026-10-27)
 3. SpeedTouch - Wikipedia - https://en.wikipedia.org/wiki/SpeedTouch (accessed 2026-10-27)

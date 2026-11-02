@@ -1,6 +1,7 @@
 ---
 name: SimpliSafe
 aliases: []
+affiliates: []
 country: US [1]
 parent: GTCR (acquisition from Hellman & Friedman completed 12 November 2025) [1]
 founded: 2006 [1]

@@ -1,6 +1,7 @@
 ---
 name: "Sichuan Tianyi Comheart Telecom Co.,LTD"
 aliases: ["Sichuan tianyi kanghe communications co., LTD"]
+affiliates: []
 country: CN [1][2]
 parent: listed company, stock code 300504 [1][2]
 founded: 2001 [1][2]
@@ -24,7 +25,6 @@ A MAC in a Comheart block is most likely a fibre ONU or home gateway supplied by
 Silicon and FCC grantee codes are not listed: the FCC ID databases refused requests from this session and no teardown was found, and nothing is filled in from memory. Randomization behaviour is not documented.
 
 ## Sources
-
 1. Sichuan Tianyi Comheart Telecom, English site - http://en.tianyisc.com/ (accessed 2026-10-27)
 2. 四川天邑康和通信股份有限公司, Chinese site - http://www.tianyisc.com/ (accessed 2026-10-27)
 3. Tianyi Comheart broadband network terminal products - http://en.tianyisc.com/product.aspx?t=15&s=44 (accessed 2026-10-27)

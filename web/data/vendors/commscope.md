@@ -1,6 +1,7 @@
 ---
 name: Commscope
 aliases: ["CommScope Inc", "Commscope, Inc"]
+affiliates: []
 country: US [1]
 parent: independent [1]
 founded: 1976 [1]

@@ -1,6 +1,7 @@
 ---
 name: Xiaomi Communications Co Ltd
 aliases: []
+affiliates: []
 country: CN [2]
 parent: unknown
 founded: unknown
@@ -24,7 +25,6 @@ WikiDevi ties two Xiaomi routers to blocks in this registrant's name: the MiWiFi
 NVD lists command-injection and remote-code-execution flaws in Xiaomi routers, among them CVE-2020-14094 on the R3600 [6] and CVE-2018-13023 on the Mi Router 3 [7]. Randomization is not documented for this registrant. No grantee code is listed: the FCC ID databases refused requests from the session that wrote this entry, and no source consulted names the grantee behind the MiWiFi 4A's FCC ID.
 
 ## Sources
-
 1. Xiaomi - Wikipedia - https://en.wikipedia.org/wiki/Xiaomi (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Xiaomi MiWiFi Mini (R1CM) - WikiDevi - https://wikidevi.wi-cat.ru/Xiaomi_MiWiFi_Mini_(R1CM) (accessed 2026-10-27)

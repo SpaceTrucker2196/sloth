@@ -1,6 +1,7 @@
 ---
 name: "Sonos, Inc."
 aliases: ["Sonos Inc."]
+affiliates: []
 country: US [1][2]
 parent: independent, listed on Nasdaq since 2018 [2]
 founded: 2002 [2]
@@ -22,7 +23,6 @@ Sonos is a US wireless-audio company founded in 2002 as Rincon Audio by John Mac
 The Play:3 teardown shows a Qualcomm Atheros AR9380, a 2.4/5 GHz 802.11a/b/g/n chip, behind a Skyworks SE2595L dual-band front end [3], and CVE-2023-50809 names the mt_7615.ko Wi-Fi driver in the Amp, Arc, Beam and Five, where a malformed element in the WPA2 handshake overflowed a kernel stack buffer [5]. Other records include DNS rebinding of the UPnP server (CVE-2018-11316) [4], network-adjacent code execution on the Sonos One (CVE-2022-24046) [7] and SMB2 flaws in the Era 100 (CVE-2024-5267) [6]. FCC grantee codes are not listed because the FCC ID databases refused automated access from the session that wrote this entry, and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Sonos - Wikipedia - https://en.wikipedia.org/wiki/Sonos (accessed 2026-10-27)
 3. Sonos Play:3 Teardown - iFixit - https://www.ifixit.com/Teardown/Sonos+Play:3+Teardown/12475 (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: NETGEAR
 aliases: []
+affiliates: []
 country: US [1]
 parent: "independent (Arlo camera business spun out as a separate company August 2018) [1]"
 founded: 1996 [1]

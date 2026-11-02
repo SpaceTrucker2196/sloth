@@ -1,6 +1,7 @@
 ---
 name: "Hangzhou Ezviz Software Co.,Ltd."
 aliases: []
+affiliates: []
 country: CN [1]
 parent: Hikvision, which lists Ezviz among its brands [2]
 founded: unknown
@@ -22,7 +23,6 @@ The IEEE registry lists 14 MA-L blocks under "Hangzhou Ezviz Software Co.,Ltd." 
 The cameras carry a run of LAN-reachable flaws: a motion-detection stack overflow allowing remote code execution (CVE-2022-2471) [5], unauthenticated overflows in the SADP multicast discovery parser (CVE-2023-34552) [4], overflows in the SDK command server (CVE-2023-34551) [6] and an authentication bypass in the Direct Connection Module that discloses sensitive information (CVE-2023-48121) [7]. Founding year, the silicon inside EZVIZ cameras and FCC grantee codes are not listed: the FCC ID databases and teardown wikis refused automated access from the session that wrote this entry, EZVIZ's about page gave no corporate history, and nothing is filled in from memory. Randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Hikvision - Wikipedia - https://en.wikipedia.org/wiki/Hikvision (accessed 2026-10-27)
 3. EZVIZ - Creating Easy Smart Homes (about us) - https://www.ezviz.com/about-us (accessed 2026-10-27)

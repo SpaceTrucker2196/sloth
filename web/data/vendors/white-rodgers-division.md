@@ -1,6 +1,7 @@
 ---
 name: White Rodgers Division
 aliases: []
+affiliates: []
 country: US [1]
 parent: Copeland (formerly part of Emerson) [2][3]
 founded: unknown
@@ -38,7 +39,6 @@ grantee codes are not listed: the FCC ID databases refused the session
 that verified this entry, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. White-Rodgers history - Copeland - https://dev-web.copeland.com/en-ca/brands/white-rodgers/white-rodgers-history (accessed 2026-10-27)
 3. Copeland (company) - Wikipedia - https://en.wikipedia.org/wiki/Copeland_(company) (accessed 2026-10-27)

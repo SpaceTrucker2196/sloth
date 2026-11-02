@@ -1,6 +1,7 @@
 ---
 name: Pittasoft
 aliases: []
+affiliates: []
 country: KR [1][4]
 parent: unknown
 founded: 2007 [3][4]
@@ -24,7 +25,6 @@ Current models carry 802.11a/b/g/n/ac Wi-Fi on 2.4 and 5 GHz and Bluetooth (V2.1
 In 2025 a researcher published unauthenticated file upload (CVE-2025-7075) and unauthenticated configuration change (CVE-2025-7076) flaws in the BlackVue Dashcam 590X, both requiring access to the dashcam's own network, plus two flaws in the BlackVue app and its API [2][7][8]. Silicon, randomization and FCC grantee codes are not listed: no teardown was found, and the FCC ID databases refused fetches from this session.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. CVE-2025-7075 - CVE Program record - https://cveawg.mitre.org/api/cve/CVE-2025-7075 (accessed 2026-10-27)
 3. Pittasoft Launched Full HD Wi-Fi Dashboard Camera BlackVue Wi-Fi DR500GW-HD - 24-7 Press Release - https://www.24-7pressrelease.com/press-release/335128/pittasoft-launched-full-hd-wi-fi-dashboard-camera-blackvue-wi-fi-dr500gw-hd (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: "HUMAX Co., Ltd."
 aliases: []
+affiliates: []
 country: KR [1][2]
 parent: unknown
 founded: 1989 [2]
@@ -24,7 +25,6 @@ A MAC in a HUMAX block is most likely an operator-supplied set-top box or broadb
 The Humax HG100R Wi-Fi router on firmware 2.0.6 has an authentication bypass, CVE-2017-11435, that exposes IP addresses, SSIDs and Wi-Fi passwords when its management console is reachable [5]. The FCC ID databases refused this session's requests, so no grantee code is listed, and no source documents MAC randomization.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Humax - Wikipedia - https://en.wikipedia.org/wiki/Humax (accessed 2026-10-27)
 3. Humax unveils Voice Assistant STB and Wi-Fi 6E gateway - Advanced Television - https://www.advanced-television.com/2020/10/27/humax-unveils-voice-assistant-stb-wi-fi-6e-gateway/ (accessed 2026-10-27)

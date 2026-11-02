@@ -1,6 +1,7 @@
 ---
 name: Ring Solutions
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: Ring, the Amazon-owned home security company [3][4]
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in this block is therefore most likely a Ring home-automation device such 
 Ring as a whole agreed a 5.8 million US dollar FTC settlement in May 2023 after the FTC said Ring compromised customers' privacy by letting any employee or contractor access their private videos, and in December 2019 attackers took over Ring cameras and broadcast racial slurs and threats through their speakers [4]. The FCC ID databases (fccid.io, fcc.report, apps.fcc.gov) refused this session's requests, so no grantee code is listed; no teardown naming the base station silicon was reachable, and no source documents MAC randomization.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. MAC address B0:09:DA - maclookup.app - https://maclookup.app/macaddress/b009da (accessed 2026-10-27)
 3. Amazon's $1B Ring deal gives Malvern engineering team an expansive home - The Philadelphia Inquirer - https://www.inquirer.com/philly/blogs/inq-phillydeals/amazons-billion-dollar-zonoff-ring-solutions-mike-harris-amazon-deal-malvern-internet-of-things-20180228.html (accessed 2026-10-27)

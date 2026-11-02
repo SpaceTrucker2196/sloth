@@ -1,6 +1,7 @@
 ---
 name: YAMAHA CORPORATION
 aliases: []
+affiliates: []
 country: JP [1][3]
 parent: unknown
 founded: 1887 [1]
@@ -39,7 +40,6 @@ MusicCast page refused the session that wrote this entry, so no grantee
 code, silicon or consumer Wi-Fi detail is listed.
 
 ## Sources
-
 1. Yamaha Corporation - Wikipedia - https://en.wikipedia.org/wiki/Yamaha_Corporation (accessed 2026-10-27)
 2. Routers and wireless LAN access points - Yamaha Network Products - https://network.yamaha.com/products/routers (accessed 2026-10-27)
 3. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)

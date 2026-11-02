@@ -1,6 +1,7 @@
 ---
 name: GoPro
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: independent, listed on Nasdaq since 2014 [2]
 founded: 2002 [2]
@@ -22,7 +23,6 @@ GoPro is a US action-camera maker founded in 2002 by Nick Woodman as Woodman Lab
 iFixit's HERO4 Session teardown found a Qualcomm QCA6134X-AM2D Wi-Fi/Bluetooth SiP on the wireless daughterboard and an Ambarella A7LS video SoC [3]. On the HERO3+, the gpExec handler allowed remote execution of files and commands (CVE-2014-6433, CVE-2014-6434) [4][5]. Silicon for later HERO generations and FCC grantee codes are not listed: the teardown and FCC ID sites that would document them refused or rate-limited automated access from the session that wrote this entry, and nothing is filled in from memory; randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. GoPro - Wikipedia - https://en.wikipedia.org/wiki/GoPro (accessed 2026-10-27)
 3. GoPro Hero4 Session Teardown - iFixit - https://www.ifixit.com/Teardown/GoPro+Hero4+Session+Teardown/44307 (accessed 2026-10-27)

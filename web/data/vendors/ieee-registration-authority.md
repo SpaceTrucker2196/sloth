@@ -1,6 +1,7 @@
 ---
 name: IEEE Registration Authority
 aliases: []
+affiliates: []
 country: US [1][3]
 parent: IEEE Standards Association [2]
 founded: unknown
@@ -24,7 +25,6 @@ The registry lists 426 MA-L blocks, one MA-S block and one IAB to the IEEE Regis
 So a MAC shown as IEEE Registration Authority is almost always a device of some smaller company holding a sub-block inside one of these OUIs, which a lookup should resolve against the MA-M, MA-S and IAB lists rather than the MA-L list; when it does not, the sub-block's holder is simply unknown [1][4]. No device class, radio, silicon or randomization behaviour belongs to the Registration Authority itself, so those fields are empty or unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L, MA-M, MA-S and IAB assignments (oui.csv, mam.csv, oui36.csv, iab.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. IEEE Registration Authority - IEEE Standards Association - https://standards.ieee.org/products-programs/regauth/ (accessed 2026-10-27)
 3. IEEE - Wikipedia - https://en.wikipedia.org/wiki/IEEE (accessed 2026-10-27)

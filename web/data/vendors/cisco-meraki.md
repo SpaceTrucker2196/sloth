@@ -1,6 +1,7 @@
 ---
 name: Cisco Meraki
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: Cisco Systems (acquired December 2012) [1]
 founded: 2006 [1]
@@ -22,7 +23,6 @@ Cisco Meraki is the cloud-managed networking company founded in 2006 by Sanjit B
 DeviWiki lists Meraki devices with FCC IDs all beginning UDX and documents their silicon, for example Qualcomm IPQ8074 with QCN5054 and QCN5024 radios in the Wi-Fi 6 MR45 and MR55, and Broadcom BCM53016 with BCM43520 radios in the MR32 [3]. A recent AP such as the MR46 runs four radios at once: 802.11ax client radios on 2.4 and 5 GHz, a dual-band WIDS/WIPS and location scanning radio, and a Bluetooth Low Energy beacon and scanning radio, so one AP may show several BSSIDs plus BLE adverts [4]. NVD records a local-status-page configuration flaw across MR, MS, MX, Z1 and Z3 (CVE-2018-0284) [5], an AnyConnect VPN server flaw on MX and Z-series allowing session hijack or denial of service (CVE-2024-20509) [7], and a Systems Manager agent privilege escalation (CVE-2024-20430) [6]. Randomization is unknown.
 
 ## Sources
-
 1. Cisco Meraki - Wikipedia - https://en.wikipedia.org/wiki/Cisco_Meraki (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Meraki - DeviWiki - https://deviwiki.com/wiki/Meraki (accessed 2026-10-27)

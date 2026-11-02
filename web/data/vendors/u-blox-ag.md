@@ -1,6 +1,7 @@
 ---
 name: u-blox AG
 aliases: []
+affiliates: []
 country: CH [1]
 parent: "Advent International (acquisition completed 2025-11-26) [1]"
 founded: 1997 [1]

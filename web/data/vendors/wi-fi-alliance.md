@@ -1,6 +1,7 @@
 ---
 name: Wi-Fi Alliance
 aliases: []
+affiliates: []
 country: US [1][3]
 parent: independent [1]
 founded: 1999 [1]

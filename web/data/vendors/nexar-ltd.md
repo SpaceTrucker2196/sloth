@@ -1,6 +1,7 @@
 ---
 name: Nexar Ltd.
 aliases: []
+affiliates: []
 country: IL [1][2]
 parent: unknown
 founded: 2015 [2]
@@ -24,7 +25,6 @@ A MAC in this block is most likely a Nexar dash cam such as the Nexar Beam, a sc
 Malwarebytes reported on 5 September 2025 that a hacker had reached Nexar's AWS store of more than 130 TB of dashcam video because an access key embedded in every dashcam carried excessive privileges; Nexar fixed it after 404 Media contacted the company [6]. The FCC ID databases refused this session's requests, so no grantee code is listed, and no source documents MAC randomization.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Nexar - Startupim - https://startupim.com/company/nexar (accessed 2026-10-27)
 3. Nexar gets $30M Series B for its AI-based road safety dashcams and network - TechCrunch - https://techcrunch.com/2018/01/24/nexar-gets-30m-series-b-for-its-ai-based-road-safety-dashcams-and-network/ (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: "Roku, Inc."
 aliases: ["Roku, Inc"]
+affiliates: []
 country: US [1][2]
 parent: independent, listed on Nasdaq since 2017 [2]; Fox Corporation agreed in June 2026 to acquire it [3]
 founded: 2002 [2]
@@ -22,7 +23,6 @@ Roku is a US streaming-platform company founded in October 2002 by Anthony Wood,
 The FCC IDs of Roku players carry the grantee code TC2, and the documented Wi-Fi silicon runs from Broadcom BCM43236B and BCM43569 in earlier players to Realtek RTL8812BU in later Ultras, with MStar MSO9380 and Realtek RTD1315 SoCs; Wi-Fi is 802.11b/g/n on Express models and 802.11ac dual-band on Premiere+, Ultra and Streaming Stick 4K [4]. The External Control API was reachable through DNS rebinding (CVE-2018-11314) [5], Roku OS 9.4.0 and earlier with a Realtek Wi-Fi chip allowed arbitrary file modification (CVE-2022-27152) [7], the Roku Indoor Camera SE had a stack overflow in message parsing (CVE-2023-6322) [6], and a credential-stuffing attack in April 2024 compromised 576,000 accounts [2]. Randomization is unknown: no consulted source documents it.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Roku, Inc. - Wikipedia - https://en.wikipedia.org/wiki/Roku,_Inc. (accessed 2026-10-27)
 3. Roku - Wikipedia - https://en.wikipedia.org/wiki/Roku (accessed 2026-10-27)

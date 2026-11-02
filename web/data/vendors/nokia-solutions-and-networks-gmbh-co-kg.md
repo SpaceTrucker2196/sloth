@@ -1,6 +1,7 @@
 ---
 name: Nokia Solutions and Networks GmbH & Co. KG
 aliases: []
+affiliates: []
 country: DE [2]
 parent: Nokia Corporation [3][4]
 founded: 2007 [3][4]

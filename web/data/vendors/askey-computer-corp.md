@@ -1,6 +1,7 @@
 ---
 name: ASKEY COMPUTER CORP
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: ASUSTeK Computer Inc. [2][3]
 founded: 1989 [2]
@@ -24,7 +25,6 @@ Askey's product lines include 5G fixed-wireless outdoor units, routers and dongl
 Askey devices have public flaws: CVE-2019-12489 allows command injection through the mount parameter of the usb_remove service on the Fastweb Askey RTV1907VW, and CVE-2021-27403 is an XSS in cgi-bin/te_acceso_router.cgi on the Askey RTF8115VW [6][7]. The FCC ID databases refused this session's direct requests, so only the grantee code visible in a fetched source is listed, and no source documents MAC randomization.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. About Askey - Askey Computer Corp. - https://www.askey.com/about/ (accessed 2026-10-27)
 3. Asus - Wikipedia - https://en.wikipedia.org/wiki/Askey_Computer_Corporation (accessed 2026-10-27)

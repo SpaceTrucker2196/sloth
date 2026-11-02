@@ -1,6 +1,7 @@
 ---
 name: HUNAN FN-LINK TECHNOLOGY LIMITED
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: unknown
 founded: 2015 [2]
@@ -45,7 +46,6 @@ nothing is filled in from memory. Parent company and security
 advisories are not documented by the sources consulted.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Fn-Link Technology Limited home page - https://www.fn-link.com/ (accessed 2026-10-27)
 3. 6223E-UUD Module Datasheet, FN-LINK TECHNOLOGY LIMITED - https://mt-system.ru/upload/iblock/252/rtmjctqbpl1niz1w0oohxzv5i6v21yph.pdf (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: Vantiva Technologies Belgium
 aliases: []
+affiliates: []
 country: BE [1][2]
 parent: Vantiva SA, the former Thomson and Technicolor, which lists an office in Edegem (inferred from the shared name and address) [3]
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely an operator-supplied home gateway or set-to
 Founding year of the Belgian entity, FCC grantee codes and randomization are not documented by the sources consulted; the FCC ID databases refused automated access from this session.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Vantiva Technologies Belgium - OpenCorporates - https://opencorporates.com/companies/be/0428837295 (accessed 2026-10-27)
 3. Vantiva - Wikipedia - https://en.wikipedia.org/wiki/Vantiva (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: "Fortinet, Inc."
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: independent, public on Nasdaq as FTNT [2]
 founded: 2000 [2]
@@ -24,7 +25,6 @@ A MAC in a Fortinet block is most likely a FortiGate or FortiWiFi firewall, a Fo
 CVE-2018-13379 is a FortiOS SSL VPN path traversal that lets an unauthenticated attacker download system files [4]. Wikipedia records almost 500,000 Fortinet VPN logins published in September 2021, allegedly taken from devices affected by that CVE, credentials and configuration files of over 15,000 FortiGates leaked in January 2025, reportedly via CVE-2022-40684, and a China-linked state-sponsored campaign against Fortinet devices reported in 2023 [2]. Randomization is unknown; the FCC ID databases refused the session that wrote this entry.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Fortinet - Wikipedia - https://en.wikipedia.org/wiki/Fortinet (accessed 2026-10-27)
 3. Fortinet - WikiDevi - https://wikidevi.wi-cat.ru/Fortinet (accessed 2026-10-27)

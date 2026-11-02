@@ -1,6 +1,7 @@
 ---
 name: Ezurio, LLC
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: "Audax Private Equity (acquired July 2022) [2]"
 founded: 2004 [2]

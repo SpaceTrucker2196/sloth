@@ -1,6 +1,7 @@
 ---
 name: Routerboard.com
 aliases: []
+affiliates: []
 country: LV [1][2]
 parent: independent, privately held by its two founders [2]
 founded: 1996 [2]
@@ -22,7 +23,6 @@ Routerboard.com is the IEEE registrant name of MikroTik, the Latvian network-equ
 Every MikroTik FCC ID DeviWiki lists begins TV7, the company's grantee code by inference, and DeviWiki documents mostly Qualcomm Atheros silicon: QCA9531 and QCA9533 in the small hAP, mAP and cAP units, IPQ4018 and IPQ4019 in the ac generation, QCA6335 for 802.11ad in the wAP 60G, and an Annapurna Labs Alpine CPU with a QCA9984 radio in the RB4011 [3]; the Wi-Fi 6 hAP ax2 uses a Qualcomm IPQ-6010 with QCN-5022 and QCN-5052 radios [4]. MikroTik is a frequent target: CVE-2018-14847, a WinBox directory traversal in RouterOS through 6.42, is in CISA's Known Exploited Vulnerabilities catalog [5]; MikroTik says the Meris botnet of 2021 was built from routers compromised through that bug in 2018 and that an upgrade without a password change does not clean them [6]; and in 2018 Cisco Talos found some MikroTik devices vulnerable to VPNFilter, whose at-risk list includes RouterOS up to 6.38.5 [2][7]. Randomization is unknown: no source consulted documents it.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. MikroTik - Wikipedia - https://en.wikipedia.org/wiki/MikroTik (accessed 2026-10-27)
 3. MikroTik - DeviWiki - https://deviwiki.com/wiki/MikroTik (accessed 2026-10-27)

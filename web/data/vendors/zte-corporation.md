@@ -1,6 +1,7 @@
 ---
 name: zte corporation
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: partially state-owned; ZTE Holdings (Zhongxing Xin) held 27.40% in June 2019, with state-owned shareholders nominating 5 of its 9 directors [1]
 founded: 1985 [1]
@@ -24,7 +25,6 @@ A MAC in these blocks may be a phone or, very often, operator customer equipment
 The ZTE Score phone sold by Cricket and MetroPCS could be accessed remotely with an easily obtained password, a 2012 US House Intelligence Committee report recommended that the government be barred from buying ZTE and Huawei equipment, the US Commerce Department banned exports to ZTE in April 2018 and lifted the ban in July after a June settlement, and the FCC designated ZTE a national security threat in June 2020 [1]. Randomization behaviour is not documented by the sources consulted; the FCC ID databases refused automated access from this session.
 
 ## Sources
-
 1. ZTE - Wikipedia - https://en.wikipedia.org/wiki/ZTE (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. ZTE - WikiDevi - https://wikidevi.wi-cat.ru/ZTE (accessed 2026-10-27)

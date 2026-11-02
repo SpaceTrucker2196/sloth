@@ -1,6 +1,7 @@
 ---
 name: Guangzhou Shiyuan Electronic Technology Company Limited
 aliases: ["Guangzhou Shiyuan Electronics Co., Ltd."]
+affiliates: []
 country: CN [2][3]
 parent: independent (listed on the Shenzhen Stock Exchange, 002841) [3]
 founded: 2005 [3][4]

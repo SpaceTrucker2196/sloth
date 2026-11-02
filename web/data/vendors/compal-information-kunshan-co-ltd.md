@@ -1,6 +1,7 @@
 ---
 name: "COMPAL INFORMATION (KUNSHAN) CO., LTD. "
 aliases: ["COMPAL INFORMATION(KUNSHAN)CO.,LTD."]
+affiliates: []
 country: CN [1]
 parent: Compal Electronics of Taipei, whose main production facility is in Kunshan (inferred from the name) [2]
 founded: unknown
@@ -22,7 +23,6 @@ The IEEE registry lists 26 MA-L blocks to "COMPAL INFORMATION (KUNSHAN) CO., LTD
 A MAC in these blocks is therefore most likely the wired or wireless interface of a notebook or similar device that Compal's Kunshan plant built for another brand, so the OUI names the contract manufacturer, not the brand on the lid [2][3]. Which radios and chips carry these addresses is not documented by the sources consulted, so radios and silicon are left empty. Founding year and FCC grantee codes are unknown: no source in hand describes the Kunshan subsidiary itself, and the FCC ID databases refused automated access from this session. Randomization is the host operating system's choice and is unknown here.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Compal Electronics - Wikipedia - https://en.wikipedia.org/wiki/Compal_Electronics (accessed 2026-10-27)
 3. Compal Laptop Repair - iFixit - https://www.ifixit.com/Device/Compal_Laptop (accessed 2026-10-27)

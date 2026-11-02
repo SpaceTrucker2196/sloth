@@ -1,6 +1,7 @@
 ---
 name: Ruckus Wireless
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: Belden, whose purchase of Ruckus was announced complete on 1 July 2026 (earlier Brocade 2016, ARRIS 2017, CommScope 2019) [1]
 founded: 2004 [1]
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely an enterprise access point, bridge or ICX s
 In December 2019 a researcher reported several vulnerabilities in the web interface of a number of Ruckus routers, which the company patched [1]. Randomization behaviour is not documented by the sources consulted; the FCC ID databases refused automated access from this session.
 
 ## Sources
-
 1. Ruckus Networks - Wikipedia - https://en.wikipedia.org/wiki/Ruckus_Networks (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. List of Ruckus Wireless Devices - WikiDevi - https://wikidevi.wi-cat.ru/List_of_Ruckus_Wireless_Devices (accessed 2026-10-27)

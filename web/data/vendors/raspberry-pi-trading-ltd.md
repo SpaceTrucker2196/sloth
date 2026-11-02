@@ -1,6 +1,7 @@
 ---
 name: Raspberry Pi Trading Ltd
-aliases: [Raspberry Pi (Trading) Ltd, Raspberry Pi Foundation]
+aliases: [Raspberry Pi (Trading) Ltd]
+affiliates: ["Raspberry Pi Foundation [1]"]
 country: GB [1]
 parent: Raspberry Pi Holdings plc, in which the Raspberry Pi Foundation remains a major shareholder [1]
 founded: 2012 [1]
@@ -24,7 +25,6 @@ The registry holds the blocks under three names: four MA-L as Raspberry Pi Tradi
 The Raspberry Pi 5 has dual-band 802.11ac Wi-Fi and Bluetooth 5.0 with BLE around a Broadcom BCM2712 processor [3]; the Raspberry Pi 4 Model B has 2.4 and 5 GHz 802.11ac and Bluetooth 5.0 with BLE [4]. The wireless Pico boards use the Infineon CYW43439, documented in the boards' key features as single-band 2.4 GHz 802.11n with Bluetooth 5.2, although the same page's models section says dual-band 802.11ac [5]. The wireless chip of the larger boards is not named on the pages consulted, the FCC ID databases refused the session that wrote this entry, and nothing is filled in from memory. Randomization depends on the operating system the board runs and is unknown here.
 
 ## Sources
-
 1. Raspberry Pi Holdings - Wikipedia - https://en.wikipedia.org/wiki/Raspberry_Pi_Holdings (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Raspberry Pi 5 product page - https://www.raspberrypi.com/products/raspberry-pi-5/ (accessed 2026-10-27)

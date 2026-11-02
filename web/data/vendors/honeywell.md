@@ -1,6 +1,7 @@
 ---
 name: Honeywell
 aliases: ["Honeywell International", "Honeywell International Inc"]
+affiliates: []
 country: US [5]
 parent: independent [5]
 founded: 1906 [5]
@@ -22,7 +23,6 @@ Honeywell is a US industrial conglomerate founded in 1906 by Mark Honeywell in W
 A MAC in these blocks is most likely industrial, building or aerospace equipment rather than a consumer device, since the consumer business left with Resideo [5]; which products carry them is not documented by the sources consulted, so radios and silicon are empty. NVD records CVE-2023-5389 against the Experion ControlEdge UOC and VirtualUOC controllers [6]. FCC grantee codes are not listed because the FCC ID databases refused access from the session that wrote this entry, and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-M assignments (mam.csv) - https://standards-oui.ieee.org/oui28/mam.csv (accessed 2026-10-27)
 3. IEEE Registration Authority, MA-S assignments (oui36.csv) - https://standards-oui.ieee.org/oui36/oui36.csv (accessed 2026-10-27)

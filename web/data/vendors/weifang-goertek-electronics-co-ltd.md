@@ -1,6 +1,7 @@
 ---
 name: "WEIFANG GOERTEK ELECTRONICS CO.,LTD"
 aliases: []
+affiliates: []
 country: CN [1]
 parent: unknown
 founded: unknown
@@ -22,7 +23,6 @@ Weifang Goertek Electronics holds 20 MA-L blocks in the IEEE registry, all at We
 A MAC in one of these blocks is most likely a contract-built consumer device, earbuds, a smart speaker, a VR headset, a wearable or a console accessory, sold under a customer's brand rather than Goertek's [3]. Which brand, radio and chipset is not documented here: the FCC ID databases refused access from the session that wrote this entry, so radios, silicon and grantee codes are left empty rather than assumed. Randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Goertek - Wikipedia - https://en.wikipedia.org/wiki/Goertek (accessed 2026-10-27)
 3. Goertek Inc. 2021 Corporate Social Responsibility Report - https://www.goertek.com/en/Upload/202204/20220426164309_9281.pdf (accessed 2026-10-27)

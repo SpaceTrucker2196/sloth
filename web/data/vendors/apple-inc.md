@@ -1,6 +1,7 @@
 ---
 name: "Apple, Inc."
 aliases: []
+affiliates: []
 country: US [1]
 parent: independent (publicly traded) [1]
 founded: 1976 [1]

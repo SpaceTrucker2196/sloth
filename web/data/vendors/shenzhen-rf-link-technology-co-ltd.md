@@ -1,6 +1,7 @@
 ---
 name: "SHENZHEN RF-LINK TECHNOLOGY CO.,LTD."
 aliases: []
+affiliates: []
 country: CN [1]
 parent: unknown
 founded: unknown
@@ -24,6 +25,5 @@ A MAC in these blocks is therefore most likely a small Wi-Fi module or USB dongl
 Founding year, parent, the company's product list and its customers are unknown: the company's site did not resolve, and the FCC ID databases refused the session's requests. NVD returned no records for RF-Link, so no security notes are listed. Randomization is unknown, and in practice belongs to the host operating system rather than the module.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Shenzhen RF-Link WL-UM01C-7601 - DeviWiki - https://deviwiki.com/wiki/Shenzhen_RF-Link_WL-UM01C-7601 (accessed 2026-10-27)

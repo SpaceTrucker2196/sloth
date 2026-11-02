@@ -1,6 +1,7 @@
 ---
 name: D&M Holdings Inc.
 aliases: []
+affiliates: []
 country: JP [1][2]
 parent: Sound United LLC since 2017, itself acquired by Samsung-owned Harman International in 2025 [3][4]
 founded: 2002 [3]
@@ -24,7 +25,6 @@ A MAC in a D&M block is most likely a networked Denon or Marantz audio product: 
 The chips inside these products are not documented by the sources consulted, so silicon is empty, and FCC grantee codes are not listed because the FCC ID databases refused automated access from this session. Randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Denon HEOS Bar EU Declaration of Conformity DM-CE16025-R4 - https://manuals.denon.com/CEdeclaration/pdf/HEOS%20Bar_CE_DoC_R4.pdf (accessed 2026-10-27)
 3. D&M Holdings - Wikipedia - https://en.wikipedia.org/wiki/D%26M_Holdings (accessed 2026-10-27)

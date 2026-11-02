@@ -1,6 +1,7 @@
 ---
 name: Dell Inc.
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: Dell Technologies [1]
 founded: 1984 [1]
@@ -41,7 +42,6 @@ grantee codes are not listed: the FCC ID databases refused the session
 that wrote this entry, and nothing is filled in from memory.
 
 ## Sources
-
 1. Dell - Wikipedia - https://en.wikipedia.org/wiki/Dell (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Dell - DeviWiki - https://deviwiki.com/wiki/Dell (accessed 2026-10-27)

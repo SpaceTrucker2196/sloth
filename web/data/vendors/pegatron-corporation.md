@@ -1,6 +1,7 @@
 ---
 name: PEGATRON CORPORATION
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: independent; spun off from ASUS on 1 June 2010 [1]
 founded: 2007 [1]
@@ -24,7 +25,6 @@ Because Pegatron builds for other brands, a MAC in its blocks may sit in a produ
 No Pegatron-specific security advisory was found by the sources consulted, and randomization behaviour is not documented; the FCC ID databases refused automated access from this session.
 
 ## Sources
-
 1. Pegatron - Wikipedia - https://en.wikipedia.org/wiki/Pegatron (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Pegatron - WikiDevi - https://wikidevi.wi-cat.ru/Pegatron (accessed 2026-10-27)

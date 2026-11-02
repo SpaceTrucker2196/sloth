@@ -1,6 +1,7 @@
 ---
 name: Ring LLC
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: "Amazon (acquired 12 April 2018 for approximately $839 million) [1]"
 founded: 2013 [1]

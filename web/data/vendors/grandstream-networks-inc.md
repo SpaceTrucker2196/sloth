@@ -1,6 +1,7 @@
 ---
 name: "Grandstream Networks, Inc."
 aliases: [Grandstream Networks Inc]
+affiliates: []
 country: US [1][2]
 parent: independent, privately held [1][2]
 founded: 2002 [1]
@@ -24,7 +25,6 @@ A MAC in a Grandstream block is most likely a VoIP device such as a desk or cord
 NVD records command injection in GWN7000 router firmware, buffer overflows in the HT801 ATA shell, parameter injection in UCM IP PBXs and command injection in a GXP desk phone [6][7][8][9]. Silicon and FCC grantee codes are not listed: the FCC ID databases refused requests from this session and no teardown was found, and nothing is filled in from memory. Randomization behaviour is not documented.
 
 ## Sources
-
 1. Grandstream Networks - Wikipedia - https://en.wikipedia.org/wiki/Grandstream_Networks (accessed 2026-10-27)
 2. About Grandstream - https://www.grandstream.com/about-us (accessed 2026-10-27)
 3. Grandstream home page and product families - https://www.grandstream.com/ (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: Synology Incorporated
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: independent, privately held [1]
 founded: 2000 [1][3]
@@ -38,7 +39,6 @@ Randomization is unknown, and FCC grantee codes are not listed because
 the FCC ID databases refused the session that wrote this entry.
 
 ## Sources
-
 1. Synology - Wikipedia - https://en.wikipedia.org/wiki/Synology (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. About Synology - https://www.synology.com/en-global/company (accessed 2026-10-27)

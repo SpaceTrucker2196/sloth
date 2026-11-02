@@ -1,168 +1,169 @@
 # The reference host's vendors: every distinct IEEE Organization Name
-# its devices' MACs resolved to, exactly as the registry spells it,
-# a TAB, then how many devices carried it (2026-10-27, commonest
-# first). web/tests/test_vendorkb.c holds COVERAGE.md's two lists
-# to this one; a name may end in a space because the registry's does.
-LG Innotek	203
-ALPSALPINE CO,.LTD	174
-AMPAK Technology,Inc.	118
-Vantiva USA LLC	84
-ESSYS	62
-SparkLAN Communications, Inc.	47
-AUMOVIO Systems, Inc.	42
-MITSUMI ELECTRIC CO.,LTD.	42
-WNC Corporation	40
-Murata Manufacturing Co., Ltd.	39
-Nokia Solutions and Networks GmbH & Co. KG	39
-Texas Instruments	35
-Wi-Fi Alliance	32
-Intel Corporate	30
-SAMSARA NETWORKS INC	29
-Amazon Technologies Inc.	27
-shenzhen trolink  Technology Co.,Ltd	26
-SHENZHEN BILIAN ELECTRONIC CO.，LTD	25
-Visteon Corporation	22
-FLEXTRONICS	20
-Tesla,Inc.	19
-Panasonic Automotive Systems Co.,Ltd	18
-HUMAX NETWORKS	16
-Shenzhen Phaten Tech. LTD	15
-Apple, Inc.	14
-u-blox AG	13
-FLEXTRONICS TECHNOLOGIES MEXICO S DE RL DE CV	13
-TP-LINK TECHNOLOGIES CO.,LTD.	13
-ASUSTek COMPUTER INC.	12
-AzureWave Technology Inc.	12
-NETGEAR	12
-Ring LLC	12
-Samsung Electronics Co.,Ltd	11
-Espressif Inc.	11
-FN-LINK TECHNOLOGY Ltd.	11
-Zhuolian (Shenzhen) Communication Co., Ltd	11
-Arcadyan Corporation	10
-Qisda Corporation	10
-Vantiva - Connected Home	8
-Ford Motor Company	7
-Guangzhou Shiyuan Electronic Technology Company Limited	7
-Wyze Labs Inc	7
-Jabil Circuit de Chihuahua	7
-SimpliSafe	7
-Vizio, Inc	6
-Tuya Smart Inc.	6
-Smart Innovation LLC	6
-CLOUD NETWORK TECHNOLOGY SINGAPORE PTE. LTD.	6
-Google, Inc.	6
-SZ DJI TECHNOLOGY CO.,LTD	6
-Motorola Mobility LLC, a Lenovo Company	5
-Garmin International	5
-Sagemcom Broadband SAS	5
-Quectel Wireless Solutions Co.,Ltd.	5
-AltoBeam Inc.	5
-Commscope	5
-Arlo Technology	5
-InPro Comm	4
-Hand Held Products Inc	4
-HP Inc.	4
-LG Electronics	4
-Hon Hai Precision Ind. Co.,Ltd.	4
-nFore Technology Co., Ltd.	4
-Guangzhou Juan Optical and Electronical Tech Joint Stock Co., Ltd	4
-Belkin International Inc.	4
-Resideo	3
-Actiontec Electronics, Inc	3
-HUNAN FN-LINK TECHNOLOGY LIMITED	3
-Hui Zhou Gaoshengda Technology Co.,LTD	3
-Roku, Inc	3
-Microsoft Corporation	3
-Spreadtrum Communications (Shanghai) Co., Ltd.	3
-The Chamberlain Group, Inc	3
-Orbit Irrigation	3
-CHINA DRAGON TECHNOLOGY LIMITED	3
-TP-Link Systems Inc.	3
-SERCOMM PHILIPPINES INC	3
-eSSys Co.,Ltd	3
-Zyxel Communications Corporation	3
-General Electric Consumer and Industrial	3
-Diffon Corporation	3
-Beijing InHand Networking Technology Co.,Ltd.	2
-TechNexion Ltd.	2
-Ezurio, LLC	2
-Epigram, Inc.	2
-REALTEK SEMICONDUCTOR CORP.	2
-Shenzhen iComm Semiconductor CO.,LTD	2
-MAGNETI MARELLI SISTEMAS ELECTRONICOS MEXICO	2
-Nest Labs Inc.	2
-Shenzhen Trolink Technology CO, LTD	2
-White Rodgers Division	2
-Danlaw Inc	2
-Sigmastar Technology Ltd.	2
-SJI Industry Company	2
-Reliance Communications LLC	2
-Hewlett Packard	2
-AMPAK Technology, Inc.	2
-Sony Interactive Entertainment Inc.	2
-Guangdong Huiwei High-tech Co., Ltd.	2
-Sleep Number	2
-TPV Display Technology (Xiamen) Co.,Ltd.	2
-Earda Technologies co Ltd	2
-Ruijie Networks Co.,LTD	2
-IEEE Registration Authority	2
-SHENZHEN ALONG INVESTMENT CO.,LTD	2
-Shenzhen Trolink Technology Co.,LTD	2
-Visteon Portuguesa, Ltd	2
-COMPAL INFORMATION (KUNSHAN) CO., LTD. 	2
-YAMAHA MOTOR CO.,LTD	1
-D&M Holdings Inc.	1
-MediaTek Inc	1
-Thomson Telecom Belgium	1
-Balboa Instruments	1
-Dreamtech Co., Ltd	1
-MITAC INTERNATIONAL CORP.	1
-Pittasoft	1
-Nintendo Co.,Ltd	1
-Universal Global Scientific Industrial., Ltd	1
-D-Link International	1
-Shenzhen Chengqian Information Technology Co., Ltd	1
-Shenzhen V-Link Technology CO., LTD.	1
-Shenzhen Four Seas Global Link Network Technology Co., Ltd.	1
-SAMJIN Co., Ltd.	1
-Inseego Wireless, Inc	1
-Oculus VR, LLC	1
-SJIT Co., Ltd.	1
-Sercomm Corporation.	1
-ecobee inc	1
-TAIYO YUDEN CO.,LTD	1
-Magneti Marelli Automotive Electronics (Guangzhou) Co. Ltd	1
-iRobot Corporation 	1
-SHENZHEN MTC CO LTD	1
-Microsoft	1
-DONGGUAN SOLUM ELECTRONICS CO.,LTD	1
-SAMSUNG ELECTRO MECHANICS CO., LTD.	1
-GE Lighting	1
-DWnet Technologies(Suzhou) Corporation	1
-Seongji Industry Company	1
-Shinwa industries(China) ltd.	1
-Beijing Unigroup Tsingteng Microsystem Co., LTD.	1
-Ubiquiti Inc	1
-TP-Link Systems Inc	1
-Chiun Mai Communication System, Inc	1
-PRO-VISION, Inc.	1
-Rivet Networks	1
-Wingtech Mobile Communications Co.,Ltd	1
-China Dragon Technology Limited	1
-Hon Hai Precision Industry Co.,LTD	1
-Ring Solutions	1
-Alarm.com	1
-ASKEY COMPUTER CORP	1
-Qingdao Intelligent&Precise Electronics Co.,Ltd.	1
-Nexar Ltd.	1
-HUMAX Co., Ltd.	1
-Sierra Wireless, ULC	1
-Qihoo  360  Technology Co.,Ltd	1
-Vantiva Technologies Belgium	1
-Dialog Semiconductor	1
-Huaqin Telecom Technology Co.,Ltd	1
-Gosuncn Technology Group Co., Ltd.	1
-Panasonic Automotive Systems Company of America	1
-CANON INC.	1
-Barrot Technology Co.,LTD	1
+# its devices' MACs resolved to on 2026-10-27, exactly as the registry
+# spells it, one per line, sorted (names only: the device counts are
+# not kept in the repository). web/tests/test_vendorkb.c holds
+# COVERAGE.md's two lists to this one and every name to the registry;
+# a name may end in a space because the registry's does.
+Actiontec Electronics, Inc
+Alarm.com
+ALPSALPINE CO,.LTD
+AltoBeam Inc.
+Amazon Technologies Inc.
+AMPAK Technology, Inc.
+AMPAK Technology,Inc.
+Apple, Inc.
+Arcadyan Corporation
+Arlo Technology
+ASKEY COMPUTER CORP
+ASUSTek COMPUTER INC.
+AUMOVIO Systems, Inc.
+AzureWave Technology Inc.
+Balboa Instruments
+Barrot Technology Co.,LTD
+Beijing InHand Networking Technology Co.,Ltd.
+Beijing Unigroup Tsingteng Microsystem Co., LTD.
+Belkin International Inc.
+CANON INC.
+CHINA DRAGON TECHNOLOGY LIMITED
+China Dragon Technology Limited
+Chiun Mai Communication System, Inc
+CLOUD NETWORK TECHNOLOGY SINGAPORE PTE. LTD.
+Commscope
+COMPAL INFORMATION (KUNSHAN) CO., LTD. 
+D&M Holdings Inc.
+D-Link International
+Danlaw Inc
+Dialog Semiconductor
+Diffon Corporation
+DONGGUAN SOLUM ELECTRONICS CO.,LTD
+Dreamtech Co., Ltd
+DWnet Technologies(Suzhou) Corporation
+Earda Technologies co Ltd
+ecobee inc
+Epigram, Inc.
+Espressif Inc.
+ESSYS
+eSSys Co.,Ltd
+Ezurio, LLC
+FLEXTRONICS
+FLEXTRONICS TECHNOLOGIES MEXICO S DE RL DE CV
+FN-LINK TECHNOLOGY Ltd.
+Ford Motor Company
+Garmin International
+GE Lighting
+General Electric Consumer and Industrial
+Google, Inc.
+Gosuncn Technology Group Co., Ltd.
+Guangdong Huiwei High-tech Co., Ltd.
+Guangzhou Juan Optical and Electronical Tech Joint Stock Co., Ltd
+Guangzhou Shiyuan Electronic Technology Company Limited
+Hand Held Products Inc
+Hewlett Packard
+Hon Hai Precision Ind. Co.,Ltd.
+Hon Hai Precision Industry Co.,LTD
+HP Inc.
+Huaqin Telecom Technology Co.,Ltd
+Hui Zhou Gaoshengda Technology Co.,LTD
+HUMAX Co., Ltd.
+HUMAX NETWORKS
+HUNAN FN-LINK TECHNOLOGY LIMITED
+IEEE Registration Authority
+InPro Comm
+Inseego Wireless, Inc
+Intel Corporate
+iRobot Corporation 
+Jabil Circuit de Chihuahua
+LG Electronics
+LG Innotek
+Magneti Marelli Automotive Electronics (Guangzhou) Co. Ltd
+MAGNETI MARELLI SISTEMAS ELECTRONICOS MEXICO
+MediaTek Inc
+Microsoft
+Microsoft Corporation
+MITAC INTERNATIONAL CORP.
+MITSUMI ELECTRIC CO.,LTD.
+Motorola Mobility LLC, a Lenovo Company
+Murata Manufacturing Co., Ltd.
+Nest Labs Inc.
+NETGEAR
+Nexar Ltd.
+nFore Technology Co., Ltd.
+Nintendo Co.,Ltd
+Nokia Solutions and Networks GmbH & Co. KG
+Oculus VR, LLC
+Orbit Irrigation
+Panasonic Automotive Systems Co.,Ltd
+Panasonic Automotive Systems Company of America
+Pittasoft
+PRO-VISION, Inc.
+Qihoo  360  Technology Co.,Ltd
+Qingdao Intelligent&Precise Electronics Co.,Ltd.
+Qisda Corporation
+Quectel Wireless Solutions Co.,Ltd.
+REALTEK SEMICONDUCTOR CORP.
+Reliance Communications LLC
+Resideo
+Ring LLC
+Ring Solutions
+Rivet Networks
+Roku, Inc
+Ruijie Networks Co.,LTD
+Sagemcom Broadband SAS
+SAMJIN Co., Ltd.
+SAMSARA NETWORKS INC
+SAMSUNG ELECTRO MECHANICS CO., LTD.
+Samsung Electronics Co.,Ltd
+Seongji Industry Company
+Sercomm Corporation.
+SERCOMM PHILIPPINES INC
+SHENZHEN ALONG INVESTMENT CO.,LTD
+SHENZHEN BILIAN ELECTRONIC CO.，LTD
+Shenzhen Chengqian Information Technology Co., Ltd
+Shenzhen Four Seas Global Link Network Technology Co., Ltd.
+Shenzhen iComm Semiconductor CO.,LTD
+SHENZHEN MTC CO LTD
+Shenzhen Phaten Tech. LTD
+shenzhen trolink  Technology Co.,Ltd
+Shenzhen Trolink Technology CO, LTD
+Shenzhen Trolink Technology Co.,LTD
+Shenzhen V-Link Technology CO., LTD.
+Shinwa industries(China) ltd.
+Sierra Wireless, ULC
+Sigmastar Technology Ltd.
+SimpliSafe
+SJI Industry Company
+SJIT Co., Ltd.
+Sleep Number
+Smart Innovation LLC
+Sony Interactive Entertainment Inc.
+SparkLAN Communications, Inc.
+Spreadtrum Communications (Shanghai) Co., Ltd.
+SZ DJI TECHNOLOGY CO.,LTD
+TAIYO YUDEN CO.,LTD
+TechNexion Ltd.
+Tesla,Inc.
+Texas Instruments
+The Chamberlain Group, Inc
+Thomson Telecom Belgium
+TP-Link Systems Inc
+TP-Link Systems Inc.
+TP-LINK TECHNOLOGIES CO.,LTD.
+TPV Display Technology (Xiamen) Co.,Ltd.
+Tuya Smart Inc.
+u-blox AG
+Ubiquiti Inc
+Universal Global Scientific Industrial., Ltd
+Vantiva - Connected Home
+Vantiva Technologies Belgium
+Vantiva USA LLC
+Visteon Corporation
+Visteon Portuguesa, Ltd
+Vizio, Inc
+White Rodgers Division
+Wi-Fi Alliance
+Wingtech Mobile Communications Co.,Ltd
+WNC Corporation
+Wyze Labs Inc
+YAMAHA MOTOR CO.,LTD
+Zhuolian (Shenzhen) Communication Co., Ltd
+Zyxel Communications Corporation

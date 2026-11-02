@@ -1,6 +1,7 @@
 ---
 name: Belkin International Inc.
 aliases: []
+affiliates: []
 country: US [1][3]
 parent: "Foxconn Interconnect Technology (acquired Belkin September 2018 for $866 million) [1]"
 founded: 1983 [1]

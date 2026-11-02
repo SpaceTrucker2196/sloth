@@ -1,6 +1,7 @@
 ---
 name: SERCOMM PHILIPPINES INC
 aliases: []
+affiliates: []
 country: PH [4]
 parent: "Sercomm Corporation, Taiwan (TWSE: 5388), founded 1992 [1][2]"
 founded: unknown

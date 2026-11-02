@@ -1,6 +1,7 @@
 ---
 name: "Shenzhen Four Seas Global Link Network Technology Co., Ltd."
 aliases: ["Shenzhen Four Seas Global Link Network Technology Co.,Ltd"]
+affiliates: []
 country: CN [1][2]
 parent: unknown
 founded: 2009 [2]
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely a COMFAST product, very often a USB Wi-Fi a
 Randomization depends on the host operating system and is not documented. No security advisory naming the company or COMFAST was found. The company's own site did not respond to fetches from this session.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Shenzhen Four Seas Global Link Network Technology Co., Ltd. - Security Essen exhibitor list - https://security-essen.de/impetus_provider/exhibitor-list/detail/shenzhen-four-seas-global-link-network-technology-co-ltd-093db (accessed 2026-10-27)
 3. COMFAST - DeviWiki - https://deviwiki.com/wiki/COMFAST (accessed 2026-10-27)

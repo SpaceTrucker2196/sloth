@@ -1,6 +1,7 @@
 ---
 name: "Huaqin Telecom Technology Co.,Ltd"
 aliases: ["Huaqin Telecom Technology Co.,Ltd.", "Shanghai Huaqin Telecom Technology Co.,Ltd"]
+affiliates: []
 country: CN [1][3]
 parent: independent, listed as Huaqin Technology (603296.SH, 03296.HK) [4]
 founded: 2005 [3][4]
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely a phone, tablet, laptop or wearable sold un
 Radios, silicon, FCC grantee codes and security history are not documented by the sources consulted; the FCC ID databases refused automated access from this session. The registry's separate "Huaqin Technology" spellings are not listed as aliases here because no fetched source states the rename.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-M assignments (mam.csv) - https://standards-oui.ieee.org/oui28/mam.csv (accessed 2026-10-27)
 3. Device Manufacturing Giant Huaqin Raises $143 Million - Caixin Global - https://www.caixinglobal.com/2019-12-13/device-manufacturing-giant-huaqin-raises-143-million-101493960.html (accessed 2026-10-27)

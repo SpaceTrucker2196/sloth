@@ -1,6 +1,7 @@
 ---
 name: Bose Corporation
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: private, majority-owned by MIT through non-voting shares [2]
 founded: 1964 [2]
@@ -22,7 +23,6 @@ Bose is a private US audio company founded in 1964 by Amar Bose and headquartere
 The SoundTouch networked speakers drew several records: remote control from a crafted web site over WebSocket (CVE-2017-17751) and cross-site scripting through crafted music-service data (CVE-2017-17749, CVE-2017-17750) [6][7], and an mDNS responder on the SoundTouch 30 that answered off-link unicast queries (CVE-2017-6520) [3]. In April 2017 Bose was sued over alleged privacy violations by the apps that control its Bluetooth headphones [2]. Silicon, Wi-Fi radios and FCC grantee codes are not listed: no teardown was found and the FCC ID databases refused automated access from the session that wrote this entry, and nothing is filled in from memory; randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Bose Corporation - Wikipedia - https://en.wikipedia.org/wiki/Bose_Corporation (accessed 2026-10-27)
 3. NVD - CVE-2017-6520 - https://nvd.nist.gov/vuln/detail/CVE-2017-6520 (accessed 2026-10-27)

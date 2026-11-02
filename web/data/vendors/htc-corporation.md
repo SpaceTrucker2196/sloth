@@ -1,6 +1,7 @@
 ---
 name: HTC Corporation
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: independent (listed on the Taiwan Stock Exchange) [1]
 founded: 1997 [1]
@@ -42,7 +43,6 @@ databases refused the session that wrote this entry, and nothing is
 filled in from memory.
 
 ## Sources
-
 1. HTC - Wikipedia - https://en.wikipedia.org/wiki/HTC (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. HTC America Settles FTC Charges It Failed to Secure Millions of Mobile Devices Shipped to Consumers - FTC - https://www.ftc.gov/news-events/news/press-releases/2013/02/htc-america-settles-ftc-charges-it-failed-secure-millions-mobile-devices-shipped-consumers (accessed 2026-10-27)

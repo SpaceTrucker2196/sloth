@@ -1,6 +1,7 @@
 ---
 name: "Spreadtrum Communications (Shanghai) Co., Ltd."
 aliases: []
+affiliates: []
 country: CN [3]
 parent: "Tsinghua Unigroup (acquired Spreadtrum in 2013; brand consolidated as UNISOC in 2018) [1]"
 founded: 2001 [1]

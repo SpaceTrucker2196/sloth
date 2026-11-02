@@ -1,6 +1,7 @@
 ---
 name: Danlaw Inc
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: unknown
 founded: unknown
@@ -34,7 +35,6 @@ are not listed: the FCC ID databases refused the session that verified
 this entry, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. IEEE Registration Authority, IAB assignments (iab.csv) - https://standards-oui.ieee.org/iab/iab.csv (accessed 2026-10-27)
 3. Danlaw Inc. introduces second-generation ultra-compact OBDII datalogger based on Telit GSM/GPRS cellular module technology - Telit - https://www.telit.com/press/danlaw-inc-introduces-second-generation-ultra-compact-obdii-datalogger-based-on-telit-gsmgprs-cellular-module-technology/ (accessed 2026-10-27)

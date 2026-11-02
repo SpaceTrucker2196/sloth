@@ -107,10 +107,12 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research set:
-<!-- count:vendors -->277<!-- /count --> entries, 160 of the reference
-host's 163 vendors covered and three pending, `COVERAGE.md`); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor research section under the
-drawer's and Lookup's OUI card, one cited Markdown file per OUI holder
+**Last updated**: 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
+listed source cited and read, the generator's refusals tested, the
+reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
+set: <!-- count:vendors -->277<!-- /count --> entries, most of the
+reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
+research section under the drawer's and Lookup's OUI card, one cited Markdown file per OUI holder
 in `web/data/vendors/` compiled in at build time, `{found:false}` and
 "no research yet" for a vendor without one, [[vendor-research]]; the
 glyph layer, slice V0 of `docs/web-visual-spec.md`, below; kept
@@ -670,10 +672,13 @@ The full account is in
   compiled in by `web/tools/vendorkb.c`; `"vendor_research"` on both
   routes, `{found:false}` and "no research yet for <name>" for a
   vendor without a file. Sources as plain text lines, never links.
-  <!-- count:vendors -->277<!-- /count --> entries today, covering 160
-  of the reference host's 163 vendor names; the other three are pending
-  because nothing public ties them to a company
-  (`web/data/vendors/COVERAGE.md`). [[vendor-research]] has the format,
+  <!-- count:vendors -->277<!-- /count --> entries today, covering most
+  of the reference host's vendor names; the rest are pending because
+  nothing public ties them to a company (`web/data/vendors/COVERAGE.md`
+  lists both and carries the totals, held to the lists by the test). A
+  registrant that is a separate company in an entry's group (an
+  affiliate) finds the entry marked as another company's, its country,
+  parent and founded left unknown. [[vendor-research]] has the format,
   the coverage and the rules the build enforces.
 
 ## M5: WiFi, History and the SQL box
@@ -1353,7 +1358,7 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | the query language, bounded, one bound statement, fuzzed | `test_query.c`, `test_query_terms`, `tests/fuzz/fuzz_web_query.c` |
 | OUI table generated, never committed, build without it | `test_oui.c`, `test_builtin_table` (the default build `ieee`, an empty `WEB_OUI_DIR` `sloth`); `/build/` keeps the generated table out of git |
 | the committed registry (2026-10-26) | `test_committed_registry_matches_source`, `test_committed_registry_builds_in_time`, `test_second_file_after_many_names`, `test_update_oui_is_never_automatic` |
-| vendor research under the OUI card (2026-10-27) | `test_vendorkb.c`: every entry complete, cited and named for an exact registry `Organization Name`; the lookup folding spelling; `"vendor_research"` on the drawer and Lookup, `{found:false}` without a file; the page drawing it as text; `COVERAGE.md`'s Have and Pending lists together the reference host's list, every Have name finding its entry (`test_coverage_matches_reference_and_entries`) |
+| vendor research under the OUI card (2026-10-27) | `test_vendorkb.c`: every entry complete, cited and named for an exact registry `Organization Name`, its affiliates too; the lookup folding spelling and flagging an affiliate; `"vendor_research"` on the drawer and Lookup, without the entry's country, parent and founded for an affiliate, `{found:false}` without a file; the page drawing it as text; the generator refusing each defect (`test_generator_refuses_each_defect`); `COVERAGE.md`'s Have and Pending lists together the reference host's list, every Have name finding its entry and the count line equal to the lists (`test_coverage_matches_reference_and_entries`) |
 | passive names, PTR cache, v4 migration | `test_ptr.c`, `test_v3_file_is_migrated`, `test_v3_failed_step_leaves_file_unchanged`, `test_passive_ptr_rows`, `test_newer_file_refused` |
 | A4 and the durable A2 | `test_a4_unknown_vendor`, `test_a4_off_without_the_ieee_table`, `test_a4_burst_is_one_episode`, `test_a2_durable_first_seen`, `test_device_z_now` |
 | routes, strict validation, presence, drawer, Lookup, page | `test_devices.c` |

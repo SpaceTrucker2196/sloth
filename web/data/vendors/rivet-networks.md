@@ -1,6 +1,7 @@
 ---
 name: Rivet Networks
 aliases: []
+affiliates: []
 country: US [1]
 parent: Intel, which acquired Rivet Networks in May 2020 [2][3]
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in the Rivet block is most likely a laptop, such as the Dell XPS 17, or a 
 The Killer Control Center software had a 2019 kernel driver bug, CVE-2019-15661, a stack overflow in KfeCo10X64.sys reachable by an administrator and giving ring 0 code execution, fixed in October 2019 [7], and Intel's advisory INTEL-SA-00644 covers CVE-2021-26258, a local privilege escalation fixed in 2.4.3337.0 [8]. Randomization depends on the host operating system and is not documented here; FCC grantee codes are not listed because the FCC ID databases refused requests from the session that wrote this entry.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Intel Acquires Rivet Networks, Makers of Killer Networking Products - PC Perspective - https://pcper.com/2020/05/intel-acquires-rivet-networks-killer-networking/ (accessed 2026-10-27)
 3. Intel buys Rivet Networks and its Killer Networking brand to beef up its Wi-Fi tech - PCWorld - https://www.pcworld.com/article/3543884/intel-buys-rivet-networks-and-its-killer-networking-brand-to-beef-up-its-wi-fi-tech.html (accessed 2026-10-27)

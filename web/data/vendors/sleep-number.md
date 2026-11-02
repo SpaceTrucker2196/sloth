@@ -1,6 +1,7 @@
 ---
 name: Sleep Number
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: Sleep Country Canada, whose subsidiary SNBR Inc. bought substantially all of the company's assets (completed 31 July 2026) [2]
 founded: 1987 [2]
@@ -24,7 +25,6 @@ In 2024 a researcher building a Homebridge plugin for the bed reached the hub's 
 The company's support pages and the FCC ID databases refused automated access from this session, so Wi-Fi band and Bluetooth version, silicon and FCC grantee codes are not listed, and randomization is unknown. The registry also lists blocks under the former name "Select Comfort"; they are not listed as aliases here because that is a different registry name, not a spelling of this one.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) and MA-M assignments (mam.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Sleep Number - Wikipedia - https://en.wikipedia.org/wiki/Sleep_Number (accessed 2026-10-27)
 3. SleepIQ integration - Home Assistant - https://www.home-assistant.io/integrations/sleepiq/ (accessed 2026-10-27)

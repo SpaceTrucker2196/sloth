@@ -1,6 +1,7 @@
 ---
 name: "Universal Electronics, Inc."
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: independent, listed on Nasdaq [2]
 founded: 1986 [2]
@@ -22,7 +23,6 @@ Universal Electronics (UEI) is an American smart-home technology provider founde
 A MAC in a UEI block is most likely a remote control, a thermostat or a home-security sensor shipped under another brand or under One For All, Ecolink, Nevo or UEI TIDE [2][3]. UEI's own site lists infrared, Bluetooth, Zigbee, Z-Wave and sub-GHz connectivity across its control products, thermostats and wireless security sensors [3]. No security advisory or NVD record naming Universal Electronics was found; silicon and FCC grantee codes are not listed because the FCC ID databases refused automated access from the session that wrote this entry, and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Universal Electronics - Wikipedia - https://en.wikipedia.org/wiki/Universal_Electronics (accessed 2026-10-27)
 3. Universal Electronics Inc. home page - https://www.uei.com/ (accessed 2026-10-27)

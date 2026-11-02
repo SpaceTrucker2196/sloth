@@ -1,6 +1,7 @@
 ---
 name: Intel Corporate
 aliases: []
+affiliates: []
 country: US [1]
 parent: independent [1]
 founded: 1968 [1]

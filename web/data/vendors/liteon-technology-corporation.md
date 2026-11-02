@@ -1,6 +1,7 @@
 ---
 name: Liteon Technology Corporation
 aliases: ["LITE-ON Technology Corp.", "Lite-On Technogy Corp.", "LiteON"]
+affiliates: []
 country: TW [1][2]
 parent: independent (listed on the Taiwan Stock Exchange) [1]
 founded: 1975 [1]
@@ -40,7 +41,6 @@ host operating system, so randomization is unknown here. No security
 advisory was consulted, so security_notes is empty rather than clean.
 
 ## Sources
-
 1. Lite-On - Wikipedia - https://en.wikipedia.org/wiki/Lite-On (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Lite-On - DeviWiki - https://deviwiki.com/wiki/Lite-On (accessed 2026-10-27)

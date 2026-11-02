@@ -1,6 +1,7 @@
 ---
 name: peiker acustic GmbH
 aliases: []
+affiliates: []
 country: DE [1][3]
 parent: Valeo, which bought most of peiker acustic in 2015 [1][2]
 founded: 1946 [1]
@@ -38,7 +39,6 @@ not documented [1]. An NVD keyword search for peiker returned no CVEs
 no grantee code or silicon is listed.
 
 ## Sources
-
 1. Peiker Acustic - Wikipedia (German) - https://de.wikipedia.org/wiki/Peiker_Acustic (accessed 2026-10-27)
 2. Valeo - Wikipedia - https://en.wikipedia.org/wiki/Valeo (accessed 2026-10-27)
 3. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)

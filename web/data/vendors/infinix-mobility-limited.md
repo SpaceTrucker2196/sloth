@@ -1,6 +1,7 @@
 ---
 name: Infinix mobility limited
 aliases: []
+affiliates: []
 country: HK [1][2]
 parent: Transsion Holdings [1][3]
 founded: 2013 [1]
@@ -22,7 +23,6 @@ Infinix was founded in April 2013 by Transsion and is part of Transsion Holdings
 A MAC in an Infinix block is most likely an Infinix phone or laptop [1][2]. Upstream's Secure-D, which found Triada and xHelper preinstalled on TECNO W2 phones in 2020, reported no signs of the malware on other Transsion models including Infinix [4], so security notes are empty. Radios, silicon and randomization are unknown: Infinix's site gave no product specifications to the session that wrote this entry [5], no Infinix teardown or specification page was reachable, and the FCC ID databases refused automated access; nothing is filled in from memory.
 
 ## Sources
-
 1. Infinix Mobile - Wikipedia - https://en.wikipedia.org/wiki/Infinix_Mobile (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Transsion - Wikipedia - https://en.wikipedia.org/wiki/Transsion (accessed 2026-10-27)

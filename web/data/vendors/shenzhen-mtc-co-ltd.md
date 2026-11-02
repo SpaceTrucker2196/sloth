@@ -1,6 +1,7 @@
 ---
 name: SHENZHEN MTC CO LTD
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: listed company (SZSE 002429), largest holder chairman Wei Gu at 27.86 percent [2][3]
 founded: unknown
@@ -24,7 +25,6 @@ Its exchange profile describes it as specialising in home audiovisual products, 
 The company's own site (szmtc.com.cn) refused connections, the FCC ID databases refused automated access, and no teardown of an MTC-built box was found, so founding year, radios, silicon and FCC grantee codes are not listed and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Shenzhen MTC Co Ltd company profile - MarketScreener - https://uk.marketscreener.com/quote/stock/SHENZHEN-MTC-CO-LTD-7720251/company/ (accessed 2026-10-27)
 3. 002429 Shenzhen MTC Co Ltd - szse.io - https://szse.io/companies/002429-shenzhen-mtc-co-ltd (accessed 2026-10-27)

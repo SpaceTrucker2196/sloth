@@ -1,6 +1,7 @@
 ---
 name: DWnet Technologies(Suzhou) Corporation
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: Sercomm Corporation, which lists DWnet Technology (Suzhou) Co. Ltd. among its sites and serves its own site from dwnet.com.cn [2][3]
 founded: unknown
@@ -24,7 +25,6 @@ Sercomm presents itself as a broadband and IoT equipment and manufacturing-servi
 The researcher who published the TCP 32764 backdoor in Linksys, Netgear, Cisco and other routers names Sercomm as its probable source, citing a header in Cisco GPL sources [4]; no source ties it to devices in DWnet's blocks. No CVE naming DWnet was found in NVD [5]. The FCC ID databases refused automated access, so founding year, radios, silicon and FCC grantee codes are not listed and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Contact - Sercomm Corporation - https://www.sercomm.com/en/contact (accessed 2026-10-27)
 3. Sercomm Corporation home page served at dwnet.com.cn - https://www.dwnet.com.cn/en (accessed 2026-10-27)

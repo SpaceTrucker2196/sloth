@@ -1,6 +1,7 @@
 ---
 name: "Gosuncn Technology Group Co., Ltd."
 aliases: ["Gosuncn Technology Group Co.,LTD."]
+affiliates: []
 country: CN [1][3]
 parent: listed company, stock code 300098 (exchange not stated by the source) [3]
 founded: 1997 [3]
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely a cellular module or a vehicle or industria
 Silicon, FCC grantee codes and randomization are not documented by the sources consulted; the FCC ID databases refused automated access from this session.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-M assignments (mam.csv) - https://standards-oui.ieee.org/oui28/mam.csv (accessed 2026-10-27)
 3. Gosuncn Technology Group Co., Ltd. - Intel Partner Showcase - https://www.intel.com/content/www/us/en/partner/showcase/storefront/a5S3b000000BBMaEAO/gosuncn-technology-group-co-ltd.html (accessed 2026-10-27)

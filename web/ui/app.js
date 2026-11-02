@@ -2713,7 +2713,13 @@
       if (ck && typeof c[ck] === "string") sp.appendChild(el("span", "d-dim", "  " + c[ck]));
       return sp;
     }
-    var rows = [["name", vr.name], ["also spelt", vr.aliases], ["kind", vr.kind],
+    // Found through an affiliate: the registrant is another company in
+    // the entry's group, and the server sent its country, parent and
+    // founded as unknown; say whose entry this is.
+    if (vr.affiliate) box.appendChild(el("div", "sub", oui.vendor + " is a separate company; " +
+        "this entry describes " + vr.name + ", so its country, parent and founded are not shown"));
+    var rows = [["name", vr.name], ["also spelt", vr.aliases], ["same group", vr.affiliates],
+                ["kind", vr.kind],
                 ["country", vr.country], ["parent", vr.parent], ["founded", vr.founded],
                 ["devices", vr.device_classes], ["found in", vr.found_in],
                 ["radios", vr.radios], ["silicon", vr.silicon],

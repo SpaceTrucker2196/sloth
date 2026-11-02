@@ -1,6 +1,7 @@
 ---
 name: ecobee inc
 aliases: []
+affiliates: []
 country: CA [1][2]
 parent: Generac Holdings (acquisition agreed November 2021, closed December 2021) [2]
 founded: 2007 [2]
@@ -24,7 +25,6 @@ A MAC in this block is most likely an ecobee thermostat, sensor or camera on the
 NVD records an evil-twin downgrade in the ecobee4 that pulls it off WPA2 onto an unencrypted network with the same SSID [4], and three 2021 flaws in the ecobee3 lite: hardcoded bootloader root credentials and two bugs in its HomeKit Wireless Access Control setup, one forcing a reboot and one able to force it onto an attacker's SSID [5][6][7]. No teardown naming the silicon and no randomization documentation was found, and the FCC ID databases could not be consulted, so no grantee code is listed [2][3].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Ecobee - Wikipedia - https://en.wikipedia.org/wiki/Ecobee (accessed 2026-10-27)
 3. ecobee Smart Thermostat Premium EB-STATE6P-01 - Snap One - https://snapav.com/shop/en/snapav/eb-state6p-01 (accessed 2026-10-27)

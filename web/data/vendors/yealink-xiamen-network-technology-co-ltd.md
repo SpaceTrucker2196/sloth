@@ -1,6 +1,7 @@
 ---
 name: "YEALINK(XIAMEN) NETWORK TECHNOLOGY CO.,LTD."
 aliases: ["XIAMEN YEALINK NETWORK TECHNOLOGY CO.,LTD"]
+affiliates: []
 country: CN [1][2]
 parent: unknown
 founded: 2001 [2]
@@ -22,7 +23,6 @@ Yealink is a Xiamen, China, maker of SIP desk phones, DECT cordless phones, audi
 A MAC in these blocks is most likely a Yealink IP phone or conferencing device on an office network [2]. Some models carry radios: the T54W desk phone has dual-band 2.4 and 5 GHz Wi-Fi and Bluetooth 4.2 for headsets [3]. NVD records CVE-2021-27561, unauthenticated root command injection in the Yealink Device Management server, listed by CISA as exploited in the wild [4]. Silicon and FCC grantee codes are not listed: Yealink's page names no chipset and the FCC ID databases refused access from the session that wrote this entry. Randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Yealink - Wikipedia - https://en.wikipedia.org/wiki/Yealink (accessed 2026-10-27)
 3. Yealink T54W IP phone product page - https://www.yealink.com/en/product-detail/ip-phone-t54w (accessed 2026-10-27)

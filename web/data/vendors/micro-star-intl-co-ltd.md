@@ -1,6 +1,7 @@
 ---
 name: "Micro-Star INTL CO., LTD."
 aliases: ["MICRO-STAR INTERNATIONAL CO., LTD.", "MICRO-STAR INT'L CO.,LTD.", "Micro-Star INT'L CO., LTD", "MICRO-STAR INT'L CO., LTD.", "Micro-Star INT'L CO., LTD.", "Micro-Star Int'l Co, Ltd", "Micro-Star International", "MICRO-STAR INT'L CO.,LTD"]
+affiliates: []
 country: TW [1]
 parent: independent, listed on the Taiwan Stock Exchange [1]
 founded: 1986 [1]
@@ -24,7 +25,6 @@ The registry spells the company nine ways across 23 MA-L blocks; Micro-Star INTL
 MSI's NVD history is host-side rather than radio-side: a write-what-where in the motherboard firmware SMI handler, privilege escalation through the drivers of its MSI Center, Dragon Center and App Player utilities, and arbitrary memory access through the Afterburner RTCore driver [3]. FCC grantee codes are not listed because the FCC ID databases refused the session that wrote this entry, and msi.com refused it too; nothing is filled in from memory. Randomization is the host operating system's behaviour and is unknown here.
 
 ## Sources
-
 1. Micro-Star International - Wikipedia - https://en.wikipedia.org/wiki/Micro-Star_International (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. NVD CVE API, keyword Micro-Star - https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=Micro-Star&resultsPerPage=20 (accessed 2026-10-27)

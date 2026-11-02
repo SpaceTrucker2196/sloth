@@ -1,6 +1,7 @@
 ---
 name: "GUANGDONG OPPO MOBILE TELECOMMUNICATIONS CORP.,LTD"
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: Guangdong Oujia Holdings Co., Ltd. since 2023; BBK Electronics from 2004 to 2023 [1]
 founded: 2004 [1]
@@ -24,7 +25,6 @@ A MAC in an Oppo block is most likely an Oppo phone, tablet or wearable, though 
 Android 10 and later use a randomized MAC by default [4], so a modern Oppo phone most likely joins networks with a random address rather than one from these blocks, though no source consulted documents ColorOS's own behaviour. Oppo's security response centre says its monthly version maintenance includes patches from the Android Security Bulletin [5]. NVD lists CVE-2025-27389, an install-source verification flaw in ColorOS [6]. FCC grantee codes are not listed because the FCC ID databases refused requests from the session that wrote this entry.
 
 ## Sources
-
 1. Oppo - Wikipedia - https://en.wikipedia.org/wiki/Oppo (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. OPPO Find X8 Pro specifications - https://www.oppo.com/en/smartphones/series-find-x/find-x8-pro/specs/ (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: Alarm.com
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: independent, listed on Nasdaq as ALRM [2]
 founded: 2000 [2]
@@ -24,7 +25,6 @@ A MAC in an Alarm.com block is most likely an Alarm.com-branded camera, gateway 
 The ADC-V522IR camera on firmware 0100b9 has two incorrect-access-control CVEs, CVE-2018-19588 and CVE-2019-9657, the second tied to weak protection of the VPN certificates the camera uses to reach Alarm.com's infrastructure [4][5]. The FCC ID databases refused this session's requests, so no grantee code is listed; no teardown naming silicon was found, and no source documents MAC randomization.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Alarm.com - Wikipedia - https://en.wikipedia.org/wiki/Alarm.com (accessed 2026-10-27)
 3. Alarm.com ADC-SG130 - Alarm Grid - https://www.alarmgrid.com/products/alarm-com-adc-sg130 (accessed 2026-10-27)

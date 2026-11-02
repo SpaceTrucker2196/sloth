@@ -1,6 +1,7 @@
 ---
 name: "OnePlus Technology (Shenzhen) Co., Ltd"
 aliases: ["OnePlus Tech (Shenzhen) Ltd"]
+affiliates: []
 country: CN [1][2]
 parent: Oppo [1]
 founded: 2013 [1][3]
@@ -24,7 +25,6 @@ A MAC in a OnePlus block is most likely a OnePlus phone [1][2]. iFixit's OnePlus
 Rapid7 disclosed CVE-2025-10184 in September 2025: an unprotected Telephony content provider in OxygenOS 12 to 15 let any installed app read SMS and MMS data, undermining SMS-based MFA, with fixes rolling out from October 2025 [7]. NVD also lists 2017 bootloader and fastboot weaknesses in the OnePlus 3/3T, an OTA updater without TLS, and leftover fingerprint debug code in the OnePlus 7 Pro [8]. FCC grantee codes are not listed because the FCC ID databases refused automated access from the session that wrote this entry; nothing is filled in from memory.
 
 ## Sources
-
 1. OnePlus - Wikipedia - https://en.wikipedia.org/wiki/OnePlus (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. About OnePlus - OnePlus - https://www.oneplus.com/global/about-us (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: Hewlett Packard Enterprise
 aliases: ["Hewlett Packard Enterprise "]
+affiliates: []
 country: US [1][2]
 parent: independent; created in the November 2015 split of Hewlett-Packard [1]
 founded: 2015 [1]
@@ -24,7 +25,6 @@ Which product line a given block serves is not stated by the registry, so the de
 HPE advisory HPESBNW04722 of 5 November 2024 fixed CVE-2024-42509 and CVE-2024-47460, unauthenticated command injection through crafted packets to the PAPI management protocol on UDP 8211 in Instant AOS-8 and AOS-10 access points [5]. Randomization behaviour is not documented by the sources consulted; the FCC ID databases refused automated access from this session.
 
 ## Sources
-
 1. Hewlett Packard Enterprise - Wikipedia - https://en.wikipedia.org/wiki/Hewlett_Packard_Enterprise (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Aruba Networks AP-555 (APIN0555) - WikiDevi - https://wikidevi.wi-cat.ru/Aruba_Networks_AP-555_(APIN0555) (accessed 2026-10-27)

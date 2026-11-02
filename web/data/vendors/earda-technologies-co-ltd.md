@@ -1,6 +1,7 @@
 ---
 name: Earda Technologies co Ltd
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: unknown
 founded: unknown
@@ -22,7 +23,6 @@ Earda Technologies, trading as Eardatek, describes itself as experts in wireless
 Earda calls itself an AIoT module supplier serving customers and operators worldwide, so a MAC in an Earda block is likely an Earda Wi-Fi or IoT module inside another company's product, and the OUI names the module maker rather than the device [2]. The company's own site names no chipset, no customer brand and no founding year (it claims 25 years in business), its product pages refused automated access, and no FCC grantee code or teardown naming Earda was found, so silicon, found_in and fcc_grantee are empty and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Eardatek - Experts in Wireless RF Solutions - https://www.eardatek.com/ (accessed 2026-10-27)
 3. A8:71:16 MAC address lookup - maclookup.app - https://maclookup.app/macaddress/a87116 (accessed 2026-10-27)

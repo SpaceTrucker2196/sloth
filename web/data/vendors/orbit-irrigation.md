@@ -1,6 +1,7 @@
 ---
 name: Orbit Irrigation
 aliases: []
+affiliates: []
 country: US [1][4]
 parent: "Husqvarna Group, Gardena Division (acquired 2021) [1]"
 founded: 1971 [1]
@@ -22,4 +23,4 @@ Orbit is a Utah lawn-and-garden irrigation maker: founded in 1971 as Pro-Mark, I
 2. B-hyve Smart Watering - Orbit - https://bhyve.orbitonline.com/ (accessed 2026-10-27)
 3. B-hyve collection (models and radio type) - Orbit - https://www.orbitonline.com/collections/b-hyve (accessed 2026-10-27)
 4. MAC block 44:67:55 - maclookup.app API - https://api.maclookup.app/v2/macs/44:67:55 (accessed 2026-10-27)
-5. IEEE Registration Authority MA-L public listing (oui.csv) (not reachable 2026-10-27, HTTP 418; the block was checked against the copy shipped in sloth web/data/oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
+5. IEEE Registration Authority MA-L registry, the copy committed in sloth as web/data/oui.csv (Debian ieee-data 20260625) - https://github.com/SpaceTrucker2196/sloth/blob/main/web/data/oui.csv (accessed 2026-11-02)

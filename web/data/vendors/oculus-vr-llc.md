@@ -1,6 +1,7 @@
 ---
 name: "Oculus VR, LLC"
 aliases: []
+affiliates: []
 country: US [1]
 parent: Meta Platforms (acquired by Facebook in 2014; Facebook renamed Meta in 2021) [2]
 founded: 2012 [2]
@@ -24,7 +25,6 @@ A MAC in this block is most likely an Oculus VR headset: the Rift CV1 shipped in
 Meta's engineering blog describes a memory corruption bug in the Quest 2 VR Runtime service, reachable from any VR app over Runtime IPC, that was caught in a 2021 review and never reached production [4]. Randomization behaviour is not documented by the sources consulted, no teardown naming the Wi-Fi chip was reachable, and the FCC ID databases could not be consulted, so no grantee code is listed [2][3].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Reality Labs (formerly Oculus VR) - Wikipedia - https://en.wikipedia.org/wiki/Oculus_VR (accessed 2026-10-27)
 3. Meta Quest 2 - Wikipedia - https://en.wikipedia.org/wiki/Meta_Quest_2 (accessed 2026-10-27)

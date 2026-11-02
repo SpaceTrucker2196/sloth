@@ -1,6 +1,7 @@
 ---
 name: TCT mobile ltd
 aliases: []
+affiliates: []
 country: CN [2]
 parent: TCL Technology (inferred from the Huizhou registry address and TCL Communication Technology, TCT, being the Alcatel phone producer) [1][2][3]
 founded: unknown
@@ -37,7 +38,6 @@ the FCC ID databases refused the session that wrote this entry and no
 product spec sheet was consulted, so nothing is filled in from memory.
 
 ## Sources
-
 1. TCL Technology - Wikipedia - https://en.wikipedia.org/wiki/TCL_Communication (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Alcatel Mobile - Wikipedia - https://en.wikipedia.org/wiki/Alcatel_Mobile (accessed 2026-10-27)

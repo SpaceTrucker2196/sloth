@@ -1,6 +1,7 @@
 ---
 name: Arcadyan Corporation
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: Compal Group [1]
 founded: unknown

@@ -1,6 +1,7 @@
 ---
 name: "Zhejiang Dahua Technology Co., Ltd."
 aliases: ["ZHEJIANG DAHUA TECHNOLOGYCO.,LTD"]
+affiliates: []
 country: CN [1][2]
 parent: independent, majority owned by founder Fu Liquan and Chen Ailing with state-linked holders at 11.67% (2023) [1]
 founded: 2001 [1]
@@ -43,7 +44,6 @@ randomization is unknown, and FCC grantee codes are not listed because
 the FCC ID databases refused the session that wrote this entry.
 
 ## Sources
-
 1. Dahua Technology - Wikipedia - https://en.wikipedia.org/wiki/Dahua_Technology (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Dahua Technology company introduction - https://www.dahuasecurity.com/aboutUs/introduction (accessed 2026-10-27)

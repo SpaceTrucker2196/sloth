@@ -1,6 +1,7 @@
 ---
 name: "TECNO MOBILE LIMITED"
 aliases: []
+affiliates: []
 country: HK [1][2]
 parent: Transsion Holdings [1][3]
 founded: 2006 [1]
@@ -24,7 +25,6 @@ A MAC in a TECNO block is most likely a TECNO phone [1][2]. The TECNO Phantom X 
 Randomization is unknown: no source consulted states the default on TECNO's HiOS. FCC grantee codes are not listed because the FCC ID databases refused automated access from the session that wrote this entry, and iFixit has no TECNO teardown; nothing is filled in from memory.
 
 ## Sources
-
 1. Tecno Mobile - Wikipedia - https://en.wikipedia.org/wiki/Tecno_Mobile (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Transsion - Wikipedia - https://en.wikipedia.org/wiki/Transsion (accessed 2026-10-27)

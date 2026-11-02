@@ -1,6 +1,7 @@
 ---
 name: MediaTek Inc
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: independent, listed on the Taiwan Stock Exchange (2454) since 2001 [1]
 founded: 1997 [1]
@@ -24,7 +25,6 @@ No source consulted says what carries these four blocks, and MediaTek is a chip 
 MediaTek publishes Product Security Bulletins, the earliest listed dated August 2021 [5]. The February 2025 bulletin rated three wlan AP driver flaws High for the MT7603, MT7615, MT7622, MT7663, MT7915, MT7916, MT7981 and MT7986 router chipsets, and a modem out-of-bounds write High across about 30 chipsets running modem NR16, NR17 and NR17R [4]; NVD describes CVE-2025-20631 as an out-of-bounds write in the wlan AP driver from an incorrect bounds check [6]. Randomization is the host operating system's choice and is unknown here; FCC grantee codes are not listed because the FCC ID databases refused automated access from this session.
 
 ## Sources
-
 1. MediaTek - Wikipedia - https://en.wikipedia.org/wiki/MediaTek (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. MediaTek MT7921/MT7921K Wireless LAN/BT Driver (AMD RZ608/RZ616) - OEMDrivers - https://oemdrivers.com/network-mediatek-mt7921-wireless-lan-driver (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: "nFore Technology Co., Ltd."
 aliases: []
+affiliates: []
 country: TW [1]
 parent: unknown
 founded: unknown
@@ -24,6 +25,5 @@ A MAC in an nFore block is therefore most likely a Bluetooth or Wi-Fi module ins
 The company site does not state the founding year, headquarters history or customers [2], and the silicon inside its modules and its FCC grantee code were not found: the FCC ID databases refused this session's requests. No security advisory naming nFore was found.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. nFore Technology (安富科技) company site - https://www.nforetek.com.tw/ (accessed 2026-10-27)

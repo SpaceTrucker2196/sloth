@@ -1,6 +1,7 @@
 ---
 name: TechNexion Ltd.
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: unknown
 founded: 2001 [2]

@@ -1,6 +1,7 @@
 ---
 name: SKY UK LIMITED
 aliases: []
+affiliates: []
 country: GB [1][2]
 parent: Sky Group, owned by Comcast [1]
 founded: 1990 [1]
@@ -22,7 +23,6 @@ Sky UK is a British broadcaster and telecommunications company providing televis
 The current Sky Max Hub (SR213), launched in 2023, is a dual-band Wi-Fi 6 router on 2.4 and 5 GHz with eight internal antennas and WPA2/WPA3, without 6 GHz [3]. The silicon inside Sky hubs and boxes, the FCC grantee codes and address randomization are not documented by the sources consulted, and no Sky-specific security advisory was reached from this session; nothing is filled in from memory.
 
 ## Sources
-
 1. Sky UK - Wikipedia - https://en.wikipedia.org/wiki/Sky_UK (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Sky Max Hub router review - Choose - https://www.choose.co.uk/broadband/sky/reviews/sky-max-hub/ (accessed 2026-10-27)

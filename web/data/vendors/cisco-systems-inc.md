@@ -1,6 +1,7 @@
 ---
 name: "Cisco Systems, Inc"
 aliases: ["Cisco Systems Inc"]
+affiliates: []
 country: US [1][2]
 parent: independent, listed on Nasdaq as CSCO [2]
 founded: 1984 [2]
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely enterprise network gear: a router, switch, 
 Silicon and randomization are not documented by the sources consulted; the FCC ID databases refused automated access from this session, so no filing under these codes was checked.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Cisco - Wikipedia - https://en.wikipedia.org/wiki/Cisco (accessed 2026-10-27)
 3. Cisco Catalyst 9136 Series Access Points Data Sheet - Cisco - https://www.cisco.com/c/en/us/products/collateral/wireless/catalyst-9100ax-access-points/nb-06-cat9136-access-point-ds-cte-en.html (accessed 2026-10-27)

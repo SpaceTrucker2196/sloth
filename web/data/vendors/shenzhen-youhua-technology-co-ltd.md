@@ -1,6 +1,7 @@
 ---
 name: "Shenzhen YOUHUA Technology Co., Ltd	"
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: unknown
 founded: 2012 [2]
@@ -40,7 +41,6 @@ unavailable to the session that wrote this entry, and nothing is
 filled in from memory [2].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. YOUHUA - Shenzhen Youhua Technology Co., Ltd. (English site) - https://en.youhuatech.com/ (accessed 2026-10-27)
 3. Youhua Communication (Chinese site) - https://www.youhuatech.com/ (accessed 2026-10-27)

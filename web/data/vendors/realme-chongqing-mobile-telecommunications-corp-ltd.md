@@ -1,6 +1,7 @@
 ---
 name: "Realme Chongqing Mobile Telecommunications Corp.,Ltd."
 aliases: ["Realme Chongqing MobileTelecommunications Corp Ltd"]
+affiliates: []
 country: CN [1][2]
 parent: Oppo, itself a BBK Electronics subsidiary [1]
 founded: 2018 [1]
@@ -24,7 +25,6 @@ A MAC in a realme block is most likely a realme phone [1][2]. The realme GT 7 Pr
 Randomization is unknown: no source consulted states realme's default setting. An NVD keyword search for realme returns mostly RealMedia and RealPlayer issues, but also CVE-2023-38297, a preinstalled factory app on the Realme C25Y that let any app factory-reset the phone, leak its IMEI and serial number and switch on Wi-Fi, Bluetooth and GPS, and two local flaws in realme software, CVE-2025-25370 on the GT 2 and CVE-2025-57452 in the BackupRestore app [5]. FCC grantee codes are not listed because the FCC ID databases refused automated access from the session that wrote this entry, and iFixit has no realme teardown [6]; nothing is filled in from memory.
 
 ## Sources
-
 1. Realme - Wikipedia - https://en.wikipedia.org/wiki/Realme (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. realme Global site - https://www.realme.com/global/ (accessed 2026-10-27)

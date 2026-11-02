@@ -1,6 +1,7 @@
 ---
 name: devolo AG
 aliases: []
+affiliates: []
 country: DE [1][2]
 parent: "SOL Capital (acquired essential parts in an asset deal after the 2024 insolvency; continued as devolo solutions GmbH) [3]"
 founded: 2002 [2][3]
@@ -24,7 +25,6 @@ A MAC in a devolo block is most likely a Magic powerline adapter, a Wi-Fi repeat
 The documented chipsets inside devolo products, FCC grantee codes and MAC randomisation behaviour are left unknown: the FCC ID databases refused the session that wrote this entry, no teardown was found, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. devolo - Wikipedia - https://en.wikipedia.org/wiki/Devolo (accessed 2026-10-27)
 3. Devolo - Wikipedia (German) - https://de.wikipedia.org/wiki/Devolo (accessed 2026-10-27)

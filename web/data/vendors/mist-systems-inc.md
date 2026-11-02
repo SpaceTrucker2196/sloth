@@ -1,6 +1,7 @@
 ---
 name: "Mist Systems, Inc."
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: "Juniper Networks (acquired 2019), itself part of Hewlett Packard Enterprise since 2 July 2025 [3]"
 founded: 2014 [2]
@@ -24,7 +25,6 @@ A MAC in a Mist block is most plausibly an enterprise access point managed from 
 Chipsets, FCC grantee codes and randomisation are unknown: the FCC databases and HPE's product pages refused the session that wrote this entry, no teardown was found, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Juniper Networks buys Mist Systems for USD 405 mln - Telecompaper - https://www.telecompaper.com/nieuws/juniper-networks-buys-mist-systems-for-usd-405-mln--1283170 (accessed 2026-10-27)
 3. Juniper Networks - Wikipedia - https://en.wikipedia.org/wiki/Juniper_Networks (accessed 2026-10-27)

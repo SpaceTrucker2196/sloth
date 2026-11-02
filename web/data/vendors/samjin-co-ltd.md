@@ -1,6 +1,7 @@
 ---
 name: "SAMJIN Co., Ltd."
 aliases: ["SAMJIN Co.ltd"]
+affiliates: []
 country: KR [1][2]
 parent: none named; KOSDAQ-listed since 1997 [2]
 founded: 1975 [2]
@@ -24,7 +25,6 @@ A MAC in a SAMJIN block is most likely a SmartThings hub or sensor: fccid.io lis
 No randomization behaviour and no security advisory naming SAMJIN was found in the sources consulted, so randomization is unknown and the security list is empty; no teardown naming the silicon in the SmartThings devices was found either [2][3].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. SAMJIN Co., Ltd. - Electronics and solutions manufacturer - https://www.samjin.com/en/ (accessed 2026-10-27)
 3. SAMJIN Co., Ltd. - Products - Communication Module - https://www.samjin.com/en/products/communication-module/ (accessed 2026-10-27)

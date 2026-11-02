@@ -12,8 +12,10 @@
  * Unlike alertkb.c, a defect stops the build and names the file: a
  * required field missing or misspelt, a value outside its word list, a
  * [n] with no source line n, a cited value with no [n], a source list
- * not numbered 1..n, a file whose name is not the slug of its name
- * field, two files claiming one normalised key. The drawer would
+ * not numbered 1..n, a source no [n] cites, a source line with text
+ * after its access date or marked as not reached, a file whose name is
+ * not the slug of its name field, two files claiming one normalised
+ * key, an affiliate that is a spelling of its own entry's name. The drawer would
  * otherwise show a guess as research, and the research agents writing
  * the files need the refusal, not a silent gap. OUT.c is generated
  * under build/ and never committed.
@@ -42,6 +44,8 @@
 #define VAL_MAX     1024
 #define KEY_MAX     32
 
+#define F_COUNT_ 16
+
 typedef struct {
     char  key[KEY_MAX];
     char *items[LIST_MAX];       /* a scalar is one item; a list its items */
@@ -53,7 +57,7 @@ typedef struct {
 typedef struct {
     char   path[PATH_MAX_];
     char   base[128];            /* the file name without .md */
-    field_t f[16];               /* in REQUIRED order */
+    field_t f[F_COUNT_];         /* in REQUIRED order */
     char  *summary;
     char  *src_title[SRC_MAX], *src_url[SRC_MAX], *src_date[SRC_MAX];
     int    nsrc;
@@ -61,16 +65,17 @@ typedef struct {
 } entry_t;
 
 enum {
-    F_NAME, F_ALIASES, F_COUNTRY, F_PARENT, F_FOUNDED, F_KIND, F_CLASSES,
+    F_NAME, F_ALIASES, F_AFFILIATES, F_COUNTRY, F_PARENT, F_FOUNDED, F_KIND, F_CLASSES,
     F_FOUND_IN, F_RADIOS, F_SILICON, F_FCC, F_RANDOM, F_SECURITY,
     F_CONFIDENCE, F_RESEARCHED, F_COUNT
 };
 static const char *const REQUIRED[F_COUNT] = {
-    "name", "aliases", "country", "parent", "founded", "kind", "device_classes",
+    "name", "aliases", "affiliates", "country", "parent", "founded", "kind", "device_classes",
     "found_in", "radios", "silicon", "fcc_grantee", "randomization",
     "security_notes", "confidence", "researched",
 };
-static const int IS_LIST[F_COUNT] = { 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0 };
+static const int IS_LIST[F_COUNT] = { 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 0 };
+typedef char f_count_fits[F_COUNT == F_COUNT_ ? 1 : -1];
 
 static const char *const KINDS[] = {
     "brand", "module-maker", "odm/ems", "chip-vendor", "carrier/isp", "automotive",
@@ -371,9 +376,18 @@ static int parse_body(entry_t *e, const char *body) {
         int okd = strlen(d) >= 11 && isdigit((unsigned char)d[0]) && isdigit((unsigned char)d[1]) &&
                   isdigit((unsigned char)d[2]) && isdigit((unsigned char)d[3]) && d[4] == '-' &&
                   isdigit((unsigned char)d[5]) && isdigit((unsigned char)d[6]) && d[7] == '-' &&
-                  isdigit((unsigned char)d[8]) && isdigit((unsigned char)d[9]) && d[10] == ')' &&
-                  (d[11] == '\0' || d[11] == ' ');
+                  isdigit((unsigned char)d[8]) && isdigit((unsigned char)d[9]) && d[10] == ')';
         if (!okd) { fail(e, "source date is not YYYY-MM-DD: \"%.60s\"", l, NULL); return -1; }
+        /* The line ends at its date: a note after it reached no table
+         * (the drawer showed "accessed" for a page that was never read),
+         * so there is nowhere for one to go. A source that was not
+         * reached, or that does not support what cites it, is not a
+         * source: drop it and the claim, or fetch one that is. */
+        if (d[11]) { fail(e, "text after the access date: \"%.60s\"", d + 11, NULL); return -1; }
+        if (strstr(l, "not reachable") || strstr(l, "does not support")) {
+            fail(e, "a source marked as not read: \"%.60s\"", l, NULL);
+            return -1;
+        }
         e->src_title[i] = trimmed(q, (size_t)(dash - q));
         e->src_url[i] = dupn(url, (size_t)(ue - url));
         e->src_date[i] = dupn(d, 10);
@@ -439,6 +453,15 @@ static int check(entry_t *e) {
     for (int i = 0; i < e->f[F_ALIASES].n; i++)
         if (plain_text(e, e->f[F_ALIASES].items[i], "aliases") || strchr(e->f[F_ALIASES].items[i], '['))
             { fail(e, "aliases are bare IEEE strings", NULL, NULL); return -1; }
+    /* affiliates: a registry string and the [n] that ties it here */
+    if (cited_list(e, F_AFFILIATES)) return -1;
+    for (int i = 0; i < e->f[F_AFFILIATES].n; i++) {
+        uncited(e->f[F_AFFILIATES].items[i], bare, sizeof(bare));
+        if (!bare[0] || strchr(bare, '[')) {
+            fail(e, "affiliate \"%s\" is not a registry string and its [n]", e->f[F_AFFILIATES].items[i], NULL);
+            return -1;
+        }
+    }
     /* country: unknown, or two capitals and a citation */
     if (cited_or_unknown(e, F_COUNTRY)) return -1;
     uncited(e->f[F_COUNTRY].items[0], bare, sizeof(bare));
@@ -496,8 +519,13 @@ static int check(entry_t *e) {
     if (!m) { fail(e, "the summary cites nothing", NULL, NULL); return -1; }
     for (int i = 0; i < e->nsrc; i++) {
         if (plain_text(e, e->src_title[i], "a source title")) return -1;
-        if (!e->cited[i + 1])
-            fprintf(stderr, "vendorkb: %s: note: source %d is never cited\n", e->path, i + 1);
+        if (!e->cited[i + 1]) {
+            /* the drawer lists every source as backing the entry */
+            char num[16];
+            snprintf(num, sizeof(num), "%d", i + 1);
+            fail(e, "source %s is never cited: cite it or drop it%s", num, NULL);
+            return -1;
+        }
     }
     return 0;
 }
@@ -549,7 +577,7 @@ static int read_dir(const char *dir) {
     return 0;
 }
 
-typedef struct { char key[WEB_VKB_KEY_MAX + 1]; int entry; } key_t_;
+typedef struct { char key[WEB_VKB_KEY_MAX + 1]; int entry; int affiliate; } key_t_;
 static int cmp_key(const void *a, const void *b) {
     return strcmp(((const key_t_ *)a)->key, ((const key_t_ *)b)->key);
 }
@@ -574,17 +602,22 @@ int main(int argc, char **argv) {
     }
     if (rc) return 1;
 
-    /* The keys: each entry's name and aliases, normalised; the same key
-     * from two files is the error, from one file (a case-only alias)
-     * is one key. */
+    /* The keys: each entry's name, aliases and affiliates, normalised;
+     * the same key from two files is the error, from one file (a
+     * case-only alias) is one key, and an affiliate that folds onto the
+     * entry's name or an alias is a spelling of it, not a second
+     * company, so it is the error too. */
     key_t_ *keys = calloc((size_t)ENTRY_MAX * (LIST_MAX + 1), sizeof(*keys));
     int nkeys = 0;
     for (int k = 0; k < ne; k++) {
-        const field_t *al = &E[k].f[F_ALIASES];
-        for (int i = -1; i < al->n; i++) {
-            const char *s = i < 0 ? E[k].f[F_NAME].items[0] : al->items[i];
+        const field_t *al = &E[k].f[F_ALIASES], *af = &E[k].f[F_AFFILIATES];
+        for (int i = -1; i < al->n + af->n; i++) {
+            char bare[VAL_MAX];
+            const char *s = i < 0 ? E[k].f[F_NAME].items[0] : i < al->n ? al->items[i] : bare;
+            if (i >= al->n) uncited(af->items[i - al->n], bare, sizeof(bare));
             key_t_ kk;
             kk.entry = k;
+            kk.affiliate = i >= al->n;
             web_vkb_norm(s, kk.key, sizeof(kk.key));
             int dup = 0;
             for (int j = 0; j < nkeys; j++)
@@ -592,6 +625,11 @@ int main(int argc, char **argv) {
                     if (keys[j].entry != k) {
                         fail(&E[k], "\"%s\" is also %s's (the same name once spelling is folded)",
                              s, E[keys[j].entry].path);
+                        return 1;
+                    }
+                    if (keys[j].affiliate != kk.affiliate) {
+                        fail(&E[k], "affiliate \"%s\" is a spelling of this entry's name%s: an alias",
+                             s, NULL);
                         return 1;
                     }
                     dup = 1;
@@ -609,6 +647,7 @@ int main(int argc, char **argv) {
     for (int k = 0; k < ne; k++) {
         const entry_t *e = &E[k];
         emit_list(o, "al", k, &e->f[F_ALIASES]);
+        emit_list(o, "af", k, &e->f[F_AFFILIATES]);
         emit_list(o, "cls", k, &e->f[F_CLASSES]);
         emit_list(o, "fin", k, &e->f[F_FOUND_IN]);
         emit_list(o, "rad", k, &e->f[F_RADIOS]);
@@ -632,7 +671,7 @@ int main(int argc, char **argv) {
         c_string(o, e->path);
         fprintf(o, ",\n    ");
         c_string(o, e->f[F_NAME].items[0]);
-        fprintf(o, ", al_%d, %d,\n    ", k, e->f[F_ALIASES].n);
+        fprintf(o, ", al_%d, %d, af_%d, %d,\n    ", k, e->f[F_ALIASES].n, k, e->f[F_AFFILIATES].n);
         c_string(o, e->f[F_COUNTRY].items[0]);
         fprintf(o, ", ");
         c_string(o, e->f[F_PARENT].items[0]);
@@ -657,9 +696,9 @@ int main(int argc, char **argv) {
     for (int i = 0; i < nkeys; i++) {
         fprintf(o, "  { ");
         c_string(o, keys[i].key);
-        fprintf(o, ", %d },\n", keys[i].entry);
+        fprintf(o, ", %d, %d },\n", keys[i].entry, keys[i].affiliate);
     }
-    if (!nkeys) fprintf(o, "  { \"\", -1 },\n");
+    if (!nkeys) fprintf(o, "  { \"\", -1, 0 },\n");
     fprintf(o, "};\nconst int web_vkb_nkeys = %d;\n", nkeys);
     return fclose(o) == 0 ? 0 : 1;
 }

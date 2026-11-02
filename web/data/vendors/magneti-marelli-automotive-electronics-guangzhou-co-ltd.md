@@ -1,6 +1,7 @@
 ---
 name: Magneti Marelli Automotive Electronics (Guangzhou) Co. Ltd
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: Marelli (formed in 2019 when Magneti Marelli merged with Calsonic Kansei) [2][3]
 founded: 1996 [2]
@@ -22,7 +23,6 @@ Magneti Marelli began in 1919 as a joint venture of Fiat and Ercole Marelli, was
 A MAC in this block is most likely a vehicle's cockpit, cluster or telematics unit built in Guangzhou, so the brand on the car is the automaker, not Marelli [2]. Marelli's ProConnect platform for the China market runs cluster, infotainment and 5G Release 15 telematics on one MediaTek MT8675 SoC, though the release does not say which plant builds it [4]. FCC grantee codes, Wi-Fi and Bluetooth radios, randomization and security advisories are not documented for this entity by the sources consulted [2][4].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Marelli celebrates 30 years of electronics excellence in Guangzhou (press release, 27 May 2026) - https://www.marelli.com/content/dam/marelli/news/documents/en/2026/Press%20Release_Marelli_Guangzhou%2030th%20anniversary_27May2026.pdf (accessed 2026-10-27)
 3. Marelli - Wikipedia - https://en.wikipedia.org/wiki/Marelli (accessed 2026-10-27)

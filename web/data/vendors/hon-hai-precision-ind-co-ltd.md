@@ -1,6 +1,7 @@
 ---
 name: "Hon Hai Precision Ind. Co.,Ltd."
 aliases: ["Hon Hai Precision Ind. CO.,Ltd.", "Hon Hai Precision IND.CO.,LTD", "Hon Hai Precision Industry Co., Ltd.", "Hon Hai Precision Industry Co.,LTD", "HON HAI-CCPBG  PRECISION IND.CO.,LTD."]
+affiliates: []
 country: TW [2]
 parent: unknown
 founded: 1974 [2]
@@ -24,7 +25,6 @@ Because Hon Hai is a contract manufacturer, a MAC in its blocks is a device or m
 Parent company is left unknown because the source consulted names none; it lists Hon Hai as a public company traded in Taipei and London [2]. The FCC grantee code is not listed because the FCC ID databases and the module wikis (fccid.io, fcc.report, TechInfoDepot) refused this session's requests. Randomization depends on the operating system of the product Hon Hai built, and no source in hand documents it, so it is unknown. No security advisory naming Hon Hai as the vendor of a networked device was found.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Foxconn - Wikipedia - https://en.wikipedia.org/wiki/Foxconn (accessed 2026-10-27)
 3. Foxconn T77H348.02 with Atheros AR9462 AR5B22 chipset and Bluetooth support with the ath9k - Trisquel forum - https://trisquel.info/gl/forum/foxconn-t77h34802-atheros-ar9462-ar5b22-chipset-and-bluetooth-support-ath9k (accessed 2026-10-27)

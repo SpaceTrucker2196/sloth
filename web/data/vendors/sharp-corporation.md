@@ -1,6 +1,7 @@
 ---
 name: SHARP Corporation
 aliases: ["SHARP CORPORATION", "SHARP Corporation."]
+affiliates: []
 country: JP [1][2]
 parent: Hon Hai Precision Industry (Foxconn), majority owner since 2016 [2]
 founded: 1912 [2]
@@ -41,7 +42,6 @@ databases and web search were unavailable to the session that wrote
 this entry [1].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Sharp Corporation - Wikipedia - https://en.wikipedia.org/wiki/Sharp_Corporation (accessed 2026-10-27)
 3. Sharp DHUB-SP1 - DeviWiki - https://deviwiki.com/wiki/Sharp_DHUB-SP1 (accessed 2026-10-27)

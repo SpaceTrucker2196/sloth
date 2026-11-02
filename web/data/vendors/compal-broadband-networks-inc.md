@@ -1,6 +1,7 @@
 ---
 name: "Compal Broadband Networks, Inc."
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: Compal Group [1]
 founded: 2009 [1]
@@ -24,7 +25,6 @@ A MAC in these blocks is most likely an ISP-supplied cable gateway: the CH7465LG
 CVE-2019-13025 lets an attacker run shell commands on the CH7465LG with firmware 6.12.18.24-5p8-NOSH through a crafted HTTP POST to a backend API [4]. Randomization behaviour is not documented by the sources consulted; the FCC ID databases refused automated access from this session.
 
 ## Sources
-
 1. Compal Broadband Networks (CBN) - https://www.icbn.com.tw/ (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Compal Broadband Networks CH7465LG-LC - WikiDevi - https://wikidevi.wi-cat.ru/Compal_Broadband_Networks_CH7465LG-LC (accessed 2026-10-27)

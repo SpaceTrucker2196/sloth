@@ -1,6 +1,7 @@
 ---
 name: Hewlett Packard
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: split in 2015 into HP Inc. and Hewlett Packard Enterprise [2]
 founded: 1939 [2]
@@ -41,7 +42,6 @@ filled in from memory. MAC randomization depends on the host operating
 system and is not documented by the sources consulted.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Hewlett-Packard - Wikipedia - https://en.wikipedia.org/wiki/Hewlett-Packard (accessed 2026-10-27)
 3. CVE-2021-39238 - NVD API record - https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=CVE-2021-39238 (accessed 2026-10-27)

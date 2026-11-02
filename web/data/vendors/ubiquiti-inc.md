@@ -1,6 +1,7 @@
 ---
 name: Ubiquiti Inc
 aliases: []
+affiliates: []
 country: US [1][3]
 parent: publicly traded on the NYSE as UI, no parent named [3]
 founded: 2003 [3]
@@ -26,7 +27,6 @@ Security history worth knowing: criminals installed Moobot on EdgeOS routers sti
 Silicon and FCC grantee codes are not listed: the U7 Pro specification page names no chipset [5], and fccid.io, fcc.report and the FCC's own grantee search refused requests from the session that wrote this entry, so nothing is filled in from memory. Randomization is unknown; access points and routers are infrastructure and no source here documents their behaviour.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. IEEE Registration Authority, IAB assignments (iab.csv) - https://standards-oui.ieee.org/iab/iab.csv (accessed 2026-10-27)
 3. Ubiquiti - Wikipedia - https://en.wikipedia.org/wiki/Ubiquiti (accessed 2026-10-27)

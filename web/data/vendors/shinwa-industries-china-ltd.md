@@ -1,6 +1,7 @@
 ---
 name: Shinwa industries(China) ltd.
 aliases: ["Shinwa Industries(China) Ltd."]
+affiliates: []
 country: CN [1][2]
 parent: a JVCKENWOOD group company [2]
 founded: 1986 [3]
@@ -24,7 +25,6 @@ A MAC in a Shinwa block is most likely a radio module inside another company's p
 The profile page carries no date, so its customer list may be historical [3]. Silicon, FCC grantee codes and security history are not listed: fccid.io and fcc.report refused requests from the session that wrote this entry, no teardown was found, and nothing is filled in from memory. The registry also has a separate SHINWA INDUSTRIES, INC. in Tokyo, holding an MA-S block, which this entry does not cover [4].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Organization - Shinwa (a JVCKENWOOD company) - https://www.shinwa-net.com/about-organization/ (accessed 2026-10-27)
 3. Shinwa Industries (China) Ltd. company profile - shinwa.com.cn - https://shinwa.com.cn/en/index.php/News/detail/classid/47/id/24.html (accessed 2026-10-27)

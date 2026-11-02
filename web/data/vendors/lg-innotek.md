@@ -1,6 +1,7 @@
 ---
 name: LG Innotek
 aliases: []
+affiliates: []
 country: KR [1]
 parent: LG Electronics (40.8% owner) / LG Group [1][2]
 founded: 1970 [1]
@@ -22,4 +23,4 @@ LG Innotek is the LG group's electronic-components arm, founded in February 1970
 2. Korean Wikipedia: LG이노텍 - https://ko.wikipedia.org/wiki/LG이노텍 (accessed 2026-10-27)
 3. PR Newswire: LG Innotek to Supply Cutting-Edge Automotive Wi-Fi 7 Communication Module to a leading European automotive parts company (2026-04-20) - https://prnewswire.com/news-releases/lg-innotek-to-supply-cutting-edge-automotive-wi-fi-7-communication-module-to-a-leading-european-automotive-parts-company-302746752.html (accessed 2026-10-27)
 4. DeviWiki: UDP Technology IPN100HD (LG Innotek TWFMKB304D module) - https://deviwiki.com/wiki/UDP_Technology_IPN100HD (accessed 2026-10-27)
-5. IEEE Registration Authority MA-L registry (local export web/data/oui.csv, ieee-data 20260625) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27) (IEEE URL not reachable 2026-10-27, HTTP 418; the rows were checked against the local export named here)
+5. IEEE Registration Authority MA-L registry, the copy committed in sloth as web/data/oui.csv (Debian ieee-data 20260625) - https://github.com/SpaceTrucker2196/sloth/blob/main/web/data/oui.csv (accessed 2026-11-02)

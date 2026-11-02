@@ -1,6 +1,7 @@
 ---
 name: "Qingdao Haier Technology Co.,Ltd"
 aliases: ["Qingdao Haier Technology Co.Ltd", "Qingdao HaierTechnology Co.,Ltd"]
+affiliates: []
 country: CN [1][2]
 parent: Haier Group, inferred from the name and the registry's Haier Information Park address [1][2]
 founded: unknown
@@ -43,7 +44,6 @@ behind the ZKJ prefix, which may be GE Appliances rather than this
 registrant, and the FCC ID databases refused it [3].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Haier - Wikipedia - https://en.wikipedia.org/wiki/Haier (accessed 2026-10-27)
 3. GE Kitchen Hub (UVH1301) - DeviWiki - https://deviwiki.com/wiki/GE_Kitchen_Hub_(UVH1301) (accessed 2026-10-27)

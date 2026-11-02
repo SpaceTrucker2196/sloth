@@ -1,6 +1,7 @@
 ---
 name: Edimax Technology Co. Ltd.
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: unknown
 founded: 1986 [2]
@@ -24,7 +25,6 @@ A MAC in an Edimax block is most likely an Edimax-branded USB adapter, router, a
 CVE-2025-1316 records that the Edimax IC-7100 IP camera does not neutralise specially crafted requests, allowing remote code execution [6]. The sources list 802.11b/g/n and 802.11a/n/ac modes and name 5 GHz products but do not state 2.4 GHz in words, so only 5 GHz is listed as a band [4][5]. Randomization is unknown: no source consulted documents it, and the FCC ID databases themselves (fccid.io, fcc.report) refused the session that wrote this entry.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Edimax - Wikipedia - https://en.wikipedia.org/wiki/Edimax (accessed 2026-10-27)
 3. Edimax global site - https://www.edimax.com/edimax/global/ (accessed 2026-10-27)

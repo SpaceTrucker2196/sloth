@@ -1,6 +1,7 @@
 ---
 name: Sigmastar Technology Ltd.
 aliases: ["Xiamen Sigmastar Technology Ltd."]
+affiliates: []
 country: CN [1][2]
 parent: listed on the Shenzhen ChiNext market since March 2024; established by SigmaStar Technology Inc., a wholly owned subsidiary of MStar Semiconductor (Taiwan), itself a MediaTek subsidiary since 2014 [2]
 founded: 2017 [2]
@@ -41,7 +42,6 @@ and no FCC grantee code or advisory is listed. Randomization is not
 documented.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. SigmaStar Technology Ltd., History and Corporate Structure, HKEX listing document (draft) - https://www1.hkexnews.hk/app/sehk/2026/108341/a131193/sehk26032702456.pdf (accessed 2026-10-27)
 3. SigmaStar SSC33x Camera SoCs are pin-to-pin compatible with Hisilicon Hi3516/Hi3518 processors - CNX Software - https://www.cnx-software.com/2021/05/05/sigmastar-ssc33x-camera-soc-pin-to-pin-compatible-hisilicon-hi3516-hi3518/ (accessed 2026-10-27)

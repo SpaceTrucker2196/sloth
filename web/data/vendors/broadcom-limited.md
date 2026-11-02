@@ -1,6 +1,7 @@
 ---
 name: Broadcom Limited
 aliases: [Broadcom, Broadcom Inc.]
+affiliates: []
 country: US [1]
 parent: independent [1]
 founded: 1961 [1]
@@ -24,7 +25,6 @@ The registry holds 21 MA-L blocks as Broadcom Limited, nine older MA-L blocks as
 NVD records CVE-2017-9417, known as Broadpwn, remote code execution on BCM43xx Wi-Fi chips [4], and CVE-2019-15126, in which crafted timed traffic makes Broadcom Wi-Fi clients send a limited set of frames with improper layer 2 encryption [5]. FCC grantee codes are not listed because the FCC ID databases refused the session that wrote this entry; nothing is filled in from memory. Randomization is the host operating system's behaviour and is unknown here.
 
 ## Sources
-
 1. Broadcom - Wikipedia - https://en.wikipedia.org/wiki/Broadcom (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Broadcom BCM6765 product page - https://www.broadcom.com/products/wireless/wireless-lan-infrastructure/bcm6765 (accessed 2026-10-27)

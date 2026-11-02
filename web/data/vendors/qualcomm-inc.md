@@ -1,6 +1,7 @@
 ---
 name: Qualcomm Inc.
 aliases: ["QUALCOMM Incorporated"]
+affiliates: []
 country: US [1][2]
 parent: independent, public on Nasdaq as QCOM [1]
 founded: 1985 [1]
@@ -43,7 +44,6 @@ fcc.report, apps.fcc.gov) refused the session that wrote this entry,
 and nothing is filled in from memory.
 
 ## Sources
-
 1. Qualcomm - Wikipedia - https://en.wikipedia.org/wiki/Qualcomm (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Qualcomm Atheros - Wikipedia - https://en.wikipedia.org/wiki/Qualcomm_Atheros (accessed 2026-10-27)

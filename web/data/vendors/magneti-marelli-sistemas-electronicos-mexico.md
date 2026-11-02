@@ -1,6 +1,7 @@
 ---
 name: MAGNETI MARELLI SISTEMAS ELECTRONICOS MEXICO
 aliases: []
+affiliates: []
 country: MX [1]
 parent: "Marelli Holdings (Magneti Marelli merged with Calsonic Kansei in May 2019 under KKR; in Chapter 11 since 11 June 2025) [2][3]"
 founded: unknown

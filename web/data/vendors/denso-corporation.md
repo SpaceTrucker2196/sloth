@@ -1,6 +1,7 @@
 ---
 name: DENSO CORPORATION
 aliases: []
+affiliates: []
 country: JP [1][2]
 parent: Toyota Group member; Toyota Motor Corporation holds 21.25% and Toyota Industries 5.59% [1]
 founded: 1949 [1]
@@ -41,7 +42,6 @@ FCC ID databases refused the session that wrote this entry, so silicon
 and grantee codes are not listed.
 
 ## Sources
-
 1. Denso - Wikipedia - https://en.wikipedia.org/wiki/Denso (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. NVD CVE API, keyword search DENSO - https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=DENSO (accessed 2026-10-27)

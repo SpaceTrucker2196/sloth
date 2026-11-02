@@ -1,6 +1,7 @@
 ---
 name: Nordic Semiconductor ASA
 aliases: []
+affiliates: []
 country: NO [1][2]
 parent: independent, public on the Oslo Stock Exchange as NOD [1]
 founded: 1983 [1]
@@ -40,7 +41,6 @@ Randomization is unknown, and FCC grantee codes are not listed because
 the FCC ID databases refused the session that wrote this entry.
 
 ## Sources
-
 1. Nordic Semiconductor - Wikipedia - https://en.wikipedia.org/wiki/Nordic_Semiconductor (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. nRF52840 product page - Nordic Semiconductor - https://www.nordicsemi.com/Products/nRF52840 (accessed 2026-10-27)

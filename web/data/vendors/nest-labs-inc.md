@@ -1,6 +1,7 @@
 ---
 name: Nest Labs Inc.
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: Google (acquired 2014) [2]
 founded: 2010 [2]
@@ -45,7 +46,6 @@ FCC grantee codes are not listed because the FCC ID databases refused
 the session that verified this entry.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Google Nest - Wikipedia - https://en.wikipedia.org/wiki/Google_Nest (accessed 2026-10-27)
 3. Nest Learning Thermostat 2nd Generation Teardown - iFixit - https://es.ifixit.com/Desmontaje/Nest+Learning+Thermostat+2nd+Generation+Teardown/13818 (accessed 2026-10-27)

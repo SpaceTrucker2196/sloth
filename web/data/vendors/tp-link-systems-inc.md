@@ -1,6 +1,7 @@
 ---
 name: TP-Link Systems Inc.
 aliases: ["TP-Link Systems Inc"]
+affiliates: []
 country: US [1]
 parent: "privately held; the US headquarters entity left by the 2022 to May 2024 restructuring of TP-Link, consolidated to a single California headquarters in October 2024 [1]"
 founded: 1996 [1]
@@ -20,7 +21,7 @@ TP-Link Systems Inc. is the Irvine, California entity left by the restructuring 
 ## Sources
 1. TP-Link - Wikipedia - https://en.wikipedia.org/wiki/TP-Link (accessed 2026-10-27)
 2. TP-Link Systems Inc MAC address blocks - maclookup.app - https://maclookup.app/vendors/tp-link-systems-inc (accessed 2026-10-27)
-3. IEEE Registration Authority MA-L public listing (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27) (not reachable 2026-10-27, HTTP 418; the claims were checked against the copy shipped in sloth web/data/oui.csv)
+3. IEEE Registration Authority MA-L registry, the copy committed in sloth as web/data/oui.csv (Debian ieee-data 20260625) - https://github.com/SpaceTrucker2196/sloth/blob/main/web/data/oui.csv (accessed 2026-11-02)
 4. Corporate Profile - TP-Link Systems Inc. - https://www.tp-link.com/us/about-us/corporate-profile/ (accessed 2026-10-27)
 5. TP-Link Archer AX23 v1 - OpenWrt Table of Hardware - https://openwrt.org/toh/tp-link/archer_ax23_v1 (accessed 2026-10-27)
 6. TP-Link EAP245 v3 - OpenWrt Table of Hardware - https://openwrt.org/toh/tp-link/eap245_v3 (accessed 2026-10-27)

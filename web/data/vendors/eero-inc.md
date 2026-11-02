@@ -1,6 +1,7 @@
 ---
 name: eero inc.
 aliases: []
+affiliates: []
 country: US [2]
 parent: Amazon (acquired 2019) [1]
 founded: unknown
@@ -22,7 +23,6 @@ eero is a home mesh Wi-Fi brand whose first system went on sale on 23 February 2
 Beyond Wi-Fi, Wikipedia's hardware table lists Thread support from the 2017 eero Beacon and eero Pro on and Matter support from the eero 6 on, so an eero node may also be heard on 802.15.4 [1]. NVD records CVE-2023-5324, a denial of service in eeroOS up to 6.16.4-11 reachable from the local network through the Ethernet interface [3]. The original eero lost guaranteed security updates on 30 September 2022 [1]. Silicon and FCC grantee codes are not listed because the FCC ID databases and teardown sites were not reachable from the session that wrote this entry, and the founding year is not stated by the sources consulted; randomization of the node's own addresses is not documented [1].
 
 ## Sources
-
 1. Eero (company) - Wikipedia - https://en.wikipedia.org/wiki/Eero_(company) (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. NVD - CVE-2023-5324 - https://nvd.nist.gov/vuln/detail/CVE-2023-5324 (accessed 2026-10-27)

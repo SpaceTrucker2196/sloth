@@ -1,6 +1,7 @@
 ---
 name: Resideo
 aliases: []
+affiliates: []
 country: US [1][3]
 parent: "independent (spun off from Honeywell in October 2018; sells under the Honeywell Home name through a long-term licence from Honeywell) [1]"
 founded: 2018 [1]

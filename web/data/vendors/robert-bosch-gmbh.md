@@ -1,6 +1,7 @@
 ---
 name: Robert Bosch GmbH
 aliases: ["ROBERT BOSCH GmbH", "Robert Bosch GmbH AnP", "Robert Bosch Gmbh, CM-CI2", "Robert Bosch GmbH, VT-ATMO"]
+affiliates: []
 country: DE [1][2]
 parent: Robert Bosch Stiftung, a charitable foundation holding about 94% of the shares without voting rights [1]
 founded: 1886 [1]
@@ -44,7 +45,6 @@ code or randomization behaviour is listed: the FCC ID databases
 wrote this entry, and no teardown was reached.
 
 ## Sources
-
 1. Robert Bosch GmbH - Wikipedia - https://en.wikipedia.org/wiki/Robert_Bosch_GmbH (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Bosch Smart Home Controller - Bosch Smart Home - https://www.bosch-smarthome.com/uk/en/products/devices/smart-home-controller/ (accessed 2026-10-27)

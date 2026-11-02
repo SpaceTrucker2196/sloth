@@ -1,6 +1,7 @@
 ---
 name: "vivo Mobile Communication Co., Ltd."
 aliases: []
+affiliates: []
 country: CN [1][2]
 parent: privately owned by Shen Wei since 2023, previously BBK Electronics (2009-2023) [1]
 founded: 2009 [1]
@@ -24,7 +25,6 @@ A MAC in a vivo block is most likely a vivo or iQOO phone [1][2]. The vivo X200 
 Randomization is unknown: no source consulted states which Android version or randomization setting vivo ships. FCC grantee codes are not listed because the FCC ID databases (fccid.io, fcc.report, apps.fcc.gov) refused automated access from the session that wrote this entry; nothing is filled in from memory. iFixit's vivo X9 teardown identifies no chips [6].
 
 ## Sources
-
 1. Vivo (technology company) - Wikipedia - https://en.wikipedia.org/wiki/Vivo_(technology_company) (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. About vivo - vivo - https://www.vivo.com/en/about-vivo/about (accessed 2026-10-27)

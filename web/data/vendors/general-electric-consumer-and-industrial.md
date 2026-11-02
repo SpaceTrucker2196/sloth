@@ -1,6 +1,7 @@
 ---
 name: General Electric Consumer and Industrial
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: "Haier Smart Home (Qingdao Haier bought GE Appliances on 6 June 2016 for $5.6 billion; GE brand licensed to Haier until 2056) [1]"
 founded: 2004 [1]

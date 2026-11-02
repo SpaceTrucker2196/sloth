@@ -1,6 +1,7 @@
 ---
 name: Ericsson AB
-aliases: ["Ericsson", "Ericsson Group", "Ericsson, EAB/RWI/K", "Ericsson - North America"]
+aliases: [Ericsson, Ericsson Group, "Ericsson, EAB/RWI/K"]
+affiliates: ["Ericsson - North America [2]"]
 country: SE [1][2]
 parent: Telefonaktiebolaget LM Ericsson, publicly listed; Investor AB and AB Industrivärden hold the largest voting stakes [1]
 founded: 1876 [1]
@@ -24,7 +25,6 @@ The IEEE registry lists 29 MA-L blocks to "Ericsson AB" at Torshamnsgatan in Sto
 The best-known security incident involving its equipment is the 2004-2005 Greek wiretapping case, in which more than 100 phones on Vodafone Greece were tapped through rogue software on four Ericsson AXE exchanges [3]. Ericsson's PSIRT publishes security bulletins and the company is a CVE Numbering Authority [4]. The 2019 settlement of over 1 billion US dollars with the US DOJ over bribery, and the 2022 leaked files on payments in Iraq, are corporate conduct cases rather than product security [1]. Silicon, FCC grantee codes and randomization are not documented here; the FCC ID databases refused requests from the session that wrote this entry.
 
 ## Sources
-
 1. Ericsson - Wikipedia - https://en.wikipedia.org/wiki/Ericsson (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Greek wiretapping case 2004-2005 - Wikipedia - https://en.wikipedia.org/wiki/Greek_wiretapping_case_2004%E2%80%932005 (accessed 2026-10-27)

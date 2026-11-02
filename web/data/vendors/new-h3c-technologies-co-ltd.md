@@ -1,6 +1,7 @@
 ---
 name: "New H3C Technologies Co., Ltd"
-aliases: ["Hangzhou H3C Technologies Co., Limited"]
+aliases: []
+affiliates: ["Hangzhou H3C Technologies Co., Limited [1]"]
 country: CN [1]
 parent: Unisplendour (UNIS), which bought 51% in 2015 and agreed in 2024 to buy a further 30% from Hewlett Packard Enterprise [3]
 founded: unknown
@@ -24,7 +25,6 @@ The IEEE registry lists 134 MA-L blocks to "New H3C Technologies Co., Ltd" at 46
 NVD records dozens of 2022 stack overflows in the web handlers of the Magic R100, R200 and NX18 Plus home routers and an open command-execution UDP service on the R100 [6]. Founding year of the current entity, FCC grantee codes and randomization are unknown; the FCC ID databases refused the session's requests.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. About Us - New H3C Technologies - https://www.h3c.com/en/About_Us/ (accessed 2026-10-27)
 3. Unisplendour - Wikipedia - https://en.wikipedia.org/wiki/Unisplendour (accessed 2026-10-27)

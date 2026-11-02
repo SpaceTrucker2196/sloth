@@ -1,6 +1,7 @@
 ---
 name: "TAIYO YUDEN CO.,LTD"
 aliases: ["TAIYO YUDEN CO., LTD.", "Taiyo Yuden Co., Ltd."]
+affiliates: []
 country: JP [1][2]
 parent: none named; listed on the Tokyo Stock Exchange (6976) [2]
 founded: 1950 [2]
@@ -24,7 +25,6 @@ A MAC in a Taiyo Yuden block is most likely the Bluetooth module inside another 
 No source in hand names the end products carrying these modules, so the found-in list is empty; no randomization documentation or security advisory naming Taiyo Yuden was found, and the FCC ID databases could not be consulted, so no grantee code is listed [2][3][4].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Taiyo Yuden - Wikipedia - https://en.wikipedia.org/wiki/Taiyo_Yuden (accessed 2026-10-27)
 3. Taiyo Yuden's EYSHSNZWZ BLE 5 Module - DigiKey - https://www.digikey.com/en/blog/taiyo-yudens-eyshsnzwz-ble-5-module (accessed 2026-10-27)

@@ -1,6 +1,7 @@
 ---
 name: ASUSTek COMPUTER INC.
 aliases: []
+affiliates: []
 country: TW [1]
 parent: independent (publicly listed, 2357.TW) [2]
 founded: 1989 [1]

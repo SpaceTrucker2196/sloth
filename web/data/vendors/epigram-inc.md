@@ -1,6 +1,7 @@
 ---
 name: "Epigram, Inc."
 aliases: []
+affiliates: []
 country: US [1]
 parent: "Broadcom Corporation (acquired April 1999 for $316M in stock); the block is now used by Broadcom [2]"
 founded: unknown

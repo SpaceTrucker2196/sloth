@@ -1,6 +1,7 @@
 ---
 name: Intel Corporation
 aliases: []
+affiliates: []
 country: US [1]
 parent: independent, listed on Nasdaq [1]
 founded: 1968 [1]
@@ -24,7 +25,6 @@ Intel manufactures network interface controllers [1] and sells its client Wi-Fi 
 INTEL-SA-00473 of May 2021 covers CVE-2020-24586, -24587 and -24588, the fragment cache, mixed key and frame aggregation attacks, across the AX210, AX201, AX200, 9560, 9260, 8265 and older PROSet/Wireless parts and the Killer AX1675, AX1650 and 1550 [5]. FCC grantee codes are not listed because the FCC ID databases refused the session that wrote this entry, and which laptop brands carry Intel modules is not stated in the sources consulted; nothing is filled in from memory. Randomization is the host operating system's behaviour and is unknown here.
 
 ## Sources
-
 1. Intel - Wikipedia - https://en.wikipedia.org/wiki/Intel (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. Intel Wi-Fi 6E AX210 (Gig+) specifications - https://www.intel.com/content/www/us/en/products/sku/204836/intel-wifi-6e-ax210-gig/specifications.html (accessed 2026-10-27)

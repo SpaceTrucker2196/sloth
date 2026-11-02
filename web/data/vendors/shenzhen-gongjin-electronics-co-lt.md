@@ -1,6 +1,7 @@
 ---
 name: "SHENZHEN GONGJIN ELECTRONICS CO.,LT"
 aliases: ["SHENZHEN GONGJIN ELECTRONICS CO.,LTD", "Shengzhen Gongjin Electronics"]
+affiliates: []
 country: CN [1][3]
 parent: unknown
 founded: 1998 [3]
@@ -24,7 +25,6 @@ A MAC in a Gongjin block is most likely a home router, mesh node, extender or DS
 Parent company, randomization and security advisories are not documented by the sources consulted; NVD's search pages did not render for the session that wrote this entry, and advisories for these devices are filed under the brand on the box.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-M assignments (mam.csv) - https://standards-oui.ieee.org/oui28/mam.csv (accessed 2026-10-27)
 3. About T&W - Shenzhen Gongjin Electronics - https://twsz.com/en/about (accessed 2026-10-27)

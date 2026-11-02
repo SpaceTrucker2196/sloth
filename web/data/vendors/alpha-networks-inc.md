@@ -1,6 +1,7 @@
 ---
 name: Alpha Networks Inc.
 aliases: []
+affiliates: []
 country: TW [1][2]
 parent: unknown
 founded: 2003 [2]
@@ -24,7 +25,6 @@ A MAC in an Alpha block is usually a device sold under another brand. DeviWiki, 
 The parent field is left unknown because no fetched source states a controlling owner, randomisation is unknown, the FCC databases refused the session, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Alpha Networks milestones - https://www.alphanetworks.com/about/38fcfa2bfeac3e0d (accessed 2026-10-27)
 3. Alpha Networks home page - https://www.alphanetworks.com/ (accessed 2026-10-27)

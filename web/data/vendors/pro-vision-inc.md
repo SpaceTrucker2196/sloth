@@ -1,6 +1,7 @@
 ---
 name: "PRO-VISION, Inc."
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: unknown
 founded: unknown
@@ -24,7 +25,6 @@ A MAC in the Pro-Vision block is most likely a vehicle recorder or a body camera
 The founding year is not stated (the company says only that it has operated since 2003), and the Wi-Fi band and generation, silicon, FCC grantee codes, randomization and security history are not documented in the sources consulted: the FCC ID databases refused requests from the session that wrote this entry, and nothing is filled in from memory [2][3].
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. About Us - Pro-Vision - https://provisionsolutions.com/company/about-us/ (accessed 2026-10-27)
 3. Ranger Mobile DVR - Pro-Vision - https://provisionsolutions.com/product/ranger-mobile-dvr/ (accessed 2026-10-27)

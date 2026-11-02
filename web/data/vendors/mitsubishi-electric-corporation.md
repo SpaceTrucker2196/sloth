@@ -1,6 +1,7 @@
 ---
 name: Mitsubishi Electric Corporation
 aliases: []
+affiliates: []
 country: JP [1][2]
 parent: member of the Mitsubishi Group [1]
 founded: 1921 [1]
@@ -40,7 +41,6 @@ year-long cyberattacks by Chinese hackers [1]. The FCC ID databases refused the 
 wrote this entry, so no grantee code or silicon is listed.
 
 ## Sources
-
 1. Mitsubishi Electric - Wikipedia - https://en.wikipedia.org/wiki/Mitsubishi_Electric (accessed 2026-10-27)
 2. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 3. NVD CVE API, keyword search Mitsubishi Electric Wi-Fi Interface (CVE-2022-33321) - https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch=Mitsubishi%20Electric%20Wi-Fi%20Interface (accessed 2026-10-27)

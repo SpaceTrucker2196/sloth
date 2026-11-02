@@ -1,6 +1,7 @@
 ---
 name: Microsoft Corporation
 aliases: []
+affiliates: []
 country: US [8]
 parent: independent [8]
 founded: 1975 [8]

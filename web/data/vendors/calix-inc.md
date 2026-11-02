@@ -1,6 +1,7 @@
 ---
 name: Calix Inc.
 aliases: ["Calix Networks"]
+affiliates: []
 country: US [1][2]
 parent: unknown
 founded: 1999 [2]
@@ -24,7 +25,6 @@ Calix files GigaSpire under subscriber solutions and GigaPoint ONTs and ONUs as 
 Parent, randomization and security advisories are not documented by the sources consulted: Wikipedia mentions no security incident [2], and NVD's search pages did not render for the session that wrote this entry.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Calix Inc. - Wikipedia - https://en.wikipedia.org/wiki/Calix_Inc. (accessed 2026-10-27)
 3. Calix home page - https://www.calix.com/ (accessed 2026-10-27)

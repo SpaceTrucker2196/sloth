@@ -1,6 +1,7 @@
 ---
 name: "Murata Manufacturing Co., Ltd."
 aliases: ["Murata Manufacturing CO., Ltd."]
+affiliates: []
 country: JP [1]
 parent: independent [1]
 founded: 1944 [1]
@@ -8,7 +9,7 @@ kind: module-maker
 device_classes: [module-in-other-brands, phone, iot-sensor, tv]
 found_in: ["Apple iPhone 4S, iPhone 8 / 8 Plus / X [8]", "Apple TV 4K [8]", "Samsung Galaxy S3, S4, S8, S10 [8]", "Apple iPhone 6s (Murata 240 front-end module) [9]", "NXP i.MX Linux hosts via Embedded Artists Type 1YN M.2 module [6]"]
 radios: ["Wi-Fi 4 (802.11a/b/g/n) [4][5]", "Wi-Fi 5 (802.11ac 2x2 MIMO) [4]", "Wi-Fi 6 (802.11ax, Type 2EL) [7]", "2.4 GHz [4]", "5 GHz [4]", "BT Classic (BR/EDR 4.1-5.4) [4][5][7]", "BLE 4.x/5.x (5.1 on 1YN, 5.2 on 1XK, 5.4 on 2EL) [5][6][7]", "Thread/Zigbee (802.15.4, Type 2EL) [7]"]
-silicon: ["NXP IW416 in Type 1XK (LBEE5CJ1XK) [5]", "Infineon CYW43439 in Type 1YN (LBEE5KL1YN) [6]", "NXP IW612 in Type 2EL [7]", "Cypress/Infineon CYW54907, CYW43907, CYW4356, CYW43340, CYW43455, CYW4343W, CYW43438, CYW43012 across Types 1PS/1GC/1CX/1BW/1MW/1DX/1LD/1MD/YD/1HD/1FX/1CD/1LV [8]", "Murata 240 front-end module in iPhone 6s [9]"]
+silicon: ["NXP IW416 in Type 1XK (LBEE5CJ1XK) [5]", "Infineon CYW43439 in Type 1YN (LBEE5KL1YN) [6]", "NXP IW612 in Type 2EL [7]", "Cypress CYW54907 (Type 1PS), CYW43907 (1GC), CYW4356 (1CX), CYW43340 (1BW), CYW43455 (1MW), CYW4343W (1DX), CYW43438 with an STM32 (1LD, 1MD, YD, 1HD), CYW43364 (1FX), CYW43362 with an STM32F405 (1CD) and CYW43012 (1LV) [8]", "Murata 240 front-end module in iPhone 6s [9]"]
 fcc_grantee: []
 randomization: unknown
 security_notes: []

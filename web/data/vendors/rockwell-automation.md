@@ -1,6 +1,7 @@
 ---
 name: Rockwell Automation
 aliases: []
+affiliates: []
 country: US [1][2]
 parent: independent [2]
 founded: 1903 [2]
@@ -22,7 +23,6 @@ Rockwell Automation is a US industrial automation company headquartered in Milwa
 A MAC in these blocks is most likely Allen-Bradley factory automation equipment, a line Rockwell International bought in 1985 that makes programmable logic controllers, among them the ControlLogix family introduced in 1997, and drives [3]. Which products sit in which block is not documented by the sources consulted, so found_in is inferred and radios and silicon are empty. NVD records CVE-2021-22681, a bypass of the key that Studio 5000 Logix Designer and RSLogix 5000 use to verify CompactLogix, ControlLogix, GuardLogix and other Logix controllers, and marks it as added to CISA's Known Exploited Vulnerabilities catalogue on 2026-03-05 [4]. FCC grantee codes are not listed because the FCC ID databases refused access from the session that wrote this entry, and randomization is unknown.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Rockwell Automation - Wikipedia - https://en.wikipedia.org/wiki/Rockwell_Automation (accessed 2026-10-27)
 3. Allen-Bradley - Wikipedia - https://en.wikipedia.org/wiki/Allen-Bradley (accessed 2026-10-27)

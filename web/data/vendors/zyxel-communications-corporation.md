@@ -1,6 +1,7 @@
 ---
 name: Zyxel Communications Corporation
 aliases: []
+affiliates: []
 country: TW [1][3]
 parent: "Zyxel Group Corp. [1]"
 founded: 1989 [1]

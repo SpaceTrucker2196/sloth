@@ -1,6 +1,7 @@
 ---
 name: "Chiun Mai Communication System, Inc"
 aliases: []
+affiliates: []
 country: TW [1][3]
 parent: unknown
 founded: unknown
@@ -24,7 +25,6 @@ What the company makes is thinly documented in the sources that could be read. C
 A MAC in these blocks is therefore most likely a phone or other handheld built by or for a Foxconn-group customer rather than a Chiun Mai-branded product, an inference from the trade records above [4][5]. Radios, silicon, FCC grantee codes and randomization are not listed: the company directories that describe its business, the FCC ID databases and Taiwan trade pages refused requests from the session that wrote this entry, and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Chiun Mai Communication System, Inc - MAC Address Lookup - https://maclookup.app/vendors/chiun-mai-communication-system-inc (accessed 2026-10-27)
 3. Chiun Mai Communication Systems, Inc., Taiwan, New Taipei City - info-clipper - https://www.info-clipper.com/en/company/taiwan/chiun-mai-communication-systems-inc.twdavrx9h.html (accessed 2026-10-27)

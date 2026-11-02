@@ -1,6 +1,7 @@
 ---
 name: "Nintendo Co.,Ltd"
 aliases: ["Nintendo Co., Ltd."]
+affiliates: []
 country: JP [1][2]
 parent: unknown
 founded: 1889 [2]
@@ -24,7 +25,6 @@ The original Switch carries a Broadcom BCM4356 802.11ac 2x2 Wi-Fi chip with Blue
 The Switch's Tegra X1 boot ROM has a USB recovery-mode bug (Fusee Gelee, 2018) that cannot be patched on consoles already shipped [8]; CVE-2018-6242 records the boot ROM recovery-mode buffer overflow in pre-2016 Tegra processors [9]. Whether consoles randomise their Wi-Fi MAC is not documented by the sources consulted. The FCC grantee code is not listed because the FCC ID databases refused fetches from this session; and nothing is filled in from memory.
 
 ## Sources
-
 1. IEEE Registration Authority, MA-L assignments (oui.csv) - https://standards-oui.ieee.org/oui/oui.csv (accessed 2026-10-27)
 2. Nintendo - Wikipedia - https://en.wikipedia.org/wiki/Nintendo (accessed 2026-10-27)
 3. Nintendo Switch Teardown - TechInsights - https://techinsights.com/ko/node/16553 (accessed 2026-10-27)
