@@ -607,7 +607,12 @@ int main(int argc, char **argv) {
      * case-only alias) is one key, and an affiliate that folds onto the
      * entry's name or an alias is a spelling of it, not a second
      * company, so it is the error too. */
-    key_t_ *keys = calloc((size_t)ENTRY_MAX * (LIST_MAX + 1), sizeof(*keys));
+    /* File scope, as E is: the table lives until exit, and a pointer
+     * only main() held would read as a leak under the sanitised build's
+     * leak check, which fails the generator. */
+    static key_t_ *keys;
+    keys = calloc((size_t)ENTRY_MAX * (2 * LIST_MAX + 1), sizeof(*keys));
+    if (!keys) { fprintf(stderr, "vendorkb: out of memory\n"); return 1; }
     int nkeys = 0;
     for (int k = 0; k < ne; k++) {
         const field_t *al = &E[k].f[F_ALIASES], *af = &E[k].f[F_AFFILIATES];
