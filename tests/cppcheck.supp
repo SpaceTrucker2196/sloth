@@ -86,6 +86,11 @@ readdirCalled:web/tests/test_store.c
 # temporary directory into a local DIR* and closedir()s it before
 # returning, on the test's one thread.
 readdirCalled:web/tests/sdb_gen.c
+# The vendor research generator walks web/data/vendors/ at build time
+# (read_dir()) and test_vendorkb.c counts the same files: each a
+# single-threaded program with a local DIR* closed in the same function.
+readdirCalled:web/tools/vendorkb.c
+readdirCalled:web/tests/test_vendorkb.c
 
 # ── False positives, checked by hand ────────────────────────────────────
 # Bucket arrays filled field-by-field when a slot is claimed; the flagged
