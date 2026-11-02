@@ -75,7 +75,14 @@ file per vendor, compiled in at build time by `web/tools/vendorkb.c`
 (`make web-vendorkb` checks the files alone); a file with a dangling
 `[n]`, a missing field or a name not its file's fails the build naming
 the file. A vendor with no file shows "no research yet for <name>".
-Sources are plain text, never links. Format and rules:
+Sources are plain text, never links. There are
+<!-- count:vendors -->277<!-- /count --> entries: 160 of the reference
+host's 163 vendor names find one, and the other three (SJI Industry
+Company, Reliance Communications LLC, SJIT Co., Ltd.) are pending
+because no public documentation ties them to a company;
+[`web/data/vendors/COVERAGE.md`](data/vendors/COVERAGE.md) lists both,
+and `test_vendorkb.c` holds it to the entries and to
+`web/data/vendors/REFERENCE_HOST.txt`. Format, coverage and rules:
 [`docs/wiki/vendor-research.md`](../docs/wiki/vendor-research.md).
 
 The full table costs the binary about 2.8 MB: slothweb is 3.3 MB with
@@ -3464,7 +3471,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_sqlbox.c` | the SQL box: the parameter and text rules; `404` without `--web-allow-sql` and the page's box hidden; spec §12's M5 acceptance (above) over a real socket against the C API and the sqlite3 shell; every write, DDL, PRAGMA, ATTACH, DML-tail CTE and second statement refused with the file byte for byte; every withheld column refused, the guardrail's words on the list, the integer flags read; the row, byte, time and value limits; one at a time (`503` `busy`, free again once answered or once the client leaves), `HEAD` `405`, `/api/recipes`. Both builds |
 | `test_flows.c` | the Flows routes over a generated sloth.db: every tab's row byte for byte, an SMB1 session marked, the columns each tab reads held to the allow-list and the withheld ones held off it, no cookie, banner, MQTT username, community count or preauth count in any body, every `400`, paging, sorting, the `ip` filter, a page that stops early with `more` and the next one, the chord pairs with their fold at three sizes, a table the file lacks; the page's Flows view. Both builds |
 | `test_alertfmt.c` | the detail audit read from `src/alerts/`: every listed type's every `fire()` site found and its formats' string fields approved; the credential-bearing types off the list and refused by the checker |
-| `test_vendorkb.c` | the vendor research table against `web/data/vendors/` and the registry: every `.md` an entry and every entry a file named for its name, every `[n]` resolving and every cited field carrying one, the name and each alias exact `Organization Name` strings of the committed CSVs (a dead entry is red), the lookup folding case, white space and punctuation and matching no prefix, the drawer and Lookup carrying `"vendor_research"` for a researched vendor and `{found:false}` for one without and for an IP, the page drawing it through one function with no `href` and no markup sink |
+| `test_vendorkb.c` | the vendor research table against `web/data/vendors/` and the registry: every `.md` an entry and every entry a file named for its name, every `[n]` resolving and every cited field carrying one, the name and each alias exact `Organization Name` strings of the committed CSVs (a dead entry is red), the lookup folding case, white space and punctuation and matching no prefix, the drawer and Lookup carrying `"vendor_research"` for a researched vendor and `{found:false}` for one without and for an IP, the page drawing it through one function with no `href` and no markup sink, and `data/vendors/COVERAGE.md` against `REFERENCE_HOST.txt` and the entries |
 | `test_alertkb.c` | the alert knowledge table against its sources: an entry per `.def` row in order with its technique, a trigger, sources and steps for each, plain text, and every remediation source a corpus document that cites the type |
 | `test_alerts.c` | the Alerts page and an alert's page over a generated sloth.db and a fed stream: the collapse (sloth.db's rows and the stream's incidents, a key once), the order, every filter, paging, every `400`/`404`/`405`, the six sections, runs, the device by MAC and by address, no key, username, community or sloth `incident_id` in any body, every type's page within the buffer, the 20,000-row bound on 30,000 rows (500,000 with `SLOTHWEB_ALERTS_BENCH`), filters, History's figures and the drawer reaching past it, and the tiles against their views on the demo's data; the page's views and links |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
@@ -3567,7 +3574,8 @@ web/
                    linked into slothweb_test too (-DSLOTHWEB_DEMO_LIB)
     quickstart_check.sh  the five-minute check, make web-quickstart-check (M6)
   data/            the IEEE registry CSVs, committed (SOURCE.md: origin, hashes, refresh);
-                   vendors/ the vendor research, one .md per OUI holder (docs/wiki/vendor-research.md)
+                   vendors/ the vendor research, one .md per OUI holder (docs/wiki/vendor-research.md),
+                   COVERAGE.md and REFERENCE_HOST.txt: which reference-host vendors have one
   tests/           slothweb_test (make web-test); sdb_gen.c builds the tests'
                    sloth.db from src/db_schema.c; src/rsn_ie.c is linked for
                    test_parity.c, src/tui.c, tui_palette.c, ip_color.c,

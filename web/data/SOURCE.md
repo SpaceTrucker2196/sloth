@@ -51,6 +51,8 @@ holds every entry's name and aliases to exact `Organization Name`
 strings of the four CSVs here. The format and rules are
 `docs/wiki/vendor-research.md`. These files are written by hand from
 cited sources and are not touched by `make update-oui`.
+`vendors/COVERAGE.md` and `vendors/REFERENCE_HOST.txt` record which of
+the reference host's vendor names have an entry and which are pending.
 
 <!-- update-oui:begin -->
 Refreshed 2026-10-26 by `make update-oui`: copied from /usr/share/ieee-data (ieee-data 20260625).

@@ -11,14 +11,63 @@ binary at build time by `web/tools/vendorkb.c`: slothweb fetches nothing
 at run time. This page is the file format, the rules the generator
 enforces, and how the section reaches the page.
 
-**Sources**: `web/data/vendors/*.md`, `web/tools/vendorkb.c`,
+**Sources**: `web/data/vendors/*.md`, `web/data/vendors/COVERAGE.md`,
+`web/data/vendors/REFERENCE_HOST.txt`, `web/tools/vendorkb.c`,
 `web/src/web_vendorkb.h`, `web/src/web_vendorkb.c`,
 `web/src/web_devices.c` (`research_member()`), `web/ui/app.js`
 (`vendorResearch()`), `web/tests/test_vendorkb.c`, `web/data/SOURCE.md`.
 
-**Last updated**: 2026-10-27 (the pipeline and three sample entries:
-Murata Manufacturing, AMPAK Technology, Tesla; owner request of
-2026-10-27).
+**Last updated**: 2026-11-01 (the research set:
+<!-- count:vendors -->277<!-- /count --> entries, covering 160 of the
+reference host's 163 vendor names, three pending; before it, the
+pipeline and three sample entries; owner request of 2026-10-27).
+
+## What is covered
+
+`web/data/vendors/` holds <!-- count:vendors -->277<!-- /count -->
+entries (`make docs-counts` keeps that number). They were written by two
+research sessions on 2026-10-27, each entry from the sources it cites,
+and each session re-fetched its entries' cited URLs to check the claims
+before handing them over; the session that merged them fetched the
+sources of ten more entries again (Ubiquiti, Nest Labs, ecobee, iRobot,
+Sony Interactive Entertainment, D-Link International, MediaTek, Taiyo
+Yuden, Sierra Wireless, Nintendo) and found every checked claim on the
+cited page. No source was found by a web search in that last pass: the
+search budget was spent, so verification fetched only URLs the entries
+already cite.
+
+The set leads with the reference host's vendors: every distinct IEEE
+name the MACs on that host resolved to, 163 names over 1672 devices,
+listed in `web/data/vendors/REFERENCE_HOST.txt`. `COVERAGE.md` beside
+the entries splits that list in two. Under Have are the 160 names (1667
+devices) that find an entry, each with the file it finds. Under Pending
+are three names (5 devices) that have no entry, because no public page,
+filing or teardown was found tying them to a company or a product:
+
+- `SJI Industry Company` and `SJIT Co., Ltd.` - the registry gives the
+  same Hwaseong-si (KR) street address it gives Seongji Industry Company,
+  which has an entry;
+- `Reliance Communications LLC` - the registry gives the Hauppauge (NY)
+  address it also gives Orbic North America.
+
+A shared registry address is not documentation that two names are one
+company, so neither is an alias of the other. The rest of the set is
+the commonest registrants beyond the reference host (network equipment,
+phones, PCs, modules, automotive).
+
+Where the two sessions both covered a company, the merge kept one file
+per IEEE string. Roku was written by both under one slug; the kept file
+is the one with a cited value in every field and four security notes
+against one. `Alps Alpine` (an alias file for `ALPSALPINE CO,.LTD`) was
+dropped for `alpsalpine-co-ltd.md`, which documents the Marvell 88W8887
+and CSR8311 silicon the other lacked. Six pairs named two distinct
+registry strings, one file listing the other's name as an alias (FN-LINK
+and HUNAN FN-LINK, Intel Corporate and Intel Corporation, Microsoft
+Corporation and Microsoft, Panasonic Automotive Systems Co.,Ltd and its
+Company of America, Vantiva USA and Vantiva Technologies Belgium,
+Visteon Corporation and Visteon Portuguesa): both files were kept and
+each string left to the file named for it, the alias dropped from the
+other.
 
 ## Why a vendor, not a product
 
@@ -107,6 +156,8 @@ stops the build, naming the file and the defect, when:
 - a name or alias, once spelling is folded, is already another file's.
 
 A source that is never cited is noted on stderr, not refused.
+`COVERAGE.md` is passed over by name (`WEB_VKB_COVERAGE` in
+`web_vendorkb.h`): it is about the entries, not one.
 
 ## How the page finds an entry
 
@@ -144,8 +195,14 @@ strings in the committed registry (`web/data/oui.csv`, `mam.csv`,
 lookup folds spelling and matches no prefix; the drawer and Lookup
 carry the section for a researched vendor and `{"found":false}` for one
 without; the page draws it through one function with no `href` and no
-markup sink. Each absence assertion was seen red under a named mutation
-(in the test's comments) and the files restored byte for byte.
+markup sink; and `COVERAGE.md` matches `REFERENCE_HOST.txt` (its two
+lists together are exactly the reference names, each once, with its
+device count), every name under Have finding the file it names and
+every name under Pending finding none, so deleting an entry turns the
+test red. `tests/test_docs_consistency.c` holds every
+`count:vendors` marker to the number of entry files. Each
+absence assertion was seen red under a named mutation (in the test's
+comments) and the files restored byte for byte.
 
 ## Adding or refreshing an entry
 
@@ -159,7 +216,9 @@ markup sink. Each absence assertion was seen red under a named mutation
    Wikipedia for corporate facts, vendor advisories and NVD for security
    notes. Never another model's summary, never memory.
 3. `make web-vendorkb` to check the file alone; `make web-test` for the
-   registry check and the rest.
+   registry check and the rest. If the vendor is one of the reference
+   host's, move its line in `COVERAGE.md` from Pending to Have with the
+   file it finds; `make docs-counts` for the entry count.
 4. The registry CSVs beside the entries are the IEEE's and are refreshed
    only by `make update-oui` (`web/data/SOURCE.md`); an entry is never a
    reason to edit them.

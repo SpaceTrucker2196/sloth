@@ -331,10 +331,31 @@ static void test_scanner_versions_exclude_addresses(void) {
     ASSERT(c.ver[1][0] == 12 && c.ver[1][1] == 34 && c.ver[1][2] == 5);
 }
 
+/* slothweb's vendor research entries: the .md files under
+ * web/data/vendors/ but COVERAGE.md, the rule web/tools/vendorkb.c and
+ * tools/docs_counts.sh apply. This suite does not link the generated
+ * table; web/tests/test_vendorkb.c holds the table to these same files,
+ * so a marker held to the files is held to the table. */
+static int dc_vendor_entries(void) {
+    DIR *d = opendir("web/data/vendors");
+    if (!d) return -1;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        size_t l = strlen(e->d_name);
+        if (e->d_name[0] != '.' && l > 3 && !strcmp(e->d_name + l - 3, ".md") &&
+            strcmp(e->d_name, "COVERAGE.md"))
+            n++;
+    }
+    closedir(d);
+    return n;
+}
+
 /* ── generated counts (#117) ──
  *
  * `make docs-counts` (tools/docs_counts.sh) rewrites every
- * <!-- count:NAME -->N<!-- /count --> marker from the two .def lists.
+ * <!-- count:NAME -->N<!-- /count --> marker from the two .def lists
+ * and the vendor research entry files.
  * What is asserted here is the marker's value against the compiled
  * constant, so drift fails with the fix in its message, and parallel
  * slices that each add a row merge with one command instead of a
@@ -362,6 +383,7 @@ static int dc_check_count_markers(const char *doc, const char *text,
         int want;
         if (e - p == 5 && !strncmp(p, "views", 5))      want = VIEW_COUNT;
         else if (e - p == 5 && !strncmp(p, "rules", 5)) want = ALERT_TYPE_COUNT;
+        else if (e - p == 7 && !strncmp(p, "vendors", 7)) want = dc_vendor_entries();
         else {
             fprintf(stderr, "    %s: unknown count marker '%.*s'\n",
                     doc, (int)(e - p), p);
@@ -397,6 +419,15 @@ static void test_count_marker_parser(void) {
     ASSERT_EQ(dc_check_count_markers("t", ok, &bad), 2);
     ASSERT_EQ(bad, 0);
     ASSERT_EQ(dc_check_count_markers("t", "no markers here", &bad), 0);
+    /* the vendor count is the entry files', whatever the build */
+    ASSERT_GE(dc_vendor_entries(), 3);
+    snprintf(ok, sizeof(ok), "<!-- count:vendors -->%d<!-- /count -->", dc_vendor_entries());
+    ASSERT_EQ(dc_check_count_markers("t", ok, &bad), 1);
+    ASSERT_EQ(bad, 0);
+    snprintf(stale, sizeof(stale), "<!-- count:vendors -->%d<!-- /count -->",
+             dc_vendor_entries() + 1);
+    ASSERT_EQ(dc_check_count_markers("(expected stale)", stale, &bad), 1);
+    ASSERT_EQ(bad, 1);
     ASSERT_EQ(dc_check_count_markers("t",
               "<!-- count:panels -->35<!-- /count -->", &bad), -1);
     ASSERT_EQ(dc_check_count_markers("t",
@@ -450,6 +481,10 @@ static void test_count_markers_match_build(void) {
         { "docs/wiki/sloth.md",            2 },
         { "docs/wiki/attack-map.md",       1 },
         { "docs/wiki/views-catalog.md",    1 },
+        { "docs/wiki/vendor-research.md",  2 },
+        { "docs/wiki/slothweb.md",         1 },
+        { "web/README.md",                 1 },
+        { "web/data/vendors/COVERAGE.md",  1 },
     };
     for (size_t i = 0; i < sizeof(docs) / sizeof(*docs); i++) {
         char *t = slurp(docs[i].path);

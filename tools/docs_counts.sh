@@ -8,6 +8,7 @@
 #
 #   <!-- count:views -->35<!-- /count -->
 #   <!-- count:rules -->75<!-- /count -->
+#   <!-- count:vendors -->277<!-- /count -->   (slothweb's vendor research)
 #
 # HTML comments, so the rendered page shows only the number. This script
 # recounts from the two .def lists — one `X(` row at column 0 per view or
@@ -28,13 +29,19 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 
 views=$(grep -c '^X(' "$root/include/sloth_views.def")
 rules=$(grep -c '^X(' "$root/include/sloth_alerts.def")
+# slothweb's vendor research entries: one .md per vendor under
+# web/data/vendors/, COVERAGE.md beside them not being one (the same
+# rule web/tools/vendorkb.c applies; web/tests/test_vendorkb.c holds the
+# table to the files, tests/test_docs_consistency.c the markers to them).
+vendors=$(ls "$root/web/data/vendors" | grep '\.md$' | grep -vc '^COVERAGE\.md$' || true)
 
 if [ "$#" -eq 0 ]; then
     # Word splitting is intended: repo paths contain no whitespace.
     # shellcheck disable=SC2046
     set -- $(grep -rl --include='*.md' '<!-- count:' \
                  "$root/README.md" "$root/MISSION.md" "$root/SECURITY.md" \
-                 "$root/docs" "$root/agents" 2>/dev/null || true)
+                 "$root/docs" "$root/agents" "$root/web/README.md" \
+                 "$root/web/data/vendors/COVERAGE.md" 2>/dev/null || true)
 fi
 
 changed=0
@@ -42,6 +49,7 @@ for f in "$@"; do
     tmp="$f.docs_counts.$$"
     sed -e "s|<!-- count:views -->[0-9]*<!-- /count -->|<!-- count:views -->$views<!-- /count -->|g" \
         -e "s|<!-- count:rules -->[0-9]*<!-- /count -->|<!-- count:rules -->$rules<!-- /count -->|g" \
+        -e "s|<!-- count:vendors -->[0-9]*<!-- /count -->|<!-- count:vendors -->$vendors<!-- /count -->|g" \
         "$f" > "$tmp"
     if cmp -s "$f" "$tmp"; then
         rm -f "$tmp"
@@ -52,4 +60,4 @@ for f in "$@"; do
         changed=$((changed + 1))
     fi
 done
-echo "docs-counts: views=$views rules=$rules, $changed file(s) rewritten"
+echo "docs-counts: views=$views rules=$rules vendors=$vendors, $changed file(s) rewritten"

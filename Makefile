@@ -673,7 +673,7 @@ WEB_BTSIG_ARGS  = $(if $(wildcard $(WEB_BTSIG_DIR)/company_identifiers.csv),--co
 # file's slug fails the build naming the file; `make web-vendorkb`
 # runs just that check. The format: docs/wiki/vendor-research.md.
 WEB_VKB_DIR     = web/data/vendors
-WEB_VKB_MDS     = $(wildcard $(WEB_VKB_DIR)/*.md)
+WEB_VKB_MDS     = $(filter-out $(WEB_VKB_DIR)/COVERAGE.md,$(wildcard $(WEB_VKB_DIR)/*.md))
 WEB_VKBGEN      = $(WEB_GEN_DIR)/vendorkb
 WEB_VKBGEN_SRCS = web/tools/vendorkb.c
 WEB_VKB_C       = $(WEB_GEN_DIR)/web_vendorkb_table.c

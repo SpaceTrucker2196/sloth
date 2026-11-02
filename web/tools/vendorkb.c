@@ -528,6 +528,8 @@ static int read_dir(const char *dir) {
     while ((d = readdir(dh)) != NULL) {
         size_t l = strlen(d->d_name);
         if (d->d_name[0] == '.' || l < 4 || strcmp(d->d_name + l - 3, ".md")) continue;
+        /* the coverage report beside the entries is about them, not one */
+        if (!strcmp(d->d_name, WEB_VKB_COVERAGE)) continue;
         if (ne == ENTRY_MAX) { fprintf(stderr, "vendorkb: more than %d entries\n", ENTRY_MAX); closedir(dh); return -1; }
         entry_t *e = &E[ne];
         memset(e, 0, sizeof(*e));

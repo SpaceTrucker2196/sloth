@@ -81,7 +81,7 @@ static void check_texts(const web_vkb_t *e, const char *const *v, int n, const c
 }
 
 /* Seen red with web/tools/vendorkb.c's read_dir() skipping files whose
- * name starts with 't' (two entries for three files), and separately
+ * name starts with 't' (fewer entries than files), and separately
  * with its citation check short-circuited and "[9]" written into
  * tesla-inc.md's summary (the dangling mark reached the table; the
  * file restored byte for byte). */
@@ -94,7 +94,8 @@ static void test_every_entry_is_complete_and_cited(void) {
         struct dirent *de;
         while ((de = readdir(d)) != NULL) {
             size_t l = strlen(de->d_name);
-            if (de->d_name[0] != '.' && l > 3 && !strcmp(de->d_name + l - 3, ".md")) files++;
+            if (de->d_name[0] != '.' && l > 3 && !strcmp(de->d_name + l - 3, ".md") &&
+                strcmp(de->d_name, WEB_VKB_COVERAGE)) files++;
         }
         closedir(d);
     }
@@ -252,7 +253,7 @@ static void test_drawer_and_lookup_carry_the_section(void) {
     FILE *f = fdopen(fd, "w");
     fputs("Registry,Assignment,Organization Name,Organization Address\n"
           "MA-L,98ED5C,\"Tesla,Inc.\",3500 Deer Creek Road Palo Alto CA US 94304\n"
-          "MA-L,000393,\"Apple, Inc.\",1 Infinite Loop Cupertino CA US 95014\n", f);
+          "MA-L,0000FE,Example Unresearched Ltd,1 Nowhere Road XX\n", f);
     fclose(f);
     oui_build_t b;
     oui_build_init(&b);
@@ -268,21 +269,20 @@ static void test_drawer_and_lookup_carry_the_section(void) {
     WT_EQ(status, 200);
     WT_HAS(g_body, "\"oui\":{\"found\":true,\"vendor\":\"Tesla,Inc.\"");
     WT_HAS(g_body, "\"vendor_research\":{\"found\":true,\"file\":\"web/data/vendors/tesla-inc.md\","
-                   "\"name\":\"Tesla,Inc.\",\"aliases\":[\"Tesla Inc\"],\"kind\":\"automotive [1]\","
-                   "\"country\":\"US [1][2]\"");
-    WT_HAS(g_body, "\"radios\":[\"BLE 4.x/5.x [5]\"]");
+                   "\"name\":\"Tesla,Inc.\",\"aliases\":[\"Tesla Inc\"],\"kind\":\"automotive\","
+                   "\"country\":\"US [1]\"");
+    WT_HAS(g_body, "\"fcc_grantee\":[\"2AEIM (attested by FCC ID 2AEIM-QCA6234) [7]\"]");
     WT_HAS(g_body, "\"confidence\":{\"country\":\"documented\",\"silicon\":\"documented\","
                    "\"radios\":\"documented\",\"found_in\":\"documented\",\"randomization\":\"unknown\"}");
-    WT_HAS(g_body, "\"summary\":\"Tesla is the US electric-vehicle");
-    WT_HAS(g_body, "\\n\\nOn the air expect Bluetooth Low Energy");
-    WT_HAS(g_body, "\"sources\":[{\"n\":1,\"title\":\"Tesla, Inc. - Wikipedia\",\"url\":"
+    WT_HAS(g_body, "\"summary\":\"Tesla, Inc. is the Austin, Texas electric-vehicle");
+    WT_HAS(g_body, "\"sources\":[{\"n\":1,\"title\":\"Wikipedia - Tesla, Inc.\",\"url\":"
                    "\"https://en.wikipedia.org/wiki/Tesla,_Inc.\",\"accessed\":\"2026-10-27\"}");
     WT_HAS(g_body, "\"researched\":\"2026-10-27\"}");
     WT_HAS(g_body, "\"record\":null");
     /* a vendor with no entry */
-    WT_EQ(web_device_route(&m, "00:03:93:aa:bb:cc", "", 1792627200, g_body, sizeof(g_body),
+    WT_EQ(web_device_route(&m, "00:00:fe:aa:bb:cc", "", 1792627200, g_body, sizeof(g_body),
                            &len, &status), 0);
-    WT_HAS(g_body, "\"vendor\":\"Apple, Inc.\"");
+    WT_HAS(g_body, "\"vendor\":\"Example Unresearched Ltd\"");
     WT_HAS(g_body, "\"vendor_research\":{\"found\":false}");
     /* no vendor at all */
     WT_EQ(web_device_route(&m, "02:11:22:33:44:55", "", 1792627200, g_body, sizeof(g_body),
@@ -333,10 +333,118 @@ static void test_page_shows_research_as_text(void) {
     WT_HAS(p, ".vr-src { ");
 }
 
+/* ── coverage of the reference host ── */
+
+#define REF_MAX 512
+
+typedef struct { char name[256]; int devices; int seen; } ref_t;
+
+/* REFERENCE_HOST.txt: "#" comment lines, then "NAME<TAB>DEVICES" per
+ * line, NAME exactly as the registry spells it (a trailing space kept). */
+static int read_reference(ref_t *r, int cap) {
+    char *t = slurp(VKB_DIR "/REFERENCE_HOST.txt");
+    WT_ASSERT(t != NULL);
+    if (!t) return 0;
+    int n = 0;
+    for (char *l = t; l && *l; ) {
+        char *nl = strchr(l, '\n');
+        if (nl) *nl = '\0';
+        if (*l && *l != '#') {
+            char *tab = strchr(l, '\t');
+            WT_ASSERT(tab != NULL);
+            if (tab && n < cap && (size_t)(tab - l) < sizeof(r[n].name)) {
+                memcpy(r[n].name, l, (size_t)(tab - l));
+                r[n].name[tab - l] = '\0';
+                r[n].devices = atoi(tab + 1);
+                r[n].seen = 0;
+                n++;
+            }
+        }
+        l = nl ? nl + 1 : NULL;
+    }
+    free(t);
+    return n;
+}
+
+static ref_t *ref_find(ref_t *r, int n, const char *name) {
+    for (int i = 0; i < n; i++) if (!strcmp(r[i].name, name)) return &r[i];
+    return NULL;
+}
+
+/* COVERAGE.md's two lists, "## Have" and "## Pending", each line
+ *   - "NAME" - N device[s] - <the entry's file | why it is pending>
+ * held to REFERENCE_HOST.txt (together exactly its names, each once,
+ * with its device count) and to the table (a Have name finds the file
+ * the line names, a Pending name finds none). Seen red with
+ * web/data/vendors/wnc-corporation.md moved out of the tree ("WNC
+ * Corporation" under Have found no entry), with the "SJIT Co., Ltd."
+ * line deleted from Pending (a reference name in neither list), and
+ * with "Ring LLC" copied into Pending (a name twice, and a Pending
+ * name that resolves); each file restored byte for byte. */
+static void test_coverage_matches_reference_and_entries(void) {
+    static ref_t ref[REF_MAX];
+    int nref = read_reference(ref, REF_MAX);
+    WT_ASSERT(nref >= 100);
+    char *t = slurp(VKB_DIR "/" WEB_VKB_COVERAGE);
+    WT_ASSERT(t != NULL);
+    if (!t) return;
+    int section = 0, have = 0, pending = 0, have_devices = 0, total = 0;
+    for (char *l = t; l && *l; ) {
+        char *nl = strchr(l, '\n');
+        if (nl) *nl = '\0';
+        if (!strcmp(l, "## Have")) section = 1;
+        else if (!strcmp(l, "## Pending")) section = 2;
+        else if (!strncmp(l, "## ", 3)) section = 0;
+        else if (section && !strncmp(l, "- \"", 3)) {
+            char *name = l + 3, *q = strstr(name, "\" - ");
+            WT_ASSERT(q != NULL);
+            if (q) {
+                *q = '\0';
+                char *rest = q + 4;
+                int dev = atoi(rest);
+                char *tail = strstr(rest, " - ");
+                WT_ASSERT(tail != NULL);
+                ref_t *r = ref_find(ref, nref, name);
+                if (!r) fprintf(stderr, "    COVERAGE.md: \"%s\" is not in REFERENCE_HOST.txt\n", name);
+                WT_ASSERT(r != NULL);
+                if (r) {
+                    if (r->seen) fprintf(stderr, "    COVERAGE.md: \"%s\" is listed twice\n", name);
+                    WT_EQ(r->seen, 0);
+                    r->seen = 1;
+                    WT_EQ(dev, r->devices);
+                }
+                const web_vkb_t *e = web_vendorkb_find(name);
+                if (section == 1) {
+                    have++;
+                    have_devices += dev;
+                    if (!e) fprintf(stderr, "    COVERAGE.md: \"%s\" is under Have and has no entry\n", name);
+                    WT_ASSERT(e != NULL);
+                    if (e && tail) WT_ASSERT(!strcmp(e->file, tail + 3));
+                } else {
+                    pending++;
+                    if (e) fprintf(stderr, "    COVERAGE.md: \"%s\" is under Pending and has %s\n",
+                                   name, e->file);
+                    WT_ASSERT(e == NULL);
+                }
+            }
+        }
+        l = nl ? nl + 1 : NULL;
+    }
+    free(t);
+    for (int i = 0; i < nref; i++) {
+        if (!ref[i].seen) fprintf(stderr, "    COVERAGE.md: \"%s\" is in neither list\n", ref[i].name);
+        WT_ASSERT(ref[i].seen);
+        total += ref[i].devices;
+    }
+    WT_EQ(have + pending, nref);
+    WT_ASSERT(have > 0 && pending >= 0 && have_devices <= total);
+}
+
 void run_vendorkb_tests(void) {
     WT_RUN(test_every_entry_is_complete_and_cited);
     WT_RUN(test_every_entry_names_an_ieee_vendor);
     WT_RUN(test_find_folds_spelling);
     WT_RUN(test_drawer_and_lookup_carry_the_section);
     WT_RUN(test_page_shows_research_as_text);
+    WT_RUN(test_coverage_matches_reference_and_entries);
 }

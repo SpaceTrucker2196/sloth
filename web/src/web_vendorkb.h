@@ -36,6 +36,12 @@
 
 #include <stddef.h>
 
+/* web/data/vendors/COVERAGE.md lists which of the reference host's
+ * vendors have an entry and which are still pending; it sits beside
+ * the entries and is not one (the generator, the tests and
+ * tools/docs_counts.sh all pass over it by this name). */
+#define WEB_VKB_COVERAGE "COVERAGE.md"
+
 /* A normalised key is cut to this many bytes. */
 #define WEB_VKB_KEY_MAX 127
 

@@ -5810,3 +5810,23 @@ report events.
   findings apart; `--help` names `/api/ble`, `/api/ble/alerts` and
   `/api/ble/ADDR`; the drawer header has the `bundle-btn-ble` hook for
   the copy-JSON bundle. Each seen red under a named mutation.
+- 2026-11-01 — [[vendor-research]], [[slothweb]], `web/README.md`: the
+  research set. 277 entries in `web/data/vendors/`, written by two
+  research sessions from the sources each cites and checked against
+  those sources; the merge re-fetched the cited pages of ten more
+  entries (no web search: that budget was spent) and found every
+  checked claim. 160 of the reference host's 163 vendor names (1667 of
+  1672 devices) find an entry; SJI Industry Company, Reliance
+  Communications LLC and SJIT Co., Ltd. are pending, because no public
+  documentation ties them to a company (the registry gives only
+  addresses shared with other registrants, which is not documentation
+  that they are one). `web/data/vendors/COVERAGE.md` lists both sides,
+  `REFERENCE_HOST.txt` the reference list with device counts, and
+  `test_coverage_matches_reference_and_entries` holds the three
+  together. Where both sessions covered one company, one file per IEEE
+  string was kept (Roku: the file with every field cited; Alps Alpine
+  dropped for the entry with documented silicon; six alias overlaps
+  left to the file named for each string). The generator passes over
+  `COVERAGE.md` by name; the entry count is a `count:vendors` marker
+  that `make docs-counts` rewrites and `tests/test_docs_consistency.c`
+  checks.
