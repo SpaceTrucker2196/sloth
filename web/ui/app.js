@@ -2760,7 +2760,7 @@
     $("drawer").hidden = false;
     $("dr-close").focus();
     set("dr-mac", mac);
-    SlothBundle.mount($("dr-hd"), "device", mac, scoped);
+    SlothBundle.mount($("dr-hd"), "device", mac, scoped, $("dr-close"));
     $("dr-sw").style.background = keyColor(mac);
     $("dr-mac").className = "d-dim";
     set("dr-note", "loading");

@@ -338,10 +338,13 @@ table.qt.dt-fixed td { overflow: hidden; text-overflow: ellipsis; }
 .dr-hd b { font-size: 15px; }
 .dr-hd button { margin-left: auto; }
 /* The copy-JSON control (bundle.js): two buttons and a note, inline in
- * a header; in the drawer it sits with the close button at the right. */
+ * a header. In the drawer it is mounted before #dr-close and the note
+ * takes the free space, so on one row the control sits at the right
+ * beside close; when the row wraps, close keeps its auto margin and
+ * stays at the right of the row it lands on. */
 .bundle { display: inline-flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
 .bundle button { font-size: 10px; letter-spacing: 0.1em; padding: 2px 8px; }
-.dr-hd .bundle { margin-left: auto; }
+.dr-hd #dr-note { flex: 1 1 auto; }
 .dr-hd .bundle button { margin-left: 0; }
 #ad-head .bundle { margin-left: var(--gap); }
 .bundle-note { min-width: 0; }

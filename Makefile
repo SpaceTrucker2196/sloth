@@ -702,10 +702,11 @@ WEB_CORE_SRCS   = src/dot11_frame.c src/radiotap.c src/wifi_freq.c src/dns_wire.
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C) \
                   $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C)
 # slothweb has no version of its own: the bundle's envelope
-# (web/src/web_bundle.c) names sloth's, read out of include/sloth.h
-# here because web/ never includes sloth.h (it links a few leaf
-# sources from src/, not sloth's state).
-WEB_VERSION_DEF = -DSLOTHWEB_VERSION='"$(shell sed -n 's/^\#define SLOTH_VERSION "\(.*\)"/\1/p' include/sloth.h)"'
+# (web/src/web_bundle.c) names the sloth tree it was built from as
+# build_version, read out of include/sloth.h here because web/ never
+# includes sloth.h (it links a few leaf sources from src/, not sloth's
+# state).
+WEB_VERSION_DEF = -DSLOTHWEB_BUILD_VERSION='"$(shell sed -n 's/^\#define SLOTH_VERSION "\(.*\)"/\1/p' include/sloth.h)"'
 WEB_TEST_SRCS   = $(wildcard web/tests/*.c) web/tools/oui_csv.c web/tools/demo.c src/db_schema.c \
                   src/rsn_ie.c src/ip_color.c src/tui_palette.c \
                   src/tui.c src/view_labels.c

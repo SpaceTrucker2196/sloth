@@ -124,7 +124,14 @@ static void test_page_carries_the_control(void) {
     const char *p = (const char *)web_page;
     WT_HAS(p, "window.SlothBundle = (function () {");
     WT_HAS(p, "  return { mount: mount, fileName: fileName };");
-    WT_HAS(p, "    SlothBundle.mount($(\"dr-hd\"), \"device\", mac, scoped);");
+    /* Before #dr-close, so close stays at the right and follows copy in
+     * the tab order; appended, both took margin-left:auto and split the
+     * row. Seen red with the fifth argument dropped. */
+    WT_HAS(p, "    SlothBundle.mount($(\"dr-hd\"), \"device\", mac, scoped, $(\"dr-close\"));");
+    WT_LACKS(p, "SlothBundle.mount($(\"dr-hd\"), \"device\", mac, scoped);");
+    WT_HAS(p, "if (before && before.parentNode === host) host.insertBefore(box, before);");
+    WT_HAS(p, ".dr-hd #dr-note { flex: 1 1 auto; }");
+    WT_LACKS(p, ".dr-hd .bundle { margin-left: auto; }");
     /* Inside ad-head, which loading and an error rewrite: no control is
      * left naming the alert before. */
     WT_HAS(p, "    SlothBundle.mount($(\"ad-head\"), \"alert\", j.id, scoped);");
@@ -160,6 +167,15 @@ static void test_page_carries_the_control(void) {
     WT_HAS(p, "var FRESH_MS = 60000;");
     WT_HAS(p, "copy.addEventListener(\"pointermove\", prefetch);");
     WT_HAS(p, "copy.addEventListener(\"pointerdown\", prefetch);");
+    /* A failed fetch holds the pointer off its request for 10 s (a 404
+     * answers in milliseconds: one bundle build per pointermove); a
+     * click retries and says the kept error. Seen red with the old
+     * prefetch, which had no keptErr() test, restored. */
+    WT_HAS(p, "var BACKOFF_MS = 10000;");
+    WT_HAS(p, "if (m !== \"stale\") { st.err = m; st.errPath = path; st.errAt = Date.now(); }");
+    WT_HAS(p, "if (!st.busy && ready(st) === null && keptErr(st) === null) load(st)");
+    WT_LACKS(p, "if (!st.busy && ready(st) === null) load(st)");
+    WT_HAS(p, "errText(e) + \"; retrying\"");
     /* The note names the text written, not st.text, which a mount
      * before write() settles has nulled (kb(null) threw). Seen red with
      * copied(st.text, true) restored. */
@@ -431,6 +447,9 @@ static void test_parameters_refused_whole(void) {
         { "kind=alert&id=x1", 400, "bad_id" },
         { "kind=alert&id=d0", 400, "bad_id" },
         { "kind=alert&id=s", 400, "bad_id" },
+        /* Decoded once, not twice: d1%2530 is "d1%30", not d10. */
+        { "kind=alert&id=d1%2530", 400, "bad_id" },
+        { "kind=alert&id=d1%26x%3D1", 400, "bad_id" },
         { "kind=lookup&id=nope", 400, "bad_lookup" },
         { "kind=device&id=02:00:00:00:00:12&x=1", 400, "unknown_parameter" },
         { "kind=device&kind=device&id=02:00:00:00:00:12", 400, "repeated_parameter" },
@@ -479,7 +498,9 @@ static void test_device_bundle_shape(void) {
      * host_is written back). */
     WT_LACKS(b, "\"host_is\":");
     /* sloth's version, as include/sloth.h has it, and the page's build. */
-    WT_HAS(b, "\"slothweb\":{\"version\":\"" SLOTH_VERSION "\",\"milestone\":\"M6\",\"page_etag\":");
+    WT_HAS(b, "\"slothweb\":{\"build_version\":\"" SLOTH_VERSION "\",\"page_etag\":");
+    WT_LACKS(b, "\"milestone\":");
+    WT_HAS(b, "\"server.slothweb.build_version\":\"the sloth source tree slothweb was built from");
     WT_HAS(b, "\"uptime_s\":42}");
     WT_HAS(b, web_page_etag);        /* carries its own quotes */
     WT_HAS(b, ",\"sensor\":{\"socket\":\"connected\",\"socket_spec\":\"unix:/test/sloth.sock\","
@@ -517,9 +538,10 @@ static void test_device_bundle_shape(void) {
               s4 < s5 && s5 < s6);
     /* The records naming the device: its MAC and its address, newest
      * first; the other host's query is not among them (seen red with
-     * every record listed). */
-    WT_HAS(b, "\"matched\":4,\"by_type\":{\"probe_client\":1,\"dns\":1,\"alert.escalate\":1,"
-              "\"alert.create\":1},\"records\":[{\"seq\":8,\"type\":\"probe_client\",");
+     * every record listed). The deauth alert names the MAC only in its
+     * detail, free text, and has no match_ip: not matched. */
+    WT_HAS(b, "\"matched\":2,\"by_type\":{\"probe_client\":1,\"dns\":1},"
+              "\"records\":[{\"seq\":8,\"type\":\"probe_client\",");
     WT_HAS(b, "\"text\":\"HomeNet  02:00:00:00:00:12\"");
     WT_HAS(b, "\"text\":\"laptop.example.org  192.0.2.12\"");
     WT_LACKS(b, "other.example.org");
@@ -929,39 +951,84 @@ static void test_records_follow_the_scope(void) {
     free(r);
 }
 
-/* A record is matched on a whole address: 192.0.2.12 is not named by a
- * record of 192.0.2.120 or 192.0.2.125, but is by one of 192.0.2.12:443.
- * Seen red with web_bundle_names_addr() reduced to strstr() (the .120
- * and .125 queries listed). */
+/* The ring record whose line contains marker, or NULL. */
+static const web_live_rec_t *ring_rec(web_live_rec_t *buf, const char *marker) {
+    unsigned long long latest = 0;
+    int n = web_live_recent_after(g_live, 0, buf, WEB_LIVE_RING, &latest);
+    for (int i = n - 1; i >= 0; i--)
+        if (strstr(buf[i].text, marker)) return &buf[i];
+    return NULL;
+}
+
+/* A record is matched on its address members, never on its line: the
+ * line is cut at WEB_LIVE_TEXT_MAX, and a 68-byte query name puts
+ * 192.0.2.123 at the cut as "192.0.2.12"; an SSID that reads
+ * "192.0.2.12" names no host; 192.0.2.120 and .125 are not .12, and a
+ * connection's "192.0.2.12:443" is. Seen red with rec_match() also
+ * accepting strstr(line, key) (the .123 query, the SSID probe, .120
+ * and .125 listed), and the Monitor case with web_live_rec_names()
+ * ignoring monitor_line (a device row's address matched on its Monitor
+ * line, which does not show it). */
 static void test_records_match_whole_addresses(void) {
-    feed("{\"type\":\"dns\",\"ts\":1792627195,\"qname\":\"q120.example.org\","
-         "\"src\":\"192.0.2.120\"}\n"
-         "{\"type\":\"dns\",\"ts\":1792627196,\"qname\":\"q125.example.org\","
-         "\"src\":\"192.0.2.125\"}\n");
+    /* 68 bytes: with the two-space gap and 192.0.2.123 the line is 81,
+     * one past WEB_LIVE_TEXT_MAX, so the cut drops the 3. (67 is the
+     * review's figure; that line is 80 and fits whole.) */
+    char q68[69];
+    memset(q68, 'q', 68);
+    q68[68] = '\0';
+    memcpy(q68 + 68 - 12, ".example.org", 12);
+    char line[512];
+    snprintf(line, sizeof(line),
+        "{\"type\":\"dns\",\"ts\":1792627195,\"qname\":\"q120.example.org\","
+        "\"src\":\"192.0.2.120\"}\n"
+        "{\"type\":\"dns\",\"ts\":1792627196,\"qname\":\"q125.example.org\","
+        "\"src\":\"192.0.2.125\"}\n"
+        "{\"type\":\"dns\",\"ts\":1792627197,\"qname\":\"%s\",\"src\":\"192.0.2.123\"}\n"
+        "{\"type\":\"probe_client\",\"ts\":1792627198,\"mac\":\"02:00:00:00:00:99\","
+        "\"ssid\":\"192.0.2.12\"}\n"
+        "{\"type\":\"connections\",\"ts\":1792627199,\"src\":\"192.0.2.12:443\","
+        "\"dst\":\"[FE80::A]:22\",\"proto\":\"tcp\"}\n", q68);
+    feed(line);
+    web_live_rec_t buf[WEB_LIVE_RING];
+    const web_live_rec_t *cut = ring_rec(buf, "qqqq");
+    WT_ASSERT(cut != NULL);
+    if (cut) {
+        /* The fixture is the cut case: the line ends in the shorter key. */
+        size_t n = strlen(cut->text);
+        WT_ASSERT(n >= 10 && !strcmp(cut->text + n - 10, "192.0.2.12"));
+        WT_ASSERT(!web_live_rec_names(cut, "192.0.2.12", 0));
+        WT_ASSERT(web_live_rec_names(cut, "192.0.2.123", 0));
+    }
+    const web_live_rec_t *conn = ring_rec(buf, "192.0.2.12:443");
+    WT_ASSERT(conn != NULL);
+    if (conn) {
+        WT_ASSERT(web_live_rec_names(conn, "192.0.2.12", 0));
+        WT_ASSERT(web_live_rec_names(conn, "fe80::a", 0));
+        WT_ASSERT(!web_live_rec_names(conn, "fe80::", 0));
+    }
     WT_EQ(route(&H, "/api/bundle", "kind=device&id=02:00:00:00:00:12"), 200);
     char *r = records_of(answer());
     WT_ASSERT(r != NULL);
     if (!r) return;
     WT_HAS(r, "laptop.example.org");
+    WT_HAS(r, "\"type\":\"connections\"");
     WT_LACKS(r, "q120.example.org");
     WT_LACKS(r, "q125.example.org");
+    WT_LACKS(r, "qqqq");
+    WT_LACKS(r, "\"type\":\"probe_client\",\"ts\":1792627198");
     free(r);
-    /* The rule itself, against a line of each shape. */
-    static const struct { const char *text, *key; int want; } M[] = {
-        { "laptop.example.org  192.0.2.12", "192.0.2.12", 1 },
-        { "q  192.0.2.120", "192.0.2.12", 0 },
-        { "q  10.192.0.2.12", "192.0.2.12", 0 },
-        { "flow 192.0.2.12:443", "192.0.2.12", 1 },
-        { "x 192.0.2.120 then 192.0.2.12", "192.0.2.12", 1 },
-        { "fe80::1:2", "fe80::1", 0 },
-        { "fe80::1 up", "fe80::1", 1 },
-        { "02:00:00:00:00:123", "02:00:00:00:00:12", 0 },
-        { "HomeNet  02:00:00:00:00:12", "02:00:00:00:00:12", 1 },
-    };
-    for (size_t i = 0; i < sizeof(M) / sizeof(M[0]); i++) {
-        int got = web_bundle_names_addr(M[i].text, M[i].key);
-        if (got != M[i].want) fprintf(stderr, "    ?%s / %s: %d\n", M[i].text, M[i].key, got);
-        WT_EQ(got, M[i].want);
+    /* Under Monitor a device row matches on its MAC alone. */
+    snprintf(line, sizeof(line),
+             "{\"type\":\"device\",\"ts\":%lld,\"mac\":\"02:00:00:00:00:12\","
+             "\"ip\":\"192.0.2.12\",\"hostname\":\"mon-hn\",\"sources\":17,"
+             "\"last_ssid\":\"HomeNet\"}\n", T - 5);
+    feed(line);
+    const web_live_rec_t *dev = ring_rec(buf, "mon-hn");
+    WT_ASSERT(dev != NULL);
+    if (dev) {
+        WT_ASSERT(web_live_rec_names(dev, "02:00:00:00:00:12", 1));
+        WT_ASSERT(web_live_rec_names(dev, "192.0.2.12", 0));
+        WT_ASSERT(!web_live_rec_names(dev, "192.0.2.12", 1));
     }
 }
 

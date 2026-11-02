@@ -2,12 +2,15 @@
 // 2026-10-27): fetches /api/bundle for the view's kind and id, puts the
 // document on the clipboard, and offers it as a download. Its own
 // module so the views' code (app.js) carries one call per view:
-//   SlothBundle.mount(container, kind, id, scoped)
+//   SlothBundle.mount(container, kind, id, scoped, before)
 // container is the element the control lives in (re-mounting with a new
 // id updates the control in place), kind the bundle's kind word (device,
 // alert, lookup; ble and platform once their slices land), id the view's
 // folded id, scoped app.js's path-with-scope function (optional: app.js
-// keeps the scope private). The copy button's id is "bundle-btn-" and
+// keeps the scope private), before a child of container to mount the
+// control ahead of (optional: the drawer's close button, so close stays
+// at the right and comes after copy in the tab order; else appended).
+// The copy button's id is "bundle-btn-" and
 // the view's slot (drawer for a device, alert, lookup), the names
 // agreed with the slices that share these views.
 // Every node is built with createElement and textContent: the bundle is
@@ -121,6 +124,12 @@ window.SlothBundle = (function () {
   // and a mount or a scope change drops the kept text anyway.
   var FRESH_MS = 60000;
 
+  // After a failed fetch the pointer does not fetch the same request
+  // again for this long: a 404 for a closed alert answers in
+  // milliseconds, and pointermove would otherwise build one bundle per
+  // round trip. A click always retries.
+  var BACKOFF_MS = 10000;
+
   // The control's request now: kind, id and the scope in effect, so a
   // scope switch on the same id is a different bundle.
   function pathOf(st) {
@@ -134,6 +143,13 @@ window.SlothBundle = (function () {
   function ready(st) {
     return st.text !== null && st.path === pathOf(st) && Date.now() - st.at < FRESH_MS
       ? st.text : null;
+  }
+
+  // The error the last fetch of the control's request now failed with,
+  // while that failure is recent, else null.
+  function keptErr(st) {
+    return st.err !== null && st.errPath === pathOf(st) && Date.now() - st.errAt < BACKOFF_MS
+      ? st.err : null;
   }
 
   // The bundle for the control's request now: the kept one while ready,
@@ -155,9 +171,12 @@ window.SlothBundle = (function () {
       st.path = path;
       st.at = Date.now();
       st.ts = j.generated_at && typeof j.generated_at.unix === "number" ? j.generated_at.unix : 0;
+      if (st.errPath === path) st.err = null;
       return st;
     }, function (e) {
       if (st.pendingPath === path) st.pending = null;
+      var m = e && e.message ? e.message : String(e);
+      if (m !== "stale") { st.err = m; st.errPath = path; st.errAt = Date.now(); }
       throw e;
     });
     return st.pending;
@@ -172,7 +191,7 @@ window.SlothBundle = (function () {
 
   var SLOT = { device: "drawer", alert: "alert", lookup: "lookup" };
 
-  function mount(host, kind, id, scoped) {
+  function mount(host, kind, id, scoped, before) {
     if (!host || typeof kind !== "string" || typeof id !== "string" || id === "") return;
     var box = null;
     for (var i = 0; i < host.children.length; i++)
@@ -187,7 +206,8 @@ window.SlothBundle = (function () {
       return;
     }
     st = { kind: kind, id: id, scoped: scoped, text: null, path: "", at: 0, ts: 0,
-           pending: null, pendingPath: "", note: null, busy: false };
+           pending: null, pendingPath: "", note: null, busy: false,
+           err: null, errPath: "", errAt: 0 };
     box = el("span", "bundle");
     var copy = el("button", "", "copy JSON");
     copy.type = "button";
@@ -200,7 +220,8 @@ window.SlothBundle = (function () {
     box.appendChild(dl);
     box.appendChild(st.note);
     box.bundleState = st;
-    host.appendChild(box);
+    if (before && before.parentNode === host) host.insertBefore(box, before);
+    else host.appendChild(box);
 
     function fail(e) {
       st.busy = false;
@@ -217,9 +238,15 @@ window.SlothBundle = (function () {
       }
     }
     // Fetched ahead, so the click finds it ready; an error waits for
-    // the click to say it.
+    // the click to say it, and holds the pointer off for BACKOFF_MS.
     function prefetch() {
-      if (!st.busy && ready(st) === null) load(st).catch(function () {});
+      if (!st.busy && ready(st) === null && keptErr(st) === null) load(st).catch(function () {});
+    }
+    // A click's first word: the kept error when the last try failed (the
+    // click retries all the same), else "fetching".
+    function trying() {
+      var e = keptErr(st);
+      st.note.textContent = e === null ? "fetching" : errText(e) + "; retrying";
     }
     // pointermove re-arms a prefetch that expired under a resting
     // pointer; pointerdown starts one a touch tap's pointerenter raced.
@@ -236,7 +263,7 @@ window.SlothBundle = (function () {
       }
       if (st.busy) return;
       st.busy = true;
-      st.note.textContent = "fetching";
+      trying();
       var mine = pathOf(st);
       if (canClipItem()) {
         // The text written, held here: a mount before write() settles
@@ -267,7 +294,7 @@ window.SlothBundle = (function () {
     dl.addEventListener("click", function () {
       if (st.busy) return;
       st.busy = true;
-      st.note.textContent = "fetching";
+      trying();
       var mine = pathOf(st);
       load(st).then(function () {
         st.busy = false;

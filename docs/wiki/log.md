@@ -5693,6 +5693,14 @@ report events.
   own words; the markers are reserved under the cap; the page fetches
   ahead so the clipboard write stays inside the click, keys what it
   keeps on the scoped request and expires it.
+- 2026-11-02 — [[slothweb]]: copy JSON second review. Ticker records
+  keep their address members (`web_live_rec_t.addr`) and the bundle
+  matches only those, not the cut line (a 68-byte query name had left
+  `192.0.2.123` as `192.0.2.12`; an SSID of an address matched); an
+  alert id is decoded once and echoed canonical (`d1%2530` is
+  `bad_id`, not d10); a failed prefetch holds off 10 s; the drawer's
+  control sits before close; `server.slothweb.version` is
+  `build_version` and the hard-coded milestone is gone.
 - 2026-11-01 — [[wiki-maintenance]]: `wiki_sync.sh` flattens a
   `docs/wiki/<dir>/` subdirectory onto the flat GitHub wiki
   (`<dir>-<page>`, `<dir>/README.md` as `<dir>`), rewriting the links

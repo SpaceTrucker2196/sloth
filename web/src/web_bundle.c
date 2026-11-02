@@ -12,8 +12,10 @@
 #include "web_series.h"
 #include "web_slothdb.h"
 
-#ifndef SLOTHWEB_VERSION
-#define SLOTHWEB_VERSION "unknown"
+/* The sloth source tree slothweb was built from (the Makefile reads
+ * SLOTH_VERSION out of include/sloth.h); slothweb has no version. */
+#ifndef SLOTHWEB_BUILD_VERSION
+#define SLOTHWEB_BUILD_VERSION "unknown"
 #endif
 
 size_t web_bundle_max = WEB_BUNDLE_MAX;
@@ -154,25 +156,6 @@ static void unavailable(web_jw_t *w, const char *reason) {
 
 /* ── the optional sections ─────────────────────────────────────────── */
 
-/* A bare substring would give 10.0.0.1 every record of 10.0.0.10-19
- * and 10.0.0.100-199, and an IPv6 prefix a longer address. */
-static int is_hex(char ch) {
-    return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
-}
-int web_bundle_names_addr(const char *text, const char *key) {
-    size_t n = strlen(key);
-    int colon = strchr(key, ':') != NULL;
-    for (const char *p = text; (p = strstr(p, key)) != NULL; p++) {
-        char b = p > text ? p[-1] : '\0', a = p[n];
-        int cont_b = colon ? (is_hex(b) || b == ':' || b == '.')
-                           : ((b >= '0' && b <= '9') || b == '.');
-        int cont_a = colon ? (is_hex(a) || a == ':' || a == '.')
-                           : ((a >= '0' && a <= '9') || a == '.');
-        if (!cont_b && !cont_a) return 1;
-    }
-    return 0;
-}
-
 /* The record's line as the page's ticker shows it under the scope in
  * effect (web_live_json_scoped()), or NULL when the scope holds it
  * not: under Monitor a device row's own line, no address, no name. */
@@ -184,14 +167,19 @@ static const char *rec_line(const web_bundle_ctx_t *c, const web_live_rec_t *r) 
     return r->text;
 }
 
-/* The line of the record when the scope holds it and it names one of
- * keys, else NULL. */
+/* The line of the record when the scope holds it and one of its
+ * address members is one of keys, else NULL. Never the line itself: it
+ * is cut at WEB_LIVE_TEXT_MAX, so 192.0.2.123 at its end reads as
+ * 192.0.2.12, and it carries free text an SSID can make look like an
+ * address. Under Monitor a device row is matched on what its own line
+ * shows, its MAC. */
 static const char *rec_match(const web_bundle_ctx_t *c, const web_live_rec_t *r,
                              const char *const keys[3]) {
     const char *t = rec_line(c, r);
     if (!t) return NULL;
+    int mon = t == r->text_m;
     for (int k = 0; k < 3; k++)
-        if (keys[k] && web_bundle_names_addr(t, keys[k])) return t;
+        if (keys[k] && web_live_rec_names(r, keys[k], mon)) return t;
     return NULL;
 }
 
@@ -222,8 +210,10 @@ static size_t fill_records(const web_bundle_ctx_t *c, web_jw_t *w) {
     web_jw_raw(w, "{\"available\":true,\"source\":\"ticker ring: the newest ");
     web_jw_int(w, WEB_BUNDLE_RECORDS);
     web_jw_raw(w, " records of every type the stream carried, those the scope in "
-                  "effect holds, matched on the device's MAC and whole addresses in "
-                  "their one-line summary as the page's ticker shows it\"");
+                  "effect holds, matched on the device's MAC and addresses in each "
+                  "record's address members (mac, bssid, sta_mac, addr, ip, src, src_ip, "
+                  "dst, dst_ip, match_ip), never in its text; text is the one-line "
+                  "summary as the page's ticker shows it\"");
     web_jw_raw(w, ",\"ring_records\":");  web_jw_int(w, c->nrecs);
     web_jw_raw(w, ",\"ring_full\":");
     web_jw_raw(w, c->latest > (unsigned long long)WEB_BUNDLE_RECORDS ? "true" : "false");
@@ -387,6 +377,7 @@ static const struct { const char *key, *text; } GLOSSARY[] = {
     { "bundle_schema", "semver of this bundle's shape; fields are only added within a major" },
     { "generated_at", "when the server built this bundle: iso (UTC) and unix (seconds)" },
     { "server.timezone", "the slothweb host's local zone; every *_seen field is unix seconds (UTC); week.cells and week.now_cell are in this local zone" },
+    { "server.slothweb.build_version", "the sloth source tree slothweb was built from (its SLOTH_VERSION); slothweb has no version of its own, and the sensor's running sloth is sloth_version" },
     { "server.slothweb.page_etag", "identifies the exact page build this was copied from" },
     { "sensor.state", "ok | degraded (a capture or monitor handle open with its thread not running, or the launch scope not enforced) | not_observing (no handle open) | stale (no sensor_health for 330 s) | unknown (none yet)" },
     { "sensor.capture.linktype", "libpcap DLT of the IP capture; 105/119/127/163 mean 802.11, i.e. the IP capture is itself a monitor radio" },
@@ -487,7 +478,7 @@ static void write_envelope(const web_bundle_ctx_t *c, web_jw_t *w) {
     web_jw_raw(w, ",\"utc_offset_s\":"); web_jw_int(w, web_utc_offset(h->wall_s));
     /* No host name: no page shows it, and a bundle is made to be
      * pasted elsewhere (a site or owner name often rides in it). */
-    web_jw_raw(w, "},\"slothweb\":{\"version\":\"" SLOTHWEB_VERSION "\",\"milestone\":\"M6\","
+    web_jw_raw(w, "},\"slothweb\":{\"build_version\":\"" SLOTHWEB_BUILD_VERSION "\","
                   "\"page_etag\":");
     /* The ETag's hex, without the quotes the header form carries. */
     size_t el = strlen(web_page_etag);
@@ -797,12 +788,22 @@ int web_bundle_route(const web_health_t *h, const char *query,
         int ik = 0;
         long long rid = 0;
         char sid[WEB_LIVE_HID_MAX + 1];
+        /* ps[1].val is decoded already; put back into a query it would
+         * be decoded again, and d1%2530 would read as d10. Both id forms
+         * are [ds][0-9A-Za-z]+, so anything else is refused here, and
+         * the sub-query and the envelope carry the parsed id. */
+        int ok = ps[1].val[0] != '\0';
+        for (const char *p = ps[1].val; *p && ok; p++)
+            ok = (*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'z') ||
+                 (*p >= 'A' && *p <= 'Z');
         snprintf(sub, sizeof(sub), "id=%s", ps[1].val);
-        if (web_alert_parse_id(sub, &ik, sid, &rid, why, sizeof(why)) != 0) {
+        if (!ok || web_alert_parse_id(sub, &ik, sid, &rid, why, sizeof(why)) != 0) {
             free(c);
             return error_body(h, "bad_id", 400, body, len, status);
         }
-        snprintf(c->id, sizeof(c->id), "%s", ps[1].val);
+        if (ik == 'd') snprintf(c->id, sizeof(c->id), "d%lld", rid);
+        else           snprintf(c->id, sizeof(c->id), "s%s", sid);
+        snprintf(sub, sizeof(sub), "id=%s", c->id);
         st = splice_read(c, "alert", R_ALERT, sub, &c->primary, &c->primary_len);
     } else {
         int is_mac = web_dev_canon_mac(ps[1].val, key) == 0;

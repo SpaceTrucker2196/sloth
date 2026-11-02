@@ -111,12 +111,6 @@ extern const size_t           web_bundle_sections_n;
 extern const char *const web_bundle_reasons[];
 extern const size_t      web_bundle_reasons_n;
 
-/* Does text name key as a whole address: an occurrence with nothing
- * before or after it that continues the address? An IPv4 key may be
- * followed by ":port"; a key with a ':' (a MAC, an IPv6 address) by
- * nothing in [0-9A-Fa-f:.]. The records sections' match. */
-int web_bundle_names_addr(const char *text, const char *key);
-
 /* The reason word for a nested sub-read (an alert's or a Lookup card's
  * device drawer, an alert's Lookup card) that did not answer 200:
  * status is the route's, or a negative when it could not render

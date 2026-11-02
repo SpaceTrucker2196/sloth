@@ -49,6 +49,7 @@
 #define WEB_LIVE_HID_MAX    24
 /* An alert's match_ip: INET6_ADDRSTRLEN - 1, address characters only. */
 #define WEB_LIVE_IP_MAX     45
+#define WEB_LIVE_ADDRS      6    /* address members kept per ticker record */
 /* Open incidents tracked; sloth's engine holds MAX_ALERTS (128). */
 #define WEB_LIVE_INCIDENTS  256
 #define WEB_LIVE_SH_STR     32
@@ -76,7 +77,19 @@ typedef struct {
     char      text_m[WEB_LIVE_TEXT_MAX + 1];
     int       sc;     /* its capture-scope tag, resolved when it came:
                          WEB_SC_M, WEB_SC_L, both, or 0 (web_scope.h) */
+    /* The record's address-bearing members (mac, bssid, sta_mac, addr,
+     * ip, src, src_ip, dst, dst_ip, match_ip), each a bare address in
+     * lower case with any ":port" or "[...]" dropped, distinct, "" past
+     * the last. What a bundle matches a device on: text is cut at
+     * WEB_LIVE_TEXT_MAX, so a longer address cut down to a shorter one
+     * would match it there. addr_m bit i: addr[i] is in text_m. */
+    char      addr[WEB_LIVE_ADDRS][WEB_LIVE_IP_MAX + 1];
+    unsigned  addr_m;
 } web_live_rec_t;
+
+/* Does record r carry key (a canonical MAC or address) in one of its
+ * address members; with monitor_line, only in those its text_m shows. */
+int web_live_rec_names(const web_live_rec_t *r, const char *key, int monitor_line);
 
 typedef struct {
     long long ts;

@@ -411,6 +411,69 @@ static void device_text_m(const web_jrec_t *r, char *out, size_t cap) {
     web_utf8_copy(out, cap, tmp);
 }
 
+/* The members whose value is a MAC or an address, as sloth writes them
+ * (src/jsonl.c): a connection's src and dst are "a.b.c.d:port" or
+ * "[v6]:port". A free-text member (an SSID, a query name, a title) is
+ * never one: an SSID of "192.0.2.12" names no host. */
+static const char *const ADDR_KEYS[] = {
+    "mac", "bssid", "sta_mac", "addr", "ip", "src", "src_ip", "dst", "dst_ip",
+    "match_ip", NULL
+};
+
+/* v as a bare address in lower case into out, or 0 when it is not one:
+ * after "[...]" or an IPv4 ":port" is dropped, 1 to WEB_LIVE_IP_MAX
+ * bytes of [0-9A-Fa-f:.]. Nothing is cut to fit. */
+static int bare_addr(const char *v, char out[WEB_LIVE_IP_MAX + 1]) {
+    if (!v) return 0;
+    const char *s = v;
+    size_t n = strlen(v);
+    if (v[0] == '[') {
+        const char *e = strchr(v, ']');
+        if (!e) return 0;
+        s = v + 1;
+        n = (size_t)(e - s);
+    } else {
+        const char *c = strchr(v, ':');
+        if (c && !strchr(c + 1, ':') && memchr(v, '.', (size_t)(c - v))) n = (size_t)(c - v);
+    }
+    if (n == 0 || n > WEB_LIVE_IP_MAX) return 0;
+    for (size_t i = 0; i < n; i++) {
+        char ch = s[i];
+        if (ch >= 'A' && ch <= 'F') ch = (char)(ch - 'A' + 'a');
+        if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || ch == ':' || ch == '.'))
+            return 0;
+        out[i] = ch;
+    }
+    out[n] = '\0';
+    return 1;
+}
+
+static void rec_addrs(const web_jrec_t *r, int is_device, web_live_rec_t *e) {
+    int n = 0;
+    e->addr_m = 0;
+    for (int k = 0; ADDR_KEYS[k] && n < WEB_LIVE_ADDRS; k++) {
+        char a[WEB_LIVE_IP_MAX + 1];
+        if (!bare_addr(web_jl_str(r, ADDR_KEYS[k]), a)) continue;
+        int dup = -1;
+        for (int i = 0; i < n && dup < 0; i++)
+            if (!strcmp(e->addr[i], a)) dup = i;
+        if (dup < 0) memcpy(e->addr[dup = n++], a, sizeof(a));
+        /* device_text_m() shows the row's mac and nothing else. */
+        if (is_device && !strcmp(ADDR_KEYS[k], "mac")) e->addr_m |= 1u << dup;
+    }
+    for (int i = n; i < WEB_LIVE_ADDRS; i++) e->addr[i][0] = '\0';
+}
+
+int web_live_rec_names(const web_live_rec_t *r, const char *key, int monitor_line) {
+    char k[WEB_LIVE_IP_MAX + 1];
+    if (!r || !bare_addr(key, k)) return 0;
+    for (int i = 0; i < WEB_LIVE_ADDRS && r->addr[i][0]; i++) {
+        if (monitor_line && !(r->addr_m & (1u << i))) continue;
+        if (!strcmp(r->addr[i], k)) return 1;
+    }
+    return 0;
+}
+
 static int sev_ok(long long s) { return s >= 0 && s <= 2; }
 
 static int inc_find(const web_live_t *l, const char *id) {
@@ -718,6 +781,7 @@ void web_live_apply(web_live_t *l, const web_jrec_t *r, long long now_ms) {
     summarise(r, is_alert || !strcmp(t, "alert"), e->text, WEB_LIVE_TEXT_MAX);
     e->text_m[0] = '\0';
     if (!strcmp(t, "device")) device_text_m(r, e->text_m, WEB_LIVE_TEXT_MAX);
+    rec_addrs(r, !strcmp(t, "device"), e);
     pthread_mutex_unlock(&l->mu);
 }
 

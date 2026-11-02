@@ -2694,7 +2694,9 @@ Around the splices:
 
 - **envelope**: `bundle_schema` (semver; fields only added within a
   major), `kind`, `id`, `generated_at` (`iso`, `unix`), `server`
-  (time zone and UTC offset, slothweb's version, the page's ETag,
+  (time zone and UTC offset, `slothweb.build_version`: the sloth
+  source tree slothweb was built from, not the sensor's running sloth,
+  which the stream does not say; the page's ETag,
   uptime; no host name: no page shows it, and a bundle is made to be
   pasted into someone else's service), `sensor` (the socket, sensor
   health and its age, the capture and monitor handles, sloth's launch
@@ -2709,8 +2711,13 @@ Around the splices:
   records that name the device or address: a stopgap, said so; only
   the records the scope in effect holds, each line as the page's ticker
   shows it under that scope, a device row's under Monitor without its
-  address or name; matched on whole addresses, so `10.0.0.1` is not
-  named by a record of `10.0.0.12`),
+  address or name; matched on the record's address members (`mac`,
+  `bssid`, `sta_mac`, `addr`, `ip`, `src`, `src_ip`, `dst`, `dst_ip`,
+  `match_ip`, an endpoint's `:port` dropped), kept beside the line in
+  the ring, never on the line itself: it is cut at 80 bytes, so a long
+  query name could leave `192.0.2.123` as `192.0.2.12` at its end, and
+  an SSID can read as an address; an alert that names the device only
+  in its detail text is therefore not listed),
   `observed_vs_thresholds`, `records_by_type_global` (the stream's
   per-type mix; a summary that did not render is `too_large`, never an
   empty `{}` that would read as "no records"), and for the
@@ -2766,7 +2773,12 @@ once; one that does not hands `ClipboardItem` the fetch as a promise
 where it exists (a secure context), and otherwise fetches and says
 "ready: click copy again". What is kept is keyed on the scoped request
 (a scope switch on the same id fetches again), expires after 60 s, and
-is dropped whenever the view mounts the control again. The minute is
+is dropped whenever the view mounts the control again. A fetch that
+failed (a closed alert's 404, a 503 from sloth.db, a 413) holds the
+pointer off that request for 10 s, so a moving pointer does not build
+one bundle per round trip; a click still retries, saying the kept
+error meanwhile. In the drawer the control is mounted before the close
+button, which stays at the right and follows it in the tab order. The minute is
 for plain http, where a first click copies only text already kept: a
 pointer resting past it re-arms the fetch on its next move, and a touch
 tap, whose `pointerenter` and click arrive together, starts it on
