@@ -27,6 +27,7 @@
 #include "web_frrs_int.h"
 #include "web_ingest.h"
 #include "web_live.h"
+#include "oui_csv.h"
 #include "web_oui.h"
 #include "web_routes.h"
 #include "web_server.h"
@@ -849,9 +850,28 @@ static void test_record_states_its_limits(void) {
  * (Singapore) Pte. Ltd, an affiliate), and with the used[] marking
  * dropped (the sources list empty). */
 static void test_scs_certification_from_vendor_kb(void) {
+    /* The four registry rows it needs, as the IEEE writes them: a table
+     * of its own, so a build whose WEB_OUI_DIR has no CSVs (sloth's
+     * fallback names, not the IEEE's) tests the same thing. */
+    char path[TEST_TMP_MAX + 32];
+    snprintf(path, sizeof(path), "%s/frrs-oui-XXXXXX", test_tmpdir());
+    int fd = mkstemp(path);
+    WT_ASSERT(fd >= 0);
+    if (fd < 0) return;
+    FILE *cf = fdopen(fd, "w");
+    fputs("Registry,Assignment,Organization Name,Organization Address\n"
+          "MA-L,240AC4,Espressif Inc.,Room 204 Building 2 690 Bibo Rd Shanghai CN 201203\n"
+          "MA-L,6C3DD8,Espressif Systems (Singapore) Pte. Ltd,1 FUSIONOPOLIS VIEW Singapore SG 138577\n"
+          "MA-L,CC6618,Adtran Inc,901 Explorer Blvd. Huntsville AL US 35806-2807\n"
+          "MA-L,000000,XEROX CORPORATION,M/S 105-50C WEBSTER NY US 14580\n", cf);
+    fclose(cf);
+    oui_build_t b;
+    oui_build_init(&b);
+    WT_EQ(oui_build_csv(&b, path), 0);
+    WT_EQ(oui_build_finish(&b, "ieee"), 0);
+    unlink(path);
     env_open(NULL, 1);
-    E.m4.oui = web_oui_builtin();
-    WT_ASSERT(web_oui_full(E.m4.oui));
+    E.m4.oui = &b.tab;
     WT_EQ(get("/api/frrs/report", "kind=sta&addr=24:0a:c4:00:00:01"), 200);
     WT_HAS(g_out, "\"certification_fcc\":{\"v\":{\"grantee\":[\"2AC7Z (FCC-certified modules");
     WT_HAS(g_out, "ESP8684-WROOM-02C) [3]\"],\"sources\":[\"[3] ");
@@ -870,6 +890,7 @@ static void test_scs_certification_from_vendor_kb(void) {
     WT_HAS(g_out, "\"certification_fcc\":{\"v\":null,\"why\":\"no registrant: the address is in no "
                   "OUI block\"");
     env_close();
+    oui_build_free(&b);
 }
 
 /* Is name a column of table in sloth.db's DDL? */
