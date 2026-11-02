@@ -237,9 +237,12 @@ int main(int argc, char **argv) {
                         "to %s only; the allow list is the only gate\n",
                 have_store ? "on" : "off (no store)",
                 have_store ? cfg.store_path : "slothweb's store");
-    fprintf(stderr, "slothweb: follow recommended: %s%s\n",
-            cfg.assess_dir[0] ? "assessments from " : "no --web-assessments, ",
-            cfg.assess_dir[0] ? cfg.assess_dir : "no recommendation yet");
+    fprintf(stderr, "slothweb: follow recommended: %s%s%s\n",
+            g_frrs.assess_dir[0] ? "assessments from " : cfg.assess_dir[0] ? cfg.assess_dir
+                                                       : "no --web-assessments",
+            g_frrs.assess_dir[0] ? g_frrs.assess_dir : cfg.assess_dir[0] ? ": no such directory"
+                                                     : "",
+            g_frrs.assess_dir[0] ? "" : ", no recommendation yet");
     if (have_store) {
         fprintf(stderr, "slothweb: time series in %s (10 s for 24 h, 1 min "
                         "for %d d, 1 h for 400 d; ceiling %d MB)\n",

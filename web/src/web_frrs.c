@@ -165,9 +165,21 @@ int frrs_text(const web_jrec_t *r, const char *name, size_t max, char *out,
     if (!f || f->kind == WEB_J_NULL) return 1;
     if (f->kind != WEB_J_STR) { *why = "bad_text"; return 0; }
     if (f->slen > max) { *why = "too_long"; return 0; }
+    const unsigned char *u = (const unsigned char *)f->str;
     for (size_t i = 0; i < f->slen; i++) {
-        unsigned char c = (unsigned char)f->str[i];
+        unsigned char c = u[i];
         if (c < 0x20 || c == 0x7f) { *why = "bad_text"; return 0; }
+        /* The bidirectional embeddings and isolates, U+202A-U+202E
+         * (E2 80 AA-AE) and U+2066-U+2069 (E2 81 A6-A9): invisible, they
+         * reorder what follows them, so a note or a name could show a
+         * reader text other than the bytes stored. Refused as a control
+         * byte is. */
+        if (c == 0xe2 && i + 2 < f->slen &&
+            ((u[i + 1] == 0x80 && u[i + 2] >= 0xaa && u[i + 2] <= 0xae) ||
+             (u[i + 1] == 0x81 && u[i + 2] >= 0xa6 && u[i + 2] <= 0xa9))) {
+            *why = "bad_text";
+            return 0;
+        }
     }
     /* The decoder already refused ill-formed UTF-8, so a whole copy is
      * a valid one. */
@@ -824,17 +836,22 @@ int web_frrs_recommend(const web_frrs_t *f, int type, char *basis, size_t basisc
     free(buf);
     if (!closed) { memset(fm, 0, sizeof(*fm)); return WEB_TRI_UNTRIAGED; }
     fm->found = 1;
-    /* The assessments judge a rule, not an alert (Q3). Only one of
-     * their verdicts says something an operator can act on per alert:
-     * noise_verdict "noisy" / "very noisy" (the rule fires on ordinary
-     * traffic on the reference host) recommends noise. Never false:
-     * false_positive_risk "high" says the rule is often wrong, not that
-     * this ARP_SPOOF is, and a real one marked false would be dimmed
-     * everywhere. Never incident: severity_assessment ("agree", "too
-     * high") judges the severity level, not whether the alert is real.
-     * Both are shown beside the buttons as advice (front_matter). */
-    if (fm_starts(fm->noise, "noisy") || fm_starts(fm->noise, "very noisy")) {
-        snprintf(basis, basiscap, "noise_verdict: %s", fm->noise);
+    /* The assessments judge a rule, not an alert (Q3). noise_verdict
+     * describes the counting artefact on the reference host (how often
+     * the rule fired, mostly per-evaluation re-firing of one standing
+     * condition), not whether an alert is real: FRAG_PLAINTEXT is "very
+     * noisy" with false_positive_risk "low", a real finding re-counted.
+     * So noise is recommended only where both say it: the rule is often
+     * wrong (false_positive_risk "high") AND it fires on ordinary
+     * traffic (noise_verdict "noisy" / "very noisy"). Never false: that
+     * is a claim about this alert no assessment makes, and a real attack
+     * marked false is dimmed everywhere. Never incident:
+     * severity_assessment judges the severity level, not whether the
+     * alert is real. Anything else is "no automatic triage", the front
+     * matter shown beside the buttons as advice. */
+    if (fm_starts(fm->fpr, "high") &&
+        (fm_starts(fm->noise, "noisy") || fm_starts(fm->noise, "very noisy"))) {
+        snprintf(basis, basiscap, "false_positive_risk high; noise_verdict: %s", fm->noise);
         return WEB_TRI_NOISE;
     }
     return WEB_TRI_UNTRIAGED;
@@ -853,6 +870,11 @@ static void recommend_json(const web_frrs_t *f, int type, web_jw_t *w) {
     frrs_str_or_null(w, basis);
     web_jw_raw(w, ",\"source\":");
     web_jw_str(w, f && f->assess_dir[0] ? "dir" : "none");
+    /* Why there is no state: "none" (no directory or no file), or
+     * "no_automatic_triage" (an assessment that does not meet the bar). */
+    web_jw_raw(w, ",\"why_none\":");
+    if (st != WEB_TRI_UNTRIAGED) web_jw_raw(w, "null");
+    else web_jw_str(w, fm.found ? "no_automatic_triage" : "no_assessment");
     web_jw_raw(w, ",\"file\":");
     if (k && k->name) {
         char nm[96];
@@ -930,7 +952,9 @@ static int tri_lookup(web_frrs_t *f, const tri_subj_t *q, web_tri_t *out) {
     sqlite3_stmt *s = NULL;
     static const char SQL[] =
         "SELECT state, prev_state, via, ts, finding, note, who, basis, peer,"
-        " (SELECT COUNT(*) FROM triage u WHERE" TRI_MATCH("u.") ")"
+        " (SELECT COUNT(*) FROM triage u WHERE" TRI_MATCH("u.") "),"
+        " claim_by, claim_peer,"
+        " (SELECT TOTAL(folded) FROM triage u WHERE" TRI_MATCH("u.") ")"
         " FROM triage t WHERE" TRI_MATCH("t.") "ORDER BY t.id DESC LIMIT 1";
     if (sqlite3_prepare_v2(f->wr, SQL, -1, &s, NULL) != SQLITE_OK) {
         sqlite3_finalize(s);
@@ -950,6 +974,9 @@ static int tri_lookup(web_frrs_t *f, const tri_subj_t *q, web_tri_t *out) {
         col_text(s, 7, out->basis, sizeof(out->basis));
         col_text(s, 8, out->peer, sizeof(out->peer));
         out->history_n = sqlite3_column_int(s, 9);
+        col_text(s, 10, out->claim_by, sizeof(out->claim_by));
+        col_text(s, 11, out->claim_peer, sizeof(out->claim_peer));
+        out->folded = (long long)sqlite3_column_double(s, 12);
         found = 1;
     }
     sqlite3_finalize(s);
@@ -1098,6 +1125,8 @@ static void tri_json(web_jw_t *w, const web_tri_t *t, int full) {
     web_jw_str(w, web_frrs_via_word(t->via));
     web_jw_raw(w, ",\"history_n\":");
     web_jw_int(w, t->history_n);
+    web_jw_raw(w, ",\"folded\":");
+    web_jw_int(w, t->folded);
     if (full) {
         web_jw_raw(w, ",\"prev_state\":");
         web_jw_str(w, web_frrs_state_word(t->prev_state));
@@ -1105,6 +1134,10 @@ static void tri_json(web_jw_t *w, const web_tri_t *t, int full) {
         web_jw_raw(w, ",\"by\":");    web_jw_str(w, t->by);
         web_jw_raw(w, ",\"basis\":"); web_jw_str(w, t->basis);
         web_jw_raw(w, ",\"peer\":");  web_jw_str(w, t->peer);
+        if (t->via == WEB_TRI_VIA_IMPORT) {
+            web_jw_raw(w, ",\"claimed_by\":");   web_jw_str(w, t->claim_by);
+            web_jw_raw(w, ",\"claimed_peer\":"); web_jw_str(w, t->claim_peer);
+        }
         web_jw_raw(w, ",\"finding\":");
         if (t->finding > 0) {
             char d[32];
@@ -1213,8 +1246,8 @@ static int route_states(const web_m4_t *m, web_live_t *live, const char *query, 
 static void history_rows(web_frrs_t *f, const tri_subj_t *s, web_jw_t *w, size_t cap) {
     sqlite3_stmt *st = NULL;
     static const char SQL[] =
-        "SELECT state, prev_state, via, basis, note, who, peer, ts, subject FROM triage t"
-        " WHERE" TRI_MATCH("t.") "ORDER BY t.id DESC LIMIT 64";
+        "SELECT state, prev_state, via, basis, note, who, peer, ts, claim_by, claim_peer, folded"
+        " FROM triage t WHERE" TRI_MATCH("t.") "ORDER BY t.id DESC LIMIT 64";
     web_jw_raw(w, "[");
     if (f->wr && sqlite3_prepare_v2(f->wr, SQL, -1, &st, NULL) == SQLITE_OK) {
         bind_subj(st, s);
@@ -1235,6 +1268,17 @@ static void history_rows(web_frrs_t *f, const tri_subj_t *s, web_jw_t *w, size_t
             }
             web_jw_raw(w, ",\"ts\":");
             web_jw_int(w, sqlite3_column_int64(st, 7));
+            if (sqlite3_column_int(st, 2) == WEB_TRI_VIA_IMPORT) {
+                /* What the file said: claims, not this sensor's facts. */
+                col_text(st, 8, t, sizeof(t));
+                web_jw_raw(w, ",\"claimed_by\":");
+                web_jw_str(w, t);
+                col_text(st, 9, t, sizeof(t));
+                web_jw_raw(w, ",\"claimed_peer\":");
+                web_jw_str(w, t);
+            }
+            web_jw_raw(w, ",\"folded\":");
+            web_jw_int(w, sqlite3_column_int64(st, 10));
             web_jw_raw(w, "}");
         }
     }
@@ -1290,6 +1334,8 @@ static int route_history(const web_m4_t *m, web_live_t *live, const char *query,
     else web_jw_raw(&w, "{\"state\":\"untriaged\",\"history_n\":0}");
     web_jw_raw(&w, ",\"history_cap\":");
     web_jw_int(&w, WEB_FRRS_HIST_PER);
+    web_jw_raw(&w, ",\"folded\":");
+    web_jw_int(&w, got > 0 ? t.folded : 0);
     web_jw_raw(&w, ",\"recommend\":");
     recommend_json(f, s.type, &w);
     web_jw_raw(&w, ",\"rows\":");
@@ -1389,8 +1435,16 @@ static int route_summary(const web_m4_t *m, web_live_t *live, const char *query,
     }
     web_jw_raw(&w, ",\"out\":");
     web_jw_int(&w, open[WEB_TRI_FALSE] + open[WEB_TRI_NOISE]);
+    /* The table's fill, for the page's warning near the cap (the
+     * oldest superseded rows fold there; §3.1). */
+    long long rows = q_count(f, "SELECT COUNT(*) FROM triage");
+    long long tcap = f ? f->triage_cap : WEB_FRRS_TRIAGE_CAP;
     web_jw_raw(&w, "},\"rows\":");
-    jw_count(&w, q_count(f, "SELECT COUNT(*) FROM triage"));
+    jw_count(&w, rows);
+    web_jw_raw(&w, ",\"cap\":");
+    web_jw_int(&w, tcap);
+    web_jw_raw(&w, ",\"near_cap\":");
+    web_jw_raw(&w, rows >= 0 && rows * 100 >= tcap * WEB_FRRS_WARN_PCT ? "true" : "false");
     web_jw_raw(&w, "}\n");
     if (w.overflow) return -1;
     *len = w.len;
@@ -1398,22 +1452,300 @@ static int route_summary(const web_m4_t *m, web_live_t *live, const char *query,
     return 0;
 }
 
-/* POST /api/frrs/triage. */
+/* ── triage writes: room, folding and the rows ──────────────────────── */
+
 #ifdef WITH_SQLITE
+
+/* One write transaction's view of the triage table: the counts, read
+ * once and kept in step by every insert and fold, and the statements it
+ * reuses (an import runs up to WEB_FRRS_IMPORT_TRIAGE lines through one
+ * transaction, so nothing here is prepared or counted per line). */
+struct frrs_tri_ctx {
+    web_frrs_t   *f;
+    long long     now_s, rows, imported, folded;
+    sqlite3_stmt *ins, *del, *addf, *alert_m, *alert_d, *dup;
+};
+
+/* The predicate an import files under: the descriptor alone. */
+#define DESC_MATCH(t) \
+    " (" t "type = ?4 AND " t "addr = ?5 AND " t "port = ?6 AND " t "first_seen = ?7) "
+
+static long long tri_cap(const web_frrs_t *f) {
+    return f->triage_cap > 0 ? f->triage_cap : WEB_FRRS_TRIAGE_CAP;
+}
+static long long cap_part(const web_frrs_t *f, long long div) {
+    long long n = tri_cap(f) / div;
+    return n > 0 ? n : 1;
+}
+
+static void ctx_close(frrs_tri_ctx_t *x) {
+    sqlite3_finalize(x->ins);
+    sqlite3_finalize(x->del);
+    sqlite3_finalize(x->addf);
+    sqlite3_finalize(x->alert_m);
+    sqlite3_finalize(x->alert_d);
+    sqlite3_finalize(x->dup);
+    x->ins = x->del = x->addf = x->alert_m = x->alert_d = x->dup = NULL;
+}
+
+/* Inside a transaction already begun. 0, or -1 (closed again). */
+static int ctx_open(web_frrs_t *f, frrs_tri_ctx_t *x, long long now_s, int imports) {
+    memset(x, 0, sizeof(*x));
+    x->f = f;
+    x->now_s = now_s;
+    x->rows = q_count(f, "SELECT COUNT(*) FROM triage");
+    x->imported = imports ? q_count(f, "SELECT COUNT(*) FROM triage WHERE via = 2") : 0;
+    if (x->rows < 0 || x->imported < 0 ||
+        sqlite3_prepare_v2(f->wr,
+            "INSERT INTO triage (subject, finding, type, addr, port, first_seen, state,"
+            " prev_state, via, basis, note, who, peer, ts, claim_by, claim_peer) VALUES"
+            " (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            -1, &x->ins, NULL) != SQLITE_OK ||
+        sqlite3_prepare_v2(f->wr, "DELETE FROM triage WHERE id = ?1", -1, &x->del, NULL) != SQLITE_OK ||
+        sqlite3_prepare_v2(f->wr, "UPDATE triage SET folded = folded + ?2 WHERE id = ?1", -1,
+                           &x->addf, NULL) != SQLITE_OK ||
+        sqlite3_prepare_v2(f->wr, "SELECT COUNT(*), TOTAL(via = 2), MAX(ts), MIN(id) FROM triage t"
+                           " WHERE" TRI_MATCH("t."), -1, &x->alert_m, NULL) != SQLITE_OK ||
+        sqlite3_prepare_v2(f->wr, "SELECT COUNT(*), TOTAL(via = 2), MAX(ts), MIN(id) FROM triage t"
+                           " WHERE" DESC_MATCH("t."), -1, &x->alert_d, NULL) != SQLITE_OK) {
+        ctx_close(x);
+        return -1;
+    }
+    return 0;
+}
+
+static int step_done(sqlite3_stmt *s) {
+    int rc = sqlite3_step(s);
+    sqlite3_reset(s);
+    sqlite3_clear_bindings(s);
+    return rc == SQLITE_DONE ? 0 : -1;
+}
+
+/* One alert's rows (TRI_MATCH, or for an import its descriptor): how
+ * many, how many imported, the newest ts, the first row's id. */
+static int alert_counts(frrs_tri_ctx_t *x, const tri_subj_t *s, int by_desc, long long *n,
+                        long long *ni, long long *maxts, long long *first) {
+    sqlite3_stmt *st = by_desc ? x->alert_d : x->alert_m;
+    bind_subj(st, s);
+    int rc = sqlite3_step(st);
+    if (rc == SQLITE_ROW) {
+        *n = sqlite3_column_int64(st, 0);
+        *ni = (long long)sqlite3_column_double(st, 1);
+        *maxts = sqlite3_column_int64(st, 2);
+        *first = sqlite3_column_int64(st, 3);
+    }
+    sqlite3_reset(st);
+    sqlite3_clear_bindings(st);
+    return rc == SQLITE_ROW ? 0 : -1;
+}
+
+/* Row id deleted, its own folded count and itself added to row keep's
+ * (0: no row left to carry it). */
+static int fold_row(frrs_tri_ctx_t *x, long long id, long long carry, int via, long long keep) {
+    sqlite3_bind_int64(x->del, 1, id);
+    if (step_done(x->del)) return -1;
+    if (keep > 0) {
+        sqlite3_bind_int64(x->addf, 1, keep);
+        sqlite3_bind_int64(x->addf, 2, 1 + carry);
+        if (step_done(x->addf)) return -1;
+    }
+    x->rows--;
+    if (via == WEB_TRI_VIA_IMPORT) x->imported--;
+    x->folded++;
+    return 0;
+}
+
+/* n of one alert's rows folded, oldest first, never its first row
+ * (which carries the count); only_imp: imported rows only. The number
+ * folded, or -1. */
+#define FOLD_MAX 256
+static long long fold_alert(frrs_tri_ctx_t *x, const tri_subj_t *s, int by_desc, int only_imp,
+                            long long first, long long n) {
+    static const char SQL_M[] = "SELECT id, folded, via FROM triage t WHERE" TRI_MATCH("t.")
+                                "AND t.id <> ?8 AND (?9 = 0 OR t.via = 2) ORDER BY t.id LIMIT ?10";
+    static const char SQL_D[] = "SELECT id, folded, via FROM triage t WHERE" DESC_MATCH("t.")
+                                "AND t.id <> ?8 AND (?9 = 0 OR t.via = 2) ORDER BY t.id LIMIT ?10";
+    if (n <= 0) return 0;
+    if (n > FOLD_MAX) n = FOLD_MAX;
+    long long ids[FOLD_MAX], carry[FOLD_MAX];
+    int via[FOLD_MAX], k = 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(x->f->wr, by_desc ? SQL_D : SQL_M, -1, &st, NULL) != SQLITE_OK) {
+        sqlite3_finalize(st);
+        return -1;
+    }
+    bind_subj(st, s);
+    sqlite3_bind_int64(st, 8, first);
+    sqlite3_bind_int(st, 9, only_imp);
+    sqlite3_bind_int64(st, 10, n);
+    int rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW && k < FOLD_MAX) {
+        ids[k] = sqlite3_column_int64(st, 0);
+        carry[k] = sqlite3_column_int64(st, 1);
+        via[k] = sqlite3_column_int(st, 2);
+        k++;
+    }
+    sqlite3_finalize(st);
+    if (rc != SQLITE_DONE && rc != SQLITE_ROW) return -1;
+    /* Collected first, deleted after: never a delete under an open read. */
+    for (int i = 0; i < k; i++)
+        if (fold_row(x, ids[i], carry[i], via[i], first) != 0) return -1;
+    return k;
+}
+
+/* The table at its cap (§3.1): the cap / WEB_FRRS_FOLD_DIV superseded rows, or
+ * as many as bring it under the cap, folded at once, so the scan runs
+ * once per batch, not per write.
+ * Superseded: a newer row of the same alert exists (by subject, finding
+ * or descriptor), so the alert's current state is never what folds.
+ * Order: imported rows first, then the rows of alerts aged out (their
+ * newest row older than WEB_FRRS_AGED_S), then the oldest. Each folded
+ * row's count goes to its alert's newest row. only_imp: an import makes
+ * room among imported rows alone, never by folding an operator's. */
+typedef struct {
+    long long id, carry, first;
+    int       via, type, port;
+    char      addr[WEB_FRRS_ADDR_MAX + 1];
+    char      subject[40];
+} fold_cand_t;
+
+static long long retain(frrs_tri_ctx_t *x, int only_imp, long long need) {
+    static const char SQL[] =
+        "SELECT t.id, t.folded, t.via, t.type, t.addr, t.port, t.first_seen, t.subject"
+        " FROM triage t WHERE (?3 = 0 OR t.via = 2) AND ("
+        " EXISTS (SELECT 1 FROM triage n WHERE n.subject = t.subject AND n.id > t.id) OR"
+        " (t.finding IS NOT NULL AND"
+        "  EXISTS (SELECT 1 FROM triage n WHERE n.finding = t.finding AND n.id > t.id)) OR"
+        " EXISTS (SELECT 1 FROM triage n WHERE n.type = t.type AND n.addr = t.addr AND"
+        "  n.port = t.port AND n.first_seen = t.first_seen AND n.id > t.id))"
+        " ORDER BY t.via = 2 DESC,"
+        " (SELECT MAX(n.ts) FROM triage n WHERE n.type = t.type AND n.addr = t.addr AND"
+        "  n.port = t.port AND n.first_seen = t.first_seen) < ?1 DESC, t.id LIMIT ?2";
+    long long batch = cap_part(x->f, WEB_FRRS_FOLD_DIV);
+    if (batch < need) batch = need;
+    fold_cand_t *c = calloc((size_t)batch, sizeof(*c));
+    if (!c) return -1;
+    sqlite3_stmt *st = NULL, *keep = NULL;
+    long long k = 0, done = 0;
+    int rc = SQLITE_ERROR;
+    if (sqlite3_prepare_v2(x->f->wr, SQL, -1, &st, NULL) == SQLITE_OK) {
+        sqlite3_bind_int64(st, 1, x->now_s - WEB_FRRS_AGED_S);
+        sqlite3_bind_int64(st, 2, batch);
+        sqlite3_bind_int(st, 3, only_imp);
+        while ((rc = sqlite3_step(st)) == SQLITE_ROW && k < batch) {
+            fold_cand_t *o = &c[k++];
+            o->id = sqlite3_column_int64(st, 0);
+            o->carry = sqlite3_column_int64(st, 1);
+            o->via = sqlite3_column_int(st, 2);
+            o->type = sqlite3_column_int(st, 3);
+            col_text(st, 4, o->addr, sizeof(o->addr));
+            o->port = sqlite3_column_int(st, 5);
+            o->first = sqlite3_column_int64(st, 6);
+            col_text(st, 7, o->subject, sizeof(o->subject));
+        }
+    }
+    sqlite3_finalize(st);
+    if (rc != SQLITE_DONE && rc != SQLITE_ROW) { free(c); return -1; }
+    if (sqlite3_prepare_v2(x->f->wr,
+            "SELECT COALESCE((SELECT MAX(id) FROM triage WHERE type = ?1 AND addr = ?2 AND"
+            " port = ?3 AND first_seen = ?4 AND id <> ?6),"
+            " (SELECT MAX(id) FROM triage WHERE subject = ?5 AND id <> ?6), 0)",
+            -1, &keep, NULL) != SQLITE_OK) {
+        sqlite3_finalize(keep);
+        free(c);
+        return -1;
+    }
+    for (long long i = 0; i < k; i++) {
+        sqlite3_bind_int(keep, 1, c[i].type);
+        sqlite3_bind_text(keep, 2, c[i].addr, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(keep, 3, c[i].port);
+        sqlite3_bind_int64(keep, 4, c[i].first);
+        sqlite3_bind_text(keep, 5, c[i].subject, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(keep, 6, c[i].id);
+        long long to = sqlite3_step(keep) == SQLITE_ROW ? sqlite3_column_int64(keep, 0) : 0;
+        sqlite3_reset(keep);
+        if (fold_row(x, c[i].id, c[i].carry, c[i].via, to) != 0) { done = -1; break; }
+        done++;
+    }
+    sqlite3_finalize(keep);
+    free(c);
+    return done;
+}
+
+/* Room for one more row of alert s, of the given state and via (§3.1).
+ * n, ni, first: the alert's row count, imported count and first row.
+ * Its history folds past WEB_FRRS_HIST_PER (an import's past
+ * WEB_FRRS_IMPORT_PER of its own first); the table folds past its cap.
+ * 0; 1 with *why "triage_full" only for an import (nothing imported
+ * left to fold) or, with nothing superseded anywhere, a decided state;
+ * -1. A clear is let in up to the cap / WEB_FRRS_CLEAR_DIV past it, and
+ * tri_write() folds the row it superseded straight after. */
+static int tri_room(frrs_tri_ctx_t *x, const tri_subj_t *s, int via, int state, long long n,
+                    long long ni, long long first, const char **why) {
+    int imp = via == WEB_TRI_VIA_IMPORT;
+    if (n > 0 && imp && ni >= WEB_FRRS_IMPORT_PER) {
+        long long k = fold_alert(x, s, 1, 1, first, ni - WEB_FRRS_IMPORT_PER + 1);
+        if (k < 0) return -1;
+        n -= k;
+    }
+    if (n >= WEB_FRRS_HIST_PER) {
+        long long k = fold_alert(x, s, imp, 0, first, n - WEB_FRRS_HIST_PER + 1);
+        if (k < 0) return -1;
+    }
+    if (x->rows >= tri_cap(x->f) && retain(x, imp, x->rows - tri_cap(x->f) + 1) < 0) return -1;
+    if (x->rows < tri_cap(x->f)) return 0;
+    if (!imp && state == WEB_TRI_UNTRIAGED && x->rows < tri_cap(x->f) + cap_part(x->f, WEB_FRRS_CLEAR_DIV)) return 0;
+    *why = "triage_full";
+    return 1;
+}
+
+static int tri_insert(frrs_tri_ctx_t *x, const tri_subj_t *s, int state, int prev, int via,
+                      const char *basis, const char *note, const char *by, const char *peer,
+                      long long ts, const char *claim_by, const char *claim_peer) {
+    sqlite3_stmt *st = x->ins;
+    sqlite3_bind_text(st, 1, s->subject, -1, SQLITE_TRANSIENT);
+    if (s->finding > 0) sqlite3_bind_int64(st, 2, s->finding); else sqlite3_bind_null(st, 2);
+    sqlite3_bind_int(st, 3, s->type);
+    sqlite3_bind_text(st, 4, s->addr, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 5, s->port);
+    sqlite3_bind_int64(st, 6, s->first);
+    sqlite3_bind_int(st, 7, state);
+    sqlite3_bind_int(st, 8, prev);
+    sqlite3_bind_int(st, 9, via);
+    sqlite3_bind_text(st, 10, basis, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 11, note, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 12, by, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 13, peer, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 14, ts);
+    sqlite3_bind_text(st, 15, claim_by, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 16, claim_peer, -1, SQLITE_TRANSIENT);
+    if (step_done(st)) return -1;
+    x->rows++;
+    if (via == WEB_TRI_VIA_IMPORT) x->imported++;
+    return 0;
+}
+
+static void stat_add(web_frrs_t *f, unsigned long *c, long long n) {
+    if (n <= 0) return;
+    pthread_mutex_lock(&f->lmu);
+    *c += (unsigned long)n;
+    pthread_mutex_unlock(&f->lmu);
+}
+
+/* POST /api/frrs/triage's write: one transaction. 0, 1 refused (why),
+ * -1. */
 static int tri_write(web_frrs_t *f, const tri_subj_t *s, int state, int prev, int via,
                      const char *basis, const char *note, const char *by, const char *peer,
                      long long now_s, const char **why) {
-    char e[8];
-    (void)e;
     if (sqlite3_exec(f->wr, "BEGIN IMMEDIATE", NULL, NULL, NULL) != SQLITE_OK) {
         *why = "store_busy";
         return db_err(f, "triage begin");
     }
+    frrs_tri_ctx_t x;
     sqlite3_stmt *st = NULL;
-    int rc = 0;
-    long long rows = q_count(f, "SELECT COUNT(*) FROM triage");
-    if (rows < 0) { *why = "store_error"; rc = -1; goto out; }
-    if (rows >= WEB_FRRS_TRIAGE_CAP) { *why = "triage_full"; rc = 1; goto out; }
+    int rc = 0, opened = 0;
+    if (ctx_open(f, &x, now_s, 0) != 0) { *why = "store_error"; rc = -1; goto out; }
+    opened = 1;
     /* A row filed before sloth.db held the finding (under its stream
      * handle or its descriptor) gets the finding now, once: only where
      * it is still NULL (docs/web-frrs-spec.md §3.6). */
@@ -1429,33 +1761,26 @@ static int tri_write(web_frrs_t *f, const tri_subj_t *s, int state, int prev, in
         sqlite3_finalize(st);
         st = NULL;
     }
-    {
-        web_tri_t cur;
-        if (tri_lookup(f, s, &cur) < 0) { *why = "store_error"; rc = -1; goto out; }
-        if (cur.history_n >= WEB_FRRS_HIST_PER) { *why = "history_full"; rc = 1; goto out; }
+    long long n = 0, ni = 0, maxts = 0, first = 0;
+    if (alert_counts(&x, s, 0, &n, &ni, &maxts, &first) != 0) { *why = "store_error"; rc = -1; goto out; }
+    rc = tri_room(&x, s, via, state, n, ni, first, why);
+    if (rc < 0) *why = "store_error";
+    if (rc != 0) goto out;
+    if (tri_insert(&x, s, state, prev, via, basis, note, by, peer, now_s, "", "") != 0) {
+        *why = "store_error";
+        rc = -1;
+        goto out;
     }
-    if (sqlite3_prepare_v2(f->wr,
-            "INSERT INTO triage (subject, finding, type, addr, port, first_seen, state,"
-            " prev_state, via, basis, note, who, peer, ts) VALUES"
-            " (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)", -1, &st, NULL)
-            != SQLITE_OK) { *why = "store_error"; rc = -1; goto out; }
-    sqlite3_bind_text(st, 1, s->subject, -1, SQLITE_TRANSIENT);
-    if (s->finding > 0) sqlite3_bind_int64(st, 2, s->finding); else sqlite3_bind_null(st, 2);
-    sqlite3_bind_int(st, 3, s->type);
-    sqlite3_bind_text(st, 4, s->addr, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(st, 5, s->port);
-    sqlite3_bind_int64(st, 6, s->first);
-    sqlite3_bind_int(st, 7, state);
-    sqlite3_bind_int(st, 8, prev);
-    sqlite3_bind_int(st, 9, via);
-    sqlite3_bind_text(st, 10, basis, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 11, note, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 12, by, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 13, peer, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(st, 14, now_s);
-    if (sqlite3_step(st) != SQLITE_DONE) { *why = "store_error"; rc = -1; goto out; }
+    /* A clear let in past the cap superseded this alert's last row: that
+     * row folds now, so the table is back at its cap, never above it. */
+    if (x.rows > tri_cap(f) && retain(&x, 0, x.rows - tri_cap(f)) < 0) {
+        *why = "store_error";
+        rc = -1;
+    }
 out:
     sqlite3_finalize(st);
+    long long folded = opened ? x.folded : 0;
+    if (opened) ctx_close(&x);
     if (rc == 0 && sqlite3_exec(f->wr, "COMMIT", NULL, NULL, NULL) != SQLITE_OK) {
         *why = "store_error";
         rc = -1;
@@ -1465,8 +1790,23 @@ out:
         if (rc < 0) db_err(f, "triage write");
     } else {
         stat_inc(f, &f->st.writes);
+        stat_add(f, &f->st.triage_folded, folded);
     }
     return rc;
+}
+
+frrs_tri_ctx_t *frrs_tri_begin(web_frrs_t *f, long long now_s) {
+    frrs_tri_ctx_t *x = malloc(sizeof(*x));
+    if (!x) return NULL;
+    if (ctx_open(f, x, now_s, 1) != 0) { free(x); return NULL; }
+    return x;
+}
+
+void frrs_tri_end(frrs_tri_ctx_t *x, int committed) {
+    if (!x) return;
+    if (committed) stat_add(x->f, &x->f->st.triage_folded, x->folded);
+    ctx_close(x);
+    free(x);
 }
 #else
 static int tri_write(web_frrs_t *f, const tri_subj_t *s, int state, int prev, int via,
@@ -1477,6 +1817,11 @@ static int tri_write(web_frrs_t *f, const tri_subj_t *s, int state, int prev, in
     *why = "no_store";
     return -1;
 }
+frrs_tri_ctx_t *frrs_tri_begin(web_frrs_t *f, long long now_s) {
+    (void)f; (void)now_s;
+    return NULL;
+}
+void frrs_tri_end(frrs_tri_ctx_t *x, int committed) { (void)x; (void)committed; }
 #endif
 
 static int post_triage(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
@@ -1514,16 +1859,25 @@ static int post_triage(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
     }
     web_tri_t cur;
     if (tri_lookup(f, &s, &cur) < 0) return frrs_error(500, "store_error", NULL, body, cap, len, status);
-    int w = tri_write(f, &s, state, cur.state, via, basis, note, by, peer, now_s, &why);
-    if (w != 0)
-        return frrs_error(w > 0 ? 507 : !strcmp(why, "store_busy") ? 503 : 500, why, NULL,
-                          body, cap, len, status);
+    /* The state it already has, and no note that is new: nothing to
+     * record, so no row (a double click, or a clear of an untriaged
+     * alert, never spends its history). */
+    int unchanged = state == cur.state && (!note[0] || !strcmp(note, cur.note));
+    if (unchanged) {
+        stat_inc(f, &f->st.triage_unchanged);
+    } else {
+        int w = tri_write(f, &s, state, cur.state, via, basis, note, by, peer, now_s, &why);
+        if (w != 0)
+            return frrs_error(w > 0 ? 507 : !strcmp(why, "store_busy") ? 503 : 500, why, NULL,
+                              body, cap, len, status);
+    }
     web_tri_t now;
     if (tri_lookup(f, &s, &now) < 0) return frrs_error(500, "store_error", NULL, body, cap, len, status);
     web_jw_t jw;
     web_jw_init(&jw, body, cap);
     web_jw_raw(&jw, "{\"ok\":true,\"id\":");  web_jw_str(&jw, id);
     web_jw_raw(&jw, ",\"subject\":");         web_jw_str(&jw, s.subject);
+    web_jw_raw(&jw, ",\"unchanged\":");       web_jw_raw(&jw, unchanged ? "true" : "false");
     web_jw_raw(&jw, ",\"current\":");
     tri_json(&jw, &now, 1);
     web_jw_raw(&jw, "}\n");
@@ -1539,9 +1893,14 @@ static int post_triage(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
 void frrs_triage_export(web_frrs_t *f, web_jw_t *w, long long *rows) {
     *rows = 0;
     sqlite3_stmt *s = NULL;
+    /* An imported row's by and peer go out as its file said them: what
+     * this sensor knows of them is the claim, and the next importer
+     * records it as one. */
     if (!f->wr || sqlite3_prepare_v2(f->wr,
-            "SELECT type, addr, port, first_seen, state, prev_state, via, basis, note, who,"
-            " peer, ts FROM triage ORDER BY id", -1, &s, NULL) != SQLITE_OK) {
+            "SELECT type, addr, port, first_seen, state, prev_state, via, basis, note,"
+            " CASE WHEN via = 2 THEN claim_by ELSE who END,"
+            " CASE WHEN via = 2 THEN claim_peer ELSE peer END, ts FROM triage ORDER BY id",
+            -1, &s, NULL) != SQLITE_OK) {
         sqlite3_finalize(s);
         return;
     }
@@ -1570,14 +1929,13 @@ void frrs_triage_export(web_frrs_t *f, web_jw_t *w, long long *rows) {
     sqlite3_finalize(s);
 }
 
-int frrs_triage_import(web_frrs_t *f, const web_jrec_t *r, int write, long long now_s,
-                       const char *peer, const char **why) {
+int frrs_triage_import(web_frrs_t *f, frrs_tri_ctx_t *x, const web_jrec_t *r, int write,
+                       long long now_s, const char *peer, const char **why) {
     static const char *const MEMBERS[] = {
         "type", "alert_type", "addr", "port", "first_seen", "state", "prev_state", "via",
         "basis", "note", "by", "peer", "ts", NULL,
     };
     const char *bad = NULL;
-    (void)now_s; (void)peer;
     if (!frrs_members_ok(r, MEMBERS, &bad)) { *why = "unknown_member"; return 1; }
     char at[48], addr[WEB_FRRS_ADDR_MAX + 1], sw[16], note[WEB_FRRS_NOTE_MAX + 1];
     char by[WEB_FRRS_BY_MAX + 1], basis[WEB_FRRS_BASIS_MAX + 1], pr[WEB_PEER_MAX];
@@ -1597,7 +1955,11 @@ int frrs_triage_import(web_frrs_t *f, const web_jrec_t *r, int write, long long 
     long long port = web_jl_int(r, "port", 0), first = web_jl_int(r, "first_seen", 0);
     long long ts = web_jl_int(r, "ts", 0);
     if (port < 0 || port > 65535 || first < 0 || ts <= 0) { *why = "bad_number"; return 1; }
+    /* A decision dated in the future would stay the newest of its alert
+     * against every later one here: refused, beyond a clock's skew. */
+    if (ts > now_s + WEB_FRRS_TS_AHEAD_S) { *why = "future_ts"; return 1; }
     if (!write) return 0;
+    if (!x) return -1;
     /* Filed by its descriptor: the finding is attached when this
      * sloth.db has it (the next triage of it resolves it, §8). */
     tri_subj_t s;
@@ -1607,78 +1969,43 @@ int frrs_triage_import(web_frrs_t *f, const web_jrec_t *r, int write, long long 
     s.port = (int)port;
     s.first = first;
     snprintf(s.addr, sizeof(s.addr), "%s", addr);
-    /* An identical row (same descriptor, state and time) is the same
-     * import twice: skipped. */
-    sqlite3_stmt *st = NULL;
-    int dup = 0;
-    if (sqlite3_prepare_v2(f->wr, "SELECT 1 FROM triage WHERE type = ?1 AND addr = ?2 AND"
-                           " port = ?3 AND first_seen = ?4 AND state = ?5 AND ts = ?6", -1,
-                           &st, NULL) == SQLITE_OK) {
-        sqlite3_bind_int(st, 1, type);
-        sqlite3_bind_text(st, 2, addr, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(st, 3, (int)port);
-        sqlite3_bind_int64(st, 4, first);
-        sqlite3_bind_int(st, 5, state);
-        sqlite3_bind_int64(st, 6, ts);
-        dup = sqlite3_step(st) == SQLITE_ROW;
-    }
-    sqlite3_finalize(st);
-    if (dup) { *why = "already_here"; return 1; }
-    int prev = 0;
-    for (int q = 0; q < WEB_TRI_COUNT; q++) {
-        const char *pw = web_jl_str(r, "prev_state");
-        if (pw && !strcmp(pw, STATE_WORD[q])) prev = q;
-    }
-    if (q_count(f, "SELECT COUNT(*) FROM triage") >= WEB_FRRS_TRIAGE_CAP) { *why = "triage_full"; return 1; }
-    /* The bounds a manual write has, and the import's own share: rows
-     * earlier in this file are in the table already (one transaction),
-     * so they count. Every row keeps its descriptor (§3.1). */
-    if (q_count(f, "SELECT COUNT(*) FROM triage WHERE via = 2") >= WEB_FRRS_IMPORTED_CAP) {
-        *why = "import_share_full";
+    long long n = 0, ni = 0, maxts = 0, firstid = 0;
+    if (alert_counts(x, &s, 1, &n, &ni, &maxts, &firstid) != 0) return -1;
+    /* Never newer than what is here: the current state is the newest
+     * row, so a line no newer than this alert's newest would either be
+     * the same import twice or an older decision put over a later one. */
+    if (n > 0 && ts <= maxts) {
+        int dup = 0;
+        if (!x->dup && sqlite3_prepare_v2(f->wr, "SELECT 1 FROM triage t WHERE" DESC_MATCH("t.")
+                                          "AND state = ?8 AND ts = ?9", -1, &x->dup, NULL) != SQLITE_OK)
+            return -1;
+        bind_subj(x->dup, &s);
+        sqlite3_bind_int(x->dup, 8, state);
+        sqlite3_bind_int64(x->dup, 9, ts);
+        dup = sqlite3_step(x->dup) == SQLITE_ROW;
+        sqlite3_reset(x->dup);
+        sqlite3_clear_bindings(x->dup);
+        *why = dup ? "already_here" : "older_than_here";
         return 1;
     }
-    long long hist = -1;
-    if (sqlite3_prepare_v2(f->wr, "SELECT COUNT(*) FROM triage WHERE type = ?1 AND addr = ?2 AND"
-                           " port = ?3 AND first_seen = ?4", -1, &st, NULL) == SQLITE_OK) {
-        sqlite3_bind_int(st, 1, type);
-        sqlite3_bind_text(st, 2, addr, -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(st, 3, (int)port);
-        sqlite3_bind_int64(st, 4, first);
-        if (sqlite3_step(st) == SQLITE_ROW) hist = sqlite3_column_int64(st, 0);
-    }
-    sqlite3_finalize(st);
-    st = NULL;
-    if (hist < 0) return -1;
-    if (hist >= WEB_FRRS_HIST_PER) { *why = "history_full"; return 1; }
-    if (sqlite3_prepare_v2(f->wr,
-            "INSERT INTO triage (subject, finding, type, addr, port, first_seen, state,"
-            " prev_state, via, basis, note, who, peer, ts) VALUES"
-            " (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, 2, ?8, ?9, ?10, ?11, ?12)", -1, &st, NULL)
-            != SQLITE_OK) { sqlite3_finalize(st); return -1; }
-    sqlite3_bind_text(st, 1, s.subject, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(st, 2, type);
-    sqlite3_bind_text(st, 3, addr, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(st, 4, (int)port);
-    sqlite3_bind_int64(st, 5, first);
-    sqlite3_bind_int(st, 6, state);
-    sqlite3_bind_int(st, 7, prev);
-    sqlite3_bind_text(st, 8, basis, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 9, note, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 10, by, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 11, pr, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(st, 12, ts);
-    int ok = sqlite3_step(st) == SQLITE_DONE;
-    sqlite3_finalize(st);
-    return ok ? 0 : -1;
+    int prev = 0;
+    const char *pw = web_jl_str(r, "prev_state");
+    for (int q = 0; q < WEB_TRI_COUNT; q++) if (pw && !strcmp(pw, STATE_WORD[q])) prev = q;
+    if (x->imported >= cap_part(f, 2)) { *why = "import_share_full"; return 1; }
+    int room = tri_room(x, &s, WEB_TRI_VIA_IMPORT, state, n, ni, firstid, why);
+    if (room) return room;
+    /* who: nobody here typed it. peer: the importer. The file's by and
+     * peer are kept as what they are, claims. */
+    return tri_insert(x, &s, state, prev, WEB_TRI_VIA_IMPORT, basis, note, "", peer, ts, by, pr) ? -1 : 0;
 }
 #else
 void frrs_triage_export(web_frrs_t *f, web_jw_t *w, long long *rows) {
     (void)f; (void)w;
     *rows = 0;
 }
-int frrs_triage_import(web_frrs_t *f, const web_jrec_t *r, int write, long long now_s,
-                       const char *peer, const char **why) {
-    (void)f; (void)r; (void)write; (void)now_s; (void)peer;
+int frrs_triage_import(web_frrs_t *f, frrs_tri_ctx_t *x, const web_jrec_t *r, int write,
+                       long long now_s, const char *peer, const char **why) {
+    (void)f; (void)x; (void)r; (void)write; (void)now_s; (void)peer;
     *why = "no_store";
     return -1;
 }
@@ -1909,6 +2236,7 @@ int web_frrs_init(web_frrs_t *f, web_store_t *store, const char *assess_dir,
     pthread_mutex_init(&f->lmu, NULL);
     f->lmu_init = 1;
     f->writes = writes;
+    f->triage_cap = WEB_FRRS_TRIAGE_CAP;
     err[0] = '\0';
     f->led = calloc(1, sizeof(*f->led));
     if (!f->led) {
@@ -1918,7 +2246,11 @@ int web_frrs_init(web_frrs_t *f, web_store_t *store, const char *assess_dir,
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     f->nonce = (unsigned)ts.tv_nsec ^ (unsigned)ts.tv_sec ^ (unsigned)getpid() * 2654435761u;
-    if (assess_dir && assess_dir[0]) snprintf(f->assess_dir, sizeof(f->assess_dir), "%s", assess_dir);
+    /* A directory that is not there (an install without the
+     * assessments) is no directory: "no recommendation yet". */
+    struct stat sb;
+    if (assess_dir && assess_dir[0] && stat(assess_dir, &sb) == 0 && S_ISDIR(sb.st_mode))
+        snprintf(f->assess_dir, sizeof(f->assess_dir), "%s", assess_dir);
     if (store && store->st.open) {
         if (web_store_open_aux(store, &f->wr, err, errsz) != 0) {
             f->wr = NULL;
@@ -1961,7 +2293,9 @@ void web_frrs_health(web_frrs_t *f, web_jw_t *w) {
     web_jw_raw(w, "{\"writes\":");     web_jw_raw(w, f->wr && f->writes ? "true" : "false");
     web_jw_raw(w, ",\"store\":");      web_jw_str(w, f->wr ? "open" : "none");
     web_jw_raw(w, ",\"triage_rows\":"); jw_count(w, q_count(f, "SELECT COUNT(*) FROM triage"));
-    web_jw_raw(w, ",\"triage_cap\":");  web_jw_int(w, WEB_FRRS_TRIAGE_CAP);
+    web_jw_raw(w, ",\"triage_cap\":");  web_jw_int(w, f->triage_cap);
+    web_jw_raw(w, ",\"triage_folded\":"); web_jw_int(w, (long long)s.triage_folded);
+    web_jw_raw(w, ",\"triage_unchanged\":"); web_jw_int(w, (long long)s.triage_unchanged);
     web_jw_raw(w, ",\"tacdb\":{\"units\":");
     jw_count(w, q_count(f, "SELECT COUNT(*) FROM tacdb_unit WHERE deleted = 0"));
     web_jw_raw(w, ",\"platforms\":");

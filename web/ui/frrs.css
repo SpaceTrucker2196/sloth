@@ -22,7 +22,19 @@ li:hover > .tri-line .tri-btns, li:focus-within > .tri-line .tri-btns { display:
 @media (max-width: 720px) { .tri-line .tri-dup { display: inline; } }
 .tri-btns { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .tri-btns.tri-always { display: flex; margin: 6px 0; }
-button.tri-b { font-size: 10px; letter-spacing: 0.06em; text-transform: none; padding: 1px 7px; }
+button.tri-b { font-size: 10px; letter-spacing: 0.06em; text-transform: none; padding: 1px 7px; white-space: normal; max-width: 100%; text-align: left; }
+/* The recommendation button's label, long and short: at phone width the
+ * short one, so the row's last button is never cut off (393 px). */
+.tri-rec .tri-short { display: none; }
+@media (max-width: 480px) {
+  .tri-rec .tri-long { display: none; }
+  .tri-rec .tri-short { display: inline; }
+  /* The table's scroll box starts some 36 px in and ends 30 px short of
+   * the screen's edge at phone width (the panel's gutter, padding and
+   * the row's border): the line is held inside it, so its last button
+   * wraps rather than running under the clip (393 px, measured). */
+  .dt .dt-row > .tri-line { max-width: calc(100vw - 72px); }
+}
 button.tri-b.sev0 { color: var(--sev-low); }
 button.tri-b.sev1 { color: var(--sev-warn); }
 button.tri-b.sev2 { color: var(--sev-crit); }

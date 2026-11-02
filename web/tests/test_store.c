@@ -249,7 +249,7 @@ static void test_no_column_can_hold_secret_material(void) {
     }
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
-                     " AND UPPER(c.type)='TEXT'"), 33);
+                     " AND UPPER(c.type)='TEXT'"), 35);
     /* meta (name, value), series (metric, key), baseline (metric, key),
      * episode (kind, metric, key, evidence), fanout (key, hist),
      * reported (kind, key), passive_ptr (ip, name) and chmix (channel,
@@ -257,8 +257,10 @@ static void test_no_column_can_hold_secret_material(void) {
      * a canonical key, a catalogue name or numbers; evidence is our own
      * sentence, with names the stream already carries (web_anomaly.h),
      * and a passive_ptr name is a host name a PTR answer on the wire
-     * gave (web_ptr.h). The v6 tables (web_frrs.h) add fifteen: triage
-     * (subject, addr, basis, note, who, peer), tacdb_unit (name, note),
+     * gave (web_ptr.h). The v6 tables (web_frrs.h) add seventeen: triage
+     * (subject, addr, basis, note, who, peer, claim_by, claim_peer: the
+     * last two what an imported file said, operator text from another
+     * sensor's validated rows), tacdb_unit (name, note),
      * tacdb_platform (nomenclature, vendor, note), tacdb_emitter (addr,
      * label) and tacdb_dismiss (a, b): an alert id, canonical addresses,
      * slothweb's own basis sentence, and operator-typed text that

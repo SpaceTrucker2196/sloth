@@ -172,7 +172,8 @@ exported file can be re-attached on another sensor or after a
 no longer matches (the fallback match is exact on all four). Q1 asks
 whether the owner prefers the descriptor as the primary key.
 
-**Row.** Append-only; the current state is the newest row of the
+**Row.** Appended, never rewritten (but `finding`, set once, and
+`folded`, a count); the current state is the newest row of the
 subject.
 
 | Column | Type | Bound | Meaning |
@@ -191,7 +192,9 @@ subject.
 | `note` | TEXT | 240 | operator text, optional |
 | `by` | TEXT | 32 | operator text, optional (§5.6) |
 | `peer` | TEXT | 45 | the connection's peer address, canonical |
-| `ts` | INTEGER | | the server's clock at the write |
+| `ts` | INTEGER | | the server's clock at the write; an imported row's, the file's (at most 300 s ahead of this clock) |
+| `folded` | INTEGER | | rows of this alert's history folded away and counted here (below) |
+| `claim_by`, `claim_peer` | TEXT | 32, 45 | an imported row's `by` and `peer` as its file said them: claims, shown "imported, claimed …"; the row's own `peer` is the importer and `who` is empty |
 
 Every TEXT column is valid UTF-8 with no control byte, cut to its bound
 on a code-point boundary at validation (not at storage: an over-long
@@ -202,13 +205,35 @@ credential word, nothing from the stream stored as text) is extended to
 assert that no stream string reaches this table (§10).
 
 **Bounds.** `WEB_FRRS_TRIAGE_CAP` 20,000 rows, `WEB_FRRS_HIST_PER` 64
-rows per subject. Triage rows are operator state: like the baselines
-and episodes they count towards `--web-max-mb` and are **never dropped
-by the ceiling**. At the cap a write is refused `507 triage_full`
-rather than an old row dropped; at the per-subject cap the oldest row
-of that subject is dropped and the drop counted (`/api/health`
-`frrs.triage_folded`). Q2 asks whether folding is acceptable or the
-per-subject cap should refuse too.
+rows per alert, of them at most `WEB_FRRS_IMPORT_PER` 8 imported.
+Triage rows are operator state: like the baselines and episodes they
+count towards `--web-max-mb` and are **never dropped by the ceiling**.
+No bound refuses an operator's write that changes the current state:
+
+- *One alert past 64 rows* folds: its first row and its newest are
+  kept, the oldest between them deleted, and their number added to the
+  first row's `folded`; the history says "N older folded". An import
+  past 8 of its own rows on one alert folds its oldest imported rows
+  the same way, so a file can never fill an alert's history before its
+  operator does.
+- *The table at 20,000* folds superseded rows (an alert's current row
+  never): imported ones first, then those of alerts whose newest row is
+  older than 7 days (closed or aged out), then the oldest, a batch of
+  1 % at a time so the scan (81 ms over a full table on the reference
+  host) runs once per 200 writes; each folded row's count moves to its
+  alert's newest row. An import makes room among imported rows only.
+  With nothing superseded left a decided state is `507 triage_full`;
+  a **clear is always taken** (the row it supersedes folds at once, so
+  the table stays at its cap).
+- *A write identical to the current state with no new note* is a
+  `200` with `"unchanged":true` and no row: a double click, or a clear
+  of an untriaged alert, never spends history.
+
+`/api/health` `frrs` reports `triage_rows`, `triage_cap`,
+`triage_folded` and `triage_unchanged`; `/api/frrs/summary` carries
+`rows`, `cap` and `near_cap` (from 90 %), and the open-alerts tile then
+says the store is near its cap and that superseded rows fold. Q2 (fold
+or refuse) is answered for now by the review of 2026-11-02 (§12.1).
 
 **"Follow recommended."** The recommendation for an alert type comes
 from its research assessment, `docs/wiki/alert-assessments/<TYPE>.md`
@@ -222,8 +247,19 @@ high` / `too low` 12):
 
 | Front matter | Recommended state | `basis` |
 |---|---|---|
-| `noise_verdict` beginning `noisy` or `very noisy` | `noise` | the line, its first 47 characters |
-| anything else, or no file | none: the button reads **no recommendation yet** and is disabled; the raw front matter, when there is one, is shown beside it as advice | |
+| `false_positive_risk` beginning `high` **and** `noise_verdict` beginning `noisy` or `very noisy` | `noise` | `false_positive_risk high; noise_verdict: <the line>`, cut to 96 bytes |
+| an assessment that does not meet that bar | none: the button reads **no automatic triage: <false_positive_risk's first words>** and does nothing (`why_none` `no_automatic_triage`); the front matter is shown beside it as advice | |
+| no file, no front matter, or no directory | none: **no recommendation yet** (`why_none` `no_assessment`) | |
+
+`noise_verdict` describes the **counting artefact** on the reference
+host — how often the rule fired, mostly per-evaluation re-firing of one
+standing condition — not whether an alert is real. FRAG_PLAINTEXT is
+"very noisy" (20.5 million fires on one key) with `false_positive_risk:
+low`: a real finding re-counted; SMB1_USE is "noisy in count, quiet in
+findings", also `low`. Neither gets `noise`. Of the 72 assessed types
+eight meet the bar (BEACONING, CAPTIVE_PORTAL, EVIL_TWIN_PROXIMITY,
+MY_NETWORK_RECON, PM_FORGE, RECURRING_TRANSIT, SURV_CLOUD_SNI,
+WPA_DOWNGRADE).
 
 The assessments judge a **rule**, not an alert. `false_positive_risk:
 high` says the rule is often wrong — ARP_SPOOF and WPA_DOWNGRADE are
@@ -231,18 +267,17 @@ among the 13 types that say it — not that the alert on screen is, and a
 real ARP spoof marked `false` by one click would be dimmed in every
 list; so it recommends nothing and is shown beside the buttons.
 `severity_assessment` (`agree`, `too high`) judges the severity level,
-not whether the alert is real, so it never recommends `incident`. Only
-`noise_verdict` says something per alert ("the rule fires on ordinary
-traffic"). A mixed verdict is decided by its first words ("noisy in
-count, quiet in findings" is noise, "quiet in incidents, very noisy in
-counts" is not). Q3 asks the owner whether either of the other two
+not whether the alert is real, so it never recommends `incident`.
+Nothing ever recommends `false`. A mixed `noise_verdict` is decided by
+its first words. Q3 asks the owner whether either of the other two
 should ever recommend. Two sources, one
 interface (`web_frrs_recommend(type, out)`): the compiled table
 `web/src/web_alertasm.{c,h}` once the other session's generator lands
 (one `#include` and one call), and until then a runtime reader of
 `<dir>/<TYPE>.md`'s front matter with `dir` from `--web-assessments DIR`
 (§5.7), default unset, which means every type answers "no
-recommendation yet". The reader opens `<dir>/<TYPE>.md` with `TYPE`
+recommendation yet"; `slothweb.service` passes the copy `make install`
+puts in `$(PREFIX)/share/sloth/alert-assessments`. The reader opens `<dir>/<TYPE>.md` with `TYPE`
 taken from `sloth_alerts.def` (never from the request), reads until
 the front matter closes and at most 32 KiB (`WEB_FRRS_ASSESS_MAX`; the
 longest real front matter, PM_FORGE's, is 4,823 bytes, past the 4 KiB
@@ -537,7 +572,7 @@ addresses), a refusal a `400` with a reason word of slothweb's own.
 
 | Route | Body | Effect |
 |---|---|---|
-| `POST /api/frrs/triage` | `{"id":"d1234","state":"noise","note":"…","by":"…"}` or `{"id":"…","state":"recommended"}` | appends a row; `state` `untriaged` clears; `recommended` resolves §3.1's table and refuses `409 no_recommendation` when it yields none |
+| `POST /api/frrs/triage` | `{"id":"d1234","state":"noise","note":"…","by":"…"}` or `{"id":"…","state":"recommended"}` | appends a row (none, `"unchanged":true`, when the state is the current one and no new note comes with it); `state` `untriaged` clears; `recommended` resolves §3.1's table and refuses `409 no_recommendation` when it yields none |
 | `POST /api/frrs/tacdb/unit` | `{"op":"create","parent":null,"name":"…","kind":"site","note":"…"}` / `{"op":"update","id":1,…}` / `{"op":"delete","id":1}` / `{"op":"restore","id":1}` | |
 | `POST /api/frrs/tacdb/platform` | `{"op":"create","nomenclature":"…","class":"phone","unit":1,"vendor":"…","note":"…","emitters":[{"kind":"sta","addr":"…","role":"primary","label":"…"}]}` / `update` / `delete` / `restore` / `{"op":"confirm","suggest":"<token>"}` | `confirm` takes a suggestion token from `/api/frrs/suggest` (slothweb's own, the rule and the addresses hashed with the process nonce, so a stale token is refused) |
 | `POST /api/frrs/tacdb/emitter` | `{"op":"add","platform":1,"kind":"ble","addr":"…/1","role":"primary","label":"…"}` / `move` / `remove` / `restore` | a live `(kind, addr)` on another platform is `409 emitter_owned` naming it |
@@ -597,7 +632,10 @@ the body is **not parsed** past the point it was needed.
    depth ≤ 3 and ≤ 64 members. Not an object, or an unknown member,
    is `400 bad_body` / `400 unknown_member` naming the member.
 9. **Validate.** Every member by its type and bound (§3.1, §3.2):
-   strings valid UTF-8 with no control byte and at most the bound in
+   strings valid UTF-8 with no control byte, no bidirectional
+   embedding or isolate control (U+202A–U+202E, U+2066–U+2069:
+   invisible, they reorder what a reader sees; `400 bad_text`) and at
+   most the bound in
    bytes (`400 too_long` naming the member), enumerations exact,
    addresses canonical through `web_key_mac` / `web_key_ip`, ids in the
    alert routes' own shape (`ALERT_ID_RE`), integers in range. Nothing
@@ -664,7 +702,7 @@ come with this slice.
 | Flag | Effect |
 |---|---|
 | `--web-read-only` | No POST route exists: every POST is `405` `Allow: GET, HEAD` before the router, exactly the surface before this slice; `/api/frrs/summary` and `/api/health` say `"writes":false`, the page draws no triage or TACDB button and the TACDB tab says why. The read routes (`/api/frrs/*` GET) stay. Default **off** (writes on) for an admitted peer; Q10 asks whether the default should be read-only when `--web-allow-remote` is given. |
-| `--web-assessments DIR` | Where to read `<TYPE>.md` front matter for "follow recommended" until the compiled table exists (§3.1). Default unset. Refused if DIR is not a directory. |
+| `--web-assessments DIR` | Where to read `<TYPE>.md` front matter for "follow recommended" until the compiled table exists (§3.1). Default unset; `slothweb.service` passes `/usr/local/share/sloth/alert-assessments`, where `make install` puts `docs/wiki/alert-assessments/*.md` (not its generated `README.md`). A DIR that is not there means "no recommendation yet", as unset; something there that is not a directory is refused (exit 2). |
 | `--web-frrs-cap N` | `WEB_FRRS_TRIAGE_CAP` override, 1,000..100,000. Optional; may be dropped if the owner prefers one knob fewer (Q11). |
 
 `--strict` does not imply `--web-read-only`: strict is about where the
@@ -913,8 +951,8 @@ record and a seqnum pair so the record has something to show.
   finding (counted), or refuse the 65th change?
 - **Q3 Assessment vocabulary.** Answered in part by the batch itself
   (§3.1 lists what the 72 files write), and the mapping now reads that
-  vocabulary: `noise_verdict` `noisy` / `very noisy` recommends `noise`,
-  nothing else recommends. Still open: should `false_positive_risk:
+  vocabulary: `noise` only where `false_positive_risk` is `high` and
+  `noise_verdict` `noisy` / `very noisy`, nothing else recommends. Still open: should `false_positive_risk:
   high` ever recommend `false` (it is a verdict on the rule; 13 types
   carry it, ARP_SPOOF among them), and should anything ever recommend
   `incident` (`severity_assessment` judges the level, not the alert)?
@@ -955,11 +993,11 @@ record and a seqnum pair so the record has something to show.
 - **Q14 Type-level triage.** A finding is triaged one at a time. Is
   "apply to every open alert of this type" (one row per finding, one
   click) wanted?
-- **Q15 Imported triage.** An import may bring at most 5,000 triage
-  rows in one file and fill at most half the table (10,000 rows) with
-  imported rows, and each alert's 64 holds for imports too, so no file
-  can leave the operator unable to triage. Is half right, and is a full
-  sensor's export (up to 20,000 rows) worth carrying whole?
+- **Q15 Imported triage.** An import may bring at most 1,000 triage
+  rows in one file, fill at most half the table (10,000 rows) with
+  imported rows, and hold at most 8 imported rows of one alert, so no
+  file can leave the operator unable to triage. Is half right, and is a
+  full sensor's export (up to 20,000 rows) worth carrying whole?
 - **Q16 Deleted TACDB rows.** A delete keeps its row (reversible), and
   deleted rows count toward a bound twice each cap. There is no purge:
   at that bound a create is refused until something is restored. Is a
@@ -973,8 +1011,8 @@ claims nothing sloth did not record, and widens no surface.
 | Q | Default built |
 |---|---|
 | Q1 | `d<rowid>` of the finding's first row, the descriptor kept on every row and used to re-attach an import; a stream incident sloth has not written is filed under its handle and gets its finding once, from NULL. |
-| Q2 | **Refuse** the 65th change of one alert (`507 history_full`) rather than fold the oldest: a fold deletes operator history, a refusal loses nothing and says so. |
-| Q3 | `noise_verdict` beginning `noisy` or `very noisy` → `noise`; nothing recommends `false` or `incident`, and both other verdicts are shown as advice (§3.1). The safe side: a wrong `noise` dims an alert the operator can still see and clear; a wrong `false` on a real attack is the outcome the lens calls worse than none. |
+| Q2 | **Fold** (review of 2026-11-02): an operator's change is never refused for room. Past 64 rows an alert keeps its first row and its newest, the folded counted on the first; at 20,000 rows the oldest superseded rows fold, imported first (§3.1). The refusal first built left an alert with a long history, or a full store, unable to be triaged at all — clearing included. |
+| Q3 | `noise` only for `false_positive_risk` `high` **and** `noise_verdict` `noisy` / `very noisy` (eight types); anything else assessed is "no automatic triage", the front matter shown as advice; nothing recommends `false` or `incident` (§3.1). `noise_verdict` alone, first built, recommended `noise` for FRAG_PLAINTEXT and SMB1_USE, whose `false_positive_risk` is `low`: the verdict is about the count, not the alert. |
 | Q4 | Four levels; a fifth is `409 unit_depth`. |
 | Q5 | `"<vendor> <class> <last two octets>"`, the vendor the OUI table's first word, or `randomised` for a locally administered address; unique among live platforms. |
 | Q6 | *not observed*, the reason named in the field (`ble_device` carries no interval and no rotation link). |
@@ -985,7 +1023,7 @@ claims nothing sloth did not record, and widens no surface.
 | Q11 | The knob dropped: 20,000 rows, fixed. |
 | Q12 | Unchanged: field names borrowed, no item numbers. |
 | Q13, Q14 | Not built. |
-| Q15 | 5,000 per file, 10,000 imported in all, 64 per alert. |
+| Q15 | 1,000 per file (more is `413`, nothing merged), 10,000 imported in all, 8 imported per alert (the oldest folded). |
 | Q16 | No purge; refused at twice the cap. |
 
 ## 13. Slices
@@ -999,12 +1037,12 @@ claims nothing sloth did not record, and widens no surface.
 | F4 | TACDB tables, routes, tab, platform view, `mountBundle` hook; suggestions S1–S3, S6; export / import | same |
 | F5 | the vendor KB hook (§4.2) once `web/data/vendors/` exists; the compiled assessment table once `web_alertasm.h` exists | same |
 
-## 14. As built (2026-11-01, review fixes 2026-11-02), where it departs from the body
+## 14. As built (2026-11-01, review fixes 2026-11-02 twice), where it departs from the body
 
 | § | The body says | Built | Why |
 |---|---|---|---|
 | 3.1 | column `by` | column `who`, `by` in every JSON body | `BY` is an SQL keyword. |
-| 3.1 | fold beyond 64 per subject | refused, `507 history_full` | Q2's conservative default (§12.1). |
+| 3.1 | fold beyond 64 per subject | folded as the body says (the first row kept and counting the fold), 8 imported per alert, and the table's cap folding superseded rows too (§3.1, Q2) | Built first as a refusal (`507 history_full`, `507 triage_full` for ever); the review of 2026-11-02 found an alert with 64 imported rows could no longer be triaged by its operator, and a full store never again. |
 | 3.1, 5.3 step 11 | the store thread writes, through a queue | the HTTP thread writes over its own read-write connection to slothweb.db (`web_store_open_aux()`), one short `BEGIN IMMEDIATE` per request, WAL and a 250 ms busy timeout between it and the store thread | One HTTP thread, writes rare and small: a queue and a condition variable bought nothing a busy timeout does not, and added a thread hand-off to every click. `web_store.h` names it as the one exception to "the store thread writes". |
 | 3.1, 5.3 | an in-memory map of current states | none: every read is an indexed query on the store | 20,000 rows at most; the indexes (`triage_subject`, `triage_finding`, `triage_desc`) answer in microseconds and there is no second copy to keep in step. |
 | 3.3 | ledger sizes 1,024 / 2,048 / 1,024 / 512 | 512 BSSIDs, 1,024 stations, 512 BLE rows, 256 addresses, 64 channels | The structs carry more than the body costed; the bound is what matters and evictions are counted. |
@@ -1018,11 +1056,14 @@ claims nothing sloth did not record, and widens no surface.
 | 7 S2 | `mld_mac` primary, each link `mld-link` | one kind for the whole MLD: a BSSID when the MLD address or any link has beaconed, else a station, for every pair and at confirm | Decided per link, an AP MLD whose links had not all beaconed was filed as a BSSID by one confirm and a station by the next: two platforms for one device. |
 | 7 S3 | BSSIDs differing only in the low nibble of the last octet, sharing `vendor`, and `channel` or `beacon_ms` | as written but **and** channel: the first five octets and the last's high nibble equal (16 characters), `vendor` equal (NULL matching NULL: sloth names the vendor from the OUI, which those characters share), the same channel; the interval raises the confidence | 100 TU is nearly every AP's interval: on the demo's eight BSSIDs the body's rule made 28 pairs. The first build compared five octets only (a /40 of 256 addresses). |
 | 8 | one JSON document | JSON Lines (`slothweb-tacdb.jsonl`): a header line, one line per unit, platform, emitter, dismissal and triage row, an `end` line | The flat decoder again; and a file cut short is told by its missing `end`. |
-| 8 | export carries deleted rows; units and platforms match by name | the export carries **live** rows only, units parents first; the import refuses a file whose first line is not the header, whose `end` is missing, is not last, counts other than the file's lines, or says `complete:false`; units merge once their parent has, whatever the file's order; a platform whose unit did not merge is skipped (`unit_not_merged`), never re-filed under no unit; a platform whose nomenclature a live platform here has is that platform only when one of its emitters is already filed on it, else skipped (`duplicate_name`); triage lines meet each alert's 64, at most 5,000 per file and 10,000 imported in all (Q15) | Deleted rows made the file grow with every create-then-delete and were then dropped by the import anyway. A name is not a device: auto names are numbered in each sensor's own order and "laptop" is anyone's. A headerless file first built began the merge and never ended it, leaving the write connection's transaction open until restart. |
+| 8 | export carries deleted rows; units and platforms match by name | the export carries **live** rows only, units parents first; the import refuses a file whose first line is not the header, whose `end` is missing, is not last, counts other than the file's lines, or says `complete:false`; units merge once their parent has, whatever the file's order; a platform whose unit did not merge is skipped (`unit_not_merged`), never re-filed under no unit; a platform whose nomenclature a live platform here has is that platform only when one of its emitters is already filed on it, else skipped (`duplicate_name`); triage lines meet each alert's 64 and 8 imported, at most 1,000 per file (`413 too_many_triage` beyond, nothing merged) and 10,000 imported in all (Q15); a triage line no newer than its alert's newest row here is skipped (`already_here` when identical, else `older_than_here`), so a file never puts an older decision over a later one and the same file twice merges nothing; `?mode=check` runs the merge in its transaction and rolls it back, so it reports every skip a merge would (a unit cycle's `parent_not_merged` among them) and what would merge | Deleted rows made the file grow with every create-then-delete and were then dropped by the import anyway. A name is not a device: auto names are numbered in each sensor's own order and "laptop" is anyone's. A headerless file first built began the merge and never ended it, leaving the write connection's transaction open until restart. |
 | 3.2 | bounds on live rows | and twice each counting deleted rows (Q16) | A soft delete keeps its row. |
 | 3.2 | restore | a unit's restore checks the depth again; a platform's restore needs its unit live (`409 unit_deleted`) | A move counts live subunits only, so a deleted child could come back at depth 5; a platform could come back into a deleted unit the tree no longer shows. |
 | 4.5 item 2 | the signal-vs-time series `dev.frames`, `dev.present` | `series_presence`, `series_frames`: no value, the field's `why` names the `/api/series` query; `series_rssi` not kept (Q7) | A series' name shown as a value read as observed data. The signal series the owner asked for is the open Q7. |
 | 5.7 | the page draws no button under `--web-read-only` | and a page loaded before the restart maps the plain `405` to "read-only" | `--web-read-only` takes the routes away before the router, so its 405 is not JSON. |
 | 6.1 | the buttons on hover/focus in each row | a linked alert row holding the buttons is `role="group"` (Enter or a click still opens it), not `link`; at phone width the Alerts page's button line is held to the screen and repeats the state the scrolled-off column holds | Buttons inside a link are not exposed by a screen reader; the cell's overflow rule clipped the line at 360 px. |
+| 8 | the import inside the request | one transaction, every statement prepared once, the table's counts read once and kept in step (the first build counted the whole table twice per triage line: 5,000 lines held the HTTP thread about 21 s); measured by `test_import_time_over_socket`, 1,000 lines into a store of 15,000 rows, in the gate run quoted in the 2026-11-02 commit | The HTTP thread is single; the per-file bound and the per-line cost are what bound how long a `/api/health` waits behind an import. |
+| 5.3 step 7 | the body read within the timeout | the timeout from the headers, plus the promised length at 16 KiB/s (`WEB_BODY_MIN_BPS`) | An 8 MiB import over a slow link needs minutes; a fixed 10 s cut it off, and a drip below the floor is still cut at its bound. |
+| 6.1 | "follow recommended" | "no automatic triage: <risk>" when an assessment does not meet §3.1's bar; at 480 px and under the button's label is the short one ("no rec. yet", "no auto: low"), and the Alerts page's button line is held inside the table's scroll box (`100vw - 72px`), so at 393 px no button is cut off (re-screenshot 2026-11-02: the line wraps, "no auto: medium" whole) | The long label ran off a phone's screen, and the line, held to `100vw - 48px`, ran under the scroll box's clip. |
 | 10 | absence assertions and their mutations | as listed in `web/tests/test_frrs.c` and `test_store.c`, each seen red in a copy of the tree with the source compared by hash afterwards | |
 

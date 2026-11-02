@@ -168,7 +168,10 @@ static const char STEP_V5_SQL[] =
  * is append-only: one row per decision on one finding (its subject as
  * the alert routes name it, the sloth.db rowid once resolved, and the
  * (type, addr, port, first_seen) descriptor that survives a rebuild),
- * so every change is reversible by another. The tacdb_* tables are the
+ * so every change is reversible by another; folded counts the rows of
+ * the alert's history folded away (one alert past WEB_FRRS_HIST_PER, the
+ * table at its cap), claim_by and claim_peer what an imported file said
+ * of who and where (peer is then the importer). The tacdb_* tables are the
  * platforms, their equipment and the units that own them, soft-deleted
  * (deleted 0/1) so a delete is a change like any other. Every TEXT
  * column holds an address, slothweb's own words or operator text, cut
@@ -192,7 +195,10 @@ static const char STEP_V6_SQL[] =
     "  note       TEXT NOT NULL DEFAULT '',\n"
     "  who        TEXT NOT NULL DEFAULT '',\n"
     "  peer       TEXT NOT NULL DEFAULT '',\n"
-    "  ts         INTEGER NOT NULL\n"
+    "  ts         INTEGER NOT NULL,\n"
+    "  folded     INTEGER NOT NULL DEFAULT 0,\n"
+    "  claim_by   TEXT NOT NULL DEFAULT '',\n"
+    "  claim_peer TEXT NOT NULL DEFAULT ''\n"
     ");\n"
     "CREATE INDEX triage_subject ON triage (subject, id);\n"
     "CREATE INDEX triage_finding ON triage (finding, id);\n"

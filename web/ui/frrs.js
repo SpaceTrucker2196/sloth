@@ -94,14 +94,14 @@ var SlothFrrs = (function () {
     "read_only": "read-only: slothweb was started with --web-read-only; reload to drop the buttons",
     "no_recommendation": "no recommendation yet for this type",
     "no_such_alert": "that alert is gone",
-    "history_full": "this alert's history is full (64 changes)",
-    "triage_full": "the triage store is full",
+    "triage_full": "the triage store is full and nothing superseded is left to fold; a clear still works",
     "tacdb_full": "the TACDB is full",
     "duplicate_name": "that name is taken",
     "emitter_owned": "that emitter is on another platform",
     "unit_depth": "units go four deep at most",
     "unit_not_empty": "empty the unit first (its subunits and platforms)",
-    "too_long": "too long", "bad_text": "a control character is not allowed",
+    "too_long": "too long", "bad_text": "a control or bidirectional-override character is not allowed",
+    "too_many_triage": "more than 1,000 triage lines in one file; split it (nothing was merged)",
     "bad_addr": "not an address of that kind", "store_busy": "the store is busy; try again"
   };
   function why(e) {
@@ -123,6 +123,11 @@ var SlothFrrs = (function () {
       if (o["false"]) parts.push(o["false"] + " false");
       var txt = parts.length ? parts.join(" · ") + " triaged out" : "";
       if (o.incident) txt += (txt ? "; " : "") + o.incident + " incident";
+      // Near the cap the oldest superseded rows fold (§3.1): said, so a
+      // history shrinking is never a surprise.
+      if (j.near_cap && typeof j.rows === "number" && typeof j.cap === "number")
+        txt += (txt ? "; " : "") + "triage store " + j.rows + " of " + j.cap +
+          " rows: the oldest superseded rows fold";
       // The big number stays the open count: nothing is dropped from
       // it, the triaged-out ones are said beside it.
       line.textContent = txt;
@@ -195,7 +200,19 @@ var SlothFrrs = (function () {
     var t = S.types[id], r = t ? S.rec[t] : null;
     if (t && !r) rec(t);
     var rs = r && typeof r.state === "string" ? r.state : null;
-    var rb = el("button", "tri-b tri-rec", rs ? "follow recommended: " + rs : "no recommendation yet");
+    // No state: either no assessment ("no recommendation yet") or one
+    // that does not meet the bar (noise only for false_positive_risk
+    // high and noise_verdict noisy): its risk word said, nothing done.
+    var fpr = r && r.front_matter && typeof r.front_matter.false_positive_risk === "string"
+      ? r.front_matter.false_positive_risk.split(" - ")[0] : null;
+    var lbl = rs ? "follow recommended: " + rs
+      : r && r.why_none === "no_automatic_triage" ? "no automatic triage: " + (fpr || "-")
+      : "no recommendation yet";
+    var sbl = rs ? "rec.: " + rs : r && r.why_none === "no_automatic_triage" ? "no auto: " + (fpr || "-") : "no rec. yet";
+    var rb = el("button", "tri-b tri-rec", "");
+    rb.appendChild(el("span", "tri-long", lbl));
+    rb.appendChild(el("span", "tri-short", sbl));
+    rb.title = lbl;
     rb.type = "button";
     rb.disabled = !rs || rs === cur;
     rb.addEventListener("click", function (e) {
@@ -347,7 +364,11 @@ var SlothFrrs = (function () {
       li.appendChild(el("span", "d-dim", "was " + r.prev_state));
       li.appendChild(el("span", "d-normal", r.via + (r.basis ? ": " + r.basis : "")));
       li.appendChild(el("span", "d-bright", r.note || "-"));
-      li.appendChild(el("span", "d-normal", (r.by || "-") + " · from " + (r.peer || "?")));
+      // An imported row: who and where are what its file claimed; the
+      // peer is the importer.
+      li.appendChild(el("span", "d-normal", r.via === "import"
+        ? "imported, claimed " + (r.claimed_by || "-") + " from " + (r.claimed_peer || "?") + " · by import from " + (r.peer || "?")
+        : (r.by || "-") + " · from " + (r.peer || "?")));
       ol.appendChild(li);
     });
   }
@@ -395,12 +416,14 @@ var SlothFrrs = (function () {
             : "kept in slothweb's store, never sent to sloth; every change is a new row, reversible by another");
           var r = h.recommend || {};
           set("frrs-tri-rec", r.state ? "the assessment recommends " + r.state + " (" + r.basis + ", " + r.file + ")"
-            : r.front_matter ? "the assessment (" + r.file + ") names no state this page maps: " +
+            : r.front_matter ? "no automatic triage: the assessment (" + r.file + ") recommends noise only when " +
+              "false_positive_risk is high and noise_verdict noisy; it says " +
               ["false_positive_risk", "noise_verdict", "severity_assessment"].map(function (k) {
                 return k + " " + (r.front_matter[k] === null ? "-" : r.front_matter[k]);
               }).join(", ")
-            : "no recommendation yet: " + (r.source === "none" ? "no --web-assessments directory" : "no " + r.file));
+            : "no recommendation yet: " + (r.source === "none" ? "no assessments directory (--web-assessments unset, or not installed)" : "no " + r.file));
           set("frrs-hist-note", (h.rows || []).length + " of at most " + h.history_cap +
+              (h.folded ? " (" + h.folded + " older folded: the first and the newest kept)" : "") +
               "; filed as " + h.subject + (h.finding ? " (sloth.db finding " + h.finding + ")" : " (not in sloth.db yet)"));
           histRows(S.hist);
           render(id);

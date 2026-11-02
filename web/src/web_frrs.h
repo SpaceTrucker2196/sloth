@@ -73,9 +73,30 @@
 #include "web_store.h"
 
 /* The bounds (docs/web-frrs-spec.md §3). Operator state is never
- * dropped by --web-max-mb; at a cap a write is refused, 507. */
+ * dropped by --web-max-mb. Triage is never refused for room: one
+ * alert's history beyond WEB_FRRS_HIST_PER folds (its first row and the
+ * newest kept, the count of the folded rows recorded on the first), and
+ * at WEB_FRRS_TRIAGE_CAP the oldest superseded rows fold, imported ones
+ * first (§3.1). A TACDB write at its cap is refused, 507. */
 #define WEB_FRRS_TRIAGE_CAP   20000
 #define WEB_FRRS_HIST_PER     64
+/* Imported rows of one alert: at most this many, the oldest folded, so
+ * a file can never fill an alert's history before its operator does. */
+#define WEB_FRRS_IMPORT_PER   8
+/* At the table's cap: rows folded at once, the cap over this (the
+ * retention's scan runs once per batch, not per write), and how old an
+ * alert's newest row is before its superseded rows are taken ahead of a
+ * live alert's. */
+#define WEB_FRRS_FOLD_DIV     100
+#define WEB_FRRS_AGED_S       (7LL * 86400)
+/* A clear is never refused: with nothing superseded left to fold, one
+ * may go past the cap by at most the cap over this (each one leaves a
+ * superseded row behind, so the next write folds it). */
+#define WEB_FRRS_CLEAR_DIV    50
+/* /api/frrs/summary and the page warn from this share of the cap. */
+#define WEB_FRRS_WARN_PCT     90
+/* An imported row's ts may run ahead of this clock by this much at most. */
+#define WEB_FRRS_TS_AHEAD_S   300
 #define WEB_FRRS_UNITS        512
 #define WEB_FRRS_PLATFORMS    2048
 #define WEB_FRRS_EMITTERS     8192
@@ -115,11 +136,11 @@
  * front matter closes, at most this much (the longest real front
  * matter is under 5 KiB; a whole file is under 30 KiB). */
 #define WEB_FRRS_ASSESS_MAX   32768
-/* An import's triage lines: at most WEB_FRRS_IMPORT_TRIAGE in one file,
- * and imported rows at most WEB_FRRS_IMPORTED_CAP of the table, so no
- * file, nor files one after another, take the rows the operator's own
- * triage needs; each alert's WEB_FRRS_HIST_PER holds for imports too. */
-#define WEB_FRRS_IMPORT_TRIAGE 5000
+/* An import's triage lines: at most WEB_FRRS_IMPORT_TRIAGE in one file
+ * (more is refused whole, 413, before a line is merged: one import runs
+ * on the HTTP thread, and this bounds how long it holds it), and
+ * imported rows at most WEB_FRRS_IMPORTED_CAP of the table. */
+#define WEB_FRRS_IMPORT_TRIAGE 1000
 #define WEB_FRRS_IMPORTED_CAP  (WEB_FRRS_TRIAGE_CAP / 2)
 /* The export, one JSON Lines file, and so also what one import takes. */
 #define WEB_FRRS_EXPORT_MAX   WEB_IMPORT_MAX
@@ -140,10 +161,15 @@ typedef struct {
     int       prev_state, via;
     long long ts, finding;           /* finding 0: not resolved */
     int       history_n;
+    long long folded;                /* rows of its history folded away */
     char      note[WEB_FRRS_NOTE_MAX + 1];
     char      by[WEB_FRRS_BY_MAX + 1];
     char      basis[WEB_FRRS_BASIS_MAX + 1];
     char      peer[WEB_PEER_MAX];
+    /* An imported row: who and where the file said (claims, not facts;
+     * peer is the importer's). */
+    char      claim_by[WEB_FRRS_BY_MAX + 1];
+    char      claim_peer[WEB_PEER_MAX];
 } web_tri_t;
 
 /* What names one alert to the triage join: its id as the alert routes
@@ -168,7 +194,7 @@ typedef struct {
 typedef struct {
     unsigned long writes, write_errors, rate_limited;
     unsigned long refused_origin, refused_ctype, refused_body, refused_size;
-    unsigned long triage_folded, ledger_evictions;
+    unsigned long triage_folded, triage_unchanged, ledger_evictions;
     unsigned long imports, exports;
 } web_frrs_stats_t;
 
@@ -179,6 +205,7 @@ typedef struct web_frrs {
     struct sqlite3      *wr;          /* the HTTP thread's writer; NULL none */
     char                 assess_dir[4096];   /* --web-assessments, "" unset */
     int                  writes;      /* 0 under --web-read-only */
+    long long            triage_cap;  /* WEB_FRRS_TRIAGE_CAP; the tests lower it */
     unsigned             nonce;       /* the suggestion tokens' */
     web_frrs_bucket_t    bucket[WEB_FRRS_PEERS];
     pthread_mutex_t      lmu;         /* the ledger's and the stats' */

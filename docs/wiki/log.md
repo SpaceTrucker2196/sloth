@@ -5724,3 +5724,20 @@ report events.
   unit; S1 needs the stream's confidence and takes the earlier address
   as primary, S2 one kind per MLD, S3 the low nibble and the vendor
   (`docs/web-frrs-spec.md` §14, Q15, Q16).
+- 2026-11-02 — [[slothweb]]: the triage and TACDB second review
+  (`docs/web-frrs-spec.md` §3.1, §12.1 Q2/Q3/Q15, §14). An operator's
+  change is never refused for room: one alert past 64 rows folds (first
+  and newest kept, the fold counted), imported rows at most 8 of it, the
+  table at 20,000 folds superseded rows (imported first, then aged-out
+  alerts', never a current row) and always takes a clear; an unchanged
+  write adds no row. "Follow recommended" gives `noise` only for
+  `false_positive_risk` high and `noise_verdict` noisy (FRAG_PLAINTEXT
+  and SMB1_USE, `low`, no longer get it), else "no automatic triage".
+  The import runs prepared in one transaction, 1,000 triage lines at
+  most (`413`), refuses a `ts` over 300 s ahead, records the importer
+  and keeps the file's `by` / `peer` as claims; its check runs the merge
+  and rolls it back. Bidirectional controls refused in operator text;
+  a body's deadline scales with its length; `make install` installs the
+  assessments and `slothweb.service` passes `--web-assessments`
+  ([[deployment]] §6). Each seen red under its mutation (the commit
+  lists them).

@@ -50,15 +50,18 @@ StateDirectoryMode=0700
 WorkingDirectory=/var/lib/slothweb
 UMask=0077
 
-# The three paths are this deployment's, fixed here because the sandbox
+# The paths are this deployment's, fixed here because the sandbox
 # below admits no others: the sensor's unix socket, the sensor's db read
 # in place (WAL reader, web/src/web_slothdb.h: no side file is ever made
-# beside it), slothweb's own store. $SLOTHWEB_ARGS carries the bind and
-# the allowed peers (packaging/default/slothweb).
+# beside it), slothweb's own store; and the research assessments `make
+# install` puts under share/sloth, read-only data "follow recommended"
+# reads (absent there: "no recommendation yet"). $SLOTHWEB_ARGS carries
+# the bind and the allowed peers (packaging/default/slothweb).
 ExecStart=/usr/local/bin/slothweb \
     --socket unix:/run/sloth/sloth.sock \
     --sloth-db /var/lib/sloth/sloth.db \
     --store /var/lib/slothweb/slothweb.db \
+    --web-assessments /usr/local/share/sloth/alert-assessments \
     $SLOTHWEB_ARGS
 
 # ── Privilege ────────────────────────────────────────────────────────────

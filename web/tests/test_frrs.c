@@ -667,18 +667,23 @@ static const char FM_PM_FORGE[] =
     "---\n";
 
 /* The front matter as the assessment batch writes it (its own lines,
- * above, not one-word stand-ins): noise_verdict "noisy" or "very noisy"
- * recommends noise, and nothing else recommends anything. The file is
- * found by the type's own name; no front matter, or no directory, no
- * recommendation.
+ * above, not one-word stand-ins): noise is recommended only where
+ * false_positive_risk begins "high" AND noise_verdict "noisy" / "very
+ * noisy"; nothing recommends false or incident; an assessment below the
+ * bar says "no automatic triage" (why_none), no file "no assessment".
+ * The file is found by the type's own name; no front matter, or no
+ * directory, no recommendation.
  *
- * ARP_SPOOF's "false_positive_risk: high" recommending nothing was seen
- * red with `if (fm_starts(fm->fpr, "high")) return WEB_TRI_FALSE;`
- * added before the noise test in web_frrs_recommend() (the state became
- * "false"); PORT_SCAN's "severity_assessment: agree" recommending
- * nothing was seen red with the same line for fm->sev and "agree"
- * returning WEB_TRI_INCIDENT. PM_FORGE's front matter (4,823 bytes)
- * found was seen red with WEB_FRRS_ASSESS_MAX back at 4096
+ * KARMA_AP (medium, noisy) recommending nothing was seen red with the
+ * fpr test dropped from web_frrs_recommend() (`if (fm_starts(fm->fpr,
+ * "high") &&` deleted, the noise_verdict alone deciding, as first
+ * built): "state":"noise". ARP_SPOOF's "false_positive_risk: high"
+ * recommending nothing was seen red with `if (fm_starts(fm->fpr,
+ * "high")) return WEB_TRI_FALSE;` added before the noise test (the
+ * state became "false"); PORT_SCAN's "severity_assessment: agree"
+ * recommending nothing was seen red with the same line for fm->sev and
+ * "agree" returning WEB_TRI_INCIDENT. PM_FORGE's front matter (4,823
+ * bytes) found was seen red with WEB_FRRS_ASSESS_MAX back at 4096
  * ("front_matter":null). */
 static void test_follow_recommended(void) {
     char dir[TEST_TMP_MAX + 16];
@@ -693,17 +698,19 @@ static void test_follow_recommended(void) {
     for (size_t i = 0; i < sizeof(F) / sizeof(F[0]); i++) {
         snprintf(p, sizeof(p), "%s/%s.md", dir, F[i].type);
         /* Each with a body below its front matter, as the files have,
-         * holding a verdict line the reader must not take. */
-        snprintf(doc, sizeof(doc), "%s## What the rule checks\nnoise_verdict: noisy\n", F[i].text);
+         * holding verdict lines the reader must not take. */
+        snprintf(doc, sizeof(doc), "%s## What the rule checks\nfalse_positive_risk: high\n"
+                 "noise_verdict: noisy\n", F[i].text);
         write_file(p, doc);
     }
     WT_EQ(strlen(FM_PM_FORGE), 4823);                 /* past the old 4096 */
     snprintf(p, sizeof(p), "%s/SMB1_USE.md", dir);
-    write_file(p, "no front matter\nnoise_verdict: noisy\n");
+    write_file(p, "no front matter\nfalse_positive_risk: high\nnoise_verdict: noisy\n");
     env_open(dir, 1);
     WT_EQ(get("/api/frrs/recommend", "type=KARMA_AP"), 200);
-    WT_HAS(g_out, "\"state\":\"noise\"");
-    WT_HAS(g_out, "\"basis\":\"noise_verdict: noisy on the reference host");
+    WT_HAS(g_out, "\"state\":null");
+    WT_HAS(g_out, "\"why_none\":\"no_automatic_triage\"");
+    WT_HAS(g_out, "\"noise_verdict\":\"noisy on the reference host");     /* shown, as advice */
     WT_EQ(get("/api/frrs/recommend", "type=ARP_SPOOF"), 200);
     WT_HAS(g_out, "\"state\":null");
     WT_HAS(g_out, "\"false_positive_risk\":\"high - ");          /* shown, as advice */
@@ -716,11 +723,31 @@ static void test_follow_recommended(void) {
     WT_LACKS(g_out, "\"front_matter\":null");
     WT_HAS(g_out, "\"false_positive_risk\":\"high - the rule treats");
     WT_HAS(g_out, "\"state\":\"noise\"");
-    WT_HAS(g_out, "\"basis\":\"noise_verdict: very noisy on the reference host");
+    WT_HAS(g_out, "\"basis\":\"false_positive_risk high; noise_verdict: very noisy on the reference");
+    WT_HAS(g_out, "\"why_none\":null");
     WT_EQ(get("/api/frrs/recommend", "type=SMB1_USE"), 200);
     WT_HAS(g_out, "\"state\":null");
     WT_HAS(g_out, "\"front_matter\":null");
+    WT_HAS(g_out, "\"why_none\":\"no_assessment\"");
     WT_EQ(get("/api/frrs/recommend", "type=../../etc/passwd"), 400);
+    if (E.have_store) {
+        char id[40], b[256];
+        WT_ASSERT(id_of("KARMA_AP", id, sizeof(id)));
+        snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"recommended\"}", id);
+        WT_EQ(post("/api/frrs/triage", b), 409);
+        WT_HAS(g_out, "no_recommendation");
+        WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+        snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"recommended\"}", id);
+        WT_EQ(post("/api/frrs/triage", b), 409);
+        WT_HAS(g_out, "no_recommendation");
+    }
+    env_close();
+    /* The POST path where the bar is met: a synthetic KARMA_AP file
+     * (the demo has no alert of a type whose real assessment meets it). */
+    snprintf(p, sizeof(p), "%s/KARMA_AP.md", dir);
+    write_file(p, "---\nfalse_positive_risk: high - synthetic, for this test\n"
+                  "noise_verdict: noisy - synthetic, for this test\n---\n");
+    env_open(dir, 1);
     if (E.have_store) {
         char id[40], b[256];
         WT_ASSERT(id_of("KARMA_AP", id, sizeof(id)));
@@ -728,10 +755,7 @@ static void test_follow_recommended(void) {
         WT_EQ(post("/api/frrs/triage", b), 200);
         WT_HAS(g_out, "\"via\":\"recommended\"");
         WT_HAS(g_out, "\"state\":\"noise\"");
-        WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
-        snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"recommended\"}", id);
-        WT_EQ(post("/api/frrs/triage", b), 409);
-        WT_HAS(g_out, "no_recommendation");
+        WT_HAS(g_out, "\"basis\":\"false_positive_risk high; noise_verdict: noisy - synthetic");
     }
     env_close();
     test_rm_tree(dir);
@@ -739,6 +763,45 @@ static void test_follow_recommended(void) {
     WT_EQ(get("/api/frrs/recommend", "type=KARMA_AP"), 200);
     WT_HAS(g_out, "\"source\":\"none\"");
     WT_HAS(g_out, "\"state\":null");
+    env_close();
+    /* A directory that is not there is none: no recommendation yet. */
+    env_open("/nonexistent/sloth-assessments", 1);
+    WT_EQ(get("/api/frrs/recommend", "type=PM_FORGE"), 200);
+    WT_HAS(g_out, "\"source\":\"none\"");
+    env_close();
+}
+
+/* The shipped assessments themselves, by name: FRAG_PLAINTEXT ("very
+ * noisy", false_positive_risk "low") and SMB1_USE ("noisy in count,
+ * quiet in findings", "low") are real findings re-counted, and get no
+ * noise; PM_FORGE and WPA_DOWNGRADE (both "high" and "very noisy") do.
+ * Read from docs/wiki/alert-assessments, the files make install ships.
+ * FRAG_PLAINTEXT's and SMB1_USE's seen red with the fpr test dropped
+ * (the mutation above): both "state":"noise". */
+static void test_recommend_from_the_shipped_assessments(void) {
+    env_open("docs/wiki/alert-assessments", 1);
+    static const char *const NONE[] = { "FRAG_PLAINTEXT", "SMB1_USE" };
+    for (size_t i = 0; i < sizeof(NONE) / sizeof(NONE[0]); i++) {
+        char q[64];
+        snprintf(q, sizeof(q), "type=%s", NONE[i]);
+        WT_EQ(get("/api/frrs/recommend", q), 200);
+        WT_HAS(g_out, "\"source\":\"dir\"");
+        WT_HAS(g_out, "\"false_positive_risk\":\"low - ");
+        WT_HAS(g_out, "\"state\":null");
+        WT_HAS(g_out, "\"why_none\":\"no_automatic_triage\"");
+        WT_LACKS(g_out, "\"state\":\"noise\"");
+    }
+    WT_EQ(get("/api/frrs/recommend", "type=FRAG_PLAINTEXT"), 200);
+    WT_HAS(g_out, "\"noise_verdict\":\"very noisy");
+    WT_EQ(get("/api/frrs/recommend", "type=SMB1_USE"), 200);
+    WT_HAS(g_out, "\"noise_verdict\":\"noisy in count");
+    static const char *const NOISE[] = { "PM_FORGE", "WPA_DOWNGRADE" };
+    for (size_t i = 0; i < sizeof(NOISE) / sizeof(NOISE[0]); i++) {
+        char q[64];
+        snprintf(q, sizeof(q), "type=%s", NOISE[i]);
+        WT_EQ(get("/api/frrs/recommend", q), 200);
+        WT_HAS(g_out, "\"state\":\"noise\"");
+    }
     env_close();
 }
 
@@ -1204,59 +1267,342 @@ static void test_deleted_rows_are_bounded(void) {
     env_close();
 }
 
-/* An import's triage lines are held to each alert's history bound, to
- * the imported share of the table, and to a bound per file. Each seen
- * red with its check removed from frrs_triage_import() or from the
- * check (history: the 65th line merged; share: the line merged; per
- * file: the 5,001-line file checked whole, 200). */
+/* A string member's value, into out ("" when absent). */
+static void json_str(const char *b, const char *key, char *out, size_t cap) {
+    char k[64];
+    snprintf(k, sizeof(k), "\"%s\":\"", key);
+    const char *p = strstr(b, k);
+    out[0] = '\0';
+    if (!p) return;
+    p += strlen(k);
+    const char *e = strchr(p, '"');
+    if (e && (size_t)(e - p) < cap) snprintf(out, cap, "%.*s", (int)(e - p), p);
+}
+
+/* An alert's descriptor, as its history names it. */
+static int desc_of(const char *id, char *type, char *addr, size_t cap, long long *port,
+                   long long *first) {
+    char q[64];
+    snprintf(q, sizeof(q), "id=%s", id);
+    if (get("/api/frrs/history", q) != 200) return 0;
+    const char *d = strstr(body_of(g_out), "\"descriptor\":");
+    if (!d) return 0;
+    json_str(d, "type", type, cap);
+    json_str(d, "addr", addr, cap);
+    *port = json_int(d, "port");
+    *first = json_int(d, "first_seen");
+    return type[0] != 0;
+}
+
+/* An import file of n triage lines on one descriptor, ts rising from
+ * ts0, into b (cap); its length. */
+static size_t tri_file(char *b, size_t cap, const char *type, const char *addr, long long port,
+                       long long first, int n, long long ts0, const char *by, const char *peer) {
+    size_t k = (size_t)snprintf(b, cap, "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n");
+    for (int i = 0; i < n && k < cap; i++)
+        k += (size_t)snprintf(b + k, cap - k, "{\"type\":\"triage\",\"alert_type\":\"%s\","
+                              "\"addr\":\"%s\",\"port\":%lld,\"first_seen\":%lld,"
+                              "\"state\":\"%s\",\"prev_state\":\"untriaged\",\"via\":\"manual\","
+                              "\"basis\":\"\",\"note\":\"\",\"by\":\"%s\",\"peer\":\"%s\",\"ts\":%lld}\n",
+                              type, addr, port, first, i % 2 ? "false" : "noise", by, peer, ts0 + i);
+    if (k < cap) k += (size_t)snprintf(b + k, cap - k, "{\"type\":\"end\",\"lines\":%d,\"complete\":true}\n", n + 2);
+    return k;
+}
+
+/* One alert's history never refuses its operator: past 64 rows it
+ * folds, the first row and the newest kept, the count of the folded
+ * recorded. 70 operator changes all succeed and leave 64 rows, the
+ * first ("noise", the first change) among them. Seen red with the fold
+ * in tri_room() replaced by the old refusal (`if (n >= WEB_FRRS_HIST_PER)
+ * { *why = "history_full"; return 1; }`): the 65th change 507. */
+static void test_history_folds_never_refuses(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    char id[40], b[256], q[64];
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    int ok = 0;
+    for (int i = 0; i < WEB_FRRS_HIST_PER + 6; i++) {
+        snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"%s\"}", id, i % 2 ? "incident" : "noise");
+        ok += post("/api/frrs/triage", b) == 200;
+    }
+    WT_EQ(ok, WEB_FRRS_HIST_PER + 6);
+    snprintf(q, sizeof(q), "id=%s", id);
+    WT_EQ(get("/api/frrs/history", q), 200);
+    const char *h = body_of(g_out);
+    WT_EQ(json_int(h, "history_n"), WEB_FRRS_HIST_PER);
+    WT_EQ(json_int(strstr(h, "\"history_cap\":"), "folded"), 6);
+    /* The oldest row shown is the first change: noise, was untriaged. */
+    const char *last = NULL;
+    for (const char *p = strstr(h, "{\"state\":"); p; p = strstr(p + 1, "{\"state\":")) last = p;
+    WT_ASSERT(last && !strncmp(last, "{\"state\":\"noise\",\"prev_state\":\"untriaged\"", 41));
+    WT_HAS(last, "\"folded\":6");
+    env_close();
+}
+
+/* Imported rows take at most WEB_FRRS_IMPORT_PER of an alert's history:
+ * 70 imported lines on one alert merge, 8 stay, 62 fold, and the
+ * operator's incident and clear after them both succeed with the fold
+ * shown. Seen red with the WEB_FRRS_IMPORT_PER fold removed from
+ * tri_room() (`if (n > 0 && imp && ni >= ...)` made `if (0)`): 64
+ * imported rows stayed, the history full of the file's rows. */
+static void test_imports_take_a_small_share(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    char id[40], type[48], addr[64], b[256], q[64];
+    long long port = 0, first = 0;
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    WT_ASSERT(desc_of(id, type, addr, sizeof(addr), &port, &first));
+    size_t cap = 80 * 400;
+    char *f = malloc(cap);
+    WT_ASSERT(f != NULL);
+    if (!f) { env_close(); return; }
+    tri_file(f, cap, type, addr, port, first, 70, T - 100000, "them", "192.0.2.7");
+    WT_EQ(import_as("merge", f, 1), 200);
+    WT_HAS(g_out, "\"triage\":70");
+    snprintf(q, sizeof(q), "id=%s", id);
+    WT_EQ(get("/api/frrs/history", q), 200);
+    WT_EQ(count_of(body_of(g_out), "\"via\":\"import\""), WEB_FRRS_IMPORT_PER + 1);   /* + current */
+    WT_EQ(json_int(strstr(body_of(g_out), "\"history_cap\":"), "folded"), 70 - WEB_FRRS_IMPORT_PER);
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"incident\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);
+    WT_HAS(g_out, "\"state\":\"incident\"");
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"untriaged\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);
+    WT_EQ(get("/api/frrs/history", q), 200);
+    WT_HAS(g_out, "\"current\":{\"state\":\"untriaged\"");
+    WT_EQ(json_int(body_of(g_out), "history_n"), WEB_FRRS_IMPORT_PER + 2);
+    WT_EQ(json_int(strstr(body_of(g_out), "\"history_cap\":"), "folded"), 70 - WEB_FRRS_IMPORT_PER);
+    /* The same file again: nothing is newer than what is here. */
+    WT_EQ(import_as("merge", f, 2), 200);
+    WT_HAS(g_out, "\"triage\":0");
+    free(f);
+    env_close();
+}
+
+/* A write that changes nothing (the state it has, no new note) is a
+ * 200 with no row: a double click, or a clear of an untriaged alert,
+ * never spends history. A new note on the same state is a change. Seen
+ * red with `int unchanged = 0;` in post_triage() (history_n 2 after the
+ * repeat, and a row for the clear of an untriaged alert). */
+static void test_unchanged_write_adds_no_row(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    char id[40], b[256];
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"untriaged\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);
+    WT_HAS(g_out, "\"unchanged\":true");
+    WT_HAS(g_out, "\"history_n\":0");
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"noise\",\"note\":\"n1\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);
+    WT_HAS(g_out, "\"unchanged\":false");
+    WT_EQ(post("/api/frrs/triage", b), 200);                  /* the same again */
+    WT_HAS(g_out, "\"unchanged\":true");
+    WT_HAS(g_out, "\"history_n\":1");
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"noise\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);                  /* no note: no change */
+    WT_HAS(g_out, "\"history_n\":1");
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"noise\",\"note\":\"n2\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);                  /* a new note is one */
+    WT_HAS(g_out, "\"history_n\":2");
+    env_close();
+}
+
+#ifdef WITH_SQLITE
+static long long store_int(const char *sql) {
+    sqlite3 *db = NULL;
+    long long v = -1;
+    sqlite3_stmt *s = NULL;
+    if (sqlite3_open(E.store_path, &db) == SQLITE_OK && sqlite3_prepare_v2(db, sql, -1, &s, NULL) == SQLITE_OK &&
+        sqlite3_step(s) == SQLITE_ROW)
+        v = sqlite3_column_int64(s, 0);
+    sqlite3_finalize(s);
+    sqlite3_close(db);
+    return v;
+}
+#endif
+
+/* The table at its cap (lowered to 40 here) keeps taking writes: the
+ * oldest superseded rows fold, imported ones first, an alert's current
+ * row never; /api/health and the summary say how full it is. With
+ * nothing superseded left a decided state is 507 triage_full, and a
+ * clear still goes in. Seen red with the retain() call removed from
+ * tri_room() (the write at the cap 507), with the clear's exception
+ * removed (the clear 507), with the fold after a clear removed from
+ * tri_write() (41 rows), and with `t.via = 2 DESC,` removed from
+ * retain()'s order (an operator's superseded row folded before the
+ * imported one). */
+static void test_triage_cap_folds_and_clears(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+#ifdef WITH_SQLITE
+    E.f.triage_cap = 40;
+    char a[40], k[40], b[256];
+    WT_ASSERT(id_of("PORT_SCAN", a, sizeof(a)));
+    WT_ASSERT(id_of("KARMA_AP", k, sizeof(k)));
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"incident\"}", a);
+    WT_EQ(post("/api/frrs/triage", b), 200);
+    /* 36 rows of 18 other alerts, two each (one superseded): the last
+     * pair imported, the rest an operator's, all older than 7 days, so
+     * only the imported-first order takes the imported one first. */
+    WT_EQ(sql_on(E.store_path,
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 36)"
+        " INSERT INTO triage (subject, type, addr, port, first_seen, state, via, ts)"
+        " SELECT 'x0:' || ((i + 1) / 2), 0, '', 0, (i + 1) / 2, 2, CASE WHEN i >= 35 THEN 2 ELSE 0 END, i"
+        " FROM n"), 0);
+    WT_EQ(store_int("SELECT COUNT(*) FROM triage"), 37);
+    WT_EQ(get("/api/frrs/summary", ""), 200);
+    WT_HAS(g_out, "\"near_cap\":true");
+    WT_HAS(g_out, "\"cap\":40");
+    for (int i = 0; i < 6; i++) {
+        snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"%s\"}", k, i % 2 ? "false" : "noise");
+        WT_EQ(post("/api/frrs/triage", b), 200);
+    }
+    WT_ASSERT(store_int("SELECT COUNT(*) FROM triage") <= 40);
+    /* The imported superseded row went first, the alert's current rows stay. */
+    WT_EQ(store_int("SELECT COUNT(*) FROM triage WHERE via = 2 AND first_seen = 18"), 1);
+    WT_EQ(store_int("SELECT COUNT(*) FROM triage WHERE state = 3"), 1);
+    WT_EQ(get("/api/health", ""), 200);
+    WT_HAS(g_out, "\"triage_cap\":40");
+    WT_ASSERT(json_int(body_of(g_out), "triage_folded") >= 3);
+    /* Nothing superseded left: the two alerts' current rows and 38
+     * others, one row each, the table at its cap. */
+    WT_EQ(sql_on(E.store_path,
+        "DELETE FROM triage WHERE subject LIKE 'x0:%';"
+        "DELETE FROM triage WHERE id NOT IN (SELECT MAX(id) FROM triage"
+        " GROUP BY type, addr, port, first_seen);"
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 38)"
+        " INSERT INTO triage (subject, type, addr, port, first_seen, state, via, ts)"
+        " SELECT 'x1:' || i, 1, '', 0, i, 2, 0, i FROM n"), 0);
+    WT_EQ(store_int("SELECT COUNT(*) FROM triage"), 40);
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"incident\"}", k);
+    WT_EQ(post("/api/frrs/triage", b), 507);
+    WT_HAS(g_out, "triage_full");
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"untriaged\"}", a);
+    WT_EQ(post("/api/frrs/triage", b), 200);              /* a clear always goes in */
+    WT_HAS(g_out, "\"current\":{\"state\":\"untriaged\"");
+    /* The incident it superseded folded at once: the table at its cap,
+     * the alert's history one row with one folded. */
+    WT_EQ(store_int("SELECT COUNT(*) FROM triage"), 40);
+    char q[64];
+    snprintf(q, sizeof(q), "id=%s", a);
+    WT_EQ(get("/api/frrs/history", q), 200);
+    WT_HAS(g_out, "\"history_n\":1,\"folded\":1");
+#endif
+    env_close();
+}
+
+/* An import's triage lines: at most WEB_FRRS_IMPORT_TRIAGE in one file
+ * (more is refused whole, 413, nothing merged), imported rows at most
+ * half the table, no ts beyond five minutes ahead, and the file's by
+ * and peer kept as claims with the importer as the peer. Per file seen
+ * red with the 413 made 400 in frrs_import(); the future ts with its
+ * check removed from frrs_triage_import() (the line merged, 200); the
+ * claims with the insert's peer and claim_peer swapped (peer
+ * "192.0.2.7"). The 1,000-line import and /api/health during it are
+ * measured in test_import_time_over_socket. */
 static void test_import_triage_bounded(void) {
     env_open(NULL, 1);
     if (!E.have_store) { env_close(); return; }
-    size_t cap = (size_t)(WEB_FRRS_IMPORT_TRIAGE + 3) * 220;
+    size_t cap = (size_t)(WEB_FRRS_IMPORT_TRIAGE + 3) * 400;
     char *b = malloc(cap);
     WT_ASSERT(b != NULL);
     if (!b) { env_close(); return; }
-    size_t n = (size_t)snprintf(b, cap, "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n");
-    for (int i = 0; i < WEB_FRRS_HIST_PER + 1; i++)
-        n += (size_t)snprintf(b + n, cap - n, "{\"type\":\"triage\",\"alert_type\":\"PORT_SCAN\","
-                              "\"addr\":\"198.51.100.7\",\"port\":0,\"first_seen\":1700000000,"
-                              "\"state\":\"noise\",\"prev_state\":\"untriaged\",\"via\":\"manual\","
-                              "\"basis\":\"\",\"note\":\"\",\"by\":\"\",\"peer\":\"\",\"ts\":%d}\n",
-                              1700000001 + i);
-    snprintf(b + n, cap - n, "{\"type\":\"end\",\"lines\":%d,\"complete\":true}\n", WEB_FRRS_HIST_PER + 3);
-    WT_EQ(import_as("merge", b, 1), 200);
-    WT_HAS(g_out, "\"triage\":64");
-    WT_HAS(g_out, "\"why\":\"history_full\"");
+    char id[40], type[48], addr[64], q[64];
+    long long port = 0, first = 0;
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    WT_ASSERT(desc_of(id, type, addr, sizeof(addr), &port, &first));
+    /* A future ts: refused. */
+    tri_file(b, cap, type, addr, port, first, 1, T + WEB_FRRS_TS_AHEAD_S + 60, "", "");
+    WT_EQ(import_as("merge", b, 1), 400);
+    WT_HAS(g_out, "future_ts");
+    tri_file(b, cap, type, addr, port, first, 1, T + WEB_FRRS_TS_AHEAD_S - 60, "", "");
+    WT_EQ(import_as("check", b, 2), 200);                 /* within the skew: taken */
+    /* Claims: the file's by and peer, and this importer as the peer. */
+    tri_file(b, cap, type, addr, port, first, 1, T - 50, "alice", "192.0.2.7");
+    WT_EQ(import_as("merge", b, 3), 200);
+    WT_HAS(g_out, "\"triage\":1");
+    snprintf(q, sizeof(q), "id=%s", id);
+    WT_EQ(get("/api/frrs/history", q), 200);
+    WT_HAS(g_out, "\"claimed_by\":\"alice\"");
+    WT_HAS(g_out, "\"claimed_peer\":\"192.0.2.7\"");
+    WT_HAS(g_out, "\"peer\":\"127.0.1.3\"");
+    WT_HAS(g_out, "\"by\":\"\"");
+    char *ex = export_copy();                             /* exported as the claim it is */
+    WT_ASSERT(ex && strstr(ex, "\"by\":\"alice\",\"peer\":\"192.0.2.7\""));
+    free(ex);
     /* The imported share, full: nothing more is imported. */
     char sql[400];
     snprintf(sql, sizeof(sql), "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < %d)"
              " INSERT INTO triage (subject, type, addr, port, first_seen, state, via, ts)"
              " SELECT 'x0:' || i, 0, '', 0, i, 2, 2, 1 FROM n", WEB_FRRS_IMPORTED_CAP);
     WT_EQ(sql_on(E.store_path, sql), 0);
-    snprintf(b, cap, "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n"
-             "{\"type\":\"triage\",\"alert_type\":\"PORT_SCAN\",\"addr\":\"198.51.100.8\",\"port\":0,"
-             "\"first_seen\":1700000000,\"state\":\"noise\",\"prev_state\":\"untriaged\",\"via\":\"manual\","
-             "\"basis\":\"\",\"note\":\"\",\"by\":\"\",\"peer\":\"\",\"ts\":1700000001}\n"
-             "{\"type\":\"end\",\"lines\":3,\"complete\":true}\n");
-    WT_EQ(import_as("merge", b, 2), 200);
+    tri_file(b, cap, "PORT_SCAN", "198.51.100.8", 0, 1700000000, 1, 1700000001, "", "");
+    WT_EQ(import_as("merge", b, 4), 200);
     WT_HAS(g_out, "\"triage\":0");
     WT_HAS(g_out, "import_share_full");
     /* A manual triage still has its room. */
-    char id[40], body[160];
-    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
-    snprintf(body, sizeof(body), "{\"id\":\"%s\",\"state\":\"noise\"}", id);
+    char body[160];
+    snprintf(body, sizeof(body), "{\"id\":\"%s\",\"state\":\"incident\"}", id);
     WT_EQ(post("/api/frrs/triage", body), 200);
-    /* One file, past its own bound: refused whole at the check. */
-    n = (size_t)snprintf(b, cap, "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n");
-    for (int i = 0; i < WEB_FRRS_IMPORT_TRIAGE + 1; i++)
-        n += (size_t)snprintf(b + n, cap - n, "{\"type\":\"triage\",\"alert_type\":\"PORT_SCAN\","
-                              "\"addr\":\"198.51.100.9\",\"port\":0,\"first_seen\":%d,"
-                              "\"state\":\"noise\",\"prev_state\":\"untriaged\",\"via\":\"manual\","
-                              "\"basis\":\"\",\"note\":\"\",\"by\":\"\",\"peer\":\"\",\"ts\":1}\n", i + 1);
-    snprintf(b + n, cap - n, "{\"type\":\"end\",\"lines\":%d,\"complete\":true}\n", WEB_FRRS_IMPORT_TRIAGE + 3);
-    WT_EQ(import_as("check", b, 3), 400);
+    /* One file, past its own bound: refused whole, 413, at the check. */
+    tri_file(b, cap, "PORT_SCAN", "198.51.100.9", 0, 1, WEB_FRRS_IMPORT_TRIAGE + 1, 1, "", "");
+    WT_EQ(import_as("merge", b, 5), 413);
     WT_HAS(g_out, "too_many_triage");
+    WT_HAS(g_out, "\"triage\":0");
     free(b);
+    env_close();
+}
+
+/* The check reports what the merge would: here a unit cycle (each the
+ * other's parent), which only the merge's parent-first rounds find.
+ * Seen red with the check's merge run removed (frrs_import()'s
+ * `if (!x.bad_line)` made `if (write && !x.bad_line)`): the check said
+ * nothing of either unit, the merge skipped both. */
+static void test_import_check_is_the_merge(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    static const char CYCLE[] =
+        "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n"
+        "{\"type\":\"unit\",\"id\":1,\"parent\":2,\"name\":\"ying\",\"kind\":\"site\",\"note\":\"\"}\n"
+        "{\"type\":\"unit\",\"id\":2,\"parent\":1,\"name\":\"yang\",\"kind\":\"site\",\"note\":\"\"}\n"
+        "{\"type\":\"unit\",\"id\":3,\"parent\":null,\"name\":\"fine\",\"kind\":\"site\",\"note\":\"\"}\n"
+        "{\"type\":\"end\",\"lines\":5,\"complete\":true}\n";
+    WT_EQ(import_as("check", CYCLE, 1), 200);
+    static char chk[4096];
+    snprintf(chk, sizeof(chk), "%s", body_of(g_out));
+    WT_HAS(chk, "{\"line\":2,\"why\":\"parent_not_merged\"}");
+    WT_HAS(chk, "{\"line\":3,\"why\":\"parent_not_merged\"}");
+    WT_HAS(chk, "\"units\":1");                           /* would merge "fine" */
+    WT_EQ(get("/api/frrs/tacdb", ""), 200);
+    WT_LACKS(g_out, "\"name\":\"fine\"");                 /* a check writes nothing */
+    WT_EQ(import_as("merge", CYCLE, 2), 200);
+    const char *mg = body_of(g_out);
+    WT_HAS(mg, "{\"line\":2,\"why\":\"parent_not_merged\"}");
+    WT_HAS(mg, "{\"line\":3,\"why\":\"parent_not_merged\"}");
+    WT_EQ(json_int(mg, "skipped_n"), json_int(chk, "skipped_n"));
+    WT_EQ(get("/api/frrs/tacdb", ""), 200);
+    WT_HAS(g_out, "\"name\":\"fine\"");
+    env_close();
+}
+
+/* The bidirectional controls are refused in operator text as control
+ * bytes are: U+202E in a note, U+2066 in a unit name. Seen red with the
+ * E2 80/81 test removed from frrs_text() (both 200). U+2069's neighbour
+ * U+2070 (superscript zero) and U+202F (narrow no-break space) are not
+ * controls and pass. */
+static void test_bidi_controls_refused(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    char id[40], b[256];
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"noise\",\"note\":\"gpj.\xe2\x80\xae" "exe\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 400);
+    WT_HAS(g_out, "bad_text");
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"a\xe2\x81\xa6" "b\",\"kind\":\"site\"}"), 400);
+    WT_HAS(g_out, "bad_text");
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"noise\",\"note\":\"x\xe2\x81\xb0y\xe2\x80\xafz\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);
     env_close();
 }
 
@@ -1472,6 +1818,149 @@ static void test_oversize_body_refused_unread(void) {
     env_close();
 }
 
+/* A body's deadline is the timeout plus its length at
+ * WEB_BODY_MIN_BPS: a 64 KiB import sent steadily over 3.2 s, past the
+ * 2 s timeout but above the floor, is answered; a client dripping a
+ * byte every 100 ms is cut off at its bound (2 s + 4,000 B at 16 KiB/s),
+ * 408. The first seen red with the C_BODY deadline line removed from
+ * conn_begin_body() (the import 408 at 2 s, from accept). */
+static void test_body_deadline_scales(void) {
+    env_open(NULL, 1);
+    running_t r;
+    WT_EQ(srv_start(&r, 0), 0);
+    if (!r.s) { env_close(); return; }
+    uint16_t port = web_server_port(r.s);
+    char req[512];
+    enum { BODY = 65536, STEP = 8192 };
+    static char nl[BODY];
+    memset(nl, '\n', sizeof(nl));
+    int hl = snprintf(req, sizeof(req), "POST /api/frrs/import?mode=check HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n"
+                      "Origin: http://127.0.0.1:%u\r\nContent-Type: application/json\r\n"
+                      "Content-Length: %d\r\n\r\n", port, port, BODY);
+    int fd = dial(port);
+    WT_ASSERT(fd >= 0);
+    struct timeval tv = { 15, 0 };
+    if (fd >= 0) {
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        send(fd, req, (size_t)hl, MSG_NOSIGNAL);
+        for (int off = 0; off < BODY; off += STEP) {
+            usleep(400000);
+            send(fd, nl + off, STEP, MSG_NOSIGNAL);
+        }
+        read_all(fd, g_out, sizeof(g_out));
+        close(fd);
+    }
+    WT_LACKS(g_out, "HTTP/1.1 408");
+    WT_HAS(g_out, E.have_store ? "HTTP/1.1 400" : "HTTP/1.1 503");   /* answered: no header line */
+    hl = snprintf(req, sizeof(req), "POST /api/frrs/triage HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n"
+                  "Origin: http://127.0.0.1:%u\r\nContent-Type: application/json\r\n"
+                  "Content-Length: 4000\r\n\r\n", port, port);
+    fd = dial(port);
+    long long t0 = mono_ms(), t1 = t0;
+    if (fd >= 0) {
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        send(fd, req, (size_t)hl, MSG_NOSIGNAL);
+        /* A byte every 100 ms until the server closes (the send fails). */
+        for (int i = 0; i < 100; i++) {
+            usleep(100000);
+            if (send(fd, " ", 1, MSG_NOSIGNAL) != 1) break;
+            char c;
+            if (recv(fd, &c, 1, MSG_PEEK | MSG_DONTWAIT) >= 0) break;
+        }
+        read_all(fd, g_out, sizeof(g_out));
+        t1 = mono_ms();
+        close(fd);
+    }
+    WT_HAS(g_out, "HTTP/1.1 408");
+    WT_ASSERT(t1 - t0 < 6000);
+    srv_stop(&r);
+    env_close();
+}
+
+/* The 1,000-line import (WEB_FRRS_IMPORT_TRIAGE, the most one file may
+ * carry) over a socket, and /api/health asked while it runs: both
+ * timed and printed, the figures the spec quotes (§14). An import runs
+ * on the HTTP thread, so the health answer waits for it; the bound per
+ * file is what keeps that wait short. */
+#ifdef WITH_SQLITE
+typedef struct { uint16_t port; long long ms; int ok; } health_probe_t;
+static void *health_probe(void *arg) {
+    health_probe_t *h = arg;
+    usleep(50000);
+    char req[256], out[8192];
+    int n = snprintf(req, sizeof(req), "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n\r\n", h->port);
+    long long t0 = mono_ms();
+    int fd = dial(h->port);
+    if (fd < 0) return NULL;
+    struct timeval tv = { 60, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    send(fd, req, (size_t)n, MSG_NOSIGNAL);
+    read_all(fd, out, sizeof(out));
+    close(fd);
+    h->ms = mono_ms() - t0;
+    h->ok = strstr(out, "HTTP/1.1 200") != NULL;
+    return NULL;
+}
+
+static void test_import_time_over_socket(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    running_t r;
+    WT_EQ(srv_start(&r, 0), 0);
+    if (!r.s) { env_close(); return; }
+    uint16_t port = web_server_port(r.s);
+    size_t cap = (size_t)(WEB_FRRS_IMPORT_TRIAGE + 3) * 400;
+    char *b = malloc(cap);
+    WT_ASSERT(b != NULL);
+    if (!b) { srv_stop(&r); env_close(); return; }
+    /* A store three quarters full (15,000 operator rows), where the
+     * per-line table counts first built cost the most; then 100 alerts,
+     * 10 lines each, the per-alert share folding as it goes. */
+    WT_EQ(sql_on(E.store_path, "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n"
+                               " WHERE i < 15000) INSERT INTO triage (subject, type, addr, port,"
+                               " first_seen, state, via, ts) SELECT 'x2:' || i, 2, '', 0, i, 2, 0, i"
+                               " FROM n"), 0);
+    size_t k = (size_t)snprintf(b, cap, "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n");
+    for (int i = 0; i < WEB_FRRS_IMPORT_TRIAGE; i++)
+        k += (size_t)snprintf(b + k, cap - k, "{\"type\":\"triage\",\"alert_type\":\"PORT_SCAN\","
+                              "\"addr\":\"198.51.100.%d\",\"port\":0,\"first_seen\":1700000000,"
+                              "\"state\":\"noise\",\"prev_state\":\"untriaged\",\"via\":\"manual\","
+                              "\"basis\":\"\",\"note\":\"\",\"by\":\"\",\"peer\":\"\",\"ts\":%d}\n",
+                              i % 100, 1700000001 + i);
+    k += (size_t)snprintf(b + k, cap - k, "{\"type\":\"end\",\"lines\":%d,\"complete\":true}\n",
+                          WEB_FRRS_IMPORT_TRIAGE + 2);
+    char req[512];
+    int hl = snprintf(req, sizeof(req), "POST /api/frrs/import?mode=merge HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n"
+                      "Origin: http://127.0.0.1:%u\r\nContent-Type: application/json\r\n"
+                      "Content-Length: %zu\r\n\r\n", port, port, k);
+    health_probe_t hp = { port, -1, 0 };
+    pthread_t th;
+    int fd = dial(port);
+    WT_ASSERT(fd >= 0);
+    long long t0 = mono_ms(), t1 = t0;
+    if (fd >= 0) {
+        struct timeval tv = { 60, 0 };
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        send(fd, req, (size_t)hl, MSG_NOSIGNAL);
+        send(fd, b, k, MSG_NOSIGNAL);
+        int started = pthread_create(&th, NULL, health_probe, &hp) == 0;
+        read_all(fd, g_out, sizeof(g_out));
+        t1 = mono_ms();
+        close(fd);
+        if (started) pthread_join(th, NULL);
+    }
+    WT_HAS(g_out, "HTTP/1.1 200");
+    WT_HAS(g_out, "\"triage\":1000");
+    WT_ASSERT(hp.ok);
+    fprintf(stderr, "  frrs: %d-line import into 15,000 rows %lld ms; /api/health asked 50 ms "
+            "into it answered in %lld ms\n", WEB_FRRS_IMPORT_TRIAGE, t1 - t0, hp.ms);
+    WT_ASSERT(t1 - t0 < 30000);
+    free(b);
+    srv_stop(&r);
+    env_close();
+}
+#endif
+
 /* --web-read-only: every POST is 405 Allow: GET, HEAD, the write paths
  * included, and the reads stay. Seen red with the read_only branch
  * taken out of conn_begin_body() (the router's own 405 read_only then
@@ -1534,7 +2023,19 @@ static void test_page_module(void) {
     WT_HAS(m, "S.rec[S.types[id]] = h.recommend;");
     /* A row holding buttons is no longer a link. */
     WT_HAS(m, "li.role = \"group\";");
+    /* The recommendation button: the bar's own words when an assessment
+     * does not meet it, and a short label for phone width. */
+    WT_HAS(m, "\"no automatic triage: \"");
+    WT_HAS(m, "el(\"span\", \"tri-short\", sbl)");
     free(m);
+    /* At 480 px and under the short label shows and the long one does
+     * not, so the row's last button is never cut off at 393 px (seen
+     * cut off there before; re-screenshot at 393 px, review of 2026-11-02).
+     * Seen red with the media block removed from frrs.css. */
+    const char *mq = strstr(p, ".tri-rec .tri-short { display: none; }");
+    const char *mw = mq ? strstr(mq, "@media (max-width: 480px) {") : NULL;
+    WT_ASSERT(mq && mw && strstr(mw, ".tri-rec .tri-long { display: none; }") &&
+              strstr(mw, ".tri-rec .tri-short { display: inline; }"));
     /* Every place a linked alert row is drawn reaches the hook through
      * alertLink(), which checks the id first: the Overview, History, the
      * drawer, and an alert page's runs and other alerts. */
@@ -1634,6 +2135,7 @@ void run_frrs_tests(void) {
     WT_RUN(test_finding_set_once);
 #endif
     WT_RUN(test_follow_recommended);
+    WT_RUN(test_recommend_from_the_shipped_assessments);
     WT_RUN(test_record_states_its_limits);
     WT_RUN(test_every_source_is_real);
     WT_RUN(test_tacdb_round_trip);
@@ -1645,9 +2147,19 @@ void run_frrs_tests(void) {
     WT_RUN(test_restore_keeps_the_rules);
     WT_RUN(test_deleted_rows_are_bounded);
     WT_RUN(test_import_triage_bounded);
+    WT_RUN(test_history_folds_never_refuses);
+    WT_RUN(test_imports_take_a_small_share);
+    WT_RUN(test_unchanged_write_adds_no_row);
+    WT_RUN(test_triage_cap_folds_and_clears);
+    WT_RUN(test_import_check_is_the_merge);
+    WT_RUN(test_bidi_controls_refused);
     WT_RUN(test_suggestion_rules);
 #endif
     WT_RUN(test_post_over_socket);
     WT_RUN(test_oversize_body_refused_unread);
     WT_RUN(test_read_only_over_socket);
+    WT_RUN(test_body_deadline_scales);
+#ifdef WITH_SQLITE
+    WT_RUN(test_import_time_over_socket);
+#endif
 }

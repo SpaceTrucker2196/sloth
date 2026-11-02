@@ -802,6 +802,10 @@ static void test_web_unit_execstart(void) {
         ASSERT(strstr(start, "--sloth-db /var/lib/sloth/sloth.db") != NULL);
         ASSERT(strstr(start, "--store /var/lib/slothweb/slothweb.db") != NULL);
         ASSERT(uf_has_token(start, "$SLOTHWEB_ARGS"));
+        /* "Follow recommended" from the copy make install puts there
+         * (test_makefile_install_targets), so a deployed slothweb is
+         * not "no recommendation yet" everywhere. */
+        ASSERT(strstr(start, "--web-assessments /usr/local/share/sloth/alert-assessments ") != NULL);
         /* Loopback unless the site's file says otherwise: the unit
          * itself never widens the bind or the peer list. */
         ASSERT(!uf_has_token(start, "--web-bind"));
@@ -809,7 +813,8 @@ static void test_web_unit_execstart(void) {
         ASSERT(!uf_has_token(start, "--web-allow"));
         ASSERT(!uf_has_token(start, "--web-allow-sql"));
         /* The deployment page names every flag the unit runs with. */
-        static const char *const flags[] = { "--socket", "--sloth-db", "--store" };
+        static const char *const flags[] = { "--socket", "--sloth-db", "--store",
+                                             "--web-assessments" };
         for (size_t i = 0; i < sizeof(flags) / sizeof(flags[0]); i++) {
             if (!uf_doc_names_flag(doc, flags[i]))
                 fprintf(stderr, "    %s does not name slothweb flag %s\n",
@@ -1313,7 +1318,7 @@ static void test_makefile_install_targets(void) {
 
     int in_install = 0, in_service = 0;
     int inst_bin = 0, inst_helper = 0, inst_db = 0, inst_web = 0;
-    int inst_web_fresh = 0;
+    int inst_web_fresh = 0, inst_assess_dir = 0, inst_assess = 0;
     int svc_unit = 0, svc_sysusers = 0, svc_defaults_nc = 0, svc_defaults_b = 0;
     int svc_web_unit = 0, svc_web_defaults_nc = 0, svc_web_defaults_b = 0;
     int recipes_seen = 0;
@@ -1344,6 +1349,14 @@ static void test_makefile_install_targets(void) {
              * unit and UI: its sources and the Makefile are its inputs. */
             if (strstr(l, "find web/src web/ui ") && strstr(l, " -newer slothweb") &&
                 strstr(l, "exit 1")) inst_web_fresh = 1;
+            /* The assessments slothweb.service names with
+             * --web-assessments: their directory, and the type files
+             * into it, read-only data, the generated index left out. */
+            if (strstr(l, "install -d ") &&
+                strstr(l, "$(DESTDIR)$(PREFIX)/share/sloth/alert-assessments")) inst_assess_dir = 1;
+            if (strstr(l, "install -m 644 ") && strstr(l, "docs/wiki/alert-assessments/*.md") &&
+                strstr(l, "filter-out %/README.md") &&
+                strstr(l, "$(DESTDIR)$(PREFIX)/share/sloth/alert-assessments/")) inst_assess = 1;
         }
         if (in_service) {
             if (strstr(l, "sloth-sensor.service")) svc_unit = 1;
@@ -1374,6 +1387,8 @@ static void test_makefile_install_targets(void) {
     ASSERT(inst_db);
     ASSERT(inst_web);
     ASSERT(inst_web_fresh);
+    ASSERT(inst_assess_dir);
+    ASSERT(inst_assess);
     /* `install-service`: the unit, the account declaration, and each
      * defaults file only where there is none, never over an edit. */
     ASSERT(svc_unit);

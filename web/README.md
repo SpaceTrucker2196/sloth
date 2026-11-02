@@ -260,7 +260,7 @@ and the page says why in each view that needs it):
 | `PATH: needs recovery by sloth, which it does when it next opens it (ERR)` | sloth stopped mid-write; start sloth and it recovers the file. |
 | `PATH: SQLITE_DBCONFIG_DEFENSIVE refused`, `PATH: query_only: ERR` | The SQLite library lacks what slothweb needs: 3.31 or newer. |
 | `no --sloth-db`, `slothweb was built without SQLite; no sloth.db` | The reason `/api/health` gives (`db_error`) when there is no sloth.db to read. |
-| `--web-assessments: empty or too long a path`, `--web-assessments PATH: not a directory` | Give the directory holding the research assessments (`<TYPE>.md` with front matter), or leave the flag out: "follow recommended" then says "no recommendation yet". |
+| `--web-assessments: empty or too long a path`, `--web-assessments PATH: not a directory` | Give the directory holding the research assessments (`<TYPE>.md` with front matter), or leave the flag out: "follow recommended" then says "no recommendation yet". A path that is not there is accepted and means the same (`slothweb: follow recommended: PATH: no such directory, no recommendation yet`); `make install` puts them in `$(PREFIX)/share/sloth/alert-assessments`. |
 | `triage: ERR`, `the store is not open`, `PATH: changed while it was being opened; refused` | The triage and TACDB writer (a third connection to the store, [Triage and the FRRS record](#triage-and-the-frrs-record)) could not open what the store thread had just opened: the file was replaced or locked in between. Start again; exit 1. |
 
 **Normal start notices** (not problems): `listening on`, `vendor
@@ -383,7 +383,7 @@ milestone (W0, M0 to M6; tracker #102).
 | `--sloth-db PATH` | sloth's own database (`sloth --db`), read-only (below). Absent: `/api/devices` is a `503` `no_sloth_db`, the drawer and Lookup answer from the stream and the vendor table, A2 runs on the stream alone, and the page says so. A path that is not there yet, or a file refused, is not fatal: every request opens it afresh. Needs a `WITH_SQLITE` build; the same path as `--store` is refused. |
 | `--web-allow-sql` | The SQL box (M5, below): `/api/query` and `/api/recipes`, and the box on the History view. Off by default; without it both paths are `404` and the page never draws the box. Needs `--sloth-db` and a `WITH_SQLITE` build. `--strict` refuses it (exit 2). With `--web-allow-remote` it is announced on stderr, naming what every admitted peer can then read. |
 | `--web-read-only` | No write route: every POST is `405` `Allow: GET, HEAD` before a header is checked, the surface before triage existed. The triage states and the TACDB still read; the page draws no button and says why. Default off: an admitted peer may write (the owner's open question Q10 asks whether `--web-allow-remote` should imply it). |
-| `--web-assessments DIR` | Where "follow recommended" reads each alert type's research assessment, `DIR/<TYPE>.md` (front matter `false_positive_risk`, `noise_verdict`, `severity_assessment`; [Triage](#triage-and-the-frrs-record)). The type name comes from the alert table, never from a request; each file read until its front matter closes, at most 32 KiB. Unset: every type says "no recommendation yet". A path that is not a directory is refused (exit 2). |
+| `--web-assessments DIR` | Where "follow recommended" reads each alert type's research assessment, `DIR/<TYPE>.md` (front matter `false_positive_risk`, `noise_verdict`, `severity_assessment`; [Triage](#triage-and-the-frrs-record)). The type name comes from the alert table, never from a request; each file read until its front matter closes, at most 32 KiB. Unset, or a path not there: every type says "no recommendation yet". Something there that is not a directory is refused (exit 2). `slothweb.service` passes `/usr/local/share/sloth/alert-assessments`, where `make install` copies `docs/wiki/alert-assessments/*.md`. |
 | `--help` | Usage. |
 
 Exit status: `0` after `SIGINT`/`SIGTERM`, `1` when the bind fails or
@@ -2429,16 +2429,25 @@ is read, and the socket closed rather than drained), the **body** (the
 stream's own JSON decoder: one flat object, `400 bad_body`; a member
 the route does not take `400 unknown_member` naming it), and each
 member to its bound (`note` 240 bytes, `by` 32, a name 64, a label 32;
-an over-long value is `400 too_long`, never cut; a control byte `400
-bad_text`; addresses canonical). Then `404 no_such_alert`,
+an over-long value is `400 too_long`, never cut; a control byte, or a
+bidirectional embedding or isolate control (U+202A to U+202E, U+2066
+to U+2069), `400 bad_text`; addresses canonical). Then `404 no_such_alert`,
 `404 no_such_platform`, `409 duplicate_name`, `409 unit_depth` (a
 restore is checked again), `409 parent_deleted` and `409 unit_deleted`
 (nothing comes back into a deleted unit), `409 emitter_owned`, `507
 tacdb_full` (512 units, 2,048 platforms, 8,192 emitters live, and twice
-each counting deleted rows, which a delete keeps), `507 triage_full` (20,000 rows) or
-`history_full` (64 changes of one alert: refused rather than the oldest
-dropped, the owner's open question Q2), `503 no_store` (no
-slothweb.db), `503 store_busy`. From a shell the Origin has to be said:
+each counting deleted rows, which a delete keeps), `507 triage_full`
+(only with all 20,000 rows current, nothing superseded to fold, and a
+decided state: a clear is always taken), `503 no_store` (no
+slothweb.db), `503 store_busy`. A triage write that changes nothing
+(the state it has, no new note) answers `200` `"unchanged":true` and
+adds no row. An operator's change is never refused for room: past 64
+changes of one alert its history folds (the first row and the newest
+kept, the folded counted, "N older folded" on the alert's page), and at
+20,000 rows the oldest superseded rows fold, imported ones first, then
+those of alerts aged out (newest row over 7 days old), never an alert's
+current row; `/api/health` `frrs` says `triage_rows`, `triage_cap`,
+`triage_folded`, and the open-alerts tile warns from 90 % of the cap. From a shell the Origin has to be said:
 
 ```sh
 curl -H 'Origin: http://127.0.0.1:8770' -H 'Content-Type: application/json' \
@@ -2470,24 +2479,37 @@ the `end` line last.
 It answers `{"mode":"check"|"merge","skipped":[{"line":n,"why":"…"}],
 "skipped_n":n,"lines":n,"ok":true|false,"why":null|"…","merged":{"units",
 "platforms","emitters","dismissed","triage"}}` (`skipped` lists 50 at
-most; `merged` is zero unless `merge` committed), `200` when the file
-checked whole and `400` when it did not. The check refuses the file
+most; `merged` is what `merge` committed, or for a `check` what it
+would: the check runs the same merge in its transaction and rolls it
+back, so it reports every skip a merge would), `200` when the file
+checked whole, `413` `too_many_triage` for more than 1,000 triage lines
+(nothing merged, the rest of the file not read) and `400` otherwise. The check refuses the file
 (nothing merged, `why` the first reason) when its first line is not the
 header (`no_header`) or the version is not 1, a line is not one flat
 object or names a member its type does not take, a value is past its
 bound, two lines share an id, the `end` line is missing, not last, or
 counts other than the file's lines (`truncated`) or says
 `complete:false` (`export_incomplete`: the export stopped at its bound),
-or the file holds more than the TACDB's caps or 5,000 triage lines.
+or the file holds more than the TACDB's caps, or a triage line's `ts`
+is more than 300 s ahead of this clock (`future_ts`).
 A merge then skips, each reported by line: a unit or platform already
 here by name under the same parent (`already_here`; ids are never
 carried across), one whose parent or unit did not merge
 (`parent_not_merged`, `unit_not_merged`: never re-filed elsewhere), a
 platform whose nomenclature a live one here has but none of whose
 emitters is filed on it (`duplicate_name`: a name is not a device), an
-emitter on another platform here (`emitter_owned`), a triage line past
-its alert's 64 (`history_full`) or once imported rows fill half the
-table (`import_share_full`), and anything at a cap (`tacdb_full`).
+emitter on another platform here (`emitter_owned`), a triage line no
+newer than its alert's newest row here (`already_here` when identical,
+else `older_than_here`: a file never puts an older decision over a later
+one, and the same file twice merges nothing), one once imported rows
+fill half the table (`import_share_full`), and anything at a cap
+(`tacdb_full`). An alert keeps at most 8 imported rows, its oldest
+imported folded, so a file never fills an operator's history. An
+imported row records the importer as its `peer`, no `by`, and the
+file's `by` and `peer` as `claimed_by` / `claimed_peer`, shown
+"imported, claimed …" (and exported as those claims). A 1,000-line
+import is one transaction with every statement prepared once; the
+figures are in `test_import_time_over_socket`'s line of `make web-test`.
 Units merge parent first whatever the file's order. A store error
 mid-merge rolls the whole file back.
 
@@ -2497,8 +2519,8 @@ mid-merge rolls the whole file back.
 |---|---|---|
 | `/api/frrs/states` | `ids=` 1..16 alert ids, comma-separated | `{"store":"open","triage":{"<id>":{"state","ts","via","history_n","prev_state","note","by","basis","peer","finding"}},"types":{"<id>":"PORT_SCAN"},"untriaged":[…],"missing":[…],"writes":true}` |
 | `/api/frrs/history` | `id=` | the subject (`d<rowid>` of the finding's first sloth.db row, or the stream handle until sloth has written it), its descriptor (`type`, `addr`, `port`, `first_seen`: what an export re-attaches by), `current`, `recommend` and every row newest first |
-| `/api/frrs/summary` | none | `{"store","writes","read_only","recommendations":"dir"\|"none","open":{"total","untriaged","false","noise","incident","out"},"rows"}`: the open incidents the tile counts, by their triage, in the request's scope |
-| `/api/frrs/recommend` | `type=` a name or number | `{"type","state":"noise"\|null,"basis","source","file","front_matter":{…}\|null}` |
+| `/api/frrs/summary` | none | `{"store","writes","read_only","recommendations":"dir"\|"none","open":{"total","untriaged","false","noise","incident","out"},"rows","cap","near_cap"}`: the open incidents the tile counts, by their triage, in the request's scope, and how full the triage table is |
+| `/api/frrs/recommend` | `type=` a name or number | `{"type","state":"noise"\|null,"basis","source","why_none":null\|"no_automatic_triage"\|"no_assessment","file","front_matter":{…}\|null}` |
 | `/api/frrs/report` | `kind=sta\|bssid\|ble`, `addr=` (BLE `aa:…:ff/N`, N the address type) | the record: `emitter`, `sources`, `position_limit`, `content_limit`, `bei`, `scs`, `ecs`, `tacdb`, `report`, `alerts` |
 | `/api/frrs/report/alert` | `id=` | `{"alert":{"id","type","emitter_from"},"record":…}`; the emitter is a MAC in the alert's key, else the device holding its `match_ip`; `record` `null` with a `reason` when it names none |
 | `/api/frrs/tacdb` | `unit=`, `q=`, `deleted=0\|1`, `limit=` 1..200, `offset=` | `{"note","writes","units":[{id,parent,name,kind,note,depth,platforms,deleted}],"platforms":[{id,nomenclature,class,vendor,note,unit,unit_path,confirmed,origin,updated,deleted,emitters:[{kind,addr,role,label,origin,deleted,last_seen,scopes}]}],"matched","more","counts":{…,"caps":{…}}}` |
@@ -2525,9 +2547,15 @@ counts, hashes; no secret among them).
 
 "Follow recommended" reads `--web-assessments DIR/<TYPE>.md` front
 matter until the other session's compiled table
-(`web/src/web_alertasm.{c,h}`) lands: a `noise_verdict` beginning
-`noisy` or `very noisy` (the batch's own words) is `noise`, and nothing
-else recommends. The assessments judge a rule, not an alert, so
+(`web/src/web_alertasm.{c,h}`) lands: `noise` only where
+`false_positive_risk` begins `high` **and** `noise_verdict` begins
+`noisy` or `very noisy` (eight of the 72 types), because `noise_verdict`
+describes how the rule counts, not whether an alert is real
+(FRAG_PLAINTEXT is "very noisy" with a `low` false-positive risk). An
+assessment below that bar draws the button "no automatic triage:
+<risk>", which does nothing; no assessment, "no recommendation yet".
+At 480 px and under the button carries its short label. The
+assessments judge a rule, not an alert, so
 `false_positive_risk: high` never marks an alert `false` and
 `severity_assessment` (`agree`, `too high`) never makes one an
 `incident`; the page shows both beside the buttons (open question Q3).
@@ -2546,9 +2574,16 @@ checked against sloth.db's DDL and `src/jsonl.c`, the TACDB's rules and
 an export merged into a fresh store (a reparented unit kept in place,
 a headerless or cut-short file merging nothing and leaving no
 transaction behind, no platform merged on its name alone), the bounds
-on deleted rows and imported triage, the suggestion rules against
+on deleted rows and imported triage, an alert's history folding past
+64 and its imported share past 8, a write that changes nothing adding
+no row, the table at a lowered cap folding superseded rows (imported
+first) and always taking a clear, a check reporting the merge's own
+skips (a unit cycle), the bidirectional controls refused, a body's
+deadline scaling with its length (a slow import answered, a drip cut
+off), the 1,000-line import timed, the suggestion rules against
 hand-built rows, the recommendation against the assessments' own
-front-matter lines; `test_store.c` the v5 to v6
+front-matter lines and against the shipped files by name
+(FRAG_PLAINTEXT and SMB1_USE get none); `test_store.c` the v5 to v6
 migration and its failure. Each absence assertion names the mutation it
 was seen red under.
 

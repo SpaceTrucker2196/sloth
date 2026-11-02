@@ -567,6 +567,13 @@ static void conn_begin_body(web_server_t *s, web_conn_t *c, web_req_t *rq) {
     c->len = rq->hdr_len;         /* the header block alone is kept */
     if (c->post_len >= c->post_want) { conn_route_post(s, c); return; }
     c->state = C_BODY;
+    /* The body's own deadline: the timeout, plus the time the promised
+     * length takes at WEB_BODY_MIN_BPS. An 8 MiB import over a slow link
+     * is owed the minutes it needs; a client dripping bytes below the
+     * floor is cut off at the same bound, never kept for ever by
+     * sending one byte per timeout. */
+    c->deadline_ms = now_ms() + s->cfg.timeout_ms +
+                     (long long)(c->post_want - c->post_len) * 1000 / WEB_BODY_MIN_BPS;
 }
 
 static void conn_read(web_server_t *s, web_conn_t *c) {

@@ -1303,7 +1303,10 @@ $(STAMPS): FORCE
 # runs as ExecStartPre (sloth never sets monitor mode itself — MISSION §2),
 # the research corpus for --with-research (0644: read-only data, opened
 # SQLITE_OPEN_READONLY, so ownership does not matter to secure_file.c), and
-# slothweb, which slothweb.service runs (#153). slothweb is not rebuilt
+# slothweb, which slothweb.service runs (#153), with the per-type alert
+# assessments (docs/wiki/alert-assessments/<TYPE>.md, 0644 data) in
+# share/sloth/alert-assessments, the --web-assessments the unit passes
+# for "follow recommended". slothweb is not rebuilt
 # here: `web` is phony and would relink it as root inside the checkout,
 # so `make web` comes first, as the build user, and install refuses
 # without it, or when any of its inputs is newer than it: a pull
@@ -1354,6 +1357,8 @@ install: $(TARGET) $(BLE_SCAN_BIN)
 	install -m 755 packaging/bin/sloth-monitor-up $(DESTDIR)$(PREFIX)/sbin/sloth-monitor-up
 	[ -z "$(BLE_SCAN_BIN)" ] || install -m 755 sloth-ble-scan $(DESTDIR)$(PREFIX)/sbin/sloth-ble-scan
 	install -m 644 research.db $(DESTDIR)$(PREFIX)/share/sloth/research.db
+	install -d $(DESTDIR)$(PREFIX)/share/sloth/alert-assessments
+	install -m 644 $(filter-out %/README.md,$(wildcard docs/wiki/alert-assessments/*.md)) $(DESTDIR)$(PREFIX)/share/sloth/alert-assessments/
 
 .PHONY: install-service
 install-service:

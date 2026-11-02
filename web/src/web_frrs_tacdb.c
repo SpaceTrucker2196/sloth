@@ -1654,7 +1654,7 @@ typedef struct {
     idmap_t    *um, *pm;
     int         nu, np, ne, num, npm, ntri;
     long long   nlines, skipped, merged[5];
-    int         saw_head, saw_end, bad_line, began, nshown;
+    int         saw_head, saw_end, bad_line, began, nshown, too_many;
     const char *bad_why;
     web_jw_t   *w;
     size_t      cap;
@@ -1740,8 +1740,8 @@ static const char *imp_check_line(imp_t *x, web_frrs_t *f, const web_jrec_t *r, 
         if (rn[0] != 'S' || !isdigit((unsigned char)rn[1]) || rn[2] || web_key_mac(a, ka) ||
             (bb[0] && web_key_mac(bb, kb))) return "bad_dismiss";
     } else if (!strcmp(type, "triage")) {
-        if (++x->ntri > WEB_FRRS_IMPORT_TRIAGE) return "too_many_triage";
-        int t = frrs_triage_import(f, r, 0, now_s, peer, &why);
+        if (++x->ntri > WEB_FRRS_IMPORT_TRIAGE) { x->too_many = 1; return "too_many_triage"; }
+        int t = frrs_triage_import(f, NULL, r, 0, now_s, peer, &why);
         if (t != 0) return why ? why : "bad_triage";
     } else {
         return "unknown_type";
@@ -1960,16 +1960,24 @@ int frrs_import(const web_m4_t *m, const web_req_t *rq, long long now_s,
             }
             if (why) imp_note(&x, ln, why, 1);
             if (!x.saw_head) break;   /* not this format: nothing more to say */
+            if (x.too_many) break;    /* refused whole: the rest is not read */
         }
         if (!x.bad_line && !x.saw_head) imp_note(&x, ln + 1, "no_header", 1);
         else if (!x.bad_line && !x.saw_end) imp_note(&x, ln + 1, "truncated", 1);
     }
-    if (write && !x.bad_line) {
+    /* The merge, in the order merge takes (units parents first, then
+     * platforms, emitters, dismissals and triage lines), inside one
+     * transaction. A check runs the same merge and rolls it back, so it
+     * reports every skip a merge would (a unit cycle, a duplicate name,
+     * a line older than this alert's newest) and what would merge. */
+    frrs_tri_ctx_t *tx = NULL;
+    if (!x.bad_line) {
         if (begin(f) != 0) {
             rc = frrs_error(503, "store_busy", NULL, body, cap, len, status);
             goto out;
         }
         x.began = 1;
+        if (x.ntri && !(tx = frrs_tri_begin(f, now_s))) imp_note(&x, 0, "store_error", 1);
         imp_units(&x, f, now_s);
         imp_platforms(&x, f, now_s);
         imp_emitters(&x, f, now_s);
@@ -1984,33 +1992,47 @@ int frrs_import(const web_m4_t *m, const web_req_t *rq, long long now_s,
                 imp_dismiss(&x, f, r, ln, now_s);
             } else if (!strcmp(type, "triage")) {
                 const char *why = NULL;
-                int t = frrs_triage_import(f, r, 1, now_s, rq->peer, &why);
+                int t = frrs_triage_import(f, tx, r, 1, now_s, rq->peer, &why);
                 if (t == 0) x.merged[4]++;
                 else imp_note(&x, ln, t < 0 ? "store_error" : why, t < 0);
             }
         }
     }
     int ok = !x.bad_line && x.saw_head && x.saw_end;
-    /* Whatever began ends here: committed whole, or rolled back. */
+    /* Whatever began ends here: a merge committed whole, a check or a
+     * failure rolled back. */
+    int committed = 0;
     if (x.began) {
-        if (ok) { if (commit(f) != 0) ok = 0; }
+        if (write && ok) { if (commit(f) != 0) ok = 0; else committed = 1; }
         else rollback(f);
     }
+    frrs_tri_end(tx, committed);
     web_jw_raw(&w, "],\"skipped_n\":"); web_jw_int(&w, x.skipped);
     web_jw_raw(&w, ",\"lines\":");      web_jw_int(&w, x.nlines);
     web_jw_raw(&w, ",\"ok\":");         web_jw_raw(&w, ok ? "true" : "false");
     web_jw_raw(&w, ",\"why\":");
     frrs_str_or_null(&w, x.bad_why && !strcmp(x.bad_why, "no_header")
                          ? "not a slothweb-tacdb file (its first line is not the header)" : x.bad_why);
-    web_jw_raw(&w, ",\"merged\":{\"units\":"); web_jw_int(&w, write && ok ? x.merged[0] : 0);
-    web_jw_raw(&w, ",\"platforms\":");  web_jw_int(&w, write && ok ? x.merged[1] : 0);
-    web_jw_raw(&w, ",\"emitters\":");   web_jw_int(&w, write && ok ? x.merged[2] : 0);
-    web_jw_raw(&w, ",\"dismissed\":");  web_jw_int(&w, write && ok ? x.merged[3] : 0);
-    web_jw_raw(&w, ",\"triage\":");     web_jw_int(&w, write && ok ? x.merged[4] : 0);
-    web_jw_raw(&w, "}}\n");
+    /* merged: what the merge merged, or for a check what it would. */
+    web_jw_raw(&w, ",\"merged\":{\"units\":"); web_jw_int(&w, ok ? x.merged[0] : 0);
+    web_jw_raw(&w, ",\"platforms\":");  web_jw_int(&w, ok ? x.merged[1] : 0);
+    web_jw_raw(&w, ",\"emitters\":");   web_jw_int(&w, ok ? x.merged[2] : 0);
+    web_jw_raw(&w, ",\"dismissed\":");  web_jw_int(&w, ok ? x.merged[3] : 0);
+    web_jw_raw(&w, ",\"triage\":");     web_jw_int(&w, ok ? x.merged[4] : 0);
+    web_jw_raw(&w, "}");
+    if (x.too_many) {
+        web_jw_raw(&w, ",\"error\":");
+        char msg[160];
+        snprintf(msg, sizeof(msg), "more than %d triage lines in one file: split it, "
+                 "nothing was merged", WEB_FRRS_IMPORT_TRIAGE);
+        web_jw_str(&w, msg);
+    }
+    web_jw_raw(&w, "}\n");
     if (!w.overflow) {
         *len = w.len;
-        *status = ok ? 200 : 400;
+        /* Too many triage lines is the file's size, not its content:
+         * 413, as an oversize body is. */
+        *status = ok ? 200 : x.too_many ? 413 : 400;
         rc = 0;
     }
 out:

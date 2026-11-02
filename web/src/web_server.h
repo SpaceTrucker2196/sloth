@@ -46,6 +46,9 @@
 /* How long the listener is left unpolled after accept() runs out of
  * descriptors or memory. */
 #define WEB_ACCEPT_BACKOFF_MS 100
+/* A POST body's slowest acceptable rate, bytes per second: its deadline
+ * is the timeout plus its length at this rate (web_server.c). */
+#define WEB_BODY_MIN_BPS 16384
 /* Ticker records sent per tick, at most (spec §7.1: coalesced to 20 a
  * second). When more arrived, the newest are sent; the seq gap shows. */
 #define WEB_SSE_RECORDS_PER_TICK 20

@@ -6,6 +6,7 @@
 #include "web_baseline.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>
@@ -293,7 +294,10 @@ void web_usage(FILE *out) {
         "                        only; the allow list is the only gate.\n"
         "  --web-assessments DIR where \"follow recommended\" reads each alert\n"
         "                        type's <TYPE>.md front matter (the research\n"
-        "                        assessments). Unset: no recommendation yet.\n"
+        "                        assessments). Unset, or no such directory:\n"
+        "                        no recommendation yet. slothweb.service\n"
+        "                        passes the installed copy,\n"
+        "                        $PREFIX/share/sloth/alert-assessments.\n"
         "  --help                this text.\n"
         "\n"
         "Routes (GET and HEAD): / (the page), /api/health, /api/live,\n"
@@ -345,7 +349,11 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 fprintf(err, "slothweb: --web-assessments: empty or too long a path\n");
                 return -1;
             }
-            if (stat(v, &sb) != 0 || !S_ISDIR(sb.st_mode)) {
+            /* Absent is allowed: the unit passes the installed path,
+             * and a build installed without the assessments answers "no
+             * recommendation yet" (web_frrs_init()). Something there
+             * that is not a directory is a mistake, refused. */
+            if (stat(v, &sb) == 0 ? !S_ISDIR(sb.st_mode) : errno != ENOENT) {
                 fprintf(err, "slothweb: --web-assessments %s: not a directory\n", v);
                 return -1;
             }

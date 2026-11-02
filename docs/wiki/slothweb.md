@@ -103,7 +103,7 @@ and for the Alerts page, `web/src/web_alerts.c`, `web/src/web_alertdb.c`,
 detail formats audited), `include/sloth_alerts.def`,
 `docs/views/alerts.md`, `research/` and [[alert-remediation]].
 
-**Last updated**: 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)), 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (kept settings: every control a viewer
+**Last updated**: 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)), 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (kept settings: every control a viewer
 can change kept per browser under `slothweb.v1.*`, each table's widths
 and sort among them, the address still winning, a reset per table and
 one for everything, and its review: a link's filters and scope applied
@@ -1063,16 +1063,26 @@ the routes with their request and response shapes are
 
 - **Triage** is operator state in slothweb.db (schema v6, an additive
   step with its migration test on a v5 file and the failure that leaves
-  it unchanged): one row per decision, append-only, the state of an
-  alert its newest row. Every alert row on every view carries the chip
+  it unchanged): one row per decision, appended, the state of an
+  alert its newest row; a click that changes nothing adds no row. No
+  bound refuses an operator's change: past 64 rows an alert's history
+  folds (its first row and its newest kept, the folded counted and
+  shown), imported rows hold at most 8 of it, and at 20,000 rows the
+  oldest superseded rows fold, imported ones first; a clear is always
+  taken, and the tile warns near the cap. Every alert row on every view carries the chip
   and the buttons; triaged-out rows (`false`, `noise`) are dimmed, never
   hidden, and the open-alerts tile keeps its count and says how many of
   it are triaged out. `/api/alerts?triage=` filters and counts; without
   it the answer is as before. Triage never reaches sloth.
 - **Follow recommended** reads the research assessment's front matter
-  (`--web-assessments DIR`, `<TYPE>.md`, until it closes): a
-  `noise_verdict` beginning `noisy` or `very noisy` recommends *noise*,
-  and nothing else recommends anything. The assessments judge a rule,
+  (`--web-assessments DIR`, `<TYPE>.md`, until it closes;
+  `slothweb.service` passes the copy `make install` puts in
+  `share/sloth/alert-assessments`): *noise* only where
+  `false_positive_risk` is `high` **and** `noise_verdict` `noisy` or
+  `very noisy` (eight types), because `noise_verdict` says how the rule
+  counts, not whether an alert is real (FRAG_PLAINTEXT is "very noisy"
+  at a `low` false-positive risk); below that bar the button says "no
+  automatic triage" and does nothing. The assessments judge a rule,
   not an alert: `false_positive_risk: high` (ARP_SPOOF carries it) never
   marks an alert *false*, and `severity_assessment` never makes one an
   *incident*; both are shown beside the buttons as advice (Q3). The
@@ -1095,7 +1105,11 @@ the routes with their request and response shapes are
   a bound twice each cap. The export carries live rows, parents first;
   the import refuses a file without its header first and its `end`
   line last (a file cut short merges nothing), merges whole or not at
-  all, and never merges two platforms on a name alone. Operator data:
+  all in one prepared transaction (1,000 triage lines at most, `413`
+  beyond), never merges two platforms on a name alone, never puts an
+  older decision over a later one, and records the file's `by` and
+  `peer` as claims beside the importer. Its check runs the merge and
+  rolls it back, so it reports what the merge would. Operator data:
   a platform spans every capture scope, and each emitter row says which
   scopes heard it.
 
@@ -1118,10 +1132,17 @@ seven one-line guarded hook points, so the parallel slices changing
 `web/src/web_frrs_report.c`, `web/src/web_frrs_tacdb.c`,
 `web/ui/frrs.js`, `web/tests/test_frrs.c`, the owner's request of
 2026-10-27.
-**Last updated**: 2026-11-02 (review fixes: the recommendation read
-against the assessments' real vocabulary, the import's header and end
-checks and its transaction, the bounds on deleted rows and imported
-triage, the suggestion rules as §7 states them); 2026-11-01.
+**Last updated**: 2026-11-02 (second review: history and the table's
+cap fold instead of refusing, no row for an unchanged write, noise
+recommended only for a high false-positive risk and a noisy count, the
+import prepared once and bounded at 1,000 triage lines, imported `by`
+and `peer` as claims, the check running the merge, bidirectional
+controls refused, the body deadline scaled to its length, the installed
+assessments passed by the unit); 2026-11-02 (review fixes: the
+recommendation read against the assessments' real vocabulary, the
+import's header and end checks and its transaction, the bounds on
+deleted rows and imported triage, the suggestion rules as §7 states
+them); 2026-11-01.
 
 ## Tests
 

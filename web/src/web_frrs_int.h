@@ -180,16 +180,26 @@ int  frrs_import(const web_m4_t *m, const web_req_t *rq, long long now_s,
 void frrs_tacdb_of(web_frrs_t *f, int kind, const char *addr, web_jw_t *w);
 /* The triage history's export lines (web_frrs.c), appended to w. */
 void frrs_triage_export(web_frrs_t *f, web_jw_t *w, long long *rows);
-/* One imported triage line, checked (write 0) or merged; 0 merged or
- * would be, 1 skipped (why set), -1 a store error. */
-int  frrs_triage_import(web_frrs_t *f, const web_jrec_t *r, int write,
+/* An import's triage context (web_frrs.c): the table's counts read once
+ * and the statements prepared once, for every line of one transaction.
+ * Begun inside the transaction; ended with whether it committed (the
+ * folds are counted only then). NULL: a store error. */
+typedef struct frrs_tri_ctx frrs_tri_ctx_t;
+frrs_tri_ctx_t *frrs_tri_begin(web_frrs_t *f, long long now_s);
+void frrs_tri_end(frrs_tri_ctx_t *x, int committed);
+/* One imported triage line, checked (write 0, x may be NULL) or merged
+ * through x; 0 merged or would be, 1 skipped (why set), -1 a store
+ * error. peer is the importer's: the file's by and peer are kept as
+ * claims. */
+int  frrs_triage_import(web_frrs_t *f, frrs_tri_ctx_t *x, const web_jrec_t *r, int write,
                         long long now_s, const char *peer, const char **why);
 
 /* A member check: every member of r is in allowed (a NULL-ended list)
  * and none is a nested value; else *bad names the first that is not. */
 int  frrs_members_ok(const web_jrec_t *r, const char *const *allowed, const char **bad);
 /* A string member: absent (1, *out ""), present and fit (1), else 0
- * with *why "too_long" or "bad_text" (a control byte, or not a string). */
+ * with *why "too_long" or "bad_text" (a control byte, a bidirectional
+ * embedding or isolate control, or not a string). */
 int  frrs_text(const web_jrec_t *r, const char *name, size_t max, char *out,
                const char **why);
 
