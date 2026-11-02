@@ -5884,3 +5884,9 @@ report events.
   drawn as a text sparkline in the TUI's glyphs and heat ramp; "not
   kept" is gone. A sloth gauge, not a calibrated measurement. Each
   absence assertion seen red under a named mutation.
+- 2026-11-02 — [[architecture]], `README.md`: a Mermaid system map
+  replacing an auto-generated one the owner shared, which routed every
+  input through `sensors.c` and left out slothweb's read of `sloth.db`,
+  the monitor-radio and Bluetooth capture paths, `sloth-ble-scan`, the
+  compiled knowledge (assessments, vendor research, registries) and the
+  triage/TACDB store.

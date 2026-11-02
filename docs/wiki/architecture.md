@@ -10,9 +10,70 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `tests/tmp_dir.h`, `tests/test_tmp_dir.c`, `tests/main_test.c`, `web/tests/wt_tmp.h`, `web/tests/web_test_main.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
+**Last updated**: 2026-11-02 (the system map: sensor, BLE scan helper, slothweb and its stores); 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
 
 ---
+
+## System map
+
+How the pieces connect at run time: three receive-only inputs, the sensor, and slothweb, which reads the sensor's stream and its `sloth.db` (read-only) and keeps its own store. Every arrow is a read or a local hand-off; nothing here transmits onto a monitored network (`MISSION.md` §2).
+
+```mermaid
+flowchart LR
+  subgraph air["On the air and on the wire (receive only, MISSION §2)"]
+    wifi(("802.11<br/>monitor radio"))
+    net(("Host interfaces<br/>Ethernet / managed Wi-Fi"))
+    ble(("Bluetooth LE<br/>advertisements"))
+  end
+
+  subgraph host["Sensor host (systemd units in packaging/systemd/)"]
+    scan["sloth-ble-scan<br/>passive LE scan holder<br/>src/ble_scan/"]
+    subgraph sloth["sloth — sloth-sensor.service, user sloth"]
+      probe["802.11 capture<br/>src/capture/probe.c"]
+      cap["IP capture<br/>src/capture/capture.c"]
+      btmon["HCI monitor<br/>src/capture/bt_monitor.c"]
+      plat["/proc · netlink · nl80211<br/>src/platform/"]
+      state["state + decoders<br/>include/sloth.h, src/*_snoop.c"]
+      rules["alert rules<br/>src/alerts/rules_*.c"]
+      engine["incident engine<br/>src/alerts/engine.c"]
+      tui["TUI views<br/>src/tui.c, src/views/"]
+      jsonl["JSONL records<br/>src/jsonl.c"]
+      sock["data socket<br/>unix:/run/sloth/sloth.sock"]
+      db[("sloth.db<br/>src/db.c")]
+      pcap[("alert pcaps +<br/>evidence manifests")]
+    end
+    subgraph web["slothweb — slothweb.service, user sloth, read-only on sloth.db"]
+      ingest["stream ingest + live state<br/>web/src/web_ingest.c, web_live.c"]
+      sdb["sloth.db reader<br/>web/src/web_slothdb.c"]
+      analytics["rollups · anomalies · BLE<br/>web_rollup, web_anomaly, web_ble"]
+      kb["compiled knowledge<br/>alert assessments, vendor research,<br/>IEEE OUI, Bluetooth SIG"]
+      frrs["triage · FRRS · TACDB<br/>web/src/web_frrs*.c"]
+      store[("slothweb.db<br/>series, baselines, BLE,<br/>triage, TACDB")]
+      routes["HTTP API + page<br/>web/src/web_routes.c, web/ui/"]
+    end
+  end
+
+  research[("research corpus<br/>research/, research.db")]
+  browser(("Browser on the<br/>allow list (Tailscale)"))
+
+  wifi --> probe
+  net --> cap
+  net --> plat
+  ble --> scan
+  scan -. "HCI user channel" .-> btmon
+  probe & cap & btmon & plat --> state
+  state --> rules --> engine
+  engine --> pcap
+  state --> tui
+  state & engine --> jsonl --> sock
+  state & engine --> db
+  research -. "--with-research" .-> engine
+  sock --> ingest --> analytics --> store
+  db --> sdb
+  ingest & sdb & analytics & kb & frrs --> routes
+  frrs <--> store
+  routes <--> browser
+```
 
 ## Tree
 

@@ -504,6 +504,67 @@ this gives you low-latency triage.
 
 ## Architecture
 
+How the pieces connect at run time: three receive-only inputs, the sensor, and slothweb, which reads the sensor's stream and its `sloth.db` (read-only) and keeps its own store. Every arrow is a read or a local hand-off; nothing here transmits onto a monitored network (`MISSION.md` §2).
+
+```mermaid
+flowchart LR
+  subgraph air["On the air and on the wire (receive only, MISSION §2)"]
+    wifi(("802.11<br/>monitor radio"))
+    net(("Host interfaces<br/>Ethernet / managed Wi-Fi"))
+    ble(("Bluetooth LE<br/>advertisements"))
+  end
+
+  subgraph host["Sensor host (systemd units in packaging/systemd/)"]
+    scan["sloth-ble-scan<br/>passive LE scan holder<br/>src/ble_scan/"]
+    subgraph sloth["sloth — sloth-sensor.service, user sloth"]
+      probe["802.11 capture<br/>src/capture/probe.c"]
+      cap["IP capture<br/>src/capture/capture.c"]
+      btmon["HCI monitor<br/>src/capture/bt_monitor.c"]
+      plat["/proc · netlink · nl80211<br/>src/platform/"]
+      state["state + decoders<br/>include/sloth.h, src/*_snoop.c"]
+      rules["alert rules<br/>src/alerts/rules_*.c"]
+      engine["incident engine<br/>src/alerts/engine.c"]
+      tui["TUI views<br/>src/tui.c, src/views/"]
+      jsonl["JSONL records<br/>src/jsonl.c"]
+      sock["data socket<br/>unix:/run/sloth/sloth.sock"]
+      db[("sloth.db<br/>src/db.c")]
+      pcap[("alert pcaps +<br/>evidence manifests")]
+    end
+    subgraph web["slothweb — slothweb.service, user sloth, read-only on sloth.db"]
+      ingest["stream ingest + live state<br/>web/src/web_ingest.c, web_live.c"]
+      sdb["sloth.db reader<br/>web/src/web_slothdb.c"]
+      analytics["rollups · anomalies · BLE<br/>web_rollup, web_anomaly, web_ble"]
+      kb["compiled knowledge<br/>alert assessments, vendor research,<br/>IEEE OUI, Bluetooth SIG"]
+      frrs["triage · FRRS · TACDB<br/>web/src/web_frrs*.c"]
+      store[("slothweb.db<br/>series, baselines, BLE,<br/>triage, TACDB")]
+      routes["HTTP API + page<br/>web/src/web_routes.c, web/ui/"]
+    end
+  end
+
+  research[("research corpus<br/>research/, research.db")]
+  browser(("Browser on the<br/>allow list (Tailscale)"))
+
+  wifi --> probe
+  net --> cap
+  net --> plat
+  ble --> scan
+  scan -. "HCI user channel" .-> btmon
+  probe & cap & btmon & plat --> state
+  state --> rules --> engine
+  engine --> pcap
+  state --> tui
+  state & engine --> jsonl --> sock
+  state & engine --> db
+  research -. "--with-research" .-> engine
+  sock --> ingest --> analytics --> store
+  db --> sdb
+  ingest & sdb & analytics & kb & frrs --> routes
+  frrs <--> store
+  routes <--> browser
+```
+
+The full walk-through is [docs/wiki/architecture.md](docs/wiki/architecture.md).
+
 The codebase is built around a **platform vtable** (`platform_ops_t` in `include/sloth.h`):
 
 ```c
