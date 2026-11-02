@@ -87,7 +87,22 @@ const web_metric_t web_metric_defs[WM_COUNT] = {
                          "advertisers" },
     [WM_BLE_ADV_REPORTS] = { "ble.adv_rate", WEB_MK_COUNTER, WEB_KC_GLOBAL, "",
                              "sensor_health ble_adv_reports delta", "reports" },
+    [WM_RF_RSSI_STA] = { "rf.rssi.sta", WEB_MK_GAUGE, WEB_KC_DEV, "mac",
+                         "probe_client signal_dbm by mac, last_seen within 10 s "
+                         "(sloth's last-heard value, not calibrated)", "dBm" },
+    [WM_RF_RSSI_BSSID] = { "rf.rssi.bssid", WEB_MK_GAUGE, WEB_KC_DEV, "mac",
+                           "beacon and assoc signal_dbm by bssid (assoc's is the "
+                           "AP's frames), last_seen within 10 s (sloth's "
+                           "last-heard value, not calibrated)", "dBm" },
+    [WM_RF_RSSI_BLE] = { "rf.rssi.ble", WEB_MK_GAUGE, WEB_KC_DEV, "mac",
+                         "ble_device rssi by addr, has_rssi 1, last_seen within "
+                         "10 s (sloth's last-heard value, not calibrated)", "dBm" },
 };
+
+int web_metric_is_rssi(int metric) {
+    return metric == WM_RF_RSSI_STA || metric == WM_RF_RSSI_BSSID ||
+           metric == WM_RF_RSSI_BLE;
+}
 
 static const int TIER_STEP[WEB_TIER_COUNT] = { WEB_FINE_S, WEB_MINUTE_S, WEB_HOUR_S };
 static const char *const TIER_NAME[WEB_TIER_COUNT] = { "fine", "minute", "hour" };

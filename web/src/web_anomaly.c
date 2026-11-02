@@ -1486,7 +1486,8 @@ static void minute_pass(web_anomaly_t *a, long long m, int latest,
                 }
                 continue;
             }
-            if (md->kclass != WEB_KC_GLOBAL) a1_score(a, g->metric, g->key, t, v);
+            if (md->kclass != WEB_KC_GLOBAL && !web_metric_is_rssi(g->metric))
+                a1_score(a, g->metric, g->key, t, v);
             if (a->cfg.store && is_flow(g->metric) && v > 0)
                 a9_check(a, g->metric, g->key, t);
             if (g->metric == WM_HOST_CONNS) fan_window(a, g->key, g->max, t);

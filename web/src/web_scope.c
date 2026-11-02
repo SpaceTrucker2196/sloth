@@ -163,6 +163,9 @@ int web_scope_metric(int metric) {
     case WM_DEV_PRESENT_LOC:                     return L;
     /* The BLE receivers are passive radio (web_ble.h). */
     case WM_BLE_DEVICES: case WM_BLE_ADV_REPORTS: return M;
+    /* The signal a radio heard: the monitor radio's records and the
+     * BLE receivers' (docs/web-frrs-spec.md Q7). */
+    case WM_RF_RSSI_STA: case WM_RF_RSSI_BSSID: case WM_RF_RSSI_BLE: return M;
     /* dev.present is every source's: Hybrid's series. The scopes have
      * their own two. */
     default:                                     return 0;

@@ -19,6 +19,7 @@
 #include "web_oui.h"
 #include "web_rollup.h"
 #include "web_scope.h"
+#include "web_series.h"
 #include "web_ssid.h"
 #include "web_vendorkb.h"
 
@@ -183,6 +184,92 @@ static void f_est(G *g, const frrs_est_t *e, const char *src, long long since) {
     fs(g, "est_dist_band", e && e->have ? e->band : NULL, src, since);
     fs(g, "est_dist_trend", e && e->have ? e->trend : NULL, src, since);
     fs(g, "est_ptx_source", e && e->have ? e->ptx : NULL, src, since);
+}
+
+/* ── the RSSI series (Q7, owner ruling 2026-11-02) ───────────────────── */
+
+/* The Report's signal against time: the last 24 h of the emitter's
+ * rf.rssi.* series (web_rollup.h) from the fine tier, the store's rows
+ * and the ring's merged as /api/series merges them, folded into
+ * FRRS_RSSI_CELLS cells of equal width, each the mean of the samples in
+ * it. min and max are the samples' own, over the window. The 30 days
+ * the minute tier keeps are /api/series's to serve, named in "history".
+ * No series, or none of it in the window: v null, "no samples". */
+#define FRRS_RSSI_WINDOW_S  86400LL
+#define FRRS_RSSI_CELLS     48
+#define FRRS_RSSI_POINTS    ((int)(FRRS_RSSI_WINDOW_S / WEB_FINE_S) + 2)
+
+static void f_rssi(G *g, const web_m4_t *m, int kind, const char *mac, long long now_s) {
+    int metric = kind == FRRS_K_BSSID ? WM_RF_RSSI_BSSID
+               : kind == FRRS_K_BLE ? WM_RF_RSSI_BLE : WM_RF_RSSI_STA;
+    const char *name = web_metric_defs[metric].name;
+    char src[192], key[WEB_KEY_MAX + 1];
+    snprintf(src, sizeof(src), "slothweb series %s (/api/series): %s, the mean per bucket; "
+             "a sloth gauge, not a calibrated measurement", name,
+             kind == FRRS_K_BSSID ? "the beacon.signal_dbm and assoc.signal_dbm sloth last heard"
+             : kind == FRRS_K_BLE ? "the ble_device.rssi sloth last heard"
+             : "the probe_client.signal_dbm sloth last heard");
+    long long to = now_s - now_s % WEB_FINE_S + WEB_FINE_S, from = to - FRRS_RSSI_WINDOW_S;
+    const long long cell_s = FRRS_RSSI_WINDOW_S / FRRS_RSSI_CELLS;
+    web_point_t *p = NULL;
+    int n = 0, more = 0, serr = 0;
+    if (m->tsdb && web_key_mac(mac, key) == 0 &&
+        (p = malloc((size_t)FRRS_RSSI_POINTS * sizeof(*p))) != NULL)
+        n = web_series_points(m->tsdb, WEB_TIER_FINE, metric, key, from, to, p,
+                              FRRS_RSSI_POINTS, &more, &serr);
+    double sum[FRRS_RSSI_CELLS] = { 0 }, lo = 0, hi = 0;
+    unsigned long cn[FRRS_RSSI_CELLS] = { 0 }, samples = 0;
+    long long last_t = 0;
+    double last_v = 0;
+    for (int i = 0; i < n; i++) {
+        if (!p[i].n || p[i].t < from || p[i].t >= to) continue;
+        int c = (int)((p[i].t - from) / cell_s);
+        sum[c] += p[i].sum;
+        cn[c] += p[i].n;
+        if (!samples || p[i].min < lo) lo = p[i].min;
+        if (!samples || p[i].max > hi) hi = p[i].max;
+        samples += p[i].n;
+        if (p[i].t >= last_t) { last_t = p[i].t; last_v = p[i].sum / (double)p[i].n; }
+    }
+    free(p);
+    if (!samples) {
+        fnone(g, "series_rssi", src, "no samples");
+        return;
+    }
+    web_jw_t *w = g->w;
+    char b[32];
+    f_head(g, "series_rssi");
+    web_jw_raw(w, "{\"metric\":");  web_jw_str(w, name);
+    web_jw_raw(w, ",\"key\":");     web_jw_str(w, key);
+    web_jw_raw(w, ",\"tier\":\"fine\",\"unit\":\"dBm\",\"from\":");
+    web_jw_int(w, from);
+    web_jw_raw(w, ",\"to\":");      web_jw_int(w, to);
+    web_jw_raw(w, ",\"cell_s\":");  web_jw_int(w, cell_s);
+    web_jw_raw(w, ",\"cells\":[");
+    for (int c = 0; c < FRRS_RSSI_CELLS; c++) {
+        if (c) web_jw_raw(w, ",");
+        if (!cn[c]) { web_jw_raw(w, "null"); continue; }
+        snprintf(b, sizeof(b), "%.1f", sum[c] / (double)cn[c]);
+        web_jw_raw(w, b);
+    }
+    web_jw_raw(w, "],\"min_dbm\":");
+    snprintf(b, sizeof(b), "%.0f", lo);
+    web_jw_raw(w, b);
+    web_jw_raw(w, ",\"max_dbm\":");
+    snprintf(b, sizeof(b), "%.0f", hi);
+    web_jw_raw(w, b);
+    web_jw_raw(w, ",\"last_dbm\":");
+    snprintf(b, sizeof(b), "%.1f", last_v);
+    web_jw_raw(w, b);
+    web_jw_raw(w, ",\"last_t\":");  web_jw_int(w, last_t);
+    web_jw_raw(w, ",\"samples\":"); web_jw_int(w, (long long)samples);
+    web_jw_raw(w, ",\"more\":");    web_jw_raw(w, more ? "true" : "false");
+    web_jw_raw(w, ",\"store_error\":"); web_jw_raw(w, serr ? "true" : "false");
+    char hist[160];
+    snprintf(hist, sizeof(hist), "/api/series?metric=%s&key=%s&tier=minute", name, key);
+    web_jw_raw(w, ",\"history\":"); web_jw_str(w, hist);
+    web_jw_raw(w, "}");
+    f_tail(g, src, 0);
 }
 
 /* ── what is read from sloth.db ─────────────────────────────────────── */
@@ -1153,8 +1240,7 @@ void frrs_report_json(const web_m4_t *m, web_live_t *live, int kind, const char 
     else
         fnone(&g, "series_frames", "slothweb series dev.frames (/api/series)",
               "a series, not a value: /api/series?metric=dev.frames&key=<this address>");
-    fnone(&g, "series_rssi", "dev.rssi (not kept)",
-          "RSSI over time is not a series slothweb keeps (open question Q7)");
+    f_rssi(&g, m, kind, mac, now_s);
     g_close(&g);
 
     g_open(&g, w, "function", 1);

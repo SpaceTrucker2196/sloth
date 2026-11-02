@@ -483,12 +483,50 @@ var SlothFrrs = (function () {
     }
     return String(v);
   }
+  // The Report's RSSI against time (rf.rssi.*, docs/web-frrs-spec.md
+  // §4.5 item 2) as text: draw_sparkline_at()'s glyphs, one per cell,
+  // `_` where a cell has no sample, each graded by glyph.js's port of
+  // the TUI's level (glyph.level, glyph.lineToken) on the cell's
+  // strength above -100 dBm against the window's strongest, in the heat
+  // ramp's classes. Every glyph is a character of SPARK and every class
+  // a word of SPARK_CLS: no value from the answer reaches either.
+  var SPARK = ["_", "\u2581", "\u2582", "\u2583", "\u2584", "\u2585", "\u2586", "\u2587", "\u2588"];
+  var SPARK_CLS = { "--tui-dim": "d-dim", "--tui-normal": "d-normal", "--heat-1": "h1",
+                    "--heat-2": "h2", "--heat-3": "h3" };
+  var RSSI_FLOOR = -100;
+  function rssiSpark(s) {
+    var v = el("span", "v fr-spark", "");
+    var cells = Array.isArray(s.cells) ? s.cells : [], max = 0, i;
+    var lift = function (x) { return num(x) ? Math.max(1, x - RSSI_FLOOR) : 0; };
+    for (i = 0; i < cells.length; i++) if (lift(cells[i]) > max) max = lift(cells[i]);
+    var line = el("span", "fr-spark-g", "");
+    for (i = 0; i < cells.length; i++) {
+      var l = typeof glyph !== "undefined" ? glyph.level(lift(cells[i]), max) : (num(cells[i]) ? 8 : 0);
+      var tk = typeof glyph !== "undefined" ? glyph.lineToken(l) : (l ? "--tui-normal" : "--tui-dim");
+      line.appendChild(el("span", SPARK_CLS[tk] || "d-normal", SPARK[l] || "_"));
+    }
+    v.appendChild(line);
+    var span = num(s.from) && num(s.to) && s.to > s.from ? Math.round((s.to - s.from) / 3600) + " h" : "24 h";
+    v.appendChild(el("span", "d-bright", "  min " + (num(s.min_dbm) ? s.min_dbm : "-") + " · max " +
+                     (num(s.max_dbm) ? s.max_dbm : "-") + " dBm"));
+    v.appendChild(el("span", "d-dim", " · last " + (num(s.last_dbm) ? s.last_dbm : "-") + " dBm" +
+                     (num(s.last_t) && s.last_t > 0 ? " at " + H.shortStamp(s.last_t) : "") +
+                     " · n=" + (num(s.samples) ? s.samples : 0) + " · " + span + " in " + cells.length +
+                     " cells · a sloth gauge, not a calibrated measurement" +
+                     (typeof s.history === "string" ? " · the minute tier: " + s.history : "")));
+    return v;
+  }
   function fields(box, g) {
     var kv = el("div", "frkv");
     Object.keys(g || {}).forEach(function (k) {
       var f = g[k];
       if (!f || typeof f !== "object" || !Object.prototype.hasOwnProperty.call(f, "v")) return;
       kv.appendChild(el("span", "k", k.replace(/_/g, " ")));
+      if (k === "series_rssi" && f.v && typeof f.v === "object" && Array.isArray(f.v.cells)) {
+        kv.appendChild(rssiSpark(f.v));
+        kv.appendChild(el("span", "s d-dim", typeof f["src"] === "string" ? f["src"] : ""));
+        return;
+      }
       var t = vtext(k, f.v);
       var v = el("span", t === null ? "v d-dim" : "v d-bright", t === null ? (f.why || "not observed") : t);
       if (num(f.since) && f.since > 0) v.appendChild(el("span", "d-dim", "  (as of " + H.shortStamp(f.since) + ")"));

@@ -29,7 +29,10 @@
 #include "web_live.h"
 #include "oui_csv.h"
 #include "web_oui.h"
+#include "web_metrics.h"
+#include "web_rollup.h"
 #include "web_routes.h"
+#include "web_tsdb.h"
 #include "web_server.h"
 #include "wt_tmp.h"
 #include "wtest.h"
@@ -970,6 +973,120 @@ static void test_every_source_is_real(void) {
     WT_EQ(bad, 0);
     WT_ASSERT(tables >= 30);
     WT_ASSERT(fields >= 30);
+    env_close();
+}
+
+/* ── the RSSI series (Q7, owner ruling 2026-11-02) ──────────────────── */
+
+static web_rollup_t  R_ru;
+static web_tsdb_t    R_ts;
+static web_metrics_t R_mx;
+static web_jrec_t    R_rec;
+static long long     R_now;
+static long long r_clock(void *c) { (void)c; return R_now; }
+
+/* One hand-built record, in the emitter's shape, at slothweb's time t,
+ * its own ts and last_seen t too (heard now). */
+static void r_line(long long t, const char *fmt, const char *addr, int sig) {
+    char l[512];
+    R_now = t;
+    int n = snprintf(l, sizeof(l), fmt, t, addr, sig, t);
+    WT_EQ(web_jl_parse(l, (size_t)n, &R_rec), WEB_JL_OK);
+    web_metrics_record(&R_mx, &R_rec);
+}
+static const char BEACON[] = "{\"type\":\"beacon\",\"ts\":%lld,\"ssid\":\"x\",\"bssid\":\"%s\","
+                             "\"signal_dbm\":%d,\"channel\":6,\"last_seen\":%lld,\"frame_count\":1}";
+static const char PROBE[] = "{\"type\":\"probe_client\",\"ts\":%lld,\"mac\":\"%s\",\"ssid\":\"x\","
+                            "\"signal_dbm\":%d,\"channel\":6,\"first_seen\":1,\"last_seen\":%lld,"
+                            "\"frame_count\":1}";
+static const char BLEDEV[] = "{\"type\":\"ble_device\",\"ts\":%lld,\"addr\":\"%s\",\"addr_type\":1,"
+                             "\"has_rssi\":1,\"rssi\":%d,\"rssi_best\":-60,\"last_seen\":%lld}";
+
+/* The Report's signal item carries the emitter's own rf.rssi.* series:
+ * the last 24 h in 48 cells of 30 min, each the mean of its samples,
+ * min and max the samples' own, and where the 30 days are. A kind
+ * reads its own metric only, and a window holds its own day only; with
+ * no series the field says "no samples", and "not kept" is gone.
+ * Absences seen red: "no samples" for the station's MAC asked as a
+ * BSSID, with f_rssi()'s metric fixed at WM_RF_RSSI_STA; the AP heard
+ * 25 h ago, with the window's from made to - 2 * FRRS_RSSI_WINDOW_S;
+ * "not kept", with the old fnone() line put back. */
+static void test_report_rssi_series(void) {
+    env_open(NULL, 1);
+    char err[64];
+    WT_EQ(web_rollup_init(&R_ru, WEB_MAX_KEYS_MIN, 0, err, sizeof(err)), 0);
+    WT_EQ(web_tsdb_init(&R_ts, &R_ru, NULL, WEB_DEFAULT_RETAIN_DAYS, 256, r_clock, NULL), 0);
+    WT_EQ(web_metrics_init(&R_mx, &R_ru, r_clock, NULL), 0);
+    E.m4.tsdb = &R_ts;
+    E.h.tsdb = &R_ts;
+    /* T is a multiple of 1800, so the window is T - 86390 .. T + 10 and
+     * these land in its cells 45, 47 and 47. */
+    r_line(T - 3600, BEACON, "02:de:00:00:00:a1", -70);
+    r_line(T - 600, BEACON, "02:de:00:00:00:a1", -50);
+    r_line(T - 60, BEACON, "02:de:00:00:00:a1", -60);
+    r_line(T - 90000, BEACON, "02:de:00:00:00:a2", -40);
+    r_line(T - 30, PROBE, "02:de:00:00:00:12", -61);
+    r_line(T - 20, BLEDEV, "c6:de:00:00:00:b1", -80);
+
+    WT_EQ(get("/api/frrs/report", "kind=bssid&addr=02:de:00:00:00:a1"), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"series_rssi\":{\"v\":{\"metric\":\"rf.rssi.bssid\",\"key\":\"02:de:00:00:00:a1\","
+              "\"tier\":\"fine\",\"unit\":\"dBm\",\"from\":1792540810,\"to\":1792627210,"
+              "\"cell_s\":1800,\"cells\":[null,");
+    WT_HAS(b, ",null,-70.0,null,-55.0],\"min_dbm\":-70,\"max_dbm\":-50,\"last_dbm\":-60.0,"
+              "\"last_t\":1792627140,\"samples\":3,\"more\":false,\"store_error\":false,"
+              "\"history\":\"/api/series?metric=rf.rssi.bssid\\u0026key=02:de:00:00:00:a1\\u0026tier=minute\"}");
+    WT_HAS(b, "a sloth gauge, not a calibrated measurement");
+    WT_LACKS(b, "not kept");
+    WT_LACKS(b, "Q7");
+    /* 48 cells: two hold the three samples, 46 are null. */
+    const char *c = strstr(b, "\"cells\":[");
+    int nulls = 0;
+    for (const char *q = c; q && *q && *q != ']'; q++) if (!strncmp(q, "null", 4)) nulls++;
+    WT_EQ(nulls, 46);
+
+    WT_EQ(get("/api/frrs/report", "kind=sta&addr=02:de:00:00:00:12"), 200);
+    WT_HAS(body_of(g_out), "\"metric\":\"rf.rssi.sta\",\"key\":\"02:de:00:00:00:12\"");
+    WT_HAS(body_of(g_out), "\"min_dbm\":-61,\"max_dbm\":-61,");
+    WT_EQ(get("/api/frrs/report", "kind=ble&addr=c6:de:00:00:00:b1/1"), 200);
+    WT_HAS(body_of(g_out), "\"metric\":\"rf.rssi.ble\",\"key\":\"c6:de:00:00:00:b1\"");
+    WT_HAS(body_of(g_out), "\"min_dbm\":-80,\"max_dbm\":-80,");
+    /* The station's MAC asked as an AP: its kind's series, which it has
+     * none of. */
+    WT_EQ(get("/api/frrs/report", "kind=bssid&addr=02:de:00:00:00:12"), 200);
+    WT_HAS(body_of(g_out), "\"series_rssi\":{\"v\":null,\"why\":\"no samples\",\"src\":\"slothweb series "
+                           "rf.rssi.bssid (/api/series)");
+    /* Heard 25 h ago: outside the day. */
+    WT_EQ(get("/api/frrs/report", "kind=bssid&addr=02:de:00:00:00:a2"), 200);
+    WT_HAS(body_of(g_out), "\"series_rssi\":{\"v\":null,\"why\":\"no samples\"");
+
+    /* Counted on /api/health as every device key is, and bounded by the
+     * device class: a 17th MAC at --web-max-keys 16 evicts the least
+     * recently seen (the AP heard 25 h ago), counted. */
+    WT_EQ(get("/api/health", NULL), 200);
+    WT_HAS(g_out, "\"series_keys\":{\"global\":0,\"device\":4,");
+    WT_HAS(g_out, "\"key_evictions\":{\"global\":0,\"device\":0,");
+    for (int i = 0; i < 13; i++) {
+        char a[18];
+        snprintf(a, sizeof(a), "02:de:00:00:01:%02x", i);
+        r_line(T - 10, BEACON, a, -45);
+    }
+    WT_EQ(get("/api/health", NULL), 200);
+    WT_HAS(g_out, "\"series_keys\":{\"global\":0,\"device\":16,");
+    WT_HAS(g_out, "\"series_key_caps\":{\"global\":1,\"device\":16,");
+    WT_HAS(g_out, "\"key_evictions\":{\"global\":0,\"device\":1,");
+    WT_ASSERT(!web_rollup_has(&R_ru, WM_RF_RSSI_BSSID, "02:de:00:00:00:a2"));
+    WT_ASSERT(web_rollup_has(&R_ru, WM_RF_RSSI_BSSID, "02:de:00:00:00:a1"));
+
+    /* No time series attached: the field says so, and nothing else. */
+    E.m4.tsdb = NULL;
+    WT_EQ(get("/api/frrs/report", "kind=bssid&addr=02:de:00:00:00:a1"), 200);
+    WT_HAS(body_of(g_out), "\"series_rssi\":{\"v\":null,\"why\":\"no samples\"");
+    WT_LACKS(body_of(g_out), "\"cells\"");
+    E.h.tsdb = NULL;
+    web_metrics_destroy(&R_mx);
+    web_tsdb_destroy(&R_ts);
+    web_rollup_destroy(&R_ru);
     env_close();
 }
 
@@ -2081,6 +2198,19 @@ static void test_page_module(void) {
      * does not meet it, and a short label for phone width. */
     WT_HAS(m, "\"no automatic triage: \"");
     WT_HAS(m, "el(\"span\", \"tri-short\", sbl)");
+    /* The Report's RSSI series is drawn as text: draw_sparkline_at()'s
+     * glyphs and the heat ramp's classes, each from a fixed table and
+     * graded by glyph.js's port of the TUI's level, never a value of the
+     * answer as markup, a class or an attribute (the sinks above hold
+     * this function too: seen red with `v.innerHTML = s.history` added
+     * to rssiSpark()). */
+    WT_HAS(m, "var SPARK = [\"_\", \"\\u2581\", \"\\u2582\", \"\\u2583\", \"\\u2584\", \"\\u2585\", "
+              "\"\\u2586\", \"\\u2587\", \"\\u2588\"];");
+    WT_HAS(m, "var SPARK_CLS = { \"--tui-dim\": \"d-dim\", \"--tui-normal\": \"d-normal\", \"--heat-1\": \"h1\",");
+    WT_HAS(m, "glyph.level(lift(cells[i]), max)");
+    WT_HAS(m, "line.appendChild(el(\"span\", SPARK_CLS[tk] || \"d-normal\", SPARK[l] || \"_\"));");
+    WT_HAS(m, "if (k === \"series_rssi\" && f.v && typeof f.v === \"object\" && Array.isArray(f.v.cells)) {");
+    WT_HAS(m, "a sloth gauge, not a calibrated measurement");
     free(m);
     /* At 480 px and under the short label shows and the long one does
      * not, so the row's last button is never cut off at 393 px (seen
@@ -2193,6 +2323,7 @@ void run_frrs_tests(void) {
     WT_RUN(test_record_states_its_limits);
     WT_RUN(test_scs_certification_from_vendor_kb);
     WT_RUN(test_every_source_is_real);
+    WT_RUN(test_report_rssi_series);
     WT_RUN(test_tacdb_round_trip);
 #ifdef WITH_SQLITE
     WT_RUN(test_import_never_leaves_a_transaction);

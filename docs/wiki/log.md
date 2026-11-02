@@ -5871,3 +5871,16 @@ report events.
   checks seen red: the affiliate branch and the source marking removed
   from `f_cert()`, `Microsoft` dropped from the merged entry's aliases,
   the `unknown` test removed from `vendorResearch()`.
+- 2026-11-02 — [[slothweb]]: the FRRS Report's RSSI against time
+  (owner ruling on `docs/web-frrs-spec.md` Q7: "Keep, bounded").
+  Three gauges in the existing tiers, `rf.rssi.sta` (`probe_client`),
+  `rf.rssi.bssid` (`beacon`, and `assoc`, whose signal is the AP's
+  frames) and `rf.rssi.ble` (`ble_device` with `has_rssi`), each
+  sampled only from a record heard within 10 s of its `ts`; the minute
+  tier keeps them `--web-retain-days` (30 d), the device class's
+  `--web-max-keys` bounds them with its eviction, counted on
+  `/api/health`; Monitor's scope; not scored by A1. `series_rssi` in
+  the Report is the last 24 h in 48 half-hour cells with min and max,
+  drawn as a text sparkline in the TUI's glyphs and heat ramp; "not
+  kept" is gone. A sloth gauge, not a calibrated measurement. Each
+  absence assertion seen red under a named mutation.

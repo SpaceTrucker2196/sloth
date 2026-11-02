@@ -808,6 +808,7 @@ docs/web-ui-spec.md §5.1, and every one of its metrics has a source
 | `live.devices`, `live.alerts_open`, `live.anomalies_open` | gauge | none | docs/web-visual-spec.md §7 (V1, F1): sampled once a batch (below), from `web_live_summary()`'s device count and open incident severities (low+warn+crit summed) and from `web_anomaly_open_count()`. Each needs its source wired first (`web_metrics_set_live()`, `web_metrics_set_anomaly()`); unwired, neither is sampled at all, not sampled at 0 |
 | `records.rate` | counter | record type | every decoded record but `socket_gap`, one per line, keyed by its own `type` |
 | `sensor.drops` | counter | none | §7: `sensor_health` `capture_drop_delta` + `capture_ifdrop_delta` + `monitor_drop_delta` + `monitor_ifdrop_delta`, every tick, including the 0 of a healthy one -- a flat line, not a gap |
+| `rf.rssi.sta`, `rf.rssi.bssid`, `rf.rssi.ble` | gauge, dBm | MAC | the signal sloth last heard from the emitter, one sample per record that carries one: `probe_client` `signal_dbm` by `mac`; `beacon` and `assoc` `signal_dbm` by `bssid` (an assoc row's signal is the AP's frames, the (re)association response and EAPOL M1/M3, never the station's); `ble_device` `rssi` by `addr` with `has_rssi` 1, every receiver and address type of that address in one series. Sampled only when the record's `last_seen` is within 10 s of its `ts`, so a row sloth re-sends after the emitter went quiet adds nothing; a Wi-Fi 0 (sloth's "no signal") and anything outside -127..-1 dBm (BLE -127..+20) is not a reading. `ble_device` is written on a change or the 300 s heartbeat, so an advertiser's series is as sparse as its record. Owner ruling 2026-11-02 on [`docs/web-frrs-spec.md`](../docs/web-frrs-spec.md) Q7. Each bucket is the mean of what one receiver's driver reported, with min and max: a sloth gauge, not a calibrated measurement. The device class's keys, so `--web-max-keys` bounds it with the same eviction; Monitor's scope; not scored by the anomaly engine |
 
 A key is a canonical form checked by type: a MAC is lower-case
 `xx:xx:xx:xx:xx:xx` (all zeros, sloth's "no MAC", is not one), an IP is
@@ -2528,7 +2529,16 @@ owner's open questions are in
   **sloth decrypts nothing** ("language" is the protocols observed and
   whether they were in the clear). Shown on an alert's page (the
   emitter the alert names), in the device drawer and per emitter on the
-  TACDB tab.
+  TACDB tab. The Report's signal item carries the emitter's RSSI
+  against time (`series_rssi`): the last 24 h of its `rf.rssi.*` series
+  ([Metrics](#metrics)) from the fine tier, in 48 cells of 30 min each
+  the mean of its samples, with the window's min and max, the last
+  value, the sample count and the `/api/series` query for the 30 days
+  the minute tier keeps; `v` `null` and "no samples" when there is
+  none. The page draws it as a text sparkline, the TUI's
+  `draw_sparkline_at()` glyphs (`_` for a cell with no sample) graded
+  by its level on the cell's strength above -100 dBm, in the heat
+  ramp's colours, with min and max beside it.
 - **The TACDB tab.** Units (site, area, room, vehicle, person, other;
   four deep) with their subordinate units; platforms listed by
   nomenclature, each with its equipment complement (the emitters it
@@ -2727,7 +2737,11 @@ deadline scaling with its length (a slow import answered, a drip cut
 off), the 1,000-line import timed, the suggestion rules against
 hand-built rows, the recommendation against the assessments' own
 front-matter lines and against the shipped files by name
-(FRAG_PLAINTEXT and SMB1_USE get none); `test_store.c` the v5 to v6
+(FRAG_PLAINTEXT and SMB1_USE get none), the Report's `series_rssi` from
+hand-built beacon, probe and `ble_device` lines (the cells, min, max and
+history query; each kind its own metric; a day's window; "no samples";
+the device cap's eviction counted on `/api/health`) and the page's
+sparkline pinned as served; `test_store.c` the v5 to v6
 migration and its failure. Each absence assertion names the mutation it
 was seen red under.
 
@@ -2838,7 +2852,15 @@ series the rollup does get are global and never evicted:
 `ble.devices` (a gauge, sloth's advertiser-table size from
 `sensor_health.ble_devices`) and `ble.adv_rate` (a counter, the delta
 of `ble_adv_reports`), both Monitor's and both sampled only while
-`btmon_iface` says sloth is listening.
+`btmon_iface` says sloth is listening. The one per-address BLE series
+is `rf.rssi.ble` ([Metrics](#metrics)), kept for the FRRS Report's
+signal against time by the owner's Q7 ruling of 2026-11-02 in this
+same device class, as the ruling asked: the class evicts its least
+recently seen key, so rotating addresses push out the quiet keys first
+and a Wi-Fi device heard every pass is not among them, every eviction
+counted on `/api/health` (`key_evictions.device`). An advertiser is
+sampled only when its change-only record arrives fresh, so its series
+is sparse, and it takes a key only once it has a reading.
 
 Below the table the findings: kind, alert, sensor, the finding in
 words (`mfr 004c/07 ADV_IND: 44 addrs (40 fresh), 812 adv at 81.2/s in
@@ -3461,7 +3483,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_live.c` | the live state and the framer without a socket: the device count per pass, passes cut by a gap, a bad line or a bad type not published, an empty table publishing 0, a reconnect as a new stream, the alert lifecycle counts, an alert's `match_ip` (an address or `""`), type names, records per second, sensor-health states, the recent ring, hostile strings escaped in `/api/live` and in `record` events, the worst-case `/api/live` fitting its buffer, split reads, truncated and overlong lines |
 | `test_ingest.c` | the client over a real unix socket and loopback TCP, the test playing sloth: `--socket` parsing and its refusals, the back-off bound, **the device count `/api/live` reports matching what the fake sent within 5 s** for 3, 12, 300, 0 and 7 devices (spec §12, M1), markup escaped over HTTP and over `/events`, reconnect after the peer closes, retrying with no peer at the capped interval, no tight loop on a peer that closes at once, a mixed stream of truncated, overlong, invalid-UTF-8 and hostile lines, and that the client never writes to the socket |
 | `test_rollup.c` | bucket boundaries in all three tiers, sum/count/min/max, value by kind, non-finite and huge values, the per-class key caps and LRU eviction with its flush and counters, churn decided on a key's whole life (keys of two and three samples crossing minute and hour boundaries keep only their 10 s rows, a key spanning a minute keeps all), held rows released when a key is established and at shutdown, a host recurring under LRU pressure keeping its minute and hour rows, interface, channel and alert keys established from their first sample and in classes of their own, the ring query's merge and bounds, the full store queue dropping 10 s rows before minute and hour rows and counting them, and every class full at `--web-max-keys` 8192 across an hour boundary and a shutdown with nothing dropped |
-| `test_metrics.c` | hand-written lines through the decoder on a pinned clock: the key canonicalisers, gauges from `%.2f` reals, hostile keys refused, event counters, running totals as deltas floored at zero and first-sight baselines, flows, channels, presence, a probe request counted once though both `probe_client` and `seqnum_client` carry it, rows per pass with gaps and bad lines, the bounded high-water table, an evicted row seen again not counted twice, the evicted-id filter's two generations remembering an id across 8,191 evictions and forgetting it at the next rotation |
+| `test_metrics.c` | hand-written lines through the decoder on a pinned clock: the key canonicalisers, gauges from `%.2f` reals, hostile keys refused, event counters, running totals as deltas floored at zero and first-sight baselines, flows, channels, presence, a probe request counted once though both `probe_client` and `seqnum_client` carry it, rows per pass with gaps and bad lines, the bounded high-water table, an evicted row seen again not counted twice, the evicted-id filter's two generations remembering an id across 8,191 evictions and forgetting it at the next rotation; `rf.rssi.*` from `probe_client`, `beacon` (no channel mix wired), `assoc` (the BSSID's, never the station's) and `ble_device`, a stale row, a Wi-Fi 0 and `has_rssi` 0 adding nothing, and the device cap's eviction at `--web-max-keys 16` |
 | `test_store.c` | the DDL guardrail in every build; with SQLite: a fresh store, `test_db.c`'s secret-column sweep, secrets fed through the stream absent from the file, a v0, a v1, a v2, a v3 and a v4 file migrated, a v0, a v1, a v2, a v3 and a v4 file whose step fails left where they were, `chmix`'s merge, tiers and bounded reads, its retention (minute rows three days, hour rows 400) and its row cap (minute rows first, counted), the cap and the ceiling deleting whole buckets, the kind in the key, `passive_ptr`'s upsert, bound and read-back, the presence cells of the minute tier, the v3 tables through their own calls (a baseline restored into a smaller table with the rest and an invalid row deleted, episodes expired at load, histograms, the reported set pruned, the A9 and MAD reads), a newer file and foreign files (a sloth.db shape, other databases, a file with another program's `application_id` and `user_version` but no table yet, our own `meta` under a foreign `application_id`, not SQLite) refused byte for byte, a WAL-mode sloth.db with an unflushed WAL refused with the file and its WAL byte for byte, a cleanly closed WAL-mode sloth.db refused with its directory listing unchanged, the file rules (symlink, mode, links, side files, a directory; the owner rule is not tested, see below), `DEFENSIVE` refusing a `sqlite_master` write on the store's handle and a library that leaves it off failing the open, a file swapped between the identifying and the writing open refused byte for byte, merged writes counted once in `store_rows` and bound queries, retention, the WAL left empty by the compaction, a start after a long stop expiring everything with the WAL never past one slice, the ceiling dropping the oldest fine rows first and sparing global series, keeping the time series within the history allowance (and rows left) while 80,000 rows arrive with the analysis state alone over it (with `dbstat`; without it, the fallback asserted), re-measuring the baseline tables after `web_store_bl_del()` and the episode table on the next pass, and holding under 200 new keys a second within one flush interval; a new baseline entry taking over its pair's stale row, a restore of 4,000 entries into ten keeping the WAL under 3 MB, the analysis estimate against the default ceiling; churn of two and three samples per key writing no minute or hour row while slothweb runs; the ceiling taking a flood's 8,192 unflagged advertisers before any keyed minute row, the HID rows and the findings kept |
 | `test_series.c` | every parameter rule and its reason, the answer's shape and paging, the routes (`HEAD`, `400` without echo, `query_too_long`, `421` and `405` on all three, `503` without a time series, the health members), the 900-point worst case fitting, the 900-point cap on a store+memory answer of 1,800 buckets and its next page, the store thread running beside reads and writes, and spec §12's M2 acceptance: an hour of records through the framer on a pinned clock, the 24 h request answered with 360 points 10 s apart (from memory, from the store's fine tier, and through `/api/series` again after a restart over the same store), the store under 5 MB on disk with its WAL after every step of the hour |
 | `test_server.c` | real loopback sockets: default bind address, a refused peer over v4 and v6, 405 for POST/PUT/DELETE/PATCH, 431, idle and slow clients timed out, slot exhaustion; the page byte for byte and its `304`, health, a stream's ticks and pings and the client leaving, the first tick at once, a departing client noticed on the read path with no event due, the stream socket's `TCP_NODELAY` and `SO_SNDBUF`, a non-reading stream client dropped at the 64 KB backlog and not past it, the stream cap, `421` for `Host: attacker.example`; an episode that opens reaching a stream client as one `anomaly` event, counted once |

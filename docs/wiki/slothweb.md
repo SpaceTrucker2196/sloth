@@ -107,7 +107,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
+**Last updated**: 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
 listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
@@ -1123,7 +1123,19 @@ the routes with their request and response shapes are
   emitter in a bounded in-memory ledger, and slothweb's own baselines
   and episodes. Every field names its source; absent is *not observed*.
   It says, every time, that a single passive sensor has no location
-  axis and that sloth decrypts nothing.
+  axis and that sloth decrypts nothing. The Report's signal item plots
+  RSSI against time (Q7, owner ruling 2026-11-02 "Keep, bounded"): three
+  gauges, `rf.rssi.sta` (probe requests), `rf.rssi.bssid` (beacons and
+  the AP's association frames) and `rf.rssi.ble` (advertisements), each
+  the signal sloth last heard as a record reports it, sampled only while
+  the record's `last_seen` is fresh. They sit in the existing tiers (the
+  minute tier's 30 days, `--web-retain-days`), in the device class's
+  keys under `--web-max-keys` with its eviction, Monitor's scope, and
+  are not scored for anomalies. The record carries the last 24 h in 48
+  half-hour cells with min and max, drawn on the alert page and in the
+  drawer as the TUI's sparkline glyphs in its heat ramp; "no samples"
+  when there are none. A receiver's own figure, not a calibrated
+  measurement, and the record says so.
 - **The TACDB tab**: units with subordinate units, platforms by
   nomenclature, each with its emitters (each opening its EC/S and
   Report), suggestions from sloth's own correlations (sequence-counter
@@ -1161,7 +1173,7 @@ seven one-line guarded hook points, so the parallel slices changing
 `web/src/web_frrs_report.c`, `web/src/web_frrs_tacdb.c`,
 `web/ui/frrs.js`, `web/tests/test_frrs.c`, the owner's request of
 2026-10-27.
-**Last updated**: 2026-11-02 (second review: history and the table's
+**Last updated**: 2026-11-02 (the Report's RSSI against time: `rf.rssi.*`, Q7 answered); 2026-11-02 (second review: history and the table's
 cap fold instead of refusing, no row for an unchanged write, noise
 recommended only for a high false-positive risk and a noisy count, the
 import prepared once and bounded at 1,000 triage lines, imported `by`
@@ -1196,7 +1208,15 @@ is kept in the module rather than as a per-address series in the
 rollup: that class is 512 keys shared with the Wi-Fi tables, and a
 resident random-address device is a new key every fifteen minutes.
 Two global series do enter the rollup, `ble.devices` and
-`ble.adv_rate`, from `sensor_health`, both Monitor's.
+`ble.adv_rate`, from `sensor_health`, both Monitor's. Since the owner's
+Q7 ruling (2026-11-02) one per-address series does too, `rf.rssi.ble`,
+for the FRRS Report's signal against time, in that shared device class
+as the ruling asked ("capped by its existing key limits"): the class
+evicts its least recently seen key, so a stream of rotating addresses
+pushes out the quiet keys first, BLE and Wi-Fi alike, and a Wi-Fi
+device heard every pass is not among them; each eviction is counted on
+`/api/health` (`key_evictions.device`). The advertising rate stays in
+the module.
 
 The tab (key `0`) is the TUI view at parity: the same columns with the
 TUI's own cell strings (`type_ch`, `count_cell`, `age_cell`, the HWS

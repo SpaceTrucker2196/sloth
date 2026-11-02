@@ -1,6 +1,7 @@
 #include "web_metrics.h"
 
 #include <arpa/inet.h>
+#include <limits.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -386,6 +387,27 @@ static void gauge(web_metrics_t *m, const web_jrec_t *r, const char *field,
     if (web_jl_num(r, field, &v)) web_rollup_add(m->ru, metric, key, v, now);
 }
 
+/* rf.rssi.* (web_rollup.h): one sample of the signal the record says
+ * sloth last heard from the emitter, in field, when sloth heard it
+ * within the last fine bucket of the record's own ts. A table row is
+ * re-sent every pass for as long as sloth keeps it, carrying its last
+ * frame's signal: sampled on every pass regardless, an emitter that
+ * went quiet would draw a flat line at its last value, which reads as
+ * a signal that was there. So no last_seen, no sample. lo..hi is the
+ * range of a real reading: a Wi-Fi row's 0 is sloth's "no signal"
+ * (sloth.h), a BLE row says so with has_rssi, and HCI's RSSI is -127
+ * to +20. The value is sloth's own, from radiotap or HCI: a gauge of
+ * what one receiver reported, not a calibrated measurement. */
+static void rssi(web_metrics_t *m, const web_jrec_t *r, const char *field,
+                 int metric, const char *key, long long ts, long long now,
+                 long long lo, long long hi) {
+    long long ls = web_jl_int(r, "last_seen", -1);
+    if (ls < 0 || ts < 0 || ts - ls > WEB_FINE_S) return;
+    long long v = web_jl_int(r, field, LLONG_MIN);
+    if (v < lo || v > hi) return;
+    web_rollup_add(m->ru, metric, key, (double)v, now);
+}
+
 /* A flow row's running total, by its src and dst. */
 static void flow(web_metrics_t *m, const web_jrec_t *r, const char *tag,
                  const char *srcf, const char *dstf, long long total,
@@ -462,6 +484,7 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
          * listening counts from its first frame. */
         m->probe_n++;
         if (web_key_mac(web_jl_str(r, "mac"), k) != 0) return;
+        rssi(m, r, "signal_dbm", WM_RF_RSSI_STA, k, ts, now, -127, -1);
         snprintf(id, sizeof(id), "pc|%s", k);
         double d = hw_delta(m, id, web_jl_int(r, "frame_count", 0),
                             web_jl_int(r, "first_seen", -1));
@@ -470,6 +493,10 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
     } else if (!strcmp(t, "assoc")) {
         if (web_key_mac(web_jl_str(r, "sta_mac"), k) != 0) return;
         if (web_key_mac(web_jl_str(r, "bssid"), k2) != 0) return;
+        /* The AP's signal, not the station's: every frame that sets an
+         * assoc row's signal_dbm is one the AP sent (the status-0
+         * (re)association response, EAPOL M1/M3; src/assoc_track.c). */
+        rssi(m, r, "signal_dbm", WM_RF_RSSI_BSSID, k2, ts, now, -127, -1);
         snprintf(id, sizeof(id), "as|%s|%s", k2, k);
         double d = hw_delta(m, id, web_jl_int(r, "frame_count", 0),
                             web_jl_int(r, "first_seen", -1));
@@ -479,9 +506,12 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
          * and EAPOL M1/M3 with the station's M2/M4, so neither one sent
          * all of it (web_chmix.h). */
     } else if (!strcmp(t, "beacon")) {
-        /* The channel mix only: an AP's beacons, by its bssid. No
-         * first_seen on the record, so a first sight is a baseline. */
-        if (!m->mix || web_key_mac(web_jl_str(r, "bssid"), k) != 0) return;
+        /* The AP's signal, then the channel mix: its beacons, by its
+         * bssid. No first_seen on the record, so a first sight is a
+         * baseline. */
+        if (web_key_mac(web_jl_str(r, "bssid"), k) != 0) return;
+        rssi(m, r, "signal_dbm", WM_RF_RSSI_BSSID, k, ts, now, -127, -1);
+        if (!m->mix) return;
         uint8_t mac[6];
         const char *ssid = web_jl_str(r, "ssid");
         if (web_mix_mac_bytes(k, mac) == 0 && ssid && ssid[0])
@@ -492,6 +522,15 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
                 web_jl_int(r, "channel_source", 0) == WEB_CH_SRC_HE_6GHZ ? "6 GHz"
                                                                          : NULL,
                 d, now);
+    } else if (!strcmp(t, "ble_device")) {
+        /* By address alone: the same address heard by two receivers (or
+         * as two addr_types) is one series, every receiver's samples in
+         * it. sloth writes this record on a change of its signature or
+         * at the 300 s heartbeat (src/jsonl.c), not every pass, so an
+         * advertiser's series is as sparse as its record. */
+        if (web_jl_int(r, "has_rssi", 0) != 1) return;
+        if (web_key_mac(web_jl_str(r, "addr"), k) != 0) return;
+        rssi(m, r, "rssi", WM_RF_RSSI_BLE, k, ts, now, -127, 20);
     } else if (!strcmp(t, "dns")) {
         if (web_key_ip(web_jl_str(r, "src"), k) != 0) return;
         long long resp = web_jl_int(r, "is_resp", -1);

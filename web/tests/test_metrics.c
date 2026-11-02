@@ -12,6 +12,7 @@
 #include "web_live.h"
 #include "web_metrics.h"
 #include "web_rollup.h"
+#include "web_scope.h"
 #include "wtest.h"
 
 static web_rollup_t  ru;
@@ -679,7 +680,113 @@ static void test_highwater_gone_filter_rotates(void) {
     done();
 }
 
+/* rf.rssi.* (docs/web-frrs-spec.md Q7, owner ruling 2026-11-02): the
+ * signal sloth last heard, from hand-built records in src/jsonl.c's
+ * shapes, each into its emitter kind's own series. */
+static void test_rssi_series(void) {
+    fresh();
+    /* A station's probes, by its MAC: a gauge, mean min and max. */
+    line("{\"type\":\"probe_client\",\"ts\":100,\"mac\":\"02:00:00:00:00:51\",\"ssid\":\"x\","
+         "\"signal_dbm\":-61,\"channel\":6,\"first_seen\":90,\"last_seen\":100,\"frame_count\":3}");
+    line("{\"type\":\"probe_client\",\"ts\":101,\"mac\":\"02:00:00:00:00:51\",\"ssid\":\"x\","
+         "\"signal_dbm\":-55,\"channel\":6,\"first_seen\":90,\"last_seen\":101,\"frame_count\":4}");
+    web_point_t p = cur(WM_RF_RSSI_STA, "02:00:00:00:00:51");
+    WT_EQ(p.n, 2);
+    WT_ASSERT(p.min == -61 && p.max == -55);
+    WT_ASSERT(web_point_value(WM_RF_RSSI_STA, &p) == -58);
+    /* An AP's beacon, by bssid (canonicalised), with no channel mix
+     * wired: the sample does not wait on the mix. Seen red with the
+     * beacon branch's `if (!m->mix) return;` moved back above it. */
+    line("{\"type\":\"beacon\",\"ts\":100,\"ssid\":\"x\",\"bssid\":\"02:00:00:00:00:A1\","
+         "\"signal_dbm\":-50,\"channel\":6,\"last_seen\":100,\"frame_count\":10}");
+    p = cur(WM_RF_RSSI_BSSID, "02:00:00:00:00:a1");
+    WT_EQ(p.n, 1);
+    WT_ASSERT(p.sum == -50);
+    /* An assoc row's signal is the AP's frames: the BSSID's series, and
+     * never the station's. Seen red with the assoc branch sampling
+     * WM_RF_RSSI_STA under the station's key k. */
+    line("{\"type\":\"assoc\",\"ts\":101,\"bssid\":\"02:00:00:00:00:a1\",\"sta_mac\":"
+         "\"02:00:00:00:00:52\",\"ssid\":\"x\",\"sta_random\":0,\"source\":1,\"channel\":6,"
+         "\"signal_dbm\":-48,\"first_seen\":95,\"last_seen\":101,\"frame_count\":2}");
+    p = cur(WM_RF_RSSI_BSSID, "02:00:00:00:00:a1");
+    WT_EQ(p.n, 2);
+    WT_ASSERT(p.max == -48);
+    WT_ASSERT(!has_series(WM_RF_RSSI_STA, "02:00:00:00:00:52"));
+    /* A row re-sent long after its last frame is no reading: its signal
+     * is the old one. Seen red with the `ts - ls > WEB_FINE_S` test
+     * taken out of rssi(). */
+    line("{\"type\":\"beacon\",\"ts\":200,\"ssid\":\"y\",\"bssid\":\"02:00:00:00:00:a2\","
+         "\"signal_dbm\":-40,\"channel\":1,\"last_seen\":150,\"frame_count\":10}");
+    WT_ASSERT(!has_series(WM_RF_RSSI_BSSID, "02:00:00:00:00:a2"));
+    /* sloth's 0 is "no signal", not 0 dBm. Seen red with rssi()'s Wi-Fi
+     * upper bound -1 made 0. */
+    line("{\"type\":\"probe_client\",\"ts\":100,\"mac\":\"02:00:00:00:00:53\",\"ssid\":\"x\","
+         "\"signal_dbm\":0,\"channel\":6,\"first_seen\":90,\"last_seen\":100,\"frame_count\":1}");
+    WT_ASSERT(!has_series(WM_RF_RSSI_STA, "02:00:00:00:00:53"));
+    WT_ASSERT(has_series(WM_DEV_PRESENT, "02:00:00:00:00:53"));
+    /* An advertiser, by its address: has_rssi 0 says there is no
+     * reading, whatever rssi holds. Seen red with the has_rssi test
+     * taken out of the ble_device branch. */
+    line("{\"type\":\"ble_device\",\"ts\":100,\"addr\":\"c6:00:00:00:00:b1\",\"addr_type\":1,"
+         "\"has_rssi\":0,\"rssi\":-70,\"rssi_best\":0,\"last_seen\":100}");
+    WT_ASSERT(!has_series(WM_RF_RSSI_BLE, "c6:00:00:00:00:b1"));
+    line("{\"type\":\"ble_device\",\"ts\":101,\"addr\":\"c6:00:00:00:00:b1\",\"addr_type\":1,"
+         "\"has_rssi\":1,\"rssi\":-70,\"rssi_best\":-66,\"last_seen\":101}");
+    p = cur(WM_RF_RSSI_BLE, "c6:00:00:00:00:b1");
+    WT_EQ(p.n, 1);
+    WT_ASSERT(p.sum == -70);
+    /* No kind's series holds another kind's emitter. */
+    WT_ASSERT(!has_series(WM_RF_RSSI_STA, "c6:00:00:00:00:b1"));
+    WT_ASSERT(!has_series(WM_RF_RSSI_BSSID, "02:00:00:00:00:51"));
+    /* The catalogue: gauges of the device class, keyed by MAC, in dBm,
+     * the monitor radio's (and the BLE receivers'). */
+    static const int M[3] = { WM_RF_RSSI_STA, WM_RF_RSSI_BSSID, WM_RF_RSSI_BLE };
+    static const char *const NAME[3] = { "rf.rssi.sta", "rf.rssi.bssid", "rf.rssi.ble" };
+    for (int i = 0; i < 3; i++) {
+        WT_EQ(web_metric_find(NAME[i]), M[i]);
+        WT_EQ(web_metric_defs[M[i]].kind, WEB_MK_GAUGE);
+        WT_EQ(web_metric_defs[M[i]].kclass, WEB_KC_DEV);
+        WT_ASSERT(!strcmp(web_metric_defs[M[i]].keykind, "mac"));
+        WT_ASSERT(!strcmp(web_metric_defs[M[i]].unit, "dBm"));
+        WT_ASSERT(strstr(web_metric_defs[M[i]].source, "not calibrated") != NULL);
+        WT_EQ(web_scope_metric(M[i]), WEB_SC_M);
+        WT_ASSERT(web_metric_is_rssi(M[i]));
+    }
+    WT_ASSERT(!web_metric_is_rssi(WM_DEV_PRESENT));
+    done();
+}
+
+/* The device class's cap bounds rf.rssi.* as it bounds every device
+ * metric: at --web-max-keys 16 the 17th BSSID evicts the least
+ * recently seen, flushed and counted. The first gone was seen red with
+ * web_rollup_init()'s device cap doubled. */
+static void test_rssi_key_cap(void) {
+    char err[64];
+    WT_EQ(web_rollup_init(&ru, WEB_MAX_KEYS_MIN, 0, err, sizeof(err)), 0);
+    WT_EQ(web_metrics_init(&mx, &ru, pinned, NULL), 0);
+    g_now = 1792627200;
+    for (int i = 0; i <= WEB_MAX_KEYS_MIN; i++) {
+        char l[256];
+        g_now++;
+        snprintf(l, sizeof(l), "{\"type\":\"beacon\",\"ts\":%lld,\"ssid\":\"x\",\"bssid\":"
+                 "\"02:00:00:00:01:%02x\",\"signal_dbm\":%d,\"channel\":6,\"last_seen\":%lld,"
+                 "\"frame_count\":1}", g_now, i, -40 - i, g_now);
+        line(l);
+    }
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.keys[WEB_KC_DEV], WEB_MAX_KEYS_MIN);
+    WT_EQ(st.caps[WEB_KC_DEV], WEB_MAX_KEYS_MIN);
+    WT_EQ(st.evictions[WEB_KC_DEV], 1);
+    WT_ASSERT(!web_rollup_has(&ru, WM_RF_RSSI_BSSID, "02:00:00:00:01:00"));
+    WT_ASSERT(web_rollup_has(&ru, WM_RF_RSSI_BSSID, "02:00:00:00:01:01"));
+    WT_ASSERT(web_rollup_has(&ru, WM_RF_RSSI_BSSID, "02:00:00:00:01:10"));
+    done();
+}
+
 void run_metrics_tests(void) {
+    WT_RUN(test_rssi_series);
+    WT_RUN(test_rssi_key_cap);
     WT_RUN(test_key_canonicalisers);
     WT_RUN(test_gauges);
     WT_RUN(test_hostile_keys_refused);

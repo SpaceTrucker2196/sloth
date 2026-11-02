@@ -149,6 +149,15 @@ enum {
      * table's size and the advertising-report rate, from sensor_health.
      * Global, so never evicted; Monitor's (web_scope.c). */
     WM_BLE_DEVICES, WM_BLE_ADV_REPORTS,
+    /* RSSI against time per emitter (docs/web-frrs-spec.md Q7, owner
+     * ruling 2026-11-02 "Keep, bounded"): a gauge of the signal sloth
+     * last heard from the emitter, as each record that carries one
+     * reports it, keyed by its MAC, one metric per emitter kind so a
+     * station, an AP and an advertiser never share a series. Device
+     * class: the key slot is the one dev.present already holds for the
+     * same MAC, and evicts as every device key does. A sloth gauge, not
+     * a calibrated measurement (web_metrics.c says which records). */
+    WM_RF_RSSI_STA, WM_RF_RSSI_BSSID, WM_RF_RSSI_BLE,
     WM_COUNT
 };
 
@@ -332,6 +341,11 @@ void web_rollup_stats(web_rollup_t *ru, web_rollup_stats_t *st);
 /* Rows waiting in the store queue. */
 size_t web_rollup_queued(web_rollup_t *ru);
 void web_rollup_note_hw_eviction(web_rollup_t *ru);
+
+/* Is metric one of the rf.rssi.* gauges? The anomaly engine scores no
+ * signal strength (web_anomaly.c's A1): a person walking past an AP is
+ * not an anomaly, and no rule was asked for over it. */
+int  web_metric_is_rssi(int metric);
 
 /* The value a bucket stands for: sum/n for a gauge, sum for a counter,
  * max for presence. */

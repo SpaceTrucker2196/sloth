@@ -61,6 +61,9 @@ details.frgrp > summary:hover { color: var(--hover); }
 .frkv .k { color: var(--muted); overflow-wrap: anywhere; }
 .frkv .v { overflow-wrap: anywhere; }
 .frkv .s { font-size: 10px; overflow-wrap: anywhere; }
+/* The RSSI sparkline: one glyph a cell; at phone width it breaks between
+ * glyphs rather than push the page sideways. */
+.fr-spark-g { word-break: break-all; letter-spacing: 0; }
 #frrs-drawer { margin-top: 10px; }
 
 /* The TACDB tab's tables. */
