@@ -1082,9 +1082,15 @@ void frrs_report_json(const web_m4_t *m, web_live_t *live, int kind, const char 
     fi(&g, "rssi_best_dbm_radios", d->mg.have && d->mg.has_best, d->mg.best_rssi,
        "wifi_merged.best_rssi", 0);
     fi(&g, "radios_heard_it", d->mg.have, d->mg.seen_by, "wifi_merged.seen_by", 0);
-    fs(&g, "series_presence", "dev.present", "slothweb series dev.present (/api/series)", 0);
-    fs(&g, "series_frames", kind == FRRS_K_BLE ? NULL : "dev.frames",
-       "slothweb series dev.frames (/api/series)", 0);
+    /* A series is not a value: no v, and where to read it. */
+    fnone(&g, "series_presence", "slothweb series dev.present (/api/series)",
+          "a series, not a value: /api/series?metric=dev.present&key=<this address>");
+    if (kind == FRRS_K_BLE)
+        fnone(&g, "series_frames", "slothweb series dev.frames (/api/series)",
+              "no frame count is kept for a BLE advertiser");
+    else
+        fnone(&g, "series_frames", "slothweb series dev.frames (/api/series)",
+              "a series, not a value: /api/series?metric=dev.frames&key=<this address>");
     fnone(&g, "series_rssi", "dev.rssi (not kept)",
           "RSSI over time is not a series slothweb keeps (open question Q7)");
     g_close(&g);

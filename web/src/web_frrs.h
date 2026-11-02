@@ -111,8 +111,16 @@
 #define WEB_FRRS_LIST         8
 /* Suggestions listed at most, in evidence order. */
 #define WEB_FRRS_SUGGEST_MAX  200
-/* The assessment file read for "follow recommended": its first bytes. */
-#define WEB_FRRS_ASSESS_MAX   4096
+/* The assessment file read for "follow recommended": read until its
+ * front matter closes, at most this much (the longest real front
+ * matter is under 5 KiB; a whole file is under 30 KiB). */
+#define WEB_FRRS_ASSESS_MAX   32768
+/* An import's triage lines: at most WEB_FRRS_IMPORT_TRIAGE in one file,
+ * and imported rows at most WEB_FRRS_IMPORTED_CAP of the table, so no
+ * file, nor files one after another, take the rows the operator's own
+ * triage needs; each alert's WEB_FRRS_HIST_PER holds for imports too. */
+#define WEB_FRRS_IMPORT_TRIAGE 5000
+#define WEB_FRRS_IMPORTED_CAP  (WEB_FRRS_TRIAGE_CAP / 2)
 /* The export, one JSON Lines file, and so also what one import takes. */
 #define WEB_FRRS_EXPORT_MAX   WEB_IMPORT_MAX
 

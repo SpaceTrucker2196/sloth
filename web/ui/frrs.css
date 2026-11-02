@@ -12,6 +12,14 @@
 .dt-row:hover > .tri-line .tri-btns, .dt-row:focus-within > .tri-line .tri-btns,
 li:hover > .tri-line .tri-btns, li:focus-within > .tri-line .tri-btns { display: inline-flex; }
 @media (hover: none) { .tri-line .tri-btns { display: inline-flex; } }
+/* In a dt table the line spans the whole row, which at phone width is
+ * wider than the screen: it is held to the screen's left edge and
+ * width so its buttons wrap where they can be read, never clipped by
+ * the cells' overflow rule (page.css), and it repeats the state the
+ * scrolled-off triage column holds. */
+.dt .dt-row > .tri-line { overflow: visible; text-overflow: clip; position: sticky; left: 0; max-width: calc(100vw - 48px); }
+.tri-line .tri-dup { display: none; }
+@media (max-width: 720px) { .tri-line .tri-dup { display: inline; } }
 .tri-btns { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .tri-btns.tri-always { display: flex; margin: 6px 0; }
 button.tri-b { font-size: 10px; letter-spacing: 0.06em; text-transform: none; padding: 1px 7px; }

@@ -70,6 +70,13 @@ var SlothFrrs = (function () {
       headers: { "Content-Type": "application/json" },
       body: raw ? body : JSON.stringify(body)
     }).then(function (r) {
+      // --web-read-only takes the POST routes away before the router:
+      // its 405 is the server's plain one, not JSON, and means exactly
+      // that (a page loaded before the restart still has its buttons).
+      if (r.status === 405) {
+        S.writes = false;
+        throw new Error("read_only");
+      }
       return r.json().then(function (j) {
         if (!r.ok) {
           var e = new Error(j && typeof j.error === "string" ? j.error : String(r.status));
@@ -84,7 +91,7 @@ var SlothFrrs = (function () {
     "bad_origin": "refused: not this page's origin",
     "rate_limited": "too many changes at once; wait a moment",
     "no_store": "no store: this slothweb keeps no triage (WITH_SQLITE=0 or no --store)",
-    "read_only": "read-only: started with --web-read-only",
+    "read_only": "read-only: slothweb was started with --web-read-only; reload to drop the buttons",
     "no_recommendation": "no recommendation yet for this type",
     "no_such_alert": "that alert is gone",
     "history_full": "this alert's history is full (64 changes)",
@@ -222,6 +229,9 @@ var SlothFrrs = (function () {
       if (p.line) {
         clear(p.line);
         if (!p.cell && st.state !== "untriaged") p.line.appendChild(chip(st));
+        // The Alerts page's column scrolls off at phone width: the line
+        // says the state too, shown only there (frrs.css).
+        if (p.cell) { var dup = chip(st); dup.classList.add("tri-dup"); p.line.appendChild(dup); }
         var msg = el("span", "sub tri-msg", "");
         p.line.appendChild(buttons(id, msg, false));
         p.line.appendChild(msg);
@@ -237,6 +247,11 @@ var SlothFrrs = (function () {
     if (!H || typeof id !== "string" || !ID_RE.test(id) || !li) return;
     var line = el("span", "tri tri-line");
     li.appendChild(line);
+    // The row holds buttons now, which a link may not: a group, still
+    // opened by Enter or a click as app.js made it, the buttons its own
+    // tab stops.
+    li.role = "group";
+    li.ariaRoleDescription = "alert, Enter opens it";
     reg(id, { row: li, line: line });
     var t = Date.now();
     if (S.seen[id] && t - S.seen[id] < 10000) { setTimeout(function () { render(id); }, 0); return; }
@@ -281,20 +296,24 @@ var SlothFrrs = (function () {
   }
 
   // triage= on the Alerts page's path (as scoped() adds scope=), and a
-  // triage:<state> term typed in the search box moved into the select.
+  // triage:<state> term typed anywhere in the search box, among other
+  // words or alone, moved into the select; the words left stay in the
+  // box and the first of them is the server's q, as alertsQuery() takes.
   function q(p) {
-    var sel = $("al-triage");
+    var sel = $("al-triage"), box = $("al-q");
     if (!sel) return;
-    for (var i = p.length - 1; i >= 0; i--) {
-      if (p[i].indexOf("q=") !== 0) continue;
-      var raw = "";
-      try { raw = decodeURIComponent(p[i].slice(2)); } catch (e) { continue; }
-      var m = /^triage:([a-z]+)$/.exec(raw);
-      if (m && FILTERS[m[1]]) {
-        sel.value = m[1];
-        H.prefSet("ctl.al-triage", m[1]);
-        p.splice(i, 1);
-        if ($("al-q")) $("al-q").value = "";
+    if (box) {
+      var hit = null, kept = [];
+      box.value.trim().split(/\s+/).forEach(function (w) {
+        var m = /^triage:([a-z]+)$/.exec(w);
+        if (m && FILTERS[m[1]]) hit = m[1]; else if (w) kept.push(w);
+      });
+      if (hit) {
+        sel.value = hit;
+        H.prefSet("ctl.al-triage", hit);
+        box.value = kept.join(" ");
+        for (var i = p.length - 1; i >= 0; i--) if (p[i].indexOf("q=") === 0) p.splice(i, 1);
+        if (kept.length) p.push("q=" + encodeURIComponent(kept[0]));
       }
     }
     p.push("triage=" + encodeURIComponent(FILTERS[sel.value] ? sel.value : "any"));
@@ -355,6 +374,10 @@ var SlothFrrs = (function () {
           S.writes = !!h.writes;
           S.st[id] = h.current;
           S.hist = h.rows || [];
+          // The answer carries the type's recommendation: the panel's
+          // button is drawn from it, not from a second ask that would
+          // redraw only the rows registered with reg().
+          if (S.types[id] && h.recommend && typeof h.recommend === "object") S.rec[S.types[id]] = h.recommend;
           var cur = $("frrs-tri-cur"), msg = el("span", "sub tri-msg", "");
           clear(cur);
           cur.appendChild(chip(h.current));

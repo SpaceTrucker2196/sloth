@@ -5710,3 +5710,17 @@ report events.
   `--web-assessments` feeds "follow recommended"; both are tabled in
   `web/README.md`, not [[cli-reference]], which
   `tests/test_docs_consistency.c` holds to sloth's own flags.
+- 2026-11-02 — [[slothweb]]: triage and TACDB review fixes. "Follow
+  recommended" reads the assessments' own vocabulary (`noise_verdict`
+  `noisy` / `very noisy` → noise; `false_positive_risk: high` and
+  `severity_assessment` are advice, never a state) and front matter past
+  4 KiB; the import refuses a file without its header first or its
+  `end` line last, merges units parent first whatever the order, never
+  merges platforms on a name alone, rolls back whatever it began (a
+  headerless file had left the write connection's transaction open
+  until restart); deleted TACDB rows count toward twice each cap, the
+  export carries live rows only; imported triage meets each alert's 64,
+  5,000 per file and half the table; restores re-check depth and the
+  unit; S1 needs the stream's confidence and takes the earlier address
+  as primary, S2 one kind per MLD, S3 the low nibble and the vendor
+  (`docs/web-frrs-spec.md` §14, Q15, Q16).

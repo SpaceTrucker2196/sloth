@@ -762,17 +762,10 @@ static void fm_value(const char *v, size_t n, char *out, size_t cap) {
     out[o] = '\0';
 }
 
-/* Lower-cased first word of v equals one of the words. */
-static int fm_is(const char *v, const char *const *words) {
-    char w[48];
-    size_t n = 0;
-    while (v[n] && v[n] != ' ' && v[n] != ',' && v[n] != ';' && n + 1 < sizeof(w)) {
-        w[n] = (char)tolower((unsigned char)v[n]);
-        n++;
-    }
-    w[n] = '\0';
-    for (int i = 0; words[i]; i++) if (!strcmp(w, words[i])) return 1;
-    return 0;
+/* v begins with the words w, in any case, and they end there. */
+static int fm_starts(const char *v, const char *w) {
+    size_t n = strlen(w);
+    return !strncasecmp(v, w, n) && !isalpha((unsigned char)v[n]);
 }
 
 int web_frrs_recommend(const web_frrs_t *f, int type, char *basis, size_t basiscap,
@@ -789,20 +782,26 @@ int web_frrs_recommend(const web_frrs_t *f, int type, char *basis, size_t basisc
     int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) return WEB_TRI_UNTRIAGED;
     struct stat st;
-    char buf[WEB_FRRS_ASSESS_MAX + 1];
+    char *buf = malloc(WEB_FRRS_ASSESS_MAX + 1);
     ssize_t got = 0;
+    if (!buf) { close(fd); return WEB_TRI_UNTRIAGED; }
+    /* Read until the front matter closes (a line "---" after the
+     * first), never more than WEB_FRRS_ASSESS_MAX: the body below it,
+     * most of the file, is not read. */
     if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
         for (;;) {
-            ssize_t r = read(fd, buf + got, (size_t)(WEB_FRRS_ASSESS_MAX - got));
+            size_t want = (size_t)(WEB_FRRS_ASSESS_MAX - got) < 4096 ? (size_t)(WEB_FRRS_ASSESS_MAX - got) : 4096;
+            ssize_t r = read(fd, buf + got, want);
             if (r < 0 && errno == EINTR) continue;
             if (r <= 0) break;
             got += r;
-            if (got >= WEB_FRRS_ASSESS_MAX) break;
+            buf[got] = '\0';
+            if (got >= WEB_FRRS_ASSESS_MAX || strstr(buf + 3, "\n---\n") || strstr(buf + 3, "\n---\r\n")) break;
         }
     }
     close(fd);
     buf[got > 0 ? got : 0] = '\0';
-    if (strncmp(buf, "---\n", 4) && strncmp(buf, "---\r\n", 5)) return WEB_TRI_UNTRIAGED;
+    if (strncmp(buf, "---\n", 4) && strncmp(buf, "---\r\n", 5)) { free(buf); return WEB_TRI_UNTRIAGED; }
     const char *p = strchr(buf, '\n') + 1;
     int closed = 0;
     while (*p) {
@@ -822,24 +821,21 @@ int web_frrs_recommend(const web_frrs_t *f, int type, char *basis, size_t basisc
         if (!e) break;
         p = e + 1;
     }
+    free(buf);
     if (!closed) { memset(fm, 0, sizeof(*fm)); return WEB_TRI_UNTRIAGED; }
     fm->found = 1;
-    /* First match wins; a value the table does not name is no
-     * recommendation, never a guess (Q3). */
-    static const char *const HIGH[] = { "high", NULL };
-    static const char *const NOISE[] = { "noise", "expected", NULL };
-    static const char *const REAL[] = { "confirmed", "incident", "real", NULL };
-    if (fm->fpr[0] && fm_is(fm->fpr, HIGH)) {
-        snprintf(basis, basiscap, "false_positive_risk: %s", fm->fpr);
-        return WEB_TRI_FALSE;
-    }
-    if (fm->noise[0] && fm_is(fm->noise, NOISE)) {
+    /* The assessments judge a rule, not an alert (Q3). Only one of
+     * their verdicts says something an operator can act on per alert:
+     * noise_verdict "noisy" / "very noisy" (the rule fires on ordinary
+     * traffic on the reference host) recommends noise. Never false:
+     * false_positive_risk "high" says the rule is often wrong, not that
+     * this ARP_SPOOF is, and a real one marked false would be dimmed
+     * everywhere. Never incident: severity_assessment ("agree", "too
+     * high") judges the severity level, not whether the alert is real.
+     * Both are shown beside the buttons as advice (front_matter). */
+    if (fm_starts(fm->noise, "noisy") || fm_starts(fm->noise, "very noisy")) {
         snprintf(basis, basiscap, "noise_verdict: %s", fm->noise);
         return WEB_TRI_NOISE;
-    }
-    if (fm->sev[0] && fm_is(fm->sev, REAL)) {
-        snprintf(basis, basiscap, "severity_assessment: %s", fm->sev);
-        return WEB_TRI_INCIDENT;
     }
     return WEB_TRI_UNTRIAGED;
 }
@@ -1634,6 +1630,26 @@ int frrs_triage_import(web_frrs_t *f, const web_jrec_t *r, int write, long long 
         if (pw && !strcmp(pw, STATE_WORD[q])) prev = q;
     }
     if (q_count(f, "SELECT COUNT(*) FROM triage") >= WEB_FRRS_TRIAGE_CAP) { *why = "triage_full"; return 1; }
+    /* The bounds a manual write has, and the import's own share: rows
+     * earlier in this file are in the table already (one transaction),
+     * so they count. Every row keeps its descriptor (§3.1). */
+    if (q_count(f, "SELECT COUNT(*) FROM triage WHERE via = 2") >= WEB_FRRS_IMPORTED_CAP) {
+        *why = "import_share_full";
+        return 1;
+    }
+    long long hist = -1;
+    if (sqlite3_prepare_v2(f->wr, "SELECT COUNT(*) FROM triage WHERE type = ?1 AND addr = ?2 AND"
+                           " port = ?3 AND first_seen = ?4", -1, &st, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(st, 1, type);
+        sqlite3_bind_text(st, 2, addr, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(st, 3, (int)port);
+        sqlite3_bind_int64(st, 4, first);
+        if (sqlite3_step(st) == SQLITE_ROW) hist = sqlite3_column_int64(st, 0);
+    }
+    sqlite3_finalize(st);
+    st = NULL;
+    if (hist < 0) return -1;
+    if (hist >= WEB_FRRS_HIST_PER) { *why = "history_full"; return 1; }
     if (sqlite3_prepare_v2(f->wr,
             "INSERT INTO triage (subject, finding, type, addr, port, first_seen, state,"
             " prev_state, via, basis, note, who, peer, ts) VALUES"

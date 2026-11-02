@@ -103,7 +103,7 @@ and for the Alerts page, `web/src/web_alerts.c`, `web/src/web_alertdb.c`,
 detail formats audited), `include/sloth_alerts.def`,
 `docs/views/alerts.md`, `research/` and [[alert-remediation]].
 
-**Last updated**: 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)), 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (kept settings: every control a viewer
+**Last updated**: 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)), 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (kept settings: every control a viewer
 can change kept per browser under `slothweb.v1.*`, each table's widths
 and sort among them, the address still winning, a reset per table and
 one for everything, and its review: a link's filters and scope applied
@@ -1056,7 +1056,7 @@ The owner asked (2026-10-27) for triage buttons on every alert record
 information gathered in the shape of COMINT's Frequency Resource Record:
 BEI, SCS, EC/S and TACDB, with the seven COMINT disclosures folded in as
 a Report. The specification, the field-by-field mapping onto what sloth
-records and the owner's open questions (Q1-Q14, each with the default
+records and the owner's open questions (Q1-Q16, each with the default
 this build took) are [`docs/web-frrs-spec.md`](../web-frrs-spec.md);
 the routes with their request and response shapes are
 [`web/README.md`](../../web/README.md#triage-and-the-frrs-record).
@@ -1069,10 +1069,15 @@ the routes with their request and response shapes are
   hidden, and the open-alerts tile keeps its count and says how many of
   it are triaged out. `/api/alerts?triage=` filters and counts; without
   it the answer is as before. Triage never reaches sloth.
-- **Follow recommended** maps the research assessment's front matter
-  (`--web-assessments DIR`, `<TYPE>.md`) to a state, first match wins,
-  an unknown value no recommendation; the compiled table the
-  assessments' own generator will write replaces the reader.
+- **Follow recommended** reads the research assessment's front matter
+  (`--web-assessments DIR`, `<TYPE>.md`, until it closes): a
+  `noise_verdict` beginning `noisy` or `very noisy` recommends *noise*,
+  and nothing else recommends anything. The assessments judge a rule,
+  not an alert: `false_positive_risk: high` (ARP_SPOOF carries it) never
+  marks an alert *false*, and `severity_assessment` never makes one an
+  *incident*; both are shown beside the buttons as advice (Q3). The
+  compiled table the assessments' own generator will write replaces the
+  reader.
 - **The record** (BEI, SCS, EC/S, TACDB, Report) is built only from what
   sloth already records: sloth.db through the column allow-list (now
   holding the parametric columns too), the stream's latest records per
@@ -1085,7 +1090,14 @@ the routes with their request and response shapes are
   Report), suggestions from sloth's own correlations (sequence-counter
   trails, Multi-Link affiliation, adjacent BSSIDs on one channel, a
   station both the host's card and the air heard) confirmed or
-  dismissed by the operator, export and import as JSON Lines.
+  dismissed by the operator, export and import as JSON Lines. A
+  delete is reversible and keeps its row, so deleted rows count toward
+  a bound twice each cap. The export carries live rows, parents first;
+  the import refuses a file without its header first and its `end`
+  line last (a file cut short merges nothing), merges whole or not at
+  all, and never merges two platforms on a name alone. Operator data:
+  a platform spans every capture scope, and each emitter row says which
+  scopes heard it.
 
 **The write surface.** slothweb was GET and HEAD only by the
 2026-10-21 ruling; the owner's request reverses that for its own state
@@ -1106,7 +1118,10 @@ seven one-line guarded hook points, so the parallel slices changing
 `web/src/web_frrs_report.c`, `web/src/web_frrs_tacdb.c`,
 `web/ui/frrs.js`, `web/tests/test_frrs.c`, the owner's request of
 2026-10-27.
-**Last updated**: 2026-11-01.
+**Last updated**: 2026-11-02 (review fixes: the recommendation read
+against the assessments' real vocabulary, the import's header and end
+checks and its transaction, the bounds on deleted rows and imported
+triage, the suggestion rules as §7 states them); 2026-11-01.
 
 ## Tests
 

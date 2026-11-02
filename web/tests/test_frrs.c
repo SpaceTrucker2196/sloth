@@ -32,6 +32,10 @@
 #include "wt_tmp.h"
 #include "wtest.h"
 
+#ifdef WITH_SQLITE
+#include <sqlite3.h>
+#endif
+
 #define T SDB_NOW
 
 int    demo_make_db(const char *path, long long now);
@@ -553,44 +557,178 @@ static void write_file(const char *path, const char *text) {
     fclose(f);
 }
 
-/* The front matter decides, first match wins, an unknown value is no
- * recommendation; the file is found by the type's own name; no
- * directory, no recommendation. */
+/* docs/wiki/alert-assessments/KARMA_AP.md (b1fbc2a), its three verdict lines verbatim */
+static const char FM_KARMA_AP[] =
+    "---\n"
+    "severity_assessment: agree - WARN for a bare SSID-count candidate, CRIT only when somethin"
+    "g ties the pattern to this radio (a single station's PNL asks for >=2 of its SSIDs, a shar"
+    "ed-victim deauth-then-lure chain, or a capture-verified tool match). The #90 pass that int"
+    "roduced this split is the right call\n"
+    "false_positive_risk: medium - KARMA_SSID_THRESH is 3 while legitimate multi-VAP gear sits "
+    "at 1-4 SSIDs, so lawful 3-4-SSID APs, repeaters/mesh nodes, and SSID-cycling captive-porta"
+    "l gear all cross the candidate bar; CRIT corroboration is what keeps those at WARN\n"
+    "noise_verdict: noisy on the reference host - 60 keys, 415,695,109 fires, max_sev 1. 415.7e"
+    "6 / 60 = 6.93e6 evaluations per BSSID; at 4 or more ticks/s that is at most ~20 days of he"
+    "ld candidate state per BSSID (an upper bound: 250 ms is the longest wait between ticks), s"
+    "o the count is time-in-table, not lure activity. max_sev 1 (WARN) means none of the 60 wer"
+    "e corroborated to CRIT - they are candidates, most of them benign multi-SSID radios. Recom"
+    "mend: show observations/first_seen/last_seen and the WARN-vs-CRIT split on the alert page,"
+    " never count; the rule is already well-gated, so the fix is presentational plus raising --"
+    "tune karma.ssid_thresh in a multi-VAP-dense site\n"
+    "---\n";
+/* docs/wiki/alert-assessments/ARP_SPOOF.md (b1fbc2a), its three verdict lines verbatim */
+static const char FM_ARP_SPOOF[] =
+    "---\n"
+    "severity_assessment: too high as a blanket - CRIT is warranted when the contested IP is th"
+    "e sensor's default gateway or resolver; a DHCP lease moved to a new machine, a VRRP/HSRP f"
+    "ailover, or a dual-homed host produces the identical observation and is not an attack\n"
+    "false_positive_risk: high - \"one IP, two MACs over time\" is also what lease reassignment"
+    ", first-hop redundancy and a laptop moving wired-to-wireless produce by design\n"
+    "noise_verdict: not seen on the reference host - host is null; because the input is the sen"
+    "sor host's own neighbour cache, a quiet result means no binding the kernel held changed, n"
+    "ot that no cache poisoning occurred elsewhere on the segment\n"
+    "---\n";
+/* docs/wiki/alert-assessments/PORT_SCAN.md (b1fbc2a), its three verdict lines verbatim */
+static const char FM_PORT_SCAN[] =
+    "---\n"
+    "severity_assessment: agree - LOW is right for reconnaissance that reaches only this host's"
+    " own listening ports; the rule cannot see anything worse than \"touched N services\"\n"
+    "false_positive_risk: medium - a legitimate client that opens many services on this host (a"
+    " browser against a local web stack, a monitoring/vuln scanner, a CDN-less mesh peer) count"
+    "s the same as nmap; but the private-source exclusion removes most LAN noise\n"
+    "noise_verdict: not seen on the reference host - host:null. Expected: the rule only counts "
+    "*public* (non-RFC1918, non-CGNAT, IPv4) sources connecting to this host's *own* listening "
+    "TCP ports, so a NAT'd host with no exposed services can never fire it; the silence is a bl"
+    "ind spot, not cleanliness\n"
+    "---\n";
+/* docs/wiki/alert-assessments/PM_FORGE.md (b1fbc2a): its whole front matter, verbatim, 4,823 bytes */
+static const char FM_PM_FORGE[] =
+    "---\n"
+    "type: PM_FORGE\n"
+    "technique: T1557\n"
+    "rule_file: src/alerts/rules_wifi_mgmt.c:1098 of rule_pm_forge()\n"
+    "count_semantics: per poll tick while a station's pm_forge_t row has contradiction_count > "
+    "0. fire_ev() at rules_wifi_mgmt.c:1124 runs on every alerts_update() pass (src/poll.c:296;"
+    " one per poll tick: POLL_MS = 250 ms default, include/sloth.h:28, overridable with --refre"
+    "sh-ms, and the loop also wakes early on an escalation (main.c:1628-1671, src/event_wake.h)"
+    ") for every row in the 128-entry LRU table (MAX_PM_FORGE_ENTRIES, src/pm_forge.h:36) whose"
+    " lifetime contradiction_count is non-zero. The counter is cleared only by table eviction ("
+    "pm_forge.c:15-31); the rule has NO recency bound (contrast rule_queue_evict at rules_wifi_"
+    "mgmt.c:1189-1191). count = ticks of residence, not contradictions; the \"%d time(s)\" fiel"
+    "d in the detail is the number of contradicting PM=0 data frames, not of distinct pairs: on"
+    "e PM=1 Null is never cleared after it is matched, so it can be counted against every paylo"
+    "ad frame on another TID inside the beacon interval, and up to 8 evidence-ring frame IDs (4"
+    " pairs) are cited.\n"
+    "severity_assessment: too high as escalated, agree as default - WARN for an observed PM=1/P"
+    "M=0 inconsistency is right (sloth cannot say which side is spoofed); escalating to CRIT pu"
+    "rely because the BSSID is --my-bssid is questionable, because the operator's own network i"
+    "s where benign fast wake-ups are most common, and max_sev=2 on the reference host shows th"
+    "at CRIT path is being taken. That the stations involved were ordinary clients is the likel"
+    "y reading, but the count does not establish it.\n"
+    "false_positive_risk: high - the rule treats \"PM=0 data on a different TID within one beac"
+    "on interval after a PM=1 Null\" as impossible for one radio, but 802.11 lets a station lea"
+    "ve power-save at any time with any frame; a client that announces sleep and is woken ~50-1"
+    "00 ms later by new uplink traffic on another access category produces exactly this pair. T"
+    "here is no minimum count, no rate, and no check that the two frames are inconsistent in se"
+    "quence number or RSSI.\n"
+    "noise_verdict: very noisy on the reference host - 141,288,757 fires on 23 keys, max_sev CR"
+    "IT. ~6.14 M evaluations per key; ticks run at 4/s or more (250 ms is the longest wait), so"
+    " that is at most 17.8 days of continuous re-firing per station, consistent with 23 station"
+    "s each tripping once (or a few times) and then being reported every tick for as long as th"
+    "eir rows stayed in the table; the figure does not establish how long the run was. The CRIT"
+    " means at least one station was on an operator-designated BSSID (--my-bssid), i.e. most li"
+    "kely a client of the owner's own AP, the benign-wake case. Note that `mine` tests the stat"
+    "ion's most recently seen BSSID (pm_forge.c:71), not the BSSID of the contradicting frames."
+    " Recommend: (1) a recency bound (new knob pmforge.report_secs, mirroring queue_evict.repor"
+    "t_secs) so a row stops firing once last_contradiction_ts ages out - the only one of these "
+    "that reduces the count; (2) a minimum contradiction count or rate before any fire (cuts fa"
+    "lse positives, but does nothing to the count if the 23 stations already exceed it); (3) re"
+    "quire QUEUE_EVICT corroboration (the issue's own A+B rule) for CRIT rather than ownership "
+    "alone (a severity fix: it changes only the severity passed to fire_ev, rules_wifi_mgmt.c:1"
+    "124, and removes no evaluations); (4) compare sequence numbers / RSSI of the two frames, s"
+    "ince a forged Null from a second radio does not sit in the victim's sequence space.\n"
+    "prevalence: the design flaw is real and standard-level (CVE-2022-47522 [5], \"Framing Fram"
+    "es\", USENIX Security 2023 [6]; FreeBSD, Cisco, SonicWall advisories [8][9][5]), but Cisco"
+    " characterises it as \"an opportunistic attack\" whose gain \"would be of minimal value in"
+    " a securely configured network\" [8], and from Linux 5.6 the kernel drops data frames when"
+    " no key is available, which the paper says prevents its plaintext-after-key-removal method"
+    " on Linux APs (\302\2473.5.1). The other leak paths it demonstrates (group-key and all-zero-key e"
+    "ncryption on other stacks) are not covered by that fix [6]. No in-the-wild exploitation re"
+    "port was located in this pass. Public PoC exists for the FreeBSD queue-leak and SA-Query v"
+    "ariants [7]; MacStealer covers the separate client-isolation variant, not power-save [10]."
+    "\n"
+    "tuning: [--my-bssid (WARN->CRIT escalation, rules_wifi_mgmt.c:1108,1124); --collect-handsh"
+    "akes + --eapol-dir with pcap.min_severity (default 2 = CRIT only) and pcap.key_cooldown_se"
+    "cs (3600) write the cited evidence frames as <incident>-<event>-PM_FORGE.pcap; --pcap-dir "
+    "alone does NOT apply (match_ip NULL, \"L2 only\"); QUEUE_EVICT reads this table within QUE"
+    "UE_EVICT_CORROB_SECS (10 s) but does not change PM_FORGE; --iface <monitor radio>, --hop; "
+    "no pmforge.* knob exists today]\n"
+    "researched: 2026-10-27\n"
+    "---\n";
+
+/* The front matter as the assessment batch writes it (its own lines,
+ * above, not one-word stand-ins): noise_verdict "noisy" or "very noisy"
+ * recommends noise, and nothing else recommends anything. The file is
+ * found by the type's own name; no front matter, or no directory, no
+ * recommendation.
+ *
+ * ARP_SPOOF's "false_positive_risk: high" recommending nothing was seen
+ * red with `if (fm_starts(fm->fpr, "high")) return WEB_TRI_FALSE;`
+ * added before the noise test in web_frrs_recommend() (the state became
+ * "false"); PORT_SCAN's "severity_assessment: agree" recommending
+ * nothing was seen red with the same line for fm->sev and "agree"
+ * returning WEB_TRI_INCIDENT. PM_FORGE's front matter (4,823 bytes)
+ * found was seen red with WEB_FRRS_ASSESS_MAX back at 4096
+ * ("front_matter":null). */
 static void test_follow_recommended(void) {
     char dir[TEST_TMP_MAX + 16];
     snprintf(dir, sizeof(dir), "%s/frrs-assess-XXXXXX", test_tmpdir());
     WT_ASSERT(mkdtemp(dir) != NULL);
     char p[TEST_TMP_MAX + 64];
-    snprintf(p, sizeof(p), "%s/PORT_SCAN.md", dir);
-    write_file(p, "---\nfalse_positive_risk: medium\nnoise_verdict: noise\n"
-                  "severity_assessment: low\n---\n# body\nnoise_verdict: incident\n");
-    snprintf(p, sizeof(p), "%s/KARMA_AP.md", dir);
-    write_file(p, "---\nseverity_assessment: \"confirmed\"\n---\n");
-    snprintf(p, sizeof(p), "%s/CLEARTEXT_CRED.md", dir);
-    write_file(p, "---\nnoise_verdict: perhaps\n---\n");
+    static const struct { const char *type, *text; } F[] = {
+        { "KARMA_AP", FM_KARMA_AP }, { "ARP_SPOOF", FM_ARP_SPOOF }, { "PORT_SCAN", FM_PORT_SCAN },
+        { "PM_FORGE", FM_PM_FORGE },
+    };
+    static char doc[16384];
+    for (size_t i = 0; i < sizeof(F) / sizeof(F[0]); i++) {
+        snprintf(p, sizeof(p), "%s/%s.md", dir, F[i].type);
+        /* Each with a body below its front matter, as the files have,
+         * holding a verdict line the reader must not take. */
+        snprintf(doc, sizeof(doc), "%s## What the rule checks\nnoise_verdict: noisy\n", F[i].text);
+        write_file(p, doc);
+    }
+    WT_EQ(strlen(FM_PM_FORGE), 4823);                 /* past the old 4096 */
     snprintf(p, sizeof(p), "%s/SMB1_USE.md", dir);
-    write_file(p, "no front matter\nfalse_positive_risk: high\n");
+    write_file(p, "no front matter\nnoise_verdict: noisy\n");
     env_open(dir, 1);
-    WT_EQ(get("/api/frrs/recommend", "type=PORT_SCAN"), 200);
-    WT_HAS(g_out, "\"state\":\"noise\"");
-    WT_HAS(g_out, "\"basis\":\"noise_verdict: noise\"");
     WT_EQ(get("/api/frrs/recommend", "type=KARMA_AP"), 200);
-    WT_HAS(g_out, "\"state\":\"incident\"");
-    WT_EQ(get("/api/frrs/recommend", "type=CLEARTEXT_CRED"), 200);
+    WT_HAS(g_out, "\"state\":\"noise\"");
+    WT_HAS(g_out, "\"basis\":\"noise_verdict: noisy on the reference host");
+    WT_EQ(get("/api/frrs/recommend", "type=ARP_SPOOF"), 200);
     WT_HAS(g_out, "\"state\":null");
-    WT_HAS(g_out, "\"noise_verdict\":\"perhaps\"");
+    WT_HAS(g_out, "\"false_positive_risk\":\"high - ");          /* shown, as advice */
+    WT_LACKS(g_out, "\"state\":\"false\"");
+    WT_EQ(get("/api/frrs/recommend", "type=PORT_SCAN"), 200);
+    WT_HAS(g_out, "\"state\":null");
+    WT_HAS(g_out, "\"severity_assessment\":\"agree - ");
+    WT_LACKS(g_out, "\"state\":\"incident\"");
+    WT_EQ(get("/api/frrs/recommend", "type=PM_FORGE"), 200);
+    WT_LACKS(g_out, "\"front_matter\":null");
+    WT_HAS(g_out, "\"false_positive_risk\":\"high - the rule treats");
+    WT_HAS(g_out, "\"state\":\"noise\"");
+    WT_HAS(g_out, "\"basis\":\"noise_verdict: very noisy on the reference host");
     WT_EQ(get("/api/frrs/recommend", "type=SMB1_USE"), 200);
     WT_HAS(g_out, "\"state\":null");
     WT_HAS(g_out, "\"front_matter\":null");
     WT_EQ(get("/api/frrs/recommend", "type=../../etc/passwd"), 400);
     if (E.have_store) {
         char id[40], b[256];
-        WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+        WT_ASSERT(id_of("KARMA_AP", id, sizeof(id)));
         snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"recommended\"}", id);
         WT_EQ(post("/api/frrs/triage", b), 200);
         WT_HAS(g_out, "\"via\":\"recommended\"");
-        WT_HAS(g_out, "\"basis\":\"noise_verdict: noise\"");
-        WT_ASSERT(id_of("CLEARTEXT_CRED", id, sizeof(id)));
+        WT_HAS(g_out, "\"state\":\"noise\"");
+        WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
         snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"recommended\"}", id);
         WT_EQ(post("/api/frrs/triage", b), 409);
         WT_HAS(g_out, "no_recommendation");
@@ -598,7 +736,7 @@ static void test_follow_recommended(void) {
     env_close();
     test_rm_tree(dir);
     env_open(NULL, 1);
-    WT_EQ(get("/api/frrs/recommend", "type=PORT_SCAN"), 200);
+    WT_EQ(get("/api/frrs/recommend", "type=KARMA_AP"), 200);
     WT_HAS(g_out, "\"source\":\"none\"");
     WT_HAS(g_out, "\"state\":null");
     env_close();
@@ -804,6 +942,377 @@ static void test_tacdb_round_trip(void) {
     WT_LACKS(g_out, "\"name\":\"x\"");                /* a bad line merges nothing */
     env_close();
 }
+
+/* ── the TACDB's bounds, its import and its suggestions ─────────────── */
+
+#ifdef WITH_SQLITE
+/* SQL on a file of the test's own world (the store, or the demo's
+ * sloth.db), as the hand-built rows elsewhere in the suite are. */
+static int sql_on(const char *path, const char *sql) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(path, &db);
+    if (rc == SQLITE_OK) {
+        sqlite3_busy_timeout(db, 2000);
+        rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    }
+    sqlite3_close(db);
+    return rc == SQLITE_OK ? 0 : -1;
+}
+
+/* One stream line into the ledger, as the feed hands it. */
+static void feed_line(const char *line) {
+    static web_jrec_t r;
+    WT_EQ(web_jl_parse(line, strlen(line), &r), WEB_JL_OK);
+    web_frrs_record(&E.f, &r);
+}
+
+/* The token of the suggestion whose text holds needle, into out. */
+static void tok_before(const char *b, const char *needle, char *out, size_t cap) {
+    out[0] = '\0';
+    const char *at = strstr(b, needle), *tok = NULL;
+    for (const char *p = strstr(b, "\"token\":\""); p && at && p < at; p = strstr(p + 1, "\"token\":\"")) tok = p + 9;
+    const char *e = tok ? strchr(tok, '"') : NULL;
+    if (e && (size_t)(e - tok) < cap) snprintf(out, cap, "%.*s", (int)(e - tok), tok);
+}
+
+/* An import, each from a peer of its own: the bucket is its own test. */
+static int import_as(const char *mode, const char *body, int peer) {
+    char q[32], p[32];
+    snprintf(q, sizeof(q), "mode=%s", mode);
+    snprintf(p, sizeof(p), "127.0.1.%d", peer);
+    return post_h("/api/frrs/import", q, body, "http://127.0.0.1:8770", "application/json", p);
+}
+
+/* The export, copied out of g_out. */
+static char *export_copy(void) {
+    if (get("/api/frrs/export", "") != 200) return NULL;
+    const char *ex = body_of(g_out);
+    size_t n = strlen(ex);
+    char *c = malloc(n + 1);
+    if (c) memcpy(c, ex, n + 1);
+    return c;
+}
+
+/* A file with no header line, whose lines are otherwise valid, merges
+ * nothing and leaves no transaction behind: the next write succeeds.
+ * Seen red with the no_header refusal removed (the first line taken as
+ * the header: `if (strcmp(type, "slothweb-tacdb")) why = "no_header";`
+ * deleted): the file was then accepted, 200. A merge that fails after it
+ * began is rolled back and the next write succeeds; that path is
+ * reached here by a trigger the test puts on the store, and was seen
+ * red with `else rollback(f);` removed from frrs_import() (the next
+ * write 503 store_busy, the transaction held). */
+static void test_import_never_leaves_a_transaction(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    static const char HEADLESS[] =
+        "{\"type\":\"unit\",\"id\":1,\"parent\":null,\"name\":\"hdrless\",\"kind\":\"site\",\"note\":\"\"}\n"
+        "{\"type\":\"end\",\"lines\":2,\"complete\":true}\n";
+    WT_EQ(import_as("merge", HEADLESS, 1), 400);
+    WT_HAS(g_out, "no_header");
+    WT_HAS(g_out, "\"ok\":false");
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"after\",\"kind\":\"site\"}"), 200);
+    WT_EQ(get("/api/frrs/tacdb", ""), 200);
+    WT_LACKS(g_out, "hdrless");
+    /* A store error mid-merge: the second unit's insert aborts. */
+    WT_EQ(sql_on(E.store_path, "CREATE TRIGGER boom BEFORE INSERT ON tacdb_unit WHEN NEW.name = 'boom'"
+                               " BEGIN SELECT RAISE(ABORT, 'boom'); END;"), 0);
+    static const char FAILS[] =
+        "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n"
+        "{\"type\":\"unit\",\"id\":1,\"parent\":null,\"name\":\"first\",\"kind\":\"site\",\"note\":\"\"}\n"
+        "{\"type\":\"unit\",\"id\":2,\"parent\":null,\"name\":\"boom\",\"kind\":\"site\",\"note\":\"\"}\n"
+        "{\"type\":\"end\",\"lines\":4,\"complete\":true}\n";
+    WT_EQ(import_as("merge", FAILS, 2), 400);
+    WT_HAS(g_out, "store_error");
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"later\",\"kind\":\"site\"}"), 200);
+    WT_EQ(get("/api/frrs/tacdb", ""), 200);
+    WT_LACKS(g_out, "\"name\":\"first\"");            /* rolled back whole */
+    WT_HAS(g_out, "\"name\":\"later\"");
+    env_close();
+}
+
+/* A file cut short, or one whose export stopped at its bound, merges
+ * nothing. Seen red with the end-line requirement removed (the
+ * "truncated" note after the check and `&& x.saw_end` in ok both
+ * deleted): the cut file merged its unit, 200. */
+static void test_import_needs_its_end(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    static const char CUT[] =
+        "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n"
+        "{\"type\":\"unit\",\"id\":1,\"parent\":null,\"name\":\"cut\",\"kind\":\"site\",\"note\":\"\"}\n";
+    WT_EQ(import_as("merge", CUT, 1), 400);
+    WT_HAS(g_out, "truncated");
+    static const char SHORT[] =
+        "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n"
+        "{\"type\":\"unit\",\"id\":1,\"parent\":null,\"name\":\"cut\",\"kind\":\"site\",\"note\":\"\"}\n"
+        "{\"type\":\"end\",\"lines\":4,\"complete\":true}\n";
+    WT_EQ(import_as("merge", SHORT, 2), 400);
+    WT_HAS(g_out, "truncated");
+    static const char PART[] =
+        "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n"
+        "{\"type\":\"unit\",\"id\":1,\"parent\":null,\"name\":\"cut\",\"kind\":\"site\",\"note\":\"\"}\n"
+        "{\"type\":\"end\",\"lines\":3,\"complete\":false}\n";
+    WT_EQ(import_as("merge", PART, 3), 400);
+    WT_HAS(g_out, "export_incomplete");
+    WT_EQ(get("/api/frrs/tacdb", ""), 200);
+    WT_LACKS(g_out, "\"name\":\"cut\"");
+    env_close();
+}
+
+/* A unit moved under one made after it, exported and merged into a
+ * fresh store, keeps its place and its platform's: the export writes
+ * parents first, and the import settles any order itself. Export order
+ * seen red with `ORDER BY t.path` made `ORDER BY u.id` (the child's
+ * line first); the import's own order seen red, on a file written
+ * child first by hand, with the rounds cut to one (`round <=
+ * WEB_FRRS_UNIT_DEPTH + 1` made `round < 1`: parent_not_merged). A
+ * platform whose unit did not merge is skipped, never re-filed under no
+ * unit: seen red with the unit_not_merged check removed (the platform
+ * merged, "unit":null). */
+static void test_import_keeps_the_tree(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"child\",\"kind\":\"room\"}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"site\",\"kind\":\"site\"}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"update\",\"id\":1,\"parent\":2}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/platform", "{\"op\":\"create\",\"nomenclature\":\"desk phone\","
+               "\"unit\":1,\"emitter_kind\":\"sta\",\"emitter_addr\":\"02:de:00:00:00:12\"}"), 200);
+    char *ex = export_copy();
+    WT_ASSERT(ex != NULL);
+    if (!ex) { env_close(); return; }
+    const char *site = strstr(ex, "\"name\":\"site\""), *child = strstr(ex, "\"name\":\"child\"");
+    WT_ASSERT(site && child && site < child);
+    env_close();
+    env_open(NULL, 1);
+    WT_EQ(import_as("merge", ex, 1), 200);
+    WT_HAS(g_out, "\"skipped_n\":0");
+    WT_EQ(get("/api/frrs/tacdb", ""), 200);
+    WT_HAS(g_out, "\"unit_path\":\"site / child\"");
+    free(ex);
+    env_close();
+    env_open(NULL, 1);
+    static const char CHILD_FIRST[] =
+        "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n"
+        "{\"type\":\"unit\",\"id\":7,\"parent\":9,\"name\":\"kid\",\"kind\":\"room\",\"note\":\"\"}\n"
+        "{\"type\":\"unit\",\"id\":9,\"parent\":null,\"name\":\"top\",\"kind\":\"site\",\"note\":\"\"}\n"
+        "{\"type\":\"platform\",\"id\":3,\"unit\":7,\"nomenclature\":\"kid phone\",\"class\":\"phone\","
+        "\"vendor\":\"\",\"note\":\"\",\"confirmed\":true,\"origin\":\"operator\"}\n"
+        "{\"type\":\"platform\",\"id\":4,\"unit\":5,\"nomenclature\":\"lost phone\",\"class\":\"phone\","
+        "\"vendor\":\"\",\"note\":\"\",\"confirmed\":true,\"origin\":\"operator\"}\n"
+        "{\"type\":\"end\",\"lines\":6,\"complete\":true}\n";
+    WT_EQ(import_as("merge", CHILD_FIRST, 2), 200);
+    WT_HAS(g_out, "\"units\":2");
+    WT_HAS(g_out, "{\"line\":5,\"why\":\"unit_not_merged\"}");
+    WT_EQ(get("/api/frrs/tacdb", ""), 200);
+    WT_HAS(g_out, "\"unit_path\":\"top / kid\"");
+    WT_LACKS(g_out, "lost phone");
+    env_close();
+}
+
+/* A platform of the file whose nomenclature a platform here has is
+ * that platform only when one of its emitters is already filed on it;
+ * else it is skipped, named, and its emitters with it. Seen red with
+ * `if (!overlap)` made `if (0)` in imp_platforms() (the stranger's
+ * emitter merged onto the local "laptop"). */
+static void test_import_no_merge_by_name(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    WT_EQ(post("/api/frrs/tacdb/platform", "{\"op\":\"create\",\"nomenclature\":\"laptop\","
+               "\"emitter_kind\":\"sta\",\"emitter_addr\":\"02:de:00:00:00:12\"}"), 200);
+    static const char OTHER[] =
+        "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n"
+        "{\"type\":\"platform\",\"id\":1,\"unit\":null,\"nomenclature\":\"Laptop\",\"class\":\"laptop\","
+        "\"vendor\":\"\",\"note\":\"\",\"confirmed\":true,\"origin\":\"operator\"}\n"
+        "{\"type\":\"emitter\",\"platform\":1,\"kind\":\"sta\",\"addr\":\"02:de:00:00:00:77\","
+        "\"role\":\"primary\",\"label\":\"\"}\n"
+        "{\"type\":\"end\",\"lines\":4,\"complete\":true}\n";
+    WT_EQ(import_as("merge", OTHER, 1), 200);
+    WT_HAS(g_out, "{\"line\":2,\"why\":\"duplicate_name\"}");
+    WT_HAS(g_out, "{\"line\":3,\"why\":\"platform_not_merged\"}");
+    WT_EQ(get("/api/frrs/tacdb", "q=77"), 200);
+    WT_EQ(json_int(body_of(g_out), "matched"), 0);
+    static const char SAME[] =
+        "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n"
+        "{\"type\":\"platform\",\"id\":1,\"unit\":null,\"nomenclature\":\"laptop\",\"class\":\"laptop\","
+        "\"vendor\":\"\",\"note\":\"\",\"confirmed\":true,\"origin\":\"operator\"}\n"
+        "{\"type\":\"emitter\",\"platform\":1,\"kind\":\"sta\",\"addr\":\"02:de:00:00:00:12\","
+        "\"role\":\"primary\",\"label\":\"\"}\n"
+        "{\"type\":\"emitter\",\"platform\":1,\"kind\":\"ble\",\"addr\":\"02:de:00:00:00:b3/0\","
+        "\"role\":\"other\",\"label\":\"mouse\"}\n"
+        "{\"type\":\"end\",\"lines\":5,\"complete\":true}\n";
+    WT_EQ(import_as("merge", SAME, 2), 200);
+    WT_HAS(g_out, "\"emitters\":1");
+    WT_EQ(get("/api/frrs/tacdb", "q=b3"), 200);
+    WT_HAS(g_out, "\"nomenclature\":\"laptop\"");
+    WT_HAS(g_out, "\"label\":\"mouse\"");
+    env_close();
+}
+
+/* A restore keeps the tree's rules: never past four levels, never a
+ * live platform in a deleted unit. Depth seen red with the restore's
+ * unit_depth check removed (Y restored at depth 5); the unit seen red
+ * with the restore's unit_deleted check removed (200). */
+static void test_restore_keeps_the_rules(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"A\",\"kind\":\"site\"}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"B\",\"kind\":\"area\",\"parent\":1}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"C\",\"kind\":\"room\",\"parent\":2}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"X\",\"kind\":\"area\"}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"Y\",\"kind\":\"person\",\"parent\":4}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"delete\",\"id\":5}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"update\",\"id\":4,\"parent\":3}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"restore\",\"id\":5}"), 409);
+    WT_HAS(g_out, "unit_depth");
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"Z\",\"kind\":\"room\"}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/platform", "{\"op\":\"create\",\"nomenclature\":\"in Z\",\"unit\":6}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/platform", "{\"op\":\"delete\",\"id\":1}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"delete\",\"id\":6}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/platform", "{\"op\":\"restore\",\"id\":1}"), 409);
+    WT_HAS(g_out, "unit_deleted");
+    env_close();
+}
+
+/* Deleted rows count toward a bound twice the cap, so create-then-
+ * delete cannot grow a table without end; the export carries live rows
+ * only. Seen red with no_room()'s total test removed (`if (!rows)
+ * return 0;` made `return 0;`: the create admitted, 200); the export's
+ * seen red with `WHERE deleted = 0` removed from its platform query
+ * (the deleted platform's name in the file). */
+static void test_deleted_rows_are_bounded(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    char sql[256];
+    snprintf(sql, sizeof(sql), "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < %d)"
+             " INSERT INTO tacdb_unit (name, kind, created, updated, deleted) SELECT 'gone ' || i, 5, 1, 1, 1"
+             " FROM n", 2 * WEB_FRRS_UNITS);
+    WT_EQ(sql_on(E.store_path, sql), 0);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"one more\",\"kind\":\"site\"}"), 507);
+    WT_HAS(g_out, "tacdb_full");
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"restore\",\"id\":1}"), 200);   /* a restore adds no row */
+    WT_EQ(post("/api/frrs/tacdb/platform", "{\"op\":\"create\",\"nomenclature\":\"kept\"}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/platform", "{\"op\":\"create\",\"nomenclature\":\"thrown away\"}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/platform", "{\"op\":\"delete\",\"id\":2}"), 200);
+    char *ex = export_copy();
+    WT_ASSERT(ex != NULL);
+    WT_HAS(ex, "\"nomenclature\":\"kept\"");
+    WT_LACKS(ex, "thrown away");
+    WT_LACKS(ex, "gone 2\"");
+    WT_LACKS(ex, "\"deleted\":");
+    free(ex);
+    env_close();
+}
+
+/* An import's triage lines are held to each alert's history bound, to
+ * the imported share of the table, and to a bound per file. Each seen
+ * red with its check removed from frrs_triage_import() or from the
+ * check (history: the 65th line merged; share: the line merged; per
+ * file: the 5,001-line file checked whole, 200). */
+static void test_import_triage_bounded(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    size_t cap = (size_t)(WEB_FRRS_IMPORT_TRIAGE + 3) * 220;
+    char *b = malloc(cap);
+    WT_ASSERT(b != NULL);
+    if (!b) { env_close(); return; }
+    size_t n = (size_t)snprintf(b, cap, "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n");
+    for (int i = 0; i < WEB_FRRS_HIST_PER + 1; i++)
+        n += (size_t)snprintf(b + n, cap - n, "{\"type\":\"triage\",\"alert_type\":\"PORT_SCAN\","
+                              "\"addr\":\"198.51.100.7\",\"port\":0,\"first_seen\":1700000000,"
+                              "\"state\":\"noise\",\"prev_state\":\"untriaged\",\"via\":\"manual\","
+                              "\"basis\":\"\",\"note\":\"\",\"by\":\"\",\"peer\":\"\",\"ts\":%d}\n",
+                              1700000001 + i);
+    snprintf(b + n, cap - n, "{\"type\":\"end\",\"lines\":%d,\"complete\":true}\n", WEB_FRRS_HIST_PER + 3);
+    WT_EQ(import_as("merge", b, 1), 200);
+    WT_HAS(g_out, "\"triage\":64");
+    WT_HAS(g_out, "\"why\":\"history_full\"");
+    /* The imported share, full: nothing more is imported. */
+    char sql[400];
+    snprintf(sql, sizeof(sql), "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < %d)"
+             " INSERT INTO triage (subject, type, addr, port, first_seen, state, via, ts)"
+             " SELECT 'x0:' || i, 0, '', 0, i, 2, 2, 1 FROM n", WEB_FRRS_IMPORTED_CAP);
+    WT_EQ(sql_on(E.store_path, sql), 0);
+    snprintf(b, cap, "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n"
+             "{\"type\":\"triage\",\"alert_type\":\"PORT_SCAN\",\"addr\":\"198.51.100.8\",\"port\":0,"
+             "\"first_seen\":1700000000,\"state\":\"noise\",\"prev_state\":\"untriaged\",\"via\":\"manual\","
+             "\"basis\":\"\",\"note\":\"\",\"by\":\"\",\"peer\":\"\",\"ts\":1700000001}\n"
+             "{\"type\":\"end\",\"lines\":3,\"complete\":true}\n");
+    WT_EQ(import_as("merge", b, 2), 200);
+    WT_HAS(g_out, "\"triage\":0");
+    WT_HAS(g_out, "import_share_full");
+    /* A manual triage still has its room. */
+    char id[40], body[160];
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    snprintf(body, sizeof(body), "{\"id\":\"%s\",\"state\":\"noise\"}", id);
+    WT_EQ(post("/api/frrs/triage", body), 200);
+    /* One file, past its own bound: refused whole at the check. */
+    n = (size_t)snprintf(b, cap, "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n");
+    for (int i = 0; i < WEB_FRRS_IMPORT_TRIAGE + 1; i++)
+        n += (size_t)snprintf(b + n, cap - n, "{\"type\":\"triage\",\"alert_type\":\"PORT_SCAN\","
+                              "\"addr\":\"198.51.100.9\",\"port\":0,\"first_seen\":%d,"
+                              "\"state\":\"noise\",\"prev_state\":\"untriaged\",\"via\":\"manual\","
+                              "\"basis\":\"\",\"note\":\"\",\"by\":\"\",\"peer\":\"\",\"ts\":1}\n", i + 1);
+    snprintf(b + n, cap - n, "{\"type\":\"end\",\"lines\":%d,\"complete\":true}\n", WEB_FRRS_IMPORT_TRIAGE + 3);
+    WT_EQ(import_as("check", b, 3), 400);
+    WT_HAS(g_out, "too_many_triage");
+    free(b);
+    env_close();
+}
+
+/* The suggestion rules as §7 states them. S3: two BSSIDs one channel
+ * apart in the high nibble of the last octet, or of two vendors, are
+ * not one AP (seen red with strncmp's 16 made 15, and with the vendor
+ * test removed); one pair differing in the low nibble with one vendor
+ * is (the control). S1: a sloth.db row the stream gave no confidence
+ * for is not suggested (seen red with the test made `conf >= 0 &&
+ * (...)`, the pre-#94 gap rule), and the earlier-seen address is the
+ * primary (seen red with b_first ignored: the later one first). S2: an
+ * AP MLD is one kind on every link, so its two confirms make one
+ * platform (seen red with the per-link kind restored in the
+ * suggestion, `ap || (lb && lb->has_b)`, and with the confirm's
+ * `ap = mld_is_ap(f, a)` made the pair's own beacons). */
+static void test_suggestion_rules(void) {
+    env_open(NULL, 1);
+    if (!E.have_store || !E.m4.sdb) { env_close(); return; }
+    WT_EQ(sql_on(E.sdb_path,
+        "INSERT INTO beacon_aps (bssid, channel, vendor, first_seen, last_seen) VALUES"
+        " ('02:de:00:00:01:15', 11, 'V', 1, 2), ('02:de:00:00:01:25', 11, 'V', 1, 2),"
+        " ('02:de:00:00:01:31', 11, 'V', 1, 2), ('02:de:00:00:01:32', 11, 'W', 1, 2),"
+        " ('02:de:00:00:01:41', 11, 'V', 1, 2), ('02:de:00:00:01:42', 11, 'V', 1, 2);"
+        "INSERT INTO seqnum_correlations (mac_a, mac_b, mac_a_random, mac_b_random, gap, dt_ms,"
+        " a_count, b_count, first_seen, last_seen) VALUES"
+        " ('06:de:00:00:05:01', '06:de:00:00:05:02', 1, 1, 3, 1000, 10, 10, 1, 2),"
+        " ('06:de:00:00:06:01', '06:de:00:00:06:02', 1, 1, 3, 1000, 10, 10, 1, 2);"), 0);
+    feed_line("{\"type\":\"seqnum_correlation\",\"ts\":2,\"mac_a\":\"06:de:00:00:06:01\","
+              "\"mac_b\":\"06:de:00:00:06:02\",\"gap\":3,\"fwd_gap\":3,\"confidence\":72,"
+              "\"a_is_earlier\":0}");
+    feed_line("{\"type\":\"beacon\",\"ts\":2,\"bssid\":\"02:de:00:00:0c:01\",\"ssid\":\"mld\"}");
+    feed_line("{\"type\":\"wifi_mld\",\"ts\":2,\"mld_mac\":\"02:de:00:00:0c:b0\",\"link_count\":2,"
+              "\"link_0_mac\":\"02:de:00:00:0c:01\",\"link_1_mac\":\"02:de:00:00:0c:02\"}");
+    WT_EQ(get("/api/frrs/suggest", ""), 200);
+    const char *b = body_of(g_out);
+    WT_LACKS(b, "\"a\":\"02:de:00:00:01:15\"");
+    WT_LACKS(b, "\"a\":\"02:de:00:00:01:31\"");
+    WT_HAS(b, "\"a\":\"02:de:00:00:01:41\",\"b\":\"02:de:00:00:01:42\"");
+    WT_LACKS(b, "06:de:00:00:05:01");
+    WT_HAS(b, "\"a\":\"06:de:00:00:06:02\",\"b\":\"06:de:00:00:06:01\"");
+    WT_HAS(b, "\"kind\":\"bssid\",\"a\":\"02:de:00:00:0c:b0\",\"b\":\"02:de:00:00:0c:01\"");
+    WT_HAS(b, "\"kind\":\"bssid\",\"a\":\"02:de:00:00:0c:b0\",\"b\":\"02:de:00:00:0c:02\"");
+    /* Both MLD pairs confirmed: one platform. */
+    char t1[64], t2[64], body[160];
+    tok_before(b, "\"a\":\"02:de:00:00:0c:b0\",\"b\":\"02:de:00:00:0c:01\"", t1, sizeof(t1));
+    tok_before(b, "\"a\":\"02:de:00:00:0c:b0\",\"b\":\"02:de:00:00:0c:02\"", t2, sizeof(t2));
+    WT_ASSERT(t1[0] && t2[0]);
+    snprintf(body, sizeof(body), "{\"op\":\"confirm\",\"suggest\":\"%s\"}", t1);
+    WT_EQ(post("/api/frrs/tacdb/platform", body), 200);
+    long long p1 = json_int(body_of(g_out), "id");
+    snprintf(body, sizeof(body), "{\"op\":\"confirm\",\"suggest\":\"%s\"}", t2);
+    WT_EQ(post("/api/frrs/tacdb/platform", body), 200);
+    WT_EQ(json_int(body_of(g_out), "id"), p1);
+    env_close();
+}
+#endif
 
 /* ── over real sockets ──────────────────────────────────────────────── */
 
@@ -1016,7 +1525,25 @@ static void test_page_module(void) {
     for (size_t i = 0; i < sizeof(SINK) / sizeof(SINK[0]); i++) WT_LACKS(m, SINK[i]);
     WT_HAS(m, "credentials: \"omit\"");
     WT_HAS(m, "\"Content-Type\": \"application/json\"");
+    /* --web-read-only's 405 is the server's plain one: told as read-only,
+     * not as a bare status. */
+    WT_HAS(m, "if (r.status === 405) {");
+    WT_HAS(m, "throw new Error(\"read_only\");");
+    /* An alert page loaded directly draws its button from the history's
+     * own recommendation. */
+    WT_HAS(m, "S.rec[S.types[id]] = h.recommend;");
+    /* A row holding buttons is no longer a link. */
+    WT_HAS(m, "li.role = \"group\";");
     free(m);
+    /* Every place a linked alert row is drawn reaches the hook through
+     * alertLink(), which checks the id first: the Overview, History, the
+     * drawer, and an alert page's runs and other alerts. */
+    const char *al = strstr(p, "function alertLink(li, id) {");
+    const char *re = al ? strstr(al, "ALERT_ID_RE.test(id)") : NULL;
+    const char *hk = al ? strstr(al, "SlothFrrs.link(li, id)") : NULL;
+    WT_ASSERT(al && re && hk && re < hk);
+    /* the definition, its five callers, and frrs.js's header naming it */
+    WT_EQ(count_of(p, "alertLink(li, "), 7);
     /* Each hook point, one guarded call in app.js. */
     static const char *const HOOK[] = {
         "if (window.SlothFrrs) SlothFrrs.link(li, id);",
@@ -1110,6 +1637,16 @@ void run_frrs_tests(void) {
     WT_RUN(test_record_states_its_limits);
     WT_RUN(test_every_source_is_real);
     WT_RUN(test_tacdb_round_trip);
+#ifdef WITH_SQLITE
+    WT_RUN(test_import_never_leaves_a_transaction);
+    WT_RUN(test_import_needs_its_end);
+    WT_RUN(test_import_keeps_the_tree);
+    WT_RUN(test_import_no_merge_by_name);
+    WT_RUN(test_restore_keeps_the_rules);
+    WT_RUN(test_deleted_rows_are_bounded);
+    WT_RUN(test_import_triage_bounded);
+    WT_RUN(test_suggestion_rules);
+#endif
     WT_RUN(test_post_over_socket);
     WT_RUN(test_oversize_body_refused_unread);
     WT_RUN(test_read_only_over_socket);

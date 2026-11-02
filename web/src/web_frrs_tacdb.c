@@ -335,6 +335,19 @@ static long long live_count(web_frrs_t *f, const char *table) {
     return scalar(f, sql, 0, NULL, 0);
 }
 
+/* 1 when n more live rows (of which `rows` are new rows) would pass the
+ * table's cap. A delete is soft and keeps its row, so the live count
+ * alone would let create-then-delete grow a table without end; rows
+ * deleted ones included are held to twice the cap. A restore adds no
+ * row (rows 0). */
+static int no_room(web_frrs_t *f, const char *table, long long cap, int n, int rows) {
+    if (live_count(f, table) + n > cap) return 1;
+    if (!rows) return 0;
+    char sql[96];
+    snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s", table);
+    return scalar(f, sql, 0, NULL, 0) + rows > 2 * cap;
+}
+
 /* ── the JSON of rows ───────────────────────────────────────────────── */
 
 static void unit_path(web_frrs_t *f, long long id, char *out, size_t cap) {
@@ -748,6 +761,19 @@ static int dismissed(web_frrs_t *f, int rule, const char *a, const char *b, long
     return ts >= 0 && last <= ts;
 }
 
+/* An MLD is an AP MLD when its own address or any of its links has
+ * beaconed. The caller holds lmu. */
+static int mld_is_ap(const web_frrs_t *f, const char *mld) {
+    const frrs_bss_t *b = frrs_led_bss(f, mld);
+    if (!b) return 0;
+    if (b->has_b) return 1;
+    for (int k = 0; k < b->nlinks; k++) {
+        const frrs_bss_t *lb = frrs_led_bss(f, b->links[k]);
+        if (lb && lb->has_b) return 1;
+    }
+    return 0;
+}
+
 static int add_sugg(web_frrs_t *f, sugg_t *out, int *n, const sugg_t *s) {
     if (*n >= WEB_FRRS_SUGGEST_MAX) return 0;
     long long pa = owner_of(f, s->kind, s->a), pb = s->b[0] ? owner_of(f, s->kind, s->b) : 0;
@@ -773,8 +799,12 @@ static int compute_suggestions(const web_m4_t *m, long long now_s, sugg_t *out) 
     char err[200];
     int have_c = m->sdb && m->sdb->configured &&
                  web_slothdb_open(m->sdb, &c, WEB_SDB_HTTP_MS, now_s, err, sizeof(err)) == 0;
-    /* S1: sequence-number trails, sloth.db's rows with the stream's
-     * confidence when the ledger has it. */
+    /* S1: sequence-number trails: sloth.db's rows, each suggested only
+     * with the stream's confidence and forward gap. sloth.db keeps the
+     * absolute gap, which has no direction (sloth.h on
+     * seqnum_correlation_t): a counter that went backwards is not one
+     * radio, so a row the ledger has no confidence for is not
+     * suggested (§14). */
     if (have_c) {
         sqlite3_stmt *s = NULL;
         if (sqlite3_prepare_v2(c.db, "SELECT mac_a, mac_b, gap, last_seen FROM seqnum_correlations"
@@ -786,34 +816,31 @@ static int compute_suggestions(const web_m4_t *m, long long now_s, sugg_t *out) 
                 ctext(s, 0, a, sizeof(a));
                 ctext(s, 1, b, sizeof(b));
                 if (web_key_mac(a, ka) || web_key_mac(b, kb)) continue;
-                int gap = sqlite3_column_int(s, 2);
                 g.last = sqlite3_column_int64(s, 3);
-                int conf = -1, fwd = -1;
+                int conf = -1, fwd = -1, b_first = 0;
                 if (f->led) {
                     pthread_mutex_lock(&f->lmu);
-                    const frrs_sta_t *st = frrs_led_sta(f, ka);
+                    const frrs_sta_t *st = frrs_led_sta(f, ka), *sb = frrs_led_sta(f, kb);
                     for (int i = 0; st && i < st->nseq; i++)
                         if (!strcmp(st->seq[i].mac, kb)) { conf = st->seq[i].confidence; fwd = st->seq[i].fwd_gap; }
+                    /* The earlier-seen address is the primary, the later
+                     * the rotation (§7): a_is_earlier, kept per side. */
+                    for (int i = 0; sb && i < sb->nseq; i++)
+                        if (!strcmp(sb->seq[i].mac, ka) && sb->seq[i].earlier) b_first = 1;
                     pthread_mutex_unlock(&f->lmu);
                 }
                 /* mac-randomisation.md's limits: confidence 60 of 90 and a
-                 * forward gap of at most 64 when the stream says them,
-                 * else the absolute gap sloth.db keeps. */
-                if (conf >= 0 ? (conf < 60 || fwd < 0 || fwd > 64) : (gap < 0 || gap > 64)) continue;
+                 * forward gap of at most 64. */
+                if (conf < 60 || fwd < 0 || fwd > 64) continue;
                 g.rule = RULE_S1;
                 g.kind = FRRS_K_STA;
                 g.role = 2;
-                g.conf = conf >= 0 ? conf : 30;
-                snprintf(g.a, sizeof(g.a), "%.17s", ka);
-                snprintf(g.b, sizeof(g.b), "%.17s", kb);
-                if (conf >= 0)
-                    snprintf(g.evidence, sizeof(g.evidence), "sequence counter continued across the "
-                             "change (confidence %d of 90, a ranking not a probability; forward gap %d)",
-                             conf, fwd);
-                else
-                    snprintf(g.evidence, sizeof(g.evidence), "sequence counter continued across the "
-                             "change (gap %d; confidence not observed: sloth.db keeps the gap, the "
-                             "stream the confidence)", gap);
+                g.conf = conf;
+                snprintf(g.a, sizeof(g.a), "%.17s", b_first ? kb : ka);
+                snprintf(g.b, sizeof(g.b), "%.17s", b_first ? ka : kb);
+                snprintf(g.evidence, sizeof(g.evidence), "sequence counter continued across the "
+                         "change (confidence %d of 90, a ranking not a probability; forward gap %d)",
+                         conf, fwd);
                 add_sugg(f, out, &n, &g);
             }
         }
@@ -827,15 +854,16 @@ static int compute_suggestions(const web_m4_t *m, long long now_s, sugg_t *out) 
         for (int i = 0; tmp && i < f->led->nbss && nt < 64; i++) {
             const frrs_bss_t *b = &f->led->bss[i];
             if (!b->has_m) continue;
-            const frrs_bss_t *bb = frrs_led_bss(f, b->mac);
-            int ap = bb && bb->has_b;
+            /* One kind for the whole MLD, never one per link: a link
+             * that has not beaconed yet would otherwise file the same
+             * MLD address as a station on a second platform. */
+            int ap = mld_is_ap(f, b->mac);
             for (int k = 0; k < b->nlinks && nt < 64; k++) {
                 if (!strcmp(b->links[k], b->mac)) continue;
-                const frrs_bss_t *lb = frrs_led_bss(f, b->links[k]);
                 sugg_t *g = &tmp[nt++];
                 memset(g, 0, sizeof(*g));
                 g->rule = RULE_S2;
-                g->kind = ap || (lb && lb->has_b) ? FRRS_K_BSSID : FRRS_K_STA;
+                g->kind = ap ? FRRS_K_BSSID : FRRS_K_STA;
                 g->role = 1;
                 g->cls = g->kind == FRRS_K_BSSID ? 3 : 0;
                 g->conf = 80;
@@ -851,17 +879,19 @@ static int compute_suggestions(const web_m4_t *m, long long now_s, sugg_t *out) 
         free(tmp);
     }
     if (have_c) {
-        /* S3: BSSID families: the same first five octets and high nibble,
-         * on the same channel. The beacon interval alone is not enough:
+        /* S3: BSSID families: the same first five octets and the same
+         * high nibble of the last (16 characters: they differ in the low
+         * nibble only, §7), the same vendor, on the same channel. The
+         * beacon interval alone is not enough:
          * 100 TU is nearly every AP's, and taken alone it joined every
          * neighbour in a block (seen on the demo's eight BSSIDs: 28
          * pairs). A KARMA candidate is not suggested: its evidence is its
          * own. */
-        typedef struct { char mac[18]; int ch, bms; long long last; } ap_t;
+        typedef struct { char mac[18], ven[WEB_FRRS_NAME_MAX + 1]; int ch, bms, has_ven; long long last; } ap_t;
         ap_t *ap = calloc(512, sizeof(*ap));
         int na = 0;
         sqlite3_stmt *s = NULL;
-        if (ap && sqlite3_prepare_v2(c.db, "SELECT bssid, channel, beacon_ms, last_seen FROM beacon_aps"
+        if (ap && sqlite3_prepare_v2(c.db, "SELECT bssid, channel, beacon_ms, last_seen, vendor FROM beacon_aps"
                                      " ORDER BY bssid LIMIT 512", -1, &s, NULL) == SQLITE_OK) {
             while (sqlite3_step(s) == SQLITE_ROW && na < 512) {
                 char a[24], k[WEB_KEY_MAX + 1];
@@ -871,13 +901,19 @@ static int compute_suggestions(const web_m4_t *m, long long now_s, sugg_t *out) 
                 ap[na].ch = sqlite3_column_int(s, 1);
                 ap[na].bms = sqlite3_column_type(s, 2) == SQLITE_NULL ? -1 : sqlite3_column_int(s, 2);
                 ap[na].last = sqlite3_column_int64(s, 3);
+                ap[na].has_ven = sqlite3_column_type(s, 4) != SQLITE_NULL;
+                ctext(s, 4, ap[na].ven, sizeof(ap[na].ven));
                 na++;
             }
         }
         sqlite3_finalize(s);
         for (int i = 0; i < na; i++)
-            for (int j = i + 1; j < na && !strncmp(ap[i].mac, ap[j].mac, 15); j++) {
+            for (int j = i + 1; j < na && !strncmp(ap[i].mac, ap[j].mac, 16); j++) {
                 if (ap[i].ch <= 0 || ap[i].ch != ap[j].ch) continue;
+                /* The same vendor, NULL matching NULL: sloth names the
+                 * vendor from the OUI, which the 16 characters already
+                 * share, so an unnamed pair is not two vendors. */
+                if (ap[i].has_ven != ap[j].has_ven || strcmp(ap[i].ven, ap[j].ven)) continue;
                 int karma = 0;
                 sqlite3_stmt *k = NULL;
                 if (sqlite3_prepare_v2(c.db, "SELECT bssid FROM karma_candidates WHERE bssid = ?1 OR"
@@ -1082,7 +1118,7 @@ static int post_unit(web_frrs_t *f, const web_jrec_t *r, long long now, char *bo
     if (!strcmp(op, "create")) {
         if (hid) FAIL(400, "unknown_member", "id");
         if (!name[0]) FAIL(400, "missing_name", "name");
-        if (live_count(f, "tacdb_unit") >= WEB_FRRS_UNITS) FAIL(507, "tacdb_full", NULL);
+        if (no_room(f, "tacdb_unit", WEB_FRRS_UNITS, 1, 1)) FAIL(507, "tacdb_full", NULL);
         if (parent && !unit_live(f, parent)) FAIL(404, "no_such_unit", "parent");
         if (parent && unit_depth(f, parent) + 1 > WEB_FRRS_UNIT_DEPTH) FAIL(409, "unit_depth", "parent");
         if (unit_name_taken(f, parent, name, 0)) FAIL(409, "duplicate_name", "name");
@@ -1137,8 +1173,13 @@ static int post_unit(web_frrs_t *f, const web_jrec_t *r, long long now, char *bo
             if (q) { sqlite3_bind_int64(q, 1, id); if (sqlite3_step(q) == SQLITE_ROW) ctext(q, 0, nm, sizeof(nm)); }
             sqlite3_finalize(q);
             if (p && !unit_live(f, p)) FAIL(409, "parent_deleted", "id");
+            /* A move counts live subunits only, so a unit may have been
+             * moved deeper while this one was deleted: the depth is
+             * checked again here. */
+            if ((p ? unit_depth(f, p) : 0) + 1 + subtree_height(f, id, 0) > WEB_FRRS_UNIT_DEPTH)
+                FAIL(409, "unit_depth", "id");
             if (unit_name_taken(f, p, nm, id)) FAIL(409, "duplicate_name", "id");
-            if (live_count(f, "tacdb_unit") >= WEB_FRRS_UNITS) FAIL(507, "tacdb_full", NULL);
+            if (no_room(f, "tacdb_unit", WEB_FRRS_UNITS, 1, 0)) FAIL(507, "tacdb_full", NULL);
         }
         sqlite3_stmt *s = prep(f, "UPDATE tacdb_unit SET deleted = ?2, updated = ?3 WHERE id = ?1");
         if (!s) FAIL(500, "store_error", NULL);
@@ -1202,13 +1243,13 @@ static int post_platform(const web_m4_t *m, web_frrs_t *f, const web_jrec_t *r, 
     if (!strcmp(op, "create")) {
         if (hid || tok[0]) FAIL(400, "unknown_member", hid ? "id" : "suggest");
         if (!nom[0]) FAIL(400, "missing_nomenclature", "nomenclature");
-        if (live_count(f, "tacdb_platform") >= WEB_FRRS_PLATFORMS) FAIL(507, "tacdb_full", NULL);
+        if (no_room(f, "tacdb_platform", WEB_FRRS_PLATFORMS, 1, 1)) FAIL(507, "tacdb_full", NULL);
         if (unit && !unit_live(f, unit)) FAIL(404, "no_such_unit", "unit");
         if (nom_taken(f, nom, 0)) FAIL(409, "duplicate_name", "nomenclature");
         if (he > 0) {
             long long o = owner_of(f, ekind, addr);
             if (o) FAIL(409, "emitter_owned", "emitter_addr");
-            if (live_count(f, "tacdb_emitter") >= WEB_FRRS_EMITTERS) FAIL(507, "tacdb_full", NULL);
+            if (no_room(f, "tacdb_emitter", WEB_FRRS_EMITTERS, 1, 1)) FAIL(507, "tacdb_full", NULL);
         }
         id = insert_platform(f, unit, nom, cls < 0 ? 0 : cls, vendor, note, 1, 0, now);
         if (id < 0) FAIL(500, "store_error", NULL);
@@ -1247,7 +1288,11 @@ static int post_platform(const web_m4_t *m, web_frrs_t *f, const web_jrec_t *r, 
             if (q) { sqlite3_bind_int64(q, 1, id); if (sqlite3_step(q) == SQLITE_ROW) ctext(q, 0, cur, sizeof(cur)); }
             sqlite3_finalize(q);
             if (nom_taken(f, cur, id)) FAIL(409, "duplicate_name", "id");
-            if (live_count(f, "tacdb_platform") >= WEB_FRRS_PLATFORMS) FAIL(507, "tacdb_full", NULL);
+            /* As a unit's restore needs its parent: never a live
+             * platform in a deleted unit. */
+            long long pu = scalar(f, "SELECT COALESCE(unit, 0) FROM tacdb_platform WHERE id = ?1", id, NULL, 0);
+            if (pu && !unit_live(f, pu)) FAIL(409, "unit_deleted", "id");
+            if (no_room(f, "tacdb_platform", WEB_FRRS_PLATFORMS, 1, 0)) FAIL(507, "tacdb_full", NULL);
         }
         /* Its emitters go with it (deleted 2: with the platform) and
          * come back with it, unless another platform has one since. */
@@ -1280,8 +1325,7 @@ static int post_platform(const web_m4_t *m, web_frrs_t *f, const web_jrec_t *r, 
             int ap = 0;
             if (f->led) {
                 pthread_mutex_lock(&f->lmu);
-                const frrs_bss_t *x = frrs_led_bss(f, a), *y = frrs_led_bss(f, b);
-                ap = (x && x->has_b) || (y && y->has_b);
+                ap = mld_is_ap(f, a);
                 pthread_mutex_unlock(&f->lmu);
             }
             kind = ap ? FRRS_K_BSSID : FRRS_K_STA;
@@ -1298,7 +1342,7 @@ static int post_platform(const web_m4_t *m, web_frrs_t *f, const web_jrec_t *r, 
         if (pa && pb && pa != pb) FAIL(409, "emitter_owned", "suggest");
         id = pa ? pa : pb;
         if (!id) {
-            if (live_count(f, "tacdb_platform") >= WEB_FRRS_PLATFORMS) FAIL(507, "tacdb_full", NULL);
+            if (no_room(f, "tacdb_platform", WEB_FRRS_PLATFORMS, 1, 1)) FAIL(507, "tacdb_full", NULL);
             if (unit && !unit_live(f, unit)) FAIL(404, "no_such_unit", "unit");
             char auto_nom[WEB_FRRS_NAME_MAX + 1];
             if (!nom[0]) {
@@ -1321,7 +1365,7 @@ static int post_platform(const web_m4_t *m, web_frrs_t *f, const web_jrec_t *r, 
             id = insert_platform(f, unit, use, rc, ven, note, 1, 10 + rule, now);
             if (id < 0) FAIL(500, "store_error", NULL);
         }
-        if (live_count(f, "tacdb_emitter") + 2 > WEB_FRRS_EMITTERS) FAIL(507, "tacdb_full", NULL);
+        if (no_room(f, "tacdb_emitter", WEB_FRRS_EMITTERS, 2, 2)) FAIL(507, "tacdb_full", NULL);
         if (!pa && put_emitter(f, id, kind, a, 0, "", 10 + rule, now) != 0) FAIL(500, "store_error", NULL);
         if (b[0] && !pb && put_emitter(f, id, kind, b, rb, "", 10 + rule, now) != 0) FAIL(500, "store_error", NULL);
     } else {
@@ -1357,7 +1401,7 @@ static int post_emitter(web_frrs_t *f, const web_jrec_t *r, long long now, char 
         if (!platform_live(f, p)) FAIL(404, "no_such_platform", "platform");
         if (op[0] == 'a' && owner && owner != p) FAIL(409, "emitter_owned", "addr");
         if (op[0] == 'm' && !owner) FAIL(404, "no_such_emitter", "addr");
-        if (!owner && live_count(f, "tacdb_emitter") >= WEB_FRRS_EMITTERS) FAIL(507, "tacdb_full", NULL);
+        if (!owner && no_room(f, "tacdb_emitter", WEB_FRRS_EMITTERS, 1, 1)) FAIL(507, "tacdb_full", NULL);
         if (op[0] == 'm' && owner != p) {
             sqlite3_stmt *s = prep(f, "UPDATE tacdb_emitter SET deleted = 1, updated = ?3 WHERE"
                                       " platform = ?1 AND kind = ?2 AND addr = ?4");
@@ -1389,7 +1433,7 @@ static int post_emitter(web_frrs_t *f, const web_jrec_t *r, long long now, char 
         if (!hp) FAIL(400, "missing_platform", "platform");
         if (owner) FAIL(409, "emitter_owned", "addr");
         if (!platform_live(f, p)) FAIL(404, "no_such_platform", "platform");
-        if (live_count(f, "tacdb_emitter") >= WEB_FRRS_EMITTERS) FAIL(507, "tacdb_full", NULL);
+        if (no_room(f, "tacdb_emitter", WEB_FRRS_EMITTERS, 1, 0)) FAIL(507, "tacdb_full", NULL);
         sqlite3_stmt *s = prep(f, "UPDATE tacdb_emitter SET deleted = 0, updated = ?3 WHERE"
                                   " platform = ?1 AND kind = ?2 AND addr = ?4 AND deleted <> 0");
         if (!s) FAIL(500, "store_error", NULL);
@@ -1474,9 +1518,17 @@ int frrs_export(const web_m4_t *m, long long now_s, char **big, size_t *biglen,
     long long lines = 1, tri = 0;
     web_jw_raw(&w, "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1,\"exported\":");
     web_jw_int(&w, now_s);
-    web_jw_raw(&w, ",\"note\":\"operator state: units, platforms, emitters, dismissed suggestions "
-                   "and triage history; deleted rows included\"}\n");
-    sqlite3_stmt *s = prep(f, "SELECT id, COALESCE(parent, 0), name, kind, note, deleted FROM tacdb_unit ORDER BY id");
+    web_jw_raw(&w, ",\"note\":\"operator state: live units (parents first), platforms and emitters, "
+                   "dismissed suggestions and triage history; deleted rows stay on this sensor\"}\n");
+    /* Parents before children, whatever the ids: a unit moved under one
+     * made after it has the larger parent id, and an import merges a
+     * unit once its parent has (it also settles any order itself). */
+    sqlite3_stmt *s = prep(f, "WITH RECURSIVE t(id, depth, path) AS ("
+                              " SELECT id, 1, printf('%012d', id) FROM tacdb_unit WHERE parent IS NULL AND deleted = 0"
+                              " UNION ALL SELECT u.id, t.depth + 1, t.path || '.' || printf('%012d', u.id)"
+                              " FROM tacdb_unit u JOIN t ON u.parent = t.id WHERE u.deleted = 0 AND t.depth < 8)"
+                              " SELECT u.id, COALESCE(u.parent, 0), u.name, u.kind, u.note FROM t"
+                              " JOIN tacdb_unit u ON u.id = t.id ORDER BY t.path");
     while (s && sqlite3_step(s) == SQLITE_ROW && w.len + 2048 < w.cap) {
         char name[WEB_FRRS_NAME_MAX + 1], note[WEB_FRRS_NOTE_MAX + 1];
         ctext(s, 2, name, sizeof(name));
@@ -1488,13 +1540,12 @@ int frrs_export(const web_m4_t *m, long long now_s, char **big, size_t *biglen,
         web_jw_raw(&w, ",\"name\":"); web_jw_str(&w, name);
         web_jw_raw(&w, ",\"kind\":"); web_jw_str(&w, k >= 0 && k < N_UNIT_KIND ? UNIT_KIND[k] : "other");
         web_jw_raw(&w, ",\"note\":"); web_jw_str(&w, note);
-        web_jw_raw(&w, ",\"deleted\":"); web_jw_raw(&w, sqlite3_column_int(s, 5) ? "true" : "false");
         web_jw_raw(&w, "}\n");
         lines++;
     }
     sqlite3_finalize(s);
-    s = prep(f, "SELECT id, COALESCE(unit, 0), nomenclature, class, vendor, note, confirmed, origin, deleted"
-                " FROM tacdb_platform ORDER BY id");
+    s = prep(f, "SELECT id, COALESCE(unit, 0), nomenclature, class, vendor, note, confirmed, origin"
+                " FROM tacdb_platform WHERE deleted = 0 ORDER BY id");
     while (s && sqlite3_step(s) == SQLITE_ROW && w.len + 2048 < w.cap) {
         char nom[WEB_FRRS_NAME_MAX + 1], ven[WEB_FRRS_NAME_MAX + 1], note[WEB_FRRS_NOTE_MAX + 1];
         ctext(s, 2, nom, sizeof(nom));
@@ -1510,12 +1561,12 @@ int frrs_export(const web_m4_t *m, long long now_s, char **big, size_t *biglen,
         web_jw_raw(&w, ",\"note\":"); web_jw_str(&w, note);
         web_jw_raw(&w, ",\"confirmed\":"); web_jw_raw(&w, sqlite3_column_int(s, 6) ? "true" : "false");
         web_jw_raw(&w, ",\"origin\":"); web_jw_str(&w, origin_word(sqlite3_column_int(s, 7)));
-        web_jw_raw(&w, ",\"deleted\":"); web_jw_raw(&w, sqlite3_column_int(s, 8) ? "true" : "false");
         web_jw_raw(&w, "}\n");
         lines++;
     }
     sqlite3_finalize(s);
-    s = prep(f, "SELECT platform, kind, addr, role, label, deleted FROM tacdb_emitter ORDER BY platform, kind, addr");
+    s = prep(f, "SELECT e.platform, e.kind, e.addr, e.role, e.label FROM tacdb_emitter e JOIN tacdb_platform p"
+                " ON p.id = e.platform WHERE e.deleted = 0 AND p.deleted = 0 ORDER BY e.platform, e.kind, e.addr");
     while (s && sqlite3_step(s) == SQLITE_ROW && w.len + 2048 < w.cap) {
         char addr[24], label[WEB_FRRS_LABEL_MAX + 1];
         ctext(s, 2, addr, sizeof(addr));
@@ -1526,7 +1577,6 @@ int frrs_export(const web_m4_t *m, long long now_s, char **big, size_t *biglen,
         web_jw_raw(&w, ",\"addr\":"); web_jw_str(&w, addr);
         web_jw_raw(&w, ",\"role\":"); web_jw_str(&w, role >= 0 && role < N_ROLE ? ROLE_WORD[role] : "other");
         web_jw_raw(&w, ",\"label\":"); web_jw_str(&w, label);
-        web_jw_raw(&w, ",\"deleted\":"); web_jw_raw(&w, sqlite3_column_int(s, 5) ? "true" : "false");
         web_jw_raw(&w, "}\n");
         lines++;
     }
@@ -1578,6 +1628,277 @@ static long long map_of(const idmap_t *mp, int n, long long from) {
     return 0;
 }
 
+/* The file's rows, read whole by the check before anything is merged:
+ * a unit is merged once its parent is, whatever the file's order; a
+ * platform's emitters are known when the platform is. */
+typedef struct {
+    long long ln, id, parent;
+    int       kind, deleted, done;   /* done: merged or skipped */
+    char      name[WEB_FRRS_NAME_MAX + 1], note[WEB_FRRS_NOTE_MAX + 1];
+} imp_unit_t;
+typedef struct {
+    long long ln, id, unit;
+    int       cls, deleted;
+    char      nom[WEB_FRRS_NAME_MAX + 1], ven[WEB_FRRS_NAME_MAX + 1], note[WEB_FRRS_NOTE_MAX + 1];
+} imp_plat_t;
+typedef struct {
+    long long ln, platform;
+    int       kind, role, deleted;
+    char      addr[24], label[WEB_FRRS_LABEL_MAX + 1];
+} imp_emit_t;
+
+typedef struct {
+    imp_unit_t *u;
+    imp_plat_t *p;
+    imp_emit_t *e;
+    idmap_t    *um, *pm;
+    int         nu, np, ne, num, npm, ntri;
+    long long   nlines, skipped, merged[5];
+    int         saw_head, saw_end, bad_line, began, nshown;
+    const char *bad_why;
+    web_jw_t   *w;
+    size_t      cap;
+} imp_t;
+
+static void imp_note(imp_t *x, long long ln, const char *why, int bad) {
+    if (bad) {
+        x->bad_line = 1;
+        if (!x->bad_why) x->bad_why = why;
+    }
+    x->skipped++;
+    if (x->nshown < 50 && x->w->len + 256 < x->cap) {
+        web_jw_raw(x->w, x->nshown++ ? ",{\"line\":" : "{\"line\":");
+        web_jw_int(x->w, ln);
+        web_jw_raw(x->w, ",\"why\":");
+        web_jw_str(x->w, why);
+        web_jw_raw(x->w, "}");
+    }
+}
+
+/* One line of the check: parsed, bounded, kept. NULL, or why it is
+ * refused. */
+static const char *imp_check_line(imp_t *x, web_frrs_t *f, const web_jrec_t *r, long long ln,
+                                  const char *type, long long now_s, const char *peer) {
+    const char *why = NULL, *b = NULL;
+    if (!strcmp(type, "unit")) {
+        static const char *const M[] = { "type", "id", "parent", "name", "kind", "note", "deleted", NULL };
+        char kw[12];
+        if (x->nu >= WEB_FRRS_UNITS) return "too_many_units";
+        imp_unit_t *u = &x->u[x->nu];
+        memset(u, 0, sizeof(*u));
+        u->ln = ln;
+        u->id = web_jl_int(r, "id", 0);
+        u->parent = web_jl_int(r, "parent", 0);
+        if (!frrs_members_ok(r, M, &b)) return "unknown_member";
+        if (!frrs_text(r, "name", WEB_FRRS_NAME_MAX, u->name, &why) || !frrs_text(r, "kind", 10, kw, &why) ||
+            !frrs_text(r, "note", WEB_FRRS_NOTE_MAX, u->note, &why)) return why;
+        if (!u->name[0] || u->id <= 0 || u->parent < 0 || u->parent == u->id) return "bad_unit";
+        if ((u->kind = word_of(UNIT_KIND, N_UNIT_KIND, kw)) < 0) return "bad_kind";
+        for (int i = 0; i < x->nu; i++) if (x->u[i].id == u->id) return "duplicate_id";
+        u->deleted = web_jl_int(r, "deleted", 0) != 0;
+        x->nu++;
+    } else if (!strcmp(type, "platform")) {
+        static const char *const M[] = { "type", "id", "unit", "nomenclature", "class", "vendor",
+                                         "note", "confirmed", "origin", "deleted", NULL };
+        char cw[16];
+        if (x->np >= WEB_FRRS_PLATFORMS) return "too_many_platforms";
+        imp_plat_t *p = &x->p[x->np];
+        memset(p, 0, sizeof(*p));
+        p->ln = ln;
+        p->id = web_jl_int(r, "id", 0);
+        p->unit = web_jl_int(r, "unit", 0);
+        if (!frrs_members_ok(r, M, &b)) return "unknown_member";
+        if (!frrs_text(r, "nomenclature", WEB_FRRS_NAME_MAX, p->nom, &why) ||
+            !frrs_text(r, "class", 15, cw, &why) || !frrs_text(r, "vendor", WEB_FRRS_NAME_MAX, p->ven, &why) ||
+            !frrs_text(r, "note", WEB_FRRS_NOTE_MAX, p->note, &why)) return why;
+        if (!p->nom[0] || p->id <= 0 || p->unit < 0) return "bad_platform";
+        if ((p->cls = word_of(CLASS_WORD, N_CLASS, cw)) < 0) return "bad_class";
+        for (int i = 0; i < x->np; i++) if (x->p[i].id == p->id) return "duplicate_id";
+        p->deleted = web_jl_int(r, "deleted", 0) != 0;
+        x->np++;
+    } else if (!strcmp(type, "emitter")) {
+        static const char *const M[] = { "type", "platform", "kind", "addr", "role", "label", "deleted", NULL };
+        char rw[12];
+        if (x->ne >= WEB_FRRS_EMITTERS) return "too_many_emitters";
+        imp_emit_t *e = &x->e[x->ne];
+        memset(e, 0, sizeof(*e));
+        e->ln = ln;
+        e->platform = web_jl_int(r, "platform", 0);
+        if (!frrs_members_ok(r, M, &b)) return "unknown_member";
+        if (!frrs_text(r, "role", 10, rw, &why) || !frrs_text(r, "label", WEB_FRRS_LABEL_MAX, e->label, &why))
+            return why;
+        if (body_emitter(r, "kind", "addr", &e->kind, e->addr, &why) <= 0) return why ? why : "bad_addr";
+        if (e->platform <= 0 || (e->role = word_of(ROLE_WORD, N_ROLE, rw)) < 0) return "bad_emitter";
+        e->deleted = web_jl_int(r, "deleted", 0) != 0;
+        x->ne++;
+    } else if (!strcmp(type, "dismiss")) {
+        static const char *const M[] = { "type", "rule", "a", "b", "ts", NULL };
+        char rn[4], a[24], bb[24], ka[WEB_KEY_MAX + 1], kb[WEB_KEY_MAX + 1];
+        if (!frrs_members_ok(r, M, &b)) return "unknown_member";
+        if (!frrs_text(r, "rule", 3, rn, &why) || !frrs_text(r, "a", 17, a, &why) ||
+            !frrs_text(r, "b", 17, bb, &why)) return why;
+        if (rn[0] != 'S' || !isdigit((unsigned char)rn[1]) || rn[2] || web_key_mac(a, ka) ||
+            (bb[0] && web_key_mac(bb, kb))) return "bad_dismiss";
+    } else if (!strcmp(type, "triage")) {
+        if (++x->ntri > WEB_FRRS_IMPORT_TRIAGE) return "too_many_triage";
+        int t = frrs_triage_import(f, r, 0, now_s, peer, &why);
+        if (t != 0) return why ? why : "bad_triage";
+    } else {
+        return "unknown_type";
+    }
+    return NULL;
+}
+
+/* A dismissal line, merged. */
+static void imp_dismiss(imp_t *x, web_frrs_t *f, const web_jrec_t *r, long long ln, long long now_s) {
+    char rn[4] = "", a[24] = "", bb[24] = "", ka[WEB_KEY_MAX + 1], kb[WEB_KEY_MAX + 1] = "";
+    const char *why = NULL;
+    frrs_text(r, "rule", 3, rn, &why);
+    frrs_text(r, "a", 17, a, &why);
+    frrs_text(r, "b", 17, bb, &why);
+    if (web_key_mac(a, ka) || (bb[0] && web_key_mac(bb, kb))) { imp_note(x, ln, "bad_dismiss", 1); return; }
+    if (scalar(f, "SELECT COUNT(*) FROM tacdb_dismiss", 0, NULL, 0) >= WEB_FRRS_DISMISS) {
+        imp_note(x, ln, "tacdb_full", 0);
+        return;
+    }
+    sqlite3_stmt *s = prep(f, "INSERT OR IGNORE INTO tacdb_dismiss (rule, a, b, ts) VALUES (?1, ?2, ?3, ?4)");
+    if (!s) { imp_note(x, ln, "store_error", 1); return; }
+    sqlite3_bind_int(s, 1, rn[1] - '0');
+    sqlite3_bind_text(s, 2, ka, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(s, 3, bb[0] ? kb : "", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(s, 4, web_jl_int(r, "ts", now_s));
+    int rc = sqlite3_step(s);
+    if (rc == SQLITE_DONE && sqlite3_changes(f->wr)) x->merged[3]++;
+    else if (rc == SQLITE_DONE) imp_note(x, ln, "already_here", 0);
+    else imp_note(x, ln, "store_error", 1);
+    sqlite3_finalize(s);
+}
+
+/* One unit, its parent already decided. */
+static void imp_one_unit(imp_t *x, web_frrs_t *f, imp_unit_t *u, long long lp, long long now_s) {
+    u->done = 1;
+    long long here = 0;
+    sqlite3_stmt *s = prep(f, "SELECT id FROM tacdb_unit WHERE deleted = 0 AND"
+                              " parent IS ?1 AND lower(name) = lower(?2)");
+    if (s) {
+        if (lp) sqlite3_bind_int64(s, 1, lp); else sqlite3_bind_null(s, 1);
+        sqlite3_bind_text(s, 2, u->name, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(s) == SQLITE_ROW) here = sqlite3_column_int64(s, 0);
+    }
+    sqlite3_finalize(s);
+    if (here) {
+        imp_note(x, u->ln, "already_here", 0);
+    } else if (no_room(f, "tacdb_unit", WEB_FRRS_UNITS, 1, 1)) {
+        imp_note(x, u->ln, "tacdb_full", 0);
+        return;
+    } else if (lp && unit_depth(f, lp) + 1 > WEB_FRRS_UNIT_DEPTH) {
+        imp_note(x, u->ln, "unit_depth", 0);
+        return;
+    } else {
+        here = insert_unit(f, lp, u->name, u->kind, u->note, 1, now_s);
+        if (here < 0) { imp_note(x, u->ln, "store_error", 1); return; }
+        x->merged[0]++;
+    }
+    x->um[x->num].from = u->id;
+    x->um[x->num].to = here;
+    x->num++;
+}
+
+static void imp_units(imp_t *x, web_frrs_t *f, long long now_s) {
+    /* Rounds, a level each: a unit whose parent is merged (or that has
+     * none) goes in this round; one whose parent was skipped is skipped
+     * with it; the rest wait. Depth is bounded, so a few rounds settle
+     * every unit, and whatever is left names a parent the file does not
+     * hold (or a cycle). */
+    for (int round = 0; round <= WEB_FRRS_UNIT_DEPTH + 1 && !x->bad_line; round++) {
+        int moved = 0;
+        for (int i = 0; i < x->nu && !x->bad_line; i++) {
+            imp_unit_t *u = &x->u[i];
+            if (u->done) continue;
+            if (u->deleted) { u->done = 1; imp_note(x, u->ln, "deleted_in_file", 0); moved = 1; continue; }
+            long long lp = u->parent ? map_of(x->um, x->num, u->parent) : 0;
+            if (u->parent && !lp) {
+                int parent_done = 0;
+                for (int k = 0; k < x->nu; k++) if (x->u[k].id == u->parent && x->u[k].done) parent_done = 1;
+                if (!parent_done) continue;
+                u->done = 1;
+                imp_note(x, u->ln, "parent_not_merged", 0);
+                moved = 1;
+                continue;
+            }
+            imp_one_unit(x, f, u, lp, now_s);
+            moved = 1;
+        }
+        if (!moved) break;
+    }
+    for (int i = 0; i < x->nu && !x->bad_line; i++)
+        if (!x->u[i].done) { x->u[i].done = 1; imp_note(x, x->u[i].ln, "parent_not_merged", 0); }
+}
+
+static void imp_platforms(imp_t *x, web_frrs_t *f, long long now_s) {
+    for (int i = 0; i < x->np && !x->bad_line; i++) {
+        const imp_plat_t *p = &x->p[i];
+        if (p->deleted) { imp_note(x, p->ln, "deleted_in_file", 0); continue; }
+        long long lu = p->unit ? map_of(x->um, x->num, p->unit) : 0;
+        /* Never re-filed under no unit: a platform whose unit did not
+         * merge is reported, and its emitters with it. */
+        if (p->unit && !lu) { imp_note(x, p->ln, "unit_not_merged", 0); continue; }
+        long long here = scalar(f, "SELECT id FROM tacdb_platform WHERE deleted = 0 AND"
+                                   " lower(nomenclature) = lower(?2) AND ?1 = ?1", 0, p->nom, 0);
+        if (here) {
+            /* A name is not a device: auto names are numbered in each
+             * sensor's own order, and "laptop" is anyone's. The file's
+             * platform is this one only when one of its emitters is
+             * already filed here. */
+            int overlap = 0;
+            for (int k = 0; k < x->ne && !overlap; k++)
+                if (x->e[k].platform == p->id && !x->e[k].deleted &&
+                    owner_of(f, x->e[k].kind, x->e[k].addr) == here) overlap = 1;
+            if (!overlap) { imp_note(x, p->ln, "duplicate_name", 0); continue; }
+            imp_note(x, p->ln, "already_here", 0);
+        } else if (no_room(f, "tacdb_platform", WEB_FRRS_PLATFORMS, 1, 1)) {
+            imp_note(x, p->ln, "tacdb_full", 0);
+            continue;
+        } else {
+            here = insert_platform(f, lu, p->nom, p->cls, p->ven, p->note, 1, 1, now_s);
+            if (here < 0) { imp_note(x, p->ln, "store_error", 1); return; }
+            x->merged[1]++;
+        }
+        x->pm[x->npm].from = p->id;
+        x->pm[x->npm].to = here;
+        x->npm++;
+    }
+}
+
+static void imp_emitters(imp_t *x, web_frrs_t *f, long long now_s) {
+    for (int i = 0; i < x->ne && !x->bad_line; i++) {
+        const imp_emit_t *e = &x->e[i];
+        long long lp = map_of(x->pm, x->npm, e->platform);
+        long long o = lp ? owner_of(f, e->kind, e->addr) : 0;
+        if (e->deleted) imp_note(x, e->ln, "deleted_in_file", 0);
+        else if (!lp) imp_note(x, e->ln, "platform_not_merged", 0);
+        else if (o && o != lp) imp_note(x, e->ln, "emitter_owned", 0);
+        else if (o == lp) imp_note(x, e->ln, "already_here", 0);
+        else if (no_room(f, "tacdb_emitter", WEB_FRRS_EMITTERS, 1, 1)) imp_note(x, e->ln, "tacdb_full", 0);
+        else if (put_emitter(f, lp, e->kind, e->addr, e->role, e->label, 1, now_s) != 0)
+            imp_note(x, e->ln, "store_error", 1);
+        else x->merged[2]++;
+    }
+}
+
+/* The next non-empty line of [*p, end): its bytes and number. */
+static int next_line(const char **p, const char *end, long long *ln, const char **line, size_t *n) {
+    while (*p < end) {
+        const char *nl = memchr(*p, '\n', (size_t)(end - *p));
+        *n = nl ? (size_t)(nl - *p) : (size_t)(end - *p);
+        *line = *p;
+        *p = nl ? nl + 1 : end;
+        (*ln)++;
+        if (*n && !(*n == 1 && **line == '\r')) return 1;
+    }
+    return 0;
+}
+
 int frrs_import(const web_m4_t *m, const web_req_t *rq, long long now_s,
                 char *body, size_t cap, size_t *len, int *status) {
     web_frrs_t *f = m->frrs;
@@ -1588,215 +1909,118 @@ int frrs_import(const web_m4_t *m, const web_req_t *rq, long long now_s,
     int write = ps[0].seen ? !strcmp(ps[0].val, "merge") ? 1 : !strcmp(ps[0].val, "check") ? 0 : -1 : 0;
     if (write < 0) return frrs_error(400, "bad_mode", NULL, body, cap, len, status);
     if (!rq->body || !rq->body_len) return frrs_error(400, "bad_body", NULL, body, cap, len, status);
+    imp_t x;
+    memset(&x, 0, sizeof(x));
     web_jrec_t *r = malloc(sizeof(*r));
-    idmap_t *um = calloc(WEB_FRRS_UNITS * 2, sizeof(*um)), *pm = calloc(WEB_FRRS_PLATFORMS * 2, sizeof(*pm));
-    if (!r || !um || !pm) { free(r); free(um); free(pm); return -1; }
-    int nu = 0, np = 0;
-    long long nlines = 0, merged[5] = { 0, 0, 0, 0, 0 }, skipped = 0;
-    int bad_line = 0, saw_head = 0;
-    const char *bad_why = NULL;
+    x.u = calloc(WEB_FRRS_UNITS, sizeof(*x.u));
+    x.p = calloc(WEB_FRRS_PLATFORMS, sizeof(*x.p));
+    x.e = calloc(WEB_FRRS_EMITTERS, sizeof(*x.e));
+    x.um = calloc(WEB_FRRS_UNITS, sizeof(*x.um));
+    x.pm = calloc(WEB_FRRS_PLATFORMS, sizeof(*x.pm));
+    int rc = -1;
+    if (!r || !x.u || !x.p || !x.e || !x.um || !x.pm) goto out;
     web_jw_t w;
     web_jw_init(&w, body, cap);
+    x.w = &w;
+    x.cap = cap;
     web_jw_raw(&w, "{\"mode\":");
     web_jw_str(&w, write ? "merge" : "check");
     web_jw_raw(&w, ",\"skipped\":[");
-    int nskip_shown = 0;
-    /* Two passes: every line checked first; only a file that checks
-     * whole is merged, in one transaction. */
-    for (int pass = 0; pass < 2; pass++) {
-        if (pass == 1) {
-            if (bad_line || !write) break;
-            if (begin(f) != 0) {
-                free(r); free(um); free(pm);
-                return frrs_error(503, "store_busy", NULL, body, cap, len, status);
-            }
-        }
-        const char *p = rq->body, *end = rq->body + rq->body_len;
+    const char *end = rq->body + rq->body_len;
+    /* The check: every line, whole, before anything is written. The
+     * header is the first line, the end line the last, and the end line
+     * counts the lines and says the export was complete: a file cut
+     * short, or one an export stopped at its bound, merges nothing. */
+    {
+        const char *p = rq->body, *line;
+        size_t n;
         long long ln = 0;
-        while (p < end) {
-            const char *nl = memchr(p, '\n', (size_t)(end - p));
-            size_t n = nl ? (size_t)(nl - p) : (size_t)(end - p);
-            ln++;
-            const char *line = p;
-            p = nl ? nl + 1 : end;
-            if (n == 0) continue;
+        while (next_line(&p, end, &ln, &line, &n)) {
             const char *why = NULL;
-            if (n > WEB_JL_MAX_LINE || web_jl_parse(line, n, r) != WEB_JL_OK) why = "bad_line";
+            x.nlines++;
+            if (x.saw_end) why = "after_end";
+            else if (n > WEB_JL_MAX_LINE || web_jl_parse(line, n, r) != WEB_JL_OK) why = "bad_line";
             const char *type = why ? "" : web_jl_str(r, "type");
-            int skip = 0;
-            if (!why && pass == 0) nlines++;
-            if (!why && !strcmp(type, "slothweb-tacdb")) {
-                if (web_jl_int(r, "version", 0) != 1) why = "bad_version";
-                saw_head = 1;
-            } else if (!why && !strcmp(type, "end")) {
-                /* the trailer */
-            } else if (!why && !strcmp(type, "unit")) {
-                static const char *const M[] = { "type", "id", "parent", "name", "kind", "note", "deleted", NULL };
-                const char *b = NULL;
-                char name[WEB_FRRS_NAME_MAX + 1], kw[12], note[WEB_FRRS_NOTE_MAX + 1];
-                long long id = web_jl_int(r, "id", 0), par = web_jl_int(r, "parent", 0);
-                if (!frrs_members_ok(r, M, &b)) why = "unknown_member";
-                else if (!frrs_text(r, "name", WEB_FRRS_NAME_MAX, name, &why) ||
-                         !frrs_text(r, "kind", 10, kw, &why) || !frrs_text(r, "note", WEB_FRRS_NOTE_MAX, note, &why)) {}
-                else if (!name[0] || id <= 0 || par < 0) why = "bad_unit";
-                else if (word_of(UNIT_KIND, N_UNIT_KIND, kw) < 0) why = "bad_kind";
-                else if (pass == 1) {
-                    if (web_jl_int(r, "deleted", 0)) { skip = 1; why = "deleted_in_file"; }
-                    else {
-                        long long lp = par ? map_of(um, nu, par) : 0;
-                        if (par && !lp) { skip = 1; why = "parent_not_merged"; }
-                        else {
-                            long long here = 0;
-                            sqlite3_stmt *s = prep(f, "SELECT id FROM tacdb_unit WHERE deleted = 0 AND"
-                                                      " parent IS ?1 AND lower(name) = lower(?2)");
-                            if (s) {
-                                if (lp) sqlite3_bind_int64(s, 1, lp); else sqlite3_bind_null(s, 1);
-                                sqlite3_bind_text(s, 2, name, -1, SQLITE_TRANSIENT);
-                                if (sqlite3_step(s) == SQLITE_ROW) here = sqlite3_column_int64(s, 0);
-                            }
-                            sqlite3_finalize(s);
-                            if (!here) {
-                                if (live_count(f, "tacdb_unit") >= WEB_FRRS_UNITS) { skip = 1; why = "tacdb_full"; }
-                                else if (lp && unit_depth(f, lp) + 1 > WEB_FRRS_UNIT_DEPTH) { skip = 1; why = "unit_depth"; }
-                                else {
-                                    here = insert_unit(f, lp, name, word_of(UNIT_KIND, N_UNIT_KIND, kw), note, 1, now_s);
-                                    if (here < 0) { why = "store_error"; bad_line = 1; }
-                                    else merged[0]++;
-                                }
-                            } else { skip = 1; why = "already_here"; }
-                            if (here > 0 && nu < WEB_FRRS_UNITS * 2) { um[nu].from = id; um[nu].to = here; nu++; }
-                        }
-                    }
-                }
-            } else if (!why && !strcmp(type, "platform")) {
-                static const char *const M[] = { "type", "id", "unit", "nomenclature", "class", "vendor",
-                                                 "note", "confirmed", "origin", "deleted", NULL };
-                const char *b = NULL;
-                char nom[WEB_FRRS_NAME_MAX + 1], cw[16], ven[WEB_FRRS_NAME_MAX + 1], note[WEB_FRRS_NOTE_MAX + 1];
-                long long id = web_jl_int(r, "id", 0), un = web_jl_int(r, "unit", 0);
-                if (!frrs_members_ok(r, M, &b)) why = "unknown_member";
-                else if (!frrs_text(r, "nomenclature", WEB_FRRS_NAME_MAX, nom, &why) ||
-                         !frrs_text(r, "class", 15, cw, &why) || !frrs_text(r, "vendor", WEB_FRRS_NAME_MAX, ven, &why) ||
-                         !frrs_text(r, "note", WEB_FRRS_NOTE_MAX, note, &why)) {}
-                else if (!nom[0] || id <= 0 || un < 0) why = "bad_platform";
-                else if (word_of(CLASS_WORD, N_CLASS, cw) < 0) why = "bad_class";
-                else if (pass == 1) {
-                    if (web_jl_int(r, "deleted", 0)) { skip = 1; why = "deleted_in_file"; }
-                    else {
-                        long long here = scalar(f, "SELECT id FROM tacdb_platform WHERE deleted = 0 AND"
-                                                   " lower(nomenclature) = lower(?2) AND ?1 = ?1", 0, nom, 0);
-                        if (here) { skip = 1; why = "already_here"; }
-                        else if (live_count(f, "tacdb_platform") >= WEB_FRRS_PLATFORMS) { skip = 1; why = "tacdb_full"; }
-                        else {
-                            here = insert_platform(f, un ? map_of(um, nu, un) : 0, nom,
-                                                   word_of(CLASS_WORD, N_CLASS, cw), ven, note, 1, 1, now_s);
-                            if (here < 0) { why = "store_error"; bad_line = 1; }
-                            else merged[1]++;
-                        }
-                        if (here > 0 && np < WEB_FRRS_PLATFORMS * 2) { pm[np].from = id; pm[np].to = here; np++; }
-                    }
-                }
-            } else if (!why && !strcmp(type, "emitter")) {
-                static const char *const M[] = { "type", "platform", "kind", "addr", "role", "label", "deleted", NULL };
-                const char *b = NULL;
-                char rw[12], label[WEB_FRRS_LABEL_MAX + 1], addr[24];
-                int kind = 0;
-                long long pl = web_jl_int(r, "platform", 0);
-                if (!frrs_members_ok(r, M, &b)) why = "unknown_member";
-                else if (!frrs_text(r, "role", 10, rw, &why) || !frrs_text(r, "label", WEB_FRRS_LABEL_MAX, label, &why)) {}
-                else if (body_emitter(r, "kind", "addr", &kind, addr, &why) <= 0) { if (!why) why = "bad_addr"; }
-                else if (pl <= 0 || word_of(ROLE_WORD, N_ROLE, rw) < 0) why = "bad_emitter";
-                else if (pass == 1) {
-                    long long lp = map_of(pm, np, pl);
-                    long long o = owner_of(f, kind, addr);
-                    if (web_jl_int(r, "deleted", 0)) { skip = 1; why = "deleted_in_file"; }
-                    else if (!lp) { skip = 1; why = "platform_not_merged"; }
-                    else if (o && o != lp) { skip = 1; why = "emitter_owned"; }
-                    else if (o == lp) { skip = 1; why = "already_here"; }
-                    else if (live_count(f, "tacdb_emitter") >= WEB_FRRS_EMITTERS) { skip = 1; why = "tacdb_full"; }
-                    else if (put_emitter(f, lp, kind, addr, word_of(ROLE_WORD, N_ROLE, rw), label, 1, now_s) != 0) {
-                        why = "store_error"; bad_line = 1;
-                    } else merged[2]++;
-                }
-            } else if (!why && !strcmp(type, "dismiss")) {
-                static const char *const M[] = { "type", "rule", "a", "b", "ts", NULL };
-                const char *b = NULL;
-                char rn[4], a[24], bb[24], ka[WEB_KEY_MAX + 1], kb[WEB_KEY_MAX + 1];
-                if (!frrs_members_ok(r, M, &b)) why = "unknown_member";
-                else if (!frrs_text(r, "rule", 3, rn, &why) || !frrs_text(r, "a", 17, a, &why) ||
-                         !frrs_text(r, "b", 17, bb, &why)) {}
-                else if (rn[0] != 'S' || !isdigit((unsigned char)rn[1]) || rn[2] || web_key_mac(a, ka) ||
-                         (bb[0] && web_key_mac(bb, kb))) why = "bad_dismiss";
-                else if (pass == 1) {
-                    if (scalar(f, "SELECT COUNT(*) FROM tacdb_dismiss", 0, NULL, 0) >= WEB_FRRS_DISMISS) {
-                        skip = 1; why = "tacdb_full";
-                    } else {
-                        sqlite3_stmt *s = prep(f, "INSERT OR IGNORE INTO tacdb_dismiss (rule, a, b, ts)"
-                                                  " VALUES (?1, ?2, ?3, ?4)");
-                        if (s) {
-                            sqlite3_bind_int(s, 1, rn[1] - '0');
-                            sqlite3_bind_text(s, 2, ka, -1, SQLITE_TRANSIENT);
-                            sqlite3_bind_text(s, 3, bb[0] ? kb : "", -1, SQLITE_TRANSIENT);
-                            sqlite3_bind_int64(s, 4, web_jl_int(r, "ts", now_s));
-                            if (sqlite3_step(s) == SQLITE_DONE && sqlite3_changes(f->wr)) merged[3]++;
-                            else { skip = 1; why = "already_here"; }
-                        }
-                        sqlite3_finalize(s);
-                    }
-                }
-            } else if (!why && !strcmp(type, "triage")) {
-                int t = frrs_triage_import(f, r, pass == 1, now_s, rq->peer, &why);
-                if (t == 0 && pass == 1) merged[4]++;
-                else if (t > 0) {
-                    if (pass == 1 || strcmp(why, "already_here")) skip = pass == 1;
-                    if (pass == 0 && !strcmp(why, "already_here")) why = NULL;
-                } else if (t < 0) { why = "store_error"; bad_line = 1; }
-            } else if (!why) {
-                why = "unknown_type";
+            if (!why && !type) why = "unknown_type";
+            if (why) {
+                /* reported below */
+            } else if (!x.saw_head) {
+                if (strcmp(type, "slothweb-tacdb")) why = "no_header";
+                else if (web_jl_int(r, "version", 0) != 1) why = "bad_version";
+                x.saw_head = 1;
+            } else if (!strcmp(type, "slothweb-tacdb")) {
+                why = "second_header";
+            } else if (!strcmp(type, "end")) {
+                x.saw_end = 1;
+                const web_jfield_t *c = web_jl_get(r, "complete");
+                if (web_jl_int(r, "lines", -1) != x.nlines) why = "truncated";
+                else if (!c || c->kind != WEB_J_BOOL || !c->i) why = "export_incomplete";
+            } else {
+                why = imp_check_line(&x, f, r, ln, type, now_s, rq->peer);
             }
-            if (why && (pass == 0 || skip || bad_line)) {
-                if (pass == 0 && !skip) {
-                    bad_line = 1;
-                    if (!bad_why) bad_why = why;
-                }
-                if (pass == 1 || !skip) skipped++;
-                if (nskip_shown < 50 && w.len + 256 < cap) {
-                    web_jw_raw(&w, nskip_shown++ ? ",{\"line\":" : "{\"line\":");
-                    web_jw_int(&w, ln);
-                    web_jw_raw(&w, ",\"why\":");
-                    web_jw_str(&w, why);
-                    web_jw_raw(&w, "}");
-                }
+            if (why) imp_note(&x, ln, why, 1);
+            if (!x.saw_head) break;   /* not this format: nothing more to say */
+        }
+        if (!x.bad_line && !x.saw_head) imp_note(&x, ln + 1, "no_header", 1);
+        else if (!x.bad_line && !x.saw_end) imp_note(&x, ln + 1, "truncated", 1);
+    }
+    if (write && !x.bad_line) {
+        if (begin(f) != 0) {
+            rc = frrs_error(503, "store_busy", NULL, body, cap, len, status);
+            goto out;
+        }
+        x.began = 1;
+        imp_units(&x, f, now_s);
+        imp_platforms(&x, f, now_s);
+        imp_emitters(&x, f, now_s);
+        const char *p = rq->body, *line;
+        size_t n;
+        long long ln = 0;
+        while (!x.bad_line && next_line(&p, end, &ln, &line, &n)) {
+            if (web_jl_parse(line, n, r) != WEB_JL_OK) { imp_note(&x, ln, "bad_line", 1); break; }
+            const char *type = web_jl_str(r, "type");
+            if (!type) continue;
+            if (!strcmp(type, "dismiss")) {
+                imp_dismiss(&x, f, r, ln, now_s);
+            } else if (!strcmp(type, "triage")) {
+                const char *why = NULL;
+                int t = frrs_triage_import(f, r, 1, now_s, rq->peer, &why);
+                if (t == 0) x.merged[4]++;
+                else imp_note(&x, ln, t < 0 ? "store_error" : why, t < 0);
             }
         }
     }
-    int ok = !bad_line && saw_head;
-    if (write && ok) {
-        if (commit(f) != 0) ok = 0;
-    } else if (write && !bad_line) {
-        /* nothing begun */
-    } else if (write && bad_line && saw_head) {
-        /* pass 1 never ran (the check failed) or failed mid-way */
-        sqlite3_exec(f->wr, "ROLLBACK", NULL, NULL, NULL);
+    int ok = !x.bad_line && x.saw_head && x.saw_end;
+    /* Whatever began ends here: committed whole, or rolled back. */
+    if (x.began) {
+        if (ok) { if (commit(f) != 0) ok = 0; }
+        else rollback(f);
     }
-    web_jw_raw(&w, "],\"skipped_n\":"); web_jw_int(&w, skipped);
-    web_jw_raw(&w, ",\"lines\":");      web_jw_int(&w, nlines);
+    web_jw_raw(&w, "],\"skipped_n\":"); web_jw_int(&w, x.skipped);
+    web_jw_raw(&w, ",\"lines\":");      web_jw_int(&w, x.nlines);
     web_jw_raw(&w, ",\"ok\":");         web_jw_raw(&w, ok ? "true" : "false");
     web_jw_raw(&w, ",\"why\":");
-    frrs_str_or_null(&w, !saw_head ? "not a slothweb-tacdb file (no header line)" : bad_why);
-    web_jw_raw(&w, ",\"merged\":{\"units\":"); web_jw_int(&w, write && ok ? merged[0] : 0);
-    web_jw_raw(&w, ",\"platforms\":");  web_jw_int(&w, write && ok ? merged[1] : 0);
-    web_jw_raw(&w, ",\"emitters\":");   web_jw_int(&w, write && ok ? merged[2] : 0);
-    web_jw_raw(&w, ",\"dismissed\":");  web_jw_int(&w, write && ok ? merged[3] : 0);
-    web_jw_raw(&w, ",\"triage\":");     web_jw_int(&w, write && ok ? merged[4] : 0);
+    frrs_str_or_null(&w, x.bad_why && !strcmp(x.bad_why, "no_header")
+                         ? "not a slothweb-tacdb file (its first line is not the header)" : x.bad_why);
+    web_jw_raw(&w, ",\"merged\":{\"units\":"); web_jw_int(&w, write && ok ? x.merged[0] : 0);
+    web_jw_raw(&w, ",\"platforms\":");  web_jw_int(&w, write && ok ? x.merged[1] : 0);
+    web_jw_raw(&w, ",\"emitters\":");   web_jw_int(&w, write && ok ? x.merged[2] : 0);
+    web_jw_raw(&w, ",\"dismissed\":");  web_jw_int(&w, write && ok ? x.merged[3] : 0);
+    web_jw_raw(&w, ",\"triage\":");     web_jw_int(&w, write && ok ? x.merged[4] : 0);
     web_jw_raw(&w, "}}\n");
+    if (!w.overflow) {
+        *len = w.len;
+        *status = ok ? 200 : 400;
+        rc = 0;
+    }
+out:
     free(r);
-    free(um);
-    free(pm);
-    if (w.overflow) return -1;
-    *len = w.len;
-    *status = ok ? 200 : 400;
-    return 0;
+    free(x.u);
+    free(x.p);
+    free(x.e);
+    free(x.um);
+    free(x.pm);
+    return rc;
 }
 
 #else /* !WITH_SQLITE */
