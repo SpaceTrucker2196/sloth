@@ -5707,5 +5707,6 @@ report events.
   units, platforms by nomenclature, sloth's correlations as suggestions,
   JSON Lines export and import. slothweb's first write routes: POST,
   same-origin, bounded, rate limited; `--web-read-only` removes them;
-  `--web-assessments` feeds "follow recommended". [[cli-reference]]
-  gains both flags.
+  `--web-assessments` feeds "follow recommended"; both are tabled in
+  `web/README.md`, not [[cli-reference]], which
+  `tests/test_docs_consistency.c` holds to sloth's own flags.

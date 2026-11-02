@@ -1244,5 +1244,7 @@ covers `web/`.
 - [[alerts]] — the engine and the rules the Alerts page lists.
 - [[capture-scope]] — the Monitor / Hybrid / Local switch and how each datum is placed.
 - [[cli-reference]] — sloth's own flags; slothweb's are in
-  [`web/README.md`](../../web/README.md) (the two of the triage slice,
-  `--web-read-only` and `--web-assessments`, in both).
+  [`web/README.md`](../../web/README.md), the triage slice's
+  `--web-read-only` and `--web-assessments` among them
+  (`tests/test_docs_consistency.c` holds that page to sloth's own
+  `src/main.c`, so slothweb's flags cannot be tabled there).
