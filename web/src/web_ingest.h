@@ -54,6 +54,7 @@ int  web_backoff_next(int cur, int min_ms, int max_ms);
  * discarded through its newline and counted once. */
 struct web_metrics;
 struct web_frrs;
+struct web_ble;
 
 typedef struct {
     size_t     len;
@@ -64,6 +65,8 @@ typedef struct {
     /* Triage and the FRRS record: the ledger's latest-per-emitter
      * records (web_frrs.h), when set. */
     struct web_frrs *frrs;
+    /* The BLE tables (web_ble.h), after the live state, when set. */
+    struct web_ble *ble;
     char       line[WEB_JL_MAX_LINE + 1];
     web_jrec_t rec;
 } web_feed_t;
@@ -96,6 +99,8 @@ void web_ingest_set_metrics(web_ingest_t *g, struct web_metrics *m);
 /* Feed the FRRS ledger (web_frrs.h) as well. Call before
  * web_ingest_start(). */
 void web_ingest_set_frrs(web_ingest_t *g, struct web_frrs *f);
+/* Feed the BLE tables as well. Call before web_ingest_start(). */
+void web_ingest_set_ble(web_ingest_t *g, struct web_ble *b);
 /* Stop and join it; safe to call when it never started. */
 void web_ingest_stop(web_ingest_t *g);
 

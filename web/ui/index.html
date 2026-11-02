@@ -39,7 +39,8 @@
       <li><button type="button" class="go" id="nav-flows"><span class="k">7</span>Flows</button></li>
       <li><button type="button" class="go" id="nav-history"><span class="k">8</span>History</button></li>
       <li><button type="button" class="go" id="nav-lookup"><span class="k">9</span>Lookup</button></li>
-      <li><button type="button" class="go" id="nav-tacdb"><span class="k">0</span>TACDB</button></li>
+      <li><button type="button" class="go" id="nav-ble"><span class="k">0</span>BLE</button></li>
+      <li><button type="button" class="go" id="nav-tacdb">TACDB</button></li>
     </ol></nav>
     <div class="scope">
       <div class="scope-g" id="scope" role="radiogroup" aria-label="capture scope: what the views show, by how it was captured">
@@ -79,6 +80,7 @@
     <span class="pills">
     <span>scope <b id="s-scope">hybrid</b></span>
     <span>devs <b id="s-devs">-</b></span>
+    <span title="BLE advertisers slothweb holds, from sloth's ble_device records (Monitor's; - under Local or with no Bluetooth source)">ble <b id="s-ble">-</b></span>
     <span>alerts <b id="s-alerts">-</b></span>
     <span>anomalies <b id="s-anoms">-</b></span>
     <span>rec/s <b id="s-rate">-</b></span>
@@ -103,6 +105,12 @@
         <div class="label">devices</div>
         <div class="kpi" id="k-devs">-</div>
         <div class="sub" id="k-devs-sub">waiting for a device pass</div>
+      </a>
+      <a class="tile hud" id="t-ble" href="#ble">
+        <div class="label">ble advertisers</div>
+        <div class="kpi" id="k-ble">-</div>
+        <canvas class="spark" id="k-ble-spark" aria-label="sloth's BLE advertiser count, 24 h"></canvas>
+        <div class="sub" id="k-ble-sub">no Bluetooth source yet</div>
       </a>
       <a class="tile hud" id="t-alerts" href="#alerts?state=open">
         <div class="label">open alerts</div>
@@ -208,6 +216,42 @@
     <section class="panel">
       <div class="label">card <span class="sub" id="l-src"></span></div>
       <div id="l-card"></div>
+    </section>
+   </div>
+   <div id="v-ble" hidden>
+    <section class="panel scope-empty" id="b-scope-empty"><div class="label">BLE</div><p id="b-scope-reason">Nothing here under Local. BLE advertisers are the passive Bluetooth receivers' (<code>--bt-monitor</code>, <code>--bt-capture</code>); the host's own interfaces carried none. Switch to Monitor or Hybrid to see them.</p></section>
+    <section class="panel controls" aria-label="ble search">
+      <label>search <input type="search" id="b-q" maxlength="63" spellcheck="false" autocomplete="off" placeholder="02:de:00 or a name or a category"></label>
+      <label>sort <select id="b-sort">
+        <option value="last" selected>last heard</option>
+        <option value="first">first heard</option>
+        <option value="rssi">rssi</option>
+        <option value="dist">distance</option>
+        <option value="adv">advertisements</option>
+        <option value="addr">address</option>
+        <option value="name">name</option>
+        <option value="kind">address kind</option>
+        <option value="best">best rssi</option>
+        <option value="rate">adv/s</option>
+        <option value="mfr">company</option>
+        <option value="watch">watch category</option>
+      </select></label>
+      <span class="sub" id="b-note">sloth's ble_device records, kept by slothweb (slothweb.db; sloth.db has no BLE table); nothing is sent, and sloth never scans, connects or reads GATT: the operator's stack runs the scan</span>
+    </section>
+    <section class="panel">
+      <div class="bleline" id="b-head-line" aria-label="ble advertisers"></div>
+      <div class="bleline d-dim" id="b-rot" hidden></div>
+      <div class="bleline d-dim" id="b-empty" hidden></div>
+      <div class="label">advertisers <span class="sub" id="b-count"></span> <span class="dt-tools" id="b-tools"></span></div>
+      <div class="hscroll" id="b-box"><div class="blerow dhead" id="b-thead"></div><div id="b-rows"></div></div>
+      <button type="button" id="b-more" hidden>more</button>
+      <div class="bleline d-dim" id="b-legend">T: P public R random p/r resolved  H HID  W watchlist  ~ sample  DIST: signal-strength estimate</div>
+      <div class="sub">one row per advertiser as one sensor heard it (the host controller and an Ubertooth hearing the same address are two rows; their counts are never summed). A row is bright for a HID or watchlisted advertiser, as the TUI's [*] view draws it. dist (est) is sloth's own estimate from signal strength (research/papers/rssi-distance-estimation.md: walls and reflections dominate; it is not a location). Click a row for every decoded field; a column header sorts (the server picks the rows), drag its right edge to resize.</div>
+    </section>
+    <section class="panel">
+      <div class="label">ble alerts <span class="sub" id="b-al-count"></span> <span class="dt-tools" id="b-al-tools"></span></div>
+      <div class="hscroll" id="b-al-box"><div class="blarow dhead" id="b-al-head"></div><div id="b-al-rows"></div></div>
+      <div class="sub">sloth's ble_alert findings (BLE_ADV_FLOOD, BLE_HID_UNEXPECTED, BLE_WATCHLIST), standing until the alert.resolve of the same key; resolved ones listed for a day. The same incidents are on the Alerts page as alert records.</div>
     </section>
    </div>
    <div id="v-wifi" hidden>
@@ -617,6 +661,21 @@
     <div class="label">anomalies</div>
     <div class="cards" id="dr-anoms"></div>
     <div id="frrs-drawer"></div>
+  </aside>
+  <aside class="drawer" id="bdrawer" hidden aria-label="ble advertiser">
+    <div class="dr-hd">
+      <span class="d-dim">BLE advertiser</span>
+      <b id="bdr-addr" class="d-normal">-</b>
+      <span class="sub" id="bdr-note"></span>
+      <button type="button" id="bdr-close">close</button>
+    </div>
+    <div id="bdr-body"></div>
+    <div class="label">24 h presence, 15 min cells <span class="sub" id="bdr-strip-note"></span></div>
+    <canvas class="strip" id="bdr-strip" aria-label="this row's presence over the last 24 hours"></canvas>
+    <div class="label">advertising rate <span class="sub" id="bdr-rate-note"></span></div>
+    <canvas class="spark" id="bdr-rate" aria-label="advertisements per second between this row's records"></canvas>
+    <div class="label">ble alerts naming it</div>
+    <div id="bdr-alerts"></div>
   </aside>
   <footer class="foot" aria-label="slothweb">
     <span>sock <b id="sock">-</b></span>

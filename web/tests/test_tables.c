@@ -72,6 +72,8 @@ static void test_page_tables(void) {
         /* the Alerts page, an alert's page and the records view */
         "id: \"alertspage\"", "id: \"alertruns\"", "id: \"alertdev\"", "id: \"rectypes\"",
         "id: \"rectick\"",
+        /* the BLE view (web_ble.h): the advertisers and the findings */
+        "id: \"ble\"", "id: \"blealerts\"",
     };
     for (size_t i = 0; i < sizeof(ID) / sizeof(ID[0]); i++) WT_HAS(p, ID[i]);
     static const char *const EL[] = {
@@ -82,7 +84,8 @@ static void test_page_tables(void) {
         "id=\"h-alerts\"", "id=\"h-flows\"", "id=\"alerts\"", "id=\"ticker\"",
         "id=\"al-head\"", "id=\"al-box\"", "id=\"ad-history-head\"", "id=\"ad-history-box\"",
         "id=\"ad-dev-alerts-head\"", "id=\"ad-dev-alerts-box\"", "id=\"rc-head\"", "id=\"rc-box\"",
-        "id=\"rc-thead\"", "id=\"rc-tbox\"",
+        "id=\"rc-thead\"", "id=\"rc-tbox\"", "id=\"b-thead\"", "id=\"b-box\"", "id=\"b-al-head\"",
+        "id=\"b-al-box\"",
     };
     for (size_t i = 0; i < sizeof(EL) / sizeof(EL[0]); i++) WT_HAS(p, EL[i]);
     WT_LACKS(p, "class=\"drow dhead\" aria-hidden");
@@ -94,6 +97,8 @@ static void test_page_tables(void) {
      * laid over the Overview's (it was, before the two met). */
     WT_LACKS(p, ".alrow { display: grid;");
     WT_HAS(p, "if (dir === \"asc\" || dir === \"desc\") p += \"&dir=\" + dir;");
+    WT_HAS(p, "            (wd ? \"&dir=\" + wd.dir : \"\") + (q ? \"&q=\" + encodeURIComponent(q) : \"\");");
+    WT_HAS(p, "      B.rows = DTB.sort(rows, !j.more);");
     WT_HAS(p, "getJSON(\"/api/wifi/aps?limit=100&sort=\" + encodeURIComponent(sort) + \"&dir=\" + wd.dir)");
     WT_HAS(p, "if (wd) p += \"&dir=\" + wd.dir;");
     WT_HAS(p, ".dt .dt-row { display: grid; grid-template-columns: var(--dt-cols);");

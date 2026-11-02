@@ -75,3 +75,8 @@ data/
 !/web/data/oui36.csv
 !/web/data/iab.csv
 !/web/data/SOURCE.md
+# The Bluetooth SIG assigned-numbers CSVs for slothweb's BLE view
+# (web/data/btsig/SOURCE.md), committed under the same ruling; the
+# subdirectory is re-included whole because nothing but its four files
+# is ever written there.
+!/web/data/btsig/

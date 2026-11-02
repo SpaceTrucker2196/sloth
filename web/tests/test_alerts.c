@@ -60,7 +60,7 @@ static void test_page_carries_the_alert_views(void) {
         "v-alerts", "nav-alerts", "al-rows", "al-count", "al-sev", "al-type", "al-q",
         "al-state", "v-alert", "ad-what", "ad-why", "ad-fix", "ad-evidence",
         "ad-history", "ad-device", "ad-back", "v-records", "rc-rows", "v-health",
-        "hl-rows", "t-tp", "t-devs", "t-alerts", "t-anoms", "t-rate", "t-sensor",
+        "hl-rows", "t-tp", "t-devs", "t-ble", "t-alerts", "t-anoms", "t-rate", "t-sensor",
         "d-filter", "n-filter", "a-focus",
     };
     for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
@@ -652,6 +652,56 @@ static void test_stream_groups_by_key(void) {
     free(l);
 }
 
+/* sloth's three BLE findings (BLE_ADV_FLOOD 87, BLE_HID_UNEXPECTED 88,
+ * BLE_WATCHLIST 89 by include/sloth_alerts.def's order) are alert
+ * lifecycle records like any other: they reach the Alerts page from the
+ * stream, typed by name, and are Monitor's (web_scope.c): listed under
+ * Monitor and Hybrid, none of them under Local. The Local absence seen
+ * red with the three rows of web_scope.c's alert table made L. */
+static void test_ble_findings_are_typed_alerts(void) {
+    web_live_t *l = calloc(1, sizeof(*l));
+    WT_ASSERT(l != NULL);
+    if (!l) return;
+    web_live_init(l, "unix:/t/s.sock");
+    web_live_sock_connected(l, 0);
+    web_feed_t f;
+    memset(&f, 0, sizeof(f));
+    web_feed_reset(&f);
+    static const struct { int ty; const char *name, *key; } A[] = {
+        { 87, "BLE_ADV_FLOOD", "ble_flood:bluetooth-monitor:mfr:004c:07" },
+        { 88, "BLE_HID_UNEXPECTED", "ble_hid_oui:bluetooth-monitor:00:13:37:00:00:01" },
+        { 89, "BLE_WATCHLIST", "ble_watch:bluetooth-monitor:tag" },
+    };
+    char b[2048];
+    size_t o = 0;
+    for (int i = 0; i < 3; i++)
+        o += (size_t)snprintf(b + o, sizeof(b) - o,
+            "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"b1e%d\",\"key\":\"%s\","
+            "\"title\":\"%s\",\"sev\":1,\"ty\":%d,\"count\":1,\"first_detected\":%lld}\n",
+            T - 60 + i, i, A[i].key, A[i].name, A[i].ty, T - 60 + i);
+    web_feed_bytes(&f, l, b, o, 1000);
+    web_health_t h;
+    memset(&h, 0, sizeof(h));
+    h.wall_s = T;
+    h.live = l;
+    char want[128];
+    WT_EQ(route(&h, "/api/alerts", ""), 200);
+    WT_EQ(rows_of(body_of(g_out)), 3);
+    for (int i = 0; i < 3; i++) {
+        snprintf(want, sizeof(want), "\"type\":%d,\"type_name\":\"%s\"", A[i].ty, A[i].name);
+        WT_HAS(body_of(g_out), want);
+    }
+    WT_EQ(route(&h, "/api/alerts", "type=BLE_HID_UNEXPECTED"), 200);
+    WT_EQ(rows_of(body_of(g_out)), 1);
+    WT_EQ(route(&h, "/api/alerts", "scope=monitor"), 200);
+    WT_EQ(rows_of(body_of(g_out)), 3);
+    WT_EQ(route(&h, "/api/alerts", "scope=local"), 200);
+    WT_EQ(rows_of(body_of(g_out)), 0);
+    WT_LACKS(body_of(g_out), "BLE_");
+    web_live_destroy(l);
+    free(l);
+}
+
 /* History's alerts in the range and the drawer's alerts naming a
  * device, collapsed the same way, each with the detail page's id.
  * Seen red with the History statement grouping by rid in place of key. */
@@ -1107,6 +1157,7 @@ void run_alerts_tests(void) {
     WT_RUN(test_key_and_withheld_detail_never_served);
     WT_RUN(test_incident_ids_never_served);
     WT_RUN(test_stream_groups_by_key);
+    WT_RUN(test_ble_findings_are_typed_alerts);
     WT_RUN(test_history_and_drawer_collapse);
     WT_RUN(test_every_type_renders);
     WT_RUN(test_lists_stay_bounded);

@@ -380,6 +380,22 @@ a.tile:focus-visible { outline-offset: 2px; }
 .src .url, .src .path { color: var(--muted); font-size: 11px; }
 .alerts li.go, .lst li.go { cursor: pointer; }
 .alerts li.go:hover, .lst li.go:hover { background: var(--tint); }
+/* ── the BLE view (web_ble.h): the TUI's [*] view ──────────────────── */
+/* The header, rotation-hints, empty-state and legend lines are the
+ * TUI's lines: monospace runs, their spaces kept. A row is one colour
+ * (d-bright or d-normal on the row, inherited by every cell); no
+ * swatch, no hash hue, no monitor ground. */
+.bleline { font-size: 12px; white-space: pre-wrap; margin: 2px 0 6px; }
+.bleline div { white-space: pre-wrap; }
+.blerow { font-size: 12px; padding: 2px 0 2px 4px; border-left: 3px solid transparent; border-bottom: 1px dotted var(--rule); cursor: pointer; }
+.blerow.dhead { cursor: default; }
+.blerow:not(.dhead):hover { background: var(--tint); }
+.blerow.on { border-left-color: var(--signal); }
+.blerow:focus-visible { outline-offset: -1px; }
+.blerow > span { color: inherit; }
+.blarow { font-size: 12px; padding: 2px 0 2px 4px; border-left: 3px solid transparent; border-bottom: 1px dotted var(--rule); }
+.blarow.open { border-left-color: var(--sev-warn); }
+#bdrawer canvas.spark { height: 48px; }
 .rcrow { font-size: 12px; padding: 2px 4px; border-bottom: 1px dotted var(--rule); cursor: pointer; }
 .rcrow.dhead { cursor: default; }
 .rcrow.on { background: var(--tint); }

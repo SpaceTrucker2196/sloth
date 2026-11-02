@@ -337,6 +337,24 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
     web_jw_raw(&w, ",");
     tsdb_health(h->tsdb, &w);
     analysis_health(h->anomaly, &w);
+    /* The BLE tables (web_ble.h), only when slothweb keeps them: the
+     * M0 shape stands without. */
+    if (h->ble) {
+        web_jw_raw(&w, ",\"ble\":");
+        web_ble_health_json(h->ble, &w);
+        if (h->tsdb && h->tsdb->store && h->tsdb->store->rd) {
+            web_store_stats_t bs;
+            web_store_stats(h->tsdb->store, &bs);
+            web_jw_raw(&w, ",\"ble_store\":{\"rows\":");  web_jw_int(&w, bs.ble_rows);
+            web_jw_raw(&w, ",\"alert_rows\":");            web_jw_int(&w, bs.ble_alert_rows);
+            web_jw_raw(&w, ",\"batches\":");               web_jw_int(&w, (long long)bs.ble_batches);
+            web_jw_raw(&w, ",\"dropped_expired\":");       web_jw_int(&w, (long long)bs.ble_dropped_expired);
+            web_jw_raw(&w, ",\"dropped_cap\":");           web_jw_int(&w, (long long)bs.ble_dropped_cap);
+            web_jw_raw(&w, "}");
+        } else {
+            web_jw_raw(&w, ",\"ble_store\":null");
+        }
+    }
     web_jw_raw(&w, ",\"sse_clients\":");
     web_jw_int(&w, h->sse_clients);
     web_jw_raw(&w, ",\"tick_seq\":");
@@ -382,6 +400,21 @@ static size_t live_body(const web_health_t *h, char *out, size_t cap) {
             if (k < 0 || n - 2 + (size_t)k + 1 > cap) return 0;
             memcpy(out + n - 2, t, (size_t)k + 1);
             n = n - 2 + (size_t)k;
+        }
+        /* The BLE receivers' state (web_ble.h), Monitor's and Hybrid's:
+         * the Overview's BLE fact and the Health view's Bluetooth block.
+         * Under Local the member is null, as the view is out of scope. */
+        if (n >= 2 && h->ble && out[n - 2] == '}' && out[n - 1] == '\n') {
+            char t[1024];
+            web_jw_t w;
+            web_jw_init(&w, t, sizeof(t));
+            web_jw_raw(&w, ",\"ble\":");
+            if (h->sc && h->sc->scope == WEB_SCOPE_LOCAL) web_jw_raw(&w, "null");
+            else web_ble_live_json(h->ble, &w, h->wall_s);
+            web_jw_raw(&w, "}\n");
+            if (w.overflow || n - 2 + w.len + 1 > cap) return 0;
+            memcpy(out + n - 2, t, w.len + 1);
+            n = n - 2 + w.len;
         }
         return n;
     }
@@ -683,6 +716,55 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
             web_jw_init(&w, body, cap);
             web_jw_raw(&w, "{\"out_of_scope\":true,\"reason\":");
             web_jw_str(&w, none_here);
+            web_jw_raw(&w, "}\n");
+            bl = w.overflow ? 0 : w.len;
+        }
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+enum { BLE_DEVICES, BLE_ALERTS, BLE_DEVICE };
+
+/* /api/ble, /api/ble/alerts, /api/ble/{addr} (web_ble.h): slothweb's
+ * own BLE tables. The receivers are passive radio, so Monitor and
+ * Hybrid serve them and Local is a view that holds nothing of them:
+ * said once, as route_m5()'s none_here says it, the query still checked
+ * first. */
+static int route_ble(const web_req_t *rq, const web_health_t *h, int which,
+                     const char *arg, char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        if (which == BLE_DEVICES)
+            rc = web_ble_devices_route(h->ble, rq->query, h->wall_s, none_here, body, cap,
+                                       &bl, &status);
+        else if (which == BLE_ALERTS)
+            rc = web_ble_alerts_route(h->ble, rq->query, h->wall_s, none_here, body, cap,
+                                      &bl, &status);
+        else
+            rc = web_ble_device_route(h->ble, arg, rq->query, h->wall_s, none_here, body,
+                                      cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) {
+            web_jw_t w;
+            web_jw_init(&w, body, cap);
+            web_jw_raw(&w, "{\"out_of_scope\":true,\"reason\":");
+            web_jw_str(&w, "BLE advertisers are the passive Bluetooth receivers' "
+                           "(--bt-monitor, --bt-capture); the host's own interfaces "
+                           "carried none");
             web_jw_raw(&w, "}\n");
             bl = w.overflow ? 0 : w.len;
         }
@@ -1027,6 +1109,13 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_alerts(rq, h, 1, out, outsz, r);
         if (!strncmp(rq->path, "/api/frrs/", 10) && web_frrs_path(rq->path))
             return route_frrs(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/ble"))
+            return route_ble(rq, h, BLE_DEVICES, NULL, out, outsz, r);
+        if (!strcmp(rq->path, "/api/ble/alerts"))
+            return route_ble(rq, h, BLE_ALERTS, NULL, out, outsz, r);
+        if (!strncmp(rq->path, "/api/ble/", 9) && rq->path[9] &&
+            !strchr(rq->path + 9, '/'))
+            return route_ble(rq, h, BLE_DEVICE, rq->path + 9, out, outsz, r);
         /* Without --web-allow-sql neither exists: a 404 like any path. */
         if (h->sql && h->sql->enabled) {
             if (!strcmp(rq->path, "/api/query"))

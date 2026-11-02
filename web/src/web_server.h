@@ -124,6 +124,7 @@ typedef struct {
     web_anomaly_t  *anomaly;  /* NULL: no anomaly engine; set before run */
     const web_m4_t *m4;       /* NULL: no Devices or Lookup; set before run */
     web_sqlbox_t   *sql;      /* NULL: no SQL box; set before run */
+    web_ble_t      *ble;      /* NULL: no BLE tables; set before run */
     int             sql_conn; /* the slot waiting on the box, or -1 */
     int             import_conn;  /* the slot reading an import, or -1 */
     unsigned long long rec_sent;  /* newest ticker record broadcast */
@@ -167,6 +168,8 @@ void     web_server_set_anomaly(web_server_t *s, web_anomaly_t *anomaly);
 void     web_server_set_m4(web_server_t *s, const web_m4_t *m4);
 /* Attach the SQL box (web_sqlbox.h), started. Same rule. */
 void     web_server_set_sqlbox(web_server_t *s, web_sqlbox_t *b);
+/* The BLE tables (web_ble.h) the routes answer from; NULL for none. */
+void     web_server_set_ble(web_server_t *s, web_ble_t *b);
 
 void     web_server_stats(web_server_t *s, web_stats_t *out);
 uint16_t web_server_port(const web_server_t *s);

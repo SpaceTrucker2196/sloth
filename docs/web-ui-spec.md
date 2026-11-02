@@ -278,6 +278,9 @@ All routes are `GET`. Any other method returns `405`. Responses are JSON unless 
 | `/api/lookup?mac=` and `/api/lookup?ip=` | vendor, passive names with their source and time, and active PTR only if enabled |
 | `/api/search?q=` | one box that searches mac, ip, hostname, vendor, ssid, alert title; returns typed hits |
 | `/api/query?sql=` | **disabled by default.** With `--web-allow-sql`, runs a read-only `SELECT` against `sloth.db` with `sqlite3_set_authorizer` denying everything except `SQLITE_READ` and `SQLITE_SELECT`, a 5 s timeout, and a 10,000 row cap. For the operator's own recipes from `sqlite-schema.md`. |
+| `/api/ble?sort=&dir=&limit=&offset=&q=` | the BLE advertisers slothweb keeps from the stream's `ble_device` records (2026-11-01; §8.13); `sloth.db` has no BLE table |
+| `/api/ble/alerts` | the `ble_alert` findings, standing first |
+| `/api/ble/{addr}?type=&iface=` | one advertiser's rows (one per sensor), its rate points, its 24 h presence strip and the findings naming it |
 | `/events` | SSE stream (see below) |
 
 ### 7.1 SSE events
@@ -443,6 +446,10 @@ One input. Paste a mac or an ip. Output is a card: vendor (with the OUI block an
 | Signal orange | selection, live alert, active-query label | one at a time; if two things are orange, one is wrong |
 
 Every colour meaning is also carried by a glyph or a word, so the page still reads in greyscale.
+
+### 8.13 View: BLE (added 2026-11-01)
+
+The TUI's `[*]` view, at data and colour parity. One table, one row per advertiser as one sensor heard it (the host controller and an Ubertooth hearing the same address are two rows; their counts are never summed), the TUI's columns and cells (address, T, sensor, rssi, dist (est), adv, age, hws, advertises) plus the address in words (random static, RPA, NRPA), the Bluetooth SIG's names for the company, service and appearance, the best RSSI, the rate between records, first heard, the PDUs heard and the watch category; a row is one colour, `--tui-bright` for a HID or watchlisted advertiser and `--tui-normal` otherwise, with no swatch, no hash hue, no RSSI heat and no monitor ground (the TUI puts no BLE row on `CP_MON_ROW`). Above it the TUI's header line and, with `--ble-rotation-hints`, its rotation-hints block verbatim (the estimate is not on the stream, only the hint count as a decade band); below it the TUI's legend and the findings (`ble_alert`), standing first. A click opens a drawer in the TUI detail's order, then the PDUs heard, the PHYs and SID, a 24 h presence strip of quarter hours (G5), the row's advertising rate between its records (G1) and the `hid_oui` findings naming the address. Served from slothweb's own tables (`web/src/web_ble.h`, persisted in slothweb.db v6): `sloth.db` has no BLE table. Monitor's: out of scope under Local, saying why. Hotkey `0`. The Health view gains a `bluetooth` block (the `sensor_health` members), the Overview a `ble advertisers` tile, the strip a `ble` pill. Full description: `web/README.md` (BLE).
 
 ## 9. Search and lookup tools
 

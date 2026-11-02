@@ -889,7 +889,7 @@
     c.addEventListener(c.tagName === "SELECT" ? "change" : "input", function () { ctlSave(id); });
   }
   ["n-win", "a-win", "d-q", "d-sort", "l-q", "w-metric", "w-win", "w-sort", "al-state", "al-sev",
-   "al-q", "al-win", "f-win", "f-sort", "f-ip", "q-sql"].forEach(keepCtl);
+   "al-q", "al-win", "f-win", "f-sort", "f-ip", "q-sql", "b-q", "b-sort"].forEach(keepCtl);
   // Filled from the server's answer, so put back where it is filled.
   $("al-type").addEventListener("change", function () { ctlSave("al-type"); });
   // Each drill-down bar's "show all" (its href the bare view).
@@ -1109,7 +1109,7 @@
     return tx;
   }
 
-  function sensor(s) {
+  function sensor(s, b) {
     if (!s) return;
     var bits = [];
     if (num(s.age_s)) bits.push("report " + dur(s.age_s) + " ago");
@@ -1118,6 +1118,10 @@
     if (s.monitor_iface) bits.push("monitor " + s.monitor_iface +
                                    (s.monitor_running ? " running" : " stopped"));
     if (s.scope_not_enforced) bits.push("scope " + s.scope);
+    // The Bluetooth source (web_ble.h): its stream's state, when there is one.
+    if (b && b.btmon_iface) bits.push("btmon " + b.btmon_iface +
+                                      (b.btmon_open ? (b.btmon_running ? " running" : " stopped") : " not open") +
+                                      (b.btmon_exit && b.btmon_exit !== "none" ? " (" + b.btmon_exit + ")" : ""));
     set("k-sensor-sub", bits.length ? bits.join(", ") : "no sensor_health yet");
   }
 
@@ -1147,7 +1151,11 @@
           set("s-anoms", l.anomalies_open);
         }
         alerts(l.alerts);
-        sensor(l.sensor);
+        sensor(l.sensor, l.ble);
+        // The strip's BLE fact: the advertisers slothweb holds, Monitor's
+        // and Hybrid's; a dash under Local, or with no Bluetooth source.
+        set("s-ble", l.ble && l.ble.configured && num(l.ble.rows) ? l.ble.rows : "-");
+        bleTile(l.ble);
         if (first && l.recent) {
           for (var i = 0; i < l.recent.length; i++) addRecord(l.recent[i]);
         }
@@ -1238,7 +1246,7 @@
 
   // ── views ─────────────────────────────────────────────────────────
   var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "flows", "history",
-               "lookup", "tacdb"];
+               "lookup", "tacdb", "ble"];
   // The views with a tab, and the drill-downs: the Alerts page (6),
   // an alert's page, the record ticker by type, the sensor's health.
   var NAV = VIEWS.concat(["alerts"]);
@@ -1248,7 +1256,8 @@
   // The parameters each view takes from the address, and nothing else:
   // what a drill-down link (an Overview tile) or a reload hands it.
   var PARAMS = { "alerts": ["state", "sev", "type", "q", "triage"], "alert": ["id"], "tacdb": ["id"],
-                 "devices": ["q"], "anomalies": ["state"], "activity": ["focus"] };
+                 "devices": ["q"], "anomalies": ["state"], "activity": ["focus"],
+                 "ble": ["q"] };
   var view = "overview", VP = {};
   function hashQuery(v, p) {
     var keys = PARAMS[v] || [], out = [];
@@ -1279,6 +1288,7 @@
     if (v === "flows") flows();
     if (v === "history") historyView();
     if (v === "lookup") $("l-q").focus();
+    if (v === "ble") bleView();
     if (v === "alerts") alertsView();
     if (v === "alert") alertView();
     if (v === "records") recordsView();
@@ -1359,6 +1369,7 @@
   $("nav-history").addEventListener("click", function () { show("history"); });
   $("nav-lookup").addEventListener("click", function () { show("lookup"); });
   $("nav-alerts").addEventListener("click", function () { show("alerts"); });
+  $("nav-ble").addEventListener("click", function () { show("ble"); });
 
   // ── the theme toggle ──────────────────────────────────────────────
   // Light or dark on :root's data-theme, the choice kept in this
@@ -1439,6 +1450,8 @@
     $("v-wifi").classList.toggle("scoped-out", SCOPE === "local");
     $("v-wifi").classList.toggle("card-out", SCOPE === "monitor");
     $("v-flows").classList.toggle("scoped-out", SCOPE === "monitor");
+    // The BLE receivers are passive radio: Monitor's, not Local's.
+    $("v-ble").classList.toggle("scoped-out", SCOPE === "local");
     scopeBar();
     scopeView(view);
   }
@@ -1468,6 +1481,7 @@
     show(view, VP);
     if (view === "lookup") lookup();
     if (!$("drawer").hidden && D.sel) openDrawer(D.sel);
+    closeBleDrawer();
   }
   SCOPES.forEach(function (s, i) {
     var b = $("sc-" + s);
@@ -1496,14 +1510,15 @@
   if (prefGet("collapsed") === true) $("app").classList.add("collapsed");
 
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") { closeDrawer(); scopeLegend(false); return; }
+    if (e.key === "Escape") { closeDrawer(); closeBleDrawer(); scopeLegend(false); return; }
     // A focused row or card opens as a click would.
     var t = e.target;
     if ((e.key === "Enter" || e.key === " ") && t && t.tabIndex === 0 && t.classList &&
         (t.classList.contains("drow") || t.classList.contains("hrow") ||
          t.classList.contains("frow") || t.classList.contains("card") ||
          t.classList.contains("anrow") || t.classList.contains("alprow") ||
-         t.classList.contains("rcrow") || t.classList.contains("go"))) {
+         t.classList.contains("rcrow") || t.classList.contains("blerow") ||
+         t.classList.contains("go"))) {
       e.preventDefault();
       t.click();
       return;
@@ -1519,6 +1534,9 @@
     if (e.key === "7") show("flows");
     if (e.key === "8") show("history");
     if (e.key === "9") show("lookup");
+    // The TUI's [*] view: every digit 1-9 is taken and * is no browser
+    // hotkey, so BLE is 0.
+    if (e.key === "0") show("ble");
     // §3: search with /.
     if (e.key === "/") { e.preventDefault(); show("devices"); $("d-q").focus(); }
   });
@@ -1868,8 +1886,48 @@
   // recently; devices, alerts and anomalies are counts with no stored
   // series behind them, so only throughput has a band.
   var O = { key: null, gen: 0 };
+  // The BLE tile (web_ble.h): the advertisers slothweb holds and what
+  // the header line of the TUI's [*] counts, from /api/live's ble
+  // member (null under Local: the receivers are passive radio, so the
+  // tile says so rather than showing a zero).
+  function bleTile(b) {
+    if (SCOPE === "local") {
+      set("k-ble", "-");
+      set("k-ble-sub", "not Local's: the BLE receivers are passive radio (Monitor)");
+      return;
+    }
+    if (!b || !b.configured) {
+      set("k-ble", "-");
+      set("k-ble-sub", b && b.seen ? "no Bluetooth source configured (--bt-monitor, --bt-capture)"
+                                   : "no Bluetooth source yet");
+      return;
+    }
+    set("k-ble", num(b.rows) ? b.rows : "-");
+    var bits = [];
+    if (num(b.hid) && b.hid > 0) bits.push(b.hid + " HID");
+    if (num(b.watch) && b.watch > 0) bits.push(b.watch + " watchlisted");
+    if (num(b.standing) && b.standing > 0) bits.push(b.standing + " standing finding" + (b.standing === 1 ? "" : "s"));
+    bits.push((b.btmon_iface || b.btcap_iface) + (b.ble_scan_mode && b.ble_scan_mode !== "unknown" ? ", scan " + b.ble_scan_mode : ""));
+    set("k-ble-sub", bits.join(", "));
+  }
+  // ble.devices (sloth's own table size, from sensor_health), 24 h, as
+  // the tile's G1; Monitor's metric, so none under Local.
+  function bleSpark() {
+    var sp = $("k-ble-spark");
+    if (SCOPE === "local") { glyph.paint(sp, glyph.g1([], null, { w: sp.clientWidth, h: sp.clientHeight }), tok); return; }
+    var now = Math.floor(Date.now() / 1000);
+    var tier = A.storeOn ? "minute" : "fine";
+    var step = tier === "minute" ? 60 : 10;
+    var to = now - now % step + step, from = to - 86400;
+    series("ble.devices", "", tier, from, to).then(function (s) {
+      var gw = glyph.win(s.points, from, to);
+      glyph.paint(sp, glyph.g1(s.points, null, { w: sp.clientWidth, h: sp.clientHeight,
+                                                 from: gw.from, to: gw.to, step: s.step }), tok);
+    }).catch(function () {});
+  }
   function overview() {
     var gen = ++O.gen;
+    bleSpark();
     getJSON("/api/keys?metric=iface.rx_rate").then(function (j) {
       var ks = j.keys || [];
       // The keys are the scope's (the server's /api/keys): under
@@ -4641,6 +4699,376 @@
     }).catch(function (e) { set("rc-note", errText(e.message)); });
   }
 
+  // ── BLE: the TUI's [*] view (web_ble.h, src/views/ble.c) ──────────
+  // One row per advertiser as one sensor heard it, from /api/ble. The
+  // cells are the TUI's strings (type_ch, count_cell, age_cell, the
+  // flags, summary_cell, rf_dist_cell's full form), and a row is one
+  // colour: CP_BRIGHT for a HID or watchlisted advertiser, CP_NORMAL
+  // otherwise. No CP_DIM on the address, no hash hue on the name, no
+  // heat on the RSSI, and no monitor ground: the TUI's BLE view puts no
+  // row on it (web/tests/test_tui_colors.c pins MON_TYPES to the 802.11
+  // emitters). The header and legend lines are CP_DIM.
+  var B = { gen: 0, rows: [], alerts: [], timer: 0, sel: null, more: false };
+  var BLE_SORTS = { "last": 1, "first": 1, "rssi": 1, "dist": 1, "adv": 1, "addr": 1, "name": 1,
+                    "kind": 1, "best": 1, "rate": 1, "hws": 1, "pdus": 1, "watch": 1, "mfr": 1,
+                    "type": 1, "iface": 1 };
+  function bv(k) { return function (d) { return d[k]; }; }
+  // count_cell(): whole below 100000, then k, then M.
+  function bleCount(c) {
+    if (!num(c)) return "-";
+    if (c < 100000) return String(c);
+    if (c < 100000000) return Math.floor(c / 1000) + "k";
+    return Math.floor(c / 1000000) + "M";
+  }
+  // age_cell(): s, m, h, d; "-" for a zero clock.
+  function bleAge(last, now) {
+    if (!num(last) || last === 0) return "-";
+    var a = Math.max(0, now - last);
+    if (a < 60) return a + "s";
+    if (a < 3600) return Math.floor(a / 60) + "m";
+    if (a < 86400) return Math.floor(a / 3600) + "h";
+    return Math.floor(a / 86400) + "d";
+  }
+  function hex4(v) { var s = v.toString(16); while (s.length < 4) s = "0" + s; return s; }
+  function hex2(v) { var s = v.toString(16); return s.length < 2 ? "0" + s : s; }
+  // summary_cell() after the name: most specific first.
+  function bleSummaryRest(d) {
+    var p = [];
+    if (num(d.mfr_id)) p.push("mfr " + hex4(d.mfr_id) + (num(d.mfr_subtype) ? "/" + hex2(d.mfr_subtype) : ""));
+    if (num(d.uuid16)) p.push("svc " + hex4(d.uuid16));
+    if (num(d.svc_data_uuid16)) p.push("sd " + hex4(d.svc_data_uuid16));
+    if (num(d.appearance)) p.push("app " + hex4(d.appearance));
+    return p.join(" ");
+  }
+  // flags_cell(): H hid, W watchlist, ~ sample.
+  function bleHws(d) {
+    return (d.hid ? "H" : "-") + (d.watch_category ? "W" : "-") + (d.sampled ? "~" : "-");
+  }
+  // The local name in its display form, quoted as the TUI quotes it,
+  // with the non-printable marker when the server escaped anything; no
+  // colour of its own (the row's).
+  function bleName(d) {
+    var sp = el("span", "", "\"" + d.name + "\"");
+    if (d.name_np !== true) return sp;
+    var w = el("span", "ssid-np");
+    w.appendChild(sp);
+    w.appendChild(el("span", "npm", "non-printable"));
+    w.title = "bytes that are not printable UTF-8 are shown as \\xNN";
+    return w;
+  }
+  function bleSigNames(d) {
+    var t = [];
+    if (d.mfr_name) t.push(d.mfr_name);
+    if (d.uuid16_name) t.push(d.uuid16_name);
+    if (d.svc_data_name && d.svc_data_name !== d.uuid16_name) t.push(d.svc_data_name);
+    if (d.appearance_name) t.push(d.appearance_name);
+    return t.join("; ");
+  }
+  function bleIsHidApp(v) { return num(v) && v >= 0x03c0 && v <= 0x03ca; }
+  var DTB = DataTable({ id: "ble", label: "ble advertisers", box: $("b-box"), head: $("b-thead"),
+    reset: $("b-tools"), server: function () { bleLoad(); }, cols: [
+      { k: "ad", label: "address", w: 19, min: 8, type: "mac", srv: "addr", val: bv("addr") },
+      { k: "ty", label: "T", w: 3, min: 1, type: "num", srv: "type", val: bv("addr_type") },
+      // The address in words, which T alone does not say for a random
+      // address: static, RPA (rotates), NRPA (Core v5.4 Vol 6 Part B §1.3.2).
+      { k: "ak", label: "kind", w: 14, min: 6, type: "text", srv: "kind", val: bv("addr_kind") },
+      { k: "if", label: "sensor", w: 17, min: 6, type: "text", srv: "iface", val: bv("iface") },
+      { k: "rs", label: "rssi", w: 5, min: 3, num: true, type: "num", srv: "rssi", val: bv("rssi") },
+      { k: "di", label: "dist (est)", w: 13, min: 6, type: "num", srv: "dist",
+        val: function (d) { return d.est ? d.est.m : null; } },
+      { k: "ac", label: "adv", w: 7, min: 3, num: true, type: "num", srv: "adv", val: bv("adv_count") },
+      { k: "ag", label: "age", w: 5, min: 3, type: "time", srv: "last", val: bv("last_seen") },
+      { k: "hw", label: "hws", w: 4, min: 3, type: "text", srv: "hws", val: function (d) { return bleHws(d); } },
+      { k: "sm", label: "advertises", w: 28, min: 12, flex: true, type: "text", srv: "name", val: bv("name") },
+      { k: "nm", label: "sig names", w: 24, min: 8, flex: true, type: "text", srv: "mfr", val: function (d) { return bleSigNames(d); } },
+      // The columns the TUI's detail shows and its table does not (owner
+      // request 2026-10-27): the best RSSI, the rate between records,
+      // first heard, the PDUs heard, the watch category.
+      { k: "rb", label: "best", w: 5, min: 3, num: true, type: "num", srv: "best", val: bv("rssi_best") },
+      { k: "rt", label: "adv/s", w: 6, min: 3, num: true, type: "num", srv: "rate", val: bv("adv_rate") },
+      { k: "fs", label: "first", w: 11, min: 5, type: "time", srv: "first", val: bv("first_seen") },
+      { k: "pd", label: "pdus", w: 18, min: 6, type: "text", srv: "pdus", val: function (d) { return (d.pdus || []).join(" "); } },
+      { k: "wc", label: "watch", w: 10, min: 5, type: "text", srv: "watch", val: bv("watch_category") }
+    ] });
+  function bleRow(d, now) {
+    var sel = B.sel && B.sel.addr === d.addr && B.sel.type === d.addr_type && B.sel.iface === d.iface;
+    var cls = d.hid || d.watch_category ? "d-bright" : "d-normal";
+    var row = el("div", "blerow dt-row " + cls + (sel ? " on" : ""));
+    row.appendChild(el("span", "c-ad", d.addr));
+    var ty = el("span", "c-ty", d.type);
+    ty.title = d.addr_kind;
+    row.appendChild(ty);
+    row.appendChild(el("span", "c-ak", d.addr_kind));
+    row.appendChild(el("span", "c-if", d.iface));
+    row.appendChild(el("span", "c-rs n", num(d.rssi) ? String(d.rssi) : "-"));
+    var di = el("span", "c-di", d.est ? d.est.cell : "-");
+    di.title = d.est ? d.est.describe + "; sloth's signal-strength estimate (research/papers/rssi-distance-estimation.md): walls and reflections dominate, and it is not a location"
+                     : "no estimate" + (!num(d.tx_power) ? " (no tx power announced; sloth assumes 0 dBm once it has samples)" : "");
+    row.appendChild(di);
+    row.appendChild(el("span", "c-ac n", bleCount(d.adv_count)));
+    row.appendChild(el("span", "c-ag", bleAge(d.last_seen, now)));
+    row.appendChild(el("span", "c-hw", bleHws(d)));
+    var sm = el("span", "c-sm");
+    var rest = bleSummaryRest(d);
+    if (d.name !== null && d.name !== undefined) sm.appendChild(bleName(d));
+    if (rest) sm.appendChild(document.createTextNode((d.name !== null && d.name !== undefined ? " " : "") + rest));
+    if ((d.name === null || d.name === undefined) && !rest) sm.textContent = "-";
+    row.appendChild(sm);
+    row.appendChild(el("span", "c-nm", bleSigNames(d)));
+    row.appendChild(el("span", "c-rb n", num(d.rssi_best) ? String(d.rssi_best) : "-"));
+    row.appendChild(el("span", "c-rt n", num(d.adv_rate) ? d.adv_rate.toFixed(2) : "-"));
+    row.appendChild(el("span", "c-fs", shortStamp(d.first_seen)));
+    row.appendChild(el("span", "c-pd", (d.pdus || []).join(" ")));
+    row.appendChild(el("span", "c-wc", d.watch_category || "-"));
+    row.tabIndex = 0;
+    row.addEventListener("click", function () { openBleDrawer(d.addr, d.addr_type, d.iface); });
+    return row;
+  }
+  // The TUI's header line: the count bright; HID and watchlist at
+  // tui_heat(0.5) when above zero, dim otherwise; the rest dim.
+  function bleHeadLine(j) {
+    var line = clear("b-head-line");
+    line.appendChild(el("span", "d-normal", "BLE advertisers: "));
+    line.appendChild(el("span", "d-bright", String(j.total)));
+    line.appendChild(el("span", "d-normal", "  HID: "));
+    line.appendChild(el("span", j.hid > 0 ? "h2" : "d-dim", String(j.hid)));
+    line.appendChild(el("span", "d-normal", "  watchlist: "));
+    line.appendChild(el("span", j.watch > 0 ? "h2" : "d-dim", String(j.watch)));
+    line.appendChild(el("span", "d-dim", "  flood keys: " + j.flood_keys));
+  }
+  // The TUI's [*] rotation-hints block, with --ble-rotation-hints on:
+  // its sentences, verbatim. The estimate itself (ble_rot_distinct())
+  // is not on the stream, only the hint count as a decade band.
+  function bleRotBlock(j) {
+    var box = $("b-rot"), rot = j.sensor && j.sensor.rot;
+    box.hidden = !rot || !j.total;
+    if (!rot || !j.total) return;
+    clear("b-rot");
+    var n = j.total;
+    box.appendChild(el("div", "", "rotation hints (internal): est. advertisers not on the stream (hints " + rot.hints +
+                       ", poisoned " + rot.poisoned + ") for " + n + " address" + (n === 1 ? "" : "es") +
+                       " - possible address rotation;"));
+    box.appendChild(el("div", "", "  corroborates, does not confirm, and identifies no device or person."));
+    box.appendChild(el("div", "", "  These records alone are not grounds for personnel action or physical identification."));
+    box.appendChild(el("div", "", "  Links cover the recent window only: an address out of it counts on its own."));
+    if (rot.hints !== "0")
+      box.appendChild(el("div", "", "  May include timing-only hints. Weak: another advertiser leaving and arriving reads the same."));
+  }
+  var DTBA = DataTable({ id: "blealerts", label: "ble alerts", box: $("b-al-box"), head: $("b-al-head"),
+    reset: $("b-al-tools"), redraw: function () { bleAlertsDraw(); }, cols: [
+      { k: "kd", label: "kind", w: 11, min: 4, type: "text", val: bv("kind") },
+      { k: "al", label: "alert", w: 20, min: 6, type: "text", val: bv("alert") },
+      { k: "if", label: "sensor", w: 17, min: 6, type: "text", val: bv("iface") },
+      { k: "dt", label: "finding", w: 40, min: 12, flex: true, type: "text", val: function (a) { return bleAlertText(a); } },
+      { k: "rs", label: "rssi", w: 5, min: 3, num: true, type: "num", val: bv("median_rssi") },
+      { k: "fs", label: "first", w: 11, type: "time", val: bv("first_ts") },
+      { k: "ls", label: "last", w: 11, type: "time", val: bv("last_ts") },
+      { k: "st", label: "state", w: 9, min: 5, type: "text", val: function (a) { return a.standing ? "standing" : "resolved"; } }
+    ] });
+  function bleAlertText(a) {
+    if (a.kind === "adv_flood")
+      return a.family + " " + hex4(a.id) + (num(a.subtype) ? "/" + hex2(a.subtype) : "") + " " + a.adv_type + ": " +
+             a.distinct_addrs + (a.distinct_capped ? "+" : "") + " addrs (" + a.fresh_addrs + " fresh), " +
+             a.total_adv + " adv at " + a.rate + "/s in " + a.window_s + " s (" + a.window + " window)";
+    if (a.kind === "hid_oui")
+      return a.addr + " (" + a.addr_type + ") " + a.oui_table + " OUI, HID " +
+             ((a.hid & 1) ? "appearance" : "") + ((a.hid & 1) && (a.hid & 2) ? ", " : "") + ((a.hid & 2) ? "service 0x1812" : "") +
+             (num(a.appearance) ? ", app " + hex4(a.appearance) : "");
+    if (a.kind === "hid_rotate")
+      return a.addrs + " random addresses in " + a.window_s + " s, appearance " + (num(a.appearance) ? hex4(a.appearance) : "-");
+    if (a.kind === "watchlist")
+      return (a.category || "?") + " - a category, never an identity: " + a.addrs + " addresses in " + a.window_s + " s";
+    return "";
+  }
+  function bleAlertRow(a) {
+    var row = el("div", "blarow dt-row" + (a.standing ? " open" : ""));
+    row.appendChild(el("span", "c-kd d-normal", a.kind));
+    row.appendChild(el("span", "c-al " + (a.standing ? "sev1" : "d-dim"), a.alert));
+    row.appendChild(el("span", "c-if d-normal", a.iface + (a.sampled ? " ~" : "")));
+    var dt = el("span", "c-dt d-normal", bleAlertText(a));
+    if (a.kind === "adv_flood" && a.spam_source) dt.title = "source: " + a.spam_source;
+    row.appendChild(dt);
+    row.appendChild(el("span", "c-rs n d-normal", num(a.median_rssi) ? String(a.median_rssi) : "-"));
+    row.appendChild(el("span", "c-fs d-dim", shortStamp(a.first_ts)));
+    row.appendChild(el("span", "c-ls d-dim", shortStamp(a.last_ts)));
+    row.appendChild(el("span", "c-st " + (a.standing ? "sev1" : "d-dim"), a.standing ? "standing" : "resolved"));
+    return row;
+  }
+  function bleAlertsDraw() {
+    var box = clear("b-al-rows");
+    DTBA.sort(B.alerts).forEach(function (a) { box.appendChild(bleAlertRow(a)); });
+    if (!B.alerts.length) box.appendChild(el("div", "sub", "none"));
+    var st = B.alerts.filter(function (a) { return a.standing; }).length;
+    set("b-al-count", B.alerts.length ? st + " standing, " + (B.alerts.length - st) + " resolved in the last day" : "");
+  }
+  function bleDraw(j) {
+    var now = num(j.now) ? j.now : Math.floor(Date.now() / 1000);
+    bleHeadLine(j);
+    bleRotBlock(j);
+    var empty = $("b-empty");
+    empty.hidden = j.total > 0;
+    if (!j.total) {
+      clear("b-empty");
+      empty.appendChild(el("div", "", "(no advertisements decoded - start with --bt-monitor or"));
+      empty.appendChild(el("div", "", " --bt-capture PATH; see docs/wiki/ble.md. sloth never scans,"));
+      empty.appendChild(el("div", "", " connects or reads GATT: the operator's stack runs the scan.)"));
+    }
+    var box = clear("b-rows");
+    B.rows.forEach(function (d) { box.appendChild(bleRow(d, now)); });
+    if (!B.rows.length && j.total) box.appendChild(el("div", "sub", "no advertiser matches"));
+    $("b-more").hidden = !B.more;
+    // R9: source, window, tier, scale, n, then the state.
+    var s = j.sensor || {};
+    set("b-count", "ble_device, " + B.rows.length + " of " + j.total + " rows" +
+        (j.matched !== j.total ? " (" + j.matched + " matched)" : "") + ", " + j.standing +
+        " standing alert" + (j.standing === 1 ? "" : "s") + ", sensor " + (s.btmon_iface || s.btcap_iface || "none") +
+        (s.scan_mode ? ", scan " + s.scan_mode + "/" + s.scan_filter : "") +
+        (j.sig !== "sig" ? ", no SIG names (built without web/data/btsig)" : ""));
+    bleAlertsDraw();
+  }
+  function bleLoad(more) {
+    var gen = ++B.gen, asked = SCOPE;
+    var sort = $("b-sort").value;
+    if (!Object.prototype.hasOwnProperty.call(BLE_SORTS, sort)) sort = "last";
+    var wd = DTB.word();
+    if (wd) sort = wd.sort;
+    var q = $("b-q").value.trim();
+    var offset = more ? B.rows.length : 0;
+    var p = "/api/ble?limit=200&offset=" + offset + "&sort=" + encodeURIComponent(sort) +
+            (wd ? "&dir=" + wd.dir : "") + (q ? "&q=" + encodeURIComponent(q) : "");
+    Promise.all([getJSON(p), getJSON("/api/ble/alerts")]).then(function (r) {
+      if (gen !== B.gen || view !== "ble" || asked !== SCOPE) return;
+      var j = r[0], a = r[1];
+      if (j.out_of_scope) { set("b-scope-reason", j.reason); return; }
+      var rows = (more ? B.rows : []).concat(j.rows || []);
+      B.more = !!j.more;
+      B.rows = DTB.sort(rows, !j.more);
+      B.alerts = a.rows || [];
+      bleDraw(j);
+    }).catch(function (e) { if (gen === B.gen) set("b-count", errText(e.message)); });
+  }
+  function bleView() {
+    // An address naming a search opens on it, not kept (the link's).
+    if (typeof VP.q === "string") $("b-q").value = VP.q;
+    else $("b-q").value = ctlKept("b-q", "");
+    bleLoad();
+    if (!B.timer) B.timer = setInterval(function () { if (view === "ble") bleLoad(); }, 5000);
+  }
+  $("b-q").addEventListener("input", function () {
+    if (B.qtimer) clearTimeout(B.qtimer);
+    B.qtimer = setTimeout(function () { B.qtimer = 0; bleLoad(); }, 300);
+  });
+  $("b-sort").addEventListener("change", function () { DTB.clear(); bleLoad(); });
+  $("b-more").addEventListener("click", function () { bleLoad(true); });
+
+  // The BLE drawer: every decoded field of one row, in the TUI detail's
+  // order and wording (draw_detail()), then what the record carries
+  // that the TUI's detail does not, the row's advertising rate between
+  // its records, and the findings naming the address.
+  var BDR = { gen: 0, back: null };
+  function closeBleDrawer() {
+    if ($("bdrawer").hidden) return;
+    $("bdrawer").hidden = true;
+    B.sel = null;
+    if (view === "ble") { var box = clear("b-rows"); var now = Math.floor(Date.now() / 1000); B.rows.forEach(function (d) { box.appendChild(bleRow(d, now)); }); }
+    if (BDR.back && BDR.back.focus && document.body.contains(BDR.back)) BDR.back.focus();
+    BDR.back = null;
+  }
+  $("bdr-close").addEventListener("click", closeBleDrawer);
+  // The row's last day as G5's 96 quarter-hour cells ending now, oldest
+  // first, from the server's strip (web_ble.h: bit i is the bucket i
+  // before its newest, 24 hex digits most significant first); the
+  // first-seen cell marked when it is in the day.
+  function blePresence(d, now) {
+    var c = $("bdr-strip"), p = d.presence, cells = [], first = -1;
+    if (p && typeof p.bits === "string" && /^[0-9a-f]{24}$/.test(p.bits) && num(p.newest) && num(p.bucket_s)) {
+      var bs = p.bucket_s, nowB = Math.floor(now / bs), newB = Math.floor(p.newest / bs);
+      for (var j = 0; j < 96; j++) {
+        var b = nowB - 95 + j, i = newB - b, on = 0;
+        if (i >= 0 && i < 96) on = (parseInt(p.bits.charAt(23 - (i >> 2)), 16) >> (i & 3)) & 1;
+        cells.push(on);
+        if (num(d.first_seen) && Math.floor(d.first_seen / bs) === b) first = j;
+      }
+    }
+    glyph.paint(c, glyph.g5(cells, { w: c.clientWidth, h: c.clientHeight, first: first, ground: "--bg" }), tok);
+    set("bdr-strip-note", cells.length ? "a quarter hour is set when a record's last_seen fell in it; the record is change-only with a 300 s heartbeat, so a quiet quarter can be an unchanged advertiser"
+                                       : "no data");
+  }
+  function openBleDrawer(addr, type, iface) {
+    if (typeof addr !== "string" || !MAC_RE.test(addr)) return;
+    var gen = ++BDR.gen;
+    B.sel = { addr: addr, type: type, iface: iface };
+    if ($("bdrawer").hidden) BDR.back = document.activeElement;
+    $("bdrawer").hidden = false;
+    $("bdr-close").focus();
+    set("bdr-addr", addr);
+    set("bdr-note", "loading");
+    var p = "/api/ble/" + encodeURIComponent(addr) + "?type=" + encodeURIComponent(String(type)) +
+            "&iface=" + encodeURIComponent(String(iface));
+    getJSON(p).then(function (j) {
+      if (gen !== BDR.gen) return;
+      var d = j.rows && j.rows.length ? j.rows[0] : null;
+      var box = clear("bdr-body");
+      if (!d) {
+        set("bdr-note", "the row has left the table: the advertiser stopped, or a newer one took its slot");
+        return;
+      }
+      var now = num(j.now) ? j.now : Math.floor(Date.now() / 1000);
+      set("bdr-note", (j.rows.length > 1 ? j.rows.length + " sensors heard this address; the asked-for row first" : "") +
+          (SCOPE === "hybrid" ? "" : "; " + SCOPE_WORD[SCOPE]));
+      var hidApp = bleIsHidApp(d.appearance);
+      var nameV = null;
+      if (d.name !== null) {
+        nameV = el("span", "");
+        nameV.appendChild(bleName(d));
+        if (!d.name_complete) nameV.appendChild(el("span", "d-dim", " (shortened)"));
+      }
+      kvList(box, [
+        ["address", d.addr + " (" + d.type + ", " + d.addr_kind + ")"],
+        ["sensor", "ble on " + d.iface + ", adapter " + d.adapter + (d.sampled ? " - one-channel sample, counts are a fraction" : "")],
+        ["LL channel", num(d.channel) ? String(d.channel) : null],
+        ["last PDU", d.last_pdu],
+        ["PDUs heard", d.pdus && d.pdus.length ? d.pdus.join(", ") : null],
+        ["local name", nameV || "-"],
+        ["manufacturer", num(d.mfr_id) ? "company 0x" + hex4(d.mfr_id) + (num(d.mfr_subtype) ? ", first octet 0x" + hex2(d.mfr_subtype) : "") +
+                                          (d.mfr_name ? " - " + d.mfr_name : "") : null],
+        ["service", num(d.uuid16) ? "0x" + hex4(d.uuid16) + " (first listed)" + (d.uuid16_name ? " - " + d.uuid16_name : "") : null],
+        ["service data", num(d.svc_data_uuid16) ? "0x" + hex4(d.svc_data_uuid16) + (d.svc_data_name ? " - " + d.svc_data_name : "") : null],
+        ["appearance", num(d.appearance) ? "0x" + hex4(d.appearance) + (hidApp ? " (HID)" : "") + (d.appearance_name ? " - " + d.appearance_name : "") : null],
+        ["HID", d.hid ? ((d.hid & 1) ? "appearance" : "") + ((d.hid & 1) && (d.hid & 2) ? ", " : "") + ((d.hid & 2) ? "service 0x1812" : "") : null],
+        ["TX power", num(d.tx_power) ? d.tx_power + " dBm" : null],
+        ["AD flags", num(d.flags) ? "0x" + hex2(d.flags) : null],
+        ["RSSI", num(d.rssi) ? d.rssi + " dBm (best " + d.rssi_best + ")" : null],
+        ["distance (est)", num(d.rssi) ? (d.est ? d.est.describe : "no estimate") : null],
+        ["advertisements", String(d.adv_count)],
+        ["adv rate", num(d.adv_rate) ? d.adv_rate.toFixed(3) + " adv/s over " + (d.points ? d.points.length : 0) +
+                                        " records (coarse: the record is change-only with a 300 s heartbeat)" : null],
+        ["first heard", bleAge(d.first_seen, now) + " ago, last " + bleAge(d.last_seen, now) + " ago"],
+        ["first seen", stamp(d.first_seen)], ["last seen", stamp(d.last_seen)],
+        ["extended", d.ext_adv ? "primary PHY " + d.primary_phy + ", secondary PHY " + d.secondary_phy +
+                                   (num(d.adv_sid) ? ", SID " + d.adv_sid : "") : null],
+        ["watchlist", d.watch_category ? d.watch_category + " - a category, never an identity" : null],
+        ["records", String(d.records)]
+      ]);
+      // G1 of the rate between successive records; dots below five.
+      var pts = [], P = d.points || [];
+      for (var i = 1; i < P.length; i++)
+        if (P[i][0] > P[i - 1][0] && P[i][1] >= P[i - 1][1])
+          pts.push([P[i][0], (P[i][1] - P[i - 1][1]) / (P[i][0] - P[i - 1][0])]);
+      var c = $("bdr-rate");
+      var from = pts.length ? pts[0][0] : now - 3600, to = pts.length ? pts[pts.length - 1][0] + 1 : now;
+      glyph.paint(c, glyph.g1(pts, null, { w: c.clientWidth, h: c.clientHeight, from: from, to: to,
+                                            step: pts.length > 1 ? Math.max(1, (to - from) / pts.length) : 300 }), tok);
+      set("bdr-rate-note", pts.length ? glyph.caption({ source: "ble_device adv_count delta", window: glyph.dur(to - from),
+                                                        tier: "per record", scale: "adv/s", n: pts.length })
+                                      : "no data: fewer than two records of this row yet");
+      blePresence(d, now);
+      var al = clear("bdr-alerts");
+      if (!j.alerts || !j.alerts.length) al.appendChild(el("div", "sub", "none (a hid_oui finding names an address; floods and watchlist findings name a key or a category)"));
+      (j.alerts || []).forEach(function (a) { al.appendChild(bleAlertRow(a)); });
+    }).catch(function (e) { if (gen === BDR.gen) set("bdr-note", errText(e.message)); });
+  }
+
   // ── the sensor's health: the sensor-health tile's view ─────────────
   function healthView() {
     var box = clear("hl-rows"), asked = SCOPE;
@@ -4661,6 +5089,33 @@
                      ["monitor", s.monitor_iface ? s.monitor_iface + (s.monitor_open ? (s.monitor_running ? " running" : " stopped") : " not open") +
                                  (s.monitor_exit ? ", " + s.monitor_exit : "") : null],
                      ["scope", s.scope ? s.scope + (s.scope_not_enforced ? ", not enforced" : "") : null]]);
+        // The Bluetooth source (web_ble.h): the btmon_* stream, the
+        // ble_* decode and scan state, the own-transmission state, the
+        // btcap_* Ubertooth block and the banded rotation hints, as the
+        // latest sensor_health said them.
+        box.appendChild(el("div", "label", "bluetooth (sensor_health btmon_* / ble_* / btcap_*)"));
+        var bl = l.ble || null;
+        if (!bl || !bl.seen) {
+          kvList(box, [["source", !bl && SCOPE === "local" ? "not Local's: the BLE receivers are passive radio (Monitor)"
+                                  : "no Bluetooth block in sensor_health yet"]]);
+        } else {
+          var scan = bl.ble_scan_mode + "/" + bl.ble_scan_filter +
+                     (bl.ble_scan_enabled === 1 ? ", enabled" : bl.ble_scan_enabled === 0 ? ", disabled" : "");
+          kvList(box, [["source", bl.btmon_iface ? bl.btmon_iface : "not configured (--bt-monitor); the zeros below mean not listening"],
+                       ["stream", bl.btmon_iface ? (bl.btmon_open ? (bl.btmon_running ? "open, running" : "open, stopped") : "not open") +
+                                  (bl.btmon_exit && bl.btmon_exit !== "none" ? ", exit " + bl.btmon_exit : "") +
+                                  (num(bl.btmon_stale_secs) && bl.btmon_stale_secs >= 0 ? ", last frame " + dur(bl.btmon_stale_secs) + " ago" : "") : null],
+                       ["controllers", String(bl.ble_controllers)],
+                       ["advertisers", bl.ble_devices + " in sloth's table, " + bl.rows + " kept here" +
+                                       (bl.hid ? ", " + bl.hid + " HID" : "") + (bl.watch ? ", " + bl.watch + " watchlisted" : "")],
+                       ["adv reports", String(bl.ble_adv_reports)],
+                       ["scan", scan],
+                       ["own transmission", bl.ble_own_tx + (bl.ble_own_tx !== "never" && bl.ble_own_tx_kind ? " (" + bl.ble_own_tx_kind + ")" : "")],
+                       ["ubertooth", bl.btcap_iface ? bl.btcap_iface + ": " + bl.btcap_state + (bl.btcap_sampling ? ", " + bl.btcap_sampling : "") : null],
+                       ["rotation hints", bl.rot ? "hints " + bl.rot.hints + ", poisoned " + bl.rot.poisoned +
+                                                   ", seam evictions " + bl.rot.seam_evictions + " (decade bands; internal use only)" : null],
+                       ["findings standing", String(bl.standing)]]);
+        }
         box.appendChild(el("div", "label", "the stream (the data socket)"));
         kvList(box, [["socket", h.socket + (h.socket_spec ? ", " + h.socket_spec : "")],
                      ["last record", num(h.last_record_age_s) ? dur(h.last_record_age_s) + " ago" : "none yet"],

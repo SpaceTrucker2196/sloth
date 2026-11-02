@@ -118,7 +118,7 @@ static void test_tables_keep_widths_and_sort(void) {
 static const char *const KEPT[] = {
     /* by keepCtl(), by value */
     "n-win", "a-win", "d-q", "d-sort", "l-q", "w-metric", "w-win", "w-sort", "al-state",
-    "al-sev", "al-q", "al-win", "f-win", "f-sort", "f-ip", "q-sql",
+    "al-sev", "al-q", "al-win", "f-win", "f-sort", "f-ip", "q-sql", "b-q", "b-sort",
 };
 static const char *const KEPT_ELSEWHERE[] = {
     "sens",       /* slothweb.v1.sens, range-checked */

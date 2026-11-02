@@ -253,6 +253,80 @@ static const char STEP_V6_SQL[] =
     "  PRIMARY KEY (rule, a, b)\n"
     ") WITHOUT ROWID;\n";
 
+/* v6 -> v7: the BLE view's tables (web_ble.h; owner request
+ * 2026-10-27). sloth.db keeps no BLE table, so slothweb keeps the
+ * advertisers and the findings it read off the stream here, and seeds
+ * its in-memory tables from them at start. ble_device is one advertiser
+ * as one sensor heard it, keyed (addr, addr_type, iface) as sloth keys
+ * it; every column but the name is a number or one of sloth's own
+ * words, and the name is the local name in its display form (web_ssid.h,
+ * as passive_ptr.name holds a peer-chosen name), never a key. ble_alert
+ * is one finding by the hash of its key (the key itself, which can carry
+ * remote text in other alert families, is never stored); its per-kind
+ * integers are five generic columns, its one word of the kind the
+ * label. Both indexed on last seen, which retention, the row caps and
+ * the seed all select on. Additive: two new tables and their indexes,
+ * nothing that exists is changed (the triage and TACDB rows of v6 among
+ * it). Plain CREATE, as every step: a file already holding one of these
+ * names fails the step and stays at v6. */
+static const char STEP_V7_SQL[] =
+    "CREATE TABLE ble_device (\n"
+    "  addr            TEXT NOT NULL,\n"
+    "  addr_type       INTEGER NOT NULL,\n"
+    "  iface           TEXT NOT NULL,\n"
+    "  adapter         INTEGER NOT NULL,\n"
+    "  sampled         INTEGER NOT NULL,\n"
+    "  pdu_mask        INTEGER NOT NULL,\n"
+    "  name            TEXT NOT NULL,\n"
+    "  name_np         INTEGER NOT NULL,\n"
+    "  name_complete   INTEGER NOT NULL,\n"
+    "  uuid16          INTEGER NOT NULL,\n"
+    "  mfr_id          INTEGER NOT NULL,\n"
+    "  mfr_subtype     INTEGER NOT NULL,\n"
+    "  svc_data_uuid16 INTEGER NOT NULL,\n"
+    "  appearance      INTEGER NOT NULL,\n"
+    "  hid             INTEGER NOT NULL,\n"
+    "  tx_power        INTEGER NOT NULL,\n"
+    "  flags           INTEGER NOT NULL,\n"
+    "  rssi            INTEGER NOT NULL,\n"
+    "  rssi_best       INTEGER NOT NULL,\n"
+    "  adv_count       INTEGER NOT NULL,\n"
+    "  watch_category  TEXT NOT NULL,\n"
+    "  ext_adv         INTEGER NOT NULL,\n"
+    "  primary_phy     INTEGER NOT NULL,\n"
+    "  secondary_phy   INTEGER NOT NULL,\n"
+    "  adv_sid         INTEGER NOT NULL,\n"
+    "  first_seen      INTEGER NOT NULL,\n"
+    "  last_seen       INTEGER NOT NULL,\n"
+    "  est_dist_dm     INTEGER NOT NULL,\n"
+    "  est_band        INTEGER NOT NULL,\n"
+    "  est_trend       INTEGER NOT NULL,\n"
+    "  est_ptx         INTEGER NOT NULL,\n"
+    "  pres_bucket     INTEGER NOT NULL,\n"
+    "  pres_lo         INTEGER NOT NULL,\n"
+    "  pres_hi         INTEGER NOT NULL,\n"
+    "  PRIMARY KEY (addr, addr_type, iface)\n"
+    ") WITHOUT ROWID;\n"
+    "CREATE INDEX ble_device_last ON ble_device (last_seen);\n"
+    "CREATE TABLE ble_alert (\n"
+    "  key_hash    TEXT PRIMARY KEY,\n"
+    "  kind        INTEGER NOT NULL,\n"
+    "  alert       TEXT NOT NULL,\n"
+    "  iface       TEXT NOT NULL,\n"
+    "  sampled     INTEGER NOT NULL,\n"
+    "  first_ts    INTEGER NOT NULL,\n"
+    "  last_ts     INTEGER NOT NULL,\n"
+    "  resolved_ts INTEGER NOT NULL,\n"
+    "  n0          INTEGER NOT NULL,\n"
+    "  n1          INTEGER NOT NULL,\n"
+    "  n2          INTEGER NOT NULL,\n"
+    "  n3          INTEGER NOT NULL,\n"
+    "  n4          INTEGER NOT NULL,\n"
+    "  rssi        INTEGER NOT NULL,\n"
+    "  label       TEXT NOT NULL\n"
+    ") WITHOUT ROWID;\n"
+    "CREATE INDEX ble_alert_last ON ble_alert (last_ts);\n";
+
 typedef struct {
     int         from;
     const char *sql;
@@ -268,6 +342,7 @@ static const web_step_t STEPS[] = {
     { 4, STEP_V5_SQL, "created chmix" },
     { 5, STEP_V6_SQL, "created triage, tacdb_unit, tacdb_platform, "
                       "tacdb_emitter and tacdb_dismiss" },
+    { 6, STEP_V7_SQL, "created ble_device and ble_alert" },
 };
 #define STEP_N ((int)(sizeof(STEPS) / sizeof(STEPS[0])))
 
@@ -483,6 +558,25 @@ int web_store_mix_query(web_store_t *s, int tier, long long from, long long to,
 
 long long web_store_mix_count(web_store_t *s) {
     (void)s;
+    return -1;
+}
+
+int web_store_ble_write(web_store_t *s, const web_store_bdev_t *rows, size_t n,
+                        const web_store_balert_t *alerts, size_t na) {
+    (void)s; (void)rows; (void)n; (void)alerts; (void)na;
+    return -1;
+}
+
+int web_store_ble_load(web_store_t *s, int cap,
+                       void (*fn)(void *ctx, const web_store_bdev_t *r), void *ctx,
+                       long long since,
+                       void (*afn)(void *ctx, const web_store_balert_t *r), void *actx) {
+    (void)s; (void)cap; (void)fn; (void)ctx; (void)since; (void)afn; (void)actx;
+    return -1;
+}
+
+long long web_store_ble_count(web_store_t *s, int alerts) {
+    (void)s; (void)alerts;
     return -1;
 }
 
@@ -881,9 +975,13 @@ static void recount(web_store_t *s) {
     long long r[WEB_TIER_COUNT];
     for (int t = 0; t < WEB_TIER_COUNT; t++) r[t] = q_int(s->db, COUNT_ROWS[t]);
     long long mx = q_int(s->db, "SELECT COUNT(*) FROM chmix");
+    long long bd = q_int(s->db, "SELECT COUNT(*) FROM ble_device");
+    long long ba = q_int(s->db, "SELECT COUNT(*) FROM ble_alert");
     pthread_mutex_lock(&s->mu);
     for (int t = 0; t < WEB_TIER_COUNT; t++) if (r[t] >= 0) s->st.rows[t] = r[t];
     if (mx >= 0) s->st.mix_rows = mx;
+    if (bd >= 0) s->st.ble_rows = bd;
+    if (ba >= 0) s->st.ble_alert_rows = ba;
     pthread_mutex_unlock(&s->mu);
 }
 
@@ -1522,6 +1620,45 @@ static long long mix_expire(web_store_t *s, long long minute_cut,
     return total;
 }
 
+/* One slice of the oldest rows of a BLE table (by its last-seen column)
+ * before `before`, at most limit. Rows, or -1. */
+static long long ble_slice(web_store_t *s, int alerts, long long before,
+                           long long limit) {
+    static const char *const SQL[2] = {
+        "DELETE FROM ble_device WHERE (addr,addr_type,iface) IN (SELECT "
+        "addr,addr_type,iface FROM ble_device WHERE last_seen<?1 ORDER BY "
+        "last_seen LIMIT ?2)",
+        "DELETE FROM ble_alert WHERE key_hash IN (SELECT key_hash FROM ble_alert"
+        " WHERE last_ts<?1 ORDER BY last_ts LIMIT ?2)",
+    };
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(s->db, SQL[alerts ? 1 : 0], -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int64(st, 1, before);
+    sqlite3_bind_int64(st, 2, limit < WEB_STORE_SLICE_ROWS ? limit
+                                                           : WEB_STORE_SLICE_ROWS);
+    int rc = sqlite3_step(st);
+    sqlite3_finalize(st);
+    if (rc != SQLITE_DONE) return -1;
+    long long d = sqlite3_changes(s->db);
+    after_commit(s);
+    return d;
+}
+
+/* The BLE tables' retention: rows last seen before cut, a slice at a
+ * time. Rows, or -1. */
+static long long ble_expire(web_store_t *s, long long cut) {
+    long long total = 0;
+    for (int k = 0; k < 2; k++)
+        for (int guard = 0; guard < 100000; guard++) {
+            long long d = ble_slice(s, k, cut, WEB_STORE_SLICE_ROWS);
+            if (d < 0) return -1;
+            total += d;
+            if (d < WEB_STORE_SLICE_ROWS) break;
+        }
+    return total;
+}
+
 int web_store_compact(web_store_t *s, long long now_s, int retain_days,
                       long long max_bytes) {
     if (!s->db) return -1;
@@ -1537,6 +1674,9 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     long long mx_exp = mix_expire(s, now_s - WEB_STORE_MIX_MINUTE_KEEP_S,
                                   cutoff[WEB_TIER_HOUR]);
     if (mx_exp < 0) goto fail;
+    /* The BLE tables: --web-retain-days, as the minute tier. */
+    long long ble_exp = ble_expire(s, cutoff[WEB_TIER_MINUTE]);
+    if (ble_exp < 0) goto fail;
     int raised;
     long long ceiling = ceiling_loop(s, max_bytes, &raised);
     if (ceiling < 0) goto fail;
@@ -1553,6 +1693,7 @@ int web_store_compact(web_store_t *s, long long now_s, int retain_days,
     s->st.compactions++;
     s->st.dropped_expired += (unsigned long long)expired;
     s->st.mix_dropped_expired += (unsigned long long)mx_exp;
+    s->st.ble_dropped_expired += (unsigned long long)ble_exp;
     s->st.dropped_ceiling += (unsigned long long)ceiling;
     if (ceiling > 0) s->st.ceiling_runs++;
     if (raised) s->st.ceiling_raised++;
@@ -1789,6 +1930,7 @@ long long web_store_mix_count(web_store_t *s) {
     if (!s->db) return -1;
     return q_int(s->db, "SELECT COUNT(*) FROM chmix");
 }
+
 
 void web_store_stats(web_store_t *s, web_store_stats_t *out) {
     if (!s->mu_init) { memset(out, 0, sizeof(*out)); return; }
@@ -2418,6 +2560,269 @@ int web_store_presence(web_store_t *s, int tier, int metric, const char *key,
         return -1;
     }
     return set;
+}
+
+/* ── the BLE tables (v7) ─────────────────────────────────────────────── */
+
+/* The one writer: a row's columns bound in the order of the DDL, the
+ * upsert keeping the earlier first_seen and OR-ing the sticky masks. */
+static const char BLE_DEV_UPSERT[] =
+    "INSERT INTO ble_device (addr,addr_type,iface,adapter,sampled,pdu_mask,name,"
+    "name_np,name_complete,uuid16,mfr_id,mfr_subtype,svc_data_uuid16,appearance,hid,"
+    "tx_power,flags,rssi,rssi_best,adv_count,watch_category,ext_adv,primary_phy,"
+    "secondary_phy,adv_sid,first_seen,last_seen,est_dist_dm,est_band,est_trend,est_ptx,"
+    "pres_bucket,pres_lo,pres_hi)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,"
+    "?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34)"
+    " ON CONFLICT(addr,addr_type,iface) DO UPDATE SET"
+    " adapter=excluded.adapter, sampled=excluded.sampled,"
+    " pdu_mask=ble_device.pdu_mask|excluded.pdu_mask, name=excluded.name,"
+    " name_np=excluded.name_np, name_complete=excluded.name_complete,"
+    " uuid16=excluded.uuid16, mfr_id=excluded.mfr_id, mfr_subtype=excluded.mfr_subtype,"
+    " svc_data_uuid16=excluded.svc_data_uuid16, appearance=excluded.appearance,"
+    " hid=ble_device.hid|excluded.hid, tx_power=excluded.tx_power, flags=excluded.flags,"
+    " rssi=excluded.rssi, rssi_best=excluded.rssi_best,"
+    " adv_count=MAX(ble_device.adv_count,excluded.adv_count),"
+    " watch_category=excluded.watch_category, ext_adv=excluded.ext_adv,"
+    " primary_phy=excluded.primary_phy, secondary_phy=excluded.secondary_phy,"
+    " adv_sid=excluded.adv_sid,"
+    " first_seen=CASE WHEN ble_device.first_seen>0 AND (excluded.first_seen<=0 OR"
+    " ble_device.first_seen<excluded.first_seen) THEN ble_device.first_seen"
+    " ELSE excluded.first_seen END,"
+    " last_seen=MAX(ble_device.last_seen,excluded.last_seen),"
+    " est_dist_dm=excluded.est_dist_dm, est_band=excluded.est_band,"
+    " est_trend=excluded.est_trend, est_ptx=excluded.est_ptx,"
+    " pres_bucket=excluded.pres_bucket, pres_lo=excluded.pres_lo, pres_hi=excluded.pres_hi";
+static const char BLE_AL_UPSERT[] =
+    "INSERT INTO ble_alert (key_hash,kind,alert,iface,sampled,first_ts,last_ts,"
+    "resolved_ts,n0,n1,n2,n3,n4,rssi,label)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)"
+    " ON CONFLICT(key_hash) DO UPDATE SET kind=excluded.kind, alert=excluded.alert,"
+    " iface=excluded.iface, sampled=excluded.sampled,"
+    " first_ts=CASE WHEN ble_alert.first_ts>0 AND (excluded.first_ts<=0 OR"
+    " ble_alert.first_ts<excluded.first_ts) THEN ble_alert.first_ts ELSE excluded.first_ts END,"
+    " last_ts=MAX(ble_alert.last_ts,excluded.last_ts), resolved_ts=excluded.resolved_ts,"
+    " n0=excluded.n0, n1=excluded.n1, n2=excluded.n2, n3=excluded.n3, n4=excluded.n4,"
+    " rssi=excluded.rssi, label=excluded.label";
+
+int web_store_ble_write(web_store_t *s, const web_store_bdev_t *rows, size_t n,
+                        const web_store_balert_t *alerts, size_t na) {
+    if (!s->db) return -1;
+    if (!n && !na) return 0;
+    char err[WEB_STORE_ERR_MAX];
+    sqlite3_stmt *sd = NULL, *sa = NULL;
+    if (sqlite3_prepare_v2(s->db, BLE_DEV_UPSERT, -1, &sd, NULL) != SQLITE_OK ||
+        sqlite3_prepare_v2(s->db, BLE_AL_UPSERT, -1, &sa, NULL) != SQLITE_OK) {
+        snprintf(err, sizeof(err), "ble: %s", sqlite3_errmsg(s->db));
+        goto fail_msg;
+    }
+    if (exec(s->db, "BEGIN IMMEDIATE", err, sizeof(err), "ble begin") != 0)
+        goto fail_msg;
+    for (size_t i = 0; i < n; i++) {
+        const web_store_bdev_t *r = &rows[i];
+        sqlite3_reset(sd);
+        sqlite3_bind_text(sd, 1, r->addr, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(sd, 2, r->addr_type);
+        sqlite3_bind_text(sd, 3, r->iface, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(sd, 4, r->adapter);
+        sqlite3_bind_int(sd, 5, r->sampled);
+        sqlite3_bind_int(sd, 6, r->pdu_mask);
+        sqlite3_bind_text(sd, 7, r->name, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(sd, 8, r->name_np);
+        sqlite3_bind_int(sd, 9, r->name_complete);
+        sqlite3_bind_int(sd, 10, r->uuid16);
+        sqlite3_bind_int(sd, 11, r->mfr_id);
+        sqlite3_bind_int(sd, 12, r->mfr_subtype);
+        sqlite3_bind_int(sd, 13, r->svc_data_uuid16);
+        sqlite3_bind_int(sd, 14, r->appearance);
+        sqlite3_bind_int(sd, 15, r->hid);
+        sqlite3_bind_int(sd, 16, r->tx_power);
+        sqlite3_bind_int(sd, 17, r->flags);
+        sqlite3_bind_int(sd, 18, r->rssi);
+        sqlite3_bind_int(sd, 19, r->rssi_best);
+        sqlite3_bind_int64(sd, 20, r->adv_count);
+        sqlite3_bind_text(sd, 21, r->watch_category, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(sd, 22, r->ext_adv);
+        sqlite3_bind_int(sd, 23, r->primary_phy);
+        sqlite3_bind_int(sd, 24, r->secondary_phy);
+        sqlite3_bind_int(sd, 25, r->adv_sid);
+        sqlite3_bind_int64(sd, 26, r->first_seen);
+        sqlite3_bind_int64(sd, 27, r->last_seen);
+        sqlite3_bind_int(sd, 28, r->est_dist_dm);
+        sqlite3_bind_int(sd, 29, r->est_band);
+        sqlite3_bind_int(sd, 30, r->est_trend);
+        sqlite3_bind_int(sd, 31, r->est_ptx);
+        sqlite3_bind_int64(sd, 32, r->pres_bucket);
+        sqlite3_bind_int64(sd, 33, r->pres_lo);
+        sqlite3_bind_int64(sd, 34, r->pres_hi);
+        if (sqlite3_step(sd) != SQLITE_DONE) goto fail;
+    }
+    for (size_t i = 0; i < na; i++) {
+        const web_store_balert_t *r = &alerts[i];
+        sqlite3_reset(sa);
+        sqlite3_bind_text(sa, 1, r->key_hash, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(sa, 2, r->kind);
+        sqlite3_bind_text(sa, 3, r->alert, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(sa, 4, r->iface, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(sa, 5, r->sampled);
+        sqlite3_bind_int64(sa, 6, r->first_ts);
+        sqlite3_bind_int64(sa, 7, r->last_ts);
+        sqlite3_bind_int64(sa, 8, r->resolved_ts);
+        for (int k = 0; k < 5; k++) sqlite3_bind_int64(sa, 9 + k, r->n[k]);
+        sqlite3_bind_int(sa, 14, r->rssi);
+        sqlite3_bind_text(sa, 15, r->label, -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(sa) != SQLITE_DONE) goto fail;
+    }
+    sqlite3_reset(sd);
+    sqlite3_reset(sa);
+    if (exec(s->db, "COMMIT", err, sizeof(err), "ble commit") != 0) goto fail_rb;
+    sqlite3_finalize(sd);
+    sqlite3_finalize(sa);
+    /* The caps: the oldest rows by last seen, a slice at a time. An
+     * upsert's changes() is 1 for an insert and an update alike, so the
+     * tables are counted rather than tallied. */
+    long long cut = 0;
+    long long have[2] = { q_int(s->db, "SELECT COUNT(*) FROM ble_device"),
+                          q_int(s->db, "SELECT COUNT(*) FROM ble_alert") };
+    const long long cap[2] = { WEB_STORE_BLE_ROWS, WEB_STORE_BLE_ALERT_ROWS };
+    for (int k = 0; k < 2; k++)
+        for (int guard = 0; have[k] > cap[k] && guard < 100000; guard++) {
+            long long d = ble_slice(s, k, (long long)1 << 62, have[k] - cap[k]);
+            if (d < 0) {
+                snprintf(err, sizeof(err), "ble cap: %s", sqlite3_errmsg(s->db));
+                goto fail_count;
+            }
+            if (d == 0) break;
+            have[k] -= d;
+            cut += d;
+        }
+    pthread_mutex_lock(&s->mu);
+    if (have[0] >= 0) s->st.ble_rows = have[0];
+    if (have[1] >= 0) s->st.ble_alert_rows = have[1];
+    s->st.ble_dropped_cap += (unsigned long long)cut;
+    s->st.ble_batches++;
+    pthread_mutex_unlock(&s->mu);
+    refresh_size(s);
+    return 0;
+fail:
+    snprintf(err, sizeof(err), "ble write: %s", sqlite3_errmsg(s->db));
+fail_rb:
+    {
+        char ignore[64];
+        sqlite3_reset(sd);
+        sqlite3_reset(sa);
+        exec(s->db, "ROLLBACK", ignore, sizeof(ignore), "rollback");
+    }
+fail_msg:
+    sqlite3_finalize(sd);
+    sqlite3_finalize(sa);
+fail_count:
+    pthread_mutex_lock(&s->mu);
+    s->st.write_errors++;
+    snprintf(s->st.last_error, sizeof(s->st.last_error), "%s", err);
+    pthread_mutex_unlock(&s->mu);
+    return -1;
+}
+
+int web_store_ble_load(web_store_t *s, int cap,
+                       void (*fn)(void *ctx, const web_store_bdev_t *r), void *ctx,
+                       long long since,
+                       void (*afn)(void *ctx, const web_store_balert_t *r), void *actx) {
+    if (!s->db || cap <= 0) return -1;
+    sqlite3_stmt *st = NULL;
+    int n = 0;
+    if (sqlite3_prepare_v2(s->db,
+            "SELECT addr,addr_type,iface,adapter,sampled,pdu_mask,name,name_np,"
+            "name_complete,uuid16,mfr_id,mfr_subtype,svc_data_uuid16,appearance,hid,"
+            "tx_power,flags,rssi,rssi_best,adv_count,watch_category,ext_adv,primary_phy,"
+            "secondary_phy,adv_sid,first_seen,last_seen,est_dist_dm,est_band,est_trend,"
+            "est_ptx,pres_bucket,pres_lo,pres_hi FROM ble_device"
+            " ORDER BY last_seen DESC, addr LIMIT ?1",
+            -1, &st, NULL) != SQLITE_OK) {
+        note_fail(s, "ble_device load");
+        return -1;
+    }
+    sqlite3_bind_int(st, 1, cap);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        web_store_bdev_t r;
+        memset(&r, 0, sizeof(r));
+        col_text(st, 0, r.addr, 17);
+        r.addr_type = sqlite3_column_int(st, 1);
+        col_text(st, 2, r.iface, WEB_BLE_IFACE_MAX);
+        r.adapter = sqlite3_column_int(st, 3);
+        r.sampled = sqlite3_column_int(st, 4);
+        r.pdu_mask = sqlite3_column_int(st, 5);
+        col_text(st, 6, r.name, WEB_BLE_NAME_MAX);
+        r.name_np = sqlite3_column_int(st, 7);
+        r.name_complete = sqlite3_column_int(st, 8);
+        r.uuid16 = sqlite3_column_int(st, 9);
+        r.mfr_id = sqlite3_column_int(st, 10);
+        r.mfr_subtype = sqlite3_column_int(st, 11);
+        r.svc_data_uuid16 = sqlite3_column_int(st, 12);
+        r.appearance = sqlite3_column_int(st, 13);
+        r.hid = sqlite3_column_int(st, 14);
+        r.tx_power = sqlite3_column_int(st, 15);
+        r.flags = sqlite3_column_int(st, 16);
+        r.rssi = sqlite3_column_int(st, 17);
+        r.rssi_best = sqlite3_column_int(st, 18);
+        r.adv_count = sqlite3_column_int64(st, 19);
+        col_text(st, 20, r.watch_category, WEB_BLE_CAT_MAX);
+        r.ext_adv = sqlite3_column_int(st, 21);
+        r.primary_phy = sqlite3_column_int(st, 22);
+        r.secondary_phy = sqlite3_column_int(st, 23);
+        r.adv_sid = sqlite3_column_int(st, 24);
+        r.first_seen = sqlite3_column_int64(st, 25);
+        r.last_seen = sqlite3_column_int64(st, 26);
+        r.est_dist_dm = sqlite3_column_int(st, 27);
+        r.est_band = sqlite3_column_int(st, 28);
+        r.est_trend = sqlite3_column_int(st, 29);
+        r.est_ptx = sqlite3_column_int(st, 30);
+        r.pres_bucket = sqlite3_column_int64(st, 31);
+        r.pres_lo = sqlite3_column_int64(st, 32);
+        r.pres_hi = sqlite3_column_int64(st, 33);
+        /* An address read back is held to the wire's rule. */
+        char c[WEB_KEY_MAX + 1];
+        if (web_key_mac(r.addr, c) != 0 || strcmp(c, r.addr)) continue;
+        fn(ctx, &r);
+        n++;
+    }
+    sqlite3_finalize(st);
+    if (!afn) return n;
+    st = NULL;
+    if (sqlite3_prepare_v2(s->db,
+            "SELECT key_hash,kind,alert,iface,sampled,first_ts,last_ts,resolved_ts,"
+            "n0,n1,n2,n3,n4,rssi,label FROM ble_alert WHERE resolved_ts<0 OR last_ts>=?1"
+            " ORDER BY last_ts DESC LIMIT ?2", -1, &st, NULL) != SQLITE_OK) {
+        note_fail(s, "ble_alert load");
+        return -1;
+    }
+    sqlite3_bind_int64(st, 1, since);
+    sqlite3_bind_int(st, 2, WEB_BLE_ALERTS);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        web_store_balert_t r;
+        memset(&r, 0, sizeof(r));
+        col_text(st, 0, r.key_hash, 16);
+        r.kind = sqlite3_column_int(st, 1);
+        col_text(st, 2, r.alert, 23);
+        col_text(st, 3, r.iface, WEB_BLE_IFACE_MAX);
+        r.sampled = sqlite3_column_int(st, 4);
+        r.first_ts = sqlite3_column_int64(st, 5);
+        r.last_ts = sqlite3_column_int64(st, 6);
+        r.resolved_ts = sqlite3_column_int64(st, 7);
+        for (int k = 0; k < 5; k++) r.n[k] = sqlite3_column_int64(st, 8 + k);
+        r.rssi = sqlite3_column_int(st, 13);
+        col_text(st, 14, r.label, WEB_BLE_LABEL_MAX);
+        afn(actx, &r);
+        n++;
+    }
+    sqlite3_finalize(st);
+    return n;
+}
+
+long long web_store_ble_count(web_store_t *s, int alerts) {
+    if (!s->db) return -1;
+    return q_int(s->db, alerts ? "SELECT COUNT(*) FROM ble_alert"
+                               : "SELECT COUNT(*) FROM ble_device");
 }
 
 #endif /* WITH_SQLITE */

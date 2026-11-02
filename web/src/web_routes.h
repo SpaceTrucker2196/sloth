@@ -22,6 +22,8 @@
  *                 JSON: the History view (M5, web_history.h)
  *   /api/query    JSON: the SQL box (M5, web_sqlbox.h), GET only, and
  *   /api/recipes  JSON: its recipes; both 404 unless --web-allow-sql
+ *   /api/ble, /api/ble/alerts, /api/ble/{addr}
+ *                 JSON: the BLE view (web_ble.h); out_of_scope under Local
  *   /events       Server-Sent Events: tick, record, anomaly, ping
  *   anything else 404
  *
@@ -49,6 +51,7 @@
 #include <stddef.h>
 
 #include "web_anomaly.h"
+#include "web_ble.h"
 #include "web_devices.h"
 #include "web_http.h"
 #include "web_live.h"
@@ -71,6 +74,7 @@ typedef struct {
     web_sqlbox_t  *sql;       /* NULL or disabled: no SQL box (M5) */
     const web_scope_ctx_t *sc; /* the request's capture scope; NULL Hybrid
                                   (set by web_route() itself) */
+    web_ble_t     *ble;       /* NULL: no BLE tables (web_ble.h) */
 } web_health_t;
 
 /* /api/live and the series routes are built into the connection's

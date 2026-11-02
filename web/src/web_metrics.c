@@ -507,6 +507,30 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
         if (web_jl_get(r, "status")) return;
         if (web_key_ip(web_jl_str(r, "src"), k) != 0) return;
         web_rollup_add(m->ru, WM_HTTP_REQUESTS, k, 1, now);
+    } else if (!strcmp(t, "sensor_health")) {
+        /* The tick's own drops, libpcap's and the NIC's, on both
+         * capture workers: already a delta (sloth's own pcap_stats()
+         * bookkeeping, not a running total), so summed and sampled
+         * as-is, every tick, including the 0 of a healthy one -- a
+         * flat-zero series is what "no drops" should read as, not a
+         * gap (docs/web-visual-spec.md rule R5). A field an older
+         * sloth does not send is 0, not missing. */
+        static const char *const drops[] = {
+            "capture_drop_delta", "capture_ifdrop_delta",
+            "monitor_drop_delta", "monitor_ifdrop_delta", NULL
+        };
+        double d = 0, v;
+        for (int i = 0; drops[i]; i++)
+            if (web_jl_num(r, drops[i], &v) && v > 0) d += v;
+        web_rollup_add(m->ru, WM_SENSOR_DROPS, "", d, now);
+        /* The Bluetooth block (web_ble.h): absent on a sloth with no
+         * Bluetooth source, and both zero while btmon_iface is "", which
+         * says "not listening", so neither is sampled then. */
+        const char *bi = web_jl_str(r, "btmon_iface");
+        if (!bi || !bi[0]) return;
+        gauge(m, r, "ble_devices", WM_BLE_DEVICES, "", now);
+        count(m, WM_BLE_ADV_REPORTS, "",
+              hw_delta(m, "ble|adv", web_jl_int(r, "ble_adv_reports", 0), -1), now);
     } else if (!strcmp(t, "alert")) {
         if (web_key_alert_type(web_jl_int(r, "ty", -1), k) != 0) return;
         web_rollup_add(m->ru, WM_ALERTS_FIRED, k, 1, now);
@@ -551,21 +575,5 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
         };
         flow(m, r, "mqtt", "src_ip", "dst_ip", sum_of(r, pk), WM_FLOW_MQTT,
              now);
-    } else if (!strcmp(t, "sensor_health")) {
-        /* The tick's own drops, libpcap's and the NIC's, on both
-         * capture workers: already a delta (sloth's own pcap_stats()
-         * bookkeeping, not a running total), so summed and sampled
-         * as-is, every tick, including the 0 of a healthy one -- a
-         * flat-zero series is what "no drops" should read as, not a
-         * gap (docs/web-visual-spec.md rule R5). A field an older
-         * sloth does not send is 0, not missing. */
-        static const char *const drops[] = {
-            "capture_drop_delta", "capture_ifdrop_delta",
-            "monitor_drop_delta", "monitor_ifdrop_delta", NULL
-        };
-        double d = 0, v;
-        for (int i = 0; drops[i]; i++)
-            if (web_jl_num(r, drops[i], &v) && v > 0) d += v;
-        web_rollup_add(m->ru, WM_SENSOR_DROPS, "", d, now);
     }
 }

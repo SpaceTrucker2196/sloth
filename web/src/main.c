@@ -13,6 +13,8 @@
 
 #include "web_anomaly.h"
 #include "web_baseline.h"
+#include "web_ble.h"
+#include "web_btsig.h"
 #include "web_chmix.h"
 #include "web_config.h"
 #include "web_devices.h"
@@ -46,6 +48,12 @@ static web_m4_t       g_m4;
 static web_sqlbox_t   g_sql;
 static web_chmix_t    g_chmix;
 static web_frrs_t     g_frrs;
+static web_ble_t      g_ble;
+
+/* The store's BLE rows into the in-memory tables, before any thread
+ * starts (the restore runs on the store's writer connection). */
+static void seed_dev(void *ctx, const web_store_bdev_t *r) { web_ble_seed(ctx, r); }
+static void seed_alert(void *ctx, const web_store_balert_t *r) { web_ble_seed_alert(ctx, r); }
 
 static void on_signal(int sig) {
     (void)sig;
@@ -112,7 +120,8 @@ int main(int argc, char **argv) {
         web_ident_init(&g_ident, cfg.max_keys, cfg.max_keys / 2) != 0 ||
         web_ptr_init(&g_ptr, WEB_PTR_CAP) != 0 ||
         web_anomaly_init(&g_anomaly, WEB_ANOM_CAP, &acfg) != 0 ||
-        web_chmix_init(&g_chmix, have_store) != 0) {
+        web_chmix_init(&g_chmix, have_store) != 0 ||
+        web_ble_init(&g_ble, have_store) != 0) {
         fprintf(stderr, "slothweb: time series: out of memory\n");
         return 1;
     }
@@ -122,11 +131,21 @@ int main(int argc, char **argv) {
         fprintf(stderr, "slothweb: store: the saved baselines or anomaly "
                         "episodes could not all be read; starting from what "
                         "was\n");
+    int ble_seeded = 0;
+    if (have_store) {
+        ble_seeded = web_store_ble_load(&g_store, WEB_BLE_DEVICES, seed_dev, &g_ble,
+                                        (long long)time(NULL) - WEB_BLE_RESOLVED_S,
+                                        seed_alert, &g_ble);
+        if (ble_seeded < 0)
+            fprintf(stderr, "slothweb: store: the saved BLE advertisers could not "
+                            "all be read; starting from what was\n");
+    }
     web_metrics_set_ident(&g_metrics, &g_ident);
     web_metrics_set_mix(&g_metrics, &g_chmix);
     web_metrics_set_live(&g_metrics, &g_live);
     web_metrics_set_anomaly(&g_metrics, &g_anomaly);
     web_tsdb_set_mix(&g_tsdb, &g_chmix);
+    web_tsdb_set_ble(&g_tsdb, &g_ble);
     web_ident_set_ptr(&g_ident, &g_ptr);
     g_m4.sdb = cfg.sloth_db[0] ? &g_sdb : NULL;
     g_m4.oui = acfg.oui;
@@ -175,8 +194,10 @@ int main(int argc, char **argv) {
         return 1;
     }
     web_server_set_sqlbox(&g_srv, &g_sql);
+    web_server_set_ble(&g_srv, &g_ble);
     web_ingest_set_metrics(&g_ingest, &g_metrics);
     web_ingest_set_frrs(&g_ingest, &g_frrs);
+    web_ingest_set_ble(&g_ingest, &g_ble);
     if (web_tsdb_start(&g_tsdb, err, sizeof(err)) != 0 ||
         web_ingest_start(&g_ingest, &cfg.sock, cfg.sock_backoff_min_ms,
                          cfg.sock_backoff_max_ms, &g_live,
@@ -198,7 +219,8 @@ int main(int argc, char **argv) {
                     "/api/metrics, /api/baseline, /api/anomalies, "
                     "/api/devices, /api/device/MAC, /api/lookup, "
                     "/api/wifi/*, /api/history/*, /api/sessions, /api/flows, "
-                    "/api/flows/graph, /api/frrs/*%s, /events)\n",
+                    "/api/flows/graph, /api/frrs/*, /api/ble, /api/ble/alerts, "
+                    "/api/ble/ADDR%s, /events)\n",
             where, cfg.allow_sql ? ", /api/query, /api/recipes" : "");
     if (cfg.allow_sql)
         fprintf(stderr, "slothweb: SQL box on (--web-allow-sql): one "
@@ -245,6 +267,15 @@ int main(int argc, char **argv) {
             g_frrs.assess_dir[0] ? g_frrs.assess_dir : cfg.assess_dir[0] ? ": no such directory"
                                                      : "",
             g_frrs.assess_dir[0] ? "" : ", no recommendation yet");
+    const web_btsig_tab_t *bt = web_btsig_builtin();
+    fprintf(stderr, "slothweb: BLE: %d advertiser%s restored from the store; "
+                    "assigned numbers: %s (%zu companies, %zu services, %zu "
+                    "appearances)%s\n", ble_seeded < 0 ? 0 : ble_seeded,
+            ble_seeded == 1 ? "" : "s", bt->source, bt->ncompany, bt->nservice,
+            bt->nappearance,
+            strcmp(bt->source, "sig") ? "; names off: built without the SIG CSVs "
+                                        "in web/data/btsig/ (web/data/btsig/SOURCE.md)"
+                                      : "");
     if (have_store) {
         fprintf(stderr, "slothweb: time series in %s (10 s for 24 h, 1 min "
                         "for %d d, 1 h for 400 d; ceiling %d MB)\n",
@@ -280,6 +311,7 @@ int main(int argc, char **argv) {
     web_tsdb_destroy(&g_tsdb);
     web_metrics_destroy(&g_metrics);
     web_chmix_destroy(&g_chmix);
+    web_ble_destroy(&g_ble);
     web_rollup_destroy(&g_rollup);
     web_anomaly_destroy(&g_anomaly);
     web_baseline_destroy(&g_baseline);

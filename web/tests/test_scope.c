@@ -1338,6 +1338,28 @@ static void test_wifi_card_scoped(void) {
     WT_EQ(route(&H, "/api/wifi/local", ""), 200);
     WT_HAS(body_of(g_out), "HomeNet");
     same_as_hybrid(&H, "/api/wifi/local", "");
+    /* The BLE routes (web_ble.h): the receivers are passive radio, so
+     * Monitor and Hybrid serve them and Local holds nothing of them,
+     * the query still checked. Seen red with route_ble()'s none_here
+     * forced 0 (a Local answer carried rows). */
+    web_ble_t ble;
+    WT_EQ(web_ble_init(&ble, 0), 0);
+    web_health_t HB = H;
+    HB.ble = &ble;
+    static const char *const BLE_ROUTES[] = { "/api/ble", "/api/ble/alerts",
+                                              "/api/ble/02%3Ade%3A00%3A00%3A00%3A01" };
+    for (size_t i = 0; i < sizeof(BLE_ROUTES) / sizeof(BLE_ROUTES[0]); i++) {
+        WT_EQ(route(&HB, BLE_ROUTES[i], "scope=local"), 200);
+        WT_HAS(body_of(g_out), "{\"scope\":\"local\",\"out_of_scope\":true,\"reason\":\"BLE advertisers are the passive Bluetooth receivers");
+        WT_LACKS(body_of(g_out), "\"rows\"");
+        int s = route(&HB, BLE_ROUTES[i], "scope=monitor");
+        WT_ASSERT(s == 200 || s == 404);
+        WT_HAS(body_of(g_out), "{\"scope\":\"monitor\",");
+        WT_LACKS(body_of(g_out), "out_of_scope");
+        same_as_hybrid(&HB, BLE_ROUTES[i], "");
+    }
+    WT_EQ(route(&HB, "/api/ble", "scope=local&sort=bogus"), 400);
+    web_ble_destroy(&ble);
     WT_EQ(sdb_exec(g_db, "DELETE FROM wifi_aps;"), 0);
 }
 

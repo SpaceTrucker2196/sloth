@@ -33,8 +33,27 @@ int web_tsdb_init(web_tsdb_t *t, web_rollup_t *ru, web_store_t *store,
 void web_tsdb_destroy(web_tsdb_t *t) {
     free(t->batch);
     free(t->mix_batch);
+    free(t->ble_batch);
+    free(t->ble_abatch);
     t->batch = NULL;
     t->mix_batch = NULL;
+    t->ble_batch = NULL;
+    t->ble_abatch = NULL;
+}
+
+/* A flush takes every dirty row: the tables' own bounds are the batch. */
+void web_tsdb_set_ble(web_tsdb_t *t, web_ble_t *ble) {
+    t->ble = ble;
+    if (!t->ble_batch) t->ble_batch = calloc(WEB_BLE_DEVICES, sizeof(*t->ble_batch));
+    if (!t->ble_abatch) t->ble_abatch = calloc(WEB_BLE_ALERTS, sizeof(*t->ble_abatch));
+    if (!t->ble_batch || !t->ble_abatch) t->ble = NULL;
+}
+
+static void flush_ble(web_tsdb_t *t) {
+    if (!t->ble || !t->store) return;
+    size_t n = web_ble_take(t->ble, t->ble_batch, WEB_BLE_DEVICES);
+    size_t na = web_ble_take_alerts(t->ble, t->ble_abatch, WEB_BLE_ALERTS);
+    if (n || na) web_store_ble_write(t->store, t->ble_batch, n, t->ble_abatch, na);
 }
 
 #define MIX_TAKE 512
@@ -66,6 +85,7 @@ void web_tsdb_set_rows_hook(web_tsdb_t *t, web_tsdb_rows_fn fn, void *ctx) {
 
 static void flush(web_tsdb_t *t) {
     flush_mix(t);
+    flush_ble(t);
     if (!t->store && !t->rows_hook) return;
     size_t n;
     int wrote = 0;

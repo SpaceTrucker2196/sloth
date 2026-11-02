@@ -79,5 +79,7 @@ void run_scope_tests(void);
 void run_prefs_tests(void);
 void run_glyph_tests(void);
 void run_frrs_tests(void);
+void run_ble_tests(void);
+void run_btsig_tests(void);
 
 #endif

@@ -738,6 +738,79 @@ static void test_monitor_rows_are_jsonls_monitor_records(void) {
     WT_EQ(found, nw);
 }
 
+/* ── the BLE view ───────────────────────────────────────────────── */
+
+/* The page's BLE view (web_ble.h) draws as src/views/ble.c's [*] does:
+ * a row is one colour, CP_BRIGHT for a HID or watchlisted advertiser
+ * and CP_NORMAL otherwise (no CP_DIM address, no hash hue, no RSSI
+ * heat, no monitor ground); the header's HID and watchlist counts at
+ * tui_heat(0.5) above zero and CP_DIM at zero; the header's count
+ * bright; the flood keys, empty state and legend dim. Both sides'
+ * choice lines are pinned, so a change on either fails here. Seen red
+ * with the page's row choice swapped (1 failed), its HID count drawn
+ * "h3" (1 failed) and "ble_device" added to MON_TYPES (2 failed). */
+static void test_ble_view_colours_as_the_tui(void) {
+    static char src[1 << 16];
+    FILE *f = fopen("src/views/ble.c", "rb");
+    WT_ASSERT(f != NULL);
+    if (!f) return;
+    size_t n = fread(src, 1, sizeof(src) - 1, f);
+    fclose(f);
+    src[n] = '\0';
+    /* The TUI's choices. */
+    WT_HAS(src, "if (i == sel) tui_sel(); else if (d->hid || d->watch_cat[0]) tui_bright(); else tui_normal();");
+    WT_HAS(src, "TPRINT(\" BLE advertisers: \");");
+    WT_HAS(src, "    if (hid) tui_heat(0.5); else tui_dim();");
+    WT_HAS(src, "    if (wl) tui_heat(0.5); else tui_dim();");
+    WT_HAS(src, "    tui_dim(); TPRINT(\"  flood keys: %d");
+    WT_HAS(src, "TPRINT(\" T: P public R random p/r resolved  H HID  W watchlist  ~ sample  DIST: signal-strength estimate\\n\");");
+    WT_HAS(src, "  (no advertisements decoded - start with --bt-monitor or\\n");
+    WT_HAS(src, "   --bt-capture PATH; see docs/wiki/ble.md. sloth never scans,\\n");
+    WT_HAS(src, "   connects or reads GATT: the operator's stack runs the scan.)\\n");
+    /* The page's: the same choices, the same words. */
+    WT_HAS(page(), "    var cls = d.hid || d.watch_category ? \"d-bright\" : \"d-normal\";");
+    WT_HAS(page(), "    var row = el(\"div\", \"blerow dt-row \" + cls + (sel ? \" on\" : \"\"));");
+    WT_HAS(page(), ".blerow > span { color: inherit; }");
+    WT_HAS(page(), "    line.appendChild(el(\"span\", \"d-normal\", \"BLE advertisers: \"));");
+    WT_HAS(page(), "    line.appendChild(el(\"span\", \"d-bright\", String(j.total)));");
+    WT_HAS(page(), "    line.appendChild(el(\"span\", j.hid > 0 ? \"h2\" : \"d-dim\", String(j.hid)));");
+    WT_HAS(page(), "    line.appendChild(el(\"span\", j.watch > 0 ? \"h2\" : \"d-dim\", String(j.watch)));");
+    WT_HAS(page(), "    line.appendChild(el(\"span\", \"d-dim\", \"  flood keys: \" + j.flood_keys));");
+    WT_HAS(page(), "<div class=\"bleline d-dim\" id=\"b-legend\">T: P public R random p/r resolved  H HID  W watchlist  ~ sample  DIST: signal-strength estimate</div>");
+    WT_HAS(page(), "<div class=\"bleline d-dim\" id=\"b-empty\" hidden></div>");
+    WT_HAS(page(), "(no advertisements decoded - start with --bt-monitor or");
+    WT_HAS(page(), " --bt-capture PATH; see docs/wiki/ble.md. sloth never scans,");
+    WT_HAS(page(), " connects or reads GATT: the operator's stack runs the scan.)");
+    WT_HAS(page(), ".d-bright { color: var(--tui-bright); }");
+    WT_HAS(page(), ".d-dim { color: var(--tui-dim); }");
+    WT_HAS(page(), ".h2 { color: var(--heat-2); }");
+    /* tui_heat(0.5) is CP_HEAT_HI in the ncurses build (the ANSI
+     * fallback draws truecolor approximations, so the pairs are read
+     * from source and from tui_pair_colors(), not captured), and
+     * test_pairs_and_heat_as_the_tui proves CP_HEAT_HI is --heat-2 and
+     * CP_BRIGHT / CP_NORMAL / CP_DIM the three --tui-* tokens. */
+    static char tsrc[1 << 18];
+    FILE *t = fopen("src/tui.c", "rb");
+    WT_ASSERT(t != NULL);
+    if (!t) return;
+    size_t tn = fread(tsrc, 1, sizeof(tsrc) - 1, t);
+    fclose(t);
+    tsrc[tn] = '\0';
+    WT_HAS(tsrc, "    else if (frac < 0.40) attrset(COLOR_PAIR(CP_HEAT_MID));\n"
+                 "    else if (frac < 0.70) attrset(COLOR_PAIR(CP_HEAT_HI));\n");
+    WT_HAS(page(), "f < 0.70 ? \"h2\" : \"h3\"; }");
+    WT_HAS(page(), "function heatClass(f) { return f < 0.15 ? \"h0\" : f < 0.40 ? \"h1\" : ");
+    /* No BLE record is a monitor-ground row (the TUI's packets band and
+     * its [*] view put none on CP_MON_ROW). */
+    const char *m = strstr(page(), "var MON_TYPES = [");
+    const char *me = m ? strstr(m, "];") : NULL;
+    WT_ASSERT(m && me);
+    if (m && me) {
+        const char *hit = strstr(m, "\"ble_");
+        WT_ASSERT(!hit || hit > me);
+    }
+}
+
 void run_tui_colors_tests(void) {
     WT_RUN(test_ips_and_ssids_colour_as_the_tui);
     WT_RUN(test_non_utf8_ssids_colour_as_the_tui);
@@ -746,4 +819,5 @@ void run_tui_colors_tests(void) {
     WT_RUN(test_pairs_and_heat_as_the_tui);
     WT_RUN(test_alert_hot_addresses_colour_as_the_tui);
     WT_RUN(test_monitor_rows_are_jsonls_monitor_records);
+    WT_RUN(test_ble_view_colours_as_the_tui);
 }

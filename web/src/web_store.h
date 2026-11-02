@@ -62,10 +62,11 @@
 
 #include "web_baseline.h"
 #include "web_chmix.h"
+#include "web_ble.h"
 #include "web_rollup.h"
 
 /* The version this build writes. */
-#define WEB_STORE_SCHEMA   6
+#define WEB_STORE_SCHEMA   7
 #define WEB_STORE_ERR_MAX  320
 #define WEB_DEFAULT_STORE  "./slothweb.db"
 /* --web-max-mb: the ceiling on the store's used pages. */
@@ -119,6 +120,10 @@ typedef struct {
                                              recounted at open and each
                                              compaction */
     unsigned long long mix_dropped_expired, mix_dropped_cap;
+    long long     ble_rows, ble_alert_rows;   /* the BLE tables (v7), recounted
+                                                 after every write and at open */
+    unsigned long long ble_dropped_expired, ble_dropped_cap;
+    unsigned long ble_batches;
     char          last_error[WEB_STORE_ERR_MAX];
 } web_store_stats_t;
 
@@ -410,6 +415,38 @@ int  web_store_mix_query(web_store_t *s, int tier, long long from, long long to,
                          int *more);
 /* chmix rows, counted now (tests). -1 on error. */
 long long web_store_mix_count(web_store_t *s);
+
+/* ── the BLE tables (v7) ────────────────────────────────────────────
+ *
+ * web_ble.h's advertiser rows and findings, as slothweb keeps them
+ * (sloth.db has no BLE table). ble_device is keyed (addr, addr_type,
+ * iface) as the in-memory table is; ble_alert by the finding's key
+ * hashed (never the key). The one peer-chosen text is the local name,
+ * stored in its display form as passive_ptr.name (v4) stores a
+ * peer-chosen name; it is never a key. Bounded: rows older than
+ * --web-retain-days go at every compaction (ble_dropped_expired); the
+ * tables hold at most WEB_STORE_BLE_ROWS and WEB_STORE_BLE_ALERT_ROWS
+ * rows, the oldest by last seen dropped after a write that passes
+ * that (ble_dropped_cap). */
+#define WEB_STORE_BLE_ROWS       131072
+#define WEB_STORE_BLE_ALERT_ROWS 4096
+
+/* Upsert n advertiser rows and na findings in one transaction (a row
+ * already there takes the new values; pdu_mask and hid are OR-ed, the
+ * earlier first_seen kept), then the row caps. 0, or -1 (counted, the
+ * reason kept). Store thread only. */
+int  web_store_ble_write(web_store_t *s, const web_store_bdev_t *rows, size_t n,
+                         const web_store_balert_t *alerts, size_t na);
+/* The cap most recently seen advertiser rows, each to fn; the findings
+ * still standing or changed since `since`, each to afn (at most
+ * WEB_BLE_ALERTS). Writer connection, before any thread starts. Rows
+ * given, or -1. */
+int  web_store_ble_load(web_store_t *s, int cap,
+                        void (*fn)(void *ctx, const web_store_bdev_t *r), void *ctx,
+                        long long since,
+                        void (*afn)(void *ctx, const web_store_balert_t *r), void *actx);
+/* ble_device and ble_alert rows, counted now (tests). -1 on error. */
+long long web_store_ble_count(web_store_t *s, int alerts);
 
 /* Test seams (web/tests/test_store.c); NULL and 0 in slothweb itself.
  * web_store_test_between_opens runs after the read-only identify and

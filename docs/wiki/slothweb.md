@@ -103,7 +103,7 @@ and for the Alerts page, `web/src/web_alerts.c`, `web/src/web_alertdb.c`,
 detail formats audited), `include/sloth_alerts.def`,
 `docs/views/alerts.md`, `research/` and [[alert-remediation]].
 
-**Last updated**: 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)), 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (kept settings: every control a viewer
+**Last updated**: 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)), 2026-11-01 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`), 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (kept settings: every control a viewer
 can change kept per browser under `slothweb.v1.*`, each table's widths
 and sort among them, the address still winning, a reset per table and
 one for everything, and its review: a link's filters and scope applied
@@ -1144,6 +1144,83 @@ import's header and end checks and its transaction, the bounds on
 deleted rows and imported triage, the suggestion rules as §7 states
 them); 2026-11-01.
 
+## The BLE view (2026-11-01)
+
+Owner request: "add bluetooth to the web ui". The reference host's
+sensor runs with `--bt-monitor` and `sloth-ble-scan` holding a passive
+scan, so the stream carries `ble_device` and `ble_alert` records and
+`sensor_health` the `btmon_*` / `ble_*` / `btcap_*` members; sloth's
+TUI has the `[*]` view ([[ble]]). sloth.db has no BLE table, so
+slothweb keeps BLE itself: `web/src/web_ble.h` holds 1024 advertisers
+(one row per advertiser **as one sensor heard it**, keyed address,
+address type and sensor, as sloth keys them: the host controller and an
+Ubertooth hearing the same address are two rows whose counts are never
+summed), 128 findings (standing until the `alert.resolve` of the same
+key, or quiet for two heartbeats), the latest `sensor_health`'s
+Bluetooth block, and per row the last sixteen `(ts, adv_count)` points
+for an advertising rate and a 96-bit strip of the quarter hours of the
+last day it was heard in; and persists the rows in slothweb.db **v7**
+(`ble_device`, `ble_alert`, their indexes, an additive migration from
+the triage slice's v6 with its two tests on a v6 file holding triage
+rows) so a restart keeps the history. The rate
+is kept in the module rather than as a per-address series in the
+rollup: that class is 512 keys shared with the Wi-Fi tables, and a
+resident random-address device is a new key every fifteen minutes.
+Two global series do enter the rollup, `ble.devices` and
+`ble.adv_rate`, from `sensor_health`, both Monitor's.
+
+The tab (key `0`) is the TUI view at parity: the same columns with the
+TUI's own cell strings (`type_ch`, `count_cell`, `age_cell`, the HWS
+flags, `summary_cell`, `rf_dist_cell`'s full form), every column
+sortable and resizable through the one `DataTable()`, a row one colour
+(`--tui-bright` for a HID or watchlisted advertiser, `--tui-normal`
+otherwise: no swatch, no hash hue, no RSSI heat, no monitor ground),
+the header line, the rotation-hints block (verbatim; the estimate is
+not on the stream, only the hint count as a decade band, and the block
+says so), the empty state and the legend, all dim as the TUI draws
+them; plus the columns the TUI lacks: the address in words (`random
+static`, `random RPA`, `random NRPA`, ...), the Bluetooth SIG's names
+from its assigned numbers, the best RSSI, the rate, first heard, the
+PDUs heard and the watch category, each with a server sort word. A click opens a drawer in the TUI detail's order and
+wording, then the PDUs heard, the PHYs and SID, the stamps, a 24 h
+presence strip (G5, quarter hours, stored with the row), the rate (a
+G1), and the `hid_oui` findings naming the address. The findings
+table lists `ble_alert` standing first; the same incidents are on the
+Alerts page as `alert.*` records, typed and Monitor's. The Health view
+gains a `bluetooth` block, the sensor tile's sub-line the `btmon`
+stream, the Overview a `ble advertisers` tile (count, HID / watchlisted
+/ standing, a G1 of `ble.devices`), the strip a `ble` pill. Under Local the view is empty and says
+why; `/api/ble`, `/api/ble/alerts` and `/api/ble/{addr}` answer
+`out_of_scope` there ([[capture-scope]]) and `/api/live`'s `ble` member
+is `null`.
+
+The SIG's company identifiers, 16-bit service UUIDs and appearance
+values are committed as CSVs under `web/data/btsig/` with a
+`SOURCE.md` (URLs, the date and SHA-256 of the YAML fetched once during
+development, the licence note) and compiled in by
+`web/tools/btsig_gen.c`, as the IEEE registry is; `make update-btsig
+SRC=DIR` converts the YAML found in a given directory and never
+fetches (the ab5fcb2 ruling). Every string off the stream is hostile
+and treated as the Wi-Fi tables treat theirs: the local name in its
+display form (`web_ssid.h`) with the non-printable marker, the sensor
+and PDU words, kinds, families and distance words only from sloth's
+closed vocabularies (else `other`, counted), the watch category only
+as sloth's slug, the finding's key kept for the resolve join and never
+rendered. Full description, the parity table and the v7 schema:
+[`web/README.md`](../../web/README.md#ble). Tests:
+`web/tests/test_ble.c` (hand-built records, every route under each
+scope, the metrics, the store round trip and seed, each absence seen
+red under a named mutation), `web/tests/test_btsig.c` (the committed
+CSVs to `SOURCE.md`'s hashes, the lookups), the v5 migration pair in
+`test_store.c`, the vocabularies held to `src/` as text in
+`test_parity.c`.
+
+**Sources**: `src/views/ble.c`, `src/jsonl.c` (the three emitters),
+`src/rf_distance.c`, `src/ble_detect.c`, `web/src/web_ble.h`,
+`web/src/web_store.c` (v7), `web/data/btsig/SOURCE.md`,
+`research/papers/rssi-distance-estimation.md`.
+**Last updated**: 2026-11-01.
+
 ## Tests
 
 `make web-test` is self-contained: no host file, loopback ephemeral
@@ -1279,6 +1356,8 @@ covers `web/`.
 - [[alert-remediation]] — the investigate-and-fix steps an alert's page shows.
 - [[alerts]] — the engine and the rules the Alerts page lists.
 - [[capture-scope]] — the Monitor / Hybrid / Local switch and how each datum is placed.
+- [[ble]] — the Bluetooth host source whose `ble_device` / `ble_alert`
+  records and `sensor_health` members the BLE view shows.
 - [[cli-reference]] — sloth's own flags; slothweb's are in
   [`web/README.md`](../../web/README.md), the triage slice's
   `--web-read-only` and `--web-assessments` among them

@@ -646,8 +646,27 @@ WEB_AKB_CORPUS  = $(wildcard research/*.md research/*/*.md research/*/*/*.md)
 WEB_AKBGEN      = $(WEB_GEN_DIR)/alertkb
 WEB_AKBGEN_SRCS = web/tools/alertkb.c
 WEB_AKB_C       = $(WEB_GEN_DIR)/web_alertkb.c
+# The Bluetooth SIG assigned numbers (company identifiers, 16-bit
+# service UUIDs, appearance values) for the BLE view, the same shape as
+# the IEEE registry: web/tools/btsig_gen.c compiles the CSVs committed in
+# web/data/btsig/ (web/data/btsig/SOURCE.md) into
+# build/web/web_btsig_table.c, never committed; WEB_BTSIG_DIR elsewhere
+# builds an empty table ("none") and the page shows the numbers alone.
+# web/tools/update_btsig.sh refreshes the CSVs from a given directory of
+# the SIG's YAML and never fetches; nothing else runs it.
+WEB_BTSIG_DIR  ?= web/data/btsig
+WEB_BTSIG_CSVS  = $(wildcard $(WEB_BTSIG_DIR)/company_identifiers.csv \
+                             $(WEB_BTSIG_DIR)/service_uuids.csv \
+                             $(WEB_BTSIG_DIR)/appearance_values.csv)
+WEB_BTSIGGEN    = $(WEB_GEN_DIR)/btsig_gen
+WEB_BTSIGGEN_SRCS = web/tools/btsig_gen.c
+WEB_BTSIG_C     = $(WEB_GEN_DIR)/web_btsig_table.c
+WEB_BTSIG_STAMP = $(WEB_GEN_DIR)/btsig.inputs
+WEB_BTSIG_ARGS  = $(if $(wildcard $(WEB_BTSIG_DIR)/company_identifiers.csv),--company $(WEB_BTSIG_DIR)/company_identifiers.csv,) \
+                  $(if $(wildcard $(WEB_BTSIG_DIR)/service_uuids.csv),--service $(WEB_BTSIG_DIR)/service_uuids.csv,) \
+                  $(if $(wildcard $(WEB_BTSIG_DIR)/appearance_values.csv),--appearance $(WEB_BTSIG_DIR)/appearance_values.csv,)
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C) \
-                  $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C)
+                  $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C)
 WEB_TEST_SRCS   = $(wildcard web/tests/*.c) web/tools/oui_csv.c web/tools/demo.c src/db_schema.c \
                   src/rsn_ie.c src/ip_color.c src/tui_palette.c \
                   src/tui.c src/netstr.c src/view_labels.c
@@ -709,6 +728,19 @@ $(WEB_OUI_C): $(WEB_OUIGEN) $(WEB_OUI_STAMP) $(WEB_OUI_CSVS) src/oui.c
 	$(WEB_OUIGEN) $@.tmp src/oui.c $(WEB_OUI_CSVS)
 	mv $@.tmp $@
 
+$(WEB_BTSIGGEN): $(WEB_BTSIGGEN_SRCS) web/src/web_btsig.h
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -Iweb/src -o $@ $(WEB_BTSIGGEN_SRCS)
+
+$(WEB_BTSIG_STAMP): STAMP = $(WEB_BTSIG_CSVS) $(if $(WEB_BTSIG_CSVS),$(shell cksum $(WEB_BTSIG_CSVS)))
+$(WEB_BTSIG_STAMP): FORCE
+	@mkdir -p $(WEB_GEN_DIR)
+	@[ -f $@ ] && [ "$$(cat $@)" = "$(STAMP)" ] || printf '%s\n' '$(STAMP)' > $@
+
+$(WEB_BTSIG_C): $(WEB_BTSIGGEN) $(WEB_BTSIG_STAMP) $(WEB_BTSIG_CSVS)
+	$(WEB_BTSIGGEN) $@.tmp $(WEB_BTSIG_ARGS)
+	mv $@.tmp $@
+
 $(WEB_RECIPESGEN): $(WEB_RECIPES_SRCS)
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -o $@ $(WEB_RECIPES_SRCS)
@@ -726,8 +758,8 @@ $(WEB_AKB_C): $(WEB_AKBGEN) $(WEB_AKB_INPUTS) $(WEB_AKB_CORPUS) web/src/web_aler
 	    docs/wiki/alerts.md docs/wiki/alert-remediation.md research
 	mv $@.tmp $@
 
-.PHONY: web web-test update-oui
-web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C)
+.PHONY: web web-test update-oui update-btsig
+web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C)
 	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iweb/src -o slothweb $(WEB_MAIN) \
 	      $(WEB_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
 
@@ -758,10 +790,12 @@ web-quickstart-check:
 # only; no host file, no running sloth, no name lookup, no network beyond
 # 127.0.0.1 and ::1. The test links the embedder's
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
-web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C)
+web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C)
 	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) -DSLOTHWEB_DEMO_LIB -Iweb/src -Iweb/tests -Iweb/tools \
 	      -Iinclude -iquote research -DWEB_OUI_EXPECT='"$(if $(WEB_OUI_CSVS),ieee,sloth)"' \
-	      -DWEB_OUI_DATA='"$(WEB_OUI_DIR)"' -o slothweb_test \
+	      -DWEB_OUI_DATA='"$(WEB_OUI_DIR)"' \
+	      -DWEB_BTSIG_EXPECT='"$(if $(WEB_BTSIG_CSVS),sig,none)"' \
+	      -DWEB_BTSIG_DATA='"$(WEB_BTSIG_DIR)"' -o slothweb_test \
 	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
 	@$(call TEST_IN_TMPDIR,./slothweb_test)
 
@@ -770,6 +804,13 @@ web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C)
 # build, test or CI step depends on it, so no build touches the network.
 update-oui:
 	sh web/tools/update_oui.sh web/data
+
+# Refresh web/data/btsig/ from a GIVEN directory of the Bluetooth SIG's
+# assigned-numbers YAML (make update-btsig SRC=DIR) and rewrite its
+# SOURCE.md's hashes. By hand only, never a fetch: no build, test or CI
+# step depends on it.
+update-btsig:
+	sh web/tools/update_btsig.sh web/data/btsig $(SRC)
 
 # ── Test build ───────────────────────────────────────────────────────────────
 # Built the way the program ships (#116): WITH_NCURSES and WITH_PCAP, the

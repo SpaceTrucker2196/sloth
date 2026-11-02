@@ -15,6 +15,7 @@
 
 #include "web_acl.h"
 #include "web_frrs.h"
+#include "web_ble.h"
 #include "web_metrics.h"
 
 /* ── --socket ────────────────────────────────────────────────────────── */
@@ -129,6 +130,7 @@ static void one_line(web_feed_t *f, web_live_t *l, long long now_ms) {
         web_live_apply(l, &f->rec, now_ms);
         if (f->metrics) web_metrics_record(f->metrics, &f->rec);
         if (f->frrs) web_frrs_record(f->frrs, &f->rec);
+        if (f->ble) web_ble_record(f->ble, &f->rec, now_ms);
     } else {
         web_live_decode_error(l, e, now_ms);
         if (f->metrics) web_metrics_taint(f->metrics);
@@ -360,6 +362,10 @@ void web_ingest_set_metrics(web_ingest_t *g, struct web_metrics *m) {
 
 void web_ingest_set_frrs(web_ingest_t *g, struct web_frrs *f) {
     g->feed.frrs = f;
+}
+
+void web_ingest_set_ble(web_ingest_t *g, struct web_ble *b) {
+    g->feed.ble = b;
 }
 
 void web_ingest_stop(web_ingest_t *g) {

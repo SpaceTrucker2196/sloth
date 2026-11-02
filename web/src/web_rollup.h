@@ -145,6 +145,10 @@ enum {
      * tick regardless; records.rate from every record, keyed by type. */
     WM_LIVE_DEVICES, WM_LIVE_ALERTS_OPEN, WM_LIVE_ANOMALIES_OPEN,
     WM_RECORDS_RATE, WM_SENSOR_DROPS,
+    /* The BLE receivers' two global series (web_ble.h): the advertiser
+     * table's size and the advertising-report rate, from sensor_health.
+     * Global, so never evicted; Monitor's (web_scope.c). */
+    WM_BLE_DEVICES, WM_BLE_ADV_REPORTS,
     WM_COUNT
 };
 

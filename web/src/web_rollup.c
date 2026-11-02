@@ -82,6 +82,11 @@ const web_metric_t web_metric_defs[WM_COUNT] = {
                           "sensor_health capture_drop_delta + "
                           "capture_ifdrop_delta + monitor_drop_delta + "
                           "monitor_ifdrop_delta", "frames" },
+    [WM_BLE_DEVICES] = { "ble.devices", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                         "sensor_health ble_devices (sloth's advertiser rows)",
+                         "advertisers" },
+    [WM_BLE_ADV_REPORTS] = { "ble.adv_rate", WEB_MK_COUNTER, WEB_KC_GLOBAL, "",
+                             "sensor_health ble_adv_reports delta", "reports" },
 };
 
 static const int TIER_STEP[WEB_TIER_COUNT] = { WEB_FINE_S, WEB_MINUTE_S, WEB_HOUR_S };

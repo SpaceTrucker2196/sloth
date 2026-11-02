@@ -56,11 +56,12 @@ static void test_schema_text_guardrail(void) {
     const char *v4 = web_store_step_sql(3);
     const char *v5 = web_store_step_sql(4);
     const char *v6 = web_store_step_sql(5);
-    WT_ASSERT(meta && v1 && v2 && v3 && v4 && v5 && v6);
-    WT_ASSERT(web_store_step_sql(6) == NULL);     /* v6 is current */
-    WT_EQ(WEB_STORE_SCHEMA, 6);
-    const char *both[7] = { meta, v1, v2, v3, v4, v5, v6 };
-    for (int k = 0; k < 7; k++) {
+    const char *v7 = web_store_step_sql(6);
+    WT_ASSERT(meta && v1 && v2 && v3 && v4 && v5 && v6 && v7);
+    WT_ASSERT(web_store_step_sql(7) == NULL);     /* v7 is current */
+    WT_EQ(WEB_STORE_SCHEMA, 7);
+    const char *both[8] = { meta, v1, v2, v3, v4, v5, v6, v7 };
+    for (int k = 0; k < 8; k++) {
         for (size_t i = 0; i < NFORBIDDEN; i++) {
             if (!strcmp(FORBIDDEN[i], "mic")) {
                 WT_ASSERT(strstr(both[k], "  mic ") == NULL);
@@ -107,12 +108,30 @@ static void test_schema_text_guardrail(void) {
     WT_HAS(v5, "CREATE TABLE chmix (");
     WT_HAS(v5, "CREATE INDEX chmix_t ON chmix (tier, t)");
     WT_ASSERT(!ci_has(v5, "ssid"));
+    /* v7: the BLE view's two tables and their indexes, nothing else; the
+     * finding's key only as its hash, the name the one text a peer
+     * chose (its display form), no raw AD byte. */
+    creates = semis = 0;
+    for (const char *p = v7; (p = strstr(p, "CREATE ")); p++) creates++;
+    for (const char *p = v7; *p; p++) semis += *p == ';';
+    WT_EQ(creates, 4);
+    WT_EQ(semis, 4);
+    WT_HAS(v7, "CREATE TABLE ble_device (");
+    WT_HAS(v7, "CREATE INDEX ble_device_last ON ble_device (last_seen)");
+    WT_HAS(v7, "CREATE TABLE ble_alert (");
+    WT_HAS(v7, "CREATE INDEX ble_alert_last ON ble_alert (last_ts)");
+    WT_HAS(v7, "  key_hash    TEXT PRIMARY KEY,");
+    WT_ASSERT(strstr(v7, "  key ") == NULL);
+    WT_ASSERT(!ci_has(v7, "ad_data"));
+    WT_ASSERT(!ci_has(v7, "raw"));
     /* Not IF NOT EXISTS: a step must fail on a name already taken. */
     WT_ASSERT(strstr(v1, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v2, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v3, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v4, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v5, "IF NOT EXISTS") == NULL);
+    WT_ASSERT(strstr(v6, "IF NOT EXISTS") == NULL);
+    WT_ASSERT(strstr(v7, "IF NOT EXISTS") == NULL);
 }
 
 #ifndef WITH_SQLITE
@@ -249,7 +268,7 @@ static void test_no_column_can_hold_secret_material(void) {
     }
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
-                     " AND UPPER(c.type)='TEXT'"), 35);
+                     " AND UPPER(c.type)='TEXT'"), 43);
     /* meta (name, value), series (metric, key), baseline (metric, key),
      * episode (kind, metric, key, evidence), fanout (key, hist),
      * reported (kind, key), passive_ptr (ip, name) and chmix (channel,
@@ -265,7 +284,13 @@ static void test_no_column_can_hold_secret_material(void) {
      * label) and tacdb_dismiss (a, b): an alert id, canonical addresses,
      * slothweb's own basis sentence, and operator-typed text that
      * arrives only through the validated POST body, never from the
-     * stream (test_frrs.c holds the stream out of them). */
+     * stream (test_frrs.c holds the stream out of them). The v7 tables
+     * (web_ble.h) add eight: ble_device (addr, iface, name,
+     * watch_category: a canonical address, sloth's two sensor names, the
+     * local name in its display form, sloth's category slug) and
+     * ble_alert (key_hash, alert, iface, label: a hash, sloth's own
+     * words); a ble_device name is the advertiser's own, escaped
+     * (web_ble.h). */
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
                      " AND UPPER(c.type)='BLOB'"), 0);
@@ -557,7 +582,8 @@ static void test_v4_file_is_migrated(void) {
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
     /* Brought through v5 to the current version by the chain. */
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 6);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"),
+          WEB_STORE_SCHEMA);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
                      " name IN ('chmix','chmix_t')"), 2);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM chmix"), 0);
@@ -601,7 +627,8 @@ static void make_v5(const char *p, const char *extra) {
 }
 
 /* v5 -> v6 adds the triage and tacdb tables with their indexes, empty,
- * and changes nothing that was there. */
+ * and changes nothing that was there; the chain then takes it on through
+ * v7 (the BLE tables, empty too). */
 static void test_v5_file_is_migrated(void) {
     char p[128], err[512];
     path_in(p, sizeof(p), "v5.db");
@@ -609,7 +636,11 @@ static void test_v5_file_is_migrated(void) {
     WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 5);
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 6);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"),
+          WEB_STORE_SCHEMA);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name IN"
+                     " ('ble_device','ble_device_last','ble_alert','ble_alert_last')"), 4);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM ble_device"), 0);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND"
                      " name IN ('triage','tacdb_unit','tacdb_platform',"
                      "'tacdb_emitter','tacdb_dismiss')"), 5);
@@ -644,6 +675,81 @@ static void test_v5_failed_step_leaves_file_unchanged(void) {
                      " name='triage_subject' AND tbl_name='minute'"), 1);
     WT_EQ(raw_int(p, "SELECT frames FROM chmix WHERE channel='6' AND t=960"), 40);
     WT_EQ(raw_int(p, "SELECT last_seen FROM passive_ptr WHERE ip='10.0.0.9'"), 60);
+    WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    rm_store(p);
+}
+
+/* A v6 file as the triage slice writes it: the v5 file, the v6 step and
+ * a row in each of triage (an operator's decision, with its note and an
+ * imported claim) and tacdb_platform, stamped v6. Its own statement run
+ * after make_v5(): the v6 step's text does not fit the nested make_vN()
+ * buffers. */
+static void make_v6(const char *p, const char *extra) {
+    char sql[8192];
+    make_v5(p, "");
+    snprintf(sql, sizeof(sql), "%s INSERT INTO triage (id, subject, finding,"
+             " type, addr, port, first_seen, state, prev_state, via, basis,"
+             " note, who, peer, ts, folded, claim_by, claim_peer) VALUES"
+             " (3,'42',42,7,'10.0.0.9',22,900,2,0,1,'','seen before','op',"
+             "'127.0.0.1',1000,0,'other','10.9.9.9');"
+             " INSERT INTO tacdb_platform (id, nomenclature, created, updated)"
+             " VALUES (1,'AN/TPQ-50',1000,1000);"
+             " UPDATE meta SET value='6' WHERE name='schema_version'; %s",
+             web_store_step_sql(5), extra);
+    raw_exec(p, sql);
+}
+
+/* v6 -> v7 adds ble_device and ble_alert with their indexes, empty, and
+ * changes nothing that was there: the operator's triage row and the
+ * platform come through as they were written. */
+static void test_v6_file_is_migrated(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v6.db");
+    make_v6(p, "");
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 6);
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 7);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name IN"
+                     " ('ble_device','ble_device_last','ble_alert','ble_alert_last')"), 4);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM ble_device"), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM ble_alert"), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM triage"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM triage WHERE id=3 AND subject='42'"
+                     " AND finding=42 AND type=7 AND addr='10.0.0.9' AND port=22"
+                     " AND first_seen=900 AND state=2 AND via=1"
+                     " AND note='seen before' AND who='op' AND peer='127.0.0.1'"
+                     " AND ts=1000 AND claim_by='other' AND claim_peer='10.9.9.9'"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM tacdb_platform WHERE"
+                     " nomenclature='AN/TPQ-50' AND deleted=0"), 1);
+    WT_EQ(raw_int(p, "SELECT frames FROM chmix WHERE channel='6' AND t=960"), 40);
+    WT_EQ(raw_int(p, "SELECT last_seen FROM passive_ptr WHERE ip='10.0.0.9'"), 60);
+    WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    rm_store(p);
+}
+
+/* The v6 step's failure: a v6 file already holding the name
+ * ble_device_last (an index of its own on minute) fails the step at its
+ * second statement, after ble_device was made. It stays at v6, keeps
+ * that index, the triage row and every other row, and is left without
+ * ble_device or ble_alert: the step's first statement is rolled back
+ * with it. Seen red with the migration's ROLLBACK replaced by COMMIT. */
+static void test_v6_failed_step_leaves_file_unchanged(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v6bad.db");
+    make_v6(p, "CREATE INDEX ble_device_last ON minute (t);");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), -1);
+    WT_HAS(err, "unchanged from v6");
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 6);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
+                     " name IN ('ble_device','ble_alert')"), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
+                     " name='ble_device_last' AND tbl_name='minute'"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM triage WHERE id=3 AND"
+                     " note='seen before' AND claim_peer='10.9.9.9'"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM tacdb_platform"), 1);
+    WT_EQ(raw_int(p, "SELECT frames FROM chmix WHERE channel='6' AND t=960"), 40);
     WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
     rm_store(p);
 }
@@ -1059,9 +1165,9 @@ static void refused_untouched(const char *p, const char *want) {
  * left exactly as it was. */
 static void test_newer_file_refused(void) {
     char p[128];
-    path_in(p, sizeof(p), "v7.db");
+    path_in(p, sizeof(p), "v8.db");
     raw_exec(p, "CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);"
-                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','7');"
+                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','8');"
                 "CREATE TABLE future (x INTEGER);");
     refused_untouched(p, "newer slothweb");
     rm_store(p);
@@ -2132,6 +2238,8 @@ void run_store_tests(void) {
     WT_RUN(test_v4_failed_step_leaves_file_unchanged);
     WT_RUN(test_v5_file_is_migrated);
     WT_RUN(test_v5_failed_step_leaves_file_unchanged);
+    WT_RUN(test_v6_file_is_migrated);
+    WT_RUN(test_v6_failed_step_leaves_file_unchanged);
     WT_RUN(test_mix_rows_round_trip);
     WT_RUN(test_mix_retention_and_cap);
     WT_RUN(test_mix_cut_keeps_buckets_whole);

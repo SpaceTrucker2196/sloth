@@ -133,7 +133,7 @@ static const char *const CALLS[] = {
 static const char *const NOTICE[] = {
     "listening on ", "SQL box on ", "vendor table: ", "reading ",
     "time series in ", "baselines (", "stopped: ", "store schema v",
-    "sloth.db %s: schema v",
+    "sloth.db %s: schema v", "BLE: ",
     /* triage and the TACDB (web_frrs.h): which way the writes are */
     "triage and TACDB writes ", "--web-read-only: no write route", "follow recommended: ",
 };

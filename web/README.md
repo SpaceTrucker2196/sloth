@@ -54,7 +54,15 @@ from `/usr/share/ieee-data` when Debian's `ieee-data` package is
 installed and otherwise from the IEEE; review and commit the result.
 `make web WEB_OUI_DIR=DIR` builds from another directory, and one
 without the CSVs gives sloth's own small table (about 120 vendors) with
-A4 off.
+A4 off. The Bluetooth SIG assigned numbers the BLE view names (company
+identifiers, 16-bit service UUIDs, appearance values) are the same
+shape: three CSVs committed in `web/data/btsig/`
+([`SOURCE.md`](data/btsig/SOURCE.md)), compiled in by
+`web/tools/btsig_gen.c`, refreshed by hand with `make update-btsig
+SRC=DIR` from a directory of the SIG's YAML (never a fetch), and
+`make web WEB_BTSIG_DIR=DIR` without them builds an empty table
+(`"sig":"none"` in `/api/health`'s `ble` member; the page shows the
+numbers alone).
 
 The full table costs the binary about 2.8 MB: slothweb is 3.3 MB with
 it and 0.5 MB without (x86-64, `-O2`, measured 2026-10-26); the
@@ -244,6 +252,7 @@ thread fails; slothweb is not running after either.
 | `slothweb: store: PATH: SQLITE_DBCONFIG_DEFENSIVE refused`, `libsqlite3 VERSION is older than 3.31.0`, `PATH: prepare: ERR` | The SQLite library is too old or built without what slothweb needs: install 3.31 or newer. |
 | `slothweb: store: PATH: slothweb was built without SQLite (WITH_SQLITE=0); no store` | Not printed by a normal start (a memory-only build has no store); rebuild with `make web` for one. |
 | `slothweb: store: the saved baselines or anomaly episodes could not all be read; starting from what was` | Runs on (no exit): the rows that could not be read are skipped. |
+| `slothweb: store: the saved BLE advertisers could not all be read; starting from what was` | Runs on (no exit): the BLE view starts from the stream alone; the v7 tables are read again at the next start. |
 | `slothweb: time series: out of memory` | Lower `--web-max-keys`. |
 | `slothweb: SQL box: cannot start its thread`, `slothweb: pipe: ERR`, `slothweb: pthread_create failed` | Out of threads or descriptors: check `ulimit -u` and `ulimit -n`. |
 
@@ -267,7 +276,10 @@ and the page says why in each view that needs it):
 table: ieee (...)`, or `vendor table: sloth (...); A4 off: built
 without the IEEE CSVs in web/data/` for a `WEB_OUI_DIR` build without
 them (see Build), `sloth.db ...: schema vN, N devices, read-only`, `reading
-SPEC`, `time series in`, `baselines (N restored)`, `store schema vN
+SPEC`, `BLE: N advertisers and M findings restored from the store;
+assigned numbers: sig (...)` (or `none (...); names off: built without
+the SIG CSVs in web/data/btsig/` for a `WEB_BTSIG_DIR` build without
+them), `time series in`, `baselines (N restored)`, `store schema vN
 migrated to vN`, `triage and TACDB writes on` (or `off (no store)`),
 `--web-read-only: no write route; every POST is 405`, `follow
 recommended: ...`, and in a `WITH_SQLITE=0` build:
@@ -616,6 +628,38 @@ engine keeps, its bound, and what it has had to drop or evict (below);
 | `sensor` | the latest `sensor_health` record and `state`: `unknown` (none yet), `ok`, `degraded` (a capture or monitor handle open with its thread not running, or the launch scope not enforced), `not_observing` (neither handle open), or `stale` (none for 330 s; it is change-only with a 300 s heartbeat) |
 | `alerts` | the last 8 alert lifecycle records, newest first. `match_ip` is the record's address (the page's alert-hot colour, [Design](#design)), or `""` when it has none or what it has is not 1..45 bytes of `[0-9A-Fa-f:.]` |
 | `recent` | the last 50 records of any type, oldest first, each as its `type`, `ts` and a short `text` built from the members a reader looks for first (`qname`, `host`, `ssid`, `mac`, `ip`, `src`, ...), at most 80 bytes |
+
+**`/api/ble?sort=&dir=&limit=&offset=&q=`**, **`/api/ble/alerts?limit=`**
+and **`/api/ble/{addr}?type=&iface=`** are the BLE view's ([BLE](#ble)):
+the advertisers and findings slothweb keeps from sloth's `ble_device`
+and `ble_alert` records (sloth.db has no BLE table). `sort` is `last`
+(default, newest first), `first`, `rssi`, `dist`, `adv`, `addr`, `type`,
+`iface`, `name`, `kind` (the address in words), `best` (the strongest
+RSSI), `rate`, `hws` (the three flags), `pdus`, `watch` or `mfr` (the
+company's SIG name; a company the table does not name after the named
+ones, by number), one word a column of the page's table, with
+`dir=asc|desc`; `limit` 1..1024 (default 100)
+from `offset`; `q` matches an address prefix, the local name or the
+watch category, ASCII case folded. A row carries the record's fields
+with absent ones `null` (`tx_power` -128, the ids -1, `rssi` without
+`has_rssi`), `addr_kind` (the address in words: `public`, `random
+static`, `random RPA`, `random NRPA`, `random reserved`, `resolved
+public`, `resolved random`, `anonymous`), the PDU names of `pdu_mask`, the Bluetooth SIG names of the
+company, service and appearance (`mfr_name`, `uuid16_name`,
+`svc_data_name`, `appearance_name`; `null` when the table has none),
+the row's advertising rate between its records (`adv_rate`, `null`
+with fewer than two), and `est` (sloth's distance estimate as it came:
+`m`, `band`, `trend`, `ptx`, plus `cell`, the TUI's `~5m room ↘`, and
+`describe`; `null` for no estimate). `/api/ble/alerts` lists the
+findings standing first, then those resolved in the last day; the
+finding's key is never in an answer. `/api/ble/{addr}` is every row of
+the address (the asked-for sensor's first) with its rate points and its
+presence strip (`presence`: `bucket_s` 900, `n` 96, `newest`, the start
+of the newest quarter hour a record was heard in, and `bits`, 24 hex
+digits most significant first, bit i the quarter hour i before
+`newest`), and the `hid_oui` findings naming it; 404 when none. Under `scope=local`
+each answers `out_of_scope` (the receivers are passive radio), the
+query still checked.
 
 **`/events`** is a Server-Sent Events stream. It starts with
 `retry: 3000` and the current tick, then:
@@ -1594,6 +1638,39 @@ delete whole buckets, every row of each `(channel, t)` the oldest rows
 fall in, never part of one, which would be drawn as the whole cell with
 its shares wrong. A row is
 about 60 bytes with its index, so the cap is about 32 MB.
+
+### The BLE tables: slothweb.db v7
+
+`v6 -> v7` adds `ble_device` and `ble_alert` with an index each on
+their last-seen column, in one additive `BEGIN IMMEDIATE` step like the
+others (a name already taken fails the step and leaves the file at
+v6; `web/tests/test_store.c` builds a v6 file as the triage slice
+writes it, a triage row and a TACDB platform in it, and holds both the
+migration, which leaves those rows as they were, and that failure; a
+v5 file is taken through v6 and v7 in turn). sloth.db keeps no BLE table, so these are
+slothweb's own record of what the stream said ([BLE](#ble)).
+`ble_device` is one advertiser as one sensor heard it, keyed
+`(addr, addr_type, iface)` exactly as sloth keys its table: every
+column but one is a number or one of sloth's words; `name` is the
+advertiser's local name in its display form (`web/src/web_ssid.h`, as
+`passive_ptr.name` holds a peer-chosen name), flagged by `name_np`,
+never a key; the distance estimate is kept as decimetres, band, trend
+and P_tx source, -1 for none; the drawer's presence strip as
+`pres_bucket` and its 96 bits in `pres_lo` / `pres_hi`; no raw AD byte exists on the stream and
+none is stored. `ble_alert` is one finding by the FNV-1a hash of its
+key (the key itself, which in other alert families can carry remote
+text, is never stored), its per-kind integers in five generic columns
+`n0..n4` and its one word of the kind (`mfr/ADV_IND`, `Hak5`, the
+watch category) in `label`. The store thread upserts every row dirtied
+since the last flush each 10 s (a row already there takes the new
+values; `pdu_mask` and `hid` are OR-ed, the earlier `first_seen` kept),
+and at start the newest 1024 rows and the findings standing or changed
+in the last day seed the in-memory tables, so a restart keeps the
+history. Bounded: rows last seen before `--web-retain-days` go at every
+compaction (`ble_store.dropped_expired`), and the tables hold at most
+131,072 and 4,096 rows, the oldest by last seen dropped after a write
+that passes that (`ble_store.dropped_cap`). A row is about 200 bytes
+with its index, so the cap is about 26 MB.
 
 ### /api/devices, /api/device/{mac}, /api/lookup
 
@@ -2599,6 +2676,141 @@ front-matter lines and against the shipped files by name
 migration and its failure. Each absence assertion names the mutation it
 was seen red under.
 
+## BLE
+
+Owner request 2026-10-27 ("add bluetooth to the web ui"). The tab after
+Lookup (key `0`: every other digit was taken, and the TUI's `*` is no
+browser hotkey; TACDB, after it, carries no digit, since its `0` was a
+label and never a binding) is the TUI's `[*]` BLE view (`src/views/ble.c`,
+`docs/views/ble.md`, [docs/wiki/ble.md](../docs/wiki/ble.md)) at data
+and colour parity, served from `/api/ble`, `/api/ble/alerts` and
+`/api/ble/{addr}` ([Routes](#routes)). Everything in it comes off the
+stream: the `ble_device` record (one row per advertiser as one sensor
+heard it: the host controller under `--bt-monitor` and an Ubertooth
+under `--bt-capture` hearing the same address are two rows, and their
+counts are never summed), the `ble_alert` record (the structured
+companion of a `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED` or `BLE_WATCHLIST`
+finding, standing until the `alert.resolve` of the same key) and the
+Bluetooth members of `sensor_health` (`btmon_*`, `ble_*`, `btcap_*`,
+the banded `ble_rot_*`). sloth.db has no BLE table, so slothweb keeps
+the rows itself (`web/src/web_ble.h`): 1024 advertisers in memory, the
+least recently heard evicted and counted; 128 findings; the latest
+sensor_health's block; and the v7 tables of slothweb.db
+([slothweb.db v7](#the-ble-tables-slothwebdb-v7)) so a restart keeps
+the history. Nothing is sent: sloth never scans, connects or reads
+GATT, and neither does slothweb.
+
+The table is the TUI's, column for column (its cells are the TUI's
+strings), then the columns the owner asked for that the TUI's detail
+shows and its table does not, with every column sortable and resizable
+through the one `DataTable()`. The `kind` column, the `T` letter's
+tooltip and the drawer's address line say the address in words: a random address's
+two top bits (Core v5.4 Vol 6 Part B §1.3.2) make it `random static`,
+`random RPA` (a resolvable private address, the rotating kind) or
+`random NRPA` (`addr_kind` in the row; `public`, `resolved public`,
+`resolved random`, `anonymous`):
+
+| Column | TUI cell | Source |
+|---|---|---|
+| address | `xx:xx:xx:xx:xx:xx` | `addr` |
+| T | `P` public, `R` random, `p`/`r` resolved identity, `?` anonymous | `addr_type` (0, 1, 2, 3, 255) |
+| kind | the address in words (above); a column the TUI lacks | `addr_kind`, from `addr_type` and the address's top two bits |
+| sensor | the iface | `iface` (`bluetooth-monitor`, `ubertooth`; anything else `other`) |
+| rssi | the dBm, `-` without one | `has_rssi`, `rssi` |
+| dist (est) | `rf_dist_cell()`'s full form: `~5m room ↘` (`<1m`, `Nm`, `>1km`; `imm`/`near`/`room`/`bldg`/`far`; ↘ approaching, → steady, ↗ leaving); `-` for no estimate | `est_dist_m`, `est_dist_band`, `est_dist_trend` (sloth's own estimate, `src/rf_distance.c`, `research/papers/rssi-distance-estimation.md`; never re-derived, absent means no estimate) |
+| adv | `count_cell()`: whole below 100000, then `Nk`, `NM` | `adv_count` |
+| age | `age_cell()`: `Ns`/`Nm`/`Nh`/`Nd` since last heard | `last_seen` |
+| hws | `H`/`-` HID, `W`/`-` watchlist, `~`/`-` a one-channel sample | `hid`, `watch_category`, `sampled` |
+| advertises | `summary_cell()`: `"name" mfr 004c/10 svc 180f sd 181c app 03c1`, most specific first, `-` when empty; the name in its display form with the non-printable marker when anything was escaped | `name`, `mfr_id`/`mfr_subtype`, `uuid16`, `svc_data_uuid16`, `appearance` |
+| sig names | the Bluetooth SIG's names for the company, service and appearance (`web/data/btsig/`, below); a column the TUI lacks | `mfr_name`, `uuid16_name`, `svc_data_name`, `appearance_name` |
+| best | the strongest RSSI seen (the TUI's detail shows it) | `rssi_best` |
+| adv/s | the rate between this row's records, coarse (below) | `adv_rate` |
+| first | first heard, as a stamp | `first_seen` |
+| pdus | the PDU types heard, from the sticky mask | `pdu_mask` |
+| watch | the `BLE_WATCHLIST` category, a category and never an identity | `watch_category` |
+
+A row is one colour, as the TUI draws it: `--tui-bright` (`d-bright`)
+for a HID or watchlisted advertiser, `--tui-normal` otherwise. The
+address takes no `--tui-dim`, the name no hash hue, the RSSI no heat,
+and no row the monitor radio's ground: the TUI's BLE view and its
+packets band put no BLE row on `CP_MON_ROW`, so `MON_TYPES` is
+unchanged and `web/tests/test_tui_colors.c`'s pin of it against
+`src/jsonl.c` stands. Above the table is the TUI's header line (`BLE
+advertisers: N` bright, `HID: n` and `watchlist: n` at `tui_heat(0.5)`
+when above zero else dim, `flood keys: n`, which on the web is the
+standing `adv_flood` findings) and, with `--ble-rotation-hints` on, its
+rotation-hints block with the TUI's sentences verbatim; the estimate
+itself (`ble_rot_distinct()`) is not on the stream, only the hint
+count as a decade band, and the block says so. The empty state is the
+TUI's three lines. Under the table the TUI's legend, dim. The caption
+is R9's: `ble_device, N of M rows, S standing alerts, sensor IFACE,
+scan MODE/FILTER`.
+
+A click opens the BLE drawer: every decoded field in the TUI detail's
+order and wording (address, sensor, LL channel, last PDU, local name
+with `(shortened)`, manufacturer as `company 0x004c, first octet 0x10`
+with the SIG's name, service, service data, appearance with `(HID)`,
+HID, TX power, AD flags, RSSI with its best, `distance (est)` as
+`~4.5m room steady, Ptx ad` or `no estimate`, advertisements, first
+heard), then what the record carries that the TUI's detail does not
+(the PDUs heard, the PHYs and SID of an extended advertiser, the
+stamps, a 24 h presence strip (G5, 96 quarter-hour cells ending
+now, the first-seen cell marked) and the row's advertising rate between
+its records with a G1 of it), and the `hid_oui` findings naming the
+address. The strip is 96 bits a row (two words and the newest bucket)
+kept and stored with the row, a quarter hour set when a record's
+`last_seen` fell in it; it costs no series and survives a restart, and
+it is coarse for the same reason as the rate: an unchanged advertiser
+is re-emitted only on the 300 s heartbeat. The rate is kept
+per row inside `web_ble` (the last 16 `(ts, adv_count)` points, 256
+bytes a row) rather than as a per-address series in the rollup: the
+rollup's device class is 512 keys shared with the Wi-Fi tables, and a
+resident random-address BLE device is a new key every fifteen minutes,
+which would churn that class and evict the Wi-Fi devices' history. The
+rate is coarse (the record is change-only with a 300 s heartbeat and
+`adv_count` is not in its signature) and the drawer says so. The two
+series the rollup does get are global and never evicted:
+`ble.devices` (a gauge, sloth's advertiser-table size from
+`sensor_health.ble_devices`) and `ble.adv_rate` (a counter, the delta
+of `ble_adv_reports`), both Monitor's and both sampled only while
+`btmon_iface` says sloth is listening.
+
+Below the table the findings: kind, alert, sensor, the finding in
+words (`mfr 004c/07 ADV_IND: 44 addrs (40 fresh), 812 adv at 81.2/s in
+10 s (previous window)`; `00:13:37:00:00:01 (0) Hak5 OUI, HID
+appearance, service 0x1812`; `3 random addresses in 900 s`; `CATEGORY -
+a category, never an identity: N addresses in 120 s`), median RSSI,
+first, last, and `standing` (the alert name at the warning colour) or
+`resolved`. A finding quiet for more than 660 s (two heartbeats and a
+margin) is no longer standing whatever resolve was missed. The same
+incidents are on the Alerts page as `alert.*` records, typed and
+Monitor's; the Health view's `bluetooth` block shows the
+`sensor_health` members (source, stream, controllers, advertisers,
+reports, scan mode and filter, own transmission, Ubertooth, rotation
+bands, findings standing), the sensor tile's sub-line names the
+`btmon` stream, the Overview's `ble advertisers` tile (a link to the
+view) is the advertisers held with the HID, watchlisted and standing
+counts and a 24 h G1 of `ble.devices`, and the status strip's `ble`
+pill is the advertisers held (a dash under Local or with no Bluetooth
+source; the tile says why). Under Local the
+view shows why it is empty.
+
+**The Bluetooth SIG assigned numbers.** The company behind a
+Manufacturer Specific Data block, the service a 16-bit UUID lists and
+the device class an Appearance value states come from the SIG's public
+Assigned Numbers, committed as three CSVs in `web/data/btsig/`
+([its SOURCE.md](data/btsig/SOURCE.md): URLs, date, SHA-256 of the
+YAML fetched once and of the CSVs, the licence note) and compiled in
+at build time by `web/tools/btsig_gen.c`, exactly as the IEEE registry
+is. `make update-btsig SRC=DIR` (`web/tools/update_btsig.sh`) converts
+the three YAML files found in a given directory and rewrites the
+hashes; it never fetches (the ab5fcb2 ruling), and nothing in the
+build, the tests or CI runs it. A `WEB_BTSIG_DIR` without the CSVs
+builds an empty table (`sig: none` in `/api/health` and the start
+notice) and the page shows the numbers alone, as the TUI does.
+`web/tests/test_btsig.c` holds the committed files to the hashes and
+the lookups to the SIG's names.
+
 ## Capture scope
 
 Owner request 2026-10-26. The top bar's **Monitor | Hybrid | Local**
@@ -2628,8 +2840,10 @@ Monitor's; the host's own ARP table, DHCP leases and scan entries
 (`/proc`, the lease files) never do, nor `PORT_SCAN` and `ARP_SPOOF`,
 which read them. sloth.db's IP tables keep no capture path and stay
 Local's. Under Local the WiFi view is the managed card's own scan and
-link; Flows are empty under Monitor, saying why. The SQL box is
-unscoped and says so. A device row's anomaly count and z, the
+link; Flows are empty under Monitor, saying why; the BLE view is empty
+under Local, saying why (the receivers are passive radio, so `/api/ble*`
+answers `out_of_scope` there and `/api/live`'s `ble` member is `null`).
+The SQL box is unscoped and says so. A device row's anomaly count and z, the
 open-anomalies tile and the Records view are counted in the scope.
 
 Every `/api` route but `/api/health` and `/api/query` takes
@@ -2697,6 +2911,7 @@ and forgets the kept ones, so it does show all.
 | WiFi: cells, window, AP sort | `ctl.w-metric`, `ctl.w-win`, `ctl.w-sort` | |
 | Alerts: state, severity, type, search, window | `ctl.al-*` | the type put back once the server's list of types is in; a kept type the server answers `bad_type` for (renamed, corrupt) is dropped and the list reloaded without it |
 | Flows: protocol tab, window, sort, address | `flows.proto`, `ctl.f-win`, `ctl.f-sort`, `ctl.f-ip` | an address picked from a row or the chord is kept as if typed |
+| BLE: search, sort | `ctl.b-q`, `ctl.b-sort` | an address naming a search (`#ble?q=`) opens on it, not kept |
 | the SQL box's text | `ctl.q-sql` | the draft; the first recipe no longer replaces it |
 | Alerts: triage filter | `ctl.al-triage` | by `frrs.js`; `#alerts?triage=out` wins, and an address naming any other filter opens on `any` |
 | triage: the "by" name | `frrs.by` | typed once, sent with every triage change from this browser |
@@ -3206,7 +3421,9 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
 | `test_tui_colors.c` | the data colours against the TUI itself ([Design](#design)): `src/tui.c`'s ANSI backend linked in and captured, every byte of an address, an SSID, a host name and an info string compared with the page's colour for it (its functions pinned as served, a C port of them over the served `SLOTH_PALETTE`, the served custom properties); the cross-panel bold and the page's `IP_SRC` bits held to `IP_SRC_*`, an alert counted by its `match_ip` alone; the alert-hot override against `tui_alert_hot_set()` (severity, bold from WARN, the TTL's edge, promotion, the full table) and its TTL and cap against `src/tui.c`; the phosphor, heat, alert-hot and monitor-row pairs; `MON_TYPES` against the record types `src/jsonl.c` emits from the monitor radio |
 | `test_glyph.c` | the glyph layer's geometry ([the glyph layer](#the-glyph-layer)): a C port of `web/ui/glyph.js` with the JS pinned verbatim out of the served page, so a change on either side fails. For G1, G5 and G6: empty, warming, one point, four points as dots (R6), a gap (R5), in band, out of band (and in again once the band is widened), G1's line graded as `draw_sparkline_at()` grades it (ruling 1), min and max dots only without a band (R7), a scale that grows and never shrinks (R11), the window rule and its words (R4), the caption grammar and the three states in it (R9), the presence cells from the server's hex, the ruler's midnight and now ticks in a shifted zone (F10), the first-seen mark (F15), an anomaly episode's underline clipped to the strip, the bullet's ranges, threshold tick and severity, the count bar's shared scale, and each glyph's list read with every token flattened to one grey (R10); each glyph's TUI form named in the README (R12). Nineteen mutations, each naming the test it reddened |
-| `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own |
+| `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own; the BLE view's vocabularies (the PDU, band, trend, glyph and P_tx-source words, the finding kinds, the alert names, the TUI's address-type letters and its legend line) held to `src/` as text |
+| `test_ble.c` | the BLE view ([BLE](#ble)) from hand-built `ble_device`, `ble_alert`, `alert.resolve` and `sensor_health` lines in the emitter's exact shape: two rows for one address heard by two sensors, a heartbeat updating in place (the sticky masks OR-ed, the earlier first_seen kept, the rate from two points), the hostile strings (a control byte escaped and flagged, an over-long name cut on a boundary, a category that is not sloth's slug dropped and counted, an unknown iface `other`, a bad record kept nowhere), the record's absent values null and an anonymous all-zero address a row, the estimate's four fields with the TUI's cell and description, the LRU at 1025 rows evicting the oldest, the findings (standing, the resolve of the key, the time-out, the day's listing, the key never rendered, a `hid_oui` finding under its address), the `sensor_health` block and its rotation bands; the two metrics only while `btmon_iface` says listening; every route through the table (the sort words and both directions, each refusal a word never echoing the value, the search, paging, HEAD, Monitor and Hybrid serving, Local `out_of_scope` with the query still checked, `/api/live`'s `ble` member and `/api/health`'s counters, the M0 shape without the tables, the BLE incident typed and Monitor's on the Alerts page); the page's lines pinned as served; with SQLite the store round trip through the store thread's flush, a changed row upserted once, the seed on reopen with the name's display form and the estimate, retention at compaction; without a store the tables still ingest and serve. Each absence seen red under a named mutation |
+| `test_btsig.c` | the Bluetooth SIG table this binary was built with (`WEB_BTSIG_EXPECT`): sorted, the names printable and within the cut, the lookups answering the SIG's names for Apple, Microsoft, Google, Ericsson, Battery, Human Interface Device, the keyboard appearance and the generic forms, a miss and the bounds null; the committed CSVs byte for byte the ones `web/data/btsig/SOURCE.md` hashes, with its row counts; `update_btsig.sh` run by the `update-btsig` target alone and named by no workflow |
 | `test_replay.c` | spec §12's M3 acceptance: a six-week JSONL stream generated in the test (never a fixture) through the framer, decoder, live state, metric derivation, identity tables, rollup, `web_tsdb_step()` and the engine as `main.c` wires them, on pinned clocks: four weeks of routine (noisy gauges, Poisson counts, and an input for every rule: names that agree, a randomised MAC with its own name, a month-old probe client, a steady ssh host), then a quiet 7 d week in which nothing at all fires, slothweb and sloth restarting in the middle of it in an SQLite build, then a 7 d week in which A1 fires for a burst of connections and A3 for a daytime device that appears only at night, while a device that is only ever present at night never fires; and the hour that just closed reaching the baseline at flush phases 0, 3 and 7 (the previous slice fed it only at phase 0); A9 for a new host whose first row the rollup released late, at sloth's real cadence (SQLite); five weeks of a 13:30-14:30 routine in IST firing nothing. Both builds |
 
 A test cannot originate from a non-loopback address, so the refused-peer

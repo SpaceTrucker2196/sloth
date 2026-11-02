@@ -506,6 +506,119 @@ static void lifecycle(long long t, unsigned long k) {
                  t - 26 * 3600, 2, ",\"match_port\":21");
 }
 
+/* The BLE advertisers (src/jsonl.c jsonl_emit_ble_devices(), one row
+ * per advertiser as one sensor heard it), and the one finding. Six
+ * rows: a public-address beacon with a complete name and a service
+ * (the stream's distance estimate on it), an Apple-style random address
+ * with Continuity manufacturer data, a keyboard (HID appearance 0x03C1
+ * and the 0x1812 service: the TUI's bright row), a random address that
+ * rotates every fifteen minutes, an extended advertiser on LE Coded,
+ * and an anonymous (type 255) extended advertisement; two of them heard
+ * by an Ubertooth as well (sampled rows of the same addresses). Every
+ * address is locally administered (0x02 bit of the first octet set) or
+ * random, every name under demo; nothing is captured. sloth's records
+ * are change-only with a 300 s heartbeat: these go out on the first
+ * pass, every 300th pass, and when a signed field changes (a rotation,
+ * a band change). */
+#define NBLE 6
+static const int BLE_CO_DEMO = 0xffff;   /* the SIG's reserved "internal use" id */
+
+static void ble_dev(long long t, long long start, unsigned long k, const char *addr,
+                    int type, const char *iface, int adapter, int sampled,
+                    int channel, const char *pdu, int pdu_mask, const char *name,
+                    int name_complete, int uuid16, int mfr_id, int mfr_sub,
+                    int svc_data, int appearance, int hid, int tx_power, int flags,
+                    int rssi, int rssi_best, unsigned long adv, const char *cat,
+                    int ext, int pphy, int sphy, int sid, long long first,
+                    const char *est) {
+    line("{\"type\":\"ble_device\",\"ts\":%lld,\"addr\":\"%s\",\"addr_type\":%d,"
+         "\"sensor\":\"ble\",\"iface\":\"%s\",\"adapter\":%d,\"sampled\":%d,\"channel\":%d,"
+         "\"last_pdu\":\"%s\",\"pdu_mask\":%d,\"name\":\"%s\",\"name_complete\":%d,"
+         "\"uuid16\":%d,\"mfr_id\":%d,\"mfr_subtype\":%d,\"svc_data_uuid16\":%d,"
+         "\"appearance\":%d,\"hid\":%d,\"tx_power\":%d,\"flags\":%d,\"has_rssi\":1,"
+         "\"rssi\":%d,\"rssi_best\":%d,\"adv_count\":%lu,\"watch_category\":\"%s\","
+         "\"ext_adv\":%d,\"primary_phy\":%d,\"secondary_phy\":%d,\"adv_sid\":%d,"
+         "\"first_seen\":%lld,\"last_seen\":%lld%s}",
+         t, addr, type, iface, adapter, sampled, channel, pdu, pdu_mask, name,
+         name_complete, uuid16, mfr_id, mfr_sub, svc_data, appearance, hid, tx_power,
+         flags, rssi, rssi_best, adv, cat, ext, pphy, sphy, sid, first, t, est);
+    (void)start; (void)k;
+}
+
+static void ble_pass(long long t, long long start, unsigned long k) {
+    /* A rotating random address: a new one every 900 passes, the row's
+     * first_seen the rotation's. */
+    unsigned long rot = k / 900;
+    char rand_addr[18];
+    snprintf(rand_addr, sizeof(rand_addr), "7a:de:00:00:%02lx:%02lx", (rot >> 8) & 0xff, rot & 0xff);
+    /* sloth's heartbeat is 300 s; the demo's rows go out every 15 passes
+     * so a client that connects between two of them (the README's walk-
+     * through, the screenshots) sees the table fill within a quarter of
+     * a minute. Each record is still change-only in shape. */
+    int heartbeat = k % 15 == 0;
+    /* The beacon's band moves between room and near every ten minutes:
+     * a signed change, so the record goes out then too. */
+    int near = (k / 600) % 2;
+    char est[160];
+    snprintf(est, sizeof(est), ",\"est_dist_m\":%s,\"est_dist_band\":\"%s\","
+             "\"est_dist_trend\":\"%s\",\"est_ptx_source\":\"ble_ad_tx_power\"",
+             near ? "2.5" : "6", near ? "near" : "room",
+             k % 600 < 60 ? (near ? "approaching" : "leaving") : "steady");
+    if (heartbeat || k % 600 == 0) {
+        ble_dev(t, start, k, "02:de:00:00:b1:01", 0, "bluetooth-monitor", 0, 0, -1, "ADV_IND",
+                17, "demo-beacon", 1, 0x180f, -1, -1, 0x181c, 0x0200, 0, -8, 6,
+                near ? -58 : -71, -55, 60 * k / 7 + 120, "", 0, 0, 0, -1, start, est);
+        ble_dev(t, start, k, "02:de:00:00:b1:01", 0, "ubertooth", 0, 1, 37, "ADV_IND",
+                1, "demo-beacon", 1, 0x180f, -1, -1, 0x181c, 0x0200, 0, -8, 6,
+                near ? -64 : -77, -61, 20 * k / 7 + 40, "", 0, 0, 0, -1, start, "");
+    }
+    if (heartbeat) {
+        ble_dev(t, start, k, "5e:de:00:00:b2:02", 1, "bluetooth-monitor", 0, 0, -1, "ADV_IND",
+                17, "", 0, -1, 0x004c, 0x10, -1, -1, 0, -128, 26, -67, -62, 3 * k + 9, "",
+                0, 0, 0, -1, start - 3600, "");
+        ble_dev(t, start, k, "02:de:00:00:b3:03", 0, "bluetooth-monitor", 0, 0, -1, "SCAN_RSP",
+                17, "demo-kbd", 1, 0x1812, BLE_CO_DEMO, -1, -1, 0x03c1, 3, 0, 5, -49, -44,
+                2 * k + 30, "", 0, 0, 0, -1, start - 7200,
+                ",\"est_dist_m\":1.5,\"est_dist_band\":\"near\",\"est_dist_trend\":\"steady\","
+                "\"est_ptx_source\":\"ble_ad_tx_power\"");
+        ble_dev(t, start, k, "02:de:00:00:b3:03", 0, "ubertooth", 0, 1, 38, "ADV_IND",
+                1, "demo-kbd", 1, 0x1812, BLE_CO_DEMO, -1, -1, 0x03c1, 3, 0, 5, -55, -50,
+                k / 2 + 10, "", 0, 0, 0, -1, start - 7200, "");
+        ble_dev(t, start, k, "02:de:00:00:b4:04", 0, "bluetooth-monitor", 0, 0, -1, "EXT_ADV",
+                32, "demo-coded-sensor", 1, 0x181a, -1, -1, -1, 0x0540, 0, -128, 6,
+                -81, -79, k / 4 + 2, "", 1, 3, 3, 4, start - 600, "");
+        ble_dev(t, start, k, "00:00:00:00:00:00", 255, "bluetooth-monitor", 0, 0, -1, "EXT_ADV",
+                32, "", 0, -1, -1, -1, -1, -1, 0, -128, -1, -76, -70, k / 9 + 1, "",
+                1, 1, 2, 7, start - 300, "");
+    }
+    if (heartbeat || k % 900 == 0)
+        ble_dev(t, start, k, rand_addr, 1, "bluetooth-monitor", 0, 0, -1, "ADV_NONCONN_IND",
+                8, "", 0, -1, 0x0006, 0x01, -1, -1, 0, -128, -1, -72, -66,
+                (k % 900) / 2 + 1, "", 0, 0, 0, -1, start + (long long)rot * 900, "");
+    /* A pairing-notification flood for a minute in every ten (research/
+     * bluetooth/ble-spam-flood.md), from the half-minute mark: the
+     * finding stands while the window passes its gates, re-emitted as
+     * its closed window grows, then the alert.resolve of the same key. */
+    static const char FK[] = "ble_flood:bluetooth-monitor:mfr:004c:07";
+    unsigned long p = (k + 390) % 600;   /* 420 at k = 30, 630, ... */
+    if (p >= 420 && p < 480 && (p == 420 || p % 10 == 0))
+        line("{\"type\":\"ble_alert\",\"ts\":%lld,\"kind\":\"adv_flood\",\"alert\":\"BLE_ADV_FLOOD\","
+             "\"ty\":87,\"key\":\"%s\",\"sensor\":\"ble\",\"iface\":\"bluetooth-monitor\","
+             "\"sampled\":0,\"adv_type\":\"ADV_IND\",\"family\":\"mfr\",\"id\":76,\"subtype\":7,"
+             "\"window\":\"previous\",\"window_s\":10,\"distinct_addrs\":%lu,\"distinct_capped\":0,"
+             "\"fresh_addrs\":%lu,\"total_adv\":%lu,\"rate\":%lu.0,\"has_rssi\":1,"
+             "\"median_rssi\":-61,\"spam_source\":\"ble-spam-flood.md: ECTO-1A/ble_spam.c\"}",
+             t, FK, 40 + (p - 420), 38 + (p - 420), 400 + (p - 420) * 9, 40 + (p - 420));
+    if (p == 420)
+        alert_ev("alert.create", t, "d0000000000e0001", 87, 1, "BLE_ADV_FLOOD", FK,
+                 "BLE advertisement flood: mfr 004c/07 ADV_IND, 40 fresh addresses in 10s",
+                 NULL, 0, t, 1, "");
+    if (p == 480)
+        alert_ev("alert.resolve", t, "d0000000000e0001", 87, 1, "BLE_ADV_FLOOD", FK,
+                 "BLE advertisement flood: mfr 004c/07 ADV_IND, 40 fresh addresses in 10s",
+                 NULL, 0, t - 60, 7, ",\"reason\":\"expired\"");
+}
+
 /* One snapshot pass at t (sloth's order: interfaces first, sensor
  * health last), with the capture thread's records before it. */
 static void pass(long long t, long long start, unsigned long k) {
@@ -686,7 +799,7 @@ static void pass(long long t, long long start, unsigned long k) {
     };
     for (size_t b = 0; b < sizeof(BLE) / sizeof(BLE[0]); b++)
         line("{\"type\":\"ble_device\",\"ts\":%lld,\"addr\":\"%s\",\"addr_type\":%d,"
-             "\"sensor\":\"hci\",\"iface\":\"hci0\",\"adapter\":%d,\"sampled\":0,"
+             "\"sensor\":\"ble\",\"iface\":\"bluetooth-monitor\",\"adapter\":%d,\"sampled\":0,"
              "\"channel\":%d,\"last_pdu\":\"%s\",\"pdu_mask\":%d,\"name\":\"%s\","
              "\"name_complete\":%d,\"uuid16\":%d,\"mfr_id\":%d,\"mfr_subtype\":-1,"
              "\"svc_data_uuid16\":-1,\"appearance\":%d,\"hid\":%d,\"tx_power\":%d,"
@@ -700,7 +813,7 @@ static void pass(long long t, long long start, unsigned long k) {
              BLE[b].rssi, BLE[b].rssi + 4, 10 * k + 3 * b, BLE[b].watch, b == 1,
              b == 1 ? 2 : 0, b == 1 ? 3 : -1, start, t,
              b == 1 ? 9.5 : 2.0 + (double)b, b == 1 ? "room" : "near",
-             BLE[b].tx ? "tx_power" : "default");
+             BLE[b].tx ? "ble_ad_tx_power" : "assumed");
     for (int p = 0; p < 6; p++)
         line("{\"type\":\"probe_client\",\"ts\":%lld,\"mac\":\"0a:de:00:00:02:%02x\","
              "\"ssid\":\"\",\"signal_dbm\":-80,\"channel\":%d,\"first_seen\":%lld,"
@@ -711,11 +824,32 @@ static void pass(long long t, long long start, unsigned long k) {
     line("{\"type\":\"smb_session\",\"ts\":%lld,\"client_ip\":\"192.0.2.12\","
          "\"server_ip\":\"192.0.2.10\",\"server_port\":445,\"dialect\":\"SMB2\",\"count\":%lu,"
          "\"first_seen\":%lld,\"last_seen\":%lld}", t, 1 + k / 10, start, t);
+    ble_pass(t, start, k);
+    /* The Bluetooth block of sensor_health (src/jsonl.c, appended after
+     * libs): a host source under --bt-monitor with a passive scan held,
+     * the decode counters climbing with the advertisers below, no
+     * Ubertooth, no rotation hints (the flag is off by default). */
     line("{\"type\":\"sensor_health\",\"ts\":%lld,\"capture_iface\":\"eth0\","
          "\"capture_linktype\":1,\"monitor_only\":0,\"monitor_iface\":\"wlan0mon\","
          "\"capture_open\":1,\"capture_running\":1,"
          "\"monitor_open\":1,\"monitor_running\":1,\"scope\":\"demo\","
-         "\"scope_not_enforced\":0}", t);
+         "\"scope_not_enforced\":0,"
+         "\"btmon_iface\":\"bluetooth-monitor\",\"btmon_err\":\"\",\"btmon_open\":1,"
+         "\"btmon_running\":1,\"btmon_exit\":\"none\",\"btmon_exit_detail\":\"\","
+         "\"btmon_stats_valid\":0,\"btmon_recv\":0,\"btmon_drop\":0,\"btmon_ifdrop\":0,"
+         "\"btmon_last_frame_ts\":%lld,\"btmon_stale_secs\":0,"
+         "\"ble_controllers\":1,\"ble_devices\":%d,\"ble_records\":%lu,"
+         "\"ble_adv_reports\":%lu,\"ble_multi_report_rejected\":0,"
+         "\"ble_ext_adv_undecoded\":0,\"ble_ext_adv_reports\":%lu,"
+         "\"ble_ext_adv_fragments\":0,\"ble_ext_adv_partial\":0,\"ble_ext_trains_evicted\":0,"
+         "\"ble_records_ignored\":%lu,\"ble_records_malformed\":0,\"ble_host_commands\":3,"
+         "\"ble_scan_mode\":\"passive\",\"ble_scan_filter\":\"basic\","
+         "\"ble_scan_accept_list\":0,\"ble_scan_enabled\":1,\"ble_own_tx\":\"never\","
+         "\"ble_own_tx_kind\":\"none\",\"ble_own_tx_count\":0,\"ble_own_tx_secs\":-1,"
+         "\"ble_own_tx_on\":\"\",\"ble_own_tx_asserted\":\"\",\"ble_own_tx_baseline\":1,"
+         "\"ble_index_records\":2,\"btcap_iface\":\"\",\"btcap_state\":\"off\","
+         "\"evict_ble_device\":0,\"evict_bredr_lap\":0,\"evict_ble_flood\":0}",
+         t, t, NBLE, k * 47 + 5, k * 44, k / 3, k);
 }
 
 static int feed(const char *spec, long long seconds) {

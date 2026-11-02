@@ -138,6 +138,10 @@ void web_server_set_sqlbox(web_server_t *s, web_sqlbox_t *b) {
     s->sql = b;
 }
 
+void web_server_set_ble(web_server_t *s, web_ble_t *b) {
+    s->ble = b;
+}
+
 void web_server_stop(web_server_t *s) {
     char b = 1;
     ssize_t r = write(s->wake[1], &b, 1);
@@ -211,6 +215,7 @@ static void health_now(web_server_t *s, web_health_t *h) {
     h->wall_s      = (long long)time(NULL);
     h->anomaly     = s->anomaly;
     h->m4          = s->m4;
+    h->ble         = s->ble;
     h->sql         = s->sql;
     h->sc          = NULL;    /* web_route() sets a request's own */
 }

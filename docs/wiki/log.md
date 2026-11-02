@@ -5741,3 +5741,24 @@ report events.
   assessments and `slothweb.service` passes `--web-assessments`
   ([[deployment]] §6). Each seen red under its mutation (the commit
   lists them).
+- 2026-11-01 — [[slothweb]], [[ble]], [[capture-scope]]: the BLE view
+  in slothweb (owner request "add bluetooth to the web ui"). A tab
+  (key `0`) at TUI parity with `[*]`: the same columns and cells, one
+  colour a row (bright for HID or watchlist), the header, rotation-hints,
+  empty-state and legend lines verbatim; a drawer in the TUI detail's
+  order plus the PDUs, PHYs, a 24 h presence strip, the rate and the
+  `hid_oui` findings; the address in words as a column; every column a
+  server sort word; the findings table; a `bluetooth` block in Health;
+  a `ble advertisers` tile on the Overview and a `ble` pill in the
+  strip. slothweb keeps the rows itself (`web/src/web_ble.h`: the
+  stream's `ble_device` / `ble_alert` / `sensor_health` members; sloth.db
+  has no BLE table) and persists them in slothweb.db v7 (`ble_device`,
+  `ble_alert`, additive migration from the triage slice's v6, with its
+  tests on a v6 file holding triage rows). The
+  Bluetooth SIG assigned numbers (company identifiers, 16-bit service
+  UUIDs, appearance values) are committed as CSVs under
+  `web/data/btsig/` with a SOURCE.md and compiled in by
+  `web/tools/btsig_gen.c`; `web/tools/update_btsig.sh` refreshes them
+  from a given directory and never fetches. Two global metrics,
+  `ble.devices` and `ble.adv_rate`, both Monitor's. `/api/ble`,
+  `/api/ble/alerts`, `/api/ble/{addr}`; out_of_scope under Local.
