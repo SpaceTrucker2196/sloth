@@ -10,14 +10,17 @@
 // here writes into #ev-alert (the alert page's last section, the
 // capture last in it) and decorates the drawer's "alerts naming it"
 // rows (#ev-drawer); nothing else on the page is touched, so the other
-// slices that edit app.js and index.html merge beside it.
+// slices that edit app.js and index.html merge beside it. The frame
+// index is drawn through app.js's one table implementation
+// (window.SlothTables.make, its DataTable), like every table on the
+// page, and its filter is kept with the page's other controls.
 //
 // Every value off the server is set as text (textContent, never
 // markup). The one way out of the page is the same origin's
 // /api/pcap, reached by window.location.assign() with every value
 // encoded: the server answers it as an attachment, so the page stays.
 window.SlothEvidence = (function () {
-  var S = { gen: 0, id: "", caps: [], cur: -1, frames: [], next: null, total: 0, rendered: "" };
+  var S = { gen: 0, id: "", caps: [], cur: -1, frames: [], open: {}, next: null, total: 0, rendered: "", t: null };
 
   function $(id) { return document.getElementById(id); }
   function el(tag, cls, text) {
@@ -142,6 +145,9 @@ window.SlothEvidence = (function () {
     (a.bibliography || []).forEach(function (b) { ol.appendChild(el("li", "", String(b))); });
     if (!(a.bibliography || []).length) ol.appendChild(el("li", "sub", "none listed"));
     box.appendChild(ol);
+    // The Bibliography's own prose (a numbering note, "no public
+    // advisory was found"): beside the entries, never one of them.
+    text(box, a.bibliography_note, "dim");
   }
 
   // ── the packet capture ─────────────────────────────────────────────
@@ -177,16 +183,27 @@ window.SlothEvidence = (function () {
     open(0, 0);
   }
 
-  function frameRow(f) {
-    var d = el("details", "ev-frame");
-    var s = el("summary", "ev-frow");
-    s.appendChild(el("span", "n d-dim", String(f.i)));
-    s.appendChild(el("span", "n", relTime(f.t_rel_ns)));
-    s.appendChild(el("span", "n d-dim", String(f.caplen) + "/" + String(f.len)));
-    s.appendChild(el("span", "ev-kind d-bright", str(f.kind)));
-    s.appendChild(el("span", "tx", str(f.summary)));
-    if (f.truncated || f.cut) s.appendChild(el("span", "ev-cut", str(f.cut) || "cut"));
-    d.appendChild(s);
+  // ── the frame index: one of the page's tables (app.js's DataTable:
+  // sortable, resizable, its widths and sort kept in this browser) ──
+  var COLS = [
+    { k: "i", label: "#", w: 5, min: 3, type: "num", num: true, val: function (f) { return f.i; } },
+    { k: "t", label: "time", w: 12, type: "num", num: true, val: function (f) { return f.t_rel_ns; } },
+    { k: "len", label: "bytes", w: 9, type: "num", num: true, val: function (f) { return f.caplen; } },
+    { k: "kind", label: "kind", w: 10, type: "text", val: function (f) { return str(f.kind); } },
+    { k: "sum", label: "summary", w: 36, flex: true, type: "text", val: function (f) { return str(f.summary); } },
+    { k: "cut", label: "cut", w: 14, type: "text", val: function (f) { return cutOf(f); } }
+  ];
+  function cutOf(f) { return f.cut ? str(f.cut) : f.truncated ? "cut" : ""; }
+  // Made on the first alert page: app.js's DataTable exists once its
+  // main() has run, after this module's init.
+  function table() {
+    if (S.t || !window.SlothTables || !$("ev-frames-box")) return S.t;
+    S.t = window.SlothTables.make({ id: "evframes", label: "the capture's frames", box: $("ev-frames-box"),
+      head: $("ev-frames-head"), reset: $("ev-frames-tools"), redraw: drawFrames, cols: COLS });
+    return S.t;
+  }
+
+  function fbody(f) {
     var body = el("div", "ev-fbody");
     var pairs = [["link", str(f.link)], ["from", str(f.from) || null], ["to", str(f.to) || null],
                  ["captured", stamp(f.ts) + frac(f.ts_frac, f.ts_ns)],
@@ -197,9 +214,46 @@ window.SlothEvidence = (function () {
     body.appendChild(el("pre", "ev-hex", str(f.hex)));
     if (num(f.hex_more) && f.hex_more > 0)
       body.appendChild(el("div", "sub", f.hex_more + " more bytes in the file: download it for them"));
-    d.appendChild(body);
+    return body;
+  }
+
+  // A row of cells under the columns, and its fields and bytes under
+  // it when opened (a click, Enter or Space); which are open is kept
+  // across a sort.
+  function frameRow(f) {
+    var d = el("div", "ev-frame");
+    var r = el("div", "evfrow dt-row");
+    r.tabIndex = 0;
+    r.appendChild(el("span", "n d-dim", String(f.i)));
+    r.appendChild(el("span", "n", relTime(f.t_rel_ns)));
+    r.appendChild(el("span", "n d-dim", String(f.caplen) + "/" + String(f.len)));
+    r.appendChild(el("span", "d-bright", str(f.kind)));
+    r.appendChild(el("span", "tx", str(f.summary)));
+    r.appendChild(el("span", "ev-cut", cutOf(f)));
+    d.appendChild(r);
+    var body = null;
+    function show(on) {
+      r.ariaExpanded = on ? "true" : "false";
+      if (on && !body) { body = fbody(f); d.appendChild(body); }
+      if (body) body.hidden = !on;
+      if (on) S.open[f.i] = true; else delete S.open[f.i];
+    }
+    show(!!S.open[f.i]);
+    r.addEventListener("click", function () { show(r.ariaExpanded !== "true"); });
+    r.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); show(r.ariaExpanded !== "true"); }
+    });
     d.dataset.q = (str(f.kind) + " " + str(f.summary) + " " + str(f.from) + " " + str(f.to)).toLowerCase();
     return d;
+  }
+
+  // The frames held, in the header's order, the filter applied.
+  function drawFrames() {
+    var box = clear("ev-frames");
+    if (!box) return;
+    var t = table();
+    (t ? t.sort(S.frames) : S.frames).forEach(function (f) { box.appendChild(frameRow(f)); });
+    filter();
   }
 
   function filter() {
@@ -217,7 +271,7 @@ window.SlothEvidence = (function () {
   function open(i, offset) {
     var c = S.caps[i], gen = S.gen, id = S.id;
     if (!c) return;
-    if (offset === 0) { clear("ev-frames"); S.cur = i; }
+    if (offset === 0) { clear("ev-frames"); S.cur = i; S.frames = []; S.open = {}; }
     var lis = $("ev-caps").querySelectorAll("li");
     for (var k = 0; k < lis.length; k++) lis[k].classList.toggle("on", k === i);
     $("ev-cap-note").textContent = "loading " + str(c.file);
@@ -239,9 +293,8 @@ window.SlothEvidence = (function () {
       $("ev-cap-note").textContent = str(c.file) + ": " + str(fi.linktype_name) + ", snaplen " +
         fi.snaplen + ", " + r.frames_total + " frames" + (r.truncated_file ? ", the file ends inside a record" : "") +
         (r.frames_capped ? ", the first 4096 indexed" : "") + "; matched by " + (MATCHED[c.matched_by] || c.matched_by);
-      var box = $("ev-frames");
-      (r.frames || []).forEach(function (f) { box.appendChild(frameRow(f)); });
-      filter();
+      S.frames = S.frames.concat(r.frames || []);
+      drawFrames();
       S.next = r.more && num(r.next_offset) ? r.next_offset : null;
       var more = $("ev-more");
       more.hidden = S.next === null;
@@ -259,6 +312,9 @@ window.SlothEvidence = (function () {
     S.gen++;
     S.id = typeof j.id === "string" ? j.id : "";
     S.rendered = location.hash;
+    S.frames = [];
+    S.open = {};
+    table();
     clear("ev-hash");
     proof(j);
     assessment(j);
@@ -271,24 +327,23 @@ window.SlothEvidence = (function () {
   // alert's page would open under it.
   function drawer(box) {
     if (!box) return;
-    var labs = box.querySelectorAll(".label");
-    for (var i = 0; i < labs.length; i++) {
-      if (labs[i].textContent.indexOf("alerts naming it") !== 0) continue;
-      var wrap = labs[i].nextSibling;
-      if (!wrap || !wrap.classList) return;
-      var old = $("ev-drawer");
-      if (old && old !== wrap) old.removeAttribute("id");
-      wrap.id = "ev-drawer";
-      labs[i].appendChild(el("span", "sub", "tap one: its page, evidence, capture and bibliography"));
-      wrap.addEventListener("click", function (e) {
-        var t = e.target;
-        while (t && t !== wrap && !(t.classList && t.classList.contains("go"))) t = t.parentNode;
-        if (!t || t === wrap) return;
-        var x = $("dr-close");
-        if (x && !$("drawer").hidden) x.click();
-      });
-      return;
-    }
+    // app.js marks the list (data-ev="drawer-alerts"); its label is the
+    // element before it.
+    var wrap = box.querySelector("[data-ev=\"drawer-alerts\"]");
+    if (!wrap) return;
+    var old = $("ev-drawer");
+    if (old && old !== wrap) old.removeAttribute("id");
+    wrap.id = "ev-drawer";
+    var lab = wrap.previousElementSibling;
+    if (lab && lab.classList.contains("label"))
+      lab.appendChild(el("span", "sub", "tap one: its page, evidence, capture and bibliography"));
+    wrap.addEventListener("click", function (e) {
+      var t = e.target;
+      while (t && t !== wrap && !(t.classList && t.classList.contains("go"))) t = t.parentNode;
+      if (!t || t === wrap) return;
+      var x = $("dr-close");
+      if (x && !$("drawer").hidden) x.click();
+    });
   }
 
   // The page's elements exist once it is parsed; app.js waits the same way.
@@ -307,6 +362,8 @@ window.SlothEvidence = (function () {
     if (location.hash === S.rendered) return;
     S.gen++;
     S.caps = [];
+    S.frames = [];
+    S.open = {};
     ["ev-proof", "ev-asm", "ev-caps", "ev-hash", "ev-frames"].forEach(clear);
     if ($("ev-more")) $("ev-more").hidden = true;
     if ($("ev-dl")) $("ev-dl").hidden = true;

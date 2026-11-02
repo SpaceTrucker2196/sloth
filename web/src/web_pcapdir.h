@@ -69,6 +69,7 @@ typedef struct {
     long long size;
     long long written_at_epoch;
     int       dir;                    /* which --pcap-dir */
+    int       order;                  /* read order: equal stamps' tie-break */
 } web_pcap_entry_t;
 
 typedef struct {

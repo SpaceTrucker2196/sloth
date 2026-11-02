@@ -292,9 +292,9 @@ static int by_newest(const void *a, const void *b) {
     const web_pcap_entry_t *x = a, *y = b;
     if (x->written_at_epoch != y->written_at_epoch)
         return x->written_at_epoch < y->written_at_epoch ? 1 : -1;
-    /* Equal stamps: the later line (the higher index as read, newest
-     * manifest first) first: the sort key below keeps read order. */
-    return 0;
+    /* Equal stamps keep the order they were read in (newest manifest
+     * first): qsort is not stable, so the read index is the tie-break. */
+    return (x->order > y->order) - (x->order < y->order);
 }
 
 static void read_manifest(web_pcapdir_t *p, int dirfd, int dir, const char *name) {
@@ -398,12 +398,11 @@ void web_pcapdir_scan(web_pcapdir_t *p, long long now_ms) {
         for (int i = 0; i < nn[d]; i++) read_manifest(p, dirfd, d, names[d][i].name);
         close(dirfd);
     }
-    /* Newest first; equal stamps keep the order they were read in
-     * (newest manifest first), which a stable sort needs: qsort is not
-     * one, so the index is folded into the comparison. */
-    for (int i = 0; i < p->n; i++) p->e[i].written_at_epoch = p->e[i].written_at_epoch * 65536 + (65535 - (i & 65535));
+    /* Newest first, read order within a stamp, on a field of its own:
+     * the stamp is whatever 18 digits a manifest line held, so nothing
+     * is folded into it (a scaled stamp overflowed past 2^47). */
+    for (int i = 0; i < p->n; i++) p->e[i].order = i;
     qsort(p->e, (size_t)p->n, sizeof(*p->e), by_newest);
-    for (int i = 0; i < p->n; i++) p->e[i].written_at_epoch /= 65536;
 }
 
 /* ── the lookup ───────────────────────────────────────────────────── */

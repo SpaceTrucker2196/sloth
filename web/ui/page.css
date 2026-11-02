@@ -503,25 +503,18 @@ a.tile:focus-visible { outline-offset: 2px; }
 .ev-bad { color: var(--sev-crit); }
 .ev-tools { display: flex; flex-wrap: wrap; gap: var(--gap); align-items: center; margin: 6px 0; }
 .ev-tools input[type=search] { flex: 1 1 18ch; min-width: 0; }
-.ev-frames { font-size: 12px; margin: 4px 0 10px; }
-.ev-frame { border-top: 1px dotted var(--rule); }
-.ev-frow { display: flex; gap: var(--gap); align-items: baseline; cursor: pointer; padding: 1px 0; min-width: 0; }
-.ev-frow:hover { background: var(--tint); }
-.ev-frow .n { flex: none; min-width: 5ch; text-align: right; }
-.ev-frow .ev-kind { flex: none; min-width: 10ch; }
-.ev-frow .tx { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ev-frow .ev-cut { flex: none; color: var(--signal); font-size: 11px; }
+.ev-frames { margin: 0 0 10px; }
+/* The frame index is a table (.dt .dt-row has the tracks); each row's
+ * fields and bytes open under it, outside the grid. */
+.dt .evfrow { font-size: 12px; border-top: 1px dotted var(--rule); padding: 1px 4px; cursor: pointer; }
+.dt .evfrow.dhead { border-top: 0; cursor: default; }
+.dt .evfrow:not(.dhead):hover, .dt .evfrow[aria-expanded="true"] { background: var(--tint); }
+.dt .evfrow > .ev-cut { color: var(--signal); font-size: 11px; }
 .ev-fbody { padding: 2px 0 8px 2ch; }
 .ev-hex { margin: 4px 0; padding: 6px; overflow-x: auto; font-size: 11px; line-height: 1.35; color: var(--tui-bright); background: var(--tint); border-radius: var(--radius-sm); }
 #ev-drawer li.go::after { content: "\203A"; margin-left: auto; padding-left: var(--gap); color: var(--brass); }
 #ev-drawer li.go:focus-visible { outline-offset: -1px; }
 @media (pointer: coarse) {
   #ev-drawer li.go { min-height: 44px; align-items: center; }
-  .ev-frow { min-height: 36px; align-items: center; }
-}
-@media (max-width: 480px) {
-  .ev-frow { flex-wrap: wrap; }
-  .ev-frow .ev-kind { min-width: 0; }
-  .ev-frow .n:nth-child(3) { display: none; }
-  .ev-frow .tx { order: 5; flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; padding-left: 6ch; }
+  .dt .evfrow:not(.dhead) { min-height: 36px; }
 }

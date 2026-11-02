@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`, `src/evidence_manifest.h`, FIPS 180-4 (SHA-256).
 
-**Last updated**: 2026-10-27 (§6: slothweb reads the manifests back, joins by `incident_id`, verifies the SHA-256, never opens a handshake sink's file). Earlier 2026-10-26 (#166: `--pcap-dir` files and manifest are swept after `pcap.retain_days`, noted in §1 too; one directory for `--pcap-dir` and `--eapol-dir` is refused). Earlier 2026-10-20 (#92 slice 3 review: EAPOL sinks hash after releasing their lock, measured cost; a manifest whose rollback fails is abandoned for `-N`; §5). Earlier 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
+**Last updated**: 2026-11-02 (§6: the download carries `X-Sloth-SHA256`, the check of the bytes it serves). Earlier 2026-10-27 (§6: slothweb reads the manifests back, joins by `incident_id`, verifies the SHA-256, never opens a handshake sink's file). Earlier 2026-10-26 (#166: `--pcap-dir` files and manifest are swept after `pcap.retain_days`, noted in §1 too; one directory for `--pcap-dir` and `--eapol-dir` is refused). Earlier 2026-10-20 (#92 slice 3 review: EAPOL sinks hash after releasing their lock, measured cost; a manifest whose rollback fails is abandoned for `-N`; §5). Earlier 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
 
 ---
 
@@ -452,6 +452,11 @@ the alert's own record names that no manifest line lists.
   by any route, whatever directory they share. An unterminated last
   line is dropped, as this section's writer promises it never commits
   one.
+- **The download is hashed too.** It is a second read of the file, so
+  the bytes it serves are checked again and the answer carries the
+  result in `X-Sloth-SHA256` (`verified`, `mismatch`,
+  `no_manifest_entry`): a file replaced after the page said
+  `hash verified` does not download under that word (2026-11-02).
 - **The 64-byte depth** of §1's files is stated on every frame it cuts
   (`truncated at snaplen 64`): a field the decode cannot reach was not
   captured, which is not the same as absent.

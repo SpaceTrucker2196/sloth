@@ -52,13 +52,15 @@ int web_pcap_frames_route(const web_m4_t *m, web_live_t *live, const char *query
                           int *status);
 
 /* 200: *data is the file (malloc'd: the caller frees it, or hands it to
- * the server as an owned body), *n its length, name its file name.
- * Otherwise a JSON error in body and *data NULL. 0, or -1 when not even
- * the error fit. */
+ * the server as an owned body), *n its length, name its file name and
+ * *hash the SHA-256 check of exactly those bytes against the manifest
+ * ("verified", "mismatch" or "no_manifest_entry", sent as the
+ * X-Sloth-SHA256 header). Otherwise a JSON error in body and *data
+ * NULL. 0, or -1 when not even the error fit. */
 int web_pcap_download_route(const web_m4_t *m, web_live_t *live, const char *query,
                             long long now_s, unsigned char **data, size_t *n,
-                            char *name, size_t namesz, char *body, size_t cap,
-                            size_t *len, int *status);
+                            char *name, size_t namesz, const char **hash, char *body,
+                            size_t cap, size_t *len, int *status);
 
 /* The monotonic clock the index's rescan is paced by. */
 long long web_evidence_now_ms(void);

@@ -428,10 +428,11 @@
       <div class="label">packet capture <span class="sub" id="ev-cap-note"></span></div>
       <div id="ev-caps"></div>
       <div class="ev-hash" id="ev-hash"></div>
-      <div class="ev-tools"><input type="search" id="ev-filter" maxlength="63" placeholder="filter the frames shown" aria-label="filter the frames shown"> <button type="button" id="ev-dl" hidden>download the pcap</button></div>
-      <div class="ev-frames" id="ev-frames"></div>
+      <div class="ev-tools"><input type="search" id="ev-filter" maxlength="63" placeholder="filter the frames shown" aria-label="filter the frames shown"> <button type="button" id="ev-dl" hidden>download the pcap</button> <span class="dt-tools" id="ev-frames-tools"></span></div>
+      <div class="hscroll" id="ev-frames-box"><div class="evfrow dhead" id="ev-frames-head"></div>
+      <div class="ev-frames" id="ev-frames"></div></div>
       <button type="button" id="ev-more" hidden>next frames</button>
-      <div class="sub">sloth's --pcap-dir files keep 64 bytes of each packet: a decode stops where the bytes do, and says so. 802.11 headers are read by sloth's own parsers (src/radiotap.c, src/dot11_frame.c, src/dot11_ie.c); the IP layers by slothweb's summary decoder. Click a frame for its fields and bytes.</div>
+      <div class="sub">sloth's --pcap-dir files keep 64 bytes of each packet: a decode stops where the bytes do, and says so. 802.11 headers are read by sloth's own parsers (src/radiotap.c, src/dot11_frame.c, src/dot11_ie.c); the IP layers by slothweb's summary decoder. Click a frame (or Enter on it) for its fields and bytes; a column's header sorts the frames held, its edge resizes it, and both are kept in this browser.</div>
     </section>
    </div>
    <div id="v-records" hidden>

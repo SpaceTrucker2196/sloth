@@ -74,6 +74,8 @@ static void test_page_tables(void) {
         "id: \"rectick\"",
         /* the BLE view (web_ble.h): the advertisers and the findings */
         "id: \"ble\"", "id: \"blealerts\"",
+        /* an alert's capture frames (web/ui/evidence.js) */
+        "id: \"evframes\"",
     };
     for (size_t i = 0; i < sizeof(ID) / sizeof(ID[0]); i++) WT_HAS(p, ID[i]);
     static const char *const EL[] = {
@@ -85,7 +87,7 @@ static void test_page_tables(void) {
         "id=\"al-head\"", "id=\"al-box\"", "id=\"ad-history-head\"", "id=\"ad-history-box\"",
         "id=\"ad-dev-alerts-head\"", "id=\"ad-dev-alerts-box\"", "id=\"rc-head\"", "id=\"rc-box\"",
         "id=\"rc-thead\"", "id=\"rc-tbox\"", "id=\"b-thead\"", "id=\"b-box\"", "id=\"b-al-head\"",
-        "id=\"b-al-box\"",
+        "id=\"b-al-box\"", "id=\"ev-frames-head\"", "id=\"ev-frames-box\"",
     };
     for (size_t i = 0; i < sizeof(EL) / sizeof(EL[0]); i++) WT_HAS(p, EL[i]);
     WT_LACKS(p, "class=\"drow dhead\" aria-hidden");

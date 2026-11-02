@@ -673,6 +673,49 @@ static void test_dir_index(void) {
     web_pcapdir_destroy(&p);
 }
 
+/* The sort: newest stamp first, read order within one stamp. A stamp
+ * is whatever ll_of() admits (18 digits), so nothing may be computed
+ * from it that can overflow. Seen red with the old key put back (the
+ * stamp scaled by 65536 with the read index folded in): the 18-digit
+ * line came back with another stamp in the plain build, and the
+ * sanitized build stopped on the signed overflow. The tie order seen
+ * red with the tie-break reversed (C before A). */
+static void test_dir_order(void) {
+    char dir[TEST_TMP_MAX];
+    snprintf(dir, sizeof(dir), "%s/slothweb-evo-XXXXXX", test_tmpdir());
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    char sha[65], l[1024], path[TEST_TMP_MAX + 200];
+    hex64((const uint8_t *)"x", 1, sha);
+    snprintf(path, sizeof(path), "%s/%s", dir, MANI);
+    FILE *f = fopen(path, "wb");
+    WT_ASSERT(f != NULL);
+    if (!f) return;
+    manifest_line(l, sizeof(l), 1, "alert_20261027_120000_a.pcap", 1, sha, "alert_pcap", NULL,
+                  "PORT_SCAN", 1793102400);
+    fputs(l, f);
+    manifest_line(l, sizeof(l), 2, "alert_20261027_120000_b.pcap", 1, sha, "alert_pcap", NULL,
+                  "PORT_SCAN", 999999999999999999LL);
+    fputs(l, f);
+    manifest_line(l, sizeof(l), 3, "alert_20261027_120000_c.pcap", 1, sha, "alert_pcap", NULL,
+                  "PORT_SCAN", 1793102400);
+    fputs(l, f);
+    fclose(f);
+    const char *dirs[1] = { dir };
+    web_pcapdir_t p;
+    WT_EQ(web_pcapdir_init(&p, dirs, 1), 0);
+    web_pcapdir_scan(&p, 1000);
+    WT_EQ(p.n, 3);
+    if (p.n == 3) {
+        WT_ASSERT(!strcmp(p.e[0].file, "alert_20261027_120000_b.pcap"));
+        WT_EQ(p.e[0].written_at_epoch, 999999999999999999LL);
+        WT_ASSERT(!strcmp(p.e[1].file, "alert_20261027_120000_a.pcap"));
+        WT_ASSERT(!strcmp(p.e[2].file, "alert_20261027_120000_c.pcap"));
+        WT_EQ(p.e[1].written_at_epoch, 1793102400);
+    }
+    web_pcapdir_destroy(&p);
+    test_rm_tree(dir);
+}
+
 /* ── the routes ───────────────────────────────────────────────────── */
 
 static char g_out[65536];
@@ -798,6 +841,11 @@ static void test_routes(void) {
     WT_HAS(g_out, "Content-Type: application/vnd.tcpdump.pcap\r\n");
     WT_HAS(g_out, "Content-Disposition: attachment; filename=\"" NAME_A "\"\r\n");
     WT_HAS(g_out, "X-Content-Type-Options: nosniff\r\n");
+    /* The bytes served are hashed themselves, not vouched for by the
+     * frames read before them. The mismatch and no_manifest_entry
+     * answers below seen red with the download's check replaced by a
+     * constant "verified" (this first one cannot tell, by design). */
+    WT_HAS(g_out, "X-Sloth-SHA256: verified\r\n");
     WT_ASSERT(r.body_owned != NULL && r.body == r.body_owned);
     WT_EQ(r.body_len, g_pa.n);
     WT_ASSERT(r.body_owned && !memcmp(r.body_owned, g_pa.b, g_pa.n));
@@ -811,6 +859,10 @@ static void test_routes(void) {
     if (fp) { fseek(fp, 40, SEEK_SET); fputc(0x55, fp); fclose(fp); }
     WT_EQ(route(&h, "/api/pcap/frames", q, 0, &r), 200);
     WT_HAS(body_of(g_out), "\"says\":\"HASH MISMATCH\"");
+    /* Downloaded after the page said "verified": the download says not. */
+    WT_EQ(route(&h, "/api/pcap", q, 0, &r), 200);
+    WT_HAS(g_out, "X-Sloth-SHA256: mismatch\r\n");
+    free(r.body_owned);
     /* A pcapng file where a pcap was. */
     static const uint8_t ng[28] = { 0x0a, 0x0d, 0x0d, 0x0a, 0x1c, 0, 0, 0, 0x4d, 0x3c, 0x2b, 0x1a };
     WT_EQ(write_file(NAME_C, ng, sizeof(ng)), 0);
@@ -818,6 +870,9 @@ static void test_routes(void) {
     WT_EQ(route(&h, "/api/pcap/frames", q, 0, &r), 415);
     WT_HAS(body_of(g_out), "\"error\":\"pcapng_not_supported\"");
     WT_HAS(body_of(g_out), "editcap -F pcap");
+    WT_EQ(route(&h, "/api/pcap", q, 0, &r), 200);
+    WT_HAS(g_out, "X-Sloth-SHA256: no_manifest_entry\r\n");
+    free(r.body_owned);
 
     /* No capture: said why, in sloth's terms. */
     snprintf(q, sizeof(q), "id=%s", id2);
@@ -934,7 +989,45 @@ static void test_assessment_generator(void) {
                   "# x\n\n## The attack\n\nSee [1].\n\n## Bibliography\n\n1. one\n\n"
                   "## Verification notes\n\nThe paper's own [70] is theirs.\n"), 0);
     WT_EQ(gen(sub, out), 0);
+    /* Prose among the entries is the Bibliography's note, not the words
+     * of the source above it: an unindented line under an entry
+     * (MY_NETWORK_RECON.md's "(5. and 6. intentionally unused ...)")
+     * and a paragraph after a blank line. An indented line straight
+     * under an entry is still its continuation. The two absences seen
+     * red with every unnumbered line taken as a continuation again. */
+    WT_EQ(put_doc(sub, "DEAUTH_FLOOD.md",
+                  "# x\n\n## The attack\n\nSee [1] and [3].\n\n## Bibliography\n\n"
+                  "1. one\n   still one\n(2. intentionally unused)\n3. three\n\n"
+                  "No public advisory was found.\n"), 0);
+    WT_EQ(gen(sub, out), 0);
+    f = fopen(out, "r");
+    t = NULL;
+    if (f) {
+        t = calloc(1, 65536);
+        if (t) { size_t n = fread(t, 1, 65535, f); t[n] = '\0'; }
+        fclose(f);
+    }
+    WT_ASSERT(t != NULL);
+    if (t) {
+        WT_HAS(t, "\"[1] one still one\"");
+        WT_HAS(t, "\"[3] three\"");
+        WT_HAS(t, "\"(2. intentionally unused)\\012\\012No public advisory was found.\"");
+        WT_LACKS(t, "still one (2.");
+        WT_LACKS(t, "[3] three No public");
+        free(t);
+    }
     test_rm_tree(dir);
+
+    /* The real MY_NETWORK_RECON.md: its note kept apart from [4]. */
+    int recon = 0;
+    for (int i = 0; i < web_asm_n; i++) {
+        if (strcmp(web_asm[i].name, "MY_NETWORK_RECON")) continue;
+        recon = 1;
+        WT_ASSERT(!strncmp(web_asm[i].bib_note, "(5. and 6. intentionally unused", 31));
+        for (int k = 0; k < web_asm[i].nbib; k++)
+            WT_ASSERT(strstr(web_asm[i].bib[k], "intentionally unused") == NULL);
+    }
+    WT_ASSERT(recon);
 
     /* The built-in table is docs/wiki/alert-assessments/ as written:
      * every entry with its count semantics, noise verdict, sections and
@@ -993,6 +1086,23 @@ static void test_page_hooks(void) {
     WT_HAS(p, "id=\"ev-alert\"");
     WT_HAS(p, "if (window.SlothEvidence) window.SlothEvidence.alert(j);");
     WT_HAS(p, "if (window.SlothEvidence) window.SlothEvidence.drawer(box);");
+    /* The drawer's alert list found by app.js's mark on that list, not
+     * by its label's wording: rewording the label cannot silently drop
+     * the tap mark, the 44 px rows and the drawer closing. The absence
+     * seen red with the label-text search put back in drawer(). */
+    WT_HAS(p, "var alw = itemList(box, \"alerts naming it\", j.alerts, ");
+    WT_HAS(p, "alw.dataset.ev = \"drawer-alerts\";\n");
+    WT_HAS(p, "var wrap = box.querySelector(\"[data-ev=\\\"drawer-alerts\\\"]\");");
+    WT_LACKS(p, "indexOf(\"alerts naming it\")");
+    /* The frame index is a data table like the page's others: through
+     * DataTable, its tools and its kept filter. The absence seen red
+     * with the old <details> rows put back in frameRow(). */
+    WT_HAS(p, "window.SlothTables = { make: DataTable };");
+    WT_HAS(p, "S.t = window.SlothTables.make({ id: \"evframes\", ");
+    WT_HAS(p, "head: $(\"ev-frames-head\"), reset: $(\"ev-frames-tools\"), redraw: drawFrames, cols: COLS });");
+    WT_HAS(p, "var r = el(\"div\", \"evfrow dt-row\");");
+    WT_HAS(p, "id=\"ev-frames-tools\"");
+    WT_LACKS(p, "el(\"details\", \"ev-frame\")");
     /* The one way the page starts a download: the same origin's
      * /api/pcap, every value encoded, no .href sink. */
     WT_HAS(p, "window.location.assign(\"/api/pcap?id=\" + encodeURIComponent(");
@@ -1014,6 +1124,7 @@ void run_evidence_tests(void) {
     WT_RUN(test_name_gate);
     WT_RUN(test_manifest_line);
     WT_RUN(test_dir_index);
+    WT_RUN(test_dir_order);
     WT_RUN(test_routes);
     WT_RUN(test_assessment_generator);
     WT_RUN(test_page_hooks);

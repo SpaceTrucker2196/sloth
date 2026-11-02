@@ -18,7 +18,10 @@
  * [n] citation marks kept verbatim) except "Related pages", which is
  * the wiki's navigation. The section named Bibliography (or References)
  * becomes the list of entries, one per list item or "[n]" line, as
- * text: no URL is ever a link on the page.
+ * text: no URL is ever a link on the page. A line under an entry is
+ * its continuation only when indented and with no blank line between;
+ * any other prose there is the Bibliography's note, kept apart from
+ * the entries.
  *
  * What stops the build, naming the file:
  *   - a stem that is not an X() row of DEF (a typo would otherwise
@@ -59,6 +62,7 @@ typedef struct {
     int    nsec;
     char  *bib[BIB_MAX];
     int    nbib;
+    char  *bib_note;           /* the Bibliography's prose, not an entry */
 } doc_t;
 
 static char  K[TYPE_MAX][NAME_MAX_];
@@ -327,14 +331,31 @@ static int read_doc(const char *dir, const char *file) {
                 }
                 plain(&b, s + mk, n - mk);
                 d->bib[d->nbib++] = b.b ? b.b : xdup("", 0);
-            } else if (d->nbib) {
-                /* A continuation line of the entry above. */
+                para = 0;
+            } else if (d->nbib && !para && (lines[i][0] == ' ' || lines[i][0] == '\t')) {
+                /* An indented line straight under an entry: its
+                 * continuation. */
                 buf_t b = { 0, 0, 0 };
                 put(&b, d->bib[d->nbib - 1], strlen(d->bib[d->nbib - 1]));
                 put(&b, " ", 1);
                 plain(&b, s, n);
                 free(d->bib[d->nbib - 1]);
                 d->bib[d->nbib - 1] = b.b;
+            } else {
+                /* Prose among the entries, after a blank line or not
+                 * indented under one (MY_NETWORK_RECON.md's "(5. and
+                 * 6. intentionally unused ...)", the "no public
+                 * literature" notes): a note of its own, never a
+                 * source's words. */
+                buf_t b = { 0, 0, 0 };
+                if (d->bib_note) {
+                    put(&b, d->bib_note, strlen(d->bib_note));
+                    put(&b, para ? "\n\n" : " ", para ? 2 : 1);
+                    free(d->bib_note);
+                }
+                plain(&b, s, n);
+                d->bib_note = b.b;
+                para = 0;
             }
             continue;
         }
@@ -457,9 +478,11 @@ int main(int argc, char **argv) {
         fputs(", ", o);      c_string(o, d->path);
         fputs(", ", o);      c_string(o, d->title ? d->title : "");
         fputs(", ", o);      c_string(o, d->updated ? d->updated : "");
-        fprintf(o, ", fk%d, fv%d, %d, sec%d, %d, bib%d, %d },\n", i, i, d->nfm, i, d->nsec, i, d->nbib);
+        fprintf(o, ", fk%d, fv%d, %d, sec%d, %d, bib%d, %d, ", i, i, d->nfm, i, d->nsec, i, d->nbib);
+        c_string(o, d->bib_note ? d->bib_note : "");
+        fputs(" },\n", o);
     }
-    if (!nd) fputs("    { NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0, NULL, 0 },\n", o);
+    if (!nd) fputs("    { NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, 0, NULL, 0, NULL },\n", o);
     fprintf(o, "};\nconst int web_asm_n = %d;\n\n", nd);
     fprintf(o, "/* The entry of each .def row, by type number; -1 none. */\n"
                "const int web_asm_by_type[] = {");

@@ -34,6 +34,7 @@ typedef struct {
     int                  nsec;
     const char *const *bib;    /* the Bibliography's entries, in order */
     int                nbib;
+    const char *bib_note;      /* its prose that is no entry, or "" */
 } web_asm_t;
 
 extern const web_asm_t web_asm[];

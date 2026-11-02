@@ -848,6 +848,8 @@
     t.build();
     return t;
   }
+  // evidence.js's frame index is one of these too.
+  window.SlothTables = { make: DataTable };
 
   // ── a control kept by value ───────────────────────────────────────
   // A select, a search box or the SQL box, slothweb.v1.ctl.<id>: the
@@ -889,7 +891,8 @@
     c.addEventListener(c.tagName === "SELECT" ? "change" : "input", function () { ctlSave(id); });
   }
   ["n-win", "a-win", "d-q", "d-sort", "l-q", "w-metric", "w-win", "w-sort", "al-state", "al-sev",
-   "al-q", "al-win", "f-win", "f-sort", "f-ip", "q-sql", "b-q", "b-sort"].forEach(keepCtl);
+   "al-q", "al-win", "f-win", "f-sort", "f-ip", "ev-filter",
+   "q-sql", "b-q", "b-sort"].forEach(keepCtl);
   // Filled from the server's answer, so put back where it is filled.
   $("al-type").addEventListener("change", function () { ctlSave("al-type"); });
   // Each drill-down bar's "show all" (its href the bare view).
@@ -2671,6 +2674,7 @@
       cols: [{ k: "ls", label: "last", w: 10, type: "time", val: function (x) { return x.last_seen; } },
              { k: "v", label: title, w: 24, flex: true, type: how[0], val: function (x) { return x[how[1]]; } }] });
     draw();
+    return wrap;
   }
 
   function ouiPairs(o) {
@@ -2792,7 +2796,7 @@
         return sp;
       }, j.assocs_more);
       itemList(box, "arp addresses", j.ips, function (x) { return ipVal(x.addr, IP_SRC.arp); }, j.ips_more);
-      itemList(box, "alerts naming it", j.alerts, function (x) {
+      var alw = itemList(box, "alerts naming it", j.alerts, function (x) {
         var ok = x.sev >= 0 && x.sev <= 2;
         var sp = el("span", ok ? "sev" + x.sev : "");
         sp.appendChild(el("span", "ty", ok ? SEV_WORD[x.sev] : "?"));
@@ -2802,7 +2806,10 @@
           sp.appendChild(el("span", heatClass(0.6), "  " + x.incidents + " incidents"));
         return sp;
       }, j.alerts_more, function (x) { return typeof x.id === "string" ? x.id : ""; });
-      // Its alert rows, tap targets that open the alert's page (web/ui/evidence.js).
+      // Its alert rows, tap targets that open the alert's page
+      // (web/ui/evidence.js), found by this mark and not by the label's
+      // wording.
+      alw.dataset.ev = "drawer-alerts";
       if (window.SlothEvidence) window.SlothEvidence.drawer(box);
       // The request's budget stopped sloth.db's walk short of the table's
       // end: the list and its figures are of the rows back to here.

@@ -213,7 +213,9 @@ void web_evidence_alert_json(web_jw_t *w, const web_m4_t *m, const web_alert_tgt
         if (i) web_jw_raw(w, ",");
         web_jw_str(w, a->bib[i]);
     }
-    web_jw_raw(w, "]}");
+    web_jw_raw(w, "],\"bibliography_note\":");
+    if (a->bib_note && a->bib_note[0]) web_jw_str(w, a->bib_note); else web_jw_raw(w, "null");
+    web_jw_raw(w, "}");
     if (!was && (w->overflow || w->len + WEB_EVIDENCE_RESERVE > w->cap)) {
         w->len = mark;
         w->overflow = 0;
@@ -271,6 +273,12 @@ static int open_capture(const web_m4_t *m, web_live_t *live, const char *idv, co
     return 0;
 }
 
+/* web_pcapdir_verify()'s word as the API spells it. */
+static const char *hash_status(const char *v) {
+    return !strcmp(v, "verified") ? "verified" : !strcmp(v, "MISMATCH") ? "mismatch"
+                                                                        : "no_manifest_entry";
+}
+
 int web_pcap_frames_route(const web_m4_t *m, web_live_t *live, const char *query,
                           long long now_s, char *body, size_t cap, size_t *len,
                           int *status) {
@@ -302,8 +310,7 @@ int web_pcap_frames_route(const web_m4_t *m, web_live_t *live, const char *query
     web_jw_raw(&w, ",\"matched_by\":");  web_jw_str(&w, hit->matched_by);
     const char *v = web_pcapdir_verify(buf, (size_t)size, hit->e);
     web_jw_raw(&w, ",\"hash\":{\"status\":");
-    web_jw_str(&w, !strcmp(v, "verified") ? "verified" : !strcmp(v, "MISMATCH") ? "mismatch"
-                                                                               : "no_manifest_entry");
+    web_jw_str(&w, hash_status(v));
     web_jw_raw(&w, ",\"says\":");
     web_jw_str(&w, !strcmp(v, "verified") ? "hash verified" : !strcmp(v, "MISMATCH")
                    ? "HASH MISMATCH" : "no manifest entry");
@@ -341,10 +348,11 @@ int web_pcap_frames_route(const web_m4_t *m, web_live_t *live, const char *query
 
 int web_pcap_download_route(const web_m4_t *m, web_live_t *live, const char *query,
                             long long now_s, unsigned char **data, size_t *n,
-                            char *name, size_t namesz, char *body, size_t cap,
-                            size_t *len, int *status) {
+                            char *name, size_t namesz, const char **hash, char *body,
+                            size_t cap, size_t *len, int *status) {
     *data = NULL;
     *n = 0;
+    *hash = NULL;
     char err[48];
     web_param_t ps[2] = { { "id", "", 0 }, { "n", "", 0 } };
     if (web_params_parse(query, ps, 2, err, sizeof(err)) != 0)
@@ -359,6 +367,10 @@ int web_pcap_download_route(const web_m4_t *m, web_live_t *live, const char *que
                          &size, body, cap, len, status);
     if (r != 0) { free(x); return r < 0 ? -1 : 0; }
     snprintf(name, namesz, "%s", hit->file);
+    /* The bytes served, hashed: the page's "hash verified" is of an
+     * earlier read (/api/pcap/frames), and a file replaced since would
+     * otherwise download with no word of it. */
+    *hash = hash_status(web_pcapdir_verify(buf, (size_t)size, hit->e));
     free(x);
     *data = buf;
     *n = (size_t)size;

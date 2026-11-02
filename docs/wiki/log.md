@@ -5911,3 +5911,11 @@ report events.
   (which had sent every real one as `too_large`), and the counters are
   labelled for what they are: `count (evaluations)`, `observations`
   following it once the detail moves, never frames or requests.
+- 2026-11-02 — [[slothweb]], [[pcap-export]] §6: the review of the
+  alert page's proof. The pcap download hashes the bytes it serves and
+  says so in `X-Sloth-SHA256`; the manifest index sorts on a read-order
+  field instead of scaling `written_at_epoch` (an 18-digit stamp
+  overflowed); a Bibliography's own prose is `bibliography_note`, never
+  folded into the entry above it; the capture's frame index is a data
+  table (sortable, resizable, kept, its filter kept); the drawer's alert
+  list is found by a `data-ev` mark, not its label's words.

@@ -928,13 +928,14 @@ static int route_pcap(const web_req_t *rq, const web_health_t *h, int download,
     unsigned char *data = NULL;
     size_t dn = 0;
     char name[WEB_PCAP_NAME_MAX + 1] = "";
+    const char *hash = NULL;
     if (qlong(rq)) {
         status = 400;
         bl = web_series_error_json("query_too_long", body, cap);
         rc = bl ? 0 : -1;
     } else if (download) {
         rc = web_pcap_download_route(m, h->live, rq->query, h->wall_s, &data, &dn, name,
-                                     sizeof(name), body, cap, &bl, &status);
+                                     sizeof(name), &hash, body, cap, &bl, &status);
     } else {
         rc = web_pcap_frames_route(m, h->live, rq->query, h->wall_s, body, cap, &bl, &status);
     }
@@ -946,11 +947,12 @@ static int route_pcap(const web_req_t *rq, const web_health_t *h, int download,
             "Content-Type: application/vnd.tcpdump.pcap\r\n"
             "Content-Disposition: attachment; filename=\"%s\"\r\n"
             "Content-Length: %zu\r\n"
+            "X-Sloth-SHA256: %s\r\n"
             "Cache-Control: no-store\r\n"
             COMMON
             CSP_NONE
             "Connection: close\r\n"
-            "\r\n", name, dn), outsz, &r->out_len) != 0) {
+            "\r\n", name, dn, hash ? hash : "no_manifest_entry"), outsz, &r->out_len) != 0) {
             free(data);
             return -1;
         }

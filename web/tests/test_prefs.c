@@ -119,6 +119,7 @@ static const char *const KEPT[] = {
     /* by keepCtl(), by value */
     "n-win", "a-win", "d-q", "d-sort", "l-q", "w-metric", "w-win", "w-sort", "al-state",
     "al-sev", "al-q", "al-win", "f-win", "f-sort", "f-ip", "q-sql", "b-q", "b-sort",
+    "ev-filter",
 };
 static const char *const KEPT_ELSEWHERE[] = {
     "sens",       /* slothweb.v1.sens, range-checked */
@@ -136,7 +137,6 @@ static const char *const NOT_KEPT[] = {
     "frrs-note", "tc-u-name", "tc-u-kind", "tc-u-parent", "tc-p-nom", "tc-p-class",
     "tc-p-unit", "tc-imp-file", "tc-pv-nom", "tc-pv-unit", "tc-e-kind", "tc-e-addr",
     "tc-e-role", "tc-e-label",
-    "ev-filter",  /* one capture file's frames, not a view's: per file */
 };
 
 static int listed(const char *id, const char *const *l, size_t n) {
