@@ -84,6 +84,10 @@ readdirCalled:research/ingest/main.c
 # directory into a local DIR* and closedir()s it before returning, on
 # the test's one thread.
 readdirCalled:web/tests/test_store.c
+# The bundle test's one-caller audit: test_rawn_has_one_caller()
+# opendir()s web/src into a local DIR* and closedir()s it before
+# returning, on the test's one thread.
+readdirCalled:web/tests/test_bundle.c
 # #162's sloth.db reader tests: sdb_listing() opendir()s the test's own
 # temporary directory into a local DIR* and closedir()s it before
 # returning, on the test's one thread.
