@@ -155,6 +155,18 @@ int web_config_check(const web_config_t *c, char *err, size_t errsz) {
                              "the box reads sloth.db and nothing else.\n");
         return -1;
     }
+    /* An evidence pcap can carry a handshake's EAPOL/PMKID frames:
+     * serving it to remote peers is its own decision, spelled out,
+     * not a side effect of a flag given for loopback. */
+    if (c->serve_evidence_pcap == 1 && c->allow_remote) {
+        snprintf(err, errsz, "slothweb: --web-serve-evidence-pcap with --web-allow-remote "
+                             "would hand remote peers evidence pcaps,\n"
+                             "  which may hold EAPOL/PMKID handshake material (crackable "
+                             "offline). Give\n"
+                             "  --web-serve-evidence-pcap=remote to serve them to remote "
+                             "peers anyway, or drop one of the two.\n");
+        return -1;
+    }
     char where[INET6_ADDRSTRLEN + 16];
     web_format_bind(c->bind_family, c->bind_addr, c->bind_port,
                     where, sizeof(where));
@@ -242,7 +254,8 @@ void web_usage(FILE *out) {
         "                [--store PATH] [--web-max-keys N] [--web-max-mb N]\n"
         "                [--web-retain-days N] [--sloth-db PATH]\n"
         "                [--web-allow-sql] [--web-read-only]\n"
-        "                [--web-assessments DIR] [--pcap-dir DIR]... [--help]\n"
+        "                [--web-assessments DIR] [--pcap-dir DIR]...\n"
+        "                [--web-serve-evidence-pcap[=remote]] [--help]\n"
         "\n"
         "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
         "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
@@ -305,6 +318,13 @@ void web_usage(FILE *out) {
         "                        files named as sloth names alert pcaps are\n"
         "                        opened, never a handshake pcap or\n"
         "                        eapol.22000; 16 MB a file at most.\n"
+        "                        Evidence pcaps (from --eapol-dir) are\n"
+        "                        listed but withheld: they may hold\n"
+        "                        EAPOL/PMKID handshake material.\n"
+        "  --web-serve-evidence-pcap[=remote]\n"
+        "                        serve evidence pcaps too; announced on\n"
+        "                        stderr. With --web-allow-remote it is\n"
+        "                        refused unless given as =remote.\n"
         "  --help                this text.\n"
         "\n"
         "Routes (GET and HEAD): / (the page), /api/health, /api/live,\n"
@@ -368,6 +388,10 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 return -1;
             }
             snprintf(c->assess_dir, sizeof(c->assess_dir), "%s", v);
+        } else if (!strcmp(a, "--web-serve-evidence-pcap")) {
+            c->serve_evidence_pcap = 1;
+        } else if (!strcmp(a, "--web-serve-evidence-pcap=remote")) {
+            c->serve_evidence_pcap = 2;
         } else if (!strcmp(a, "--socket")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);
@@ -519,6 +543,18 @@ void web_config_announce(const web_config_t *c, FILE *err) {
                      "  with no authentication and no TLS: every device, "
                      "name, SSID, flow and finding\n"
                      "  sloth recorded (credential columns stay withheld).\n");
+    }
+    if (c->serve_evidence_pcap) {
+        fprintf(err, "slothweb: WARNING: --web-serve-evidence-pcap: evidence pcaps "
+                     "(<incident>-<event>-<RULE>.pcap\n"
+                     "  from the sensor's --eapol-dir) are decoded and downloadable; "
+                     "they may hold\n"
+                     "  EAPOL/PMKID handshake material, crackable offline.\n");
+        if (c->serve_evidence_pcap == 2 && c->allow_remote)
+            fprintf(err, "slothweb: WARNING: --web-serve-evidence-pcap=remote with "
+                         "--web-allow-remote: every peer\n"
+                         "  the allow list admits can download them, with no "
+                         "authentication and no TLS.\n");
     }
     if (c->sock.kind && !web_sockspec_is_local(&c->sock)) {
         char sp[INET6_ADDRSTRLEN + 16];

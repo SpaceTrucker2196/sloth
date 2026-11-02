@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/packets.md`, `docs/views/alerts.md`, `docs/views/eapol.md`, `src/evidence_ring.h`, `src/evidence_export.h`, `src/evidence_manifest.h`, FIPS 180-4 (SHA-256).
 
-**Last updated**: 2026-11-02 (§6: the download carries `X-Sloth-SHA256`, the check of the bytes it serves). Earlier 2026-10-27 (§6: slothweb reads the manifests back, joins by `incident_id`, verifies the SHA-256, never opens a handshake sink's file). Earlier 2026-10-26 (#166: `--pcap-dir` files and manifest are swept after `pcap.retain_days`, noted in §1 too; one directory for `--pcap-dir` and `--eapol-dir` is refused). Earlier 2026-10-20 (#92 slice 3 review: EAPOL sinks hash after releasing their lock, measured cost; a manifest whose rollback fails is abandoned for `-N`; §5). Earlier 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
+**Last updated**: 2026-11-02 (§6: evidence pcaps withheld by slothweb unless `--web-serve-evidence-pcap`; a file named by several manifest lines verified by any line that matches, a disagreement said; `truncated at snaplen` only when the snaplen cut the record). Earlier 2026-11-02 (§6: the download carries `X-Sloth-SHA256`, the check of the bytes it serves). Earlier 2026-10-27 (§6: slothweb reads the manifests back, joins by `incident_id`, verifies the SHA-256, never opens a handshake sink's file). Earlier 2026-10-26 (#166: `--pcap-dir` files and manifest are swept after `pcap.retain_days`, noted in §1 too; one directory for `--pcap-dir` and `--eapol-dir` is refused). Earlier 2026-10-20 (#92 slice 3 review: EAPOL sinks hash after releasing their lock, measured cost; a manifest whose rollback fails is abandoned for `-N`; §5). Earlier 2026-10-20 (#92 slice 3: the hashed per-session manifest, §5; the per-alert and `w` pcaps declare snaplen 64, the depth the wired ring actually keeps). Earlier 2026-10-20 (#92 slices 1+2: the alert engine writes cited evidence frames; the evidence exporter writes temp → fsync → rename, so no partial file is ever left under a final name; review: a name an earlier run used gets a `-N` suffix instead of a per-tick retry). Previously 2026-10-14 (#122).
 
 ---
 
@@ -459,7 +459,29 @@ the alert's own record names that no manifest line lists.
   `hash verified` does not download under that word (2026-11-02).
 - **The 64-byte depth** of §1's files is stated on every frame it cuts
   (`truncated at snaplen 64`): a field the decode cannot reach was not
-  captured, which is not the same as absent.
+  captured, which is not the same as absent. The snaplen is named only
+  when a record's captured length equals it; a record cut shorter says
+  `N of M bytes captured`, without a cause the file does not support.
+- **Evidence pcaps are withheld by default.** §4's files are raw
+  802.11 frames from the evidence ring, gated here behind
+  `--collect-handshakes` because such a frame can carry EAPOL/PMKID
+  material. slothweb holds to the same line: an `evidence_pcap` file is
+  listed with `withheld: may hold EAPOL/PMKID handshake material`, its
+  size and hash, and never decoded or downloaded (`403
+  withheld_evidence_pcap`) unless slothweb is started with
+  `--web-serve-evidence-pcap`, which it announces. With
+  `--web-allow-remote` that flag is refused unless spelled
+  `--web-serve-evidence-pcap=remote` (2026-11-02).
+- **Several lines for one file.** A file may be named by more than one
+  line (§5's writer appends; anyone who can write the directory can
+  too). Every such line is tried: one whose hash and size match makes
+  it `hash verified`, none makes it `HASH MISMATCH`, and lines that
+  disagree are said as `conflicting manifest lines (N)`. The newest
+  `written_at_epoch` decides nothing, since a stamp is only what its
+  line claims (2026-11-02).
+- **Names that are not regular files** (a symlink, a FIFO) are listed
+  as `unreadable: not a regular file` (`fstatat`, nothing followed)
+  and refused by both routes; they were never opened (2026-11-02).
 
 The page, its routes and its limits: `web/README.md`, "An alert's
 proof"; [[slothweb]].

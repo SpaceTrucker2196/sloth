@@ -9,8 +9,11 @@
  *                      first, at most WEB_PCAPDIR_HITS: n (the index the
  *                      routes below take), file, sink, size, sha256,
  *                      written_at, matched_by (incident | record |
- *                      rule_time); never the incident_id, the session
- *                      or a directory path
+ *                      rule_time), withheld (an evidence pcap without
+ *                      --web-serve-evidence-pcap), unreadable (not a
+ *                      regular file), manifest_lines and conflict;
+ *                      never the incident_id, the session or a
+ *                      directory path
  *     "captures_note"  why the list may be short, or null
  *     "evidence"       observed against threshold where known: the
  *                      counts, the detail's name=value numerals (only
@@ -29,6 +32,9 @@
  *   /api/pcap?id=&n=
  *       the same file's bytes, application/vnd.tcpdump.pcap, as an
  *       attachment. GET only.
+ *
+ * A withheld or unreadable capture is 403 from both routes: listed,
+ * never opened.
  *
  * n names a file only through its alert: a file the alert's lookup
  * does not return is a 404 whatever the directory holds, so neither

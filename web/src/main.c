@@ -161,6 +161,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "slothweb: --pcap-dir: out of memory\n");
             return 1;
         }
+        g_pcap.serve_evidence = cfg.serve_evidence_pcap != 0;
         g_m4.pcap = &g_pcap;
     }
     web_anomaly_attach(&g_anomaly, &g_tsdb);
@@ -265,7 +266,9 @@ int main(int argc, char **argv) {
     for (int i = 0; i < cfg.npcap_dir; i++)
         fprintf(stderr, "slothweb: alert pcaps from %s (read-only, opened per "
                         "request; sloth's alert pcap names only, never a "
-                        "handshake pcap or eapol.22000)\n", cfg.pcap_dir[i]);
+                        "handshake pcap or eapol.22000; evidence pcaps %s)\n",
+                cfg.pcap_dir[i], cfg.serve_evidence_pcap ? "served"
+                                                         : "listed and withheld");
     if (!cfg.npcap_dir)
         fprintf(stderr, "slothweb: no --pcap-dir: the alert page's packet "
                         "capture is off\n");

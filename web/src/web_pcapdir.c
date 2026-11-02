@@ -421,6 +421,45 @@ static void take(web_pcap_hit_t *out, int *n, int max, const web_pcap_entry_t *e
     snprintf(h->file, sizeof(h->file), "%s", file);
     h->dir = dir;
     h->matched_by = by;
+    h->withheld = NULL;
+    h->unreadable = NULL;
+    h->lines = 0;
+    h->conflict = 0;
+}
+
+/* What the list says of each hit beyond its name: withheld, not a
+ * regular file, and how many manifest lines name it. */
+static void annotate(const web_pcapdir_t *p, web_pcap_hit_t *out, int n) {
+    for (int d = 0; d < p->ndir; d++) {
+        int dirfd = -1;
+        for (int i = 0; i < n; i++) {
+            web_pcap_hit_t *h = &out[i];
+            if (h->dir != d) continue;
+            /* parse_line() ties the evidence sink to the evidence
+             * name, so the name alone says which a record-named file
+             * with no line is. */
+            if (!p->serve_evidence && strncmp(h->file, "alert_", 6) != 0)
+                h->withheld = WEB_PCAP_WITHHELD;
+            const web_pcap_entry_t *first = NULL;
+            for (int k = 0; k < p->n; k++) {
+                const web_pcap_entry_t *e = &p->e[k];
+                if (e->dir != d || strcmp(e->file, h->file) != 0) continue;
+                h->lines++;
+                if (!first) first = e;
+                else if (e->size != first->size || strcmp(e->sha256, first->sha256) != 0)
+                    h->conflict = 1;
+            }
+            if (dirfd < 0) {
+                int err;
+                dirfd = web_pcapdir_open_dir(p, d, &err);
+                if (dirfd < 0) break;
+            }
+            struct stat st;
+            if (fstatat(dirfd, h->file, &st, AT_SYMLINK_NOFOLLOW) == 0 && !S_ISREG(st.st_mode))
+                h->unreadable = WEB_PCAP_NOT_REG;
+        }
+        if (dirfd >= 0) close(dirfd);
+    }
 }
 
 int web_pcapdir_for_alert(web_pcapdir_t *p, long long now_ms, const char *incident_id,
@@ -468,6 +507,7 @@ int web_pcapdir_for_alert(web_pcapdir_t *p, long long now_ms, const char *incide
             take(out, &n, max, e, e->file, e->dir, "rule_time");
         }
     }
+    annotate(p, out, n);
     return n;
 }
 
@@ -488,6 +528,34 @@ const char *web_pcapdir_verify(const unsigned char *buf, size_t n, const web_pca
         if (e->sha256[2 * i] != HEX[d[i] >> 4] || e->sha256[2 * i + 1] != HEX[d[i] & 15])
             return "MISMATCH";
     return "verified";
+}
+
+const char *web_pcapdir_verify_hit(const web_pcapdir_t *p, const unsigned char *buf, size_t n,
+                                   const web_pcap_hit_t *h, const web_pcap_entry_t **match) {
+    if (match) *match = h ? h->e : NULL;
+    if (!h || !h->e) return "no_manifest_entry";
+    /* Any line naming the file that vouches for these bytes, not only
+     * the newest: a line's stamp is its own claim, so a later one
+     * cannot outvote an earlier one that matches. Hashed once, however
+     * many lines name the file. */
+    uint8_t d[32];
+    char hex[65];
+    web_sha256(buf, n, d);
+    static const char HEX[] = "0123456789abcdef";
+    for (int i = 0; i < 32; i++) {
+        hex[2 * i] = HEX[d[i] >> 4];
+        hex[2 * i + 1] = HEX[d[i] & 15];
+    }
+    hex[64] = '\0';
+    for (int k = 0; p && k < p->n; k++) {
+        const web_pcap_entry_t *e = &p->e[k];
+        if (e->dir != h->dir || strcmp(e->file, h->file) != 0) continue;
+        if ((long long)n == e->size && !strcmp(e->sha256, hex)) {
+            if (match) *match = e;
+            return "verified";
+        }
+    }
+    return "MISMATCH";
 }
 
 const char *web_pcapdir_note(const web_pcapdir_t *p, char *buf, size_t cap) {

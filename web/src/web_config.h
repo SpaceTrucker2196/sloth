@@ -61,6 +61,11 @@ typedef struct {
      * --pcap-dir and, optionally, its --eapol-dir. None by default. */
     char     pcap_dir[WEB_PCAP_DIRS][4096];   /* --pcap-dir, repeatable */
     int      npcap_dir;
+    /* --web-serve-evidence-pcap: 0 withheld (default), 1 served to the
+     * peers a loopback-only slothweb admits, 2 ("=remote") served to
+     * remote peers too. An evidence pcap can hold EAPOL/PMKID material
+     * (web_pcapdir.h). */
+    int      serve_evidence_pcap;
 } web_config_t;
 
 void web_config_defaults(web_config_t *c);
@@ -79,7 +84,9 @@ int  web_parse_bind(const char *s, int *family, uint8_t addr[16],
  *     authentication; sloth's own --strict refuses to serve one);
  *   - with a store, a --web-max-mb below web_config_store_min_mb();
  *   - --web-allow-sql under strict, or without --sloth-db (the box has
- *     nothing else to read).
+ *     nothing else to read);
+ *   - --web-serve-evidence-pcap with --web-allow-remote, unless given
+ *     as --web-serve-evidence-pcap=remote.
  * Pure: no output, no socket. 0, or -1 with the refusal in err. */
 int  web_config_check(const web_config_t *c, char *err, size_t errsz);
 
@@ -99,8 +106,10 @@ int  web_config_parse(web_config_t *c, int argc, char **argv,
 /* Print the stderr announcement every authorised remote exposure gets:
  * one for a non-loopback bind, one per non-loopback allow entry, one
  * for a --socket read from another host, and one for the SQL box served
- * to remote peers (--web-allow-sql with --web-allow-remote). Prints
- * nothing for a loopback-only configuration. */
+ * to remote peers (--web-allow-sql with --web-allow-remote); and, for
+ * any configuration, one when evidence pcaps are served
+ * (--web-serve-evidence-pcap), naming remote peers when they get them.
+ * Prints nothing for a loopback-only configuration without that flag. */
 void web_config_announce(const web_config_t *c, FILE *err);
 
 /* "127.0.0.1:8770" / "[::1]:8770". */

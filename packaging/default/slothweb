@@ -35,7 +35,10 @@
 # the sensor's --pcap-dir, read in place. /var/lib/sloth is already
 # read-only in the unit's sandbox, so nothing else needs widening. Only
 # files named as sloth names alert pcaps are opened, never a handshake
-# pcap or eapol.22000.
+# pcap or eapol.22000. An evidence pcap from the sensor's --eapol-dir
+# is listed but withheld (it may hold EAPOL/PMKID handshake material)
+# unless --web-serve-evidence-pcap is added; with --web-allow-remote
+# that is refused unless spelled --web-serve-evidence-pcap=remote.
 #   --pcap-dir /var/lib/sloth/pcap
 #
 # Example:

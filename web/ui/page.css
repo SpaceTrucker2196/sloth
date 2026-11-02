@@ -496,6 +496,8 @@ a.tile:focus-visible { outline-offset: 2px; }
 #ev-alert .ev-bib li { margin: 2px 0; overflow-wrap: anywhere; }
 #ev-alert .ev-files li { cursor: pointer; flex-wrap: wrap; }
 #ev-alert .ev-files li.on { background: var(--tint); }
+#ev-alert .ev-files li.ev-shut { cursor: default; }
+#ev-alert .ev-files li.ev-shut .ev-badge { font-weight: 400; font-size: 11px; }
 .ev-hash { font-size: 12px; margin: 6px 0; overflow-wrap: anywhere; }
 .ev-badge { display: inline-block; padding: 0 6px; border: 1px solid currentColor; border-radius: var(--radius-sm); font-weight: 600; }
 .ev-ok { color: var(--phosphor); }

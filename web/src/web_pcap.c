@@ -879,8 +879,15 @@ int web_pcap_frames_json(const uint8_t *buf, size_t n, long long offset, web_jw_
              * absent field as "none". */
             web_jw_raw(w, ",\"cut\":");
             if (r.caplen < r.origlen) {
-                char cut[48];
-                snprintf(cut, sizeof(cut), "truncated at snaplen %u", h.snaplen);
+                /* The snaplen is the reason only when the record
+                 * stopped exactly there; otherwise something else cut
+                 * it, and the page states the counts, not a cause. */
+                char cut[64];
+                if (r.caplen == h.snaplen)
+                    snprintf(cut, sizeof(cut), "truncated at snaplen %u", h.snaplen);
+                else
+                    snprintf(cut, sizeof(cut), "%u of %u bytes captured",
+                             (unsigned)r.caplen, (unsigned)r.origlen);
                 web_jw_str(w, cut);
             } else {
                 web_jw_raw(w, "null");

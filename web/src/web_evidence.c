@@ -114,6 +114,21 @@ void web_evidence_alert_json(web_jw_t *w, const web_m4_t *m, const web_alert_tgt
         web_jw_int(w, i);
         web_jw_raw(w, ",\"file\":");       web_jw_str(w, h[i].file);
         web_jw_raw(w, ",\"matched_by\":"); web_jw_str(w, h[i].matched_by);
+        /* Listed, never opened: the reason in place of frames and a
+         * download (web_pcapdir.h). */
+        web_jw_raw(w, ",\"withheld\":");
+        if (h[i].withheld) web_jw_str(w, h[i].withheld); else web_jw_raw(w, "null");
+        web_jw_raw(w, ",\"unreadable\":");
+        if (h[i].unreadable) web_jw_str(w, h[i].unreadable); else web_jw_raw(w, "null");
+        web_jw_raw(w, ",\"manifest_lines\":"); web_jw_int(w, h[i].lines);
+        web_jw_raw(w, ",\"conflict\":");
+        if (h[i].conflict) {
+            char cf[48];
+            snprintf(cf, sizeof(cf), "conflicting manifest lines (%d)", h[i].lines);
+            web_jw_str(w, cf);
+        } else {
+            web_jw_raw(w, "null");
+        }
         if (h[i].e) {
             web_jw_raw(w, ",\"sink\":");       web_jw_str(w, h[i].e->sink);
             web_jw_raw(w, ",\"size\":");       web_jw_int(w, h[i].e->size);
@@ -257,6 +272,10 @@ static int open_capture(const web_m4_t *m, web_live_t *live, const char *idv, co
     if (n >= x->nh)
         return web_hist_error(404, "no_such_capture", NULL, body, cap, len, status) ? -1 : 1;
     *hit = &x->h[n];
+    if ((*hit)->withheld)
+        return web_hist_error(403, "withheld_evidence_pcap", NULL, body, cap, len, status) ? -1 : 1;
+    if ((*hit)->unreadable)
+        return web_hist_error(403, "not_regular", NULL, body, cap, len, status) ? -1 : 1;
     int err = 0;
     int dfd = web_pcapdir_open_dir(m->pcap, (*hit)->dir, &err);
     if (dfd < 0) return web_hist_error(503, "pcap_dir_unreadable", NULL, body, cap, len, status) ? -1 : 1;
@@ -308,7 +327,8 @@ int web_pcap_frames_route(const web_m4_t *m, web_live_t *live, const char *query
     web_jw_raw(&w, ",\"n\":");           web_jw_int(&w, hit - x->h);
     web_jw_raw(&w, ",\"file_name\":");   web_jw_str(&w, hit->file);
     web_jw_raw(&w, ",\"matched_by\":");  web_jw_str(&w, hit->matched_by);
-    const char *v = web_pcapdir_verify(buf, (size_t)size, hit->e);
+    const web_pcap_entry_t *me = NULL;
+    const char *v = web_pcapdir_verify_hit(m->pcap, buf, (size_t)size, hit, &me);
     web_jw_raw(&w, ",\"hash\":{\"status\":");
     web_jw_str(&w, hash_status(v));
     web_jw_raw(&w, ",\"says\":");
@@ -316,12 +336,21 @@ int web_pcap_frames_route(const web_m4_t *m, web_live_t *live, const char *query
                    ? "HASH MISMATCH" : "no manifest entry");
     web_jw_raw(&w, ",\"algorithm\":\"SHA-256\",\"bytes\":"); web_jw_int(&w, size);
     web_jw_raw(&w, ",\"manifest_sha256\":");
-    if (hit->e) web_jw_str(&w, hit->e->sha256); else web_jw_raw(&w, "null");
+    if (me) web_jw_str(&w, me->sha256); else web_jw_raw(&w, "null");
     web_jw_raw(&w, ",\"manifest_size\":");
-    if (hit->e) web_jw_int(&w, hit->e->size); else web_jw_raw(&w, "null");
+    if (me) web_jw_int(&w, me->size); else web_jw_raw(&w, "null");
     web_jw_raw(&w, ",\"written_at\":");
-    if (hit->e && hit->e->written_at[0]) web_jw_str(&w, hit->e->written_at);
+    if (me && me->written_at[0]) web_jw_str(&w, me->written_at);
     else web_jw_raw(&w, "null");
+    web_jw_raw(&w, ",\"manifest_lines\":"); web_jw_int(&w, hit->lines);
+    web_jw_raw(&w, ",\"conflict\":");
+    if (hit->conflict) {
+        char cf[48];
+        snprintf(cf, sizeof(cf), "conflicting manifest lines (%d)", hit->lines);
+        web_jw_str(&w, cf);
+    } else {
+        web_jw_raw(&w, "null");
+    }
     web_jw_raw(&w, "},");
     const char *why = NULL;
     size_t mark = w.len;
@@ -370,7 +399,7 @@ int web_pcap_download_route(const web_m4_t *m, web_live_t *live, const char *que
     /* The bytes served, hashed: the page's "hash verified" is of an
      * earlier read (/api/pcap/frames), and a file replaced since would
      * otherwise download with no word of it. */
-    *hash = hash_status(web_pcapdir_verify(buf, (size_t)size, hit->e));
+    *hash = hash_status(web_pcapdir_verify_hit(m->pcap, buf, (size_t)size, hit, NULL));
     free(x);
     *data = buf;
     *n = (size_t)size;

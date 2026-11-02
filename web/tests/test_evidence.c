@@ -414,6 +414,17 @@ static void test_frames_page(void) {
     WT_EQ(web_pcap_frames_json(f.b, f.n - 3, 0, &w, &why), 0);
     WT_HAS(buf, "\"truncated_file\":true");
     WT_HAS(buf, "\"frames_total\":29");
+    /* A record cut below the header's snaplen was not cut by it: the
+     * counts, not a cause the file does not support. The absence seen
+     * red with the snaplen sentence written for every short record. */
+    static pf_t c;
+    pf_hdr(&c, 0, 0, 0xffffffffu, 1);
+    pf_rec(&c, 1, 0, ETH_TLS, 40, 270);
+    web_jw_init(&w, buf, sizeof(buf));
+    WT_EQ(web_pcap_frames_json(c.b, c.n, 0, &w, &why), 0);
+    WT_ASSERT(!w.overflow);
+    WT_HAS(buf, "\"cut\":\"40 of 270 bytes captured\"");
+    WT_LACKS(buf, "truncated at snaplen");
 }
 
 /* ── the directory ────────────────────────────────────────────────── */
@@ -786,7 +797,8 @@ static void test_routes(void) {
     WT_EQ(route(&h, "/api/alert", q, 0, &r), 200);
     const char *b = body_of(g_out);
     WT_HAS(b, "\"captures\":[{\"n\":0,\"file\":\"" NAME_A "\",\"matched_by\":\"incident\"");
-    WT_HAS(b, "{\"n\":1,\"file\":\"" NAME_C "\",\"matched_by\":\"record\",\"sink\":null");
+    WT_HAS(b, "{\"n\":1,\"file\":\"" NAME_C "\",\"matched_by\":\"record\",\"withheld\":null,"
+              "\"unreadable\":null,\"manifest_lines\":0,\"conflict\":null,\"sink\":null");
     WT_HAS(b, "\"captures_note\":null");
     WT_HAS(b, "\"why_no_capture\":null");
     WT_HAS(b, "\"assessment\":");
@@ -894,6 +906,250 @@ static void test_routes(void) {
     free(l);
     free(p);
     test_rm_tree(g_dir);
+}
+
+/* ── what the list holds back, and lines that disagree ────────────── */
+
+#define INC_W  "00112233aabbccdd"
+#define NAME_W "alert_20261027_140000_Port_scan.pcap"       /* genuine + forged line */
+#define NAME_F "alert_20261027_140500_Port_scan.pcap"       /* forged line only */
+#define NAME_E INC_W "-7-FRAG_EAPOL_RELAY.pcap"           /* an evidence pcap */
+#define NAME_L "alert_20261027_141000_link.pcap"            /* a symlink */
+#define NAME_Q "alert_20261027_141500_fifo.pcap"            /* a FIFO */
+
+static char g_wdir[TEST_TMP_MAX];
+static pf_t g_pe;
+
+static int put_in(const char *dir, const char *name, const void *b, size_t n, int append) {
+    char path[TEST_TMP_MAX + 200];
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
+    FILE *f = fopen(path, append ? "ab" : "wb");
+    if (!f) return -1;
+    size_t w = fwrite(b, 1, n, f);
+    return fclose(f) == 0 && w == n ? 0 : -1;
+}
+
+/* W listed twice: sloth's line, then a later-stamped one with another
+ * hash, as anyone who can write the directory could append. F listed
+ * only by such a line. E an evidence pcap of radiotap frames. L and Q
+ * a symlink and a FIFO under names the gate passes, each with a line.
+ * Every one is the incident's. */
+static int make_wdir(void) {
+    snprintf(g_wdir, sizeof(g_wdir), "%s/slothweb-evw-XXXXXX", test_tmpdir());
+    if (!mkdtemp(g_wdir)) return -1;
+    pf_hdr(&g_pe, 0, 0, 65535, 127);
+    pf_rec(&g_pe, 1793102400, 0, RT_DEAUTH, sizeof(RT_DEAUTH), sizeof(RT_DEAUTH));
+    char sha[65], esha[65], bad[65], l[1024];
+    hex64(g_pa.b, g_pa.n, sha);
+    hex64(g_pe.b, g_pe.n, esha);
+    hex64((const uint8_t *)"forged", 6, bad);
+    if (put_in(g_wdir, NAME_W, g_pa.b, g_pa.n, 0) || put_in(g_wdir, NAME_F, g_pa.b, g_pa.n, 0) ||
+        put_in(g_wdir, NAME_E, g_pe.b, g_pe.n, 0))
+        return -1;
+    char path[TEST_TMP_MAX + 200], tgt[TEST_TMP_MAX + 200];
+    snprintf(path, sizeof(path), "%s/%s", g_wdir, NAME_L);
+    snprintf(tgt, sizeof(tgt), "%s/%s", g_wdir, NAME_W);
+    if (symlink(tgt, path) != 0) return -1;
+    snprintf(path, sizeof(path), "%s/%s", g_wdir, NAME_Q);
+    if (mkfifo(path, 0600) != 0) return -1;
+    struct { const char *file, *sha, *sink; long long at; size_t size; } L[] = {
+        { NAME_W, sha,  "alert_pcap",    1793102400, g_pa.n },
+        { NAME_W, bad,  "alert_pcap",    999999999999999999LL, g_pa.n },
+        { NAME_F, bad,  "alert_pcap",    1793102390, g_pa.n },
+        { NAME_E, esha, "evidence_pcap", 1793102380, g_pe.n },
+        { NAME_L, sha,  "alert_pcap",    1793102370, g_pa.n },
+        { NAME_Q, sha,  "alert_pcap",    1793102360, g_pa.n },
+    };
+    for (size_t i = 0; i < sizeof(L) / sizeof(L[0]); i++) {
+        int n = manifest_line(l, sizeof(l), (int)i + 1, L[i].file, L[i].size, L[i].sha, L[i].sink,
+                              INC_W, "PORT_SCAN", L[i].at);
+        if (put_in(g_wdir, MANI, l, (size_t)n, 1)) return -1;
+    }
+    return 0;
+}
+
+static const web_pcap_hit_t *hit_of(const web_pcap_hit_t *h, int n, const char *file) {
+    for (int i = 0; i < n; i++)
+        if (!strcmp(h[i].file, file)) return &h[i];
+    return NULL;
+}
+
+static unsigned char *read_hit(web_pcapdir_t *p, const web_pcap_hit_t *h, long long *size) {
+    int err = 0;
+    int dfd = web_pcapdir_open_dir(p, h->dir, &err);
+    if (dfd < 0) return NULL;
+    const char *why = NULL;
+    int fd = web_pcapdir_open_file(dfd, h->file, size, &why);
+    close(dfd);
+    if (fd < 0) return NULL;
+    unsigned char *b = web_pcapdir_slurp(fd, *size);
+    close(fd);
+    return b;
+}
+
+/* Each absence below was seen red under its own mutation: the withheld
+ * mark with annotate()'s evidence test removed; the not-regular mark
+ * with its fstatat() test removed; "verified" for W with
+ * web_pcapdir_verify_hit() checking only the hit's own (newest) line. */
+static void test_withheld_and_lines(void) {
+    WT_EQ(make_wdir(), 0);
+    const char *dirs[1] = { g_wdir };
+    web_pcapdir_t p;
+    WT_EQ(web_pcapdir_init(&p, dirs, 1), 0);
+    web_pcap_hit_t h[WEB_PCAPDIR_HITS];
+    int n = web_pcapdir_for_alert(&p, 1000, INC_W, "", "PORT_SCAN", 0, 0, h, WEB_PCAPDIR_HITS);
+    WT_EQ(n, 5);
+    const web_pcap_hit_t *w = hit_of(h, n, NAME_W), *f = hit_of(h, n, NAME_F),
+                         *e = hit_of(h, n, NAME_E), *sl = hit_of(h, n, NAME_L),
+                         *q = hit_of(h, n, NAME_Q);
+    WT_ASSERT(w && f && e && sl && q);
+    if (!(w && f && e && sl && q)) { web_pcapdir_destroy(&p); return; }
+    /* Withheld by default, listed all the same; served when asked. */
+    WT_ASSERT(e->withheld && !strcmp(e->withheld, WEB_PCAP_WITHHELD));
+    WT_ASSERT(w->withheld == NULL && f->withheld == NULL);
+    /* Not a regular file: said in the list, not only on opening. */
+    WT_ASSERT(sl->unreadable && !strcmp(sl->unreadable, WEB_PCAP_NOT_REG));
+    WT_ASSERT(q->unreadable && !strcmp(q->unreadable, WEB_PCAP_NOT_REG));
+    WT_ASSERT(w->unreadable == NULL && e->unreadable == NULL);
+    /* Two lines for W that disagree; one for F. */
+    WT_EQ(w->lines, 2);
+    WT_EQ(w->conflict, 1);
+    WT_EQ(f->lines, 1);
+    WT_EQ(f->conflict, 0);
+    /* The forged line is W's newest, so it is the hit's own line, and
+     * the genuine one still vouches for the bytes. */
+    WT_EQ(w->e->written_at_epoch, 999999999999999999LL);
+    long long size = 0;
+    unsigned char *b = read_hit(&p, w, &size);
+    WT_ASSERT(b != NULL);
+    if (b) {
+        const web_pcap_entry_t *me = NULL;
+        WT_ASSERT(!strcmp(web_pcapdir_verify_hit(&p, b, (size_t)size, w, &me), "verified"));
+        WT_ASSERT(me && me->written_at_epoch == 1793102400);
+        b[30] ^= 1;
+        WT_ASSERT(!strcmp(web_pcapdir_verify_hit(&p, b, (size_t)size, w, &me), "MISMATCH"));
+        WT_ASSERT(me == w->e);
+        free(b);
+    }
+    b = read_hit(&p, f, &size);
+    WT_ASSERT(b != NULL);
+    if (b) {
+        WT_ASSERT(!strcmp(web_pcapdir_verify_hit(&p, b, (size_t)size, f, NULL), "MISMATCH"));
+        free(b);
+    }
+    p.serve_evidence = 1;
+    n = web_pcapdir_for_alert(&p, 1000, INC_W, "", "PORT_SCAN", 0, 0, h, WEB_PCAPDIR_HITS);
+    e = hit_of(h, n, NAME_E);
+    WT_ASSERT(e && e->withheld == NULL);
+    web_pcapdir_destroy(&p);
+}
+
+/* The same through the routes: a withheld evidence pcap is listed with
+ * its reason and neither decoded nor downloaded. The 403s seen red with
+ * open_capture()'s withheld check removed (frames and bytes served). */
+static void test_routes_withheld(void) {
+    const char *dirs[1] = { g_wdir };
+    web_pcapdir_t *p = calloc(1, sizeof(*p));
+    web_live_t *l = calloc(1, sizeof(*l));
+    WT_ASSERT(p && l);
+    if (!p || !l) { free(p); free(l); return; }
+    WT_EQ(web_pcapdir_init(p, dirs, 1), 0);
+    web_live_init(l, "unix:/t/s.sock");
+    web_live_sock_connected(l, 0);
+    web_feed_t fd;
+    memset(&fd, 0, sizeof(fd));
+    web_feed_reset(&fd);
+    const char rec[] = "{\"type\":\"alert.create\",\"ts\":1793102400,\"incident_id\":\"" INC_W "\","
+                       "\"ty\":0,\"sev\":2,\"title\":\"Port scan\",\"key\":\"scan:10.0.0.9\","
+                       "\"match_ip\":\"10.0.0.9\",\"first_detected\":1793102390}\n";
+    web_feed_bytes(&fd, l, rec, strlen(rec), 1000);
+    char id[48] = "";
+    for (int i = 0; i < l->ninc; i++)
+        if (l->inc[i].type == 0) snprintf(id, sizeof(id), "s%s", l->inc[i].hid);
+    WT_ASSERT(id[0]);
+    web_m4_t m;
+    memset(&m, 0, sizeof(m));
+    m.pcap = p;
+    web_health_t hh;
+    memset(&hh, 0, sizeof(hh));
+    hh.wall_s = 1793103000;
+    hh.live = l;
+    hh.m4 = &m;
+    web_resp_t r;
+    char q[128];
+
+    /* Newest first: W (by its forged stamp), F, E, L, Q. */
+    snprintf(q, sizeof(q), "id=%s", id);
+    WT_EQ(route(&hh, "/api/alert", q, 0, &r), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "{\"n\":0,\"file\":\"" NAME_W "\",\"matched_by\":\"incident\",\"withheld\":null,"
+              "\"unreadable\":null,\"manifest_lines\":2,"
+              "\"conflict\":\"conflicting manifest lines (2)\"");
+    WT_HAS(b, "{\"n\":2,\"file\":\"" NAME_E "\",\"matched_by\":\"incident\","
+              "\"withheld\":\"" WEB_PCAP_WITHHELD "\",\"unreadable\":null");
+    WT_HAS(b, "{\"n\":3,\"file\":\"" NAME_L "\",\"matched_by\":\"incident\",\"withheld\":null,"
+              "\"unreadable\":\"" WEB_PCAP_NOT_REG "\"");
+    WT_HAS(b, "{\"n\":4,\"file\":\"" NAME_Q "\",\"matched_by\":\"incident\",\"withheld\":null,"
+              "\"unreadable\":\"" WEB_PCAP_NOT_REG "\"");
+
+    /* W: verified by sloth's line, the forged newer one notwithstanding,
+     * with the disagreement said. Seen red with the frames and download
+     * routes checking the hit's own line only. */
+    char sha[65];
+    hex64(g_pa.b, g_pa.n, sha);
+    snprintf(q, sizeof(q), "id=%s&n=0", id);
+    WT_EQ(route(&hh, "/api/pcap/frames", q, 0, &r), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"hash\":{\"status\":\"verified\",\"says\":\"hash verified\"");
+    WT_HAS(b, sha);
+    WT_HAS(b, "\"manifest_lines\":2,\"conflict\":\"conflicting manifest lines (2)\"");
+    WT_EQ(route(&hh, "/api/pcap", q, 0, &r), 200);
+    WT_HAS(g_out, "X-Sloth-SHA256: verified\r\n");
+    free(r.body_owned);
+    /* F: only a line that does not match. */
+    snprintf(q, sizeof(q), "id=%s&n=1", id);
+    WT_EQ(route(&hh, "/api/pcap/frames", q, 0, &r), 200);
+    WT_HAS(body_of(g_out), "\"says\":\"HASH MISMATCH\"");
+    WT_HAS(body_of(g_out), "\"conflict\":null");
+
+    /* E: withheld, from both routes, no frame and no byte. */
+    snprintf(q, sizeof(q), "id=%s&n=2", id);
+    WT_EQ(route(&hh, "/api/pcap/frames", q, 0, &r), 403);
+    WT_HAS(body_of(g_out), "\"error\":\"withheld_evidence_pcap\"");
+    WT_LACKS(body_of(g_out), "frames_total");
+    r.body_owned = NULL;
+    WT_EQ(route(&hh, "/api/pcap", q, 0, &r), 403);
+    WT_HAS(body_of(g_out), "\"error\":\"withheld_evidence_pcap\"");
+    WT_ASSERT(r.body_owned == NULL);
+    WT_LACKS(g_out, "application/vnd.tcpdump.pcap");
+    free(r.body_owned);
+    /* L, Q: listed as unreadable, refused the same way. */
+    snprintf(q, sizeof(q), "id=%s&n=3", id);
+    WT_EQ(route(&hh, "/api/pcap/frames", q, 0, &r), 403);
+    WT_HAS(body_of(g_out), "\"error\":\"not_regular\"");
+    snprintf(q, sizeof(q), "id=%s&n=4", id);
+    WT_EQ(route(&hh, "/api/pcap", q, 0, &r), 403);
+    WT_HAS(body_of(g_out), "\"error\":\"not_regular\"");
+
+    /* --web-serve-evidence-pcap: the same file decoded and served. */
+    p->serve_evidence = 1;
+    snprintf(q, sizeof(q), "id=%s", id);
+    WT_EQ(route(&hh, "/api/alert", q, 0, &r), 200);
+    WT_HAS(body_of(g_out), "{\"n\":2,\"file\":\"" NAME_E "\",\"matched_by\":\"incident\","
+                           "\"withheld\":null");
+    snprintf(q, sizeof(q), "id=%s&n=2", id);
+    WT_EQ(route(&hh, "/api/pcap/frames", q, 0, &r), 200);
+    WT_HAS(body_of(g_out), "\"hash\":{\"status\":\"verified\"");
+    WT_HAS(body_of(g_out), "\"frames_total\":1");
+    WT_EQ(route(&hh, "/api/pcap", q, 0, &r), 200);
+    WT_EQ(r.body_len, g_pe.n);
+    free(r.body_owned);
+
+    web_live_destroy(l);
+    web_pcapdir_destroy(p);
+    free(l);
+    free(p);
+    test_rm_tree(g_wdir);
 }
 
 /* ── the assessment generator ─────────────────────────────────────── */
@@ -1103,6 +1359,11 @@ static void test_page_hooks(void) {
     WT_HAS(p, "var r = el(\"div\", \"evfrow dt-row\");");
     WT_HAS(p, "id=\"ev-frames-tools\"");
     WT_LACKS(p, "el(\"details\", \"ev-frame\")");
+    /* A withheld or unreadable capture is listed with its reason and
+     * never opened: no click, no key, and open() refuses it. */
+    WT_HAS(p, "var shut = c.withheld || c.unreadable;");
+    WT_HAS(p, "if (!c || c.withheld || c.unreadable) return;");
+    WT_HAS(p, "if (first >= 0) open(first, 0);");
     /* The one way the page starts a download: the same origin's
      * /api/pcap, every value encoded, no .href sink. */
     WT_HAS(p, "window.location.assign(\"/api/pcap?id=\" + encodeURIComponent(");
@@ -1126,6 +1387,8 @@ void run_evidence_tests(void) {
     WT_RUN(test_dir_index);
     WT_RUN(test_dir_order);
     WT_RUN(test_routes);
+    WT_RUN(test_withheld_and_lines);
+    WT_RUN(test_routes_withheld);
     WT_RUN(test_assessment_generator);
     WT_RUN(test_page_hooks);
 }

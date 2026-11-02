@@ -40,7 +40,20 @@
  * Verification recomputes SHA-256 (FIPS 180-4, web/tools/sha256.c) over
  * the opened file and compares it with the manifest's. "verified" says
  * the bytes are the ones sloth hashed when it wrote the line, and no
- * more than that: pcap-export.md §5 "What a hash does not establish". */
+ * more than that: pcap-export.md §5 "What a hash does not establish".
+ * A file named by more than one line (a session that wrote it twice,
+ * or a line someone appended) is checked against every one of them:
+ * any line whose hash and size match makes it "verified", and lines
+ * that disagree are counted and said, never resolved by which stamp is
+ * newest, since a stamp is whatever the line claims.
+ *
+ * Evidence pcaps are withheld unless serve_evidence is set
+ * (--web-serve-evidence-pcap). An evidence_pcap file under --eapol-dir
+ * is raw 802.11 frames from sloth's evidence ring, which notes every
+ * monitor frame, so an EAPOL-relay or A-MSDU-EAPOL incident's file can
+ * hold the same EAPOL/PMKID material sloth itself only writes under
+ * --collect-handshakes (pcap-export.md §4, owner ruling 2026-10-08). A
+ * withheld file is still listed, with its reason, and never opened. */
 #ifndef SLOTHWEB_PCAPDIR_H
 #define SLOTHWEB_PCAPDIR_H
 
@@ -58,6 +71,10 @@
 /* The rule+time fallback: written_at within [first_seen - this,
  * last_seen + this]; sloth's pcap.key_cooldown_secs is 3600. */
 #define WEB_PCAPDIR_TIME_SLACK_S  3600
+/* What the list says of an evidence pcap it does not serve, and of a
+ * listed name that is not a regular file. */
+#define WEB_PCAP_WITHHELD   "withheld: may hold EAPOL/PMKID handshake material"
+#define WEB_PCAP_NOT_REG    "unreadable: not a regular file"
 
 typedef struct {
     char      file[WEB_PCAP_NAME_MAX + 1];
@@ -88,6 +105,7 @@ typedef struct {
     int               partial;        /* a bound was hit */
     long long         scanned_ms;     /* -1 never */
     unsigned long     scans;
+    int               serve_evidence; /* --web-serve-evidence-pcap */
 } web_pcapdir_t;
 
 /* dirs may be NULL with n 0 (no --pcap-dir). 0, or -1 out of memory. */
@@ -118,6 +136,10 @@ typedef struct {
     char        file[WEB_PCAP_NAME_MAX + 1];
     int         dir;
     const char *matched_by;           /* "incident", "record", "rule_time" */
+    const char *withheld;             /* WEB_PCAP_WITHHELD, or NULL: served */
+    const char *unreadable;           /* WEB_PCAP_NOT_REG, or NULL */
+    int         lines;                /* manifest lines naming the file */
+    int         conflict;             /* those lines disagree on hash or size */
 } web_pcap_hit_t;
 
 /* The alert's files, newest first, at most max (WEB_PCAPDIR_HITS): by
@@ -126,7 +148,10 @@ typedef struct {
  * WEB_PCAPDIR_TIME_SLACK_S].
  * incident_id, pcap_name and rule may be "" or NULL. A record-named
  * file with no manifest line is a hit with e NULL when it exists in a
- * directory. Returns the count. */
+ * directory. Each hit says whether it is withheld (an evidence-shaped
+ * name, serve_evidence off), whether the name is not a regular file
+ * (fstatat, nothing followed), and how many manifest lines name it.
+ * Returns the count. */
 int  web_pcapdir_for_alert(web_pcapdir_t *p, long long now_ms,
                            const char *incident_id, const char *pcap_name,
                            const char *rule, long long first_seen,
@@ -141,6 +166,12 @@ const web_pcap_hit_t *web_pcapdir_hit_named(const web_pcap_hit_t *hits, int n,
  * "MISMATCH" (hash or size differs), or "no_manifest_entry" (e NULL). */
 const char *web_pcapdir_verify(const unsigned char *buf, size_t n,
                                const web_pcap_entry_t *e);
+/* The hit's bytes against every manifest line naming its file in its
+ * directory: "verified" when any line's hash and size match (*match,
+ * when given, is that line), "MISMATCH" when none does (*match the
+ * hit's own line), "no_manifest_entry" when the hit has none. */
+const char *web_pcapdir_verify_hit(const web_pcapdir_t *p, const unsigned char *buf, size_t n,
+                                   const web_pcap_hit_t *h, const web_pcap_entry_t **match);
 /* Read fd (size bytes, as web_pcapdir_open_file() gave it) whole into
  * a new buffer; NULL when it could not be read or is not size bytes. */
 unsigned char *web_pcapdir_slurp(int fd, long long size);

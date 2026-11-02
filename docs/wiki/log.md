@@ -5919,3 +5919,14 @@ report events.
   folded into the entry above it; the capture's frame index is a data
   table (sortable, resizable, kept, its filter kept); the drawer's alert
   list is found by a `data-ev` mark, not its label's words.
+- 2026-11-02 — [[slothweb]], [[pcap-export]] §6, [[cli-reference]]:
+  the proof's second review. Evidence pcaps (`--eapol-dir`, raw 802.11
+  frames that may carry EAPOL/PMKID material) are listed but withheld
+  unless `--web-serve-evidence-pcap`, which is announced and, with
+  `--web-allow-remote`, refused unless spelled `=remote`. A file named
+  by several manifest lines is verified by any line that matches, and
+  a disagreement is said (`conflicting manifest lines (N)`) instead of
+  the newest stamp winning. `truncated at snaplen N` only when the
+  snaplen cut the record, otherwise `N of M bytes captured`. A listed
+  name that is a symlink or FIFO is marked `unreadable: not a regular
+  file`.

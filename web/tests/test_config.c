@@ -446,7 +446,51 @@ static void test_web_allow_sql_flag(void) {
     done(&p);
 }
 
+/* --web-serve-evidence-pcap: an evidence pcap can hold EAPOL/PMKID
+ * material, so it is withheld by default, announced when served, and
+ * refused with --web-allow-remote unless given as =remote. The refusal
+ * seen red with its condition in web_config_check() replaced by 0; the
+ * announcement with its block removed from web_config_announce(); the
+ * remote line's absence with its condition replaced by 1. */
+static void test_serve_evidence_pcap_flag(void) {
+    parsed_t p;
+    parse(&p, NULL);
+    WT_EQ(p.cfg.serve_evidence_pcap, 0);
+    WT_LACKS(p.ann, "evidence");
+    done(&p);
+    static const char *const local[] = { "--web-serve-evidence-pcap", NULL };
+    parse(&p, local);
+    WT_EQ(p.rc, 0);
+    WT_EQ(p.cfg.serve_evidence_pcap, 1);
+    WT_HAS(p.ann, "WARNING: --web-serve-evidence-pcap: evidence pcaps");
+    WT_HAS(p.ann, "EAPOL/PMKID handshake material");
+    WT_LACKS(p.ann, "=remote with --web-allow-remote");
+    done(&p);
+    static const char *const refused[] = { "--web-allow-remote", "--web-serve-evidence-pcap",
+                                           NULL };
+    parse(&p, refused);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "--web-serve-evidence-pcap with --web-allow-remote");
+    WT_HAS(p.err, "EAPOL/PMKID handshake material");
+    WT_HAS(p.err, "--web-serve-evidence-pcap=remote");
+    done(&p);
+    static const char *const remote[] = { "--web-allow-remote", "--web-serve-evidence-pcap=remote",
+                                          NULL };
+    parse(&p, remote);
+    WT_EQ(p.rc, 0);
+    WT_EQ(p.cfg.serve_evidence_pcap, 2);
+    WT_HAS(p.ann, "WARNING: --web-serve-evidence-pcap: evidence pcaps");
+    WT_HAS(p.ann, "=remote with --web-allow-remote: every peer");
+    done(&p);
+    static const char *const bogus[] = { "--web-serve-evidence-pcap=yes", NULL };
+    parse(&p, bogus);
+    WT_EQ(p.rc, -1);
+    WT_HAS(p.err, "unknown option --web-serve-evidence-pcap=yes");
+    done(&p);
+}
+
 void run_config_tests(void) {
+    WT_RUN(test_serve_evidence_pcap_flag);
     WT_RUN(test_web_allow_sql_flag);
     WT_RUN(test_ceiling_below_minimum_refused);
     WT_RUN(test_socket_flag);

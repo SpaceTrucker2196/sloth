@@ -164,23 +164,32 @@ window.SlothEvidence = (function () {
       box.appendChild(el("div", "sub", (j.evidence && j.evidence.why_no_capture) || "no capture"));
       return;
     }
-    var ul = el("ul", "lst ev-files");
+    var ul = el("ul", "lst ev-files"), first = -1;
     S.caps.forEach(function (c, i) {
-      var li = el("li", "go");
-      li.tabIndex = 0;
-      li.role = "button";
+      // A withheld evidence pcap, or a name that is not a regular file:
+      // listed with the server's reason, never opened or offered.
+      var shut = c.withheld || c.unreadable;
+      var li = el("li", shut ? "ev-shut" : "go");
       li.appendChild(el("span", "tx d-bright", str(c.file)));
       li.appendChild(el("span", "d-dim", (c.sink ? c.sink + ", " : "") + bytes(c.size) +
-                        (c.written_at ? ", written " + c.written_at : "")));
+                        (c.written_at ? ", written " + c.written_at : "") +
+                        (c.conflict ? ", " + str(c.conflict) : "")));
       li.title = MATCHED[c.matched_by] || "";
-      li.addEventListener("click", function () { open(i, 0); });
-      li.addEventListener("keydown", function (e) {
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(i, 0); }
-      });
+      if (shut) {
+        li.appendChild(el("span", "ev-badge ev-warn", str(shut)));
+      } else {
+        if (first < 0) first = i;
+        li.tabIndex = 0;
+        li.role = "button";
+        li.addEventListener("click", function () { open(i, 0); });
+        li.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(i, 0); }
+        });
+      }
       ul.appendChild(li);
     });
     box.appendChild(ul);
-    open(0, 0);
+    if (first >= 0) open(first, 0);
   }
 
   // ── the frame index: one of the page's tables (app.js's DataTable:
@@ -270,7 +279,7 @@ window.SlothEvidence = (function () {
 
   function open(i, offset) {
     var c = S.caps[i], gen = S.gen, id = S.id;
-    if (!c) return;
+    if (!c || c.withheld || c.unreadable) return;
     if (offset === 0) { clear("ev-frames"); S.cur = i; S.frames = []; S.open = {}; }
     var lis = $("ev-caps").querySelectorAll("li");
     for (var k = 0; k < lis.length; k++) lis[k].classList.toggle("on", k === i);
@@ -289,7 +298,8 @@ window.SlothEvidence = (function () {
       head.appendChild(el("span", "d-dim", "  SHA-256 of the " + h.bytes + " bytes read" +
         (h.manifest_sha256 ? ", manifest " + h.manifest_sha256 : "") +
         (h.status === "mismatch" ? ": the file is not the one sloth wrote and hashed" : "") +
-        (h.status === "no_manifest_entry" ? ": no manifest line names it, so nothing vouches for its bytes" : "")));
+        (h.status === "no_manifest_entry" ? ": no manifest line names it, so nothing vouches for its bytes" : "") +
+        (h.conflict ? "; " + str(h.conflict) + ": the lines naming this file disagree, so one of them is not sloth's" : "")));
       $("ev-cap-note").textContent = str(c.file) + ": " + str(fi.linktype_name) + ", snaplen " +
         fi.snaplen + ", " + r.frames_total + " frames" + (r.truncated_file ? ", the file ends inside a record" : "") +
         (r.frames_capped ? ", the first 4096 indexed" : "") + "; matched by " + (MATCHED[c.matched_by] || c.matched_by);

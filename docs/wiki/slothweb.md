@@ -107,7 +107,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
+**Last updated**: 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
 listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
@@ -1226,7 +1226,14 @@ drawn by its own module (`web/ui/evidence.js`, one hook in
   802.11-2020 subtype, reason (Table 9-49) and status (Table 9-50)
   names; Ethernet, SLL and SLL2 by slothweb's bounded summary decoder.
   The sensor keeps 64 bytes of a packet, so a decode stops where the
-  bytes do and every such frame says `truncated at snaplen 64`.
+  bytes do and every such frame says `truncated at snaplen 64`; a
+  record cut short of its file's snaplen says `N of M bytes captured`
+  instead, since the snaplen did not cut it. When more than one
+  manifest line names a file, any line whose hash and size match
+  verifies it (a later-stamped line cannot outvote it), and lines that
+  disagree are said as `conflicting manifest lines (N)`. A name whose
+  file is a symlink, a FIFO or anything not regular is listed as
+  `unreadable: not a regular file` and cannot be opened.
 - **The drawer's alert rows** carry a `›`, are 44 px tall on a touch
   screen, and a tap opens the alert's page and closes the drawer, which
   at phone width covers it. Checked at 360 px under touch emulation by
@@ -1236,7 +1243,20 @@ Never served: a handshake pcap or `eapol.22000`, which can share an
 `--eapol-dir` and are crackable material: their names pass neither
 alert-pcap grammar, their manifest sinks are not indexed, and a request
 never names a file (the routes take an index into the alert's own
-list). The demo writes a made-up `--pcap-dir` for its SMB1 and deauth
+list).
+
+Withheld unless asked for: an **evidence pcap**
+(`<incident_id>-<event>-<RULE>[-N].pcap` in the `--eapol-dir`) is raw
+802.11 frames from sloth's evidence ring, which notes every monitor
+frame, so an EAPOL-relay or A-MSDU-EAPOL incident's file can hold
+EAPOL/PMKID handshake material, the reason sloth writes it only under
+`--collect-handshakes` ([[pcap-export]] §4). slothweb lists it with
+`withheld: may hold EAPOL/PMKID handshake material` and neither decodes
+nor serves it (`403 withheld_evidence_pcap`) unless started with
+`--web-serve-evidence-pcap`, announced on stderr. With
+`--web-allow-remote` the bare flag is refused (exit 2);
+`--web-serve-evidence-pcap=remote` serves the files to remote peers
+too, announced as such. The demo writes a made-up `--pcap-dir` for its SMB1 and deauth
 incidents (`slothweb-demo pcaps DIR`, in the quick start).
 
 **Sources**: owner requests 2026-10-27; `web/src/web_evidence.h`,
