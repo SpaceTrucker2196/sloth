@@ -830,33 +830,46 @@ static void test_routes(void) {
     WT_LACKS(body_of(g_out), "BLE_ADV_FLOOD");
     WT_EQ(route(&H, "/api/alerts", ""), 200);
     WT_HAS(body_of(g_out), "BLE_ADV_FLOOD");
+    web_live_destroy(&L);
+    web_ble_destroy(&B);
+}
+
+static void test_live_member_worst_case(void) {
+    WT_EQ(web_ble_init(&B, 0), 0);
+    web_live_init(&L, "unix:/t.sock");
+    web_live_sock_connected(&L, 1000);
+    web_health_t H;
+    memset(&H, 0, sizeof(H));
+    H.live = &L;
+    H.ble = &B;
+    H.wall_s = T;
+    H.now_ms = 2000;
+    const char *b;
     /* /api/live's "ble" member at its worst: every string the member
      * carries at its 32-byte cut and every byte one the writer turns
      * into a six-byte \u escape. The member fits, and /api/live is
      * whole. Seen red with live_body()'s buffer back at 1024 bytes (the
      * member null), and before the null fallback existed the whole
      * route failed. */
-    {
-        char S32[33], big[2048];
-        memset(S32, '<', 32);
-        S32[32] = '\0';
-        snprintf(big, sizeof(big),
-                 "{\"type\":\"sensor_health\",\"ts\":%lld,\"btmon_iface\":\"%s\",\"btmon_exit\":\"%s\","
-                 "\"ble_scan_mode\":\"%s\",\"ble_scan_filter\":\"%s\",\"ble_own_tx\":\"%s\","
-                 "\"ble_own_tx_kind\":\"%s\",\"btcap_iface\":\"%s\",\"btcap_state\":\"%s\","
-                 "\"btcap_sampling\":\"%s\",\"ble_rot_hints\":\"%s\",\"ble_rot_poisoned\":\"%s\","
-                 "\"ble_rot_seam_evictions\":\"%s\",\"ble_devices\":9223372036854775807,"
-                 "\"ble_controllers\":9223372036854775807,\"ble_adv_reports\":9223372036854775807,"
-                 "\"btmon_stale_secs\":-9223372036854775807}",
-                 T, S32, S32, S32, S32, S32, S32, S32, S32, S32, S32, S32, S32);
-        live_feed(big);
-        WT_EQ(route(&H, "/api/live", ""), 200);
-        b = body_of(g_out);
-        WT_HAS(b, ",\"ble\":{\"configured\":true,\"seen\":true,");
-        WT_HAS(b, "\"btcap_sampling\":\"\\u003c\\u003c");
-        WT_HAS(b, "\"seam_evictions\":\"\\u003c");
-        WT_LACKS(b, ",\"ble\":null");
-    }
+    char S32[33], big[2048];
+    memset(S32, '<', 32);
+    S32[32] = '\0';
+    snprintf(big, sizeof(big),
+             "{\"type\":\"sensor_health\",\"ts\":%lld,\"btmon_iface\":\"%s\",\"btmon_exit\":\"%s\","
+             "\"ble_scan_mode\":\"%s\",\"ble_scan_filter\":\"%s\",\"ble_own_tx\":\"%s\","
+             "\"ble_own_tx_kind\":\"%s\",\"btcap_iface\":\"%s\",\"btcap_state\":\"%s\","
+             "\"btcap_sampling\":\"%s\",\"ble_rot_hints\":\"%s\",\"ble_rot_poisoned\":\"%s\","
+             "\"ble_rot_seam_evictions\":\"%s\",\"ble_devices\":9223372036854775807,"
+             "\"ble_controllers\":9223372036854775807,\"ble_adv_reports\":9223372036854775807,"
+             "\"btmon_stale_secs\":-9223372036854775807}",
+             T, S32, S32, S32, S32, S32, S32, S32, S32, S32, S32, S32, S32);
+    live_feed(big);
+    WT_EQ(route(&H, "/api/live", ""), 200);
+    b = body_of(g_out);
+    WT_HAS(b, ",\"ble\":{\"configured\":true,\"seen\":true,");
+    WT_HAS(b, "\"btcap_sampling\":\"\\u003c\\u003c");
+    WT_HAS(b, "\"seam_evictions\":\"\\u003c");
+    WT_LACKS(b, ",\"ble\":null");
     web_live_destroy(&L);
     web_ble_destroy(&B);
 }
@@ -1312,6 +1325,7 @@ void run_ble_tests(void) {
     WT_RUN(test_sensor_health_members);
     WT_RUN(test_metrics_from_sensor_health);
     WT_RUN(test_routes);
+    WT_RUN(test_live_member_worst_case);
     WT_RUN(test_page);
 #ifdef WITH_SQLITE
     WT_RUN(test_store_round_trip);
