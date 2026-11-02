@@ -5775,3 +5775,19 @@ report events.
   `ble.devices` is sampled with an Ubertooth alone; the 5 s refresh
   keeps rows a "more" brought in; and every sort word is tested in both
   directions. Each new test seen red under a named mutation.
+- 2026-11-02 — [[slothweb]], [[ble]]: the BLE view rebased onto the
+  triage slice. Both bumped slothweb.db to v6; triage keeps v6, the BLE
+  tables become v7 (`v6 -> v7`, additive, one `BEGIN IMMEDIATE`), tested
+  on a v6 file holding a triage row and a TACDB platform, on a v5 file
+  through both steps, and with the failure that leaves a v6 file
+  unchanged. BLE keeps key `0`; TACDB, after it, carries no digit. The
+  demo's three FRRS advertisers now use sloth's own words (`iface`
+  `bluetooth-monitor`, `est_ptx_source` `ble_ad_tx_power` / `assumed`).
+  Review fixes: an address flood evicts the oldest row with neither a
+  HID flag nor a watch category (the oldest of all only when every row
+  is flagged), so the rows that matter stay in memory and reach the
+  store; a row's `adv_count` and `last_seen` only move up, as the
+  store's upsert keeps them; the start notice counts advertisers and
+  findings apart; `--help` names `/api/ble`, `/api/ble/alerts` and
+  `/api/ble/ADDR`; the drawer header has the `bundle-btn-ble` hook for
+  the copy-JSON bundle. Each seen red under a named mutation.

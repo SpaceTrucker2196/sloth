@@ -181,17 +181,27 @@ static web_ble_dev_t *dev_find(web_ble_t *b, const uint8_t addr[6], int type, in
     return NULL;
 }
 
+static int dev_older(const web_ble_dev_t *d, const web_ble_dev_t *than) {
+    return !than || d->last_seen < than->last_seen ||
+           (d->last_seen == than->last_seen && d->touched < than->touched);
+}
+
 /* A free row, else the least recently heard (by its own last_seen, then
- * by arrival), evicted and counted. */
+ * by arrival) of the rows with neither a HID flag nor a watch category,
+ * evicted and counted. An address flood is many plain rows, each heard
+ * once and newer than the resident keyboard or tracker, so age alone
+ * would evict the rows that matter first, and one not yet flushed would
+ * never reach slothweb.db; the store's row cap orders the same way. The
+ * plain oldest of all only when every row is flagged. */
 static web_ble_dev_t *dev_slot(web_ble_t *b) {
-    web_ble_dev_t *lru = NULL;
+    web_ble_dev_t *lru = NULL, *plain = NULL;
     for (int i = 0; i < WEB_BLE_DEVICES; i++) {
         web_ble_dev_t *d = &b->dev[i];
         if (!d->used) return d;
-        if (!lru || d->last_seen < lru->last_seen ||
-            (d->last_seen == lru->last_seen && d->touched < lru->touched))
-            lru = d;
+        if (dev_older(d, lru)) lru = d;
+        if (!d->hid && !d->watch_category[0] && dev_older(d, plain)) plain = d;
     }
+    if (plain) lru = plain;
     b->st.evictions++;
     if (lru->dirty) b->st.evicted_dirty++;
     b->st.rows--;
@@ -261,8 +271,11 @@ static void dev_fill(web_ble_t *b, web_ble_dev_t *d, const web_jrec_t *r, long l
     d->has_rssi = web_jl_int(r, "has_rssi", 0) == 1;
     d->rssi = d->has_rssi ? (int)ibound(r, "rssi", -127, 20, 0) : 0;
     d->rssi_best = d->has_rssi ? (int)ibound(r, "rssi_best", -127, 20, 0) : 0;
+    /* adv_count and last_seen only move up, as the store's upsert keeps
+     * them (MAX): an older or repeated record (a second sensor's replay,
+     * a reconnect's catch-up) never takes the row back. */
     long long ac = web_jl_int(r, "adv_count", 0);
-    d->adv_count = ac < 0 ? 0 : (unsigned long long)ac;
+    if (ac > 0 && (unsigned long long)ac > d->adv_count) d->adv_count = (unsigned long long)ac;
     const char *cat = web_jl_str(r, "watch_category");
     if (cat_ok(cat)) snprintf(d->watch_category, sizeof(d->watch_category), "%s", cat);
     else {
@@ -275,8 +288,8 @@ static void dev_fill(web_ble_t *b, web_ble_dev_t *d, const web_jrec_t *r, long l
     d->adv_sid = (int)ibound(r, "adv_sid", -1, 15, -1);
     long long fs = web_jl_int(r, "first_seen", 0), ls = web_jl_int(r, "last_seen", 0);
     if (fs > 0 && (d->first_seen == 0 || fs < d->first_seen)) d->first_seen = fs;
-    if (ls > 0) d->last_seen = ls;
-    else if (ts > 0 && d->last_seen == 0) d->last_seen = ts;
+    if (ls > d->last_seen) d->last_seen = ls;
+    else if (ls <= 0 && ts > 0 && d->last_seen == 0) d->last_seen = ts;
     /* The estimate: present with all four members or absent. */
     double m;
     int band = find_word(BAND, WEB_BLE_BAND_COUNT, web_jl_str(r, "est_dist_band"));
@@ -297,6 +310,7 @@ static void dev_fill(web_ble_t *b, web_ble_dev_t *d, const web_jrec_t *r, long l
     /* The rate points: one per record with a later frame time. */
     long long pt = d->last_seen > 0 ? d->last_seen : ts;
     if (d->records == 0) pres_mark(d, d->first_seen);
+    if (ls > 0 && ls < pt) pres_mark(d, ls);   /* an older record's own bucket */
     pres_mark(d, pt);
     if (d->npts == 0 || pt > d->pts[(d->pt_head + d->npts - 1) % WEB_BLE_PTS].ts) {
         int at = (d->pt_head + d->npts) % WEB_BLE_PTS;
@@ -876,6 +890,13 @@ void web_ble_stats(web_ble_t *b, web_ble_stats_t *out) {
     pthread_mutex_lock(&b->mu);
     stats_locked(b, out, 0);
     pthread_mutex_unlock(&b->mu);
+}
+
+void web_ble_restored(web_ble_t *b, char *out, size_t n) {
+    web_ble_stats_t st;
+    web_ble_stats(b, &st);
+    snprintf(out, n, "%lu advertiser%s and %lu finding%s", st.seeded,
+             st.seeded == 1 ? "" : "s", st.seeded_alerts, st.seeded_alerts == 1 ? "" : "s");
 }
 
 void web_ble_sensor(web_ble_t *b, web_ble_sh_t *out) {

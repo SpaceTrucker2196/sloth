@@ -299,6 +299,38 @@ static void test_lru_eviction(void) {
     web_ble_destroy(&B);
 }
 
+/* The larger-value rule in memory, as the store's upsert keeps it: a
+ * record older than the row's newest (decreasing last_seen and
+ * adv_count), and the newest one repeated, leave adv_count and
+ * last_seen where the newest put them; a later one moves both on. Seen
+ * red with dev_fill() assigning each from the record again, one at a
+ * time (adv_count 10, and last_seen T - 600, after the older two). */
+static void test_counts_only_move_up(void) {
+    WT_EQ(web_ble_init(&B, 0), 0);
+    char body[65536];
+    size_t len = 0;
+    int status = 0;
+    feed(dev_line("02:de:00:00:00:61", 1, "bluetooth-monitor", "", -60, 120, T - 900, T, NULL));
+    feed(dev_line("02:de:00:00:00:61", 1, "bluetooth-monitor", "", -60, 40, T - 900, T - 300, NULL));
+    feed(dev_line("02:de:00:00:00:61", 1, "bluetooth-monitor", "", -60, 10, T - 900, T - 600, NULL));
+    for (int rep = 0; rep < 2; rep++) {
+        /* After the two older records, and again after the newest one
+         * repeated. */
+        WT_EQ(web_ble_device_route(&B, "02:de:00:00:00:61", "", T, 0, body, sizeof(body), &len, &status), 0);
+        WT_EQ(status, 200);
+        WT_HAS(body, "\"adv_count\":120,");
+        WT_HAS(body, "\"last_seen\":1793000000");
+        WT_ASSERT(strstr(body, "\"adv_count\":10,") == NULL);
+        WT_ASSERT(strstr(body, "\"last_seen\":1792999400") == NULL);
+        feed(dev_line("02:de:00:00:00:61", 1, "bluetooth-monitor", "", -60, 120, T - 900, T, NULL));
+    }
+    feed(dev_line("02:de:00:00:00:61", 1, "bluetooth-monitor", "", -60, 130, T - 900, T + 60, NULL));
+    WT_EQ(web_ble_device_route(&B, "02:de:00:00:00:61", "", T + 60, 0, body, sizeof(body), &len, &status), 0);
+    WT_HAS(body, "\"adv_count\":130,");
+    WT_HAS(body, "\"last_seen\":1793000060");
+    web_ble_destroy(&B);
+}
+
 /* The drawer's presence strip: a quarter-hour bit per record's
  * last_seen over the row's last day, newest bucket first. A first
  * record marks its first_seen too; a later bucket shifts the strip
@@ -889,6 +921,11 @@ static void test_page(void) {
     WT_HAS(p, "    if (e.key === \"0\") show(\"ble\");");
     WT_HAS(p, "               \"lookup\", \"tacdb\", \"ble\"];");
     WT_HAS(p, "    if (v === \"ble\") bleView();");
+    /* The bundle module's hook in the drawer header: the container and
+     * the guarded call, a no-op without bundle.js. Seen red with the
+     * guard's window.SlothBundle test dropped. */
+    WT_HAS(p, "<span id=\"bundle-btn-ble\"></span>");
+    WT_HAS(p, "    if (bb && window.SlothBundle && SlothBundle.mount) SlothBundle.mount(bb, \"ble\", addr);");
     WT_HAS(p, "                 \"ble\": [\"q\"] };");
     WT_HAS(p, "  var DTB = DataTable({ id: \"ble\", label: \"ble advertisers\", box: $(\"b-box\"), head: $(\"b-thead\"),");
     WT_HAS(p, "  var DTBA = DataTable({ id: \"blealerts\", label: \"ble alerts\", box: $(\"b-al-box\"), head: $(\"b-al-head\"),");
@@ -1078,6 +1115,14 @@ static void test_store_round_trip(void) {
     WT_EQ(n, 5);
     WT_EQ(g_seeded, 3);
     WT_EQ(g_seeded_alerts, 2);
+    /* main.c's start notice names the two apart, not the load's sum of
+     * five. Seen red with web_ble_restored() printing seeded +
+     * seeded_alerts as the advertisers ("5 advertisers"). */
+    {
+        char rs[96];
+        web_ble_restored(&B, rs, sizeof(rs));
+        WT_ASSERT(strcmp(rs, "3 advertisers and 2 findings") == 0);
+    }
     char body[65536];
     size_t len = 0;
     int status = 0;
@@ -1211,6 +1256,83 @@ static void test_store_failed_write_is_retried(void) {
     rm_dir_store();
 }
 
+/* An address flood against the rows that matter: the table filled
+ * with HID and watchlisted rows older than everything after them (all
+ * but 24 slots), then 2,000 plain random addresses, each heard once and
+ * newer, with no flush between. The flood turns over the 24 plain slots
+ * among itself: every flagged row is still in memory, and the flush
+ * after it writes every one of them to slothweb.db. Then a table of
+ * flagged rows only: a plain arrival evicts the oldest of them (the
+ * fallback), not none. Seen red with dev_slot()'s plain-row choice
+ * removed (age alone: the flagged rows, oldest, evicted first, none of
+ * the 1000 left in memory or in the file, which held 1024 flood rows),
+ * and with the fallback removed (a NULL row: the suite died on SIGSEGV). */
+static void test_flood_keeps_flagged_rows(void) {
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-blev-XXXXXX", test_tmpdir());
+    WT_ASSERT(mkdtemp(g_dir) != NULL);
+    char p[160], err[512];
+    snprintf(p, sizeof(p), "%s/slothweb.db", g_dir);
+    web_store_t S;
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_rollup_t ru;
+    web_tsdb_t ts;
+    WT_EQ(web_rollup_init(&ru, 64, 1, err, sizeof(err)), 0);
+    WT_EQ(web_tsdb_init(&ts, &ru, &S, 30, 256, clock_fn, NULL), 0);
+    WT_EQ(web_ble_init(&B, 1), 0);
+    web_tsdb_set_ble(&ts, &B);
+    const int nflag = WEB_BLE_DEVICES - 24;
+    char addr[18];
+    for (int i = 0; i < nflag; i++) {
+        snprintf(addr, sizeof(addr), "02:de:01:00:%02x:%02x", (i >> 8) & 255, i & 255);
+        feed(dev_line(addr, 0, "bluetooth-monitor", "", -60, 5, T - 5000, T - 5000 + i,
+                      i % 2 ? ",\"hid\":1" : ",\"watch_category\":\"tag\""));
+    }
+    for (int i = 0; i < 2000; i++) {
+        /* Random static (the two top bits set), each one new. */
+        snprintf(addr, sizeof(addr), "c2:de:02:00:%02x:%02x", (i >> 8) & 255, i & 255);
+        feed(dev_line(addr, 1, "bluetooth-monitor", "", -80, 1, T + i, T + i, NULL));
+    }
+    web_ble_stats_t st;
+    web_ble_stats(&B, &st);
+    WT_EQ(st.rows, WEB_BLE_DEVICES);
+    WT_EQ(st.evictions, 2000 - 24);
+    WT_EQ(st.hid + st.watch, nflag);
+    char body[65536];
+    size_t len = 0;
+    int status = 0, kept = 0;
+    for (int i = 0; i < nflag; i++) {
+        snprintf(addr, sizeof(addr), "02:de:01:00:%02x:%02x", (i >> 8) & 255, i & 255);
+        status = 0;
+        WT_EQ(web_ble_device_route(&B, addr, "", T + 2000, 0, body, sizeof(body), &len, &status), 0);
+        kept += status == 200;
+    }
+    WT_EQ(kept, nflag);
+    web_tsdb_flush_all(&ts);
+    WT_EQ(raw_q(p, "SELECT COUNT(*) FROM ble_device WHERE addr LIKE '02:de:01:%'"
+                   " AND (hid > 0 OR watch_category != '')"), nflag);
+    WT_EQ(raw_q(p, "SELECT COUNT(*) FROM ble_device WHERE addr LIKE 'c2:de:02:%'"), 24);
+    web_ble_destroy(&B);
+    /* Every row flagged: the plain oldest of all goes. */
+    WT_EQ(web_ble_init(&B, 0), 0);
+    for (int i = 0; i < WEB_BLE_DEVICES; i++) {
+        snprintf(addr, sizeof(addr), "02:de:03:00:%02x:%02x", (i >> 8) & 255, i & 255);
+        feed(dev_line(addr, 0, "bluetooth-monitor", "", -60, 5, T, i == 9 ? T - 900 : T + i, ",\"hid\":1"));
+    }
+    feed(dev_line("c2:de:04:00:00:01", 1, "bluetooth-monitor", "", -80, 1, T + 5000, T + 5000, NULL));
+    web_ble_stats(&B, &st);
+    WT_EQ(st.rows, WEB_BLE_DEVICES);
+    WT_EQ(st.evictions, 1);
+    WT_EQ(web_ble_device_route(&B, "02:de:03:00:00:09", "", T, 0, body, sizeof(body), &len, &status), 0);
+    WT_EQ(status, 404);
+    WT_EQ(web_ble_device_route(&B, "c2:de:04:00:00:01", "", T, 0, body, sizeof(body), &len, &status), 0);
+    WT_EQ(status, 200);
+    web_ble_destroy(&B);
+    web_tsdb_destroy(&ts);
+    web_rollup_destroy(&ru);
+    web_store_close(&S);
+    rm_dir_store();
+}
+
 /* The row caps: a write past WEB_STORE_BLE_ROWS keeps the cap, the
  * oldest advertisers by last seen gone, a flagged one (HID, watchlist)
  * kept past unflagged newer ones; a write past WEB_STORE_BLE_ALERT_ROWS
@@ -1319,6 +1441,7 @@ void run_ble_tests(void) {
     WT_RUN(test_hostile_strings);
     WT_RUN(test_absent_and_estimate);
     WT_RUN(test_lru_eviction);
+    WT_RUN(test_counts_only_move_up);
     WT_RUN(test_presence_strip);
     WT_RUN(test_every_column_sorts);
     WT_RUN(test_findings_and_resolve);
@@ -1331,6 +1454,7 @@ void run_ble_tests(void) {
     WT_RUN(test_store_round_trip);
     WT_RUN(test_store_failed_write_is_retried);
     WT_RUN(test_store_row_caps);
+    WT_RUN(test_flood_keeps_flagged_rows);
 #endif
     WT_RUN(test_without_store);
 }

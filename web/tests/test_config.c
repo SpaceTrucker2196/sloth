@@ -206,6 +206,10 @@ static void test_usage_and_unknown(void) {
     WT_HAS(p.out, "--web-allow-remote");
     WT_HAS(p.out, "/api/health");
     WT_HAS(p.out, "/events");
+    /* The BLE view's three routes in the Routes paragraph. Seen red with
+     * the line naming them taken out of web_usage(). */
+    WT_HAS(p.out, " /api/ble,\n");
+    WT_HAS(p.out, "/api/ble/alerts, /api/ble/ADDR (the BLE view)");
     WT_HAS(p.out, "405");
     WT_LACKS(p.out, "serves no routes");
     done(&p);

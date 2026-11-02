@@ -5020,6 +5020,10 @@
     $("bdrawer").hidden = false;
     $("bdr-close").focus();
     set("bdr-addr", addr);
+    // The copy-JSON bundle's button (bundle.js, its own slice): a no-op
+    // when that module is not loaded.
+    var bb = $("bundle-btn-ble");
+    if (bb && window.SlothBundle && SlothBundle.mount) SlothBundle.mount(bb, "ble", addr);
     set("bdr-note", "loading");
     var p = "/api/ble/" + encodeURIComponent(addr) + "?type=" + encodeURIComponent(String(type)) +
             "&iface=" + encodeURIComponent(String(iface));

@@ -268,11 +268,12 @@ int main(int argc, char **argv) {
                                                      : "",
             g_frrs.assess_dir[0] ? "" : ", no recommendation yet");
     const web_btsig_tab_t *bt = web_btsig_builtin();
-    fprintf(stderr, "slothweb: BLE: %d advertiser%s restored from the store; "
+    char restored[96];
+    web_ble_restored(&g_ble, restored, sizeof(restored));
+    fprintf(stderr, "slothweb: BLE: %s restored from the store; "
                     "assigned numbers: %s (%zu companies, %zu services, %zu "
-                    "appearances)%s\n", ble_seeded < 0 ? 0 : ble_seeded,
-            ble_seeded == 1 ? "" : "s", bt->source, bt->ncompany, bt->nservice,
-            bt->nappearance,
+                    "appearances)%s\n", restored, bt->source, bt->ncompany,
+            bt->nservice, bt->nappearance,
             strcmp(bt->source, "sig") ? "; names off: built without the SIG CSVs "
                                         "in web/data/btsig/ (web/data/btsig/SOURCE.md)"
                                       : "");

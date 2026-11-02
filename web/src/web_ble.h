@@ -16,8 +16,11 @@
  * docs/wiki/jsonl-schema.md say what each field is; every field read
  * here was read from the emitter.
  *
- * In memory: WEB_BLE_DEVICES rows, the least recently heard evicted
- * and counted when a new one arrives; WEB_BLE_ALERTS findings, the
+ * In memory: WEB_BLE_DEVICES rows, the least recently heard row with
+ * neither a HID flag nor a watch category evicted and counted when a
+ * new one arrives (the plain oldest only when every row is flagged), and
+ * a row's adv_count and last_seen only ever moving up, as the store
+ * keeps them; WEB_BLE_ALERTS findings, the
  * oldest resolved one evicted first; one copy of the latest
  * sensor_health's Bluetooth members. A row keeps the last WEB_BLE_PTS
  * (ts, adv_count) points of its own records, so the drawer can draw
@@ -309,6 +312,10 @@ void web_ble_redirty(web_ble_t *b, const web_store_bdev_t *rows, size_t n,
                      const web_store_balert_t *alerts, size_t na);
 
 void web_ble_stats(web_ble_t *b, web_ble_stats_t *out);
+/* What the seed restored, for main.c's start notice: "N advertisers and
+ * M findings", each counted as web_ble_seed() / web_ble_seed_alert()
+ * took it, never web_store_ble_load()'s sum of the two. */
+void web_ble_restored(web_ble_t *b, char *out, size_t n);
 /* A copy of the latest sensor_health's Bluetooth members. */
 void web_ble_sensor(web_ble_t *b, web_ble_sh_t *out);
 

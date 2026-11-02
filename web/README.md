@@ -2714,7 +2714,11 @@ finding, standing until the `alert.resolve` of the same key) and the
 Bluetooth members of `sensor_health` (`btmon_*`, `ble_*`, `btcap_*`,
 the banded `ble_rot_*`). sloth.db has no BLE table, so slothweb keeps
 the rows itself (`web/src/web_ble.h`): 1024 advertisers in memory, the
-least recently heard evicted and counted; 128 findings; the latest
+least recently heard row with neither a HID flag nor a watch category
+evicted and counted (an address flood turns over its own rows, never
+the keyboard or the tracker; the oldest of all only when every row is
+flagged), a row's `adv_count` and `last_seen` only moving up as the
+store's upsert keeps them; 128 findings; the latest
 sensor_health's block; and the v7 tables of slothweb.db
 ([slothweb.db v7](#the-ble-tables-slothwebdb-v7)) so a restart keeps
 the history. Nothing is sent: sloth never scans, connects or reads
