@@ -4,6 +4,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "web_slothdb.h"
 #include "wtest.h"
 #include "wt_tmp.h"
 
@@ -46,8 +47,32 @@ static int wanted(const char *name) {
 }
 #define SUITE(fn) do { if (wanted(#fn)) fn(); } while (0)
 
+/* The sanitizers slow slothweb's own code several-fold (SQLite is the
+ * system library and is not instrumented); ThreadSanitizer most. A read
+ * that fits its budget in a plain build then missed it on a busy host
+ * and answered 503 (test_alerts.c's 30,000-row lists, 3 to 6 failures in
+ * some web TSan runs on 2026-11-01), so the budgets are scaled here and
+ * only here. */
+#if defined(__SANITIZE_THREAD__)
+#define WT_BUDGET_SCALE 8
+#elif defined(__SANITIZE_ADDRESS__)
+#define WT_BUDGET_SCALE 4
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define WT_BUDGET_SCALE 8
+#elif __has_feature(address_sanitizer)
+#define WT_BUDGET_SCALE 4
+#endif
+#endif
+#ifndef WT_BUDGET_SCALE
+#define WT_BUDGET_SCALE 1
+#endif
+
 int main(void) {
     signal(SIGPIPE, SIG_IGN);
+#ifdef WITH_SQLITE
+    web_sdb_test_budget_scale = WT_BUDGET_SCALE;
+#endif
     /* The baselines index the local hour of the week: the suite pins the
      * zone, as it pins the clock, so a cell is the same on every host. */
     setenv("TZ", "UTC0", 1);

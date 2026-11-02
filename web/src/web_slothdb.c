@@ -228,6 +228,7 @@ struct web_sdb_ovc {
 };
 
 long long web_sdb_ovc_test_skew_ms = 0;
+int web_sdb_test_budget_scale = 1;
 
 static long long ovc_now_ms(void) {
     struct timespec ts;
@@ -930,7 +931,8 @@ static int open_conn(web_slothdb_t *s, web_sdb_conn_t *c, int budget_ms,
     memset(c, 0, sizeof(*c));
     c->s = s;
     c->now_s = now_s;
-    c->deadline_ms = mono_ms() + (budget_ms > 0 ? budget_ms : WEB_SDB_HTTP_MS);
+    c->deadline_ms = mono_ms() + (long long)(budget_ms > 0 ? budget_ms : WEB_SDB_HTTP_MS) *
+                                 (web_sdb_test_budget_scale > 1 ? web_sdb_test_budget_scale : 1);
     err[0] = '\0';
     if (!s->configured) {
         snprintf(err, errsz, "no --sloth-db");

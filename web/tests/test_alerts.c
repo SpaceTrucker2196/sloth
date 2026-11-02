@@ -757,7 +757,7 @@ static void test_lists_stay_bounded(void) {
                            qs[i], ms, strstr(b, "\"scan\":") ? num_of(strstr(b, "\"scan\":"), "rows") : -1);
         WT_ASSERT(num_of(strstr(b, "\"scan\":") ? strstr(b, "\"scan\":") : b, "rows") <=
                   WEB_ADB_SCAN_CAP);
-        WT_ASSERT(ms < 2000);
+        WT_ASSERT(ms < 2000.0 * web_sdb_test_budget_scale);
     }
     WT_EQ(route(&h2, "/api/alerts", "window=2592000"), 200);
     const char *sc = strstr(body_of(g_out), "\"scan\":");

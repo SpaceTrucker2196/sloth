@@ -550,6 +550,11 @@ void web_sdb_ovc_put(web_slothdb_t *s, const web_sdb_ident_t *id,
                      const web_sdb_ovw_t *v);
 /* Test seam: added to the cache's clock, to age an entry. */
 extern long long web_sdb_ovc_test_skew_ms;
+/* Test seam: every read budget is multiplied by it (1 in slothweb). The
+ * suite raises it only in a sanitizer build, which slows slothweb's own
+ * code several-fold, so a read that fits the budget plainly is not a
+ * 503 there; tests that need a budget to expire use one far below it. */
+extern int web_sdb_test_budget_scale;
 
 /* ── M6 reads (#164): the Flows view ──────────────────────────────────── */
 
