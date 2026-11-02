@@ -5666,3 +5666,8 @@ report events.
   `tests/deploy/test_wiki_sync.sh` (21 checks, run by `make
   deploy-test`) seen red with the subdirectory loop removed (9 failed)
   and with the collision guard removed (1 failed).
+- 2026-11-02 — [[wiki-maintenance]]: `wiki_sync.sh` rewrites a
+  top-level page's `](../doc.md)` (a document in `docs/` beside the
+  wiki) to its `blob/main` URL; [[slothweb]]'s link to
+  `../web-visual-spec.md` had been published broken. Seen red with the
+  rule removed (2 of 22 checks).

@@ -14,6 +14,7 @@
 #   - ](../views/x.md)    -> absolute blob URL on main
 #   - ](../personas/x.md) -> absolute blob URL on main
 #   - ](../../X.md)       -> absolute blob URL on main
+#   - ](../X.md)          -> absolute blob URL under docs/ (a doc beside docs/wiki)
 #   - ](page.md)          -> ](page)   (sibling wiki page)
 #   - docs/wiki/<dir>/x.md -> page <dir>-x, <dir>/README.md -> page <dir>
 #     (the GitHub wiki is flat). Links follow: ](dir/x.md) -> ](dir-x),
@@ -57,6 +58,7 @@ render() {
             -e "s#](\.\./views/\([^)]*\))#]($BLOB/docs/views/\1)#g" \
             -e "s#](\.\./personas/\([^)]*\))#]($BLOB/docs/personas/\1)#g" \
             -e "s#](\.\./\.\./\([^)]*\))#]($BLOB/\1)#g" \
+            -e "s#](\.\./\([^)]*\))#]($BLOB/docs/\1)#g" \
             -e "s#](\([A-Za-z0-9_-]*\)/README\.md\(\#[^)]*\)\{0,1\})#](\1\2)#g" \
             -e "s#](\([A-Za-z0-9_-]*\)/\([A-Za-z0-9_-]*\)\.md\(\#[^)]*\)\{0,1\})#](\1-\2\3)#g" \
             -e "s#](\([a-z0-9-]*\)\.md)#](\1)#g" \

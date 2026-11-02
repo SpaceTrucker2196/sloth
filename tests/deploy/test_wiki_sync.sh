@@ -42,7 +42,8 @@ mkwiki() {  # $1 = root
 EOF
     cat > "$1/src/alerts.md" <<'EOF'
 See [the index](alert-assessments/README.md), [one](alert-assessments/PORT_SCAN.md)
-and [a part](alert-assessments/PORT_SCAN.md#bibliography), [cli](cli-reference.md).
+and [a part](alert-assessments/PORT_SCAN.md#bibliography), [cli](cli-reference.md),
+[spec](../web-visual-spec.md#rulings).
 EOF
     cat > "$1/src/alert-assessments/README.md" <<'EOF'
 | [PORT_SCAN](PORT_SCAN.md) | [back](../alerts.md) | [[alerts]] |
@@ -68,6 +69,7 @@ check "$o/alerts.md" "](alert-assessments)" "top-level link to a subdirectory RE
 check "$o/alerts.md" "](alert-assessments-PORT_SCAN)" "top-level link to a subdirectory page"
 check "$o/alerts.md" "](alert-assessments-PORT_SCAN#bibliography)" "anchor kept"
 check "$o/alerts.md" "](cli-reference)" "sibling link unchanged"
+check "$o/alerts.md" "]($B/docs/web-visual-spec.md#rulings)" "../doc.md from the top -> docs/ blob URL"
 check "$o/alert-assessments.md" "](alert-assessments-PORT_SCAN)" "README -> page <dir>, sibling flattened"
 check "$o/alert-assessments.md" "](alerts)" "../page.md from a subdirectory"
 check "$o/alert-assessments.md" "[[alerts]]" "wikilink untouched"

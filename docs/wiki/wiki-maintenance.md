@@ -15,7 +15,7 @@ updates the wiki in the same change.
 **Sources**: `.github/scripts/wiki_sync.sh`,
 `.github/workflows/wiki-sync.yml`, `docs/CLAUDE.md`, `agents/AGENTS.md`.
 
-**Last updated**: 2026-11-01 (subdirectory pages flattened, the sync under test); 2026-10-15.
+**Last updated**: 2026-11-02 (`](../doc.md)` links to docs/; 2026-11-01 subdirectory pages flattened, the sync under test); 2026-10-15.
 
 ---
 
@@ -32,7 +32,8 @@ saying exactly this.
 
 - `index.md` → `Home.md` (GitHub's landing page name).
 - YAML front matter is stripped.
-- `](../views/…)`, `](../personas/…)`, `](../../…)` become absolute
+- `](../views/…)`, `](../personas/…)`, `](../../…)` and any other
+  `](../doc.md)` (a document in `docs/` beside the wiki) become absolute
   `blob/main` URLs (the wiki has no repo tree beside it).
 - `](sibling.md)` → `](sibling)` (wiki page links).
 - `[[wiki-links]]` are left as-is — GitHub's wiki resolves them.
