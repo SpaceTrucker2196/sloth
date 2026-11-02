@@ -2711,7 +2711,9 @@ Around the splices:
   shows it under that scope, a device row's under Monitor without its
   address or name; matched on whole addresses, so `10.0.0.1` is not
   named by a record of `10.0.0.12`),
-  `observed_vs_thresholds`, `records_by_type_global`, and for the
+  `observed_vs_thresholds`, `records_by_type_global` (the stream's
+  per-type mix; a summary that did not render is `too_large`, never an
+  empty `{}` that would read as "no records"), and for the
   slices still in flight `vendor_research`, `frrs`, `comint_report`,
   `triage`, `assessment`, `evidence`, `location`, `signal_history`,
   `distance`. A section without data is
@@ -2726,7 +2728,15 @@ Around the splices:
 - **analysis aids**: `glossary` (every field and unit), `prompt` (a
   suggested prompt that tells the reader the sensor is passive and one
   vantage point, and asks for observed versus inferred), `limits`
-  (every cap, whether it cut, each sloth.db read's time).
+  (every cap, whether it cut, each sloth.db read's time). The glossary
+  and the prompt say what an alert's `count` and `observations` are:
+  evaluations of a standing condition, not frames or requests. `count`
+  rises once per evaluation pass that fired; `observations` once per
+  evaluation whose detail or severity differs from the last emitted
+  one, and since the engine refreshes that baseline only on a severity
+  change or past its 60 s update floor (`src/alerts/engine.c`), it
+  follows the evaluations while the detail keeps changing. A large
+  figure is how long the rule kept matching.
 
 Bounds: the body is the route's own heap buffer (`web_resp_t
 .body_owned`, freed with the connection) of at most 512 KB. The
@@ -2755,8 +2765,12 @@ focus reaches the button and a click that finds it ready copies at
 once; one that does not hands `ClipboardItem` the fetch as a promise
 where it exists (a secure context), and otherwise fetches and says
 "ready: click copy again". What is kept is keyed on the scoped request
-(a scope switch on the same id fetches again), expires after 10 s, and
-is dropped whenever the view mounts the control again. The alert
+(a scope switch on the same id fetches again), expires after 60 s, and
+is dropped whenever the view mounts the control again. The minute is
+for plain http, where a first click copies only text already kept: a
+pointer resting past it re-arms the fetch on its next move, and a touch
+tap, whose `pointerenter` and click arrive together, starts it on
+`pointerdown`. `generated_at` dates the copy either way. The alert
 page's control lives inside its heading, which loading and an error
 rewrite, so it never names the alert before. The download is a Blob URL of the
 document's own bytes: the one `.href =` on the page, and the only

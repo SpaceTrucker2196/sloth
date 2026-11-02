@@ -150,7 +150,17 @@ static void test_page_carries_the_control(void) {
     WT_HAS(p, "copy.addEventListener(\"focus\", prefetch);");
     WT_HAS(p, "navigator.clipboard.write([new window.ClipboardItem({ \"text/plain\": body })])");
     WT_HAS(p, "\"ready: click copy again\"");
-    WT_HAS(p, "var FRESH_MS = 10000;");
+    /* Kept a minute, re-armed on a resting or touching pointer: on plain
+     * http a first click copies only text already kept. */
+    WT_HAS(p, "var FRESH_MS = 60000;");
+    WT_HAS(p, "copy.addEventListener(\"pointermove\", prefetch);");
+    WT_HAS(p, "copy.addEventListener(\"pointerdown\", prefetch);");
+    /* The note names the text written, not st.text, which a mount
+     * before write() settles has nulled (kb(null) threw). Seen red with
+     * copied(st.text, true) restored. */
+    WT_HAS(p, "got = s.text;");
+    WT_HAS(p, "copied(got, true);");
+    WT_LACKS(p, "copied(st.text, true)");
     WT_HAS(p, "st.path === pathOf(st) && Date.now() - st.at < FRESH_MS");
     WT_HAS(p, "st.text = null; st.path = \"\"; st.at = 0; st.ts = 0;");
     WT_HAS(p, "a.download = name;");
@@ -1010,6 +1020,44 @@ static void test_glossary_risk_is_the_level(void) {
     WT_EQ(web_scope_risk_level(16 | 1 | 2), 3);
 }
 
+/* count and observations are evaluations of a standing condition, not
+ * frames or requests (src/alerts/engine.c: evaluations++ on every fire;
+ * observations++ whenever detail_sig differs, and detail_sig is only
+ * refreshed on a severity change or past the 60 s update floor), and
+ * the prompt does not hand them to the analyst as event counts. Seen red
+ * with the old "the underlying events the rule counted" entry restored. */
+static void test_glossary_counts_are_evaluations(void) {
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10"), 200);
+    const char *b = answer();
+    WT_HAS(b, "\"count\":\"rule evaluations that fired while the condition held (about "
+              "one per evaluation pass), across every incident of the key; not packets "
+              "or requests; latest_count is the one incident this id names\"");
+    WT_HAS(b, "\"observations\":\"evaluations at which the rendered detail or severity "
+              "differed from the last emitted one (stream only); it follows evaluations "
+              "while detail keeps changing inside the 60 s update floor; not a count of "
+              "frames or requests\"");
+    WT_HAS(b, "An alert\\u0027s count and observations are evaluations of a standing "
+              "condition, not event counts");
+    WT_LACKS(b, "the underlying events the rule counted");
+    WT_LACKS(b, "the alert\\u0027s count/observations/severity history");
+}
+
+/* A stream summary that does not render is not an empty mix: "{}" would
+ * read as "no records". Seen red with fill_types writing "{}" for an
+ * unrendered summary again. The no-map-in-a-rendered-summary branch
+ * cannot be isolated: web_live_json_scoped always writes "types". */
+static void test_types_unrendered_is_not_empty(void) {
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10"), 200);
+    WT_HAS(answer(), ",\"records_by_type_global\":{\"");
+    WT_LACKS(answer(), ",\"records_by_type_global\":{\"available\":false");
+    web_bundle_scratch = 64;
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10"), 200);
+    web_bundle_scratch = WEB_BUNDLE_SCRATCH;
+    WT_HAS(answer(), ",\"records_by_type_global\":{\"available\":false,"
+                     "\"reason\":\"too_large\",");
+    WT_LACKS(answer(), "\"records_by_type_global\":{}");
+}
+
 /* Every cap from the least the required part needs up: a 200 that ends
  * whole, or a 413 below the first 200; never a 413 above one, which is
  * a body that overflowed once the optional rows' markers were written
@@ -1067,6 +1115,8 @@ void run_bundle_tests(void) {
     WT_RUN(test_sensor_counts_follow_the_scope);
     WT_RUN(test_nested_reasons);
     WT_RUN(test_glossary_risk_is_the_level);
+    WT_RUN(test_glossary_counts_are_evaluations);
+    WT_RUN(test_types_unrendered_is_not_empty);
     WT_RUN(test_markers_fit_under_every_cap);
     down();
 }

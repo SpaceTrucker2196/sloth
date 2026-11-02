@@ -17,6 +17,7 @@
 #endif
 
 size_t web_bundle_max = WEB_BUNDLE_MAX;
+size_t web_bundle_scratch = WEB_BUNDLE_SCRATCH;
 
 enum { K_DEVICE, K_ALERT, K_LOOKUP };
 static const char *const KIND_WORD[] = { "device", "alert", "lookup" };
@@ -322,23 +323,31 @@ static size_t fill_nested_lookup(const web_bundle_ctx_t *c, web_jw_t *w) {
     return 1;
 }
 
-/* The stream mix the alert sits in: /api/live's "types" map. */
+/* The stream mix the alert sits in: /api/live's "types" map. A summary
+ * that did not render, or carries no map, is not an empty mix: an "{}"
+ * here would read as "no records". It is too_large (the summary
+ * outgrew the scratch) or no_data, never a map. */
 static size_t fill_types(const web_bundle_ctx_t *c, web_jw_t *w) {
     if (!c->h->live) return 0;
     size_t start = w->len;
-    char *buf = malloc(WEB_BUNDLE_SCRATCH);
+    char *buf = malloc(web_bundle_scratch);
     if (!buf) return 0;
-    size_t n = web_live_json_scoped(c->h->live, c->h->sc, buf, WEB_BUNDLE_SCRATCH,
+    size_t n = web_live_json_scoped(c->h->live, c->h->sc, buf, web_bundle_scratch,
                                     c->h->now_ms);
-    /* A flat map of type to count: no brace inside it. */
-    const char *p = n ? jafter(buf, ",\"types\":{") : NULL;
-    const char *e = p ? strchr(p, '}') : NULL;
-    if (e) {
-        web_jw_raw(w, "{");
-        web_jw_rawn(w, p, (size_t)(e - p) + 1);
-    } else {
-        web_jw_raw(w, "{}");
+    if (n == 0) {
+        free(buf);
+        w->overflow = 1;              /* write_section's too_large marker */
+        return 0;
     }
+    /* A flat map of type to count: no brace inside it. */
+    const char *p = jafter(buf, ",\"types\":{");
+    const char *e = p ? strchr(p, '}') : NULL;
+    if (!e) {
+        free(buf);
+        return 0;
+    }
+    web_jw_raw(w, "{");
+    web_jw_rawn(w, p, (size_t)(e - p) + 1);
     free(buf);
     return w->overflow ? 0 : w->len - start;
 }
@@ -401,8 +410,8 @@ static const struct { const char *key, *text; } GLOSSARY[] = {
     { "alerts[].id / alert.page.id", "opaque: s<handle> is slothweb's handle for a live-stream incident, d<rowid> names sloth.db's newest row of the alert's key. Neither derives from the alert key or sloth's incident_id" },
     { "alert.state", "open (live, unresolved) | closed (resolved on the stream) | recorded (sloth.db only; the stream does not hold it)" },
     { "alert.source", "stream | sloth.db | both" },
-    { "count", "rule evaluations that fired across every incident of the key; latest_count is the one incident this id names" },
-    { "observations", "the underlying events the rule counted (stream only)" },
+    { "count", "rule evaluations that fired while the condition held (about one per evaluation pass), across every incident of the key; not packets or requests; latest_count is the one incident this id names" },
+    { "observations", "evaluations at which the rendered detail or severity differed from the last emitted one (stream only); it follows evaluations while detail keeps changing inside the 60 s update floor; not a count of frames or requests" },
     { "incidents", "how many times this key opened (1 + reopens)" },
     { "sev_history[].ev", "create | update | escalate | resolve" },
     { "history.runs", "incidents of the same key less than gap_s apart folded into one run, newest first" },
@@ -427,10 +436,12 @@ static const char PROMPT[] =
     "purpose, and \"limits\" for every list that was cut. A section with "
     "\"available\": false is missing for the stated reason; do not infer its "
     "contents.\n\n"
-    "Distinguish OBSERVED (timestamps, counts, addresses, signal in dBm, presence "
-    "cells, the alert's count/observations/severity history) from INFERRED (vendor "
+    "Distinguish OBSERVED (timestamps, addresses, signal in dBm, presence cells, the "
+    "alert's severity history) from INFERRED (vendor "
     "from OUI, device class, risk level, anomaly scores, any distance estimate, the "
-    "KB's prose). Alert ids are opaque handles. SSIDs are in a display form with \\xNN "
+    "KB's prose). An alert's count and observations are evaluations of a standing "
+    "condition, not event counts: a large figure is how long the rule kept matching, "
+    "not how many frames or requests were seen. Alert ids are opaque handles. SSIDs are in a display form with \\xNN "
     "escapes for non-printable octets; a flagged non-printable SSID may be a "
     "look-alike.\n\n"
     "Give: (1) a one-paragraph assessment of what this device/alert most likely is and "

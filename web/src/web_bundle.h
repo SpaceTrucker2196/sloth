@@ -85,6 +85,9 @@
 
 /* The hard cap in force: WEB_BUNDLE_MAX, lowered only by a test. */
 extern size_t web_bundle_max;
+/* The scratch the stream summary renders into for records_by_type_global:
+ * WEB_BUNDLE_SCRATCH, lowered only by a test. */
+extern size_t web_bundle_scratch;
 
 struct web_bundle_ctx;
 typedef struct web_bundle_ctx web_bundle_ctx_t;

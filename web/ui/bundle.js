@@ -114,8 +114,12 @@ window.SlothBundle = (function () {
   }
 
   // A fetched bundle is copied as is for this long, then fetched again:
-  // the views re-render live, and a copy is of the view now.
-  var FRESH_MS = 10000;
+  // the views re-render live, and a copy is of the view now. Long
+  // enough to read the view before clicking: on plain http (the
+  // tailnet bind) there is no promised ClipboardItem, so a click finds
+  // the text kept or asks for a second one. generated_at dates the copy,
+  // and a mount or a scope change drops the kept text anyway.
+  var FRESH_MS = 60000;
 
   // The control's request now: kind, id and the scope in effect, so a
   // scope switch on the same id is a different bundle.
@@ -217,7 +221,11 @@ window.SlothBundle = (function () {
     function prefetch() {
       if (!st.busy && ready(st) === null) load(st).catch(function () {});
     }
+    // pointermove re-arms a prefetch that expired under a resting
+    // pointer; pointerdown starts one a touch tap's pointerenter raced.
     copy.addEventListener("pointerenter", prefetch);
+    copy.addEventListener("pointermove", prefetch);
+    copy.addEventListener("pointerdown", prefetch);
     copy.addEventListener("focus", prefetch);
     copy.addEventListener("click", function () {
       var text = ready(st);
@@ -231,12 +239,16 @@ window.SlothBundle = (function () {
       st.note.textContent = "fetching";
       var mine = pathOf(st);
       if (canClipItem()) {
+        // The text written, held here: a mount before write() settles
+        // nulls st.text, and the note is of what was copied.
+        var got = "";
         var body = load(st).then(function (s) {
           if (pathOf(s) !== mine) throw new Error("stale");
-          return new Blob([s.text], { type: "text/plain" });
+          got = s.text;
+          return new Blob([got], { type: "text/plain" });
         });
         navigator.clipboard.write([new window.ClipboardItem({ "text/plain": body })]).then(function () {
-          copied(st.text, true);
+          copied(got, true);
         }, function () {
           body.then(function () {
             st.busy = false;
