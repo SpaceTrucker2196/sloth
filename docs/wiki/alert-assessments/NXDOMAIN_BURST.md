@@ -61,6 +61,9 @@ DGA-generated (random) domains that a bot queries would result in
 Non-Existent Domain (NXDomain) responses" - which is precisely the
 signal Antonakakis et al. built Pleiades on, detecting DGA malware from
 the NXDOMAIN traffic alone without reverse-engineering the binary [7].
+Failed-lookup bursts as a detection feature in their own right have
+published prior art too: Yadav & Reddy build botnet detection on bursts of
+failed (NXDOMAIN) lookups [5].
 MITRE's DGA detection guidance is to "correlate resolver logs with high
 NXDOMAIN rates" alongside "repeated DNS queries to random-looking
 domains" [6].
@@ -176,10 +179,10 @@ suffix, fix the resolver/search-domain configuration
 2. Application Layer Protocol: DNS, Technique T1071.004 - MITRE ATT&CK - https://attack.mitre.org/techniques/T1071/004/ (accessed 2026-10-27)
 3. docs/wiki/alert-remediation.md § NXDOMAIN_BURST; docs/views/dns.md § NXDOMAIN burst; docs/views/alerts.md rule-table row (repo, read 2026-10-27)
 4. RFC 2308, "Negative Caching of DNS Queries (DNS NCACHE)" §1, §2.1 (NXDOMAIN = Name Error, RCODE 3, QNAME does not exist); RFC 1035 §4.1.1 - https://www.rfc-editor.org/rfc/rfc2308 (accessed 2026-10-27)
-5. (no public literature beyond the above specific to the burst-counting heuristic itself; it is a standard precursor signal)
+5. S. Yadav, A. L. N. Reddy, "Winning with DNS Failures: Strategies for Faster Botnet Detection", SecureComm 2011, Security and Privacy in Communication Networks (LNICST, Springer, 2012) - botnet detection built on bursts of failed (NXDOMAIN) lookups - doi:10.1007/978-3-642-31909-9_26 (title and authors confirmed via Crossref, accessed 2026-11-01). Antonakakis et al. [7] is likewise NXDOMAIN-based detection: its abstract opens on the observation that most DGA-generated names a bot queries return NXDOMAIN
 6. Domain Generation Algorithms, Technique T1568.002 - MITRE ATT&CK (detection analytic: "Correlate resolver logs with high NXDOMAIN rates"; "repeated DNS queries to random-looking domains") - https://attack.mitre.org/techniques/T1568/002/ (accessed 2026-10-27)
 7. Antonakakis, Perdisci, Nadji, Vasiloglou, Abu-Nimeh, Lee, Dagon, "From Throw-Away Traffic to Bots: Detecting the Rise of DGA-Based Malware", USENIX Security 2012 - https://www.usenix.org/conference/usenixsecurity12/technical-sessions/presentation/antonakakis (accessed 2026-10-27)
-8. Thomas & Wessels (Verisign/APNIC), "Chromium's impact on root DNS traffic", APNIC Blog, 2020 (random-hostname interception probes; ~45.8% of root traffic) - https://blog.apnic.net/2020/08/21/chromiums-impact-on-root-dns-traffic/ (accessed 2026-10-27)
+8. M. Thomas (Verisign), "Chromium's impact on root DNS traffic", APNIC Blog, 2020 (random-hostname interception probes; ~45.8% of root traffic) - https://blog.apnic.net/2020/08/21/chromiums-impact-on-root-dns-traffic/ (accessed 2026-10-27)
 
 ## Verification notes
 
@@ -235,3 +238,11 @@ domains present on the page), the USENIX abstract sentence, and the
 APNIC figures (three lookups, 7-15 letters a-z, startup / IP change /
 DNS-config change, 45.80% on 13 May 2020, ~60 billion/day) all
 re-confirmed verbatim.
+
+Review pass, 2026-11-01. [5] previously claimed no public literature
+exists for the burst heuristic; that was false and is replaced by Yadav &
+Reddy (SecureComm 2011; Crossref confirms title, authors and
+doi:10.1007/978-3-642-31909-9_26). [7] is now noted as NXDOMAIN-based
+detection in the bibliography as well as the body. [8] re-credited to
+M. Thomas, the post's author (Duane Wessels is a contributor), matching
+DGA_DOMAIN [5].

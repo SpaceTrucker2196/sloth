@@ -19,7 +19,7 @@ type that is neither assessed nor listed there, and on a listed type that
 has gained a file.
 
 A fire count in the hundreds of millions is per-evaluation counting of a
-standing condition (about four polls a second), not that many events;
+standing condition (at least four polls a second), not that many events;
 each file's `count_semantics` says how its rule counts.
 
 | Type | Technique | Severity assessment | False-positive risk | Noise verdict |

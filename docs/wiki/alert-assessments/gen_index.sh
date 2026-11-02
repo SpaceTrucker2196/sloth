@@ -19,7 +19,8 @@ out="$dir/README.md"
 tmp="$out.tmp.$$"
 trap 'rm -f "$tmp"' EXIT INT TERM HUP
 
-n=$(ls "$dir"/[A-Z]*.md | wc -l | tr -d ' ')
+# README.md is this script's output, not an assessment, and matches the glob.
+n=$(ls "$dir"/[A-Z]*.md | grep -v '/README\.md$' | wc -l | tr -d ' ')
 
 {
 cat <<EOF
@@ -44,7 +45,7 @@ type that is neither assessed nor listed there, and on a listed type that
 has gained a file.
 
 A fire count in the hundreds of millions is per-evaluation counting of a
-standing condition (about four polls a second), not that many events;
+standing condition (at least four polls a second), not that many events;
 each file's \`count_semantics\` says how its rule counts.
 
 | Type | Technique | Severity assessment | False-positive risk | Noise verdict |
@@ -52,6 +53,7 @@ each file's \`count_semantics\` says how its rule counts.
 EOF
 
 for f in "$dir"/[A-Z]*.md; do
+    [ "$(basename "$f")" = README.md ] && continue
     awk -v file="$(basename "$f")" '
         function head(v) {
             sub(/^[a-z_]+: */, "", v)

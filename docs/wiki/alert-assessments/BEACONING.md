@@ -5,7 +5,7 @@ rule_file: src/alerts/rules_wired.c:1456 (rule_beaconing); helpers src/beacon_de
 count_semantics: per poll tick (default 250 ms) per open per-destination finding - each strong (remote_ip, remote_port) track that holds a seat fires once per tick (key `beacon:<ip>:<port>`), and all strong tracks past the cap fire once per tick as the single `beacon-overflow` finding; `count` is tick re-evaluations while the track stays strong, not per packet, flow or callout
 severity_assessment: agree - WARN is correct; periodicity is a shape, not an intent (update checkers, telemetry and NTP beacon by design), and the destination matters more than the rhythm
 false_positive_risk: high - any well-behaved periodic client (NTP, telemetry, update pollers, keepalives, dashboards on a timer) is periodic by design and can satisfy v1/v2; the detector is explicit that it reports a shape
-noise_verdict: noisy on the reference host - 40 keys, 172,989,288 fires, max_sev WARN (1). The fires count is tick re-evaluations, not beacon callouts: ~1.73e8 fires over 40 keys is ~4.3M evaluations per key, which at <=4 evaluations/s is ~12.5 days of continuously-held beacon state per destination - i.e. 40 long-lived periodic flows (NTP, telemetry, keepalives) each held open for most of the capture, re-fired every tick. This is the expected shape of benign periodic traffic, not 173M attacks. The #148 cap already bounds open findings to bd.max_findings (16) + one overflow; the dedup key already collapses per destination. The figure to trend is `observations`, which moves only when the detail (period/jitter/n) changes, not `count`
+noise_verdict: noisy on the reference host - 40 keys, 172,989,288 fires, max_sev WARN (1). The fires count is tick re-evaluations, not beacon callouts: ~1.73e8 fires over 40 keys is ~4.3M evaluations per key, which at 4 or more evaluations/s (POLL_MS 250 is the longest wait between ticks, include/sloth.h:28; the loop wakes early at main.c:1666/1671) is at most ~12.5 days of continuously-held beacon state per destination - long-lived periodic flows (NTP, telemetry, keepalives) re-fired every tick. Because at most 16 seats plus the overflow key fire per tick, the 40 keys cannot all have been open at once; they took turns in the 17 slots. This is the expected shape of benign periodic traffic, not 173M attacks. The #148 cap already bounds open findings to bd.max_findings (16) + one overflow; the dedup key already collapses per destination. `observations` is not the figure to trend: the detail carries `n` (rules_wired.c:1368-1379), which grows with every callout until the 16-sample window fills (BD_MAX_SAMPLES, beacon_detect.h:13), after which the sliding window moves period/jitter; each change against the stored `detail_sig`, refreshed only on an emitted event (engine.c:487, 534), makes `observations` follow `evaluations` for up to 60 s. Trend the open-incident count (40) and a per-track callout total instead, not `count`
 prevalence: true C2 beaconing is common in intrusions (Cobalt Strike was #8 in Red Canary's 2022 Threat Detection Report, the only post-exploitation framework in its top 10 [5]); but benign periodic traffic vastly outnumbers it on any network, so base rate favours false positives
 tuning: [bd.min_samples (5), bd.min_interval_s (10), bd.max_jitter_pct (25) - v1; bd.min_samples_v2 (12), bd.min_concentration_pct (60) - v2; bd.max_findings (16, 1..64) - open-findings cap (#148); pcap.min_severity (default CRIT, so a WARN exports no pcap unless lowered to 0), pcap.key_cooldown_secs]
 researched: 2026-10-27
@@ -159,22 +159,28 @@ not a verdict.
 
 Reference-host noise verdict: **noisy**, and the arithmetic shows why it
 is benign noise rather than 173M attacks. 172,989,288 fires on 40 keys is
-~4.3M re-evaluations per key; at the <=4 evaluations/s tick rate that is
-~12.5 days of continuously-held beacon state per destination. In other
-words, 40 long-lived periodic flows (NTP, telemetry, keepalives) were
-strong for essentially the whole capture and re-fired every tick - the
-count is dominated by re-evaluation of a handful of persistent benign
-beacons, not by new incidents. (One bound worth stating: since #148 at
-most 16 seats plus the overflow key fire per tick, so 173M fires at
-<= 4 ticks/s need at least ~29 days of continuously-held state in
-aggregate; if the capture was shorter, the figure predates the cap or
-`--refresh-ms` was below 250. The metrics do not say which.) The mitigations that matter are already in
+~4.3M re-evaluations per key; ticks run at 4/s or more (POLL_MS 250 is
+the longest wait, include/sloth.h:28), so that is at most ~12.5 days of
+continuously-held beacon state per destination. In other words, long-lived
+periodic flows (NTP, telemetry, keepalives) stayed strong for days and
+re-fired every tick - the count is dominated by re-evaluation of a handful
+of persistent benign beacons, not by new incidents. (One bound worth stating: since #148 at
+most 16 seats plus the overflow key fire per tick, so 173M fires need at
+least 173M / 17 = ~10.2M ticks, which at 4 or more ticks/s is at most
+~29 days with every slot full; the 40 keys therefore took turns in the 17
+slots rather than all being open for most of the run. A shorter capture
+with the same total would mean the figure predates the cap. The metrics
+do not say which.) The mitigations that matter are already in
 place: the per-destination key collapses each flow to one incident, and
 the #148 cap bounds *open* findings to 16 + overflow. The remaining
 problem is purely the `count` metric being read as if it were callouts;
-the honest figure is `observations` (moves only when period/jitter/n
-changes) and the incident count (40). Recommendations if an operator
-wants it quieter: (a) trend `observations`/incidents, never `count`; (b)
+the honest figure is the incident count (40), not `observations`: the
+detail carries `n`, which grows with every callout until the 16-sample
+window fills, and then the sliding window moves period/jitter, so each
+change - against a stored `detail_sig` refreshed only on an emitted event
+(engine.c:487, 534) - makes `observations` follow `evaluations` for up to
+60 s. Recommendations if an operator wants it quieter: (a) trend the
+incident count and a per-track callout total, never `count`; (b)
 raise `bd.min_interval_s` to push past fast keepalives, or raise
 `bd.min_concentration_pct` / lower `bd.max_jitter_pct` to tighten v2/v1;
 (c) maintain a destination allowlist of known periodic services so NTP
@@ -290,3 +296,5 @@ is not supported by the reachable source; [7] now cites that page and
 the body sentence says so. Worth a follow-up in the repo: the v2 design
 rationale in `beacon_detect.h` rests on two jitter figures neither of
 which its cited sources state.
+
+Review pass (2026-11-01). Reversed the bounds: 250 ms is the longest wait between ticks, so 12.5 days per key and ~29 days in aggregate are both upper bounds. Dropped "40 flows open for most of the capture" (only 17 keys fire per tick). Withdrew the `observations` recommendation: `n` grows with every callout until BD_MAX_SAMPLES (16), then period/jitter move with the window, and `observations` rises whenever the new detail differs from the stored `detail_sig`, which is refreshed only on an emitted event (engine.c:487-488, 519, 534), so a detail that moves at all makes it track `evaluations` between 60 s updates.
