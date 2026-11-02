@@ -1315,26 +1315,55 @@ static void test_makefile_installs_ble_scan_without_enabling(void) {
  * only the IP families. make installs it to share/sloth, never to the
  * unit directory (test_makefile_installs_ble_scan_without_enabling
  * already fails on any .service.d install into $(UNITDIR)). Seen red
- * with `#` removed from the serial block's `#[Service]`. */
+ * with `#` removed from the serial block's `#[Service]`.
+ *
+ * Each directive is checked in its own block, not just somewhere in the
+ * file: the fail-closed property is PrivateDevices=false travelling
+ * WITH DevicePolicy=closed and the read-only DeviceAllow, so an edit
+ * that moved DevicePolicy into the gpsd block would leave an operator
+ * who uncomments the serial block with the host's whole /dev. Seen red
+ * with `#DevicePolicy=closed` moved below the gpsd block's `#[Service]`,
+ * and with `#RestrictAddressFamilies=...` moved into the serial block. */
 static void test_gps_dropin_is_inert_and_scoped(void) {
     char *buf = uf_slurp("packaging/systemd/sloth-sensor.service.d/gps.conf");
     ASSERT(buf != NULL);
     if (!buf) return;
-    int live = 0, pd = 0, policy = 0, allow_r = 0, groups = 0, fam = 0;
+    /* [0] preamble, [1] serial block, [2] gpsd block. */
+    int live = 0, blk = 0, headings = 0;
+    int pd[3] = {0}, policy[3] = {0}, allow_r[3] = {0}, groups[3] = {0}, fam[3] = {0};
     for (char *l = strtok(buf, "\n"); l; l = strtok(NULL, "\n")) {
         if (l[0] != '#' && l[0] != '\0') {
             fprintf(stderr, "    gps.conf has a live line: %s\n", l);
             live++;
         }
-        if (!strcmp(l, "#PrivateDevices=false")) pd = 1;
-        if (!strcmp(l, "#DevicePolicy=closed")) policy = 1;
-        if (!strncmp(l, "#DeviceAllow=/dev/tty", 21) &&
-            !strcmp(l + strlen(l) - 2, " r")) allow_r = 1;
-        if (!strcmp(l, "#SupplementaryGroups=dialout")) groups = 1;
-        if (!strcmp(l, "#RestrictAddressFamilies=AF_INET AF_INET6")) fam = 1;
+        if (!strncmp(l, "# \xe2\x94\x80\xe2\x94\x80 Serial NMEA", 17)) { blk = 1; headings++; }
+        if (!strncmp(l, "# \xe2\x94\x80\xe2\x94\x80 gpsd over TCP", 19)) { blk = 2; headings++; }
+        if (!strcmp(l, "#PrivateDevices=false")) pd[blk]++;
+        if (!strcmp(l, "#DevicePolicy=closed")) policy[blk]++;
+        if (!strncmp(l, "#DeviceAllow=", 13)) {
+            if (!strncmp(l, "#DeviceAllow=/dev/tty", 21) &&
+                !strcmp(l + strlen(l) - 2, " r"))
+                allow_r[blk]++;
+            else
+                allow_r[blk] += 100;   /* any other DeviceAllow is wrong */
+        }
+        if (!strcmp(l, "#SupplementaryGroups=dialout")) groups[blk]++;
+        if (!strncmp(l, "#RestrictAddressFamilies=", 25)) {
+            if (!strcmp(l, "#RestrictAddressFamilies=AF_INET AF_INET6")) fam[blk]++;
+            else fam[blk] += 100;
+        }
     }
     ASSERT_EQ(live, 0);
-    ASSERT(pd && policy && allow_r && groups && fam);
+    ASSERT_EQ(headings, 2);
+    for (int b = 0; b < 3; b++) {
+        /* serial: the device directives once each, no families */
+        ASSERT_EQ(pd[b], b == 1);
+        ASSERT_EQ(policy[b], b == 1);
+        ASSERT_EQ(allow_r[b], b == 1);
+        ASSERT_EQ(groups[b], b == 1);
+        /* gpsd: the families once, nothing about devices */
+        ASSERT_EQ(fam[b], b == 2);
+    }
     free(buf);
 
     char *mk = uf_slurp("Makefile");

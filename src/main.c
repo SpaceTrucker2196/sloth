@@ -1483,14 +1483,12 @@ int main(int argc, char **argv) {
             g_platform.cleanup();
             return 2;
         }
-        if (gps_arg[0] == '/')
-            fprintf(stderr, "sloth: --gps reading NMEA 0183 from %s "
-                            "(receive-only: nothing is written to the "
-                            "device)\n", gps_arg);
-        else
-            fprintf(stderr, "sloth: --gps connecting to gpsd at %s over TCP "
-                            "after the privilege drop; sloth sends one "
-                            "?WATCH line, then only reads\n", gps_arg + 7);
+        gps_spec_t gsp;
+        char ann[400];
+        if (gps_spec_parse(gps_arg, &gsp, NULL, 0) == 0) {
+            gps_spec_announce(&gsp, ann, sizeof(ann));
+            fprintf(stderr, "sloth: --gps %s\n", ann);
+        }
     }
 
     /* #140: drop here — every handle that needs CAP_NET_RAW is open,

@@ -1001,7 +1001,7 @@ copy works on plain http (a hidden textarea and `execCommand`) where
 sloth's `--location` / `--gps` stamp ([[location]]) reaches the page in
 two places. An alert's page gains a "where the sensor was" section
 (`#loc-alert`): the coordinates, the accuracy estimate, the altitude,
-the source and the fix's time, and a copy button. The device drawer
+the source and the time sloth received the fix, and a copy button. The device drawer
 gains a scatter (`#loc-drawer`) of where the **sensor** was each time
 it heard the device, coloured by RSSI, with the sensor's track, drawn
 on a local projection with no map tiles, and GeoJSON / GPX exports.
@@ -1010,7 +1010,9 @@ per view, so the rest of the page is unchanged. Server side:
 `web/src/web_loc.c` (the stamp, range-checked, from the stream's `loc`
 object or sloth.db v9's alerts columns) and `web/src/web_positions.c`
 (`/api/positions`, at most 200 samples an answer so the widest
-rendering fits the 64 KiB response). slothweb reads schema v1..v9;
+rendering fits the 64 KiB response; a cut answer says so in every
+format — JSON and GeoJSON `"more":true`, GPX `truncated` in its
+metadata). slothweb reads schema v1..v9;
 `device_positions`, `sensor_positions` and the six stamp columns are on
 the allow-list. Details: `web/README.md` *Sensor location*.
 

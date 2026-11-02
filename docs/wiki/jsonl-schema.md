@@ -307,7 +307,7 @@ signal the `ICMP_TUNNEL` rule keys on (added #40; older records omit it).
 | `evidence_count` | int | additive, #92 — how many evidence-ring frame IDs this incident cites, below. **Omitted** when the rule cited none. Populated by the no-IP wireless rules whose triggering frames are monitor frames (#92 slice 4; [[pcap-export]] § Which alerts cite frames is the list, and says what each rule cites) — because a frame with no IP has no flow to export on, so the ring's own frames are the only path from the alert back to the bytes that caused it |
 | `evidence_id_0` .. `evidence_id_7` | int | additive, #92 — the cited frames' evidence-ring IDs, oldest first, present for `0 .. evidence_count-1` only. Opaque and **not** the same thing as this record's own `event_id` below — look one up with the evidence-ring retrieval path, never by assuming it is a byte offset or a packet count. Refreshed on every evaluation: a long-running incident cites the IDs still resolvable in the ring, not the first ones it opened with, which the ring may since have evicted |
 | `incident_id` | string | additive, #98 — 16 hex chars identifying the incident this record opens. Join key into the `alert.*` lifecycle records below |
-| `loc` | object | additive, 2026-10-27 — where the sensor was as the incident opened ([[location]]): `{"lat":51.5007400,"lon":-0.1246900[,"alt_m":11.6][,"acc_m":4.5],"src":"gps","ts":1800000000}`. `lat`/`lon` WGS84 decimal degrees to 7 places, `alt_m` metres above mean sea level, `acc_m` an **estimate** of horizontal error (HDOP x 5 m, or gpsd's `eph`) omitted when the source gave none, `src` `"gps"` (a fix no older than `gps.max_fix_age_s`, `ts` the fix's time) or `"fixed"` (`--location`, `ts` the stamp time). Stamped once, when the incident opens, never refreshed. **Omitted entirely** when nothing was known — never `0,0`. The only nested object on this record; written without `%f`, so a decimal-comma locale cannot reach it |
+| `loc` | object | additive, 2026-10-27 — where the sensor was as the incident opened ([[location]]): `{"lat":51.5007400,"lon":-0.1246900[,"alt_m":11.6][,"acc_m":4.5],"src":"gps","ts":1800000000}`. `lat`/`lon` WGS84 decimal degrees to 7 places, `alt_m` metres above mean sea level, `acc_m` an **estimate** of horizontal error (HDOP x 5 m, or gpsd's `eph`) omitted when the source gave none, `src` `"gps"` (a fix no older than `gps.max_fix_age_s`, `ts` the wall-clock time sloth received the sentence or object carrying the position, not the receiver's UTC) or `"fixed"` (`--location`, `ts` the stamp time). Stamped once, when the incident opens, never refreshed. **Omitted entirely** when nothing was known — never `0,0`. The only nested object on this record; written without `%f`, so a decimal-comma locale cannot reach it |
 
 `ts` for alerts is the `last_seen` time of the dedup key, not the
 first observation.
@@ -935,13 +935,13 @@ The position itself is not here; it is on the alerts it stamps.
 | `gps_state` | `fixed` (`--location` alone), `searching` (a `--gps` source with no usable fix, or one that reported losing it), `fix` (a fix no older than `gps.max_fix_age_s`), `stale` (the newest fix is older; stamps fall back to `--location`, or to nothing) |
 | `gps_src` | `fixed`, `nmea:/dev/ttyACM0` or `gpsd:127.0.0.1:2947` |
 | `gps_fix_age_s` | seconds since the newest usable fix, -1 before any |
-| `gps_quality` | the newest GGA fix quality (0..8) or gpsd TPV mode (0..3); -1 none yet |
+| `gps_quality` | the newest GGA fix quality (0..8) or gpsd TPV mode (0..3); -1 before any GGA or TPV has said (an RMC or GSA alone leaves it -1) |
 | `gps_sats` | satellites in use (GGA, or gpsd `SKY` `uSat`); 0 unknown |
 | `gps_hdop` | horizontal dilution of precision, one decimal; 0 unknown |
 | `gps_sentences` | NMEA sentences / gpsd objects parsed, every type |
 | `gps_bad_checksum` | NMEA sentences refused for their checksum |
 | `gps_parse_errors` | lines refused otherwise: over length, malformed fields, not JSON |
-| `gps_reconnects` | reopens of the serial device / reconnects to gpsd after a loss |
+| `gps_reconnects` | open sessions to the serial device / gpsd that were lost (EOF, read error); each is followed by a reopen attempt. A failed open or connect is not counted: a gpsd that was never reachable reads 0 here and says why in `gps_err` |
 | `gps_positions_dropped` | device and track samples dropped because their queue was full before the `--db` writer drained it |
 | `gps_err` | the reader's last open, read or connect failure; `""` when none |
 

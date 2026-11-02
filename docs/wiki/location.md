@@ -36,7 +36,7 @@ gpsd(8) (https://gpsd.gitlab.io/gpsd/gpsd.html), the client HOWTO
 (https://gpsd.gitlab.io/gpsd/gpsd_json.html); RFC 7946 (GeoJSON); GPX
 1.1 (https://www.topografix.com/GPX/1/1/).
 
-**Last updated**: 2026-10-27.
+**Last updated**: 2026-11-02 (`loc_ts` is receipt time; a GSA never renews a position; a FIFO is treated as live; what leaves the host through slothweb and the data socket; `gps_reconnects` counts lost sessions; `gps_quality` -1 before any sentence). 2026-10-27.
 
 ## Sources of a position
 
@@ -62,6 +62,13 @@ never writes to it, so it cannot reconfigure the receiver. A lost
 device is reopened with backoff; after the drop that reopen may be
 refused, and `gps_err` says so.
 
+A FIFO is accepted in place of the device, for a stream the operator
+pipes in. sloth treats it **as live**: positions are stamped with the
+time they are read, not the time they were recorded, so a replayed
+track stamps today's alerts as if the sensor were there now. Use
+`--location` (or nothing) for a replay; `--replay` refuses `--gps` for
+this reason.
+
 **NMEA.** A sentence is accepted only with a correct checksum (the XOR
 of every byte between `$` and `*`) and at most 82 bytes from `$` to
 CRLF. The talker is ignored (`GP`, `GN`, `GL`, `GA`, `GB`, `BD`, ...);
@@ -83,7 +90,12 @@ position is a fix (altitude only from a 3D fix, `altMSL` before
 At the moment an incident opens:
 
 1. a GPS fix no older than `gps.max_fix_age_s` (30 s) — `loc_src` `gps`,
-   `loc_ts` the fix's own time;
+   `loc_ts` the wall-clock time sloth **received** the sentence or
+   object that carried the position (not the receiver's own UTC field,
+   which is parsed but not used). Only a sentence that carries a
+   position renews it: a `GSA` (DOP and mode, no position) never
+   re-stamps an older `GGA` / `RMC` position, so a line on which only
+   the short sentences survive their checksum lets the fix age out;
 2. otherwise `--location`, if given — `loc_src` `fixed`, `loc_ts` the
    stamp time;
 3. otherwise **nothing**. An unstamped record carries no `loc` key and
@@ -137,12 +149,16 @@ tables are in the observation retention tier (1x `db.retain_days`).
 
 A position track is personal data about whoever carries the sensor,
 and a device sample series says where a person's phone was heard. All
-of it stays on the sensor: the forensic log and the manifests are
-created 0600, `sloth.db` is the operator's file, and slothweb serves it
-only to its own page under its ACL. Nothing about a position is sent
-off the host; the one byte stream this feature sends at all is the
-`?WATCH` line to gpsd, loopback unless `--gps-allow-remote` says
-otherwise. Run without the flags and no position exists anywhere.
+of it is written on the sensor: the forensic log and the manifests are
+created 0600 and `sloth.db` is the operator's file. sloth itself sends
+no position anywhere; the one byte stream this feature sends at all is
+the `?WATCH` line to gpsd, loopback unless `--gps-allow-remote` says
+otherwise. The host as a whole can: slothweb serves alert `loc` and
+`/api/positions` (JSON, GeoJSON and GPX of the device samples and the
+sensor's track) to any client its bind address and ACL admit, and a
+`--data-socket` client receives every `loc` the stream carries. Bind
+and ACL those as you would the coordinates themselves. Run without the
+flags and no position exists anywhere.
 
 ## Deployment
 

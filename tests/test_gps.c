@@ -2,12 +2,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/poll.h>   /* not <poll.h>: -Isrc puts src/poll.h first */
+#include <sys/socket.h>
+#include <time.h>
 
 #include "runner.h"
 #include "tmp_dir.h"
 #include "sloth.h"
 #include "alerts.h"
 #include "gps.h"
+#include "capture/gps_reader.h"
 #include "jsonl.h"
 #include "position_track.h"
 #include "sloth_clock.h"
@@ -460,6 +466,66 @@ static void test_receiver_no_fix_stops_stamping(void) {
     ASSERT_EQ(s.gps.quality, 0);
 }
 
+/* The startup line names what is dialled. Seen red with the gpsd branch
+ * of gps_spec_announce() printing "" in place of the parsed label, which
+ * is what main.c's old `gps_arg + 7` printed for a bare "gpsd://"
+ * ("connecting to gpsd at  over TCP"). */
+static void test_gps_announce_names_what_it_dials(void) {
+    gps_spec_t sp;
+    char out[400];
+    ASSERT_EQ(gps_spec_parse("gpsd://", &sp, NULL, 0), 0);
+    gps_spec_announce(&sp, out, sizeof(out));
+    ASSERT(strstr(out, "gpsd at 127.0.0.1:2947 over TCP") != NULL);
+    ASSERT_EQ(gps_spec_parse("gpsd://[::1]:3000", &sp, NULL, 0), 0);
+    gps_spec_announce(&sp, out, sizeof(out));
+    ASSERT(strstr(out, "gpsd at [::1]:3000 over TCP") != NULL);
+    ASSERT_EQ(gps_spec_parse("/dev/ttyUSB0", &sp, NULL, 0), 0);
+    gps_spec_announce(&sp, out, sizeof(out));
+    ASSERT(strstr(out, "NMEA 0183 from /dev/ttyUSB0 (receive-only") != NULL);
+}
+
+/* A GSA carries no position, so it must not renew an older GGA's one.
+ * One GGA, then a 3D GSA every second past gps.max_fix_age_s: the GGA's
+ * position ages out and nothing stamps. Seen red with the pos_new test
+ * in gps_location_feed_nmea() removed (take_fix on every usable merge):
+ * the ten-minute-old position came back as a fresh GPS fix aged 0. */
+static void test_gsa_does_not_restamp_an_old_position(void) {
+    gps_location_set_gps("nmea:/dev/ttyUSB0");
+    nmea_fix_t f = feed_gga(1800000000);
+    for (time_t t = 1800000001; t <= 1800000600; t++) {
+        ASSERT_EQ(nmea_parse(S(GSA_SPEC), &f), 1);
+        gps_location_feed_nmea(&f, t);
+    }
+    loc_stamp_t l;
+    ASSERT_EQ(gps_location_current(&l, 1800000600), LOC_SRC_NONE);
+    ASSERT_EQ(gps_location_last_fix(&l), 1);
+    ASSERT_EQ((long long)l.ts, 1800000000LL);
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    gps_health_poll(&s, 1800000600);
+    ASSERT_EQ(s.gps.fix_age_s, 600);
+    ASSERT_EQ(s.gps.state, GPS_STALE);
+    /* A new GGA (with a position) still stamps at its own receipt. */
+    ASSERT_EQ(nmea_parse(S(GGA_SPEC), &f), 1);
+    gps_location_feed_nmea(&f, 1800000601);
+    ASSERT_EQ(gps_location_current(&l, 1800000601), LOC_SRC_GPS);
+    ASSERT_EQ((long long)l.ts, 1800000601LL);
+}
+
+/* Before any sentence, gps_quality is -1 ("none yet"), not GGA's 0
+ * ("no fix"). Seen red with g_loc's `.quality = -1` initialiser and the
+ * reset's re-arm both removed: the poll reported 0. */
+static void test_quality_is_minus_one_before_any_sentence(void) {
+    gps_location_set_gps("nmea:/dev/ttyUSB0");
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    gps_health_poll(&s, 1800000000);
+    ASSERT_EQ(s.gps.quality, -1);
+    feed_gga(1800000000);
+    gps_health_poll(&s, 1800000000);
+    ASSERT_EQ(s.gps.quality, 1);
+}
+
 /* gpsd: a 2D TPV stamps without altitude; mode 1 does not stamp; eph
  * is the accuracy, and SKY supplies satellites and HDOP. */
 static void test_gpsd_feed(void) {
@@ -484,6 +550,80 @@ static void test_gpsd_feed(void) {
     ASSERT_EQ(s.gps.sats, 7);
     ASSERT_NEAR(s.gps.hdop, 1.1, 1e-9);
     ASSERT_EQ(s.gps.quality, 2);
+}
+
+/* ── the reader's reconnect counter ────────────────────────── */
+
+static int loopback_listener(int *port) {
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    socklen_t al = sizeof(a);
+    if (bind(fd, (struct sockaddr *)&a, sizeof(a)) != 0 || listen(fd, 1) != 0 ||
+        getsockname(fd, (struct sockaddr *)&a, &al) != 0) {
+        close(fd);
+        return -1;
+    }
+    *port = ntohs(a.sin_port);
+    return fd;
+}
+
+static void nap_ms(long ms) {
+    struct timespec ts = { ms / 1000, (ms % 1000) * 1000000L };
+    nanosleep(&ts, NULL);
+}
+
+static uint64_t reconnects_now(void) {
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    gps_health_poll(&s, 1800000000);
+    return s.gps.reconnects;
+}
+
+/* gps_reconnects counts sessions lost after opening, not failed
+ * attempts: a gpsd that was never reachable reads 0 (and says why in
+ * gps_err), one that accepted and then hung up reads 1. The first half
+ * seen red with gps_location_note(0, 0, 0, 1) restored on the failed
+ * connect in gps_reader_thread(): it read 1 before any session existed.
+ * Loopback only; the "gpsd" is this test's own listener. */
+static void test_reconnects_count_lost_sessions_only(void) {
+    char err[160], spec[64];
+    int port = 0;
+    int lfd = loopback_listener(&port);
+    ASSERT(lfd >= 0);
+    close(lfd);                       /* nothing listens on port now */
+    snprintf(spec, sizeof(spec), "gpsd://127.0.0.1:%d", port);
+    ASSERT_EQ(gps_reader_configure(spec, 0, 0, err, sizeof(err)), 0);
+    gps_reader_run();
+    nap_ms(400);
+    gps_reader_stop();
+    ASSERT_EQ(reconnects_now(), 0u);
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    gps_health_poll(&s, 1800000000);
+    ASSERT(strstr(s.gps.err, "connect") != NULL);
+
+    lfd = loopback_listener(&port);
+    ASSERT(lfd >= 0);
+    snprintf(spec, sizeof(spec), "gpsd://127.0.0.1:%d", port);
+    ASSERT_EQ(gps_reader_configure(spec, 0, 0, err, sizeof(err)), 0);
+    gps_reader_run();
+    struct pollfd pfd = { lfd, POLLIN, 0 };
+    ASSERT_EQ(poll(&pfd, 1, 5000), 1);
+    int c = accept(lfd, NULL, NULL);
+    ASSERT(c >= 0);
+    char watch[64];
+    struct pollfd cp = { c, POLLIN, 0 };
+    if (poll(&cp, 1, 5000) == 1) (void)!read(c, watch, sizeof(watch));
+    close(c);                         /* the session is lost */
+    uint64_t r = 0;
+    for (int i = 0; i < 100 && (r = reconnects_now()) == 0; i++) nap_ms(50);
+    gps_reader_stop();
+    close(lfd);
+    ASSERT_EQ(r, 1u);
 }
 
 /* ── line framing and counters ─────────────────────────────── */
@@ -1030,7 +1170,11 @@ void run_gps_tests(void) {
     RUN_TEST(test_fix_age_boundary_falls_back_to_fixed);
     RUN_TEST(test_stale_fix_without_fixed_stamps_nothing);
     RUN_TEST(test_receiver_no_fix_stops_stamping);
+    RUN_TEST(test_gps_announce_names_what_it_dials);
+    RUN_TEST(test_gsa_does_not_restamp_an_old_position);
+    RUN_TEST(test_quality_is_minus_one_before_any_sentence);
     RUN_TEST(test_gpsd_feed);
+    RUN_TEST(test_reconnects_count_lost_sessions_only);
     RUN_TEST(test_lines_feed_counts);
     RUN_TEST(test_lines_feed_gpsd);
     TEST_SUITE("gps: formatting");

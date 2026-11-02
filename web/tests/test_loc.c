@@ -341,6 +341,9 @@ static void test_positions_geojson_and_gpx(void) {
     /* The track oldest first, [lon, lat] (RFC 7946 §3.1.1). */
     WT_HAS(b, "{\"type\":\"LineString\",\"coordinates\":[[11.2500000,48.5000000],"
               "[11.2500000,48.5000100]]}");
+    /* An uncut file says so. Seen red with `more` forced to 1 in the
+     * geojson_body() / gpx_body() calls. */
+    WT_HAS(b, "],\"more\":false,\"limit\":200}\n");
     WT_EQ(route(&H, "/api/positions", "mac=" MAC1 "&format=gpx"), 200);
     WT_HAS(g_out, "Content-Type: application/gpx+xml\r\n");
     b = body_of(g_out);
@@ -350,6 +353,7 @@ static void test_positions_geojson_and_gpx(void) {
     WT_HAS(b, "<trk><name>sensor</name><trkseg>\n<trkpt lat=\"48.5000000\" lon=\"11.2500000\">"
               "<ele>500.0</ele><time>");
     WT_HAS(b, "</trkseg></trk>\n</gpx>\n");
+    WT_LACKS(b, "truncated");
     down();
 }
 
@@ -367,8 +371,13 @@ static void test_positions_refusals_and_cap(void) {
     const char *b = body_of(g_out);
     /* The widest rendering of a full answer fits the server's one
      * buffer (the route table's out is 64 KiB here as in web_server.h). */
+    /* The exports say they were cut, as the JSON's "more" does. Seen red
+     * with `more` forced to 0 in the geojson_body() / gpx_body() calls. */
     WT_EQ(route(&H, "/api/positions", "mac=" MAC1 "&format=geojson"), 200);
+    WT_HAS(body_of(g_out), "],\"more\":true,\"limit\":200}\n");
     WT_EQ(route(&H, "/api/positions", "mac=" MAC1 "&format=gpx"), 200);
+    WT_HAS(body_of(g_out), "; truncated: only the newest 200 samples and the "
+                           "newest 200 track points of their span</desc></metadata>");
     WT_EQ(route(&H, "/api/positions", "mac=" MAC1), 200);
     b = body_of(g_out);
     WT_HAS(b, "\"more\":true");

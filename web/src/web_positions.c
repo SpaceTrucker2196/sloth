@@ -130,9 +130,11 @@ static void json_body(web_jw_t *w, const char *mac, const pos_t *d, int nd,
     web_jw_raw(w, "}\n");
 }
 
-/* RFC 7946: [lon, lat], WGS84, no "crs" member. */
+/* RFC 7946: [lon, lat], WGS84, no "crs" member. "more" and "limit" are
+ * foreign members (§6.1): a file cut at WEB_POS_MAX says so, as the
+ * JSON answer does, rather than passing for the whole series. */
 static void geojson_body(web_jw_t *w, const char *mac, const pos_t *d, int nd,
-                         const pos_t *t, int nt) {
+                         const pos_t *t, int nt, int more) {
     web_jw_raw(w, "{\"type\":\"FeatureCollection\",\"features\":[");
     for (int i = 0; i < nd; i++) {
         web_jw_raw(w, i ? ",{" : "{");
@@ -166,20 +168,32 @@ static void geojson_body(web_jw_t *w, const char *mac, const pos_t *d, int nd,
         web_jw_int(w, t[0].ts);
         web_jw_raw(w, "}}");
     }
-    web_jw_raw(w, "]}\n");
+    web_jw_raw(w, "],\"more\":");
+    web_jw_raw(w, more ? "true" : "false");
+    web_jw_raw(w, ",\"limit\":");
+    web_jw_int(w, WEB_POS_MAX);
+    web_jw_raw(w, "}\n");
 }
 
 /* GPX 1.1 (https://www.topografix.com/GPX/1/1/): attributes lat and lon,
  * <time> in UTC, <ele> metres. The MAC is canonical hex and colons, so
  * it needs no XML escaping; nothing else here is text. */
 static void gpx_body(web_jw_t *w, const char *mac, const pos_t *d, int nd,
-                     const pos_t *t, int nt) {
+                     const pos_t *t, int nt, int more) {
     web_jw_raw(w, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
                   "<gpx version=\"1.1\" creator=\"slothweb\""
                   " xmlns=\"http://www.topografix.com/GPX/1/1\">\n");
     web_jw_raw(w, "<metadata><desc>where the sensor was when it heard ");
     web_jw_raw(w, mac);
-    web_jw_raw(w, ", not where the device is</desc></metadata>\n");
+    web_jw_raw(w, ", not where the device is");
+    if (more) {
+        char b[160];
+        snprintf(b, sizeof(b), "; truncated: only the newest %d samples and "
+                 "the newest %d track points of their span", WEB_POS_MAX,
+                 WEB_POS_MAX);
+        web_jw_raw(w, b);
+    }
+    web_jw_raw(w, "</desc></metadata>\n");
     for (int i = nd - 1; i >= 0; i--) {
         web_jw_raw(w, "<wpt lat=\"");  num(w, d[i].lat, 7);
         web_jw_raw(w, "\" lon=\"");    num(w, d[i].lon, 7);
@@ -267,8 +281,8 @@ int web_positions_route(const web_m4_t *m, const char *query, long long now_s,
 #endif
     web_jw_t w;
     web_jw_init(&w, body, cap);
-    if (fmt == WEB_POS_GEOJSON)  geojson_body(&w, mac, d, nd, t, nt);
-    else if (fmt == WEB_POS_GPX) gpx_body(&w, mac, d, nd, t, nt);
+    if (fmt == WEB_POS_GEOJSON)  geojson_body(&w, mac, d, nd, t, nt, more);
+    else if (fmt == WEB_POS_GPX) gpx_body(&w, mac, d, nd, t, nt, more);
     else                         json_body(&w, mac, d, nd, t, nt, more);
     free(d);
     free(t);

@@ -55,8 +55,11 @@ static void set_err(const char *what, int e) {
 }
 
 /* Open the serial device read-only and put it in raw mode. Nothing is
- * written to it. A FIFO is accepted too (a recorded stream piped in by
- * the operator); termios is skipped for it. */
+ * written to it. A FIFO is accepted too (a stream piped in by the
+ * operator); termios is skipped for it. It is treated as live: a fix is
+ * stamped with the time it is read, never the NMEA UTC fields, so a
+ * recorded track replayed here stamps as if the sensor were there now
+ * (docs/wiki/location.md). */
 static int serial_open(char *err, size_t errsz) {
     int fd = open(g_spec.path, O_RDONLY | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
@@ -197,8 +200,10 @@ static void *gps_reader_thread(void *arg) {
             } else {
                 fd = gpsd_connect();
             }
+            /* A failed attempt is not a reconnect: a gpsd that was never
+             * reachable must not read as a flapping one. It shows in
+             * gps_err; gps_reconnects counts sessions lost below. */
             if (fd < 0) {
-                gps_location_note(0, 0, 0, 1);
                 backoff_wait(backoff);
                 backoff = backoff * 2 > GPS_BACKOFF_MAX ? GPS_BACKOFF_MAX : backoff * 2;
                 continue;
@@ -233,7 +238,7 @@ static void *gps_reader_thread(void *arg) {
         close(fd);
         fd = -1;
         if (capture_run_flag_get(&g_running)) {
-            gps_location_note(0, 0, 0, 1);
+            gps_location_note(0, 0, 0, 1);   /* an open session was lost */
             backoff_wait(backoff);
         }
     }
@@ -254,4 +259,5 @@ void gps_reader_stop(void) {
     if (capture_run_flag_take(&g_running))
         pthread_join(g_thread, NULL);
     if (g_fd >= 0) { close(g_fd); g_fd = -1; }
+    g_configured = 0;
 }

@@ -63,6 +63,10 @@ typedef struct {
     int      gsa_mode;          /* GSA field 2: 1 none, 2 2D, 3 3D; 0 no GSA */
     long     utc_hms;           /* hhmmss of the newest GGA/RMC, -1 unknown */
     long     utc_dmy;           /* ddmmyy of the newest RMC, -1 unknown */
+    int      pos_new;           /* 1 when the sentence last merged carried a
+                                 * position itself (GGA quality > 0 or RMC A
+                                 * with coordinates); a GSA never does, so it
+                                 * cannot re-stamp an older GGA/RMC position */
 } nmea_fix_t;
 
 void nmea_fix_init(nmea_fix_t *f);
@@ -159,6 +163,11 @@ int  gps_spec_is_remote(const gps_spec_t *sp);
 /* "nmea:/dev/ttyUSB0" / "gpsd:127.0.0.1:2947", as sensor_health and the
  * stamps name the source. */
 void gps_spec_label(const gps_spec_t *sp, char *out, size_t outsz);
+
+/* The startup announcement for a parsed spec, naming what is actually
+ * opened or dialled (a bare "gpsd://" says 127.0.0.1:2947), not the
+ * operator's spelling of it. */
+void gps_spec_announce(const gps_spec_t *sp, char *out, size_t outsz);
 
 /* ── Arbitration state ─────────────────────────────────────────── *
  * All under one mutex: the reader thread feeds, the main thread reads. */

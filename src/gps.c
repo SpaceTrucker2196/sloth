@@ -141,7 +141,7 @@ int nmea_parse(const char *line, size_t n, nmea_fix_t *f) {
     const char *body = line + 1;
     size_t blen = n - 1;
 
-    fld_t fl[NMEA_MAX_FIELDS];
+    fld_t fl[NMEA_MAX_FIELDS] = {{0}};
     int nf = 0;
     size_t start = 0;
     for (size_t i = 0; i <= blen; i++) {
@@ -160,6 +160,7 @@ int nmea_parse(const char *line, size_t n, nmea_fix_t *f) {
 
     /* Merge into a copy so a malformed sentence changes nothing. */
     nmea_fix_t t = *f;
+    t.pos_new = 0;
     if (memcmp(type, "GGA", 3) == 0) {
         if (nf < 10) return -1;
         long q = 0;
@@ -190,6 +191,7 @@ int nmea_parse(const char *line, size_t n, nmea_fix_t *f) {
             t.lat = lat;
             t.lon = lon;
             t.valid_lat_lon = 1;
+            t.pos_new = 1;
             t.has_alt = 0;
             if (fl[9].n) {
                 double alt;
@@ -217,6 +219,7 @@ int nmea_parse(const char *line, size_t n, nmea_fix_t *f) {
             t.lat = lat;
             t.lon = lon;
             t.valid_lat_lon = 1;
+            t.pos_new = 1;
         }
     } else if (memcmp(type, "GSA", 3) == 0) {
         if (nf < 18) return -1;
@@ -499,6 +502,20 @@ void gps_spec_label(const gps_spec_t *sp, char *out, size_t outsz) {
         snprintf(out, outsz, "gpsd:%s:%d", sp->host, sp->port);
 }
 
+void gps_spec_announce(const gps_spec_t *sp, char *out, size_t outsz) {
+    if (!out || !outsz) return;
+    if (!sp) { out[0] = '\0'; return; }
+    char label[300];
+    gps_spec_label(sp, label, sizeof(label));
+    if (sp->kind == GPS_SPEC_SERIAL)
+        snprintf(out, outsz, "reading NMEA 0183 from %s (receive-only: "
+                 "nothing is written to the device)", sp->path);
+    else
+        snprintf(out, outsz, "connecting to gpsd at %s over TCP after the "
+                 "privilege drop; sloth sends one ?WATCH line, then only "
+                 "reads", label + 5);   /* past "gpsd:" */
+}
+
 /* ── Arbitration state ─────────────────────────────────────────── */
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -516,7 +533,7 @@ static struct {
     int      quality;
     char     err[96];
     uint64_t sentences, bad_checksum, parse_errors, reconnects;
-} g_loc;
+} g_loc = { .quality = -1 };
 
 static int range_ok(double lat, double lon) {
     return lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0 &&
@@ -599,11 +616,14 @@ void gps_location_feed_nmea(const nmea_fix_t *f, time_t wall) {
     if (f->sats >= 0) g_loc.sats = f->sats;
     if (f->has_hdop) g_loc.hdop = f->hdop;
     g_loc.quality = f->quality >= 0 ? f->quality : g_loc.quality;
-    if (nmea_fix_usable(f))
+    /* Only a sentence that carried a position stamps one: a GSA (or a
+     * GGA/RMC that still says "fix") leaves the older position to age
+     * out against gps.max_fix_age_s rather than renewing it at `wall`. */
+    if (!nmea_fix_usable(f))
+        g_loc.fix_live = 0;   /* the receiver said it has no fix */
+    else if (f->pos_new)
         take_fix(f->lat, f->lon, f->has_alt, f->alt_m,
                  f->has_hdop, nmea_acc_m(f->hdop), wall);
-    else
-        g_loc.fix_live = 0;   /* the receiver said it has no fix */
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -716,6 +736,7 @@ void gps_health_poll(sloth_state_t *s, time_t now) {
 void gps_location_reset(void) {
     pthread_mutex_lock(&g_mu);
     memset(&g_loc, 0, sizeof(g_loc));
+    g_loc.quality = -1;
     pthread_mutex_unlock(&g_mu);
 }
 

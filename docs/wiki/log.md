@@ -5977,3 +5977,10 @@ report events.
   scatter and `/api/positions` (JSON, GeoJSON, GPX); the inert
   `gps.conf` drop-in. Pages touched: [[cli-reference]], [[jsonl-schema]],
   [[sqlite-schema]], [[pcap-export]], [[deployment]], [[slothweb]].
+- 2026-11-02 — [[location]] review: a `GSA` no longer re-stamps an
+  older `GGA` / `RMC` position as a fresh fix; `loc_ts` / `loc.ts` is
+  stated as receipt time and a piped FIFO as treated live;
+  `gps_quality` is -1 before any GGA or TPV; `gps_reconnects` counts
+  lost sessions, not failed attempts; the privacy section says what
+  slothweb and the data socket serve. [[slothweb]]: a cut GeoJSON or
+  GPX export says so. Pages touched: [[jsonl-schema]], [[slothweb]].

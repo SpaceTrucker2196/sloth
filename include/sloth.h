@@ -912,7 +912,8 @@ typedef struct loc_stamp {
     double  lat, lon;
     double  alt_m;
     double  acc_m;
-    time_t  ts;
+    time_t  ts;         /* GPS: wall time the position was received (not
+                         * the receiver's UTC); fixed: the stamp time */
 } loc_stamp_t;
 
 typedef struct {
