@@ -161,7 +161,7 @@ Sampling and freshness for the position stamp; no rule reads a position. → [[l
 | Knob | Default | Range | Meaning |
 |------|---------|-------|---------|
 | `gps.min_move_m` | 5 | 0..100000 | metres the GPS fix must move before a device's position sample (and the sensor's track) is taken again |
-| `gps.sample_s` | 60 | 1..86400 | seconds between samples of a device still being heard while the sensor is at rest |
+| `gps.sample_s` | 60 | 1..86400 | at rest: the sensor's track interval, the least gap before a device's RSSI band change is sampled, and /10 of a device's keep-alive interval ([[location]]) |
 | `gps.max_fix_age_s` | 30 | 1..3600 | a GPS fix older than this stamps nothing; `--location`, when given, stands in |
 
 `--refresh-ms` is deliberately not a knob: it is UI cadence, not a detector or retention decision.

@@ -36,7 +36,7 @@ gpsd(8) (https://gpsd.gitlab.io/gpsd/gpsd.html), the client HOWTO
 (https://gpsd.gitlab.io/gpsd/gpsd_json.html); RFC 7946 (GeoJSON); GPX
 1.1 (https://www.topografix.com/GPX/1/1/).
 
-**Last updated**: 2026-11-02 (`loc_ts` is receipt time; a GSA never renews a position; a FIFO is treated as live; what leaves the host through slothweb and the data socket; `gps_reconnects` counts lost sessions; `gps_quality` -1 before any sentence). 2026-10-27.
+**Last updated**: 2026-11-02 (a fix is aged on sloth's monotonic clock, and ends when its source goes away; a GSA mode 1 no longer ends a fix; out-of-range accuracy and altitude are dropped; a parked sensor's device sample rate and the `--location` recommendation). 2026-11-02 (`loc_ts` is receipt time; a GSA never renews a position; a FIFO is treated as live; what leaves the host through slothweb and the data socket; `gps_reconnects` counts lost sessions; `gps_quality` -1 before any sentence). 2026-10-27.
 
 ## Sources of a position
 
@@ -77,13 +77,32 @@ is counted and skipped. Numbers are parsed without `strtod()`, so the
 locale cannot change them. A fix is usable when it has a position and
 GGA fix quality 1 to 5; quality 6 (dead reckoning), 7 (manual input)
 and 8 (simulation) are reported but **never stamp**. A receiver saying
-it has no fix (GGA quality 0, RMC status `V`, GSA mode 1) stops the
-stamping at once rather than after `gps.max_fix_age_s`.
+it has no fix (GGA quality 0, RMC status `V`) stops the stamping at
+once rather than after `gps.max_fix_age_s`. A `GSA` mode 1 does **not**
+end a fix: from NMEA 4.10 a multi-GNSS receiver sends one `GSA` per
+constellation (system ID in field 18), and one contributing no
+satellites says mode 1 while the combined fix is 3D. Ending the fix on
+it flapped the position, and `gps_state` with it, inside every epoch.
+
+**A source that goes away ends the fix.** EOF on the device or the
+gpsd socket, a read error, or an unplugged receiver ends the fix at
+once (`gps_state` `searching`), rather than leaving the last position
+to stamp until `gps.max_fix_age_s` passes.
 
 **gpsd.** sloth connects, sends `?WATCH={"enable":true,"json":true}`
 and reads one JSON object per line. A `TPV` with `mode` 2 or 3 and a
 position is a fix (altitude only from a 3D fix, `altMSL` before
 `altHAE`); `SKY` supplies the satellites in use and HDOP.
+
+**Bounds.** A position that is not finite or lies outside -90..90 /
+-180..180 is ignored entirely. An accuracy (gpsd `eph`,
+`hypot(epx, epy)`, or HDOP x 5 m from either source) that is not
+finite or lies outside 0..100000 m, and an altitude that is not finite
+or lies outside -1000..20000 m (`--location`'s range), are dropped from
+the fix (`acc_m` / `alt_m` absent) rather than recorded: gpsd's JSON
+numbers take any exponent, and `"eph":1e400` reads as infinity, which
+would otherwise reach the JSONL, the `--db` REAL columns and
+`/api/positions`. A non-finite or negative `SKY` HDOP is not recorded.
 
 ## Which position stamps
 
@@ -92,7 +111,10 @@ At the moment an incident opens:
 1. a GPS fix no older than `gps.max_fix_age_s` (30 s) — `loc_src` `gps`,
    `loc_ts` the wall-clock time sloth **received** the sentence or
    object that carried the position (not the receiver's own UTC field,
-   which is parsed but not used). Only a sentence that carries a
+   which is parsed but not used). The **age** is measured on sloth's
+   monotonic clock from that receipt, not from `loc_ts`: a wall-clock
+   step (NTP correcting a Pi's fake-hwclock, an operator setting the
+   date) neither keeps an old fix fresh nor ages a new one. Only a sentence that carries a
    position renews it: a `GSA` (DOP and mode, no position) never
    re-stamps an older `GGA` / `RMC` position, so a line on which only
    the short sentences survive their checksum lets the fix age out;
@@ -138,12 +160,28 @@ position lives in its manifest line, which also carries its SHA-256.
 **Sampling** (`src/position_track.c`). Each tick with a fresh GPS fix,
 for every device heard in the last two seconds, a sample is queued
 when the fix has moved `gps.min_move_m` (5 m) since that device's last
-sample or `gps.sample_s` (60 s) have passed; the sensor's own track on
-the same rule. Nothing is sampled from `--location` alone (every row
+sample. **At rest** (moved less than that) a repeat row would only
+restate the same coordinates, so one is queued only when the device's
+RSSI has changed 10 dB band and `gps.sample_s` (60 s) have passed, or
+as a keep-alive every `gps.sample_s` x 10 (10 min). The sensor's own
+track is queued on a move or every `gps.sample_s`. Nothing is sampled from `--location` alone (every row
 would repeat it) or without `--db` to drain the queue. The queues are
 bounded (2048 device samples, 256 track points); a full queue drops
 its oldest sample and counts it in `gps_positions_dropped`. Both
 tables are in the observation retention tier (1x `db.retain_days`).
+
+**Row rate.** Moving, `device_positions` gains one row per heard device
+per `gps.min_move_m` travelled, at most one per device per tick. Parked,
+it gains one row per heard device per 10 minutes, plus one per RSSI
+band change (no more than one a minute per device): 300 devices in
+steady signal is about 43,000 rows a day, and up to the old 430,000 a
+day only if every device's band changes every minute.
+`sensor_positions` gains one row a minute at rest. **For a sensor that
+does not move, use `--location`, not `--gps`**: it stamps every alert
+with the surveyed position, writes no samples at all (every row would
+repeat it), and needs no receiver. If a parked sensor must keep its
+receiver, raise `gps.sample_s` to cut both tables' at-rest rate in
+proportion.
 
 ## Privacy
 

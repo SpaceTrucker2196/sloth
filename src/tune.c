@@ -263,7 +263,7 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
      * sample or sample_s have elapsed; a fix older than max_fix_age_s
      * stamps nothing (a fixed --location then stands in, if given). */
     { "gps.min_move_m",             5, 0, 100000, "metres the GPS fix must move before a device position is sampled again" },
-    { "gps.sample_s",               60, 1, 86400, "seconds between device position samples at rest" },
+    { "gps.sample_s",               60, 1, 86400, "at rest: sensor track interval; device keep-alive is 10x this" },
     { "gps.max_fix_age_s",          30, 1, 3600, "seconds after which a GPS fix is stale and stamps nothing" },
 };
 

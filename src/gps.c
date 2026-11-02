@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "gps.h"
+#include "sloth_clock.h"
 #include "tune.h"
 
 /* Contract in gps.h. Everything here is pure except the arbitration
@@ -234,7 +235,12 @@ int nmea_parse(const char *line, size_t n, nmea_fix_t *f) {
             t.has_hdop = 1;
             t.hdop = h;
         }
-        if (mode == 1) t.valid_lat_lon = 0;
+        /* GSA never ends a fix. From NMEA 4.10 a multi-GNSS receiver
+         * sends one GSA per constellation (field 18, the system ID), and
+         * one that contributes no satellites says mode 1 while the
+         * combined fix is 3D: clearing on it flapped the position inside
+         * every epoch. GGA quality 0 and RMC status V are the receiver's
+         * "no fix", and they are per fix, not per constellation. */
     } else {
         return 0;
     }
@@ -527,7 +533,8 @@ static struct {
     char     label[48];
     int      ever_fix;      /* a usable fix has arrived at least once */
     int      fix_live;      /* the receiver has not since said "no fix" */
-    loc_stamp_t fix;        /* the newest usable fix */
+    loc_stamp_t fix;        /* the newest usable fix; fix.ts is wall */
+    uint64_t fix_mono;      /* sloth_mono_ms() at its receipt: the age */
     int      sats;
     double   hdop;
     int      quality;
@@ -536,8 +543,24 @@ static struct {
 } g_loc = { .quality = -1 };
 
 static int range_ok(double lat, double lon) {
-    return lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0 &&
-           lat == lat && lon == lon;   /* NaN fails both */
+    return isfinite(lat) && isfinite(lon) &&
+           lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0;
+}
+
+/* The bounds a receiver's figures must sit inside before sloth records
+ * them. gpsd's JSON numbers may carry any exponent ("eph":1e400 reads as
+ * +inf) and a GGA field may hold 24 digits, and either would reach the
+ * JSONL, the --db REAL columns and /api/positions as inf or as a value
+ * gps_fmt_fixed() cannot print. Altitude takes --location's range. */
+#define GPS_ACC_MAX_M 1e5
+static int acc_ok(double acc) {
+    return isfinite(acc) && acc >= 0.0 && acc <= GPS_ACC_MAX_M;
+}
+static int alt_ok(double alt) {
+    return isfinite(alt) && alt >= -1000.0 && alt <= 20000.0;
+}
+static int hdop_ok(double hdop) {
+    return isfinite(hdop) && hdop >= 0.0 && acc_ok(nmea_acc_m(hdop));
 }
 
 int gps_location_set_fixed(double lat, double lon, double alt_m, int has_alt,
@@ -598,6 +621,8 @@ void gps_location_set_gps(const char *label) {
 static void take_fix(double lat, double lon, int has_alt, double alt,
                      int has_acc, double acc, time_t wall) {
     if (!range_ok(lat, lon)) return;
+    if (has_alt && !alt_ok(alt)) has_alt = 0;
+    if (has_acc && !acc_ok(acc)) has_acc = 0;
     g_loc.fix.src = LOC_SRC_GPS;
     g_loc.fix.lat = lat;
     g_loc.fix.lon = lon;
@@ -606,6 +631,7 @@ static void take_fix(double lat, double lon, int has_alt, double alt,
     g_loc.fix.has_acc = has_acc ? 1 : 0;
     g_loc.fix.acc_m = has_acc ? acc : 0.0;
     g_loc.fix.ts = wall;
+    g_loc.fix_mono = sloth_mono_ms();
     g_loc.ever_fix = 1;
     g_loc.fix_live = 1;
 }
@@ -614,7 +640,8 @@ void gps_location_feed_nmea(const nmea_fix_t *f, time_t wall) {
     if (!f) return;
     pthread_mutex_lock(&g_mu);
     if (f->sats >= 0) g_loc.sats = f->sats;
-    if (f->has_hdop) g_loc.hdop = f->hdop;
+    int hdop_good = f->has_hdop && hdop_ok(f->hdop);
+    if (hdop_good) g_loc.hdop = f->hdop;
     g_loc.quality = f->quality >= 0 ? f->quality : g_loc.quality;
     /* Only a sentence that carried a position stamps one: a GSA (or a
      * GGA/RMC that still says "fix") leaves the older position to age
@@ -623,7 +650,7 @@ void gps_location_feed_nmea(const nmea_fix_t *f, time_t wall) {
         g_loc.fix_live = 0;   /* the receiver said it has no fix */
     else if (f->pos_new)
         take_fix(f->lat, f->lon, f->has_alt, f->alt_m,
-                 f->has_hdop, nmea_acc_m(f->hdop), wall);
+                 hdop_good, nmea_acc_m(f->hdop), wall);
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -632,7 +659,7 @@ void gps_location_feed_gpsd(const gpsd_msg_t *m, time_t wall) {
     pthread_mutex_lock(&g_mu);
     if (m->cls == GPSD_CLS_SKY) {
         if (m->has_usat) g_loc.sats = m->usat;
-        if (m->has_hdop) g_loc.hdop = m->hdop;
+        if (m->has_hdop && hdop_ok(m->hdop)) g_loc.hdop = m->hdop;
     } else if (m->cls == GPSD_CLS_TPV && m->mode >= 0) {
         g_loc.quality = m->mode;
         if (m->mode >= 2 && m->has_lat && m->has_lon) {
@@ -662,24 +689,40 @@ void gps_location_note(int sentences, int bad_checksum, int parse_errors,
     pthread_mutex_unlock(&g_mu);
 }
 
+void gps_location_source_lost(void) {
+    pthread_mutex_lock(&g_mu);
+    g_loc.fix_live = 0;
+    pthread_mutex_unlock(&g_mu);
+}
+
 void gps_location_set_err(const char *err) {
     pthread_mutex_lock(&g_mu);
     snprintf(g_loc.err, sizeof(g_loc.err), "%s", err ? err : "");
     pthread_mutex_unlock(&g_mu);
 }
 
-/* Caller holds g_mu. 1 when the newest fix may stamp at `now`. */
-static int fix_fresh(time_t now) {
+/* Caller holds g_mu. Seconds since the newest fix arrived, on sloth's
+ * monotonic clock: a wall-clock step (NTP correcting a fake-hwclock Pi,
+ * an operator setting the date) neither keeps an old fix fresh nor ages
+ * a new one. fix.ts stays wall time, as the stamp reports it. */
+static long fix_age_s(void) {
+    uint64_t now = sloth_mono_ms();
+    if (now <= g_loc.fix_mono) return 0;
+    uint64_t s = (now - g_loc.fix_mono) / 1000u;
+    return s > 0x7fffffffu ? 0x7fffffffL : (long)s;
+}
+
+/* Caller holds g_mu. 1 when the newest fix may stamp now. */
+static int fix_fresh(void) {
     if (!g_loc.has_gps || !g_loc.ever_fix || !g_loc.fix_live) return 0;
-    long age = (long)(now - g_loc.fix.ts);
-    return age <= tune_val(TUNE_GPS_MAX_FIX_AGE_S);
+    return fix_age_s() <= tune_val(TUNE_GPS_MAX_FIX_AGE_S);
 }
 
 int gps_location_current(loc_stamp_t *out, time_t now) {
     if (!out) return LOC_SRC_NONE;
     memset(out, 0, sizeof(*out));
     pthread_mutex_lock(&g_mu);
-    if (fix_fresh(now)) {
+    if (fix_fresh()) {
         *out = g_loc.fix;
     } else if (g_loc.has_fixed) {
         out->src = LOC_SRC_FIXED;
@@ -704,6 +747,7 @@ int gps_location_last_fix(loc_stamp_t *out) {
 
 void gps_health_poll(sloth_state_t *s, time_t now) {
     if (!s) return;
+    (void)now;   /* the fix's age is monotonic; see fix_age_s() */
     gps_health_t *h = &s->gps;
     memset(h, 0, sizeof(*h));
     pthread_mutex_lock(&g_mu);
@@ -711,13 +755,10 @@ void gps_health_poll(sloth_state_t *s, time_t now) {
     h->has_gps = g_loc.has_gps;
     h->configured = h->has_fixed || h->has_gps;
     h->fix_age_s = -1;
-    if (g_loc.ever_fix) {
-        long age = (long)(now - g_loc.fix.ts);
-        h->fix_age_s = age < 0 ? 0 : (age > 0x7fffffffL ? 0x7fffffff : (int)age);
-    }
+    if (g_loc.ever_fix) h->fix_age_s = (int)fix_age_s();
     if (!h->configured)            h->state = GPS_NONE;
     else if (!h->has_gps)          h->state = GPS_FIXED_ONLY;
-    else if (fix_fresh(now))       h->state = GPS_FIX;
+    else if (fix_fresh())          h->state = GPS_FIX;
     else if (g_loc.ever_fix && g_loc.fix_live) h->state = GPS_STALE;
     else                           h->state = GPS_SEARCHING;
     h->sats = g_loc.sats;

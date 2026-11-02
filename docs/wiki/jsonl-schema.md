@@ -932,12 +932,12 @@ The position itself is not here; it is on the alerts it stamps.
 
 | Field | Meaning |
 |---|---|
-| `gps_state` | `fixed` (`--location` alone), `searching` (a `--gps` source with no usable fix, or one that reported losing it), `fix` (a fix no older than `gps.max_fix_age_s`), `stale` (the newest fix is older; stamps fall back to `--location`, or to nothing) |
+| `gps_state` | `fixed` (`--location` alone), `searching` (a `--gps` source with no usable fix, one that reported losing it, or one whose device or gpsd connection went away), `fix` (a fix no older than `gps.max_fix_age_s`), `stale` (the newest fix is older; stamps fall back to `--location`, or to nothing) |
 | `gps_src` | `fixed`, `nmea:/dev/ttyACM0` or `gpsd:127.0.0.1:2947` |
-| `gps_fix_age_s` | seconds since the newest usable fix, -1 before any |
+| `gps_fix_age_s` | seconds since the newest usable fix arrived, on sloth's monotonic clock (a wall-clock step does not change it), -1 before any |
 | `gps_quality` | the newest GGA fix quality (0..8) or gpsd TPV mode (0..3); -1 before any GGA or TPV has said (an RMC or GSA alone leaves it -1) |
 | `gps_sats` | satellites in use (GGA, or gpsd `SKY` `uSat`); 0 unknown |
-| `gps_hdop` | horizontal dilution of precision, one decimal; 0 unknown |
+| `gps_hdop` | horizontal dilution of precision, one decimal; 0 unknown (a non-finite, negative or over-20000 HDOP is not recorded) |
 | `gps_sentences` | NMEA sentences / gpsd objects parsed, every type |
 | `gps_bad_checksum` | NMEA sentences refused for their checksum |
 | `gps_parse_errors` | lines refused otherwise: over length, malformed fields, not JSON |

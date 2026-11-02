@@ -135,8 +135,9 @@ static void test_nmea_quality_gates_the_fix(void) {
 }
 
 /* A receiver saying "no fix" clears the position it said before. Seen
- * red with each of the three clears removed from nmea_parse() in turn
- * (GGA quality 0, RMC status V, GSA mode 1): valid_lat_lon stays 1. */
+ * red with each of the two clears removed from nmea_parse() in turn
+ * (GGA quality 0, RMC status V): valid_lat_lon stays 1. A GSA mode 1
+ * does not clear it: test_multi_gnss_gsa_mode1_keeps_the_fix. */
 static void test_nmea_no_fix_sentences_clear_the_position(void) {
     nmea_fix_t f;
     nmea_fix_init(&f);
@@ -156,7 +157,8 @@ static void test_nmea_no_fix_sentences_clear_the_position(void) {
     ASSERT_EQ(nmea_parse(S(RMC_SPEC), &f), 1);
     ASSERT_EQ(nmea_parse(S("$GPGSA,A,1,,,,,,,,,,,,,,,*1E"), &f), 1);
     ASSERT_EQ(f.gsa_mode, 1);
-    ASSERT_EQ(f.valid_lat_lon, 0);
+    ASSERT_EQ(f.valid_lat_lon, 1);
+    ASSERT_EQ(nmea_fix_usable(&f), 1);   /* RMC A still says "fix" */
 }
 
 /* A malformed sentence returns -1 and changes nothing already merged.
@@ -369,10 +371,30 @@ static void test_location_parse_refusals(void) {
 
 /* ── arbitration ───────────────────────────────────────────── */
 
+/* A fix's age is monotonic (sloth_mono_ms at receipt), so every test
+ * that ages one drives both clocks through the seam: wall g_wall, and
+ * monotonic following it in step. */
+static time_t g_wall;
+static time_t gw_wall(void) { return g_wall; }
+static uint64_t gw_mono(void) { return (uint64_t)g_wall * 1000u; }
+static void clk(time_t w) {
+    g_wall = w;
+    sloth_clock_test_set(gw_mono, gw_wall);
+}
+static int cur_at(loc_stamp_t *l, time_t w) {
+    clk(w);
+    return gps_location_current(l, w);
+}
+static void poll_at(sloth_state_t *s, time_t w) {
+    clk(w);
+    gps_health_poll(s, w);
+}
+
 static nmea_fix_t feed_gga(time_t wall) {
     nmea_fix_t f;
     nmea_fix_init(&f);
     nmea_parse(S(GGA_SPEC), &f);
+    clk(wall);
     gps_location_feed_nmea(&f, wall);
     return f;
 }
@@ -380,12 +402,12 @@ static nmea_fix_t feed_gga(time_t wall) {
 static void test_nothing_configured_stamps_nothing(void) {
     loc_stamp_t l;
     memset(&l, 0x5a, sizeof(l));
-    ASSERT_EQ(gps_location_current(&l, 1800000000), LOC_SRC_NONE);
+    ASSERT_EQ(cur_at(&l, 1800000000), LOC_SRC_NONE);
     ASSERT_EQ(l.src, LOC_SRC_NONE);
     ASSERT_EQ(l.lat, 0.0);   /* zeroed, not left as it was */
     TEST_STATE(s);
     memset(&s, 0, sizeof(s));
-    gps_health_poll(&s, 1800000000);
+    poll_at(&s, 1800000000);
     ASSERT_EQ(s.gps.configured, 0);
     ASSERT_EQ(s.gps.state, GPS_NONE);
 }
@@ -398,14 +420,14 @@ static void test_gps_fix_wins_over_fixed(void) {
     gps_location_set_gps("nmea:/dev/ttyUSB0");
     feed_gga(1800000000);
     loc_stamp_t l;
-    ASSERT_EQ(gps_location_current(&l, 1800000005), LOC_SRC_GPS);
+    ASSERT_EQ(cur_at(&l, 1800000005), LOC_SRC_GPS);
     ASSERT_NEAR(l.lat, 48.1173, 1e-9);
     ASSERT_EQ(l.has_acc, 1);
     ASSERT_NEAR(l.acc_m, 4.5, 1e-9);
     ASSERT_EQ((long long)l.ts, 1800000000LL);
     TEST_STATE(s);
     memset(&s, 0, sizeof(s));
-    gps_health_poll(&s, 1800000005);
+    poll_at(&s, 1800000005);
     ASSERT_EQ(s.gps.state, GPS_FIX);
     ASSERT_EQ(s.gps.sats, 8);
     ASSERT_EQ(s.gps.fix_age_s, 5);
@@ -421,13 +443,13 @@ static void test_fix_age_boundary_falls_back_to_fixed(void) {
     gps_location_set_gps("nmea:/dev/ttyUSB0");
     feed_gga(1800000000);
     loc_stamp_t l;
-    ASSERT_EQ(gps_location_current(&l, 1800000030), LOC_SRC_GPS);
-    ASSERT_EQ(gps_location_current(&l, 1800000031), LOC_SRC_FIXED);
+    ASSERT_EQ(cur_at(&l, 1800000030), LOC_SRC_GPS);
+    ASSERT_EQ(cur_at(&l, 1800000031), LOC_SRC_FIXED);
     ASSERT_NEAR(l.lat, 10.0, 1e-9);
     ASSERT_EQ((long long)l.ts, 1800000031LL);
     TEST_STATE(s);
     memset(&s, 0, sizeof(s));
-    gps_health_poll(&s, 1800000031);
+    poll_at(&s, 1800000031);
     ASSERT_EQ(s.gps.state, GPS_STALE);
     ASSERT_EQ(s.gps.fix_age_s, 31);
 }
@@ -440,8 +462,8 @@ static void test_stale_fix_without_fixed_stamps_nothing(void) {
     feed_gga(1800000000);
     ASSERT_EQ(tune_set("gps.max_fix_age_s=10", NULL, 0), 0);
     loc_stamp_t l;
-    ASSERT_EQ(gps_location_current(&l, 1800000010), LOC_SRC_GPS);
-    ASSERT_EQ(gps_location_current(&l, 1800000011), LOC_SRC_NONE);
+    ASSERT_EQ(cur_at(&l, 1800000010), LOC_SRC_GPS);
+    ASSERT_EQ(cur_at(&l, 1800000011), LOC_SRC_NONE);
     ASSERT_EQ(l.src, LOC_SRC_NONE);
     ASSERT_EQ(l.lat, 0.0);
     /* The raw fix is still there for the sampler and the tests. */
@@ -458,10 +480,10 @@ static void test_receiver_no_fix_stops_stamping(void) {
     ASSERT_EQ(nmea_parse(S("$GPGGA,123519,,,,,0,00,,,M,,M,,*6B"), &f), 1);
     gps_location_feed_nmea(&f, 1800000001);
     loc_stamp_t l;
-    ASSERT_EQ(gps_location_current(&l, 1800000001), LOC_SRC_NONE);
+    ASSERT_EQ(cur_at(&l, 1800000001), LOC_SRC_NONE);
     TEST_STATE(s);
     memset(&s, 0, sizeof(s));
-    gps_health_poll(&s, 1800000001);
+    poll_at(&s, 1800000001);
     ASSERT_EQ(s.gps.state, GPS_SEARCHING);
     ASSERT_EQ(s.gps.quality, 0);
 }
@@ -497,18 +519,18 @@ static void test_gsa_does_not_restamp_an_old_position(void) {
         gps_location_feed_nmea(&f, t);
     }
     loc_stamp_t l;
-    ASSERT_EQ(gps_location_current(&l, 1800000600), LOC_SRC_NONE);
+    ASSERT_EQ(cur_at(&l, 1800000600), LOC_SRC_NONE);
     ASSERT_EQ(gps_location_last_fix(&l), 1);
     ASSERT_EQ((long long)l.ts, 1800000000LL);
     TEST_STATE(s);
     memset(&s, 0, sizeof(s));
-    gps_health_poll(&s, 1800000600);
+    poll_at(&s, 1800000600);
     ASSERT_EQ(s.gps.fix_age_s, 600);
     ASSERT_EQ(s.gps.state, GPS_STALE);
     /* A new GGA (with a position) still stamps at its own receipt. */
     ASSERT_EQ(nmea_parse(S(GGA_SPEC), &f), 1);
     gps_location_feed_nmea(&f, 1800000601);
-    ASSERT_EQ(gps_location_current(&l, 1800000601), LOC_SRC_GPS);
+    ASSERT_EQ(cur_at(&l, 1800000601), LOC_SRC_GPS);
     ASSERT_EQ((long long)l.ts, 1800000601LL);
 }
 
@@ -519,11 +541,182 @@ static void test_quality_is_minus_one_before_any_sentence(void) {
     gps_location_set_gps("nmea:/dev/ttyUSB0");
     TEST_STATE(s);
     memset(&s, 0, sizeof(s));
-    gps_health_poll(&s, 1800000000);
+    poll_at(&s, 1800000000);
     ASSERT_EQ(s.gps.quality, -1);
     feed_gga(1800000000);
-    gps_health_poll(&s, 1800000000);
+    poll_at(&s, 1800000000);
     ASSERT_EQ(s.gps.quality, 1);
+}
+
+/* A multi-GNSS receiver (NMEA 4.10) sends one GSA per constellation
+ * inside an epoch, the system ID in field 18: here GPS (1) at mode 3 and
+ * GLONASS (2) at mode 1, contributing nothing, while the combined GN fix
+ * is 3D. The fix holds through every sentence of two epochs. Seen red
+ * with `if (mode == 1) t.valid_lat_lon = 0;` restored in nmea_parse()'s
+ * GSA branch: the state flips to searching after each GLONASS GSA. */
+static void test_multi_gnss_gsa_mode1_keeps_the_fix(void) {
+    static const char *const epoch[] = {
+        "$GNGGA,123519,4807.038,N,01131.000,E,1,14,0.8,545.4,M,46.9,M,,*55",
+        "$GNRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*74",
+        "$GNGSA,A,3,04,05,09,12,24,,,,,,,,1.6,0.8,1.4,1*36",
+        "$GNGSA,A,1,,,,,,,,,,,,,,,,2*1E",
+    };
+    gps_location_set_gps("nmea:/dev/ttyUSB0");
+    nmea_fix_t f;
+    nmea_fix_init(&f);
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    loc_stamp_t l;
+    for (time_t t = 1800000000; t < 1800000002; t++) {
+        clk(t);
+        for (size_t i = 0; i < sizeof(epoch) / sizeof(epoch[0]); i++) {
+            ASSERT_EQ(nmea_parse(epoch[i], strlen(epoch[i]), &f), 1);
+            gps_location_feed_nmea(&f, t);
+            ASSERT_EQ(gps_location_current(&l, t), LOC_SRC_GPS);
+            gps_health_poll(&s, t);
+            ASSERT_EQ(s.gps.state, GPS_FIX);
+        }
+    }
+    ASSERT_EQ(f.gsa_mode, 1);
+    ASSERT_EQ(f.valid_lat_lon, 1);
+}
+
+/* gpsd's numbers may carry any exponent. Out-of-range or non-finite
+ * accuracy and altitude are dropped from the fix, not recorded; a
+ * non-finite or out-of-range position is not a fix at all. Each line
+ * hand-built per gpsd_json.html's TPV/SKY. Seen red with take_fix()'s
+ * acc_ok()/alt_ok() checks removed (acc_m inf, alt_m 1e300, acc_m -50
+ * kept), with range_ok()'s isfinite() and bounds turned to `1` (the
+ * 1e400 latitude stamps), and with SKY's hdop_ok() removed (hdop inf). */
+static void test_gpsd_out_of_range_figures_are_dropped(void) {
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    gpsd_msg_t m;
+    loc_stamp_t l;
+    clk(1800000000);
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":3,\"lat\":51.5,"
+                                "\"lon\":-0.1,\"altMSL\":1e300,\"eph\":1e400}"), &m), 1);
+    gps_location_feed_gpsd(&m, 1800000000);
+    ASSERT_EQ(gps_location_current(&l, 1800000000), LOC_SRC_GPS);
+    ASSERT_NEAR(l.lat, 51.5, 1e-9);
+    ASSERT_EQ(l.has_acc, 0);
+    ASSERT_EQ(l.has_alt, 0);
+    char js[256];
+    ASSERT(gps_loc_json(&l, js, sizeof(js)) > 0);
+    ASSERT(strstr(js, "acc_m") == NULL);
+    ASSERT(strstr(js, "alt_m") == NULL);
+
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":3,\"lat\":51.6,"
+                                "\"lon\":-0.1,\"altMSL\":-1001,\"eph\":-50}"), &m), 1);
+    gps_location_feed_gpsd(&m, 1800000000);
+    ASSERT_EQ(gps_location_current(&l, 1800000000), LOC_SRC_GPS);
+    ASSERT_NEAR(l.lat, 51.6, 1e-9);
+    ASSERT_EQ(l.has_acc, 0);
+    ASSERT_EQ(l.has_alt, 0);
+
+    /* In range on both sides: kept. */
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":3,\"lat\":51.7,"
+                                "\"lon\":-0.1,\"altMSL\":20000,\"eph\":1e5}"), &m), 1);
+    gps_location_feed_gpsd(&m, 1800000000);
+    ASSERT_EQ(gps_location_current(&l, 1800000000), LOC_SRC_GPS);
+    ASSERT_EQ(l.has_acc, 1);
+    ASSERT_NEAR(l.acc_m, 1e5, 1e-6);
+    ASSERT_EQ(l.has_alt, 1);
+    ASSERT_NEAR(l.alt_m, 20000.0, 1e-9);
+
+    /* A non-finite or out-of-range position is ignored entirely: the
+     * 51.7 fix stands. */
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":3,\"lat\":1e400,"
+                                "\"lon\":-0.1}"), &m), 1);
+    gps_location_feed_gpsd(&m, 1800000000);
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":3,\"lat\":51.5,"
+                                "\"lon\":-1e400}"), &m), 1);
+    gps_location_feed_gpsd(&m, 1800000000);
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":3,\"lat\":90.5,"
+                                "\"lon\":-0.1}"), &m), 1);
+    gps_location_feed_gpsd(&m, 1800000000);
+    ASSERT_EQ(gps_location_current(&l, 1800000000), LOC_SRC_GPS);
+    ASSERT_NEAR(l.lat, 51.7, 1e-9);
+
+    /* SKY: a non-finite or negative HDOP is not recorded, and so never
+     * becomes a TPV's accuracy estimate. */
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"SKY\",\"hdop\":1e400}"), &m), 1);
+    gps_location_feed_gpsd(&m, 1800000000);
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"SKY\",\"hdop\":-2}"), &m), 1);
+    gps_location_feed_gpsd(&m, 1800000000);
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    gps_health_poll(&s, 1800000000);
+    ASSERT_EQ(s.gps.hdop, 0.0);
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":2,\"lat\":51.8,"
+                                "\"lon\":-0.1}"), &m), 1);
+    gps_location_feed_gpsd(&m, 1800000000);
+    ASSERT_EQ(gps_location_current(&l, 1800000000), LOC_SRC_GPS);
+    ASSERT_NEAR(l.lat, 51.8, 1e-9);
+    ASSERT_EQ(l.has_acc, 0);
+}
+
+/* NMEA's HDOP is digits, so never inf, but HDOP 99999 x 5 is past
+ * 1e5 m and no accuracy, and a GGA altitude past 20000 m is none. Seen
+ * red with feed_nmea's hdop_ok() turned to `1` and take_fix()'s checks
+ * removed (acc_m 499995 and alt_m 30000 kept). */
+static void test_nmea_out_of_range_figures_are_dropped(void) {
+    static const char *const gga =
+        "$GPGGA,123519,4807.038,N,01131.000,E,1,08,99999,30000.0,M,46.9,M,,*5A";
+    gps_location_set_gps("nmea:/dev/ttyUSB0");
+    nmea_fix_t f;
+    nmea_fix_init(&f);
+    ASSERT_EQ(nmea_parse(gga, strlen(gga), &f), 1);
+    ASSERT_EQ(f.has_hdop, 1);
+    clk(1800000000);
+    gps_location_feed_nmea(&f, 1800000000);
+    loc_stamp_t l;
+    ASSERT_EQ(gps_location_current(&l, 1800000000), LOC_SRC_GPS);
+    ASSERT_NEAR(l.lat, 48.1173, 1e-9);
+    ASSERT_EQ(l.has_acc, 0);
+    ASSERT_EQ(l.has_alt, 0);
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    gps_health_poll(&s, 1800000000);
+    ASSERT_EQ(s.gps.hdop, 0.0);
+}
+
+/* Freshness is monotonic. The fix arrives at wall 5000; the wall clock
+ * then steps BACK to 1000 (NTP correcting a fake-hwclock Pi) while 31 s
+ * pass on the monotonic clock: the fix is stale, and the stamp, while
+ * it was fresh, reported its own wall receipt time. Seen red with
+ * fix_fresh() testing `now - g_loc.fix.ts` against gps.max_fix_age_s
+ * (the old wall rule): a negative age read as fresh and the 31 s old
+ * fix stamped as GPS. */
+static time_t g_bw_wall;
+static uint64_t g_bw_mono;
+static time_t bw_wall(void) { return g_bw_wall; }
+static uint64_t bw_mono(void) { return g_bw_mono; }
+static void test_fix_age_is_monotonic_across_a_wall_step_back(void) {
+    g_bw_wall = 5000;
+    g_bw_mono = 777000;
+    sloth_clock_test_set(bw_mono, bw_wall);
+    gps_location_set_gps("nmea:/dev/ttyUSB0");
+    nmea_fix_t f;
+    nmea_fix_init(&f);
+    ASSERT_EQ(nmea_parse(S(GGA_SPEC), &f), 1);
+    gps_location_feed_nmea(&f, g_bw_wall);
+    loc_stamp_t l;
+    g_bw_wall = 1000;                       /* the step back */
+    g_bw_mono += 30000;
+    ASSERT_EQ(gps_location_current(&l, g_bw_wall), LOC_SRC_GPS);
+    ASSERT_EQ((long long)l.ts, 5000LL);     /* loc_ts: wall at receipt */
+    g_bw_mono += 1000;                      /* 31 s on */
+    ASSERT_EQ(gps_location_current(&l, g_bw_wall), LOC_SRC_NONE);
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    gps_health_poll(&s, g_bw_wall);
+    ASSERT_EQ(s.gps.state, GPS_STALE);
+    ASSERT_EQ(s.gps.fix_age_s, 31);
+    /* And a step FORWARD does not age a new fix. */
+    gps_location_feed_nmea(&f, g_bw_wall);
+    g_bw_wall += 3600;
+    ASSERT_EQ(gps_location_current(&l, g_bw_wall), LOC_SRC_GPS);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 /* gpsd: a 2D TPV stamps without altitude; mode 1 does not stamp; eph
@@ -536,17 +729,17 @@ static void test_gpsd_feed(void) {
     ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":1,\"lat\":1.0,\"lon\":2.0}"), &m), 1);
     gps_location_feed_gpsd(&m, 1800000000);
     loc_stamp_t l;
-    ASSERT_EQ(gps_location_current(&l, 1800000000), LOC_SRC_NONE);
+    ASSERT_EQ(cur_at(&l, 1800000000), LOC_SRC_NONE);
     ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":2,\"lat\":1.5,"
                                 "\"lon\":2.5,\"altMSL\":40,\"epx\":3,\"epy\":4}"), &m), 1);
     gps_location_feed_gpsd(&m, 1800000001);
-    ASSERT_EQ(gps_location_current(&l, 1800000001), LOC_SRC_GPS);
+    ASSERT_EQ(cur_at(&l, 1800000001), LOC_SRC_GPS);
     ASSERT_NEAR(l.lat, 1.5, 1e-9);
     ASSERT_EQ(l.has_alt, 0);               /* 2D */
     ASSERT_NEAR(l.acc_m, 5.0, 1e-9);       /* hypot(epx, epy) */
     TEST_STATE(s);
     memset(&s, 0, sizeof(s));
-    gps_health_poll(&s, 1800000001);
+    poll_at(&s, 1800000001);
     ASSERT_EQ(s.gps.sats, 7);
     ASSERT_NEAR(s.gps.hdop, 1.1, 1e-9);
     ASSERT_EQ(s.gps.quality, 2);
@@ -624,6 +817,45 @@ static void test_reconnects_count_lost_sessions_only(void) {
     gps_reader_stop();
     close(lfd);
     ASSERT_EQ(r, 1u);
+}
+
+/* A source that goes away ends the fix at once, not gps.max_fix_age_s
+ * later: gpsd sends a 3D TPV, the fix stamps, gpsd hangs up, and by the
+ * time the lost session is counted nothing stamps. Seen red with the
+ * gps_location_source_lost() call removed from gps_reader_thread(): the
+ * seconds-old fix kept stamping as GPS after the hang-up. Loopback only;
+ * the "gpsd" is this test's own listener. Real clocks: the reader thread
+ * runs, so the seam is not swapped. */
+static void test_reader_eof_ends_the_fix(void) {
+    char err[160], spec[64];
+    int port = 0;
+    int lfd = loopback_listener(&port);
+    ASSERT(lfd >= 0);
+    if (lfd < 0) return;
+    snprintf(spec, sizeof(spec), "gpsd://127.0.0.1:%d", port);
+    ASSERT_EQ(gps_reader_configure(spec, 0, 0, err, sizeof(err)), 0);
+    gps_reader_run();
+    struct pollfd pfd = { lfd, POLLIN, 0 };
+    ASSERT_EQ(poll(&pfd, 1, 5000), 1);
+    int c = accept(lfd, NULL, NULL);
+    ASSERT(c >= 0);
+    static const char tpv[] =
+        "{\"class\":\"TPV\",\"mode\":3,\"lat\":51.5,\"lon\":-0.1,\"eph\":8}\n";
+    ASSERT_EQ(write(c, tpv, sizeof(tpv) - 1), (ssize_t)(sizeof(tpv) - 1));
+    loc_stamp_t l;
+    int src = LOC_SRC_NONE;
+    for (int i = 0; i < 100; i++) {
+        if ((src = gps_location_current(&l, time(NULL))) == LOC_SRC_GPS) break;
+        nap_ms(50);
+    }
+    ASSERT_EQ(src, LOC_SRC_GPS);
+    close(c);                         /* gpsd goes away */
+    uint64_t r = 0;
+    for (int i = 0; i < 100 && (r = reconnects_now()) == 0; i++) nap_ms(50);
+    ASSERT_EQ(r, 1u);
+    ASSERT_EQ(gps_location_current(&l, time(NULL)), LOC_SRC_NONE);
+    gps_reader_stop();
+    close(lfd);
 }
 
 /* ── line framing and counters ─────────────────────────────── */
@@ -761,15 +993,11 @@ static void jl_open(void) {
     ASSERT(jsonl_open(g_jl));
 }
 
-static time_t g_wall;
-
 static int scan_alert(const sloth_state_t *s) {
     for (int i = 0; i < s->alert_count; i++)
         if (!strcmp(s->alerts[i].key, "scan:192.0.2.9")) return i;
     return -1;
 }
-static time_t gw_wall(void) { return g_wall; }
-static uint64_t gw_mono(void) { return (uint64_t)g_wall * 1000u; }
 
 /* The stamp is taken where the incident opens, and both JSONL records
  * of that opening carry it. */
@@ -970,6 +1198,7 @@ static void fix_at(double lat, time_t wall) {
     m.has_lat = m.has_lon = 1;
     m.lat = lat;
     m.lon = 11.0;
+    clk(wall);
     gps_location_feed_gpsd(&m, wall);
 }
 
@@ -987,6 +1216,7 @@ static void test_postrack_samples_on_move_or_interval(void) {
     time_t t = 1800000000;
     add_dev(&s, 1, t, -60);
     fix_at(48.0, t);
+    clk(t);
     postrack_tick(&s, t);
     static postrack_sample_t out[16];
     static postrack_sensor_t so[16];
@@ -999,6 +1229,7 @@ static void test_postrack_samples_on_move_or_interval(void) {
     t += 1;
     s.devices[0].last_seen = t;
     fix_at(48.0 + 4 * DEG_PER_M, t);
+    clk(t);
     postrack_tick(&s, t);
     ASSERT_EQ(postrack_drain_devices(out, 16), 0);
     ASSERT_EQ(postrack_drain_sensor(so, 16), 0);
@@ -1006,15 +1237,65 @@ static void test_postrack_samples_on_move_or_interval(void) {
     t += 1;
     s.devices[0].last_seen = t;
     fix_at(48.0 + 6 * DEG_PER_M, t);
+    clk(t);
     postrack_tick(&s, t);
     ASSERT_EQ(postrack_drain_devices(out, 16), 1);
     ASSERT_EQ(postrack_drain_sensor(so, 16), 1);
 
+    /* At rest, gps.sample_s on: the sensor's own track samples; the
+     * device, unchanged in band, waits (test_postrack_at_rest_...). */
     t += 60;                                         /* gps.sample_s */
     s.devices[0].last_seen = t;
     fix_at(48.0 + 6 * DEG_PER_M, t);
+    clk(t);
+    postrack_tick(&s, t);
+    ASSERT_EQ(postrack_drain_devices(out, 16), 0);
+    ASSERT_EQ(postrack_drain_sensor(so, 16), 1);
+}
+
+/* A parked sensor: the device's row is not restated every gps.sample_s.
+ * At rest a sample is written when the device's RSSI 10 dB band changes
+ * (no sooner than gps.sample_s), or at gps.sample_s x 10. Seen red with
+ * device_due() replaced by the sensor's due() (the old rule: a row every
+ * gps.sample_s, so the 60 s and 120 s ticks below each sample). */
+static void test_postrack_at_rest_samples_on_band_change_or_long_interval(void) {
+    postrack_set_sink(1);
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    time_t t0 = 1800000000, t = t0;
+    static postrack_sample_t out[16];
+    add_dev(&s, 1, t, -62);
+    fix_at(48.0, t);
+    postrack_tick(&s, t);
+    ASSERT_EQ(postrack_drain_devices(out, 16), 1);   /* first sight */
+
+    for (t = t0 + 60; t < t0 + 600; t += 60) {       /* same band, -62..-68 */
+        s.devices[0].last_seen = t;
+        s.devices[0].signal_dbm = (int8_t)(t == t0 + 120 ? -68 : -62);
+        fix_at(48.0 + 2 * DEG_PER_M, t);             /* jitter, not a move */
+        postrack_tick(&s, t);
+        ASSERT_EQ(postrack_drain_devices(out, 16), 0);
+    }
+    t = t0 + 600;                                     /* gps.sample_s x 10 */
+    s.devices[0].last_seen = t;
+    fix_at(48.0, t);
     postrack_tick(&s, t);
     ASSERT_EQ(postrack_drain_devices(out, 16), 1);
+
+    /* A band change 30 s on waits for gps.sample_s, then samples. */
+    t += 30;
+    s.devices[0].last_seen = t;
+    s.devices[0].signal_dbm = -45;
+    fix_at(48.0, t);
+    postrack_tick(&s, t);
+    ASSERT_EQ(postrack_drain_devices(out, 16), 0);
+    t += 30;
+    s.devices[0].last_seen = t;
+    fix_at(48.0, t);
+    postrack_tick(&s, t);
+    ASSERT_EQ(postrack_drain_devices(out, 16), 1);
+    ASSERT_EQ(out[0].rssi, -45);
 }
 
 /* No series from a fixed sensor, from a stale fix, from a device not
@@ -1031,24 +1312,29 @@ static void test_postrack_samples_nothing_without_a_moving_fix(void) {
     postrack_set_sink(1);
     ASSERT_EQ(gps_location_parse_fixed("48,11", err, sizeof(err)), 0);
     add_dev(&s, 1, t, -50);
+    clk(t);
     postrack_tick(&s, t);
     ASSERT_EQ(postrack_drain_devices(out, 16), 0);
 
     gps_location_set_gps("gpsd:127.0.0.1:2947");
     fix_at(48.0, t - 100);                           /* stale */
+    clk(t);
     postrack_tick(&s, t);
     ASSERT_EQ(postrack_drain_devices(out, 16), 0);
 
     fix_at(48.0, t);
     s.devices[0].last_seen = t - 10;                 /* not heard lately */
+    clk(t);
     postrack_tick(&s, t);
     ASSERT_EQ(postrack_drain_devices(out, 16), 0);
 
     s.devices[0].last_seen = t;
     postrack_set_sink(0);
+    clk(t);
     postrack_tick(&s, t);
     ASSERT_EQ(postrack_drain_devices(out, 16), 0);
     postrack_set_sink(1);
+    clk(t);
     postrack_tick(&s, t);
     ASSERT_EQ(postrack_drain_devices(out, 16), 1);
 }
@@ -1065,7 +1351,8 @@ static void test_postrack_queue_drops_oldest_and_counts(void) {
     for (int k = 0; k < 11; k++) {
         t += 60;
         for (int i = 0; i < s.device_count; i++) s.devices[i].last_seen = t;
-        fix_at(48.0, t);
+        fix_at(48.0 + k * 0.001, t);                  /* ~111 m a tick */
+        clk(t);
         postrack_tick(&s, t);
     }
     /* 2200 samples into 2048 slots. */
@@ -1131,12 +1418,12 @@ static void test_health_strip_gps_token(void) {
     ASSERT_EQ(gps_location_parse_fixed("10,20", err, sizeof(err)), 0);
     gps_location_set_gps("nmea:/dev/ttyUSB0");
     feed_gga(1800000000);
-    gps_health_poll(&s, 1800000002);
+    poll_at(&s, 1800000002);
     iface_fmt_health_strip(&s, buf, (int)sizeof(buf));
     ASSERT(strstr(buf, "  gps fix 8sat") != NULL);
-    gps_health_poll(&s, 1800000100);
+    poll_at(&s, 1800000100);
     gps_location_set_err("read: Input/output error");
-    gps_health_poll(&s, 1800000100);
+    poll_at(&s, 1800000100);
     iface_fmt_health_strip(&s, buf, (int)sizeof(buf));
     ASSERT(strstr(buf, "  gps stale 100s (using --location) err read: Input/output error") != NULL);
 }
@@ -1173,8 +1460,13 @@ void run_gps_tests(void) {
     RUN_TEST(test_gps_announce_names_what_it_dials);
     RUN_TEST(test_gsa_does_not_restamp_an_old_position);
     RUN_TEST(test_quality_is_minus_one_before_any_sentence);
+    RUN_TEST(test_multi_gnss_gsa_mode1_keeps_the_fix);
+    RUN_TEST(test_gpsd_out_of_range_figures_are_dropped);
+    RUN_TEST(test_nmea_out_of_range_figures_are_dropped);
+    RUN_TEST(test_fix_age_is_monotonic_across_a_wall_step_back);
     RUN_TEST(test_gpsd_feed);
     RUN_TEST(test_reconnects_count_lost_sessions_only);
+    RUN_TEST(test_reader_eof_ends_the_fix);
     RUN_TEST(test_lines_feed_counts);
     RUN_TEST(test_lines_feed_gpsd);
     TEST_SUITE("gps: formatting");
@@ -1190,6 +1482,7 @@ void run_gps_tests(void) {
     RUN_TEST(test_sensor_health_fix_age_is_bucketed);
     TEST_SUITE("gps: device position samples");
     RUN_TEST(test_postrack_samples_on_move_or_interval);
+    RUN_TEST(test_postrack_at_rest_samples_on_band_change_or_long_interval);
     RUN_TEST(test_postrack_samples_nothing_without_a_moving_fix);
     RUN_TEST(test_postrack_queue_drops_oldest_and_counts);
     TEST_SUITE("gps: TUI");

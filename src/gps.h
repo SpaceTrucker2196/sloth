@@ -45,9 +45,12 @@
 #define NMEA_MAX_LINE 82        /* "$" .. CRLF inclusive, per the spec */
 
 /* The receiver's state as GGA, RMC and GSA sentences merge into it.
- * -1 means "no sentence has said". A sentence with empty position
+ * -1 means "no sentence has said". A GGA or RMC with empty position
  * fields, an RMC with status V, or a GGA with quality 0 clears
- * valid_lat_lon: the receiver is telling us it has no fix. */
+ * valid_lat_lon: the receiver is telling us it has no fix. A GSA never
+ * clears it: from NMEA 4.10 a multi-GNSS receiver sends one GSA per
+ * constellation, and a constellation contributing nothing says mode 1
+ * while the combined fix stands. */
 typedef struct {
     int      valid_lat_lon;
     double   lat, lon;          /* decimal degrees, N and E positive */
@@ -185,16 +188,26 @@ int  gps_location_parse_fixed(const char *arg, char *err, size_t errsz);
 void gps_location_set_gps(const char *label);
 
 /* The reader's feeds. A usable NMEA fix or a TPV with mode >= 2 and a
- * position becomes the newest fix at `wall`; anything else only moves
- * the counters and the satellite / HDOP figures. */
+ * position becomes the newest fix, reported with wall time `wall` and
+ * aged on sloth_mono_ms() at its receipt; anything else only moves the
+ * counters and the satellite / HDOP figures. A position outside
+ * -90..90 / -180..180 or not finite is ignored entirely; an accuracy
+ * (eph, hypot(epx, epy), HDOP x 5) outside 0..1e5 m or an altitude
+ * outside -1000..20000 m, or either not finite, is dropped from the fix
+ * (has_acc / has_alt 0) rather than recorded. */
 void gps_location_feed_nmea(const nmea_fix_t *f, time_t wall);
 void gps_location_feed_gpsd(const gpsd_msg_t *m, time_t wall);
+
+/* The reader lost its source (EOF, read error, unplugged device, gpsd
+ * hung up): the fix ends now rather than after gps.max_fix_age_s. */
+void gps_location_source_lost(void);
 void gps_location_note(int sentences, int bad_checksum, int parse_errors,
                        int reconnects);
 void gps_location_set_err(const char *err);     /* "" clears */
 
 /* The stamp for `now`: GPS while the newest fix is at most
- * gps.max_fix_age_s old, the fixed position otherwise, else
+ * gps.max_fix_age_s old by sloth's monotonic clock (so a wall-clock
+ * step cannot keep an old fix fresh), the fixed position otherwise, else
  * LOC_SRC_NONE with *out zeroed. Returns out->src. */
 int  gps_location_current(loc_stamp_t *out, time_t now);
 

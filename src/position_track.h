@@ -16,8 +16,11 @@
  *
  * For each device heard in the last two seconds, a sample is queued
  * when the fix has moved gps.min_move_m since that device's previous
- * sample or gps.sample_s have passed. The sensor's own track is queued
- * on the same rule. The queues are drained by the --db writer into
+ * sample. At rest (moved less than that) one is queued only when the
+ * device's RSSI 10 dB band has changed and gps.sample_s have passed, or
+ * when gps.sample_s x 10 have passed: a parked sensor does not restate
+ * its own position once a minute for every device it hears. The
+ * sensor's own track is queued on a move or every gps.sample_s. The queues are drained by the --db writer into
  * device_positions / sensor_positions; with no sink attached nothing is
  * sampled. A queue that fills drops the oldest sample and counts it
  * (sensor_health gps_positions_dropped). */

@@ -13,6 +13,7 @@ typedef struct {
     int     used;
     time_t  ts;          /* of the last sample, also the LRU clock */
     double  lat, lon;
+    int     band;        /* rssi_band() of the last sample */
 } last_t;
 
 static int               g_sink;
@@ -27,12 +28,40 @@ static uint64_t          g_dropped;
 
 void postrack_set_sink(int on) { g_sink = on ? 1 : 0; }
 
-/* The sampling rule shared by devices and the sensor's own track. */
+static int moved(double llat, double llon, const loc_stamp_t *fix) {
+    return gps_distance_m(llat, llon, fix->lat, fix->lon) >=
+           (double)tune_val(TUNE_GPS_MIN_MOVE_M);
+}
+
+/* The sensor's own track: on a move, or every gps.sample_s. One row a
+ * minute at rest by default, which costs nothing. */
 static int due(time_t last_ts, double llat, double llon,
                const loc_stamp_t *fix, time_t now) {
     if (now - last_ts >= tune_val(TUNE_GPS_SAMPLE_S)) return 1;
-    return gps_distance_m(llat, llon, fix->lat, fix->lon) >=
-           (double)tune_val(TUNE_GPS_MIN_MOVE_M);
+    return moved(llat, llon, fix);
+}
+
+/* 10 dB bands of a device's signal, 0 for "no reading". */
+static int rssi_band(int dbm) {
+    if (dbm == 0) return 0;
+    if (dbm > -20) dbm = -20;
+    if (dbm < -100) dbm = -100;
+    return 1 + (-dbm) / 10;
+}
+
+/* A device. On a move, as the sensor's track. At rest (the sensor has
+ * moved less than gps.min_move_m since this device's last sample) a
+ * repeat row would only restate where the sensor already said it was,
+ * so one is written when the device's RSSI band has changed (no sooner
+ * than gps.sample_s), or every gps.sample_s x 10 as a keep-alive. A
+ * parked sensor hearing 300 devices otherwise wrote 300 rows a minute,
+ * ~430k a day, of the same coordinates. */
+static int device_due(const last_t *l, int band, const loc_stamp_t *fix,
+                      time_t now) {
+    if (moved(l->lat, l->lon, fix)) return 1;
+    long since = (long)(now - l->ts), every = tune_val(TUNE_GPS_SAMPLE_S);
+    if (since >= every * 10) return 1;
+    return band != l->band && since >= every;
 }
 
 static void push_device(const postrack_sample_t *smp) {
@@ -98,7 +127,8 @@ void postrack_tick(const sloth_state_t *s, time_t now) {
         const device_t *d = &s->devices[i];
         if (d->last_seen <= 0 || now - d->last_seen > 2) continue;
         last_t *l = slot_for(d->mac);
-        if (l->used && !due(l->ts, l->lat, l->lon, &fix, now)) continue;
+        int band = rssi_band(d->signal_dbm);
+        if (l->used && !device_due(l, band, &fix, now)) continue;
         postrack_sample_t smp;
         memset(&smp, 0, sizeof(smp));
         snprintf(smp.mac, sizeof(smp.mac), "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -114,6 +144,7 @@ void postrack_tick(const sloth_state_t *s, time_t now) {
         l->ts = now;
         l->lat = fix.lat;
         l->lon = fix.lon;
+        l->band = band;
     }
 }
 

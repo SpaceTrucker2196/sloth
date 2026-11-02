@@ -237,6 +237,9 @@ static void *gps_reader_thread(void *arg) {
         }
         close(fd);
         fd = -1;
+        /* Whatever ended the session (EOF, a read error, an unplugged
+         * device), the position it gave is no longer being confirmed. */
+        gps_location_source_lost();
         if (capture_run_flag_get(&g_running)) {
             gps_location_note(0, 0, 0, 1);   /* an open session was lost */
             backoff_wait(backoff);

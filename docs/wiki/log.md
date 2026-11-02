@@ -5984,3 +5984,14 @@ report events.
   lost sessions, not failed attempts; the privacy section says what
   slothweb and the data socket serve. [[slothweb]]: a cut GeoJSON or
   GPX export says so. Pages touched: [[jsonl-schema]], [[slothweb]].
+- 2026-11-02 — [[location]] review round 2: a fix is aged on sloth's
+  monotonic clock from its receipt (`loc_ts` stays wall time), so a
+  wall-clock step back no longer keeps an old fix fresh; EOF, a read
+  error or an unplugged receiver ends the fix at once; a `GSA` mode 1
+  no longer ends a fix (NMEA 4.10 sends one per constellation); a
+  non-finite or out-of-range position is ignored, and accuracy outside
+  0..100000 m or altitude outside -1000..20000 m is dropped from the
+  fix rather than recorded; `device_positions` at rest samples only on
+  an RSSI band change or every `gps.sample_s` x 10, with the row rate
+  and the `--location` recommendation for a parked sensor. Pages
+  touched: [[sqlite-schema]], [[jsonl-schema]].
