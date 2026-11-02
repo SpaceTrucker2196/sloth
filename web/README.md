@@ -725,15 +725,19 @@ docs/web-ui-spec.md §5.1, and every one of its metrics has a source
 | `wifi.probe_clients` | gauge | none | `probe_client` rows per snapshot pass |
 | `conns.total` | gauge | none | `connections` rows per snapshot pass |
 | `flow.ssh`, `flow.rdp`, `flow.smb`, `flow.snmp`, `flow.mqtt` | counter | IP | deltas of `ssh_flow` `banner_count`, `rdp_flow` `connect_req_count`, `smb_session` `count` (by `client_ip`), `snmp_flow` get+getnext+getbulk+set+response+trap, `mqtt_flow` connect+subscribe+publish, per flow, by source |
+| `live.devices`, `live.alerts_open`, `live.anomalies_open` | gauge | none | docs/web-visual-spec.md §7 (V1, F1): sampled once a batch (below), from `web_live_summary()`'s device count and open incident severities (low+warn+crit summed) and from `web_anomaly_open_count()`. Each needs its source wired first (`web_metrics_set_live()`, `web_metrics_set_anomaly()`); unwired, neither is sampled at all, not sampled at 0 |
+| `records.rate` | counter | record type | every decoded record but `socket_gap`, one per line, keyed by its own `type` |
+| `sensor.drops` | counter | none | §7: `sensor_health` `capture_drop_delta` + `capture_ifdrop_delta` + `monitor_drop_delta` + `monitor_ifdrop_delta`, every tick, including the 0 of a healthy one -- a flat line, not a gap |
 
 A key is a canonical form checked by type: a MAC is lower-case
 `xx:xx:xx:xx:xx:xx` (all zeros, sloth's "no MAC", is not one), an IP is
 what `inet_ntop()` writes back for what `inet_pton()` accepted, an
 interface name is 1..15 bytes of `[A-Za-z0-9_.:@-]`, a channel is
 1..233 with `6g` in front on 6 GHz (5 and 6 GHz share numbers), an alert
-type is `ty` 0..9999. A record whose key does not pass is not counted,
-so no string a peer wrote is ever a key as it was sent. Gauges take
-sloth's `%.2f` reals.
+type is `ty` 0..9999, a record type is 1..32 bytes of `[a-z0-9_.]` (the
+same charset `web_live.c`'s own `type_ok()` holds it to). A record whose
+key does not pass is not counted, so no string a peer wrote is ever a
+key as it was sent. Gauges take sloth's `%.2f` reals.
 
 **Running totals.** `frame_count`, `count` and the flow counts are
 high-water marks. Each is turned into a delta against the last value
@@ -765,6 +769,14 @@ poll-thread record. `connections` is written just before its tick's
 tick's connections and the previous tick's probe clients. The partial
 window a connection opens in is not sampled, nor is one that a
 `socket_gap` or an undecodable line may have cut.
+
+`live.devices` and `live.alerts_open` sample at the same batch start,
+but unlike `conns.total` they are not gated on the batch being untainted:
+`web_live_t`'s own device count already holds its last *published*
+value through a taint (`web_live.c`'s `devices_step()`), so the sample
+is the same figure `/api/live` would answer, not a stale reread of a
+half-built pass. `live.anomalies_open` samples on the same tick, from
+whichever `web_anomaly_t` was wired in, independent of `web_live_t`.
 
 Bucketing uses slothweb's clock, never a record's `ts`: a hostile `ts`
 could otherwise write anywhere in history.

@@ -124,6 +124,8 @@ int main(int argc, char **argv) {
                         "was\n");
     web_metrics_set_ident(&g_metrics, &g_ident);
     web_metrics_set_mix(&g_metrics, &g_chmix);
+    web_metrics_set_live(&g_metrics, &g_live);
+    web_metrics_set_anomaly(&g_metrics, &g_anomaly);
     web_tsdb_set_mix(&g_tsdb, &g_chmix);
     web_ident_set_ptr(&g_ident, &g_ptr);
     g_m4.sdb = cfg.sloth_db[0] ? &g_sdb : NULL;

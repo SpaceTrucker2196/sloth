@@ -290,11 +290,11 @@ static void test_routes(void) {
     WT_EQ(r.status, 200);
     WT_HAS(out, "\"store\":\"memory\",\"store_path\":null,");
     WT_HAS(out, "\"series_key_caps\":{\"global\":1,\"device\":64,\"host\":32,"
-                "\"iface\":32,\"channel\":64,\"alert\":128}");
+                "\"iface\":32,\"channel\":64,\"alert\":128,\"rectype\":64}");
     WT_HAS(out, "\"key_evictions\":{\"global\":0,\"device\":0,\"host\":0,"
-                "\"iface\":0,\"channel\":0,\"alert\":0}");
+                "\"iface\":0,\"channel\":0,\"alert\":0,\"rectype\":0}");
     WT_HAS(out, "\"key_returns\":{\"global\":0,\"device\":0,\"host\":0,"
-                "\"iface\":0,\"channel\":0,\"alert\":0}");
+                "\"iface\":0,\"channel\":0,\"alert\":0,\"rectype\":0}");
     WT_HAS(out, "\"queue_rows\":0,\"queue_cap\":0,");
     WT_HAS(out, "\"queue_dropped\":0,\"churn_dropped\":0,");
     /* The ceiling's raised passes and the analysis state's measured size
@@ -484,7 +484,8 @@ static size_t sample_all_keys(long long now) {
         int cap = kc == WEB_KC_GLOBAL ? 1 : kc == WEB_KC_DEV ? WEB_MAX_KEYS_MAX
                 : kc == WEB_KC_HOST ? WEB_MAX_KEYS_MAX / 2
                 : kc == WEB_KC_IFACE ? WEB_IFACE_KEYS
-                : kc == WEB_KC_CHANNEL ? WEB_CHANNEL_KEYS : WEB_ALERT_KEYS;
+                : kc == WEB_KC_CHANNEL ? WEB_CHANNEL_KEYS
+                : kc == WEB_KC_RECTYPE ? WEB_RECTYPE_KEYS : WEB_ALERT_KEYS;
         for (int i = 0; i < cap; i++) {
             switch (kc) {
             case WEB_KC_GLOBAL:  k[0] = '\0'; break;
@@ -567,11 +568,16 @@ static void test_flush_all_writes_backlog_first(void) {
  * 117 series that each get a sample in every 10 s bucket, and the 40 of
  * the capture-scope presence split (web_scope.h): the 30 ARP devices'
  * dev.present.local and the 10 probe clients' dev.present.monitor. 157,
- * still under 5 MB. */
+ * plus, since docs/web-visual-spec.md V1: records.rate, one series per
+ * distinct "type" the pass actually writes -- connections, iface,
+ * top_host, device, dns, probe_client, channel_summary, sensor_health,
+ * 8 of them (not 9: "iface" is one type under two names, lo and eth0) --
+ * and sensor.drops, one global series fed by every sensor_health line.
+ * 157 + 8 + 1 = 166, still under 5 MB. */
 static long long g_now;
 static long long pinned(void *ctx) { (void)ctx; return g_now; }
 
-#define ACC_SERIES 157
+#define ACC_SERIES 166
 
 static size_t pass(char *b, size_t cap, long long t, int k) {
     size_t o = 0;

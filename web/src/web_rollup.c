@@ -66,12 +66,28 @@ const web_metric_t web_metric_defs[WM_COUNT] = {
     [WM_DEV_PRESENT_LOC] = { "dev.present.local", WEB_MK_PRESENCE, WEB_KC_DEV,
                              "mac", "dev.present from the host's own "
                              "interfaces' records", "0/1" },
+    [WM_LIVE_DEVICES] = { "live.devices", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                          "the device count of the latest published pass "
+                          "(web_live_t)", "devices" },
+    [WM_LIVE_ALERTS_OPEN] = { "live.alerts_open", WEB_MK_GAUGE, WEB_KC_GLOBAL,
+                              "", "open incidents, low+warn+crit "
+                              "(web_live_t)", "incidents" },
+    [WM_LIVE_ANOMALIES_OPEN] = { "live.anomalies_open", WEB_MK_GAUGE,
+                                 WEB_KC_GLOBAL, "", "open anomaly episodes "
+                                 "(web_anomaly_open_count)", "episodes" },
+    [WM_RECORDS_RATE] = { "records.rate", WEB_MK_COUNTER, WEB_KC_RECTYPE,
+                          "rectype", "every decoded record, by its type",
+                          "records" },
+    [WM_SENSOR_DROPS] = { "sensor.drops", WEB_MK_COUNTER, WEB_KC_GLOBAL, "",
+                          "sensor_health capture_drop_delta + "
+                          "capture_ifdrop_delta + monitor_drop_delta + "
+                          "monitor_ifdrop_delta", "frames" },
 };
 
 static const int TIER_STEP[WEB_TIER_COUNT] = { WEB_FINE_S, WEB_MINUTE_S, WEB_HOUR_S };
 static const char *const TIER_NAME[WEB_TIER_COUNT] = { "fine", "minute", "hour" };
 static const char *const KC_NAME[WEB_KC_COUNT] = {
-    "global", "device", "host", "iface", "channel", "alert"
+    "global", "device", "host", "iface", "channel", "alert", "rectype"
 };
 
 int web_metric_find(const char *name) {
@@ -386,7 +402,7 @@ int web_rollup_init(web_rollup_t *ru, int max_keys, int store_on,
     pthread_mutex_init(&ru->mu, NULL);
     const int caps[WEB_KC_COUNT] = {
         1, max_keys, max_keys / 2, WEB_IFACE_KEYS, WEB_CHANNEL_KEYS,
-        WEB_ALERT_KEYS
+        WEB_ALERT_KEYS, WEB_RECTYPE_KEYS
     };
     int bad = 0;
     size_t series_max = 0;

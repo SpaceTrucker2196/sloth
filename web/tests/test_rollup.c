@@ -792,7 +792,8 @@ static void sample_every_key(long long now, size_t *series) {
         int cap = kc == WEB_KC_GLOBAL ? 1 : kc == WEB_KC_DEV ? WEB_MAX_KEYS_MAX
                 : kc == WEB_KC_HOST ? WEB_MAX_KEYS_MAX / 2
                 : kc == WEB_KC_IFACE ? WEB_IFACE_KEYS
-                : kc == WEB_KC_CHANNEL ? WEB_CHANNEL_KEYS : WEB_ALERT_KEYS;
+                : kc == WEB_KC_CHANNEL ? WEB_CHANNEL_KEYS
+                : kc == WEB_KC_RECTYPE ? WEB_RECTYPE_KEYS : WEB_ALERT_KEYS;
         for (int i = 0; i < cap; i++) {
             switch (kc) {
             case WEB_KC_GLOBAL:  k[0] = '\0'; break;

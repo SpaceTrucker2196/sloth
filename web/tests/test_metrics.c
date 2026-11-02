@@ -6,7 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "web_anomaly.h"
+#include "web_baseline.h"
 #include "web_jsonl.h"
+#include "web_live.h"
 #include "web_metrics.h"
 #include "web_rollup.h"
 #include "wtest.h"
@@ -97,6 +100,16 @@ static void test_key_canonicalisers(void) {
     WT_EQ(web_key_canon(WM_ALERTS_FIRED, "12a", o), -1);
     WT_EQ(web_key_canon(WM_DEV_FRAMES, "AA:BB:CC:DD:EE:FF", o), 0);
     WT_ASSERT(!strcmp(o, "aa:bb:cc:dd:ee:ff"));
+    WT_EQ(web_key_rectype("dns", o), 0);
+    WT_ASSERT(!strcmp(o, "dns"));
+    WT_EQ(web_key_rectype("alert.create", o), 0);
+    WT_EQ(web_key_rectype("DNS", o), -1);          /* upper case */
+    WT_EQ(web_key_rectype("dns<script>", o), -1);
+    WT_EQ(web_key_rectype("", o), -1);
+    WT_EQ(web_key_rectype(NULL, o), -1);
+    WT_EQ(web_key_rectype("twelve_characters_too_long_for_this", o), -1);
+    WT_EQ(web_key_canon(WM_RECORDS_RATE, "dns", o), 0);
+    WT_EQ(web_key_canon(WM_RECORDS_RATE, "DNS", o), -1);
 }
 
 /* iface and top_host rates are sloth's "%.2f" reals. */
@@ -125,7 +138,12 @@ static void test_gauges(void) {
 }
 
 /* Untrusted keys never become keys: markup in the ip, a bad name, a
- * name too long. Seen red with web_key_ip() replaced by a plain copy. */
+ * name too long. Seen red with web_key_ip() replaced by a plain copy.
+ * records.rate is the one metric every valid-typed line still feeds
+ * (its key is the type, never the hostile field), so the overall
+ * sample/series counts below are 4, not 0 -- asserted per metric
+ * instead of in aggregate so that stays true without this test caring
+ * how many other metrics a future record type might add. */
 static void test_hostile_keys_refused(void) {
     fresh();
     line("{\"type\":\"top_host\",\"ts\":1,\"ip\":\"<img onerror=x>\",\"conn_count\":1}");
@@ -134,10 +152,24 @@ static void test_hostile_keys_refused(void) {
     line("{\"type\":\"iface\",\"ts\":1,\"name\":\"eth0\\u2028\",\"rx_rate\":1}");
     line("{\"type\":\"probe_client\",\"ts\":1,\"mac\":\"aa:bb:cc:dd:ee:ff<\","
          "\"frame_count\":5}");
+    web_keyinfo_t ki[4];
+    int total;
+    WT_EQ(web_rollup_keys(&ru, WM_HOST_CONNS, ki, 4, &total), 0);
+    WT_EQ(total, 0);
+    WT_EQ(web_rollup_keys(&ru, WM_DNS_QUERIES, ki, 4, &total), 0);
+    WT_EQ(total, 0);
+    WT_EQ(web_rollup_keys(&ru, WM_IFACE_RX, ki, 4, &total), 0);
+    WT_EQ(total, 0);
+    WT_EQ(web_rollup_keys(&ru, WM_DEV_FRAMES, ki, 4, &total), 0);
+    WT_EQ(total, 0);
+    WT_ASSERT(cur(WM_RECORDS_RATE, "top_host").sum == 1);
+    WT_ASSERT(cur(WM_RECORDS_RATE, "dns").sum == 1);
+    WT_ASSERT(cur(WM_RECORDS_RATE, "iface").sum == 1);
+    WT_ASSERT(cur(WM_RECORDS_RATE, "probe_client").sum == 1);
     web_rollup_stats_t st;
     web_rollup_stats(&ru, &st);
-    WT_EQ(st.samples, 0);
-    WT_EQ(st.series, 0);
+    WT_EQ(st.samples, 4);
+    WT_EQ(st.series, 4);
     done();
 }
 
@@ -373,6 +405,152 @@ static void test_pass_gauges(void) {
     done();
 }
 
+/* records.rate (docs/web-visual-spec.md §7): every decoded record
+ * bumps its own type's counter, by one, regardless of whether the type
+ * steers anything else here. socket_gap is the one exception: it taints
+ * rather than counting as content. */
+static void test_records_rate(void) {
+    fresh();
+    line("{\"type\":\"dns\",\"ts\":1,\"src\":\"10.0.0.5\",\"qname\":\"a.example\","
+         "\"qtype\":\"A\",\"answer\":\"\",\"is_resp\":0}");
+    line("{\"type\":\"dns\",\"ts\":1,\"src\":\"10.0.0.6\",\"qname\":\"b.example\","
+         "\"qtype\":\"A\",\"answer\":\"\",\"is_resp\":0}");
+    line("{\"type\":\"tls\",\"ts\":1,\"src\":\"10.0.0.5\",\"dst\":\"1.1.1.1\","
+         "\"host\":\"x\",\"ver\":\"1.3\",\"ja3\":\"abc\"}");
+    line("{\"type\":\"alert.create\",\"ts\":1,\"title\":\"t\",\"sev\":2,\"ty\":14}");
+    WT_ASSERT(cur(WM_RECORDS_RATE, "dns").sum == 2);
+    WT_ASSERT(cur(WM_RECORDS_RATE, "tls").sum == 1);
+    WT_ASSERT(cur(WM_RECORDS_RATE, "alert.create").sum == 1);
+    WT_EQ(has_series(WM_RECORDS_RATE, "alert"), 0);
+    line("{\"type\":\"socket_gap\",\"ts\":1,\"dropped\":1}");
+    WT_EQ(has_series(WM_RECORDS_RATE, "socket_gap"), 0);
+    done();
+}
+
+/* sensor.drops (docs/web-visual-spec.md §7): the four delta fields
+ * summed, every tick -- a tick with none of them present (an older
+ * sloth, or simply nothing to report) still samples, at 0, so the
+ * series reads as a flat line rather than a gap when the sensor is
+ * healthy. Seen red by gating the sample on the sum being positive. */
+static void test_sensor_drops(void) {
+    fresh();
+    line("{\"type\":\"sensor_health\",\"ts\":1,\"capture_drop_delta\":3,"
+         "\"capture_ifdrop_delta\":1,\"monitor_drop_delta\":2,"
+         "\"monitor_ifdrop_delta\":0}");
+    web_point_t p = cur(WM_SENSOR_DROPS, "");
+    WT_EQ(p.n, 1);
+    WT_ASSERT(p.sum == 6);
+    line("{\"type\":\"sensor_health\",\"ts\":1}");
+    p = cur(WM_SENSOR_DROPS, "");
+    WT_EQ(p.n, 2);
+    WT_ASSERT(p.sum == 6 && p.min == 0);
+    done();
+}
+
+/* live.devices, live.alerts_open, live.anomalies_open (docs/
+ * web-visual-spec.md §7): sampled once a snapshot batch, at its first
+ * iface record, from whatever web_live_t and web_anomaly_t already
+ * hold. Mirrors web_ingest.c's one_line(): web_live_apply() then
+ * web_metrics_record() on the same record. */
+static web_live_t      g_live;
+static web_anomaly_t   g_anom;
+static web_baseline_t  g_bl;
+
+static void live_fresh(void) {
+    fresh();
+    web_live_init(&g_live, NULL);
+    web_anom_cfg_t acfg;
+    memset(&acfg, 0, sizeof(acfg));
+    WT_EQ(web_baseline_init(&g_bl, 32), 0);
+    acfg.bl = &g_bl;
+    WT_EQ(web_anomaly_init(&g_anom, 8, &acfg), 0);
+    web_metrics_set_live(&mx, &g_live);
+    web_metrics_set_anomaly(&mx, &g_anom);
+}
+
+static void live_done(void) {
+    web_anomaly_destroy(&g_anom);
+    web_baseline_destroy(&g_bl);
+    web_live_destroy(&g_live);
+    done();
+}
+
+static void live_line(const char *s) {
+    int e = web_jl_parse(s, strlen(s), &rec);
+    WT_EQ(e, WEB_JL_OK);
+    if (e != WEB_JL_OK) return;
+    web_live_apply(&g_live, &rec, g_now * 1000);
+    web_metrics_record(&mx, &rec);
+}
+
+static void test_live_sampling(void) {
+    live_fresh();
+    /* Pass 1: one device, closed by the beacon that follows it. Not yet
+     * sampled: the first batch_start() has nothing prior to report, the
+     * same way wifi.probe_clients and conns.total report nothing on it
+     * (test_pass_gauges). */
+    live_line("{\"type\":\"iface\",\"ts\":1,\"name\":\"eth0\",\"rx_rate\":0,"
+              "\"tx_rate\":0}");
+    live_line("{\"type\":\"device\",\"ts\":1,\"mac\":\"02:00:00:00:00:01\","
+              "\"ip\":\"\"}");
+    live_line("{\"type\":\"beacon\",\"ts\":1,\"bssid\":\"02:00:00:00:aa:01\","
+              "\"frame_count\":1}");
+    live_line("{\"type\":\"alert.create\",\"ts\":1,\"incident_id\":\"i1\","
+              "\"sev\":1,\"ty\":1,\"title\":\"t\"}");
+    WT_EQ(has_series(WM_LIVE_DEVICES, ""), 0);
+    WT_EQ(has_series(WM_LIVE_ALERTS_OPEN, ""), 0);
+    WT_EQ(has_series(WM_LIVE_ANOMALIES_OPEN, ""), 0);
+    /* One open episode, poked directly: the rules that open one for
+     * real are test_anomaly.c's job, not this file's. */
+    g_anom.ep[0].state = WEB_EP_OPEN;
+
+    /* Pass 2's first iface record is the next batch's batch_start():
+     * it samples pass 1's published count, the open alert and the
+     * open episode. */
+    g_now += 1;
+    live_line("{\"type\":\"iface\",\"ts\":2,\"name\":\"eth0\",\"rx_rate\":0,"
+              "\"tx_rate\":0}");
+    WT_ASSERT(cur(WM_LIVE_DEVICES, "").sum == 1);
+    WT_ASSERT(cur(WM_LIVE_ALERTS_OPEN, "").sum == 1);
+    WT_ASSERT(cur(WM_LIVE_ANOMALIES_OPEN, "").sum == 1);
+    live_line("{\"type\":\"device\",\"ts\":2,\"mac\":\"02:00:00:00:00:02\","
+              "\"ip\":\"\"}");
+    live_line("{\"type\":\"beacon\",\"ts\":2,\"bssid\":\"02:00:00:00:aa:01\","
+              "\"frame_count\":2}");
+    /* Pass 2 published 1 device too; close the open alert and episode,
+     * open nothing new, and confirm the next batch samples 0, not a
+     * stale 1 -- seen red with sample_live() skipped under a 0 value. */
+    live_line("{\"type\":\"alert.resolve\",\"ts\":2,\"incident_id\":\"i1\","
+              "\"sev\":1,\"ty\":1,\"title\":\"t\",\"reason\":\"r\"}");
+    g_anom.ep[0].state = WEB_EP_CLOSED;
+    g_now += 1;
+    live_line("{\"type\":\"iface\",\"ts\":3,\"name\":\"eth0\",\"rx_rate\":0,"
+              "\"tx_rate\":0}");
+    web_point_t p = cur(WM_LIVE_ALERTS_OPEN, "");
+    WT_EQ(p.n, 2);
+    WT_ASSERT(p.sum == 1 && p.min == 0);
+    p = cur(WM_LIVE_ANOMALIES_OPEN, "");
+    WT_EQ(p.n, 2);
+    WT_ASSERT(p.sum == 1 && p.min == 0);
+    live_done();
+}
+
+/* With neither wired (the default), nothing is sampled: existing
+ * callers of web_metrics_init() that never call web_metrics_set_live()
+ * or web_metrics_set_anomaly() are unaffected. */
+static void test_live_sampling_unwired_is_a_noop(void) {
+    fresh();
+    line("{\"type\":\"iface\",\"ts\":1,\"name\":\"eth0\",\"rx_rate\":0,"
+         "\"tx_rate\":0}");
+    g_now += 1;
+    line("{\"type\":\"iface\",\"ts\":2,\"name\":\"eth0\",\"rx_rate\":0,"
+         "\"tx_rate\":0}");
+    WT_EQ(has_series(WM_LIVE_DEVICES, ""), 0);
+    WT_EQ(has_series(WM_LIVE_ALERTS_OPEN, ""), 0);
+    WT_EQ(has_series(WM_LIVE_ANOMALIES_OPEN, ""), 0);
+    done();
+}
+
 /* The high-water table is bounded; its evictions are counted. */
 static void test_highwater_table_bounded(void) {
     fresh();
@@ -511,6 +689,10 @@ void run_metrics_tests(void) {
     WT_RUN(test_channels);
     WT_RUN(test_presence);
     WT_RUN(test_pass_gauges);
+    WT_RUN(test_records_rate);
+    WT_RUN(test_sensor_drops);
+    WT_RUN(test_live_sampling);
+    WT_RUN(test_live_sampling_unwired_is_a_noop);
     WT_RUN(test_highwater_table_bounded);
     WT_RUN(test_highwater_evicted_row_not_recounted);
     WT_RUN(test_highwater_gone_filter_rotates);

@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "web_anomaly.h"
 #include "web_chmix.h"
 #include "web_ident.h"
 #include "web_live.h"
@@ -100,6 +101,24 @@ int web_key_alert_type(long long ty, char *out) {
     return 0;
 }
 
+/* The same charset web_live.c's type_ok() validates a record's "type"
+ * against: 1..32 bytes of [a-z0-9_.]. A peer's "type" is already this
+ * shape or the decoder refuses the line; checked again here so nothing
+ * unvalidated ever becomes a rollup key. */
+int web_key_rectype(const char *s, char *out) {
+    if (!s) return -1;
+    size_t n = strlen(s);
+    if (n == 0 || n > 32 || n > WEB_KEY_MAX) return -1;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+              c == '_' || c == '.'))
+            return -1;
+    }
+    memcpy(out, s, n + 1);
+    return 0;
+}
+
 int web_key_canon(int metric, const char *s, char *out) {
     if (metric < 0 || metric >= WM_COUNT || !s) return -1;
     const char *kk = web_metric_defs[metric].keykind;
@@ -116,6 +135,7 @@ int web_key_canon(int metric, const char *s, char *out) {
         if (!all_digits(s, 4)) return -1;
         return web_key_alert_type(atoll(s), out);
     }
+    if (!strcmp(kk, "rectype")) return web_key_rectype(s, out);
     return -1;
 }
 
@@ -220,6 +240,14 @@ void web_metrics_set_mix(web_metrics_t *m, struct web_chmix *mix) {
     m->mix = mix;
 }
 
+void web_metrics_set_live(web_metrics_t *m, struct web_live_s *live) {
+    m->live = live;
+}
+
+void web_metrics_set_anomaly(web_metrics_t *m, struct web_anomaly *anomaly) {
+    m->anomaly = anomaly;
+}
+
 /* d frames from the transmitter at field on the record's channel. */
 static void mix_add(web_metrics_t *m, const web_jrec_t *r, const char *field,
                     int kind, const char *band, double d, long long now) {
@@ -318,11 +346,35 @@ static void presence(web_metrics_t *m, const web_jrec_t *r, const char *field,
     if (tag & WEB_SC_L) web_rollup_add(m->ru, WM_DEV_PRESENT_LOC, k, 1, now);
 }
 
+/* docs/web-visual-spec.md §7, F1: the Overview tiles' own comparison.
+ * Sampled once a batch, at its first iface record, from whatever the
+ * previous batch's close_round() already published to live (web_live.c
+ * publish()) and whatever anomaly episodes are open now. Unlike
+ * wifi.probe_clients and conns.total this does not gate on !m->taint:
+ * a tainted round leaves live's own dev_count at its last published
+ * value (web_live.c's devices_step()), so the sample is the same
+ * "latest known" figure /api/live itself would answer, not a stale
+ * reread of a half-built pass. */
+static void sample_live(web_metrics_t *m, long long now) {
+    if (m->live) {
+        web_live_sum_t s;
+        web_live_summary(m->live, &s, now * 1000);
+        if (s.dev_known)
+            web_rollup_add(m->ru, WM_LIVE_DEVICES, "", (double)s.devices, now);
+        web_rollup_add(m->ru, WM_LIVE_ALERTS_OPEN, "",
+                      (double)(s.alerts[0] + s.alerts[1] + s.alerts[2]), now);
+    }
+    if (m->anomaly)
+        web_rollup_add(m->ru, WM_LIVE_ANOMALIES_OPEN, "",
+                       (double)web_anomaly_open_count(m->anomaly), now);
+}
+
 static void batch_start(web_metrics_t *m, long long now) {
     if (m->batch_open && !m->taint) {
         web_rollup_add(m->ru, WM_WIFI_PROBE_CLIENTS, "", (double)m->probe_n, now);
         web_rollup_add(m->ru, WM_CONNS_TOTAL, "", (double)m->conns_n, now);
     }
+    if (m->batch_open) sample_live(m, now);
     m->batch_open = 1;
     m->taint = 0;
     m->probe_n = m->conns_n = 0;
@@ -366,6 +418,17 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
         m->first_ts = ts;
     }
     if (!strcmp(t, "socket_gap")) { m->taint = 1; return; }
+    /* records.rate: every decoded record but this one, including types
+     * that steer nothing else here (web_live.c's POLL_TYPES is a
+     * narrower list; this is every type the JSON decoder accepted).
+     * The decoder only guarantees t is a string, not this charset web_live.c's
+     * type_ok() separately holds "type" to for its own table, so a
+     * hostile or oversized "type" is refused here, not trusted on the
+     * strength of a check in a different module over a value this
+     * function never saw checked. */
+    char rk[WEB_KEY_MAX + 1];
+    if (web_key_rectype(t, rk) == 0)
+        web_rollup_add(m->ru, WM_RECORDS_RATE, rk, 1, now);
     if (m->ident) web_ident_record(m->ident, r, now);
 
     if (!strcmp(t, "iface")) {
@@ -488,5 +551,21 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
         };
         flow(m, r, "mqtt", "src_ip", "dst_ip", sum_of(r, pk), WM_FLOW_MQTT,
              now);
+    } else if (!strcmp(t, "sensor_health")) {
+        /* The tick's own drops, libpcap's and the NIC's, on both
+         * capture workers: already a delta (sloth's own pcap_stats()
+         * bookkeeping, not a running total), so summed and sampled
+         * as-is, every tick, including the 0 of a healthy one -- a
+         * flat-zero series is what "no drops" should read as, not a
+         * gap (docs/web-visual-spec.md rule R5). A field an older
+         * sloth does not send is 0, not missing. */
+        static const char *const drops[] = {
+            "capture_drop_delta", "capture_ifdrop_delta",
+            "monitor_drop_delta", "monitor_ifdrop_delta", NULL
+        };
+        double d = 0, v;
+        for (int i = 0; drops[i]; i++)
+            if (web_jl_num(r, drops[i], &v) && v > 0) d += v;
+        web_rollup_add(m->ru, WM_SENSOR_DROPS, "", d, now);
     }
 }

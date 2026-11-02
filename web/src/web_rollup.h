@@ -93,6 +93,9 @@
 #define WEB_IFACE_KEYS       32
 #define WEB_CHANNEL_KEYS     64
 #define WEB_ALERT_KEYS       128
+/* The record types sloth's stream carries (web_live.h: WEB_LIVE_TYPES),
+ * with headroom: the set is sloth's own, not a peer's to grow. */
+#define WEB_RECTYPE_KEYS     64
 /* The longest canonical key: an IPv6 address is at most 45 bytes. */
 #define WEB_KEY_MAX          47
 
@@ -115,7 +118,7 @@
 
 enum { WEB_TIER_FINE = 0, WEB_TIER_MINUTE, WEB_TIER_HOUR, WEB_TIER_COUNT };
 enum { WEB_KC_GLOBAL = 0, WEB_KC_DEV, WEB_KC_HOST, WEB_KC_IFACE, WEB_KC_CHANNEL,
-       WEB_KC_ALERT, WEB_KC_COUNT };
+       WEB_KC_ALERT, WEB_KC_RECTYPE, WEB_KC_COUNT };
 enum { WEB_MK_GAUGE = 0, WEB_MK_COUNTER, WEB_MK_PRESENCE };
 
 /* §5.1, the metrics whose source records sloth emits today
@@ -135,6 +138,13 @@ enum {
      * the monitor radio heard, and the ones the host's own interfaces
      * carried. dev.present stays every source's. */
     WM_DEV_PRESENT_MON, WM_DEV_PRESENT_LOC,
+    /* docs/web-visual-spec.md §7: the Overview tiles' own comparison
+     * (F1), sampled once a pass at the next snapshot batch's first
+     * iface record, when the sampler is wired (web_metrics_set_live(),
+     * web_metrics_set_anomaly()); sensor.drops from every sensor_health
+     * tick regardless; records.rate from every record, keyed by type. */
+    WM_LIVE_DEVICES, WM_LIVE_ALERTS_OPEN, WM_LIVE_ANOMALIES_OPEN,
+    WM_RECORDS_RATE, WM_SENSOR_DROPS,
     WM_COUNT
 };
 

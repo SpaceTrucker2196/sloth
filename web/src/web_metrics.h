@@ -71,11 +71,15 @@ typedef long long (*web_clock_fn)(void *ctx);
 
 struct web_ident;
 struct web_chmix;
+struct web_live_s;
+struct web_anomaly;
 
 typedef struct web_metrics {
     web_rollup_t *ru;
     struct web_ident *ident;     /* M3: names for the anomaly rules, or NULL */
     struct web_chmix *mix;       /* the WiFi view's channel mix, or NULL */
+    struct web_live_s  *live;    /* live.devices / live.alerts_open, or NULL */
+    struct web_anomaly *anomaly; /* live.anomalies_open, or NULL */
     web_clock_fn  clock;
     void         *clock_ctx;
 
@@ -112,6 +116,13 @@ void web_metrics_set_ident(web_metrics_t *m, struct web_ident *id);
  * and assoc records to the channel mix (web_chmix.h), and each beacon's
  * SSID as its AP's name. Call before the ingest thread starts. */
 void web_metrics_set_mix(web_metrics_t *m, struct web_chmix *mix);
+/* docs/web-visual-spec.md §7: sample live.devices and live.alerts_open
+ * from live's latest published pass at every snapshot batch start.
+ * Call before the ingest thread starts. */
+void web_metrics_set_live(web_metrics_t *m, struct web_live_s *live);
+/* Sample live.anomalies_open the same way, from the open episode count.
+ * Call before the ingest thread starts. */
+void web_metrics_set_anomaly(web_metrics_t *m, struct web_anomaly *anomaly);
 
 /* Key canonicalisers; out holds WEB_KEY_MAX + 1. 0, or -1 when s is not
  * one. Also what /api/series checks its key parameter with. */
@@ -123,6 +134,10 @@ int  web_key_channel(long long ch, const char *band, char *out);
 /* A channel key as /api/series takes it: "N" or "6gN". */
 int  web_key_channel_text(const char *s, char *out);
 int  web_key_alert_type(long long ty, char *out);
+/* A record type as records.rate keys it: 1..32 bytes of
+ * [a-z0-9_.], the charset web_live.c's type_ok() already validates a
+ * record's "type" field against. */
+int  web_key_rectype(const char *s, char *out);
 /* The canonical key for metric from the text s, by its key kind; "" for
  * a global metric (s must then be empty). */
 int  web_key_canon(int metric, const char *s, char *out);
