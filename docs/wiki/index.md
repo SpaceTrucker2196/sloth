@@ -138,7 +138,8 @@ the Wi-Fi it watches:
   the Overview; M2 to M5 the time series, baselines and anomalies,
   Devices, WiFi, History and the SQL box; M6 (#164) the Flows view and
   the five-minute README (`web/README.md`) with its troubleshooting
-  table and security section.
+  table and security section; alert triage, the FRRS emitter record
+  and the TACDB tab, its spec [`docs/web-frrs-spec.md`](../web-frrs-spec.md).
 - [[capture-scope]] — slothweb's Monitor / Hybrid / Local switch: what
   the passive monitor radio heard, what the host's own interfaces
   carried, or both; how each record, alert, metric, interface and

@@ -8,6 +8,7 @@
 #include "web_alertdb.h"
 #include "web_alertfmt.h"
 #include "web_alertkb.h"
+#include "web_frrs.h"
 #include "web_history.h"
 #include "web_json.h"
 #include "web_series.h"
@@ -80,14 +81,18 @@ typedef struct {
     int       type;                  /* -1 any */
     char      q[WEB_PARAM_MAX + 1];
     long long window, limit, offset;
+    /* triage= (web_frrs.h, docs/web-frrs-spec.md §5.4): 0 not given,
+     * else 1 with tri the WEB_TRI_* state or WEB_TRI_F_* group. */
+    int       has_tri, tri;
 } aq_t;
 
 static int parse_list(const char *query, aq_t *a, char *err, size_t errsz) {
-    web_param_t ps[7] = {
+    web_param_t ps[8] = {
         { "state", "", 0 }, { "sev", "", 0 }, { "type", "", 0 }, { "q", "", 0 },
         { "window", "", 0 }, { "limit", "", 0 }, { "offset", "", 0 },
+        { "triage", "", 0 },
     };
-    if (web_params_parse(query, ps, 7, err, errsz) != 0) return -1;
+    if (web_params_parse(query, ps, 8, err, errsz) != 0) return -1;
     memset(a, 0, sizeof(*a));
     a->type = -1;
     a->window = WEB_ALERTS_WINDOW_S;
@@ -144,6 +149,11 @@ static int parse_list(const char *query, aq_t *a, char *err, size_t errsz) {
         snprintf(err, errsz, "bad_offset");
         return -1;
     }
+    if (ps[7].seen) {
+        a->has_tri = 1;
+        a->tri = web_frrs_filter_find(ps[7].val);
+        if (a->tri == WEB_TRI_F_BAD) { snprintf(err, errsz, "bad_triage"); return -1; }
+    }
     return 0;
 }
 
@@ -174,6 +184,9 @@ typedef struct {
     web_adb_totals_t t;              /* sloth.db's totals of the key */
     int       have_t;
     long long last;
+    /* Its triage, under triage= only (web_frrs.h). */
+    int       tri_state, tri_via;
+    long long tri_ts;
 } row_t;
 
 static int by_open(const void *x, const void *y) {
@@ -227,7 +240,7 @@ static sum_t key_sum(const web_adb_totals_t *t, int have_t, int sn, long long s_
     return o;
 }
 
-static void row_json(web_jw_t *w, const row_t *r, int first) {
+static void row_json(web_jw_t *w, const row_t *r, int first, int tri) {
     web_jw_raw(w, first ? "{\"id\":" : ",{\"id\":");
     char id[48];
     sum_t k;
@@ -277,6 +290,16 @@ static void row_json(web_jw_t *w, const row_t *r, int first) {
     web_jw_raw(w, ",\"incidents\":");  web_jw_int(w, k.incidents);
     web_jw_raw(w, ",\"reason\":");
     jw_str_or_null(w, r->stream ? r->inc->reason : NULL);
+    if (tri) {
+        web_jw_raw(w, ",\"triage\":{\"state\":");
+        web_jw_str(w, web_frrs_state_word(r->tri_state));
+        web_jw_raw(w, ",\"via\":");
+        if (r->tri_state) web_jw_str(w, web_frrs_via_word(r->tri_via));
+        else web_jw_raw(w, "null");
+        web_jw_raw(w, ",\"ts\":");
+        if (r->tri_state) web_jw_int(w, r->tri_ts); else web_jw_raw(w, "null");
+        web_jw_raw(w, "}");
+    }
     web_jw_raw(w, "}");
 }
 
@@ -358,6 +381,10 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
     web_adb_stats_t st;
     memset(&st, 0, sizeof(st));
     long long want = a.offset + a.limit + 1;
+    /* Under a triage filter the rows it drops are dropped after the
+     * read, so the read takes as many as a page could reach. */
+    if (a.has_tri && a.tri != WEB_TRI_F_ANY)
+        want = WEB_ALERTS_OFFSET_MAX + WEB_ALERTS_LIMIT_MAX + 1;
     int ngroups = 0, db_more = 0;
     web_sdb_conn_t c;
     int have_c = 0;
@@ -401,6 +428,45 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
     int nclosed = stream_closed + ngroups;
     qsort(rows + open_rows, (size_t)nclosed, sizeof(*rows), by_last);
     int total = open_rows + nclosed;
+    /* triage= (docs/web-frrs-spec.md §5.4): every row's current triage,
+     * counted before the filter, so a triaged-out row is never silently
+     * gone: the counts say how many each state holds, and without a
+     * state the answer is the rows exactly as before. */
+    long long tri_n[WEB_TRI_COUNT] = { 0, 0, 0, 0 };
+    if (a.has_tri) {
+        web_frrs_t *f = m ? m->frrs : NULL;
+        int any = web_frrs_triage_any(f), o = 0, oo = 0;
+        for (int i = 0; i < total; i++) {
+            row_t *r = &rows[i];
+            r->tri_state = WEB_TRI_UNTRIAGED;
+            if (any) {
+                char id[48];
+                web_tri_q_t q;
+                if (r->stream) {
+                    snprintf(id, sizeof(id), "s%s", r->inc->hid);
+                    q = (web_tri_q_t){ id, r->inc->key[0] ? r->inc->key : NULL, 0, r->inc->type,
+                                       r->inc->match_port, r->inc->match_ip, r->inc->first_ts };
+                } else {
+                    snprintf(id, sizeof(id), "d%lld", r->g.rid);
+                    q = (web_tri_q_t){ id, NULL, r->g.rid, r->g.type, r->g.port, r->g.ip,
+                                       r->g.first_seen };
+                }
+                web_tri_t t;
+                if (web_frrs_triage_find(f, have_c ? &c : NULL, &q, &t) > 0) {
+                    r->tri_state = t.state;
+                    r->tri_via = t.via;
+                    r->tri_ts = t.ts;
+                }
+            }
+            tri_n[r->tri_state]++;
+            if (!web_frrs_filter_pass(a.tri, r->tri_state)) continue;
+            if (i < open_rows) oo++;
+            if (o != i) rows[o] = rows[i];
+            o++;
+        }
+        total = o;
+        open_rows = oo;
+    }
     int lo = (int)a.offset, hi = (int)(a.offset + a.limit);
     if (hi > total) hi = total;
 
@@ -437,7 +503,7 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
     int shown = 0;
     for (int i = lo; i < hi; i++) {
         if (w.len + ROW_JSON_MAX + 2048 > cap) break;
-        row_json(&w, &rows[i], shown == 0);
+        row_json(&w, &rows[i], shown == 0, a.has_tri);
         shown++;
     }
     long long next = a.offset + shown;
@@ -455,7 +521,19 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
     web_jw_raw(&w, ",\"oldest\":");
     if (st.capped) web_jw_int(&w, st.oldest); else web_jw_raw(&w, "null");
     web_jw_raw(&w, ",\"groups\":");   web_jw_int(&w, st.groups);
-    web_jw_raw(&w, "},\"types\":[");
+    web_jw_raw(&w, "}");
+    if (a.has_tri) {
+        web_jw_raw(&w, ",\"triage_counts\":{");
+        for (int s = 0; s < WEB_TRI_COUNT; s++) {
+            if (s) web_jw_raw(&w, ",");
+            web_jw_key(&w, web_frrs_state_word(s));
+            web_jw_int(&w, tri_n[s]);
+        }
+        web_jw_raw(&w, ",\"out\":");
+        web_jw_int(&w, tri_n[WEB_TRI_FALSE] + tri_n[WEB_TRI_NOISE]);
+        web_jw_raw(&w, "}");
+    }
+    web_jw_raw(&w, ",\"types\":[");
     /* The facets: sloth.db's groups per type (the type filter left out)
      * with the stream's keys of each added, a key once. */
     long long fn[WEB_ADB_TYPES + 1];

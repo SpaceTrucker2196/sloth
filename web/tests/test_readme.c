@@ -134,6 +134,8 @@ static const char *const NOTICE[] = {
     "listening on ", "SQL box on ", "vendor table: ", "reading ",
     "time series in ", "baselines (", "stopped: ", "store schema v",
     "sloth.db %s: schema v",
+    /* triage and the TACDB (web_frrs.h): which way the writes are */
+    "triage and TACDB writes ", "--web-read-only: no write route", "follow recommended: ",
 };
 static const struct { const char *file, *start; } RUNTIME[] = {
     { "web_ingest.c", "socket: " }, { "web_ingest.c", "fcntl: " },
@@ -203,7 +205,8 @@ static void test_security_section(void) {
     WT_ASSERT(s != NULL);
     static const char *const points[] = {
         "**Loopback by default.**", "`--web-allow-remote`", "`--web-allow CIDR`",
-        "**GET and HEAD only.**", "**No authentication.**",
+        "**GET and HEAD, and POST to slothweb's own state only.**", "`--web-read-only`",
+        "**No authentication.**",
         "Whoever can reach the port reads everything", "**The Host check.**",
         "**CSP and no external requests.**", "Content-Security-Policy",
         "**Read-only towards sloth.db.**", "In WAL mode", "never checkpoints",

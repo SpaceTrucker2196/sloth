@@ -126,7 +126,7 @@ static void test_page_carries_the_m4_views(void) {
         WT_ASSERT(strstr(p, want) || strstr(p, alt));
     }
     WT_HAS(p, "var VIEWS = [\"overview\", \"activity\", \"devices\", \"anomalies\", \"wifi\", \"flows\", \"history\",\n"
-              "               \"lookup\"];");
+              "               \"lookup\", \"tacdb\"];");
     WT_HAS(p, "var p = \"/api/devices?limit=\" + DEV_PAGE + \"&offset=\" + offset +\n"
               "            \"&sort=\" + encodeURIComponent(sort);");
     WT_HAS(p, "if (q !== \"\") p += \"&q=\" + encodeURIComponent(q);");
@@ -163,7 +163,7 @@ static void test_page_shows_db_freshness(void) {
         snprintf(want, sizeof(want), "<span class=\"sub dbage\" id=\"%s\"></span>", ids[i]);
         WT_HAS(p, want);
     }
-    WT_HAS(p, "var DB_VIEWS = [\"devices\", \"wifi\", \"flows\", \"history\", \"lookup\"];");
+    WT_HAS(p, "var DB_VIEWS = [\"devices\", \"wifi\", \"flows\", \"history\", \"lookup\", \"tacdb\"];");
     WT_HAS(p, "var DB_AGE_IDS = [\"d-dbage\", \"w-dbage\", \"f-dbage\", \"h-dbage\", \"l-dbage\"];");
     WT_HAS(p, "var t = \"database as of \" + dbWhen(h.sloth_db_mtime);");
     /* The date when it is not today's (a days-old snapshot with the

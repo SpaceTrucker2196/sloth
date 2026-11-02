@@ -912,7 +912,7 @@
   // live. The server decides "stale" (/api/health sloth_db_stale: older
   // than sloth_db_stale_after_s while the stream is current); the page
   // only says so.
-  var DB_VIEWS = ["devices", "wifi", "flows", "history", "lookup"];
+  var DB_VIEWS = ["devices", "wifi", "flows", "history", "lookup", "tacdb"];
   var DB_AGE_IDS = ["d-dbage", "w-dbage", "f-dbage", "h-dbage", "l-dbage"];
   // The date as well when it is not today's: a snapshot days old must not
   // read as this afternoon, and "stale" is said only while the stream is
@@ -1238,7 +1238,7 @@
 
   // ── views ─────────────────────────────────────────────────────────
   var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "flows", "history",
-               "lookup"];
+               "lookup", "tacdb"];
   // The views with a tab, and the drill-downs: the Alerts page (6),
   // an alert's page, the record ticker by type, the sensor's health.
   var NAV = VIEWS.concat(["alerts"]);
@@ -1247,7 +1247,7 @@
   var NAV_OF = { "alert": "alerts", "records": "overview", "health": "overview" };
   // The parameters each view takes from the address, and nothing else:
   // what a drill-down link (an Overview tile) or a reload hands it.
-  var PARAMS = { "alerts": ["state", "sev", "type", "q"], "alert": ["id"],
+  var PARAMS = { "alerts": ["state", "sev", "type", "q", "triage"], "alert": ["id"], "tacdb": ["id"],
                  "devices": ["q"], "anomalies": ["state"], "activity": ["focus"] };
   var view = "overview", VP = {};
   function hashQuery(v, p) {
@@ -1270,6 +1270,7 @@
       // ARIA reflection, not an attribute write: the page has none.
       nb.ariaCurrent = lit === NAV[i] ? "page" : null;
     }
+    if (window.SlothFrrs) SlothFrrs.show(v, VP);
     if (v === "activity") activity();
     if (v === "anomalies") anomalies();
     if (v === "overview") overview();
@@ -2702,6 +2703,7 @@
       while (an.firstChild) an.removeChild(an.firstChild);
       if (!j.anomalies || !j.anomalies.length) an.appendChild(el("div", "sub", "none"));
       (j.anomalies || []).forEach(function (a) { an.appendChild(card(a)); });
+      if (window.SlothFrrs) SlothFrrs.mountDrawer(mac, j);
     }).catch(function (e) { if (gen === DR.gen) set("dr-note", errText(e.message)); });
   }
 
@@ -4088,6 +4090,7 @@
     li.tabIndex = 0;
     li.role = "link";
     li.addEventListener("click", function () { openAlert(id); });
+    if (window.SlothFrrs) SlothFrrs.link(li, id);
   }
 
   function alertsQuery(off) {
@@ -4104,6 +4107,7 @@
     p.push("window=" + encodeURIComponent($("al-win").value));
     p.push("limit=50");
     if (off) p.push("offset=" + off);
+    if (window.SlothFrrs) SlothFrrs.q(p);
     return p.join("&");
   }
 
@@ -4162,6 +4166,7 @@
     row.appendChild(el("span", "n d-normal", fmt(a.count)));
     row.appendChild(el("span", "n " + (num(a.incidents) && a.incidents > 1 ? heatClass(0.6) : "d-dim"),
                        num(a.incidents) ? String(a.incidents) : "-"));
+    row.appendChild(window.SlothFrrs ? SlothFrrs.cell(a, row) : el("span", "d-dim", "-"));
     row.tabIndex = 0;
     row.role = "link";
     var id = a.id;
@@ -4180,7 +4185,8 @@
       { k: "fs", label: "first", w: 11, type: "time", val: function (a) { return a.first_seen; } },
       { k: "ls", label: "last", w: 11, type: "time", val: function (a) { return a.last_seen; } },
       { k: "n", label: "count", w: 7, num: true, type: "num", val: function (a) { return a.count; } },
-      { k: "in", label: "incidents", w: 9, num: true, type: "num", val: function (a) { return a.incidents; } }
+      { k: "in", label: "incidents", w: 9, num: true, type: "num", val: function (a) { return a.incidents; } },
+      { k: "tr", label: "triage", w: 10, type: "text", val: function (a) { return a.triage ? a.triage.state : null; } }
     ] });
   function alertsDraw() {
     var box = $("al-rows");
@@ -4495,6 +4501,7 @@
 
     // (f) the device it names
     alertDevice(j);
+    if (window.SlothFrrs) SlothFrrs.mountAlert(j);
   }
 
   function alertDevice(j) {
@@ -4750,6 +4757,12 @@
       });
     }).catch(function (e) { set("a-hosts-note", errText(e.message)); });
   }
+
+  // Triage and the FRRS record (web/ui/frrs.js): the page's helpers,
+  // lent once.
+  if (window.SlothFrrs) SlothFrrs.init({ el: el, getJSON: getJSON, DataTable: DataTable,
+    prefGet: prefGet, prefSet: prefSet, stamp: stamp, shortStamp: shortStamp, go: go, show: show,
+    openDrawer: openDrawer, alertsReload: function () { alertsLoad(true); } });
 
   // The Overview is the first view: learn whether there is a store (for
   // the tier), then draw it, and redraw every minute.

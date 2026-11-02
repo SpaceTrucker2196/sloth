@@ -64,6 +64,9 @@ typedef struct {
     unsigned long accept_paused; /* accept() out of fds/memory: back-off */
     unsigned long status_404, status_405, status_431, status_400;
     unsigned long status_200, status_304, status_503, status_421;
+    unsigned long status_413;     /* a POST body over its bound, unread */
+    unsigned long status_403;     /* a POST refused by the Origin rule */
+    unsigned long posts;          /* POST requests routed (body complete) */
     unsigned long sse_opened;     /* /events streams started */
     unsigned long sse_closed;     /* ended by the client */
     unsigned long sse_dropped;    /* ended by us: WEB_SSE_MAX_UNSENT behind */
@@ -84,6 +87,22 @@ typedef struct {
     const unsigned char *body;    /* static body sent after out */
     size_t    body_len, body_off;
     int       sql_hold;       /* body is the SQL box's: release at close */
+    /* A POST (docs/web-frrs-spec.md §5.3): the peer's address as the
+     * row records it, the body read so far and how much is promised.
+     * The body lands in post[] (WEB_POST_MAX), or, for the import route,
+     * in import_buf, made for the length promised (one import at a time:
+     * import_held, the server's import_conn) and freed when the slot
+     * closes. close_now: the 413 answer goes out and the socket closes
+     * at once, no linger, so an oversize body is never drained.
+     * body_free: body is the route's malloc'd answer (the export), freed
+     * when it is sent or the slot closes. */
+    char      peer[WEB_PEER_MAX];
+    char      post[WEB_POST_MAX];
+    size_t    post_len, post_want;
+    int       import_held;
+    char     *import_buf;
+    int       close_now;
+    int       body_free;
 } web_conn_t;
 
 typedef struct {
@@ -103,6 +122,7 @@ typedef struct {
     const web_m4_t *m4;       /* NULL: no Devices or Lookup; set before run */
     web_sqlbox_t   *sql;      /* NULL: no SQL box; set before run */
     int             sql_conn; /* the slot waiting on the box, or -1 */
+    int             import_conn;  /* the slot reading an import, or -1 */
     unsigned long long rec_sent;  /* newest ticker record broadcast */
     unsigned long long anom_sent; /* newest anomaly change broadcast */
     pthread_mutex_t mu;       /* guards stats only */

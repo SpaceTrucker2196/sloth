@@ -128,4 +128,24 @@ int web_adb_incidents(web_sdb_conn_t *c, long long rid, const char *key,
 int web_adb_device(web_sdb_conn_t *c, long long rid, const char *key,
                    const char *ip, char mac[18]);
 
+/* The finding a key is (docs/web-frrs-spec.md §3.1), by a rowid of it
+ * or the key itself: its first row (the smallest rowid, which never
+ * changes as rows accrete) and that row's descriptor. The key is a
+ * predicate, as everywhere here. 1 found, 0 none, -1. */
+typedef struct {
+    long long first_rid;
+    int       type, port;            /* port -1 none */
+    char      ip[WEB_SDB_TEXT_MAX + 1];
+    long long first_seen;
+} web_adb_finding_t;
+int web_adb_finding(web_sdb_conn_t *c, long long rid, const char *key,
+                    web_adb_finding_t *out);
+
+/* The emitter an alert names on the air: a beacon_aps BSSID in its key,
+ * else a probe_clients or devices MAC in it (by rowid or the key
+ * itself, as a predicate). *kind 1 a BSSID, 0 a station. 1 found, 0
+ * none, -1. */
+int web_adb_emitter(web_sdb_conn_t *c, long long rid, const char *key,
+                    char mac[18], int *kind);
+
 #endif

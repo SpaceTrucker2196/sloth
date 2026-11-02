@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "web_acl.h"
+#include "web_frrs.h"
 #include "web_metrics.h"
 
 /* ── --socket ────────────────────────────────────────────────────────── */
@@ -127,6 +128,7 @@ static void one_line(web_feed_t *f, web_live_t *l, long long now_ms) {
     if (e == WEB_JL_OK) {
         web_live_apply(l, &f->rec, now_ms);
         if (f->metrics) web_metrics_record(f->metrics, &f->rec);
+        if (f->frrs) web_frrs_record(f->frrs, &f->rec);
     } else {
         web_live_decode_error(l, e, now_ms);
         if (f->metrics) web_metrics_taint(f->metrics);
@@ -354,6 +356,10 @@ int web_ingest_start(web_ingest_t *g, const web_sockspec_t *spec,
 
 void web_ingest_set_metrics(web_ingest_t *g, struct web_metrics *m) {
     g->feed.metrics = m;
+}
+
+void web_ingest_set_frrs(web_ingest_t *g, struct web_frrs *f) {
+    g->feed.frrs = f;
 }
 
 void web_ingest_stop(web_ingest_t *g) {

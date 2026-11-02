@@ -164,6 +164,89 @@ static const char STEP_V5_SQL[] =
     ") WITHOUT ROWID;\n"
     "CREATE INDEX chmix_t ON chmix (tier, t);\n";
 
+/* v5 -> v6 (docs/web-frrs-spec.md §3): the operator's own state. triage
+ * is append-only: one row per decision on one finding (its subject as
+ * the alert routes name it, the sloth.db rowid once resolved, and the
+ * (type, addr, port, first_seen) descriptor that survives a rebuild),
+ * so every change is reversible by another. The tacdb_* tables are the
+ * platforms, their equipment and the units that own them, soft-deleted
+ * (deleted 0/1) so a delete is a change like any other. Every TEXT
+ * column holds an address, slothweb's own words or operator text, cut
+ * to its bound at validation (web_frrs.c); nothing from the stream.
+ * Additive: five new tables and their indexes, nothing that exists is
+ * changed. Plain CREATE, as every step: a file already holding one of
+ * these names fails the step and stays at v5. */
+static const char STEP_V6_SQL[] =
+    "CREATE TABLE triage (\n"
+    "  id         INTEGER PRIMARY KEY,\n"
+    "  subject    TEXT NOT NULL,\n"
+    "  finding    INTEGER,\n"
+    "  type       INTEGER NOT NULL,\n"
+    "  addr       TEXT NOT NULL DEFAULT '',\n"
+    "  port       INTEGER NOT NULL DEFAULT 0,\n"
+    "  first_seen INTEGER NOT NULL DEFAULT 0,\n"
+    "  state      INTEGER NOT NULL,\n"
+    "  prev_state INTEGER NOT NULL DEFAULT 0,\n"
+    "  via        INTEGER NOT NULL DEFAULT 0,\n"
+    "  basis      TEXT NOT NULL DEFAULT '',\n"
+    "  note       TEXT NOT NULL DEFAULT '',\n"
+    "  who        TEXT NOT NULL DEFAULT '',\n"
+    "  peer       TEXT NOT NULL DEFAULT '',\n"
+    "  ts         INTEGER NOT NULL\n"
+    ");\n"
+    "CREATE INDEX triage_subject ON triage (subject, id);\n"
+    "CREATE INDEX triage_finding ON triage (finding, id);\n"
+    "CREATE INDEX triage_desc ON triage (type, addr, port, first_seen);\n"
+    "CREATE TABLE tacdb_unit (\n"
+    "  id      INTEGER PRIMARY KEY,\n"
+    "  parent  INTEGER,\n"
+    "  name    TEXT NOT NULL,\n"
+    "  kind    INTEGER NOT NULL DEFAULT 5,\n"
+    "  note    TEXT NOT NULL DEFAULT '',\n"
+    "  origin  INTEGER NOT NULL DEFAULT 0,\n"
+    "  created INTEGER NOT NULL,\n"
+    "  updated INTEGER NOT NULL,\n"
+    "  deleted INTEGER NOT NULL DEFAULT 0\n"
+    ");\n"
+    "CREATE INDEX tacdb_unit_parent ON tacdb_unit (parent);\n"
+    "CREATE TABLE tacdb_platform (\n"
+    "  id           INTEGER PRIMARY KEY,\n"
+    "  unit         INTEGER,\n"
+    "  nomenclature TEXT NOT NULL,\n"
+    "  class        INTEGER NOT NULL DEFAULT 0,\n"
+    "  vendor       TEXT NOT NULL DEFAULT '',\n"
+    "  note         TEXT NOT NULL DEFAULT '',\n"
+    "  confirmed    INTEGER NOT NULL DEFAULT 1,\n"
+    "  origin       INTEGER NOT NULL DEFAULT 0,\n"
+    "  created      INTEGER NOT NULL,\n"
+    "  updated      INTEGER NOT NULL,\n"
+    "  deleted      INTEGER NOT NULL DEFAULT 0\n"
+    ");\n"
+    "CREATE UNIQUE INDEX tacdb_platform_nom ON tacdb_platform (nomenclature)"
+    " WHERE deleted = 0;\n"
+    "CREATE TABLE tacdb_emitter (\n"
+    "  platform  INTEGER NOT NULL,\n"
+    "  kind      INTEGER NOT NULL,\n"
+    "  addr      TEXT NOT NULL,\n"
+    "  role      INTEGER NOT NULL DEFAULT 0,\n"
+    "  label     TEXT NOT NULL DEFAULT '',\n"
+    "  confirmed INTEGER NOT NULL DEFAULT 1,\n"
+    "  origin    INTEGER NOT NULL DEFAULT 0,\n"
+    "  created   INTEGER NOT NULL,\n"
+    "  updated   INTEGER NOT NULL,\n"
+    "  deleted   INTEGER NOT NULL DEFAULT 0,\n"
+    "  PRIMARY KEY (platform, kind, addr)\n"
+    ") WITHOUT ROWID;\n"
+    "CREATE UNIQUE INDEX tacdb_emitter_addr ON tacdb_emitter (kind, addr)"
+    " WHERE deleted = 0;\n"
+    "CREATE TABLE tacdb_dismiss (\n"
+    "  rule INTEGER NOT NULL,\n"
+    "  a    TEXT NOT NULL,\n"
+    "  b    TEXT NOT NULL DEFAULT '',\n"
+    "  ts   INTEGER NOT NULL,\n"
+    "  PRIMARY KEY (rule, a, b)\n"
+    ") WITHOUT ROWID;\n";
+
 typedef struct {
     int         from;
     const char *sql;
@@ -177,6 +260,8 @@ static const web_step_t STEPS[] = {
                       "and reported" },
     { 3, STEP_V4_SQL, "created passive_ptr" },
     { 4, STEP_V5_SQL, "created chmix" },
+    { 5, STEP_V6_SQL, "created triage, tacdb_unit, tacdb_platform, "
+                      "tacdb_emitter and tacdb_dismiss" },
 };
 #define STEP_N ((int)(sizeof(STEPS) / sizeof(STEPS[0])))
 
@@ -221,6 +306,13 @@ int web_store_open(web_store_t *s, const char *path, char *err, size_t errsz) {
 }
 
 void web_store_close(web_store_t *s) { (void)s; }
+
+int web_store_open_aux(web_store_t *s, struct sqlite3 **out, char *err, size_t errsz) {
+    (void)s;
+    *out = NULL;
+    snprintf(err, errsz, "built without SQLite");
+    return -1;
+}
 
 int web_store_write(web_store_t *s, const web_qrow_t *rows, size_t n) {
     (void)s; (void)rows; (void)n;
@@ -992,6 +1084,27 @@ int web_store_open(web_store_t *s, const char *path, char *err, size_t errsz) {
     refresh_size(s);
     s->st.analysis_bytes = -1;
     s->st.open = 1;
+    return 0;
+}
+
+int web_store_open_aux(web_store_t *s, sqlite3 **out, char *err, size_t errsz) {
+    *out = NULL;
+    if (!s->st.open) {
+        snprintf(err, errsz, "the store is not open");
+        return -1;
+    }
+    if (private_main(s->path, err, errsz) != 0 || private_side(s->path, err, errsz) != 0)
+        return -1;
+    if (open_db(s->path, SQLITE_OPEN_READWRITE, 0, out, err, errsz) != 0) return -1;
+    /* What it opened is the store the writer identified. */
+    if (identify(*out, s->path, err, errsz) != WEB_STORE_SCHEMA) {
+        if (!err[0]) snprintf(err, errsz, "%s: changed while it was being opened; "
+                                     "refused", s->path);
+        sqlite3_close(*out);
+        *out = NULL;
+        return -1;
+    }
+    sqlite3_busy_timeout(*out, WEB_STORE_AUX_BUSY_MS);
     return 0;
 }
 

@@ -1,0 +1,261 @@
+/* slothweb's alert triage and the FRRS emitter record
+ * (docs/web-frrs-spec.md, owner request 2026-10-27): the operator's
+ * judgement on each finding, and for every emitter sloth hears what the
+ * Joint Spectrum Center's five databases would hold about it, built only
+ * from what sloth already recorded.
+ *
+ *   Triage   append-only rows in slothweb.db (v6, web_store.h): one per
+ *            decision on one finding, false / noise / incident /
+ *            untriaged (a clear), each with who, from where, when, an
+ *            optional note, and for "follow recommended" the words of
+ *            the research assessment that recommended it. The current
+ *            state is the newest row of the finding; every change is
+ *            reversible by another row. Never a change to sloth: triage
+ *            feeds nothing back to the sensor.
+ *   Report   /api/frrs/report: BEI (the RF environment around the
+ *            emitter), SCS (certification and compliance posture), EC/S
+ *            (the observed parametrics), TACDB (the operator's filing)
+ *            and the COMINT report (identity, signal, function, timing,
+ *            technical characteristics, protection posture, peers),
+ *            every field with its sloth source named and "not observed"
+ *            (v null) when absent. Two fixed sentences travel with it:
+ *            a single passive sensor has no location axis, and sloth
+ *            decrypts nothing (MISSION §2).
+ *   TACDB    the operator's platforms (by nomenclature), each one's
+ *            equipment complement (the emitters it owns, each linking to
+ *            its EC/S), and the units that own platforms, a tree four
+ *            deep; suggested from sloth's own correlations (sequence
+ *            counter trails, MLD affiliation, BSSID families, a station
+ *            the card and the air both heard) and confirmed by the
+ *            operator; exported and imported as JSON Lines, so another
+ *            sensor shares it.
+ *
+ * The write surface is slothweb's first (every other route is GET or
+ * HEAD) and is deliberately narrow: POST only, to the six paths
+ * web_http_post_path() names, which answer nothing else (a GET there is
+ * 405 Allow: POST); JSON bodies of at most WEB_POST_MAX bytes
+ * (WEB_IMPORT_MAX for the import); Content-Type checked; the Origin
+ * header required and equal to the request's Host (slothweb sets no
+ * cookie, so this is the whole of its cross-site defence: a browser
+ * sends Origin on every cross-site POST and lets no page forge it); a
+ * token bucket per peer; every member validated to its bound (an
+ * over-long value is refused, never cut); every stored string an
+ * address, slothweb's own words, or operator text that never came off
+ * the stream. web_frrs_gate() runs the header checks before a body byte
+ * is read. --web-read-only removes the surface whole: every POST is 405
+ * Allow: GET, HEAD, as before this module existed. The allow list
+ * (web_acl.h) stays the trust boundary: there is no login, and "by" is
+ * the peer's address plus whatever name the operator typed.
+ *
+ * Writes go over a connection to slothweb.db of the HTTP thread's own
+ * (web_store_open_aux(); web_store.h says why that is the one exception
+ * to "the store thread writes"), one short transaction per request;
+ * reads of sloth.db go through the M4 reader and its column allow-list
+ * (web_slothdb.h), so no credential column is reachable from here
+ * either. The ledger, the one place a stream string lives in this
+ * module, is memory: the latest beacon, regulatory, MLD,
+ * association-request, sequence-number, BLE, TLS and channel facts per
+ * emitter, bounded, written by the ingest thread and read by the HTTP
+ * thread under one mutex, lost at exit and refilled by the stream's
+ * re-broadcast on connect. */
+#ifndef SLOTHWEB_FRRS_H
+#define SLOTHWEB_FRRS_H
+
+#include <pthread.h>
+#include <stddef.h>
+
+#include "web_devices.h"
+#include "web_http.h"
+#include "web_json.h"
+#include "web_jsonl.h"
+#include "web_live.h"
+#include "web_slothdb.h"
+#include "web_store.h"
+
+/* The bounds (docs/web-frrs-spec.md §3). Operator state is never
+ * dropped by --web-max-mb; at a cap a write is refused, 507. */
+#define WEB_FRRS_TRIAGE_CAP   20000
+#define WEB_FRRS_HIST_PER     64
+#define WEB_FRRS_UNITS        512
+#define WEB_FRRS_PLATFORMS    2048
+#define WEB_FRRS_EMITTERS     8192
+#define WEB_FRRS_DISMISS      4096
+#define WEB_FRRS_UNIT_DEPTH   4
+#define WEB_FRRS_ADDR_MAX     45
+#define WEB_FRRS_NOTE_MAX     240
+#define WEB_FRRS_BY_MAX       32
+#define WEB_FRRS_BASIS_MAX    96
+#define WEB_FRRS_NAME_MAX     64
+#define WEB_FRRS_LABEL_MAX    32
+/* The write path's token bucket per peer: a burst of ten, thirty a
+ * minute after; WEB_FRRS_PEERS peers tracked, the least recent evicted.
+ * The import route costs WEB_FRRS_IMPORT_COST of them. */
+#define WEB_FRRS_RATE_BURST   10
+#define WEB_FRRS_RATE_PER_MIN 30
+#define WEB_FRRS_PEERS        64
+#define WEB_FRRS_IMPORT_COST  5
+/* The ledger (§3.3): the latest of each record per emitter. */
+#define WEB_FRRS_LEDGER_BSSID 512
+#define WEB_FRRS_LEDGER_STA   1024
+#define WEB_FRRS_LEDGER_BLE   512
+#define WEB_FRRS_LEDGER_IP    256
+#define WEB_FRRS_LEDGER_CHAN  64
+#define WEB_FRRS_SNI          8
+#define WEB_FRRS_SNI_MAX      64
+#define WEB_FRRS_SEQ_PARTNERS 4
+#define WEB_FRRS_MLD_LINKS    4
+/* /api/frrs/states takes at most this many ids (the query bound,
+ * WEB_QUERY_ROUTE_MAX, holds sixteen of the longest). */
+#define WEB_FRRS_IDS_MAX      16
+/* The lists a record shows. */
+#define WEB_FRRS_LIST         8
+/* Suggestions listed at most, in evidence order. */
+#define WEB_FRRS_SUGGEST_MAX  200
+/* The assessment file read for "follow recommended": its first bytes. */
+#define WEB_FRRS_ASSESS_MAX   4096
+/* The export, one JSON Lines file, and so also what one import takes. */
+#define WEB_FRRS_EXPORT_MAX   WEB_IMPORT_MAX
+
+enum { WEB_TRI_UNTRIAGED = 0, WEB_TRI_FALSE, WEB_TRI_NOISE, WEB_TRI_INCIDENT,
+       WEB_TRI_COUNT };
+enum { WEB_TRI_VIA_MANUAL = 0, WEB_TRI_VIA_RECOMMENDED, WEB_TRI_VIA_IMPORT };
+/* The triage= filter of /api/alerts (§5.4): the four states, and three
+ * groups: any (every row, each carrying its triage), triaged (the three
+ * decided states) and out (false or noise: what the tile counts as
+ * triaged out). */
+enum { WEB_TRI_F_ANY = -1, WEB_TRI_F_TRIAGED = -2, WEB_TRI_F_OUT = -3 };
+#define WEB_TRI_F_BAD (-100)
+
+/* The current triage of one finding. */
+typedef struct {
+    int       state;                 /* WEB_TRI_* */
+    int       prev_state, via;
+    long long ts, finding;           /* finding 0: not resolved */
+    int       history_n;
+    char      note[WEB_FRRS_NOTE_MAX + 1];
+    char      by[WEB_FRRS_BY_MAX + 1];
+    char      basis[WEB_FRRS_BASIS_MAX + 1];
+    char      peer[WEB_PEER_MAX];
+} web_tri_t;
+
+/* What names one alert to the triage join: its id as the alert routes
+ * give it ("s<handle>" or "d<rowid>"), the stream incident's key (a
+ * predicate only, never stored) or the sloth.db row, and the
+ * descriptor that survives a rebuild of sloth.db. */
+typedef struct {
+    const char *id;
+    const char *key;                 /* NULL: not a stream incident */
+    long long   rid;                 /* 0: not a sloth.db row */
+    int         type, port;
+    const char *ip;
+    long long   first;
+} web_tri_q_t;
+
+typedef struct {
+    char      peer[WEB_PEER_MAX];
+    double    tokens;
+    long long last_ms;
+} web_frrs_bucket_t;
+
+typedef struct {
+    unsigned long writes, write_errors, rate_limited;
+    unsigned long refused_origin, refused_ctype, refused_body, refused_size;
+    unsigned long triage_folded, ledger_evictions;
+    unsigned long imports, exports;
+} web_frrs_stats_t;
+
+struct web_frrs_led;
+struct sqlite3;
+
+typedef struct web_frrs {
+    struct sqlite3      *wr;          /* the HTTP thread's writer; NULL none */
+    char                 assess_dir[4096];   /* --web-assessments, "" unset */
+    int                  writes;      /* 0 under --web-read-only */
+    unsigned             nonce;       /* the suggestion tokens' */
+    web_frrs_bucket_t    bucket[WEB_FRRS_PEERS];
+    pthread_mutex_t      lmu;         /* the ledger's and the stats' */
+    int                  lmu_init;
+    struct web_frrs_led *led;
+    web_frrs_stats_t     st;
+    char                 err[WEB_STORE_ERR_MAX];
+} web_frrs_t;
+
+/* Open on the store (store NULL or not open: the record still answers
+ * from the ledger and sloth.db, every triage and TACDB route 503
+ * no_store). assess_dir is --web-assessments or NULL. writes 0 is
+ * --web-read-only. 0, or -1 with err (the writer could not open: the
+ * store opened first, so this is a locked or vanished file). Call
+ * web_frrs_destroy() either way. */
+int  web_frrs_init(web_frrs_t *f, web_store_t *store, const char *assess_dir,
+                   int writes, char *err, size_t errsz);
+void web_frrs_destroy(web_frrs_t *f);
+
+/* The ingest thread: every decoded record, for the ledger. */
+void web_frrs_record(web_frrs_t *f, const web_jrec_t *r);
+
+/* Is this a path of the module (GET or POST)? */
+int  web_frrs_path(const char *path);
+
+/* The routes, GET and POST (docs/web-frrs-spec.md §5): the body into
+ * body (cap bytes), *status set; *extra gets extra header lines
+ * ("Retry-After: 2\r\n", a Content-Disposition) or "". An answer too
+ * large for body (only the export) is put in *big, malloc'd, with
+ * *biglen; the caller sends and frees it. 0, or -1 when not even an
+ * error fit. */
+int  web_frrs_route(const web_m4_t *m, web_live_t *live, const web_req_t *rq,
+                    long long now_s, long long now_ms, char *body, size_t cap,
+                    size_t *len, int *status, char *extra, size_t extracap,
+                    char **big, size_t *biglen);
+
+/* The write path's header checks (§5.3 steps 4-6), before a body byte
+ * is read: Origin, Sec-Fetch-Site, the peer's token bucket, the
+ * Content-Type. 0 to go on, else the status with the reason word in why
+ * (and "Retry-After: N\r\n" in extra for a 429). f may be NULL (no
+ * module: 503 no_store). Counted. */
+int  web_frrs_gate(web_frrs_t *f, const web_req_t *rq, long long now_ms,
+                   const char **why, char *extra, size_t extracap);
+/* A refusal's JSON answer, headers and all, into out. Its length. */
+size_t web_frrs_refusal(int status, const char *why, const char *extra,
+                        char *out, size_t outsz);
+
+/* The triage of one alert for the alert routes' triage= join. c is an
+ * open sloth.db connection or NULL. 1 with *out filled, 0 untriaged
+ * (*out zeroed), -1 on a store error. */
+int  web_frrs_triage_find(web_frrs_t *f, web_sdb_conn_t *c, const web_tri_q_t *q,
+                          web_tri_t *out);
+/* Whether any triage row exists: the join's shortcut. */
+int  web_frrs_triage_any(web_frrs_t *f);
+/* "any", "untriaged", "false", "noise", "incident", "triaged", "out"
+ * -> the WEB_TRI_* value or WEB_TRI_F_*; WEB_TRI_F_BAD for anything
+ * else. */
+int  web_frrs_filter_find(const char *word);
+/* Does a triage state pass a triage= filter? */
+int  web_frrs_filter_pass(int filter, int state);
+const char *web_frrs_state_word(int state);
+const char *web_frrs_via_word(int via);
+
+/* The research assessment's recommendation for an alert type (§3.1):
+ * the WEB_TRI_* state, or WEB_TRI_UNTRIAGED for "no recommendation
+ * yet"; basis gets the front-matter line that decided it ("" none), fm
+ * the three keys' raw values (each "" when absent, printable ASCII,
+ * cut). Reads <assess_dir>/<TYPE>.md with TYPE from the alert table,
+ * never from a request. */
+typedef struct {
+    int  found;                      /* the file was there and had front matter */
+    char fpr[48], noise[48], sev[48];
+} web_frrs_fm_t;
+int  web_frrs_recommend(const web_frrs_t *f, int type, char *basis, size_t basiscap,
+                        web_frrs_fm_t *fm);
+
+/* The "frrs" member of /api/health, preceded by a comma. */
+void web_frrs_health(web_frrs_t *f, web_jw_t *w);
+void web_frrs_stats(web_frrs_t *f, web_frrs_stats_t *out);
+
+/* The write path's checks, each on its own for the tests: the Origin
+ * rule (1 ok), the Content-Type rule (1 ok), the token bucket (1
+ * admitted; cost tokens taken). */
+int  web_frrs_origin_ok(const web_req_t *rq);
+int  web_frrs_ctype_ok(const web_req_t *rq);
+int  web_frrs_rate_admit(web_frrs_t *f, const char *peer, long long now_ms, int cost);
+
+#endif

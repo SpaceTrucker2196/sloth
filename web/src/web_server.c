@@ -7,14 +7,16 @@
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
+#include "web_frrs.h"
 #include "web_routes.h"
 
-enum { C_FREE = 0, C_READ, C_WRITE, C_LINGER, C_SSE, C_SQL };
+enum { C_FREE = 0, C_READ, C_WRITE, C_LINGER, C_SSE, C_SQL, C_BODY };
 
 /* sse_queue() admits up to WEB_SSE_MAX_UNSENT unsent bytes and then
  * copies them into out[]; an out[] smaller than that would be written
@@ -70,6 +72,7 @@ int web_server_open(web_server_t *s, const web_config_t *cfg,
     s->wake[0] = s->wake[1] = -1;
     for (int i = 0; i < WEB_MAX_CONNS; i++) s->conns[i].fd = -1;
     s->sql_conn = -1;
+    s->import_conn = -1;
     s->cfg = *cfg;
     pthread_mutex_init(&s->mu, NULL);
     s->start_ms = now_ms();
@@ -154,9 +157,17 @@ static void conn_close(web_server_t *s, web_conn_t *c) {
     if (c->state == C_SQL) s->sql_conn = -1;
     if (c->sql_hold && s->sql) web_sqlbox_release(s->sql);
     c->sql_hold = 0;
+    if (c->import_held && s->import_conn == (int)(c - s->conns)) s->import_conn = -1;
+    c->import_held = 0;
+    free(c->import_buf);
+    c->import_buf = NULL;
+    c->post_len = c->post_want = 0;
+    c->close_now = 0;
     if (c->fd >= 0) close(c->fd);
     c->fd = -1;
     c->state = C_FREE;
+    if (c->body_free) free((void *)c->body);
+    c->body_free = 0;
     c->body = NULL;
     c->out_len = c->out_off = c->body_len = c->body_off = 0;
 }
@@ -172,6 +183,8 @@ static void count_status(web_server_t *s, int status) {
     case 405: s->stats.status_405++; break;
     case 431: s->stats.status_431++; break;
     case 400: s->stats.status_400++; break;
+    case 413: s->stats.status_413++; break;
+    case 403: s->stats.status_403++; break;
     default: break;
     }
     pthread_mutex_unlock(&s->mu);
@@ -355,6 +368,7 @@ static void conn_route(web_server_t *s, web_conn_t *c, const web_req_t *rq) {
     }
     c->body = r.body;
     c->body_len = r.body_len;
+    c->body_free = r.body_free;
     c->body_off = 0;
     c->state = C_WRITE;
     c->deadline_ms = now_ms() + s->cfg.timeout_ms;
@@ -406,7 +420,26 @@ static void accept_ready(web_server_t *s) {
         c->fd = fd;
         c->state = C_READ;
         c->len = 0;
+        c->post_len = c->post_want = 0;
+        c->import_held = 0;
+        c->import_buf = NULL;
+        c->body_free = 0;
+        c->close_now = 0;
         c->deadline_ms = now_ms() + s->cfg.timeout_ms;
+        /* The peer's address, canonical, for a triage row's "from"
+         * (web_frrs.h): a v4-mapped v6 peer as its v4 form. */
+        c->peer[0] = '\0';
+        if (peer.ss_family == AF_INET6) {
+            const struct sockaddr_in6 *a6 = (const struct sockaddr_in6 *)&peer;
+            if (IN6_IS_ADDR_V4MAPPED(&a6->sin6_addr))
+                inet_ntop(AF_INET, (const unsigned char *)&a6->sin6_addr + 12,
+                          c->peer, sizeof(c->peer));
+            else
+                inet_ntop(AF_INET6, &a6->sin6_addr, c->peer, sizeof(c->peer));
+        } else if (peer.ss_family == AF_INET) {
+            inet_ntop(AF_INET, &((const struct sockaddr_in *)&peer)->sin_addr,
+                      c->peer, sizeof(c->peer));
+        }
     }
 }
 
@@ -438,13 +471,102 @@ static void conn_write(web_server_t *s, web_conn_t *c) {
      * now, before the client has even seen the end of this one. */
     if (c->sql_hold && s->sql) web_sqlbox_release(s->sql);
     c->sql_hold = 0;
+    if (c->body_free) free((void *)c->body);
+    c->body_free = 0;
     c->body = NULL;
+    /* A 413 (a POST body over its bound): the answer is out and the
+     * socket closes now. Draining a quarter megabyte from a peer that
+     * promised one is the cost the bound exists to avoid; the RST a
+     * close with unread bytes can send is accepted for this one case. */
+    if (c->close_now) { conn_close(s, c); return; }
     /* Half-close and drain: closing with unread request bytes queued
      * (a body, or the tail of an oversize header) makes the kernel send
      * RST, which can destroy the response before the client reads it. */
     shutdown(c->fd, SHUT_WR);
     c->state = C_LINGER;
     c->deadline_ms = now_ms() + s->cfg.linger_ms;
+}
+
+/* The body of a POST is complete: route it. The header block is parsed
+ * again from c->buf (cheap, and the request struct is not kept across
+ * reads) and the body and peer are handed on. */
+static void conn_route_post(web_server_t *s, web_conn_t *c) {
+    web_req_t rq;
+    if (web_http_parse(c->buf, c->len, &rq) != WEB_HTTP_ROUTE || !rq.is_post) {
+        conn_respond(s, c, 400, 0);
+        conn_write(s, c);
+        return;
+    }
+    rq.body = c->import_held ? c->import_buf : c->post;
+    rq.body_len = c->post_len;
+    snprintf(rq.peer, sizeof(rq.peer), "%s", c->peer);
+    rq.gated = 1;
+    STAT_INC(s, posts);
+    conn_route(s, c, &rq);
+}
+
+/* A POST's headers are in: decide the body before a byte of it is
+ * taken (docs/web-frrs-spec.md §5.3 steps 6 and 7, the length ones).
+ * No Content-Length is 411; a malformed or doubled one, or any
+ * Transfer-Encoding (no chunked bodies: the length is the bound), 400;
+ * a length over the path's bound 413 and the socket closed; the import
+ * route's buffer in use 503. Otherwise the bytes already received past
+ * the header block are moved into the body buffer and the rest is read
+ * in C_BODY. */
+static void conn_begin_body(web_server_t *s, web_conn_t *c, web_req_t *rq) {
+    /* --web-read-only: every POST is the 405 it was before the write
+     * routes existed, Allow: GET, HEAD, before a header is checked. */
+    if (s->cfg.read_only) { conn_respond(s, c, 405, 0); conn_write(s, c); return; }
+    /* Origin, Sec-Fetch-Site, the peer's bucket and the Content-Type,
+     * before a byte of the body is taken (docs/web-frrs-spec.md §5.3
+     * steps 4-6). */
+    snprintf(rq->peer, sizeof(rq->peer), "%s", c->peer);
+    const char *why = NULL;
+    char extra[64];
+    int g = web_frrs_gate(s->m4 ? s->m4->frrs : NULL, rq, now_ms(), &why, extra, sizeof(extra));
+    if (g) {
+        c->out_len = web_frrs_refusal(g, why, extra, c->out, sizeof(c->out));
+        c->out_off = 0;
+        c->body = NULL;
+        c->body_len = c->body_off = 0;
+        c->state = C_WRITE;
+        c->deadline_ms = now_ms() + s->cfg.timeout_ms;
+        count_status(s, g);
+        if (!c->out_len) { conn_close(s, c); return; }
+        conn_write(s, c);
+        return;
+    }
+    int import = !strcmp(rq->path, "/api/frrs/import");
+    size_t max = import ? WEB_IMPORT_MAX : WEB_POST_MAX;
+    if (rq->has_te) { conn_respond(s, c, 400, 0); conn_write(s, c); return; }
+    if (rq->content_length == -1) { conn_respond(s, c, 411, 0); conn_write(s, c); return; }
+    if (rq->content_length < 0) {
+        conn_respond(s, c, 400, 0); conn_write(s, c); return;
+    }
+    if ((unsigned long long)rq->content_length > max) {
+        conn_respond(s, c, 413, 0);
+        c->close_now = 1;
+        conn_write(s, c);
+        return;
+    }
+    if (import) {
+        /* One import at a time, its buffer made for it and freed when
+         * the connection ends. */
+        if (s->import_conn >= 0) { conn_respond(s, c, 503, 0); conn_write(s, c); return; }
+        c->import_buf = malloc(rq->content_length > 0 ? (size_t)rq->content_length : 1);
+        if (!c->import_buf) { conn_respond(s, c, 503, 0); conn_write(s, c); return; }
+        s->import_conn = (int)(c - s->conns);
+        c->import_held = 1;
+    }
+    char *dst = import ? c->import_buf : c->post;
+    c->post_want = (size_t)rq->content_length;
+    size_t have = c->len > rq->hdr_len ? c->len - rq->hdr_len : 0;
+    if (have > c->post_want) have = c->post_want;   /* pipelined bytes: dropped */
+    memcpy(dst, c->buf + rq->hdr_len, have);
+    c->post_len = have;
+    c->len = rq->hdr_len;         /* the header block alone is kept */
+    if (c->post_len >= c->post_want) { conn_route_post(s, c); return; }
+    c->state = C_BODY;
 }
 
 static void conn_read(web_server_t *s, web_conn_t *c) {
@@ -477,6 +599,24 @@ static void conn_read(web_server_t *s, web_conn_t *c) {
         }
     }
 
+    if (c->state == C_BODY) {
+        char *dst = c->import_held ? c->import_buf : c->post;
+        for (;;) {
+            size_t room = c->post_want - c->post_len;
+            if (!room) break;
+            ssize_t n = recv(c->fd, dst + c->post_len, room, 0);
+            if (n == 0) { conn_close(s, c); return; }
+            if (n < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return;
+                conn_close(s, c);
+                return;
+            }
+            c->post_len += (size_t)n;
+        }
+        conn_route_post(s, c);
+        return;
+    }
+
     ssize_t n = recv(c->fd, c->buf + c->len, sizeof(c->buf) - c->len, 0);
     if (n == 0) { conn_close(s, c); return; }
     if (n < 0) {
@@ -489,7 +629,11 @@ static void conn_read(web_server_t *s, web_conn_t *c) {
     web_req_t rq;
     int status = web_http_parse(c->buf, c->len, &rq);
     if (status == 0) return;
-    if (status == WEB_HTTP_ROUTE) { conn_route(s, c, &rq); return; }
+    if (status == WEB_HTTP_ROUTE) {
+        if (rq.is_post) { conn_begin_body(s, c, &rq); return; }
+        conn_route(s, c, &rq);
+        return;
+    }
     conn_respond(s, c, status, rq.is_head);
     conn_write(s, c);
 }
@@ -521,7 +665,7 @@ static void sql_ready(web_server_t *s) {
 static void conn_timeout(web_server_t *s, web_conn_t *c) {
     if (c->state == C_LINGER) { conn_close(s, c); return; }
     STAT_INC(s, timeouts);
-    if (c->state == C_READ) {
+    if (c->state == C_READ || c->state == C_BODY) {
         /* One best-effort 408. A client too slow to send a header is
          * not owed a write budget for the answer. */
         char out[512];

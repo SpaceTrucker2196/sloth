@@ -78,5 +78,6 @@ void run_alerts_tests(void);
 void run_scope_tests(void);
 void run_prefs_tests(void);
 void run_glyph_tests(void);
+void run_frrs_tests(void);
 
 #endif

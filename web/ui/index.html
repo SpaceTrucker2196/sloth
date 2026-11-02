@@ -13,10 +13,12 @@
 @include palette.css
 @include theme.css
 @include page.css
+@include frrs.css
 </style>
 <script>
 @include palette.js
 @include glyph.js
+@include frrs.js
 @include app.js
 </script>
 </head>
@@ -37,6 +39,7 @@
       <li><button type="button" class="go" id="nav-flows"><span class="k">7</span>Flows</button></li>
       <li><button type="button" class="go" id="nav-history"><span class="k">8</span>History</button></li>
       <li><button type="button" class="go" id="nav-lookup"><span class="k">9</span>Lookup</button></li>
+      <li><button type="button" class="go" id="nav-tacdb"><span class="k">0</span>TACDB</button></li>
     </ol></nav>
     <div class="scope">
       <div class="scope-g" id="scope" role="radiogroup" aria-label="capture scope: what the views show, by how it was captured">
@@ -105,6 +108,7 @@
         <div class="label">open alerts</div>
         <div class="kpi"><span class="sev2" id="k-crit">-</span> <span class="sev1" id="k-warn">-</span> <span class="sev0" id="k-low">-</span></div>
         <div class="sub">crit / warn / low, since connect</div>
+        <div class="sub tri-tile" id="k-alerts-triaged" hidden></div>
       </a>
       <a class="tile hud" id="t-rate" href="#records">
         <div class="label">records/s</div>
@@ -287,6 +291,15 @@
       </select></label>
       <label>type <select id="al-type"><option value="" selected>any</option></select></label>
       <label>search <input type="search" id="al-q" maxlength="63" spellcheck="false" autocomplete="off" placeholder="192.0.2.10 or SMB1"></label>
+      <label>triage <select id="al-triage">
+        <option value="any" selected>any</option>
+        <option value="untriaged">untriaged</option>
+        <option value="triaged">triaged</option>
+        <option value="out">triaged out (false or noise)</option>
+        <option value="false">false</option>
+        <option value="noise">noise</option>
+        <option value="incident">incident</option>
+      </select></label>
       <label>window <select id="al-win">
         <option value="86400">24 h</option>
         <option value="604800" selected>7 d</option>
@@ -309,6 +322,19 @@
     <section class="panel">
       <div class="label">alert <span class="sub" id="ad-note"></span></div>
       <div class="adtitle" id="ad-title"></div>
+    </section>
+    <section class="panel" id="frrs-alert-triage" hidden aria-label="triage">
+      <div class="label">triage <span class="sub" id="frrs-tri-note"></span></div>
+      <div id="frrs-tri-cur"></div>
+      <div class="tri-btns tri-always" id="frrs-tri-btns"></div>
+      <div class="controls tri-form">
+        <label>note <input type="text" id="frrs-note" maxlength="240" spellcheck="false" autocomplete="off" placeholder="optional, kept with the change"></label>
+        <label>by <input type="text" id="frrs-by" maxlength="32" spellcheck="false" autocomplete="off" placeholder="your name (kept in this browser)"></label>
+      </div>
+      <div class="sub" id="frrs-tri-rec"></div>
+      <div class="label">every change, newest first <span class="sub" id="frrs-hist-note"></span> <span class="dt-tools" id="frrs-hist-tools"></span></div>
+      <div class="hscroll" id="frrs-hist-box"><div class="frhrow dhead" id="frrs-hist-head"></div>
+      <ol class="lst" id="frrs-hist"></ol></div>
     </section>
     <section class="row2">
       <div class="panel" id="ad-what">
@@ -345,6 +371,7 @@
       <div class="label">its anomalies</div>
       <div class="cards" id="ad-dev-anoms"></div>
     </section>
+    <div id="frrs-alert"></div>
    </div>
    <div id="v-records" hidden>
     <div class="filterbar"><span id="rc-filter-t">records by type, over the five seconds the records/s tile counts</span> <a href="#overview">back to the overview</a></div>
@@ -443,6 +470,106 @@
       <div class="qout" id="q-out"></div>
     </section>
    </div>
+   <div id="v-tacdb" hidden>
+    <div class="filterbar"><span id="tc-note">operator data: not captured, not scoped; the evidence under each emitter is</span> <span class="sub" id="tc-counts"></span></div>
+    <section class="row2">
+      <div class="panel" aria-label="units">
+        <div class="label">units and subordinate units <span class="sub" id="tc-u-note"></span> <span class="dt-tools" id="tc-units-tools"></span></div>
+        <div class="hscroll" id="tc-units-box"><div class="tcurow dhead" id="tc-units-head"></div>
+        <div id="tc-units"></div></div>
+        <div class="controls tc-form" id="tc-u-form">
+          <label>name <input type="text" id="tc-u-name" maxlength="64" spellcheck="false" autocomplete="off" placeholder="home, office, car"></label>
+          <label>kind <select id="tc-u-kind">
+            <option value="site" selected>site</option>
+            <option value="area">area</option>
+            <option value="room">room</option>
+            <option value="vehicle">vehicle</option>
+            <option value="person">person</option>
+            <option value="other">other</option>
+          </select></label>
+          <label>under <select id="tc-u-parent"><option value="" selected>(top level)</option></select></label>
+          <button type="button" id="tc-u-add">new unit</button>
+          <button type="button" id="tc-u-edit">rename / move the selected</button>
+          <button type="button" id="tc-u-del">delete / restore the selected</button>
+        </div>
+        <div class="sub" id="tc-u-msg"></div>
+      </div>
+      <div class="panel" aria-label="suggestions">
+        <div class="label">suggested from sloth's correlations <span class="sub" id="tc-s-note"></span> <span class="dt-tools" id="tc-sug-tools"></span></div>
+        <div class="hscroll" id="tc-sug-box"><div class="tcsrow dhead" id="tc-sug-head"></div>
+        <div id="tc-sug"></div></div>
+        <div class="sub">each says "may be one platform", never "is the same device": a hypothesis about radios, never an identification of a person (docs/wiki/mac-randomisation.md)</div>
+        <div class="sub" id="tc-s-msg"></div>
+      </div>
+    </section>
+    <section class="panel" aria-label="platforms">
+      <div class="label">platforms, by nomenclature <span class="sub" id="tc-p-note"></span> <span class="dt-tools" id="tc-plat-tools"></span></div>
+      <div class="controls">
+        <label>search <input type="search" id="tc-q" maxlength="63" spellcheck="false" autocomplete="off" placeholder="nomenclature, vendor or address"></label>
+        <span class="sub" id="tc-unit-sel"></span>
+      </div>
+      <div class="hscroll" id="tc-plat-box"><div class="tcprow dhead" id="tc-plat-head"></div>
+      <div id="tc-plat"></div></div>
+      <div class="controls tc-form" id="tc-p-form">
+        <label>nomenclature <input type="text" id="tc-p-nom" maxlength="64" spellcheck="false" autocomplete="off" placeholder="work laptop"></label>
+        <label>class <select id="tc-p-class">
+          <option value="unknown" selected>unknown</option>
+          <option value="phone">phone</option>
+          <option value="laptop">laptop</option>
+          <option value="ap">ap</option>
+          <option value="iot">iot</option>
+          <option value="camera">camera</option>
+          <option value="wearable">wearable</option>
+          <option value="vehicle">vehicle</option>
+          <option value="infrastructure">infrastructure</option>
+          <option value="other">other</option>
+        </select></label>
+        <label>unit <select id="tc-p-unit"><option value="" selected>(unfiled)</option></select></label>
+        <button type="button" id="tc-p-add">new platform</button>
+      </div>
+      <div class="sub" id="tc-p-msg"></div>
+      <div class="controls tc-form">
+        <button type="button" id="tc-export">export (JSON Lines)</button>
+        <label>import <input type="file" id="tc-imp-file" accept=".jsonl,.json,application/json"></label>
+        <button type="button" id="tc-imp-check">check the file</button>
+        <button type="button" id="tc-imp-merge">merge it</button>
+        <span class="sub" id="tc-imp-msg"></span>
+      </div>
+    </section>
+    <section class="panel" id="tc-platform" hidden aria-label="the platform">
+      <div class="label">platform <b id="tc-pv-title"></b> <span class="sub" id="tc-pv-note"></span> <span id="bundle-btn-tacdb"></span> <span class="dt-tools" id="tc-em-tools"></span></div>
+      <div id="tc-pv-kv"></div>
+      <div class="label">equipment complement</div>
+      <div class="hscroll" id="tc-em-box"><div class="tcerow dhead" id="tc-em-head"></div>
+      <div id="tc-em"></div></div>
+      <div class="controls tc-form" id="tc-pv-form">
+        <label>rename <input type="text" id="tc-pv-nom" maxlength="64" spellcheck="false" autocomplete="off"></label>
+        <label>file under <select id="tc-pv-unit"><option value="" selected>(unfiled)</option></select></label>
+        <button type="button" id="tc-pv-save">save</button>
+        <button type="button" id="tc-pv-del">delete / restore</button>
+      </div>
+      <div class="controls tc-form" id="tc-e-form">
+        <label>emitter <select id="tc-e-kind">
+          <option value="sta" selected>Wi-Fi station</option>
+          <option value="bssid">BSSID</option>
+          <option value="ble">BLE (addr/type)</option>
+        </select></label>
+        <label>address <input type="text" id="tc-e-addr" maxlength="19" spellcheck="false" autocomplete="off" placeholder="aa:bb:cc:dd:ee:ff or /1 for BLE"></label>
+        <label>role <select id="tc-e-role">
+          <option value="primary" selected>primary</option>
+          <option value="mld-link">mld-link</option>
+          <option value="rotation">rotation</option>
+          <option value="vap">vap</option>
+          <option value="other">other</option>
+        </select></label>
+        <label>label <input type="text" id="tc-e-label" maxlength="32" spellcheck="false" autocomplete="off"></label>
+        <button type="button" id="tc-e-add">add to the platform</button>
+      </div>
+      <div class="sub" id="tc-pv-msg"></div>
+      <div id="tc-pv-detail"></div>
+      <div class="sub">no location axis &#183; sloth decrypts nothing</div>
+    </section>
+   </div>
    <div id="v-activity" hidden>
     <div class="filterbar" id="a-focus-bar" hidden><span id="a-focus-t"></span> <a href="#activity">every metric</a> <a href="#overview">back to the overview</a></div>
     <section class="panel" id="a-focus" hidden aria-label="throughput by interface">
@@ -489,6 +616,7 @@
     <canvas class="heat" id="dr-week" aria-label="share of weeks present by local hour, Monday first"></canvas>
     <div class="label">anomalies</div>
     <div class="cards" id="dr-anoms"></div>
+    <div id="frrs-drawer"></div>
   </aside>
   <footer class="foot" aria-label="slothweb">
     <span>sock <b id="sock">-</b></span>

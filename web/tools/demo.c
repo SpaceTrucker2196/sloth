@@ -240,6 +240,47 @@ static int make_db(const char *path) {
     ex("INSERT INTO karma_candidates (bssid,ssid_count,pnl_overlap,pnl_best,ie_uniform,"
        "score,top_ssid,first_seen,last_seen) VALUES ('%s',4,3,2,1,82,'demo-cafe',%lld,%lld)",
        AP[3].bssid, now - 3 * H, now - 30);
+    /* The FRRS record's parametrics and posture (docs/web-frrs-spec.md
+     * §4): the columns sloth fills from a beacon, a client's
+     * association request, a BTM steer, a sequence-counter trail and the
+     * multi-radio merge. No rnd() here: the passes the suite replays
+     * draw the same numbers as before this block existed. */
+    ex("UPDATE beacon_aps SET beacon_ms=100, frame_count=4200,"
+       " pairwise=CASE WHEN enc='OPEN' THEN NULL ELSE 'CCMP' END,"
+       " group_ciph=CASE WHEN enc='OPEN' THEN NULL ELSE 'CCMP' END");
+    /* A second SSID from the home AP's radio: a virtual BSSID one up
+     * from it, on its channel (the TACDB's S3 suggestion). */
+    ex("INSERT INTO beacon_aps (bssid,ssid,signal_dbm,channel,enc,akm,akm_bits,mfp,"
+       "downgrade_flags,phy,has_wps,first_seen,last_seen) VALUES ('02:de:00:00:00:a9',"
+       "'example-home-iot',-42,6,'WPA2','PSK',4,0,0,'n',0,%lld,%lld)", now - 29 * D, now - 5);
+    ex("UPDATE beacon_aps SET has_qbss=1, qbss_stations=7, qbss_chan_util=88"
+       " WHERE bssid='%s'", AP[0].bssid);
+    ex("UPDATE beacon_aps SET wps_state=2, wps_locked=0 WHERE bssid='%s'", AP[2].bssid);
+    ex("INSERT INTO ssid_akm_history (ssid,bssid,akm_bits,first_seen,last_seen) VALUES"
+       " ('example-home','%s',%d,%lld,%lld), ('neighbour-demo','%s',4,%lld,%lld),"
+       " ('neighbour-demo','%s',256,%lld,%lld)", AP[0].bssid, 0x104, now - 29 * D, now - 5,
+       AP[4].bssid, now - 15 * D, now - 9 * D, AP[4].bssid, now - 9 * D, now - 5);
+    ex("INSERT INTO assoc_reqs (bssid,sta_mac,requested_ssid,listen_interval,akm_bits,"
+       "pairwise_bits,requested_mfp,supported_rates,phy,vendor_ie_hash,first_seen,last_seen)"
+       " VALUES ('%s','%s','example-home',10,256,16,1,4095,'HE',1311768467294899695,%lld,%lld)",
+       AP[0].bssid, DEV[3].mac, now - 21 * D, now - 40);
+    ex("INSERT INTO btm_requests (bssid,sta_mac,req_count,imminent_count,first_seen,last_seen)"
+       " VALUES ('%s','%s',3,0,%lld,%lld)", AP[0].bssid, DEV[4].mac, now - 2 * D, now - 3 * H);
+    ex("UPDATE pnl_clients SET os_fp='Apple', phy='HE', phy_confirmed=1 WHERE mac='%s'",
+       DEV[3].mac);
+    ex("INSERT INTO seqnum_correlations (mac_a,mac_b,mac_a_random,mac_b_random,gap,dt_ms,"
+       "a_count,b_count,first_seen,last_seen) VALUES ('%s','%s',1,1,3,4200,40,38,%lld,%lld)",
+       DEV[14].mac, DEV[15].mac, now - 3 * D, now - 2 * H);
+    ex("INSERT INTO wifi_merged (entity,sensor_mask,seen_by,best_rssi,best_sensor,channel,"
+       "observations,first_seen,last_seen) VALUES ('%s',3,2,-39,0,6,900,%lld,%lld),"
+       " ('%s',1,1,-46,0,6,410,%lld,%lld)", AP[0].bssid, now - 29 * D, now - 5,
+       DEV[3].mac, now - 21 * D, now - 40);
+    /* The host's own card is a station of the home AP too: the TACDB's
+     * S6 suggestion (one emitter heard in both scopes). */
+    ex("INSERT INTO wifi_stas (mac,signal_dbm,tx_rate_kbps,rx_rate_kbps,connected_secs,"
+       "inactive_ms,tx_bytes,rx_bytes,first_seen,last_seen) VALUES"
+       " ('%s',-55,866700,780000,5400,120,48000000,910000000,%lld,%lld)",
+       DEV[11].mac, now - 6 * D, now - 20);
     /* Alert episodes, oldest first; type is sloth_alerts.def's row, the
      * detail in the format the rule writes (src/alerts/). sloth upserts
      * one row per (key, first_seen), so a finding that comes and goes is
@@ -271,6 +312,11 @@ static int make_db(const char *path) {
           "FTP user demo-user in the clear on FTP -> 192.0.2.10:21" },
         { 0,  1, "PORT_SCAN",       "scan:192.0.2.21",                            "192.0.2.21", 0,
           50 * 60, 300, 22, 1, 0, "192.0.2.21 scanned 22 distinct ports" },
+        /* A posture finding (no ATT&CK technique): what the FRRS
+         * record's SCS group lists for the emitter. */
+        { 80, 0, "COUNTRY_ABSENT",  "countryabsent:02:de:00:00:00:a5",            NULL, 0,
+          7 * 3600, 3600, 1, 1, 0,
+          "02:de:00:00:00:a5 (neighbour-demo) beacons on 5 GHz channel 149 with no Country element" },
     };
     for (size_t i = 0; i < sizeof(AL) / sizeof(AL[0]); i++) {
         for (int r = AL[i].runs - 1; r >= 0; r--) {
@@ -562,10 +608,99 @@ static void pass(long long t, long long start, unsigned long k) {
     for (int a = 0; a < NAP; a++)
         line("{\"type\":\"beacon\",\"ts\":%lld,\"ssid\":\"%s\",\"bssid\":\"%s\","
              "\"signal_dbm\":%d,\"channel\":%d,\"channel_source\":%d,\"enc\":\"%s\","
-             "\"last_seen\":%lld,\"frame_count\":%lu}", t,
+             "\"last_seen\":%lld,\"frame_count\":%lu,\"beacon_ms\":100,"
+             "\"primary_channel\":%d,\"secondary_offset\":%d,\"operating_width\":%d,"
+             "\"phy\":\"%s\",\"akm\":\"%s\",\"akm_bits\":%d,\"mfp\":%d,"
+             "\"pairwise\":\"%s\",\"group\":\"%s\",\"has_wps\":%d,"
+             "\"rssi_min_60s\":%d,\"rssi_max_60s\":%d,\"tbtt_jitter_us\":%d,"
+             "\"tbtt_jitter_samples\":60,\"vendor_ies_hash\":%d,\"ie_order_hash\":%d,"
+             "\"ie_order_count\":%d,\"est_dist_m\":%.1f,\"est_dist_band\":\"%s\","
+             "\"est_dist_trend\":\"steady\",\"est_ptx_source\":\"default\"}", t,
              AP[a].stream_ssid ? AP[a].stream_ssid : AP[a].ssid, AP[a].bssid,
              AP[a].signal, AP[a].channel, AP[a].six ? 3 : 1, AP[a].enc, t,
-             k * (unsigned long)(4 + 2 * a) + (k % 120 < 60 && a == 3 ? k : 0));
+             k * (unsigned long)(4 + 2 * a) + (k % 120 < 60 && a == 3 ? k : 0),
+             AP[a].channel, AP[a].channel > 14 ? 1 : 0,
+             AP[a].six ? 160 : AP[a].channel > 14 ? 80 : 20,
+             AP[a].six ? "EHT" : AP[a].channel > 14 ? "VHT" : "HT", AP[a].akm,
+             AP[a].akm_bits, AP[a].mfp, AP[a].enc[0] == 'O' ? "" : "CCMP",
+             AP[a].enc[0] == 'O' ? "" : "CCMP", a == 2,
+             AP[a].signal - 4, AP[a].signal + 3, a == 3 ? 900 : 40 + 10 * a,
+             0x51a70000 + a, 0x0e0d0000 + a, 9 + a % 3,
+             AP[a].signal > -50 ? 2.5 + 0.5 * a : 12.0 + 2.0 * a,
+             AP[a].signal > -50 ? "near" : AP[a].signal > -75 ? "room" : "far");
+    /* The records the FRRS record reads from the stream alone
+     * (docs/web-frrs-spec.md §3.3): the regulatory envelope of three
+     * APs (one with no Country element), one Multi-Link Device, a
+     * client's association request and probe-list summary, a
+     * sequence-counter trail between two randomised probers, and three
+     * BLE advertisers. Fixed values, no rnd(). */
+    line("{\"type\":\"wifi_regulatory\",\"ts\":%lld,\"bssid\":\"%s\","
+         "\"country_present\":1,\"country\":\"US\",\"env\":\"any\",\"env_raw\":32,"
+         "\"triplets_truncated\":0,\"triplets\":[{\"first_channel\":1,\"num_channels\":11,"
+         "\"max_tx_power_dbm\":30}],\"power_constraint_present\":1,"
+         "\"power_constraint_db\":3,\"tpc_present\":1,\"tpc_tx_power_dbm\":17,"
+         "\"tpc_link_margin_db\":0,\"he6_present\":0,\"he6_reg_info\":0,"
+         "\"he6_reg_info_name\":\"\",\"tpe_truncated\":0,\"tpe\":[],"
+         "\"malformed_country\":0}", t, AP[0].bssid);
+    line("{\"type\":\"wifi_regulatory\",\"ts\":%lld,\"bssid\":\"%s\","
+         "\"country_present\":0,\"country\":\"\",\"env\":\"\",\"env_raw\":0,"
+         "\"triplets_truncated\":0,\"triplets\":[],\"power_constraint_present\":0,"
+         "\"power_constraint_db\":0,\"tpc_present\":0,\"tpc_tx_power_dbm\":0,"
+         "\"tpc_link_margin_db\":0,\"he6_present\":0,\"he6_reg_info\":0,"
+         "\"he6_reg_info_name\":\"\",\"tpe_truncated\":0,\"tpe\":[],"
+         "\"malformed_country\":0}", t, AP[4].bssid);
+    line("{\"type\":\"wifi_regulatory\",\"ts\":%lld,\"bssid\":\"%s\","
+         "\"country_present\":1,\"country\":\"US\",\"env\":\"indoor\",\"env_raw\":73,"
+         "\"triplets_truncated\":0,\"triplets\":[],\"power_constraint_present\":0,"
+         "\"power_constraint_db\":0,\"tpc_present\":1,\"tpc_tx_power_dbm\":12,"
+         "\"tpc_link_margin_db\":0,\"he6_present\":1,\"he6_reg_info\":0,"
+         "\"he6_reg_info_name\":\"indoor_ap\",\"tpe_truncated\":0,\"tpe\":[],"
+         "\"malformed_country\":0}", t, AP[7].bssid);
+    line("{\"type\":\"wifi_mld\",\"ts\":%lld,\"mld_mac\":\"02:de:00:00:00:b0\","
+         "\"link_count\":2,\"links_truncated\":0,\"link_0_mac\":\"%s\",\"link_0_id\":0,"
+         "\"link_1_mac\":\"%s\",\"link_1_id\":1,\"first_seen\":%lld,\"last_seen\":%lld}",
+         t, AP[0].bssid, AP[7].bssid, start, t);
+    line("{\"type\":\"wifi_assoc_req\",\"ts\":%lld,\"bssid\":\"%s\",\"sta_mac\":\"%s\","
+         "\"requested_ssid\":\"example-home\",\"is_reassoc\":0,\"listen_interval\":10,"
+         "\"capability_info\":4369,\"akm_bits\":256,\"pairwise_bits\":16,"
+         "\"requested_mfp\":1,\"supported_rates\":4095,\"phy\":\"HE\","
+         "\"vendor_ie_hash\":1311768467294899695,\"downgrade_flags\":0,"
+         "\"prev_akm_bits\":0,\"prev_mfp\":0,\"last_seen\":%lld}", t, AP[0].bssid,
+         DEV[3].mac, t);
+    line("{\"type\":\"pnl_client\",\"ts\":%lld,\"mac\":\"%s\",\"mac_random\":0,"
+         "\"probe_count\":%lu,\"os_fp\":\"Apple\",\"phy\":\"HE\",\"phy_confirmed\":1,"
+         "\"first_seen\":%lld,\"last_seen\":%lld,\"ssids\":[\"example-home\",\"demo-cafe\"]}",
+         t, DEV[3].mac, 40 + k / 30, start, t);
+    line("{\"type\":\"seqnum_correlation\",\"ts\":%lld,\"mac_a\":\"%s\",\"mac_b\":\"%s\","
+         "\"mac_a_random\":1,\"mac_b_random\":1,\"gap\":3,\"dt_ms\":4200,\"a_count\":40,"
+         "\"b_count\":38,\"fwd_gap\":3,\"confidence\":72,\"window_start\":%lld,"
+         "\"window_end\":%lld,\"a_hist_n\":16,\"b_hist_n\":16,\"a_is_earlier\":1}",
+         t, DEV[14].mac, DEV[15].mac, start, t);
+    static const struct {
+        const char *addr, *name, *watch, *pdu;
+        int type, appearance, mfr, tx, rssi, adapter;
+    } BLE[] = {
+        { "c6:de:00:00:00:b1", "demo-watch", "smartwatch", "ADV_IND", 1, 0x00c2, 0x004c, 4, -61, 0 },
+        { "d2:de:00:00:00:b2", "", "", "ADV_NONCONN_IND", 1, -1, 0x0006, -8, -77, 0 },
+        { "02:de:00:00:00:b3", "demo-keyboard", "", "ADV_IND", 0, 0x03c1, 0x0059, 0, -55, 0 },
+    };
+    for (size_t b = 0; b < sizeof(BLE) / sizeof(BLE[0]); b++)
+        line("{\"type\":\"ble_device\",\"ts\":%lld,\"addr\":\"%s\",\"addr_type\":%d,"
+             "\"sensor\":\"hci\",\"iface\":\"hci0\",\"adapter\":%d,\"sampled\":0,"
+             "\"channel\":%d,\"last_pdu\":\"%s\",\"pdu_mask\":%d,\"name\":\"%s\","
+             "\"name_complete\":%d,\"uuid16\":%d,\"mfr_id\":%d,\"mfr_subtype\":-1,"
+             "\"svc_data_uuid16\":-1,\"appearance\":%d,\"hid\":%d,\"tx_power\":%d,"
+             "\"flags\":6,\"has_rssi\":1,\"rssi\":%d,\"rssi_best\":%d,\"adv_count\":%lu,"
+             "\"watch_category\":\"%s\",\"ext_adv\":%d,\"primary_phy\":1,"
+             "\"secondary_phy\":%d,\"adv_sid\":%d,\"first_seen\":%lld,\"last_seen\":%lld,"
+             "\"est_dist_m\":%.1f,\"est_dist_band\":\"%s\",\"est_dist_trend\":\"steady\","
+             "\"est_ptx_source\":\"%s\"}", t, BLE[b].addr, BLE[b].type, BLE[b].adapter,
+             37 + (int)b, BLE[b].pdu, b == 1 ? 8 : 1, BLE[b].name, BLE[b].name[0] ? 1 : 0,
+             b == 2 ? 0x1812 : -1, BLE[b].mfr, BLE[b].appearance, b == 2 ? 1 : 0, BLE[b].tx,
+             BLE[b].rssi, BLE[b].rssi + 4, 10 * k + 3 * b, BLE[b].watch, b == 1,
+             b == 1 ? 2 : 0, b == 1 ? 3 : -1, start, t,
+             b == 1 ? 9.5 : 2.0 + (double)b, b == 1 ? "room" : "near",
+             BLE[b].tx ? "tx_power" : "default");
     for (int p = 0; p < 6; p++)
         line("{\"type\":\"probe_client\",\"ts\":%lld,\"mac\":\"0a:de:00:00:02:%02x\","
              "\"ssid\":\"\",\"signal_dbm\":-80,\"channel\":%d,\"first_seen\":%lld,"

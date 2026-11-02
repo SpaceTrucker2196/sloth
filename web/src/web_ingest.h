@@ -53,6 +53,7 @@ int  web_backoff_next(int cur, int min_ms, int max_ms);
  * errors out to the live state. A line over WEB_JL_MAX_LINE is
  * discarded through its newline and counted once. */
 struct web_metrics;
+struct web_frrs;
 
 typedef struct {
     size_t     len;
@@ -60,6 +61,9 @@ typedef struct {
     /* M2: every decoded record also goes to the metric derivation
      * (web_metrics.h) when this is set; lost lines taint its pass. */
     struct web_metrics *metrics;
+    /* Triage and the FRRS record: the ledger's latest-per-emitter
+     * records (web_frrs.h), when set. */
+    struct web_frrs *frrs;
     char       line[WEB_JL_MAX_LINE + 1];
     web_jrec_t rec;
 } web_feed_t;
@@ -89,6 +93,9 @@ int  web_ingest_start(web_ingest_t *g, const web_sockspec_t *spec,
 /* Feed the time series as well as the live state. Call before
  * web_ingest_start(); the metrics are then the ingest thread's alone. */
 void web_ingest_set_metrics(web_ingest_t *g, struct web_metrics *m);
+/* Feed the FRRS ledger (web_frrs.h) as well. Call before
+ * web_ingest_start(). */
+void web_ingest_set_frrs(web_ingest_t *g, struct web_frrs *f);
 /* Stop and join it; safe to call when it never started. */
 void web_ingest_stop(web_ingest_t *g);
 

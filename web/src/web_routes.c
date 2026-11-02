@@ -7,6 +7,7 @@
 #include "web_alerts.h"
 #include "web_assets.h"
 #include "web_flows.h"
+#include "web_frrs.h"
 #include "web_history.h"
 #include "web_json.h"
 #include "web_recipes.h"
@@ -340,6 +341,10 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
     web_jw_int(&w, h->sse_clients);
     web_jw_raw(&w, ",\"tick_seq\":");
     web_jw_int(&w, (long long)h->tick_seq);
+    /* Triage and the FRRS record (web_frrs.h): additive, last, and only
+     * when the module is attached, so the answer without it is as it
+     * was. */
+    if (h->m4 && h->m4->frrs) web_frrs_health(h->m4->frrs, &w);
     web_jw_raw(&w, "}\n");
     return w.overflow ? 0 : w.len;
 }
@@ -730,6 +735,79 @@ static int route_alerts(const web_req_t *rq, const web_health_t *h, int one,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+/* /api/frrs/... (web_frrs.h): a JSON answer with the module's extra
+ * header lines (an Allow, a Retry-After), or the export, a body of its
+ * own the connection frees once sent. */
+static int route_frrs(const web_req_t *rq, const web_health_t *h, char *out, size_t outsz,
+                      web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0, biglen = 0;
+    int status = 200;
+    char extra[160];
+    char *big = NULL;
+    static const web_m4_t none;
+    const web_m4_t *m = h->m4 ? h->m4 : &none;
+    int rc = web_frrs_route(m, h->live, rq, h->wall_s, h->now_ms, body, cap, &bl, &status,
+                            extra, sizeof(extra), &big, &biglen);
+    if (rc != 0 || (bl == 0 && !big)) {
+        free(big);
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (big) {
+        r->status = status;
+        if (fit(snprintf(out, outsz,
+            "HTTP/1.1 %d %s\r\n"
+            "Content-Type: application/x-ndjson; charset=utf-8\r\n"
+            "Content-Length: %zu\r\n"
+            "Cache-Control: no-store\r\n"
+            "%s"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n", status, web_http_reason(status), biglen, extra), outsz, &r->out_len) != 0) {
+            free(big);
+            return -1;
+        }
+        if (rq->is_head) {
+            free(big);
+        } else {
+            r->body = (const unsigned char *)big;
+            r->body_len = biglen;
+            r->body_free = 1;
+        }
+        return 0;
+    }
+    scope_echo(h, body, &bl, cap);
+    char hdr[WEB_LIVE_HDR_RESERVE];
+    size_t hl;
+    if (fit(snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        "%s"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", status, web_http_reason(status), bl, extra), sizeof(hdr), &hl) != 0)
+        return -1;
+    if (hl + bl > outsz) return -1;
+    r->status = status;
+    if (rq->is_head) {
+        memcpy(out, hdr, hl);
+        r->out_len = hl;
+        return 0;
+    }
+    memmove(out + hl, body, bl);
+    memcpy(out, hdr, hl);
+    r->out_len = hl + bl;
+    return 0;
+}
+
 /* /api/recipes: docs/wiki/sqlite-schema.md's, as built in. */
 static int route_recipes(const web_req_t *rq, const web_health_t *h, char *out, size_t outsz,
                          web_resp_t *r) {
@@ -947,6 +1025,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_alerts(rq, h, 0, out, outsz, r);
         if (!strcmp(rq->path, "/api/alert"))
             return route_alerts(rq, h, 1, out, outsz, r);
+        if (!strncmp(rq->path, "/api/frrs/", 10) && web_frrs_path(rq->path))
+            return route_frrs(rq, h, out, outsz, r);
         /* Without --web-allow-sql neither exists: a 404 like any path. */
         if (h->sql && h->sql->enabled) {
             if (!strcmp(rq->path, "/api/query"))

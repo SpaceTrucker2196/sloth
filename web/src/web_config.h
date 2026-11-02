@@ -50,6 +50,12 @@ typedef struct {
     char     sloth_db[4096];       /* --sloth-db */
     /* M5 (#163): the SQL box (web_sqlbox.h). Off unless given. */
     int      allow_sql;            /* --web-allow-sql */
+    /* Triage and the TACDB (docs/web-frrs-spec.md): --web-read-only
+     * removes the write surface whole (every POST 405, as before it
+     * existed); --web-assessments is where "follow recommended" reads
+     * <TYPE>.md's front matter, "" unset. */
+    int      read_only;            /* --web-read-only */
+    char     assess_dir[4096];     /* --web-assessments */
 } web_config_t;
 
 void web_config_defaults(web_config_t *c);

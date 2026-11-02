@@ -1,0 +1,58 @@
+/* Alert triage and the FRRS record (web/ui/frrs.js,
+ * docs/web-frrs-spec.md §6). Its own file, so the slices changing
+ * page.css in parallel do not meet it. Only the page's tokens: the
+ * triage chip takes the severity colours (noise low, false warn,
+ * incident crit), no new colour. */
+
+/* A row's triage: a line under the row's cells, the chip on it once
+ * triaged, the buttons while the row is hovered or focused (always on
+ * a device with no hover, and always on an alert's page). */
+.dt .dt-row > .tri-line, .tri-line { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: center; min-width: 0; font-size: 11px; white-space: normal; }
+.tri-line .tri-btns { display: none; }
+.dt-row:hover > .tri-line .tri-btns, .dt-row:focus-within > .tri-line .tri-btns,
+li:hover > .tri-line .tri-btns, li:focus-within > .tri-line .tri-btns { display: inline-flex; }
+@media (hover: none) { .tri-line .tri-btns { display: inline-flex; } }
+.tri-btns { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.tri-btns.tri-always { display: flex; margin: 6px 0; }
+button.tri-b { font-size: 10px; letter-spacing: 0.06em; text-transform: none; padding: 1px 7px; }
+button.tri-b.sev0 { color: var(--sev-low); }
+button.tri-b.sev1 { color: var(--sev-warn); }
+button.tri-b.sev2 { color: var(--sev-crit); }
+button.tri-b:disabled { opacity: 0.45; cursor: default; }
+.tri-chip { font-size: 11px; letter-spacing: 0.04em; }
+.tri-chip.sev1, .tri-chip.sev2 { font-weight: 700; }
+.tri-msg:empty { display: none; }
+/* Triaged out (false, noise): dimmed, never removed. */
+.tri-out { opacity: 0.55; }
+.tri-out:hover, .tri-out:focus-within { opacity: 0.85; }
+.tri-tile { cursor: pointer; color: var(--muted); }
+.tri-tile:hover { color: var(--hover); }
+.tri-form input[type=text] { width: 26ch; max-width: 100%; }
+.frhrow { font-size: 12px; border-top: 1px dotted var(--rule); padding: 1px 0; }
+.frhrow.dhead { border-top: 0; }
+
+/* The record: groups folded, each field its value and its source. */
+.frrs .fr-limit, #frrs-drawer .fr-limit, #tc-pv-detail .fr-limit { color: var(--sev-warn); }
+details.frgrp { border-top: 1px dotted var(--rule); padding: 4px 0; }
+details.frgrp > summary { cursor: pointer; font-size: 12px; color: var(--tui-bright); letter-spacing: 0.04em; }
+details.frgrp > summary:hover { color: var(--hover); }
+.fr-sub { margin-top: 8px; }
+.frkv { display: grid; grid-template-columns: minmax(10ch, 18ch) minmax(0, 1fr) minmax(0, 0.9fr); gap: 1px 10px; font-size: 12px; margin: 4px 0 8px; }
+.frkv .k { color: var(--muted); overflow-wrap: anywhere; }
+.frkv .v { overflow-wrap: anywhere; }
+.frkv .s { font-size: 10px; overflow-wrap: anywhere; }
+#frrs-drawer { margin-top: 10px; }
+
+/* The TACDB tab's tables. */
+.tcurow, .tcprow, .tcsrow, .tcerow { font-size: 12px; border-top: 1px dotted var(--rule); padding: 2px 0; cursor: pointer; }
+.tcurow.dhead, .tcprow.dhead, .tcsrow.dhead, .tcerow.dhead { border-top: 0; cursor: default; }
+.tcurow:not(.dhead):hover, .tcprow:not(.dhead):hover, .tcsrow:not(.dhead):hover, .tcerow:not(.dhead):hover { background: var(--tint); }
+.tcurow.sel, .tcprow.sel, .tcerow.sel { background: var(--tint); border-left: 3px solid var(--brass); }
+.tcurow > span, .tcprow > span, .tcerow > span { white-space: pre; }
+.tcsrow > span:nth-child(4) { white-space: normal; }
+.tc-form { margin-top: 8px; }
+
+@media (max-width: 480px) {
+  .frkv { grid-template-columns: minmax(0, 1fr); }
+  .frkv .s { margin-bottom: 4px; }
+}

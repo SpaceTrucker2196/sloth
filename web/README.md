@@ -260,13 +260,17 @@ and the page says why in each view that needs it):
 | `PATH: needs recovery by sloth, which it does when it next opens it (ERR)` | sloth stopped mid-write; start sloth and it recovers the file. |
 | `PATH: SQLITE_DBCONFIG_DEFENSIVE refused`, `PATH: query_only: ERR` | The SQLite library lacks what slothweb needs: 3.31 or newer. |
 | `no --sloth-db`, `slothweb was built without SQLite; no sloth.db` | The reason `/api/health` gives (`db_error`) when there is no sloth.db to read. |
+| `--web-assessments: empty or too long a path`, `--web-assessments PATH: not a directory` | Give the directory holding the research assessments (`<TYPE>.md` with front matter), or leave the flag out: "follow recommended" then says "no recommendation yet". |
+| `triage: ERR`, `the store is not open`, `PATH: changed while it was being opened; refused` | The triage and TACDB writer (a third connection to the store, [Triage and the FRRS record](#triage-and-the-frrs-record)) could not open what the store thread had just opened: the file was replaced or locked in between. Start again; exit 1. |
 
 **Normal start notices** (not problems): `listening on`, `vendor
 table: ieee (...)`, or `vendor table: sloth (...); A4 off: built
 without the IEEE CSVs in web/data/` for a `WEB_OUI_DIR` build without
 them (see Build), `sloth.db ...: schema vN, N devices, read-only`, `reading
 SPEC`, `time series in`, `baselines (N restored)`, `store schema vN
-migrated to vN`, and in a `WITH_SQLITE=0` build:
+migrated to vN`, `triage and TACDB writes on` (or `off (no store)`),
+`--web-read-only: no write route; every POST is 405`, `follow
+recommended: ...`, and in a `WITH_SQLITE=0` build:
 
 | Message | Meaning |
 |---|---|
@@ -289,12 +293,27 @@ Read this before exposing slothweb to anything but your own loopback.
   `--web-allow CIDR` admits that prefix (it needs `--web-allow-remote`
   too). Each is announced on stderr at start. Loopback stays admitted
   whatever is added. Prefer `ssh -L` to either.
-- **GET and HEAD only.** Every other method is `405`, on every path,
-  for good: there is no endpoint that changes anything in sloth,
-  slothweb, the host or the network.
+- **GET and HEAD, and POST to slothweb's own state only.** Every other
+  method is `405` on every path, and POST is `405` everywhere but the
+  six triage and TACDB write routes ([Triage and the FRRS
+  record](#triage-and-the-frrs-record)), which write slothweb's own
+  store and nothing else: no endpoint changes anything in sloth,
+  sloth.db, the host or the network. A write must carry an `Origin`
+  equal to the `Host` it was sent to (slothweb sets no cookie, so this
+  is its whole cross-site defence: a browser sends `Origin` on every
+  cross-site POST and no page can forge it), `Content-Type:
+  application/json` and a `Content-Length` within the bound (4 KiB; the
+  import 8 MiB), refused before a body byte is read otherwise; and each
+  peer is rate limited. `--web-read-only` removes the write routes
+  whole, restoring GET and HEAD only. `--strict` does not imply it:
+  strict is about where the bind and the peers are, read-only about
+  what an admitted peer may do.
 - **No authentication.** Whoever can reach the port reads everything
-  slothweb serves: every device, name, SSID, flow and alert. There are
-  no accounts and no token; the allow list is the only gate.
+  slothweb serves: every device, name, SSID, flow and alert, and,
+  unless `--web-read-only`, can triage alerts and edit the TACDB. There
+  are no accounts and no token; the allow list is the only gate. A
+  triage row records the peer's address and whatever name the operator
+  typed ("by"): neither is an identity.
 - **No TLS.** Use an SSH tunnel (or a VPN you already trust) for
   another host.
 - **The Host check.** A request is answered only when its `Host` is
@@ -363,6 +382,8 @@ milestone (W0, M0 to M6; tracker #102).
 | `--web-retain-days N` | Days of 1 min buckets kept, 1..400, default 30. |
 | `--sloth-db PATH` | sloth's own database (`sloth --db`), read-only (below). Absent: `/api/devices` is a `503` `no_sloth_db`, the drawer and Lookup answer from the stream and the vendor table, A2 runs on the stream alone, and the page says so. A path that is not there yet, or a file refused, is not fatal: every request opens it afresh. Needs a `WITH_SQLITE` build; the same path as `--store` is refused. |
 | `--web-allow-sql` | The SQL box (M5, below): `/api/query` and `/api/recipes`, and the box on the History view. Off by default; without it both paths are `404` and the page never draws the box. Needs `--sloth-db` and a `WITH_SQLITE` build. `--strict` refuses it (exit 2). With `--web-allow-remote` it is announced on stderr, naming what every admitted peer can then read. |
+| `--web-read-only` | No write route: every POST is `405` `Allow: GET, HEAD` before a header is checked, the surface before triage existed. The triage states and the TACDB still read; the page draws no button and says why. Default off: an admitted peer may write (the owner's open question Q10 asks whether `--web-allow-remote` should imply it). |
+| `--web-assessments DIR` | Where "follow recommended" reads each alert type's research assessment, `DIR/<TYPE>.md` (front matter `false_positive_risk`, `noise_verdict`, `severity_assessment`; [Triage](#triage-and-the-frrs-record)). The type name comes from the alert table, never from a request; 4 KiB of each file read. Unset: every type says "no recommendation yet". A path that is not a directory is refused (exit 2). |
 | `--help` | Usage. |
 
 Exit status: `0` after `SIGINT`/`SIGTERM`, `1` when the bind fails or
@@ -2317,6 +2338,171 @@ way back. `test_alerts.c` asserts the counts on the demo's own data
 rows, the open alerts and the Alerts page's open rows, the open
 episodes and the open cards, the records/s and the rates' sum.
 
+## Triage and the FRRS record
+
+Owner request 2026-10-27; the model, the field-by-field mapping and the
+owner's open questions are in
+[`docs/web-frrs-spec.md`](../docs/web-frrs-spec.md). Two things:
+
+- **Triage.** Every alert row, wherever it is drawn (the Overview's
+  latest alerts, the Alerts page, History, the drawer's "alerts naming
+  it", an alert's page), carries its state chip and the buttons
+  *false*, *noise*, *incident*, *follow recommended* and, once triaged,
+  *clear*: on hover or focus in a list (always on a device with no
+  hover), always on an alert's page, which adds the optional note, the
+  "by" name (kept in this browser) and every change as a table. States:
+  `untriaged` (no row, or a *clear*), `false` (the rule fired on
+  something it does not detect), `noise` (what it detects, expected
+  here), `incident`. Triaged-out rows (`false`, `noise`) are dimmed,
+  never removed; the open-alerts tile keeps the open count and says how
+  many of them are triaged out beside it. Every change is a new row in
+  slothweb.db's `triage` table (append-only: a change is undone by
+  another), with when, the peer's address, the typed name and note, and
+  for *follow recommended* the assessment's own words. Nothing goes back
+  to sloth: triage changes no rule.
+- **The FRRS emitter record.** For a Wi-Fi station, a BSSID or a BLE
+  address, the Joint Spectrum Center's groups as sloth can fill them
+  passively: **BEI** (the RF environment: channel, occupancy measured
+  and advertised, co-channel networks, the regulatory domain seen,
+  `RF_DEGRADED` and deauth floods, presence, anomaly episodes, which
+  radios could hear), **SCS** (certification: the vendor research KB's
+  hook, `web/data/vendors/`, not there yet; compliance: Country, TPC,
+  DFS, cipher, AKM, MFP, transition mode, WPS, the posture findings),
+  **EC/S** (the parametrics: bands, width, PHY generation, beacon
+  interval and its jitter, suites, MFP, TX power, vendor-IE hashes, WPS
+  model, Multi-Link links, steering; a client's requested suites, rates
+  and listen interval, its probe cadence and sequence-counter trail; a
+  BLE advertiser's address type, PHYs, TX power, appearance, Company
+  ID), **TACDB** (the operator's filing) and the **Report**: the COMINT
+  seven (who, signal and radio, function, timing, technical, protection,
+  peers). Every field is `{"v": value, "src": "where sloth keeps it"}`,
+  `v` `null` meaning *not observed*, with `since` when the value came
+  from the stream's latest record. Two sentences travel with every
+  record: a single passive sensor has **no location axis** (`est_dist_*`
+  is a distance from signal strength, not a position; the location
+  slice's elements `loc-alert` and `loc-drawer` are another's), and
+  **sloth decrypts nothing** ("language" is the protocols observed and
+  whether they were in the clear). Shown on an alert's page (the
+  emitter the alert names), in the device drawer and per emitter on the
+  TACDB tab.
+- **The TACDB tab.** Units (site, area, room, vehicle, person, other;
+  four deep) with their subordinate units; platforms listed by
+  nomenclature, each with its equipment complement (the emitters it
+  owns, each opening its EC/S and Report); suggestions from sloth's own
+  correlations (S1 a sequence-counter trail at confidence 60 or more and
+  a forward gap of 64 or less, S2 Multi-Link affiliation, S3 adjacent
+  BSSIDs of one block on one channel, S6 a station both the host's card
+  and the air heard), each saying "may be one platform", confirmed or
+  dismissed by the operator; export and import as JSON Lines so another
+  sensor shares it. Operator data: not captured and not scoped; a
+  platform spans every capture scope, and each emitter row says which
+  scopes heard it.
+
+### The write surface
+
+slothweb's first. Six paths take POST, and nothing else does:
+
+| Path | Body | Effect |
+|---|---|---|
+| `/api/frrs/triage` | `{"id":"d1234","state":"noise","note":"…","by":"…"}`; `state` one of `untriaged`, `false`, `noise`, `incident`, `recommended` | appends a row; `recommended` takes the assessment's state, `409 no_recommendation` when it names none |
+| `/api/frrs/tacdb/unit` | `{"op":"create","name":"home","kind":"site","parent":null,"note":"…"}`, `{"op":"update","id":1,…}`, `{"op":"delete"\|"restore","id":1}` | |
+| `/api/frrs/tacdb/platform` | `{"op":"create","nomenclature":"work laptop","class":"laptop","unit":1,"vendor":"…","note":"…","emitter_kind":"sta","emitter_addr":"…"}`, `update`, `delete`, `restore`, `{"op":"confirm","suggest":"<token>","unit":1}` | |
+| `/api/frrs/tacdb/emitter` | `{"op":"add"\|"move"\|"remove"\|"restore","platform":1,"kind":"sta"\|"bssid"\|"ble","addr":"aa:bb:cc:dd:ee:ff[/type]","role":"primary","label":"…"}` | a live `(kind, addr)` belongs to one platform: `409 emitter_owned` |
+| `/api/frrs/tacdb/dismiss` | `{"suggest":"<token>"}` | the pair is not offered again until either address shows newer evidence |
+| `/api/frrs/import?mode=check\|merge` | an export (JSON Lines) | `check` (the default) validates every line and reports; `merge` writes the whole file in one transaction, or nothing |
+
+Every write answers `200` with the stored row as the read routes render
+it; the page redraws from that. A write passes, in order: the method
+(`405`; a GET to a write path is `405` `Allow: POST`, a POST anywhere
+else `405` `Allow: GET, HEAD`; under `--web-read-only` every POST is the
+latter), the allow list (at `accept()`), the Host check (`421`),
+**Origin** (exactly one, `http://` and the request's own Host, the port
+defaulted to 80 on both sides: else `403 bad_origin`; a
+`Sec-Fetch-Site` other than `same-origin` or `none` is `403
+bad_fetch_site`), the **rate** (a token bucket per peer address, a
+burst of 10 and 30 a minute, the import costing 5: `429 rate_limited`
+with `Retry-After`), the **Content-Type** (`application/json`, an
+optional `; charset=utf-8`: else `415 bad_content_type`), the
+**length** (`Content-Length` required, `411`; any `Transfer-Encoding`
+`400`; over 4,096 bytes, 8 MiB for the import, `413` before a body byte
+is read, and the socket closed rather than drained), the **body** (the
+stream's own JSON decoder: one flat object, `400 bad_body`; a member
+the route does not take `400 unknown_member` naming it), and each
+member to its bound (`note` 240 bytes, `by` 32, a name 64, a label 32;
+an over-long value is `400 too_long`, never cut; a control byte `400
+bad_text`; addresses canonical). Then `404 no_such_alert`,
+`404 no_such_platform`, `409 duplicate_name`, `409 unit_depth`,
+`409 emitter_owned`, `507 triage_full` (20,000 rows) or
+`history_full` (64 changes of one alert: refused rather than the oldest
+dropped, the owner's open question Q2), `503 no_store` (no
+slothweb.db), `503 store_busy`. From a shell the Origin has to be said:
+
+```sh
+curl -H 'Origin: http://127.0.0.1:8770' -H 'Content-Type: application/json' \
+     -d '{"id":"d1234","state":"noise","note":"the NAS"}' \
+     http://127.0.0.1:8770/api/frrs/triage
+```
+
+The writes go over a third connection to slothweb.db, the HTTP
+thread's own, one short `BEGIN IMMEDIATE` transaction per request,
+beside the store thread's writer and the read-only reader (WAL; a 250 ms
+busy timeout either side). Nothing written is a stream string: the
+tables hold addresses, slothweb's own words and operator text that came
+only through a validated POST body.
+
+### The reads
+
+| Path | Parameters | Answer |
+|---|---|---|
+| `/api/frrs/states` | `ids=` 1..16 alert ids, comma-separated | `{"store":"open","triage":{"<id>":{"state","ts","via","history_n","prev_state","note","by","basis","peer","finding"}},"types":{"<id>":"PORT_SCAN"},"untriaged":[…],"missing":[…],"writes":true}` |
+| `/api/frrs/history` | `id=` | the subject (`d<rowid>` of the finding's first sloth.db row, or the stream handle until sloth has written it), its descriptor (`type`, `addr`, `port`, `first_seen`: what an export re-attaches by), `current`, `recommend` and every row newest first |
+| `/api/frrs/summary` | none | `{"store","writes","read_only","recommendations":"dir"\|"none","open":{"total","untriaged","false","noise","incident","out"},"rows"}`: the open incidents the tile counts, by their triage, in the request's scope |
+| `/api/frrs/recommend` | `type=` a name or number | `{"type","state":"noise"\|null,"basis","source","file","front_matter":{…}\|null}` |
+| `/api/frrs/report` | `kind=sta\|bssid\|ble`, `addr=` (BLE `aa:…:ff/N`, N the address type) | the record: `emitter`, `sources`, `position_limit`, `content_limit`, `bei`, `scs`, `ecs`, `tacdb`, `report`, `alerts` |
+| `/api/frrs/report/alert` | `id=` | `{"alert":{"id","type","emitter_from"},"record":…}`; the emitter is a MAC in the alert's key, else the device holding its `match_ip`; `record` `null` with a `reason` when it names none |
+| `/api/frrs/tacdb` | `unit=`, `q=`, `deleted=0\|1`, `limit=` 1..200, `offset=` | `{"note","writes","units":[{id,parent,name,kind,note,depth,platforms,deleted}],"platforms":[{id,nomenclature,class,vendor,note,unit,unit_path,confirmed,origin,updated,deleted,emitters:[{kind,addr,role,label,origin,deleted,last_seen,scopes}]}],"matched","more","counts":{…,"caps":{…}}}` |
+| `/api/frrs/tacdb/view` | `id=` | one platform, deleted emitters included |
+| `/api/frrs/suggest` | `limit=` | `{"note","suggestions":[{token,rule,rule_name,kind,a,b,role_b,class,confidence,last_seen,nomenclature,evidence}]}` |
+| `/api/frrs/export` | none | `slothweb-tacdb.jsonl` (attachment): a header line, every unit, platform, emitter and dismissal, deleted ones included, every triage row by its descriptor, an `end` line |
+
+`/api/alerts` takes `triage=any|untriaged|triaged|out|false|noise|incident`
+(the Alerts page always sends it): every row then carries
+`"triage":{"state","via","ts"}` and the answer `triage_counts`, counted
+before the filter, so a row the filter leaves out is counted, never
+silently gone. Without the parameter the answer is byte for byte as
+before. `/api/health` gains `frrs` (writes, rows, the TACDB's counts,
+the ledger's sizes and evictions, refusals by kind).
+
+The stream facts (the latest beacon, `wifi_regulatory`, `wifi_mld`,
+`wifi_assoc_req`, `pnl_client`, `seqnum_correlation`, `ble_device`, TLS
+server names and the cleartext protocols per address) are held in
+memory only, bounded and least-recently-seen out, and lost at exit:
+after a restart "not observed" means "not in the stream since". sloth.db
+is read through the same column allow-list as every route, extended
+with the parametric columns the record names (suite identifiers, rates,
+counts, hashes; no secret among them).
+
+"Follow recommended" reads `--web-assessments DIR/<TYPE>.md` front
+matter until the other session's compiled table
+(`web/src/web_alertasm.{c,h}`) lands: `false_positive_risk: high` is
+`false`, `noise_verdict: noise` (or `expected`) is `noise`,
+`severity_assessment: confirmed` (or `incident`, `real`) is `incident`,
+first match wins, and any other value is no recommendation, never a
+guess (open question Q3).
+
+`web/tests/test_frrs.c` holds it: hand-built requests through the
+router and over loopback sockets (a cross-origin, doubled-Origin,
+`Sec-Fetch-Site` and missing-Origin write refused; `text/plain`, an
+unknown member, a 241-byte note, a control byte refused; an oversize
+body answered `413` before it is read; a GET to a write path `405`;
+`--web-read-only`; the rate limit), the credential and stream-string
+scans of the store file, the finding set once, triaged-out rows counted
+and never dropped, the record's two limits and every source it names
+checked against sloth.db's DDL and `src/jsonl.c`, the TACDB's rules and
+an export merged into a fresh store; `test_store.c` the v5 to v6
+migration and its failure. Each absence assertion names the mutation it
+was seen red under.
+
 ## Capture scope
 
 Owner request 2026-10-26. The top bar's **Monitor | Hybrid | Local**
@@ -2416,11 +2602,18 @@ and forgets the kept ones, so it does show all.
 | Alerts: state, severity, type, search, window | `ctl.al-*` | the type put back once the server's list of types is in; a kept type the server answers `bad_type` for (renamed, corrupt) is dropped and the list reloaded without it |
 | Flows: protocol tab, window, sort, address | `flows.proto`, `ctl.f-win`, `ctl.f-sort`, `ctl.f-ip` | an address picked from a row or the chord is kept as if typed |
 | the SQL box's text | `ctl.q-sql` | the draft; the first recipe no longer replaces it |
+| Alerts: triage filter | `ctl.al-triage` | by `frrs.js`; `#alerts?triage=out` wins, and an address naming any other filter opens on `any` |
+| triage: the "by" name | `frrs.by` | typed once, sent with every triage change from this browser |
+| the FRRS record's open groups | `frrs.open` | a bit per group; Report and BEI open by default |
+| TACDB: the selected unit, the search | `frrs.tacdb.unit`, `frrs.tacdb.q` | |
+| the triage history and TACDB tables | `table.frrs.triage`, `table.tacdb-*` | through `DataTable()` as every table |
 
 A select's kept value is put back only when it is one of its options,
 a text only within the box's `maxlength`.
 
-**Not kept, by decision:** the recipe picker (it fills the SQL box,
+**Not kept, by decision:** the triage note and the TACDB tab's forms
+(each the fields of one change, emptied once written: `frrs-note`,
+`tc-u-*`, `tc-p-*`, `tc-pv-*`, `tc-e-*`, the import file); the recipe picker (it fills the SQL box,
 whose text is kept); the History range (absolute times, stale on the
 next launch) and its session markers; the Records view's type pick (a
 row of a list that changes every 2 s: kept, a type that stopped
@@ -2840,7 +3033,9 @@ Monitor rows, on `--mon-bg` (`#303030` dark, `#c5c2ba` light):
 The [Security](#security) section above is the summary; this is the
 same list as code facts.
 
-- No method that writes, ever (`405` is permanent, not a W0 placeholder).
+- No write but to slothweb's own store: POST only on the six triage and
+  TACDB routes, same-origin, bounded, rate limited; none under
+  `--web-read-only`, where every other method stays `405` as before.
 - No name resolution of any kind, including its own bind address.
 - No write to `sloth.db`, ever, and no migration of it and no file beside
   it: `--sloth-db` opens it `SQLITE_OPEN_READONLY | SQLITE_OPEN_NOFOLLOW`

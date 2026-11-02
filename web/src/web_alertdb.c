@@ -34,6 +34,17 @@ int web_adb_device(web_sdb_conn_t *c, long long rid, const char *key,
     (void)c; (void)rid; (void)key; (void)ip; (void)mac;
     return -1;
 }
+int web_adb_finding(web_sdb_conn_t *c, long long rid, const char *key,
+                    web_adb_finding_t *out) {
+    (void)c; (void)rid; (void)key;
+    memset(out, 0, sizeof(*out));
+    return -1;
+}
+int web_adb_emitter(web_sdb_conn_t *c, long long rid, const char *key,
+                    char mac[18], int *kind) {
+    (void)c; (void)rid; (void)key; (void)mac; (void)kind;
+    return -1;
+}
 
 #else
 
@@ -420,6 +431,75 @@ int web_adb_device(web_sdb_conn_t *c, long long rid, const char *key,
         if (rc != SQLITE_ROW && rc != SQLITE_DONE) return -1;
     }
     return found;
+}
+
+int web_adb_finding(web_sdb_conn_t *c, long long rid, const char *key,
+                    web_adb_finding_t *out) {
+    memset(out, 0, sizeof(*out));
+    out->port = -1;
+    if (!have_alerts(c)) return 0;
+    sqlb_t b;
+    memset(&b, 0, sizeof(b));
+    /* The primary key's index finds the key's rows; the first by rowid
+     * is the finding's name, whichever of its rows the caller held. */
+    add(&b, "SELECT rowid, type, match_ip, match_port, first_seen FROM alerts WHERE ");
+    key_is(&b, rid, key);
+    add(&b, " ORDER BY rowid LIMIT 1");
+    c->pred_ok = 1;
+    sqlite3_stmt *s = prepare(c, &b);
+    if (!s) { c->pred_ok = 0; c->detail_ok = 0; return -1; }
+    int rc = sqlite3_step(s), found = 0;
+    if (rc == SQLITE_ROW) {
+        out->first_rid = sqlite3_column_int64(s, 0);
+        out->type = sqlite3_column_int(s, 1);
+        text_col(s, 2, out->ip, sizeof(out->ip));
+        out->port = sqlite3_column_type(s, 3) == SQLITE_NULL ? -1 : sqlite3_column_int(s, 3);
+        out->first_seen = sqlite3_column_int64(s, 4);
+        found = 1;
+    }
+    sqlite3_finalize(s);
+    c->pred_ok = 0;
+    c->detail_ok = 0;
+    return rc == SQLITE_ROW || rc == SQLITE_DONE ? found : -1;
+}
+
+int web_adb_emitter(web_sdb_conn_t *c, long long rid, const char *key,
+                    char mac[18], int *kind) {
+    static const struct { const char *sql; int kind; } T[] = {
+        { "SELECT bssid FROM beacon_aps WHERE instr(", 1 },
+        { "SELECT mac FROM probe_clients WHERE instr(", 0 },
+        { "SELECT mac FROM devices WHERE instr(", 0 },
+    };
+    static const char *const COL[] = { "bssid", "mac", "mac" };
+    mac[0] = '\0';
+    *kind = 0;
+    if (!key && !have_alerts(c)) return 0;
+    for (size_t i = 0; i < sizeof(T) / sizeof(T[0]); i++) {
+        sqlb_t b;
+        memset(&b, 0, sizeof(b));
+        add(&b, T[i].sql);
+        if (key) bind_s(&b, key);
+        else {
+            add(&b, "(SELECT key FROM alerts WHERE rowid = ");
+            bind_i(&b, rid);
+            add(&b, ")");
+        }
+        add(&b, ", ");
+        add(&b, COL[i]);
+        add(&b, ") > 0 ORDER BY last_seen DESC LIMIT 1");
+        c->pred_ok = 1;
+        sqlite3_stmt *s = prepare(c, &b);
+        c->pred_ok = 0;
+        c->detail_ok = 0;
+        /* A file without the table (an old schema) has none of it. */
+        if (!s) continue;
+        int rc = sqlite3_step(s);
+        if (rc == SQLITE_ROW) text_col(s, 0, mac, 18);
+        sqlite3_finalize(s);
+        if (rc != SQLITE_ROW && rc != SQLITE_DONE) return -1;
+        if (mac[0]) { *kind = T[i].kind; return 1; }
+    }
+    return 0;
 }
 
 #endif /* WITH_SQLITE */

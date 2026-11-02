@@ -26,7 +26,7 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-10-26 (`make install-service` writes `/etc/default/sloth` only where absent); 2026-10-26 (`sloth-ble-scan` review: the bind wait, `--down` on an unregistered hciN, exit 1 causes); 2026-10-26 (`sloth-ble-scan`, its `--down` and `--delay`, and the units `make install-service` adds); 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
+**Last updated**: 2026-11-01 (slothweb's `--web-read-only` and `--web-assessments`); 2026-10-26 (`make install-service` writes `/etc/default/sloth` only where absent); 2026-10-26 (`sloth-ble-scan` review: the bind wait, `--down` on an unregistered hciN, exit 1 causes); 2026-10-26 (`sloth-ble-scan`, its `--down` and `--delay`, and the units `make install-service` adds); 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
@@ -329,6 +329,16 @@ per-frame detectors behave as live. → [[replay-integration]]
 | `--no-color`, `--no-colour` | — | color on | Suppress colour escapes, keep drawing. Also honoured via `NO_COLOR` env. |
 | `--version`, `-V` | — | — | Print version to stdout and exit `0`. Line 1 is `sloth <SLOTH_VERSION>`, unchanged for scripts that read it alone; lines 2–3 (#142) are `pcap: <pcap_lib_version()>` and `sqlite: <sqlite3_libversion()>` — the libraries the dynamic linker **loaded**, `none` in a build without one. → [[release-checklist]] |
 | `--help`, `-h` | — | — | Print usage and exit `0`. |
+
+### slothweb — the browser dashboard (a separate binary)
+
+slothweb's flags are tabled in [`web/README.md`](../../web/README.md#command-line);
+the two of the triage and FRRS slice ([[slothweb]], 2026-11-01):
+
+| Flag | Arg | Default | Effect |
+|------|-----|---------|--------|
+| `--web-read-only` | — | off | No write route: every POST is `405` `Allow: GET, HEAD`, the surface before triage existed. Triage states and the TACDB still read. Without it an admitted peer may triage alerts and edit the TACDB, which write slothweb's own store only; the allow list is the only gate. |
+| `--web-assessments` | `DIR` | unset | Where "follow recommended" reads each alert type's research assessment, `DIR/<TYPE>.md` front matter. Unset: no recommendation. Not a directory: exit 2. |
 
 ## Keybindings (runtime TUI)
 

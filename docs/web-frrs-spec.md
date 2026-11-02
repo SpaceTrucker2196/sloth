@@ -2,9 +2,10 @@
 
 **Working name:** `frrs` (the module), `SlothFrrs` (its namespace)
 **Applies to:** `web/` (slothweb) only. `src/` is untouched.
-**Status:** specification for the owner to read, 2026-10-27; the
-implementation follows it slice by slice (§13) and this file is amended
-where the owner's answers to §12 change it.
+**Status:** specification for the owner to read, 2026-10-27; slices
+F0-F4 built 2026-11-01. Where the build departs from the body, §14
+says how and why, and wins; §12 says which default each open question
+took until the owner answers it.
 **Companions:** `docs/web-ui-spec.md` (the UI spec and its rulings
 table), `docs/web-visual-spec.md` (the glyphs), `docs/wiki/slothweb.md`,
 `docs/wiki/capture-scope.md`.
@@ -934,6 +935,27 @@ record and a seqnum pair so the record has something to show.
   "apply to every open alert of this type" (one row per finding, one
   click) wanted?
 
+### 12.1 The defaults taken until the owner answers
+
+Each the conservative choice: the one that loses no operator state,
+claims nothing sloth did not record, and widens no surface.
+
+| Q | Default built |
+|---|---|
+| Q1 | `d<rowid>` of the finding's first row, the descriptor kept on every row and used to re-attach an import; a stream incident sloth has not written is filed under its handle and gets its finding once, from NULL. |
+| Q2 | **Refuse** the 65th change of one alert (`507 history_full`) rather than fold the oldest: a fold deletes operator history, a refusal loses nothing and says so. |
+| Q3 | The defensive table of §3.1 as written: an unknown value is no recommendation. `incident` may be recommended (`severity_assessment: confirmed`), since the owner's words list it among the buttons. |
+| Q4 | Four levels; a fifth is `409 unit_depth`. |
+| Q5 | `"<vendor> <class> <last two octets>"`, the vendor the OUI table's first word, or `randomised` for a locally administered address; unique among live platforms. |
+| Q6 | *not observed*, the reason named in the field (`ble_device` carries no interval and no rotation link). |
+| Q7 | Not kept: the field says so (`series_rssi`, "not a series slothweb keeps"). |
+| Q8 | Counts, not names. |
+| Q9 | No token: peer address plus the typed name. |
+| Q10 | Writes on for every admitted peer; `--web-read-only` to remove them. |
+| Q11 | The knob dropped: 20,000 rows, fixed. |
+| Q12 | Unchanged: field names borrowed, no item numbers. |
+| Q13, Q14 | Not built. |
+
 ## 13. Slices
 
 | # | Content | Gate |
@@ -944,3 +966,23 @@ record and a seqnum pair so the record has something to show.
 | F3 | the ledger; `/api/frrs/report` and `/report/alert`; `frrs-alert` and `frrs-drawer`; the allow-list columns | same |
 | F4 | TACDB tables, routes, tab, platform view, `mountBundle` hook; suggestions S1–S3, S6; export / import | same |
 | F5 | the vendor KB hook (§4.2) once `web/data/vendors/` exists; the compiled assessment table once `web_alertasm.h` exists | same |
+
+## 14. As built (2026-11-01), where it departs from the body
+
+| § | The body says | Built | Why |
+|---|---|---|---|
+| 3.1 | column `by` | column `who`, `by` in every JSON body | `BY` is an SQL keyword. |
+| 3.1 | fold beyond 64 per subject | refused, `507 history_full` | Q2's conservative default (§12.1). |
+| 3.1, 5.3 step 11 | the store thread writes, through a queue | the HTTP thread writes over its own read-write connection to slothweb.db (`web_store_open_aux()`), one short `BEGIN IMMEDIATE` per request, WAL and a 250 ms busy timeout between it and the store thread | One HTTP thread, writes rare and small: a queue and a condition variable bought nothing a busy timeout does not, and added a thread hand-off to every click. `web_store.h` names it as the one exception to "the store thread writes". |
+| 3.1, 5.3 | an in-memory map of current states | none: every read is an indexed query on the store | 20,000 rows at most; the indexes (`triage_subject`, `triage_finding`, `triage_desc`) answer in microseconds and there is no second copy to keep in step. |
+| 3.3 | ledger sizes 1,024 / 2,048 / 1,024 / 512 | 512 BSSIDs, 1,024 stations, 512 BLE rows, 256 addresses, 64 channels | The structs carry more than the body costed; the bound is what matters and evictions are counted. |
+| 5.1 | `/api/frrs/triage?ids=` (1..100), `/api/frrs/triage/history`, `/api/frrs/tacdb/platform` | `/api/frrs/states?ids=` (1..16), `/api/frrs/history`, `/api/frrs/tacdb/view` | A GET to a write path is `405 Allow: POST`; a read path must not share a write path's name. Sixteen ids fit the query bound (512 bytes) at the longest id. |
+| 5.2 | the platform body carries an `emitters` array; the import's mode is a member | one emitter per create (`emitter_kind`, `emitter_addr`, `emitter_role`, `emitter_label`), more by `tacdb/emitter`; `?mode=check\|merge` on the import's path, `check` the default | The body is parsed by the stream's flat decoder (one object, no nesting): the decoder's limits are the body's limits. |
+| 5.3 step 7 | import bound 262,144 bytes | 8 MiB | An export carries the triage history: 20,000 rows at their bounds do not fit 256 KiB. The import buffer is made for the length promised, one import at a time (`503` for a second). |
+| 5.4 | `triage=` on `/api/alerts`, `/api/history/alerts`, `/api/device`, `/api/alert` | on `/api/alerts`; History, the drawer and an alert's page ask `/api/frrs/states` for the ids they drew | Those three answers are unchanged byte for byte; the page needs the states only where it draws them. |
+| 5.7 | `--web-frrs-cap` | dropped | Q11. |
+| 6.2 | hooks in `alerts()`, `alertsDraw()`, `histAlerts()`, `overview()` | one hook in `alertLink()` covers every linked alert row (the Overview, History, the drawer, an alert's page); `alertRow()` gets the Alerts page's cell; the tile line is refreshed by the module's own 10 s timer | Fewer hooks in fewer functions, and a list redrawn by its own sort keeps its chips. The seven hook points: `alertLink` → `SlothFrrs.link(li, id)`, `alertRow` → `SlothFrrs.cell(a, row)`, `alertsQuery` → `SlothFrrs.q(p)`, `show` → `SlothFrrs.show(v, VP)`, `openDrawer` → `SlothFrrs.mountDrawer(mac, j)`, `alertPage` → `SlothFrrs.mountAlert(j)`, `main` → `SlothFrrs.init({...})`. |
+| 7 S3 | same block and channel **or** beacon interval | same block **and** channel; the interval raises the confidence | 100 TU is nearly every AP's interval: on the demo's eight BSSIDs the body's rule made 28 pairs. |
+| 8 | one JSON document | JSON Lines (`slothweb-tacdb.jsonl`): a header line, one line per unit, platform, emitter, dismissal and triage row, an `end` line | The flat decoder again; and a file cut short is told by its missing `end`. |
+| 10 | absence assertions and their mutations | as listed in `web/tests/test_frrs.c` and `test_store.c`, each seen red in a copy of the tree with the source compared by hash afterwards | |
+

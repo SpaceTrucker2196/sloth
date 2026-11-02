@@ -1,11 +1,19 @@
-/* slothweb request parsing (#157 W0, #158 M0).
+/* slothweb request parsing (#157 W0, #158 M0; the write surface of
+ * docs/web-frrs-spec.md §5.3, 2026-10-27).
  *
  * A request is read only far enough to route it. A well-formed GET or
  * HEAD comes back as WEB_HTTP_ROUTE with its path and If-None-Match;
- * every other method is 405 (forever: slothweb is read-only), a
- * malformed request line or header 400, an HTTP major version other
- * than 1 505, and a header block that does not fit in WEB_HDR_MAX bytes
- * 431. A request body is never read. */
+ * a POST comes back the same way only when its path is one of the
+ * write paths (web_http_post_path(): the triage and TACDB writes), with
+ * the headers the write path checks kept (Content-Length,
+ * Transfer-Encoding, Content-Type, Origin, Sec-Fetch-Site) and hdr_len
+ * saying where the body starts; every other method, and a POST to any
+ * other path, is 405 (Allow: GET, HEAD) here, before the router (the
+ * server makes every POST that under --web-read-only). A malformed request line or header is 400, an HTTP major
+ * version other than 1 505, and a header block that does not fit in
+ * WEB_HDR_MAX bytes 431. No body is read here: the server reads a
+ * POST's, bounded by WEB_POST_MAX (WEB_IMPORT_MAX for the import route),
+ * and only after this said the request is one. */
 #ifndef SLOTHWEB_HTTP_H
 #define SLOTHWEB_HTTP_H
 
@@ -32,12 +40,24 @@
  * kept: the longest acceptable one, a bracketed IPv6 literal with a
  * port, is 47 bytes. */
 #define WEB_HOST_MAX 256
+/* A POST body: the triage and TACDB writes fit in a few hundred bytes;
+ * the import route takes a whole export (web_frrs.h WEB_FRRS_EXPORT_MAX,
+ * the TACDB and the triage history at their caps). Over the bound is
+ * 413 before a body byte is read. */
+#define WEB_POST_MAX   4096
+#define WEB_IMPORT_MAX 8388608
+/* A Content-Type value longer than this is not kept (ctype_long), and
+ * refused as not application/json. */
+#define WEB_CTYPE_MAX  80
+#define WEB_FETCH_MAX  24
+#define WEB_PEER_MAX   48
 
 /* Not an HTTP status: "well-formed GET or HEAD, route it". */
 #define WEB_HTTP_ROUTE 200
 
 typedef struct {
     int  is_head;
+    int  is_post;             /* a POST to a write path, writes on */
     char path[WEB_PATH_MAX];  /* request target, query removed */
     int  path_long;
     char query[WEB_QUERY_MAX]; /* after the '?', raw; "" when none */
@@ -50,8 +70,29 @@ typedef struct {
      * replaces Host for routing. */
     char target_host[WEB_HOST_MAX];
     int  target_abs, target_host_long;
+    /* The write path's headers (is_post only). content_length is -1
+     * when absent and -2 when malformed or given twice with different
+     * values; has_te says a Transfer-Encoding line was seen. */
+    long long content_length;
+    int  has_te;
+    char ctype[WEB_CTYPE_MAX];
+    int  ctype_count, ctype_long;
+    char origin[WEB_HOST_MAX];
+    int  origin_count, origin_long;
+    char fetch_site[WEB_FETCH_MAX];
+    int  fetch_site_long;
+    size_t hdr_len;           /* bytes of the header block, its empty line
+                                 included: where a body starts */
+    /* Set by the server after the parse, for the router: the body read
+     * (NULL for GET and HEAD) and the peer's address, canonical. */
+    const char *body;
+    size_t      body_len;
+    char        peer[WEB_PEER_MAX];
+    int         gated;        /* the server ran web_frrs_gate() already */
 } web_req_t;
 
+/* The write paths, POST only. */
+int    web_http_post_path(const char *path);
 /* Parse the bytes received so far. Returns 0 when more are needed,
  * WEB_HTTP_ROUTE, or the error status to answer with. */
 int    web_http_parse(const char *buf, size_t len, web_req_t *rq);
@@ -76,7 +117,8 @@ int    web_http_classify(const char *buf, size_t len, int *is_head);
 
 /* Write the fixed plain-text response for `status` (an error, or 404
  * from the router) into out. Returns its length, or 0 if out is too
- * small. */
+ * small. A 405 carries Allow: GET, HEAD (a GET to a write path gets its
+ * own Allow: POST from the router). */
 size_t web_http_response(int status, int is_head, char *out, size_t outsz);
 
 const char *web_http_reason(int status);

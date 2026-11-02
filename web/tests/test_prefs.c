@@ -125,9 +125,17 @@ static const char *const KEPT_ELSEWHERE[] = {
     "al-type",    /* filled from the answer: put back as ALP.wantType */
     "a-metric",   /* by name (act.metric): its options are indices */
     "a-key",      /* by key, per metric (act.keys) */
+    "al-triage",  /* ctl.al-triage, by frrs.js (the address wins) */
+    "frrs-by",    /* frrs.by: the name a triage row carries */
+    "tc-q",       /* frrs.tacdb.q, by frrs.js */
 };
 static const char *const NOT_KEPT[] = {
     "q-recipe",   /* an action: it fills the SQL box, whose text is kept */
+    /* web/ui/frrs.js's forms: each the fields of one change to write,
+     * emptied once written, not a setting */
+    "frrs-note", "tc-u-name", "tc-u-kind", "tc-u-parent", "tc-p-nom", "tc-p-class",
+    "tc-p-unit", "tc-imp-file", "tc-pv-nom", "tc-pv-unit", "tc-e-kind", "tc-e-addr",
+    "tc-e-role", "tc-e-label",
 };
 
 static int listed(const char *id, const char *const *l, size_t n) {
@@ -207,6 +215,9 @@ static void test_every_control_is_decided(void) {
     WT_HAS(p, "ALP.wantType = typeof VP.type === \"string\" ? VP.type : !named && typeof kt === \"string\" ? kt : \"\";");
     WT_HAS(p, "if (selMetric()) prefSet(\"act.metric\", selMetric().name);");
     WT_HAS(p, "if (A.key < 0) A.key = Math.max(0, A.keys.indexOf(actKey(m.name)));");
+    WT_HAS(p, "H.prefSet(\"ctl.al-triage\", $(\"al-triage\").value);");
+    WT_HAS(p, "H.prefSet(\"frrs.by\", $(\"frrs-by\").value || null);");
+    WT_HAS(p, "H.prefSet(\"frrs.tacdb.q\", $(\"tc-q\").value || null);");
     /* A kept value only where the control can hold it. */
     WT_HAS(p, "for (var i = 0; i < c.options.length; i++) if (c.options[i].value === v) return true;");
     WT_HAS(p, "return v.length <= (c.maxLength > 0 ? c.maxLength : 65536);");

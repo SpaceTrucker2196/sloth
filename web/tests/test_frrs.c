@@ -1,0 +1,1116 @@
+/* Triage and the FRRS record (web_frrs.h, docs/web-frrs-spec.md),
+ * slothweb's first write surface: hand-built requests through the
+ * router and over real loopback sockets, a sloth.db from the demo's
+ * generator (sloth's own DDL, never a committed fixture), the stream
+ * from the demo's own passes, and a store in a fresh directory.
+ *
+ * Every absence assertion here was seen red under the mutation its
+ * comment names, applied in a copy of the tree, with the tree's sources
+ * compared by sha256 afterwards, before the comment was written. The
+ * migration's ROLLBACK made COMMIT turned test_store.c's v5 failure
+ * red the same way. */
+#include <arpa/inet.h>
+#include <dirent.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "sdb_gen.h"
+#include "web_assets.h"
+#include "web_frrs.h"
+#include "web_frrs_int.h"
+#include "web_ingest.h"
+#include "web_live.h"
+#include "web_routes.h"
+#include "web_server.h"
+#include "wt_tmp.h"
+#include "wtest.h"
+
+#define T SDB_NOW
+
+int    demo_make_db(const char *path, long long now);
+size_t demo_pass(long long t, long long start, unsigned long k, char *out, size_t cap);
+const char *db_schema_sql(void);
+
+static char g_out[262144];
+
+static const char *body_of(const char *out) {
+    const char *sep = strstr(out, "\r\n\r\n");
+    return sep ? sep + 4 : "";
+}
+
+/* One test's world: a store, the frrs module on it, the demo's sloth.db
+ * and stream. Large: static. */
+typedef struct {
+    char           dir[TEST_TMP_MAX];
+    char           store_path[TEST_TMP_MAX + 32];
+    char           sdb_path[TEST_TMP_MAX + 32];
+    web_store_t    store;
+    int            have_store;
+    web_frrs_t     f;
+    web_live_t     live;
+    web_slothdb_t  sdb;
+    web_m4_t       m4;
+    web_health_t   h;
+} env_t;
+static env_t E;
+
+static void env_open(const char *assess, int writes) {
+    memset(&E, 0, sizeof(E));
+    snprintf(E.dir, sizeof(E.dir), "%s/slothweb-frrs-XXXXXX", test_tmpdir());
+    WT_ASSERT(mkdtemp(E.dir) != NULL);
+    snprintf(E.store_path, sizeof(E.store_path), "%s/slothweb.db", E.dir);
+    snprintf(E.sdb_path, sizeof(E.sdb_path), "%s/sloth.db", E.dir);
+    char err[512];
+    if (web_store_available()) {
+        WT_EQ(web_store_open(&E.store, E.store_path, err, sizeof(err)), 0);
+        E.have_store = 1;
+    }
+    WT_EQ(web_frrs_init(&E.f, E.have_store ? &E.store : NULL, assess, writes, err, sizeof(err)), 0);
+    web_live_init(&E.live, "unix:/demo/sloth.sock");
+    web_live_sock_connected(&E.live, 0);
+    int have_db = web_store_available() && demo_make_db(E.sdb_path, T) == 0;
+    web_sdb_fns_t fns = { NULL, NULL, NULL, &E.live };
+    web_slothdb_init(&E.sdb, have_db ? E.sdb_path : "", &fns);
+    E.m4.sdb = have_db ? &E.sdb : NULL;
+    E.m4.frrs = &E.f;
+    /* The demo's first twenty passes: the KARMA AP opens at the third,
+     * the cleartext credential at the fourth; every ledger record type
+     * is in each. */
+    web_feed_t *fd = calloc(1, sizeof(*fd));
+    static char buf[1 << 16];
+    WT_ASSERT(fd != NULL);
+    if (fd) {
+        web_feed_reset(fd);
+        fd->frrs = &E.f;
+        long long start = T - 100;
+        for (unsigned long k = 0; k < 20; k++) {
+            size_t n = demo_pass(start + (long long)k, start, k, buf, sizeof(buf));
+            web_feed_bytes(fd, &E.live, buf, n, (long long)k * 1000 + 500);
+        }
+        free(fd);
+    }
+    E.h.wall_s = T;
+    E.h.now_ms = 30000;
+    E.h.m4 = &E.m4;
+    E.h.live = &E.live;
+}
+
+static void env_close(void) {
+    web_frrs_destroy(&E.f);
+    web_slothdb_destroy(&E.sdb);
+    web_live_destroy(&E.live);
+    web_store_close(&E.store);
+    test_rm_tree(E.dir);
+}
+
+static void base_rq(web_req_t *rq, const char *path, const char *query) {
+    memset(rq, 0, sizeof(*rq));
+    snprintf(rq->path, sizeof(rq->path), "%s", path);
+    snprintf(rq->query, sizeof(rq->query), "%s", query ? query : "");
+    snprintf(rq->host, sizeof(rq->host), "127.0.0.1:8770");
+    rq->host_count = 1;
+    rq->content_length = -1;
+}
+
+static int get(const char *path, const char *query) {
+    web_req_t rq;
+    web_resp_t r;
+    base_rq(&rq, path, query);
+    memset(&r, 0, sizeof(r));
+    if (web_route(&rq, &E.h, 1, g_out, sizeof(g_out), &r) != 0) return -1;
+    size_t n = r.out_len < sizeof(g_out) - 1 ? r.out_len : sizeof(g_out) - 1;
+    if (r.body && r.body_len && n + r.body_len < sizeof(g_out) - 1) {
+        memcpy(g_out + n, r.body, r.body_len);
+        n += r.body_len;
+    }
+    g_out[n] = '\0';
+    if (r.body_free) free((void *)r.body);
+    return r.status;
+}
+
+/* A POST as the server hands it to the router: the headers it keeps,
+ * the body read, the peer. origin or ctype NULL: the header absent. */
+static int post_h(const char *path, const char *query, const char *body, const char *origin,
+                  const char *ctype, const char *peer) {
+    web_req_t rq;
+    web_resp_t r;
+    base_rq(&rq, path, query);
+    rq.is_post = 1;
+    if (origin) { snprintf(rq.origin, sizeof(rq.origin), "%s", origin); rq.origin_count = 1; }
+    if (ctype) { snprintf(rq.ctype, sizeof(rq.ctype), "%s", ctype); rq.ctype_count = 1; }
+    rq.body = body;
+    rq.body_len = strlen(body);
+    rq.content_length = (long long)rq.body_len;
+    /* Two seconds apart, one token's refill: the bucket is its own test. */
+    E.h.now_ms += 2000;
+    snprintf(rq.peer, sizeof(rq.peer), "%s", peer ? peer : "127.0.0.1");
+    memset(&r, 0, sizeof(r));
+    if (web_route(&rq, &E.h, 1, g_out, sizeof(g_out), &r) != 0) return -1;
+    g_out[r.out_len < sizeof(g_out) ? r.out_len : sizeof(g_out) - 1] = '\0';
+    return r.status;
+}
+
+static int post(const char *path, const char *body) {
+    return post_h(path, "", body, "http://127.0.0.1:8770", "application/json", NULL);
+}
+
+/* The id of the first /api/alerts row of a type, into out. */
+static int id_of(const char *type, char *out, size_t cap) {
+    out[0] = '\0';
+    if (get("/api/alerts", "limit=100") != 200) return 0;
+    char want[80];
+    snprintf(want, sizeof(want), "\"type_name\":\"%s\"", type);
+    const char *b = body_of(g_out), *t = strstr(b, want);
+    if (!t) return 0;
+    const char *id = NULL;
+    for (const char *p = strstr(b, "{\"id\":\""); p && p < t; p = strstr(p + 1, "{\"id\":\"")) id = p + 7;
+    if (!id) return 0;
+    const char *e = strchr(id, '"');
+    if (!e || (size_t)(e - id) >= cap) return 0;
+    memcpy(out, id, (size_t)(e - id));
+    out[e - id] = '\0';
+    return 1;
+}
+
+static long long json_int(const char *b, const char *key) {
+    char k[64];
+    snprintf(k, sizeof(k), "\"%s\":", key);
+    const char *p = strstr(b, k);
+    return p ? atoll(p + strlen(k)) : -1;
+}
+
+/* The answer's own "count", after its rows. */
+static long long rows_count(const char *b) {
+    const char *p = strstr(b, "],\"count\":");
+    return p ? atoll(p + 10) : -1;
+}
+
+static int count_of(const char *s, const char *w) {
+    int n = 0;
+    for (const char *q = strstr(s, w); q; q = strstr(q + 1, w)) n++;
+    return n;
+}
+
+#ifdef WITH_SQLITE
+/* A needle in a file's bytes (the store, and its WAL). */
+static int file_has(const char *path, const char *needle) {
+    static unsigned char buf[1 << 22];
+    size_t n = sdb_slurp(path, buf, sizeof(buf));
+    size_t nl = strlen(needle);
+    for (size_t i = 0; n >= nl && i + nl <= n; i++)
+        if (!memcmp(buf + i, needle, nl)) return 1;
+    return 0;
+}
+static int store_has(const char *needle) {
+    char w[TEST_TMP_MAX + 48];
+    snprintf(w, sizeof(w), "%s-wal", E.store_path);
+    return file_has(E.store_path, needle) || file_has(w, needle);
+}
+
+#endif
+
+/* ── triage ─────────────────────────────────────────────────────────── */
+
+/* A decision, its history, the clear that undoes it (a second row, not
+ * a delete), and a note holding markup kept as typed and served
+ * escaped. The escape seen red with web_jw_str(w, t->note) made
+ * web_jw_raw(w, t->note) in tri_json() (the <b> then reached the body). */
+static void test_triage_round_trip(void) {
+    env_open(NULL, 1);
+    char id[40];
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    char b[512];
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"noise\",\"note\":\"the <b>scanner</b>\","
+             "\"by\":\"op\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), E.have_store ? 200 : 503);
+    if (!E.have_store) { WT_HAS(g_out, "no_store"); env_close(); return; }
+    WT_HAS(g_out, "\"state\":\"noise\"");
+    WT_HAS(g_out, "the \\u003cb\\u003escanner\\u003c/b\\u003e");
+    WT_LACKS(body_of(g_out), "<b>");
+    WT_HAS(g_out, "\"peer\":\"127.0.0.1\"");
+    WT_HAS(g_out, "\"by\":\"op\"");
+    char q[96];
+    snprintf(q, sizeof(q), "ids=%s", id);
+    WT_EQ(get("/api/frrs/states", q), 200);
+    WT_HAS(g_out, "\"state\":\"noise\"");
+    WT_HAS(g_out, "\"types\":{");
+    WT_HAS(g_out, "\"PORT_SCAN\"");
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"untriaged\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);
+    WT_HAS(g_out, "\"prev_state\":\"noise\"");
+    snprintf(q, sizeof(q), "id=%s", id);
+    WT_EQ(get("/api/frrs/history", q), 200);
+    WT_EQ(count_of(body_of(g_out), "\"prev_state\":"), 3);   /* current + two rows */
+    WT_HAS(g_out, "\"current\":{\"state\":\"untriaged\"");
+#ifdef WITH_SQLITE
+    WT_ASSERT(store_has("the <b>scanner</b>"));      /* stored as typed */
+#endif
+    env_close();
+}
+
+/* triage= on /api/alerts dims, never drops: the open rows with
+ * triage=any are exactly the open rows without it, and the counts sum
+ * to them. Seen red with web_frrs_filter_pass() answering
+ * state == WEB_TRI_UNTRIAGED for WEB_TRI_F_ANY (the noise row gone). */
+static void test_triaged_out_is_counted_not_dropped(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    char id[40], b[256];
+    WT_ASSERT(id_of("KARMA_AP", id, sizeof(id)));
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"false\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);
+    WT_EQ(get("/api/alerts", "state=open&limit=100"), 200);
+    long long plain = rows_count(body_of(g_out));
+    WT_ASSERT(plain >= 2);
+    WT_LACKS(body_of(g_out), "\"triage\"");          /* without it, as before */
+    WT_EQ(get("/api/alerts", "state=open&limit=100&triage=any"), 200);
+    WT_EQ(rows_count(body_of(g_out)), plain);
+    WT_EQ(count_of(body_of(g_out), "\"triage\":{\"state\":"), plain);
+    WT_EQ(json_int(body_of(g_out), "false") + json_int(body_of(g_out), "untriaged") +
+          json_int(body_of(g_out), "noise") + json_int(body_of(g_out), "incident"), plain);
+    WT_EQ(get("/api/alerts", "state=open&limit=100&triage=out"), 200);
+    WT_EQ(rows_count(body_of(g_out)), 1);
+    WT_EQ(get("/api/alerts", "state=open&limit=100&triage=untriaged"), 200);
+    WT_EQ(rows_count(body_of(g_out)), plain - 1);
+    WT_EQ(get("/api/alerts", "triage=maybe"), 400);
+    WT_HAS(g_out, "bad_triage");
+    /* The tile's figures: the open count, and the triaged out within it. */
+    WT_EQ(get("/api/frrs/summary", ""), 200);
+    WT_EQ(json_int(body_of(g_out), "total"), plain);
+    WT_EQ(json_int(body_of(g_out), "out"), 1);
+    WT_ASSERT(json_int(body_of(g_out), "out") <= json_int(body_of(g_out), "total"));
+    env_close();
+}
+
+/* ── the write path's refusals ──────────────────────────────────────── */
+
+/* Cross-site writes. Each refusal leaves the store without a row.
+ * Seen red: the Origin/Host equality in web_frrs_origin_ok() replaced by
+ * `return 1` (evil.example accepted); the `rq->origin_count != 1 ||`
+ * test removed (the doubled Origin accepted). The missing Origin is
+ * refused by two guards (the count and the scheme), so no one mutation
+ * isolates it: it is asserted, not claimed as covered alone. */
+static void test_cross_origin_refused(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    char id[40], b[256];
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"noise\"}", id);
+    static const char *const bad[] = {
+        "http://evil.example", "http://127.0.0.1:8771", "https://127.0.0.1:8770", "null",
+        "http://127.0.0.1:8770/", "http://user@127.0.0.1:8770",
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        WT_EQ(post_h("/api/frrs/triage", "", b, bad[i], "application/json", NULL), 403);
+        WT_HAS(g_out, "bad_origin");
+    }
+    WT_EQ(post_h("/api/frrs/triage", "", b, NULL, "application/json", NULL), 403);
+    /* Two Origin lines, the first this page's: refused whole. */
+    {
+        web_req_t rq;
+        web_resp_t r;
+        base_rq(&rq, "/api/frrs/triage", "");
+        rq.is_post = 1;
+        snprintf(rq.origin, sizeof(rq.origin), "http://127.0.0.1:8770");
+        rq.origin_count = 2;
+        snprintf(rq.ctype, sizeof(rq.ctype), "application/json");
+        rq.ctype_count = 1;
+        rq.body = b;
+        rq.body_len = strlen(b);
+        snprintf(rq.peer, sizeof(rq.peer), "127.0.0.1");
+        WT_EQ(web_route(&rq, &E.h, 1, g_out, sizeof(g_out), &r), 0);
+        WT_EQ(r.status, 403);
+    }
+    /* Sec-Fetch-Site from another site. */
+    {
+        web_req_t rq;
+        web_resp_t r;
+        base_rq(&rq, "/api/frrs/triage", "");
+        rq.is_post = 1;
+        snprintf(rq.origin, sizeof(rq.origin), "http://127.0.0.1:8770");
+        rq.origin_count = 1;
+        snprintf(rq.ctype, sizeof(rq.ctype), "application/json");
+        rq.ctype_count = 1;
+        snprintf(rq.fetch_site, sizeof(rq.fetch_site), "cross-site");
+        rq.body = b;
+        rq.body_len = strlen(b);
+        WT_EQ(web_route(&rq, &E.h, 1, g_out, sizeof(g_out), &r), 0);
+        WT_EQ(r.status, 403);
+    }
+    WT_EQ(get("/api/frrs/summary", ""), 200);
+    WT_EQ(json_int(body_of(g_out), "rows"), 0);
+    /* The port defaulted on both sides is the same origin. */
+    WT_EQ(post_h("/api/frrs/triage", "", b, "http://127.0.0.1:8770", "application/json; charset=utf-8",
+                 NULL), 200);
+    env_close();
+}
+
+/* Content-Type, unknown members, bounds, control bytes. Seen red: the
+ * Content-Type check in web_frrs_gate() removed (text/plain written);
+ * frrs_members_ok() returning 1 (the "admin" member accepted); the bound
+ * in frrs_text() made `f->slen > max + 1` (a 241-byte note stored). */
+static void test_body_rules(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    char id[40], b[1024], note[300];
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"noise\"}", id);
+    WT_EQ(post_h("/api/frrs/triage", "", b, "http://127.0.0.1:8770", "text/plain", NULL), 415);
+    WT_HAS(g_out, "bad_content_type");
+    WT_EQ(post_h("/api/frrs/triage", "", b, "http://127.0.0.1:8770", "application/jsonx", NULL), 415);
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"noise\",\"admin\":true}", id);
+    WT_EQ(post("/api/frrs/triage", b), 400);
+    WT_HAS(g_out, "unknown_member");
+    WT_EQ(post("/api/frrs/triage", "[1,2]"), 400);
+    WT_EQ(post("/api/frrs/triage", "{\"id\":"), 400);
+    WT_HAS(g_out, "bad_body");
+    memset(note, 'n', 241);
+    note[241] = '\0';
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"noise\",\"note\":\"%s\"}", id, note);
+    WT_EQ(post("/api/frrs/triage", b), 400);
+    WT_HAS(g_out, "too_long");
+    WT_EQ(get("/api/frrs/summary", ""), 200);
+    WT_EQ(json_int(body_of(g_out), "rows"), 0);
+    note[240] = '\0';
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"noise\",\"note\":\"%s\"}", id, note);
+    WT_EQ(post("/api/frrs/triage", b), 200);
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"false\",\"by\":\"a\\u0007b\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 400);
+    WT_HAS(g_out, "bad_text");
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"maybe\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 400);
+    WT_HAS(g_out, "bad_state");
+    WT_EQ(post("/api/frrs/triage", "{\"id\":\"d999999\",\"state\":\"noise\"}"), 404);
+    WT_EQ(post("/api/frrs/triage", "{\"id\":\"x1\",\"state\":\"noise\"}"), 404);
+    env_close();
+}
+
+/* A GET can never write: a write path answers POST only, a read path
+ * GET only. Seen red with the `post != rq->is_post` check removed from
+ * web_frrs_route() (the GET then a 404, not the 405). */
+static void test_get_cannot_write(void) {
+    env_open(NULL, 1);
+    char id[40], q[128];
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    snprintf(q, sizeof(q), "id=%s&state=noise", id);
+    WT_EQ(get("/api/frrs/triage", q), 405);
+    WT_HAS(g_out, "Allow: POST\r\n");
+    WT_EQ(get("/api/frrs/tacdb/unit", "op=create&name=x"), 405);
+    WT_EQ(post("/api/frrs/states", "{}"), 405);
+    WT_HAS(g_out, "Allow: GET, HEAD\r\n");
+    WT_EQ(get("/api/frrs/summary", ""), 200);
+    if (E.have_store) WT_EQ(json_int(body_of(g_out), "rows"), 0);
+    else WT_HAS(g_out, "\"rows\":null");
+    env_close();
+}
+
+/* The token bucket: ten at once, the eleventh refused, one more every
+ * two seconds, peers apart. Seen red with the bucket refilled to the
+ * burst on every call (the eleventh admitted). */
+static void test_rate_limit(void) {
+    static web_frrs_t f;
+    char err[256];
+    WT_EQ(web_frrs_init(&f, NULL, NULL, 1, err, sizeof(err)), 0);
+    for (int i = 0; i < 10; i++) WT_EQ(web_frrs_rate_admit(&f, "192.0.2.1", 1000, 1), 1);
+    WT_EQ(web_frrs_rate_admit(&f, "192.0.2.1", 1000, 1), 0);
+    WT_EQ(web_frrs_rate_admit(&f, "192.0.2.2", 1000, 1), 1);
+    WT_EQ(web_frrs_rate_admit(&f, "192.0.2.1", 2900, 1), 0);
+    WT_EQ(web_frrs_rate_admit(&f, "192.0.2.1", 3000, 1), 1);
+    WT_EQ(web_frrs_rate_admit(&f, "192.0.2.1", 3000, 1), 0);
+    /* The import costs five. */
+    WT_EQ(web_frrs_rate_admit(&f, "192.0.2.3", 0, 5), 1);
+    WT_EQ(web_frrs_rate_admit(&f, "192.0.2.3", 0, 5), 1);
+    WT_EQ(web_frrs_rate_admit(&f, "192.0.2.3", 0, 5), 0);
+    web_frrs_destroy(&f);
+}
+
+/* ── what is stored ─────────────────────────────────────────────────── */
+
+#ifdef WITH_SQLITE
+/* A cleartext credential's key names a username: triaging it stores
+ * none of it, and no answer carries it. And a stream string (a beacon's
+ * SSID, sent here as an injection attempt) reaches no table: the ledger
+ * is memory. Seen red: the alert key's text stored as the descriptor's
+ * addr in resolve_id() (the username in the file and in /history; a
+ * desc_addr() taking the key first did not reach the row, as sloth.db's
+ * match_ip replaces it); the ledger
+ * BSSID's SSID copied into the platform's vendor in post_platform()
+ * (the SSID in the file). */
+static void test_no_credential_and_no_stream_string_stored(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    char id[40], b[512], q[96];
+    WT_ASSERT(id_of("CLEARTEXT_CRED", id, sizeof(id)));
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"incident\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);
+    WT_LACKS(g_out, "demo-user");
+    snprintf(q, sizeof(q), "id=%s", id);
+    WT_EQ(get("/api/frrs/history", q), 200);
+    WT_LACKS(g_out, "demo-user");
+    WT_HAS(g_out, "\"addr\":\"192.0.2.16\"");
+    snprintf(q, sizeof(q), "ids=%s", id);
+    WT_EQ(get("/api/frrs/states", q), 200);
+    WT_LACKS(g_out, "demo-user");
+    /* A hostile SSID on the air, then the TACDB filing that BSSID. */
+    web_jrec_t *r = malloc(sizeof(*r));
+    static const char L[] = "{\"type\":\"beacon\",\"ts\":1792627000,\"bssid\":\"02:de:00:00:00:c1\","
+                            "\"ssid\":\"' OR 1=1--\",\"channel\":6,\"enc\":\"OPEN\"}";
+    WT_ASSERT(r && web_jl_parse(L, sizeof(L) - 1, r) == WEB_JL_OK);
+    if (r) web_frrs_record(&E.f, r);
+    free(r);
+    WT_EQ(get("/api/frrs/report", "kind=bssid&addr=02:de:00:00:00:c1"), 200);
+    WT_HAS(g_out, "OR 1=1--");                       /* shown, from memory */
+    WT_EQ(post("/api/frrs/tacdb/platform", "{\"op\":\"create\",\"nomenclature\":\"cafe ap\","
+               "\"class\":\"ap\",\"emitter_kind\":\"bssid\",\"emitter_addr\":\"02:de:00:00:00:c1\"}"), 200);
+    WT_EQ(get("/api/frrs/suggest", ""), 200);
+    const char *tok = strstr(body_of(g_out), "\"token\":\"");
+    WT_ASSERT(tok != NULL);
+    if (tok) {
+        char t[64];
+        const char *e = strchr(tok + 9, '"');
+        snprintf(t, sizeof(t), "%.*s", e ? (int)(e - tok - 9) : 0, tok + 9);
+        snprintf(b, sizeof(b), "{\"op\":\"confirm\",\"suggest\":\"%s\"}", t);
+        WT_EQ(post("/api/frrs/tacdb/platform", b), 200);
+    }
+    WT_EQ(get("/api/frrs/export", ""), 200);
+    WT_LACKS(g_out, "demo-user");
+    WT_LACKS(g_out, "OR 1=1");
+    web_frrs_destroy(&E.f);
+    web_store_close(&E.store);
+    WT_ASSERT(!store_has("demo-user"));
+    WT_ASSERT(!store_has("00c0ffee"));
+    WT_ASSERT(!store_has("OR 1=1"));
+    WT_ASSERT(store_has("cafe ap"));                  /* the scan reads the file */
+    memset(&E.f, 0, sizeof(E.f));
+    memset(&E.store, 0, sizeof(E.store));
+    web_slothdb_destroy(&E.sdb);
+    web_live_destroy(&E.live);
+    test_rm_tree(E.dir);
+}
+
+/* A row filed before sloth.db held its finding gets the finding once,
+ * from NULL, never a second time. Seen red with `finding IS NULL AND`
+ * taken out of tri_write()'s UPDATE (the earlier row's 4242 rewritten). */
+static void test_finding_set_once(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    char id[40], b[256];
+    WT_ASSERT(id_of("KARMA_AP", id, sizeof(id)));
+    WT_ASSERT(id[0] == 's');
+    /* An earlier row under the same stream handle, already resolved to
+     * another rowid (a sloth.db rebuilt since). */
+    char sql[512];
+    snprintf(sql, sizeof(sql), "INSERT INTO triage (subject, finding, type, state, ts) VALUES"
+             " ('%s', 4242, 20, 2, 1)", id);
+    WT_EQ(sdb_exec(E.store_path, sql), 0);
+    /* And one not yet resolved. */
+    snprintf(sql, sizeof(sql), "INSERT INTO triage (subject, finding, type, state, ts) VALUES"
+             " ('%s', NULL, 20, 1, 2)", id);
+    WT_EQ(sdb_exec(E.store_path, sql), 0);
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"incident\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);
+    const char *d = strstr(body_of(g_out), "\"finding\":\"d");
+    WT_ASSERT(d != NULL);
+    long long rid = d ? atoll(d + 12) : 0;
+    WT_ASSERT(rid > 0 && rid != 4242);
+    /* Read the rows back through a GET of the history. */
+    char q[96];
+    snprintf(q, sizeof(q), "id=%s", id);
+    WT_EQ(get("/api/frrs/history", q), 200);
+    WT_EQ(count_of(body_of(g_out), "{\"state\":"), 4);   /* current + three rows */
+    web_frrs_destroy(&E.f);
+    web_store_close(&E.store);
+    memset(&E.f, 0, sizeof(E.f));
+    memset(&E.store, 0, sizeof(E.store));
+    char err[512];
+    WT_EQ(web_store_open(&E.store, E.store_path, err, sizeof(err)), 0);
+    WT_EQ(web_frrs_init(&E.f, &E.store, NULL, 1, err, sizeof(err)), 0);
+    snprintf(q, sizeof(q), "id=d%lld", rid);
+    WT_EQ(get("/api/frrs/history", q), 200);
+    /* By the finding: the resolved rows, not the one still on 4242. */
+    WT_EQ(count_of(body_of(g_out), "{\"state\":"), 3);
+    snprintf(q, sizeof(q), "id=d4242");
+    WT_EQ(get("/api/frrs/history", q), 404);
+    env_close();
+}
+
+#endif
+
+/* ── the recommendation ─────────────────────────────────────────────── */
+
+static void write_file(const char *path, const char *text) {
+    FILE *f = fopen(path, "w");
+    WT_ASSERT(f != NULL);
+    if (!f) return;
+    fputs(text, f);
+    fclose(f);
+}
+
+/* The front matter decides, first match wins, an unknown value is no
+ * recommendation; the file is found by the type's own name; no
+ * directory, no recommendation. */
+static void test_follow_recommended(void) {
+    char dir[TEST_TMP_MAX + 16];
+    snprintf(dir, sizeof(dir), "%s/frrs-assess-XXXXXX", test_tmpdir());
+    WT_ASSERT(mkdtemp(dir) != NULL);
+    char p[TEST_TMP_MAX + 64];
+    snprintf(p, sizeof(p), "%s/PORT_SCAN.md", dir);
+    write_file(p, "---\nfalse_positive_risk: medium\nnoise_verdict: noise\n"
+                  "severity_assessment: low\n---\n# body\nnoise_verdict: incident\n");
+    snprintf(p, sizeof(p), "%s/KARMA_AP.md", dir);
+    write_file(p, "---\nseverity_assessment: \"confirmed\"\n---\n");
+    snprintf(p, sizeof(p), "%s/CLEARTEXT_CRED.md", dir);
+    write_file(p, "---\nnoise_verdict: perhaps\n---\n");
+    snprintf(p, sizeof(p), "%s/SMB1_USE.md", dir);
+    write_file(p, "no front matter\nfalse_positive_risk: high\n");
+    env_open(dir, 1);
+    WT_EQ(get("/api/frrs/recommend", "type=PORT_SCAN"), 200);
+    WT_HAS(g_out, "\"state\":\"noise\"");
+    WT_HAS(g_out, "\"basis\":\"noise_verdict: noise\"");
+    WT_EQ(get("/api/frrs/recommend", "type=KARMA_AP"), 200);
+    WT_HAS(g_out, "\"state\":\"incident\"");
+    WT_EQ(get("/api/frrs/recommend", "type=CLEARTEXT_CRED"), 200);
+    WT_HAS(g_out, "\"state\":null");
+    WT_HAS(g_out, "\"noise_verdict\":\"perhaps\"");
+    WT_EQ(get("/api/frrs/recommend", "type=SMB1_USE"), 200);
+    WT_HAS(g_out, "\"state\":null");
+    WT_HAS(g_out, "\"front_matter\":null");
+    WT_EQ(get("/api/frrs/recommend", "type=../../etc/passwd"), 400);
+    if (E.have_store) {
+        char id[40], b[256];
+        WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+        snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"recommended\"}", id);
+        WT_EQ(post("/api/frrs/triage", b), 200);
+        WT_HAS(g_out, "\"via\":\"recommended\"");
+        WT_HAS(g_out, "\"basis\":\"noise_verdict: noise\"");
+        WT_ASSERT(id_of("CLEARTEXT_CRED", id, sizeof(id)));
+        snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"recommended\"}", id);
+        WT_EQ(post("/api/frrs/triage", b), 409);
+        WT_HAS(g_out, "no_recommendation");
+    }
+    env_close();
+    test_rm_tree(dir);
+    env_open(NULL, 1);
+    WT_EQ(get("/api/frrs/recommend", "type=PORT_SCAN"), 200);
+    WT_HAS(g_out, "\"source\":\"none\"");
+    WT_HAS(g_out, "\"state\":null");
+    env_close();
+}
+
+/* ── the record ─────────────────────────────────────────────────────── */
+
+/* The two limits in every record, and no member that would claim a
+ * position or a plaintext. Seen red with POSITION_LIMIT emptied in
+ * web_frrs_report.c, and with a `"lat":null` member added to the
+ * emitter group. */
+static void test_record_states_its_limits(void) {
+    env_open(NULL, 1);
+    static const char *const Q[] = {
+        "kind=bssid&addr=02:de:00:00:00:a1", "kind=sta&addr=02:de:00:00:00:12",
+        "kind=ble&addr=c6:de:00:00:00:b1/1",
+    };
+    for (size_t i = 0; i < sizeof(Q) / sizeof(Q[0]); i++) {
+        WT_EQ(get("/api/frrs/report", Q[i]), 200);
+        const char *b = body_of(g_out);
+        WT_HAS(b, "no location axis");
+        WT_HAS(b, "sloth decrypts nothing");
+        static const char *const NO[] = { "\"lat\"", "\"lon\"", "\"location\"", "\"bearing\"",
+                                          "\"plaintext\"", "\"decrypted\"" };
+        for (size_t k = 0; k < sizeof(NO) / sizeof(NO[0]); k++) WT_LACKS(b, NO[k]);
+    }
+    /* The ledger's own: the BLE advertiser's appearance and the AP's
+     * regulatory envelope and Multi-Link links, from the stream alone. */
+    WT_EQ(get("/api/frrs/report", "kind=ble&addr=c6:de:00:00:00:b1/1"), 200);
+    WT_HAS(g_out, "\"appearance\":{\"v\":194");
+    WT_EQ(get("/api/frrs/report", "kind=bssid&addr=02:de:00:00:00:a1"), 200);
+    WT_HAS(g_out, "\"regulatory_country\":{\"v\":\"US\"");
+    WT_HAS(g_out, "\"mld_mac\":{\"v\":\"02:de:00:00:00:b0\"");
+    WT_EQ(get("/api/frrs/report", "kind=bssid&addr=02:DE:00:00:00:A1"), 200);
+    WT_EQ(get("/api/frrs/report", "kind=bssid&addr=not-a-mac"), 400);
+    WT_EQ(get("/api/frrs/report", "kind=ip&addr=192.0.2.1"), 400);
+    env_close();
+}
+
+/* Is name a column of table in sloth.db's DDL? */
+static int ddl_has(const char *ddl, const char *table, const char *col) {
+    char head[96];
+    snprintf(head, sizeof(head), "CREATE TABLE IF NOT EXISTS %s (", table);
+    const char *a = strstr(ddl, head);
+    if (!a) return -1;                               /* not a sloth.db table */
+    const char *e = strstr(a, ");");
+    char w[96];
+    snprintf(w, sizeof(w), "  %s ", col);
+    const char *c = strstr(a, w);
+    if (c && (!e || c < e)) return 1;
+    /* A column a migration adds. */
+    snprintf(w, sizeof(w), "ALTER TABLE %s ADD COLUMN %s ", table, col);
+    return strstr(ddl, w) ? 1 : 0;
+}
+
+/* Every source a record names is real: a table.column of sloth.db's
+ * DDL (src/db_schema.c, linked in), or a record and field sloth's
+ * stream writes (src/jsonl.c, read from the tree), or slothweb's own.
+ * Seen red with "beacon_aps.beacon_ms" misspelt "beacon_aps.beacon_msx"
+ * in web_frrs_report.c, and with "beacon.tbtt_jitter_us" misspelt
+ * "beacon.tbtt_jitter_usx". */
+static void test_every_source_is_real(void) {
+    env_open(NULL, 1);
+    const char *ddl = db_schema_sql();
+    FILE *jf = fopen("src/jsonl.c", "rb");
+    WT_ASSERT(jf != NULL);
+    static char jsonl[1 << 20];
+    size_t jn = jf ? fread(jsonl, 1, sizeof(jsonl) - 1, jf) : 0;
+    if (jf) fclose(jf);
+    jsonl[jn] = '\0';
+    static const char *const Q[] = {
+        "kind=bssid&addr=02:de:00:00:00:a1", "kind=sta&addr=02:de:00:00:00:12",
+        "kind=ble&addr=c6:de:00:00:00:b1/1",
+    };
+    int tables = 0, fields = 0, bad = 0;
+    for (size_t i = 0; i < sizeof(Q) / sizeof(Q[0]); i++) {
+        WT_EQ(get("/api/frrs/report", Q[i]), 200);
+        for (const char *p = strstr(g_out, "\"src\":\""); p; p = strstr(p + 1, "\"src\":\"")) {
+            const char *s = p + 7, *e = strchr(s, '"');
+            if (!e) break;
+            /* Each token word.word in the source text. */
+            for (const char *t = s; t < e; t++) {
+                if (!(*t >= 'a' && *t <= 'z') || (t > s && ((t[-1] >= 'a' && t[-1] <= 'z') ||
+                    t[-1] == '_' || t[-1] == '.' || (t[-1] >= '0' && t[-1] <= '9'))))
+                    continue;
+                const char *dot = t;
+                while (dot < e && ((*dot >= 'a' && *dot <= 'z') || *dot == '_' || (*dot >= '0' && *dot <= '9'))) dot++;
+                if (dot >= e || *dot != '.' || dot + 1 >= e || !(dot[1] >= 'a' && dot[1] <= 'z')) continue;
+                const char *ce = dot + 1;
+                while (ce < e && ((*ce >= 'a' && *ce <= 'z') || *ce == '_' || (*ce >= '0' && *ce <= '9'))) ce++;
+                if (ce < e && (*ce == '*' || *ce == '<' || *ce == '\\' || *ce == '.')) continue;   /* a family (link_<n>, escaped), a file */
+                char tb[64], col[64];
+                snprintf(tb, sizeof(tb), "%.*s", (int)(dot - t), t);
+                snprintf(col, sizeof(col), "%.*s", (int)(ce - dot - 1), dot + 1);
+                if (!strcmp(tb, "dev") || !strcmp(tb, "wifi") || !strcmp(col, "md") ||
+                    !strcmp(col, "c") || !strcmp(col, "h")) continue;   /* slothweb's series, files */
+                int h = ddl_has(ddl, tb, col);
+                if (h == 1) { tables++; continue; }
+                if (h == 0) {
+                    fprintf(stderr, "    %s.%s is not in sloth.db's DDL\n", tb, col);
+                    bad++;
+                    continue;
+                }
+                /* A stream record: its type and its field in jsonl.c. */
+                char ty[80], fl[80];
+                snprintf(ty, sizeof(ty), "\"%s\"", tb);
+                snprintf(fl, sizeof(fl), "\"%s\"", col);
+                if (strstr(jsonl, ty) && strstr(jsonl, fl)) { fields++; continue; }
+                fprintf(stderr, "    %s.%s is neither a sloth.db column nor a stream field\n", tb, col);
+                bad++;
+            }
+        }
+    }
+    WT_EQ(bad, 0);
+    WT_ASSERT(tables >= 30);
+    WT_ASSERT(fields >= 30);
+    env_close();
+}
+
+/* ── the TACDB ──────────────────────────────────────────────────────── */
+
+static void test_tacdb_round_trip(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) {
+        WT_EQ(get("/api/frrs/tacdb", ""), 503);
+        env_close();
+        return;
+    }
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"home\",\"kind\":\"site\"}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"office\",\"kind\":\"room\",\"parent\":1}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"OFFICE\",\"kind\":\"room\",\"parent\":1}"), 409);
+    WT_HAS(g_out, "duplicate_name");
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"desk\",\"kind\":\"area\",\"parent\":2}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"jeff\",\"kind\":\"person\",\"parent\":3}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"create\",\"name\":\"pocket\",\"kind\":\"other\",\"parent\":4}"), 409);
+    WT_HAS(g_out, "unit_depth");
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"update\",\"id\":1,\"parent\":4}"), 409);
+    WT_EQ(post("/api/frrs/tacdb/platform", "{\"op\":\"create\",\"nomenclature\":\"work laptop\","
+               "\"class\":\"laptop\",\"unit\":4,\"emitter_kind\":\"sta\",\"emitter_addr\":\"02:DE:00:00:00:12\"}"), 200);
+    WT_HAS(g_out, "\"addr\":\"02:de:00:00:00:12\"");
+    WT_EQ(post("/api/frrs/tacdb/platform", "{\"op\":\"create\",\"nomenclature\":\"other\","
+               "\"emitter_kind\":\"sta\",\"emitter_addr\":\"02:de:00:00:00:12\"}"), 409);
+    WT_HAS(g_out, "emitter_owned");
+    WT_EQ(post("/api/frrs/tacdb/emitter", "{\"op\":\"add\",\"platform\":1,\"kind\":\"ble\","
+               "\"addr\":\"02:de:00:00:00:b3/0\",\"role\":\"other\",\"label\":\"keyboard\"}"), 200);
+    WT_EQ(post("/api/frrs/tacdb/unit", "{\"op\":\"delete\",\"id\":4}"), 409);
+    WT_HAS(g_out, "unit_not_empty");
+    WT_EQ(get("/api/frrs/tacdb", "unit=2"), 200);
+    WT_HAS(g_out, "\"nomenclature\":\"work laptop\"");
+    WT_HAS(g_out, "\"unit_path\":\"home / office / desk / jeff\"");
+    WT_EQ(get("/api/frrs/tacdb", "q=b3"), 200);
+    WT_EQ(json_int(body_of(g_out), "matched"), 1);
+    /* The report knows the filing. */
+    WT_EQ(get("/api/frrs/report", "kind=sta&addr=02:de:00:00:00:12"), 200);
+    WT_HAS(g_out, "\"nomenclature\":\"work laptop\"");
+    /* A suggestion dismissed is gone from the list. */
+    WT_EQ(get("/api/frrs/suggest", ""), 200);
+    int before = count_of(body_of(g_out), "\"token\":");
+    WT_ASSERT(before >= 3);
+    const char *tok = strstr(body_of(g_out), "\"token\":\"");
+    char t[64] = "", b[256];
+    if (tok) {
+        const char *e = strchr(tok + 9, '"');
+        snprintf(t, sizeof(t), "%.*s", e ? (int)(e - tok - 9) : 0, tok + 9);
+    }
+    snprintf(b, sizeof(b), "{\"suggest\":\"%s\"}", t);
+    WT_EQ(post("/api/frrs/tacdb/dismiss", b), 200);
+    WT_EQ(get("/api/frrs/suggest", ""), 200);
+    WT_EQ(count_of(body_of(g_out), "\"token\":"), before - 1);
+    WT_EQ(post("/api/frrs/tacdb/dismiss", "{\"suggest\":\"S1.000000000000.-.00000000\"}"), 400);
+    /* Delete is reversible. */
+    WT_EQ(post("/api/frrs/tacdb/platform", "{\"op\":\"delete\",\"id\":1}"), 200);
+    WT_HAS(g_out, "\"deleted\":true");
+    WT_EQ(post("/api/frrs/tacdb/platform", "{\"op\":\"restore\",\"id\":1}"), 200);
+    WT_HAS(g_out, "\"deleted\":false");
+    /* Export, then check and merge into a fresh store. */
+    WT_EQ(get("/api/frrs/export", ""), 200);
+    WT_HAS(g_out, "Content-Disposition: attachment");
+    const char *ex = body_of(g_out);
+    size_t exn = strlen(ex);
+    char *copy = malloc(exn + 1);
+    WT_ASSERT(copy != NULL);
+    if (!copy) { env_close(); return; }
+    memcpy(copy, ex, exn + 1);
+    WT_HAS(copy, "\"type\":\"end\"");
+    env_close();
+    env_open(NULL, 1);
+    WT_EQ(post_h("/api/frrs/import", "mode=check", copy, "http://127.0.0.1:8770", "application/json", NULL), 200);
+    WT_HAS(g_out, "\"mode\":\"check\"");
+    WT_EQ(get("/api/frrs/tacdb", ""), 200);
+    WT_EQ(json_int(body_of(g_out), "matched"), 0);
+    WT_EQ(post_h("/api/frrs/import", "mode=merge", copy, "http://127.0.0.1:8770", "application/json",
+                 "127.0.0.2"), 200);
+    WT_EQ(get("/api/frrs/tacdb", ""), 200);
+    WT_EQ(json_int(body_of(g_out), "matched"), 1);
+    WT_HAS(g_out, "\"unit_path\":\"home / office / desk / jeff\"");
+    WT_HAS(g_out, "\"label\":\"keyboard\"");
+    free(copy);
+    WT_EQ(post_h("/api/frrs/import", "mode=merge", "{\"type\":\"unit\",\"id\":1,\"name\":\"x\","
+                 "\"kind\":\"site\",\"evil\":1}\n", "http://127.0.0.1:8770", "application/json",
+                 "127.0.0.3"), 400);
+    WT_EQ(get("/api/frrs/tacdb", ""), 200);
+    WT_LACKS(g_out, "\"name\":\"x\"");                /* a bad line merges nothing */
+    env_close();
+}
+
+/* ── over real sockets ──────────────────────────────────────────────── */
+
+typedef struct {
+    web_server_t *s;
+    pthread_t     th;
+    int           rc;
+} running_t;
+
+static void *server_main(void *arg) {
+    running_t *r = arg;
+    r->rc = web_server_run(r->s);
+    return NULL;
+}
+
+static int srv_start(running_t *r, int read_only) {
+    web_config_t c;
+    web_config_defaults(&c);
+    c.bind_port = 0;
+    c.timeout_ms = 2000;
+    c.linger_ms = 200;
+    c.read_only = read_only;
+    char err[256];
+    r->s = calloc(1, sizeof(*r->s));
+    if (!r->s || web_server_open(r->s, &c, err, sizeof(err)) != 0) {
+        if (r->s) web_server_close(r->s);
+        free(r->s);
+        r->s = NULL;
+        return -1;
+    }
+    web_server_set_live(r->s, &E.live);
+    web_server_set_m4(r->s, &E.m4);
+    if (pthread_create(&r->th, NULL, server_main, r) != 0) return -1;
+    return 0;
+}
+
+static void srv_stop(running_t *r) {
+    web_server_stop(r->s);
+    pthread_join(r->th, NULL);
+    web_server_close(r->s);
+    free(r->s);
+    r->s = NULL;
+}
+
+static int dial(uint16_t port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    struct timeval tv = { 4, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (connect(fd, (struct sockaddr *)&a, sizeof(a)) != 0) { close(fd); return -1; }
+    return fd;
+}
+
+static size_t read_all(int fd, char *out, size_t cap) {
+    size_t n = 0;
+    while (n + 1 < cap) {
+        ssize_t r = recv(fd, out + n, cap - 1 - n, 0);
+        if (r <= 0) break;
+        n += (size_t)r;
+    }
+    out[n] = '\0';
+    return n;
+}
+
+static long long mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* A write end to end: the body in two sends, after the headers. */
+static void test_post_over_socket(void) {
+    env_open(NULL, 1);
+    running_t r;
+    WT_EQ(srv_start(&r, 0), 0);
+    if (!r.s) { env_close(); return; }
+    uint16_t port = web_server_port(r.s);
+    char id[40], body[200], req[1024];
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    int bl = snprintf(body, sizeof(body), "{\"id\":\"%s\",\"state\":\"incident\",\"by\":\"sock\"}", id);
+    int hl = snprintf(req, sizeof(req), "POST /api/frrs/triage HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n"
+                      "Origin: http://127.0.0.1:%u\r\nContent-Type: application/json\r\n"
+                      "Content-Length: %d\r\n\r\n", port, port, bl);
+    int fd = dial(port);
+    WT_ASSERT(fd >= 0);
+    if (fd >= 0) {
+        send(fd, req, (size_t)hl, MSG_NOSIGNAL);
+        send(fd, body, 10, MSG_NOSIGNAL);
+        usleep(50000);
+        send(fd, body + 10, (size_t)bl - 10, MSG_NOSIGNAL);
+        read_all(fd, g_out, sizeof(g_out));
+        close(fd);
+    }
+    WT_HAS(g_out, E.have_store ? "HTTP/1.1 200 OK\r\n" : "HTTP/1.1 503");
+    if (E.have_store) WT_HAS(g_out, "\"by\":\"sock\"");
+    /* A POST to a path that writes nothing is the 405 it always was. */
+    hl = snprintf(req, sizeof(req), "POST /api/alerts HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n"
+                  "Origin: http://127.0.0.1:%u\r\nContent-Type: application/json\r\n"
+                  "Content-Length: 2\r\n\r\n{}", port, port);
+    fd = dial(port);
+    if (fd >= 0) {
+        send(fd, req, (size_t)hl, MSG_NOSIGNAL);
+        read_all(fd, g_out, sizeof(g_out));
+        close(fd);
+    }
+    WT_HAS(g_out, "HTTP/1.1 405");
+    WT_HAS(g_out, "Allow: GET, HEAD\r\n");
+    srv_stop(&r);
+    env_close();
+}
+
+/* An oversize body is refused before a byte of it is read, and the
+ * socket closed at once rather than drained. Seen red with the bound
+ * compared as `> max * 1024` in conn_begin_body() (the server then
+ * waited for the body, and answered 408 at its timeout). */
+static void test_oversize_body_refused_unread(void) {
+    env_open(NULL, 1);
+    running_t r;
+    WT_EQ(srv_start(&r, 0), 0);
+    if (!r.s) { env_close(); return; }
+    uint16_t port = web_server_port(r.s);
+    char req[512];
+    int hl = snprintf(req, sizeof(req), "POST /api/frrs/triage HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n"
+                      "Origin: http://127.0.0.1:%u\r\nContent-Type: application/json\r\n"
+                      "Content-Length: %d\r\n\r\n", port, port, WEB_POST_MAX + 1);
+    int fd = dial(port);
+    WT_ASSERT(fd >= 0);
+    long long t0 = mono_ms();
+    if (fd >= 0) {
+        send(fd, req, (size_t)hl, MSG_NOSIGNAL);
+        read_all(fd, g_out, sizeof(g_out));
+        close(fd);
+    }
+    WT_HAS(g_out, "HTTP/1.1 413 Content Too Large\r\n");
+    WT_ASSERT(mono_ms() - t0 < 1000);
+    /* No Content-Length: 411; a Transfer-Encoding: 400. */
+    hl = snprintf(req, sizeof(req), "POST /api/frrs/triage HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n"
+                  "Origin: http://127.0.0.1:%u\r\nContent-Type: application/json\r\n\r\n", port, port);
+    fd = dial(port);
+    if (fd >= 0) { send(fd, req, (size_t)hl, MSG_NOSIGNAL); read_all(fd, g_out, sizeof(g_out)); close(fd); }
+    WT_HAS(g_out, "HTTP/1.1 411");
+    hl = snprintf(req, sizeof(req), "POST /api/frrs/triage HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n"
+                  "Origin: http://127.0.0.1:%u\r\nContent-Type: application/json\r\n"
+                  "Transfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n", port, port);
+    fd = dial(port);
+    if (fd >= 0) { send(fd, req, (size_t)hl, MSG_NOSIGNAL); read_all(fd, g_out, sizeof(g_out)); close(fd); }
+    WT_HAS(g_out, "HTTP/1.1 400");
+    web_stats_t st;
+    web_server_stats(r.s, &st);
+    WT_EQ(st.status_413, 1);
+    srv_stop(&r);
+    env_close();
+}
+
+/* --web-read-only: every POST is 405 Allow: GET, HEAD, the write paths
+ * included, and the reads stay. Seen red with the read_only branch
+ * taken out of conn_begin_body() (the router's own 405 read_only then
+ * carried no Allow: GET, HEAD). */
+static void test_read_only_over_socket(void) {
+    env_open(NULL, 0);
+    running_t r;
+    WT_EQ(srv_start(&r, 1), 0);
+    if (!r.s) { env_close(); return; }
+    uint16_t port = web_server_port(r.s);
+    char id[40], body[200], req[1024];
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    int bl = snprintf(body, sizeof(body), "{\"id\":\"%s\",\"state\":\"noise\"}", id);
+    int hl = snprintf(req, sizeof(req), "POST /api/frrs/triage HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n"
+                      "Origin: http://127.0.0.1:%u\r\nContent-Type: application/json\r\n"
+                      "Content-Length: %d\r\n\r\n%s", port, port, bl, body);
+    int fd = dial(port);
+    if (fd >= 0) { send(fd, req, (size_t)hl, MSG_NOSIGNAL); read_all(fd, g_out, sizeof(g_out)); close(fd); }
+    WT_HAS(g_out, "HTTP/1.1 405");
+    WT_HAS(g_out, "Allow: GET, HEAD\r\n");
+    hl = snprintf(req, sizeof(req), "GET /api/frrs/summary HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n\r\n", port);
+    fd = dial(port);
+    if (fd >= 0) { send(fd, req, (size_t)hl, MSG_NOSIGNAL); read_all(fd, g_out, sizeof(g_out)); close(fd); }
+    WT_HAS(g_out, "HTTP/1.1 200 OK");
+    WT_HAS(g_out, "\"writes\":false");
+    WT_HAS(g_out, E.have_store ? "\"rows\":0" : "\"rows\":null");
+    srv_stop(&r);
+    env_close();
+}
+
+/* ── the page ───────────────────────────────────────────────────────── */
+
+/* frrs.js's own part of the page: no sink that parses markup, no
+ * attribute written from a value, and the hook points app.js calls.
+ * Seen red with `box.innerHTML = ""` added to clear() in frrs.js. */
+static void test_page_module(void) {
+    const char *p = (const char *)web_page;
+    const char *a = strstr(p, "var SlothFrrs = (function () {");
+    const char *b = a ? strstr(a, "\n})();") : NULL;
+    WT_ASSERT(a != NULL && b != NULL);
+    if (!a || !b) return;
+    size_t n = (size_t)(b - a);
+    char *m = malloc(n + 1);
+    if (!m) return;
+    memcpy(m, a, n);
+    m[n] = '\0';
+    static const char *const SINK[] = {
+        "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "setAttribute(",
+        "eval(", "new Function", ".href =", ".src =", "createElement(\"input\")",
+    };
+    for (size_t i = 0; i < sizeof(SINK) / sizeof(SINK[0]); i++) WT_LACKS(m, SINK[i]);
+    WT_HAS(m, "credentials: \"omit\"");
+    WT_HAS(m, "\"Content-Type\": \"application/json\"");
+    free(m);
+    /* Each hook point, one guarded call in app.js. */
+    static const char *const HOOK[] = {
+        "if (window.SlothFrrs) SlothFrrs.link(li, id);",
+        "if (window.SlothFrrs) SlothFrrs.q(p);",
+        "row.appendChild(window.SlothFrrs ? SlothFrrs.cell(a, row) : el(\"span\", \"d-dim\", \"-\"));",
+        "if (window.SlothFrrs) SlothFrrs.show(v, VP);",
+        "if (window.SlothFrrs) SlothFrrs.mountDrawer(mac, j);",
+        "if (window.SlothFrrs) SlothFrrs.mountAlert(j);",
+        "if (window.SlothFrrs) SlothFrrs.init({",
+    };
+    for (size_t i = 0; i < sizeof(HOOK) / sizeof(HOOK[0]); i++) WT_EQ(count_of(p, HOOK[i]), 1);
+    static const char *const IDS[] = {
+        "id=\"nav-tacdb\"", "id=\"v-tacdb\"", "id=\"frrs-alert-triage\"", "id=\"frrs-alert\"",
+        "id=\"frrs-drawer\"", "id=\"k-alerts-triaged\"", "id=\"al-triage\"", "id=\"bundle-btn-tacdb\"",
+    };
+    for (size_t i = 0; i < sizeof(IDS) / sizeof(IDS[0]); i++) WT_HAS(p, IDS[i]);
+    /* The location slice's elements are not this module's. */
+    WT_LACKS(p, "id=\"loc-alert\"");
+    WT_LACKS(p, "id=\"loc-drawer\"");
+}
+
+/* The ledger is bounded: past its BSSIDs the least recently seen goes,
+ * counted. */
+static void test_ledger_bounded(void) {
+    static web_frrs_t f;
+    char err[256];
+    WT_EQ(web_frrs_init(&f, NULL, NULL, 1, err, sizeof(err)), 0);
+    web_jrec_t *r = malloc(sizeof(*r));
+    WT_ASSERT(r != NULL);
+    for (int i = 0; r && i < WEB_FRRS_LEDGER_BSSID + 10; i++) {
+        char l[200];
+        int n = snprintf(l, sizeof(l), "{\"type\":\"beacon\",\"ts\":%d,\"bssid\":\"02:00:00:00:%02x:%02x\","
+                         "\"ssid\":\"x\",\"channel\":1}", i + 1, i / 256, i % 256);
+        if (web_jl_parse(l, (size_t)n, r) == WEB_JL_OK) web_frrs_record(&f, r);
+    }
+    free(r);
+    web_frrs_stats_t st;
+    web_frrs_stats(&f, &st);
+    WT_EQ(st.ledger_evictions, 10);
+    WT_EQ(f.led->nbss, WEB_FRRS_LEDGER_BSSID);
+    WT_ASSERT(frrs_led_bss(&f, "02:00:00:00:00:00") == NULL);
+    WT_ASSERT(frrs_led_bss(&f, "02:00:00:00:02:09") != NULL);
+    web_frrs_destroy(&f);
+}
+
+/* The request parser's half: POST is a request only on a write path,
+ * with the write path's headers kept; a doubled Content-Length that
+ * disagrees, or a malformed one, is marked; the body is not read here. */
+static void test_http_post_parse(void) {
+    web_req_t rq;
+    static const char A[] = "POST /api/frrs/triage HTTP/1.1\r\nHost: 127.0.0.1:8770\r\n"
+                            "Origin: http://127.0.0.1:8770\r\nContent-Type: application/json\r\n"
+                            "Content-Length: 11\r\nSec-Fetch-Site: same-origin\r\n\r\n{\"id\":\"d1\"}";
+    WT_EQ(web_http_parse(A, sizeof(A) - 1, &rq), WEB_HTTP_ROUTE);
+    WT_EQ(rq.is_post, 1);
+    WT_EQ(rq.content_length, 11);
+    WT_HAS(rq.origin, "http://127.0.0.1:8770");
+    WT_HAS(rq.ctype, "application/json");
+    WT_HAS(rq.fetch_site, "same-origin");
+    WT_EQ((long long)rq.hdr_len, (long long)(sizeof(A) - 1 - 11));
+    static const char B[] = "POST /api/alerts HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\n\r\n{}";
+    WT_EQ(web_http_parse(B, sizeof(B) - 1, &rq), 405);
+    static const char C[] = "POST /api/frrs/triage HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2\r\n"
+                            "Content-Length: 3\r\n\r\n";
+    WT_EQ(web_http_parse(C, sizeof(C) - 1, &rq), WEB_HTTP_ROUTE);
+    WT_EQ(rq.content_length, -2);
+    static const char D[] = "POST /api/frrs/triage HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 1x\r\n\r\n";
+    WT_EQ(web_http_parse(D, sizeof(D) - 1, &rq), WEB_HTTP_ROUTE);
+    WT_EQ(rq.content_length, -2);
+    static const char E2[] = "PUT /api/frrs/triage HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+    WT_EQ(web_http_parse(E2, sizeof(E2) - 1, &rq), 405);
+    static const char F[] = "post /api/frrs/triage HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+    WT_EQ(web_http_parse(F, sizeof(F) - 1, &rq), 405);
+}
+
+void run_frrs_tests(void) {
+    WT_RUN(test_http_post_parse);
+    WT_RUN(test_rate_limit);
+    WT_RUN(test_ledger_bounded);
+    WT_RUN(test_page_module);
+    WT_RUN(test_triage_round_trip);
+    WT_RUN(test_triaged_out_is_counted_not_dropped);
+    WT_RUN(test_cross_origin_refused);
+    WT_RUN(test_body_rules);
+    WT_RUN(test_get_cannot_write);
+#ifdef WITH_SQLITE
+    WT_RUN(test_no_credential_and_no_stream_string_stored);
+    WT_RUN(test_finding_set_once);
+#endif
+    WT_RUN(test_follow_recommended);
+    WT_RUN(test_record_states_its_limits);
+    WT_RUN(test_every_source_is_real);
+    WT_RUN(test_tacdb_round_trip);
+    WT_RUN(test_post_over_socket);
+    WT_RUN(test_oversize_body_refused_unread);
+    WT_RUN(test_read_only_over_socket);
+}

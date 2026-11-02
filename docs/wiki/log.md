@@ -5697,3 +5697,15 @@ report events.
   containing `rule_`, the Bibliography has an entry and the index has a
   row; seen red by deleting `PORT_SCAN.md` and by moving ARP_SPOOF's
   `rule_file` off its line.
+- 2026-11-01 — [[slothweb]]: alert triage and the FRRS emitter record
+  (`docs/web-frrs-spec.md`, owner request 2026-10-27). Triage buttons
+  (false, noise, incident, follow recommended) on every alert row,
+  append-only in slothweb.db v6 with its v5 migration test, filterable
+  (`/api/alerts?triage=`), the open-alerts tile saying what is triaged
+  out; the record's BEI, SCS, EC/S, TACDB and Report groups from what
+  sloth already records, every field with its source; the TACDB tab with
+  units, platforms by nomenclature, sloth's correlations as suggestions,
+  JSON Lines export and import. slothweb's first write routes: POST,
+  same-origin, bounded, rate limited; `--web-read-only` removes them;
+  `--web-assessments` feeds "follow recommended". [[cli-reference]]
+  gains both flags.

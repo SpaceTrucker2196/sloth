@@ -53,6 +53,20 @@ static void keep_path(web_req_t *rq, const char *t, size_t n) {
     rq->path[n] = '\0';
 }
 
+/* The write surface (docs/web-frrs-spec.md §5.2), and nothing else:
+ * a POST anywhere else is 405 before the router sees it. */
+static const char *const POST_PATHS[] = {
+    "/api/frrs/triage", "/api/frrs/tacdb/unit", "/api/frrs/tacdb/platform",
+    "/api/frrs/tacdb/emitter", "/api/frrs/tacdb/dismiss", "/api/frrs/import",
+    NULL
+};
+
+int web_http_post_path(const char *path) {
+    for (int i = 0; POST_PATHS[i]; i++)
+        if (!strcmp(path, POST_PATHS[i])) return 1;
+    return 0;
+}
+
 /* RFC 9112 §3: method SP request-target SP HTTP-version. */
 static int classify_request_line(const char *s, size_t n, web_req_t *rq) {
     size_t i = 0;
@@ -74,12 +88,78 @@ static int classify_request_line(const char *s, size_t n, web_req_t *rq) {
     if (v[5] != '1') return 505;
 
     /* Methods are case-sensitive (RFC 9110 §9.1): "get" is not GET. */
-    int route = 0;
+    int route = 0, post = 0;
     if (mlen == 3 && !memcmp(s, "GET", 3))  route = 1;
     if (mlen == 4 && !memcmp(s, "HEAD", 4)) { rq->is_head = 1; route = 1; }
-    if (!route) return 405;
+    if (mlen == 4 && !memcmp(s, "POST", 4)) post = 1;
+    if (!route && !post) return 405;
     keep_path(rq, s + ts, (i - 1) - ts);
+    if (post) {
+        /* A POST is a request only to a write path: anywhere else it is
+         * the 405 it always was, Allow: GET, HEAD, and the path is not
+         * even routed. --web-read-only is the server's to apply, before
+         * a body byte is read (web_server.c). */
+        if (rq->path_long || !web_http_post_path(rq->path)) {
+            memset(rq, 0, sizeof(*rq));
+            return 405;
+        }
+        rq->is_post = 1;
+    }
     return WEB_HTTP_ROUTE;
+}
+
+/* One header line's value, OWS trimmed, when its name is `name` (with
+ * the colon, lower case). NULL when it is another header. */
+static const char *header_value(const char *s, size_t n, const char *name,
+                                size_t *vl) {
+    size_t nl = strlen(name);
+    if (n < nl || strncasecmp(s, name, nl) != 0) return NULL;
+    const char *v = s + nl;
+    size_t l = n - nl;
+    while (l && (*v == ' ' || *v == '\t')) { v++; l--; }
+    while (l && (v[l - 1] == ' ' || v[l - 1] == '\t')) l--;
+    *vl = l;
+    return v;
+}
+
+static void keep_text(const char *v, size_t vl, char *out, size_t cap, int *too_long) {
+    if (vl >= cap) { *too_long = 1; out[0] = '\0'; return; }
+    memcpy(out, v, vl);
+    out[vl] = '\0';
+}
+
+/* The headers the write path checks (docs/web-frrs-spec.md §5.3), kept
+ * for a POST only. Content-Length: digits, at most 15 of them; a
+ * second line must repeat the first (RFC 9110 §8.6), else -2. */
+static void keep_post_headers(web_req_t *rq, const char *s, size_t n) {
+    size_t vl;
+    const char *v;
+    if ((v = header_value(s, n, "content-length:", &vl)) != NULL) {
+        long long cl = 0;
+        int ok = vl >= 1 && vl <= 15;
+        for (size_t i = 0; ok && i < vl; i++) {
+            if (v[i] < '0' || v[i] > '9') ok = 0;
+            else cl = cl * 10 + (v[i] - '0');
+        }
+        if (!ok || (rq->content_length >= 0 && rq->content_length != cl))
+            rq->content_length = -2;
+        else if (rq->content_length != -2)
+            rq->content_length = cl;
+        return;
+    }
+    if (header_value(s, n, "transfer-encoding:", &vl)) { rq->has_te = 1; return; }
+    if ((v = header_value(s, n, "content-type:", &vl)) != NULL) {
+        if (rq->ctype_count++ == 0)
+            keep_text(v, vl, rq->ctype, sizeof(rq->ctype), &rq->ctype_long);
+        return;
+    }
+    if ((v = header_value(s, n, "origin:", &vl)) != NULL) {
+        if (rq->origin_count++ == 0)
+            keep_text(v, vl, rq->origin, sizeof(rq->origin), &rq->origin_long);
+        return;
+    }
+    if ((v = header_value(s, n, "sec-fetch-site:", &vl)) != NULL)
+        keep_text(v, vl, rq->fetch_site, sizeof(rq->fetch_site), &rq->fetch_site_long);
 }
 
 /* RFC 9112 §5: field-name ":" ... with no whitespace before the colon,
@@ -186,6 +266,7 @@ int web_http_parse(const char *buf, size_t len, web_req_t *rq) {
     size_t pos = 0;
     int    have_rl = 0, status = 0;
     memset(rq, 0, sizeof(*rq));
+    rq->content_length = -1;
 
     for (;;) {
         if (pos >= WEB_HDR_MAX) return 431;
@@ -204,17 +285,20 @@ int web_http_parse(const char *buf, size_t len, web_req_t *rq) {
             if (!line_clean(line, n)) return 400;
             status = classify_request_line(line, n, rq);
             if (status == 400 || status == 505) return status;
+            if (status == 405) rq->content_length = -1;
             have_rl = 1;
             continue;
         }
-        if (n == 0) return status;               /* end of the header block */
+        if (n == 0) { rq->hdr_len = pos; return status; }   /* end of the header block */
         if (!line_clean(line, n) || !header_line_ok(line, n)) {
             rq->is_head = 0;
+            rq->is_post = 0;
             return 400;
         }
         if (status == WEB_HTTP_ROUTE) {
             keep_inm(rq, line, n);
             keep_host(rq, line, n);
+            if (rq->is_post) keep_post_headers(rq, line, n);
         }
     }
 }
@@ -231,13 +315,21 @@ const char *web_http_reason(int status) {
     case 200: return "OK";
     case 304: return "Not Modified";
     case 400: return "Bad Request";
+    case 403: return "Forbidden";
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
     case 408: return "Request Timeout";
+    case 409: return "Conflict";
+    case 411: return "Length Required";
+    case 413: return "Content Too Large";
+    case 415: return "Unsupported Media Type";
     case 421: return "Misdirected Request";
+    case 429: return "Too Many Requests";
     case 431: return "Request Header Fields Too Large";
+    case 500: return "Internal Server Error";
     case 503: return "Service Unavailable";
     case 505: return "HTTP Version Not Supported";
+    case 507: return "Insufficient Storage";
     default:  return "Internal Server Error";
     }
 }
@@ -245,9 +337,12 @@ const char *web_http_reason(int status) {
 static const char *body_for(int status) {
     switch (status) {
     case 400: return "bad request\n";
+    case 403: return "forbidden\n";
     case 404: return "not found\n";
     case 405: return "method not allowed\n";
     case 408: return "request timeout\n";
+    case 411: return "length required\n";
+    case 413: return "body too large\n";
     case 421: return "misdirected request\n";
     case 431: return "request header fields too large\n";
     case 503: return "service unavailable\n";
@@ -258,8 +353,10 @@ static const char *body_for(int status) {
 
 size_t web_http_response(int status, int is_head, char *out, size_t outsz) {
     const char *body = body_for(status);
-    /* Allow is required on a 405 (RFC 9110 §15.5.6), and states the
-     * whole read-only surface: there will never be a third method. */
+    /* Allow is required on a 405 (RFC 9110 §15.5.6). This one is the
+     * read surface's: a POST reaches the router only on a write path
+     * (web_http_post_path()), and a GET there gets Allow: POST from the
+     * router (web_routes.c), so the two never meet in one answer. */
     const char *allow = status == 405 ? "Allow: GET, HEAD\r\n" : "";
     int n = snprintf(out, outsz,
         "HTTP/1.1 %d %s\r\n"

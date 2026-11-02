@@ -9,6 +9,7 @@
 #include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 void web_config_defaults(web_config_t *c) {
     memset(c, 0, sizeof(*c));
@@ -239,7 +240,8 @@ void web_usage(FILE *out) {
         "                [--web-allow CIDR]... [--web-allow-remote] [--strict]\n"
         "                [--store PATH] [--web-max-keys N] [--web-max-mb N]\n"
         "                [--web-retain-days N] [--sloth-db PATH]\n"
-        "                [--web-allow-sql] [--help]\n"
+        "                [--web-allow-sql] [--web-read-only]\n"
+        "                [--web-assessments DIR] [--help]\n"
         "\n"
         "  --socket SPEC         sloth's data socket to read: unix:PATH or\n"
         "                        tcp:A.B.C.D:PORT / tcp:[V6]:PORT, literal\n"
@@ -284,6 +286,14 @@ void web_usage(FILE *out) {
         "                        withheld. Off by default; refused by\n"
         "                        --strict; announced with\n"
         "                        --web-allow-remote.\n"
+        "  --web-read-only       no write route: every POST is 405, as before\n"
+        "                        triage and the TACDB existed. Without it an\n"
+        "                        admitted peer may POST triage and TACDB\n"
+        "                        changes, which write slothweb's own store\n"
+        "                        only; the allow list is the only gate.\n"
+        "  --web-assessments DIR where \"follow recommended\" reads each alert\n"
+        "                        type's <TYPE>.md front matter (the research\n"
+        "                        assessments). Unset: no recommendation yet.\n"
         "  --help                this text.\n"
         "\n"
         "Routes (GET and HEAD): / (the page), /api/health, /api/live,\n"
@@ -293,9 +303,11 @@ void web_usage(FILE *out) {
         "/api/wifi/local,\n"
         "/api/history/overview, /api/history/devices, /api/history/alerts,\n"
         "/api/history/flows, /api/sessions, /api/sessions/new (JSON),\n"
+        "/api/frrs/* (triage, the FRRS record, the TACDB),\n"
         "/events (Server-Sent Events); with --web-allow-sql, /api/query\n"
-        "(GET only) and /api/recipes. Any other path is 404; any\n"
-        "other method is 405; a Host that is not localhost or an IP\n"
+        "(GET only) and /api/recipes. POST only to the six /api/frrs\n"
+        "write routes, same-origin, unless --web-read-only. Any other\n"
+        "path is 404; any other method is 405; a Host that is not localhost or an IP\n"
         "literal is 421; a header block over 8 KB is 431.\n");
 }
 
@@ -320,6 +332,24 @@ int web_config_parse(web_config_t *c, int argc, char **argv,
                 return -1;
             }
             c->allow_sql = 1;
+        } else if (!strcmp(a, "--web-read-only")) {
+            c->read_only = 1;
+        } else if (!strcmp(a, "--web-assessments")) {
+            if (i + 1 >= argc) {
+                fprintf(err, "slothweb: %s needs an argument\n", a);
+                return -1;
+            }
+            const char *v = argv[++i];
+            struct stat sb;
+            if (!v[0] || strlen(v) >= sizeof(c->assess_dir) - 80) {
+                fprintf(err, "slothweb: --web-assessments: empty or too long a path\n");
+                return -1;
+            }
+            if (stat(v, &sb) != 0 || !S_ISDIR(sb.st_mode)) {
+                fprintf(err, "slothweb: --web-assessments %s: not a directory\n", v);
+                return -1;
+            }
+            snprintf(c->assess_dir, sizeof(c->assess_dir), "%s", v);
         } else if (!strcmp(a, "--socket")) {
             if (i + 1 >= argc) {
                 fprintf(err, "slothweb: %s needs an argument\n", a);

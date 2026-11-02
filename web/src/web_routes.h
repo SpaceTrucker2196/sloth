@@ -36,8 +36,13 @@
  * answer's first member is "scope". /api/query is never scoped: the SQL
  * box runs what it is given.
  *
- * Only GET and HEAD reach the router; web_http.c has already answered
- * every other method 405. */
+ *   /api/frrs/...  triage and the FRRS record (web_frrs.h): GET and HEAD
+ *                 to its read paths, POST to its write paths only
+ *
+ * GET and HEAD reach the router, and POST to the write paths
+ * (web_http_post_path()); web_http.c has already answered every other
+ * method, and a POST anywhere else, 405. A GET to a write path, or a
+ * POST to a read path, is 405 here. */
 #ifndef SLOTHWEB_ROUTES_H
 #define SLOTHWEB_ROUTES_H
 
@@ -83,6 +88,7 @@ typedef struct {
     size_t               out_len;   /* header, plus any small body, in out */
     const unsigned char *body;      /* a static body sent after out, or NULL */
     size_t               body_len;
+    int                  body_free; /* body is malloc'd: the caller frees it */
 } web_resp_t;
 
 /* Route rq. sse_room is 0 when every event-stream slot is in use, which

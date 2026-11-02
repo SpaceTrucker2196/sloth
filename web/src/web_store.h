@@ -41,10 +41,15 @@
  * file is stamped v0 first and takes the same path, so the chain from
  * v0 runs on every first start.
  *
- * Writes come only from the store thread (web_tsdb.c), batched, never
- * from the HTTP thread; queries come only from the HTTP thread, over a
- * second, read-only connection, with every parameter bound. WAL lets
- * the two run side by side.
+ * Writes to the time series and the analysis state come only from the
+ * store thread (web_tsdb.c), batched, never from the HTTP thread;
+ * queries come only from the HTTP thread, over a second, read-only
+ * connection, with every parameter bound. WAL lets the two run side by
+ * side. The one exception since v6 is the operator's own state (the
+ * triage and TACDB tables, web_frrs.h): the HTTP thread writes those
+ * over a third, read-write connection of its own, one short transaction
+ * per request, serialised against the store thread by SQLite's lock and
+ * a busy timeout; the two never share a connection or a statement.
  *
  * Built without WITH_SQLITE, every call is a stub: open fails with
  * "built without SQLite", and /api/series serves the in-memory fine
@@ -60,7 +65,7 @@
 #include "web_rollup.h"
 
 /* The version this build writes. */
-#define WEB_STORE_SCHEMA   5
+#define WEB_STORE_SCHEMA   6
 #define WEB_STORE_ERR_MAX  320
 #define WEB_DEFAULT_STORE  "./slothweb.db"
 /* --web-max-mb: the ceiling on the store's used pages. */
@@ -143,6 +148,15 @@ int  web_store_available(void);
  * web_store_close() either way. */
 int  web_store_open(web_store_t *s, const char *path, char *err, size_t errsz);
 void web_store_close(web_store_t *s);
+
+/* A third connection to an open store, read-write, opened as the
+ * writer is (no-follow, DEFENSIVE, the side files' mode checked), with a
+ * busy timeout of WEB_STORE_AUX_BUSY_MS: the HTTP thread's, for the
+ * operator's own state (web_frrs.h), one short transaction per request.
+ * The caller closes it (sqlite3_close) before web_store_close(). 0, or
+ * -1 with err. */
+#define WEB_STORE_AUX_BUSY_MS 250
+int  web_store_open_aux(web_store_t *s, struct sqlite3 **out, char *err, size_t errsz);
 
 /* The rows, in one transaction. Their (series, t) may already be on
  * disk (a bucket closed early by an eviction or a shutdown, then

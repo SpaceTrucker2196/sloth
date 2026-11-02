@@ -103,7 +103,7 @@ and for the Alerts page, `web/src/web_alerts.c`, `web/src/web_alertdb.c`,
 detail formats audited), `include/sloth_alerts.def`,
 `docs/views/alerts.md`, `research/` and [[alert-remediation]].
 
-**Last updated**: 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (kept settings: every control a viewer
+**Last updated**: 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)), 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (kept settings: every control a viewer
 can change kept per browser under `slothweb.v1.*`, each table's widths
 and sort among them, the address still winning, a reset per table and
 one for everything, and its review: a link's filters and scope applied
@@ -152,6 +152,7 @@ resolves a name (its bind address included) and never writes to
 | M4: sloth.db read-only, query language, OUI table, passive names, A4, durable A2, Devices, drawer, Lookup | #162 | shipped (active reverse DNS cut by the rulings) |
 | M5: WiFi and History views, sessions and new-since, SQL box behind `--web-allow-sql` | #163 | shipped (three of the eight recipes are refused: two read a withheld column, one `dbstat`) |
 | M6: Flows view, polish, README security section, screenshots | #164 | shipped (`mqtt_flows` not read; Kerberos' preauth counts off the allow-list) |
+| F0-F4: alert triage, the FRRS emitter record, the TACDB tab (owner request 2026-10-27) | - | shipped 2026-11-01; F5 (the vendor KB's certification data, the compiled assessment table) waits on the other sessions' files |
 
 ## W0: the access boundary before any route
 
@@ -1048,6 +1049,65 @@ element id.
 `web/tools/palette.c` (the generator shape, for contrast).
 **Last updated**: 2026-10-27.
 
+## Triage and the FRRS record (2026-11-01)
+
+The owner asked (2026-10-27) for triage buttons on every alert record
+(*false*, *noise*, *incident*, *follow recommended*) and for the
+information gathered in the shape of COMINT's Frequency Resource Record:
+BEI, SCS, EC/S and TACDB, with the seven COMINT disclosures folded in as
+a Report. The specification, the field-by-field mapping onto what sloth
+records and the owner's open questions (Q1-Q14, each with the default
+this build took) are [`docs/web-frrs-spec.md`](../web-frrs-spec.md);
+the routes with their request and response shapes are
+[`web/README.md`](../../web/README.md#triage-and-the-frrs-record).
+
+- **Triage** is operator state in slothweb.db (schema v6, an additive
+  step with its migration test on a v5 file and the failure that leaves
+  it unchanged): one row per decision, append-only, the state of an
+  alert its newest row. Every alert row on every view carries the chip
+  and the buttons; triaged-out rows (`false`, `noise`) are dimmed, never
+  hidden, and the open-alerts tile keeps its count and says how many of
+  it are triaged out. `/api/alerts?triage=` filters and counts; without
+  it the answer is as before. Triage never reaches sloth.
+- **Follow recommended** maps the research assessment's front matter
+  (`--web-assessments DIR`, `<TYPE>.md`) to a state, first match wins,
+  an unknown value no recommendation; the compiled table the
+  assessments' own generator will write replaces the reader.
+- **The record** (BEI, SCS, EC/S, TACDB, Report) is built only from what
+  sloth already records: sloth.db through the column allow-list (now
+  holding the parametric columns too), the stream's latest records per
+  emitter in a bounded in-memory ledger, and slothweb's own baselines
+  and episodes. Every field names its source; absent is *not observed*.
+  It says, every time, that a single passive sensor has no location
+  axis and that sloth decrypts nothing.
+- **The TACDB tab**: units with subordinate units, platforms by
+  nomenclature, each with its emitters (each opening its EC/S and
+  Report), suggestions from sloth's own correlations (sequence-counter
+  trails, Multi-Link affiliation, adjacent BSSIDs on one channel, a
+  station both the host's card and the air heard) confirmed or
+  dismissed by the operator, export and import as JSON Lines.
+
+**The write surface.** slothweb was GET and HEAD only by the
+2026-10-21 ruling; the owner's request reverses that for its own state
+and nothing else. Six paths take POST: JSON with a checked
+`Content-Type`, `Content-Length` bounded (4 KiB, the import 8 MiB) and
+refused before the body is read, an `Origin` that must equal the
+`Host` (slothweb sets no cookie, so Origin is the whole cross-site
+defence), a token bucket per peer, every member validated whole and an
+over-long value refused rather than cut. The allow list stays the trust
+boundary: there is no login, and a row's "by" is the peer's address
+and a typed name. `--web-read-only` removes the six routes and restores
+the surface byte for byte. The UI is its own module
+(`web/ui/frrs.js`, `window.SlothFrrs`) reached from `app.js` through
+seven one-line guarded hook points, so the parallel slices changing
+`app.js` merge around it.
+
+**Sources**: `docs/web-frrs-spec.md`, `web/src/web_frrs.c`,
+`web/src/web_frrs_report.c`, `web/src/web_frrs_tacdb.c`,
+`web/ui/frrs.js`, `web/tests/test_frrs.c`, the owner's request of
+2026-10-27.
+**Last updated**: 2026-11-01.
+
 ## Tests
 
 `make web-test` is self-contained: no host file, loopback ephemeral
@@ -1184,4 +1244,5 @@ covers `web/`.
 - [[alerts]] — the engine and the rules the Alerts page lists.
 - [[capture-scope]] — the Monitor / Hybrid / Local switch and how each datum is placed.
 - [[cli-reference]] — sloth's own flags; slothweb's are in
-  [`web/README.md`](../../web/README.md).
+  [`web/README.md`](../../web/README.md) (the two of the triage slice,
+  `--web-read-only` and `--web-assessments`, in both).

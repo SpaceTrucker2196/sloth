@@ -16,6 +16,7 @@
 #include "web_chmix.h"
 #include "web_config.h"
 #include "web_devices.h"
+#include "web_frrs.h"
 #include "web_ident.h"
 #include "web_ingest.h"
 #include "web_live.h"
@@ -44,6 +45,7 @@ static web_slothdb_t  g_sdb;
 static web_m4_t       g_m4;
 static web_sqlbox_t   g_sql;
 static web_chmix_t    g_chmix;
+static web_frrs_t     g_frrs;
 
 static void on_signal(int sig) {
     (void)sig;
@@ -131,6 +133,18 @@ int main(int argc, char **argv) {
     g_m4.anomaly = &g_anomaly;
     g_m4.tsdb = &g_tsdb;
     web_anomaly_attach(&g_anomaly, &g_tsdb);
+    /* Triage and the TACDB (web_frrs.h): the operator's state in the
+     * store, written over the HTTP thread's own connection; without a
+     * store every write is 503 no_store and the record still reads. */
+    if (web_frrs_init(&g_frrs, have_store ? &g_store : NULL, cfg.assess_dir,
+                      !cfg.read_only, err, sizeof(err)) != 0) {
+        fprintf(stderr, "slothweb: triage: %s\n", err);
+        web_frrs_destroy(&g_frrs);
+        web_store_close(&g_store);
+        web_server_close(&g_srv);
+        return 1;
+    }
+    g_m4.frrs = &g_frrs;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -160,6 +174,7 @@ int main(int argc, char **argv) {
     }
     web_server_set_sqlbox(&g_srv, &g_sql);
     web_ingest_set_metrics(&g_ingest, &g_metrics);
+    web_ingest_set_frrs(&g_ingest, &g_frrs);
     if (web_tsdb_start(&g_tsdb, err, sizeof(err)) != 0 ||
         web_ingest_start(&g_ingest, &cfg.sock, cfg.sock_backoff_min_ms,
                          cfg.sock_backoff_max_ms, &g_live,
@@ -168,6 +183,7 @@ int main(int argc, char **argv) {
         web_tsdb_stop(&g_tsdb);
         web_server_close(&g_srv);
         web_live_destroy(&g_live);
+        web_frrs_destroy(&g_frrs);
         web_store_close(&g_store);
         return 1;
     }
@@ -180,7 +196,7 @@ int main(int argc, char **argv) {
                     "/api/metrics, /api/baseline, /api/anomalies, "
                     "/api/devices, /api/device/MAC, /api/lookup, "
                     "/api/wifi/*, /api/history/*, /api/sessions, /api/flows, "
-                    "/api/flows/graph%s, /events)\n",
+                    "/api/flows/graph, /api/frrs/*%s, /events)\n",
             where, cfg.allow_sql ? ", /api/query, /api/recipes" : "");
     if (cfg.allow_sql)
         fprintf(stderr, "slothweb: SQL box on (--web-allow-sql): one "
@@ -213,6 +229,17 @@ int main(int argc, char **argv) {
     }
     fprintf(stderr, "slothweb: reading %s (read-only; reconnects on its "
                     "own)\n", spec);
+    if (cfg.read_only)
+        fprintf(stderr, "slothweb: --web-read-only: no write route; every POST "
+                        "is 405\n");
+    else
+        fprintf(stderr, "slothweb: triage and TACDB writes %s: POST, same-origin, "
+                        "to %s only; the allow list is the only gate\n",
+                have_store ? "on" : "off (no store)",
+                have_store ? cfg.store_path : "slothweb's store");
+    fprintf(stderr, "slothweb: follow recommended: %s%s\n",
+            cfg.assess_dir[0] ? "assessments from " : "no --web-assessments, ",
+            cfg.assess_dir[0] ? cfg.assess_dir : "no recommendation yet");
     if (have_store) {
         fprintf(stderr, "slothweb: time series in %s (10 s for 24 h, 1 min "
                         "for %d d, 1 h for 400 d; ceiling %d MB)\n",
@@ -254,6 +281,7 @@ int main(int argc, char **argv) {
     web_ident_destroy(&g_ident);
     web_ptr_destroy(&g_ptr);
     web_slothdb_destroy(&g_sdb);
+    web_frrs_destroy(&g_frrs);
     web_store_close(&g_store);
     return rc == 0 ? 0 : 1;
 }

@@ -55,11 +55,12 @@ static void test_schema_text_guardrail(void) {
     const char *v3 = web_store_step_sql(2);
     const char *v4 = web_store_step_sql(3);
     const char *v5 = web_store_step_sql(4);
-    WT_ASSERT(meta && v1 && v2 && v3 && v4 && v5);
-    WT_ASSERT(web_store_step_sql(5) == NULL);     /* v5 is current */
-    WT_EQ(WEB_STORE_SCHEMA, 5);
-    const char *both[6] = { meta, v1, v2, v3, v4, v5 };
-    for (int k = 0; k < 6; k++) {
+    const char *v6 = web_store_step_sql(5);
+    WT_ASSERT(meta && v1 && v2 && v3 && v4 && v5 && v6);
+    WT_ASSERT(web_store_step_sql(6) == NULL);     /* v6 is current */
+    WT_EQ(WEB_STORE_SCHEMA, 6);
+    const char *both[7] = { meta, v1, v2, v3, v4, v5, v6 };
+    for (int k = 0; k < 7; k++) {
         for (size_t i = 0; i < NFORBIDDEN; i++) {
             if (!strcmp(FORBIDDEN[i], "mic")) {
                 WT_ASSERT(strstr(both[k], "  mic ") == NULL);
@@ -248,7 +249,7 @@ static void test_no_column_can_hold_secret_material(void) {
     }
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
-                     " AND UPPER(c.type)='TEXT'"), 18);
+                     " AND UPPER(c.type)='TEXT'"), 33);
     /* meta (name, value), series (metric, key), baseline (metric, key),
      * episode (kind, metric, key, evidence), fanout (key, hist),
      * reported (kind, key), passive_ptr (ip, name) and chmix (channel,
@@ -256,7 +257,13 @@ static void test_no_column_can_hold_secret_material(void) {
      * a canonical key, a catalogue name or numbers; evidence is our own
      * sentence, with names the stream already carries (web_anomaly.h),
      * and a passive_ptr name is a host name a PTR answer on the wire
-     * gave (web_ptr.h). */
+     * gave (web_ptr.h). The v6 tables (web_frrs.h) add fifteen: triage
+     * (subject, addr, basis, note, who, peer), tacdb_unit (name, note),
+     * tacdb_platform (nomenclature, vendor, note), tacdb_emitter (addr,
+     * label) and tacdb_dismiss (a, b): an alert id, canonical addresses,
+     * slothweb's own basis sentence, and operator-typed text that
+     * arrives only through the validated POST body, never from the
+     * stream (test_frrs.c holds the stream out of them). */
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
                      " AND UPPER(c.type)='BLOB'"), 0);
@@ -547,7 +554,8 @@ static void test_v4_file_is_migrated(void) {
     WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 4);
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 5);
+    /* Brought through v5 to the current version by the chain. */
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 6);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
                      " name IN ('chmix','chmix_t')"), 2);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM chmix"), 0);
@@ -574,6 +582,65 @@ static void test_v4_failed_step_leaves_file_unchanged(void) {
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name='chmix'"), 0);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
                      " name='chmix_t' AND tbl_name='minute'"), 1);
+    WT_EQ(raw_int(p, "SELECT last_seen FROM passive_ptr WHERE ip='10.0.0.9'"), 60);
+    WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    rm_store(p);
+}
+
+/* A v5 file as the chmix slice left it: the v4 file, the v5 step and a
+ * chmix row, stamped v5. */
+static void make_v5(const char *p, const char *extra) {
+    char sql[8192];
+    snprintf(sql, sizeof(sql), "%s INSERT INTO chmix VALUES"
+             " (1,'6',960,'02:00:00:00:00:01',1,40);"
+             " UPDATE meta SET value='5' WHERE name='schema_version'; %s",
+             web_store_step_sql(4), extra);
+    make_v4(p, sql);
+}
+
+/* v5 -> v6 adds the triage and tacdb tables with their indexes, empty,
+ * and changes nothing that was there. */
+static void test_v5_file_is_migrated(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v5.db");
+    make_v5(p, "");
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 5);
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 6);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND"
+                     " name IN ('triage','tacdb_unit','tacdb_platform',"
+                     "'tacdb_emitter','tacdb_dismiss')"), 5);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND"
+                     " name IN ('triage_subject','triage_finding','triage_desc',"
+                     "'tacdb_unit_parent','tacdb_platform_nom','tacdb_emitter_addr')"), 6);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM triage"), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM tacdb_platform"), 0);
+    WT_EQ(raw_int(p, "SELECT frames FROM chmix WHERE channel='6' AND t=960"), 40);
+    WT_EQ(raw_int(p, "SELECT last_seen FROM passive_ptr WHERE ip='10.0.0.9'"), 60);
+    WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    WT_EQ(raw_int(p, "SELECT score FROM episode WHERE id=5"), 70);
+    rm_store(p);
+}
+
+/* The v5 step's failure: a v5 file already holding the name
+ * triage_subject (an index of its own on minute) fails the step at its
+ * second statement, after triage was made. It stays at v5, keeps that
+ * index and every row, and is left without triage: the step's first
+ * statement is rolled back with it. Seen red with the migration's
+ * ROLLBACK replaced by COMMIT (triage left behind at v5). */
+static void test_v5_failed_step_leaves_file_unchanged(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v5bad.db");
+    make_v5(p, "CREATE INDEX triage_subject ON minute (t);");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), -1);
+    WT_HAS(err, "unchanged from v5");
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 5);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name='triage'"), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
+                     " name='triage_subject' AND tbl_name='minute'"), 1);
+    WT_EQ(raw_int(p, "SELECT frames FROM chmix WHERE channel='6' AND t=960"), 40);
     WT_EQ(raw_int(p, "SELECT last_seen FROM passive_ptr WHERE ip='10.0.0.9'"), 60);
     WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
     rm_store(p);
@@ -990,9 +1057,9 @@ static void refused_untouched(const char *p, const char *want) {
  * left exactly as it was. */
 static void test_newer_file_refused(void) {
     char p[128];
-    path_in(p, sizeof(p), "v6.db");
+    path_in(p, sizeof(p), "v7.db");
     raw_exec(p, "CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);"
-                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','6');"
+                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','7');"
                 "CREATE TABLE future (x INTEGER);");
     refused_untouched(p, "newer slothweb");
     rm_store(p);
@@ -2061,6 +2128,8 @@ void run_store_tests(void) {
     WT_RUN(test_v3_failed_step_leaves_file_unchanged);
     WT_RUN(test_v4_file_is_migrated);
     WT_RUN(test_v4_failed_step_leaves_file_unchanged);
+    WT_RUN(test_v5_file_is_migrated);
+    WT_RUN(test_v5_failed_step_leaves_file_unchanged);
     WT_RUN(test_mix_rows_round_trip);
     WT_RUN(test_mix_retention_and_cap);
     WT_RUN(test_mix_cut_keeps_buckets_whole);

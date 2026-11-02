@@ -47,6 +47,8 @@
 #include "web_slothdb.h"
 #include "web_tsdb.h"
 
+struct web_frrs;
+
 #define WEB_DEV_LIMIT       100
 #define WEB_DEV_LIMIT_MAX   200
 #define WEB_DEV_OFFSET_MAX  100000
@@ -69,6 +71,8 @@ typedef struct {
     /* Validate the query and stop, reading nothing (the router's copy,
      * for a view the scope holds nothing of): WEB_M4_CHECKED(). */
     int                  check_only;
+    /* Triage and the FRRS record (web_frrs.h); NULL: not attached. */
+    struct web_frrs     *frrs;
 } web_m4_t;
 
 /* In a route, once its parameters are checked: under check_only, an
