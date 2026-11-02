@@ -263,8 +263,9 @@ static const char STEP_V6_SQL[] =
  * as passive_ptr.name holds a peer-chosen name), never a key. ble_alert
  * is one finding by the hash of its key (the key itself, which can carry
  * remote text in other alert families, is never stored); its per-kind
- * integers are five generic columns, its one word of the kind the
- * label. Both indexed on last seen, which retention, the row caps and
+ * integers are eight generic columns, its one word of the kind the
+ * label, and a flood's citation line (sloth's own text, src/ble_flood.c)
+ * the detail. Both indexed on last seen, which retention, the row caps and
  * the seed all select on. Additive: two new tables and their indexes,
  * nothing that exists is changed (the triage and TACDB rows of v6 among
  * it). Plain CREATE, as every step: a file already holding one of these
@@ -322,8 +323,12 @@ static const char STEP_V7_SQL[] =
     "  n2          INTEGER NOT NULL,\n"
     "  n3          INTEGER NOT NULL,\n"
     "  n4          INTEGER NOT NULL,\n"
+    "  n5          INTEGER NOT NULL,\n"
+    "  n6          INTEGER NOT NULL,\n"
+    "  n7          INTEGER NOT NULL,\n"
     "  rssi        INTEGER NOT NULL,\n"
-    "  label       TEXT NOT NULL\n"
+    "  label       TEXT NOT NULL,\n"
+    "  detail      TEXT NOT NULL\n"
     ") WITHOUT ROWID;\n"
     "CREATE INDEX ble_alert_last ON ble_alert (last_ts);\n";
 
@@ -680,12 +685,27 @@ static const char *const EXP_ANY[WEB_TIER_COUNT] = {
 #define MIX_SLICE(tier) \
     "DELETE FROM chmix WHERE tier=" tier " AND (channel,t) IN (SELECT channel,t" \
     " FROM chmix WHERE tier=" tier " ORDER BY t LIMIT ?1)"
+/* The BLE tables (v7) are in the same budget: an advertiser row is
+ * remote-paced (an address flood mints a row per random address, which
+ * is what BLE_ADV_FLOOD exists to catch), so the ones no flag marks go
+ * right after the channel mix and before any keyed history, and a flood
+ * cannot erase the Wi-Fi and host series to make room for itself. The
+ * HID and watchlisted rows, and then the findings, go after the keyed
+ * history and before the global series. */
+#define BLE_FLAGGED "(hid<>0 OR watch_category<>'')"
 static const char *const CEIL_STEP[] = {
     SLICE("fine", ""),
     MIX_SLICE("1"),
     MIX_SLICE("2"),
+    "DELETE FROM ble_device WHERE (addr,addr_type,iface) IN (SELECT addr,"
+    "addr_type,iface FROM ble_device WHERE NOT " BLE_FLAGGED
+    " ORDER BY last_seen LIMIT ?1)",
     SLICE("minute", " WHERE " KEYED),
     SLICE("hour", " WHERE " KEYED),
+    "DELETE FROM ble_device WHERE (addr,addr_type,iface) IN (SELECT addr,"
+    "addr_type,iface FROM ble_device ORDER BY last_seen LIMIT ?1)",
+    "DELETE FROM ble_alert WHERE key_hash IN (SELECT key_hash FROM ble_alert"
+    " ORDER BY last_ts LIMIT ?1)",
     SLICE("minute", " WHERE " GLOBAL),
     SLICE("hour", " WHERE " GLOBAL),
 };
@@ -1624,15 +1644,22 @@ static long long mix_expire(web_store_t *s, long long minute_cut,
  * before `before`, at most limit. Rows, or -1. */
 static long long ble_slice(web_store_t *s, int alerts, long long before,
                            long long limit) {
-    static const char *const SQL[2] = {
+    /* 0 the advertisers, 1 the findings, 2 the advertisers with the
+     * flagged ones last (the row cap: a flood of fresh random addresses
+     * pushes out its own rows before a HID or watchlisted one). */
+    static const char *const SQL[3] = {
         "DELETE FROM ble_device WHERE (addr,addr_type,iface) IN (SELECT "
         "addr,addr_type,iface FROM ble_device WHERE last_seen<?1 ORDER BY "
         "last_seen LIMIT ?2)",
         "DELETE FROM ble_alert WHERE key_hash IN (SELECT key_hash FROM ble_alert"
         " WHERE last_ts<?1 ORDER BY last_ts LIMIT ?2)",
+        "DELETE FROM ble_device WHERE (addr,addr_type,iface) IN (SELECT "
+        "addr,addr_type,iface FROM ble_device WHERE last_seen<?1 ORDER BY "
+        BLE_FLAGGED ", last_seen LIMIT ?2)",
     };
     sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(s->db, SQL[alerts ? 1 : 0], -1, &st, NULL) != SQLITE_OK)
+    if (alerts < 0 || alerts > 2) return -1;
+    if (sqlite3_prepare_v2(s->db, SQL[alerts], -1, &st, NULL) != SQLITE_OK)
         return -1;
     sqlite3_bind_int64(st, 1, before);
     sqlite3_bind_int64(st, 2, limit < WEB_STORE_SLICE_ROWS ? limit
@@ -2595,15 +2622,16 @@ static const char BLE_DEV_UPSERT[] =
     " pres_bucket=excluded.pres_bucket, pres_lo=excluded.pres_lo, pres_hi=excluded.pres_hi";
 static const char BLE_AL_UPSERT[] =
     "INSERT INTO ble_alert (key_hash,kind,alert,iface,sampled,first_ts,last_ts,"
-    "resolved_ts,n0,n1,n2,n3,n4,rssi,label)"
-    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)"
+    "resolved_ts,n0,n1,n2,n3,n4,n5,n6,n7,rssi,label,detail)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)"
     " ON CONFLICT(key_hash) DO UPDATE SET kind=excluded.kind, alert=excluded.alert,"
     " iface=excluded.iface, sampled=excluded.sampled,"
     " first_ts=CASE WHEN ble_alert.first_ts>0 AND (excluded.first_ts<=0 OR"
     " ble_alert.first_ts<excluded.first_ts) THEN ble_alert.first_ts ELSE excluded.first_ts END,"
     " last_ts=MAX(ble_alert.last_ts,excluded.last_ts), resolved_ts=excluded.resolved_ts,"
     " n0=excluded.n0, n1=excluded.n1, n2=excluded.n2, n3=excluded.n3, n4=excluded.n4,"
-    " rssi=excluded.rssi, label=excluded.label";
+    " n5=excluded.n5, n6=excluded.n6, n7=excluded.n7,"
+    " rssi=excluded.rssi, label=excluded.label, detail=excluded.detail";
 
 int web_store_ble_write(web_store_t *s, const web_store_bdev_t *rows, size_t n,
                         const web_store_balert_t *alerts, size_t na) {
@@ -2668,9 +2696,10 @@ int web_store_ble_write(web_store_t *s, const web_store_bdev_t *rows, size_t n,
         sqlite3_bind_int64(sa, 6, r->first_ts);
         sqlite3_bind_int64(sa, 7, r->last_ts);
         sqlite3_bind_int64(sa, 8, r->resolved_ts);
-        for (int k = 0; k < 5; k++) sqlite3_bind_int64(sa, 9 + k, r->n[k]);
-        sqlite3_bind_int(sa, 14, r->rssi);
-        sqlite3_bind_text(sa, 15, r->label, -1, SQLITE_TRANSIENT);
+        for (int k = 0; k < WEB_BLE_NCOLS; k++) sqlite3_bind_int64(sa, 9 + k, r->n[k]);
+        sqlite3_bind_int(sa, 17, r->rssi);
+        sqlite3_bind_text(sa, 18, r->label, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(sa, 19, r->detail, -1, SQLITE_TRANSIENT);
         if (sqlite3_step(sa) != SQLITE_DONE) goto fail;
     }
     sqlite3_reset(sd);
@@ -2687,7 +2716,7 @@ int web_store_ble_write(web_store_t *s, const web_store_bdev_t *rows, size_t n,
     const long long cap[2] = { WEB_STORE_BLE_ROWS, WEB_STORE_BLE_ALERT_ROWS };
     for (int k = 0; k < 2; k++)
         for (int guard = 0; have[k] > cap[k] && guard < 100000; guard++) {
-            long long d = ble_slice(s, k, (long long)1 << 62, have[k] - cap[k]);
+            long long d = ble_slice(s, k ? 1 : 2, (long long)1 << 62, have[k] - cap[k]);
             if (d < 0) {
                 snprintf(err, sizeof(err), "ble cap: %s", sqlite3_errmsg(s->db));
                 goto fail_count;
@@ -2791,7 +2820,8 @@ int web_store_ble_load(web_store_t *s, int cap,
     st = NULL;
     if (sqlite3_prepare_v2(s->db,
             "SELECT key_hash,kind,alert,iface,sampled,first_ts,last_ts,resolved_ts,"
-            "n0,n1,n2,n3,n4,rssi,label FROM ble_alert WHERE resolved_ts<0 OR last_ts>=?1"
+            "n0,n1,n2,n3,n4,n5,n6,n7,rssi,label,detail FROM ble_alert"
+            " WHERE resolved_ts<0 OR last_ts>=?1"
             " ORDER BY last_ts DESC LIMIT ?2", -1, &st, NULL) != SQLITE_OK) {
         note_fail(s, "ble_alert load");
         return -1;
@@ -2809,9 +2839,10 @@ int web_store_ble_load(web_store_t *s, int cap,
         r.first_ts = sqlite3_column_int64(st, 5);
         r.last_ts = sqlite3_column_int64(st, 6);
         r.resolved_ts = sqlite3_column_int64(st, 7);
-        for (int k = 0; k < 5; k++) r.n[k] = sqlite3_column_int64(st, 8 + k);
-        r.rssi = sqlite3_column_int(st, 13);
-        col_text(st, 14, r.label, WEB_BLE_LABEL_MAX);
+        for (int k = 0; k < WEB_BLE_NCOLS; k++) r.n[k] = sqlite3_column_int64(st, 8 + k);
+        r.rssi = sqlite3_column_int(st, 16);
+        col_text(st, 17, r.label, WEB_BLE_LABEL_MAX);
+        col_text(st, 18, r.detail, WEB_BLE_DETAIL_MAX);
         afn(actx, &r);
         n++;
     }

@@ -204,11 +204,15 @@ static int by_value(const void *a, const void *b) {
     return x->value < y->value ? -1 : x->value > y->value ? 1 : 0;
 }
 
+/* A C string literal. '?' is escaped too, as alertkb.c and oui_csv.c
+ * escape it: the build is -std=c99, where gcc expands trigraphs, and a
+ * refresh writes third-party SIG text in unreviewed, so "??/" in a name
+ * must not become a backslash (or a -Wtrigraphs error under -Werror). */
 static void emit_str(FILE *out, const char *s) {
     fputc('"', out);
     for (; *s; s++) {
         unsigned char c = (unsigned char)*s;
-        if (c == '"' || c == '\\') { fputc('\\', out); fputc(c, out); }
+        if (c == '"' || c == '\\' || c == '?') { fputc('\\', out); fputc(c, out); }
         /* Octal, never hex: three digits at most, so a digit that follows
          * cannot join the escape. */
         else if (c < 0x20 || c >= 0x7f) fprintf(out, "\\%03o", c);

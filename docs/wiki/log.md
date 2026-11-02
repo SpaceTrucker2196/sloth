@@ -5741,7 +5741,7 @@ report events.
   assessments and `slothweb.service` passes `--web-assessments`
   ([[deployment]] §6). Each seen red under its mutation (the commit
   lists them).
-- 2026-11-01 — [[slothweb]], [[ble]], [[capture-scope]]: the BLE view
+- 2026-11-02 — [[slothweb]], [[ble]], [[capture-scope]]: the BLE view
   in slothweb (owner request "add bluetooth to the web ui"). A tab
   (key `0`) at TUI parity with `[*]`: the same columns and cells, one
   colour a row (bright for HID or watchlist), the header, rotation-hints,
@@ -5762,3 +5762,16 @@ report events.
   from a given directory and never fetches. Two global metrics,
   `ble.devices` and `ble.adv_rate`, both Monitor's. `/api/ble`,
   `/api/ble/alerts`, `/api/ble/{addr}`; out_of_scope under Local.
+  On review, before it shipped: a resolve on a seeded finding resolves
+  the stored row instead of writing a second; `ble_alert` gained
+  `n5..n7` and `detail` inside v7 (unreleased), so a seeded flood keeps
+  its fresh count, rate, window and citation line and a `hid_oui`
+  finding its address; the header's count is sloth's `ble_devices` and
+  `flood keys` became `standing floods`, which is what the web can
+  count; the BLE tables are in `--web-max-mb`'s ceiling (unflagged
+  advertisers before keyed history, the row cap 8 × 1024 and flagged
+  rows last); a failed write re-dirties its batch; the SIG generator
+  escapes `?`; `/api/live`'s `ble` member is sized for its worst case;
+  `ble.devices` is sampled with an Ubertooth alone; the 5 s refresh
+  keeps rows a "more" brought in; and every sort word is tested in both
+  directions. Each new test seen red under a named mutation.

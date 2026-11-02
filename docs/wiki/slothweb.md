@@ -103,7 +103,7 @@ and for the Alerts page, `web/src/web_alerts.c`, `web/src/web_alertdb.c`,
 detail formats audited), `include/sloth_alerts.def`,
 `docs/views/alerts.md`, `research/` and [[alert-remediation]].
 
-**Last updated**: 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)), 2026-11-01 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`), 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (kept settings: every control a viewer
+**Last updated**: 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)), 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (kept settings: every control a viewer
 can change kept per browser under `slothweb.v1.*`, each table's widths
 and sort among them, the address still winning, a reset per table and
 one for everything, and its review: a link's filters and scope applied
@@ -1144,7 +1144,7 @@ import's header and end checks and its transaction, the bounds on
 deleted rows and imported triage, the suggestion rules as §7 states
 them); 2026-11-01.
 
-## The BLE view (2026-11-01)
+## The BLE view (2026-11-02)
 
 Owner request: "add bluetooth to the web ui". The reference host's
 sensor runs with `--bt-monitor` and `sloth-ble-scan` holding a passive
@@ -1215,11 +1215,35 @@ CSVs to `SOURCE.md`'s hashes, the lookups), the v5 migration pair in
 `test_store.c`, the vocabularies held to `src/` as text in
 `test_parity.c`.
 
+Where the stream does not carry the TUI's number, the web says what it
+shows. The header's `BLE advertisers: N` is sloth's own table
+(`sensor_health` `ble_devices`, the TUI's `s->ble_device_count`), with
+the rows slothweb keeps beside it (they outlive sloth's evictions and
+restarts); the rotation block counts the same live figure. The TUI's
+`flood keys` is the flood detector's tracked windows, which no record
+carries, so the web shows `standing floods: N`, the `adv_flood`
+findings standing, under that name. `ble.devices` is sampled while
+either source is configured (an Ubertooth alone counts in sloth's
+table), `ble.adv_rate` only with the host stream, whose reports it
+counts. A finding seeded after a restart carries every field the live
+one rendered (`ble_alert` keeps eight integer columns and a flood's
+citation line in `detail`, inside v7, which had not shipped), and a
+resolve on its live key resolves the stored row in place. The BLE
+tables are inside `--web-max-mb`: the ceiling drops the advertisers no
+flag marks right after the channel mix and before any keyed history,
+the HID and watchlisted ones and the findings after the keyed history,
+so an address flood trims its own rows and not the Wi-Fi and host
+series; the row cap is 8,192 (eight times the in-memory table), the
+flagged rows last. A failed write leaves its batch dirty for the next
+flush. Tests on the store side: `test_ble.c`'s failed-write and
+row-cap cases, `test_store.c`'s
+`test_ceiling_takes_ble_rows_before_history`.
+
 **Sources**: `src/views/ble.c`, `src/jsonl.c` (the three emitters),
 `src/rf_distance.c`, `src/ble_detect.c`, `web/src/web_ble.h`,
 `web/src/web_store.c` (v7), `web/data/btsig/SOURCE.md`,
 `research/papers/rssi-distance-estimation.md`.
-**Last updated**: 2026-11-01.
+**Last updated**: 2026-11-02.
 
 ## Tests
 

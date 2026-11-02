@@ -405,13 +405,22 @@ static size_t live_body(const web_health_t *h, char *out, size_t cap) {
          * the Overview's BLE fact and the Health view's Bluetooth block.
          * Under Local the member is null, as the view is out of scope. */
         if (n >= 2 && h->ble && out[n - 2] == '}' && out[n - 1] == '\n') {
-            char t[1024];
+            /* Sized from the worst case: twelve sensor_health strings of
+             * WEB_BLE_SH_STR bytes, each byte at most a six-byte \u
+             * escape, about 450 bytes of names and a dozen integers.
+             * Should it ever not fit, the member is null and the rest of
+             * /api/live stands: one block is not the page's feed. */
+            char t[12 * WEB_BLE_SH_STR * 6 + 1024];
             web_jw_t w;
             web_jw_init(&w, t, sizeof(t));
             web_jw_raw(&w, ",\"ble\":");
             if (h->sc && h->sc->scope == WEB_SCOPE_LOCAL) web_jw_raw(&w, "null");
             else web_ble_live_json(h->ble, &w, h->wall_s);
             web_jw_raw(&w, "}\n");
+            if (w.overflow) {
+                web_jw_init(&w, t, sizeof(t));
+                web_jw_raw(&w, ",\"ble\":null}\n");
+            }
             if (w.overflow || n - 2 + w.len + 1 > cap) return 0;
             memcpy(out + n - 2, t, w.len + 1);
             n = n - 2 + w.len;

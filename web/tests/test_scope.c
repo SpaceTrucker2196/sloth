@@ -1340,22 +1340,44 @@ static void test_wifi_card_scoped(void) {
     same_as_hybrid(&H, "/api/wifi/local", "");
     /* The BLE routes (web_ble.h): the receivers are passive radio, so
      * Monitor and Hybrid serve them and Local holds nothing of them,
-     * the query still checked. Seen red with route_ble()'s none_here
-     * forced 0 (a Local answer carried rows). */
+     * the query still checked. One advertiser at the drawer's address
+     * and one finding are held, so each Monitor answer is a 200 whose
+     * rows carry them, and the Local absence is of something there to
+     * leak. Seen red with route_ble()'s none_here forced 0 (each Local
+     * answer carried the row). */
     web_ble_t ble;
     WT_EQ(web_ble_init(&ble, 0), 0);
+    {
+        static web_jrec_t br;
+        static const char *const L2[2] = {
+            "{\"type\":\"ble_device\",\"ts\":1793000000,\"addr\":\"02:de:00:00:00:01\",\"addr_type\":0,"
+            "\"sensor\":\"ble\",\"iface\":\"bluetooth-monitor\",\"name\":\"scoped-kettle\",\"has_rssi\":1,"
+            "\"rssi\":-50,\"rssi_best\":-45,\"adv_count\":3,\"first_seen\":1792999000,\"last_seen\":1793000000}",
+            "{\"type\":\"ble_alert\",\"ts\":1793000000,\"kind\":\"watchlist\",\"alert\":\"BLE_WATCHLIST\","
+            "\"ty\":89,\"key\":\"ble_watch:bluetooth-monitor:tag\",\"sensor\":\"ble\",\"iface\":"
+            "\"bluetooth-monitor\",\"sampled\":0,\"category\":\"scoped-tag\",\"addrs\":2,\"window_s\":60}",
+        };
+        for (int i = 0; i < 2; i++) {
+            WT_EQ(web_jl_parse(L2[i], strlen(L2[i]), &br), WEB_JL_OK);
+            web_ble_record(&ble, &br, 1000);
+        }
+    }
     web_health_t HB = H;
     HB.ble = &ble;
+    HB.wall_s = 1793000000;
     static const char *const BLE_ROUTES[] = { "/api/ble", "/api/ble/alerts",
                                               "/api/ble/02%3Ade%3A00%3A00%3A00%3A01" };
+    static const char *const BLE_HELD[] = { "scoped-kettle", "scoped-tag", "scoped-kettle" };
     for (size_t i = 0; i < sizeof(BLE_ROUTES) / sizeof(BLE_ROUTES[0]); i++) {
+        WT_EQ(route(&HB, BLE_ROUTES[i], "scope=monitor"), 200);
+        WT_HAS(body_of(g_out), "{\"scope\":\"monitor\",");
+        WT_HAS(body_of(g_out), "\"rows\":[{");
+        WT_HAS(body_of(g_out), BLE_HELD[i]);
+        WT_LACKS(body_of(g_out), "out_of_scope");
         WT_EQ(route(&HB, BLE_ROUTES[i], "scope=local"), 200);
         WT_HAS(body_of(g_out), "{\"scope\":\"local\",\"out_of_scope\":true,\"reason\":\"BLE advertisers are the passive Bluetooth receivers");
         WT_LACKS(body_of(g_out), "\"rows\"");
-        int s = route(&HB, BLE_ROUTES[i], "scope=monitor");
-        WT_ASSERT(s == 200 || s == 404);
-        WT_HAS(body_of(g_out), "{\"scope\":\"monitor\",");
-        WT_LACKS(body_of(g_out), "out_of_scope");
+        WT_LACKS(body_of(g_out), BLE_HELD[i]);
         same_as_hybrid(&HB, BLE_ROUTES[i], "");
     }
     WT_EQ(route(&HB, "/api/ble", "scope=local&sort=bogus"), 400);

@@ -745,7 +745,7 @@ static void test_monitor_rows_are_jsonls_monitor_records(void) {
  * and CP_NORMAL otherwise (no CP_DIM address, no hash hue, no RSSI
  * heat, no monitor ground); the header's HID and watchlist counts at
  * tui_heat(0.5) above zero and CP_DIM at zero; the header's count
- * bright; the flood keys, empty state and legend dim. Both sides'
+ * bright; the standing floods, empty state and legend dim. Both sides'
  * choice lines are pinned, so a change on either fails here. Seen red
  * with the page's row choice swapped (1 failed), its HID count drawn
  * "h3" (1 failed) and "ble_device" added to MON_TYPES (2 failed). */
@@ -772,10 +772,10 @@ static void test_ble_view_colours_as_the_tui(void) {
     WT_HAS(page(), "    var row = el(\"div\", \"blerow dt-row \" + cls + (sel ? \" on\" : \"\"));");
     WT_HAS(page(), ".blerow > span { color: inherit; }");
     WT_HAS(page(), "    line.appendChild(el(\"span\", \"d-normal\", \"BLE advertisers: \"));");
-    WT_HAS(page(), "    line.appendChild(el(\"span\", \"d-bright\", String(j.total)));");
+    WT_HAS(page(), "    line.appendChild(el(\"span\", \"d-bright\", live !== null ? String(live) : \"-\"));");
     WT_HAS(page(), "    line.appendChild(el(\"span\", j.hid > 0 ? \"h2\" : \"d-dim\", String(j.hid)));");
     WT_HAS(page(), "    line.appendChild(el(\"span\", j.watch > 0 ? \"h2\" : \"d-dim\", String(j.watch)));");
-    WT_HAS(page(), "    line.appendChild(el(\"span\", \"d-dim\", \"  flood keys: \" + j.flood_keys));");
+    WT_HAS(page(), "    line.appendChild(el(\"span\", \"d-dim\", \"  standing floods: \" + j.standing_floods));");
     WT_HAS(page(), "<div class=\"bleline d-dim\" id=\"b-legend\">T: P public R random p/r resolved  H HID  W watchlist  ~ sample  DIST: signal-strength estimate</div>");
     WT_HAS(page(), "<div class=\"bleline d-dim\" id=\"b-empty\" hidden></div>");
     WT_HAS(page(), "(no advertisements decoded - start with --bt-monitor or");

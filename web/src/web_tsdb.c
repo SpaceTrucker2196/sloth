@@ -53,7 +53,8 @@ static void flush_ble(web_tsdb_t *t) {
     if (!t->ble || !t->store) return;
     size_t n = web_ble_take(t->ble, t->ble_batch, WEB_BLE_DEVICES);
     size_t na = web_ble_take_alerts(t->ble, t->ble_abatch, WEB_BLE_ALERTS);
-    if (n || na) web_store_ble_write(t->store, t->ble_batch, n, t->ble_abatch, na);
+    if ((n || na) && web_store_ble_write(t->store, t->ble_batch, n, t->ble_abatch, na) != 0)
+        web_ble_redirty(t->ble, t->ble_batch, n, t->ble_abatch, na);
 }
 
 #define MIX_TAKE 512

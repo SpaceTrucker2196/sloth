@@ -520,7 +520,12 @@ static void lifecycle(long long t, unsigned long k) {
  * are change-only with a 300 s heartbeat: these go out on the first
  * pass, every 300th pass, and when a signed field changes (a rotation,
  * a band change). */
-#define NBLE 6
+/* sloth's own table (s->ble_device_count, sensor_health ble_devices)
+ * keys a row per address as one sensor heard it, so the two Ubertooth
+ * rows count: six advertisers, eight rows, and the FRRS record's three
+ * (pass(): the watch, the beacon and the keyboard, heard by the host
+ * controller) make eleven. */
+#define NBLE 11
 static const int BLE_CO_DEMO = 0xffff;   /* the SIG's reserved "internal use" id */
 
 static void ble_dev(long long t, long long start, unsigned long k, const char *addr,

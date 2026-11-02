@@ -268,7 +268,7 @@ static void test_no_column_can_hold_secret_material(void) {
     }
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
-                     " AND UPPER(c.type)='TEXT'"), 43);
+                     " AND UPPER(c.type)='TEXT'"), 44);
     /* meta (name, value), series (metric, key), baseline (metric, key),
      * episode (kind, metric, key, evidence), fanout (key, hist),
      * reported (kind, key), passive_ptr (ip, name) and chmix (channel,
@@ -288,9 +288,10 @@ static void test_no_column_can_hold_secret_material(void) {
      * (web_ble.h) add eight: ble_device (addr, iface, name,
      * watch_category: a canonical address, sloth's two sensor names, the
      * local name in its display form, sloth's category slug) and
-     * ble_alert (key_hash, alert, iface, label: a hash, sloth's own
-     * words); a ble_device name is the advertiser's own, escaped
-     * (web_ble.h). */
+     * ble_alert (key_hash, alert, iface, label, detail: a hash, sloth's
+     * own words, and a flood's citation line from sloth's own table,
+     * src/ble_flood.c); a ble_device name is the advertiser's own,
+     * escaped (web_ble.h). */
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master m,"
                      " pragma_table_info(m.name) c WHERE m.type='table'"
                      " AND UPPER(c.type)='BLOB'"), 0);
@@ -2217,6 +2218,61 @@ static void test_ceiling_spares_global_series(void) {
     rm_store(p);
 }
 
+/* The BLE tables are in the --web-max-mb budget, and an address flood
+ * pays for itself: 8,192 advertisers with 128-byte names (what a flood
+ * of random addresses leaves at the row cap) in a file of keyed minute
+ * history, and a ceiling the history alone fits under. The ceiling
+ * takes the unflagged advertisers, keeps every keyed minute row, and
+ * keeps the HID rows (the oldest in the table) and the findings, which
+ * go only after the keyed history. Seen red with the unflagged-BLE step
+ * moved after the keyed steps in CEIL_STEP (keyed rows dropped while
+ * advertisers were left), and with the BLE steps removed (the file left
+ * over the ceiling, every keyed row gone). */
+static void test_ceiling_takes_ble_rows_before_history(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "ceilble.db");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    const long long now = 1792627200;
+    static web_qrow_t r[3000];
+    char k[32];
+    for (int s = 0; s < 12; s++) {
+        snprintf(k, sizeof(k), "10.0.%d.1", s);
+        for (int b = 0; b < 3000; b++)
+            r[b] = row(WEB_TIER_MINUTE, WM_HOST_RX, k, now - 200000 + b * 60, b, 1, b, b);
+        WT_EQ(web_store_write(&S, r, 3000), 0);
+    }
+    web_store_stats_t st;
+    web_store_stats(&S, &st);
+    const long long hist = st.bytes;
+    raw_exec(p, "WITH RECURSIVE c(x) AS (SELECT 0 UNION ALL SELECT x+1 FROM c WHERE x<8191)"
+                " INSERT INTO ble_device (addr,addr_type,iface,adapter,sampled,pdu_mask,name,name_np,"
+                "name_complete,uuid16,mfr_id,mfr_subtype,svc_data_uuid16,appearance,hid,tx_power,flags,"
+                "rssi,rssi_best,adv_count,watch_category,ext_adv,primary_phy,secondary_phy,adv_sid,"
+                "first_seen,last_seen,est_dist_dm,est_band,est_trend,est_ptx,pres_bucket,pres_lo,pres_hi)"
+                " SELECT printf('02:de:00:%02x:%02x:%02x',x/65536,(x/256)%256,x%256),1,"
+                "'bluetooth-monitor',0,0,1,replace(hex(zeroblob(64)),'0','x'),1,0,-1,-1,-1,-1,-1,"
+                "CASE WHEN x<16 THEN 1 ELSE 0 END,-128,-1,-60,-60,1,'',0,0,0,-1,1000+x,1000+x,-1,0,0,2,"
+                "0,0,0 FROM c;"
+                "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<100)"
+                " INSERT INTO ble_alert (key_hash,kind,alert,iface,sampled,first_ts,last_ts,resolved_ts,"
+                "n0,n1,n2,n3,n4,n5,n6,n7,rssi,label,detail) SELECT printf('%016x',x),0,'BLE_ADV_FLOOD',"
+                "'bluetooth-monitor',0,1000,1000+x,-1,0,0,0,0,0,0,0,0,0,'mfr/ADV_IND','' FROM c;");
+    WT_ASSERT(raw_int(p, "SELECT (page_count - freelist_count) * page_size FROM pragma_page_count,"
+                         " pragma_freelist_count, pragma_page_size") > hist + (1LL << 20));
+    const long long cap = hist + (128LL << 10);
+    WT_ASSERT(web_store_ceiling(&S, cap) > 0);
+    web_store_stats(&S, &st);
+    fprintf(stderr, "  history %lld bytes, after the ceiling %lld\n", hist, st.bytes);
+    WT_ASSERT(st.bytes <= cap);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM minute"), 36000);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM ble_device WHERE hid<>0"), 16);
+    WT_ASSERT(raw_int(p, "SELECT COUNT(*) FROM ble_device WHERE hid=0") < 8176);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM ble_alert"), 100);
+    WT_EQ(st.ble_rows, raw_int(p, "SELECT COUNT(*) FROM ble_device"));
+    web_store_close(&S);
+    rm_store(p);
+}
+
 void run_store_tests(void) {
     if (mkdir_tmp() != 0) {
         WT_ASSERT(!"mkdtemp");
@@ -2260,6 +2316,7 @@ void run_store_tests(void) {
     WT_RUN(test_long_stop_expiry_keeps_wal_small);
     WT_RUN(test_sparse_expiry_across_batches_and_tiles);
     WT_RUN(test_ceiling_spares_global_series);
+    WT_RUN(test_ceiling_takes_ble_rows_before_history);
     WT_RUN(test_ceiling_keeps_the_allowance_when_analysis_is_over);
     WT_RUN(test_ceiling_remeasures_after_analysis_writes);
     WT_RUN(test_ceiling_holds_under_key_churn);

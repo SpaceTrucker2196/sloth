@@ -524,13 +524,20 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
             if (web_jl_num(r, drops[i], &v) && v > 0) d += v;
         web_rollup_add(m->ru, WM_SENSOR_DROPS, "", d, now);
         /* The Bluetooth block (web_ble.h): absent on a sloth with no
-         * Bluetooth source, and both zero while btmon_iface is "", which
-         * says "not listening", so neither is sampled then. */
+         * Bluetooth source. ble_devices is sloth's whole table, the
+         * host controller's rows and an Ubertooth's alike, so it is
+         * sampled while either source is configured (btmon_iface or
+         * btcap_iface not ""); ble_adv_reports counts the host stream's
+         * HCI reports only, so it is sampled only with btmon_iface.
+         * Both "" says "not listening": nothing sampled. */
         const char *bi = web_jl_str(r, "btmon_iface");
-        if (!bi || !bi[0]) return;
+        const char *bc = web_jl_str(r, "btcap_iface");
+        int mon = bi && bi[0], cap = bc && bc[0];
+        if (!mon && !cap) return;
         gauge(m, r, "ble_devices", WM_BLE_DEVICES, "", now);
-        count(m, WM_BLE_ADV_REPORTS, "",
-              hw_delta(m, "ble|adv", web_jl_int(r, "ble_adv_reports", 0), -1), now);
+        if (mon)
+            count(m, WM_BLE_ADV_REPORTS, "",
+                  hw_delta(m, "ble|adv", web_jl_int(r, "ble_adv_reports", 0), -1), now);
     } else if (!strcmp(t, "alert")) {
         if (web_key_alert_type(web_jl_int(r, "ty", -1), k) != 0) return;
         web_rollup_add(m->ru, WM_ALERTS_FIRED, k, 1, now);

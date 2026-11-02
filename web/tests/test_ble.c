@@ -10,10 +10,10 @@
  * byte-identical (cmp against a copy): the Local out_of_scope with
  * route_ble()'s none_here forced 0 (a Local answer carried rows); the
  * resolve with resolve_apply()'s body emptied (standing stayed true); the
- * metrics guard with the btmon_iface test removed from web_metrics.c
- * (ble.devices sampled with no Bluetooth block); the hostile name with
- * web_ssid_escape() replaced by a plain copy (name_np false, the
- * control byte raw); the LRU with dev_slot()'s eviction returning the
+ * metrics guard with the source test removed from web_metrics.c
+ * (ble.devices sampled with no Bluetooth source); the hostile name with
+ * web_ssid_escape() replaced by a plain copy (name_np false, \u0001 on
+ * the page); the LRU with dev_slot()'s eviction returning the
  * first used row (the newest row gone, not the oldest). */
 #include <stdio.h>
 #include <stdlib.h>
@@ -169,8 +169,8 @@ static void test_rows_by_sensor_and_update(void) {
 }
 
 /* Every string is hostile: a control byte in the name is \x01 in the
- * display form and flagged; an over-long name is cut on a code-point
- * boundary; an empty name is null; a category that is not sloth's slug
+ * display form and flagged; an over-long name is cut back to a
+ * code-point boundary (never through a sequence, which would flag it); an empty name is null; a category that is not sloth's slug
  * is dropped and counted; an iface outside the two is "other" and
  * counted; a record with no address, or a bad one, is counted and kept
  * nowhere. */
@@ -178,7 +178,7 @@ static void test_hostile_strings(void) {
     WT_EQ(web_ble_init(&B, 0), 0);
     feed(dev_line("02:de:00:00:00:02", 1, "bluetooth-monitor", "bad\\u0001name", -60, 1, T, T, NULL));
     feed(dev_line("02:de:00:00:00:03", 1, "bluetooth-monitor",
-                  "\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9"
+                  "x\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9"
                   "\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9"
                   "\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9"
                   "\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9"
@@ -202,12 +202,18 @@ static void test_hostile_strings(void) {
     int status = 0;
     WT_EQ(web_ble_devices_route(&B, "sort=addr&dir=asc", T, 0, body, sizeof(body), &len, &status), 0);
     WT_HAS(body, "\"name\":\"bad\\\\x01name\",\"name_np\":true");
-    WT_LACKS(body, "\x01");
+    /* What a plain copy would put on the page: the writer's escape of
+     * the raw control byte. */
+    WT_LACKS(body, "\\u0001");
     WT_HAS(body, "\"name\":null");
     WT_HAS(body, "\"watch_category\":null");
     WT_HAS(body, "\"iface\":\"other\"");
-    /* The long name: the stream's form is read to 96 bytes (32 octets,
-     * three each at most) and cut on a boundary, so every é is whole. */
+    /* The long name: "x" and 67 é, read to 96 bytes (32 octets, three
+     * each at most). Byte 96 is the second byte of the 48th é, so a
+     * byte cut would leave its lead byte as \xc3 and flag the name; the
+     * cut backs off to the boundary instead: "x" and 47 é, 95 bytes,
+     * valid UTF-8 and not flagged. Seen red with the back-off loop in
+     * dev_fill() removed (99 bytes with the \\xc3 escape, name_np true). */
     const char *p = strstr(body, "\"addr\":\"02:de:00:00:00:03\"");
     WT_ASSERT(p != NULL);
     if (p) {
@@ -216,8 +222,8 @@ static void test_hostile_strings(void) {
         if (nm) {
             nm += 8;
             const char *e = strchr(nm, '"');
-            WT_ASSERT(e && (e - nm) == 32 * 3);
-            if (e) WT_EQ((e - nm) % 2, 0);
+            WT_ASSERT(e && (e - nm) == 1 + 47 * 2);
+            WT_ASSERT(e && !strncmp(e, "\",\"name_np\":false", 16));
         }
     }
     web_ble_destroy(&B);
@@ -326,6 +332,105 @@ static void test_presence_strip(void) {
     feed(dev_line(A, 0, "bluetooth-monitor", "", -50, 4, T - 1800, T + (70 + 96) * 900, NULL));
     WT_EQ(web_ble_device_route(&B, A, "", T + (70 + 96) * 900, 0, body, sizeof(body), &len, &status), 0);
     WT_HAS(body, "\"newest\":1793149200,\"bits\":\"000000000000000000000001\"");
+    web_ble_destroy(&B);
+}
+
+/* Every sort word the page's columns name orders by its own key. Four
+ * rows a word, its key low on :03, middle on :01, high on :02 and empty
+ * (or highest, for a key with no empty value) on :04, so neither
+ * direction is the address order the tie-break falls back to: asc is
+ * 03 01 02 04, desc 02 01 03 04 with an empty key last either way, or 04
+ * 02 01 03 with none. mfr is three tiers in both directions (the SIG's
+ * names by name, then ids it does not name, then none), so its desc is
+ * 01 03 02 04. Seen red with each of the seven comparators' r set to 0
+ * (every asc order failed, and desc where it differs from the address
+ * order), and with mfr's old unnamed-after-named branch restored inside
+ * the direction (desc put the unnamed id first). */
+static const char *A4[5] = { "", "02:de:00:00:00:01", "02:de:00:00:00:02", "02:de:00:00:00:03",
+                              "02:de:00:00:00:04" };
+
+static void order_is(const char *q, const int want[4]) {
+    char body[65536];
+    size_t len = 0;
+    int status = 0;
+    WT_EQ(web_ble_devices_route(&B, q, T + 300, 0, body, sizeof(body), &len, &status), 0);
+    WT_EQ(status, 200);
+    const char *at[4];
+    char key[40];
+    for (int i = 0; i < 4; i++) {
+        snprintf(key, sizeof(key), "\"addr\":\"%s\"", A4[want[i]]);
+        at[i] = strstr(body, key);
+        WT_ASSERT(at[i] != NULL);
+    }
+    int ok = at[0] && at[1] && at[2] && at[3] && at[0] < at[1] && at[1] < at[2] && at[2] < at[3];
+    if (!ok) fprintf(stderr, "  %s: not %d %d %d %d\n", q, want[0], want[1], want[2], want[3]);
+    WT_ASSERT(ok);
+}
+
+static void sorted(const char *word, int has_empty) {
+    static const int ASC[4] = { 3, 1, 2, 4 }, DESC_E[4] = { 2, 1, 3, 4 }, DESC[4] = { 4, 2, 1, 3 };
+    char q[64];
+    snprintf(q, sizeof(q), "sort=%s&dir=asc", word);
+    order_is(q, ASC);
+    snprintf(q, sizeof(q), "sort=%s&dir=desc", word);
+    order_is(q, has_empty ? DESC_E : DESC);
+}
+
+/* Four rows of one key: extra[i] the member for :0(i+1). */
+static void four(const char *e1, const char *e2, const char *e3, const char *e4, int rssi4) {
+    const char *ex[4] = { e1, e2, e3, e4 };
+    web_ble_destroy(&B);
+    WT_EQ(web_ble_init(&B, 0), 0);
+    for (int i = 0; i < 4; i++)
+        feed(dev_line(A4[i + 1], 0, "bluetooth-monitor", "", i == 3 ? rssi4 : -60, 1, T, T, ex[i]));
+}
+
+static void test_every_column_sorts(void) {
+    WT_EQ(web_ble_init(&B, 0), 0);
+    /* kind: "public" < "random NRPA" < "resolved public" < "resolved
+     * random" (0x02 is a random address's 00 top bits). */
+    four(",\"addr_type\":1", ",\"addr_type\":2", ",\"addr_type\":0", ",\"addr_type\":3", -60);
+    sorted("kind", 0);
+    /* best: rssi_best, the row with no RSSI last. */
+    four(",\"rssi_best\":-80", ",\"rssi_best\":-70", ",\"rssi_best\":-90", "", 0);
+    sorted("best", 1);
+    /* hws: sampled 1 < watch 2 < hid 4 < all three 7. */
+    four(",\"watch_category\":\"tag\"", ",\"hid\":1", ",\"sampled\":1",
+         ",\"hid\":1,\"watch_category\":\"tag\",\"sampled\":1", -60);
+    sorted("hws", 0);
+    /* pdus: the mask, 1 < 16 < 32 < 64. */
+    four(",\"pdu_mask\":16", ",\"pdu_mask\":32", ",\"pdu_mask\":1", ",\"pdu_mask\":64", -60);
+    sorted("pdus", 0);
+    /* watch: the category, none last. */
+    four(",\"watch_category\":\"beta\"", ",\"watch_category\":\"gamma\"", ",\"watch_category\":\"alpha\"", "", -60);
+    sorted("watch", 1);
+    /* rate: adv/s between two records, a row of one record last. */
+    web_ble_destroy(&B);
+    WT_EQ(web_ble_init(&B, 0), 0);
+    static const long long ADV[4] = { 160, 310, 40, 0 };   /* 0.5, 1, 0.1 /s; none */
+    for (int i = 0; i < 4; i++) {
+        feed(dev_line(A4[i + 1], 0, "bluetooth-monitor", "", -60, 10, T, T, NULL));
+        if (ADV[i]) feed(dev_line(A4[i + 1], 0, "bluetooth-monitor", "", -60, ADV[i], T, T + 300, NULL));
+    }
+    sorted("rate", 1);
+    /* mfr: Apple, Inc. (0x004c) < Microsoft (0x0006) by name, then an
+     * id the table does not name, then none. Without the SIG table
+     * every id is unnamed and orders by number. */
+    const web_btsig_tab_t *sig = web_btsig_builtin();
+    if (sig && !strcmp(sig->source, "sig")) {
+        int un = 0xfff0;
+        while (un > 0xff00 && web_btsig_company(sig, un)) un--;
+        WT_ASSERT(web_btsig_company(sig, un) == NULL);
+        char e2[32];
+        snprintf(e2, sizeof(e2), ",\"mfr_id\":%d", un);
+        four(",\"mfr_id\":6", e2, ",\"mfr_id\":76", "", -60);
+        static const int ASC[4] = { 3, 1, 2, 4 }, DESC[4] = { 1, 3, 2, 4 };
+        order_is("sort=mfr&dir=asc", ASC);
+        order_is("sort=mfr&dir=desc", DESC);
+    } else {
+        four(",\"mfr_id\":200", ",\"mfr_id\":300", ",\"mfr_id\":100", "", -60);
+        sorted("mfr", 1);
+    }
     web_ble_destroy(&B);
 }
 
@@ -466,8 +571,9 @@ static long long g_clock = T;
 static long long clock_fn(void *ctx) { (void)ctx; return g_clock; }
 
 /* ble.devices is a gauge and ble.adv_rate a counter delta, both from
- * the sensor_health's Bluetooth block and only while btmon_iface says
- * sloth is listening. Seen red with the btmon_iface guard removed. */
+ * the sensor_health's Bluetooth block: nothing while neither source is
+ * configured (btmon_iface and btcap_iface both ""). Seen red with the
+ * guard removed. */
 static void test_metrics_from_sensor_health(void) {
     web_rollup_t ru;
     web_metrics_t m;
@@ -491,6 +597,30 @@ static void test_metrics_from_sensor_health(void) {
     WT_EQ(web_jl_parse(line, strlen(line), &r), WEB_JL_OK);
     web_metrics_record(&m, &r);
     WT_ASSERT(web_rollup_has(&ru, WM_BLE_ADV_REPORTS, ""));
+    web_metrics_destroy(&m);
+    web_rollup_destroy(&ru);
+    /* An Ubertooth alone (--bt-capture, no --bt-monitor): sloth's count
+     * takes its rows, so ble.devices is sampled; ble_adv_reports is the
+     * host stream's, so ble.adv_rate is not, however many records. Seen
+     * red with the btcap_iface test taken out of web_metrics.c (nothing
+     * sampled), and with the btmon-only gate on the adv delta removed
+     * (a rate of the host stream's zeros). */
+    WT_EQ(web_rollup_init(&ru, 64, 0, err, sizeof(err)), 0);
+    WT_EQ(web_metrics_init(&m, &ru, clock_fn, NULL), 0);
+    for (int i = 0; i < 3; i++) {
+        g_clock = T + 10 * i;
+        snprintf(line, sizeof(line), SH, T + 10 * i, "", T, 12 + i, 100 + 50 * i, "");
+        char *bc = strstr(line, "\"btcap_iface\":\"\"");
+        WT_ASSERT(bc != NULL);
+        if (!bc) break;
+        char tail[1024];
+        snprintf(tail, sizeof(tail), "%s", bc + strlen("\"btcap_iface\":\"\""));
+        snprintf(bc, sizeof(line) - (size_t)(bc - line), "\"btcap_iface\":\"/run/ut.pipe\"%s", tail);
+        WT_EQ(web_jl_parse(line, strlen(line), &r), WEB_JL_OK);
+        web_metrics_record(&m, &r);
+    }
+    WT_ASSERT(web_rollup_has(&ru, WM_BLE_DEVICES, ""));
+    WT_ASSERT(!web_rollup_has(&ru, WM_BLE_ADV_REPORTS, ""));
     WT_ASSERT(!strcmp(web_metric_defs[WM_BLE_DEVICES].name, "ble.devices"));
     WT_ASSERT(!strcmp(web_metric_defs[WM_BLE_ADV_REPORTS].name, "ble.adv_rate"));
     WT_EQ(web_metric_defs[WM_BLE_DEVICES].kclass, WEB_KC_GLOBAL);
@@ -564,7 +694,7 @@ static void test_routes(void) {
     WT_EQ(route(&H, "/api/ble", ""), 200);
     const char *b = body_of(g_out);
     WT_HAS(b, "\"sort\":\"last\"");
-    WT_HAS(b, "\"total\":3,\"matched\":3,\"hid\":1,\"watch\":1,\"standing\":1,\"flood_keys\":1");
+    WT_HAS(b, "\"total\":3,\"matched\":3,\"hid\":1,\"watch\":1,\"standing\":1,\"standing_floods\":1");
     /* last desc: 13, 12, 11. */
     WT_ASSERT(strstr(b, ":00:13\"") < strstr(b, ":00:12\"") && strstr(b, ":00:12\"") < strstr(b, ":00:11\""));
     static const char *const W[] = { "last", "first", "rssi", "dist", "adv", "addr", "type", "iface", "name",
@@ -700,6 +830,33 @@ static void test_routes(void) {
     WT_LACKS(body_of(g_out), "BLE_ADV_FLOOD");
     WT_EQ(route(&H, "/api/alerts", ""), 200);
     WT_HAS(body_of(g_out), "BLE_ADV_FLOOD");
+    /* /api/live's "ble" member at its worst: every string the member
+     * carries at its 32-byte cut and every byte one the writer turns
+     * into a six-byte \u escape. The member fits, and /api/live is
+     * whole. Seen red with live_body()'s buffer back at 1024 bytes (the
+     * member null), and before the null fallback existed the whole
+     * route failed. */
+    {
+        char S32[33], big[2048];
+        memset(S32, '<', 32);
+        S32[32] = '\0';
+        snprintf(big, sizeof(big),
+                 "{\"type\":\"sensor_health\",\"ts\":%lld,\"btmon_iface\":\"%s\",\"btmon_exit\":\"%s\","
+                 "\"ble_scan_mode\":\"%s\",\"ble_scan_filter\":\"%s\",\"ble_own_tx\":\"%s\","
+                 "\"ble_own_tx_kind\":\"%s\",\"btcap_iface\":\"%s\",\"btcap_state\":\"%s\","
+                 "\"btcap_sampling\":\"%s\",\"ble_rot_hints\":\"%s\",\"ble_rot_poisoned\":\"%s\","
+                 "\"ble_rot_seam_evictions\":\"%s\",\"ble_devices\":9223372036854775807,"
+                 "\"ble_controllers\":9223372036854775807,\"ble_adv_reports\":9223372036854775807,"
+                 "\"btmon_stale_secs\":-9223372036854775807}",
+                 T, S32, S32, S32, S32, S32, S32, S32, S32, S32, S32, S32, S32);
+        live_feed(big);
+        WT_EQ(route(&H, "/api/live", ""), 200);
+        b = body_of(g_out);
+        WT_HAS(b, ",\"ble\":{\"configured\":true,\"seen\":true,");
+        WT_HAS(b, "\"btcap_sampling\":\"\\u003c\\u003c");
+        WT_HAS(b, "\"seam_evictions\":\"\\u003c");
+        WT_LACKS(b, ",\"ble\":null");
+    }
     web_live_destroy(&L);
     web_ble_destroy(&B);
 }
@@ -745,10 +902,10 @@ static void test_page(void) {
     WT_HAS(p, "    if (num(d.mfr_id)) p.push(\"mfr \" + hex4(d.mfr_id) + (num(d.mfr_subtype) ? \"/\" + hex2(d.mfr_subtype) : \"\"));");
     /* The header line: count bright, HID and watchlist at tui_heat(0.5)
      * when above zero else dim, the rest dim. */
-    WT_HAS(p, "    line.appendChild(el(\"span\", \"d-bright\", String(j.total)));");
+    WT_HAS(p, "    line.appendChild(el(\"span\", \"d-bright\", live !== null ? String(live) : \"-\"));");
     WT_HAS(p, "    line.appendChild(el(\"span\", j.hid > 0 ? \"h2\" : \"d-dim\", String(j.hid)));");
     WT_HAS(p, "    line.appendChild(el(\"span\", j.watch > 0 ? \"h2\" : \"d-dim\", String(j.watch)));");
-    WT_HAS(p, "    line.appendChild(el(\"span\", \"d-dim\", \"  flood keys: \" + j.flood_keys));");
+    WT_HAS(p, "    line.appendChild(el(\"span\", \"d-dim\", \"  standing floods: \" + j.standing_floods));");
     /* The TUI's lines, verbatim. */
     WT_HAS(p, "T: P public R random p/r resolved  H HID  W watchlist  ~ sample  DIST: signal-strength estimate");
     WT_HAS(p, "(no advertisements decoded - start with --bt-monitor or");
@@ -805,8 +962,43 @@ static void test_page(void) {
 
 #ifdef WITH_SQLITE
 
+#include <sqlite3.h>
+
 static char g_dir[TEST_TMP_MAX];
 static int  g_seeded, g_seeded_alerts;
+
+/* The file through a second connection, as test_store.c's raw helpers. */
+static long long raw_q(const char *path, const char *sql) {
+    sqlite3 *h = NULL;
+    long long v = -1;
+    if (sqlite3_open(path, &h) == SQLITE_OK) {
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(h, sql, -1, &st, NULL) == SQLITE_OK && sqlite3_step(st) == SQLITE_ROW)
+            v = sqlite3_column_int64(st, 0);
+        sqlite3_finalize(st);
+    }
+    sqlite3_close(h);
+    return v;
+}
+
+static int raw_exec_ok(const char *path, const char *sql) {
+    sqlite3 *h = NULL;
+    int rc = -1;
+    if (sqlite3_open(path, &h) == SQLITE_OK)
+        rc = sqlite3_exec(h, sql, NULL, NULL, NULL) == SQLITE_OK ? 0 : -1;
+    sqlite3_close(h);
+    return rc;
+}
+
+static void rm_dir_store(void) {
+    static const char *const SUF[3] = { "", "-wal", "-shm" };
+    char f[TEST_TMP_MAX + 32];
+    for (int i = 0; i < 3; i++) {
+        snprintf(f, sizeof(f), "%s/slothweb.db%s", g_dir, SUF[i]);
+        unlink(f);
+    }
+    rmdir(g_dir);
+}
 static void seed_dev(void *ctx, const web_store_bdev_t *r) { g_seeded += web_ble_seed(ctx, r); }
 static void seed_alert(void *ctx, const web_store_balert_t *r) { g_seeded_alerts += web_ble_seed_alert(ctx, r); }
 
@@ -898,6 +1090,40 @@ static void test_store_round_trip(void) {
     WT_HAS(body, "\"resolved_ts\":1793000050");
     WT_HAS(body, "\"oui_table\":\"Hak5\"");
     WT_HAS(body, "\"family\":\"mfr\",\"id\":76,\"subtype\":7");
+    /* Everything the finding text renders came back, not zeros: the
+     * flood's fresh count, rate, cap flag, window and citation line, and
+     * the hid_oui finding's address, which the drawer matches on. Seen
+     * red with al_to_row()'s n3..n7 and detail left unset (fresh_addrs
+     * 0, rate 0.0, window current, the address all zeros). */
+    WT_HAS(body, "\"window\":\"previous\",\"window_s\":10,\"distinct_addrs\":44,\"distinct_capped\":0,"
+                 "\"fresh_addrs\":40,\"total_adv\":812,\"rate\":81.2,\"median_rssi\":-61,"
+                 "\"spam_source\":\"ble-spam-flood.md\"");
+    WT_HAS(body, "\"addr\":\"00:13:37:00:00:01\",\"addr_type\":0,\"hid\":3,\"appearance\":961");
+    WT_EQ(web_ble_device_route(&B, "00%3A13%3A37%3A00%3A00%3A01", "", T + 60, 0, body, sizeof(body), &len,
+                               &status), 0);
+    WT_HAS(body, "\"alerts\":[{\"kind\":\"hid_oui\"");
+    /* The resolve of a seeded finding, on its live key: the file's row
+     * of it is resolved in place, not joined by a second row. Seen red
+     * with al_to_row()'s seeded-hash branch removed (3 rows, the
+     * original still standing). */
+    feed("{\"type\":\"alert.resolve\",\"ts\":1793000070,\"incident_id\":\"d3\",\"sev\":1,\"ty\":87,"
+         "\"key\":\"ble_flood:bluetooth-monitor:mfr:004c:07\",\"title\":\"BLE_ADV_FLOOD\"}");
+    web_tsdb_flush_all(&ts);
+    WT_EQ(web_store_ble_count(&S, 1), 2);
+    {
+        char fh[17], q[160];
+        web_ble_key_hash("ble_flood:bluetooth-monitor:mfr:004c:07", fh);
+        snprintf(q, sizeof(q), "SELECT resolved_ts FROM ble_alert WHERE key_hash='%s'", fh);
+        WT_EQ(raw_q(p, q), 1793000070);
+    }
+    /* Fresh traffic on a seeded row: the strip shifts on from the stored
+     * one (three buckets on: 0x3 << 3, the new bucket's bit, and the
+     * first_seen bucket the first record after a seed marks again,
+     * already set). Seen red with the seed's strip dropped. */
+    feed(dev_line("02:de:00:00:00:21", 0, "bluetooth-monitor", "k\\u0001ttle", -48, 170, T - 500, T + 3 * 900, NULL));
+    WT_EQ(web_ble_device_route(&B, "02:de:00:00:00:21", "type=0&iface=bluetooth-monitor", T + 3 * 900, 0,
+                               body, sizeof(body), &len, &status), 0);
+    WT_HAS(body, "\"newest\":1793002500,\"bits\":\"000000000000000000000019\"");
     /* Retention: the row last seen 40 days ago goes at a compaction with
      * 30 days kept; the other two stay. */
     WT_EQ(web_store_compact(&S, T, 30, 256LL << 20), 0);
@@ -917,6 +1143,132 @@ static void test_store_round_trip(void) {
     snprintf(p, sizeof(p), "%s/slothweb.db-wal", g_dir); unlink(p);
     snprintf(p, sizeof(p), "%s/slothweb.db-shm", g_dir); unlink(p);
     rmdir(g_dir);
+}
+
+/* A failed write: a trigger on ble_alert (made from a second
+ * connection, as an operator's sqlite3 could) aborts the transaction
+ * after the advertiser rows were upserted in it. The transaction is
+ * rolled back whole (no ble_device row either), the failure counted,
+ * and the batch dirty again, so once the trigger is gone the next flush
+ * writes both. Seen red with the redirty call taken out of flush_ble()
+ * (the second flush wrote nothing), and with the ROLLBACK in
+ * web_store_ble_write() replaced by a COMMIT (the advertiser row
+ * written by the failed batch). */
+static void test_store_failed_write_is_retried(void) {
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-blef-XXXXXX", test_tmpdir());
+    WT_ASSERT(mkdtemp(g_dir) != NULL);
+    char p[160], err[512];
+    snprintf(p, sizeof(p), "%s/slothweb.db", g_dir);
+    web_store_t S;
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_rollup_t ru;
+    web_tsdb_t ts;
+    WT_EQ(web_rollup_init(&ru, 64, 1, err, sizeof(err)), 0);
+    WT_EQ(web_tsdb_init(&ts, &ru, &S, 30, 256, clock_fn, NULL), 0);
+    WT_EQ(web_ble_init(&B, 1), 0);
+    web_tsdb_set_ble(&ts, &B);
+    feed(dev_line("02:de:00:00:00:51", 0, "bluetooth-monitor", "", -50, 1, T, T, NULL));
+    char line[1024];
+    snprintf(line, sizeof(line), FLOOD, T);
+    feed(line);
+    WT_EQ(raw_exec_ok(p, "CREATE TRIGGER no_al BEFORE INSERT ON ble_alert BEGIN"
+                         " SELECT RAISE(ABORT, 'refused'); END"), 0);
+    web_store_stats_t ss;
+    web_store_stats(&S, &ss);
+    unsigned long errs = ss.write_errors;
+    web_tsdb_flush_all(&ts);
+    WT_EQ(web_store_ble_count(&S, 0), 0);
+    WT_EQ(web_store_ble_count(&S, 1), 0);
+    /* flush_all flushes twice (before and after closing the buckets):
+     * the second took the batch the first gave back, and failed too. */
+    web_store_stats(&S, &ss);
+    WT_EQ(ss.write_errors, errs + 2);
+    WT_HAS(ss.last_error, "refused");
+    web_ble_stats_t st;
+    web_ble_stats(&B, &st);
+    WT_EQ(st.redirtied, 4);
+    WT_EQ(raw_exec_ok(p, "DROP TRIGGER no_al"), 0);
+    web_tsdb_flush_all(&ts);
+    WT_EQ(web_store_ble_count(&S, 0), 1);
+    WT_EQ(web_store_ble_count(&S, 1), 1);
+    web_ble_destroy(&B);
+    web_tsdb_destroy(&ts);
+    web_rollup_destroy(&ru);
+    web_store_close(&S);
+    rm_dir_store();
+}
+
+/* The row caps: a write past WEB_STORE_BLE_ROWS keeps the cap, the
+ * oldest advertisers by last seen gone, a flagged one (HID, watchlist)
+ * kept past unflagged newer ones; a write past WEB_STORE_BLE_ALERT_ROWS
+ * keeps that, the oldest findings gone; both counted. A row whose
+ * address is not canonical (made by hand) is not seeded. Seen red with
+ * the cap loop in web_store_ble_write() removed (cap + 10 rows, nothing
+ * counted), with its slice ordered newest first (the newest rows gone),
+ * and with the cap's flagged-last order dropped (the old HID row gone). */
+static void test_store_row_caps(void) {
+    snprintf(g_dir, sizeof(g_dir), "%s/slothweb-blec-XXXXXX", test_tmpdir());
+    WT_ASSERT(mkdtemp(g_dir) != NULL);
+    char p[160], err[512];
+    snprintf(p, sizeof(p), "%s/slothweb.db", g_dir);
+    web_store_t S;
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    const size_t nd = WEB_STORE_BLE_ROWS + 10, na = WEB_STORE_BLE_ALERT_ROWS + 5;
+    web_store_bdev_t *d = calloc(nd, sizeof(*d));
+    web_store_balert_t *a = calloc(na, sizeof(*a));
+    WT_ASSERT(d && a);
+    if (!d || !a) { free(d); free(a); web_store_close(&S); rm_dir_store(); return; }
+    for (size_t i = 0; i < nd; i++) {
+        snprintf(d[i].addr, sizeof(d[i].addr), "02:de:00:%02x:%02x:%02x", (unsigned)(i >> 16) & 255,
+                 (unsigned)(i >> 8) & 255, (unsigned)i & 255);
+        snprintf(d[i].iface, sizeof(d[i].iface), "bluetooth-monitor");
+        d[i].uuid16 = d[i].mfr_id = d[i].mfr_subtype = d[i].svc_data_uuid16 = d[i].appearance = -1;
+        d[i].tx_power = -128;
+        d[i].flags = d[i].adv_sid = d[i].est_dist_dm = -1;
+        d[i].rssi = d[i].rssi_best = -60;
+        d[i].first_seen = T;
+        d[i].last_seen = T + (long long)i;      /* row 0 the oldest */
+    }
+    d[2].hid = 1;                               /* old, but HID */
+    snprintf(d[5].watch_category, sizeof(d[5].watch_category), "tag");
+    for (size_t i = 0; i < na; i++) {
+        snprintf(a[i].key_hash, sizeof(a[i].key_hash), "%016zx", i + 1);
+        snprintf(a[i].alert, sizeof(a[i].alert), "BLE_ADV_FLOOD");
+        snprintf(a[i].iface, sizeof(a[i].iface), "bluetooth-monitor");
+        a[i].first_ts = T;
+        a[i].last_ts = T + (long long)i;
+        a[i].resolved_ts = -1;
+    }
+    WT_EQ(web_store_ble_write(&S, d, nd, a, na), 0);
+    WT_EQ(web_store_ble_count(&S, 0), WEB_STORE_BLE_ROWS);
+    WT_EQ(web_store_ble_count(&S, 1), WEB_STORE_BLE_ALERT_ROWS);
+    web_store_stats_t ss;
+    web_store_stats(&S, &ss);
+    WT_EQ(ss.ble_dropped_cap, 15);
+    WT_EQ(ss.ble_rows, WEB_STORE_BLE_ROWS);
+    /* Gone: rows 0, 1, 3, 4 and 6..11 (the ten oldest unflagged); kept:
+     * rows 2 and 5 (flagged), row 12 and the newest. */
+    WT_EQ(raw_q(p, "SELECT COUNT(*) FROM ble_device WHERE addr IN ('02:de:00:00:00:00','02:de:00:00:00:01',"
+                   "'02:de:00:00:00:03','02:de:00:00:00:04','02:de:00:00:00:0b')"), 0);
+    WT_EQ(raw_q(p, "SELECT COUNT(*) FROM ble_device WHERE addr IN ('02:de:00:00:00:02','02:de:00:00:00:05',"
+                   "'02:de:00:00:00:0c')"), 3);
+    char q[200];
+    snprintf(q, sizeof(q), "SELECT COUNT(*) FROM ble_device WHERE addr='%s'", d[nd - 1].addr);
+    WT_EQ(raw_q(p, q), 1);
+    /* The findings: the five oldest by last_ts gone. */
+    WT_EQ(raw_q(p, "SELECT COUNT(*) FROM ble_alert WHERE key_hash<='0000000000000005'"), 0);
+    WT_EQ(raw_q(p, "SELECT COUNT(*) FROM ble_alert WHERE key_hash='0000000000000006'"), 1);
+    /* A non-canonical address in the file (upper case, as no write of
+     * ours makes it) is passed over by the seed. */
+    WT_EQ(raw_exec_ok(p, "UPDATE ble_device SET addr='02:DE:00:00:00:0C' WHERE addr='02:de:00:00:00:0c'"), 0);
+    WT_EQ(web_ble_init(&B, 1), 0);
+    g_seeded = 0;
+    WT_EQ(web_store_ble_load(&S, WEB_STORE_BLE_ROWS, seed_dev, &B, 0, NULL, NULL), WEB_STORE_BLE_ROWS - 1);
+    web_ble_destroy(&B);
+    free(d);
+    free(a);
+    web_store_close(&S);
+    rm_dir_store();
 }
 
 /* The memory-only path (no store): the tables still ingest and serve,
@@ -955,6 +1307,7 @@ void run_ble_tests(void) {
     WT_RUN(test_absent_and_estimate);
     WT_RUN(test_lru_eviction);
     WT_RUN(test_presence_strip);
+    WT_RUN(test_every_column_sorts);
     WT_RUN(test_findings_and_resolve);
     WT_RUN(test_sensor_health_members);
     WT_RUN(test_metrics_from_sensor_health);
@@ -962,6 +1315,8 @@ void run_ble_tests(void) {
     WT_RUN(test_page);
 #ifdef WITH_SQLITE
     WT_RUN(test_store_round_trip);
+    WT_RUN(test_store_failed_write_is_retried);
+    WT_RUN(test_store_row_caps);
 #endif
     WT_RUN(test_without_store);
 }

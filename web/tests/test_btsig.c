@@ -13,6 +13,7 @@
 #include "sha256.h"
 #include "web_btsig.h"
 #include "wtest.h"
+#include "wt_tmp.h"
 
 #ifndef WEB_BTSIG_EXPECT
 #define WEB_BTSIG_EXPECT NULL
@@ -181,7 +182,68 @@ static void test_update_btsig_is_never_automatic(void) {
     }
 }
 
+/* The generator on a name that holds every trigraph's opening: run as
+ * the build runs it (build/web/btsig_gen) on a CSV in the run
+ * directory, its literal decoded back is the name byte for byte, and
+ * no "??" is left anywhere in the output for -std=c99 to read as a
+ * trigraph. Seen red with '?' taken out of emit_str()'s escapes (the
+ * output held "??/"). */
+static int c_unescape(const char *p, char *out, size_t cap) {
+    size_t o = 0;
+    if (*p++ != '"') return -1;
+    for (; *p && *p != '"'; p++) {
+        int c = (unsigned char)*p;
+        if (c == '\\') {
+            p++;
+            if (*p >= '0' && *p <= '7') {
+                c = 0;
+                for (int k = 0; k < 3 && *p >= '0' && *p <= '7'; k++, p++) c = c * 8 + (*p - '0');
+                p--;
+            } else {
+                c = (unsigned char)*p;
+            }
+        }
+        if (o + 1 >= cap) return -1;
+        out[o++] = (char)c;
+    }
+    out[o] = '\0';
+    return *p == '"' ? 0 : -1;
+}
+
+static void test_generator_escapes_trigraphs(void) {
+    static const char NAME[] = "Odd \?\?/ \?\?' \?\?( \?\?) \?\?! \?\?< \?\?> \?\?- \?\?= \"q\" back\\slash \xc3\xa9";
+    char csv[TEST_TMP_MAX], out[TEST_TMP_MAX], cmd[3 * TEST_TMP_MAX];
+    snprintf(csv, sizeof(csv), "%s/btsig-tri.csv", test_tmpdir());
+    snprintf(out, sizeof(out), "%s/btsig-tri.c", test_tmpdir());
+    FILE *f = fopen(csv, "wb");
+    WT_ASSERT(f != NULL);
+    if (!f) return;
+    /* RFC 4180: the field quoted, its quotes doubled. */
+    fputs("value,name\n0x0042,\"", f);
+    for (const char *c = NAME; *c; c++) { if (*c == '"') fputc('"', f); fputc(*c, f); }
+    fputs("\"\n", f);
+    fclose(f);
+    snprintf(cmd, sizeof(cmd), "build/web/btsig_gen '%s' --company '%s' 2>/dev/null", out, csv);
+    WT_EQ(system(cmd), 0);
+    size_t n = 0;
+    char *src = slurp_file(out, &n);
+    WT_ASSERT(src != NULL);
+    if (src) {
+        WT_LACKS(src, "??");
+        const char *lit = strstr(src, "btsig_names[");
+        lit = lit ? strstr(lit, "\n    \"") : NULL;
+        char got[256] = "";
+        WT_ASSERT(lit && c_unescape(lit + 5, got, sizeof(got)) == 0);
+        if (strcmp(got, NAME)) fprintf(stderr, "  decoded \"%s\"\n", got);
+        WT_ASSERT(!strcmp(got, NAME));
+        free(src);
+    }
+    unlink(csv);
+    unlink(out);
+}
+
 void run_btsig_tests(void) {
+    WT_RUN(test_generator_escapes_trigraphs);
     WT_RUN(test_builtin_table);
     WT_RUN(test_committed_tables_match_source);
     WT_RUN(test_update_btsig_is_never_automatic);

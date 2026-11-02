@@ -19,6 +19,7 @@
 #include "web_alerts.h"
 #include "web_anomaly.h"
 #include "web_assets.h"
+#include "web_ble.h"
 #include "web_ingest.h"
 #include "web_live.h"
 #include "web_routes.h"
@@ -922,7 +923,8 @@ size_t demo_pass(long long t, long long start, unsigned long k, char *out, size_
  * Throughput and sensor health are a rate and a word, not counts: their
  * views show the same series and the same word, which the page reads
  * from the same members. Seen red with web_inpass() answering 1 for
- * every MAC (24 devices for a pass of 23). */
+ * every MAC (24 devices for a pass of 23), and with demo.c's keyboard
+ * rows emitted without their hid (the BLE pins: hid 0). */
 static void test_tiles_equal_their_views_on_demo_data(void) {
     char p[160];
     snprintf(p, sizeof(p), "%s/demo.db", g_dir);
@@ -935,15 +937,30 @@ static void test_tiles_equal_their_views_on_demo_data(void) {
     web_feed_t f;
     memset(&f, 0, sizeof(f));         /* no metrics, no anomaly engine attached */
     web_feed_reset(&f);
+    /* The BLE tables, as slothweb attaches them (web_ingest_set_ble()). */
+    static web_ble_t ble;
+    WT_EQ(web_ble_init(&ble, 0), 0);
+    f.ble = &ble;
     static char buf[1 << 16];
     /* 700 passes a second apart: a scan opened and closed fifteen times,
-     * SMB1 escalated, the deauth flood's burst, the two left open. */
+     * SMB1 escalated, the deauth flood's burst, the two left open; the
+     * BLE pairing flood standing from pass 30 to 89 and again from 630
+     * to 689, resolved after each. */
     long long start = T - 700, now_ms = 0;
+    web_ble_stats_t bst;
     for (unsigned long k = 0; k < 700; k++) {
         size_t n = demo_pass(start + (long long)k, start, k, buf, sizeof(buf));
         now_ms = (long long)k * 1000 + 500;
         web_feed_bytes(&f, l, buf, n, now_ms);
+        if (k == 29 || k == 59 || k == 95) {
+            web_ble_stats(&ble, &bst);
+            WT_EQ(bst.standing, k == 59 ? 1 : 0);
+            WT_EQ(bst.alert_rows, k == 29 ? 0 : 1);
+        }
     }
+    web_ble_stats(&ble, &bst);
+    WT_EQ(bst.bad_records, 0);
+    WT_EQ(bst.other_iface + bst.other_word, 0);
     web_sdb_fns_t fns = { NULL, NULL, NULL, l };
     web_slothdb_t s3;
     web_slothdb_init(&s3, p, &fns);
@@ -974,8 +991,27 @@ static void test_tiles_equal_their_views_on_demo_data(void) {
     h.live = l;
     h.anomaly = &an;
     h.now_ms = now_ms;
+    h.ble = &ble;
     web_live_sum_t s;
     web_live_summary(l, &s, now_ms);
+
+    /* The BLE tile (bleTile(l.ble): advertisers, HID, watchlisted,
+     * standing) is the BLE view's header: /api/live's member equals
+     * /api/ble's counts, and the demo's are pinned: eleven rows (six
+     * advertisers, two of them heard by the Ubertooth too, and the FRRS
+     * record's three), the two keyboards' three HID rows, the FRRS
+     * watch watchlisted, the flood resolved by the last pass; sloth's
+     * own count says eleven as well. */
+    WT_EQ(route(&h, "/api/ble", "limit=100"), 200);
+    WT_HAS(body_of(g_out), "\"total\":11,\"matched\":11,\"hid\":3,\"watch\":1,\"standing\":0,");
+    WT_HAS(body_of(g_out), "\"sensor\":{\"btmon_iface\":\"bluetooth-monitor\",\"ble_devices\":11,");
+    WT_EQ(count_of(body_of(g_out), "{\"addr\":"), 11);
+    WT_EQ(route(&h, "/api/live", ""), 200);
+    WT_HAS(body_of(g_out), ",\"ble\":{\"configured\":true,\"seen\":true,\"rows\":11,\"hid\":3,\"watch\":1,"
+                           "\"standing\":0,");
+    WT_EQ(route(&h, "/api/ble/alerts", ""), 200);
+    WT_HAS(body_of(g_out), "\"standing\":0,\"rows\":[{\"kind\":\"adv_flood\"");
+    WT_HAS(body_of(g_out), "\"fresh_addrs\":");
 
     /* devices */
     WT_ASSERT(s.dev_known);
@@ -1018,6 +1054,7 @@ static void test_tiles_equal_their_views_on_demo_data(void) {
     web_anomaly_destroy(&an);
     web_slothdb_destroy(&s3);
     web_live_destroy(l);
+    web_ble_destroy(&ble);
     free(l);
     unlink(p);
 }

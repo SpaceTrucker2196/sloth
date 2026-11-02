@@ -161,9 +161,14 @@ typedef struct {
 } web_store_bdev_t;
 
 /* One finding as the store keeps it (ble_alert): the key as a 16-digit
- * FNV-1a hash, never the key; the per-kind integers in five generic
- * columns (n0..n4, below), the one word of the kind in label. */
-#define WEB_BLE_LABEL_MAX 63
+ * FNV-1a hash, never the key; the per-kind integers in eight generic
+ * columns (n0..n7, al_to_row() in web_ble.c says which is which), the
+ * one word of the kind in label, sloth's citation line for a flood in
+ * detail. Everything al_json() renders and the drawer matches on is
+ * here, so a seeded finding reads as the live one did. */
+#define WEB_BLE_LABEL_MAX  63
+#define WEB_BLE_DETAIL_MAX 159
+#define WEB_BLE_NCOLS      8
 typedef struct {
     char      key_hash[17];
     int       kind;                  /* WEB_BLE_FIND_* */
@@ -171,9 +176,10 @@ typedef struct {
     char      iface[WEB_BLE_IFACE_MAX + 1];
     int       sampled;
     long long first_ts, last_ts, resolved_ts;   /* resolved_ts -1 standing */
-    long long n[5];
+    long long n[WEB_BLE_NCOLS];
     int       rssi;                  /* median RSSI, 0 none */
     char      label[WEB_BLE_LABEL_MAX + 1];
+    char      detail[WEB_BLE_DETAIL_MAX + 1];
 } web_store_balert_t;
 
 typedef struct {
@@ -218,7 +224,7 @@ typedef struct {
     int       distinct_capped;
     double    rate;
     int       has_rssi, median_rssi;
-    char      spam_source[WEB_BLE_LABEL_MAX + 1];
+    char      spam_source[WEB_BLE_DETAIL_MAX + 1];
     /* hid_oui */
     uint8_t   addr[6];
     int       addr_type, hid, appearance, oui_table;
@@ -263,7 +269,7 @@ typedef struct {
     unsigned long long records, device_records, alert_records, resolves;
     unsigned long evictions, alert_evictions, evicted_dirty;
     unsigned long other_iface, other_word, name_escaped, bad_records;
-    unsigned long seeded, seeded_alerts;
+    unsigned long seeded, seeded_alerts, redirtied;
     int           rows, alert_rows, standing, hid, watch;
 } web_ble_stats_t;
 
@@ -294,6 +300,13 @@ int  web_ble_seed_alert(web_ble_t *b, const web_store_balert_t *r);
 /* The dirty rows, cleared, into out (at most max). Store thread. */
 size_t web_ble_take(web_ble_t *b, web_store_bdev_t *out, size_t max);
 size_t web_ble_take_alerts(web_ble_t *b, web_store_balert_t *out, size_t max);
+
+/* A write of what web_ble_take*() gave failed (web_store_ble_write()
+ * -1, the transaction rolled back): those rows are dirty again, so the
+ * next flush writes them, rather than clean in memory and stale on
+ * disk until their next record. A row evicted since is skipped. */
+void web_ble_redirty(web_ble_t *b, const web_store_bdev_t *rows, size_t n,
+                     const web_store_balert_t *alerts, size_t na);
 
 void web_ble_stats(web_ble_t *b, web_ble_stats_t *out);
 /* A copy of the latest sensor_health's Bluetooth members. */

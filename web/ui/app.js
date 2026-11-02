@@ -4824,27 +4824,41 @@
     row.addEventListener("click", function () { openBleDrawer(d.addr, d.addr_type, d.iface); });
     return row;
   }
+  // The live count: sloth's own table (s->ble_device_count, the TUI's
+  // header number), which sensor_health carries as ble_devices; null
+  // before one said it. j.total is slothweb's rows, which outlive
+  // sloth's evictions and restarts, so it is a different number.
+  function bleLive(j) {
+    return j.sensor && num(j.sensor.ble_devices) ? j.sensor.ble_devices : null;
+  }
   // The TUI's header line: the count bright; HID and watchlist at
-  // tui_heat(0.5) when above zero, dim otherwise; the rest dim.
+  // tui_heat(0.5) when above zero, dim otherwise; the rest dim. The
+  // count is the TUI's (sloth's live table), the rows slothweb keeps
+  // beside it. The TUI's "flood keys" (ble_flood_count, the flood
+  // detector's tracked windows) is not on the stream: what is said
+  // instead is the adv_flood findings standing, under its own name.
   function bleHeadLine(j) {
-    var line = clear("b-head-line");
+    var line = clear("b-head-line"), live = bleLive(j);
     line.appendChild(el("span", "d-normal", "BLE advertisers: "));
-    line.appendChild(el("span", "d-bright", String(j.total)));
+    line.appendChild(el("span", "d-bright", live !== null ? String(live) : "-"));
+    line.appendChild(el("span", "d-dim", " (" + j.total + " row" + (j.total === 1 ? "" : "s") + " kept here)"));
     line.appendChild(el("span", "d-normal", "  HID: "));
     line.appendChild(el("span", j.hid > 0 ? "h2" : "d-dim", String(j.hid)));
     line.appendChild(el("span", "d-normal", "  watchlist: "));
     line.appendChild(el("span", j.watch > 0 ? "h2" : "d-dim", String(j.watch)));
-    line.appendChild(el("span", "d-dim", "  flood keys: " + j.flood_keys));
+    line.appendChild(el("span", "d-dim", "  standing floods: " + j.standing_floods));
   }
   // The TUI's [*] rotation-hints block, with --ble-rotation-hints on:
   // its sentences, verbatim. The estimate itself (ble_rot_distinct())
   // is not on the stream, only the hint count as a decade band.
   function bleRotBlock(j) {
-    var box = $("b-rot"), rot = j.sensor && j.sensor.rot;
-    box.hidden = !rot || !j.total;
-    if (!rot || !j.total) return;
+    // The address count is sloth's live table, the window the seam
+    // estimate covers (the TUI's s->ble_device_count), never the rows
+    // slothweb keeps, which would overstate it.
+    var box = $("b-rot"), rot = j.sensor && j.sensor.rot, n = bleLive(j);
+    box.hidden = !rot || !n;
+    if (!rot || !n) return;
     clear("b-rot");
-    var n = j.total;
     box.appendChild(el("div", "", "rotation hints (internal): est. advertisers not on the stream (hints " + rot.hints +
                        ", poisoned " + rot.poisoned + ") for " + n + " address" + (n === 1 ? "" : "es") +
                        " - possible address rotation;"));
@@ -4926,7 +4940,10 @@
         (j.sig !== "sig" ? ", no SIG names (built without web/data/btsig)" : ""));
     bleAlertsDraw();
   }
-  function bleLoad(more) {
+  // keep: the 5 s refresh, which asks for as many rows as are shown
+  // (at least a page, at most the server's limit), so rows a "more"
+  // brought in are not dropped by the next tick.
+  function bleLoad(more, keep) {
     var gen = ++B.gen, asked = SCOPE;
     var sort = $("b-sort").value;
     if (!Object.prototype.hasOwnProperty.call(BLE_SORTS, sort)) sort = "last";
@@ -4934,7 +4951,8 @@
     if (wd) sort = wd.sort;
     var q = $("b-q").value.trim();
     var offset = more ? B.rows.length : 0;
-    var p = "/api/ble?limit=200&offset=" + offset + "&sort=" + encodeURIComponent(sort) +
+    var limit = keep && !more ? Math.min(1024, Math.max(200, B.rows.length)) : 200;
+    var p = "/api/ble?limit=" + limit + "&offset=" + offset + "&sort=" + encodeURIComponent(sort) +
             (wd ? "&dir=" + wd.dir : "") + (q ? "&q=" + encodeURIComponent(q) : "");
     Promise.all([getJSON(p), getJSON("/api/ble/alerts")]).then(function (r) {
       if (gen !== B.gen || view !== "ble" || asked !== SCOPE) return;
@@ -4952,7 +4970,7 @@
     if (typeof VP.q === "string") $("b-q").value = VP.q;
     else $("b-q").value = ctlKept("b-q", "");
     bleLoad();
-    if (!B.timer) B.timer = setInterval(function () { if (view === "ble") bleLoad(); }, 5000);
+    if (!B.timer) B.timer = setInterval(function () { if (view === "ble") bleLoad(false, true); }, 5000);
   }
   $("b-q").addEventListener("input", function () {
     if (B.qtimer) clearTimeout(B.qtimer);
@@ -5101,7 +5119,14 @@
         } else {
           var scan = bl.ble_scan_mode + "/" + bl.ble_scan_filter +
                      (bl.ble_scan_enabled === 1 ? ", enabled" : bl.ble_scan_enabled === 0 ? ", disabled" : "");
-          kvList(box, [["source", bl.btmon_iface ? bl.btmon_iface : "not configured (--bt-monitor); the zeros below mean not listening"],
+          // Each source on its own: the host controller's stream
+          // (--bt-monitor) and an Ubertooth (--bt-capture PATH). The
+          // controller and report counts are the host stream's alone.
+          var srcs = [];
+          if (bl.btmon_iface) srcs.push(bl.btmon_iface + " (--bt-monitor)");
+          if (bl.btcap_iface) srcs.push("ubertooth " + bl.btcap_iface + " (--bt-capture)");
+          kvList(box, [["source", srcs.length ? srcs.join(", ") : "not configured (--bt-monitor, --bt-capture); the zeros below mean not listening"],
+                       ["host stream", bl.btmon_iface ? null : bl.btcap_iface ? "--bt-monitor not configured: controllers and adv reports below are the host stream's, zero here" : null],
                        ["stream", bl.btmon_iface ? (bl.btmon_open ? (bl.btmon_running ? "open, running" : "open, stopped") : "not open") +
                                   (bl.btmon_exit && bl.btmon_exit !== "none" ? ", exit " + bl.btmon_exit : "") +
                                   (num(bl.btmon_stale_secs) && bl.btmon_stale_secs >= 0 ? ", last frame " + dur(bl.btmon_stale_secs) + " ago" : "") : null],

@@ -427,8 +427,15 @@ long long web_store_mix_count(web_store_t *s);
  * --web-retain-days go at every compaction (ble_dropped_expired); the
  * tables hold at most WEB_STORE_BLE_ROWS and WEB_STORE_BLE_ALERT_ROWS
  * rows, the oldest by last seen dropped after a write that passes
- * that (ble_dropped_cap). */
-#define WEB_STORE_BLE_ROWS       131072
+ * that, an advertiser no flag marks (hid 0, no watch category) before
+ * any that is (ble_dropped_cap). They are in --web-max-mb's budget too:
+ * the ceiling takes the unflagged advertisers before any keyed history,
+ * the rest before the global series (web_store.c CEIL_STEP), so an
+ * address flood fills and trims its own rows and not the time series.
+ * The row cap is eight times the in-memory table, whose seed reads the
+ * newest WEB_BLE_DEVICES rows: a flood reaches it in minutes, and past
+ * it a row is one nothing reads back. */
+#define WEB_STORE_BLE_ROWS       (8 * WEB_BLE_DEVICES)
 #define WEB_STORE_BLE_ALERT_ROWS 4096
 
 /* Upsert n advertiser rows and na findings in one transaction (a row

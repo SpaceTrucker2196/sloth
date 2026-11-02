@@ -235,7 +235,14 @@ static void dev_fill(web_ble_t *b, web_ble_dev_t *d, const web_jrec_t *r, long l
     const char *name = web_jl_str(r, "name");
     if (name && name[0]) {
         int np = 0;
-        web_ssid_escape(name, strnlen(name, 32 * 3), d->name, sizeof(d->name), &np);
+        /* Read to 96 bytes (32 octets, three each at most), cut back to
+         * a code-point boundary: a byte cut through a sequence would
+         * leave its lead byte as a \xNN and flag a name that was valid
+         * UTF-8 on the stream. */
+        size_t nl = strnlen(name, 32 * 3);
+        if (name[nl])
+            while (nl > 0 && ((unsigned char)name[nl] & 0xc0) == 0x80) nl--;
+        web_ssid_escape(name, nl, d->name, sizeof(d->name), &np);
         d->name_np = np;
         if (np) b->st.name_escaped++;
     } else {
@@ -415,7 +422,7 @@ static void al_apply(web_ble_t *b, const web_jrec_t *r, long long ts) {
             /* sloth's own citation line, not a peer's text; cut, and in
              * the display form all the same. */
             const char *src = web_jl_str(r, "spam_source");
-            web_ssid_escape(src ? src : "", src ? strnlen(src, 120) : 0, a->spam_source,
+            web_ssid_escape(src ? src : "", src ? strnlen(src, WEB_BLE_DETAIL_MAX) : 0, a->spam_source,
                             sizeof(a->spam_source), NULL);
         }
         break;
@@ -660,7 +667,12 @@ int web_ble_seed(web_ble_t *b, const web_store_bdev_t *r) {
 
 static void al_to_row(const web_ble_alert_t *a, web_store_balert_t *o) {
     memset(o, 0, sizeof(*o));
-    web_ble_key_hash(a->key, o->key_hash);
+    /* A seeded row's key is "#" and the hash the file holds (the key
+     * itself was never stored): that hash again, never a hash of the
+     * stand-in, or a resolve on a seeded row would write a second row
+     * beside the standing one and the restart after would list both. */
+    if (a->key[0] == '#' && strlen(a->key) == 17) snprintf(o->key_hash, sizeof(o->key_hash), "%s", a->key + 1);
+    else web_ble_key_hash(a->key, o->key_hash);
     o->kind = a->kind;
     snprintf(o->alert, sizeof(o->alert), "%s", ALERT[a->alert]);
     snprintf(o->iface, sizeof(o->iface), "%s", IFACE[a->iface]);
@@ -670,20 +682,33 @@ static void al_to_row(const web_ble_alert_t *a, web_store_balert_t *o) {
     o->resolved_ts = a->standing ? -1 : a->resolved_ts;
     switch (a->kind) {
     case WEB_BLE_FIND_FLOOD:
+        /* n0 id, n1 subtype, n2 window_s, n3 distinct, n4 total, n5
+         * fresh, n6 the rate in tenths (al_json() prints one decimal),
+         * n7 distinct_capped | window << 1; detail the citation line. */
         o->n[0] = a->id;
         o->n[1] = a->subtype;
         o->n[2] = a->window_s;
         o->n[3] = a->distinct;
         o->n[4] = a->total;
+        o->n[5] = a->fresh;
+        o->n[6] = (long long)floor(a->rate * 10 + 0.5);
+        o->n[7] = (a->distinct_capped ? 1 : 0) | (a->window ? 2 : 0);
         o->rssi = a->has_rssi ? a->median_rssi : 0;
         snprintf(o->label, sizeof(o->label), "%s/%s", FAMILY[a->family], PDU[a->adv_type]);
+        snprintf(o->detail, sizeof(o->detail), "%s", a->spam_source);
         break;
-    case WEB_BLE_FIND_HID_OUI:
+    case WEB_BLE_FIND_HID_OUI: {
+        /* n0 addr_type, n1 hid, n2 appearance, n3 the address as its
+         * 48-bit number (the drawer matches the finding on it). */
+        long long ad = 0;
+        for (int k = 0; k < 6; k++) ad = ad << 8 | a->addr[k];
         o->n[0] = a->addr_type;
         o->n[1] = a->hid;
         o->n[2] = a->appearance;
+        o->n[3] = ad;
         snprintf(o->label, sizeof(o->label), "%s", OUI_TABLE[a->oui_table]);
         break;
+    }
     case WEB_BLE_FIND_HID_ROTATE:
         o->n[0] = a->addrs;
         o->n[1] = a->window_s;
@@ -732,8 +757,14 @@ int web_ble_seed_alert(web_ble_t *b, const web_store_balert_t *r) {
         a->window_s = (int)(r->n[2] < 0 ? 0 : r->n[2] > 86400 ? 86400 : r->n[2]);
         a->distinct = r->n[3] < 0 ? 0 : r->n[3];
         a->total = r->n[4] < 0 ? 0 : r->n[4];
+        a->fresh = r->n[5] < 0 ? 0 : r->n[5];
+        a->rate = r->n[6] > 0 ? (double)r->n[6] / 10.0 : 0;
+        a->distinct_capped = (r->n[7] & 1) != 0;
+        a->window = (r->n[7] & 2) != 0;
         a->has_rssi = r->rssi != 0;
         a->median_rssi = r->rssi;
+        /* sloth's own line, kept in its display form; held to it again. */
+        web_utf8_copy(a->spam_source, WEB_BLE_DETAIL_MAX, r->detail);
         {
             const char *sl = strchr(r->label, '/');
             char fam[16];
@@ -748,6 +779,7 @@ int web_ble_seed_alert(web_ble_t *b, const web_store_balert_t *r) {
         a->hid = (int)(r->n[1] & 3);
         a->appearance = r->n[2] >= -1 && r->n[2] <= 65535 ? (int)r->n[2] : -1;
         a->oui_table = word_of(OUI_TABLE, 3, r->label, NULL);
+        for (int k = 0; k < 6; k++) a->addr[k] = (uint8_t)((r->n[3] >> (8 * (5 - k))) & 0xff);
         break;
     case WEB_BLE_FIND_HID_ROTATE:
         a->addrs = r->n[0] < 0 ? 0 : r->n[0];
@@ -796,6 +828,30 @@ size_t web_ble_take_alerts(web_ble_t *b, web_store_balert_t *out, size_t max) {
     }
     pthread_mutex_unlock(&b->mu);
     return n;
+}
+
+void web_ble_redirty(web_ble_t *b, const web_store_bdev_t *rows, size_t n,
+                     const web_store_balert_t *alerts, size_t na) {
+    if (!b || !b->dev || !b->store_on) return;
+    pthread_mutex_lock(&b->mu);
+    for (size_t i = 0; i < n; i++) {
+        uint8_t addr[6];
+        if (addr_bytes(rows[i].addr, addr) != 0) continue;
+        web_ble_dev_t *d = dev_find(b, addr, rows[i].addr_type,
+                                    word_of(IFACE, WEB_BLE_IF_COUNT, rows[i].iface, NULL));
+        /* Gone since the take (evicted): the eviction already counted
+         * it, and there is nothing left to write. */
+        if (d && !d->dirty) { d->dirty = 1; b->st.redirtied++; }
+    }
+    for (size_t i = 0; i < na; i++)
+        for (int k = 0; k < WEB_BLE_ALERTS; k++) {
+            web_ble_alert_t *a = &b->al[k];
+            if (!a->used || a->dirty) continue;
+            web_store_balert_t o;
+            al_to_row(a, &o);
+            if (!strcmp(o.key_hash, alerts[i].key_hash)) { a->dirty = 1; b->st.redirtied++; break; }
+        }
+    pthread_mutex_unlock(&b->mu);
 }
 
 static int standing_now(const web_ble_alert_t *a, long long now_s) {
@@ -1138,18 +1194,19 @@ static int by_sort(const void *pa, const void *pb) {
         const web_btsig_tab_t *sig = web_btsig_builtin();
         const char *x = a->mfr_id >= 0 ? web_btsig_company(sig, a->mfr_id) : NULL;
         const char *y = b->mfr_id >= 0 ? web_btsig_company(sig, b->mfr_id) : NULL;
-        ea = a->mfr_id < 0; eb = b->mfr_id < 0;
-        /* A company the table does not name sorts by its number, after
-         * the named ones. */
+        /* Three tiers, either direction: the companies the SIG table
+         * names (by name), then the ids it does not name (by number),
+         * then no company at all. Only the order inside a tier turns. */
+        ea = a->mfr_id < 0 ? 2 : x ? 0 : 1;
+        eb = b->mfr_id < 0 ? 2 : y ? 0 : 1;
         if (x && y) r = ci_cmp(x, y);
-        else if (x || y) r = x ? -1 : 1;
         else r = a->mfr_id < b->mfr_id ? -1 : a->mfr_id > b->mfr_id;
         if (!dir) dir = 1;
         break;
     }
     default: break;
     }
-    if (ea != eb) return ea ? 1 : -1;
+    if (ea != eb) return ea < eb ? -1 : 1;
     if (r) return r * dir;
     r = memcmp(a->addr, b->addr, 6);
     if (r) return r;
@@ -1237,7 +1294,11 @@ int web_ble_devices_route(web_ble_t *b, const char *query, long long now_s,
     web_jw_raw(&w, ",\"hid\":"); web_jw_int(&w, hid);
     web_jw_raw(&w, ",\"watch\":"); web_jw_int(&w, watch);
     web_jw_raw(&w, ",\"standing\":"); web_jw_int(&w, st.standing);
-    web_jw_raw(&w, ",\"flood_keys\":");
+    /* Not the TUI's "flood keys" (s->ble_flood_count, the flood
+     * detector's tracked windows, one a manufacturer heard): the stream
+     * does not carry that. This is the adv_flood findings standing now,
+     * and the page labels it so. */
+    web_jw_raw(&w, ",\"standing_floods\":");
     int floods = 0;
     for (int i = 0; i < WEB_BLE_ALERTS; i++)
         if (b->al[i].used && b->al[i].kind == WEB_BLE_FIND_FLOOD && standing_now(&b->al[i], now_s))
@@ -1246,6 +1307,12 @@ int web_ble_devices_route(web_ble_t *b, const char *query, long long now_s,
     web_jw_raw(&w, ",\"evictions\":"); web_jw_int(&w, (long long)st.evictions);
     web_jw_raw(&w, ",\"sig\":"); web_jw_str(&w, sig ? sig->source : "none");
     web_jw_raw(&w, ",\"sensor\":{\"btmon_iface\":"); web_jw_str(&w, b->sh.btmon_iface);
+    /* sloth's own live count (s->ble_device_count, the TUI's header
+     * number and the rotation block's address count), null before a
+     * sensor_health said it; "total" is slothweb's rows, which outlive
+     * sloth's evictions and restarts. */
+    web_jw_raw(&w, ",\"ble_devices\":");
+    if (b->sh.seen) web_jw_int(&w, b->sh.ble_devices); else web_jw_raw(&w, "null");
     web_jw_raw(&w, ",\"btcap_iface\":"); web_jw_str(&w, b->sh.btcap_iface);
     web_jw_raw(&w, ",\"scan_mode\":"); web_jw_str(&w, b->sh.ble_scan_mode);
     web_jw_raw(&w, ",\"scan_filter\":"); web_jw_str(&w, b->sh.ble_scan_filter);
@@ -1481,6 +1548,7 @@ void web_ble_health_json(web_ble_t *b, web_jw_t *w) {
     web_jw_raw(w, ",\"bad_records\":");     web_jw_int(w, (long long)st.bad_records);
     web_jw_raw(w, ",\"seeded\":");          web_jw_int(w, (long long)st.seeded);
     web_jw_raw(w, ",\"seeded_alerts\":");   web_jw_int(w, (long long)st.seeded_alerts);
+    web_jw_raw(w, ",\"redirtied\":");       web_jw_int(w, (long long)st.redirtied);
     web_jw_raw(w, ",\"sensor_seen\":");     web_jw_raw(w, sh.seen ? "true" : "false");
     web_jw_raw(w, ",\"sig\":");             web_jw_str(w, sig ? sig->source : "none");
     web_jw_raw(w, ",\"sig_counts\":{\"company\":"); web_jw_int(w, sig ? (long long)sig->ncompany : 0);
