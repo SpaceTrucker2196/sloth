@@ -2710,7 +2710,10 @@
       var sp = el("span", "");
       sp.appendChild(el("span", "d-normal", v instanceof Array ? v.join("; ") : String(v)));
       var ck = Object.prototype.hasOwnProperty.call(VR_CONF, label) ? VR_CONF[label] : "";
-      if (ck && typeof c[ck] === "string") sp.appendChild(el("span", "d-dim", "  " + c[ck]));
+      // A value of "unknown" carries no confidence word: an affiliate's
+      // country read "unknown unknown".
+      if (ck && typeof c[ck] === "string" && v !== "unknown")
+        sp.appendChild(el("span", "d-dim", "  " + c[ck]));
       return sp;
     }
     // Found through an affiliate: the registrant is another company in

@@ -17,18 +17,21 @@ enforces, and how the section reaches the page.
 `web/src/web_devices.c` (`research_member()`), `web/ui/app.js`
 (`vendorResearch()`), `web/tests/test_vendorkb.c`, `web/data/SOURCE.md`.
 
-**Last updated**: 2026-11-02 (the review pass: `affiliates` for
+**Last updated**: 2026-11-02 (the FRRS record's SCS group reads the
+registrant's `fcc_grantee` from here; Microsoft's four registry
+spellings one entry; no confidence word after `unknown`; Espressif's
+block counts from the committed registry copy); 2026-11-02 (the review pass: `affiliates` for
 separate companies the registry lists under their own names, every
 listed source cited and read, a source line ending at its date, the
 generator's refusals tested, the reference list without device
 counts); 2026-11-01 (the research set:
-<!-- count:vendors -->277<!-- /count --> entries, covering 160 of the
+<!-- count:vendors -->276<!-- /count --> entries, covering 160 of the
 reference host's 163 vendor names, three pending; before it, the
 pipeline and three sample entries; owner request of 2026-10-27).
 
 ## What is covered
 
-`web/data/vendors/` holds <!-- count:vendors -->277<!-- /count -->
+`web/data/vendors/` holds <!-- count:vendors -->276<!-- /count -->
 entries (`make docs-counts` keeps that number). They were written by two
 research sessions on 2026-10-27, each entry from the sources it cites,
 and each session re-fetched its entries' cited URLs to check the claims
@@ -222,6 +225,27 @@ as paragraphs with its `[n]` marks, the sources as plain text lines
 says first that the registrant is a separate company and whose entry
 this is; the affiliates are a `same group` row. A source is never a link: the page
 holds no `href` but fragments (`test_routes.c`) and fetches nothing.
+A field whose value is `unknown` carries no confidence word (an
+affiliate's country had read "unknown unknown").
+
+The FRRS emitter record (`docs/web-frrs-spec.md` §4.2) reads the same
+table: `web_frrs_report.c :: f_cert()` looks the address's registrant
+up and puts the entry's `fcc_grantee` values, each with its `[n]`, and
+the Sources lines those numbers name into SCS's `certification_fcc`,
+its `src` the entry's file. A registrant found through an affiliate gets
+no codes (they are another company's), and an address in no block, a
+registrant with no entry and an entry with no grantee each say which.
+`test_frrs.c :: test_scs_certification_from_vendor_kb` holds the five
+cases.
+
+One registrant, several spellings: where the registry's rows for two
+names carry the same registrant (the same address), they are one entry
+with the other names as aliases. Microsoft is the case that was split
+and is now one file, `microsoft-corporation.md`, keyed by
+`Microsoft Corporation`, `Microsoft`, `Microsoft Corp.` and
+`MICROSOFT CORP.` (`test_microsoft_spellings_are_one_entry`);
+Microsoft Mobile Oy, Microsoft XCG and Microsoft Research are other
+registrants and are not keyed to it.
 
 ## Tests
 

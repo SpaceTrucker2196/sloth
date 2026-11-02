@@ -364,6 +364,11 @@ static void test_page_shows_research_as_text(void) {
     WT_HAS(body, "\"no research yet for \" + oui.vendor");
     WT_HAS(body, "if (vr.affiliate) box.appendChild(el(\"div\", \"sub\", oui.vendor + \" is a separate company; \"");
     WT_HAS(body, "[\"same group\", vr.affiliates]");
+    /* No confidence word after "unknown" (an affiliate's country had read
+     * "unknown unknown"). Seen red with the v !== "unknown" test removed
+     * from val(). */
+    WT_HAS(body, "if (ck && typeof c[ck] === \"string\" && v !== \"unknown\")\n"
+                 "        sp.appendChild(el(\"span\", \"d-dim\", \"  \" + c[ck]));");
     WT_HAS(body, "el(\"li\", \"\", s.n + \". \" + s.title + \" - \" + s.url +");
     WT_LACKS(body, "href");
     WT_LACKS(body, "\"a\"");
@@ -644,6 +649,30 @@ static void test_coverage_matches_reference_and_entries(void) {
     WT_EQ(c_pend, pending);
 }
 
+/* The registry's four spellings of Microsoft are one registrant (every
+ * block but two at Microsoft Way, Redmond, in web/data/), so they reach
+ * one entry as spellings, not affiliates, and the separate registrants
+ * named Microsoft-something reach none. Seen red with "Microsoft"
+ * dropped from microsoft-corporation.md's aliases. */
+static void test_microsoft_spellings_are_one_entry(void) {
+    static const char *const SAME[] = { "Microsoft Corporation", "Microsoft", "Microsoft Corp.",
+                                        "MICROSOFT CORP." };
+    for (size_t i = 0; i < sizeof(SAME) / sizeof(SAME[0]); i++) {
+        int aff = -1;
+        const web_vkb_t *e = web_vendorkb_lookup(SAME[i], &aff);
+        WT_ASSERT(e != NULL);
+        if (!e) { fprintf(stderr, "    \"%s\" finds no entry\n", SAME[i]); continue; }
+        WT_ASSERT(!strcmp(e->file, "web/data/vendors/microsoft-corporation.md"));
+        WT_EQ(aff, 0);
+    }
+    WT_ASSERT(web_vendorkb_find("Microsoft Mobile Oy") == NULL);
+    WT_ASSERT(web_vendorkb_find("Microsoft Research") == NULL);
+    int n = 0;
+    for (int i = 0; i < web_vkb_n; i++)
+        if (strstr(web_vkb[i].file, "/microsoft")) n++;
+    WT_EQ(n, 1);
+}
+
 void run_vendorkb_tests(void) {
     WT_RUN(test_every_entry_is_complete_and_cited);
     WT_RUN(test_every_entry_names_an_ieee_vendor);
@@ -652,4 +681,5 @@ void run_vendorkb_tests(void) {
     WT_RUN(test_page_shows_research_as_text);
     WT_RUN(test_generator_refuses_each_defect);
     WT_RUN(test_coverage_matches_reference_and_entries);
+    WT_RUN(test_microsoft_spellings_are_one_entry);
 }

@@ -5855,3 +5855,19 @@ report events.
   line; `test_generator_refuses_each_defect` runs the built generator
   over fixtures. Each new check seen red under a named mutation, the
   files restored byte for byte.
+- 2026-11-02 — [[vendor-research]], [[slothweb]]: the FRRS record's SCS
+  `certification_fcc` reads the registrant's vendor research entry
+  (`fcc_grantee` with its source lines; none for an affiliate, a
+  registrant without an entry, an entry without a code, an address in
+  no block), `docs/web-frrs-spec.md` §4.2's hook wired. `microsoft.md`
+  folded into `microsoft-corporation.md` (one registrant, four registry
+  spellings; 276 entries then); the
+  page writes no confidence word after `unknown`; Raspberry Pi's
+  summary loses a clause its source does not hold (re-fetched), SparkLAN's
+  found_in names DeviWiki, Espressif's randomisation is `inferred` and
+  its block counts come from the committed registry copy (319 and 1,
+  ieee-data 20260625, not the live list's 355 and 19). The README points
+  at Lookup for the section, the demo being locally administered. New
+  checks seen red: the affiliate branch and the source marking removed
+  from `f_cert()`, `Microsoft` dropped from the merged entry's aliases,
+  the `unknown` test removed from `vendorResearch()`.

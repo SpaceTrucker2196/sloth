@@ -80,7 +80,7 @@ an entry's group (an affiliate: a subsidiary, branch or parent with
 blocks of its own) finds that entry, marked as another company's, with
 country, parent and founded left unknown.
 Sources are plain text, never links. There are
-<!-- count:vendors -->277<!-- /count --> entries. Most of the
+<!-- count:vendors -->276<!-- /count --> entries. Most of the
 reference host's vendor names find one; those that do not (SJI
 Industry Company, Reliance Communications LLC, SJIT Co., Ltd. today)
 are pending because no public documentation ties them to a company;
@@ -130,7 +130,11 @@ has nothing to name there: no device gets an IEEE vendor and A4 (vendor
 unknown) never fires, though `/api/health` says `"a4":"on"`. That is the
 rule working, not the table missing. To see the table, type a globally
 administered MAC into Lookup (`00:1b:63:00:00:01` is an Apple block), or
-run beside sloth on real traffic.
+run beside sloth on real traffic. The same goes for the vendor research
+section under the OUI card: the stock demo never shows it, and Lookup
+does for a researched vendor's block (`24:0a:c4:00:00:01`, Espressif,
+with its FCC grantee code and the sources each line cites). The demo
+stays locally administered, because everything in it is invented.
 
 ### Run it beside sloth
 
@@ -2504,8 +2508,9 @@ owner's open questions are in
   passively: **BEI** (the RF environment: channel, occupancy measured
   and advertised, co-channel networks, the regulatory domain seen,
   `RF_DEGRADED` and deauth floods, presence, anomaly episodes, which
-  radios could hear), **SCS** (certification: the vendor research KB's
-  hook, `web/data/vendors/`, not there yet; compliance: Country, TPC,
+  radios could hear), **SCS** (certification: the registrant's FCC
+  grantee codes from the vendor research KB, `web/data/vendors/`, each
+  with its source; compliance: Country, TPC,
   DFS, cipher, AKM, MFP, transition mode, WPS, the posture findings),
   **EC/S** (the parametrics: bands, width, PHY generation, beacon
   interval and its jitter, suites, MFP, TX power, vendor-IE hashes, WPS

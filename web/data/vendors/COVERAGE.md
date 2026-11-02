@@ -12,7 +12,7 @@ it reaches that file as a separate company in its group, and every name
 under Pending to none) and holds the count line below to the lists. This
 file is not an entry: the generator passes over it by name.
 
-Entries in this directory: <!-- count:vendors -->277<!-- /count -->. Reference host: 163 vendor names; 160 have an entry (0 of them through an affiliate), 3 are pending.
+Entries in this directory: <!-- count:vendors -->276<!-- /count -->. Reference host: 163 vendor names; 160 have an entry (0 of them through an affiliate), 3 are pending.
 
 Names are quoted exactly as the registry spells them, white space included.
 
@@ -92,7 +92,7 @@ Names are quoted exactly as the registry spells them, white space included.
 - "Magneti Marelli Automotive Electronics (Guangzhou) Co. Ltd" - web/data/vendors/magneti-marelli-automotive-electronics-guangzhou-co-ltd.md
 - "MAGNETI MARELLI SISTEMAS ELECTRONICOS MEXICO" - web/data/vendors/magneti-marelli-sistemas-electronicos-mexico.md
 - "MediaTek Inc" - web/data/vendors/mediatek-inc.md
-- "Microsoft" - web/data/vendors/microsoft.md
+- "Microsoft" - web/data/vendors/microsoft-corporation.md
 - "Microsoft Corporation" - web/data/vendors/microsoft-corporation.md
 - "MITAC INTERNATIONAL CORP." - web/data/vendors/mitac-international-corp.md
 - "MITSUMI ELECTRIC CO.,LTD." - web/data/vendors/mitsumi-electric-co-ltd.md

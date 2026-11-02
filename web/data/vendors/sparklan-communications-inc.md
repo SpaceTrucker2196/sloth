@@ -7,7 +7,7 @@ parent: unknown
 founded: unknown
 kind: module-maker
 device_classes: [module-in-other-brands, industrial]
-found_in: ["Embedded/industrial systems using SparkLAN Mini PCIe, M.2/NGFF and USB Wi-Fi cards (114 FCC-certified devices catalogued; hosts not named) [1]"]
+found_in: ["Embedded/industrial systems using SparkLAN Mini PCIe, M.2/NGFF and USB Wi-Fi cards (114 devices catalogued on DeviWiki (FCC grantee RYK); hosts not named) [1]"]
 radios: ["Wi-Fi 4 [1]", "Wi-Fi 5 [1]", "2.4 GHz [1]", "5 GHz [1]", "Bluetooth on the combo cards (version stated only for WPEA-152GN(BT), Atheros AR3012 + AR9485: 4.0 LE) [1]"]
 silicon: ["Qualcomm Atheros QCA9880 (WPEA-351AC), QCA9882 (WPEQ-257ACN), QCA9890 (WPEQ-353ACNI), QCA6174 (WNFQ-255ACN(BT)) in Mini PCIe/M.2 cards [1]", "Qualcomm Atheros AR9462 (WPEA-251N(BT)) and QCA9377 (WNFQ-158ACN(BT)) in Wi-Fi + Bluetooth combo modules, Bluetooth version not stated [1]", "Atheros AR3012 + AR9485 (WPEA-152GN(BT), Wi-Fi + Bluetooth 4.0 LE) [1]", "MediaTek MT7610E (WPER-176AC), MT7612U (WUBM-273ACN USB 2x2 ac) [1]", "Realtek RTL8812AE (WPET-232ACN) [1]"]
 fcc_grantee: ["RYK [1]"]
