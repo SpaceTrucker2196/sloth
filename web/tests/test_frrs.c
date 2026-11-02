@@ -27,6 +27,7 @@
 #include "web_frrs_int.h"
 #include "web_ingest.h"
 #include "web_live.h"
+#include "web_oui.h"
 #include "web_routes.h"
 #include "web_server.h"
 #include "wt_tmp.h"
@@ -836,6 +837,38 @@ static void test_record_states_its_limits(void) {
     WT_EQ(get("/api/frrs/report", "kind=bssid&addr=02:DE:00:00:00:A1"), 200);
     WT_EQ(get("/api/frrs/report", "kind=bssid&addr=not-a-mac"), 400);
     WT_EQ(get("/api/frrs/report", "kind=ip&addr=192.0.2.1"), 400);
+    env_close();
+}
+
+/* SCS's certification from the vendor research KB (§4.2's hook): the
+ * entry's fcc_grantee values with their [n] and the source lines those
+ * numbers name; an affiliate's registrant, a registrant without an
+ * entry, an entry with no grantee and an address in no block each say
+ * which and show no code. Seen red with f_cert()'s affiliate branch
+ * removed (Espressif's 2AC7Z shown for 6c:3d:d8, Espressif Systems
+ * (Singapore) Pte. Ltd, an affiliate), and with the used[] marking
+ * dropped (the sources list empty). */
+static void test_scs_certification_from_vendor_kb(void) {
+    env_open(NULL, 1);
+    E.m4.oui = web_oui_builtin();
+    WT_ASSERT(web_oui_full(E.m4.oui));
+    WT_EQ(get("/api/frrs/report", "kind=sta&addr=24:0a:c4:00:00:01"), 200);
+    WT_HAS(g_out, "\"certification_fcc\":{\"v\":{\"grantee\":[\"2AC7Z (FCC-certified modules");
+    WT_HAS(g_out, "ESP8684-WROOM-02C) [3]\"],\"sources\":[\"[3] ");
+    WT_HAS(g_out, "\"src\":\"web/data/vendors/espressif-inc.md fcc_grantee\"");
+    WT_EQ(get("/api/frrs/report", "kind=sta&addr=6c:3d:d8:00:00:01"), 200);
+    WT_HAS(g_out, "\"certification_fcc\":{\"v\":null,\"why\":\"the registrant is an affiliate of "
+                  "Espressif Inc.");
+    WT_LACKS(g_out, "2AC7Z");
+    WT_EQ(get("/api/frrs/report", "kind=sta&addr=cc:66:18:00:00:01"), 200);
+    WT_HAS(g_out, "\"certification_fcc\":{\"v\":null,\"why\":\"the vendor research entry documents "
+                  "no FCC grantee code\"");
+    WT_EQ(get("/api/frrs/report", "kind=sta&addr=00:00:00:00:00:01"), 200);
+    WT_HAS(g_out, "\"certification_fcc\":{\"v\":null,\"why\":\"no vendor research entry for this "
+                  "registrant\"");
+    WT_EQ(get("/api/frrs/report", "kind=sta&addr=02:de:00:00:00:12"), 200);
+    WT_HAS(g_out, "\"certification_fcc\":{\"v\":null,\"why\":\"no registrant: the address is in no "
+                  "OUI block\"");
     env_close();
 }
 
@@ -2137,6 +2170,7 @@ void run_frrs_tests(void) {
     WT_RUN(test_follow_recommended);
     WT_RUN(test_recommend_from_the_shipped_assessments);
     WT_RUN(test_record_states_its_limits);
+    WT_RUN(test_scs_certification_from_vendor_kb);
     WT_RUN(test_every_source_is_real);
     WT_RUN(test_tacdb_round_trip);
 #ifdef WITH_SQLITE

@@ -3,7 +3,8 @@
 **Working name:** `frrs` (the module), `SlothFrrs` (its namespace)
 **Applies to:** `web/` (slothweb) only. `src/` is untouched.
 **Status:** specification for the owner to read, 2026-10-27; slices
-F0-F4 built 2026-11-01, review fixes 2026-11-02. Where the build departs from the body, §14
+F0-F4 built 2026-11-01, review fixes 2026-11-02, F5's vendor KB hook
+(§4.2) wired 2026-11-02. Where the build departs from the body, §14
 says how and why, and wins; §12 says which default each open question
 took until the owner answers it.
 **Companions:** `docs/web-ui-spec.md` (the UI spec and its rulings
@@ -112,7 +113,7 @@ frame to the air.
 |---|---|---|---|---|
 | **Frequency Resource Record** | The record of one assignment: who, where, what equipment, on what frequency, with what emission. | *emitter*, *station class*, *emission designator* | One **emitter record**: a Wi-Fi STA MAC, a BSSID, or a BLE address (+ address type). *Station class* is sloth's role for it: AP, client, MLD, BLE advertiser. *Emission designator* is the PHY generation and channel width sloth decoded (§4.3). | the alert page, the device drawer, the TACDB tab |
 | **BEI** Background Environment Information | The RF environment the assignment sits in. | *supplementary details* | The channel's occupancy and co-channel networks (the channel mix), the regulatory domain seen on the air, interference indicators (`RF_DEGRADED`), time-of-day presence, and the site baseline / anomaly state (§4.1). | alert page, drawer |
-| **SCS** Spectrum Certification System | Equipment certification (DD Form 1494 / J/F-12) and compliance. | *equipment nomenclature* | Certification data from the vendor research KB when present (FCC grantee / FCC ID; a hook until `web/data/vendors/` lands) and sloth's own compliance findings for the emitter: `COUNTRY_ABSENT`, `TPC_ABSENT_HIGH_BAND`, `DFS_MASKING`, cipher / MFP / WPA3 posture (§4.2). | alert page, drawer |
+| **SCS** Spectrum Certification System | Equipment certification (DD Form 1494 / J/F-12) and compliance. | *equipment nomenclature* | Certification data from the vendor research KB (`web/data/vendors/`: the registrant's entry's FCC grantee codes, wired 2026-11-02) and sloth's own compliance findings for the emitter: `COUNTRY_ABSENT`, `TPC_ABSENT_HIGH_BAND`, `DFS_MASKING`, cipher / MFP / WPA3 posture (§4.2). | alert page, drawer |
 | **EC/S** Equipment Characteristics/Space | The parametric data of each piece of equipment. | *equipment characteristics* | The emitter's observed parametrics: bands, widths, PHY generation, ciphers and AKMs, MFP, TX power / TPC, rates, vendor IEs, WPS; for BLE: PHY, advertising interval, TX power, appearance (§4.3). | alert page, drawer, TACDB platform view |
 | **TACDB** | Platform lists by nomenclature → each platform's C-E equipment complement → each equipment's parametrics; unit lists with subordinate units and their equipment. | *platform*, *unit*, *nomenclature*, *equipment complement* | Operator-kept **platforms** (a phone, a laptop, an AP, a camera), each with its **equipment complement** (the emitters it owns, each linking to its EC/S), under **units** (site → room / vehicle / person) with subordinate units. Auto-suggested from sloth's correlations, confirmed by the operator, exportable (§4.4, §7, §8). | the TACDB tab |
 | **Report** (the owner's addendum) | COMINT's seven disclosures. | — | Identity, signal and radio, function, timing, technical characteristics, protection posture, peers (§4.5), each field with its sloth source and "not observed" when absent; "no location axis" and "sloth decrypts nothing" stated in the UI. | alert page, drawer, TACDB platform view |
@@ -465,7 +466,7 @@ sloth's own `tbtt_jitter_us`.
 | Field | Source | Notes |
 |---|---|---|
 | Vendor (registry) | the OUI table (`/api/lookup`'s `oui` block: block, registry, vendor) | |
-| Certification: FCC grantee, FCC ID, product | **hook**: `web/data/vendors/` (the vendor research KB, another session) keyed by OUI block or by `beacon.wps_manufacturer` + `wps_model_name`; until it lands, the field reads *no certification data* with the source named `web/data/vendors/` | |
+| Certification: FCC grantee | `certification_fcc`: the vendor research KB (`web/data/vendors/`, `web_vendorkb_lookup()` on the registry's Organization Name for the address's block): the entry's `fcc_grantee` values as written, each with its `[n]`, and the Sources lines those numbers name; `src` names the entry's file. `v` is null with a `why` for an address in no block, a registrant with no entry, an entry with no grantee code, and a registrant that is one of the entry's *affiliates* (a separate company, whose codes the entry's are not). Wired 2026-11-02 | FCC ID and product, and the WPS `wps_manufacturer` + `wps_model_name` key, are not wired: the KB documents a vendor, not a product |
 | Country element | `wifi_regulatory.country_present`, `.country`, `.env`, `.triplets_truncated`, `.malformed_country`; finding `COUNTRY_ABSENT` on the BSSID | |
 | TPC | `wifi_regulatory.tpc_present`, `.tpc_tx_power_dbm`, `.tpc_link_margin_db`, `.power_constraint_present`, `.power_constraint_db`; finding `TPC_ABSENT_HIGH_BAND` | |
 | 6 GHz regulatory info | `wifi_regulatory.he6_present`, `.he6_reg_info_name` | |
@@ -1035,7 +1036,7 @@ claims nothing sloth did not record, and widens no surface.
 | F2 | `/api/frrs/recommend` with the directory reader and `--web-assessments`; "follow recommended" live | same |
 | F3 | the ledger; `/api/frrs/report` and `/report/alert`; `frrs-alert` and `frrs-drawer`; the allow-list columns | same |
 | F4 | TACDB tables, routes, tab, platform view, `mountBundle` hook; suggestions S1–S3, S6; export / import | same |
-| F5 | the vendor KB hook (§4.2) once `web/data/vendors/` exists; the compiled assessment table once `web_alertasm.h` exists | same |
+| F5 | the vendor KB hook (§4.2), wired 2026-11-02 with `web/data/vendors/`; the compiled assessment table once `web_alertasm.h` exists | same |
 
 ## 14. As built (2026-11-01, review fixes 2026-11-02 twice), where it departs from the body
 

@@ -20,6 +20,7 @@
 #include "web_rollup.h"
 #include "web_scope.h"
 #include "web_ssid.h"
+#include "web_vendorkb.h"
 
 #ifdef WITH_SQLITE
 #include <sqlite3.h>
@@ -111,6 +112,69 @@ static void fnone(G *g, const char *name, const char *src, const char *why) {
     f_head(g, name);
     web_jw_raw(g->w, "null,\"why\":");
     web_jw_str(g->w, why);
+    f_tail(g, src, 0);
+}
+
+/* SCS's certification: the vendor research entry for the registrant
+ * (web_vendorkb.h), its fcc_grantee values as the entry writes them,
+ * each with its [n], and the Sources lines those numbers name. A
+ * grantee code is a company's: a registrant found through an affiliate
+ * is a different company, so its entry's codes are not shown as its. */
+static void f_cert(G *g, int have_oui, const web_oui_hit_t *oh) {
+    static const char WHERE[] = "web/data/vendors/ (the vendor research KB: fcc_grantee)";
+    int aff = 0;
+    const web_vkb_t *e = have_oui ? web_vendorkb_lookup(oh->name, &aff) : NULL;
+    if (!e) {
+        fnone(g, "certification_fcc", WHERE, have_oui ? "no vendor research entry for this registrant"
+                                                     : "no registrant: the address is in no OUI block");
+        return;
+    }
+    char src[160];
+    snprintf(src, sizeof(src), "%s fcc_grantee", e->file);
+    if (aff) {
+        char why[256];
+        snprintf(why, sizeof(why), "the registrant is an affiliate of %s, a separate company; that "
+                 "entry's grantee codes are not this registrant's", e->name);
+        fnone(g, "certification_fcc", src, why);
+        return;
+    }
+    if (!e->nfcc_grantee) {
+        fnone(g, "certification_fcc", src, "the vendor research entry documents no FCC grantee code");
+        return;
+    }
+    f_head(g, "certification_fcc");
+    web_jw_raw(g->w, "{\"grantee\":[");
+    unsigned char used[64] = { 0 };
+    for (int i = 0; i < e->nfcc_grantee; i++) {
+        if (i) web_jw_raw(g->w, ",");
+        web_jw_str(g->w, e->fcc_grantee[i]);
+        /* A citation as web/tools/vendorkb.c reads one: "[" digits,
+         * commas and spaces "]". */
+        for (const char *p = strchr(e->fcc_grantee[i], '['); p; p = strchr(p + 1, '[')) {
+            const char *q = p + 1;
+            int ok = 1;
+            for (; *q && *q != ']'; q++)
+                if (!(*q >= '0' && *q <= '9') && *q != ',' && *q != ' ') ok = 0;
+            if (*q != ']' || !ok) continue;
+            for (q = p + 1; *q != ']'; ) {
+                if (*q < '0' || *q > '9') { q++; continue; }
+                int n = 0;
+                while (*q >= '0' && *q <= '9' && n < 1000) n = n * 10 + (*q++ - '0');
+                if (n >= 1 && n <= e->nsources && n < 64) used[n] = 1;
+            }
+        }
+    }
+    web_jw_raw(g->w, "],\"sources\":[");
+    int k = 0;
+    for (int n = 1; n < 64 && n <= e->nsources; n++) {
+        if (!used[n]) continue;
+        const web_vkb_src_t *sv = &e->sources[n - 1];
+        char line[1024];
+        snprintf(line, sizeof(line), "[%d] %s, %s (accessed %s)", n, sv->title, sv->url, sv->accessed);
+        if (k++) web_jw_raw(g->w, ",");
+        web_jw_str(g->w, line);
+    }
+    web_jw_raw(g->w, "]}");
     f_tail(g, src, 0);
 }
 
@@ -792,9 +856,7 @@ void frrs_report_json(const web_m4_t *m, web_live_t *live, int kind, const char 
     fs(&g, "vendor_block", have_oui ? oh.block : NULL, "the OUI table", 0);
     fb(&g, "locally_administered", web_oui_mac_bytes(mac, mb) == 0, local,
        "the address's U/L bit", 0);
-    fnone(&g, "certification_fcc", "web/data/vendors/ (the vendor research KB: fcc_grantee)",
-          "no certification data in this build: the vendor research KB is another slice's "
-          "and has not landed here (hook: SlothFrrs.certHook)");
+    f_cert(&g, have_oui, &oh);
     if (kind != FRRS_K_BLE) {
         fb(&g, "country_element", B && B->has_r, B && B->country_present, "wifi_regulatory.country_present",
            B ? B->ts_r : 0);
