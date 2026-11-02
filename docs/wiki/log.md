@@ -5658,3 +5658,11 @@ report events.
   page's CSP gains `img-src data:` and nothing else; the no-external-
   reference test admits exactly those two forms (seen red with an
   `<img src="/icon.png">` and with a stylesheet `<link>`).
+- 2026-11-01 — [[wiki-maintenance]]: `wiki_sync.sh` flattens a
+  `docs/wiki/<dir>/` subdirectory onto the flat GitHub wiki
+  (`<dir>-<page>`, `<dir>/README.md` as `<dir>`), rewriting the links
+  in both directions, and refuses a flattened name that would overwrite
+  a top-level page; owner's go-ahead for the alert-assessment pages.
+  `tests/deploy/test_wiki_sync.sh` (21 checks, run by `make
+  deploy-test`) seen red with the subdirectory loop removed (9 failed)
+  and with the collision guard removed (1 failed).

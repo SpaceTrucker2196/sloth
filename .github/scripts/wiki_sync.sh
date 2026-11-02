@@ -15,6 +15,12 @@
 #   - ](../personas/x.md) -> absolute blob URL on main
 #   - ](../../X.md)       -> absolute blob URL on main
 #   - ](page.md)          -> ](page)   (sibling wiki page)
+#   - docs/wiki/<dir>/x.md -> page <dir>-x, <dir>/README.md -> page <dir>
+#     (the GitHub wiki is flat). Links follow: ](dir/x.md) -> ](dir-x),
+#     ](dir/README.md) -> ](dir); inside <dir>, ](x.md) -> ](dir-x),
+#     ](README.md) -> ](dir), ](../page.md) -> ](page), ](../../views/..)
+#     and ](../../../X) -> absolute blob URLs. A flattened name that
+#     collides with a top-level page fails the sync.
 #   - [[page]]            untouched    (GitHub wiki resolves these itself)
 #   - _Sidebar.md         generated from index.md's headings + [[links]]
 #   - _Footer.md          fixed provenance line
@@ -38,20 +44,35 @@ BLOB="$REPO_URL/blob/main"
 find "$DST" -maxdepth 1 -name '*.md' -type f -exec rm -f {} +
 
 render() {
-    # $1 = source file, $2 = destination file
+    # $1 = source file, $2 = destination file, $3 = its subdirectory ("" at the top)
+    d=${3:-}
     awk '
         NR == 1 && $0 == "---" { fm = 1; next }
         fm && $0 == "---"      { fm = 0; next }
         fm                     { next }
         { print }
-    ' "$1" \
-    | sed \
-        -e "s#](\.\./views/\([^)]*\))#]($BLOB/docs/views/\1)#g" \
-        -e "s#](\.\./personas/\([^)]*\))#]($BLOB/docs/personas/\1)#g" \
-        -e "s#](\.\./\.\./\([^)]*\))#]($BLOB/\1)#g" \
-        -e "s#](\([a-z0-9-]*\)\.md)#](\1)#g" \
-        -e "s#](\([a-z0-9-]*\)\.md\(\#[^)]*\))#](\1\2)#g" \
-    > "$2"
+    ' "$1" > "$2.fm"
+    if [ -z "$d" ]; then
+        sed \
+            -e "s#](\.\./views/\([^)]*\))#]($BLOB/docs/views/\1)#g" \
+            -e "s#](\.\./personas/\([^)]*\))#]($BLOB/docs/personas/\1)#g" \
+            -e "s#](\.\./\.\./\([^)]*\))#]($BLOB/\1)#g" \
+            -e "s#](\([A-Za-z0-9_-]*\)/README\.md\(\#[^)]*\)\{0,1\})#](\1\2)#g" \
+            -e "s#](\([A-Za-z0-9_-]*\)/\([A-Za-z0-9_-]*\)\.md\(\#[^)]*\)\{0,1\})#](\1-\2\3)#g" \
+            -e "s#](\([a-z0-9-]*\)\.md)#](\1)#g" \
+            -e "s#](\([a-z0-9-]*\)\.md\(\#[^)]*\))#](\1\2)#g" \
+            "$2.fm" > "$2"
+    else
+        sed \
+            -e "s#](\.\./\.\./\.\./\([^)]*\))#]($BLOB/\1)#g" \
+            -e "s#](\.\./\.\./views/\([^)]*\))#]($BLOB/docs/views/\1)#g" \
+            -e "s#](\.\./\.\./personas/\([^)]*\))#]($BLOB/docs/personas/\1)#g" \
+            -e "s#](\.\./\([a-z0-9-]*\)\.md\(\#[^)]*\)\{0,1\})#](\1\2)#g" \
+            -e "s#](README\.md\(\#[^)]*\)\{0,1\})#]($d\1)#g" \
+            -e "s#](\([A-Za-z0-9_-]*\)\.md\(\#[^)]*\)\{0,1\})#]($d-\1\2)#g" \
+            "$2.fm" > "$2"
+    fi
+    rm -f "$2.fm"
 }
 
 for f in "$SRC"/*.md; do
@@ -61,6 +82,25 @@ for f in "$SRC"/*.md; do
         *)     out=$base ;;
     esac
     render "$f" "$DST/$out.md"
+done
+
+# Subdirectory pages, flattened; never over a top-level page.
+for dir in "$SRC"/*/; do
+    [ -d "$dir" ] || continue
+    d=$(basename "$dir")
+    for f in "$dir"*.md; do
+        [ -f "$f" ] || continue
+        base=$(basename "$f" .md)
+        case "$base" in
+            README) out=$d ;;
+            *)      out=$d-$base ;;
+        esac
+        if [ -e "$DST/$out.md" ]; then
+            echo "wiki_sync: $d/$base.md would overwrite page $out" >&2
+            exit 1
+        fi
+        render "$f" "$DST/$out.md" "$d"
+    done
 done
 
 # Sidebar: every "## Heading" and every "- [[page]] — hook" line from

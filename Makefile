@@ -1390,7 +1390,8 @@ install-service:
 # real service, reads nothing under /etc. Not a `make test` dependency
 # because it is shell, not the C suite; shellcheck runs when installed.
 DEPLOY_SCRIPTS = packaging/bin/sloth-migrate-sensor packaging/bin/sloth-monitor-up \
-                 tests/deploy/test_migrate_sensor.sh
+                 tests/deploy/test_migrate_sensor.sh \
+                 .github/scripts/wiki_sync.sh tests/deploy/test_wiki_sync.sh
 
 .PHONY: deploy-test
 deploy-test:
@@ -1400,3 +1401,4 @@ deploy-test:
 	  echo "deploy-test: shellcheck not installed, skipping lint"; \
 	fi
 	sh tests/deploy/test_migrate_sensor.sh
+	sh tests/deploy/test_wiki_sync.sh

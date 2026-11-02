@@ -15,7 +15,7 @@ updates the wiki in the same change.
 **Sources**: `.github/scripts/wiki_sync.sh`,
 `.github/workflows/wiki-sync.yml`, `docs/CLAUDE.md`, `agents/AGENTS.md`.
 
-**Last updated**: 2026-10-15.
+**Last updated**: 2026-11-01 (subdirectory pages flattened, the sync under test); 2026-10-15.
 
 ---
 
@@ -38,6 +38,19 @@ saying exactly this.
 - `[[wiki-links]]` are left as-is — GitHub's wiki resolves them.
 - `_Sidebar.md` is generated from `index.md`'s headings and `[[links]]`.
 - A page deleted from `docs/wiki/` is deleted from the wiki.
+- A subdirectory is flattened, since the GitHub wiki has no folders:
+  `docs/wiki/<dir>/x.md` publishes as the page `<dir>-x` and
+  `<dir>/README.md` as the page `<dir>`. Links follow: from the top,
+  `](dir/x.md)` → `](dir-x)` and `](dir/README.md)` → `](dir)`; inside
+  the directory, `](x.md)` → `](dir-x)`, `](README.md)` → `](dir)`,
+  `](../page.md)` → `](page)`, and `](../../views/…)` / `](../../../…)`
+  become `blob/main` URLs. A flattened name that would overwrite a
+  top-level page fails the sync. `docs/wiki/alert-assessments/` is the
+  first such directory.
+
+`make deploy-test` runs `tests/deploy/test_wiki_sync.sh`: the script
+against a hand-built tree and a scratch wiki checkout with `--no-push`,
+every link shape above checked, and the collision refused.
 
 `.github/workflows/wiki-sync.yml` runs it on every push to `main` that
 touches `docs/wiki/**`. So the wiki can never drift from the repo by more
