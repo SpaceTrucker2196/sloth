@@ -2727,7 +2727,12 @@ its first row's type; `/api/frrs/report/alert?id=` for an alert),
 decision), and `device.vendor_research`, `alert.assessment` and
 `alert.evidence` (`captures`, `captures_note`, `evidence`: the capture
 files listed with their manifest hashes, never a pcap's bytes) are
-members of the primary answer lifted out whole. A bundle can carry
+members of the primary answer lifted out whole. `location` is the
+location slice's own answers: a device's is `/api/positions?mac=` in
+its JSON form, as the drawer's scatter reads it (where the sensor was
+each time it heard the device, and its track, newest first, at most
+200 of each), and an alert's is the alert page's `loc` member, the
+stamp as the incident opened (`no_data` when the page's is null). A bundle can carry
 nothing the page would not show. `test_bundle.c` compares the spliced bytes with the routes' own
 answers and reruns the alert routes' credential and incident-id checks
 against every kind.
@@ -2763,9 +2768,9 @@ Around the splices:
   `observed_vs_thresholds`, `records_by_type_global` (the stream's
   per-type mix; a summary that did not render is `too_large`, never an
   empty `{}` that would read as "no records"), `vendor_research`,
-  `frrs`, `triage` (an alert's), `assessment`, `evidence`, and for what
-  no build has yet `comint_report`, a device's `triage` (triage is per
-  finding), `location`, `signal_history`, `distance`. A section without
+  `frrs`, `triage` (an alert's), `assessment`, `evidence`, `location`,
+  and for what no build has yet `comint_report`, a device's `triage`
+  (triage is per finding), `signal_history`, `distance`. A section without
   data is
   `{"available": false, "reason": ...}`, the reason one of `not_built`
   (this build has no such feature), `no_data`, `too_large`,

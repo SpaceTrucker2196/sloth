@@ -387,7 +387,11 @@ static int seed(void) {
         " FTP -> 10.0.0.9:21','T1040','10.0.0.1',21,1),"
         " (22,'snmp-brute:10.0.0.7->10.0.0.8',%lld,%lld,16,2,'SNMP_COMMUNITY_BRUTE',"
         "'10.0.0.7->10.0.0.8: 9 SNMP communities tried (last=community-secret-x)','T1110.001',"
-        "'10.0.0.7',161,9);",
+        "'10.0.0.7',161,9);"
+        "INSERT INTO device_positions (mac,last_seen,lat,lon,acc_m,rssi) VALUES"
+        " ('02:00:00:00:00:12',%lld,48.5000000,11.2500000,7.5,-61);"
+        "INSERT INTO sensor_positions (last_seen,lat,lon,alt_m,acc_m,loc_src) VALUES"
+        " (%lld,48.5000000,11.2500000,500,7.5,'gps');",
         T - 10 * DY, T - 60, T - 10 * DY, T - 60,
         T - 10 * DY, T - 60,
         T - 5 * HR, T - 5 * HR + 300, T - 5 * HR + 900, T - 5 * HR + 1200,
@@ -395,7 +399,7 @@ static int seed(void) {
         T - 2 * HR, T - HR,
         T - 4 * HR, T - 1800,
         CRED_KEY, T - 2 * DY, T - 2 * DY + 60, CRED_KEY, T - HR, T - 30 * 60,
-        T - 900, T - 600);
+        T - 900, T - 600, T - 120, T - 120);
     if (n < 0 || (size_t)n >= sizeof(sql)) return -1;
     return sdb_exec(g_db, sql);
 }
@@ -415,7 +419,8 @@ static void stream(void) {
         "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"" IB "\",\"key\":"
         "\"deauth:02:00:00:00:00:12@02:00:00:00:00:a1\",\"title\":\"DEAUTH_FLOOD\","
         "\"detail\":\"victim=02:00:00:00:00:12 bssid=02:00:00:00:00:a1 observed 6 frames\","
-        "\"sev\":1,\"ty\":1,\"count\":1}\n"
+        "\"sev\":1,\"ty\":1,\"count\":1,\"loc\":{\"lat\":-33.8688000,\"lon\":151.2093000,"
+        "\"acc_m\":6.5,\"src\":\"gps\",\"ts\":%lld}}\n"
         "{\"type\":\"alert.escalate\",\"ts\":%lld,\"incident_id\":\"" IB "\",\"key\":"
         "\"deauth:02:00:00:00:00:12@02:00:00:00:00:a1\",\"title\":\"DEAUTH_FLOOD\","
         "\"detail\":\"victim=02:00:00:00:00:12 bssid=02:00:00:00:00:a1 observed 40 frames\","
@@ -434,7 +439,7 @@ static void stream(void) {
         "{\"type\":\"dns\",\"ts\":%lld,\"qname\":\"laptop.example.org\",\"src\":\"192.0.2.12\"}\n"
         "{\"type\":\"probe_client\",\"ts\":%lld,\"mac\":\"02:00:00:00:00:12\",\"ssid\":\"HomeNet\"}\n"
         "{\"type\":\"dns\",\"ts\":%lld,\"qname\":\"other.example.org\",\"src\":\"192.0.2.99\"}\n",
-        T - 600, T - 700, T - 3600, T - 3000, T - 120, T - 300, CRED_KEY,
+        T - 600, T - 700, T - 3600, T - 3602, T - 3000, T - 120, T - 300, CRED_KEY,
         T - 10, T - 9, T - 8, T - 7);
     feed(b);
 }
@@ -789,7 +794,15 @@ static void test_sections_are_the_routes_bytes(void) {
     WT_ASSERT(vr != NULL);
     WT_ASSERT(section_is("device", "vendor_research", vr, n));
     WT_HAS(answer(), ",{\"what\":\"device.frrs\",\"ms\":");
-    free(fr); free(dv);
+    /* Where the sensor was: /api/positions as the drawer's scatter asks
+     * it, the seeded sample and track point in it (seen red with the
+     * device row's fill put back to NULL, "not_built"). */
+    char *ps = own("/api/positions", "mac=02:00:00:00:00:12", 200);
+    WT_HAS(ps, "\"lat\":48.5000000");
+    WT_EQ(route(&H, "/api/bundle", "kind=device&id=02:00:00:00:00:12"), 200);
+    WT_ASSERT(section_is("device", "location", ps, ps ? strlen(ps) : 0));
+    WT_HAS(answer(), ",{\"what\":\"device.location\",\"ms\":");
+    free(fr); free(dv); free(ps);
 
     char *al = own("/api/alert", "id=d10", 200);
     char *fa = own("/api/frrs/report/alert", "id=d10", 200);
@@ -817,6 +830,12 @@ static void test_sections_are_the_routes_bytes(void) {
     }
     en += (size_t)snprintf(ev + en, sizeof(ev) - en, "}");
     WT_ASSERT(section_is("alert", "evidence", ev, en));
+    /* The alert page's own stamp, lifted whole (seen red with the
+     * alert row's fill put back to NULL). */
+    const char *lc = top(al, "loc", &n);
+    WT_ASSERT(lc && *lc == '{');
+    if (lc) WT_ASSERT(!strncmp(lc, "{\"lat\":-33.8688000,", 19));
+    WT_ASSERT(section_is("alert", "location", lc, n));
     WT_HAS(answer(), "{\"what\":\"alert.frrs\",\"ms\":");
     WT_HAS(answer(), "{\"what\":\"alert.triage\",\"ms\":");
     free(al); free(fa); free(th);
@@ -1127,8 +1146,8 @@ static void test_size_cap(void) {
     WT_ASSERT(g_body_len <= capb && g_body_len < full);
     WT_HAS(answer(), ",\"device\":{\"available\":false,\"reason\":\"too_large\",\"cap_bytes\":");
     /* The triage history after it (the FRRS slice's) has no room left
-     * either. */
-    WT_HAS(answer(), "\"truncated_sections\":[\"device\",\"triage\"]");
+     * either, nor the location stamp after that. */
+    WT_HAS(answer(), "\"truncated_sections\":[\"device\",\"triage\",\"location\"]");
     char cap[64];
     snprintf(cap, sizeof(cap), "\"limits\":{\"hard_cap_bytes\":%zu,", capb);
     WT_HAS(answer(), cap);

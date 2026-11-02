@@ -5995,3 +5995,11 @@ report events.
   an RSSI band change or every `gps.sample_s` x 10, with the row rate
   and the `--location` recommendation for a parked sensor. Pages
   touched: [[sqlite-schema]], [[jsonl-schema]].
+- 2026-11-02 — [[slothweb]] copy JSON meets [[location]]: rebased onto
+  triage/FRRS, BLE, the alert's proof and the bundle; the alert page's
+  `loc-alert` sits after `frrs-alert` and above the proof (`ev-alert`,
+  the capture still last), `loc-drawer` after `frrs-drawer`. The
+  bundle's `location` section, `{available:false}` until now, is the
+  location routes' own answer spliced: a device's `/api/positions?mac=`
+  JSON, an alert's page `loc` stamp. FRRS keeps "no location axis": the
+  sensor's position is not the emitter's. Pages touched: [[slothweb]].

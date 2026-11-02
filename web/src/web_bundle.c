@@ -12,6 +12,7 @@
 #include "web_frrs.h"
 #include "web_http.h"
 #include "web_metrics.h"
+#include "web_positions.h"
 #include "web_series.h"
 #include "web_slothdb.h"
 
@@ -52,6 +53,10 @@ struct web_bundle_ctx {
     int        frrs_withheld;                  /* not read: the scope holds it not */
     char      *triage;   size_t triage_len;
     int        triage_status;
+    /* /api/positions?mac= (web_positions.h): where the sensor was each
+     * time it heard the device, and its track over the same span. */
+    char      *pos;      size_t pos_len;       /* 0 status: not read */
+    int        pos_status;
     struct { const char *what; long long ms; int status; } reads[BUNDLE_READS];
     int        nreads;
     /* The ticker ring, newest last as the ring gives it. */
@@ -238,6 +243,32 @@ static int frrs_read(web_bundle_ctx_t *c, const char *what, const char *path,
     free(rq);
     free(big);                       /* only the export answers in one */
     if (rc != 0 || bl == 0) {
+        free(buf);
+        note_read(c, what, ms, 503);
+        return SPLICE_TOO_LARGE;
+    }
+    if (buf[bl - 1] == '\n') bl--;
+    buf[bl] = '\0';
+    note_read(c, what, ms, st);
+    *out = buf;
+    *outlen = bl;
+    return st;
+}
+
+/* A GET of /api/positions?mac= in its JSON form, as location.js asks
+ * it for the drawer. The same contract as splice_read(). */
+static int positions_read(web_bundle_ctx_t *c, const char *what, const char *mac,
+                          char **out, size_t *outlen) {
+    char *buf = malloc(WEB_BUNDLE_SCRATCH);
+    if (!buf) return SPLICE_NO_MEMORY;
+    char q[WEB_KEY_MAX + 8];
+    snprintf(q, sizeof(q), "mac=%s", mac);
+    size_t bl = 0;
+    int st = 0, fmt = WEB_POS_JSON;
+    long long t0 = mono_ms();
+    int rc = web_positions_route(c->m, q, c->h->wall_s, buf, WEB_BUNDLE_SCRATCH, &bl, &st, &fmt);
+    long long ms = mono_ms() - t0;
+    if (rc != 0 || bl == 0 || fmt != WEB_POS_JSON) {
         free(buf);
         note_read(c, what, ms, 503);
         return SPLICE_TOO_LARGE;
@@ -491,6 +522,18 @@ static size_t fill_triage(const web_bundle_ctx_t *c, web_jw_t *w) {
     return splice_or_reason(w, c->triage_status, c->triage, c->triage_len);
 }
 
+/* Where the sensor was. A device's: /api/positions?mac= as the
+ * drawer's scatter reads it (samples and track, sloth.db v9). An
+ * alert's: the page's own "loc" member, the stamp as the incident
+ * opened; no_data when the page has none (null). */
+static size_t fill_location_device(const web_bundle_ctx_t *c, web_jw_t *w) {
+    return splice_or_reason(w, c->pos_status, c->pos, c->pos_len);
+}
+
+static size_t fill_location_alert(const web_bundle_ctx_t *c, web_jw_t *w) {
+    return lift(c, w, "loc");
+}
+
 /* The stream mix the alert sits in: /api/live's "types" map. A summary
  * that did not render, or carries no map, is not an empty mix: an "{}"
  * here would read as "no records". It is too_large (the summary
@@ -528,7 +571,7 @@ const web_bundle_sec_t web_bundle_sections[] = {
     { "device", "frrs",           fill_frrs, NULL, 160 * 1024 },
     { "device", "comint_report",  NULL, "not_built", 32 * 1024 },
     { "device", "triage",         NULL, "not_built",  8 * 1024 },
-    { "device", "location",       NULL, "not_built", 16 * 1024 },
+    { "device", "location",       fill_location_device, NULL, WEB_BUNDLE_SCRATCH },
     { "alert",  "observed_vs_thresholds", fill_observed, NULL, 2 * 1024 },
     { "alert",  "assessment",     fill_assessment, NULL, WEB_BUNDLE_SCRATCH },
     { "alert",  "frrs",           fill_frrs, NULL, 160 * 1024 },
@@ -538,7 +581,7 @@ const web_bundle_sec_t web_bundle_sections[] = {
     { "alert",  "device",         fill_nested_device, NULL, WEB_BUNDLE_SCRATCH },
     { "alert",  "lookup",         fill_nested_lookup, NULL, WEB_BUNDLE_SCRATCH },
     { "alert",  "triage",         fill_triage, NULL, 32 * 1024 },
-    { "alert",  "location",       NULL, "not_built", 16 * 1024 },
+    { "alert",  "location",       fill_location_alert, NULL, 1024 },
     { "lookup", "device",         fill_nested_device, NULL, WEB_BUNDLE_SCRATCH },
     { "ble",    "frrs",           fill_frrs, NULL, 160 * 1024 },
 };
@@ -596,6 +639,7 @@ static const struct { const char *key, *text; } GLOSSARY[] = {
     { "alert.assessment", "the research assessment of the alert type (docs/wiki/alert-assessments/), as the alert page shows it: front matter, sections, bibliography; prose written about the rule, not observations of this alert" },
     { "alert.evidence", "the alert page's proof block: captures (pcap files sloth saved that match the alert, listed with their manifest hash; never their bytes), captures_note, and evidence (the observed counts and the assessment's thresholds)" },
     { "frrs", "the FRRS emitter record as /api/frrs/report answers it: BEI, SCS, EC/S, TACDB and COMINT fields, each with its sloth source, null when not observed; a single passive sensor has no location axis and decrypts nothing" },
+    { "location", "where the SENSOR was, never the device's own position (one antenna, no bearing): device.location is /api/positions?mac= as the drawer reads it, positions[] (the sensor's fix each time it heard the device, with rssi) and track[] (the sensor's own path over that span), newest first, at most 200 of each, more:true when there were more; alert.location is the stamp as the incident opened (lat, lon, alt_m, acc_m an estimate in metres, src gps or fixed, ts the fix's time)" },
     { "alert.triage", "the operator's triage of the alert as /api/frrs/history answers it: the current state (untriaged, false, noise, incident) and every decision, who, when, why; operator judgement, not an observation" },
     { "ble.drawer", "the BLE advertiser as /api/ble/{addr} answers it: every sensor's row of the address and the findings naming it; under the local scope only the out-of-scope note" },
     { "platform.view", "a TACDB platform as /api/frrs/tacdb/view answers it: the operator's filing of a platform and its equipment complement (the emitters it owns); operator-entered, not observed" },
@@ -908,6 +952,7 @@ static void ctx_free(web_bundle_ctx_t *c) {
     free(c->lookup);
     free(c->frrs);
     free(c->triage);
+    free(c->pos);
     free(c->recs);
 }
 
@@ -1094,6 +1139,7 @@ int web_bundle_route(const web_health_t *h, const char *query,
         snprintf(sub, sizeof(sub), "kind=%s&addr=%s", (src & 8) || ap ? "bssid" : "sta", c->mac);
         c->frrs_status = frrs_read(c, "device.frrs", "/api/frrs/report", sub, &c->frrs,
                                    &c->frrs_len);
+        c->pos_status = positions_read(c, "device.location", c->mac, &c->pos, &c->pos_len);
     } else if (kind == K_BLE) {
         /* The record is keyed on the address and its type, as the TACDB
          * view's emitter link names it: the type of the drawer's first
