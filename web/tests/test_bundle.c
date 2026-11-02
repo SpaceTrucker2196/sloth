@@ -90,6 +90,10 @@ static int route(const web_health_t *h, const char *path, const char *query) {
 /* The answer's body, wherever it was sent from. */
 static const char *answer(void) { return g_body ? g_body : body_of(g_out); }
 
+#ifdef WITH_SQLITE
+/* Read helpers for the sloth.db-backed cases below; a WITH_SQLITE=0
+ * build has none, and an unused static is a -Werror failure there. */
+
 /* The value of the first member named key after from: the bytes after
  * "key": (NULL when absent). */
 static const char *member(const char *from, const char *key) {
@@ -109,6 +113,7 @@ static int count_of(const char *s, const char *needle) {
     for (const char *p = s; (p = strstr(p, needle)) != NULL; p += strlen(needle)) n++;
     return n;
 }
+#endif
 
 /* ── the page ──────────────────────────────────────────────────────── */
 
