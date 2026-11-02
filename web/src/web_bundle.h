@@ -3,12 +3,15 @@
  * so an operator can paste a device, an alert or a Lookup result into
  * Claude for analysis.
  *
- *   /api/bundle?kind=device|alert|lookup&id=...
- *       kind=device  id a MAC, folded as /api/device/{mac} folds it
- *       kind=alert   id s<handle> or d<rowid>, as /api/alert takes it
- *       kind=lookup  id a MAC or an IP, as /api/lookup?q= takes it
- *       kind=ble, kind=platform are reserved for the slices that own
- *       them: 400 "kind_not_built" until they register (below).
+ *   /api/bundle?kind=device|alert|lookup|ble|platform&id=...
+ *       kind=device   id a MAC, folded as /api/device/{mac} folds it
+ *       kind=alert    id s<handle> or d<rowid>, as /api/alert takes it
+ *       kind=lookup   id a MAC or an IP, as /api/lookup?q= takes it
+ *       kind=ble      id a BLE address, as /api/ble/{addr} takes it
+ *                     (every sensor's row of it; the out-of-scope note
+ *                     under Local, as the router answers)
+ *       kind=platform id a TACDB platform's, as /api/frrs/tacdb/view
+ *                     takes it
  *
  * The bundle does not re-render anything. Every detail route renders
  * straight into a buffer through web_jw_t and keeps no struct, and its
@@ -16,7 +19,13 @@
  * ids, the lists a capture scope empties) lives in that rendering; so
  * the bundle calls the route functions themselves and splices their
  * bodies in verbatim as members ("device.drawer", "alert.page",
- * "lookup.card", and the nested "alert.device" / "lookup.device"). A
+ * "lookup.card", "ble.drawer", "platform.view", and the nested
+ * "alert.device" / "lookup.device"). Sections whose data a route
+ * already answers are that route's bytes too: the FRRS record and the
+ * alert's triage history are web_frrs_route()'s answers to the GETs the
+ * page's panels make (/api/frrs/report, /api/frrs/report/alert,
+ * /api/frrs/history), and vendor_research, assessment and evidence are
+ * members of the primary answer lifted out whole (jmember()). A
  * bundle can carry nothing the page would not show, by construction:
  * web/tests/test_bundle.c compares the spliced bytes to the routes'
  * and reruns the alert routes' credential and incident-id tests
@@ -37,7 +46,8 @@
  * retain); a fill that returns 0 as "no_data"; one that overflows its
  * cap, or the bundle's, is rolled back to "too_large"; a nested
  * sub-read that failed says why in its own route's words
- * (web_bundle_nested_reason()). The reason words are fixed
+ * (web_bundle_nested_reason(); "no_store" when an FRRS route needs
+ * slothweb.db and it is not open). The reason words are fixed
  * (WEB_BUNDLE_REASONS) so the prompt can tell "slothweb cannot know"
  * from "this build has not got it yet". A slice that lands after this
  * one adds its row and function; one that lands before changes
@@ -52,7 +62,9 @@
  * names them. Every list is a route's own capped list, or the 50
  * records of the ticker ring. Each sloth.db read keeps WEB_SDB_HTTP_MS
  * on its own connection, as the page's parallel requests do; a bundle
- * is at most three serial reads, and "limits.reads" reports each.
+ * is at most four serial reads (an alert's: the page, its device or
+ * address, its FRRS record, its triage), and "limits.reads" reports
+ * each.
  *
  * GET only: a HEAD is a 405, as /api/alert's (nothing to describe
  * without reading sloth.db). The body is owned (web_resp_t.body_owned)
@@ -112,11 +124,13 @@ extern const char *const web_bundle_reasons[];
 extern const size_t      web_bundle_reasons_n;
 
 /* The reason word for a nested sub-read (an alert's or a Lookup card's
- * device drawer, an alert's Lookup card) that did not answer 200:
- * status is the route's, or a negative when it could not render
- * (-1 its body overflowed its cap, -2 memory), body its answer or NULL.
- * 400 / 404 are "no_data", a sloth.db timeout "budget", no sloth.db
- * "no_sloth_db", an overflow "too_large", anything else "read_error". */
+ * device drawer, an alert's Lookup card, an FRRS route's answer) that
+ * did not answer 200: status is the route's, or a negative when it
+ * could not render (-1 its body overflowed its cap, -2 memory), body
+ * its answer or NULL. 400 / 404 are "no_data", a sloth.db timeout
+ * "budget", no sloth.db "no_sloth_db", no slothweb.db "no_store", an
+ * overflow (or the FRRS record_too_large) "too_large", anything else
+ * "read_error". */
 const char *web_bundle_nested_reason(int status, const char *body);
 
 /* The route. query is the request's (scope already taken out by the

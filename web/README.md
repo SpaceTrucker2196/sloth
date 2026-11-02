@@ -495,7 +495,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/alert?id=` | `200` JSON, everything an alert's page shows; `400` for an id that is not `s<handle>` or `d<rowid>`; `404` for one neither source has; `503` with no `--sloth-db` for a `d` id, or sloth.db unreadable |
    | `GET /api/pcap/frames?id=&n=&offset=` | `200` JSON: capture `n` of alert `id` (an index into `/api/alert`'s `captures`; a name or path is never taken), its SHA-256 recomputed against the manifest (`hash.says`: `hash verified`, `HASH MISMATCH` or `no manifest entry`), its file header, and 24 decoded frames from `offset` (0..4095) with each one's hex dump; `400` for a parameter that does not pass; `404` `no_such_alert`, `no_such_capture`, `no_pcap_dir`, `not_found`; `403` `not_regular`, `withheld_evidence_pcap` (an evidence pcap without `--web-serve-evidence-pcap`); `413` `too_large` (over 16 MiB); `415` `pcapng_not_supported` or `not_pcap` with a `message` |
    | `GET /api/pcap?id=&n=` | `200` the same file's bytes, `Content-Type: application/vnd.tcpdump.pcap`, `Content-Disposition: attachment; filename="<its name>"`, `X-Sloth-SHA256: verified`, `mismatch` or `no_manifest_entry` (the check of the bytes served), `Cache-Control: no-store`; the errors as above, as JSON |
-   | `GET /api/bundle?kind=device\|alert\|lookup&id=` | `200` JSON, a detail view's whole answer for its "copy JSON" button ([Copy JSON: the analysis bundle](#copy-json-the-analysis-bundle)); `400` for a kind, an id or a parameter that does not pass (`kind_not_built` for `ble` and `platform`); `404` and `503` as the route it splices; `413` `bundle_too_large` |
+   | `GET /api/bundle?kind=device\|alert\|lookup\|ble\|platform&id=` | `200` JSON, a detail view's whole answer for its "copy JSON" button ([Copy JSON: the analysis bundle](#copy-json-the-analysis-bundle)); `400` for a kind, an id or a parameter that does not pass; `404` and `503` as the route it splices (`not_found` for a BLE address no sensor heard, `no_such_platform`, `no_store`); `413` `bundle_too_large` |
    | `HEAD /api/alerts`, `HEAD /api/alert`, `HEAD /api/pcap`, `HEAD /api/pcap/frames`, `HEAD /api/bundle` | `405`, `Allow: GET`, as `/api/query` |
    | `GET /api/query?sql=` | only with `--web-allow-sql` (otherwise `404`): `200` JSON, the statement's result; `400` with `{"error":"reason"}` for a refused statement; `503` `busy` while another runs, or sloth.db unreadable |
    | `HEAD /api/query` | `405`, `Allow: GET`: nothing to describe without running it |
@@ -2670,11 +2670,13 @@ not run by CI, loopback only).
 ### Copy JSON: the analysis bundle
 
 Owner request 2026-10-27: every detail view (the device drawer, an
-alert's page, the Lookup card) carries a **copy JSON** button and a
-**download .json** button, so the view's data can be pasted into Claude
-(or anything else) for analysis. Both fetch one document,
-`/api/bundle?kind=device|alert|lookup&id=`, the id as the view's own
-route takes it (a MAC; `s<handle>` or `d<rowid>`; a MAC or an IP).
+alert's page, the Lookup card, the BLE drawer, a TACDB platform)
+carries a **copy JSON** button and a **download .json** button, so the
+view's data can be pasted into Claude (or anything else) for analysis.
+Both fetch one document,
+`/api/bundle?kind=device|alert|lookup|ble|platform&id=`, the id as the
+view's own route takes it (a MAC; `s<handle>` or `d<rowid>`; a MAC or
+an IP; a BLE address; a platform's number).
 
 **It re-renders nothing.** Every detail route writes its JSON straight
 into a buffer and keeps no struct, and what it withholds (an unaudited
@@ -2682,11 +2684,23 @@ alert detail, the alert key, sloth's `incident_id`, the lists a capture
 scope empties) lives in that rendering. So `web_bundle.c` calls the
 route functions themselves and splices their bodies in verbatim:
 `device.drawer` is `/api/device/{mac}`, `alert.page` is
-`/api/alert?id=`, `lookup.card` is `/api/lookup?q=`, and `alert.device`
-/ `lookup.device` the drawer of the device they name (an alert naming
-an address and no MAC carries the address's Lookup card as
-`alert.lookup` instead). A bundle can carry nothing the page would not
-show. `test_bundle.c` compares the spliced bytes with the routes' own
+`/api/alert?id=`, `lookup.card` is `/api/lookup?q=`, `ble.drawer` is
+`/api/ble/{addr}` (every sensor's row of the address; under Local the
+router's out-of-scope note, and no row), `platform.view` is
+`/api/frrs/tacdb/view?id=`, and `alert.device` / `lookup.device` the
+drawer of the device they name (an alert naming an address and no MAC
+carries the address's Lookup card as `alert.lookup` instead). The
+sections later slices brought data for are routes' bytes too: `frrs` is
+`web_frrs_route()`'s answer to the GET the page's FRRS panel makes
+(`/api/frrs/report?kind=sta|bssid&addr=` for a device, the kind the
+drawer's panel picks; `?kind=ble&addr=<addr>/<type>` for a BLE address,
+its first row's type; `/api/frrs/report/alert?id=` for an alert),
+`alert.triage` is `/api/frrs/history?id=` (the state and every
+decision), and `device.vendor_research`, `alert.assessment` and
+`alert.evidence` (`captures`, `captures_note`, `evidence`: the capture
+files listed with their manifest hashes, never a pcap's bytes) are
+members of the primary answer lifted out whole. A bundle can carry
+nothing the page would not show. `test_bundle.c` compares the spliced bytes with the routes' own
 answers and reruns the alert routes' credential and incident-id checks
 against every kind.
 
@@ -2720,17 +2734,21 @@ Around the splices:
   in its detail text is therefore not listed),
   `observed_vs_thresholds`, `records_by_type_global` (the stream's
   per-type mix; a summary that did not render is `too_large`, never an
-  empty `{}` that would read as "no records"), and for the
-  slices still in flight `vendor_research`, `frrs`, `comint_report`,
-  `triage`, `assessment`, `evidence`, `location`, `signal_history`,
-  `distance`. A section without data is
+  empty `{}` that would read as "no records"), `vendor_research`,
+  `frrs`, `triage` (an alert's), `assessment`, `evidence`, and for what
+  no build has yet `comint_report`, a device's `triage` (triage is per
+  finding), `location`, `signal_history`, `distance`. A section without
+  data is
   `{"available": false, "reason": ...}`, the reason one of `not_built`
   (this build has no such feature), `no_data`, `too_large`,
   `withheld`, `budget` (a sloth.db read timed out), `no_sloth_db`,
   `not_kept` (the stream carries it, slothweb does not keep it),
-  `read_error` (a read failed). A nested drawer or card that did not
-  answer says which in its route's own words: a 400 or 404 is
-  `no_data`, a body over the route's cap `too_large`. A slice adds its row and a fill
+  `read_error` (a read failed), `no_store` (an FRRS route needs
+  slothweb.db and it is not open). A nested drawer, card or FRRS answer
+  that did not answer says which in its route's own words: a 400 or 404
+  is `no_data`, a body over the route's cap (or the record's own
+  `record_too_large`) `too_large`. A BLE address's FRRS record under
+  Local is `withheld` with the drawer it belongs to. A slice adds its row and a fill
   function; the page needs no change.
 - **analysis aids**: `glossary` (every field and unit), `prompt` (a
   suggested prompt that tells the reader the sensor is passive and one
@@ -2754,13 +2772,18 @@ cross it; a required part that cannot fit is `413 bundle_too_large`.
 The room held back for the required part counts every optional row's
 name and its longest marker, so a cap the required part fits never
 overflows on the markers.
-Each sloth.db read keeps its own 250 ms budget, at most three serial
-reads a bundle. A `scope=` rides along as on every route.
+Each sloth.db read keeps its own 250 ms budget, at most four serial
+reads a bundle (an alert's: the page, its device or address, its FRRS
+record, its triage). A `scope=` rides along as on every route.
 
 The page: `web/ui/bundle.js` (`window.SlothBundle`, included before
 `app.js` into the one hashed script) with one `SlothBundle.mount()`
 call per view; the copy buttons are `#bundle-btn-drawer`,
-`#bundle-btn-alert` and `#bundle-btn-lookup`. It copies with
+`#bundle-btn-alert` and `#bundle-btn-lookup`. The BLE drawer and the
+TACDB platform view mount it through their own hooks, the spans
+`#bundle-btn-ble` (app.js, with the scope) and `#bundle-btn-tacdb`
+(`SlothFrrs.mountBundle()`); a span that carries the slot's id already
+gives its button none, so no id is on the page twice. It copies with
 `navigator.clipboard` where the page is a secure context (localhost,
 https) and otherwise, on plain http over a tunnel or Tailscale where
 `navigator.clipboard` does not exist, through a selected hidden

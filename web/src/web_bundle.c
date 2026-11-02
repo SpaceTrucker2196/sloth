@@ -7,7 +7,10 @@
 
 #include "web_alerts.h"
 #include "web_assets.h"
+#include "web_ble.h"
 #include "web_devices.h"
+#include "web_frrs.h"
+#include "web_http.h"
 #include "web_metrics.h"
 #include "web_series.h"
 #include "web_slothdb.h"
@@ -21,10 +24,10 @@
 size_t web_bundle_max = WEB_BUNDLE_MAX;
 size_t web_bundle_scratch = WEB_BUNDLE_SCRATCH;
 
-enum { K_DEVICE, K_ALERT, K_LOOKUP };
-static const char *const KIND_WORD[] = { "device", "alert", "lookup" };
+enum { K_DEVICE, K_ALERT, K_LOOKUP, K_BLE, K_PLATFORM, K_COUNT };
+static const char *const KIND_WORD[K_COUNT] = { "device", "alert", "lookup", "ble", "platform" };
 
-#define BUNDLE_READS 4
+#define BUNDLE_READS 6
 
 struct web_bundle_ctx {
     const web_health_t *h;
@@ -42,6 +45,13 @@ struct web_bundle_ctx {
     int        nested_status;                  /* 0 not read */
     char      *lookup;   size_t lookup_len;    /* /api/lookup of ip, alert with no MAC */
     int        lookup_status;
+    /* The FRRS routes' answers (web_frrs.h): the record of the device,
+     * the alert or the BLE address, and the alert's triage history. */
+    char      *frrs;     size_t frrs_len;      /* 0 status: not read */
+    int        frrs_status;
+    int        frrs_withheld;                  /* not read: the scope holds it not */
+    char      *triage;   size_t triage_len;
+    int        triage_status;
     struct { const char *what; long long ms; int status; } reads[BUNDLE_READS];
     int        nreads;
     /* The ticker ring, newest last as the ring gives it. */
@@ -96,6 +106,52 @@ static int jint_after(const char *body, const char *needle, long long *v) {
     return 1;
 }
 
+/* The end of the JSON value at p (one of our own writers' answers, so
+ * well formed): past its closing quote, brace or bracket, or past the
+ * scalar. Strings are skipped whole, escapes and all. */
+static const char *jvalue_end(const char *p) {
+    int depth = 0;
+    for (; *p; p++) {
+        if (*p == '"') {
+            for (p++; *p && *p != '"'; p++)
+                if (*p == '\\' && p[1]) p++;
+            if (!*p) return p;
+            if (depth == 0) return p + 1;
+            continue;
+        }
+        if (*p == '{' || *p == '[') depth++;
+        else if (*p == '}' || *p == ']') {
+            if (depth == 0) return p;            /* a scalar's end */
+            if (--depth == 0) return p + 1;
+        } else if (*p == ',' && depth == 0) {
+            return p;
+        }
+    }
+    return p;
+}
+
+/* The value of the member name of the object at obj, at its top level
+ * only (a member of the same name nested deeper is not it): its first
+ * byte and *n its length, or NULL when the object has no such member. */
+static const char *jmember(const char *obj, const char *name, size_t *n) {
+    if (!obj || *obj != '{') return NULL;
+    size_t nl = strlen(name);
+    const char *p = obj + 1;
+    while (*p == '"') {
+        const char *k = p + 1, *ke = k;
+        while (*ke && *ke != '"') ke += *ke == '\\' && ke[1] ? 2 : 1;
+        if (*ke != '"' || ke[1] != ':') return NULL;
+        const char *v = ke + 2, *e = jvalue_end(v);
+        if ((size_t)(ke - k) == nl && !memcmp(k, name, nl)) {
+            *n = (size_t)(e - v);
+            return v;
+        }
+        if (*e != ',') return NULL;
+        p = e + 1;
+    }
+    return NULL;
+}
+
 /* ── the splices ───────────────────────────────────────────────────── */
 
 static long long mono_ms(void) {
@@ -112,7 +168,7 @@ static void note_read(web_bundle_ctx_t *c, const char *what, long long ms, int s
     c->nreads++;
 }
 
-enum { R_DEVICE, R_ALERT, R_LOOKUP };
+enum { R_DEVICE, R_ALERT, R_LOOKUP, R_BLE };
 enum { SPLICE_TOO_LARGE = -1, SPLICE_NO_MEMORY = -2 };
 
 /* One route, rendered into a fresh scratch of the routes' own cap, its
@@ -127,14 +183,60 @@ static int splice_read(web_bundle_ctx_t *c, const char *what, int which,
     size_t bl = 0;
     int st = 0, rc;
     long long t0 = mono_ms();
-    if (which == R_DEVICE)
+    if (which == R_DEVICE) {
         rc = web_device_route(c->m, arg, "", c->h->wall_s, buf, WEB_BUNDLE_SCRATCH, &bl, &st);
+    } else if (which == R_BLE) {
+        /* As /api/ble/{addr} answers it, every sensor's row of the
+         * address: under Local the parameters checked and the answer
+         * the out-of-scope note, as the router's (web_ble.h). */
+        int local = c->h->sc && c->h->sc->scope == WEB_SCOPE_LOCAL;
+        rc = web_ble_device_route(c->h->ble, arg, "", c->h->wall_s, local, buf,
+                                  WEB_BUNDLE_SCRATCH, &bl, &st);
+        if (rc == 0 && local && st == 200)
+            bl = web_ble_out_of_scope_json(buf, WEB_BUNDLE_SCRATCH);
+    }
     else if (which == R_ALERT)
         rc = web_alert_route(c->m, c->h->live, arg, c->h->wall_s, buf, WEB_BUNDLE_SCRATCH,
                              &bl, &st);
     else
         rc = web_lookup_route(c->m, arg, c->h->wall_s, buf, WEB_BUNDLE_SCRATCH, &bl, &st);
     long long ms = mono_ms() - t0;
+    if (rc != 0 || bl == 0) {
+        free(buf);
+        note_read(c, what, ms, 503);
+        return SPLICE_TOO_LARGE;
+    }
+    if (buf[bl - 1] == '\n') bl--;
+    buf[bl] = '\0';
+    note_read(c, what, ms, st);
+    *out = buf;
+    *outlen = bl;
+    return st;
+}
+
+/* A GET of one of the FRRS routes (web_frrs.h), as the page makes it:
+ * path and query as the page's request carries them. The same contract
+ * as splice_read(). */
+static int frrs_read(web_bundle_ctx_t *c, const char *what, const char *path,
+                     const char *query, char **out, size_t *outlen) {
+    char *buf = malloc(WEB_BUNDLE_SCRATCH);
+    web_req_t *rq = calloc(1, sizeof(*rq));
+    if (!buf || !rq) {
+        free(buf); free(rq);
+        return SPLICE_NO_MEMORY;
+    }
+    snprintf(rq->path, sizeof(rq->path), "%s", path);
+    snprintf(rq->query, sizeof(rq->query), "%s", query);
+    rq->content_length = -1;
+    size_t bl = 0, biglen = 0;
+    int st = 0;
+    char extra[160], *big = NULL;
+    long long t0 = mono_ms();
+    int rc = web_frrs_route(c->m, c->h->live, rq, c->h->wall_s, c->h->now_ms, buf,
+                            WEB_BUNDLE_SCRATCH, &bl, &st, extra, sizeof(extra), &big, &biglen);
+    long long ms = mono_ms() - t0;
+    free(rq);
+    free(big);                       /* only the export answers in one */
     if (rc != 0 || bl == 0) {
         free(buf);
         note_read(c, what, ms, 503);
@@ -287,6 +389,8 @@ const char *web_bundle_nested_reason(int status, const char *body) {
     if (status == 503 && body && jstr_after(body, "\"error\":", word, sizeof(word))) {
         if (!strcmp(word, "no_sloth_db")) return "no_sloth_db";
         if (!strcmp(word, "sloth_db_timeout")) return "budget";
+        if (!strcmp(word, "no_store")) return "no_store";
+        if (!strcmp(word, "record_too_large")) return "too_large";
     }
     return "read_error";
 }
@@ -311,6 +415,80 @@ static size_t fill_nested_lookup(const web_bundle_ctx_t *c, web_jw_t *w) {
     if (c->lookup_status == 0) return 0;
     unavailable(w, web_bundle_nested_reason(c->lookup_status, c->lookup));
     return 1;
+}
+
+/* A member of the primary answer, its bytes as the route wrote them: a
+ * section the page's own answer already holds, lifted out whole so the
+ * analysis has it under the registry's name. 0 (no_data) when the
+ * answer has no such member or it is null. */
+static size_t lift(const web_bundle_ctx_t *c, web_jw_t *w, const char *name) {
+    size_t n = 0;
+    const char *v = jmember(c->primary, name, &n);
+    if (!v || n == 0 || (n == 4 && !memcmp(v, "null", 4))) return 0;
+    web_jw_rawn(w, v, n);
+    return n;
+}
+
+/* The drawer's own vendor research (/api/device's "vendor_research",
+ * web_vendorkb.h): the cited entry for the MAC's OUI holder, or
+ * {"found":false} as the drawer says it. */
+static size_t fill_vendor_research(const web_bundle_ctx_t *c, web_jw_t *w) {
+    return lift(c, w, "vendor_research");
+}
+
+/* The alert page's research assessment (/api/alert's "assessment",
+ * web_alertasm.h): front matter, sections and bibliography. */
+static size_t fill_assessment(const web_bundle_ctx_t *c, web_jw_t *w) {
+    return lift(c, w, "assessment");
+}
+
+/* The alert page's proof block as /api/alert answers it
+ * (web_evidence.h): the captures listed (file, manifest hash, never a
+ * byte of a pcap), the note on the capture directory, and the evidence
+ * (the observed values and the assessment's thresholds). */
+static size_t fill_evidence(const web_bundle_ctx_t *c, web_jw_t *w) {
+    static const char *const M[] = { "captures", "captures_note", "evidence" };
+    size_t start = w->len;
+    int got = 0;
+    web_jw_raw(w, "{");
+    for (size_t i = 0; i < sizeof(M) / sizeof(M[0]); i++) {
+        size_t n = 0;
+        const char *v = jmember(c->primary, M[i], &n);
+        if (!v) continue;
+        if (got++) web_jw_raw(w, ",");
+        web_jw_key(w, M[i]);
+        web_jw_rawn(w, v, n);
+    }
+    web_jw_raw(w, "}");
+    return got && !w->overflow ? w->len - start : 0;
+}
+
+/* A sub-read's answer, or its reason; 0 (no_data) when not read. */
+static size_t splice_or_reason(web_jw_t *w, int status, const char *body, size_t len) {
+    if (status == 200 && body) {
+        web_jw_rawn(w, body, len);
+        return len;
+    }
+    if (status == 0) return 0;
+    unavailable(w, web_bundle_nested_reason(status, body));
+    return 1;
+}
+
+/* The FRRS record as its route answers it: /api/frrs/report for a
+ * device (sta, or bssid as the drawer's FRRS panel picks it) or a BLE
+ * address (under Local withheld with the drawer it belongs to),
+ * /api/frrs/report/alert for an alert. */
+static size_t fill_frrs(const web_bundle_ctx_t *c, web_jw_t *w) {
+    if (c->frrs_withheld) {
+        unavailable(w, "withheld");
+        return 1;
+    }
+    return splice_or_reason(w, c->frrs_status, c->frrs, c->frrs_len);
+}
+
+/* The alert's triage, state and history, as /api/frrs/history answers. */
+static size_t fill_triage(const web_bundle_ctx_t *c, web_jw_t *w) {
+    return splice_or_reason(w, c->triage_status, c->triage, c->triage_len);
 }
 
 /* The stream mix the alert sits in: /api/live's "types" map. A summary
@@ -346,28 +524,29 @@ const web_bundle_sec_t web_bundle_sections[] = {
     { "device", "signal_history", NULL, "not_built", 32 * 1024 },
     { "device", "distance",       NULL, "not_kept",   1024 },
     { "device", "records_recent", fill_records, NULL, 16 * 1024 },
-    { "device", "vendor_research", NULL, "not_built", 16 * 1024 },
-    { "device", "frrs",           NULL, "not_built", 160 * 1024 },
+    { "device", "vendor_research", fill_vendor_research, NULL, 16 * 1024 },
+    { "device", "frrs",           fill_frrs, NULL, 160 * 1024 },
     { "device", "comint_report",  NULL, "not_built", 32 * 1024 },
     { "device", "triage",         NULL, "not_built",  8 * 1024 },
     { "device", "location",       NULL, "not_built", 16 * 1024 },
     { "alert",  "observed_vs_thresholds", fill_observed, NULL, 2 * 1024 },
-    { "alert",  "assessment",     NULL, "not_built", 48 * 1024 },
-    { "alert",  "frrs",           NULL, "not_built", 160 * 1024 },
-    { "alert",  "evidence",       NULL, "not_built", 16 * 1024 },
+    { "alert",  "assessment",     fill_assessment, NULL, WEB_BUNDLE_SCRATCH },
+    { "alert",  "frrs",           fill_frrs, NULL, 160 * 1024 },
+    { "alert",  "evidence",       fill_evidence, NULL, 24 * 1024 },
     { "alert",  "records_around", fill_records, NULL, 16 * 1024 },
     { "alert",  "records_by_type_global", fill_types, NULL, 4 * 1024 },
     { "alert",  "device",         fill_nested_device, NULL, WEB_BUNDLE_SCRATCH },
     { "alert",  "lookup",         fill_nested_lookup, NULL, WEB_BUNDLE_SCRATCH },
-    { "alert",  "triage",         NULL, "not_built",  8 * 1024 },
+    { "alert",  "triage",         fill_triage, NULL, 32 * 1024 },
     { "alert",  "location",       NULL, "not_built", 16 * 1024 },
     { "lookup", "device",         fill_nested_device, NULL, WEB_BUNDLE_SCRATCH },
+    { "ble",    "frrs",           fill_frrs, NULL, 160 * 1024 },
 };
 const size_t web_bundle_sections_n = sizeof(web_bundle_sections) / sizeof(web_bundle_sections[0]);
 
 const char *const web_bundle_reasons[] = {
     "not_built", "no_data", "too_large", "withheld", "budget", "no_sloth_db", "not_kept",
-    "read_error",
+    "read_error", "no_store",
 };
 const size_t web_bundle_reasons_n = sizeof(web_bundle_reasons) / sizeof(web_bundle_reasons[0]);
 
@@ -412,7 +591,14 @@ static const struct { const char *key, *text; } GLOSSARY[] = {
     { "detail_shown", "false: the alert type's detail text can carry a credential or free text and is withheld everywhere" },
     { "oui", "IEEE registry lookup of the MAC's first 24/28/36 bits: registry MA-L/MA-M/MA-S, private = a private registration, local/multicast = the address bits" },
     { "records_recent / records_around", "the last records the live stream carried that mention this device or address, from a ring of the newest 50 of every type; a stopgap, not a per-device history; sc is the record's capture-scope tag (1 monitor, 2 local, 3 both)" },
-    { "available:false", "the section's data is not in this bundle; reason: not_built (that feature is not in this build), no_data (built, nothing for this id), too_large (over its cap), withheld (policy), budget (the read ran out of time), no_sloth_db (needs --sloth-db), not_kept (the stream carries it but slothweb does not retain it), read_error (the read failed: sloth.db could not answer)" },
+    { "available:false", "the section's data is not in this bundle; reason: not_built (that feature is not in this build), no_data (built, nothing for this id), too_large (over its cap), withheld (policy), budget (the read ran out of time), no_sloth_db (needs --sloth-db), not_kept (the stream carries it but slothweb does not retain it), read_error (the read failed: sloth.db could not answer), no_store (needs slothweb's own store, slothweb.db, open)" },
+    { "vendor_research", "the cited research entry for the MAC's OUI holder, as the drawer shows it (web/data/vendors/); found:false when this build has none; every field carries its confidence word and numbered sources" },
+    { "alert.assessment", "the research assessment of the alert type (docs/wiki/alert-assessments/), as the alert page shows it: front matter, sections, bibliography; prose written about the rule, not observations of this alert" },
+    { "alert.evidence", "the alert page's proof block: captures (pcap files sloth saved that match the alert, listed with their manifest hash; never their bytes), captures_note, and evidence (the observed counts and the assessment's thresholds)" },
+    { "frrs", "the FRRS emitter record as /api/frrs/report answers it: BEI, SCS, EC/S, TACDB and COMINT fields, each with its sloth source, null when not observed; a single passive sensor has no location axis and decrypts nothing" },
+    { "alert.triage", "the operator's triage of the alert as /api/frrs/history answers it: the current state (untriaged, false, noise, incident) and every decision, who, when, why; operator judgement, not an observation" },
+    { "ble.drawer", "the BLE advertiser as /api/ble/{addr} answers it: every sensor's row of the address and the findings naming it; under the local scope only the out-of-scope note" },
+    { "platform.view", "a TACDB platform as /api/frrs/tacdb/view answers it: the operator's filing of a platform and its equipment complement (the emitters it owns); operator-entered, not observed" },
     { "limits", "every cap applied to this bundle and whether it cut anything" },
 };
 
@@ -435,7 +621,8 @@ static const char PROMPT[] =
     "not how many frames or requests were seen. Alert ids are opaque handles. SSIDs are in a display form with \\xNN "
     "escapes for non-printable octets; a flagged non-printable SSID may be a "
     "look-alike.\n\n"
-    "Give: (1) a one-paragraph assessment of what this device/alert most likely is and "
+    "Give: (1) a one-paragraph assessment of what this device/alert/advertiser/platform "
+    "most likely is and "
     "whether it warrants action; (2) your confidence (low/medium/high) and the single "
     "observation that most drives it; (3) the two or three specific next checks an "
     "operator can do passively or on the device itself (what to look for in presence, "
@@ -591,6 +778,10 @@ static void write_envelope(const web_bundle_ctx_t *c, web_jw_t *w) {
                       "lookup.card.macs\",\"why\":\"excluded by the capture scope in "
                       "effect (monitor): addresses are the host's own interfaces' "
                       "(local)\"}");
+    if (sc.scope == WEB_SCOPE_LOCAL && c->kind == K_BLE)
+        web_jw_raw(w, ",{\"field\":\"ble.drawer.rows, ble.drawer.alerts\",\"why\":"
+                      "\"excluded by the capture scope in effect (local): BLE advertisers are "
+                      "the passive Bluetooth receivers'\"}");
     if (sc.scope == WEB_SCOPE_LOCAL)
         web_jw_raw(w, ",{\"field\":\"device.drawer.ssids, device.drawer.assocs\",\"why\":"
                       "\"excluded by the capture scope in effect (local): the PNL and "
@@ -665,14 +856,14 @@ static void write_limits(const web_bundle_ctx_t *c, web_jw_t *w, size_t bytes_so
         limit_row(w, &k, "alert.page.sev_history", WEB_LIVE_SEVH, -1, "total", v,
                   jint_after(c->primary, ",\"sev_changes\":", &v));
         if (c->nested_status == 200) drawer_limits(w, &k, "alert.device", c->nested);
-    } else {
+    } else if (c->kind == K_LOOKUP) {
         limit_row(w, &k, "lookup.card.names", 12, -1, NULL, 0, 0);
         limit_row(w, &k, "lookup.card.ips / macs", 8,
                   jbool_after(c->primary, ",\"ips_more\":") > 0 ||
                   jbool_after(c->primary, ",\"macs_more\":") > 0, NULL, 0, 0);
         if (c->nested_status == 200) drawer_limits(w, &k, "lookup.device", c->nested);
     }
-    if (c->kind != K_LOOKUP)
+    if (c->kind == K_DEVICE || c->kind == K_ALERT)
         limit_row(w, &k, c->kind == K_DEVICE ? "device.records_recent" : "alert.records_around",
                   WEB_BUNDLE_RECORDS, c->latest > (unsigned long long)WEB_BUNDLE_RECORDS,
                   "ring_records", c->nrecs, 1);
@@ -705,8 +896,9 @@ static int error_body(const web_health_t *h, const char *reason, int status,
 }
 
 /* A sub-answer's error word, for the bundle's own status. */
-static const char *error_word(const char *body, char *out, size_t cap) {
-    if (!jstr_after(body, "\"error\":", out, cap)) snprintf(out, cap, "sloth_db_error");
+static const char *error_word(int status, const char *body, char *out, size_t cap) {
+    if (!jstr_after(body, "\"error\":", out, cap))
+        snprintf(out, cap, "%s", status == 404 ? "not_found" : "sloth_db_error");
     return out;
 }
 
@@ -714,6 +906,8 @@ static void ctx_free(web_bundle_ctx_t *c) {
     free(c->primary);
     free(c->nested);
     free(c->lookup);
+    free(c->frrs);
+    free(c->triage);
     free(c->recs);
 }
 
@@ -755,14 +949,9 @@ int web_bundle_route(const web_health_t *h, const char *query,
         return error_body(h, why, 400, body, len, status);
     if (!ps[0].seen) return error_body(h, "missing_kind", 400, body, len, status);
     int kind = -1;
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < K_COUNT; i++)
         if (!strcmp(ps[0].val, KIND_WORD[i])) kind = i;
-    if (kind < 0) {
-        /* Reserved for the slices that own them. */
-        if (!strcmp(ps[0].val, "ble") || !strcmp(ps[0].val, "platform"))
-            return error_body(h, "kind_not_built", 400, body, len, status);
-        return error_body(h, "bad_kind", 400, body, len, status);
-    }
+    if (kind < 0) return error_body(h, "bad_kind", 400, body, len, status);
     if (!ps[1].seen) return error_body(h, "missing_id", 400, body, len, status);
 
     web_bundle_ctx_t *c = calloc(1, sizeof(*c));
@@ -805,6 +994,26 @@ int web_bundle_route(const web_health_t *h, const char *query,
         else           snprintf(c->id, sizeof(c->id), "s%s", sid);
         snprintf(sub, sizeof(sub), "id=%s", c->id);
         st = splice_read(c, "alert", R_ALERT, sub, &c->primary, &c->primary_len);
+    } else if (kind == K_BLE) {
+        if (web_dev_canon_mac(ps[1].val, key) != 0) {
+            free(c);
+            return error_body(h, "bad_mac", 400, body, len, status);
+        }
+        snprintf(c->id, sizeof(c->id), "%s", key);
+        snprintf(c->mac, sizeof(c->mac), "%s", key);
+        st = splice_read(c, "ble", R_BLE, key, &c->primary, &c->primary_len);
+    } else if (kind == K_PLATFORM) {
+        /* A TACDB platform's id, decimal, as /api/frrs/tacdb/view takes
+         * it; that route's own bound refuses the rest. */
+        int ok = ps[1].val[0] != '\0' && ps[1].val[0] != '0' && strlen(ps[1].val) <= 13;
+        for (const char *p = ps[1].val; *p && ok; p++) ok = *p >= '0' && *p <= '9';
+        if (!ok) {
+            free(c);
+            return error_body(h, "bad_id", 400, body, len, status);
+        }
+        snprintf(c->id, sizeof(c->id), "%s", ps[1].val);
+        snprintf(sub, sizeof(sub), "id=%s", c->id);
+        st = frrs_read(c, "platform", "/api/frrs/tacdb/view", sub, &c->primary, &c->primary_len);
     } else {
         int is_mac = web_dev_canon_mac(ps[1].val, key) == 0;
         if (!is_mac && web_key_ip(ps[1].val, key) != 0) {
@@ -826,7 +1035,7 @@ int web_bundle_route(const web_health_t *h, const char *query,
     }
     if (st != 200) {
         char word[48];
-        error_word(c->primary, word, sizeof(word));
+        error_word(st, c->primary, word, sizeof(word));
         ctx_free(c);
         free(c);
         return error_body(h, word, st, body, len, status);
@@ -853,7 +1062,7 @@ int web_bundle_route(const web_health_t *h, const char *query,
             c->lookup_status = splice_read(c, "alert.lookup", R_LOOKUP, sub, &c->lookup,
                                            &c->lookup_len);
         }
-    } else {
+    } else if (kind == K_LOOKUP) {
         const char *dev = jafter(c->primary, ",\"device\":{\"mac\":");
         char mac[WEB_KEY_MAX + 1];
         if (dev && jstr(dev, mac, sizeof(mac))) {
@@ -865,6 +1074,48 @@ int web_bundle_route(const web_health_t *h, const char *query,
                 if (rec && !c->ip[0]) jstr_after(rec, ",\"ip\":", c->ip, sizeof(c->ip));
             }
         }
+    }
+
+    /* The FRRS routes' answers, as the page's panels fetch them
+     * (web/ui/frrs.js): the device's record of the kind its drawer
+     * picks (bssid when sloth heard it beacon or calls it an AP, else
+     * sta), the BLE address's, the alert's, and the alert's triage. */
+    if (kind == K_DEVICE) {
+        size_t rn = 0;
+        const char *rec = jmember(c->primary, "record", &rn);
+        long long src = 0;
+        int ap = 0;
+        if (rec && *rec == '{') {
+            const char *v = jmember(rec, "sources", &rn);
+            if (v) src = strtoll(v, NULL, 10);
+            v = jmember(rec, "is_ap", &rn);
+            ap = v && !strncmp(v, "true", 4);
+        }
+        snprintf(sub, sizeof(sub), "kind=%s&addr=%s", (src & 8) || ap ? "bssid" : "sta", c->mac);
+        c->frrs_status = frrs_read(c, "device.frrs", "/api/frrs/report", sub, &c->frrs,
+                                   &c->frrs_len);
+    } else if (kind == K_BLE) {
+        /* The record is keyed on the address and its type, as the TACDB
+         * view's emitter link names it: the type of the drawer's first
+         * row (the route lists every sensor's row of the address). Under
+         * Local the drawer is the out-of-scope note, and the record of
+         * an advertiser goes with it. */
+        size_t rn = 0;
+        const char *rows = jmember(c->primary, "rows", &rn);
+        const char *ty = rows && rows[0] == '[' ? jmember(rows + 1, "addr_type", &rn) : NULL;
+        if (c->h->sc && c->h->sc->scope == WEB_SCOPE_LOCAL) {
+            c->frrs_withheld = 1;
+        } else if (ty) {
+            snprintf(sub, sizeof(sub), "kind=ble&addr=%s/%lld", c->mac, strtoll(ty, NULL, 10));
+            c->frrs_status = frrs_read(c, "ble.frrs", "/api/frrs/report", sub, &c->frrs,
+                                       &c->frrs_len);
+        }
+    } else if (kind == K_ALERT) {
+        snprintf(sub, sizeof(sub), "id=%s", c->id);
+        c->frrs_status = frrs_read(c, "alert.frrs", "/api/frrs/report/alert", sub, &c->frrs,
+                                   &c->frrs_len);
+        c->triage_status = frrs_read(c, "alert.triage", "/api/frrs/history", sub, &c->triage,
+                                     &c->triage_len);
     }
 
     /* The ticker ring, once. */
@@ -907,7 +1158,7 @@ int web_bundle_route(const web_health_t *h, const char *query,
     web_jw_raw(&w, ",");
     web_jw_key(&w, KIND_WORD[kind]);
     web_jw_raw(&w, "{");
-    static const char *const PRIMARY[] = { "drawer", "page", "card" };
+    static const char *const PRIMARY[K_COUNT] = { "drawer", "page", "card", "drawer", "view" };
     web_jw_key(&w, PRIMARY[kind]);
     web_jw_rawn(&w, c->primary, c->primary_len);
     int required_fit = !w.overflow && !tw.overflow && w.len + reserve <= web_bundle_max;

@@ -5954,3 +5954,14 @@ report events.
   snaplen cut the record, otherwise `N of M bytes captured`. A listed
   name that is a symlink or FIFO is marked `unreadable: not a regular
   file`.
+- 2026-11-02 — [[slothweb]]: copy JSON rebased onto main's triage,
+  FRRS, BLE, vendor research and alert-proof slices. `kind=ble` splices
+  `/api/ble/{addr}` (the router's out-of-scope note under Local) and is
+  mounted through the BLE drawer's `#bundle-btn-ble` hook with the
+  scope; `kind=platform` splices `/api/frrs/tacdb/view` through
+  `SlothFrrs.mountBundle()`. The optional sections main now has data
+  for are the owning routes' answers: `frrs` (`/api/frrs/report`,
+  `/api/frrs/report/alert`), an alert's `triage` (`/api/frrs/history`),
+  and `vendor_research`, `assessment` and `evidence` lifted whole out
+  of the drawer's and the alert page's own answers; a new reason word,
+  `no_store`, for an FRRS route without slothweb.db.

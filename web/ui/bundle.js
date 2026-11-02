@@ -5,14 +5,16 @@
 //   SlothBundle.mount(container, kind, id, scoped, before)
 // container is the element the control lives in (re-mounting with a new
 // id updates the control in place), kind the bundle's kind word (device,
-// alert, lookup; ble and platform once their slices land), id the view's
+// alert, lookup, ble, platform), id the view's
 // folded id, scoped app.js's path-with-scope function (optional: app.js
 // keeps the scope private), before a child of container to mount the
 // control ahead of (optional: the drawer's close button, so close stays
 // at the right and comes after copy in the tab order; else appended).
 // The copy button's id is "bundle-btn-" and
-// the view's slot (drawer for a device, alert, lookup), the names
-// agreed with the slices that share these views.
+// the view's slot (drawer for a device, alert, lookup, ble, tacdb for a
+// platform), the names agreed with the slices that share these views;
+// where the container already carries that id (the BLE drawer's and the
+// TACDB view's hook spans) the button takes none, so ids stay unique.
 // Every node is built with createElement and textContent: the bundle is
 // data, never markup. No setting is kept: there is nothing to keep.
 // The clipboard wants the write inside the click: Firefox's execCommand
@@ -29,7 +31,10 @@ window.SlothBundle = (function () {
     "bad_mac": "not a MAC",
     "bad_lookup": "not a MAC or an IP",
     "bad_kind": "unknown bundle kind",
-    "kind_not_built": "this build has no bundle for that kind yet",
+    "not_found": "nothing is known for that id",
+    "no_ble": "no BLE tables in this slothweb",
+    "no_store": "slothweb.db is not open",
+    "no_such_platform": "no such platform: it may have been deleted",
     "no_such_alert": "no such alert: it may have closed and left the stream",
     "no_sloth_db": "no sloth.db: start slothweb with --sloth-db PATH",
     "sloth_db_timeout": "sloth.db was too slow to answer; try again",
@@ -189,7 +194,7 @@ window.SlothBundle = (function () {
       typeof navigator.clipboard.write === "function";
   }
 
-  var SLOT = { device: "drawer", alert: "alert", lookup: "lookup" };
+  var SLOT = { device: "drawer", alert: "alert", lookup: "lookup", ble: "ble", platform: "tacdb" };
 
   function mount(host, kind, id, scoped, before) {
     if (!host || typeof kind !== "string" || typeof id !== "string" || id === "") return;
@@ -211,7 +216,8 @@ window.SlothBundle = (function () {
     box = el("span", "bundle");
     var copy = el("button", "", "copy JSON");
     copy.type = "button";
-    copy.id = "bundle-btn-" + (Object.prototype.hasOwnProperty.call(SLOT, kind) ? SLOT[kind] : kind);
+    var cid = "bundle-btn-" + (Object.prototype.hasOwnProperty.call(SLOT, kind) ? SLOT[kind] : kind);
+    if (host.id !== cid) copy.id = cid;
     copy.title = "copy this view's data as JSON, for analysis (e.g. paste it to Claude)";
     var dl = el("button", "", "download .json");
     dl.type = "button";

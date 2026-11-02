@@ -1501,6 +1501,17 @@ int web_ble_device_route(web_ble_t *b, const char *path_addr, const char *query,
     return 0;
 }
 
+size_t web_ble_out_of_scope_json(char *body, size_t cap) {
+    web_jw_t w;
+    web_jw_init(&w, body, cap);
+    web_jw_raw(&w, "{\"out_of_scope\":true,\"reason\":");
+    web_jw_str(&w, "BLE advertisers are the passive Bluetooth receivers' "
+                   "(--bt-monitor, --bt-capture); the host's own interfaces "
+                   "carried none");
+    web_jw_raw(&w, "}\n");
+    return w.overflow ? 0 : w.len;
+}
+
 /* ── /api/live and /api/health ──────────────────────────────────────── */
 
 void web_ble_live_json(web_ble_t *b, web_jw_t *w, long long now_s) {

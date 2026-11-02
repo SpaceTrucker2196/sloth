@@ -35,8 +35,11 @@
 
 #include "sloth.h"
 #include "web_assets.h"
+#include "web_ble.h"
 #include "web_bundle.h"
+#include "web_frrs.h"
 #include "web_ingest.h"
+#include "web_jsonl.h"
 #include "web_live.h"
 #include "web_routes.h"
 #include "wtest.h"
@@ -108,6 +111,8 @@ static const char *alert_page(const char *b) {
     return member(b ? strstr(b, "\"alert\":{\"page\":") : NULL, "page");
 }
 
+static size_t vlen(const char *v);
+
 static int count_of(const char *s, const char *needle) {
     int n = 0;
     for (const char *p = s; (p = strstr(p, needle)) != NULL; p += strlen(needle)) n++;
@@ -145,8 +150,21 @@ static void test_page_carries_the_control(void) {
     WT_ASSERT(mod && app && mod < app);
     /* The copy buttons' ids, as agreed with the slices sharing the views:
      * bundle-btn-drawer, bundle-btn-alert, bundle-btn-lookup. */
-    WT_HAS(p, "var SLOT = { device: \"drawer\", alert: \"alert\", lookup: \"lookup\" };");
-    WT_HAS(p, "copy.id = \"bundle-btn-\" + (");
+    WT_HAS(p, "var SLOT = { device: \"drawer\", alert: \"alert\", lookup: \"lookup\", ble: \"ble\", "
+              "platform: \"tacdb\" };");
+    WT_HAS(p, "var cid = \"bundle-btn-\" + (");
+    /* The BLE drawer's and the TACDB view's hooks are spans that carry
+     * the slot's id already: the button takes none, so no id is on the
+     * page twice. Seen red with copy.id = cid unconditional. */
+    WT_HAS(p, "if (host.id !== cid) copy.id = cid;");
+    WT_HAS(p, "<span id=\"bundle-btn-ble\"></span>");
+    WT_HAS(p, "<span id=\"bundle-btn-tacdb\"></span>");
+    /* The BLE hook carries the scope, as the other views' do: the
+     * bundle answers Local as /api/ble does. */
+    WT_HAS(p, "SlothBundle.mount(bb, \"ble\", addr, scoped);");
+    WT_HAS(p, "mountBundle($(\"bundle-btn-tacdb\"), \"platform\", String(p.id));");
+    /* No kind is reserved any more: the word is gone with its branch. */
+    WT_LACKS(p, "kind_not_built");
     WT_HAS(p, "el(\"button\", \"\", \"copy JSON\")");
     WT_HAS(p, "el(\"button\", \"\", \"download .json\")");
     WT_HAS(p, "\"/api/bundle?kind=\" + encodeURIComponent(st.kind) + \"&id=\" + encodeURIComponent(st.id)");
@@ -283,10 +301,35 @@ static web_m4_t m4;
 static web_health_t H;
 static web_live_t *g_live;
 static web_feed_t g_feed;
+static web_store_t g_store;
+static int g_have_store;
+static web_frrs_t g_frrs;
+static web_ble_t g_ble;
 
 static void feed(const char *s) {
     web_feed_bytes(&g_feed, g_live, s, strlen(s), 1000);
 }
+
+/* A BLE advertiser as the emitter writes its ble_device line (the
+ * shape test_ble.c's dev_line() builds), into the BLE table. */
+#define BLE_ADDR "02:de:00:00:00:21"
+static void ble_seed(void) {
+    char line[2048];
+    snprintf(line, sizeof(line),
+             "{\"type\":\"ble_device\",\"ts\":%lld,\"addr\":\"" BLE_ADDR "\",\"addr_type\":0,"
+             "\"sensor\":\"ble\",\"iface\":\"bluetooth-monitor\",\"adapter\":0,\"sampled\":0,"
+             "\"channel\":-1,\"last_pdu\":\"ADV_IND\",\"pdu_mask\":1,\"name\":\"kettle\","
+             "\"name_complete\":1,\"uuid16\":-1,\"mfr_id\":-1,\"mfr_subtype\":-1,"
+             "\"svc_data_uuid16\":-1,\"appearance\":-1,\"hid\":0,\"tx_power\":-128,"
+             "\"flags\":-1,\"has_rssi\":1,\"rssi\":-50,\"rssi_best\":-45,\"adv_count\":100,"
+             "\"watch_category\":\"\",\"ext_adv\":0,\"primary_phy\":0,\"secondary_phy\":0,"
+             "\"adv_sid\":-1,\"first_seen\":%lld,\"last_seen\":%lld}",
+             T - 20, T - 500, T - 20);
+    static web_jrec_t r;
+    WT_EQ(web_jl_parse(line, strlen(line), &r), WEB_JL_OK);
+    web_ble_record(&g_ble, &r, 1000);
+}
+
 
 /* sloth's incident_ids in the stream below: never on the wire. */
 #define IA "a1f0c3e5d7b9a201"
@@ -412,24 +455,36 @@ static void up(void) {
     web_slothdb_init(&sdb, g_db, &fns);
     memset(&m4, 0, sizeof(m4));
     m4.sdb = &sdb;
+    /* slothweb's own store and the FRRS module on it, and the BLE
+     * table: the routes the bundle's newer sections splice. */
+    char sp[TEST_TMP_MAX + 32], err[512];
+    snprintf(sp, sizeof(sp), "%s/slothweb.db", g_dir);
+    g_have_store = web_store_open(&g_store, sp, err, sizeof(err)) == 0;
+    WT_ASSERT(g_have_store);
+    WT_EQ(web_frrs_init(&g_frrs, g_have_store ? &g_store : NULL, NULL, 1, err, sizeof(err)), 0);
+    m4.frrs = &g_frrs;
+    WT_EQ(web_ble_init(&g_ble, 0), 0);
+    ble_seed();
     memset(&H, 0, sizeof(H));
     H.wall_s = T;
     H.uptime_s = 42;
     H.now_ms = 1000;
     H.m4 = &m4;
     H.live = g_live;
+    H.ble = &g_ble;
 }
 
 static void down(void) {
+    web_frrs_destroy(&g_frrs);
+    if (g_have_store) web_store_close(&g_store);
+    g_have_store = 0;
+    web_ble_destroy(&g_ble);
     web_slothdb_destroy(&sdb);
     web_live_destroy(g_live);
     free(g_live);
     free(g_body);
     g_body = NULL;
-    char p[192];
-    snprintf(p, sizeof(p), "%s/sloth.db", g_dir);
-    unlink(p);
-    rmdir(g_dir);
+    test_rm_tree(g_dir);
 }
 
 /* Every parameter checked before anything is read, each refusal a word
@@ -439,8 +494,13 @@ static void test_parameters_refused_whole(void) {
         { "", 400, "missing_kind" },
         { "id=1", 400, "missing_kind" },
         { "kind=x&id=1", 400, "bad_kind" },
-        { "kind=ble&id=1", 400, "kind_not_built" },
-        { "kind=platform&id=1", 400, "kind_not_built" },
+        { "kind=ble&id=1", 400, "bad_mac" },
+        { "kind=ble&id=02:de:00:00:00:99", 404, "not_found" },
+        { "kind=platform&id=x", 400, "bad_id" },
+        { "kind=platform&id=0", 400, "bad_id" },
+        { "kind=platform&id=01", 400, "bad_id" },
+        { "kind=platform&id=99999999999999", 400, "bad_id" },
+        { "kind=platform&id=9", 404, "no_such_platform" },
         { "kind=device", 400, "missing_id" },
         { "kind=device&id=zz", 400, "bad_mac" },
         { "kind=device&id=02:00:00:00:00:1g", 400, "bad_mac" },
@@ -527,11 +587,16 @@ static void test_device_bundle_shape(void) {
     const char *d = strstr(b, "\"drawer\":");
     WT_ASSERT(d != NULL);
     if (!d) return;
+    /* Past the drawer: the drawer itself carries vendor_research. */
+    d += strlen("\"drawer\":");
+    d += vlen(d);
     const char *s1 = strstr(d, ",\"signal_history\":{\"available\":false,\"reason\":\"not_built\"}");
     const char *s2 = strstr(d, ",\"distance\":{\"available\":false,\"reason\":\"not_kept\"}");
     const char *s3 = strstr(d, ",\"records_recent\":{\"available\":true,\"source\":\"ticker ring");
-    const char *s4 = strstr(d, ",\"vendor_research\":{\"available\":false,\"reason\":\"not_built\"}");
-    const char *s5 = strstr(d, ",\"frrs\":{\"available\":false,\"reason\":\"not_built\"}");
+    /* The drawer's own vendor research and the FRRS record are data now
+     * (test_sections_are_the_routes_bytes holds their bytes). */
+    const char *s4 = strstr(d, "},\"vendor_research\":{\"found\":");
+    const char *s5 = strstr(d, ",\"frrs\":{");
     const char *s6 = strstr(d, ",\"triage\":{\"available\":false,\"reason\":\"not_built\"}");
     WT_ASSERT(s1 && s2 && s3 && s4 && s5 && s6);
     WT_ASSERT(s1 && s2 && s3 && s4 && s5 && s6 && s1 < s2 && s2 < s3 && s3 < s4 &&
@@ -619,6 +684,215 @@ static void test_spliced_answers_are_byte_identical(void) {
     free(dev); free(al); free(lk); free(dev18);
 }
 
+/* The end of the JSON value at v, written here apart from the bundle's
+ * own walker so the test does not borrow what it checks: strings
+ * skipped whole, brackets counted. */
+static size_t vlen(const char *v) {
+    int depth = 0;
+    const char *p = v;
+    for (; *p; p++) {
+        if (*p == '"') {
+            for (p++; *p && *p != '"'; p++) if (*p == '\\' && p[1]) p++;
+            if (!*p) break;
+            if (!depth) return (size_t)(p + 1 - v);
+        } else if (*p == '{' || *p == '[') {
+            depth++;
+        } else if (*p == '}' || *p == ']') {
+            if (!depth) break;
+            if (!--depth) return (size_t)(p + 1 - v);
+        } else if (*p == ',' && !depth) {
+            break;
+        }
+    }
+    return (size_t)(p - v);
+}
+
+/* The top-level member name of the object at obj (*n its length). */
+static const char *top(const char *obj, const char *name, size_t *n) {
+    if (!obj || *obj != '{') return NULL;
+    const char *p = obj + 1;
+    while (*p == '"') {
+        const char *k = p + 1, *ke = strchr(k, '"');
+        if (!ke || ke[1] != ':') return NULL;
+        const char *v = ke + 2;
+        size_t l = vlen(v);
+        if ((size_t)(ke - k) == strlen(name) && !strncmp(k, name, (size_t)(ke - k))) {
+            *n = l;
+            return v;
+        }
+        if (v[l] != ',') return NULL;
+        p = v + l + 1;
+    }
+    return NULL;
+}
+
+/* A route's answer on its own, trailing newline dropped, into a fresh
+ * string (NULL when the status is not want). */
+static char *own(const char *path, const char *query, int want) {
+    int st = route(&H, path, query);
+    if (st != want) fprintf(stderr, "    ?%s?%s: %d %s\n", path, query, st, answer());
+    WT_EQ(st, want);
+    if (st != want) return NULL;
+    char *b = strdup(answer());
+    if (b && *b && b[strlen(b) - 1] == '\n') b[strlen(b) - 1] = '\0';
+    return b;
+}
+
+/* The section name of the kind's object in the answer now, as bytes
+ * equal to want (want_n of them). */
+static int section_is(const char *kind, const char *name, const char *want, size_t want_n) {
+    size_t n = 0;
+    const char *k = top(answer(), kind, &n);
+    const char *v = top(k, name, &n);
+    int ok = v && want && n == want_n && !memcmp(v, want, n);
+    if (!ok) fprintf(stderr, "    %s.%s: %.*s\n    want %.*s\n", kind, name, v ? (int)(n > 160 ? 160 : n) : 0,
+                     v ? v : "", (int)(want_n > 160 ? 160 : want_n), want ? want : "");
+    return ok;
+}
+
+/* A POST as the server hands it to the router, from the page's origin. */
+static int post(const char *path, const char *body) {
+    web_req_t rq;
+    web_resp_t r;
+    memset(&rq, 0, sizeof(rq));
+    snprintf(rq.path, sizeof(rq.path), "%s", path);
+    snprintf(rq.host, sizeof(rq.host), "127.0.0.1:8770");
+    rq.host_count = 1;
+    rq.is_post = 1;
+    snprintf(rq.origin, sizeof(rq.origin), "http://127.0.0.1:8770");
+    rq.origin_count = 1;
+    snprintf(rq.ctype, sizeof(rq.ctype), "application/json");
+    rq.ctype_count = 1;
+    rq.body = body;
+    rq.body_len = strlen(body);
+    rq.content_length = (long long)rq.body_len;
+    snprintf(rq.peer, sizeof(rq.peer), "127.0.0.1");
+    memset(&r, 0, sizeof(r));
+    if (web_route(&rq, &H, 1, g_out, sizeof(g_out), &r) != 0) return -1;
+    g_out[r.out_len < sizeof(g_out) ? r.out_len : sizeof(g_out) - 1] = '\0';
+    return r.status;
+}
+
+/* The sections whose data main's later slices brought are the owning
+ * routes' bytes, never a re-rendering: the FRRS record as
+ * /api/frrs/report and /api/frrs/report/alert answer it, the triage
+ * history as /api/frrs/history does, and the drawer's vendor research
+ * and the alert page's assessment and proof lifted out of the primary
+ * answer whole. */
+static void test_sections_are_the_routes_bytes(void) {
+    char *fr = own("/api/frrs/report", "kind=sta&addr=02:00:00:00:00:12", 200);
+    char *dv = own("/api/device/02:00:00:00:00:12", "", 200);
+    WT_EQ(route(&H, "/api/bundle", "kind=device&id=02:00:00:00:00:12"), 200);
+    WT_ASSERT(section_is("device", "frrs", fr, fr ? strlen(fr) : 0));
+    size_t n = 0;
+    const char *vr = top(dv, "vendor_research", &n);
+    WT_ASSERT(vr != NULL);
+    WT_ASSERT(section_is("device", "vendor_research", vr, n));
+    WT_HAS(answer(), ",{\"what\":\"device.frrs\",\"ms\":");
+    free(fr); free(dv);
+
+    char *al = own("/api/alert", "id=d10", 200);
+    char *fa = own("/api/frrs/report/alert", "id=d10", 200);
+    char *th = own("/api/frrs/history", "id=d10", 200);
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10"), 200);
+    WT_ASSERT(section_is("alert", "frrs", fa, fa ? strlen(fa) : 0));
+    WT_ASSERT(section_is("alert", "triage", th, th ? strlen(th) : 0));
+    const char *as = top(al, "assessment", &n);
+    /* DEAUTH_FLOOD has its assessment in docs/wiki/alert-assessments. */
+    WT_ASSERT(as && *as == '{');
+    WT_ASSERT(section_is("alert", "assessment", as, n));
+    /* The proof block: the page's captures, its note and its evidence,
+     * in that order and nothing else (no frames: a pcap's bytes are
+     * /api/pcap's, never the bundle's). */
+    char ev[24 * 1024];
+    size_t en = 0;
+    static const char *const M[] = { "captures", "captures_note", "evidence" };
+    en += (size_t)snprintf(ev + en, sizeof(ev) - en, "{");
+    for (int i = 0; i < 3; i++) {
+        const char *v = top(al, M[i], &n);
+        WT_ASSERT(v != NULL);
+        if (!v || en + n + 32 > sizeof(ev)) break;
+        en += (size_t)snprintf(ev + en, sizeof(ev) - en, "%s\"%s\":%.*s", i ? "," : "", M[i],
+                               (int)n, v);
+    }
+    en += (size_t)snprintf(ev + en, sizeof(ev) - en, "}");
+    WT_ASSERT(section_is("alert", "evidence", ev, en));
+    WT_HAS(answer(), "{\"what\":\"alert.frrs\",\"ms\":");
+    WT_HAS(answer(), "{\"what\":\"alert.triage\",\"ms\":");
+    free(al); free(fa); free(th);
+
+    /* A decision on the alert is in the next bundle, as the history
+     * route says it; cleared again for the tests after this one. */
+    WT_EQ(post("/api/frrs/triage", "{\"id\":\"d10\",\"state\":\"noise\",\"by\":\"op\"}"), 200);
+    th = own("/api/frrs/history", "id=d10", 200);
+    WT_HAS(th, "\"current\":{\"state\":\"noise\"");
+    WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10"), 200);
+    WT_ASSERT(section_is("alert", "triage", th, th ? strlen(th) : 0));
+    free(th);
+    WT_EQ(post("/api/frrs/triage", "{\"id\":\"d10\",\"state\":\"untriaged\"}"), 200);
+}
+
+/* kind=ble: the BLE drawer's own answer, /api/bundle?kind=ble splicing
+ * /api/ble/{addr} (every sensor's row of the address), and the FRRS
+ * record of the address and its first row's type. Under Local the
+ * drawer is the router's out-of-scope note and no row is carried: seen
+ * red with the bundle's local test made 0 (the rows came through). */
+static void test_ble_bundle(void) {
+    char *bd = own("/api/ble/" BLE_ADDR, "", 200);
+    char *fr = own("/api/frrs/report", "kind=ble&addr=" BLE_ADDR "/0", 200);
+    WT_EQ(route(&H, "/api/bundle", "kind=ble&id=02-DE-00-00-00-21"), 200);
+    WT_HAS(answer(), "\"kind\":\"ble\",\"id\":\"" BLE_ADDR "\",");
+    WT_ASSERT(section_is("ble", "drawer", bd, bd ? strlen(bd) : 0));
+    WT_ASSERT(section_is("ble", "frrs", fr, fr ? strlen(fr) : 0));
+    WT_HAS(bd, "\"name\":\"kettle\"");
+    WT_HAS(answer(), "{\"what\":\"ble.frrs\",\"ms\":");
+    /* ble_device is a poll type the ticker ring does not keep: no
+     * records section to carry (seen red with a ble records_recent row
+     * added to the registry). */
+    WT_LACKS(answer(), "\"records_recent\":");
+    free(bd); free(fr);
+    size_t n = 0;
+
+    WT_EQ(route(&H, "/api/bundle", "scope=local&kind=ble&id=" BLE_ADDR), 200);
+    char oos[512];
+    size_t ol = web_ble_out_of_scope_json(oos, sizeof(oos));
+    WT_ASSERT(ol > 1);
+    WT_ASSERT(section_is("ble", "drawer", oos, ol - 1));
+    const char *b = top(answer(), "ble", &n);
+    WT_ASSERT(b != NULL);
+    if (b) {
+        WT_LACKS(b, "\"rows\":");
+        WT_LACKS(b, "kettle");
+    }
+    WT_HAS(answer(), "{\"field\":\"ble.drawer.rows, ble.drawer.alerts\",");
+    WT_HAS(answer(), ",\"frrs\":{\"available\":false,\"reason\":\"withheld\"}");
+}
+
+/* kind=platform: the TACDB platform view's answer, as frrs.js's hook
+ * asks for it (SlothFrrs.mountBundle on the platform view). A platform
+ * is the operator's filing, not a device: no ticker records, no
+ * sections. The records' absence seen red with a platform
+ * records_recent row added to the registry. */
+static void test_platform_bundle(void) {
+    WT_ASSERT(g_frrs.wr != NULL);
+    if (!g_frrs.wr) return;
+    char sql[256];
+    snprintf(sql, sizeof(sql), "INSERT INTO tacdb_platform (id,nomenclature,created,updated) "
+             "VALUES (1,'KETTLE-1',%lld,%lld)", T - 60, T - 60);
+    WT_EQ(sqlite3_exec(g_frrs.wr, sql, NULL, NULL, NULL), SQLITE_OK);
+    char *pv = own("/api/frrs/tacdb/view", "id=1", 200);
+    WT_EQ(route(&H, "/api/bundle", "kind=platform&id=1"), 200);
+    WT_HAS(answer(), "\"kind\":\"platform\",\"id\":\"1\",");
+    WT_ASSERT(section_is("platform", "view", pv, pv ? strlen(pv) : 0));
+    WT_HAS(pv, "\"nomenclature\":\"KETTLE-1\"");
+    size_t n = 0;
+    const char *p = top(answer(), "platform", &n);
+    WT_ASSERT(p && p[n - 1] == '}' && pv && n == strlen(pv) + strlen("{\"view\":") + 1);
+    WT_LACKS(answer(), "\"records_recent\":");
+    WT_HAS(answer(), "\"reads\":[{\"what\":\"platform\",\"ms\":");
+    free(pv);
+}
+
 /* An alert that names an address and no MAC: the Lookup card of the
  * address rides in place of a drawer. */
 static void test_alert_with_an_address_only(void) {
@@ -662,12 +936,18 @@ static void test_every_section_is_present_or_marked(void) {
         { "device", "kind=device&id=02:00:00:00:00:12" },
         { "alert", "kind=alert&id=d10" },
         { "lookup", "kind=lookup&id=02:00:00:00:00:18" },
+        { "ble", "kind=ble&id=" BLE_ADDR },
     };
-    static const char *const primary[] = { "drawer", "page", "card" };
+    static const char *const primary[] = { "drawer", "page", "card", "drawer" };
     int rows = 0;
-    for (size_t k = 0; k < 3; k++) {
+    for (size_t k = 0; k < sizeof(K) / sizeof(K[0]); k++) {
         WT_EQ(route(&H, "/api/bundle", K[k].query), 200);
-        const char *v = member(answer(), primary[k]);
+        /* The kind's own primary: "page" alone finds the envelope's,
+         * which walked the alert's sections from the envelope and
+         * matched the page's own assessment and evidence members. */
+        char pk[32];
+        snprintf(pk, sizeof(pk), "\"%s\":{", K[k].kind);
+        const char *v = member(strstr(answer(), pk), primary[k]);
         WT_ASSERT(v != NULL);
         if (!v) continue;
         /* Past the primary splice (its members are the route's): the
@@ -715,10 +995,11 @@ static void test_every_section_is_present_or_marked(void) {
     }
     WT_EQ(rows, (int)web_bundle_sections_n);
     /* The reasons list is the documented one. */
-    WT_EQ(web_bundle_reasons_n, 8);
+    WT_EQ(web_bundle_reasons_n, 9);
     WT_ASSERT(!strcmp(web_bundle_reasons[0], "not_built") &&
               !strcmp(web_bundle_reasons[6], "not_kept") &&
-              !strcmp(web_bundle_reasons[7], "read_error"));
+              !strcmp(web_bundle_reasons[7], "read_error") &&
+              !strcmp(web_bundle_reasons[8], "no_store"));
 }
 
 /* test_alerts.c's credential and incident-id tests, against the
@@ -845,7 +1126,9 @@ static void test_size_cap(void) {
     WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10"), 200);
     WT_ASSERT(g_body_len <= capb && g_body_len < full);
     WT_HAS(answer(), ",\"device\":{\"available\":false,\"reason\":\"too_large\",\"cap_bytes\":");
-    WT_HAS(answer(), "\"truncated_sections\":[\"device\"]");
+    /* The triage history after it (the FRRS slice's) has no room left
+     * either. */
+    WT_HAS(answer(), "\"truncated_sections\":[\"device\",\"triage\"]");
     char cap[64];
     snprintf(cap, sizeof(cap), "\"limits\":{\"hard_cap_bytes\":%zu,", capb);
     WT_HAS(answer(), cap);
@@ -1074,6 +1357,10 @@ static void test_nested_reasons(void) {
     reason_is(503, "{\"error\":\"no_sloth_db\",\"detail\":\"x\"}", "no_sloth_db");
     reason_is(503, "{\"error\":\"sloth_db_timeout\"}", "budget");
     reason_is(503, "{\"error\":\"sloth_db_error\"}", "read_error");
+    /* The FRRS routes' own words. */
+    reason_is(503, "{\"error\":\"no_store\"}", "no_store");
+    reason_is(503, "{\"error\":\"record_too_large\"}", "too_large");
+    reason_is(404, "{\"error\":\"no_such_alert\"}", "no_data");
     /* A detail naming another word does not decide it. */
     reason_is(503, "{\"error\":\"sloth_db_error\",\"detail\":\"no_sloth_db\"}", "read_error");
 }
@@ -1180,6 +1467,9 @@ void run_bundle_tests(void) {
     WT_RUN(test_scope_is_carried_through);
     WT_RUN(test_size_cap);
     WT_RUN(test_caps_are_proven);
+    WT_RUN(test_sections_are_the_routes_bytes);
+    WT_RUN(test_ble_bundle);
+    WT_RUN(test_platform_bundle);
     down();
     up();
     WT_RUN(test_records_follow_the_scope);

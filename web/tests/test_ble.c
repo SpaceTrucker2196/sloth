@@ -925,7 +925,7 @@ static void test_page(void) {
      * the guarded call, a no-op without bundle.js. Seen red with the
      * guard's window.SlothBundle test dropped. */
     WT_HAS(p, "<span id=\"bundle-btn-ble\"></span>");
-    WT_HAS(p, "    if (bb && window.SlothBundle && SlothBundle.mount) SlothBundle.mount(bb, \"ble\", addr);");
+    WT_HAS(p, "    if (bb && window.SlothBundle && SlothBundle.mount) SlothBundle.mount(bb, \"ble\", addr, scoped);");
     WT_HAS(p, "                 \"ble\": [\"q\"] };");
     WT_HAS(p, "  var DTB = DataTable({ id: \"ble\", label: \"ble advertisers\", box: $(\"b-box\"), head: $(\"b-thead\"),");
     WT_HAS(p, "  var DTBA = DataTable({ id: \"blealerts\", label: \"ble alerts\", box: $(\"b-al-box\"), head: $(\"b-al-head\"),");

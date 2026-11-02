@@ -107,11 +107,11 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-02 (copy JSON: records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
+**Last updated**: 2026-11-02 (copy JSON, first landed 2026-10-27 as `/api/bundle` and a copy and download button on every detail view: rebased onto triage, FRRS, BLE, vendor research and the alert's proof; kinds `ble` and `platform` through the views' own hooks; `frrs`, an alert's `triage`, `vendor_research`, `assessment` and `evidence` filled from their routes' answers; records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
 listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
-reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (copy JSON: `/api/bundle` and a copy and download button on every detail view); 2026-10-27 (an alert's proof: `--pcap-dir`, the capture decoded and hash-checked, the assessment and bibliography, the drawer's rows as tap targets); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
+reference host's vendors covered and the rest pending, `COVERAGE.md`); 2026-10-27 (an alert's proof: `--pcap-dir`, the capture decoded and hash-checked, the assessment and bibliography, the drawer's rows as tap targets); 2026-10-27 (the sloth icon in the header and as the favicon, inline data: PNGs admitted by `img-src data:`); 2026-10-27 (the vendor
 research section under the drawer's and Lookup's OUI card, one cited Markdown file per OUI holder
 in `web/data/vendors/` compiled in at build time, `{found:false}` and
 "no research yet" for a vendor without one, [[vendor-research]]; the
@@ -967,18 +967,26 @@ A test asserts each count on the demo's own data.
 
 Owner request 2026-10-27: a **copy JSON** button (and **download
 .json**) on every detail view (the device drawer, an alert's page, the
-Lookup card) that captures the view's data as one JSON document to
-paste into Claude for analysis. `/api/bundle?kind=device|alert|lookup&id=`
-answers it. The bundle splices the detail routes' own answers in
-verbatim rather than re-rendering them, so it carries exactly what the
-page shows and nothing it withholds (alert key, `incident_id`,
-unaudited detail, credential columns); around them an envelope (schema,
-time, server and time zone, sensor health, sloth.db, the capture scope
-in effect and what it excludes, a `withheld` list), optional sections
-that read `{"available": false, "reason": ...}` until the slices that
-own them land (vendor research, FRRS, COMINT report, triage,
-assessment, evidence, location), a glossary, a suggested prompt and the
-limits applied. `server.slothweb.build_version` is the sloth source
+Lookup card, the BLE drawer, a TACDB platform) that captures the view's
+data as one JSON document to paste into Claude for analysis.
+`/api/bundle?kind=device|alert|lookup|ble|platform&id=` answers it. The
+bundle splices the detail routes' own answers in verbatim rather than
+re-rendering them, so it carries exactly what the page shows and
+nothing it withholds (alert key, `incident_id`, unaudited detail,
+credential columns); around them an envelope (schema, time, server and
+time zone, sensor health, sloth.db, the capture scope in effect and
+what it excludes, a `withheld` list), optional sections, a glossary, a
+suggested prompt and the limits applied. The sections are routes'
+bytes as well: `frrs` is the FRRS record as `/api/frrs/report` (a
+device, a BLE address) or `/api/frrs/report/alert` answers it, an
+alert's `triage` is `/api/frrs/history`, and `vendor_research`,
+`assessment` and `evidence` (the capture files listed with their
+hashes, never a pcap's bytes) are lifted whole out of the drawer's and
+the alert page's own answers. What no build has yet (a COMINT report,
+location, signal history) reads `{"available": false, "reason": ...}`,
+as does a section whose route did not answer (`no_store` without
+slothweb.db; under Local a BLE address's record is `withheld` with its
+drawer). `server.slothweb.build_version` is the sloth source
 tree slothweb was built from; slothweb has no version of its own. The
 ticker records a bundle lists are matched on their address members
 (`mac`, `ip`, `src`, `dst`, ...), never on the 80-byte line, which a

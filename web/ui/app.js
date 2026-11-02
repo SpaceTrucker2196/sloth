@@ -5100,7 +5100,7 @@
     // The copy-JSON bundle's button (bundle.js, its own slice): a no-op
     // when that module is not loaded.
     var bb = $("bundle-btn-ble");
-    if (bb && window.SlothBundle && SlothBundle.mount) SlothBundle.mount(bb, "ble", addr);
+    if (bb && window.SlothBundle && SlothBundle.mount) SlothBundle.mount(bb, "ble", addr, scoped);
     set("bdr-note", "loading");
     var p = "/api/ble/" + encodeURIComponent(addr) + "?type=" + encodeURIComponent(String(type)) +
             "&iface=" + encodeURIComponent(String(iface));

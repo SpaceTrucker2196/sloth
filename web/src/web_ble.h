@@ -339,6 +339,11 @@ int  web_ble_device_route(web_ble_t *b, const char *path_addr, const char *query
                           long long now_s, int check_only, char *body, size_t cap,
                           size_t *len, int *status);
 
+/* The answer of every /api/ble route under the Local scope, which holds
+ * no advertiser (the router's, and the bundle's for kind=ble): its
+ * length, 0 when it did not fit. */
+size_t web_ble_out_of_scope_json(char *body, size_t cap);
+
 /* /api/live's "ble" member (the object, no key) and /api/health's
  * (the counters and bounds). */
 void web_ble_live_json(web_ble_t *b, web_jw_t *w, long long now_s);

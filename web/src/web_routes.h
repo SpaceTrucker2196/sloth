@@ -100,7 +100,7 @@ typedef struct {
     int                  body_free; /* body is malloc'd: the caller frees it */
     /* body is this heap block, the route's to give away: the server
      * frees it when the connection is done with it (a pcap download,
-     * too large for out). NULL for a static body. */
+     * /api/bundle: answers too large for out). NULL for a static body. */
     unsigned char       *body_owned;
 } web_resp_t;
 

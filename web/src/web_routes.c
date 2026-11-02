@@ -769,16 +769,7 @@ static int route_ble(const web_req_t *rq, const web_health_t *h, int which,
         else
             rc = web_ble_device_route(h->ble, arg, rq->query, h->wall_s, none_here, body,
                                       cap, &bl, &status);
-        if (rc == 0 && none_here && status == 200) {
-            web_jw_t w;
-            web_jw_init(&w, body, cap);
-            web_jw_raw(&w, "{\"out_of_scope\":true,\"reason\":");
-            web_jw_str(&w, "BLE advertisers are the passive Bluetooth receivers' "
-                           "(--bt-monitor, --bt-capture); the host's own interfaces "
-                           "carried none");
-            web_jw_raw(&w, "}\n");
-            bl = w.overflow ? 0 : w.len;
-        }
+        if (rc == 0 && none_here && status == 200) bl = web_ble_out_of_scope_json(body, cap);
     }
     if (rc != 0 || bl == 0) {
         r->status = 503;
