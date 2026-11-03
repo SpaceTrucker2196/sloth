@@ -6414,3 +6414,14 @@ footer's drops carries its last bucket's count and names its bucket,
 scales restart on a scope change, an anomaly card keeps its y-range and
 reads a long window from the minute tier, and the V1 glyph functions are
 pinned whole. Updated [[slothweb]].
+
+## 2026-11-03 — slothweb glyph slice V2: how near, and coming closer (#171)
+
+G2 range sparklines in the Devices and AP tables' signal column, the
+drawer and the Lookup card, from the existing `rf.rssi.bssid` and
+`rf.rssi.sta` series (the spec's `ap.rssi` and `sta.rssi`) through a
+new `"rf"` row member; the number bold, and the band and trend worded,
+by sloth's own distance estimate, never a slope of the page's. The new
+mark and G5's first-seen cell; G6 bullets on risk, karma and the
+anomaly score, bars on the anom and flow total counts. Updated
+[[slothweb]].

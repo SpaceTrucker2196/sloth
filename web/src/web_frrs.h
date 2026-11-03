@@ -232,6 +232,22 @@ void web_frrs_destroy(web_frrs_t *f);
 /* The ingest thread: every decoded record, for the ledger. */
 void web_frrs_record(web_frrs_t *f, const web_jrec_t *r);
 
+/* What the ledger holds of one Wi-Fi emitter's signal, for G2
+ * (docs/web-visual-spec.md, slice V2): sloth's own distance band and
+ * trend (src/rf_distance.h) from the latest beacon (bssid 1) or
+ * probe_client (bssid 0) record of mac, and for a BSSID the beacon's
+ * rssi_min_60s..rssi_max_60s. The page draws these words, so the glyph
+ * says what sloth's estimate says and never a trend of its own. band
+ * and trend are "" unless they are one of sloth's words (rf_band_name,
+ * rf_trend_name); the range is set only when both ends are a reading
+ * (-127..-1) in order. 1 when the ledger holds the record, else 0. */
+typedef struct {
+    char      band[12], trend[14];
+    int       have_range, rmin, rmax;
+    long long ts;                     /* the record's ts */
+} web_frrs_rf_t;
+int  web_frrs_rf(web_frrs_t *f, int bssid, const char *mac, web_frrs_rf_t *out);
+
 /* Is this a path of the module (GET or POST)? */
 int  web_frrs_path(const char *path);
 

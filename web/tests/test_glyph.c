@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "web_assets.h"
+#include "web_rf.h"
 #include "wtest.h"
 
 static const char *page(void) { return (const char *)web_page; }
@@ -372,6 +373,79 @@ static void gl_g6(double v, int have_v, double w, double h, double max,
     }
 }
 
+/* G2, the range sparkline (V2). Fixed scale, -95 to -20 dBm; the
+ * -67 dBm rule (ruling 3); one sample is its dot alone. has_w 0: no
+ * whisker. */
+#define GL_RSSI_LO  (-95.0)
+#define GL_RSSI_HI  (-20.0)
+#define GL_RSSI_REF (-67.0)
+static double gl_g2y(double v, double h) {
+    double c = v < GL_RSSI_LO ? GL_RSSI_LO : v > GL_RSSI_HI ? GL_RSSI_HI : v;
+    return h - (c - GL_RSSI_LO) / (GL_RSSI_HI - GL_RSSI_LO) * h;
+}
+static void gl_g2(const double (*pts)[2], int n, double w, double h, double from,
+                  double to, double step, int has_w, const double *wk, gmarks_t *g) {
+    memset(g, 0, sizeof(*g));
+    if (n <= 0) { gl_dash(g, w, h); return; }
+    if (!(step > 0)) step = 1;
+#define GX(t) (to > from ? ((t) - from) / (to - from) * w : w)
+    int k = n - 1;
+    if (!k) { gm_push(g, "last", GX(pts[0][0]), gl_g2y(pts[0][1], h), 2.5, 2.5, "--ink"); return; }
+    gm_push(g, "ref", 0, gl_g2y(GL_RSSI_REF, h), w, 1, "--faint");
+    double gap = step * 2.5;
+    int dots = n < 5;
+    for (int i = 1; i < n; i++) {
+        double xa = GX(pts[i - 1][0]), xb = GX(pts[i][0]);
+        if (pts[i][0] - pts[i - 1][0] > gap) {
+            gm_push(g, "gap", xa, 0, xb - xa, h, "--faint");
+            continue;
+        }
+        if (dots) continue;
+        gm_push(g, "line", xa, gl_g2y(pts[i - 1][1], h), xb - xa,
+                gl_g2y(pts[i][1], h) - gl_g2y(pts[i - 1][1], h), "--tui-normal");
+    }
+    if (dots)
+        for (int i = 0; i < k; i++)
+            gm_push(g, "dot", GX(pts[i][0]), gl_g2y(pts[i][1], h), 1.5, 1.5, "--tui-normal");
+    if (has_w && wk[1] >= wk[0]) {
+        double d = gl_g2y(wk[0], h) - gl_g2y(wk[1], h);
+        gm_push(g, "whisker", GX(pts[k][0]), gl_g2y(wk[1], h), 1, d > 1 ? d : 1, "--tui-normal");
+    }
+    gm_push(g, "last", GX(pts[k][0]), gl_g2y(pts[k][1], h), 2.5, 2.5, "--ink");
+#undef GX
+}
+static int gl_g2_clamped(const double (*pts)[2], int n) {
+    int c = 0;
+    for (int i = 0; i < n; i++) if (pts[i][1] > GL_RSSI_HI || pts[i][1] < GL_RSSI_LO) c++;
+    return c;
+}
+/* G2's words: sloth's band and trend, never a slope of the page's. */
+typedef struct { char text[16]; int bold; char nearw[24]; } g2w_t;
+static g2w_t gl_g2_words(int have_last, double last, const char *band, const char *trend) {
+    static const char *const B[][2] = { { "immediate", "imm" }, { "near", "near" },
+        { "room", "room" }, { "building", "bldg" }, { "far", "far" } };
+    static const char *const T[][2] = { { "approaching", "\xe2\x86\x98" },
+        { "steady", "\xe2\x86\x92" }, { "leaving", "\xe2\x86\x97" } };
+    g2w_t o;
+    memset(&o, 0, sizeof(o));
+    if (have_last) snprintf(o.text, sizeof(o.text), "%d", (int)floor(last + 0.5));
+    else snprintf(o.text, sizeof(o.text), "-");
+    o.bold = trend && !strcmp(trend, "approaching");
+    const char *b = "", *t = "";
+    for (size_t i = 0; band && i < sizeof(B) / sizeof(B[0]); i++) if (!strcmp(band, B[i][0])) b = B[i][1];
+    for (size_t i = 0; trend && i < sizeof(T) / sizeof(T[0]); i++) if (!strcmp(trend, T[i][0])) t = T[i][1];
+    if (*b && *t) snprintf(o.nearw, sizeof(o.nearw), "%s %s", b, t);
+    else snprintf(o.nearw, sizeof(o.nearw), "%s", *b ? b : t);
+    return o;
+}
+/* F15: new inside the window, and G5's first-seen cell. */
+static int gl_is_new(int have, double first, double from) { return have && first >= from; }
+static int gl_first_cell(int have, double first, double from, double cell_s, int n) {
+    if (!gl_is_new(have, first, from) || !(cell_s > 0)) return -1;
+    int c = (int)floor((first - from) / cell_s);
+    return c < n ? c : -1;
+}
+
 /* ── the JS, pinned as served ───────────────────────────────────── */
 
 /* Seen red with web/ui/glyph.js left out of index.html's includes, and
@@ -489,6 +563,61 @@ static void test_the_page_carries_the_ported_js(void) {
               "    if (gnum(nc) && nc >= 0 && nc < 168)\n"
               "      m.push([\"outline\", x0 + cw * (nc % 24), y0 + ch * Math.floor(nc / 24), cw, ch, \"--signal\"]);\n"
               "    return m;\n");
+    /* V2: G2, its words and the new mark, whole. Seen red with one
+     * character changed in each (the -67 rule's constant, and the
+     * approaching word). */
+    WT_HAS(p, "  var RSSI_LO = -95, RSSI_HI = -20, RSSI_REF = -67;\n"
+              "  function g2Y(v, h) {\n"
+              "    var c = v < RSSI_LO ? RSSI_LO : v > RSSI_HI ? RSSI_HI : v;\n"
+              "    return h - (c - RSSI_LO) / (RSSI_HI - RSSI_LO) * h;\n"
+              "  }\n"
+              "  function g2(pts, opt) {\n"
+              "    var m = [], w = opt.w, h = opt.h, i;\n"
+              "    if (!pts || !pts.length) { m.push(dash(w, h)); return m; }\n"
+              "    var step = opt.step > 0 ? opt.step : 1, from = opt.from, to = opt.to;\n"
+              "    var X = function (t) { return to > from ? (t - from) / (to - from) * w : w; };\n"
+              "    var k = pts.length - 1;\n"
+              "    if (!k) { m.push([\"last\", X(pts[0][0]), g2Y(pts[0][1], h), 2.5, 2.5, \"--ink\"]); return m; }\n"
+              "    m.push([\"ref\", 0, g2Y(RSSI_REF, h), w, 1, \"--faint\"]);\n"
+              "    var gap = step * GAP_STEPS, dots = pts.length < DOTS_BELOW;\n"
+              "    for (i = 1; i < pts.length; i++) {\n"
+              "      var xa = X(pts[i - 1][0]), xb = X(pts[i][0]);\n"
+              "      if (pts[i][0] - pts[i - 1][0] > gap) {\n"
+              "        m.push([\"gap\", xa, 0, xb - xa, h, \"--faint\"]);\n"
+              "        continue;\n"
+              "      }\n"
+              "      if (dots) continue;\n"
+              "      m.push([\"line\", xa, g2Y(pts[i - 1][1], h), xb - xa,\n"
+              "              g2Y(pts[i][1], h) - g2Y(pts[i - 1][1], h), \"--tui-normal\"]);\n"
+              "    }\n"
+              "    if (dots)\n"
+              "      for (i = 0; i < k; i++)\n"
+              "        m.push([\"dot\", X(pts[i][0]), g2Y(pts[i][1], h), 1.5, 1.5, \"--tui-normal\"]);\n"
+              "    var wk = opt.whisker;\n"
+              "    if (wk && gnum(wk[0]) && gnum(wk[1]) && wk[1] >= wk[0])\n"
+              "      m.push([\"whisker\", X(pts[k][0]), g2Y(wk[1], h), 1,\n"
+              "              Math.max(1, g2Y(wk[0], h) - g2Y(wk[1], h)), \"--tui-normal\"]);\n"
+              "    m.push([\"last\", X(pts[k][0]), g2Y(pts[k][1], h), 2.5, 2.5, \"--ink\"]);\n"
+              "    return m;\n"
+              "  }\n");
+    WT_HAS(p, "      if (pts[i][1] > RSSI_HI || pts[i][1] < RSSI_LO) n++;");
+    WT_HAS(p, "  var BAND_SHORT = { immediate: \"imm\", near: \"near\", room: \"room\", "
+              "building: \"bldg\", far: \"far\" };\n"
+              "  var TREND_GLYPH = { approaching: \"\\u2198\", steady: \"\\u2192\", "
+              "leaving: \"\\u2197\" };\n"
+              "  function g2Words(last, band, trend) {\n"
+              "    var own = Object.prototype.hasOwnProperty;\n"
+              "    var b = typeof band === \"string\" && own.call(BAND_SHORT, band) ? BAND_SHORT[band] : \"\";\n"
+              "    var g = typeof trend === \"string\" && own.call(TREND_GLYPH, trend) ? TREND_GLYPH[trend] : \"\";\n"
+              "    return { text: gnum(last) ? String(Math.round(last)) : \"-\",\n"
+              "             bold: trend === \"approaching\", near: b && g ? b + \" \" + g : b || g };\n"
+              "  }\n");
+    WT_HAS(p, "  function isNew(first, from) { return gnum(first) && gnum(from) && first >= from; }\n"
+              "  function firstCell(first, from, cellS, n) {\n"
+              "    if (!isNew(first, from) || !(cellS > 0)) return -1;\n"
+              "    var c = Math.floor((first - from) / cellS);\n"
+              "    return c < n ? c : -1;\n"
+              "  }\n");
     WT_HAS(p, "  function g4Stats(cells, warm) {\n"
               "    var o = { warm: gnum(warm) ? warm : 3, warming: 0, fed: 0, max: 0, n: 0 };\n"
               "    for (var i = 0; i < 168; i++) {\n"
@@ -1150,6 +1279,200 @@ static void test_cards_and_multiples_wiring(void) {
     WT_HAS(p, "n: st.n, state: st.warming ? \"warming: \" + st.warming + \" of 168 cells\" : \"\" });");
 }
 
+/* ── V2: G2, its words, the new mark, G6's placements ───────────── */
+
+/* "No whisker" is has_w 0 with a zeroed range, never NULL: a mutation
+ * that drops the has_w test must draw a wrong mark, not crash the suite
+ * (V0's M4 and M8). */
+static const double NOWK[2] = { 0, 0 };
+
+/* G2's states (§5 G2, §9): no data is the dash alone; one sample its
+ * dot alone; four are dots; a gap breaks the line; the last value is
+ * always marked. Seen red with the one-sample early return taken out
+ * of the port (a ref mark appeared). */
+static void test_g2_states(void) {
+    gmarks_t g;
+    gl_g2(NULL, 0, 72, 14, 0, 3600, 60, 0, NOWK, &g);
+    WT_EQ(g.n, 1);
+    WT_EQ(gm_count(&g, "dash"), 1);
+    double one[1][2] = {{1800, -60}};
+    gl_g2(one, 1, 72, 14, 0, 3600, 60, 0, NOWK, &g);
+    WT_EQ(g.n, 1);
+    WT_EQ(gm_count(&g, "last"), 1);
+    WT_EQ(gm_count(&g, "ref"), 0);
+    double four[4][2] = {{0, -80}, {60, -70}, {120, -60}, {180, -50}};
+    gl_g2(four, 4, 72, 14, 0, 3600, 60, 0, NOWK, &g);
+    WT_EQ(gm_count(&g, "line"), 0);
+    WT_EQ(gm_count(&g, "dot"), 3);
+    WT_EQ(gm_count(&g, "last"), 1);
+    double gp[6][2] = {{0, -80}, {60, -70}, {120, -60}, {600, -50}, {660, -52}, {720, -51}};
+    gl_g2(gp, 6, 72, 14, 0, 3600, 60, 0, NOWK, &g);
+    WT_EQ(gm_count(&g, "gap"), 1);
+    WT_EQ(gm_count(&g, "line"), 4);
+    /* One ink (R1): every line segment is --tui-normal, however high. */
+    for (int i = 0; i < g.n; i++)
+        if (!strcmp(g.m[i].kind, "line")) WT_ASSERT(!strcmp(g.m[i].tok, "--tui-normal"));
+}
+
+/* The fixed scale (R3, §9): -20 dBm is the top and -95 the bottom on
+ * every G2, whatever the row's own range, so two rows compare; the
+ * -67 dBm rule is at its place (ruling 3); a -10 dBm reading clamps to
+ * the top and is counted. Seen red with the clamp taken out of gl_g2y
+ * (the last value left the glyph) and with the count's upper bound
+ * dropped. */
+static void test_g2_fixed_scale_and_clamp(void) {
+    gmarks_t g;
+    double a[5][2] = {{0, -90}, {60, -88}, {120, -86}, {180, -84}, {240, -20}};
+    gl_g2(a, 5, 72, 15, 0, 300, 60, 0, NOWK, &g);
+    WT_ASSERT(near(gm_get(&g, "last").y, 0));
+    WT_ASSERT(near(gm_get(&g, "ref").y, 15 - (-67.0 + 95) / 75 * 15));
+    WT_ASSERT(!strcmp(gm_get(&g, "ref").tok, "--faint"));
+    double b[5][2] = {{0, -30}, {60, -28}, {120, -26}, {180, -24}, {240, -95}};
+    gl_g2(b, 5, 72, 15, 0, 300, 60, 0, NOWK, &g);
+    WT_ASSERT(near(gm_get(&g, "last").y, 15));
+    double c[5][2] = {{0, -60}, {60, -50}, {120, -40}, {180, -30}, {240, -10}};
+    gl_g2(c, 5, 72, 15, 0, 300, 60, 0, NOWK, &g);
+    WT_ASSERT(near(gm_get(&g, "last").y, 0));
+    WT_EQ(gl_g2_clamped(c, 5), 1);
+    WT_EQ(gl_g2_clamped(a, 5), 0);
+    double d[1][2] = {{0, -120}};
+    WT_EQ(gl_g2_clamped(d, 1), 1);
+}
+
+/* The whisker (§5 G2): the range at the last value, drawn from its top
+ * down, and only when there is one. The absence with none given was
+ * seen red with the has_w test taken out of the port (it drew the
+ * whisker of a zeroed range), and with a range out of order. */
+static void test_g2_whisker(void) {
+    gmarks_t g;
+    double p[5][2] = {{0, -70}, {60, -66}, {120, -62}, {180, -58}, {240, -55}};
+    double wk[2] = { -65, -50 };
+    gl_g2(p, 5, 72, 15, 0, 300, 60, 1, wk, &g);
+    WT_EQ(gm_count(&g, "whisker"), 1);
+    gmark_t w = gm_get(&g, "whisker");
+    WT_ASSERT(near(w.x, gm_get(&g, "last").x));
+    WT_ASSERT(near(w.y, 15 - (-50.0 + 95) / 75 * 15));
+    WT_ASSERT(near(w.h, 15.0 * 15 / 75));
+    double none[2] = { 0, 0 };
+    gl_g2(p, 5, 72, 15, 0, 300, 60, 0, none, &g);
+    WT_EQ(gm_count(&g, "whisker"), 0);
+    double bad[2] = { -50, -65 };
+    gl_g2(p, 5, 72, 15, 0, 300, 60, 1, bad, &g);
+    WT_EQ(gm_count(&g, "whisker"), 0);
+    /* R10: in one grey the rule, the line, the whisker and the last
+     * value are four kinds at their own places. */
+    gl_g2(p, 5, 72, 15, 0, 300, 60, 1, wk, &g);
+    gm_grey(&g);
+    WT_ASSERT(gm_all_grey(&g));
+    WT_EQ(gm_count(&g, "ref"), 1);
+    WT_EQ(gm_count(&g, "line"), 4);
+    WT_EQ(gm_count(&g, "whisker"), 1);
+    WT_EQ(gm_count(&g, "last"), 1);
+}
+
+/* G2's words agree with sloth's estimate and fit nothing of their own:
+ * bold only when sloth's trend says approaching, whatever the line
+ * does, and the band and trend glyph as the TUI's distance cell prints
+ * them (rf_band_short, rf_trend_glyph). A climbing trail that sloth
+ * calls steady is not bold. Seen red with the port's bold taken from
+ * the last value against the first instead (a slope of its own). */
+static void test_g2_words_are_sloths(void) {
+    g2w_t w = gl_g2_words(1, -45.4, "room", "approaching");
+    WT_ASSERT(!strcmp(w.text, "-45"));
+    WT_EQ(w.bold, 1);
+    WT_ASSERT(!strcmp(w.nearw, "room \xe2\x86\x98"));
+    w = gl_g2_words(1, -45, "building", "steady");
+    WT_EQ(w.bold, 0);
+    WT_ASSERT(!strcmp(w.nearw, "bldg \xe2\x86\x92"));
+    w = gl_g2_words(1, -80, "far", "leaving");
+    WT_ASSERT(!strcmp(w.nearw, "far \xe2\x86\x97"));
+    /* No estimate: no words, never a guess; no value: "-". */
+    w = gl_g2_words(0, 0, NULL, NULL);
+    WT_ASSERT(!strcmp(w.text, "-"));
+    WT_EQ(w.bold, 0);
+    WT_ASSERT(!strcmp(w.nearw, ""));
+    /* A word that is not sloth's says nothing. */
+    w = gl_g2_words(1, -60, "next door", "unknown");
+    WT_ASSERT(!strcmp(w.nearw, ""));
+    WT_EQ(w.bold, 0);
+    /* The page's cells take their bold and words from g2Words() and
+     * from the row's own rf words, nowhere else. */
+    const char *p = page();
+    WT_HAS(p, "    var w = glyph.g2Words(last, rf ? rf.band : null, rf ? rf.trend : null);");
+    WT_HAS(p, "    c.appendChild(el(\"span\", w.bold ? \"g2n near\" : \"g2n\", w.text));");
+    WT_HAS(p, "if (d.rf && d.rf.trend === \"approaching\") nnear++;");
+    WT_HAS(p, "if (a.rf && a.rf.trend === \"approaching\") nnear++;");
+}
+
+/* F15: new is first seen inside the window; G5's first-seen cell is
+ * where it falls, -1 before the window or past it. Seen red with the
+ * port's >= made >. */
+static void test_new_mark_and_first_cell(void) {
+    WT_EQ(gl_is_new(1, 1000, 1000), 1);
+    WT_EQ(gl_is_new(1, 999, 1000), 0);
+    WT_EQ(gl_is_new(0, 5000, 1000), 0);
+    WT_EQ(gl_first_cell(1, 1000, 1000, 600, 144), 0);
+    WT_EQ(gl_first_cell(1, 1000 + 600 * 7 + 5, 1000, 600, 144), 7);
+    WT_EQ(gl_first_cell(1, 999, 1000, 600, 144), -1);
+    WT_EQ(gl_first_cell(1, 1000 + 600 * 144, 1000, 600, 144), -1);
+    /* The strip draws it as G5's "first" mark at that cell. */
+    int cells[10] = { 0, 0, 0, 1, 1, 1, 0, 0, 0, 0 };
+    gmarks_t g;
+    gl_g5(cells, 10, 100, 12, gl_first_cell(1, 1000 + 600 * 3, 1000, 600, 10), NULL, 0, &g);
+    WT_EQ(gm_count(&g, "first"), 1);
+    WT_ASSERT(near(gm_get(&g, "first").x, 30));
+    /* The page passes it: Devices, the drawer and the Lookup card. */
+    const char *p = page();
+    WT_HAS(p, "    drawStrip(r.cv, d.presence, 144, glyph.firstCell(d.first_seen, D.pfrom, 600, 144));");
+    WT_HAS(p, "                glyph.firstCell(rec ? rec.first_seen : null, j.presence_from, 600, 144));");
+    WT_HAS(p, "    r.nw = SlothRf.newMark(d.first_seen, D.pfrom);");
+    WT_HAS(p, "    var nw = SlothRf.newMark(a.first_seen, WF.newFrom);");
+    WT_HAS(p, "    if (!glyph.isNew(first, from)) return null;");
+}
+
+/* F9, F17, F20 as the page wires them: G2 in both DBM columns, the
+ * drawer and the Lookup card; G6's bullet on risk (sloth's levels, the
+ * tick at HIGH), karma (karma_candidates.score, 1 to 7, the tick at 3,
+ * the least a corroborated candidate scores), the anomaly score (A1's 60) and the anomaly
+ * table; G6's bar on the anom and flow total columns, each on its own
+ * column maximum; and the card's rounded score bar gone (R8). Each seen
+ * red with its line taken out of the page. */
+static void test_v2_wiring(void) {
+    const char *p = page();
+    WT_HAS(p, "window.SlothRf = { init: function (h) { H = h; }, cell: cell, block: block, bullet: bullet,");
+    WT_HAS(p, "    SlothRf.cell(r.cells[\"c-sig\"], d.rf, num(d.signal) ? d.signal : null);");
+    WT_HAS(p, "    SlothRf.cell(sg, a.rf, num(a.signal) ? a.signal : null);");
+    WT_HAS(p, "      drf.appendChild(SlothRf.block(j.rf, mac));");
+    WT_HAS(p, "        box.appendChild(SlothRf.block(j.rf, j.mac));");
+    WT_HAS(p, "<div id=\"dr-rf\"></div>");
+    /* The theme toggle redraws the Lookup card too, whose strip and G2
+     * are canvases now: pixels do not follow a var(). */
+    WT_HAS(p, "    if (view !== \"lookup\") show(view, VP);\n"
+              "    // The Lookup card has canvases since V2 (F20: its strip and G2), so\n"
+              "    // it is asked again rather than shown, which would only focus the\n"
+              "    // box and leave the old theme's pixels.\n"
+              "    else lookup();\n");
+    WT_HAS(p, "{ max: 3, ranges: [1, 2, 3], threshold: 2 }");
+    WT_HAS(p, "{ max: 7, ranges: [3, 7], threshold: 3 }");
+    /* Not the alert's 0-100 confidence: the column is the [y] score. */
+    WT_LACKS(p, "{ max: 100, ranges: [20, 45, 100], threshold: 45 }");
+    WT_HAS(p, "    return { max: 100, ranges: [40, 70, 100], threshold: a.rule === \"A1\" ? 60 : null };");
+    WT_HAS(p, "    SlothRf.bullet(sb, score, ANOM_G6(a), \"\");");
+    WT_HAS(p, "      SlothRf.bullet(row.appendChild(el(\"span\", \"n\")), score, ANOM_G6(a), String(score),");
+    WT_HAS(p, "    SlothRf.count(r.cells[\"c-an\"], an, D.anMax, String(an), an > 0 ? heatClass(0.5) : \"d-dim\");");
+    WT_HAS(p, "    SlothRf.count(row.appendChild(el(\"span\", \"n\")), f.total, F.totMax, fmt(f.total),");
+    WT_HAS(p, "      return glyph.g6(num(v) ? v : null, { w: w, h: h, max: max, count: true });");
+    WT_LACKS(p, "var bar = el(\"div\", \"bar\");");
+    WT_LACKS(p, ".bar { height: 4px;");
+    /* A table's G2 draws the whole hour in every row (P4); the block's
+     * caption says the rule is a rule of thumb (ruling 3). */
+    WT_HAS(p, "    var n = rf && rf.cells && rf.cells.length ? rf.cells.length : 60;");
+    WT_HAS(p, "\" dBm, a field rule of thumb, not a standard\"");
+    /* The member's cells are web_rf.h's: the page's fallback is the same
+     * count. */
+    WT_EQ(WEB_RF_CELLS, 60);
+}
+
 /* ── the TUI forms (R12) ────────────────────────────────────────── */
 
 /* R12: a glyph with no character-cell form is not added, so each of
@@ -1178,6 +1501,10 @@ static void test_every_glyph_names_its_tui_form(void) {
                 "\xe2\x96\x85\xe2\x96\x86\xe2\x96\x87\xe2\x96\x88`");
     WT_HAS(doc, "\xe2\x96\xae");          /* G5's present cell */
     WT_HAS(doc, "\xe2\x96\x90\xe2\x96\x88");  /* G6's bullet */
+    /* V2: G2's row, its form on the fixed scale with sloth's own
+     * distance cell for the words. Seen red with the row removed. */
+    WT_HAS(doc, "| G2 range sparkline (RSSI) |");
+    WT_HAS(doc, "`rf_dist_cell()`");
 }
 
 /* The V1 review's fixes, as the page wires them: the footer's drops
@@ -1237,4 +1564,10 @@ void run_glyph_tests(void) {
     WT_RUN(test_cards_and_multiples_wiring);
     WT_RUN(test_v1_review_wiring);
     WT_RUN(test_every_glyph_names_its_tui_form);
+    WT_RUN(test_g2_states);
+    WT_RUN(test_g2_fixed_scale_and_clamp);
+    WT_RUN(test_g2_whisker);
+    WT_RUN(test_g2_words_are_sloths);
+    WT_RUN(test_new_mark_and_first_cell);
+    WT_RUN(test_v2_wiring);
 }

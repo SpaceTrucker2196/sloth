@@ -217,9 +217,21 @@ canvas.strip { display: block; width: 100%; height: 18px; margin: 4px 0 var(--ga
 .card .ky { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .card .ev { font-size: 11px; overflow-wrap: anywhere; margin: 4px 0; }
 .card .tm { font-size: 11px; color: var(--tui-dim); }
-.bar { height: 4px; background: var(--rule); margin: 4px 0; border-radius: 2px; overflow: hidden; }
-.bar > i { display: block; height: 4px; }
 .card canvas { display: block; width: 100%; height: 32px; }
+/* G2 and G6 (web/ui/rf.js; #171 V2): word-sized in a table cell (R2,
+ * 14 px for G2 and 12 for G6, never wider than 48 px plus the number),
+ * square-cornered (R8). More specific than .drow canvas, which is the
+ * presence strip's. */
+canvas.g2, .drow canvas.g2 { display: inline-block; vertical-align: middle; width: 72px; height: 14px; margin-right: 4px; border-radius: 0; }
+canvas.g6, .drow canvas.g6 { display: inline-block; vertical-align: middle; width: 36px; height: 12px; margin-right: 4px; border-radius: 0; }
+.card .g6b canvas.g6 { display: block; width: 100%; height: 8px; margin: 4px 0; }
+.g2n.near { font-weight: 700; color: var(--tui-bright); }
+.g2e { color: var(--muted); }
+.g2b { margin: var(--gap) 0; }
+canvas.g2w { display: block; width: 100%; height: 48px; }
+.g2t { display: flex; justify-content: space-between; font-size: 10px; color: var(--faint); }
+/* F15: the new mark, the row's one --signal accent (P6). */
+.nw { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--signal); margin-right: 4px; vertical-align: middle; }
 
 /* ── tables: Devices (§8.6), APs, History, Flows ───────────────────── */
 /* A virtualised table, one fixed row height, its columns sized to fit

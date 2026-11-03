@@ -1398,6 +1398,10 @@
     // Redrawn with its parameters: an alert's page keeps its id, a
     // drill-down its filter.
     if (view !== "lookup") show(view, VP);
+    // The Lookup card has canvases since V2 (F20: its strip and G2), so
+    // it is asked again rather than shown, which would only focus the
+    // box and leave the old theme's pixels.
+    else lookup();
     // The strip's and the footer's glyphs, in the new theme's tokens,
     // from what they last read.
     if (window.SlothFacts) SlothFacts.paint();
@@ -2049,6 +2053,9 @@
     });
   }
 
+  function ANOM_G6(a) {
+    return { max: 100, ranges: [40, 70, 100], threshold: a.rule === "A1" ? 60 : null };
+  }
   function card(a) {
     var c = el("div", "card " + (a.open ? "open" : "closed"));
     var hd = el("div", "hd");
@@ -2059,12 +2066,11 @@
     hd.appendChild(ky);
     c.appendChild(hd);
     var score = num(a.score) ? Math.max(0, Math.min(100, a.score)) : 0;
-    var bar = el("div", "bar");
-    var fill = el("i");
-    fill.style.width = score + "%";
-    fill.style.background = heat(score / 100);
-    bar.appendChild(fill);
-    c.appendChild(bar);
+    // G6 (§6.5): the score against the heat ramp's cuts (0.4, 0.7) and,
+    // for A1, the 60 it fires at (WEB_ANOM_Z_THRESHOLD 3 sd, score z x
+    // 20); the other rules score a fixed figure, so no tick.
+    var sb = c.appendChild(el("div", "g6b"));
+    SlothRf.bullet(sb, score, ANOM_G6(a), "");
     c.appendChild(richText(el("div", "ev"), a.evidence, 0, "d-normal"));
     if (typeof a.metric === "string") {
       var cv = document.createElement("canvas");
@@ -2095,7 +2101,7 @@
       { k: "kd", label: "kind", w: 8, type: "text", val: anv("kind") },
       { k: "ru", label: "rule", w: 6, type: "text", val: anv("rule") },
       { k: "ky", label: "key", w: 20, flex: true, type: "text", val: anv("key") },
-      { k: "sc", label: "score", w: 7, num: true, type: "num", val: anv("score") },
+      { k: "sc", label: "score", px: 72, num: true, type: "num", val: anv("score") },
       { k: "fs", label: "first", w: 20, type: "time", val: anv("first_seen") },
       { k: "ls", label: "last", w: 20, type: "time", val: anv("last_seen") }
     ] });
@@ -2111,7 +2117,8 @@
       ky.appendChild(a.key !== "" ? keySpan(String(a.key)) : el("span", "d-dim", "(sensor)"));
       row.appendChild(ky);
       var score = num(a.score) ? Math.max(0, Math.min(100, a.score)) : 0;
-      row.appendChild(el("span", "n " + heatClass(score / 100), String(score)));
+      SlothRf.bullet(row.appendChild(el("span", "n")), score, ANOM_G6(a), String(score),
+                     heatClass(score / 100));
       row.appendChild(el("span", "d-dim", stamp(a.first_seen)));
       row.appendChild(el("span", "d-dim", stamp(a.last_seen)));
       if (typeof a.key === "string" && MAC_RE.test(a.key)) {
@@ -2480,13 +2487,13 @@
       { k: "ip", label: "ip", w: 15, type: "ip", srv: "ip", val: dv("ip") },
       { k: "nm", label: "name", w: 8, flex: true },
       { k: "ss", label: "ssid", w: 12, type: "text", srv: "ssid", val: dv("ssid") },
-      { k: "sig", label: "dBm", w: 4, min: 3, num: true, type: "num", srv: "signal", val: dv("signal") },
+      { k: "sig", label: "dBm", px: 150, min: 3, num: true, type: "num", srv: "signal", val: dv("signal") },
       { k: "src", label: "src", w: 6, min: 3, type: "num", srv: "sources", val: dv("sources") },
-      { k: "rk", label: "risk", w: 4, min: 3, type: "sev", srv: "risk", val: dv("risk") },
+      { k: "rk", label: "risk", px: 52, min: 3, type: "sev", srv: "risk", val: dv("risk") },
       { k: "fs", label: "first", w: 10, type: "time", srv: "first", val: dv("first_seen") },
       { k: "ls", label: "last", w: 10, type: "time", srv: "last", val: dv("last_seen") },
       { k: "z", label: "z", w: 4, min: 3 },
-      { k: "an", label: "anom", w: 6, min: 3 },
+      { k: "an", label: "anom", px: 60, min: 3 },
       { k: "pr", label: "24 h presence", px: 146 }
     ] });
 
@@ -2514,7 +2521,18 @@
         var more = !!j.more;
         if (more && num(j.next_offset) && rows.length < DEV_MAX) return page(j.next_offset);
         D.rows = DTD.sort(rows.slice(0, DEV_MAX), !more && rows.length <= DEV_MAX);
-        set("d-count", D.rows.length + " shown" +
+        // V2: the strip's window is the new mark's (F15), the anom
+        // column's bars share its largest count (F17, R3), and the
+        // caption counts what is new and what sloth says is approaching.
+        D.pfrom = num(j.presence_from) ? j.presence_from : null;
+        D.anMax = SlothRf.colMax(D.rows, function (d) { return d.anomalies; });
+        var nnew = 0, nnear = 0;
+        D.rows.forEach(function (d) {
+          if (glyph.isNew(d.first_seen, D.pfrom)) nnew++;
+          if (d.rf && d.rf.trend === "approaching") nnear++;
+        });
+        set("d-count", D.rows.length + " shown, " + nnew + " new in 24 h, " + nnear +
+            " approaching (sloth's estimate)" + (D.anMax ? "; anom bars to " + D.anMax : "") +
             (more || rows.length > DEV_MAX ? "; the first " + D.rows.length + ", narrow the search" : "") +
             (q.indexOf("pass:latest") >= 0 && num(j.pass_size)
               ? "; " + j.pass_size + " in the latest pass, " + D.rows.length + " of them in sloth.db" : ""));
@@ -2554,10 +2572,11 @@
   // width: 144 of 10 minutes on the Devices view and the drawer,
   // History's presence_cells over its range (the rest of the 144 are
   // past it). A strip the server could not answer draws R5's dash.
-  function drawStrip(c, hex, n) {
+  // first: the first-seen cell (glyph.firstCell()), or -1 (F15's mark).
+  function drawStrip(c, hex, n, first) {
     var cells = glyph.cellsFromHex(hex, n);
     glyph.paint(c, glyph.g5(cells, { w: c.clientWidth, h: c.clientHeight,
-                                     first: -1, ground: "--bg" }), tok);
+                                     first: num(first) ? first : -1, ground: "--bg" }), tok);
   }
 
   function rowEl() {
@@ -2604,6 +2623,9 @@
     r.el.className = "drow dt-row" + (SEV_CLASS[risk] ? " " + SEV_CLASS[risk] : "") +
                      (r.mac === D.sel ? " on" : "");
     r.sw.style.background = keyColor(r.mac);
+    if (r.nw) { r.nw.remove(); r.nw = null; }
+    r.nw = SlothRf.newMark(d.first_seen, D.pfrom);
+    if (r.nw) r.cells["c-mac"].insertBefore(r.nw, r.sw);
     r.macText.className = d.random ? "rnd d-dim" : "d-dim";
     r.macText.textContent = (d.random ? "~" : "") + r.mac;
     r.cells["c-ven"].className = "c-ven " + (d.vendor === null ? "d-dim" : "d-bright");
@@ -2616,11 +2638,14 @@
     else brandText(r.nameText, String(d.name), "d-bright");
     put(r.cells["c-ss"], d.ssid === null ? el("span", "d-dim", "-") : ssidSpan(String(d.ssid), d.ssid_k, d.ssid_np));
     r.cells["c-sig"].className = "c-sig d-dim";
-    r.cells["c-sig"].textContent = num(d.signal) ? String(d.signal) : "-";
+    SlothRf.cell(r.cells["c-sig"], d.rf, num(d.signal) ? d.signal : null);
     r.cells["c-src"].className = "c-src d-dim";
     r.cells["c-src"].textContent = srcGlyphs(num(d.sources) ? d.sources : 0);
-    r.cells["c-rk"].className = "c-rk " + (RISK_HEAT[risk] > 0 ? heatClass(RISK_HEAT[risk]) : "d-dim");
-    r.cells["c-rk"].textContent = String(risk);
+    // G6 (F17): risk against sloth's levels, the tick at HIGH (2); the
+    // number keeps the TUI's heat grade beside it.
+    r.cells["c-rk"].className = "c-rk";
+    SlothRf.bullet(r.cells["c-rk"], risk, { max: 3, ranges: [1, 2, 3], threshold: 2 }, String(risk),
+                   RISK_HEAT[risk] > 0 ? heatClass(RISK_HEAT[risk]) : "d-dim");
     r.cells["c-fs"].className = "c-fs d-dim";
     r.cells["c-fs"].textContent = shortStamp(d.first_seen);
     r.cells["c-ls"].className = "c-ls d-dim";
@@ -2628,9 +2653,9 @@
     r.cells["c-z"].className = "c-z d-normal";
     r.cells["c-z"].textContent = num(d.z) ? d.z.toFixed(1) : "-";
     var an = num(d.anomalies) ? d.anomalies : 0;
-    r.cells["c-an"].className = "c-an " + (an > 0 ? heatClass(0.5) : "d-dim");
-    r.cells["c-an"].textContent = String(an);
-    drawStrip(r.cv, d.presence);
+    r.cells["c-an"].className = "c-an";
+    SlothRf.count(r.cells["c-an"], an, D.anMax, String(an), an > 0 ? heatClass(0.5) : "d-dim");
+    drawStrip(r.cv, d.presence, 144, glyph.firstCell(d.first_seen, D.pfrom, 600, 144));
   }
 
   function layout() {
@@ -2893,7 +2918,13 @@
       if (num(j.alerts_reached))
         box.appendChild(el("div", "sub", "alerts read back to " + stamp(j.alerts_reached) +
                            " only (the request's time budget)"));
-      drawStrip($("dr-strip"), j.presence);
+      var rec = j.record;
+      drawStrip($("dr-strip"), j.presence, 144,
+                glyph.firstCell(rec ? rec.first_seen : null, j.presence_from, 600, 144));
+      // G2 at the drawer's width (F9, §6.8): the device's signal over
+      // the hour, with sloth's band and trend.
+      var drf = clear("dr-rf");
+      drf.appendChild(SlothRf.block(j.rf, mac));
       var wk = j.week || {};
       var cells = null;
       if (wk.cells && wk.cells.length === 168) {
@@ -2934,6 +2965,16 @@
       else
         itemList(box, "arp macs", j.macs, function (x) { return macVal(x.addr); }, j.macs_more);
       var d = j.device;
+      // F20: the card ends with the drawer's 24 h strip and G2, so the
+      // analyst need not leave the view to see when and how near.
+      function tail() {
+        if (typeof j.presence !== "string") return;
+        box.appendChild(el("div", "label", "24 h presence, 10 min cells"));
+        var sc = box.appendChild(el("canvas", "strip"));
+        sc.ariaLabel = "presence over the last 24 hours";
+        drawStrip(sc, j.presence, 144, glyph.firstCell(d ? d.first_seen : null, j.presence_from, 600, 144));
+        box.appendChild(SlothRf.block(j.rf, j.mac));
+      }
       if (d) {
         kvList(box, [["sloth.db", macVal(d.mac)],
                      ["vendor", d.vendor === null ? null : el("span", "d-bright", String(d.vendor))],
@@ -2945,6 +2986,7 @@
       } else {
         box.appendChild(el("div", "sub", "no sloth.db record"));
       }
+      tail();
     }).catch(function (e) { if (gen === L.gen) set("l-src", errText(e.message)); });
   }
   $("l-go").addEventListener("click", lookup);
@@ -3245,11 +3287,11 @@
       { k: "bs", label: "bssid", w: 19, min: 8, type: "mac", srv: "bssid", val: av("bssid") },
       { k: "ss", label: "ssid", w: 12, flex: true, type: "text", srv: "ssid", val: av("ssid") },
       { k: "ch", label: "ch", w: 4, min: 3, type: "num", srv: "channel", val: av("channel") },
-      { k: "sig", label: "dBm", w: 5, min: 3, type: "num", srv: "signal", val: av("signal") },
+      { k: "sig", label: "dBm", px: 150, min: 3, type: "num", srv: "signal", val: av("signal") },
       { k: "enc", label: "enc / akm", w: 20, type: "text", srv: "enc", val: av("enc") },
       { k: "mfp", label: "mfp", w: 12, type: "num", srv: "mfp", val: av("mfp") },
       { k: "dg", label: "downgrade", w: 16, type: "num", srv: "downgrade", val: av("downgrade") },
-      { k: "km", label: "karma", w: 9, type: "num", srv: "karma",
+      { k: "km", label: "karma", px: 112, type: "num", srv: "karma",
         val: function (a) { return a.karma ? a.karma.score : null; } },
       { k: "ls", label: "last", w: 11, type: "time", srv: "last", val: av("last_seen") }
     ] });
@@ -3260,6 +3302,8 @@
     var bs = el("span", "c-bs");
     var sw = el("span", "sw");
     sw.style.background = keyColor(String(a.bssid));
+    var nw = SlothRf.newMark(a.first_seen, WF.newFrom);
+    if (nw) bs.appendChild(nw);
     bs.appendChild(sw);
     bs.appendChild(el("span", "d-dim", a.bssid));
     row.appendChild(bs);
@@ -3270,15 +3314,25 @@
     if (a.ssid_count > 1) ss.appendChild(el("span", "warn", "  +" + (a.ssid_count - 1) + " ssids"));
     row.appendChild(ss);
     row.appendChild(el("span", "c-ch d-normal", String(a.channel)));
-    row.appendChild(el("span", "c-sig d-dim", num(a.signal) ? String(a.signal) : "-"));
+    var sg = row.appendChild(el("span", "c-sig d-dim"));
+    SlothRf.cell(sg, a.rf, num(a.signal) ? a.signal : null);
     row.appendChild(el("span", "c-enc d-normal", (a.enc === null ? "?" : a.enc) + " " +
                        (a.akm_names && a.akm_names.length ? a.akm_names.join(",") : "")));
     row.appendChild(el("span", "c-mfp d-normal", "mfp " + a.mfp_word));
     row.appendChild(el("span", "c-dg" + (a.downgrade ? " warn" : " d-dim"),
                        a.downgrade_names && a.downgrade_names.length
                          ? a.downgrade_names.join(", ") : "-"));
-    row.appendChild(el("span", "c-km" + (a.karma ? " warn" : " d-dim"),
-                       a.karma ? "karma " + a.karma.score : "-"));
+    // G6 (F17): karma_candidates.score, the TUI's [y] score and not
+    // the KARMA_AP alert's 0-100 confidence: 1 + 2 for a station's PNL
+    // (pnl_best >= KARMA_PNL_CORROB_MIN) + 1 for uniform IEs + 3 for a
+    // deauth chain (src/karma_detect.c), so 1 to 7. The uncorroborated
+    // reach 2 at most (base and IEs); 3 is the least a candidate scores
+    // once the PNL or a deauth chain corroborates it, the alert's CRIT
+    // gate, so the tick is at 3.
+    var km = row.appendChild(el("span", "c-km"));
+    if (a.karma) SlothRf.bullet(km, a.karma.score, { max: 7, ranges: [3, 7], threshold: 3 },
+                                "karma " + a.karma.score, "warn");
+    else km.appendChild(el("span", "d-dim", "-"));
     row.appendChild(el("span", "c-ls d-dim", shortStamp(a.last_seen)));
     var box = el("div", "apbox");
     box.appendChild(row);
@@ -3310,9 +3364,18 @@
       var box = $("w-aps");
       while (box.firstChild) box.removeChild(box.firstChild);
       WF.apEls = new Map();
+      // F15: new is first seen in the last 24 h, the Devices view's
+      // window; the caption counts it and sloth's approaching.
+      WF.newFrom = num(j.now) ? j.now - 86400 : null;
+      var nnew = 0, nnear = 0;
+      (j.rows || []).forEach(function (a) {
+        if (glyph.isNew(a.first_seen, WF.newFrom)) nnew++;
+        if (a.rf && a.rf.trend === "approaching") nnear++;
+      });
       DTA.sort(j.rows || [], !j.more).forEach(function (a) { box.appendChild(apRow(a)); });
       if (!j.rows || !j.rows.length) box.appendChild(el("div", "sub", "no beacon_aps rows"));
-      set("w-aps-count", (j.rows ? j.rows.length : 0) + " shown" + (j.more ? ", more in sloth.db" : ""));
+      set("w-aps-count", (j.rows ? j.rows.length : 0) + " shown, " + nnew + " new in 24 h, " + nnear +
+          " approaching (sloth's estimate)" + (j.more ? ", more in sloth.db" : ""));
     }).catch(function (e) {
       if (gen !== WF.gen) return;
       var box = $("w-aps");
@@ -3577,7 +3640,7 @@
       { k: "s", label: "source", w: 24, min: 8, type: "ip", srv: "src", val: fv("src") },
       { k: "d", label: "destination", w: 24, min: 8, type: "ip", srv: "dst", val: fv("dst") },
       { k: "c", label: "counts", w: 14, flex: true },
-      { k: "t", label: "total", w: 9, num: true, type: "num", srv: "total", val: fv("total") },
+      { k: "t", label: "total", px: 108, num: true, type: "num", srv: "total", val: fv("total") },
       { k: "x", label: "", w: 11 },
       { k: "fs", label: "first", w: 11, type: "time", srv: "first", val: fv("first_seen") },
       { k: "ls", label: "last", w: 11, type: "time", srv: "last", val: fv("last_seen") }
@@ -3602,7 +3665,8 @@
       return String(cols[i] || "?").replace(/_count$/, "") + " " + fmt(v);
     }).join("  ");
     row.appendChild(el("span", hot ? "" : "d-normal", counts));
-    row.appendChild(el("span", hot ? "n" : "n d-bright", fmt(f.total)));
+    SlothRf.count(row.appendChild(el("span", "n")), f.total, F.totMax, fmt(f.total),
+                  hot ? "" : "d-bright");
     var extra = "";
     if (num(f.server_port)) extra = ":" + f.server_port;
     if (typeof f.dialect === "string") extra += " " + f.dialect;
@@ -3642,6 +3706,8 @@
       while (box.firstChild) box.removeChild(box.firstChild);
       flowHead(j);
       F.rows = F.rows.concat(j.rows || []);
+      // F17: the total column's bars on its largest (R3).
+      F.totMax = SlothRf.colMax(F.rows, function (f) { return f.total; });
       DTF.sort(F.rows, !j.more).forEach(function (f) { box.appendChild(flowRow(f, j.columns || [])); });
       F.offset += num(j.count) ? j.count : 0;
       $("f-more").hidden = !j.more;
@@ -5455,6 +5521,9 @@
   if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,
     heat: heat, keyColor: keyColor, sizeCanvas: sizeCanvas, fmt: fmt, hhmmss: hhmmss, css: css,
     errText: errText, series: series, tierFor: tierFor, openBleDrawer: openBleDrawer });
+
+  // G2, G6 and the new mark in the tables (web/ui/rf.js).
+  if (window.SlothRf) SlothRf.init({ tok: tok });
 
   // G1 on the strip, the tiles and the footer (web/ui/facts.js): the
   // page's helpers, lent once.

@@ -1,4 +1,5 @@
 #include "web_devices.h"
+#include "web_rf.h"
 
 #include "web_live.h"
 
@@ -219,9 +220,13 @@ static const char *best_name(const web_m4_t *m, const web_sdb_dev_t *d,
     return NULL;
 }
 
-/* One device row (§8.6). At most WEB_DEV_ROW_MAX bytes. */
+/* One device row (§8.6). At most WEB_DEV_ROW_MAX bytes. rf, when not
+ * NULL, is the row's G2 trail (web_rf.h), written as its "rf" member;
+ * NULL leaves the member out (History's rows, a record inside a larger
+ * answer that carries its own). */
 static void dev_json(web_jw_t *w, const web_m4_t *m, const web_sdb_dev_t *d,
-                     const unsigned char *bits, long long now_s) {
+                     const unsigned char *bits, const web_rf_trail_t *rf,
+                     long long now_s) {
     uint8_t mac[6];
     web_oui_hit_t hit;
     memset(&hit, 0, sizeof(hit));
@@ -271,8 +276,34 @@ static void dev_json(web_jw_t *w, const web_m4_t *m, const web_sdb_dev_t *d,
     } else {
         web_jw_raw(w, "null");
     }
+    if (rf) web_rf_json(w, rf, m->frrs, d->mac, now_s);
     web_jw_ssid_meta(w, "ssid", d->ssid);
     web_jw_raw(w, "}");
+}
+
+/* G2's trails for the rows' MACs (web_rf.h): the AP's series first for
+ * a row sloth calls an AP. NULL when memory is short. */
+static web_rf_trail_t *rf_rows(const web_m4_t *m, const char (*macs)[WEB_KEY_MAX + 1],
+                               const web_sdb_dev_t *rows, int n, long long now_s) {
+    web_rf_trail_t *t = calloc((size_t)(n ? n : 1), sizeof(*t));
+    int *ap = calloc((size_t)(n ? n : 1), sizeof(*ap));
+    if (!t || !ap) { free(t); free(ap); return NULL; }
+    for (int i = 0; i < n; i++) ap[i] = rows[i].is_ap != 0;
+    web_rf_trails(m->tsdb ? m->tsdb->ru : NULL, m->sc, macs, ap, n, now_s, t);
+    free(ap);
+    return t;
+}
+
+/* The presence strip and G2's trail of one MAC, as top-level members of
+ * /api/device and /api/lookup (the drawer's and the card's). */
+static void rf_member(web_jw_t *w, const web_m4_t *m, const char *mac, int is_ap,
+                      long long now_s) {
+    char macs[1][WEB_KEY_MAX + 1];
+    snprintf(macs[0], sizeof(macs[0]), "%s", mac);
+    web_rf_trail_t t;
+    web_rf_trails(m->tsdb ? m->tsdb->ru : NULL, m->sc,
+                  (const char (*)[WEB_KEY_MAX + 1])macs, &is_ap, 1, now_s, &t);
+    web_rf_json(w, &t, m->frrs, mac, now_s);
 }
 
 /* ── /api/devices ────────────────────────────────────────────────────── */
@@ -363,6 +394,8 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
     for (int i = 0; i < show; i++)
         snprintf(macs[i], sizeof(macs[i]), "%s", c.rows[i].mac);
     strips(m, (const char (*)[WEB_KEY_MAX + 1])macs, show, now_s, bits);
+    web_rf_trail_t *rf = rf_rows(m, (const char (*)[WEB_KEY_MAX + 1])macs, c.rows, show, now_s);
+    if (!rf) { free(macs); free(bits); free(c.rows); return -1; }
 
     web_jw_t w;
     web_jw_init(&w, body, cap);
@@ -398,9 +431,10 @@ int web_devices_route(const web_m4_t *m, const char *query, long long now_s,
         /* Room for this row and the tail, or stop here with "more". */
         if (w.len + WEB_DEV_ROW_MAX + 96 > cap) break;
         if (i) web_jw_raw(&w, ",");
-        dev_json(&w, m, &c.rows[i], bits + (size_t)i * (WEB_DEV_CELLS / 8), now_s);
+        dev_json(&w, m, &c.rows[i], bits + (size_t)i * (WEB_DEV_CELLS / 8), &rf[i], now_s);
         shown++;
     }
+    free(rf);
     int more = shown < c.n;
     web_jw_raw(&w, "],\"count\":");   web_jw_int(&w, shown);
     web_jw_raw(&w, ",\"more\":");     web_jw_raw(&w, more ? "true" : "false");
@@ -514,7 +548,7 @@ int web_history_devices_route(const web_m4_t *m, const char *query,
     for (int i = 0; i < show; i++) {
         if (w.len + WEB_DEV_ROW_MAX + 96 > cap) break;
         if (i) web_jw_raw(&w, ",");
-        dev_json(&w, m, &c.rows[i], bits + (size_t)i * (WEB_DEV_CELLS / 8), now_s);
+        dev_json(&w, m, &c.rows[i], bits + (size_t)i * (WEB_DEV_CELLS / 8), NULL, now_s);
         shown++;
     }
     int more = shown < c.n;
@@ -858,7 +892,7 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
     oui_member(&w, m, mac);
     web_jw_raw(&w, ",\"record\":");
     if (found) {
-        dev_json(&w, m, &d, NULL, now_s);
+        dev_json(&w, m, &d, NULL, NULL, now_s);
         web_jw_raw(&w, ",\"detail\":{\"hostname\":");
         jw_text_or_null(&w, d.hostname);
         web_jw_raw(&w, ",\"device_class\":");
@@ -904,6 +938,7 @@ int web_device_route(const web_m4_t *m, const char *path_mac,
     web_dev_presence_hex(bits, hx);
     web_jw_raw(&w, ",\"presence\":");      web_jw_str(&w, hx);
     web_jw_raw(&w, ",\"presence_from\":"); web_jw_int(&w, strip_from(now_s));
+    rf_member(&w, m, mac, found && d.is_ap, now_s);
     week_member(&w, m, mac, now_s);
     web_jw_raw(&w, ",\"anomalies\":[");
     if (m->anomaly) {
@@ -1013,7 +1048,21 @@ int web_lookup_route(const web_m4_t *m, const char *query, long long now_s,
     names_member(&w, m, have_db ? &conn : NULL, ip, now_s);
     web_slothdb_close(&conn);
     web_jw_raw(&w, ",\"device\":");
-    if (found) dev_json(&w, m, &d, NULL, now_s); else web_jw_raw(&w, "null");
+    if (found) dev_json(&w, m, &d, NULL, NULL, now_s); else web_jw_raw(&w, "null");
+    /* F20: the card ends with the drawer's presence strip and G2, for
+     * the MAC looked up or the IP's. */
+    if (mac[0]) {
+        unsigned char bits[WEB_DEV_CELLS / 8];
+        char macs[1][WEB_KEY_MAX + 1];
+        snprintf(macs[0], sizeof(macs[0]), "%s", mac);
+        strips(m, (const char (*)[WEB_KEY_MAX + 1])macs, 1, now_s, bits);
+        char hx[WEB_DEV_CELLS / 4 + 1];
+        web_dev_presence_hex(bits, hx);
+        web_jw_raw(&w, ",\"mac\":");           web_jw_str(&w, mac);
+        web_jw_raw(&w, ",\"presence\":");      web_jw_str(&w, hx);
+        web_jw_raw(&w, ",\"presence_from\":"); web_jw_int(&w, strip_from(now_s));
+        rf_member(&w, m, mac, found && d.is_ap, now_s);
+    }
     if (mon && !is_mac) web_jw_raw(&w, ",\"ip_in_scope\":false");
     web_jw_raw(&w, "}\n");
     if (w.overflow) return -1;

@@ -525,6 +525,41 @@ static void test_drawer_presence_week_anomalies(void) {
     WT_ASSERT(!strcmp(macs, mac));
 }
 
+/* G2 (web_rf.h, #171 V2): a device row carries its signal trail, the
+ * drawer and the Lookup card the same at the top level with the card's
+ * presence strip (F20); under Local, which shows nothing of the monitor
+ * radio, "rf" is null. The Local absence was seen red with
+ * web_rf_trails()'s scope guard taken out, and the card's strip with
+ * its member left out of the lookup route. */
+static void test_rows_carry_g2(void) {
+    const char *mac = "da:a1:19:00:00:01";
+    web_rollup_add(&g_ru, WM_RF_RSSI_STA, mac, -71, SDB_NOW - 130);
+    web_rollup_add(&g_ru, WM_RF_RSSI_STA, mac, -64, SDB_NOW - 70);
+    web_rollup_add(&g_ru, WM_RF_RSSI_STA, mac, -60, SDB_NOW - 5);
+    WT_EQ(route(&H, "/api/devices", "q=mac:da:a1:19:00:00:01", 0), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"rf\":{\"metric\":\"rf.rssi.sta\",");
+    /* Minutes 56 to 58 of the hour; the one now is in has nothing yet. */
+    WT_HAS(b, ",-71,-64,-60,null],\"n\":3,\"whisker\":[-60,-60],\"whisker_src\":\"samples\",");
+    WT_EQ(route(&H, "/api/device/da:a1:19:00:00:01", "", 0), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"presence_from\":");
+    WT_HAS(b, ",-71,-64,-60,null],\"n\":3,");
+    WT_EQ(route(&H, "/api/lookup", "q=da:a1:19:00:00:01", 0), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"mac\":\"da:a1:19:00:00:01\",\"presence\":\"");
+    WT_HAS(b, ",-71,-64,-60,null],\"n\":3,");
+    /* An IP with no MAC behind it has neither. */
+    WT_EQ(route(&H, "/api/lookup", "q=10.0.1.11", 0), 200);
+    WT_LACKS(body_of(g_out), "\"presence\":");
+    WT_LACKS(body_of(g_out), "\"rf\":");
+    WT_EQ(route(&H, "/api/devices", "q=mac:da:a1:19:00:00:01&scope=local", 0), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "{\"mac\":\"da:a1:19:00:00:01\"");
+    WT_HAS(b, "\"rf\":null");
+    WT_LACKS(b, "rf.rssi.sta");
+}
+
 /* The Lookup card (§8.11, without the active part, ever): a MAC from an
  * MA-S block resolves to its holder where sloth's own 117-entry table
  * has nothing (spec §12, M4), with its block, registry and bits; an IP
@@ -787,6 +822,7 @@ void run_devices_tests(void) {
     WT_RUN(test_devices_db_states);
     WT_RUN(test_device_drawer);
     WT_RUN(test_drawer_presence_week_anomalies);
+    WT_RUN(test_rows_carry_g2);
     WT_RUN(test_lookup);
     WT_RUN(test_health_members);
     WT_RUN(test_health_db_freshness);

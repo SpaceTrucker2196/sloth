@@ -705,6 +705,69 @@ void web_rollup_presence(web_rollup_t *ru, int metric,
     free(hk);
 }
 
+/* One cell's merge of a bucket: the first sets it, the rest add. */
+static void trail_add(web_agg_t *c, long long t, double sum, double mn,
+                      double mx, unsigned long n) {
+    if (!n) return;
+    if (!c->n) { c->t = t; c->sum = sum; c->min = mn; c->max = mx; c->n = n; return; }
+    c->sum += sum;
+    if (mn < c->min) c->min = mn;
+    if (mx > c->max) c->max = mx;
+    c->n += n;
+}
+
+void web_rollup_trail(web_rollup_t *ru, int metric,
+                      const char (*keys)[WEB_KEY_MAX + 1], int n,
+                      long long from, long long until, int ncell, int cell_s,
+                      web_agg_t *out) {
+    if (!out || n <= 0 || ncell <= 0) return;
+    for (int i = 0; i < n * ncell; i++) {
+        memset(&out[i], 0, sizeof(out[i]));
+        out[i].t = -1;
+    }
+    if (!ru || metric < 0 || metric >= WM_COUNT || cell_s <= 0) return;
+    const web_metric_t *md = &web_metric_defs[metric];
+    long long to = from + (long long)ncell * cell_s;
+    if (until < to) to = until;
+    int hn = 1;
+    while (hn < n * 2) hn <<= 1;
+    uint32_t *hs = calloc((size_t)hn, sizeof(*hs));
+    int *hk = malloc((size_t)hn * sizeof(*hk));
+    if (!hs || !hk) { free(hs); free(hk); return; }
+    pthread_mutex_lock(&ru->mu);
+    web_kclass_t *c = &ru->cls[md->kclass];
+    int any = 0;
+    for (int k = 0; k < n; k++) {
+        int i = c->nhead ? key_find(c, keys[k]) : -1;
+        if (i < 0 || !c->k[i].sid[metric]) continue;
+        uint32_t sid = c->k[i].sid[metric];
+        unsigned h = (sid * 2654435761u) & (unsigned)(hn - 1);
+        while (hs[h]) h = (h + 1) & (unsigned)(hn - 1);
+        hs[h] = sid;
+        hk[h] = k;
+        any = 1;
+        const web_agg_t *a = &c->k[i].open[metric][WEB_TIER_FINE];
+        if (a->t >= from && a->t < to && a->n) {
+            long long cell = (a->t - from) / cell_s;
+            trail_add(&out[(size_t)k * (size_t)ncell + (size_t)cell],
+                      from + cell * cell_s, a->sum, a->min, a->max, a->n);
+        }
+    }
+    for (size_t j = 0; any && j < ru->ring_n; j++) {
+        const web_ring_row_t *r = &ru->ring[j];
+        if (r->t < from || r->t >= to || !r->sid || !r->n) continue;
+        unsigned h = (r->sid * 2654435761u) & (unsigned)(hn - 1);
+        while (hs[h] && hs[h] != r->sid) h = (h + 1) & (unsigned)(hn - 1);
+        if (!hs[h]) continue;
+        long long cell = (r->t - from) / cell_s;
+        trail_add(&out[(size_t)hk[h] * (size_t)ncell + (size_t)cell],
+                  from + cell * cell_s, r->sum, r->min, r->max, r->n);
+    }
+    pthread_mutex_unlock(&ru->mu);
+    free(hs);
+    free(hk);
+}
+
 static int cmp_key_desc(const void *a, const void *b) {
     const web_keyinfo_t *x = a, *y = b;
     if (x->last_seen != y->last_seen) return x->last_seen < y->last_seen ? 1 : -1;

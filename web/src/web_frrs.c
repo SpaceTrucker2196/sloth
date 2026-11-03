@@ -598,6 +598,46 @@ const frrs_bss_t *frrs_led_mld_of(const web_frrs_t *f, const char *mac) {
     return NULL;
 }
 
+static int one_of(const char *s, const char *const *words) {
+    for (int i = 0; words[i]; i++) if (!strcmp(s, words[i])) return 1;
+    return 0;
+}
+
+int web_frrs_rf(web_frrs_t *f, int bssid, const char *mac, web_frrs_rf_t *out) {
+    static const char *const BAND[] = { "immediate", "near", "room", "building",
+                                        "far", NULL };
+    static const char *const TREND[] = { "approaching", "steady", "leaving",
+                                         "unknown", NULL };
+    memset(out, 0, sizeof(*out));
+    if (!f || !f->led || !f->lmu_init || !mac) return 0;
+    const frrs_est_t *e = NULL;
+    int got = 0;
+    pthread_mutex_lock(&f->lmu);
+    if (bssid) {
+        const frrs_bss_t *b = frrs_led_bss(f, mac);
+        if (b && b->has_b) {
+            got = 1;
+            out->ts = b->ts_b;
+            e = &b->est;
+            if (b->has_rssi60 && b->rssi_min >= -127 && b->rssi_max <= -1 &&
+                b->rssi_min <= b->rssi_max) {
+                out->have_range = 1;
+                out->rmin = b->rssi_min;
+                out->rmax = b->rssi_max;
+            }
+        }
+    } else {
+        const frrs_sta_t *st = frrs_led_sta(f, mac);
+        if (st && st->has_p) { got = 1; out->ts = st->ts_p; e = &st->est; }
+    }
+    if (e && e->have) {
+        if (one_of(e->band, BAND)) snprintf(out->band, sizeof(out->band), "%s", e->band);
+        if (one_of(e->trend, TREND)) snprintf(out->trend, sizeof(out->trend), "%s", e->trend);
+    }
+    pthread_mutex_unlock(&f->lmu);
+    return got;
+}
+
 const frrs_sta_t *frrs_led_sta(const web_frrs_t *f, const char *mac) {
     if (!f || !f->led) return NULL;
     for (int i = 0; i < f->led->nsta; i++)

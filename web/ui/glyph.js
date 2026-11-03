@@ -1,5 +1,6 @@
 // The glyph layer (docs/web-visual-spec.md §5; slice V0: G1, G5, G6;
-// slice V1: G1's words, the episode shade, shared scales, G4).
+// slice V1: G1's words, the episode shade, shared scales, G4; slice V2:
+// G2, its words, the new mark).
 //
 // Every glyph is two halves. The first maps data and a size to a list
 // of marks, each `[kind, x, y, w, h, token]` in CSS pixels with a
@@ -301,6 +302,83 @@ var glyph = (function () {
     return m;
   }
 
+  // G2, the range sparkline (RSSI). pts are [t, dBm] oldest first.
+  // opt: {w, h, from, to, step, whisker} — whisker is the [lo, hi] at
+  // the last value (the beacon's 60 s range, or the last cell's), or
+  // null. The scale is fixed, -95 to -20 dBm on every G2 on the page
+  // (R3), so a line near the top is a near emitter in every row; a
+  // reading past it is drawn at the edge and counted by g2Clamped(). A
+  // --faint rule at -67 dBm, a field rule of thumb for good coverage
+  // and not a standard (owner ruling 3), is the one reference. One ink
+  // (R1): only G1's line is graded (ruling 1). One sample is the dot
+  // alone, and the number beside it says the rest (§5 G2's states).
+  var RSSI_LO = -95, RSSI_HI = -20, RSSI_REF = -67;
+  function g2Y(v, h) {
+    var c = v < RSSI_LO ? RSSI_LO : v > RSSI_HI ? RSSI_HI : v;
+    return h - (c - RSSI_LO) / (RSSI_HI - RSSI_LO) * h;
+  }
+  function g2(pts, opt) {
+    var m = [], w = opt.w, h = opt.h, i;
+    if (!pts || !pts.length) { m.push(dash(w, h)); return m; }
+    var step = opt.step > 0 ? opt.step : 1, from = opt.from, to = opt.to;
+    var X = function (t) { return to > from ? (t - from) / (to - from) * w : w; };
+    var k = pts.length - 1;
+    if (!k) { m.push(["last", X(pts[0][0]), g2Y(pts[0][1], h), 2.5, 2.5, "--ink"]); return m; }
+    m.push(["ref", 0, g2Y(RSSI_REF, h), w, 1, "--faint"]);
+    var gap = step * GAP_STEPS, dots = pts.length < DOTS_BELOW;
+    for (i = 1; i < pts.length; i++) {
+      var xa = X(pts[i - 1][0]), xb = X(pts[i][0]);
+      if (pts[i][0] - pts[i - 1][0] > gap) {
+        m.push(["gap", xa, 0, xb - xa, h, "--faint"]);
+        continue;
+      }
+      if (dots) continue;
+      m.push(["line", xa, g2Y(pts[i - 1][1], h), xb - xa,
+              g2Y(pts[i][1], h) - g2Y(pts[i - 1][1], h), "--tui-normal"]);
+    }
+    if (dots)
+      for (i = 0; i < k; i++)
+        m.push(["dot", X(pts[i][0]), g2Y(pts[i][1], h), 1.5, 1.5, "--tui-normal"]);
+    var wk = opt.whisker;
+    if (wk && gnum(wk[0]) && gnum(wk[1]) && wk[1] >= wk[0])
+      m.push(["whisker", X(pts[k][0]), g2Y(wk[1], h), 1,
+              Math.max(1, g2Y(wk[0], h) - g2Y(wk[1], h)), "--tui-normal"]);
+    m.push(["last", X(pts[k][0]), g2Y(pts[k][1], h), 2.5, 2.5, "--ink"]);
+    return m;
+  }
+  // §9: a reading off the fixed scale is clamped, and said.
+  function g2Clamped(pts) {
+    var n = 0;
+    for (var i = 0; pts && i < pts.length; i++)
+      if (pts[i][1] > RSSI_HI || pts[i][1] < RSSI_LO) n++;
+    return n;
+  }
+  // G2's words agree with sloth's own distance estimate
+  // (src/rf_distance.c) and fit no slope of their own: the number is
+  // bold when sloth's trend says approaching, and after it come sloth's
+  // band and trend glyph as the TUI's distance cell prints them
+  // (rf_band_short, rf_trend_glyph). band and trend are the row's "rf"
+  // words (web/src/web_rf.h), or null.
+  var BAND_SHORT = { immediate: "imm", near: "near", room: "room", building: "bldg", far: "far" };
+  var TREND_GLYPH = { approaching: "\u2198", steady: "\u2192", leaving: "\u2197" };
+  function g2Words(last, band, trend) {
+    var own = Object.prototype.hasOwnProperty;
+    var b = typeof band === "string" && own.call(BAND_SHORT, band) ? BAND_SHORT[band] : "";
+    var g = typeof trend === "string" && own.call(TREND_GLYPH, trend) ? TREND_GLYPH[trend] : "";
+    return { text: gnum(last) ? String(Math.round(last)) : "-",
+             bold: trend === "approaching", near: b && g ? b + " " + g : b || g };
+  }
+
+  // F15: new is first seen inside the window the row is shown against,
+  // and G5's first-seen cell is the cell of the strip it falls in (-1
+  // when it is before the strip, or after it).
+  function isNew(first, from) { return gnum(first) && gnum(from) && first >= from; }
+  function firstCell(first, from, cellS, n) {
+    if (!isNew(first, from) || !(cellS > 0)) return -1;
+    var c = Math.floor((first - from) / cellS);
+    return c < n ? c : -1;
+  }
+
   // G6, the bullet and the count bar. v is the measure. opt: {w, h,
   // max, ranges, threshold, count} — ranges are the qualitative band
   // edges of a bounded score, threshold the value the rule fires at,
@@ -371,7 +449,9 @@ var glyph = (function () {
     }
   }
 
-  return { g1: g1, g4: g4, g4Stats: g4Stats, g5: g5, g5Ruler: g5Ruler, g6: g6,
+  return { g1: g1, g2: g2, g2Clamped: g2Clamped, g2Words: g2Words, isNew: isNew,
+           firstCell: firstCell, RSSI_LO: RSSI_LO, RSSI_HI: RSSI_HI, RSSI_REF: RSSI_REF,
+           g4: g4, g4Stats: g4Stats, g5: g5, g5Ruler: g5Ruler, g6: g6,
            paint: paint, caption: caption, win: win, scale: scale, dur: dur,
            trend: trend, shared: shared, order: order,
            cellsFromHex: cellsFromHex, level: level, lineToken: lineToken,

@@ -123,6 +123,7 @@ int main(void) {
     SUITE(run_scope_tests);
     SUITE(run_prefs_tests);
     SUITE(run_glyph_tests);
+    SUITE(run_rf_tests);
     SUITE(run_frrs_tests);
     SUITE(run_ble_tests);
     SUITE(run_gnss_tests);

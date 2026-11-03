@@ -43,6 +43,7 @@
 #include "web_json.h"
 #include "web_oui.h"
 #include "web_pcapdir.h"
+#include "web_rf.h"
 #include "web_ptr.h"
 #include "web_scope.h"
 #include "web_slothdb.h"
@@ -56,8 +57,9 @@ struct web_frrs;
 #define WEB_DEV_CELLS       144
 #define WEB_DEV_CELL_S      600
 /* The largest one device row renders to: every text member at its cut
- * length, each byte escaped six-fold, and the fixed members. */
-#define WEB_DEV_ROW_MAX     2600
+ * length, each byte escaped six-fold, the fixed members, and G2's "rf"
+ * (web_rf.h). */
+#define WEB_DEV_ROW_MAX     (2600 + WEB_RF_JSON_MAX)
 
 typedef struct {
     web_slothdb_t       *sdb;      /* NULL: no --sloth-db */

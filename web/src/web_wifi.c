@@ -8,6 +8,7 @@
 
 #include "web_json.h"
 #include "web_metrics.h"
+#include "web_rf.h"
 #include "web_series.h"
 #include "web_ssid.h"
 #include "web_chmix.h"
@@ -938,7 +939,9 @@ static int emit_ssid(void *ctx, const web_sdb_item_t *it) {
     return 0;
 }
 
-static void ap_json(web_jw_t *w, web_sdb_conn_t *c, const web_sdb_ap_t *a) {
+/* rf: the row's G2 trail (web_rf.h), its "rf" member; NULL for none. */
+static void ap_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *c,
+                    const web_sdb_ap_t *a, const web_rf_trail_t *rf, long long now_s) {
     web_jw_raw(w, "{\"bssid\":");    web_jw_str(w, a->bssid);
     web_jw_raw(w, ",\"ssid\":");     web_jw_ssid(w, a->ssid);
     web_jw_raw(w, ",\"signal\":");
@@ -1002,6 +1005,7 @@ static void ap_json(web_jw_t *w, web_sdb_conn_t *c, const web_sdb_ap_t *a) {
         web_jw_raw(w, ",\"ie_uniform\":");   web_jw_raw(w, a->k_ie_uniform ? "true" : "false");
         web_jw_raw(w, "}");
     }
+    if (rf) web_rf_json(w, rf, m->frrs, a->bssid, now_s);
     web_jw_ssid_meta(w, "ssid", a->ssid);
     web_jw_raw(w, "}");
 }
@@ -1060,6 +1064,24 @@ int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
                             NULL, body, cap, len, status);
     }
     int show = c.n > limit ? (int)limit : c.n;
+    /* G2 (web_rf.h): every row is a BSSID, so rf.rssi.bssid first. */
+    char (*macs)[WEB_KEY_MAX + 1] = calloc((size_t)(show ? show : 1), sizeof(*macs));
+    int *isap = calloc((size_t)(show ? show : 1), sizeof(*isap));
+    web_rf_trail_t *rf = calloc((size_t)(show ? show : 1), sizeof(*rf));
+    if (!macs || !isap || !rf) {
+        free(macs); free(isap); free(rf);
+        web_slothdb_close(&conn);
+        free(c.rows);
+        return -1;
+    }
+    for (int i = 0; i < show; i++) {
+        snprintf(macs[i], sizeof(macs[i]), "%s", c.rows[i].bssid);
+        isap[i] = 1;
+    }
+    web_rf_trails(m->tsdb ? m->tsdb->ru : NULL, m->sc,
+                  (const char (*)[WEB_KEY_MAX + 1])macs, isap, show, now_s, rf);
+    free(macs);
+    free(isap);
     web_jw_t w;
     web_jw_init(&w, body, cap);
     web_jw_raw(&w, "{\"now\":");     web_jw_int(&w, now_s);
@@ -1072,9 +1094,10 @@ int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
     for (int i = 0; i < show; i++) {
         if (w.len + WEB_WIFI_AP_ROW_MAX + 96 > cap) break;
         if (i) web_jw_raw(&w, ",");
-        ap_json(&w, &conn, &c.rows[i]);
+        ap_json(&w, m, &conn, &c.rows[i], &rf[i], now_s);
         shown++;
     }
+    free(rf);
     web_slothdb_close(&conn);
     int more = shown < c.n;
     web_jw_raw(&w, "],\"count\":");   web_jw_int(&w, shown);

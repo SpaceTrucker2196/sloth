@@ -356,6 +356,20 @@ void web_rollup_presence(web_rollup_t *ru, int metric,
                          long long from, long long until, int ncell,
                          int cell_s, unsigned char *bits);
 
+/* The trails of n keys of a gauge from what is in memory (the fine
+ * ring and the open bucket), for G2 (docs/web-visual-spec.md): for key
+ * k, out[k * ncell + i] is the merge (sum, n, min, max) of every fine
+ * bucket of the key's current series that starts in cell i of ncell
+ * cells of cell_s seconds from from, and before until; t is the cell's
+ * start, or -1 with n 0 where no bucket fell. One pass over the ring
+ * for all n keys, as web_rollup_presence() makes. What the ring has
+ * already overwritten is not there: the trail is memory's, not the
+ * store's. */
+void web_rollup_trail(web_rollup_t *ru, int metric,
+                      const char (*keys)[WEB_KEY_MAX + 1], int n,
+                      long long from, long long until, int ncell, int cell_s,
+                      web_agg_t *out);
+
 /* The keys holding a series of metric, most recently seen first, at
  * most max. *total gets how many there are. */
 int  web_rollup_keys(web_rollup_t *ru, int metric, web_keyinfo_t *out,

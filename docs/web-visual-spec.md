@@ -2,7 +2,7 @@
 
 **Working name:** the sloth glyph set
 **Applies to:** `web/ui/` (slothweb), with parity notes for the TUI
-**Status:** draft for the owner to read, 2026-10-26; slices V0 and V1 built (§10)
+**Status:** draft for the owner to read, 2026-10-26; slices V0, V1 and V2 built (§10)
 **Companion:** `docs/web-ui-spec.md` (the UI spec; its rulings table wins where the two disagree)
 
 > **Owner rulings, 2026-10-26** (these win over the body below):
@@ -409,6 +409,8 @@ Everything in §5 and §6 is drawn from records that already cross the socket. T
 | `records.total` | (global) | counter | the same records, unkeyed (F1's `live.records_rate`, under the name of its family) | fine, minute, hour | G1 on the strip and the records/s tile |
 | `sensor.drops` | (global) | counter | `sensor_health` per-tick libpcap and NIC drop deltas | fine, minute | G1 in the footer |
 
+**As built (V2).** `ap.rssi` and `sta.rssi` are the `rf.rssi.bssid` and `rf.rssi.sta` gauges that already existed (`web/src/web_rollup.h`, 2026-11-02): the same quantity, so no new metric and no slothweb.db step. Two of the `sta.rssi` sources above are the AP's signal, not the station's (an assoc's `signal_dbm` is set from frames the AP sent, and `rf.rssi.bssid` takes it; `wifi_sta`'s is the managed card's link to its AP, another receiver), so they are not in it. The beacon's 60 s range is G2's whisker when that beacon is in the last value's minute, read from the latest beacon rather than stored as a bucket's min and max; otherwise the last minute's own sample range. G2's "approaching" and its band are sloth's own estimate (`est_dist_trend`, `est_dist_band`, `src/rf_distance.c`), never a slope of the page's, so the glyph and the TUI's distance cell cannot disagree; §5 G2's "+1 dB/min over ten minutes" is replaced by sloth's trend. `web/src/web_rf.h` has the row member.
+
 Rules for the new series:
 
 - They enter the existing cardinality caps (`--web-max-keys`); `ap.rssi` and `sta.rssi` are keyed metrics in the device class.
@@ -463,7 +465,7 @@ One child issue per slice, in the dark-factory style, each green on its own.
 |---|---|---|
 | V0 | The glyph layer: G1, G5, G6 as pure mark-list functions plus painters; rules R1 to R12 in `web/README.md`; the caption grammar; the strip and footer split (F5); the three empty states (R5); the window rule (R4). No new data. | nothing |
 | V1 | **Done** (series 379ac49; page, #171 V1). The `live.*`, `records.rate` and `sensor.drops` series, plus `records.total` for the records/s tile; G1 on every tile and strip fact and the footer's drops (F1, §6.9); G1 on anomaly cards with the episode shaded (F13); the heatmap without hatch, as G4 (F3); shared-scale multiples with the `scale` toggle and the |z| sort (F6); tiles in urgency order (ruling 5). One-ink sparklines (F7) are not done, by ruling 1: G1's line keeps the TUI's grading. Left: the Records panel's per-type G1 (§6.1), G4's TUI form (R12), F4's hover notes. | V0 |
-| V2 | `ap.rssi` and `sta.rssi`; G2 on Devices, WiFi, Lookup and the drawer (F9, F20); the `new` mark (F15); G6 on risk, karma, anomaly score and counts (F17). | V0 |
+| V2 | **Done** (#171 V2). `ap.rssi` and `sta.rssi` as the existing `rf.rssi.bssid` and `rf.rssi.sta` (§7, as built); G2 on the Devices and AP tables' DBM columns, the drawer and the Lookup card (F9, F20), its words and bold from sloth's distance band and trend; the `new` mark and G5's first-seen cell (F15); G6 on risk, karma (on `karma_candidates.score`, the TUI's 1 to 7 `[y]` score, tick at 3, the least a corroborated candidate scores; F17's `karma 82` was a mockup), the anomaly score (cards and table) and the anom and flow total counts (F17). Left: G2's TUI half (the Devices Enter trail on the fixed scale, R12), the Flows `counts` column (several numbers a cell), G4's 56 by 28 form on the Lookup card (§6.8), G2 on the managed card's tables (no series: another receiver) and on the WiFi Clients panel (V3's layout). | V0 |
 | V3 | G3 horizon strips with absolute scales on the WiFi view (F8); G7 on History (F12); the WiFi view's four-panel layout (§6.3). | V1, V2 |
 | V4 | G8 chain timeline from the lifecycle records (F14); the flows matrix (F11). | V3 |
 

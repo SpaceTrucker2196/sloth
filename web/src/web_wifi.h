@@ -58,8 +58,9 @@
 #define WEB_WIFI_AP_MAX   100
 #define WEB_WIFI_SPAN_MAX (400LL * 86400)
 /* The largest one AP row renders to: every text member at its cut
- * length escaped six-fold, every AKM name, WEB_WIFI_SSIDS SSIDs. */
-#define WEB_WIFI_AP_ROW_MAX 7400
+ * length escaped six-fold, every AKM name, WEB_WIFI_SSIDS SSIDs, and
+ * G2's "rf" (web_rf.h). */
+#define WEB_WIFI_AP_ROW_MAX (7400 + WEB_RF_JSON_MAX)
 
 /* The grid the channel, deauth and mix answers share, lent to the BLE
  * Devices view (web_bledev.h) so its class grid has the same tiers,

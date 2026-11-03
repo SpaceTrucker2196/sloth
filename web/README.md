@@ -1930,8 +1930,45 @@ digit, set when a minute row of `dev.present` in slothweb.db, or a 10 s
 bucket still in memory, had the device present. A page stops early,
 with `"more":true` and `next_offset`, when the next row might not fit
 its 64 KB (a row is at most 2,600 bytes with every text member at its
-cut length escaped six-fold; `test_devices.c` builds that case);
-nothing is ever a `503` for size.
+cut length escaped six-fold, and `WEB_RF_JSON_MAX`, 560, for its
+`"rf"`; `test_devices.c` builds that case); nothing is ever a `503`
+for size.
+
+**`"rf"`, G2's data (#171 V2, `web/src/web_rf.h`).** Each `/api/devices`
+and `/api/wifi/aps` row, and `/api/device/{mac}` and `/api/lookup` (for
+the MAC looked up, or the IP's) at the top level, carry the emitter's
+signal over the last hour:
+
+```
+"rf":{"metric":"rf.rssi.sta","from":1792623660,"cell_s":60,
+      "cells":[null,...,-71,-64,-60,null],"n":3,
+      "whisker":[-60,-60],"whisker_src":"samples",
+      "band":"room","trend":"approaching","est_src":"probe_client"}
+```
+
+`cells` are 60 minute means of the `rf.rssi.*` fine buckets in memory
+(the ring and the open bucket, `web_rollup_trail()`), integer dBm,
+oldest first, the last the minute `now` is in, `null` where none fell,
+`[]` when none at all. The series are §7's `ap.rssi` and `sta.rssi`
+under the names they already had: `rf.rssi.bssid` (a beacon's
+`signal_dbm`, and an assoc's, which is the AP's frames) for a row
+sloth calls an AP and every `/api/wifi/aps` row, `rf.rssi.sta` (a
+probe_client's) otherwise, and the other when the first has nothing in
+the hour. The spec's other two `sta.rssi` sources are the AP's signal,
+not the station's (assoc's `signal_dbm` is set from frames the AP
+sent; `wifi_sta`'s is the managed card's link), so no new metric and
+no slothweb.db step. `whisker` is the range at the last value: the
+beacon's own `rssi_min_60s`..`rssi_max_60s` for a BSSID whose latest
+beacon is in the minute of the last value (`"beacon"`; an assoc, the
+AP's frames too, can be the later sample), else the last cell's sample
+range, which spans the same minute (`"samples"`). `band` and `trend`
+are **sloth's** distance estimate (`src/rf_distance.c`, the
+`est_dist_band` and `est_dist_trend` of the latest beacon or
+probe_client record, held in the FRRS ledger), passed on only as one
+of sloth's own words, so the page bolds an approaching emitter by
+sloth's trend and names sloth's band: G2 never fits a nearness of its
+own that could disagree with the TUI's distance cell. Under Local,
+which shows nothing of the monitor radio, `"rf":null`.
 
 `/api/device/{mac}` (the MAC percent-decoded, case and `-` folded)
 answers the drawer: the OUI card, the vendor research section
@@ -1951,7 +1988,8 @@ first). `/api/lookup?q=` takes a MAC or an IP: for a MAC the OUI card
 table and whether it is the full one), the same vendor research section
 and its ARP addresses; for an IP
 its ARP MACs; for both every passive name and sloth.db's record (an
-IP's through its ARP MAC, or the stream's binding). `"active":false`
+IP's through its ARP MAC, or the stream's binding), and for that MAC
+`"mac"`, the presence strip and `"rf"` (F20). `"active":false`
 always: there is no active lookup.
 
 ### The Devices view, the drawer, Lookup
@@ -1971,7 +2009,10 @@ click opens the drawer, as does an Anomalies card keyed by a MAC; Esc
 closes it. The drawer lists everything `/api/device/{mac}` gives, the
 strip, the week heatmap (the Overview's heatmap drawing, by share of
 weeks) and the episodes as cards. `9` opens Lookup: one input, a MAC or
-an IP, and the card. Every value is set with `textContent`; the page
+an IP, and the card, which ends with the drawer's strip and G2 (F20).
+Slice V2 (#171) puts G2 in the signal column, G6 in risk and anom, the
+`new` mark before the swatch and the first-seen `◆` on the strip; see
+The glyph layer, below. Every value is set with `textContent`; the page
 gained no HTML or code sink (`test_routes.c` scans for them) and makes
 no request but its own server's (the CSP's hashes are recomputed by
 the build).
@@ -3761,18 +3802,18 @@ bare address, on the defaults.
 
 The page's data graphics are a small, fixed set of glyphs, specified in
 [`docs/web-visual-spec.md`](../docs/web-visual-spec.md) (its rulings
-table of 2026-10-26 overrides its body). Four of the eight are built:
+table of 2026-10-26 overrides its body). Five of the eight are built:
 **G1** the band sparkline, **G5** the binary presence strip, **G6** the
-bullet and count bar (slice V0), and **G4** the hour-of-week grid
-(slice V1, F3). G2 (range sparkline), G3 (horizon strip), G7 (event
-rug) and G8 (chain timeline) are later slices and are not in `glyph.js`
-yet.
+bullet and count bar (slice V0), **G4** the hour-of-week grid (slice
+V1, F3) and **G2** the range sparkline (slice V2, F9). G3 (horizon
+strip), G7 (event rug) and G8 (chain timeline) are later slices and
+are not in `glyph.js` yet.
 
 **Two halves.** Each glyph is a *pure function* from data and a size to
 a list of marks, plus a *painter* that draws the list. A mark is
 `[kind, x, y, w, h, token]`: a kind (`shade`, `band`, `line`, `gap`,
 `dot`, `max`, `min`, `last`, `cell`, `warm`, `outline`, `first`,
-`tick`, `now`, `range`, `bar`, `dash`), a rectangle in CSS pixels, and a colour **token** name — never
+`tick`, `now`, `range`, `bar`, `ref`, `whisker`, `dash`), a rectangle in CSS pixels, and a colour **token** name — never
 a colour. Nothing in the pure half reads the DOM, the canvas or the
 theme, so what a glyph *says* can be read without a browser, which is
 what `web/tests/test_glyph.c` does: the C there is a port of
@@ -3835,12 +3876,13 @@ slothweb change checks the change against the list
   shrinks on a refresh (`glyph.scale()` takes the previous range). A
   reader must be able to look away and back.
 - **R12. The TUI form exists.** A glyph with no character-cell form is
-  not added — parity is the test that keeps the web honest. The three
+  not added — parity is the test that keeps the web honest. The five
   built here:
 
 | Glyph | What it answers | TUI form |
 |---|---|---|
 | G1 band sparkline | what is the value now, and is it normal | the `▁▂▃▄▅▆▇█` sparkline of `draw_sparkline_at()` in `CP_NORMAL`, graded by level, with the last cell in `CP_HEAT_*` when out of band; the band is the `±` number after it |
+| G2 range sparkline (RSSI) | how near is this emitter, and is it moving | the same `▁▂▃▄▅▆▇█` glyphs on the fixed −95 to −20 dBm scale with the dBm number, and sloth's own distance cell (`rf_dist_cell()`: `~4.5m room ↘`) for the words. The Devices view's Enter signal trail draws a trail today but on its own range; adopting the fixed scale there is the TUI's half of R12 for G2, **not done in this slice** |
 | G4 hour-of-week grid | when is this usually here, and is now usual | **not built in the TUI yet.** The spec's form is the Devices Enter detail's 7 by 24 grid of `▪` at `tui_heat`'s four levels. The web grid predates the glyph layer (M3); V1 moved it into `glyph.js` and took its hatch out, it did not add it, so R12 is owed here rather than met: the TUI form is a follow-up |
 | G5 binary presence strip | when was it here | the Devices view's 24 cells, one an hour, as `▮` and `·`, with `◆` at a first-seen cell inside the window and the anomaly episode's cells underlined |
 | G6 bullet and count bar | how big is this score or count, against its range | `▐████▌░░░` in `CP_NORMAL`, eight cells, the measure filled and the rest dotted |
@@ -3849,9 +3891,10 @@ slothweb change checks the change against the list
 after each network fact in the status strip and after the footer's
 `drops`, every anomaly card, and the Activity view's small multiples;
 G4 paints the Overview's hour-of-week heatmap and the drawer's weekly
-presence; the presence strips go through G5 (`drawStrip()`); G6's
-placements (the risk, karma, anomaly-score and count columns) land
-with slice V2, so its painter is in the page before its first caller.
+presence; the presence strips go through G5 (`drawStrip()`); G2 paints
+the signal column of Devices and of the AP table, the drawer and the
+Lookup card; G6 the risk, karma, anomaly-score and count columns (both
+slice V2, `web/ui/rf.js`).
 
 **Slice V1 (#171), what each placement draws.**
 
@@ -3907,6 +3950,57 @@ with slice V2, so its painter is in the page before its first caller.
   key has a baseline (`glyph.order()`); the caption says `sorted by
   |z|` or `sorted by value`. Each cell's line under its number carries
   its `z`. A presence metric keeps its strips.
+
+**Slice V2 (#171), what each placement draws (`web/ui/rf.js`).**
+
+- **G2 in the signal column (F9).** The Devices table's and the AP
+  table's `dBm` cell: the row's `"rf"` (above, under `/api/devices`) as
+  G2 at 72 by 14 px on the fixed −95 to −20 dBm scale (R3), a `--faint`
+  rule at −67 dBm (owner ruling 3: a field rule of thumb for good
+  coverage, not a standard), the whisker at the last value, the last
+  value marked (R7) and written beside it, then **sloth's** band and
+  trend glyph as the TUI's distance cell prints them (`room ↘`). The
+  number is bold when sloth's trend says `approaching`, never by a
+  slope the page fits (`glyph.g2Words()`), and each table's caption
+  counts `n approaching (sloth's estimate)`. One ink (R1). Every row
+  draws the same hour, so the rows compare (P4): R4's shrink is the
+  full-width glyph's, not a table cell's. A row with no trail (Local,
+  or nothing heard in the hour) is R5's dash beside sloth.db's number.
+  A reading off the scale is drawn at its edge and counted
+  (`glyph.g2Clamped()`).
+- **G2 at full width (F20, §6.8).** The drawer, under the strip, and
+  the end of the Lookup card (after the card's own copy of the
+  drawer's strip): the same glyph across the panel, its window's three
+  time labels under it, and R9's caption — `rf.rssi.sta
+  da:a1:19:00:00:01, 1 h, fine, -95 to -20 dBm, n=42`, the clamped
+  count, the −67 dBm rule named for what it is, where the whisker came
+  from, and sloth's estimate in words. A trail under a tenth of the
+  hour draws its own span and says `6 min of 1 h` (R4); with nothing
+  to draw the block is its caption (R5).
+- **The new mark (F15).** A `--signal` dot before the swatch of any
+  row first seen in the last 24 h (the Devices view's strip window; the
+  AP table's the same day), the row's one accent (P6), `new` in its
+  title (R10); each table's caption counts `n new in 24 h`. G5's `◆`
+  marks the first-seen cell on the Devices strip, the drawer's and the
+  card's (`glyph.firstCell()`).
+- **G6 (F17, §6.5).** A bullet on the bounded scores, the number kept
+  beside it: risk on sloth's levels 0 to 3 (`DEV_RISK_*`), the tick at
+  HIGH (2), the number in the TUI's heat grade; karma on
+  `karma_candidates.score`, the TUI's `[y]` score of 1 to 7 (1, plus 2
+  for a station's PNL, 1 for uniform IEs, 3 for a deauth chain;
+  `src/karma_detect.c`), not the KARMA_AP alert's 0 to 100 confidence:
+  the tick at 3, the least a candidate scores once the PNL or a deauth
+  chain corroborates it (the alert's CRIT gate; the uncorroborated reach
+  2); the anomaly score on every card
+  and in the table, ranges at the heat ramp's 40 and 70, the tick at 60
+  for A1 (`WEB_ANOM_Z_THRESHOLD` 3 sd, score z × 20) and none for the
+  rules that score a fixed figure. The bar takes `--sev-warn` only at
+  or past the tick, so a column is grey while all is well. A bar on the
+  counts: the Devices `anom` column and the Flows `total` column, each
+  on its own column's largest value (R3), which the Devices caption
+  prints (`anom bars to 3`). The card's old rounded score bar is gone
+  (R8). The Flows `counts` column, several numbers to a cell, keeps its
+  text.
 
 ### Tables: sort and resize
 
@@ -4296,7 +4390,8 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_alerts.c` | the Alerts page and an alert's page over a generated sloth.db and a fed stream: the collapse (sloth.db's rows and the stream's incidents, a key once), the order, every filter, paging, every `400`/`404`/`405`, the six sections, runs, the device by MAC and by address, no key, username, community or sloth `incident_id` in any body, every type's page within the buffer, the 20,000-row bound on 30,000 rows (500,000 with `SLOTHWEB_ALERTS_BENCH`), filters, History's figures and the drawer reaching past it, and the tiles against their views on the demo's data; the page's views and links |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
 | `test_tui_colors.c` | the data colours against the TUI itself ([Design](#design)): `src/tui.c`'s ANSI backend linked in and captured, every byte of an address, an SSID, a host name and an info string compared with the page's colour for it (its functions pinned as served, a C port of them over the served `SLOTH_PALETTE`, the served custom properties); the cross-panel bold and the page's `IP_SRC` bits held to `IP_SRC_*`, an alert counted by its `match_ip` alone; the alert-hot override against `tui_alert_hot_set()` (severity, bold from WARN, the TTL's edge, promotion, the full table) and its TTL and cap against `src/tui.c`; the phosphor, heat, alert-hot and monitor-row pairs; `MON_TYPES` against the record types `src/jsonl.c` emits from the monitor radio |
-| `test_glyph.c` | the glyph layer's geometry ([the glyph layer](#the-glyph-layer)): a C port of `web/ui/glyph.js` with the JS pinned verbatim out of the served page, so a change on either side fails. For G1, G5 and G6: empty, warming, one point, four points as dots (R6), a gap (R5), in band, out of band (and in again once the band is widened), G1's line graded as `draw_sparkline_at()` grades it (ruling 1), min and max dots only without a band (R7), a scale that grows and never shrinks (R11), the window rule and its words (R4), the caption grammar and the three states in it (R9), the presence cells from the server's hex, the ruler's midnight and now ticks in a shifted zone (F10), the first-seen mark (F15), an anomaly episode's underline clipped to the strip, the bullet's ranges, threshold tick and severity, the count bar's shared scale, and each glyph's list read with every token flattened to one grey (R10); each glyph's TUI form named in the README (R12). Nineteen mutations, each naming the test it reddened |
+| `test_glyph.c` | the glyph layer's geometry ([the glyph layer](#the-glyph-layer)): a C port of `web/ui/glyph.js` with the JS pinned verbatim out of the served page, so a change on either side fails. For G1, G5 and G6: empty, warming, one point, four points as dots (R6), a gap (R5), in band, out of band (and in again once the band is widened), G1's line graded as `draw_sparkline_at()` grades it (ruling 1), min and max dots only without a band (R7), a scale that grows and never shrinks (R11), the window rule and its words (R4), the caption grammar and the three states in it (R9), the presence cells from the server's hex, the ruler's midnight and now ticks in a shifted zone (F10), the first-seen mark (F15), an anomaly episode's underline clipped to the strip, the bullet's ranges, threshold tick and severity, the count bar's shared scale, and each glyph's list read with every token flattened to one grey (R10); each glyph's TUI form named in the README (R12). Nineteen mutations, each naming the test it reddened. V2: G2's states (the dash, one sample as its dot alone, dots under five, a gap), its fixed −95 to −20 dBm scale and the −67 dBm rule, a reading off the scale clamped and counted, the whisker only when there is one and in order, the four kinds in one grey (R10); G2's words bold only by sloth's `approaching` and naming sloth's band and trend glyph, never a slope of their own; the new mark and G5's first-seen cell (F15); every placement of G2 and G6 and the card's rounded bar gone (R8) |
+| `test_rf.c` | G2's data (`web_rf.h`): the hour's window; `web_rollup_trail()` merging closed and open fine buckets per cell, another key's and an earlier bucket left out; an AP's series first, a station's otherwise, the other when the first is empty, and no trail under Local or without a rollup; the member with the beacon's 60 s range or the last cell's samples as the whisker (the beacon's only when it is in the last value's minute) and sloth's band and trend from the FRRS ledger's latest beacon or probe_client; a record's word that is not sloth's, and a range out of order, refused; `WEB_RF_JSON_MAX` holding the longest member |
 | `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own; the BLE view's vocabularies (the PDU, band, trend, glyph and P_tx-source words, the finding kinds, the alert names, the TUI's address-type letters and its legend line) held to `src/` as text |
 | `test_ble.c` | the BLE view ([BLE](#ble)) from hand-built `ble_device`, `ble_alert`, `alert.resolve` and `sensor_health` lines in the emitter's exact shape: two rows for one address heard by two sensors, a heartbeat updating in place (the sticky masks OR-ed, the earlier first_seen kept, the rate from two points), the hostile strings (a control byte escaped and flagged, an over-long name cut back to a code-point boundary, a category that is not sloth's slug dropped and counted, an unknown iface `other`, a bad record kept nowhere), the record's absent values null and an anonymous all-zero address a row, the estimate's four fields with the TUI's cell and description, the LRU at 1025 rows evicting the oldest, the findings (standing, the resolve of the key, the time-out, the day's listing, the key never rendered, a `hid_oui` finding under its address), the `sensor_health` block and its rotation bands; the two metrics only while a Bluetooth source is configured; every route through the table (the sort words and both directions, each refusal a word never echoing the value, the search, paging, HEAD, Monitor and Hybrid serving, Local `out_of_scope` with the query still checked, `/api/live`'s `ble` member and `/api/health`'s counters, the M0 shape without the tables, the BLE incident typed and Monitor's on the Alerts page); the page's lines pinned as served; with SQLite the store round trip through the store thread's flush, a changed row upserted once, the seed on reopen with the name's display form and the estimate, every field of a seeded finding (a flood's fresh count, rate, window and citation, a `hid_oui` finding's address and the drawer's match on it), a resolve on a seeded finding updating its stored row in place, a seeded row's presence strip shifting on with fresh traffic, retention at compaction, a failed write (a trigger aborting it mid-transaction) rolled back whole and its batch written by the next flush, the row caps (the oldest gone, a flagged row kept past newer unflagged ones, counted) and a non-canonical stored address not seeded; every sort word in both directions with an empty key last (`mfr`'s three tiers fixed in either direction); a name cut back to a code-point boundary; `ble.devices` with an Ubertooth alone and `ble.adv_rate` only with the host stream; `/api/live`'s `ble` member with every string at its cut and escaped six-fold; without a store the tables still ingest and serve. Each absence seen red under a named mutation |
 | `test_bledev.c` | the BLE Devices waterfall ([BLE](#ble)): each class rule on hand-built fields (SIG Appearance values, Continuity types, the registry's UUIDs) and each left-out shape landing in Unknown, the first-match order and the table's match numbers, the slugs (never a channel key, the only `bleclass` keys), a class from a record line; the proximity edges against `src/rf_distance.h` and `.c` read in the test; the page's class table and grade pinned against the C ones, the panels inside `v-ble`, no `innerHTML` in the module; the mix engine taking kinds 3 and 4 (an advertiser, anonymous advertising) apart and refusing 5, a sized ring; the class mix fed from `ble_device` lines (a baseline, deltas, a reconnect, a row born while listening, a sampled row, one address on two sensors kept apart); the advertisers gauge once a pass, an address on two sensors once; the one anonymous row sloth can send (the host stream's, its first mfr pair kept, a keyboard's HID bit OR-ed in) credited to Unknown alone as one entry and one advertiser while its fields read Phones then Input, named rows and an Ubertooth's uncredited samples beside it, each class's advertisers, drawn transmitters, reports and drawn frames agreeing, no series under the zero address; the anonymous entry through both routes (one `anonymous` tx entry in `b:unk`, its kind word the one `bledev.js` tests, no proximity row, never nearest, `anonymous_heard`, the strip counting it once) and under a read cut (no slot taken: 256 read); five thousand fresh BLE addresses leaving a Wi-Fi row's high-water mark (and its true delta) in place; both routes from memory (display order, the tx entries named from the tables or by address alone, the strip's facts, every refusal), the proximity rows' order, means and window, a tracker heard before three hundred newer addresses still read and first, each row graded with its announced power (extended header, TX Power Level, else 0 dBm) and nearest by the margin; `now`'s sensor facts; both routes 503 `no_time_series` in either scope and the mix 503 `no_ble_mix`; Local `out_of_scope` with the query checked and a long query a 400; with SQLite the WiFi and BLE mixes in one `chmix` at the same tier and t, each namespace reading only its own, each route drawing only its own, a kind-4 anonymous row read back and drawn, and the file still v7. Each absence seen red under a named mutation |
@@ -4351,6 +4446,8 @@ web/
     web_live.c     the live state: counts, devices, alerts, sensor, ring
     web_metrics.c  records to samples: keys, deltas, rows per pass (M2)
     web_rollup.c   the metric table, the three tiers, key bounds, the ring
+    web_rf.c       G2's "rf" member: a row's rf.rssi.* trail and sloth's
+                   distance words from the FRRS ledger (#171 V2)
     web_store.c    slothweb.db: open rules, identification, migration, I/O
     web_tsdb.c     the store thread: close, write, compact
     web_series.c   /api/series, /api/keys, /api/metrics, /api/baseline
@@ -4391,7 +4488,8 @@ web/
     web_json.c     the JSON writer every outgoing string goes through
     web_assets.h   the generated page's symbols
   ui/              the page sources (index.html, theme.css, page.css, app.js,
-                   glyph.js, evidence.js, bundle.js the copy-JSON
+                   glyph.js, facts.js and rf.js: the glyphs' placements,
+                   evidence.js, bundle.js the copy-JSON
                    control, location.js and location.css: where
                    the sensor was, gnss.js and gnss.css: the GPS Sat
                    tab, and bledev.js and bledev.css: the BLE Devices
