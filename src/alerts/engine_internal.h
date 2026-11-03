@@ -77,4 +77,23 @@ static inline void fmt_bssid(char out[20], const uint8_t b[6]) {
              b[0], b[1], b[2], b[3], b[4], b[5]);
 }
 
+/* A running count for an alert detail (#173). The engine counts an
+ * observation each time the rendered detail differs from the one it
+ * last emitted, so a raw frame or packet total in the detail turns a
+ * standing incident into one observation per tick while the total
+ * moves. Exact below ten, where each new one is worth reading, then
+ * the decade it has reached ("10+", "100+", ...): a detail that moves
+ * only when the count gains a digit. The exact figure stays in the
+ * table and view the rule reads. */
+static inline const char *count_bucket(char out[24], unsigned long n) {
+    if (n < 10) {
+        snprintf(out, 24, "%lu", n);
+        return out;
+    }
+    unsigned long d = 10;
+    while (n / d >= 10) d *= 10;
+    snprintf(out, 24, "%lu+", d);
+    return out;
+}
+
 #endif

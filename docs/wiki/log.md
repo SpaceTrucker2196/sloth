@@ -6276,3 +6276,45 @@ disagree with MS-RDPBCGR; `snmp.community_brute` above 8 silently
 disables the rule; the MQTT CONNACK decoder scores v5 by v3.1.1 codes;
 `fragattack.h` and the FragAttacks corpus document still say
 CVE-2020-26139 and -26146 are not implemented.
+
+## 2026-11-03 — Rules whose count followed the tick rate (#173)
+
+The per-type assessments measured fire counts of 7.5e6 to 3.1e9 on a
+handful of keys for the rules below. The engine counts an observation when
+a detail differs from the one it last emitted, so any detail value that
+moved without the evidence moving made `observations` follow
+`evaluations`. Fixed per rule, not in the engine: `ATTACK_TOOL_UA` fires
+once per (src, tool) a pass instead of once per matching HTTP ring entry
+(up to 256 a pass) and summarises the target(s) and request count;
+`DGA_DOMAIN` fires once per name a pass and names the client from the
+newest query, not whichever of query and response slot came last (which
+also made the resolver the `match_ip`); `WPA_DOWNGRADE` carries the
+posture's age as a band (`30s+`/`5m+`/`1h+`/`1d+`) instead of seconds;
+`MGMT_FUZZ` carries the defect kinds and a defects-per-100-frames band
+instead of three running counters; `FRAG_PLAINTEXT` drops the row's
+shared last SA/DA (another FragAttacks kind's hit rewrote it) and takes
+its frame count by decade; `SMB1_USE` takes the session packet count by
+decade; `PM_FORGE` gets the 900 s recency bound `QUEUE_EVICT` already
+had (`PM_FORGE_REPORT_SECS`). `CAM_SETUP_OUI` needed no change and is
+pinned. Shared helper `count_bucket()` (`src/alerts/engine_internal.h`).
+Tests in `tests/test_alert_tick_rate.c`, each standing assertion seen
+red under the old detail or fire. Updated [[alerts]] (a detail-discipline
+bullet, with the engine edge that remains: a change arriving inside
+the 60 s update floor counts per pass until the floor passes; the
+`observations` row of [[jsonl-schema]] now says so too),
+[[smb-snoop]], [[jsonl-schema]] (the MGMT_FUZZ lifecycle example),
+[[alert-remediation]] (FRAG_PLAINTEXT, PM_FORGE), the eight assessments'
+`count_semantics` / `noise_verdict` and Assessment text (the reference
+host figures predate the change and are the owner's to re-measure), and
+the `rule_file` line of every assessment whose rule moved.
+On review: `MGMT_FUZZ`'s counters saturate at 0xffff while `frame_count`
+keeps climbing, so past saturation the per-100 band fell with every frame
+and a fault in every beacon drifted down to the stray-frame reading
+(`under 1` after about a week at 10 beacons/s); a saturated counter now
+reads `counters saturated, rate no longer measured` instead of a band.
+`PM_FORGE`'s bound was measured on the frame's capture stamp against the
+host clock, so a `--replay` of a savefile older than 900 s reported
+nothing; it now ages on `last_contradiction_arrival` (`sloth_wall()` when
+the contradiction was processed), as table ageing does elsewhere
+([[replay-integration]]). `QUEUE_EVICT`'s bound has the same shape and is
+left for its own change.

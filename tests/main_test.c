@@ -199,6 +199,7 @@ void run_research_ingest_tests(void);
 void run_research_corpus_tests(void);
 void run_docs_consistency_tests(void);
 void run_alert_assessment_tests(void);
+void run_alert_tick_rate_tests(void);
 void run_build_recipe_tests(void);
 void run_unit_file_tests(void);
 void run_ci_pin_tests(void);
@@ -396,6 +397,7 @@ int main(void) {
     run_research_corpus_tests();
     run_docs_consistency_tests();
     run_alert_assessment_tests();
+    run_alert_tick_rate_tests();
     run_build_recipe_tests();
     run_unit_file_tests();
     run_ci_pin_tests();

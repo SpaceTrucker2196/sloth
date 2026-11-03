@@ -1,7 +1,7 @@
 ---
 type: THREAT_IP
 technique: T1071
-rule_file: src/alerts/rules_wired.c:1203 (rule_threat_ip)
+rule_file: src/alerts/rules_wired.c:1296 (rule_threat_ip)
 count_semantics: per poll tick (default 250 ms) per matched IOC address - fires once per distinct matched IOC each tick a conn still has that remote address (key `threat-i:<ioc>`); `count` is tick re-evaluations while the connection is in the socket table, not per packet or per flow
 severity_assessment: agree in principle (CRIT for a confirmed-bad remote is correct) - but moot with the shipped list, which is synthetic (RFC 5737 documentation addresses) and matches nothing real
 false_positive_risk: low in mechanism (exact string match on the remote address) - the real risk is feed staleness (addresses are re-allocated) once a real list replaces the demo one

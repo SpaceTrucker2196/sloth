@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
+**Last updated**: 2026-11-03 (#173: a detail carries only what moves with the evidence; per-rule fixes listed under *Incident lifecycle*). 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
 **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
@@ -180,6 +180,27 @@ WARN→CRIT escalation updated the ring in place and emitted nothing.
   `observations` only moves when the evidence does. Timestamps split
   the same way (`first_detected` / `last_evaluated` vs
   `first_observed` / `last_observed`).
+- **A detail carries only what moves with the evidence (#173).** The
+  engine compares each evaluation's detail with the one it last
+  *emitted*, so a value that changes without the evidence changing — a
+  seconds counter, a frame total, a source that alternates between two
+  ring slots — makes `observations` follow `evaluations` and turns the
+  update floor into one `alert.update` a minute per key. A running total
+  goes in through `count_bucket()` (exact below ten, then `10+`, `100+`,
+  ...), an age as a band, and a rule that walks a ring fires once per
+  key per pass, not once per matching entry. The rules fixed for
+  it in #173 are `ATTACK_TOOL_UA`, `DGA_DOMAIN`, `WPA_DOWNGRADE`,
+  `MGMT_FUZZ`, `FRAG_PLAINTEXT`, `SMB1_USE`; `PM_FORGE` gained the
+  recency bound `QUEUE_EVICT` already had; `CAM_SETUP_OUI` already
+  held still and is pinned by a test (`tests/test_alert_tick_rate.c`).
+  One edge remains in the engine: a change that arrives less than 60 s
+  after the incident's last emitted event (its `alert.create`, or the
+  last update) is compared against the stored copy until the floor
+  passes, so even a single real change counts one observation per pass
+  for the rest of that floor; once the update is emitted the new detail
+  is the stored copy and stops counting.
+  The tests in `tests/test_alert_tick_rate.c` make their real changes
+  past the floor for that reason.
 - Durations run on `CLOCK_MONOTONIC` via the clock seam
   (`src/sloth_clock.c`, #109; the only libc clock reader in `src/`);
   exported timestamps stay wall clock. The evil-twin taint TTL

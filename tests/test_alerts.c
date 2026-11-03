@@ -9684,17 +9684,23 @@ static void test_lifecycle_update_is_throttled_not_per_poll(void) {
     lc_seed_fuzz(&s, b, 3);
     alerts_update(&s);
 
-    /* 30 polls, evidence changing each time, all inside one floor. */
+    /* 30 polls, evidence changing each time, all inside one floor.
+     * The defect kind alternates rather than the score: since #173 the
+     * MGMT_FUZZ detail reports which kinds are present and a rate band,
+     * not the raw counters, so a score of 3 and of 4 render alike. */
     for (int i = 0; i < 30; i++) {
         lc_advance(1);
-        lc_seed_fuzz(&s, b, 3 + (i % 2));   /* detail flips, sev stays WARN */
+        seed_state(&s);                      /* detail flips, sev stays WARN */
+        if (i % 2) add_fuzz_beacon(&s, b, 0, 3, 0);
+        else       add_fuzz_beacon(&s, b, 3, 0, 0);
         alerts_update(&s);
     }
     ASSERT_EQ(lc_count("\"type\":\"alert.update\""), 0);
 
     /* Past the floor, exactly one update carries the current evidence. */
     lc_advance(ALERT_UPDATE_MIN_S);
-    lc_seed_fuzz(&s, b, 4);
+    seed_state(&s);
+    add_fuzz_beacon(&s, b, 0, 3, 0);
     alerts_update(&s);
     ASSERT_EQ(lc_count("\"type\":\"alert.update\""), 1);
     ASSERT_EQ(lc_count("\"type\":\"alert.escalate\""), 0);

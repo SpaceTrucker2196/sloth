@@ -352,19 +352,72 @@ static const char *attack_tool_ua_match(const char *ua) {
     return NULL;
 }
 
+/* One fire per (src, tool) key per tick (#173). The rule walks the
+ * whole HTTP ring every tick, and it used to fire once per matching
+ * entry: a key's evaluations climbed by the number of that scanner's
+ * requests still in the ring, up to MAX_HTTP_LOG a tick (3.1e9 on two
+ * keys on the reference host). And because each entry named its own
+ * host, a scanner working several hosts switched the detail between
+ * entries inside one tick, so observations climbed with it.
+ *
+ * The key's entries are summarised instead: the target when there is
+ * one, otherwise how many hosts, and how many matching requests the
+ * ring holds, both through count_bucket(). The detail then moves when
+ * the scanner reaches a new host or its request count a new decade,
+ * not on every pass. The ring is newest first, so a group is fired
+ * from its newest entry and a match at a newer index means the group
+ * was fired already. */
 void rule_attack_tool_ua(const sloth_state_t *s, time_t now) {
-    for (int i = 0; i < s->http_log_count; i++) {
+    int n = s->http_log_count;
+    if (n > MAX_HTTP_LOG) n = MAX_HTTP_LOG;
+    /* The needle walk is the expensive part; one pass, then pointer
+     * compares (labels are table entries, so equal labels are equal
+     * pointers). */
+    const char *labels[MAX_HTTP_LOG];
+    for (int i = 0; i < n; i++)
+        labels[i] = attack_tool_ua_match(s->http_log[i].user_agent);
+
+    for (int i = 0; i < n; i++) {
         const http_log_entry_t *e = &s->http_log[i];
-        const char *label = attack_tool_ua_match(e->user_agent);
+        const char *label = labels[i];
         if (!label) continue;
+        int fired = 0;
+        for (int j = 0; j < i && !fired; j++)
+            if (labels[j] == label &&
+                strcmp(s->http_log[j].src, e->src) == 0) fired = 1;
+        if (fired) continue;
+
+        unsigned long reqs = 0, hosts = 0;
+        for (int j = i; j < n; j++) {
+            const http_log_entry_t *o = &s->http_log[j];
+            if (labels[j] != label || strcmp(o->src, e->src) != 0) continue;
+            reqs++;
+            int seen = 0;
+            for (int k = i; k < j && !seen; k++)
+                if (labels[k] == label &&
+                    strcmp(s->http_log[k].src, e->src) == 0 &&
+                    strcmp(s->http_log[k].host, o->host) == 0) seen = 1;
+            if (!seen) hosts++;
+        }
+
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
+        char rb[24], hb[24];
         snprintf(key,    sizeof(key),    "ua:%s:%s", e->src, label);
-        snprintf(detail, sizeof(detail),
-                 "%.24s -> %.24s [%.16s]",
-                 e->src[0]  ? e->src  : "?",
-                 e->host[0] ? e->host : "?",
-                 label);
+        count_bucket(rb, reqs);
+        if (hosts == 1)
+            snprintf(detail, sizeof(detail),
+                     "%.24s -> %.24s [%.16s]: %s matching request%s in the"
+                     " HTTP ring",
+                     e->src[0]  ? e->src  : "?",
+                     e->host[0] ? e->host : "?",
+                     label, rb, reqs == 1 ? "" : "s");
+        else
+            snprintf(detail, sizeof(detail),
+                     "%.24s -> %s hosts [%.16s]: %s matching requests in the"
+                     " HTTP ring",
+                     e->src[0] ? e->src : "?", count_bucket(hb, hosts),
+                     label, rb);
         fire(ALERT_TYPE_ATTACK_TOOL_UA, ALERT_SEV_CRIT,
              "ATTACK_TOOL_UA", detail, key, e->src, 80, now);
     }
@@ -898,13 +951,20 @@ void rule_smb1_use(const sloth_state_t *s, time_t now) {
         char key[ALERT_KEY_LEN];
         snprintf(key, sizeof(key), "smb1:%.39s>%.39s:%u",
                  e->client_ip, e->server_ip, (unsigned)e->server_port);
-        char detail[ALERT_DETAIL_LEN];
+        /* The session's packet count moves with every SMB packet on
+         * the flow, so as a raw figure it made observations follow the
+         * tick rate for as long as the session was busy (#173); its
+         * decade is enough to tell one exchange from a bulk transfer,
+         * and the `smb_session` JSONL record keeps the exact figure. */
+        char detail[ALERT_DETAIL_LEN], cb[24];
         snprintf(detail, sizeof(detail),
-                 "SMBv1 traffic %.39s -> %.39s:%u (count=%d). SMBv1 has been "
-                 "deprecated since 2017 (EternalBlue / WannaCry); the "
-                 "endpoint serving v1 should be patched or v1 disabled.",
+                 "SMBv1 traffic %.39s -> %.39s:%u (%s SMB packet%s). SMBv1"
+                 " has been deprecated since 2017 (EternalBlue / WannaCry);"
+                 " the endpoint serving v1 should be patched or v1"
+                 " disabled.",
                  e->client_ip, e->server_ip, (unsigned)e->server_port,
-                 e->count);
+                 count_bucket(cb, e->count > 0 ? (unsigned long)e->count : 0),
+                 e->count == 1 ? "" : "s");
         fire(ALERT_TYPE_SMB1_USE, ALERT_SEV_CRIT,
              "SMB1_USE", detail, key, e->server_ip, e->server_port, now);
     }
@@ -1143,12 +1203,37 @@ void rule_mqtt_broker_brute(const sloth_state_t *s, time_t now) {
 /* DGA: any qname whose leftmost label trips the dga_is_suspicious
  * heuristic — high Shannon entropy + consonant clusters + digit
  * density. Dedup key is the qname so repeated lookups against the
- * same domain only ever produce one alert. */
+ * same domain only ever produce one alert.
+ *
+ * One fire per name per tick, naming the client that asked (#173). A
+ * name sits in the ring as its query and as its response, and `src`
+ * is the client on the first and the resolver on the second; firing
+ * once per entry alternated the detail between the two every tick,
+ * so observations followed evaluations (376e6 on 11 names on the
+ * reference host), and `match_ip` was whichever slot was newest when
+ * the incident opened, often the resolver. The newest *query* speaks
+ * for the name, so the detail moves when a client asks again, not on
+ * every pass; the resolver is named only when the ring holds nothing
+ * but responses for it. The ring is newest first, so an earlier index
+ * with the same name means the name was fired already. */
 void rule_dga_domain(const sloth_state_t *s, time_t now) {
-    for (int i = 0; i < s->dns_log_count; i++) {
+    int n = s->dns_log_count;
+    if (n > MAX_DNS_LOG) n = MAX_DNS_LOG;
+    for (int i = 0; i < n; i++) {
         const dns_log_entry_t *e = &s->dns_log[i];
         if (!e->qname[0]) continue;
+        int fired = 0;
+        for (int j = 0; j < i && !fired; j++)
+            if (strcmp(s->dns_log[j].qname, e->qname) == 0) fired = 1;
+        if (fired) continue;
         if (!dga_is_suspicious(e->qname)) continue;
+
+        /* The newest query for the name, if the ring still has one. */
+        const dns_log_entry_t *q = NULL;
+        for (int j = i; j < n && !q; j++)
+            if (!s->dns_log[j].is_resp &&
+                strcmp(s->dns_log[j].qname, e->qname) == 0)
+                q = &s->dns_log[j];
 
         /* The qname is chosen by whoever generated it — the point of a
          * DGA — so it is a remote component: readable prefix plus the
@@ -1159,12 +1244,20 @@ void rule_dga_domain(const sloth_state_t *s, time_t now) {
         akey_begin(&k, key, sizeof(key), "dga");
         akey_remote(&k, e->qname, 40);
         if (!akey_end(&k)[0]) continue;
-        snprintf(detail, sizeof(detail),
-                 "%.30s queried %.30s (entropy %.2f bits/char)",
-                 e->src[0] ? e->src : "?", e->qname,
-                 dga_label_entropy(e->qname));
+        const char *who = q ? q->src : e->src;
+        if (q)
+            snprintf(detail, sizeof(detail),
+                     "%.30s queried %.30s (entropy %.2f bits/char)",
+                     who[0] ? who : "?", e->qname,
+                     dga_label_entropy(e->qname));
+        else
+            snprintf(detail, sizeof(detail),
+                     "%.30s answered %.30s (entropy %.2f bits/char; the"
+                     " query is no longer in the DNS log)",
+                     who[0] ? who : "?", e->qname,
+                     dga_label_entropy(e->qname));
         fire(ALERT_TYPE_DGA_DOMAIN, ALERT_SEV_WARN,
-             "DGA_DOMAIN", detail, key, e->src, 53, now);
+             "DGA_DOMAIN", detail, key, who, 53, now);
     }
 }
 

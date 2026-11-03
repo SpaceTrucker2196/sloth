@@ -593,12 +593,22 @@ void rule_fragattack(const sloth_state_t *s, time_t now) {
         char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
 
         if (b->plaintext_unicast > 0) {
+            /* Neither the frame count nor the row's last pair goes into
+             * this detail raw (#173). The count moves with every
+             * plaintext frame, and last_sa/last_da are the row's newest
+             * offender of *any* FragAttacks kind, so a PN-gap or cache
+             * hit on the same BSS rewrote this alert's detail too; with
+             * the engine's change-only emission either made observations
+             * follow the tick rate while the row stayed resident. The
+             * count goes in by decade; the pair, which belongs to the
+             * row and not to this kind, stays on the [c] view. */
+            char cb[24];
             snprintf(key, sizeof(key), "fragplain:%.17s", bss);
             snprintf(detail, sizeof(detail),
-                     "%u unprotected data frame%s on %.17s after key install"
-                     " - last %.17s -> %.17s (CVE-2020-26140/-26143)",
-                     b->plaintext_unicast,
-                     b->plaintext_unicast == 1 ? "" : "s", bss, sa, da);
+                     "%s unprotected data frame%s on %.17s after key install"
+                     " (CVE-2020-26140/-26143)",
+                     count_bucket(cb, b->plaintext_unicast),
+                     b->plaintext_unicast == 1 ? "" : "s", bss);
             /* CRIT on the first one. This is not a threshold detector:
              * a station whose encrypted traffic we have already seen
              * has no legitimate reason to send one plaintext non-EAPOL
@@ -844,6 +854,21 @@ void rule_sae_psk_regression(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* How long the posture has stood, as a band (#173). The detail used to
+ * carry the exact seconds, which change every second: under the
+ * engine's change-only emission that made every standing key an
+ * `alert.update` a minute and an observation a tick for the life of
+ * the AP (672e6 on 794 keys on the reference host). A band moves three
+ * times in a day and then never; first_seen is on the beacon row for
+ * anyone who wants the figure. The first band is the rule's own
+ * WPA_DOWNGRADE_MIN_OBSERVED_S floor. */
+static const char *wpa_downgrade_age_band(long secs) {
+    if (secs >= 86400) return "1d+";
+    if (secs >= 3600)  return "1h+";
+    if (secs >= 300)   return "5m+";
+    return "30s+";
+}
+
 void rule_wpa_downgrade(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
@@ -891,10 +916,10 @@ void rule_wpa_downgrade(const sloth_state_t *s, time_t now) {
             char detail[ALERT_DETAIL_LEN];
             snprintf(key, sizeof(key), "wpadg:%.17s:%u", bss, kind);
             snprintf(detail, sizeof(detail),
-                     "%.17s \"%.20s\" posture=%s (observed %lds)%s%s",
+                     "%.17s \"%.20s\" posture=%s (observed %s)%s%s",
                      bss, a->ssid[0] ? a->ssid : "<hidden>",
                      wifi_downgrade_label(kind),
-                     (long)(now - a->first_seen),
+                     wpa_downgrade_age_band((long)(now - a->first_seen)),
                      exercised ? " - a client took the weak lane" : "",
                      mine ? " - YOUR network" : "");
             fire(ALERT_TYPE_WPA_DOWNGRADE,

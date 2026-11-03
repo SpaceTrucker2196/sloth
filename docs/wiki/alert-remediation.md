@@ -10,7 +10,7 @@ by `web/tools/alertkb.c`, never copied by hand).
 step's basis; each section names its own), `docs/wiki/alerts.md` and
 `docs/views/alerts.md` (what each rule fires on).
 
-**Last updated**: 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
+**Last updated**: 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
 remove" steps made conditional on the premises, as the rest are;
 review: WEAK_TLS aimed at the client
 that offered the old version; every on-device step conditional on the
@@ -1024,8 +1024,12 @@ Sources: `research/papers/bl0ck-2302.05899.md`, `research/mitre/T1499.md`
 
 **Investigate**
 
-1. Note the BSSID and the station pair: unprotected data frames after key
-   install are the on-air artefact of CVE-2020-26140 / -26143.
+1. Note the BSSID, then read the station pair from the `[c]`
+   FragAttacks view (since #173 the alert's detail names the BSS and the
+   frame count only: the row's last pair is the newest offender of any
+   FragAttacks kind on that BSS, not necessarily this one). Unprotected
+   data frames after key install are the on-air artefact of
+   CVE-2020-26140 / -26143.
 2. Whether the receiver accepted them is a decision inside its driver;
    the source says this varies by vendor.
 
@@ -1439,6 +1443,10 @@ Sources: `research/papers/ws-discovery-onvif.md`
    incompatible power-save states inside one beacon interval. Sloth does
    not say which frame was forged.
 2. Check for a `QUEUE_EVICT` on the same station within seconds.
+3. The alert stands for 15 minutes after the newest contradiction
+   (`PM_FORGE_REPORT_SECS`, #173) and resolves five minutes after that;
+   a later contradiction opens a new incident, so one long-lived
+   incident means the contradictions kept coming.
 
 **Fix**
 

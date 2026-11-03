@@ -1,7 +1,7 @@
 ---
 type: SURV_DNS
 technique: ""
-rule_file: src/alerts/rules_wired.c:714 of rule_surv_dns(); watchlist src/vendor_watchlist.c:83 (vendor_watchlist_match_domain)
+rule_file: src/alerts/rules_wired.c:767 of rule_surv_dns(); watchlist src/vendor_watchlist.c:83 (vendor_watchlist_match_domain)
 count_semantics: per rule tick (one alerts_update() pass, POLL_MS=250 ms default) on which a DNS query naming a watchlist domain is still in the dns_log ring for that (vendor, local-host) pair. Keyed per vendor + asking host, so one incident per host-vendor pair with a rising count, not one per query. `fire()` bumps `evaluations` (= `count`) once per alerts_update() under the key (engine.c:478); the dns_log ring holds MAX_DNS_LOG=256 entries and is bounded by count only (src/dns_log.c:159-163, no time-based expiry), so a matching query keeps re-asserting the key every tick until 256 newer DNS records (queries and responses, from any host) displace it; only then does the row resolve, ALERT_RESOLVE_AFTER_S=300 s later. On a quiet segment that can be the rest of the run.
 severity_assessment: agree - LOW, one tier under SURV_CLOUD_SNI's WARN. A lookup is weaker evidence than a TLS session (link previews, prefetchers and filtering resolvers resolve names nothing connects to), so LOW is right; higher would overstate.
 false_positive_risk: medium - the domain match is precise (label-boundary suffix on a vendor-published domain), but a DNS query is a weak signal: a browser tab, a prefetch, a link preview, or a filtering resolver can all produce it, and axon.com is also Axon's marketing site.

@@ -62,10 +62,15 @@ overflow.
 ## Alert: `SMB1_USE`
 
 ```
-SMB1_USE: SMBv1 traffic 10.0.0.5 -> 10.0.0.10:445 (count=42). SMBv1
-has been deprecated since 2017 (EternalBlue / WannaCry); the
+SMB1_USE: SMBv1 traffic 10.0.0.5 -> 10.0.0.10:445 (10+ SMB packets).
+SMBv1 has been deprecated since 2017 (EternalBlue / WannaCry); the
 endpoint serving v1 should be patched or v1 disabled.
 ```
+
+The packet count is the session's `count`, exact below ten and by
+decade above (#173): as a raw figure it moved with every SMB packet, so a
+busy v1 session changed the alert's detail every poll. The exact figure
+is on the `smb_session` JSONL record.
 
 | Field | Value |
 |-------|-------|

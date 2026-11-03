@@ -1094,13 +1094,31 @@ void rule_rf_degraded(const sloth_state_t *s, time_t now) {
  * only that the two declarations disagree. Escalated to CRIT only
  * when the BSSID is operator-designated, per the issue's own
  * correlation rule and the wording discipline #90 established:
- * "pattern consistent with", never "attacker is". */
+ * "pattern consistent with", never "attacker is".
+ *
+ * Recency bound (#173), the one rule_queue_evict has had since #107:
+ * contradiction_count is a lifetime figure cleared only when the row
+ * leaves the 128-entry LRU, so one contradiction re-asserted the key
+ * every tick for as long as the station stayed in the table (141e6
+ * evaluations on 23 stations on the reference host). A contradiction
+ * older than PM_FORGE_REPORT_SECS is no longer reported; the incident
+ * resolves ALERT_RESOLVE_AFTER_S later, and a new contradiction opens
+ * the next one. The same 900 s as queue_evict.report_secs, because the
+ * two halves of one attack should age out together. Aged on when the
+ * contradiction arrived (host clock, as `now` is), not on the frame's
+ * capture stamp: against the capture stamp a --replay of an older
+ * savefile reported nothing at all. */
+#define PM_FORGE_REPORT_SECS 900
+
 void rule_pm_forge(const sloth_state_t *s, time_t now) {
     (void)s;
     pm_forge_t tbl[MAX_PM_FORGE_ENTRIES];
     int n = pm_forge_snapshot(tbl, MAX_PM_FORGE_ENTRIES);
     for (int i = 0; i < n; i++) {
         if (tbl[i].contradiction_count == 0) continue;
+        if (tbl[i].last_contradiction_arrival <= 0 ||
+            now - tbl[i].last_contradiction_arrival > PM_FORGE_REPORT_SECS)
+            continue;
 
         char bss[20], sta[20];
         mac_to_str(tbl[i].bssid, bss, sizeof(bss));
@@ -1264,6 +1282,34 @@ void rule_queue_evict(const sloth_state_t *s, time_t now) {
 #define MGMT_FUZZ_WARN ((int)tune_val(TUNE_MGMT_FUZZ_WARN))
 #define MGMT_FUZZ_CRIT ((int)tune_val(TUNE_MGMT_FUZZ_CRIT))
 
+/* The detail reports a rate, not the counters (#173). Each counter
+ * rises with every malformed frame, so a driver that puts one bad IE in
+ * every beacon moved the detail ten times a second until the uint16
+ * saturated, and observations followed the tick rate (501e6 on 403
+ * keys on the reference host). Which defects are present, and how many
+ * per hundred frames heard from the BSSID, in a band: that is what
+ * separates a fault in every frame from a few stray ones, and it holds
+ * still while the fault does. The exact counters stay on the `beacon`
+ * JSONL record (fuzz_*). The bands' edges sit away from the
+ * figures a steady fault produces (100 for one bad IE a frame, 200 for
+ * two), so a constant fault does not straddle one.
+ *
+ * The counters saturate at 0xffff (beacon_snoop.c) while frame_count
+ * keeps climbing, so past saturation the quotient falls with every
+ * frame: a fault in every beacon at 10 a second would read "10-49"
+ * after about 18 hours and "under 1" after a week, the stray-frame
+ * reading for the opposite case. Once any counter is saturated the
+ * rate is no longer measured and the detail says so instead, one
+ * change and then still. */
+#define MGMT_FUZZ_COUNTER_SAT 0xffffu
+
+static const char *mgmt_fuzz_rate_band(unsigned long per100) {
+    if (per100 >= 50) return "50 or more";
+    if (per100 >= 10) return "10-49";
+    if (per100 >= 1)  return "1-9";
+    return "under 1";
+}
+
 void rule_mgmt_fuzz(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
@@ -1277,11 +1323,37 @@ void rule_mgmt_fuzz(const sloth_state_t *s, time_t now) {
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         snprintf(key, sizeof(key), "mgmtfuzz:%s", bssid);
-        snprintf(detail, sizeof(detail),
-                 "BSSID %s malformed IEs: %u overrun / %u oversize-SSID / "
-                 "%u truncated-RSN - 802.11 mgmt fuzzing",
-                 bssid, a->fuzz_ie_overruns, a->fuzz_oversize_ssid,
-                 a->fuzz_truncated_rsn);
+
+        char kinds[64];
+        int kn = 0;
+        kinds[0] = '\0';
+        if (a->fuzz_ie_overruns)
+            kn += snprintf(kinds + kn, sizeof(kinds) - (size_t)kn,
+                           "%sIE overrun", kn ? ", " : "");
+        if (a->fuzz_oversize_ssid)
+            kn += snprintf(kinds + kn, sizeof(kinds) - (size_t)kn,
+                           "%soversize SSID", kn ? ", " : "");
+        if (a->fuzz_truncated_rsn)
+            snprintf(kinds + kn, sizeof(kinds) - (size_t)kn,
+                     "%struncated RSN", kn ? ", " : "");
+        /* frame_count counts every frame the table took from this
+         * BSSID, the frames the counters were read from. */
+        unsigned long frames = a->frame_count > 0
+                             ? (unsigned long)a->frame_count : 1ul;
+        unsigned long per100 = (unsigned long)score * 100ul / frames;
+        int saturated = a->fuzz_ie_overruns   >= MGMT_FUZZ_COUNTER_SAT ||
+                        a->fuzz_oversize_ssid >= MGMT_FUZZ_COUNTER_SAT ||
+                        a->fuzz_truncated_rsn >= MGMT_FUZZ_COUNTER_SAT;
+        if (saturated)
+            snprintf(detail, sizeof(detail),
+                     "BSSID %s malformed IEs (%s): counters saturated,"
+                     " rate no longer measured - 802.11 mgmt fuzzing",
+                     bssid, kinds);
+        else
+            snprintf(detail, sizeof(detail),
+                     "BSSID %s malformed IEs (%s): %s per 100 frames heard"
+                     " - 802.11 mgmt fuzzing",
+                     bssid, kinds, mgmt_fuzz_rate_band(per100));
         fire(ALERT_TYPE_MGMT_FUZZ,
              score >= MGMT_FUZZ_CRIT ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
              "MGMT_FUZZ", detail, key, NULL, 0, now);

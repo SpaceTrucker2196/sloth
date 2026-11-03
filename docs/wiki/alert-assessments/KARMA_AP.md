@@ -1,7 +1,7 @@
 ---
 type: KARMA_AP
 technique: T1557
-rule_file: src/alerts/rules_twin.c:944 (rule_karma_ap); candidate synthesis in src/karma_detect.c
+rule_file: src/alerts/rules_twin.c:969 (rule_karma_ap); candidate synthesis in src/karma_detect.c
 count_semantics: per poll tick (default 250 ms) per BSSID that has beaconed >= KARMA_SSID_THRESH distinct SSIDs, while it remains in the beacon table (BEACON_AGE_SECS 300 s); `count` aliases `evaluations` (engine.c:478-479). Not per beacon and not per SSID - one BSSID with N SSIDs is one fire per tick. The distinct-SSID history is a per-BSSID set capped at MAX_AP_SSID_HISTORY = 8 (beacon_snoop.c:1146), so the count never reflects frame volume
 severity_assessment: agree - WARN for a bare SSID-count candidate, CRIT only when something ties the pattern to this radio (a single station's PNL asks for >=2 of its SSIDs, a shared-victim deauth-then-lure chain, or a capture-verified tool match). The #90 pass that introduced this split is the right call
 false_positive_risk: medium - KARMA_SSID_THRESH is 3 while legitimate multi-VAP gear sits at 1-4 SSIDs, so lawful 3-4-SSID APs, repeaters/mesh nodes, and SSID-cycling captive-portal gear all cross the candidate bar; CRIT corroboration is what keeps those at WARN
