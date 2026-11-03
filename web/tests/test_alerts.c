@@ -236,7 +236,7 @@ static void test_observations_lead_count(void) {
      * copied OUI and a forged 802.11k claim take to 5%, so the floor
      * muting it would hand the attacker the lever rules_twin.c refuses.
      * Seen red with "&& sevOf(a.sev) < 2" dropped from lowConf(). */
-    WT_HAS(p, "function lowConf(a) { return num(a.confidence) && a.confidence < CONF_FLOOR && sevOf(a.sev) < 2; }");
+    WT_HAS(p, "function lowConf(a) { return num(a.confidence) && a.confidence <= CONF_FLOOR && sevOf(a.sev) < 2; }");
     WT_HAS(p, "cf = el(\"span\", lowConf(j) ? \"d-dim\" : \"d-normal\"");
     WT_HAS(p, "(lowConf(a) ? \" lowconf\" : \"\")");
     WT_HAS(p, ".alprow.lowconf, .alprow.lowconf span, .alprow.lowconf .ty { color: var(--tui-dim);");

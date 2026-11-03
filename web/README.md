@@ -2537,8 +2537,8 @@ none); a sloth.db row has neither, so both are `null`. Open incidents
 come first, highest severity, then most observations, then newest
 change, and never by `count` (#179: for a per-tick rule `count` is how
 long the condition stood, 44.8M on an EVIL_TWIN pair of one detail
-change); then the closed ones, newest last seen first. A row under 20%
-confidence is drawn muted, display only, its order and severity
+change); then the closed ones, newest last seen first. A row at or under 20%
+confidence (owner ruling 2026-11-03) is drawn muted, display only, its order and severity
 unchanged; a CRIT row never is (EVIL_TWIN keeps CRIT on a hard
 signal that a forged 802.11k claim and a copied OUI take to 5%).
 

@@ -960,7 +960,9 @@ word to a literal in `src/alerts/rules_twin.c`. Both fields are the
 stream's: sloth.db keeps neither. The Alerts page sorts its open rows
 by severity, then observations, then the newest change, never by count,
 shows a changes column ahead of incidents and the evals column, and
-draws a row under 20% confidence muted (display only), never a CRIT
+draws a row at or under 20% confidence muted (owner ruling
+2026-11-03: `<= 20`, so the 20% "vendor OUI differs"-only EVIL_TWIN
+rows are muted) (display only), never a CRIT
 one: EVIL_TWIN keeps CRIT on a hard signal however far context lowers
 the percent (an uninventoried BSSID with a copied OUI and a forged
 802.11k claim reads 5%), and muting it would make that claim the

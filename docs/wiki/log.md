@@ -6393,3 +6393,11 @@ as typed and none over the bound is sent; the history is drawn from the
 server's rows only. Updated [[slothweb]] and the EVIL_TWIN, KARMA_AP,
 CAM_SETUP_OUI, CAPTIVE_PORTAL and SSID_CONFUSION assessments'
 `noise_verdict` (the presentational recommendation is done).
+
+## 2026-11-03 — Alert list confidence floor inclusive (owner ruling)
+
+Owner answered #179's open question: the Alerts page's display-only
+muted floor is `confidence <= 20`, not `< 20`, so EVIL_TWIN rows whose
+only signal is "vendor OUI differs" (20%) are drawn muted. CRIT rows
+are still never muted. [slothweb.md](slothweb.md), the EVIL_TWIN
+assessment and web/README.md say so.

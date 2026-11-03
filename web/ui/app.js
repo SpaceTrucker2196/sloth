@@ -4285,7 +4285,7 @@
   // claim reads 5%), and src/alerts/rules_twin.c refuses to let the
   // claim be a severity lever, so the page does not make it a volume one.
   var CONF_FLOOR = 20;
-  function lowConf(a) { return num(a.confidence) && a.confidence < CONF_FLOOR && sevOf(a.sev) < 2; }
+  function lowConf(a) { return num(a.confidence) && a.confidence <= CONF_FLOOR && sevOf(a.sev) < 2; }
   var EVAL_TIP = "evaluations: the rule's passes that found the condition still holding, " +
     "about four a second for a per-tick rule, over every incident of the key; how long " +
     "the condition stood, not frames, requests or how hard anyone attacked";
@@ -4560,7 +4560,7 @@
     var cf = null;
     if (num(j.confidence))
       cf = el("span", lowConf(j) ? "d-dim" : "d-normal", j.confidence + "%" +
-              (lowConf(j) ? ", under " + CONF_FLOOR + "%: the list shows it muted" : ""));
+              (lowConf(j) ? ", at or under " + CONF_FLOOR + "%: the list shows it muted" : ""));
     var evs = el("span", "d-dim", fmt(j.count) + " evaluations over every incident of the key" +
       (num(j.latest_count) && j.latest_count !== j.count ? " (" + fmt(j.latest_count) +
        " in the one this page opened on)" : ""));
