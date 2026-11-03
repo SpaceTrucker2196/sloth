@@ -917,7 +917,7 @@ static void test_live_member_worst_case(void) {
  * suite pins its lines. Seen red with "0" taken out of the keydown. */
 static void test_page(void) {
     const char *p = (const char *)web_page;
-    WT_HAS(p, "<li><button type=\"button\" class=\"go\" id=\"nav-ble\"><span class=\"k\">0</span>BLE</button></li>");
+    WT_HAS(p, "<li><button type=\"button\" class=\"go\" id=\"nav-ble\"><span class=\"k\">0</span>BLE Devices</button></li>");
     WT_HAS(p, "    if (e.key === \"0\") show(\"ble\");");
     WT_HAS(p, "               \"lookup\", \"tacdb\", \"ble\", \"gnss\"];");
     WT_HAS(p, "    if (v === \"ble\") bleView();");
@@ -969,7 +969,17 @@ static void test_page(void) {
     WT_HAS(p, "        [\"watchlist\", d.watch_category ? d.watch_category + \" - a category, never an identity\" : null],");
     WT_HAS(p, "        [\"distance (est)\", num(d.rssi) ? (d.est ? d.est.describe : \"no estimate\") : null],");
     /* Kept controls, the scope, the strip, the Health block. */
-    WT_HAS(p, "\"q-sql\", \"b-q\", \"b-sort\"].forEach(keepCtl);");
+    WT_HAS(p, "\"q-sql\", \"b-q\", \"b-sort\", \"bledev-win\", \"bledev-metric\", \"bledev-n\"].forEach(keepCtl);");
+    /* The BLE Devices waterfall (web/ui/bledev.js): its module after
+     * app.js, its four hooks guarded (reset since the 2026-11-02
+     * review: the drawer's BLE lines never outlive their address), its
+     * panels children of v-ble so Local's scoped-out rule hides them
+     * with the rest. */
+    WT_HAS(p, "    if (window.SlothBleDev) SlothBleDev.show();");
+    WT_HAS(p, "      if (window.SlothBleDev) SlothBleDev.drawer(d, now);");
+    WT_HAS(p, "  if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,");
+    WT_HAS(p, "    if (window.SlothBleDev) SlothBleDev.reset();");
+    WT_HAS(p, "  window.SlothBleDev = { init: init, show: show, drawer: drawer, reset: reset };");
     WT_HAS(p, "    $(\"v-ble\").classList.toggle(\"scoped-out\", SCOPE === \"local\");");
     WT_HAS(p, "<span title=\"BLE advertisers slothweb holds, from sloth's ble_device records (Monitor's; - under Local or with no Bluetooth source)\">ble <b id=\"s-ble\">-</b></span>");
     WT_HAS(p, "        set(\"s-ble\", l.ble && l.ble.configured && num(l.ble.rows) ? l.ble.rows : \"-\");");

@@ -1381,6 +1381,41 @@ static void test_wifi_card_scoped(void) {
         same_as_hybrid(&HB, BLE_ROUTES[i], "");
     }
     WT_EQ(route(&HB, "/api/ble", "scope=local&sort=bogus"), 400);
+    /* The BLE Devices waterfall's two routes (web_bledev.h), the same
+     * way: Monitor carries the held advertiser (proximity's row, the
+     * classes answer's nearest), Local carries nothing of it, Hybrid is
+     * the unscoped answer. Seen red with route_bledev()'s none_here
+     * forced 0. */
+    {
+        char err[64];
+        web_rollup_t *ru = calloc(1, sizeof(*ru));
+        web_tsdb_t *ts = calloc(1, sizeof(*ts));
+        WT_ASSERT(ru && ts);
+        if (ru && ts) {
+            WT_EQ(web_rollup_init(ru, 64, 0, err, sizeof(err)), 0);
+            WT_EQ(web_tsdb_init(ts, ru, NULL, 30, 256, NULL, NULL), 0);
+            g_m4.tsdb = ts;
+            static const char *const DEV_ROUTES[] = { "/api/ble/classes", "/api/ble/proximity" };
+            for (size_t i = 0; i < sizeof(DEV_ROUTES) / sizeof(DEV_ROUTES[0]); i++) {
+                WT_EQ(route(&HB, DEV_ROUTES[i], "scope=monitor"), 200);
+                WT_HAS(body_of(g_out), "{\"scope\":\"monitor\",");
+                WT_HAS(body_of(g_out), "\"rows\":[{");
+                WT_HAS(body_of(g_out), "scoped-kettle");
+                WT_LACKS(body_of(g_out), "out_of_scope");
+                WT_EQ(route(&HB, DEV_ROUTES[i], "scope=local"), 200);
+                WT_HAS(body_of(g_out), "{\"scope\":\"local\",\"out_of_scope\":true,\"reason\":\"BLE advertisers are the passive Bluetooth receivers");
+                WT_LACKS(body_of(g_out), "\"rows\"");
+                WT_LACKS(body_of(g_out), "scoped-kettle");
+                same_as_hybrid(&HB, DEV_ROUTES[i], "");
+            }
+            WT_EQ(route(&HB, "/api/ble/proximity", "scope=local&n=5"), 400);
+            g_m4.tsdb = NULL;
+            web_tsdb_destroy(ts);
+            web_rollup_destroy(ru);
+        }
+        free(ts);
+        free(ru);
+    }
     web_ble_destroy(&ble);
     WT_EQ(sdb_exec(g_db, "DELETE FROM wifi_aps;"), 0);
 }

@@ -106,6 +106,14 @@ const web_metric_t web_metric_defs[WM_COUNT] = {
                               "coarse, no PPS)", "ms" },
     [WM_GNSS_CN0_MEAN] = { "gnss.cn0_mean", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
                            "gnss_sky cn0_mean", "dB-Hz" },
+    [WM_BLE_CLASS_ADVERTISERS] = { "ble.class.advertisers", WEB_MK_GAUGE,
+                                   WEB_KC_BLECLASS, "bleclass",
+                                   "slothweb's ble_device rows heard in the last "
+                                   "20 s, distinct addresses per device class, "
+                                   "once a snapshot pass", "advertisers" },
+    [WM_BLE_CLASS_ADV] = { "ble.class.adv", WEB_MK_COUNTER, WEB_KC_BLECLASS,
+                           "bleclass", "ble_device adv_count delta per device "
+                           "class (sampled rows left out)", "reports" },
 };
 
 int web_metric_is_rssi(int metric) {
@@ -116,7 +124,7 @@ int web_metric_is_rssi(int metric) {
 static const int TIER_STEP[WEB_TIER_COUNT] = { WEB_FINE_S, WEB_MINUTE_S, WEB_HOUR_S };
 static const char *const TIER_NAME[WEB_TIER_COUNT] = { "fine", "minute", "hour" };
 static const char *const KC_NAME[WEB_KC_COUNT] = {
-    "global", "device", "host", "iface", "channel", "alert", "rectype"
+    "global", "device", "host", "iface", "channel", "alert", "rectype", "bleclass"
 };
 
 int web_metric_find(const char *name) {
@@ -431,7 +439,7 @@ int web_rollup_init(web_rollup_t *ru, int max_keys, int store_on,
     pthread_mutex_init(&ru->mu, NULL);
     const int caps[WEB_KC_COUNT] = {
         1, max_keys, max_keys / 2, WEB_IFACE_KEYS, WEB_CHANNEL_KEYS,
-        WEB_ALERT_KEYS, WEB_RECTYPE_KEYS
+        WEB_ALERT_KEYS, WEB_RECTYPE_KEYS, WEB_BLECLASS_KEYS
     };
     int bad = 0;
     size_t series_max = 0;

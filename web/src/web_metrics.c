@@ -9,6 +9,8 @@
 #include <time.h>
 
 #include "web_anomaly.h"
+#include "web_ble.h"
+#include "web_bledev.h"
 #include "web_chmix.h"
 #include "web_ident.h"
 #include "web_live.h"
@@ -137,6 +139,7 @@ int web_key_canon(int metric, const char *s, char *out) {
         return web_key_alert_type(atoll(s), out);
     }
     if (!strcmp(kk, "rectype")) return web_key_rectype(s, out);
+    if (!strcmp(kk, "bleclass")) return web_key_bleclass_text(s, out);
     return -1;
 }
 
@@ -161,26 +164,53 @@ static unsigned hw_hash2(const char *s) {
 
 /* Into the current generation; a full one hands over to the other,
  * cleared first, so the ids it forgets are the oldest. */
-static void gone_set(web_metrics_t *m, const char *id) {
-    if (m->hw_gone_n >= WEB_HW_GONE_ROTATE) {
-        m->hw_gone_cur ^= 1;
-        memset(m->hw_gone[m->hw_gone_cur], 0, sizeof(m->hw_gone[0]));
-        m->hw_gone_n = 0;
+static void gone_set(web_hwtab_t *t, const char *id) {
+    if (t->gone_n >= WEB_HW_GONE_ROTATE) {
+        t->gone_cur ^= 1;
+        memset(t->gone[t->gone_cur], 0, sizeof(t->gone[0]));
+        t->gone_n = 0;
     }
-    unsigned char *g = m->hw_gone[m->hw_gone_cur];
+    unsigned char *g = t->gone[t->gone_cur];
     unsigned a = hw_hash(id) % WEB_HW_GONE_BITS, b = hw_hash2(id) % WEB_HW_GONE_BITS;
     g[a / 8] |= (unsigned char)(1u << (a % 8));
     g[b / 8] |= (unsigned char)(1u << (b % 8));
-    m->hw_gone_n++;
+    t->gone_n++;
 }
 
-static int gone_maybe(const web_metrics_t *m, const char *id) {
+static int gone_maybe(const web_hwtab_t *t, const char *id) {
     unsigned a = hw_hash(id) % WEB_HW_GONE_BITS, b = hw_hash2(id) % WEB_HW_GONE_BITS;
     for (int i = 0; i < 2; i++) {
-        const unsigned char *g = m->hw_gone[i];
+        const unsigned char *g = t->gone[i];
         if ((g[a / 8] >> (a % 8) & 1) && (g[b / 8] >> (b % 8) & 1)) return 1;
     }
     return 0;
+}
+
+static int hwtab_init(web_hwtab_t *t, int cap) {
+    t->cap = cap;
+    t->nhead = 1;
+    while (t->nhead < t->cap * 2) t->nhead <<= 1;
+    t->rows = calloc((size_t)t->cap, sizeof(*t->rows));
+    t->head = malloc((size_t)t->nhead * sizeof(*t->head));
+    return t->rows && t->head ? 0 : -1;
+}
+
+static void hwtab_destroy(web_hwtab_t *t) {
+    free(t->rows);
+    free(t->head);
+    t->rows = NULL;
+    t->head = NULL;
+}
+
+static void hwtab_clear(web_hwtab_t *t) {
+    if (t->rows) {
+        for (int i = 0; i < t->cap; i++) t->rows[i].used = 0;
+        for (int i = 0; i < t->nhead; i++) t->head[i] = -1;
+    }
+    t->n = 0;
+    memset(t->gone, 0, sizeof(t->gone));
+    t->gone_cur = 0;
+    t->gone_n = 0;
 }
 
 static long long default_clock(void *ctx) {
@@ -194,12 +224,9 @@ int web_metrics_init(web_metrics_t *m, web_rollup_t *ru, web_clock_fn clock,
     m->ru = ru;
     m->clock = clock ? clock : default_clock;
     m->clock_ctx = clock_ctx;
-    m->hw_cap = WEB_HW_ROWS;
-    m->hw_nhead = 1;
-    while (m->hw_nhead < m->hw_cap * 2) m->hw_nhead <<= 1;
-    m->hw = calloc((size_t)m->hw_cap, sizeof(*m->hw));
-    m->hw_head = malloc((size_t)m->hw_nhead * sizeof(*m->hw_head));
-    if (!m->hw || !m->hw_head) {
+    int e1 = hwtab_init(&m->hw, WEB_HW_ROWS);
+    int e2 = hwtab_init(&m->blehw, WEB_BLE_HW_ROWS);
+    if (e1 || e2) {
         web_metrics_destroy(m);
         return -1;
     }
@@ -208,21 +235,13 @@ int web_metrics_init(web_metrics_t *m, web_rollup_t *ru, web_clock_fn clock,
 }
 
 void web_metrics_destroy(web_metrics_t *m) {
-    free(m->hw);
-    free(m->hw_head);
-    m->hw = NULL;
-    m->hw_head = NULL;
+    hwtab_destroy(&m->hw);
+    hwtab_destroy(&m->blehw);
 }
 
 void web_metrics_stream(web_metrics_t *m) {
-    if (m->hw) {
-        for (int i = 0; i < m->hw_cap; i++) m->hw[i].used = 0;
-        for (int i = 0; i < m->hw_nhead; i++) m->hw_head[i] = -1;
-    }
-    m->hw_n = 0;
-    memset(m->hw_gone, 0, sizeof(m->hw_gone));
-    m->hw_gone_cur = 0;
-    m->hw_gone_n = 0;
+    hwtab_clear(&m->hw);
+    hwtab_clear(&m->blehw);
     m->have_first_ts = 0;
     m->first_ts = 0;
     m->in_iface = 0;
@@ -249,6 +268,14 @@ void web_metrics_set_anomaly(web_metrics_t *m, struct web_anomaly *anomaly) {
     m->anomaly = anomaly;
 }
 
+void web_metrics_set_blemix(web_metrics_t *m, struct web_chmix *mix) {
+    m->blemix = mix;
+}
+
+void web_metrics_set_ble(web_metrics_t *m, struct web_ble *ble) {
+    m->ble = ble;
+}
+
 /* d frames from the transmitter at field on the record's channel. */
 static void mix_add(web_metrics_t *m, const web_jrec_t *r, const char *field,
                     int kind, const char *band, double d, long long now) {
@@ -262,21 +289,21 @@ static void mix_add(web_metrics_t *m, const web_jrec_t *r, const char *field,
     web_chmix_add(m->mix, ch, mac, kind, d, now);
 }
 
-static void hw_unlink(web_metrics_t *m, int idx) {
-    int *pp = &m->hw_head[hw_hash(m->hw[idx].id) & (unsigned)(m->hw_nhead - 1)];
-    while (*pp >= 0 && *pp != idx) pp = &m->hw[*pp].next;
-    if (*pp == idx) *pp = m->hw[idx].next;
+static void hw_unlink(web_hwtab_t *t, int idx) {
+    int *pp = &t->head[hw_hash(t->rows[idx].id) & (unsigned)(t->nhead - 1)];
+    while (*pp >= 0 && *pp != idx) pp = &t->rows[*pp].next;
+    if (*pp == idx) *pp = t->rows[idx].next;
 }
 
-/* The delta of a running total v for row id, floored at zero.
- * first_seen is the row's own, or -1 when the record has none. */
-static double hw_delta(web_metrics_t *m, const char *id, long long v,
-                       long long first_seen) {
+/* The delta of a running total v for row id in table t, floored at
+ * zero. first_seen is the row's own, or -1 when the record has none. */
+static double hwt_delta(web_metrics_t *m, web_hwtab_t *t, const char *id,
+                        long long v, long long first_seen) {
     if (v < 0) v = 0;
-    unsigned h = hw_hash(id) & (unsigned)(m->hw_nhead - 1);
+    unsigned h = hw_hash(id) & (unsigned)(t->nhead - 1);
     m->touch++;
-    for (int i = m->hw_head[h]; i >= 0; i = m->hw[i].next) {
-        web_hw_t *e = &m->hw[i];
+    for (int i = t->head[h]; i >= 0; i = t->rows[i].next) {
+        web_hw_t *e = &t->rows[i];
         if (strcmp(e->id, id)) continue;
         long long d = v - e->v;
         e->v = v;
@@ -284,33 +311,38 @@ static double hw_delta(web_metrics_t *m, const char *id, long long v,
         return d > 0 ? (double)d : 0;
     }
     int slot = -1;
-    if (m->hw_n < m->hw_cap) {
-        for (int i = 0; i < m->hw_cap; i++) if (!m->hw[i].used) { slot = i; break; }
-        m->hw_n++;
+    if (t->n < t->cap) {
+        for (int i = 0; i < t->cap; i++) if (!t->rows[i].used) { slot = i; break; }
+        t->n++;
     } else {
         slot = 0;
-        for (int i = 1; i < m->hw_cap; i++)
-            if (m->hw[i].touched < m->hw[slot].touched) slot = i;
-        hw_unlink(m, slot);
-        gone_set(m, m->hw[slot].id);
+        for (int i = 1; i < t->cap; i++)
+            if (t->rows[i].touched < t->rows[slot].touched) slot = i;
+        hw_unlink(t, slot);
+        gone_set(t, t->rows[slot].id);
         web_rollup_note_hw_eviction(m->ru);
     }
-    web_hw_t *e = &m->hw[slot];
+    web_hw_t *e = &t->rows[slot];
     e->used = 1;
     snprintf(e->id, sizeof(e->id), "%s", id);
     e->v = v;
     e->touched = m->touch;
-    e->next = m->hw_head[h];
-    m->hw_head[h] = slot;
+    e->next = t->head[h];
+    t->head[h] = slot;
     /* Born while we were listening: its whole total is new. Unless
      * this table evicted the row earlier on this connection: its total
      * up to then was already counted, so it is a baseline again. The
      * filter can only err towards a baseline (a born row whose id
      * collides with an evicted one loses its first total). */
     if (first_seen >= 0 && m->have_first_ts && first_seen >= m->first_ts &&
-        !gone_maybe(m, id))
+        !gone_maybe(t, id))
         return (double)v;
     return 0;
+}
+
+static double hw_delta(web_metrics_t *m, const char *id, long long v,
+                       long long first_seen) {
+    return hwt_delta(m, &m->hw, id, v, first_seen);
 }
 
 static void count(web_metrics_t *m, int metric, const char *key, double d,
@@ -370,12 +402,30 @@ static void sample_live(web_metrics_t *m, long long now) {
                        (double)web_anomaly_open_count(m->anomaly), now);
 }
 
-static void batch_start(web_metrics_t *m, long long now) {
+/* ble.class.advertisers: the BLE tables' rows heard within two fine
+ * buckets of the pass's own ts (the sensor's clock, as the rows'
+ * last_seen is), distinct addresses per class. A heard advertiser's
+ * record comes once a 10 s slot (src/jsonl.c BLE_JSONL_LIVE_S), so two
+ * buckets hold it; a class with none is not sampled, so its row is
+ * empty rather than a line at zero. Not gated on taint: the rows are
+ * the BLE tables', which a socket gap does not half-build. */
+static void sample_ble(web_metrics_t *m, long long ts, long long now) {
+    if (!m->ble || ts < 0) return;
+    int n[WEB_BC_COUNT];
+    if (web_ble_class_counts(m->ble, ts - 2 * WEB_FINE_S, n) <= 0) return;
+    for (int c = 0; c < WEB_BC_COUNT; c++)
+        if (n[c] > 0)
+            web_rollup_add(m->ru, WM_BLE_CLASS_ADVERTISERS, web_ble_classes[c].slug,
+                           (double)n[c], now);
+}
+
+static void batch_start(web_metrics_t *m, long long ts, long long now) {
     if (m->batch_open && !m->taint) {
         web_rollup_add(m->ru, WM_WIFI_PROBE_CLIENTS, "", (double)m->probe_n, now);
         web_rollup_add(m->ru, WM_CONNS_TOTAL, "", (double)m->conns_n, now);
     }
     if (m->batch_open) sample_live(m, now);
+    if (m->batch_open) sample_ble(m, ts, now);
     m->batch_open = 1;
     m->taint = 0;
     m->probe_n = m->conns_n = 0;
@@ -454,7 +504,7 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
     if (m->ident) web_ident_record(m->ident, r, now);
 
     if (!strcmp(t, "iface")) {
-        if (!m->in_iface) batch_start(m, now);
+        if (!m->in_iface) batch_start(m, ts, now);
         m->in_iface = 1;
     } else if (web_live_is_poll_type(t)) {
         m->in_iface = 0;
@@ -525,12 +575,31 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
     } else if (!strcmp(t, "ble_device")) {
         /* By address alone: the same address heard by two receivers (or
          * as two addr_types) is one series, every receiver's samples in
-         * it. sloth writes this record on a change of its signature or
-         * at the 300 s heartbeat (src/jsonl.c), not every pass, so an
-         * advertiser's series is as sparse as its record. */
-        if (web_jl_int(r, "has_rssi", 0) != 1) return;
+         * it. sloth re-sends this record once a 10 s slot while it keeps
+         * hearing the advertiser and otherwise on a change of its
+         * signature or the 300 s heartbeat (src/jsonl.c), so a heard
+         * advertiser's series has a point a fine bucket. */
         if (web_key_mac(web_jl_str(r, "addr"), k) != 0) return;
-        rssi(m, r, "rssi", WM_RF_RSSI_BLE, k, ts, now, -127, 20);
+        if (web_jl_int(r, "has_rssi", 0) == 1)
+            rssi(m, r, "rssi", WM_RF_RSSI_BLE, k, ts, now, -127, 20);
+        /* The class mix: adv_count is the row's running total AS ONE
+         * SENSOR HEARD IT (web_ble.h), so the high-water id carries the
+         * addr_type and the sensor's iface word: two receivers' totals
+         * for one address never interleave into one id. The marks are
+         * BLE's own table (web_metrics.h WEB_BLE_HW_ROWS), so fresh
+         * random addresses cannot evict the shared rows. A one-channel
+         * Ubertooth sample (sampled 1) is a fraction of the air and is
+         * not credited. */
+        uint8_t mac[6];
+        if (web_mix_mac_bytes(k, mac) != 0) return;
+        const char *slug = web_ble_classes[web_ble_class_of_rec(r)].slug;
+        snprintf(id, sizeof(id), "bl|%s|%lld|%s", k, web_jl_int(r, "addr_type", -1),
+                 web_ble_iface_name(web_ble_iface_find(web_jl_str(r, "iface"))));
+        double d = hwt_delta(m, &m->blehw, id, web_jl_int(r, "adv_count", 0),
+                             web_jl_int(r, "first_seen", -1));
+        if (web_jl_int(r, "sampled", 0) == 1 || !(d > 0)) return;
+        count(m, WM_BLE_CLASS_ADV, slug, d, now);
+        if (m->blemix) web_chmix_add(m->blemix, slug, mac, WEB_TX_BLE, d, now);
     } else if (!strcmp(t, "gnss_fix")) {
         /* The host's own receiver (web_gnss.h): change-only records, so
          * a sample per band change or heartbeat. A gnss_fix carries

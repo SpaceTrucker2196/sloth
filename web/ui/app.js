@@ -892,7 +892,7 @@
   }
   ["n-win", "a-win", "d-q", "d-sort", "l-q", "w-metric", "w-win", "w-sort", "al-state", "al-sev",
    "al-q", "al-win", "f-win", "f-sort", "f-ip", "ev-filter",
-   "q-sql", "b-q", "b-sort"].forEach(keepCtl);
+   "q-sql", "b-q", "b-sort", "bledev-win", "bledev-metric", "bledev-n"].forEach(keepCtl);
   // Filled from the server's answer, so put back where it is filled.
   $("al-type").addEventListener("change", function () { ctlSave("al-type"); });
   // Each drill-down bar's "show all" (its href the bare view).
@@ -1399,6 +1399,7 @@
     // drill-down its filter.
     if (view !== "lookup") show(view, VP);
     if (!$("drawer").hidden && D.sel) openDrawer(D.sel);
+    if (!$("bdrawer").hidden && B.sel) openBleDrawer(B.sel.addr, B.sel.type, B.sel.iface);
   });
 
   // ── the capture-scope switch ──────────────────────────────────────
@@ -5055,6 +5056,7 @@
     if (typeof VP.q === "string") $("b-q").value = VP.q;
     else $("b-q").value = ctlKept("b-q", "");
     bleLoad();
+    if (window.SlothBleDev) SlothBleDev.show();
     if (!B.timer) B.timer = setInterval(function () { if (view === "ble") bleLoad(false, true); }, 5000);
   }
   $("b-q").addEventListener("input", function () {
@@ -5094,7 +5096,7 @@
       }
     }
     glyph.paint(c, glyph.g5(cells, { w: c.clientWidth, h: c.clientHeight, first: first, ground: "--bg" }), tok);
-    set("bdr-strip-note", cells.length ? "a quarter hour is set when a record's last_seen fell in it; the record is change-only with a 300 s heartbeat, so a quiet quarter can be an unchanged advertiser"
+    set("bdr-strip-note", cells.length ? "a quarter hour is set when a record's last_seen fell in it; a heard advertiser's record comes once a 10 s slot and a quiet one's on the 300 s heartbeat, so a quiet quarter can be an unchanged advertiser whose heartbeat fell in the next"
                                        : "no data");
   }
   function openBleDrawer(addr, type, iface) {
@@ -5105,6 +5107,7 @@
     $("bdrawer").hidden = false;
     $("bdr-close").focus();
     set("bdr-addr", addr);
+    if (window.SlothBleDev) SlothBleDev.reset();
     // The copy-JSON bundle's button (bundle.js, its own slice): a no-op
     // when that module is not loaded.
     var bb = $("bundle-btn-ble");
@@ -5149,7 +5152,7 @@
         ["distance (est)", num(d.rssi) ? (d.est ? d.est.describe : "no estimate") : null],
         ["advertisements", String(d.adv_count)],
         ["adv rate", num(d.adv_rate) ? d.adv_rate.toFixed(3) + " adv/s over " + (d.points ? d.points.length : 0) +
-                                        " records (coarse: the record is change-only with a 300 s heartbeat)" : null],
+                                        " records (coarse: points at least 300 s apart, the newest following each record)" : null],
         ["first heard", bleAge(d.first_seen, now) + " ago, last " + bleAge(d.last_seen, now) + " ago"],
         ["first seen", stamp(d.first_seen)], ["last seen", stamp(d.last_seen)],
         ["extended", d.ext_adv ? "primary PHY " + d.primary_phy + ", secondary PHY " + d.secondary_phy +
@@ -5170,6 +5173,7 @@
                                                         tier: "per record", scale: "adv/s", n: pts.length })
                                       : "no data: fewer than two records of this row yet");
       blePresence(d, now);
+      if (window.SlothBleDev) SlothBleDev.drawer(d, now);
       var al = clear("bdr-alerts");
       if (!j.alerts || !j.alerts.length) al.appendChild(el("div", "sub", "none (a hid_oui finding names an address; floods and watchlist findings name a key or a category)"));
       (j.alerts || []).forEach(function (a) { al.appendChild(bleAlertRow(a)); });
@@ -5332,6 +5336,11 @@
   if (window.SlothFrrs) SlothFrrs.init({ el: el, getJSON: getJSON, DataTable: DataTable,
     prefGet: prefGet, prefSet: prefSet, stamp: stamp, shortStamp: shortStamp, go: go, show: show,
     openDrawer: openDrawer, alertsReload: function () { alertsLoad(true); } });
+
+  // The BLE Devices waterfall (web/ui/bledev.js): the page's helpers, lent once.
+  if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,
+    heat: heat, keyColor: keyColor, sizeCanvas: sizeCanvas, fmt: fmt, hhmmss: hhmmss, css: css,
+    errText: errText, series: series, tierFor: tierFor, openBleDrawer: openBleDrawer });
 
   // The Overview is the first view: learn whether there is a store (for
   // the tier), then draw it, and redraw every minute.

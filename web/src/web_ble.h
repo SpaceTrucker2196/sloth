@@ -28,9 +28,11 @@
  * the rollup (whose device class is 512 keys shared with the Wi-Fi
  * tables, and BLE addresses rotate: a resident random-address device is
  * a new key every fifteen minutes, which would churn that class and
- * evict the Wi-Fi devices' history). The rate is coarse, since the
- * record is change-only with a 300 s heartbeat and adv_count is not in
- * its signature, and the drawer says so.
+ * evict the Wi-Fi devices' history). The rate is coarse, its points
+ * kept WEB_BLE_PT_MIN_S apart (sloth re-sends a heard advertiser once a
+ * 10 s slot, src/jsonl.c BLE_JSONL_LIVE_S, and sixteen points of every
+ * record would span under three minutes), and the drawer says so. Each
+ * row's class (web_bledev.h) is derived from its fields when asked.
  *
  * Persisted (web_store.h, slothweb.db v7): every row dirtied since the
  * last flush is upserted by the store thread each WEB_FLUSH_S
@@ -85,11 +87,17 @@
  * bucket set when a record's last_seen falls in it. 96 bits a row (two
  * words and the newest bucket's index), kept and stored with the row,
  * so the strip costs no series and survives a restart. Coarse by
- * construction: the record is change-only with a 300 s heartbeat, so a
- * quiet bucket can be an unchanged advertiser whose heartbeat fell in
- * the next one. */
+ * construction: a heard advertiser's record comes once a 10 s slot and a
+ * quiet one's on the 300 s heartbeat, so a quiet bucket can be an
+ * unchanged advertiser whose heartbeat fell in the next one. */
 #define WEB_BLE_PRES_S     900
 #define WEB_BLE_PRES_N     96
+/* The drawer's rate points are kept at least this far apart (the newest
+ * one moves with each record until it is): since sloth re-sends a heard
+ * advertiser once a 10 s slot (src/jsonl.c BLE_JSONL_LIVE_S), sixteen
+ * points of every record would cover under three minutes; at this
+ * spacing they cover about eighty. */
+#define WEB_BLE_PT_MIN_S   300
 
 /* The sensor's interface: sloth's two names, or neither. */
 enum { WEB_BLE_IF_MONITOR = 0, WEB_BLE_IF_UBERTOOTH, WEB_BLE_IF_OTHER,
@@ -117,6 +125,8 @@ enum { WEB_BLE_OUI_HAK5 = 0, WEB_BLE_OUI_ESPRESSIF, WEB_BLE_OUI_OTHER };
 
 /* The vocabularies, for the page and the parity test. */
 const char *web_ble_iface_name(int i);
+/* The sensor word's index: one of sloth's two, else WEB_BLE_IF_OTHER. */
+int         web_ble_iface_find(const char *s);
 const char *web_ble_pdu_name(int i);
 const char *web_ble_band_name(int b);
 const char *web_ble_band_short(int b);
@@ -200,6 +210,11 @@ typedef struct {
     int       name_np, name_complete;
     int       uuid16, mfr_id, mfr_subtype, svc_data_uuid16, appearance, hid;
     int       tx_power;              /* -128 absent */
+    /* The extended report header's TxPower (ble_device ext_tx_power,
+     * -128 absent). Memory only, never stored, as chan_mask: a row
+     * seeded from slothweb.db has none until its next record, which a
+     * heard advertiser sends within a 10 s slot. */
+    int       ext_tx_power;
     int       flags;
     int       has_rssi, rssi, rssi_best;
     unsigned long long adv_count;
@@ -213,6 +228,10 @@ typedef struct {
     web_ble_pt_t pts[WEB_BLE_PTS];
     int       npts, pt_head;
     unsigned long long records;
+    /* The LL channels (0..39) the row's records named since slothweb
+     * started: an Ubertooth row's; the host controller's carry none
+     * (an HCI report has no channel). Memory only, never stored. */
+    uint64_t  chan_mask;
 } web_ble_dev_t;
 
 typedef struct {
@@ -348,6 +367,49 @@ size_t web_ble_out_of_scope_json(char *body, size_t cap);
  * (the counters and bounds). */
 void web_ble_live_json(web_ble_t *b, web_jw_t *w, long long now_s);
 void web_ble_health_json(web_ble_t *b, web_jw_t *w);
+
+/* ── for the BLE Devices view (web_bledev.h) ──────────────────────── */
+
+/* The device class (web_bledev.h WEB_BC_*) of a row, from its fields. */
+int  web_ble_dev_class(const web_ble_dev_t *d);
+/* Per class, the distinct addresses whose rows were heard at or after
+ * since (their last_seen, the sensor's clock) into counts[WEB_BC_COUNT];
+ * the rows counted, or -1 with no table. */
+int  web_ble_class_counts(web_ble_t *b, long long since, int *counts);
+/* One advertiser of a window, every row of its address merged: the
+ * newest row's type, sensor, name and current RSSI, the best of the
+ * rows' best RSSI, the largest adv_count (one sensor's: never summed),
+ * the earliest first_seen, the latest last_seen, the channels any heard
+ * it on, and the class of the newest row. */
+typedef struct {
+    uint8_t   addr[6];
+    int       addr_type, iface, cls;
+    char      name[WEB_BLE_NAME_MAX + 1];
+    int       name_np;
+    int       has_rssi, rssi, rssi_best;
+    int       est_valid, est_band;
+    int       ptx_dbm, ptx_src;      /* web_ble_dev_ptx() */
+    unsigned long long adv_count;
+    long long first_seen, last_seen;
+    uint64_t  chan_mask;
+    int       rows;
+} web_ble_cand_t;
+/* The P_tx the proximity grade uses for a row, in rf_ctx_ble()'s order:
+ * the extended header's TxPower, else the TX Power Level AD, else
+ * 0 dBm assumed; *src a WEB_BLE_PTX_*. */
+void web_ble_dev_ptx(const web_ble_dev_t *d, int *dbm, int *src);
+/* The newest row of an address as one candidate (its own fields, not
+ * merged): name, class, type and sensor for the class mix's names.
+ * 1 found, 0 not. */
+int  web_ble_addr_info(web_ble_t *b, const uint8_t addr[6], web_ble_cand_t *out);
+/* The addresses with a row heard in [from, to) (last_seen >= from and
+ * first_seen < to), at most max; *more when there were more. Every
+ * address whose newest row is a tracker first, newest first, then the
+ * rest newest first: a cut drops the oldest non-trackers, never a
+ * tracker heard earlier in the window (unless there are more than max
+ * trackers). Their number. */
+int  web_ble_candidates(web_ble_t *b, long long from, long long to,
+                        web_ble_cand_t *out, int max, int *more);
 
 /* FNV-1a 64 of s as 16 lower-case hex digits into out[17]: the store's
  * key for a finding (never the key itself). */

@@ -96,12 +96,9 @@ static void jw_cell(web_jw_t *w, double v) {
 
 /* ── the grid ────────────────────────────────────────────────────────── */
 
-typedef struct {
-    int       tier, ncol;
-    long long step, from, to, col_s;
-} grid_t;
+typedef web_grid_t grid_t;
 
-#define GRID_KEYS 512
+#define GRID_KEYS WEB_GRID_KEYS
 #define GRID_PTS  12000
 
 static int decimal(const char *s, long long lo, long long hi, long long *out) {
@@ -119,8 +116,8 @@ static int decimal(const char *s, long long lo, long long hi, long long *out) {
 
 /* from, to and cols (ps[0..2]) into g, the tier the range needs. 0, or
  * -1 with the reason in why. */
-static int grid_of(const web_m4_t *m, const web_param_t *ps, long long now,
-                   grid_t *g, const char **why) {
+int web_grid_of(const web_m4_t *m, const web_param_t *ps, long long now,
+                web_grid_t *g, const char **why) {
     memset(g, 0, sizeof(*g));
     g->to = now - now % 10 + 10;
     if (ps[1].seen && web_param_secs(ps[1].val, &g->to) != 0) {
@@ -283,6 +280,30 @@ static size_t row_max(const grid_t *g, size_t extra) {
     return 160 + (size_t)g->ncol * 18 + extra;
 }
 
+/* The plain grid for another view (web_bledev.c): one key's cells. */
+int web_grid_keys(const web_m4_t *m, int metric, const web_grid_t *g,
+                  char (*keys)[WEB_KEY_MAX + 1]) {
+    return grid_keys(m, metric, g, keys);
+}
+
+int web_grid_cells_json(const web_m4_t *m, int metric, const web_grid_t *g,
+                        const char *key, web_jw_t *w, double *total) {
+    web_point_t *pts = malloc(GRID_PTS * sizeof(*pts));
+    double *sum = malloc(WEB_WIFI_COLS * sizeof(*sum));
+    int *cnt = malloc(WEB_WIFI_COLS * sizeof(*cnt));
+    int rc = -1;
+    if (pts && sum && cnt && grid_row(m, metric, g, key, pts, sum, cnt, total) == 0) {
+        cells_json(w, metric, g, sum, cnt);
+        rc = 0;
+    }
+    free(pts); free(sum); free(cnt);
+    return rc;
+}
+
+void web_grid_head(web_jw_t *w, int metric, const web_grid_t *g) {
+    grid_head(w, metric, g);
+}
+
 /* ── /api/wifi/channels?mix=1 ────────────────────────────────────────── */
 
 /* The aggregation behind one answer. Every channel and transmitter the
@@ -328,6 +349,7 @@ typedef struct {
 
 typedef struct {
     const grid_t *g;
+    const web_mix_ops_t *ops;
     mchan_t  ch[WEB_CHMIX_CHANNELS];
     int      nch, cut_ch;
     mcell_t *cells;                    /* WEB_CHMIX_CHANNELS x ncol */
@@ -345,17 +367,27 @@ static int mix_chan(magg_t *a, const char *key) {
     for (int i = 0; i < a->nch; i++)
         if (!strcmp(a->ch[i].key, key)) return i;
     if (a->nch >= WEB_CHMIX_CHANNELS) { a->cut_ch = 1; return -1; }
-    char canon[WEB_KEY_MAX + 1];
+    int rank = 0;
+    long num = 0;
     /* Read back from the store as if off the wire: a key slothweb did not
      * write is not shown. */
-    if (web_key_channel_text(key, canon) != 0 || strcmp(canon, key)) return -1;
+    if (a->ops->key(key, &rank, &num) != 0) return -1;
     mchan_t *c = &a->ch[a->nch];
     snprintf(c->key, sizeof(c->key), "%s", key);
     c->idx = a->nch;
-    web_channel_band(key, &c->rank);
-    c->num = strtol(key + (c->rank == 2 ? 2 : 0), NULL, 10);
+    c->rank = rank;
+    c->num = num;
     c->total = 0;
     return a->nch++;
+}
+
+/* The WiFi mix's keys: canonical channel keys, by band then number. */
+static int wifi_mix_key(const char *key, int *rank, long *num) {
+    char canon[WEB_KEY_MAX + 1];
+    if (web_key_channel_text(key, canon) != 0 || strcmp(canon, key)) return -1;
+    web_channel_band(key, rank);
+    *num = strtol(key + (*rank == 2 ? 2 : 0), NULL, 10);
+    return 0;
 }
 
 static int mix_tx(magg_t *a, const uint8_t mac[6], int kind) {
@@ -426,7 +458,7 @@ static int mix_from_store(void *ctx, const char *chan, long long t,
     uint8_t mac[6];
     if (frames <= 0) return 0;
     if (!tx[0]) { mix_put(a, chan, t, NULL, 0, (unsigned long long)frames); return 0; }
-    if ((kind != WEB_TX_AP && kind != WEB_TX_CLIENT) ||
+    if (kind < 0 || kind > 7 || !(a->ops->kinds & (1u << kind)) ||
         web_mix_mac_bytes(tx, mac) != 0)
         return 0;
     mix_put(a, chan, t, mac, kind, (unsigned long long)frames);
@@ -456,26 +488,27 @@ static int by_mix_band(const void *x, const void *y) {
     return strcmp(a->key, b->key);
 }
 
-/* One transmitter of the answer's tx list. */
-static void mix_tx_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *conn,
-                        const mtx_t *t) {
+/* One transmitter of the WiFi answer's tx list. */
+static void wifi_tx_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *conn,
+                         const uint8_t txmac[6], int kind, void *ctx) {
+    (void)ctx;
     char mac[18];
-    web_mix_mac_text(t->mac, mac);
+    web_mix_mac_text(txmac, mac);
     web_jw_raw(w, "{\"id\":");   web_jw_str(w, mac);
-    web_jw_raw(w, ",\"kind\":"); web_jw_str(w, t->kind == WEB_TX_AP ? "ap" : "client");
+    web_jw_raw(w, ",\"kind\":"); web_jw_str(w, kind == WEB_TX_AP ? "ap" : "client");
     web_oui_hit_t hit;
     memset(&hit, 0, sizeof(hit));
-    if (m->oui) web_oui_lookup(m->oui, t->mac, &hit);
+    if (m->oui) web_oui_lookup(m->oui, txmac, &hit);
     web_jw_raw(w, ",\"vendor\":");
     if (hit.found) web_jw_str(w, hit.name); else web_jw_raw(w, "null");
-    if (t->kind == WEB_TX_AP) {
+    if (kind == WEB_TX_AP) {
         /* sloth.db's octets first: they are the TUI's (web_ssid.h). The
          * buffer holds either source's longest. */
         char ssid[(WEB_SDB_TEXT_MAX > WEB_CHMIX_SSID_MAX ? WEB_SDB_TEXT_MAX
                                                          : WEB_CHMIX_SSID_MAX) + 1] = "";
         const char *src = NULL;
         if (conn && web_sdb_ap_ssid(conn, mac, ssid) == 1) src = "sloth.db";
-        else if (m->tsdb && m->tsdb->mix && web_chmix_ssid(m->tsdb->mix, t->mac, ssid))
+        else if (m->tsdb && m->tsdb->mix && web_chmix_ssid(m->tsdb->mix, txmac, ssid))
             src = "stream";
         if (!src) ssid[0] = '\0';
         web_jw_raw(w, ",\"ssid\":"); web_jw_ssid(w, ssid);
@@ -486,9 +519,15 @@ static void mix_tx_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *conn,
     web_jw_raw(w, "}");
 }
 
-static int mix_route(const web_m4_t *m, const grid_t *g, long long now_s,
-                     char *body, size_t cap, size_t *len, int *status) {
-    web_chmix_t *mix = m->tsdb->mix;
+static void wifi_row_extra(web_jw_t *w, const char *key, void *ctx) {
+    (void)ctx;
+    int rank;
+    web_jw_raw(w, ",\"band\":");  web_jw_str(w, web_channel_band(key, &rank));
+}
+
+int web_mix_answer(const web_m4_t *m, const web_grid_t *g, const web_mix_ops_t *ops,
+                   long long now_s, char *body, size_t cap, size_t *len, int *status) {
+    web_chmix_t *mix = ops->mix;
     magg_t *a = calloc(1, sizeof(*a));
     mcell_t *cells = calloc((size_t)WEB_CHMIX_CHANNELS * (size_t)g->ncol,
                             sizeof(*cells));
@@ -498,6 +537,7 @@ static int mix_route(const web_m4_t *m, const grid_t *g, long long now_s,
         return -1;
     }
     a->g = g;
+    a->ops = ops;
     a->cells = cells;
     for (int i = 0; i < MIX_TXH; i++) a->hash[i] = -1;
     int read_more = 0;
@@ -507,8 +547,9 @@ static int mix_route(const web_m4_t *m, const grid_t *g, long long now_s,
         nread = web_chmix_each_fine(mix, g->from, g->to, mix_from_ring, a);
     } else if (m->tsdb->store && m->tsdb->store->rd) {
         source = "store";
-        nread = web_store_mix_query(m->tsdb->store, g->tier, g->from, g->to,
-                                    MIX_READ_MAX, mix_from_store, a, &read_more);
+        nread = web_store_mix_query_ns(m->tsdb->store, ops->ns, g->tier, g->from,
+                                       g->to, MIX_READ_MAX, mix_from_store, a,
+                                       &read_more);
         if (nread < 0) {
             free(a); free(cells); free(dict); free(rows); free(row);
             return answer_error(503, "store_error", NULL, body, cap, len, status);
@@ -525,7 +566,7 @@ static int mix_route(const web_m4_t *m, const grid_t *g, long long now_s,
     web_sdb_conn_t conn;
     memset(&conn, 0, sizeof(conn));
     char oerr[WEB_SDB_ERR_MAX] = "";
-    int have_db = m->sdb && m->sdb->configured &&
+    int have_db = ops->use_db && m->sdb && m->sdb->configured &&
                   web_slothdb_open(m->sdb, &conn, WEB_SDB_HTTP_MS, now_s, oerr,
                                    sizeof(oerr)) == 0;
 
@@ -555,7 +596,8 @@ static int mix_route(const web_m4_t *m, const grid_t *g, long long now_s,
         if (nout >= MIX_DICT_MAX) { folded = 1; break; }
         size_t mark = dw.len;
         if (nout) web_jw_raw(&dw, ",");
-        mix_tx_json(&dw, m, have_db ? &conn : NULL, &a->tx[byf[k]]);
+        ops->tx_json(&dw, m, have_db ? &conn : NULL, a->tx[byf[k]].mac,
+                     a->tx[byf[k]].kind, ops->ctx);
         if (dw.overflow) {
             dw.overflow = 0;
             dw.len = mark;
@@ -568,7 +610,7 @@ static int mix_route(const web_m4_t *m, const grid_t *g, long long now_s,
     free(txf);
     free(byf);
     /* Rows a row at a time, and only while the whole answer still fits. */
-    size_t head_max = 720, tail_max = 160;
+    size_t head_max = 720, tail_max = 160 + ops->tail_max;
     int shown = 0, rows_cut = 0;
     for (int oi = 0; oi < a->nch && shown < WEB_WIFI_ROWS; oi++) {
         int ci = order[oi];
@@ -577,8 +619,7 @@ static int mix_route(const web_m4_t *m, const grid_t *g, long long now_s,
         web_jw_init(&r, row, cap);
         web_jw_raw(&r, shown ? ",{\"key\":" : "{\"key\":");
         web_jw_str(&r, c->key);
-        int rank;
-        web_jw_raw(&r, ",\"band\":");  web_jw_str(&r, web_channel_band(c->key, &rank));
+        ops->row_extra(&r, c->key, ops->ctx);
         web_jw_raw(&r, ",\"total\":");
         web_jw_int(&r, (long long)(c->total > 0x7fffffffffffULL ? 0x7fffffffffffULL
                                                                  : c->total));
@@ -621,7 +662,8 @@ static int mix_route(const web_m4_t *m, const grid_t *g, long long now_s,
     web_slothdb_close(&conn);
     web_jw_t w;
     web_jw_init(&w, body, cap);
-    web_jw_raw(&w, "{\"metric\":\"wifi.mix\",\"kind\":\"counter\",\"unit\":\"frames\"");
+    web_jw_raw(&w, "{\"metric\":");  web_jw_str(&w, ops->metric);
+    web_jw_raw(&w, ",\"kind\":\"counter\",\"unit\":");  web_jw_str(&w, ops->unit);
     web_jw_raw(&w, ",\"tier\":");    web_jw_str(&w, web_tier_name(g->tier));
     web_jw_raw(&w, ",\"step\":");    web_jw_int(&w, g->step);
     web_jw_raw(&w, ",\"from\":");    web_jw_int(&w, g->from);
@@ -635,16 +677,20 @@ static int mix_route(const web_m4_t *m, const grid_t *g, long long now_s,
     web_jw_raw(&w, ",\"ring_from\":");
     if (g->tier == WEB_TIER_FINE && ms.ring_oldest >= 0) web_jw_int(&w, ms.ring_oldest);
     else web_jw_raw(&w, "null");
-    web_sdb_stats_t sst;
-    memset(&sst, 0, sizeof(sst));
-    if (m->sdb) web_slothdb_stats(m->sdb, &sst);
-    web_jw_raw(&w, ",\"db\":");
-    web_jw_str(&w, have_db ? "open" : m->sdb && m->sdb->configured
-                   ? web_slothdb_state_word(sst.state) : "none");
+    if (ops->use_db) {
+        web_sdb_stats_t sst;
+        memset(&sst, 0, sizeof(sst));
+        if (m->sdb) web_slothdb_stats(m->sdb, &sst);
+        web_jw_raw(&w, ",\"db\":");
+        web_jw_str(&w, have_db ? "open" : m->sdb && m->sdb->configured
+                       ? web_slothdb_state_word(sst.state) : "none");
+    }
     web_jw_raw(&w, ",\"total_keys\":"); web_jw_int(&w, a->nch);
     web_jw_raw(&w, ",\"tx\":[");
     web_jw_raw(&w, dict);
-    web_jw_raw(&w, "],\"channels\":[");
+    web_jw_raw(&w, "],\"");
+    web_jw_raw(&w, ops->rows_word);
+    web_jw_raw(&w, "\":[");
     web_jw_raw(&w, rows);
     web_jw_raw(&w, "],\"shown\":");  web_jw_int(&w, shown);
     web_jw_raw(&w, ",\"more\":");
@@ -653,6 +699,7 @@ static int mix_route(const web_m4_t *m, const grid_t *g, long long now_s,
      * past the read cap. Their frames are in "other" or not read. */
     web_jw_raw(&w, ",\"folded\":"); web_jw_raw(&w, folded ? "true" : "false");
     web_jw_raw(&w, ",\"read_cut\":"); web_jw_raw(&w, read_more ? "true" : "false");
+    if (ops->tail) ops->tail(&w, ops->ctx);
     web_jw_raw(&w, "}\n");
     (void)nread;
     free(a); free(cells); free(dict); free(rows); free(row);
@@ -686,10 +733,22 @@ int web_wifi_channels_route(const web_m4_t *m, const char *query,
             return answer_error(503, "no_channel_mix", NULL, body, cap, len, status);
         grid_t mg;
         const char *mwhy;
-        if (grid_of(m, ps, now_s, &mg, &mwhy) != 0)
+        if (web_grid_of(m, ps, now_s, &mg, &mwhy) != 0)
             return answer_error(400, mwhy, NULL, body, cap, len, status);
         WEB_M4_CHECKED(m, len, status);
-        return mix_route(m, &mg, now_s, body, cap, len, status);
+        web_mix_ops_t ops;
+        memset(&ops, 0, sizeof(ops));
+        ops.mix = m->tsdb->mix;
+        ops.ns = WEB_MIX_NS_WIFI;
+        ops.metric = "wifi.mix";
+        ops.unit = "frames";
+        ops.rows_word = "channels";
+        ops.kinds = 1u << WEB_TX_AP | 1u << WEB_TX_CLIENT;
+        ops.use_db = 1;
+        ops.key = wifi_mix_key;
+        ops.row_extra = wifi_row_extra;
+        ops.tx_json = wifi_tx_json;
+        return web_mix_answer(m, &mg, &ops, now_s, body, cap, len, status);
     }
     int metric = WM_WIFI_AP_COUNT;
     if (ps[3].seen) {
@@ -700,7 +759,7 @@ int web_wifi_channels_route(const web_m4_t *m, const char *query,
     }
     grid_t g;
     const char *why;
-    if (grid_of(m, ps, now_s, &g, &why) != 0)
+    if (web_grid_of(m, ps, now_s, &g, &why) != 0)
         return answer_error(400, why, NULL, body, cap, len, status);
     WEB_M4_CHECKED(m, len, status);
     gbuf_t b;
@@ -779,7 +838,7 @@ int web_wifi_deauth_route(const web_m4_t *m, const char *query,
         return answer_error(400, err, NULL, body, cap, len, status);
     grid_t g;
     const char *why;
-    if (grid_of(m, ps, now_s, &g, &why) != 0)
+    if (web_grid_of(m, ps, now_s, &g, &why) != 0)
         return answer_error(400, why, NULL, body, cap, len, status);
     WEB_M4_CHECKED(m, len, status);
     const int metric = WM_WIFI_DEAUTH;

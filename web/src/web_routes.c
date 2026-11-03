@@ -6,6 +6,7 @@
 
 #include "web_alerts.h"
 #include "web_assets.h"
+#include "web_bledev.h"
 #include "web_evidence.h"
 #include "web_bundle.h"
 #include "web_flows.h"
@@ -872,6 +873,41 @@ static int route_ble(const web_req_t *rq, const web_health_t *h, int which,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+/* /api/ble/classes and /api/ble/proximity (web_bledev.h): the BLE
+ * Devices view's two panels, over the time series and the BLE tables.
+ * Monitor's and Hybrid's as route_ble()'s; under Local the query is
+ * checked on a check-only copy, then the one out_of_scope answer. */
+static int route_bledev(const web_req_t *rq, const web_health_t *h, int prox,
+                        char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    static const web_m4_t none;
+    web_m4_t mc = h->m4 ? *h->m4 : none;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        mc.check_only = none_here;
+        rc = prox ? web_bledev_proximity_route(&mc, h->ble, rq->query, h->wall_s, body,
+                                               cap, &bl, &status)
+                  : web_bledev_classes_route(&mc, h->ble, rq->query, h->wall_s, body,
+                                             cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_ble_out_of_scope_json(body, cap);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
 /* /api/alerts and /api/alert (web_alerts.h): GET only. A HEAD has no
  * answer to describe without reading sloth.db, as /api/query's. */
 static int route_alerts(const web_req_t *rq, const web_health_t *h, int one,
@@ -1335,6 +1371,12 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_ble(rq, h, BLE_DEVICES, NULL, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble/alerts"))
             return route_ble(rq, h, BLE_ALERTS, NULL, out, outsz, r);
+        /* Before the address branch below, which would read either as a
+         * bad address. */
+        if (!strcmp(rq->path, "/api/ble/classes"))
+            return route_bledev(rq, h, 0, out, outsz, r);
+        if (!strcmp(rq->path, "/api/ble/proximity"))
+            return route_bledev(rq, h, 1, out, outsz, r);
         if (!strncmp(rq->path, "/api/ble/", 9) && rq->path[9] &&
             !strchr(rq->path + 9, '/'))
             return route_ble(rq, h, BLE_DEVICE, rq->path + 9, out, outsz, r);

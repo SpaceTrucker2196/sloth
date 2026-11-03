@@ -1,0 +1,9 @@
+/* The BLE Devices view's waterfall (bledev.js, web_bledev.h). Colours
+ * are the palette's: an advertiser's band in its name's (else its
+ * address's) hash colour, the proximity grade on the heat ramp, the
+ * page's own ground (the TUI puts no BLE row on the monitor ground). */
+canvas.wfall.bledev-classes { height: 196px; }
+canvas.wfall.bledev-prox { height: 120px; }
+.bledev-legend { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 12px; margin: 4px 0; }
+.bledev-key { white-space: nowrap; }
+#bdrawer canvas.spark.bledev-rssi { height: 64px; }

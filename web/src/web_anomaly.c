@@ -1420,7 +1420,8 @@ static int idx_push(struct web_anom_priv *p, int i) {
 
 static void collect_counter(void *ctx, int metric, const char *key) {
     struct web_anom_priv *p = ctx;
-    if (web_metric_defs[metric].kclass == WEB_KC_GLOBAL) return;
+    if (web_metric_defs[metric].kclass == WEB_KC_GLOBAL ||
+        web_metric_defs[metric].kclass == WEB_KC_BLECLASS) return;
     if (p->pairs_n == p->pairs_cap) {
         int nc = p->pairs_cap ? p->pairs_cap * 2 : 1024;
         pair_t *np = realloc(p->pairs, (size_t)nc * sizeof(*np));
@@ -1486,7 +1487,8 @@ static void minute_pass(web_anomaly_t *a, long long m, int latest,
                 }
                 continue;
             }
-            if (md->kclass != WEB_KC_GLOBAL && !web_metric_is_rssi(g->metric))
+            if (md->kclass != WEB_KC_GLOBAL && md->kclass != WEB_KC_BLECLASS &&
+                !web_metric_is_rssi(g->metric))
                 a1_score(a, g->metric, g->key, t, v);
             if (a->cfg.store && is_flow(g->metric) && v > 0)
                 a9_check(a, g->metric, g->key, t);

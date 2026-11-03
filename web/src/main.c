@@ -15,6 +15,7 @@
 #include "web_baseline.h"
 #include "web_ble.h"
 #include "web_btsig.h"
+#include "web_bledev.h"
 #include "web_chmix.h"
 #include "web_config.h"
 #include "web_devices.h"
@@ -47,6 +48,7 @@ static web_slothdb_t  g_sdb;
 static web_m4_t       g_m4;
 static web_sqlbox_t   g_sql;
 static web_chmix_t    g_chmix;
+static web_chmix_t    g_blemix;
 static web_frrs_t     g_frrs;
 static web_ble_t      g_ble;
 static web_gnss_t     g_gnss;
@@ -123,6 +125,7 @@ int main(int argc, char **argv) {
         web_ptr_init(&g_ptr, WEB_PTR_CAP) != 0 ||
         web_anomaly_init(&g_anomaly, WEB_ANOM_CAP, &acfg) != 0 ||
         web_chmix_init(&g_chmix, have_store) != 0 ||
+        web_chmix_init_sized(&g_blemix, have_store, WEB_BLEDEV_RING) != 0 ||
         web_ble_init(&g_ble, have_store) != 0 ||
         web_gnss_init(&g_gnss) != 0) {
         fprintf(stderr, "slothweb: time series: out of memory\n");
@@ -145,9 +148,12 @@ int main(int argc, char **argv) {
     }
     web_metrics_set_ident(&g_metrics, &g_ident);
     web_metrics_set_mix(&g_metrics, &g_chmix);
+    web_metrics_set_blemix(&g_metrics, &g_blemix);
+    web_metrics_set_ble(&g_metrics, &g_ble);
     web_metrics_set_live(&g_metrics, &g_live);
     web_metrics_set_anomaly(&g_metrics, &g_anomaly);
     web_tsdb_set_mix(&g_tsdb, &g_chmix);
+    web_tsdb_set_blemix(&g_tsdb, &g_blemix);
     web_tsdb_set_ble(&g_tsdb, &g_ble);
     web_ident_set_ptr(&g_ident, &g_ptr);
     g_m4.sdb = cfg.sloth_db[0] ? &g_sdb : NULL;
@@ -337,6 +343,7 @@ int main(int argc, char **argv) {
     web_tsdb_destroy(&g_tsdb);
     web_metrics_destroy(&g_metrics);
     web_chmix_destroy(&g_chmix);
+    web_chmix_destroy(&g_blemix);
     web_ble_destroy(&g_ble);
     web_gnss_destroy(&g_gnss);
     web_rollup_destroy(&g_rollup);

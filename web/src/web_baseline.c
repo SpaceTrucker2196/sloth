@@ -15,7 +15,7 @@ int web_baseline_cap_for(int max_keys) {
     if (max_keys > WEB_MAX_KEYS_MAX) max_keys = WEB_MAX_KEYS_MAX;
     const int caps[WEB_KC_COUNT] = {
         1, max_keys, max_keys / 2, WEB_IFACE_KEYS, WEB_CHANNEL_KEYS,
-        WEB_ALERT_KEYS, WEB_RECTYPE_KEYS
+        WEB_ALERT_KEYS, WEB_RECTYPE_KEYS, WEB_BLECLASS_KEYS
     };
     size_t total = 0;
     for (int m = 0; m < WM_COUNT; m++)

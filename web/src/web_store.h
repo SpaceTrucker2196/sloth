@@ -413,6 +413,15 @@ typedef int (*web_store_mix_fn)(void *ctx, const char *chan, long long t,
 int  web_store_mix_query(web_store_t *s, int tier, long long from, long long to,
                          long long max, web_store_mix_fn fn, void *ctx,
                          int *more);
+/* The same in one namespace of chmix's keys (2026-11-02): the WiFi
+ * view's channels (every key not starting "b:", which is what
+ * web_store_mix_query() reads) or the BLE view's class slugs ("b:*",
+ * web_bledev.h, kind WEB_TX_BLE). Each reads under its own max, so one
+ * view's rows never use up the other's read cap. */
+enum { WEB_MIX_NS_WIFI = 0, WEB_MIX_NS_BLE = 1 };
+int  web_store_mix_query_ns(web_store_t *s, int ns, int tier, long long from,
+                            long long to, long long max, web_store_mix_fn fn,
+                            void *ctx, int *more);
 /* chmix rows, counted now (tests). -1 on error. */
 long long web_store_mix_count(web_store_t *s);
 

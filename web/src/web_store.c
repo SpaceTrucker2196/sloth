@@ -145,7 +145,14 @@ static const char STEP_V4_SQL[] =
 /* v4 -> v5: the WiFi view's channel mix (web_chmix.h): per channel
  * and closed minute or hour bucket (tier 1 or 2), the frames of each of
  * its top transmitters (tx a canonical MAC, kind 1 an AP, 2 a client)
- * and of the rest (tx '', kind 0). The kind is in the key, as it is in
+ * and of the rest (tx '', kind 0). Since 2026-11-02 the same table also
+ * holds the BLE view's class mix (web_bledev.h): channel a class slug
+ * "b:phone" .. "b:unk", which no channel key can be, tx an advertiser's
+ * address, kind 3 (WEB_TX_BLE), frames its advertising reports. Values
+ * the columns already hold kinds of, so no step: a v7 file is read as
+ * it is, an older slothweb never draws a "b:" row (its WiFi reader
+ * keeps canonical channel keys and kinds 1 and 2 only), and each view
+ * reads its own namespace (web_store_mix_query_ns()). The kind is in the key, as it is in
  * memory: a MAC that both beacons and probes is two transmitters, and
  * neither's frames are added to the other's row. The key is canonical text and the
  * rest are numbers: no SSID, nor any other string a peer chose, is
@@ -559,6 +566,13 @@ int web_store_mix_query(web_store_t *s, int tier, long long from, long long to,
     (void)s; (void)tier; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
     *more = 0;
     return -1;
+}
+
+int web_store_mix_query_ns(web_store_t *s, int ns, int tier, long long from,
+                           long long to, long long max, web_store_mix_fn fn,
+                           void *ctx, int *more) {
+    (void)ns;
+    return web_store_mix_query(s, tier, from, to, max, fn, ctx, more);
 }
 
 long long web_store_mix_count(web_store_t *s) {
@@ -1917,14 +1931,26 @@ fail_count:
 int web_store_mix_query(web_store_t *s, int tier, long long from, long long to,
                         long long max, web_store_mix_fn fn, void *ctx,
                         int *more) {
+    return web_store_mix_query_ns(s, WEB_MIX_NS_WIFI, tier, from, to, max, fn,
+                                  ctx, more);
+}
+
+int web_store_mix_query_ns(web_store_t *s, int ns, int tier, long long from,
+                           long long to, long long max, web_store_mix_fn fn,
+                           void *ctx, int *more) {
     *more = 0;
-    if (!s->rd || (tier != WEB_TIER_MINUTE && tier != WEB_TIER_HOUR) || max <= 0)
+    if (!s->rd || (tier != WEB_TIER_MINUTE && tier != WEB_TIER_HOUR) || max <= 0 ||
+        (ns != WEB_MIX_NS_WIFI && ns != WEB_MIX_NS_BLE))
         return -1;
     pthread_mutex_lock(&s->rmu);
     sqlite3_stmt *st = NULL;
-    int rc = sqlite3_prepare_v2(s->rd,
-        "SELECT channel,t,tx,kind,frames FROM chmix WHERE tier=?1 AND t>=?2"
-        " AND t<?3 ORDER BY t LIMIT ?4", -1, &st, NULL);
+    /* Two fixed statements, nothing spliced: GLOB is case-sensitive and
+     * 'b:*' matches only the class slugs. */
+    int rc = sqlite3_prepare_v2(s->rd, ns == WEB_MIX_NS_BLE
+        ? "SELECT channel,t,tx,kind,frames FROM chmix WHERE tier=?1 AND t>=?2"
+          " AND t<?3 AND channel GLOB 'b:*' ORDER BY t LIMIT ?4"
+        : "SELECT channel,t,tx,kind,frames FROM chmix WHERE tier=?1 AND t>=?2"
+          " AND t<?3 AND channel NOT GLOB 'b:*' ORDER BY t LIMIT ?4", -1, &st, NULL);
     long long n = 0;
     if (rc == SQLITE_OK) {
         sqlite3_bind_int(st, 1, tier);

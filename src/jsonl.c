@@ -2785,10 +2785,12 @@ void jsonl_emit_gnss(const sloth_state_t *s) {
 /* ── BLE (#144 slice 4) ─────────────────────────────────────────────
  *
  * ble_device: one record per advertiser row, change-only. The
- * signature holds the row's discrete facts and its RSSI quantised to
- * 10 dB; adv_count, the timestamps and the LL channel (an Ubertooth
- * row hops between 37, 38 and 39) are written but never signed, so an
- * advertiser that keeps advertising is a heartbeat, not a firehose.
+ * signature holds the row's discrete facts, its best RSSI quantised to
+ * 10 dB, and the BLE_JSONL_LIVE_S slot its last_seen falls in;
+ * adv_count, the timestamps and the LL channel (an Ubertooth row hops
+ * between 37, 38 and 39) are written but never signed. So an
+ * advertiser sloth keeps hearing writes one record per slot, a quiet
+ * one rides the heartbeat, and neither is a firehose (below).
  *
  * ble_alert: one record per finding ble_findings_build() returns — the
  * same list the three BLE rules fire from — with its structured fields.
@@ -2805,6 +2807,25 @@ static unsigned log2_bucket(uint64_t v) {
 static int rssi_bucket(int has, int rssi) {
     return has ? (rssi + 200) / 10 : -1;
 }
+
+/* The ble_device liveness slot (2026-11-02, slothweb's BLE waterfall).
+ * The beacon record goes out on every pass (jsonl_emit_beacons(), at
+ * POLL_MS); ble_device was change-only on facts that settle, so a
+ * steady advertiser reached a consumer once per JSONL_HEARTBEAT_SECS
+ * and a time series of it was one point in five minutes. The same
+ * mechanism as beacon - the row is re-sent while sloth keeps hearing
+ * it - bounded to one record per slot of this many seconds: the
+ * signature folds last_seen / BLE_JSONL_LIVE_S, a quantised term and
+ * never the raw counter (agents/AGENTS.md, change-only emission). A
+ * heard row's frame-clock last_seen crosses a slot boundary every
+ * BLE_JSONL_LIVE_S seconds; a silent row's last_seen is frozen, so it
+ * writes nothing until the heartbeat. Ten seconds is slothweb's fine
+ * bucket (web_rollup.h WEB_FINE_S), the finest cell anything draws.
+ * Worst case MAX_BLE_DEVICES rows heard at once is 25.6 lines/s,
+ * against beacon's MAX_BEACON_APS x 4 a second at the default 250 ms
+ * pass. The frame clock, not sloth_wall(): a replay and a test stay
+ * deterministic. */
+#define BLE_JSONL_LIVE_S 10
 
 void jsonl_emit_ble_devices(const sloth_state_t *s) {
     if (!any_sink() || !s) return;
@@ -2857,6 +2878,8 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
                           d->dist.valid ? d->dist.band : 0 };
         h = fnv1a(b, sizeof(b), h);
         h = fnv1a(&d->mfr_id, sizeof(d->mfr_id), h);
+        uint32_t live = (uint32_t)(d->last_seen / BLE_JSONL_LIVE_S);
+        h = fnv1a(&live, sizeof(live), h);
         if (!jsonl_changed(JD_BLE_DEVICE, key, sizeof(key), h, now)) continue;
 
         char buf[LINEBUF]; int off = 0;
@@ -2882,6 +2905,8 @@ void jsonl_emit_ble_devices(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "hid", d->hid);
         kv_int(buf, LINEBUF, &off, "tx_power",
                d->has_tx_power ? d->tx_power : -128);
+        kv_int(buf, LINEBUF, &off, "ext_tx_power",
+               d->has_ext_tx_power ? d->ext_tx_power : -128);
         kv_int(buf, LINEBUF, &off, "flags", d->has_flags ? d->flags : -1);
         kv_int(buf, LINEBUF, &off, "has_rssi", d->has_rssi);
         kv_int(buf, LINEBUF, &off, "rssi", d->has_rssi ? d->rssi : 0);

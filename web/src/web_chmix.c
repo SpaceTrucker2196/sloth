@@ -29,9 +29,14 @@ int web_mix_mac_bytes(const char *s, uint8_t mac[6]) {
 }
 
 int web_chmix_init(web_chmix_t *c, int store_on) {
+    return web_chmix_init_sized(c, store_on, WEB_CHMIX_RING);
+}
+
+int web_chmix_init_sized(web_chmix_t *c, int store_on, size_t ring_rows) {
     memset(c, 0, sizeof(*c));
     c->store_on = store_on;
-    c->ring = calloc(WEB_CHMIX_RING, sizeof(*c->ring));
+    c->ring_cap = ring_rows ? ring_rows : 1;
+    c->ring = calloc(c->ring_cap, sizeof(*c->ring));
     c->queue = store_on ? calloc(WEB_CHMIX_QUEUE, sizeof(*c->queue)) : NULL;
     if (!c->ring || (store_on && !c->queue)) {
         free(c->ring);
@@ -66,9 +71,9 @@ static uint32_t sat_add(uint32_t a, uint32_t b) {
 }
 
 static void push_ring(web_chmix_t *c, const web_mix_row_t *r) {
-    size_t at = (c->ring_head + c->ring_n) % WEB_CHMIX_RING;
-    if (c->ring_n == WEB_CHMIX_RING) {
-        c->ring_head = (c->ring_head + 1) % WEB_CHMIX_RING;
+    size_t at = (c->ring_head + c->ring_n) % c->ring_cap;
+    if (c->ring_n == c->ring_cap) {
+        c->ring_head = (c->ring_head + 1) % c->ring_cap;
         c->st.ring_overwritten++;
     } else {
         c->ring_n++;
@@ -197,7 +202,7 @@ void web_chmix_add(web_chmix_t *c, const char *chan, const uint8_t mac[6],
     if (!c || !c->ring || !chan || !chan[0] || strlen(chan) > WEB_CHMIX_KEY_MAX)
         return;
     if (!isfinite(frames) || frames < 0.5) return;
-    if (kind != WEB_TX_AP && kind != WEB_TX_CLIENT) return;
+    if (kind != WEB_TX_AP && kind != WEB_TX_CLIENT && kind != WEB_TX_BLE) return;
     uint32_t f = frames >= 4294967295.0 ? 0xffffffffu : (uint32_t)(frames + 0.5);
     pthread_mutex_lock(&c->mu);
     web_mix_chan_t *ch = chan_of(c, chan, now_s);
@@ -289,7 +294,7 @@ int web_chmix_each_fine(web_chmix_t *c, long long from, long long to,
     int n = 0;
     pthread_mutex_lock(&c->mu);
     for (size_t i = 0; i < c->ring_n; i++) {
-        const web_mix_row_t *r = &c->ring[(c->ring_head + i) % WEB_CHMIX_RING];
+        const web_mix_row_t *r = &c->ring[(c->ring_head + i) % c->ring_cap];
         if (r->t < from || r->t >= to) continue;
         n++;
         if (fn(ctx, r)) break;

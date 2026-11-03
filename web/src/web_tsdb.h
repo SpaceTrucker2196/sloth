@@ -49,6 +49,7 @@ typedef struct {
     web_store_t  *store;          /* NULL: memory only */
     web_chmix_t  *mix;            /* the WiFi view's channel mix, or NULL */
     web_mix_row_t *mix_batch;
+    web_chmix_t  *blemix;         /* the BLE view's class mix, or NULL */
     web_ble_t    *ble;            /* the BLE tables (web_ble.h), or NULL */
     web_store_bdev_t   *ble_batch;
     web_store_balert_t *ble_abatch;
@@ -88,6 +89,9 @@ void web_tsdb_set_rows_hook(web_tsdb_t *t, web_tsdb_rows_fn fn, void *ctx);
  * minute and hour rows to the store with every flush. Call before the
  * thread starts. */
 void web_tsdb_set_mix(web_tsdb_t *t, web_chmix_t *mix);
+/* The same for the BLE Devices view's class mix (web_bledev.h), into
+ * the same chmix table under its "b:" keys. */
+void web_tsdb_set_blemix(web_tsdb_t *t, web_chmix_t *mix);
 
 /* Write the BLE tables' dirty rows (web_ble_take()) to the store with
  * every flush. Call before the thread starts. */

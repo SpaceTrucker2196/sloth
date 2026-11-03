@@ -16,6 +16,7 @@
 @include frrs.css
 @include location.css
 @include gnss.css
+@include bledev.css
 </style>
 <script>
 @include palette.js
@@ -26,6 +27,7 @@
 @include app.js
 @include location.js
 @include gnss.js
+@include bledev.js
 </script>
 </head>
 <body>
@@ -45,8 +47,8 @@
       <li><button type="button" class="go" id="nav-flows"><span class="k">7</span>Flows</button></li>
       <li><button type="button" class="go" id="nav-history"><span class="k">8</span>History</button></li>
       <li><button type="button" class="go" id="nav-lookup"><span class="k">9</span>Lookup</button></li>
-      <li><button type="button" class="go" id="nav-ble"><span class="k">0</span>BLE</button></li>
-      <li><button type="button" class="go" id="nav-gnss">GNSS</button></li>
+      <li><button type="button" class="go" id="nav-ble"><span class="k">0</span>BLE Devices</button></li>
+      <li><button type="button" class="go" id="nav-gnss">GPS Sat</button></li>
       <li><button type="button" class="go" id="nav-tacdb">TACDB</button></li>
     </ol></nav>
     <div class="scope">
@@ -244,6 +246,39 @@
         <option value="watch">watch category</option>
       </select></label>
       <span class="sub" id="b-note">sloth's ble_device records, kept by slothweb (slothweb.db; sloth.db has no BLE table); nothing is sent, and sloth never scans, connects or reads GATT: the operator's stack runs the scan</span>
+    </section>
+    <section class="panel controls" aria-label="ble waterfall controls">
+      <label>cells <select id="bledev-metric">
+        <option value="advertisers" selected>advertisers per class</option>
+        <option value="adv">advertising reports</option>
+      </select></label>
+      <label>window <select id="bledev-win">
+        <option value="3600" selected>1 h</option>
+        <option value="21600">6 h</option>
+        <option value="86400">24 h</option>
+        <option value="604800">7 d</option>
+        <option value="2592000">30 d</option>
+      </select></label>
+      <label>devices <select id="bledev-n">
+        <option value="12">12</option>
+        <option value="24" selected>24</option>
+        <option value="48">48</option>
+      </select></label>
+      <span class="sub" id="bledev-note">from slothweb.db's ble.class.* and rf.rssi.ble series, its class mix and its BLE tables; nothing is sent</span>
+    </section>
+    <section class="panel">
+      <div class="bleline" id="bledev-now" aria-label="ble now"></div>
+      <div class="label">who is around: device class x time <span class="sub" id="bledev-classes-note"></span> <span class="sub" id="bledev-mix-note"></span></div>
+      <canvas class="wfall bledev-classes" id="bledev-classes" aria-label="device classes by time: each cell the class's five busiest advertisers as stacked bands; arrow keys pick a cell, the list below names it" aria-describedby="bledev-detail"></canvas>
+      <div class="sub">rows: device classes, decided from what each advertisement carries (web/README.md, BLE Devices: the rules and their sources), Trackers always shown. A cell: its five busiest advertisers by advertising reports, each band its share (a named device in its name's colour, else its address's), grey the rest; the strip at a row's left: its busyness in the cells select, the heat ramp against the busiest row; a dimmed heat cell: no advertiser detail held for it. With --bt-capture alone (an Ubertooth) every report is a one-channel sample, which the mix and the report count do not credit: every cell is then a dimmed advertiser count, the note says so, and "advertising reports" stays empty. Trackers are a watch category, an Appearance Tag or Keyring, or a UUID the SIG assigns to Tile or CHIPOLO: the shipped watchlist is empty and the Find My and SmartTag shapes are unverified, so an empty row is not "no trackers here". A report is one HCI advertising report (one a scan when the controller filters duplicates), not one frame on the air.</div>
+      <div class="mixd" id="bledev-detail" aria-live="polite"></div>
+    </section>
+    <section class="panel">
+      <div class="label">how close: advertiser x time <span class="sub" id="bledev-prox-note"></span></div>
+      <canvas class="wfall bledev-prox" id="bledev-prox" aria-label="advertisers by time: each cell the mean signal, hotter is nearer; arrow keys pick a cell, the list below names it; a click on a name opens the advertiser" aria-describedby="bledev-pdetail"></canvas>
+      <div class="bledev-legend" id="bledev-prox-legend"></div>
+      <div class="sub" id="bledev-foot">rows: the advertisers heard in the window (at most 256 read: every tracker, then the newest), trackers first, then the nearest by signal less announced power, then the most reports; blank: not heard. A cell is the mean of rf.rssi.ble in it, graded by the distance band sloth's estimator gives that signal (N 2.8 at 2440 MHz) at the row's own announced power, the extended header's TxPower or else its TX Power Level, and 0 dBm when it announces none; the legend's edges are the 0 dBm ones. A tuned path-loss exponent and the band's hysteresis and hold can still put sloth's own band (the table's dist column) elsewhere. Signal strength is not a location. A rotating random address is its own row: rotations are not linked.</div>
+      <div class="mixd" id="bledev-pdetail" aria-live="polite"></div>
     </section>
     <section class="panel">
       <div class="bleline" id="b-head-line" aria-label="ble advertisers"></div>
@@ -729,6 +764,10 @@
     <canvas class="strip" id="bdr-strip" aria-label="this row's presence over the last 24 hours"></canvas>
     <div class="label">advertising rate <span class="sub" id="bdr-rate-note"></span></div>
     <canvas class="spark" id="bdr-rate" aria-label="advertisements per second between this row's records"></canvas>
+    <div class="label">signal over the waterfall's window <span class="sub" id="bledev-rssi-note"></span></div>
+    <canvas class="spark bledev-rssi" id="bledev-rssi" aria-label="this address's signal over the BLE waterfall's window, coloured by the proximity grade"></canvas>
+    <div class="sub" id="bledev-class"></div>
+    <div class="sub" id="bledev-chans" hidden></div>
     <div class="label">ble alerts naming it</div>
     <div id="bdr-alerts"></div>
   </aside>

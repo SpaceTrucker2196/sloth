@@ -67,12 +67,34 @@ typedef struct {
     unsigned long long touched;
 } web_hw_t;
 
+/* One bounded high-water table and its evicted-id filter. */
+typedef struct {
+    web_hw_t     *rows;
+    int          *head;
+    int           n, cap, nhead;
+    unsigned char gone[2][WEB_HW_GONE_BITS / 8];
+    int           gone_cur;              /* the generation taking ids */
+    unsigned      gone_n;                /* ids it has taken */
+} web_hwtab_t;
+
+/* The BLE advertisers' adv_count marks are a table of their own. One
+ * id per (address, addr_type, sensor) means a remote transmitter
+ * cycling random addresses (a BLE spam tool, the case BLE_ADV_FLOOD
+ * exists for) mints ids at its own rate; in the shared table that
+ * would evict the Wi-Fi and flow rows between their records and have
+ * them count whole totals again. Here a flood only churns BLE's own
+ * marks. sloth holds 256 rows a BLE table (src/ble_hci.c), one table a
+ * sensor, and an address can be heard as two addr_types: 2048 holds
+ * every row of several sensors at once. */
+#define WEB_BLE_HW_ROWS 2048
+
 typedef long long (*web_clock_fn)(void *ctx);
 
 struct web_ident;
 struct web_chmix;
 struct web_live_s;
 struct web_anomaly;
+struct web_ble;
 
 typedef struct web_metrics {
     web_rollup_t *ru;
@@ -80,16 +102,14 @@ typedef struct web_metrics {
     struct web_chmix *mix;       /* the WiFi view's channel mix, or NULL */
     struct web_live_s  *live;    /* live.devices / live.alerts_open, or NULL */
     struct web_anomaly *anomaly; /* live.anomalies_open, or NULL */
+    struct web_chmix *blemix;    /* the BLE view's class mix, or NULL */
+    struct web_ble   *ble;       /* ble.class.advertisers' rows, or NULL */
     web_clock_fn  clock;
     void         *clock_ctx;
 
-    web_hw_t     *hw;
-    int          *hw_head;
-    int           hw_n, hw_cap, hw_nhead;
+    web_hwtab_t   hw;                    /* every running total but BLE's */
+    web_hwtab_t   blehw;                 /* ble_device adv_count */
     unsigned long long touch;
-    unsigned char hw_gone[2][WEB_HW_GONE_BITS / 8];
-    int           hw_gone_cur;           /* the generation taking ids */
-    unsigned      hw_gone_n;             /* ids it has taken */
 
     int       have_first_ts;
     long long first_ts;
@@ -123,6 +143,13 @@ void web_metrics_set_live(web_metrics_t *m, struct web_live_s *live);
 /* Sample live.anomalies_open the same way, from the open episode count.
  * Call before the ingest thread starts. */
 void web_metrics_set_anomaly(web_metrics_t *m, struct web_anomaly *anomaly);
+/* The BLE Devices view (web_bledev.h): each ble_device record's
+ * adv_count delta to the class mix (kind WEB_TX_BLE, keyed by class
+ * slug) and to ble.class.adv; once a snapshot pass, the distinct
+ * addresses of each class the BLE tables heard in the last two fine
+ * buckets to ble.class.advertisers. Either may be NULL. */
+void web_metrics_set_blemix(web_metrics_t *m, struct web_chmix *mix);
+void web_metrics_set_ble(web_metrics_t *m, struct web_ble *ble);
 
 /* Key canonicalisers; out holds WEB_KEY_MAX + 1. 0, or -1 when s is not
  * one. Also what /api/series checks its key parameter with. */

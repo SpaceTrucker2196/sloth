@@ -3,7 +3,7 @@
 **Issue:** [#73](https://github.com/SpaceTrucker2196/sloth/issues/73) ·
 **Built by:** `make research-index` · **Guard:** `tests/test_research_corpus.c`
 
-**Last updated**: 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
+**Last updated**: 2026-11-02 (the BLE device-class document, no alert kind); 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
 
 `agents/AGENTS.md` § Discipline says every detector names its basis. The
 citations exist — in issue bodies, wiki pages and the rule table — but
@@ -406,6 +406,16 @@ site-general fit, the Bluetooth TX Power Level AD type and the extended
 report's TX_Power, and two published measurements of how wrong RSSI
 ranging is indoors — with no `alert_kinds`, because no rule reads the
 estimate. See [[rf-distance]].
+
+The BLE Devices view's classes (2026-11-02) cite theirs in
+`research/bluetooth/ble-device-classes.md` — Celosia & Cunche 2020 and
+Martin et al. 2019 for the Apple Continuity types, the Eddystone
+specification, the SIG Appearance values and member-UUID assignments
+(Tile, CHIPOLO), Microsoft's MS-CDP beacon, Google Fast Pair, and the
+BLE spam tool's own Samsung packets — and say there why iBeacon,
+AltBeacon, Find My and SmartTag are left out. It has no `alert_kinds`:
+it backs slothweb's display classes (`web/src/web_bledev.c`), not a
+rule. See [[slothweb]].
 
 ## What is not here yet
 - **Coverage.** 59 of 60 alert kinds have a document, and the sixtieth

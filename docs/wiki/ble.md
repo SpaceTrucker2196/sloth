@@ -34,7 +34,7 @@ Bluetooth Core Specification v5.4 Vol 4 Part E §5.2 (arrayed parameters), §5.4
 Core Spec v5.4 Vol 4 Part E §7.3.1, §7.7.14–§7.7.16, §7.8.1, §7.8.10,
 §7.8.11, §7.8.64, §7.8.65; Vol 6 Part B §4.4.3.1 (passive scanning).
 
-**Last updated**: 2026-11-02 (slothweb's BLE tab: the `[*]` view at parity in the browser, kept by slothweb from this stream and persisted in slothweb.db v7; the SIG assigned numbers under `web/data/btsig/`; on review, the header's count is sloth's own and its flood figure says what it counts, a finding comes back whole after a restart, and the BLE rows sit inside `--web-max-mb`), 2026-10-26 (`sloth-ble-scan` integration: build, gate and write as one `bles_send()` with an injected writer, and `main.c`'s one `send()` pinned inside it), 2026-10-26 (`sloth-ble-scan` review: a No-Op is flow control, not a restart; a Hardware Error mid-sequence retries in-process; the boot-time bind wait; the decisions as a pure step function; the link-time check that sloth carries no HCI builder; what stopping bluetoothd sends, and Conflicts= in both directions), 2026-10-26 (`sloth-ble-scan`: a passive LE scan held over the HCI user channel for the life of the sensor, its command set and why it is consistent with MISSION §2), 2026-10-23 (#156 item 2 follow-up: `BLE_ADV_FLOOD` and `BLE_WATCHLIST` pinned unchanged by the flag, the flood also with linked addresses inside it; which side of a link eviction and retention can free), 2026-10-23 (#156 item 2 integration: hints feed only the `[*]` estimate, `BLE_HID_UNEXPECTED` unchanged by the flag; links window-scoped; a linked entry keeps its digests until the link goes), 2026-10-23 (#156 item 2 review round: sequential-spray poisoning and the flood gate judged at commit; no link under controller duplicate filtering; banded `sensor_health` fields; expiry without frames; 3600 s poison window, full list fails closed; Fast Pair token from a 5-octet filter), 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
+**Last updated**: 2026-11-02 (`ble_device` re-sent once a 10 s slot while heard; slothweb's BLE Devices waterfall, the device classes and their sources), 2026-11-02 (slothweb's BLE tab: the `[*]` view at parity in the browser, kept by slothweb from this stream and persisted in slothweb.db v7; the SIG assigned numbers under `web/data/btsig/`; on review, the header's count is sloth's own and its flood figure says what it counts, a finding comes back whole after a restart, and the BLE rows sit inside `--web-max-mb`), 2026-10-26 (`sloth-ble-scan` integration: build, gate and write as one `bles_send()` with an injected writer, and `main.c`'s one `send()` pinned inside it), 2026-10-26 (`sloth-ble-scan` review: a No-Op is flow control, not a restart; a Hardware Error mid-sequence retries in-process; the boot-time bind wait; the decisions as a pure step function; the link-time check that sloth carries no HCI builder; what stopping bluetoothd sends, and Conflicts= in both directions), 2026-10-26 (`sloth-ble-scan`: a passive LE scan held over the HCI user channel for the life of the sensor, its command set and why it is consistent with MISSION §2), 2026-10-23 (#156 item 2 follow-up: `BLE_ADV_FLOOD` and `BLE_WATCHLIST` pinned unchanged by the flag, the flood also with linked addresses inside it; which side of a link eviction and retention can free), 2026-10-23 (#156 item 2 integration: hints feed only the `[*]` estimate, `BLE_HID_UNEXPECTED` unchanged by the flag; links window-scoped; a linked entry keeps its digests until the link goes), 2026-10-23 (#156 item 2 review round: sequential-spray poisoning and the flood gate judged at commit; no link under controller duplicate filtering; banded `sensor_health` fields; expiry without frames; 3600 s poison window, full list fails closed; Fast Pair token from a 5-octet filter), 2026-10-23 (#156 item 2: address-rotation hints, `--ble-rotation-hints`, internal use only, off by default), 2026-10-23 (multi-report events decoded as consecutive records per Vol 4 Part E §5.2, for 0x02 and 0x0D; Legacy-bit PHY rule; anonymous fragment trains; LE Coded S=2), 2026-10-22 (LE Extended Advertising Report (0x0D) decoded into the advertiser table and the detectors; fragment policy; multi-report rule reconciled for 0x0D; passive extended scan in the procedure), 2026-10-21 (#144 slice 4: the three BLE detectors, the `[*]` view, `ble_device` / `ble_alert`, Service Data decode; #144 slice 3: the advertiser table is keyed by sensor too and takes the Ubertooth stream; #144 slice 2; on/off own-transmission state after review).
 
 ---
 
@@ -770,6 +770,27 @@ Wi-Fi or host history, and the HID and watchlisted ones only after it
 ([[slothweb]]). The web side's description, routes
 (`/api/ble`, `/api/ble/alerts`, `/api/ble/{addr}`) and parity table:
 [`web/README.md`](../../web/README.md#ble).
+
+Since 2026-11-02 the tab reads `BLE Devices` and has a waterfall above
+the table in the WiFi view's style: device classes by time (each cell
+the class's busiest advertisers as stacked bands) and advertisers by
+time (each cell the mean signal graded by this page's distance bands,
+hot is near). Not channels: an HCI advertising report carries none.
+The classes are decided from what `ble_device` carries, first match
+wins, each rule sourced in
+`research/bluetooth/ble-device-classes.md`: Trackers (a watch
+category, Appearance Tag or Keyring, a Tile or CHIPOLO UUID by the SIG
+registry, the assignment and not a verified shape), Input (the HID
+bits above), Beacons (Eddystone 0xFEAA), Wearables & audio, Phones &
+computers, Vehicles & IoT (Apple Continuity types per Celosia and
+Cunche 2020 and Martin et al. 2019, the MS-CDP beacon, Fast Pair's
+Provider signal, Samsung's packets as the spam tool writes them, and
+the SIG Appearance categories), Unknown. A class names a kind of
+device, never a device or a person; a rotating random address is its
+own row and no rotation is linked. To give both panels a point a 10 s
+bucket, `ble_device` is now re-sent once a slot while the advertiser
+is heard ([[jsonl-schema]]). Description, routes, the class table and
+the grade: [`web/README.md`](../../web/README.md#ble).
 
 ## Not built yet
 

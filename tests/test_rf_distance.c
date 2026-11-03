@@ -749,6 +749,40 @@ static void test_jsonl_ble_signature_bands_the_distance(void) {
     unlink(g_tmp);
 }
 
+/* ble_device carries the extended header's TxPower beside tx_power
+ * (2026-11-02, for slothweb's per-row proximity grade), -128 absent, and
+ * written, not signed: it moves only with the advertiser's own setting,
+ * and a heard advertiser's record follows within its 10 s slot. Seen red
+ * with the kv_int removed from jsonl_emit_ble_devices() (the field was
+ * absent), and the signed half with d->ext_tx_power added to the
+ * signature bytes (a second record). */
+static void test_jsonl_ble_ext_tx_power_written_not_signed(void) {
+    static sloth_state_t s;
+    memset(&s, 0, sizeof(s));
+    jl_open();
+    s.ble_device_count = 2;
+    ble_device_t *d = &s.ble_devices[0];
+    d->addr[0] = 0xc2; d->addr[5] = 8;
+    d->has_rssi = 1; d->rssi = -60; d->rssi_best = -60;
+    d->has_tx_power = 1; d->tx_power = 4;
+    d->has_ext_tx_power = 1; d->ext_tx_power = 20;
+    snprintf(d->sensor_iface, sizeof(d->sensor_iface), "bluetooth-monitor");
+    ble_device_t *e = &s.ble_devices[1];
+    e->addr[0] = 0xc2; e->addr[5] = 9;
+    snprintf(e->sensor_iface, sizeof(e->sensor_iface), "bluetooth-monitor");
+    jsonl_emit_ble_devices(&s);
+    char *out = jl_read();
+    ASSERT_EQ(count_str(out, "\"type\":\"ble_device\""), 2);
+    ASSERT(strstr(out, "\"tx_power\":4,\"ext_tx_power\":20,") != NULL);
+    ASSERT(strstr(out, "\"tx_power\":-128,\"ext_tx_power\":-128,") != NULL);
+    d->ext_tx_power = 10;
+    jsonl_emit_ble_devices(&s);
+    out = jl_read();
+    ASSERT_EQ(count_str(out, "\"type\":\"ble_device\""), 2);
+    jsonl_close();
+    unlink(g_tmp);
+}
+
 /* A stationary advertiser under ordinary RSSI noise rides the 300 s
  * heartbeat: one record, then one per heartbeat, over an hour. Each
  * case sits its mean on a band boundary, where noise moves the median
@@ -824,7 +858,10 @@ static void test_jsonl_ble_stationary_noise_rides_the_heartbeat(void) {
     rf_calibration_reset();
     sloth_clock_test_set(NULL, fake_wall);
     /* The heartbeat alone writes 12: the first record, then one each
-     * 300 s up to 3300. A few more are allowed, not a rate. */
+     * 300 s up to 3300. A few more are allowed, not a rate. Since the
+     * 10 s live slot (jsonl.c BLE_JSONL_LIVE_S) a heard advertiser also
+     * writes once per slot; stationary_hour() keeps last_seen frozen,
+     * so this is the silent-row case and the heartbeat is all it gets. */
     const int beat = 12, budget = beat + 4;
     int a = stationary_hour(-68.0, 10, 6.0, 1);
     int b = stationary_hour(-53.0, 10, 6.0, 2);
@@ -881,5 +918,6 @@ void run_rf_distance_tests(void) {
     RUN_TEST(test_jsonl_fields_present_only_with_an_estimate);
     RUN_TEST(test_jsonl_beacon_assoc_device_carry_the_fields);
     RUN_TEST(test_jsonl_ble_signature_bands_the_distance);
+    RUN_TEST(test_jsonl_ble_ext_tx_power_written_not_signed);
     RUN_TEST(test_jsonl_ble_stationary_noise_rides_the_heartbeat);
 }

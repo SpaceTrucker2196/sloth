@@ -86,7 +86,11 @@
 /* "6g233" and its NUL. */
 #define WEB_CHMIX_KEY_MAX  7
 
-enum { WEB_TX_OTHER = 0, WEB_TX_AP = 1, WEB_TX_CLIENT = 2 };
+/* WEB_TX_BLE (2026-11-02): a BLE advertiser in the BLE view's class
+ * mix (web_bledev.h), a second web_chmix_t on the same engine whose
+ * keys are the class slugs ("b:phone" ...) and whose frames are a
+ * row's adv_count deltas (HCI advertising reports, not air frames). */
+enum { WEB_TX_OTHER = 0, WEB_TX_AP = 1, WEB_TX_CLIENT = 2, WEB_TX_BLE = 3 };
 /* include/sloth.h CH_SRC_HE_6GHZ: a beacon's channel_source when its
  * channel came from the HE 6 GHz Operation element (test_wifi.c holds
  * the two equal). */
@@ -149,6 +153,7 @@ typedef struct web_chmix {
     int             store_on;
     web_mix_chan_t  ch[WEB_CHMIX_CHANNELS];
     web_mix_row_t  *ring;
+    size_t          ring_cap;      /* WEB_CHMIX_RING, or init_sized's */
     size_t          ring_head, ring_n;
     web_mix_row_t  *queue;
     size_t          q_head, q_n;
@@ -159,10 +164,14 @@ typedef struct web_chmix {
 /* store_on: whether minute and hour buckets are kept for a store. 0, or
  * -1 (memory). */
 int  web_chmix_init(web_chmix_t *c, int store_on);
+/* The same with a fine ring of ring_rows rows (at least 1): the BLE
+ * class mix keeps seven keys, not sixty-four, and sizes its ring to
+ * the fine tier's six hours of them (web_bledev.h). */
+int  web_chmix_init_sized(web_chmix_t *c, int store_on, size_t ring_rows);
 void web_chmix_destroy(web_chmix_t *c);
 
 /* frames frames from mac (a WEB_TX_* kind) on the channel key chan (a
- * canonical web_key_channel() key) at now_s. A non-positive or
+ * canonical web_key_channel() key, or a BLE class slug) at now_s. A non-positive or
  * non-finite count is ignored; one past 2^32 - 1 is clamped. */
 void web_chmix_add(web_chmix_t *c, const char *chan, const uint8_t mac[6],
                    int kind, double frames, long long now_s);

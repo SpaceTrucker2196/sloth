@@ -422,7 +422,18 @@ static void test_gnss_page(void) {
     WT_LACKS(p, "getJSON(\"/api/gnss/fixes\")");
 }
 
+/* The tab's label (owner request 2026-11-02, "a GPS Sat and BLE Devices
+ * tab"): the words changed, the id and the view did not. */
+static void test_gnss_tab_label(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "<li><button type=\"button\" class=\"go\" id=\"nav-gnss\">GPS Sat</button></li>");
+    WT_LACKS(p, "id=\"nav-gnss\">GNSS</button>");
+    WT_HAS(p, "  $(\"nav-gnss\").addEventListener(\"click\", function () { show(\"gnss\"); });");
+    WT_HAS(p, "<div id=\"v-gnss\" hidden>");
+}
+
 void run_gnss_tests(void) {
+    WT_RUN(test_gnss_tab_label);
     WT_RUN(test_gnss_ingest_and_route);
     WT_RUN(test_gnss_ranges_and_refusals);
     WT_RUN(test_gnss_eviction_and_age);
@@ -431,5 +442,6 @@ void run_gnss_tests(void) {
     WT_RUN(test_gnss_metrics);
     WT_RUN(test_gnss_names_are_sloths);
     WT_RUN(test_gnss_page);
+    WT_RUN(test_gnss_tab_label);
     web_gnss_destroy(&G);
 }

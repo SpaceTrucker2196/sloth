@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "web_bledev.h"
 #include "web_btsig.h"
 #include "web_query.h"
 #include "web_series.h"
@@ -239,6 +240,7 @@ static void dev_fill(web_ble_t *b, web_ble_dev_t *d, const web_jrec_t *r, long l
     d->adapter = (int)ibound(r, "adapter", 0, 65535, 0);
     d->sampled = web_jl_int(r, "sampled", 0) == 1;
     d->channel = (int)ibound(r, "channel", -1, 39, -1);
+    if (d->channel >= 0) d->chan_mask |= (uint64_t)1 << d->channel;
     int pdu = find_word(PDU, WEB_BLE_PDU_COUNT, web_jl_str(r, "last_pdu"));
     d->last_pdu = pdu < 0 ? WEB_BLE_PDU_ADV : pdu;
     d->pdu_mask |= (int)ibound(r, "pdu_mask", 0, 127, 0);
@@ -267,6 +269,7 @@ static void dev_fill(web_ble_t *b, web_ble_dev_t *d, const web_jrec_t *r, long l
     d->appearance = (int)ibound(r, "appearance", -1, 65535, -1);
     d->hid |= (int)ibound(r, "hid", 0, 3, 0);
     d->tx_power = (int)ibound(r, "tx_power", -128, 127, -128);
+    d->ext_tx_power = (int)ibound(r, "ext_tx_power", -128, 127, -128);
     d->flags = (int)ibound(r, "flags", -1, 255, -1);
     d->has_rssi = web_jl_int(r, "has_rssi", 0) == 1;
     d->rssi = d->has_rssi ? (int)ibound(r, "rssi", -127, 20, 0) : 0;
@@ -313,11 +316,21 @@ static void dev_fill(web_ble_t *b, web_ble_dev_t *d, const web_jrec_t *r, long l
     if (ls > 0 && ls < pt) pres_mark(d, ls);   /* an older record's own bucket */
     pres_mark(d, pt);
     if (d->npts == 0 || pt > d->pts[(d->pt_head + d->npts - 1) % WEB_BLE_PTS].ts) {
-        int at = (d->pt_head + d->npts) % WEB_BLE_PTS;
-        if (d->npts == WEB_BLE_PTS) d->pt_head = (d->pt_head + 1) % WEB_BLE_PTS;
-        else d->npts++;
-        d->pts[at].ts = pt;
-        d->pts[at].count = d->adv_count;
+        /* The newest point follows the record until it is
+         * WEB_BLE_PT_MIN_S past the one before it; then a new one is
+         * taken. */
+        int last = (d->pt_head + d->npts - 1) % WEB_BLE_PTS;
+        if (d->npts >= 2 &&
+            pt - d->pts[(d->pt_head + d->npts - 2) % WEB_BLE_PTS].ts < WEB_BLE_PT_MIN_S) {
+            d->pts[last].ts = pt;
+            d->pts[last].count = d->adv_count;
+        } else {
+            int at = (d->pt_head + d->npts) % WEB_BLE_PTS;
+            if (d->npts == WEB_BLE_PTS) d->pt_head = (d->pt_head + 1) % WEB_BLE_PTS;
+            else d->npts++;
+            d->pts[at].ts = pt;
+            d->pts[at].count = d->adv_count;
+        }
     }
     d->records++;
     d->dirty = 1;
@@ -342,6 +355,7 @@ static void dev_apply(web_ble_t *b, const web_jrec_t *r, long long ts) {
         d->addr_type = (int)type;
         d->iface = ifi;
         d->tx_power = -128;
+        d->ext_tx_power = -128;
         d->uuid16 = d->mfr_id = d->mfr_subtype = d->svc_data_uuid16 = d->appearance = -1;
         d->flags = -1;
         d->adv_sid = -1;
@@ -624,6 +638,7 @@ int web_ble_seed(web_ble_t *b, const web_store_bdev_t *r) {
         memcpy(d->addr, addr, 6);
         d->addr_type = r->addr_type;
         d->iface = ifi;
+        d->ext_tx_power = -128;
         b->st.rows++;
     }
     d->adapter = r->adapter;
@@ -1024,6 +1039,21 @@ static void dev_json(web_jw_t *w, const web_ble_dev_t *d, const web_btsig_tab_t 
         web_jw_raw(w, "}");
     } else {
         web_jw_raw(w, "null");
+    }
+    int cls = web_ble_dev_class(d);
+    web_jw_raw(w, ",\"class\":"); web_jw_str(w, web_ble_classes[cls].slug);
+    web_jw_raw(w, ",\"class_label\":"); web_jw_str(w, web_ble_classes[cls].label);
+    /* The P_tx the BLE Devices view grades this row's signal with. */
+    int gp, gs;
+    web_ble_dev_ptx(d, &gp, &gs);
+    jw_opt(w, "ext_tx_power", d->ext_tx_power, -128);
+    web_jw_raw(w, ",\"grade_ptx\":"); web_jw_int(w, gp);
+    web_jw_raw(w, ",\"grade_ptx_source\":"); web_jw_str(w, PTX[gs]);
+    if (full && d->chan_mask) {
+        web_jw_raw(w, ",\"channels\":[");
+        for (int c = 0, k = 0; c < 40; c++)
+            if (d->chan_mask >> c & 1) { if (k++) web_jw_raw(w, ","); web_jw_int(w, c); }
+        web_jw_raw(w, "]");
     }
     if (full) {
         /* The strip as 24 hex digits, most significant first: digit k's
@@ -1499,6 +1529,170 @@ int web_ble_device_route(web_ble_t *b, const char *path_addr, const char *query,
     *len = w.len;
     *status = n ? 200 : 404;
     return 0;
+}
+
+/* ── the BLE Devices view's reads (web_bledev.h) ────────────────────── */
+
+int web_ble_iface_find(const char *s) {
+    return word_of(IFACE, WEB_BLE_IF_COUNT, s, NULL);
+}
+
+int web_ble_dev_class(const web_ble_dev_t *d) {
+    web_ble_fields_t f = { d->mfr_id, d->mfr_subtype, d->uuid16, d->svc_data_uuid16,
+                           d->appearance, d->hid, d->watch_category[0] != '\0' };
+    return web_ble_class_of(&f);
+}
+
+/* An open-addressed set of addresses for one call: a hit is a repeat. */
+#define ADDR_SET 2048
+static int addr_seen(uint8_t (*set)[7], const uint8_t a[6]) {
+    unsigned h = 2166136261u;
+    for (int i = 0; i < 6; i++) h = (h ^ a[i]) * 16777619u;
+    for (unsigned k = 0; k < ADDR_SET; k++) {
+        uint8_t *e = set[(h + k) & (ADDR_SET - 1)];
+        if (!e[6]) { memcpy(e, a, 6); e[6] = 1; return 0; }
+        if (!memcmp(e, a, 6)) return 1;
+    }
+    return 1;
+}
+
+int web_ble_class_counts(web_ble_t *b, long long since, int *counts) {
+    for (int c = 0; c < WEB_BC_COUNT; c++) counts[c] = 0;
+    if (!b || !b->dev) return -1;
+    uint8_t (*set)[7] = calloc(ADDR_SET, sizeof(*set));
+    if (!set) return -1;
+    int n = 0;
+    pthread_mutex_lock(&b->mu);
+    for (int i = 0; i < WEB_BLE_DEVICES; i++) {
+        const web_ble_dev_t *d = &b->dev[i];
+        if (!d->used || d->last_seen < since) continue;
+        n++;
+        if (addr_seen(set, d->addr)) continue;
+        counts[web_ble_dev_class(d)]++;
+    }
+    pthread_mutex_unlock(&b->mu);
+    free(set);
+    return n;
+}
+
+void web_ble_dev_ptx(const web_ble_dev_t *d, int *dbm, int *src) {
+    if (d->ext_tx_power > -128) {
+        *dbm = d->ext_tx_power; *src = WEB_BLE_PTX_EXT;
+    } else if (d->tx_power > -128) {
+        *dbm = d->tx_power; *src = WEB_BLE_PTX_AD;
+    } else {
+        *dbm = 0; *src = WEB_BLE_PTX_ASSUMED;
+    }
+}
+
+static void cand_of(const web_ble_dev_t *d, web_ble_cand_t *c) {
+    memset(c, 0, sizeof(*c));
+    memcpy(c->addr, d->addr, 6);
+    c->addr_type = d->addr_type;
+    c->iface = d->iface;
+    c->cls = web_ble_dev_class(d);
+    snprintf(c->name, sizeof(c->name), "%s", d->name);
+    c->name_np = d->name_np;
+    c->has_rssi = d->has_rssi;
+    c->rssi = d->rssi;
+    c->rssi_best = d->rssi_best;
+    c->est_valid = d->est_valid;
+    c->est_band = d->est_band;
+    web_ble_dev_ptx(d, &c->ptx_dbm, &c->ptx_src);
+    c->adv_count = d->adv_count;
+    c->first_seen = d->first_seen;
+    c->last_seen = d->last_seen;
+    c->chan_mask = d->chan_mask;
+    c->rows = 1;
+}
+
+int web_ble_addr_info(web_ble_t *b, const uint8_t addr[6], web_ble_cand_t *out) {
+    memset(out, 0, sizeof(*out));
+    out->cls = WEB_BC_UNK;
+    if (!b || !b->dev) return 0;
+    const web_ble_dev_t *best = NULL;
+    pthread_mutex_lock(&b->mu);
+    for (int i = 0; i < WEB_BLE_DEVICES; i++) {
+        const web_ble_dev_t *d = &b->dev[i];
+        if (d->used && !memcmp(d->addr, addr, 6) && (!best || d->last_seen > best->last_seen))
+            best = d;
+    }
+    if (best) cand_of(best, out);
+    pthread_mutex_unlock(&b->mu);
+    return best != NULL;
+}
+
+static int by_newest(const void *pa, const void *pb) {
+    const web_ble_dev_t *a = *(const web_ble_dev_t *const *)pa;
+    const web_ble_dev_t *b = *(const web_ble_dev_t *const *)pb;
+    if (a->last_seen != b->last_seen) return a->last_seen > b->last_seen ? -1 : 1;
+    if (a->touched != b->touched) return a->touched > b->touched ? -1 : 1;
+    return 0;
+}
+
+int web_ble_candidates(web_ble_t *b, long long from, long long to,
+                       web_ble_cand_t *out, int max, int *more) {
+    *more = 0;
+    if (!b || !b->dev || max <= 0) return 0;
+    int n = 0;
+    pthread_mutex_lock(&b->mu);
+    /* Newest first, so a cut keeps the most recently heard. */
+    const web_ble_dev_t **idx = calloc(WEB_BLE_DEVICES, sizeof(*idx));
+    unsigned char *tag = calloc(WEB_BLE_DEVICES, 1);
+    int ni = 0;
+    if (idx && tag) {
+        for (int i = 0; i < WEB_BLE_DEVICES; i++) {
+            const web_ble_dev_t *d = &b->dev[i];
+            if (!d->used || d->last_seen < from || (d->first_seen > 0 && d->first_seen >= to))
+                continue;
+            idx[ni++] = d;
+        }
+        qsort(idx, (size_t)ni, sizeof(idx[0]), by_newest);
+        /* An address is a tracker by its newest row, the one its
+         * candidate is made from; every row of it then goes in the same
+         * pass below. */
+        for (int i = 0; i < ni; i++) {
+            int j = 0;
+            while (j < i && memcmp(idx[j]->addr, idx[i]->addr, 6)) j++;
+            tag[i] = j < i ? tag[j] : web_ble_dev_class(idx[i]) == WEB_BC_TAG;
+        }
+    }
+    /* Two passes: the trackers, then the rest. A tracker heard three
+     * hours ago is behind hundreds of rotated addresses by recency, and
+     * the view promises trackers first. */
+    for (int pass = 0; pass < 2; pass++)
+    for (int i = 0; i < ni; i++) {
+        if (tag[i] != (pass == 0)) continue;
+        const web_ble_dev_t *d = idx[i];
+        web_ble_cand_t *c = NULL;
+        for (int k = 0; k < n && !c; k++) if (!memcmp(out[k].addr, d->addr, 6)) c = &out[k];
+        if (!c) {
+            if (n >= max) { *more = 1; continue; }
+            c = &out[n++];
+            cand_of(d, c);
+            continue;
+        } else {
+            if (d->has_rssi && (!c->has_rssi || d->rssi_best > c->rssi_best)) {
+                if (!c->has_rssi) c->rssi = d->rssi;
+                c->has_rssi = 1;
+                c->rssi_best = d->rssi_best;
+            }
+            if (d->first_seen > 0 && (c->first_seen == 0 || d->first_seen < c->first_seen))
+                c->first_seen = d->first_seen;
+            /* Another sensor's row of the same advertiser may have heard
+             * the more specific power announcement. */
+            int pd, ps;
+            web_ble_dev_ptx(d, &pd, &ps);
+            if (ps < c->ptx_src) { c->ptx_dbm = pd; c->ptx_src = ps; }
+        }
+        if (d->adv_count > c->adv_count) c->adv_count = d->adv_count;
+        c->chan_mask |= d->chan_mask;
+        c->rows++;
+    }
+    pthread_mutex_unlock(&b->mu);
+    free(idx);
+    free(tag);
+    return n;
 }
 
 size_t web_ble_out_of_scope_json(char *body, size_t cap) {

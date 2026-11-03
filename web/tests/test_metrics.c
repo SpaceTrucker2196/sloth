@@ -565,7 +565,7 @@ static void test_highwater_table_bounded(void) {
     web_rollup_stats_t st;
     web_rollup_stats(&ru, &st);
     WT_EQ(st.hw_evictions, 10);
-    WT_EQ(mx.hw_n, WEB_HW_ROWS);
+    WT_EQ(mx.hw.n, WEB_HW_ROWS);
     done();
 }
 
@@ -676,7 +676,7 @@ static void test_highwater_gone_filter_rotates(void) {
     WT_ASSERT(cur(WM_DEV_FRAMES, "02:00:00:ff:ff:02").sum == 6);
     web_rollup_stats(&ru, &st);
     WT_EQ(st.hw_evictions, 8193);
-    WT_EQ(mx.hw_gone_n, 1);
+    WT_EQ(mx.hw.gone_n, 1);
     done();
 }
 

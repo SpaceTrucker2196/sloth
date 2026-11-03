@@ -96,6 +96,8 @@
 /* The record types sloth's stream carries (web_live.h: WEB_LIVE_TYPES),
  * with headroom: the set is sloth's own, not a peer's to grow. */
 #define WEB_RECTYPE_KEYS     64
+/* The BLE view's device classes (web_bledev.h): seven, and a spare. */
+#define WEB_BLECLASS_KEYS    8
 /* The longest canonical key: an IPv6 address is at most 45 bytes. */
 #define WEB_KEY_MAX          47
 
@@ -118,7 +120,7 @@
 
 enum { WEB_TIER_FINE = 0, WEB_TIER_MINUTE, WEB_TIER_HOUR, WEB_TIER_COUNT };
 enum { WEB_KC_GLOBAL = 0, WEB_KC_DEV, WEB_KC_HOST, WEB_KC_IFACE, WEB_KC_CHANNEL,
-       WEB_KC_ALERT, WEB_KC_RECTYPE, WEB_KC_COUNT };
+       WEB_KC_ALERT, WEB_KC_RECTYPE, WEB_KC_BLECLASS, WEB_KC_COUNT };
 enum { WEB_MK_GAUGE = 0, WEB_MK_COUNTER, WEB_MK_PRESENCE };
 
 /* §5.1, the metrics whose source records sloth emits today
@@ -163,6 +165,13 @@ enum {
      * series is as sparse as its record (a band change or the 300 s
      * heartbeat). Every scope's, as sensor.drops is. */
     WM_GNSS_SATS_USED, WM_GNSS_HDOP, WM_GNSS_TIME_OFF_MS, WM_GNSS_CN0_MEAN,
+    /* The BLE Devices view's class rows (web_bledev.h, 2026-11-02), keyed
+     * by class slug: the distinct advertisers of a class heard in the
+     * last two fine buckets, sampled once a snapshot pass (a gauge), and
+     * its advertising reports (a counter, the rows' adv_count deltas, a
+     * one-channel Ubertooth sample left out). Monitor's; not scored by
+     * the anomaly engine (a crowd walking in is not an anomaly). */
+    WM_BLE_CLASS_ADVERTISERS, WM_BLE_CLASS_ADV,
     WM_COUNT
 };
 

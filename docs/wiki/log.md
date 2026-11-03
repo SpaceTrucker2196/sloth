@@ -6061,3 +6061,24 @@ with better documentation").
   satellite writes and the band-edge case stated. Updated
   [[jsonl-schema]], [[sqlite-schema]], `docs/views/gnss.md`,
   `web/README.md`, `MISSION.md`'s key list (`[#]`).
+
+
+- 2026-11-02 — BLE Devices waterfall: [[slothweb]]'s BLE tab (now
+  labelled `BLE Devices`; the GNSS tab `GPS Sat`) gains a header strip
+  and two panels in the WiFi view's style: device classes by time (the
+  class mix, a second `web_chmix` keyed by class slug, rows in
+  slothweb.db v7's `chmix` as kind 3, no schema step) and advertisers by
+  time graded by sloth's distance bands; `/api/ble/classes`,
+  `/api/ble/proximity`, `ble.class.advertisers`, `ble.class.adv`, the
+  `bleclass` key class. sloth re-sends `ble_device` once a 10 s slot
+  while it hears the advertiser (the slot in the change-only
+  signature). New research page `research/bluetooth/ble-device-classes.md`.
+  Updated [[ble]], [[jsonl-schema]], [[slothweb]].
+- 2026-11-02 — BLE Devices waterfall review: the BLE `adv_count` marks
+  in their own high-water table (a random-address flood no longer evicts
+  the Wi-Fi and flow marks); trackers read before the 256-address cut;
+  each row graded at its announced power (new `ble_device`
+  `ext_tx_power`); `now.sensor` for the no-sensor and Ubertooth-only
+  states; the drawer's BLE lines reset per address; the research page
+  recorded in [[research-corpus]] and `research.db` rebuilt. Updated
+  [[jsonl-schema]], [[slothweb]], [[research-corpus]].
