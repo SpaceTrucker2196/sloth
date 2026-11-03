@@ -1193,7 +1193,10 @@ Sources: `research/papers/fragattacks-usenix2021.md`
 **Investigate**
 
 1. Note the BSSID and the two stations: EAPOL forwarded between stations,
-   neither of which is the AP (CVE-2020-26139).
+   neither of which is the AP (CVE-2020-26139). "The AP" includes the
+   AP MLD MAC its beacon advertised (#180); a detail ending
+   `(mld-sibling heuristic)` means other frames on this BSS were
+   withheld on a guess because its beacon was never decoded.
 
 **Fix**
 

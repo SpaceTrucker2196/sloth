@@ -18,7 +18,7 @@ The counter increments in `observe_locked()` (`src/fragattack.c:470-601`) only w
 
 - data frame (`f->type == 2`, line 472), not Null/QoS-Null (line 477), not four-address/WDS (line 481);
 - Protected bit clear (the Protected case returns at 550-557);
-- the transmitter `(BSSID, SA)` has previously been seen sending a Protected frame — `sta_known()` at line 564. This is the key-install gate: the station's own encrypted traffic is the evidence a key was installed; the beacon's RSN element is deliberately not used (src/fragattack.h, "What 'protected network' means here");
+- the transmitter `(BSSID, SA)` has previously been seen sending a Protected frame — `sta_known()` at line 564. This is the key-install gate: the station's own encrypted traffic is the evidence a key was installed (since #180 an SA equal to the BSSID or to the AP MLD MAC its beacon advertised counts as the BSSID, so an 802.11be AP MLD is one station to the gate; the mld-sibling heuristic is not used here); the beacon's RSN element is deliberately not used (src/fragattack.h, "What 'protected network' means here");
 - Address 1 is a group address (`dot11_is_group_addr(da)`, line 566);
 - the frame is fragmented: FN > 0 or More Fragments set (`fragmented`, line 488; checked at 572).
 
@@ -44,7 +44,7 @@ What sloth records:
 - **No pcap.** `fire()` passes `match_ip = NULL` (rules_twin.c:618-619) and `alert_pcap.c` returns early without a `match_ip` (src/alert_pcap.c:105). `docs/views/fragattack.md` says the per-alert pcap carries the offending frames; for this family the code does not write one.
 - **No evidence-ring IDs.** The rule uses `fire()`, not `fire_ev()`, so `evidence_id_count` is 0 (engine.c:671-677).
 - The `[c]` FragAttacks view shows the per-BSS counter, the `SA -> DA` pair, age, and the `protected_frames` gate count (rendered in src/views/fragattack.c:125-127 and 156 from the snapshot built at src/fragattack.c:655-693).
-- `sensor_health` carries eviction tallies for the five fragattack tables (`frag_bss/sta/session/assoc/mpdu`; src/sensor_health.c:126-130). A rising `frag_sta` eviction count means the gate is forgetting stations, which makes the rule miss, not false-fire.
+- `sensor_health` carries eviction tallies for the fragattack tables (`frag_bss/sta/session/assoc/mpdu`, src/sensor_health.c:126-130, and since #180 `frag_ap_ident`, the per-BSSID AP identity; a rising one means the gate stops merging an AP MLD's two addresses, which makes the rule miss, not false-fire). A rising `frag_sta` eviction count means the gate is forgetting stations, which makes the rule miss, not false-fire.
 
 To call it real: on the named BSSID, a data frame with Address 1 a group/broadcast address, Protected = 0, fragment number ≥ 1 or More Fragments = 1, from a transmitter that earlier sent Protected = 1 frames on that BSSID; the fragment payload begins with an LLC/SNAP header (`AA AA 03 00 00 00` + EtherType) wrapping an IPv4/ARP packet [3, §6.4]. Several such fragments with no fragment 0 ever sent is the `ping D,BP --bcast-ra` fingerprint [6].
 
@@ -105,3 +105,5 @@ Third pass 2026-10-27 against HEAD d70d394 (no src/ or include/ commit since c56
 - [13] Cisco 6.5 is tied with three other CVEs for the highest score, not the sole highest; reworded.
 - Code re-checked: gate (564), group-address test (566), `fragmented` (488/572), key/detail/fire 610-620 — unchanged and correct.
 - Sources re-fetched (curl + pdftotext for PDFs, WebFetch for Intel which 403s curl): USENIX paper, fragattacks.com, CVE records, fragattacks README/ADVISORIES (41 links), Wi-Fi Alliance, oss-security, ATT&CK pages, Intel (5.3 x3), Cisco (6.5 for -26140/-26143/-26144/-26145; 5.7 for -24586/-24588; 4.8 for -24587/-26146/-26147) — every quoted phrase grepped and present. research/papers/fragattacks-usenix2021.md names the type.
+
+**#180 (2026-11-03).** The AP-identity block (`frag_ap_identity()`, the per-BSSID beacon table, `gate_identity()`) was inserted above `observe_locked()`, so every `src/fragattack.c` line number above is pre-#180: `observe_locked` moved 470 -> 590, the `sta_known` gate 564 -> 699, `plaintext_bcast_frag++` 573 -> 708, `plaintext_unicast++` 595 -> 730, `snapshot_locked` 655 -> 790. Behaviour change for this rule: the gate files an SA equal to the BSSID or to the AP MLD MAC that BSSID's beacon advertised under the BSSID, so an 802.11be AP MLD is one station to it. count_semantics and noise_verdict are unaffected.

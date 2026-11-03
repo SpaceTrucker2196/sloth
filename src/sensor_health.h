@@ -140,6 +140,9 @@ typedef enum {
     /* #144 slice 4: the advertising-flood windows. STAB_OLDEST for the
      * same reason as the advertiser table: the keys are the air's. */
     SH_EVICT_BLE_FLOOD,     /* src/ble_flood.c — least-recently-heard flood-window key dropped */
+    /* #180: the per-BSSID AP-identity table the FragAttacks rules ask
+     * "is this address the AP?" of. Appended. */
+    SH_EVICT_FRAG_AP_IDENT, /* src/fragattack.c — least-recently-beaconing BSSID's AP MLD binding dropped */
     SH_EVICT_KIND_COUNT
 } sh_evict_t;
 
@@ -184,7 +187,7 @@ uint64_t sh_evict_total_tables(void);
  * "frag_session", "frag_assoc", "frag_mpdu", "ndp_ra", "rogue_radius",
  * "ssdp_device", "onvif_device", "smtp_flow", "eapol_pending",
  * "deauth_obs", "deauth_victim", "rtsp_exchange", "rtsp_stream",
- * "lan_role", "ble_device".
+ * "lan_role", "ble_device", "bredr_lap", "ble_flood", "frag_ap_ident".
  * Unknown kinds return "". */
 const char *sh_evict_name(sh_evict_t kind);
 

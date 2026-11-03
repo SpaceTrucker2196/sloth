@@ -559,11 +559,27 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
              * is where they differ, and that is the whole signal. */
             /* An AP's own Multi-Link Element (#67) — the AP-side MLD.
              * The client side arrives via assoc_request_parse. */
+            int have_mld = 0;
+            sloth_mld_t mld;
             if (rsn.mle_body && rsn.mle_len > 0) {
-                sloth_mld_t mld;
-                if (mle_parse(rsn.mle_body, rsn.mle_len, &mld))
+                if (mle_parse(rsn.mle_body, rsn.mle_len, &mld)) {
                     mle_observe(&mld, fts);
+                    have_mld = 1;
+                }
             }
+            /* The same identity, bound to the BSSID that sent it, for
+             * the FragAttacks rules' "is this the AP?" (#180). A beacon
+             * without an MLE is recorded too - it says the BSS is not an
+             * AP MLD - but only when it could have shown one: a capture
+             * cut short by its snaplen may have lost the MLE off the
+             * tail, and a Basic MLE mle_parse() refused is still one.
+             * Neither is evidence of absence, and recording either as
+             * "not an MLD" would bar the sibling fallback on exactly
+             * the AP it exists for. */
+            if (have_mld)
+                frag_note_beacon(bssid, mld.mld_mac, fts);
+            else if (!rsn.mle_body && (uint32_t)fv.caplen >= fv.origlen)
+                frag_note_beacon(bssid, NULL, fts);
             if (rsn.csa_present)
                 csa_observe(fr.bssid, fr.sa,
                             rsn.csa_new_channel, rsn.csa_new_op_class,

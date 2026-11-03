@@ -585,7 +585,7 @@ void rule_fragattack(const sloth_state_t *s, time_t now) {
         if (!frag_bss_copy(i, &row)) continue;
         const frag_bss_t *b = &row;
 
-        char bss[20], sa[20], da[20];
+        char bss[20], sa[20], da[20], sib[96];
         mac_to_str(b->bssid,   bss, sizeof(bss));
         mac_to_str(b->last_sa, sa,  sizeof(sa));
         mac_to_str(b->last_da, da,  sizeof(da));
@@ -646,9 +646,9 @@ void rule_fragattack(const sloth_state_t *s, time_t now) {
             snprintf(detail, sizeof(detail),
                      "%u EAPOL frame%s forwarded between stations on %.17s"
                      " - last %.17s -> %.17s, neither is the AP"
-                     " (CVE-2020-26139)",
+                     " (CVE-2020-26139)%s",
                      b->eapol_relay, b->eapol_relay == 1 ? "" : "s",
-                     bss, sa, da);
+                     bss, sa, da, frag_sibling_note(b, sib, sizeof(sib)));
             fire(ALERT_TYPE_FRAG_EAPOL_RELAY, ALERT_SEV_CRIT,
                  "FRAG_EAPOL_RELAY", detail, key, NULL, 0, now);
         }

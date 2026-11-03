@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `CLAUDE.md`, `Makefile`, `tests/test_build_recipe.c`, `tests/tmp_dir.h`, `tests/test_tmp_dir.c`, `tests/main_test.c`, `web/tests/wt_tmp.h`, `web/tests/web_test_main.c`, `src/sloth_clock.h`, `src/poll.h`, `tests/test_poll.c`, `src/dot11_frame.h`, `src/capture/frame_edge.h`, `src/capture/probe.c`, `src/worker_thread.c`, `tests/test_worker_thread.c`, `docs/views/connections.md`, `docs/views/packets.md`, `docs/views/dashboard.md`, `docs/views/devices.md`.
 
-**Last updated**: 2026-11-02 (the system map: sensor, BLE scan helper, slothweb and its stores); 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
+**Last updated**: 2026-11-03 (#180: fragattack's sixth table, no new lock edge); 2026-11-02 (the system map: sensor, BLE scan helper, slothweb and its stores); 2026-10-27 (temporary files: the leak guard, interrupts and a long TMPDIR; #95, #118, #141, #132, #130, #109)
 
 ---
 
@@ -374,7 +374,7 @@ file, two of its own mutexes are never held at once.
 | `assoc_track.c` `g_mu` | association pair table | `beacon_snoop` `g_mu` (`beacon_find_ssid` in `assoc_observe` / `assoc_snapshot`); `sensor_health` `g_mu` |
 | `assoc_track.c` `g_req_mu`, `g_ring_mu` | assoc-request flood table; request event ring | `g_req_mu`: `sensor_health` `g_mu` |
 | `eapol_log.c` `g_mu` | EAPOL event ring, pending-handshake table, 22000 / pcap export state | `assoc_track` `g_mu` (`assoc_observe`), `beacon_snoop` `g_mu`, `engine` `g_taint_mu` (via `append_22000_line_for_bssid`), `sensor_health` `g_mu` |
-| `fragattack.c` `g_mu` | the five FragAttacks tables | `eapol_log` `g_mu` (`eapol_key_generation`), `sensor_health` `g_mu` |
+| `fragattack.c` `g_mu` | the six FragAttacks tables (the per-BSSID AP identity since #180) | `eapol_log` `g_mu` (`eapol_key_generation`), `sensor_health` `g_mu` |
 | `pm_forge.c` `g_mu` | PM-forge per-station table | `beacon_snoop` `g_mu` (`beacon_find_interval_ms`), `sensor_health` `g_mu` |
 | `dhcp_snoop.c`, `mdns_snoop.c` `g_mu` | DHCP event table; mDNS host table | `dns` `g_mu` (`dns_set_resolved`), `sensor_health` `g_mu` |
 | `smtp_snoop.c` `g_mu` | SMTP flow table | `cleartext_creds` `g_mu`, `sensor_health` `g_mu` |

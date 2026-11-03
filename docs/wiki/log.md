@@ -6318,3 +6318,34 @@ nothing; it now ages on `last_contradiction_arrival` (`sloth_wall()` when
 the contradiction was processed), as table ageing does elsewhere
 ([[replay-integration]]). `QUEUE_EVICT`'s bound has the same shape and is
 left for its own change.
+
+## 2026-11-03 — FRAG_EAPOL_RELAY knows the AP MLD MAC (#180)
+
+`FRAG_EAPOL_RELAY` (CVE-2020-26139) fired on every handshake of a
+Wi-Fi 7 AP MLD: the authenticator's EAPOL address is the AP MLD MAC,
+the over-the-air BSSID the per-link address, so neither address equalled
+the BSSID (reference host alert `d10040`, 2,964,009 evaluations, three
+incidents, all the AP's own M1/M3). `frag_ap_identity()` in
+`src/fragattack.c` now answers "is this the AP?" as the BSSID, or the
+MLD MAC that BSSID's beacon advertised (fed by a new
+`frag_note_beacon()` call in `on_probe_frame()`'s beacon branch), or —
+only while no beacon from the BSSID has been decoded — the
+mld-sibling heuristic (unicast, locally administered, octets 1-4 equal,
+octet 5 within ±1), which withholds the frame into a separate
+`eapol_mld_sibling` count and is named in the detail of a real relay on
+the same BSS. The key-install gate of `FRAG_PLAINTEXT` / `FRAG_BCAST` /
+`FRAG_AMSDU_EAPOL` files the AP's two advertised identities as one
+station; the heuristic is never used there. The FRRS record's
+`ecs.mld_mac = null` was "not surfaced", not "not captured": a beacon's
+Basic MLE never lists the reporting BSSID as a link, so neither
+`mle_canonical()` nor FRRS's `wifi_mld` link join can bind them. New
+evict kind `evict_frag_ap_ident`, additive to `sensor_health`; replay
+golden regenerated for that one field. Updated [[fragattacks]],
+[[jsonl-schema]], [[architecture]], [[alert-remediation]], the
+FRAG_PLAINTEXT assessment and the rule row in `docs/views/alerts.md`.
+The `needs-pcap-fixture` follow-up stays open. On review: "no MLE" is
+recorded only from a beacon captured whole and carrying no Basic MLE at
+all (a snapped capture or a refused MLE is not evidence of absence), and
+the page now states the two limits — a forged beacon steers the binding
+until the next real one, and a nontransmitted BSSID of a Multiple BSSID
+set, which never beacons itself, still has only the heuristic.

@@ -6284,6 +6284,57 @@ static void test_frag_quiet_on_an_open_network(void) {
     frag_clear();
 }
 
+/* #180: FRAG_EAPOL_RELAY on an 802.11be AP MLD. The AP's own M1 has its
+ * MLD MAC as SA (addr3), the link BSSID as addr2. FA_MLD is FA_LINK's
+ * vendor-style sibling (octet 0 gains bits 1 and 5, octet 5 minus one);
+ * FA_LINK is the link address. */
+static const uint8_t FA_LINK[6] = { 0x00, 0x00, 0x5e, 0x00, 0x53, 0x30 };
+static const uint8_t FA_MLD[6]  = { 0x22, 0x00, 0x5e, 0x00, 0x53, 0x2f };
+
+static void test_frag_eapol_relay_quiet_on_an_ap_mld(void) {
+    /* With the beacon's MLD on file, and without any beacon (the
+     * sibling heuristic). Seen red pass by pass: the beacon-MLD branch
+     * answering FRAG_AP_NO fires pass 0, mld_sibling() answering 0
+     * fires pass 1, and the pre-#180 BSSID-only test fires both. */
+    for (int pass = 0; pass < 2; pass++) {
+        alerts_clear();
+        frag_clear();
+        if (pass == 0) frag_note_beacon(FA_LINK, FA_MLD, 999);
+        uint8_t f[128];
+        int n = frag_frame(f, 0, FA_STA, FA_LINK, FA_MLD, 0, 0x888E);
+        frag_observe(f, n, 1000);
+        sloth_state_t s; seed_state(&s);
+        alerts_update(&s);
+        ASSERT_EQ(find_alert(&s, ALERT_TYPE_FRAG_EAPOL_RELAY), -1);
+    }
+    frag_clear();
+}
+
+static void test_frag_eapol_relay_names_the_sibling_guess(void) {
+    /* A real relay on a BSS where the heuristic also withheld a frame:
+     * the alert fires, and its detail says a guess was made. Seen red
+     * with frag_sibling_note() returning "" unconditionally. */
+    alerts_clear();
+    frag_clear();
+    static const uint8_t ODD[6] = { 0x06, 0x11, 0x22, 0x33, 0x44, 0x55 };
+    uint8_t f[128];
+    int n = frag_frame(f, 0, FA_STA, FA_LINK, FA_MLD, 0, 0x888E);
+    frag_observe(f, n, 1000);
+    n = frag_frame(f, 0, FA_STA, FA_LINK, ODD, 0, 0x888E);
+    frag_observe(f, n, 1001);
+    sloth_state_t s; seed_state(&s);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_FRAG_EAPOL_RELAY);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT(strstr(s.alerts[i].detail, "1 EAPOL frame forwarded") != NULL);
+        ASSERT(strstr(s.alerts[i].detail,
+                      "; 1 more withheld as the AP MLD (mld-sibling heuristic)")
+               != NULL);
+    }
+    frag_clear();
+}
+
 /* ── SAE/PSK split (#74 Detector B, concurrent half) ─────── */
 
 /* add_beacon() sets no AKM bits, so the split rule needs a variant that
@@ -10782,6 +10833,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_frag_mixkey_silent_without_a_rekey);
     RUN_TEST(test_frag_pn_gap_and_eapol_relay_fire);
     RUN_TEST(test_frag_quiet_on_an_open_network);
+    RUN_TEST(test_frag_eapol_relay_quiet_on_an_ap_mld);
+    RUN_TEST(test_frag_eapol_relay_names_the_sibling_guess);
 
     TEST_SUITE("alerts: SAE/PSK split (#74)");
     RUN_TEST(test_sae_psk_split_fires);

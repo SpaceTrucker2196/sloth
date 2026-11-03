@@ -201,6 +201,90 @@ Two exclusions, each carrying its weight:
 - **Unicast only.** A group address can never equal the BSSID, so
   including broadcast would fire on a shape the CVE does not describe.
 
+**"The AP" is not only the BSSID (#180).** On an 802.11be AP MLD the
+authenticator is the AP MLD, and its EAPOL travels under the **MLD MAC
+address**; the over-the-air BSSID (addr2 downlink, addr1 uplink) is the
+per-link address of one affiliated AP. The AP's own M1 to its own
+client is therefore FromDS with addr3 = SA = the MLD MAC, and the
+client's M2 is ToDS with addr3 = DA = the MLD MAC — neither equal to
+the BSSID. The reference host's alert `d10040` was exactly that: an
+Arcadyan Wi-Fi 7 AP at `18:60:41:b4:24:30` sending its handshakes as
+`3a:60:41:b4:24:2f` (the BSSID with bits 1 and 5 of octet 0 set and
+octet 5 minus one) to a client that had associated to it; 2,964,009
+evaluations over three incidents, every one a false positive.
+
+`frag_ap_identity()` (`src/fragattack.c`) is now the one answer to "is
+this address the AP?", in order:
+
+1. **The BSSID.**
+2. **The MLD MAC the BSSID's own Beacon advertised** in its Basic
+   Multi-Link element. `on_probe_frame()` hands every decoded beacon to
+   `frag_note_beacon()`, with the MLD MAC `mle_parse()` read or with
+   none; a 128-row per-BSSID table (`evict_frag_ap_ident`) keeps the
+   latest.
+3. **The mld-sibling heuristic**, and only when no beacon from that
+   BSSID has been decoded: unicast, locally administered, octets 1-4
+   equal to the BSSID's, octet 5 within ±1 (no wrap). A frame cleared
+   only this way is not counted as a relay; it is counted in
+   `eapol_mld_sibling`, and when a real relay on the same BSS fires the
+   detail ends `; N more withheld as the AP MLD (mld-sibling heuristic)`.
+
+A decoded beacon turns the guess off for its BSSID either way: one
+naming an MLD says which address is the AP, and one with no Basic MLE
+says the BSS is not an AP MLD at all — hostapd's
+`ieee802_11_build_ap_params()` appends `hostapd_eid_eht_ml_beacon()` to
+every beacon tail whenever `mld_ap` is set (`src/ap/beacon.c`, read
+2026-11-03 through the AOSP mirror). So the blind spot the heuristic
+opens — an unrelated locally administered station one octet away from
+the BSSID — exists only on a BSS whose beacon sloth never decoded.
+"No MLE" is recorded only from a beacon that could have shown one: a
+capture snapped by its snaplen before the end of the frame (caplen <
+wire length) may have lost the MLE off the tail, and a Basic MLE that
+`mle_parse()` refused (an unusable MLD MAC) is still an MLE, so neither
+bars the guess (`test_a_beacon_that_could_not_show_an_mle_keeps_the_fallback`).
+
+Limits, stated rather than implied:
+
+- **A forged beacon steers the binding.** The latest beacon wins, and
+  nothing compares one beacon's MLD MAC with the previous one's from the
+  same BSSID (`MLE_PR_BEACON_DIFF` compares a Probe Response with a
+  Beacon). A relaying station that forges the AP's beacon naming its own
+  address as the MLD MAC silences this rule for itself until the AP's
+  next real beacon overwrites it, so it has to time a forgery in front of
+  every relayed frame.
+- **An AP MLD sloth holds no beacon for still fires** when its MLD MAC is
+  not sibling-shaped. The usual case is a nontransmitted BSSID of a
+  Multiple BSSID set: it never beacons under its own address, and sloth
+  does not decode the nontransmitted profiles inside the transmitted
+  BSSID's beacon, so the heuristic is its only path.
+
+Why not `src/mle.c`'s MLD roster, which the issue first pointed at: the
+roster is keyed by MLD MAC and holds the addresses a Basic MLE's
+Per-STA Profiles list, and a Beacon's Basic MLE names the MLD but not
+the reporting AP's own address, so the BSSID is never one of its links.
+That is also why the reference host's FRRS record for the alerting
+BSSID showed `ecs.mld_mac = null`: FRRS joins a BSSID to an MLD only
+through the `wifi_mld` record's link list. The MLE was very likely
+captured (an MLO association happened, and its AP beacons a Basic MLE
+ten times a second); it was not *surfaced* against the BSSID, because
+nothing in the JSONL binds the two. `mle.c`'s per-BSSID table (#104
+slice 6) does hold the binding but has no lookup and no record. The
+roster also merges client MLDs from (Re)Association Requests, so
+trusting it here would let a forged request name any address as the AP.
+Pinned by `test_beacon_mle_roster_never_names_the_bssid`.
+
+The same identity is used by the key-install gate the plaintext
+detectors share (`FRAG_PLAINTEXT`, `FRAG_BCAST`, `FRAG_AMSDU_EAPOL`):
+an AP MLD that sends encrypted frames under one of its addresses and
+plaintext under the other is one station to the gate. Only the
+advertised identities merge there — never the heuristic, which may
+withhold a CRIT but may not create one.
+
+The tests are hand-built frames (`tests/test_fragattack.c`, the
+`#180` suite, and two rule-level cases in `tests/test_alerts.c`); the
+`needs-pcap-fixture` follow-up — the same exchange off a real AP MLD —
+stays open.
+
 What this does *not* claim is that the sender was unauthenticated —
 sloth cannot know that, and the earlier note was right that inferring it
 from a hopping radio's association history would be a guess. It claims
