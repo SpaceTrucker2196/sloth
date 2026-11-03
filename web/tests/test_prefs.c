@@ -117,7 +117,7 @@ static void test_tables_keep_widths_and_sort(void) {
  * select, input or textarea fails here until it is one or the other. */
 static const char *const KEPT[] = {
     /* by keepCtl(), by value */
-    "n-win", "a-win", "d-q", "d-sort", "l-q", "w-metric", "w-win", "w-sort", "al-state",
+    "n-win", "a-win", "d-q", "d-sort", "l-q", "w-grid", "w-metric", "w-win", "w-sort", "al-state",
     "al-sev", "al-q", "al-win", "f-win", "f-sort", "f-ip", "q-sql", "b-q", "b-sort",
     "ev-filter", "bledev-win", "bledev-metric", "bledev-n",
 };

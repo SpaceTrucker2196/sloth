@@ -1,6 +1,6 @@
 // The glyph layer (docs/web-visual-spec.md §5; slice V0: G1, G5, G6;
 // slice V1: G1's words, the episode shade, shared scales, G4; slice V2:
-// G2, its words, the new mark).
+// G2, its words, the new mark; slice V3: G3, G7).
 //
 // Every glyph is two halves. The first maps data and a size to a list
 // of marks, each `[kind, x, y, w, h, token]` in CSS pixels with a
@@ -401,6 +401,106 @@ var glyph = (function () {
     return m;
   }
 
+  // G3, the horizon strip (F8). v are a channel's columns oldest
+  // first, each a value in bands (1 is the top of the first band, 2 the
+  // top of the second) or null for a column nothing was observed in;
+  // opt: {w, h, hot, warm} — hot when the second band is out of band (a
+  // z scale, whose second band begins at the slider's k), so that band
+  // and nothing else takes --heat-2; warm[i] marks a column a baseline
+  // could not yet score. Two bands laid over one another in one row
+  // (Heer, Kong and Agrawala, CHI 2009): the first in --data at 35 %,
+  // the second at 70 % over it. The three states of R5 differ: nothing
+  // observed is no ink (a row of none is the dash), observed and quiet
+  // a 1 px --rule base, warming a --rule cell as G4's warming cell is.
+  // A value past the second band is drawn to the top and said by a 1 px
+  // --ink mark along it (R10: by position, not by colour).
+  var G3_BANDS = 2;
+  function g3(v, opt) {
+    var m = [], w = opt.w, h = opt.h, n = v ? v.length : 0, i, any = false;
+    var warm = opt.warm || [];
+    for (i = 0; i < n; i++) if (gnum(v[i]) || warm[i]) any = true;
+    if (!any) { m.push(dash(w, h)); return m; }
+    var cw = w / n;
+    for (i = 0; i < n; i++) {
+      var x = Math.floor(i * cw), cwi = Math.max(1, Math.ceil(cw)), a = v[i];
+      if (!gnum(a)) {
+        if (warm[i]) m.push(["warm", x, 0, cwi, h, "--rule"]);
+        continue;
+      }
+      if (!(a > 0)) { m.push(["base", x, h - 1, cwi, 1, "--rule"]); continue; }
+      var b1 = Math.min(1, a);
+      m.push(["hz1", x, h - h * b1, cwi, h * b1, "--data"]);
+      if (a > 1) {
+        var b2 = Math.min(1, a - 1);
+        m.push(["hz2", x, h - h * b2, cwi, h * b2, opt.hot ? "--heat-2" : "--data"]);
+      }
+      if (a > G3_BANDS) m.push(["clip", x, 0, cwi, 1, "--ink"]);
+    }
+    return m;
+  }
+  // G3's columns in bands, from a /api/wifi/channels row. An absolute
+  // scale splits its 0 to max in two halves; a z scale's first band is
+  // 0 to k sd and its second k to 2k, so the second band begins where
+  // the band sparkline's band ends and a channel quieter than normal is
+  // flat. rate is the cell's factor to the unit the max is in (60 /
+  // col_s for a counter's count per minute, 1 for a gauge); max is the
+  // scale's top after R11 (the page keeps it from growing smaller).
+  function g3Vals(row, k, rate, max) {
+    var v = [], warm = [], i, sc = row && row.scale, z = !!(sc && sc.kind === "z");
+    var cells = (row && row.cells) || [];
+    for (i = 0; i < cells.length; i++) {
+      var c = cells[i];
+      warm.push(false);
+      if (z) {
+        var zi = row.z ? row.z[i] : null;
+        if (gnum(zi)) v.push(k > 0 ? Math.max(0, zi) / k : 0);
+        else { v.push(null); warm[i] = gnum(c); }
+      } else v.push(!gnum(c) ? null : max > 0 ? c * rate / (max / G3_BANDS) : 0);
+    }
+    return { v: v, warm: warm, hot: z };
+  }
+
+  // G7, the event rug (F12). lanes are [{counts, token, spans,
+  // spanToken}]: a lane's events per column oldest first, its ink, and
+  // the column ranges [a, b] an episode covered (a flood), underlined in
+  // spanToken. opt: {w, h, lane, gap, marks} — lane is a lane's height,
+  // gap the space under it, marks the x (CSS pixels) of full-height
+  // events in --ink (survey sessions). Every lane shares one scale (R3):
+  // the tallest column of any lane reaches the lane's height, and
+  // g7Max() is the count the caption prints. A column with none draws
+  // nothing (P3); one with any is at least 1 px, so one event does not
+  // vanish beside thirty. A rug with nothing at all is R5's dash.
+  function g7Max(lanes) {
+    var max = 0;
+    for (var j = 0; lanes && j < lanes.length; j++)
+      for (var i = 0, c = lanes[j].counts || []; i < c.length; i++)
+        if (gnum(c[i]) && c[i] > max) max = c[i];
+    return max;
+  }
+  function g7(lanes, opt) {
+    var m = [], w = opt.w, L = opt.lane, gp = opt.gap || 0, max = g7Max(lanes), i, j;
+    for (j = 0; lanes && j < lanes.length; j++) {
+      var c = lanes[j].counts || [], n = c.length, cw = n ? w / n : 0, y0 = j * (L + gp);
+      for (i = 0; i < n; i++) {
+        if (!gnum(c[i]) || !(c[i] > 0)) continue;
+        var th = Math.max(1, L * c[i] / max);
+        m.push(["tick", Math.floor(i * cw), y0 + L - th, Math.max(1, Math.ceil(cw) - (cw > 3 ? 1 : 0)),
+                th, lanes[j].token]);
+      }
+      var sp = lanes[j].spans || [];
+      for (i = 0; n && i < sp.length; i++) {
+        var a = sp[i][0] < 0 ? 0 : sp[i][0], b = sp[i][1] > n - 1 ? n - 1 : sp[i][1];
+        if (b < a) continue;
+        m.push(["span", Math.floor(a * cw), y0 + L, Math.max(1, Math.ceil((b - a + 1) * cw)), 1,
+                lanes[j].spanToken || "--sev-crit"]);
+      }
+    }
+    var sm = opt.marks || [];
+    for (i = 0; i < sm.length; i++) if (gnum(sm[i])) m.push(["session", sm[i], 0, 2, opt.h, "--ink"]);
+    if (!m.length) m.push(dash(w, opt.h));
+    return m;
+  }
+
   // The painter. One for every glyph, because a mark list is all a
   // glyph says: resolve(token) gives the CSS colour of a token, and
   // marks are in CSS pixels on a canvas sized at the device ratio. A
@@ -429,6 +529,10 @@ var glyph = (function () {
         g.globalAlpha = 0.12;
         g.fillRect(m[1] * dpr, m[2] * dpr, Math.max(1, m[3] * dpr), Math.max(1, m[4] * dpr));
         g.globalAlpha = 1;
+      } else if (k === "hz1" || k === "hz2") {
+        g.globalAlpha = k === "hz1" ? 0.35 : 0.7;
+        g.fillRect(m[1] * dpr, m[2] * dpr, Math.max(1, m[3] * dpr), Math.max(1, m[4] * dpr));
+        g.globalAlpha = 1;
       } else if (k === "outline") {
         g.lineWidth = 2 * dpr;
         g.strokeRect((m[1] + 1) * dpr, (m[2] + 1) * dpr, (m[3] - 2) * dpr, (m[4] - 2) * dpr);
@@ -454,6 +558,7 @@ var glyph = (function () {
            g4: g4, g4Stats: g4Stats, g5: g5, g5Ruler: g5Ruler, g6: g6,
            paint: paint, caption: caption, win: win, scale: scale, dur: dur,
            trend: trend, shared: shared, order: order,
+           g3: g3, g3Vals: g3Vals, G3_BANDS: G3_BANDS, g7: g7, g7Max: g7Max,
            cellsFromHex: cellsFromHex, level: level, lineToken: lineToken,
            heatToken: heatToken };
 })();

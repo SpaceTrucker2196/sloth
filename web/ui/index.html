@@ -23,6 +23,7 @@
 @include glyph.js
 @include facts.js
 @include rf.js
+@include air.js
 @include frrs.js
 @include evidence.js
 @include bundle.js
@@ -363,6 +364,10 @@
       <div class="sub">the access points the managed card's own scan found (sloth.db wifi_aps), newest first; status: the BSS the card is on now</div>
     </section>
     <section class="panel controls" aria-label="wifi controls">
+      <label>channels <select id="w-grid">
+        <option value="horizon" selected>against normal (horizon)</option>
+        <option value="mix">who transmits (stacked)</option>
+      </select></label>
       <label>cells <select id="w-metric">
         <option value="ap_count" selected>APs per channel</option>
         <option value="ctrl_total">control frames</option>
@@ -376,16 +381,23 @@
       </select></label>
       <span class="sub" id="w-note">from slothweb.db's wifi.* series and sloth.db's beacon_aps; nothing is sent</span>
     </section>
+    <!-- The air picture (docs/web-visual-spec.md §6.3, #171 V3), four
+         panels top to bottom: channels, emitters, chains, clients. -->
     <section class="panel">
-      <div class="label">channel x time <span class="sub" id="w-heat-note"></span> <span class="sub" id="w-mix-note"></span></div>
-      <canvas class="wfall" id="w-heat" aria-label="channels by time: each cell the top five transmitters as stacked bands, 2.4, 5 and 6 GHz grouped; arrow keys pick a cell, the list below names it" aria-describedby="w-mix"></canvas>
-      <div class="sub">rows: channels, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), a rule between bands. A cell: its five busiest transmitters, each band its share of the cell's frames (an AP in its SSID's colour, a client in its MAC's, as the TUI colours them; a client's probes all on the channel of its latest one, which carries no band, so a 6 GHz client reads as the 2.4 or 5 GHz channel of that number), grey the rest, on the monitor radio's ground; the strip at a row's left: its busyness in the metric above, the heat ramp against the busiest row; a dimmed heat cell: no transmitter detail held for it. Point at, tap or arrow to a cell.</div>
+      <div class="label">channels <span class="sub" id="w-heat-note"></span> <span class="sub" id="w-mix-note"></span></div>
+      <div class="g3wrap" id="w-g3wrap">
+      <canvas class="wfall" id="w-heat" aria-label="channels by time: one horizon strip per channel against its own scale, or each cell the top five transmitters as stacked bands; 2.4, 5 and 6 GHz grouped; arrow keys pick a cell, the list below names it" aria-describedby="w-mix"></canvas>
+      <canvas class="g3drill" id="w-drill" aria-label="the picked column: each channel's five busiest transmitters, stacked by their share of its frames"></canvas>
+      </div>
+      <div class="sub" id="w-hz-sub">rows: every channel seen in 30 days, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), a rule between bands. A strip is two bands laid over one another, the lighter its first half, the darker its second: APs per channel from 0 to the channel's own 30 d largest; control frames as z against the channel's hour-of-week baseline ("z" after the key), the second band above the sensitivity's sd and in the heat colour, flat while the channel is normal (a channel with no baseline yet: from 0 to its own 30 d busiest, per minute). A grey cell: warming, a line along the foot: observed and quiet, nothing: not observed, a mark along the top: past the scale. Point at, tap or arrow to a column: beside the strips, that column's five busiest transmitters on each channel, stacked in their TUI colours; the list below names the picked cell's.</div>
+      <div class="sub" id="w-mx-sub" hidden>rows: channels, 2.4 GHz first, then 5 and 6 (6 GHz keys read 6gN), a rule between bands. A cell: its five busiest transmitters, each band its share of the cell's frames (an AP in its SSID's colour, a client in its MAC's, as the TUI colours them; a client's probes all on the channel of its latest one, which carries no band, so a 6 GHz client reads as the 2.4 or 5 GHz channel of that number), grey the rest, on the monitor radio's ground; the strip at a row's left: its busyness in the metric above, the heat ramp against the busiest row; a dimmed heat cell: no transmitter detail held for it. Point at, tap or arrow to a cell.</div>
       <div class="mixd" id="w-mix" aria-live="polite"></div>
     </section>
     <section class="panel">
-      <div class="label">access points <span class="sub" id="w-aps-count"></span> <span class="sub dbage" id="w-dbage"></span> <span class="dt-tools" id="w-aps-tools"></span></div>
+      <div class="label">emitters: access points <span class="sub" id="w-aps-count"></span> <span class="sub dbage" id="w-dbage"></span> <span class="dt-tools" id="w-aps-tools"></span></div>
       <div class="controls"><label>sort <select id="w-sort">
-        <option value="last" selected>last seen</option>
+        <option value="signal" selected>signal (near first)</option>
+        <option value="last">last seen</option>
         <option value="ssids">ssid count</option>
         <option value="karma">karma score</option>
         <option value="bssid">bssid</option>
@@ -394,18 +406,22 @@
       <div class="aprow dhead" id="w-aps-head"></div>
       <div id="w-aps"></div>
       </div>
-      <div class="sub">an ssid count above 1 (KARMA, multi-VAP) is in the warning colour with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers</div>
+      <div class="sub">nearest first by default (sloth.db's last signal); a square after the SSID for each SSID the BSSID has beaconed, in the warning colour above one (KARMA, multi-VAP), with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers</div>
     </section>
-    <section class="row2">
-      <div class="panel">
-        <div class="label">deauth timeline <span class="sub" id="w-da-note"></span></div>
-        <canvas class="chart" id="w-deauth" aria-label="deauthentication frames per bssid, flood episodes marked"></canvas>
-        <div class="sub">bars: deauth frames per bssid per cell; red behind them: DEAUTH_FLOOD episodes from sloth.db's alerts</div>
+    <section class="panel">
+      <div class="label">chains <span class="sub" id="w-da-note"></span></div>
+      <canvas class="rug" id="w-deauth" aria-label="deauthentication frames per bssid, one lane each on one scale, flood episodes underlined"></canvas>
+      <div class="sub">a lane per bssid: deauth frames per cell, the tallest of any lane at the lane's height; underlined in the critical colour: DEAUTH_FLOOD episodes from sloth.db's alerts. The stages linked (deauth, twin, association) arrive with the chain timeline.</div>
+    </section>
+    <section class="panel">
+      <div class="label">clients <span class="sub" id="w-pc-note"></span></div>
+      <canvas class="chart" id="w-probe" aria-label="probe clients over time, over their baseline band"></canvas>
+      <div class="label">probing in the window <span class="sub" id="w-cl-count"></span> <span class="dt-tools" id="w-cl-tools"></span></div>
+      <div class="hscroll" id="w-cl-box">
+      <div class="dhead" id="w-cl-head"></div>
+      <div id="w-cl"></div>
       </div>
-      <div class="panel">
-        <div class="label">probe clients <span class="sub" id="w-pc-note"></span></div>
-        <canvas class="chart" id="w-probe" aria-label="probe clients over time, over their baseline band"></canvas>
-      </div>
+      <div class="sub">sloth.db's devices with a probe_clients row last seen in the window, nearest first: the dBm column on the fixed scale with sloth's own distance words, and the 24 h presence; click a row for its drawer</div>
     </section>
    </div>
    <div id="v-alerts" hidden>
@@ -588,7 +604,8 @@
     <section class="panel">
       <div class="label">the last 30 days <span class="sub" id="h-range"></span> <span class="sub dbage" id="h-dbage"></span></div>
       <canvas class="ovw" id="h-strip" aria-label="30 days: devices first seen and alerts begun; drag to pick a range"></canvas>
-      <div class="sub">drag to pick a range; top: devices first seen, bottom: alerts begun; white ticks: survey sessions, one click each for what was new</div>
+      <div class="sub" id="h-strip-note"></div>
+      <div class="sub">drag to pick a range; upper lane: devices first seen, lower: alerts begun, each tick as tall as its cell's count on the one scale; full-height ticks: survey sessions, one click each for what was new</div>
       <div class="chips" id="h-sessions"></div>
     </section>
     <section class="panel">

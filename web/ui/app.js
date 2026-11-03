@@ -890,7 +890,7 @@
     c.value = ctlKept(id, c.value);
     c.addEventListener(c.tagName === "SELECT" ? "change" : "input", function () { ctlSave(id); });
   }
-  ["n-win", "a-win", "d-q", "d-sort", "l-q", "w-metric", "w-win", "w-sort", "al-state", "al-sev",
+  ["n-win", "a-win", "d-q", "d-sort", "l-q", "w-grid", "w-metric", "w-win", "w-sort", "al-state", "al-sev",
    "al-q", "al-win", "f-win", "f-sort", "f-ip", "ev-filter",
    "q-sql", "b-q", "b-sort", "bledev-win", "bledev-metric", "bledev-n"].forEach(keepCtl);
   // Filled from the server's answer, so put back where it is filled.
@@ -1534,7 +1534,7 @@
          t.classList.contains("frow") || t.classList.contains("card") ||
          t.classList.contains("anrow") || t.classList.contains("alprow") ||
          t.classList.contains("rcrow") || t.classList.contains("blerow") ||
-         t.classList.contains("go"))) {
+         t.classList.contains("clrow") || t.classList.contains("go"))) {
       e.preventDefault();
       t.click();
       return;
@@ -2192,6 +2192,7 @@
     if (view === "overview") overview();
     if (view === "activity") refresh();
     if (view === "anomalies") anomalies();
+    if (view === "wifi") wifi();
   });
 
   // ── Activity (spec §8.5) ──────────────────────────────────────────
@@ -2998,8 +2999,9 @@
   // deauth timeline from /api/wifi/deauth, and probe clients from
   // /api/series with its baseline band. Channel keys, BSSIDs and SSIDs
   // are drawn with fillText or set with textContent, never as markup.
-  var WF = { gen: 0, heat: null, mix: null, rows: [], cur: null, apEls: new Map(), geo: null };
-  var AP_SORTS = { "last": 1, "ssids": 1, "karma": 1, "bssid": 1 };
+  var WF = { gen: 0, heat: null, mix: null, rows: [], cur: null, apEls: new Map(), geo: null,
+             g3max: {}, g3of: "", cl: [], clFrom: null };
+  var AP_SORTS = { "signal": 1, "last": 1, "ssids": 1, "karma": 1, "bssid": 1 };
   var BAND_WORD = { "2.4": "2.4 GHz", "5": "5 GHz", "6": "6 GHz" };
 
   function wifiWindow() {
@@ -3077,8 +3079,74 @@
     return keyColor(t.id);
   }
 
+  // The channels panel, in the mode the "channels" control picks: G3's
+  // horizon strips (F8, slice V3; the default) or the stacked grid it
+  // drills into. Both answers are fetched whichever is shown, so the
+  // control switches without asking the server again.
   function channelGrid() {
+    var hz = $("w-grid").value !== "mix";
+    $("w-g3wrap").classList.toggle("mix", !hz);
+    $("w-drill").hidden = !hz;
+    $("w-hz-sub").hidden = !hz;
+    $("w-mx-sub").hidden = hz;
+    if (hz) horizonGrid(); else mixGrid();
+  }
+
+  // G3 (web/ui/air.js): one strip per channel on its own absolute
+  // scale, or as z against its hour-of-week baseline for control
+  // frames, the second band at the slider's k (§5 G3). A picked column
+  // is drawn beside the strips as each channel's top five transmitters,
+  // stacked (owner ruling of 2026-10-26: both), and the list under it
+  // names the picked cell's five, as the stacked grid's does.
+  function horizonGrid() {
     var c = $("w-heat");
+    c.style.height = "";
+    var rows = gridRows();
+    WF.rows = rows;
+    // R11 per channel: a scale's top grows and never shrinks while the
+    // metric and the scope stay; either changing starts it again.
+    var of = (WF.heat ? WF.heat.metric : "") + "\u0000" + SCOPE;
+    if (WF.g3of !== of) { WF.g3max = {}; WF.g3of = of; }
+    var o = SlothAir.horizon(c, rows, { heat: WF.heat, k: sens, g3max: WF.g3max, cur: WF.cur });
+    WF.geo = o.geo;
+    var hz = WF.heat;
+    if (hz) {
+      var ctl = hz.metric === "wifi.ctrl_total";
+      var own = "0 to its own " + glyph.dur(hz.scale_s || 0);
+      var sc = ctl ? (o.nz ? o.nz + " as z against hour-of-week, band 2 above " + sens.toFixed(1) + " sd" : "") +
+                     (o.nz && o.nabs ? "; " : "") +
+                     (o.nabs ? o.nabs + " with no baseline yet, each " + own + " busiest per minute, " +
+                               "the top beside its key" : "")
+                   : "each " + own + " largest, the top beside its key, band 2 above half";
+      set("w-heat-note", glyph.caption({
+            source: hz.metric, window: glyph.dur(hz.to - hz.from), tier: hz.tier,
+            scale: sc + "; " + rows.length + " channels, " + fmt(hz.col_s) + " s cells" +
+                   (hz.more ? ", more channels than shown" : "") +
+                   (o.clipped ? ", " + o.clipped + " past the scale" : ""),
+            n: hz.cols,
+            state: !rows.length ? "no data" : [o.win ? o.win.text : "",
+                   o.warming ? "warming: " + o.warming + " cells" : ""].filter(Boolean).join(", ") }));
+    }
+    mixNote();
+    SlothAir.drill($("w-drill"), rows, WF.cur && WF.geo && WF.cur.c < WF.geo.cols ? WF.cur.c : -1);
+    mixDetail();
+  }
+
+  function mixNote() {
+    if (!WF.mix) return;
+    var from = WF.mix.from || 0, nm = (WF.mix.tx || []).length;
+    set("w-mix-note", nm + " transmitters, " + WF.mix.source +
+        (WF.mix.folded ? "; some folded into other" : "") +
+        (WF.mix.more ? "; more channels than shown" : "") +
+        (num(WF.mix.ring_from) && WF.mix.ring_from > from
+          ? "; detail held from " + hhmmss(WF.mix.ring_from) : ""));
+  }
+
+  // The stacked grid (owner request 2026-10-26), the horizon's
+  // drill-in at full size: every cell its top five.
+  function mixGrid() {
+    var c = $("w-heat");
+    c.style.height = "";
     var T = theme();
     var dpr = sizeCanvas(c);
     var g = c.getContext("2d");
@@ -3094,14 +3162,7 @@
     if (WF.heat) note += ", " + WF.heat.tier + " tier, " + fmt(WF.heat.col_s) + " s cells" +
                          (WF.heat.more ? ", more channels than shown" : "");
     set("w-heat-note", note);
-    if (WF.mix) {
-      var nm = (WF.mix.tx || []).length;
-      set("w-mix-note", nm + " transmitters, " + WF.mix.source +
-          (WF.mix.folded ? "; some folded into other" : "") +
-          (WF.mix.more ? "; more channels than shown" : "") +
-          (num(WF.mix.ring_from) && WF.mix.ring_from > from
-            ? "; detail held from " + hhmmss(WF.mix.ring_from) : ""));
-    }
+    mixNote();
     if (!rows.length || !cols) { mixDetail(); return; }
     var busy = rows.map(rowBusy), bmax = 0;
     busy.forEach(function (v) { if (v > bmax) bmax = v; });
@@ -3249,8 +3310,9 @@
     var b = c.getBoundingClientRect();
     var px = (ev.clientX - b.left) * (c.width / Math.max(1, b.width));
     var py = (ev.clientY - b.top) * (c.height / Math.max(1, b.height));
-    var col = Math.floor((px - geo.x0) / geo.cw), row = Math.floor(py / geo.rh);
-    if (col < 0 || col >= geo.cols || row < 0 || row >= WF.rows.length) return;
+    // geo.c0: the first column drawn, when R4 shrank the horizon.
+    var col = Math.floor((px - geo.x0) / geo.cw) + (geo.c0 || 0), row = Math.floor(py / geo.rh);
+    if (col < (geo.c0 || 0) || col >= geo.cols || row < 0 || row >= WF.rows.length) return;
     if (WF.cur && WF.cur.r === row && WF.cur.c === col) return;
     WF.cur = { r: row, c: col };
     channelGrid();
@@ -3261,13 +3323,13 @@
   $("w-heat").addEventListener("keydown", function (ev) {
     var geo = WF.geo;
     if (!geo || !WF.rows.length) return;
-    var cur = WF.cur || { r: 0, c: geo.cols - 1 };
+    var cur = WF.cur || { r: 0, c: num(geo.c1) ? geo.c1 : geo.cols - 1 };
     var MOVE = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] };
     var d = Object.prototype.hasOwnProperty.call(MOVE, ev.key) ? MOVE[ev.key] : null;
     if (d) {
       ev.preventDefault();
       cur = { r: Math.max(0, Math.min(WF.rows.length - 1, cur.r + d[0])),
-              c: Math.max(0, Math.min(geo.cols - 1, cur.c + d[1])) };
+              c: Math.max(geo.c0 || 0, Math.min(num(geo.c1) ? geo.c1 : geo.cols - 1, cur.c + d[1])) };
       WF.cur = cur;
       channelGrid();
       return;
@@ -3308,10 +3370,18 @@
     bs.appendChild(el("span", "d-dim", a.bssid));
     row.appendChild(bs);
     // The SSID in its hash colour; the warning (KARMA, multi-VAP) is
-    // the "+N ssids" after it, at the heat the TUI warns at.
+    // the squares after it, at the heat the TUI warns at.
     var ss = el("span", "c-ssid");
     ss.appendChild(a.ssid === null ? el("span", "d-dim", "(hidden)") : ssidSpan(String(a.ssid), a.ssid_k, a.ssid_np));
-    if (a.ssid_count > 1) ss.appendChild(el("span", "warn", "  +" + (a.ssid_count - 1) + " ssids"));
+    // §6.3: the SSID count as a row of small squares after the SSID, one
+    // each (eight, then a plus), not "+3 ssids" in words; the count in
+    // words in its title.
+    if (a.ssid_count > 0) {
+      var sq = el("span", a.ssid_count > 1 ? "warn" : "d-dim",
+                  " " + "\u25aa".repeat(Math.min(8, a.ssid_count)) + (a.ssid_count > 8 ? "+" : ""));
+      sq.title = a.ssid_count + " ssid" + (a.ssid_count === 1 ? "" : "s");
+      ss.appendChild(sq);
+    }
     row.appendChild(ss);
     row.appendChild(el("span", "c-ch d-normal", String(a.channel)));
     var sg = row.appendChild(el("span", "c-sig d-dim"));
@@ -3384,43 +3454,67 @@
     });
   }
 
-  // Bars per bssid, the frames of each cell against the row's busiest;
-  // flood episodes under them in --sev-crit.
-  function deauthChart(c, j) {
-    var T = theme();
-    var dpr = sizeCanvas(c);
-    var g = c.getContext("2d");
-    var W = c.width, H = c.height;
-    g.clearRect(0, 0, W, H);
-    var rows = (j.bssids || []).slice(0, 12);
-    if (!rows.length) return;
-    var padL = 128 * dpr, rh = Math.floor(H / rows.length);
-    var cw = (W - padL) / Math.max(1, j.cols);
-    var span = j.to - j.from;
-    g.font = Math.min(10 * dpr, rh) + "px " + css("--font-mono");
-    g.textBaseline = "middle";
-    for (var i = 0; i < rows.length; i++) {
-      var r = rows[i], y = i * rh;
-      g.fillStyle = css("--sev-crit");
-      (r.floods || []).forEach(function (f) {
-        var a = Math.max(j.from, f[0]), b = Math.min(j.to, f[1] + j.col_s);
-        if (b <= a) return;
-        g.globalAlpha = 0.35;
-        g.fillRect(padL + (a - j.from) / span * (W - padL), y, Math.max(dpr, (b - a) / span * (W - padL)), rh);
-        g.globalAlpha = 1;
+  // §6.3's clients panel, under the probe-client chart: the devices
+  // sloth.db holds a probe_clients row for, last seen in the window,
+  // nearest first (/api/devices, src:probe), each with G2 in its dBm
+  // column and G5 for its 24 h, so a probing client that is near and
+  // new is found by eye. Held whole (one page), so the headers sort
+  // here.
+  var CL_PAGE = 50;
+  function seenWord(s) { return s % 86400 ? Math.round(s / 3600) + "h" : Math.round(s / 86400) + "d"; }
+  var DTWL = DataTable({ id: "wclients", label: "probing clients", box: $("w-cl-box"),
+    head: $("w-cl-head"), reset: $("w-cl-tools"), redraw: function () { clientsDraw(); }, cols: [
+      { k: "mac", label: "mac", w: 20, min: 8, type: "mac", val: av("mac") },
+      { k: "ven", label: "vendor", w: 12, flex: true, type: "text", val: av("vendor") },
+      { k: "sig", label: "dBm", px: 150, min: 3, type: "num", val: av("signal") },
+      { k: "pr", label: "24 h presence", px: 146 },
+      { k: "ls", label: "last", w: 10, type: "time", val: av("last_seen") }
+    ] });
+  function clientsDraw() {
+    var box = clear("w-cl");
+    DTWL.sort(WF.cl).forEach(function (d) {
+      var row = el("div", "clrow dt-row");
+      var mc = el("span", "");
+      var nw = SlothRf.newMark(d.first_seen, WF.clFrom);
+      if (nw) mc.appendChild(nw);
+      var sw = el("span", "sw");
+      sw.style.background = keyColor(String(d.mac));
+      mc.appendChild(sw);
+      mc.appendChild(el("span", d.random ? "rnd d-dim" : "d-dim", (d.random ? "~" : "") + d.mac));
+      row.appendChild(mc);
+      row.appendChild(el("span", d.vendor === null ? "d-dim" : "d-bright", d.vendor === null ? "?" : String(d.vendor)));
+      SlothRf.cell(row.appendChild(el("span", "c-sig d-dim")), d.rf, num(d.signal) ? d.signal : null);
+      var cv = document.createElement("canvas");
+      row.appendChild(cv);
+      row.appendChild(el("span", "d-dim", shortStamp(d.last_seen)));
+      row.addEventListener("click", function () { openDrawer(d.mac); });
+      row.role = "row";
+      row.tabIndex = 0;
+      box.appendChild(row);
+      drawStrip(cv, d.presence, 144, glyph.firstCell(d.first_seen, WF.clFrom, 600, 144));
+    });
+    if (!WF.cl.length) box.appendChild(el("div", "sub", "no probing client last seen in the window"));
+  }
+  function wifiClients(gen, r) {
+    var q = "src:probe seen:<" + seenWord(r.win);
+    getJSON("/api/devices?limit=" + CL_PAGE + "&sort=signal&q=" + encodeURIComponent(q)).then(function (j) {
+      if (gen !== WF.gen) return;
+      WF.cl = j.rows || [];
+      WF.clFrom = num(j.presence_from) ? j.presence_from : null;
+      var nnew = 0, nnear = 0;
+      WF.cl.forEach(function (d) {
+        if (glyph.isNew(d.first_seen, WF.clFrom)) nnew++;
+        if (d.rf && d.rf.trend === "approaching") nnear++;
       });
-      g.fillStyle = T.dim;
-      g.fillText(String(r.bssid), 2 * dpr, y + rh / 2);
-      var max = 0;
-      (r.cells || []).forEach(function (v) { if (num(v) && v > max) max = v; });
-      g.fillStyle = (r.floods || []).length ? css("--sev-crit") : T.normal;
-      for (var k = 0; k < (r.cells || []).length; k++) {
-        var v = r.cells[k];
-        if (!num(v) || v <= 0 || max <= 0) continue;
-        var h = Math.max(dpr, (rh - 2 * dpr) * v / max);
-        g.fillRect(padL + k * cw, y + rh - dpr - h, Math.max(dpr, cw - dpr), h);
-      }
-    }
+      clientsDraw();
+      set("w-cl-count", WF.cl.length + " shown, " + nnew + " new in 24 h, " + nnear +
+          " approaching (sloth's estimate)" + (j.more ? ", the nearest " + WF.cl.length : ""));
+    }).catch(function (e) {
+      if (gen !== WF.gen) return;
+      WF.cl = [];
+      clear("w-cl");
+      set("w-cl-count", errText(e.message));
+    });
   }
 
   // ── the managed card's own scan and link (/api/wifi/local) ────────
@@ -3525,6 +3619,7 @@
     if (SCOPE === "local") return;
     var r = wifiWindow();
     var metric = $("w-metric").value === "ctrl_total" ? "ctrl_total" : "ap_count";
+    WF.win = r;
     WF.heat = null;
     WF.mix = null;
     getJSON(wifiGridPath("channels", metric, r)).then(function (j) {
@@ -3543,11 +3638,17 @@
     });
     getJSON(wifiGridPath("deauth", "", r)).then(function (j) {
       if (gen !== WF.gen) return;
-      deauthChart($("w-deauth"), j);
+      // G7 (§6.3's chains, F16): a lane per bssid on one scale; none
+      // collapses the panel to this line.
+      var rg = SlothAir.rug($("w-deauth"), j), nb = rg.busy;
       var floods = 0;
       (j.bssids || []).forEach(function (b) { floods += (b.floods || []).length; });
-      set("w-da-note", (j.bssids || []).length + " bssids, " + floods +
-          " flood episode" + (floods === 1 ? "" : "s") + ", sloth.db " + j.db);
+      set("w-da-note", glyph.caption({
+            source: "wifi.deauth, sloth.db " + j.db, window: glyph.dur(j.to - j.from), tier: j.tier,
+            scale: nb ? "shared, tallest " + fmt(rg.max) + " frames a cell; " + nb + " bssids" +
+                        (nb > rg.lanes ? ", the busiest " + rg.lanes + " drawn" : "") + ", " + floods +
+                        " flood episode" + (floods === 1 ? "" : "s") : "",
+            n: j.cols, state: nb ? "" : "0 deauth in the window" }));
     }).catch(function (e) { if (gen === WF.gen) set("w-da-note", errText(e.message)); });
     var tier = tierFor(r.win);
     Promise.all([series("wifi.probe_clients", "", tier, r.from, r.to),
@@ -3558,7 +3659,9 @@
       var pbanded = false;
       for (var pi = 0; pbd && pi < pbd.length; pi++) if (pbd[pi]) pbanded = true;
       var pw = glyph.win(s.points, r.from, r.to);
-      draw($("w-probe"), s.points, { from: pw.from, to: pw.to, step: s.step, kind: s.kind,
+      // F16: no points, no box; the caption says "no data" (R5).
+      $("w-probe").hidden = !s.points.length;
+      if (s.points.length) draw($("w-probe"), s.points, { from: pw.from, to: pw.to, step: s.step, kind: s.kind,
                                      color: theme().normal, axes: true, band: pbd,
                                      now: Math.floor(Date.now() / 1000) });
       set("w-pc-note", glyph.caption({
@@ -3570,8 +3673,10 @@
                    : pbanded ? "" : "warming" }));
     }).catch(function (e) { if (gen === WF.gen) set("w-pc-note", errText(e.message)); });
     wifiAps();
+    wifiClients(gen, r);
   }
   $("w-metric").addEventListener("change", function () { wifi(); });
+  $("w-grid").addEventListener("change", function () { if (view === "wifi") channelGrid(); });
   $("w-win").addEventListener("change", function () { wifi(); });
   $("w-sort").addEventListener("change", function () { DTA.clear(); wifiAps(); });
 
@@ -3939,34 +4044,38 @@
     return Math.max(o.from, Math.min(o.to, t));
   }
 
+  // G7 (F12, slice V3): the 30 d strip as an event rug, a lane each for
+  // devices first seen (--tui-normal) and alerts begun (--sev-warn),
+  // their ticks' heights the counts on one scale for both lanes, the
+  // tallest printed in the caption; survey sessions full height in
+  // --ink. The range picked is the outline, in the one accent. The
+  // lanes span the canvas's whole width, so the drag's x is still a
+  // time (stripX, stripT).
+  var HS_GAP = 8;
   function drawOverview() {
     var c = $("h-strip"), o = HS.ov;
     if (!o) return;
     var T = theme();
-    var dpr = sizeCanvas(c);
+    var W = c.clientWidth, Hh = c.clientHeight, L = (Hh - HS_GAP) / 2;
+    var lanes = [{ counts: o.devices || [], token: "--tui-normal" },
+                 { counts: o.alerts || [], token: "--sev-warn" }];
+    var marks = HS.sessions.map(function (s) { return (s.started - o.from) / (o.to - o.from) * W; });
+    glyph.paint(c, glyph.g7(lanes, { w: W, h: Hh, lane: L, gap: HS_GAP, marks: marks }), tok);
+    var nd = 0, na = 0;
+    (o.devices || []).forEach(function (v) { if (num(v)) nd += v; });
+    (o.alerts || []).forEach(function (v) { if (num(v)) na += v; });
+    set("h-strip-note", glyph.caption({
+          source: "sloth.db devices.first_seen and alerts.first_seen", window: glyph.dur(o.to - o.from),
+          tier: glyph.dur(o.cell_s) + " cells",
+          scale: "one scale, tallest " + fmt(glyph.g7Max(lanes)) + " in a cell; " + nd + " devices, " + na + " alerts",
+          n: o.cols, state: nd || na ? "" : "no data" }));
+    var dpr = window.devicePixelRatio || 1;
     var g = c.getContext("2d");
-    var W = c.width, H = c.height;
-    g.clearRect(0, 0, W, H);
-    var max = 1;
-    for (var i = 0; i < o.cols; i++) max = Math.max(max, o.devices[i] || 0, o.alerts[i] || 0);
-    var cw = W / Math.max(1, o.cols), h2 = (H - 8 * dpr) / 2;
-    for (i = 0; i < o.cols; i++) {
-      var d = o.devices[i] || 0, a = o.alerts[i] || 0;
-      g.fillStyle = T.normal;
-      if (d) g.fillRect(i * cw, h2 - h2 * d / max, Math.max(dpr, cw - dpr), h2 * d / max);
-      g.fillStyle = css("--sev-warn");
-      if (a) g.fillRect(i * cw, h2 + 2 * dpr, Math.max(dpr, cw - dpr), h2 * a / max);
-    }
-    g.fillStyle = T.ink;
-    HS.sessions.forEach(function (s) {
-      var x = stripX(c, s.started);
-      g.fillRect(x, 0, Math.max(dpr, 2 * dpr), H);
-    });
     var a0 = HS.drag ? Math.min(HS.drag.a, HS.drag.b) : stripX(c, HS.from);
     var a1 = HS.drag ? Math.max(HS.drag.a, HS.drag.b) : stripX(c, HS.to);
     g.strokeStyle = T.signal;
     g.lineWidth = Math.max(1, dpr);
-    g.strokeRect(a0 + 0.5, 0.5, Math.max(dpr, a1 - a0), H - 1);
+    g.strokeRect(a0 + 0.5, 0.5, Math.max(dpr, a1 - a0), c.height - 1);
   }
 
   function sessionChips() {
@@ -5524,6 +5633,11 @@
 
   // G2, G6 and the new mark in the tables (web/ui/rf.js).
   if (window.SlothRf) SlothRf.init({ tok: tok });
+
+  // The WiFi view's air picture (web/ui/air.js): G3 and its drill-in,
+  // the chains rug.
+  if (window.SlothAir) SlothAir.init({ tok: tok, css: css, theme: theme, sizeCanvas: sizeCanvas,
+    txColor: txColor, txOf: txOf, fmt: fmt });
 
   // G1 on the strip, the tiles and the footer (web/ui/facts.js): the
   // page's helpers, lent once.

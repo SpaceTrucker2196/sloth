@@ -187,6 +187,18 @@ canvas.spark { display: block; width: 100%; height: 36px; margin-top: 4px; }
 canvas.sg { display: inline-block; vertical-align: middle; width: 40px; height: 12px; margin-left: 6px; }
 canvas.heat { display: block; width: 100%; height: 180px; margin-top: var(--gap); }
 canvas.wfall { display: block; width: 100%; height: 280px; margin-top: var(--gap); }
+/* #171 V3: G3's block and its drill-in side by side, the drill-in a
+ * narrow column at the strips' row height (web/ui/air.js); G7's rug on
+ * the WiFi view, its height set from its lanes. Square-cornered (R8). */
+.g3wrap { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 8px; margin-top: var(--gap); }
+.g3wrap > canvas { margin-top: 0; }
+.g3wrap.mix { grid-template-columns: minmax(0, 1fr); }
+canvas.g3drill { display: block; width: 100%; height: 18px; }
+canvas.rug { display: block; width: 100%; height: 16px; margin-top: var(--gap); }
+.clrow { font-size: 12px; white-space: nowrap; cursor: pointer; border-bottom: 1px dotted var(--rule); }
+.clrow > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.clrow > canvas { display: block; width: 144px; height: 12px; }
+.clrow:hover { background: var(--tint); }
 canvas.ovw { display: block; width: 100%; height: 72px; margin-top: var(--gap); cursor: crosshair; touch-action: none; }
 canvas.chord { display: block; width: 100%; height: 420px; margin-top: var(--gap); cursor: pointer; }
 canvas.strip { display: block; width: 100%; height: 18px; margin: 4px 0 var(--gap); border-radius: 4px; }
@@ -512,6 +524,9 @@ a.tile:focus-visible { outline-offset: 2px; }
   .pills { border-radius: var(--radius); }
   .pills > span { padding: 0 8px; }
   .views button, .views li.off { padding: 4px 6px; }
+  /* G3's drill-in at half width, so the strips keep most of a phone's
+   * row beside the key and scale gutter (#171 V3 review). */
+  .g3wrap { grid-template-columns: minmax(0, 1fr) 56px; gap: 4px; }
   /* An eyebrow too long for the line would leave its rule alone on one. */
   .label::before { display: none; }
   /* A search box takes its own line, inside its card. */

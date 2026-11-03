@@ -107,7 +107,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-03 (#171 V2: G2 in the Devices and AP tables' signal column, the drawer and the Lookup card, from the existing `rf.rssi.*` series through each row's `"rf"` member, bold and worded by sloth's own distance band and trend rather than a slope of its own; the new mark and G5's first-seen cell; G6 on risk, karma, the anomaly score and the anom and flow total counts); 2026-11-03 (#171 V1: G1 on every Overview tile, the strip's network facts and the footer's drops, from `live.*`, `records.total`, `sensor.drops` and `ble.devices`, with G1's band words and arrow; the tiles in urgency order; anomaly cards' G1 with the episode shaded and `series unavailable` on a failed read; the hour-of-week grid as G4, warming cells plain grey with no hatch, counted in the caption; the small multiples on one shared scale with a `scale: own` toggle and the |z| sort); 2026-11-03 (#175: sloth.db v11's `alert_incidents` allow-listed, its key and incident_id predicate-only, `WEB_SDB_SCHEMA_MAX` 11; `/api/history/alerts` per incident in the range; the alert page's runs per incident and its `db_incident`); 2026-11-03 (#179: the alert page leads with observations, incidents, the times, confidence and the rule's phrase, count last as evaluations; the list sorted by severity then observations, a muted floor under 20% for a row below CRIT; `/api/alert`'s members in that order); 2026-11-03 (#181: a triage note over its 240 bytes refused beside the buttons with both numbers, counted in bytes as typed, never drawn before the server confirms it); 2026-11-03 (the fourth triage verdict `known`, known good, drawn green); 2026-11-03 (BLE Devices: anonymous advertising one entry and one advertiser, always in Unknown, no proximity row and no read slot; A1 across the 10 s slot measured, quiet, no change); 2026-11-02 (the BLE Devices waterfall's review fixes: its own high-water table, trackers read first, the grade at each row's announced power, the no-sensor and Ubertooth-only states); 2026-11-02 (the BLE Devices waterfall: device classes by time as the WiFi channel mix draws channels, advertisers by time graded by sloth's distance bands, the drawer's signal over the window; the `BLE Devices` and `GPS Sat` labels; `ble_device` re-sent once a 10 s slot while heard); 2026-11-02 (copy JSON's `location` filled: a device's `/api/positions` answer, an alert's page `loc` stamp, both spliced, never re-rendered); 2026-11-02 (copy JSON, first landed 2026-10-27 as `/api/bundle` and a copy and download button on every detail view: rebased onto triage, FRRS, BLE, vendor research and the alert's proof; kinds `ble` and `platform` through the views' own hooks; `frrs`, an alert's `triage`, `vendor_research`, `assessment` and `evidence` filled from their routes' answers; records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
+**Last updated**: 2026-11-03 (#171 V3: the WiFi view as four panels, channels as G3 horizon strips on each channel's own 30 d scale or as z against its hour-of-week baseline with a stacked top-5 drill-in per column, emitters nearest first, the chains panel's deauth rug, probing clients with G2 and G5; History's 30 d strip as a G7 rug on one scale); 2026-11-03 (#171 V2: G2 in the Devices and AP tables' signal column, the drawer and the Lookup card, from the existing `rf.rssi.*` series through each row's `"rf"` member, bold and worded by sloth's own distance band and trend rather than a slope of its own; the new mark and G5's first-seen cell; G6 on risk, karma, the anomaly score and the anom and flow total counts); 2026-11-03 (#171 V1: G1 on every Overview tile, the strip's network facts and the footer's drops, from `live.*`, `records.total`, `sensor.drops` and `ble.devices`, with G1's band words and arrow; the tiles in urgency order; anomaly cards' G1 with the episode shaded and `series unavailable` on a failed read; the hour-of-week grid as G4, warming cells plain grey with no hatch, counted in the caption; the small multiples on one shared scale with a `scale: own` toggle and the |z| sort); 2026-11-03 (#175: sloth.db v11's `alert_incidents` allow-listed, its key and incident_id predicate-only, `WEB_SDB_SCHEMA_MAX` 11; `/api/history/alerts` per incident in the range; the alert page's runs per incident and its `db_incident`); 2026-11-03 (#179: the alert page leads with observations, incidents, the times, confidence and the rule's phrase, count last as evaluations; the list sorted by severity then observations, a muted floor under 20% for a row below CRIT; `/api/alert`'s members in that order); 2026-11-03 (#181: a triage note over its 240 bytes refused beside the buttons with both numbers, counted in bytes as typed, never drawn before the server confirms it); 2026-11-03 (the fourth triage verdict `known`, known good, drawn green); 2026-11-03 (BLE Devices: anonymous advertising one entry and one advertiser, always in Unknown, no proximity row and no read slot; A1 across the 10 s slot measured, quiet, no change); 2026-11-02 (the BLE Devices waterfall's review fixes: its own high-water table, trackers read first, the grade at each row's announced power, the no-sensor and Ubertooth-only states); 2026-11-02 (the BLE Devices waterfall: device classes by time as the WiFi channel mix draws channels, advertisers by time graded by sloth's distance bands, the drawer's signal over the window; the `BLE Devices` and `GPS Sat` labels; `ble_device` re-sent once a 10 s slot while heard); 2026-11-02 (copy JSON's `location` filled: a device's `/api/positions` answer, an alert's page `loc` stamp, both spliced, never re-rendered); 2026-11-02 (copy JSON, first landed 2026-10-27 as `/api/bundle` and a copy and download button on every detail view: rebased onto triage, FRRS, BLE, vendor research and the alert's proof; kinds `ble` and `platform` through the views' own hooks; `frrs`, an alert's `triage`, `vendor_research`, `assessment` and `evidence` filled from their routes' answers; records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
 listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
@@ -1254,10 +1254,54 @@ as a glyph beside every signal number.
 Not in V2: G2's TUI half (the Devices Enter signal trail on the fixed
 scale), the Flows counts column, G4's small form on the Lookup card, G2
 on the managed card's tables (another receiver, no series) and on the
-WiFi Clients panel (V3).
+WiFi Clients panel (V3, below).
+
+### Slice V3 (#171, 2026-11-03)
+
+The air picture: the WiFi view is four panels, top to bottom, as
+`docs/web-visual-spec.md` §6.3 lays it out, and History's strip says
+how many.
+
+- **Channels: G3 (F8).** One horizon strip per channel seen in the
+  last 30 days, two bands laid over one another. The scale is the
+  server's, never the busiest cell in view: `/api/wifi/channels` rows
+  carry `"scale"` — `absolute` with the channel's own largest over 30
+  days (the fine ring's day without a store), or `z`, with a `"z"` per
+  cell, for `ctrl_total` against its hour-of-week baseline, scored as
+  A1 scores a minute. On a z strip the second band begins at the
+  slider's k and is the panel's only colour (`--heat-2`), so the strip
+  is flat while the channel is normal. Nothing observed, observed and
+  quiet, and warming are three different marks (R5). The `channels`
+  control keeps the stacked grid of 2026-10-26 one choice away.
+- **The drill-in (ruling: both).** A picked column is drawn beside the
+  strips as each channel's five busiest transmitters, stacked in their
+  TUI colours, and the list under the panel names the picked cell's.
+- **Emitters.** The AP table nearest first by default, the SSID count
+  a row of `▪`.
+- **Chains.** Until G8 (V4), the deauth frames as a G7 rug, one lane per
+  bssid with a frame or a flood in the window, on one scale, flood
+  episodes underlined in `--sev-crit`; no deauth collapses the panel
+  to `0 deauth in the window` (F16).
+- **Clients.** The probe-client chart over its band (hidden when it has
+  no points, F16), and the probing clients last seen in the window,
+  nearest first, each with G2 and G5.
+
+`web/ui/air.js` draws the strips, the drill-in and the deauth rug. Each
+strip prints its own top beside its key (R3), and when the channels
+were observed for less than a tenth of the window every strip draws
+only those columns and the caption says `6 min of 1 h` (R4).
+- **History (F12).** The 30 d strip is G7: a lane for devices first
+  seen and one for alerts begun, each tick its cell's count on one
+  scale for both, the tallest in the caption; survey sessions full
+  height.
+
+Not in V3: the probe-flood rug (the page has no alert type table to key
+`alerts.fired` by), per-severity ticks on History's alert lane, and
+G3's and G7's TUI forms (R12).
 
 **Sources**: `docs/web-visual-spec.md` (§2 F1-F20, §5, §8, §10),
-`web/ui/glyph.js`, `web/ui/facts.js`, `web/ui/rf.js`, `web/src/web_rf.c`,
+`web/ui/glyph.js`, `web/ui/facts.js`, `web/ui/rf.js`, `web/ui/air.js`,
+`web/src/web_rf.c`, `web/src/web_wifi.c`,
 `web/tests/test_glyph.c`, `web/tests/test_rf.c`, `web/README.md` (Design),
 `src/rf_distance.h` (the band and trend G2 agrees with),
 `src/views/dashboard_primitives.c` (`draw_sparkline_at()`),

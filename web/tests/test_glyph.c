@@ -446,6 +446,103 @@ static int gl_first_cell(int have, double first, double from, double cell_s, int
     return c < n ? c : -1;
 }
 
+/* ── V3: G3 and G7, ported ──────────────────────────────────────── */
+
+/* G3, the horizon strip. v[i] is a column's value in bands where has[i],
+ * else nothing was observed; warm may be NULL. */
+static void gl_g3(const double *v, const int *has, const int *warm, int n,
+                  double w, double h, int hot, gmarks_t *g) {
+    memset(g, 0, sizeof(*g));
+    int any = 0;
+    for (int i = 0; i < n; i++) if (has[i] || (warm && warm[i])) any = 1;
+    if (!any) { gl_dash(g, w, h); return; }
+    double cw = w / n;
+    for (int i = 0; i < n; i++) {
+        double x = floor(i * cw), cwi = ceil(cw);
+        if (cwi < 1) cwi = 1;
+        if (!has[i]) {
+            if (warm && warm[i]) gm_push(g, "warm", x, 0, cwi, h, "--rule");
+            continue;
+        }
+        double a = v[i];
+        if (!(a > 0)) { gm_push(g, "base", x, h - 1, cwi, 1, "--rule"); continue; }
+        double b1 = a < 1 ? a : 1;
+        gm_push(g, "hz1", x, h - h * b1, cwi, h * b1, "--data");
+        if (a > 1) {
+            double b2 = a - 1 < 1 ? a - 1 : 1;
+            gm_push(g, "hz2", x, h - h * b2, cwi, h * b2, hot ? "--heat-2" : "--data");
+        }
+        if (a > 2) gm_push(g, "clip", x, 0, cwi, 1, "--ink");
+    }
+}
+
+/* G3's columns in bands from a row: cells (has_c), and for a z row its
+ * z (has_z); k the slider's, rate the cell's factor, max the scale's
+ * top. Out: v, has, warm; the return is hot. */
+static int gl_g3_vals(const double *cells, const int *has_c, int zrow, const double *z,
+                      const int *has_z, int n, double k, double rate, double max,
+                      double *v, int *has, int *warm) {
+    for (int i = 0; i < n; i++) {
+        warm[i] = 0;
+        if (zrow) {
+            if (has_z && has_z[i]) {
+                v[i] = k > 0 ? (z[i] > 0 ? z[i] : 0) / k : 0;
+                has[i] = 1;
+            } else {
+                v[i] = 0;
+                has[i] = 0;
+                warm[i] = has_c[i];
+            }
+        } else if (!has_c[i]) {
+            v[i] = 0;
+            has[i] = 0;
+        } else {
+            v[i] = max > 0 ? cells[i] * rate / (max / 2) : 0;
+            has[i] = 1;
+        }
+    }
+    return zrow;
+}
+
+/* G7, the event rug: nl lanes of n columns each, counts[l][i] (zero is
+ * none), one span per lane at most ([a, b], or a > b for none). */
+#define G7_N 16
+typedef struct { double c[G7_N]; int n; const char *tok; int span[2]; } glane_t;
+static double gl_g7_max(const glane_t *ln, int nl) {
+    double max = 0;
+    for (int j = 0; j < nl; j++)
+        for (int i = 0; i < ln[j].n; i++) if (ln[j].c[i] > max) max = ln[j].c[i];
+    return max;
+}
+static void gl_g7(const glane_t *ln, int nl, double w, double h, double L, double gp,
+                  const double *marks, int nm, gmarks_t *g) {
+    memset(g, 0, sizeof(*g));
+    double max = gl_g7_max(ln, nl);
+    for (int j = 0; j < nl; j++) {
+        int n = ln[j].n;
+        double cw = n ? w / n : 0, y0 = j * (L + gp);
+        for (int i = 0; i < n; i++) {
+            if (!(ln[j].c[i] > 0)) continue;
+            double th = L * ln[j].c[i] / max;
+            if (th < 1) th = 1;
+            double tw = ceil(cw) - (cw > 3 ? 1 : 0);
+            if (tw < 1) tw = 1;
+            gm_push(g, "tick", floor(i * cw), y0 + L - th, tw, th, ln[j].tok);
+        }
+        if (n && ln[j].span[0] <= ln[j].span[1]) {
+            int a = ln[j].span[0] < 0 ? 0 : ln[j].span[0];
+            int b = ln[j].span[1] > n - 1 ? n - 1 : ln[j].span[1];
+            if (b >= a) {
+                double sw = ceil((b - a + 1) * cw);
+                if (sw < 1) sw = 1;
+                gm_push(g, "span", floor(a * cw), y0 + L, sw, 1, "--sev-crit");
+            }
+        }
+    }
+    for (int i = 0; i < nm; i++) gm_push(g, "session", marks[i], 0, 2, h, "--ink");
+    if (!g->n) gl_dash(g, w, h);
+}
+
 /* ── the JS, pinned as served ───────────────────────────────────── */
 
 /* Seen red with web/ui/glyph.js left out of index.html's includes, and
@@ -1531,6 +1628,313 @@ static void test_v1_review_wiring(void) {
     WT_HAS(p, "    if (e.key === \"[\" && window.SlothFacts) SlothFacts.paint();");
 }
 
+/* ── V3: G3, G7 and the air picture ─────────────────────────────── */
+
+/* V3's JS, whole: G3, its values, G7 and its maximum, and the
+ * painter's two horizon tints. Seen red with one character changed in
+ * each (G3's "--heat-2", g3Vals' "max / G3_BANDS", g7's "Math.max(1,",
+ * and the 0.35). */
+static void test_the_page_carries_v3s_js(void) {
+    const char *p = page();
+    WT_HAS(p, "  var G3_BANDS = 2;\n"
+              "  function g3(v, opt) {\n"
+              "    var m = [], w = opt.w, h = opt.h, n = v ? v.length : 0, i, any = false;\n"
+              "    var warm = opt.warm || [];\n"
+              "    for (i = 0; i < n; i++) if (gnum(v[i]) || warm[i]) any = true;\n"
+              "    if (!any) { m.push(dash(w, h)); return m; }\n"
+              "    var cw = w / n;\n"
+              "    for (i = 0; i < n; i++) {\n"
+              "      var x = Math.floor(i * cw), cwi = Math.max(1, Math.ceil(cw)), a = v[i];\n"
+              "      if (!gnum(a)) {\n"
+              "        if (warm[i]) m.push([\"warm\", x, 0, cwi, h, \"--rule\"]);\n"
+              "        continue;\n"
+              "      }\n"
+              "      if (!(a > 0)) { m.push([\"base\", x, h - 1, cwi, 1, \"--rule\"]); continue; }\n"
+              "      var b1 = Math.min(1, a);\n"
+              "      m.push([\"hz1\", x, h - h * b1, cwi, h * b1, \"--data\"]);\n"
+              "      if (a > 1) {\n"
+              "        var b2 = Math.min(1, a - 1);\n"
+              "        m.push([\"hz2\", x, h - h * b2, cwi, h * b2, opt.hot ? \"--heat-2\" : \"--data\"]);\n"
+              "      }\n"
+              "      if (a > G3_BANDS) m.push([\"clip\", x, 0, cwi, 1, \"--ink\"]);\n"
+              "    }\n"
+              "    return m;\n"
+              "  }\n");
+    WT_HAS(p, "  function g3Vals(row, k, rate, max) {\n"
+              "    var v = [], warm = [], i, sc = row && row.scale, z = !!(sc && sc.kind === \"z\");\n"
+              "    var cells = (row && row.cells) || [];\n"
+              "    for (i = 0; i < cells.length; i++) {\n"
+              "      var c = cells[i];\n"
+              "      warm.push(false);\n"
+              "      if (z) {\n"
+              "        var zi = row.z ? row.z[i] : null;\n"
+              "        if (gnum(zi)) v.push(k > 0 ? Math.max(0, zi) / k : 0);\n"
+              "        else { v.push(null); warm[i] = gnum(c); }\n"
+              "      } else v.push(!gnum(c) ? null : max > 0 ? c * rate / (max / G3_BANDS) : 0);\n"
+              "    }\n"
+              "    return { v: v, warm: warm, hot: z };\n"
+              "  }\n");
+    WT_HAS(p, "  function g7Max(lanes) {\n"
+              "    var max = 0;\n"
+              "    for (var j = 0; lanes && j < lanes.length; j++)\n"
+              "      for (var i = 0, c = lanes[j].counts || []; i < c.length; i++)\n"
+              "        if (gnum(c[i]) && c[i] > max) max = c[i];\n"
+              "    return max;\n"
+              "  }\n");
+    WT_HAS(p, "  function g7(lanes, opt) {\n"
+              "    var m = [], w = opt.w, L = opt.lane, gp = opt.gap || 0, max = g7Max(lanes), i, j;\n"
+              "    for (j = 0; lanes && j < lanes.length; j++) {\n"
+              "      var c = lanes[j].counts || [], n = c.length, cw = n ? w / n : 0, y0 = j * (L + gp);\n"
+              "      for (i = 0; i < n; i++) {\n"
+              "        if (!gnum(c[i]) || !(c[i] > 0)) continue;\n"
+              "        var th = Math.max(1, L * c[i] / max);\n"
+              "        m.push([\"tick\", Math.floor(i * cw), y0 + L - th, Math.max(1, Math.ceil(cw) - (cw > 3 ? 1 : 0)),\n"
+              "                th, lanes[j].token]);\n"
+              "      }\n"
+              "      var sp = lanes[j].spans || [];\n"
+              "      for (i = 0; n && i < sp.length; i++) {\n"
+              "        var a = sp[i][0] < 0 ? 0 : sp[i][0], b = sp[i][1] > n - 1 ? n - 1 : sp[i][1];\n"
+              "        if (b < a) continue;\n"
+              "        m.push([\"span\", Math.floor(a * cw), y0 + L, Math.max(1, Math.ceil((b - a + 1) * cw)), 1,\n"
+              "                lanes[j].spanToken || \"--sev-crit\"]);\n"
+              "      }\n"
+              "    }\n"
+              "    var sm = opt.marks || [];\n"
+              "    for (i = 0; i < sm.length; i++) if (gnum(sm[i])) m.push([\"session\", sm[i], 0, 2, opt.h, \"--ink\"]);\n"
+              "    if (!m.length) m.push(dash(w, opt.h));\n"
+              "    return m;\n"
+              "  }\n");
+    WT_HAS(p, "      } else if (k === \"hz1\" || k === \"hz2\") {\n"
+              "        g.globalAlpha = k === \"hz1\" ? 0.35 : 0.7;");
+}
+
+/* G3's states (§5 G3, R5): nothing observed is the dash; a column
+ * nothing was observed in draws nothing; observed and quiet is a 1 px
+ * --rule base; warming a --rule cell the strip's height; under one band
+ * the first band alone at its share of the height; between one and two
+ * the first band full and the second at its share; past two both full
+ * and a clip mark along the top. Seen red with the base mark taken out
+ * of the port (a quiet column and an unobserved one drew alike), with
+ * the clip mark's test moved to a > 1, and, for the column that draws
+ * nothing, with the port pushing a gap mark there. */
+static void test_g3_states(void) {
+    gmarks_t g;
+    double v0[3] = { 0, 0, 0 };
+    int no[3] = { 0, 0, 0 };
+    gl_g3(v0, no, NULL, 3, 90, 16, 0, &g);
+    WT_EQ(g.n, 1);
+    WT_EQ(gm_count(&g, "dash"), 1);
+    double v[6] = { 0, 0, 0, 0.5, 1.5, 2.5 };
+    int has[6] = { 0, 0, 1, 1, 1, 1 };
+    int warm[6] = { 0, 1, 0, 0, 0, 0 };
+    gl_g3(v, has, warm, 6, 60, 16, 0, &g);
+    WT_EQ(gm_count(&g, "dash"), 0);
+    WT_EQ(gm_count(&g, "warm"), 1);
+    WT_ASSERT(near(gm_get(&g, "warm").x, 10) && near(gm_get(&g, "warm").h, 16));
+    WT_ASSERT(!strcmp(gm_get(&g, "warm").tok, "--rule"));
+    WT_EQ(gm_count(&g, "base"), 1);
+    WT_ASSERT(near(gm_get(&g, "base").x, 20) && near(gm_get(&g, "base").y, 15) &&
+              near(gm_get(&g, "base").h, 1));
+    WT_EQ(gm_count(&g, "hz1"), 3);
+    WT_ASSERT(near(gm_get(&g, "hz1").x, 30) && near(gm_get(&g, "hz1").h, 8) &&
+              near(gm_get(&g, "hz1").y, 8));
+    WT_EQ(gm_count(&g, "hz2"), 2);
+    WT_ASSERT(near(gm_get(&g, "hz2").x, 40) && near(gm_get(&g, "hz2").h, 8));
+    WT_ASSERT(near(gm_last(&g, "hz2").h, 16));
+    WT_EQ(gm_count(&g, "clip"), 1);
+    WT_ASSERT(near(gm_get(&g, "clip").x, 50) && near(gm_get(&g, "clip").y, 0));
+    /* Nothing for the column nothing was observed in. */
+    for (int i = 0; i < g.n; i++) WT_ASSERT(!near(g.m[i].x, 0));
+}
+
+/* F8 and R1: out of band is the heat ramp and only on a z scale, and
+ * only the second band. The out-of-band case seen to fail when the band
+ * is widened (§9): z 3 at k 2 is in the second band; at k 4 it is not
+ * (that absence seen red with the second band's test moved to a > 0.5).
+ * Seen red too with the port's second band always --heat-2. */
+static void test_g3_out_of_band_only_on_z(void) {
+    double cells[1] = { 12 }, z[1] = { 3 }, v[1];
+    int hc[1] = { 1 }, hz[1] = { 1 }, has[1], warm[1];
+    gmarks_t g;
+    int hot = gl_g3_vals(cells, hc, 1, z, hz, 1, 2.0, 1, 0, v, has, warm);
+    WT_ASSERT(hot && has[0] && near(v[0], 1.5));
+    gl_g3(v, has, warm, 1, 10, 16, hot, &g);
+    WT_EQ(gm_count(&g, "hz2"), 1);
+    WT_ASSERT(!strcmp(gm_get(&g, "hz2").tok, "--heat-2"));
+    WT_ASSERT(!strcmp(gm_get(&g, "hz1").tok, "--data"));
+    hot = gl_g3_vals(cells, hc, 1, z, hz, 1, 4.0, 1, 0, v, has, warm);
+    gl_g3(v, has, warm, 1, 10, 16, hot, &g);
+    WT_EQ(gm_count(&g, "hz2"), 0);
+    /* An absolute scale's second band is the same ink as its first. */
+    hot = gl_g3_vals(cells, hc, 0, NULL, NULL, 1, 2.0, 1, 16, v, has, warm);
+    WT_ASSERT(!hot && near(v[0], 1.5));
+    gl_g3(v, has, warm, 1, 10, 16, hot, &g);
+    WT_ASSERT(!strcmp(gm_get(&g, "hz2").tok, "--data"));
+}
+
+/* G3's values (F8): an absolute scale is the channel's own max in two
+ * halves, a counter's cell at its count per minute; a z scale's second
+ * band begins at k, a channel quieter than normal is flat (0, not
+ * negative), and a z the baseline could not give is warming where the
+ * cell has a value and nothing where it has none. Seen red with the
+ * rate left out (40 frames in 80 s read 1.33, not 1.0) and with the
+ * negative z let through. */
+static void test_g3_values(void) {
+    double cells[4] = { 5, 7.5, 0, 40 }, v[4];
+    int hc[4] = { 1, 1, 0, 1 }, has[4], warm[4];
+    gl_g3_vals(cells, hc, 0, NULL, NULL, 3, 2.0, 1, 10, v, has, warm);
+    WT_ASSERT(has[0] && near(v[0], 1.0));
+    WT_ASSERT(has[1] && near(v[1], 1.5));
+    WT_ASSERT(!has[2] && !warm[2]);
+    gl_g3_vals(cells + 3, hc + 3, 0, NULL, NULL, 1, 2.0, 60.0 / 80, 60, v, has, warm);
+    WT_ASSERT(has[0] && near(v[0], 1.0));
+    double z[4] = { -2, 0, 0, 5 };
+    int hz[4] = { 1, 0, 0, 1 };
+    gl_g3_vals(cells, hc, 1, z, hz, 4, 2.5, 1, 0, v, has, warm);
+    WT_ASSERT(has[0] && near(v[0], 0));
+    WT_ASSERT(!has[1] && warm[1]);
+    WT_ASSERT(!has[2] && !warm[2]);
+    WT_ASSERT(has[3] && near(v[3], 2.0));
+    /* The JS says the same: z rows hot, absolute not. */
+    const char *p = page();
+    WT_HAS(p, "        if (gnum(zi)) v.push(k > 0 ? Math.max(0, zi) / k : 0);");
+}
+
+/* R10: with every token one grey, a strip's bands, base, warming cell
+ * and clip still differ by kind and position. */
+static void test_g3_reads_in_greyscale(void) {
+    double v[4] = { 0, 0, 0.5, 2.5 };
+    int has[4] = { 0, 1, 1, 1 }, warm[4] = { 1, 0, 0, 0 };
+    gmarks_t g;
+    gl_g3(v, has, warm, 4, 40, 16, 1, &g);
+    gm_grey(&g);
+    WT_ASSERT(gm_all_grey(&g));
+    WT_ASSERT(near(gm_get(&g, "warm").h, 16));
+    WT_ASSERT(near(gm_get(&g, "base").h, 1) && near(gm_get(&g, "base").y, 15));
+    WT_ASSERT(near(gm_get(&g, "hz1").h, 8));
+    WT_EQ(gm_count(&g, "hz2"), 1);
+    WT_ASSERT(near(gm_get(&g, "clip").y, 0));
+}
+
+/* G7 (F12): one scale for every lane, the tallest column of any lane at
+ * the lane's height, so one device first seen beside thirty alerts is a
+ * 1 px tick and not as tall as they are; zero draws nothing; a flood
+ * span underlines its columns; a session is full height in --ink; no
+ * event at all is the dash. Seen red with each lane scaled to its own
+ * largest (the device lane's tick at full height), and with the 1 px
+ * floor taken out (the device tick 0.8 px). */
+static void test_g7_rug(void) {
+    glane_t ln[2];
+    memset(ln, 0, sizeof(ln));
+    ln[0].n = 10; ln[0].tok = "--tui-normal"; ln[0].c[3] = 1; ln[0].span[0] = 1; ln[0].span[1] = 0;
+    ln[1].n = 10; ln[1].tok = "--sev-warn"; ln[1].c[3] = 30; ln[1].c[7] = 15;
+    ln[1].span[0] = 6; ln[1].span[1] = 8;
+    double marks[1] = { 55 };
+    gmarks_t g;
+    gl_g7(ln, 2, 100, 72, 24, 8, marks, 1, &g);
+    WT_EQ(gl_g7_max(ln, 2), 30);
+    WT_EQ(gm_count(&g, "tick"), 3);
+    gmark_t d = gm_get(&g, "tick");
+    WT_ASSERT(!strcmp(d.tok, "--tui-normal") && near(d.h, 1) && near(d.y, 23) && near(d.x, 30));
+    gmark_t a = g.m[1];
+    WT_ASSERT(!strcmp(a.kind, "tick") && !strcmp(a.tok, "--sev-warn") && near(a.h, 24) && near(a.y, 32));
+    WT_ASSERT(near(g.m[2].h, 12));
+    WT_EQ(gm_count(&g, "span"), 1);
+    WT_ASSERT(near(gm_get(&g, "span").x, 60) && near(gm_get(&g, "span").w, 30) &&
+              near(gm_get(&g, "span").y, 56));
+    WT_EQ(gm_count(&g, "session"), 1);
+    WT_ASSERT(near(gm_get(&g, "session").h, 72) && !strcmp(gm_get(&g, "session").tok, "--ink"));
+    WT_EQ(gm_count(&g, "dash"), 0);
+    glane_t none[1];
+    memset(none, 0, sizeof(none));
+    none[0].n = 10; none[0].tok = "--tui-normal"; none[0].span[0] = 1;
+    gl_g7(none, 1, 100, 72, 24, 8, NULL, 0, &g);
+    WT_EQ(g.n, 1);
+    WT_EQ(gm_count(&g, "dash"), 1);
+    /* R10: in one grey, the lanes still differ by position. */
+    gl_g7(ln, 2, 100, 72, 24, 8, marks, 1, &g);
+    gm_grey(&g);
+    WT_ASSERT(gm_all_grey(&g));
+    WT_ASSERT(g.m[0].y < 24 && g.m[1].y >= 32);
+}
+
+/* §6.3 and §6.7 as the page wires them: the channels panel's horizon is
+ * the default and the stacked grid one control away, both fetched so
+ * the control redraws without asking again; R11 per channel, reset with
+ * the metric or the scope; the drill-in beside the strips; the emitters
+ * nearest first with the SSID count as squares; the chains rug that
+ * collapses with "0 deauth in the window"; the clients panel's rows
+ * from src:probe nearest first; History's strip as G7 with its caption.
+ * The two absences seen red with the old "+N ssids" line put back and
+ * with a deauthChart() stub added; the rest are the page's own lines. */
+static void test_v3_wiring(void) {
+    const char *p = page();
+    WT_HAS(p, "<option value=\"horizon\" selected>against normal (horizon)</option>");
+    WT_HAS(p, "<option value=\"mix\">who transmits (stacked)</option>");
+    WT_HAS(p, "    if (hz) horizonGrid(); else mixGrid();");
+    WT_HAS(p, "  $(\"w-grid\").addEventListener(\"change\", function () { if (view === \"wifi\") channelGrid(); });");
+    WT_HAS(p, "    if (WF.g3of !== of) { WF.g3max = {}; WF.g3of = of; }");
+    WT_HAS(p, "        max = o.g3max[r.key] = Math.max(o.g3max[r.key] || 0, num(sc.max) ? sc.max : 0);");
+    WT_HAS(p, "      var gv = glyph.g3Vals(row, o.k, rate, max);");
+    WT_HAS(p, "    var rate = hz && hz.kind === \"counter\" && hz.col_s > 0 ? 60 / hz.col_s : 1;");
+    WT_HAS(p, "    SlothAir.drill($(\"w-drill\"), rows, WF.cur && WF.geo && WF.cur.c < WF.geo.cols ? WF.cur.c : -1);");
+    WT_HAS(p, "        g.fillStyle = H.txColor(H.txOf(m[e]));");
+    WT_HAS(p, "<option value=\"signal\" selected>signal (near first)</option>");
+    WT_HAS(p, "  var AP_SORTS = { \"signal\": 1, \"last\": 1, \"ssids\": 1, \"karma\": 1, \"bssid\": 1 };");
+    WT_HAS(p, "\" \" + \"\\u25aa\".repeat(Math.min(8, a.ssid_count)) + (a.ssid_count > 8 ? \"+\" : \"\"));");
+    WT_LACKS(p, "\" ssids\"));");
+    WT_HAS(p, "    c.hidden = !rows.length;\n    if (!rows.length) return { max: 0, lanes: 0, busy: 0 };");
+    WT_HAS(p, "n: j.cols, state: nb ? \"\" : \"0 deauth in the window\" }));");
+    WT_HAS(p, "      var rg = SlothAir.rug($(\"w-deauth\"), j), nb = rg.busy;");
+    WT_LACKS(p, "function deauthChart(");
+    WT_HAS(p, "    var q = \"src:probe seen:<\" + seenWord(r.win);");
+    WT_HAS(p, "    getJSON(\"/api/devices?limit=\" + CL_PAGE + \"&sort=signal&q=\" + encodeURIComponent(q))");
+    WT_HAS(p, "      SlothRf.cell(row.appendChild(el(\"span\", \"c-sig d-dim\")), d.rf, num(d.signal) ? d.signal : null);");
+    WT_HAS(p, "      drawStrip(cv, d.presence, 144, glyph.firstCell(d.first_seen, WF.clFrom, 600, 144));");
+    WT_HAS(p, "id: \"wclients\"");
+    WT_HAS(p, "    glyph.paint(c, glyph.g7(lanes, { w: W, h: Hh, lane: L, gap: HS_GAP, marks: marks }), tok);");
+    WT_HAS(p, "scale: \"one scale, tallest \" + fmt(glyph.g7Max(lanes)) +");
+    WT_HAS(p, "<div class=\"sub\" id=\"h-strip-note\"></div>");
+    WT_HAS(p, "    if (view === \"wifi\") wifi();\n  });");
+    /* The four panels in §6.3's order. */
+    const char *a = strstr(p, "<canvas class=\"wfall\" id=\"w-heat\"");
+    const char *b = strstr(p, "<div class=\"aprow dhead\" id=\"w-aps-head\">");
+    const char *c = strstr(p, "<canvas class=\"rug\" id=\"w-deauth\"");
+    const char *d = strstr(p, "<canvas class=\"chart\" id=\"w-probe\"");
+    const char *e = strstr(p, "<div class=\"dhead\" id=\"w-cl-head\">");
+    WT_ASSERT(a && b && c && d && e && a < b && b < c && c < d && d < e);
+}
+
+/* The V3 review's fixes, as the page wires them. R3: each G3 strip is
+ * on its own scale, so it prints its top beside its key (z for a z
+ * strip); the key alone, as before, seen red by putting the old
+ * `r.key + (z ? " z" : "")` label back. R4: when the columns any
+ * channel was observed in span under a tenth of the window, every strip
+ * draws those columns only, through glyph.win()'s rule and words, and a
+ * pick maps back through the first column drawn; seen red with the
+ * shrink's assignment taken out and with gridPick's c0 offset removed.
+ * F16: the probe-client chart is hidden with no points (seen red with
+ * the hide removed). A focused clients row opens on Enter like every
+ * other row (seen red with clrow left out of the list). */
+static void test_v3_review_wiring(void) {
+    const char *p = page();
+    WT_HAS(p, "      tops.push(sc && sc.kind === \"z\" ? \"z\" : sc ? H.fmt(max) : \"\");");
+    WT_HAS(p, "      g.fillText(tops[j], (LABEL - 4) * dpr, ty);");
+    WT_HAS(p, "  var ROW = 18, LABEL = 76;");
+    WT_LACKS(p, "r.key + (z ? \" z\" : \"\")");
+    WT_HAS(p, "      var wn = glyph.win([[hz.from + lo * hz.col_s, 0], [hz.from + (hi + 1) * hz.col_s, 0]],\n"
+              "                         hz.from, hz.to);\n"
+              "      if (wn.shrunk) { c0 = lo; c1 = hi; out.win = wn; }");
+    WT_HAS(p, "      if (row) row = { scale: sc, cells: (row.cells || []).slice(c0, c1 + 1),\n"
+              "                       z: row.z ? row.z.slice(c0, c1 + 1) : null };");
+    WT_HAS(p, "    var col = Math.floor((px - geo.x0) / geo.cw) + (geo.c0 || 0), row = Math.floor(py / geo.rh);");
+    WT_HAS(p, "state: !rows.length ? \"no data\" : [o.win ? o.win.text : \"\",");
+    WT_HAS(p, "      $(\"w-probe\").hidden = !s.points.length;\n"
+              "      if (s.points.length) draw($(\"w-probe\"), s.points,");
+    WT_HAS(p, "t.classList.contains(\"clrow\") || t.classList.contains(\"go\"))) {");
+    WT_HAS(p, "    txColor: txColor, txOf: txOf, fmt: fmt });");
+}
+
 void run_glyph_tests(void) {
     WT_RUN(test_the_page_carries_the_ported_js);
     WT_RUN(test_g1_empty_is_a_dash);
@@ -1570,4 +1974,12 @@ void run_glyph_tests(void) {
     WT_RUN(test_g2_words_are_sloths);
     WT_RUN(test_new_mark_and_first_cell);
     WT_RUN(test_v2_wiring);
+    WT_RUN(test_the_page_carries_v3s_js);
+    WT_RUN(test_g3_states);
+    WT_RUN(test_g3_out_of_band_only_on_z);
+    WT_RUN(test_g3_values);
+    WT_RUN(test_g3_reads_in_greyscale);
+    WT_RUN(test_g7_rug);
+    WT_RUN(test_v3_wiring);
+    WT_RUN(test_v3_review_wiring);
 }

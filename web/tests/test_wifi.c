@@ -3,12 +3,15 @@
  * slothweb's rollup and store, the AP table over a sloth.db generated
  * from sloth's own DDL (sdb_gen.c), on the pinned clock SDB_NOW; and
  * the page's WiFi view, its elements and its fetches. */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "sdb_gen.h"
+#include "web_anomaly.h"
+#include "web_baseline.h"
 #include "web_assets.h"
 #include "web_routes.h"
 #include "web_series.h"
@@ -132,7 +135,7 @@ static void test_channels_grid(void) {
     item(cells, 89, v, sizeof(v)); WT_ASSERT(!strcmp(v, "7.5"));
     WT_EQ(cells_of(b, "key", "36", cells, sizeof(cells)), 0);
     item(cells, 45, v, sizeof(v)); WT_ASSERT(!strcmp(v, "1.5"));
-    WT_HAS(b, "\"shown\":5,\"more\":false}");
+    WT_HAS(b, "\"shown\":5,\"more\":false,\"scale_s\":86400}");
     /* The counter: the cell is the sum of its buckets. */
     snprintf(q, sizeof(q), "metric=ctrl_total&from=%lld&to=%lld&cols=90", T - 3600, T);
     WT_EQ(route(&H, "/api/wifi/channels", q), 200);
@@ -192,7 +195,7 @@ static void test_channels_bounds_and_refusals(void) {
     }
     WT_EQ(route(&H, "/api/wifi/channels", ""), 200);
     WT_HAS(body_of(g_out), "\"total_keys\":45,");
-    WT_HAS(body_of(g_out), "\"shown\":40,\"more\":true}");
+    WT_HAS(body_of(g_out), "\"shown\":40,\"more\":true,\"scale_s\":86400}");
     char q[160];
     static const char *const bad[][2] = {
         { "metric=xyz", "unknown_metric" }, { "cols=0", "bad_cols" },
@@ -221,6 +224,154 @@ static void test_channels_bounds_and_refusals(void) {
     WT_EQ(route(&h0, "/api/wifi/deauth", ""), 503);
     WT_EQ(route(&h0, "/api/wifi/aps", ""), 503);
     WT_HAS(body_of(g_out), "{\"error\":\"no_sloth_db\"");
+    mem_down();
+}
+
+/* The scale member of a row's answer, as text: from "scale": to the end
+ * of the row's object, into out. */
+static int scale_of(const char *b, const char *key, char *out, size_t cap) {
+    char want[64];
+    snprintf(want, sizeof(want), "{\"key\":\"%s\"", key);
+    const char *p = strstr(b, want);
+    const char *c = p ? strstr(p, "\"scale\":{") : NULL;
+    const char *n = p ? strstr(p + 1, "{\"key\":") : NULL;
+    out[0] = '\0';
+    if (!c || (n && c > n)) return -1;
+    const char *e = strchr(c, '}');
+    if (!e) return -1;
+    snprintf(out, cap, "%.*s", (int)(e - c + 1), c);
+    return 0;
+}
+
+/* G3's absolute scale (F8, slice V3): a channel's own largest value
+ * over the day the fine ring holds (no store), not the busiest cell in
+ * view: an hour where channel 6 held 2 APs reads 2 of 9, because it
+ * held 9 earlier in the day. A counter's is its busiest minute as a
+ * count per minute, the fine buckets of one minute summed. Each seen
+ * red with chan_scale_max() reading no points (the scale fell to the
+ * window's own cells), and the counter's with the minute sum taken out
+ * (30, one bucket's). */
+static void test_channels_absolute_scale(void) {
+    mem_up();
+    web_rollup_add(&ru, WM_WIFI_AP_COUNT, "6", 9, T - 20000);
+    web_rollup_add(&ru, WM_WIFI_AP_COUNT, "6", 2, T - 600);
+    web_rollup_add(&ru, WM_WIFI_AP_COUNT, "11", 3, T - 600);
+    long long m0 = (T - 7200) - (T - 7200) % 60;
+    web_rollup_add(&ru, WM_WIFI_CTRL_TOTAL, "6", 30, m0 + 5);
+    web_rollup_add(&ru, WM_WIFI_CTRL_TOTAL, "6", 30, m0 + 15);
+    web_rollup_add(&ru, WM_WIFI_CTRL_TOTAL, "6", 4, T - 100);
+    char q[160], sc[160];
+    snprintf(q, sizeof(q), "from=%lld&to=%lld&cols=90", T - 3600, T);
+    WT_EQ(route(&H, "/api/wifi/channels", q), 200);
+    const char *b = body_of(g_out);
+    WT_EQ(scale_of(b, "6", sc, sizeof(sc)), 0);
+    WT_ASSERT(!strcmp(sc, "\"scale\":{\"kind\":\"absolute\",\"max\":9}"));
+    WT_EQ(scale_of(b, "11", sc, sizeof(sc)), 0);
+    WT_ASSERT(!strcmp(sc, "\"scale\":{\"kind\":\"absolute\",\"max\":3}"));
+    WT_LACKS(b, "\"z\":[");
+    snprintf(q, sizeof(q), "metric=ctrl_total&from=%lld&to=%lld&cols=90", T - 3600, T);
+    WT_EQ(route(&H, "/api/wifi/channels", q), 200);
+    b = body_of(g_out);
+    WT_EQ(scale_of(b, "6", sc, sizeof(sc)), 0);
+    if (strcmp(sc, "\"scale\":{\"kind\":\"absolute\",\"max\":60}")) fprintf(stderr, "    %s\n", sc);
+    WT_ASSERT(!strcmp(sc, "\"scale\":{\"kind\":\"absolute\",\"max\":60}"));
+    /* No baseline (no anomaly engine wired): never z. */
+    WT_LACKS(b, "\"kind\":\"z\"");
+    WT_HAS(b, "\"scale_s\":86400}");
+    mem_down();
+}
+
+/* ctrl_total against its hour-of-week baseline (F8): each cell's count
+ * per minute (40 frames in an 80 s cell is 30) scored against the cell
+ * its UTC hour bucket was filed under with the minute spread, as A1
+ * scores; a cell in an hour the baseline has not warmed is null and
+ * counted; an empty cell null. ap_count keeps its absolute scale even
+ * with a baseline. Seen red with the count per minute taken as the
+ * cell's sum (z 9.49, not 6.32), and with the warming test removed (a
+ * number for the hour never fed, and no z_warming). */
+static void test_channels_z_scale(void) {
+    mem_up();
+    web_baseline_t bl;
+    WT_EQ(web_baseline_init(&bl, 64), 0);
+    static web_anomaly_t an;
+    memset(&an, 0, sizeof(an));
+    an.cfg.bl = &bl;
+    m4.anomaly = &an;
+    long long h = T - 3600, wk = 7 * 86400;
+    for (int k = 3; k >= 1; k--) {
+        WT_EQ(web_baseline_feed(&bl, WM_WIFI_CTRL_TOTAL, "6", h - k * wk, 10, 1), 0);
+        WT_EQ(web_baseline_feed(&bl, WM_WIFI_AP_COUNT, "6", h - k * wk, 3, 1), 0);
+    }
+    web_rollup_add(&ru, WM_WIFI_CTRL_TOTAL, "6", 40, T - 100);   /* col 88, hour h */
+    web_rollup_add(&ru, WM_WIFI_CTRL_TOTAL, "6", 40, T - 7000);  /* col 2, hour h - 3600 */
+    web_rollup_add(&ru, WM_WIFI_AP_COUNT, "6", 3, T - 100);
+    char q[160], cells[4096], v[32], want[32];
+    snprintf(q, sizeof(q), "metric=ctrl_total&from=%lld&to=%lld&cols=90", T - 7200, T);
+    WT_EQ(route(&H, "/api/wifi/channels", q), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"col_s\":80,");
+    WT_HAS(b, "{\"key\":\"6\",\"band\":\"2.4\",\"cells\":[");
+    WT_HAS(b, "\"scale\":{\"kind\":\"z\"},\"z\":[");
+    WT_EQ(cells_of(b, "key", "6", cells, sizeof(cells)), 0);
+    const char *z = strstr(b, "\"z\":[");
+    const char *ze = z ? strchr(z, ']') : NULL;
+    WT_ASSERT(z && ze);
+    if (z && ze) {
+        snprintf(cells, sizeof(cells), "%.*s", (int)(ze - z - 5), z + 5);
+        web_bl_cell_t c[WEB_BL_CELLS];
+        WT_EQ(web_baseline_cells(&bl, WM_WIFI_CTRL_TOTAL, "6", c), 0);
+        const web_bl_cell_t *cl = &c[web_bl_cell_index(h)];
+        double sd = web_bl_cell_sd(WM_WIFI_CTRL_TOTAL, cl, NULL, NULL);
+        snprintf(want, sizeof(want), "%.2f", (30.0 - cl->mean) / sd);
+        item(cells, 88, v, sizeof(v));
+        if (strcmp(v, want)) fprintf(stderr, "    z %s, want %s\n", v, want);
+        WT_ASSERT(!strcmp(v, want));
+        WT_ASSERT(fabs(atof(v) - 6.32) < 0.01);
+        item(cells, 2, v, sizeof(v));
+        WT_ASSERT(!strcmp(v, "null"));                 /* warming */
+        item(cells, 50, v, sizeof(v));
+        WT_ASSERT(!strcmp(v, "null"));                 /* empty */
+    }
+    WT_HAS(b, "],\"z_warming\":1}");
+    /* A gauge stays absolute, baseline or not. */
+    snprintf(q, sizeof(q), "from=%lld&to=%lld&cols=90", T - 7200, T);
+    WT_EQ(route(&H, "/api/wifi/channels", q), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"scale\":{\"kind\":\"absolute\",\"max\":3}");
+    WT_LACKS(b, "\"z\":[");
+    m4.anomaly = NULL;
+    web_baseline_destroy(&bl);
+    mem_down();
+}
+
+/* Why the chains rug filters its lanes (web/ui/air.js busy(), #171 V3
+ * review): /api/wifi/deauth lists every bssid the rollup holds, not
+ * only those with a frame in the range, so a bssid that deauthed five
+ * hours before a 1 h window comes back with every cell null. Drawn as
+ * a lane, that is a name over an empty box, which F16 removes. */
+static void test_deauth_lists_quiet_bssids(void) {
+    mem_up();
+    web_rollup_add(&ru, WM_WIFI_DEAUTH, "aa:00:00:00:00:01", 9, T - 18000);
+    web_rollup_add(&ru, WM_WIFI_DEAUTH, "aa:00:00:00:00:02", 4, T - 300);
+    char q[160], cells[4096];
+    snprintf(q, sizeof(q), "from=%lld&to=%lld&cols=90", T - 3600, T);
+    WT_EQ(route(&H, "/api/wifi/deauth", q), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"total_keys\":2,");
+    WT_EQ(cells_of(b, "bssid", "aa:00:00:00:00:01", cells, sizeof(cells)), 0);
+    WT_ASSERT(strspn(cells, "nul,") == strlen(cells));      /* every cell null */
+    WT_EQ(cells_of(b, "bssid", "aa:00:00:00:00:02", cells, sizeof(cells)), 0);
+    WT_ASSERT(strstr(cells, "4") != NULL);
+    /* And the page draws a lane only for a bssid with a frame or a
+     * flood, collapsing on none. Seen red with .filter(busy) taken out
+     * of rug(). */
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "    var all = ((j && j.bssids) || []).filter(busy), rows = all.slice(0, LANES);\n"
+              "    c.hidden = !rows.length;\n"
+              "    if (!rows.length) return { max: 0, lanes: 0, busy: 0 };");
+    WT_HAS(p, "    if ((r.floods || []).length) return true;\n"
+              "    for (var i = 0, c = r.cells || []; i < c.length; i++) if (num(c[i]) && c[i] > 0) return true;\n"
+              "    return false;");
     mem_down();
 }
 
@@ -259,6 +410,9 @@ void run_wifi_tests(void) {
     WT_RUN(test_channels_grid);
     WT_RUN(test_channels_bounds_and_refusals);
     WT_RUN(test_unknown_band);
+    WT_RUN(test_channels_absolute_scale);
+    WT_RUN(test_channels_z_scale);
+    WT_RUN(test_deauth_lists_quiet_bssids);
     WT_RUN(test_page_carries_the_wifi_view);
 }
 
@@ -342,6 +496,38 @@ static void test_channels_from_the_store(void) {
     WT_HAS(b, "\"tier\":\"hour\",\"step\":3600,");
     WT_HAS(b, "{\"key\":\"1\",\"band\":\"2.4\"");
     WT_LACKS(b, "\"149\"");                  /* minute rows, not hour */
+    db_down();
+}
+
+/* G3's rows and scale with a store (§5 G3): every channel seen in the
+ * last 30 days keeps its row in an hour's grid, its cells empty, so a
+ * channel that went quiet is seen to; its scale is its hour rows' own
+ * largest over the 30 days. Seen red with the 30 d key union taken out
+ * (no 149), and with chan_scale_max() reading the fine tier (max 0). */
+static void test_channels_of_the_last_30_days(void) {
+    db_up();
+    web_qrow_t r[3];
+    qrow(&r[0], WEB_TIER_HOUR, WM_WIFI_AP_COUNT, "149", T - 20 * 86400, 4);
+    r[0].max = 7;
+    qrow(&r[1], WEB_TIER_HOUR, WM_WIFI_AP_COUNT, "1", T - 40 * 86400, 5);   /* past 30 d */
+    qrow(&r[2], WEB_TIER_HOUR, WM_WIFI_AP_COUNT, "6", T - 2 * 86400, 2);
+    WT_EQ(web_store_write(&st, r, 3), 0);
+    web_rollup_add(&ru, WM_WIFI_AP_COUNT, "6", 1, T - 600);
+    char q[160], sc[160], cells[4096], v[32];
+    snprintf(q, sizeof(q), "from=%lld&to=%lld&cols=90", T - 3600, T);
+    WT_EQ(route(&H, "/api/wifi/channels", q), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "{\"key\":\"149\",\"band\":\"5\",\"cells\":[null,");
+    WT_EQ(cells_of(b, "key", "149", cells, sizeof(cells)), 0);
+    item(cells, 89, v, sizeof(v));
+    WT_ASSERT(!strcmp(v, "null"));
+    WT_EQ(scale_of(b, "149", sc, sizeof(sc)), 0);
+    WT_ASSERT(!strcmp(sc, "\"scale\":{\"kind\":\"absolute\",\"max\":7}"));
+    WT_EQ(scale_of(b, "6", sc, sizeof(sc)), 0);
+    WT_ASSERT(!strcmp(sc, "\"scale\":{\"kind\":\"absolute\",\"max\":2}"));
+    WT_LACKS(b, "{\"key\":\"1\",");
+    WT_HAS(b, "\"total_keys\":2,");
+    WT_HAS(b, "\"scale_s\":2592000}");
     db_down();
 }
 
@@ -528,8 +714,12 @@ void run_wifi_tests(void) {
     WT_RUN(test_channels_grid);
     WT_RUN(test_channels_bounds_and_refusals);
     WT_RUN(test_unknown_band);
+    WT_RUN(test_channels_absolute_scale);
+    WT_RUN(test_channels_z_scale);
+    WT_RUN(test_deauth_lists_quiet_bssids);
     WT_RUN(test_page_carries_the_wifi_view);
     WT_RUN(test_channels_from_the_store);
+    WT_RUN(test_channels_of_the_last_30_days);
     WT_RUN(test_deauth_timeline);
     WT_RUN(test_ap_table);
     WT_RUN(test_ap_worst_case_fits);

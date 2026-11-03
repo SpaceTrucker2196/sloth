@@ -712,6 +712,103 @@ int web_mix_answer(const web_m4_t *m, const web_grid_t *g, const web_mix_ops_t *
 
 /* ── /api/wifi/channels ──────────────────────────────────────────────── */
 
+/* ── G3's scales (docs/web-visual-spec.md F8, slice V3) ─────────────── */
+
+/* The window a channel's absolute scale is read over: the last 30 days
+ * at the hour tier when there is a store, the fine ring's day without
+ * one; and the channels a grid lists however quiet its own range was. */
+#define CHAN_SEEN_S (30LL * 86400)
+
+/* A channel's own largest value over chan_scale_window(): a gauge's
+ * largest sample (each bucket's max), a counter's busiest minute as a
+ * count per minute (an hour bucket's sum over its 60 minutes, which is
+ * that hour's mean rate; fine buckets summed by minute). Never the
+ * busiest cell in view, which is what F8 found wrong: a colour that
+ * means "busiest in the last hour" means nothing when the hour was
+ * quiet. -1 on memory; 0 with *out 0 when the key has nothing there. */
+static int chan_scale_max(const web_m4_t *m, int metric, const char *key,
+                          long long now, web_point_t *pts, double *out) {
+    int store_on = m->tsdb->store && m->tsdb->store->rd;
+    int tier = store_on ? WEB_TIER_HOUR : WEB_TIER_FINE;
+    long long span = store_on ? CHAN_SEEN_S : WEB_FINE_KEEP_S;
+    long long maxp = span / web_tier_step(tier) + 2;
+    if (maxp > GRID_PTS) maxp = GRID_PTS;
+    int more = 0, serr = 0;
+    int n = web_series_points(m->tsdb, tier, metric, key, now - span, now + 1,
+                              pts, (int)maxp, &more, &serr);
+    if (n < 0) return -1;
+    int counter = web_metric_defs[metric].kind == WEB_MK_COUNTER;
+    double best = 0, run = 0;
+    long long minute = -1;
+    for (int i = 0; i < n; i++) {
+        double v;
+        if (!counter) v = pts[i].max;
+        else if (tier == WEB_TIER_HOUR) v = pts[i].sum / 60.0;
+        else {
+            /* Newest first: a minute's fine buckets are adjacent. */
+            long long mi = pts[i].t / 60;
+            if (mi != minute) { run = 0; minute = mi; }
+            run += pts[i].sum;
+            v = run;
+        }
+        if (isfinite(v) && v > best) best = v;
+    }
+    *out = best;
+    return 0;
+}
+
+/* One row's scale member and, for a counter with a baseline, its cells
+ * as z (F8: "ctrl_total against its hour-of-week baseline as a
+ * z-score", so the strip is flat while the channel is normal). Each
+ * cell's count per minute against the hour-of-week cell its UTC hour
+ * bucket was filed under, as A1 scores (web_baseline.h): a minute's
+ * spread for a cell shorter than an hour, the hour's for one an hour or
+ * longer, as the page's band() reads sd_hour. A warming cell and an
+ * empty one are null. A counter whose baseline was never fed, and every
+ * gauge, take the absolute scale: 0 to the channel's own largest value
+ * (chan_scale_max()), widened to every cell of the answer so the top of
+ * the scale is never under a value the page draws. */
+static int chan_scale_json(const web_m4_t *m, int metric, const grid_t *g,
+                           const char *key, const double *sum, const int *cnt,
+                           web_point_t *pts, web_bl_cell_t *bl, web_jw_t *w) {
+    int counter = web_metric_defs[metric].kind == WEB_MK_COUNTER;
+    web_baseline_t *b = m->anomaly ? m->anomaly->cfg.bl : NULL;
+    if (counter && b && web_baseline_cells(b, metric, key, bl) == 0) {
+        int warming = 0;
+        web_jw_raw(w, ",\"scale\":{\"kind\":\"z\"");
+        web_jw_raw(w, "},\"z\":[");
+        for (int c = 0; c < g->ncol; c++) {
+            if (c) web_jw_raw(w, ",");
+            if (!cnt[c]) { web_jw_raw(w, "null"); continue; }
+            long long t0 = g->from + (long long)c * g->col_s;
+            const web_bl_cell_t *cl = &bl[web_bl_cell_index(t0 - t0 % 3600)];
+            if (cl->n < WEB_BL_WARM_N) { web_jw_raw(w, "null"); warming++; continue; }
+            double sh, sd = web_bl_cell_sd(metric, cl, &sh, NULL);
+            double v = sum[c] * 60.0 / (double)g->col_s;
+            double d = g->col_s >= 3600 ? sh : sd;
+            double z = d > 0 ? (v - cl->mean) / d : 0;
+            char t[32];
+            snprintf(t, sizeof(t), "%.2f", isfinite(z) ? z : 0.0);
+            if (!strcmp(t, "-0.00")) snprintf(t, sizeof(t), "0.00");
+            web_jw_raw(w, t);
+        }
+        web_jw_raw(w, "],\"z_warming\":");
+        web_jw_int(w, warming);
+        return 0;
+    }
+    double mx = 0;
+    if (chan_scale_max(m, metric, key, g->to, pts, &mx) != 0) return -1;
+    for (int c = 0; c < g->ncol; c++) {
+        if (!cnt[c]) continue;
+        double v = counter ? sum[c] * 60.0 / (double)g->col_s : sum[c] / cnt[c];
+        if (isfinite(v) && v > mx) mx = v;
+    }
+    web_jw_raw(w, ",\"scale\":{\"kind\":\"absolute\",\"max\":");
+    jw_cell(w, mx);
+    web_jw_raw(w, "}");
+    return 0;
+}
+
 int web_wifi_channels_route(const web_m4_t *m, const char *query,
                             long long now_s, char *body, size_t cap,
                             size_t *len, int *status) {
@@ -764,8 +861,23 @@ int web_wifi_channels_route(const web_m4_t *m, const char *query,
         return answer_error(400, why, NULL, body, cap, len, status);
     WEB_M4_CHECKED(m, len, status);
     gbuf_t b;
-    if (gbuf_alloc(&b) != 0) { gbuf_free(&b); return -1; }
+    web_bl_cell_t *bl = malloc(WEB_BL_CELLS * sizeof(*bl));
+    if (gbuf_alloc(&b) != 0 || !bl) { gbuf_free(&b); free(bl); return -1; }
     int nk = grid_keys(m, metric, &g, b.keys);
+    /* G3's rows (§5): every channel seen in the last 30 days, not only
+     * those the range holds, so a channel that went quiet keeps its row
+     * and its silence is visible. */
+    if (m->tsdb->store && m->tsdb->store->rd && nk < GRID_KEYS) {
+        char (*sk)[WEB_KEY_MAX + 1] = malloc(256 * sizeof(*sk));
+        int ns = sk ? web_store_keys(m->tsdb->store, WEB_TIER_HOUR, metric,
+                                     now_s - CHAN_SEEN_S, now_s + 1, sk, 256) : 0;
+        for (int i = 0; i < ns && nk < GRID_KEYS; i++) {
+            int dup = 0;
+            for (int j = 0; j < nk && !dup; j++) dup = !strcmp(b.keys[j], sk[i]);
+            if (!dup) snprintf(b.keys[nk++], WEB_KEY_MAX + 1, "%s", sk[i]);
+        }
+        free(sk);
+    }
     for (int i = 0; i < nk; i++) {
         snprintf(b.rows[i].key, sizeof(b.rows[i].key), "%s", b.keys[i]);
         web_channel_band(b.keys[i], &b.rows[i].rank);
@@ -780,11 +892,13 @@ int web_wifi_channels_route(const web_m4_t *m, const char *query,
     web_jw_raw(&w, ",\"channels\":[");
     int shown = 0;
     for (int i = 0; i < nk && shown < WEB_WIFI_ROWS; i++) {
-        if (w.len + row_max(&g, 0) + 64 > cap) break;
+        /* The scale member and a z per cell at 9 bytes ("-12345.67"). */
+        if (w.len + row_max(&g, 96 + (size_t)g.ncol * 10) + 64 > cap) break;
         double total;
         if (grid_row(m, metric, &g, b.rows[i].key, b.pts, b.sum, b.cnt,
                      &total) != 0) {
             gbuf_free(&b);
+            free(bl);
             return -1;
         }
         int rank;
@@ -794,12 +908,22 @@ int web_wifi_channels_route(const web_m4_t *m, const char *query,
         web_jw_raw(&w, ",\"band\":"); web_jw_str(&w, band);
         web_jw_raw(&w, ",\"cells\":");
         cells_json(&w, metric, &g, b.sum, b.cnt);
+        if (chan_scale_json(m, metric, &g, b.rows[i].key, b.sum, b.cnt, b.pts, bl,
+                            &w) != 0) {
+            gbuf_free(&b);
+            free(bl);
+            return -1;
+        }
         web_jw_raw(&w, "}");
     }
     web_jw_raw(&w, "],\"shown\":");  web_jw_int(&w, shown);
     web_jw_raw(&w, ",\"more\":");    web_jw_raw(&w, shown < nk ? "true" : "false");
+    /* What an absolute scale was read over (chan_scale_max()). */
+    web_jw_raw(&w, ",\"scale_s\":");
+    web_jw_int(&w, m->tsdb->store && m->tsdb->store->rd ? CHAN_SEEN_S : WEB_FINE_KEEP_S);
     web_jw_raw(&w, "}\n");
     gbuf_free(&b);
+    free(bl);
     if (w.overflow) return -1;
     *len = w.len;
     *status = 200;

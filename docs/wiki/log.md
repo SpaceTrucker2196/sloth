@@ -6425,3 +6425,14 @@ by sloth's own distance estimate, never a slope of the page's. The new
 mark and G5's first-seen cell; G6 bullets on risk, karma and the
 anomaly score, bars on the anom and flow total counts. Updated
 [[slothweb]].
+
+## 2026-11-03 — slothweb glyph slice V3: the air picture (#171)
+
+The WiFi view as four panels: channels as G3 horizon strips on each
+channel's own 30 d scale, or control frames as z against the channel's
+hour-of-week baseline with the second band at the slider's k, a stacked
+top-5 drill-in per column beside them and the stacked grid one control
+away; emitters nearest first with the SSID count as squares; the deauth
+frames as a G7 rug that collapses when empty; the probing clients with
+G2 and G5. History's 30 d strip as a G7 rug on one scale. Updated
+[[slothweb]].

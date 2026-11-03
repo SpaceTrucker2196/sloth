@@ -2078,7 +2078,9 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
 {"metric":"wifi.ap_count","kind":"gauge","unit":"APs","tier":"fine","step":10,
  "from":1792623600,"to":1792627200,"cols":90,"col_s":40,"total_keys":5,
  "channels":[{"key":"1","band":"2.4","cells":[3,null,...]},...,
-             {"key":"6g37","band":"6","cells":[...]}],"shown":5,"more":false}
+             {"key":"6g37","band":"6","cells":[...],
+              "scale":{"kind":"absolute","max":3}}],"shown":5,"more":false,
+ "scale_s":86400}
 ```
 
 - **The waterfall** is slothweb.db's `wifi.ap_count` (a gauge: a cell is
@@ -2095,7 +2097,34 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   rollup's and the store's for that tier and range, so a channel the
   rollup evicted or a restart forgot keeps its history. Without a store
   a range reaching past 24 h is a `400` `tier_unavailable`. Drawn on
-  Canvas 2D in the heat ramp against the busiest cell in view.
+  Canvas 2D as G3's horizon strips by default (slice V3, the Design
+  section's "Slice V3"), or as the stacked grid below.
+- **G3's scale** (slice V3, F8). Each row carries `"scale"`, and the
+  answer `"scale_s"`, the span an absolute scale was read over
+  (2,592,000 with a store, 86,400 without):
+
+  ```
+  {"key":"6","band":"2.4","cells":[...],"scale":{"kind":"absolute","max":9}}
+  {"key":"6","band":"2.4","cells":[...],"scale":{"kind":"z"},
+   "z":[null,...,6.32,...],"z_warming":12}
+  ```
+
+  `absolute`'s `max` is the channel's own largest over the last 30 days
+  at the hour tier (the fine ring's day without a store), widened to
+  every cell of the answer so no drawn value is above it: a gauge's
+  largest sample (each bucket's max); a counter's as a count per
+  minute: with a store its busiest hour's mean (an hour bucket's sum
+  over 60), without one its busiest minute (the fine buckets of one
+  minute summed). Never the busiest cell in view (F8). `z` is
+  `ctrl_total`'s when the channel's hour-of-week baseline has an entry:
+  each cell's count per minute (its sum × 60 / `col_s`) scored against
+  the cell its UTC hour bucket was filed under, with the minute spread
+  as A1 scores it, or the hour's (`sd_hour`) for a cell of an hour or
+  more; `null` for an empty cell and for a warming one, which
+  `z_warming` counts. `ap_count` is always absolute. Rows are every
+  channel the store holds an hour row for in the last 30 days besides
+  the range's own keys, so a quiet channel keeps its row with every
+  cell `null`.
 - **The channel mix** (owner request 2026-10-26) is who made a cell
   busy. With `mix=1` (and no `metric`), `/api/wifi/channels` answers on
   the same grid and tiers with, per channel and cell, the five
@@ -2205,7 +2234,8 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   the 40 bssids with the most frames in the range first, each with the
   `DEAUTH_FLOOD` episodes sloth.db's `alerts` holds against it in the
   range (`[first_seen, last_seen, sev, count]`, 8, oldest first), drawn
-  in `--sev-crit` behind its bars. The episode is matched by
+  as the chains panel's G7 rug since slice V3, the episodes underlined
+  in `--sev-crit`. The episode is matched by
   `alerts.key` (`deauth:<victim>@<bssid>`, `rule_deauth_flood()`),
   which is predicate-only: the key is in the WHERE, bound to the
   canonical BSSID, and never in a result column or a body.
@@ -3802,18 +3832,19 @@ bare address, on the defaults.
 
 The page's data graphics are a small, fixed set of glyphs, specified in
 [`docs/web-visual-spec.md`](../docs/web-visual-spec.md) (its rulings
-table of 2026-10-26 overrides its body). Five of the eight are built:
+table of 2026-10-26 overrides its body). Seven of the eight are built:
 **G1** the band sparkline, **G5** the binary presence strip, **G6** the
 bullet and count bar (slice V0), **G4** the hour-of-week grid (slice
-V1, F3) and **G2** the range sparkline (slice V2, F9). G3 (horizon
-strip), G7 (event rug) and G8 (chain timeline) are later slices and
-are not in `glyph.js` yet.
+V1, F3), **G2** the range sparkline (slice V2, F9), **G3** the horizon
+strip and **G7** the event rug (slice V3, F8, F12). G8 (chain
+timeline) is slice V4 and is not in `glyph.js` yet.
 
 **Two halves.** Each glyph is a *pure function* from data and a size to
 a list of marks, plus a *painter* that draws the list. A mark is
 `[kind, x, y, w, h, token]`: a kind (`shade`, `band`, `line`, `gap`,
 `dot`, `max`, `min`, `last`, `cell`, `warm`, `outline`, `first`,
-`tick`, `now`, `range`, `bar`, `ref`, `whisker`, `dash`), a rectangle in CSS pixels, and a colour **token** name — never
+`tick`, `now`, `range`, `bar`, `ref`, `whisker`, `dash`, and V3's
+`hz1`, `hz2`, `base`, `clip`, `span`, `session`), a rectangle in CSS pixels, and a colour **token** name — never
 a colour. Nothing in the pure half reads the DOM, the canvas or the
 theme, so what a glyph *says* can be read without a browser, which is
 what `web/tests/test_glyph.c` does: the C there is a port of
@@ -3876,7 +3907,7 @@ slothweb change checks the change against the list
   shrinks on a refresh (`glyph.scale()` takes the previous range). A
   reader must be able to look away and back.
 - **R12. The TUI form exists.** A glyph with no character-cell form is
-  not added — parity is the test that keeps the web honest. The five
+  not added — parity is the test that keeps the web honest. The seven
   built here:
 
 | Glyph | What it answers | TUI form |
@@ -3886,6 +3917,8 @@ slothweb change checks the change against the list
 | G4 hour-of-week grid | when is this usually here, and is now usual | **not built in the TUI yet.** The spec's form is the Devices Enter detail's 7 by 24 grid of `▪` at `tui_heat`'s four levels. The web grid predates the glyph layer (M3); V1 moved it into `glyph.js` and took its hatch out, it did not add it, so R12 is owed here rather than met: the TUI form is a follow-up |
 | G5 binary presence strip | when was it here | the Devices view's 24 cells, one an hour, as `▮` and `·`, with `◆` at a first-seen cell inside the window and the anomaly episode's cells underlined |
 | G6 bullet and count bar | how big is this score or count, against its range | `▐████▌░░░` in `CP_NORMAL`, eight cells, the measure filled and the rest dotted |
+| G3 horizon strip | which channels are busy against their norm, and when | the Channel view's histogram is the bar form of it; the spec's two-level row per channel, `▄` for the first band in `CP_NORMAL` and `█` for the second in `CP_HEAT_MID`, is **not built in the TUI in this slice** (R12 owed, as G4's is) |
+| G7 event rug | when did things happen, and how many | the same `▁▂▃▄▅▆▇█` row per lane on one scale for every lane, a space for none; **not built in the TUI in this slice** (no TUI view has the 30 d strip or the deauth lanes yet) |
 
 **Where they are drawn.** G1 paints every Overview tile, a 40 px G1
 after each network fact in the status strip and after the footer's
@@ -3894,7 +3927,8 @@ G4 paints the Overview's hour-of-week heatmap and the drawer's weekly
 presence; the presence strips go through G5 (`drawStrip()`); G2 paints
 the signal column of Devices and of the AP table, the drawer and the
 Lookup card; G6 the risk, karma, anomaly-score and count columns (both
-slice V2, `web/ui/rf.js`).
+slice V2, `web/ui/rf.js`); G3 the WiFi view's channels and G7 its
+chains and the History strip (slice V3, `web/ui/air.js` and app.js).
 
 **Slice V1 (#171), what each placement draws.**
 
@@ -4001,6 +4035,86 @@ slice V2, `web/ui/rf.js`).
   prints (`anom bars to 3`). The card's old rounded score bar is gone
   (R8). The Flows `counts` column, several numbers to a cell, keeps its
   text.
+
+**Slice V3 (#171), the WiFi view's air picture (§6.3) and History's
+rug (`web/ui/air.js`).** The WiFi view is four panels, top to bottom:
+channels, emitters, chains, clients.
+
+- **Channels: G3 (F8).** One horizon strip per channel, 18 px a row,
+  the key in a gutter at its left and, right-aligned in `--faint`
+  beside it, the strip's own top (R3: each strip is on its own scale,
+  so each prints its maximum), or `z` for a z strip: two bands laid
+  over one another
+  (`hz1` in `--data` at 35 percent, `hz2` at 70 percent over it; Heer,
+  Kong and Agrawala 2009). The scale is absolute and the server's
+  (`/api/wifi/channels`' row `"scale"`, below): `ap_count` from 0 to
+  the channel's own largest over 30 days, the second band its upper
+  half; `ctrl_total` as z against the channel's hour-of-week baseline
+  (`"z"`), the first band 0 to the slider's k sd and the second k to
+  2k in `--heat-2`, the only colour on the panel, so the strip is flat
+  while a channel is normal and the horizon and the band sparkline
+  agree on what out of band means; a `ctrl_total` channel with no
+  baseline yet is drawn from 0 to its own 30 d busiest, per minute,
+  and its top is printed where a z strip's `z` is. R5's three states differ: nothing
+  observed is no ink (a row with none is the dash), observed and quiet
+  a 1 px `--rule` `base`, warming a `--rule` cell (`warm`, as G4's); a
+  value past the top is drawn to it and marked by a 1 px `clip` along
+  it (R10), counted in the caption. R11 per channel: a top grows and
+  never shrinks until the metric or the scope changes. The caption:
+  `wifi.ctrl_total, 1 h, fine, 5 as z against hour-of-week, band 2
+  above 2.0 sd; 7 channels, 40 s cells, n=90`, then `warming: n cells`
+  while any is. R4: when the columns any channel was observed in span
+  less than a tenth of the window, every strip draws those columns
+  only (one window for every row, so they still compare) and the
+  caption says `6 min of 1 h` (`glyph.win()`). Rows are every channel seen in 30 days, so a channel
+  that went quiet keeps its row. The `channels` control (kept, as
+  `ctl.w-grid`) turns the panel back to **the stacked grid** below,
+  unchanged; both answers are fetched whichever is shown.
+- **The drill-in (ruling: both).** Pointing at, tapping or arrowing to
+  a column outlines it in `--signal` and draws, in a 112 px column
+  (56 px on a phone) beside the strips at their row height, that column's five busiest
+  transmitters on each channel, stacked by share of its frames in their
+  TUI colours on the monitor radio's ground (the stacking work of
+  2026-10-23); the list under the panel names the picked cell's five,
+  each a button, as the grid's does.
+- **Emitters.** The AP table, nearest first by default (`sort=signal`,
+  sloth.db's last signal, strongest first), with V2's G2, karma bullet
+  and new mark; the SSID count is a row of `▪`, one per SSID (eight,
+  then `+`), in `--sev-warn` above one, its count in words in the
+  title, not `+3 ssids`.
+- **Chains: G7 (§6.3, F16).** Until G8 (V4), the deauth frames per
+  bssid as an event rug, a 12 px lane per bssid (the busiest 12) on
+  one scale for every lane (R3; the timeline drew each row against its
+  own busiest), the tallest printed in the caption, sloth.db's
+  `DEAUTH_FLOOD` episodes as a 1 px `--sev-crit` underline across the
+  cells they cover. A lane only for a bssid with a frame or a flood in
+  the window (the route lists every key the rollup holds, so one that
+  deauthed hours before the window comes with every cell empty); with
+  none the canvas collapses and the caption says `0 deauth in the
+  window`. Probe floods as a second rug are not
+  drawn: `alerts.fired` is keyed by type number and the page does not
+  hold that table yet; with G8 in V4.
+- **Clients (F16).** The probe-client chart over its band (with no
+  points the canvas is hidden and the caption says `no data`), and under it
+  the devices sloth.db holds a `probe_clients` row for, last seen in
+  the window, nearest first (`/api/devices?sort=signal&q=src:probe
+  seen:<1h`, 50), each with the new mark, V2's G2 in its dBm column and
+  G5 for its 24 h, so a probing client that is near and new is found by
+  eye; a row opens the drawer. Its own table (`wclients`), held whole,
+  sorted in place.
+- **History: G7 (F12).** The 30 d strip is a rug of two lanes, devices
+  first seen (`--tui-normal`) and alerts begun (`--sev-warn`), each
+  tick as tall as its cell's count on one scale for both lanes (at
+  least 1 px for one event), none drawing nothing, and survey sessions
+  full height in `--ink`. The lanes span the canvas so a drag's x is
+  still a time; the range picked is the `--signal` outline. The caption
+  (`h-strip-note`) prints the tallest count, the cell size and the two
+  totals. The overview already answered counts per cell (§7's route
+  change was already true), so nothing changed on the server. The
+  alert lane is one severity colour: per-severity counts would need
+  the overview's read to group by severity, not done here.
+- **The TUI's half (R12)** is not done for G3 or G7: no TUI view draws
+  the forms in the table above yet.
 
 ### Tables: sort and resize
 
@@ -4488,7 +4602,7 @@ web/
     web_json.c     the JSON writer every outgoing string goes through
     web_assets.h   the generated page's symbols
   ui/              the page sources (index.html, theme.css, page.css, app.js,
-                   glyph.js, facts.js and rf.js: the glyphs' placements,
+                   glyph.js, facts.js, rf.js and air.js: the glyphs' placements,
                    evidence.js, bundle.js the copy-JSON
                    control, location.js and location.css: where
                    the sensor was, gnss.js and gnss.css: the GPS Sat
