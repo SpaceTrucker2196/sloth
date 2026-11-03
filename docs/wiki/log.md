@@ -6011,3 +6011,10 @@ report events.
   rules written down from this week's work; follow-ups filed as #173
   (rules whose count follows the tick rate), #174 (18 assessments
   pending), #175, #176, #177.
+- 2026-11-02 — [[deployment]] §7.2, §7.3: the `gps.conf` drop-in is
+  enabled a whole block at a time, `[Service]` line included (a lone
+  directive is ignored by systemd and `--gps gpsd://` then has no TCP
+  family; hit live); GPS time into the host clock through gpsd `-n` and
+  ntpsec's `shm` refclock, `time1` from the measured offset, no PPS on
+  a USB u-blox 7. The reference host runs `--gps gpsd://127.0.0.1:2947`
+  with a 3D fix on 13 satellites.

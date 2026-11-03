@@ -28,7 +28,7 @@ sensor runs, installed but never enabled by make.
 `src/secure_file.c`, `src/data_socket.c`, `src/privdrop.c`, `tests/test_privdrop.c`, `MISSION.md` §2,
 `packaging/systemd/sloth-ble-scan.service`, `src/ble_scan/main.c`, `src/ble_scan/ble_scan_cmd.c`, `tests/test_ble_scan.c`.
 
-**Last updated**: 2026-11-02 (§6: `slothweb.service` passes `--web-assessments` the copy `make install` puts in `share/sloth/alert-assessments`); 2026-10-27 (§6: `--pcap-dir /var/lib/sloth/pcap` for the alert page's capture, an example in `/etc/default/slothweb`); 2026-10-27 (§7.2: the inert `gps.conf` drop-in for `--gps`, why `PrivateDevices=true` hides the receiver, `dialout`, the gpsd variant); 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
+**Last updated**: 2026-11-02 (§7.2: uncomment the whole block, the `[Service]` line included, and what the one-line mistake looks like; §7.3: GPS time into the host clock through gpsd and ntpsec's SHM refclock, as done on the reference host); 2026-11-02 (§6: `slothweb.service` passes `--web-assessments` the copy `make install` puts in `share/sloth/alert-assessments`); 2026-10-27 (§6: `--pcap-dir /var/lib/sloth/pcap` for the alert page's capture, an example in `/etc/default/slothweb`); 2026-10-27 (§7.2: the inert `gps.conf` drop-in for `--gps`, why `PrivateDevices=true` hides the receiver, `dialout`, the gpsd variant); 2026-10-26 (§2, §7.1 integration: `/etc/default/sloth` no-clobber like slothweb's, units still replaced; `[Service]` of the scan unit an allow-list; the reference host's hand-made `10-bluetooth-monitor.conf` removed in §7.1 and after §4.4's migration, so one drop-in grants `AF_BLUETOOTH`); 2026-10-26 (§7 review: the sensor's `AF_BLUETOOTH` moved to an opt-in drop-in; `Conflicts=` in both directions and the mask required; what stopping bluetoothd sends; `WantedBy=` pulls the scan in, `PartOf=` carries restarts, measured; the boot-time bind wait; the journal check); 2026-10-26 (§7 BLE capture: `sloth-ble-scan.service`, `AF_BLUETOOTH` for `--bt-monitor` in the sensor's unit, the migration carries `--bt-monitor`); 2026-10-26 (#153 third review: the shared uid's signal exposure stated and the signal syscalls denied, `ReadOnlyPaths=-`, `make install` refuses a stale slothweb, a failed backup is not an incomplete rollback); 2026-10-26 (#153 owner ruling: `--data-socket-unix`, `slothweb.service`, `--with-slothweb`); 2026-10-26 (#153, second review fixes: EPERM/EACCES verify, `/run/sloth` on rollback, radio and dropped-key checks); 2026-10-23 (#153, review fixes)
 
 ---
 
@@ -1094,10 +1094,33 @@ To enable either:
 ```sh
 sudo install -D -m 644 /usr/local/share/sloth/sloth-sensor-gps.conf \
     /etc/systemd/system/sloth-sensor.service.d/gps.conf
-sudoedit /etc/systemd/system/sloth-sensor.service.d/gps.conf   # uncomment ONE block
-sudoedit /etc/default/sloth          # SLOTH_ARGS gains --gps /dev/ttyACM0
+sudoedit /etc/systemd/system/sloth-sensor.service.d/gps.conf   # uncomment ONE block, its [Service] line included
+sudoedit /etc/default/sloth          # SLOTH_ARGS gains --gps /dev/ttyACM0 (or --gps gpsd://127.0.0.1:2947)
 sudo systemctl daemon-reload && sudo systemctl restart sloth-sensor
+systemctl show sloth-sensor -p RestrictAddressFamilies --value   # gpsd variant: AF_INET listed
 journalctl -u sloth-sensor -n 20 | grep -- '--gps'
+```
+
+Each block in the shipped file carries its own commented `[Service]`
+line. Uncomment the whole block: a directive uncommented on its own
+sits outside any section, systemd logs `Assignment outside of section.
+Ignoring.` at `daemon-reload`, the unit keeps its old family list, and
+`--gps gpsd://` then runs with no way to open a TCP socket (seen on the
+reference host, 2026-11-02: `gps_state` stayed `searching` with
+`gps_src` set, which is what that failure looks like from the stream).
+The two results, in full:
+
+```ini
+[Service]
+PrivateDevices=false
+DevicePolicy=closed
+DeviceAllow=/dev/ttyACM0 r
+SupplementaryGroups=dialout
+```
+
+```ini
+[Service]
+RestrictAddressFamilies=AF_INET AF_INET6
 ```
 
 The startup line names what was opened (`sloth: --gps reading NMEA
@@ -1105,6 +1128,40 @@ The startup line names what was opened (`sloth: --gps reading NMEA
 `gps_state` reads `fix` once the receiver has one. `sloth-migrate-sensor`
 does not carry `--gps`: a unit with it is refused and moved by hand,
 because the drop-in needs the device name only the operator knows.
+
+### 7.3 GPS time for the host's clock (reference host, 2026-11-02)
+
+sloth does not set the clock; the host's time daemon does, from gpsd.
+What was done on the reference host (u-blox 7 on `/dev/ttyACM0`, no
+PPS line, gpsd 3.27, ntpsec 1.2.5), for a box that may run with no
+network at all:
+
+```sh
+sudoedit /etc/default/gpsd        # DEVICES="/dev/ttyACM0"  GPSD_OPTIONS="-n"
+sudoedit /etc/ntpsec/ntp.conf     # append:
+#   refclock shm unit 0 refid GPS time1 0.085
+sudo systemctl restart gpsd ntpsec
+sleep 70; ntpq -p                 # a SHM(0) .GPS. row; * selected, + candidate, # excess
+```
+
+`-n` makes gpsd read the receiver with no client attached, so the time
+feed does not stop when sloth is restarted. gpsd exports the sentence
+time through System V shared memory unit 0 (`ipcs -m` shows keys
+`0x4e545030`, `0x4e545031`, …; unit 1 would be a PPS line this
+receiver has not got), and ntpsec's `shm` refclock reads it. Without
+PPS the time arrives over USB serial some tens of milliseconds late and
+jitters by a few: `time1` is that latency, read off the `offset` column
+of the SHM row against the pool servers (−84.5 ms here, so 0.085) and
+re-trimmed once `reach` reaches 377. Expect the GPS row to be a
+backup (`#` or `+`) while the pool is reachable and to carry the clock
+alone, to within those tens of milliseconds, when it is not. For a
+tenth of that, the receiver needs a PPS output on a GPIO or a serial
+control line; a USB-only u-blox 7 has none.
+
+Then sloth's own position comes from the same gpsd (`--gps
+gpsd://127.0.0.1:2947`, the gpsd block of §7.2): `sensor_health`
+`gps_state` `fix`, `gps_sats` 13 and `gps_hdop` 0.9 on the reference
+host within a minute of the restart.
 
 ## 8. What this does not do
 
