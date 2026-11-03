@@ -2,13 +2,15 @@
 source_url: https://attack.mitre.org/techniques/T1464/
 retrieved: 2026-11-02
 topics: [gnss, gps, jamming, spoofing, mitre, att&ck, ics, mobile, technique-mapping, exemption]
-# Names the four planned GNSS kinds in prose only; see the other three
-# research/gnss/ documents for why alert_kinds is commented out.
+# Names the four GNSS kinds in prose only: the other three research/gnss/
+# documents carry their alert_kinds. Owner ruling 2026-11-02: GNSS_JAMMING
+# takes Mobile T1464 as recommended below; the other three the exemption.
 citation: MITRE ATT&CK Mobile T1464; ICS T0830, T0814, T1692.002 (was T0856); Enterprise T1498 — read 2026-11-02
 ---
 # GNSS spoofing and jamming against ATT&CK — which technique, if any, is honest
 
-Whether the four planned GNSS kinds get an `alert_technique()` value,
+Whether the four GNSS kinds (`src/alerts/rules_gnss.c`, 2026-11-03) get
+an `alert_technique()` value,
 or take the second exemption form in `agents/AGENTS.md` (a real,
 citable basis but no honest ATT&CK technique, pinned by
 `tests/test_research_corpus.c ::

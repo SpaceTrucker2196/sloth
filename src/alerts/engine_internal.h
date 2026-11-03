@@ -58,6 +58,12 @@ int btm_candidate_is_twin(const sloth_state_t *s, const uint8_t bssid[6]);
  * alerts_clear(). */
 void rules_wired_forget(void);
 
+/* src/alerts/rules_gnss.c — drops the GNSS rules' memory (the fix pairs
+ * judged, a held collapse, the spoofing heuristics' last sightings);
+ * called by alerts_clear(). A fix received before the call is never
+ * judged after it. */
+void rules_gnss_forget(void);
+
 /* Formatting helpers every rule file uses. static inline rather than
  * external: a name as generic as mac_to_str() has no business in
  * libsloth_core.a's symbol table. */

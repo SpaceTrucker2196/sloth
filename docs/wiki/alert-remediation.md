@@ -10,7 +10,7 @@ by `web/tools/alertkb.c`, never copied by hand).
 step's basis; each section names its own), `docs/wiki/alerts.md` and
 `docs/views/alerts.md` (what each rule fires on).
 
-**Last updated**: 2026-10-26 (the last two unconditioned "locate and
+**Last updated**: 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
 remove" steps made conditional on the premises, as the rest are;
 review: WEAK_TLS aimed at the client
 that offered the old version; every on-device step conditional on the
@@ -1811,6 +1811,119 @@ Sources: `research/cve/2023-45866.md`
 **Vendor fix:** not applicable.
 
 Sources: `research/bluetooth/ble-watchlist-categories.md`
+
+## `GNSS_JAMMING`
+
+**Investigate**
+
+1. Read the figures: either the tracked satellites' C/N0 fell together
+   (their median, or every one lost from tracking) with the sky still
+   listed, or the receiver's CW jamming indicator held high.
+   Interference and jamming are the same effect (DHS 2017: "the only
+   difference is the intent"); the alert cannot tell which, and one
+   receiver cannot locate the source.
+2. Rule out the ordinary causes first: the antenna, its cable or its
+   amplifier failing, something placed over the antenna, and nearby
+   equipment radiating in the band. Physical obstructions, scintillation
+   and multipath "can produce signatures similar to those of jamming".
+3. If it was the indicator path, compare against what this receiver
+   reads on an ordinary day: the u-blox 7 description says the
+   indicator must be calibrated for the "not jammed" case in place.
+4. Note whether it coincided with a vehicle nearby: a jammer bought to
+   defeat one vehicle's tracker affected a nearby receiver in the FCC's
+   Bojczak case.
+
+**Fix**
+
+1. If the cause is the operator's own antenna, cable or amplifier,
+   repair or replace it.
+2. In the United States it is generally illegal to operate a jammer;
+   report a suspected one to the FCC Enforcement Bureau rather than
+   looking for it.
+3. Treat this receiver's position and time as unavailable until the
+   C/N0 recovers; DHS 2017 advises delaying reacquisition after
+   interference to reduce the chance of acquiring spoofed signals.
+
+**Vendor fix:** none; interference is not a defect. The u-blox 7's own
+broadband monitor (UBX-CFG-ITFM) is off by default and gpsd 3.27 does
+not report it.
+
+Sources: `research/gnss/jamming-detection.md`
+
+## `GNSS_SPOOF_SUSPECT`
+
+**Investigate**
+
+1. Read which heuristics the detail lists. Each is weak alone, and two
+   together are a suspicion, not a detection: a consumer receiver has no
+   signal authentication.
+2. Rule out the benign causes the source names: a GPS repeater (which
+   DHS 2017 counts as unintentional spoofing), a high-gain or amplified
+   antenna raising every satellite's C/N0, and a cold or warm start or a
+   USB re-enumeration behind a reacquisition with a jump.
+3. Compare the position and time against an independent reference: the
+   sensor's known location, and network time.
+
+**Fix**
+
+1. If a repeater or an amplified antenna on the operator's own premises
+   explains it, remove or re-site it.
+2. Treat position and time from this receiver as unverified while the
+   heuristics recur.
+
+**Vendor fix:** none for a u-blox 7, which has no spoofing detector.
+The u-blox M8 reports spoofDetState from protocol 18, and its own
+description says it cannot see a spoofer present when the receiver
+starts.
+
+Sources: `research/gnss/spoofing-detection.md`
+
+## `GNSS_TIME_JUMP`
+
+**Investigate**
+
+1. Read the step, the clock offset and the host clock step. A step of
+   the host's clock alone never fires this, nor does a suspend or a
+   reader catching up after a stall.
+2. Rule out the faults the source names: a leap second the rule did not
+   recognise, a receiver whose date is off by a multiple of 1024 weeks
+   (the week-number rollover), a restart, and the in-band delay over USB
+   that may "jump by 200mSec".
+3. Check whether chrony takes time from this receiver, and how: a
+   source marked trust outvotes every NTP server.
+
+**Fix**
+
+1. While GNSS time is only being compared, give its chrony refclock
+   noselect, and do not mark it trust.
+2. Keep makestep to boot and set maxchange, so chrony refuses a large
+   step after start-up.
+
+**Vendor fix:** none for an attack. A receiver showing the 1024-week
+signature has a rollover fault, which is its manufacturer's to fix.
+
+Sources: `research/gnss/time-and-position-integrity.md`
+
+## `GNSS_POSITION_JUMP`
+
+**Investigate**
+
+1. Read the distance, the elapsed time and the bound. For a sensor that
+   does not move, the bound is the two fixes' error estimates alone.
+2. Rule out the false positives the source names: multipath at a fixed
+   site (the error estimate may not cover it), a 2D fix with an assumed
+   altitude, and several reports in one epoch.
+3. For a fixed sensor, compare against its known location.
+
+**Fix**
+
+1. Treat this receiver's position as unverified while jumps recur, and
+   use the sensor's known location for a fixed sensor.
+
+**Vendor fix:** none; gpsd's error estimates are "relative goodness"
+indicators with no stated confidence level, by gpsd's own account.
+
+Sources: `research/gnss/time-and-position-integrity.md`
 
 ## Related pages
 

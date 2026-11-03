@@ -45,8 +45,8 @@ minus the host's wall clock as the line arrived, a coarse figure
 (serial and gpsd latency, no PPS) that shows a multi-second step and
 nothing finer. Up to 48 satellites are kept; more are counted.
 
-All of it is observation. No row here is a finding; the detectors that
-will read this sky are a following slice.
+The view itself is observation; since 2026-11-03 four alert rules read
+the same sky and fixes (below, and the `[v]` Alerts view).
 
 ## View
 
@@ -90,26 +90,33 @@ a SKY that listed no satellites is said as that.
 
 ## What's suspicious
 
-None of these is an alert yet; they are what the next slice's rules
-will read, and what to look at by hand until then.
+Each is now an alert kind (`src/alerts/rules_gnss.c`; the rows in
+[alerts.md](alerts.md)); this is what each reads, and what to look at
+here when one fires.
 
-- **Spoofing**: every satellite's C/N0 uniform and high at once, the
-  set used by the solution changing while the sky does not, the
-  position still while the clock offset steps, GST sigmas collapsing to
-  near zero. Humphreys et al., *Assessing the spoofing threat*, ION
-  GNSS 2008.
-- **Jamming**: mean C/N0 falling across the whole sky with the number
-  of satellites in view unchanged, used dropping to zero with
-  satellites still listed, `jam` rising into the hundreds.
-- **Time jump**: the clock offset stepping by seconds between passes;
-  the receiver's time running backwards against sloth's monotonic
-  clock.
-- **Position jump**: consecutive fixes further apart than the reported
-  speed and accuracy allow.
+- **Spoofing** (`GNSS_SPOOF_SUSPECT`, LOW/WARN): two of — used
+  satellites' C/N0 too high, uniform and high across the used set, a
+  reacquisition that lands somewhere else or at another time. Each is
+  weak alone (Psiaki & Humphreys 2016; Humphreys et al., ION GNSS 2008).
+  Here: are the high rows all in the solution, at every elevation?
+- **Jamming** (`GNSS_JAMMING`, WARN/CRIT): the tracked satellites'
+  median C/N0 falling within seconds with satellites still listed, the
+  list itself holding and the used set falling, or `jam` held high.
+  Rows at ss 0 (listed, not tracked) do not count, so a building
+  hiding part of the sky does not fire it. Here: did every tracked
+  row's signal bar drop together?
+- **Time jump** (`GNSS_TIME_JUMP`, WARN): the receiver's time stepping
+  by a second or more against sloth's monotonic clock and staying
+  there; a host clock step, a suspend and a reader draining a queue
+  after a stall do not count. Here: the header's clock offset.
+- **Position jump** (`GNSS_POSITION_JUMP`, WARN): consecutive fixes
+  further apart than the reported speed and accuracy allow over the
+  time between their epochs (the receiver's own clock, not when sloth
+  read them).
 
-A detector needs its source first (agents/AGENTS.md: detectors cite
-their sources), and it is noted in [the GNSS wiki page](../wiki/gnss.md)
-that none of the four has an honest ATT&CK technique.
+Every detector cites its source (`research/gnss/`); the ATT&CK mapping
+— Mobile T1464 for jamming, none for the other three — is in
+[the GNSS wiki page](../wiki/gnss.md).
 
 ## See also
 

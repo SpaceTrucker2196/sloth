@@ -26,7 +26,7 @@ only that each flag and key is here.
 `src/views/dashboard_bands.c` (`draw_persist_badge`) for the status
 badges.
 
-**Last updated**: 2026-11-02 (the `#` GNSS view key, [[gnss]]); 2026-11-02 (slothweb's `--web-serve-evidence-pcap[=remote]`); 2026-10-27 (a pointer to slothweb's flags, `--pcap-dir` among them); 2026-10-27 (`--location`, `--gps`, `--gps-allow-remote`, `--gps-baud`, the `gps.*` knobs, the exit-2 refusals); 2026-10-26 (`make install-service` writes `/etc/default/sloth` only where absent); 2026-10-26 (`sloth-ble-scan` review: the bind wait, `--down` on an unregistered hciN, exit 1 causes); 2026-10-26 (`sloth-ble-scan`, its `--down` and `--delay`, and the units `make install-service` adds); 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
+**Last updated**: 2026-11-03 (the twelve `gnss.*` knobs of the four GNSS rules); 2026-11-02 (the `#` GNSS view key, [[gnss]]); 2026-11-02 (slothweb's `--web-serve-evidence-pcap[=remote]`); 2026-10-27 (a pointer to slothweb's flags, `--pcap-dir` among them); 2026-10-27 (`--location`, `--gps`, `--gps-allow-remote`, `--gps-baud`, the `gps.*` knobs, the exit-2 refusals); 2026-10-26 (`make install-service` writes `/etc/default/sloth` only where absent); 2026-10-26 (`sloth-ble-scan` review: the bind wait, `--down` on an unregistered hciN, exit 1 causes); 2026-10-26 (`sloth-ble-scan`, its `--down` and `--delay`, and the units `make install-service` adds); 2026-10-26 (the five `rf.*` distance knobs); 2026-10-26 (#170: `--db-compact-alerts`, and its review: the un-checkpointed SRC refusal, the immutable read, DST's owner); 2026-10-26 (#166: `pcap.retain_days`, the `--pcap-dir` age sweep); 2026-10-23 (#153: `make deploy-test`); 2026-10-23 (#156: `--ble-rotation-hints`, internal use only, off by default, feeding only the `[*]` estimate); 2026-10-23 (`--bt-monitor` decodes both advertising report events, every report); 2026-10-21 (#144 slice 4: the `*` BLE view key, `ble.flood_window_s`, `ble.flood_distinct_addrs`, `ble.flood_rate`, `ble.hid_rotate_addrs`, `ble.hid_rotate_window_s`; #144 slice 3: `--bt-capture PATH`, the Ubertooth stream; #144 slice 2: `--bt-monitor`, the DLT 254 replay route, `--iface bluetoothN` refused); 2026-10-20 (#106 round 2: `camera.join_fresh_secs`; #82: `wps.pixie_silence_s`, `wps.pixie_success_window_s`; #92: `--collect-handshakes` also gates alert evidence pcaps).
 
 ---
 
@@ -156,13 +156,32 @@ rows (~44).
 
 #### Knobs added 2026-10-27 (sensor position, `--gps`)
 
-Sampling and freshness for the position stamp; no rule reads a position. → [[location]]
+Sampling and freshness for the position stamp; no rule reads the position stamp. `GNSS_POSITION_JUMP` and `GNSS_SPOOF_SUSPECT` read the receiver's fix history instead: see the `gnss.*` knobs below. → [[location]]
 
 | Knob | Default | Range | Meaning |
 |------|---------|-------|---------|
 | `gps.min_move_m` | 5 | 0..100000 | metres the GPS fix must move before a device's position sample (and the sensor's track) is taken again |
 | `gps.sample_s` | 60 | 1..86400 | at rest: the sensor's track interval, the least gap before a device's RSSI band change is sampled, and /10 of a device's keep-alive interval ([[location]]) |
 | `gps.max_fix_age_s` | 30 | 1..3600 | a GPS fix older than this stamps nothing; `--location`, when given, stands in |
+
+#### Knobs added 2026-11-03 (the GNSS rules)
+
+Thresholds of the four `--gps` rules ([[alerts]] § The GNSS receiver, `src/alerts/rules_gnss.c`). Each default is argued from `research/gnss/`; where the research says no published threshold exists, the default is the conservative one and the row says so. Every window runs on the monotonic clock. → [[gnss]]
+
+| Knob | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `gnss.jam_cn0_drop_db` | 10 | 1..60 | `GNSS_JAMMING`: dB the median C/N0 of the tracked satellites (ss > 0) must fall, newest point against the 60 s before the window. "No read source puts a number on 'simultaneous' or on the drop; any value is a judgement" (`research/gnss/jamming-detection.md`): 10 dB is the bottom of the nominal "~ 37 to 45dB-Hz" band down to the 27 dB-Hz Kriezis et al. define as signal loss |
+| `gnss.jam_window_s` | 10 | 2..120 | seconds the collapse must happen within: the research's "within one or two epochs", stretched over gpsd's SKY cadence. A sky falling over minutes stays inside its own baseline |
+| `gnss.jam_ind` | 128 | 1..255 | u-blox `jamInd` (TPV `jam`, CW only) at or above which the indicator path counts. The vendor: "It is necessary to run the receiver in the application and then calibrate the 'not jammed' case" — no published level, so the top half of the scale, erring quiet |
+| `gnss.jam_hold_s` | 30 | 2..299 | seconds `jamInd` must hold there: gpsd attaches `jam` about one TPV in four (MON-HW "every 4" epochs), so one report cannot fire |
+| `gnss.spoof_cn0_high_db` | 53 | 30..99 | `GNSS_SPOOF_SUSPECT` heuristic 1: dB-Hz at or above which a used satellite counts. Kriezis et al.'s F9P + ANN-MB spoofing threshold, 8 dB over the nominal band's top; "Neither number transfers to a u-blox 7 with an unknown antenna" (`research/gnss/spoofing-detection.md`), so conservative, not calibrated |
+| `gnss.spoof_high_sats` | 4 | 1..48 | used satellites that must be that high at once: four is what a spoofer must supply to steer a fix |
+| `gnss.spoof_cn0_mean_db` | 45 | 20..99 | heuristic 2: the used set's mean C/N0 must be at least this (the nominal band's top), which keeps the indoor case — uniform but weak — out |
+| `gnss.spoof_cn0_sd_db` | 1 | 1..20 | heuristic 2: the spread must be under this. "No peer-reviewed source read for this document states a uniformity (low-spread) threshold" — 1 dB is below what a sky across elevations shows |
+| `gnss.spoof_min_sats` | 6 | 3..48 | heuristic 2: used satellites with a C/N0 the spread is taken over ("Few satellites (spread undefined)") |
+| `gnss.spoof_window_s` | 300 | 10..3600 | seconds in which two heuristics must both have been seen; spans a jam-then-reacquire sequence (DHS 2017 advises delaying reacquisition "for many minutes or hours") |
+| `gnss.time_jump_ms` | 1000 | 200..3600000 | `GNSS_TIME_JUMP` (and heuristic 3): ms the receiver's time must step against the host's monotonic clock between fixes. The gpsd time HOWTO: the in-band delay "may be stable to 10 mSec for hours and then jump by 200mSec", so 200 ms is the floor, and "anything below roughly a second is noise on its own terms" (`research/gnss/time-and-position-integrity.md`) |
+| `gnss.pos_jump_k` | 3 | 1..100 | `GNSS_POSITION_JUMP` (and heuristic 3): the multiplier on eph₁ + eph₂ in the bound `(speed + eps) × Δt + k × (eph₁ + eph₂)`. "Because the confidence level of eph is unknown, a multiplier on it is a judgement, not a cited value": 3 covers eph read as one sigma to three sigma per fix |
 
 `--refresh-ms` is deliberately not a knob: it is UI cadence, not a detector or retention decision.
 

@@ -19,7 +19,7 @@ row's a `text_m` line).
 `src/device_risk.c`, `include/sloth.h` (`DEV_SRC_*`, `CAM_SIG_*`),
 `include/sloth_alerts.def`, owner request 2026-10-26.
 
-**Last updated**: 2026-11-01 (the BLE view: Monitor's and Hybrid's,
+**Last updated**: 2026-11-03 (the four GNSS alerts in every scope, as their records are). 2026-11-01 (the BLE view: Monitor's and Hybrid's,
 `out_of_scope` under Local), 2026-10-27 (the verify pass: top hosts, `THREAT_IP`,
 `BEACONING` and `host.*` from the `/proc` socket table stay Local on a
 radio, `/api/metrics` counts a scope's own keys, Records and Health drop
@@ -39,7 +39,9 @@ statement; first version 2026-10-26).
 sloth's own state (`sensor_health`, `sensor`, `socket_gap`, and the two
 own-state alerts `NO_MONITOR_MODE` and `BT_OWN_TRANSMIT`, the list
 `tests/test_research_corpus.c :: test_own_state_kinds_are_named` pins)
-appears in every scope.
+appears in every scope, and so does the host's own GNSS receiver: its
+`gnss_*` records and, since 2026-11-03, the four `GNSS_*` alerts that
+read it ([[gnss]]).
 
 ## How a datum gets its scope
 

@@ -164,6 +164,23 @@ typedef enum {
     TUNE_GPS_MIN_MOVE_M,
     TUNE_GPS_SAMPLE_S,
     TUNE_GPS_MAX_FIX_AGE_S,
+    /* 2026-11-03: the four GNSS rules (src/alerts/rules_gnss.c). Each
+       default is argued from research/gnss/ in the rule's comment and
+       in docs/wiki/cli-reference.md; where the research says no
+       published threshold exists the default is the conservative one
+       and the comment says so. */
+    TUNE_GNSS_JAM_CN0_DROP_DB,
+    TUNE_GNSS_JAM_WINDOW_S,
+    TUNE_GNSS_JAM_IND,
+    TUNE_GNSS_JAM_HOLD_S,
+    TUNE_GNSS_SPOOF_CN0_HIGH_DB,
+    TUNE_GNSS_SPOOF_HIGH_SATS,
+    TUNE_GNSS_SPOOF_CN0_MEAN_DB,
+    TUNE_GNSS_SPOOF_CN0_SD_DB,
+    TUNE_GNSS_SPOOF_MIN_SATS,
+    TUNE_GNSS_SPOOF_WINDOW_S,
+    TUNE_GNSS_TIME_JUMP_MS,
+    TUNE_GNSS_POS_JUMP_K,
     TUNE_COUNT
 } tune_id_t;
 

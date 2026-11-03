@@ -123,8 +123,8 @@ typedef struct {
     int    usat;                /* SKY: satellites used */
     char   time[32];            /* TPV / SKY / GST "time", "" absent */
     /* GNSS observation (2026-11-02). TPV: */
-    int    has_speed, has_track, has_climb, has_epv;
-    double speed, track, climb, epv;
+    int    has_speed, has_track, has_climb, has_epv, has_eps;
+    double speed, track, climb, epv, eps;
     int    status;              /* TPV status 0..9, -1 absent */
     int    jam;                 /* u-blox jamming indicator, -1 absent */
     int    leap;                /* leapseconds, -1 absent */
@@ -271,29 +271,12 @@ void gps_location_reset(void);
 void gps_sky_snapshot(gnss_sky_t *out);
 void gps_fix_snapshot(gnss_fix_t *out);
 
-/* Kept history for the detector slice that follows (none fires yet):
- * the last GNSS_FIX_HIST positioned fixes and GNSS_SERIES_S one-second
- * points of (cn0_mean, usat, nsat, jam). Rings, oldest overwritten. */
-#define GNSS_FIX_HIST 64
-#define GNSS_SERIES_S 300
-typedef struct {
-    time_t    ts;
-    double    lat, lon, alt_m, eph;
-    int       mode, usat, has_alt, has_eph, has_time_off;
-    long long time_off_ms;
-} gnss_fix_pt_t;
-typedef struct {
-    time_t  ts;
-    int16_t cn0_mean_x10;
-    int16_t jam;               /* -1 absent */
-    uint8_t usat, nsat;
-} gnss_sec_pt_t;
-typedef struct {
-    gnss_fix_pt_t fixes[GNSS_FIX_HIST];
-    int           fix_n, fix_head;     /* head: the next slot written */
-    gnss_sec_pt_t secs[GNSS_SERIES_S];
-    int           sec_n, sec_head;
-} gnss_hist_t;
+/* The history the GNSS rules read (gnss_hist_t, include/sloth.h): the
+ * last GNSS_FIX_HIST positioned fixes and GNSS_SERIES_S one-second
+ * points of (the tracked rows' median C/N0 and count, usat, nsat, jam,
+ * mode). gps_health_poll() copies
+ * it each poll and points s->gnss_hist at the copy; this is the same
+ * copy, into the caller's buffer, for the tests. */
 void gps_gnss_history(gnss_hist_t *out);
 
 /* Change-only signatures, shared by the JSONL writer and the --db

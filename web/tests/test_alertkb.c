@@ -171,6 +171,7 @@ static int cell_names(const char *cell, const char *word) {
 static void test_rule_severity_matches_the_code(void) {
     static const char *const files[] = {
         "src/alerts/rules_ble.c", "src/alerts/rules_camera.c", "src/alerts/rules_enterprise.c",
+        "src/alerts/rules_gnss.c",
         "src/alerts/rules_mle.c", "src/alerts/rules_regulatory.c", "src/alerts/rules_twin.c",
         "src/alerts/rules_wifi_mgmt.c", "src/alerts/rules_wired.c",
     };

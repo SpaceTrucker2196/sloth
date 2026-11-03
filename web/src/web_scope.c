@@ -130,6 +130,10 @@ const web_scope_alert_t web_scope_alerts[] = {
     { "CAM_RTSP_UNAUTH", LI },
     { "BT_OWN_TRANSMIT", MT },      /* sloth's own state */
     { "BLE_ADV_FLOOD", M }, { "BLE_HID_UNEXPECTED", M }, { "BLE_WATCHLIST", M },
+    /* The GNSS rules read the host's own receiver, neither radio's nor
+     * the IP capture's: every scope's, as their gnss_* records are. */
+    { "GNSS_JAMMING", MT }, { "GNSS_SPOOF_SUSPECT", MT },
+    { "GNSS_TIME_JUMP", MT }, { "GNSS_POSITION_JUMP", MT },
 };
 const int web_scope_alerts_n = (int)(sizeof(web_scope_alerts) / sizeof(web_scope_alerts[0]));
 

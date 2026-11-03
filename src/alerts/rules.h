@@ -126,4 +126,10 @@ void rule_mld_mac_collision(const sloth_state_t *s, time_t now);
 void rule_mle_cross_link_cipher_downgrade(const sloth_state_t *s, time_t now);
 void rule_mle_reconfig_no_mlo(const sloth_state_t *s, time_t now);
 void rule_mle_pr_beacon_diff(const sloth_state_t *s, time_t now);
+
+/* src/alerts/rules_gnss.c (2026-11-03): the --gps receiver's own inputs */
+void rule_gnss_jamming(const sloth_state_t *s, time_t now);
+void rule_gnss_spoof_suspect(const sloth_state_t *s, time_t now);
+void rule_gnss_time_jump(const sloth_state_t *s, time_t now);
+void rule_gnss_position_jump(const sloth_state_t *s, time_t now);
 #endif

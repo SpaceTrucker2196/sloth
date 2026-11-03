@@ -387,7 +387,7 @@ static void test_filters_and_paging(void) {
     /* Refusals, a word of slothweb's own, never the value. */
     static const char *const bad[][2] = {
         { "state=maybe", "bad_state" }, { "sev=crit,crit", "bad_sev" }, { "sev=high", "bad_sev" },
-        { "sev=1,", "bad_sev" }, { "type=NOPE", "bad_type" }, { "type=90", "bad_type" },
+        { "sev=1,", "bad_sev" }, { "type=NOPE", "bad_type" }, { "type=999", "bad_type" },
         { "window=59", "bad_window" }, { "limit=0", "bad_limit" }, { "limit=101", "bad_limit" },
         { "offset=1001", "bad_offset" }, { "q=%01", "bad_value" }, { "id=d1", "unknown_parameter" },
     };

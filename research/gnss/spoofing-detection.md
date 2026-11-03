@@ -2,18 +2,14 @@
 source_url: https://doi.org/10.1109/JPROC.2016.2526658
 retrieved: 2026-11-02
 topics: [gnss, gps, spoofing, c-n0, rpm, drift-monitoring, u-blox-7, gpsd, sky, tpv, consumer-receiver]
-# The detector does not exist yet. ALERT_TYPE_GNSS_SPOOF_SUSPECT is not in
-# include/sloth_alerts.def, and test_no_document_cites_a_nonexistent_alert_kind
-# fails on any alert_kinds entry the enum lacks. Uncomment the line below in
-# the same commit that adds the X() entry.
-# alert_kinds: [ALERT_TYPE_GNSS_SPOOF_SUSPECT]
+alert_kinds: [ALERT_TYPE_GNSS_SPOOF_SUSPECT]
 citation: Psiaki, Humphreys, "GNSS Spoofing and Detection", Proc. IEEE 104(6):1258-1270, 2016; + Humphreys et al. ION GNSS 2008
 ---
 # GNSS spoofing — what a consumer receiver behind gpsd can observe, and what it cannot
 
-The basis for the planned `ALERT_TYPE_GNSS_SPOOF_SUSPECT` (GNSS
-observation layer: a u-blox 7 USB receiver read through gpsd 3.27, SKY
-and TPV). Every source below was read first-hand on 2026-11-02; the
+The basis for `ALERT_TYPE_GNSS_SPOOF_SUSPECT` (`src/alerts/rules_gnss.c`,
+2026-11-03), over the GNSS observation layer (a u-blox 7 USB receiver
+read through gpsd 3.27, SKY and TPV). Every source below was read first-hand on 2026-11-02; the
 full list is under **Sources**. Papers that the read sources cite but
 that were not themselves read (Akos 2012 on AGC; the Volpe report;
 Warner & Johnston 2003) back nothing here.

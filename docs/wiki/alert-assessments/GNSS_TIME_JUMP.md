@@ -1,0 +1,71 @@
+---
+type: GNSS_TIME_JUMP
+technique: ""
+rule_file: src/alerts/rules_gnss.c:466 rule_gnss_time_jump() (the non-attack shapes in time_step_benign() at line 155, the queued-read and suspend tests at lines 213 and 226; tune row gnss.time_jump_ms in src/tune.c)
+count_semantics: per confirmed jump - each positioned fix is judged once against the last accepted fix (the rule keeps the TPV count of the newest fix judged), and a confirmed step is one fire(); several jumps inside the engine's quiet period are one incident with a rising count. One incident per receiver (key `gnsstime`). Not per poll: a receiver that stays stepped fires once
+severity_assessment: agree - WARN: a confirmed multi-second step of the receiver's clock is worth an operator's attention when GNSS time feeds the host clock, and is not CRIT because faults produce it too
+false_positive_risk: low - the host's own clock steps are taken out by measuring against the monotonic clock, a step must hold on the next fix, a fix read from a queue after a reader stall is neither judged nor measured from, a suspend is a reacquisition, and the first fix after a loss, a leap second and a 1024-week rollover are not judged; what remains is a receiver fault or a moved clock
+noise_verdict: not measured - new rule (2026-11-03); no reference-host firing data yet. Expected silent: a USB u-blox 7's in-band delay jitters by hundreds of milliseconds, under the 1000 ms default
+prevalence: week-number rollovers in old receivers are documented events ("Many GPS-enabled devices ... exhibited problems on that date") [3]; deliberate time spoofing is the subject of the spoofing literature [4]; neither is common on one host
+tuning: [gnss.time_jump_ms (1000, 200..3600000); the 250 ms leap tolerance, the 60 s rollover tolerance and the 250 ms queued-read margin are compile-time constants in src/alerts/rules_gnss.c]
+researched: 2026-11-03
+---
+## What the rule checks
+
+`rule_gnss_time_jump()` (src/alerts/rules_gnss.c:466) walks the positioned-fix ring in `s->gnss_hist`. Each fix carries the receiver's `time` (unix ms), the host's wall and monotonic clocks at receipt, `leapseconds`, and `reacq` (src/gps.c). For each new fix `b` it computes the receiver's step against the host's **monotonic** clock from the **anchor** `a`, the last fix whose time was accepted, `(rx_b - rx_a) - (mono_b - mono_a)`, and the host's own wall step, `(wall_b - mono_b) - (wall_a - mono_a)`.
+
+`mono` is when sloth read the TPV, not when the receiver produced it, and read latency only ever makes a fix look late. Three guards follow from that:
+
+- the step must **hold on the next fix** (within half the threshold), so one late or wild TPV followed by one on time is not a moved clock;
+- a fix **read from a queue** - the next fix is more than `GNSS_BACKLOG_MS` (250 ms) further on in the receiver's time than in the host's, as when a stalled reader (the TUI stopped with Ctrl-Z, a loaded host) drains what gpsd buffered a millisecond apart - is not judged; at a raised threshold its 1 s steps back are under the hold's half;
+- neither kind becomes the anchor, so each fix after a run of them is measured from the last good one. The first version measured the pair after an outlier from the fix before it, itself an outlier inside a drained queue, and fired on a four-second stall.
+
+A host **suspend** stops `CLOCK_MONOTONIC` and neither the receiver's clock nor the host's wall clock: when both moved past it together, forward, by at least the threshold (to half of it), the fix is a reacquisition.
+
+- **Fires** when `|step| >= gnss.time_jump_ms` from the anchor and the step holds on the next fix, which is not a queued read. The rule waits one fix for that confirmation; the fired fix becomes the anchor.
+- **Not judged**: a fix that is a reacquisition (first fix since start, a mode 0/1 TPV, a lost source or a suspend: "compare only fix to fix"); a fix without the receiver's time; and the shapes `time_step_benign()` names - a whole-second step (±250 ms) equal to minus the change in `leapseconds`, up to `leapseconds` seconds when the count first appears after a cold boot, a one-second step within 2 s of UTC midnight, and a step within 60 s of ±1 or ±2 × 1024 weeks.
+- **Key** `gnsstime`. **Severity** WARN. **Detail**: the step, the time between the two reads, the clock offset before and after, the host clock step, and the two `leapseconds` values. A host clock step alone (NTP, `date -s`) moves the offset and never fires this.
+
+Empty technique, second exemption form, with a second reason: the step comes from faults as well as attacks (research/gnss/attack-mapping.md).
+
+## The attack
+
+Psiaki & Humphreys §III-C: "If the spoofer causes the receiver clock error to change too rapidly, then the victim receiver can detect that the rate of clock drift is larger than is reasonable" [4]; §II-D: a stealthy attack "should not attempt to alter the victim's position or timing fix too rapidly. Otherwise, the attack may be recognized by the unphysical nature of the changes" [4]. Humphreys et al. 2008 would "flag jumps of more than, say, 100 ns" [4] - a receiver-internal figure. Through gpsd over USB with no PPS, the in-band delay "may be stable to 10 mSec for hours and then jump by 200mSec ... you can't expect accuracy to UTC much better than 1 second from this method" [2]: hence the 200 ms floor and the 1000 ms default.
+
+Why it matters on this host: a receiver feeding chrony through a refclock marked `trust` - "Assume time from this source is always true" - outvotes every NTP server [1]. chrony's own guards (`makestep` limited to boot, `maxchange`) already refuse a large step after start-up; the exposure is `trust` or a slow pull within the slew limits, "exactly the patient drag-off" the spoofing literature describes [1]. This rule catches the impatient step, not the patient pull, which needs comparison against independent NTP sources.
+
+## Evidence that proves it
+
+What sloth records: the alert detail; `gnss_fix` records carry `rx_time_ms`, `time_off_ms` and `leap`, signed on the clock-offset band held with hysteresis, so a multi-second step writes a record (docs/wiki/gnss.md); `sensor_health.gnss_time_offset_ms`; with `--db`, `gnss_fixes.time_off_ms`.
+
+A moved clock looks like: the receiver's time stepped against the monotonic clock and stayed stepped, the host clock did not step, `leapseconds` did not change, the date is not off by 1024 weeks, and the receiver did not restart. Compare against the host's NTP sources: if they agree with each other and not with the receiver, the receiver is the outlier.
+
+## Benign causes
+
+- A leap second, or the leap count arriving after a cold boot ("reported UTC time may be slightly inaccurate between a cold boot or leap second and the following subframe broadcast") [2] - excluded.
+- A week-number rollover fault, "a date error of a multiple of 1024 weeks" [3] - excluded, and a fault for the receiver's manufacturer.
+- A cold start: "must search the full time and frequency space" [1] - not judged.
+- USB and gpsd latency, which jitters by up to a few hundred milliseconds [2] - under the floor.
+
+Excluded and tested (tests/test_gnss_rules.c): a host clock step; a one-minute suspend; a four-second reader stall draining four queued TPVs; a six-second stall under a 3000 ms threshold; the first fix after a loss; a leap second; the leap count arriving; a one-second step at UTC midnight; a 1024-week rollover; a step that does not hold; 800 ms under the default. Also tested: a backward step at the ordinary cadence fires, the rule waits for the next fix, and `c` does not replay a judged jump.
+
+## Assessment
+
+**Severity.** WARN is right: actionable for a host taking time from the receiver, and ambiguous between a fault and an attack.
+
+**Default.** 1000 ms because "anything below roughly a second is noise on its own terms" for in-band time over USB, with the HOWTO's 200 ms jump as the floor the knob cannot go under [1][2].
+
+**Sufficient to act on?** Sufficient to take the receiver out of time selection until explained; not sufficient to assert spoofing.
+
+**First step for a responder.** Check whether chrony selects this receiver (`chronyc sources`) and how it is marked; then compare its time with the NTP sources.
+
+## Bibliography
+
+1. research/gnss/time-and-position-integrity.md - repo research note (retrieved 2026-11-02): chrony.conf(5) `refclock`, `trust`, `noselect`, `makestep`, `maxchange`; u-blox GPS.G7-SW-12001-B §6.5 and §9
+2. gpsd, "GPSD Time Service HOWTO", gpsd.io/gpsd-time-service-howto.html - as quoted in research/gnss/time-and-position-integrity.md
+3. GPS.gov, "GPS Week Number Rollover", archive.gps.gov/support/user/rollover/ - as quoted in research/gnss/time-and-position-integrity.md
+4. M. L. Psiaki, T. E. Humphreys, Proc. IEEE 104(6), 2016, doi:10.1109/JPROC.2016.2526658; T. E. Humphreys et al., ION GNSS 2008, pp. 2314-2325 - as quoted in research/gnss/spoofing-detection.md and research/gnss/time-and-position-integrity.md
+
+## Verification notes
+
+Written 2026-11-03 with the rule, against the working tree that adds it. Code facts checked against src/alerts/rules_gnss.c, src/gps.c (the per-fix `wall_ms`, `mono_ms`, `rx_time_ms`, `leap`, `reacq`) and src/tune.c. Sources **not re-fetched**: quotations are from research/gnss/time-and-position-integrity.md and research/gnss/spoofing-detection.md, which record their own first-hand reading on 2026-11-02. No reference-host firing data yet.

@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
+**Last updated**: 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
 **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
@@ -30,6 +30,7 @@ type: reference
   | `rules_wifi_mgmt.c` | 802.11 management/control plane and the sensor's radio: the floods, BTM, CSA, RRM, RTS, SA Query, MFP, Block Ack, malformed management frames, probe floods, recon, transit, unknown devices, RF degradation, no monitor radio, PM forgery, queue release, TPC |
   | `rules_twin.c` | impersonation: the evil-twin family, SSID confusion, KARMA, open/camera setup SSIDs, captive portal, WPA downgrade, SAE, FragAttacks — and the pair scoring the Twins view shares |
   | `rules_enterprise.c` | rogue RADIUS, PEAP without a server certificate, the three WPS verdicts |
+  | `rules_gnss.c` | the `--gps` receiver's own inputs: GNSS jamming, spoofing suspect, time and position jumps |
   | `rules_mle.c` | the 802.11be Multi-Link Element rules: five keyed by MLD MAC, two by BSSID (#104) |
 
   `src/alerts.h` is the public API and did not change.
@@ -633,6 +634,65 @@ ruling 8).
 Full row, including the false-positive cases, in
 [`docs/views/alerts.md`](../views/alerts.md); basis in
 `research/papers/surveillance-vendor-endpoints.md`.
+### The GNSS receiver (2026-11-03)
+
+What the `--gps` receiver reports about its own inputs ([[gnss]]),
+judged by `src/alerts/rules_gnss.c` from the per-poll snapshot
+(`s->gnss_sky`, `s->gnss_fix` and the `s->gnss_hist` rings) and never
+from `src/gps.c`, every window on the host's monotonic clock. A u-blox 7
+behind gpsd 3.27 exports no AGC, no `jammingState` and no
+`spoofDetState`, so all four are built from SKY `ss` / `used` and TPV
+`mode` / `time` / `eph` / `speed` / `eps` / `leapseconds` / `jam`. Each
+threshold is a `gnss.*` knob ([[cli-reference]]), and each default is
+argued from `research/gnss/` in the rule's comment and its assessment
+in [alert-assessments/](alert-assessments/README.md); where the research
+says no published threshold exists, the comment says so and the default
+is the conservative one.
+
+| Kind | Sev | ATT&CK | Fires on |
+|---|---|---|---|
+| `GNSS_JAMMING` | WARN, CRIT when the fix is lost | Mobile T1464 | the tracked satellites' median C/N0 collapsing at once (≥ 10 dB under the 60 s before a 10 s window, satellites still listed and the list not down 2, the used set down 2 or the fix gone; ss-0 rows are not tracked and do not count), or the u-blox `jamInd` ≥ 128 held 30 s |
+| `GNSS_SPOOF_SUSPECT` | LOW on two heuristics, WARN on three, never CRIT | — | two of: used C/N0 too high on ≥ 4 satellites, used C/N0 uniform (sd < 1 dB over ≥ 6) and high, a reacquisition with a position or time jump — within 300 s |
+| `GNSS_TIME_JUMP` | WARN | — | the receiver's time stepping ≥ 1000 ms against the host's monotonic clock from the last accepted fix, held on the next fix; not a queued read after a stall, not a suspend |
+| `GNSS_POSITION_JUMP` | WARN | — | consecutive fixes farther apart than (speed + eps) × Δt + 3 × (eph₁ + eph₂), Δt the receiver's epoch spacing |
+
+**`GNSS_JAMMING` takes Mobile T1464** (owner ruling 2026-11-03), the
+only Mobile ATT&CK ID in `include/sloth_alerts.def` and the only
+technique in any matrix whose text names GPS jamming; like
+`RF_DEGRADED`'s T1498 it tags the observable, not intent, because DHS
+2017 defines interference and jamming as the same effect. The detail
+says "interference or jamming" and never names a source: one receiver
+cannot bearing a jammer. **The other three take the second exemption
+form** — a real basis (Psiaki & Humphreys 2016, Humphreys et al. 2008,
+chrony, the gpsd time HOWTO, GPS.gov on the week rollover) and no
+technique that describes them; a time or position step also comes from
+faults. They are on the named list in `tests/test_research_corpus.c ::
+test_uncitable_kinds_with_a_real_basis_are_still_cited`, and
+`research/gnss/attack-mapping.md` records why ICS T0830 and T0856 (now
+T1692.002) are not fits.
+
+What separates each from its benign twin, and is tested
+(`tests/test_gnss_rules.c`, every absence seen red under a named
+mutation): `GNSS_JAMMING` measures its drop against the minute before
+the window, so a sky falling over minutes moves it a decibel or two; a
+dip that keeps the solution (foliage) does not fire; an empty sky is
+the antenna gone, not this. `GNSS_TIME_JUMP` takes the host's own wall
+step out (an NTP step or `date -s` moves the clock offset and never
+fires it), passes over a step that does not hold on the next fix, and
+does not judge the first fix after a start or a loss, a leap second (a
+whole-second step with a `leapseconds` change, or at UTC midnight) or a
+1024-week rollover. `GNSS_POSITION_JUMP` puts the reported speed in the
+bound and does not judge a cold start or a fix without `eph`.
+`GNSS_SPOOF_SUSPECT` never fires on one heuristic, counts only satellites
+in the solution, keeps the indoor case (uniform but weak) out with a
+mean gate, and cannot see a spoofer that was present before sloth
+started (the u-blox M8's own detector has the same limit).
+
+Each rule judges a fix pair once; `c` (alerts_clear) drops the rules'
+memory and a fix received before it is never judged after it, so
+clearing cannot replay a minute-old jump. No new JSONL record: the
+alert records already carry `loc` ([[location]]).
+
 ### Exposure rules — no ATT&CK technique, on purpose
 
 `OPEN_SETUP_AP` (#80), `CAM_WS_DISCOVERY` (#106 slice 1),

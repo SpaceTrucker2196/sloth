@@ -107,6 +107,13 @@ const alert_rule_t g_alert_rules[] = {
     R(rule_country_absent),
     R(rule_dfs_masking),
     R(rule_cam_rtsp_unauth),
+    /* The GNSS rules depend on no other rule and none on them. Jamming
+     * first: when a jam and a reacquisition land in one tick, the
+     * interference reaches the stream before the suspicion it feeds. */
+    R(rule_gnss_jamming),
+    R(rule_gnss_time_jump),
+    R(rule_gnss_position_jump),
+    R(rule_gnss_spoof_suspect),
 };
 
 #undef R

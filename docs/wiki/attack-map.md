@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/README.md`, `docs/views/alerts.md`, all per-view docs.
 
-**Last updated**: 2026-10-15.
+**Last updated**: 2026-11-03 (GNSS receiver attacks); 2026-10-15.
 
 ---
 
@@ -44,6 +44,15 @@ type: reference
 | KARMA / mana — auto-respond to every probe | [pnl.md](../views/pnl.md), [assoc.md](../views/assoc.md) |
 | Beacon flood (mdk3/4) | [beacons.md](../views/beacons.md) |
 
+## GNSS receiver attacks (`--gps`)
+
+| Threat | Start here |
+|--------|------------|
+| GPS jamming / interference | [gnss.md](../views/gnss.md), [[gnss]], [[alerts]] (`GNSS_JAMMING`) |
+| GPS spoofing | [gnss.md](../views/gnss.md), [[alerts]] (`GNSS_SPOOF_SUSPECT`) |
+| Receiver clock moved (host time steered by GNSS) | [[gnss]] (the clock offset), [[alerts]] (`GNSS_TIME_JUMP`) |
+| Position moved implausibly | [[location]], [[alerts]] (`GNSS_POSITION_JUMP`) |
+
 ## Triage tips
 
 - **Bold IP across multiple [[dashboard]] panels** → start with
@@ -56,7 +65,7 @@ type: reference
 
 ## Related pages
 
-- [[alerts]] — the <!-- count:rules -->90<!-- /count --> alert rules and what each one keys on.
+- [[alerts]] — the <!-- count:rules -->94<!-- /count --> alert rules and what each one keys on.
 - [[threat-intel]] — the IOC list and its match semantics.
 - [[ja3-fingerprinting]] — TLS-client identification primitive.
 - [[beacon-detection]] — C2 periodicity detector.

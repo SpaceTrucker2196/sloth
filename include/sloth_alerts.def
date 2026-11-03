@@ -316,3 +316,31 @@ X(BLE_HID_UNEXPECTED, "T1200") /* Hardware Additions — a keyboard that should 
  * empty, so with no rows it never fires. Category, never identity. */
 /* advertiser matching a watched category (row-driven, shipped empty) in range — Bluetooth SIG member UUIDs (#144 slice 4) */
 X(BLE_WATCHLIST, "") /* observation of a category, not adversary technique (#144 slice 4) */
+/* The GNSS rules (2026-11-03, src/alerts/rules_gnss.c), read off the
+ * --gps receiver's sky and fixes (docs/wiki/gnss.md). T1464 is a MOBILE
+ * ATT&CK technique, the only ID here from that matrix: every other row
+ * is Enterprise. Mobile T1464 Network Denial of Service is the one
+ * technique in any matrix whose text names GPS jamming ("jam radio
+ * signals (e.g. Wi-Fi, cellular, GPS)"); Enterprise T1498 is about a
+ * network connection's bandwidth, which a GNSS receiver is not on
+ * (research/gnss/attack-mapping.md; owner ruling 2026-11-02). Like
+ * RF_DEGRADED's T1498 it tags the observable, not intent: DHS 2017
+ * defines interference and jamming as the same effect. */
+/* tracked-median C/N0 collapse with the used set falling, or the u-blox jamInd held high — DHS 2017, u-blox 7 MON-HW */
+X(GNSS_JAMMING, "T1464") /* Mobile ATT&CK: Network Denial of Service (GPS jamming) */
+/* Deliberately empty, the second exemption form (agents/AGENTS.md):
+ * a real basis — Psiaki & Humphreys 2016, Humphreys et al. 2008 — and
+ * no technique in any matrix names GNSS spoofing; ICS T0830 and
+ * T0856 (now T1692.002) are about network sessions and ICS reporting
+ * messages, not counterfeit satellite signals
+ * (research/gnss/attack-mapping.md). */
+/* two of: used C/N0 too high, used C/N0 uniform and high, reacquisition with a jump — Psiaki & Humphreys 2016 */
+X(GNSS_SPOOF_SUSPECT, "") /* real basis, no ATT&CK technique names GNSS spoofing (second exemption form) */
+/* Empty on the same form, and a second reason: a step comes from
+ * faults as well as attacks (leap second, week rollover, cold start;
+ * research/gnss/time-and-position-integrity.md). */
+/* receiver time stepped against the host's monotonic clock between fixes — chrony, gpsd time HOWTO */
+X(GNSS_TIME_JUMP, "") /* real basis, no ATT&CK technique (second exemption form) */
+/* Empty on the same form and for the same second reason. */
+/* consecutive fixes farther apart than speed x dt plus k x (eph + eph) — Psiaki & Humphreys 2016 §III-C */
+X(GNSS_POSITION_JUMP, "") /* real basis, no ATT&CK technique (second exemption form) */

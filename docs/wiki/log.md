@@ -6123,3 +6123,37 @@ slothweb.db schema step. Updated [[slothweb]], `docs/web-frrs-spec.md`,
   position jumps, so those three take the second exemption form). Each
   `alert_kinds` line is commented out until its `X()` entry lands.
   `research.db` rebuilt. Pages touched: [[research-corpus]].
+
+## 2026-11-03 — The four GNSS rules
+
+Owner: "finish ... gps dectors". `GNSS_JAMMING` (WARN, CRIT on a lost
+fix; Mobile T1464 by owner ruling), `GNSS_SPOOF_SUSPECT` (LOW on two
+heuristics, WARN on three, never CRIT), `GNSS_TIME_JUMP` and
+`GNSS_POSITION_JUMP` (WARN; empty technique, second exemption form) in
+the new `src/alerts/rules_gnss.c`, last in the rule table; 90 → 94
+rules. They read the per-poll snapshot: `s->gnss_hist` points at
+gps.c's copy of the rings, which now carry the host's monotonic and
+wall clocks, the receiver's time, `speed`, `eps` (TPV `eps` parsed),
+`leapseconds` and a `reacq` flag per fix, and the mode per second.
+Twelve `gnss.*` knobs, each default argued from `research/gnss/` with
+its quote. The four research documents' `alert_kinds` uncommented and
+`research.db` rebuilt; one assessment per kind; remediation sections;
+`tests/test_gnss_rules.c` with hand-built sequences, every absence seen
+red under a named mutation. No new JSONL record. Updated [[gnss]],
+[[alerts]], [[cli-reference]], [[research-corpus]], [[alert-remediation]],
+`docs/views/alerts.md`, `docs/views/gnss.md`,
+[alert-assessments/](alert-assessments/README.md).
+
+Review fixes before push. Receipt time is not epoch time:
+`GNSS_TIME_JUMP` now measures from the last accepted fix, never from a
+fix that did not hold, skips a fix read from a queue (a reader stalled
+by Ctrl-Z or load draining gpsd's buffer a millisecond apart, which
+fired the first version) and takes a suspend as a reacquisition;
+`GNSS_POSITION_JUMP` takes Δt from the receiver's own time, so a
+moving receiver's queued fixes no longer shrink the bound to the error
+estimates. `GNSS_JAMMING` reads the median C/N0 of the tracked
+satellites (ss > 0) with the tracked count, and requires the list to
+hold, so a building hiding four of ten satellites is no longer a 12 dB
+collapse. The four research documents speak of the kinds in the
+present tense and `research.db` is rebuilt; [[cli-reference]] no longer
+says no rule reads a position.

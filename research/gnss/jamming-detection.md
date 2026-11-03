@@ -2,16 +2,13 @@
 source_url: https://www.cisa.gov/resources-tools/resources/paper-improving-operation-and-development-gps-equipment-used-critical-infrastructure
 retrieved: 2026-11-02
 topics: [gnss, gps, jamming, interference, c-n0, agc, mon-hw, jamind, u-blox-7, gpsd, fcc, gpsjam]
-# The detector does not exist yet. ALERT_TYPE_GNSS_JAMMING is not in
-# include/sloth_alerts.def, and test_no_document_cites_a_nonexistent_alert_kind
-# fails on any alert_kinds entry the enum lacks. Uncomment the line below in
-# the same commit that adds the X() entry.
-# alert_kinds: [ALERT_TYPE_GNSS_JAMMING]
+alert_kinds: [ALERT_TYPE_GNSS_JAMMING]
 citation: DHS NCCIC/NCC, "Improving the Operation and Development of GPS Equipment Used by Critical Infrastructure", 2017-01-06
 ---
 # GNSS jamming — what a u-blox 7 behind gpsd reports, and what that cannot tell apart
 
-The basis for the planned `ALERT_TYPE_GNSS_JAMMING`. Every source below
+The basis for `ALERT_TYPE_GNSS_JAMMING` (`src/alerts/rules_gnss.c`,
+2026-11-03). Every source below
 was read first-hand on 2026-11-02; the list is under **Sources**.
 
 **Verdict.** The sources support flagging *interference* — C/N0

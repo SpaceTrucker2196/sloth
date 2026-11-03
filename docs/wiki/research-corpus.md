@@ -3,7 +3,7 @@
 **Issue:** [#73](https://github.com/SpaceTrucker2196/sloth/issues/73) ·
 **Built by:** `make research-index` · **Guard:** `tests/test_research_corpus.c`
 
-**Last updated**: 2026-11-02 (four GNSS documents, kinds pending; the BLE device-class document, no alert kind); 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
+**Last updated**: 2026-11-03 (the four GNSS kinds landed: each document's `alert_kinds` uncommented); 2026-11-02 (four GNSS documents, kinds pending; the BLE device-class document, no alert kind); 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
 
 `agents/AGENTS.md` § Discipline says every detector names its basis. The
 citations exist — in issue bodies, wiki pages and the rule table — but
@@ -419,19 +419,24 @@ AltBeacon, Find My and SmartTag are left out. It has no `alert_kinds`:
 it backs slothweb's display classes (`web/src/web_bledev.c`), not a
 rule. See [[slothweb]].
 
-The GNSS observation layer's four planned detectors cite theirs ahead
-of the code (2026-11-02), in `research/gnss/`:
+The GNSS observation layer's four detectors cite theirs (written ahead
+of the code on 2026-11-02), in `research/gnss/`:
 `spoofing-detection.md` (Psiaki & Humphreys 2016, Humphreys et al.
 2008, what a u-blox 7 lacks against the M8's `spoofDetState`),
 `jamming-detection.md` (DHS 2017, u-blox 7 MON-HW `jamInd` and what
 gpsd 3.27 passes through, FCC jammer enforcement, GPSJam's method),
 `time-and-position-integrity.md` (chrony `trust`/`maxchange`, the gpsd
 time HOWTO, the 2019 week rollover) and `attack-mapping.md` (Mobile
-T1464 for jamming; no technique for spoofing). The kinds are not in
-`include/sloth_alerts.def` yet, so each document carries its
-`alert_kinds` line **commented out**: the guard's first direction fails
-on a kind the enum lacks, and the line is uncommented in the commit that
-adds the `X()` entry.
+T1464 for jamming; no technique for spoofing). The documents went in
+with their `alert_kinds` lines commented out, because the guard's first
+direction fails on a kind the enum lacks; the commit that added the four
+`X()` entries (2026-11-03, `src/alerts/rules_gnss.c`) uncommented them:
+`jamming-detection.md` cites `GNSS_JAMMING`, `spoofing-detection.md`
+`GNSS_SPOOF_SUSPECT`, `time-and-position-integrity.md` both jumps, and
+`attack-mapping.md` names the four in prose only. `GNSS_JAMMING` takes
+Mobile T1464 (owner ruling 2026-11-03) and the coverage guard holds it;
+the other three are on the cited-basis list in
+`test_uncitable_kinds_with_a_real_basis_are_still_cited`. See [[gnss]].
 
 ## What is not here yet
 - **Coverage.** 59 of 60 alert kinds have a document, and the sixtieth

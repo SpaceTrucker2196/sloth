@@ -88,12 +88,14 @@ static void test_alert_table_is_the_def(void) {
                   t == (WEB_SC_L | WEB_SC_IPCAP));
         if (t == WEB_SC_META) {
             meta++;
+            /* sloth's own state, and the host's own GNSS receiver */
             WT_ASSERT(!strcmp(web_scope_alerts[i].name, "NO_MONITOR_MODE") ||
-                      !strcmp(web_scope_alerts[i].name, "BT_OWN_TRANSMIT"));
+                      !strcmp(web_scope_alerts[i].name, "BT_OWN_TRANSMIT") ||
+                      !strncmp(web_scope_alerts[i].name, "GNSS_", 5));
         }
         if (i < web_akb_n) WT_ASSERT(!strcmp(web_akb[i].name, web_scope_alerts[i].name));
     }
-    WT_EQ(meta, 2);
+    WT_EQ(meta, 6);
     /* The rule's input, not its file: the overrides the survey named. */
     static const struct { const char *n; int tag; } O[] = {
         { "CAPTIVE_PORTAL", WEB_SC_L }, { "CAM_SETUP_OUI", WEB_SC_M },
@@ -292,12 +294,13 @@ static void test_tags(void) {
     int nl = web_scope_alert_types(WEB_SCOPE_LOCAL, 0, ty, 128);
     int nh = web_scope_alert_types(WEB_SCOPE_HYBRID, 0, ty, 128);
     WT_EQ(nh, web_scope_alerts_n);
-    WT_EQ(nm + nl, web_scope_alerts_n + 2);   /* the two own-state types twice */
-    /* On a radio Local keeps the own-state types and the four rules over
-     * the host's own tables: PORT_SCAN (scan_entries, the /proc sockets),
-     * THREAT_IP and BEACONING (s->conns) and ARP_SPOOF (/proc/net/arp).
-     * Seen red with each tagged LI. */
-    WT_EQ(web_scope_alert_types(WEB_SCOPE_LOCAL, 1, ty, 128), 6);
+    /* the two own-state types and the four GNSS types, twice */
+    WT_EQ(nm + nl, web_scope_alerts_n + 6);
+    /* On a radio Local keeps those six and the four rules over the host's
+     * own tables: PORT_SCAN (scan_entries, the /proc sockets), THREAT_IP
+     * and BEACONING (s->conns) and ARP_SPOOF (/proc/net/arp). Seen red
+     * with each tagged LI. */
+    WT_EQ(web_scope_alert_types(WEB_SCOPE_LOCAL, 1, ty, 128), 10);
     WT_EQ(ty[0], 0);    /* PORT_SCAN */
     WT_EQ(ty[1], 4);    /* THREAT_IP */
     WT_EQ(ty[2], 5);    /* BEACONING */

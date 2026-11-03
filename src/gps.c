@@ -492,6 +492,7 @@ int gpsd_json_parse(const char *line, size_t n, gpsd_msg_t *out) {
             else if (strcmp(key, "epx") == 0)    { out->epx = d; out->has_epx = 1; }
             else if (strcmp(key, "epy") == 0)    { out->epy = d; out->has_epy = 1; }
             else if (strcmp(key, "epv") == 0)    { out->epv = d; out->has_epv = 1; }
+            else if (strcmp(key, "eps") == 0)    { out->eps = d; out->has_eps = 1; }
             else if (strcmp(key, "hdop") == 0)   { out->hdop = d; out->has_hdop = 1; }
             else if (strcmp(key, "pdop") == 0)   { out->pdop = d; out->has_pdop = 1; }
             else if (strcmp(key, "vdop") == 0)   { out->vdop = d; out->has_vdop = 1; }
@@ -741,12 +742,20 @@ static struct {
     char     err[96];
     uint64_t sentences, bad_checksum, parse_errors, reconnects;
     /* GNSS observation (2026-11-02): the sky, the newest TPV, and the
-     * history the detector slice will read. */
+     * history the GNSS rules read (src/alerts/rules_gnss.c). */
     gnss_sky_t  sky;
     gnss_fix_t  gfix;
     gnss_hist_t hist;
     time_t      sec_last;   /* the second the newest series point is for */
+    int         fix_gap;    /* a TPV said no fix, or the source went away,
+                             * since the newest positioned fix: the next
+                             * one is a reacquisition (gnss_fix_pt_t.reacq) */
 } g_loc = { .quality = -1 };
+
+/* The per-poll copy of g_loc.hist that s->gnss_hist points at: written
+ * only by gps_health_poll() on the main thread, read by the rules on the
+ * same thread after it. */
+static gnss_hist_t g_hist_snap;
 
 static int range_ok(double lat, double lon) {
     return isfinite(lat) && isfinite(lon) &&
@@ -882,6 +891,7 @@ static void take_sky(const gpsd_msg_t *m, time_t wall) {
     }
     k->valid = 1;
     k->ts = wall;
+    k->mono_ms = sloth_mono_ms();
     k->nsat = m->has_nsat ? m->nsat : (m->nsats ? m->nsats + m->sats_overflow : -1);
     k->usat = m->has_usat ? m->usat : -1;
     k->n = 0;
@@ -925,13 +935,40 @@ static void take_sky(const gpsd_msg_t *m, time_t wall) {
     k->passes++;
 }
 
+/* The median C/N0 x 10 of the sky's tracked rows (ss > 0), 0 when none
+ * is. Tracked only: gpsd lists satellites it is not tracking at ss 0,
+ * and averaging those in turned a building blocking four of ten
+ * satellites into a 12 dB "collapse" while the other six sat at exactly
+ * their old level. The median, because the jamming signature is most of
+ * the tracked set falling together; a subset lost to an obstruction
+ * leaves it where the rest are. */
+static int sky_tracked_median_x10(const gnss_sky_t *k, int *n_out) {
+    int16_t v[GNSS_MAX_SATS];
+    int n = 0;
+    for (int i = 0; i < k->n && i < GNSS_MAX_SATS; i++) {
+        const gnss_sat_t *a = &k->sats[i];
+        if (!a->has_cn0 || a->cn0_x10 <= 0) continue;
+        int j = n++;
+        while (j > 0 && v[j - 1] > a->cn0_x10) { v[j] = v[j - 1]; j--; }
+        v[j] = a->cn0_x10;
+    }
+    *n_out = n;
+    if (n == 0) return 0;
+    return n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2] + 1) / 2;
+}
+
 /* Caller holds g_mu. One point per second of the sky's summary, for
  * the jamming detector's window; the newest point of a second wins. */
 static void push_sec(time_t wall) {
     gnss_hist_t *h = &g_loc.hist;
     gnss_sec_pt_t pt;
+    memset(&pt, 0, sizeof(pt));
     pt.ts = wall;
-    pt.cn0_mean_x10 = (int16_t)(g_loc.sky.cn0_mean * 10.0 + 0.5);
+    pt.mono_ms = g_loc.gfix.host_mono_ms;
+    pt.mode = (uint8_t)(g_loc.gfix.mode > 0 && g_loc.gfix.mode <= 3 ? g_loc.gfix.mode : 0);
+    int trk = 0;
+    pt.cn0_med_x10 = (int16_t)sky_tracked_median_x10(&g_loc.sky, &trk);
+    pt.trk = (uint8_t)(trk > 255 ? 255 : trk);
     pt.jam = (int16_t)g_loc.gfix.jam;
     pt.usat = (uint8_t)(g_loc.sky.usat > 0 ? (g_loc.sky.usat > 255 ? 255 : g_loc.sky.usat) : 0);
     pt.nsat = (uint8_t)(g_loc.sky.nsat > 0 ? (g_loc.sky.nsat > 255 ? 255 : g_loc.sky.nsat) : 0);
@@ -950,7 +987,20 @@ static void push_sec(time_t wall) {
 static void push_fix_pt(const gnss_fix_t *f) {
     gnss_hist_t *h = &g_loc.hist;
     gnss_fix_pt_t *p = &h->fixes[h->fix_head];
+    memset(p, 0, sizeof(*p));
     p->ts = f->ts;
+    p->seq = f->count;
+    p->mono_ms = f->host_mono_ms;
+    p->wall_ms = f->host_wall_ms;
+    p->has_speed = f->has_speed;
+    p->speed = f->speed;
+    p->has_eps = f->has_eps;
+    p->eps = f->eps;
+    p->has_rx_time = f->has_rx_time;
+    p->rx_time_ms = f->rx_time_ms;
+    p->leap = f->leap;
+    p->reacq = (h->fix_n == 0 || g_loc.fix_gap) ? 1 : 0;
+    g_loc.fix_gap = 0;
     p->lat = f->lat;
     p->lon = f->lon;
     p->has_alt = f->has_alt;
@@ -995,8 +1045,13 @@ static void take_tpv(const gpsd_msg_t *m, time_t wall, int64_t wall_ms) {
     memset(f, 0, sizeof(*f));
     f->valid = 1;
     f->ts = wall;
+    f->host_wall_ms = (long long)wall_ms;
+    f->host_mono_ms = sloth_mono_ms();
     f->count = keep.count + 1;
     f->mode = m->mode < 0 ? 0 : m->mode;
+    /* An explicit mode 0 or 1 is the receiver saying it has no fix; a
+     * TPV without a mode says nothing either way. */
+    if (m->mode >= 0 && m->mode < 2) g_loc.fix_gap = 1;
     f->status = m->status;
     f->leap = m->leap;
     /* jam rides only the TPV after a UBX-MON-HW poll: a TPV without it
@@ -1023,6 +1078,8 @@ static void take_tpv(const gpsd_msg_t *m, time_t wall, int64_t wall_ms) {
     if (m->has_epv && acc_ok(m->epv)) { f->has_epv = 1; f->epv = m->epv; }
     if (m->has_speed && isfinite(m->speed) && m->speed >= 0 && m->speed < 1e4)
         { f->has_speed = 1; f->speed = m->speed; }
+    if (m->has_eps && isfinite(m->eps) && m->eps >= 0 && m->eps < 1e4)
+        { f->has_eps = 1; f->eps = m->eps; }
     if (m->has_track && isfinite(m->track) && m->track >= 0 && m->track <= 360)
         { f->has_track = 1; f->track = m->track; }
     if (m->has_climb && isfinite(m->climb) && m->climb > -1e4 && m->climb < 1e4)
@@ -1121,6 +1178,7 @@ void gps_location_note(int sentences, int bad_checksum, int parse_errors,
 void gps_location_source_lost(void) {
     pthread_mutex_lock(&g_mu);
     g_loc.fix_live = 0;
+    g_loc.fix_gap = 1;      /* a reconnect's first fix has no prior */
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -1214,6 +1272,8 @@ void gps_health_poll(sloth_state_t *s, time_t now) {
     h->jam          = g_loc.gfix.valid ? g_loc.gfix.jam : -1;
     s->gnss_sky = g_loc.sky;
     s->gnss_fix = g_loc.gfix;
+    g_hist_snap = g_loc.hist;
+    s->gnss_hist = &g_hist_snap;
     pthread_mutex_unlock(&g_mu);
 }
 

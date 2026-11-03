@@ -2,17 +2,14 @@
 source_url: https://chrony-project.org/doc/latest/chrony.conf.html
 retrieved: 2026-11-02
 topics: [gnss, gps, time, chrony, refclock, gpsd, leap-second, week-rollover, position-jump, tpv, eph, drift-monitoring]
-# The detectors do not exist yet. Neither kind is in include/sloth_alerts.def,
-# and test_no_document_cites_a_nonexistent_alert_kind fails on any
-# alert_kinds entry the enum lacks. Uncomment the line below in the same
-# commit that adds the X() entries.
-# alert_kinds: [ALERT_TYPE_GNSS_TIME_JUMP, ALERT_TYPE_GNSS_POSITION_JUMP]
+alert_kinds: [ALERT_TYPE_GNSS_TIME_JUMP, ALERT_TYPE_GNSS_POSITION_JUMP]
 citation: chrony.conf(5) refclock/trust/maxchange; gpsd time service HOWTO; GPS.gov week rollover; Psiaki & Humphreys 2016 §III-C
 ---
 # GNSS time and position jumps — why they matter here, and how big a legitimate one is
 
-The basis for the planned `ALERT_TYPE_GNSS_TIME_JUMP` and
-`ALERT_TYPE_GNSS_POSITION_JUMP`. Every source below was read first-hand
+The basis for `ALERT_TYPE_GNSS_TIME_JUMP` and
+`ALERT_TYPE_GNSS_POSITION_JUMP` (`src/alerts/rules_gnss.c`, 2026-11-03).
+Every source below was read first-hand
 on 2026-11-02.
 
 **Verdict.** A jump is the observable that every spoofing source

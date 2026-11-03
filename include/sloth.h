@@ -3094,6 +3094,8 @@ typedef struct {
 typedef struct {
     int        valid;          /* a SKY with satellites has arrived */
     time_t     ts;             /* wall at receipt */
+    uint64_t   mono_ms;        /* sloth_mono_ms() at receipt: what the
+                                * GNSS rules age the sky by */
     int        nsat, usat;     /* SKY nSat / uSat; -1 absent */
     int        n;              /* rows in sats[] */
     int        overflow;       /* satellites past GNSS_MAX_SATS, not kept */
@@ -3117,6 +3119,12 @@ typedef struct {
     double    eph, epv;        /* metres */
     int       has_speed, has_track, has_climb;
     double    speed, track, climb;
+    int       has_eps;
+    double    eps;             /* speed error estimate, m/s (gpsd TPV eps) */
+    long long host_wall_ms;    /* the host's wall clock as the line was framed */
+    uint64_t  host_mono_ms;    /* and its monotonic clock, read in take_tpv():
+                                * the pair tells a host clock step from a
+                                * receiver one (rules_gnss.c GNSS_TIME_JUMP) */
     int       has_rx_time;
     long long rx_time_ms;      /* the receiver's "time", unix ms */
     int       has_time_off;
@@ -3135,6 +3143,52 @@ typedef struct {
     double    gst_lat_sd, gst_lon_sd, gst_alt_sd;
     uint64_t  count;           /* TPVs, lifetime */
 } gnss_fix_t;
+
+/* The history the GNSS rules read (src/alerts/rules_gnss.c), kept by
+ * src/gps.c and copied by gps_health_poll() into the per-poll snapshot
+ * s->gnss_hist points at, so a rule reads the snapshot, never the module: the last GNSS_FIX_HIST
+ * positioned fixes (mode >= 2 with a position) and GNSS_SERIES_S
+ * one-second points of the sky's summary. Rings, oldest overwritten.
+ * Every point carries the host's monotonic clock at receipt: the rules'
+ * windows and the time-jump test run on it, never on wall time. */
+#define GNSS_FIX_HIST 64
+#define GNSS_SERIES_S 300
+typedef struct {
+    time_t    ts;              /* wall at receipt */
+    uint64_t  seq;             /* the TPV's count (gnss_fix_t.count) */
+    uint64_t  mono_ms;         /* host monotonic ms at receipt */
+    long long wall_ms;         /* host wall ms at receipt */
+    double    lat, lon, alt_m, eph;
+    int       mode, usat, has_alt, has_eph, has_time_off;
+    long long time_off_ms;
+    int       has_speed, has_eps, has_rx_time;
+    double    speed, eps;      /* m/s */
+    long long rx_time_ms;      /* the receiver's own time, unix ms */
+    int       leap;            /* leapseconds, -1 absent */
+    int       reacq;           /* the first positioned fix since sloth
+                                * started, since a TPV said no fix (mode
+                                * 0 or 1), or since the source was lost:
+                                * there is no fix before it to compare */
+} gnss_fix_pt_t;
+typedef struct {
+    time_t   ts;               /* wall second the point is for */
+    uint64_t mono_ms;          /* host monotonic ms of its newest TPV */
+    int16_t  cn0_med_x10;      /* median C/N0 x 10 of the tracked rows
+                                * (ss > 0), 0 when none is tracked: gpsd
+                                * lists untracked satellites at ss 0, and
+                                * a mean over them reads a satellite
+                                * lost to an obstruction as a collapse */
+    int16_t  jam;              /* -1 absent */
+    uint8_t  trk;              /* rows tracked (ss > 0) */
+    uint8_t  usat, nsat;
+    uint8_t  mode;             /* the TPV's mode: 0..1 no fix */
+} gnss_sec_pt_t;
+typedef struct {
+    gnss_fix_pt_t fixes[GNSS_FIX_HIST];
+    int           fix_n, fix_head;     /* head: the next slot written */
+    gnss_sec_pt_t secs[GNSS_SERIES_S];
+    int           sec_n, sec_head;
+} gnss_hist_t;
 
 typedef struct {
     int      configured;       /* --bt-capture given */
@@ -3618,6 +3672,11 @@ typedef struct {
      * by gps_health_poll(); the [#] view's cursor and detail flag. */
     gnss_sky_t       gnss_sky;
     gnss_fix_t       gnss_fix;
+    /* The rings the GNSS rules read: gps_health_poll() points this at
+     * its own per-poll copy (taken under the gps lock), NULL before the
+     * first poll. A pointer rather than the 16 KB copy itself: the state
+     * is returned by value in tests whose stack it already nearly fills. */
+    const gnss_hist_t *gnss_hist;
     int              gnss_sel;        /* row index into the C/N0-sorted table */
     int              gnss_sel_key;    /* the selected satellite's identity
                                        * (views/gnss.c gnss_sat_key), 0 none:

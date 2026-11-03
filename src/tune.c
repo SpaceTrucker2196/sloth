@@ -265,6 +265,24 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "gps.min_move_m",             5, 0, 100000, "metres the GPS fix must move before a device position is sampled again" },
     { "gps.sample_s",               60, 1, 86400, "at rest: sensor track interval; device keep-alive is 10x this" },
     { "gps.max_fix_age_s",          30, 1, 3600, "seconds after which a GPS fix is stale and stamps nothing" },
+    /* The GNSS rules (2026-11-03, src/alerts/rules_gnss.c; bases in
+     * research/gnss/). The series the jamming rule reads holds 300 s and
+     * its baseline takes the 60 s before the window, so the window stops
+     * well short of that and the hold one point short. time_jump_ms cannot go under 200: the
+     * gpsd time HOWTO's in-band delay "may ... jump by 200mSec", so a
+     * smaller step is link wobble by the source's own account. */
+    { "gnss.jam_cn0_drop_db",       10, 1, 60, "dB the tracked satellites' median C/N0 must fall within gnss.jam_window_s, against the 60 s before it, for GNSS_JAMMING" },
+    { "gnss.jam_window_s",          10, 2, 120, "seconds the GNSS_JAMMING C/N0 collapse must happen within" },
+    { "gnss.jam_ind",               128, 1, 255, "u-blox jamInd (0..255, CW only, uncalibrated) at or above which the indicator path counts" },
+    { "gnss.jam_hold_s",            30, 2, 299, "seconds jamInd must hold at or above gnss.jam_ind for GNSS_JAMMING" },
+    { "gnss.spoof_cn0_high_db",     53, 30, 99, "dB-Hz at or above which a used satellite's C/N0 counts as too high (GNSS_SPOOF_SUSPECT heuristic 1)" },
+    { "gnss.spoof_high_sats",       4, 1, GNSS_MAX_SATS, "used satellites that must be that high at once (four is what a position fix needs)" },
+    { "gnss.spoof_cn0_mean_db",     45, 20, 99, "dB-Hz mean C/N0 over the used set above which a uniform set counts (heuristic 2)" },
+    { "gnss.spoof_cn0_sd_db",       1, 1, 20, "dB the C/N0 spread over the used set must stay under (heuristic 2)" },
+    { "gnss.spoof_min_sats",        6, 3, GNSS_MAX_SATS, "used satellites with a C/N0 the spread is taken over (heuristic 2)" },
+    { "gnss.spoof_window_s",        300, 10, 3600, "seconds in which two GNSS_SPOOF_SUSPECT heuristics must both have been seen" },
+    { "gnss.time_jump_ms",          1000, 200, 3600000, "ms the receiver's time must step against the host's monotonic clock between fixes for GNSS_TIME_JUMP" },
+    { "gnss.pos_jump_k",            3, 1, 100, "multiplier on the two fixes' eph in the GNSS_POSITION_JUMP bound" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

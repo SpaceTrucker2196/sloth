@@ -974,5 +974,6 @@ void alerts_clear(void) {
     /* Reset per-rule history too so tests (and the user pressing 'c')
      * get a fully clean slate. */
     rules_wired_forget();
+    rules_gnss_forget();
     evil_twin_taint_clear();
 }

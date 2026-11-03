@@ -292,6 +292,16 @@ static void test_uncitable_kinds_with_a_real_basis_are_still_cited(void) {
          * member-UUID registry and each row's own source are what it
          * detects from (research/bluetooth/ble-watchlist-categories.md). */
         "ALERT_TYPE_BLE_WATCHLIST",
+        /* 2026-11-03, the GNSS rules. No technique in any ATT&CK matrix
+         * names GNSS spoofing, and a time or position step comes from
+         * faults (leap second, week rollover, cold start) as well as
+         * attacks; Psiaki & Humphreys 2016, Humphreys et al. 2008, chrony
+         * and the gpsd time HOWTO are what they detect from
+         * (research/gnss/attack-mapping.md). GNSS_JAMMING is not here:
+         * it takes Mobile T1464 and the coverage guard holds it. */
+        "ALERT_TYPE_GNSS_SPOOF_SUSPECT",
+        "ALERT_TYPE_GNSS_TIME_JUMP",
+        "ALERT_TYPE_GNSS_POSITION_JUMP",
     };
     sqlite3 *db = open_corpus();
     ASSERT(db != NULL);

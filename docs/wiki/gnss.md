@@ -1,6 +1,6 @@
 ---
 name: gnss
-description: GNSS observation — what sloth records off the --gps receiver beyond its position (the satellites in view with their C/N0, the DOPs, the receiver's clock against the host's), the [#] view, the gnss_fix / gnss_sky / gnss_sat records, the v10 tables, slothweb's panel, the caveats, and the detector hooks left for the next slice
+description: GNSS observation — what sloth records off the --gps receiver beyond its position (the satellites in view with their C/N0, the DOPs, the receiver's clock against the host's), the [#] view, the gnss_fix / gnss_sky / gnss_sat records, the v10 tables, slothweb's panel, the caveats, and the four GNSS alert rules that read it
 type: reference
 ---
 
@@ -15,10 +15,9 @@ the C/N0 mean / max / spread) and the newest fix (mode, status,
 accuracy, speed, the receiver's time against the host's clock). It
 surfaces as the `[#]` TUI view, three change-only JSONL records plus
 five `sensor_health` fields, two `--db` tables (schema v10), the `gps`
-sensor in the registry, and slothweb's GNSS tab. **Observation only**:
-nothing here fires an alert; the detectors that will read this sky
-(spoofing, jamming, time and position jumps) are a following slice,
-and their inputs are kept now (below). **Receive-only** (MISSION §2):
+sensor in the registry, and slothweb's GNSS tab. Since 2026-11-03 four
+alert rules read it — `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`,
+`GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP` (below). **Receive-only** (MISSION §2):
 the one `?WATCH` line to gpsd is unchanged, and a serial device is
 never written to.
 
@@ -28,11 +27,12 @@ GST, `gpsd_time_parse()`, the sky / fix state, `gps_gnss_*_sig()`),
 `src/jsonl.c` (`jsonl_emit_gnss()`, the `gnss_*` appends in
 `jsonl_emit_sensor_health()`), `src/poll.c` (`SENSOR_GPS`), `src/db.c`
 (`write_gnss()`), `src/db_schema.c` (v10), `web/src/web_gnss.c`,
-`web/ui/gnss.js`; tests `tests/test_gps.c` ("GNSS observation"),
+`web/ui/gnss.js`, `src/alerts/rules_gnss.c`; tests `tests/test_gps.c` ("GNSS observation"),
+`tests/test_gnss_rules.c` (the GNSS rules),
 `tests/test_gnss_view.c`, `tests/test_db.c` (v9 → v10),
 `web/tests/test_gnss.c`.
 
-**Last updated**: 2026-11-02 (verify: `GPSD_MAX_LINE` 10240 so a full multi-GNSS SKY fits; a fractional `mode` is no fix; slothweb shows any offset sloth records). 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
+**Last updated**: 2026-11-03 (the four GNSS rules replace the hooks section; the history carries the monotonic clock, `eps`, `leapseconds` and `reacq`). 2026-11-02 (verify: `GPSD_MAX_LINE` 10240 so a full multi-GNSS SKY fits; a fractional `mode` is no fix; slothweb shows any offset sloth records). 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
 
 ## What is read
 
@@ -222,33 +222,57 @@ sensor's position, and [[location]]'s rules govern it unchanged: it
 leaves at five decimals, it is never in a change-only signature, and
 a `--location` run writes none of these records.
 
-## Hooks for the detector slice (named, not fired)
+## The rules (2026-11-03)
 
-`gps_gnss_history()` returns the rings kept for the rules that follow:
-the last 64 positioned fixes (`ts`, lat, lon, alt, eph, mode, usat,
-clock offset) and 300 one-second points of (mean C/N0, usat, nsat,
-jam). The snapshot on `sloth_state_t` (`gnss_sky`, `gnss_fix`) carries
-the per-pass `cn0_sd`, the used set, the GST sigmas and the offset. A
-rule would live in `src/alerts/rules_gnss.c`, read the snapshot (never
-the module), and needs its `research/` document first:
+What were the detector hooks are now four alert kinds,
+`src/alerts/rules_gnss.c` ([[alerts]] § The GNSS receiver, the rows in
+`docs/views/alerts.md`, one assessment each in
+[alert-assessments/](alert-assessments/README.md)). Each rule reads
+the snapshot, never the module: `gps_health_poll()` copies the sky, the
+newest fix and the history rings each poll, `s->gnss_hist` pointing at
+the rings' copy (a pointer, because `sloth_state_t` is returned by value
+in tests whose stack it already nearly fills). The bases are the four
+documents under `research/gnss/` ([[research-corpus]]); the thresholds
+are the twelve `gnss.*` knobs ([[cli-reference]]).
 
-- `GNSS_SPOOF_SUSPECT` — uniform, high C/N0 across the set (low
-  `cn0_sd` with a high mean), the used set changing while the sky does
-  not, an all-satellite C/N0 step, a clock step while the position
-  stands, GST sigmas collapsing. Humphreys et al., *Assessing the
-  spoofing threat* (ION GNSS 2008), is the candidate source.
-- `GNSS_JAMMING` — mean C/N0 falling with `nsat` unchanged, `usat`
-  reaching 0 with satellites still listed, the u-blox `jam` indicator
-  (the receiver description's `jamInd`); the 300 s ring.
-- `GNSS_TIME_JUMP` — consecutive `time_off_ms` deltas and receiver-time
-  monotonicity against the host's monotonic clock.
-- `GNSS_POSITION_JUMP` — `gps_distance_m()` between consecutive fixes
-  over Δt against the reported speed and `eph`; the fix ring.
+| Kind | Sev | ATT&CK | Reads |
+|---|---|---|---|
+| `GNSS_JAMMING` | WARN; CRIT when the fix is lost | Mobile T1464 | the 300 s series: the newest point's median C/N0 over the tracked satellites (ss > 0) against the 60 s before a 10 s window, with the used set falling and the sky still listed at its size; or `jam` held high for 30 s |
+| `GNSS_SPOOF_SUSPECT` | LOW on two heuristics, WARN on three | — | the sky (used C/N0 too high; uniform and high) and the fix ring (a reacquisition with a jump), two within 300 s |
+| `GNSS_TIME_JUMP` | WARN | — | the fix ring: the receiver's time against the host's monotonic clock, from the last accepted fix, held on the next; a fix read from a queue or that did not hold is never the reference |
+| `GNSS_POSITION_JUMP` | WARN | — | the fix ring: distance against (speed + eps) × Δt + 3 × (eph₁ + eph₂), Δt the receiver's epoch spacing |
 
-None has an honest ATT&CK technique unless ICS T0856 / T0830 is judged
-one; each would otherwise land on the "real basis, no technique" list
-in `tests/test_research_corpus.c`. That is a decision for the owner,
-noted here so the next slice does not rediscover it.
+**What the history carries for them** (`gnss_hist_t`, now in
+`include/sloth.h`): every positioned fix keeps the TPV's count, the
+host's monotonic and wall clocks at receipt, the receiver's own time,
+`speed`, `eps` (TPV `eps`, parsed since this change), `eph`,
+`leapseconds`, and `reacq` — set on the first positioned fix since
+sloth started, the first after a TPV that said mode 0 or 1, and the
+first after the source was lost (`gps_location_source_lost()`), so no
+rule compares across a gap. Every one-second point carries the
+monotonic clock, the TPV's mode, and the median C/N0 and count of the
+sky's **tracked** rows (ss > 0): gpsd lists satellites it is not
+tracking at ss 0, and a mean over every row read four satellites lost
+behind a building as a 12 dB collapse of the sky. The sky carries its
+monotonic receipt time. A host clock step therefore moves
+`time_off_ms` (as it always did) and never a rule's window.
+
+**Receipt time is not epoch time.** `mono_ms` is when sloth read the
+TPV. A reader that stalls (the TUI stopped with Ctrl-Z, a loaded Pi)
+and then drains what gpsd queued reads fixes a second apart in the
+receiver's time a millisecond apart; a host suspend stops the monotonic
+clock while the receiver's keeps going. `GNSS_TIME_JUMP` therefore
+skips a fix read from a queue and never measures from one, and takes a
+suspend (the receiver's and the host's wall clocks moving past the
+monotonic one together) as a reacquisition; `GNSS_POSITION_JUMP` takes
+Δt from the receiver's own time.
+
+**What they cannot do**, from the research: tell interference from
+jamming (DHS 2017), locate a jammer, see a spoofer present before sloth
+started, or catch a patient drag-off; a consumer receiver has no signal
+authentication. The ATT&CK reasoning — T1464 for jamming, nothing for
+the other three — is `research/gnss/attack-mapping.md`, ruled by the
+owner on 2026-11-03.
 
 ## Not in this slice
 
@@ -268,3 +292,4 @@ noted here so the next slice does not rediscover it.
 - [[views-catalog]] — the `[#]` row.
 - [[non-ip-sensors]] — the sensor-family roadmap this fulfils for GPS.
 - [[slothweb]] — the page the GNSS tab belongs to.
+- [[alerts]] — the four GNSS rules among the rest.
