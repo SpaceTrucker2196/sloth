@@ -1648,11 +1648,11 @@ by the next one.
   `503` `sloth_db_timeout`, never sloth a stall
   (`db_timeouts` on `/api/health`).
 - **Identify.** sloth's `meta` is `(key, value)`; a `schema_version`
-  of 1 to 10 is read (`"db_supported":[1,10]`). The upper bound is held
+  of 1 to 11 is read (`"db_supported":[1,11]`). The upper bound is held
   to sloth's `DB_SCHEMA_VERSION` by a test, so a schema bump cannot
   ship with slothweb still refusing the new files. A newer one is refused
-  with "written by a newer sloth (schema v11; this slothweb reads
-  v1..v10)": this build does not know its columns. An older one is read
+  with "written by a newer sloth (schema v12; this slothweb reads
+  v1..v11)": this build does not know its columns. An older one is read
   by probing its columns with `PRAGMA table_info`: a column the version
   lacks (`device_class`, `camera_*` before v6, `dhcp_vci` before v7,
   `alerts.reopens` before v8) reads as `0` or `NULL`, and a table that is missing reads as no rows,
@@ -2236,7 +2236,13 @@ GET /api/wifi/channels?metric=ap_count&from=1792623600&to=1792627200&cols=90
   earlier incidents too. On a v8 sloth.db a row is a finding that may
   span several incidents, and the range test reads the latest
   incident's start, so a range inside the gap between two incidents
-  does not list it; the anomaly episodes slothweb still
+  does not list it. On a v11 sloth.db (#175) a key with rows in
+  `alert_incidents` is read from those instead: listed when one of its
+  incidents overlaps the range, its `sev` the highest peak, `count` the
+  sum and `incidents` the number of the incidents there (exact), so a
+  finding CRIT once and LOW since reads LOW in a range holding only the
+  LOW incident; a key with none is read from its row as above, and the
+  20,000 rows are over both sources together; the anomaly episodes slothweb still
   holds (`/api/anomalies?since=from`, those begun by `to`; episodes are
   kept a week), and `/api/history/flows` (`ssh_flows`, `rdp_flows`,
   `smb_sessions`, `snmp_flows`: protocol, src, dst, the count each keeps,
@@ -2518,7 +2524,13 @@ once, as the stream's (`"source":"both"`). A row's `"incidents"` and
 `"count"` are the key's, all time: sloth.db's totals over every row of
 the key (`1 + reopens` a v8 row, one an older row) or the stream's,
 whichever is larger, since either can lag the other; the alert's page
-shows the same two (and `"latest_count"`, the one incident's). Open
+shows the same two (and `"latest_count"`, the one incident's; on a
+v11 sloth.db, #175, also `"db_incident"`, one incident's own
+`first_seen`, `last_seen`, `sev`, `peak_sev`, `count`, `observations`,
+`closed_at` and `reason` from `alert_incidents`: the stream incident the
+page opened on, `"which":"opened"`, else the key's newest,
+`"latest"`, and its `"history"` runs built from those rows,
+`"source":"incidents"`). Open
 incidents come first, highest severity then newest change; then the
 closed ones, newest last seen first.
 

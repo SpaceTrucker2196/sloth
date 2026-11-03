@@ -31,6 +31,8 @@ int sdb_exec(const char *path, const char *sql) {
 
 /* The columns each later version added (src/db_schema.c's migration
  * steps), dropped again for an older file's shape. */
+static const char DROP_V11[] =
+    "DROP TABLE alert_incidents;";
 static const char DROP_V9[] =
     "ALTER TABLE alerts DROP COLUMN lat;"
     "ALTER TABLE alerts DROP COLUMN lon;"
@@ -69,6 +71,7 @@ int sdb_make(const char *path, int version, int wal) {
     if (wal) rc = sqlite3_exec(h, "PRAGMA journal_mode=WAL", NULL, NULL, NULL);
     if (rc == SQLITE_OK) rc = sqlite3_exec(h, db_schema_meta_sql(), NULL, NULL, NULL);
     if (rc == SQLITE_OK) rc = sqlite3_exec(h, db_schema_sql(), NULL, NULL, NULL);
+    if (rc == SQLITE_OK && version < 11) rc = sqlite3_exec(h, DROP_V11, NULL, NULL, NULL);
     if (rc == SQLITE_OK && version < 9) rc = sqlite3_exec(h, DROP_V9, NULL, NULL, NULL);
     if (rc == SQLITE_OK && version < 8) rc = sqlite3_exec(h, DROP_V8, NULL, NULL, NULL);
     if (rc == SQLITE_OK && version < 7) rc = sqlite3_exec(h, DROP_V7, NULL, NULL, NULL);

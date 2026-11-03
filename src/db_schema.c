@@ -567,6 +567,57 @@ static const char SCHEMA_SQL[] =
      * costs an entry per new episode and nothing per tick. */
     "CREATE INDEX IF NOT EXISTS idx_alerts_first_seen ON alerts(first_seen);\n"
 
+    /* Schema v11 (#175): one row per incident. The alerts row above is
+     * the finding (every incident of its key, #170) and stays as it is:
+     * its sev is the peak and its count the sum across incidents, which
+     * is right for the finding and wrong for "how bad was it in this
+     * window". This table holds each incident's own figures so a range
+     * read can ask that. Written by the --db writer from the engine's
+     * snapshot every tick and from its open / severity / resolve hook
+     * (src/alerts.h alerts_set_incident_hook), so an incident evicted
+     * between two ticks still gets its last figures and its close.
+     *
+     * `first_seen` is the incident's own start (the engine's
+     * first_detected; the alerts row's incident_first_seen while it is
+     * the latest), `sev` its severity as last written and `peak_sev`
+     * the highest it reached, `count` its evaluations and
+     * `observations` its evidence changes (the engine's two counters,
+     * docs/wiki/jsonl-schema.md). `closed_at` and `reason` are its
+     * alert.resolve: NULL while open, or while the file never saw the
+     * resolve (a sensor stopped mid-incident). No detail column: the
+     * finding's detail is on the alerts row, and the audited-detail gate
+     * slothweb reads it through (web_alertdb.h) stays the one way out.
+     *
+     * Keyed by (key, incident_id): the id hashes the key, the wall
+     * second the incident opened and a per-process sequence number
+     * (incident_id_make()), so two runs' incidents of one key share a
+     * row only if both opened in the same wall second at the same
+     * sequence number - a clock set back across a restart, nothing a
+     * running clock produces. Bounded per key at DB_INCIDENTS_PER_KEY
+     * (src/db.c), oldest first, and retained on the finding tier. A
+     * migrated v10 file gets it from this same unconditional schema, so
+     * it and a fresh v11 file agree. */
+    "CREATE TABLE IF NOT EXISTS alert_incidents ("
+    "  key          TEXT NOT NULL,"
+    "  incident_id  TEXT NOT NULL,"
+    "  type         INTEGER NOT NULL,"
+    "  first_seen   INTEGER NOT NULL,"
+    "  last_seen    INTEGER NOT NULL,"
+    "  sev          INTEGER NOT NULL,"
+    "  peak_sev     INTEGER NOT NULL,"
+    "  count        INTEGER NOT NULL DEFAULT 0,"
+    "  observations INTEGER NOT NULL DEFAULT 0,"
+    "  closed_at    INTEGER,"
+    "  reason       TEXT,"
+    "  PRIMARY KEY (key, incident_id)"
+    ");\n"
+    /* A key's incidents in order (the alert page, the per-key bound)
+     * and a range's (History), each an index seek. */
+    "CREATE INDEX IF NOT EXISTS idx_alert_incidents_key"
+    " ON alert_incidents(key, first_seen);\n"
+    "CREATE INDEX IF NOT EXISTS idx_alert_incidents_last_seen"
+    " ON alert_incidents(last_seen);\n"
+
     "CREATE TABLE IF NOT EXISTS cleartext_creds ("
     "  ts          INTEGER NOT NULL,"
     "  src         TEXT NOT NULL,"
@@ -907,6 +958,16 @@ static const char MIGRATE_V8_SQL[] =
  * new tables on the unconditional schema; the step is the stamp. */
 static const char MIGRATE_V9_SQL[] = "";
 
+/* v10 -> v11 (#175): no ALTER. alert_incidents is a new table on the
+ * unconditional schema, so the step is the stamp, as v9 -> v10 was. No
+ * row is written into it from the alerts table: a v10 row's sev is the
+ * peak and its count the sum over every incident it absorbed, which no
+ * single incident had, so a backfilled row would record figures that
+ * were never observed. The first v11 tick writes the incidents open
+ * then; a key with no incident rows is read from its alerts row, as
+ * before (docs/wiki/sqlite-schema.md). */
+static const char MIGRATE_V10_SQL[] = "";
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -919,3 +980,4 @@ const char *db_schema_migrate_v6_sql(void) { return MIGRATE_V6_SQL; }
 const char *db_schema_migrate_v7_sql(void) { return MIGRATE_V7_SQL; }
 const char *db_schema_migrate_v8_sql(void) { return MIGRATE_V8_SQL; }
 const char *db_schema_migrate_v9_sql(void) { return MIGRATE_V9_SQL; }
+const char *db_schema_migrate_v10_sql(void) { return MIGRATE_V10_SQL; }

@@ -11,6 +11,22 @@ void alerts_update(sloth_state_t *s);
 /* Drop all known alerts (clears engine state, not just the snapshot). */
 void alerts_clear(void);
 
+/* Incident lifecycle hook (#175). Called by the engine, on the thread
+ * that runs alerts_update() / alerts_clear(), as an incident opens and
+ * each time its severity moves (`reason` NULL both times), and as it
+ * closes (`reason` the alert.resolve reason: "expired", "evicted",
+ * "cleared" or a rule's own; "" for none). `a` is the engine's entry,
+ * valid for the call only; on a close it carries the incident's final
+ * figures, which the snapshot may never show: an incident evicted
+ * between two --db ticks leaves the engine inside one alerts_update().
+ * One hook; NULL removes it. src/db.c is the one user (db_open() sets
+ * it, db_close() clears it), so alert_incidents gets the close of every
+ * incident the run had while the file was open. It must not call back
+ * into the engine. */
+typedef void (*alerts_incident_hook_fn)(const alert_t *a, time_t now,
+                                        const char *reason);
+void alerts_set_incident_hook(alerts_incident_hook_fn fn);
+
 /* Test-only: fire one finding through the engine's real dedup path
  * (fire → fire_inv), stamped with sloth_wall(). The rules are the only
  * production callers; this exists so engine properties — key lookup,

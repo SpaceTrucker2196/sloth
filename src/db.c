@@ -25,6 +25,7 @@
 #error "sloth needs sqlite3 >= 3.31.0 (SQLITE_OPEN_NOFOLLOW, SQLITE_DBCONFIG_TRUSTED_SCHEMA)"
 #endif
 
+#include "alerts.h"
 #include "libver.h"
 #include "ownership.h"
 #include "presence.h"
@@ -90,6 +91,8 @@ static const char *const TIER_ENTITY[] = {
 /* 12x — the findings. These are why the operator kept the file. */
 static const char *const TIER_FINDING[] = {
     "alerts", "cleartext_creds",
+    /* #175: a finding's incidents live as long as the finding does. */
+    "alert_incidents",
     /* Detector evidence sits here, not in the entity tier, so it lives
      * exactly as long as the alert it justifies. At 3x the evidence
      * would expire while the CRIT it supports was still retained,
@@ -128,7 +131,7 @@ enum {
     ST_WIFI_MERGED, ST_ARP, ST_DHCP_LEASE, ST_TOP_HOST,
     ST_MDNS, ST_NBNS, ST_SSDP, ST_NDP_RA, ST_NDP_PREFIX, ST_SENSOR,
     ST_BGP, ST_SSH, ST_RDP, ST_SNMP, ST_MQTT, ST_LDAP, ST_KERB, ST_SMB,
-    ST_ALERT, ST_ALERT_ROW, ST_CRED, ST_EAPOL, ST_DEAUTH, ST_SEQCORR, ST_TWIN,
+    ST_ALERT, ST_ALERT_ROW, ST_INCIDENT, ST_INCIDENT_TRIM, ST_CRED, ST_EAPOL, ST_DEAUTH, ST_SEQCORR, ST_TWIN,
     ST_SCAN, ST_SCAN_PORT, ST_KARMA, ST_ROGUE_RADIUS,
     ST_DEV_POS, ST_SENSOR_POS,
     ST_GNSS_FIX, ST_GNSS_SIGHT,
@@ -634,6 +637,34 @@ static const char *const SQL[ST_COUNT] = {
 [ST_ALERT_ROW] =
     "SELECT first_seen FROM alerts WHERE key=?1"
     " ORDER BY first_seen DESC LIMIT 1",
+/* One incident's own figures (#175, schema v11). Written from the
+ * engine's hook and from the snapshot, in that order within a tick, so
+ * every column is monotone or sticky and two writes of one incident in
+ * either order leave the same row: the span widens, the peak and the
+ * two counters only rise, and a close once recorded stays. `sev` is the
+ * one latest-wins column, and the snapshot write (the newer of the two)
+ * is the last to set it. */
+[ST_INCIDENT] =
+    "INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,"
+    "sev,peak_sev,count,observations,closed_at,reason)"
+    " VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
+    " ON CONFLICT(key,incident_id) DO UPDATE SET"
+    "  first_seen=MIN(alert_incidents.first_seen,excluded.first_seen),"
+    "  last_seen=MAX(alert_incidents.last_seen,excluded.last_seen),"
+    "  sev=excluded.sev,"
+    "  peak_sev=MAX(alert_incidents.peak_sev,excluded.peak_sev),"
+    "  count=MAX(alert_incidents.count,excluded.count),"
+    "  observations=MAX(alert_incidents.observations,excluded.observations),"
+    "  closed_at=COALESCE(alert_incidents.closed_at,excluded.closed_at),"
+    "  reason=COALESCE(alert_incidents.reason,excluded.reason)",
+/* The per-key bound (DB_INCIDENTS_PER_KEY): every incident of the key
+ * but its newest ?2, newest by start and then by insertion. Both walk
+ * idx_alert_incidents_key, so the cost is the key's rows, never the
+ * table's. */
+[ST_INCIDENT_TRIM] =
+    "DELETE FROM alert_incidents WHERE key=?1 AND rowid NOT IN"
+    " (SELECT rowid FROM alert_incidents WHERE key=?1"
+    "  ORDER BY first_seen DESC, rowid DESC LIMIT ?2)",
 [ST_CRED] =
     "INSERT INTO cleartext_creds (ts,src,dst,dst_port,protocol,username,"
     "pw_observed,first_seen,last_seen) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)"
@@ -785,6 +816,121 @@ static int exec(const char *sql, const char *what) {
     return 1;
 }
 
+/* ── per-incident rows (#175) ────────────────────────────────
+ *
+ * alert_incidents is written two ways. Every tick writes each incident
+ * the engine's snapshot holds, as the alerts row is written. And the
+ * engine's lifecycle hook (src/alerts.h) queues an incident's figures as
+ * it opens, moves severity and closes, which reaches what a tick cannot
+ * see: the alert.resolve reason, a severity that rose and fell between
+ * two ticks, and an incident evicted inside one alerts_update(), whose
+ * slot is reused before any snapshot shows it closed. The queue is
+ * coalesced per incident and drained at the start of the tick's write;
+ * a queue that fills between ticks (an eviction storm under a long
+ * --db-interval-secs) is written there and then in its own transaction
+ * rather than dropping a close. */
+#define DB_INC_PENDING 256
+
+typedef struct {
+    char      key[ALERT_KEY_LEN];
+    char      id[ALERT_INCIDENT_ID_LEN];
+    int       type, sev, peak;
+    long long count, obs;
+    time_t    first, last, closed;   /* closed 0: not closed yet */
+    char      reason[24];
+} db_inc_pend_t;
+
+static db_inc_pend_t g_inc_pend[DB_INC_PENDING];
+static int           g_inc_pend_n;
+
+static void bind_incident(sqlite3_stmt *st, const char *key, const char *id,
+                          int type, time_t first, time_t last, int sev,
+                          int peak, long long count, long long obs,
+                          time_t closed, const char *reason) {
+    /* first_seen <= last_seen, as write_events() keeps it for alerts. */
+    if (last < first) last = first;
+    bind_txt(st, 1, key);
+    bind_txt(st, 2, id);
+    sqlite3_bind_int(st, 3, type);
+    sqlite3_bind_int64(st, 4, (sqlite3_int64)first);
+    sqlite3_bind_int64(st, 5, (sqlite3_int64)last);
+    sqlite3_bind_int(st, 6, sev);
+    sqlite3_bind_int(st, 7, peak);
+    sqlite3_bind_int64(st, 8, (sqlite3_int64)count);
+    sqlite3_bind_int64(st, 9, (sqlite3_int64)obs);
+    /* ?10 and ?11 stay NULL (clear_bindings) for an open incident. */
+    if (closed) {
+        sqlite3_bind_int64(st, 10, (sqlite3_int64)closed);
+        if (reason && reason[0]) bind_txt(st, 11, reason);
+    }
+}
+
+/* Write the queue, each incident then its key's bound. Inside the
+ * caller's transaction. */
+static void write_incident_queue(void) {
+    for (int i = 0; i < g_inc_pend_n && !g_disabled; i++) {
+        const db_inc_pend_t *p = &g_inc_pend[i];
+        bind_incident(g_st[ST_INCIDENT], p->key, p->id, p->type, p->first,
+                      p->last, p->sev, p->peak, p->count, p->obs, p->closed,
+                      p->reason);
+        step_reset(ST_INCIDENT);
+        /* Only an incident the hook saw can be one the file did not
+         * have, so this is where a key can pass its bound. */
+        bind_txt(g_st[ST_INCIDENT_TRIM], 1, p->key);
+        sqlite3_bind_int(g_st[ST_INCIDENT_TRIM], 2, DB_INCIDENTS_PER_KEY);
+        step_reset(ST_INCIDENT_TRIM);
+    }
+    g_inc_pend_n = 0;
+}
+
+/* The queue written now, in its own transaction: between ticks only,
+ * which is where the hook runs (the poll loop calls alerts_update()
+ * before db_tick(), never inside it). */
+static void incident_queue_flush(void) {
+    if (!db_is_open() || g_inc_pend_n == 0) return;
+    if (!exec("BEGIN IMMEDIATE", "incident begin")) {
+        db_fail("incident begin");
+        g_inc_pend_n = 0;
+        return;
+    }
+    write_incident_queue();
+    if (g_disabled) { exec("ROLLBACK", "incident rollback"); return; }
+    if (!exec("COMMIT", "incident commit")) {
+        exec("ROLLBACK", "incident rollback");
+        db_fail("incident commit");
+    }
+}
+
+static void db_incident_hook(const alert_t *a, time_t now, const char *reason) {
+    if (!db_is_open() || !a || !a->incident_id[0]) return;
+    db_inc_pend_t *p = NULL;
+    for (int i = 0; i < g_inc_pend_n && !p; i++)
+        if (!strcmp(g_inc_pend[i].id, a->incident_id) &&
+            !strcmp(g_inc_pend[i].key, a->key))
+            p = &g_inc_pend[i];
+    if (!p) {
+        if (g_inc_pend_n == DB_INC_PENDING) incident_queue_flush();
+        if (g_inc_pend_n == DB_INC_PENDING || !db_is_open()) return;
+        p = &g_inc_pend[g_inc_pend_n++];
+        memset(p, 0, sizeof(*p));
+        snprintf(p->key, sizeof(p->key), "%s", a->key);
+        snprintf(p->id, sizeof(p->id), "%s", a->incident_id);
+        p->peak = (int)a->sev;
+    }
+    p->type  = (int)a->type;
+    p->sev   = (int)a->sev;
+    if ((int)a->sev > p->peak) p->peak = (int)a->sev;
+    p->count = a->count;
+    p->obs   = (long long)a->observations;
+    p->first = a->first_detected ? a->first_detected
+             : a->first_seen ? a->first_seen : now;
+    p->last  = a->last_seen ? a->last_seen : now;
+    if (reason) {
+        p->closed = now;
+        snprintf(p->reason, sizeof(p->reason), "%s", reason);
+    }
+}
+
 /* ── schema version ──────────────────────────────────────── */
 
 /* The migration chain (db.h). Each step takes a file from `from` to
@@ -835,6 +981,8 @@ static const db_step_t g_steps[] = {
     { 9, db_schema_migrate_v9_sql, TABLES_NONE,
       "gnss_fixes and gnss_sightings ride the unconditional schema; stamp"
       " only" },
+    { 10, db_schema_migrate_v10_sql, TABLES_NONE,
+      "alert_incidents rides the unconditional schema; stamp only" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -1054,11 +1202,18 @@ int db_open(const char *path) {
     g_last_maint = 0;
     g_session_id = 0;
     g_over_ceiling_reported = 0;
+    g_inc_pend_n = 0;
     postrack_set_sink(1);   /* --gps samples now have somewhere to go */
+    alerts_set_incident_hook(db_incident_hook);   /* #175 */
     return 1;
 }
 
 void db_close(void) {
+    /* The closes queued since the last tick are the run's last word on
+     * those incidents (#175). */
+    incident_queue_flush();
+    g_inc_pend_n = 0;
+    alerts_set_incident_hook(NULL);
     postrack_set_sink(0);
     for (int i = 0; i < ST_COUNT; i++) {
         if (g_st[i]) { sqlite3_finalize(g_st[i]); g_st[i] = NULL; }
@@ -1821,6 +1976,22 @@ static void write_events(const sloth_state_t *s, time_t now) {
             sqlite3_bind_int64(st, 19, (sqlite3_int64)a->loc.ts);
         }
         step_reset(ST_ALERT);
+    }
+
+    /* #175: the hook's queue first, then the snapshot's incidents, the
+     * newer of the two (db.c's per-incident section). A snapshot entry
+     * never closes a row: the reason is the hook's to give. */
+    write_incident_queue();
+    for (int i = 0; i < s->alert_count && !g_disabled; i++) {
+        const alert_t *a = &s->alerts[i];
+        if (!a->incident_id[0]) continue;
+        bind_incident(g_st[ST_INCIDENT], a->key, a->incident_id, (int)a->type,
+                      a->first_detected ? a->first_detected
+                          : a->first_seen ? a->first_seen : now,
+                      a->last_seen ? a->last_seen : now, (int)a->sev,
+                      (int)a->sev, a->count, (long long)a->observations, 0,
+                      NULL);
+        step_reset(ST_INCIDENT);
     }
 
     for (int i = 0; i < s->cleartext_cred_count; i++) {

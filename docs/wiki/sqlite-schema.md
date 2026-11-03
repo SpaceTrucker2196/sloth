@@ -1,6 +1,6 @@
 ---
 name: sqlite-schema
-description: The --db SQLite sink — why it exists, the schema and its v1 → v9 migration chain, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
+description: The --db SQLite sink — why it exists, the schema and its v1 → v11 migration chain, findings and their per-incident rows, survey sessions, retention tiers, MISSION §2 guardrails, and query recipes
 type: reference
 ---
 
@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154 and #170.
 
-**Last updated**: 2026-11-02 ([[gnss]]: schema v10, `gnss_fixes` and `gnss_sightings` in the observation tier on the records' banded change-only rule, the stamp-only v9 → v10 step and its two tests). 2026-11-02 ([[location]]: `device_positions` at rest samples on an RSSI band change or every `gps.sample_s` x 10, its row rate, and `--location` for a parked sensor). 2026-10-27 ([[location]]: schema v9, the alerts location stamp `lat`/`lon`/`alt_m`/`acc_m`/`loc_src`/`loc_ts`, the v8 → v9 step, `device_positions` and `sensor_positions` in the observation tier, the stamp's upsert rule and `--db-compact-alerts` carrying it). 2026-10-26 (`idx_alerts_first_seen` and `idx_devices_first_seen`, for slothweb's History strip; an index needs no bump, and the build cost is measured under "Indexes on time"). 2026-10-26 (#170 review: `alerts.incident_first_seen`, peak `sev` on the live row as on a compacted one, `count` / `reopens` as lower bounds, and `--db-compact-alerts` refusing an un-checkpointed SRC, writing nothing beside it, and handing DST to SRC's owner). 2026-10-26 (#170: schema v8, one `alerts` row per finding rather than per incident — the incident semantics below, the v7 → v8 step, and the opt-in `--db-compact-alerts` copy for the duplicates older builds wrote). 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
+**Last updated**: 2026-11-03 (#175: schema v11, `alert_incidents`, one row per incident beside the per-finding `alerts` row, written from the engine's lifecycle hook and each tick, bounded at 256 incidents a key, on the finding tier; the stamp-only v10 → v11 step and its two tests; slothweb's History and alert page read it). 2026-11-02 ([[gnss]]: schema v10, `gnss_fixes` and `gnss_sightings` in the observation tier on the records' banded change-only rule, the stamp-only v9 → v10 step and its two tests). 2026-11-02 ([[location]]: `device_positions` at rest samples on an RSSI band change or every `gps.sample_s` x 10, its row rate, and `--location` for a parked sensor). 2026-10-27 ([[location]]: schema v9, the alerts location stamp `lat`/`lon`/`alt_m`/`acc_m`/`loc_src`/`loc_ts`, the v8 → v9 step, `device_positions` and `sensor_positions` in the observation tier, the stamp's upsert rule and `--db-compact-alerts` carrying it). 2026-10-26 (`idx_alerts_first_seen` and `idx_devices_first_seen`, for slothweb's History strip; an index needs no bump, and the build cost is measured under "Indexes on time"). 2026-10-26 (#170 review: `alerts.incident_first_seen`, peak `sev` on the live row as on a compacted one, `count` / `reopens` as lower bounds, and `--db-compact-alerts` refusing an un-checkpointed SRC, writing nothing beside it, and handing DST to SRC's owner). 2026-10-26 (#170: schema v8, one `alerts` row per finding rather than per incident — the incident semantics below, the v7 → v8 step, and the opt-in `--db-compact-alerts` copy for the duplicates older builds wrote). 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
 
 ---
 
@@ -136,15 +136,16 @@ These are what make the file trustworthy rather than merely present.
 | Evidence flags latch | deauth, twins, karma | A burst that crossed the flood threshold *was* a flood; a twin caught mid-attack was caught mid-attack. |
 | `sev` = MAX, `detail` the latest at that peak | `alerts` | A row holds every incident of a key (#170), and a LOW reopen must not erase the CRIT before it. The compactor folds rows the same way. |
 | One row per finding; `count` sums incidents, `reopens` counts them | `alerts` | A write continues the key's newest row, so evict-and-refire, a quiet-period reopen and a restart all advance one row (#170). See *Findings and incidents* below. |
+| One row per incident: span widens, `peak_sev`/`count`/`observations` only rise, a close once recorded stays; `sev` the latest | `alert_incidents` | Written each tick from the hook's queue and then from the snapshot, and by a full queue's own flush between ticks. Every column but `sev` comes out the same whatever the order; `sev` is the last write's, and the snapshot, the newest view, is written last (#175). See *Per-incident rows* below. |
 
-## Schema — 45 tables, v1 → v10
+## Schema — 46 tables, v1 → v11
 
-`meta` holds `schema_version`, currently **10**. `db_open()` checks it
+`meta` holds `schema_version`, currently **11**. `db_open()` checks it
 *before* applying the rest of the schema, so a mismatch produces the
 clear version message rather than whatever SQL error the schema happens
-to hit first. Since #154 the chain covers the full **v1 → v10**: any
+to hit first. Since #154 the chain covers the full **v1 → v11**: any
 file this build has ever written opens and migrates forward. Only a
-file from a *newer* build (`schema_version` above 10) is refused.
+file from a *newer* build (`schema_version` above 11) is refused.
 
 **v5** (#90): `karma_candidates.pnl_best`. **v6** (#106 round 2):
 `devices` gains `device_class`, `camera_vendor`, `camera_model`,
@@ -160,7 +161,23 @@ gains `reopens`, `incident_id`, `incident_count` and
 row's current incident opened, and two new tables, `device_positions`
 and `sensor_positions`. **v10** (2026-11-02, [[gnss]]): two new tables,
 `gnss_fixes` and `gnss_sightings`, the `--gps` receiver's own sky and
-clock; no existing table or value changes.
+clock; no existing table or value changes. **v11** (2026-11-03, #175):
+one new table, `alert_incidents`, a row per incident beside the
+per-finding `alerts` row (*Per-incident rows* below); `alerts` is
+unchanged.
+
+**The v10 → v11 migration.** A stamp alone
+(`db_schema_migrate_v10_sql()` is empty): `alert_incidents` and its two
+indexes ride the unconditional schema. Nothing is copied into it from
+`alerts`: a v10 row's `sev` is the peak and its `count` the sum over
+every incident it absorbed, figures no single incident had, so a
+backfilled row would record what was never observed. The first v11
+tick writes the incidents open then, and a key with no incident rows is
+read from its `alerts` row as before. Tested on a v10 file
+(`test_v10_file_migrates_additively`: `alerts` unchanged at 21 columns,
+the table and indexes present, the table empty) and on one whose stamp
+a trigger refuses (`test_v10_migration_failure_leaves_file_unchanged`:
+it stays v10, with no `alert_incidents`).
 
 **The v9 → v10 migration.** A stamp alone (`db_schema_migrate_v9_sql()`
 is empty, as v2 → v3's was): both tables ride the unconditional
@@ -254,9 +271,9 @@ ALTER fails, which stays v6 with none of the step's columns
 (`test_v6_migration_failure_leaves_file_unchanged`).
 
 **The chain.** `src/db.c`'s `g_steps[]` lists one entry per step (`from`
-1 through 8) and runs every one from the file's version up, each in its
+1 through 10) and runs every one from the file's version up, each in its
 own transaction with its own stamp, so a v1 file opened by this build
-goes v1 → v2 → v3 → v4 → v5 → v6 → v7 → v8 → v9 in one `db_open()` call. A step
+goes v1 → v2 → v3 → v4 → v5 → v6 → v7 → v8 → v9 → v10 → v11 in one `db_open()` call. A step
 that fails leaves the file at the last version it fully reached — a v3
 file whose next step fails is a v4 file, never half of v5
 (`test_v3_chain_stops_at_last_whole_step`) — and `db_open()` refuses the
@@ -295,7 +312,7 @@ version stamp, in one `BEGIN IMMEDIATE` transaction. No existing value
 is rewritten, so a v5 forensic record reads the same afterwards; a
 statement that fails rolls the whole step back and the file stays v5
 (`tests/test_db.c :: test_v5_migration_failure_leaves_file_unchanged`).
-Only a file newer than v9 is refused.
+Only a file newer than v11 is refused.
 
 **Migration path, by design** (owner ruling 2026-10-21, replacing the
 earlier "no migration path by design"). Every schema bump ships its
@@ -456,7 +473,9 @@ eviction churn and with a longer interval. The JSONL stream's
 table: it sees every incident, but restarts at 0 when the 512-row side
 table forgets the key or the process restarts, while `reopens`
 persists across both. Neither is derived from the other; for an exact
-incident history, count `alert.create` records in the JSONL stream.
+incident history, count `alert.create` records in the JSONL stream, or
+(since v11) read `alert_incidents`, below, which the engine's hook
+fills whatever the write interval.
 
 Why not one row per (key, incident): the owner's v6 file held
 **867,748 rows for 7,598 keys**. Its rate fell from about 130,000 rows a
@@ -466,12 +485,79 @@ back after a gap longer than the 300 s resolve period (most of them
 five minutes to an hour) — the reopens a per-incident row would keep
 producing forever. The gap the old per-episode row
 showed is not lost when the sensor also writes the JSONL stream (`-o`):
-it is there, as `alert.resolve` and the next `alert.create`. A
-`--db`-only sensor keeps the latest incident's start
-(`incident_first_seen`) and how many there were (`reopens`, a lower
-bound), not the gaps before it. Retention still applies: a key whose row ages out of
+it is there, as `alert.resolve` and the next `alert.create`. Since v11
+a `--db`-only sensor keeps them too, in `alert_incidents` beside the
+row, bounded per key (below), and the `alerts` row stays one per
+finding. Retention still applies: a key whose row ages out of
 the finding tier (12× `--db-retain-days`) and fires again starts a new
 row.
+
+#### Per-incident rows (`alert_incidents`, #175, v11)
+
+The `alerts` row's `sev` is the finding's peak and its `count` the sum
+across incidents. That is right for the finding and wrong for "how bad
+was it in this window": a key CRIT once and LOW since read CRIT in
+every History range. `alert_incidents` keeps each incident's own
+figures, and the `alerts` row is left exactly as above (a contract:
+the alert list, the alert page's `count` and `sev`, and every recipe
+read it).
+
+| Column | Meaning |
+|---|---|
+| `key`, `incident_id` | the primary key: the alerts key, and the engine's id for the incident (the JSONL stream's `incident_id`). The id hashes the key, the wall second the incident opened and a per-process sequence number, so two runs' incidents of one key share a row only if both opened in the same second at the same sequence number (a clock set back across a restart) |
+| `type` | the alert type |
+| `first_seen` | the incident's own start, the engine's `first_detected` (the alerts row's `incident_first_seen` while it is the latest) |
+| `last_seen` | its last evaluation, MAX |
+| `sev` | its severity as last written |
+| `peak_sev` | the highest it reached, including a rise and fall between two writes |
+| `count` | its evaluations (the engine's `count`), MAX |
+| `observations` | its evidence changes (the engine's `observations`, [[jsonl-schema]]), MAX |
+| `closed_at`, `reason` | its `alert.resolve`: the wall time and the reason (`expired`, `evicted`, `cleared` or a rule's own). NULL while open, and NULL for an incident whose close the file never saw (a sensor stopped mid-incident) |
+
+No `detail` column: the finding's evidence is on the `alerts` row.
+
+**How it is written.** Two ways, so nothing the engine does between two
+writes is lost. Every `--db` write upserts each incident the engine's
+snapshot holds, as the `alerts` row is written. And the engine calls a
+lifecycle hook (`alerts_set_incident_hook()` in `src/alerts.h`, set by
+`db_open()`, cleared by `db_close()`) as an incident opens, each time
+its severity moves, and as it closes; the writer queues those per
+incident and drains the queue at the start of its next write. That is
+what reaches what a snapshot cannot: the close and its reason, a peak
+reached and left between two writes, and an incident evicted inside one
+`alerts_update()`, whose slot is reused before any snapshot shows it
+closed. A queue that fills between writes (256 incidents: an eviction
+storm under a long `--db-interval-secs`) is written there and then in
+its own transaction, and `db_close()` writes what is left, so a sensor
+stopped right after a close still records it. So unlike the `alerts`
+row's `count` and `reopens`, which are sampled at writes, this table
+has every incident the run had while the file was open.
+
+**Bounded per key.** A key keeps its newest `DB_INCIDENTS_PER_KEY`
+(256, `src/db.h`) incidents by start, the oldest deleted as the writer
+records a new incident of the key: an evicted key re-fires as a new
+incident every tick, which unbounded would be #170's growth one table
+over. The table rides the finding tier's retention (12×
+`--db-retain-days`) like `alerts`; the size guard never touches it. The
+bound drops per-incident detail only: the `alerts` row still holds the
+finding.
+
+**Who reads it.** slothweb's History (`/api/history/alerts`) lists a key
+whose incidents overlap the range with the highest `peak_sev`, the sum
+of `count` and the number of incidents among those in the range, so a
+range holding only a LOW incident reads LOW; a key with no incident rows
+(an incident recorded before v11, or past the bound) is read from its
+`alerts` row as before. The alert page (`/api/alert`) builds its runs
+from the incidents and carries one incident's figures as `db_incident`
+([[slothweb]]).
+
+Tests (`tests/test_db.c`): `test_incident_rows_keep_each_incidents_figures`
+(the issue's case through the engine: one `alerts` row reading CRIT, two
+incident rows, the first's peak CRIT and close `expired`, the second
+LOW), `test_incident_peak_between_ticks_is_kept`,
+`test_incident_evicted_between_ticks_is_recorded` (the hook's queue,
+and its flush when full), `test_incident_rows_bounded_per_key` and
+`test_incident_close_is_flushed_on_db_close`.
 
 #### Compacting an older file (`--db-compact-alerts`)
 
@@ -616,7 +702,7 @@ rows. Entities keep **3×**, findings keep **12×**.
 |---|---|---|
 | observation | 1× | protocol flows, deauths, twins, EAPOL, scans, seqnum correlations, `device_positions`, `sensor_positions`, `gnss_fixes`, `gnss_sightings` |
 | entity | 3× | devices, PNL, beacons, assocs, ARP, leases, discovery, sensors |
-| finding | 12× | `alerts`, `cleartext_creds`, `karma_candidates`, `rogue_radius`, `btm_requests` |
+| finding | 12× | `alerts`, `alert_incidents`, `cleartext_creds`, `karma_candidates`, `rogue_radius`, `btm_requests` |
 
 The ordering is what an investigator reaches for months later: *what
 fired* outlives *who was here*, which outlives *the individual
@@ -747,3 +833,5 @@ sqlite3 sloth.db "SELECT name, SUM(pgsize) b FROM dbstat
 - [[log]] — doc-change record.
 - [[alerts]] — what populates the `alerts` table.
 - [[pcap-export]] — where packet-level evidence lives instead.
+- [[retention]] — the tiers in full, and `alert_incidents`' per-key bound.
+- [[slothweb]] — History and the alert page, the readers of `alert_incidents`.

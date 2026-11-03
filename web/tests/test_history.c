@@ -609,6 +609,60 @@ static void test_alert_finding_gap_is_not_a_hit(void) {
     WT_EQ(sdb_exec(g_db, "DELETE FROM alerts WHERE key='gap:10.0.0.42';"), 0);
 }
 
+/* The issue's case (#175): a finding CRIT in its first incident and LOW
+ * in its second. On a v11 file History reads the incidents, so a range
+ * holding only the second says LOW and the second's count, a range
+ * holding only the first says CRIT (and is listed at all, where the
+ * alerts row's latest incident starts after it), one holding both says
+ * CRIT, both counts and two incidents, and the quiet gap between them
+ * lists nothing. The alerts row is left as sloth wrote it (CRIT, 30).
+ * Seen red with the probe never setting WEB_SDB_OPT_INCROWS (the second
+ * range CRIT and 30, the first not listed), and with f's incident
+ * branch taking max(i.sev) for max(i.peak_sev) (the first range LOW).
+ * The key and sloth's id stay out of the body because no result column
+ * names either (both predicate-only); that half is not claimed for a
+ * mutation here, test_alerts.c's per-incident test is where it is seen
+ * red. */
+static void test_alert_history_reads_incidents(void) {
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO alerts (key,first_seen,last_seen,type,sev,title,detail,"
+        "technique,match_ip,match_port,count,reopens,incident_id,incident_count,"
+        "incident_first_seen) VALUES ('inc:10.0.0.43',%lld,%lld,0,2,'INC_FINDING','x',"
+        "'T1046','10.0.0.43',NULL,30,1,'00000000000000b2',20,%lld);"
+        "INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,sev,"
+        "peak_sev,count,observations,closed_at,reason) VALUES"
+        " ('inc:10.0.0.43','00000000000000a1',0,%lld,%lld,1,2,10,3,%lld,'expired'),"
+        " ('inc:10.0.0.43','00000000000000b2',0,%lld,%lld,0,0,20,5,NULL,NULL);",
+        T - 10 * DY, T - 2 * DY + 100, T - 2 * DY,
+        T - 10 * DY, T - 10 * DY + 100, T - 10 * DY + 400,
+        T - 2 * DY, T - 2 * DY + 100);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    static const struct { long long from, to; int sev, count, inc; long long fs, ls; } R[] = {
+        { T - 3 * DY,  T - DY,     0, 20, 1, T - 2 * DY,  T - 2 * DY + 100 },
+        { T - 11 * DY, T - 9 * DY, 2, 10, 1, T - 10 * DY, T - 10 * DY + 100 },
+        { T - 11 * DY, T - DY,     2, 30, 2, T - 10 * DY, T - 2 * DY + 100 },
+    };
+    char q[160], want[256];
+    for (size_t i = 0; i < sizeof(R) / sizeof(R[0]); i++) {
+        snprintf(q, sizeof(q), "from=%lld&to=%lld", R[i].from, R[i].to);
+        WT_EQ(route(&H, "/api/history/alerts", q), 200);
+        snprintf(want, sizeof(want), "{\"title\":\"INC_FINDING\",\"ip\":\"10.0.0.43\","
+                 "\"type\":0,\"sev\":%d,\"count\":%d,\"first_seen\":%lld,"
+                 "\"last_seen\":%lld,\"incidents\":%d,", R[i].sev, R[i].count, R[i].fs,
+                 R[i].ls, R[i].inc);
+        if (!strstr(body_of(g_out), want)) fprintf(stderr, "    range %zu: %s\n", i, body_of(g_out));
+        WT_HAS(body_of(g_out), want);
+        WT_LACKS(body_of(g_out), "inc:10.0.0.43");
+        WT_LACKS(body_of(g_out), "00000000000000a1");
+    }
+    snprintf(q, sizeof(q), "from=%lld&to=%lld", T - 8 * DY, T - 4 * DY);
+    WT_EQ(route(&H, "/api/history/alerts", q), 200);
+    WT_LACKS(body_of(g_out), "INC_FINDING");
+    WT_EQ(sdb_exec(g_db, "DELETE FROM alerts WHERE key='inc:10.0.0.43';"
+                         "DELETE FROM alert_incidents;"), 0);
+}
+
 /* ── the overview on a large file, and its cache ─────────────────────── */
 
 /* src/db_schema.c's DDL, as sloth applies it on every open. */
@@ -1083,6 +1137,7 @@ void run_history_tests(void) {
     WT_RUN(test_presence_from_the_hour_tier);
     WT_RUN(test_alerts_and_flows);
     WT_RUN(test_alert_finding_gap_is_not_a_hit);
+    WT_RUN(test_alert_history_reads_incidents);
     WT_RUN(test_new_since);
     WT_RUN(test_sessions);
     down();

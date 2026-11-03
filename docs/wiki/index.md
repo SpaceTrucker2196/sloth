@@ -158,7 +158,8 @@ the Wi-Fi it watches:
   checksum-verified, self-rolling-back migration off a build-tree unit,
   with the owner-ruled `tcp:` to unix socket move (`--data-socket-unix`)
   and `slothweb.service` (`--with-slothweb`).
-- [[sqlite-schema]] — the `--db` retained artifact: 38-table schema,
+- [[sqlite-schema]] — the `--db` retained artifact: 46-table schema
+  (v11), findings and their per-incident rows (`alert_incidents`, #175),
   retention tiers, MISSION §2 guardrails, query recipes.
 - [[ring-buffers]] — bounded-history pattern shared by every per-protocol log file.
 

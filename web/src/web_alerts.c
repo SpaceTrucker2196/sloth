@@ -579,6 +579,12 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
 
 /* ── /api/alert ──────────────────────────────────────────────────────── */
 
+/* One input of runs_json(): an alerts row of the key, or an incident. */
+typedef struct {
+    long long rid, first_seen, last_seen, count;
+    int       sev;
+} run_in_t;
+
 typedef struct {
     web_adb_row_t *r;
     int            n, cap;
@@ -586,6 +592,18 @@ typedef struct {
 
 static int take_row(void *ctx, const web_adb_row_t *r) {
     il_t *l = ctx;
+    if (l->n >= l->cap) return 1;
+    l->r[l->n++] = *r;
+    return 0;
+}
+
+typedef struct {
+    web_adb_inc_t *r;
+    int            n, cap;
+} il_inc_t;
+
+static int take_inc(void *ctx, const web_adb_inc_t *r) {
+    il_inc_t *l = ctx;
     if (l->n >= l->cap) return 1;
     l->r[l->n++] = *r;
     return 0;
@@ -639,8 +657,9 @@ static void kb_json(web_jw_t *w, const web_akb_t *k) {
 /* Every incident of the key as runs, newest run first: incidents less
  * than WEB_ALERT_RUN_GAP_S apart (one's first_seen after the previous
  * one's last_seen) are one run, which is what sloth's churn on one key
- * looks like. r is newest first. */
-static void runs_json(web_jw_t *w, const web_adb_row_t *r, int n, size_t cap,
+ * looks like. r is newest first: sloth.db's alerts rows of the key, or
+ * on a v11 file its alert_incidents rows (#175), sev each one's peak. */
+static void runs_json(web_jw_t *w, const run_in_t *r, int n, size_t cap,
                       int *runs_out) {
     int runs = 0, at = 0, cut = 0;
     while (at < n) {
@@ -716,17 +735,23 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
     web_live_inc_t *e = calloc(1, sizeof(*e));
     web_live_inc_t *all = calloc(INC_MAX, sizeof(*all));
     web_adb_row_t *hist = calloc(WEB_ADB_INCIDENTS, sizeof(*hist));
+    /* v11's per-incident rows (#175), and the runs' input. */
+    web_adb_inc_t *inc = calloc(WEB_ADB_INCIDENTS, sizeof(*inc));
+    run_in_t *rin = calloc(WEB_ADB_INCIDENTS, sizeof(*rin));
+    web_adb_inc_t opened;
+    memset(&opened, 0, sizeof(opened));
+    int ni = 0, have_opened = 0, opened_match = 0;
     web_adb_row_t row;
     memset(&row, 0, sizeof(row));
-    if (!e || !hist || !all) { free(e); free(hist); free(all); return -1; }
+    if (!e || !hist || !all || !inc || !rin) { free(e); free(hist); free(all); free(inc); free(rin); return -1; }
     int na = live ? web_live_incidents(live, all, INC_MAX, NULL) : 0;
     int have_inc = kind == 's' && live && web_live_incident(live, sid, e);
     if (kind == 's' && !have_inc) {
-        free(e); free(hist); free(all);
+        free(e); free(hist); free(all); free(inc); free(rin);
         return web_hist_error(404, "no_such_alert", NULL, body, cap, len, status);
     }
     if (kind == 'd' && !web_hist_configured(m)) {
-        free(e); free(hist); free(all);
+        free(e); free(hist); free(all); free(inc); free(rin);
         return web_hist_no_db(body, cap, len, status);
     }
     const char *db = "none";
@@ -739,7 +764,7 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
         int o = web_hist_open(m, &c, now_s, body, cap, len, status);
         if (o) {
             /* A stream incident stands without sloth.db. */
-            if (kind == 'd') { free(e); free(hist); free(all); return o > 0 ? 0 : -1; }
+            if (kind == 'd') { free(e); free(hist); free(all); free(inc); free(rin); return o > 0 ? 0 : -1; }
             db = "unreadable";
         } else {
             db = "open";
@@ -749,7 +774,7 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
                 got = web_adb_row(&c, rid, &row);
                 if (got == 0) {
                     web_slothdb_close(&c);
-                    free(e); free(hist); free(all);
+                    free(e); free(hist); free(all); free(inc); free(rin);
                     return web_hist_error(404, "no_such_alert", NULL, body, cap, len, status);
                 }
                 have_row = got > 0;
@@ -775,13 +800,31 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
                 if (g2 < 0) got = -1;
                 else if (g2 > 0 && t2.newest_rid == tot.newest_rid) { *e = all[i]; have_inc = 1; }
             }
+            /* v11 (#175): the key's incidents, each with its own
+             * figures, and the one the page opened on: the stream's
+             * incident (its id matched as a predicate), else the
+             * newest. */
+            il_inc_t li = { inc, 0, WEB_ADB_INCIDENTS };
+            if (got >= 0 && (key || kind == 'd'))
+                got = web_adb_key_incidents(&c, kind == 'd' ? rid : 0,
+                                            kind == 'd' ? NULL : key, NULL,
+                                            WEB_ADB_INCIDENTS, take_inc, &li);
+            ni = li.n;
+            if (got >= 0 && ni > 0 && have_inc && e->id[0]) {
+                il_inc_t lo = { &opened, 0, 1 };
+                got = web_adb_key_incidents(&c, kind == 'd' ? rid : 0,
+                                            kind == 'd' ? NULL : key, e->id, 1,
+                                            take_inc, &lo);
+                have_opened = opened_match = lo.n > 0;
+            }
+            if (ni > 0 && !have_opened) { opened = inc[0]; have_opened = 1; }
             if (got >= 0) {
                 const char *ip = have_inc ? e->match_ip : row.ip;
                 got = web_adb_device(&c, kind == 'd' ? rid : 0, kind == 'd' ? NULL : key,
                                      ip, mac);
             }
             if (got < 0) {
-                free(e); free(hist); free(all);
+                free(e); free(hist); free(all); free(inc); free(rin);
                 return web_hist_read_failed(&c, body, cap, len, status);
             }
             web_slothdb_close(&c);
@@ -918,7 +961,7 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
         /* The capture, the evidence and the assessment (web_evidence.h),
          * looked up by what this page already holds. */
         web_alert_tgt_t *t = calloc(1, sizeof(*t));
-        if (!t) { free(e); free(hist); return -1; }
+        if (!t) { free(e); free(hist); free(inc); free(rin); return -1; }
         snprintf(t->id, sizeof(t->id), "%s", id);
         t->type = type;
         t->sev = sev;
@@ -939,17 +982,65 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
         web_evidence_alert_json(&w, m, t);
         free(t);
     }
+    /* One incident's own figures from sloth.db (v11, #175), where count
+     * and sev above are the finding's: the stream incident the page
+     * opened on ("opened"), else the key's newest ("latest"); null on a
+     * file without per-incident rows or a key with none. The figures
+     * are data for the page's header; how it lays them out is the
+     * page's. */
+    web_jw_raw(&w, ",\"db_incident\":");
+    if (!have_opened) {
+        web_jw_raw(&w, "null");
+    } else {
+        web_jw_raw(&w, "{\"which\":");
+        web_jw_str(&w, opened_match ? "opened" : "latest");
+        web_jw_raw(&w, ",\"first_seen\":");   web_jw_int(&w, opened.first_seen);
+        web_jw_raw(&w, ",\"last_seen\":");    web_jw_int(&w, opened.last_seen);
+        web_jw_raw(&w, ",\"sev\":");          web_jw_int(&w, sev_clamp(opened.sev));
+        web_jw_raw(&w, ",\"peak_sev\":");     web_jw_int(&w, sev_clamp(opened.peak_sev));
+        web_jw_raw(&w, ",\"count\":");        web_jw_int(&w, opened.count);
+        web_jw_raw(&w, ",\"observations\":"); web_jw_int(&w, opened.observations);
+        web_jw_raw(&w, ",\"closed_at\":");
+        if (opened.closed_at >= 0) web_jw_int(&w, opened.closed_at);
+        else web_jw_raw(&w, "null");
+        web_jw_raw(&w, ",\"reason\":");
+        if (opened.reason[0]) web_jw_text(&w, opened.reason);
+        else web_jw_raw(&w, "null");
+        web_jw_raw(&w, "}");
+    }
+    /* The runs: from the incident rows where the key has them, each its
+     * own peak and count, else from its alerts rows (one per finding
+     * since v8, so one run holding every incident's peak and sum). */
+    int nr = ni > 0 ? ni : nh;
+    for (int i = 0; i < nr; i++) {
+        if (ni > 0) {
+            rin[i].rid = tot.newest_rid > 0 ? tot.newest_rid : rid;
+            rin[i].first_seen = inc[i].first_seen;
+            rin[i].last_seen = inc[i].last_seen;
+            rin[i].count = inc[i].count;
+            rin[i].sev = inc[i].peak_sev;
+        } else {
+            rin[i].rid = hist[i].rid;
+            rin[i].first_seen = hist[i].first_seen;
+            rin[i].last_seen = hist[i].last_seen;
+            rin[i].count = hist[i].count;
+            rin[i].sev = hist[i].sev;
+        }
+    }
     web_jw_raw(&w, ",\"history\":{\"gap_s\":"); web_jw_int(&w, WEB_ALERT_RUN_GAP_S);
-    web_jw_raw(&w, ",\"incidents_read\":");   web_jw_int(&w, nh);
+    web_jw_raw(&w, ",\"source\":");           web_jw_str(&w, ni > 0 ? "incidents" : "rows");
+    web_jw_raw(&w, ",\"incidents_read\":");   web_jw_int(&w, nr);
     web_jw_raw(&w, ",\"incidents_cap\":");    web_jw_int(&w, WEB_ADB_INCIDENTS);
     web_jw_raw(&w, ",\"runs\":[");
     int runs = 0;
-    runs_json(&w, hist, nh, cap > 1024 ? cap - 1024 : 0, &runs);
+    runs_json(&w, rin, nr, cap > 1024 ? cap - 1024 : 0, &runs);
     web_jw_raw(&w, "],\"more\":");
-    web_jw_raw(&w, runs < 0 || nh >= WEB_ADB_INCIDENTS ? "true" : "false");
+    web_jw_raw(&w, runs < 0 || nr >= WEB_ADB_INCIDENTS ? "true" : "false");
     web_jw_raw(&w, "}}\n");
     free(e);
     free(hist);
+    free(inc);
+    free(rin);
     if (w.overflow) return -1;
     *len = w.len;
     *status = 200;

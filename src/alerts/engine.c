@@ -95,12 +95,24 @@ static uint64_t alert_age_ms(uint64_t now_ms, uint64_t then_ms) {
     return now_ms > then_ms ? now_ms - then_ms : 0;
 }
 
+/* The incident lifecycle hook (#175, src/alerts.h). */
+static alerts_incident_hook_fn g_incident_hook;
+
+void alerts_set_incident_hook(alerts_incident_hook_fn fn) {
+    g_incident_hook = fn;
+}
+
+static void incident_hook(const alert_t *a, time_t now, const char *reason) {
+    if (g_incident_hook) g_incident_hook(a, now, reason);
+}
+
 /* Close an incident: one resolve, once. `reason` is why. */
 static void alert_resolve(alert_t *a, time_t now, const char *reason) {
     if (a->resolved || !a->incident_id[0]) return;
     a->resolved = 1;
     a->event_seq++;
     jsonl_emit_alert_event(a, "alert.resolve", now, -1, reason);
+    incident_hook(a, now, reason ? reason : "");
 }
 
 /* ── Tainted-BSSID tracker (evil-twin Phase 4) ────────────── */
@@ -524,6 +536,7 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
                                    sev > prev ? "alert.escalate"
                                               : "alert.update",
                                    now, (int)prev, NULL);
+            incident_hook(a, now, NULL);
             if (sev > prev) event_wake_signal();
         } else if (sig != a->detail_sig &&
                    alert_age_ms(mono, a->last_event_ms) >= ALERT_UPDATE_MIN_MS) {
@@ -612,6 +625,7 @@ void fire_inv(alert_type_t type, alert_sev_t sev, int confidence,
      * `incident_id`; `alert.create` opens the lifecycle stream (#98). */
     jsonl_emit_alert(a);
     jsonl_emit_alert_event(a, "alert.create", now, -1, NULL);
+    incident_hook(a, now, NULL);
     event_wake_signal();
 }
 

@@ -29,6 +29,13 @@ int web_adb_incidents(web_sdb_conn_t *c, long long rid, const char *key,
     (void)c; (void)rid; (void)key; (void)max; (void)fn; (void)ctx;
     return -1;
 }
+int web_adb_key_incidents(web_sdb_conn_t *c, long long rid, const char *key,
+                          const char *incident_id, int max,
+                          web_adb_inc_fn fn, void *ctx) {
+    (void)c; (void)rid; (void)key; (void)incident_id; (void)max; (void)fn;
+    (void)ctx;
+    return -1;
+}
 int web_adb_device(web_sdb_conn_t *c, long long rid, const char *key,
                    const char *ip, char mac[18]) {
     (void)c; (void)rid; (void)key; (void)ip; (void)mac;
@@ -412,6 +419,45 @@ int web_adb_incidents(web_sdb_conn_t *c, long long rid, const char *key,
     sqlite3_finalize(s);
     c->pred_ok = 0;
     c->detail_ok = 0;
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_adb_key_incidents(web_sdb_conn_t *c, long long rid, const char *key,
+                          const char *incident_id, int max,
+                          web_adb_inc_fn fn, void *ctx) {
+    if (!have_alerts(c) || !(c->opt & WEB_SDB_OPT_INCROWS)) return 0;
+    if (max < 1 || max > WEB_ADB_INCIDENTS) max = WEB_ADB_INCIDENTS;
+    sqlb_t b;
+    memset(&b, 0, sizeof(b));
+    /* idx_alert_incidents_key: (key, first_seen); the primary key with an
+     * id. The key and the id are matched, never read out. */
+    add(&b, "SELECT first_seen, last_seen, COALESCE(closed_at,-1), sev,"
+            " peak_sev, count, observations, COALESCE(reason,'')"
+            " FROM alert_incidents WHERE ");
+    key_is(&b, rid, key);
+    if (incident_id) { add(&b, " AND incident_id = "); bind_s(&b, incident_id); }
+    add(&b, " ORDER BY first_seen DESC LIMIT ");
+    bind_i(&b, max);
+    c->pred_ok = 1;
+    sqlite3_stmt *s = prepare(c, &b);
+    if (!s) { c->pred_ok = 0; return -1; }
+    int rc, n = 0;
+    while ((rc = sqlite3_step(s)) == SQLITE_ROW) {
+        web_adb_inc_t r;
+        memset(&r, 0, sizeof(r));
+        r.first_seen = sqlite3_column_int64(s, 0);
+        r.last_seen = sqlite3_column_int64(s, 1);
+        r.closed_at = sqlite3_column_int64(s, 2);
+        r.sev = sqlite3_column_int(s, 3);
+        r.peak_sev = sqlite3_column_int(s, 4);
+        r.count = sqlite3_column_int64(s, 5);
+        r.observations = sqlite3_column_int64(s, 6);
+        text_col(s, 7, r.reason, sizeof(r.reason));
+        n++;
+        if (fn(ctx, &r)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(s);
+    c->pred_ok = 0;
     return rc == SQLITE_DONE ? n : -1;
 }
 

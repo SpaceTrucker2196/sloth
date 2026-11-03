@@ -82,7 +82,7 @@
 #include "web_secret.h"
 
 #define WEB_SDB_SCHEMA_MIN 1
-#define WEB_SDB_SCHEMA_MAX 10
+#define WEB_SDB_SCHEMA_MAX 11
 #define WEB_SDB_BUSY_MS    100
 #define WEB_SDB_HTTP_MS    250       /* a request's budget */
 /* /api/history/overview's alone. It counts every device and alert
@@ -222,7 +222,8 @@ enum {
     WEB_SDB_OPT_VCI   = 1 << 1,      /* devices.dhcp_vci (v7) */
     WEB_SDB_OPT_INC   = 1 << 2,      /* alerts.incident_first_seen, reopens (v8) */
     WEB_SDB_OPT_LOC   = 1 << 3,      /* alerts.lat .. loc_ts (v9, web_loc.h) */
-    WEB_SDB_OPT_POS   = 1 << 4       /* device_positions, sensor_positions (v9) */
+    WEB_SDB_OPT_POS   = 1 << 4,      /* device_positions, sensor_positions (v9) */
+    WEB_SDB_OPT_INCROWS = 1 << 5     /* alert_incidents, a row per incident (v11) */
 };
 
 int  web_slothdb_available(void);
@@ -474,7 +475,17 @@ int  web_sdb_devices_between(web_sdb_conn_t *c, long long from, long long to,
  * key's figures over all of its rows in the range (through the primary
  * key): a = title, b = match_ip, n1 = type, n2 = the highest sev, n3 =
  * the sum of count, rid its newest rowid in the range, rows its rows
- * there (each at least one incident). Newest first. */
+ * there (each at least one incident). Newest first.
+ *
+ * On a v11 file (#175) a key with rows in alert_incidents is read from
+ * those instead: listed when one of its incidents overlaps the range,
+ * n2 the highest peak_sev, n3 the sum of count and first_seen the
+ * earliest start of the incidents in the range, rows how many of them
+ * there are (exact, where the alerts row could only give a lower
+ * bound), and rid the key's newest alerts rowid (in the range when it
+ * has one there). A key with none (written before v11) reads its alerts
+ * rows as above. The scan's WEB_SDB_ALERT_SCAN is over both sources
+ * together, newest last_seen first. */
 int  web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
                             int max, web_sdb_item_fn fn, void *ctx);
 /* The rows of the range web_sdb_alerts_between() took its keys from (at

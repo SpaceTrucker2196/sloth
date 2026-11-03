@@ -27,7 +27,7 @@ per-alert pcaps in `--pcap-dir` are swept on a 14-day default window
 (`ALERT_PCAP_DEFAULT_RETAIN_DAYS`), `tests/test_alert_pcap.c` for §2d
 (#166).
 
-**Last updated**: 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
+**Last updated**: 2026-11-03 (#175 — `alert_incidents` on the finding tier, and its per-key bound of `DB_INCIDENTS_PER_KEY` incidents). 2026-10-26 (#166 — the `--pcap-dir` age sweep, §2d; owner ruling: two weeks; review: one directory for both sinks refused, the stale-clock guard, the sweep's own stderr line). Previously 2026-10-19 (#96 — dashboard `!persist` badge closes the §6 gap).
 
 ---
 
@@ -61,10 +61,18 @@ there is nothing to retain.
 |------|--------|-------:|---------------|
 | observation | **1×** (30 d) | 14 | `bgp_sessions`, `ssh_flows`, `rdp_flows`, `snmp_flows`, `mqtt_flows`, `ldap_events`, `kerb_events`, `smb_sessions`, `deauth_events`, `seqnum_correlations`, `twin_episodes`, `eapol_events`, `scan_entries`, `scan_entry_ports` |
 | entity | **3×** (90 d) | 21 | `devices`, `pnl_clients`, `pnl_ssids`, `probe_clients`, `beacon_aps`, `beacon_ap_ssids`, `ssid_akm_history`, `wifi_aps`, `wifi_stas`, `assocs`, `assoc_reqs`, `wifi_merged`, `arp`, `dhcp_leases`, `top_hosts`, `mdns_services`, `nbns_names`, `ssdp_devices`, `ndp_ras`, `ndp_ra_prefixes`, `sensors` |
-| finding | **12×** (360 d) | 5 | `alerts`, `cleartext_creds`, `karma_candidates`, `rogue_radius`, `btm_requests` |
+| finding | **12×** (360 d) | 6 | `alerts`, `alert_incidents`, `cleartext_creds`, `karma_candidates`, `rogue_radius`, `btm_requests` |
 
 The ordering is the point: *what fired* outlives *who was here*, which
 outlives *the individual observations that established it*.
+
+`alert_incidents` (schema v11, #175) has one more bound besides its
+tier: a key keeps its newest `DB_INCIDENTS_PER_KEY` (256) incidents,
+the oldest trimmed as the writer records a new one, because a key
+evicted under pressure re-fires as a new incident every tick. That trim
+removes per-incident detail only: the key's `alerts` row, which holds
+the finding across every incident, is not touched by it
+([[sqlite-schema]], *Per-incident rows*).
 
 `--db-retain-days 0` does **not** disable retention. Since #120 it is
 refused at startup (exit 2): the flag is an alias for the

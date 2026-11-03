@@ -96,7 +96,20 @@
  * gnss_fixes and gnss_sightings are new tables and ride the
  * unconditional schema; the v9 -> v10 step is a stamp alone, as
  * v2 -> v3 was. No existing table or value changes. */
-#define DB_SCHEMA_VERSION 10
+/* Bumped to 11 on 2026-11-03 (#175): alert_incidents is a new table,
+ * one row per incident beside the per-finding alerts row, and rides the
+ * unconditional schema; the v10 -> v11 step is a stamp alone. The
+ * alerts table is unchanged. */
+#define DB_SCHEMA_VERSION 11
+
+/* The incidents kept per key in alert_incidents (#175), newest first
+ * by first_seen. A key evicted under pressure re-fires as a new
+ * incident every tick (#170's churn), so without a bound one key could
+ * write a row a tick; trimmed whenever the writer writes an incident of
+ * the key that the engine's hook reported (every new incident is one).
+ * slothweb's alert page reads at most
+ * WEB_ADB_INCIDENTS (2000) of them, so this is the tighter cap. */
+#define DB_INCIDENTS_PER_KEY 256
 
 /* How long a statement on sloth's connection waits out another
  * connection's lock before failing busy. A reader of the file (the
@@ -368,5 +381,8 @@ const char *db_schema_migrate_v8_sql(void);
  * new tables and ride the unconditional schema. An empty statement
  * list; the step still advances the stamp in db.c. */
 const char *db_schema_migrate_v9_sql(void);
+/* v10 -> v11 (#175): no ALTER — alert_incidents is a new table and
+ * rides the unconditional schema. An empty statement list. */
+const char *db_schema_migrate_v10_sql(void);
 
 #endif /* SLOTH_DB_H */

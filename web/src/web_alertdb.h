@@ -124,6 +124,30 @@ typedef int (*web_adb_row_fn)(void *ctx, const web_adb_row_t *r);
 int web_adb_incidents(web_sdb_conn_t *c, long long rid, const char *key,
                       int max, web_adb_row_fn fn, void *ctx);
 
+/* One incident of a key from sloth.db's alert_incidents (v11, #175):
+ * its own figures, where an alerts row holds the finding's (the peak
+ * and the sum across every incident it absorbed). closed_at -1 while
+ * open, or when the file never saw the close; reason "" then. Neither
+ * the key nor sloth's incident_id is read out (both predicate-only):
+ * the id inverts to the key's hash, as web_alerts.h says of the list. */
+typedef struct {
+    long long first_seen, last_seen, closed_at;
+    int       sev, peak_sev;
+    long long count, observations;
+    char      reason[24];
+} web_adb_inc_t;
+
+/* The key's incidents (by a rowid of its alerts rows, or the key
+ * itself), newest first_seen first, at most max (WEB_ADB_INCIDENTS) to
+ * fn; with incident_id not NULL, only the one of that id (the stream's,
+ * bound as a predicate). Rows, or -1; 0 also when the file has no
+ * alert_incidents (before v11) or the key has no rows in it (an
+ * incident recorded before v11, or past sloth's per-key bound). */
+typedef int (*web_adb_inc_fn)(void *ctx, const web_adb_inc_t *r);
+int web_adb_key_incidents(web_sdb_conn_t *c, long long rid, const char *key,
+                          const char *incident_id, int max,
+                          web_adb_inc_fn fn, void *ctx);
+
 /* The device an alert names: a devices row whose MAC is in the key (by
  * rowid or the key itself), else one whose ip is ip. 1 (mac filled), 0,
  * -1. */

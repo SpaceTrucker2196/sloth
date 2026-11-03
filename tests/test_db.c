@@ -2222,11 +2222,11 @@ static void test_current_file_gains_the_first_seen_indexes(void) {
 
 /* ── Schema v4: the batched column bump ──────────────────── */
 
-static void test_schema_version_is_ten(void) {
+static void test_schema_version_is_eleven(void) {
     fresh_db();
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "10");
+    ASSERT_STR(v, "11");
     db_close();
     unlink(db_path);
 }
@@ -2805,7 +2805,7 @@ static void test_v5_file_migrates_additively(void) {
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
     /* The chain runs on: v5 -> v6 -> v7 -> v8 in one open (#155, #170). */
-    ASSERT_STR(v, "10");
+    ASSERT_STR(v, "11");
     ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('devices')"
                     " WHERE name='dhcp_vci'"), 23);
     q_text("SELECT hostname FROM devices WHERE mac='02:00:00:00:00:77'",
@@ -2858,7 +2858,7 @@ static void test_v5_file_without_devices_migrates(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "10");
+    ASSERT_STR(v, "11");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
                     " WHERE name='cam_signals'"), 1);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
@@ -2898,7 +2898,7 @@ static void test_v6_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "10");
+    ASSERT_STR(v, "11");
     q_text("SELECT hostname FROM devices", v, sizeof(v));
     ASSERT_STR(v, "old-host");
     ASSERT_EQ(q_int("SELECT device_class FROM devices"), 2);
@@ -2996,7 +2996,7 @@ static void test_v7_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "10");
+    ASSERT_STR(v, "11");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts WHERE key='recon:10.0.0.5'"),
               19);
@@ -3093,7 +3093,7 @@ static void test_v8_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "10");
+    ASSERT_STR(v, "11");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
     q_text("SELECT incident_id FROM alerts WHERE first_seen=1600000011", v, sizeof(v));
@@ -3276,7 +3276,7 @@ static void test_v9_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "10");
+    ASSERT_STR(v, "11");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
     q_text("SELECT incident_id FROM alerts WHERE first_seen=1600000011", v, sizeof(v));
@@ -3323,6 +3323,282 @@ static void test_v9_migration_failure_leaves_file_unchanged(void) {
                     " AND name IN ('gnss_fixes','gnss_sightings')"), 0);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
+    unlink(db_path);
+}
+
+/* ── Schema v11: per-incident rows (#175) ──────────────────── */
+
+/* A v10 file: write_v9_file() stamped 10. The GNSS tables are left to
+ * the unconditional schema, as write_v9_file() leaves the position
+ * tables. */
+static void write_v10_file(void) {
+    write_v9_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "UPDATE meta SET value='10' WHERE key='schema_version';",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+}
+
+/* v10 -> v11 is a stamp: alert_incidents and its two indexes arrive
+ * with the unconditional schema, every alerts value reads as it was,
+ * and no incident row is made up from an alerts row (whose sev is a
+ * peak and count a sum no single incident had). Seen to fail with the
+ * { 10, ... } step removed from g_steps[] (the static chain check
+ * refuses the build), and the empty table seen red with a backfill
+ * (MIGRATE_V10_SQL creating the table and copying one row per alerts
+ * row into it). */
+static void test_v10_file_migrates_additively(void) {
+    write_v10_file();
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "11");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
+    ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alerts')"), 21);
+    q_text("SELECT loc_src FROM alerts WHERE first_seen=1600000011", v, sizeof(v));
+    ASSERT_STR(v, "gps");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name='alert_incidents'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
+                    " AND name IN ('idx_alert_incidents_key',"
+                    "'idx_alert_incidents_last_seen')"), 2);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alert_incidents')"), 11);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 0);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v10 file whose stamp cannot be written stays v10 with no
+ * alert_incidents table: the step is the stamp, and the schema that
+ * would create the table runs only after the version check passes.
+ * Seen red with migrate_step()'s return ignored in migrate_from()
+ * (db_open returned 1 and the table appeared beside a v10 stamp). */
+static void test_v10_migration_failure_leaves_file_unchanged(void) {
+    write_v10_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TRIGGER refuse_v11 BEFORE UPDATE ON meta"
+        " WHEN NEW.key='schema_version' AND NEW.value='11'"
+        " BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "10");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name='alert_incidents'"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
+    ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
+    unlink(db_path);
+}
+
+#define INC_KEY "inc:10.0.0.7"
+
+static long long inc_q(const char *col, int nth) {
+    char sql[160];
+    snprintf(sql, sizeof(sql), "SELECT %s FROM alert_incidents WHERE key='"
+             INC_KEY "' ORDER BY first_seen LIMIT 1 OFFSET %d", col, nth);
+    return q_int(sql);
+}
+
+/* The issue's acceptance case, through the engine: a key CRIT in its
+ * first incident and LOW in its second is one alerts row reading CRIT
+ * (the finding's peak, unchanged by #175) and two incident rows, the
+ * second reading LOW, each with its own span, count and close. The
+ * first incident's CRIT fell to LOW inside it, so its row's sev is LOW
+ * and its peak CRIT. Seen red with ST_INCIDENT's peak_sev taking
+ * excluded.peak_sev (incident 1's peak 0), and with the hook's call in
+ * alert_resolve() removed (incident 1's closed_at NULL, reason NULL). */
+static void test_incident_rows_keep_each_incidents_figures(void) {
+    alerts_clear();
+    fresh_db();
+    ch_clock();
+    time_t t0 = g_ch_wall;
+    alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_CRIT, INC_KEY,
+                         "crit", NULL, 0);
+    ch_snap();
+    db_tick(&g_ch, g_ch_wall);
+    ch_advance(1);
+    alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_LOW, INC_KEY,
+                         "low", NULL, 0);
+    ch_snap();
+    db_tick(&g_ch, g_ch_wall);
+    ch_advance(ALERT_RESOLVE_AFTER_S + 1);
+    ch_snap();                               /* expires incident 1 */
+    db_tick(&g_ch, g_ch_wall);
+    ch_advance(600);
+    time_t t2 = g_ch_wall;
+    for (int i = 0; i < 3; i++) {
+        alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_LOW, INC_KEY,
+                             "low again", NULL, 0);
+        ch_snap();
+        db_tick(&g_ch, g_ch_wall);
+        ch_advance(1);
+    }
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 1);
+    ASSERT_EQ(q_int("SELECT sev FROM alerts"), ALERT_SEV_CRIT);
+    ASSERT_EQ(q_int("SELECT reopens FROM alerts"), 1);
+    ASSERT_EQ(q_int("SELECT count FROM alerts"), 2 + 3);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 2);
+    ASSERT_EQ(inc_q("first_seen", 0), (long long)t0);
+    ASSERT_EQ(inc_q("last_seen", 0), (long long)t0 + 1);
+    ASSERT_EQ(inc_q("peak_sev", 0), ALERT_SEV_CRIT);
+    ASSERT_EQ(inc_q("sev", 0), ALERT_SEV_LOW);
+    ASSERT_EQ(inc_q("count", 0), 2);
+    ASSERT_EQ(inc_q("observations", 0), 2);
+    ASSERT_EQ(inc_q("closed_at", 0), (long long)t0 + 2 + ALERT_RESOLVE_AFTER_S);
+    char v[32];
+    q_text("SELECT reason FROM alert_incidents ORDER BY first_seen LIMIT 1",
+           v, sizeof(v));
+    ASSERT_STR(v, "expired");
+    ASSERT_EQ(inc_q("first_seen", 1), (long long)t2);
+    ASSERT_EQ(inc_q("last_seen", 1), (long long)t2 + 2);
+    ASSERT_EQ(inc_q("peak_sev", 1), ALERT_SEV_LOW);
+    ASSERT_EQ(inc_q("count", 1), 3);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"
+                    " WHERE closed_at IS NULL AND reason IS NULL"), 1);
+    /* The latest incident is the alerts row's: the join holds. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts a JOIN alert_incidents i"
+                    " ON i.key = a.key AND i.incident_id = a.incident_id"
+                    " WHERE i.first_seen = a.incident_first_seen"), 1);
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear();
+    db_close();
+    unlink(db_path);
+}
+
+/* An incident that rose to CRIT and fell back between two ticks never
+ * shows CRIT in a snapshot; the hook's severity call is what records
+ * the peak. Seen red with the incident_hook() call on a severity
+ * change removed from fire_inv() (peak_sev 0). */
+static void test_incident_peak_between_ticks_is_kept(void) {
+    alerts_clear();
+    fresh_db();
+    ch_clock();
+    alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_LOW, INC_KEY,
+                         "low", NULL, 0);
+    ch_snap();
+    db_tick(&g_ch, g_ch_wall);
+    ch_advance(1);
+    alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_CRIT, INC_KEY,
+                         "crit", NULL, 0);
+    alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_LOW, INC_KEY,
+                         "low", NULL, 0);
+    ch_snap();
+    db_tick(&g_ch, g_ch_wall);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 1);
+    ASSERT_EQ(q_int("SELECT peak_sev FROM alert_incidents"), ALERT_SEV_CRIT);
+    ASSERT_EQ(q_int("SELECT sev FROM alert_incidents"), ALERT_SEV_LOW);
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear();
+    db_close();
+    unlink(db_path);
+}
+
+/* An incident opened and evicted inside one alerts_update() is in no
+ * snapshot at all: only the hook's queue writes it, with its close and
+ * the reason. CHURN_FILLERS evictions overflow the queue (DB_INC_PENDING
+ * 256) twice before the tick, so this is also the flush-when-full path:
+ * every one of the 521 incidents has a row. Seen red with the hook
+ * returning on a full queue instead of flushing (fewer rows: the
+ * evictions queued past the 256th were lost). */
+static void test_incident_evicted_between_ticks_is_recorded(void) {
+    alerts_clear();
+    fresh_db();
+    ch_clock();
+    alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN, INC_KEY,
+                         "victim", NULL, 0);
+    ch_advance(1);
+    char k[48];
+    for (int f = 0; f < CHURN_FILLERS; f++) {
+        snprintf(k, sizeof(k), "inc-filler:%d", f);
+        alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN, k,
+                             "filler", NULL, 0);
+    }
+    ch_snap();
+    ASSERT(ch_find(INC_KEY) < 0);            /* precondition: evicted */
+    db_tick(&g_ch, g_ch_wall);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"), 1 + CHURN_FILLERS);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE key='"
+                    INC_KEY "' AND closed_at IS NOT NULL"), 1);
+    char v[32];
+    q_text("SELECT reason FROM alert_incidents WHERE key='" INC_KEY "'",
+           v, sizeof(v));
+    ASSERT_STR(v, "evicted");
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear();
+    db_close();
+    unlink(db_path);
+}
+
+/* One key reopened past DB_INCIDENTS_PER_KEY keeps its newest that many
+ * incidents and drops the oldest: #170's churn writes an incident a
+ * cycle, and the table must not grow a row a tick for ever. Another
+ * key's rows are untouched. Seen red with ST_INCIDENT_TRIM's step
+ * removed from write_incident_queue() (DB_INCIDENTS_PER_KEY + 20
+ * rows). */
+static void test_incident_rows_bounded_per_key(void) {
+    alerts_clear();
+    fresh_db();
+    ch_clock();
+    alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN, "inc:other",
+                         "other", NULL, 0);
+    ch_snap();
+    db_tick(&g_ch, g_ch_wall);
+    time_t first_kept = 0;
+    for (int c = 0; c < DB_INCIDENTS_PER_KEY + 20; c++) {
+        if (c == 20) first_kept = g_ch_wall;
+        alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN, INC_KEY,
+                             "x", NULL, 0);
+        ch_snap();
+        db_tick(&g_ch, g_ch_wall);
+        ch_advance(ALERT_RESOLVE_AFTER_S + 1);
+        ch_snap();                           /* expired */
+        db_tick(&g_ch, g_ch_wall);
+    }
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents WHERE key='"
+                    INC_KEY "'"), DB_INCIDENTS_PER_KEY);
+    ASSERT_EQ(q_int("SELECT MIN(first_seen) FROM alert_incidents WHERE key='"
+                    INC_KEY "'"), (long long)first_kept);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"
+                    " WHERE key='inc:other'"), 1);
+    ASSERT_EQ(q_int("SELECT reopens FROM alerts WHERE key='" INC_KEY "'"),
+              DB_INCIDENTS_PER_KEY + 19);
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear();
+    db_close();
+    unlink(db_path);
+}
+
+/* The closes queued since the last tick reach the file on db_close():
+ * a sensor stopped right after an incident closed still records it.
+ * Seen red with the incident_queue_flush() call removed from
+ * db_close() (closed_at NULL). */
+static void test_incident_close_is_flushed_on_db_close(void) {
+    alerts_clear();
+    fresh_db();
+    ch_clock();
+    alerts_fire_for_test(ALERT_TYPE_PORT_SCAN, ALERT_SEV_WARN, INC_KEY,
+                         "x", NULL, 0);
+    ch_snap();
+    db_tick(&g_ch, g_ch_wall);
+    ch_advance(ALERT_RESOLVE_AFTER_S + 1);
+    ch_snap();                               /* expired; no tick after */
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alert_incidents"
+                    " WHERE closed_at IS NOT NULL AND reason='expired'"), 1);
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear();
+    db_close();
     unlink(db_path);
 }
 
@@ -3543,7 +3819,7 @@ static void test_compact_alerts_900k_rows(void) {
     ASSERT_EQ(db_is_open(), 0);
 
     ASSERT_EQ(q_int_at(g_cmp_dst, "SELECT CAST(value AS INTEGER) FROM meta"
-                                  " WHERE key='schema_version'"), 10);
+                                  " WHERE key='schema_version'"), 11);
     ASSERT_EQ(q_int_at(g_cmp_dst, "SELECT COUNT(*) FROM alerts"), CMP_KEYS);
     ASSERT_EQ(q_int_at(g_cmp_dst, "SELECT COUNT(DISTINCT key) FROM alerts"),
               CMP_KEYS);
@@ -3804,10 +4080,11 @@ static void test_migration_sql_is_add_column_only(void) {
         db_schema_migrate_v1_sql(), db_schema_migrate_v2_sql(),
         db_schema_migrate_v3_sql(), db_schema_migrate_v4_sql(),
         db_schema_migrate_v5_sql(), db_schema_migrate_v6_sql(),
-        db_schema_migrate_v7_sql(),
+        db_schema_migrate_v7_sql(), db_schema_migrate_v8_sql(),
+        db_schema_migrate_v9_sql(), db_schema_migrate_v10_sql(),
     };
-    const int want[] = { 1, 0, 7, 1, 5, 6, 4 };
-    for (int i = 0; i < 7; i++) {
+    const int want[] = { 1, 0, 7, 1, 5, 6, 4, 6, 0, 0 };
+    for (int i = 0; i < 10; i++) {
         const char *m = ms[i];
         int alters = 0, adds = 0, semis = 0;
         for (const char *p = m; (p = strstr(p, "ALTER TABLE ")); p++)
@@ -3884,7 +4161,7 @@ static void test_v1_file_migrates_to_current(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "10");
+    ASSERT_STR(v, "11");
     ASSERT_EQ(q_int("SELECT presence FROM probe_clients"
                     " WHERE mac='02:00:00:00:00:51'"), 0);
     q_text("SELECT ssid FROM probe_clients WHERE mac='02:00:00:00:00:51'",
@@ -3929,7 +4206,7 @@ static void test_v1_file_without_probe_clients_migrates(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "10");
+    ASSERT_STR(v, "11");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('probe_clients')"
                     " WHERE name='presence'"), 1);
     db_close();
@@ -3982,7 +4259,7 @@ static void test_v2_file_migrates_to_current(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "10");
+    ASSERT_STR(v, "11");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master"
                     " WHERE type='table' AND name='assoc_reqs'"), 1);
     db_close();
@@ -4034,7 +4311,7 @@ static void test_v3_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "10");
+    ASSERT_STR(v, "11");
     ASSERT_EQ(q_int("SELECT phy_confirmed FROM pnl_clients"
                     " WHERE mac='02:00:00:00:00:53'"), 0);
     ASSERT_EQ(q_int("SELECT probe_count FROM pnl_clients"
@@ -4188,7 +4465,7 @@ static void test_v4_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "10");
+    ASSERT_STR(v, "11");
     ASSERT_EQ(q_int("SELECT pnl_best FROM karma_candidates"
                     " WHERE bssid='aa:bb:cc:dd:ee:55'"), 0);
     ASSERT_EQ(q_int("SELECT score FROM karma_candidates"
@@ -4269,13 +4546,20 @@ void run_db_tests(void) {
     RUN_TEST(test_btm_requests_first_seen_does_not_move);
     RUN_TEST(test_btm_requests_forcing_index_exists);
     RUN_TEST(test_btm_requests_in_finding_retention_tier);
-    RUN_TEST(test_schema_version_is_ten);
+    RUN_TEST(test_schema_version_is_eleven);
     RUN_TEST(test_v8_file_migrates_additively);
     RUN_TEST(test_v8_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_alert_stamp_kept_within_incident);
     RUN_TEST(test_position_tables_written);
     RUN_TEST(test_v9_file_migrates_additively);
     RUN_TEST(test_v9_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_v10_file_migrates_additively);
+    RUN_TEST(test_v10_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_incident_rows_keep_each_incidents_figures);
+    RUN_TEST(test_incident_peak_between_ticks_is_kept);
+    RUN_TEST(test_incident_evicted_between_ticks_is_recorded);
+    RUN_TEST(test_incident_rows_bounded_per_key);
+    RUN_TEST(test_incident_close_is_flushed_on_db_close);
     RUN_TEST(test_gnss_tables_written);
     RUN_TEST(test_device_ip_joined_camera_columns_follow_latest);
     RUN_TEST(test_device_mac_keyed_camera_columns_are_sticky);

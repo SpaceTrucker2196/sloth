@@ -1158,6 +1158,100 @@ static void test_key_totals_on_list_and_page(void) {
     WT_EQ(num_of(body_of(g_out), "first_seen"), T - 10 * DY);
 }
 
+/* sloth.db v11's per-incident rows on the alert page (#175). One
+ * finding, CRIT once (incident A, five hours ago) and LOW since
+ * (incident B, an hour ago): the page's sev and count stay the
+ * finding's (the alerts row: CRIT, 30), its runs are per incident
+ * (each its own peak and count, where the alerts row alone gave one run
+ * of CRIT and 30), and db_incident is one incident's figures: the
+ * stream incident the page opened on (A, matched by sloth's id as a
+ * predicate), else the key's newest (B). A second key with no incident
+ * rows reads its row as before. Neither the keys nor sloth's ids are
+ * served. Seen red with web_adb_key_incidents() answering 0 (the runs
+ * one of sev 2 and count 30, db_incident null), with the opened-on
+ * lookup's id predicate dropped (the stream's page showing B), and the
+ * never-served half with db_incident's "which" written as the stream's
+ * incident_id (cafe...a1 in both bodies). */
+static void test_alert_page_reads_per_incident_rows(void) {
+    char sql[2048];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO alerts (rowid,key,first_seen,last_seen,type,sev,title,detail,technique,"
+        "match_ip,match_port,count,reopens,incident_id,incident_count,incident_first_seen)"
+        " VALUES (96,'inc:192.0.2.70',%lld,%lld,0,2,'PORT_SCAN','x','T1046','192.0.2.70',0,"
+        "30,1,'cafe0000000000b2',20,%lld),"
+        " (97,'inc:192.0.2.71',%lld,%lld,0,1,'PORT_SCAN','x','T1046','192.0.2.71',0,4,0,"
+        "'cafe0000000000c3',4,%lld);"
+        "INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,sev,peak_sev,"
+        "count,observations,closed_at,reason) VALUES"
+        " ('inc:192.0.2.70','cafe0000000000a1',0,%lld,%lld,1,2,10,3,%lld,'expired'),"
+        " ('inc:192.0.2.70','cafe0000000000b2',0,%lld,%lld,0,0,20,5,NULL,NULL);",
+        T - 5 * HR, T - HR + 100, T - HR,
+        T - 3 * HR, T - 3 * HR + 60, T - 3 * HR,
+        T - 5 * HR, T - 5 * HR + 100, T - 5 * HR + 400,
+        T - HR, T - HR + 100);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    char b0[1024];
+    snprintf(b0, sizeof(b0),
+        "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"cafe0000000000a1\",\"key\":"
+        "\"inc:192.0.2.70\",\"title\":\"PORT_SCAN\",\"detail\":\"x\",\"sev\":2,\"ty\":0,"
+        "\"count\":1,\"match_ip\":\"192.0.2.70\",\"match_port\":0}\n"
+        "{\"type\":\"alert.resolve\",\"ts\":%lld,\"incident_id\":\"cafe0000000000a1\",\"key\":"
+        "\"inc:192.0.2.70\",\"title\":\"PORT_SCAN\",\"sev\":1,\"ty\":0,\"count\":10,"
+        "\"reason\":\"expired\"}\n", T - 5 * HR, T - 5 * HR + 400);
+    feed(b0);
+
+    char want[512];
+    WT_EQ(route(&H, "/api/alert", "id=d97"), 200);
+    WT_HAS(body_of(g_out), "\"db_incident\":null");
+    WT_HAS(body_of(g_out), "\"history\":{\"gap_s\":1800,\"source\":\"rows\",\"incidents_read\":1,");
+
+    /* By the stream's handle: A is the incident the page opened on. */
+    char q[WEB_LIVE_HID_MAX + 8];
+    snprintf(q, sizeof(q), "%s", Q("cafe0000000000a1"));
+    WT_ASSERT(strlen(q) > 4);
+    WT_EQ(route(&H, "/api/alert", q), 200);
+    snprintf(want, sizeof(want), "\"db_incident\":{\"which\":\"opened\",\"first_seen\":%lld,"
+             "\"last_seen\":%lld,\"sev\":1,\"peak_sev\":2,\"count\":10,\"observations\":3,"
+             "\"closed_at\":%lld,\"reason\":\"expired\"}", T - 5 * HR, T - 5 * HR + 100,
+             T - 5 * HR + 400);
+    WT_HAS(body_of(g_out), want);
+    /* The finding's own figures, as the list row has them (contract). */
+    WT_EQ(num_of(body_of(g_out), "count"), 30);
+
+    /* By the sloth.db id the stream incident is matched by key, so it is
+     * still A; the runs are the two incidents, newest first. */
+    WT_EQ(route(&H, "/api/alert", "id=d96"), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"db_incident\":{\"which\":\"opened\",");
+    snprintf(want, sizeof(want), "\"history\":{\"gap_s\":1800,\"source\":\"incidents\","
+             "\"incidents_read\":2,\"incidents_cap\":%d,\"runs\":[{\"from\":%lld,\"to\":%lld,"
+             "\"incidents\":1,\"sev\":0,\"count\":20,\"id\":\"d96\"},{\"from\":%lld,\"to\":%lld,"
+             "\"incidents\":1,\"sev\":2,\"count\":10,\"id\":\"d96\"}],\"more\":false}",
+             WEB_ADB_INCIDENTS, T - HR, T - HR + 100, T - 5 * HR, T - 5 * HR + 100);
+    WT_HAS(b, want);
+    WT_EQ(num_of(b, "count"), 30);
+    for (int pass = 0; pass < 2; pass++) {
+        WT_LACKS(b, "cafe0000000000a1");
+        WT_LACKS(b, "cafe0000000000b2");
+        WT_LACKS(b, "inc:192.0.2.70");
+        WT_LACKS(b, "\"incident_id\"");
+        if (pass) break;
+        WT_EQ(route(&H, "/api/alert", q), 200);
+        b = body_of(g_out);
+    }
+
+    /* With no stream incident to open on, the newest incident. */
+    WT_EQ(sdb_exec(g_db, "UPDATE alerts SET key='inc:192.0.2.72' WHERE rowid=96;"
+                         "UPDATE alert_incidents SET key='inc:192.0.2.72';"), 0);
+    WT_EQ(route(&H, "/api/alert", "id=d96"), 200);
+    snprintf(want, sizeof(want), "\"db_incident\":{\"which\":\"latest\",\"first_seen\":%lld,"
+             "\"last_seen\":%lld,\"sev\":0,\"peak_sev\":0,\"count\":20,\"observations\":5,"
+             "\"closed_at\":null,\"reason\":null}", T - HR, T - HR + 100);
+    WT_HAS(body_of(g_out), want);
+    WT_EQ(sdb_exec(g_db, "DELETE FROM alerts WHERE rowid IN (96,97);"
+                         "DELETE FROM alert_incidents;"), 0);
+}
+
 /* The drawer walks a device's alerts a slice at a time and keeps at
  * most 65 keys of one: they are the slice's newest, not the first 65
  * in key order. 70 keys name one device inside a day, the
@@ -1207,6 +1301,7 @@ void run_alerts_tests(void) {
     up();
     WT_RUN(test_alert_text_display_form);
     WT_RUN(test_key_totals_on_list_and_page);
+    WT_RUN(test_alert_page_reads_per_incident_rows);
     WT_RUN(test_drawer_keeps_a_slices_newest_keys);
     down();
 }

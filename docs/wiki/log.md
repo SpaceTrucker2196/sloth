@@ -6349,3 +6349,25 @@ all (a snapped capture or a refused MLE is not evidence of absence), and
 the page now states the two limits — a forged beacon steers the binding
 until the next real one, and a nontransmitted BSSID of a Multiple BSSID
 set, which never beacons itself, still has only the heuristic.
+
+## 2026-11-03 — Per-incident rows in sloth.db (#175, schema v11)
+
+sloth.db gains `alert_incidents`, one row per incident (key,
+incident_id, type, the incident's own first and last seen, its last
+and peak severity, count, observations, and its close time and
+reason) beside the per-finding `alerts` row, which is unchanged. The
+--db writer fills it from the engine's snapshot every tick and from a
+new engine lifecycle hook (`alerts_set_incident_hook()`, open /
+severity / close), so an incident evicted between ticks, a peak
+between ticks and every close reason are recorded; bounded at 256
+incidents a key, on the finding tier. `DB_SCHEMA_VERSION` 10 -> 11,
+the step a stamp (no backfill: a v10 row's peak and sum belong to no
+single incident), tested on a v10 file and on one whose stamp is
+refused. slothweb allow-lists the table (key and incident_id
+predicate-only, `WEB_SDB_SCHEMA_MAX` 11): `/api/history/alerts` reads a
+key's sev, count and incidents per incident in the range, and
+`/api/alert` builds its runs from the incidents and adds
+`db_incident` (data for #179's header). Updated [[sqlite-schema]]
+(v11, *Per-incident rows*, the upsert rule, the chain), [[retention]]
+(the finding tier, the per-key bound) and [[slothweb]] (History, the
+alert page).

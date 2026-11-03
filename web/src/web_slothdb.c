@@ -117,6 +117,22 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "gnss_sightings", "el", 10, 1, 0 },        { "gnss_sightings", "az", 10, 1, 0 },
     { "gnss_sightings", "cn0", 10, 1, 0 },       { "gnss_sightings", "used", 10, 1, 0 },
     { "gnss_sightings", "health", 10, 1, 0 },
+    /* v11 (#175): one row per incident beside the per-finding alerts
+     * row. The key is the alerts key and as predicate-only as that one;
+     * so is sloth's incident_id, a hash over the key (web_alerts.h never
+     * serves it). The rest are sloth's own figures and the alert.resolve
+     * word sloth chose. No detail column exists. */
+    { "alert_incidents", "key", 11, 1, 1 },
+    { "alert_incidents", "incident_id", 11, 1, 1 },
+    { "alert_incidents", "type", 11, 1, 0 },
+    { "alert_incidents", "first_seen", 11, 1, 0 },
+    { "alert_incidents", "last_seen", 11, 1, 0 },
+    { "alert_incidents", "sev", 11, 1, 0 },
+    { "alert_incidents", "peak_sev", 11, 1, 0 },
+    { "alert_incidents", "count", 11, 1, 0 },
+    { "alert_incidents", "observations", 11, 1, 0 },
+    { "alert_incidents", "closed_at", 11, 1, 0 },
+    { "alert_incidents", "reason", 11, 1, 0 },
     /* M5 (#163): the WiFi view's AP table and the History view. */
     { "beacon_aps", "bssid", 1, 0, 0 },  { "beacon_aps", "ssid", 1, 0, 0 },
     { "beacon_aps", "signal_dbm", 1, 0, 0 }, { "beacon_aps", "channel", 1, 0, 0 },
@@ -1012,6 +1028,13 @@ static int probe(web_sdb_conn_t *c) {
                                         "acc_m", "rssi", NULL };
     static const char *const spos[] = { "last_seen", "lat", "lon", "alt_m",
                                         "acc_m", NULL };
+    /* v11 (#175): every column the per-incident reads name. */
+    static const char *const irow[] = { "key", "incident_id", "type",
+        "first_seen", "last_seen", "sev", "peak_sev", "count",
+        "observations", "closed_at", "reason", NULL };
+    if ((c->feats & WEB_QF_ALERTS) &&
+        table_cols(c->db, "alert_incidents", irow, &have) > 0 && have == 0x7ff)
+        c->opt |= WEB_SDB_OPT_INCROWS;
     unsigned have2 = 0;
     if (table_cols(c->db, "device_positions", dpos, &have) > 0 && have == 0x3f &&
         table_cols(c->db, "sensor_positions", spos, &have2) > 0 && have2 == 0x1f)
@@ -2219,9 +2242,52 @@ int web_sdb_alerts_between(web_sdb_conn_t *c, long long from, long long to,
      * lower bound, since a v8 row's earlier incidents may fall in the
      * range too and their starts are not kept. */
     const char *fs = alert_start(c);
-    char sql[3072], tys[640];
+    char sql[4096], tys[640];
     /* A capture scope's types only (web_scope.h): a key is one type. */
     web_sdb_scope_types(c, "type", tys, sizeof(tys));
+    if (c->opt & WEB_SDB_OPT_INCROWS) {
+        /* v11 (#175). u: the range's newest rows of both sources, an
+         * incident of a key that has incident rows or an alerts row of
+         * one that has none (a key is read from one source, never
+         * both). k: the keys shown, each named by its newest alerts row
+         * in the range, else its newest. f: each key's figures from its
+         * source, the incidents that overlap the range or, without
+         * them, its alerts rows that do. Every per-key read is an index
+         * seek on the key (idx_alert_incidents_key, the alerts primary
+         * key). */
+        snprintf(sql, sizeof(sql),
+                 "WITH wi AS (SELECT key, last_seen FROM alert_incidents"
+                 " WHERE last_seen >= ?2 AND first_seen < ?3%s"
+                 " ORDER BY last_seen DESC LIMIT %d),"
+                 " wa AS (SELECT key, last_seen FROM alerts WHERE last_seen >= ?2"
+                 " AND %s < ?3%s AND NOT EXISTS (SELECT 1 FROM alert_incidents i"
+                 " WHERE i.key = alerts.key) ORDER BY last_seen DESC LIMIT %d),"
+                 " u AS (SELECT key, last_seen FROM (SELECT key, last_seen FROM wi"
+                 " UNION ALL SELECT key, last_seen FROM wa)"
+                 " ORDER BY last_seen DESC LIMIT %d),"
+                 " k AS (SELECT key, max(last_seen) AS ls, COALESCE("
+                 "(SELECT max(x.rowid) FROM alerts x WHERE x.key = u.key AND"
+                 " x.last_seen >= ?2 AND %s < ?3),"
+                 " (SELECT max(x.rowid) FROM alerts x WHERE x.key = u.key)) AS rid"
+                 " FROM u GROUP BY key ORDER BY ls DESC, rid DESC LIMIT ?4),"
+                 " f AS (SELECT k.key AS fk, max(i.peak_sev) AS sv, sum(i.count) AS cn,"
+                 " min(i.first_seen) AS f0, count(*) AS n FROM k JOIN alert_incidents i"
+                 " ON i.key = k.key WHERE i.last_seen >= ?2 AND i.first_seen < ?3"
+                 " GROUP BY k.key"
+                 " UNION ALL SELECT k.key, max(r.sev), sum(r.count), min(%s), count(*)"
+                 " FROM k JOIN alerts r ON r.key = k.key WHERE r.last_seen >= ?2 AND"
+                 " %s < ?3 AND NOT EXISTS (SELECT 1 FROM alert_incidents i"
+                 " WHERE i.key = k.key) GROUP BY k.key)"
+                 " SELECT COALESCE(a.title,''), COALESCE(a.match_ip,''), a.type, f.sv,"
+                 " f.cn, f.f0, k.ls, k.rid, f.n FROM k JOIN f ON f.fk = k.key"
+                 " JOIN alerts a ON a.rowid = k.rid ORDER BY k.ls DESC, k.rid DESC",
+                 tys, WEB_SDB_ALERT_SCAN, fs, tys, WEB_SDB_ALERT_SCAN,
+                 WEB_SDB_ALERT_SCAN, fs, fs, fs);
+        c->pred_ok = 1;
+        int n = items_range(c, sql, NULL, from, to, max, fn, ctx);
+        c->pred_ok = 0;
+        return n;
+    }
     /* g: the keys shown, from the scan. Then one pass over each shown
      * key's rows in the range, joined through the primary key. */
     snprintf(sql, sizeof(sql),
@@ -2247,15 +2313,34 @@ int web_sdb_alerts_scan(web_sdb_conn_t *c, long long from, long long to,
     *rows = 0;
     *oldest = 0;
     if (!(c->feats & WEB_QF_ALERTS)) return 0;
-    char sql[1280], tys[640];
+    char sql[2560], tys[640];
     web_sdb_scope_types(c, "type", tys, sizeof(tys));
-    snprintf(sql, sizeof(sql),
-             "SELECT count(*), min(last_seen) FROM (SELECT last_seen, %s AS fs"
-             " FROM alerts WHERE last_seen >= ?2 AND fs < ?3%s"
-             " ORDER BY last_seen DESC LIMIT %d)", alert_start(c), tys,
-             WEB_SDB_ALERT_SCAN);
+    if (c->opt & WEB_SDB_OPT_INCROWS)
+        /* web_sdb_alerts_between()'s u, as it reads it (#175). */
+        snprintf(sql, sizeof(sql),
+                 "SELECT count(*), min(last_seen) FROM (SELECT last_seen FROM"
+                 " (SELECT last_seen FROM (SELECT last_seen FROM alert_incidents"
+                 " WHERE last_seen >= ?2 AND first_seen < ?3%s"
+                 " ORDER BY last_seen DESC LIMIT %d)"
+                 " UNION ALL SELECT last_seen FROM (SELECT last_seen FROM alerts"
+                 " WHERE last_seen >= ?2 AND %s < ?3%s AND NOT EXISTS (SELECT 1"
+                 " FROM alert_incidents i WHERE i.key = alerts.key)"
+                 " ORDER BY last_seen DESC LIMIT %d))"
+                 " ORDER BY last_seen DESC LIMIT %d)", tys, WEB_SDB_ALERT_SCAN,
+                 alert_start(c), tys, WEB_SDB_ALERT_SCAN, WEB_SDB_ALERT_SCAN);
+    else
+        snprintf(sql, sizeof(sql),
+                 "SELECT count(*), min(last_seen) FROM (SELECT last_seen, %s AS fs"
+                 " FROM alerts WHERE last_seen >= ?2 AND fs < ?3%s"
+                 " ORDER BY last_seen DESC LIMIT %d)", alert_start(c), tys,
+                 WEB_SDB_ALERT_SCAN);
     sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(c->db, sql, -1, &st, NULL) != SQLITE_OK) return -1;
+    /* The v11 form matches a key against a key; its result columns are
+     * a count and a time. */
+    c->pred_ok = (c->opt & WEB_SDB_OPT_INCROWS) != 0;
+    int prc = sqlite3_prepare_v2(c->db, sql, -1, &st, NULL);
+    c->pred_ok = 0;
+    if (prc != SQLITE_OK) return -1;
     sqlite3_bind_int64(st, 2, from);
     sqlite3_bind_int64(st, 3, to);
     int rc = sqlite3_step(st);
