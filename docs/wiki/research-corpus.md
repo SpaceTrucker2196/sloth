@@ -3,7 +3,7 @@
 **Issue:** [#73](https://github.com/SpaceTrucker2196/sloth/issues/73) ·
 **Built by:** `make research-index` · **Guard:** `tests/test_research_corpus.c`
 
-**Last updated**: 2026-11-02 (the BLE device-class document, no alert kind); 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
+**Last updated**: 2026-11-02 (four GNSS documents, kinds pending; the BLE device-class document, no alert kind); 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
 
 `agents/AGENTS.md` § Discipline says every detector names its basis. The
 citations exist — in issue bodies, wiki pages and the rule table — but
@@ -24,6 +24,8 @@ research/
   papers/bl0ck-2302.05899.md     academic sources
   bluetooth/ubertooth-link-types-and-core-clauses.md
                                  Bluetooth link types and Core Spec clauses
+  gnss/spoofing-detection.md     GNSS spoofing, jamming, time/position
+                                 integrity, ATT&CK mapping
   tools/                         tool documentation
 ```
 
@@ -416,6 +418,20 @@ BLE spam tool's own Samsung packets — and say there why iBeacon,
 AltBeacon, Find My and SmartTag are left out. It has no `alert_kinds`:
 it backs slothweb's display classes (`web/src/web_bledev.c`), not a
 rule. See [[slothweb]].
+
+The GNSS observation layer's four planned detectors cite theirs ahead
+of the code (2026-11-02), in `research/gnss/`:
+`spoofing-detection.md` (Psiaki & Humphreys 2016, Humphreys et al.
+2008, what a u-blox 7 lacks against the M8's `spoofDetState`),
+`jamming-detection.md` (DHS 2017, u-blox 7 MON-HW `jamInd` and what
+gpsd 3.27 passes through, FCC jammer enforcement, GPSJam's method),
+`time-and-position-integrity.md` (chrony `trust`/`maxchange`, the gpsd
+time HOWTO, the 2019 week rollover) and `attack-mapping.md` (Mobile
+T1464 for jamming; no technique for spoofing). The kinds are not in
+`include/sloth_alerts.def` yet, so each document carries its
+`alert_kinds` line **commented out**: the guard's first direction fails
+on a kind the enum lacks, and the line is uncommented in the commit that
+adds the `X()` entry.
 
 ## What is not here yet
 - **Coverage.** 59 of 60 alert kinds have a document, and the sixtieth

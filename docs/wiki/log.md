@@ -6113,3 +6113,13 @@ slothweb.db schema step. Updated [[slothweb]], `docs/web-frrs-spec.md`,
   `records.rate{ble_device}` across the 10 s slot measured from the
   baseline code: at most one pre-step sample per cell on the host, z at
   most 1.55, no change. Updated [[slothweb]].
+
+- 2026-11-02 — [[research-corpus]]: four GNSS documents under
+  `research/gnss/` cite the planned observation-layer detectors ahead of
+  the code — spoofing (Psiaki & Humphreys 2016, Humphreys et al. 2008),
+  jamming (DHS 2017, u-blox 7 MON-HW, gpsd 3.27), time and position
+  integrity (chrony, gpsd time HOWTO, week rollover) and the ATT&CK
+  mapping (Mobile T1464 for jamming; no technique for spoofing, time or
+  position jumps, so those three take the second exemption form). Each
+  `alert_kinds` line is commented out until its `X()` entry lands.
+  `research.db` rebuilt. Pages touched: [[research-corpus]].
