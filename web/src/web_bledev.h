@@ -57,7 +57,13 @@
  *             transmitted by powered HomeKit devices", ibid.); an
  *             Appearance of a fixed, home, vehicle or industrial
  *             category.
- *   7 b:unk   Unknown: none of the above.
+ *   7 b:unk   Unknown: none of the above; and every anonymous row
+ *             (addr_type 255), whatever its fields: sloth keeps one row
+ *             a sensor for all anonymous advertisers it hears, the first
+ *             manufacturer pair for good and the HID bits and watch
+ *             category only ever added (src/ble_hci.c), so the fields
+ *             are several devices' and decide no class
+ *             (docs/wiki/ble.md, "Anonymous trains collide").
  *
  * Left out, said so rather than guessed: iBeacon (Apple 0x004C type
  * 0x02; no primary text was read for it), AltBeacon (its 0xBEAC code is
@@ -102,7 +108,16 @@
  *       grid's tiers, bounds and cells (web_wifi.h).
  *   /api/ble/classes?from=&to=&cols=&mix=1
  *       the class mix, /api/wifi/channels?mix=1's answer with "rows" for
- *       "channels" and a BLE advertiser per tx entry.
+ *       "channels" and a BLE advertiser per tx entry. Anonymous
+ *       advertising (addr_type 255: an extended advertisement with no
+ *       AdvA, the address zeroed by sloth, one row per sensor for all
+ *       of it) is one entry, {"id":"anonymous","kind":"anon"}, in
+ *       Unknown alone (web_chmix.h WEB_TX_BLE_ANON), and
+ *       ble.class.advertisers counts it there as one advertiser, so it
+ *       never moves class as its row's fields accumulate. A named
+ *       advertiser whose fields change class still can: its earlier
+ *       bands stay in the class it left, so a bucket where one changes
+ *       can draw it in both.
  *   /api/ble/proximity?from=&to=&cols=&n=12|24|48
  *       the advertisers slothweb holds that were heard in the window,
  *       merged by address (rf.rssi.ble is keyed by address), at most
@@ -110,7 +125,12 @@
  *       first, whatever its age, then the newest), the top n by
  *       trackers first, then the nearest by the signal in the window
  *       less the row's P_tx, then reports; each with its cells, the
- *       mean RSSI per cell or null, and its P_tx and band edges.
+ *       mean RSSI per cell or null, and its P_tx and band edges. No
+ *       anonymous row: there is no address to key rf.rssi.ble by, and
+ *       the one row's signal is whichever anonymous advertiser that
+ *       sensor heard last, so its line would be several devices' at
+ *       once. It takes none of the 256 read; "anonymous_heard" says
+ *       whether any was left out; nor is it ever "nearest".
  * Every answer carries "now": advertisers heard in the last 60 s, the
  * trackers among them, the nearest (current RSSI less the row's P_tx,
  * so by the grade's estimate rather than raw signal) and the

@@ -6102,3 +6102,14 @@ triaged out like false and noise; `/api/frrs/summary` and
 `triage_counts` count it, `triage=known` filters it. Stored as 4, no
 slothweb.db schema step. Updated [[slothweb]], `docs/web-frrs-spec.md`,
 `web/README.md`.
+
+- 2026-11-03 — BLE Devices gaps closed: anonymous advertising
+  (`addr_type` 255, no AdvA) is one `anonymous` entry and one advertiser
+  in Unknown, whatever its row's accumulated fields read as (chmix kind
+  4, the zero address; neutral band, no drawer), so for it
+  `ble.class.advertisers`, `ble.class.adv` and the class mix agree and
+  never move class; it has no proximity row, takes no read slot and is
+  never nearest (`anonymous_heard` says it was left out). A1 on
+  `records.rate{ble_device}` across the 10 s slot measured from the
+  baseline code: at most one pre-step sample per cell on the host, z at
+  most 1.55, no change. Updated [[slothweb]].

@@ -179,7 +179,14 @@
     var t = S.mix && S.mix.tx && S.mix.tx[i];
     return t && typeof t.id === "string" ? t : null;
   }
-  function txColor(t) { return t ? devColor(t.name, t.id) : H.theme().heat[0]; }
+  // Anonymous advertising (an extended advertisement with no AdvA; one
+  // entry, kind "anon", in Unknown alone) is no device: neutral, not a
+  // hash hue that would read as one advertiser, and not the rest's grey.
+  function isAnon(t) { return !!t && t.kind === "anon"; }
+  function txColor(t) {
+    if (isAnon(t)) return H.theme().muted;
+    return t ? devColor(t.name, t.id) : H.theme().heat[0];
+  }
 
   function classGrid() {
     if (emptyState()) return;
@@ -196,7 +203,10 @@
     S.geo = null;
     if (S.cls) H.set("bledev-classes-note", rows.length + " classes, " + S.cls.tier + " tier, " + H.fmt(S.cls.col_s) + " s cells");
     if (S.mix) {
-      H.set("bledev-mix-note", (S.mix.tx || []).length + " advertisers named, " + S.mix.source +
+      var txs = S.mix.tx || [], named = txs.filter(function (t) { return !isAnon(t); }).length;
+      H.set("bledev-mix-note", named + " advertisers named" +
+            (named < txs.length ? " and anonymous advertising (no address: one neutral band, in Unknown)" : "") +
+            ", " + S.mix.source +
             (S.mix.folded ? "; some folded into other" : "") +
             (num(S.mix.ring_from) && S.mix.ring_from > from ? "; detail held from " + H.hhmmss(S.mix.ring_from) : "") +
             (captureOnly() ? "; --bt-capture only: an Ubertooth's one-channel samples are not credited, so there is no " +
@@ -294,17 +304,24 @@
       if (!t) continue;
       var li = H.el("li", "");
       // An address the tables still hold opens its drawer; one they no
-      // longer hold (the mix outlives a row) is a line, not a button.
-      var held = num(t.addr_type) && typeof t.iface === "string";
+      // longer hold (the mix outlives a row) is a line, not a button,
+      // and so is the anonymous entry, which has no address to open.
+      var anon = isAnon(t);
+      var held = !anon && num(t.addr_type) && typeof t.iface === "string";
       var b = H.el(held ? "button" : "span", "mixgo");
       if (held) b.type = "button";
       var sw = H.el("span", "sw");
       sw.style.background = txColor(t);
       b.appendChild(sw);
       var nm = H.el("span", "nm");
-      nm.appendChild(H.el("span", "d-normal", t.name !== null ? "\"" + t.name + "\"" : t.id));
-      nm.appendChild(H.el("span", "d-dim", (t.name !== null ? "  " + t.id : "") + "  " +
-                          (t["class"] ? classDef(t["class"]).label : "not in the table now")));
+      if (anon) {
+        nm.appendChild(H.el("span", "d-normal", "anonymous"));
+        nm.appendChild(H.el("span", "d-dim", "  extended advertising with no address: every such advertiser a sensor heard, one row of fields between them, so Unknown"));
+      } else {
+        nm.appendChild(H.el("span", "d-normal", t.name !== null ? "\"" + t.name + "\"" : t.id));
+        nm.appendChild(H.el("span", "d-dim", (t.name !== null ? "  " + t.id : "") + "  " +
+                            (t["class"] ? classDef(t["class"]).label : "not in the table now")));
+      }
       b.appendChild(nm);
       b.appendChild(H.el("span", "n d-bright", H.fmt(m[e + 1])));
       b.appendChild(H.el("span", "n d-normal", share(m[e + 1])));
@@ -349,7 +366,9 @@
     if (p) H.set("bledev-prox-note", rows.length + " of " +
                  (p.read_cut ? "the " + p.candidates + " read (every tracker, then the newest; more were heard in the window)"
                              : p.candidates + " advertisers in the window") + ", " +
-                 p.tier + " tier, " + H.fmt(p.col_s) + " s cells" + (p.more && !p.read_cut ? "; more than shown" : ""));
+                 p.tier + " tier, " + H.fmt(p.col_s) + " s cells" + (p.more && !p.read_cut ? "; more than shown" : "") +
+                 (p.anonymous_heard ? "; anonymous advertising heard and not drawn: no address to key a signal by " +
+                                      "(it is in the class panel)" : ""));
     if (!p || !rows.length || !p.cols) {
       g.fillStyle = T.faint;
       g.fillRect(W * 0.35, Hh / 2, W * 0.3, Math.max(1, dpr));

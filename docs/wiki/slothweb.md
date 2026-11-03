@@ -107,7 +107,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-03 (the fourth triage verdict `known`, known good, drawn green); 2026-11-02 (the BLE Devices waterfall's review fixes: its own high-water table, trackers read first, the grade at each row's announced power, the no-sensor and Ubertooth-only states); 2026-11-02 (the BLE Devices waterfall: device classes by time as the WiFi channel mix draws channels, advertisers by time graded by sloth's distance bands, the drawer's signal over the window; the `BLE Devices` and `GPS Sat` labels; `ble_device` re-sent once a 10 s slot while heard); 2026-11-02 (copy JSON's `location` filled: a device's `/api/positions` answer, an alert's page `loc` stamp, both spliced, never re-rendered); 2026-11-02 (copy JSON, first landed 2026-10-27 as `/api/bundle` and a copy and download button on every detail view: rebased onto triage, FRRS, BLE, vendor research and the alert's proof; kinds `ble` and `platform` through the views' own hooks; `frrs`, an alert's `triage`, `vendor_research`, `assessment` and `evidence` filled from their routes' answers; records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
+**Last updated**: 2026-11-03 (the fourth triage verdict `known`, known good, drawn green); 2026-11-03 (BLE Devices: anonymous advertising one entry and one advertiser, always in Unknown, no proximity row and no read slot; A1 across the 10 s slot measured, quiet, no change); 2026-11-02 (the BLE Devices waterfall's review fixes: its own high-water table, trackers read first, the grade at each row's announced power, the no-sensor and Ubertooth-only states); 2026-11-02 (the BLE Devices waterfall: device classes by time as the WiFi channel mix draws channels, advertisers by time graded by sloth's distance bands, the drawer's signal over the window; the `BLE Devices` and `GPS Sat` labels; `ble_device` re-sent once a 10 s slot while heard); 2026-11-02 (copy JSON's `location` filled: a device's `/api/positions` answer, an alert's page `loc` stamp, both spliced, never re-rendered); 2026-11-02 (copy JSON, first landed 2026-10-27 as `/api/bundle` and a copy and download button on every detail view: rebased onto triage, FRRS, BLE, vendor research and the alert's proof; kinds `ble` and `platform` through the views' own hooks; `frrs`, an alert's `triage`, `vendor_research`, `assessment` and `evidence` filled from their routes' answers; records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
 listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
@@ -1444,6 +1444,98 @@ rule, the order, the slugs, the page's copies, the grade against
 routes from memory and the store, the namespaces sharing `chmix`, a v7
 file reopening as one; each absence seen red under a named mutation),
 `tests/test_ble_rules.c` (the slot over sixty passes).
+
+**Anonymous advertising** (2026-11-03). An LE Extended Advertising
+Report with Address_Type 0xFF carries no AdvA; sloth zeroes the address,
+so one row per sensor holds every anonymous advertiser that sensor hears
+([[ble]]). Until now those rows were in `ble.class.advertisers` and in
+neither `ble.class.adv` nor the class mix, so a class row's advertiser
+count and its drawn bands disagreed. Now anonymous advertising is
+Unknown's, whatever its row's fields would read as, and its three
+numbers sit in that one row: its reports are one entry
+(`{id: "anonymous", kind: "anon", class: "b:unk"}`; in the mix and
+`chmix` kind 4 with the zero address, which no advertiser's entry can
+carry, since an address reaches the mix only through `web_key_mac()`,
+which refuses all zeros, and the kind is in every key besides), and it
+counts as one advertiser there. Not per record, because the row's
+fields are no one advertiser's: sloth keeps the first manufacturer pair
+the row heard for good, ORs in HID bits and only ever sets a watch
+category ([[ble]]: "an anonymous row's AD fields are the least
+trustworthy on the table"), so the first anonymous advertiser a sensor
+hears would fix the class of every anonymous report after it, and one
+keyboard Appearance would move all later ones to Input for good.
+`web_ble_class_of_rec()` and `web_ble_dev_class()` both answer Unknown
+for `addr_type` 255, so the gauge, the reports and the band cannot
+part when the fields change. That includes an anonymous row sloth's watchlist marked
+(`watch_category` set): it stays in Unknown, not Trackers, because the
+mark may belong to any one of the advertisers sharing the row; the
+table and the drawer show the row's watch category as before. The
+anonymous advertiser is counted by its own flag, not by its zeroed
+address, so a real row whose AdvA is literally all zeros (an Ubertooth
+copies AdvA as heard) is a second advertiser, not merged with it. Under
+a read cut (256 rows read) the header's `advertisers` is the rows read
+plus anonymous advertising, so it can read 257 with `advertisers_more`
+set. A named advertiser whose fields change
+class still can: its earlier bands stay in the row it left, so in the
+bucket where it moves it can be drawn in both rows while the gauge, a
+snapshot, counts it in one. The band is `--muted`, the cell's list says
+"anonymous" and it opens no drawer. **Where it is not**: the proximity panel. With no address
+there is no `rf.rssi.ble` series to key, and the one row per sensor
+carries whichever anonymous advertiser was heard last, so a line of it
+would be several devices' signals drawn as one. It has no row there and
+is never the strip's nearest, and it is skipped before the 256-address
+read cap, so a cut still reads 256 advertisers and the note's "of the
+256 read" is true; the answer's `anonymous_heard` and the panel's note
+say when some was left out, and the class panel counts it.
+A b801ab7 slothweb reading a newer slothweb.db skips kind 4 (its reader
+keeps kind 3), so on a downgrade those reports are missing from the
+minute and hour cells rather than drawn as an address; no schema step.
+Tests: `test_anonymous_counts_agree` (built from the one anonymous row
+sloth can send: the host stream's, its mfr pair kept, the class change
+from an OR-ed HID bit), `test_anonymous_routes` (the page's `isAnon()`
+word held to the one the answer serves), the anonymous row under a cut
+in `test_proximity_keeps_old_trackers`, and the kind-4 rows in
+`test_chmix_ble_kind` and `test_store_shares_chmix`
+(`web/tests/test_bledev.c`), each seen red under a named mutation.
+
+**A1 and the 10 s slot: measured, no code change** (2026-11-03). The
+slot made `ble_device` about 30 times as frequent, and
+`records.rate{ble_device}` (a counter keyed by record type) is A1-scored.
+It does not fire on that step on the reference host, and the arithmetic
+is in the baseline code itself (`web/src/web_baseline.c`
+`feed_cell()`, `web_baseline_score()`, `web_bl_cell_sd()`):
+
+- `records.rate` first shipped in 379ac49 (authored 2026-11-02 14:10
+  UTC, 08:10 CST); the host's first slothweb start after that was 08:15
+  CST, and the sensor with the slot started at 22:52 CST the same day
+  (the journal's unit starts). Under 15 hours of a 168-hour week: no
+  hour-of-week cell of the series holds more than one pre-step sample.
+- A cell is an EWMA with alpha = 1 - 2^(-1/4) = 0.1591; its first
+  sample sets the mean with var 0; it scores z = 0 while n < 3
+  (`WEB_BL_WARM_N`); a minute is scored before its hour is fed.
+- One pre-step sample m0, then the new rate r m0 each week, d = (r - 1)
+  m0: week 1 is scored at n = 1 and week 2 at n = 2, both warming. After
+  week 2's feed the cell's residual is (1 - alpha)^2 d and its variance
+  alpha (1 - alpha)^2 (2 - alpha) d^2, so week 3's first scored minute
+  has z <= (1 - alpha) / sqrt(alpha (2 - alpha)) = 0.841 / 0.541 = 1.55,
+  for any r; the within-hour term only adds to the spread, and each
+  later week is lower. `WEB_ANOM_Z_THRESHOLD` is 3, for three minutes
+  running: a steady minute cannot reach it, and a noisy one would need
+  1.66 times the new mean three minutes in a row.
+- Measured through `web_baseline.c` itself (a scratch driver, not
+  committed) at r = 30: z peaks at 1.48, 1.54, 1.55 and 1.55 for m0 of
+  0.5, 4, 40 and 400 records a minute.
+
+What would fire: two pre-step samples cap z at sqrt((1 - alpha) /
+alpha) = 2.30, still quiet, but three or more fire A1 on the first
+post-step week (measured z 14.5 to 290 over the same m0). So an install
+that had learned `records.rate{ble_device}` for three weeks before
+taking b801ab7's sensor would see one A1 episode on `ble_device`; none
+can exist, because the metric and the slot shipped 14 hours apart. A
+later change of a record's feed shape on an install with a learned
+series is not handled by any rule today: that is a follow-up (a feed
+generation slothweb can read from `sensor_health`, or a rebaseline on a
+release boundary), not a gap this step opened.
 
 The SIG's company identifiers, 16-bit service UUIDs and appearance
 values are committed as CSVs under `web/data/btsig/` with a

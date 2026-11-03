@@ -202,7 +202,9 @@ void web_chmix_add(web_chmix_t *c, const char *chan, const uint8_t mac[6],
     if (!c || !c->ring || !chan || !chan[0] || strlen(chan) > WEB_CHMIX_KEY_MAX)
         return;
     if (!isfinite(frames) || frames < 0.5) return;
-    if (kind != WEB_TX_AP && kind != WEB_TX_CLIENT && kind != WEB_TX_BLE) return;
+    if (kind != WEB_TX_AP && kind != WEB_TX_CLIENT && kind != WEB_TX_BLE &&
+        kind != WEB_TX_BLE_ANON)
+        return;
     uint32_t f = frames >= 4294967295.0 ? 0xffffffffu : (uint32_t)(frames + 0.5);
     pthread_mutex_lock(&c->mu);
     web_mix_chan_t *ch = chan_of(c, chan, now_s);

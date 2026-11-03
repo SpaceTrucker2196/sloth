@@ -747,13 +747,20 @@ answer (`metric` `ble.mix`, `unit` `reports`, `top`, `source`,
 each row `{key, label, glyph, total, cells}`, and each `tx` entry an
 advertiser: `{id, kind: "ble", name, name_np, class, addr_type, iface}`
 from the newest row the BLE tables hold of the address, the last four
-`null` when they no longer hold it. The third lists the advertisers
+`null` when they no longer hold it. Anonymous advertising (`addr_type`
+255, an extended advertisement with no AdvA) is one entry,
+`{"id":"anonymous","kind":"anon","name":null,"name_np":false,"class":"b:unk","addr_type":255,"iface":null}`,
+in Unknown alone (no `iface`: it has no row to open). The third lists the advertisers
 with a row heard in the window (`last_seen >= from`), every row of an
 address merged (`rf.rssi.ble` is keyed by address), at most 256 read
 (`read_cut`): every address whose newest row is a tracker first,
 whatever its age, then the newest, so a cut drops the oldest
 non-trackers and `candidates` is then the number read, not the window's
-total. The top `n` (default 24; anything else a 400 `bad_n`) are
+total. Anonymous advertising is never a candidate and takes none of
+the 256 (`candidates` does not count it, and a cut still reads 256
+addresses); `anonymous_heard` says whether any was heard: there is no
+address to key `rf.rssi.ble` by, and sloth's one anonymous row per
+sensor carries whichever anonymous advertiser it heard last. The top `n` (default 24; anything else a 400 `bad_n`) are
 trackers first, then the nearest (the strongest signal in the window
 less the row's P_tx), then by reports: `rows` of `{addr, addr_type,
 addr_kind, iface, name, name_np, class, best, samples, adv_count,
@@ -763,10 +770,11 @@ the row is graded with, in `rf_ctx_ble()`'s order (`ptx_source`
 `ble_ext_tx_power`, `ble_ad_tx_power` or `assumed` 0 dBm), and `edges`
 its four dBm edges; the answer's own `edges` and `candidates` are the
 0 dBm ones and the count read. Each answer ends with `now`: `window_s`
-60, `advertisers` (addresses with a row heard in it), `trackers`,
+60, `advertisers` (addresses with a row heard in it, anonymous advertising one between them), `trackers`,
 `nearest` (by current RSSI less P_tx, the grade's estimate rather than
 raw signal: address, name, class, `rssi`, sloth's `band` when it has an
-estimate, the grade, `ptx`, `ptx_source`), `adv_rate` (sloth's
+estimate, the grade, `ptx`, `ptx_source`; never an anonymous row, whose
+signal is no one device's), `adv_rate` (sloth's
 `ble.adv_rate` over the last minute, reports a second) and `sensor`
 (`seen`, `btmon_iface`, `btcap_iface` from sloth's latest
 `sensor_health`; `seen` false before one). Monitor's and Hybrid's;
@@ -954,8 +962,8 @@ docs/web-ui-spec.md §5.1, and every one of its metrics has a source
 | `live.devices`, `live.alerts_open`, `live.anomalies_open` | gauge | none | docs/web-visual-spec.md §7 (V1, F1): sampled once a batch (below), from `web_live_summary()`'s device count and open incident severities (low+warn+crit summed) and from `web_anomaly_open_count()`. Each needs its source wired first (`web_metrics_set_live()`, `web_metrics_set_anomaly()`); unwired, neither is sampled at all, not sampled at 0 |
 | `records.rate` | counter | record type | every decoded record but `socket_gap`, one per line, keyed by its own `type` |
 | `gnss.sats_used`, `gnss.hdop`, `gnss.time_off_ms`, `gnss.cn0_mean` | gauge | none | the host's own GNSS receiver ([GNSS](#gnss)): `gnss_fix` `usat` (when ≥ 0), `hdop` (when > 0) and `time_off_ms` (when present), `gnss_sky` `cn0_mean` (when > 0). The records are change-only (a band change or the 300 s heartbeat), so each series is as sparse as its record; every scope's, as `sensor.drops` is; not scored by the anomaly engine |
-| `ble.class.advertisers` | gauge | BLE class | the BLE Devices view's class rows ([BLE](#ble), `web/src/web_bledev.h`): once a snapshot pass (at the batch's first `iface` record), the distinct addresses whose rows in the BLE tables were heard in the last 20 s, per device class (`b:phone`, `b:wear`, `b:tag`, `b:hid`, `b:bcn`, `b:iot`, `b:unk`); a class with none is not sampled |
-| `ble.class.adv` | counter, reports | BLE class | `ble_device` `adv_count` deltas per (address, address type, sensor), by the record's class; a one-channel sample (`sampled` 1) left out. HCI advertising reports, one a scan rather than a frame when the controller filters duplicates |
+| `ble.class.advertisers` | gauge | BLE class | the BLE Devices view's class rows ([BLE](#ble), `web/src/web_bledev.h`): once a snapshot pass (at the batch's first `iface` record), the distinct addresses whose rows in the BLE tables were heard in the last 20 s, per device class (`b:phone`, `b:wear`, `b:tag`, `b:hid`, `b:bcn`, `b:iot`, `b:unk`), anonymous rows (`addr_type` 255) one advertiser between them in `b:unk`, as the class mix draws them; a class with none is not sampled |
+| `ble.class.adv` | counter, reports | BLE class | `ble_device` `adv_count` deltas per (address, address type, sensor), by the record's class, an anonymous row's (`addr_type` 255) included, always under `b:unk`; a one-channel sample (`sampled` 1) left out. HCI advertising reports, one a scan rather than a frame when the controller filters duplicates |
 | `sensor.drops` | counter | none | §7: `sensor_health` `capture_drop_delta` + `capture_ifdrop_delta` + `monitor_drop_delta` + `monitor_ifdrop_delta`, every tick, including the 0 of a healthy one -- a flat line, not a gap |
 | `rf.rssi.sta`, `rf.rssi.bssid`, `rf.rssi.ble` | gauge, dBm | MAC | the signal sloth last heard from the emitter, one sample per record that carries one: `probe_client` `signal_dbm` by `mac`; `beacon` and `assoc` `signal_dbm` by `bssid` (an assoc row's signal is the AP's frames, the (re)association response and EAPOL M1/M3, never the station's); `ble_device` `rssi` by `addr` with `has_rssi` 1, every receiver and address type of that address in one series. Sampled only when the record's `last_seen` is within 10 s of its `ts`, so a row sloth re-sends after the emitter went quiet adds nothing; a Wi-Fi 0 (sloth's "no signal") and anything outside -127..-1 dBm (BLE -127..+20) is not a reading. Since 2026-11-02 sloth re-sends `ble_device` once a 10 s slot while it keeps hearing the advertiser (otherwise on a change or the 300 s heartbeat), so a heard advertiser's series has a point a fine bucket. Owner ruling 2026-11-02 on [`docs/web-frrs-spec.md`](../docs/web-frrs-spec.md) Q7. Each bucket is the mean of what one receiver's driver reported, with min and max: a sloth gauge, not a calibrated measurement. The device class's keys, so `--web-max-keys` bounds it with the same eviction; Monitor's scope; not scored by the anomaly engine |
 
@@ -1830,7 +1838,11 @@ about 60 bytes with its index, so the cap is about 32 MB.
 The BLE Devices view's class mix ([BLE](#ble)) shares the table without
 a step (2026-11-02): `channel` a class slug (`b:phone` .. `b:unk`, which
 no channel key can be), `tx` an advertiser's address, `kind` 3, `frames`
-its advertising reports. The values are of kinds the columns already
+its advertising reports; since 2026-11-03 also anonymous advertising,
+`channel` `b:unk`, `tx` `00:00:00:00:00:00` and `kind` 4, one row a
+bucket (a b801ab7 slothweb skips kind 4 on read, so on a downgrade those
+reports are missing from the minute and hour cells, never drawn as an
+address). The values are of kinds the columns already
 hold, so a v7 file is read as it is and an older slothweb never draws a
 `b:` row (its reader keeps canonical channel keys and kinds 1 and 2).
 Each view reads its own namespace (`b:*` or everything else) under its
@@ -3411,7 +3423,36 @@ no longer holds keeps the series' heat, dimmed (the cells select:
 advertisers, a gauge of distinct addresses, or advertising reports). The
 strip at a row's left is its busyness, the heat ramp against the busiest
 row. Past 30% of the canvas (a phone) a row's label is its class letter
-alone, which the footnote's list explains. The ground is the page's own (`--bg`): the TUI puts no BLE row on
+alone, which the footnote's list explains.
+
+Anonymous advertising (2026-11-03) is in the class rows too. An LE
+Extended Advertising Report with Address_Type 0xFF carries no AdvA;
+sloth zeroes the address, so one row per sensor holds every anonymous
+advertiser that sensor hears ([ble](../docs/wiki/ble.md), "Anonymous trains collide").
+Its reports are Unknown's, whatever the row's fields would read as,
+because those fields are no one advertiser's: sloth keeps the first
+manufacturer pair the row heard for good, ORs in the HID bits and only
+ever sets a watch category (`src/ble_hci.c` `observe_locked()`), so the
+first anonymous advertiser fixes the Continuity pair for the life of
+the row and a later one's Appearance or HID bit would move every
+anonymous report after it. Classing it per record would have credited
+them to a class decided by whichever devices happened to leave fields
+on the row. So `web_ble_class_of_rec()` and `web_ble_dev_class()` both
+answer Unknown for `addr_type` 255, and its reports are one band there:
+the mix's `WEB_TX_BLE_ANON` (kind 4) with the zero address, drawn in `--muted` (neither a device's hash colour nor the
+rest's grey), listed as "anonymous" in the cell's list and not a button,
+since there is no row to open. It cannot be taken for an advertiser:
+the kind is in every key (the open buckets, the answer's table, the
+`chmix` primary key), and no kind-3 entry can carry the zero address,
+because an address reaches the mix only through `web_key_mac()`, which
+refuses all zeros. `ble.class.advertisers` counts anonymous advertising
+as one advertiser in Unknown, so for it a row's advertiser count, its
+`ble.class.adv` reports and its drawn bands name one set and never move
+class (before, the anonymous row was in the advertiser count of
+whichever class its fields read as, and in neither of the other two).
+A named advertiser whose fields change class still moves: its earlier
+bands stay where they were drawn, so the bucket in which it moves can
+show it in both rows while the gauge, a snapshot, counts it in one. The ground is the page's own (`--bg`): the TUI puts no BLE row on
 the monitor ground. The mix is the WiFi channel mix's engine
 (`web/src/web_chmix.h`), a second instance keyed by class slug with a
 16,384-row fine ring (seven classes over the fine tier's six hours),
@@ -3442,7 +3483,7 @@ and rests on a source quoted in
 | 4 | Wearables & audio (`b:wear`) | Apple 0x004C Continuity 0x07 Proximity Pairing or 0x0B Magic Switch; Fast Pair Service Data 0xFE2C (the Provider, the accessory side); Samsung 0x0075 first octet 0x42 or 0x01; an Appearance of a worn, audio or personal-health category (Watch, Eye-glasses, Heart Rate, Blood Pressure, Glucose, Running Walking, Cycling, Audio Sink and Source, Wearable Audio, Hearing aid, Pulse Oximeter, CGM, Insulin Pump, Medication Delivery, Spirometer, Outdoor Sports) |
 | 5 | Phones & computers (`b:phone`) | Apple Continuity 0x05 AirDrop, 0x0C Handoff, 0x0D / 0x0E Instant Hotspot, 0x0F Nearby Action, 0x10 Nearby Info; Microsoft 0x0006 first octet 0x01 (the MS-CDP beacon); Appearance Phone or Computer |
 | 6 | Vehicles & IoT (`b:iot`) | Apple Continuity 0x06 HomeKit; an Appearance of a fixed, home, vehicle or industrial category |
-| 7 | Unknown (`b:unk`) | none of the above |
+| 7 | Unknown (`b:unk`) | none of the above; and all anonymous advertising (`addr_type` 255), whatever its row's fields, which are several advertisers' (below) |
 
 Left out, said so rather than guessed: iBeacon (Apple type 0x02; no
 primary text was read for it), AltBeacon (its 0xBEAC code is two octets
@@ -3483,7 +3524,15 @@ slothweb cannot see) and the band's hysteresis and hold can put sloth's
 own band (the table's `dist (est)`) elsewhere, and signal strength is not a
 location. A rotating random address is its own row: rotations are not
 linked (the rotation hints, above, are sloth's, banded, and identify
-nothing). Pointer, tap or arrow keys pick a cell in either panel and the
+nothing). Anonymous advertising has no row here and is never the
+strip's nearest: with no address there is no `rf.rssi.ble` series to
+key, and the one row per sensor carries whichever anonymous advertiser
+was heard last, so its line would be several devices' signals drawn as
+one. The note says when some was heard and left out
+(`anonymous_heard`), and points at the class panel, which counts it;
+it takes none of the 256 read, so under a cut "of the 256 read" stays
+256.
+Pointer, tap or arrow keys pick a cell in either panel and the
 list under it names it (an advertiser the BLE tables still hold is a
 button that opens its drawer); a click (a primary press and release,
 never the start of a touch scroll) on a row's name opens the drawer.
@@ -4138,7 +4187,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_glyph.c` | the glyph layer's geometry ([the glyph layer](#the-glyph-layer)): a C port of `web/ui/glyph.js` with the JS pinned verbatim out of the served page, so a change on either side fails. For G1, G5 and G6: empty, warming, one point, four points as dots (R6), a gap (R5), in band, out of band (and in again once the band is widened), G1's line graded as `draw_sparkline_at()` grades it (ruling 1), min and max dots only without a band (R7), a scale that grows and never shrinks (R11), the window rule and its words (R4), the caption grammar and the three states in it (R9), the presence cells from the server's hex, the ruler's midnight and now ticks in a shifted zone (F10), the first-seen mark (F15), an anomaly episode's underline clipped to the strip, the bullet's ranges, threshold tick and severity, the count bar's shared scale, and each glyph's list read with every token flattened to one grey (R10); each glyph's TUI form named in the README (R12). Nineteen mutations, each naming the test it reddened |
 | `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own; the BLE view's vocabularies (the PDU, band, trend, glyph and P_tx-source words, the finding kinds, the alert names, the TUI's address-type letters and its legend line) held to `src/` as text |
 | `test_ble.c` | the BLE view ([BLE](#ble)) from hand-built `ble_device`, `ble_alert`, `alert.resolve` and `sensor_health` lines in the emitter's exact shape: two rows for one address heard by two sensors, a heartbeat updating in place (the sticky masks OR-ed, the earlier first_seen kept, the rate from two points), the hostile strings (a control byte escaped and flagged, an over-long name cut back to a code-point boundary, a category that is not sloth's slug dropped and counted, an unknown iface `other`, a bad record kept nowhere), the record's absent values null and an anonymous all-zero address a row, the estimate's four fields with the TUI's cell and description, the LRU at 1025 rows evicting the oldest, the findings (standing, the resolve of the key, the time-out, the day's listing, the key never rendered, a `hid_oui` finding under its address), the `sensor_health` block and its rotation bands; the two metrics only while a Bluetooth source is configured; every route through the table (the sort words and both directions, each refusal a word never echoing the value, the search, paging, HEAD, Monitor and Hybrid serving, Local `out_of_scope` with the query still checked, `/api/live`'s `ble` member and `/api/health`'s counters, the M0 shape without the tables, the BLE incident typed and Monitor's on the Alerts page); the page's lines pinned as served; with SQLite the store round trip through the store thread's flush, a changed row upserted once, the seed on reopen with the name's display form and the estimate, every field of a seeded finding (a flood's fresh count, rate, window and citation, a `hid_oui` finding's address and the drawer's match on it), a resolve on a seeded finding updating its stored row in place, a seeded row's presence strip shifting on with fresh traffic, retention at compaction, a failed write (a trigger aborting it mid-transaction) rolled back whole and its batch written by the next flush, the row caps (the oldest gone, a flagged row kept past newer unflagged ones, counted) and a non-canonical stored address not seeded; every sort word in both directions with an empty key last (`mfr`'s three tiers fixed in either direction); a name cut back to a code-point boundary; `ble.devices` with an Ubertooth alone and `ble.adv_rate` only with the host stream; `/api/live`'s `ble` member with every string at its cut and escaped six-fold; without a store the tables still ingest and serve. Each absence seen red under a named mutation |
-| `test_bledev.c` | the BLE Devices waterfall ([BLE](#ble)): each class rule on hand-built fields (SIG Appearance values, Continuity types, the registry's UUIDs) and each left-out shape landing in Unknown, the first-match order and the table's match numbers, the slugs (never a channel key, the only `bleclass` keys), a class from a record line; the proximity edges against `src/rf_distance.h` and `.c` read in the test; the page's class table and grade pinned against the C ones, the panels inside `v-ble`, no `innerHTML` in the module; the mix engine taking kind 3 and refusing 4, a sized ring; the class mix fed from `ble_device` lines (a baseline, deltas, a reconnect, a row born while listening, a sampled row, one address on two sensors kept apart); the advertisers gauge once a pass, an address on two sensors once; five thousand fresh BLE addresses leaving a Wi-Fi row's high-water mark (and its true delta) in place; both routes from memory (display order, the tx entries named from the tables or by address alone, the strip's facts, every refusal), the proximity rows' order, means and window, a tracker heard before three hundred newer addresses still read and first, each row graded with its announced power (extended header, TX Power Level, else 0 dBm) and nearest by the margin; `now`'s sensor facts; both routes 503 `no_time_series` in either scope and the mix 503 `no_ble_mix`; Local `out_of_scope` with the query checked and a long query a 400; with SQLite the WiFi and BLE mixes in one `chmix` at the same tier and t, each namespace reading only its own, each route drawing only its own, and the file still v7. Each absence seen red under a named mutation |
+| `test_bledev.c` | the BLE Devices waterfall ([BLE](#ble)): each class rule on hand-built fields (SIG Appearance values, Continuity types, the registry's UUIDs) and each left-out shape landing in Unknown, the first-match order and the table's match numbers, the slugs (never a channel key, the only `bleclass` keys), a class from a record line; the proximity edges against `src/rf_distance.h` and `.c` read in the test; the page's class table and grade pinned against the C ones, the panels inside `v-ble`, no `innerHTML` in the module; the mix engine taking kinds 3 and 4 (an advertiser, anonymous advertising) apart and refusing 5, a sized ring; the class mix fed from `ble_device` lines (a baseline, deltas, a reconnect, a row born while listening, a sampled row, one address on two sensors kept apart); the advertisers gauge once a pass, an address on two sensors once; the one anonymous row sloth can send (the host stream's, its first mfr pair kept, a keyboard's HID bit OR-ed in) credited to Unknown alone as one entry and one advertiser while its fields read Phones then Input, named rows and an Ubertooth's uncredited samples beside it, each class's advertisers, drawn transmitters, reports and drawn frames agreeing, no series under the zero address; the anonymous entry through both routes (one `anonymous` tx entry in `b:unk`, its kind word the one `bledev.js` tests, no proximity row, never nearest, `anonymous_heard`, the strip counting it once) and under a read cut (no slot taken: 256 read); five thousand fresh BLE addresses leaving a Wi-Fi row's high-water mark (and its true delta) in place; both routes from memory (display order, the tx entries named from the tables or by address alone, the strip's facts, every refusal), the proximity rows' order, means and window, a tracker heard before three hundred newer addresses still read and first, each row graded with its announced power (extended header, TX Power Level, else 0 dBm) and nearest by the margin; `now`'s sensor facts; both routes 503 `no_time_series` in either scope and the mix 503 `no_ble_mix`; Local `out_of_scope` with the query checked and a long query a 400; with SQLite the WiFi and BLE mixes in one `chmix` at the same tier and t, each namespace reading only its own, each route drawing only its own, a kind-4 anonymous row read back and drawn, and the file still v7. Each absence seen red under a named mutation |
 | `test_btsig.c` | the Bluetooth SIG table this binary was built with (`WEB_BTSIG_EXPECT`): sorted, the names printable and within the cut, the lookups answering the SIG's names for Apple, Microsoft, Google, Ericsson, Battery, Human Interface Device, the keyboard appearance and the generic forms, a miss and the bounds null; the committed CSVs byte for byte the ones `web/data/btsig/SOURCE.md` hashes, with its row counts; `update_btsig.sh` run by the `update-btsig` target alone and named by no workflow; the generator run on a name holding every trigraph's opening, a quote and a backslash, its literal decoded back byte-identical and no `??` left in its output |
 | `test_replay.c` | spec §12's M3 acceptance: a six-week JSONL stream generated in the test (never a fixture) through the framer, decoder, live state, metric derivation, identity tables, rollup, `web_tsdb_step()` and the engine as `main.c` wires them, on pinned clocks: four weeks of routine (noisy gauges, Poisson counts, and an input for every rule: names that agree, a randomised MAC with its own name, a month-old probe client, a steady ssh host), then a quiet 7 d week in which nothing at all fires, slothweb and sloth restarting in the middle of it in an SQLite build, then a 7 d week in which A1 fires for a burst of connections and A3 for a daytime device that appears only at night, while a device that is only ever present at night never fires; and the hour that just closed reaching the baseline at flush phases 0, 3 and 7 (the previous slice fed it only at phase 0); A9 for a new host whose first row the rollup released late, at sloth's real cadence (SQLite); five weeks of a 13:30-14:30 routine in IST firing nothing. Both builds |
 | `test_evidence.c` | an alert's proof, every pcap written at run time from byte arrays built per their clause (no capture is committed): the file header in both byte orders and both resolutions, pcapng and junk refused by name, the record walk (orig_len raised to incl_len, a caplen past the snaplen, a file cut inside a record); the decoders on Ethernet/IPv4/TCP with a ClientHello cut at 64 bytes (no SNI claimed), a DNS query whole and cut, a compression pointer to itself, SLL2/ICMP, SLL/ARP, radiotap deauthentication (reason 7, Table 9-26 roles, channel and signal), a beacon (SSID, DS channel, RSN, a 33-octet SSID called invalid), an authentication status 0; the hex dump; a page of 24 frames, the next page, the worst case stopping with `more` inside its buffer, a cut file, a record cut below a 0xffffffff snaplen said as `40 of 270 bytes captured` and never as the snaplen; both alert-pcap name grammars and what they refuse (a handshake pcap's name, `eapol.22000`, a path, a near miss of each); the manifest line in `src/evidence_manifest.c`'s shape and every sink and shape it refuses; a directory: newest first, a handshake line and an unterminated tail not indexed, an 18-digit `written_at_epoch` sorted first and returned as written (no arithmetic on a stamp; the sanitized build would stop on an overflow) and equal stamps in read order, the three joins and the fallback only when they find nothing, hash verified, mismatched by a byte and by a length, no entry; a symlink, a FIFO, a name off the gate and a 16 MiB + 1 file refused; a missing directory; the routes: `captures` with no `incident_id`, session or path in the answer, `hash verified`, `no manifest entry`, `HASH MISMATCH` after a byte changed, `404` past the list, `400` for a file name or a bad `n`, `405` on `HEAD`, the download's headers and bytes, its `X-Sloth-SHA256` of the bytes served (`verified`, then `mismatch` after a byte changed, `no_manifest_entry`), `415` for pcapng, `why_no_capture` for an L2-only rule and with no `--pcap-dir`; an evidence pcap listed `withheld` and refused `403` by both routes with no frame or byte, then decoded and served under `serve_evidence`; a symlink and a FIFO with manifest lines listed `unreadable: not a regular file` and refused `403`; a file with sloth's line and a forged later-stamped line `hash verified` (by sloth's line) with `conflicting manifest lines (2)`, and a file with only a forged line `HASH MISMATCH`; the assessment generator run on documents it writes (header lines, front matter, sections, bibliography, Related pages left out, an indented continuation kept with its entry and other prose kept apart as the note, MY_NETWORK_RECON.md's note never in an entry) and its two build stops; the page's hooks (the drawer's list by its `data-ev` mark, the frame index through `DataTable`, a withheld or unreadable capture never opened), the download's one form and the section's place, last |

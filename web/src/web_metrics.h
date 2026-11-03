@@ -145,9 +145,11 @@ void web_metrics_set_live(web_metrics_t *m, struct web_live_s *live);
 void web_metrics_set_anomaly(web_metrics_t *m, struct web_anomaly *anomaly);
 /* The BLE Devices view (web_bledev.h): each ble_device record's
  * adv_count delta to the class mix (kind WEB_TX_BLE, keyed by class
- * slug) and to ble.class.adv; once a snapshot pass, the distinct
- * addresses of each class the BLE tables heard in the last two fine
- * buckets to ble.class.advertisers. Either may be NULL. */
+ * slug; anonymous advertising's, addr_type 255, as Unknown's one
+ * WEB_TX_BLE_ANON entry) and to ble.class.adv; once a snapshot pass,
+ * the distinct addresses of each class the BLE tables heard in the
+ * last two fine buckets, anonymous rows one in Unknown, to
+ * ble.class.advertisers. Either may be NULL. */
 void web_metrics_set_blemix(web_metrics_t *m, struct web_chmix *mix);
 void web_metrics_set_ble(web_metrics_t *m, struct web_ble *ble);
 

@@ -370,11 +370,14 @@ void web_ble_health_json(web_ble_t *b, web_jw_t *w);
 
 /* ── for the BLE Devices view (web_bledev.h) ──────────────────────── */
 
-/* The device class (web_bledev.h WEB_BC_*) of a row, from its fields. */
+/* The device class (web_bledev.h WEB_BC_*) of a row, from its fields;
+ * an anonymous row (addr_type 255) is Unknown whatever they hold. */
 int  web_ble_dev_class(const web_ble_dev_t *d);
 /* Per class, the distinct addresses whose rows were heard at or after
- * since (their last_seen, the sensor's clock) into counts[WEB_BC_COUNT];
- * the rows counted, or -1 with no table. */
+ * since (their last_seen, the sensor's clock) into counts[WEB_BC_COUNT]
+ * (anonymous rows, addr_type 255 and the zero address, one advertiser
+ * in Unknown, as the class mix's one anonymous entry); the rows
+ * counted, or -1 with no table. */
 int  web_ble_class_counts(web_ble_t *b, long long since, int *counts);
 /* One advertiser of a window, every row of its address merged: the
  * newest row's type, sensor, name and current RSSI, the best of the
@@ -407,9 +410,12 @@ int  web_ble_addr_info(web_ble_t *b, const uint8_t addr[6], web_ble_cand_t *out)
  * address whose newest row is a tracker first, newest first, then the
  * rest newest first: a cut drops the oldest non-trackers, never a
  * tracker heard earlier in the window (unless there are more than max
- * trackers). Their number. */
+ * trackers). Anonymous rows (addr_type 255) are never candidates and
+ * take none of the max: there is no address to merge or key a signal
+ * by, and the one row per sensor is several advertisers; *anon (when
+ * not NULL) says one was heard in the window. Their number. */
 int  web_ble_candidates(web_ble_t *b, long long from, long long to,
-                        web_ble_cand_t *out, int max, int *more);
+                        web_ble_cand_t *out, int max, int *more, int *anon);
 
 /* FNV-1a 64 of s as 16 lower-case hex digits into out[17]: the store's
  * key for a finding (never the key itself). */

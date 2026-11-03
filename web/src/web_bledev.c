@@ -32,7 +32,9 @@ const web_ble_class_def_t web_ble_classes[WEB_BC_COUNT] = {
     [WEB_BC_IOT] = { "b:iot", "Vehicles & IoT", "I", 6,
         "Apple Continuity 0x06 HomeKit; Appearance of a fixed, home, vehicle or "
         "industrial category" },
-    [WEB_BC_UNK] = { "b:unk", "Unknown", "?", 7, "none of the above" },
+    [WEB_BC_UNK] = { "b:unk", "Unknown", "?", 7,
+        "none of the above; and all anonymous advertising (Address_Type 0xFF), "
+        "whose one row a sensor holds fields several advertisers left" },
 };
 
 #define APPLE     0x004C
@@ -109,6 +111,9 @@ static int ibound(const web_jrec_t *r, const char *k, int lo, int hi) {
 }
 
 int web_ble_class_of_rec(const web_jrec_t *r) {
+    /* As web_ble_dev_class(): an anonymous record is its row, every
+     * anonymous advertiser that sensor heard, so Unknown. */
+    if (web_jl_int(r, "addr_type", -1) == 255) return WEB_BC_UNK;
     const char *cat = web_jl_str(r, "watch_category");
     long long hid = web_jl_int(r, "hid", 0);
     web_ble_fields_t f = {
@@ -208,13 +213,15 @@ typedef struct {
 static void now_json(web_jw_t *w, void *vctx) {
     const now_ctx_t *c = vctx;
     web_ble_cand_t *cs = malloc(WEB_BLEDEV_CANDS * sizeof(*cs));
-    int more = 0, n = 0, tags = 0, near = -1;
+    int more = 0, n = 0, tags = 0, near = -1, anon = 0;
     if (cs) n = web_ble_candidates(c->b, c->now_s - WEB_BLEDEV_NOW_S, c->now_s + 1, cs,
-                                   WEB_BLEDEV_CANDS, &more);
+                                   WEB_BLEDEV_CANDS, &more, &anon);
     /* Nearest by the grade's estimate: the reading less the row's own
      * P_tx (a larger margin is a shorter path), not raw RSSI, so a
      * 10 dBm advertiser at -60 is not taken for nearer than a 0 dBm
-     * one at -55. */
+     * one at -55. Never anonymous advertising, which is no candidate:
+     * its signal is whichever anonymous advertiser was heard last, and
+     * it has no address to name or open. */
     for (int i = 0; i < n; i++) {
         if (cs[i].cls == WEB_BC_TAG) tags++;
         if (cs[i].has_rssi &&
@@ -222,7 +229,8 @@ static void now_json(web_jw_t *w, void *vctx) {
             near = i;
     }
     web_jw_raw(w, ",\"now\":{\"window_s\":"); web_jw_int(w, WEB_BLEDEV_NOW_S);
-    web_jw_raw(w, ",\"advertisers\":"); web_jw_int(w, n);
+    /* Anonymous advertising one advertiser, as ble.class.advertisers. */
+    web_jw_raw(w, ",\"advertisers\":"); web_jw_int(w, n + anon);
     web_jw_raw(w, ",\"advertisers_more\":"); web_jw_raw(w, more ? "true" : "false");
     web_jw_raw(w, ",\"trackers\":"); web_jw_int(w, tags);
     web_jw_raw(w, ",\"nearest\":");
@@ -296,10 +304,18 @@ static void ble_row_extra(web_jw_t *w, const char *key, void *ctx) {
 
 static void ble_tx_json(web_jw_t *w, const web_m4_t *m, web_sdb_conn_t *conn,
                         const uint8_t mac[6], int kind, void *vctx) {
-    (void)m; (void)conn; (void)kind;
+    (void)m; (void)conn;
     const now_ctx_t *c = vctx;
     char a[18];
     web_ble_cand_t d;
+    /* Anonymous advertising (web_chmix.h WEB_TX_BLE_ANON): one entry,
+     * its id a word no address can be, always Unknown's (it is credited
+     * nowhere else), no row to open. */
+    if (kind == WEB_TX_BLE_ANON) {
+        web_jw_raw(w, "{\"id\":\"anonymous\",\"kind\":\"anon\",\"name\":null,\"name_np\":false,"
+                      "\"class\":\"b:unk\",\"addr_type\":255,\"iface\":null}");
+        return;
+    }
     web_mix_mac_text(mac, a);
     int known = web_ble_addr_info(c->b, mac, &d);
     /* An address the tables no longer hold (evicted, or never kept: the
@@ -359,7 +375,7 @@ int web_bledev_classes_route(const web_m4_t *m, web_ble_t *b, const char *query,
         ops.metric = "ble.mix";
         ops.unit = "reports";
         ops.rows_word = "rows";
-        ops.kinds = 1u << WEB_TX_BLE;
+        ops.kinds = 1u << WEB_TX_BLE | 1u << WEB_TX_BLE_ANON;
         ops.key = ble_mix_key;
         ops.row_extra = ble_row_extra;
         ops.tx_json = ble_tx_json;
@@ -479,8 +495,12 @@ int web_bledev_proximity_route(const web_m4_t *m, web_ble_t *b, const char *quer
         free(cs); free(pr); free(sum); free(cnt); free(pts);
         return -1;
     }
-    int cut = 0, store_err = 0;
-    int n = web_ble_candidates(b, g.from, g.to, cs, WEB_BLEDEV_CANDS, &cut);
+    int cut = 0, store_err = 0, anon = 0;
+    /* Anonymous advertising has no row here (web_bledev.h) and takes no
+     * read slot: it has no address to key a signal series by, and its
+     * one row per sensor is every anonymous advertiser that sensor
+     * heard. Said, not drawn. */
+    int n = web_ble_candidates(b, g.from, g.to, cs, WEB_BLEDEV_CANDS, &cut, &anon);
     for (int i = 0; i < n; i++) {
         char a[18];
         web_mix_mac_text(cs[i].addr, a);
@@ -516,6 +536,7 @@ int web_bledev_proximity_route(const web_m4_t *m, web_ble_t *b, const char *quer
     web_jw_raw(&w, ",\"col_s\":"); web_jw_int(&w, g.col_s);
     web_jw_raw(&w, ",\"n\":");     web_jw_int(&w, want);
     web_jw_raw(&w, ",\"candidates\":"); web_jw_int(&w, n);
+    web_jw_raw(&w, ",\"anonymous_heard\":"); web_jw_raw(&w, anon ? "true" : "false");
     web_jw_raw(&w, ",\"edges\":");
     edges_json(&w, WEB_BLE_PROX_PTX_DBM);
     web_jw_raw(&w, ",\"rows\":[");

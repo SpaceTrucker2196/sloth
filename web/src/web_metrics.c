@@ -578,10 +578,35 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
          * it. sloth re-sends this record once a 10 s slot while it keeps
          * hearing the advertiser and otherwise on a change of its
          * signature or the 300 s heartbeat (src/jsonl.c), so a heard
-         * advertiser's series has a point a fine bucket. */
-        if (web_key_mac(web_jl_str(r, "addr"), k) != 0) return;
-        if (web_jl_int(r, "has_rssi", 0) == 1)
-            rssi(m, r, "rssi", WM_RF_RSSI_BLE, k, ts, now, -127, 20);
+         * advertiser's series has a point a fine bucket.
+         *
+         * An anonymous advertiser (addr_type 255, an extended
+         * advertisement with no AdvA) has no address: sloth zeroes it,
+         * so one row per sensor holds every anonymous advertiser that
+         * sensor hears, and a signal series of it would interleave
+         * several devices into one line that belongs to none. So it has
+         * no series and no proximity row (web_bledev.h). Its reports go
+         * to Unknown's ble.class.adv and to the one anonymous entry in
+         * Unknown's mix (WEB_TX_BLE_ANON, the zero mac, web_chmix.h),
+         * never to the class its row's fields would read as: those are
+         * every anonymous advertiser's (the first mfr pair kept, HID and
+         * watch bits only added), so web_ble_class_of_rec() and
+         * web_ble_dev_class() both say Unknown, and the advertiser
+         * count, the report count and the drawn band stay in one row. */
+        int anon = web_jl_int(r, "addr_type", -1) == 255;
+        uint8_t mac[6] = { 0, 0, 0, 0, 0, 0 };
+        const char *ifn = web_ble_iface_name(web_ble_iface_find(web_jl_str(r, "iface")));
+        if (anon) {
+            /* "anon" is no canonical address (17 characters of hex
+             * pairs and colons), so this id is never an address's. */
+            snprintf(id, sizeof(id), "bl|anon|%s", ifn);
+        } else {
+            if (web_key_mac(web_jl_str(r, "addr"), k) != 0) return;
+            if (web_jl_int(r, "has_rssi", 0) == 1)
+                rssi(m, r, "rssi", WM_RF_RSSI_BLE, k, ts, now, -127, 20);
+            if (web_mix_mac_bytes(k, mac) != 0) return;
+            snprintf(id, sizeof(id), "bl|%s|%lld|%s", k, web_jl_int(r, "addr_type", -1), ifn);
+        }
         /* The class mix: adv_count is the row's running total AS ONE
          * SENSOR HEARD IT (web_ble.h), so the high-water id carries the
          * addr_type and the sensor's iface word: two receivers' totals
@@ -590,16 +615,13 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
          * random addresses cannot evict the shared rows. A one-channel
          * Ubertooth sample (sampled 1) is a fraction of the air and is
          * not credited. */
-        uint8_t mac[6];
-        if (web_mix_mac_bytes(k, mac) != 0) return;
         const char *slug = web_ble_classes[web_ble_class_of_rec(r)].slug;
-        snprintf(id, sizeof(id), "bl|%s|%lld|%s", k, web_jl_int(r, "addr_type", -1),
-                 web_ble_iface_name(web_ble_iface_find(web_jl_str(r, "iface"))));
         double d = hwt_delta(m, &m->blehw, id, web_jl_int(r, "adv_count", 0),
                              web_jl_int(r, "first_seen", -1));
         if (web_jl_int(r, "sampled", 0) == 1 || !(d > 0)) return;
         count(m, WM_BLE_CLASS_ADV, slug, d, now);
-        if (m->blemix) web_chmix_add(m->blemix, slug, mac, WEB_TX_BLE, d, now);
+        if (m->blemix)
+            web_chmix_add(m->blemix, slug, mac, anon ? WEB_TX_BLE_ANON : WEB_TX_BLE, d, now);
     } else if (!strcmp(t, "gnss_fix")) {
         /* The host's own receiver (web_gnss.h): change-only records, so
          * a sample per band change or heartbeat. A gnss_fix carries

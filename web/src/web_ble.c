@@ -1538,6 +1538,12 @@ int web_ble_iface_find(const char *s) {
 }
 
 int web_ble_dev_class(const web_ble_dev_t *d) {
+    /* An anonymous row (addr_type 255) is every anonymous advertiser
+     * one sensor heard, and its fields are what all of them left: the
+     * first manufacturer pair kept for good, the HID bits and a watch
+     * category only ever added (src/ble_hci.c observe_locked()). They
+     * name no one advertiser, so neither does a class of them. */
+    if (d->addr_type == 255) return WEB_BC_UNK;
     web_ble_fields_t f = { d->mfr_id, d->mfr_subtype, d->uuid16, d->svc_data_uuid16,
                            d->appearance, d->hid, d->watch_category[0] != '\0' };
     return web_ble_class_of(&f);
@@ -1561,12 +1567,22 @@ int web_ble_class_counts(web_ble_t *b, long long since, int *counts) {
     if (!b || !b->dev) return -1;
     uint8_t (*set)[7] = calloc(ADDR_SET, sizeof(*set));
     if (!set) return -1;
-    int n = 0;
+    int n = 0, anon_seen = 0;
     pthread_mutex_lock(&b->mu);
     for (int i = 0; i < WEB_BLE_DEVICES; i++) {
         const web_ble_dev_t *d = &b->dev[i];
         if (!d->used || d->last_seen < since) continue;
         n++;
+        /* Anonymous advertising (addr_type 255, the zeroed address) is
+         * one advertiser in Unknown (web_ble_dev_class()), the one the
+         * class mix draws there (web_metrics.c). It is counted by its own
+         * flag, not through the address set: a real row whose AdvA is
+         * literally all zeros (an Ubertooth copy, a spoofer) must neither
+         * take its place nor be taken by it. */
+        if (d->addr_type == 255) {
+            if (!anon_seen) { anon_seen = 1; counts[web_ble_dev_class(d)]++; }
+            continue;
+        }
         if (addr_seen(set, d->addr)) continue;
         counts[web_ble_dev_class(d)]++;
     }
@@ -1631,8 +1647,9 @@ static int by_newest(const void *pa, const void *pb) {
 }
 
 int web_ble_candidates(web_ble_t *b, long long from, long long to,
-                       web_ble_cand_t *out, int max, int *more) {
+                       web_ble_cand_t *out, int max, int *more, int *anon) {
     *more = 0;
+    if (anon) *anon = 0;
     if (!b || !b->dev || max <= 0) return 0;
     int n = 0;
     pthread_mutex_lock(&b->mu);
@@ -1645,6 +1662,12 @@ int web_ble_candidates(web_ble_t *b, long long from, long long to,
             const web_ble_dev_t *d = &b->dev[i];
             if (!d->used || d->last_seen < from || (d->first_seen > 0 && d->first_seen >= to))
                 continue;
+            /* Anonymous advertising takes no slot: it is said, never
+             * read as a candidate (web_ble.h). */
+            if (d->addr_type == 255) {
+                if (anon) *anon = 1;
+                continue;
+            }
             idx[ni++] = d;
         }
         qsort(idx, (size_t)ni, sizeof(idx[0]), by_newest);

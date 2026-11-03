@@ -148,7 +148,11 @@ static const char STEP_V4_SQL[] =
  * and of the rest (tx '', kind 0). Since 2026-11-02 the same table also
  * holds the BLE view's class mix (web_bledev.h): channel a class slug
  * "b:phone" .. "b:unk", which no channel key can be, tx an advertiser's
- * address, kind 3 (WEB_TX_BLE), frames its advertising reports. Values
+ * address, kind 3 (WEB_TX_BLE), frames its advertising reports; since
+ * 2026-11-03 also anonymous advertising, channel "b:unk", tx the
+ * all-zero address and kind 4 (WEB_TX_BLE_ANON), which a b801ab7 slothweb
+ * skips on read (its BLE reader keeps kind 3), so those reports are
+ * missing from its minute and hour cells, never drawn as an address. Values
  * the columns already hold kinds of, so no step: a v7 file is read as
  * it is, an older slothweb never draws a "b:" row (its WiFi reader
  * keeps canonical channel keys and kinds 1 and 2 only), and each view

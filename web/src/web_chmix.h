@@ -89,8 +89,18 @@
 /* WEB_TX_BLE (2026-11-02): a BLE advertiser in the BLE view's class
  * mix (web_bledev.h), a second web_chmix_t on the same engine whose
  * keys are the class slugs ("b:phone" ...) and whose frames are a
- * row's adv_count deltas (HCI advertising reports, not air frames). */
-enum { WEB_TX_OTHER = 0, WEB_TX_AP = 1, WEB_TX_CLIENT = 2, WEB_TX_BLE = 3 };
+ * row's adv_count deltas (HCI advertising reports, not air frames).
+ *
+ * WEB_TX_BLE_ANON (2026-11-03): anonymous advertising (Address_Type
+ * 0xFF, an extended advertisement with no AdvA; sloth zeroes the
+ * address, so a sensor's every anonymous advertiser is one row), always
+ * with the all-zero mac and only under "b:unk": one entry, never an
+ * address. It cannot be taken for one twice over: the kind is part
+ * of every key (the open buckets, the answer's table, chmix's primary
+ * key), and no WEB_TX_BLE entry has the zero mac, since an address
+ * reaches the mix only through web_key_mac(), which refuses all zeros. */
+enum { WEB_TX_OTHER = 0, WEB_TX_AP = 1, WEB_TX_CLIENT = 2, WEB_TX_BLE = 3,
+       WEB_TX_BLE_ANON = 4 };
 /* include/sloth.h CH_SRC_HE_6GHZ: a beacon's channel_source when its
  * channel came from the HE 6 GHz Operation element (test_wifi.c holds
  * the two equal). */
@@ -98,7 +108,7 @@ enum { WEB_TX_OTHER = 0, WEB_TX_AP = 1, WEB_TX_CLIENT = 2, WEB_TX_BLE = 3 };
 
 typedef struct {
     uint8_t  mac[6];
-    uint8_t  kind;                 /* WEB_TX_AP or WEB_TX_CLIENT */
+    uint8_t  kind;                 /* a WEB_TX_* other than WEB_TX_OTHER */
     uint32_t frames;
 } web_mix_tx_t;
 
