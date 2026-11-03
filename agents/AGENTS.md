@@ -66,15 +66,63 @@ Single binary `sloth`. Test binary `sloth_test`.
   load-bearing. It is still cheap insurance before quoting a matrix
   result, and the six-config loops in this repo's history do it.
 
-  **The whole build surface, every slice:** the six configs above;
-  `make test` and `make test-capture-path`; **both again under
+  **The whole build surface, every slice, is `make gate`**
+  (`tools/gate.sh`): the six configs above; `make test` and
+  `make test-capture-path` plain, under
   `EXTRA_CFLAGS="-Werror -fsanitize=address,undefined
-  -fno-omit-frame-pointer -fno-sanitize-recover=all"`**; `make fuzz
-  FUZZ_SECONDS=1`; `make cppcheck`. The sanitized capture-path run is
-  the one that caught a 900-byte stack over-read in a test helper on
-  2026-10-15 after every other local gate was green. Source lists are
-  derived since #115 - a new `src/*.c` goes in `CORE_COMMON_SRCS` once,
-  and tests and fuzz harnesses are picked up by wildcard.
+  -fno-omit-frame-pointer -fno-sanitize-recover=all"` and under
+  `-fsanitize=thread`; `make web-test` plain, without SQLite, with an
+  empty vendor table, under ASan and under TSan twice (and against
+  SQLite 3.45 with `GATE_SQLITE345`, which is what CI's Ubuntu 24.04
+  has); `make web-quickstart-check`; `make deploy-test` (and with other
+  shellcheck versions via `GATE_SHELLCHECKS`; CI has 0.9); `make
+  replay-check`; `make fuzz FUZZ_SECONDS=1`; `make cppcheck`; and
+  `docs-counts` plus `research-index` leaving the tree clean. **Run the
+  script, never a hand-picked subset:** the one time a slice's gate left
+  `make fuzz` out, a fuzz harness that no longer linked reached CI
+  (93f8c38, 2026-10-26). The sanitized capture-path run is the one that
+  caught a 900-byte stack over-read in a test helper on 2026-10-15 after
+  every other local gate was green. Source lists are derived since #115
+  - a new `src/*.c` goes in `CORE_COMMON_SRCS` once, and tests and fuzz
+  harnesses are picked up by wildcard.
+
+  What the script does that a loop in a shell did not, each from a run
+  that went wrong (its header comment has the dates): one run per tree
+  (two at once `make clean` each other's objects and neither result
+  means anything); refuse a `TMPDIR` under 1.5 GB (the suite builds a
+  900,000-row database there); print the toolchain first (an `apt
+  upgrade` mid-run swapped gcc, glibc and libpcap and broke four
+  configs); `make clean` before every sanitized step (a build-time
+  generator left over from a plain build never ran instrumented
+  locally; CI found a leak and a `qsort(NULL)` in one); keep every
+  step's log and print the FAIL lines under a red step. The generators
+  also depend on `$(WEB_GEN_DIR)/.flags` now, so a sanitized make
+  rebuilds them regardless.
+
+  **When the owner says to skip local gates and lean on CI** (asked on
+  2026-11-02 when four slices were gating at once on one machine), the
+  per-slice minimum is the build with `-Werror`, `make test`, `make
+  web-test`, `make web-test WITH_SQLITE=0`, `make cppcheck` and a clean
+  `docs-counts`; CI is the full matrix; one `make gate` on `main` at the
+  end. Say which of the two you ran when you quote a result.
+
+  **The host's toolchain can be newer than CI's.** CI's Ubuntu 24.04
+  has libpcap 1.10, SQLite 3.45 and shellcheck 0.9; the reference host
+  had libpcap 1.11 (which marks `pcap_set_*` and `pcap_setfilter`
+  `warn_unused_result`, so `(void)` does not silence them, 9a5c52c),
+  SQLite 3.53 and shellcheck 0.11. A warning that appears only on one
+  side is still real on that side; the car box will be the newer one.
+
+- **A test that measures wall-clock time against a real budget scales
+  it under the sanitizers.** slothweb's 250 ms read budget is right for
+  slothweb and wrong for a TSan build on a loaded host, where a correct
+  read answered 503 in some runs and not others (test_alerts.c,
+  2026-11-01). The seam is `web_sdb_test_budget_scale`
+  (1 in slothweb; 4 under ASan, 8 under TSan, set only by the test
+  runner), and a test's own time bound scales with it; a test that needs
+  a budget to expire uses one far below the scaled value. A timing
+  assertion with no sanitizer scale is a flake waiting for a busy
+  machine, and a flake teaches people to rerun instead of read.
 - **Views and alert kinds are X-macro lists** since #117:
   `include/sloth_views.def` and `include/sloth_alerts.def` generate the
   enums, labels, dispatch, key switch and name/technique tables. Edit
@@ -190,6 +238,40 @@ Single binary `sloth`. Test binary `sloth_test`.
   `stale_secs` enters the `sensor_health` signature as the three-state
   `stale_state()` bucket, not as itself. Heartbeat is what guarantees
   liveness; the signature's job is to encode *meaningful* change.
+
+## Working beside another session
+
+Two sessions pushed to `main` in parallel through 2026-10-27 to
+2026-11-02 (this one and a fork). What kept it from costing more than it
+did, written down so it is the default next time:
+
+- **One pusher at a time, and say so.** Agree an order, hold until the
+  other's slice is on `main`, send the SHA the moment it lands; a push
+  that lands under someone's gate costs them the whole gate again. A fix
+  for a red `main` is the one exception, announced.
+- **One module file per slice** where the slices meet in the same page:
+  `web/ui/glyph.js`, `frrs.js`, `evidence.js`, `bundle.js`,
+  `location.js`, each with one namespace object, its own container ids,
+  and one call per view in `app.js`. Exchange the ids and the order of
+  the containers on a shared page before either builds; the merge is
+  then a line, not an afternoon.
+- **Shared stores are sequenced, not merged.** Two slices that each bump
+  `slothweb.db`'s version become v6 then v7 in push order, each with its
+  migration and a test on the other's file; sloth.db's
+  `DB_SCHEMA_VERSION` the same. Say which store a slice touches when
+  you announce it.
+- **Hand work across the seam by lists, in writing.** The 208 vendors
+  one session researched for the other travelled as a message with the
+  exact format, path, file names and the registry-spelling pitfalls;
+  the receiver committed through the sender's generator and tests.
+- **The host is shared.** Only one session deploys or restarts the
+  services at a time; the other asks. Check `ps -o pid,ppid` before
+  calling two same-named processes two runs: a script's `$(...)`
+  subshells carry the parent's command line, and a valid gate run was
+  killed for that on 2026-11-02.
+- **Quotas are per session.** The web-search allowance (200 a session)
+  ran out in one while the other had it to spare; research moved
+  sessions rather than waiting for a reset.
 
 ## Conventions
 

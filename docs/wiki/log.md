@@ -6003,3 +6003,11 @@ report events.
   location routes' own answer spliced: a device's `/api/positions?mac=`
   JSON, an alert's page `loc` stamp. FRRS keeps "no location axis": the
   sensor's position is not the emitter's. Pages touched: [[slothweb]].
+- 2026-11-02 — [[architecture]] (via `agents/AGENTS.md`): `make gate`
+  (`tools/gate.sh`) is the whole build surface in one locked, measured
+  run; the web generators depend on `build/web/.flags` so a sanitized
+  make rebuilds them (CI alone had caught a leak and a `qsort(NULL)` in
+  `btsig_gen`); the wall-clock-budget rule and the parallel-session
+  rules written down from this week's work; follow-ups filed as #173
+  (rules whose count follows the tick rate), #174 (18 assessments
+  pending), #175, #176, #177.

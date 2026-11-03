@@ -631,6 +631,15 @@ research-mcp:
 # (web/tests/test_alerts.c).
 WEB_MAIN        = web/src/main.c
 WEB_GEN_DIR     = build/web
+
+# The build-time generators (web/tools/*.c) are built with the current
+# CFLAGS and rebuilt when they change, so a sanitized make rebuilds them
+# under the sanitizers instead of reusing a plain-built binary: CI,
+# building from a clean tree, found a leak and a qsort(NULL) in one that
+# no local gate had run instrumented (ec058e5, aa8c9c9, 2026-11-02).
+$(WEB_GEN_DIR)/.flags: STAMP = $(CC) $(CFLAGS)
+$(WEB_GEN_DIR)/.flags: FORCE
+	$(write_stamp)
 WEB_EMBED       = $(WEB_GEN_DIR)/embed
 WEB_ASSETS_C    = $(WEB_GEN_DIR)/web_assets.c
 WEB_UI          = $(wildcard web/ui/*)
@@ -725,7 +734,7 @@ ifeq ($(UNAME),Linux)
     WEB_LDFLAGS = -pie -Wl,-z,relro,-z,now
 endif
 
-$(WEB_EMBED): $(WEB_EMBED_SRCS) web/tools/sha256.h
+$(WEB_EMBED): $(WEB_EMBED_SRCS) web/tools/sha256.h $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -Iweb/tools -o $@ $(WEB_EMBED_SRCS)
 
@@ -739,7 +748,7 @@ WEB_PALGEN_SRCS = web/tools/palette.c src/tui_palette.c
 WEB_PAL_CSS     = $(WEB_GEN_DIR)/palette.css
 WEB_PAL_JS      = $(WEB_GEN_DIR)/palette.js
 
-$(WEB_PALGEN): $(WEB_PALGEN_SRCS) src/tui_palette.h src/tui.h src/ip_color.h
+$(WEB_PALGEN): $(WEB_PALGEN_SRCS) src/tui_palette.h src/tui.h src/ip_color.h $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -Iinclude -Isrc -o $@ $(WEB_PALGEN_SRCS) -lm
 
@@ -760,7 +769,7 @@ $(WEB_ASSETS_C): $(WEB_EMBED) $(WEB_UI) $(WEB_PAL_CSS) $(WEB_PAL_JS)
 	$(WEB_EMBED) web/ui index.html $@.tmp $(WEB_GEN_DIR)
 	mv $@.tmp $@
 
-$(WEB_OUIGEN): $(WEB_OUIGEN_SRCS) web/tools/oui_csv.h web/src/web_oui.h
+$(WEB_OUIGEN): $(WEB_OUIGEN_SRCS) web/tools/oui_csv.h web/src/web_oui.h $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -Iweb/tools -Iweb/src -o $@ $(WEB_OUIGEN_SRCS)
 
@@ -772,7 +781,7 @@ $(WEB_OUI_C): $(WEB_OUIGEN) $(WEB_OUI_STAMP) $(WEB_OUI_CSVS) src/oui.c
 	$(WEB_OUIGEN) $@.tmp src/oui.c $(WEB_OUI_CSVS)
 	mv $@.tmp $@
 
-$(WEB_BTSIGGEN): $(WEB_BTSIGGEN_SRCS) web/src/web_btsig.h
+$(WEB_BTSIGGEN): $(WEB_BTSIGGEN_SRCS) web/src/web_btsig.h $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -Iweb/src -o $@ $(WEB_BTSIGGEN_SRCS)
 
@@ -785,7 +794,7 @@ $(WEB_BTSIG_C): $(WEB_BTSIGGEN) $(WEB_BTSIG_STAMP) $(WEB_BTSIG_CSVS)
 	$(WEB_BTSIGGEN) $@.tmp $(WEB_BTSIG_ARGS)
 	mv $@.tmp $@
 
-$(WEB_RECIPESGEN): $(WEB_RECIPES_SRCS)
+$(WEB_RECIPESGEN): $(WEB_RECIPES_SRCS) $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -o $@ $(WEB_RECIPES_SRCS)
 
@@ -793,7 +802,7 @@ $(WEB_RECIPES_C): $(WEB_RECIPESGEN) $(WEB_RECIPES_MD) web/src/web_recipes.h
 	$(WEB_RECIPESGEN) $(WEB_RECIPES_MD) $@.tmp
 	mv $@.tmp $@
 
-$(WEB_AKBGEN): $(WEB_AKBGEN_SRCS)
+$(WEB_AKBGEN): $(WEB_AKBGEN_SRCS) $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -o $@ $(WEB_AKBGEN_SRCS)
 
@@ -802,7 +811,7 @@ $(WEB_AKB_C): $(WEB_AKBGEN) $(WEB_AKB_INPUTS) $(WEB_AKB_CORPUS) web/src/web_aler
 	    docs/wiki/alerts.md docs/wiki/alert-remediation.md research
 	mv $@.tmp $@
 
-$(WEB_VKBGEN): $(WEB_VKBGEN_SRCS) web/src/web_vendorkb.h
+$(WEB_VKBGEN): $(WEB_VKBGEN_SRCS) web/src/web_vendorkb.h $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -Iweb/src -o $@ $(WEB_VKBGEN_SRCS)
 
@@ -818,7 +827,7 @@ $(WEB_VKB_C): $(WEB_VKBGEN) $(WEB_VKB_STAMP) $(WEB_VKB_MDS)
 web-vendorkb: $(WEB_VKB_C)
 
 .PHONY: web web-test update-oui update-btsig
-$(WEB_ASMGEN): $(WEB_ASMGEN_SRCS)
+$(WEB_ASMGEN): $(WEB_ASMGEN_SRCS) $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -o $@ $(WEB_ASMGEN_SRCS)
 
@@ -848,7 +857,7 @@ WEB_DEMO_SRCS   = web/tools/demo.c web/tools/sha256.c
 WEB_DEMO_DB_SRCS = src/db_schema.c
 .PHONY: web-demo web-quickstart-check
 web-demo: $(WEB_DEMO)
-$(WEB_DEMO): $(WEB_DEMO_SRCS) $(WEB_DEMO_DB_SRCS)
+$(WEB_DEMO): $(WEB_DEMO_SRCS) $(WEB_DEMO_DB_SRCS) $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) -Iinclude -o $@ $(WEB_DEMO_SRCS) \
 	      $(if $(filter 1,$(WITH_SQLITE)),$(WEB_DEMO_DB_SRCS) -lsqlite3,) -lm
@@ -1525,7 +1534,16 @@ install-service:
 # because it is shell, not the C suite; shellcheck runs when installed.
 DEPLOY_SCRIPTS = packaging/bin/sloth-migrate-sensor packaging/bin/sloth-monitor-up \
                  tests/deploy/test_migrate_sensor.sh \
-                 .github/scripts/wiki_sync.sh tests/deploy/test_wiki_sync.sh
+                 .github/scripts/wiki_sync.sh tests/deploy/test_wiki_sync.sh \
+                 tools/gate.sh
+
+# The whole build surface in one measured run (agents/AGENTS.md
+# "Discipline"); one run per tree, refuses a full TMPDIR, prints the
+# toolchain, cleans before each sanitized step. GATE_SQLITE345 and
+# GATE_SHELLCHECKS add the 3.45 and other-shellcheck steps.
+.PHONY: gate
+gate:
+	sh tools/gate.sh .
 
 .PHONY: deploy-test
 deploy-test:
