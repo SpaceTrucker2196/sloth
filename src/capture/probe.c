@@ -471,6 +471,18 @@ static void on_probe_frame(u_char *user, const struct pcap_pkthdr *hdr,
     fr.event_id = ev;
     fr.band     = (int)band;
 
+    /* A frame radiotap marked FCS-failed is retained as evidence above
+     * (mon_frame_record, the freshness clock, the evidence ring,
+     * rf_quality) but its content is not trustworthy enough to feed a
+     * content parser — a bit error can turn a real SSID into a handful
+     * of near-random octets that beacon_parse_frame() would record as a
+     * seen name (#178). #123 deferred this decision on purpose; this is
+     * it, resolved. */
+    if (fr.bad_fcs) {
+        sh_parse_fault_note(SH_PF_FCS_FAILED);
+        return;
+    }
+
     if (type == 1) {
         /* Control frames (#64). Dispatched *above* the 24-byte guard
          * below: a CTS or ACK is 14 bytes and an RTS is 20, so every

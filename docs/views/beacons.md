@@ -38,6 +38,15 @@ the AP itself is broadcasting — and appears as `qbss_stations` /
 `qbss_chan_util` in the `beacon` JSONL record (omitted when the IE is
 absent, so consumers can tell "no data" from a genuine zero).
 
+**FCS-clean since #178.** A beacon radiotap marked FCS-failed is no
+longer handed to `beacon_parse_frame()` — a bit error in a weak frame
+could otherwise read as a plausible SSID and be recorded as a name the
+AP actually sent. Before this fix a BSSID could accumulate several
+short, mostly non-printable "SSIDs" over time, heaviest on the weakest
+signal, each with the same `last_seen` — the signature of bit errors,
+not of an AP changing its name. Those rows are not deleted retroactively;
+a sloth.db from before this version may still show them.
+
 ## WPS vendor-string leakage (#77)
 
 When the AP's WPS IE carries the optional Manufacturer / Model Name /

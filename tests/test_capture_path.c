@@ -1544,10 +1544,13 @@ static void evidence_setup(void);   /* with the #92 evidence cases below */
 static void test_bad_fcs_frames_still_feed_rf_quality_and_evidence(void) {
     /* Policy pinned, not changed. A frame the driver marked FCS-failed
        is untrustworthy content but real evidence about the channel, so
-       it still reaches rf_quality_observe() and the evidence ring. It
-       is also still parsed: whether a bad-FCS frame should feed the
-       per-type parsers at all is a deferred decision (#123), and this
-       test does not claim one either way. */
+       it still reaches rf_quality_observe() and the evidence ring.
+       Whether it should also feed a per-type content parser was a
+       deferred decision (#123); #178 answered no (see
+       test_bad_fcs_beacon_does_not_reach_beacon_table below), so this
+       probe request is not expected to reach probe_pnl/record_probe
+       either — it just is not asserted here, because this test's own
+       claim is the evidence-side behaviour, not the content side. */
     evidence_setup();
     rf_quality_clear();
     uint8_t f[160];
@@ -1573,6 +1576,48 @@ static void test_bad_fcs_frames_still_feed_rf_quality_and_evidence(void) {
     ASSERT_EQ(rf_quality_badfcs_pct(6, WIFI_BAND_2GHZ, (time_t)1600000000), 100);
     rf_quality_clear();
     evidence_ring_shutdown();
+}
+
+static void test_bad_fcs_beacon_does_not_reach_beacon_table(void) {
+    /* #178: a beacon radiotap marked FCS-failed must not reach
+       beacon_parse_frame(). A bit error in a weak frame can read as a
+       plausible SSID and get recorded as one the AP actually sent —
+       observed on the reference host as several short, mostly
+       non-printable "SSIDs" on one BSSID, heaviest on the weakest
+       signal, all sharing one last_seen. #123 priced this exact
+       question ("whether a bad-FCS frame should feed the per-type
+       parsers at all") and deferred it on purpose; this is where it is
+       answered.
+
+       Mutation-proved: removing the `fr.bad_fcs` early return in
+       on_probe_frame() (src/capture/probe.c) reddens the first half of
+       this test (the AP gets recorded, the counter stays put); the
+       inverse edit restores green. */
+    uint8_t f[160];
+    int fl = 0;
+    int n = rt_beacon(f, sizeof f, RT_F_FCS | RT_F_BADFCS, &fl);
+    ASSERT_GT(n, 0);
+    const uint8_t *fs[1] = { f };
+    int ls[1] = { n };
+
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); beacon_clear();
+    uint64_t pf0 = sh_parse_fault_count(SH_PF_FCS_FAILED);
+    uint64_t m0  = mon_before();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    ASSERT(rt_find_ap() == NULL);
+    ASSERT_EQ((long long)(sh_parse_fault_count(SH_PF_FCS_FAILED) - pf0), 1);
+    /* Still evidence: the frame is counted before the content gate. */
+    ASSERT_EQ(mon_delta(m0), 1);
+
+    /* Control: same octets, BADFCS cleared — must parse normally. Without
+       this half, "not recorded" above could mean the beacon builder
+       produced a frame nothing can parse, bad-FCS or not. */
+    f[fl] = RT_F_FCS;
+    memset(&g_s, 0, sizeof(g_s)); probe_clear(); beacon_clear();
+    ASSERT_EQ(probe_test_dispatch(&g_s, fs, ls, NULL, NULL, 1), 1);
+    const beacon_ap_t *ap = rt_find_ap();
+    ASSERT(ap != NULL);
+    if (ap) ASSERT_STR(ap->ssid, "rt-test-net");
 }
 
 static void test_monitor_seam_rejects_frames_below_the_guards(void) {
@@ -3737,6 +3782,7 @@ void run_capture_path_tests(void) {
     RUN_TEST(test_a_caplen_above_origlen_is_refused_before_decode);
     RUN_TEST(test_a_caplen_past_the_snaplen_is_refused_at_both_edges);
     RUN_TEST(test_bad_fcs_frames_still_feed_rf_quality_and_evidence);
+    RUN_TEST(test_bad_fcs_beacon_does_not_reach_beacon_table);
     RUN_TEST(test_monitor_seam_rejects_frames_below_the_guards);
     RUN_TEST(test_monitor_seam_mixes_admitted_and_rejected);
     RUN_TEST(test_monitor_seam_carries_per_frame_timestamps);

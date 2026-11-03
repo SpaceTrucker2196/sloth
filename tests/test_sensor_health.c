@@ -787,7 +787,8 @@ static void test_parse_fault_names_are_stable_and_distinct(void) {
     ASSERT_STR(sh_parse_fault_name(SH_PF_DNS_NAME_BAD),  "dns_name_bad");
     ASSERT_STR(sh_parse_fault_name(SH_PF_TLS_MALFORMED), "tls_malformed");
     ASSERT_STR(sh_parse_fault_name(SH_PF_FRAME_EDGE),    "frame_edge");
-    ASSERT_EQ((int)SH_PF_KIND_COUNT, 10);
+    ASSERT_STR(sh_parse_fault_name(SH_PF_FCS_FAILED),    "fcs_failed");
+    ASSERT_EQ((int)SH_PF_KIND_COUNT, 11);
     for (int a = 0; a < SH_PF_KIND_COUNT; a++) {
         ASSERT(sh_parse_fault_name((sh_parse_fault_t)a)[0] != '\0');
         for (int b = a + 1; b < SH_PF_KIND_COUNT; b++)
@@ -810,6 +811,7 @@ static void test_parse_fault_wired_set(void) {
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_DNS_NAME_BAD),  0);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_TLS_MALFORMED), 0);
     ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_FRAME_EDGE),    1);
+    ASSERT_EQ(sh_parse_fault_is_wired(SH_PF_FCS_FAILED),    1);
 }
 
 /* beacon_parse_ies() is the first walk on the iterator (#126). One
