@@ -40,15 +40,12 @@
 #define AA_VAL_LEN  2048
 #define AA_MAX_KEYS 16
 
-/* Types with no assessment file yet, in sloth_alerts.def order. */
-static const char *const pending[] = {
-    "LDAP_SEARCH_FLOOD", "BGP_NOTIFICATION_BURST", "SSH_BRUTE_FORCE",
-    "RDP_BRUTE_FORCE", "SNMP_COMMUNITY_BRUTE", "MQTT_BROKER_BRUTE",
-    "ATTACK_PATH", "WEAK_TLS", "NO_MONITOR_MODE", "CLEARTEXT_CRED",
-    "BEACON_FLOOD", "AUTH_FLOOD", "FRAG_AMSDU_EAPOL", "FRAG_MIXKEY",
-    "FRAG_PN_GAP", "FRAG_EAPOL_RELAY", "SA_QUERY_FLOOD", "MFP_UNPROTECTED",
-};
-#define AA_PENDING_N ((int)(sizeof(pending) / sizeof(pending[0])))
+/* Types with no assessment file yet, in sloth_alerts.def order. Empty
+ * since 2026-11-03 (#174 wrote the last 18): a new ALERT_TYPE_* goes
+ * here only until its file lands, and AA_PENDING_N is the count, so
+ * the one placeholder string below is never read. */
+static const char *const pending[1] = { "" };
+#define AA_PENDING_N 0
 
 /* Fields every assessment carries; the index and the alert page read
  * them by name. */
