@@ -88,6 +88,18 @@ static const uint8_t ETH_TLS[64] = {
 /* Ethernet + IPv4 (total 57) + UDP (RFC 768, 40000 -> 53, length 37) +
  * a DNS query (RFC 1035 §4.1: id 0x1234, RD, one question,
  * example.com A IN). 71 bytes. */
+/* UDP to 1900 (SSDP) with a 4-byte payload, the prefix of "M-SEARCH":
+ * enough to pass the decoder's n >= 4 gate, too short for the 6- and
+ * 8-byte keyword compares. CI's 30 s fuzz found the over-read
+ * (fuzz_web_pcap, 2026-11-03). */
+static const uint8_t ETH_SSDP_SHORT[46] = {
+    0x02, 0x00, 0x00, 0x00, 0x00, 0x02, 0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0x08, 0x00,
+    0x45, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x40, 0x11, 0x00, 0x00,
+    10, 0, 0, 5, 239, 255, 255, 250,
+    0x9c, 0x40, 0x07, 0x6c, 0x00, 0x0c, 0x00, 0x00,
+    'M', '-', 'S', 'E',
+};
+
 static const uint8_t ETH_DNS[71] = {
     0x02, 0x00, 0x00, 0x00, 0x00, 0x02, 0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0x08, 0x00,
     0x45, 0x00, 0x00, 0x39, 0x00, 0x00, 0x00, 0x00, 0x40, 0x11, 0x00, 0x00,
@@ -258,6 +270,20 @@ static void test_decode_ip_tiers(void) {
      * empty "sni" recorded for a cut hello. */
     WT_ASSERT(!has_kv(&d, "sni", NULL));
 
+    /* A short SSDP payload is not read past its end: the frame is
+     * copied to a heap block of exactly its size so ASan sees any
+     * over-read. Seen red under ASan with the length guards removed
+     * from dec_app_udp(). */
+    {
+        uint8_t *f = malloc(sizeof(ETH_SSDP_SHORT));
+        WT_ASSERT(f != NULL);
+        if (f) {
+            memcpy(f, ETH_SSDP_SHORT, sizeof(ETH_SSDP_SHORT));
+            web_pcap_decode(1, f, sizeof(ETH_SSDP_SHORT), sizeof(ETH_SSDP_SHORT), &d);
+            WT_ASSERT(strcmp(d.kind, "SSDP") != 0);
+            free(f);
+        }
+    }
     web_pcap_decode(1, ETH_DNS, sizeof(ETH_DNS), sizeof(ETH_DNS), &d);
     WT_ASSERT(!strcmp(d.kind, "DNS"));
     WT_ASSERT(!d.truncated);

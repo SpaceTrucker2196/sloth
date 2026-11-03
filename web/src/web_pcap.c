@@ -368,8 +368,8 @@ static void dec_app_udp(web_pcap_dec_t *o, unsigned sport, unsigned dport,
         return;
     }
     if ((sport == 1900 || dport == 1900 || sport == 3702 || dport == 3702) && n >= 4 &&
-        (http_method(p, n) || !memcmp(p, "NOTIFY", 6) || !memcmp(p, "M-SEARCH", 8) ||
-         !memcmp(p, "HTTP/", 5))) {
+        (http_method(p, n) || (n >= 6 && !memcmp(p, "NOTIFY", 6)) ||
+         (n >= 8 && !memcmp(p, "M-SEARCH", 8)) || (n >= 5 && !memcmp(p, "HTTP/", 5)))) {
         dec_http(o, p, n);
         scopy(o->kind, sizeof(o->kind), sport == 3702 || dport == 3702 ? "WS-Discovery" : "SSDP");
         return;
