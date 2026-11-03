@@ -6157,3 +6157,22 @@ hold, so a building hiding four of ten satellites is no longer a 12 dB
 collapse. The four research documents speak of the kinds in the
 present tense and `research.db` is rebuilt; [[cli-reference]] no longer
 says no rule reads a position.
+
+## 2026-11-03 — Bad-FCS frames stop reaching content parsers (#178)
+
+A beacon, probe-response, assoc-response or probe-request whose
+radiotap FLAGS carried BADFCS used to reach its content parser anyway;
+only `rf_quality_observe`, `mon_frame_record` and the evidence ring
+tested it. #123 (2026-10-15) deferred the question of whether a
+bad-FCS frame should feed the per-type parsers at all; #178 answers no,
+citing a real-host symptom — a BSSID accumulating several short,
+mostly non-printable "SSIDs" sharing one `last_seen`, heaviest on the
+weakest signal, the signature of bit errors rather than an AP renaming
+itself. `on_probe_frame()` (`src/capture/probe.c`) now returns right
+after the evidence-side bookkeeping, before the type dispatch, once
+`fr.bad_fcs` is set. New parse-fault kind `SH_PF_FCS_FAILED` /
+`parse_fault_fcs_failed`, wired immediately, additive to the
+`sensor_health` JSONL record. Updated [[jsonl-schema]] (both pinned
+parse-fault lists, a `fcs_failed` bullet, the row table, the literal
+example line) and `docs/views/beacons.md` (an "FCS-clean since #178"
+note; old rows from before this version are not deleted retroactively).
