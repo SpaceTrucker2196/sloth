@@ -2530,9 +2530,17 @@ v11 sloth.db, #175, also `"db_incident"`, one incident's own
 `closed_at` and `reason` from `alert_incidents`: the stream incident the
 page opened on, `"which":"opened"`, else the key's newest,
 `"latest"`, and its `"history"` runs built from those rows,
-`"source":"incidents"`). Open
-incidents come first, highest severity then newest change; then the
-closed ones, newest last seen first.
+`"source":"incidents"`). A
+stream row also carries `"observations"` (the incident's detail
+changes) and `"confidence"` (the rule's percent, `null` when it reports
+none); a sloth.db row has neither, so both are `null`. Open incidents
+come first, highest severity, then most observations, then newest
+change, and never by `count` (#179: for a per-tick rule `count` is how
+long the condition stood, 44.8M on an EVIL_TWIN pair of one detail
+change); then the closed ones, newest last seen first. A row under 20%
+confidence is drawn muted, display only, its order and severity
+unchanged; a CRIT row never is (EVIL_TWIN keeps CRIT on a hard
+signal that a forged 802.11k claim and a copied OUI take to 5%).
 
 Filters: state (open, closed, all), severity, type (by name or
 number; the dropdown is the facets, groups per type in the window),
@@ -2612,10 +2620,25 @@ naming it. `/api/alert?id=` answers all six sections:
   written for all 90 types, each step resting on a corpus document
   that cites the type, "none; mitigate by ..." where no vendor fix
   exists.
-- **Evidence**: severity history, count and observations, incidents,
-  first and last seen, when and why it closed, whether sloth saved a
-  pcap (only the stream says), and the detail text, for an audited
-  type only (below).
+- **The header** (#179), under the title (type, severity, technique),
+  in reading order: the detail changes (`observations`), the times
+  opened (`incidents`), first and last seen and the span between, the
+  rule's `confidence` and `rule_reason`, and only then `count`, as
+  evaluations with a tooltip saying what they are. The answer's own
+  member order follows: `observations`, `incidents`, `sev_history`,
+  `confidence`, `rule_reason`, then `count` and `latest_count`, so the
+  copy-JSON bundle's `alert.page` reads the same way; no member is
+  renamed. `confidence` is the stream record's own field; `rule_reason`
+  is EVIL_TWIN's or KARMA_AP's verdict phrase ("vendor OUI differs",
+  "candidate, uncorroborated", ...), matched at ingest against a table
+  of the rule's literals (`web_alertfmt.h`) in the text after the
+  detail's last quote, so what is served is the table's word, never
+  the detail's bytes, and it is served even where the detail is
+  withheld. sloth.db keeps neither: both are `null` for a row the
+  stream does not hold. `reason` is unchanged: why an incident closed.
+- **Evidence**: severity history, when and why it closed, whether sloth
+  saved a pcap (only the stream says), and the detail text, for an
+  audited type only (below).
 - **History of this alert**: every incident of the key, newest first,
   incidents less than 30 minutes apart folded into one run, each run a
   link to its newest incident.
@@ -3101,7 +3124,15 @@ is read, and the socket closed rather than drained), the **body** (the
 stream's own JSON decoder: one flat object, `400 bad_body`; a member
 the route does not take `400 unknown_member` naming it), and each
 member to its bound (`note` 240 bytes, `by` 32, a name 64, a label 32;
-an over-long value is `400 too_long`, never cut; a control byte, or a
+an over-long value is `400 too_long`, never cut, and on
+`/api/frrs/triage` the refusal carries the member, the bytes sent and
+the bound, `{"error":"too_long","member":"note","length":242,"limit":240}`,
+never the text (#181); the page says "note too long: 242 of 240 bytes"
+beside the buttons, counts the note in bytes as it is typed (the
+field's `maxlength` is the same 240, but counts UTF-16 units, so 121
+accented letters fit the field and not the server), sends no note over
+the bound, marks a change pending until the server answers and draws
+the history from the server's rows only; a control byte, or a
 bidirectional embedding or isolate control (U+202A to U+202E, U+2066
 to U+2069), `400 bad_text`; addresses canonical). Then `404 no_such_alert`,
 `404 no_such_platform`, `409 duplicate_name`, `409 unit_depth` (a

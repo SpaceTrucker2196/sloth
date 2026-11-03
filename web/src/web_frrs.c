@@ -1830,6 +1830,29 @@ frrs_tri_ctx_t *frrs_tri_begin(web_frrs_t *f, long long now_s) {
 void frrs_tri_end(frrs_tri_ctx_t *x, int committed) { (void)x; (void)committed; }
 #endif
 
+/* A text member over its bound, refused with the bound and the length
+ * that was sent, both in bytes of UTF-8 (#181): the page says "note too
+ * long: N of M" from these, and a browser's maxlength counts UTF-16
+ * units, so a note of 230 characters with a few accents in it can pass
+ * the field and still be over. The text itself is never echoed. */
+static int text_refused(const web_jrec_t *r, const char *member, size_t max, const char *why,
+                        char *body, size_t cap, size_t *len, int *status) {
+    const web_jfield_t *f = web_jl_get(r, member);
+    if (strcmp(why, "too_long") != 0 || !f)
+        return frrs_error(400, why, member, body, cap, len, status);
+    web_jw_t w;
+    web_jw_init(&w, body, cap);
+    web_jw_raw(&w, "{\"error\":\"too_long\",\"member\":");
+    web_jw_str(&w, member);
+    web_jw_raw(&w, ",\"length\":");     web_jw_int(&w, (long long)f->slen);
+    web_jw_raw(&w, ",\"limit\":");      web_jw_int(&w, (long long)max);
+    web_jw_raw(&w, "}\n");
+    if (w.overflow) return -1;
+    *len = w.len;
+    *status = 400;
+    return 0;
+}
+
 static int post_triage(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
                        const char *peer, long long now_s, char *body, size_t cap,
                        size_t *len, int *status) {
@@ -1843,9 +1866,9 @@ static int post_triage(const web_m4_t *m, web_live_t *live, const web_jrec_t *r,
     if (!frrs_text(r, "state", 12, sw, &why))
         return frrs_error(400, why, "state", body, cap, len, status);
     if (!frrs_text(r, "note", WEB_FRRS_NOTE_MAX, note, &why))
-        return frrs_error(400, why, "note", body, cap, len, status);
+        return text_refused(r, "note", WEB_FRRS_NOTE_MAX, why, body, cap, len, status);
     if (!frrs_text(r, "by", WEB_FRRS_BY_MAX, by, &why))
-        return frrs_error(400, why, "by", body, cap, len, status);
+        return text_refused(r, "by", WEB_FRRS_BY_MAX, why, body, cap, len, status);
     if (!id[0]) return frrs_error(400, "missing_id", "id", body, cap, len, status);
     int state = -1, via = WEB_TRI_VIA_MANUAL;
     for (int s = 0; s < WEB_TRI_COUNT; s++) if (!strcmp(sw, STATE_WORD[s])) state = s;

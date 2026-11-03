@@ -88,10 +88,167 @@ static void test_page_carries_the_alert_views(void) {
     WT_LACKS(p, "document.write");
 }
 
+/* The page's handle of a stream incident, by sloth's incident_id. */
+static void hid_q(const web_live_t *l, const char *iid, char *q, size_t cap) {
+    q[0] = '\0';
+    for (int i = 0; i < l->ninc; i++)
+        if (!strcmp(l->inc[i].id, iid)) snprintf(q, cap, "id=s%s", l->inc[i].hid);
+}
+
+/* #179: what the alert did leads, count trails. Four open incidents in
+ * the stream, as src/jsonl.c writes the lifecycle records:
+ *   e1  EVIL_TWIN same-security WARN, the newest change: count 10^7,
+ *       one detail change, one incident, conf 20 "vendor OUI differs"
+ *   k1  KARMA_AP WARN, older: count 5, forty detail changes, conf 35
+ *       "candidate, uncorroborated"
+ *   c1  EVIL_TWIN attack chain CRIT whose SSID spells a same-security
+ *       verdict ("conf 95% - attacker-tool OUI present")
+ *   x1  CLEARTEXT_CRED WARN whose detail spells one too
+ * Neither EVIL_TWIN's nor KARMA_AP's detail is audited, so both are
+ * withheld, and the confidence and the phrase are shown all the same.
+ *
+ * Seen red, each by a one-line mutant restored by the inverse edit:
+ * by_open() without its observations comparison (e1 listed ahead of
+ * k1); count also written ahead of observations in web_alert_route()
+ * (the order assertions); web_alert_reason_of() searching from the
+ * detail's start instead of after its last quote (c1 answered
+ * "attacker-tool OUI present"); its type comparison removed (x1
+ * answered "vendor OUI differs"); web_alert_detail_ok() answering 1
+ * (HomeNet on e1's page). Runs without SQLite too: the stream alone
+ * answers both routes. */
+static void test_observations_lead_count(void) {
+    web_live_t *l = calloc(1, sizeof(*l));
+    WT_ASSERT(l != NULL);
+    if (!l) return;
+    web_live_init(l, "unix:/t/s.sock");
+    web_live_sock_connected(l, 0);
+    web_feed_t f;
+    memset(&f, 0, sizeof(f));
+    web_feed_reset(&f);
+    int et = web_akb_find("EVIL_TWIN"), ka = web_akb_find("KARMA_AP");
+    int cr = web_akb_find("CLEARTEXT_CRED");
+    WT_ASSERT(et >= 0 && ka >= 0 && cr >= 0);
+    WT_EQ(web_alert_detail_ok(et), 0);
+    WT_EQ(web_alert_detail_ok(ka), 0);
+    char b[4096];
+    int n = snprintf(b, sizeof(b),
+        "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"b0b0\",\"key\":\"karma:02:00:00:00:00:03\","
+        "\"title\":\"KARMA_AP\",\"detail\":\"KARMA BSSID 02:00:00:00:00:03: 5 SSIDs, conf 35%% -"
+        " candidate, uncorroborated\",\"sev\":1,\"ty\":%d,\"observations\":40,\"count\":5,"
+        "\"first_detected\":%lld,\"confidence\":35}\n"
+        "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"c0c0\",\"key\":\"twin-chain:x\","
+        "\"title\":\"EVIL_TWIN\",\"detail\":\"'a conf 95%% - attacker-tool OUI present b' attack-in-progress:"
+        " real=02:00:00:00:00:04 twin=02:00:00:00:00:05 [WPA2]\",\"sev\":2,\"ty\":%d,"
+        "\"observations\":3,\"count\":12,\"first_detected\":%lld}\n"
+        "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"d0d0\",\"key\":\"cred:x\","
+        "\"title\":\"CLEARTEXT_CRED\",\"detail\":\"FTP user u conf 5%% - vendor OUI differs on FTP\","
+        "\"sev\":1,\"ty\":%d,\"count\":1}\n"
+        "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"a0a0\",\"key\":\"twin-fp:x\","
+        "\"title\":\"EVIL_TWIN\",\"detail\":\"'HomeNet' on 02:00:00:00:00:01 AND 02:00:00:00:00:02 [WPA2]"
+        " - suspected impersonation, conf 20%% - vendor OUI differs [class=? wired=?]\",\"sev\":1,"
+        "\"ty\":%d,\"observations\":1,\"count\":10000000,\"first_detected\":%lld,\"confidence\":20}\n",
+        T - 900, ka, T - 4000, T - 800, et, T - 800, T - 700, cr, T - 60, et, T - 60);
+    WT_ASSERT(n > 0 && (size_t)n < sizeof(b));
+    web_feed_bytes(&f, l, b, (size_t)n, 1000);
+    web_health_t h;
+    memset(&h, 0, sizeof(h));
+    h.wall_s = T;
+    h.live = l;
+    char qe[48], qk[48], qc[48], qx[48];
+    hid_q(l, "a0a0", qe, sizeof(qe));
+    hid_q(l, "b0b0", qk, sizeof(qk));
+    hid_q(l, "c0c0", qc, sizeof(qc));
+    hid_q(l, "d0d0", qx, sizeof(qx));
+    WT_ASSERT(qe[0] && qk[0] && qc[0] && qx[0]);
+
+    /* The list: the two EVIL_TWIN/KARMA WARNs by observations, the
+     * newer one with the nine-digit count second. */
+    WT_EQ(route(&h, "/api/alerts", "state=open"), 200);
+    const char *body = body_of(g_out);
+    char want[320];
+    snprintf(want, sizeof(want), "{\"id\":\"s%s\"", qk + 4);
+    const char *rk = strstr(body, want);
+    snprintf(want, sizeof(want), "{\"id\":\"s%s\"", qe + 4);
+    const char *re = strstr(body, want);
+    WT_ASSERT(rk != NULL && re != NULL && rk < re);
+    if (rk) WT_HAS(rk, "\"observations\":40,\"confidence\":35,\"count\":5,");
+    if (re) WT_HAS(re, "\"observations\":1,\"confidence\":20,\"count\":10000000,");
+
+    /* The page: observations, incidents and the severity history come
+     * before count, the first figure after the times; the confidence and
+     * the phrase with the detail withheld. */
+    WT_EQ(route(&h, "/api/alert", qe), 200);
+    body = body_of(g_out);
+    snprintf(want, sizeof(want), "\"last_seen\":%lld,\"observations\":1,\"incidents\":1,"
+             "\"sev_history\":[{\"ts\":%lld,\"sev\":1,\"ev\":\"create\"}],\"sev_changes\":1,"
+             "\"confidence\":20,\"rule_reason\":\"vendor OUI differs\",\"count\":10000000,",
+             T - 60, T - 60);
+    WT_HAS(body, want);
+    const char *po = strstr(body, "\"observations\":"), *pi = strstr(body, "\"incidents\":");
+    const char *ph = strstr(body, "\"sev_history\":"), *pc = strstr(body, "\"count\":");
+    WT_ASSERT(po && pi && ph && pc && po < pc && pi < pc && ph < pc);
+    WT_HAS(body, "\"detail\":null,\"detail_shown\":false");
+    WT_LACKS(body, "HomeNet");
+    WT_EQ(route(&h, "/api/alert", qk), 200);
+    WT_HAS(body_of(g_out), "\"confidence\":35,\"rule_reason\":\"candidate, uncorroborated\",");
+    WT_HAS(body_of(g_out), "\"detail\":null,\"detail_shown\":false");
+    /* An SSID's words are no verdict: the chain's own phrase, and none
+     * at all for a type the table does not name. */
+    WT_EQ(route(&h, "/api/alert", qc), 200);
+    WT_HAS(body_of(g_out), "\"confidence\":null,\"rule_reason\":\"attack-in-progress\",");
+    WT_EQ(route(&h, "/api/alert", qx), 200);
+    WT_HAS(body_of(g_out), "\"confidence\":null,\"rule_reason\":null,");
+
+    /* The page reads them in that order: the header's first figure is
+     * the detail changes, count last as evaluations with its tooltip;
+     * the list's changes column ahead of its evals, a muted floor under
+     * 20%. */
+    const char *p = (const char *)web_page;
+    const char *fa = strstr(p, "function alertFacts(box, j) {");
+    const char *fe = fa ? strstr(fa, "\n  }\n") : NULL;
+    WT_ASSERT(fa && fe);
+    if (fa && fe) {
+        static const char *const ORDER[] = {
+            "kvList(box, [[\"detail changes\", num(j.observations) ? fmt(j.observations)",
+            "[\"times opened\", num(j.incidents)", "[\"first seen\", stamp(j.first_seen)]",
+            "[\"last seen\", stamp(j.last_seen)]", "[\"duration\", ", "[\"confidence\", cf]",
+            "[\"reason\", typeof j.rule_reason === \"string\"", "[\"evaluations\", evs]]);",
+        };
+        const char *at = fa;
+        for (size_t i = 0; i < sizeof(ORDER) / sizeof(ORDER[0]); i++) {
+            const char *q = strstr(at, ORDER[i]);
+            if (!q || q > fe) fprintf(stderr, "    alertFacts: %s missing or out of order\n", ORDER[i]);
+            WT_ASSERT(q != NULL && q < fe);
+            if (q) at = q;
+        }
+        const char *tip = strstr(fa, "evs.title = EVAL_TIP;");
+        WT_ASSERT(tip != NULL && tip < fe);
+    }
+    WT_HAS(p, "    alertFacts($(\"ad-facts\"), j);\n");
+    const char *af = strstr(p, "id=\"ad-facts\""), *tr = strstr(p, "id=\"frrs-alert-triage\"");
+    WT_ASSERT(af && tr && af < tr);
+    const char *cob = strstr(p, "{ k: \"ob\", label: \"changes\"");
+    const char *cin = strstr(p, "{ k: \"in\", label: \"incidents\", w: 9, num: true, type: \"num\", val: function (a)");
+    const char *cev = strstr(p, "{ k: \"n\", label: \"evals\"");
+    WT_ASSERT(cob && cin && cev && cob < cin && cin < cev);
+    WT_HAS(p, "var CONF_FLOOR = 20;");
+    /* Never a CRIT: EVIL_TWIN keeps CRIT on an inventory mismatch that a
+     * copied OUI and a forged 802.11k claim take to 5%, so the floor
+     * muting it would hand the attacker the lever rules_twin.c refuses.
+     * Seen red with "&& sevOf(a.sev) < 2" dropped from lowConf(). */
+    WT_HAS(p, "function lowConf(a) { return num(a.confidence) && a.confidence < CONF_FLOOR && sevOf(a.sev) < 2; }");
+    WT_HAS(p, "cf = el(\"span\", lowConf(j) ? \"d-dim\" : \"d-normal\"");
+    WT_HAS(p, "(lowConf(a) ? \" lowconf\" : \"\")");
+    WT_HAS(p, ".alprow.lowconf, .alprow.lowconf span, .alprow.lowconf .ty { color: var(--tui-dim);");
+    web_live_destroy(l);
+    free(l);
+}
+
 #ifndef WITH_SQLITE
 
 void run_alerts_tests(void) {
     WT_RUN(test_page_carries_the_alert_views);
+    WT_RUN(test_observations_lead_count);
     /* Without SQLite the stream alone answers /api/alerts. */
     web_live_t *l = calloc(1, sizeof(*l));
     WT_ASSERT(l != NULL);
@@ -323,10 +480,12 @@ static void test_list_collapses_and_orders(void) {
     const char *b = body_of(g_out);
     WT_EQ(num_of(b, "open"), 2);
     WT_EQ(num_of(b, "open_all"), 2);
-    /* The open two, sev then newest change: the credential, the scan. */
+    /* The open two, sev then observations (#179): both WARN, the scan's
+     * two detail changes ahead of the credential's none, though the
+     * credential changed last. */
     char w1[96], w2[96], w3[96];
-    snprintf(w1, sizeof(w1), "\"rows\":[{\"id\":\"%s\",\"state\":\"open\",\"source\":\"both\"", S(IC));
-    snprintf(w2, sizeof(w2), ",{\"id\":\"%s\",\"state\":\"open\",\"source\":\"stream\"", S(IA));
+    snprintf(w1, sizeof(w1), "\"rows\":[{\"id\":\"%s\",\"state\":\"open\",\"source\":\"stream\"", S(IA));
+    snprintf(w2, sizeof(w2), ",{\"id\":\"%s\",\"state\":\"open\",\"source\":\"both\"", S(IC));
     snprintf(w3, sizeof(w3), "{\"id\":\"%s\",\"state\":\"closed\",\"source\":\"both\"", S(IB));
     const char *r1 = strstr(b, w1);
     WT_ASSERT(r1 != NULL);
@@ -342,7 +501,8 @@ static void test_list_collapses_and_orders(void) {
     WT_ASSERT(r2 < r3 && r3 < r4 && r4 < r5 && r5 < r6);
     WT_HAS(r6, "\"incidents\":7,\"reason\":null}");
     WT_HAS(r3, "\"incidents\":1,\"reason\":\"expired\"}");
-    WT_HAS(r1, "\"incidents\":2,");
+    WT_HAS(r1, "\"observations\":2,\"confidence\":null,\"count\":3,");
+    WT_HAS(r2, "\"incidents\":2,");
     WT_EQ(count_of(b, "\"type_name\":\"DEAUTH_FLOOD\""), 1);
     WT_EQ(count_of(b, "\"type_name\":\"PORT_SCAN\""), 2);
     WT_EQ(num_of(b, "total"), 6);
@@ -638,14 +798,14 @@ static void test_stream_groups_by_key(void) {
     snprintf(want, sizeof(want), "\"state\":\"open\",\"source\":\"stream\",\"type\":0,"
              "\"type_name\":\"PORT_SCAN\",\"title\":\"PORT_SCAN\",\"sev\":2,");
     WT_HAS(body, want);
-    snprintf(want, sizeof(want), "\"first_seen\":%lld,\"last_seen\":%lld,\"count\":9,"
-             "\"incidents\":3,", T - 3000, T - 100);
+    snprintf(want, sizeof(want), "\"first_seen\":%lld,\"last_seen\":%lld,\"observations\":0,"
+             "\"confidence\":null,\"count\":9,\"incidents\":3,", T - 3000, T - 100);
     WT_HAS(body, want);
     /* .61: closed twice, the newer shown, both counted. */
     snprintf(want, sizeof(want), "\"state\":\"closed\",\"source\":\"stream\"");
     WT_HAS(body, want);
-    snprintf(want, sizeof(want), "\"first_seen\":%lld,\"last_seen\":%lld,\"count\":5,"
-             "\"incidents\":2,", T - 2990, T - 1890);
+    snprintf(want, sizeof(want), "\"first_seen\":%lld,\"last_seen\":%lld,\"observations\":0,"
+             "\"confidence\":null,\"count\":5,\"incidents\":2,", T - 2990, T - 1890);
     WT_HAS(body, want);
     /* The facets count a key once. */
     WT_HAS(body, "{\"type\":0,\"name\":\"PORT_SCAN\",\"n\":2}");
@@ -1283,6 +1443,7 @@ static void test_drawer_keeps_a_slices_newest_keys(void) {
 
 void run_alerts_tests(void) {
     WT_RUN(test_page_carries_the_alert_views);
+    WT_RUN(test_observations_lead_count);
     up();
     WT_RUN(test_list_collapses_and_orders);
     WT_RUN(test_filters_and_paging);

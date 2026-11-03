@@ -381,6 +381,11 @@ a.tile:focus-visible { outline-offset: 2px; }
 .alprow.open { border-left-color: var(--sev-warn); }
 .alprow:not(.dhead):hover { background: var(--tint); }
 .alprow:focus-visible { outline-offset: -1px; }
+/* The display floor (#179): a row whose rule gives it under 20%
+ * confidence, every cell in the dim colour, its severity word too, so a
+ * 5% candidate does not read at a CRIT's volume (lowConf(): never a
+ * CRIT row). */
+.alprow.lowconf, .alprow.lowconf span, .alprow.lowconf .ty { color: var(--tui-dim); font-weight: 400; }
 .adtitle { font-size: 18px; color: var(--tui-bright); overflow-wrap: anywhere; }
 .adtitle .ty { font-size: 13px; margin-right: 8px; }
 .prose { font-size: 12px; color: var(--ink); overflow-wrap: anywhere; margin: 4px 0 10px; }

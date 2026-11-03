@@ -659,6 +659,17 @@ static void test_spliced_answers_are_byte_identical(void) {
     WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d10"), 200);
     v = alert_page(answer());
     WT_ASSERT(v && !memcmp(v, al, na) && v[na] == ',');
+    /* #179: so alert.page reads as the page does, observations,
+     * incidents and the severity history ahead of count, every name as
+     * it was (seen red with count also written ahead of observations in
+     * web_alert_route()). */
+    if (v) {
+        const char *o = strstr(v, ",\"observations\":"), *in = strstr(v, ",\"incidents\":");
+        const char *sh = strstr(v, ",\"sev_history\":[{"), *c = strstr(v, ",\"count\":");
+        WT_ASSERT(o && in && sh && c && o < c && in < c && sh < c);
+    }
+    WT_HAS(answer(), "\"confidence\":\"the rule");
+    WT_HAS(answer(), "\"rule_reason\":\"the rule");
     /* The alert names device ...:12 by its key: its drawer, nested,
      * after the page (the page's own "device" member is inside it). */
     const char *nested = v ? member(v + na, "device") : NULL;

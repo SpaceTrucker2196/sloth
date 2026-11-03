@@ -603,10 +603,66 @@ static void test_audit_refuses_aliases_and_helpers(void) {
     WT_EQ(sites, 2);
 }
 
+/* The verdict phrases (#179) are the rule's own: each one stands in
+ * src/alerts/ as a string literal in the shape its position says, so a
+ * rule reworded fails here rather than leaving the page with no reason.
+ * Seen red with "vendor OUI differs" spelled "vendor OUI differ" in
+ * web_alert_reasons[]. */
+static void test_reason_words_are_the_rules(void) {
+    load();
+    WT_ASSERT(g_nsrc > 0);
+    for (size_t r = 0; r < web_alert_reasons_n; r++) {
+        const web_ar_t *a = &web_alert_reasons[r];
+        char want[160];
+        if (a->pos == WEB_AR_TAIL) snprintf(want, sizeof(want), "\" - %s\"", a->word);
+        else if (a->pos == WEB_AR_LEAD) snprintf(want, sizeof(want), "' %s:", a->word);
+        else snprintf(want, sizeof(want), "\"%s\"", a->word);
+        int hit = 0;
+        for (int i = 0; i < g_nsrc && !hit; i++) hit = strstr(g_src[i].text, want) != NULL;
+        if (!hit) fprintf(stderr, "    %s: %s is no literal in src/alerts/\n", a->type, want);
+        WT_ASSERT(hit);
+        WT_ASSERT(web_akb_find(a->type) >= 0);
+    }
+    /* Each shape as the rule's snprintf() writes it. */
+    int et = web_akb_find("EVIL_TWIN"), ka = web_akb_find("KARMA_AP");
+    static const struct { const char *detail, *word; } C[] = {
+        { "'Guest' on 02:00:00:00:00:01[OPEN] AND 02:00:00:00:00:02[WPA2] - suspected impersonation,"
+          " conf 85% [class=impostor wired=?]", "suspected impersonation" },
+        { "'Guest' on 02:00:00:00:00:01[OPEN] AND 02:00:00:00:00:02[WPA2] - inventory-approved pair,"
+          " weak/strong split, conf 40% [class=declared wired=?]",
+          "inventory-approved pair, weak/strong split" },
+        { "'Home' on 02:00:00:00:00:01 AND 02:00:00:00:00:02 [WPA2] - suspected impersonation, conf 95%"
+          " - BSSID not in the approved inventory +not in inventory +btm-steered by 02:00:00:00:00:09"
+          " [class=impostor wired=?]", "BSSID not in the approved inventory" },
+        { "'Home' on 02:00:00:00:00:01 AND 02:00:00:00:00:02 [WPA2] - suspected impersonation, conf 5%"
+          " - same vendor OUI +same-vendor-OUI", "same vendor OUI" },
+        { "'it''s' attack-in-progress: real=02:00:00:00:00:01 twin=02:00:00:00:00:02 [WPA2]",
+          "attack-in-progress" },
+    };
+    for (size_t i = 0; i < sizeof(C) / sizeof(C[0]); i++) {
+        const char *w = web_alert_reason_word(web_alert_reason_of(et, C[i].detail, strlen(C[i].detail)));
+        if (!w || strcmp(w, C[i].word)) fprintf(stderr, "    %s -> %s\n", C[i].detail, w ? w : "(none)");
+        WT_ASSERT(w != NULL && !strcmp(w, C[i].word));
+    }
+    static const char K[] = "KARMA BSSID 02:00:00:00:00:03: 9 SSIDs, 2 in client PNLs +PMKID"
+                            " [Pineapple/medium? provisional], conf 60% - candidate, uncorroborated";
+    const char *kw = web_alert_reason_word(web_alert_reason_of(ka, K, strlen(K)));
+    WT_ASSERT(kw != NULL && !strcmp(kw, "candidate, uncorroborated"));
+    /* A corroborated KARMA_AP states no phrase; nor does a cut detail,
+     * nor a type the table does not name. */
+    static const char K2[] = "KARMA BSSID 02:00:00:00:00:03: 9 SSIDs +deauth-then-lure, conf 90%";
+    WT_EQ(web_alert_reason_of(ka, K2, strlen(K2)), 0);
+    WT_EQ(web_alert_reason_of(et, C[3].detail, 80), 0);
+    WT_EQ(web_alert_reason_of(web_akb_find("PORT_SCAN"), C[3].detail, strlen(C[3].detail)), 0);
+    WT_ASSERT(web_alert_reason_word(0) == NULL);
+    WT_ASSERT(web_alert_reason_word((int)web_alert_reasons_n + 1) == NULL);
+}
+
 void run_alertfmt_tests(void) {
     WT_RUN(test_every_listed_type_passes_the_audit);
     WT_RUN(test_credential_types_stay_withheld);
     WT_RUN(test_audit_refuses_aliases_and_helpers);
+    WT_RUN(test_reason_words_are_the_rules);
     for (int i = 0; i < g_nsrc; i++) free(g_src[i].text);
     g_nsrc = 0;
 }

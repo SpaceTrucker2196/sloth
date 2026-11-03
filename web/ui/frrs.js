@@ -111,8 +111,32 @@ var SlothFrrs = (function () {
     "bad_addr": "not an address of that kind", "store_busy": "the store is busy; try again"
   };
   function why(e) {
-    var m = e && e.message ? e.message : String(e);
+    var m = e && e.message ? e.message : String(e), b = e && e.body;
+    // A text over its bound, said with the bound (#181): the server's
+    // refusal carries both numbers, in bytes of UTF-8.
+    if (m === "too_long" && b && num(b.length) && num(b.limit))
+      return (b.member === "by" ? "name" : "note") + " too long: " + b.length + " of " + b.limit +
+        " bytes; nothing was saved";
     return Object.prototype.hasOwnProperty.call(WHY, m) ? WHY[m] : "error: " + m;
+  }
+
+  // The note as the server measures it, in bytes of UTF-8 against
+  // WEB_FRRS_NOTE_MAX, which the field's maxlength carries (test_frrs.c
+  // holds the two equal). maxlength counts UTF-16 units, so a note with
+  // accents in it can fit the field and not the server: the counter
+  // says bytes, and a note over them is never sent.
+  function bytes(s) { return new TextEncoder().encode(s).length; }
+  function noteMax() { var n = $("frrs-note"); return n && n.maxLength > 0 ? n.maxLength : 240; }
+  function noteCount() {
+    var n = $("frrs-note"), c = $("frrs-note-n");
+    if (!n || !c) return;
+    var b = bytes(n.value.trim()), m = noteMax();
+    c.textContent = n.value ? b + " of " + m + " bytes" : "";
+    c.classList.toggle("sev2", b > m);
+  }
+  function noteClear() {
+    if ($("frrs-note")) $("frrs-note").value = "";
+    noteCount();
   }
 
   // ── what the server says about writes, and the open-alerts tile ──
@@ -170,7 +194,16 @@ var SlothFrrs = (function () {
     var b = { id: id, state: state };
     if (note) b.note = note;
     if (by) b.by = by;
-    if (msg) msg.textContent = "saving";
+    if (note && bytes(note) > noteMax()) {
+      var big = new Error("too_long");
+      big.body = { member: "note", length: bytes(note), limit: noteMax() };
+      if (msg) msg.textContent = why(big);
+      return Promise.reject(big);
+    }
+    // Nothing is drawn from the request (#181): the state and the
+    // history change only once the server has the row, and until then
+    // the line says the change is pending.
+    if (msg) msg.textContent = "pending: not in the store until the server confirms it";
     return post("/api/frrs/triage", b).then(function (j) {
       S.st[id] = j.current;
       if (msg) msg.textContent = "";
@@ -180,6 +213,9 @@ var SlothFrrs = (function () {
       return j;
     }).catch(function (e) {
       if (msg) msg.textContent = why(e);
+      // Refused or failed: the panel is read again, so what it shows
+      // is what the store holds, the refusal kept beside the buttons.
+      if (S.onChange) S.onChange(id);
       throw e;
     });
   }
@@ -196,9 +232,7 @@ var SlothFrrs = (function () {
         e.stopPropagation();
         e.preventDefault();
         var note = always && $("frrs-note") ? $("frrs-note").value.trim() : "";
-        act(id, state, note, msg).then(function () {
-          if (always && $("frrs-note")) $("frrs-note").value = "";
-        }, function () {});
+        act(id, state, note, msg).then(function () { if (always) noteClear(); }, function () {});
       });
       x.addEventListener("keydown", function (e) { e.stopPropagation(); });
       box.appendChild(x);
@@ -229,7 +263,7 @@ var SlothFrrs = (function () {
       e.stopPropagation();
       e.preventDefault();
       act(id, "recommended", always && $("frrs-note") ? $("frrs-note").value.trim() : "", msg)
-        .then(function () { if (always && $("frrs-note")) $("frrs-note").value = ""; }, function () {});
+        .then(function () { if (always) noteClear(); }, function () {});
     });
     rb.addEventListener("keydown", function (e) { e.stopPropagation(); });
     box.appendChild(rb);
@@ -399,6 +433,10 @@ var SlothFrrs = (function () {
           { k: "nt", label: "note", w: 24, flex: true, type: "text", val: hk("note") },
           { k: "by", label: "by, from", w: 22, type: "text", val: hk("by") }
         ] });
+      // One line for the panel's outcome, kept across its redraws, so a
+      // refusal stays beside the buttons after the panel is read again.
+      var msg = el("span", "sub tri-msg", "");
+      noteCount();
       var load = function () {
         H.getJSON("/api/frrs/history?id=" + encodeURIComponent(id)).then(function (h) {
           if (gen !== S.gen) return;
@@ -409,7 +447,7 @@ var SlothFrrs = (function () {
           // button is drawn from it, not from a second ask that would
           // redraw only the rows registered with reg().
           if (S.types[id] && h.recommend && typeof h.recommend === "object") S.rec[S.types[id]] = h.recommend;
-          var cur = $("frrs-tri-cur"), msg = el("span", "sub tri-msg", "");
+          var cur = $("frrs-tri-cur");
           clear(cur);
           cur.appendChild(chip(h.current));
           if (h.current && h.current.state !== "untriaged") {
@@ -1019,6 +1057,7 @@ var SlothFrrs = (function () {
       if (typeof by === "string" && by.length <= 32) $("frrs-by").value = by;
       $("frrs-by").addEventListener("input", function () { H.prefSet("frrs.by", $("frrs-by").value || null); });
     }
+    if ($("frrs-note")) $("frrs-note").addEventListener("input", noteCount);
     if ($("al-triage")) $("al-triage").addEventListener("change", function () {
       H.prefSet("ctl.al-triage", $("al-triage").value);
       H.alertsReload();

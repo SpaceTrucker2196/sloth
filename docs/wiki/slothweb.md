@@ -107,7 +107,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-03 (#175: sloth.db v11's `alert_incidents` allow-listed, its key and incident_id predicate-only, `WEB_SDB_SCHEMA_MAX` 11; `/api/history/alerts` per incident in the range; the alert page's runs per incident and its `db_incident`); 2026-11-03 (the fourth triage verdict `known`, known good, drawn green); 2026-11-03 (BLE Devices: anonymous advertising one entry and one advertiser, always in Unknown, no proximity row and no read slot; A1 across the 10 s slot measured, quiet, no change); 2026-11-02 (the BLE Devices waterfall's review fixes: its own high-water table, trackers read first, the grade at each row's announced power, the no-sensor and Ubertooth-only states); 2026-11-02 (the BLE Devices waterfall: device classes by time as the WiFi channel mix draws channels, advertisers by time graded by sloth's distance bands, the drawer's signal over the window; the `BLE Devices` and `GPS Sat` labels; `ble_device` re-sent once a 10 s slot while heard); 2026-11-02 (copy JSON's `location` filled: a device's `/api/positions` answer, an alert's page `loc` stamp, both spliced, never re-rendered); 2026-11-02 (copy JSON, first landed 2026-10-27 as `/api/bundle` and a copy and download button on every detail view: rebased onto triage, FRRS, BLE, vendor research and the alert's proof; kinds `ble` and `platform` through the views' own hooks; `frrs`, an alert's `triage`, `vendor_research`, `assessment` and `evidence` filled from their routes' answers; records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
+**Last updated**: 2026-11-03 (#175: sloth.db v11's `alert_incidents` allow-listed, its key and incident_id predicate-only, `WEB_SDB_SCHEMA_MAX` 11; `/api/history/alerts` per incident in the range; the alert page's runs per incident and its `db_incident`); 2026-11-03 (#179: the alert page leads with observations, incidents, the times, confidence and the rule's phrase, count last as evaluations; the list sorted by severity then observations, a muted floor under 20% for a row below CRIT; `/api/alert`'s members in that order); 2026-11-03 (#181: a triage note over its 240 bytes refused beside the buttons with both numbers, counted in bytes as typed, never drawn before the server confirms it); 2026-11-03 (the fourth triage verdict `known`, known good, drawn green); 2026-11-03 (BLE Devices: anonymous advertising one entry and one advertiser, always in Unknown, no proximity row and no read slot; A1 across the 10 s slot measured, quiet, no change); 2026-11-02 (the BLE Devices waterfall's review fixes: its own high-water table, trackers read first, the grade at each row's announced power, the no-sensor and Ubertooth-only states); 2026-11-02 (the BLE Devices waterfall: device classes by time as the WiFi channel mix draws channels, advertisers by time graded by sloth's distance bands, the drawer's signal over the window; the `BLE Devices` and `GPS Sat` labels; `ble_device` re-sent once a 10 s slot while heard); 2026-11-02 (copy JSON's `location` filled: a device's `/api/positions` answer, an alert's page `loc` stamp, both spliced, never re-rendered); 2026-11-02 (copy JSON, first landed 2026-10-27 as `/api/bundle` and a copy and download button on every detail view: rebased onto triage, FRRS, BLE, vendor research and the alert's proof; kinds `ble` and `platform` through the views' own hooks; `frrs`, an alert's `triage`, `vendor_research`, `assessment` and `evidence` filled from their routes' answers; records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
 listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
@@ -939,6 +939,33 @@ header, whose layout is #179's. The first three are extracted at
 build time by `web/tools/alertkb.c` from the files themselves, never
 copied, and `web/tests/test_alertkb.c` holds every type to having them.
 
+**What the alert did leads, count trails (#179, 2026-11-03).** For a
+per-tick rule `count` is how long the condition stood, about four a
+second: three EVIL_TWIN bundles copied on the reference host read
+44.8M, 44.9M and 39M against `observations` of 1, 1839 and 1839, and
+the operator read them as attack intensity. The page's header now reads,
+under the type, severity and technique: the detail changes
+(`observations`), the times opened (`incidents`), first and last seen
+and the span, the rule's `confidence` and its verdict phrase
+(`rule_reason`), and `count` last, labelled evaluations, with a tooltip.
+`/api/alert` writes its members in that order, so the copy-JSON
+bundle's `alert.page` does too; nothing is renamed, since the names are
+contract. `rule_reason` is EVIL_TWIN's or KARMA_AP's own phrase ("vendor
+OUI differs", "candidate, uncorroborated", "attack-in-progress", ...),
+matched at ingest against a table of the rule's literals in the text
+after the detail's last quote (every remote string those rules write is
+a quoted SSID), so the word served is the table's, never the detail's
+bytes, and it is shown where the detail is withheld; a test holds every
+word to a literal in `src/alerts/rules_twin.c`. Both fields are the
+stream's: sloth.db keeps neither. The Alerts page sorts its open rows
+by severity, then observations, then the newest change, never by count,
+shows a changes column ahead of incidents and the evals column, and
+draws a row under 20% confidence muted (display only), never a CRIT
+one: EVIL_TWIN keeps CRIT on a hard signal however far context lowers
+the percent (an uninventoried BSSID with a copied OUI and a forged
+802.11k claim reads 5%), and muting it would make that claim the
+lever the rule refuses it.
+
 M4's rules hold. `alerts.key` stays predicate-only: the reads
 group by it and match on it, a list row is named by an opaque
 `d<rowid>` or `s<handle>`, and a stream incident's key is kept in
@@ -1174,6 +1201,21 @@ the routes with their request and response shapes are
   hidden, and the open-alerts tile keeps its count and says how many of
   it are triaged out. `/api/alerts?triage=` filters and counts; without
   it the answer is as before. Triage never reaches sloth.
+- **A note over its bound is refused where the operator sees it (#181,
+  2026-11-03).** The bound is 240 bytes of UTF-8; the field's
+  `maxlength` is 240 too, but a browser counts UTF-16 units, so 121
+  accented letters fit the field and not the server, and on 1.8.5 seven
+  triages with notes of roughly 230 and 330 characters were refused while
+  the page looked done. (That accounts for the 230s, not the 330: no
+  note over 240 characters can be typed into the field, so that one was
+  set by script, which `maxlength` does not bind, or posted directly.
+  The page now measures what it is about to send, whatever set it.)
+  The refusal now carries the bytes sent and the bound
+  (`"length":242,"limit":240`, never the text), the page says
+  "note too long: N of M bytes" beside the buttons, counts the note in
+  bytes as it is typed, sends no note over the bound, marks a change
+  pending until the server answers, reads the panel again after a
+  refusal, and draws the history from the server's rows only.
 - **Known** (owner request 2026-11-03: "a Green tag for known or a
   sigint term for known good traffic"): a fourth verdict, the button
   `known`, drawn green. Known good — expected traffic from a friendly
@@ -1255,7 +1297,7 @@ seven one-line guarded hook points, so the parallel slices changing
 `web/src/web_frrs_report.c`, `web/src/web_frrs_tacdb.c`,
 `web/ui/frrs.js`, `web/tests/test_frrs.c`, the owner's request of
 2026-10-27.
-**Last updated**: 2026-11-02 (the Report's RSSI against time: `rf.rssi.*`, Q7 answered); 2026-11-02 (second review: history and the table's
+**Last updated**: 2026-11-03 (#181: a note over its bound refused with the bytes sent and the bound, said beside the buttons, counted as typed, no row before the server confirms); 2026-11-02 (the Report's RSSI against time: `rf.rssi.*`, Q7 answered); 2026-11-02 (second review: history and the table's
 cap fold instead of refusing, no row for an unchanged write, noise
 recommended only for a high false-positive risk and a noisy count, the
 import prepared once and bounded at 1,000 triage lines, imported `by`

@@ -160,6 +160,11 @@ typedef struct {
     int       match_port;
     long long first_ts, last_ts, closed_ts;   /* closed_ts -1 open */
     long long count, observations, reopen;
+    /* The rule's confidence, percent, 0 when its record carries none
+     * (#89: most rules have nothing to qualify); and the verdict phrase
+     * its detail states, as web_alert_reason_of() answers (0 none), the
+     * one thing kept from a withheld detail (#179, web_alertfmt.h). */
+    int       confidence, why;
     int       pcap;                    /* sloth wrote a pcap of it */
     /* That pcap's file name: the basename of the record's pcap_path,
      * kept only when it is exactly sloth's alert-pcap name

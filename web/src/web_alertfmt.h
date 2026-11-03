@@ -46,4 +46,47 @@ extern const char *const web_alert_fmt_banned[];
  * JSONL `ty`) shown? 0 for an unknown or negative type. */
 int web_alert_detail_ok(long long type);
 
+/* The rule's own verdict words, read out of a detail that may itself be
+ * withheld (#179). EVIL_TWIN and KARMA_AP state why they fired as a
+ * fixed phrase inside the detail ("conf 20% - vendor OUI differs");
+ * sloth's JSONL carries the confidence as a field of its own but not
+ * the phrase. The page can show the phrase without the detail because
+ * what leaves slothweb is a word of web_alert_reasons[], never a byte
+ * of the detail: the detail is only compared against the table, at
+ * ingest, and then dropped as before.
+ *
+ * Only the text after the detail's last ' is compared. Every remote
+ * string these two rules format is an SSID, and each is written quoted
+ * ('%.16s'), so the closing quote is the rule's and all that
+ * follows it is the rule's own text: MACs, the cipher sloth parsed, the
+ * class and wired labels, literals. An SSID spelling "conf 95% -
+ * attacker-tool OUI present" therefore names nothing. KARMA_AP's detail
+ * quotes no SSID at all.
+ *
+ * pos says where the phrase stands against the last "conf N%":
+ *   WEB_AR_AFTER   right after "conf N% - " (EVIL_TWIN same-security)
+ *   WEB_AR_BEFORE  " - <word>, conf N%" (EVIL_TWIN weak/strong)
+ *   WEB_AR_TAIL    "conf N% - <word>" ending the detail (KARMA_AP's
+ *                  uncorroborated WARN)
+ *   WEB_AR_LEAD    the text after the quote opening " <word>:", with
+ *                  no confidence in it (EVIL_TWIN's attack chain)
+ * web/tests/test_alertfmt.c holds every word to a string literal in
+ * src/alerts/rules_twin.c, so a reworded rule fails the suite instead
+ * of going quietly unmatched. */
+enum { WEB_AR_AFTER = 1, WEB_AR_BEFORE, WEB_AR_TAIL, WEB_AR_LEAD };
+typedef struct {
+    const char *type;        /* the ALERT_TYPE_ suffix */
+    const char *word;        /* the rule's phrase, as rules_twin.c has it */
+    int         pos;         /* WEB_AR_* */
+} web_ar_t;
+
+extern const web_ar_t web_alert_reasons[];
+extern const size_t   web_alert_reasons_n;
+
+/* The phrase a detail of this type states (at most n bytes of it), as
+ * 1 + its index in web_alert_reasons[]; 0 when it states none. */
+int web_alert_reason_of(long long type, const char *detail, size_t n);
+/* The phrase for web_alert_reason_of()'s answer, NULL for 0. */
+const char *web_alert_reason_word(int r);
+
 #endif

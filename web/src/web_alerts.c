@@ -190,10 +190,21 @@ typedef struct {
     long long tri_ts;
 } row_t;
 
+/* Severity, then observations, then the newest change; never count
+ * (#179): for a per-tick rule count is how long the condition stood,
+ * so it would rank a pair that merely sat in the beacon table for a
+ * week above one whose detail kept moving. */
 static int by_open(const void *x, const void *y) {
     const row_t *a = x, *b = y;
     if (a->inc->sev != b->inc->sev) return b->inc->sev - a->inc->sev;
+    if (a->inc->observations != b->inc->observations)
+        return a->inc->observations < b->inc->observations ? 1 : -1;
     return a->inc->seq < b->inc->seq ? 1 : a->inc->seq > b->inc->seq ? -1 : 0;
+}
+
+static void jw_conf(web_jw_t *w, const web_live_inc_t *e) {
+    web_jw_raw(w, ",\"confidence\":");
+    if (e && e->confidence > 0) web_jw_int(w, e->confidence); else web_jw_raw(w, "null");
 }
 
 static int by_last(const void *x, const void *y) {
@@ -263,6 +274,8 @@ static void row_json(web_jw_t *w, const row_t *r, int first, int tri) {
         if (e->match_ip[0]) web_jw_int(w, e->match_port); else web_jw_raw(w, "null");
         web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, k.first_seen);
         web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, e->last_ts);
+        web_jw_raw(w, ",\"observations\":"); web_jw_int(w, e->observations);
+        jw_conf(w, e);
     } else {
         const web_adb_group_t *g = &r->g;
         web_adb_totals_t t0;
@@ -285,6 +298,9 @@ static void row_json(web_jw_t *w, const row_t *r, int first, int tri) {
         if (g->ip[0] && g->port >= 0) web_jw_int(w, g->port); else web_jw_raw(w, "null");
         web_jw_raw(w, ",\"first_seen\":"); web_jw_int(w, k.first_seen);
         web_jw_raw(w, ",\"last_seen\":");  web_jw_int(w, g->last_seen);
+        /* Both are the stream's: sloth.db keeps neither. */
+        web_jw_raw(w, ",\"observations\":null");
+        jw_conf(w, NULL);
     }
     /* The key's, all time: the alert's page shows the same two. */
     web_jw_raw(w, ",\"count\":");      web_jw_int(w, k.count);
@@ -914,14 +930,38 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
     if (ip && ip[0] && port >= 0) web_jw_int(&w, port); else web_jw_raw(&w, "null");
     web_jw_raw(&w, ",\"first_seen\":"); web_jw_int(&w, first);
     web_jw_raw(&w, ",\"last_seen\":");  web_jw_int(&w, last);
+    /* What the alert did before how long the rule kept matching (#179):
+     * observations, incidents and the severity history ahead of count,
+     * in this answer and so in the bundle's alert.page, which is this
+     * answer as it stands. Nothing renamed: the names are contract. */
+    web_jw_raw(&w, ",\"observations\":");
+    if (have_inc) web_jw_int(&w, e->observations); else web_jw_raw(&w, "null");
+    web_jw_raw(&w, ",\"incidents\":");  web_jw_int(&w, k.incidents);
+    web_jw_raw(&w, ",\"sev_history\":[");
+    if (have_inc) {
+        int nk = e->nsev < WEB_LIVE_SEVH ? e->nsev : WEB_LIVE_SEVH;
+        for (int i = 0; i < nk; i++) {
+            web_jw_raw(&w, i ? ",{\"ts\":" : "{\"ts\":");
+            web_jw_int(&w, e->sevh[i].ts);
+            web_jw_raw(&w, ",\"sev\":"); web_jw_int(&w, sev_clamp(e->sevh[i].sev));
+            web_jw_raw(&w, ",\"ev\":");  web_jw_str(&w, ev_word(e->sevh[i].ev));
+            web_jw_raw(&w, "}");
+        }
+    }
+    web_jw_raw(&w, "],\"sev_changes\":");
+    web_jw_int(&w, have_inc ? e->nsev : 0);
+    /* The rule's confidence and its verdict phrase, the stream's (sloth
+     * writes neither into sloth.db): structured, so shown whether or
+     * not the detail is (web_alertfmt.h). rule_reason is not "reason",
+     * which says why an incident closed. */
+    jw_conf(&w, have_inc ? e : NULL);
+    web_jw_raw(&w, ",\"rule_reason\":");
+    jw_str_or_null(&w, have_inc ? web_alert_reason_word(e->why) : NULL);
     /* count and incidents are the key's, as its list row shows them;
      * latest_count is the one incident's this page opened on. */
     web_jw_raw(&w, ",\"count\":");      web_jw_int(&w, k.count);
     web_jw_raw(&w, ",\"latest_count\":");
     web_jw_int(&w, have_inc ? e->count : row.count);
-    web_jw_raw(&w, ",\"observations\":");
-    if (have_inc) web_jw_int(&w, e->observations); else web_jw_raw(&w, "null");
-    web_jw_raw(&w, ",\"incidents\":");  web_jw_int(&w, k.incidents);
     web_jw_raw(&w, ",\"closed_at\":");
     if (have_inc && e->closed_ts >= 0) web_jw_int(&w, e->closed_ts); else web_jw_raw(&w, "null");
     web_jw_raw(&w, ",\"reason\":");     jw_str_or_null(&w, have_inc ? e->reason : NULL);
@@ -940,19 +980,6 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
     web_loc_json(&w, have_inc && e->loc.has ? &e->loc
                    : have_row && row.loc.has ? &row.loc
                    : nh > 0 && hist[0].loc.has ? &hist[0].loc : NULL);
-    web_jw_raw(&w, ",\"sev_history\":[");
-    if (have_inc) {
-        int nk = e->nsev < WEB_LIVE_SEVH ? e->nsev : WEB_LIVE_SEVH;
-        for (int i = 0; i < nk; i++) {
-            web_jw_raw(&w, i ? ",{\"ts\":" : "{\"ts\":");
-            web_jw_int(&w, e->sevh[i].ts);
-            web_jw_raw(&w, ",\"sev\":"); web_jw_int(&w, sev_clamp(e->sevh[i].sev));
-            web_jw_raw(&w, ",\"ev\":");  web_jw_str(&w, ev_word(e->sevh[i].ev));
-            web_jw_raw(&w, "}");
-        }
-    }
-    web_jw_raw(&w, "],\"sev_changes\":");
-    web_jw_int(&w, have_inc ? e->nsev : 0);
     web_jw_raw(&w, ",\"device\":{\"mac\":"); jw_str_or_null(&w, mac);
     web_jw_raw(&w, ",\"ip\":");             jw_str_or_null(&w, ip);
     web_jw_raw(&w, "}");

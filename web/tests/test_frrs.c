@@ -506,6 +506,52 @@ static void test_body_rules(void) {
     env_close();
 }
 
+/* #181: a note over the server's bound is refused with the bound and
+ * what was sent, in bytes, never the text, and the history is exactly
+ * what it was. 121 accented letters are 121 characters, under the
+ * field's maxlength, and 242 bytes, over the server's: the case the
+ * page used to lose. The unchanged history seen red with frrs_text()'s
+ * bound made `f->slen > max + 2` (the 241-byte note stored, the history
+ * one row longer); the text's absence from the refusal seen red with
+ * web_jw_strn(&w, f->str, f->slen) added to text_refused(). */
+static void test_note_over_limit_refused_with_its_limit(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    char id[40], q[64], b[2048], note[WEB_FRRS_NOTE_MAX * 2 + 8];
+    static char before[16384];
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"noise\",\"note\":\"first\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);
+    snprintf(q, sizeof(q), "id=%s", id);
+    WT_EQ(get("/api/frrs/history", q), 200);
+    snprintf(before, sizeof(before), "%s", body_of(g_out));
+    WT_EQ(count_of(before, "\"prev_state\":"), 2);      /* current + one row */
+
+    memset(note, 'n', WEB_FRRS_NOTE_MAX + 1);
+    note[WEB_FRRS_NOTE_MAX + 1] = '\0';
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"false\",\"note\":\"%s\"}", id, note);
+    WT_EQ(post("/api/frrs/triage", b), 400);
+    char want[128];
+    snprintf(want, sizeof(want), "{\"error\":\"too_long\",\"member\":\"note\",\"length\":%d,"
+             "\"limit\":%d}", WEB_FRRS_NOTE_MAX + 1, WEB_FRRS_NOTE_MAX);
+    WT_HAS(body_of(g_out), want);
+    WT_LACKS(body_of(g_out), "nnnn");
+    WT_EQ(get("/api/frrs/history", q), 200);
+    WT_EQ(strcmp(body_of(g_out), before), 0);
+
+    size_t o = 0;
+    for (int i = 0; i < 121; i++) { note[o++] = (char)0xc3; note[o++] = (char)0xa9; }
+    note[o] = '\0';
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"false\",\"note\":\"%s\"}", id, note);
+    WT_EQ(post("/api/frrs/triage", b), 400);
+    snprintf(want, sizeof(want), "\"length\":242,\"limit\":%d}", WEB_FRRS_NOTE_MAX);
+    WT_HAS(body_of(g_out), want);
+    WT_EQ(get("/api/frrs/history", q), 200);
+    WT_EQ(strcmp(body_of(g_out), before), 0);
+    WT_HAS(body_of(g_out), "\"current\":{\"state\":\"noise\"");
+    env_close();
+}
+
 /* A GET can never write: a write path answers POST only, a read path
  * GET only. Seen red with the `post != rq->is_post` check removed from
  * web_frrs_route() (the GET then a 404, not the 405). */
@@ -2327,7 +2373,30 @@ static void test_page_module(void) {
     WT_HAS(m, "line.appendChild(el(\"span\", SPARK_CLS[tk] || \"d-normal\", SPARK[l] || \"_\"));");
     WT_HAS(m, "if (k === \"series_rssi\" && f.v && typeof f.v === \"object\" && Array.isArray(f.v.cells)) {");
     WT_HAS(m, "a sloth gauge, not a calibrated measurement");
+    /* #181: a note is measured in bytes, as the server does, against the
+     * field's maxlength; one over it is refused before it is sent, the
+     * server's refusal is said with both numbers next to the buttons,
+     * the change is pending until the server confirms it, and a refusal
+     * reads the panel again rather than drawing anything from the
+     * request. The history is drawn from the server's rows alone: one
+     * assignment of S.hist (seen red with
+     * `S.hist = [{ state: state, note: note }].concat(S.hist || []);`
+     * added to act(), the count then two). */
+    WT_HAS(m, "function bytes(s) { return new TextEncoder().encode(s).length; }");
+    WT_HAS(m, "return n && n.maxLength > 0 ? n.maxLength : 240;");
+    WT_HAS(m, "if (note && bytes(note) > noteMax()) {");
+    WT_HAS(m, "return (b.member === \"by\" ? \"name\" : \"note\") + \" too long: \" + b.length + \" of \" + b.limit +");
+    WT_HAS(m, "msg.textContent = \"pending: not in the store until the server confirms it\";");
+    WT_EQ(count_of(m, "if (S.onChange) S.onChange(id);"), 2);
+    WT_EQ(count_of(m, "S.hist ="), 1);
+    WT_HAS(m, "S.hist = h.rows || [];");
+    WT_HAS(m, "$(\"frrs-note\").addEventListener(\"input\", noteCount);");
     free(m);
+    /* The field carries the server's own bound, and a counter beside it. */
+    char ml[96];
+    snprintf(ml, sizeof(ml), "id=\"frrs-note\" maxlength=\"%d\"", WEB_FRRS_NOTE_MAX);
+    WT_HAS(p, ml);
+    WT_HAS(p, "id=\"frrs-note-n\"");
     /* At 480 px and under the short label shows and the long one does
      * not, so the row's last button is never cut off at 393 px (seen
      * cut off there before; re-screenshot at 393 px, review of 2026-11-02).
@@ -2444,6 +2513,7 @@ void run_frrs_tests(void) {
     WT_RUN(test_state_past_known_refused);
     WT_RUN(test_cross_origin_refused);
     WT_RUN(test_body_rules);
+    WT_RUN(test_note_over_limit_refused_with_its_limit);
     WT_RUN(test_get_cannot_write);
 #ifdef WITH_SQLITE
     WT_RUN(test_no_credential_and_no_stream_string_stored);

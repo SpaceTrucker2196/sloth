@@ -93,3 +93,79 @@ int web_alert_detail_ok(long long type) {
         if (!strcmp(web_alert_detail_audited[i].type, k->name)) return 1;
     return 0;
 }
+
+/* The verdict phrases (web_alertfmt.h), as src/alerts/rules_twin.c
+ * writes them. No phrase of a type is a prefix of another at the same
+ * position, so the first match is the only one. */
+const web_ar_t web_alert_reasons[] = {
+    { "EVIL_TWIN", "vendor OUI differs", WEB_AR_AFTER },
+    { "EVIL_TWIN", "same vendor OUI", WEB_AR_AFTER },
+    { "EVIL_TWIN", "vendor-IE fingerprint differs", WEB_AR_AFTER },
+    { "EVIL_TWIN", "attacker-tool OUI present", WEB_AR_AFTER },
+    { "EVIL_TWIN", "BSSID not in the approved inventory", WEB_AR_AFTER },
+    { "EVIL_TWIN", "suspected impersonation", WEB_AR_BEFORE },
+    { "EVIL_TWIN", "inventory-approved pair, weak/strong split", WEB_AR_BEFORE },
+    { "EVIL_TWIN", "attack-in-progress", WEB_AR_LEAD },
+    { "KARMA_AP", "candidate, uncorroborated", WEB_AR_TAIL },
+};
+const size_t web_alert_reasons_n = sizeof(web_alert_reasons) / sizeof(web_alert_reasons[0]);
+
+/* At s[0..n): "conf ", one to three digits and '%'; the length, or 0. */
+static size_t conf_at(const char *s, size_t n) {
+    if (n < 7 || memcmp(s, "conf ", 5) != 0) return 0;
+    size_t i = 5;
+    while (i < n && i < 8 && s[i] >= '0' && s[i] <= '9') i++;
+    if (i == 5 || i >= n || s[i] != '%') return 0;
+    return i + 1;
+}
+
+static int starts(const char *s, size_t n, const char *w) {
+    size_t k = strlen(w);
+    return n >= k && memcmp(s, w, k) == 0;
+}
+
+int web_alert_reason_of(long long type, const char *detail, size_t n) {
+    const web_akb_t *k = web_akb_get(type);
+    if (!k || !detail) return 0;
+    /* The rule's own text: what follows the last quote. */
+    size_t at = 0, len = 0;
+    for (; len < n && detail[len]; len++)
+        if (detail[len] == '\'') at = len + 1;
+    const char *t = detail + at;
+    size_t tn = len - at, c = 0, cl = 0;
+    /* Its last "conf N%". */
+    for (size_t i = tn; i-- > 0;)
+        if ((cl = conf_at(t + i, tn - i)) != 0) { c = i; break; }
+    for (size_t r = 0; r < web_alert_reasons_n; r++) {
+        const web_ar_t *a = &web_alert_reasons[r];
+        if (strcmp(a->type, k->name) != 0) continue;
+        size_t wl = strlen(a->word);
+        if (a->pos == WEB_AR_LEAD) {
+            if (!cl && tn > wl + 1 && t[0] == ' ' && memcmp(t + 1, a->word, wl) == 0 &&
+                t[wl + 1] == ':')
+                return (int)r + 1;
+            continue;
+        }
+        if (!cl) continue;
+        const char *e = t + c + cl;
+        size_t en = tn - c - cl;
+        if (a->pos == WEB_AR_AFTER) {
+            if (starts(e, en, " - ") && starts(e + 3, en - 3, a->word) &&
+                (en == 3 + wl || e[3 + wl] == ' '))
+                return (int)r + 1;
+        } else if (a->pos == WEB_AR_TAIL) {
+            if (en == 3 + wl && starts(e, en, " - ") && memcmp(e + 3, a->word, wl) == 0)
+                return (int)r + 1;
+        } else if (a->pos == WEB_AR_BEFORE) {
+            if (c >= wl + 5 && memcmp(t + c - 2, ", ", 2) == 0 &&
+                memcmp(t + c - 2 - wl, a->word, wl) == 0 &&
+                memcmp(t + c - 5 - wl, " - ", 3) == 0)
+                return (int)r + 1;
+        }
+    }
+    return 0;
+}
+
+const char *web_alert_reason_word(int r) {
+    return r >= 1 && (size_t)r <= web_alert_reasons_n ? web_alert_reasons[r - 1].word : NULL;
+}

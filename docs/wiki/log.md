@@ -6371,3 +6371,25 @@ key's sev, count and incidents per incident in the range, and
 (v11, *Per-incident rows*, the upsert rule, the chain), [[retention]]
 (the finding tier, the per-key bound) and [[slothweb]] (History, the
 alert page).
+
+## 2026-11-03 — The alert page leads with observations; an over-long triage note refused visibly (#179, #181)
+
+#179: slothweb's alert page and copy-JSON bundle headlined `count`,
+which for a per-tick rule is time-in-table (44.8M on an EVIL_TWIN pair
+of one detail change). The header now reads observations ("detail
+changes"), incidents ("times opened"), first and last seen, the span,
+the rule's `confidence` and its verdict phrase, then `count` as
+evaluations with a tooltip; `/api/alert` writes `observations`,
+`incidents` and `sev_history` before `count`, so `alert.page` does too,
+nothing renamed. New structured members `confidence` and `rule_reason`
+(the stream's; a word from a table of the rule's literals in
+`web_alertfmt.h`, matched after the detail's last quote, so served
+where the detail is withheld); the Alerts page sorts open rows by
+severity then observations and mutes a row under 20% confidence
+below CRIT (a CRIT at 5% is a hard signal a forged claim lowered).
+#181: a triage note over its 240 bytes is refused with the bytes sent
+and the bound and said beside the buttons; the note is counted in bytes
+as typed and none over the bound is sent; the history is drawn from the
+server's rows only. Updated [[slothweb]] and the EVIL_TWIN, KARMA_AP,
+CAM_SETUP_OUI, CAPTIVE_PORTAL and SSID_CONFUSION assessments'
+`noise_verdict` (the presentational recommendation is done).

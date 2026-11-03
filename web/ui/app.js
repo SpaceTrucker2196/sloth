@@ -4276,9 +4276,23 @@
     if (!ALP.timer) ALP.timer = setInterval(function () { if (view === "alerts" && !ALP.offset) alertsLoad(true); }, 10000);
   }
 
+  // Below this the rule itself doubts its finding (EVIL_TWIN's 5-20%
+  // same-vendor rows): drawn muted so it does not sit beside a CRIT at
+  // the same volume. Display only (#179): the row, its severity and its
+  // place in the order are the server's. Never a CRIT: EVIL_TWIN keeps
+  // CRIT on a hard signal however low the context pushes the percent
+  // (an uninventoried BSSID with a copied OUI and one forged 802.11k
+  // claim reads 5%), and src/alerts/rules_twin.c refuses to let the
+  // claim be a severity lever, so the page does not make it a volume one.
+  var CONF_FLOOR = 20;
+  function lowConf(a) { return num(a.confidence) && a.confidence < CONF_FLOOR && sevOf(a.sev) < 2; }
+  var EVAL_TIP = "evaluations: the rule's passes that found the condition still holding, " +
+    "about four a second for a per-tick rule, over every incident of the key; how long " +
+    "the condition stood, not frames, requests or how hard anyone attacked";
+
   function alertRow(a) {
     var sev = sevOf(a.sev);
-    var row = el("div", "alprow dt-row" + (a.state === "open" ? " open" : ""));
+    var row = el("div", "alprow dt-row" + (a.state === "open" ? " open" : "") + (lowConf(a) ? " lowconf" : ""));
     row.appendChild(el("span", "ty " + (sev >= 0 ? "sev" + sev : ""), sev >= 0 ? SEV_WORD[sev] : "?"));
     var t = el("span", "");
     t.appendChild(el("span", "d-bright", String(a.title)));
@@ -4298,9 +4312,15 @@
     row.appendChild(host);
     row.appendChild(el("span", "d-dim", shortStamp(a.first_seen)));
     row.appendChild(el("span", "d-dim", shortStamp(a.last_seen)));
-    row.appendChild(el("span", "n d-normal", fmt(a.count)));
+    // What the alert did leads, heat-graded; count trails it, dim, as
+    // evaluations (#179).
+    row.appendChild(el("span", "n " + (num(a.observations) && a.observations > 1 ? heatClass(0.6) : "d-dim"),
+                       num(a.observations) ? fmt(a.observations) : "-"));
     row.appendChild(el("span", "n " + (num(a.incidents) && a.incidents > 1 ? heatClass(0.6) : "d-dim"),
                        num(a.incidents) ? String(a.incidents) : "-"));
+    var evc = el("span", "n d-dim", fmt(a.count));
+    evc.title = EVAL_TIP;
+    row.appendChild(evc);
     row.appendChild(window.SlothFrrs ? SlothFrrs.cell(a, row) : el("span", "d-dim", "-"));
     row.tabIndex = 0;
     row.role = "link";
@@ -4310,7 +4330,8 @@
   }
 
   // The list is a table: the rows held, in the server's order (open
-  // first, then the newest change) until a header sorts them.
+  // first, by severity then observations, never count; then the
+  // newest change) until a header sorts them.
   var DTALP = DataTable({ id: "alertspage", label: "alerts", box: $("al-box"), head: $("al-head"),
     reset: $("al-tools"), redraw: alertsDraw, cols: [
       { k: "sev", label: "sev", w: 5, min: 3, type: "sev", val: function (a) { return a.sev; } },
@@ -4319,8 +4340,9 @@
       { k: "ip", label: "host", w: 18, type: "ip", val: function (a) { return a.ip; } },
       { k: "fs", label: "first", w: 11, type: "time", val: function (a) { return a.first_seen; } },
       { k: "ls", label: "last", w: 11, type: "time", val: function (a) { return a.last_seen; } },
-      { k: "n", label: "count", w: 7, num: true, type: "num", val: function (a) { return a.count; } },
+      { k: "ob", label: "changes", w: 8, num: true, type: "num", val: function (a) { return a.observations; } },
       { k: "in", label: "incidents", w: 9, num: true, type: "num", val: function (a) { return a.incidents; } },
+      { k: "n", label: "evals", w: 7, num: true, type: "num", val: function (a) { return a.count; } },
       { k: "tr", label: "triage", w: 10, type: "text", val: function (a) { return a.triage ? a.triage.state : null; } }
     ] });
   function alertsDraw() {
@@ -4506,7 +4528,7 @@
   function alertView() {
     var id = VP.id;
     var gen = ++AD.gen;
-    ["ad-title", "ad-what-b", "ad-why-b", "ad-fix-b", "ad-evidence-b", "ad-history-b",
+    ["ad-title", "ad-facts", "ad-what-b", "ad-why-b", "ad-fix-b", "ad-evidence-b", "ad-history-b",
      "ad-device-b", "ad-dev-alerts", "ad-dev-anoms"].forEach(clear);
     if (window.SlothLocation) window.SlothLocation.alert(null);
     drawStrip($("ad-strip"), null);
@@ -4526,6 +4548,33 @@
     });
   }
 
+  // The header under the title, in the order an operator should read it
+  // (#179): what the alert did (its detail changes, the times it opened,
+  // when and for how long), then how sure its rule is and why, and only
+  // then how long the rule kept matching, as evaluations. For a per-tick
+  // rule count is the clock, so it is never the headline: an EVIL_TWIN
+  // pair of one detail change read 44.8M there.
+  function alertFacts(box, j) {
+    var span = num(j.first_seen) && num(j.last_seen) && j.last_seen >= j.first_seen
+      ? j.last_seen - j.first_seen : null;
+    var cf = null;
+    if (num(j.confidence))
+      cf = el("span", lowConf(j) ? "d-dim" : "d-normal", j.confidence + "%" +
+              (lowConf(j) ? ", under " + CONF_FLOOR + "%: the list shows it muted" : ""));
+    var evs = el("span", "d-dim", fmt(j.count) + " evaluations over every incident of the key" +
+      (num(j.latest_count) && j.latest_count !== j.count ? " (" + fmt(j.latest_count) +
+       " in the one this page opened on)" : ""));
+    evs.title = EVAL_TIP;
+    kvList(box, [["detail changes", num(j.observations) ? fmt(j.observations)
+                    : "not known: only the stream's records count them"],
+                 ["times opened", num(j.incidents) ? String(j.incidents) : "-"],
+                 ["first seen", stamp(j.first_seen)], ["last seen", stamp(j.last_seen)],
+                 ["duration", span === null ? null : dur(span)],
+                 ["confidence", cf],
+                 ["reason", typeof j.rule_reason === "string" ? j.rule_reason : null],
+                 ["evaluations", evs]]);
+  }
+
   function alertPage(j) {
     var sev = sevOf(j.sev), k = j.kb || null;
     set("ad-head", (j.type_name || j.title) + ": " + j.state + ", from " + j.source);
@@ -4541,11 +4590,13 @@
     t.appendChild(el("span", "d-bright", String(j.title)));
     if (typeof j.type_name === "string" && j.type_name !== j.title)
       t.appendChild(el("span", "d-dim", "  " + j.type_name));
+    t.appendChild(el("span", "d-dim", "  " + (typeof j.technique === "string" && j.technique ? j.technique : "no ATT&CK technique")));
     if (typeof j.ip === "string" && isIP(j.ip)) {
       noteAlertIp(j.ip, j.last_seen, sev);
       t.appendChild(document.createTextNode("  "));
       t.appendChild(ipSpan(j.ip, IP_SRC.alert));
     }
+    alertFacts($("ad-facts"), j);
 
     // (a) what it is
     var w = $("ad-what-b");
@@ -4614,18 +4665,11 @@
     else if (j.detail_shown === false)
       detail = el("span", "d-dim", "withheld: this type's detail can carry a credential or free text (web/src/web_alertfmt.h)");
     else detail = "-";
+    // The counts and the times lead the page (alertFacts, above); here
+    // the rest of what was seen.
     kvList(ev, [["state", j.state + (j.reason ? ", " + j.reason : "")],
                 ["severity", (j.sev_history || []).length ? hist : (sev >= 0 ? SEV_WORD[sev] : "?")],
-                ["first seen", stamp(j.first_seen)], ["last seen", stamp(j.last_seen)],
                 ["closed", num(j.closed_at) ? stamp(j.closed_at) : null],
-                ["count", fmt(j.count) + " evaluations, every incident of the key" +
-                  (num(j.latest_count) && j.latest_count !== j.count ? " (" + fmt(j.latest_count) +
-                   " in the one this page opened on)" : "")],
-                ["observations", num(j.observations) ? fmt(j.observations) +
-                  " polls whose detail moved; not frames or requests (it follows the count" +
-                  " once the detail changes: the engine re-takes the detail only on a" +
-                  " severity change or after 60 s)" : null],
-                ["incidents", String(j.incidents)],
                 ["pcap", pcap], ["detail", detail],
                 ["also", j.stream_id && j.db_id && j.id !== j.db_id ? "sloth.db's rows of it: " + j.db_id : null]]);
 

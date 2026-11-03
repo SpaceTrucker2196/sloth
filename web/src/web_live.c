@@ -546,6 +546,15 @@ static void inc_fill(web_live_inc_t *e, const web_jrec_t *r, long long ts,
     if ((s = web_jl_str(r, "title")) != NULL)
         web_ssid_escape(s, strnlen(s, WEB_SSID_IN_MAX), e->title, sizeof(e->title), NULL);
     s = web_jl_str(r, "detail");
+    /* Every lifecycle record sloth writes carries the detail and, when
+     * the rule has one, the confidence: both are the record's own, so a
+     * record with a detail sets both. The verdict phrase is a word of
+     * web_alert_reasons[], never the detail's bytes. */
+    if (s) {
+        long long cf = web_jl_int(r, "confidence", 0);
+        e->confidence = cf >= 1 && cf <= 100 ? (int)cf : 0;
+        e->why = web_alert_reason_of(e->type, s, strnlen(s, WEB_SSID_IN_MAX * 2));
+    }
     /* Not even kept for a type whose detail is not audited. */
     if (s && web_alert_detail_ok(e->type))
         web_ssid_escape(s, strnlen(s, WEB_SSID_IN_MAX * 2), e->detail,
