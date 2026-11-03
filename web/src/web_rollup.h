@@ -11,14 +11,16 @@
  * also goes to the store's queue when a store is attached.
  *
  * Cardinality is bounded the way sloth bounds it (§5.2): keys are held
- * per class (device MACs, host IPs, interfaces, channels, alert types),
+ * per class (device MACs, host IPs, BLE addresses, interfaces, channels,
+ * alert types),
  * each class has a cap, and a new key in a full class evicts the one
  * seen least recently, after flushing its open buckets. Evictions are
  * counted per class and shown on /api/health. Global metrics have one
  * key, "", and are never evicted.
  *
- * Only the device and host classes can be churned by a peer: a MAC or
- * an IP is whatever a frame or a packet claims. Their keys are judged
+ * Only the device, host and BLE classes can be churned by a peer: a MAC,
+ * an IP or an advertiser's address is whatever a frame, a packet or an
+ * advertisement claims. Their keys are judged
  * on their whole life, not their sample count. Until a key's samples
  * span WEB_MINUTE_S (last_seen - first_seen >= 60 s) it is not
  * established: its fine buckets close and are written as usual, but
@@ -83,10 +85,14 @@
 #define WEB_DEFAULT_RETAIN_DAYS 30
 #define WEB_RETAIN_DAYS_MAX     400
 
-/* --web-max-keys N: N device keys and N/2 host keys (512 and 256 by
- * default, §5.2). Interfaces, channels and alert types have fixed caps
- * taken from sloth's own bounds: MAX_IFACES, MAX_CHAN_ENTRIES, and the
- * 90 ALERT_TYPE_* kinds with room for more. */
+/* --web-max-keys N: N device keys, N/2 host keys and N BLE addresses
+ * (512, 256 and 512 by default, §5.2). The BLE class is rf.rssi.ble's
+ * own (#177): a resident random-address advertiser is a new key every
+ * fifteen minutes, and in the device class that churn evicted the
+ * quiet Wi-Fi keys' signal history; held apart, it can only evict
+ * other advertisers. Interfaces, channels and alert types have fixed
+ * caps taken from sloth's own bounds: MAX_IFACES, MAX_CHAN_ENTRIES,
+ * and the 90 ALERT_TYPE_* kinds with room for more. */
 #define WEB_DEFAULT_MAX_KEYS 512
 #define WEB_MAX_KEYS_MIN     16
 #define WEB_MAX_KEYS_MAX     8192
@@ -120,7 +126,7 @@
 
 enum { WEB_TIER_FINE = 0, WEB_TIER_MINUTE, WEB_TIER_HOUR, WEB_TIER_COUNT };
 enum { WEB_KC_GLOBAL = 0, WEB_KC_DEV, WEB_KC_HOST, WEB_KC_IFACE, WEB_KC_CHANNEL,
-       WEB_KC_ALERT, WEB_KC_RECTYPE, WEB_KC_BLECLASS, WEB_KC_COUNT };
+       WEB_KC_ALERT, WEB_KC_RECTYPE, WEB_KC_BLECLASS, WEB_KC_BLE, WEB_KC_COUNT };
 enum { WEB_MK_GAUGE = 0, WEB_MK_COUNTER, WEB_MK_PRESENCE };
 
 /* §5.1, the metrics whose source records sloth emits today
@@ -155,10 +161,13 @@ enum {
      * ruling 2026-11-02 "Keep, bounded"): a gauge of the signal sloth
      * last heard from the emitter, as each record that carries one
      * reports it, keyed by its MAC, one metric per emitter kind so a
-     * station, an AP and an advertiser never share a series. Device
-     * class: the key slot is the one dev.present already holds for the
-     * same MAC, and evicts as every device key does. A sloth gauge, not
-     * a calibrated measurement (web_metrics.c says which records). */
+     * station, an AP and an advertiser never share a series. The Wi-Fi
+     * pair are device class: the key slot is the one dev.present already
+     * holds for the same MAC, and evicts as every device key does. The
+     * BLE one is the BLE class (#177), a cap of its own at the same N,
+     * so rotating advertiser addresses evict each other and never a
+     * Wi-Fi key. A sloth gauge, not a calibrated measurement
+     * (web_metrics.c says which records). */
     WM_RF_RSSI_STA, WM_RF_RSSI_BSSID, WM_RF_RSSI_BLE,
     /* The host's own GNSS receiver (web_gnss.h, 2026-11-02): global
      * gauges from the change-only gnss_fix / gnss_sky records, so each

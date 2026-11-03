@@ -790,6 +790,7 @@ static void sample_every_key(long long now, size_t *series) {
     for (int m = 0; m < WM_COUNT; m++) {
         int kc = web_metric_defs[m].kclass;
         int cap = kc == WEB_KC_GLOBAL ? 1 : kc == WEB_KC_DEV ? WEB_MAX_KEYS_MAX
+                : kc == WEB_KC_BLE ? WEB_MAX_KEYS_MAX
                 : kc == WEB_KC_HOST ? WEB_MAX_KEYS_MAX / 2
                 : kc == WEB_KC_IFACE ? WEB_IFACE_KEYS
                 : kc == WEB_KC_CHANNEL ? WEB_CHANNEL_KEYS
@@ -799,6 +800,8 @@ static void sample_every_key(long long now, size_t *series) {
             switch (kc) {
             case WEB_KC_GLOBAL:  k[0] = '\0'; break;
             case WEB_KC_DEV:     snprintf(k, sizeof(k), "02:00:00:00:%02x:%02x",
+                                          i >> 8, i & 0xff); break;
+            case WEB_KC_BLE:     snprintf(k, sizeof(k), "c6:00:00:00:%02x:%02x",
                                           i >> 8, i & 0xff); break;
             case WEB_KC_HOST:    snprintf(k, sizeof(k), "10.0.%d.%d", i >> 8,
                                           i & 0xff); break;

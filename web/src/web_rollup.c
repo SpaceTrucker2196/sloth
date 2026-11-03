@@ -94,7 +94,7 @@ const web_metric_t web_metric_defs[WM_COUNT] = {
                            "beacon and assoc signal_dbm by bssid (assoc's is the "
                            "AP's frames), last_seen within 10 s (sloth's "
                            "last-heard value, not calibrated)", "dBm" },
-    [WM_RF_RSSI_BLE] = { "rf.rssi.ble", WEB_MK_GAUGE, WEB_KC_DEV, "mac",
+    [WM_RF_RSSI_BLE] = { "rf.rssi.ble", WEB_MK_GAUGE, WEB_KC_BLE, "mac",
                          "ble_device rssi by addr, has_rssi 1, last_seen within "
                          "10 s (sloth's last-heard value, not calibrated)", "dBm" },
     [WM_GNSS_SATS_USED] = { "gnss.sats_used", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
@@ -124,7 +124,8 @@ int web_metric_is_rssi(int metric) {
 static const int TIER_STEP[WEB_TIER_COUNT] = { WEB_FINE_S, WEB_MINUTE_S, WEB_HOUR_S };
 static const char *const TIER_NAME[WEB_TIER_COUNT] = { "fine", "minute", "hour" };
 static const char *const KC_NAME[WEB_KC_COUNT] = {
-    "global", "device", "host", "iface", "channel", "alert", "rectype", "bleclass"
+    "global", "device", "host", "iface", "channel", "alert", "rectype", "bleclass",
+    "ble"
 };
 
 int web_metric_find(const char *name) {
@@ -439,12 +440,12 @@ int web_rollup_init(web_rollup_t *ru, int max_keys, int store_on,
     pthread_mutex_init(&ru->mu, NULL);
     const int caps[WEB_KC_COUNT] = {
         1, max_keys, max_keys / 2, WEB_IFACE_KEYS, WEB_CHANNEL_KEYS,
-        WEB_ALERT_KEYS, WEB_RECTYPE_KEYS, WEB_BLECLASS_KEYS
+        WEB_ALERT_KEYS, WEB_RECTYPE_KEYS, WEB_BLECLASS_KEYS, max_keys
     };
     int bad = 0;
     size_t series_max = 0;
     for (int c = 0; c < WEB_KC_COUNT; c++) {
-        int churnable = c == WEB_KC_DEV || c == WEB_KC_HOST;
+        int churnable = c == WEB_KC_DEV || c == WEB_KC_HOST || c == WEB_KC_BLE;
         if (class_init(&ru->cls[c], caps[c], churnable) != 0) bad = 1;
         for (int m = 0; m < WM_COUNT; m++)
             if (web_metric_defs[m].kclass == c) series_max += (size_t)caps[c];

@@ -442,7 +442,7 @@ milestone (W0, M0 to M6; tracker #102).
 | `--web-allow-remote` | Authorise a non-loopback bind and non-loopback `--web-allow` entries. Each one is announced on stderr at startup. It authorises the bind, not the peers: with no `--web-allow`, a remote bind still admits loopback only. |
 | `--strict` | Refuse any non-loopback bind or allow entry, even with `--web-allow-remote`, and a non-loopback `--socket tcp:` address. Same shape as sloth's `--strict` refusing a routable `--data-socket`. |
 | `--store PATH` | slothweb's own SQLite file for the time series (M2) and the baselines and anomaly episodes (M3); default `./slothweb.db`. Never `sloth.db`: a file that is not a slothweb store is refused untouched (below). Needs a `WITH_SQLITE` build; in one without, the flag is a usage error. |
-| `--web-max-keys N` | Device keys tracked by keyed metrics, 16..8192, default 512; host keys get N/2 (256). Least recently seen out first. It also sizes M3's tables: the baseline cap (`web_baseline_cap_for()`), the identity tables (N MACs, N/2 IPs) and A7's hosts (N/2). |
+| `--web-max-keys N` | Device keys tracked by keyed metrics, 16..8192, default 512; host keys get N/2 (256) and BLE advertiser addresses (`rf.rssi.ble`) a class of their own at N (#177), so rotating BLE addresses evict each other and never a Wi-Fi key. Least recently seen out first. It also sizes M3's tables: the baseline cap (`web_baseline_cap_for()`), the identity tables (N MACs, N/2 IPs) and A7's hosts (N/2). |
 | `--web-max-mb N` | Ceiling on the store's used size, in MB, default 256. Checked after every 10 s write and at each compaction; over it, the oldest 10 s rows go first, then the 1 min and 1 h rows of keyed series, and the global series' rows last. The baselines and episodes (M3) count towards it but are never dropped, and the time series always keeps a history allowance beside them: a week of hour rows for every series the baselines can hold, at 64 bytes a row (measured), about 51 MB at the default 512 keys and 760 MB at 8,192. So the bound is `used <= max(ceiling, analysis state + allowance)`: when the analysis state (its pages measured with SQLite's `dbstat`, `store_analysis_bytes`) leaves less than the allowance under the ceiling, the time series is trimmed to the allowance, not erased and not left to grow, and the pass is counted in `store_ceiling_raised`. A library without `dbstat` cannot measure the analysis state (`store_analysis_bytes` `-1`) and drops until under the ceiling or out of rows. With a store, a ceiling below the analysis state's estimate plus the allowance is refused at start (exit 2), naming the least that would do: 96 at the default 512 keys, 1,437 at 8,192 (MB here are 2^20 bytes). |
 | `--web-retain-days N` | Days of 1 min buckets kept, 1..400, default 30. |
 | `--sloth-db PATH` | sloth's own database (`sloth --db`), read-only (below). Absent: `/api/devices` is a `503` `no_sloth_db`, the drawer and Lookup answer from the stream and the vendor table, A2 runs on the stream alone, and the page says so. A path that is not there yet, or a file refused, is not fatal: every request opens it afresh. Needs a `WITH_SQLITE` build; the same path as `--store` is refused. |
@@ -607,10 +607,10 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
    "queue_dropped":0,"folded":0,"channel_evictions":0,"store_rows":2210,
    "store_dropped_expired":0,"store_dropped_cap":0},
  "retain_days":30,
- "series_keys":{"global":1,"device":30,"host":20,"iface":2,"channel":3,"alert":0},
- "series_key_caps":{"global":1,"device":512,"host":256,"iface":32,"channel":64,"alert":128},
- "key_evictions":{"global":0,"device":0,"host":0,"iface":0,"channel":0,"alert":0},
- "key_returns":{"global":0,"device":0,"host":0,"iface":0,"channel":0,"alert":0},
+ "series_keys":{"global":1,"device":30,"host":20,"iface":2,"channel":3,"alert":0,"rectype":9,"bleclass":3,"ble":40},
+ "series_key_caps":{"global":1,"device":512,"host":256,"iface":32,"channel":64,"alert":128,"rectype":64,"bleclass":8,"ble":512},
+ "key_evictions":{"global":0,"device":0,"host":0,"iface":0,"channel":0,"alert":0,"rectype":0,"bleclass":0,"ble":0},
+ "key_returns":{"global":0,"device":0,"host":0,"iface":0,"channel":0,"alert":0,"rectype":0,"bleclass":0,"ble":0},
  "series":117,"samples":221385,"ring_rows":42120,"queue_rows":0,
  "queue_cap":32768,"queue_dropped":0,"churn_dropped":0,"highwater_evictions":0,
  "values_clamped":0,
@@ -965,7 +965,7 @@ docs/web-ui-spec.md §5.1, and every one of its metrics has a source
 | `ble.class.advertisers` | gauge | BLE class | the BLE Devices view's class rows ([BLE](#ble), `web/src/web_bledev.h`): once a snapshot pass (at the batch's first `iface` record), the distinct addresses whose rows in the BLE tables were heard in the last 20 s, per device class (`b:phone`, `b:wear`, `b:tag`, `b:hid`, `b:bcn`, `b:iot`, `b:unk`), anonymous rows (`addr_type` 255) one advertiser between them in `b:unk`, as the class mix draws them; a class with none is not sampled |
 | `ble.class.adv` | counter, reports | BLE class | `ble_device` `adv_count` deltas per (address, address type, sensor), by the record's class, an anonymous row's (`addr_type` 255) included, always under `b:unk`; a one-channel sample (`sampled` 1) left out. HCI advertising reports, one a scan rather than a frame when the controller filters duplicates |
 | `sensor.drops` | counter | none | §7: `sensor_health` `capture_drop_delta` + `capture_ifdrop_delta` + `monitor_drop_delta` + `monitor_ifdrop_delta`, every tick, including the 0 of a healthy one -- a flat line, not a gap |
-| `rf.rssi.sta`, `rf.rssi.bssid`, `rf.rssi.ble` | gauge, dBm | MAC | the signal sloth last heard from the emitter, one sample per record that carries one: `probe_client` `signal_dbm` by `mac`; `beacon` and `assoc` `signal_dbm` by `bssid` (an assoc row's signal is the AP's frames, the (re)association response and EAPOL M1/M3, never the station's); `ble_device` `rssi` by `addr` with `has_rssi` 1, every receiver and address type of that address in one series. Sampled only when the record's `last_seen` is within 10 s of its `ts`, so a row sloth re-sends after the emitter went quiet adds nothing; a Wi-Fi 0 (sloth's "no signal") and anything outside -127..-1 dBm (BLE -127..+20) is not a reading. Since 2026-11-02 sloth re-sends `ble_device` once a 10 s slot while it keeps hearing the advertiser (otherwise on a change or the 300 s heartbeat), so a heard advertiser's series has a point a fine bucket. Owner ruling 2026-11-02 on [`docs/web-frrs-spec.md`](../docs/web-frrs-spec.md) Q7. Each bucket is the mean of what one receiver's driver reported, with min and max: a sloth gauge, not a calibrated measurement. The device class's keys, so `--web-max-keys` bounds it with the same eviction; Monitor's scope; not scored by the anomaly engine |
+| `rf.rssi.sta`, `rf.rssi.bssid`, `rf.rssi.ble` | gauge, dBm | MAC | the signal sloth last heard from the emitter, one sample per record that carries one: `probe_client` `signal_dbm` by `mac`; `beacon` and `assoc` `signal_dbm` by `bssid` (an assoc row's signal is the AP's frames, the (re)association response and EAPOL M1/M3, never the station's); `ble_device` `rssi` by `addr` with `has_rssi` 1, every receiver and address type of that address in one series. Sampled only when the record's `last_seen` is within 10 s of its `ts`, so a row sloth re-sends after the emitter went quiet adds nothing; a Wi-Fi 0 (sloth's "no signal") and anything outside -127..-1 dBm (BLE -127..+20) is not a reading. Since 2026-11-02 sloth re-sends `ble_device` once a 10 s slot while it keeps hearing the advertiser (otherwise on a change or the 300 s heartbeat), so a heard advertiser's series has a point a fine bucket. Owner ruling 2026-11-02 on [`docs/web-frrs-spec.md`](../docs/web-frrs-spec.md) Q7. Each bucket is the mean of what one receiver's driver reported, with min and max: a sloth gauge, not a calibrated measurement. The Wi-Fi pair are the device class's keys, so `--web-max-keys` bounds them with the same eviction; `rf.rssi.ble` is the BLE class's (#177), its own cap at the same N, so rotating advertiser addresses evict each other and never a Wi-Fi key; Monitor's scope; not scored by the anomaly engine |
 
 A key is a canonical form checked by type: a MAC is lower-case
 `xx:xx:xx:xx:xx:xx` (all zeros, sloth's "no MAC", is not one), an IP is
@@ -1034,8 +1034,9 @@ max. A bucket closes when a sample lands in a later one, or when the
 store thread finds its interval over, whichever is first. A gauge's
 value is sum/count, a counter's sum, presence's max. Keys are bounded
 per class: device MACs (`--web-max-keys`, 512), host IPs (half, 256),
-interfaces (32, sloth's `MAX_IFACES`), channels (64, sloth's
-`MAX_CHAN_ENTRIES`) and alert types (128: sloth has 90 kinds); a new key
+BLE advertiser addresses (`rf.rssi.ble`, the same N, a class of their
+own since #177), interfaces (32, sloth's `MAX_IFACES`), channels (64,
+sloth's `MAX_CHAN_ENTRIES`) and alert types (128: sloth has 90 kinds); a new key
 in a full class evicts the one seen least recently, after writing out
 its open buckets, and is counted in `key_evictions`. The one global key
 is never evicted.
@@ -3364,11 +3365,12 @@ series the rollup does get are global and never evicted:
 of `ble_adv_reports`), both Monitor's and both sampled only while
 `btmon_iface` says sloth is listening. The one per-address BLE series
 is `rf.rssi.ble` ([Metrics](#metrics)), kept for the FRRS Report's
-signal against time by the owner's Q7 ruling of 2026-11-02 in this
-same device class, as the ruling asked: the class evicts its least
-recently seen key, so rotating addresses push out the quiet keys first
-and a Wi-Fi device heard every pass is not among them, every eviction
-counted on `/api/health` (`key_evictions.device`). An advertiser is
+signal against time by the owner's Q7 ruling of 2026-11-02, in a key
+class of its own since #177 (`ble`, the same `--web-max-keys` N as the
+device class): the class evicts its least recently seen advertiser, so
+rotating addresses push out the quiet advertisers first and never a
+Wi-Fi key, every eviction counted on `/api/health`
+(`key_evictions.ble`). An advertiser is
 sampled only when its record arrives fresh (once a 10 s slot while it is
 heard), and it takes a key only once it has a reading.
 

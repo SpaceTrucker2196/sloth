@@ -427,8 +427,10 @@ Bucketing uses slothweb's clock, never a record's `ts`.
 
 10 s for 24 h, 1 min for `--web-retain-days` (30), 1 h for 400 days,
 each bucket with sum, count, min and max. Keys are bounded per class:
-`--web-max-keys` device MACs (512) and half that many host IPs, least
-recently seen out first, evictions counted on `/api/health`;
+`--web-max-keys` device MACs (512), half that many host IPs and, since
+#177, as many BLE advertiser addresses in a class of their own
+(`rf.rssi.ble`), least recently seen out first, evictions counted on
+`/api/health`;
 interfaces (32), channels (64) and alert types (128) each have a class
 sized from sloth's own bounds; global metrics are always kept. Those
 three come from catalogues no peer can churn, so their keys count as
@@ -1194,8 +1196,9 @@ the routes with their request and response shapes are
   the AP's association frames) and `rf.rssi.ble` (advertisements), each
   the signal sloth last heard as a record reports it, sampled only while
   the record's `last_seen` is fresh. They sit in the existing tiers (the
-  minute tier's 30 days, `--web-retain-days`), in the device class's
-  keys under `--web-max-keys` with its eviction, Monitor's scope, and
+  minute tier's 30 days, `--web-retain-days`), the Wi-Fi pair in the
+  device class's keys and `rf.rssi.ble` in the BLE class's (#177), each
+  under `--web-max-keys` with its eviction, Monitor's scope, and
   are not scored for anomalies. The record carries the last 24 h in 48
   half-hour cells with min and max, drawn on the alert page and in the
   drawer as the TUI's sparkline glyphs in its heat ramp; "no samples"
@@ -1358,12 +1361,14 @@ resident random-address device is a new key every fifteen minutes.
 Two global series do enter the rollup, `ble.devices` and
 `ble.adv_rate`, from `sensor_health`, both Monitor's. Since the owner's
 Q7 ruling (2026-11-02) one per-address series does too, `rf.rssi.ble`,
-for the FRRS Report's signal against time, in that shared device class
-as the ruling asked ("capped by its existing key limits"): the class
-evicts its least recently seen key, so a stream of rotating addresses
-pushes out the quiet keys first, BLE and Wi-Fi alike, and a Wi-Fi
-device heard every pass is not among them; each eviction is counted on
-`/api/health` (`key_evictions.device`). The advertising rate stays in
+for the FRRS Report's signal against time. It sat in the shared device
+class first, as the ruling asked ("capped by its existing key limits"),
+where a stream of rotating addresses pushed out the quiet keys first,
+BLE and Wi-Fi alike; since #177 (2026-11-03) it has a class of its own,
+`ble`, at the same `--web-max-keys` N, so an advertiser evicts only
+the least recently seen advertiser and a quiet Wi-Fi key's signal
+history is never the one that goes; each eviction is counted on
+`/api/health` (`key_evictions.ble`). The advertising rate stays in
 the module.
 
 The tab (key `0`) is the TUI view at parity: the same columns with the

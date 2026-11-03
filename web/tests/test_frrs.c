@@ -1167,11 +1167,13 @@ static void test_report_rssi_series(void) {
 
     /* Counted on /api/health as every device key is, and bounded by the
      * device class: a 17th MAC at --web-max-keys 16 evicts the least
-     * recently seen (the AP heard 25 h ago), counted. */
+     * recently seen (the AP heard 25 h ago), counted. The advertiser is
+     * the BLE class's (#177), not among the device keys. */
     WT_EQ(get("/api/health", NULL), 200);
-    WT_HAS(g_out, "\"series_keys\":{\"global\":0,\"device\":4,");
+    WT_HAS(g_out, "\"series_keys\":{\"global\":0,\"device\":3,");
+    WT_HAS(g_out, "\"bleclass\":0,\"ble\":1}");
     WT_HAS(g_out, "\"key_evictions\":{\"global\":0,\"device\":0,");
-    for (int i = 0; i < 13; i++) {
+    for (int i = 0; i < 14; i++) {
         char a[18];
         snprintf(a, sizeof(a), "02:de:00:00:01:%02x", i);
         r_line(T - 10, BEACON, a, -45);

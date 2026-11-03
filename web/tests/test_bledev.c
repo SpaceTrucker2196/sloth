@@ -208,6 +208,7 @@ static void test_slugs(void) {
     WT_EQ(web_metric_defs[WM_BLE_CLASS_ADVERTISERS].kind, WEB_MK_GAUGE);
     WT_EQ(web_metric_defs[WM_BLE_CLASS_ADV].kclass, WEB_KC_BLECLASS);
     WT_ASSERT(!strcmp(web_kclass_name(WEB_KC_BLECLASS), "bleclass"));
+    WT_ASSERT(!strcmp(web_kclass_name(WEB_KC_BLE), "ble"));
     WT_EQ(web_scope_metric(WM_BLE_CLASS_ADV), WEB_SC_M);
 }
 

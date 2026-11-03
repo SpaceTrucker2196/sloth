@@ -6187,7 +6187,7 @@ now reached by IPv6 rows); `tests/test_parse.c`, `test_devices.c`,
 **Changed pages**: [[captive-portal]] (the first grading route joins an
 IPv6-only client too), [[jsonl-schema]] (`arp` rows carry IPv6
 addresses), [[capture-scope]], [[views-catalog]],
-[[alert-assessments/ARP_SPOOF]] (anchors; the rule now sees IPv6
+`alert-assessments/ARP_SPOOF.md` (anchors; the rule now sees IPv6
 bindings), `docs/views/arp.md` and `docs/views/devices.md`.
 
 An IPv6-only client had no row to join on: `s->arp_entries` was
@@ -6211,3 +6211,68 @@ The table stays what the host itself resolves, as the IPv4 half always
 was; on the reference host that is 27 rows against 55,578 devices, so
 an over-the-air IPv6 client the sensor never exchanged packets with is
 still unjoined. Filed on #176 as the follow-up.
+
+## 2026-11-03 — rf.rssi.ble in a key class of its own (#177)
+
+**Source**: `web/src/web_rollup.h`, `web_rollup.c`, `web_baseline.c`;
+`web/tests/test_metrics.c`, `test_series.c`, `test_rollup.c`,
+`test_frrs.c`, `test_bledev.c`; `web/README.md`.
+
+**Changed pages**: [[slothweb]] (tiers and bounds, the RSSI series, the
+BLE section).
+
+The BLE advertiser series shared the device class with the Wi-Fi keys,
+so a resident random-address advertiser (a new key every fifteen
+minutes) could evict a quiet Wi-Fi station's signal history under
+pressure. `rf.rssi.ble` now has the `ble` class, churnable, capped at
+the same `--web-max-keys` N as the device class; one flag still sizes
+every address class (N device, N/2 host, N BLE). `/api/health` carries
+the class in `series_keys`, `series_key_caps`, `key_evictions` and
+`key_returns`. The baseline cap is unchanged (the metric moved class,
+it did not gain one). Seen red with the metric back in the device
+class: the station's series evicted, device evictions 2, BLE class
+empty.
+
+The Report's 24 h fine read, the second half of the issue, was measured
+rather than cached: with 8,640 fine buckets for one advertiser in the
+store and the ring, `/api/frrs/report` answered in 5 ms mean, 9 ms
+worst of 20, against `/api/series` fine at 0.8 ms and `/api/health`
+at 1 ms, on the build host under the test harness. The transient is
+8,642 points, not a megabyte. Nothing to shrink at that cost; the
+number is on the issue so a slower host has a baseline.
+
+## 2026-11-03 — The last 18 alert assessments (#174)
+
+**Source**: `docs/wiki/alert-assessments/*.md` (18 new files),
+`MLD_MAC_COLLISION.md` and `MLE_CROSS_LINK_CIPHER_DOWNGRADE.md`
+(literature search recorded), `README.md` there regenerated,
+`tests/test_alert_assessments.c` (`pending[]` now empty).
+
+Every `ALERT_TYPE_*` has an assessment: the six wired brute-force rules,
+the four wired posture rules, the four Wi-Fi management floods and
+protections, and the four remaining FragAttacks kinds, each with the
+rule's code anchors re-read, its count semantics, the reference host's
+firing data (read from its `sloth.db` on 2026-11-03: rows, evaluations,
+keys, severity, reopens over 2026-10-14 to 2026-11-03) and every
+citation fetched. The two MLO pages now record a real search (Crossref,
+arXiv, the web, mentor.ieee.org, patents, the hostap list; dblp and
+Semantic Scholar unreachable, Google Scholar not run) and what it
+found: the TGbe drafting record requires one pairwise cipher list
+across an MLD's links, so the cross-link posture is non-conformance, and
+no public treatment of AP-MLD identity cloning exists.
+
+Code findings the pages record for follow-up (not fixed here):
+FRAG_AMSDU_EAPOL reads the EAPOL SNAP at the first subframe's payload
+(body offset 14) while the paper's frame carries it in the first 8
+bytes of the A-MSDU body; FRAG_MIXKEY's generation lookup is keyed on
+SA so downlink reassemblies never qualify; FRAG_PN_GAP holds one
+session per (BSSID, SA, DA, TID) and advances `last_pn` on a
+sequence-number mismatch; `rule_attack_path` also walks paired
+responses and, with `rule_weak_tls`, hard-codes `match_port`;
+`tls_ver_is_weak()`'s SSL branches are unreachable; `linux.c` treats
+ARPHRD 804 as Prism monitor (it is IEEE 802.15.4); no Telnet snoop
+exists though the corpus lists it; the RDP `proto_mask` constants
+disagree with MS-RDPBCGR; `snmp.community_brute` above 8 silently
+disables the rule; the MQTT CONNACK decoder scores v5 by v3.1.1 codes;
+`fragattack.h` and the FragAttacks corpus document still say
+CVE-2020-26139 and -26146 are not implemented.

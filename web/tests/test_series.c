@@ -290,11 +290,11 @@ static void test_routes(void) {
     WT_EQ(r.status, 200);
     WT_HAS(out, "\"store\":\"memory\",\"store_path\":null,");
     WT_HAS(out, "\"series_key_caps\":{\"global\":1,\"device\":64,\"host\":32,"
-                "\"iface\":32,\"channel\":64,\"alert\":128,\"rectype\":64,\"bleclass\":8}");
+                "\"iface\":32,\"channel\":64,\"alert\":128,\"rectype\":64,\"bleclass\":8,\"ble\":64}");
     WT_HAS(out, "\"key_evictions\":{\"global\":0,\"device\":0,\"host\":0,"
-                "\"iface\":0,\"channel\":0,\"alert\":0,\"rectype\":0,\"bleclass\":0}");
+                "\"iface\":0,\"channel\":0,\"alert\":0,\"rectype\":0,\"bleclass\":0,\"ble\":0}");
     WT_HAS(out, "\"key_returns\":{\"global\":0,\"device\":0,\"host\":0,"
-                "\"iface\":0,\"channel\":0,\"alert\":0,\"rectype\":0,\"bleclass\":0}");
+                "\"iface\":0,\"channel\":0,\"alert\":0,\"rectype\":0,\"bleclass\":0,\"ble\":0}");
     WT_HAS(out, "\"queue_rows\":0,\"queue_cap\":0,");
     WT_HAS(out, "\"queue_dropped\":0,\"churn_dropped\":0,");
     /* The ceiling's raised passes and the analysis state's measured size
@@ -482,6 +482,7 @@ static size_t sample_all_keys(long long now) {
     for (int m = 0; m < WM_COUNT; m++) {
         int kc = web_metric_defs[m].kclass;
         int cap = kc == WEB_KC_GLOBAL ? 1 : kc == WEB_KC_DEV ? WEB_MAX_KEYS_MAX
+                : kc == WEB_KC_BLE ? WEB_MAX_KEYS_MAX
                 : kc == WEB_KC_HOST ? WEB_MAX_KEYS_MAX / 2
                 : kc == WEB_KC_IFACE ? WEB_IFACE_KEYS
                 : kc == WEB_KC_CHANNEL ? WEB_CHANNEL_KEYS
@@ -491,6 +492,8 @@ static size_t sample_all_keys(long long now) {
             switch (kc) {
             case WEB_KC_GLOBAL:  k[0] = '\0'; break;
             case WEB_KC_DEV:     snprintf(k, sizeof(k), "02:00:00:00:%02x:%02x",
+                                          i >> 8, i & 0xff); break;
+            case WEB_KC_BLE:     snprintf(k, sizeof(k), "c6:00:00:00:%02x:%02x",
                                           i >> 8, i & 0xff); break;
             case WEB_KC_HOST:    snprintf(k, sizeof(k), "10.0.%d.%d", i >> 8,
                                           i & 0xff); break;

@@ -745,7 +745,7 @@ static void test_rssi_series(void) {
     for (int i = 0; i < 3; i++) {
         WT_EQ(web_metric_find(NAME[i]), M[i]);
         WT_EQ(web_metric_defs[M[i]].kind, WEB_MK_GAUGE);
-        WT_EQ(web_metric_defs[M[i]].kclass, WEB_KC_DEV);
+        WT_EQ(web_metric_defs[M[i]].kclass, i == 2 ? WEB_KC_BLE : WEB_KC_DEV);
         WT_ASSERT(!strcmp(web_metric_defs[M[i]].keykind, "mac"));
         WT_ASSERT(!strcmp(web_metric_defs[M[i]].unit, "dBm"));
         WT_ASSERT(strstr(web_metric_defs[M[i]].source, "not calibrated") != NULL);
@@ -784,9 +784,47 @@ static void test_rssi_key_cap(void) {
     done();
 }
 
+/* rf.rssi.ble has a class of its own (#177), capped at the same N: a
+ * stream of rotating advertiser addresses evicts the quietest
+ * advertiser, never a Wi-Fi key, and a Wi-Fi station's history is
+ * untouched by however many advertisers pass. Seen red with
+ * rf.rssi.ble back in the device class: the station's series gone,
+ * device evictions 2 (its key and the first advertiser's) and the BLE
+ * class empty. */
+static void test_ble_rssi_has_its_own_class(void) {
+    char err[64];
+    WT_EQ(web_rollup_init(&ru, WEB_MAX_KEYS_MIN, 0, err, sizeof(err)), 0);
+    WT_EQ(web_metrics_init(&mx, &ru, pinned, NULL), 0);
+    g_now = 1792627200;
+    line("{\"type\":\"probe_client\",\"ts\":1792627200,\"mac\":\"02:00:00:00:02:01\","
+         "\"ssid\":\"x\",\"signal_dbm\":-61,\"channel\":6,\"first_seen\":1,"
+         "\"last_seen\":1792627200,\"frame_count\":1}");
+    for (int i = 0; i <= WEB_MAX_KEYS_MIN; i++) {
+        char l[256];
+        g_now++;
+        snprintf(l, sizeof(l), "{\"type\":\"ble_device\",\"ts\":%lld,\"addr\":"
+                 "\"c6:00:00:00:03:%02x\",\"addr_type\":1,\"has_rssi\":1,\"rssi\":%d,"
+                 "\"rssi_best\":-60,\"last_seen\":%lld}", g_now, i, -70 - i, g_now);
+        line(l);
+    }
+    web_rollup_stats_t st;
+    web_rollup_stats(&ru, &st);
+    WT_EQ(st.keys[WEB_KC_DEV], 1);
+    WT_EQ(st.evictions[WEB_KC_DEV], 0);
+    WT_EQ(st.keys[WEB_KC_BLE], WEB_MAX_KEYS_MIN);
+    WT_EQ(st.caps[WEB_KC_BLE], WEB_MAX_KEYS_MIN);
+    WT_EQ(st.evictions[WEB_KC_BLE], 1);
+    WT_ASSERT(web_rollup_has(&ru, WM_RF_RSSI_STA, "02:00:00:00:02:01"));
+    WT_ASSERT(!web_rollup_has(&ru, WM_RF_RSSI_BLE, "c6:00:00:00:03:00"));
+    WT_ASSERT(web_rollup_has(&ru, WM_RF_RSSI_BLE, "c6:00:00:00:03:01"));
+    WT_ASSERT(!strcmp(web_kclass_name(WEB_KC_BLE), "ble"));
+    done();
+}
+
 void run_metrics_tests(void) {
     WT_RUN(test_rssi_series);
     WT_RUN(test_rssi_key_cap);
+    WT_RUN(test_ble_rssi_has_its_own_class);
     WT_RUN(test_key_canonicalisers);
     WT_RUN(test_gauges);
     WT_RUN(test_hostile_keys_refused);
