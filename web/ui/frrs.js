@@ -41,11 +41,17 @@ var SlothFrrs = (function () {
   function $(id) { return document.getElementById(id); }
   var ID_RE = /^[sd][0-9A-Za-z]{1,24}$/;
   var MAC_RE = /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/;
-  var STATES = ["untriaged", "false", "noise", "incident"];
-  // The severity tokens the page has, no new colour: noise low, false
-  // warn, incident crit.
-  var CHIP = { "untriaged": "d-dim", "false": "sev1", "noise": "sev0", "incident": "sev2" };
-  var FILTERS = { "any": 1, "untriaged": 1, "triaged": 1, "out": 1, "false": 1, "noise": 1, "incident": 1 };
+  var STATES = ["untriaged", "false", "noise", "incident", "known"];
+  // The severity tokens the page has: noise low, false warn, incident
+  // crit; known green (--tri-known, the TUI's bright phosphor), the
+  // affiliation colour of a friendly or neutral emitter.
+  var CHIP = { "untriaged": "d-dim", "false": "sev1", "noise": "sev0", "incident": "sev2",
+               "known": "tri-known" };
+  var FILTERS = { "any": 1, "untriaged": 1, "triaged": 1, "out": 1, "false": 1, "noise": 1,
+                  "incident": 1, "known": 1 };
+  var KNOWN_TITLE = "known good: expected traffic from a friendly or neutral emitter " +
+    "(the FRRS/EW affiliation sense: friend, or neutral per MIL-STD-2525's green); " +
+    "triaged out like false and noise, never an incident";
   var S = {
     writes: false, store: "none", readOnly: false, recSrc: "none",
     st: {},      // alert id -> its current triage, as the server said
@@ -60,7 +66,7 @@ var SlothFrrs = (function () {
   function el(tag, cls, text) { return H.el(tag, cls, text); }
   function clear(n) { while (n && n.firstChild) n.removeChild(n.firstChild); }
   function num(v) { return typeof v === "number" && isFinite(v); }
-  function out(st) { return st === "false" || st === "noise"; }
+  function out(st) { return st === "false" || st === "noise" || st === "known"; }
   function stamp(t) { return num(t) && t > 0 ? H.stamp(t) : "-"; }
 
   // ── the write path ────────────────────────────────────────────────
@@ -121,6 +127,7 @@ var SlothFrrs = (function () {
       var parts = [];
       if (o.noise) parts.push(o.noise + " noise");
       if (o["false"]) parts.push(o["false"] + " false");
+      if (o.known) parts.push(o.known + " known");
       var txt = parts.length ? parts.join(" · ") + " triaged out" : "";
       if (o.incident) txt += (txt ? "; " : "") + o.incident + " incident";
       // Near the cap the oldest superseded rows fold (§3.1): said, so a
@@ -153,6 +160,7 @@ var SlothFrrs = (function () {
   function chip(st) {
     var s = st && st.state ? st.state : "untriaged";
     var c = el("span", "tri-chip " + (CHIP[s] || "d-dim"), s);
+    if (s === "known") c.title = KNOWN_TITLE;
     if (st && st.via === "recommended") c.appendChild(el("span", "d-dim", " (rec.)"));
     if (st && st.via === "import") c.appendChild(el("span", "d-dim", " (imp.)"));
     return c;
@@ -179,9 +187,10 @@ var SlothFrrs = (function () {
     var box = el("span", "tri-btns" + (always ? " tri-always" : ""));
     if (!S.writes) return box;
     var cur = S.st[id] ? S.st[id].state : "untriaged";
-    function b(label, state, cls) {
+    function b(label, state, cls, title) {
       var x = el("button", "tri-b" + (cls ? " " + cls : ""), label);
       x.type = "button";
+      if (title) x.title = title;
       x.disabled = state === cur;
       x.addEventListener("click", function (e) {
         e.stopPropagation();
@@ -197,6 +206,7 @@ var SlothFrrs = (function () {
     b("false", "false", "sev1");
     b("noise", "noise", "sev0");
     b("incident", "incident", "sev2");
+    b("known", "known", "tri-known", KNOWN_TITLE);
     var t = S.types[id], r = t ? S.rec[t] : null;
     if (t && !r) rec(t);
     var rs = r && typeof r.state === "string" ? r.state : null;

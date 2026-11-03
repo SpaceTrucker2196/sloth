@@ -2979,13 +2979,18 @@ owner's open questions are in
 - **Triage.** Every alert row, wherever it is drawn (the Overview's
   latest alerts, the Alerts page, History, the drawer's "alerts naming
   it", an alert's page), carries its state chip and the buttons
-  *false*, *noise*, *incident*, *follow recommended* and, once triaged,
+  *false*, *noise*, *incident*, *known*, *follow recommended* and, once triaged,
   *clear*: on hover or focus in a list (always on a device with no
   hover), always on an alert's page, which adds the optional note, the
   "by" name (kept in this browser) and every change as a table. States:
   `untriaged` (no row, or a *clear*), `false` (the rule fired on
   something it does not detect), `noise` (what it detects, expected
-  here), `incident`. Triaged-out rows (`false`, `noise`) are dimmed,
+  here), `incident`, `known` (known good — expected traffic from a
+  friendly or neutral emitter, the FRRS/EW affiliation sense: friend,
+  or neutral per MIL-STD-2525's green; drawn green, `--tri-known`;
+  triaged out like false/noise, never an incident; owner request
+  2026-11-03, stored as 4, no schema step since nothing in slothweb.db
+  rejects it). Triaged-out rows (`false`, `noise`, `known`) are dimmed,
   never removed; the open-alerts tile keeps the open count and says how
   many of them are triaged out beside it. Every change is a new row in
   slothweb.db's `triage` table (append-only: a change is undone by
@@ -3046,7 +3051,7 @@ slothweb's first. Six paths take POST, and nothing else does:
 
 | Path | Body | Effect |
 |---|---|---|
-| `/api/frrs/triage` | `{"id":"d1234","state":"noise","note":"…","by":"…"}`; `state` one of `untriaged`, `false`, `noise`, `incident`, `recommended` | appends a row; `recommended` takes the assessment's state, `409 no_recommendation` when it names none |
+| `/api/frrs/triage` | `{"id":"d1234","state":"noise","note":"…","by":"…"}`; `state` one of `untriaged`, `false`, `noise`, `incident`, `known`, `recommended` | appends a row; `recommended` takes the assessment's state, `409 no_recommendation` when it names none |
 | `/api/frrs/tacdb/unit` | `{"op":"create","name":"home","kind":"site","parent":null,"note":"…"}`, `{"op":"update","id":1,…}`, `{"op":"delete"\|"restore","id":1}` | |
 | `/api/frrs/tacdb/platform` | `{"op":"create","nomenclature":"work laptop","class":"laptop","unit":1,"vendor":"…","note":"…","emitter_kind":"sta","emitter_addr":"…"}`, `update`, `delete`, `restore`, `{"op":"confirm","suggest":"<token>","unit":1}` | |
 | `/api/frrs/tacdb/emitter` | `{"op":"add"\|"move"\|"remove"\|"restore","platform":1,"kind":"sta"\|"bssid"\|"ble","addr":"aa:bb:cc:dd:ee:ff[/type]","role":"primary","label":"…"}` | a live `(kind, addr)` belongs to one platform: `409 emitter_owned` |
@@ -3161,7 +3166,7 @@ mid-merge rolls the whole file back.
 |---|---|---|
 | `/api/frrs/states` | `ids=` 1..16 alert ids, comma-separated | `{"store":"open","triage":{"<id>":{"state","ts","via","history_n","prev_state","note","by","basis","peer","finding"}},"types":{"<id>":"PORT_SCAN"},"untriaged":[…],"missing":[…],"writes":true}` |
 | `/api/frrs/history` | `id=` | the subject (`d<rowid>` of the finding's first sloth.db row, or the stream handle until sloth has written it), its descriptor (`type`, `addr`, `port`, `first_seen`: what an export re-attaches by), `current`, `recommend` and every row newest first |
-| `/api/frrs/summary` | none | `{"store","writes","read_only","recommendations":"dir"\|"none","open":{"total","untriaged","false","noise","incident","out"},"rows","cap","near_cap"}`: the open incidents the tile counts, by their triage, in the request's scope, and how full the triage table is |
+| `/api/frrs/summary` | none | `{"store","writes","read_only","recommendations":"dir"\|"none","open":{"total","untriaged","false","noise","incident","known","out"},"rows","cap","near_cap"}`: the open incidents the tile counts, by their triage, in the request's scope, and how full the triage table is |
 | `/api/frrs/recommend` | `type=` a name or number | `{"type","state":"noise"\|null,"basis","source","why_none":null\|"no_automatic_triage"\|"no_assessment","file","front_matter":{…}\|null}` |
 | `/api/frrs/report` | `kind=sta\|bssid\|ble`, `addr=` (BLE `aa:…:ff/N`, N the address type) | the record: `emitter`, `sources`, `position_limit`, `content_limit`, `bei`, `scs`, `ecs`, `tacdb`, `report`, `alerts` |
 | `/api/frrs/report/alert` | `id=` | `{"alert":{"id","type","emitter_from"},"record":…}`; the emitter is a MAC in the alert's key, else the device holding its `match_ip`; `record` `null` with a `reason` when it names none |
@@ -3170,7 +3175,8 @@ mid-merge rolls the whole file back.
 | `/api/frrs/suggest` | `limit=` | `{"note","suggestions":[{token,rule,rule_name,kind,a,b,role_b,class,confidence,last_seen,nomenclature,evidence}]}` |
 | `/api/frrs/export` | none | `slothweb-tacdb.jsonl` (attachment, the import's format above): a header line, every live unit (parents first), platform and emitter, every dismissal, every triage row by its descriptor, an `end` line counting the lines and saying `complete`; deleted rows stay on this sensor; `507 export_too_large` past 8 MiB |
 
-`/api/alerts` takes `triage=any|untriaged|triaged|out|false|noise|incident`
+`/api/alerts` takes `triage=any|untriaged|triaged|out|false|noise|incident|known`
+(`out` is `false`, `noise` or `known`)
 (the Alerts page always sends it): every row then carries
 `"triage":{"state","via","ts"}` and the answer `triage_counts`, counted
 before the filter, so a row the filter leaves out is counted, never

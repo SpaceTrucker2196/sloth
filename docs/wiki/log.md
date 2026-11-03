@@ -6091,3 +6091,14 @@ them); Rev N's render moved there from `docs/assets/`, the original
 build-guide PDF kept beside it, and
 [antenna-fixture-rev-n.md](antenna-fixture-rev-n.md) §12 names the
 directory as the home of `rev-n.scad` when it is supplied.
+
+## 2026-11-03 — Triage verdict `known` (known good)
+
+Owner request: "this needs a Green tag for known or a sigint term for
+known good traffic". [[slothweb]]'s triage gains a fourth verdict,
+`known` (known good: expected traffic from a friendly or neutral
+emitter, friend or neutral in MIL-STD-2525's green), drawn green and
+triaged out like false and noise; `/api/frrs/summary` and
+`triage_counts` count it, `triage=known` filters it. Stored as 4, no
+slothweb.db schema step. Updated [[slothweb]], `docs/web-frrs-spec.md`,
+`web/README.md`.

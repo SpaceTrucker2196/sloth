@@ -38,11 +38,14 @@ button.tri-b { font-size: 10px; letter-spacing: 0.06em; text-transform: none; pa
 button.tri-b.sev0 { color: var(--sev-low); }
 button.tri-b.sev1 { color: var(--sev-warn); }
 button.tri-b.sev2 { color: var(--sev-crit); }
+/* known good: green, the affiliation colour of a friendly or neutral
+ * emitter (MIL-STD-2525), from the theme's token. */
+button.tri-b.tri-known, .tri-chip.tri-known { color: var(--tri-known); }
 button.tri-b:disabled { opacity: 0.45; cursor: default; }
 .tri-chip { font-size: 11px; letter-spacing: 0.04em; }
-.tri-chip.sev1, .tri-chip.sev2 { font-weight: 700; }
+.tri-chip.sev1, .tri-chip.sev2, .tri-chip.tri-known { font-weight: 700; }
 .tri-msg:empty { display: none; }
-/* Triaged out (false, noise): dimmed, never removed. */
+/* Triaged out (false, noise, known): dimmed, never removed. */
 .tri-out { opacity: 0.55; }
 .tri-out:hover, .tri-out:focus-within { opacity: 0.85; }
 .tri-tile { cursor: pointer; color: var(--muted); }

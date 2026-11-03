@@ -29,7 +29,7 @@
 /* ── words ──────────────────────────────────────────────────────────── */
 
 static const char *const STATE_WORD[WEB_TRI_COUNT] = {
-    "untriaged", "false", "noise", "incident",
+    "untriaged", "false", "noise", "incident", "known",
 };
 static const char *const VIA_WORD[] = { "manual", "recommended", "import" };
 static const char *const KIND_WORD[FRRS_K_COUNT] = { "sta", "bssid", "ble" };
@@ -57,10 +57,14 @@ int web_frrs_filter_find(const char *w) {
     return WEB_TRI_F_BAD;
 }
 
+int web_frrs_state_out(int state) {
+    return state == WEB_TRI_FALSE || state == WEB_TRI_NOISE || state == WEB_TRI_KNOWN;
+}
+
 int web_frrs_filter_pass(int filter, int state) {
     if (filter == WEB_TRI_F_ANY) return 1;
     if (filter == WEB_TRI_F_TRIAGED) return state != WEB_TRI_UNTRIAGED;
-    if (filter == WEB_TRI_F_OUT) return state == WEB_TRI_FALSE || state == WEB_TRI_NOISE;
+    if (filter == WEB_TRI_F_OUT) return web_frrs_state_out(state);
     return filter == state;
 }
 
@@ -1379,7 +1383,7 @@ static int route_summary(const web_m4_t *m, web_live_t *live, const char *query,
                          char *body, size_t cap, size_t *len, int *status) {
     if (query[0]) return frrs_error(400, "unknown_parameter", NULL, body, cap, len, status);
     web_frrs_t *f = m->frrs;
-    long long open[WEB_TRI_COUNT] = { 0, 0, 0, 0 }, total = 0;
+    long long open[WEB_TRI_COUNT] = { 0 }, total = 0;
     int nopen = 0;
     web_live_inc_t *inc = NULL;
     if (live) {
@@ -1434,7 +1438,9 @@ static int route_summary(const web_m4_t *m, web_live_t *live, const char *query,
         web_jw_int(&w, open[s]);
     }
     web_jw_raw(&w, ",\"out\":");
-    web_jw_int(&w, open[WEB_TRI_FALSE] + open[WEB_TRI_NOISE]);
+    long long nout = 0;
+    for (int s = 0; s < WEB_TRI_COUNT; s++) if (web_frrs_state_out(s)) nout += open[s];
+    web_jw_int(&w, nout);
     /* The table's fill, for the page's warning near the cap (the
      * oldest superseded rows fold there; §3.1). */
     long long rows = q_count(f, "SELECT COUNT(*) FROM triage");

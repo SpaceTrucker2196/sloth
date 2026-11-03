@@ -433,7 +433,7 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
      * counted before the filter, so a triaged-out row is never silently
      * gone: the counts say how many each state holds, and without a
      * state the answer is the rows exactly as before. */
-    long long tri_n[WEB_TRI_COUNT] = { 0, 0, 0, 0 };
+    long long tri_n[WEB_TRI_COUNT] = { 0 };
     if (a.has_tri) {
         web_frrs_t *f = m ? m->frrs : NULL;
         int any = web_frrs_triage_any(f), o = 0, oo = 0;
@@ -531,7 +531,9 @@ int web_alerts_route(const web_m4_t *m, web_live_t *live, const char *query,
             web_jw_int(&w, tri_n[s]);
         }
         web_jw_raw(&w, ",\"out\":");
-        web_jw_int(&w, tri_n[WEB_TRI_FALSE] + tri_n[WEB_TRI_NOISE]);
+        long long nout = 0;
+        for (int s = 0; s < WEB_TRI_COUNT; s++) if (web_frrs_state_out(s)) nout += tri_n[s];
+        web_jw_int(&w, nout);
         web_jw_raw(&w, "}");
     }
     web_jw_raw(&w, ",\"types\":[");

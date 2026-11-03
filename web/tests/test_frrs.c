@@ -225,6 +225,12 @@ static int store_has(const char *needle) {
 
 #endif
 
+#ifdef WITH_SQLITE
+static int sql_on(const char *path, const char *sql);
+static int desc_of(const char *id, char *type, char *addr, size_t cap, long long *port,
+                   long long *first);
+#endif
+
 /* ── triage ─────────────────────────────────────────────────────────── */
 
 /* A decision, its history, the clear that undoes it (a second row, not
@@ -283,7 +289,8 @@ static void test_triaged_out_is_counted_not_dropped(void) {
     WT_EQ(rows_count(body_of(g_out)), plain);
     WT_EQ(count_of(body_of(g_out), "\"triage\":{\"state\":"), plain);
     WT_EQ(json_int(body_of(g_out), "false") + json_int(body_of(g_out), "untriaged") +
-          json_int(body_of(g_out), "noise") + json_int(body_of(g_out), "incident"), plain);
+          json_int(body_of(g_out), "noise") + json_int(body_of(g_out), "incident") +
+          json_int(body_of(g_out), "known"), plain);
     WT_EQ(get("/api/alerts", "state=open&limit=100&triage=out"), 200);
     WT_EQ(rows_count(body_of(g_out)), 1);
     WT_EQ(get("/api/alerts", "state=open&limit=100&triage=untriaged"), 200);
@@ -295,6 +302,104 @@ static void test_triaged_out_is_counted_not_dropped(void) {
     WT_EQ(json_int(body_of(g_out), "total"), plain);
     WT_EQ(json_int(body_of(g_out), "out"), 1);
     WT_ASSERT(json_int(body_of(g_out), "out") <= json_int(body_of(g_out), "total"));
+    env_close();
+}
+
+/* known (known good, owner request 2026-11-03): set by the route,
+ * counted by the summary and the alerts list, triaged out like false
+ * and noise (out of the untriaged rows, in "out"), never an incident.
+ * Seen red with web_frrs_state_out() left at false || noise (triage=out
+ * 0 rows, the summary's out 0). */
+static void test_known_is_triaged_out(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    char id[40], b[256], q[96];
+    WT_ASSERT(id_of("KARMA_AP", id, sizeof(id)));
+    WT_EQ(get("/api/alerts", "state=open&limit=100"), 200);
+    long long plain = rows_count(body_of(g_out));
+    WT_ASSERT(plain >= 2);
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"known\",\"note\":\"our own AP\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);
+    WT_HAS(g_out, "\"state\":\"known\"");
+    snprintf(q, sizeof(q), "ids=%s", id);
+    WT_EQ(get("/api/frrs/states", q), 200);
+    WT_HAS(g_out, "\"state\":\"known\"");
+    snprintf(q, sizeof(q), "id=%s", id);
+    WT_EQ(get("/api/frrs/history", q), 200);
+    WT_HAS(g_out, "\"current\":{\"state\":\"known\"");
+    WT_EQ(get("/api/alerts", "state=open&limit=100&triage=known"), 200);
+    WT_EQ(rows_count(body_of(g_out)), 1);
+    WT_EQ(get("/api/alerts", "state=open&limit=100&triage=out"), 200);
+    WT_EQ(rows_count(body_of(g_out)), 1);
+    WT_EQ(get("/api/alerts", "state=open&limit=100&triage=triaged"), 200);
+    WT_EQ(rows_count(body_of(g_out)), 1);
+    WT_EQ(get("/api/alerts", "state=open&limit=100&triage=incident"), 200);
+    WT_EQ(rows_count(body_of(g_out)), 0);
+    WT_EQ(get("/api/alerts", "state=open&limit=100&triage=untriaged"), 200);
+    WT_EQ(rows_count(body_of(g_out)), plain - 1);
+    WT_EQ(get("/api/alerts", "state=open&limit=100&triage=any"), 200);
+    WT_EQ(json_int(body_of(g_out), "known"), 1);
+    WT_EQ(json_int(body_of(g_out), "incident"), 0);
+    WT_EQ(get("/api/frrs/summary", ""), 200);
+    WT_EQ(json_int(body_of(g_out), "total"), plain);
+    WT_EQ(json_int(body_of(g_out), "known"), 1);
+    WT_EQ(json_int(body_of(g_out), "incident"), 0);
+    WT_EQ(json_int(body_of(g_out), "untriaged"), plain - 1);
+    WT_EQ(json_int(body_of(g_out), "out"), 1);
+    env_close();
+}
+
+/* No sixth state: "5" (and a number for the word) is refused on the
+ * route and in an import line, and a stored state past known (a newer
+ * build's, or an edited file) reads as untriaged, never as an index
+ * past the table. The stored case seen red with the read clamp in
+ * web_frrs_triage_find() widened to `out->state > WEB_TRI_COUNT` (the
+ * row then counted out of untriaged, its via no longer null). The
+ * route's and the import's refusals are the word table's: there is no
+ * numeric range there to widen, so they are asserted, not claimed as
+ * seen red. */
+static void test_state_past_known_refused(void) {
+    env_open(NULL, 1);
+    if (!E.have_store) { env_close(); return; }
+    char id[40], b[512];
+    WT_ASSERT(id_of("KARMA_AP", id, sizeof(id)));
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"5\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 400);
+    WT_HAS(g_out, "bad_state");
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":5}", id);
+    WT_EQ(post("/api/frrs/triage", b), 400);
+    WT_EQ(get("/api/frrs/summary", ""), 200);
+    WT_EQ(json_int(body_of(g_out), "rows"), 0);
+#ifdef WITH_SQLITE
+    char type[48], addr[64];
+    long long port = 0, first = 0;
+    snprintf(b, sizeof(b), "{\"id\":\"%s\",\"state\":\"known\"}", id);
+    WT_EQ(post("/api/frrs/triage", b), 200);
+    WT_ASSERT(desc_of(id, type, addr, sizeof(addr), &port, &first));
+    static const char *const W[] = { "5", "known" };
+    for (int i = 0; i < 2; i++) {
+        snprintf(b, sizeof(b),
+                 "{\"type\":\"slothweb-tacdb\",\"format\":\"slothweb-tacdb\",\"version\":1}\n"
+                 "{\"type\":\"triage\",\"alert_type\":\"%s\",\"addr\":\"%s\",\"port\":%lld,"
+                 "\"first_seen\":%lld,\"state\":\"%s\",\"prev_state\":\"untriaged\",\"via\":\"manual\","
+                 "\"basis\":\"\",\"note\":\"\",\"by\":\"\",\"peer\":\"\",\"ts\":%lld}\n"
+                 "{\"type\":\"end\",\"lines\":3,\"complete\":true}\n",
+                 type, addr, port, first, W[i], T + 10);
+        int st = post_h("/api/frrs/import", "mode=check", b, "http://127.0.0.1:8770", "application/json",
+                        i ? "127.0.2.2" : "127.0.2.1");
+        if (i) WT_EQ(st, 200);
+        else { WT_EQ(st, 400); WT_HAS(g_out, "bad_state"); }
+    }
+    WT_EQ(get("/api/alerts", "state=open&limit=100"), 200);
+    long long plain = rows_count(body_of(g_out));
+    WT_EQ(sql_on(E.store_path, "UPDATE triage SET state = 5"), 0);
+    WT_EQ(get("/api/alerts", "state=open&limit=100&triage=any"), 200);
+    WT_EQ(json_int(body_of(g_out), "untriaged"), plain);
+    WT_EQ(json_int(body_of(g_out), "known"), 0);
+    WT_EQ(count_of(body_of(g_out), "\"via\":null"), plain);
+    WT_EQ(get("/api/alerts", "state=open&limit=100&triage=out"), 200);
+    WT_EQ(rows_count(body_of(g_out)), 0);
+#endif
     env_close();
 }
 
@@ -2198,6 +2303,15 @@ static void test_page_module(void) {
      * does not meet it, and a short label for phone width. */
     WT_HAS(m, "\"no automatic triage: \"");
     WT_HAS(m, "el(\"span\", \"tri-short\", sbl)");
+    /* known: its button, green, with the known-good wording as its
+     * title, its chip, and triaged out like false and noise. */
+    WT_HAS(m, "b(\"known\", \"known\", \"tri-known\", KNOWN_TITLE);");
+    WT_HAS(m, "\"known\": \"tri-known\" };");
+    WT_HAS(m, "\"incident\": 1, \"known\": 1 };");
+    WT_HAS(m, "function out(st) { return st === \"false\" || st === \"noise\" || st === \"known\"; }");
+    WT_HAS(m, "if (o.known) parts.push(o.known + \" known\");");
+    WT_HAS(m, "known good: expected traffic from a friendly or neutral emitter ");
+    WT_HAS(m, "MIL-STD-2525's green");
     /* The Report's RSSI series is drawn as text: draw_sparkline_at()'s
      * glyphs and the heat ramp's classes, each from a fixed table and
      * graded by glyph.js's port of the TUI's level, never a value of the
@@ -2216,6 +2330,9 @@ static void test_page_module(void) {
      * not, so the row's last button is never cut off at 393 px (seen
      * cut off there before; re-screenshot at 393 px, review of 2026-11-02).
      * Seen red with the media block removed from frrs.css. */
+    WT_HAS(p, "button.tri-b.tri-known, .tri-chip.tri-known { color: var(--tri-known); }");
+    WT_HAS(p, "--tri-known:    var(--tui-bright);");
+    WT_HAS(p, "<option value=\"known\">known (known good)</option>");
     const char *mq = strstr(p, ".tri-rec .tri-short { display: none; }");
     const char *mw = mq ? strstr(mq, "@media (max-width: 480px) {") : NULL;
     WT_ASSERT(mq && mw && strstr(mw, ".tri-rec .tri-long { display: none; }") &&
@@ -2321,6 +2438,8 @@ void run_frrs_tests(void) {
     WT_RUN(test_page_module);
     WT_RUN(test_triage_round_trip);
     WT_RUN(test_triaged_out_is_counted_not_dropped);
+    WT_RUN(test_known_is_triaged_out);
+    WT_RUN(test_state_past_known_refused);
     WT_RUN(test_cross_origin_refused);
     WT_RUN(test_body_rules);
     WT_RUN(test_get_cannot_write);

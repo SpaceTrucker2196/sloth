@@ -59,6 +59,11 @@
   --sev-low:      var(--heat-1);
   --sev-warn:     var(--heat-2);
   --sev-crit:     var(--heat-3);
+  /* the triage verdict known (known good): green, the affiliation
+   * colour of a friendly or neutral emitter (MIL-STD-2525). The TUI's
+   * bright phosphor, which palette.css lightens for the cream theme to
+   * 4.5:1, so one line serves both themes. */
+  --tri-known:    var(--tui-bright);
 
   /* flow protocol hues (the Flows view, M6): a categorical chart
    * encoding the TUI has no counterpart for, each named beside its line

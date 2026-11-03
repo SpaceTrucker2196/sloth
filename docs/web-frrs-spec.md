@@ -90,8 +90,9 @@ migration convention), `web/src/web_routes.h`, `web/src/web_http.h`,
 
 ### 0.1 The two things being built
 
-1. **Triage.** Every alert row, everywhere one is drawn, gets four
-   buttons: *false*, *noise*, *incident*, and *follow recommended*.
+1. **Triage.** Every alert row, everywhere one is drawn, gets five
+   buttons: *false*, *noise*, *incident*, *known* (green; owner
+   request 2026-11-03) and *follow recommended*.
    The state is kept in slothweb's own store, every change appends a
    row (so every change is reversible by another), with an optional
    note, a timestamp, and who. Rows are filterable by state; the
@@ -150,9 +151,19 @@ Two terms are used throughout:
 **States.** `untriaged` (no decision; the default and the absence of
 rows), `false` (the rule fired on something that is not what it
 detects), `noise` (what the rule detects, but expected here), and
-`incident` (what the rule detects, and it matters). The three decided
-states are the owner's words; `untriaged` is reached again by an
-explicit *clear*, which is itself a row.
+`incident` (what the rule detects, and it matters), and `known`
+(known good — expected traffic from a friendly or neutral emitter (the FRRS/EW affiliation sense: friend, or neutral per MIL-STD-2525's green); triaged out like false/noise, never an incident; added 2026-11-03 at the owner's request, "a Green tag for known
+or a sigint term for known good traffic"). The decided states are the
+owner's words; `untriaged` is reached again by an explicit *clear*,
+which is itself a row.
+
+`known` is stored as 4, appended after `incident` so the stored values
+0..3 keep their meaning. Nothing in slothweb.db rejects 4 (the
+`state` column has no `CHECK`; the route and the import validate the
+word against the state table, and the read clamps anything outside it
+to `untriaged`), so it needs **no schema step**: an older build reading
+a 4 shows the alert untriaged, the safe direction, and the row is kept
+as written.
 
 **Subject.** A triage row attaches to a **finding**, named
 `d<rowid>` where `rowid` is the smallest rowid of the finding's key in
@@ -187,7 +198,7 @@ subject.
 | `addr` | TEXT | 45 | descriptor; canonical (`web_key_ip` / `web_key_mac`), `""` when the finding names none |
 | `port` | INTEGER | 0..65535 | descriptor |
 | `first_seen` | INTEGER | | descriptor: the finding's first row's |
-| `state` | INTEGER | 0 untriaged, 1 false, 2 noise, 3 incident | |
+| `state` | INTEGER | 0 untriaged, 1 false, 2 noise, 3 incident, 4 known | anything else read as untriaged |
 | `prev_state` | INTEGER | | what the newest row said before this one (0 for the first) |
 | `via` | INTEGER | 0 manual, 1 recommended, 2 import | how the state was chosen |
 | `basis` | TEXT | 96 | for `via` 1: the assessment's own words that recommended it (slothweb's copy of the front-matter value, not operator text) |
@@ -270,7 +281,9 @@ real ARP spoof marked `false` by one click would be dimmed in every
 list; so it recommends nothing and is shown beside the buttons.
 `severity_assessment` (`agree`, `too high`) judges the severity level,
 not whether the alert is real, so it never recommends `incident`.
-Nothing ever recommends `false`. A mixed `noise_verdict` is decided by
+Nothing ever recommends `false`, nor `known`: whether an emitter is
+the operator's own or expected is a fact about this site no assessment
+of a rule can know. A mixed `noise_verdict` is decided by
 its first words. Q3 asks the owner whether either of the other two
 should ever recommend. Two sources, one
 interface (`web_frrs_recommend(type, out)`): the compiled table
@@ -561,7 +574,7 @@ addresses), a refusal a `400` with a reason word of slothweb's own.
 |---|---|---|
 | `/api/frrs/triage?ids=` | 1..100 alert ids (`s…`/`d…` as the alert routes give them), comma-separated | `{"triage":{"<id>":{"state":"noise","ts":…,"via":"manual","note":"…","by":"…","history_n":3,"finding":"d1234"}}, "missing":[…]}`; an id with no rows is in neither map (untriaged) |
 | `/api/frrs/triage/history?id=` | one alert id | the subject's rows, newest first, each as above plus `prev_state`, `basis`, `peer` |
-| `/api/frrs/summary` | | `{"open":{"untriaged":n,"false":n,"noise":n,"incident":n},"all":{…},"writes":true,"read_only":false,"recommendations":"compiled"|"dir"|"none"}` — the open counts are over the stream's open incidents (what the tile counts), by their current triage |
+| `/api/frrs/summary` | | `{"open":{"total":n,"untriaged":n,"false":n,"noise":n,"incident":n,"known":n,"out":n},"all":{…},"writes":true,"read_only":false,"recommendations":"compiled"|"dir"|"none"}` — the open counts are over the stream's open incidents (what the tile counts), by their current triage |
 | `/api/frrs/recommend?type=` | an alert type name or number | `{"type":"…","state":"noise"|null,"basis":"…","front_matter":{…},"source":"compiled"|"dir"|"none"}` |
 | `/api/frrs/report?kind=sta|bssid|ble&addr=` | a canonical address (BLE with `/type`) | the §4 record: `{"emitter":{…},"bei":{…},"scs":{…},"ecs":{…},"tacdb":{…},"report":{…},"since":…}`; every field `{"v":…,"src":"beacon_aps.beacon_ms"}` or `{"v":null,"src":"…"}`; capped at 32 KiB, lists cut with `_more` |
 | `/api/frrs/report/alert?id=` | an alert id | the same, for the emitter the alert names (a MAC in its key, else the device holding `match_ip`), plus `"finding"` |
@@ -669,8 +682,8 @@ answer is byte for byte as today; with it (`any` included) every row
 carries `"triage":{"state":…,"ts":…,"via":…}` (`state` `"untriaged"`
 when no row) and the answer carries `"triage_counts":{…}` over the
 rows the filters matched. Values: `any`, `untriaged`, `false`, `noise`,
-`incident`, `triaged` (any of the three), `out` (`false` or `noise`:
-what the tile shows as triaged-out). The filter is applied inside the
+`incident`, `known`, `triaged` (any of the four), `out` (`false`,
+`noise` or `known`: what the tile shows as triaged-out). The filter is applied inside the
 bounded read, like the others (`scan` counts rows that match). The same
 parameter on `/api/history/alerts` and on `/api/device/{mac}` (its
 `alerts` list) and `/api/alert` (the one alert) behaves the same.
@@ -738,9 +751,12 @@ label ("follow recommended: noise") when there is one, is disabled
 with "no recommendation yet" when there is none, and on click writes
 `state: recommended`. The state chip's colours are the severity
 tokens the page has (`sev0` for noise, `sev1` for false, `sev2` for
-incident) — no new colour.
+incident); `known` is green (`tri-known`, the theme's `--tri-known`,
+which is the TUI's bright phosphor `--tui-bright`, lightened for the
+cream theme to 4.5:1 by palette.c), the affiliation colour of a
+friendly or neutral emitter. Its button's title says what it means.
 
-Triaged-out rows (`false`, `noise`) are **dimmed, not hidden**, in
+Triaged-out rows (`false`, `noise`, `known`) are **dimmed, not hidden**, in
 every list unless the viewer filters them out; the count line always
 says how many are dimmed ("12 rows, 4 triaged out").
 

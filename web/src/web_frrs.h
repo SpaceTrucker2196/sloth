@@ -5,7 +5,7 @@
  * from what sloth already recorded.
  *
  *   Triage   append-only rows in slothweb.db (v6, web_store.h): one per
- *            decision on one finding, false / noise / incident /
+ *            decision on one finding, false / noise / incident / known /
  *            untriaged (a clear), each with who, from where, when, an
  *            optional note, and for "follow recommended" the words of
  *            the research assessment that recommended it. The current
@@ -145,13 +145,17 @@
 /* The export, one JSON Lines file, and so also what one import takes. */
 #define WEB_FRRS_EXPORT_MAX   WEB_IMPORT_MAX
 
+/* known (4): known good, expected traffic from a friendly or neutral
+ * emitter (the FRRS/EW affiliation sense: friend, or neutral per
+ * MIL-STD-2525's green). Triaged out like false and noise, never an
+ * incident. Appended, so 0..3 keep their stored values. */
 enum { WEB_TRI_UNTRIAGED = 0, WEB_TRI_FALSE, WEB_TRI_NOISE, WEB_TRI_INCIDENT,
-       WEB_TRI_COUNT };
+       WEB_TRI_KNOWN, WEB_TRI_COUNT };
 enum { WEB_TRI_VIA_MANUAL = 0, WEB_TRI_VIA_RECOMMENDED, WEB_TRI_VIA_IMPORT };
-/* The triage= filter of /api/alerts (§5.4): the four states, and three
- * groups: any (every row, each carrying its triage), triaged (the three
- * decided states) and out (false or noise: what the tile counts as
- * triaged out). */
+/* The triage= filter of /api/alerts (§5.4): the five states, and three
+ * groups: any (every row, each carrying its triage), triaged (the four
+ * decided states) and out (false, noise or known: what the tile counts
+ * as triaged out). */
 enum { WEB_TRI_F_ANY = -1, WEB_TRI_F_TRIAGED = -2, WEB_TRI_F_OUT = -3 };
 #define WEB_TRI_F_BAD (-100)
 
@@ -260,12 +264,14 @@ int  web_frrs_triage_find(web_frrs_t *f, web_sdb_conn_t *c, const web_tri_q_t *q
                           web_tri_t *out);
 /* Whether any triage row exists: the join's shortcut. */
 int  web_frrs_triage_any(web_frrs_t *f);
-/* "any", "untriaged", "false", "noise", "incident", "triaged", "out"
+/* "any", "untriaged", "false", "noise", "incident", "known", "triaged", "out"
  * -> the WEB_TRI_* value or WEB_TRI_F_*; WEB_TRI_F_BAD for anything
  * else. */
 int  web_frrs_filter_find(const char *word);
 /* Does a triage state pass a triage= filter? */
 int  web_frrs_filter_pass(int filter, int state);
+/* Is a triage state triaged out (false, noise or known)? */
+int  web_frrs_state_out(int state);
 const char *web_frrs_state_word(int state);
 const char *web_frrs_via_word(int via);
 
