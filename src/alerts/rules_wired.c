@@ -957,14 +957,14 @@ void rule_smb1_use(const sloth_state_t *s, time_t now) {
          * decade is enough to tell one exchange from a bulk transfer,
          * and the `smb_session` JSONL record keeps the exact figure. */
         char detail[ALERT_DETAIL_LEN], cb[24];
+        count_bucket(cb, e->count > 0 ? (unsigned long)e->count : 0);
         snprintf(detail, sizeof(detail),
                  "SMBv1 traffic %.39s -> %.39s:%u (%s SMB packet%s). SMBv1"
                  " has been deprecated since 2017 (EternalBlue / WannaCry);"
                  " the endpoint serving v1 should be patched or v1"
                  " disabled.",
                  e->client_ip, e->server_ip, (unsigned)e->server_port,
-                 count_bucket(cb, e->count > 0 ? (unsigned long)e->count : 0),
-                 e->count == 1 ? "" : "s");
+                 cb, e->count == 1 ? "" : "s");
         fire(ALERT_TYPE_SMB1_USE, ALERT_SEV_CRIT,
              "SMB1_USE", detail, key, e->server_ip, e->server_port, now);
     }

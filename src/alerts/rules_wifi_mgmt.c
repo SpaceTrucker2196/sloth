@@ -1349,11 +1349,13 @@ void rule_mgmt_fuzz(const sloth_state_t *s, time_t now) {
                      "BSSID %s malformed IEs (%s): counters saturated,"
                      " rate no longer measured - 802.11 mgmt fuzzing",
                      bssid, kinds);
-        else
+        else {
+            const char *band = mgmt_fuzz_rate_band(per100);
             snprintf(detail, sizeof(detail),
                      "BSSID %s malformed IEs (%s): %s per 100 frames heard"
                      " - 802.11 mgmt fuzzing",
-                     bssid, kinds, mgmt_fuzz_rate_band(per100));
+                     bssid, kinds, band);
+        }
         fire(ALERT_TYPE_MGMT_FUZZ,
              score >= MGMT_FUZZ_CRIT ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
              "MGMT_FUZZ", detail, key, NULL, 0, now);

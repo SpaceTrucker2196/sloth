@@ -604,11 +604,11 @@ void rule_fragattack(const sloth_state_t *s, time_t now) {
              * row and not to this kind, stays on the [c] view. */
             char cb[24];
             snprintf(key, sizeof(key), "fragplain:%.17s", bss);
+            count_bucket(cb, b->plaintext_unicast);
             snprintf(detail, sizeof(detail),
                      "%s unprotected data frame%s on %.17s after key install"
                      " (CVE-2020-26140/-26143)",
-                     count_bucket(cb, b->plaintext_unicast),
-                     b->plaintext_unicast == 1 ? "" : "s", bss);
+                     cb, b->plaintext_unicast == 1 ? "" : "s", bss);
             /* CRIT on the first one. This is not a threshold detector:
              * a station whose encrypted traffic we have already seen
              * has no legitimate reason to send one plaintext non-EAPOL
@@ -643,12 +643,13 @@ void rule_fragattack(const sloth_state_t *s, time_t now) {
 
         if (b->eapol_relay > 0) {
             snprintf(key, sizeof(key), "fragrelay:%.17s", bss);
+            frag_sibling_note(b, sib, sizeof(sib));
             snprintf(detail, sizeof(detail),
                      "%u EAPOL frame%s forwarded between stations on %.17s"
                      " - last %.17s -> %.17s, neither is the AP"
                      " (CVE-2020-26139)%s",
                      b->eapol_relay, b->eapol_relay == 1 ? "" : "s",
-                     bss, sa, da, frag_sibling_note(b, sib, sizeof(sib)));
+                     bss, sa, da, sib);
             fire(ALERT_TYPE_FRAG_EAPOL_RELAY, ALERT_SEV_CRIT,
                  "FRAG_EAPOL_RELAY", detail, key, NULL, 0, now);
         }
