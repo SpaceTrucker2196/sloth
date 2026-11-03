@@ -531,6 +531,23 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
         if (web_jl_int(r, "has_rssi", 0) != 1) return;
         if (web_key_mac(web_jl_str(r, "addr"), k) != 0) return;
         rssi(m, r, "rssi", WM_RF_RSSI_BLE, k, ts, now, -127, 20);
+    } else if (!strcmp(t, "gnss_fix")) {
+        /* The host's own receiver (web_gnss.h): change-only records, so
+         * a sample per band change or heartbeat. A gnss_fix carries
+         * usat / hdop as -1 / 0 when its sky has not said; gauge()
+         * samples what the record says, and the page reads null from
+         * /api/gnss, so only a figure in range is sampled here. */
+        double v;
+        if (web_jl_num(r, "usat", &v) && v >= 0)
+            web_rollup_add(m->ru, WM_GNSS_SATS_USED, "", v, now);
+        if (web_jl_num(r, "hdop", &v) && v > 0 && v <= 100)
+            web_rollup_add(m->ru, WM_GNSS_HDOP, "", v, now);
+        if (web_jl_num(r, "time_off_ms", &v) && v > -1e12 && v < 1e12)
+            web_rollup_add(m->ru, WM_GNSS_TIME_OFF_MS, "", v, now);
+    } else if (!strcmp(t, "gnss_sky")) {
+        double v;
+        if (web_jl_num(r, "cn0_mean", &v) && v > 0 && v <= 99)
+            web_rollup_add(m->ru, WM_GNSS_CN0_MEAN, "", v, now);
     } else if (!strcmp(t, "dns")) {
         if (web_key_ip(web_jl_str(r, "src"), k) != 0) return;
         long long resp = web_jl_int(r, "is_resp", -1);

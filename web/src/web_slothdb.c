@@ -99,6 +99,24 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "sensor_positions", "lon", 9, 1, 0 },
     { "sensor_positions", "alt_m", 9, 1, 0 },
     { "sensor_positions", "acc_m", 9, 1, 0 },
+    /* v10: the receiver's own sky and clock (docs/wiki/gnss.md). Nothing
+     * a third party chose: a satellite's identity and the receiver's
+     * figures. */
+    { "gnss_fixes", "last_seen", 10, 1, 0 }, { "gnss_fixes", "src", 10, 1, 0 },
+    { "gnss_fixes", "mode", 10, 1, 0 },      { "gnss_fixes", "status", 10, 1, 0 },
+    { "gnss_fixes", "nsat", 10, 1, 0 },      { "gnss_fixes", "usat", 10, 1, 0 },
+    { "gnss_fixes", "hdop", 10, 1, 0 },      { "gnss_fixes", "vdop", 10, 1, 0 },
+    { "gnss_fixes", "pdop", 10, 1, 0 },      { "gnss_fixes", "eph", 10, 1, 0 },
+    { "gnss_fixes", "epv", 10, 1, 0 },       { "gnss_fixes", "lat", 10, 1, 0 },
+    { "gnss_fixes", "lon", 10, 1, 0 },       { "gnss_fixes", "alt_m", 10, 1, 0 },
+    { "gnss_fixes", "speed_mps", 10, 1, 0 }, { "gnss_fixes", "track_deg", 10, 1, 0 },
+    { "gnss_fixes", "time_off_ms", 10, 1, 0 }, { "gnss_fixes", "jam", 10, 1, 0 },
+    { "gnss_fixes", "cn0_mean", 10, 1, 0 },
+    { "gnss_sightings", "last_seen", 10, 1, 0 }, { "gnss_sightings", "gnssid", 10, 1, 0 },
+    { "gnss_sightings", "prn", 10, 1, 0 },       { "gnss_sightings", "svid", 10, 1, 0 },
+    { "gnss_sightings", "el", 10, 1, 0 },        { "gnss_sightings", "az", 10, 1, 0 },
+    { "gnss_sightings", "cn0", 10, 1, 0 },       { "gnss_sightings", "used", 10, 1, 0 },
+    { "gnss_sightings", "health", 10, 1, 0 },
     /* M5 (#163): the WiFi view's AP table and the History view. */
     { "beacon_aps", "bssid", 1, 0, 0 },  { "beacon_aps", "ssid", 1, 0, 0 },
     { "beacon_aps", "signal_dbm", 1, 0, 0 }, { "beacon_aps", "channel", 1, 0, 0 },

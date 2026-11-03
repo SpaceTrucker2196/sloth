@@ -14,7 +14,7 @@ month of operation costs megabytes instead of a terabyte.
 **Sources**: `src/db.h`, `src/db.c`, `src/db_schema.c`,
 `tests/test_db.c`, issues #42, #56, #154 and #170.
 
-**Last updated**: 2026-11-02 ([[location]]: `device_positions` at rest samples on an RSSI band change or every `gps.sample_s` x 10, its row rate, and `--location` for a parked sensor). 2026-10-27 ([[location]]: schema v9, the alerts location stamp `lat`/`lon`/`alt_m`/`acc_m`/`loc_src`/`loc_ts`, the v8 → v9 step, `device_positions` and `sensor_positions` in the observation tier, the stamp's upsert rule and `--db-compact-alerts` carrying it). 2026-10-26 (`idx_alerts_first_seen` and `idx_devices_first_seen`, for slothweb's History strip; an index needs no bump, and the build cost is measured under "Indexes on time"). 2026-10-26 (#170 review: `alerts.incident_first_seen`, peak `sev` on the live row as on a compacted one, `count` / `reopens` as lower bounds, and `--db-compact-alerts` refusing an un-checkpointed SRC, writing nothing beside it, and handing DST to SRC's owner). 2026-10-26 (#170: schema v8, one `alerts` row per finding rather than per incident — the incident semantics below, the v7 → v8 step, and the opt-in `--db-compact-alerts` copy for the duplicates older builds wrote). 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
+**Last updated**: 2026-11-02 ([[gnss]]: schema v10, `gnss_fixes` and `gnss_sightings` in the observation tier on the records' banded change-only rule, the stamp-only v9 → v10 step and its two tests). 2026-11-02 ([[location]]: `device_positions` at rest samples on an RSSI band change or every `gps.sample_s` x 10, its row rate, and `--location` for a parked sensor). 2026-10-27 ([[location]]: schema v9, the alerts location stamp `lat`/`lon`/`alt_m`/`acc_m`/`loc_src`/`loc_ts`, the v8 → v9 step, `device_positions` and `sensor_positions` in the observation tier, the stamp's upsert rule and `--db-compact-alerts` carrying it). 2026-10-26 (`idx_alerts_first_seen` and `idx_devices_first_seen`, for slothweb's History strip; an index needs no bump, and the build cost is measured under "Indexes on time"). 2026-10-26 (#170 review: `alerts.incident_first_seen`, peak `sev` on the live row as on a compacted one, `count` / `reopens` as lower bounds, and `--db-compact-alerts` refusing an un-checkpointed SRC, writing nothing beside it, and handing DST to SRC's owner). 2026-10-26 (#170: schema v8, one `alerts` row per finding rather than per incident — the incident semantics below, the v7 → v8 step, and the opt-in `--db-compact-alerts` copy for the duplicates older builds wrote). 2026-10-23 (#163: the query recipes are slothweb's SQL box's, extracted at its build; three are refused there, the space recipe because `dbstat` gives away a withheld column's length). 2026-10-21 (#154: the v1 → v4 migration steps, so the chain now runs the full v1 → v7 and nothing below v5 is refused any more; also fixed a latent `check_version()` bug — reopening a file already at the current version could wrongly re-enter the migration chain once the floor reached v1, because "a schema_version row exists" and "the version to migrate from" shared one variable). 2026-10-21 (#155: schema v7, the devices classifier and DHCP option columns, the v6 → v7 step and the migration chain). 2026-10-20 (#106 round 2: schema v6, devices camera columns, the add-column-only v5 → v6 migration). Earlier: 2026-10-15 (#113: write path names `poll_tick()`; #134: sqlite3 >= 3.31.0 compile-time pin, SQLITE_OPEN_NOFOLLOW unconditional; #137).
 
 ---
 
@@ -137,14 +137,14 @@ These are what make the file trustworthy rather than merely present.
 | `sev` = MAX, `detail` the latest at that peak | `alerts` | A row holds every incident of a key (#170), and a LOW reopen must not erase the CRIT before it. The compactor folds rows the same way. |
 | One row per finding; `count` sums incidents, `reopens` counts them | `alerts` | A write continues the key's newest row, so evict-and-refire, a quiet-period reopen and a restart all advance one row (#170). See *Findings and incidents* below. |
 
-## Schema — 43 tables, v1 → v9
+## Schema — 45 tables, v1 → v10
 
-`meta` holds `schema_version`, currently **9**. `db_open()` checks it
+`meta` holds `schema_version`, currently **10**. `db_open()` checks it
 *before* applying the rest of the schema, so a mismatch produces the
 clear version message rather than whatever SQL error the schema happens
-to hit first. Since #154 the chain covers the full **v1 → v9**: any
+to hit first. Since #154 the chain covers the full **v1 → v10**: any
 file this build has ever written opens and migrates forward. Only a
-file from a *newer* build (`schema_version` above 9) is refused.
+file from a *newer* build (`schema_version` above 10) is refused.
 
 **v5** (#90): `karma_candidates.pnl_best`. **v6** (#106 round 2):
 `devices` gains `device_class`, `camera_vendor`, `camera_model`,
@@ -158,7 +158,33 @@ gains `reopens`, `incident_id`, `incident_count` and
 **v9** (2026-10-27, [[location]]): `alerts` gains `lat`, `lon`,
 `alt_m`, `acc_m`, `loc_src` and `loc_ts`, where the sensor was when the
 row's current incident opened, and two new tables, `device_positions`
-and `sensor_positions`.
+and `sensor_positions`. **v10** (2026-11-02, [[gnss]]): two new tables,
+`gnss_fixes` and `gnss_sightings`, the `--gps` receiver's own sky and
+clock; no existing table or value changes.
+
+**The v9 → v10 migration.** A stamp alone (`db_schema_migrate_v9_sql()`
+is empty, as v2 → v3's was): both tables ride the unconditional
+schema. Tested on a v9 file (`test_v9_file_migrates_additively`: the
+rows and their stamps unchanged, `alerts` still 21 columns, the two
+tables present) and on one whose stamp is refused by a trigger
+(`test_v9_migration_failure_leaves_file_unchanged`: it stays v9 with
+neither table).
+
+**`gnss_fixes` and `gnss_sightings`.** Written only with `--gps`, by
+`write_gnss()`, on the same banded change-only rule as the `gnss_fix`
+and `gnss_sat` JSONL records (`src/gps.c gps_gnss_fix_sig()` /
+`gps_gnss_sat_sig()`), with the writer's own change memory, so the row
+rate is the record rate. `gnss_fixes (last_seen PK, src, mode, status,
+nsat, usat, hdop, vdop, pdop, eph, epv, lat, lon, alt_m, speed_mps,
+track_deg, time_off_ms, jam, cn0_mean)`: one row when the fix's bands
+move or every 300 s. `gnss_sightings (last_seen, gnssid, prn, svid, el,
+az, cn0, used, health)`, key `(last_seen, gnssid, prn)` (PRN is the one
+member gpsd always writes; `gnssid` is -1 from an NMEA-only gpsd): one
+row per satellite when its bands move (used, health, C/N0 to 6 dB,
+elevation and azimuth to 15°) or every 300 s. **Row rate**: a steady
+sky of a dozen satellites is ~290 fix rows and ~3,500 sightings a day;
+a satellite crossing a band is one row. Both age with the observation
+tier. slothweb reads both (allow-listed at version 10).
 
 **The v8 → v9 migration.** Six `ALTER TABLE alerts ADD COLUMN`
 statements, every column nullable with no default
@@ -586,7 +612,7 @@ rows. Entities keep **3×**, findings keep **12×**.
 
 | Tier | Window | Contents |
 |---|---|---|
-| observation | 1× | protocol flows, deauths, twins, EAPOL, scans, seqnum correlations, `device_positions`, `sensor_positions` |
+| observation | 1× | protocol flows, deauths, twins, EAPOL, scans, seqnum correlations, `device_positions`, `sensor_positions`, `gnss_fixes`, `gnss_sightings` |
 | entity | 3× | devices, PNL, beacons, assocs, ARP, leases, discovery, sensors |
 | finding | 12× | `alerts`, `cleartext_creds`, `karma_candidates`, `rogue_radius`, `btm_requests` |
 

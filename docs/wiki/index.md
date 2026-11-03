@@ -30,7 +30,7 @@ the Wi-Fi it watches:
 - [[threat-model]] — assets A1–A5, adversaries ADV-1..4, trust
   boundaries TB-1..7, and the finding → boundary map every security
   issue cites by ID.
-- [[views-catalog]] — keybinding-to-view map for all <!-- count:views -->36<!-- /count --> views.
+- [[views-catalog]] — keybinding-to-view map for all <!-- count:views -->37<!-- /count --> views.
 - [[dashboard]] — the seven-band composite view.
 
 ## Engines
@@ -58,7 +58,8 @@ the Wi-Fi it watches:
 - [[non-ip-sensors]] — passive RF / non-IP sensor-family roadmap (#26).
 - [[ble]] — the Bluetooth host source: `--bt-monitor` over the HCI monitor channel, the passive-scan procedure, what is refused and never written (#144).
 - [[rf-distance]] — the RSSI distance data point: an estimate from signal strength (ITU-R P.1238 log-distance), bands and trend, announced vs assumed transmit power, calibration, and why it is not a location.
-- [[antenna-fixture-rev-n]] — the three-sector passive antenna fixture (Rev N): print, assemble, mount on a 1-1/2 NPT PVC mast, foil the reflectors, validate passively with sloth, maintain; how how three sectors reach a sloth that drives one monitor radio (2026-11-02).
+- [[antenna-fixture-rev-n]] — the three-sector passive antenna fixture (Rev N): print, assemble, mount on a 1-1/2 NPT PVC mast, foil the reflectors, validate passively with sloth, maintain; how three sectors reach a sloth that drives one monitor radio (2026-11-02).
+- [[gnss]] — what the `--gps` receiver sees: satellites in view with C/N0, the DOPs, the receiver's clock against the host's; the `[#]` view, the `gnss_fix` / `gnss_sky` / `gnss_sat` records, schema v10, slothweb's GNSS tab; observation only, the detectors' hooks named (2026-11-02).
 - [[location]] — where the sensor is: `--location` for a fixed sensor, `--gps` for an NMEA serial receiver or loopback gpsd; the stamp on alerts and on captures' manifests, device position samples, GeoJSON / GPX export (2026-10-27).
 - [[ubertooth]] — the over-the-air Bluetooth source: `--bt-capture` reading an Ubertooth's pcap file or FIFO, the allowed and forbidden tools and flags, jam mode and DISABLE_TX firmware (#144 slice 3).
 - [[mac-randomisation]] — the 802.11 seqnum deanonymisation primitive.

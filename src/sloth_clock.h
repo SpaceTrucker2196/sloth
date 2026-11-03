@@ -24,6 +24,12 @@
 /* Wall-clock seconds. Evidence and display only — never a duration. */
 time_t sloth_wall(void);
 
+/* Wall-clock milliseconds (CLOCK_REALTIME), for the one place that
+ * compares the host clock with a receiver's: the GNSS clock offset
+ * (src/gps.c). Evidence only. Under a wall stub it is that stub's
+ * seconds x 1000 unless sloth_clock_test_set_wall_ms() gave its own. */
+int64_t sloth_wall_ms(void);
+
 /* CLOCK_MONOTONIC milliseconds. Arbitrary epoch; only differences mean
  * anything. */
 uint64_t sloth_mono_ms(void);
@@ -38,5 +44,8 @@ void sloth_mono_ts(struct timespec *out);
  * only by tests, before any capture thread exists — the pointers are
  * read without a lock. */
 void sloth_clock_test_set(uint64_t (*mono)(void), time_t (*wall)(void));
+/* A millisecond wall stub on top of the seconds one; NULL falls back to
+ * wall x 1000. sloth_clock_test_set() clears it. */
+void sloth_clock_test_set_wall_ms(int64_t (*wall_ms)(void));
 
 #endif /* SLOTH_CLOCK_H */

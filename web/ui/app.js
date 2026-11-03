@@ -1249,7 +1249,7 @@
 
   // ── views ─────────────────────────────────────────────────────────
   var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "flows", "history",
-               "lookup", "tacdb", "ble"];
+               "lookup", "tacdb", "ble", "gnss"];
   // The views with a tab, and the drill-downs: the Alerts page (6),
   // an alert's page, the record ticker by type, the sensor's health.
   var NAV = VIEWS.concat(["alerts"]);
@@ -1292,6 +1292,8 @@
     if (v === "history") historyView();
     if (v === "lookup") $("l-q").focus();
     if (v === "ble") bleView();
+    // The GNSS panel (gnss.js, its own module): a no-op when not loaded.
+    if (v === "gnss" && window.SlothGnss) SlothGnss.show();
     if (v === "alerts") alertsView();
     if (v === "alert") alertView();
     if (v === "records") recordsView();
@@ -1373,6 +1375,7 @@
   $("nav-lookup").addEventListener("click", function () { show("lookup"); });
   $("nav-alerts").addEventListener("click", function () { show("alerts"); });
   $("nav-ble").addEventListener("click", function () { show("ble"); });
+  $("nav-gnss").addEventListener("click", function () { show("gnss"); });
 
   // ── the theme toggle ──────────────────────────────────────────────
   // Light or dark on :root's data-theme, the choice kept in this
@@ -1437,8 +1440,9 @@
       box.insertBefore(line, box.firstChild);
     }
     var chip = line.firstChild;
-    // sloth's own state is every scope's.
-    var all = v === "health";
+    // sloth's own state is every scope's; so is the host's own GNSS
+    // receiver (web_scope.c tags its records META).
+    var all = v === "health" || v === "gnss";
     chip.className = "scopechip" + (SCOPE === "hybrid" || all ? "" : " sc-" + SCOPE.charAt(0));
     chip.textContent = all ? "every scope: sloth's own state" : "scope: " + SCOPE_WORD[SCOPE];
   }

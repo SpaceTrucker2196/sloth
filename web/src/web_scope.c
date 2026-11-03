@@ -68,6 +68,9 @@ static const struct { const char *t; int tag; } RTYPES[] = {
     { "iface", BK }, { "device", BK },
     /* sloth's own state */
     { "sensor", MT }, { "sensor_health", MT }, { "socket_gap", MT },
+    /* The host's own GNSS receiver (web_gnss.h): neither radio's nor
+     * the IP capture's, so every scope's, as sensor_health is. */
+    { "gnss_fix", MT }, { "gnss_sky", MT }, { "gnss_sat", MT },
 };
 
 int web_scope_record(const char *type) {

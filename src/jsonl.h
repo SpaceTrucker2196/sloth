@@ -105,6 +105,10 @@ void jsonl_emit_mqtt_flows    (const sloth_state_t *s);
 /* #144 slice 4: BLE advertisers and the BLE findings, change-only. */
 void jsonl_emit_ble_devices   (const sloth_state_t *s);
 void jsonl_emit_ble_alerts    (const sloth_state_t *s);
+/* GNSS observation (2026-11-02): gnss_fix, gnss_sky and one gnss_sat per
+ * satellite in view, change-only on src/gps.c's banded signatures; a
+ * no-op without a --gps reader. */
+void jsonl_emit_gnss          (const sloth_state_t *s);
 
 /* Sensor self-report (#91 slice 3). Unlike every emitter above this is a
  * SINGLETON, not one line per table row: "healthy with no detections"

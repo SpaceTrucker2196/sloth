@@ -496,6 +496,8 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/pcap/frames?id=&n=&offset=` | `200` JSON: capture `n` of alert `id` (an index into `/api/alert`'s `captures`; a name or path is never taken), its SHA-256 recomputed against the manifest (`hash.says`: `hash verified`, `HASH MISMATCH` or `no manifest entry`), its file header, and 24 decoded frames from `offset` (0..4095) with each one's hex dump; `400` for a parameter that does not pass; `404` `no_such_alert`, `no_such_capture`, `no_pcap_dir`, `not_found`; `403` `not_regular`, `withheld_evidence_pcap` (an evidence pcap without `--web-serve-evidence-pcap`); `413` `too_large` (over 16 MiB); `415` `pcapng_not_supported` or `not_pcap` with a `message` |
    | `GET /api/pcap?id=&n=` | `200` the same file's bytes, `Content-Type: application/vnd.tcpdump.pcap`, `Content-Disposition: attachment; filename="<its name>"`, `X-Sloth-SHA256: verified`, `mismatch` or `no_manifest_entry` (the check of the bytes served), `Cache-Control: no-store`; the errors as above, as JSON |
    | `GET /api/bundle?kind=device\|alert\|lookup\|ble\|platform&id=` | `200` JSON, a detail view's whole answer for its "copy JSON" button ([Copy JSON: the analysis bundle](#copy-json-the-analysis-bundle)); `400` for a kind, an id or a parameter that does not pass; `404` and `503` as the route it splices (`not_found` for a BLE address no sensor heard, `no_such_platform`, `no_store`); `413` `bundle_too_large` |
+   | `GET /api/gnss?limit=` | `200` JSON, the GNSS tab ([GNSS](#gnss)): the `sensor_health` gnss block, the newest `gnss_fix` and `gnss_sky`, every satellite row with its last 16 `(ts, C/N0)` points sorted by C/N0, and the panel's counts; `scope_note` says the receiver is the host's own, so the answer is the same under every scope; `400` for an unknown parameter or a `limit` outside 1..64; `503` with no panel |
+   | `GET /api/gnss/fixes?since=&limit=` | `200` JSON, the kept `gnss_fix` records (512 in memory) oldest first after `since` (unix seconds), at most `limit` (default and most 128; the page continues from the last row's `ts`); `400` for `bad_since` / `bad_limit` |
    | `HEAD /api/alerts`, `HEAD /api/alert`, `HEAD /api/pcap`, `HEAD /api/pcap/frames`, `HEAD /api/bundle` | `405`, `Allow: GET`, as `/api/query` |
    | `GET /api/positions?mac=&format=json\|geojson\|gpx&since=&until=` | `200`, sloth.db v9's `device_positions` for one MAC (where the sensor was when it heard it, not the device's position) and the sensor's track over the same span, newest first, at most 200 of each (the track the newest 200 points within the samples' span, so the oldest samples of a full answer may have no track under them), `"more"` when there were more; the GeoJSON carries the same `"more"` and `"limit"` as foreign members of its FeatureCollection (RFC 7946 §6.1) and a cut GPX says `truncated` in its `<metadata><desc>` ([Sensor location](#sensor-location)); `json` is `application/json`, `geojson` (RFC 7946) `application/geo+json` and `gpx` (GPX 1.1) `application/gpx+xml`, both as attachments; `400` for a parameter that does not pass (`bad_mac`, `bad_format`, `bad_range`); `503` with no `--sloth-db` or sloth.db unreadable. A file before v9 answers empty lists. `HEAD` is `405` |
    | `GET /api/query?sql=` | only with `--web-allow-sql` (otherwise `404`): `200` JSON, the statement's result; `400` with `{"error":"reason"}` for a refused statement; `503` `busy` while another runs, or sloth.db unreadable |
@@ -773,6 +775,46 @@ third-party map: the page still asks its own server and nothing else.
 when the drawer opens) and two containers, `#loc-alert` and
 `#loc-drawer`.
 
+## GNSS
+
+The GNSS tab is the host's own receiver as sloth reports it
+([gnss](../docs/wiki/gnss.md)): with `--gps`, sloth writes three
+change-only records off the gpsd stream it already reads for its
+position — `gnss_fix` (the newest TPV: mode, status, DOPs, position,
+speed, the receiver's time against the host's clock), `gnss_sky` (the
+pass's counts, DOPs and C/N0 statistics) and one `gnss_sat` per
+satellite in view — plus five `gnss_*` members of `sensor_health`.
+`web/src/web_gnss.c` keeps them in memory: 64 satellite rows keyed
+(gnssid, PRN), the least recently reported evicted and a row quiet for
+660 s (two heartbeats and a margin) dropped as set, each with its last
+16 `(ts, C/N0)` points; 512 fixes in a ring; the newest sky and sensor
+block. Nothing is persisted — sloth.db's `gnss_fixes` and
+`gnss_sightings` (schema v10, both allow-listed) hold the history, and
+`WEB_SDB_SCHEMA_MAX` moved to 10 with them.
+
+The page (`web/ui/gnss.js`, `window.SlothGnss`, containers `gnss-*`,
+one hook in `app.js`) draws the TUI's `[#]` view: its two header
+lines, the satellite table sorted by C/N0 (a header sorts client-side;
+rows bright when in the solution and dim when unhealthy; the signal
+cell heat-graded over 50 dB-Hz with the TUI's thresholds; a per-row
+C/N0 trail from the points), a polar sky plot (azimuth around,
+elevation inward, north up, dots heat-graded and larger when used),
+and a fix-history strip (mode, satellites used, HDOP, clock offset
+over the kept records). Clicking a row opens the TUI's detail rows.
+The receiver is neither the monitor radio's nor the IP capture's, so
+its records are META like `sensor_health`, the tab is served under
+every scope, and the scope chip says so.
+
+Every string is hostile: the constellation is named from gpsd's
+`gnssid` through sloth's own table (`other` past 7, counted), the
+source label is kept only when printable ASCII, every number is range
+checked and anything outside is `null`, never clamped. The clock
+offset is the receiver's stamp against the host's `CLOCK_REALTIME` as
+the line arrived — coarse (serial and gpsd latency, no PPS), enough to
+see a multi-second step and nothing finer; the page labels it so.
+Observation only: no row is a finding, and the detectors are a later
+slice.
+
 ## The data socket (M1)
 
 One thread (`web/src/web_ingest.c`) connects to `--socket`, reads, and
@@ -863,6 +905,7 @@ docs/web-ui-spec.md §5.1, and every one of its metrics has a source
 | `flow.ssh`, `flow.rdp`, `flow.smb`, `flow.snmp`, `flow.mqtt` | counter | IP | deltas of `ssh_flow` `banner_count`, `rdp_flow` `connect_req_count`, `smb_session` `count` (by `client_ip`), `snmp_flow` get+getnext+getbulk+set+response+trap, `mqtt_flow` connect+subscribe+publish, per flow, by source |
 | `live.devices`, `live.alerts_open`, `live.anomalies_open` | gauge | none | docs/web-visual-spec.md §7 (V1, F1): sampled once a batch (below), from `web_live_summary()`'s device count and open incident severities (low+warn+crit summed) and from `web_anomaly_open_count()`. Each needs its source wired first (`web_metrics_set_live()`, `web_metrics_set_anomaly()`); unwired, neither is sampled at all, not sampled at 0 |
 | `records.rate` | counter | record type | every decoded record but `socket_gap`, one per line, keyed by its own `type` |
+| `gnss.sats_used`, `gnss.hdop`, `gnss.time_off_ms`, `gnss.cn0_mean` | gauge | none | the host's own GNSS receiver ([GNSS](#gnss)): `gnss_fix` `usat` (when ≥ 0), `hdop` (when > 0) and `time_off_ms` (when present), `gnss_sky` `cn0_mean` (when > 0). The records are change-only (a band change or the 300 s heartbeat), so each series is as sparse as its record; every scope's, as `sensor.drops` is; not scored by the anomaly engine |
 | `sensor.drops` | counter | none | §7: `sensor_health` `capture_drop_delta` + `capture_ifdrop_delta` + `monitor_drop_delta` + `monitor_ifdrop_delta`, every tick, including the 0 of a healthy one -- a flat line, not a gap |
 | `rf.rssi.sta`, `rf.rssi.bssid`, `rf.rssi.ble` | gauge, dBm | MAC | the signal sloth last heard from the emitter, one sample per record that carries one: `probe_client` `signal_dbm` by `mac`; `beacon` and `assoc` `signal_dbm` by `bssid` (an assoc row's signal is the AP's frames, the (re)association response and EAPOL M1/M3, never the station's); `ble_device` `rssi` by `addr` with `has_rssi` 1, every receiver and address type of that address in one series. Sampled only when the record's `last_seen` is within 10 s of its `ts`, so a row sloth re-sends after the emitter went quiet adds nothing; a Wi-Fi 0 (sloth's "no signal") and anything outside -127..-1 dBm (BLE -127..+20) is not a reading. `ble_device` is written on a change or the 300 s heartbeat, so an advertiser's series is as sparse as its record. Owner ruling 2026-11-02 on [`docs/web-frrs-spec.md`](../docs/web-frrs-spec.md) Q7. Each bucket is the mean of what one receiver's driver reported, with min and max: a sloth gauge, not a calibrated measurement. The device class's keys, so `--web-max-keys` bounds it with the same eviction; Monitor's scope; not scored by the anomaly engine |
 
@@ -1544,11 +1587,11 @@ by the next one.
   `503` `sloth_db_timeout`, never sloth a stall
   (`db_timeouts` on `/api/health`).
 - **Identify.** sloth's `meta` is `(key, value)`; a `schema_version`
-  of 1 to 8 is read (`"db_supported":[1,8]`). The upper bound is held
+  of 1 to 10 is read (`"db_supported":[1,10]`). The upper bound is held
   to sloth's `DB_SCHEMA_VERSION` by a test, so a schema bump cannot
   ship with slothweb still refusing the new files. A newer one is refused
-  with "written by a newer sloth (schema v9; this slothweb reads
-  v1..v8)": this build does not know its columns. An older one is read
+  with "written by a newer sloth (schema v11; this slothweb reads
+  v1..v10)": this build does not know its columns. An older one is read
   by probing its columns with `PRAGMA table_info`: a column the version
   lacks (`device_class`, `camera_*` before v6, `dhcp_vci` before v7,
   `alerts.reopens` before v8) reads as `0` or `NULL`, and a table that is missing reads as no rows,

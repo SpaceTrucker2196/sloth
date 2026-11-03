@@ -284,6 +284,16 @@ static void st_sensors(sloth_state_t *s, const poll_ctx_t *ctx) {
                                        BT_CAPTURE_IFACE, ctx->wall);
         sensor_observe(ub, s->btcap.adv + s->btcap.bredr, ctx->wall);
     }
+    /* GNSS (2026-11-02): the --gps receiver is a sensor too, observing
+     * parsed sentences / gpsd objects. After the radios, for the same
+     * id-slot reason; s->gps is this tick's (gps_health_poll ran in the
+     * health stage). A --location alone registers nothing: it is a
+     * setting, not a receiver. */
+    if (s->gps.has_gps) {
+        sensor_t *gn = sensor_register(s, SENSOR_GPS, "GNSS receiver",
+                                       s->gps.src, ctx->wall);
+        sensor_observe(gn, s->gps.sentences, ctx->wall);
+    }
 }
 
 static void st_twins(sloth_state_t *s, const poll_ctx_t *ctx) {

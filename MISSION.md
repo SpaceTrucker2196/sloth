@@ -24,7 +24,7 @@ console** for IP, 802.11 and Bluetooth (Classic BR/EDR and Low Energy)
 networks. It turns what a host already sees — `/proc`, `/sys`, netlink,
 a libpcap stream, and a Bluetooth receiver (the host's HCI controller,
 or an Ubertooth for over-the-air capture) — into a live
-operator view: <!-- count:views -->36<!-- /count --> panels, <!-- count:rules -->90<!-- /count --> alert rules, an embedded (synthetic)
+operator view: <!-- count:views -->37<!-- /count --> panels, <!-- count:rules -->90<!-- /count --> alert rules, an embedded (synthetic)
 threat-intel matcher, a WiFi-SIGINT toolkit, and an optional JSONL
 forensic log.
 
@@ -152,7 +152,7 @@ segment. Lose that and the tool is just another aircrack fork.
 As of v1.8.2 (`SLOTH_VERSION` in `include/sloth.h` is the source of
 truth for this number; if the two disagree, the `#define` is right):
 
-- **<!-- count:views -->36<!-- /count --> views** (`VIEW_COUNT`), keyed `[1]…[0]`, `[a]…[z]`, `[?]` (help) and `[*]` (BLE; every
+- **<!-- count:views -->37<!-- /count --> views** (`VIEW_COUNT`), keyed `[1]…[0]`, `[a]…[z]`, `[?]` (help) and `[*]` (BLE; every
   letter and digit is taken), indexed in
   the README and in [`docs/wiki/views-catalog.md`](docs/wiki/views-catalog.md).
 - **<!-- count:rules -->90<!-- /count --> alert rules** in `src/alerts/` (one file per domain since #118) — one per `ALERT_TYPE_*`, each

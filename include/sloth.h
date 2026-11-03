@@ -3051,7 +3051,80 @@ typedef struct {
     uint64_t bad_checksum;     /* NMEA checksum failures */
     uint64_t parse_errors;     /* malformed lines, both sources */
     uint64_t reconnects;       /* reopen / reconnect attempts after a loss */
+    /* GNSS observation (2026-11-02, docs/wiki/gnss.md): the sky and the
+     * receiver's clock, from gpsd's SKY / TPV. Exact figures; the
+     * sensor_health signature takes their bands only. */
+    int      sats_in_view;     /* SKY nSat, or the satellites[] count; 0 unknown */
+    int      sats_used;        /* SKY uSat; 0 unknown */
+    double   cn0_mean;         /* mean C/N0 of the satellites reporting one, dB-Hz; 0 none */
+    double   cn0_max;
+    int      has_time_off;
+    long long time_off_ms;     /* receiver time - host wall time at receipt */
+    double   pdop, vdop;       /* 0 unknown */
+    int      status;           /* TPV status, -1 absent */
+    int      jam;              /* TPV jam (u-blox jamInd 0..255), -1 absent */
 } gps_health_t;
+
+/* ── GNSS observation (2026-11-02) ──────────────────────────────────
+ * What the receiver sees, recorded like the Wi-Fi and BLE tables: one
+ * row per satellite in view (gnss_sat_t), the pass they came in
+ * (gnss_sky_t), and the newest TPV (gnss_fix_t). Copied under the gps
+ * module's lock into sloth_state_t once per poll (gps_health_poll), so
+ * views, exports and the later detectors read the copy, never the
+ * module. Fields are gpsd's (https://gpsd.gitlab.io/gpsd/gpsd_json.html):
+ * gnssid 0 GPS, 1 SBAS, 2 Galileo, 3 BeiDou, 4 IMES, 5 QZSS, 6 GLONASS,
+ * 7 NavIC; svid the PRN within its constellation; ss the C/N0 in
+ * dB-Hz; health 0 unknown, 1 OK, 2 unhealthy. */
+#define GNSS_MAX_SATS 48
+
+typedef struct {
+    int16_t prn;               /* always present */
+    int8_t  gnssid;            /* -1 absent (an NMEA-only gpsd) */
+    int16_t svid;              /* -1 absent */
+    int8_t  sigid;             /* -1 absent */
+    int8_t  health;            /* -1 absent */
+    int16_t el, az;            /* degrees; -1 absent */
+    int16_t cn0_x10;           /* C/N0 x 10; has_cn0 0 when absent */
+    uint8_t used, has_cn0;
+} gnss_sat_t;
+
+typedef struct {
+    int        valid;          /* a SKY with satellites has arrived */
+    time_t     ts;             /* wall at receipt */
+    int        nsat, usat;     /* SKY nSat / uSat; -1 absent */
+    int        n;              /* rows in sats[] */
+    int        overflow;       /* satellites past GNSS_MAX_SATS, not kept */
+    gnss_sat_t sats[GNSS_MAX_SATS];
+    double     hdop, vdop, pdop, gdop, tdop;   /* 0 absent */
+    double     cn0_mean, cn0_max, cn0_sd;      /* over the rows with a C/N0 */
+    int        cn0_n;
+    uint64_t   passes;         /* SKY objects with satellites, lifetime */
+} gnss_sky_t;
+
+typedef struct {
+    int       valid;           /* a TPV has arrived */
+    time_t    ts;              /* wall at receipt */
+    int       mode;            /* 0 unknown, 1 none, 2 2D, 3 3D */
+    int       status;          /* TPV status, -1 absent */
+    int       has_pos;
+    double    lat, lon;
+    int       has_alt;
+    double    alt_m;           /* MSL, else HAE */
+    int       has_eph, has_epv;
+    double    eph, epv;        /* metres */
+    int       has_speed, has_track, has_climb;
+    double    speed, track, climb;
+    int       has_rx_time;
+    long long rx_time_ms;      /* the receiver's "time", unix ms */
+    int       has_time_off;
+    long long time_off_ms;     /* rx_time_ms - host wall ms at receipt; coarse */
+    int       leap;            /* leapseconds, -1 absent */
+    int       jam;             /* u-blox jamming indicator 0..255, -1 absent */
+    int       has_gst;
+    double    gst_rms, gst_major, gst_minor, gst_orient;
+    double    gst_lat_sd, gst_lon_sd, gst_alt_sd;
+    uint64_t  count;           /* TPVs, lifetime */
+} gnss_fix_t;
 
 typedef struct {
     int      configured;       /* --bt-capture given */
@@ -3531,6 +3604,12 @@ typedef struct {
      * per poll by gps_health_poll() from src/gps.c; exported by
      * sensor_health (only while configured) and the iface health strip. */
     gps_health_t     gps;
+    /* GNSS observation (2026-11-02): the sky and the newest fix, copied
+     * by gps_health_poll(); the [#] view's cursor and detail flag. */
+    gnss_sky_t       gnss_sky;
+    gnss_fix_t       gnss_fix;
+    int              gnss_sel;
+    int              gnss_detail;
     bredr_lap_t      bredr_laps[MAX_BREDR_LAPS];
     int              bredr_lap_count;
 

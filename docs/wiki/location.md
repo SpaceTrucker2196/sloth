@@ -36,7 +36,7 @@ gpsd(8) (https://gpsd.gitlab.io/gpsd/gpsd.html), the client HOWTO
 (https://gpsd.gitlab.io/gpsd/gpsd_json.html); RFC 7946 (GeoJSON); GPX
 1.1 (https://www.topografix.com/GPX/1/1/).
 
-**Last updated**: 2026-11-02 (a fix is aged on sloth's monotonic clock, and ends when its source goes away; a GSA mode 1 no longer ends a fix; out-of-range accuracy and altitude are dropped; a parked sensor's device sample rate and the `--location` recommendation). 2026-11-02 (`loc_ts` is receipt time; a GSA never renews a position; a FIFO is treated as live; what leaves the host through slothweb and the data socket; `gps_reconnects` counts lost sessions; `gps_quality` -1 before any sentence). 2026-10-27.
+**Last updated**: 2026-11-02 ([[gnss]]: the same receiver's sky, clock offset and the `[#]` view are their own page; `gps_health_poll()` now also fills `s->gnss_sky` / `s->gnss_fix`); 2026-11-02 (a fix is aged on sloth's monotonic clock, and ends when its source goes away; a GSA mode 1 no longer ends a fix; out-of-range accuracy and altitude are dropped; a parked sensor's device sample rate and the `--location` recommendation). 2026-11-02 (`loc_ts` is receipt time; a GSA never renews a position; a FIFO is treated as live; what leaves the host through slothweb and the data socket; `gps_reconnects` counts lost sessions; `gps_quality` -1 before any sentence). 2026-10-27.
 
 ## Sources of a position
 
@@ -210,6 +210,8 @@ IP socket family, so `--gps` needs the opt-in drop-in
 needs nothing.
 
 ## Related pages
+
+- [[gnss]] — what the `--gps` receiver sees: the satellites, the DOPs, the clock offset, the `[#]` view and the `gnss_*` records (2026-11-02).
 
 - [[cli-reference]] — the four flags, the three `gps.*` knobs and the
   exit-2 refusals.

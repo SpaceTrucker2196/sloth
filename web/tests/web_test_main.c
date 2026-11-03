@@ -125,6 +125,7 @@ int main(void) {
     SUITE(run_glyph_tests);
     SUITE(run_frrs_tests);
     SUITE(run_ble_tests);
+    SUITE(run_gnss_tests);
     SUITE(run_btsig_tests);
     SUITE(run_evidence_tests);
     SUITE(run_bundle_tests);

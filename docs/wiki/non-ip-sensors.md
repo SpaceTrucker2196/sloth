@@ -18,7 +18,7 @@ each is a typed producer of observations copied into `sloth_state_t`, exactly
 like the 802.11 path. Until the sensor seam exists, treat everything here as
 design, not implementation.
 
-**Last updated**: 2026-10-14.
+**Last updated**: 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
 
 ---
 
@@ -108,17 +108,27 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
   bundling a full SDR stack (sloth *consumes* a decoder's output).
 - **Test**: sample decoder-JSON lines.
 
-### GPS / location context
-- **Observe**: the operator's own position/time from a local GPS (gpsd) — used
-  to *stamp* other observations with where/when they were seen, not as a
-  target. Enables geo-tagged site snapshots (#27) and wardrive-style maps.
-- **Hardware**: any gpsd-served receiver.
-- **State**: a single `gps_fix_t` (lat, lon, alt, fix quality, sat count, ts)
-  on the state, plus optional per-observation location stamping.
-- **View**: a status line; lat/lon in the snapshot header.
-- **JSONL**: a `gps` field on existing records, or a `gps_fix` record.
-- **Out of scope**: tracking third parties; this is *self*-location only.
-- **Test**: crafted gpsd JSON / NMEA sentences.
+### GPS / GNSS — shipped
+- **Observe**: the operator's own position and time from a local
+  receiver (`--gps gpsd://` or `--gps /dev/tty…`), used to *stamp*
+  findings with where the sensor was ([[location]], 2026-10-27), and the
+  receiver's own sky — satellites in view with C/N0, elevation, azimuth,
+  used and health, the DOPs, the receiver's clock against the host's
+  ([[gnss]], 2026-11-02). Self-location and the sensor's own antenna
+  only; nothing about a third party.
+- **Hardware**: any gpsd-served receiver (the reference host: a USB
+  u-blox 7 under gpsd), or an NMEA 0183 serial device for the position.
+- **State**: `gps_health_t` and the `loc_stamp_t` arbitration in
+  `src/gps.c`; `gnss_sky_t` / `gnss_fix_t` on `sloth_state_t`.
+- **View**: the `gps` token in the Interfaces health strip, the location
+  line in an alert's detail, and the `[#]` GNSS view.
+- **JSONL**: `loc` on stamped alerts, the `gps_*` and `gnss_*` members of
+  `sensor_health`, `gnss_fix` / `gnss_sky` / `gnss_sat`, and the `sensor`
+  record of kind `gps`.
+- **Out of scope**: tracking third parties; writing to the receiver
+  (sloth sends gpsd one `?WATCH` line and a serial device nothing).
+- **Test**: hand-built gpsd JSON and NMEA sentences
+  (`tests/test_gps.c`); no fixtures.
 
 ### ADS-B aircraft
 - **Observe**: decoded Mode-S / ADS-B messages from a local decoder

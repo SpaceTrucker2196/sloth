@@ -919,7 +919,7 @@ static void test_page(void) {
     const char *p = (const char *)web_page;
     WT_HAS(p, "<li><button type=\"button\" class=\"go\" id=\"nav-ble\"><span class=\"k\">0</span>BLE</button></li>");
     WT_HAS(p, "    if (e.key === \"0\") show(\"ble\");");
-    WT_HAS(p, "               \"lookup\", \"tacdb\", \"ble\"];");
+    WT_HAS(p, "               \"lookup\", \"tacdb\", \"ble\", \"gnss\"];");
     WT_HAS(p, "    if (v === \"ble\") bleView();");
     /* The bundle module's hook in the drawer header: the container and
      * the guarded call, a no-op without bundle.js. Seen red with the

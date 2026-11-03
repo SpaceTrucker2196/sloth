@@ -100,7 +100,17 @@ double nmea_acc_m(double hdop);
 
 #define GPSD_MAX_LINE 4096
 
-enum { GPSD_CLS_OTHER = 0, GPSD_CLS_TPV, GPSD_CLS_SKY, GPSD_CLS_VERSION };
+enum { GPSD_CLS_OTHER = 0, GPSD_CLS_TPV, GPSD_CLS_SKY, GPSD_CLS_VERSION,
+       GPSD_CLS_GST };
+
+/* One entry of SKY's satellites[] (2026-11-02). PRN is the only member
+ * gpsd always writes; -1 / has_* 0 mark the rest absent. */
+#define GPSD_MAX_SATS GNSS_MAX_SATS
+typedef struct {
+    int     prn, gnssid, svid, sigid, health;
+    double  el, az, cn0;
+    uint8_t used, has_el, has_az, has_cn0;
+} gpsd_sat_t;
 
 typedef struct {
     int    cls;                 /* GPSD_CLS_* */
@@ -111,15 +121,43 @@ typedef struct {
     double eph, epx, epy;       /* metres */
     double hdop;                /* SKY */
     int    usat;                /* SKY: satellites used */
-    char   time[32];            /* TPV "time", "" absent */
+    char   time[32];            /* TPV / SKY / GST "time", "" absent */
+    /* GNSS observation (2026-11-02). TPV: */
+    int    has_speed, has_track, has_climb, has_epv;
+    double speed, track, climb, epv;
+    int    status;              /* TPV status 0..9, -1 absent */
+    int    jam;                 /* u-blox jamming indicator, -1 absent */
+    int    leap;                /* leapseconds, -1 absent */
+    /* SKY: */
+    int    has_nsat, nsat;
+    int    has_pdop, has_vdop, has_gdop, has_tdop;
+    double pdop, vdop, gdop, tdop;
+    int    nsats;               /* entries kept in sats[] */
+    int    sats_overflow;       /* entries past GPSD_MAX_SATS, not kept */
+    gpsd_sat_t sats[GPSD_MAX_SATS];
+    /* GST (error statistics): rms, the error ellipse, the sigmas; -1 absent. */
+    double gst_rms, gst_major, gst_minor, gst_orient;
+    double gst_lat, gst_lon, gst_alt;
 } gpsd_msg_t;
 
-/* One line of gpsd's stream. 1 for a TPV, SKY or VERSION object, 0 for
- * any other well-formed object (DEVICES, WATCH, ...), -1 when the line
- * is not a JSON object, is unbalanced, or is over GPSD_MAX_LINE.
- * Unknown keys are skipped; nested arrays and objects (SKY's
- * satellites) are skipped by depth. Tolerant of key order. */
+/* One line of gpsd's stream. 1 for a TPV, SKY, GST or VERSION object, 0
+ * for any other well-formed object (DEVICES, WATCH, ...), -1 when the
+ * line is not a JSON object, is unbalanced, or is over GPSD_MAX_LINE.
+ * Unknown keys are skipped; nested arrays and objects are skipped by
+ * depth except SKY's satellites[], whose flat objects are read into
+ * sats[] (a member of another type, or a nested value inside one, is
+ * skipped the same way). Tolerant of key order. */
 int  gpsd_json_parse(const char *line, size_t n, gpsd_msg_t *out);
+
+/* gpsd's "time": strict ISO 8601 UTC, YYYY-MM-DDTHH:MM:SS[.fff]Z, digit
+ * walk, no strptime and no locale. 0 with unix milliseconds in
+ * *epoch_ms (the fraction truncated to ms), -1 for anything else: a
+ * missing Z, an offset, a field out of range, a year outside 1970..2999. */
+int  gpsd_time_parse(const char *s, int64_t *epoch_ms);
+
+/* "GPS", "SBAS", "Galileo", "BeiDou", "IMES", "QZSS", "GLONASS", "NavIC"
+ * for gpsd's gnssid 0..7; "?" otherwise (-1: an NMEA-only gpsd). */
+const char *gnss_name(int gnssid);
 
 /* ── Line framing ──────────────────────────────────────────────
  * Both sources are line-oriented (NMEA CRLF, gpsd LF). The reader hands
@@ -197,6 +235,10 @@ void gps_location_set_gps(const char *label);
  * (has_acc / has_alt 0) rather than recorded. */
 void gps_location_feed_nmea(const nmea_fix_t *f, time_t wall);
 void gps_location_feed_gpsd(const gpsd_msg_t *m, time_t wall);
+/* The same, with the host's wall clock in milliseconds at the moment the
+ * line was framed (sloth_wall_ms()), which the clock offset is measured
+ * against; gps_location_feed_gpsd() passes wall x 1000. */
+void gps_location_feed_gpsd_ms(const gpsd_msg_t *m, int64_t wall_ms);
 
 /* The reader lost its source (EOF, read error, unplugged device, gpsd
  * hung up): the fix ends now rather than after gps.max_fix_age_s. */
@@ -216,6 +258,55 @@ void gps_health_poll(sloth_state_t *s, time_t now);
 
 /* Back to "nothing configured". Tests and sloth_reset_all(). */
 void gps_location_reset(void);
+
+/* ── GNSS observation (2026-11-02, docs/wiki/gnss.md) ──────────────
+ * The sky and the newest fix as the module holds them, copied under the
+ * lock. gps_health_poll() fills s->gnss_sky / s->gnss_fix with these. */
+void gps_sky_snapshot(gnss_sky_t *out);
+void gps_fix_snapshot(gnss_fix_t *out);
+
+/* Kept history for the detector slice that follows (none fires yet):
+ * the last GNSS_FIX_HIST positioned fixes and GNSS_SERIES_S one-second
+ * points of (cn0_mean, usat, nsat, jam). Rings, oldest overwritten. */
+#define GNSS_FIX_HIST 64
+#define GNSS_SERIES_S 300
+typedef struct {
+    time_t    ts;
+    double    lat, lon, alt_m, eph;
+    int       mode, usat, has_alt, has_eph, has_time_off;
+    long long time_off_ms;
+} gnss_fix_pt_t;
+typedef struct {
+    time_t  ts;
+    int16_t cn0_mean_x10;
+    int16_t jam;               /* -1 absent */
+    uint8_t usat, nsat;
+} gnss_sec_pt_t;
+typedef struct {
+    gnss_fix_pt_t fixes[GNSS_FIX_HIST];
+    int           fix_n, fix_head;     /* head: the next slot written */
+    gnss_sec_pt_t secs[GNSS_SERIES_S];
+    int           sec_n, sec_head;
+} gnss_hist_t;
+void gps_gnss_history(gnss_hist_t *out);
+
+/* Change-only signatures, shared by the JSONL writer and the --db
+ * writer so one bucketing rule decides when a GNSS record is news
+ * (agents/AGENTS.md: a continuous value enters a signature as its
+ * band, never itself). gps_gnss_fix_sig: mode, status, usat, nsat/4,
+ * the HDOP and PDOP bands (<1, <2, <5, >=5), the clock-offset band
+ * (|off| <500 ms, <2 s, <10 s, >=10 s, unknown), the speed band (0,
+ * <2 m/s, <30, >=30), the jam band, has_pos. gps_gnss_sat_sig: the
+ * row's identity, used, health, C/N0 to 6 dB, elevation and azimuth to
+ * 15 degrees. gps_gnss_sky_sig: nsat, usat, the DOP bands and the
+ * mean-C/N0 band (<25, 25..35, >=35 dB-Hz). */
+uint64_t gps_gnss_fix_sig(const gnss_fix_t *f, const gnss_sky_t *k);
+uint64_t gps_gnss_sat_sig(const gnss_sat_t *s);
+uint64_t gps_gnss_sky_sig(const gnss_sky_t *k);
+/* The bands themselves, for sensor_health's signature. */
+int  gps_cn0_band(double cn0_mean);               /* -1 none, 0 <25, 1 <35, 2 >=35 */
+int  gps_time_off_band(int has, long long off_ms); /* -1 unknown, 0..3 */
+int  gps_jam_band(int jam);                        /* -1 absent, 0 none, 1 light, 2, 3 */
 
 /* The newest raw fix, fresh or not, for the position sampler and the
  * tests: 1 when one exists (lat/lon/acc/ts filled), 0 before any. */

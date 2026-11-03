@@ -97,6 +97,15 @@ const web_metric_t web_metric_defs[WM_COUNT] = {
     [WM_RF_RSSI_BLE] = { "rf.rssi.ble", WEB_MK_GAUGE, WEB_KC_DEV, "mac",
                          "ble_device rssi by addr, has_rssi 1, last_seen within "
                          "10 s (sloth's last-heard value, not calibrated)", "dBm" },
+    [WM_GNSS_SATS_USED] = { "gnss.sats_used", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                            "gnss_fix usat (satellites in the solution)", "satellites" },
+    [WM_GNSS_HDOP] = { "gnss.hdop", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                       "gnss_fix hdop", "dop" },
+    [WM_GNSS_TIME_OFF_MS] = { "gnss.time_off_ms", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                              "gnss_fix time_off_ms (receiver minus host clock; "
+                              "coarse, no PPS)", "ms" },
+    [WM_GNSS_CN0_MEAN] = { "gnss.cn0_mean", WEB_MK_GAUGE, WEB_KC_GLOBAL, "",
+                           "gnss_sky cn0_mean", "dB-Hz" },
 };
 
 int web_metric_is_rssi(int metric) {

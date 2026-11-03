@@ -97,7 +97,7 @@ static jsonl_dedup_slot_t g_dedup[JSONL_DEDUP_SLOTS];
 
 /* Snapshot event "kinds" — one per deduped emitter. */
 enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH, JD_WIFI_REG,
-       JD_BLE_DEVICE, JD_BLE_ALERT };
+       JD_BLE_DEVICE, JD_BLE_ALERT, JD_GNSS_FIX, JD_GNSS_SKY, JD_GNSS_SAT };
 
 static uint64_t fnv1a(const void *data, size_t n, uint64_t h) {
     const unsigned char *p = (const unsigned char *)data;
@@ -2200,6 +2200,10 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * a receiver is talking, and would sign a line per tick. */
         int      gps_configured, gps_state, gps_age_bucket;
         int      gps_bad_any, gps_err_any;
+        /* GNSS observation (2026-11-02): the clock offset, the mean
+         * C/N0 and the jamming indicator as bands only (src/gps.c
+         * gps_*_band); the satellite counts move too often to sign. */
+        int      gnss_time_off_band, gnss_cn0_band, gnss_jam_band;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -2313,6 +2317,9 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         : (s->gps.fix_age_s > tune_val(TUNE_GPS_MAX_FIX_AGE_S) ? 1 : 0);
     sig.gps_bad_any    = (s->gps.bad_checksum + s->gps.parse_errors) > 0;
     sig.gps_err_any    = s->gps.err[0] != '\0';
+    sig.gnss_time_off_band = gps_time_off_band(s->gps.has_time_off, s->gps.time_off_ms);
+    sig.gnss_cn0_band      = gps_cn0_band(s->gps.cn0_mean);
+    sig.gnss_jam_band      = gps_jam_band(s->gps.jam);
     const int pcap_on = alert_pcap_enabled();
     sig.pcap_swept_band     = pcap_on ? decade_band(alert_pcap_swept()) : -1;
     sig.pcap_sweep_err_band = pcap_on
@@ -2627,9 +2634,142 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "gps_positions_dropped",
                (long long)postrack_dropped());
         kv_str(buf, LINEBUF, &off, "gps_err", g->err);
+        /* GNSS observation (2026-11-02, docs/wiki/gnss.md): the sky's
+         * summary and the receiver's clock, only with a --gps reader
+         * (a --location run has no receiver). gnss_time_offset_ms is
+         * present only once a TPV carried a parseable time. Appended. */
+        if (g->has_gps) {
+            char cn[24];
+            gps_fmt_fixed(cn, sizeof(cn), g->cn0_mean, 1);
+            kv_int(buf, LINEBUF, &off, "gnss_sats_in_view", g->sats_in_view);
+            kv_int(buf, LINEBUF, &off, "gnss_sats_used", g->sats_used);
+            appendf(buf, LINEBUF, &off, ",\"gnss_cn0_mean\":%s", cn);
+            if (g->has_time_off)
+                kv_int(buf, LINEBUF, &off, "gnss_time_offset_ms", g->time_off_ms);
+            kv_int(buf, LINEBUF, &off, "gnss_jam", g->jam);
+        }
     }
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
+}
+
+/* ── GNSS observation (2026-11-02) ──────────────────────────────────
+ *
+ * Three change-only records off the receiver sloth already reads for
+ * its position (docs/wiki/gnss.md), each signed on bands, never on a
+ * figure that moves every second:
+ *
+ *   gnss_fix  the newest TPV, key "gnss_fix": gps_gnss_fix_sig()
+ *   gnss_sky  the newest SKY's summary, key "gnss_sky": gps_gnss_sky_sig()
+ *   gnss_sat  one per satellite in view, key gnssid|prn:
+ *             gps_gnss_sat_sig() (used, health, C/N0 to 6 dB, el/az to
+ *             15 degrees), so a steady sky writes nothing between
+ *             heartbeats and one satellite rising, setting, joining or
+ *             leaving the solution or crossing a band writes that one
+ *             record, not the whole sky.
+ *
+ * Per satellite rather than a nested array in gnss_sky, for the same
+ * reason ble_device is per advertiser: a consumer keeps a table keyed
+ * by the row, and a change in one row costs one line. Every figure is
+ * written without %f (gps_fmt_fixed; locale). */
+static void kv_fixed(char *buf, int *off, const char *key, double v, int dp) {
+    char t[32];
+    gps_fmt_fixed(t, sizeof(t), v, dp);
+    appendf(buf, LINEBUF, off, ",\"%s\":%s", key, t);
+}
+
+void jsonl_emit_gnss(const sloth_state_t *s) {
+    if (!any_sink() || !s || !s->gps.has_gps) return;
+    time_t now = sloth_wall();
+    const gnss_fix_t *f = &s->gnss_fix;
+    const gnss_sky_t *k = &s->gnss_sky;
+    char buf[LINEBUF]; int off = 0;
+
+    if (f->valid &&
+        jsonl_changed(JD_GNSS_FIX, "gnss_fix", 8, gps_gnss_fix_sig(f, k), now)) {
+        start_obj(buf, LINEBUF, &off, "gnss_fix", now);
+        kv_str(buf, LINEBUF, &off, "src", s->gps.src);
+        kv_int(buf, LINEBUF, &off, "fix_ts", (long long)f->ts);
+        kv_int(buf, LINEBUF, &off, "mode", f->mode);
+        kv_int(buf, LINEBUF, &off, "status", f->status);
+        kv_int(buf, LINEBUF, &off, "nsat", k->valid ? k->nsat : -1);
+        kv_int(buf, LINEBUF, &off, "usat", k->valid ? k->usat : -1);
+        kv_fixed(buf, &off, "hdop", k->hdop, 1);
+        kv_fixed(buf, &off, "vdop", k->vdop, 1);
+        kv_fixed(buf, &off, "pdop", k->pdop, 1);
+        if (f->has_pos) {
+            /* Five decimals, as the alerts' stamp exports it; written,
+             * never signed ([[location]]'s privacy rules apply). */
+            kv_fixed(buf, &off, "lat", f->lat, 5);
+            kv_fixed(buf, &off, "lon", f->lon, 5);
+        }
+        if (f->has_alt)   kv_fixed(buf, &off, "alt_m", f->alt_m, 1);
+        if (f->has_eph)   kv_fixed(buf, &off, "eph", f->eph, 1);
+        if (f->has_epv)   kv_fixed(buf, &off, "epv", f->epv, 1);
+        if (f->has_speed) kv_fixed(buf, &off, "speed_mps", f->speed, 2);
+        if (f->has_track) kv_fixed(buf, &off, "track_deg", f->track, 1);
+        if (f->has_rx_time)
+            kv_int(buf, LINEBUF, &off, "rx_time_ms", f->rx_time_ms);
+        if (f->has_time_off)
+            kv_int(buf, LINEBUF, &off, "time_off_ms", f->time_off_ms);
+        kv_int(buf, LINEBUF, &off, "leap", f->leap);
+        kv_int(buf, LINEBUF, &off, "jam", f->jam);
+        if (f->has_gst) {
+            kv_fixed(buf, &off, "gst_rms", f->gst_rms, 2);
+            kv_fixed(buf, &off, "gst_major", f->gst_major, 2);
+            kv_fixed(buf, &off, "gst_minor", f->gst_minor, 2);
+            kv_fixed(buf, &off, "gst_orient", f->gst_orient, 1);
+            kv_fixed(buf, &off, "gst_lat_sd", f->gst_lat_sd, 2);
+            kv_fixed(buf, &off, "gst_lon_sd", f->gst_lon_sd, 2);
+            kv_fixed(buf, &off, "gst_alt_sd", f->gst_alt_sd, 2);
+        }
+        kv_int(buf, LINEBUF, &off, "tpv_count", (long long)f->count);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+
+    if (!k->valid) return;
+    if (jsonl_changed(JD_GNSS_SKY, "gnss_sky", 8, gps_gnss_sky_sig(k), now)) {
+        start_obj(buf, LINEBUF, &off, "gnss_sky", now);
+        kv_str(buf, LINEBUF, &off, "src", s->gps.src);
+        kv_int(buf, LINEBUF, &off, "sky_ts", (long long)k->ts);
+        kv_int(buf, LINEBUF, &off, "nsat", k->nsat);
+        kv_int(buf, LINEBUF, &off, "usat", k->usat);
+        kv_int(buf, LINEBUF, &off, "rows", k->n);
+        kv_int(buf, LINEBUF, &off, "overflow", k->overflow);
+        kv_fixed(buf, &off, "hdop", k->hdop, 1);
+        kv_fixed(buf, &off, "vdop", k->vdop, 1);
+        kv_fixed(buf, &off, "pdop", k->pdop, 1);
+        kv_fixed(buf, &off, "gdop", k->gdop, 1);
+        kv_fixed(buf, &off, "tdop", k->tdop, 1);
+        kv_fixed(buf, &off, "cn0_mean", k->cn0_mean, 1);
+        kv_fixed(buf, &off, "cn0_max", k->cn0_max, 1);
+        kv_fixed(buf, &off, "cn0_sd", k->cn0_sd, 1);
+        kv_int(buf, LINEBUF, &off, "cn0_n", k->cn0_n);
+        kv_int(buf, LINEBUF, &off, "passes", (long long)k->passes);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
+    for (int i = 0; i < k->n && i < GNSS_MAX_SATS; i++) {
+        const gnss_sat_t *a = &k->sats[i];
+        int16_t key[2] = { (int16_t)a->gnssid, a->prn };
+        if (!jsonl_changed(JD_GNSS_SAT, key, sizeof(key), gps_gnss_sat_sig(a), now))
+            continue;
+        start_obj(buf, LINEBUF, &off, "gnss_sat", now);
+        kv_str(buf, LINEBUF, &off, "gnss", a->gnssid >= 0 ? gnss_name(a->gnssid) : "");
+        kv_int(buf, LINEBUF, &off, "gnssid", a->gnssid);
+        kv_int(buf, LINEBUF, &off, "svid", a->svid);
+        kv_int(buf, LINEBUF, &off, "prn", a->prn);
+        kv_int(buf, LINEBUF, &off, "sigid", a->sigid);
+        kv_int(buf, LINEBUF, &off, "el", a->el);
+        kv_int(buf, LINEBUF, &off, "az", a->az);
+        if (a->has_cn0) kv_fixed(buf, &off, "cn0", a->cn0_x10 / 10.0, 1);
+        kv_int(buf, LINEBUF, &off, "used", a->used);
+        kv_int(buf, LINEBUF, &off, "health", a->health);
+        kv_int(buf, LINEBUF, &off, "sky_ts", (long long)k->ts);
+        end_obj(buf, LINEBUF, &off);
+        emit_line(buf);
+    }
 }
 
 /* ── BLE (#144 slice 4) ─────────────────────────────────────────────
@@ -2890,6 +3030,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_mqtt_flows        (s);
     jsonl_emit_ble_devices       (s);   /* #144 slice 4 */
     jsonl_emit_ble_alerts        (s);
+    jsonl_emit_gnss              (s);   /* 2026-11-02 */
     /* Last: the sensor's self-report about this tick, after every
      * observation in it has been emitted (#91 slice 3). */
     jsonl_emit_sensor_health     (s);

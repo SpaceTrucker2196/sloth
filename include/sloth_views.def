@@ -61,3 +61,5 @@ X(FRAGATTACK,   "FragAttacks", "c", fragattack)   /* per-BSSID FragAttacks count
 /* '*', not a letter: every letter and digit already selects a view or
  * is a global (q quits, n toggles DNS), and 'b' is Beacons. */
 X(BLE,          "BLE",         "*", ble)          /* BLE advertisers per sensor (#144 slice 4) */
+/* '#', the next free symbol: the GNSS receiver's sky (2026-11-02). */
+X(GNSS,         "GNSS",        "#", gnss)         /* satellites in view, C/N0, DOP, clock offset */

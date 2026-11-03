@@ -356,10 +356,105 @@ static int jskip(jcur_t *c) {
     return -1;
 }
 
+/* A JSON literal true / false at c->p. */
+static int jbool(jcur_t *c, int *out) {
+    if ((size_t)(c->e - c->p) >= 4 && memcmp(c->p, "true", 4) == 0) {
+        c->p += 4; *out = 1; return 0;
+    }
+    if ((size_t)(c->e - c->p) >= 5 && memcmp(c->p, "false", 5) == 0) {
+        c->p += 5; *out = 0; return 0;
+    }
+    return -1;
+}
+
+/* A small integer field, or -1 when gpsd's value is not one. */
+static int jsmall(double d, double hi) {
+    return (d >= 0 && d <= hi && d == (double)(int)d) ? (int)d : -1;
+}
+
+/* One object of SKY's satellites[]: flat numbers and the `used`
+ * boolean; anything else inside it is skipped by depth. */
+static int parse_sat(jcur_t *c, gpsd_sat_t *s) {
+    memset(s, 0, sizeof(*s));
+    s->prn = s->gnssid = s->svid = s->sigid = s->health = -1;
+    if (c->p >= c->e || *c->p != '{') return -1;
+    c->p++;
+    jws(c);
+    if (c->p < c->e && *c->p == '}') { c->p++; return 0; }
+    for (;;) {
+        char key[24];
+        jws(c);
+        if (jstr(c, key, sizeof(key)) != 0) return -1;
+        jws(c);
+        if (c->p >= c->e || *c->p != ':') return -1;
+        c->p++;
+        jws(c);
+        if (c->p >= c->e) return -1;
+        if (*c->p == '-' || (*c->p >= '0' && *c->p <= '9')) {
+            double d;
+            if (jnum(c, &d) != 0) return -1;
+            if      (strcmp(key, "PRN") == 0)    s->prn = jsmall(d, 32767);
+            else if (strcmp(key, "gnssid") == 0) s->gnssid = jsmall(d, 127);
+            else if (strcmp(key, "svid") == 0)   s->svid = jsmall(d, 32767);
+            else if (strcmp(key, "sigid") == 0)  s->sigid = jsmall(d, 127);
+            else if (strcmp(key, "health") == 0) s->health = jsmall(d, 2);
+            else if (strcmp(key, "el") == 0 && isfinite(d) && d >= -90 && d <= 90)
+                                                 { s->el = d; s->has_el = 1; }
+            else if (strcmp(key, "az") == 0 && isfinite(d) && d >= 0 && d <= 360)
+                                                 { s->az = d; s->has_az = 1; }
+            else if (strcmp(key, "ss") == 0 && isfinite(d) && d >= 0 && d <= 99)
+                                                 { s->cn0 = d; s->has_cn0 = 1; }
+        } else if (*c->p == 't' || *c->p == 'f') {
+            int b;
+            if (jbool(c, &b) != 0) return -1;
+            if (strcmp(key, "used") == 0) s->used = (uint8_t)b;
+        } else {
+            if (jskip(c) != 0) return -1;
+        }
+        jws(c);
+        if (c->p >= c->e) return -1;
+        if (*c->p == ',') { c->p++; continue; }
+        if (*c->p == '}') { c->p++; return 0; }
+        return -1;
+    }
+}
+
+/* satellites: [ {...}, ... ]. Entries past GPSD_MAX_SATS are parsed
+ * (the line must still balance) and counted, not kept. A PRN-less
+ * entry is dropped: gpsd always writes PRN, so one without it is not
+ * a satellite. */
+static int parse_sats(jcur_t *c, gpsd_msg_t *out) {
+    if (c->p >= c->e || *c->p != '[') return -1;
+    c->p++;
+    jws(c);
+    if (c->p < c->e && *c->p == ']') { c->p++; return 0; }
+    for (;;) {
+        gpsd_sat_t s;
+        jws(c);
+        if (c->p < c->e && *c->p == '{') {
+            if (parse_sat(c, &s) != 0) return -1;
+            if (s.prn >= 0) {
+                if (out->nsats < GPSD_MAX_SATS) out->sats[out->nsats++] = s;
+                else out->sats_overflow++;
+            }
+        } else {
+            if (jskip(c) != 0) return -1;
+        }
+        jws(c);
+        if (c->p >= c->e) return -1;
+        if (*c->p == ',') { c->p++; continue; }
+        if (*c->p == ']') { c->p++; return 0; }
+        return -1;
+    }
+}
+
 int gpsd_json_parse(const char *line, size_t n, gpsd_msg_t *out) {
     if (!line || !out || n > GPSD_MAX_LINE) return -1;
     memset(out, 0, sizeof(*out));
     out->mode = -1;
+    out->status = out->jam = out->leap = -1;
+    out->gst_rms = out->gst_major = out->gst_minor = out->gst_orient = -1;
+    out->gst_lat = out->gst_lon = out->gst_alt = -1;
     jcur_t c = { line, line + n };
     jws(&c);
     if (c.p >= c.e || *c.p != '{') return -1;
@@ -396,9 +491,28 @@ int gpsd_json_parse(const char *line, size_t n, gpsd_msg_t *out) {
             else if (strcmp(key, "eph") == 0)    { out->eph = d; out->has_eph = 1; }
             else if (strcmp(key, "epx") == 0)    { out->epx = d; out->has_epx = 1; }
             else if (strcmp(key, "epy") == 0)    { out->epy = d; out->has_epy = 1; }
+            else if (strcmp(key, "epv") == 0)    { out->epv = d; out->has_epv = 1; }
             else if (strcmp(key, "hdop") == 0)   { out->hdop = d; out->has_hdop = 1; }
+            else if (strcmp(key, "pdop") == 0)   { out->pdop = d; out->has_pdop = 1; }
+            else if (strcmp(key, "vdop") == 0)   { out->vdop = d; out->has_vdop = 1; }
+            else if (strcmp(key, "gdop") == 0)   { out->gdop = d; out->has_gdop = 1; }
+            else if (strcmp(key, "tdop") == 0)   { out->tdop = d; out->has_tdop = 1; }
+            else if (strcmp(key, "speed") == 0)  { out->speed = d; out->has_speed = 1; }
+            else if (strcmp(key, "track") == 0)  { out->track = d; out->has_track = 1; }
+            else if (strcmp(key, "climb") == 0)  { out->climb = d; out->has_climb = 1; }
+            else if (strcmp(key, "status") == 0) out->status = jsmall(d, 9);
+            else if (strcmp(key, "jam") == 0)    out->jam = jsmall(d, 255);
+            else if (strcmp(key, "leapseconds") == 0) out->leap = jsmall(d, 127);
             else if (strcmp(key, "uSat") == 0 && d >= 0 && d < 1000)
                                                  { out->usat = (int)d; out->has_usat = 1; }
+            else if (strcmp(key, "nSat") == 0 && d >= 0 && d < 1000)
+                                                 { out->nsat = (int)d; out->has_nsat = 1; }
+            else if (strcmp(key, "rms") == 0)    out->gst_rms = d;
+            else if (strcmp(key, "major") == 0)  out->gst_major = d;
+            else if (strcmp(key, "minor") == 0)  out->gst_minor = d;
+            else if (strcmp(key, "orient") == 0) out->gst_orient = d;
+        } else if (*c.p == '[' && strcmp(key, "satellites") == 0) {
+            if (parse_sats(&c, out) != 0) return -1;
         } else {
             if (jskip(&c) != 0) return -1;
         }
@@ -416,8 +530,93 @@ done:
     if (strcmp(cls, "TPV") == 0)     { out->cls = GPSD_CLS_TPV; return 1; }
     if (strcmp(cls, "SKY") == 0)     { out->cls = GPSD_CLS_SKY; return 1; }
     if (strcmp(cls, "VERSION") == 0) { out->cls = GPSD_CLS_VERSION; return 1; }
+    if (strcmp(cls, "GST") == 0) {
+        /* GST's lat / lon / alt are standard deviations in metres, not a
+         * position: moved out of the position fields so no caller can
+         * mistake them for one. */
+        out->cls = GPSD_CLS_GST;
+        if (out->has_lat) out->gst_lat = out->lat;
+        if (out->has_lon) out->gst_lon = out->lon;
+        if (out->has_alt) out->gst_alt = out->alt_m;
+        out->has_lat = out->has_lon = out->has_alt = 0;
+        out->lat = out->lon = out->alt_m = 0.0;
+        return 1;
+    }
     out->cls = GPSD_CLS_OTHER;
     return 0;
+}
+
+/* ── gpsd's "time" ─────────────────────────────────────────────── */
+
+static int digits(const char *s, int n, long *out) {
+    long v = 0;
+    for (int i = 0; i < n; i++) {
+        if (s[i] < '0' || s[i] > '9') return -1;
+        v = v * 10 + (s[i] - '0');
+    }
+    *out = v;
+    return 0;
+}
+
+/* Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's
+ * days_from_civil), so no mktime and no TZ. */
+static long days_from_civil(long y, long m, long d) {
+    y -= m <= 2;
+    long era = (y >= 0 ? y : y - 399) / 400;
+    long yoe = y - era * 400;
+    long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+int gpsd_time_parse(const char *s, int64_t *epoch_ms) {
+    if (!s || !epoch_ms) return -1;
+    size_t n = strlen(s);
+    if (n < 20) return -1;
+    long y, mo, d, h, mi, se, frac = 0;
+    if (s[4] != '-' || s[7] != '-' || s[10] != 'T' || s[13] != ':' ||
+        s[16] != ':')
+        return -1;
+    if (digits(s, 4, &y) || digits(s + 5, 2, &mo) || digits(s + 8, 2, &d) ||
+        digits(s + 11, 2, &h) || digits(s + 14, 2, &mi) || digits(s + 17, 2, &se))
+        return -1;
+    size_t i = 19;
+    if (s[i] == '.') {
+        i++;
+        int k = 0;
+        long scale = 100;
+        while (i < n && s[i] >= '0' && s[i] <= '9') {
+            if (k < 3) { frac += (s[i] - '0') * scale; scale /= 10; }
+            k++;
+            i++;
+        }
+        if (k == 0) return -1;
+    }
+    if (i + 1 != n || s[i] != 'Z') return -1;
+    if (y < 1970 || y > 2999 || mo < 1 || mo > 12 || d < 1 || d > 31 ||
+        h > 23 || mi > 59 || se > 60)
+        return -1;
+    static const int mdays[12] = { 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    if (d > mdays[mo - 1]) return -1;
+    if (mo == 2 && d == 29 && !((y % 4 == 0 && y % 100 != 0) || y % 400 == 0))
+        return -1;
+    int64_t days = days_from_civil(y, mo, d);
+    *epoch_ms = ((days * 86400 + h * 3600 + mi * 60 + se) * 1000) + frac;
+    return 0;
+}
+
+const char *gnss_name(int gnssid) {
+    switch (gnssid) {
+    case 0: return "GPS";
+    case 1: return "SBAS";
+    case 2: return "Galileo";
+    case 3: return "BeiDou";
+    case 4: return "IMES";
+    case 5: return "QZSS";
+    case 6: return "GLONASS";
+    case 7: return "NavIC";
+    default: return "?";
+    }
 }
 
 /* ── The --gps SPEC ────────────────────────────────────────────── */
@@ -540,6 +739,12 @@ static struct {
     int      quality;
     char     err[96];
     uint64_t sentences, bad_checksum, parse_errors, reconnects;
+    /* GNSS observation (2026-11-02): the sky, the newest TPV, and the
+     * history the detector slice will read. */
+    gnss_sky_t  sky;
+    gnss_fix_t  gfix;
+    gnss_hist_t hist;
+    time_t      sec_last;   /* the second the newest series point is for */
 } g_loc = { .quality = -1 };
 
 static int range_ok(double lat, double lon) {
@@ -654,12 +859,180 @@ void gps_location_feed_nmea(const nmea_fix_t *f, time_t wall) {
     pthread_mutex_unlock(&g_mu);
 }
 
-void gps_location_feed_gpsd(const gpsd_msg_t *m, time_t wall) {
+/* A DOP is kept when finite and inside the range a receiver reports
+ * (0..100); 0 marks absent. */
+static double dop_ok(int has, double v) {
+    return (has && isfinite(v) && v >= 0.0 && v <= 100.0) ? v : 0.0;
+}
+
+/* Caller holds g_mu. The SKY's satellites into the sky state, with the
+ * C/N0 statistics the records and the later detectors read. */
+static void take_sky(const gpsd_msg_t *m, time_t wall) {
+    gnss_sky_t *k = &g_loc.sky;
+    if (m->nsats == 0 && !m->has_nsat && !m->has_usat) {
+        /* A SKY carrying only DOPs (gpsd splits them on some drivers):
+         * the DOPs update, the satellite rows stand. */
+        if (m->has_hdop && hdop_ok(m->hdop)) k->hdop = m->hdop;
+        if (dop_ok(m->has_pdop, m->pdop) > 0) k->pdop = m->pdop;
+        if (dop_ok(m->has_vdop, m->vdop) > 0) k->vdop = m->vdop;
+        return;
+    }
+    k->valid = 1;
+    k->ts = wall;
+    k->nsat = m->has_nsat ? m->nsat : (m->nsats ? m->nsats + m->sats_overflow : -1);
+    k->usat = m->has_usat ? m->usat : -1;
+    k->n = 0;
+    k->overflow = m->sats_overflow;
+    double sum = 0, sq = 0, mx = 0;
+    int cn = 0;
+    for (int i = 0; i < m->nsats && i < GNSS_MAX_SATS; i++) {
+        const gpsd_sat_t *a = &m->sats[i];
+        gnss_sat_t *b = &k->sats[k->n++];
+        b->prn = (int16_t)a->prn;
+        b->gnssid = (int8_t)a->gnssid;
+        b->svid = (int16_t)a->svid;
+        b->sigid = (int8_t)a->sigid;
+        b->health = (int8_t)a->health;
+        b->el = (int16_t)(a->has_el ? (int)(a->el + (a->el >= 0 ? 0.5 : -0.5)) : -1);
+        b->az = (int16_t)(a->has_az ? (int)(a->az + 0.5) : -1);
+        b->used = a->used;
+        b->has_cn0 = a->has_cn0;
+        b->cn0_x10 = (int16_t)(a->has_cn0 ? (int)(a->cn0 * 10.0 + 0.5) : 0);
+        if (a->has_cn0) {
+            sum += a->cn0;
+            sq += a->cn0 * a->cn0;
+            if (a->cn0 > mx) mx = a->cn0;
+            cn++;
+        }
+    }
+    k->cn0_n = cn;
+    k->cn0_mean = cn ? sum / cn : 0.0;
+    k->cn0_max = mx;
+    double var = cn ? sq / cn - k->cn0_mean * k->cn0_mean : 0.0;
+    k->cn0_sd = var > 0 ? sqrt(var) : 0.0;
+    if (m->has_hdop && hdop_ok(m->hdop)) k->hdop = m->hdop;
+    k->pdop = dop_ok(m->has_pdop, m->pdop);
+    k->vdop = dop_ok(m->has_vdop, m->vdop);
+    k->gdop = dop_ok(m->has_gdop, m->gdop);
+    k->tdop = dop_ok(m->has_tdop, m->tdop);
+    k->passes++;
+}
+
+/* Caller holds g_mu. One point per second of the sky's summary, for
+ * the jamming detector's window; the newest point of a second wins. */
+static void push_sec(time_t wall) {
+    gnss_hist_t *h = &g_loc.hist;
+    gnss_sec_pt_t pt;
+    pt.ts = wall;
+    pt.cn0_mean_x10 = (int16_t)(g_loc.sky.cn0_mean * 10.0 + 0.5);
+    pt.jam = (int16_t)g_loc.gfix.jam;
+    pt.usat = (uint8_t)(g_loc.sky.usat > 0 ? (g_loc.sky.usat > 255 ? 255 : g_loc.sky.usat) : 0);
+    pt.nsat = (uint8_t)(g_loc.sky.nsat > 0 ? (g_loc.sky.nsat > 255 ? 255 : g_loc.sky.nsat) : 0);
+    if (h->sec_n > 0 && g_loc.sec_last == wall) {
+        int last = (h->sec_head + GNSS_SERIES_S - 1) % GNSS_SERIES_S;
+        h->secs[last] = pt;
+        return;
+    }
+    h->secs[h->sec_head] = pt;
+    h->sec_head = (h->sec_head + 1) % GNSS_SERIES_S;
+    if (h->sec_n < GNSS_SERIES_S) h->sec_n++;
+    g_loc.sec_last = wall;
+}
+
+/* Caller holds g_mu. */
+static void push_fix_pt(const gnss_fix_t *f) {
+    gnss_hist_t *h = &g_loc.hist;
+    gnss_fix_pt_t *p = &h->fixes[h->fix_head];
+    p->ts = f->ts;
+    p->lat = f->lat;
+    p->lon = f->lon;
+    p->has_alt = f->has_alt;
+    p->alt_m = f->alt_m;
+    p->has_eph = f->has_eph;
+    p->eph = f->eph;
+    p->mode = f->mode;
+    p->usat = g_loc.sky.usat;
+    p->has_time_off = f->has_time_off;
+    p->time_off_ms = f->time_off_ms;
+    h->fix_head = (h->fix_head + 1) % GNSS_FIX_HIST;
+    if (h->fix_n < GNSS_FIX_HIST) h->fix_n++;
+}
+
+/* Caller holds g_mu. The TPV into the fix state. Every figure is range
+ * checked as take_fix() checks the position's; one outside is dropped
+ * (has_* 0), never recorded. The GST figures outlive a TPV. */
+static void take_tpv(const gpsd_msg_t *m, time_t wall, int64_t wall_ms) {
+    gnss_fix_t *f = &g_loc.gfix;
+    gnss_fix_t keep = *f;
+    memset(f, 0, sizeof(*f));
+    f->valid = 1;
+    f->ts = wall;
+    f->count = keep.count + 1;
+    f->mode = m->mode < 0 ? 0 : m->mode;
+    f->status = m->status;
+    f->leap = m->leap;
+    f->jam = m->jam;
+    if (m->has_lat && m->has_lon && range_ok(m->lat, m->lon)) {
+        f->has_pos = 1;
+        f->lat = m->lat;
+        f->lon = m->lon;
+    }
+    if (m->has_alt && alt_ok(m->alt_m)) { f->has_alt = 1; f->alt_m = m->alt_m; }
+    if (m->has_eph && acc_ok(m->eph)) { f->has_eph = 1; f->eph = m->eph; }
+    if (m->has_epv && acc_ok(m->epv)) { f->has_epv = 1; f->epv = m->epv; }
+    if (m->has_speed && isfinite(m->speed) && m->speed >= 0 && m->speed < 1e4)
+        { f->has_speed = 1; f->speed = m->speed; }
+    if (m->has_track && isfinite(m->track) && m->track >= 0 && m->track <= 360)
+        { f->has_track = 1; f->track = m->track; }
+    if (m->has_climb && isfinite(m->climb) && m->climb > -1e4 && m->climb < 1e4)
+        { f->has_climb = 1; f->climb = m->climb; }
+    int64_t rx;
+    if (m->time[0] && gpsd_time_parse(m->time, &rx) == 0) {
+        f->has_rx_time = 1;
+        f->rx_time_ms = rx;
+        /* The receiver's stamp against the host's clock as the line was
+         * framed. Coarse: serial / USB and gpsd latency sit in it, and
+         * there is no PPS; it shows a multi-second step, not sync
+         * quality (docs/wiki/gnss.md). */
+        f->has_time_off = 1;
+        f->time_off_ms = rx - wall_ms;
+    }
+    if (keep.has_gst) {
+        f->has_gst = 1;
+        f->gst_rms = keep.gst_rms; f->gst_major = keep.gst_major;
+        f->gst_minor = keep.gst_minor; f->gst_orient = keep.gst_orient;
+        f->gst_lat_sd = keep.gst_lat_sd; f->gst_lon_sd = keep.gst_lon_sd;
+        f->gst_alt_sd = keep.gst_alt_sd;
+    }
+    if (f->mode >= 2 && f->has_pos) push_fix_pt(f);
+    push_sec(wall);
+}
+
+/* Caller holds g_mu. A GST's figures onto the fix; -1 means absent and
+ * is kept as 0 / not recorded. */
+static void take_gst(const gpsd_msg_t *m) {
+    gnss_fix_t *f = &g_loc.gfix;
+    double v[7] = { m->gst_rms, m->gst_major, m->gst_minor, m->gst_orient,
+                    m->gst_lat, m->gst_lon, m->gst_alt };
+    int any = 0;
+    for (int i = 0; i < 7; i++) {
+        if (!(isfinite(v[i]) && v[i] >= 0 && v[i] <= 1e5)) v[i] = 0.0;
+        else any = 1;
+    }
+    if (!any) return;
+    f->has_gst = 1;
+    f->gst_rms = v[0]; f->gst_major = v[1]; f->gst_minor = v[2];
+    f->gst_orient = v[3]; f->gst_lat_sd = v[4]; f->gst_lon_sd = v[5];
+    f->gst_alt_sd = v[6];
+}
+
+static void feed_gpsd(const gpsd_msg_t *m, time_t wall, int64_t wall_ms) {
     if (!m) return;
     pthread_mutex_lock(&g_mu);
     if (m->cls == GPSD_CLS_SKY) {
         if (m->has_usat) g_loc.sats = m->usat;
         if (m->has_hdop && hdop_ok(m->hdop)) g_loc.hdop = m->hdop;
+        take_sky(m, wall);
     } else if (m->cls == GPSD_CLS_TPV && m->mode >= 0) {
         g_loc.quality = m->mode;
         if (m->mode >= 2 && m->has_lat && m->has_lon) {
@@ -675,8 +1048,22 @@ void gps_location_feed_gpsd(const gpsd_msg_t *m, time_t wall) {
         } else {
             g_loc.fix_live = 0;
         }
+        take_tpv(m, wall, wall_ms);
+    } else if (m->cls == GPSD_CLS_TPV) {
+        take_tpv(m, wall, wall_ms);   /* mode absent: still a TPV */
+    } else if (m->cls == GPSD_CLS_GST) {
+        take_gst(m);
     }
     pthread_mutex_unlock(&g_mu);
+}
+
+void gps_location_feed_gpsd(const gpsd_msg_t *m, time_t wall) {
+    feed_gpsd(m, wall, (int64_t)wall * 1000);
+}
+
+void gps_location_feed_gpsd_ms(const gpsd_msg_t *m, int64_t wall_ms) {
+    int64_t w = wall_ms >= 0 ? wall_ms / 1000 : -((-wall_ms + 999) / 1000);
+    feed_gpsd(m, (time_t)w, wall_ms);
 }
 
 void gps_location_note(int sentences, int bad_checksum, int parse_errors,
@@ -771,6 +1158,19 @@ void gps_health_poll(sloth_state_t *s, time_t now) {
     h->bad_checksum = g_loc.bad_checksum;
     h->parse_errors = g_loc.parse_errors;
     h->reconnects = g_loc.reconnects;
+    /* GNSS observation (2026-11-02). */
+    h->sats_in_view = g_loc.sky.nsat > 0 ? g_loc.sky.nsat : 0;
+    h->sats_used    = g_loc.sky.usat > 0 ? g_loc.sky.usat : 0;
+    h->cn0_mean     = g_loc.sky.cn0_mean;
+    h->cn0_max      = g_loc.sky.cn0_max;
+    h->has_time_off = g_loc.gfix.has_time_off;
+    h->time_off_ms  = g_loc.gfix.time_off_ms;
+    h->pdop         = g_loc.sky.pdop;
+    h->vdop         = g_loc.sky.vdop;
+    h->status       = g_loc.gfix.valid ? g_loc.gfix.status : -1;
+    h->jam          = g_loc.gfix.valid ? g_loc.gfix.jam : -1;
+    s->gnss_sky = g_loc.sky;
+    s->gnss_fix = g_loc.gfix;
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -779,6 +1179,103 @@ void gps_location_reset(void) {
     memset(&g_loc, 0, sizeof(g_loc));
     g_loc.quality = -1;
     pthread_mutex_unlock(&g_mu);
+}
+
+/* ── GNSS observation: snapshots, history, signatures ─────────── */
+
+void gps_sky_snapshot(gnss_sky_t *out) {
+    if (!out) return;
+    pthread_mutex_lock(&g_mu);
+    *out = g_loc.sky;
+    pthread_mutex_unlock(&g_mu);
+}
+
+void gps_fix_snapshot(gnss_fix_t *out) {
+    if (!out) return;
+    pthread_mutex_lock(&g_mu);
+    *out = g_loc.gfix;
+    pthread_mutex_unlock(&g_mu);
+}
+
+void gps_gnss_history(gnss_hist_t *out) {
+    if (!out) return;
+    pthread_mutex_lock(&g_mu);
+    *out = g_loc.hist;
+    pthread_mutex_unlock(&g_mu);
+}
+
+static int dop_band(double v) {
+    if (v <= 0) return -1;
+    return v < 1 ? 0 : v < 2 ? 1 : v < 5 ? 2 : 3;
+}
+
+int gps_cn0_band(double cn0_mean) {
+    if (cn0_mean <= 0) return -1;
+    return cn0_mean < 25 ? 0 : cn0_mean < 35 ? 1 : 2;
+}
+
+int gps_time_off_band(int has, long long off_ms) {
+    if (!has) return -1;
+    long long a = off_ms < 0 ? -off_ms : off_ms;
+    return a < 500 ? 0 : a < 2000 ? 1 : a < 10000 ? 2 : 3;
+}
+
+/* u-blox jamInd semantics (receiver description, UBX-MON-HW): 0 no
+ * CW jamming, 255 strong. */
+int gps_jam_band(int jam) {
+    if (jam < 0) return -1;
+    return jam == 0 ? 0 : jam < 64 ? 1 : jam < 128 ? 2 : 3;
+}
+
+static uint64_t mix64(uint64_t h, long long v) {
+    h ^= (uint64_t)v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    return h * 0x100000001b3ULL;
+}
+
+uint64_t gps_gnss_fix_sig(const gnss_fix_t *f, const gnss_sky_t *k) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    if (!f) return h;
+    h = mix64(h, f->valid);
+    h = mix64(h, f->mode);
+    h = mix64(h, f->status);
+    h = mix64(h, k ? k->usat : -1);
+    h = mix64(h, k && k->nsat > 0 ? k->nsat / 4 : -1);
+    h = mix64(h, dop_band(k ? k->hdop : 0));
+    h = mix64(h, dop_band(k ? k->pdop : 0));
+    h = mix64(h, gps_time_off_band(f->has_time_off, f->time_off_ms));
+    int sp = !f->has_speed ? -1 : f->speed < 0.5 ? 0 : f->speed < 2 ? 1
+           : f->speed < 30 ? 2 : 3;
+    h = mix64(h, sp);
+    h = mix64(h, gps_jam_band(f->jam));
+    h = mix64(h, f->has_pos);
+    return h;
+}
+
+uint64_t gps_gnss_sat_sig(const gnss_sat_t *s) {
+    uint64_t h = 0x84222325cbf29ce4ULL;
+    if (!s) return h;
+    h = mix64(h, s->prn);
+    h = mix64(h, s->gnssid);
+    h = mix64(h, s->svid);
+    h = mix64(h, s->used);
+    h = mix64(h, s->health);
+    h = mix64(h, s->has_cn0 ? s->cn0_x10 / 60 : -1);   /* 6 dB */
+    h = mix64(h, s->el >= 0 ? s->el / 15 : -1);
+    h = mix64(h, s->az >= 0 ? s->az / 15 : -1);
+    return h;
+}
+
+uint64_t gps_gnss_sky_sig(const gnss_sky_t *k) {
+    uint64_t h = 0x2325cbf29ce48422ULL;
+    if (!k) return h;
+    h = mix64(h, k->valid);
+    h = mix64(h, k->nsat);
+    h = mix64(h, k->usat);
+    h = mix64(h, dop_band(k->hdop));
+    h = mix64(h, dop_band(k->pdop));
+    h = mix64(h, dop_band(k->vdop));
+    h = mix64(h, gps_cn0_band(k->cn0_mean));
+    return h;
 }
 
 double gps_distance_m(double lat1, double lon1, double lat2, double lon2) {
@@ -824,11 +1321,13 @@ static void gps_line_done(gps_lines_t *l, time_t wall) {
         gps_location_note(1, 0, 0, 0);
         if (r == 1) gps_location_feed_nmea(&l->nmea, wall);
     } else {
-        gpsd_msg_t m;
+        static gpsd_msg_t m;   /* ~2 KB of satellites: not the reader's stack */
         int r = gpsd_json_parse(l->buf, n, &m);
         if (r < 0) { gps_location_note(0, 0, 1, 0); return; }
         gps_location_note(1, 0, 0, 0);
-        if (r == 1) gps_location_feed_gpsd(&m, wall);
+        /* The clock offset is measured against the host's millisecond
+         * wall clock as the line was framed; the fix keeps `wall`. */
+        if (r == 1) feed_gpsd(&m, wall, sloth_wall_ms());
     }
 }
 

@@ -49,6 +49,7 @@ static web_sqlbox_t   g_sql;
 static web_chmix_t    g_chmix;
 static web_frrs_t     g_frrs;
 static web_ble_t      g_ble;
+static web_gnss_t     g_gnss;
 
 /* The store's BLE rows into the in-memory tables, before any thread
  * starts (the restore runs on the store's writer connection). */
@@ -122,7 +123,8 @@ int main(int argc, char **argv) {
         web_ptr_init(&g_ptr, WEB_PTR_CAP) != 0 ||
         web_anomaly_init(&g_anomaly, WEB_ANOM_CAP, &acfg) != 0 ||
         web_chmix_init(&g_chmix, have_store) != 0 ||
-        web_ble_init(&g_ble, have_store) != 0) {
+        web_ble_init(&g_ble, have_store) != 0 ||
+        web_gnss_init(&g_gnss) != 0) {
         fprintf(stderr, "slothweb: time series: out of memory\n");
         return 1;
     }
@@ -206,9 +208,11 @@ int main(int argc, char **argv) {
     }
     web_server_set_sqlbox(&g_srv, &g_sql);
     web_server_set_ble(&g_srv, &g_ble);
+    web_server_set_gnss(&g_srv, &g_gnss);
     web_ingest_set_metrics(&g_ingest, &g_metrics);
     web_ingest_set_frrs(&g_ingest, &g_frrs);
     web_ingest_set_ble(&g_ingest, &g_ble);
+    web_ingest_set_gnss(&g_ingest, &g_gnss);
     if (web_tsdb_start(&g_tsdb, err, sizeof(err)) != 0 ||
         web_ingest_start(&g_ingest, &cfg.sock, cfg.sock_backoff_min_ms,
                          cfg.sock_backoff_max_ms, &g_live,
@@ -334,6 +338,7 @@ int main(int argc, char **argv) {
     web_metrics_destroy(&g_metrics);
     web_chmix_destroy(&g_chmix);
     web_ble_destroy(&g_ble);
+    web_gnss_destroy(&g_gnss);
     web_rollup_destroy(&g_rollup);
     web_anomaly_destroy(&g_anomaly);
     web_baseline_destroy(&g_baseline);

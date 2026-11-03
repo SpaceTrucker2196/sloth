@@ -50,6 +50,7 @@ One file per sloth view. Each covers:
 | `f` | Research  | [research.md](research.md) |
 | `c` | FragAttacks | [fragattack.md](fragattack.md) |
 | `*` | BLE | [ble.md](ble.md) |
+| `#` | GNSS | [gnss.md](gnss.md) |
 
 ## WiFi SIGINT (v1.1)
 

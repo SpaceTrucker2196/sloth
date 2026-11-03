@@ -15,7 +15,9 @@
 #include "gps.h"
 #include "capture/gps_reader.h"
 #include "jsonl.h"
+#include "poll.h"
 #include "position_track.h"
+#include "sensors.h"
 #include "sloth_clock.h"
 #include "tune.h"
 #include "tui.h"
@@ -267,6 +269,15 @@ static void test_gpsd_sky_skips_nested(void) {
     ASSERT_EQ(m.has_usat, 1);
     ASSERT_EQ(m.usat, 9);
     ASSERT_NEAR(m.hdop, 0.8, 1e-9);
+    /* 2026-11-02: the array is read now; the nested value inside the
+     * second satellite is still skipped, and the line still balances. */
+    ASSERT_EQ(m.nsats, 2);
+    ASSERT_EQ(m.sats[0].prn, 5);
+    ASSERT_EQ(m.sats[0].used, 1);
+    ASSERT_EQ(m.sats[0].has_el, 1);
+    ASSERT_EQ(m.sats[1].prn, 7);
+    ASSERT_EQ(m.sats[1].used, 0);
+    ASSERT_EQ(m.sats[1].has_el, 0);
 }
 
 static void test_gpsd_other_and_malformed(void) {
@@ -1428,6 +1439,665 @@ static void test_health_strip_gps_token(void) {
     ASSERT(strstr(buf, "  gps stale 100s (using --location) err read: Input/output error") != NULL);
 }
 
+
+/* ── GNSS observation (2026-11-02) ─────────────────────────── */
+
+/* A SKY as gpsd's u-blox driver writes one (gpsd_json.html: PRN always;
+ * gnssid / svid / sigid, el, az, ss in dBHz, used, health), four
+ * satellites across three constellations, one with no C/N0 (an SBAS
+ * bird the receiver lists but does not track), one with no el / az. */
+static const char SKY4[] =
+    "{\"class\":\"SKY\",\"device\":\"/dev/ttyACM0\","
+    "\"time\":\"2026-10-27T00:00:01.000Z\",\"xdop\":0.6,\"ydop\":0.5,"
+    "\"vdop\":1.2,\"tdop\":0.9,\"hdop\":0.8,\"gdop\":2.0,\"pdop\":1.5,"
+    "\"nSat\":4,\"uSat\":2,\"satellites\":["
+    "{\"PRN\":5,\"gnssid\":0,\"svid\":5,\"sigid\":0,\"el\":45.0,\"az\":120.0,"
+    "\"ss\":41.0,\"used\":true,\"health\":1},"
+    "{\"PRN\":7,\"gnssid\":0,\"svid\":7,\"ss\":22.5,\"used\":false,\"health\":1,"
+    "\"x\":[1,{\"y\":\"}]\"}]},"
+    "{\"PRN\":73,\"gnssid\":6,\"svid\":9,\"freqid\":3,\"el\":30.0,\"az\":300.0,"
+    "\"ss\":30.5,\"used\":true,\"health\":1},"
+    "{\"PRN\":131,\"gnssid\":1,\"svid\":131,\"el\":10.0,\"az\":200.0,"
+    "\"used\":false,\"health\":0}]}";
+
+static const char TPV_FULL[] =
+    "{\"class\":\"TPV\",\"device\":\"/dev/ttyACM0\",\"status\":2,\"mode\":3,"
+    "\"time\":\"2026-10-27T00:00:01.250Z\",\"leapseconds\":18,\"ept\":0.005,"
+    "\"lat\":51.500740,\"lon\":-0.124690,\"altHAE\":57.3,\"altMSL\":11.6,"
+    "\"epx\":3.0,\"epy\":4.0,\"epv\":9.1,\"track\":12.5,\"speed\":0.3,"
+    "\"climb\":-0.1,\"eph\":6.2,\"jam\":12}";
+
+static void test_gpsd_sky_satellites(void) {
+    static gpsd_msg_t m;
+    ASSERT_EQ(gpsd_json_parse(S(SKY4), &m), 1);
+    ASSERT_EQ(m.cls, GPSD_CLS_SKY);
+    ASSERT_EQ(m.has_nsat, 1);  ASSERT_EQ(m.nsat, 4);
+    ASSERT_EQ(m.has_usat, 1);  ASSERT_EQ(m.usat, 2);
+    ASSERT_EQ(m.has_pdop, 1);  ASSERT_NEAR(m.pdop, 1.5, 1e-9);
+    ASSERT_EQ(m.has_vdop, 1);  ASSERT_NEAR(m.vdop, 1.2, 1e-9);
+    ASSERT_EQ(m.has_gdop, 1);  ASSERT_NEAR(m.gdop, 2.0, 1e-9);
+    ASSERT_EQ(m.has_tdop, 1);  ASSERT_NEAR(m.tdop, 0.9, 1e-9);
+    ASSERT_STR(m.time, "2026-10-27T00:00:01.000Z");
+    ASSERT_EQ(m.nsats, 4);
+    ASSERT_EQ(m.sats_overflow, 0);
+    ASSERT_EQ(m.sats[0].prn, 5);
+    ASSERT_EQ(m.sats[0].gnssid, 0);
+    ASSERT_EQ(m.sats[0].svid, 5);
+    ASSERT_EQ(m.sats[0].sigid, 0);
+    ASSERT_EQ(m.sats[0].has_el, 1); ASSERT_NEAR(m.sats[0].el, 45.0, 1e-9);
+    ASSERT_EQ(m.sats[0].has_az, 1); ASSERT_NEAR(m.sats[0].az, 120.0, 1e-9);
+    ASSERT_EQ(m.sats[0].has_cn0, 1); ASSERT_NEAR(m.sats[0].cn0, 41.0, 1e-9);
+    ASSERT_EQ(m.sats[0].used, 1);
+    ASSERT_EQ(m.sats[0].health, 1);
+    /* used:false is a boolean, not a number; the nested x is skipped. */
+    ASSERT_EQ(m.sats[1].prn, 7);
+    ASSERT_EQ(m.sats[1].used, 0);
+    ASSERT_EQ(m.sats[1].has_el, 0);
+    ASSERT_EQ(m.sats[1].has_az, 0);
+    ASSERT_EQ(m.sats[1].sigid, -1);
+    ASSERT_NEAR(m.sats[1].cn0, 22.5, 1e-9);
+    /* GLONASS: gpsd's PRN 65+slot, svid the slot. */
+    ASSERT_EQ(m.sats[2].prn, 73);
+    ASSERT_EQ(m.sats[2].gnssid, 6);
+    ASSERT_EQ(m.sats[2].svid, 9);
+    ASSERT_EQ(m.sats[2].used, 1);
+    /* Listed, not tracked: no ss. */
+    ASSERT_EQ(m.sats[3].prn, 131);
+    ASSERT_EQ(m.sats[3].gnssid, 1);
+    ASSERT_EQ(m.sats[3].has_cn0, 0);
+    ASSERT_EQ(m.sats[3].health, 0);
+    ASSERT_EQ(m.sats[3].used, 0);
+    /* A satellite with no PRN is not one; an out-of-range el is dropped,
+     * the row kept. */
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"SKY\",\"satellites\":[{\"used\":true},"
+                                "{\"PRN\":9,\"el\":95}]}"), &m), 1);
+    ASSERT_EQ(m.nsats, 1);
+    ASSERT_EQ(m.sats[0].prn, 9);
+    ASSERT_EQ(m.sats[0].has_el, 0);
+    /* An unbalanced array is a parse error, as an unbalanced object is. */
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"SKY\",\"satellites\":[{\"PRN\":1}"), &m), -1);
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"SKY\",\"satellites\":[{\"PRN\":1,\"used\":yes}]}"), &m), -1);
+    /* A satellites member that is not an array is skipped like any
+     * unknown value. */
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"SKY\",\"satellites\":7,\"uSat\":3}"), &m), 1);
+    ASSERT_EQ(m.nsats, 0);
+    ASSERT_EQ(m.usat, 3);
+}
+
+/* Past GPSD_MAX_SATS the rest are parsed and counted, not kept: a
+ * multi-GNSS receiver listing 50 objects is still one well-formed line.
+ * Seen red with parse_sats()'s bound check removed (ASan: sats[48]). */
+static void test_gpsd_sky_overflow_counted(void) {
+    static char line[GPSD_MAX_LINE];
+    int off = snprintf(line, sizeof(line), "{\"class\":\"SKY\",\"satellites\":[");
+    for (int i = 0; i < 50; i++)
+        off += snprintf(line + off, sizeof(line) - (size_t)off,
+                        "%s{\"PRN\":%d,\"ss\":%d,\"used\":%s}", i ? "," : "",
+                        i + 1, 20 + i % 30, i % 2 ? "true" : "false");
+    off += snprintf(line + off, sizeof(line) - (size_t)off, "]}");
+    static gpsd_msg_t m;
+    ASSERT_EQ(gpsd_json_parse(line, (size_t)off, &m), 1);
+    ASSERT_EQ(m.nsats, GPSD_MAX_SATS);
+    ASSERT_EQ(m.sats_overflow, 2);
+    ASSERT_EQ(m.sats[GPSD_MAX_SATS - 1].prn, 48);
+    /* The state keeps the 48 and reports nSat as all 50. */
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    gps_location_feed_gpsd(&m, 1800000000);
+    gnss_sky_t k;
+    gps_sky_snapshot(&k);
+    ASSERT_EQ(k.n, GPSD_MAX_SATS);
+    ASSERT_EQ(k.overflow, 2);
+    ASSERT_EQ(k.nsat, 50);
+}
+
+static void test_gpsd_tpv_extras(void) {
+    static gpsd_msg_t m;
+    ASSERT_EQ(gpsd_json_parse(S(TPV_FULL), &m), 1);
+    ASSERT_EQ(m.cls, GPSD_CLS_TPV);
+    ASSERT_EQ(m.status, 2);
+    ASSERT_EQ(m.leap, 18);
+    ASSERT_EQ(m.jam, 12);
+    ASSERT_EQ(m.has_speed, 1); ASSERT_NEAR(m.speed, 0.3, 1e-9);
+    ASSERT_EQ(m.has_track, 1); ASSERT_NEAR(m.track, 12.5, 1e-9);
+    ASSERT_EQ(m.has_climb, 1); ASSERT_NEAR(m.climb, -0.1, 1e-9);
+    ASSERT_EQ(m.has_epv, 1);   ASSERT_NEAR(m.epv, 9.1, 1e-9);
+    /* Absent reads -1, not 0: a status 0 is "unknown", -1 "not said". */
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":1}"), &m), 1);
+    ASSERT_EQ(m.status, -1);
+    ASSERT_EQ(m.jam, -1);
+    ASSERT_EQ(m.leap, -1);
+    ASSERT_EQ(m.has_speed, 0);
+    /* A fractional or negative status / jam is not one. */
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":1,\"status\":2.5,\"jam\":-3}"), &m), 1);
+    ASSERT_EQ(m.status, -1);
+    ASSERT_EQ(m.jam, -1);
+}
+
+/* GST (gpsd_json.html): pseudorange noise statistics; its lat / lon /
+ * alt are standard deviations in metres and must never read as a
+ * position. Seen red with the GST branch's has_lat clearing removed
+ * (the TPV path would then take a 2.1 m sigma as a latitude). */
+static void test_gpsd_gst(void) {
+    static gpsd_msg_t m;
+    static const char gst[] =
+        "{\"class\":\"GST\",\"device\":\"/dev/ttyACM0\","
+        "\"time\":\"2026-10-27T00:00:01.000Z\",\"rms\":1.57,\"major\":2.5,"
+        "\"minor\":1.1,\"orient\":40.0,\"lat\":2.1,\"lon\":1.3,\"alt\":4.9}";
+    ASSERT_EQ(gpsd_json_parse(S(gst), &m), 1);
+    ASSERT_EQ(m.cls, GPSD_CLS_GST);
+    ASSERT_NEAR(m.gst_rms, 1.57, 1e-9);
+    ASSERT_NEAR(m.gst_major, 2.5, 1e-9);
+    ASSERT_NEAR(m.gst_minor, 1.1, 1e-9);
+    ASSERT_NEAR(m.gst_orient, 40.0, 1e-9);
+    ASSERT_NEAR(m.gst_lat, 2.1, 1e-9);
+    ASSERT_NEAR(m.gst_lon, 1.3, 1e-9);
+    ASSERT_NEAR(m.gst_alt, 4.9, 1e-9);
+    ASSERT_EQ(m.has_lat, 0);
+    ASSERT_EQ(m.has_lon, 0);
+    ASSERT_EQ(m.has_alt, 0);
+    /* Through the state: the sigmas ride the fix and outlive a TPV. */
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    gps_location_feed_gpsd(&m, 1800000000);
+    ASSERT_EQ(gpsd_json_parse(S(TPV_FULL), &m), 1);
+    gps_location_feed_gpsd(&m, 1800000000);
+    gnss_fix_t f;
+    gps_fix_snapshot(&f);
+    ASSERT_EQ(f.has_gst, 1);
+    ASSERT_NEAR(f.gst_rms, 1.57, 1e-9);
+    ASSERT_NEAR(f.gst_lat_sd, 2.1, 1e-9);
+    ASSERT_NEAR(f.lat, 51.50074, 1e-9);
+    loc_stamp_t l;
+    ASSERT_EQ(gps_location_last_fix(&l), 1);
+    ASSERT_NEAR(l.lat, 51.50074, 1e-9);   /* never the sigma */
+}
+
+/* gpsd's time is ISO 8601 UTC with a millisecond fraction; the parser
+ * takes exactly that form. 1793059200 is 2026-10-27T00:00:00Z. */
+static void test_gpsd_time_parse(void) {
+    int64_t ms = 0;
+    ASSERT_EQ(gpsd_time_parse("2026-10-27T00:00:00.000Z", &ms), 0);
+    ASSERT_EQ(ms, 1793059200000LL);
+    ASSERT_EQ(gpsd_time_parse("2026-10-27T12:00:00Z", &ms), 0);
+    ASSERT_EQ(ms, 1793102400000LL);
+    ASSERT_EQ(gpsd_time_parse("2026-10-27T00:00:01.250Z", &ms), 0);
+    ASSERT_EQ(ms, 1793059201250LL);
+    ASSERT_EQ(gpsd_time_parse("2026-10-27T00:00:00.5Z", &ms), 0);
+    ASSERT_EQ(ms, 1793059200500LL);
+    ASSERT_EQ(gpsd_time_parse("2026-10-27T00:00:00.123456Z", &ms), 0);
+    ASSERT_EQ(ms, 1793059200123LL);       /* truncated, not rounded */
+    ASSERT_EQ(gpsd_time_parse("2000-02-29T23:59:59Z", &ms), 0);
+    ASSERT_EQ(ms, 951868799000LL);
+    ASSERT_EQ(gpsd_time_parse("1970-01-01T00:00:00Z", &ms), 0);
+    ASSERT_EQ(ms, 0);
+    /* Refused: no Z, an offset, a space, out-of-range fields, an
+     * impossible date, a bare fraction, a year before the epoch. */
+    ASSERT_EQ(gpsd_time_parse("2026-10-27T00:00:00", &ms), -1);
+    ASSERT_EQ(gpsd_time_parse("2026-10-27T00:00:00+00:00", &ms), -1);
+    ASSERT_EQ(gpsd_time_parse("2026-10-27 00:00:00Z", &ms), -1);
+    ASSERT_EQ(gpsd_time_parse("2026-13-01T00:00:00Z", &ms), -1);
+    ASSERT_EQ(gpsd_time_parse("2026-02-30T00:00:00Z", &ms), -1);
+    ASSERT_EQ(gpsd_time_parse("2026-02-29T00:00:00Z", &ms), -1);
+    ASSERT_EQ(gpsd_time_parse("2026-10-27T24:00:00Z", &ms), -1);
+    ASSERT_EQ(gpsd_time_parse("2026-10-27T00:00:00.Z", &ms), -1);
+    ASSERT_EQ(gpsd_time_parse("1969-12-31T23:59:59Z", &ms), -1);
+    ASSERT_EQ(gpsd_time_parse("", &ms), -1);
+    ASSERT_EQ(gpsd_time_parse("2026-10-27T00:00:0xZ", &ms), -1);
+    ASSERT_EQ(gpsd_time_parse(NULL, &ms), -1);
+}
+
+/* The clock offset is the receiver's stamp minus the host's wall clock
+ * in milliseconds as the line was framed: through the framer the host
+ * side is sloth_wall_ms() (the seam), through the _ms feed the caller's
+ * figure. Seen red with take_tpv() computing rx - wall x 1000 (the
+ * 700 ms case reads 1250). */
+static int64_t g_wall_ms_stub;
+static int64_t gw_wall_ms(void) { return g_wall_ms_stub; }
+
+static void test_clock_offset_against_host_ms(void) {
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    clk(1793059200);                                   /* 2026-10-27T00:00:00Z */
+    static gps_lines_t L;
+    gps_lines_init(&L, GPS_FEED_GPSD);
+    static char line[512];
+    int n = snprintf(line, sizeof(line), "%s\n", TPV_FULL);
+    gps_lines_feed(&L, (const uint8_t *)line, (size_t)n, 1793059200);
+    gnss_fix_t f;
+    gps_fix_snapshot(&f);
+    ASSERT_EQ(f.valid, 1);
+    ASSERT_EQ(f.has_rx_time, 1);
+    ASSERT_EQ(f.rx_time_ms, 1793059201250LL);
+    ASSERT_EQ(f.has_time_off, 1);
+    ASSERT_EQ(f.time_off_ms, 1250LL);
+    ASSERT_EQ(f.ts, (time_t)1793059200);
+    /* A finer host stub. */
+    g_wall_ms_stub = 1793059200700LL;
+    sloth_clock_test_set_wall_ms(gw_wall_ms);
+    gps_lines_feed(&L, (const uint8_t *)line, (size_t)n, 1793059200);
+    gps_fix_snapshot(&f);
+    ASSERT_EQ(f.time_off_ms, 550LL);
+    sloth_clock_test_set_wall_ms(NULL);
+    /* The _ms feed, directly, with a negative result. */
+    static gpsd_msg_t m;
+    ASSERT_EQ(gpsd_json_parse(S(TPV_FULL), &m), 1);
+    gps_location_feed_gpsd_ms(&m, 1793059203000LL);
+    gps_fix_snapshot(&f);
+    ASSERT_EQ(f.time_off_ms, -1750LL);
+    ASSERT_EQ(f.ts, (time_t)1793059203);
+    /* No time on the TPV: no offset, and the previous one does not
+     * linger on the new fix. */
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":3,\"lat\":1,\"lon\":2}"), &m), 1);
+    gps_location_feed_gpsd(&m, 1793059204);
+    gps_fix_snapshot(&f);
+    ASSERT_EQ(f.has_time_off, 0);
+    ASSERT_EQ(f.has_rx_time, 0);
+    /* A TPV whose time does not parse: a TPV still, offset unknown. */
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":3,\"time\":\"soon\"}"), &m), 1);
+    gps_location_feed_gpsd(&m, 1793059205);
+    gps_fix_snapshot(&f);
+    ASSERT_EQ(f.valid, 1);
+    ASSERT_EQ(f.has_time_off, 0);
+    ASSERT_EQ(f.count, 5u);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* Feed SKY4 and TPV_FULL at wall w, through the framer. */
+static void feed_sky_tpv(time_t w) {
+    static gps_lines_t L;
+    static int init;
+    if (!init) { gps_lines_init(&L, GPS_FEED_GPSD); init = 1; }
+    static char line[2048];
+    int n = snprintf(line, sizeof(line), "%s\n%s\n", SKY4, TPV_FULL);
+    /* The TPV's time follows w (same day), 250 ms ahead of the host, so
+     * a run of passes keeps its clock-offset band. */
+    char *t = strstr(line, "T00:00:01.250Z");
+    ASSERT(t != NULL);
+    /* And PRN 5's C/N0 wanders inside its 6 dB band (41.0 .. 41.9), so
+     * a run of passes proves the band, not an unchanged figure. */
+    char *ss = strstr(line, "\"ss\":41.0");
+    ASSERT(ss != NULL);
+    if (ss) ss[8] = (char)('0' + (int)((w - 1793059200) % 10));
+    if (t) {
+        int d = (int)(w - 1793059200) % 86400;
+        char stamp[24];
+        snprintf(stamp, sizeof(stamp), "T%02d:%02d:%02d.250Z",
+                 d / 3600, (d / 60) % 60, d % 60);
+        memcpy(t, stamp, 14);
+    }
+    clk(w);
+    gps_lines_feed(&L, (const uint8_t *)line, (size_t)n, w);
+}
+
+/* The sky state, its statistics and the copy on sloth_state_t. */
+static void test_sky_state_and_snapshot(void) {
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    feed_sky_tpv(1793059200);
+    gnss_sky_t k;
+    gps_sky_snapshot(&k);
+    ASSERT_EQ(k.valid, 1);
+    ASSERT_EQ(k.ts, (time_t)1793059200);
+    ASSERT_EQ(k.n, 4);
+    ASSERT_EQ(k.nsat, 4);
+    ASSERT_EQ(k.usat, 2);
+    ASSERT_EQ(k.cn0_n, 3);
+    ASSERT_NEAR(k.cn0_mean, (41.0 + 22.5 + 30.5) / 3.0, 1e-9);
+    ASSERT_NEAR(k.cn0_max, 41.0, 1e-9);
+    ASSERT(k.cn0_sd > 7.0 && k.cn0_sd < 8.0);
+    ASSERT_NEAR(k.hdop, 0.8, 1e-9);
+    ASSERT_NEAR(k.pdop, 1.5, 1e-9);
+    ASSERT_NEAR(k.vdop, 1.2, 1e-9);
+    ASSERT_NEAR(k.gdop, 2.0, 1e-9);
+    ASSERT_NEAR(k.tdop, 0.9, 1e-9);
+    ASSERT_EQ(k.passes, 1u);
+    ASSERT_EQ(k.sats[0].prn, 5);
+    ASSERT_EQ(k.sats[0].cn0_x10, 410);
+    ASSERT_EQ(k.sats[0].el, 45);
+    ASSERT_EQ(k.sats[0].az, 120);
+    ASSERT_EQ(k.sats[1].el, -1);
+    ASSERT_EQ(k.sats[3].has_cn0, 0);
+    ASSERT_EQ(k.sats[2].gnssid, 6);
+    ASSERT_STR(gnss_name(k.sats[2].gnssid), "GLONASS");
+    ASSERT_STR(gnss_name(-1), "?");
+
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    poll_at(&s, 1793059200);
+    ASSERT_EQ(s.gnss_sky.n, 4);
+    ASSERT_EQ(s.gnss_fix.valid, 1);
+    ASSERT_EQ(s.gnss_fix.mode, 3);
+    ASSERT_EQ(s.gnss_fix.status, 2);
+    ASSERT_EQ(s.gnss_fix.jam, 12);
+    ASSERT_EQ(s.gnss_fix.leap, 18);
+    ASSERT_EQ(s.gnss_fix.has_pos, 1);
+    ASSERT_EQ(s.gnss_fix.has_speed, 1);
+    ASSERT_EQ(s.gnss_fix.has_epv, 1);
+    ASSERT_NEAR(s.gnss_fix.alt_m, 11.6, 1e-9);
+    ASSERT_EQ(s.gnss_fix.time_off_ms, 250LL);
+    ASSERT_EQ(s.gps.sats_in_view, 4);
+    ASSERT_EQ(s.gps.sats_used, 2);
+    ASSERT_NEAR(s.gps.cn0_mean, (41.0 + 22.5 + 30.5) / 3.0, 1e-9);
+    ASSERT_NEAR(s.gps.cn0_max, 41.0, 1e-9);
+    ASSERT_EQ(s.gps.has_time_off, 1);
+    ASSERT_EQ(s.gps.time_off_ms, 250LL);
+    ASSERT_NEAR(s.gps.pdop, 1.5, 1e-9);
+    ASSERT_EQ(s.gps.status, 2);
+    ASSERT_EQ(s.gps.jam, 12);
+    /* A SKY carrying DOPs alone updates them and keeps the rows. */
+    static gpsd_msg_t m;
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"SKY\",\"hdop\":1.9,\"pdop\":3.0}"), &m), 1);
+    gps_location_feed_gpsd(&m, 1793059201);
+    gps_sky_snapshot(&k);
+    ASSERT_EQ(k.n, 4);
+    ASSERT_NEAR(k.hdop, 1.9, 1e-9);
+    ASSERT_NEAR(k.pdop, 3.0, 1e-9);
+    ASSERT_EQ(k.passes, 1u);
+    /* Before any receiver: nothing valid, nothing in s->gps. */
+    gps_location_reset();
+    memset(&s, 0, sizeof(s));
+    poll_at(&s, 1793059202);
+    ASSERT_EQ(s.gnss_sky.valid, 0);
+    ASSERT_EQ(s.gnss_fix.valid, 0);
+    ASSERT_EQ(s.gps.sats_in_view, 0);
+    ASSERT_EQ(s.gps.status, -1);
+    ASSERT_EQ(s.gps.jam, -1);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* The rings kept for the detector slice: 64 positioned fixes, 300 one-
+ * second points, oldest overwritten; a TPV without a position keeps the
+ * fix ring but still makes a second's point. */
+static void test_gnss_history_rings_wrap(void) {
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    static gpsd_msg_t m;
+    ASSERT_EQ(gpsd_json_parse(S(SKY4), &m), 1);
+    gps_location_feed_gpsd(&m, 1793059200);
+    for (int i = 0; i < 70; i++) {
+        static char line[256];
+        int n = snprintf(line, sizeof(line),
+                         "{\"class\":\"TPV\",\"mode\":3,\"lat\":%d.5,\"lon\":2,\"eph\":%d}",
+                         i % 80, i);
+        ASSERT_EQ(gpsd_json_parse(line, (size_t)n, &m), 1);
+        gps_location_feed_gpsd(&m, 1793059200 + i);
+    }
+    static gnss_hist_t h;
+    gps_gnss_history(&h);
+    ASSERT_EQ(h.fix_n, GNSS_FIX_HIST);
+    ASSERT_EQ(h.fix_head, 70 % GNSS_FIX_HIST);
+    /* The newest point sits before head; the oldest kept is fix 6. */
+    int newest = (h.fix_head + GNSS_FIX_HIST - 1) % GNSS_FIX_HIST;
+    ASSERT_NEAR(h.fixes[newest].eph, 69.0, 1e-9);
+    ASSERT_NEAR(h.fixes[h.fix_head].eph, 6.0, 1e-9);
+    ASSERT_EQ(h.fixes[newest].usat, 2);
+    ASSERT_EQ(h.sec_n, 70);
+    ASSERT_EQ(h.secs[(h.sec_head + GNSS_SERIES_S - 1) % GNSS_SERIES_S].ts,
+              (time_t)1793059269);
+    ASSERT_EQ(h.secs[0].nsat, 4);
+    /* Two TPVs in one second are one point; 400 seconds are 300. */
+    for (int i = 70; i < 400; i++) {
+        ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":1}"), &m), 1);
+        gps_location_feed_gpsd(&m, 1793059200 + i);
+        gps_location_feed_gpsd(&m, 1793059200 + i);
+    }
+    gps_gnss_history(&h);
+    ASSERT_EQ(h.sec_n, GNSS_SERIES_S);
+    ASSERT_EQ(h.fix_n, GNSS_FIX_HIST);          /* mode 1 adds no fix */
+    ASSERT_EQ(h.secs[(h.sec_head + GNSS_SERIES_S - 1) % GNSS_SERIES_S].ts,
+              (time_t)1793059599);
+    ASSERT_EQ(h.secs[h.sec_head].ts, (time_t)1793059300);
+}
+
+/* The three records are change-only on bands: sixty identical passes
+ * are one record each (and four gnss_sat), one satellite crossing a
+ * 6 dB C/N0 band is one more gnss_sat and nothing else. Seen red with
+ * gps_gnss_sat_sig() signing cn0_x10 itself (every pass wrote four
+ * gnss_sat lines) and with the 60-pass loop's `== 4` turned to `>= 4`
+ * after that mutation (the absence claim needs the exact count). */
+static void test_gnss_records_change_only(void) {
+    jl_open();
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    time_t w = 1793059200;
+    feed_sky_tpv(w);
+    poll_at(&s, w);
+    jsonl_emit_gnss(&s);
+    for (int i = 1; i <= 60; i++) {
+        feed_sky_tpv(w + i);
+        poll_at(&s, w + i);
+        jsonl_emit_gnss(&s);
+    }
+    /* One sink throughout: jsonl_open() resets the change cache, so a
+     * reopen would make every phase's first pass a full re-emission. */
+    /* One satellite's C/N0 crosses a band (41.0 -> 47.5: 6 dB bucket 6
+     * to 7); the sky's mean band and the fix's bands do not move. */
+    static gps_lines_t L;
+    gps_lines_init(&L, GPS_FEED_GPSD);
+    static char line[2048];
+    snprintf(line, sizeof(line), "%s\n", SKY4);
+    char *p = strstr(line, "\"ss\":41.0");
+    ASSERT(p != NULL);
+    if (p) memcpy(p, "\"ss\":47.5", 9);
+    clk(w + 61);
+    gps_lines_feed(&L, (const uint8_t *)line, strlen(line), w + 61);
+    poll_at(&s, w + 61);
+    jsonl_emit_gnss(&s);
+    /* The receiver dropping to no fix is a gnss_fix (mode band). */
+    static gpsd_msg_t m;
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":1}"), &m), 1);
+    clk(w + 62);
+    gps_location_feed_gpsd(&m, w + 62);
+    poll_at(&s, w + 62);
+    jsonl_emit_gnss(&s);
+    /* Nothing without a --gps reader: --location alone has no sky. */
+    gps_location_reset();
+    char err[160];
+    ASSERT_EQ(gps_location_parse_fixed("10,20", err, sizeof(err)), 0);
+    memset(&s, 0, sizeof(s));
+    poll_at(&s, w + 63);
+    jsonl_emit_gnss(&s);
+    jsonl_close();
+    char *b = read_all(g_jl);
+    ASSERT(b != NULL);
+    if (b) {
+        /* 60 identical passes: one of each; the crossing: one gnss_sat;
+         * the lost fix: one gnss_fix; --location: nothing. */
+        ASSERT_EQ(count_type(b, "\"type\":\"gnss_fix\""), 2);
+        ASSERT_EQ(count_type(b, "\"type\":\"gnss_sky\""), 1);
+        ASSERT_EQ(count_type(b, "\"type\":\"gnss_sat\""), 5);
+        ASSERT(strstr(b, "\"type\":\"gnss_sat\",\"ts\":1793059261,\"gnss\":\"GPS\",\"gnssid\":0,"
+                         "\"svid\":5,\"prn\":5,\"sigid\":0,\"el\":45,\"az\":120,\"cn0\":47.5") != NULL);
+        ASSERT(strstr(b, "\"type\":\"gnss_fix\",\"ts\":1793059262,\"src\":\"gpsd:127.0.0.1:2947\","
+                         "\"fix_ts\":1793059262,\"mode\":1,\"status\":-1") != NULL);
+        ASSERT(strstr(b, "\"ts\":1793059263") == NULL);
+        ASSERT(strstr(b, "\"type\":\"gnss_fix\",\"ts\":1793059200,\"src\":\"gpsd:127.0.0.1:2947\","
+                         "\"fix_ts\":1793059200,\"mode\":3,\"status\":2,\"nsat\":4,\"usat\":2,"
+                         "\"hdop\":0.8,\"vdop\":1.2,\"pdop\":1.5,\"lat\":51.50074,\"lon\":-0.12469,"
+                         "\"alt_m\":11.6,\"eph\":6.2,\"epv\":9.1,\"speed_mps\":0.30,"
+                         "\"track_deg\":12.5,\"rx_time_ms\":1793059200250,\"time_off_ms\":250,"
+                         "\"leap\":18,\"jam\":12,\"tpv_count\":1}") != NULL);
+        ASSERT(strstr(b, "\"type\":\"gnss_sky\",\"ts\":1793059200,\"src\":\"gpsd:127.0.0.1:2947\","
+                         "\"sky_ts\":1793059200,\"nsat\":4,\"usat\":2,\"rows\":4,\"overflow\":0,"
+                         "\"hdop\":0.8,\"vdop\":1.2,\"pdop\":1.5,\"gdop\":2.0,\"tdop\":0.9,"
+                         "\"cn0_mean\":31.3,\"cn0_max\":41.0,\"cn0_sd\":7.6,\"cn0_n\":3,"
+                         "\"passes\":1}") != NULL);
+        ASSERT(strstr(b, "\"type\":\"gnss_sat\",\"ts\":1793059200,\"gnss\":\"GPS\",\"gnssid\":0,"
+                         "\"svid\":5,\"prn\":5,\"sigid\":0,\"el\":45,\"az\":120,\"cn0\":41.0,"
+                         "\"used\":1,\"health\":1,\"sky_ts\":1793059200}") != NULL);
+        ASSERT(strstr(b, "\"gnss\":\"GLONASS\",\"gnssid\":6,\"svid\":9,\"prn\":73") != NULL);
+        /* The untracked SBAS row carries no cn0 key at all. */
+        ASSERT(strstr(b, "\"prn\":131,\"sigid\":-1,\"el\":10,\"az\":200,\"used\":0,\"health\":0") != NULL);
+        /* The lost-fix record has no position. */
+        const char *nf = strstr(b, "\"fix_ts\":1793059262");
+        ASSERT(nf && strstr(nf, "\"lat\"") == NULL);
+    }
+    unlink(g_jl);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* The sensor_health appends: present only with a --gps reader (a
+ * --location run and a run with neither write no gnss_ key, so their
+ * lines are what they were before this slice), the offset key only once
+ * a TPV carried a time; and the bands, not the figures, sign the line:
+ * a C/N0 wandering inside its band writes nothing, the clock offset
+ * crossing 2 s writes one line. Seen red with sig.gnss_time_off_band
+ * replaced by the raw offset (every tick wrote a line). */
+static void test_sensor_health_gnss_block(void) {
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    char err[160];
+    /* --location alone. */
+    jl_open();
+    ASSERT_EQ(gps_location_parse_fixed("10,20", err, sizeof(err)), 0);
+    poll_at(&s, 1793059200);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *b = read_all(g_jl);
+    ASSERT(b != NULL);
+    if (b) {
+        ASSERT(strstr(b, "\"gps_state\":\"fixed\"") != NULL);
+        ASSERT(strstr(b, "\"gnss_") == NULL);
+    }
+    unlink(g_jl);
+    /* --gps, before any time: counts and jam, no offset key. */
+    gps_location_reset();
+    jsonl_dedup_reset();
+    jl_open();
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    static gpsd_msg_t m;
+    ASSERT_EQ(gpsd_json_parse(S(SKY4), &m), 1);
+    clk(1793059200);
+    gps_location_feed_gpsd(&m, 1793059200);
+    poll_at(&s, 1793059200);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    b = read_all(g_jl);
+    ASSERT(b != NULL);
+    if (b) {
+        ASSERT(strstr(b, "\"gps_err\":\"\",\"gnss_sats_in_view\":4,\"gnss_sats_used\":2,"
+                         "\"gnss_cn0_mean\":31.3,\"gnss_jam\":-1}") != NULL);
+        ASSERT(strstr(b, "gnss_time_offset_ms") == NULL);
+    }
+    unlink(g_jl);
+    /* With the TPV: the offset and jam appear; sixty ticks of a C/N0
+     * wandering in its band and an offset wandering under 500 ms write
+     * nothing; the offset crossing 2 s writes one. */
+    jl_open();
+    feed_sky_tpv(1793059201);
+    poll_at(&s, 1793059201);
+    jsonl_emit_sensor_health(&s);
+    for (int i = 2; i < 62; i++) {
+        static char line[2048];
+        /* C/N0 41.0 -> 41.x, offset 250 -> 250 + i ms. */
+        int n = snprintf(line, sizeof(line),
+                         "{\"class\":\"SKY\",\"nSat\":4,\"uSat\":2,\"satellites\":["
+                         "{\"PRN\":5,\"ss\":41.%d,\"used\":true},{\"PRN\":7,\"ss\":22.5,\"used\":false},"
+                         "{\"PRN\":73,\"ss\":30.5,\"used\":true},{\"PRN\":131,\"used\":false}]}\n"
+                         "{\"class\":\"TPV\",\"mode\":3,\"lat\":51.5,\"lon\":-0.1,"
+                         "\"time\":\"2026-10-27T00:%02d:%02d.%03dZ\",\"jam\":12}\n",
+                         i % 10, i / 60, i % 60, 250 + i);
+        static gps_lines_t L;
+        gps_lines_init(&L, GPS_FEED_GPSD);
+        clk(1793059200 + i);
+        gps_lines_feed(&L, (const uint8_t *)line, (size_t)n, 1793059200 + i);
+        poll_at(&s, 1793059200 + i);
+        jsonl_emit_sensor_health(&s);
+    }
+    /* Same sink (a reopen resets the change cache): the crossing. */
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":3,\"lat\":51.5,\"lon\":-0.1,"
+                                "\"time\":\"2026-10-27T00:01:05.000Z\",\"jam\":12}"), &m), 1);
+    clk(1793059262);
+    gps_location_feed_gpsd(&m, 1793059262);             /* receiver 3 s ahead */
+    poll_at(&s, 1793059262);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    b = read_all(g_jl);
+    ASSERT(b != NULL);
+    if (b) {
+        ASSERT_EQ(count_type(b, "\"type\":\"sensor_health\""), 2);
+        ASSERT(strstr(b, "\"gnss_time_offset_ms\":250,\"gnss_jam\":12}") != NULL);
+        ASSERT(strstr(b, "\"gnss_time_offset_ms\":3000,\"gnss_jam\":12}") != NULL);
+    }
+    unlink(g_jl);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* The receiver registers as the `gps` sensor (kind name "gps", iface
+ * its source label, observed its parsed objects), after the radios;
+ * --location alone registers nothing. */
+static void test_sensor_registry_gps(void) {
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    char err[160];
+    ASSERT_EQ(gps_location_parse_fixed("10,20", err, sizeof(err)), 0);
+    poll_ctx_t ctx;
+    poll_ctx_init(&ctx);
+    poll_tick(&s, &ctx);
+    for (int i = 0; i < s.sensor_count; i++) ASSERT_NE(s.sensors[i].kind, SENSOR_GPS);
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    feed_sky_tpv(1793059200);
+    poll_ctx_init(&ctx);
+    poll_tick(&s, &ctx);
+    int found = -1;
+    for (int i = 0; i < s.sensor_count; i++)
+        if (s.sensors[i].kind == SENSOR_GPS) found = i;
+    ASSERT(found >= 0);
+    if (found >= 0) {
+        ASSERT_STR(s.sensors[found].iface, "gpsd:127.0.0.1:2947");
+        ASSERT_STR(s.sensors[found].name, "GNSS receiver");
+        ASSERT_EQ(s.sensors[found].observed, 2u);
+        ASSERT_EQ(s.sensors[found].state, SENSOR_STATE_ACTIVE);
+        ASSERT_STR(sensor_kind_name(s.sensors[found].kind), "gps");
+    }
+    jl_open();
+    jsonl_emit_sensors(&s);
+    jsonl_close();
+    char *b = read_all(g_jl);
+    ASSERT(b != NULL);
+    if (b)
+        ASSERT(strstr(b, "\"type\":\"sensor\",\"ts\":1793059200,\"kind\":\"gps\",\"state\":\"active\","
+                         "\"name\":\"GNSS receiver\",\"iface\":\"gpsd:127.0.0.1:2947\","
+                         "\"observed\":2") != NULL);
+    unlink(g_jl);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* The banded signatures move only across a band edge. */
+static void test_gnss_signature_bands(void) {
+    ASSERT_EQ(gps_cn0_band(0), -1);
+    ASSERT_EQ(gps_cn0_band(24.9), 0);
+    ASSERT_EQ(gps_cn0_band(25.0), 1);
+    ASSERT_EQ(gps_cn0_band(35.0), 2);
+    ASSERT_EQ(gps_time_off_band(0, 0), -1);
+    ASSERT_EQ(gps_time_off_band(1, -499), 0);
+    ASSERT_EQ(gps_time_off_band(1, 500), 1);
+    ASSERT_EQ(gps_time_off_band(1, -1999), 1);
+    ASSERT_EQ(gps_time_off_band(1, 2000), 2);
+    ASSERT_EQ(gps_time_off_band(1, 10000), 3);
+    ASSERT_EQ(gps_jam_band(-1), -1);
+    ASSERT_EQ(gps_jam_band(0), 0);
+    ASSERT_EQ(gps_jam_band(63), 1);
+    ASSERT_EQ(gps_jam_band(64), 2);
+    ASSERT_EQ(gps_jam_band(128), 3);
+    gnss_sat_t a;
+    memset(&a, 0, sizeof(a));
+    a.prn = 5; a.gnssid = 0; a.svid = 5; a.has_cn0 = 1; a.cn0_x10 = 410;
+    a.el = 45; a.az = 120; a.used = 1; a.health = 1;
+    uint64_t h0 = gps_gnss_sat_sig(&a);
+    a.cn0_x10 = 419;  ASSERT_EQ(gps_gnss_sat_sig(&a), h0);     /* 41.9: same 6 dB band */
+    a.el = 59;        ASSERT_EQ(gps_gnss_sat_sig(&a), h0);     /* same 15 degree band */
+    a.cn0_x10 = 420;  ASSERT_NE(gps_gnss_sat_sig(&a), h0);     /* 42.0: next band */
+    a.cn0_x10 = 419; a.used = 0;  ASSERT_NE(gps_gnss_sat_sig(&a), h0);
+    a.used = 1; a.el = 60;        ASSERT_NE(gps_gnss_sat_sig(&a), h0);
+    gnss_fix_t f; gnss_sky_t k;
+    memset(&f, 0, sizeof(f)); memset(&k, 0, sizeof(k));
+    f.valid = 1; f.mode = 3; f.has_pos = 1; f.has_speed = 1; f.speed = 0.1;
+    f.has_time_off = 1; f.time_off_ms = 100; k.valid = 1; k.usat = 8; k.nsat = 12; k.hdop = 1.1;
+    uint64_t g0 = gps_gnss_fix_sig(&f, &k);
+    f.time_off_ms = 400; f.speed = 0.4; k.nsat = 15; k.hdop = 1.9;
+    ASSERT_EQ(gps_gnss_fix_sig(&f, &k), g0);
+    f.time_off_ms = 600;  ASSERT_NE(gps_gnss_fix_sig(&f, &k), g0);
+    f.time_off_ms = 400; k.usat = 9;  ASSERT_NE(gps_gnss_fix_sig(&f, &k), g0);
+}
+
 void run_gps_tests(void) {
     TEST_SUITE("gps: NMEA 0183");
     RUN_TEST(test_nmea_checksum_spec_examples);
@@ -1488,4 +2158,18 @@ void run_gps_tests(void) {
     TEST_SUITE("gps: TUI");
     RUN_TEST(test_view_detail_location_line);
     RUN_TEST(test_health_strip_gps_token);
+
+    TEST_SUITE("gps: GNSS observation (2026-11-02)");
+    RUN_TEST(test_gpsd_sky_satellites);
+    RUN_TEST(test_gpsd_sky_overflow_counted);
+    RUN_TEST(test_gpsd_tpv_extras);
+    RUN_TEST(test_gpsd_gst);
+    RUN_TEST(test_gpsd_time_parse);
+    RUN_TEST(test_clock_offset_against_host_ms);
+    RUN_TEST(test_sky_state_and_snapshot);
+    RUN_TEST(test_gnss_history_rings_wrap);
+    RUN_TEST(test_gnss_records_change_only);
+    RUN_TEST(test_sensor_health_gnss_block);
+    RUN_TEST(test_sensor_registry_gps);
+    RUN_TEST(test_gnss_signature_bands);
 }

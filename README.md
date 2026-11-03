@@ -25,7 +25,7 @@ default run originates no network traffic at all. Both of those are opt-in behin
 `--allow-active`, which announces itself on stderr; optional telemetry (`-o file.jsonl`,
 `--data-socket`) carries observations to a consumer you configured, over a path you
 configured, never to the segment being watched. It observes what your host already
-sees and turns it into **<!-- count:views -->36<!-- /count --> live views** and **<!-- count:rules -->90<!-- /count --> passive
+sees and turns it into **<!-- count:views -->37<!-- /count --> live views** and **<!-- count:rules -->90<!-- /count --> passive
 alert rules**, an embedded
 WiFi-SIGINT toolkit (PNL aggregation, RSN/cipher/MFP inventory, EAPOL/PMKID
 capture, hidden-SSID reveal, scored seqnum correlation across MAC rotations),
@@ -107,6 +107,7 @@ GitHub automatically; start at [`docs/wiki/index.md`](docs/wiki/index.md).
 | [**RADIUS**](docs/views/rogue-radius.md) | 802.1X EAP method inventory and identity leaks — the hostapd-wpe / eaphammer surface (#31, #38) |
 | [**FragAttacks**](docs/views/fragattack.md) | Per-BSSID counters for the FragAttacks rules (CVE-2020-24586/24587/24588, CVE-2020-261xx) (#75) |
 | [**BLE**](docs/views/ble.md) `[*]`        | One row per BLE advertiser per sensor, with the HID / watchlist flags the BLE_* rules read and an `Enter` detail (#144) |
+| [**GNSS**](docs/views/gnss.md) `[#]`      | The `--gps` receiver's sky: one row per satellite in view with its C/N0, elevation, azimuth, used and health flags, over the fix, the DOPs and the receiver's clock against the host's; observation only (2026-11-02) |
 | [**Research**](docs/views/research.md)   | The cited source behind each alert that actually fired — CVE, advisory, IEEE clause or paper (#73) |
 | [**Channel**](docs/views/channel.md)     | Per-channel 802.11 activity histogram: APs beaconing and STAs associated on each channel |
 | **Help** `[?]`                            | Keybindings, running version, and the embedded-data disclosures |

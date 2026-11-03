@@ -72,6 +72,8 @@ static const char *const TIER_OBSERVATION[] = {
     /* --gps (2026-10-27): a moving sensor's samples, the bulkiest
      * thing it writes per hour of driving. */
     "device_positions", "sensor_positions",
+    /* GNSS observation (2026-11-02): the receiver's own sky and clock. */
+    "gnss_fixes", "gnss_sightings",
 };
 
 /* 3x — the inventory. "Which devices were on this network in March"
@@ -129,10 +131,23 @@ enum {
     ST_ALERT, ST_ALERT_ROW, ST_CRED, ST_EAPOL, ST_DEAUTH, ST_SEQCORR, ST_TWIN,
     ST_SCAN, ST_SCAN_PORT, ST_KARMA, ST_ROGUE_RADIUS,
     ST_DEV_POS, ST_SENSOR_POS,
+    ST_GNSS_FIX, ST_GNSS_SIGHT,
     ST_COUNT
 };
 
 static sqlite3_stmt *g_st[ST_COUNT];
+
+/* GNSS observation (2026-11-02): write_gnss()'s change memory, cleared
+ * by db_open(). */
+#define DB_GNSS_HEARTBEAT_S 300
+#define DB_GNSS_SLOTS 64
+static struct { uint64_t sig; time_t ts; } g_gnss_fix_mem;
+static struct {
+    int16_t gnssid, prn;
+    uint64_t sig;
+    time_t ts;
+    int used;
+} g_gnss_sat_mem[DB_GNSS_SLOTS];
 
 /* The ST_DEVICE upsert spells the MAC-keyed camera bits as literals. */
 #if CAM_SIG_SETUP_SSID != 2 || CAM_SIG_SETUP_OUI != 16
@@ -601,6 +616,16 @@ static const char *const SQL[ST_COUNT] = {
 [ST_SENSOR_POS] =
     "INSERT OR IGNORE INTO sensor_positions (last_seen,lat,lon,alt_m,acc_m,"
     "loc_src,sats,hdop) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+/* GNSS observation (2026-11-02). INSERT OR REPLACE: within one second
+ * the newest state of the key is the one worth keeping. */
+[ST_GNSS_FIX] =
+    "INSERT OR REPLACE INTO gnss_fixes (last_seen,src,mode,status,nsat,usat,"
+    "hdop,vdop,pdop,eph,epv,lat,lon,alt_m,speed_mps,track_deg,time_off_ms,jam,"
+    "cn0_mean) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,"
+    "?17,?18,?19)",
+[ST_GNSS_SIGHT] =
+    "INSERT OR REPLACE INTO gnss_sightings (last_seen,gnssid,prn,svid,el,az,"
+    "cn0,used,health) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
 /* The key's newest row, which the write above continues instead of
  * starting one under the engine's first_seen (#170). The engine keeps
  * first_seen across a reopen in its side table, but that table is LRU
@@ -807,6 +832,9 @@ static const db_step_t g_steps[] = {
     { 8, db_schema_migrate_v8_sql, TABLES_ALERTS,
       "alerts gained the location stamp (lat, lon, alt_m, acc_m, loc_src,"
       " loc_ts)" },
+    { 9, db_schema_migrate_v9_sql, TABLES_NONE,
+      "gnss_fixes and gnss_sightings ride the unconditional schema; stamp"
+      " only" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -945,6 +973,10 @@ static int db_prepare_private(const char *path) {
 
 int db_open(const char *path) {
     if (!path || !path[0]) return 0;
+    /* A new file starts with no GNSS change memory: its first tick
+     * writes the current sky whole. */
+    memset(&g_gnss_fix_mem, 0, sizeof(g_gnss_fix_mem));
+    memset(g_gnss_sat_mem, 0, sizeof(g_gnss_sat_mem));
     /* The #error above checks the headers; this checks the library the
      * dynamic linker actually loaded, which can be older on a host the
      * binary was copied to (#142). Before anything touches the path:
@@ -1664,6 +1696,88 @@ static void write_positions(void) {
     }
 }
 
+/* GNSS observation (2026-11-02): one gnss_fixes row when the fix's
+ * banded signature changes or DB_GNSS_HEARTBEAT_S passed since the last
+ * row, one gnss_sightings row per satellite on the same rule — the
+ * JSONL records' rule (src/gps.c gps_gnss_*_sig), kept here on this
+ * writer's own memory so the two sinks never depend on each other's
+ * cache. The per-satellite memory is a small table keyed by identity;
+ * a satellite that leaves the sky frees its slot after a heartbeat. */
+
+static void bind_opt_real(sqlite3_stmt *st, int i, int has, double v) {
+    if (has) sqlite3_bind_double(st, i, v);
+}
+
+static void write_gnss(const sloth_state_t *s, time_t now) {
+    if (!s->gps.has_gps) return;
+    const gnss_fix_t *f = &s->gnss_fix;
+    const gnss_sky_t *k = &s->gnss_sky;
+    if (f->valid) {
+        uint64_t sig = gps_gnss_fix_sig(f, k);
+        if (sig != g_gnss_fix_mem.sig || g_gnss_fix_mem.ts == 0 ||
+            now - g_gnss_fix_mem.ts >= DB_GNSS_HEARTBEAT_S) {
+            sqlite3_stmt *st = g_st[ST_GNSS_FIX];
+            sqlite3_bind_int64(st, 1, (sqlite3_int64)now);
+            bind_txt(st, 2, s->gps.src);
+            sqlite3_bind_int(st, 3, f->mode);
+            if (f->status >= 0) sqlite3_bind_int(st, 4, f->status);
+            if (k->valid && k->nsat >= 0) sqlite3_bind_int(st, 5, k->nsat);
+            if (k->valid && k->usat >= 0) sqlite3_bind_int(st, 6, k->usat);
+            bind_opt_real(st, 7, k->hdop > 0, k->hdop);
+            bind_opt_real(st, 8, k->vdop > 0, k->vdop);
+            bind_opt_real(st, 9, k->pdop > 0, k->pdop);
+            bind_opt_real(st, 10, f->has_eph, f->eph);
+            bind_opt_real(st, 11, f->has_epv, f->epv);
+            bind_opt_real(st, 12, f->has_pos, f->lat);
+            bind_opt_real(st, 13, f->has_pos, f->lon);
+            bind_opt_real(st, 14, f->has_alt, f->alt_m);
+            bind_opt_real(st, 15, f->has_speed, f->speed);
+            bind_opt_real(st, 16, f->has_track, f->track);
+            if (f->has_time_off) sqlite3_bind_int64(st, 17, (sqlite3_int64)f->time_off_ms);
+            if (f->jam >= 0) sqlite3_bind_int(st, 18, f->jam);
+            bind_opt_real(st, 19, k->valid && k->cn0_n > 0, k->cn0_mean);
+            step_reset(ST_GNSS_FIX);
+            g_gnss_fix_mem.sig = sig;
+            g_gnss_fix_mem.ts = now;
+        }
+    }
+    if (!k->valid) return;
+    for (int i = 0; i < k->n && i < GNSS_MAX_SATS; i++) {
+        const gnss_sat_t *a = &k->sats[i];
+        uint64_t sig = gps_gnss_sat_sig(a);
+        int slot = -1, free_slot = -1;
+        for (int j = 0; j < DB_GNSS_SLOTS; j++) {
+            if (g_gnss_sat_mem[j].used && g_gnss_sat_mem[j].gnssid == a->gnssid &&
+                g_gnss_sat_mem[j].prn == a->prn) { slot = j; break; }
+            if (free_slot < 0 && (!g_gnss_sat_mem[j].used ||
+                now - g_gnss_sat_mem[j].ts > 2 * DB_GNSS_HEARTBEAT_S))
+                free_slot = j;
+        }
+        if (slot >= 0 && g_gnss_sat_mem[slot].sig == sig &&
+            now - g_gnss_sat_mem[slot].ts < DB_GNSS_HEARTBEAT_S)
+            continue;
+        sqlite3_stmt *st = g_st[ST_GNSS_SIGHT];
+        sqlite3_bind_int64(st, 1, (sqlite3_int64)now);
+        sqlite3_bind_int(st, 2, a->gnssid);
+        sqlite3_bind_int(st, 3, a->prn);
+        if (a->svid >= 0) sqlite3_bind_int(st, 4, a->svid);
+        if (a->el >= 0)   sqlite3_bind_int(st, 5, a->el);
+        if (a->az >= 0)   sqlite3_bind_int(st, 6, a->az);
+        if (a->has_cn0)   sqlite3_bind_double(st, 7, a->cn0_x10 / 10.0);
+        sqlite3_bind_int(st, 8, a->used);
+        if (a->health >= 0) sqlite3_bind_int(st, 9, a->health);
+        step_reset(ST_GNSS_SIGHT);
+        if (slot < 0) slot = free_slot;
+        if (slot >= 0) {
+            g_gnss_sat_mem[slot].used = 1;
+            g_gnss_sat_mem[slot].gnssid = (int16_t)a->gnssid;
+            g_gnss_sat_mem[slot].prn = a->prn;
+            g_gnss_sat_mem[slot].sig = sig;
+            g_gnss_sat_mem[slot].ts = now;
+        }
+    }
+}
+
 static void write_events(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->alert_count; i++) {
         const alert_t *a = &s->alerts[i];
@@ -2215,6 +2329,7 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_events         (s, now);
     write_detector_evidence(s, now);
     write_positions      ();
+    write_gnss           (s, now);
 
     if (g_disabled) {
         exec("ROLLBACK", "rollback");

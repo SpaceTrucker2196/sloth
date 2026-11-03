@@ -222,6 +222,8 @@ CORE_COMMON_SRCS += src/ble_flood.c src/ble_watchlist.c src/ble_detect.c
 # the keyed hash their digests use. Pure.
 CORE_COMMON_SRCS += src/ble_rotation.c src/siphash.c
 CORE_COMMON_SRCS += src/views/ble.c
+# GNSS observation (2026-11-02): the [#] view over the --gps receiver's sky.
+CORE_COMMON_SRCS += src/views/gnss.c
 CORE_COMMON_SRCS += src/scan.c
 CORE_COMMON_SRCS += src/alert_key.c
 CORE_COMMON_SRCS += src/camera_vendor.c

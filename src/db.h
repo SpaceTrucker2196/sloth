@@ -92,7 +92,11 @@
  * nullable, NULL meaning "not stamped". The v8 -> v9 step adds the six
  * columns and touches no row. device_positions and sensor_positions
  * are new tables and ride the unconditional schema. */
-#define DB_SCHEMA_VERSION 9
+/* Bumped to 10 on 2026-11-02 (GNSS observation, docs/wiki/gnss.md):
+ * gnss_fixes and gnss_sightings are new tables and ride the
+ * unconditional schema; the v9 -> v10 step is a stamp alone, as
+ * v2 -> v3 was. No existing table or value changes. */
+#define DB_SCHEMA_VERSION 10
 
 /* How long a statement on sloth's connection waits out another
  * connection's lock before failing busy. A reader of the file (the
@@ -360,5 +364,9 @@ const char *db_schema_migrate_v6_sql(void);
 const char *db_schema_migrate_v7_sql(void);
 /* v8 -> v9 (2026-10-27): ALTER TABLE alerts ADD COLUMN only. */
 const char *db_schema_migrate_v8_sql(void);
+/* v9 -> v10 (2026-11-02): no ALTER — gnss_fixes and gnss_sightings are
+ * new tables and ride the unconditional schema. An empty statement
+ * list; the step still advances the stamp in db.c. */
+const char *db_schema_migrate_v9_sql(void);
 
 #endif /* SLOTH_DB_H */

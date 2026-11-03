@@ -57,6 +57,7 @@
 
 #include "web_anomaly.h"
 #include "web_ble.h"
+#include "web_gnss.h"
 #include "web_devices.h"
 #include "web_http.h"
 #include "web_live.h"
@@ -80,6 +81,7 @@ typedef struct {
     const web_scope_ctx_t *sc; /* the request's capture scope; NULL Hybrid
                                   (set by web_route() itself) */
     web_ble_t     *ble;       /* NULL: no BLE tables (web_ble.h) */
+    web_gnss_t    *gnss;      /* NULL: no GNSS panel (web_gnss.h) */
 } web_health_t;
 
 /* /api/live and the series routes are built into the connection's

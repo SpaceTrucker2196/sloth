@@ -158,6 +158,11 @@ enum {
      * same MAC, and evicts as every device key does. A sloth gauge, not
      * a calibrated measurement (web_metrics.c says which records). */
     WM_RF_RSSI_STA, WM_RF_RSSI_BSSID, WM_RF_RSSI_BLE,
+    /* The host's own GNSS receiver (web_gnss.h, 2026-11-02): global
+     * gauges from the change-only gnss_fix / gnss_sky records, so each
+     * series is as sparse as its record (a band change or the 300 s
+     * heartbeat). Every scope's, as sensor.drops is. */
+    WM_GNSS_SATS_USED, WM_GNSS_HDOP, WM_GNSS_TIME_OFF_MS, WM_GNSS_CN0_MEAN,
     WM_COUNT
 };
 

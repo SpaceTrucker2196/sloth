@@ -186,9 +186,12 @@ static void test_schema_tables_have_seen_columns(void) {
     /* device_positions / sensor_positions (--gps, 2026-10-27) are point
      * samples, not entities: one time per row, named last_seen so the
      * retention sweep ages them, and no span for a first_seen to open. */
+    /* gnss_fixes / gnss_sightings (2026-11-02) likewise: one pass's time
+     * per row, named last_seen for the same sweep. */
     static const char *const exempt[] = { "meta (", "sessions (",
                                           "device_positions (",
-                                          "sensor_positions (" };
+                                          "sensor_positions (",
+                                          "gnss_fixes (", "gnss_sightings (" };
 
     int tables = 0, entities = 0, with_both = 0;
     for (const char *p = strstr(sql, "CREATE TABLE"); p;
@@ -2219,11 +2222,11 @@ static void test_current_file_gains_the_first_seen_indexes(void) {
 
 /* ── Schema v4: the batched column bump ──────────────────── */
 
-static void test_schema_version_is_nine(void) {
+static void test_schema_version_is_ten(void) {
     fresh_db();
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "9");
+    ASSERT_STR(v, "10");
     db_close();
     unlink(db_path);
 }
@@ -2802,7 +2805,7 @@ static void test_v5_file_migrates_additively(void) {
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
     /* The chain runs on: v5 -> v6 -> v7 -> v8 in one open (#155, #170). */
-    ASSERT_STR(v, "9");
+    ASSERT_STR(v, "10");
     ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('devices')"
                     " WHERE name='dhcp_vci'"), 23);
     q_text("SELECT hostname FROM devices WHERE mac='02:00:00:00:00:77'",
@@ -2855,7 +2858,7 @@ static void test_v5_file_without_devices_migrates(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "9");
+    ASSERT_STR(v, "10");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
                     " WHERE name='cam_signals'"), 1);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
@@ -2895,7 +2898,7 @@ static void test_v6_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "9");
+    ASSERT_STR(v, "10");
     q_text("SELECT hostname FROM devices", v, sizeof(v));
     ASSERT_STR(v, "old-host");
     ASSERT_EQ(q_int("SELECT device_class FROM devices"), 2);
@@ -2993,7 +2996,7 @@ static void test_v7_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "9");
+    ASSERT_STR(v, "10");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts WHERE key='recon:10.0.0.5'"),
               19);
@@ -3090,7 +3093,7 @@ static void test_v8_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "9");
+    ASSERT_STR(v, "10");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
     q_text("SELECT incident_id FROM alerts WHERE first_seen=1600000011", v, sizeof(v));
@@ -3242,6 +3245,168 @@ static void test_position_tables_written(void) {
     unlink(db_path);
 }
 
+/* ── Schema v10: the GNSS tables (2026-11-02) ──────────────── */
+
+/* A v9 file: write_v8_file() under the v9 alerts columns, stamped 9.
+ * The position tables are not created here: a v9 file sloth wrote has
+ * them, but the unconditional schema creates them either way and the
+ * step must not depend on it. */
+#define V9_ALERTS_COLS \
+    ", lat REAL, lon REAL, alt_m REAL, acc_m REAL, loc_src TEXT, loc_ts INTEGER"
+
+static void write_v9_file(void) {
+    write_v8_file(V7_ALERTS_DDL(V8_ALERTS_COLS(V9_ALERTS_COLS)));
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "UPDATE meta SET value='9' WHERE key='schema_version';"
+        "UPDATE alerts SET lat=51.5, lon=-0.1, loc_src='gps', loc_ts=1700000000"
+        "  WHERE first_seen=1600000011;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+}
+
+/* v9 -> v10 is a stamp: no ALTER, every recorded value as it was, and
+ * the two GNSS tables arrive with the unconditional schema. Seen to
+ * fail with the { 9, ... } step removed from g_steps[] (the static
+ * chain check refuses the build) and with DB_SCHEMA_VERSION left at 9
+ * (the tables exist but the stamp reads 9). */
+static void test_v9_file_migrates_additively(void) {
+    write_v9_file();
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "10");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
+    ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
+    q_text("SELECT incident_id FROM alerts WHERE first_seen=1600000011", v, sizeof(v));
+    ASSERT_STR(v, "00000000000000a1");
+    ASSERT_EQ(q_int("SELECT CAST(ROUND(lat*10) AS INTEGER) FROM alerts"
+                    " WHERE first_seen=1600000011"), 515);
+    q_text("SELECT loc_src FROM alerts WHERE first_seen=1600000011", v, sizeof(v));
+    ASSERT_STR(v, "gps");
+    /* The alerts table is untouched by the step: still 21 columns. */
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alerts')"), 21);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name IN ('gnss_fixes','gnss_sightings')"), 2);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
+                    " AND name='idx_gnss_sightings_last_seen'"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM gnss_fixes"), 0);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v9 file whose stamp cannot be written stays v9, with none of the
+ * v10 tables: the step's one statement is the stamp, so a trigger that
+ * refuses the value '10' is the one way to make it fail, and the
+ * transaction around it must leave nothing behind. Seen to fail with
+ * migrate_step()'s return ignored in migrate_from() (db_open returned 1
+ * and the tables appeared beside a v9 stamp). */
+static void test_v9_migration_failure_leaves_file_unchanged(void) {
+    write_v9_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TRIGGER refuse_v10 BEFORE UPDATE ON meta"
+        " WHEN NEW.key='schema_version' AND NEW.value='10'"
+        " BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "9");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name IN ('gnss_fixes','gnss_sightings')"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
+    ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
+    unlink(db_path);
+}
+
+/* The GNSS writer: a SKY and a TPV become one gnss_fixes row and one
+ * gnss_sightings row per satellite; an unchanged sky on the next tick
+ * writes nothing (the banded change-only rule, shared with the JSONL
+ * records); one satellite crossing a 6 dB band writes that one row.
+ * Seen red with write_gnss()'s per-satellite memory check removed
+ * (the second tick wrote four more sightings). */
+static void test_gnss_tables_written(void) {
+    fresh_db();
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    static const char sky[] =
+        "{\"class\":\"SKY\",\"hdop\":0.8,\"pdop\":1.5,\"vdop\":1.2,\"nSat\":4,\"uSat\":2,"
+        "\"satellites\":[{\"PRN\":5,\"gnssid\":0,\"svid\":5,\"el\":45,\"az\":120,\"ss\":41.0,"
+        "\"used\":true,\"health\":1},{\"PRN\":7,\"gnssid\":0,\"svid\":7,\"ss\":22.5,\"used\":false},"
+        "{\"PRN\":73,\"gnssid\":6,\"svid\":9,\"el\":30,\"az\":300,\"ss\":30.5,\"used\":true},"
+        "{\"PRN\":131,\"gnssid\":1,\"svid\":131,\"el\":10,\"az\":200,\"used\":false}]}";
+    static const char tpv[] =
+        "{\"class\":\"TPV\",\"mode\":3,\"status\":2,\"lat\":48.5,\"lon\":11.25,\"altMSL\":500,"
+        "\"eph\":7,\"epv\":9,\"speed\":0.2,\"track\":90,\"jam\":3}";
+    static gpsd_msg_t m;
+    ASSERT_EQ(gpsd_json_parse(sky, sizeof(sky) - 1, &m), 1);
+    gps_location_feed_gpsd(&m, 1793059200);
+    ASSERT_EQ(gpsd_json_parse(tpv, sizeof(tpv) - 1, &m), 1);
+    gps_location_feed_gpsd(&m, 1793059200);
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    gps_health_poll(&s, 1793059200);
+    db_tick(&s, 1793059200);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM gnss_fixes"), 1);
+    char v[64];
+    q_text("SELECT src FROM gnss_fixes", v, sizeof(v));
+    ASSERT_STR(v, "gpsd:127.0.0.1:2947");
+    ASSERT_EQ(q_int("SELECT mode FROM gnss_fixes"), 3);
+    ASSERT_EQ(q_int("SELECT status FROM gnss_fixes"), 2);
+    ASSERT_EQ(q_int("SELECT nsat FROM gnss_fixes"), 4);
+    ASSERT_EQ(q_int("SELECT usat FROM gnss_fixes"), 2);
+    ASSERT_EQ(q_int("SELECT CAST(ROUND(hdop*10) AS INTEGER) FROM gnss_fixes"), 8);
+    ASSERT_EQ(q_int("SELECT CAST(ROUND(lat*100) AS INTEGER) FROM gnss_fixes"), 4850);
+    ASSERT_EQ(q_int("SELECT CAST(alt_m AS INTEGER) FROM gnss_fixes"), 500);
+    ASSERT_EQ(q_int("SELECT CAST(eph AS INTEGER) FROM gnss_fixes"), 7);
+    ASSERT_EQ(q_int("SELECT time_off_ms IS NULL FROM gnss_fixes"), 1);   /* no time on the TPV */
+    ASSERT_EQ(q_int("SELECT jam FROM gnss_fixes"), 3);
+    ASSERT_EQ(q_int("SELECT CAST(ROUND(cn0_mean*10) AS INTEGER) FROM gnss_fixes"), 313);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM gnss_sightings"), 4);
+    ASSERT_EQ(q_int("SELECT used FROM gnss_sightings WHERE gnssid=6 AND prn=73"), 1);
+    ASSERT_EQ(q_int("SELECT svid FROM gnss_sightings WHERE gnssid=6 AND prn=73"), 9);
+    ASSERT_EQ(q_int("SELECT CAST(ROUND(cn0*10) AS INTEGER) FROM gnss_sightings"
+                    " WHERE gnssid=0 AND prn=5"), 410);
+    ASSERT_EQ(q_int("SELECT cn0 IS NULL FROM gnss_sightings WHERE prn=131"), 1);
+    ASSERT_EQ(q_int("SELECT el IS NULL FROM gnss_sightings WHERE prn=7"), 1);
+    ASSERT_EQ(q_int("SELECT health IS NULL FROM gnss_sightings WHERE prn=7"), 1);
+    /* The same sky a second later: nothing new. */
+    gps_location_feed_gpsd(&m, 1793059201);
+    gps_health_poll(&s, 1793059201);
+    db_tick(&s, 1793059201);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM gnss_fixes"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM gnss_sightings"), 4);
+    /* PRN 5 crosses a band: one sighting, no fix row. */
+    static char sky2[sizeof(sky)];
+    memcpy(sky2, sky, sizeof(sky));
+    char *p = strstr(sky2, "\"ss\":41.0");
+    ASSERT(p != NULL);
+    if (p) memcpy(p, "\"ss\":47.5", 9);
+    ASSERT_EQ(gpsd_json_parse(sky2, sizeof(sky) - 1, &m), 1);
+    gps_location_feed_gpsd(&m, 1793059202);
+    gps_health_poll(&s, 1793059202);
+    db_tick(&s, 1793059202);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM gnss_fixes"), 1);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM gnss_sightings"), 5);
+    ASSERT_EQ(q_int("SELECT CAST(ROUND(cn0*10) AS INTEGER) FROM gnss_sightings"
+                    " WHERE prn=5 AND last_seen=1793059202"), 475);
+    /* The heartbeat: 300 s on, every row again. */
+    gps_health_poll(&s, 1793059502);
+    db_tick(&s, 1793059502);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM gnss_fixes"), 2);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM gnss_sightings"), 9);
+    /* Both tables sit in the observation tier: test_every_table_has_a_
+     * retention_tier holds the schema to the tier lists. */
+    db_close();
+    unlink(db_path);
+}
+
 /* ── --db-compact-alerts (#170) ─────────────────────────── */
 
 static char g_cmp_src[TEST_TMP_MAX + 8], g_cmp_dst[TEST_TMP_MAX + 8];
@@ -3378,7 +3543,7 @@ static void test_compact_alerts_900k_rows(void) {
     ASSERT_EQ(db_is_open(), 0);
 
     ASSERT_EQ(q_int_at(g_cmp_dst, "SELECT CAST(value AS INTEGER) FROM meta"
-                                  " WHERE key='schema_version'"), 9);
+                                  " WHERE key='schema_version'"), 10);
     ASSERT_EQ(q_int_at(g_cmp_dst, "SELECT COUNT(*) FROM alerts"), CMP_KEYS);
     ASSERT_EQ(q_int_at(g_cmp_dst, "SELECT COUNT(DISTINCT key) FROM alerts"),
               CMP_KEYS);
@@ -3719,7 +3884,7 @@ static void test_v1_file_migrates_to_current(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "9");
+    ASSERT_STR(v, "10");
     ASSERT_EQ(q_int("SELECT presence FROM probe_clients"
                     " WHERE mac='02:00:00:00:00:51'"), 0);
     q_text("SELECT ssid FROM probe_clients WHERE mac='02:00:00:00:00:51'",
@@ -3764,7 +3929,7 @@ static void test_v1_file_without_probe_clients_migrates(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "9");
+    ASSERT_STR(v, "10");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('probe_clients')"
                     " WHERE name='presence'"), 1);
     db_close();
@@ -3817,7 +3982,7 @@ static void test_v2_file_migrates_to_current(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "9");
+    ASSERT_STR(v, "10");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master"
                     " WHERE type='table' AND name='assoc_reqs'"), 1);
     db_close();
@@ -3869,7 +4034,7 @@ static void test_v3_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "9");
+    ASSERT_STR(v, "10");
     ASSERT_EQ(q_int("SELECT phy_confirmed FROM pnl_clients"
                     " WHERE mac='02:00:00:00:00:53'"), 0);
     ASSERT_EQ(q_int("SELECT probe_count FROM pnl_clients"
@@ -4023,7 +4188,7 @@ static void test_v4_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "9");
+    ASSERT_STR(v, "10");
     ASSERT_EQ(q_int("SELECT pnl_best FROM karma_candidates"
                     " WHERE bssid='aa:bb:cc:dd:ee:55'"), 0);
     ASSERT_EQ(q_int("SELECT score FROM karma_candidates"
@@ -4104,11 +4269,14 @@ void run_db_tests(void) {
     RUN_TEST(test_btm_requests_first_seen_does_not_move);
     RUN_TEST(test_btm_requests_forcing_index_exists);
     RUN_TEST(test_btm_requests_in_finding_retention_tier);
-    RUN_TEST(test_schema_version_is_nine);
+    RUN_TEST(test_schema_version_is_ten);
     RUN_TEST(test_v8_file_migrates_additively);
     RUN_TEST(test_v8_migration_failure_leaves_file_unchanged);
     RUN_TEST(test_alert_stamp_kept_within_incident);
     RUN_TEST(test_position_tables_written);
+    RUN_TEST(test_v9_file_migrates_additively);
+    RUN_TEST(test_v9_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_gnss_tables_written);
     RUN_TEST(test_device_ip_joined_camera_columns_follow_latest);
     RUN_TEST(test_device_mac_keyed_camera_columns_are_sticky);
     RUN_TEST(test_ip_only_camera_record_is_not_persisted);

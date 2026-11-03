@@ -358,6 +358,11 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
             web_jw_raw(&w, ",\"ble_store\":null");
         }
     }
+    /* The GNSS panel (web_gnss.h), likewise only when kept. */
+    if (h->gnss) {
+        web_jw_raw(&w, ",\"gnss\":");
+        web_gnss_health_json(h->gnss, &w);
+    }
     web_jw_raw(&w, ",\"sse_clients\":");
     web_jw_int(&w, h->sse_clients);
     web_jw_raw(&w, ",\"tick_seq\":");
@@ -802,6 +807,32 @@ static int route_positions(const web_req_t *rq, const web_health_t *h,
 }
 
 enum { BLE_DEVICES, BLE_ALERTS, BLE_DEVICE };
+
+/* /api/gnss and /api/gnss/fixes (web_gnss.h): the host's own receiver,
+ * sloth's own state, so every scope's; the answer says so itself. */
+static int route_gnss(const web_req_t *rq, const web_health_t *h, int fixes,
+                      char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else if (fixes) {
+        rc = web_gnss_fixes_route(h->gnss, rq->query, h->wall_s, body, cap, &bl, &status);
+    } else {
+        rc = web_gnss_route(h->gnss, rq->query, h->wall_s, body, cap, &bl, &status);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
 
 /* /api/ble, /api/ble/alerts, /api/ble/{addr} (web_ble.h): slothweb's
  * own BLE tables. The receivers are passive radio, so Monitor and
@@ -1296,6 +1327,10 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_alerts(rq, h, 1, out, outsz, r);
         if (!strncmp(rq->path, "/api/frrs/", 10) && web_frrs_path(rq->path))
             return route_frrs(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/gnss"))
+            return route_gnss(rq, h, 0, out, outsz, r);
+        if (!strcmp(rq->path, "/api/gnss/fixes"))
+            return route_gnss(rq, h, 1, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble"))
             return route_ble(rq, h, BLE_DEVICES, NULL, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble/alerts"))

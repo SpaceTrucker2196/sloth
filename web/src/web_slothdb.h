@@ -82,7 +82,7 @@
 #include "web_secret.h"
 
 #define WEB_SDB_SCHEMA_MIN 1
-#define WEB_SDB_SCHEMA_MAX 9
+#define WEB_SDB_SCHEMA_MAX 10
 #define WEB_SDB_BUSY_MS    100
 #define WEB_SDB_HTTP_MS    250       /* a request's budget */
 /* /api/history/overview's alone. It counts every device and alert

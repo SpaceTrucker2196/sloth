@@ -8,7 +8,7 @@ type: reference
 
 **Summary**: sloth is a terminal-based **passive** network monitor for
 Linux, C99, single binary. It reads what is already on the wire and in
-the air and surfaces it through <!-- count:views -->36<!-- /count --> views and <!-- count:rules -->90<!-- /count --> alert rules. It never
+the air and surfaces it through <!-- count:views -->37<!-- /count --> views and <!-- count:rules -->90<!-- /count --> alert rules. It never
 injects a frame onto a network it monitors; everything else that uses
 the network is opt-in and announced (`MISSION.md` §2). This page is the one-screen map of everything it does; each row links to the
 page that covers it in full.
@@ -44,7 +44,7 @@ NTP, ICMP, and the 802.11 frame classes ([[how-wifi-works]] §2). It reads
 every layer; it writes to none. See [[platform-vtable]] for the kernel
 seam and [[architecture]] for the code tree.
 
-## What it shows (<!-- count:views -->36<!-- /count --> views)
+## What it shows (<!-- count:views -->37<!-- /count --> views)
 
 Grouped three ways. Full keybinding map: [[views-catalog]].
 

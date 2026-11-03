@@ -747,6 +747,52 @@ static const char SCHEMA_SQL[] =
     "  hdop    REAL"
     ");\n"
 
+    /* GNSS observation (2026-11-02, docs/wiki/gnss.md). The receiver's
+     * own sky and clock, written on the same banded change-only rule as
+     * the gnss_fix / gnss_sat JSONL records (src/gps.c
+     * gps_gnss_*_sig), so the row rate is the record rate: a steady sky
+     * is one row per 300 s heartbeat, a satellite crossing a band is one
+     * row. Observation tier; `last_seen` keeps the retention sweep
+     * unchanged. */
+    "CREATE TABLE IF NOT EXISTS gnss_fixes ("
+    "  last_seen INTEGER PRIMARY KEY,"
+    "  src       TEXT NOT NULL,"
+    "  mode      INTEGER NOT NULL,"
+    "  status    INTEGER,"
+    "  nsat      INTEGER,"
+    "  usat      INTEGER,"
+    "  hdop      REAL,"
+    "  vdop      REAL,"
+    "  pdop      REAL,"
+    "  eph       REAL,"
+    "  epv       REAL,"
+    "  lat       REAL,"
+    "  lon       REAL,"
+    "  alt_m     REAL,"
+    "  speed_mps REAL,"
+    "  track_deg REAL,"
+    "  time_off_ms INTEGER,"
+    "  jam       INTEGER,"
+    "  cn0_mean  REAL"
+    ");\n"
+    /* One row per satellite per change: the key is the pass's time and
+     * the satellite's identity (PRN is the one member gpsd always
+     * writes; gnssid is -1 from an NMEA-only gpsd). */
+    "CREATE TABLE IF NOT EXISTS gnss_sightings ("
+    "  last_seen INTEGER NOT NULL,"
+    "  gnssid    INTEGER NOT NULL,"
+    "  prn       INTEGER NOT NULL,"
+    "  svid      INTEGER,"
+    "  el        INTEGER,"
+    "  az        INTEGER,"
+    "  cn0       REAL,"
+    "  used      INTEGER NOT NULL DEFAULT 0,"
+    "  health    INTEGER,"
+    "  PRIMARY KEY (last_seen, gnssid, prn)"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_gnss_sightings_last_seen"
+    " ON gnss_sightings(last_seen);\n"
+
     "CREATE TABLE IF NOT EXISTS sensors ("
     "  kind       INTEGER NOT NULL,"
     "  iface      TEXT NOT NULL,"
@@ -857,6 +903,10 @@ static const char MIGRATE_V8_SQL[] =
     "ALTER TABLE alerts ADD COLUMN loc_src TEXT;\n"
     "ALTER TABLE alerts ADD COLUMN loc_ts  INTEGER;\n";
 
+/* v9 -> v10 (2026-11-02): no ALTER. gnss_fixes and gnss_sightings are
+ * new tables on the unconditional schema; the step is the stamp. */
+static const char MIGRATE_V9_SQL[] = "";
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -868,3 +918,4 @@ const char *db_schema_migrate_v5_sql(void) { return MIGRATE_V5_SQL; }
 const char *db_schema_migrate_v6_sql(void) { return MIGRATE_V6_SQL; }
 const char *db_schema_migrate_v7_sql(void) { return MIGRATE_V7_SQL; }
 const char *db_schema_migrate_v8_sql(void) { return MIGRATE_V8_SQL; }
+const char *db_schema_migrate_v9_sql(void) { return MIGRATE_V9_SQL; }

@@ -6038,3 +6038,14 @@ with better documentation").
   re-inspection schedule. Render in `docs/assets/antenna-fixture-rev-n.png`.
   The OpenSCAD source the PDF cites is not in the repo; its home is an
   owner call.
+- 2026-11-02 — GNSS observation: new page [[gnss]]. sloth records what
+  the `--gps` receiver sees the way it records the Wi-Fi and BLE air:
+  the `[#]` view (37 views), the change-only `gnss_fix` / `gnss_sky` /
+  `gnss_sat` records and five `gnss_*` `sensor_health` fields, schema
+  v10 (`gnss_fixes`, `gnss_sightings`, stamp-only step), the `gps`
+  sensor finally registered, slothweb's GNSS tab (`web/ui/gnss.js`,
+  `/api/gnss`, `/api/gnss/fixes`, four `gnss.*` gauges). Observation
+  only; the detector hooks (history rings, signatures) are named for
+  the next slice. Updated [[jsonl-schema]], [[sqlite-schema]],
+  [[views-catalog]], [[cli-reference]], [[non-ip-sensors]],
+  [[location]], [[index]].
