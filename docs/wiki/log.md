@@ -6082,3 +6082,12 @@ with better documentation").
   states; the drawer's BLE lines reset per address; the research page
   recorded in [[research-corpus]] and `research.db` rebuilt. Updated
   [[jsonl-schema]], [[slothweb]], [[research-corpus]].
+
+## 2026-11-03 — Antenna designs kept in the docs
+
+Owner ruling: "keep antenna designs in the docs". New
+`docs/hardware/antenna/` (one directory per revision, a README listing
+them); Rev N's render moved there from `docs/assets/`, the original
+build-guide PDF kept beside it, and
+[antenna-fixture-rev-n.md](antenna-fixture-rev-n.md) §12 names the
+directory as the home of `rev-n.scad` when it is supplied.

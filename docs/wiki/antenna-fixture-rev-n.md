@@ -29,12 +29,12 @@ B1.20.1 *Pipe Threads, General Purpose (Inch)*; Charlotte Pipe Schedule
 80 PVC fitting catalog (1-1/2 in FPT/MPT adapters); Parker NPT thread
 reference (60° flank, 1-1/2-11.5 designation); ISO 273 clearance holes;
 [[monitor-mode]], [[rf-distance]], [[deployment]] for the sloth side.
-The OpenSCAD source the PDF refers to is **not in this repository**;
-see §12.
+The design files live in `docs/hardware/antenna/rev-n/`; the
+OpenSCAD source the PDF refers to is not committed yet (§12).
 
-**Last updated**: 2026-11-02 (first wiki edition, from the Rev N PDF).
+**Last updated**: 2026-11-03 (design files under `docs/hardware/antenna/rev-n/`); 2026-11-02 (first wiki edition, from the Rev N PDF).
 
-![Rev N fixture render: three vertical reflector plates on a ring base, center chase with the NPT collar below](../assets/antenna-fixture-rev-n.png)
+![Rev N fixture render: three vertical reflector plates on a ring base, center chase with the NPT collar below](https://raw.githubusercontent.com/SpaceTrucker2196/sloth/main/docs/hardware/antenna/rev-n/render.png)
 
 ---
 
@@ -518,10 +518,11 @@ transport, after high wind, and at least each season outdoors:
   dimensional adjustment" — the thread scale and XY compensation from
   §4.4 belong there, not in the slicer alone, so the next print starts
   from the corrected model.
-- The source is not in this repository. When it is added it needs a
-  home outside the root (`agents/AGENTS.md` "no new files at repo
-  root"); `docs/hardware/` next to this page's assets, or a
-  `hardware/` tree if more fixtures follow, is an owner call.
+- Antenna designs live in the docs (owner ruling 2026-11-03):
+  `docs/hardware/antenna/rev-n/` holds this revision's render and the
+  original build-guide PDF, and is where `rev-n.scad` and its STL
+  exports go. `docs/hardware/antenna/README.md` lists every revision.
+  The OpenSCAD source itself has not been committed yet.
 - Revision discipline: a change to any dimension in §2 is a new
   revision letter, a new coupon (§4.4), a new validation table (§9),
   and an update to this page and the record in §11.2.
