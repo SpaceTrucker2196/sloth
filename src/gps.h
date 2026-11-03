@@ -129,6 +129,9 @@ typedef struct {
     int    jam;                 /* u-blox jamming indicator, -1 absent */
     int    leap;                /* leapseconds, -1 absent */
     /* SKY: */
+    int    has_sats;            /* the satellites key was present (an empty
+                                 * array is a sky with nothing in it, not a
+                                 * DOP-only SKY) */
     int    has_nsat, nsat;
     int    has_pdop, has_vdop, has_gdop, has_tdop;
     double pdop, vdop, gdop, tdop;
@@ -175,6 +178,9 @@ typedef struct {
     int        overlong;        /* discarding to the next newline */
     nmea_fix_t nmea;            /* merged receiver state (NMEA only) */
     char       buf[GPSD_MAX_LINE + 1];
+    gpsd_msg_t msg;             /* the parse scratch (~2.5 KB of satellites):
+                                 * per framer, so two readers cannot share
+                                 * one, and off the reader's stack */
 } gps_lines_t;
 
 void gps_lines_init(gps_lines_t *l, int kind);
@@ -293,20 +299,35 @@ void gps_gnss_history(gnss_hist_t *out);
 /* Change-only signatures, shared by the JSONL writer and the --db
  * writer so one bucketing rule decides when a GNSS record is news
  * (agents/AGENTS.md: a continuous value enters a signature as its
- * band, never itself). gps_gnss_fix_sig: mode, status, usat, nsat/4,
- * the HDOP and PDOP bands (<1, <2, <5, >=5), the clock-offset band
- * (|off| <500 ms, <2 s, <10 s, >=10 s, unknown), the speed band (0,
- * <2 m/s, <30, >=30), the jam band, has_pos. gps_gnss_sat_sig: the
- * row's identity, used, health, C/N0 to 6 dB, elevation and azimuth to
- * 15 degrees. gps_gnss_sky_sig: nsat, usat, the DOP bands and the
- * mean-C/N0 band (<25, 25..35, >=35 dB-Hz). */
+ * band, never itself). gps_gnss_fix_sig: mode, status, the used-count
+ * band (gps_usat_band: 0, 1..3, 4..5, 6..7, >=8 - a solution-quality
+ * band, because uSat flaps by one every few seconds on a moving or
+ * urban receiver), nsat/4, the HDOP and PDOP bands (<1, <2, <5, >=5),
+ * the clock-offset band as take_tpv() holds it with hysteresis (|off|
+ * <500 ms, <2 s, <10 s, >=10 s, unknown; a band changes only once the
+ * offset clears the edge by a quarter of it, since a 9600-baud
+ * receiver's serial latency hovers around the first edge), the speed
+ * band (<0.5, <2 m/s, <30, >=30), the jam band, has_pos.
+ * gps_gnss_sat_sig: the row's identity, used, health, C/N0 to 6 dB,
+ * elevation and azimuth to 15 degrees (absent as their own band).
+ * gps_gnss_sky_sig: nsat/4, the used-count band, the DOP bands and the
+ * mean-C/N0 band (<25, 25..35, >=35 dB-Hz). The per-row bands have no
+ * hysteresis: a satellite sitting on a 6 dB or 15 degree edge writes a
+ * line per pass until it moves off it, which is bounded (one row, one
+ * line) and accepted (docs/wiki/gnss.md). */
 uint64_t gps_gnss_fix_sig(const gnss_fix_t *f, const gnss_sky_t *k);
 uint64_t gps_gnss_sat_sig(const gnss_sat_t *s);
 uint64_t gps_gnss_sky_sig(const gnss_sky_t *k);
 /* The bands themselves, for sensor_health's signature. */
 int  gps_cn0_band(double cn0_mean);               /* -1 none, 0 <25, 1 <35, 2 >=35 */
-int  gps_time_off_band(int has, long long off_ms); /* -1 unknown, 0..3 */
+int  gps_time_off_band(int has, long long off_ms); /* -1 unknown, 0..3: the raw band, no hysteresis */
 int  gps_jam_band(int jam);                        /* -1 absent, 0 none, 1 light, 2, 3 */
+int  gps_usat_band(int usat);                      /* -1 unknown, 0 none, 1 <4, 2 <6, 3 <8, 4 >=8 */
+/* How many TPVs without `jam` keep the last reported value: gpsd
+ * attaches jam only to the TPV after a UBX-MON-HW poll (one in five to
+ * seven on the reference u-blox 7), so a per-TPV reading would flip
+ * -1 / value every second and sign a record each tick. */
+#define GNSS_JAM_HOLD_TPVS 10
 
 /* The newest raw fix, fresh or not, for the position sampler and the
  * tests: 1 when one exists (lat/lon/acc/ts filled), 0 before any. */

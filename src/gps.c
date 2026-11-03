@@ -512,6 +512,7 @@ int gpsd_json_parse(const char *line, size_t n, gpsd_msg_t *out) {
             else if (strcmp(key, "minor") == 0)  out->gst_minor = d;
             else if (strcmp(key, "orient") == 0) out->gst_orient = d;
         } else if (*c.p == '[' && strcmp(key, "satellites") == 0) {
+            out->has_sats = 1;
             if (parse_sats(&c, out) != 0) return -1;
         } else {
             if (jskip(&c) != 0) return -1;
@@ -869,9 +870,11 @@ static double dop_ok(int has, double v) {
  * C/N0 statistics the records and the later detectors read. */
 static void take_sky(const gpsd_msg_t *m, time_t wall) {
     gnss_sky_t *k = &g_loc.sky;
-    if (m->nsats == 0 && !m->has_nsat && !m->has_usat) {
+    if (!m->has_sats && !m->has_nsat && !m->has_usat) {
         /* A SKY carrying only DOPs (gpsd splits them on some drivers):
-         * the DOPs update, the satellite rows stand. */
+         * the DOPs update, the satellite rows stand. One that carries
+         * the satellites key, empty, or nSat / uSat is a sky with that
+         * in it, and empties the rows: the antenna is gone. */
         if (m->has_hdop && hdop_ok(m->hdop)) k->hdop = m->hdop;
         if (dop_ok(m->has_pdop, m->pdop) > 0) k->pdop = m->pdop;
         if (dop_ok(m->has_vdop, m->vdop) > 0) k->vdop = m->vdop;
@@ -893,8 +896,10 @@ static void take_sky(const gpsd_msg_t *m, time_t wall) {
         b->svid = (int16_t)a->svid;
         b->sigid = (int8_t)a->sigid;
         b->health = (int8_t)a->health;
-        b->el = (int16_t)(a->has_el ? (int)(a->el + (a->el >= 0 ? 0.5 : -0.5)) : -1);
-        b->az = (int16_t)(a->has_az ? (int)(a->az + 0.5) : -1);
+        b->has_el = a->has_el;
+        b->has_az = a->has_az;
+        b->el = (int16_t)(a->has_el ? (int)(a->el + (a->el >= 0 ? 0.5 : -0.5)) : 0);
+        b->az = (int16_t)(a->has_az ? (int)(a->az + 0.5) : 0);
         b->used = a->used;
         b->has_cn0 = a->has_cn0;
         b->cn0_x10 = (int16_t)(a->has_cn0 ? (int)(a->cn0 * 10.0 + 0.5) : 0);
@@ -910,7 +915,9 @@ static void take_sky(const gpsd_msg_t *m, time_t wall) {
     k->cn0_max = mx;
     double var = cn ? sq / cn - k->cn0_mean * k->cn0_mean : 0.0;
     k->cn0_sd = var > 0 ? sqrt(var) : 0.0;
-    if (m->has_hdop && hdop_ok(m->hdop)) k->hdop = m->hdop;
+    /* A full SKY's DOPs are the pass's: one it does not carry is
+     * unknown for this pass, hdop as the other four. */
+    k->hdop = (m->has_hdop && hdop_ok(m->hdop)) ? m->hdop : 0.0;
     k->pdop = dop_ok(m->has_pdop, m->pdop);
     k->vdop = dop_ok(m->has_vdop, m->vdop);
     k->gdop = dop_ok(m->has_gdop, m->gdop);
@@ -958,6 +965,27 @@ static void push_fix_pt(const gnss_fix_t *f) {
     if (h->fix_n < GNSS_FIX_HIST) h->fix_n++;
 }
 
+/* The clock-offset band with hysteresis. The raw band
+ * (gps_time_off_band) has edges at 500 ms, 2 s and 10 s; the held band
+ * moves to a new one only once |off| is past the edge between them by
+ * a quarter of that edge (125 ms, 500 ms, 2.5 s). A 9600-baud receiver
+ * through gpsd with no PPS sits 200..700 ms behind the host at line
+ * framing and jitters, so the raw band flipped 0 <-> 1 TPV by TPV and
+ * each flip was a gnss_fix line, a sensor_health line and a gnss_fixes
+ * row. `held` is -1 before any offset. */
+static int time_off_band_held(int held, long long off_ms) {
+    static const long long edge[3] = { 500, 2000, 10000 };
+    int raw = gps_time_off_band(1, off_ms);
+    if (held < 0 || raw == held) return raw;
+    long long a = off_ms < 0 ? -off_ms : off_ms;
+    if (raw > held) {
+        long long e = edge[raw - 1];
+        return a >= e + e / 4 ? raw : held;
+    }
+    long long e = edge[raw];
+    return a <= e - e / 4 ? raw : held;
+}
+
 /* Caller holds g_mu. The TPV into the fix state. Every figure is range
  * checked as take_fix() checks the position's; one outside is dropped
  * (has_* 0), never recorded. The GST figures outlive a TPV. */
@@ -971,7 +999,20 @@ static void take_tpv(const gpsd_msg_t *m, time_t wall, int64_t wall_ms) {
     f->mode = m->mode < 0 ? 0 : m->mode;
     f->status = m->status;
     f->leap = m->leap;
-    f->jam = m->jam;
+    /* jam rides only the TPV after a UBX-MON-HW poll: a TPV without it
+     * keeps the last value for GNSS_JAM_HOLD_TPVS TPVs, then it is
+     * absent again. Per TPV it flipped -1 / value every second and
+     * signed gnss_fix and sensor_health on every tick. */
+    if (m->jam >= 0) {
+        f->jam = m->jam;
+        f->jam_tpv = f->count;
+    } else if (keep.jam >= 0 && f->count - keep.jam_tpv <= GNSS_JAM_HOLD_TPVS) {
+        f->jam = keep.jam;
+        f->jam_tpv = keep.jam_tpv;
+    } else {
+        f->jam = -1;
+    }
+    f->time_off_band = -1;
     if (m->has_lat && m->has_lon && range_ok(m->lat, m->lon)) {
         f->has_pos = 1;
         f->lat = m->lat;
@@ -996,6 +1037,7 @@ static void take_tpv(const gpsd_msg_t *m, time_t wall, int64_t wall_ms) {
          * quality (docs/wiki/gnss.md). */
         f->has_time_off = 1;
         f->time_off_ms = rx - wall_ms;
+        f->time_off_band = time_off_band_held(keep.time_off_band, f->time_off_ms);
     }
     if (keep.has_gst) {
         f->has_gst = 1;
@@ -1165,6 +1207,7 @@ void gps_health_poll(sloth_state_t *s, time_t now) {
     h->cn0_max      = g_loc.sky.cn0_max;
     h->has_time_off = g_loc.gfix.has_time_off;
     h->time_off_ms  = g_loc.gfix.time_off_ms;
+    h->time_off_band = g_loc.gfix.valid ? g_loc.gfix.time_off_band : -1;
     h->pdop         = g_loc.sky.pdop;
     h->vdop         = g_loc.sky.vdop;
     h->status       = g_loc.gfix.valid ? g_loc.gfix.status : -1;
@@ -1227,6 +1270,16 @@ int gps_jam_band(int jam) {
     return jam == 0 ? 0 : jam < 64 ? 1 : jam < 128 ? 2 : 3;
 }
 
+/* The used count as a solution-quality band: none, under the four a
+ * 3D fix needs, a thin fix, a fair one, a good one. Raw it flaps by
+ * one every few seconds in a built-up area and wrote a record each
+ * time; the per-satellite `used` flag already carries which bird
+ * joined or left. */
+int gps_usat_band(int usat) {
+    if (usat < 0) return -1;
+    return usat == 0 ? 0 : usat < 4 ? 1 : usat < 6 ? 2 : usat < 8 ? 3 : 4;
+}
+
 static uint64_t mix64(uint64_t h, long long v) {
     h ^= (uint64_t)v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
     return h * 0x100000001b3ULL;
@@ -1238,11 +1291,11 @@ uint64_t gps_gnss_fix_sig(const gnss_fix_t *f, const gnss_sky_t *k) {
     h = mix64(h, f->valid);
     h = mix64(h, f->mode);
     h = mix64(h, f->status);
-    h = mix64(h, k ? k->usat : -1);
+    h = mix64(h, gps_usat_band(k ? k->usat : -1));
     h = mix64(h, k && k->nsat > 0 ? k->nsat / 4 : -1);
     h = mix64(h, dop_band(k ? k->hdop : 0));
     h = mix64(h, dop_band(k ? k->pdop : 0));
-    h = mix64(h, gps_time_off_band(f->has_time_off, f->time_off_ms));
+    h = mix64(h, f->has_time_off ? f->time_off_band : -1);
     int sp = !f->has_speed ? -1 : f->speed < 0.5 ? 0 : f->speed < 2 ? 1
            : f->speed < 30 ? 2 : 3;
     h = mix64(h, sp);
@@ -1260,8 +1313,8 @@ uint64_t gps_gnss_sat_sig(const gnss_sat_t *s) {
     h = mix64(h, s->used);
     h = mix64(h, s->health);
     h = mix64(h, s->has_cn0 ? s->cn0_x10 / 60 : -1);   /* 6 dB */
-    h = mix64(h, s->el >= 0 ? s->el / 15 : -1);
-    h = mix64(h, s->az >= 0 ? s->az / 15 : -1);
+    h = mix64(h, s->has_el ? (s->el + 90) / 15 : -1);  /* 15 degrees, -90.. */
+    h = mix64(h, s->has_az ? s->az / 15 : -1);
     return h;
 }
 
@@ -1269,8 +1322,8 @@ uint64_t gps_gnss_sky_sig(const gnss_sky_t *k) {
     uint64_t h = 0x2325cbf29ce48422ULL;
     if (!k) return h;
     h = mix64(h, k->valid);
-    h = mix64(h, k->nsat);
-    h = mix64(h, k->usat);
+    h = mix64(h, k->nsat > 0 ? k->nsat / 4 : -1);
+    h = mix64(h, gps_usat_band(k->usat));
     h = mix64(h, dop_band(k->hdop));
     h = mix64(h, dop_band(k->pdop));
     h = mix64(h, dop_band(k->vdop));
@@ -1321,13 +1374,15 @@ static void gps_line_done(gps_lines_t *l, time_t wall) {
         gps_location_note(1, 0, 0, 0);
         if (r == 1) gps_location_feed_nmea(&l->nmea, wall);
     } else {
-        static gpsd_msg_t m;   /* ~2 KB of satellites: not the reader's stack */
-        int r = gpsd_json_parse(l->buf, n, &m);
+        /* The scratch is the framer's own (gps_lines_t.msg): one
+         * reader per framer is then structural, not an invariant a
+         * second receiver could silently break. */
+        int r = gpsd_json_parse(l->buf, n, &l->msg);
         if (r < 0) { gps_location_note(0, 0, 1, 0); return; }
         gps_location_note(1, 0, 0, 0);
         /* The clock offset is measured against the host's millisecond
          * wall clock as the line was framed; the fix keeps `wall`. */
-        if (r == 1) feed_gpsd(&m, wall, sloth_wall_ms());
+        if (r == 1) feed_gpsd(&l->msg, wall, sloth_wall_ms());
     }
 }
 

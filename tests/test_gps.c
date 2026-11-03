@@ -1479,6 +1479,7 @@ static void test_gpsd_sky_satellites(void) {
     ASSERT_EQ(m.has_tdop, 1);  ASSERT_NEAR(m.tdop, 0.9, 1e-9);
     ASSERT_STR(m.time, "2026-10-27T00:00:01.000Z");
     ASSERT_EQ(m.nsats, 4);
+    ASSERT_EQ(m.has_sats, 1);
     ASSERT_EQ(m.sats_overflow, 0);
     ASSERT_EQ(m.sats[0].prn, 5);
     ASSERT_EQ(m.sats[0].gnssid, 0);
@@ -1752,7 +1753,8 @@ static void test_sky_state_and_snapshot(void) {
     ASSERT_EQ(k.sats[0].cn0_x10, 410);
     ASSERT_EQ(k.sats[0].el, 45);
     ASSERT_EQ(k.sats[0].az, 120);
-    ASSERT_EQ(k.sats[1].el, -1);
+    ASSERT_EQ(k.sats[1].has_el, 0);
+    ASSERT_EQ(k.sats[1].has_az, 0);
     ASSERT_EQ(k.sats[3].has_cn0, 0);
     ASSERT_EQ(k.sats[2].gnssid, 6);
     ASSERT_STR(gnss_name(k.sats[2].gnssid), "GLONASS");
@@ -1867,32 +1869,44 @@ static void test_gnss_records_change_only(void) {
     }
     /* One sink throughout: jsonl_open() resets the change cache, so a
      * reopen would make every phase's first pass a full re-emission. */
-    /* One satellite's C/N0 crosses a band (41.0 -> 47.5: 6 dB bucket 6
-     * to 7); the sky's mean band and the fix's bands do not move. */
+    /* uSat wobbling by one (2 -> 3, the same used-count band) writes
+     * nothing: neither gnss_fix nor gnss_sky signs the raw count. Seen
+     * red with gps_gnss_fix_sig() / gps_gnss_sky_sig() signing k->usat
+     * itself (one more of each). */
     static gps_lines_t L;
     gps_lines_init(&L, GPS_FEED_GPSD);
     static char line[2048];
     snprintf(line, sizeof(line), "%s\n", SKY4);
-    char *p = strstr(line, "\"ss\":41.0");
+    char *p = strstr(line, "\"uSat\":2");
     ASSERT(p != NULL);
-    if (p) memcpy(p, "\"ss\":47.5", 9);
+    if (p) memcpy(p, "\"uSat\":3", 8);
     clk(w + 61);
     gps_lines_feed(&L, (const uint8_t *)line, strlen(line), w + 61);
     poll_at(&s, w + 61);
     jsonl_emit_gnss(&s);
+    /* One satellite's C/N0 crosses a band (41.0 -> 47.5: 6 dB bucket 6
+     * to 7); the sky's mean band and the fix's bands do not move. */
+    snprintf(line, sizeof(line), "%s\n", SKY4);
+    p = strstr(line, "\"ss\":41.0");
+    ASSERT(p != NULL);
+    if (p) memcpy(p, "\"ss\":47.5", 9);
+    clk(w + 62);
+    gps_lines_feed(&L, (const uint8_t *)line, strlen(line), w + 62);
+    poll_at(&s, w + 62);
+    jsonl_emit_gnss(&s);
     /* The receiver dropping to no fix is a gnss_fix (mode band). */
     static gpsd_msg_t m;
     ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"TPV\",\"mode\":1}"), &m), 1);
-    clk(w + 62);
-    gps_location_feed_gpsd(&m, w + 62);
-    poll_at(&s, w + 62);
+    clk(w + 63);
+    gps_location_feed_gpsd(&m, w + 63);
+    poll_at(&s, w + 63);
     jsonl_emit_gnss(&s);
     /* Nothing without a --gps reader: --location alone has no sky. */
     gps_location_reset();
     char err[160];
     ASSERT_EQ(gps_location_parse_fixed("10,20", err, sizeof(err)), 0);
     memset(&s, 0, sizeof(s));
-    poll_at(&s, w + 63);
+    poll_at(&s, w + 64);
     jsonl_emit_gnss(&s);
     jsonl_close();
     char *b = read_all(g_jl);
@@ -1903,11 +1917,14 @@ static void test_gnss_records_change_only(void) {
         ASSERT_EQ(count_type(b, "\"type\":\"gnss_fix\""), 2);
         ASSERT_EQ(count_type(b, "\"type\":\"gnss_sky\""), 1);
         ASSERT_EQ(count_type(b, "\"type\":\"gnss_sat\""), 5);
-        ASSERT(strstr(b, "\"type\":\"gnss_sat\",\"ts\":1793059261,\"gnss\":\"GPS\",\"gnssid\":0,"
+        ASSERT(strstr(b, "\"ts\":1793059261") == NULL);          /* the uSat wobble */
+        ASSERT(strstr(b, "\"type\":\"gnss_sat\",\"ts\":1793059262,\"gnss\":\"GPS\",\"gnssid\":0,"
                          "\"svid\":5,\"prn\":5,\"sigid\":0,\"el\":45,\"az\":120,\"cn0\":47.5") != NULL);
-        ASSERT(strstr(b, "\"type\":\"gnss_fix\",\"ts\":1793059262,\"src\":\"gpsd:127.0.0.1:2947\","
-                         "\"fix_ts\":1793059262,\"mode\":1,\"status\":-1") != NULL);
-        ASSERT(strstr(b, "\"ts\":1793059263") == NULL);
+        ASSERT(strstr(b, "\"type\":\"gnss_fix\",\"ts\":1793059263,\"src\":\"gpsd:127.0.0.1:2947\","
+                         "\"fix_ts\":1793059263,\"mode\":1,\"status\":-1") != NULL);
+        ASSERT(strstr(b, "\"ts\":1793059264") == NULL);
+        /* The row gpsd sent no el / az for carries neither key. */
+        ASSERT(strstr(b, "\"svid\":7,\"prn\":7,\"sigid\":-1,\"cn0\":22.5,\"used\":0") != NULL);
         ASSERT(strstr(b, "\"type\":\"gnss_fix\",\"ts\":1793059200,\"src\":\"gpsd:127.0.0.1:2947\","
                          "\"fix_ts\":1793059200,\"mode\":3,\"status\":2,\"nsat\":4,\"usat\":2,"
                          "\"hdop\":0.8,\"vdop\":1.2,\"pdop\":1.5,\"lat\":51.50074,\"lon\":-0.12469,"
@@ -1926,7 +1943,7 @@ static void test_gnss_records_change_only(void) {
         /* The untracked SBAS row carries no cn0 key at all. */
         ASSERT(strstr(b, "\"prn\":131,\"sigid\":-1,\"el\":10,\"az\":200,\"used\":0,\"health\":0") != NULL);
         /* The lost-fix record has no position. */
-        const char *nf = strstr(b, "\"fix_ts\":1793059262");
+        const char *nf = strstr(b, "\"fix_ts\":1793059263");
         ASSERT(nf && strstr(nf, "\"lat\"") == NULL);
     }
     unlink(g_jl);
@@ -2077,25 +2094,273 @@ static void test_gnss_signature_bands(void) {
     ASSERT_EQ(gps_jam_band(63), 1);
     ASSERT_EQ(gps_jam_band(64), 2);
     ASSERT_EQ(gps_jam_band(128), 3);
+    ASSERT_EQ(gps_usat_band(-1), -1);
+    ASSERT_EQ(gps_usat_band(0), 0);
+    ASSERT_EQ(gps_usat_band(3), 1);
+    ASSERT_EQ(gps_usat_band(4), 2);
+    ASSERT_EQ(gps_usat_band(5), 2);
+    ASSERT_EQ(gps_usat_band(7), 3);
+    ASSERT_EQ(gps_usat_band(8), 4);
+    ASSERT_EQ(gps_usat_band(14), 4);
     gnss_sat_t a;
     memset(&a, 0, sizeof(a));
     a.prn = 5; a.gnssid = 0; a.svid = 5; a.has_cn0 = 1; a.cn0_x10 = 410;
-    a.el = 45; a.az = 120; a.used = 1; a.health = 1;
+    a.has_el = a.has_az = 1; a.el = 45; a.az = 120; a.used = 1; a.health = 1;
     uint64_t h0 = gps_gnss_sat_sig(&a);
     a.cn0_x10 = 419;  ASSERT_EQ(gps_gnss_sat_sig(&a), h0);     /* 41.9: same 6 dB band */
     a.el = 59;        ASSERT_EQ(gps_gnss_sat_sig(&a), h0);     /* same 15 degree band */
     a.cn0_x10 = 420;  ASSERT_NE(gps_gnss_sat_sig(&a), h0);     /* 42.0: next band */
     a.cn0_x10 = 419; a.used = 0;  ASSERT_NE(gps_gnss_sat_sig(&a), h0);
     a.used = 1; a.el = 60;        ASSERT_NE(gps_gnss_sat_sig(&a), h0);
+    /* Absent is its own band, not -1 degrees; -15..-1 is one band
+     * under the horizon (the edges are multiples of 15 from -90),
+     * -16 the next. */
+    a.el = 45; a.has_el = 0;      ASSERT_NE(gps_gnss_sat_sig(&a), h0);
+    a.has_el = 1; a.el = -1;
+    uint64_t hm = gps_gnss_sat_sig(&a);
+    ASSERT_NE(hm, h0);
+    a.el = -15;  ASSERT_EQ(gps_gnss_sat_sig(&a), hm);
+    a.el = -16;  ASSERT_NE(gps_gnss_sat_sig(&a), hm);
     gnss_fix_t f; gnss_sky_t k;
     memset(&f, 0, sizeof(f)); memset(&k, 0, sizeof(k));
     f.valid = 1; f.mode = 3; f.has_pos = 1; f.has_speed = 1; f.speed = 0.1;
-    f.has_time_off = 1; f.time_off_ms = 100; k.valid = 1; k.usat = 8; k.nsat = 12; k.hdop = 1.1;
+    f.has_time_off = 1; f.time_off_ms = 100; f.time_off_band = 0;
+    k.valid = 1; k.usat = 8; k.nsat = 12; k.hdop = 1.1;
     uint64_t g0 = gps_gnss_fix_sig(&f, &k);
-    f.time_off_ms = 400; f.speed = 0.4; k.nsat = 15; k.hdop = 1.9;
+    uint64_t s0 = gps_gnss_sky_sig(&k);
+    /* The signatures take the held band, never the figure. */
+    f.time_off_ms = 4000; f.speed = 0.4; k.nsat = 15; k.hdop = 1.9;
     ASSERT_EQ(gps_gnss_fix_sig(&f, &k), g0);
-    f.time_off_ms = 600;  ASSERT_NE(gps_gnss_fix_sig(&f, &k), g0);
-    f.time_off_ms = 400; k.usat = 9;  ASSERT_NE(gps_gnss_fix_sig(&f, &k), g0);
+    f.time_off_band = 1;  ASSERT_NE(gps_gnss_fix_sig(&f, &k), g0);
+    f.time_off_band = 0;
+    /* uSat 8 -> 9 is one band; 8 -> 7 crosses one, in both signatures. */
+    k.usat = 9;  ASSERT_EQ(gps_gnss_fix_sig(&f, &k), g0);  ASSERT_EQ(gps_gnss_sky_sig(&k), s0);
+    k.usat = 7;  ASSERT_NE(gps_gnss_fix_sig(&f, &k), g0);  ASSERT_NE(gps_gnss_sky_sig(&k), s0);
+    k.usat = 8;  k.nsat = 16;  ASSERT_NE(gps_gnss_sky_sig(&k), s0);   /* nsat/4 */
+}
+
+/* A TPV with a `time` whose receiver clock is `off_ms` ahead of the
+ * host's at w (2026-10-27, as the fixtures), TPV_FULL's mode, status
+ * and speed (so the fix signature's other bands stand), plus `extra`
+ * members. */
+static void feed_tpv_off(time_t w, long off_ms, const char *extra) {
+    static gps_lines_t L;
+    static int init;
+    if (!init) { gps_lines_init(&L, GPS_FEED_GPSD); init = 1; }
+    long long ms = ((long long)(w - 1793059200) % 86400) * 1000 + off_ms;
+    long long sec = ms / 1000, frac = ms % 1000;
+    static char line[512];
+    int n = snprintf(line, sizeof(line),
+                     "{\"class\":\"TPV\",\"mode\":3,\"status\":2,\"speed\":0.3,"
+                     "\"lat\":51.5,\"lon\":-0.1,"
+                     "\"time\":\"2026-10-27T%02lld:%02lld:%02lld.%03lldZ\"%s%s}\n",
+                     sec / 3600, (sec / 60) % 60, sec % 60, frac,
+                     extra && extra[0] ? "," : "", extra ? extra : "");
+    clk(w);
+    gps_lines_feed(&L, (const uint8_t *)line, (size_t)n, w);
+}
+
+/* gpsd attaches `jam` only to the TPV after a UBX-MON-HW poll (two of
+ * fourteen in eight seconds on the reference u-blox 7). A TPV without
+ * it keeps the last value for GNSS_JAM_HOLD_TPVS TPVs: the fix
+ * signature, the sensor_health line and the one-second series hold;
+ * past the hold it is absent again, and a new reading takes over.
+ * Seen red with take_tpv() back to `f->jam = m->jam` (the second TPV
+ * read jam -1, the fix signature moved, sensor_health wrote 11 lines,
+ * the series point said -1). */
+static void test_jam_is_sticky_across_tpvs(void) {
+    jl_open();
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    time_t w = 1793059200;
+    feed_sky_tpv(w);                              /* TPV_FULL: jam 12 */
+    poll_at(&s, w);
+    jsonl_emit_sensor_health(&s);
+    uint64_t sig0 = gps_gnss_fix_sig(&s.gnss_fix, &s.gnss_sky);
+    ASSERT_EQ(s.gnss_fix.jam, 12);
+    for (int i = 1; i <= GNSS_JAM_HOLD_TPVS; i++) {
+        feed_tpv_off(w + i, 250, "");             /* no jam member */
+        poll_at(&s, w + i);
+        jsonl_emit_sensor_health(&s);
+        ASSERT_EQ(s.gnss_fix.jam, 12);
+        ASSERT_EQ(s.gps.jam, 12);
+        ASSERT_EQ(gps_gnss_fix_sig(&s.gnss_fix, &s.gnss_sky), sig0);
+    }
+    static gnss_hist_t h;
+    gps_gnss_history(&h);
+    ASSERT_EQ(h.secs[(h.sec_head + GNSS_SERIES_S - 1) % GNSS_SERIES_S].jam, 12);
+    /* The eleventh without it: absent. */
+    feed_tpv_off(w + GNSS_JAM_HOLD_TPVS + 1, 250, "");
+    poll_at(&s, w + GNSS_JAM_HOLD_TPVS + 1);
+    jsonl_emit_sensor_health(&s);
+    ASSERT_EQ(s.gnss_fix.jam, -1);
+    ASSERT_NE(gps_gnss_fix_sig(&s.gnss_fix, &s.gnss_sky), sig0);
+    gps_gnss_history(&h);
+    ASSERT_EQ(h.secs[(h.sec_head + GNSS_SERIES_S - 1) % GNSS_SERIES_S].jam, -1);
+    /* A new reading, then one omission: the new one holds. */
+    feed_tpv_off(w + GNSS_JAM_HOLD_TPVS + 2, 250, "\"jam\":70");
+    feed_tpv_off(w + GNSS_JAM_HOLD_TPVS + 3, 250, "");
+    poll_at(&s, w + GNSS_JAM_HOLD_TPVS + 3);
+    jsonl_emit_sensor_health(&s);
+    ASSERT_EQ(s.gnss_fix.jam, 70);
+    jsonl_close();
+    char *b = read_all(g_jl);
+    ASSERT(b != NULL);
+    if (b) {
+        /* First line, the hold expiring (jam band -1), 70 (band 2). */
+        ASSERT_EQ(count_type(b, "\"type\":\"sensor_health\""), 3);
+        ASSERT(strstr(b, "\"gnss_jam\":12}") != NULL);
+        ASSERT(strstr(b, "\"gnss_jam\":-1}") != NULL);
+        ASSERT(strstr(b, "\"gnss_jam\":70}") != NULL);
+    }
+    unlink(g_jl);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* The clock-offset band has hysteresis: with a 9600-baud receiver
+ * through gpsd and no PPS the offset sits 200..700 ms behind the host
+ * and jitters across the 500 ms edge, so the raw band flipped 0 <-> 1
+ * TPV by TPV and each flip was a gnss_fix line, a sensor_health line
+ * and a gnss_fixes row. An offset wandering 400 <-> 600 ms writes
+ * nothing; 700 (a quarter past the edge) moves the band once; 550 on
+ * the way back does not; 300 (a quarter under) does; the same at the
+ * 2 s and 10 s edges. Exact counts. Seen red with take_tpv() taking
+ * gps_time_off_band() raw (every alternation wrote both lines). */
+static void test_time_off_band_hysteresis(void) {
+    jl_open();
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    time_t w = 1793059200;
+    feed_sky_tpv(w);                              /* offset 250: band 0 */
+    poll_at(&s, w);
+    jsonl_emit_gnss(&s);
+    jsonl_emit_sensor_health(&s);
+    ASSERT_EQ(s.gnss_fix.time_off_band, 0);
+    ASSERT_EQ(s.gps.time_off_band, 0);
+    int i = 1;
+    for (; i <= 20; i++) {
+        feed_tpv_off(w + i, (i & 1) ? 600 : 400, "\"jam\":12");
+        poll_at(&s, w + i);
+        jsonl_emit_gnss(&s);
+        jsonl_emit_sensor_health(&s);
+        ASSERT_EQ(s.gnss_fix.time_off_band, 0);
+    }
+    static const struct { long off; int band; } steps[] = {
+        { 700, 1 }, { 550, 1 }, { 620, 1 }, { 300, 0 }, { 1900, 1 }, { 2400, 1 },
+        { 2600, 2 }, { 1600, 2 }, { 1400, 1 }, { 9000, 2 }, { 12600, 3 }, { 8000, 3 },
+        { 7400, 2 },
+    };
+    for (size_t j = 0; j < sizeof(steps) / sizeof(steps[0]); j++, i++) {
+        feed_tpv_off(w + i, steps[j].off, "\"jam\":12");
+        poll_at(&s, w + i);
+        jsonl_emit_gnss(&s);
+        jsonl_emit_sensor_health(&s);
+        ASSERT_EQ(s.gnss_fix.time_off_band, steps[j].band);
+        ASSERT_EQ(s.gnss_fix.time_off_ms, (long long)steps[j].off);   /* the figure is exact */
+    }
+    jsonl_close();
+    char *b = read_all(g_jl);
+    ASSERT(b != NULL);
+    if (b) {
+        /* The first, then each band move: 700, 300, 1900, 2600, 1400,
+         * 9000, 12600, 7400 - eight. */
+        ASSERT_EQ(count_type(b, "\"type\":\"gnss_fix\""), 9);
+        ASSERT_EQ(count_type(b, "\"type\":\"sensor_health\""), 9);
+        ASSERT(strstr(b, "\"time_off_ms\":700,") != NULL);
+        ASSERT(strstr(b, "\"time_off_ms\":550,") == NULL);
+        ASSERT(strstr(b, "\"time_off_ms\":600,") == NULL);
+        ASSERT(strstr(b, "\"gnss_time_offset_ms\":12600,") != NULL);
+    }
+    unlink(g_jl);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* A SKY whose satellite set is present but empty (nSat 0, or the key
+ * alone) empties the rows - the antenna is gone - where a DOP-only SKY
+ * keeps them; the following jsonl_emit_gnss() writes no gnss_sat. And
+ * el / az are carried with flags, not a -1 sentinel: a bird one degree
+ * under the horizon is -1 with has_el, written as itself; one gpsd
+ * sent no el for has none and no key. Seen red with take_sky()'s
+ * DOP-only test back on `m->nsats == 0` (the key-alone SKY kept four
+ * rows) and with the emitter writing el unconditionally. */
+static void test_sky_empty_set_and_elevation_flags(void) {
+    jl_open();
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    time_t w = 1793059200;
+    feed_sky_tpv(w);
+    poll_at(&s, w);
+    jsonl_emit_gnss(&s);
+    gnss_sky_t k;
+    gps_sky_snapshot(&k);
+    ASSERT_EQ(k.n, 4);
+    ASSERT_EQ(k.sats[0].has_el, 1); ASSERT_EQ(k.sats[0].el, 45);
+    ASSERT_EQ(k.sats[1].has_el, 0); ASSERT_EQ(k.sats[1].has_az, 0);
+    static gpsd_msg_t m;
+    /* The empty set as gpsd writes it. */
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"SKY\",\"nSat\":0,\"uSat\":0,\"satellites\":[]}"), &m), 1);
+    ASSERT_EQ(m.has_sats, 1);
+    clk(w + 1);
+    gps_location_feed_gpsd(&m, w + 1);
+    gps_sky_snapshot(&k);
+    ASSERT_EQ(k.valid, 1);
+    ASSERT_EQ(k.n, 0);
+    ASSERT_EQ(k.nsat, 0);
+    ASSERT_EQ(k.usat, 0);
+    ASSERT_EQ(k.cn0_n, 0);
+    ASSERT_EQ(k.passes, 2u);
+    poll_at(&s, w + 1);
+    jsonl_emit_gnss(&s);
+    ASSERT_EQ(s.gps.sats_in_view, 0);
+    /* Back, then the key alone with no nSat / uSat: still an empty sky. */
+    feed_sky_tpv(w + 2);
+    gps_sky_snapshot(&k);
+    ASSERT_EQ(k.n, 4);
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"SKY\",\"satellites\":[]}"), &m), 1);
+    gps_location_feed_gpsd(&m, w + 3);
+    gps_sky_snapshot(&k);
+    ASSERT_EQ(k.n, 0);
+    ASSERT_EQ(k.nsat, -1);
+    /* A DOP-only SKY has no satellites key and keeps the rows. */
+    feed_sky_tpv(w + 4);
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"SKY\",\"hdop\":1.9}"), &m), 1);
+    ASSERT_EQ(m.has_sats, 0);
+    gps_location_feed_gpsd(&m, w + 5);
+    gps_sky_snapshot(&k);
+    ASSERT_EQ(k.n, 4);
+    ASSERT_NEAR(k.hdop, 1.9, 1e-9);
+    /* A bird under the horizon. */
+    ASSERT_EQ(gpsd_json_parse(S("{\"class\":\"SKY\",\"nSat\":1,\"uSat\":0,\"satellites\":["
+                                "{\"PRN\":9,\"gnssid\":0,\"svid\":9,\"el\":-1.0,\"az\":0.0,"
+                                "\"used\":false}]}"), &m), 1);
+    clk(w + 6);
+    gps_location_feed_gpsd(&m, w + 6);
+    gps_sky_snapshot(&k);
+    ASSERT_EQ(k.n, 1);
+    ASSERT_EQ(k.sats[0].has_el, 1);
+    ASSERT_EQ(k.sats[0].el, -1);
+    ASSERT_EQ(k.sats[0].has_az, 1);
+    ASSERT_EQ(k.sats[0].az, 0);
+    ASSERT_NEAR(k.hdop, 0.0, 1e-9);              /* a full SKY's DOPs are its own */
+    poll_at(&s, w + 6);
+    jsonl_emit_gnss(&s);
+    jsonl_close();
+    char *b = read_all(g_jl);
+    ASSERT(b != NULL);
+    if (b) {
+        /* Four rows at w, none at w+1 (an emptied sky writes no gnss_sat
+         * line), one at w+6 with its negative elevation as itself. */
+        ASSERT_EQ(count_type(b, "\"type\":\"gnss_sat\""), 5);
+        ASSERT(strstr(b, "\"type\":\"gnss_sat\",\"ts\":1793059201") == NULL);
+        ASSERT(strstr(b, "\"type\":\"gnss_sky\",\"ts\":1793059201,\"src\":\"gpsd:127.0.0.1:2947\","
+                         "\"sky_ts\":1793059201,\"nsat\":0,\"usat\":0,\"rows\":0,") != NULL);
+        ASSERT(strstr(b, "\"svid\":9,\"prn\":9,\"sigid\":-1,\"el\":-1,\"az\":0,\"used\":0") != NULL);
+    }
+    unlink(g_jl);
+    sloth_clock_test_set(NULL, NULL);
 }
 
 void run_gps_tests(void) {
@@ -2172,4 +2437,7 @@ void run_gps_tests(void) {
     RUN_TEST(test_sensor_health_gnss_block);
     RUN_TEST(test_sensor_registry_gps);
     RUN_TEST(test_gnss_signature_bands);
+    RUN_TEST(test_jam_is_sticky_across_tpvs);
+    RUN_TEST(test_time_off_band_hysteresis);
+    RUN_TEST(test_sky_empty_set_and_elevation_flags);
 }

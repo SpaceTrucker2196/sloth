@@ -269,9 +269,9 @@
       <span class="sub" id="gnss-note">sloth's gnss_fix, gnss_sky and gnss_sat records off the --gps receiver, kept by slothweb in memory (sloth.db's gnss_fixes and gnss_sightings hold the history). The receiver is the host's own, so this panel is every scope's. Receive-only: sloth sends gpsd one ?WATCH line and writes nothing to a serial device. Observation only: no row here is a finding.</span>
     </section>
     <section class="panel">
-      <div class="label">satellites in view <span class="sub" id="gnss-count"></span></div>
-      <div class="hscroll"><table class="gnss-table" id="gnss-table"><thead id="gnss-thead"></thead><tbody id="gnss-rows"></tbody></table></div>
-      <div class="sub">one row per satellite as the receiver lists it, sorted by C/N0 (the TUI's [#] order); a column header sorts. Bright rows are in the solution, dim rows unhealthy, as the TUI draws them; the signal cell is heat-graded over 50 dB-Hz with the TUI's thresholds; the trail is the row's last records (change-only: a point per band change or 300 s heartbeat). Click a row for its figures.</div>
+      <div class="label">satellites in view <span class="sub" id="gnss-count"></span> <span class="dt-tools" id="gnss-tools"></span></div>
+      <div class="hscroll" id="gnss-box"><div class="gnssrow dhead" id="gnss-thead"></div><div id="gnss-rows"></div></div>
+      <div class="sub">one row per satellite as the receiver lists it, sorted by C/N0 (the TUI's [#] order); a column header sorts, drag its right edge to resize. Bright rows are in the solution, dim rows unhealthy, as the TUI draws them; the signal cell is heat-graded over 50 dB-Hz with the TUI's thresholds; the trail is the row's last records (change-only: a point per band change or 300 s heartbeat). Click a row for its figures.</div>
     </section>
     <section class="panel gnss-two">
       <div>

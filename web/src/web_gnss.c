@@ -34,8 +34,8 @@ void web_gnss_destroy(web_gnss_t *g) {
 }
 
 const char *web_gnss_name(int gnssid) {
-    /* sloth's table (src/gps.c gnss_name()); test_parity.c holds the
-     * two together. */
+    /* sloth's table (src/gps.c gnss_name()); web/tests/test_gnss.c ::
+     * test_gnss_names_are_sloths holds the two together. */
     switch (gnssid) {
     case 0: return "GPS";
     case 1: return "SBAS";
@@ -122,8 +122,10 @@ static void sat_apply(web_gnss_t *g, const web_jrec_t *r, long long ts) {
     s->prn = (int)prn;
     s->svid = (int)jint(r, "svid", 0, 32767, -1);
     s->sigid = (int)jint(r, "sigid", 0, 127, -1);
-    s->el = (int)jint(r, "el", 0, 90, -1);
-    s->az = (int)jint(r, "az", 0, 360, -1);
+    /* The emitter writes el / az only when gpsd sent them; a negative
+     * elevation is a real one (a bird under the horizon, still listed). */
+    s->el = (int)jint(r, "el", -90, 90, WEB_GNSS_NO_ANGLE);
+    s->az = (int)jint(r, "az", 0, 360, WEB_GNSS_NO_ANGLE);
     double cn0;
     s->has_cn0 = jnum(r, "cn0", 0.0, 99.0, &cn0);
     s->cn0 = s->has_cn0 ? cn0 : 0.0;
@@ -389,8 +391,8 @@ int web_gnss_route(web_gnss_t *g, const char *query, long long now_s,
         web_jw_raw(&w, ",\"svid\":"); jw_int_or_null(&w, s->svid >= 0, s->svid);
         web_jw_raw(&w, ",\"prn\":"); web_jw_int(&w, s->prn);
         web_jw_raw(&w, ",\"sigid\":"); jw_int_or_null(&w, s->sigid >= 0, s->sigid);
-        web_jw_raw(&w, ",\"el\":"); jw_int_or_null(&w, s->el >= 0, s->el);
-        web_jw_raw(&w, ",\"az\":"); jw_int_or_null(&w, s->az >= 0, s->az);
+        web_jw_raw(&w, ",\"el\":"); jw_int_or_null(&w, s->el != WEB_GNSS_NO_ANGLE, s->el);
+        web_jw_raw(&w, ",\"az\":"); jw_int_or_null(&w, s->az != WEB_GNSS_NO_ANGLE, s->az);
         web_jw_raw(&w, ",\"cn0\":"); jw_num(&w, s->has_cn0, s->cn0, 1);
         web_jw_raw(&w, ",\"used\":"); web_jw_int(&w, s->in_fix);
         web_jw_raw(&w, ",\"health\":"); jw_int_or_null(&w, s->health >= 0, s->health);

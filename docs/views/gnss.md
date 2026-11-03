@@ -63,12 +63,16 @@ will read this sky are a following slice.
 ```
 
 Rows are sorted by C/N0, strongest first; a satellite the receiver
-lists but does not track (no `ss`) sits last with no bar. Rows in the
+lists but does not track (no `ss`) sits last with no bar; an elevation
+or azimuth gpsd did not send is `-` (a negative elevation is a bird
+under the horizon, drawn as itself). The cursor follows the satellite
+across the re-sort every SKY brings, not the row number. Rows in the
 solution are bright, unhealthy rows dim. HDOP / PDOP warm past 2 and
 hot past 5; the clock offset warms past 500 ms and reddens past 2 s;
 `jam` follows u-blox's `jamInd` bands. `Enter` opens the selected
 row's figures; `Esc` or `Enter` closes. Without `--gps` the view names
-the flag; with a serial NMEA source it waits (GSV is not parsed yet).
+the flag; with a serial NMEA source it waits (GSV is not parsed yet);
+a SKY that listed no satellites is said as that.
 
 ## What's normal
 

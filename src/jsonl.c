@@ -2200,8 +2200,9 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * a receiver is talking, and would sign a line per tick. */
         int      gps_configured, gps_state, gps_age_bucket;
         int      gps_bad_any, gps_err_any;
-        /* GNSS observation (2026-11-02): the clock offset, the mean
-         * C/N0 and the jamming indicator as bands only (src/gps.c
+        /* GNSS observation (2026-11-02): the clock offset (its held
+         * band), the mean C/N0 and the jamming indicator (sticky across
+         * the TPVs gpsd omits it from) as bands only (src/gps.c
          * gps_*_band); the satellite counts move too often to sign. */
         int      gnss_time_off_band, gnss_cn0_band, gnss_jam_band;
     } sig;
@@ -2317,7 +2318,10 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         : (s->gps.fix_age_s > tune_val(TUNE_GPS_MAX_FIX_AGE_S) ? 1 : 0);
     sig.gps_bad_any    = (s->gps.bad_checksum + s->gps.parse_errors) > 0;
     sig.gps_err_any    = s->gps.err[0] != '\0';
-    sig.gnss_time_off_band = gps_time_off_band(s->gps.has_time_off, s->gps.time_off_ms);
+    /* The held band (gps.c take_tpv: hysteresis a quarter past each
+     * edge), never the raw one: a 9600-baud offset hovering at 500 ms
+     * otherwise re-signed this line TPV by TPV. */
+    sig.gnss_time_off_band = s->gps.has_time_off ? s->gps.time_off_band : -1;
     sig.gnss_cn0_band      = gps_cn0_band(s->gps.cn0_mean);
     sig.gnss_jam_band      = gps_jam_band(s->gps.jam);
     const int pcap_on = alert_pcap_enabled();
@@ -2664,9 +2668,13 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
  *   gnss_sat  one per satellite in view, key gnssid|prn:
  *             gps_gnss_sat_sig() (used, health, C/N0 to 6 dB, el/az to
  *             15 degrees), so a steady sky writes nothing between
- *             heartbeats and one satellite rising, setting, joining or
- *             leaving the solution or crossing a band writes that one
- *             record, not the whole sky.
+ *             heartbeats and one satellite rising, joining or leaving
+ *             the solution or crossing a band writes that one record,
+ *             not the whole sky. A satellite that sets writes nothing:
+ *             only the current sky is walked, so a consumer infers it
+ *             from the row's 300 s heartbeat lapsing (slothweb drops a
+ *             row quiet for 660 s); one that sets and re-rises inside a
+ *             heartbeat with the same bands is silent too.
  *
  * Per satellite rather than a nested array in gnss_sky, for the same
  * reason ble_device is per advertiser: a consumer keeps a table keyed
@@ -2761,8 +2769,10 @@ void jsonl_emit_gnss(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "svid", a->svid);
         kv_int(buf, LINEBUF, &off, "prn", a->prn);
         kv_int(buf, LINEBUF, &off, "sigid", a->sigid);
-        kv_int(buf, LINEBUF, &off, "el", a->el);
-        kv_int(buf, LINEBUF, &off, "az", a->az);
+        /* el / az only when gpsd sent them: a key with -1 was both
+         * "absent" and a bird one degree below the horizon. */
+        if (a->has_el) kv_int(buf, LINEBUF, &off, "el", a->el);
+        if (a->has_az) kv_int(buf, LINEBUF, &off, "az", a->az);
         if (a->has_cn0) kv_fixed(buf, &off, "cn0", a->cn0_x10 / 10.0, 1);
         kv_int(buf, LINEBUF, &off, "used", a->used);
         kv_int(buf, LINEBUF, &off, "health", a->health);

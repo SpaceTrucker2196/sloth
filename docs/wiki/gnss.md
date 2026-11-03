@@ -32,7 +32,7 @@ GST, `gpsd_time_parse()`, the sky / fix state, `gps_gnss_*_sig()`),
 `tests/test_gnss_view.c`, `tests/test_db.c` (v9 → v10),
 `web/tests/test_gnss.c`.
 
-**Last updated**: 2026-11-02 (first version).
+**Last updated**: 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
 
 ## What is read
 
@@ -69,7 +69,21 @@ the serial / USB transfer and gpsd's own latency, and there is no PPS
 on a USB u-blox 7, so it is biased by tens to hundreds of
 milliseconds and jitters. It is enough to see a multi-second step —
 the host clock being wrong, or the receiver's time being moved — and
-it is **not** a time-sync quality figure. gpsd's `TOFF` / `PPS`
+it is **not** a time-sync quality figure. Because a 9600-baud
+receiver's latency sits in the 200–700 ms range, right across the
+first band edge, the band the records sign is **held with
+hysteresis** (`take_tpv()`): it moves to a new band only once the
+offset clears the edge between them by a quarter of that edge
+(125 ms at 500 ms, 500 ms at 2 s, 2.5 s at 10 s). The figure itself
+is always exact; the TUI and the page colour the raw value.
+
+**`jam` is sticky.** gpsd attaches the u-blox jamming indicator only
+to the TPV that follows a UBX-MON-HW poll (two of fourteen TPVs in
+eight seconds on the reference host), not to every TPV. A TPV without
+it keeps the last reported value for `GNSS_JAM_HOLD_TPVS` (10) TPVs,
+then it reads -1 again. Per TPV it flipped -1 / value every second,
+which re-signed `gnss_fix` and `sensor_health` on every tick and left
+the one-second series mostly -1. gpsd's `TOFF` / `PPS`
 objects would give a far better one, but they need
 `?WATCH={"pps":true}`, a change to the one line sloth sends; that is
 an owner ruling, not this slice's.
@@ -86,7 +100,13 @@ one row per satellite sorted by C/N0, strongest first, untracked rows
 last: constellation, svid, PRN, elevation, azimuth, C/N0, used,
 health, and a heat-graded signal bar over 50 dB-Hz that flexes to the
 width. Rows in the solution are bright, unhealthy rows dim. Up / down
-move, Enter opens the row's figures, Esc or Enter closes. Without a
+move, Enter opens the row's figures, Esc or Enter closes. The cursor
+follows the **satellite**, not the row number: the table is sorted
+again on every SKY, and the highlight (and the open detail) stays on
+the bird the operator chose when two C/N0s cross; only once that bird
+has left the sky does the row index stand in. A SKY that lists
+nothing (the antenna gone) is said as that, not as the first pass
+still awaited. Without a
 `--gps` reader the view names the flag and this page; `--location`
 alone is a setting, not a receiver. `docs/views/gnss.md` has the
 mockup.
@@ -103,14 +123,29 @@ sinks agree on what is news.
 
 | Record | Key | Signed on | Carries |
 |---|---|---|---|
-| `gnss_fix` | singleton | mode, status, `usat`, `nsat`/4, HDOP and PDOP bands (<1, <2, <5, ≥5), the clock-offset band (\|off\| <500 ms, <2 s, <10 s, ≥10 s, unknown), the speed band (<0.5 m/s, <2, <30, ≥30), the jam band (0, 1–63, 64–127, ≥128), whether there is a position | `src`, `fix_ts`, `mode`, `status`, `nsat`, `usat`, `hdop`, `vdop`, `pdop`, `lat` / `lon` (five decimals, when there is a position; [[location]]'s privacy rules apply), `alt_m`, `eph`, `epv`, `speed_mps`, `track_deg`, `rx_time_ms`, `time_off_ms`, `leap`, `jam`, the `gst_*` sigmas when a GST arrived, `tpv_count` |
-| `gnss_sky` | singleton | `nsat`, `usat`, the HDOP / PDOP / VDOP bands, the mean-C/N0 band (<25, 25–35, ≥35 dB-Hz) | `src`, `sky_ts`, `nsat`, `usat`, `rows`, `overflow`, the five DOPs, `cn0_mean`, `cn0_max`, `cn0_sd`, `cn0_n`, `passes` |
-| `gnss_sat` | `gnssid` + `prn` | identity, `used`, `health`, C/N0 to 6 dB, elevation and azimuth to 15° | `gnss`, `gnssid`, `svid`, `prn`, `sigid`, `el`, `az`, `cn0` (absent when not tracked), `used`, `health`, `sky_ts` |
+| `gnss_fix` | singleton | mode, status, the used-count band (0, 1–3, 4–5, 6–7, ≥8), `nsat`/4, HDOP and PDOP bands (<1, <2, <5, ≥5), the clock-offset band held with hysteresis (\|off\| <500 ms, <2 s, <10 s, ≥10 s, unknown), the speed band (<0.5 m/s, <2, <30, ≥30), the jam band (0, 1–63, 64–127, ≥128), whether there is a position | `src`, `fix_ts`, `mode`, `status`, `nsat`, `usat`, `hdop`, `vdop`, `pdop`, `lat` / `lon` (five decimals, when there is a position; [[location]]'s privacy rules apply), `alt_m`, `eph`, `epv`, `speed_mps`, `track_deg`, `rx_time_ms`, `time_off_ms`, `leap`, `jam`, the `gst_*` sigmas when a GST arrived, `tpv_count` |
+| `gnss_sky` | singleton | `nsat`/4, the used-count band, the HDOP / PDOP / VDOP bands, the mean-C/N0 band (<25, 25–35, ≥35 dB-Hz) | `src`, `sky_ts`, `nsat`, `usat`, `rows`, `overflow`, the five DOPs, `cn0_mean`, `cn0_max`, `cn0_sd`, `cn0_n`, `passes` |
+| `gnss_sat` | `gnssid` + `prn` | identity, `used`, `health`, C/N0 to 6 dB, elevation and azimuth to 15° (absent as its own band) | `gnss`, `gnssid`, `svid`, `prn`, `sigid`, `el` and `az` (absent when gpsd sent none; `el` may be negative), `cn0` (absent when not tracked), `used`, `health`, `sky_ts` |
 
 So a steady sky writes nothing between 300 s heartbeats; a satellite
-rising, setting, joining or leaving the solution or crossing a 6 dB
-band writes that one `gnss_sat`; a fix lost or regained, a DOP band
-crossed or the clock stepping writes one `gnss_fix`. Per satellite
+rising, joining or leaving the solution or crossing a 6 dB band
+writes that one `gnss_sat`; a fix lost or regained, a DOP band
+crossed or the clock stepping writes one `gnss_fix`. The used count
+is a band, not the number, because `uSat` flaps by one every few
+seconds on a moving or urban receiver and the per-satellite `used`
+flag already says which bird joined or left.
+
+Two things the records do **not** say, stated so a consumer does not
+expect them. **A satellite that sets writes nothing**: the emitter
+walks the current sky, so a set satellite's row simply stops coming,
+and a consumer infers it from the 300 s heartbeat lapsing (slothweb
+drops a row quiet for 660 s); one that sets and re-rises inside a
+heartbeat with the same bands is silent too. And **the per-row bands
+have no hysteresis**: a satellite sitting on a 6 dB C/N0 edge or a
+15° azimuth edge writes a `gnss_sat` line (and a `gnss_sightings`
+row) per pass until it moves off the edge. That is bounded to the one
+row and accepted; the fix-level bands, which would otherwise fire on
+every TPV, are the ones held. Per satellite
 rather than a nested array in `gnss_sky` for the reason `ble_device` is
 per advertiser: a consumer keeps a table keyed by the row, one change
 costs one line, and slothweb's decoder keeps top-level scalars only.
@@ -151,9 +186,15 @@ The GNSS tab (`web/ui/gnss.js`, `window.SlothGnss`, containers
 `gnss-*`) reads `/api/gnss` (the sensor block, the newest fix and sky,
 every satellite row with its last 16 `(ts, C/N0)` points, sorted by
 C/N0) and `/api/gnss/fixes?since=&limit=` (the kept `gnss_fix` records,
-oldest first, 128 a page). It draws the TUI's two header lines, the
-table (a header sorts; rows bright / dim as the TUI's; the signal cell
-heat-graded with the TUI's thresholds; a per-row C/N0 trail), a polar
+oldest first, 128 a page; the page **walks** it — from `since=0`, then
+from the last row's `ts` while a page comes back full — so the strip
+reaches the newest fix once the 512-entry ring holds more than a
+page). It draws the TUI's two header lines, the table (app.js's one
+`DataTable`, as every table on the page: kept column widths and sort,
+`aria-sort`, drag / keyboard sizing, "reset columns"; with no sort set
+the rows are in the TUI's order; rows bright / dim as the TUI's; the
+signal cell heat-graded with the TUI's thresholds; a per-row C/N0
+trail), a polar
 sky plot (azimuth around, elevation inward, north up) and a fix-history
 strip (mode, satellites used, HDOP, clock offset). `web_gnss.c` keeps
 64 satellite rows (least recently reported evicted, a row quiet for

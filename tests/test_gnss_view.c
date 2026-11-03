@@ -22,6 +22,9 @@ static const char *render(const sloth_state_t *s) {
     return g_buf;
 }
 
+/* el / az NONE: gpsd sent neither (has_el / has_az 0); any other value,
+ * a negative elevation included, is carried. */
+#define NONE (-999)
 static void add_sat(gnss_sky_t *k, int gnssid, int svid, int prn, int el, int az,
                     double cn0, int used, int health) {
     gnss_sat_t *a = &k->sats[k->n++];
@@ -30,8 +33,8 @@ static void add_sat(gnss_sky_t *k, int gnssid, int svid, int prn, int el, int az
     a->svid = (int16_t)svid;
     a->prn = (int16_t)prn;
     a->sigid = -1;
-    a->el = (int16_t)el;
-    a->az = (int16_t)az;
+    if (el != NONE) { a->has_el = 1; a->el = (int16_t)el; }
+    if (az != NONE) { a->has_az = 1; a->az = (int16_t)az; }
     if (cn0 >= 0) { a->has_cn0 = 1; a->cn0_x10 = (int16_t)(cn0 * 10 + 0.5); }
     a->used = (uint8_t)used;
     a->health = (int8_t)health;
@@ -52,7 +55,7 @@ static void seed(sloth_state_t *s) {
     k->usat = 3;
     k->hdop = 1.1; k->pdop = 1.9; k->vdop = 1.5;
     add_sat(k, 0, 5, 5, 45, 120, 41.0, 1, 1);
-    add_sat(k, 0, 7, 7, -1, -1, 22.5, 0, 1);
+    add_sat(k, 0, 7, 7, NONE, NONE, 22.5, 0, 1);
     add_sat(k, 6, 9, 73, 30, 300, 47.5, 1, 1);
     add_sat(k, 1, 131, 131, 10, 200, -1, 0, 0);
     add_sat(k, 2, 12, 312, 60, 40, 33.0, 1, 2);
@@ -184,8 +187,10 @@ static void test_gnss_nav_and_detail(void) {
     ASSERT_EQ(s.gnss_sel, 2);
     view_gnss_key(&s, 27);
     ASSERT_EQ(s.gnss_detail, 0);
-    /* The untracked row's detail says so. */
+    /* The untracked row's detail says so (the index, with no satellite
+     * remembered). */
     s.gnss_sel = 4;
+    s.gnss_sel_key = 0;
     view_gnss_key(&s, '\r');
     b = render(&s);
     ASSERT(strstr(b, "C/N0             - (not tracked)") != NULL);
@@ -236,6 +241,67 @@ static void test_gnss_header_states(void) {
     ASSERT(strstr(b, "status normal") != NULL);
 }
 
+/* The cursor follows the satellite, not the row index: the table is
+ * sorted again on every SKY, and two C/N0s crossing used to carry the
+ * highlight (and the Enter detail) to another bird. Down twice lands
+ * on Galileo 312 (row 2); its C/N0 rising to the top keeps it
+ * selected at row 0; Down from there moves to the row now below it;
+ * a remembered satellite that left the sky falls back to the index.
+ * Seen red with cursor_row() returning the index alone (the '>' stayed
+ * on row 2, now GLONASS 73). */
+static void test_gnss_cursor_follows_satellite(void) {
+    TEST_STATE(s);
+    seed(&s);
+    view_gnss_key(&s, SLOTH_KEY_DOWN);
+    view_gnss_key(&s, SLOTH_KEY_DOWN);
+    ASSERT_EQ(s.gnss_sel, 2);
+    ASSERT_NE(s.gnss_sel_key, 0);
+    const char *b = render(&s);
+    ASSERT(strstr(b, ">Galileo") != NULL);
+    /* Galileo 312: 33.0 -> 49.0, now the strongest. */
+    s.gnss_sky.sats[4].cn0_x10 = 490;
+    b = render(&s);
+    ASSERT(strstr(b, ">Galileo") != NULL);
+    ASSERT(strstr(b, ">GLONASS") == NULL);
+    const char *gal = strstr(b, ">Galileo"), *glo = strstr(b, " GLONASS");
+    ASSERT(gal && glo && gal < glo);              /* drawn at row 0 */
+    view_gnss_key(&s, '\n');
+    b = render(&s);
+    ASSERT(strstr(b, "constellation    Galileo (gnssid 2)") != NULL);
+    view_gnss_key(&s, 27);
+    /* Down from row 0: GLONASS 73 is the row below now. */
+    view_gnss_key(&s, SLOTH_KEY_DOWN);
+    ASSERT_EQ(s.gnss_sel, 1);
+    b = render(&s);
+    ASSERT(strstr(b, ">GLONASS") != NULL);
+    /* The remembered bird leaves: the index stands in. */
+    s.gnss_sky.n = 4;                             /* Galileo 312 was sats[4] */
+    s.gnss_sel_key = ((2 + 1) << 16) | (312 + 1);
+    b = render(&s);
+    ASSERT(strstr(b, ">GPS          5") != NULL);    /* row 1: GPS 5 at 41.0 */
+}
+
+/* A SKY that listed nothing is said as that, not as the first pass
+ * still awaited; a negative elevation is drawn as itself and an
+ * absent one as "-". Seen red with the view's `!k->valid || k->n == 0`
+ * branch restored (the empty sky read "waiting"). */
+static void test_gnss_empty_sky_and_negative_elevation(void) {
+    TEST_STATE(s);
+    seed(&s);
+    s.gnss_sky.n = 0;
+    s.gnss_sky.nsat = s.gnss_sky.usat = 0;
+    s.gnss_sky.cn0_n = 0;
+    const char *b = render(&s);
+    ASSERT(strstr(b, "the receiver lists no satellites") != NULL);
+    ASSERT(strstr(b, "waiting for the receiver's first satellite list") == NULL);
+    ASSERT(strstr(b, "sats 0/0") != NULL);
+    seed(&s);
+    add_sat(&s.gnss_sky, 0, 9, 9, -1, 0, 18.0, 0, 1);
+    b = render(&s);
+    ASSERT(strstr(b, "    9     9   -1    0   18.0") != NULL);
+    ASSERT(strstr(b, "    7     7    -    -   22.5") != NULL);
+}
+
 void run_gnss_view_tests(void) {
     TEST_SUITE("views: [#] GNSS (2026-11-02)");
     RUN_TEST(test_gnss_empty_without_receiver);
@@ -243,4 +309,6 @@ void run_gnss_view_tests(void) {
     RUN_TEST(test_gnss_populated_render_sorted);
     RUN_TEST(test_gnss_nav_and_detail);
     RUN_TEST(test_gnss_header_states);
+    RUN_TEST(test_gnss_cursor_follows_satellite);
+    RUN_TEST(test_gnss_empty_sky_and_negative_elevation);
 }

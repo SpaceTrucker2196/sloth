@@ -152,8 +152,8 @@ segment. Lose that and the tool is just another aircrack fork.
 As of v1.8.2 (`SLOTH_VERSION` in `include/sloth.h` is the source of
 truth for this number; if the two disagree, the `#define` is right):
 
-- **<!-- count:views -->37<!-- /count --> views** (`VIEW_COUNT`), keyed `[1]…[0]`, `[a]…[z]`, `[?]` (help) and `[*]` (BLE; every
-  letter and digit is taken), indexed in
+- **<!-- count:views -->37<!-- /count --> views** (`VIEW_COUNT`), keyed `[1]…[0]`, `[a]…[z]`, `[?]` (help), `[*]` (BLE) and `[#]` (GNSS;
+  every letter and digit is taken), indexed in
   the README and in [`docs/wiki/views-catalog.md`](docs/wiki/views-catalog.md).
 - **<!-- count:rules -->90<!-- /count --> alert rules** in `src/alerts/` (one file per domain since #118) — one per `ALERT_TYPE_*`, each
   with a row in [`docs/views/alerts.md`](docs/views/alerts.md) and a

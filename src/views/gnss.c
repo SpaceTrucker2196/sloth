@@ -102,6 +102,25 @@ static int sorted(const gnss_sky_t *k, const gnss_sat_t **idx) {
     return n;
 }
 
+/* The satellite's identity as one non-zero int (gnssid -1..127, PRN
+ * 0..32767), so s->gnss_sel_key 0 is "none". */
+static int gnss_sat_key(const gnss_sat_t *a) {
+    return ((a->gnssid + 1) << 16) | (a->prn + 1);
+}
+
+/* The cursor's row: the selected satellite's, wherever the re-sort put
+ * it this pass (the table is sorted again on every SKY, and two C/N0s
+ * crossing used to carry the highlight to another bird); the index
+ * only when that satellite has left the sky. -1 for an empty table. */
+static int cursor_row(const sloth_state_t *s, const gnss_sat_t **idx, int n) {
+    if (n <= 0) return -1;
+    if (s->gnss_sel_key)
+        for (int i = 0; i < n; i++)
+            if (gnss_sat_key(idx[i]) == s->gnss_sel_key) return i;
+    int sel = s->gnss_sel;
+    return sel >= n ? n - 1 : sel < 0 ? 0 : sel;
+}
+
 static void kv(const char *key, const char *v) {
     tui_dim();    TPRINT("  %-16s ", key);
     tui_normal(); TPRINT("%s\n", v);
@@ -113,7 +132,7 @@ static void draw_detail(const sloth_state_t *s) {
     int n = sorted(k, idx);
     tui_dim(); TPRINT(" ── GNSS satellite ── "); tui_normal();
     tui_dim(); TPRINT("[Enter/Esc] back\n"); tui_normal();
-    int sel = s->gnss_sel;
+    int sel = cursor_row(s, idx, n);
     if (sel < 0 || sel >= n) {
         tui_dim();
         TPRINT("  (the row has left the sky: the satellite set, or the pass "
@@ -129,8 +148,8 @@ static void draw_detail(const sloth_state_t *s) {
     snprintf(v, sizeof(v), "%d", a->svid);           kv("svid", v);
     snprintf(v, sizeof(v), "%d", a->prn);            kv("PRN", v);
     if (a->sigid >= 0) { snprintf(v, sizeof(v), "%d", a->sigid); kv("signal id", v); }
-    if (a->el >= 0) { snprintf(v, sizeof(v), "%d deg", a->el); kv("elevation", v); }
-    if (a->az >= 0) { snprintf(v, sizeof(v), "%d deg true", a->az); kv("azimuth", v); }
+    if (a->has_el) { snprintf(v, sizeof(v), "%d deg", a->el); kv("elevation", v); }
+    if (a->has_az) { snprintf(v, sizeof(v), "%d deg true", a->az); kv("azimuth", v); }
     if (a->has_cn0) {
         fx(t, sizeof(t), a->cn0_x10 / 10.0, 1);
         snprintf(v, sizeof(v), "%s dB-Hz", t);
@@ -213,11 +232,19 @@ void view_gnss_draw(const sloth_state_t *s) {
     time_t now = sloth_wall();
     header(s, now);
     const gnss_sky_t *k = &s->gnss_sky;
-    if (!k->valid || k->n == 0) {
+    if (!k->valid) {
         tui_dim();
         TPRINT("  (waiting for the receiver's first satellite list - gpsd's SKY,\n"
                "   which a serial NMEA source does not carry yet; err %s)\n",
                s->gps.err[0] ? s->gps.err : "none");
+        tui_normal();
+        return;
+    }
+    if (k->n == 0) {
+        /* A SKY arrived and listed nothing: the antenna is gone, or the
+         * receiver has just started. Not the first-pass message. */
+        tui_dim();
+        TPRINT("  (the receiver lists no satellites: its newest SKY was empty)\n");
         tui_normal();
         return;
     }
@@ -238,9 +265,7 @@ void view_gnss_draw(const sloth_state_t *s) {
     tui_normal();
 
     int page = view_page_budget(GNSS_LEGEND_ROWS, GNSS_PAGE);
-    int sel = s->gnss_sel;
-    if (sel >= n) sel = n - 1;
-    if (sel < 0) sel = 0;
+    int sel = cursor_row(s, idx, n);
     int top = sel - page / 2;
     if (top + page > n) top = n - page;
     if (top < 0) top = 0;
@@ -252,8 +277,8 @@ void view_gnss_draw(const sloth_state_t *s) {
         char cn[16], el[8], az[8], sv[8], g[12];
         if (a->has_cn0) fx(cn, sizeof(cn), a->cn0_x10 / 10.0, 1);
         else            snprintf(cn, sizeof(cn), "-");
-        if (a->el >= 0) snprintf(el, sizeof(el), "%d", a->el); else snprintf(el, sizeof(el), "-");
-        if (a->az >= 0) snprintf(az, sizeof(az), "%d", a->az); else snprintf(az, sizeof(az), "-");
+        if (a->has_el) snprintf(el, sizeof(el), "%d", a->el); else snprintf(el, sizeof(el), "-");
+        if (a->has_az) snprintf(az, sizeof(az), "%d", a->az); else snprintf(az, sizeof(az), "-");
         if (a->svid >= 0) snprintf(sv, sizeof(sv), "%d", a->svid); else snprintf(sv, sizeof(sv), "-");
         snprintf(g, sizeof(g), "%s", a->gnssid >= 0 ? gnss_name(a->gnssid) : "-");
         g[8] = '\0';
@@ -284,18 +309,28 @@ void view_gnss_key(sloth_state_t *s, int key) {
         if (key == '\r' || key == '\n' || key == 27) s->gnss_detail = 0;
         return;
     }
-    int n = s->gnss_sky.valid ? s->gnss_sky.n : 0;
+    const gnss_sat_t *idx[GNSS_MAX_SATS];
+    int n = s->gnss_sky.valid ? sorted(&s->gnss_sky, idx) : 0;
+    /* Move from where the cursor is drawn (the selected satellite's row
+     * after this pass's sort), and remember the satellite landed on. */
+    int sel = cursor_row(s, idx, n);
     switch (key) {
     case SLOTH_KEY_UP:
-        if (s->gnss_sel > 0) s->gnss_sel--;
+        if (sel > 0) sel--;
         break;
     case SLOTH_KEY_DOWN:
-        if (n > 0 && s->gnss_sel < n - 1) s->gnss_sel++;
+        if (n > 0 && sel < n - 1) sel++;
         break;
     case '\r': case '\n':
-        if (n > 0 && s->gnss_sel >= 0 && s->gnss_sel < n) s->gnss_detail = 1;
+        if (n > 0 && sel >= 0 && sel < n) s->gnss_detail = 1;
         break;
     default:
-        break;
+        return;
+    }
+    if (sel >= 0 && sel < n) {
+        s->gnss_sel = sel;
+        s->gnss_sel_key = gnss_sat_key(idx[sel]);
+    } else if (n == 0) {
+        s->gnss_sel = 0;
     }
 }

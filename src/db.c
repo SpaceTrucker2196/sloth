@@ -1761,8 +1761,8 @@ static void write_gnss(const sloth_state_t *s, time_t now) {
         sqlite3_bind_int(st, 2, a->gnssid);
         sqlite3_bind_int(st, 3, a->prn);
         if (a->svid >= 0) sqlite3_bind_int(st, 4, a->svid);
-        if (a->el >= 0)   sqlite3_bind_int(st, 5, a->el);
-        if (a->az >= 0)   sqlite3_bind_int(st, 6, a->az);
+        if (a->has_el)    sqlite3_bind_int(st, 5, a->el);   /* may be negative */
+        if (a->has_az)    sqlite3_bind_int(st, 6, a->az);
         if (a->has_cn0)   sqlite3_bind_double(st, 7, a->cn0_x10 / 10.0);
         sqlite3_bind_int(st, 8, a->used);
         if (a->health >= 0) sqlite3_bind_int(st, 9, a->health);

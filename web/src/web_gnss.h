@@ -52,14 +52,18 @@
 #define WEB_GNSS_SAT_TTL_S 660
 /* A page of the fix ring: the answer is built in the connection's 64 KB
  * output buffer (web_server.h WEB_SSE_MAX_UNSENT) and a row is some
- * 330 bytes; the page walks the ring with since=. */
+ * 330 bytes; the page walks the ring with since= (gnss.js fixes(): from
+ * 0, then from the last row's ts while a page comes back full). */
 #define WEB_GNSS_LIMIT_MAX 128
+/* el / az absent: a value outside -90..90 / 0..360, never -1, which
+ * is a satellite one degree under the horizon (gpsd lists them). */
+#define WEB_GNSS_NO_ANGLE  (-999)
 
 typedef struct {
     int       used;
     int       gnssid;        /* -1 absent, 0..7 gpsd's, 8 other */
     int       svid, prn, sigid;   /* -1 absent */
-    int       el, az;        /* -1 absent */
+    int       el, az;        /* degrees, el -90..90; WEB_GNSS_NO_ANGLE absent */
     int       has_cn0;
     double    cn0;
     int       in_fix;        /* the record's `used` */

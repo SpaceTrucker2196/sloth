@@ -6049,3 +6049,15 @@ with better documentation").
   the next slice. Updated [[jsonl-schema]], [[sqlite-schema]],
   [[views-catalog]], [[cli-reference]], [[non-ip-sensors]],
   [[location]], [[index]].
+- 2026-11-02 — [[gnss]] review round: `jam` sticky across the TPVs gpsd
+  omits it from (it rides only the TPV after a UBX-MON-HW poll; per
+  TPV it re-signed `gnss_fix` and `sensor_health` every second); the
+  clock-offset band held with hysteresis (a 9600-baud offset hovers at
+  the 500 ms edge); the used count signed as a band; `el` / `az`
+  carried with flags, absent from the records rather than -1, negative
+  kept; an empty `satellites` set empties the sky; the `[#]` cursor
+  follows the satellite; slothweb's table on the one `DataTable`, the
+  fix strip walking `/api/gnss/fixes` with `since=`; what a set
+  satellite writes and the band-edge case stated. Updated
+  [[jsonl-schema]], [[sqlite-schema]], `docs/views/gnss.md`,
+  `web/README.md`, `MISSION.md`'s key list (`[#]`).

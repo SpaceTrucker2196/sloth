@@ -3060,6 +3060,7 @@ typedef struct {
     double   cn0_max;
     int      has_time_off;
     long long time_off_ms;     /* receiver time - host wall time at receipt */
+    int      time_off_band;    /* its band with hysteresis (gnss_fix_t), -1 unknown */
     double   pdop, vdop;       /* 0 unknown */
     int      status;           /* TPV status, -1 absent */
     int      jam;              /* TPV jam (u-blox jamInd 0..255), -1 absent */
@@ -3083,9 +3084,11 @@ typedef struct {
     int16_t svid;              /* -1 absent */
     int8_t  sigid;             /* -1 absent */
     int8_t  health;            /* -1 absent */
-    int16_t el, az;            /* degrees; -1 absent */
+    int16_t el, az;            /* degrees (el may be negative: gpsd lists
+                                * birds below the horizon); has_el / has_az
+                                * 0 when absent, never a sentinel value */
     int16_t cn0_x10;           /* C/N0 x 10; has_cn0 0 when absent */
-    uint8_t used, has_cn0;
+    uint8_t used, has_cn0, has_el, has_az;
 } gnss_sat_t;
 
 typedef struct {
@@ -3118,8 +3121,15 @@ typedef struct {
     long long rx_time_ms;      /* the receiver's "time", unix ms */
     int       has_time_off;
     long long time_off_ms;     /* rx_time_ms - host wall ms at receipt; coarse */
+    int       time_off_band;   /* the offset's band with hysteresis
+                                * (gps.c take_tpv), -1 unknown; what the
+                                * signatures sign, never time_off_ms */
     int       leap;            /* leapseconds, -1 absent */
-    int       jam;             /* u-blox jamming indicator 0..255, -1 absent */
+    int       jam;             /* u-blox jamming indicator 0..255, -1 absent.
+                                * Sticky: gpsd attaches it only to the TPV
+                                * after a UBX-MON-HW poll, so the last value
+                                * holds for GNSS_JAM_HOLD_TPVS TPVs */
+    uint64_t  jam_tpv;         /* count of the TPV that last carried jam */
     int       has_gst;
     double    gst_rms, gst_major, gst_minor, gst_orient;
     double    gst_lat_sd, gst_lon_sd, gst_alt_sd;
@@ -3608,7 +3618,11 @@ typedef struct {
      * by gps_health_poll(); the [#] view's cursor and detail flag. */
     gnss_sky_t       gnss_sky;
     gnss_fix_t       gnss_fix;
-    int              gnss_sel;
+    int              gnss_sel;        /* row index into the C/N0-sorted table */
+    int              gnss_sel_key;    /* the selected satellite's identity
+                                       * (views/gnss.c gnss_sat_key), 0 none:
+                                       * the cursor follows the satellite,
+                                       * not the index, across a re-sort */
     int              gnss_detail;
     bredr_lap_t      bredr_laps[MAX_BREDR_LAPS];
     int              bredr_lap_count;

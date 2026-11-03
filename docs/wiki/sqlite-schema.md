@@ -179,7 +179,9 @@ nsat, usat, hdop, vdop, pdop, eph, epv, lat, lon, alt_m, speed_mps,
 track_deg, time_off_ms, jam, cn0_mean)`: one row when the fix's bands
 move or every 300 s. `gnss_sightings (last_seen, gnssid, prn, svid, el,
 az, cn0, used, health)`, key `(last_seen, gnssid, prn)` (PRN is the one
-member gpsd always writes; `gnssid` is -1 from an NMEA-only gpsd): one
+member gpsd always writes; `gnssid` is -1 from an NMEA-only gpsd; `el`
+and `az` are NULL when gpsd sent none, and `el` may be negative — a
+bird under the horizon gpsd still lists): one
 row per satellite when its bands move (used, health, C/N0 to 6 dB,
 elevation and azimuth to 15°) or every 300 s. **Row rate**: a steady
 sky of a dozen satellites is ~290 fix rows and ~3,500 sightings a day;

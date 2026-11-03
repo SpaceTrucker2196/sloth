@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "web_assets.h"
 #include "web_gnss.h"
 #include "web_jsonl.h"
 #include "web_live.h"
@@ -60,7 +61,7 @@ static const char SAT5[] =
     "\"used\":1,\"health\":1,\"sky_ts\":1793059200}";
 static const char SAT7[] =
     "{\"type\":\"gnss_sat\",\"ts\":1793059200,\"gnss\":\"GPS\",\"gnssid\":0,"
-    "\"svid\":7,\"prn\":7,\"sigid\":-1,\"el\":-1,\"az\":-1,\"cn0\":22.5,"
+    "\"svid\":7,\"prn\":7,\"sigid\":-1,\"cn0\":22.5,"
     "\"used\":0,\"health\":1,\"sky_ts\":1793059200}";
 static const char SAT73[] =
     "{\"type\":\"gnss_sat\",\"ts\":1793059200,\"gnss\":\"GLONASS\",\"gnssid\":6,"
@@ -136,8 +137,9 @@ static void test_gnss_ingest_and_route(void) {
     const char *g3 = strstr(b, "\"gnss\":\"GPS\",\"gnssid\":0,\"svid\":7");
     const char *g4 = strstr(b, "\"gnss\":\"SBAS\"");
     WT_ASSERT(g1 && g2 && g3 && g4 && g1 < g2 && g2 < g3 && g3 < g4);
-    /* The emitter's -1 is null here, and an absent cn0 is null with no
-     * point. */
+    /* The emitter's -1 is null here, an el / az it did not write is
+     * null (never -1: that is a real elevation), and an absent cn0 is
+     * null with no point. */
     WT_HAS(b, "\"svid\":7,\"prn\":7,\"sigid\":null,\"el\":null,\"az\":null,\"cn0\":22.5");
     WT_HAS(b, "\"svid\":131,\"prn\":131,\"sigid\":null,\"el\":10,\"az\":200,\"cn0\":null,"
               "\"used\":0,\"health\":0,\"ts\":1793059200,\"first_ts\":1793059200,"
@@ -201,6 +203,17 @@ static void test_gnss_ranges_and_refusals(void) {
               "\"time_off_ms\":5,\"leap\":null,\"jam\":null,\"tpv_count\":0}");
     WT_HAS(b, "\"total\":1,\"sats\":[{\"gnss\":\"other\",\"gnssid\":8,\"svid\":null,\"prn\":9,"
               "\"sigid\":null,\"el\":null,\"az\":null,\"cn0\":null,\"used\":0,\"health\":null");
+    /* A negative elevation is a satellite under the horizon that gpsd
+     * still lists, kept as itself; -91 is out of range. Seen red with
+     * sat_apply()'s el floor back at 0 (the -3 read null). */
+    feed("{\"type\":\"gnss_sat\",\"ts\":1793059200,\"gnss\":\"GPS\",\"gnssid\":0,"
+         "\"svid\":9,\"prn\":9,\"el\":-3,\"az\":0,\"used\":0,\"sky_ts\":1793059200}");
+    feed("{\"type\":\"gnss_sat\",\"ts\":1793059200,\"gnss\":\"GPS\",\"gnssid\":0,"
+         "\"svid\":10,\"prn\":10,\"el\":-91,\"az\":-1,\"used\":0,\"sky_ts\":1793059200}");
+    WT_EQ(route(&H, "/api/gnss", ""), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"svid\":9,\"prn\":9,\"sigid\":null,\"el\":-3,\"az\":0,");
+    WT_HAS(b, "\"svid\":10,\"prn\":10,\"sigid\":null,\"el\":null,\"az\":null,");
     WT_EQ(route(&H, "/api/gnss", "limit=0"), 400);
     WT_HAS(body_of(g_out), "bad_limit");
     WT_EQ(route(&H, "/api/gnss", "limit=65"), 400);
@@ -381,6 +394,34 @@ static void test_gnss_names_are_sloths(void) {
     WT_ASSERT(!strcmp(web_gnss_name(-1), "?"));
 }
 
+/* The page's half (the pattern test_ble.c::test_page uses): the
+ * satellites table is app.js's one DataTable, not a hand-rolled
+ * <table>; the fix strip walks /api/gnss/fixes with since= from the
+ * last row's ts while a page comes back full, so it reaches the newest
+ * record once the 512-entry ring holds more than one 128-row page (a
+ * single request showed the oldest 128 for ever). The route's own
+ * paging is test_gnss_fix_ring's. */
+static void test_gnss_page(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "    T = window.SlothTables.make({ id: \"gnss\", label: \"satellites in view\", box: $(\"gnss-box\"),\n"
+              "      head: $(\"gnss-thead\"), reset: $(\"gnss-tools\"), redraw: drawRows, cols: COLS });");
+    WT_HAS(p, "<div class=\"hscroll\" id=\"gnss-box\"><div class=\"gnssrow dhead\" id=\"gnss-thead\"></div><div id=\"gnss-rows\"></div></div>");
+    WT_HAS(p, "<span class=\"dt-tools\" id=\"gnss-tools\"></span>");
+    WT_LACKS(p, "class=\"gnss-table\"");
+    WT_LACKS(p, ".gnss-table th");
+    /* The row: bright in the solution, dim unhealthy, the TUI's. */
+    WT_HAS(p, "    var cls = s.health === 2 ? \"d-dim\" : s.used ? \"d-bright\" : \"d-normal\";\n"
+              "    var r = el(\"div\", \"gnssrow dt-row \" + cls + (on ? \" on\" : \"\"));");
+    WT_HAS(p, "    var ordered = t ? t.sort(rows, true) : rows.slice();");
+    /* The walk. */
+    WT_HAS(p, "  var FIX_PAGE = 128, FIX_PAGES = 8;");
+    WT_HAS(p, "    return getJSON(\"/api/gnss/fixes?since=\" + since).then(function (f) {");
+    WT_HAS(p, "      if (got.length >= FIX_PAGE && pages + 1 < FIX_PAGES && num(lastTs) && lastTs > since)\n"
+              "        return fixes(lastTs, acc, pages + 1);");
+    WT_HAS(p, "      return fixes(0, [], 0).then(function (f) {");
+    WT_LACKS(p, "getJSON(\"/api/gnss/fixes\")");
+}
+
 void run_gnss_tests(void) {
     WT_RUN(test_gnss_ingest_and_route);
     WT_RUN(test_gnss_ranges_and_refusals);
@@ -389,5 +430,6 @@ void run_gnss_tests(void) {
     WT_RUN(test_gnss_every_scope);
     WT_RUN(test_gnss_metrics);
     WT_RUN(test_gnss_names_are_sloths);
+    WT_RUN(test_gnss_page);
     web_gnss_destroy(&G);
 }

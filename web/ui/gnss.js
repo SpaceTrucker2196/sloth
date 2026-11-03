@@ -6,11 +6,14 @@
 // no tiles and nothing fetched from anywhere else. The receiver is the
 // host's own, so the panel is every scope's and the page says so.
 // Colours are the palette's: the C/N0 heat ramp uses the TUI's
-// thresholds (app.js heatClass: 0.15 / 0.40 / 0.70 of 50 dB-Hz).
+// thresholds (app.js heatClass: 0.15 / 0.40 / 0.70 of 50 dB-Hz). The
+// satellites table is app.js's DataTable (window.SlothTables.make), as
+// every table on the page is; the fix strip walks /api/gnss/fixes
+// with since= so it reaches the newest record once the ring is full.
 (function () {
   "use strict";
   var POLL_MS = 5000, SPAN_DBHZ = 50;
-  var timer = 0, gen = 0, last = null, sortKey = "cn0", sortDir = -1, sel = null;
+  var timer = 0, gen = 0, last = null, sel = null;
 
   function $(id) { return document.getElementById(id); }
   function el(tag, cls, text) {
@@ -102,33 +105,35 @@
   }
 
   // ── the table ────────────────────────────────────────────────────
+  // One of app.js's DataTable (window.SlothTables.make, the owner's
+  // 2026-10-26 ruling: every table on the page is one implementation):
+  // kept column widths and sort, aria-sort on the header buttons,
+  // drag / keyboard / double-click sizing, "reset columns". Made on
+  // first show: app.js's main() has run by then. With no sort set the
+  // rows stay in the server's order, which is the TUI's (C/N0,
+  // strongest first, untracked last).
+  var T = null, rows = [];
+  function val(k) { return function (s) { return num(s[k]) ? s[k] : null; }; }
   var COLS = [
-    ["gnss", "GNSS"], ["svid", "SV"], ["prn", "PRN"], ["el", "EL"], ["az", "AZ"],
-    ["cn0", "C/N0"], ["used", "USED"], ["health", "HLTH"], ["signal", "SIGNAL"],
-    ["trail", "TRAIL"], ["ts", "AGE"]
+    { k: "gn", label: "GNSS", w: 9, min: 4, type: "text", val: function (s) { return s.gnss || ""; } },
+    { k: "sv", label: "SV", w: 4, min: 2, num: true, type: "num", val: val("svid") },
+    { k: "pr", label: "PRN", w: 5, min: 3, num: true, type: "num", val: val("prn") },
+    { k: "el", label: "EL", w: 4, min: 2, num: true, type: "num", val: val("el") },
+    { k: "az", label: "AZ", w: 4, min: 2, num: true, type: "num", val: val("az") },
+    { k: "cn", label: "C/N0", w: 6, min: 4, num: true, type: "num", val: val("cn0") },
+    { k: "us", label: "USED", w: 5, min: 3, type: "text", val: function (s) { return s.used ? "yes" : "-"; } },
+    { k: "hl", label: "HLTH", w: 5, min: 3, type: "text", val: function (s) { return num(s.health) ? HEALTH[s.health] || "?" : "?"; } },
+    { k: "sg", label: "SIGNAL", w: 12, min: 6, type: "num", val: val("cn0") },
+    { k: "tr", label: "TRAIL", w: 13, min: 6, type: "none" },
+    { k: "ag", label: "AGE", w: 5, min: 3, type: "time", val: val("ts") }
   ];
-  function cmp(a, b) {
-    var x = a[sortKey], y = b[sortKey];
-    if (sortKey === "signal" || sortKey === "trail") { x = a.cn0; y = b.cn0; }
-    if (sortKey === "gnss") { x = a.gnssid; y = b.gnssid; }
-    var nx = num(x), ny = num(y);
-    if (nx !== ny) return nx ? -1 : 1;          // unknown last either way
-    if (nx && x !== y) return (x - y) * sortDir;
-    if (a.gnssid !== b.gnssid) return a.gnssid - b.gnssid;
-    return a.prn - b.prn;
+  function table() {
+    if (T || !window.SlothTables || !$("gnss-box")) return T;
+    T = window.SlothTables.make({ id: "gnss", label: "satellites in view", box: $("gnss-box"),
+      head: $("gnss-thead"), reset: $("gnss-tools"), redraw: drawRows, cols: COLS });
+    return T;
   }
-  function thead() {
-    var tr = el("tr");
-    COLS.forEach(function (c) {
-      var th = el("th", c[0] === sortKey ? "on" : "", c[1] + (c[0] === sortKey ? (sortDir < 0 ? " ▾" : " ▴") : ""));
-      th.addEventListener("click", function () {
-        if (sortKey === c[0]) sortDir = -sortDir; else { sortKey = c[0]; sortDir = c[0] === "gnss" || c[0] === "svid" || c[0] === "prn" ? 1 : -1; }
-        if (last) table(last);
-      });
-      tr.appendChild(th);
-    });
-    clear($("gnss-thead")).appendChild(tr);
-  }
+  function cell(cls, text) { var c = el("span", cls); if (text !== undefined) c.textContent = String(text); return c; }
   function trail(c, pts) {
     var dpr = window.devicePixelRatio || 1, W = 96, H = 14;
     c.width = W * dpr; c.height = H * dpr;
@@ -139,6 +144,7 @@
     if (!pts || pts.length < 1) return;
     var t0 = pts[0][0], t1 = pts[pts.length - 1][0], span = Math.max(1, t1 - t0);
     g.lineWidth = 1.5;
+    var px = 0, py = 0;
     for (var i = 0; i < pts.length; i++) {
       var x = pts.length === 1 ? W - 2 : 1 + (pts[i][0] - t0) / span * (W - 3);
       var y = H - 1 - Math.min(1, pts[i][1] / SPAN_DBHZ) * (H - 2);
@@ -146,41 +152,56 @@
       if (i) { g.beginPath(); g.moveTo(px, py); g.lineTo(x, y); g.stroke(); }
       g.fillStyle = g.strokeStyle;
       g.fillRect(x - 1, y - 1, 2, 2);
-      var px = x, py = y;
+      px = x; py = y;
     }
   }
-  function table(j) {
-    var now = num(j.now) ? j.now : Math.floor(Date.now() / 1000);
-    thead();
-    var rows = (j.sats || []).slice().sort(cmp);
+  // A row under the columns: bright when in the solution, dim when
+  // unhealthy, the TUI's; the signal cell heat-graded over 50 dB-Hz.
+  function row(s, now, j) {
+    var on = sel && sel.gnssid === s.gnssid && sel.prn === s.prn;
+    var cls = s.health === 2 ? "d-dim" : s.used ? "d-bright" : "d-normal";
+    var r = el("div", "gnssrow dt-row " + cls + (on ? " on" : ""));
+    r.appendChild(cell("c-gn", s.gnss));
+    r.appendChild(cell("c-sv n", num(s.svid) ? s.svid : "-"));
+    r.appendChild(cell("c-pr n", s.prn));
+    r.appendChild(cell("c-el n", num(s.el) ? s.el : "-"));
+    r.appendChild(cell("c-az n", num(s.az) ? s.az : "-"));
+    r.appendChild(cell("c-cn n " + (num(s.cn0) ? heatClass(s.cn0 / SPAN_DBHZ) : "d-dim"), fx(s.cn0, 1)));
+    r.appendChild(cell("c-us", s.used ? "yes" : "-"));
+    r.appendChild(cell("c-hl", num(s.health) ? HEALTH[s.health] || "?" : "?"));
+    var sig = cell("c-sg " + (num(s.cn0) ? heatClass(s.cn0 / SPAN_DBHZ) : ""));
+    var bar = el("span", "gnss-bar");
+    bar.style.width = (num(s.cn0) ? Math.round(Math.min(1, s.cn0 / SPAN_DBHZ) * 100) : 0) + "%";
+    sig.appendChild(bar);
+    r.appendChild(sig);
+    var tc = cell("c-tr");
+    var c = el("canvas", "trail");
+    c.title = "C/N0 over the row's last records";
+    tc.appendChild(c);
+    r.appendChild(tc);
+    r.appendChild(cell("c-ag d-dim", age(s.ts, now)));
+    r.tabIndex = 0;
+    function pick() { sel = { gnssid: s.gnssid, prn: s.prn }; detail(s, now); drawRows(); }
+    r.addEventListener("click", pick);
+    r.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+    r._trail = [c, s.points];
+    void j;
+    return r;
+  }
+  function drawRows() {
+    if (!last) return;
+    var j = last, now = num(j.now) ? j.now : Math.floor(Date.now() / 1000);
+    var t = table();
+    var ordered = t ? t.sort(rows, true) : rows.slice();
     var body = clear($("gnss-rows"));
     set("gnss-count", rows.length + (j.sky && j.sky.overflow ? " (+" + j.sky.overflow + " more than sloth's table holds)" : ""));
-    rows.forEach(function (s) {
-      var tr = el("tr", (s.used ? "used " : "") + (s.health === 2 ? "bad " : "") +
-                        (sel && sel.gnssid === s.gnssid && sel.prn === s.prn ? "sel" : ""));
-      tr.appendChild(el("td", "", s.gnss));
-      tr.appendChild(el("td", "", num(s.svid) ? s.svid : "-"));
-      tr.appendChild(el("td", "", s.prn));
-      tr.appendChild(el("td", "", num(s.el) ? s.el : "-"));
-      tr.appendChild(el("td", "", num(s.az) ? s.az : "-"));
-      tr.appendChild(el("td", num(s.cn0) ? heatClass(s.cn0 / SPAN_DBHZ) : "d-dim", fx(s.cn0, 1)));
-      tr.appendChild(el("td", "", s.used ? "yes" : "-"));
-      tr.appendChild(el("td", "", num(s.health) ? HEALTH[s.health] || "?" : "?"));
-      var sig = el("td", num(s.cn0) ? heatClass(s.cn0 / SPAN_DBHZ) : "");
-      var bar = el("span", "gnss-bar");
-      bar.style.width = (num(s.cn0) ? Math.round(Math.min(1, s.cn0 / SPAN_DBHZ) * 80) : 0) + "px";
-      sig.appendChild(bar);
-      tr.appendChild(sig);
-      var tc = el("td");
-      var c = el("canvas", "trail");
-      c.title = "C/N0 over the row's last records";
-      tc.appendChild(c);
-      tr.appendChild(tc);
-      tr.appendChild(el("td", "d-dim", age(s.ts, now)));
-      tr.addEventListener("click", function () { sel = { gnssid: s.gnssid, prn: s.prn }; detail(s, now); table(j); });
-      body.appendChild(tr);
-      trail(c, s.points);
-    });
+    var drawn = [];
+    ordered.forEach(function (s) { var r = row(s, now, j); body.appendChild(r); drawn.push(r); });
+    drawn.forEach(function (r) { trail(r._trail[0], r._trail[1]); });
+  }
+  function tableLoad(j) {
+    rows = (j.sats || []).slice();
+    drawRows();
   }
 
   // ── the detail: the TUI's kv rows ────────────────────────────────
@@ -207,7 +228,7 @@
       kv.appendChild(el("dd", "", p[1]));
     });
   }
-  function closeDetail() { $("gnss-detail").hidden = true; sel = null; if (last) table(last); }
+  function closeDetail() { $("gnss-detail").hidden = true; sel = null; drawRows(); }
 
   // ── the sky: a polar plot, north up, elevation inward ────────────
   function sky(j) {
@@ -286,19 +307,37 @@
     });
   }
 
+  // The fix ring, walked: /api/gnss/fixes answers oldest first, at most
+  // FIX_PAGE rows after since=, so one request would show the oldest
+  // 128 of 512 for ever once the ring had filled. From since=0, then
+  // from the last row's ts while a page comes back full, at most
+  // FIX_PAGES pages (the ring is 512 = 4 pages; the margin is for rows
+  // arriving under the walk). Two fixes in one second share a ts and
+  // the second is skipped by the next page: accepted, it is a strip.
+  var FIX_PAGE = 128, FIX_PAGES = 8;
+  function fixes(since, acc, pages) {
+    return getJSON("/api/gnss/fixes?since=" + since).then(function (f) {
+      var got = f.rows || [];
+      acc = acc.concat(got);
+      var lastTs = got.length ? got[got.length - 1].ts : since;
+      if (got.length >= FIX_PAGE && pages + 1 < FIX_PAGES && num(lastTs) && lastTs > since)
+        return fixes(lastTs, acc, pages + 1);
+      return { rows: acc, now: f.now };
+    });
+  }
   function load() {
     var my = ++gen;
     getJSON("/api/gnss").then(function (j) {
       if (my !== gen || !visible()) return;
       last = j;
       header(j);
-      table(j);
+      tableLoad(j);
       sky(j);
       if (sel) {
         var cur = (j.sats || []).filter(function (s) { return s.gnssid === sel.gnssid && s.prn === sel.prn; })[0];
         if (cur) detail(cur, num(j.now) ? j.now : Math.floor(Date.now() / 1000));
       }
-      return getJSON("/api/gnss/fixes").then(function (f) {
+      return fixes(0, [], 0).then(function (f) {
         if (my !== gen || !visible()) return;
         fixstrip(f.rows || [], num(f.now) ? f.now : Math.floor(Date.now() / 1000));
       });
