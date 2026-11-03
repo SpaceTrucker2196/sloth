@@ -53,7 +53,8 @@ tag is decided by what the record is:
   plus `twin_episode` and `wifi_merged`) and `ble_device`/`ble_alert`
   are Monitor's; the IP capture's and the host's are Local's. The
   host's own tables are told apart from the IP capture's: `arp` is
-  `/proc/net/arp` (`src/platform/linux.c`), `dhcp_lease` the host's
+  `/proc/net/arp` and the kernel's IPv6 neighbour cache
+  (`src/platform/linux.c`, `linux_neigh.c`; #176), `dhcp_lease` the host's
   dhclient and systemd-networkd lease files (`linux_dhcp.c`),
   `scan_entry` the inbound peers of the `/proc` sockets
   (`src/scan.c`), `top_host` the `/proc` sockets with their bandwidth
@@ -69,7 +70,7 @@ tag is decided by what the record is:
   but reads beacon BSSIDs (Monitor); `BEACONING` is C2 beaconing over IP
   (Local); `PORT_SCAN` reads the `/proc` sockets' scan entries,
   `THREAT_IP` and `BEACONING` walk the `/proc` socket table
-  (`s->conns`) and `ARP_SPOOF` reads `/proc/net/arp`, so all four are
+  (`s->conns`) and `ARP_SPOOF` reads the neighbour table, so all four are
   the host's own (Local on a radio too), as are the `host.*` metrics, while `ROGUE_DHCP` reads DHCP snooped off the IP capture.
 - **Interface.** Monitor when its name has been named as a monitor
   radio: `sensor_health.monitor_iface`, or a `sensor` record of kind

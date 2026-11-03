@@ -903,6 +903,28 @@ static void test_hijack_on_own_network_is_crit(void) {
  * it: a wired client answered by a wired portal, while the sensor's
  * Wi-Fi happens to be on the operator's AP. Seen red with the
  * cp_on_wifi_link() gate in cp_context() removed. */
+/* An IPv6-only client (#176): its probe comes from an IPv6 address,
+ * which the neighbour table now binds to a MAC the monitor table heard
+ * associating, so it is graded like an IPv4 one. Seen red with the
+ * neighbour row withheld: LOW, "legitimate captive portals do this". */
+static void test_ipv6_client_is_joined_to_its_bss(void) {
+    cps_reset();
+    ASSERT_EQ(ownership_add_ssid("HomeNet"), 1);
+    cps_assoc("HomeNet");
+    cps_neigh("2001:db8::2", STA_A, "wlan1");
+    cps_event(CP_KIND_HIJACK, 0, "ipv6.msftconnecttest.com", "2001:db8::2",
+              "2001:db8::1", "HTTP 302, 0 body bytes");
+    alerts_update(&g_cps);
+    int i = cps_find_key("portal:");
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ(g_cps.alerts[i].sev, ALERT_SEV_CRIT);
+        ASSERT(strstr(g_cps.alerts[i].detail, "own network") != NULL);
+        ASSERT_STR(g_cps.alerts[i].match_ip, "2001:db8::1");
+    }
+    cps_reset();
+}
+
 static void test_station_link_needs_the_event_on_that_link(void) {
     cps_reset();
     ASSERT_EQ(ownership_add_bssid("02:11:22:33:44:55"), 1);
@@ -1257,6 +1279,7 @@ void run_captive_portal_tests(void) {
     TEST_SUITE("captive-portal graded severity (#169)");
     RUN_TEST(test_hotel_redirect_is_graded_low);
     RUN_TEST(test_hijack_on_own_network_is_crit);
+    RUN_TEST(test_ipv6_client_is_joined_to_its_bss);
     RUN_TEST(test_link_not_associated_is_not_own_network);
     RUN_TEST(test_hijack_from_evil_twin_is_crit);
     RUN_TEST(test_station_link_needs_the_event_on_that_link);

@@ -9,7 +9,9 @@ probes, and WiFi-station state into a single record.
 in-memory device table by upserting one row per MAC across five
 sources:
 
-1. **ARP** — kernel ARP table → IP + MAC + interface.
+1. **ARP** — kernel neighbour table → IP + MAC + interface. IPv4 from
+   `/proc/net/arp`, IPv6 from the NDP cache (#176); a device keeps one
+   address, the IPv4 over any IPv6 and a global IPv6 over a link-local.
 2. **DHCP** — assigned IP and hostname (bridged to MAC via the
    matching ARP entry).
 3. **Beacons** — 802.11 beacons identify access points by BSSID

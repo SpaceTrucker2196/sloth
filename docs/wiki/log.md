@@ -6176,3 +6176,38 @@ after the evidence-side bookkeeping, before the type dispatch, once
 parse-fault lists, a `fcs_failed` bullet, the row table, the literal
 example line) and `docs/views/beacons.md` (an "FCS-clean since #178"
 note; old rows from before this version are not deleted retroactively).
+
+## 2026-11-03 — IPv6 neighbours in the sensor's table (#176)
+
+**Source**: `src/platform/linux_neigh.c` (new), `src/platform/linux.c`,
+`src/devices.c`, `src/views/arp.c`, `src/alerts/rules_twin.c` (unchanged,
+now reached by IPv6 rows); `tests/test_parse.c`, `test_devices.c`,
+`test_arp.c`, `test_captive_portal.c`.
+
+**Changed pages**: [[captive-portal]] (the first grading route joins an
+IPv6-only client too), [[jsonl-schema]] (`arp` rows carry IPv6
+addresses), [[capture-scope]], [[views-catalog]],
+[[alert-assessments/ARP_SPOOF]] (anchors; the rule now sees IPv6
+bindings), `docs/views/arp.md` and `docs/views/devices.md`.
+
+An IPv6-only client had no row to join on: `s->arp_entries` was
+`/proc/net/arp`, which the kernel keeps for IPv4 only, so the
+CAPTIVE_PORTAL grade could not tie the client's address to a MAC the
+monitor table had heard associating, and the Devices view showed it
+with no address. The kernel's IPv6 neighbour cache is now dumped over
+rtnetlink (`RTM_GETNEIGH`, AF_INET6; what `ip -6 neigh` prints) into
+the same table after the IPv4 rows, resolved states only (REACHABLE,
+STALE, DELAY, PROBE, PERMANENT; never INCOMPLETE, FAILED, NOARP or a
+proxy entry). The parser is pure and tested on hand-built netlink
+messages (states, families, a delete, NLMSG_DONE, missing and odd-sized
+attributes, a truncated header, the cap). A device keeps one address:
+IPv4 over IPv6, a global IPv6 over a link-local, else the first seen.
+The ARP view's address column widens to the longest address. Each new
+absence assertion was seen red under a named mutation (rank flattened,
+every state resolved, the column fixed at 15, the join refusing ':').
+
+Not in this slice: passive learning of NS/NA bindings off the capture.
+The table stays what the host itself resolves, as the IPv4 half always
+was; on the reference host that is 27 rows against 55,578 devices, so
+an over-the-air IPv6 client the sensor never exchanged packets with is
+still unjoined. Filed on #176 as the follow-up.

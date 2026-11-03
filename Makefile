@@ -251,7 +251,8 @@ CORE_COMMON_SRCS += src/gps.c src/capture/gps_reader.c src/position_track.c
 LINUX_PLATFORM_SRCS = src/platform/linux_parse.c   \
                       src/platform/linux_pid.c     \
                       src/platform/linux_dhcp.c    \
-                      src/platform/linux_tcpdiag.c
+                      src/platform/linux_tcpdiag.c \
+                      src/platform/linux_neigh.c
 LINUX_WIFI_SRCS     = src/platform/linux_wifi.c
 
 # probe.c exists only with WITH_PCAP: without it probe.h's inline stubs

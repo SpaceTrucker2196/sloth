@@ -30,7 +30,7 @@ generated from — #117), `docs/views/README.md` and all `docs/views/*.md`.
 | `5` | Processes   | [processes.md](../views/processes.md) | per-process socket inventory |
 | `6` | Stats       | [stats.md](../views/stats.md) | counters from `/proc/net/snmp` |
 | `7` | Probe       | [probe.md](../views/probe.md) | 802.11 probe-request sniffer |
-| `8` | ARP         | [arp.md](../views/arp.md) | kernel ARP table |
+| `8` | ARP         | [arp.md](../views/arp.md) | kernel neighbour table: ARP, and the IPv6 NDP cache since #176 |
 | `9` | mDNS        | [mdns.md](../views/mdns.md) | multicast DNS service announcements |
 | `0` | NBNS        | [nbns.md](../views/nbns.md) | NetBIOS name service / LLMNR |
 | `d` | DHCP        | [dhcp.md](../views/dhcp.md) | DHCP DISCOVER/OFFER/REQUEST/ACK |

@@ -66,9 +66,10 @@ read as the worst finding sloth has. Since #169:
 
 "The network" is resolved per event, two ways, both stated rather than
 guessed. The event is keyed by the client's IP and the monitor table by
-MAC, so the first route joins them through the sensor's neighbour (ARP)
-table: the client's MAC, then the BSS that MAC was last heard associated
-with. A station heard on a twin that is *not* the event's client proves
+MAC, so the first route joins them through the sensor's neighbour
+table (`/proc/net/arp`, and since #176 the kernel's IPv6 neighbour
+cache, so an IPv6-only client is joined the same way): the client's
+MAC, then the BSS that MAC was last heard associated with. A station heard on a twin that is *not* the event's client proves
 nothing about it, and nothing escalates. The second route is the
 sensor's own station link, used only when the client or the responder is
 a neighbour on a Wi-Fi station interface, so a wired client is never

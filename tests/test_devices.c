@@ -178,10 +178,53 @@ static void test_view_nav(void) {
     ASSERT_EQ(s.device_sel, 0);
 }
 
+/* The neighbour table holds IPv6 rows beside IPv4 since #176, and a
+ * device keeps one address: the IPv4, whichever came first; among IPv6
+ * a global over a link-local. Seen red with ip_rank() returning 0 for
+ * every address (then the first row wins outright). */
+static void test_arp_ipv4_preferred_over_ipv6(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    uint8_t mac[6] = { 0x02, 0x00, 0x5e, 0x00, 0x53, 0x01 };
+    add_arp(&s, "fe80::5eff:fe00:5301", mac);
+    add_arp(&s, "2001:db8::1", mac);
+    add_arp(&s, "192.168.1.100", mac);
+    devices_update(&s);
+    ASSERT_EQ(s.device_count, 1);
+    ASSERT_STR(s.devices[0].ip, "192.168.1.100");
+
+    memset(&s, 0, sizeof(s));
+    add_arp(&s, "192.168.1.100", mac);
+    add_arp(&s, "2001:db8::1", mac);
+    devices_update(&s);
+    ASSERT_STR(s.devices[0].ip, "192.168.1.100");
+}
+
+static void test_arp_ipv6_only_device_keeps_its_global_address(void) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    uint8_t mac[6] = { 0x02, 0x00, 0x5e, 0x00, 0x53, 0x02 };
+    add_arp(&s, "fe80::5eff:fe00:5302", mac);
+    add_arp(&s, "2001:db8::2", mac);
+    devices_update(&s);
+    ASSERT_EQ(s.device_count, 1);
+    ASSERT_STR(s.devices[0].ip, "2001:db8::2");
+    ASSERT((s.devices[0].sources & DEV_SRC_ARP) != 0);
+
+    /* Link-local alone is still an address, and the lease bridge keys
+     * on whatever the device holds. */
+    memset(&s, 0, sizeof(s));
+    add_arp(&s, "fe80::5eff:fe00:5302", mac);
+    add_dhcp(&s, "fe80::5eff:fe00:5302", "sensor6");
+    devices_update(&s);
+    ASSERT_STR(s.devices[0].ip, "fe80::5eff:fe00:5302");
+    ASSERT_STR(s.devices[0].hostname, "sensor6");
+}
+
 void run_devices_tests(void) {
     TEST_SUITE("devices upsert");
     RUN_TEST(test_empty_state_yields_zero_devices);
     RUN_TEST(test_arp_creates_device);
+    RUN_TEST(test_arp_ipv4_preferred_over_ipv6);
+    RUN_TEST(test_arp_ipv6_only_device_keeps_its_global_address);
     RUN_TEST(test_dhcp_attaches_hostname_via_arp_bridge);
     RUN_TEST(test_dhcp_without_arp_does_not_create_device);
     RUN_TEST(test_beacon_marks_as_ap);

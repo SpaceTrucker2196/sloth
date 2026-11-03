@@ -59,12 +59,28 @@ static const char *short_vendor(const char *v) {
 
 /* ── Sources ─────────────────────────────────────────────── */
 
+/* A device record keeps one address. The neighbour table can hold
+ * several for one MAC since #176 (IPv4 from ARP, IPv6 from the NDP
+ * cache): the IPv4 one is kept over any IPv6, and a global IPv6 over a
+ * link-local, because that is the order a reader can act on them -
+ * leases, names and flows are keyed by the IPv4, and fe80:: says only
+ * which link. Equal rank keeps the first seen. */
+static int ip_rank(const char *ip) {
+    if (!ip[0]) return 0;
+    if (!strchr(ip, ':')) return 3;
+    if (ip[0] == 'f' && ip[1] == 'e' &&
+        (ip[2] == '8' || ip[2] == '9' || ip[2] == 'a' || ip[2] == 'b'))
+        return 1;
+    return 2;
+}
+
 static void merge_arp(const sloth_state_t *s, device_t *dev, int *n, time_t now) {
     for (int i = 0; i < s->arp_count; i++) {
         const arp_entry_t *a = &s->arp_entries[i];
         device_t *d = upsert(dev, n, a->mac);
         if (!d) continue;
-        set_str(d->ip,     sizeof(d->ip),     a->ip);
+        if (ip_rank(a->ip) > ip_rank(d->ip))
+            snprintf(d->ip, sizeof(d->ip), "%s", a->ip);
         set_str(d->vendor, sizeof(d->vendor), short_vendor(oui_lookup(a->mac)));
         d->sources  |= DEV_SRC_ARP;
         d->last_seen = now;
