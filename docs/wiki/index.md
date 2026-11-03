@@ -58,6 +58,7 @@ the Wi-Fi it watches:
 - [[non-ip-sensors]] — passive RF / non-IP sensor-family roadmap (#26).
 - [[ble]] — the Bluetooth host source: `--bt-monitor` over the HCI monitor channel, the passive-scan procedure, what is refused and never written (#144).
 - [[rf-distance]] — the RSSI distance data point: an estimate from signal strength (ITU-R P.1238 log-distance), bands and trend, announced vs assumed transmit power, calibration, and why it is not a location.
+- [[antenna-fixture-rev-n]] — the three-sector passive antenna fixture (Rev N): print, assemble, mount on a 1-1/2 NPT PVC mast, foil the reflectors, validate passively with sloth, maintain; how how three sectors reach a sloth that drives one monitor radio (2026-11-02).
 - [[location]] — where the sensor is: `--location` for a fixed sensor, `--gps` for an NMEA serial receiver or loopback gpsd; the stamp on alerts and on captures' manifests, device position samples, GeoJSON / GPX export (2026-10-27).
 - [[ubertooth]] — the over-the-air Bluetooth source: `--bt-capture` reading an Ubertooth's pcap file or FIFO, the allowed and forbidden tools and flags, jam mode and DISABLE_TX firmware (#144 slice 3).
 - [[mac-randomisation]] — the 802.11 seqnum deanonymisation primitive.

@@ -6018,3 +6018,23 @@ report events.
   ntpsec's `shm` refclock, `time1` from the measured offset, no PPS on
   a USB u-blox 7. The reference host runs `--gps gpsd://127.0.0.1:2947`
   with a 3D fix on 13 satellites.
+
+## 2026-11-02 — Antenna fixture Rev N build guide
+
+**Source**: the owner's ten-page Rev N build-guide PDF ("improve this
+with better documentation").
+
+**Created pages**:
+
+- [antenna-fixture-rev-n.md](antenna-fixture-rev-n.md) — every
+  dimension and standard from the PDF, plus what it left to the
+  builder: a BOM with the SMA/RP-SMA gender trap and coax losses, a
+  thread-coupon procedure with ASME L1 engagement targets, ABS torque
+  guidance for the bulkhead nuts and the six M6 base bolts, a sector
+  A/B/C labelling and bearing convention, a passive validation method
+  (own AP, twelve 30° positions, RSSI per sector), an honest
+  account of sloth's single monitor radio and the two ways three
+  sectors reach it, a build record and
+  re-inspection schedule. Render in `docs/assets/antenna-fixture-rev-n.png`.
+  The OpenSCAD source the PDF cites is not in the repo; its home is an
+  owner call.
