@@ -542,7 +542,7 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
             web_rollup_add(m->ru, WM_GNSS_SATS_USED, "", v, now);
         if (web_jl_num(r, "hdop", &v) && v > 0 && v <= 100)
             web_rollup_add(m->ru, WM_GNSS_HDOP, "", v, now);
-        if (web_jl_num(r, "time_off_ms", &v) && v > -1e12 && v < 1e12)
+        if (web_jl_num(r, "time_off_ms", &v) && v > -1e14 && v < 1e14)
             web_rollup_add(m->ru, WM_GNSS_TIME_OFF_MS, "", v, now);
     } else if (!strcmp(t, "gnss_sky")) {
         double v;

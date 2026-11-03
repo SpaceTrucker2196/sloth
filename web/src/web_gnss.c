@@ -126,7 +126,7 @@ static void sat_apply(web_gnss_t *g, const web_jrec_t *r, long long ts) {
      * elevation is a real one (a bird under the horizon, still listed). */
     s->el = (int)jint(r, "el", -90, 90, WEB_GNSS_NO_ANGLE);
     s->az = (int)jint(r, "az", 0, 360, WEB_GNSS_NO_ANGLE);
-    double cn0;
+    double cn0 = 0.0;
     s->has_cn0 = jnum(r, "cn0", 0.0, 99.0, &cn0);
     s->cn0 = s->has_cn0 ? cn0 : 0.0;
     s->in_fix = jint(r, "used", 0, 1, 0) == 1;
@@ -189,8 +189,11 @@ static void fix_apply(web_gnss_t *g, const web_jrec_t *r, long long ts) {
     f.has_epv = jnum(r, "epv", 0, 1e5, &f.epv);
     f.has_speed = jnum(r, "speed_mps", 0, 1e4, &f.speed);
     f.has_track = jnum(r, "track_deg", 0, 360, &f.track);
-    long long off = jint(r, "time_off_ms", -(1LL << 40), (1LL << 40), (1LL << 41));
-    if (off != (1LL << 41)) { f.has_time_off = 1; f.time_off_ms = off; }
+    /* sloth accepts receiver years 1970..2999, so an offset reaches
+     * about +-3.2e13 ms; the bound covers that, so a wildly wrong clock
+     * is shown rather than blanked (docs/wiki/gnss.md). */
+    long long off = jint(r, "time_off_ms", -(1LL << 46), (1LL << 46), (1LL << 47));
+    if (off != (1LL << 47)) { f.has_time_off = 1; f.time_off_ms = off; }
     f.leap = (int)jint(r, "leap", -1, 127, -1);
     f.jam = (int)jint(r, "jam", -1, 255, -1);
     f.tpv_count = jint(r, "tpv_count", 0, (1LL << 60), 0);
@@ -216,8 +219,8 @@ static void sh_apply(web_gnss_t *g, const web_jrec_t *r, long long ts) {
     h.sats_in_view = (int)jint(r, "gnss_sats_in_view", 0, 999, 0);
     h.sats_used = (int)jint(r, "gnss_sats_used", 0, 999, 0);
     if (!jnum(r, "gnss_cn0_mean", 0, 99, &h.cn0_mean)) h.cn0_mean = 0;
-    long long off = jint(r, "gnss_time_offset_ms", -(1LL << 40), (1LL << 40), (1LL << 41));
-    if (off != (1LL << 41)) { h.has_time_off = 1; h.time_off_ms = off; }
+    long long off = jint(r, "gnss_time_offset_ms", -(1LL << 46), (1LL << 46), (1LL << 47));
+    if (off != (1LL << 47)) { h.has_time_off = 1; h.time_off_ms = off; }
     h.jam = (int)jint(r, "gnss_jam", -1, 255, -1);
     g->sh = h;
     const char *src = web_jl_str(r, "gps_src");

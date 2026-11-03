@@ -1551,6 +1551,42 @@ static void test_gpsd_sky_overflow_counted(void) {
     ASSERT_EQ(k.nsat, 50);
 }
 
+/* A SKY as gpsd writes it for a multi-constellation receiver: every
+ * per-satellite field, 50 entries. At the old 4096-byte limit this line
+ * (about 5.5 kB) was refused whole as overlong and the sky froze; seen
+ * red with GPSD_MAX_LINE back at 4096. */
+static void test_gpsd_full_sky_fits_the_line(void) {
+    static char line[GPSD_MAX_LINE + 1];
+    int off = snprintf(line, sizeof(line),
+        "{\"class\":\"SKY\",\"device\":\"/dev/ttyACM0\","
+        "\"time\":\"2026-11-02T12:00:00.000Z\",\"xdop\":0.61,\"ydop\":0.72,"
+        "\"vdop\":1.10,\"tdop\":0.80,\"hdop\":0.94,\"gdop\":1.75,\"pdop\":1.45,"
+        "\"nSat\":50,\"uSat\":20,\"satellites\":[");
+    for (int i = 0; i < 50; i++)
+        off += snprintf(line + off, sizeof(line) - (size_t)off,
+            "%s{\"PRN\":%d,\"gnssid\":%d,\"svid\":%d,\"sigid\":0,"
+            "\"freqid\":0,\"el\":%d.0,\"az\":%d.0,\"ss\":%d.0,"
+            "\"used\":%s,\"health\":1}",
+            i ? "," : "", i + 1, i % 7, i + 1, 5 + i % 80, (i * 37) % 360,
+            20 + i % 30, i % 2 ? "true" : "false");
+    off += snprintf(line + off, sizeof(line) - (size_t)off, "]}");
+    ASSERT(off > 4096);
+    ASSERT(off <= GPSD_MAX_LINE);
+    static gpsd_msg_t m;
+    ASSERT_EQ(gpsd_json_parse(line, (size_t)off, &m), 1);
+    ASSERT_EQ(m.nsats, GPSD_MAX_SATS);
+    ASSERT_EQ(m.sats_overflow, 2);
+}
+
+/* "mode":2.5 is not a mode; it must not become a 2D fix with a position.
+ * Seen red with the old (int)d truncation. */
+static void test_gpsd_fractional_mode_is_no_fix(void) {
+    static gpsd_msg_t m;
+    const char *l = "{\"class\":\"TPV\",\"mode\":2.5,\"lat\":44.9,\"lon\":-93.2}";
+    ASSERT_EQ(gpsd_json_parse(l, strlen(l), &m), 1);
+    ASSERT_EQ(m.mode, 0);
+}
+
 static void test_gpsd_tpv_extras(void) {
     static gpsd_msg_t m;
     ASSERT_EQ(gpsd_json_parse(S(TPV_FULL), &m), 1);
@@ -2427,6 +2463,8 @@ void run_gps_tests(void) {
     TEST_SUITE("gps: GNSS observation (2026-11-02)");
     RUN_TEST(test_gpsd_sky_satellites);
     RUN_TEST(test_gpsd_sky_overflow_counted);
+    RUN_TEST(test_gpsd_full_sky_fits_the_line);
+    RUN_TEST(test_gpsd_fractional_mode_is_no_fix);
     RUN_TEST(test_gpsd_tpv_extras);
     RUN_TEST(test_gpsd_gst);
     RUN_TEST(test_gpsd_time_parse);

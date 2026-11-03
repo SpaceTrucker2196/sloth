@@ -482,7 +482,7 @@ int gpsd_json_parse(const char *line, size_t n, gpsd_msg_t *out) {
         } else if (*c.p == '-' || (*c.p >= '0' && *c.p <= '9')) {
             double d;
             if (jnum(&c, &d) != 0) return -1;
-            if      (strcmp(key, "mode") == 0)   out->mode = (d >= 0 && d <= 3) ? (int)d : 0;
+            if      (strcmp(key, "mode") == 0)   out->mode = jsmall(d, 3) < 0 ? 0 : jsmall(d, 3);
             else if (strcmp(key, "lat") == 0)    { out->lat = d; out->has_lat = 1; }
             else if (strcmp(key, "lon") == 0)    { out->lon = d; out->has_lon = 1; }
             else if (strcmp(key, "altMSL") == 0) { msl = d; have_msl = 1; }

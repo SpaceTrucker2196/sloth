@@ -32,7 +32,7 @@ GST, `gpsd_time_parse()`, the sky / fix state, `gps_gnss_*_sig()`),
 `tests/test_gnss_view.c`, `tests/test_db.c` (v9 → v10),
 `web/tests/test_gnss.c`.
 
-**Last updated**: 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
+**Last updated**: 2026-11-02 (verify: `GPSD_MAX_LINE` 10240 so a full multi-GNSS SKY fits; a fractional `mode` is no fix; slothweb shows any offset sloth records). 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
 
 ## What is read
 
@@ -43,8 +43,11 @@ top of the position fields [[location]] needed:
   and the `satellites[]` array — per entry `PRN` (always present),
   `gnssid`, `svid`, `sigid`, `el`, `az`, `ss` (C/N0 in dB-Hz), `used`,
   `health`. Up to `GNSS_MAX_SATS` (48) entries are kept; the rest are
-  parsed, counted (`overflow`) and dropped, so a 50-object multi-GNSS
-  SKY is still one well-formed line. gpsd's `gnssid` is 0 GPS, 1 SBAS,
+  parsed, counted (`overflow`) and dropped. A line may be up to
+  `GPSD_MAX_LINE` (10240 bytes, gpsd's own response ceiling); a
+  50-satellite SKY with every per-satellite field is about 5.5 kB, so it
+  fits, and a longer line is refused whole and counted in
+  `gps_parse_errors`. gpsd's `gnssid` is 0 GPS, 1 SBAS,
   2 Galileo, 3 BeiDou, 4 IMES, 5 QZSS, 6 GLONASS, 7 NavIC (`gnss_name()`);
   an NMEA-only gpsd sends PRN alone, and the row then reads gnssid -1.
 - **TPV**: `status`, `speed`, `track`, `climb`, `epv`, `leapseconds`,
@@ -69,7 +72,10 @@ the serial / USB transfer and gpsd's own latency, and there is no PPS
 on a USB u-blox 7, so it is biased by tens to hundreds of
 milliseconds and jitters. It is enough to see a multi-second step —
 the host clock being wrong, or the receiver's time being moved — and
-it is **not** a time-sync quality figure. Because a 9600-baud
+it is **not** a time-sync quality figure. Every receiver year sloth accepts
+(1970–2999) gives an offset sloth records as it is, and slothweb shows
+the whole of that range (±2⁴⁶ ms) rather than blanking it, so the
+wildest clock is the one still on screen. Because a 9600-baud
 receiver's latency sits in the 200–700 ms range, right across the
 first band edge, the band the records sign is **held with
 hysteresis** (`take_tpv()`): it moves to a new band only once the

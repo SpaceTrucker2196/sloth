@@ -98,7 +98,7 @@ double nmea_acc_m(double hdop);
 
 /* ── gpsd JSON ─────────────────────────────────────────────────── */
 
-#define GPSD_MAX_LINE 4096
+#define GPSD_MAX_LINE 10240
 
 enum { GPSD_CLS_OTHER = 0, GPSD_CLS_TPV, GPSD_CLS_SKY, GPSD_CLS_VERSION,
        GPSD_CLS_GST };
