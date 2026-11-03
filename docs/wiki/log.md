@@ -6401,3 +6401,16 @@ muted floor is `confidence <= 20`, not `< 20`, so EVIL_TWIN rows whose
 only signal is "vendor OUI differs" (20%) are drawn muted. CRIT rows
 are still never muted. [slothweb.md](slothweb.md), the EVIL_TWIN
 assessment and web/README.md say so.
+
+## 2026-11-03 — slothweb glyph slice V1: every Overview number compared (#171)
+
+G1 on every Overview tile (urgency order: alerts, anomalies, sensor,
+throughput, devices, records/s, then BLE), on the strip's network facts
+and the footer's drops, from the `live.*`, `sensor.drops`, `ble.devices`
+and new `records.total` series, with G1's band words and arrow; G1 with
+the episode shaded on anomaly cards; the hour-of-week grid as G4 with no
+hatch; shared-scale small multiples sorted by |z|. On review: the
+footer's drops carries its last bucket's count and names its bucket,
+scales restart on a scope change, an anomaly card keeps its y-range and
+reads a long window from the minute tier, and the V1 glyph functions are
+pinned whole. Updated [[slothweb]].

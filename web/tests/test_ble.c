@@ -981,7 +981,7 @@ static void test_page(void) {
     WT_HAS(p, "    if (window.SlothBleDev) SlothBleDev.reset();");
     WT_HAS(p, "  window.SlothBleDev = { init: init, show: show, drawer: drawer, reset: reset };");
     WT_HAS(p, "    $(\"v-ble\").classList.toggle(\"scoped-out\", SCOPE === \"local\");");
-    WT_HAS(p, "<span title=\"BLE advertisers slothweb holds, from sloth's ble_device records (Monitor's; - under Local or with no Bluetooth source)\">ble <b id=\"s-ble\">-</b></span>");
+    WT_HAS(p, "<span title=\"BLE advertisers slothweb holds, from sloth's ble_device records (Monitor's; - under Local or with no Bluetooth source)\">ble <b id=\"s-ble\">-</b><canvas class=\"sg\" id=\"s-ble-g\" aria-label=\"BLE advertisers, 24 h\"></canvas></span>");
     WT_HAS(p, "        set(\"s-ble\", l.ble && l.ble.configured && num(l.ble.rows) ? l.ble.rows : \"-\");");
     WT_HAS(p, "        box.appendChild(el(\"div\", \"label\", \"bluetooth (sensor_health btmon_* / ble_* / btcap_*)\"));");
     WT_HAS(p, "    if (b && b.btmon_iface) bits.push(\"btmon \" + b.btmon_iface +");
@@ -1012,7 +1012,11 @@ static void test_page(void) {
     WT_HAS(p, "        if (i >= 0 && i < 96) on = (parseInt(p.bits.charAt(23 - (i >> 2)), 16) >> (i & 3)) & 1;");
     WT_HAS(p, "<a class=\"tile hud\" id=\"t-ble\" href=\"#ble\">");
     WT_HAS(p, "        bleTile(l.ble);");
-    WT_HAS(p, "    series(\"ble.devices\", \"\", tier, from, to).then(function (s) {");
+    /* The tile's and the strip's G1 are web/ui/facts.js's since #171 V1:
+     * ble.devices, Hybrid's and Monitor's, a dash under Local. */
+    WT_HAS(p, "    { id: \"ble\", metric: \"ble.devices\", strip: \"s-ble-g\", tile: \"k-ble-spark\",\n"
+              "      words: \"k-ble-w\", scopes: [\"hybrid\", \"monitor\"] }");
+    WT_HAS(p, "      Promise.all([H.series(f.metric, \"\", tier, from, to), H.baseline(f.metric, \"\")]).then(function (r) {");
     /* MON_TYPES unchanged: no BLE row on the monitor ground. */
     WT_LACKS(p, "\"ble_device\", \"ble_alert\"");
     WT_LACKS(p, "blerow dt-row mon");

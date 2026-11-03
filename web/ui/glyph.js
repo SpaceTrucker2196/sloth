@@ -1,4 +1,5 @@
-// The glyph layer (docs/web-visual-spec.md §5, slice V0: G1, G5, G6).
+// The glyph layer (docs/web-visual-spec.md §5; slice V0: G1, G5, G6;
+// slice V1: G1's words, the episode shade, shared scales, G4).
 //
 // Every glyph is two halves. The first maps data and a size to a list
 // of marks, each `[kind, x, y, w, h, token]` in CSS pixels with a
@@ -108,7 +109,8 @@ var glyph = (function () {
   // G1, the band sparkline. pts are [t, v] oldest first; band is the
   // same length, each [lo, hi, mean, sd] or null where the cell is
   // warming, or null for no band at all. opt: {w, h, from, to, step,
-  // sens, scale}.
+  // sens, scale, shade} — shade is an anomaly episode's [first, last]
+  // (F13), drawn under everything else and clipped to the window.
   function g1(pts, band, opt) {
     var m = [], w = opt.w, h = opt.h, i, b;
     if (!pts || !pts.length) { m.push(dash(w, h)); return m; }
@@ -117,6 +119,11 @@ var glyph = (function () {
     var sc = scale(pts, band, opt.scale || null), lo = sc[0], hi = sc[1];
     var X = function (t) { return to > from ? (t - from) / (to - from) * w : 0; };
     var Y = function (v) { return h - (v - lo) / (hi - lo) * h; };
+    var sh = opt.shade;
+    if (sh && gnum(sh[0]) && gnum(sh[1]) && to > from) {
+      var sa = X(Math.max(sh[0], from)), sb = X(Math.min(sh[1] + step, to));
+      if (sb > sa) m.push(["shade", sa, 0, Math.max(1, sb - sa), h, "--signal"]);
+    }
     var any = false;
     for (i = 0; band && i < band.length; i++) if (band[i]) any = true;
     for (i = 0; any && i < pts.length; i++) {
@@ -161,6 +168,79 @@ var glyph = (function () {
     }
     m.push(["last", X(pts[k][0]), Y(pts[k][1]), 2.5, 2.5, tok]);
     return m;
+  }
+
+  // G1's words (§5): the direction since the previous bucket, one of
+  // the three arrows, or "" when there is no previous bucket to say it
+  // against. A gap between the two is still a direction: the words say
+  // where the value went, the line says how.
+  function trend(pts) {
+    if (!pts || pts.length < 2) return "";
+    var a = pts[pts.length - 2][1], b = pts[pts.length - 1][1];
+    return b > a ? "\u2191" : b < a ? "\u2193" : "\u2192";
+  }
+
+  // R3 and F6: small multiples share one y-scale, so a cell's height
+  // means the same in every cell. sets are [{pts, band}]; prev is the
+  // range the stack last drew (R11: grown, never shrunk).
+  function shared(sets, prev) {
+    var r = prev ? [prev[0], prev[1]] : null;
+    for (var i = 0; sets && i < sets.length; i++) r = scale(sets[i].pts, sets[i].band, r);
+    return r || [0, 1];
+  }
+
+  // F6's sort: by |z| when any row has a baseline to be scored against,
+  // the rows without one after them by value; by value when none has.
+  // rows are [{cur, z}], z a number or null; the answer is a new array
+  // and the word the caption names the sort by.
+  function order(rows) {
+    var out = (rows || []).slice(), byz = false, i;
+    for (i = 0; i < out.length; i++) if (gnum(out[i].z)) byz = true;
+    out.sort(function (a, b) {
+      if (byz) {
+        var za = gnum(a.z), zb = gnum(b.z);
+        if (za !== zb) return za ? -1 : 1;
+        if (za && Math.abs(b.z) !== Math.abs(a.z)) return Math.abs(b.z) - Math.abs(a.z);
+      }
+      return (gnum(b.cur) ? b.cur : 0) - (gnum(a.cur) ? a.cur : 0);
+    });
+    return { rows: out, by: byz ? "|z|" : "value" };
+  }
+
+  // G4, the hour-of-week grid (F3). cells are 168 [mean, sd, n] from
+  // Monday 00:00; a cell with n under warm is warming. opt: {w, h, x0,
+  // y0, warm, now} — x0 and y0 leave room for the labels, now is the
+  // current cell or -1. A fed cell is the heat ramp by its mean against
+  // the largest fed mean; a warming cell is --rule and nothing else
+  // (R8: no hatch). When every cell is warming the grid draws only the
+  // now outline, and the caption says the rest (g4Stats).
+  function g4(cells, opt) {
+    var m = [], w = opt.w, h = opt.h, x0 = opt.x0 || 0, y0 = opt.y0 || 0, i;
+    var cw = (w - x0) / 24, ch = (h - y0) / 7, st = g4Stats(cells, opt.warm);
+    for (i = 0; st.fed && i < 168; i++) {
+      var c = cells && cells[i], x = x0 + cw * (i % 24), y = y0 + ch * Math.floor(i / 24);
+      if (c && c[2] >= st.warm)
+        m.push(["cell", x + 1, y + 1, cw - 2, ch - 2,
+                heatToken(st.max > 0 ? c[0] / st.max : 0)]);
+      else m.push(["warm", x + 1, y + 1, cw - 2, ch - 2, "--rule"]);
+    }
+    var nc = opt.now;
+    if (gnum(nc) && nc >= 0 && nc < 168)
+      m.push(["outline", x0 + cw * (nc % 24), y0 + ch * Math.floor(nc / 24), cw, ch, "--signal"]);
+    return m;
+  }
+  // G4's caption facts: the warming count, the largest fed mean (the
+  // top of the ramp, printed), and the samples behind the fed cells.
+  function g4Stats(cells, warm) {
+    var o = { warm: gnum(warm) ? warm : 3, warming: 0, fed: 0, max: 0, n: 0 };
+    for (var i = 0; i < 168; i++) {
+      var c = cells && cells[i];
+      if (!c || !(c[2] >= o.warm)) { o.warming++; continue; }
+      o.fed++;
+      o.n += c[2];
+      if (c[0] > o.max) o.max = c[0];
+    }
+    return o;
   }
 
   // The server's 36 hex digits as n cells, cell 0 the oldest, its bit
@@ -267,10 +347,13 @@ var glyph = (function () {
         g.moveTo(m[1] * dpr, m[2] * dpr);
         g.lineTo((m[1] + m[3]) * dpr, (m[2] + m[4]) * dpr);
         g.stroke();
-      } else if (k === "band") {
+      } else if (k === "band" || k === "shade") {
         g.globalAlpha = 0.12;
         g.fillRect(m[1] * dpr, m[2] * dpr, Math.max(1, m[3] * dpr), Math.max(1, m[4] * dpr));
         g.globalAlpha = 1;
+      } else if (k === "outline") {
+        g.lineWidth = 2 * dpr;
+        g.strokeRect((m[1] + 1) * dpr, (m[2] + 1) * dpr, (m[3] - 2) * dpr, (m[4] - 2) * dpr);
       } else if (k === "first") {
         var cx = (m[1] + m[3] / 2) * dpr, cy = (m[2] + m[4] / 2) * dpr, rr = m[4] * dpr / 2;
         g.beginPath();
@@ -288,8 +371,9 @@ var glyph = (function () {
     }
   }
 
-  return { g1: g1, g5: g5, g5Ruler: g5Ruler, g6: g6, paint: paint,
-           caption: caption, win: win, scale: scale, dur: dur,
+  return { g1: g1, g4: g4, g4Stats: g4Stats, g5: g5, g5Ruler: g5Ruler, g6: g6,
+           paint: paint, caption: caption, win: win, scale: scale, dur: dur,
+           trend: trend, shared: shared, order: order,
            cellsFromHex: cellsFromHex, level: level, lineToken: lineToken,
            heatToken: heatToken };
 })();

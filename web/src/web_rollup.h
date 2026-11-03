@@ -150,9 +150,12 @@ enum {
      * (F1), sampled once a pass at the next snapshot batch's first
      * iface record, when the sampler is wired (web_metrics_set_live(),
      * web_metrics_set_anomaly()); sensor.drops from every sensor_health
-     * tick regardless; records.rate from every record, keyed by type. */
+     * tick regardless; records.rate from every record, keyed by type,
+     * and records.total from the same records, unkeyed: the records/s
+     * tile's own series (F1), which a sum of records.rate's keys on the
+     * page would be one request per type to read. */
     WM_LIVE_DEVICES, WM_LIVE_ALERTS_OPEN, WM_LIVE_ANOMALIES_OPEN,
-    WM_RECORDS_RATE, WM_SENSOR_DROPS,
+    WM_RECORDS_RATE, WM_RECORDS_TOTAL, WM_SENSOR_DROPS,
     /* The BLE receivers' two global series (web_ble.h): the advertiser
      * table's size and the advertising-report rate, from sensor_health.
      * Global, so never evicted; Monitor's (web_scope.c). */

@@ -1398,6 +1398,9 @@
     // Redrawn with its parameters: an alert's page keeps its id, a
     // drill-down its filter.
     if (view !== "lookup") show(view, VP);
+    // The strip's and the footer's glyphs, in the new theme's tokens,
+    // from what they last read.
+    if (window.SlothFacts) SlothFacts.paint();
     if (!$("drawer").hidden && D.sel) openDrawer(D.sel);
     if (!$("bdrawer").hidden && B.sel) openBleDrawer(B.sel.addr, B.sel.type, B.sel.iface);
   });
@@ -1487,6 +1490,7 @@
   function pickScope(s) {
     if (!setScope(s)) return;
     show(view, VP);
+    if (view !== "overview" && window.SlothFacts) SlothFacts.refresh();
     if (view === "lookup") lookup();
     if (!$("drawer").hidden && D.sel) openDrawer(D.sel);
     closeBleDrawer();
@@ -1533,6 +1537,8 @@
     }
     if (e.target !== document.body) return;
     if (e.key === "[") prefSet("collapsed", $("app").classList.toggle("collapsed") || null);
+    // The footer's drops glyph was skipped while hidden (zero wide).
+    if (e.key === "[" && window.SlothFacts) SlothFacts.paint();
     if (e.key === "1") show("overview");
     if (e.key === "2") show("activity");
     if (e.key === "3") show("devices");
@@ -1828,71 +1834,43 @@
     }
   }
 
-  // The hour-of-week heatmap (§8.4, §8.12): 7 rows from Monday, 24
-  // columns, the heat ramp by the cell's mean against the largest, a
-  // warming cell (fewer than warm_n samples) grey and hatched, the
-  // current cell outlined in --signal.
+  // The hour-of-week heatmap (§8.4, §8.12), G4 (glyph.js): 7 rows from
+  // Monday, 24 columns, the heat ramp by the cell's mean against the
+  // largest, a warming cell (fewer than warm_n samples) plain --rule
+  // with no hatch (F3, R8), the current cell outlined in --signal. The
+  // grid's own words are its caption (heatCaption): how many cells are
+  // warming and the top of the ramp.
   var DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   function heatmap(c, bl) {
     var T = theme();
-    var dpr = sizeCanvas(c);
+    var cells = bl && bl.cells || null;
+    var warm = bl && num(bl.warm_n) ? bl.warm_n : 3;
+    glyph.paint(c, glyph.g4(cells, { w: c.clientWidth, h: c.clientHeight, x0: 32, y0: 14,
+                                     warm: warm, now: bl ? bl.now_cell : -1 }), tok);
+    var dpr = window.devicePixelRatio || 1;
     var g = c.getContext("2d");
-    var W = c.width, H = c.height;
-    g.clearRect(0, 0, W, H);
-    var padL = 32 * dpr, padT = 14 * dpr;
-    var cw = (W - padL) / 24, ch = (H - padT) / 7;
+    var cw = (c.width - 32 * dpr) / 24, ch = (c.height - 14 * dpr) / 7;
     g.font = (9 * dpr) + "px " + css("--font-mono");
     g.fillStyle = T.muted;
     g.textBaseline = "middle";
-    for (var d = 0; d < 7; d++) g.fillText(DAYS[d], 0, padT + ch * (d + 0.5));
+    for (var d = 0; d < 7; d++) g.fillText(DAYS[d], 0, 14 * dpr + ch * (d + 0.5));
     g.textBaseline = "top";
-    for (var h = 0; h < 24; h += 3) g.fillText(String(h), padL + cw * h, 0);
-    if (!bl) return;
-    // Never fed: every cell is warming.
-    var cells = bl.cells || [];
-    var warm = num(bl.warm_n) ? bl.warm_n : 3;
-    var max = 0;
-    for (var i = 0; i < cells.length; i++)
-      if (cells[i][2] >= warm && cells[i][0] > max) max = cells[i][0];
-    for (i = 0; i < 168; i++) {
-      var x = padL + cw * (i % 24), y = padT + ch * Math.floor(i / 24);
-      var cell = cells[i] || [0, 0, 0];
-      if (cell[2] < warm) {
-        g.fillStyle = T.rule;
-        g.fillRect(x + 1, y + 1, cw - 2, ch - 2);
-        g.save();
-        g.beginPath();
-        g.rect(x + 1, y + 1, cw - 2, ch - 2);
-        g.clip();
-        // The hatch carries the meaning, so it is --muted, 3:1 or more
-        // on --rule and on --panel (web/README.md, the graphics table).
-        g.strokeStyle = T.muted;
-        g.lineWidth = 1;
-        g.beginPath();
-        for (var s = -ch; s < cw; s += 4 * dpr) {
-          g.moveTo(x + s, y + ch);
-          g.lineTo(x + s + ch, y);
-        }
-        g.stroke();
-        g.restore();
-        continue;
-      }
-      g.fillStyle = heat(max > 0 ? cell[0] / max : 0);
-      g.fillRect(x + 1, y + 1, cw - 2, ch - 2);
-    }
-    var nc = bl.now_cell;
-    if (num(nc) && nc >= 0 && nc < 168) {
-      g.strokeStyle = T.signal;
-      g.lineWidth = 2 * dpr;
-      g.strokeRect(padL + cw * (nc % 24) + dpr, padT + ch * Math.floor(nc / 24) + dpr,
-                   cw - 2 * dpr, ch - 2 * dpr);
-    }
+    for (var h = 0; h < 24; h += 3) g.fillText(String(h), 32 * dpr + cw * h, 0);
+    return glyph.g4Stats(cells, warm);
+  }
+  // R9 for a G4: the source, the window, the scale (the ramp's top, in
+  // the series' unit), n (the samples behind the fed cells), and the
+  // warming count whenever a cell is still warming.
+  function heatCaption(source, st, unit) {
+    return glyph.caption({ source: source, window: "hour of week",
+      scale: st.fed ? "ramp 0 to " + fmt(st.max) + (unit ? " " + unit : "") : "",
+      n: st.n, state: st.warming ? "warming: " + st.warming + " of 168 cells" : "" });
   }
 
   // ── Overview (§8.4) ───────────────────────────────────────────────
   // Throughput is iface.rx_rate of the interface sloth reported most
-  // recently; devices, alerts and anomalies are counts with no stored
-  // series behind them, so only throughput has a band.
+  // recently. Every other tile's G1 is web/ui/facts.js's, from the
+  // live.*, records.total, sensor.drops and ble.devices series (F1).
   var O = { key: null, gen: 0 };
   // The BLE tile (web_ble.h): the advertisers slothweb holds and what
   // the header line of the TUI's [*] counts, from /api/live's ble
@@ -1918,24 +1896,11 @@
     bits.push((b.btmon_iface || b.btcap_iface) + (b.ble_scan_mode && b.ble_scan_mode !== "unknown" ? ", scan " + b.ble_scan_mode : ""));
     set("k-ble-sub", bits.join(", "));
   }
-  // ble.devices (sloth's own table size, from sensor_health), 24 h, as
-  // the tile's G1; Monitor's metric, so none under Local.
-  function bleSpark() {
-    var sp = $("k-ble-spark");
-    if (SCOPE === "local") { glyph.paint(sp, glyph.g1([], null, { w: sp.clientWidth, h: sp.clientHeight }), tok); return; }
-    var now = Math.floor(Date.now() / 1000);
-    var tier = A.storeOn ? "minute" : "fine";
-    var step = tier === "minute" ? 60 : 10;
-    var to = now - now % step + step, from = to - 86400;
-    series("ble.devices", "", tier, from, to).then(function (s) {
-      var gw = glyph.win(s.points, from, to);
-      glyph.paint(sp, glyph.g1(s.points, null, { w: sp.clientWidth, h: sp.clientHeight,
-                                                 from: gw.from, to: gw.to, step: s.step }), tok);
-    }).catch(function () {});
-  }
   function overview() {
     var gen = ++O.gen;
-    bleSpark();
+    // G1 on every other tile and on the strip (web/ui/facts.js, F1);
+    // ble.devices is one of them now.
+    if (window.SlothFacts) SlothFacts.refresh();
     getJSON("/api/keys?metric=iface.rx_rate").then(function (j) {
       var ks = j.keys || [];
       // The keys are the scope's (the server's /api/keys): under
@@ -1964,6 +1929,7 @@
           var bd = bands(s.points, bl, s.kind, s.step);
           var last = s.points.length ? s.points[s.points.length - 1][1] : NaN;
           set("k-tp", fmt(last) + " B/s");
+          if (window.SlothFacts) set("k-tp-w", SlothFacts.words(s.points, bd, { unit: "B/s" }));
           // R4: a window the data covers less than a tenth of shrinks
           // to the data, and the caption says so (F2). Both the tile's
           // G1 and the chart draw the same window.
@@ -1986,9 +1952,9 @@
             n: s.points.length,
             state: !s.points.length ? "no data" : gw.shrunk ? gw.text
                    : banded ? "" : "warming" }));
-          heatmap($("o-heat"), bl);
-          set("o-heat-note", bl && bl.cells ? "iface.rx_rate " + O.key +
-              ", mean B/s by local hour of the sensor host" : "no baseline yet");
+          var hs = heatmap($("o-heat"), bl);
+          set("o-heat-note", heatCaption("iface.rx_rate " + O.key +
+              ", mean by local hour of the sensor host", hs, "B/s"));
         });
     }).catch(function (e) { set("o-nvn-note", "error: " + e.message); });
     anomalies();
@@ -2034,6 +2000,55 @@
     return a.kind !== "rate" || !num(a.score) || a.score >= sens * 20 || a.score >= 100;
   }
 
+  // F13: the metric that fired, as G1 over its band, the episode's own
+  // first-to-last window shaded in --signal under the line, so a burst
+  // and a steady drip read differently. The window is the last hour, or
+  // back to the episode's start (and ten minutes before it) up to a
+  // day. A presence series keeps its strip. A read that fails says so
+  // in the glyph's place, never a blank (R5).
+  // A window over an hour reads the minute tier when there is a store:
+  // a day at 10 s is ten pages per card, a day of minutes two. Each
+  // card's y-range is kept by episode and scope (R11), because the
+  // Overview rebuilds its cards every minute.
+  var ANSC = {}, ANSC_N = 0;
+  function anomGlyph(cv, note, a) {
+    var now = Math.floor(Date.now() / 1000);
+    var first = num(a.first_seen) ? a.first_seen : now - 3600;
+    var win = Math.min(86400, Math.max(3600, now - first + 600));
+    var tier = win > 3600 && A.storeOn ? "minute" : "fine", st = tier === "minute" ? 60 : 10;
+    var to = now - now % st + st, from = to - win;
+    var key = a.key !== "" ? String(a.key) : "";
+    Promise.all([series(a.metric, key, tier, from, to), baseline(a.metric, key)]).then(function (r) {
+      var s = r[0];
+      if (s.kind === "presence") {
+        draw(cv, s.points, { from: from, to: to, step: s.step, kind: s.kind,
+                             color: theme().normal, axes: false, spark: true });
+        note.textContent = glyph.caption({ source: a.metric + (key ? " " + key : ""),
+          window: glyph.dur(win), tier: tier, n: s.points.length,
+          state: s.points.length ? "" : "no data" });
+        return;
+      }
+      var bd = bands(s.points, r[1], s.kind, s.step);
+      var banded = false;
+      for (var bi = 0; bd && bi < bd.length; bi++) if (bd[bi]) banded = true;
+      var gw = glyph.win(s.points, from, to);
+      var sk = SCOPE + "\u0000" + a.id;
+      if (!(sk in ANSC) && ++ANSC_N > 256) { ANSC = {}; ANSC_N = 1; }
+      ANSC[sk] = glyph.scale(s.points, bd, ANSC[sk] || null);
+      glyph.paint(cv, glyph.g1(s.points, bd, { w: cv.clientWidth, h: cv.clientHeight,
+        from: gw.from, to: gw.to, step: s.step, sens: sens, scale: ANSC[sk],
+        shade: [first, num(a.last_seen) ? a.last_seen : now] }), tok);
+      note.textContent = glyph.caption({ source: a.metric + (key ? " " + key : ""),
+        window: glyph.dur(win), tier: tier,
+        scale: banded ? "band ±" + sens.toFixed(1) + " sd" : "", n: s.points.length,
+        state: !s.points.length ? "no data" : gw.shrunk ? gw.text : banded ? "" : "warming" }) +
+        (s.points.length ? "; shaded: the episode" : "");
+    }).catch(function () {
+      cv.hidden = true;
+      note.textContent = "series unavailable";
+    });
+  }
+
   function card(a) {
     var c = el("div", "card " + (a.open ? "open" : "closed"));
     var hd = el("div", "hd");
@@ -2054,12 +2069,9 @@
     if (typeof a.metric === "string") {
       var cv = document.createElement("canvas");
       c.appendChild(cv);
-      var now = Math.floor(Date.now() / 1000);
-      var to = now - now % 10 + 10, from = to - 3600;
-      getJSON(seriesPath(a.metric, a.key, "fine", from, to)).then(function (j) {
-        draw(cv, j.points || [], { from: from, to: to, step: 10, kind: j.kind,
-                                   color: theme().normal, axes: false, spark: true });
-      }).catch(function () { /* the card stands without it */ });
+      var gn = el("div", "sub", "");
+      c.appendChild(gn);
+      anomGlyph(cv, gn, a);
     }
     c.appendChild(el("div", "tm", (a.open ? "open" : "closed") + "  score " + score +
                      "  first " + stamp(a.first_seen) + "  last " + stamp(a.last_seen)));
@@ -2246,8 +2258,35 @@
     }).catch(function (e) { set("a-src", "error: " + e.message); });
   }
 
-  // Small multiples: one sparkline per key over the last hour, the
-  // highest current value first.
+  // Small multiples (F6): one G1 per key over the last hour, every cell
+  // on one y-scale unless "scale: own" is picked (R3), the shared top
+  // printed once in the caption and an own top in each cell. Sorted by
+  // |z| (the last bucket against its hour's band) when any key has a
+  // baseline, by the last value otherwise, and the caption says which.
+  A.ownScale = prefGet("act.scale") === "own";
+  A.mown = {};
+  function scaleBtn() {
+    $("a-scale").ariaPressed = A.ownScale ? "true" : "false";
+    set("a-scale", A.ownScale ? "scale: own" : "scale: shared");
+  }
+  scaleBtn();
+  $("a-scale").addEventListener("click", function () {
+    A.ownScale = !A.ownScale;
+    prefSet("act.scale", A.ownScale ? "own" : null);
+    scaleBtn();
+    A.mscale = null;
+    A.mown = {};
+    multiples();
+  });
+  // A baseline moves once an hour at most, and the multiples ask for
+  // one per key every 10 s: each answer is kept five minutes, per scope.
+  var BLC = {};
+  function baselineKept(m, key) {
+    var k = SCOPE + "\u0000" + m + "\u0000" + key, t = Date.now(), c = BLC[k];
+    if (c && t - c.t < 300000) return c.p;
+    BLC[k] = { t: t, p: baseline(m, key) };
+    return BLC[k].p;
+  }
   function multiples() {
     var m = selMetric();
     var box = $("a-multi");
@@ -2257,31 +2296,62 @@
     var to = now - now % 10 + 10, from = to - 3600;
     var gen = A.gen;
     Promise.all(keys.map(function (k) {
-      return getJSON(seriesPath(m.name, k, "fine", from, to))
-        .then(function (j) { return { key: k, pts: j.points || [], kind: j.kind }; })
-        .catch(function () { return { key: k, pts: [], kind: m.kind }; });
+      return Promise.all([getJSON(seriesPath(m.name, k, "fine", from, to)), baselineKept(m.name, k)])
+        .then(function (r) {
+          var pts = r[0].points || [];
+          return { key: k, pts: pts, kind: r[0].kind, band: bands(pts, r[1], r[0].kind, 10) };
+        })
+        .catch(function () { return { key: k, pts: [], kind: m.kind, band: null }; });
     })).then(function (rows) {
       if (gen !== A.gen) return;
-      rows.forEach(function (r) { r.cur = r.pts.length ? r.pts[r.pts.length - 1][1] : 0; });
-      rows.sort(function (a, b) { return b.cur - a.cur; });
-      while (box.firstChild) box.removeChild(box.firstChild);
       rows.forEach(function (r) {
+        r.cur = r.pts.length ? r.pts[r.pts.length - 1][1] : 0;
+        var lb = r.band && r.pts.length ? r.band[r.pts.length - 1] : null;
+        r.z = lb && lb[3] > 0 ? (r.cur - lb[2]) / lb[3] : null;
+      });
+      var ord = glyph.order(rows);
+      // R11: the shared scale grows with the stack and never shrinks on
+      // a refresh; a new metric or a toggle starts it again.
+      // A scope's keys are other data, so a scope change starts it too.
+      var mso = m.name + "\u0000" + SCOPE;
+      if (A.mscaleOf !== mso) { A.mscale = null; A.mown = {}; A.mscaleOf = mso; }
+      var sh = m.kind === "presence" ? null : glyph.shared(ord.rows, A.ownScale ? null : A.mscale || null);
+      if (!A.ownScale) A.mscale = sh;
+      while (box.firstChild) box.removeChild(box.firstChild);
+      var pn = 0;
+      ord.rows.forEach(function (r) {
+        pn += r.pts.length;
         var cell = el("div", "cell" + (A.keys[A.key] === r.key ? " on" : ""));
         var nm = el("div", "nm");
         nm.appendChild(r.key ? keySpan(r.key) : el("span", "d-normal", "(global)"));
         cell.appendChild(nm);
+        var own = A.ownScale && sh ? glyph.scale(r.pts, r.band, A.mown[r.key] || null) : null;
+        if (own) A.mown[r.key] = own;
+        if (own) cell.appendChild(el("div", "mx", "top " + fmt(own[1])));
         var cv = document.createElement("canvas");
         cell.appendChild(cv);
-        cell.appendChild(el("div", "v", fmt(r.cur) + " " + m.unit));
+        cell.appendChild(el("div", "v", fmt(r.cur) + " " + m.unit +
+                            (num(r.z) ? "  z " + r.z.toFixed(1) : "")));
         cell.addEventListener("click", function () {
           var i = A.keys.indexOf(r.key);
           if (i >= 0) { A.key = i; $("a-key").value = String(i); actKeep(); refresh(); }
         });
         box.appendChild(cell);
-        draw(cv, r.pts, { from: from, to: to, step: 10, kind: r.kind,
-                          color: theme().normal, axes: false, spark: true });
+        if (!sh) {
+          draw(cv, r.pts, { from: from, to: to, step: 10, kind: r.kind,
+                            color: theme().normal, axes: false, spark: true });
+          return;
+        }
+        glyph.paint(cv, glyph.g1(r.pts, r.band, { w: cv.clientWidth, h: cv.clientHeight,
+          from: from, to: to, step: 10, sens: sens, scale: own || sh }), tok);
       });
-      set("a-multi-note", A.keys.length > 24 ? "the 24 most recently seen of " + A.keys.length : "");
+      set("a-multi-note", glyph.caption({
+        source: m.name + ", " + (A.keys.length > 24 ? "the 24 most recently seen of " + A.keys.length
+                                 : rows.length + " key" + (rows.length === 1 ? "" : "s")),
+        window: "1 h", tier: "fine",
+        scale: (!sh ? "0/1" : A.ownScale ? "own scale per cell"
+                : "shared scale, top " + fmt(sh[1]) + " " + m.unit) + ", sorted by " + ord.by,
+        n: pn, state: rows.length && !pn ? "no data" : "" }));
     });
   }
 
@@ -2830,8 +2900,8 @@
         cells = [];
         for (var c = 0; c < 168; c++) cells.push([wk.cells[c][0], 0, wk.cells[c][1]]);
       }
-      heatmap($("dr-week"), { cells: cells, warm_n: wk.warm_n, now_cell: wk.now_cell });
-      set("dr-week-note", cells ? "share of weeks present" : "no baseline yet");
+      var ws = heatmap($("dr-week"), { cells: cells, warm_n: wk.warm_n, now_cell: wk.now_cell });
+      set("dr-week-note", heatCaption("dev.present, share of weeks present", ws, ""));
       var an = $("dr-anoms");
       while (an.firstChild) an.removeChild(an.firstChild);
       if (!j.anomalies || !j.anomalies.length) an.appendChild(el("div", "sub", "none"));
@@ -5386,6 +5456,13 @@
     heat: heat, keyColor: keyColor, sizeCanvas: sizeCanvas, fmt: fmt, hhmmss: hhmmss, css: css,
     errText: errText, series: series, tierFor: tierFor, openBleDrawer: openBleDrawer });
 
+  // G1 on the strip, the tiles and the footer (web/ui/facts.js): the
+  // page's helpers, lent once.
+  if (window.SlothFacts) SlothFacts.init({ set: set, fmt: fmt, tok: tok, series: series,
+    baseline: baseline, bands: bands, sens: function () { return sens; },
+    scope: function () { return SCOPE; }, scopeWord: function (s) { return SCOPE_WORD[s]; },
+    storeOn: function () { return A.storeOn; }, onOverview: function () { return view === "overview"; } });
+
   // The Overview is the first view: learn whether there is a store (for
   // the tier), then draw it, and redraw every minute.
   getJSON("/api/metrics").then(function (j) { A.storeOn = !!j.store; })
@@ -5393,8 +5470,10 @@
     .then(function () {
       var r = hashRoute(), kv = prefGet("view");
       if (!r && NAV.indexOf(kv) >= 0) r = { v: kv, p: {} };
-      if (r && r.v !== "overview") show(r.v, r.p);
-      else overview();
+      if (r && r.v !== "overview") {
+        show(r.v, r.p);
+        if (window.SlothFacts) SlothFacts.refresh();
+      } else overview();
     });
   setInterval(function () { if (view === "overview") overview(); }, 60000);
   }

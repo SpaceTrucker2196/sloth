@@ -21,6 +21,7 @@
 <script>
 @include palette.js
 @include glyph.js
+@include facts.js
 @include frrs.js
 @include evidence.js
 @include bundle.js
@@ -88,54 +89,72 @@
     <span class="dot wait" id="dot">&#9679; <span id="conn">connecting</span></span>
     <span class="pills">
     <span>scope <b id="s-scope">hybrid</b></span>
-    <span>devs <b id="s-devs">-</b></span>
-    <span title="BLE advertisers slothweb holds, from sloth's ble_device records (Monitor's; - under Local or with no Bluetooth source)">ble <b id="s-ble">-</b></span>
-    <span>alerts <b id="s-alerts">-</b></span>
-    <span>anomalies <b id="s-anoms">-</b></span>
-    <span>rec/s <b id="s-rate">-</b></span>
+    <span>devs <b id="s-devs">-</b><canvas class="sg" id="s-devs-g" aria-label="devices, 24 h"></canvas></span>
+    <span title="BLE advertisers slothweb holds, from sloth's ble_device records (Monitor's; - under Local or with no Bluetooth source)">ble <b id="s-ble">-</b><canvas class="sg" id="s-ble-g" aria-label="BLE advertisers, 24 h"></canvas></span>
+    <span>alerts <b id="s-alerts">-</b><canvas class="sg" id="s-alerts-g" aria-label="open alerts, 24 h"></canvas></span>
+    <span>anomalies <b id="s-anoms">-</b><canvas class="sg" id="s-anoms-g" aria-label="open anomalies, 24 h"></canvas></span>
+    <span>rec/s <b id="s-rate">-</b><canvas class="sg" id="s-rate-g" aria-label="records per second, 24 h"></canvas></span>
     </span>
   </div>
   <div class="scopebar" id="scopebar" role="status" hidden><span id="scopebar-t"></span> <button type="button" id="scopebar-legend">what each scope holds</button></div>
   <main>
    <div id="v-overview">
     <section class="kpis" aria-label="overview">
-      <a class="tile hud" id="t-tp" href="#activity?focus=throughput">
-        <div class="label">throughput <span id="k-tp-key"></span></div>
-        <div class="kpi" id="k-tp">-</div>
-        <canvas class="spark" id="k-tp-spark" aria-label="throughput, 24 h, over its baseline band"></canvas>
-        <div class="sub" id="k-tp-sub">rx, 24 h, band = mean &#177; k sd</div>
+      <!-- Urgency first (owner ruling 5 of 2026-10-26): open alerts,
+           open anomalies, sensor health, throughput, devices, records;
+           then BLE. Each tile's G1 is the 24 h series behind its number
+           over the band for its hour (F1), and the line under it is
+           G1's words: that band, and the direction since the last
+           bucket (web/ui/facts.js; the throughput tile's, app.js). -->
+      <a class="tile hud" id="t-alerts" href="#alerts?state=open">
+        <div class="label">open alerts</div>
+        <div class="kpi"><span class="sev2" id="k-crit">-</span> <span class="sev1" id="k-warn">-</span> <span class="sev0" id="k-low">-</span></div>
+        <canvas class="spark" id="k-alerts-spark" aria-label="open alerts, 24 h, over their baseline band"></canvas>
+        <div class="sub gw" id="k-alerts-w">-</div>
+        <div class="sub">crit / warn / low, since connect</div>
+        <div class="sub tri-tile" id="k-alerts-triaged" hidden></div>
       </a>
       <a class="tile hud" id="t-anoms" href="#anomalies?state=open">
         <div class="label">open anomalies</div>
         <div class="kpi" id="k-anoms">-</div>
+        <canvas class="spark" id="k-anoms-spark" aria-label="open anomalies, 24 h, over their baseline band"></canvas>
+        <div class="sub gw" id="k-anoms-w">-</div>
         <div class="sub" id="k-anoms-sub">rules A1-A3, A5-A10</div>
+      </a>
+      <a class="tile hud" id="t-sensor" href="#health">
+        <div class="label">sensor health</div>
+        <div class="kpi" id="k-sensor">-</div>
+        <canvas class="spark" id="k-sensor-spark" aria-label="the sensor's dropped frames, 24 h, over their baseline band"></canvas>
+        <div class="sub gw" id="k-sensor-w">-</div>
+        <div class="sub" id="k-sensor-sub">-</div>
+      </a>
+      <a class="tile hud" id="t-tp" href="#activity?focus=throughput">
+        <div class="label">throughput <span id="k-tp-key"></span></div>
+        <div class="kpi" id="k-tp">-</div>
+        <canvas class="spark" id="k-tp-spark" aria-label="throughput, 24 h, over its baseline band"></canvas>
+        <div class="sub gw" id="k-tp-w">-</div>
+        <div class="sub" id="k-tp-sub">rx, 24 h, band = mean &#177; k sd</div>
       </a>
       <a class="tile hud" id="t-devs" href="#devices?q=pass:latest">
         <div class="label">devices</div>
         <div class="kpi" id="k-devs">-</div>
+        <canvas class="spark" id="k-devs-spark" aria-label="devices, 24 h, over their baseline band"></canvas>
+        <div class="sub gw" id="k-devs-w">-</div>
         <div class="sub" id="k-devs-sub">waiting for a device pass</div>
+      </a>
+      <a class="tile hud" id="t-rate" href="#records">
+        <div class="label">records/s</div>
+        <div class="kpi" id="k-rate">-</div>
+        <canvas class="spark" id="k-rate-spark" aria-label="records per second, 24 h, over their baseline band"></canvas>
+        <div class="sub gw" id="k-rate-w">-</div>
+        <div class="sub" id="k-rate-sub">-</div>
       </a>
       <a class="tile hud" id="t-ble" href="#ble">
         <div class="label">ble advertisers</div>
         <div class="kpi" id="k-ble">-</div>
         <canvas class="spark" id="k-ble-spark" aria-label="sloth's BLE advertiser count, 24 h"></canvas>
+        <div class="sub gw" id="k-ble-w">-</div>
         <div class="sub" id="k-ble-sub">no Bluetooth source yet</div>
-      </a>
-      <a class="tile hud" id="t-alerts" href="#alerts?state=open">
-        <div class="label">open alerts</div>
-        <div class="kpi"><span class="sev2" id="k-crit">-</span> <span class="sev1" id="k-warn">-</span> <span class="sev0" id="k-low">-</span></div>
-        <div class="sub">crit / warn / low, since connect</div>
-        <div class="sub tri-tile" id="k-alerts-triaged" hidden></div>
-      </a>
-      <a class="tile hud" id="t-rate" href="#records">
-        <div class="label">records/s</div>
-        <div class="kpi" id="k-rate">-</div>
-        <div class="sub" id="k-rate-sub">-</div>
-      </a>
-      <a class="tile hud" id="t-sensor" href="#health">
-        <div class="label">sensor health</div>
-        <div class="kpi" id="k-sensor">-</div>
-        <div class="sub" id="k-sensor-sub">-</div>
       </a>
     </section>
     <section class="panel controls" aria-label="sensitivity">
@@ -151,7 +170,7 @@
       <div class="panel">
         <div class="label">hour of week <span class="sub" id="o-heat-note"></span></div>
         <canvas class="heat" id="o-heat" aria-label="hour-of-week heatmap, Monday first, the current hour outlined"></canvas>
-        <div class="sub">grey hatched: warming (fewer than 3 weeks); outlined: now</div>
+        <div class="sub">plain grey: warming (fewer than 3 weeks), counted in the caption; outlined: now</div>
       </div>
     </section>
     <section class="row2">
@@ -731,7 +750,7 @@
       <div class="sub" id="a-hover">bucket value over its baseline band (mean &#177; k sd for its hour of the week)</div>
     </section>
     <section class="panel">
-      <div class="label">every key, last hour at 10 s <span class="sub" id="a-multi-note"></span></div>
+      <div class="label">every key, last hour at 10 s <button type="button" class="dt-reset" id="a-scale" aria-pressed="false" title="shared: every cell on one y-scale, its top in the caption; own: each cell on its own, its top in the cell">scale: shared</button> <span class="sub" id="a-multi-note"></span></div>
       <div class="multi" id="a-multi"></div>
     </section>
    </div>
@@ -780,6 +799,7 @@
     <span>tick <b id="seq">-</b></span>
     <span>up <b id="up">-</b></span>
     <span>clients <b id="clients">-</b></span>
+    <span title="sensor.drops: sensor_health's libpcap and NIC drop deltas, the number the last bucket's and the glyph 24 h (Hybrid's series)">drops <b id="f-drops">-</b><canvas class="sg" id="f-drops-g" aria-label="the sensor's dropped frames, 24 h"></canvas></span>
     <span class="sub">passive: this page asks its own server and nothing else</span>
     <button type="button" class="dt-reset" id="prefs-reset" title="forget every setting this browser keeps for this page: the view, the theme, the scope, the filters, each table's columns and sort">reset settings</button>
   </footer>

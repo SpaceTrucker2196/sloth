@@ -275,11 +275,13 @@ static const struct toggle TOGGLES[] = {
     { "n-mode",     "    prefSet(\"anom.table\", N.table || null);" },
     { "n-chips",    "    prefSet(\"anom.kind\", N.kind || null);" },
     { "f-tabs",     "          prefSet(\"flows.proto\", p);" },
+    { "a-scale",    "    prefSet(\"act.scale\", A.ownScale ? \"own\" : null);" },
 };
 static const char *const TOGGLE_JS[] = {   /* the script's ARIA state, each a listed toggle's */
     "      b.ariaChecked = on ? \"true\" : \"false\";",
     "    $(\"n-mode\").ariaPressed = N.table ? \"true\" : \"false\";",
     "        b.ariaSelected = p === F.proto ? \"true\" : \"false\";",
+    "    $(\"a-scale\").ariaPressed = A.ownScale ? \"true\" : \"false\";",
 };
 
 static void test_every_toggle_is_decided(void) {

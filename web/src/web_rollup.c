@@ -78,6 +78,9 @@ const web_metric_t web_metric_defs[WM_COUNT] = {
     [WM_RECORDS_RATE] = { "records.rate", WEB_MK_COUNTER, WEB_KC_RECTYPE,
                           "rectype", "every decoded record, by its type",
                           "records" },
+    [WM_RECORDS_TOTAL] = { "records.total", WEB_MK_COUNTER, WEB_KC_GLOBAL, "",
+                           "every decoded record records.rate counts, unkeyed",
+                           "records" },
     [WM_SENSOR_DROPS] = { "sensor.drops", WEB_MK_COUNTER, WEB_KC_GLOBAL, "",
                           "sensor_health capture_drop_delta + "
                           "capture_ifdrop_delta + monitor_drop_delta + "

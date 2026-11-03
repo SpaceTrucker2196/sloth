@@ -107,7 +107,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-03 (#175: sloth.db v11's `alert_incidents` allow-listed, its key and incident_id predicate-only, `WEB_SDB_SCHEMA_MAX` 11; `/api/history/alerts` per incident in the range; the alert page's runs per incident and its `db_incident`); 2026-11-03 (#179: the alert page leads with observations, incidents, the times, confidence and the rule's phrase, count last as evaluations; the list sorted by severity then observations, a muted floor under 20% for a row below CRIT; `/api/alert`'s members in that order); 2026-11-03 (#181: a triage note over its 240 bytes refused beside the buttons with both numbers, counted in bytes as typed, never drawn before the server confirms it); 2026-11-03 (the fourth triage verdict `known`, known good, drawn green); 2026-11-03 (BLE Devices: anonymous advertising one entry and one advertiser, always in Unknown, no proximity row and no read slot; A1 across the 10 s slot measured, quiet, no change); 2026-11-02 (the BLE Devices waterfall's review fixes: its own high-water table, trackers read first, the grade at each row's announced power, the no-sensor and Ubertooth-only states); 2026-11-02 (the BLE Devices waterfall: device classes by time as the WiFi channel mix draws channels, advertisers by time graded by sloth's distance bands, the drawer's signal over the window; the `BLE Devices` and `GPS Sat` labels; `ble_device` re-sent once a 10 s slot while heard); 2026-11-02 (copy JSON's `location` filled: a device's `/api/positions` answer, an alert's page `loc` stamp, both spliced, never re-rendered); 2026-11-02 (copy JSON, first landed 2026-10-27 as `/api/bundle` and a copy and download button on every detail view: rebased onto triage, FRRS, BLE, vendor research and the alert's proof; kinds `ble` and `platform` through the views' own hooks; `frrs`, an alert's `triage`, `vendor_research`, `assessment` and `evidence` filled from their routes' answers; records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
+**Last updated**: 2026-11-03 (#171 V1: G1 on every Overview tile, the strip's network facts and the footer's drops, from `live.*`, `records.total`, `sensor.drops` and `ble.devices`, with G1's band words and arrow; the tiles in urgency order; anomaly cards' G1 with the episode shaded and `series unavailable` on a failed read; the hour-of-week grid as G4, warming cells plain grey with no hatch, counted in the caption; the small multiples on one shared scale with a `scale: own` toggle and the |z| sort); 2026-11-03 (#175: sloth.db v11's `alert_incidents` allow-listed, its key and incident_id predicate-only, `WEB_SDB_SCHEMA_MAX` 11; `/api/history/alerts` per incident in the range; the alert page's runs per incident and its `db_incident`); 2026-11-03 (#179: the alert page leads with observations, incidents, the times, confidence and the rule's phrase, count last as evaluations; the list sorted by severity then observations, a muted floor under 20% for a row below CRIT; `/api/alert`'s members in that order); 2026-11-03 (#181: a triage note over its 240 bytes refused beside the buttons with both numbers, counted in bytes as typed, never drawn before the server confirms it); 2026-11-03 (the fourth triage verdict `known`, known good, drawn green); 2026-11-03 (BLE Devices: anonymous advertising one entry and one advertiser, always in Unknown, no proximity row and no read slot; A1 across the 10 s slot measured, quiet, no change); 2026-11-02 (the BLE Devices waterfall's review fixes: its own high-water table, trackers read first, the grade at each row's announced power, the no-sensor and Ubertooth-only states); 2026-11-02 (the BLE Devices waterfall: device classes by time as the WiFi channel mix draws channels, advertisers by time graded by sloth's distance bands, the drawer's signal over the window; the `BLE Devices` and `GPS Sat` labels; `ble_device` re-sent once a 10 s slot while heard); 2026-11-02 (copy JSON's `location` filled: a device's `/api/positions` answer, an alert's page `loc` stamp, both spliced, never re-rendered); 2026-11-02 (copy JSON, first landed 2026-10-27 as `/api/bundle` and a copy and download button on every detail view: rebased onto triage, FRRS, BLE, vendor research and the alert's proof; kinds `ble` and `platform` through the views' own hooks; `frrs`, an alert's `triage`, `vendor_research`, `assessment` and `evidence` filled from their routes' answers; records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
 listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
@@ -1172,8 +1172,48 @@ another name. `web/tests/test_routes.c ::
 test_the_strip_and_the_footer_are_split` holds the two rows apart by
 element id.
 
+### Slice V1 (#171, 2026-11-03)
+
+The MVP's second half: after it every number on the Overview has its
+comparison. The series landed first (379ac49: `live.devices`,
+`live.alerts_open`, `live.anomalies_open`, `records.rate`,
+`sensor.drops`); this slice adds `records.total`, the same records
+unkeyed, so the records/s tile is one read rather than one per type,
+and draws them.
+
+- **Tiles (F1, ruling 5).** Urgency first: open alerts, open
+  anomalies, sensor health, throughput, devices, records/s, then BLE
+  advertisers. Each has the 24 h G1 of its series over the band for
+  each bucket's hour, and under it G1's words: `band lo to hi` (or
+  `warming`) and `↑ ↓ →` since the previous bucket. The number is still
+  `/api/live`'s. `web/ui/facts.js` owns the six series and paints the
+  tiles, the strip's 40 px G1s after `devs ble alerts anomalies rec/s`,
+  and the footer's `drops` (§6.9) with its last bucket's count beside
+  it, its words naming the bucket (`drops per 10 s`); the throughput
+  tile stays app.js's.
+  The V1 series are Hybrid's, so under Monitor or Local their glyphs
+  are the `no data` dash and the words name the scope that holds them.
+- **Anomaly cards (F13).** G1 of the metric that fired over its band,
+  the episode's window shaded in `--signal` at 12 percent, a caption;
+  `series unavailable` in the glyph's place when the read fails. A
+  window over an hour reads the minute tier when there is a store, and
+  a card keeps its y-range across the Overview's minute (R11).
+- **Hour of week (F3).** The grid is G4 in `glyph.js` now: a warming
+  cell plain `--rule` with no hatch (R8), an all-warming grid only its
+  now outline, the caption `warming: n of 168 cells` with the ramp's
+  top and n. The warming meaning is that word count (R10). G4 has no
+  TUI form yet; the grid predates the glyph layer, so R12 is owed, not
+  met.
+- **Small multiples (F6).** One shared y-scale by default, its top in
+  the caption, a `scale: own` toggle kept in the browser (each cell then
+  prints its top), sorted by |z| when a key has a baseline and by value
+  otherwise, the caption naming which.
+
+Not in V1: one-ink sparklines (F7, overruled by ruling 1), F4's hover
+notes, the Records panel's per-type G1 (§6.1), G4's TUI form.
+
 **Sources**: `docs/web-visual-spec.md` (§2 F1-F20, §5, §8, §10),
-`web/ui/glyph.js`, `web/tests/test_glyph.c`, `web/README.md` (Design),
+`web/ui/glyph.js`, `web/ui/facts.js`, `web/tests/test_glyph.c`, `web/README.md` (Design),
 `src/views/dashboard_primitives.c` (`draw_sparkline_at()`),
 `web/tests/test_tui_colors.c` (the pinning mechanism),
 `web/tools/palette.c` (the generator shape, for contrast).

@@ -711,8 +711,10 @@ static int emit_contrast(void) {
      * rules separate rows that are legible without them. */
     static const struct { const char *fg, *bg, *w; } gfx[] = {
         { "--rule", "--bg", "row rules" }, { "--rule", "--panel", "row rules, the warming cell" },
-        { "--muted", "--rule", "the warming hatch, on its cell" },
-        { "--muted", "--panel", "the warming hatch, on the panel" },
+        /* Since #171 V1 a warming cell has no hatch (F3, R8): its meaning
+         * is the caption's count in words, and this is the step from it
+         * to the lowest heat of a fed cell beside it. */
+        { "--heat-0", "--rule", "a fed cell's lowest heat, beside a warming one" },
     };
     printf("\nGraphics (`*` under 3:1):\n\n| graphic | on | use | dark | light |\n"
            "|---|---|---|---|---|\n");

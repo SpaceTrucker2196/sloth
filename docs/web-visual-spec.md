@@ -2,7 +2,7 @@
 
 **Working name:** the sloth glyph set
 **Applies to:** `web/ui/` (slothweb), with parity notes for the TUI
-**Status:** draft for the owner to read, 2026-10-26
+**Status:** draft for the owner to read, 2026-10-26; slices V0 and V1 built (§10)
 **Companion:** `docs/web-ui-spec.md` (the UI spec; its rulings table wins where the two disagree)
 
 > **Owner rulings, 2026-10-26** (these win over the body below):
@@ -403,9 +403,10 @@ Everything in §5 and §6 is drawn from records that already cross the socket. T
 | `ap.rssi` | bssid | gauge | `beacon.signal_dbm`; `rssi_min_60s`, `rssi_max_60s` kept as the bucket's min and max | fine, minute | G2 on WiFi, drawer |
 | `sta.rssi` | mac | gauge | `probe_client.signal_dbm`, `assoc.signal_dbm`, `wifi_sta.signal_dbm` | fine, minute | G2 on Devices, Lookup |
 | `live.devices` | (global) | gauge | the device count of sloth's latest pass, as `/api/live` computes it | fine, minute, hour | G1 on the strip and tile |
-| `live.alerts_open` | (global) | gauge | open incidents by severity, three keys `low`, `warn`, `crit` | fine, minute, hour | G1 on the strip and tile |
+| `live.alerts_open` | (global) | gauge | open incidents, as built one global sum of low + warn + crit (not three keys) | fine, minute, hour | G1 on the strip and tile |
 | `live.anomalies_open` | (global) | gauge | open episodes | fine, minute, hour | G1 on the strip and tile |
 | `records.rate` | type | counter | records per second by type, the `types[]` counts `/api/live` already keeps | fine | G1 in the Records header |
+| `records.total` | (global) | counter | the same records, unkeyed (F1's `live.records_rate`, under the name of its family) | fine, minute, hour | G1 on the strip and the records/s tile |
 | `sensor.drops` | (global) | counter | `sensor_health` per-tick libpcap and NIC drop deltas | fine, minute | G1 in the footer |
 
 Rules for the new series:
@@ -461,7 +462,7 @@ One child issue per slice, in the dark-factory style, each green on its own.
 | Slice | Content | Depends on |
 |---|---|---|
 | V0 | The glyph layer: G1, G5, G6 as pure mark-list functions plus painters; rules R1 to R12 in `web/README.md`; the caption grammar; the strip and footer split (F5); the three empty states (R5); the window rule (R4). No new data. | nothing |
-| V1 | The `live.*`, `records.rate` and `sensor.drops` series; G1 on every tile and strip fact (F1); G1 on anomaly cards (F13); the heatmap without hatch (F3); shared-scale multiples (F6); one-ink sparklines (F7). | V0 |
+| V1 | **Done** (series 379ac49; page, #171 V1). The `live.*`, `records.rate` and `sensor.drops` series, plus `records.total` for the records/s tile; G1 on every tile and strip fact and the footer's drops (F1, §6.9); G1 on anomaly cards with the episode shaded (F13); the heatmap without hatch, as G4 (F3); shared-scale multiples with the `scale` toggle and the |z| sort (F6); tiles in urgency order (ruling 5). One-ink sparklines (F7) are not done, by ruling 1: G1's line keeps the TUI's grading. Left: the Records panel's per-type G1 (§6.1), G4's TUI form (R12), F4's hover notes. | V0 |
 | V2 | `ap.rssi` and `sta.rssi`; G2 on Devices, WiFi, Lookup and the drawer (F9, F20); the `new` mark (F15); G6 on risk, karma, anomaly score and counts (F17). | V0 |
 | V3 | G3 horizon strips with absolute scales on the WiFi view (F8); G7 on History (F12); the WiFi view's four-panel layout (§6.3). | V1, V2 |
 | V4 | G8 chain timeline from the lifecycle records (F14); the flows matrix (F11). | V3 |

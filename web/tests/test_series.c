@@ -579,11 +579,12 @@ static void test_flush_all_writes_backlog_first(void) {
  * and sensor.drops, one global series fed by every sensor_health line.
  * 157 + 8 + 1 = 166; and since the owner's Q7 ruling of 2026-11-02,
  * the 10 probe clients' rf.rssi.sta (each row's last_seen is its ts):
- * 176, still under 5 MB. */
+ * 176; and since V1's records/s tile, records.total, one global series
+ * fed by every line: 177, still under 5 MB. */
 static long long g_now;
 static long long pinned(void *ctx) { (void)ctx; return g_now; }
 
-#define ACC_SERIES 176
+#define ACC_SERIES 177
 
 static size_t pass(char *b, size_t cap, long long t, int k) {
     size_t o = 0;

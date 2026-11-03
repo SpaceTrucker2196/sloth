@@ -18,6 +18,7 @@
  * canvas calls, and the mark list is what says what the glyph means. */
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "web_assets.h"
@@ -157,6 +158,8 @@ static void gl_caption(const gcap_t *c, char *out, size_t sz) {
 typedef struct {
     double w, h, from, to, step, sens;
     const double *scale;                       /* NULL for a fresh scale */
+    int shade_on;                              /* V1, F13: an episode's window */
+    double shade[2];
 } gopt_t;
 
 static void gl_dash(gmarks_t *g, double w, double h) {
@@ -176,6 +179,12 @@ static void gl_g1(const double (*pts)[2], int n, const double (*band)[4],
     double from = o->from, to = o->to;
 #define GX(t) (to > from ? ((t) - from) / (to - from) * w : 0)
 #define GY(v) (h - ((v) - lo) / (hi - lo) * h)
+    if (o->shade_on && to > from) {
+        double sa = GX(o->shade[0] > from ? o->shade[0] : from);
+        double e = o->shade[1] + step;
+        double sb = GX(e < to ? e : to);
+        if (sb > sa) gm_push(g, "shade", sa, 0, sb - sa > 1 ? sb - sa : 1, h, "--signal");
+    }
     int any = 0, i;
     for (i = 0; band && has && i < n; i++) if (has[i]) any = 1;
     for (i = 0; any && has && i < n; i++) {
@@ -229,6 +238,76 @@ static void gl_g1(const double (*pts)[2], int n, const double (*band)[4],
     gm_push(g, "last", GX(pts[k][0]), GY(pts[k][1]), 2.5, 2.5, tok);
 #undef GX
 #undef GY
+}
+
+/* G1's words: the arrow since the previous bucket, or "" for none. */
+static const char *gl_trend(const double (*pts)[2], int n) {
+    if (n < 2) return "";
+    double a = pts[n - 2][1], b = pts[n - 1][1];
+    return b > a ? "\xe2\x86\x91" : b < a ? "\xe2\x86\x93" : "\xe2\x86\x92";
+}
+
+/* R3, F6: one y-scale across a stack, grown from prev (NULL for none). */
+typedef struct { const double (*pts)[2]; int n; const double (*band)[4]; const int *has; } gset_t;
+static void gl_shared(const gset_t *sets, int ns, const double *prev, double *lo, double *hi) {
+    double r[2];
+    int have = prev != NULL;
+    if (prev) { r[0] = prev[0]; r[1] = prev[1]; }
+    for (int i = 0; i < ns; i++) {
+        gl_scale(sets[i].pts, sets[i].n, sets[i].band, sets[i].has, have ? r : NULL, lo, hi);
+        r[0] = *lo; r[1] = *hi;
+        have = 1;
+    }
+    if (!have) { r[0] = 0; r[1] = 1; }
+    *lo = r[0]; *hi = r[1];
+}
+
+/* F6's sort: by |z| when any row has one (rows without after, by
+ * value), else by value. The answer's word is "|z|" or "value". */
+typedef struct { int id; double cur; int has_z; double z; } grow_t;
+static int g_byz;
+static int gl_order_cmp(const void *pa, const void *pb) {
+    const grow_t *a = pa, *b = pb;
+    if (g_byz) {
+        if (a->has_z != b->has_z) return a->has_z ? -1 : 1;
+        if (a->has_z && fabs(b->z) != fabs(a->z)) return fabs(b->z) > fabs(a->z) ? 1 : -1;
+    }
+    return b->cur > a->cur ? 1 : b->cur < a->cur ? -1 : 0;
+}
+static const char *gl_order(grow_t *rows, int n) {
+    g_byz = 0;
+    for (int i = 0; i < n; i++) if (rows[i].has_z) g_byz = 1;
+    qsort(rows, (size_t)n, sizeof(rows[0]), gl_order_cmp);
+    return g_byz ? "|z|" : "value";
+}
+
+/* G4, the hour-of-week grid. cells NULL, or 168 [mean, sd, n]. */
+typedef struct { double warm; int warming, fed; double max, n; } g4st_t;
+static g4st_t gl_g4_stats(const double (*cells)[3], double warm) {
+    g4st_t o;
+    o.warm = warm; o.warming = 0; o.fed = 0; o.max = 0; o.n = 0;
+    for (int i = 0; i < 168; i++) {
+        if (!cells || !(cells[i][2] >= o.warm)) { o.warming++; continue; }
+        o.fed++;
+        o.n += cells[i][2];
+        if (cells[i][0] > o.max) o.max = cells[i][0];
+    }
+    return o;
+}
+static void gl_g4(const double (*cells)[3], double w, double h, double x0, double y0,
+                  double warm, int now, gmarks_t *g) {
+    memset(g, 0, sizeof(*g));
+    double cw = (w - x0) / 24, ch = (h - y0) / 7;
+    g4st_t st = gl_g4_stats(cells, warm);
+    for (int i = 0; st.fed && i < 168; i++) {
+        double x = x0 + cw * (i % 24), y = y0 + ch * (i / 24);
+        if (cells && cells[i][2] >= st.warm)
+            gm_push(g, "cell", x + 1, y + 1, cw - 2, ch - 2,
+                    gl_heat_token(st.max > 0 ? cells[i][0] / st.max : 0));
+        else gm_push(g, "warm", x + 1, y + 1, cw - 2, ch - 2, "--rule");
+    }
+    if (now >= 0 && now < 168)
+        gm_push(g, "outline", x0 + cw * (now % 24), y0 + ch * (now / 24), cw, ch, "--signal");
 }
 
 /* G5, the binary presence strip. cells: 1 present, 0 absent, -1 a gap. */
@@ -354,6 +433,72 @@ static void test_the_page_carries_the_ported_js(void) {
               "h * 0.5,\n"
               "            opt.count ? \"--rule\" : hot ? \"--sev-warn\" : \"--ink\"]);");
     WT_HAS(p, "      if (k === \"gap\") continue;");
+    /* V1: G1's words, the episode shade, the shared scale, the sort,
+     * G4. */
+    WT_HAS(p, "    return b > a ? \"\\u2191\" : b < a ? \"\\u2193\" : \"\\u2192\";");
+    WT_HAS(p, "      var sa = X(Math.max(sh[0], from)), sb = X(Math.min(sh[1] + step, to));\n"
+              "      if (sb > sa) m.push([\"shade\", sa, 0, Math.max(1, sb - sa), h, \"--signal\"]);");
+    WT_HAS(p, "    for (var i = 0; sets && i < sets.length; i++) r = scale(sets[i].pts, sets[i].band, r);\n"
+              "    return r || [0, 1];");
+    WT_HAS(p, "        if (za !== zb) return za ? -1 : 1;\n"
+              "        if (za && Math.abs(b.z) !== Math.abs(a.z)) return Math.abs(b.z) - Math.abs(a.z);");
+    WT_HAS(p, "    return { rows: out, by: byz ? \"|z|\" : \"value\" };");
+    WT_HAS(p, "      if (c && c[2] >= st.warm)\n"
+              "        m.push([\"cell\", x + 1, y + 1, cw - 2, ch - 2,\n"
+              "                heatToken(st.max > 0 ? c[0] / st.max : 0)]);\n"
+              "      else m.push([\"warm\", x + 1, y + 1, cw - 2, ch - 2, \"--rule\"]);");
+    WT_HAS(p, "      m.push([\"outline\", x0 + cw * (nc % 24), y0 + ch * Math.floor(nc / 24), cw, ch, \"--signal\"]);");
+    WT_HAS(p, "      if (!c || !(c[2] >= o.warm)) { o.warming++; continue; }");
+    WT_HAS(p, "      } else if (k === \"band\" || k === \"shade\") {\n"
+              "        g.globalAlpha = 0.12;");
+    /* The V1 functions whole, not a line of each: a line-only pin let
+     * G4's all-warming guard and its stats' max change in the JS with
+     * the port, and so the suite, still green (the V1 review, seen
+     * green, then red once these were pinned). */
+    WT_HAS(p, "  function trend(pts) {\n"
+              "    if (!pts || pts.length < 2) return \"\";\n"
+              "    var a = pts[pts.length - 2][1], b = pts[pts.length - 1][1];\n"
+              "    return b > a ? \"\\u2191\" : b < a ? \"\\u2193\" : \"\\u2192\";\n");
+    WT_HAS(p, "  function shared(sets, prev) {\n"
+              "    var r = prev ? [prev[0], prev[1]] : null;\n"
+              "    for (var i = 0; sets && i < sets.length; i++) r = scale(sets[i].pts, sets[i].band, r);\n"
+              "    return r || [0, 1];\n");
+    WT_HAS(p, "  function order(rows) {\n"
+              "    var out = (rows || []).slice(), byz = false, i;\n"
+              "    for (i = 0; i < out.length; i++) if (gnum(out[i].z)) byz = true;\n"
+              "    out.sort(function (a, b) {\n"
+              "      if (byz) {\n"
+              "        var za = gnum(a.z), zb = gnum(b.z);\n"
+              "        if (za !== zb) return za ? -1 : 1;\n"
+              "        if (za && Math.abs(b.z) !== Math.abs(a.z)) return Math.abs(b.z) - Math.abs(a.z);\n"
+              "      }\n"
+              "      return (gnum(b.cur) ? b.cur : 0) - (gnum(a.cur) ? a.cur : 0);\n"
+              "    });\n"
+              "    return { rows: out, by: byz ? \"|z|\" : \"value\" };\n");
+    WT_HAS(p, "  function g4(cells, opt) {\n"
+              "    var m = [], w = opt.w, h = opt.h, x0 = opt.x0 || 0, y0 = opt.y0 || 0, i;\n"
+              "    var cw = (w - x0) / 24, ch = (h - y0) / 7, st = g4Stats(cells, opt.warm);\n"
+              "    for (i = 0; st.fed && i < 168; i++) {\n"
+              "      var c = cells && cells[i], x = x0 + cw * (i % 24), y = y0 + ch * Math.floor(i / 24);\n"
+              "      if (c && c[2] >= st.warm)\n"
+              "        m.push([\"cell\", x + 1, y + 1, cw - 2, ch - 2,\n"
+              "                heatToken(st.max > 0 ? c[0] / st.max : 0)]);\n"
+              "      else m.push([\"warm\", x + 1, y + 1, cw - 2, ch - 2, \"--rule\"]);\n"
+              "    }\n"
+              "    var nc = opt.now;\n"
+              "    if (gnum(nc) && nc >= 0 && nc < 168)\n"
+              "      m.push([\"outline\", x0 + cw * (nc % 24), y0 + ch * Math.floor(nc / 24), cw, ch, \"--signal\"]);\n"
+              "    return m;\n");
+    WT_HAS(p, "  function g4Stats(cells, warm) {\n"
+              "    var o = { warm: gnum(warm) ? warm : 3, warming: 0, fed: 0, max: 0, n: 0 };\n"
+              "    for (var i = 0; i < 168; i++) {\n"
+              "      var c = cells && cells[i];\n"
+              "      if (!c || !(c[2] >= o.warm)) { o.warming++; continue; }\n"
+              "      o.fed++;\n"
+              "      o.n += c[2];\n"
+              "      if (c[0] > o.max) o.max = c[0];\n"
+              "    }\n"
+              "    return o;\n");
 }
 
 /* ── G1, every state §9 asks for ────────────────────────────────── */
@@ -784,6 +929,227 @@ static void test_g6_reads_in_greyscale(void) {
     WT_ASSERT(bar.w > tick.x);            /* over the threshold, by place */
 }
 
+/* ── V1: G1's words, the shade, shared scales, the sort, G4 ──────── */
+
+/* G1's words end in the direction since the previous bucket. Seen red
+ * with the up and down arrows swapped in the port. */
+static void test_g1_words_trend(void) {
+    double up[2][2] = {{0, 1}, {10, 2}}, dn[2][2] = {{0, 2}, {10, 1}}, fl[2][2] = {{0, 2}, {10, 2}};
+    WT_ASSERT(!strcmp(gl_trend(up, 2), "\xe2\x86\x91"));
+    WT_ASSERT(!strcmp(gl_trend(dn, 2), "\xe2\x86\x93"));
+    WT_ASSERT(!strcmp(gl_trend(fl, 2), "\xe2\x86\x92"));
+    /* One bucket has nothing to be a direction against. */
+    WT_ASSERT(!strcmp(gl_trend(up, 1), ""));
+    WT_ASSERT(!strcmp(gl_trend(NULL, 0), ""));
+}
+
+/* F13: the episode's window is one --signal mark, first, under the
+ * band and the line, clipped to the window. The absence for an episode
+ * over before the window began was seen red with the `sb > sa` clip
+ * taken out of the port, and the clip at the window's start with the
+ * `from` bound left out. The absence with no episode at all cannot be
+ * isolated by a mutation of the port: with no shade given there is no
+ * window to draw (the JS reads opt.shade only when it is there), so it
+ * is stated here, not claimed. */
+static void test_g1_episode_shade(void) {
+    double pts[6][2] = {{1000,1},{1010,2},{1020,3},{1030,4},{1040,5},{1050,6}};
+    gmarks_t g;
+    gopt_t o = g1opt();
+    gl_g1(pts, 6, NULL, NULL, &o, &g);
+    WT_EQ(gm_count(&g, "shade"), 0);
+    o.shade_on = 1; o.shade[0] = 1500; o.shade[1] = 1690;
+    gl_g1(pts, 6, NULL, NULL, &o, &g);
+    WT_EQ(gm_count(&g, "shade"), 1);
+    WT_ASSERT(!strcmp(g.m[0].kind, "shade"));
+    gmark_t sh = gm_get(&g, "shade");
+    WT_ASSERT(near(sh.x, 50));
+    WT_ASSERT(near(sh.w, 20));            /* to the end of its last bucket */
+    WT_ASSERT(near(sh.y, 0) && near(sh.h, 18));
+    WT_ASSERT(!strcmp(sh.tok, "--signal"));
+    /* Begun before the window: from the window's edge. */
+    o.shade[0] = 10; o.shade[1] = 1090;
+    gl_g1(pts, 6, NULL, NULL, &o, &g);
+    WT_ASSERT(near(gm_get(&g, "shade").x, 0));
+    WT_ASSERT(near(gm_get(&g, "shade").w, 10));
+    /* Over before the window began: nothing to shade. */
+    o.shade[0] = 10; o.shade[1] = 500;
+    gl_g1(pts, 6, NULL, NULL, &o, &g);
+    WT_EQ(gm_count(&g, "shade"), 0);
+    /* The line and the last value are unchanged by it. */
+    WT_EQ(gm_count(&g, "line"), 5);
+    WT_EQ(gm_count(&g, "last"), 1);
+}
+
+/* R3, F6, §9: a shared-scale stack has one maximum, so the small key's
+ * line sits low in its cell instead of filling it; and a refresh never
+ * shrinks it (R11). Seen red with gl_shared() keeping only the last
+ * set's range. */
+static void test_shared_scale_has_one_maximum(void) {
+    double big[5][2] = {{1000,0},{1010,300},{1020,100},{1030,200},{1040,300}};
+    double small[5][2] = {{1000,0},{1010,10},{1020,5},{1030,10},{1040,10}};
+    gset_t sets[2] = { { big, 5, NULL, NULL }, { small, 5, NULL, NULL } };
+    double lo, hi;
+    gl_shared(sets, 2, NULL, &lo, &hi);
+    WT_ASSERT(near(lo, 0) && near(hi, 300));
+    /* The small key drawn on it: its last value at a thirtieth of the
+     * height, not at the top as its own scale would put it. */
+    double sc[2] = { lo, hi };
+    gmarks_t g;
+    gopt_t o = g1opt();
+    o.scale = sc;
+    gl_g1(small, 5, NULL, NULL, &o, &g);
+    WT_ASSERT(near(gm_get(&g, "last").y, 18 - 10.0 / 300 * 18));
+    o.scale = NULL;
+    gl_g1(small, 5, NULL, NULL, &o, &g);
+    WT_ASSERT(near(gm_get(&g, "last").y, 0));
+    /* A refresh where the big key went quiet keeps the top. */
+    gset_t quiet[1] = { { small, 5, NULL, NULL } };
+    gl_shared(quiet, 1, sc, &lo, &hi);
+    WT_ASSERT(near(hi, 300));
+    /* An empty stack is the empty scale, never NaN. */
+    gl_shared(NULL, 0, NULL, &lo, &hi);
+    WT_ASSERT(near(lo, 0) && near(hi, 1));
+}
+
+/* F6's sort: |z| first, negative or positive, then the rows without a
+ * baseline by value; with no baseline anywhere, by value and the word
+ * says so. Seen red with fabs() left out of the comparison. */
+static void test_multiples_sort(void) {
+    grow_t r[4] = { { 0, 50, 0, 0 }, { 1, 1, 1, 0.5 }, { 2, 2, 1, -4 }, { 3, 900, 0, 0 } };
+    WT_ASSERT(!strcmp(gl_order(r, 4), "|z|"));
+    WT_EQ(r[0].id, 2);                     /* |z| 4, below its band */
+    WT_EQ(r[1].id, 1);
+    WT_EQ(r[2].id, 3);                     /* no baseline: after, by value */
+    WT_EQ(r[3].id, 0);
+    grow_t v[3] = { { 0, 5, 0, 0 }, { 1, 50, 0, 0 }, { 2, 0.5, 0, 0 } };
+    WT_ASSERT(!strcmp(gl_order(v, 3), "value"));
+    WT_EQ(v[0].id, 1);
+    WT_EQ(v[2].id, 2);
+}
+
+/* F3, R8: a warming cell is one --rule mark and nothing else, and a
+ * grid that is all warming draws only the now outline. Seen red with a
+ * second "hatch" mark pushed for each warming cell, and with the
+ * all-warming guard taken out of the port. */
+static void test_g4_warming_is_plain_rule(void) {
+    static double cells[168][3];
+    memset(cells, 0, sizeof(cells));
+    gmarks_t g;
+    gl_g4(cells, 272, 84, 32, 14, 3, 30, &g);
+    WT_EQ(g.n, 1);
+    WT_EQ(gm_count(&g, "outline"), 1);
+    gmark_t ol = gm_get(&g, "outline");
+    WT_ASSERT(near(ol.x, 32 + 10.0 * 6) && near(ol.y, 14 + 10.0));
+    WT_ASSERT(!strcmp(ol.tok, "--signal"));
+    gl_g4(NULL, 272, 84, 32, 14, 3, -1, &g);
+    WT_EQ(g.n, 0);
+    /* One cell fed: every other is a single warming mark. */
+    cells[5][0] = 7; cells[5][2] = 3;
+    gl_g4(cells, 272, 84, 32, 14, 3, 30, &g);
+    WT_EQ(g.n, 169);
+    WT_EQ(gm_count(&g, "cell"), 1);
+    WT_EQ(gm_count(&g, "warm"), 167);
+    for (int i = 0; i < g.n; i++)
+        if (!strcmp(g.m[i].kind, "warm")) WT_ASSERT(!strcmp(g.m[i].tok, "--rule"));
+    /* The hatch the old heatmap stroked is gone from the page. */
+    WT_LACKS(page(), "for (var s = -ch; s < cw; s += 4 * dpr) {");
+    WT_LACKS(page(), "grey hatched");
+}
+
+/* G4's ramp is against the largest fed mean: a warming cell's mean,
+ * however large, neither sets the top nor is drawn. Seen red with the
+ * stats' max taken over every cell. */
+static void test_g4_ramp_and_caption_facts(void) {
+    static double cells[168][3];
+    memset(cells, 0, sizeof(cells));
+    cells[0][0] = 100; cells[0][2] = 4;
+    cells[1][0] = 50;  cells[1][2] = 3;
+    cells[2][0] = 1e6; cells[2][2] = 2;    /* warming */
+    g4st_t st = gl_g4_stats(cells, 3);
+    WT_EQ(st.fed, 2);
+    WT_EQ(st.warming, 166);
+    WT_ASSERT(near(st.max, 100));
+    WT_ASSERT(near(st.n, 7));
+    gmarks_t g;
+    gl_g4(cells, 272, 84, 32, 14, 3, -1, &g);
+    WT_ASSERT(!strcmp(g.m[0].tok, "--heat-3"));
+    WT_ASSERT(!strcmp(g.m[1].tok, "--heat-2"));
+    WT_ASSERT(!strcmp(g.m[2].kind, "warm"));
+    WT_EQ(gm_count(&g, "outline"), 0);
+    /* R10: in one grey, fed, warming and now are still three kinds. */
+    gl_g4(cells, 272, 84, 32, 14, 3, 0, &g);
+    gm_grey(&g);
+    WT_ASSERT(gm_all_grey(&g));
+    WT_EQ(gm_count(&g, "cell"), 2);
+    WT_EQ(gm_count(&g, "warm"), 166);
+    WT_EQ(gm_count(&g, "outline"), 1);
+}
+
+/* F1, ruling 5: the Overview's tiles in urgency order, each with a G1
+ * and its words; every network fact in the strip and the footer's
+ * drops with a 40 px G1; each fed by its series in facts.js. Seen red
+ * with t-tp moved back to the front, and with k-devs-spark removed. */
+static void test_tiles_and_strip_carry_g1(void) {
+    const char *p = page();
+    static const char *const order[] = { "t-alerts", "t-anoms", "t-sensor", "t-tp", "t-devs",
+                                         "t-rate", "t-ble" };
+    static const char *const spark[] = { "k-alerts-spark", "k-anoms-spark", "k-sensor-spark",
+                                         "k-tp-spark", "k-devs-spark", "k-rate-spark", "k-ble-spark" };
+    static const char *const words[] = { "k-alerts-w", "k-anoms-w", "k-sensor-w", "k-tp-w",
+                                         "k-devs-w", "k-rate-w", "k-ble-w" };
+    const char *prev = p;
+    for (size_t i = 0; i < sizeof(order) / sizeof(order[0]); i++) {
+        char want[64];
+        snprintf(want, sizeof(want), "<a class=\"tile hud\" id=\"%s\"", order[i]);
+        const char *t = strstr(p, want);
+        WT_ASSERT(t != NULL && t > prev);
+        if (!t) continue;
+        prev = t;
+        const char *end = strstr(t, "</a>");
+        WT_ASSERT(end != NULL);
+        char sp[64], wd[64];
+        snprintf(sp, sizeof(sp), "<canvas class=\"spark\" id=\"%s\"", spark[i]);
+        snprintf(wd, sizeof(wd), "<div class=\"sub gw\" id=\"%s\">", words[i]);
+        const char *a = strstr(t, sp), *b = strstr(t, wd);
+        WT_ASSERT(a != NULL && end != NULL && a < end);
+        WT_ASSERT(b != NULL && end != NULL && b < end);
+    }
+    static const char *const sg[] = { "s-devs-g", "s-ble-g", "s-alerts-g", "s-anoms-g", "s-rate-g",
+                                      "f-drops-g" };
+    for (size_t i = 0; i < sizeof(sg) / sizeof(sg[0]); i++) {
+        char want[64];
+        snprintf(want, sizeof(want), "<canvas class=\"sg\" id=\"%s\"", sg[i]);
+        WT_HAS(p, want);
+    }
+    static const char *const metric[] = { "live.alerts_open", "live.anomalies_open", "sensor.drops",
+                                          "live.devices", "records.total", "ble.devices" };
+    for (size_t i = 0; i < sizeof(metric) / sizeof(metric[0]); i++) {
+        char want[64];
+        snprintf(want, sizeof(want), "metric: \"%s\"", metric[i]);
+        WT_HAS(p, want);
+    }
+    WT_HAS(p, "  window.SlothFacts = { init: init, refresh: refresh, paint: paint, words: words };");
+}
+
+/* F13 and F6 as the page wires them: a card's G1 is given its band and
+ * the episode, and says "series unavailable" in the glyph's place when
+ * the read fails; the multiples are one shared scale unless "own" is
+ * picked, and the caption names the sort. Seen red with the card's
+ * catch emptied back to the old silent one, and with the multiples'
+ * shared scale replaced by null. */
+static void test_cards_and_multiples_wiring(void) {
+    const char *p = page();
+    WT_HAS(p, "        shade: [first, num(a.last_seen) ? a.last_seen : now] }), tok);");
+    WT_HAS(p, "      cv.hidden = true;\n      note.textContent = \"series unavailable\";");
+    WT_LACKS(p, "/* the card stands without it */");
+    WT_HAS(p, "      var sh = m.kind === \"presence\" ? null : glyph.shared(ord.rows, "
+              "A.ownScale ? null : A.mscale || null);");
+    WT_HAS(p, "                : \"shared scale, top \" + fmt(sh[1]) + \" \" + m.unit) + \", sorted by \" + ord.by,");
+    WT_HAS(p, "        if (own) cell.appendChild(el(\"div\", \"mx\", \"top \" + fmt(own[1])));");
+    /* The heatmap's caption counts the warming cells (F3). */
+    WT_HAS(p, "n: st.n, state: st.warming ? \"warming: \" + st.warming + \" of 168 cells\" : \"\" });");
+}
+
 /* ── the TUI forms (R12) ────────────────────────────────────────── */
 
 /* R12: a glyph with no character-cell form is not added, so each of
@@ -814,6 +1180,30 @@ static void test_every_glyph_names_its_tui_form(void) {
     WT_HAS(doc, "\xe2\x96\x90\xe2\x96\x88");  /* G6's bullet */
 }
 
+/* The V1 review's fixes, as the page wires them: the footer's drops
+ * carries its number beside its glyph (R7: it has no /api/live figure
+ * of its own), a per-bucket counter's words name the bucket, a scope
+ * change starts the facts' and the multiples' scales again (R11 holds
+ * a scale across refreshes, not across other data), an anomaly card
+ * keeps its y-range by episode across the Overview's minute (R11) and
+ * reads a window over an hour from the minute tier, and the footer's
+ * glyph is painted again when "[" shows it. Each seen red with its
+ * line taken out of the page. */
+static void test_v1_review_wiring(void) {
+    const char *p = page();
+    WT_HAS(p, "drops <b id=\"f-drops\">-</b><canvas class=\"sg\" id=\"f-drops-g\"");
+    WT_HAS(p, "      H.set(f.num, g && g.pts.length ? H.fmt(g.pts[g.pts.length - 1][1]) : \"-\");");
+    WT_HAS(p, "    return f.perBucket && g && g.step > 0 ? f.unit + \" per \" + glyph.dur(g.step) : f.unit;");
+    WT_HAS(p, "words: \"k-sensor-w\", scopes: [\"hybrid\"], unit: \"drops\", perBucket: true },");
+    WT_HAS(p, "    if (S.scaleOf !== H.scope()) { S.scale = {}; S.scaleOf = H.scope(); }");
+    WT_HAS(p, "      var mso = m.name + \"\\u0000\" + SCOPE;\n"
+              "      if (A.mscaleOf !== mso) { A.mscale = null; A.mown = {}; A.mscaleOf = mso; }");
+    WT_HAS(p, "      ANSC[sk] = glyph.scale(s.points, bd, ANSC[sk] || null);");
+    WT_HAS(p, "        from: gw.from, to: gw.to, step: s.step, sens: sens, scale: ANSC[sk],");
+    WT_HAS(p, "    var tier = win > 3600 && A.storeOn ? \"minute\" : \"fine\", st = tier === \"minute\" ? 60 : 10;");
+    WT_HAS(p, "    if (e.key === \"[\" && window.SlothFacts) SlothFacts.paint();");
+}
+
 void run_glyph_tests(void) {
     WT_RUN(test_the_page_carries_the_ported_js);
     WT_RUN(test_g1_empty_is_a_dash);
@@ -837,5 +1227,14 @@ void run_glyph_tests(void) {
     WT_RUN(test_g6_count_bar);
     WT_RUN(test_g6_states);
     WT_RUN(test_g6_reads_in_greyscale);
+    WT_RUN(test_g1_words_trend);
+    WT_RUN(test_g1_episode_shade);
+    WT_RUN(test_shared_scale_has_one_maximum);
+    WT_RUN(test_multiples_sort);
+    WT_RUN(test_g4_warming_is_plain_rule);
+    WT_RUN(test_g4_ramp_and_caption_facts);
+    WT_RUN(test_tiles_and_strip_carry_g1);
+    WT_RUN(test_cards_and_multiples_wiring);
+    WT_RUN(test_v1_review_wiring);
     WT_RUN(test_every_glyph_names_its_tui_form);
 }

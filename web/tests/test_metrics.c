@@ -140,11 +140,11 @@ static void test_gauges(void) {
 
 /* Untrusted keys never become keys: markup in the ip, a bad name, a
  * name too long. Seen red with web_key_ip() replaced by a plain copy.
- * records.rate is the one metric every valid-typed line still feeds
- * (its key is the type, never the hostile field), so the overall
- * sample/series counts below are 4, not 0 -- asserted per metric
- * instead of in aggregate so that stays true without this test caring
- * how many other metrics a future record type might add. */
+ * records.rate is the one keyed metric every valid-typed line still
+ * feeds (its key is the type, never the hostile field), and
+ * records.total the one global, so the overall counts below are 8
+ * samples in 5 series (4 type keys and the global), not 0 -- the
+ * hostile fields themselves asserted per metric above them. */
 static void test_hostile_keys_refused(void) {
     fresh();
     line("{\"type\":\"top_host\",\"ts\":1,\"ip\":\"<img onerror=x>\",\"conn_count\":1}");
@@ -167,10 +167,11 @@ static void test_hostile_keys_refused(void) {
     WT_ASSERT(cur(WM_RECORDS_RATE, "dns").sum == 1);
     WT_ASSERT(cur(WM_RECORDS_RATE, "iface").sum == 1);
     WT_ASSERT(cur(WM_RECORDS_RATE, "probe_client").sum == 1);
+    WT_ASSERT(cur(WM_RECORDS_TOTAL, "").sum == 4);
     web_rollup_stats_t st;
     web_rollup_stats(&ru, &st);
-    WT_EQ(st.samples, 4);
-    WT_EQ(st.series, 4);
+    WT_EQ(st.samples, 8);
+    WT_EQ(st.series, 5);
     done();
 }
 
@@ -425,6 +426,15 @@ static void test_records_rate(void) {
     WT_EQ(has_series(WM_RECORDS_RATE, "alert"), 0);
     line("{\"type\":\"socket_gap\",\"ts\":1,\"dropped\":1}");
     WT_EQ(has_series(WM_RECORDS_RATE, "socket_gap"), 0);
+    /* records.total (F1, the records/s tile): the same four, one global
+     * series, and neither the gap nor a type records.rate refuses is in
+     * it. Seen red with the total's add moved above the type check. */
+    WT_ASSERT(cur(WM_RECORDS_TOTAL, "").sum == 4);
+    line("{\"type\":\"Not A Type\",\"ts\":1}");
+    WT_ASSERT(cur(WM_RECORDS_TOTAL, "").sum == 4);
+    WT_EQ(web_metric_defs[WM_RECORDS_TOTAL].kind, WEB_MK_COUNTER);
+    WT_EQ(web_metric_defs[WM_RECORDS_TOTAL].kclass, WEB_KC_GLOBAL);
+    WT_EQ(web_metric_find("records.total"), WM_RECORDS_TOTAL);
     done();
 }
 

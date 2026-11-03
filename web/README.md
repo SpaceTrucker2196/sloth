@@ -961,6 +961,7 @@ docs/web-ui-spec.md §5.1, and every one of its metrics has a source
 | `flow.ssh`, `flow.rdp`, `flow.smb`, `flow.snmp`, `flow.mqtt` | counter | IP | deltas of `ssh_flow` `banner_count`, `rdp_flow` `connect_req_count`, `smb_session` `count` (by `client_ip`), `snmp_flow` get+getnext+getbulk+set+response+trap, `mqtt_flow` connect+subscribe+publish, per flow, by source |
 | `live.devices`, `live.alerts_open`, `live.anomalies_open` | gauge | none | docs/web-visual-spec.md §7 (V1, F1): sampled once a batch (below), from `web_live_summary()`'s device count and open incident severities (low+warn+crit summed) and from `web_anomaly_open_count()`. Each needs its source wired first (`web_metrics_set_live()`, `web_metrics_set_anomaly()`); unwired, neither is sampled at all, not sampled at 0 |
 | `records.rate` | counter | record type | every decoded record but `socket_gap`, one per line, keyed by its own `type` |
+| `records.total` | counter | none | the same records, unkeyed (#171 V1): the records/s tile's G1, one read rather than one per type, and exactly the sum of `records.rate`'s keys (a type `records.rate` refuses is in neither) |
 | `gnss.sats_used`, `gnss.hdop`, `gnss.time_off_ms`, `gnss.cn0_mean` | gauge | none | the host's own GNSS receiver ([GNSS](#gnss)): `gnss_fix` `usat` (when ≥ 0), `hdop` (when > 0) and `time_off_ms` (when present), `gnss_sky` `cn0_mean` (when > 0). The records are change-only (a band change or the 300 s heartbeat), so each series is as sparse as its record; every scope's, as `sensor.drops` is; not scored by the anomaly engine |
 | `ble.class.advertisers` | gauge | BLE class | the BLE Devices view's class rows ([BLE](#ble), `web/src/web_bledev.h`): once a snapshot pass (at the batch's first `iface` record), the distinct addresses whose rows in the BLE tables were heard in the last 20 s, per device class (`b:phone`, `b:wear`, `b:tag`, `b:hid`, `b:bcn`, `b:iot`, `b:unk`), anonymous rows (`addr_type` 255) one advertiser between them in `b:unk`, as the class mix draws them; a class with none is not sampled |
 | `ble.class.adv` | counter, reports | BLE class | `ble_device` `adv_count` deltas per (address, address type, sensor), by the record's class, an anonymous row's (`addr_type` 255) included, always under `b:unk`; a one-channel sample (`sampled` 1) left out. HCI advertising reports, one a scan rather than a frame when the controller filters duplicates |
@@ -1293,10 +1294,12 @@ line over the baseline band, `mean ± k sd` of each bucket's hour of the
 week with `k` the sensitivity slider's (2 by default), a segment out of
 the band in the heat ramp, and the baseline mean and z in the hover. A
 series with no baseline yet is drawn over its min..max spread instead.
-The spec's `abs(z)` ordering of the small multiples and the
-ratio-to-baseline toggle are not here yet. Below it, a small multiple per key (the 24 most
-recently seen), each the last hour at 10 s, sorted by current value so
-the loudest is top left, with the key in the TUI's colour for it: the
+The ratio-to-baseline toggle is not here yet. Below it, a small
+multiple per key (the 24 most recently seen), each the last hour at
+10 s as G1 over its band on one shared y-scale (or each its own, by the
+`scale` button), sorted by |z| when a key has a baseline and by current
+value otherwise (#171 V1, F6; the glyph layer, below), with the key in
+the TUI's colour for it: the
 eight hues of `src/tui_palette.c` picked by `src/ip_color.c`'s hash
 (djb2; the spec says FNV-1a, but the TUI's own hash is the one that
 keeps the colours equal). Colours come from `theme.css` tokens read back
@@ -1586,10 +1589,11 @@ The Overview (§8.4) gains a throughput tile (the `iface.rx_rate` of the
 interface sloth reported most recently) with its 24 h sparkline over the
 baseline band, an open-anomalies tile, "now vs normal" (the same series,
 larger), the hour-of-week heatmap of that series (7 x 24, the heat ramp
-by mean, warming cells grey and hatched, the current cell outlined in
-`--signal`), and the five highest-scoring open episodes. The device,
-alert and anomaly counts have no stored series behind them, so only
-throughput has a band.
+by mean, warming cells plain grey (no hatch, #171 V1), the current cell outlined in
+`--signal`), and the five highest-scoring open episodes. Since #171
+V1 every tile has its own series and band (the glyph layer, below):
+the hour-of-week grid's warming cells are plain grey, counted in its
+caption, with no hatch.
 
 The **sensitivity** slider (1.5 to 4 sd, kept in this browser only)
 changes the band drawn and hides `rate` episodes whose |z| is under it.
@@ -3712,6 +3716,7 @@ and forgets the kept ones, so it does show all.
 | Anomalies: kind chip, cards or table | `anom.kind`, `anom.table` | the chip narrows the Anomalies list only: the Overview's open top five and the open-anomalies tile's drill-down are every kind |
 | Anomalies: closed-in window | `ctl.n-win` | |
 | Activity: metric, its key, window | `act.metric`, `act.keys`, `ctl.a-win` | the metric by name, each metric's key by itself |
+| Activity: the small multiples' scale | `act.scale` | `own`, or absent for the shared default (#171 V1, F6) |
 | Devices: search, sort | `ctl.d-q`, `ctl.d-sort` | |
 | Lookup: the query box | `ctl.l-q` | kept, not run |
 | WiFi: cells, window, AP sort | `ctl.w-metric`, `ctl.w-win`, `ctl.w-sort` | |
@@ -3756,19 +3761,18 @@ bare address, on the defaults.
 
 The page's data graphics are a small, fixed set of glyphs, specified in
 [`docs/web-visual-spec.md`](../docs/web-visual-spec.md) (its rulings
-table of 2026-10-26 overrides its body). Three of the eight are built
-(slice V0): **G1** the band sparkline, **G5** the binary presence
-strip, **G6** the bullet and count bar. G2 (range sparkline), G3
-(horizon strip), G4 (hour-of-week heat glyph), G7 (event rug) and G8
-(chain timeline) are later slices and are not in `glyph.js` yet; the
-hour-of-week heatmap on the Overview is still `heatmap()` in `app.js`,
-its own drawing, until G4 lands.
+table of 2026-10-26 overrides its body). Four of the eight are built:
+**G1** the band sparkline, **G5** the binary presence strip, **G6** the
+bullet and count bar (slice V0), and **G4** the hour-of-week grid
+(slice V1, F3). G2 (range sparkline), G3 (horizon strip), G7 (event
+rug) and G8 (chain timeline) are later slices and are not in `glyph.js`
+yet.
 
 **Two halves.** Each glyph is a *pure function* from data and a size to
 a list of marks, plus a *painter* that draws the list. A mark is
-`[kind, x, y, w, h, token]`: a kind (`band`, `line`, `gap`, `dot`,
-`max`, `min`, `last`, `cell`, `first`, `tick`, `now`, `range`, `bar`,
-`dash`), a rectangle in CSS pixels, and a colour **token** name — never
+`[kind, x, y, w, h, token]`: a kind (`shade`, `band`, `line`, `gap`,
+`dot`, `max`, `min`, `last`, `cell`, `warm`, `outline`, `first`,
+`tick`, `now`, `range`, `bar`, `dash`), a rectangle in CSS pixels, and a colour **token** name — never
 a colour. Nothing in the pure half reads the DOM, the canvas or the
 theme, so what a glyph *says* can be read without a browser, which is
 what `web/tests/test_glyph.c` does: the C there is a port of
@@ -3837,13 +3841,72 @@ slothweb change checks the change against the list
 | Glyph | What it answers | TUI form |
 |---|---|---|
 | G1 band sparkline | what is the value now, and is it normal | the `▁▂▃▄▅▆▇█` sparkline of `draw_sparkline_at()` in `CP_NORMAL`, graded by level, with the last cell in `CP_HEAT_*` when out of band; the band is the `±` number after it |
+| G4 hour-of-week grid | when is this usually here, and is now usual | **not built in the TUI yet.** The spec's form is the Devices Enter detail's 7 by 24 grid of `▪` at `tui_heat`'s four levels. The web grid predates the glyph layer (M3); V1 moved it into `glyph.js` and took its hatch out, it did not add it, so R12 is owed here rather than met: the TUI form is a follow-up |
 | G5 binary presence strip | when was it here | the Devices view's 24 cells, one an hour, as `▮` and `·`, with `◆` at a first-seen cell inside the window and the anomaly episode's cells underlined |
 | G6 bullet and count bar | how big is this score or count, against its range | `▐████▌░░░` in `CP_NORMAL`, eight cells, the measure filled and the rest dotted |
 
-**Where they are drawn.** G1 paints the Overview's tile sparklines and
-the presence strips go through G5 (`drawStrip()`); G6's placements (the
-risk, karma, anomaly-score and count columns) land with slice V2, so
-its painter is in the page before its first caller.
+**Where they are drawn.** G1 paints every Overview tile, a 40 px G1
+after each network fact in the status strip and after the footer's
+`drops`, every anomaly card, and the Activity view's small multiples;
+G4 paints the Overview's hour-of-week heatmap and the drawer's weekly
+presence; the presence strips go through G5 (`drawStrip()`); G6's
+placements (the risk, karma, anomaly-score and count columns) land
+with slice V2, so its painter is in the page before its first caller.
+
+**Slice V1 (#171), what each placement draws.**
+
+- **Tiles and strip (F1, `web/ui/facts.js`).** The tiles are in the
+  owner's urgency order (ruling 5): open alerts, open anomalies, sensor
+  health, throughput, devices, records/s, then BLE advertisers. Each
+  draws the 24 h series behind its number over the band for each
+  bucket's hour — `live.alerts_open`, `live.anomalies_open`,
+  `sensor.drops`, `iface.rx_rate` (app.js's own, as before),
+  `live.devices`, `records.total` (shown per second, as the tile's
+  number is) and `ble.devices` — and under the glyph G1's words:
+  `band lo to hi` for the last bucket's hour (or `warming`, or `no
+  data`) and `↑`, `↓` or `→` since the bucket before (`glyph.trend()`).
+  The strip's `devs`, `ble`, `alerts`, `anomalies` and `rec/s` carry
+  the same series at 40 by 12 px, and the footer's `drops` the
+  sensor's (§6.9), with the last bucket's count beside it (R7: the
+  footer has no `/api/live` figure of its own). A drop count is a
+  bucket's sum, so its words name the bucket (`band 0 to 3 drops per
+  10 s`, or `per 1 min` from the minute tier). The tile's number stays
+  `/api/live`'s; the glyph is the stored series, read once a minute (the
+  Overview's own minute, or facts.js's on every other view), its scale
+  grown across refreshes and started again on a scope change. The five V1 series are Hybrid's
+  (`web_scope_metric()` tag 0), so under Monitor or Local their glyphs
+  are R5's dash and the words say `a Hybrid series: none under
+  Monitor`; `ble.devices` is Monitor's too and a dash only under Local.
+- **Anomaly cards (F13).** The metric that fired, as G1 over its band,
+  with the episode's first-to-last window as a `shade` mark in
+  `--signal` at 12 percent under everything else, clipped to the
+  window. The window is the last hour, or back to ten minutes before
+  the episode began, up to a day, read from the minute tier when it is
+  over an hour and there is a store (a day at 10 s is ten pages a
+  card). Each card's y-range is kept by episode and scope (R11), since
+  the Overview rebuilds its cards every minute. A presence series keeps
+  its strip.
+  A failed read hides the canvas and says `series unavailable`, never a
+  blank; the card's caption follows R9 and ends `shaded: the episode`.
+- **Hour-of-week grid (F3, G4).** A warming cell is one plain `--rule`
+  `warm` mark, no hatch (R8); a grid with every cell warming draws only
+  the now `outline` and its caption. The caption (`heatCaption()`) is
+  R9's: the source, `hour of week`, the top of the ramp (`ramp 0 to
+  1.2k B/s`, the largest fed mean; a warming cell's mean never sets
+  it), n (the samples behind the fed cells), and `warming: n of 168
+  cells` while any is. The warming cell's meaning is that count in
+  words (R10), so the grey itself is not asked to reach 3:1.
+- **Small multiples (F6).** One G1 per key over the last hour, every
+  cell on one y-scale (`glyph.shared()`, grown and never shrunk on a
+  refresh, R11, started again for a new metric, a scope or the toggle)
+  whose top the caption prints once; the `scale: shared`
+  button turns to `scale: own`, kept in this browser (`act.scale`),
+  where each cell prints its own top in `--faint` at its top left.
+  Sorted by |z| — the last bucket against its hour's band, a key with
+  no baseline after every key with one, by value — or by value when no
+  key has a baseline (`glyph.order()`); the caption says `sorted by
+  |z|` or `sorted by value`. Each cell's line under its number carries
+  its `z`. A presence metric keeps its strips.
 
 ### Tables: sort and resize
 
@@ -4046,8 +4109,13 @@ chip); a placeholder that is not a control, such as the nav's
 brackets, canvas strokes), and the light theme's hover text and live
 pill use `--hover` instead. Chip text (`--phosphor-mid`) sits on
 `--panel-2` (4.69:1 light). The graphics table holds a mark that
-carries meaning to 3:1 (WCAG 1.4.11): the hour-of-week heatmap's
-warming cell is a `--muted` hatch on a `--rule` fill. The dotted row
+carries meaning to 3:1 (WCAG 1.4.11). The hour-of-week heatmap's
+warming cell is plain `--rule` since #171 V1 (F3: no hatch, R8): its
+meaning is carried in words, the caption's `warming: n of 168 cells`
+(R10), so the fill is structure, and a fed cell's lowest heat
+(`--heat-0`) is measured against it below: 2.05:1 in the dark theme,
+under 3:1, which is why the count in words is the carrier and not the
+grey. The dotted row
 rules are under 3:1 on purpose; they separate rows that read without
 them. A closed anomaly card is marked by a dashed edge and the word
 `closed`, never by dimming, so its data keep these ratios.
@@ -4120,8 +4188,7 @@ Graphics (`*` under 3:1):
 |---|---|---|---|---|
 | `--rule` | `--bg` | row rules | 1.65 * | 1.34 * |
 | `--rule` | `--panel` | row rules, the warming cell | 1.58 * | 1.51 * |
-| `--muted` | `--rule` | the warming hatch, on its cell | 3.44 | 3.82 |
-| `--muted` | `--panel` | the warming hatch, on the panel | 5.42 | 5.74 |
+| `--heat-0` | `--rule` | a fed cell's lowest heat, beside a warming one | 2.05 * | 3.99 |
 
 Chart hues closer than 30 (CIEDE2000) in either theme; under 15 fails the build:
 

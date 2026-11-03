@@ -182,6 +182,9 @@ input[type=range] { vertical-align: middle; accent-color: var(--phosphor); }
 /* ── charts ────────────────────────────────────────────────────────── */
 canvas.chart { display: block; width: 100%; height: 240px; margin-top: var(--gap); }
 canvas.spark { display: block; width: 100%; height: 36px; margin-top: 4px; }
+/* F1, F5: a 40 px G1 after each network fact in the strip, and after
+   the footer's drops, on the text line's own height (R2). */
+canvas.sg { display: inline-block; vertical-align: middle; width: 40px; height: 12px; margin-left: 6px; }
 canvas.heat { display: block; width: 100%; height: 180px; margin-top: var(--gap); }
 canvas.wfall { display: block; width: 100%; height: 280px; margin-top: var(--gap); }
 canvas.ovw { display: block; width: 100%; height: 72px; margin-top: var(--gap); cursor: crosshair; touch-action: none; }
@@ -193,6 +196,9 @@ canvas.strip { display: block; width: 100%; height: 18px; margin: 4px 0 var(--ga
 .cell .nm { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cell .v { font-size: 11px; color: var(--muted); }
 .cell canvas { display: block; width: 100%; height: 40px; }
+/* F6: under "scale: own" each cell prints its own top, --faint, at its
+   top left; under "shared" the caption prints the one top. */
+.cell .mx { font-size: 10px; color: var(--faint); }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 11px; color: var(--muted); margin: 6px 0; }
 .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 4px; }
 

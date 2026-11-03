@@ -499,8 +499,13 @@ void web_metrics_record(web_metrics_t *m, const web_jrec_t *r) {
      * strength of a check in a different module over a value this
      * function never saw checked. */
     char rk[WEB_KEY_MAX + 1];
-    if (web_key_rectype(t, rk) == 0)
+    if (web_key_rectype(t, rk) == 0) {
         web_rollup_add(m->ru, WM_RECORDS_RATE, rk, 1, now);
+        /* records.total: the same count, one global series, so the
+         * records/s tile's G1 is one read and its sum is exactly the
+         * per-type series' sum (a type refused above is in neither). */
+        web_rollup_add(m->ru, WM_RECORDS_TOTAL, "", 1, now);
+    }
     if (m->ident) web_ident_record(m->ident, r, now);
 
     if (!strcmp(t, "iface")) {
