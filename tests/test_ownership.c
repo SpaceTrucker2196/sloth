@@ -309,6 +309,133 @@ static void test_unconfigured_roster_knows_nothing(void) {
     ASSERT_EQ(ownership_known_count(), 0);
 }
 
+/* ── the sensor's own addresses (#183) ───────────────────── */
+
+/* One iface row, as the platform reports it. */
+static void add_iface(iface_stat_t *out, const char *name,
+                      const uint8_t mac[6], iface_mode_t mode) {
+    memset(out, 0, sizeof(*out));
+    snprintf(out->name, sizeof(out->name), "%s", name);
+    if (mac) memcpy(out->mac, mac, 6);
+    out->mode = mode;
+}
+
+/* Every interface, not only the managed card: the issue's whole point is
+ * that the Ethernet port and the monitor radio's own address are the
+ * host's too, and a roster that held one of the three would still have
+ * the sensor accusing itself through the others. */
+static void test_self_sync_rosters_every_iface_mac(void) {
+    ownership_clear();
+    ASSERT_EQ(ownership_self_count(), 0);
+    uint8_t eth[6] = {0x24,0x41,0x8c,0x00,0x00,0x01};
+    uint8_t wifi[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    uint8_t mon[6] = {0x00,0xc0,0xca,0xbb,0x51,0x82};
+    iface_stat_t ifs[3];
+    add_iface(&ifs[0], "eth0",  eth,  IFACE_MODE_ETHER);
+    add_iface(&ifs[1], "wlan0", wifi, IFACE_MODE_WIFI);
+    add_iface(&ifs[2], "alfa0", mon,  IFACE_MODE_MONITOR);
+    ownership_self_sync_ifaces(ifs, 3);
+    ASSERT_EQ(ownership_self_count(), 3);
+    ASSERT_EQ(ownership_is_self_mac(eth),  1);
+    ASSERT_EQ(ownership_is_self_mac(wifi), 1);
+    ASSERT_EQ(ownership_is_self_mac(mon),  1);
+    uint8_t stranger[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    ASSERT_EQ(ownership_is_self_mac(stranger), 0);
+}
+
+/* The roster is re-synced every poll, so re-adding must not consume a
+ * slot — 1 Hz for a day would otherwise overflow a 64-entry table in
+ * the first minute. */
+static void test_self_sync_is_idempotent(void) {
+    ownership_clear();
+    uint8_t wifi[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    iface_stat_t ifs[1];
+    add_iface(&ifs[0], "wlan0", wifi, IFACE_MODE_WIFI);
+    for (int i = 0; i < 50; i++) ownership_self_sync_ifaces(ifs, 1);
+    ASSERT_EQ(ownership_self_count(), 1);
+}
+
+/* An interface whose hardware address is unknown reads all-zero
+ * (iface_stat_t.mac), and loopback really is all-zero. Rostering that
+ * would exonerate every frame whose source address did not parse. The
+ * multicast bit can never be set on a host's own unicast address, so a
+ * row carrying one is a reporting artefact, not an address. */
+static void test_self_sync_rejects_non_addresses(void) {
+    ownership_clear();
+    uint8_t zero[6]  = {0,0,0,0,0,0};
+    uint8_t bcast[6] = {0xff,0xff,0xff,0xff,0xff,0xff};
+    uint8_t mcast[6] = {0x01,0x00,0x5e,0x00,0x00,0x01};
+    iface_stat_t ifs[3];
+    add_iface(&ifs[0], "lo",   zero,  IFACE_MODE_ETHER);
+    add_iface(&ifs[1], "br0",  bcast, IFACE_MODE_ETHER);
+    add_iface(&ifs[2], "veth", mcast, IFACE_MODE_ETHER);
+    ownership_self_sync_ifaces(ifs, 3);
+    ASSERT_EQ(ownership_self_count(), 0);
+    ASSERT_EQ(ownership_is_self_mac(zero),  0);
+    ASSERT_EQ(ownership_is_self_mac(bcast), 0);
+    ASSERT_EQ(ownership_is_self_mac(mcast), 0);
+    /* ...and the rejection must not have made every lookup true. */
+    uint8_t real[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    ASSERT_EQ(ownership_is_self_mac(real), 0);
+}
+
+/* Bounded like every other table here. A host with a few dozen veths
+ * must not walk off the end of the array. */
+static void test_self_roster_is_bounded(void) {
+    ownership_clear();
+    iface_stat_t one;
+    for (int i = 0; i < MAX_SELF_MACS + 10; i++) {
+        uint8_t m[6] = {0x02,0x00,0x00,
+                        (uint8_t)(i >> 16), (uint8_t)(i >> 8), (uint8_t)i};
+        add_iface(&one, "veth", m, IFACE_MODE_ETHER);
+        ownership_self_sync_ifaces(&one, 1);
+    }
+    ASSERT_EQ(ownership_self_count(), MAX_SELF_MACS);
+}
+
+/* The sensor's own card is "ours" in exactly the sense --known-mac
+ * means, which is what lets the exonerations consult one predicate.
+ * But the operator's roster count must NOT move: rule_unknown_device
+ * is inert until the operator rosters something, and a sensor that
+ * rostered itself would switch that rule on for every deployment that
+ * had only designated an SSID. */
+static void test_self_is_own_device_but_not_a_known_mac(void) {
+    ownership_clear();
+    uint8_t wifi[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    iface_stat_t ifs[1];
+    add_iface(&ifs[0], "wlan0", wifi, IFACE_MODE_WIFI);
+    ownership_self_sync_ifaces(ifs, 1);
+    ASSERT_EQ(ownership_is_own_device(wifi),   1);
+    ASSERT_EQ(ownership_is_known_device(wifi), 0);
+    ASSERT_EQ(ownership_known_count(), 0);
+    /* The operator's own entries still read as ours. */
+    ownership_add_known_mac("aa:bb:cc:dd:ee:ff");
+    uint8_t op[6] = {0xaa,0xbb,0xcc,0xdd,0xee,0xff};
+    ASSERT_EQ(ownership_is_own_device(op), 1);
+    ASSERT_EQ(ownership_is_self_mac(op),   0);
+    uint8_t stranger[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    ASSERT_EQ(ownership_is_own_device(stranger), 0);
+}
+
+static void test_self_roster_cleared_and_null_safe(void) {
+    ownership_clear();
+    uint8_t wifi[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    iface_stat_t ifs[1];
+    add_iface(&ifs[0], "wlan0", wifi, IFACE_MODE_WIFI);
+    ownership_self_sync_ifaces(ifs, 1);
+    ASSERT_EQ(ownership_self_count(), 1);
+    ownership_clear();
+    ASSERT_EQ(ownership_self_count(), 0);
+    ASSERT_EQ(ownership_is_self_mac(wifi), 0);
+    /* A platform backend that reports nothing, or a negative count. */
+    ownership_self_sync_ifaces(NULL, 3);
+    ownership_self_sync_ifaces(ifs, 0);
+    ownership_self_sync_ifaces(ifs, -1);
+    ASSERT_EQ(ownership_self_count(), 0);
+    ASSERT_EQ(ownership_is_self_mac(NULL), 0);
+    ASSERT_EQ(ownership_is_own_device(NULL), 0);
+}
+
 /* ── echoed input is sanitised (#137) ─────────────────────── */
 
 /* Run fn with stderr redirected to a temp file; returns bytes captured. */
@@ -446,6 +573,14 @@ void run_ownership_tests(void) {
     RUN_TEST(test_roster_file_load_is_idempotent);
     RUN_TEST(test_roster_is_bounded);
     RUN_TEST(test_unconfigured_roster_knows_nothing);
+
+    TEST_SUITE("ownership: the sensor's own addresses (#183)");
+    RUN_TEST(test_self_sync_rosters_every_iface_mac);
+    RUN_TEST(test_self_sync_is_idempotent);
+    RUN_TEST(test_self_sync_rejects_non_addresses);
+    RUN_TEST(test_self_roster_is_bounded);
+    RUN_TEST(test_self_is_own_device_but_not_a_known_mac);
+    RUN_TEST(test_self_roster_cleared_and_null_safe);
 
     TEST_SUITE("ownership: echoed input is sanitised (#137)");
     RUN_TEST(test_roster_bad_line_echo_has_no_control_bytes);

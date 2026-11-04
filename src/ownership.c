@@ -12,6 +12,8 @@ static uint8_t g_bssids[MAX_MY_BSSIDS][6];
 static int     g_bssid_n;
 static uint8_t g_known[MAX_KNOWN_MACS][6];
 static int     g_known_n;
+static uint8_t g_self[MAX_SELF_MACS][6];
+static int     g_self_n;
 
 /* Bounded, printable copy of operator-supplied text for an error line
  * (#137). The roster is a file, and the bad line about to be echoed is
@@ -197,6 +199,49 @@ int ownership_is_known_device(const uint8_t mac[6]) {
 
 int ownership_known_count(void) { return g_known_n; }
 
+/* ── the sensor's own addresses (#183) ─────────────────────── */
+
+int ownership_self_add(const uint8_t mac[6]) {
+    static const uint8_t zero[6] = { 0 };
+    if (!mac) return 0;
+    /* An unknown hardware address reads all-zero, and a zero entry
+     * would exonerate every row whose address was never resolved. */
+    if (memcmp(mac, zero, 6) == 0) return 0;
+    /* Group bit: no host's own unicast address has it, so a record
+     * carrying one is a reporting artefact. Covers broadcast too. */
+    if (mac[0] & 0x01) return 0;
+    for (int i = 0; i < g_self_n; i++)
+        if (memcmp(g_self[i], mac, 6) == 0) return 1;   /* idempotent */
+    /* Silent when full, unlike the operator-supplied rosters: nobody
+     * typed this in, so there is no input to correct, and a line per
+     * poll about a veth that did not fit would be the whole log. */
+    if (g_self_n >= MAX_SELF_MACS) return 0;
+    memcpy(g_self[g_self_n++], mac, 6);
+    return 1;
+}
+
+int ownership_self_sync_ifaces(const iface_stat_t *ifaces, int count) {
+    int added = 0;
+    if (!ifaces || count <= 0) return 0;
+    if (count > MAX_IFACES) count = MAX_IFACES;
+    for (int i = 0; i < count; i++)
+        if (ownership_self_add(ifaces[i].mac)) added++;
+    return added;
+}
+
+int ownership_is_self_mac(const uint8_t mac[6]) {
+    if (!mac) return 0;
+    for (int i = 0; i < g_self_n; i++)
+        if (memcmp(g_self[i], mac, 6) == 0) return 1;
+    return 0;
+}
+
+int ownership_self_count(void) { return g_self_n; }
+
+int ownership_is_own_device(const uint8_t mac[6]) {
+    return ownership_is_known_device(mac) || ownership_is_self_mac(mac);
+}
+
 int ownership_any(void)         { return g_ssid_n > 0 || g_bssid_n > 0; }
 int ownership_ssid_count(void)  { return g_ssid_n; }
 int ownership_bssid_count(void) { return g_bssid_n; }
@@ -205,7 +250,9 @@ void ownership_clear(void) {
     g_ssid_n  = 0;
     g_bssid_n = 0;
     g_known_n = 0;
+    g_self_n  = 0;
     memset(g_ssids,  0, sizeof(g_ssids));
     memset(g_bssids, 0, sizeof(g_bssids));
     memset(g_known,  0, sizeof(g_known));
+    memset(g_self,   0, sizeof(g_self));
 }

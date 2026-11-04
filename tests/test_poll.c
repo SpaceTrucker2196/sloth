@@ -13,6 +13,7 @@
 #include "beacon_snoop.h"
 #include "transit.h"
 #include "tmp_dir.h"
+#include "ownership.h"
 
 /* poll_tick() and its phase table (#113).
  *
@@ -191,6 +192,41 @@ static void test_sensor_emitted_on_registration_tick(void) {
     sloth_clock_test_set(NULL, NULL);
 }
 
+/* #183: the self roster is sourced from the iface records the PLATFORM
+ * phase already polls, so it must be populated by the first tick — the
+ * phase order puts PLATFORM ahead of the alert rules, which means there
+ * is no tick on which a rule can see a probe from the host's own card
+ * before the roster knows the address. */
+static void test_tick_rosters_the_hosts_own_iface_macs(void) {
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    fake_net_reset();
+    ownership_clear();
+    const uint8_t eth[6] = {0x24,0x41,0x8c,0x00,0x00,0x01};
+    const uint8_t mon[6] = {0x00,0xc0,0xca,0xbb,0x51,0x82};
+    snprintf(g_fake_net.ifaces[0].name, sizeof(g_fake_net.ifaces[0].name),
+             "eth0");
+    memcpy(g_fake_net.ifaces[0].mac, eth, 6);
+    g_fake_net.ifaces[0].mode = IFACE_MODE_ETHER;
+    snprintf(g_fake_net.ifaces[1].name, sizeof(g_fake_net.ifaces[1].name),
+             "alfa0");
+    memcpy(g_fake_net.ifaces[1].mac, mon, 6);
+    g_fake_net.ifaces[1].mode = IFACE_MODE_MONITOR;
+    g_fake_net.iface_count = 2;
+
+    poll_ctx_t ctx;
+    poll_ctx_init(&ctx);
+    poll_tick(&s, &ctx);
+    ASSERT_EQ(ownership_is_self_mac(eth), 1);
+    ASSERT_EQ(ownership_is_self_mac(mon), 1);
+    ASSERT_EQ(ownership_self_count(), 2);
+    /* An address the host does not have stays a stranger. */
+    const uint8_t other[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    ASSERT_EQ(ownership_is_self_mac(other), 0);
+    ownership_clear();
+    fake_net_reset();
+}
+
 void run_poll_tests(void) {
     TEST_SUITE("poll_tick phase table (#113)");
     RUN_TEST(test_phases_are_monotonic);
@@ -200,6 +236,7 @@ void run_poll_tests(void) {
     RUN_TEST(test_tick_reads_platform_and_runs_hooks);
     RUN_TEST(test_ctx_init_reads_the_clock_seam);
     RUN_TEST(test_sensor_emitted_on_registration_tick);
+    RUN_TEST(test_tick_rosters_the_hosts_own_iface_macs);
 }
 
 #ifdef WITH_PCAP

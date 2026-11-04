@@ -64,6 +64,7 @@
 #include "presence.h"
 #include "rf_distance.h"
 #include "jsonl.h"
+#include "ownership.h"
 #include "db.h"
 
 /* Stage bodies. Each is the code poll_data() ran at that point, moved
@@ -75,6 +76,15 @@
 static void st_platform_net(sloth_state_t *s, const poll_ctx_t *ctx) {
     (void)ctx;
     s->iface_count = g_platform.get_ifaces(s->ifaces, MAX_IFACES);
+    /* #183: every address this host answers on, into the self roster,
+     * from the records that already carry them. Here rather than at
+     * startup alone because an interface can appear, be renamed or be
+     * replugged mid-run; and here rather than later in the tick because
+     * the PLATFORM phase runs ahead of the alert rules, so no rule ever
+     * sees a frame from the host's own card before the roster has the
+     * address. No syscall is added - this reads what get_ifaces()
+     * returned (MISSION §2). */
+    ownership_self_sync_ifaces(s->ifaces, s->iface_count);
     s->conn_count  = g_platform.get_conns(s->conns, MAX_CONNS);
 #ifdef WITH_WIFI
     s->ap_count       = g_platform.wifi_scan(s->aps, MAX_WIFI_APS);

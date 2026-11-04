@@ -24,6 +24,11 @@
 
 #include <stdint.h>
 
+/* For iface_stat_t, which the self roster (#183) reads. State still
+ * does not belong here — the self roster takes the interface records as
+ * an argument and keeps no pointer into sloth_state_t. */
+#include "sloth.h"
+
 /* Bounded like every other table in the tree. A surveyor designates a
  * handful of networks per engagement, not hundreds. */
 #define MAX_MY_SSIDS   16
@@ -96,6 +101,64 @@ int ownership_load_known_macs(const char *path);
 
 int ownership_is_known_device(const uint8_t mac[6]);
 int ownership_known_count(void);
+
+/* ── the sensor's own addresses (#183) ─────────────────────
+ *
+ * The operator's roster answers "which devices are mine". This answers
+ * the question nobody had to ask, because the host already knows it:
+ * **which addresses are this sensor's own**. Every rule that treats an
+ * emitter as a third party was reading the host's own Wi-Fi card as
+ * one, and on the reference host that produced 330 WARN incidents of
+ * MY_NETWORK_RECON against the managed card's background scan — the
+ * sensor reporting itself as reconnaissance against the network it is
+ * sitting on. `--known-mac` cleared it, but only if the operator
+ * thought to roster the sensor.
+ *
+ * It is a roster and not a lookup through sloth_state_t on purpose:
+ * `get_ifaces()` is a poll that can come back short for a tick (a
+ * renamed, replugged or momentarily absent interface), and an
+ * exoneration that blinks is worse than one that is slightly stale —
+ * the address does not stop being the host's own because one read of
+ * /sys missed it. Entries are therefore added and never removed, for
+ * the life of the process.
+ *
+ * Kept separate from the operator's roster rather than folded into it,
+ * because `ownership_known_count()` is a *gate*: rule_unknown_device is
+ * deliberately inert until the operator rosters something, and a sensor
+ * that rostered itself would switch that rule on for every deployment
+ * that had designated only an SSID. */
+
+/* A host carries more addresses than it has radios — bridges, veths and
+ * docker interfaces all report one. Bounded like every other table
+ * here; past the bound, later interfaces are not rostered. */
+#define MAX_SELF_MACS 64
+
+/* Register one of the host's own addresses. Rejects an all-zero address
+ * (iface_stat_t.mac uses it for "unknown", and loopback really is zero)
+ * and any address with the multicast bit set, which a host's own
+ * unicast address can never have. Idempotent; returns 1 when the
+ * address is rostered, 0 when it was rejected or the table is full. */
+int ownership_self_add(const uint8_t mac[6]);
+
+/* Sync from one poll's worth of interface records — the call the
+ * PLATFORM phase makes right after get_ifaces(), which is "at startup
+ * and on every iface change" without a second source of truth. NULL or
+ * a non-positive count is a no-op. */
+int ownership_self_sync_ifaces(const iface_stat_t *ifaces, int count);
+
+int ownership_is_self_mac(const uint8_t mac[6]);
+int ownership_self_count(void);
+
+/* "Ours": on the operator's roster, or one of the sensor's own
+ * addresses. This is what the exonerations consult, so that the two
+ * answers to "this is not a stranger" are indistinguishable at the call
+ * site — which is the whole of #183 item 1. Rules that consult the
+ * roster to *escalate* (BTM_ABUSE, PEAP_NO_SERVER_CERT: "the operator's
+ * own device fell for this") deliberately keep asking
+ * ownership_is_known_device(), because the sensor's own card is not
+ * what the operator wrote down and a CRIT about it would be the
+ * opposite of the point. */
+int ownership_is_own_device(const uint8_t mac[6]);
 
 /* True when the operator designated anything at all. Rules use this to
  * skip work entirely in the common unconfigured case. */
