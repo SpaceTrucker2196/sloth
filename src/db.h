@@ -264,6 +264,27 @@ int db_count_new_since(db_new_kind_t kind, time_t since);
  * Returns the number written. */
 int db_akm_regressions(db_akm_regression_t *out, int max);
 
+/* ── persisted association evidence (#183 item 3) ────────────────────
+ *
+ * When `sta` was last recorded as associated to a network the operator
+ * designated as theirs, or 0 if never / no database open.
+ *
+ * The live `s->assocs[]` table is what sloth can see *now*; this is
+ * what it saw. MY_NETWORK_RECON needs the second one because its
+ * corroboration is measured over a window (recon.sustain_s) while its
+ * exoneration was reading an instant: on the reference host the
+ * association aged out of the live table 33 minutes before the
+ * sustained-probing corroboration escalated the finding to WARN, so
+ * the rule reported a card that had been on the network the whole time.
+ *
+ * Queried on demand rather than cached at db_tick, which is the
+ * opposite of db_akm_regressions() and for the opposite reason: a
+ * regression can only change at a tick, but this answer changes as rows
+ * age, and the caller reaches it only for a client that already
+ * survived every live exoneration — a handful of rows a poll, on
+ * idx_assocs_sta. */
+time_t db_sta_designated_assoc_last_seen(const uint8_t sta[6]);
+
 /* True when `now` is far enough past the last write for another tick.
  * Kept here rather than in main.c so the cadence is testable. */
 int  db_due(time_t now);
@@ -315,6 +336,11 @@ static inline void db_maintain(time_t now)   { (void)now; }
 static inline long long db_size_bytes(void)  { return -1; }
 static inline int db_akm_regressions(db_akm_regression_t *o, int m)
        { (void)o; (void)m; return 0; }
+/* No file, no history: the freshness exoneration degrades to the live
+ * assoc table it was added beside, which is this build's only evidence
+ * either way. */
+static inline time_t db_sta_designated_assoc_last_seen(const uint8_t s[6])
+       { (void)s; return 0; }
 
 typedef enum {
     DB_NEW_DEVICE = 0,

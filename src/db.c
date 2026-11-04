@@ -2475,6 +2475,39 @@ int db_akm_regressions(db_akm_regression_t *out, int max) {
     return n;
 }
 
+/* ── persisted association evidence (#183) ───────────────────────────
+ *
+ * Designation is tested here rather than in SQL because it is operator
+ * context, not a stored column: the BSSID and the SSID are both valid
+ * answers (the operator may have designated either), and a LIKE over
+ * an SSID the air supplied would be a pattern match on untrusted text.
+ * Rows come back newest-first and the walk stops at the first
+ * designated one, so the common case is one step. */
+time_t db_sta_designated_assoc_last_seen(const uint8_t sta[6]) {
+    if (!sta || !db_is_open()) return 0;
+    char mac[18];
+    mac_str(sta, mac);
+
+    sqlite3_stmt *st = NULL;
+    const char *sql = "SELECT bssid, ssid, last_seen FROM assocs"
+                      " WHERE sta_mac = ?1 ORDER BY last_seen DESC";
+    if (sqlite3_prepare_v2(g_db, sql, -1, &st, NULL) != SQLITE_OK) return 0;
+    sqlite3_bind_text(st, 1, mac, -1, SQLITE_TRANSIENT);
+    time_t found = 0;
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        const unsigned char *bss  = sqlite3_column_text(st, 0);
+        const unsigned char *ssid = sqlite3_column_text(st, 1);
+        uint8_t bssid[6];
+        int mine = 0;
+        if (bss && ownership_parse_mac((const char *)bss, bssid))
+            mine = ownership_is_my_bssid(bssid);
+        if (!mine && ssid) mine = ownership_is_my_ssid((const char *)ssid);
+        if (mine) { found = (time_t)sqlite3_column_int64(st, 2); break; }
+    }
+    sqlite3_finalize(st);
+    return found;
+}
+
 void db_tick(const sloth_state_t *s, time_t now) {
     if (!s || !db_is_open()) return;
 

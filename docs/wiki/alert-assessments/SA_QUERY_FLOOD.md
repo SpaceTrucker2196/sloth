@@ -1,7 +1,7 @@
 ---
 type: SA_QUERY_FLOOD
 technique: T1499
-rule_file: src/alerts/rules_wifi_mgmt.c:402 rule_sa_query_flood()
+rule_file: src/alerts/rules_wifi_mgmt.c:403 rule_sa_query_flood()
 count_semantics: per evaluation tick, per (BSSID, STA) key, while a storm stands. fire_ev() bumps count every poll (>= 4/s; POLL_MS 250 is the longest wait) in which that pair's in-window SA-Query total is still >= threshold; one increment is one poll, NOT one SA-Query frame. The measurement (saq_flood_pair) counts stamps in the pair's own timestamp ring (SAQ_FLOOD_THRESH*4 = 48 slots) that fall inside the window, so the detail's "N SA-Query frames" is a per-frame count and the alert's count is per tick; the ring slides, so an old burst does not keep the pair over threshold
 severity_assessment: agree - CRIT with no ownership split is defensible: a sustained SA Query storm is the AP successfully refusing spoofed disassociations under MFP, i.e. an attack in progress against that BSS whoever owns it, and the rule says so rather than overclaiming the attacker's frames it never heard
 false_positive_risk: low-to-medium - a legitimate SA Query exchange is a handful of frames over a few hundred milliseconds (hostapd default dot11AssociationSAQueryMaximumTimeout 1000 TU), far below 12 in 10 s; the residual risk is a client or AP SA-Query state-machine bug, and (before 2026-10-14) a parser artefact that read protected-frame ciphertext as an SA Query category

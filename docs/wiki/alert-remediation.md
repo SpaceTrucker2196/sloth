@@ -782,7 +782,17 @@ Sources: `research/mitre/T1095.md`
 1. Note the client and the designated network it probed for. The rule's
    own text lists the benign causes: a returning device, an unobserved
    association.
-2. Check whether the client is rostered (`--known-mac`).
+2. Check whether the client is rostered (`--known-mac`). The sensor's own
+   interface addresses no longer need to be: they are rostered from the
+   `iface` records (#183), as is an association this host recorded
+   inside the `recon.sustain_s` window. If the address is one of the
+   host's own and the finding is still open, say so on the issue - that
+   is a bug in the self roster, not a lead.
+3. Check whether it is a *randomised* address belonging to one of the
+   host's own radios. A managed card scans with rotating MACs that the
+   `iface` records never name, so the self roster cannot see them; they
+   are exonerated only when seqnum correlation ties one to an address
+   that is associated. The `[j]` view is where that link shows.
 
 **Fix**
 

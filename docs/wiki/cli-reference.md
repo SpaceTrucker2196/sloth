@@ -333,7 +333,7 @@ The three `--db-*` flags are aliases for `db.interval_secs`, `db.retain_days` an
 | `--site` | `TEXT` | off | Operator label for this sensor's location; part of the evil-twin dedup key. Overrides the inventory file's `site`. Config only — never derived from RF. |
 | `--my-ssid` | `SSID` | off | Designate your own network (repeatable, max 16). Label only; unlocks `MY_NET_RECON`. |
 | `--my-bssid` | `BSSID` | off | Designate your own AP (repeatable, max 16). Floods at it escalate WARN→CRIT; never named the impostor half of a twin. |
-| `--known-mac` | `MAC` | off | Add a MAC to the known-device roster (repeatable, max 512). |
+| `--known-mac` | `MAC` | off | Add a MAC to the known-device roster (repeatable, max 512). The host's **own** interface addresses need no flag: every MAC the `iface` records carry - Ethernet, the managed card, the monitor radio - is rostered automatically and exonerates the same way (#183). |
 | `--known-macs` | `FILE` | off | Load a roster (one MAC/line, `#` comments). With a roster **and** a `--my-ssid`/`--my-bssid`, an associated device not on the roster raises `UNKNOWN_DEVICE`. A bad line is echoed as at most 48 bytes with C0/DEL shown as `?` (#137). |
 
 ### Posture — snapshots & research

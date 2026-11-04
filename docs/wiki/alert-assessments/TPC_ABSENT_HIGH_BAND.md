@@ -1,7 +1,7 @@
 ---
 type: TPC_ABSENT_HIGH_BAND
 technique: ""
-rule_file: src/alerts/rules_wifi_mgmt.c:682 of rule_tpc_absent_high_band()
+rule_file: src/alerts/rules_wifi_mgmt.c:683 of rule_tpc_absent_high_band()
 count_semantics: per rule tick (one alerts_update() pass, POLL_MS=250 ms default) on which a designated 5 GHz beacon_ap row still has neither Power Constraint (tag 32) nor TPC Report (tag 35) retained. Keyed per BSSID, so one incident with a rising count per designated AP, not one per beacon frame. `fire()` bumps `evaluations` (= `count`) once per alerts_update() under the key (engine.c:478).
 severity_assessment: agree - WARN, never CRIT. It reports the operator's own equipment being misconfigured against IEEE 802.11-2020 §11.8, not an adversary; the header is explicit that nothing was transmitted at sloth to produce it.
 false_positive_risk: low (as scoped) - it fires only on a BSS the operator designated with --my-bssid/--my-ssid, and only after an observation floor; the residual benign cause is a 6 GHz BSS misread as 5 GHz (guarded by ap_band_label) or a legacy 802.11a AP (suppressed). Ungated it would be high.

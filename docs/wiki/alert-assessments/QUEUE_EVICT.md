@@ -1,7 +1,7 @@
 ---
 type: QUEUE_EVICT
 technique: T1557
-rule_file: src/alerts/rules_wifi_mgmt.c:1184 of rule_queue_evict(); feeder src/queue_evict.c:103 (queue_evict_observe_downlink_frame)
+rule_file: src/alerts/rules_wifi_mgmt.c:1229 of rule_queue_evict(); feeder src/queue_evict.c:103 (queue_evict_observe_downlink_frame)
 count_semantics: per rule tick (one alerts_update() pass, every POLL_MS=250 ms by default) on which the (BSSID,STA) row still holds a release younger than queue_evict.report_secs (900 s). NOT per frame, NOT per release. One qualifying burst re-asserts the key on every tick for 15 minutes (~3,600 counts at the default poll). The true incident count is `release_count`, shown in the detail as `x<N>`.
 severity_assessment: agree - LOW/25% uncorroborated, WARN/70% only with a PM_FORGE contradiction on the same station within 10 s, CRIT only when that holds on a --my-bssid AP. The bare observable is identical to a roam, so anything higher by default would overclaim.
 false_positive_risk: high - the uncorroborated shape (a session change then >=3 distinct downlink data frames inside 100 ms) is what an ordinary (re)association on a busy BSS looks like; the corroborated shape is medium.

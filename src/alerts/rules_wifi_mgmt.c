@@ -17,6 +17,7 @@
 #include "assoc_track.h"
 #include "action_snoop.h"
 #include "ctrl_frames.h"
+#include "db.h"
 #include "ownership.h"
 #include "rf_quality.h"
 #include "pm_forge.h"
@@ -846,6 +847,16 @@ void rule_probe_flood(const sloth_state_t *s, time_t now) {
  * exonerations that were missing: a correlated sibling address that *is*
  * associated, and the operator's own roster.
  *
+ * #183 adds the two the reference host needed. The host's own interface
+ * addresses are rostered automatically, because the first device this
+ * rule finds on a sensor sitting on the designated network is the
+ * sensor's own managed card doing a background scan. And an association
+ * this host *recorded* inside the corroboration window counts, not only
+ * one still live in the assoc table: the live row aged out 33 minutes
+ * before the sustained-probing corroboration escalated the finding, so
+ * the exoneration was being asked for an instant while the accusation
+ * was measured over ten minutes.
+ *
  * Deliberately NOT corroborated by a randomised MAC. Probe-request MAC
  * randomisation is default behaviour on current iOS and Android, so it
  * describes the phone population, not the adversary. */
@@ -893,6 +904,28 @@ static int correlated_sibling_is_associated(const sloth_state_t *s,
     return 0;
 }
 
+/* The same exoneration, from the record instead of the moment (#183).
+ *
+ * `sustained` is measured over recon.sustain_s, so the association that
+ * answers it has to be allowed the same window: on the reference host
+ * the card's association left the live table 33 minutes before the
+ * corroboration escalated the finding, and the rule then reported a
+ * radio that had been on the designated network throughout. A `--db`
+ * run has the row; without one this returns 0 and the rule behaves as
+ * it did before.
+ *
+ * Only the client's own address is looked up, not its correlated
+ * siblings: a sibling's persisted association would be a second
+ * inference on top of the correlation, and the live-sibling rule above
+ * is what the issue scoped. */
+static int assoc_recorded_within_window(const uint8_t mac[6], time_t now) {
+    time_t seen = db_sta_designated_assoc_last_seen(mac);
+    if (seen <= 0) return 0;
+    long age = (long)(now - seen);
+    if (age < 0) age = 0;          /* a stepped clock is not evidence */
+    return age <= RECON_SUSTAIN_S;
+}
+
 void rule_my_network_recon(const sloth_state_t *s, time_t now) {
     if (!ownership_any()) return;      /* nothing designated — no work */
     for (int i = 0; i < s->pnl_count; i++) {
@@ -910,9 +943,16 @@ void rule_my_network_recon(const sloth_state_t *s, time_t now) {
         if (!hit) continue;
         if (sta_is_associated_to_designated(s, p->mac))  continue;
         if (correlated_sibling_is_associated(s, p->mac)) continue;
-        /* The operator wrote this one down as theirs. That is the answer
-         * to "returning employee" and it outranks every inference. */
-        if (ownership_is_known_device(p->mac))           continue;
+        /* Ours: the operator wrote this one down, or it is one of the
+         * sensor's own interface addresses (#183). That is the answer to
+         * "returning employee" and it outranks every inference — and
+         * the sensor's own managed card is the first thing this rule
+         * finds on any host associated to the designated network, which
+         * is what the roster is for. */
+        if (ownership_is_own_device(p->mac))             continue;
+        /* ...and the association this host recorded inside the same
+         * window the corroboration is measured over (#183 item 3). */
+        if (assoc_recorded_within_window(p->mac, now))   continue;
 
         /* Corroborators. Both are positive observations; absence of
          * evidence is never one of them — an incomplete capture is the
@@ -1031,7 +1071,12 @@ void rule_unknown_device(const sloth_state_t *s, time_t now) {
         int mine = ownership_is_my_bssid(a->bssid) ||
                    ownership_is_my_ssid(a->ssid);
         if (!mine) continue;
-        if (ownership_is_known_device(a->sta_mac)) continue;
+        /* The roster, plus the sensor's own addresses (#183): a host
+         * running sloth on its own network is associated to it, and
+         * "unknown device on my network" must not name the sensor. The
+         * *gate* above still counts only the operator's entries, so
+         * this rule stays inert until they roster something. */
+        if (ownership_is_own_device(a->sta_mac)) continue;
 
         char sta[20], bss[20];
         mac_to_str(a->sta_mac, sta, sizeof(sta));

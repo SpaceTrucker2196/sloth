@@ -1,7 +1,7 @@
 ---
 type: RF_DEGRADED
 technique: T1498
-rule_file: src/alerts/rules_wifi_mgmt.c:1063 rule_rf_degraded()
+rule_file: src/alerts/rules_wifi_mgmt.c:1108 rule_rf_degraded()
 count_semantics: per evaluation tick, per channel key - fire() bumps count every poll in which that channel's current-window retry ratio is still at or above 40%; one increment is one poll (~4/s at POLL_MS 250), NOT one retried frame. The 40% ratio itself is computed over a tumbling (reset, not sliding) 300 s window of >=100 frames in src/rf_quality.c, so the alert is a thresholded measurement, not a per-event counter
 severity_assessment: agree - WARN is correct and load-bearing: a retry ratio is an observable with at least four benign causes, and the rule explicitly refuses to call it jamming
 false_positive_risk: high - "false positive" is the wrong frame here; the rule reports a real measurement whose CAUSE is ambiguous. Interference and congestion trip it as readily as a jammer

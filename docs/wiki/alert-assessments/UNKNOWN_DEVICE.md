@@ -1,7 +1,7 @@
 ---
 type: UNKNOWN_DEVICE
 technique: T1200
-rule_file: src/alerts/rules_wifi_mgmt.c:1025 rule_unknown_device()
+rule_file: src/alerts/rules_wifi_mgmt.c:1065 rule_unknown_device()
 count_semantics: per evaluation tick, per standing (unrostered STA) key - fire() bumps `evaluations`/`count` every poll in which the STA is still in `s->assocs[]` on a designated BSSID/SSID and still absent from the roster; one increment is one poll (~4/s at the default 250 ms POLL_MS), not one frame or one association
 severity_assessment: agree - WARN is right for "a device I did not list is on my network": actionable, but the commonest cause is an incomplete roster, and the rule cannot escalate on anything it observes
 false_positive_risk: high - every guest handset, every rotated private MAC and every device the operator forgot to roster fires it; the rule is only as good as the roster
@@ -12,14 +12,14 @@ researched: 2026-10-27
 ---
 ## What the rule checks
 
-`rule_unknown_device()` (src/alerts/rules_wifi_mgmt.c:1025-1049) is a pure function of two operator inputs and one observed table.
+`rule_unknown_device()` (src/alerts/rules_wifi_mgmt.c:1065-1094) is a pure function of two operator inputs and one observed table.
 
-- **Gates.** It returns immediately if the roster is empty (`ownership_known_count() == 0`, line 1026) or if no network has been designated (`!ownership_any()`, line 1027). Both inputs are required; with either missing the rule can never fire.
-- **Input table.** `s->assocs[]` (include/sloth.h:2009-2024), the association table built from frames the AP sent - association/reassociation responses with status 0 and EAPOL M3 (`ASSOC_SRC_*`). It is not built from probe requests, by design (comment at lines 1016-1021): per-SSID MAC randomisation is stable across reconnects, probe randomisation is not.
-- **Condition.** For each row: the BSSID is in the `--my-bssid` set or the SSID is in the `--my-ssid` set (lines 1031-1032), and the STA MAC is not on the roster (line 1034).
-- **Key.** `unknowndev:<sta_mac>` (line 1041) - one incident per unrostered station, whichever of the operator's BSSIDs it is on.
+- **Gates.** It returns immediately if the roster is empty (`ownership_known_count() == 0`, line 1066) or if no network has been designated (`!ownership_any()`, line 1067). Both inputs are required; with either missing the rule can never fire.
+- **Input table.** `s->assocs[]` (include/sloth.h:2009-2024), the association table built from frames the AP sent - association/reassociation responses with status 0 and EAPOL M3 (`ASSOC_SRC_*`). It is not built from probe requests, by design (comment at lines 1056-1061): per-SSID MAC randomisation is stable across reconnects, probe randomisation is not.
+- **Condition.** For each row: the BSSID is in the `--my-bssid` set or the SSID is in the `--my-ssid` set (lines 1071-1072), and the STA MAC is neither on the roster nor one of the host's own interface addresses (`ownership_is_own_device()`, line 1079 - #183: a sensor is associated to the network it watches, and the rule must not name it; the gate above still counts only the operator's entries, so the rule stays inert until they roster something).
+- **Key.** `unknowndev:<sta_mac>` (line 1086) - one incident per unrostered station, whichever of the operator's BSSIDs it is on.
 - **Detail.** `<sta> on '<ssid>' [<bssid>] not in roster` with a trailing `(randomised MAC)` when the STA's first octet has the locally-administered bit set (`sta_random`, set at src/assoc_track.c:455 from `sta[0] & 0x02`).
-- **Severity.** Always `ALERT_SEV_WARN` (line 1046). There is no CRIT branch and no ownership escalation - the ownership check is the precondition, not a modifier.
+- **Severity.** Always `ALERT_SEV_WARN` (line 1091). There is no CRIT branch and no ownership escalation - the ownership check is the precondition, not a modifier.
 - **Count.** Plain `fire()` (no evidence IDs, no `match_ip`), so each poll in which a row still satisfies the condition increments `evaluations` and the compat alias `count` (src/alerts/engine.c:478-479). The detail string is stable, so `observations` stays at 1 unless the SSID/BSSID in the row changes. Because the key is the STA alone and `s->assocs[]` is keyed by (BSSID, STA), one unrostered STA associated to two designated BSSIDs fires the same key twice per poll with two different details - `count` then climbs at twice the poll rate and `observations` moves every poll, so the detail flips between the two BSSIDs.
 - **Resolve.** The incident expires 300 s after the last evaluation (`ALERT_RESOLVE_AFTER_S`, include/sloth.h:860; `expire_incidents()`, engine.c:917-925), i.e. once the STA is rostered, the designation no longer covers the row, or the row leaves the table. The association table does **not** age rows: `g_tbl` (`MAX_ASSOC_ENTRIES` = 128, include/sloth.h:1999) evicts the least-recently-seen pair only when it is full (src/assoc_track.c:441-447). In a quiet environment an unrostered STA that associated once therefore stays in the table, and the incident stays open, for the life of the process.
 
@@ -48,6 +48,7 @@ What refutes it: `(randomised MAC)` in the detail plus a vendor name in the `dev
 
 ## Benign causes
 
+- **The sensor's own host** - a host running sloth on the designated network is associated to it, so before #183 it was its own first "unknown device". Exonerated now without being rostered, from the `iface` records (`ownership_is_own_device()`).
 - **Guest and visitor devices** - the dominant case; the repo's research note says so explicitly [1].
 - **Rotating private addresses** - Apple's Rotating mode (every two weeks) [3] and Android non-persistent randomization (per connection) [4] produce a new "unknown" from a device the operator already knows. The detail's `(randomised MAC)` marker is the tell.
 - **A device re-provisioned or factory reset** - Android's persistent random MAC changes on factory reset [4].

@@ -1812,6 +1812,218 @@ static void test_my_net_recon_clamps_ssid_count(void) {
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
 }
 
+/* ── the sensor accuses its own card (#183) ───────────────
+ *
+ * Reference host, 2026-11-03: the managed Wi-Fi card's background scan
+ * probes for the SSID it is associated to, on another channel, and the
+ * rule read that as 330 WARN incidents of reconnaissance against the
+ * operator. Every input was correct — a wpa_supplicant scan cadence
+ * satisfies "sustained probing" on its own — and the host already knew
+ * the address was its own, from the iface records it polls every tick. */
+
+/* One iface row, as st_platform_net hands them to the roster. */
+static void recon_self_iface(sloth_state_t *s, const uint8_t mac[6],
+                             const char *name, iface_mode_t mode) {
+    iface_stat_t *f = &s->ifaces[s->iface_count++];
+    memset(f, 0, sizeof(*f));
+    snprintf(f->name, sizeof(f->name), "%s", name);
+    memcpy(f->mac, mac, 6);
+    f->mode = mode;
+    ownership_self_sync_ifaces(s->ifaces, s->iface_count);
+}
+
+/* The issue's first fixture: an iface record naming MAC X, then 25
+ * directed probes from X for the designated SSID over 700 s — past
+ * recon.sustain_s (600) and recon.sustain_probes (20), so the
+ * corroborated WARN branch is what would fire. Mutation-proved by
+ * removing the roster consultation in rule_my_network_recon, which
+ * reddens this with a WARN; see the #183 commit body. */
+static void test_my_net_recon_self_iface_mac_no_fire(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    sloth_state_t s; seed_state(&s);
+    uint8_t own[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    recon_self_iface(&s, own, "wlan0", IFACE_MODE_WIFI);
+    add_pnl(&s, own, "CeilingCatHD");
+    time_t now = time(NULL);
+    s.pnl_clients[0].first_seen  = now - 700;
+    s.pnl_clients[0].last_seen   = now;
+    s.pnl_clients[0].probe_count = 25;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
+}
+
+/* The monitor radio's own address is on the same host and reaches the
+ * air through the same rules, so it is rostered too — the issue says
+ * "all of them, not only the managed Wi-Fi card". */
+static void test_my_net_recon_self_monitor_radio_no_fire(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    sloth_state_t s; seed_state(&s);
+    uint8_t mon[6] = {0x00,0xc0,0xca,0xbb,0x51,0x82};
+    recon_self_iface(&s, mon, "alfa0", IFACE_MODE_MONITOR);
+    add_pnl(&s, mon, "CeilingCatHD");
+    s.pnl_clients[0].probe_count = 25;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
+}
+
+/* The roster must stay an identity check and not a blanket silence: a
+ * stranger probing the same SSID on a host that rostered itself is
+ * still reported. Without this, the test above would pass just as
+ * happily if the rule had stopped firing altogether. */
+static void test_my_net_recon_stranger_still_fires_beside_self(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    sloth_state_t s; seed_state(&s);
+    uint8_t own[6]      = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    uint8_t stranger[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    recon_self_iface(&s, own, "wlan0", IFACE_MODE_WIFI);
+    add_pnl(&s, own, "CeilingCatHD");
+    add_pnl(&s, stranger, "CeilingCatHD");
+    s.pnl_clients[1].first_seen  = time(NULL) - 700;
+    s.pnl_clients[1].last_seen   = time(NULL);
+    s.pnl_clients[1].probe_count = 25;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON);
+    ASSERT(idx >= 0);
+    ASSERT(strstr(s.alerts[idx].detail, "99:88:77:66:55:44") != NULL);
+    ASSERT(strstr(s.alerts[idx].detail, "24:41:8c:30:97:a1") == NULL);
+    /* One finding, not two: the self row must not have minted a key. */
+    int n = 0;
+    for (int i = 0; i < s.alert_count; i++)
+        if (s.alerts[i].type == ALERT_TYPE_MY_NETWORK_RECON) n++;
+    ASSERT_EQ(n, 1);
+}
+
+/* The randomised-sibling case from the issue's test plan, on a self
+ * address: the card scans with a locally administered MAC while its
+ * real one is associated, and the exoneration that catches it is the
+ * existing seqnum-sibling rule — not the self roster, which holds only
+ * the addresses the iface records name. This passes before #183 too;
+ * it is here so the roster work cannot quietly break that path, and it
+ * is the one case the roster alone does not cover. */
+static void test_my_net_recon_self_randomised_sibling_still_exonerated(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    sloth_state_t s; seed_state(&s);
+    uint8_t own[6]    = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    uint8_t random[6] = {0x02,0xaa,0xbb,0xcc,0xdd,0xee};
+    uint8_t bssid[6]  = {0x28,0x25,0x5f,0x19,0x0e,0x18};
+    recon_self_iface(&s, own, "wlan0", IFACE_MODE_WIFI);
+    add_pnl(&s, random, "CeilingCatHD");
+    s.pnl_clients[0].mac_random  = 1;
+    s.pnl_clients[0].first_seen  = time(NULL) - 700;
+    s.pnl_clients[0].last_seen   = time(NULL);
+    s.pnl_clients[0].probe_count = 25;
+    add_assoc_entry(&s, own, bssid, "CeilingCatHD");
+    seqnum_correlation_t *c =
+        &s.seqnum_correlations[s.seqnum_correlation_count++];
+    memset(c, 0, sizeof(*c));
+    memcpy(c->mac_a, random, 6);
+    memcpy(c->mac_b, own,    6);
+    c->mac_a_random = 1;
+    c->gap = 2; c->fwd_gap = 2; c->confidence = 70;
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON), -1);
+}
+
+/* ── exoneration freshness (#183 item 3) ──────────────────
+ *
+ * The reference host's association was last seen 1793728967 and the
+ * escalation came 33 minutes later: the live assoc row had aged out
+ * while the scan probes kept the PNL row alive, so the corroboration
+ * outran the evidence that answered it. A persisted association inside
+ * the same window the corroboration is measured over is the same fact,
+ * recorded. */
+
+#ifdef WITH_SQLITE
+/* A fixed clock, so the window boundary is exact rather than a race
+ * with the host's second hand. */
+#define RECON_DB_NOW ((time_t)1793730000)
+static time_t recon_db_wall(void) { return RECON_DB_NOW; }
+
+/* Persist one association for `sta` at `when`, through the real writer. */
+static void recon_db_assoc(const uint8_t sta[6], const uint8_t bssid[6],
+                           const char *ssid, time_t when) {
+    sloth_state_t s; memset(&s, 0, sizeof(s));
+    assoc_t *a = &s.assocs[s.assoc_count++];
+    memcpy(a->sta_mac, sta, 6);
+    memcpy(a->bssid,   bssid, 6);
+    snprintf(a->ssid, sizeof(a->ssid), "%s", ssid);
+    a->source     = ASSOC_SRC_EAPOL;
+    a->first_seen = when;
+    a->last_seen  = when;
+    db_tick(&s, when);
+}
+
+/* Seed a database holding one association for `sta` at `assoc_ts`, then
+ * run the rule on a state whose live assoc table is empty and whose PNL
+ * row is corroborated. Returns the alert index (-1 = exonerated). */
+static int recon_db_case(time_t assoc_ts) {
+    uint8_t sta[6]   = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    uint8_t bssid[6] = {0x28,0x25,0x5f,0x19,0x0e,0x18};
+    char path[TEST_TMP_MAX];
+    test_tmp_path(path, sizeof(path), "sloth_reconassoc_XXXXXX");
+    int fd = mkstemp(path);
+    if (fd >= 0) close(fd);
+    unlink(path);
+    db_close();
+    ASSERT_EQ(db_open(path), 1);
+    recon_db_assoc(sta, bssid, "CeilingCatHD", assoc_ts);
+
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    sloth_clock_test_set(NULL, recon_db_wall);
+    sloth_state_t s; seed_state(&s);
+    add_pnl(&s, sta, "CeilingCatHD");
+    s.pnl_clients[0].first_seen  = RECON_DB_NOW - 700;
+    s.pnl_clients[0].last_seen   = RECON_DB_NOW;
+    s.pnl_clients[0].probe_count = 25;
+    /* Nothing in the live table: this is the aged-out case. */
+    ASSERT_EQ(s.assoc_count, 0);
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON);
+    sloth_clock_test_set(NULL, NULL);
+    db_close();
+    unlink(path);
+    return idx;
+}
+
+/* Inside recon.sustain_s (600 s): the association is as fresh as the
+ * probing the rule is about to call corroborated, so it exonerates. */
+static void test_my_net_recon_db_assoc_within_window_no_fire(void) {
+    ASSERT_EQ(recon_db_case(RECON_DB_NOW - 300), -1);
+}
+
+/* Older than the window: a device that was on the network last week and
+ * is probing for it now is exactly the "returning device" lead this
+ * rule exists to report, so the stale row must not exonerate it. */
+static void test_my_net_recon_db_assoc_older_than_window_fires(void) {
+    int idx = recon_db_case(RECON_DB_NOW - 7 * 86400);
+    ASSERT(idx >= 0);
+}
+#endif /* WITH_SQLITE */
+
+/* With no database there is no persisted association to consult, and
+ * the rule must behave exactly as it did before #183 rather than
+ * exonerate on a failed query. */
+static void test_my_net_recon_without_a_database_still_fires(void) {
+    db_close();
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    sloth_state_t s; seed_state(&s);
+    uint8_t sta[6] = {0x99,0x88,0x77,0x66,0x55,0x44};
+    add_pnl(&s, sta, "CeilingCatHD");
+    s.pnl_clients[0].first_seen  = time(NULL) - 700;
+    s.pnl_clients[0].last_seen   = time(NULL);
+    s.pnl_clients[0].probe_count = 25;
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_MY_NETWORK_RECON);
+    ASSERT(idx >= 0);
+    if (idx >= 0) ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+}
+
 /* ── flood severity scoping (#52) ───────────────────────── */
 
 static void test_deauth_flood_on_my_bssid_escalates_crit(void) {
@@ -2011,6 +2223,33 @@ static void test_designation_without_roster_is_inert(void) {
     add_assoc_entry(&s, stranger, bssid, "CorpWiFi");
     alerts_update(&s);
     ASSERT_EQ(find_alert(&s, ALERT_TYPE_UNKNOWN_DEVICE), -1);
+    ownership_clear();
+}
+
+/* The sensor is on the network it is watching, and "unknown device on
+ * my network" must not name the host running the detector (#183). The
+ * roster the operator supplied is still what switches the rule on, so
+ * this case needs one. */
+static void test_unknown_device_self_iface_no_fire(void) {
+    alerts_clear(); ownership_clear();
+    ownership_add_ssid("CeilingCatHD");
+    ownership_add_known_mac("02:00:00:00:00:01");
+    sloth_state_t s; seed_state(&s);
+    uint8_t own[6]   = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    uint8_t bssid[6] = {0x28,0x25,0x5f,0x19,0x0e,0x18};
+    recon_self_iface(&s, own, "wlan0", IFACE_MODE_WIFI);
+    add_assoc_entry(&s, own, bssid, "CeilingCatHD");
+    alerts_update(&s);
+    ASSERT_EQ(find_alert(&s, ALERT_TYPE_UNKNOWN_DEVICE), -1);
+    /* Still an identity check: a stranger on the same network is
+     * reported, so the roster has not silenced the rule. */
+    uint8_t stranger[6] = {0x02,0x00,0x00,0x00,0x00,0x99};
+    add_assoc_entry(&s, stranger, bssid, "CeilingCatHD");
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_UNKNOWN_DEVICE);
+    ASSERT(idx >= 0);
+    if (idx >= 0)
+        ASSERT(strstr(s.alerts[idx].detail, "02:00:00:00:00:99") != NULL);
     ownership_clear();
 }
 
@@ -10692,6 +10931,15 @@ void run_alerts_tests(void) {
     RUN_TEST(test_my_net_recon_no_designation_no_fire);
     RUN_TEST(test_my_net_recon_matches_any_pnl_slot);
     RUN_TEST(test_my_net_recon_clamps_ssid_count);
+    RUN_TEST(test_my_net_recon_self_iface_mac_no_fire);
+    RUN_TEST(test_my_net_recon_self_monitor_radio_no_fire);
+    RUN_TEST(test_my_net_recon_stranger_still_fires_beside_self);
+    RUN_TEST(test_my_net_recon_self_randomised_sibling_still_exonerated);
+#ifdef WITH_SQLITE
+    RUN_TEST(test_my_net_recon_db_assoc_within_window_no_fire);
+    RUN_TEST(test_my_net_recon_db_assoc_older_than_window_fires);
+#endif
+    RUN_TEST(test_my_net_recon_without_a_database_still_fires);
     RUN_TEST(test_deauth_flood_on_my_bssid_escalates_crit);
     RUN_TEST(test_deauth_flood_elsewhere_stays_warn);
     RUN_TEST(test_deauth_flood_no_designation_stays_warn);
@@ -10709,6 +10957,7 @@ void run_alerts_tests(void) {
     RUN_TEST(test_unknown_device_matches_by_designated_bssid);
     RUN_TEST(test_roster_without_designation_is_inert);
     RUN_TEST(test_designation_without_roster_is_inert);
+    RUN_TEST(test_unknown_device_self_iface_no_fire);
     RUN_TEST(test_unconfigured_is_inert);
     RUN_TEST(test_unknown_device_notes_randomised_mac);
 
