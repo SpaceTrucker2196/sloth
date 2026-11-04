@@ -273,6 +273,45 @@ did, written down so it is the default next time:
   ran out in one while the other had it to spare; research moved
   sessions rather than waiting for a reset.
 
+## Cost and concurrency (lessons of 2026-11-02/03)
+
+The owner's standing rules, and what they cost to learn:
+
+- **Fewest agents that do the job.** A build/review/fix workflow cost
+  2.2-2.7M subagent tokens per slice set (GNSS, BLE tab, issues wave 1,
+  #171). Default shape: **one builder, then one reviewer that fixes what
+  it confirms** - no per-finding judge agents, no parallel lens fan-out.
+  Small fixes, merges and conflict resolution are done inline, not by
+  an agent. Ask before more.
+- **One workflow at a time, agents sequential, one background shell,
+  `make -j2`** (owner, 2026-11-03). The host is the live sensor.
+- **Test only what the change touches** per slice (the minimum in
+  Discipline above); CI is the matrix. Install on the host right after
+  the push; if CI goes red, fix, push, reinstall.
+- **Check the design against live data before building.** The first BLE
+  waterfall design used advertising channels; an HCI report carries no
+  channel (every host row is -1), so it would have drawn nothing. A
+  two-minute look at the records saved a full slice.
+
+Integration traps that turned CI or the suite red after green slices:
+
+- **Additive record fields change `tests/replay/golden.jsonl`.** Run
+  `make replay-check` whenever a JSONL record gains a field; regenerate
+  with `make replay-golden` in the same commit (7052c71).
+- **Assessments cite `rule_file` lines.** Any edit to
+  `src/alerts/rules_*.c` shifts them; repoint each to its rule
+  function's definition line before pushing (8caf61e).
+- **slothweb's detail audit (`web/tests/test_alertfmt.c`) only follows
+  plain variables** in an alert's detail `snprintf`. Bind helper results
+  (`count_bucket()`, band helpers) to a variable first and name it in
+  `web_alert_detail_audited[]`.
+- **Doc `**Last updated**` lines conflict on every parallel merge.**
+  Merge by keeping both entries, newest first.
+- **A red fuzz run on an unrelated commit is still a real bug.** CI's
+  30 s fuzz found a pre-existing over-read in `web_pcap.c` (c3a2bf7).
+- **Page tests that pin single JS lines miss mutations of the lines
+  around them; pin whole functions** (#171 V1 review).
+
 ## Conventions
 
 - **Commit messages.** Imperative subject line, blank line, optional

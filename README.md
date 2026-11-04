@@ -358,7 +358,7 @@ Use `[?]` inside sloth for an up-to-date reference card.
 
 ## Alerts
 
-**<!-- count:rules -->94<!-- /count --> rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` row in [`include/sloth_alerts.def`](include/sloth_alerts.def), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
+**<!-- count:rules -->94<!-- /count --> rules** feed `VIEW_ALERTS` — one per `ALERT_TYPE_*` row in [`include/sloth_alerts.def`](include/sloth_alerts.def), each with a row in [`docs/views/alerts.md`](docs/views/alerts.md). Every rule has a cited assessment in [`docs/wiki/alert-assessments/`](docs/wiki/alert-assessments/README.md); four watch the `--gps` receiver (`GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, [`docs/wiki/gnss.md`](docs/wiki/gnss.md)). With `--db`, every incident of a finding is its own `alert_incidents` row (schema v11). New keys also append to the JSONL stream and (if `--pcap-dir` is set) trigger a per-alert pcap dump. Escalations, changed evidence and expiry ride the `alert.*` incident-lifecycle records (#98).
 
 Six of them, as a sample of the shape:
 
@@ -402,9 +402,18 @@ when the evidence does. Full field tables in
 `slothweb` is an optional browser dashboard that runs beside sloth on
 the same host: it reads the data socket and, read-only, `sloth.db`, and
 serves one page on `http://127.0.0.1:8770/` (loopback only by default,
-GET and HEAD only, no external requests). Overview, Activity with
-hour-of-week baselines, anomaly episodes, Devices, WiFi, Flows with a
-chord diagram, History and Lookup.
+GET and HEAD only, no external requests; triage writes only behind the
+allow list). Overview tiles and strip facts each drawn against their
+own hour-of-week band; Activity and anomaly episodes; Devices and WiFi
+with per-device signal ranges in sloth's own distance bands, channel
+horizon strips and the channel mix; **BLE Devices** (who is around by
+device class, how close by signal, a signal chart per device); **GPS
+Sat** (satellites in view, sky plot, fix history); Flows as a matrix
+(chord diagram second); History with an event rug; Lookup; and an alert
+page that leads with detail changes, incidents and confidence, draws
+the attack chain, shows the evidence and capture, the cited assessment,
+and triage buttons (false, noise, incident, the green **known** for
+expected traffic, follow recommended).
 
 ![slothweb Overview on synthetic data](docs/assets/slothweb/overview.png)
 
@@ -674,6 +683,8 @@ the top.
 ## Status
 
 Code: ~48.6k lines of C99 across 147 `.c` files (285 counting headers). Tests: `make test` plus a `make mutate` harness. Reference Python consumer + 3-sink SIEM forwarder under [`examples/`](examples/). License: [Sloth Source-Available License 1.0](LICENSE) (free for individual non-commercial use; private modifications are allowed but modified versions may not be distributed; contact jeff@river.io for commercial, enterprise, or other licensing).
+
+Hardware: the three-sector passive antenna fixture (Rev N) build guide is [`docs/wiki/antenna-fixture-rev-n.md`](docs/wiki/antenna-fixture-rev-n.md), its design files under [`docs/hardware/antenna/`](docs/hardware/antenna/README.md).
 
 Sloth was built as a passive monitor. It will not fuzz, attack, or attempt to deauth or de-associate anything, and it puts no frame of its own on the air. The one thing it can be asked to do that resembles scanning is `--allow-active`'s kernel scan trigger — a passive, SSID-less nl80211 scan on your own radio, off unless you ask for it. If active reconnaissance is what you need, use a different tool.
 

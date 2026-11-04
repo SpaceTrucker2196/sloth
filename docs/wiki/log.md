@@ -6454,3 +6454,12 @@ the link words out so a taint and an attribution in one column no
 longer overprint, kept each chain's scale per cell width, and said in
 the caption when only the most deauthed BSSIDs were read. Updated
 [[slothweb]].
+
+## 2026-11-03 — README and agent lessons after the GNSS, BLE, triage, issues and #171 work
+
+README's slothweb, Alerts and Status sections now name the BLE Devices
+and GPS Sat tabs, the `known` triage verdict, the alert page's order,
+the four GNSS rules, `alert_incidents` (sloth.db v11) and the antenna
+fixture guide. `agents/AGENTS.md` gains "Cost and concurrency": one
+builder plus one fixing reviewer, one workflow at a time, change-local
+tests, and the integration traps that turned CI red after green slices.
