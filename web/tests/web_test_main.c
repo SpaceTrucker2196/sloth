@@ -109,6 +109,7 @@ int main(void) {
     SUITE(run_devices_tests);
     SUITE(run_parity_tests);
     SUITE(run_wifi_tests);
+    SUITE(run_chain_tests);
     SUITE(run_chmix_tests);
     SUITE(run_tables_tests);
     SUITE(run_history_tests);

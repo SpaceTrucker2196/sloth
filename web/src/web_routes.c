@@ -676,7 +676,8 @@ static int route_m4(const web_req_t *rq, const web_health_t *h, int which,
 }
 
 enum { M5_CHANNELS, M5_DEAUTH, M5_APS, M5_OVERVIEW, M5_HDEVICES, M5_HALERTS,
-       M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW, M6_FLOWS, M6_GRAPH, M5_WLOCAL };
+       M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW, M6_FLOWS, M6_GRAPH, M5_WLOCAL,
+       M5_CHAIN };
 
 /* The WiFi and History routes (M5, web_wifi.h, web_history.h) and the
  * Flows routes (M6, web_flows.h): the same shape as route_m4(). */
@@ -696,7 +697,7 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         web_history_overview_route, web_history_devices_route,
         web_history_alerts_route, web_history_flows_route, web_sessions_route,
         web_sessions_new_route, web_flows_route, web_flows_graph_route,
-        web_wifi_local_route,
+        web_wifi_local_route, web_wifi_chain_route,
     };
     /* A view a capture scope holds nothing of (web_scope.h): the WiFi
      * view's channels, deauths and APs are the monitor radio's, its card
@@ -709,7 +710,7 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
     int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
     const char *none_here =
         sc == WEB_SCOPE_LOCAL && (which == M5_CHANNELS || which == M5_DEAUTH ||
-                                  which == M5_APS)
+                                  which == M5_APS || which == M5_CHAIN)
             ? "the WiFi view's channels, deauths and access points are the passive "
               "monitor radio's; the host's own interfaces carried none of it (the "
               "managed card's own scan and link are /api/wifi/local)"
@@ -1343,6 +1344,7 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
         static const struct { const char *path; int which; } M5[] = {
             { "/api/wifi/channels", M5_CHANNELS },
             { "/api/wifi/deauth", M5_DEAUTH },
+            { "/api/wifi/chain", M5_CHAIN },
             { "/api/wifi/aps", M5_APS },
             { "/api/wifi/local", M5_WLOCAL },
             { "/api/history/overview", M5_OVERVIEW },

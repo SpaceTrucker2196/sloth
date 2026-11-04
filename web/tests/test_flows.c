@@ -432,6 +432,72 @@ static void test_graph(void) {
     WT_HAS(body_of(g_out), "\"nodes\":[],\"edges\":[],\"fold\":{\"pairs\":0,");
 }
 
+/* The matrix form (#171 V4, F11): the same pairs, no endpoint folded by
+ * rank, sources and destinations each in address order (10.0.0.11 after
+ * 10.0.0.8, where text order puts it first: seen red with node_addr_cmp
+ * comparing the text), each with its subnet group, the cells merged by
+ * pair with every protocol on it and SMB1 kept (seen red with the merge
+ * search removed: two cells for 10.0.0.5 -> 10.0.0.6), IPv6 after IPv4
+ * in a /64 of its own; the largest cell for the one scale; the fold
+ * counting only the pairs past `edges`; a node count refused, said. */
+static void test_matrix(void) {
+    WT_EQ(route(&H, "/api/flows/graph", "form=matrix"), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"form\":\"matrix\",\"max_edges\":80,\"groups\":[{\"id\":\"10.0.0.0/24\"},"
+              "{\"id\":\"192.0.2.0/24\"}],\"srcs\":[{\"id\":\"10.0.0.1\",\"group\":0,\"total\":3},"
+              "{\"id\":\"10.0.0.3\",\"group\":0,\"total\":2},{\"id\":\"10.0.0.5\",\"group\":0,"
+              "\"total\":8},{\"id\":\"10.0.0.7\",\"group\":0,\"total\":6},{\"id\":\"192.0.2.1\","
+              "\"group\":1,\"total\":20}],\"dsts\":[{\"id\":\"10.0.0.2\",\"group\":0,\"total\":3},"
+              "{\"id\":\"10.0.0.4\",\"group\":0,\"total\":2},{\"id\":\"10.0.0.6\",\"group\":0,"
+              "\"total\":7},{\"id\":\"10.0.0.8\",\"group\":0,\"total\":6},{\"id\":\"10.0.0.11\","
+              "\"group\":0,\"total\":1},{\"id\":\"192.0.2.2\",\"group\":1,\"total\":20}],");
+    WT_HAS(b, "\"cells\":[{\"s\":0,\"d\":0,\"total\":3,\"protos\":[\"ssh\"]},"
+              "{\"s\":1,\"d\":1,\"total\":2,\"protos\":[\"rdp\"]},"
+              "{\"s\":2,\"d\":2,\"total\":7,\"protos\":[\"smb\"],\"smb1\":true},"
+              "{\"s\":2,\"d\":4,\"total\":1,\"protos\":[\"smb\"]},"
+              "{\"s\":3,\"d\":3,\"total\":6,\"protos\":[\"snmp\"]},"
+              "{\"s\":4,\"d\":5,\"total\":20,\"protos\":[\"bgp\"]}],\"max\":20,");
+    WT_HAS(b, "\"fold\":{\"pairs\":6,\"pairs_shown\":6,\"pairs_folded\":0,\"flows\":39,"
+              "\"flows_shown\":39,\"flows_folded\":0,\"nodes\":11,\"nodes_shown\":11,"
+              "\"nodes_folded\":0},\"per_source\":[\"ldap\",\"kerb\"],\"tabs\":{");
+    WT_LACKS(b, "10.0.0.12");
+    WT_LACKS(b, "10.0.0.13");
+    lacks_secrets(b);
+    /* Two tables on one pair are one cell; IPv6 sorts after IPv4. */
+    WT_EQ(sdb_exec(g_db, "INSERT INTO ssh_flows (src_ip,dst_ip,banner_count,first_seen,last_seen)"
+                         " SELECT '10.0.0.5','10.0.0.6',2,first_seen,last_seen FROM ssh_flows;"
+                         "INSERT INTO ssh_flows (src_ip,dst_ip,banner_count,first_seen,last_seen)"
+                         " SELECT '2001:db8::1','2001:db8::2',1,first_seen,last_seen FROM ssh_flows"
+                         " WHERE src_ip = '10.0.0.1';"), 0);
+    WT_EQ(route(&H, "/api/flows/graph", "form=matrix"), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "{\"s\":2,\"d\":2,\"total\":9,\"protos\":[\"ssh\",\"smb\"],\"smb1\":true}");
+    WT_HAS(b, "{\"id\":\"192.0.2.0/24\"},{\"id\":\"2001:db8::/64\"}],");
+    WT_HAS(b, "{\"id\":\"192.0.2.1\",\"group\":1,\"total\":20},{\"id\":\"2001:db8::1\","
+              "\"group\":2,\"total\":1}],");
+    WT_EQ(sdb_exec(g_db, "DELETE FROM ssh_flows WHERE src_ip IN ('10.0.0.5','2001:db8::1');"), 0);
+    /* The pairs past edges are folded, and only they. */
+    WT_EQ(route(&H, "/api/flows/graph", "form=matrix&edges=1"), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"srcs\":[{\"id\":\"192.0.2.1\",\"group\":0,\"total\":20}],");
+    WT_HAS(b, "\"fold\":{\"pairs\":6,\"pairs_shown\":1,\"pairs_folded\":5,\"flows\":39,"
+              "\"flows_shown\":20,\"flows_folded\":19,\"nodes\":11,\"nodes_shown\":2,"
+              "\"nodes_folded\":9}");
+    /* The chord is the other form, and what no form names. */
+    WT_EQ(route(&H, "/api/flows/graph", "form=chord&nodes=4"), 200);
+    WT_HAS(body_of(g_out), "\"nodes_shown\":4,");
+    WT_LACKS(body_of(g_out), "\"form\":");
+    WT_EQ(route(&H, "/api/flows/graph", "form=matrix&nodes=4"), 400);
+    WT_HAS(body_of(g_out), "{\"error\":\"nodes_not_in_matrix\"");
+    WT_EQ(route(&H, "/api/flows/graph", "form=grid"), 400);
+    WT_HAS(body_of(g_out), "{\"error\":\"bad_form\"");
+    /* Nothing in the range: no cells, the scale 0. */
+    char q[96];
+    snprintf(q, sizeof(q), "form=matrix&from=%lld&to=%lld", T - 10 * DY, T - 9 * DY);
+    WT_EQ(route(&H, "/api/flows/graph", q), 200);
+    WT_HAS(body_of(g_out), "\"groups\":[],\"srcs\":[],\"dsts\":[],\"cells\":[],\"max\":0,");
+}
+
 /* A file without a table: that tab is absent, the others read. */
 static void test_missing_table(void) {
     WT_EQ(sdb_exec(g_db, "DROP TABLE bgp_sessions"), 0);
@@ -488,6 +554,7 @@ void run_flows_tests(void) {
     WT_RUN(test_validation);
     WT_RUN(test_paging);
     WT_RUN(test_graph);
+    WT_RUN(test_matrix);
     WT_RUN(test_page_that_does_not_fit);
     WT_RUN(test_missing_table);
     down();

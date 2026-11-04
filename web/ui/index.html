@@ -24,6 +24,8 @@
 @include facts.js
 @include rf.js
 @include air.js
+@include chain.js
+@include flowmx.js
 @include frrs.js
 @include evidence.js
 @include bundle.js
@@ -409,9 +411,12 @@
       <div class="sub">nearest first by default (sloth.db's last signal); a square after the SSID for each SSID the BSSID has beaconed, in the warning colour above one (KARMA, multi-VAP), with its history under it; akm: the suites the AKM bits name; downgrade: the weaker lanes the AP offers</div>
     </section>
     <section class="panel">
-      <div class="label">chains <span class="sub" id="w-da-note"></span></div>
+      <div class="label">chains <span class="sub" id="w-ch-note"></span></div>
+      <div id="w-chains" hidden></div>
+      <div class="sub" id="w-ch-sub">a bssid with more than one stage of an attack in the window, its chain: a lane per stage in the order the chain runs, deauth frames and associations to it as ticks on one scale, each EVIL_TWIN, KARMA_AP and DEAUTH_FLOOD incident from sloth.db's alerts a bar from its first to its last observation in the severity it reached (its word beside the lane), a dot where it began and where it closed; under the lanes, the links sloth made (the twin tainted by a deauth flood on the other half within 5 s, the pair attributed), from the stream's twin_episode since slothweb started. Every bssid with a deauth key in the window is a candidate; a station associating counts as a stage only on a bssid with an EVIL_TWIN or KARMA_AP incident (on any other AP it is a client joining); a bssid with one stage is a lane of the rug below.</div>
+      <div class="label">deauth, one stage <span class="sub" id="w-da-note"></span></div>
       <canvas class="rug" id="w-deauth" aria-label="deauthentication frames per bssid, one lane each on one scale, flood episodes underlined"></canvas>
-      <div class="sub">a lane per bssid: deauth frames per cell, the tallest of any lane at the lane's height; underlined in the critical colour: DEAUTH_FLOOD episodes from sloth.db's alerts. The stages linked (deauth, twin, association) arrive with the chain timeline.</div>
+      <div class="sub">a lane per bssid: deauth frames per cell, the tallest of any lane at the lane's height; underlined in the critical colour: DEAUTH_FLOOD episodes from sloth.db's alerts.</div>
     </section>
     <section class="panel">
       <div class="label">clients <span class="sub" id="w-pc-note"></span></div>
@@ -513,6 +518,13 @@
         <ol class="alerts" id="ad-history-b"></ol></div>
       </div>
     </section>
+    <!-- G8 (docs/web-visual-spec.md F14, #171 V4): the chain of the
+         BSSID the alert names, web/ui/chain.js. -->
+    <section class="panel" id="ad-chain" hidden aria-label="the attack chain">
+      <div class="label">attack chain <span class="sub" id="ad-chain-note"></span></div>
+      <canvas class="chain" id="ad-chain-c" aria-label="the attack chain on the bssid this alert names: deauth, twin, association and karma lanes on one time axis"></canvas>
+      <div class="sub">the bssid this alert names, from a quarter of an hour before it began to five minutes after it was last seen: a lane per stage in the order the chain runs (deauth frames and DEAUTH_FLOOD, EVIL_TWIN, associations to it, KARMA_AP), each incident a bar in the severity it reached; under the lanes the links sloth made (a deauth taint, an attribution), from the stream</div>
+    </section>
     <section class="panel" id="ad-device">
       <div class="label">the device <span class="sub" id="ad-device-note"></span></div>
       <div id="ad-device-b"></div>
@@ -580,14 +592,23 @@
         <option value="src">source</option>
       </select></label>
       <label>ip <input type="search" id="f-ip" maxlength="45" spellcheck="false" autocomplete="off" placeholder="192.0.2.10"></label>
+      <label>draw <select id="f-mode">
+        <option value="matrix" selected>who talks to whom (matrix)</option>
+        <option value="chord">chord</option>
+      </select></label>
       <span class="sub" id="f-note">sloth.db's protocol tables, read-only</span>
       <span class="sub dbage" id="f-dbage"></span>
     </section>
     <section class="panel">
       <div class="label">source &#8594; destination, by protocol <span class="sub" id="f-fold"></span></div>
-      <canvas class="chord" id="f-chord" aria-label="chord diagram: the busiest source to destination pairs, coloured by protocol; the fold note above says what was left out"></canvas>
-      <div class="legend" id="f-legend"></div>
-      <div class="sub">each line runs from a source to a destination (the arrowhead), its width by its count, its colour by protocol and named in the legend; red: an SMB1 session. ldap and kerb record a source only and are not drawn. Click an address to filter the table by it.</div>
+      <!-- The matrix first, the chord second (owner ruling 4 of
+           2026-10-26; docs/web-visual-spec.md F11, #171 V4). -->
+      <div class="hscroll" id="f-mx-box"><canvas class="fmx" id="f-matrix" aria-label="source by destination matrix: a row per source, a column per destination, both in address order with subnets grouped; each cell the pair's count as a bar and a number, its protocols as letters"></canvas></div>
+      <div class="sub" id="f-mx-note"></div>
+      <div class="sub" id="f-mx-sub">a row per source, a column per destination, both in address order, a line where the subnet (/24, /64) changes; a cell: the pair's count as a bar on one scale and as a number, its protocols as letters in the corner (S ssh, R rdp, M smb, N snmp, B bgp); red: an SMB1 session. ldap and kerb record a source only and are not drawn. Click an address or a cell to filter the table by it.</div>
+      <canvas class="chord" id="f-chord" hidden aria-label="chord diagram: the busiest source to destination pairs, coloured by protocol; the fold note above says what was left out"></canvas>
+      <div class="legend" id="f-legend" hidden></div>
+      <div class="sub" id="f-ch-sub" hidden>each line runs from a source to a destination (the arrowhead), its width by its count, its colour by protocol and named in the legend; red: an SMB1 session. ldap and kerb record a source only and are not drawn. Click an address to filter the table by it.</div>
     </section>
     <section class="panel">
       <div class="label">flows <span class="sub" id="f-count"></span> <span class="dt-tools" id="f-tools"></span></div>
@@ -784,6 +805,10 @@
     <div class="label">24 h presence, 10 min cells</div>
     <canvas class="strip" id="dr-strip" aria-label="presence over the last 24 hours"></canvas>
     <div id="dr-rf"></div>
+    <div id="dr-chain" hidden>
+      <div class="label">attack chain, 24 h <span class="sub" id="dr-chain-note"></span></div>
+      <canvas class="chain" id="dr-chain-c" aria-label="the attack chain on this bssid over the last 24 hours"></canvas>
+    </div>
     <div class="label">hour of week presence <span class="sub" id="dr-week-note"></span></div>
     <canvas class="heat" id="dr-week" aria-label="share of weeks present by local hour, Monday first"></canvas>
     <div class="label">anomalies</div>

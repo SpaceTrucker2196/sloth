@@ -372,6 +372,10 @@ int  web_sdb_new_macs(web_sdb_conn_t *c, long long since, web_sdb_new_t *out,
 /* sloth's ALERT_TYPE_DEAUTH_FLOOD (include/sloth_alerts.def row order;
  * web/tests/test_wifi.c holds it to sloth's enum). */
 #define WEB_ALERT_DEAUTH_FLOOD 1
+/* The two other stages of an attack chain (#171 V4, G8): the same
+ * table's rows, held to sloth's enum by test_parity.c too. */
+#define WEB_ALERT_EVIL_TWIN    18
+#define WEB_ALERT_KARMA_AP     20
 
 typedef struct {
     char      bssid[WEB_KEY_MAX + 1];
@@ -440,6 +444,25 @@ int  web_sdb_ap_ssid(web_sdb_conn_t *c, const char *bssid, char *out);
 int  web_sdb_deauth_floods(web_sdb_conn_t *c, const char *bssid,
                            long long from, long long to, int max,
                            web_sdb_item_fn fn, void *ctx);
+
+/* G8's other stages against bssid (#171 V4): the EVIL_TWIN and
+ * KARMA_AP rows whose key names it, overlapping [from, to): n1 = type,
+ * n2 = sev, n3 = count. A pair's key (twin:<lo>:<hi>:... or
+ * twin-fp:<lo>:<hi>:...) names both of its halves, KARMA_AP's
+ * (karma:<bssid>) its one, each matched at that field and never as a
+ * substring; the attack-chain row's (twin-chain:<ssid>:<hash>) names
+ * neither, and its link arrives by the stream's twin_episode instead
+ * (web_chain.h). The key in the WHERE only, against a canonical MAC, as
+ * web_sdb_deauth_floods(); oldest first. */
+int  web_sdb_chain_stages(web_sdb_conn_t *c, const char *bssid,
+                          long long from, long long to, int max,
+                          web_sdb_item_fn fn, void *ctx);
+/* The associations to bssid first seen in [from, to): first_seen only
+ * (the station is not read), oldest first. 0 rows for a file without
+ * the table. */
+int  web_sdb_bssid_assocs(web_sdb_conn_t *c, const char *bssid,
+                          long long from, long long to, int max,
+                          web_sdb_item_fn fn, void *ctx);
 
 typedef struct {
     long long id, started, ended;    /* ended -1: never recorded */

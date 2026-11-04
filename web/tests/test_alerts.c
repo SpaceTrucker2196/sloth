@@ -596,13 +596,13 @@ static void test_detail_sections(void) {
              "\"count\":18,\"id\":\"d2\"}]", T - 5 * HR, T - 5 * HR + 3900, T - 3 * DY,
              T - 3 * DY + 1300);
     WT_HAS(b, want);
-    WT_HAS(b, "\"device\":{\"mac\":null,\"ip\":\"192.0.2.50\"}");
+    WT_HAS(b, "\"device\":{\"mac\":null,\"ip\":\"192.0.2.50\",\"bssid\":null}");
     /* The device a key names by MAC, and one named by address. */
     WT_EQ(route(&H, "/api/alert", "id=d11"), 200);
-    WT_HAS(body_of(g_out), "\"device\":{\"mac\":\"02:00:00:00:00:18\",\"ip\":\"192.0.2.18\"}");
+    WT_HAS(body_of(g_out), "\"device\":{\"mac\":\"02:00:00:00:00:18\",\"ip\":\"192.0.2.18\",\"bssid\":null}");
     WT_EQ(route(&H, "/api/alert", "id=d10"), 200);
     b = body_of(g_out);
-    WT_HAS(b, "\"device\":{\"mac\":\"02:00:00:00:00:12\",\"ip\":null}");
+    WT_HAS(b, "\"device\":{\"mac\":\"02:00:00:00:00:12\",\"ip\":null,\"bssid\":null}");
     /* The stream has this key: its live state comes with it. */
     char w5[128];
     snprintf(w5, sizeof(w5), "\"state\":\"closed\",\"source\":\"both\",\"stream_id\":\"%s\"", S(IB));
@@ -1441,6 +1441,33 @@ static void test_drawer_keeps_a_slices_newest_keys(void) {
     WT_HAS(b, "\"alerts_more\":true");
 }
 
+/* G8's BSSID (#171 V4): /api/alert's device names the AP sloth heard
+ * beacon that the key names, read as a predicate (the key never
+ * served), so the page can ask for that BSSID's chain; a key naming a
+ * station only, or nothing, is null. The positive case seen red with
+ * the emitter's kind test inverted (a station's MAC as the bssid), the
+ * null with the kind test removed (the station 02:..:55 came back). */
+static void test_alert_names_its_bssid(void) {
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO beacon_aps (bssid,ssid,channel,enc,first_seen,last_seen) VALUES"
+        " ('0a:00:00:00:00:b1','Cafe',6,'WPA2',%lld,%lld);"
+        "INSERT INTO alerts (rowid,key,first_seen,last_seen,type,sev,title,detail,technique,"
+        "match_ip,match_port,count) VALUES"
+        " (5220,'karma:0a:00:00:00:00:b1',%lld,%lld,20,1,'KARMA_AP','x','T1557',NULL,NULL,3),"
+        " (5221,'dev:02:00:00:00:00:55:k01',%lld,%lld,0,1,'K01','x','T1046',NULL,NULL,1);",
+        T - DY, T - 60, T - HR, T - HR + 60, T - HR, T - HR + 60);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    WT_EQ(route(&H, "/api/alert", "id=d5220"), 200);
+    const char *b = body_of(g_out);
+    WT_HAS(b, "\"bssid\":\"0a:00:00:00:00:b1\"}");
+    WT_LACKS(b, "karma:");
+    WT_EQ(route(&H, "/api/alert", "id=d5221"), 200);
+    WT_HAS(body_of(g_out), "\"bssid\":null}");
+    WT_EQ(sdb_exec(g_db, "DELETE FROM alerts WHERE rowid IN (5220,5221);"
+                         "DELETE FROM beacon_aps;"), 0);
+}
+
 void run_alerts_tests(void) {
     WT_RUN(test_page_carries_the_alert_views);
     WT_RUN(test_observations_lead_count);
@@ -1464,6 +1491,7 @@ void run_alerts_tests(void) {
     WT_RUN(test_key_totals_on_list_and_page);
     WT_RUN(test_alert_page_reads_per_incident_rows);
     WT_RUN(test_drawer_keeps_a_slices_newest_keys);
+    WT_RUN(test_alert_names_its_bssid);
     down();
 }
 

@@ -1,10 +1,13 @@
 // The glyph layer (docs/web-visual-spec.md §5; slice V0: G1, G5, G6;
 // slice V1: G1's words, the episode shade, shared scales, G4; slice V2:
-// G2, its words, the new mark; slice V3: G3, G7).
+// G2, its words, the new mark; slice V3: G3, G7; slice V4: G8 and the
+// Flows matrix).
 //
 // Every glyph is two halves. The first maps data and a size to a list
 // of marks, each `[kind, x, y, w, h, token]` in CSS pixels with a
-// colour *token* and no canvas, no DOM and no theme: it is a pure
+// colour *token* and no canvas, no DOM and no theme (a word the glyph
+// writes is a seventh member, its text, painted in that token at the
+// mark's h as its size in pixels): it is a pure
 // function of its arguments, so a test can read what a glyph says
 // without a browser. The second (paint) draws a mark list. The rules
 // the two halves follow are R1 to R12 in web/README.md.
@@ -501,6 +504,186 @@ var glyph = (function () {
     return m;
   }
 
+  // G8, the chain timeline (F14). One lane per stage, in the order the
+  // chain runs (G8_STAGES), on one time axis of ncol columns, each lane
+  // its --rule axis line whether or not it has anything, so a stage not
+  // yet seen reads as an empty lane and the next stage is where to look
+  // (Endsley's projection). lanes are [{counts, bars}]: counts a lane's
+  // events per column oldest first (deauth frames, associations), on one
+  // scale for every lane that has them (R3), as G7's ticks; bars an
+  // incident's [a, b, sev, open] in columns, b inclusive, a bar from its
+  // first to its last observation in the severity colour it reached
+  // (R1: severity on alert and chain bars only), with a dot where it
+  // began and where it ended when that is inside the window and it has
+  // closed. links are [{col, top, word}]: a connector sloth made (the
+  // deauth taint, an attribution), --faint from lane top's middle down
+  // to the words row under the lanes, its reason in words beside it
+  // (P9, P11). labels are each lane's words in the gutter (R10: the
+  // severity word with its bar). opt: {w, lane, gutter, ncol, max} —
+  // max is the count scale the glyph last drew (R11: grown, never
+  // shrunk); g8Max() is the one it draws now. No lane at all: the dash.
+  var G8_STAGES = ["deauth", "twin", "assoc", "karma"];
+  var G8_WORDS = 12;
+  // A 10 px monospace character's advance, near enough to lay words out.
+  var G8_CH = 6;
+  var SEV_TOKEN = ["--sev-low", "--sev-warn", "--sev-crit"];
+  function g8Max(lanes, prev) {
+    var max = gnum(prev) && prev > 0 ? prev : 0;
+    for (var j = 0; lanes && j < lanes.length; j++)
+      for (var i = 0, c = lanes[j].counts || []; i < c.length; i++)
+        if (gnum(c[i]) && c[i] > max) max = c[i];
+    return max;
+  }
+  function g8(lanes, links, labels, opt) {
+    var m = [], L = opt.lane, gx = opt.gutter || 0, n = opt.ncol > 0 ? opt.ncol : 1, i, j;
+    var nl = lanes ? lanes.length : 0, gw = Math.max(1, opt.w - gx), cw = gw / n;
+    if (!nl) { m.push(dash(opt.w, L)); return m; }
+    var max = g8Max(lanes, opt.max), X = function (c) { return gx + c * cw; };
+    for (j = 0; j < nl; j++) {
+      var y0 = j * L, mid = y0 + L / 2, ln = lanes[j];
+      m.push(["axis", gx, mid, gw, 1, "--rule"]);
+      if (labels && labels[j]) m.push(["label", 2, mid, gx - 4, 10, labels[j].token, labels[j].text]);
+      var c = ln.counts || [];
+      for (i = 0; max > 0 && i < c.length && i < n; i++) {
+        if (!gnum(c[i]) || !(c[i] > 0)) continue;
+        var th = Math.max(1, (L - 4) * c[i] / max);
+        m.push(["tick", Math.floor(X(i)), y0 + L - 2 - th, Math.max(1, Math.ceil(cw) - (cw > 3 ? 1 : 0)),
+                th, "--tui-normal"]);
+      }
+      var b = ln.bars || [];
+      for (i = 0; i < b.length; i++) {
+        var a0 = b[i][0], b0 = b[i][1];
+        if (!gnum(a0) || !gnum(b0) || b0 < 0 || a0 > n - 1 || b0 < a0) continue;
+        var tok = SEV_TOKEN[b[i][2] >= 0 && b[i][2] <= 2 ? b[i][2] : 1];
+        var xa = X(Math.max(0, a0)), xb = X(Math.min(n - 1, b0) + 1);
+        m.push(["bar", xa, mid - 2, Math.max(1, xb - xa), 4, tok]);
+        if (a0 >= 0) m.push(["dot", xa, mid, 2.5, 2.5, tok]);
+        if (!b[i][3] && b0 <= n - 1) m.push(["dot", xb, mid, 2.5, 2.5, tok]);
+      }
+    }
+    // The words in column order, each after the one before it (the
+    // taint and the attribution it settles are often one record, so
+    // two connectors share a column and their words would overprint),
+    // and drawn back from the right edge rather than past it.
+    var wy = nl * L, wx = -1, ks = [];
+    for (i = 0; links && i < links.length; i++) {
+      var k = links[i];
+      if (!gnum(k.col) || k.col < 0 || k.col > n - 1 || !(k.top >= 0 && k.top < nl)) continue;
+      ks.push(k);
+    }
+    ks.sort(function (a, b) { return a.col - b.col; });
+    for (i = 0; i < ks.length; i++) {
+      var lx = Math.floor(X(ks[i].col) + cw / 2), ly = ks[i].top * L + L / 2;
+      var tw = String(ks[i].word).length * G8_CH, tx = Math.max(lx + 3, wx + G8_CH);
+      if (tx + tw > opt.w) tx = Math.max(wx + G8_CH, opt.w - tw);
+      m.push(["link", lx, ly, 1, wy + 2 - ly, "--faint"]);
+      m.push(["word", tx, wy + G8_WORDS / 2, Math.max(1, opt.w - tx), 10, "--muted", ks[i].word]);
+      wx = tx + tw;
+    }
+    return m;
+  }
+  // g8's height: the lanes, and the words row when a link has words.
+  function g8Height(nl, links, lane) {
+    return nl * lane + (links && links.length ? G8_WORDS + 2 : 0);
+  }
+  // A /api/wifi/chain row as g8's lanes, links and labels, and how many
+  // stages it has: j is the answer (its from, col_s and cols). A time
+  // is the column it falls in; an incident still open at the answer's
+  // end (its last observation in the window's last column) has no end
+  // dot. The taint joins the deauth lane to the twin lane, so its
+  // connector starts at deauth; an attribution is the twin lane's own.
+  function g8Lanes(row, j) {
+    var cs = j.col_s > 0 ? j.col_s : 1, n = j.cols > 0 ? j.cols : 0, from = j.from;
+    var col = function (t) { return Math.floor((t - from) / cs); };
+    var bars = function (list) {
+      return (list || []).map(function (e) {
+        var b = col(e[1]);
+        return [col(e[0]), b, e[2], b >= n - 1 ? 1 : 0];
+      });
+    };
+    // A lane's words: its name, the highest severity its bars reached
+    // (R10: the word beside the colour), and "none" when it has nothing,
+    // in --muted, so an empty lane reads as not yet seen.
+    var words = function (name, list, have, extra) {
+      var hi = -1;
+      for (var i = 0; list && i < list.length; i++) if (list[i][2] > hi) hi = list[i][2];
+      var sv = hi === 0 ? " low" : hi === 1 ? " warn" : hi === 2 ? " CRIT" : "";
+      return { text: name + (have ? sv + (extra || "") : " none"), token: have ? "--ink" : "--muted" };
+    };
+    var dc = (row.cells || []).map(function (v) { return gnum(v) ? v : 0; });
+    var ac = row.assoc || [];
+    var links = [], conf = null;
+    (row.links || []).forEach(function (k) {
+      if (gnum(k.tainted)) links.push({ col: col(k.tainted), top: 0, word: "tainted \u2191 5 s" });
+      if (gnum(k.attributed)) links.push({ col: col(k.attributed), top: 1, word: "attributed \u2191" });
+      if (gnum(k.confidence)) conf = k.confidence;
+    });
+    var nd = 0, na = 0;
+    for (var i = 0; i < dc.length; i++) if (dc[i] > 0) nd++;
+    for (i = 0; i < ac.length; i++) if (gnum(ac[i]) && ac[i] > 0) na++;
+    // An association is a stage only on a BSSID accused or caught
+    // luring (a twin or a karma row): elsewhere it is a client joining.
+    var lure = (row.twin || []).length + (row.karma || []).length > 0;
+    var stages = (nd || (row.floods || []).length ? 1 : 0) + ((row.twin || []).length ? 1 : 0) +
+                 (na && lure ? 1 : 0) + ((row.karma || []).length ? 1 : 0);
+    var fl = row.floods || [], tw = row.twin || [], ka = row.karma || [];
+    return {
+      lanes: [{ counts: dc, bars: bars(fl) }, { counts: null, bars: bars(tw) },
+              { counts: ac, bars: null }, { counts: null, bars: bars(ka) }],
+      labels: [words("deauth", fl, nd > 0 || fl.length > 0),
+               words("twin", tw, tw.length > 0, conf !== null ? " " + conf + "%" : ""),
+               words("assoc", null, na > 0), words("karma", ka, ka.length > 0)],
+      links: links, stages: stages
+    };
+  }
+
+  // The Flows matrix (F11): sources by destinations as /api/flows/graph
+  // ?form=matrix answers them, both axes in address order, subnets
+  // grouped by a --rule line where the group changes. Each cell a G6
+  // count bar on one scale for the matrix (R3: its largest, printed in
+  // the caption), behind its count as a word, and the protocols as a
+  // letter each in the cell's corner rather than a hue (no legend). An
+  // SMB1 cell keeps the critical colour, bar and number (R10: the
+  // caption says what red is). opt: {x0, y0, cw, ch, max} — the label
+  // gutter and the header, a cell's size, and the scale the matrix last
+  // drew (R11). No cell: the dash.
+  var MX_LETTER = { ssh: "S", rdp: "R", smb: "M", snmp: "N", bgp: "B", ldap: "L", kerb: "K" };
+  function mxNum(v) {
+    if (!gnum(v) || v < 0) return "-";
+    if (v < 1000) return String(Math.round(v));
+    if (v < 1e6) return (v < 1e4 ? (v / 1e3).toFixed(1) : String(Math.round(v / 1e3))) + "k";
+    return (v < 1e7 ? (v / 1e6).toFixed(1) : String(Math.round(v / 1e6))) + "M";
+  }
+  function mxMax(mx, prev) {
+    var max = gnum(prev) && prev > 0 ? prev : 0;
+    for (var i = 0, c = (mx && mx.cells) || []; i < c.length; i++)
+      if (gnum(c[i].total) && c[i].total > max) max = c[i].total;
+    return max;
+  }
+  function mx(m, opt) {
+    var out = [], x0 = opt.x0, y0 = opt.y0, cw = opt.cw, ch = opt.ch, i;
+    var srcs = (m && m.srcs) || [], dsts = (m && m.dsts) || [], cells = (m && m.cells) || [];
+    var W = x0 + dsts.length * cw, Hh = y0 + srcs.length * ch;
+    if (!cells.length) { out.push(dash(Math.max(W, 60), ch)); return out; }
+    var own = Object.prototype.hasOwnProperty, max = mxMax(m, opt.max);
+    for (i = 1; i < srcs.length; i++)
+      if (srcs[i].group !== srcs[i - 1].group) out.push(["grp", 0, y0 + i * ch, W, 1, "--rule"]);
+    for (i = 1; i < dsts.length; i++)
+      if (dsts[i].group !== dsts[i - 1].group) out.push(["grp", x0 + i * cw, 0, 1, Hh, "--rule"]);
+    for (i = 0; i < cells.length; i++) {
+      var c = cells[i], x = x0 + c.d * cw, y = y0 + c.s * ch, hot = c.smb1 === true;
+      var v = gnum(c.total) && c.total > 0 ? c.total : 0;
+      out.push(["bar", x + 2, y + ch * 0.25, Math.max(1, (cw - 4) * Math.min(1, max > 0 ? v / max : 0)),
+                ch * 0.5, hot ? "--sev-crit" : "--rule"]);
+      out.push(["num", x + 3, y + ch / 2, cw - 6, 10, hot ? "--sev-crit" : "--ink", mxNum(v)]);
+      var lt = "";
+      for (var k = 0, p = c.protos || []; k < p.length; k++)
+        if (typeof p[k] === "string" && own.call(MX_LETTER, p[k])) lt += MX_LETTER[p[k]];
+      if (lt) out.push(["proto", x + cw - 2 - 5 * lt.length, y + 4, 5 * lt.length, 7, "--muted", lt]);
+    }
+    return out;
+  }
+
   // The painter. One for every glyph, because a mark list is all a
   // glyph says: resolve(token) gives the CSS colour of a token, and
   // marks are in CSS pixels on a canvas sized at the device ratio. A
@@ -519,7 +702,13 @@ var glyph = (function () {
       var col = resolve(m[5]);
       g.fillStyle = col;
       g.strokeStyle = col;
-      if (k === "line") {
+      if (typeof m[6] === "string") {
+        // A word: its size is the mark's h, its width at most w.
+        g.font = Math.round(m[4] * dpr) + "px " + resolve("--font-mono");
+        g.textBaseline = "middle";
+        g.textAlign = "left";
+        g.fillText(m[6], m[1] * dpr, m[2] * dpr, Math.max(1, m[3] * dpr));
+      } else if (k === "line") {
         g.lineWidth = Math.max(1, dpr);
         g.beginPath();
         g.moveTo(m[1] * dpr, m[2] * dpr);
@@ -560,5 +749,7 @@ var glyph = (function () {
            trend: trend, shared: shared, order: order,
            g3: g3, g3Vals: g3Vals, G3_BANDS: G3_BANDS, g7: g7, g7Max: g7Max,
            cellsFromHex: cellsFromHex, level: level, lineToken: lineToken,
-           heatToken: heatToken };
+           heatToken: heatToken, g8: g8, g8Max: g8Max, g8Height: g8Height,
+           g8Lanes: g8Lanes, G8_STAGES: G8_STAGES, mx: mx, mxMax: mxMax, mxNum: mxNum,
+           MX_LETTER: MX_LETTER };
 })();

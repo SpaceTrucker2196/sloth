@@ -927,7 +927,7 @@ static void test_platform_bundle(void) {
  * address rides in place of a drawer. */
 static void test_alert_with_an_address_only(void) {
     WT_EQ(route(&H, "/api/alert", "id=d7"), 200);
-    WT_HAS(body_of(g_out), "\"device\":{\"mac\":null,\"ip\":\"192.0.2.50\"}");
+    WT_HAS(body_of(g_out), "\"device\":{\"mac\":null,\"ip\":\"192.0.2.50\",\"bssid\":null}");
     WT_EQ(route(&H, "/api/bundle", "kind=alert&id=d7"), 200);
     const char *v = alert_page(answer());
     const char *after = v ? strstr(v, "\"history\":{") : NULL;

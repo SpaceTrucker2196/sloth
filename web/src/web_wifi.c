@@ -12,6 +12,7 @@
 #include "web_series.h"
 #include "web_ssid.h"
 #include "web_chmix.h"
+#include "web_chain.h"
 
 /* ── names ───────────────────────────────────────────────────────────── */
 
@@ -1025,6 +1026,217 @@ int web_wifi_deauth_route(const web_m4_t *m, const char *query,
     web_jw_raw(&w, "],\"shown\":");  web_jw_int(&w, shown);
     web_jw_raw(&w, ",\"more\":");    web_jw_raw(&w, shown < nk ? "true" : "false");
     web_jw_raw(&w, "}\n");
+    gbuf_free(&b);
+    if (w.overflow) return -1;
+    *len = w.len;
+    *status = 200;
+    return 0;
+}
+
+/* ── /api/wifi/chain ─────────────────────────────────────────────────── */
+
+typedef struct {
+    web_jw_t *w;
+    int       n, max, type, k;   /* type: the alert type this list takes */
+} stage_t;
+
+static int emit_stage(void *ctx, const web_sdb_item_t *it) {
+    stage_t *s = ctx;
+    if (it->n1 != s->type) return 0;
+    s->k++;
+    if (s->n >= s->max) return 0;
+    web_jw_raw(s->w, s->n++ ? ",[" : "[");
+    web_jw_int(s->w, it->first_seen);
+    web_jw_raw(s->w, ",");
+    web_jw_int(s->w, it->last_seen);
+    web_jw_raw(s->w, ",");
+    web_jw_int(s->w, it->n2 < 0 ? 0 : it->n2 > 2 ? 2 : it->n2);
+    web_jw_raw(s->w, ",");
+    web_jw_int(s->w, it->has_n3 && it->n3 > 0 ? it->n3 : 0);
+    web_jw_raw(s->w, "]");
+    return 0;
+}
+
+typedef struct {
+    const grid_t *g;
+    int          *cells;
+    int           n;
+} assoc_t;
+
+static int take_assoc(void *ctx, const web_sdb_item_t *it) {
+    assoc_t *a = ctx;
+    long long c = (it->first_seen - a->g->from) / a->g->col_s;
+    if (c >= 0 && c < a->g->ncol) { a->cells[c]++; a->n++; }
+    return 0;
+}
+
+static void jw_ts_or_null(web_jw_t *w, long long ts) {
+    if (ts > 0) web_jw_int(w, ts); else web_jw_raw(w, "null");
+}
+
+/* One BSSID's chain: its deauth row (as /api/wifi/deauth's), the other
+ * stages sloth.db holds against it, the associations to it, and the
+ * links the stream's twin_episode made. The stages counted: deauth (a
+ * frame or a flood), twin, assoc (only beside a twin or a karma row),
+ * karma. */
+static void chain_row(const web_m4_t *m, web_sdb_conn_t *conn, int have_db,
+                      const grid_t *g, const char *bssid, double total,
+                      const double *sum, const int *cnt, int *acells,
+                      web_jw_t *w) {
+    int metric = WM_WIFI_DEAUTH, stages = 0, frames = 0, ok = 1;
+    for (int c = 0; c < g->ncol; c++) if (cnt[c] && sum[c] > 0) frames = 1;
+    web_jw_raw(w, "{\"bssid\":"); web_jw_str(w, bssid);
+    web_jw_raw(w, ",\"total\":");  jw_cell(w, total);
+    web_jw_raw(w, ",\"cells\":");
+    cells_json(w, metric, g, sum, cnt);
+    web_jw_raw(w, ",\"floods\":[");
+    flood_t f = { w, 0, WEB_WIFI_FLOODS };
+    int got = have_db ? web_sdb_deauth_floods(conn, bssid, g->from, g->to,
+                                              WEB_WIFI_FLOODS + 1, emit_flood, &f) : 0;
+    if (got < 0) ok = 0;
+    web_jw_raw(w, "],\"floods_more\":");
+    web_jw_raw(w, got > WEB_WIFI_FLOODS ? "true" : "false");
+    if (frames || f.n) stages++;
+    /* The two alert stages from one read each: the rows come back
+     * oldest first, both types mixed, and each list takes its own. */
+    static const struct { const char *name; int type; } ST[] = {
+        { "twin", WEB_ALERT_EVIL_TWIN }, { "karma", WEB_ALERT_KARMA_AP },
+    };
+    int more = 0, accused = 0;
+    for (size_t i = 0; i < sizeof(ST) / sizeof(ST[0]); i++) {
+        web_jw_raw(w, ",\"");
+        web_jw_raw(w, ST[i].name);
+        web_jw_raw(w, "\":[");
+        stage_t st = { w, 0, WEB_WIFI_FLOODS, ST[i].type, 0 };
+        int r = have_db ? web_sdb_chain_stages(conn, bssid, g->from, g->to,
+                                               WEB_WIFI_STAGE_READ, emit_stage, &st) : 0;
+        if (r < 0) ok = 0;
+        if (r >= WEB_WIFI_STAGE_READ || st.k > st.n) more = 1;
+        web_jw_raw(w, "]");
+        if (st.n) { stages++; accused = 1; }
+    }
+    web_jw_raw(w, ",\"stages_more\":"); web_jw_raw(w, more ? "true" : "false");
+    memset(acells, 0, (size_t)g->ncol * sizeof(*acells));
+    assoc_t as = { g, acells, 0 };
+    int ar = have_db ? web_sdb_bssid_assocs(conn, bssid, g->from, g->to,
+                                            WEB_WIFI_ASSOC_READ, take_assoc, &as) : 0;
+    if (ar < 0) ok = 0;
+    web_jw_raw(w, ",\"assoc\":[");
+    for (int c = 0; c < g->ncol; c++) {
+        if (c) web_jw_raw(w, ",");
+        web_jw_int(w, acells[c]);
+    }
+    web_jw_raw(w, "],\"assoc_n\":"); web_jw_int(w, as.n);
+    web_jw_raw(w, ",\"assoc_more\":");
+    web_jw_raw(w, ar >= WEB_WIFI_ASSOC_READ ? "true" : "false");
+    /* A station associating is the chain's stage only on a BSSID sloth
+     * accused or caught luring (§5 G8: "a client associated to the twin
+     * BSSID"): on any other AP it is a client joining, and with the
+     * deauth frames every AP sends it would make each busy AP a chain. */
+    if (as.n && accused) stages++;
+    web_chain_pair_t lk[WEB_CHAIN_LINKS];
+    long long since = 0;
+    int nl = m->chain ? web_chain_links(m->chain, bssid, g->from, g->to, lk,
+                                        WEB_CHAIN_LINKS, &since) : 0;
+    web_jw_raw(w, ",\"links\":[");
+    for (int i = 0; i < nl; i++) {
+        web_jw_raw(w, i ? ",{\"real\":" : "{\"real\":"); web_jw_str(w, lk[i].real);
+        web_jw_raw(w, ",\"twin\":");       web_jw_str(w, lk[i].twin);
+        web_jw_raw(w, ",\"first\":");      web_jw_int(w, lk[i].first_ts);
+        web_jw_raw(w, ",\"last\":");       web_jw_int(w, lk[i].last_ts);
+        web_jw_raw(w, ",\"tainted\":");    jw_ts_or_null(w, lk[i].taint_ts);
+        web_jw_raw(w, ",\"attributed\":"); jw_ts_or_null(w, lk[i].attr_ts);
+        web_jw_raw(w, ",\"confidence\":");
+        if (lk[i].confidence >= 0) web_jw_int(w, lk[i].confidence); else web_jw_raw(w, "null");
+        web_jw_raw(w, "}");
+    }
+    web_jw_raw(w, "],\"read\":");  web_jw_raw(w, ok ? "true" : "false");
+    web_jw_raw(w, ",\"stages\":"); web_jw_int(w, stages);
+    web_jw_raw(w, "}");
+}
+
+int web_wifi_chain_route(const web_m4_t *m, const char *query,
+                         long long now_s, char *body, size_t cap,
+                         size_t *len, int *status) {
+    if (!m || !m->tsdb)
+        return answer_error(503, "no_time_series", NULL, body, cap, len, status);
+    web_param_t ps[4] = { { "from", "", 0 }, { "to", "", 0 }, { "cols", "", 0 },
+                          { "bssid", "", 0 } };
+    char err[48];
+    if (web_params_parse(query, ps, 4, err, sizeof(err)) != 0)
+        return answer_error(400, err, NULL, body, cap, len, status);
+    char one[WEB_KEY_MAX + 1] = "";
+    if (ps[3].seen && web_key_mac(ps[3].val, one) != 0)
+        return answer_error(400, "bad_bssid", NULL, body, cap, len, status);
+    grid_t g;
+    const char *why;
+    if (web_grid_of(m, ps, now_s, &g, &why) != 0)
+        return answer_error(400, why, NULL, body, cap, len, status);
+    WEB_M4_CHECKED(m, len, status);
+    const int metric = WM_WIFI_DEAUTH;
+    gbuf_t b;
+    if (gbuf_alloc(&b) != 0) { gbuf_free(&b); return -1; }
+    int *acells = malloc((size_t)WEB_WIFI_COLS * sizeof(*acells));
+    if (!acells) { gbuf_free(&b); return -1; }
+    int nk;
+    if (one[0]) {
+        nk = 1;
+        snprintf(b.rows[0].key, sizeof(b.rows[0].key), "%s", one);
+    } else {
+        nk = grid_keys(m, metric, &g, b.keys);
+        for (int i = 0; i < nk; i++) {
+            snprintf(b.rows[i].key, sizeof(b.rows[i].key), "%s", b.keys[i]);
+            if (grid_row(m, metric, &g, b.keys[i], b.pts, b.sum, b.cnt,
+                         &b.rows[i].total) != 0) {
+                free(acells);
+                gbuf_free(&b);
+                return -1;
+            }
+        }
+        qsort(b.rows, (size_t)nk, sizeof(*b.rows), by_total);
+    }
+
+    web_sdb_conn_t conn;
+    memset(&conn, 0, sizeof(conn));
+    char oerr[WEB_SDB_ERR_MAX] = "";
+    int have_db = m->sdb && m->sdb->configured &&
+                  web_slothdb_open(m->sdb, &conn, WEB_SDB_HTTP_MS, now_s, oerr,
+                                   sizeof(oerr)) == 0;
+    web_sdb_stats_t sst;
+    memset(&sst, 0, sizeof(sst));
+    if (m->sdb) web_slothdb_stats(m->sdb, &sst);
+    long long since = m->chain ? web_chain_since(m->chain) : 0;
+
+    web_jw_t w;
+    web_jw_init(&w, body, cap);
+    grid_head(&w, metric, &g);
+    web_jw_raw(&w, ",\"db\":");
+    web_jw_str(&w, have_db ? "open" : m->sdb && m->sdb->configured
+                   ? web_slothdb_state_word(sst.state) : "none");
+    web_jw_raw(&w, ",\"links_from\":");
+    web_jw_raw(&w, m->chain ? "\"stream\"" : "null");
+    web_jw_raw(&w, ",\"links_since\":"); jw_ts_or_null(&w, since);
+    web_jw_raw(&w, ",\"total_keys\":"); web_jw_int(&w, nk);
+    web_jw_raw(&w, ",\"bssids\":[");
+    int shown = 0;
+    /* A row: its deauth cells and its association counts, the floods
+     * and both stage lists at 48 bytes a row, and its links. */
+    size_t extra = (size_t)g.ncol * 12 + (size_t)(3 * WEB_WIFI_FLOODS + 3) * 48 +
+                   (size_t)WEB_CHAIN_LINKS * 220 + 160;
+    for (int i = 0; i < nk && shown < WEB_WIFI_CHAINS; i++) {
+        if (w.len + row_max(&g, extra) + 64 > cap) break;
+        double total;
+        if (grid_row(m, metric, &g, b.rows[i].key, b.pts, b.sum, b.cnt,
+                     &total) != 0)
+            break;
+        if (shown++) web_jw_raw(&w, ",");
+        chain_row(m, &conn, have_db, &g, b.rows[i].key, total, b.sum, b.cnt, acells, &w);
+    }
+    web_slothdb_close(&conn);
+    web_jw_raw(&w, "],\"shown\":");  web_jw_int(&w, shown);
+    web_jw_raw(&w, ",\"more\":");    web_jw_raw(&w, shown < nk ? "true" : "false");
+    web_jw_raw(&w, "}\n");
+    free(acells);
     gbuf_free(&b);
     if (w.overflow) return -1;
     *len = w.len;

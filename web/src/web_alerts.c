@@ -774,7 +774,7 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
     int have_row = 0, nh = 0, have_t = 0;
     web_adb_totals_t tot;
     memset(&tot, 0, sizeof(tot));
-    char mac[18] = "";
+    char mac[18] = "", bssid[18] = "";
     if (web_hist_configured(m)) {
         web_sdb_conn_t c;
         int o = web_hist_open(m, &c, now_s, body, cap, len, status);
@@ -838,6 +838,16 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
                 const char *ip = have_inc ? e->match_ip : row.ip;
                 got = web_adb_device(&c, kind == 'd' ? rid : 0, kind == 'd' ? NULL : key,
                                      ip, mac);
+            }
+            /* G8's BSSID (#171 V4): an AP sloth heard beacon that the key
+             * names, as a predicate, so the page can ask for its chain. */
+            if (got >= 0 && (key || kind == 'd')) {
+                int ek = 0;
+                char em[18];
+                int g2 = web_adb_emitter(&c, kind == 'd' ? rid : 0, kind == 'd' ? NULL : key,
+                                         em, &ek);
+                if (g2 < 0) got = -1;
+                else if (g2 > 0 && ek == 1) memcpy(bssid, em, sizeof(bssid));
             }
             if (got < 0) {
                 free(e); free(hist); free(all); free(inc); free(rin);
@@ -982,6 +992,7 @@ int web_alert_route(const web_m4_t *m, web_live_t *live, const char *query,
                    : nh > 0 && hist[0].loc.has ? &hist[0].loc : NULL);
     web_jw_raw(&w, ",\"device\":{\"mac\":"); jw_str_or_null(&w, mac);
     web_jw_raw(&w, ",\"ip\":");             jw_str_or_null(&w, ip);
+    web_jw_raw(&w, ",\"bssid\":");          jw_str_or_null(&w, bssid[0] ? bssid : NULL);
     web_jw_raw(&w, "}");
     kb_json(&w, web_akb_get(type));
     {

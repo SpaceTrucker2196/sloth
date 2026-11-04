@@ -195,6 +195,11 @@ canvas.wfall { display: block; width: 100%; height: 280px; margin-top: var(--gap
 .g3wrap.mix { grid-template-columns: minmax(0, 1fr); }
 canvas.g3drill { display: block; width: 100%; height: 18px; }
 canvas.rug { display: block; width: 100%; height: 16px; margin-top: var(--gap); }
+/* G8 (#171 V4): the chain timeline; its height is its lanes' (chain.js). */
+canvas.chain { display: block; width: 100%; height: 86px; margin-top: 2px; }
+.chhead { font-size: 11px; margin-top: var(--gap); }
+/* The Flows matrix: as wide as its columns need, in its own scroll box. */
+canvas.fmx { display: block; height: 18px; }
 .clrow { font-size: 12px; white-space: nowrap; cursor: pointer; border-bottom: 1px dotted var(--rule); }
 .clrow > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .clrow > canvas { display: block; width: 144px; height: 12px; }

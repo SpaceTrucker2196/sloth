@@ -25,6 +25,21 @@
  *       episodes sloth.db's alerts hold against it in the range
  *       ([first_seen, last_seen, sev, count], oldest first, at most
  *       WEB_WIFI_FLOODS); "db" says whether sloth.db was read.
+ *   /api/wifi/chain?from=&to=&cols=&bssid=
+ *       G8's attack chain (#171 V4, F14): /api/wifi/deauth's rows (at
+ *       most WEB_WIFI_CHAINS of them), or the one BSSID bssid names
+ *       whether or not it has a deauth key, each with the chain's other
+ *       stages against it: "twin" and "karma", the EVIL_TWIN and
+ *       KARMA_AP rows sloth.db's alerts hold whose key names it
+ *       ([first_seen, last_seen, sev, count], oldest first, at most
+ *       WEB_WIFI_FLOODS each, "stages_more" past that); "assoc", the
+ *       associations to it first seen in each cell (sloth.db's assocs,
+ *       the station never read); "links", the pairs the stream's
+ *       twin_episode made with it (web_chain.h: real, twin, first and
+ *       newest record, when sloth tainted the twin and when it
+ *       attributed the pair, the newest confidence), since
+ *       "links_since"; "stages", how many of deauth, twin, assoc and
+ *       karma it has; "read" false when a sloth.db read failed.
  *   /api/wifi/aps?sort=&limit=&offset=
  *       sloth.db's beacon_aps through the M4 allow-list: SSID, channel,
  *       signal, the encryption and AKM sloth wrote and the AKM bits
@@ -53,6 +68,11 @@
 #define WEB_WIFI_COLS     96
 #define WEB_WIFI_ROWS     40
 #define WEB_WIFI_FLOODS   8
+/* /api/wifi/chain (#171 V4): the BSSIDs a list answers, the stage rows
+ * read for one (both types together), the associations counted. */
+#define WEB_WIFI_CHAINS     16
+#define WEB_WIFI_STAGE_READ 64
+#define WEB_WIFI_ASSOC_READ 2000
 #define WEB_WIFI_SSIDS    8
 #define WEB_WIFI_AP_LIMIT 50
 #define WEB_WIFI_AP_MAX   100
@@ -114,6 +134,9 @@ int web_wifi_channels_route(const web_m4_t *m, const char *query,
 int web_wifi_deauth_route(const web_m4_t *m, const char *query,
                           long long now_s, char *body, size_t cap,
                           size_t *len, int *status);
+int web_wifi_chain_route(const web_m4_t *m, const char *query,
+                         long long now_s, char *body, size_t cap,
+                         size_t *len, int *status);
 int web_wifi_aps_route(const web_m4_t *m, const char *query, long long now_s,
                        char *body, size_t cap, size_t *len, int *status);
 /* /api/wifi/local?limit=: the managed Wi-Fi card's own scan (sloth.db

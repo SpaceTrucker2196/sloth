@@ -331,7 +331,7 @@ void web_usage(FILE *out) {
         "/api/series, /api/keys, /api/metrics, /api/baseline,\n"
         "/api/anomalies, /api/devices, /api/device/MAC, /api/lookup,\n"
         "/api/wifi/channels, /api/wifi/aps, /api/wifi/deauth,\n"
-        "/api/wifi/local,\n"
+        "/api/wifi/local, /api/wifi/chain,\n"
         "/api/history/overview, /api/history/devices, /api/history/alerts,\n"
         "/api/history/flows, /api/sessions, /api/sessions/new (JSON),\n"
         "/api/frrs/* (triage, the FRRS record, the TACDB), /api/ble,\n"

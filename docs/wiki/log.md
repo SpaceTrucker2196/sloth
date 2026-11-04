@@ -6436,3 +6436,21 @@ away; emitters nearest first with the SSID count as squares; the deauth
 frames as a G7 rug that collapses when empty; the probing clients with
 G2 and G5. History's 30 d strip as a G7 rug on one scale. Updated
 [[slothweb]].
+
+## 2026-11-03 — slothweb glyph slice V4: the attack chain and the Flows matrix (#171)
+
+G8, the chain timeline: deauth, twin, association and karma lanes on
+one time axis with the links sloth made between them in words, on the
+WiFi view's chains panel, the alert page and the drawer, from the new
+`/api/wifi/chain` (sloth.db's incidents and associations, the stream's
+`twin_episode` links kept in memory). The Flows view draws the source
+by destination matrix first and the chord second
+(`/api/flows/graph?form=matrix`). The slice's review matched a stage's
+alert key at its BSSID fields (a substring took the text across a
+pair's two halves, or an attack-chain key's SSID), counted an
+association as a stage only on a BSSID with a twin or karma incident
+(otherwise every busy AP with routine deauth frames was a chain), laid
+the link words out so a taint and an attribution in one column no
+longer overprint, kept each chain's scale per cell width, and said in
+the caption when only the most deauthed BSSIDs were read. Updated
+[[slothweb]].

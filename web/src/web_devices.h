@@ -50,6 +50,7 @@
 #include "web_tsdb.h"
 
 struct web_frrs;
+struct web_chain;
 
 #define WEB_DEV_LIMIT       100
 #define WEB_DEV_LIMIT_MAX   200
@@ -79,6 +80,9 @@ typedef struct {
     int                  check_only;
     /* Triage and the FRRS record (web_frrs.h); NULL: not attached. */
     struct web_frrs     *frrs;
+    /* The stream's twin_episode links for G8 (web_chain.h); NULL: not
+     * attached, and a chain has no links. */
+    struct web_chain    *chain;
 } web_m4_t;
 
 /* In a route, once its parameters are checked: under check_only, an

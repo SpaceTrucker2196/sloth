@@ -566,6 +566,18 @@ int web_sdb_deauth_floods(web_sdb_conn_t *c, const char *bssid,
     (void)c; (void)bssid; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
     return -1;
 }
+int web_sdb_chain_stages(web_sdb_conn_t *c, const char *bssid,
+                         long long from, long long to, int max,
+                         web_sdb_item_fn fn, void *ctx) {
+    (void)c; (void)bssid; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_bssid_assocs(web_sdb_conn_t *c, const char *bssid,
+                         long long from, long long to, int max,
+                         web_sdb_item_fn fn, void *ctx) {
+    (void)c; (void)bssid; (void)from; (void)to; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
 int web_sdb_sessions(web_sdb_conn_t *c, web_sdb_session_t *out, int max) {
     (void)c; (void)out; (void)max;
     return -1;
@@ -2003,6 +2015,45 @@ int web_sdb_deauth_floods(web_sdb_conn_t *c, const char *bssid,
     int n = items_range(c, sql, bssid, from, to, max, fn, ctx);
     c->pred_ok = 0;
     return n;
+}
+
+int web_sdb_chain_stages(web_sdb_conn_t *c, const char *bssid,
+                         long long from, long long to, int max,
+                         web_sdb_item_fn fn, void *ctx) {
+    if (!(c->feats & WEB_QF_ALERTS)) return 0;
+    char sql[768];
+    /* As web_sdb_deauth_floods(): the key in the WHERE only, against
+     * the canonical MAC the route bound; the result columns are
+     * constants and the row's numbers. The MAC is matched at a key's
+     * fields, never anywhere in it: alert_pair_key()'s "twin:" and
+     * "twin-fp:" put the pair's two fixed-width BSSIDs straight after
+     * the rule id, karma_alert_key() its one, and an instr() would also
+     * take the text across a pair's two halves (lo's last three octets
+     * and hi's first three) or an attack-chain key's SSID, both of which
+     * a transmitter chooses. */
+    snprintf(sql, sizeof(sql),
+             "SELECT '', '', type, sev, count, %s AS fs, last_seen FROM"
+             " alerts WHERE ((type = %d AND (substr(key, 1, 5) = 'twin:' AND"
+             " (substr(key, 6, 17) = ?1 OR substr(key, 24, 17) = ?1) OR"
+             " substr(key, 1, 8) = 'twin-fp:' AND (substr(key, 9, 17) = ?1 OR"
+             " substr(key, 27, 17) = ?1))) OR (type = %d AND"
+             " substr(key, 1, 6) = 'karma:' AND substr(key, 7, 17) = ?1)) AND"
+             " last_seen >= ?2 AND fs < ?3 ORDER BY fs, type"
+             " LIMIT ?4", alert_start(c), WEB_ALERT_EVIL_TWIN, WEB_ALERT_KARMA_AP);
+    c->pred_ok = 1;
+    int n = items_range(c, sql, bssid, from, to, max, fn, ctx);
+    c->pred_ok = 0;
+    return n;
+}
+
+int web_sdb_bssid_assocs(web_sdb_conn_t *c, const char *bssid,
+                         long long from, long long to, int max,
+                         web_sdb_item_fn fn, void *ctx) {
+    if (!(c->feats & WEB_QF_ASSOC)) return 0;
+    return items_range(c, "SELECT '', '', 0, 0, NULL, first_seen, first_seen FROM"
+                          " assocs WHERE bssid = ?1 AND first_seen >= ?2 AND"
+                          " first_seen < ?3 ORDER BY first_seen LIMIT ?4",
+                       bssid, from, to, max, fn, ctx);
 }
 
 static int sessions_ok(web_sdb_conn_t *c) {

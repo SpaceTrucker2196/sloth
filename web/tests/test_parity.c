@@ -40,6 +40,9 @@ static void test_downgrade_bits_are_sloths(void) {
     }
     WT_ASSERT(web_downgrade_name(4) == NULL);
     WT_EQ(WEB_ALERT_DEAUTH_FLOOD, ALERT_TYPE_DEAUTH_FLOOD);
+    /* G8's other two stages (#171 V4), the same way. */
+    WT_EQ(WEB_ALERT_EVIL_TWIN, ALERT_TYPE_EVIL_TWIN);
+    WT_EQ(WEB_ALERT_KARMA_AP, ALERT_TYPE_KARMA_AP);
 }
 
 /* A source file as text (its own allocation: the test holds several). */

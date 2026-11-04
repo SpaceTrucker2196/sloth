@@ -485,12 +485,13 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/device/{mac}` | `200` JSON, one device; `400` for a MAC that does not pass or any query |
    | `GET /api/lookup?q=` | `200` JSON, the Lookup card for a MAC or an IP; `400` otherwise |
    | `GET /api/wifi/channels?metric=&from=&to=&cols=`, `/api/wifi/deauth?from=&to=&cols=` | `200` JSON, the channel waterfall and the deauth timeline (M5, below); `400` for a parameter that does not pass; `503` with no time series |
+   | `GET /api/wifi/chain?from=&to=&cols=&bssid=` | `200` JSON, G8's attack chain per BSSID: the deauth timeline's rows (or the one `bssid`) with the EVIL_TWIN, KARMA_AP and association stages sloth.db holds against each and the links the stream's `twin_episode` made (#171 V4, below); out of scope under Local; `400` for a parameter that does not pass (`bad_bssid`); `503` with no time series |
    | `GET /api/wifi/aps?sort=&dir=&limit=&offset=` | `200` JSON, a page of sloth.db's beacon_aps; `400`; `503` with no `--sloth-db` or sloth.db unreadable |
    | `GET /api/wifi/local?limit=` | `200` JSON, the managed Wi-Fi card's own scan (sloth.db `wifi_aps`, newest first, at most 100) and link (`wifi_stas`, at most 32); out of scope under Monitor; `400`; `503` as above |
    | `GET /api/history/overview`, `/api/history/devices`, `/api/history/alerts`, `/api/history/flows` (`?from=&to=` and their own) | `200` JSON, the History view's reads of sloth.db; `400`; `503` as above |
    | `GET /api/sessions`, `/api/sessions/new?id=` | `200` JSON, the survey sessions and one's "new since the previous session"; `404` for a session sloth.db does not have |
    | `GET /api/flows?proto=&from=&to=&ip=&sort=&dir=&limit=&offset=` | `200` JSON, one protocol table of sloth.db (M6, below); `400` for a parameter that does not pass, `proto=mqtt` included (`proto_withheld`); `503` as above |
-   | `GET /api/flows/graph?from=&to=&nodes=&edges=` | `200` JSON, the chord diagram's pairs with the fold stated; `400`; `503` as above |
+   | `GET /api/flows/graph?from=&to=&nodes=&edges=&form=` | `200` JSON, the pairs with the fold stated: the chord diagram's (`form=chord`, the default) or the source by destination matrix's (`form=matrix`, #171 V4); `400` (`bad_form`, `nodes_not_in_matrix`); `503` as above |
    | `GET /api/alerts?state=&sev=&type=&q=&window=&limit=&offset=` | `200` JSON, the Alerts page: the stream's open incidents, then the closed ones and sloth.db's rows, one row per alert key ([Alerts](#alerts)); `400` for a parameter that does not pass; sloth.db missing or refused leaves the stream's rows and says so (`"db"`) |
    | `GET /api/alert?id=` | `200` JSON, everything an alert's page shows; `400` for an id that is not `s<handle>` or `d<rowid>`; `404` for one neither source has; `503` with no `--sloth-db` for a `d` id, or sloth.db unreadable |
    | `GET /api/pcap/frames?id=&n=&offset=` | `200` JSON: capture `n` of alert `id` (an index into `/api/alert`'s `captures`; a name or path is never taken), its SHA-256 recomputed against the manifest (`hash.says`: `hash verified`, `HASH MISMATCH` or `no manifest entry`), its file header, and 24 decoded frames from `offset` (0..4095) with each one's hex dump; `400` for a parameter that does not pass; `404` `no_such_alert`, `no_such_capture`, `no_pcap_dir`, `not_found`; `403` `not_regular`, `withheld_evidence_pcap` (an evidence pcap without `--web-serve-evidence-pcap`); `413` `too_large` (over 16 MiB); `415` `pcapng_not_supported` or `not_pcap` with a `message` |
@@ -2518,8 +2519,9 @@ count`. Each parameter passes whole or the answer is a `400` with its
 reason (`missing_proto`, `unknown_proto`, `proto_withheld`, `bad_ip`,
 `bad_sort`, `bad_limit`, `bad_offset`, and History's range reasons).
 
-**`/api/flows/graph?from=&to=&nodes=&edges=`.** The chord diagram's
-data: the source -> destination pairs of the pair tables (`ssh`, `rdp`,
+**`/api/flows/graph?from=&to=&nodes=&edges=&form=`.** The chord diagram's
+data (`form=chord`, the default, and the answer as it was before
+`form` existed): the source -> destination pairs of the pair tables (`ssh`, `rdp`,
 `smb`, `snmp`, `bgp`; `ldap` and `kerb` record a source only), the
 `edges` largest by total (1..200, default 80), and of their endpoints
 the `nodes` busiest (2..64, default 24; the page asks for 12 below
@@ -2532,7 +2534,48 @@ and total in the range for the tab strip (`null` for a table the file
 lacks, `"mqtt":"withheld"`). Bounded on both sides: at most 200 pairs
 read, 64 nodes drawn, whatever sloth.db holds.
 
-**The view.** A Canvas 2D chord diagram: the kept addresses on a
+**`form=matrix`** (#171 V4, F11; `docs/web-visual-spec.md` §7's route
+change). The same `edges` largest pairs, and no endpoint folded by
+rank: every end of a pair read is a row or a column, so `nodes` is
+refused with it (`400 nodes_not_in_matrix`) rather than quietly
+ignored. `"srcs"` and `"dsts"` are the sources and the destinations,
+each `{id, group, total}` and each in address order (IPv4 by its
+bytes, then IPv6 by its bytes, then anything else by its text, so
+`10.0.0.11` follows `10.0.0.8` as the address plan has it); `"groups"`
+are the subnets over both axes in that order (an IPv4 address's /24,
+an IPv6 address's /64, anything else its own), computed here so the
+page draws what it is given; `"cells"` are the pairs merged by
+(source, destination), `{s, d, total, protos, smb1}`, `protos` every
+pair table that has the pair (`ssh`, `rdp`, `smb`, `snmp`, `bgp`) and
+`smb1` when one was an SMB1 session; `"max"` is the largest cell, the
+matrix's one scale. `"fold"` keeps its members: `pairs_folded` counts
+only the pairs past `edges`, `nodes_folded` the ends of those. `"tabs"`
+as the chord's.
+
+**The view: the matrix first** (owner ruling 4 of 2026-10-26, F11;
+#171 V4, `web/ui/flowmx.js`). The panel's `draw` control (kept, as
+`ctl.f-mode`) is `who talks to whom (matrix)` by default and `chord`
+second. The matrix: a row per source and a column per destination
+(`form=matrix`, 80 pairs, 40 below 520 px), the source addresses in a
+gutter at the left and the destinations reading up the column headers,
+each in its hash colour and bold once cross-panel, an alert-hot one in
+its `CP_ALERT_HOT_*` colour, as the chord's nodes are; a `--rule` line
+where the subnet changes on either axis; each cell G6's count bar on
+the matrix's one scale (R3: the largest cell a full cell, printed in
+the caption) behind the pair's count in words (`64`, `2.0k`), and the
+pair's protocols as letters in its corner (`S` ssh, `R` rdp, `M` smb,
+`N` snmp, `B` bgp) rather than a hue, so it needs no legend; an SMB1
+cell in `--sev-crit`, bar and number (R10: the note under it says what
+red is). A cell is 30 to 56 px wide, so a matrix wider than the panel
+scrolls inside its own box and the page never does. R11: the scale
+grows and never shrinks until the window or the scope changes. R9: the
+caption `sloth.db's pair tables, 7 d, one scale, largest 64; 2
+subnets, n=6`; no pair collapses the panel to it (R5). Clicking a
+source, a cell (its source) or a destination's header filters the
+table by that address. **The chord, the second mode**, is the drawing
+below, unchanged.
+
+A Canvas 2D chord diagram: the kept addresses on a
 circle, busiest first from twelve o'clock, each with its hash colour
 (§8.12) and its address as text (cut to 22 characters, 11 below
 520 px, from the left and only after a `.` or `:`, behind `…`: so
@@ -2727,6 +2770,13 @@ naming it. `/api/alert?id=` answers all six sections:
   `"alerts_reached"` is the last seen it got back to when the budget
   stopped it first (the drawer says so), `null` when it read the table
   to its end.
+- **The attack chain** (#171 V4, `web/ui/chain.js`), above the device:
+  G8 for the BSSID the alert names. `"device"` carries `"bssid"`, the
+  AP sloth heard beacon whose BSSID the key names (`web_adb_emitter()`
+  over `beacon_aps`, the key a predicate, never read out), `null`
+  otherwise, and the page asks `/api/wifi/chain` for that BSSID around
+  the alert's span ([The glyph layer](#the-glyph-layer), slice V4). No
+  BSSID: no section.
 
 - **The proof** (the page's last section, `web/ui/evidence.js`):
   observed against threshold, the type's assessment and bibliography,
@@ -3792,7 +3842,7 @@ and forgets the kept ones, so it does show all.
 | Lookup: the query box | `ctl.l-q` | kept, not run |
 | WiFi: cells, window, AP sort | `ctl.w-metric`, `ctl.w-win`, `ctl.w-sort` | |
 | Alerts: state, severity, type, search, window | `ctl.al-*` | the type put back once the server's list of types is in; a kept type the server answers `bad_type` for (renamed, corrupt) is dropped and the list reloaded without it |
-| Flows: protocol tab, window, sort, address | `flows.proto`, `ctl.f-win`, `ctl.f-sort`, `ctl.f-ip` | an address picked from a row or the chord is kept as if typed |
+| Flows: protocol tab, window, sort, address, the pairs' drawing | `flows.proto`, `ctl.f-win`, `ctl.f-sort`, `ctl.f-ip`, `ctl.f-mode` | an address picked from a row, the matrix or the chord is kept as if typed; the drawing is the matrix until the chord is chosen (ruling 4) |
 | BLE: search, sort | `ctl.b-q`, `ctl.b-sort` | an address naming a search (`#ble?q=`) opens on it, not kept |
 | BLE Devices: cells, window, devices | `ctl.bledev-metric`, `ctl.bledev-win`, `ctl.bledev-n` | the waterfall's three selects |
 | the SQL box's text | `ctl.q-sql` | the draft; the first recipe no longer replaces it |
@@ -3832,20 +3882,26 @@ bare address, on the defaults.
 
 The page's data graphics are a small, fixed set of glyphs, specified in
 [`docs/web-visual-spec.md`](../docs/web-visual-spec.md) (its rulings
-table of 2026-10-26 overrides its body). Seven of the eight are built:
+table of 2026-10-26 overrides its body). All eight are built:
 **G1** the band sparkline, **G5** the binary presence strip, **G6** the
 bullet and count bar (slice V0), **G4** the hour-of-week grid (slice
 V1, F3), **G2** the range sparkline (slice V2, F9), **G3** the horizon
-strip and **G7** the event rug (slice V3, F8, F12). G8 (chain
-timeline) is slice V4 and is not in `glyph.js` yet.
+strip and **G7** the event rug (slice V3, F8, F12), and **G8** the
+chain timeline (slice V4, F14). Slice V4 also lays G6's count bar out
+as the Flows matrix (`glyph.mx()`, F11).
 
 **Two halves.** Each glyph is a *pure function* from data and a size to
 a list of marks, plus a *painter* that draws the list. A mark is
 `[kind, x, y, w, h, token]`: a kind (`shade`, `band`, `line`, `gap`,
 `dot`, `max`, `min`, `last`, `cell`, `warm`, `outline`, `first`,
-`tick`, `now`, `range`, `bar`, `ref`, `whisker`, `dash`, and V3's
-`hz1`, `hz2`, `base`, `clip`, `span`, `session`), a rectangle in CSS pixels, and a colour **token** name — never
-a colour. Nothing in the pure half reads the DOM, the canvas or the
+`tick`, `now`, `range`, `bar`, `ref`, `whisker`, `dash`, V3's
+`hz1`, `hz2`, `base`, `clip`, `span`, `session`, and V4's `axis`,
+`link`, `grp`), a rectangle in CSS pixels, and a colour **token** name — never
+a colour. A word a glyph writes (V4's `label`, `word`, `num`, `proto`)
+is a mark with a seventh member, its text, which the painter writes in
+the token's colour at the mark's height in pixels, at most its width
+wide; so a severity word or a count is in the mark list a test reads,
+not added after it. Nothing in the pure half reads the DOM, the canvas or the
 theme, so what a glyph *says* can be read without a browser, which is
 what `web/tests/test_glyph.c` does: the C there is a port of
 `web/ui/glyph.js` line for line, and the JS it ports is pinned verbatim
@@ -3907,7 +3963,7 @@ slothweb change checks the change against the list
   shrinks on a refresh (`glyph.scale()` takes the previous range). A
   reader must be able to look away and back.
 - **R12. The TUI form exists.** A glyph with no character-cell form is
-  not added — parity is the test that keeps the web honest. The seven
+  not added — parity is the test that keeps the web honest. The eight
   built here:
 
 | Glyph | What it answers | TUI form |
@@ -3919,6 +3975,7 @@ slothweb change checks the change against the list
 | G6 bullet and count bar | how big is this score or count, against its range | `▐████▌░░░` in `CP_NORMAL`, eight cells, the measure filled and the rest dotted |
 | G3 horizon strip | which channels are busy against their norm, and when | the Channel view's histogram is the bar form of it; the spec's two-level row per channel, `▄` for the first band in `CP_NORMAL` and `█` for the second in `CP_HEAT_MID`, is **not built in the TUI in this slice** (R12 owed, as G4's is) |
 | G7 event rug | when did things happen, and how many | the same `▁▂▃▄▅▆▇█` row per lane on one scale for every lane, a space for none; **not built in the TUI in this slice** (no TUI view has the 30 d strip or the deauth lanes yet) |
+| G8 chain timeline | which stage of an attack is in progress, and what came before it | the spec's form: the Twins view's episode table carrying one 24-cell lane per stage, `━` for an incident's span and `●` where it began and closed, in the alert's severity colour, the deauth lane as G7's row; **not built in the TUI in this slice** (R12 owed, as G3's and G7's are) |
 
 **Where they are drawn.** G1 paints every Overview tile, a 40 px G1
 after each network fact in the status strip and after the footer's
@@ -3928,7 +3985,10 @@ presence; the presence strips go through G5 (`drawStrip()`); G2 paints
 the signal column of Devices and of the AP table, the drawer and the
 Lookup card; G6 the risk, karma, anomaly-score and count columns (both
 slice V2, `web/ui/rf.js`); G3 the WiFi view's channels and G7 its
-chains and the History strip (slice V3, `web/ui/air.js` and app.js).
+chains and the History strip (slice V3, `web/ui/air.js` and app.js);
+G8 the WiFi view's chains, the alert page and the drawer, and G6's
+count bar the Flows matrix (slice V4, `web/ui/chain.js` and
+`web/ui/flowmx.js`).
 
 **Slice V1 (#171), what each placement draws.**
 
@@ -4082,8 +4142,9 @@ channels, emitters, chains, clients.
   and new mark; the SSID count is a row of `▪`, one per SSID (eight,
   then `+`), in `--sev-warn` above one, its count in words in the
   title, not `+3 ssids`.
-- **Chains: G7 (§6.3, F16).** Until G8 (V4), the deauth frames per
-  bssid as an event rug, a 12 px lane per bssid (the busiest 12) on
+- **Chains: G7 (§6.3, F16).** The deauth frames per bssid as an event
+  rug (since V4, of the bssids with one stage; G8 draws the rest,
+  below), a 12 px lane per bssid (the busiest 12) on
   one scale for every lane (R3; the timeline drew each row against its
   own busiest), the tallest printed in the caption, sloth.db's
   `DEAUTH_FLOOD` episodes as a 1 px `--sev-crit` underline across the
@@ -4115,6 +4176,79 @@ channels, emitters, chains, clients.
   the overview's read to group by severity, not done here.
 - **The TUI's half (R12)** is not done for G3 or G7: no TUI view draws
   the forms in the table above yet.
+
+**Slice V4 (#171), the attack chain and the Flows matrix
+(`web/ui/chain.js`, `web/ui/flowmx.js`).**
+
+- **G8, the chain timeline (F14).** sloth's rules know that a deauth
+  flood, then an evil twin, then a client association to the twin is
+  one event in three parts; the page showed them in three places. G8
+  draws them as one: four 18 px lanes on one time axis, in the order
+  the chain runs (`deauth`, `twin`, `assoc`, `karma`), every lane its
+  `--rule` axis whether or not it has anything, so a stage not yet
+  seen is an empty lane and the next stage is where to look. Deauth
+  frames and associations are ticks on one scale for both lanes (R3,
+  the tallest in the caption; R11 per BSSID until the window or the
+  scope changes); each DEAUTH_FLOOD, EVIL_TWIN and KARMA_AP incident
+  is a 4 px bar from its first to its last observation in the
+  severity colour it reached (R1: severity on chain bars only), with a
+  dot where it began and where it closed when that is inside the
+  window and it has closed. A lane's words in the gutter carry its
+  highest severity (`twin CRIT 70%`, R10) or `none`. Under the lanes,
+  the links sloth made, each a `--faint` connector with its reason in
+  words: `tainted ↑ 5 s` from the deauth lane at the first
+  `twin_episode` that carried `attack_in_progress` (the twin tainted
+  by a deauth flood on the other half within `DEAUTH_TWIN_WIN_SECS`),
+  `attributed ↑` on the twin lane at the first that carried
+  `attributed`; the twin's newest `confidence` follows its label.
+  Three time labels under it (R4). The data is
+  **`/api/wifi/chain`**: the deauth rows of `/api/wifi/deauth` (at
+  most 16, the busiest first), or the one BSSID `bssid=` names whether
+  or not it has a deauth key, each with `"twin"` and `"karma"`
+  (sloth.db's EVIL_TWIN and KARMA_AP rows whose key names the BSSID,
+  matched as a predicate and never read out, `[first, last, sev,
+  count]`, at most 8 each; the key matched at its fields, the pair's
+  two BSSIDs after `twin:` or `twin-fp:` and the one after `karma:`,
+  never as a substring, which would take the text across a pair's two
+  halves or an attack-chain key's SSID), `"assoc"` (sloth.db's
+  associations to it first seen in each cell; the station is never
+  read), `"links"` (the stream's pairs naming it: `real`, `twin`, the
+  first and newest record, `tainted` and `attributed` as those first
+  times, the newest `confidence`), `"stages"` (deauth, twin, assoc and
+  karma; an association counts only beside a twin or karma row, since
+  on any other AP it is a station joining) and `"read"` (false when a
+  sloth.db read failed). sloth.db keeps none of the links in a form G8
+  can draw: its `twin_episodes` latches `attack_in_progress` with no
+  time it was set and keeps neither `attributed` nor `confidence`, and
+  EVIL_TWIN's attack-chain row is keyed by the SSID, not the BSSIDs,
+  with its detail withheld on the web, so the links are the stream's
+  `twin_episode`
+  kept in memory (`web_chain.c`: 64 pairs keyed by the unordered pair,
+  the least recently reported evicted and counted, every address
+  through `web_key_mac()`, the SSID not kept), and the answer says
+  since when (`"links_since"`, the first one kept). No slothweb.db
+  step.
+- **Where G8 goes.** On the WiFi view's chains panel (§6.3): one G8 per
+  bssid with more than one stage, its address in its hash colour above
+  it, and a bssid with one stage a lane of the G7 rug under it (§5:
+  "a BSSID with one stage gets a G7 rug, not a G8"); with no chain the
+  block collapses to its caption (`no bssid with more than one stage
+  in the window`, F16). A BSSID with no deauth key in the window is not
+  a candidate there (the chain begins with a deauth); it still has its
+  G8 on its alert page and in its drawer. **On the alert page**, in an
+  `attack chain` section above the device's: the chain of the BSSID
+  the alert names (`/api/alert`'s `device.bssid`: an AP sloth heard
+  beacon that the key names, matched as a predicate, `null` for
+  anything else, in which case the section is hidden), from a quarter
+  of an hour before its first observation to five minutes after its
+  last (at least half an hour, never past now); one stage is the
+  caption alone (`one stage in the window: a chain draws from two`).
+  **In the drawer** (§6.8), when the device is a BSSID with more than
+  one stage in the last 24 h, and nothing otherwise. Under Local none
+  of the three asks.
+- **The Flows matrix (F11)**, above under Flows: the matrix first, the
+  chord second, by ruling 4.
+- **The TUI's half (R12)** is not done for G8 (the table above).
 
 ### Tables: sort and resize
 
@@ -4576,12 +4710,14 @@ web/
     web_ptr.c      the passive PTR cache (M4)
     web_devices.c  /api/devices, /api/device/{mac}, /api/lookup (M4),
                    /api/history/devices (M5)
-    web_wifi.c     /api/wifi/channels, /api/wifi/deauth, /api/wifi/aps, /api/wifi/local (M5);
-                   the grid and the mix answer the BLE waterfall shares
+    web_wifi.c     /api/wifi/channels, /api/wifi/deauth, /api/wifi/aps, /api/wifi/local (M5),
+                   /api/wifi/chain (#171 V4); the grid and the mix answer the BLE
+                   waterfall shares
+    web_chain.c    G8's links: the stream's twin_episode pairs, in memory (#171 V4)
     web_bledev.c   the BLE device classes, the proximity grade, /api/ble/classes,
                    /api/ble/proximity (the BLE Devices waterfall)
     web_history.c  /api/history/*, /api/sessions, /api/sessions/new (M5)
-    web_flows.c    /api/flows, /api/flows/graph (M6)
+    web_flows.c    /api/flows, /api/flows/graph and its matrix form (M6, #171 V4)
     web_alerts.c   /api/alerts, /api/alert: the Alerts page, an alert's page
     web_bundle.c   /api/bundle: a detail view's answers spliced into one document
     web_alertdb.c  sloth.db's alerts: groups by key, a key's incidents, its device

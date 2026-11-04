@@ -891,7 +891,7 @@
     c.addEventListener(c.tagName === "SELECT" ? "change" : "input", function () { ctlSave(id); });
   }
   ["n-win", "a-win", "d-q", "d-sort", "l-q", "w-grid", "w-metric", "w-win", "w-sort", "al-state", "al-sev",
-   "al-q", "al-win", "f-win", "f-sort", "f-ip", "ev-filter",
+   "al-q", "al-win", "f-win", "f-sort", "f-ip", "f-mode", "ev-filter",
    "q-sql", "b-q", "b-sort", "bledev-win", "bledev-metric", "bledev-n"].forEach(keepCtl);
   // Filled from the server's answer, so put back where it is filled.
   $("al-type").addEventListener("change", function () { ctlSave("al-type"); });
@@ -2866,6 +2866,8 @@
     $("dr-mac").className = "d-dim";
     set("dr-note", "loading");
     if (window.SlothLocation) window.SlothLocation.drawer(mac);
+    // G8 when the device is a BSSID with more than one stage (§6.8).
+    if (window.SlothChain) SlothChain.drawer(mac);
     getJSON("/api/device/" + encodeURIComponent(mac)).then(function (j) {
       if (gen !== DR.gen) return;
       var box = $("dr-body");
@@ -3636,10 +3638,24 @@
       if (gen !== WF.gen) return;
       set("w-mix-note", "no transmitter detail: " + errText(e.message));
     });
-    getJSON(wifiGridPath("deauth", "", r)).then(function (j) {
+    getJSON(wifiGridPath("chain", "", r)).then(function (cj) {
       if (gen !== WF.gen) return;
-      // G7 (§6.3's chains, F16): a lane per bssid on one scale; none
-      // collapses the panel to this line.
+      // G8 (§6.3's chains, F14): one per bssid with more than one stage;
+      // none collapses the block to its caption (F16).
+      var ch = SlothChain.list($("w-chains"), cj);
+      set("w-ch-note", glyph.caption({
+            source: "wifi.chain, sloth.db " + cj.db + "; links: " +
+                    (num(cj.links_since) ? "the stream's twin_episode since " + shortStamp(cj.links_since)
+                                         : "no twin_episode in the stream yet"),
+            window: glyph.dur(cj.to - cj.from), tier: cj.tier,
+            scale: ch.chains ? "one scale a chain, tallest " + fmt(ch.max) + " a cell; " + ch.chains +
+                               " chain" + (ch.chains === 1 ? "" : "s") : "",
+            n: cj.cols, state: (ch.chains ? ch.win : "no bssid with more than one stage in the window") +
+                               (cj.more ? (ch.chains && ch.win ? "; " : ch.chains ? "" : "; ") + "the " + cj.shown +
+                                          " of " + cj.total_keys + " bssids most deauthed read" : "") }));
+      // G7 for the rest: a bssid with one stage gets a rug, not a G8.
+      var j = { from: cj.from, to: cj.to, col_s: cj.col_s, cols: cj.cols, tier: cj.tier, db: cj.db,
+                bssids: ch.singles };
       var rg = SlothAir.rug($("w-deauth"), j), nb = rg.busy;
       var floods = 0;
       (j.bssids || []).forEach(function (b) { floods += (b.floods || []).length; });
@@ -3649,7 +3665,11 @@
                         (nb > rg.lanes ? ", the busiest " + rg.lanes + " drawn" : "") + ", " + floods +
                         " flood episode" + (floods === 1 ? "" : "s") : "",
             n: j.cols, state: nb ? "" : "0 deauth in the window" }));
-    }).catch(function (e) { if (gen === WF.gen) set("w-da-note", errText(e.message)); });
+    }).catch(function (e) {
+      if (gen !== WF.gen) return;
+      set("w-da-note", errText(e.message));
+      set("w-ch-note", errText(e.message));
+    });
     var tier = tierFor(r.win);
     Promise.all([series("wifi.probe_clients", "", tier, r.from, r.to),
                  baseline("wifi.probe_clients", "")]).then(function (res) {
@@ -3681,10 +3701,12 @@
   $("w-sort").addEventListener("change", function () { DTA.clear(); wifiAps(); });
 
   // ── Flows (§8.9, M6) ──────────────────────────────────────────────
-  // sloth.db's protocol tables, one tab each (/api/flows, paged), and a
-  // chord diagram of the busiest source -> destination pairs
-  // (/api/flows/graph): the server ranks and folds, the page draws
-  // what it was given and says what was folded. Addresses are drawn
+  // sloth.db's protocol tables, one tab each (/api/flows, paged), and
+  // the busiest source -> destination pairs (/api/flows/graph) drawn
+  // two ways: first as a source by destination matrix (owner ruling 4
+  // of 2026-10-26, F11; web/ui/flowmx.js), second as the chord diagram.
+  // The server ranks, folds and groups; the page draws what it was
+  // given and says what was folded. Addresses are drawn
   // with fillText and set with textContent; a protocol name only ever
   // picks from the fixed tables below. mqtt_flows is never read (it
   // holds usernames), and its tab says so.
@@ -3955,18 +3977,50 @@
     box.appendChild(s1);
   }
 
+  // The mode the panel draws: the matrix unless the chord is chosen.
+  function flowMode() { return $("f-mode").value === "chord" ? "chord" : "matrix"; }
+  function flowShowMode(mx) {
+    $("f-mx-box").hidden = !mx;
+    $("f-mx-note").hidden = !mx;
+    $("f-mx-sub").hidden = !mx;
+    $("f-chord").hidden = mx;
+    $("f-legend").hidden = mx;
+    $("f-ch-sub").hidden = mx;
+  }
+  // The graph answer drawn in its own mode; the matrix's caption (R9).
+  function flowDraw(g, why) {
+    var mx = !!(g ? g.form === "matrix" : flowMode() === "matrix");
+    flowShowMode(mx);
+    if (!mx) { chord($("f-chord"), g, why); flowLegend(g); return; }
+    var st = SlothFlowMx.draw($("f-matrix"), g);
+    // R5: no pair is the caption alone, not an empty box.
+    $("f-mx-box").hidden = !st.cells;
+    set("f-mx-note", glyph.caption({
+          source: "sloth.db's pair tables", window: glyph.dur(Number($("f-win").value)),
+          scale: st.cells ? "one scale, largest " + fmt(st.max) + "; " + st.groups + " subnet" +
+                            (st.groups === 1 ? "" : "s") : "",
+          n: st.cells, state: why || (st.cells ? "" : "no pairs in the window") }));
+  }
+
   function flowGraph() {
     var gen = ++F.ggen;
     var r = flowRange();
     var c = $("f-chord");
-    var nodes = c.clientWidth < 520 ? 12 : 24;
-    getJSON("/api/flows/graph?from=" + r.from + "&to=" + r.to + "&nodes=" + nodes + "&edges=80").then(function (g) {
+    var mode = flowMode();
+    // R11: the matrix's scale grows while the window and the scope stay.
+    var mk = SCOPE + "\u0000" + $("f-win").value;
+    if (F.mxOf !== mk) { SlothFlowMx.reset(); F.mxOf = mk; }
+    flowShowMode(mode === "matrix");
+    var narrow = (mode === "matrix" ? $("f-mx-box") : c).clientWidth < 520;
+    var nodes = narrow ? 12 : 24;
+    var q = mode === "matrix" ? "&form=matrix&edges=" + (narrow ? 40 : 80)
+                              : "&nodes=" + nodes + "&edges=80";
+    getJSON("/api/flows/graph?from=" + r.from + "&to=" + r.to + q).then(function (g) {
       if (gen !== F.ggen) return;
       F.graph = g;
       F.tabs = g.tabs || null;
       flowTabs();
-      chord(c, g);
-      flowLegend(g);
+      flowDraw(g);
       var f = g.fold || {};
       set("f-fold", num(f.pairs) && f.pairs > 0
         ? (f.pairs_shown + " of " + f.pairs + " pairs, " + f.nodes_shown + " of " + f.nodes +
@@ -3980,8 +4034,7 @@
       F.graph = null;
       F.tabs = null;
       flowTabs();
-      chord(c, null, errText(e.message));
-      flowLegend(null);
+      flowDraw(null, errText(e.message));
       set("f-fold", errText(e.message));
     });
   }
@@ -3994,6 +4047,14 @@
     flowRows(true);
   }
   $("f-win").addEventListener("change", flows);
+  $("f-mode").addEventListener("change", function () { if (SCOPE !== "monitor") flowGraph(); });
+  $("f-matrix").addEventListener("click", function (e) {
+    var id = SlothFlowMx.hit(e);
+    if (id === null) return;
+    $("f-ip").value = id;
+    ctlSave("f-ip");
+    flowRows(true);
+  });
   $("f-sort").addEventListener("change", function () { DTF.clear(); flowRows(true); });
   $("f-more").addEventListener("click", function () { flowRows(false); });
   var fipTimer = 0;
@@ -4016,7 +4077,7 @@
     }
   });
   window.addEventListener("resize", function () {
-    if (view === "flows" && F.graph) chord($("f-chord"), F.graph);
+    if (view === "flows" && F.graph) flowDraw(F.graph);
   });
 
   // ── History (§8.10, M5) ───────────────────────────────────────────
@@ -4776,6 +4837,7 @@
     ["ad-title", "ad-facts", "ad-what-b", "ad-why-b", "ad-fix-b", "ad-evidence-b", "ad-history-b",
      "ad-device-b", "ad-dev-alerts", "ad-dev-anoms"].forEach(clear);
     if (window.SlothLocation) window.SlothLocation.alert(null);
+    if (window.SlothChain) SlothChain.alert(null);
     drawStrip($("ad-strip"), null);
     if (typeof id !== "string" || !ALERT_ID_RE.test(id)) {
       set("ad-head", "no alert named");
@@ -4928,12 +4990,14 @@
         (num(h2.gap_s) ? "; incidents less than " + Math.round(h2.gap_s / 60) + " min apart are one run" : "") +
         (h2.more ? "; more than shown" : ""));
 
-    // (f) the device it names
+    // (f) the attack chain on the BSSID it names (G8, web/ui/chain.js)
+    if (window.SlothChain) SlothChain.alert(j);
+    // (g) the device it names
     alertDevice(j);
     if (window.SlothFrrs) SlothFrrs.mountAlert(j);
-    // (g) where the sensor was (location.js)
+    // (h) where the sensor was (location.js)
     if (window.SlothLocation) window.SlothLocation.alert(j);
-    // (h) the proof: evidence, assessment, capture (web/ui/evidence.js)
+    // (i) the proof: evidence, assessment, capture (web/ui/evidence.js)
     if (window.SlothEvidence) window.SlothEvidence.alert(j);
   }
 
@@ -5638,6 +5702,21 @@
   // the chains rug.
   if (window.SlothAir) SlothAir.init({ tok: tok, css: css, theme: theme, sizeCanvas: sizeCanvas,
     txColor: txColor, txOf: txOf, fmt: fmt });
+
+  // G8, the chain timeline (web/ui/chain.js), and the Flows matrix
+  // (web/ui/flowmx.js): the page's helpers, lent once.
+  if (window.SlothChain) SlothChain.init({ tok: tok, set: set, fmt: fmt, getJSON: getJSON,
+    errText: errText, shortStamp: shortStamp, keyColor: keyColor,
+    scope: function () { return SCOPE; } });
+  if (window.SlothFlowMx) SlothFlowMx.init({ tok: tok, css: css, cutLabel: cutLabel,
+    addrStyle: function (id) {
+      // An address's identity colour, bold once cross-panel; an
+      // alert-hot one in its CP_ALERT_HOT_* colour, bold from WARN: as
+      // the chord's nodes are drawn.
+      var e = isIP(id) ? ipNote(id, IP_SRC.conn) : null, hot = isIP(id) ? hotCheck(id) : -1;
+      return { color: hot >= 0 ? theme().hot[hot] : keyColor(id),
+               bold: hot >= 1 || (hot < 0 && !!e && crossPanel(e.m)) };
+    } });
 
   // G1 on the strip, the tiles and the footer (web/ui/facts.js): the
   // page's helpers, lent once.

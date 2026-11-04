@@ -397,7 +397,7 @@ static void test_page_carries_the_wifi_view(void) {
     WT_HAS(p, "var p = \"/api/wifi/\" + route + \"?from=\" + r.from + \"&to=\" + r.to + \"&cols=96\";");
     WT_HAS(p, "if (metric !== \"\") p += \"&metric=\" + encodeURIComponent(metric);");
     WT_HAS(p, "getJSON(wifiGridPath(\"channels\", metric, r))");
-    WT_HAS(p, "getJSON(wifiGridPath(\"deauth\", \"\", r))");
+    WT_HAS(p, "getJSON(wifiGridPath(\"chain\", \"\", r))");
     WT_HAS(p, "getJSON(\"/api/wifi/aps?limit=100&sort=\" + encodeURIComponent(sort))");
     WT_HAS(p, "series(\"wifi.probe_clients\", \"\", tier, r.from, r.to)");
     WT_HAS(p, "baseline(\"wifi.probe_clients\", \"\")");

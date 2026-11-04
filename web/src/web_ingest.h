@@ -56,6 +56,7 @@ struct web_metrics;
 struct web_frrs;
 struct web_ble;
 struct web_gnss;
+struct web_chain;
 
 typedef struct {
     size_t     len;
@@ -70,6 +71,8 @@ typedef struct {
     struct web_ble *ble;
     /* The GNSS panel (web_gnss.h), when set. */
     struct web_gnss *gnss;
+    /* G8's links, the stream's twin_episode (web_chain.h), when set. */
+    struct web_chain *chain;
     char       line[WEB_JL_MAX_LINE + 1];
     web_jrec_t rec;
 } web_feed_t;
@@ -106,6 +109,8 @@ void web_ingest_set_frrs(web_ingest_t *g, struct web_frrs *f);
 void web_ingest_set_ble(web_ingest_t *g, struct web_ble *b);
 /* Feed the GNSS panel as well. Call before web_ingest_start(). */
 void web_ingest_set_gnss(web_ingest_t *g, struct web_gnss *n);
+/* Feed G8's links as well. Call before web_ingest_start(). */
+void web_ingest_set_chain(web_ingest_t *g, struct web_chain *c);
 /* Stop and join it; safe to call when it never started. */
 void web_ingest_stop(web_ingest_t *g);
 

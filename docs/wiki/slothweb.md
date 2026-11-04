@@ -107,7 +107,7 @@ the vendor research section, `web/data/vendors/*.md`,
 `web/src/web_vendorkb.c`, `web/tests/test_vendorkb.c` and
 [[vendor-research]].
 
-**Last updated**: 2026-11-03 (#171 V3: the WiFi view as four panels, channels as G3 horizon strips on each channel's own 30 d scale or as z against its hour-of-week baseline with a stacked top-5 drill-in per column, emitters nearest first, the chains panel's deauth rug, probing clients with G2 and G5; History's 30 d strip as a G7 rug on one scale); 2026-11-03 (#171 V2: G2 in the Devices and AP tables' signal column, the drawer and the Lookup card, from the existing `rf.rssi.*` series through each row's `"rf"` member, bold and worded by sloth's own distance band and trend rather than a slope of its own; the new mark and G5's first-seen cell; G6 on risk, karma, the anomaly score and the anom and flow total counts); 2026-11-03 (#171 V1: G1 on every Overview tile, the strip's network facts and the footer's drops, from `live.*`, `records.total`, `sensor.drops` and `ble.devices`, with G1's band words and arrow; the tiles in urgency order; anomaly cards' G1 with the episode shaded and `series unavailable` on a failed read; the hour-of-week grid as G4, warming cells plain grey with no hatch, counted in the caption; the small multiples on one shared scale with a `scale: own` toggle and the |z| sort); 2026-11-03 (#175: sloth.db v11's `alert_incidents` allow-listed, its key and incident_id predicate-only, `WEB_SDB_SCHEMA_MAX` 11; `/api/history/alerts` per incident in the range; the alert page's runs per incident and its `db_incident`); 2026-11-03 (#179: the alert page leads with observations, incidents, the times, confidence and the rule's phrase, count last as evaluations; the list sorted by severity then observations, a muted floor under 20% for a row below CRIT; `/api/alert`'s members in that order); 2026-11-03 (#181: a triage note over its 240 bytes refused beside the buttons with both numbers, counted in bytes as typed, never drawn before the server confirms it); 2026-11-03 (the fourth triage verdict `known`, known good, drawn green); 2026-11-03 (BLE Devices: anonymous advertising one entry and one advertiser, always in Unknown, no proximity row and no read slot; A1 across the 10 s slot measured, quiet, no change); 2026-11-02 (the BLE Devices waterfall's review fixes: its own high-water table, trackers read first, the grade at each row's announced power, the no-sensor and Ubertooth-only states); 2026-11-02 (the BLE Devices waterfall: device classes by time as the WiFi channel mix draws channels, advertisers by time graded by sloth's distance bands, the drawer's signal over the window; the `BLE Devices` and `GPS Sat` labels; `ble_device` re-sent once a 10 s slot while heard); 2026-11-02 (copy JSON's `location` filled: a device's `/api/positions` answer, an alert's page `loc` stamp, both spliced, never re-rendered); 2026-11-02 (copy JSON, first landed 2026-10-27 as `/api/bundle` and a copy and download button on every detail view: rebased onto triage, FRRS, BLE, vendor research and the alert's proof; kinds `ble` and `platform` through the views' own hooks; `frrs`, an alert's `triage`, `vendor_research`, `assessment` and `evidence` filled from their routes' answers; records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
+**Last updated**: 2026-11-03 (#171 V4: G8, the chain timeline, on the WiFi view's chains panel for each bssid with more than one stage, on the alert page for the BSSID the alert names and in the drawer, from the new `/api/wifi/chain` (sloth.db's EVIL_TWIN, KARMA_AP and DEAUTH_FLOOD incidents and associations, the stream's `twin_episode` links kept in memory); the Flows view's matrix first and the chord second, from `/api/flows/graph?form=matrix`; `/api/alert`'s `device.bssid`); 2026-11-03 (#171 V3: the WiFi view as four panels, channels as G3 horizon strips on each channel's own 30 d scale or as z against its hour-of-week baseline with a stacked top-5 drill-in per column, emitters nearest first, the chains panel's deauth rug, probing clients with G2 and G5; History's 30 d strip as a G7 rug on one scale); 2026-11-03 (#171 V2: G2 in the Devices and AP tables' signal column, the drawer and the Lookup card, from the existing `rf.rssi.*` series through each row's `"rf"` member, bold and worded by sloth's own distance band and trend rather than a slope of its own; the new mark and G5's first-seen cell; G6 on risk, karma, the anomaly score and the anom and flow total counts); 2026-11-03 (#171 V1: G1 on every Overview tile, the strip's network facts and the footer's drops, from `live.*`, `records.total`, `sensor.drops` and `ble.devices`, with G1's band words and arrow; the tiles in urgency order; anomaly cards' G1 with the episode shaded and `series unavailable` on a failed read; the hour-of-week grid as G4, warming cells plain grey with no hatch, counted in the caption; the small multiples on one shared scale with a `scale: own` toggle and the |z| sort); 2026-11-03 (#175: sloth.db v11's `alert_incidents` allow-listed, its key and incident_id predicate-only, `WEB_SDB_SCHEMA_MAX` 11; `/api/history/alerts` per incident in the range; the alert page's runs per incident and its `db_incident`); 2026-11-03 (#179: the alert page leads with observations, incidents, the times, confidence and the rule's phrase, count last as evaluations; the list sorted by severity then observations, a muted floor under 20% for a row below CRIT; `/api/alert`'s members in that order); 2026-11-03 (#181: a triage note over its 240 bytes refused beside the buttons with both numbers, counted in bytes as typed, never drawn before the server confirms it); 2026-11-03 (the fourth triage verdict `known`, known good, drawn green); 2026-11-03 (BLE Devices: anonymous advertising one entry and one advertiser, always in Unknown, no proximity row and no read slot; A1 across the 10 s slot measured, quiet, no change); 2026-11-02 (the BLE Devices waterfall's review fixes: its own high-water table, trackers read first, the grade at each row's announced power, the no-sensor and Ubertooth-only states); 2026-11-02 (the BLE Devices waterfall: device classes by time as the WiFi channel mix draws channels, advertisers by time graded by sloth's distance bands, the drawer's signal over the window; the `BLE Devices` and `GPS Sat` labels; `ble_device` re-sent once a 10 s slot while heard); 2026-11-02 (copy JSON's `location` filled: a device's `/api/positions` answer, an alert's page `loc` stamp, both spliced, never re-rendered); 2026-11-02 (copy JSON, first landed 2026-10-27 as `/api/bundle` and a copy and download button on every detail view: rebased onto triage, FRRS, BLE, vendor research and the alert's proof; kinds `ble` and `platform` through the views' own hooks; `frrs`, an alert's `triage`, `vendor_research`, `assessment` and `evidence` filled from their routes' answers; records matched on address members, the alert id parsed once, a 10 s prefetch back-off after a failure, `server.slothweb.build_version`); 2026-11-02 (evidence pcaps withheld unless `--web-serve-evidence-pcap`, refused with `--web-allow-remote` unless `=remote`; a file with several manifest lines verified by any matching line, conflicts said; the snaplen named only when it cut the record; non-regular names marked unreadable); 2026-11-02 (the FRRS Report's RSSI series, `rf.rssi.sta` / `.bssid` / `.ble`, owner ruling on Q7); 2026-11-02 (the BLE view rebased onto triage: slothweb.db v7 after triage's v6, a flood evicting plain rows before HID and watchlisted ones, counts that only move up, the `bundle-btn-ble` hook); 2026-11-02 (the BLE view: the TUI's `[*]` at parity, slothweb's own tables from the stream, slothweb.db v7, the Bluetooth SIG assigned numbers under `web/data/btsig/`; on review, sloth's own count in the header, `standing floods` for what the web can count, a seeded finding whole and resolved in place, the BLE rows inside `--web-max-mb`); 2026-11-02 (vendor research review: affiliates, every
 listed source cited and read, the generator's refusals tested, the
 reference list without device counts); 2026-11-02 (triage second review: folding not refusing, the recommendation's bar, the import bounded and prepared, the installed assessments); 2026-11-02 (triage and TACDB review fixes: "follow recommended" reads the assessments' real vocabulary, the import refuses a file without its header and end line and never leaves a transaction open, deleted rows and imported triage bounded); 2026-11-01 (alert triage and the FRRS emitter record: slothweb's first write routes, POST and same-origin only, `--web-read-only` and `--web-assessments`, slothweb.db v6, the TACDB tab, [`docs/web-frrs-spec.md`](../web-frrs-spec.md)); 2026-11-01 (the vendor research
 set: <!-- count:vendors -->276<!-- /count --> entries, most of the
@@ -1278,8 +1278,9 @@ how many.
   TUI colours, and the list under the panel names the picked cell's.
 - **Emitters.** The AP table nearest first by default, the SSID count
   a row of `▪`.
-- **Chains.** Until G8 (V4), the deauth frames as a G7 rug, one lane per
-  bssid with a frame or a flood in the window, on one scale, flood
+- **Chains.** The deauth frames as a G7 rug (since V4, of the bssids
+  with one stage; G8 draws the rest), one lane per bssid with a frame
+  or a flood in the window, on one scale, flood
   episodes underlined in `--sev-crit`; no deauth collapses the panel
   to `0 deauth in the window` (F16).
 - **Clients.** The probe-client chart over its band (hidden when it has
@@ -1299,10 +1300,58 @@ Not in V3: the probe-flood rug (the page has no alert type table to key
 `alerts.fired` by), per-severity ticks on History's alert lane, and
 G3's and G7's TUI forms (R12).
 
+### Slice V4 (#171, 2026-11-03)
+
+The projection layer's last two pieces: where in an attack chain a
+BSSID is (F14), and who talks to whom in one scan (F11).
+
+- **G8, the chain timeline.** Four 18 px lanes on one time axis in the
+  order the chain runs, `deauth`, `twin`, `assoc`, `karma`, each lane's
+  axis drawn whether or not it has anything, so the stage not yet seen
+  is an empty lane. Deauth frames and associations are ticks on one
+  scale; each DEAUTH_FLOOD, EVIL_TWIN and KARMA_AP incident a bar from
+  its first to its last observation in the severity it reached, its
+  word in the lane's label (`twin CRIT 70%`); under the lanes the links
+  sloth made, in words: `tainted ↑ 5 s` (a deauth flood on the other
+  half within 5 s, sloth's `attack_in_progress`) and `attributed ↑`.
+- **`/api/wifi/chain`.** The deauth rows, or one `bssid=`, each with
+  the EVIL_TWIN and KARMA_AP rows sloth.db holds whose key names the
+  BSSID (a predicate, never read out), the associations to it per cell
+  (the station never read), and the links. A key is matched at its
+  BSSID fields, never as a substring; an association is a stage only
+  on a BSSID with a twin or karma row. sloth.db keeps no link G8 can
+  draw (`twin_episodes` latches the taint with no time, and has no
+  attribution or confidence; the attack-chain alert's key names the
+  SSID and its detail is withheld), so the links are the stream's
+  `twin_episode`, kept in memory by
+  `web/src/web_chain.c` (64 pairs, evicted and counted), and the
+  answer says since when. No new series and no slothweb.db step.
+- **Where.** The WiFi chains panel draws one G8 per bssid with more
+  than one stage and leaves the rest to the G7 rug, collapsing to its
+  caption with none; the alert page, in an `attack chain` section
+  above the device, draws the chain of the BSSID its key names
+  (`/api/alert`'s `device.bssid`, a `beacon_aps` BSSID matched as a
+  predicate), around the alert's span; the drawer draws it for a BSSID
+  with more than one stage in the last 24 h.
+- **The Flows matrix (ruling 4: matrix first).** `/api/flows/graph?
+  form=matrix`: every endpoint of the pairs read, sources and
+  destinations each in address order with their /24 or /64 group, the
+  cells merged by pair. The page draws a row per source and a column
+  per destination, a rule where the subnet changes, each cell G6's
+  count bar on one scale behind its count, its protocols as letters
+  (`S` `R` `M` `N` `B`), SMB1 in the critical colour; the chord is the
+  `draw` control's second choice (kept). `web/ui/flowmx.js`.
+
+Not in V4: G8's TUI form (R12), the matrix's TUI layout, a BSSID with
+no deauth key as a candidate on the WiFi panel (its alert page and
+drawer still draw it), the probe-flood rug.
+
 **Sources**: `docs/web-visual-spec.md` (§2 F1-F20, §5, §8, §10),
 `web/ui/glyph.js`, `web/ui/facts.js`, `web/ui/rf.js`, `web/ui/air.js`,
-`web/src/web_rf.c`, `web/src/web_wifi.c`,
-`web/tests/test_glyph.c`, `web/tests/test_rf.c`, `web/README.md` (Design),
+`web/ui/chain.js`, `web/ui/flowmx.js`,
+`web/src/web_rf.c`, `web/src/web_wifi.c`, `web/src/web_chain.c`,
+`web/src/web_flows.c`, `web/tests/test_glyph.c`, `web/tests/test_rf.c`,
+`web/tests/test_chain.c`, `web/tests/test_flows.c`, `web/README.md` (Design),
 `src/rf_distance.h` (the band and trend G2 agrees with),
 `src/views/dashboard_primitives.c` (`draw_sparkline_at()`),
 `web/tests/test_tui_colors.c` (the pinning mechanism),
@@ -1889,7 +1938,7 @@ unix socket in a fresh temporary directory, or a loopback TCP port.
 | a stranger with the README can run it in five minutes | `make web-quickstart-check` (`web/tools/quickstart_check.sh`: the README's quick start, read out of the README and run in a temporary copy of the tree; `/api/health` connected with sloth.db open, `/` the page) |
 | every start-up message documented | `test_every_start_message_is_documented` (`test_readme.c`) |
 | the security section's points; the screenshots present and small | `test_security_section`, `test_screenshots` |
-| Flows: tabs, SMB1, withheld columns, validation, paging, the chord's fold | `test_flows.c` |
+| Flows: tabs, SMB1, withheld columns, validation, paging, the chord's fold, the matrix form (#171 V4) | `test_flows.c` |
 | An alert's proof: pcap reader and decoders on hand-built frames, the name gate, the manifest index, hash verified and mismatched, the routes, the download, the assessment generator's build stops | `test_evidence.c`; `tests/fuzz/fuzz_web_pcap.c` |
 
 The restyle maps as follows.

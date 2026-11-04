@@ -20,6 +20,7 @@
 #include "web_config.h"
 #include "web_devices.h"
 #include "web_frrs.h"
+#include "web_chain.h"
 #include "web_ident.h"
 #include "web_ingest.h"
 #include "web_live.h"
@@ -52,6 +53,7 @@ static web_chmix_t    g_blemix;
 static web_frrs_t     g_frrs;
 static web_ble_t      g_ble;
 static web_gnss_t     g_gnss;
+static web_chain_t    g_chain;
 
 /* The store's BLE rows into the in-memory tables, before any thread
  * starts (the restore runs on the store's writer connection). */
@@ -127,7 +129,8 @@ int main(int argc, char **argv) {
         web_chmix_init(&g_chmix, have_store) != 0 ||
         web_chmix_init_sized(&g_blemix, have_store, WEB_BLEDEV_RING) != 0 ||
         web_ble_init(&g_ble, have_store) != 0 ||
-        web_gnss_init(&g_gnss) != 0) {
+        web_gnss_init(&g_gnss) != 0 ||
+        web_chain_init(&g_chain) != 0) {
         fprintf(stderr, "slothweb: time series: out of memory\n");
         return 1;
     }
@@ -185,6 +188,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     g_m4.frrs = &g_frrs;
+    g_m4.chain = &g_chain;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -219,6 +223,7 @@ int main(int argc, char **argv) {
     web_ingest_set_frrs(&g_ingest, &g_frrs);
     web_ingest_set_ble(&g_ingest, &g_ble);
     web_ingest_set_gnss(&g_ingest, &g_gnss);
+    web_ingest_set_chain(&g_ingest, &g_chain);
     if (web_tsdb_start(&g_tsdb, err, sizeof(err)) != 0 ||
         web_ingest_start(&g_ingest, &cfg.sock, cfg.sock_backoff_min_ms,
                          cfg.sock_backoff_max_ms, &g_live,
@@ -346,6 +351,7 @@ int main(int argc, char **argv) {
     web_chmix_destroy(&g_blemix);
     web_ble_destroy(&g_ble);
     web_gnss_destroy(&g_gnss);
+    web_chain_destroy(&g_chain);
     web_rollup_destroy(&g_rollup);
     web_anomaly_destroy(&g_anomaly);
     web_baseline_destroy(&g_baseline);

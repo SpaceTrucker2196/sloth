@@ -31,8 +31,9 @@ static const char *page(void) { return (const char *)web_page; }
 
 #define GM_MAX 512
 
-typedef struct { const char *kind; double x, y, w, h; const char *tok; } gmark_t;
-typedef struct { gmark_t m[GM_MAX]; int n; } gmarks_t;
+/* txt: a word's text (the JS mark's seventh member), NULL for ink. */
+typedef struct { const char *kind; double x, y, w, h; const char *tok; const char *txt; } gmark_t;
+typedef struct { gmark_t m[GM_MAX]; int n; char tx[GM_MAX][48]; } gmarks_t;
 
 static void gm_push(gmarks_t *g, const char *kind, double x, double y,
                     double w, double h, const char *tok) {
@@ -41,7 +42,16 @@ static void gm_push(gmarks_t *g, const char *kind, double x, double y,
     g->m[g->n].x = x; g->m[g->n].y = y;
     g->m[g->n].w = w; g->m[g->n].h = h;
     g->m[g->n].tok = tok;
+    g->m[g->n].txt = NULL;
     g->n++;
+}
+/* A word, its text kept in the list's own buffer. */
+static void gm_push_t(gmarks_t *g, const char *kind, double x, double y,
+                      double w, double h, const char *tok, const char *txt) {
+    if (g->n >= GM_MAX) return;
+    gm_push(g, kind, x, y, w, h, tok);
+    snprintf(g->tx[g->n - 1], sizeof(g->tx[0]), "%s", txt);
+    g->m[g->n - 1].txt = g->tx[g->n - 1];
 }
 
 /* How many marks of a kind, and the first of a kind. */
@@ -55,13 +65,13 @@ static int gm_count(const gmarks_t *g, const char *kind) {
  * the existence of must not dereference NULL when a mutation removes
  * it, because the crash takes every test after it with it. */
 static gmark_t gm_get(const gmarks_t *g, const char *kind) {
-    static const gmark_t none = { "", 0, 0, 0, 0, "" };
+    static const gmark_t none = { "", 0, 0, 0, 0, "", NULL };
     for (int i = 0; i < g->n; i++) if (!strcmp(g->m[i].kind, kind)) return g->m[i];
     return none;
 }
 /* The last mark of a kind, the same way. */
 static gmark_t gm_last(const gmarks_t *g, const char *kind) {
-    static const gmark_t none = { "", 0, 0, 0, 0, "" };
+    static const gmark_t none = { "", 0, 0, 0, 0, "", NULL };
     gmark_t out = none;
     for (int i = 0; i < g->n; i++) if (!strcmp(g->m[i].kind, kind)) out = g->m[i];
     return out;
@@ -541,6 +551,220 @@ static void gl_g7(const glane_t *ln, int nl, double w, double h, double L, doubl
     }
     for (int i = 0; i < nm; i++) gm_push(g, "session", marks[i], 0, 2, h, "--ink");
     if (!g->n) gl_dash(g, w, h);
+}
+
+/* ── V4: G8 and the Flows matrix, ported ────────────────────────── */
+
+/* G8's lanes: counts (NULL for a lane without them) of nc columns, and
+ * up to four bars [a, b, sev, open] in columns. */
+typedef struct { const double *counts; int nc; double bars[4][4]; int nb; } g8lane_t;
+typedef struct { int has; double col; int top; const char *word; } g8link_t;
+typedef struct { const char *text, *tok; } g8label_t;
+
+static double gl_g8_max(const g8lane_t *ln, int nl, double prev) {
+    double max = prev > 0 ? prev : 0;
+    for (int j = 0; j < nl; j++)
+        for (int i = 0; ln[j].counts && i < ln[j].nc; i++)
+            if (ln[j].counts[i] > max) max = ln[j].counts[i];
+    return max;
+}
+
+static void gl_g8(const g8lane_t *ln, int nl, const g8link_t *lk, int nk,
+                  const g8label_t *lb, double w, double L, double gx, int ncol,
+                  double prev, gmarks_t *g) {
+    memset(g, 0, sizeof(*g));
+    int n = ncol > 0 ? ncol : 1;
+    double gw = w - gx > 1 ? w - gx : 1, cw = gw / n;
+    if (!nl) { gl_dash(g, w, L); return; }
+    double max = gl_g8_max(ln, nl, prev);
+    for (int j = 0; j < nl; j++) {
+        double y0 = j * L, mid = y0 + L / 2;
+        gm_push(g, "axis", gx, mid, gw, 1, "--rule");
+        if (lb && lb[j].text) gm_push_t(g, "label", 2, mid, gx - 4, 10, lb[j].tok, lb[j].text);
+        for (int i = 0; max > 0 && ln[j].counts && i < ln[j].nc && i < n; i++) {
+            double c = ln[j].counts[i];
+            if (!(c > 0)) continue;
+            double th = (L - 4) * c / max;
+            if (th < 1) th = 1;
+            double tw = ceil(cw) - (cw > 3 ? 1 : 0);
+            if (tw < 1) tw = 1;
+            gm_push(g, "tick", floor(gx + i * cw), y0 + L - 2 - th, tw, th, "--tui-normal");
+        }
+        for (int i = 0; i < ln[j].nb; i++) {
+            double a0 = ln[j].bars[i][0], b0 = ln[j].bars[i][1];
+            if (b0 < 0 || a0 > n - 1 || b0 < a0) continue;
+            int sv = (int)ln[j].bars[i][2];
+            const char *tok = sv == 0 ? "--sev-low" : sv == 2 ? "--sev-crit" : "--sev-warn";
+            double xa = gx + (a0 > 0 ? a0 : 0) * cw;
+            double xb = gx + ((b0 < n - 1 ? b0 : n - 1) + 1) * cw;
+            gm_push(g, "bar", xa, mid - 2, xb - xa > 1 ? xb - xa : 1, 4, tok);
+            if (a0 >= 0) gm_push(g, "dot", xa, mid, 2.5, 2.5, tok);
+            if (!ln[j].bars[i][3] && b0 <= n - 1) gm_push(g, "dot", xb, mid, 2.5, 2.5, tok);
+        }
+    }
+    /* The words in column order, each after the one before it (a JS
+     * sort is stable, so ties keep their order, as this insertion sort
+     * does). A word's width is its characters at 6 px, counted as JS
+     * counts them: one a code point here, the words being BMP. */
+    double wy = nl * L, wx = -1;
+    int ord[8], no = 0;
+    for (int i = 0; i < nk && no < 8; i++) {
+        if (!lk[i].has || lk[i].col < 0 || lk[i].col > n - 1 ||
+            !(lk[i].top >= 0 && lk[i].top < nl))
+            continue;
+        int j = no++;
+        while (j > 0 && lk[ord[j - 1]].col > lk[i].col) { ord[j] = ord[j - 1]; j--; }
+        ord[j] = i;
+    }
+    for (int q = 0; q < no; q++) {
+        const g8link_t *k = &lk[ord[q]];
+        double lx = floor(gx + k->col * cw + cw / 2), ly = k->top * L + L / 2;
+        int nch = 0;
+        for (const unsigned char *u = (const unsigned char *)k->word; *u; u++)
+            if ((*u & 0xc0) != 0x80) nch++;
+        double tw = nch * 6, tx = lx + 3 > wx + 6 ? lx + 3 : wx + 6;
+        if (tx + tw > w) tx = wx + 6 > w - tw ? wx + 6 : w - tw;
+        gm_push(g, "link", lx, ly, 1, wy + 2 - ly, "--faint");
+        gm_push_t(g, "word", tx, wy + 6, w - tx > 1 ? w - tx : 1, 10, "--muted", k->word);
+        wx = tx + tw;
+    }
+}
+
+/* g8Lanes: a /api/wifi/chain row (16 cells at most) as G8's lanes. */
+typedef struct { double e[4][4]; int n; } glist_t;    /* [first, last, sev, count] */
+typedef struct { int has_t; double t; int has_a; double a; int has_c; double c; } gclink_t;
+typedef struct {
+    double   cells[16];
+    int      has_cell[16], ncell;
+    glist_t  floods, twin, karma;
+    double   assoc[16];
+    int      nassoc;
+    gclink_t links[2];
+    int      nlinks;
+} gchrow_t;
+typedef struct {
+    g8lane_t  lanes[4];
+    double    dc[16];
+    g8label_t labels[4];
+    char      ltext[4][48];
+    g8link_t  links[4];
+    int       nlinks, stages;
+} glanes_t;
+
+static void gl_g8_bars(const glist_t *l, double from, double cs, int n, g8lane_t *o) {
+    o->nb = l->n;
+    for (int i = 0; i < l->n; i++) {
+        double b = floor((l->e[i][1] - from) / cs);
+        o->bars[i][0] = floor((l->e[i][0] - from) / cs);
+        o->bars[i][1] = b;
+        o->bars[i][2] = l->e[i][2];
+        o->bars[i][3] = b >= n - 1 ? 1 : 0;
+    }
+}
+static void gl_g8_words(const char *name, const glist_t *l, int have, const char *extra,
+                        char *out, size_t sz, const char **tok) {
+    double hi = -1;
+    for (int i = 0; l && i < l->n; i++) if (l->e[i][2] > hi) hi = l->e[i][2];
+    const char *sv = hi == 0 ? " low" : hi == 1 ? " warn" : hi == 2 ? " CRIT" : "";
+    if (have) snprintf(out, sz, "%s%s%s", name, sv, extra ? extra : "");
+    else snprintf(out, sz, "%s none", name);
+    *tok = have ? "--ink" : "--muted";
+}
+static void gl_g8_lanes(const gchrow_t *r, double from, double cs, int n, glanes_t *o) {
+    memset(o, 0, sizeof(*o));
+    if (!(cs > 0)) cs = 1;
+    int nd = 0, na = 0;
+    for (int i = 0; i < r->ncell; i++) {
+        o->dc[i] = r->has_cell[i] ? r->cells[i] : 0;
+        if (o->dc[i] > 0) nd++;
+    }
+    for (int i = 0; i < r->nassoc; i++) if (r->assoc[i] > 0) na++;
+    int has_conf = 0;
+    double conf = 0;
+    for (int i = 0; i < r->nlinks; i++) {
+        if (r->links[i].has_t)
+            o->links[o->nlinks++] = (g8link_t){ 1, floor((r->links[i].t - from) / cs), 0,
+                                                "tainted \xe2\x86\x91 5 s" };
+        if (r->links[i].has_a)
+            o->links[o->nlinks++] = (g8link_t){ 1, floor((r->links[i].a - from) / cs), 1,
+                                                "attributed \xe2\x86\x91" };
+        if (r->links[i].has_c) { has_conf = 1; conf = r->links[i].c; }
+    }
+    int lure = r->twin.n + r->karma.n > 0;
+    o->stages = (nd || r->floods.n ? 1 : 0) + (r->twin.n ? 1 : 0) + (na && lure ? 1 : 0) +
+                (r->karma.n ? 1 : 0);
+    o->lanes[0].counts = o->dc;
+    o->lanes[0].nc = r->ncell;
+    gl_g8_bars(&r->floods, from, cs, n, &o->lanes[0]);
+    gl_g8_bars(&r->twin, from, cs, n, &o->lanes[1]);
+    o->lanes[2].counts = r->assoc;
+    o->lanes[2].nc = r->nassoc;
+    gl_g8_bars(&r->karma, from, cs, n, &o->lanes[3]);
+    char ex[16] = "";
+    if (has_conf) snprintf(ex, sizeof(ex), " %.0f%%", conf);
+    gl_g8_words("deauth", &r->floods, nd > 0 || r->floods.n > 0, NULL, o->ltext[0],
+                sizeof(o->ltext[0]), &o->labels[0].tok);
+    gl_g8_words("twin", &r->twin, r->twin.n > 0, ex, o->ltext[1], sizeof(o->ltext[1]),
+                &o->labels[1].tok);
+    gl_g8_words("assoc", NULL, na > 0, NULL, o->ltext[2], sizeof(o->ltext[2]),
+                &o->labels[2].tok);
+    gl_g8_words("karma", &r->karma, r->karma.n > 0, NULL, o->ltext[3], sizeof(o->ltext[3]),
+                &o->labels[3].tok);
+    for (int i = 0; i < 4; i++) o->labels[i].text = o->ltext[i];
+}
+
+/* The matrix: a cell's pair, total, protocols (by name) and SMB1. */
+typedef struct { int s, d; double total; const char *protos[4]; int np; int smb1; } gcell_t;
+
+static const char *gl_letter(const char *p) {
+    static const char *const T[][2] = { { "ssh", "S" }, { "rdp", "R" }, { "smb", "M" },
+                                        { "snmp", "N" }, { "bgp", "B" }, { "ldap", "L" },
+                                        { "kerb", "K" } };
+    for (size_t i = 0; i < sizeof(T) / sizeof(T[0]); i++) if (!strcmp(T[i][0], p)) return T[i][1];
+    return NULL;
+}
+/* Math.round is floor(x + 0.5). */
+static void gl_mx_num(double v, char *out, size_t sz) {
+    if (!(v >= 0)) snprintf(out, sz, "-");
+    else if (v < 1000) snprintf(out, sz, "%.0f", floor(v + 0.5));
+    else if (v < 1e6) {
+        if (v < 1e4) snprintf(out, sz, "%.1fk", v / 1e3);
+        else snprintf(out, sz, "%.0fk", floor(v / 1e3 + 0.5));
+    } else if (v < 1e7) snprintf(out, sz, "%.1fM", v / 1e6);
+    else snprintf(out, sz, "%.0fM", floor(v / 1e6 + 0.5));
+}
+static double gl_mx_max(const gcell_t *c, int nc, double prev) {
+    double max = prev > 0 ? prev : 0;
+    for (int i = 0; i < nc; i++) if (c[i].total > max) max = c[i].total;
+    return max;
+}
+static void gl_mx(const int *sg, int ns, const int *dg, int nd, const gcell_t *c, int nc,
+                  double x0, double y0, double cw, double ch, double prev, gmarks_t *g) {
+    memset(g, 0, sizeof(*g));
+    double W = x0 + nd * cw, Hh = y0 + ns * ch;
+    if (!nc) { gl_dash(g, W > 60 ? W : 60, ch); return; }
+    double max = gl_mx_max(c, nc, prev);
+    for (int i = 1; i < ns; i++)
+        if (sg[i] != sg[i - 1]) gm_push(g, "grp", 0, y0 + i * ch, W, 1, "--rule");
+    for (int i = 1; i < nd; i++)
+        if (dg[i] != dg[i - 1]) gm_push(g, "grp", x0 + i * cw, 0, 1, Hh, "--rule");
+    for (int i = 0; i < nc; i++) {
+        double x = x0 + c[i].d * cw, y = y0 + c[i].s * ch;
+        double v = c[i].total > 0 ? c[i].total : 0, f = max > 0 ? v / max : 0;
+        double bw = (cw - 4) * (f < 1 ? f : 1);
+        gm_push(g, "bar", x + 2, y + ch * 0.25, bw > 1 ? bw : 1, ch * 0.5,
+                c[i].smb1 ? "--sev-crit" : "--rule");
+        char t[24];
+        gl_mx_num(v, t, sizeof(t));
+        gm_push_t(g, "num", x + 3, y + ch / 2, cw - 6, 10, c[i].smb1 ? "--sev-crit" : "--ink", t);
+        char lt[8] = "";
+        for (int k = 0; k < c[i].np; k++) {
+            const char *l = gl_letter(c[i].protos[k]);
+            if (l && strlen(lt) + 1 < sizeof(lt)) strcat(lt, l);
+        }
+        double nl = (double)strlen(lt);
+        if (nl > 0) gm_push_t(g, "proto", x + cw - 2 - 5 * nl, y + 4, 5 * nl, 7, "--muted", lt);
+    }
 }
 
 /* ── the JS, pinned as served ───────────────────────────────────── */
@@ -1602,6 +1826,10 @@ static void test_every_glyph_names_its_tui_form(void) {
      * distance cell for the words. Seen red with the row removed. */
     WT_HAS(doc, "| G2 range sparkline (RSSI) |");
     WT_HAS(doc, "`rf_dist_cell()`");
+    /* V4: G8's row, its spec form named and its TUI half said to be
+     * owed. Seen red with the row removed. */
+    WT_HAS(doc, "| G8 chain timeline |");
+    WT_HAS(doc, "`\xe2\x94\x81` for an incident's span and `\xe2\x97\x8f` where it began");
 }
 
 /* The V1 review's fixes, as the page wires them: the footer's drops
@@ -1935,6 +2163,485 @@ static void test_v3_review_wiring(void) {
     WT_HAS(p, "    txColor: txColor, txOf: txOf, fmt: fmt });");
 }
 
+
+/* ── V4: G8 and the Flows matrix ────────────────────────────────── */
+
+/* V4's JS, whole: G8, its maximum, its height and its lanes, and the
+ * matrix with its number and its maximum; and the painter's words.
+ * Seen red with one character changed in each (g8's "L - 2 - th",
+ * g8Lanes' "b >= n - 1", mxNum's "1e4", mx's "--sev-crit" bar, and the
+ * painter's typeof m[6]). */
+static void test_the_page_carries_v4s_js(void) {
+    const char *p = page();
+    WT_HAS(p, "  var G8_STAGES = [\"deauth\", \"twin\", \"assoc\", \"karma\"];\n"
+              "  var G8_WORDS = 12;\n"
+              "  // A 10 px monospace character's advance, near enough to lay words out.\n"
+              "  var G8_CH = 6;\n"
+              "  var SEV_TOKEN = [\"--sev-low\", \"--sev-warn\", \"--sev-crit\"];\n"
+              "  function g8Max(lanes, prev) {\n"
+              "    var max = gnum(prev) && prev > 0 ? prev : 0;\n"
+              "    for (var j = 0; lanes && j < lanes.length; j++)\n"
+              "      for (var i = 0, c = lanes[j].counts || []; i < c.length; i++)\n"
+              "        if (gnum(c[i]) && c[i] > max) max = c[i];\n"
+              "    return max;\n"
+              "  }\n");
+    WT_HAS(p, "  function g8(lanes, links, labels, opt) {\n"
+              "    var m = [], L = opt.lane, gx = opt.gutter || 0, n = opt.ncol > 0 ? opt.ncol : 1, i, j;\n"
+              "    var nl = lanes ? lanes.length : 0, gw = Math.max(1, opt.w - gx), cw = gw / n;\n"
+              "    if (!nl) { m.push(dash(opt.w, L)); return m; }\n"
+              "    var max = g8Max(lanes, opt.max), X = function (c) { return gx + c * cw; };\n"
+              "    for (j = 0; j < nl; j++) {\n"
+              "      var y0 = j * L, mid = y0 + L / 2, ln = lanes[j];\n"
+              "      m.push([\"axis\", gx, mid, gw, 1, \"--rule\"]);\n"
+              "      if (labels && labels[j]) m.push([\"label\", 2, mid, gx - 4, 10, labels[j].token, labels[j].text]);\n"
+              "      var c = ln.counts || [];\n"
+              "      for (i = 0; max > 0 && i < c.length && i < n; i++) {\n"
+              "        if (!gnum(c[i]) || !(c[i] > 0)) continue;\n"
+              "        var th = Math.max(1, (L - 4) * c[i] / max);\n"
+              "        m.push([\"tick\", Math.floor(X(i)), y0 + L - 2 - th, Math.max(1, Math.ceil(cw) - (cw > 3 ? 1 : 0)),\n"
+              "                th, \"--tui-normal\"]);\n"
+              "      }\n"
+              "      var b = ln.bars || [];\n"
+              "      for (i = 0; i < b.length; i++) {\n"
+              "        var a0 = b[i][0], b0 = b[i][1];\n"
+              "        if (!gnum(a0) || !gnum(b0) || b0 < 0 || a0 > n - 1 || b0 < a0) continue;\n"
+              "        var tok = SEV_TOKEN[b[i][2] >= 0 && b[i][2] <= 2 ? b[i][2] : 1];\n"
+              "        var xa = X(Math.max(0, a0)), xb = X(Math.min(n - 1, b0) + 1);\n"
+              "        m.push([\"bar\", xa, mid - 2, Math.max(1, xb - xa), 4, tok]);\n"
+              "        if (a0 >= 0) m.push([\"dot\", xa, mid, 2.5, 2.5, tok]);\n"
+              "        if (!b[i][3] && b0 <= n - 1) m.push([\"dot\", xb, mid, 2.5, 2.5, tok]);\n"
+              "      }\n"
+              "    }\n"
+              "    // The words in column order, each after the one before it (the\n"
+              "    // taint and the attribution it settles are often one record, so\n"
+              "    // two connectors share a column and their words would overprint),\n"
+              "    // and drawn back from the right edge rather than past it.\n"
+              "    var wy = nl * L, wx = -1, ks = [];\n"
+              "    for (i = 0; links && i < links.length; i++) {\n"
+              "      var k = links[i];\n"
+              "      if (!gnum(k.col) || k.col < 0 || k.col > n - 1 || !(k.top >= 0 && k.top < nl)) continue;\n"
+              "      ks.push(k);\n"
+              "    }\n"
+              "    ks.sort(function (a, b) { return a.col - b.col; });\n"
+              "    for (i = 0; i < ks.length; i++) {\n"
+              "      var lx = Math.floor(X(ks[i].col) + cw / 2), ly = ks[i].top * L + L / 2;\n"
+              "      var tw = String(ks[i].word).length * G8_CH, tx = Math.max(lx + 3, wx + G8_CH);\n"
+              "      if (tx + tw > opt.w) tx = Math.max(wx + G8_CH, opt.w - tw);\n"
+              "      m.push([\"link\", lx, ly, 1, wy + 2 - ly, \"--faint\"]);\n"
+              "      m.push([\"word\", tx, wy + G8_WORDS / 2, Math.max(1, opt.w - tx), 10, \"--muted\", ks[i].word]);\n"
+              "      wx = tx + tw;\n"
+              "    }\n"
+              "    return m;\n"
+              "  }\n");
+    WT_HAS(p, "  function g8Height(nl, links, lane) {\n"
+              "    return nl * lane + (links && links.length ? G8_WORDS + 2 : 0);\n"
+              "  }\n");
+    WT_HAS(p, "  function g8Lanes(row, j) {\n"
+              "    var cs = j.col_s > 0 ? j.col_s : 1, n = j.cols > 0 ? j.cols : 0, from = j.from;\n"
+              "    var col = function (t) { return Math.floor((t - from) / cs); };\n"
+              "    var bars = function (list) {\n"
+              "      return (list || []).map(function (e) {\n"
+              "        var b = col(e[1]);\n"
+              "        return [col(e[0]), b, e[2], b >= n - 1 ? 1 : 0];\n"
+              "      });\n"
+              "    };\n"
+              "    // A lane's words: its name, the highest severity its bars reached\n"
+              "    // (R10: the word beside the colour), and \"none\" when it has nothing,\n"
+              "    // in --muted, so an empty lane reads as not yet seen.\n"
+              "    var words = function (name, list, have, extra) {\n"
+              "      var hi = -1;\n"
+              "      for (var i = 0; list && i < list.length; i++) if (list[i][2] > hi) hi = list[i][2];\n"
+              "      var sv = hi === 0 ? \" low\" : hi === 1 ? \" warn\" : hi === 2 ? \" CRIT\" : \"\";\n"
+              "      return { text: name + (have ? sv + (extra || \"\") : \" none\"), token: have ? \"--ink\" : \"--muted\" };\n"
+              "    };\n"
+              "    var dc = (row.cells || []).map(function (v) { return gnum(v) ? v : 0; });\n"
+              "    var ac = row.assoc || [];\n"
+              "    var links = [], conf = null;\n"
+              "    (row.links || []).forEach(function (k) {\n"
+              "      if (gnum(k.tainted)) links.push({ col: col(k.tainted), top: 0, word: \"tainted \\u2191 5 s\" });\n"
+              "      if (gnum(k.attributed)) links.push({ col: col(k.attributed), top: 1, word: \"attributed \\u2191\" });\n"
+              "      if (gnum(k.confidence)) conf = k.confidence;\n"
+              "    });\n"
+              "    var nd = 0, na = 0;\n"
+              "    for (var i = 0; i < dc.length; i++) if (dc[i] > 0) nd++;\n"
+              "    for (i = 0; i < ac.length; i++) if (gnum(ac[i]) && ac[i] > 0) na++;\n"
+              "    // An association is a stage only on a BSSID accused or caught\n"
+              "    // luring (a twin or a karma row): elsewhere it is a client joining.\n"
+              "    var lure = (row.twin || []).length + (row.karma || []).length > 0;\n"
+              "    var stages = (nd || (row.floods || []).length ? 1 : 0) + ((row.twin || []).length ? 1 : 0) +\n"
+              "                 (na && lure ? 1 : 0) + ((row.karma || []).length ? 1 : 0);\n"
+              "    var fl = row.floods || [], tw = row.twin || [], ka = row.karma || [];\n"
+              "    return {\n"
+              "      lanes: [{ counts: dc, bars: bars(fl) }, { counts: null, bars: bars(tw) },\n"
+              "              { counts: ac, bars: null }, { counts: null, bars: bars(ka) }],\n"
+              "      labels: [words(\"deauth\", fl, nd > 0 || fl.length > 0),\n"
+              "               words(\"twin\", tw, tw.length > 0, conf !== null ? \" \" + conf + \"%\" : \"\"),\n"
+              "               words(\"assoc\", null, na > 0), words(\"karma\", ka, ka.length > 0)],\n"
+              "      links: links, stages: stages\n"
+              "    };\n"
+              "  }\n");
+    WT_HAS(p, "  var MX_LETTER = { ssh: \"S\", rdp: \"R\", smb: \"M\", snmp: \"N\", bgp: \"B\", ldap: \"L\", kerb: \"K\" };\n"
+              "  function mxNum(v) {\n"
+              "    if (!gnum(v) || v < 0) return \"-\";\n"
+              "    if (v < 1000) return String(Math.round(v));\n"
+              "    if (v < 1e6) return (v < 1e4 ? (v / 1e3).toFixed(1) : String(Math.round(v / 1e3))) + \"k\";\n"
+              "    return (v < 1e7 ? (v / 1e6).toFixed(1) : String(Math.round(v / 1e6))) + \"M\";\n"
+              "  }\n");
+    WT_HAS(p, "  function mxMax(mx, prev) {\n"
+              "    var max = gnum(prev) && prev > 0 ? prev : 0;\n"
+              "    for (var i = 0, c = (mx && mx.cells) || []; i < c.length; i++)\n"
+              "      if (gnum(c[i].total) && c[i].total > max) max = c[i].total;\n"
+              "    return max;\n"
+              "  }\n");
+    WT_HAS(p, "  function mx(m, opt) {\n"
+              "    var out = [], x0 = opt.x0, y0 = opt.y0, cw = opt.cw, ch = opt.ch, i;\n"
+              "    var srcs = (m && m.srcs) || [], dsts = (m && m.dsts) || [], cells = (m && m.cells) || [];\n"
+              "    var W = x0 + dsts.length * cw, Hh = y0 + srcs.length * ch;\n"
+              "    if (!cells.length) { out.push(dash(Math.max(W, 60), ch)); return out; }\n"
+              "    var own = Object.prototype.hasOwnProperty, max = mxMax(m, opt.max);\n"
+              "    for (i = 1; i < srcs.length; i++)\n"
+              "      if (srcs[i].group !== srcs[i - 1].group) out.push([\"grp\", 0, y0 + i * ch, W, 1, \"--rule\"]);\n"
+              "    for (i = 1; i < dsts.length; i++)\n"
+              "      if (dsts[i].group !== dsts[i - 1].group) out.push([\"grp\", x0 + i * cw, 0, 1, Hh, \"--rule\"]);\n"
+              "    for (i = 0; i < cells.length; i++) {\n"
+              "      var c = cells[i], x = x0 + c.d * cw, y = y0 + c.s * ch, hot = c.smb1 === true;\n"
+              "      var v = gnum(c.total) && c.total > 0 ? c.total : 0;\n"
+              "      out.push([\"bar\", x + 2, y + ch * 0.25, Math.max(1, (cw - 4) * Math.min(1, max > 0 ? v / max : 0)),\n"
+              "                ch * 0.5, hot ? \"--sev-crit\" : \"--rule\"]);\n"
+              "      out.push([\"num\", x + 3, y + ch / 2, cw - 6, 10, hot ? \"--sev-crit\" : \"--ink\", mxNum(v)]);\n"
+              "      var lt = \"\";\n"
+              "      for (var k = 0, p = c.protos || []; k < p.length; k++)\n"
+              "        if (typeof p[k] === \"string\" && own.call(MX_LETTER, p[k])) lt += MX_LETTER[p[k]];\n"
+              "      if (lt) out.push([\"proto\", x + cw - 2 - 5 * lt.length, y + 4, 5 * lt.length, 7, \"--muted\", lt]);\n"
+              "    }\n"
+              "    return out;\n"
+              "  }\n");
+    WT_HAS(p, "      if (typeof m[6] === \"string\") {\n"
+              "        // A word: its size is the mark's h, its width at most w.\n"
+              "        g.font = Math.round(m[4] * dpr) + \"px \" + resolve(\"--font-mono\");\n");
+}
+
+/* §5 G8's states (R5): no lane is the dash; four empty lanes are their
+ * axes and their words and nothing else, so a stage not yet seen reads
+ * as an empty lane, not as a missing one. The absence seen red with the
+ * port's tick loop dropping its c > 0 test (a zero drew a 1 px tick). */
+static void test_g8_states(void) {
+    gmarks_t g;
+    gl_g8(NULL, 0, NULL, 0, NULL, 300, 18, 100, 10, 0, &g);
+    WT_EQ(g.n, 1);
+    WT_EQ(gm_count(&g, "dash"), 1);
+    double z[10] = { 0 };
+    g8lane_t ln[4];
+    memset(ln, 0, sizeof(ln));
+    ln[0].counts = z; ln[0].nc = 10;
+    ln[2].counts = z; ln[2].nc = 10;
+    g8label_t lb[4] = { { "deauth none", "--muted" }, { "twin none", "--muted" },
+                        { "assoc none", "--muted" }, { "karma none", "--muted" } };
+    gl_g8(ln, 4, NULL, 0, lb, 300, 18, 100, 10, 0, &g);
+    WT_EQ(gm_count(&g, "axis"), 4);
+    WT_EQ(gm_count(&g, "label"), 4);
+    WT_EQ(gm_count(&g, "tick"), 0);
+    WT_EQ(gm_count(&g, "bar"), 0);
+    WT_EQ(gm_count(&g, "dash"), 0);
+    WT_ASSERT(near(gm_last(&g, "axis").y, 63) && !strcmp(gm_last(&g, "axis").tok, "--rule"));
+    WT_ASSERT(!strcmp(gm_get(&g, "label").txt, "deauth none"));
+}
+
+/* R3: every lane with counts is on one scale, so two associations under
+ * ten deauth frames are a fifth of their height, not as tall (seen red
+ * with the port's maximum taken per lane); R11: a scale the glyph last
+ * drew is kept (seen red with prev ignored: the deauth tick full height
+ * under a prev of 20). */
+static void test_g8_counts_share_one_scale(void) {
+    double d[10] = { 0, 5, 0, 10, 0, 0, 0, 0, 0, 0 }, a[10] = { 0, 0, 0, 0, 0, 2, 0, 0, 0, 0 };
+    g8lane_t ln[4];
+    memset(ln, 0, sizeof(ln));
+    ln[0].counts = d; ln[0].nc = 10;
+    ln[2].counts = a; ln[2].nc = 10;
+    gmarks_t g;
+    gl_g8(ln, 4, NULL, 0, NULL, 200, 18, 100, 10, 0, &g);
+    WT_EQ(gl_g8_max(ln, 4, 0), 10);
+    WT_EQ(gm_count(&g, "tick"), 3);
+    WT_ASSERT(near(g.m[2].h, 14) && near(g.m[2].x, 130) && near(g.m[2].y, 2));
+    gmark_t at = gm_last(&g, "tick");
+    WT_ASSERT(near(at.h, 2.8) && near(at.x, 150) && near(at.y, 36 + 18 - 2 - 2.8));
+    gl_g8(ln, 4, NULL, 0, NULL, 200, 18, 100, 10, 20, &g);
+    WT_ASSERT(near(g.m[2].h, 7));
+}
+
+/* An incident is a bar from its first to its last observation in the
+ * severity colour it reached, a dot where it began and one where it
+ * closed, each only inside the window: one that began before it has no
+ * start dot and starts at the axis (seen red with the port's a0 >= 0
+ * test dropped), one still open has no end dot (seen red with the open
+ * flag ignored), one wholly after the window is not drawn (seen red
+ * with the a0 > n - 1 test dropped). */
+static void test_g8_bars(void) {
+    g8lane_t ln[2];
+    memset(ln, 0, sizeof(ln));
+    double b0[4] = { 1, 3, 2, 0 }, b1[4] = { -4, 2, 0, 0 }, b2[4] = { 6, 9, 1, 1 },
+           b3[4] = { 12, 14, 2, 0 };
+    memcpy(ln[0].bars[0], b0, sizeof(b0));
+    memcpy(ln[0].bars[1], b1, sizeof(b1));
+    ln[0].nb = 2;
+    memcpy(ln[1].bars[0], b2, sizeof(b2));
+    memcpy(ln[1].bars[1], b3, sizeof(b3));
+    ln[1].nb = 2;
+    gmarks_t g;
+    gl_g8(ln, 2, NULL, 0, NULL, 200, 18, 100, 10, 0, &g);
+    WT_EQ(gm_count(&g, "bar"), 3);
+    gmark_t b = gm_get(&g, "bar");
+    WT_ASSERT(near(b.x, 110) && near(b.w, 30) && near(b.y, 7) && !strcmp(b.tok, "--sev-crit"));
+    WT_ASSERT(near(g.m[4].x, 100) && near(g.m[4].w, 30) && !strcmp(g.m[4].tok, "--sev-low"));
+    WT_EQ(gm_count(&g, "dot"), 4);
+    for (int i = 0; i < g.n; i++)
+        if (!strcmp(g.m[i].kind, "dot")) WT_ASSERT(!near(g.m[i].x, 100));
+    gmark_t ob = gm_last(&g, "bar");
+    WT_ASSERT(near(ob.x, 160) && near(ob.w, 40) && !strcmp(ob.tok, "--sev-warn"));
+    gmark_t od = gm_last(&g, "dot");
+    WT_ASSERT(near(od.x, 160) && near(od.y, 27));
+}
+
+/* The links sloth made: a --faint connector from its lane down to the
+ * words row under the lanes, its reason beside it; one outside the
+ * window, or on a lane the glyph has not, is not drawn (each seen red
+ * with its test dropped from the port). */
+static void test_g8_links(void) {
+    g8lane_t ln[4];
+    memset(ln, 0, sizeof(ln));
+    g8link_t lk[3] = { { 1, 4, 0, "tainted \xe2\x86\x91 5 s" }, { 1, 12, 1, "late" },
+                       { 1, 2, 7, "no lane" } };
+    gmarks_t g;
+    gl_g8(ln, 4, lk, 3, NULL, 200, 18, 100, 10, 0, &g);
+    WT_EQ(gm_count(&g, "link"), 1);
+    gmark_t l = gm_get(&g, "link");
+    WT_ASSERT(near(l.x, 145) && near(l.y, 9) && near(l.h, 72 + 2 - 9) && !strcmp(l.tok, "--faint"));
+    WT_EQ(gm_count(&g, "word"), 1);
+    WT_ASSERT(!strcmp(gm_get(&g, "word").txt, "tainted \xe2\x86\x91 5 s"));
+    WT_ASSERT(near(gm_get(&g, "word").y, 78));
+    /* A taint and the attribution it settles are often one record: two
+     * connectors in one column, and the second word after the first
+     * rather than over it (seen red with each word at its own
+     * connector: both at 328); a later link's words in column order,
+     * after both (seen red with the links taken in the order given),
+     * and a word that would run past the edge drawn back to it (seen
+     * red with the edge test dropped). */
+    g8link_t lk2[3] = { { 1, 9, 1, "attributed \xe2\x86\x91" },
+                        { 1, 4, 0, "tainted \xe2\x86\x91 5 s" },
+                        { 1, 4, 1, "attributed \xe2\x86\x91" } };
+    gl_g8(ln, 4, lk2, 3, NULL, 600, 18, 100, 10, 0, &g);
+    WT_EQ(gm_count(&g, "link"), 3);
+    WT_EQ(gm_count(&g, "word"), 3);
+    double wx[3];
+    int nw = 0;
+    for (int i = 0; i < g.n && nw < 3; i++)
+        if (!strcmp(g.m[i].kind, "word")) wx[nw++] = g.m[i].x;
+    /* 50 px columns: column 4's connector at 325, column 9's at 575;
+     * "tainted ↑ 5 s" is 13 characters, "attributed ↑" 12. */
+    WT_ASSERT(nw == 3 && near(wx[0], 328) && near(wx[1], 328 + 13 * 6 + 6));
+    /* The third, at 578, would end past 600: drawn back to end there. */
+    WT_ASSERT(nw == 3 && near(wx[2], 600 - 12 * 6));
+    WT_ASSERT(!strcmp(gm_last(&g, "word").txt, "attributed \xe2\x86\x91") &&
+              near(gm_last(&g, "link").x, 575));
+}
+
+/* g8Lanes: a row's stages, each lane's words with the highest severity
+ * its bars reached (R10) and "none" for an empty one, the twin's
+ * confidence from the stream, an incident still open at the window's
+ * end without its end dot, and the links in columns. A row of nothing
+ * is no stage, and an association is one only beside a twin or a karma
+ * row. Seen red with the stage count's deauth term reading the floods
+ * alone (2, not 3), and with "none" written for a lane that has frames
+ * but no flood. */
+static void test_g8_lanes(void) {
+    gchrow_t r;
+    memset(&r, 0, sizeof(r));
+    r.ncell = 10;
+    r.has_cell[1] = 1; r.cells[1] = 5;
+    r.has_cell[3] = 1; r.cells[3] = 10;
+    r.twin.n = 1;
+    double tw[4] = { 1040, 1099, 2, 1 };
+    memcpy(r.twin.e[0], tw, sizeof(tw));
+    r.nassoc = 10; r.assoc[5] = 2;
+    r.nlinks = 1;
+    r.links[0] = (gclink_t){ 1, 1042, 0, 0, 1, 70 };
+    glanes_t o;
+    gl_g8_lanes(&r, 1000, 10, 10, &o);
+    WT_EQ(o.stages, 3);
+    WT_ASSERT(!strcmp(o.labels[0].text, "deauth") && !strcmp(o.labels[0].tok, "--ink"));
+    WT_ASSERT(!strcmp(o.labels[1].text, "twin CRIT 70%"));
+    WT_ASSERT(!strcmp(o.labels[2].text, "assoc"));
+    WT_ASSERT(!strcmp(o.labels[3].text, "karma none") && !strcmp(o.labels[3].tok, "--muted"));
+    WT_ASSERT(near(o.lanes[1].bars[0][0], 4) && near(o.lanes[1].bars[0][1], 9) &&
+              near(o.lanes[1].bars[0][3], 1));
+    WT_EQ(o.nlinks, 1);
+    WT_ASSERT(near(o.links[0].col, 4) && o.links[0].top == 0);
+    gmarks_t g;
+    gl_g8(o.lanes, 4, o.links, o.nlinks, o.labels, 200, 18, 100, 10, 0, &g);
+    WT_EQ(gm_count(&g, "dot"), 1);
+    /* Deauth frames and stations associating with no twin or karma row:
+     * an ordinary AP, one stage, the rug's (seen red with the port's
+     * association term not asking for a lure: 2). */
+    r.twin.n = 0;
+    r.nlinks = 0;
+    gl_g8_lanes(&r, 1000, 10, 10, &o);
+    WT_EQ(o.stages, 1);
+    gchrow_t e;
+    memset(&e, 0, sizeof(e));
+    gl_g8_lanes(&e, 1000, 10, 10, &o);
+    WT_EQ(o.stages, 0);
+    WT_ASSERT(!strcmp(o.labels[0].text, "deauth none"));
+}
+
+/* R10: in one grey, a bar, a tick, a dot and a link still differ by
+ * kind and position, and the severity is a word in the lane's label. */
+static void test_g8_reads_in_greyscale(void) {
+    gchrow_t r;
+    memset(&r, 0, sizeof(r));
+    r.ncell = 10;
+    r.has_cell[2] = 1; r.cells[2] = 4;
+    r.floods.n = 1;
+    double fl[4] = { 1010, 1035, 2, 9 };
+    memcpy(r.floods.e[0], fl, sizeof(fl));
+    r.nlinks = 1;
+    r.links[0] = (gclink_t){ 1, 1042, 1, 1050, 0, 0 };
+    glanes_t o;
+    gl_g8_lanes(&r, 1000, 10, 10, &o);
+    gmarks_t g;
+    gl_g8(o.lanes, 4, o.links, o.nlinks, o.labels, 200, 18, 100, 10, 0, &g);
+    gm_grey(&g);
+    WT_ASSERT(gm_all_grey(&g));
+    WT_ASSERT(near(gm_get(&g, "bar").h, 4) && near(gm_get(&g, "bar").y, 7));
+    WT_ASSERT(gm_get(&g, "tick").y + gm_get(&g, "tick").h <= 16 + 1e-9);
+    WT_EQ(gm_count(&g, "link"), 2);
+    WT_ASSERT(!strcmp(gm_get(&g, "label").txt, "deauth CRIT"));
+}
+
+/* The matrix (F11): a --rule line where a subnet changes on each axis;
+ * each cell a bar on the matrix's one scale (the largest cell a full
+ * cell, seen red with each bar against its own row's largest), behind
+ * its count in words; an SMB1 cell in the critical colour, bar and
+ * number (R10: the caption says what red is); the protocols as letters
+ * in the corner; R11's prev kept; no cell the dash. */
+static void test_mx(void) {
+    int sg[3] = { 0, 0, 1 }, dg[2] = { 0, 1 };
+    gcell_t c[3] = {
+        { 0, 0, 64, { "ssh", "smb" }, 2, 0 },
+        { 1, 0, 2000, { "smb" }, 1, 1 },
+        { 2, 1, 32, { "bgp", "mqtt" }, 2, 0 },
+    };
+    gmarks_t g;
+    gl_mx(sg, 3, dg, 2, c, 3, 100, 50, 40, 18, 0, &g);
+    WT_EQ(gm_count(&g, "grp"), 2);
+    WT_ASSERT(near(g.m[0].y, 50 + 36) && near(g.m[0].w, 180));
+    WT_ASSERT(near(g.m[1].x, 140) && near(g.m[1].h, 104));
+    WT_EQ(gm_count(&g, "bar"), 3);
+    gmark_t b0 = gm_get(&g, "bar");
+    WT_ASSERT(near(b0.x, 102) && near(b0.w, 36 * 64.0 / 2000) && !strcmp(b0.tok, "--rule"));
+    WT_ASSERT(!strcmp(g.m[5].kind, "bar") && near(g.m[5].w, 36) && !strcmp(g.m[5].tok, "--sev-crit"));
+    WT_ASSERT(!strcmp(g.m[6].txt, "2.0k") && !strcmp(g.m[6].tok, "--sev-crit"));
+    WT_ASSERT(!strcmp(gm_get(&g, "num").txt, "64") && !strcmp(gm_get(&g, "num").tok, "--ink"));
+    gmark_t pl = gm_get(&g, "proto");
+    WT_ASSERT(!strcmp(pl.txt, "SM") && near(pl.x, 100 + 40 - 2 - 10) && !strcmp(pl.tok, "--muted"));
+    WT_ASSERT(!strcmp(gm_last(&g, "proto").txt, "B"));
+    gl_mx(sg, 3, dg, 2, c, 3, 100, 50, 40, 18, 4000, &g);
+    WT_ASSERT(near(g.m[5].w, 18));
+    gl_mx(sg, 3, dg, 2, c, 0, 100, 50, 40, 18, 0, &g);
+    WT_EQ(g.n, 1);
+    WT_EQ(gm_count(&g, "dash"), 1);
+}
+
+/* A cell's count in words: whole below a thousand, then k and M with
+ * one decimal under ten of them. */
+static void test_mx_num(void) {
+    char t[24];
+    gl_mx_num(999, t, sizeof(t));     WT_ASSERT(!strcmp(t, "999"));
+    gl_mx_num(1234, t, sizeof(t));    WT_ASSERT(!strcmp(t, "1.2k"));
+    gl_mx_num(45678, t, sizeof(t));   WT_ASSERT(!strcmp(t, "46k"));
+    gl_mx_num(1234567, t, sizeof(t)); WT_ASSERT(!strcmp(t, "1.2M"));
+    gl_mx_num(98765432, t, sizeof(t)); WT_ASSERT(!strcmp(t, "99M"));
+    gl_mx_num(-1, t, sizeof(t));      WT_ASSERT(!strcmp(t, "-"));
+}
+
+/* §6.3, §6.6 and §6.8 as the page wires them. The chains panel asks
+ * /api/wifi/chain and draws one G8 per bssid with more than one stage,
+ * the rest left to the G7 rug (a bssid with one stage gets a rug, not a
+ * G8), collapsing to its caption with none; the alert page draws the
+ * chain of the BSSID its device names, in its own section above the
+ * device; the drawer draws it only with two stages or more. The Flows
+ * panel draws the matrix first (ruling 4): its control kept, matrix
+ * selected, the chord hidden until chosen, the matrix asked for in its
+ * own form, wider than its box in a scroll box of its own, a click a
+ * filter. The two absences seen red with the old chains note put back
+ * and with flowGraph()'s direct chord(c, g) call put back; the order
+ * seen red with ad-chain moved under ad-device. */
+static void test_v4_wiring(void) {
+    const char *p = page();
+    WT_HAS(p, "window.SlothChain = {");
+    WT_HAS(p, "window.SlothFlowMx = {");
+    /* The chains panel. */
+    WT_HAS(p, "    getJSON(wifiGridPath(\"chain\", \"\", r)).then(function (cj) {");
+    WT_HAS(p, "      var ch = SlothChain.list($(\"w-chains\"), cj);");
+    WT_HAS(p, "      if (gl.stages < 2) { singles.push(r); return; }");
+    WT_HAS(p, "    box.hidden = !chains.length;\n"
+              "    return { chains: chains.length, max: max, singles: singles, win: sp ? sp.text : \"\" };");
+    /* R4: under a tenth of the window, the columns held only, one span
+     * for every chain of a list, and the caption's words. Seen red with
+     * the cut taken out of paint() (the whole window drawn under the
+     * shrunk caption). */
+    WT_HAS(p, "    var wn = glyph.win([[a, 0], [b, 0]], j.from, j.to);\n"
+              "    return wn.shrunk ? { lo: acc[0], hi: acc[1], from: a, to: b, text: wn.text } : null;");
+    WT_HAS(p, "    if (sp) { cut(gl, sp); cols = sp.hi - sp.lo + 1; from = sp.from; to = sp.to; }");
+    WT_HAS(p, "      if (ln.counts) ln.counts = ln.counts.slice(sp.lo, sp.hi + 1);");
+    WT_HAS(p, "    var sp = span(acc, j);\n    chains.forEach(function (r) {");
+    WT_HAS(p, "                bssids: ch.singles };\n      var rg = SlothAir.rug($(\"w-deauth\"), j), nb = rg.busy;");
+    WT_HAS(p, "n: cj.cols, state: (ch.chains ? ch.win : \"no bssid with more than one stage in the window\") +");
+    /* The route reads the WEB_WIFI_CHAINS most deauthed; past that the
+     * caption says how many it did not (V4 review). Seen red with the
+     * clause taken out. */
+    WT_HAS(p, "\" of \" + cj.total_keys + \" bssids most deauthed read\"");
+    WT_HAS(p, "<div id=\"w-chains\" hidden></div>");
+    WT_LACKS(p, "arrive with the chain timeline");
+    /* R11 per BSSID, started again with the scope or the window. */
+    WT_HAS(p, "    if (S.of !== scaleKey(j)) { S.max = {}; S.of = scaleKey(j); }");
+    WT_HAS(p, "    var max = glyph.g8Max(gl.lanes, S.max[key] || 0);\n    S.max[key] = max;");
+    /* One BSSID's scale per cell width and scope: the alert page's half
+     * hour does not inherit the WiFi panel's day (V4 review). Seen red
+     * with the key the BSSID alone, as it was. */
+    WT_HAS(p, "    var key = H.scope() + \"\\u0000\" + j.col_s + \"\\u0000\" + String(row.bssid);");
+    /* The alert page and the drawer. */
+    WT_HAS(p, "    if (window.SlothChain) SlothChain.alert(j);\n    // (g) the device it names");
+    WT_HAS(p, "    var b = j && j.device && j.device.bssid;");
+    WT_HAS(p, "    var to = Math.min(now, (num(j.last_seen) ? j.last_seen : now) + 300);\n"
+              "    var from = (num(j.first_seen) ? j.first_seen : to) - 900;\n"
+              "    if (to - from < 1800) from = to - 1800;");
+    WT_HAS(p, "      var two = glyph.g8Lanes(row, a).stages > 1;\n      c.hidden = !two;");
+    WT_HAS(p, "      if (!row || glyph.g8Lanes(row, a).stages < 2) return;");
+    WT_HAS(p, "    if (window.SlothChain) SlothChain.drawer(mac);");
+    WT_HAS(p, "<canvas class=\"chain\" id=\"dr-chain-c\"");
+    const char *h = strstr(p, "<section class=\"panel\" id=\"ad-history\"");
+    if (!h) h = strstr(p, "id=\"ad-history\"");
+    const char *c = strstr(p, "<section class=\"panel\" id=\"ad-chain\" hidden");
+    const char *d = strstr(p, "<section class=\"panel\" id=\"ad-device\">");
+    const char *e = strstr(p, "<section class=\"panel\" id=\"ev-alert\"");
+    WT_ASSERT(h && c && d && e && h < c && c < d && d < e);
+    /* The Flows matrix, first. */
+    WT_HAS(p, "<option value=\"matrix\" selected>who talks to whom (matrix)</option>");
+    WT_HAS(p, "<canvas class=\"chord\" id=\"f-chord\" hidden");
+    WT_HAS(p, "<div class=\"hscroll\" id=\"f-mx-box\"><canvas class=\"fmx\" id=\"f-matrix\"");
+    WT_HAS(p, "  function flowMode() { return $(\"f-mode\").value === \"chord\" ? \"chord\" : \"matrix\"; }");
+    WT_HAS(p, "    var q = mode === \"matrix\" ? \"&form=matrix&edges=\" + (narrow ? 40 : 80)\n"
+              "                              : \"&nodes=\" + nodes + \"&edges=80\";");
+    WT_HAS(p, "    getJSON(\"/api/flows/graph?from=\" + r.from + \"&to=\" + r.to + q).then(function (g) {");
+    WT_LACKS(p, "      chord(c, g);\n      flowLegend(g);");
+    WT_HAS(p, "    $(\"f-mx-box\").hidden = !st.cells;");
+    WT_HAS(p, "    if (F.mxOf !== mk) { SlothFlowMx.reset(); F.mxOf = mk; }");
+    WT_HAS(p, "    c.style.width = Math.max(bw, x0 + dsts.length * cw) + \"px\";");
+    WT_HAS(p, "    cw = Math.max(CW_MIN, Math.min(CW_MAX, cw));");
+    WT_HAS(p, "    G.max = glyph.mxMax(m, G.max);");
+    WT_HAS(p, "    var id = SlothFlowMx.hit(e);\n    if (id === null) return;\n    $(\"f-ip\").value = id;");
+}
+
 void run_glyph_tests(void) {
     WT_RUN(test_the_page_carries_the_ported_js);
     WT_RUN(test_g1_empty_is_a_dash);
@@ -1982,4 +2689,14 @@ void run_glyph_tests(void) {
     WT_RUN(test_g7_rug);
     WT_RUN(test_v3_wiring);
     WT_RUN(test_v3_review_wiring);
+    WT_RUN(test_the_page_carries_v4s_js);
+    WT_RUN(test_g8_states);
+    WT_RUN(test_g8_counts_share_one_scale);
+    WT_RUN(test_g8_bars);
+    WT_RUN(test_g8_links);
+    WT_RUN(test_g8_lanes);
+    WT_RUN(test_g8_reads_in_greyscale);
+    WT_RUN(test_mx);
+    WT_RUN(test_mx_num);
+    WT_RUN(test_v4_wiring);
 }
