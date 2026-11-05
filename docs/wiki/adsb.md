@@ -28,7 +28,7 @@ stage, `SENSOR_ADSB` in the sensors stage), `src/jsonl.c`
 readsb's `README-json.md` (wiedehopf/readsb; dump1090-fa documents
 the same `aircraft.json`).
 
-**Last updated**: 2026-11-05 (slice 1 shipped: feed, state, JSONL).
+**Last updated**: 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
 
 ---
 
@@ -117,7 +117,12 @@ from `seen_pos`.
 which readsb keeps an aircraft in `aircraft.json` at all) is retired,
 on sloth's monotonic clock, in the poll's health stage, and reported
 once as `"state":"gone"`. A table full at 256 rows refuses a new
-address and counts it in `adsb_overflow`.
+address and counts it in `adsb_overflow`. **A stale file at startup
+takes no rows**: an unchanged file is never re-read, so without this
+the aircraft a hung decoder last listed would each be written as
+`live` (with `last_seen` read time minus `seen`, hours wrong) and
+`gone` a minute later. Its rows come in with the first document whose
+clock has moved.
 
 **Freshness** is the decoder's own clock: the document's `now` (or,
 in a document without one, the file's mtime) moving forward. States:
@@ -125,8 +130,8 @@ in a document without one, the file's mtime) moving forward. States:
 | `adsb_state` | Meaning |
 |---|---|
 | `waiting` | configured; no document parsed yet and no failure |
-| `live` | the decoder's clock advanced within `ADSB_STALE_S` (10 s) |
-| `stale` | it has not for longer: the file is readable but the decoder stopped writing |
+| `live` | the decoder's clock advanced within `ADSB_STALE_S` (10 s); the first document counts as an advance when its clock is at most 10 s behind the host's |
+| `stale` | it has not for longer: the file is readable but the decoder stopped writing. Also a first document already more than 10 s old: a decoder that hung before sloth started (`adsb_age_s` -1) |
 | `error` | the last attempt failed: missing or unreadable file, not a regular file, over 2 MiB, malformed. Clears on the next good document |
 
 The registry's `adsb` sensor (name "ADS-B decoder", iface the source

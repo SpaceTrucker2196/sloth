@@ -6518,3 +6518,13 @@ x,750 ft, 100 ft hysteresis) and held 0.1° position cells, never the
 per-second figures; expiry writes one `"gone"`. Updated
 [[non-ip-sensors]], [[cli-reference]], [[jsonl-schema]], [[index]].
 View, slothweb, `--db` and the emergency alert are later slices.
+
+## 2026-11-05 — ADS-B slice 1 review (#26)
+
+[[adsb]]: a first `aircraft.json` whose clock is already more than
+`ADSB_STALE_S` behind the host's (a decoder that hung before sloth
+started) now reads `stale` and contributes no rows until the decoder's
+clock moves; before, each aircraft in it was written as a `live`
+`adsb_aircraft` with a wrong `last_seen` and `gone` a minute later.
+`--help` for `--adsb` names `beast://` beside `sbs://`, as
+[[cli-reference]] already did.

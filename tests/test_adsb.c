@@ -408,6 +408,44 @@ static void test_freshness_states(void) {
     ASSERT_EQ(s.adsb.age_s, 0);
 }
 
+/* A decoder that hung (stopped writing, file left in place) before
+ * sloth started leaves an aircraft.json whose clock is already old, and
+ * an unchanged file is never re-read. Its aircraft were heard then, not
+ * now: the first document whose clock is more than ADSB_STALE_S behind
+ * the host's reads stale, and its rows are not taken - else each would
+ * be written as a "live" adsb_aircraft with last_seen = now - seen and
+ * "gone" a minute later. When the decoder writes again it is live and
+ * the rows come in. A first document ADSB_STALE_S old is still live. */
+static void test_stale_file_at_startup(void) {
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    adsb_set_source("file:/x");
+    ASSERT_EQ(parse("{\"now\":1799996400,\"aircraft\":[{\"hex\":\"a0b1c2\",\"seen\":1}]}"), 0);
+    adsb_feed_doc(&g_doc, 0, 1800000000, 1000000);
+    adsb_health_poll(&s, 1800000000, 1000000);
+    ASSERT_EQ(s.adsb.state, ADSB_STALE);
+    ASSERT_EQ(s.adsb.fresh_bucket, 1);
+    ASSERT_EQ(s.adsb.age_s, -1);
+    ASSERT_EQ(s.adsb.reads, 1u);
+    ASSERT_EQ(s.adsb_count, 0);
+    ASSERT_EQ(parse("{\"now\":1800000001,\"aircraft\":[{\"hex\":\"a0b1c2\",\"seen\":0}]}"), 0);
+    adsb_feed_doc(&g_doc, 0, 1800000001, 1001000);
+    adsb_health_poll(&s, 1800000001, 1001000);
+    ASSERT_EQ(s.adsb.state, ADSB_LIVE);
+    ASSERT_EQ(s.adsb.age_s, 0);
+    ASSERT_EQ(s.adsb_count, 1);
+    if (s.adsb_count == 1) ASSERT_EQ(s.adsb_rows[0].first_seen, (time_t)1800000001);
+
+    adsb_reset();
+    memset(&s, 0, sizeof(s));
+    adsb_set_source("file:/x");
+    ASSERT_EQ(parse("{\"now\":1799999990,\"aircraft\":[{\"hex\":\"a0b1c2\"}]}"), 0);
+    adsb_feed_doc(&g_doc, 0, 1800000000, 1000000);
+    adsb_health_poll(&s, 1800000000, 1000000);
+    ASSERT_EQ(s.adsb.state, ADSB_LIVE);
+    ASSERT_EQ(s.adsb_count, 1);
+}
+
 /* ── Bands ─────────────────────────────────────────────────────── */
 
 static void test_alt_bands(void) {
@@ -791,6 +829,7 @@ void run_adsb_tests(void) {
     RUN_TEST(test_table_keys_and_sticky_merge);
     RUN_TEST(test_aircraft_expires);
     RUN_TEST(test_freshness_states);
+    RUN_TEST(test_stale_file_at_startup);
     RUN_TEST(test_alt_bands);
     RUN_TEST(test_spec_parse);
     RUN_TEST(test_reader_polls_a_file);

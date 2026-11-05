@@ -577,7 +577,17 @@ void adsb_feed_doc(const adsb_doc_t *d, double stamp, time_t wall,
     if (!d) return;
     pthread_mutex_lock(&g_mu);
     double clk = d->has_now ? d->now : stamp;
-    if (!g.ever_doc || clk > g.stamp) {
+    if (!g.ever_doc) {
+        /* The first document has shown no advance yet. The decoder is
+         * local, so its clock is the host's: one already more than
+         * ADSB_STALE_S behind was left by a decoder that stopped before
+         * sloth started, and its aircraft were heard then, not now. */
+        g.stamp = clk;
+        if ((double)wall - clk <= (double)ADSB_STALE_S) {
+            g.ever_advance = 1;
+            g.advance_mono = mono_ms;
+        }
+    } else if (clk > g.stamp) {
         g.stamp = clk;
         g.ever_advance = 1;
         g.advance_mono = mono_ms;
@@ -590,7 +600,7 @@ void adsb_feed_doc(const adsb_doc_t *d, double stamp, time_t wall,
     if (d->has_messages) g.messages = d->messages;
     g.overflow += (uint64_t)d->overflow;
     g.bad += (uint64_t)d->bad;
-    for (int i = 0; i < d->n && i < ADSB_MAX_AIRCRAFT; i++) {
+    for (int i = 0; g.ever_advance && i < d->n && i < ADSB_MAX_AIRCRAFT; i++) {
         const adsb_aircraft_t *a = &d->ac[i];
         adsb_aircraft_t *r = row_find(a->icao, a->non_icao);
         if (!r) {
@@ -657,6 +667,8 @@ void adsb_health_poll(sloth_state_t *s, time_t wall, uint64_t mono_ms) {
         uint64_t age = mono_ms > g.advance_mono ? mono_ms - g.advance_mono : 0;
         h->age_s = (int)(age / 1000u > 0x7fffffff ? 0x7fffffff : age / 1000u);
         h->fresh_bucket = h->age_s <= ADSB_STALE_S ? 0 : 1;
+    } else if (g.ever_doc) {
+        h->fresh_bucket = 1;   /* stale at first sight: no advance seen */
     }
     if (!g.configured)          h->state = ADSB_NONE;
     else if (g.err[0])          h->state = ADSB_ERROR;

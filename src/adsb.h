@@ -95,7 +95,11 @@ void adsb_set_source(const char *label);
  * still listing an aircraft it has not heard for 50 s does not keep it
  * young. A new address past ADSB_MAX_AIRCRAFT rows is refused and
  * counted. The decoder's clock ("now", else `stamp`, the file's mtime)
- * advancing is what keeps the source LIVE. Clears the error. */
+ * advancing is what keeps the source LIVE. The first document has shown
+ * no advance: if its clock is already more than ADSB_STALE_S behind
+ * `wall` (the decoder is local, so the clock is the host's) it was left
+ * by a decoder that stopped before sloth started - the source reads
+ * STALE and no row is taken until the clock moves. Clears the error. */
 void adsb_feed_doc(const adsb_doc_t *d, double stamp, time_t wall,
                    uint64_t mono_ms);
 

@@ -1194,6 +1194,17 @@ static void test_usage_strict_claims_no_total_coverage(void) {
     ASSERT(has_ci(b, "--no-discovery"));
 }
 
+/* --adsb refuses sbs:// and beast:// alike (src/adsb.c
+ * adsb_spec_parse, docs/wiki/cli-reference.md); the help named only
+ * sbs://, so an operator reading it would try beast:// and hit exit 2. */
+static void test_usage_adsb_names_both_refused_schemes(void) {
+    char b[2048];
+    ASSERT_EQ(usage_option_block("--adsb", b, sizeof(b)), 1);
+    ASSERT(has_ci(b, "sbs://"));
+    ASSERT(has_ci(b, "beast://"));
+    ASSERT(has_ci(b, "--replay"));
+}
+
 /*
  * Header-comment honesty — issue #84.
  *
@@ -2569,6 +2580,7 @@ void run_docs_consistency_tests(void) {
     RUN_TEST(test_has_ci);
     RUN_TEST(test_usage_hop_claims_no_sole_kernel_state_write);
     RUN_TEST(test_usage_strict_claims_no_total_coverage);
+    RUN_TEST(test_usage_adsb_names_both_refused_schemes);
     RUN_TEST(test_set_channel_comments_claim_no_total);
     TEST_SUITE("wiki + rule-table integrity (#103)");
     RUN_TEST(test_wiki_link_scanner_skips_code);
