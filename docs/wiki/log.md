@@ -6501,3 +6501,20 @@ hold today with each `SOURCE.md`'s own counts, the `src/` tables as
 the rule that a published pack version is never re-published with
 different bytes. Marked a draft throughout. Updated
 [index.md](index.md).
+
+## 2026-11-05 — ADS-B slice 1: --adsb, the aircraft table, adsb_aircraft (#26)
+
+New [[adsb]]. `--adsb PATH|file:///PATH` re-reads the `aircraft.json` a
+local readsb / dump1090-fa writes about once a second (sloth never
+touches the SDR; no network; `sbs://` and `beast://` refused as not yet
+supported). `src/adsb.c` parses it per readsb's README-json.md into
+`adsb_aircraft_t` rows (256 cap, overflow counted), sticky-merged,
+retired 60 s after the decoder last heard them; `adsb_health_t` reports
+`waiting` / `live` / `stale` / `error` off the decoder's own `now`
+advancing. The `adsb` sensor registers, `sensor_health` gains `adsb_*`
+(only with `--adsb`), and the change-only `adsb_aircraft` record signs
+held altitude bands (1,000 ft below 9,750 ft, 4,000 ft above, edges at
+x,750 ft, 100 ft hysteresis) and held 0.1° position cells, never the
+per-second figures; expiry writes one `"gone"`. Updated
+[[non-ip-sensors]], [[cli-reference]], [[jsonl-schema]], [[index]].
+View, slothweb, `--db` and the emergency alert are later slices.

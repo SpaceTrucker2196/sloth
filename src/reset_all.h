@@ -24,6 +24,7 @@
 #define SLOTH_RESETS(X) \
     X(action_clear) \
     X(action_mfp_clear) \
+    X(adsb_reset) \
     X(alerts_clear) \
     X(assoc_clear) \
     X(assoc_flood_clear) \

@@ -18,7 +18,7 @@ each is a typed producer of observations copied into `sloth_state_t`, exactly
 like the 802.11 path. Until the sensor seam exists, treat everything here as
 design, not implementation.
 
-**Last updated**: 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
+**Last updated**: 2026-11-05 (ADS-B slice 1 shipped: the `--adsb` feed, the aircraft table and the `adsb_aircraft` record, [[adsb]]); 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
 
 ---
 
@@ -130,15 +130,28 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
 - **Test**: hand-built gpsd JSON and NMEA sentences
   (`tests/test_gps.c`); no fixtures.
 
-### ADS-B aircraft
+### ADS-B aircraft — slice 1 shipped
 - **Observe**: decoded Mode-S / ADS-B messages from a local decoder
-  (dump1090): ICAO address, callsign, altitude, position, velocity.
-- **Hardware**: an RTL-SDR on 1090 MHz feeding dump1090, whose feed sloth tails.
-- **State**: `adsb_aircraft_t` keyed by ICAO.
-- **View**: an aircraft table.
-- **JSONL**: `adsb_aircraft`.
-- **Out of scope**: transmitting, interrogating (that's active radar).
-- **Test**: sample dump1090 SBS/JSON lines.
+  (readsb / dump1090-fa): address (ICAO, or `~` non-ICAO / TIS-B),
+  callsign, squawk, emergency, category, altitude, position, velocity,
+  RSSI.
+- **Hardware**: an RTL-SDR on 1090 MHz feeding readsb or dump1090-fa,
+  whose `aircraft.json` sloth re-reads (`--adsb PATH`). sloth never
+  opens or tunes the SDR and uses no network.
+- **State**: `adsb_aircraft_t` keyed by address, `adsb_health_t`
+  (`include/sloth.h`, `src/adsb.c`).
+- **View**: pending (an aircraft table).
+- **JSONL**: `adsb_aircraft`, change-only on held altitude bands and
+  position cells; `adsb_*` in `sensor_health`; the `sensor` record of
+  kind `adsb`.
+- **Out of scope**: transmitting, interrogating (that's active radar),
+  driving the SDR. SBS / Beast sockets are refused as not yet
+  supported.
+- **Test**: hand-written `aircraft.json` documents from readsb's
+  README-json.md (`tests/test_adsb.c`), a fuzz harness; no captures.
+- **Status**: slice 1 (2026-11-05) is the core — feed, state, JSONL.
+  The view, slothweb, `--db` and the emergency-squawk alert (with its
+  research citation) are pending. See [[adsb]].
 
 ### Meshtastic / LoRa
 - **Observe**: packet metadata from a local Meshtastic node in a
@@ -179,3 +192,4 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
 - [[architecture]] — where the platform/sensor seam lives.
 - [[wifi-sigint]] — the 802.11 family whose patterns these mirror.
 - [[jsonl-schema]] — the record-type contract new families extend.
+- [[adsb]] — the ADS-B family's first slice.

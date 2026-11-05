@@ -131,6 +131,8 @@
 #include "capture/bt_capture.h" /* --bt-capture (#144 slice 3) */
 #include "capture/gps_reader.h" /* --gps (2026-10-27) */
 #include "gps.h"                 /* --location (2026-10-27) */
+#include "adsb.h"                /* --adsb (#26 slice 1) */
+#include "capture/adsb_reader.h"
 #include "ble_hci.h"
 
 static sloth_state_t g_state;
@@ -314,7 +316,7 @@ static void print_usage(const char *argv0) {
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
             "       [--bt-monitor] [--bt-capture PATH] [--ble-rotation-hints]\n"
             "       [--location LAT,LON[,ALT]] [--gps SPEC] [--gps-allow-remote]\n"
-            "       [--gps-baud N]\n"
+            "       [--gps-baud N] [--adsb SPEC]\n"
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
@@ -576,6 +578,13 @@ static void print_usage(const char *argv0) {
             "                     --strict refuses a remote gpsd regardless.\n"
             "  --gps-baud N       serial speed for --gps /dev/... (4800, 9600\n"
             "                     (default), 19200, 38400, 57600, 115200).\n"
+            "  --adsb SPEC        tail the aircraft.json a local ADS-B decoder\n"
+            "                     (readsb, dump1090-fa) already writes:\n"
+            "                       /path/aircraft.json or file:///path\n"
+            "                     Re-read about once a second; sloth never\n"
+            "                     opens or tunes the SDR and uses no network.\n"
+            "                     sbs:// is not yet supported. Refused with\n"
+            "                     --replay.\n"
             "  --ble-rotation-hints\n"
             "                     INTERNAL USE ONLY, off by default: link\n"
             "                     private BLE addresses that may be one\n"
@@ -784,6 +793,7 @@ int main(int argc, char **argv) {
     const char *gps_arg      = NULL;     /* --gps SPEC (2026-10-27) */
     int         gps_allow_remote = 0;    /* --gps-allow-remote */
     int         gps_baud     = 0;        /* --gps-baud N; 0 = 9600 */
+    const char *adsb_arg     = NULL;     /* --adsb SPEC (#26 slice 1) */
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     time_t      session_start = sloth_wall();
@@ -887,6 +897,8 @@ int main(int argc, char **argv) {
             location_arg = argv[++i];
         } else if (!strcmp(argv[i], "--gps") && i + 1 < argc) {
             gps_arg = argv[++i];
+        } else if (!strcmp(argv[i], "--adsb") && i + 1 < argc) {
+            adsb_arg = argv[++i];
         } else if (!strcmp(argv[i], "--gps-allow-remote")) {
             gps_allow_remote = 1;
         } else if (!strcmp(argv[i], "--gps-baud") && i + 1 < argc) {
@@ -1176,6 +1188,26 @@ int main(int argc, char **argv) {
         }
     } else if (gps_allow_remote) {
         fprintf(stderr, "sloth: --gps-allow-remote ignored: no --gps\n");
+    }
+    /* #26 slice 1: --adsb. Only the SPEC is checked here: the file is
+     * opened by the worker each poll, after the drop, and a decoder
+     * that has not written it yet is a state (waiting / error), not a
+     * refusal. */
+    if (adsb_arg) {
+        char aerr[200];
+        if (replay_arg) {
+            fprintf(stderr, "sloth: --replay reads savefiles, not a live "
+                            "decoder: --adsb does not apply\n");
+            return 2;
+        }
+        if (adsb_reader_configure(adsb_arg, aerr, sizeof(aerr)) != 0) {
+            fprintf(stderr, "sloth: --adsb %s: %s\n", adsb_arg, aerr);
+            return 2;
+        }
+        char apath[256];
+        if (adsb_spec_parse(adsb_arg, apath, sizeof(apath), NULL, 0) == 0)
+            fprintf(stderr, "sloth: --adsb reading %s about once a second "
+                            "(read-only; no SDR, no network)\n", apath);
     }
 
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
@@ -1733,6 +1765,7 @@ int main(int argc, char **argv) {
     bt_capture_run();   /* after the drop: opens as the run's account */
 #endif
     gps_reader_run();   /* after the drop: gpsd is dialled from here */
+    adsb_reader_run();  /* after the drop: the file is read as the run's account */
     event_wake_init();
     updater_init(check_manifest);
     if (headless) {
@@ -1803,6 +1836,7 @@ int main(int argc, char **argv) {
 
     if (!headless) tui_cleanup();
     gps_reader_stop();
+    adsb_reader_stop();
 #ifdef WITH_PCAP
     probe_stop();
     capture_stop();

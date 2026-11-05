@@ -8,6 +8,7 @@
 #include "ble_hci.h"
 #include "persist_health.h"
 #include "gps.h"
+#include "adsb.h"
 #include "position_track.h"
 #include "history.h"
 #include "bandwidth.h"
@@ -111,6 +112,9 @@ static void st_health(sloth_state_t *s, const poll_ctx_t *ctx) {
     /* --location / --gps (2026-10-27): the reader's state into s->gps,
      * before anything this tick stamps a position. */
     gps_health_poll(s, ctx->wall);
+    /* --adsb (#26 slice 1): expire the aircraft the decoder stopped
+     * reporting and copy the table, before anything this tick reads it. */
+    adsb_health_poll(s, ctx->wall, ctx->mono_ms);
     /* #96: per-sink write-failure counts, for the cannot-persist badge. */
     persist_health_poll(&s->persist_health);
     /* #85: re-check each pinned ifindex still names its interface; a
@@ -303,6 +307,21 @@ static void st_sensors(sloth_state_t *s, const poll_ctx_t *ctx) {
         sensor_t *gn = sensor_register(s, SENSOR_GPS, "GNSS receiver",
                                        s->gps.src, ctx->wall);
         sensor_observe(gn, s->gps.sentences, ctx->wall);
+    }
+    /* ADS-B (#26 slice 1): the --adsb decoder file, observing parsed
+     * documents. A missing, unreadable or malformed file, or a decoder
+     * whose clock stopped advancing, is the registry's ERROR; recovery
+     * puts it back to ACTIVE (or PRESENT before any document). After the
+     * GNSS receiver, for the same id-slot reason. */
+    if (s->adsb.configured) {
+        sensor_t *ad = sensor_register(s, SENSOR_ADSB, "ADS-B decoder",
+                                       s->adsb.src, ctx->wall);
+        sensor_observe(ad, s->adsb.reads, ctx->wall);
+        if (s->adsb.state == ADSB_ERROR || s->adsb.state == ADSB_STALE)
+            sensor_set_state(ad, SENSOR_STATE_ERROR);
+        else
+            sensor_set_state(ad, s->adsb.reads ? SENSOR_STATE_ACTIVE
+                                               : SENSOR_STATE_PRESENT);
     }
 }
 

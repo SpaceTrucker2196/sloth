@@ -3190,6 +3190,85 @@ typedef struct {
     int           sec_n, sec_head;
 } gnss_hist_t;
 
+/* ── ADS-B aircraft (#26, slice 1, 2026-11-05) ───────────────────────
+ * What a local, already-running Mode S / ADS-B decoder (readsb,
+ * dump1090-fa) lists in its aircraft.json, tailed by --adsb
+ * (docs/wiki/adsb.md). sloth never opens or tunes the SDR. One row per
+ * address the decoder reports: the decoder's own merge of everything it
+ * heard, sticky here (a key the newest document omits keeps the row's
+ * last value; a present key overwrites it). Fields per readsb's
+ * README-json.md; units as the decoder writes them (feet, knots,
+ * ft/min, degrees, dBFS). Kept by src/adsb.c under its lock and copied
+ * once per poll by adsb_health_poll(): s->adsb_rows / s->adsb_gone
+ * point at that copy, never at the module's table, and are pointers
+ * rather than arrays so sloth_state_t does not grow by the table. */
+#define ADSB_MAX_AIRCRAFT 256
+
+enum {
+    ADSB_EMERG_ABSENT = -1, ADSB_EMERG_NONE = 0, ADSB_EMERG_GENERAL,
+    ADSB_EMERG_LIFEGUARD, ADSB_EMERG_MINFUEL, ADSB_EMERG_NORDO,
+    ADSB_EMERG_UNLAWFUL, ADSB_EMERG_DOWNED, ADSB_EMERG_RESERVED
+};
+
+typedef struct {
+    uint32_t icao;             /* 24-bit address */
+    uint8_t  non_icao;         /* the decoder's hex had a leading '~':
+                                * a non-ICAO (e.g. TIS-B) address, a
+                                * different key space from icao */
+    uint8_t  on_ground;        /* alt_baro was "ground" */
+    uint8_t  has_alt_baro, has_alt_geom, has_gs, has_track;
+    uint8_t  has_baro_rate, has_geom_rate, has_pos, has_rssi;
+    uint8_t  has_seen, has_seen_pos, has_messages;
+    int8_t   emergency;        /* ADSB_EMERG_*; ABSENT never reported */
+    char     type[16];         /* "adsb_icao", "mode_s", "mlat", "tisb_other", ... */
+    char     flight[9];        /* callsign, trailing spaces trimmed; "" absent */
+    char     squawk[5];        /* 4 octal digits; "" absent */
+    char     category[3];      /* "A0".."D7"; "" absent */
+    int32_t  alt_baro;         /* ft (not meaningful while on_ground) */
+    int32_t  alt_geom;         /* ft, WGS84 ellipsoid */
+    int32_t  baro_rate, geom_rate;   /* ft/min */
+    double   gs;               /* kt */
+    double   track;            /* degrees true */
+    double   lat, lon;         /* only as a valid pair */
+    double   rssi;             /* dBFS */
+    double   seen, seen_pos;   /* s before the document's "now" */
+    uint64_t messages;
+    /* Kept by src/adsb.c, not parsed: */
+    time_t   first_seen;       /* wall, the first document that listed it */
+    time_t   last_seen;        /* wall, the decoder's last message: read - seen */
+    time_t   pos_ts;           /* wall of the position: read - seen_pos */
+    uint64_t last_mono_ms;     /* last_seen on the monotonic clock: the expiry runs on it */
+    int16_t  alt_band;         /* the held altitude band (adsb_alt_band) */
+    int16_t  cell_lat, cell_lon;   /* the held position cell, 0.1 degree */
+    uint8_t  has_cell;
+} adsb_aircraft_t;
+
+/* The --adsb source's health: the decoder's freshness by its own "now"
+ * (or the file's mtime when a document has none) advancing, measured on
+ * sloth's monotonic clock; the read and parse tallies. */
+typedef enum {
+    ADSB_NONE = 0, ADSB_WAITING, ADSB_LIVE, ADSB_STALE, ADSB_ERROR
+} adsb_state_t;
+
+typedef struct {
+    int      configured;
+    int      state;            /* adsb_state_t */
+    int      fresh_bucket;     /* -1 never, 0 within ADSB_STALE_S, 1 older */
+    int      age_s;            /* since the decoder's clock last advanced, -1 never */
+    char     src[48];          /* "file:/run/readsb/aircraft.json" */
+    char     err[96];          /* the last read or parse failure, "" none */
+    time_t   last_read;        /* wall of the last document parsed, 0 never */
+    double   decoder_now;      /* the newest document's "now", 0 absent */
+    uint64_t messages;         /* the decoder's lifetime Mode S message count */
+    uint64_t reads;            /* documents parsed */
+    uint64_t read_errors;      /* opens / reads that failed, oversize files */
+    uint64_t parse_errors;     /* documents refused as malformed */
+    uint64_t overflow;         /* aircraft refused for the ADSB_MAX_AIRCRAFT cap */
+    uint64_t bad_entries;      /* aircraft entries refused (no or bad hex) */
+    uint64_t expired;          /* rows retired after ADSB_EXPIRE_S unheard */
+    int      aircraft;         /* rows now */
+} adsb_health_t;
+
 typedef struct {
     int      configured;       /* --bt-capture given */
     int      state;            /* bt_cap_state_t */
@@ -3683,6 +3762,16 @@ typedef struct {
                                        * the cursor follows the satellite,
                                        * not the index, across a re-sort */
     int              gnss_detail;
+    /* ADS-B (#26 slice 1, 2026-11-05): the --adsb source's health and
+     * the aircraft table, filled by adsb_health_poll(). The two row
+     * pointers name that poll's copy (NULL before the first poll);
+     * adsb_gone holds the rows retired by this poll's expiry, for the
+     * JSONL "gone" record. */
+    adsb_health_t    adsb;
+    const adsb_aircraft_t *adsb_rows;
+    int              adsb_count;
+    const adsb_aircraft_t *adsb_gone;
+    int              adsb_gone_count;
     bredr_lap_t      bredr_laps[MAX_BREDR_LAPS];
     int              bredr_lap_count;
 

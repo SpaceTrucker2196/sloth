@@ -238,6 +238,10 @@ CORE_COMMON_SRCS += src/poll.c
 # are pure; the reader opens a serial device or a gpsd TCP stream and
 # needs neither libpcap nor SQLite, so it is common too.
 CORE_COMMON_SRCS += src/gps.c src/capture/gps_reader.c src/position_track.c
+# --adsb (#26 slice 1, 2026-11-05): the aircraft.json parser and table are
+# pure; the reader re-reads a local file and needs neither libpcap nor
+# SQLite.
+CORE_COMMON_SRCS += src/adsb.c src/capture/adsb_reader.c
 
 # Feature-gated core sources, grouped by the flag that gates them.
 # CORE_SRCS_ALL is their union with the common list: the test and fuzz

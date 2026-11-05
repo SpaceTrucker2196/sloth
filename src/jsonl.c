@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include "jsonl.h"
 #include "gps.h"
+#include "adsb.h"
 #include "position_track.h"
 #include "sloth_clock.h"
 #include "netstr.h"
@@ -97,7 +98,8 @@ static jsonl_dedup_slot_t g_dedup[JSONL_DEDUP_SLOTS];
 
 /* Snapshot event "kinds" — one per deduped emitter. */
 enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH, JD_WIFI_REG,
-       JD_BLE_DEVICE, JD_BLE_ALERT, JD_GNSS_FIX, JD_GNSS_SKY, JD_GNSS_SAT };
+       JD_BLE_DEVICE, JD_BLE_ALERT, JD_GNSS_FIX, JD_GNSS_SKY, JD_GNSS_SAT,
+       JD_ADSB_AIRCRAFT };
 
 static uint64_t fnv1a(const void *data, size_t n, uint64_t h) {
     const unsigned char *p = (const unsigned char *)data;
@@ -2205,6 +2207,15 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * the TPVs gpsd omits it from) as bands only (src/gps.c
          * gps_*_band); the satellite counts move too often to sign. */
         int      gnss_time_off_band, gnss_cn0_band, gnss_jam_band;
+        /* --adsb (#26 slice 1): the source's state (which already folds
+         * its freshness: live within ADSB_STALE_S of the decoder's clock
+         * last advancing, stale after), and none/some bands of the
+         * tallies and the error. Never the age, the aircraft count, the
+         * reads or the decoder's message count: each moves every
+         * second the decoder is writing. */
+        int      adsb_configured, adsb_state;
+        int      adsb_read_err_any, adsb_parse_err_any, adsb_overflow_any;
+        int      adsb_bad_any, adsb_err_any;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -2324,6 +2335,13 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.gnss_time_off_band = s->gps.has_time_off ? s->gps.time_off_band : -1;
     sig.gnss_cn0_band      = gps_cn0_band(s->gps.cn0_mean);
     sig.gnss_jam_band      = gps_jam_band(s->gps.jam);
+    sig.adsb_configured    = s->adsb.configured;
+    sig.adsb_state         = s->adsb.state;
+    sig.adsb_read_err_any  = s->adsb.read_errors > 0;
+    sig.adsb_parse_err_any = s->adsb.parse_errors > 0;
+    sig.adsb_overflow_any  = s->adsb.overflow > 0;
+    sig.adsb_bad_any       = s->adsb.bad_entries > 0;
+    sig.adsb_err_any       = s->adsb.err[0] != '\0';
     const int pcap_on = alert_pcap_enabled();
     sig.pcap_swept_band     = pcap_on ? decade_band(alert_pcap_swept()) : -1;
     sig.pcap_sweep_err_band = pcap_on
@@ -2653,6 +2671,24 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
             kv_int(buf, LINEBUF, &off, "gnss_jam", g->jam);
         }
     }
+    /* --adsb (#26 slice 1), ONLY with --adsb, so a run without it writes
+     * exactly what it wrote before. Appended. */
+    if (s->adsb.configured) {
+        const adsb_health_t *a = &s->adsb;
+        kv_str(buf, LINEBUF, &off, "adsb_state", adsb_state_name(a->state));
+        kv_str(buf, LINEBUF, &off, "adsb_src", a->src);
+        kv_int(buf, LINEBUF, &off, "adsb_age_s", a->age_s);
+        kv_int(buf, LINEBUF, &off, "adsb_last_read", (long long)a->last_read);
+        kv_int(buf, LINEBUF, &off, "adsb_aircraft", a->aircraft);
+        kv_int(buf, LINEBUF, &off, "adsb_messages", (long long)a->messages);
+        kv_int(buf, LINEBUF, &off, "adsb_reads", (long long)a->reads);
+        kv_int(buf, LINEBUF, &off, "adsb_read_errors", (long long)a->read_errors);
+        kv_int(buf, LINEBUF, &off, "adsb_parse_errors", (long long)a->parse_errors);
+        kv_int(buf, LINEBUF, &off, "adsb_overflow", (long long)a->overflow);
+        kv_int(buf, LINEBUF, &off, "adsb_bad_entries", (long long)a->bad_entries);
+        kv_int(buf, LINEBUF, &off, "adsb_expired", (long long)a->expired);
+        kv_str(buf, LINEBUF, &off, "adsb_err", a->err);
+    }
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }
@@ -2779,6 +2815,86 @@ void jsonl_emit_gnss(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "sky_ts", (long long)k->ts);
         end_obj(buf, LINEBUF, &off);
         emit_line(buf);
+    }
+}
+
+/* ── ADS-B aircraft (#26 slice 1, 2026-11-05) ───────────────────────
+ *
+ * adsb_aircraft: one record per aircraft the --adsb decoder lists,
+ * keyed by address (icao + non_icao), change-only on adsb_row_sig() -
+ * the held altitude band, the held 0.1 degree position cell, squawk,
+ * emergency, callsign, category, and first_seen - never on the figures
+ * that move every second (src/adsb.h has the bands and why). So an
+ * aircraft is a record when it first appears, one per band or cell it
+ * crosses, one per squawk / emergency / callsign change, the 300 s
+ * heartbeat while it stays, and one with "state":"gone" when the
+ * decoder has not heard it for ADSB_EXPIRE_S. The gone record is
+ * written unconditionally (it happens once per row), and also re-signs
+ * the slot, so the same address coming back is a fresh record. Every
+ * figure is written without %f (gps_fmt_fixed; locale). */
+static void emit_adsb_row(const adsb_aircraft_t *a, const char *state,
+                          const char *src, time_t now) {
+    char buf[LINEBUF]; int off = 0;
+    char hex[8];
+    snprintf(hex, sizeof(hex), "%s%06x", a->non_icao ? "~" : "",
+             (unsigned)(a->icao & 0xffffffu));
+    start_obj(buf, LINEBUF, &off, "adsb_aircraft", now);
+    kv_str(buf, LINEBUF, &off, "hex", hex);
+    kv_int(buf, LINEBUF, &off, "non_icao", a->non_icao);
+    kv_str(buf, LINEBUF, &off, "state", state);
+    kv_str(buf, LINEBUF, &off, "src", src);
+    kv_str(buf, LINEBUF, &off, "source_type", a->type);
+    kv_str(buf, LINEBUF, &off, "flight", a->flight);
+    kv_str(buf, LINEBUF, &off, "squawk", a->squawk);
+    kv_str(buf, LINEBUF, &off, "category", a->category);
+    kv_str(buf, LINEBUF, &off, "emergency", adsb_emergency_name(a->emergency));
+    kv_int(buf, LINEBUF, &off, "on_ground", a->on_ground);
+    if (a->has_alt_baro) kv_int(buf, LINEBUF, &off, "alt_baro", a->alt_baro);
+    if (a->has_alt_geom) kv_int(buf, LINEBUF, &off, "alt_geom", a->alt_geom);
+    kv_int(buf, LINEBUF, &off, "alt_band", a->alt_band == INT16_MIN ? -1 : a->alt_band);
+    if (a->has_gs)        kv_fixed(buf, &off, "gs", a->gs, 1);
+    if (a->has_track)     kv_fixed(buf, &off, "track", a->track, 1);
+    if (a->has_baro_rate) kv_int(buf, LINEBUF, &off, "baro_rate", a->baro_rate);
+    if (a->has_geom_rate) kv_int(buf, LINEBUF, &off, "geom_rate", a->geom_rate);
+    if (a->has_pos) {
+        kv_fixed(buf, &off, "lat", a->lat, 5);
+        kv_fixed(buf, &off, "lon", a->lon, 5);
+        kv_int(buf, LINEBUF, &off, "pos_ts", (long long)a->pos_ts);
+    }
+    if (a->has_rssi)      kv_fixed(buf, &off, "rssi", a->rssi, 1);
+    if (a->has_messages)  kv_int(buf, LINEBUF, &off, "messages", (long long)a->messages);
+    kv_int(buf, LINEBUF, &off, "first_seen", (long long)a->first_seen);
+    kv_int(buf, LINEBUF, &off, "last_seen", (long long)a->last_seen);
+    end_obj(buf, LINEBUF, &off);
+    emit_line(buf);
+}
+
+static void adsb_key(const adsb_aircraft_t *a, uint8_t key[4]) {
+    key[0] = (uint8_t)(a->icao >> 16);
+    key[1] = (uint8_t)(a->icao >> 8);
+    key[2] = (uint8_t)a->icao;
+    key[3] = a->non_icao;
+}
+
+void jsonl_emit_adsb(const sloth_state_t *s) {
+    if (!any_sink() || !s || !s->adsb.configured) return;
+    time_t now = sloth_wall();
+    for (int i = 0; s->adsb_gone && i < s->adsb_gone_count; i++) {
+        const adsb_aircraft_t *a = &s->adsb_gone[i];
+        uint8_t key[4];
+        adsb_key(a, key);
+        (void)jsonl_changed(JD_ADSB_AIRCRAFT, key, sizeof(key),
+                            ~adsb_row_sig(a), now);
+        emit_adsb_row(a, "gone", s->adsb.src, now);
+    }
+    for (int i = 0; s->adsb_rows && i < s->adsb_count; i++) {
+        const adsb_aircraft_t *a = &s->adsb_rows[i];
+        uint8_t key[4];
+        adsb_key(a, key);
+        if (!jsonl_changed(JD_ADSB_AIRCRAFT, key, sizeof(key),
+                           adsb_row_sig(a), now))
+            continue;
+        emit_adsb_row(a, "live", s->adsb.src, now);
     }
 }
 
@@ -3066,6 +3182,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_ble_devices       (s);   /* #144 slice 4 */
     jsonl_emit_ble_alerts        (s);
     jsonl_emit_gnss              (s);   /* 2026-11-02 */
+    jsonl_emit_adsb              (s);   /* #26 slice 1 */
     /* Last: the sensor's self-report about this tick, after every
      * observation in it has been emitted (#91 slice 3). */
     jsonl_emit_sensor_health     (s);

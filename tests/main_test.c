@@ -101,6 +101,7 @@ void run_pcap_write_tests(void);
 void run_iface_graph_tests(void);
 void run_geo_tests(void);
 void run_gps_tests(void);
+void run_adsb_tests(void);               /* tests/test_adsb.c (#26 slice 1) */
 void run_gnss_view_tests(void);          /* tests/test_gnss_view.c (2026-11-02) */
 void run_dhcp_tests(void);
 void run_rtt_tests(void);
@@ -307,6 +308,7 @@ int main(void) {
     run_iface_graph_tests();
     run_geo_tests();
     run_gps_tests();
+    run_adsb_tests();
     run_gnss_view_tests();
     run_dhcp_tests();
     run_rtt_tests();
