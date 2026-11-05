@@ -167,7 +167,7 @@
     r.appendChild(cell("c-st", a.state));
     r.appendChild(cell("c-ag d-dim", age(a.last_seen, now)));
     r.tabIndex = 0;
-    function pick() { sel = a.hex; detail(a, now); drawRows(); plot(last); }
+    function pick() { sel = a.hex; detail(a, now); drawRows(); histLoad(a.hex); }
     r.addEventListener("click", pick);
     r.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
     return r;
@@ -214,7 +214,11 @@
       kv.appendChild(el("dd", "", p[1]));
     });
   }
-  function closeDetail() { $("adsb-detail").hidden = true; sel = null; drawRows(); plot(last); }
+  function closeDetail() {
+    $("adsb-detail").hidden = true;
+    sel = null; histHex = null; histPts = [];
+    drawRows(); drawSeen(); plot(last);
+  }
 
   // ── the plot: positions and tracks, north up, no map ─────────────
   // Equirectangular around the rows' own centre, longitude scaled by
@@ -235,6 +239,10 @@
       (a.track_pts || []).forEach(function (p) { pts.push(p); });
       if (num(a.lat)) pts.push([0, a.lat, a.lon, null]);
     });
+    // The selected aircraft's recorded track (sloth.db), as [ts, lat, lon, alt].
+    var rec = histHex && histHex === sel ? histPts.filter(function (p) { return num(p[3]) && num(p[4]); })
+      .map(function (p) { return [p[0], p[3], p[4], p[2]]; }) : [];
+    rec.forEach(function (p) { pts.push(p); });
     var dim = cssVar("--tui-dim", "#888");
     g.font = "11px monospace";
     if (!pts.length) {
@@ -263,6 +271,22 @@
     g.textAlign = "left";
     g.fillText(km + " km", 10, H - 14);
     g.fillText("N↑", W - 24, 14);
+    if (rec.length) {
+      g.setLineDash([4, 3]);
+      g.lineWidth = 1.5;
+      for (var ri = 1; ri < rec.length; ri++) {
+        var ra = num(rec[ri][3]) ? Math.max(0, rec[ri][3]) : 0;
+        g.strokeStyle = heatColor(ra / ALT_SPAN);
+        g.beginPath(); g.moveTo(X(rec[ri - 1][2]), Y(rec[ri - 1][1])); g.lineTo(X(rec[ri][2]), Y(rec[ri][1])); g.stroke();
+      }
+      g.setLineDash([]);
+      if (!(j.rows || []).some(function (a) { return a.hex === sel && num(a.lat); })) {
+        var lp = rec[rec.length - 1];
+        g.fillStyle = dim;
+        g.beginPath(); g.arc(X(lp[2]), Y(lp[1]), 4, 0, Math.PI * 2); g.fill();
+        g.fillText(sel + " (recorded)", X(lp[2]) + 7, Y(lp[1]) - 6);
+      }
+    }
     (j.rows || []).forEach(function (a) {
       var tp = a.track_pts || [];
       var gone = a.state === "gone", picked = sel === a.hex;
@@ -315,11 +339,201 @@
     });
   }
 
+  // ── history: sloth.db's adsb_aircraft and adsb_sightings ─────────
+  // (web_rfhist.h) Every aircraft seen over a window, a page at a time,
+  // and one aircraft's recorded sightings: its altitude profile here and
+  // its track (dashed) on the positions plot. Read once a minute.
+  var SEEN_MS = 60000, SEEN_PAGE = 100, seenAt = 0, seenGen = 0, histGen = 0;
+  var histHex = null, histPts = [], ST = null, seenRows = [], seenLast = null, seenMore = false;
+  function when(ts) {
+    if (!num(ts) || ts <= 0) return "-";
+    var d = new Date(ts * 1000), p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return (d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+  var SEEN_COLS = [
+    { k: "hx", label: "HEX", w: 8, min: 6, type: "text", val: function (a) { return a.hex; } },
+    { k: "fl", label: "FLIGHT", w: 9, min: 4, type: "text", val: function (a) { return a.flight || ""; } },
+    { k: "sq", label: "SQWK", w: 5, min: 4, type: "text", val: function (a) { return a.squawk || ""; } },
+    { k: "ct", label: "CAT", w: 4, min: 3, type: "text", val: function (a) { return a.category || ""; } },
+    { k: "fs", label: "FIRST", w: 11, min: 5, type: "time", val: val("first_seen") },
+    { k: "ls", label: "LAST", w: 11, min: 5, type: "time", val: val("last_seen") },
+    { k: "vi", label: "VISITS", w: 6, min: 3, num: true, type: "num", val: val("visits") },
+    { k: "si", label: "SIGHTINGS", w: 9, min: 4, num: true, type: "num", val: val("sightings") },
+    { k: "al", label: "ALT ft", w: 13, min: 5, num: true, type: "num", val: val("alt_max") },
+    { k: "gs", label: "GS MAX", w: 7, min: 4, num: true, type: "num", val: val("gs_max") },
+    { k: "rs", label: "RSSI MAX", w: 8, min: 4, num: true, type: "num", val: val("rssi_max") },
+    { k: "em", label: "EMERG", w: 6, min: 3, type: "text", val: function (a) { return a.emergency_seen ? "yes" : ""; } }
+  ];
+  function seenTable() {
+    if (ST || !window.SlothTables || !$("adsb-seen-box")) return ST;
+    ST = window.SlothTables.make({ id: "adsb-seen", label: "aircraft seen", box: $("adsb-seen-box"),
+      head: $("adsb-seen-thead"), reset: $("adsb-seen-tools"), redraw: drawSeen, cols: SEEN_COLS });
+    return ST;
+  }
+  function drawSeen() {
+    var j = seenLast;
+    if (!j) return;
+    var t = seenTable();
+    var ordered = t ? t.sort(seenRows, true) : seenRows.slice();
+    var body = clear($("adsb-seen-rows"));
+    set("adsb-seen-count", j.have === false ? "sloth.db has no adsb_aircraft yet (sloth 12+ with --db and --adsb)" :
+      seenRows.length + (seenMore ? "+" : "") + " in " + (j.days === 1 ? "24 h" : j.days + " days") + (j.q ? " matching " + j.q : ""));
+    $("adsb-seen-more").hidden = !seenMore;
+    ordered.forEach(function (a) {
+      var r = el("div", "histrow dt-row d-normal" + (histHex === a.hex ? " on" : ""));
+      r.appendChild(cell("c-hx", a.hex));
+      r.appendChild(cell("c-fl" + (a.emergency_seen ? " h3" : ""), a.flight || "-"));
+      r.appendChild(cell("c-sq" + (SPECIAL[a.squawk] ? " h3" : ""), a.squawk || "-"));
+      r.appendChild(cell("c-ct", a.category || "-"));
+      r.appendChild(cell("c-fs d-dim", when(a.first_seen)));
+      r.appendChild(cell("c-ls", when(a.last_seen)));
+      r.appendChild(cell("c-vi n", a.visits));
+      r.appendChild(cell("c-si n", a.sightings));
+      r.appendChild(cell("c-al n " + (num(a.alt_max) ? heatClass(Math.max(0, a.alt_max) / ALT_SPAN) : "d-dim"),
+        num(a.alt_min) ? (a.alt_min === a.alt_max ? String(a.alt_max) : a.alt_min + "-" + a.alt_max) : "-"));
+      r.appendChild(cell("c-gs n", fx(a.gs_max, 0)));
+      r.appendChild(cell("c-rs n " + (num(a.rssi_max) ? heatClass(rssiFrac(a.rssi_max)) : "d-dim"), fx(a.rssi_max, 1)));
+      r.appendChild(cell("c-em" + (a.emergency_seen ? " h3" : ""), a.emergency_seen ? "yes" : "-"));
+      r.tabIndex = 0;
+      function pick() {
+        sel = a.hex;
+        var live = (rows || []).filter(function (x) { return x.hex === a.hex; })[0];
+        if (live) detail(live, num(last && last.now) ? last.now : Math.floor(Date.now() / 1000));
+        else histOnly(a);
+        drawRows();
+        histLoad(a.hex);
+      }
+      r.addEventListener("click", pick);
+      r.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+      body.appendChild(r);
+    });
+  }
+  function seenDays() { var s = $("adsb-seen-days"); return s ? s.value : "7"; }
+  function seenQ() { var q = $("adsb-seen-q"); return q ? q.value.trim() : ""; }
+  function loadSeen(more) {
+    var my = ++seenGen;
+    seenAt = Date.now();
+    var off = more ? seenRows.length : 0, q = seenQ();
+    if (q && !/^~?[0-9A-Za-z]{1,8}$/.test(q)) { set("adsb-seen-count", "search: letters and digits only"); return; }
+    getJSON("/api/adsb/seen?days=" + encodeURIComponent(seenDays()) + "&limit=" + SEEN_PAGE +
+            "&offset=" + off + (q ? "&q=" + encodeURIComponent(q) : "")).then(function (j) {
+      if (my !== seenGen) return;
+      if (j.out_of_scope) return;
+      seenLast = j;
+      seenRows = (more ? seenRows : []).concat(j.aircraft || []);
+      seenMore = !!j.more;
+      drawSeen();
+    }).catch(function (e) {
+      if (my !== seenGen) return;
+      set("adsb-seen-count", "history unavailable: " + (e && e.message ? e.message : "error") + " (needs --sloth-db)");
+    });
+  }
+  // An aircraft the decoder no longer lists: the detail panel from its
+  // inventory row alone.
+  function histOnly(a) {
+    $("adsb-detail").hidden = false;
+    set("adsb-detail-name", (a.flight || a.hex) + (a.flight ? " (" + a.hex + ")" : "") + ", not listed now");
+    clear($("adsb-detail-kv"));
+  }
+  function histLoad(hex) {
+    histHex = hex;
+    histPts = [];
+    var my = ++histGen;
+    set("adsb-hist-note", "loading");
+    getJSON("/api/adsb/aircraft?hex=" + encodeURIComponent(hex) + "&days=" + encodeURIComponent(seenDays())).then(function (j) {
+      if (my !== histGen || j.out_of_scope) return;
+      histPts = j.sightings || [];
+      var a = j.aircraft, kv = clear($("adsb-hist-kv"));
+      if (!a) {
+        set("adsb-hist-note", j.have === false ? "sloth.db has no adsb_aircraft yet" : "not in sloth.db yet");
+      } else {
+        set("adsb-hist-note", histPts.length + " recorded sightings in " + (j.days === 1 ? "24 h" : j.days + " days"));
+        [["first seen", when(a.first_seen)],
+         ["last seen", when(a.last_seen)],
+         ["visits", String(a.visits) + (a.visits > 1 ? " (came back after expiring)" : "")],
+         ["sightings recorded", String(a.sightings)],
+         ["last callsign", a.flight || "-"],
+         ["last squawk", a.squawk || "-"],
+         ["category", a.category || "-"],
+         ["altitude range", num(a.alt_min) ? a.alt_min + " to " + a.alt_max + " ft" : "-"],
+         ["top ground speed", num(a.gs_max) ? a.gs_max.toFixed(0) + " kt" : "-"],
+         ["strongest signal", num(a.rssi_max) ? a.rssi_max.toFixed(1) + " dBFS" : "-"],
+         ["position ever reported", a.pos_seen ? "yes" : "no"],
+         ["emergency ever reported", a.emergency_seen ? "yes" : "no"],
+         ["decoder source", a.source_type || "-"]
+        ].forEach(function (p) {
+          kv.appendChild(el("dt", "", p[0]));
+          kv.appendChild(el("dd", p[0] === "emergency ever reported" && a.emergency_seen ? "h3" : "", p[1]));
+        });
+        var calls = {}, sqs = {};
+        histPts.forEach(function (p) { if (p[10]) calls[p[10]] = 1; if (p[9]) sqs[p[9]] = 1; });
+        if (Object.keys(calls).length > 1) { kv.appendChild(el("dt", "", "callsigns")); kv.appendChild(el("dd", "", Object.keys(calls).join(", "))); }
+        if (Object.keys(sqs).length > 1) { kv.appendChild(el("dt", "", "squawks")); kv.appendChild(el("dd", "", Object.keys(sqs).join(", "))); }
+      }
+      profile(histPts);
+      drawSeen();
+      plot(last);
+    }).catch(function (e) {
+      if (my !== histGen) return;
+      set("adsb-hist-note", "history unavailable: " + (e && e.message ? e.message : "error"));
+    });
+  }
+  // Altitude over the recorded sightings, heat-graded; ground at the floor.
+  function profile(pts) {
+    var c = $("adsb-prof");
+    if (!c) return;
+    var dpr = window.devicePixelRatio || 1, W = Math.max(200, c.clientWidth || 400), H = 160;
+    c.width = W * dpr; c.height = H * dpr;
+    var g = c.getContext("2d");
+    if (!g) return;
+    g.scale(dpr, dpr);
+    g.clearRect(0, 0, W, H);
+    var dim = cssVar("--tui-dim", "#888");
+    g.font = "11px monospace"; g.fillStyle = dim;
+    var ap = pts.filter(function (p) { return num(p[2]); });
+    if (!ap.length) { g.fillText("no recorded altitude", 4, 14); return; }
+    var top = Math.max(1000, Math.max.apply(null, ap.map(function (p) { return p[2]; })) * 1.1);
+    var t0 = pts[0][0], t1 = pts[pts.length - 1][0], span = Math.max(1, t1 - t0);
+    function X(ts) { return pts.length === 1 ? W - 4 : 30 + (ts - t0) / span * (W - 36); }
+    function Y(alt) { return H - 14 - Math.max(0, alt) / top * (H - 24); }
+    g.fillText(Math.round(top / 100) * 100 + " ft", 2, 12);
+    g.fillText(when(t0), 30, H - 2);
+    g.textAlign = "right"; g.fillText(when(t1), W - 4, H - 2); g.textAlign = "left";
+    g.lineWidth = 1.5;
+    var px = null, py = null, pt = null;
+    ap.forEach(function (p) {
+      var x = X(p[0]), y = Y(p[2]);
+      g.strokeStyle = g.fillStyle = heatColor(Math.max(0, p[2]) / ALT_SPAN);
+      // A gap over twice the heartbeat is a separate visit: no line across it.
+      if (px !== null && p[0] - pt <= 600) { g.beginPath(); g.moveTo(px, py); g.lineTo(x, y); g.stroke(); }
+      g.fillRect(x - 1.5, y - 1.5, 3, 3);
+      if (SPECIAL[p[9]] || (p[11] && p[11] !== "none")) {
+        g.strokeStyle = cssVar("--heat-3", "#f00");
+        g.beginPath(); g.arc(x, y, 5, 0, Math.PI * 2); g.stroke();
+      }
+      px = x; py = y; pt = p[0];
+    });
+  }
+
   function show() {
     if (!$("v-adsb")) return;
     load();
-    if (!timer) timer = setInterval(function () { if (visible()) load(); }, POLL_MS);
+    if (Date.now() - seenAt > SEEN_MS) loadSeen(false);
+    if (!timer) timer = setInterval(function () {
+      if (!visible()) return;
+      load();
+      if (Date.now() - seenAt > SEEN_MS && !seenMore) loadSeen(false);
+    }, POLL_MS);
   }
+  var seenDaysSel = $("adsb-seen-days");
+  if (seenDaysSel) seenDaysSel.addEventListener("change", function () { loadSeen(false); if (histHex) histLoad(histHex); });
+  var seenQIn = $("adsb-seen-q"), qTimer = 0;
+  if (seenQIn) seenQIn.addEventListener("input", function () {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(function () { loadSeen(false); }, 300);
+  });
+  var seenMoreBtn = $("adsb-seen-more");
+  if (seenMoreBtn) seenMoreBtn.addEventListener("click", function () { loadSeen(true); });
 
   var closeBtn = $("adsb-detail-close");
   if (closeBtn) closeBtn.addEventListener("click", closeDetail);

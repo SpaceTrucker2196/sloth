@@ -1,6 +1,7 @@
 /* Embedded SQLite sink. Contract in db.h, schema in db_schema.c (#42). */
 
 #include "db.h"
+#include "adsb.h"
 #include "gps.h"
 #include "position_track.h"
 #include "beacon_snoop.h"   /* RSN_AKM_*_FAMILY */
@@ -75,6 +76,8 @@ static const char *const TIER_OBSERVATION[] = {
     "device_positions", "sensor_positions",
     /* GNSS observation (2026-11-02): the receiver's own sky and clock. */
     "gnss_fixes", "gnss_sightings",
+    /* ADS-B (#26, schema v12): an aircraft's track, change by change. */
+    "adsb_sightings",
 };
 
 /* 3x — the inventory. "Which devices were on this network in March"
@@ -86,6 +89,8 @@ static const char *const TIER_ENTITY[] = {
     "assocs", "assoc_reqs", "wifi_merged", "arp", "dhcp_leases", "top_hosts",
     "mdns_services", "nbns_names", "ssdp_devices",
     "ndp_ras", "ndp_ra_prefixes", "sensors",
+    /* ADS-B (#26, schema v12): every aircraft address ever listed. */
+    "adsb_aircraft",
 };
 
 /* 12x — the findings. These are why the operator kept the file. */
@@ -135,6 +140,7 @@ enum {
     ST_SCAN, ST_SCAN_PORT, ST_KARMA, ST_ROGUE_RADIUS,
     ST_DEV_POS, ST_SENSOR_POS,
     ST_GNSS_FIX, ST_GNSS_SIGHT,
+    ST_ADSB_AC, ST_ADSB_SIGHT,
     ST_COUNT
 };
 
@@ -151,6 +157,17 @@ static struct {
     time_t ts;
     int used;
 } g_gnss_sat_mem[DB_GNSS_SLOTS];
+
+/* ADS-B (#26, schema v12): write_adsb()'s change memory, one slot per
+ * row sloth can hold, cleared by db_open(). */
+#define DB_ADSB_HEARTBEAT_S 300
+#define DB_ADSB_SLOTS ADSB_MAX_AIRCRAFT
+static struct {
+    uint32_t icao;
+    uint8_t  non_icao, used;
+    uint64_t sig;
+    time_t   ts;
+} g_adsb_mem[DB_ADSB_SLOTS];
 
 /* The ST_DEVICE upsert spells the MAC-keyed camera bits as literals. */
 #if CAM_SIG_SETUP_SSID != 2 || CAM_SIG_SETUP_OUI != 16
@@ -629,6 +646,45 @@ static const char *const SQL[ST_COUNT] = {
 [ST_GNSS_SIGHT] =
     "INSERT OR REPLACE INTO gnss_sightings (last_seen,gnssid,prn,svid,el,az,"
     "cn0,used,health) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+/* ADS-B (#26, schema v12). The inventory row keeps the earliest
+ * first_seen, the newest non-empty callsign / squawk / category, the
+ * altitude, speed and RSSI extremes, and counts a visit each time
+ * sloth's own first_seen for the address moves (the row expired and
+ * the address came back). visit_first is that first_seen. */
+[ST_ADSB_AC] =
+    "INSERT INTO adsb_aircraft (hex,non_icao,first_seen,last_seen,visit_first,"
+    "visits,sightings,flight,squawk,category,source_type,emergency_seen,"
+    "alt_min,alt_max,gs_max,rssi_max,messages,pos_seen)"
+    " VALUES (?1,?2,?3,?4,?3,1,1,NULLIF(?5,''),NULLIF(?6,''),NULLIF(?7,''),"
+    "NULLIF(?8,''),?9,?10,?10,?11,?12,?13,?14)"
+    " ON CONFLICT(hex) DO UPDATE SET"
+    "  first_seen=MIN(adsb_aircraft.first_seen, excluded.first_seen),"
+    "  last_seen=MAX(adsb_aircraft.last_seen, excluded.last_seen),"
+    "  visits=adsb_aircraft.visits +"
+    "    (excluded.visit_first <> adsb_aircraft.visit_first),"
+    "  visit_first=excluded.visit_first,"
+    "  sightings=adsb_aircraft.sightings + 1,"
+    "  flight=COALESCE(excluded.flight, adsb_aircraft.flight),"
+    "  squawk=COALESCE(excluded.squawk, adsb_aircraft.squawk),"
+    "  category=COALESCE(excluded.category, adsb_aircraft.category),"
+    "  source_type=COALESCE(excluded.source_type, adsb_aircraft.source_type),"
+    "  emergency_seen=MAX(adsb_aircraft.emergency_seen, excluded.emergency_seen),"
+    "  alt_min=COALESCE(MIN(adsb_aircraft.alt_min, excluded.alt_min),"
+    "    adsb_aircraft.alt_min, excluded.alt_min),"
+    "  alt_max=COALESCE(MAX(adsb_aircraft.alt_max, excluded.alt_max),"
+    "    adsb_aircraft.alt_max, excluded.alt_max),"
+    "  gs_max=COALESCE(MAX(adsb_aircraft.gs_max, excluded.gs_max),"
+    "    adsb_aircraft.gs_max, excluded.gs_max),"
+    "  rssi_max=COALESCE(MAX(adsb_aircraft.rssi_max, excluded.rssi_max),"
+    "    adsb_aircraft.rssi_max, excluded.rssi_max),"
+    "  messages=COALESCE(excluded.messages, adsb_aircraft.messages),"
+    "  pos_seen=MAX(adsb_aircraft.pos_seen, excluded.pos_seen)",
+[ST_ADSB_SIGHT] =
+    "INSERT OR REPLACE INTO adsb_sightings (last_seen,hex,heard,flight,squawk,"
+    "emergency,category,on_ground,alt_baro,alt_geom,alt_band,gs,track,"
+    "baro_rate,lat,lon,rssi,messages,source_type) VALUES (?1,?2,?3,"
+    "NULLIF(?4,''),NULLIF(?5,''),NULLIF(?6,''),NULLIF(?7,''),?8,?9,?10,?11,"
+    "?12,?13,?14,?15,?16,?17,?18,NULLIF(?19,''))",
 /* The key's newest row, which the write above continues instead of
  * starting one under the engine's first_seen (#170). The engine keeps
  * first_seen across a reopen in its side table, but that table is LRU
@@ -983,6 +1039,9 @@ static const db_step_t g_steps[] = {
       " only" },
     { 10, db_schema_migrate_v10_sql, TABLES_NONE,
       "alert_incidents rides the unconditional schema; stamp only" },
+    { 11, db_schema_migrate_v11_sql, TABLES_NONE,
+      "adsb_aircraft and adsb_sightings ride the unconditional schema;"
+      " stamp only" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -1125,6 +1184,7 @@ int db_open(const char *path) {
      * writes the current sky whole. */
     memset(&g_gnss_fix_mem, 0, sizeof(g_gnss_fix_mem));
     memset(g_gnss_sat_mem, 0, sizeof(g_gnss_sat_mem));
+    memset(g_adsb_mem, 0, sizeof(g_adsb_mem));
     /* The #error above checks the headers; this checks the library the
      * dynamic linker actually loaded, which can be older on a host the
      * binary was copied to (#142). Before anything touches the path:
@@ -1933,6 +1993,86 @@ static void write_gnss(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* ADS-B (#26, schema v12): one adsb_sightings row and an
+ * adsb_aircraft upsert per aircraft when adsb_row_sig() changes or
+ * DB_ADSB_HEARTBEAT_S passed - the adsb_aircraft JSONL record's rule,
+ * on this writer's own memory so the two sinks never depend on each
+ * other. Never once a second: the signature holds bands and cells, not
+ * the raw figures. A slot quiet for two heartbeats is free again. */
+static void write_adsb(const sloth_state_t *s, time_t now) {
+    if (!s->adsb.configured || !s->adsb_rows) return;
+    for (int i = 0; i < s->adsb_count; i++) {
+        const adsb_aircraft_t *a = &s->adsb_rows[i];
+        uint64_t sig = adsb_row_sig(a);
+        int slot = -1, free_slot = -1;
+        for (int j = 0; j < DB_ADSB_SLOTS; j++) {
+            if (g_adsb_mem[j].used && g_adsb_mem[j].icao == a->icao &&
+                g_adsb_mem[j].non_icao == a->non_icao) { slot = j; break; }
+            if (free_slot < 0 && (!g_adsb_mem[j].used ||
+                now - g_adsb_mem[j].ts > 2 * DB_ADSB_HEARTBEAT_S))
+                free_slot = j;
+        }
+        if (slot >= 0 && g_adsb_mem[slot].sig == sig &&
+            now - g_adsb_mem[slot].ts < DB_ADSB_HEARTBEAT_S)
+            continue;
+        char hex[8];
+        snprintf(hex, sizeof(hex), "%s%06x", a->non_icao ? "~" : "",
+                 (unsigned)(a->icao & 0xffffffu));
+        int has_alt = !a->on_ground && (a->has_alt_baro || a->has_alt_geom);
+        int alt = a->has_alt_baro ? a->alt_baro : a->alt_geom;
+        const char *em = adsb_emergency_name(a->emergency);
+
+        sqlite3_stmt *st = g_st[ST_ADSB_AC];
+        bind_txt(st, 1, hex);
+        sqlite3_bind_int(st, 2, a->non_icao);
+        sqlite3_bind_int64(st, 3, (sqlite3_int64)(a->first_seen ? a->first_seen : now));
+        sqlite3_bind_int64(st, 4, (sqlite3_int64)now);
+        bind_txt(st, 5, a->flight);
+        bind_txt(st, 6, a->squawk);
+        bind_txt(st, 7, a->category);
+        bind_txt(st, 8, a->type);
+        sqlite3_bind_int(st, 9, a->emergency > ADSB_EMERG_NONE);
+        if (has_alt) sqlite3_bind_int(st, 10, alt);
+        bind_opt_real(st, 11, a->has_gs, a->gs);
+        bind_opt_real(st, 12, a->has_rssi, a->rssi);
+        if (a->has_messages) sqlite3_bind_int64(st, 13, (sqlite3_int64)a->messages);
+        sqlite3_bind_int(st, 14, a->has_pos);
+        step_reset(ST_ADSB_AC);
+
+        st = g_st[ST_ADSB_SIGHT];
+        sqlite3_bind_int64(st, 1, (sqlite3_int64)now);
+        bind_txt(st, 2, hex);
+        if (a->last_seen) sqlite3_bind_int64(st, 3, (sqlite3_int64)a->last_seen);
+        bind_txt(st, 4, a->flight);
+        bind_txt(st, 5, a->squawk);
+        bind_txt(st, 6, em);
+        bind_txt(st, 7, a->category);
+        sqlite3_bind_int(st, 8, a->on_ground);
+        if (a->has_alt_baro) sqlite3_bind_int(st, 9, a->alt_baro);
+        if (a->has_alt_geom) sqlite3_bind_int(st, 10, a->alt_geom);
+        sqlite3_bind_int(st, 11, a->alt_band == INT16_MIN ? -1 : a->alt_band);
+        bind_opt_real(st, 12, a->has_gs, a->gs);
+        bind_opt_real(st, 13, a->has_track, a->track);
+        if (a->has_baro_rate) sqlite3_bind_int(st, 14, a->baro_rate);
+        else if (a->has_geom_rate) sqlite3_bind_int(st, 14, a->geom_rate);
+        bind_opt_real(st, 15, a->has_pos, a->lat);
+        bind_opt_real(st, 16, a->has_pos, a->lon);
+        bind_opt_real(st, 17, a->has_rssi, a->rssi);
+        if (a->has_messages) sqlite3_bind_int64(st, 18, (sqlite3_int64)a->messages);
+        bind_txt(st, 19, a->type);
+        step_reset(ST_ADSB_SIGHT);
+
+        if (slot < 0) slot = free_slot;
+        if (slot >= 0) {
+            g_adsb_mem[slot].used = 1;
+            g_adsb_mem[slot].icao = a->icao;
+            g_adsb_mem[slot].non_icao = a->non_icao;
+            g_adsb_mem[slot].sig = sig;
+            g_adsb_mem[slot].ts = now;
+        }
+    }
+}
+
 static void write_events(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->alert_count; i++) {
         const alert_t *a = &s->alerts[i];
@@ -2534,6 +2674,7 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_detector_evidence(s, now);
     write_positions      ();
     write_gnss           (s, now);
+    write_adsb           (s, now);
 
     if (g_disabled) {
         exec("ROLLBACK", "rollback");

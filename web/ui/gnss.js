@@ -181,7 +181,7 @@
     r.appendChild(tc);
     r.appendChild(cell("c-ag d-dim", age(s.ts, now)));
     r.tabIndex = 0;
-    function pick() { sel = { gnssid: s.gnssid, prn: s.prn }; detail(s, now); drawRows(); }
+    function pick() { sel = { gnssid: s.gnssid, prn: s.prn }; detail(s, now); drawRows(); hist(s.gnssid, s.prn); }
     r.addEventListener("click", pick);
     r.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
     r._trail = [c, s.points];
@@ -347,11 +347,148 @@
     });
   }
 
+  // ── history: sloth.db's gnss_sightings (web_rfhist.h) ────────────
+  // The satellites seen over a window, and one satellite's C/N0 and
+  // elevation over it. Read once a minute while the view shows, not at
+  // POLL_MS: sloth writes a sighting per banded change, not per second.
+  var SEEN_MS = 60000, seenAt = 0, seenGen = 0, histSel = null, histGen = 0;
+  function when(ts) {
+    if (!num(ts) || ts <= 0) return "-";
+    var d = new Date(ts * 1000), p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return (d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+  var ST = null, seenRows = [], seenLast = null;
+  var SEEN_COLS = [
+    { k: "gn", label: "GNSS", w: 9, min: 4, type: "text", val: function (g) { return g.gnss; } },
+    { k: "pr", label: "PRN", w: 5, min: 3, num: true, type: "num", val: val("prn") },
+    { k: "sv", label: "SV", w: 4, min: 2, num: true, type: "num", val: val("svid") },
+    { k: "fs", label: "FIRST", w: 11, min: 5, type: "time", val: val("first_seen") },
+    { k: "ls", label: "LAST", w: 11, min: 5, type: "time", val: val("last_seen") },
+    { k: "rc", label: "RECORDS", w: 8, min: 4, num: true, type: "num", val: val("records") },
+    { k: "us", label: "USED %", w: 7, min: 4, num: true, type: "num", val: val("used_pct") },
+    { k: "cx", label: "C/N0 MAX", w: 8, min: 4, num: true, type: "num", val: val("cn0_max") },
+    { k: "cm", label: "C/N0 MEAN", w: 9, min: 4, num: true, type: "num", val: val("cn0_mean") },
+    { k: "el", label: "EL MAX", w: 7, min: 3, num: true, type: "num", val: val("el_max") }
+  ];
+  function seenTable() {
+    if (ST || !window.SlothTables || !$("gnss-seen-box")) return ST;
+    ST = window.SlothTables.make({ id: "gnss-seen", label: "satellites seen", box: $("gnss-seen-box"),
+      head: $("gnss-seen-thead"), reset: $("gnss-seen-tools"), redraw: drawSeen, cols: SEEN_COLS });
+    return ST;
+  }
+  function drawSeen() {
+    var j = seenLast;
+    if (!j) return;
+    var t = seenTable();
+    var ordered = t ? t.sort(seenRows, true) : seenRows.slice();
+    var body = clear($("gnss-seen-rows"));
+    set("gnss-seen-count", j.have === false ? "sloth.db has no gnss_sightings yet" :
+      seenRows.length + (j.more ? "+" : "") + " in " + (j.days === 1 ? "24 h" : j.days + " days"));
+    ordered.forEach(function (g) {
+      var on = histSel && histSel.gnssid === g.gnssid && histSel.prn === g.prn;
+      var r = el("div", "histrow dt-row d-normal" + (on ? " on" : ""));
+      r.appendChild(cell("c-gn", g.gnss));
+      r.appendChild(cell("c-pr n", g.prn));
+      r.appendChild(cell("c-sv n", num(g.svid) ? g.svid : "-"));
+      r.appendChild(cell("c-fs d-dim", when(g.first_seen)));
+      r.appendChild(cell("c-ls", when(g.last_seen)));
+      r.appendChild(cell("c-rc n", g.records));
+      r.appendChild(cell("c-us n", fx(g.used_pct, 0)));
+      r.appendChild(cell("c-cx n " + (num(g.cn0_max) ? heatClass(g.cn0_max / SPAN_DBHZ) : "d-dim"), fx(g.cn0_max, 1)));
+      r.appendChild(cell("c-cm n " + (num(g.cn0_mean) ? heatClass(g.cn0_mean / SPAN_DBHZ) : "d-dim"), fx(g.cn0_mean, 1)));
+      r.appendChild(cell("c-el n", num(g.el_max) ? g.el_max : "-"));
+      r.tabIndex = 0;
+      function pick() { hist(g.gnssid, g.prn); }
+      r.addEventListener("click", pick);
+      r.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+      body.appendChild(r);
+    });
+  }
+  function seenDays() { var s = $("gnss-seen-days"); return s ? s.value : "1"; }
+  function loadSeen() {
+    var my = ++seenGen;
+    seenAt = Date.now();
+    getJSON("/api/gnss/seen?days=" + encodeURIComponent(seenDays())).then(function (j) {
+      if (my !== seenGen) return;
+      seenLast = j;
+      seenRows = (j.sats || []).slice();
+      drawSeen();
+    }).catch(function (e) {
+      if (my !== seenGen) return;
+      set("gnss-seen-count", "history unavailable: " + (e && e.message ? e.message : "error") + " (needs --sloth-db)");
+    });
+  }
+  function hist(gnssid, prn) {
+    histSel = { gnssid: gnssid, prn: prn };
+    var my = ++histGen;
+    $("gnss-hist").hidden = false;
+    set("gnss-hist-note", "loading");
+    drawSeen();
+    getJSON("/api/gnss/sat?gnssid=" + gnssid + "&prn=" + prn + "&days=" + encodeURIComponent(seenDays())).then(function (j) {
+      if (my !== histGen) return;
+      set("gnss-hist-name", j.gnss + " PRN " + j.prn + " over " + (j.days === 1 ? "24 h" : j.days + " days"));
+      histPlot(j.points || []);
+    }).catch(function (e) {
+      if (my !== histGen) return;
+      set("gnss-hist-note", "history unavailable: " + (e && e.message ? e.message : "error"));
+    });
+  }
+  // Two lanes over one time axis: C/N0 (0..50 dB-Hz) heat-graded, a
+  // larger dot when the record was in the solution; elevation (0..90).
+  function histPlot(pts) {
+    var c = $("gnss-hist-plot");
+    if (!c) return;
+    var dpr = window.devicePixelRatio || 1, W = Math.max(200, c.clientWidth || 400), H = 160;
+    c.width = W * dpr; c.height = H * dpr;
+    var g = c.getContext("2d");
+    if (!g) return;
+    g.scale(dpr, dpr);
+    g.clearRect(0, 0, W, H);
+    if (!pts.length) { set("gnss-hist-note", "no records in the window"); return; }
+    var t0 = pts[0][0], t1 = pts[pts.length - 1][0], span = Math.max(1, t1 - t0), lh = H / 2;
+    var dim = cssVar("--tui-dim", "#888");
+    g.strokeStyle = dim; g.fillStyle = dim; g.lineWidth = 1; g.font = "11px monospace";
+    g.beginPath(); g.moveTo(0, lh - 0.5); g.lineTo(W, lh - 0.5); g.stroke();
+    g.fillText("C/N0", 4, 12); g.fillText("elevation", 4, lh + 12);
+    function X(ts) { return pts.length === 1 ? W - 4 : 2 + (ts - t0) / span * (W - 6); }
+    var px = null, py = null;
+    pts.forEach(function (p) {
+      var x = X(p[0]);
+      if (num(p[3])) {
+        var f = Math.min(1, p[3] / SPAN_DBHZ);
+        g.fillStyle = heatColor(f);
+        var r = p[4] ? 2.5 : 1.5;
+        g.fillRect(x - r, lh - 3 - f * (lh - 16) - r, 2 * r, 2 * r);
+      }
+      if (num(p[1])) {
+        var y = H - 3 - Math.max(0, Math.min(90, p[1])) / 90 * (lh - 16);
+        g.strokeStyle = cssVar("--ink", "currentColor");
+        if (px !== null) { g.beginPath(); g.moveTo(px, py); g.lineTo(x, y); g.stroke(); }
+        px = x; py = y;
+      } else { px = null; }
+    });
+    var used = pts.filter(function (p) { return p[4]; }).length;
+    set("gnss-hist-note", pts.length + " records from " + when(t0) + " to " + when(t1) +
+      ", " + used + " in the solution; larger dots were used. C/N0 over 0..50 dB-Hz, elevation 0..90 deg.");
+  }
+
   function show() {
     if (!$("v-gnss")) return;
     load();
-    if (!timer) timer = setInterval(function () { if (visible()) load(); }, POLL_MS);
+    if (Date.now() - seenAt > SEEN_MS) loadSeen();
+    if (!timer) timer = setInterval(function () {
+      if (!visible()) return;
+      load();
+      if (Date.now() - seenAt > SEEN_MS) loadSeen();
+    }, POLL_MS);
   }
+  var daysSel = $("gnss-seen-days");
+  if (daysSel) daysSel.addEventListener("change", function () {
+    loadSeen();
+    if (histSel) hist(histSel.gnssid, histSel.prn);
+  });
+  var histClose = $("gnss-hist-close");
+  if (histClose) histClose.addEventListener("click", function () { $("gnss-hist").hidden = true; histSel = null; drawSeen(); });
 
   var closeBtn = $("gnss-detail-close");
   if (closeBtn) closeBtn.addEventListener("click", closeDetail);

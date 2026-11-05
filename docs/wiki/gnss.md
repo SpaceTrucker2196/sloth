@@ -32,7 +32,7 @@ GST, `gpsd_time_parse()`, the sky / fix state, `gps_gnss_*_sig()`),
 `tests/test_gnss_view.c`, `tests/test_db.c` (v9 → v10),
 `web/tests/test_gnss.c`.
 
-**Last updated**: 2026-11-03 (the four GNSS rules replace the hooks section; the history carries the monotonic clock, `eps`, `leapseconds` and `reacq`). 2026-11-02 (verify: `GPSD_MAX_LINE` 10240 so a full multi-GNSS SKY fits; a fractional `mode` is no fix; slothweb shows any offset sloth records). 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
+**Last updated**: 2026-11-05 (slothweb's "satellites seen" history over `gnss_sightings`, `/api/gnss/seen` and `/api/gnss/sat`, and a satellite's C/N0 and elevation over a window). 2026-11-03 (the four GNSS rules replace the hooks section; the history carries the monotonic clock, `eps`, `leapseconds` and `reacq`). 2026-11-02 (verify: `GPSD_MAX_LINE` 10240 so a full multi-GNSS SKY fits; a fractional `mode` is no fix; slothweb shows any offset sloth records). 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
 
 ## What is read
 
@@ -209,6 +209,21 @@ in memory only. Four global gauges ride the rollup: `gnss.sats_used`,
 `gnss.hdop`, `gnss.time_off_ms` (from `gnss_fix`) and `gnss.cn0_mean`
 (from `gnss_sky`), each as sparse as its record.
 
+**History** (2026-11-05): with `--sloth-db`, the tab also reads
+sloth.db's `gnss_sightings` through the allow-list
+(`web/src/web_rfhist.c`). `/api/gnss/seen?days=&limit=` is one row per
+satellite seen in the window (24 h by default, up to 400 days, at most
+160 rows): first and last seen, the records, the share of them in the
+solution, C/N0 maximum and mean, the highest elevation, the most
+recently seen first. `/api/gnss/sat?gnssid=&prn=&days=` is one
+satellite's records over the window, oldest first, at most 400, as
+`[ts, el, az, cn0, used, health]`. The page shows the first as the
+"satellites seen" table (window 24 h / 7 d / 30 d, kept per browser)
+and the second, for a row clicked there or in the live table, as two
+lanes over time: C/N0 heat-graded (larger dots in the solution) and
+elevation. A file older than v10 answers `"have":false` and an empty
+list.
+
 **Scope**: the receiver is the host's own, neither the monitor radio's
 nor the IP capture's. Its records are tagged META like
 `sensor_health`, the panel is served under every scope, and the answer
@@ -281,8 +296,9 @@ owner on 2026-11-03.
 - `?WATCH={"pps":true}` and the TOFF / PPS offset (changes the one
   line sloth sends; owner ruling).
 - A text sky plot in the TUI (slothweb has one).
-- Persisting slothweb's GNSS tables in `slothweb.db` (sloth.db v10
-  holds the history; the panel is live state).
+- Persisting slothweb's live GNSS tables in `slothweb.db` (sloth.db
+  v10 holds the history, which the tab reads since 2026-11-05; the live
+  panel is live state).
 
 ## Related pages
 

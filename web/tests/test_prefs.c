@@ -120,6 +120,7 @@ static const char *const KEPT[] = {
     "n-win", "a-win", "d-q", "d-sort", "l-q", "w-grid", "w-metric", "w-win", "w-sort", "al-state",
     "al-sev", "al-q", "al-win", "f-win", "f-sort", "f-ip", "f-mode", "q-sql", "b-q", "b-sort",
     "ev-filter", "bledev-win", "bledev-metric", "bledev-n",
+    "gnss-seen-days", "adsb-seen-days", "adsb-seen-q",
 };
 static const char *const KEPT_ELSEWHERE[] = {
     "sens",       /* slothweb.v1.sens, range-checked */

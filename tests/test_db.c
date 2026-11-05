@@ -23,6 +23,7 @@
 #include "alerts.h"
 #include "sloth_clock.h"
 #include "tmp_dir.h"
+#include "adsb.h"
 #include "gps.h"
 #include "position_track.h"
 
@@ -191,7 +192,10 @@ static void test_schema_tables_have_seen_columns(void) {
     static const char *const exempt[] = { "meta (", "sessions (",
                                           "device_positions (",
                                           "sensor_positions (",
-                                          "gnss_fixes (", "gnss_sightings (" };
+                                          "gnss_fixes (", "gnss_sightings (",
+                                          /* adsb_sightings (#26, v12): one
+                                           * change of one aircraft per row. */
+                                          "adsb_sightings (" };
 
     int tables = 0, entities = 0, with_both = 0;
     for (const char *p = strstr(sql, "CREATE TABLE"); p;
@@ -2226,7 +2230,7 @@ static void test_schema_version_is_eleven(void) {
     fresh_db();
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "11");
+    ASSERT_STR(v, "12");
     db_close();
     unlink(db_path);
 }
@@ -2805,7 +2809,7 @@ static void test_v5_file_migrates_additively(void) {
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
     /* The chain runs on: v5 -> v6 -> v7 -> v8 in one open (#155, #170). */
-    ASSERT_STR(v, "11");
+    ASSERT_STR(v, "12");
     ASSERT_EQ(q_int("SELECT cid FROM pragma_table_info('devices')"
                     " WHERE name='dhcp_vci'"), 23);
     q_text("SELECT hostname FROM devices WHERE mac='02:00:00:00:00:77'",
@@ -2858,7 +2862,7 @@ static void test_v5_file_without_devices_migrates(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "11");
+    ASSERT_STR(v, "12");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
                     " WHERE name='cam_signals'"), 1);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('devices')"
@@ -2898,7 +2902,7 @@ static void test_v6_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "11");
+    ASSERT_STR(v, "12");
     q_text("SELECT hostname FROM devices", v, sizeof(v));
     ASSERT_STR(v, "old-host");
     ASSERT_EQ(q_int("SELECT device_class FROM devices"), 2);
@@ -2996,7 +3000,7 @@ static void test_v7_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "11");
+    ASSERT_STR(v, "12");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts WHERE key='recon:10.0.0.5'"),
               19);
@@ -3093,7 +3097,7 @@ static void test_v8_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "11");
+    ASSERT_STR(v, "12");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
     q_text("SELECT incident_id FROM alerts WHERE first_seen=1600000011", v, sizeof(v));
@@ -3276,7 +3280,7 @@ static void test_v9_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "11");
+    ASSERT_STR(v, "12");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
     q_text("SELECT incident_id FROM alerts WHERE first_seen=1600000011", v, sizeof(v));
@@ -3354,7 +3358,7 @@ static void test_v10_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "11");
+    ASSERT_STR(v, "12");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('alerts')"), 21);
@@ -3397,6 +3401,161 @@ static void test_v10_migration_failure_leaves_file_unchanged(void) {
                     " AND name='alert_incidents'"), 0);
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
     ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
+    unlink(db_path);
+}
+
+/* ── Schema v12: the ADS-B tables (#26) ─────────────────────── */
+
+/* A v11 file: write_v10_file() stamped 11. alert_incidents is left to
+ * the unconditional schema, as the earlier files leave theirs. */
+static void write_v11_file(void) {
+    write_v10_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "UPDATE meta SET value='11' WHERE key='schema_version';",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+}
+
+/* v11 -> v12 is a stamp: adsb_aircraft and adsb_sightings and their
+ * indexes arrive with the unconditional schema, empty, and every
+ * alerts value reads as it was. Seen to fail with the { 11, ... } step
+ * removed from g_steps[] (the static chain check refuses the build). */
+static void test_v11_file_migrates_additively(void) {
+    write_v11_file();
+    ASSERT_EQ(db_open(db_path), 1);
+    char v[64];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "12");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
+    ASSERT_EQ(q_int("SELECT SUM(count) FROM alerts"), 21);
+    q_text("SELECT loc_src FROM alerts WHERE first_seen=1600000011", v, sizeof(v));
+    ASSERT_STR(v, "gps");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name IN ('adsb_aircraft','adsb_sightings')"), 2);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='index'"
+                    " AND name IN ('idx_adsb_aircraft_last_seen',"
+                    "'idx_adsb_sightings_last_seen','idx_adsb_sightings_hex')"), 3);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM adsb_aircraft"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM adsb_sightings"), 0);
+    db_close();
+    ASSERT_EQ(db_open(db_path), 1);
+    db_close();
+    unlink(db_path);
+}
+
+/* A v11 file whose stamp cannot be written stays v11 with neither ADS-B
+ * table. Seen red with migrate_step()'s return ignored in
+ * migrate_from() (db_open returned 1 and the tables appeared beside a
+ * v11 stamp). */
+static void test_v11_migration_failure_leaves_file_unchanged(void) {
+    write_v11_file();
+    sqlite3 *h = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &h), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(h,
+        "CREATE TRIGGER refuse_v12 BEFORE UPDATE ON meta"
+        " WHEN NEW.key='schema_version' AND NEW.value='12'"
+        " BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        NULL, NULL, NULL), SQLITE_OK);
+    sqlite3_close(h);
+    ASSERT_EQ(db_open(db_path), 0);
+    ASSERT_EQ(db_is_open(), 0);
+    char v[32];
+    q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
+    ASSERT_STR(v, "11");
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+                    " AND name IN ('adsb_aircraft','adsb_sightings')"), 0);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM alerts"), 4);
+    unlink(db_path);
+}
+
+/* The ADS-B writer: each aircraft row is one adsb_sightings row and one
+ * adsb_aircraft upsert; the same rows a second later write nothing
+ * (adsb_row_sig(), the JSONL record's rule); a squawk change writes
+ * that one aircraft again and the inventory keeps the newest squawk,
+ * the altitude extremes and the earliest first_seen; a returning
+ * address (sloth's first_seen moved) counts a visit; the heartbeat
+ * writes every row. Invented addresses and positions. Seen red with
+ * write_adsb()'s memory check removed (the second tick wrote two more
+ * sightings) and with the visits term dropped from ST_ADSB_AC (visits
+ * stayed 1). */
+static void test_adsb_tables_written(void) {
+    fresh_db();
+    static adsb_aircraft_t ac[2];
+    memset(ac, 0, sizeof(ac));
+    ac[0].icao = 0xa1b2c3;
+    snprintf(ac[0].flight, sizeof(ac[0].flight), "TST123");
+    snprintf(ac[0].squawk, sizeof(ac[0].squawk), "2201");
+    snprintf(ac[0].category, sizeof(ac[0].category), "A3");
+    snprintf(ac[0].type, sizeof(ac[0].type), "adsb_icao");
+    ac[0].emergency = ADSB_EMERG_NONE;
+    ac[0].has_alt_baro = 1; ac[0].alt_baro = 34000; ac[0].alt_band = 16;
+    ac[0].has_gs = 1; ac[0].gs = 451.2;
+    ac[0].has_track = 1; ac[0].track = 271.5;
+    ac[0].has_pos = 1; ac[0].lat = 10.12345; ac[0].lon = 20.54321;
+    ac[0].has_rssi = 1; ac[0].rssi = -18.4;
+    ac[0].has_messages = 1; ac[0].messages = 2210;
+    ac[0].first_seen = 1793059100; ac[0].last_seen = 1793059199;
+    ac[1].icao = 0x00abcd; ac[1].non_icao = 1;
+    ac[1].emergency = ADSB_EMERG_ABSENT;
+    ac[1].has_alt_geom = 1; ac[1].alt_geom = 2550; ac[1].alt_band = 3;
+    ac[1].first_seen = 1793059150; ac[1].last_seen = 1793059170;
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    s.adsb.configured = 1;
+    s.adsb_rows = ac;
+    s.adsb_count = 2;
+    db_tick(&s, 1793059200);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM adsb_aircraft"), 2);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM adsb_sightings"), 2);
+    char v[64];
+    q_text("SELECT flight FROM adsb_aircraft WHERE hex='a1b2c3'", v, sizeof(v));
+    ASSERT_STR(v, "TST123");
+    ASSERT_EQ(q_int("SELECT first_seen FROM adsb_aircraft WHERE hex='a1b2c3'"), 1793059100);
+    ASSERT_EQ(q_int("SELECT alt_max FROM adsb_aircraft WHERE hex='a1b2c3'"), 34000);
+    ASSERT_EQ(q_int("SELECT pos_seen FROM adsb_aircraft WHERE hex='a1b2c3'"), 1);
+    ASSERT_EQ(q_int("SELECT non_icao FROM adsb_aircraft WHERE hex='~00abcd'"), 1);
+    ASSERT_EQ(q_int("SELECT flight IS NULL FROM adsb_aircraft WHERE hex='~00abcd'"), 1);
+    ASSERT_EQ(q_int("SELECT alt_min FROM adsb_aircraft WHERE hex='~00abcd'"), 2550);
+    ASSERT_EQ(q_int("SELECT heard FROM adsb_sightings WHERE hex='a1b2c3'"), 1793059199);
+    ASSERT_EQ(q_int("SELECT CAST(ROUND(lat*100000) AS INTEGER) FROM adsb_sightings"
+                    " WHERE hex='a1b2c3'"), 1012345);
+    q_text("SELECT emergency FROM adsb_sightings WHERE hex='a1b2c3'", v, sizeof(v));
+    ASSERT_STR(v, "none");
+    ASSERT_EQ(q_int("SELECT emergency IS NULL FROM adsb_sightings WHERE hex='~00abcd'"), 1);
+    ASSERT_EQ(q_int("SELECT lat IS NULL FROM adsb_sightings WHERE hex='~00abcd'"), 1);
+    /* The same rows a second later: nothing new. */
+    db_tick(&s, 1793059201);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM adsb_sightings"), 2);
+    ASSERT_EQ(q_int("SELECT sightings FROM adsb_aircraft WHERE hex='a1b2c3'"), 1);
+    /* A squawk change and a lower band: that aircraft only. */
+    snprintf(ac[0].squawk, sizeof(ac[0].squawk), "7700");
+    ac[0].emergency = ADSB_EMERG_GENERAL;
+    ac[0].alt_baro = 12000; ac[0].alt_band = 10;
+    db_tick(&s, 1793059210);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM adsb_sightings"), 3);
+    q_text("SELECT squawk FROM adsb_aircraft WHERE hex='a1b2c3'", v, sizeof(v));
+    ASSERT_STR(v, "7700");
+    ASSERT_EQ(q_int("SELECT emergency_seen FROM adsb_aircraft WHERE hex='a1b2c3'"), 1);
+    ASSERT_EQ(q_int("SELECT alt_min FROM adsb_aircraft WHERE hex='a1b2c3'"), 12000);
+    ASSERT_EQ(q_int("SELECT alt_max FROM adsb_aircraft WHERE hex='a1b2c3'"), 34000);
+    ASSERT_EQ(q_int("SELECT sightings FROM adsb_aircraft WHERE hex='a1b2c3'"), 2);
+    ASSERT_EQ(q_int("SELECT visits FROM adsb_aircraft WHERE hex='a1b2c3'"), 1);
+    /* The address back after expiring: sloth's first_seen moved. */
+    ac[0].first_seen = 1793059400;
+    db_tick(&s, 1793059400);
+    ASSERT_EQ(q_int("SELECT visits FROM adsb_aircraft WHERE hex='a1b2c3'"), 2);
+    ASSERT_EQ(q_int("SELECT first_seen FROM adsb_aircraft WHERE hex='a1b2c3'"), 1793059100);
+    ASSERT_EQ(q_int("SELECT last_seen FROM adsb_aircraft WHERE hex='a1b2c3'"), 1793059400);
+    /* The heartbeat: 300 s after each row's last write, both again. */
+    db_tick(&s, 1793059700);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM adsb_sightings"), 6);
+    /* Not configured: nothing. */
+    s.adsb.configured = 0;
+    db_tick(&s, 1793060100);
+    ASSERT_EQ(q_int("SELECT COUNT(*) FROM adsb_sightings"), 6);
+    db_close();
     unlink(db_path);
 }
 
@@ -3819,7 +3978,7 @@ static void test_compact_alerts_900k_rows(void) {
     ASSERT_EQ(db_is_open(), 0);
 
     ASSERT_EQ(q_int_at(g_cmp_dst, "SELECT CAST(value AS INTEGER) FROM meta"
-                                  " WHERE key='schema_version'"), 11);
+                                  " WHERE key='schema_version'"), DB_SCHEMA_VERSION);
     ASSERT_EQ(q_int_at(g_cmp_dst, "SELECT COUNT(*) FROM alerts"), CMP_KEYS);
     ASSERT_EQ(q_int_at(g_cmp_dst, "SELECT COUNT(DISTINCT key) FROM alerts"),
               CMP_KEYS);
@@ -4082,9 +4241,10 @@ static void test_migration_sql_is_add_column_only(void) {
         db_schema_migrate_v5_sql(), db_schema_migrate_v6_sql(),
         db_schema_migrate_v7_sql(), db_schema_migrate_v8_sql(),
         db_schema_migrate_v9_sql(), db_schema_migrate_v10_sql(),
+        db_schema_migrate_v11_sql(),
     };
-    const int want[] = { 1, 0, 7, 1, 5, 6, 4, 6, 0, 0 };
-    for (int i = 0; i < 10; i++) {
+    const int want[] = { 1, 0, 7, 1, 5, 6, 4, 6, 0, 0, 0 };
+    for (int i = 0; i < 11; i++) {
         const char *m = ms[i];
         int alters = 0, adds = 0, semis = 0;
         for (const char *p = m; (p = strstr(p, "ALTER TABLE ")); p++)
@@ -4161,7 +4321,7 @@ static void test_v1_file_migrates_to_current(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "11");
+    ASSERT_STR(v, "12");
     ASSERT_EQ(q_int("SELECT presence FROM probe_clients"
                     " WHERE mac='02:00:00:00:00:51'"), 0);
     q_text("SELECT ssid FROM probe_clients WHERE mac='02:00:00:00:00:51'",
@@ -4206,7 +4366,7 @@ static void test_v1_file_without_probe_clients_migrates(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "11");
+    ASSERT_STR(v, "12");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM pragma_table_info('probe_clients')"
                     " WHERE name='presence'"), 1);
     db_close();
@@ -4259,7 +4419,7 @@ static void test_v2_file_migrates_to_current(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[16];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "11");
+    ASSERT_STR(v, "12");
     ASSERT_EQ(q_int("SELECT COUNT(*) FROM sqlite_master"
                     " WHERE type='table' AND name='assoc_reqs'"), 1);
     db_close();
@@ -4311,7 +4471,7 @@ static void test_v3_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "11");
+    ASSERT_STR(v, "12");
     ASSERT_EQ(q_int("SELECT phy_confirmed FROM pnl_clients"
                     " WHERE mac='02:00:00:00:00:53'"), 0);
     ASSERT_EQ(q_int("SELECT probe_count FROM pnl_clients"
@@ -4465,7 +4625,7 @@ static void test_v4_file_migrates_additively(void) {
     ASSERT_EQ(db_open(db_path), 1);
     char v[64];
     q_text("SELECT value FROM meta WHERE key='schema_version'", v, sizeof(v));
-    ASSERT_STR(v, "11");
+    ASSERT_STR(v, "12");
     ASSERT_EQ(q_int("SELECT pnl_best FROM karma_candidates"
                     " WHERE bssid='aa:bb:cc:dd:ee:55'"), 0);
     ASSERT_EQ(q_int("SELECT score FROM karma_candidates"
@@ -4561,6 +4721,9 @@ void run_db_tests(void) {
     RUN_TEST(test_incident_rows_bounded_per_key);
     RUN_TEST(test_incident_close_is_flushed_on_db_close);
     RUN_TEST(test_gnss_tables_written);
+    RUN_TEST(test_v11_file_migrates_additively);
+    RUN_TEST(test_v11_migration_failure_leaves_file_unchanged);
+    RUN_TEST(test_adsb_tables_written);
     RUN_TEST(test_device_ip_joined_camera_columns_follow_latest);
     RUN_TEST(test_device_mac_keyed_camera_columns_are_sticky);
     RUN_TEST(test_ip_only_camera_record_is_not_persisted);

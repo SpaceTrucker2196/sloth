@@ -117,6 +117,29 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "gnss_sightings", "el", 10, 1, 0 },        { "gnss_sightings", "az", 10, 1, 0 },
     { "gnss_sightings", "cn0", 10, 1, 0 },       { "gnss_sightings", "used", 10, 1, 0 },
     { "gnss_sightings", "health", 10, 1, 0 },
+    /* v12 (#26): the --adsb decoder's aircraft (docs/wiki/adsb.md). The
+     * callsign, squawk and category are what an aircraft broadcasts and
+     * the decoder decoded, shown as they are, never a key; the hex is
+     * sloth's own spelling of the 24-bit address. */
+    { "adsb_aircraft", "hex", 12, 1, 0 },        { "adsb_aircraft", "non_icao", 12, 1, 0 },
+    { "adsb_aircraft", "first_seen", 12, 1, 0 }, { "adsb_aircraft", "last_seen", 12, 1, 0 },
+    { "adsb_aircraft", "visit_first", 12, 1, 0 }, { "adsb_aircraft", "visits", 12, 1, 0 },
+    { "adsb_aircraft", "sightings", 12, 1, 0 },  { "adsb_aircraft", "flight", 12, 1, 0 },
+    { "adsb_aircraft", "squawk", 12, 1, 0 },     { "adsb_aircraft", "category", 12, 1, 0 },
+    { "adsb_aircraft", "source_type", 12, 1, 0 }, { "adsb_aircraft", "emergency_seen", 12, 1, 0 },
+    { "adsb_aircraft", "alt_min", 12, 1, 0 },    { "adsb_aircraft", "alt_max", 12, 1, 0 },
+    { "adsb_aircraft", "gs_max", 12, 1, 0 },     { "adsb_aircraft", "rssi_max", 12, 1, 0 },
+    { "adsb_aircraft", "messages", 12, 1, 0 },   { "adsb_aircraft", "pos_seen", 12, 1, 0 },
+    { "adsb_sightings", "last_seen", 12, 1, 0 }, { "adsb_sightings", "hex", 12, 1, 0 },
+    { "adsb_sightings", "heard", 12, 1, 0 },     { "adsb_sightings", "flight", 12, 1, 0 },
+    { "adsb_sightings", "squawk", 12, 1, 0 },    { "adsb_sightings", "emergency", 12, 1, 0 },
+    { "adsb_sightings", "category", 12, 1, 0 },  { "adsb_sightings", "on_ground", 12, 1, 0 },
+    { "adsb_sightings", "alt_baro", 12, 1, 0 },  { "adsb_sightings", "alt_geom", 12, 1, 0 },
+    { "adsb_sightings", "alt_band", 12, 1, 0 },  { "adsb_sightings", "gs", 12, 1, 0 },
+    { "adsb_sightings", "track", 12, 1, 0 },     { "adsb_sightings", "baro_rate", 12, 1, 0 },
+    { "adsb_sightings", "lat", 12, 1, 0 },       { "adsb_sightings", "lon", 12, 1, 0 },
+    { "adsb_sightings", "rssi", 12, 1, 0 },      { "adsb_sightings", "messages", 12, 1, 0 },
+    { "adsb_sightings", "source_type", 12, 1, 0 },
     /* v11 (#175): one row per incident beside the per-finding alerts
      * row. The key is the alerts key and as predicate-only as that one;
      * so is sloth's incident_id, a hash over the key (web_alerts.h never
@@ -650,6 +673,31 @@ void web_sdb_scope_types(const web_sdb_conn_t *c, const char *col, char *out,
     if (cap) out[0] = '\0';
 }
 
+
+int web_sdb_gnss_seen(web_sdb_conn_t *c, long long from, long long limit,
+                      web_sdb_gsat_fn fn, void *ctx) {
+    (void)c; (void)from; (void)limit; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_gnss_sat(web_sdb_conn_t *c, int gnssid, int prn, long long from,
+                     int max, web_sdb_gpt_fn fn, void *ctx) {
+    (void)c; (void)gnssid; (void)prn; (void)from; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_adsb_seen(web_sdb_conn_t *c, long long from, long long limit,
+                      long long offset, const char *q, web_sdb_ac_fn fn, void *ctx) {
+    (void)c; (void)from; (void)limit; (void)offset; (void)q; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_adsb_one(web_sdb_conn_t *c, const char *hex, web_sdb_ac_t *out) {
+    (void)c; (void)hex; (void)out;
+    return -1;
+}
+int web_sdb_adsb_track(web_sdb_conn_t *c, const char *hex, long long from,
+                       int max, web_sdb_apt_fn fn, void *ctx) {
+    (void)c; (void)hex; (void)from; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
 
 #else
 
@@ -2832,6 +2880,232 @@ int web_sdb_flow_pairs(web_sdb_conn_t *c, long long from, long long to,
     }
     sqlite3_finalize(st);
     return rc == SQLITE_DONE ? 0 : -1;
+}
+
+/* ── the receiver's sky and the aircraft, over time (2026-11-05) ───── */
+
+static int gnss_sight_ok(web_sdb_conn_t *c) {
+    static const char *const k[] = { "last_seen", "gnssid", "prn", "svid", "el",
+                                     "az", "cn0", "used", "health", NULL };
+    return have_all(c, "gnss_sightings", k);
+}
+
+int web_sdb_gnss_seen(web_sdb_conn_t *c, long long from, long long limit,
+                      web_sdb_gsat_fn fn, void *ctx) {
+    if (!gnss_sight_ok(c)) return 0;
+    sqlite3_stmt *st = NULL;
+    /* The primary key leads with last_seen, so the window is a range
+     * scan; the rest is one pass over it. */
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT gnssid, prn, max(svid), min(last_seen), max(last_seen),"
+            " count(*), sum(used), max(cn0), sum(cn0), count(cn0), max(el)"
+            " FROM gnss_sightings WHERE last_seen >= ?1"
+            " GROUP BY gnssid, prn ORDER BY max(last_seen) DESC, gnssid, prn"
+            " LIMIT ?2", -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, limit);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_gsat_t g;
+        memset(&g, 0, sizeof(g));
+        g.gnssid = sqlite3_column_int(st, 0);
+        g.prn = sqlite3_column_int(st, 1);
+        g.svid = sqlite3_column_type(st, 2) == SQLITE_NULL ? -1 : sqlite3_column_int(st, 2);
+        g.first_seen = sqlite3_column_int64(st, 3);
+        g.last_seen = sqlite3_column_int64(st, 4);
+        g.records = sqlite3_column_int64(st, 5);
+        g.used_n = sqlite3_column_int64(st, 6);
+        g.has_cn0 = sqlite3_column_type(st, 7) != SQLITE_NULL;
+        g.cn0_max = sqlite3_column_double(st, 7);
+        g.cn0_sum = sqlite3_column_double(st, 8);
+        g.cn0_n = sqlite3_column_int64(st, 9);
+        g.has_el = sqlite3_column_type(st, 10) != SQLITE_NULL;
+        g.el_max = sqlite3_column_int(st, 10);
+        n++;
+        if (fn(ctx, &g)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_sdb_gnss_sat(web_sdb_conn_t *c, int gnssid, int prn, long long from,
+                     int max, web_sdb_gpt_fn fn, void *ctx) {
+    if (!gnss_sight_ok(c)) return 0;
+    sqlite3_stmt *st = NULL;
+    /* The newest max, handed back oldest first. */
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT last_seen, el, az, cn0, used, health FROM ("
+            " SELECT last_seen, el, az, cn0, used, health FROM gnss_sightings"
+            " WHERE gnssid = ?1 AND prn = ?2 AND last_seen >= ?3"
+            " ORDER BY last_seen DESC LIMIT ?4) ORDER BY last_seen",
+            -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int(st, 1, gnssid);
+    sqlite3_bind_int(st, 2, prn);
+    sqlite3_bind_int64(st, 3, from);
+    sqlite3_bind_int(st, 4, max);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_gpt_t p;
+        memset(&p, 0, sizeof(p));
+        p.ts = sqlite3_column_int64(st, 0);
+        p.has_el = sqlite3_column_type(st, 1) != SQLITE_NULL;
+        p.el = sqlite3_column_int(st, 1);
+        p.has_az = sqlite3_column_type(st, 2) != SQLITE_NULL;
+        p.az = sqlite3_column_int(st, 2);
+        p.has_cn0 = sqlite3_column_type(st, 3) != SQLITE_NULL;
+        p.cn0 = sqlite3_column_double(st, 3);
+        p.used = sqlite3_column_int(st, 4);
+        p.health = sqlite3_column_type(st, 5) == SQLITE_NULL ? -1 : sqlite3_column_int(st, 5);
+        n++;
+        if (fn(ctx, &p)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+static int adsb_ac_ok(web_sdb_conn_t *c) {
+    static const char *const k[] = { "hex", "non_icao", "first_seen", "last_seen",
+                                     "visits", "sightings", "flight", "squawk",
+                                     "category", "source_type", "emergency_seen",
+                                     "alt_min", "alt_max", "gs_max", "rssi_max",
+                                     "messages", "pos_seen", NULL };
+    return have_all(c, "adsb_aircraft", k);
+}
+
+#define ADSB_AC_COLS "hex, non_icao, first_seen, last_seen, visits, sightings," \
+    " flight, squawk, category, source_type, emergency_seen, alt_min, alt_max," \
+    " gs_max, rssi_max, messages, pos_seen"
+
+static void ac_row(sqlite3_stmt *st, web_sdb_ac_t *a) {
+    memset(a, 0, sizeof(*a));
+    text(st, 0, a->hex, sizeof(a->hex));
+    a->non_icao = sqlite3_column_int(st, 1);
+    a->first_seen = sqlite3_column_int64(st, 2);
+    a->last_seen = sqlite3_column_int64(st, 3);
+    a->visits = sqlite3_column_int64(st, 4);
+    a->sightings = sqlite3_column_int64(st, 5);
+    text(st, 6, a->flight, sizeof(a->flight));
+    text(st, 7, a->squawk, sizeof(a->squawk));
+    text(st, 8, a->category, sizeof(a->category));
+    text(st, 9, a->source_type, sizeof(a->source_type));
+    a->emergency_seen = sqlite3_column_int(st, 10);
+    a->has_alt = sqlite3_column_type(st, 11) != SQLITE_NULL &&
+                 sqlite3_column_type(st, 12) != SQLITE_NULL;
+    a->alt_min = sqlite3_column_int(st, 11);
+    a->alt_max = sqlite3_column_int(st, 12);
+    a->has_gs = sqlite3_column_type(st, 13) != SQLITE_NULL;
+    a->gs_max = sqlite3_column_double(st, 13);
+    a->has_rssi = sqlite3_column_type(st, 14) != SQLITE_NULL;
+    a->rssi_max = sqlite3_column_double(st, 14);
+    a->has_messages = sqlite3_column_type(st, 15) != SQLITE_NULL;
+    a->messages = sqlite3_column_int64(st, 15);
+    a->pos_seen = sqlite3_column_int(st, 16);
+}
+
+int web_sdb_adsb_seen(web_sdb_conn_t *c, long long from, long long limit,
+                      long long offset, const char *q, web_sdb_ac_fn fn, void *ctx) {
+    if (!adsb_ac_ok(c)) return 0;
+    sqlite3_stmt *st = NULL;
+    /* The prefix is bound, never spliced, and the caller has already
+     * refused anything but [0-9a-z~] / [0-9A-Z]; '%' and '_' cannot
+     * reach the pattern. */
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT " ADSB_AC_COLS " FROM adsb_aircraft WHERE last_seen >= ?1"
+            " AND (?3 = '' OR hex LIKE ?3 || '%' OR flight LIKE ?4 || '%')"
+            " ORDER BY last_seen DESC, hex LIMIT ?2 OFFSET ?5", -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, limit);
+    sqlite3_bind_int64(st, 5, offset);
+    char lo[16] = "", up[16] = "";
+    for (size_t i = 0; q && q[i] && i < sizeof(lo) - 1; i++) {
+        char ch = q[i];
+        lo[i] = (ch >= 'A' && ch <= 'Z') ? (char)(ch - 'A' + 'a') : ch;
+        up[i] = (ch >= 'a' && ch <= 'z') ? (char)(ch - 'a' + 'A') : ch;
+        lo[i + 1] = up[i + 1] = '\0';
+    }
+    sqlite3_bind_text(st, 3, lo, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 4, up, -1, SQLITE_TRANSIENT);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_ac_t a;
+        ac_row(st, &a);
+        n++;
+        if (fn(ctx, &a)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_sdb_adsb_one(web_sdb_conn_t *c, const char *hex, web_sdb_ac_t *out) {
+    memset(out, 0, sizeof(*out));
+    if (!adsb_ac_ok(c)) return 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT " ADSB_AC_COLS " FROM adsb_aircraft WHERE hex = ?1",
+            -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_text(st, 1, hex, -1, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(st), found = 0;
+    if (rc == SQLITE_ROW) { ac_row(st, out); found = 1; rc = SQLITE_DONE; }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? found : -1;
+}
+
+int web_sdb_adsb_track(web_sdb_conn_t *c, const char *hex, long long from,
+                       int max, web_sdb_apt_fn fn, void *ctx) {
+    static const char *const k[] = { "last_seen", "hex", "heard", "flight", "squawk",
+                                     "emergency", "on_ground", "alt_baro", "alt_geom",
+                                     "alt_band", "gs", "track", "baro_rate", "lat",
+                                     "lon", "rssi", NULL };
+    if (!have_all(c, "adsb_sightings", k)) return 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT last_seen, heard, flight, squawk, emergency, on_ground, alt_baro,"
+            " alt_geom, alt_band, gs, track, baro_rate, lat, lon, rssi FROM ("
+            " SELECT last_seen, heard, flight, squawk, emergency, on_ground, alt_baro,"
+            " alt_geom, alt_band, gs, track, baro_rate, lat, lon, rssi"
+            " FROM adsb_sightings WHERE hex = ?1 AND last_seen >= ?2"
+            " ORDER BY last_seen DESC LIMIT ?3) ORDER BY last_seen",
+            -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_text(st, 1, hex, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 2, from);
+    sqlite3_bind_int(st, 3, max);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_apt_t p;
+        memset(&p, 0, sizeof(p));
+        p.ts = sqlite3_column_int64(st, 0);
+        p.heard = sqlite3_column_int64(st, 1);
+        text(st, 2, p.flight, sizeof(p.flight));
+        text(st, 3, p.squawk, sizeof(p.squawk));
+        text(st, 4, p.emergency, sizeof(p.emergency));
+        p.on_ground = sqlite3_column_int(st, 5);
+        p.has_alt_baro = sqlite3_column_type(st, 6) != SQLITE_NULL;
+        p.alt_baro = sqlite3_column_int(st, 6);
+        p.has_alt_geom = sqlite3_column_type(st, 7) != SQLITE_NULL;
+        p.alt_geom = sqlite3_column_int(st, 7);
+        p.alt_band = sqlite3_column_type(st, 8) == SQLITE_NULL ? -1 : sqlite3_column_int(st, 8);
+        p.has_gs = sqlite3_column_type(st, 9) != SQLITE_NULL;
+        p.gs = sqlite3_column_double(st, 9);
+        p.has_track = sqlite3_column_type(st, 10) != SQLITE_NULL;
+        p.track = sqlite3_column_double(st, 10);
+        p.has_rate = sqlite3_column_type(st, 11) != SQLITE_NULL;
+        p.rate = sqlite3_column_int(st, 11);
+        p.has_pos = sqlite3_column_type(st, 12) != SQLITE_NULL &&
+                    sqlite3_column_type(st, 13) != SQLITE_NULL;
+        p.lat = sqlite3_column_double(st, 12);
+        p.lon = sqlite3_column_double(st, 13);
+        p.has_rssi = sqlite3_column_type(st, 14) != SQLITE_NULL;
+        p.rssi = sqlite3_column_double(st, 14);
+        n++;
+        if (fn(ctx, &p)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
 }
 
 #endif /* WITH_SQLITE */

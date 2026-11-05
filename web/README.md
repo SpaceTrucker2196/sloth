@@ -499,6 +499,10 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/bundle?kind=device\|alert\|lookup\|ble\|platform&id=` | `200` JSON, a detail view's whole answer for its "copy JSON" button ([Copy JSON: the analysis bundle](#copy-json-the-analysis-bundle)); `400` for a kind, an id or a parameter that does not pass; `404` and `503` as the route it splices (`not_found` for a BLE address no sensor heard, `no_such_platform`, `no_store`); `413` `bundle_too_large` |
    | `GET /api/gnss?limit=` | `200` JSON, the GNSS tab ([GNSS](#gnss)): the `sensor_health` gnss block, the newest `gnss_fix` and `gnss_sky`, every satellite row with its last 16 `(ts, C/N0)` points sorted by C/N0, and the panel's counts; `scope_note` says the receiver is the host's own, so the answer is the same under every scope; `400` for an unknown parameter or a `limit` outside 1..64; `503` with no panel |
    | `GET /api/adsb?limit=` | `200` JSON, the ADS-B tab ([ADS-B](#ads-b)): the `sensor_health` adsb block, every aircraft row with its kept track (its last 32 positions, `[ts, lat, lon, alt]`), an emergency first, then live before gone, then the most recently heard, and the panel's counts (`total`, `live`, `with_pos`, `emergency`); Monitor's and Hybrid's, Local answers `out_of_scope` with the query still checked; `400` for an unknown parameter or a `limit` outside 1..512; `503` with no panel |
+   | `GET /api/gnss/seen?days=&limit=` | `200` JSON from sloth.db's `gnss_sightings` (needs `--sloth-db`): one row per satellite seen in the last `days` (1..400, default 1), most recently seen first, at most `limit` (1..160): first and last seen, records, `used_pct`, `cn0_max`, `cn0_mean`, `el_max`; `"have":false` from a file older than v10; every scope's; `503` `no_sloth_db` without one |
+   | `GET /api/gnss/sat?gnssid=&prn=&days=` | `200` JSON, one satellite's `gnss_sightings` over the window, oldest first, at most 400, as `[ts, el, az, cn0, used, health]`; `400` `bad_gnssid` / `bad_prn` / `bad_days` |
+   | `GET /api/adsb/seen?days=&limit=&offset=&q=` | `200` JSON from sloth.db's `adsb_aircraft`: the aircraft last seen in the last `days` (default 7), newest first, `limit` (1..100) from `offset`, `more` when there are others; `q` a hex or callsign prefix (letters and digits, a leading `~`; anything else `400` `bad_q`); `"have":false` from a file older than v12; Monitor's and Hybrid's (Local `out_of_scope`, the query checked) |
+   | `GET /api/adsb/aircraft?hex=&days=` | `200` JSON, one aircraft's inventory row (`null` when not in the file) and its `adsb_sightings` over the window, oldest first, at most 400, as compact rows named in `cols`; `400` `bad_hex` for anything but sloth's six lower-case hex digits (optionally `~`) |
    | `GET /api/gnss/fixes?since=&limit=` | `200` JSON, the kept `gnss_fix` records (512 in memory) oldest first after `since` (unix seconds), at most `limit` (default and most 128); the page walks the ring (`gnss.js fixes()`: from `since=0`, then from the last row's `ts` while a page comes back full, at most eight pages), so the strip reaches the newest record once the ring holds more than a page; `400` for `bad_since` / `bad_limit` |
    | `HEAD /api/alerts`, `HEAD /api/alert`, `HEAD /api/pcap`, `HEAD /api/pcap/frames`, `HEAD /api/bundle` | `405`, `Allow: GET`, as `/api/query` |
    | `GET /api/positions?mac=&format=json\|geojson\|gpx&since=&until=` | `200`, sloth.db v9's `device_positions` for one MAC (where the sensor was when it heard it, not the device's position) and the sensor's track over the same span, newest first, at most 200 of each (the track the newest 200 points within the samples' span, so the oldest samples of a full answer may have no track under them), `"more"` when there were more; the GeoJSON carries the same `"more"` and `"limit"` as foreign members of its FeatureCollection (RFC 7946 §6.1) and a cut GPX says `truncated` in its `<metadata><desc>` ([Sensor location](#sensor-location)); `json` is `application/json`, `geojson` (RFC 7946) `application/geo+json` and `gpx` (GPX 1.1) `application/gpx+xml`, both as attachments; `400` for a parameter that does not pass (`bad_mac`, `bad_format`, `bad_range`); `503` with no `--sloth-db` or sloth.db unreadable. A file before v9 answers empty lists. `HEAD` is `405` |
@@ -873,6 +877,14 @@ see a multi-second step and nothing finer; the page labels it so.
 Observation only: no row is a finding, and the detectors are a later
 slice.
 
+With `--sloth-db`, the tab's "satellites seen" table reads sloth.db's
+`gnss_sightings` (`/api/gnss/seen`): every satellite listed in the
+window (24 h, 7 or 30 days, kept per browser), first and last seen,
+records, the share in the solution, C/N0 maximum and mean, the highest
+elevation. Clicking a row there or in the live table draws that
+satellite's C/N0 (heat-graded, larger dots in the solution) and
+elevation over the window (`/api/gnss/sat`).
+
 ## ADS-B
 
 The ADS-B tab (2026-11-05, #26) is the aircraft a local decoder lists,
@@ -905,6 +917,19 @@ position with a heading tick and its kept track coloured by altitude,
 a km scale bar) and a detail panel on click. The decoder's SDR is a
 passive radio, so `adsb_aircraft` is Monitor's like `ble_device`; under
 Local the view shows its scope note.
+
+**History** (2026-11-05): with `--sloth-db`, the tab also reads
+sloth.db's `adsb_aircraft` and `adsb_sightings` (schema v12, written by
+sloth's `--db` with `--adsb`): an "aircraft seen" table over a window
+(24 h to a year, 100 a page, a hex or callsign search, the window and
+search kept per browser) with first and last seen, visits, recorded
+sightings, the last callsign, squawk and category, the altitude range,
+top speed, strongest RSSI and whether an emergency was ever reported;
+and, for a row clicked there or in the live table, the detail panel's
+history: those figures, every callsign and squawk it used, an altitude
+profile (emergencies ringed) and its recorded track dashed on the
+positions plot, also for an aircraft no longer listed. The GNSS tab
+has the same for satellites (see [GNSS](#gnss)).
 
 Every string is hostile: `hex` must be sloth's `~`? and six lower-case
 hex digits (else rejected and counted), the callsign printable ASCII of
@@ -1694,11 +1719,11 @@ by the next one.
   `503` `sloth_db_timeout`, never sloth a stall
   (`db_timeouts` on `/api/health`).
 - **Identify.** sloth's `meta` is `(key, value)`; a `schema_version`
-  of 1 to 11 is read (`"db_supported":[1,11]`). The upper bound is held
+  of 1 to 12 is read (`"db_supported":[1,12]`). The upper bound is held
   to sloth's `DB_SCHEMA_VERSION` by a test, so a schema bump cannot
   ship with slothweb still refusing the new files. A newer one is refused
-  with "written by a newer sloth (schema v12; this slothweb reads
-  v1..v11)": this build does not know its columns. An older one is read
+  with "written by a newer sloth (schema v13; this slothweb reads
+  v1..v12)": this build does not know its columns. An older one is read
   by probing its columns with `PRAGMA table_info`: a column the version
   lacks (`device_class`, `camera_*` before v6, `dhcp_vci` before v7,
   `alerts.reopens` before v8) reads as `0` or `NULL`, and a table that is missing reads as no rows,

@@ -82,7 +82,7 @@
 #include "web_secret.h"
 
 #define WEB_SDB_SCHEMA_MIN 1
-#define WEB_SDB_SCHEMA_MAX 11
+#define WEB_SDB_SCHEMA_MAX 12
 #define WEB_SDB_BUSY_MS    100
 #define WEB_SDB_HTTP_MS    250       /* a request's budget */
 /* /api/history/overview's alone. It counts every device and alert
@@ -663,5 +663,70 @@ extern int web_slothdb_test_flags;
 extern int web_slothdb_test_immutable;
 /* Called, when set, between the choice of open and sqlite3_open_v2(). */
 extern void (*web_slothdb_test_before_open)(void);
+
+/* ── the receiver's sky and the aircraft, over time (2026-11-05) ─────
+ *
+ * The GNSS tab's "satellites seen" and the ADS-B tab's "aircraft seen"
+ * (web_rfhist.h): sloth.db's gnss_sightings (v10) and adsb_aircraft /
+ * adsb_sightings (v12), read through the allow-list like every other
+ * table. A file older than the table answers 0 rows (the caller says
+ * the history is not in it yet). */
+typedef struct {
+    int       gnssid, prn, svid;       /* svid -1 absent */
+    long long first_seen, last_seen, records, used_n, cn0_n;
+    int       has_cn0;
+    double    cn0_max, cn0_sum;
+    int       has_el, el_max;
+} web_sdb_gsat_t;
+typedef int (*web_sdb_gsat_fn)(void *ctx, const web_sdb_gsat_t *g);
+/* One row per (gnssid, prn) with a sighting at or after `from`, the
+ * most recently seen first, at most limit. Rows, or -1. */
+int  web_sdb_gnss_seen(web_sdb_conn_t *c, long long from, long long limit,
+                       web_sdb_gsat_fn fn, void *ctx);
+
+typedef struct {
+    long long ts;
+    int       has_el, el, has_az, az, has_cn0, used, health;   /* health -1 absent */
+    double    cn0;
+} web_sdb_gpt_t;
+typedef int (*web_sdb_gpt_fn)(void *ctx, const web_sdb_gpt_t *p);
+/* One satellite's sightings at or after `from`, oldest first, the
+ * newest `max` of them. Rows, or -1. */
+int  web_sdb_gnss_sat(web_sdb_conn_t *c, int gnssid, int prn, long long from,
+                      int max, web_sdb_gpt_fn fn, void *ctx);
+
+typedef struct {
+    char      hex[8];
+    int       non_icao, emergency_seen, pos_seen;
+    long long first_seen, last_seen, visits, sightings;
+    char      flight[9], squawk[5], category[3], source_type[16];
+    int       has_alt, alt_min, alt_max;
+    int       has_gs, has_rssi, has_messages;
+    double    gs_max, rssi_max;
+    long long messages;
+} web_sdb_ac_t;
+typedef int (*web_sdb_ac_fn)(void *ctx, const web_sdb_ac_t *a);
+/* adsb_aircraft rows last seen at or after `from`, newest first, at
+ * most limit; `q`, when not empty, a prefix of the hex or the callsign
+ * (case-folded by the caller; only [0-9a-z~] and [0-9A-Z]). An exact
+ * hex reads one row. Rows, or -1. */
+int  web_sdb_adsb_seen(web_sdb_conn_t *c, long long from, long long limit,
+                       long long offset, const char *q, web_sdb_ac_fn fn, void *ctx);
+/* One aircraft's inventory row: 1 found, 0 not, -1 error. */
+int  web_sdb_adsb_one(web_sdb_conn_t *c, const char *hex, web_sdb_ac_t *out);
+
+typedef struct {
+    long long ts, heard;               /* heard 0 absent */
+    char      flight[9], squawk[5], emergency[12];
+    int       on_ground, alt_band;
+    int       has_alt_baro, alt_baro, has_alt_geom, alt_geom;
+    int       has_gs, has_track, has_rate, rate, has_pos, has_rssi;
+    double    gs, track, lat, lon, rssi;
+} web_sdb_apt_t;
+typedef int (*web_sdb_apt_fn)(void *ctx, const web_sdb_apt_t *p);
+/* One aircraft's sightings at or after `from`, oldest first, the newest
+ * `max` of them. Rows, or -1. */
+int  web_sdb_adsb_track(web_sdb_conn_t *c, const char *hex, long long from,
+                        int max, web_sdb_apt_fn fn, void *ctx);
 
 #endif

@@ -100,7 +100,10 @@
  * one row per incident beside the per-finding alerts row, and rides the
  * unconditional schema; the v10 -> v11 step is a stamp alone. The
  * alerts table is unchanged. */
-#define DB_SCHEMA_VERSION 11
+/* Bumped to 12 on 2026-11-05 (#26, docs/wiki/adsb.md): adsb_aircraft
+ * and adsb_sightings are new tables and ride the unconditional schema;
+ * the v11 -> v12 step is a stamp alone. No existing table changes. */
+#define DB_SCHEMA_VERSION 12
 
 /* The incidents kept per key in alert_incidents (#175), newest first
  * by first_seen. A key evicted under pressure re-fires as a new
@@ -410,5 +413,8 @@ const char *db_schema_migrate_v9_sql(void);
 /* v10 -> v11 (#175): no ALTER — alert_incidents is a new table and
  * rides the unconditional schema. An empty statement list. */
 const char *db_schema_migrate_v10_sql(void);
+/* v11 -> v12 (#26): no ALTER — adsb_aircraft and adsb_sightings are new
+ * tables and ride the unconditional schema. An empty statement list. */
+const char *db_schema_migrate_v11_sql(void);
 
 #endif /* SLOTH_DB_H */

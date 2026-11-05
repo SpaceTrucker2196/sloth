@@ -349,6 +349,17 @@
       <div class="label">satellite <span class="sub" id="gnss-detail-name"></span> <button type="button" id="gnss-detail-close">close</button></div>
       <dl class="gnss-kv" id="gnss-detail-kv"></dl>
     </section>
+    <section class="panel" id="gnss-hist" hidden>
+      <div class="label">satellite history <span class="sub" id="gnss-hist-name"></span> <button type="button" id="gnss-hist-close">close</button></div>
+      <canvas id="gnss-hist-plot" class="heat" aria-label="the satellite's C/N0 and elevation over the window"></canvas>
+      <div class="sub" id="gnss-hist-note"></div>
+    </section>
+    <section class="panel">
+      <div class="label">satellites seen <span class="sub" id="gnss-seen-count"></span> <span class="dt-tools" id="gnss-seen-tools"></span>
+        <label class="sub">window <select id="gnss-seen-days"><option value="1">24 h</option><option value="7">7 days</option><option value="30">30 days</option></select></label></div>
+      <div class="hscroll" id="gnss-seen-box"><div class="histrow dhead" id="gnss-seen-thead"></div><div id="gnss-seen-rows"></div></div>
+      <div class="sub" id="gnss-seen-note">every satellite the receiver listed in the window, from sloth.db's gnss_sightings (one row per satellite per banded change or 300 s heartbeat, kept as long as sloth's --db retention keeps observations). Click a row, or a satellite above, for its C/N0 and elevation over the window.</div>
+    </section>
    </div>
    <div id="v-adsb" hidden>
     <section class="panel scope-empty" id="adsb-scope-empty"><div class="label">ADS-B</div><p>Nothing here under Local. Aircraft are the ADS-B decoder's (<code>--adsb</code>), a passive radio; the host's own interfaces carried none. Switch to Monitor or Hybrid to see them.</p></section>
@@ -371,6 +382,18 @@
     <section class="panel" id="adsb-detail" hidden>
       <div class="label">aircraft <span class="sub" id="adsb-detail-name"></span> <button type="button" id="adsb-detail-close">close</button></div>
       <dl class="adsb-kv" id="adsb-detail-kv"></dl>
+      <div class="label">history <span class="sub" id="adsb-hist-note"></span></div>
+      <dl class="adsb-kv" id="adsb-hist-kv"></dl>
+      <canvas id="adsb-prof" class="heat" aria-label="the aircraft's altitude over its recorded sightings"></canvas>
+      <div class="sub">altitude over the aircraft's recorded sightings in the window (sloth.db's adsb_sightings: one per altitude band, position cell, squawk, emergency, callsign or category change, or the 300 s heartbeat); its whole recorded track is drawn on the positions plot above.</div>
+    </section>
+    <section class="panel">
+      <div class="label">aircraft seen <span class="sub" id="adsb-seen-count"></span> <span class="dt-tools" id="adsb-seen-tools"></span>
+        <label class="sub">window <select id="adsb-seen-days"><option value="1">24 h</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="365">a year</option></select></label>
+        <label class="sub">search <input type="search" id="adsb-seen-q" maxlength="8" spellcheck="false" autocomplete="off" placeholder="hex or callsign"></label></div>
+      <div class="hscroll" id="adsb-seen-box"><div class="histrow dhead" id="adsb-seen-thead"></div><div id="adsb-seen-rows"></div></div>
+      <div><button type="button" id="adsb-seen-more" hidden>more</button></div>
+      <div class="sub" id="adsb-seen-note">every aircraft address the decoder listed in the window, from sloth.db's adsb_aircraft (one row per address, kept as long as sloth's --db retention keeps entities): first and last seen, visits (each time it came back after expiring), recorded sightings, the callsign, squawk and category last heard, the altitude range, top ground speed and strongest signal, and whether it ever reported an emergency. Click a row for its history.</div>
     </section>
    </div>
    <div id="v-wifi" hidden>

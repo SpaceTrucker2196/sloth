@@ -844,6 +844,63 @@ static const char SCHEMA_SQL[] =
     "CREATE INDEX IF NOT EXISTS idx_gnss_sightings_last_seen"
     " ON gnss_sightings(last_seen);\n"
 
+    /* ADS-B (#26, schema v12, docs/wiki/adsb.md): what the --adsb
+     * decoder listed. adsb_aircraft is the inventory, one row per
+     * address ever seen (the entity tier); adsb_sightings one row per
+     * meaningful change of an aircraft (the adsb_aircraft JSONL
+     * record's rule: altitude band, position cell, squawk, emergency,
+     * callsign, category, or the 300 s heartbeat), its track over time
+     * (the observation tier). hex is sloth's own spelling: six
+     * lower-case hex digits, `~`-prefixed for a non-ICAO address. */
+    "CREATE TABLE IF NOT EXISTS adsb_aircraft ("
+    "  hex            TEXT PRIMARY KEY,"
+    "  non_icao       INTEGER NOT NULL DEFAULT 0,"
+    "  first_seen     INTEGER NOT NULL,"
+    "  last_seen      INTEGER NOT NULL,"
+    "  visit_first    INTEGER NOT NULL,"
+    "  visits         INTEGER NOT NULL DEFAULT 1,"
+    "  sightings      INTEGER NOT NULL DEFAULT 1,"
+    "  flight         TEXT,"
+    "  squawk         TEXT,"
+    "  category       TEXT,"
+    "  source_type    TEXT,"
+    "  emergency_seen INTEGER NOT NULL DEFAULT 0,"
+    "  alt_min        INTEGER,"
+    "  alt_max        INTEGER,"
+    "  gs_max         REAL,"
+    "  rssi_max       REAL,"
+    "  messages       INTEGER,"
+    "  pos_seen       INTEGER NOT NULL DEFAULT 0"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_adsb_aircraft_last_seen"
+    " ON adsb_aircraft(last_seen);\n"
+    "CREATE TABLE IF NOT EXISTS adsb_sightings ("
+    "  last_seen  INTEGER NOT NULL,"
+    "  hex        TEXT NOT NULL,"
+    "  heard      INTEGER,"
+    "  flight     TEXT,"
+    "  squawk     TEXT,"
+    "  emergency  TEXT,"
+    "  category   TEXT,"
+    "  on_ground  INTEGER NOT NULL DEFAULT 0,"
+    "  alt_baro   INTEGER,"
+    "  alt_geom   INTEGER,"
+    "  alt_band   INTEGER,"
+    "  gs         REAL,"
+    "  track      REAL,"
+    "  baro_rate  INTEGER,"
+    "  lat        REAL,"
+    "  lon        REAL,"
+    "  rssi       REAL,"
+    "  messages   INTEGER,"
+    "  source_type TEXT,"
+    "  PRIMARY KEY (last_seen, hex)"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_adsb_sightings_last_seen"
+    " ON adsb_sightings(last_seen);\n"
+    "CREATE INDEX IF NOT EXISTS idx_adsb_sightings_hex"
+    " ON adsb_sightings(hex, last_seen);\n"
+
     "CREATE TABLE IF NOT EXISTS sensors ("
     "  kind       INTEGER NOT NULL,"
     "  iface      TEXT NOT NULL,"
@@ -968,6 +1025,12 @@ static const char MIGRATE_V9_SQL[] = "";
  * before (docs/wiki/sqlite-schema.md). */
 static const char MIGRATE_V10_SQL[] = "";
 
+/* v11 -> v12 (#26, 2026-11-05): no ALTER. adsb_aircraft and
+ * adsb_sightings are new tables on the unconditional schema; the step
+ * is the stamp, as v10 -> v11 was. Nothing is backfilled: no earlier
+ * file recorded an aircraft. */
+static const char MIGRATE_V11_SQL[] = "";
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -981,3 +1044,4 @@ const char *db_schema_migrate_v7_sql(void) { return MIGRATE_V7_SQL; }
 const char *db_schema_migrate_v8_sql(void) { return MIGRATE_V8_SQL; }
 const char *db_schema_migrate_v9_sql(void) { return MIGRATE_V9_SQL; }
 const char *db_schema_migrate_v10_sql(void) { return MIGRATE_V10_SQL; }
+const char *db_schema_migrate_v11_sql(void) { return MIGRATE_V11_SQL; }

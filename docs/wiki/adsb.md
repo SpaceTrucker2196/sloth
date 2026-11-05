@@ -28,7 +28,7 @@ stage, `SENSOR_ADSB` in the sensors stage), `src/jsonl.c`
 readsb's `README-json.md` (wiedehopf/readsb; dump1090-fa documents
 the same `aircraft.json`).
 
-**Last updated**: 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
+**Last updated**: 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
 
 ---
 
@@ -44,7 +44,8 @@ the same `aircraft.json`).
 3. **State**: `adsb_aircraft_t` keyed by (24-bit address, non-ICAO
    flag), and `adsb_health_t` (`include/sloth.h`).
 4. **View**: slothweb's ADS-B tab (below); no TUI view yet (pending).
-5. **JSONL**: `adsb_aircraft`, plus `adsb_*` fields on `sensor_health`
+5. **JSONL / --db**: `adsb_aircraft`, plus `adsb_*` fields on `sensor_health`;
+   with `--db`, the `adsb_aircraft` and `adsb_sightings` tables (v12, below)
    and a `sensor` record of kind `adsb`.
 6. **Out of scope**: transmitting or interrogating (active radar),
    driving the SDR, SBS / Beast network feeds (slice 1 refuses
@@ -227,10 +228,39 @@ passive radio, so the records are Monitor's, as BLE's are; under Local
 the tab shows its scope note. Full description in
 [`web/README.md`](../../web/README.md#ads-b).
 
+## `--db`: `adsb_aircraft` and `adsb_sightings` (schema v12)
+
+With `--db` and `--adsb`, `write_adsb()` (`src/db.c`) records the
+aircraft on the record's own change-only rule (`adsb_row_sig()`, or the
+300 s heartbeat), with its own change memory: one `adsb_sightings` row
+per write (time, the decoder's last-heard time, callsign, squawk,
+emergency, category, on-ground, both altitudes, band, speed, track,
+vertical rate, position, RSSI, messages, source) and one upsert of the
+`adsb_aircraft` inventory row for the address: earliest first seen,
+latest last seen, `visits` (one more each time sloth's own `first_seen`
+moves, i.e. the row expired and the address came back), `sightings`,
+the newest non-empty callsign, squawk, category and source, the
+altitude range, top ground speed, strongest RSSI, whether a position
+or an emergency was ever reported. `adsb_sightings` is in the
+observation tier, `adsb_aircraft` in the entity tier (3× retention).
+The v11 → v12 step is a stamp; [[sqlite-schema]] has the columns.
+
+slothweb reads them (`web/src/web_rfhist.c`, through the allow-list):
+`/api/adsb/seen?days=&limit=&offset=&q=` the inventory rows last seen
+in the window (7 days by default, up to 400; 100 a page; `q` a hex or
+callsign prefix, letters and digits only) and
+`/api/adsb/aircraft?hex=&days=` one aircraft's row and its sightings
+(at most 400, oldest first, compact rows named in `cols`). The ADS-B
+tab shows the first as the "aircraft seen" table and the second in the
+detail panel: the inventory figures, every callsign and squawk it used,
+an altitude profile over time (emergencies ringed), and the recorded
+track dashed on the positions plot, also for an aircraft the decoder no
+longer lists. Monitor's and Hybrid's, as the live panel is.
+
 ## Pending (later slices)
 
-A TUI aircraft view, `--db` tables, an emergency-squawk alert with its
-research citation, SBS / Beast socket input.
+A TUI aircraft view, an emergency-squawk alert with its research
+citation, SBS / Beast socket input.
 
 ## Related pages
 

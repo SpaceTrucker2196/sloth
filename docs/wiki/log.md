@@ -6538,3 +6538,16 @@ aged out, a 32-position track per row. The page draws the decoder's
 health, the aircraft table, a north-up position plot with altitude-coloured
 tracks (no map tiles) and a detail panel; Monitor's and Hybrid's, as
 BLE is. Updated [[slothweb]].
+
+## 2026-11-05 — GNSS and ADS-B history (#26)
+
+[[sqlite-schema]] v12: `adsb_aircraft` (entity tier, one row per address
+ever listed: first and last seen, visits, sightings, last callsign /
+squawk / category, altitude, speed and RSSI extremes, emergency and
+position ever seen) and `adsb_sightings` (observation tier, one row per
+change on the `adsb_aircraft` record's rule), written by `write_adsb()`;
+the v11 → v12 step is a stamp. slothweb reads them and the v10
+`gnss_sightings` (`/api/gnss/seen`, `/api/gnss/sat`, `/api/adsb/seen`,
+`/api/adsb/aircraft`): a "seen" table in each tab and per-item history
+(a satellite's C/N0 and elevation, an aircraft's altitude profile and
+recorded track). Updated [[adsb]], [[gnss]], [[slothweb]].
