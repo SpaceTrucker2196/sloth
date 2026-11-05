@@ -18,7 +18,7 @@ each is a typed producer of observations copied into `sloth_state_t`, exactly
 like the 802.11 path. Until the sensor seam exists, treat everything here as
 design, not implementation.
 
-**Last updated**: 2026-11-05 (ADS-B slice 1 shipped: the `--adsb` feed, the aircraft table and the `adsb_aircraft` record, [[adsb]]); 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
+**Last updated**: 2026-11-05 (ADS-B in slothweb: the ADS-B tab, [[adsb]]); 2026-11-05 (ADS-B slice 1 shipped: the `--adsb` feed, the aircraft table and the `adsb_aircraft` record, [[adsb]]); 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
 
 ---
 
@@ -140,7 +140,7 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
   opens or tunes the SDR and uses no network.
 - **State**: `adsb_aircraft_t` keyed by address, `adsb_health_t`
   (`include/sloth.h`, `src/adsb.c`).
-- **View**: pending (an aircraft table).
+- **View**: slothweb's ADS-B tab (aircraft table, position plot, 2026-11-05); a TUI view pending.
 - **JSONL**: `adsb_aircraft`, change-only on held altitude bands and
   position cells; `adsb_*` in `sensor_health`; the `sensor` record of
   kind `adsb`.

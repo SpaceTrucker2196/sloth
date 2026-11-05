@@ -262,7 +262,7 @@ static const char *const POLL_TYPES[] = {
     "ssdp_device", "onvif_device", "scan_entry", "packet", "process",
     "ndp_ra", "smb_session", "kerb_event", "ldap_event", "bgp_session",
     "ssh_flow", "rdp_flow", "snmp_flow", "mqtt_flow", "ble_device",
-    "ble_alert", "gnss_fix", "gnss_sky", "gnss_sat", "sensor_health", NULL
+    "ble_alert", "gnss_fix", "gnss_sky", "gnss_sat", "adsb_aircraft", "sensor_health", NULL
 };
 
 int web_live_is_poll_type(const char *t) {

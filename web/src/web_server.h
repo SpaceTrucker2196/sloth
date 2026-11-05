@@ -30,6 +30,7 @@
 #include "web_live.h"
 #include "web_sqlbox.h"
 #include "web_tsdb.h"
+#include "web_adsb.h"
 #include "web_gnss.h"
 
 #define WEB_MAX_CONNS 32
@@ -128,6 +129,7 @@ typedef struct {
     web_sqlbox_t   *sql;      /* NULL: no SQL box; set before run */
     web_ble_t      *ble;      /* NULL: no BLE tables; set before run */
     web_gnss_t     *gnss;     /* NULL: no GNSS panel; set before run */
+    web_adsb_t     *adsb;     /* NULL: no ADS-B panel; set before run */
     int             sql_conn; /* the slot waiting on the box, or -1 */
     int             import_conn;  /* the slot reading an import, or -1 */
     unsigned long long rec_sent;  /* newest ticker record broadcast */
@@ -175,6 +177,8 @@ void     web_server_set_sqlbox(web_server_t *s, web_sqlbox_t *b);
 void     web_server_set_ble(web_server_t *s, web_ble_t *b);
 /* The GNSS panel (web_gnss.h) the routes answer from; NULL for none. */
 void     web_server_set_gnss(web_server_t *s, web_gnss_t *g);
+/* The ADS-B panel (web_adsb.h) the route answers from; NULL for none. */
+void     web_server_set_adsb(web_server_t *s, web_adsb_t *a);
 
 void     web_server_stats(web_server_t *s, web_stats_t *out);
 uint16_t web_server_port(const web_server_t *s);

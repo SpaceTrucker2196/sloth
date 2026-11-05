@@ -498,6 +498,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/pcap?id=&n=` | `200` the same file's bytes, `Content-Type: application/vnd.tcpdump.pcap`, `Content-Disposition: attachment; filename="<its name>"`, `X-Sloth-SHA256: verified`, `mismatch` or `no_manifest_entry` (the check of the bytes served), `Cache-Control: no-store`; the errors as above, as JSON |
    | `GET /api/bundle?kind=device\|alert\|lookup\|ble\|platform&id=` | `200` JSON, a detail view's whole answer for its "copy JSON" button ([Copy JSON: the analysis bundle](#copy-json-the-analysis-bundle)); `400` for a kind, an id or a parameter that does not pass; `404` and `503` as the route it splices (`not_found` for a BLE address no sensor heard, `no_such_platform`, `no_store`); `413` `bundle_too_large` |
    | `GET /api/gnss?limit=` | `200` JSON, the GNSS tab ([GNSS](#gnss)): the `sensor_health` gnss block, the newest `gnss_fix` and `gnss_sky`, every satellite row with its last 16 `(ts, C/N0)` points sorted by C/N0, and the panel's counts; `scope_note` says the receiver is the host's own, so the answer is the same under every scope; `400` for an unknown parameter or a `limit` outside 1..64; `503` with no panel |
+   | `GET /api/adsb?limit=` | `200` JSON, the ADS-B tab ([ADS-B](#ads-b)): the `sensor_health` adsb block, every aircraft row with its kept track (its last 32 positions, `[ts, lat, lon, alt]`), an emergency first, then live before gone, then the most recently heard, and the panel's counts (`total`, `live`, `with_pos`, `emergency`); Monitor's and Hybrid's, Local answers `out_of_scope` with the query still checked; `400` for an unknown parameter or a `limit` outside 1..512; `503` with no panel |
    | `GET /api/gnss/fixes?since=&limit=` | `200` JSON, the kept `gnss_fix` records (512 in memory) oldest first after `since` (unix seconds), at most `limit` (default and most 128); the page walks the ring (`gnss.js fixes()`: from `since=0`, then from the last row's `ts` while a page comes back full, at most eight pages), so the strip reaches the newest record once the ring holds more than a page; `400` for `bad_since` / `bad_limit` |
    | `HEAD /api/alerts`, `HEAD /api/alert`, `HEAD /api/pcap`, `HEAD /api/pcap/frames`, `HEAD /api/bundle` | `405`, `Allow: GET`, as `/api/query` |
    | `GET /api/positions?mac=&format=json\|geojson\|gpx&since=&until=` | `200`, sloth.db v9's `device_positions` for one MAC (where the sensor was when it heard it, not the device's position) and the sensor's track over the same span, newest first, at most 200 of each (the track the newest 200 points within the samples' span, so the oldest samples of a full answer may have no track under them), `"more"` when there were more; the GeoJSON carries the same `"more"` and `"limit"` as foreign members of its FeatureCollection (RFC 7946 §6.1) and a cut GPX says `truncated` in its `<metadata><desc>` ([Sensor location](#sensor-location)); `json` is `application/json`, `geojson` (RFC 7946) `application/geo+json` and `gpx` (GPX 1.1) `application/gpx+xml`, both as attachments; `400` for a parameter that does not pass (`bad_mac`, `bad_format`, `bad_range`); `503` with no `--sloth-db` or sloth.db unreadable. A file before v9 answers empty lists. `HEAD` is `405` |
@@ -871,6 +872,46 @@ the line arrived — coarse (serial and gpsd latency, no PPS), enough to
 see a multi-second step and nothing finer; the page labels it so.
 Observation only: no row is a finding, and the detectors are a later
 slice.
+
+## ADS-B
+
+The ADS-B tab (2026-11-05, #26) is the aircraft a local decoder lists,
+as sloth reports them ([adsb](../docs/wiki/adsb.md)): with `--adsb`,
+sloth tails readsb's or dump1090-fa's `aircraft.json` and writes one
+change-only `adsb_aircraft` record per aircraft (first sight, a change
+of held altitude band, position cell, squawk, emergency, callsign or
+category, the 300 s heartbeat, and one `"gone"` on expiry), plus the
+`adsb_*` members of `sensor_health`. `web/src/web_adsb.c` keeps them in
+memory: 512 rows keyed by `hex` (`~`-prefixed non-ICAO addresses are a
+separate key), the least recently reported evicted; a gone row kept,
+dimmed, for 600 s; a live row quiet for 660 s (two heartbeats and a
+margin: its `gone` was lost or sloth stopped) dropped and counted as
+aged; each row's last 32 positions, one per record whose position
+moved, reset when the address comes back with a new `first_seen`.
+Nothing is persisted; sloth.db has no ADS-B table yet.
+
+A row's figures are as of its last record, not the decoder's last
+second: altitude within its band, position within its cell. The page
+says so. The page (`web/ui/adsb.js`, `window.SlothAdsb`, containers
+`adsb-*`, one hook in `app.js`) draws a header from the decoder's
+health (state, aircraft live and with a position, the decoder's clock
+age, message, read and error counts), the aircraft table (app.js's
+DataTable; rows bright with a position, dim once gone; altitude
+heat-graded over 45,000 ft, RSSI over -50..0 dBFS with a bar; an
+emergency status and the reserved squawks 7500 / 7600 / 7700 in the
+peak colour as the decoder reports them, text only), a position plot
+(north up, no map tiles and nothing fetched: each aircraft at its last
+position with a heading tick and its kept track coloured by altitude,
+a km scale bar) and a detail panel on click. The decoder's SDR is a
+passive radio, so `adsb_aircraft` is Monitor's like `ble_device`; under
+Local the view shows its scope note.
+
+Every string is hostile: `hex` must be sloth's `~`? and six lower-case
+hex digits (else rejected and counted), the callsign printable ASCII of
+at most 8, the squawk four octal digits, the category `A0`..`D7`, the
+emergency one of sloth's eight words; every number is range checked
+and anything outside is `null`, never clamped. Observation only: no
+row is a finding; the emergency-squawk alert is a later slice.
 
 ## The data socket (M1)
 

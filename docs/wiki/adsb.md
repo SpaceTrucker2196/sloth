@@ -28,7 +28,7 @@ stage, `SENSOR_ADSB` in the sensors stage), `src/jsonl.c`
 readsb's `README-json.md` (wiedehopf/readsb; dump1090-fa documents
 the same `aircraft.json`).
 
-**Last updated**: 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
+**Last updated**: 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
 
 ---
 
@@ -43,7 +43,7 @@ the same `aircraft.json`).
    dump1090-fa, which the operator runs; sloth needs only the file.
 3. **State**: `adsb_aircraft_t` keyed by (24-bit address, non-ICAO
    flag), and `adsb_health_t` (`include/sloth.h`).
-4. **View**: none yet (pending).
+4. **View**: slothweb's ADS-B tab (below); no TUI view yet (pending).
 5. **JSONL**: `adsb_aircraft`, plus `adsb_*` fields on `sensor_health`
    and a `sensor` record of kind `adsb`.
 6. **Out of scope**: transmitting or interrogating (active radar),
@@ -211,10 +211,26 @@ receiver locate it roughly. The records go to the operator's own JSONL
 sink only. Tests and documentation carry invented addresses, callsigns
 and positions, never a receiver's.
 
+## slothweb
+
+The ADS-B tab (2026-11-05) reads the `adsb_aircraft` records and the
+`adsb_*` block of `sensor_health` off the data socket and keeps them in
+memory (`web/src/web_adsb.c`, `/api/adsb`): up to 512 rows, a gone row
+kept dimmed for 600 s, a live row with no record for 660 s dropped as
+aged, each row's last 32 positions as its track. The page
+(`web/ui/adsb.js`) draws the decoder's health line, the aircraft table,
+a north-up position plot with the tracks coloured by altitude (no map
+tiles, nothing fetched) and a detail panel. Because the records are
+change-only, a row's altitude and position are as of its last record:
+within its band and cell, not the decoder's latest second. The SDR is a
+passive radio, so the records are Monitor's, as BLE's are; under Local
+the tab shows its scope note. Full description in
+[`web/README.md`](../../web/README.md#ads-b).
+
 ## Pending (later slices)
 
-A TUI aircraft view, slothweb, `--db` tables, an emergency-squawk alert
-with its research citation, SBS / Beast socket input.
+A TUI aircraft view, `--db` tables, an emergency-squawk alert with its
+research citation, SBS / Beast socket input.
 
 ## Related pages
 

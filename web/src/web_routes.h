@@ -57,6 +57,7 @@
 
 #include "web_anomaly.h"
 #include "web_ble.h"
+#include "web_adsb.h"
 #include "web_gnss.h"
 #include "web_devices.h"
 #include "web_http.h"
@@ -82,6 +83,7 @@ typedef struct {
                                   (set by web_route() itself) */
     web_ble_t     *ble;       /* NULL: no BLE tables (web_ble.h) */
     web_gnss_t    *gnss;      /* NULL: no GNSS panel (web_gnss.h) */
+    web_adsb_t    *adsb;      /* NULL: no ADS-B panel (web_adsb.h) */
 } web_health_t;
 
 /* /api/live and the series routes are built into the connection's

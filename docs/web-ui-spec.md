@@ -285,6 +285,7 @@ All routes are `GET`. Any other method returns `405`. Responses are JSON unless 
 | `/api/ble/classes?from=&to=&cols=&mix=1` | the class mix: `/api/wifi/channels?mix=1`'s answer with `rows` for `channels` and a BLE advertiser per `tx` entry, anonymous advertising one `anonymous` entry in `b:unk` |
 | `/api/ble/proximity?from=&to=&cols=&n=12\|24\|48` | the advertisers heard in the window (at most 256 read, every tracker first), trackers first then nearest by signal less the row's announced power, each with its mean `rf.rssi.ble` per cell, its P_tx and band edges; no anonymous row and no read slot for one (`anonymous_heard` says one was left out) |
 | `/api/gnss?limit=`, `/api/gnss/fixes?since=&limit=` | the GPS Sat tab's receiver, satellites and kept fixes (2026-11-02) |
+| `/api/adsb?limit=` | the ADS-B tab's decoder health and aircraft with their kept tracks (2026-11-05); Monitor's and Hybrid's |
 | `/events` | SSE stream (see below) |
 
 ### 7.1 SSE events

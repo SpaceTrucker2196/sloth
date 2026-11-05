@@ -364,6 +364,11 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
         web_jw_raw(&w, ",\"gnss\":");
         web_gnss_health_json(h->gnss, &w);
     }
+    /* The ADS-B panel (web_adsb.h), likewise only when kept. */
+    if (h->adsb) {
+        web_jw_raw(&w, ",\"adsb\":");
+        web_adsb_health_json(h->adsb, &w);
+    }
     web_jw_raw(&w, ",\"sse_clients\":");
     web_jw_int(&w, h->sse_clients);
     web_jw_raw(&w, ",\"tick_seq\":");
@@ -827,6 +832,35 @@ static int route_gnss(const web_req_t *rq, const web_health_t *h, int fixes,
         rc = web_gnss_fixes_route(h->gnss, rq->query, h->wall_s, body, cap, &bl, &status);
     } else {
         rc = web_gnss_route(h->gnss, rq->query, h->wall_s, body, cap, &bl, &status);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/adsb (web_adsb.h): the aircraft a local decoder lists. Its SDR
+ * is a passive radio, as the BLE receivers are, so Monitor's and
+ * Hybrid's; under Local the query is checked, then the one
+ * out_of_scope answer. */
+static int route_adsb(const web_req_t *rq, const web_health_t *h,
+                      char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_adsb_route(h->adsb, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_adsb_out_of_scope_json(body, cap);
     }
     if (rc != 0 || bl == 0) {
         r->status = 503;
@@ -1369,6 +1403,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_gnss(rq, h, 0, out, outsz, r);
         if (!strcmp(rq->path, "/api/gnss/fixes"))
             return route_gnss(rq, h, 1, out, outsz, r);
+        if (!strcmp(rq->path, "/api/adsb"))
+            return route_adsb(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble"))
             return route_ble(rq, h, BLE_DEVICES, NULL, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble/alerts"))

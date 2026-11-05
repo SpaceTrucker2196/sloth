@@ -6528,3 +6528,13 @@ clock moves; before, each aircraft in it was written as a `live`
 `adsb_aircraft` with a wrong `last_seen` and `gone` a minute later.
 `--help` for `--adsb` names `beast://` beside `sbs://`, as
 [[cli-reference]] already did.
+
+## 2026-11-05 — ADS-B in slothweb (#26)
+
+[[adsb]]: slothweb's ADS-B tab. `/api/adsb` serves the aircraft slothweb
+keeps in memory from `adsb_aircraft` and the `adsb_*` block of
+`sensor_health`: 512 rows, gone rows kept 600 s, live rows quiet 660 s
+aged out, a 32-position track per row. The page draws the decoder's
+health, the aircraft table, a north-up position plot with altitude-coloured
+tracks (no map tiles) and a detail panel; Monitor's and Hybrid's, as
+BLE is. Updated [[slothweb]].

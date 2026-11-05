@@ -1,0 +1,328 @@
+// slothweb: the ADS-B panel (#26, 2026-11-05, web_adsb.h, docs/wiki/adsb.md).
+// window.SlothAdsb, one hook app.js calls when the view shows:
+//   SlothAdsb.show()   loads /api/adsb into the adsb-* containers and
+//                      keeps it current while the view is visible
+// Same-origin relative paths only, every value shown with textContent,
+// no map tiles and nothing fetched from anywhere else: the position plot
+// is drawn from the rows' own coordinates on a plain canvas. The SDR is a
+// passive radio, so the view is Monitor's and Hybrid's, as BLE is; under
+// Local the route answers out_of_scope and app.js shows the scope note.
+// The aircraft table is app.js's DataTable (window.SlothTables.make), as
+// every table on the page is. A row's figures are as of its last
+// adsb_aircraft record, which sloth writes only on a change of altitude
+// band, position cell, squawk, emergency, callsign or category (or the
+// 300 s heartbeat): the page says so rather than implying a live feed.
+(function () {
+  "use strict";
+  var POLL_MS = 5000, ALT_SPAN = 45000, RSSI_LO = -50;
+  var timer = 0, gen = 0, last = null, sel = null;
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = String(text);
+    return e;
+  }
+  function clear(n) { while (n && n.firstChild) n.removeChild(n.firstChild); return n; }
+  function set(id, text) { var e = $(id); if (e) e.textContent = text; }
+  function num(v) { return typeof v === "number" && isFinite(v); }
+  function fx(v, dp) { return num(v) ? v.toFixed(dp) : "-"; }
+  function heatClass(f) { return f < 0.15 ? "h0" : f < 0.40 ? "h1" : f < 0.70 ? "h2" : "h3"; }
+  function cssVar(name, fallback) {
+    var v = getComputedStyle(document.documentElement).getPropertyValue(name);
+    return v && v.trim() ? v.trim() : fallback;
+  }
+  function heatColor(f) {
+    return cssVar("--heat-" + (f < 0.15 ? 0 : f < 0.40 ? 1 : f < 0.70 ? 2 : 3), "currentColor");
+  }
+  function visible() { var v = $("v-adsb"); return v && !v.hidden; }
+  function age(ts, now) {
+    if (!num(ts) || ts <= 0) return "-";
+    var a = Math.max(0, now - ts);
+    return a < 60 ? a + "s" : a < 3600 ? Math.floor(a / 60) + "m" : Math.floor(a / 3600) + "h";
+  }
+  // The squawks the decoder reports for itself as an emergency are in
+  // `emergency`; these three are the codes ICAO reserves (7500 unlawful
+  // interference, 7600 radio failure, 7700 emergency), shown, not judged.
+  var SPECIAL = { "7500": "unlawful interference", "7600": "radio failure", "7700": "emergency" };
+  function emerg(a) { return a.state === "live" && a.emergency && a.emergency !== "none"; }
+  function altOf(a) { return num(a.alt_baro) ? a.alt_baro : num(a.alt_geom) ? a.alt_geom : null; }
+  function altText(a) {
+    if (a.on_ground) return "ground";
+    var v = altOf(a);
+    return num(v) ? String(v) : "-";
+  }
+  function rateOf(a) { return num(a.baro_rate) ? a.baro_rate : num(a.geom_rate) ? a.geom_rate : null; }
+  function rateText(a) {
+    var v = rateOf(a);
+    if (!num(v)) return "-";
+    return (v > 64 ? "↑" : v < -64 ? "↓" : "→") + Math.abs(v);
+  }
+  function label(a) { return a.flight || a.hex; }
+
+  function getJSON(path) {
+    return fetch(path, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    });
+  }
+
+  // ── the header: the decoder's sensor_health and the table's counts ─
+  function header(j) {
+    var now = num(j.now) ? j.now : Math.floor(Date.now() / 1000);
+    var s = j.sensor;
+    var h = clear($("adsb-head"));
+    if (!s && !j.total) {
+      h.appendChild(el("span", "", "ADS-B: no decoder"));
+      var e = $("adsb-empty");
+      e.hidden = false;
+      e.textContent = "no adsb records yet: sloth needs --adsb /run/readsb/aircraft.json (or another readsb / dump1090-fa aircraft.json), docs/wiki/adsb.md";
+      $("adsb-head2").textContent = "";
+      return;
+    }
+    $("adsb-empty").hidden = true;
+    h.appendChild(el("span", "", "ADS-B: decoder "));
+    var st = s ? s.state : "-";
+    h.appendChild(el("b", st === "live" ? "h0" : st === "waiting" ? "h1" : st === "stale" ? "h2" : st === "error" ? "h3" : "d-dim", st));
+    h.appendChild(el("span", "", "  aircraft "));
+    h.appendChild(el("b", "", String(j.live)));
+    h.appendChild(el("span", "", " live, " + j.with_pos + " with position" + (j.total > j.live ? ", " + (j.total - j.live) + " gone" : "")));
+    if (j.emergency) {
+      h.appendChild(el("span", "", "  "));
+      h.appendChild(el("b", "h3", j.emergency + " reporting an emergency"));
+    }
+    h.appendChild(el("span", "d-dim", "  src " + (j.src || (s && s.src) || "-") +
+      (s && num(s.age_s) ? "  decoder clock " + s.age_s + "s ago" : "") +
+      (s ? "  health " + age(s.ts, now) + " ago" : "")));
+    var h2 = clear($("adsb-head2"));
+    if (!s) return;
+    var errs = s.read_errors + s.parse_errors;
+    h2.appendChild(el("span", "", "decoder messages " + s.messages + "  reads " + s.reads + "  expired " + s.expired + "  "));
+    h2.appendChild(el("span", errs ? "h2" : "", "errors " + errs));
+    if (s.overflow) h2.appendChild(el("span", "h2", "  overflow " + s.overflow));
+    if (s.bad_entries) h2.appendChild(el("span", "h1", "  bad entries " + s.bad_entries));
+    if (s.err) h2.appendChild(el("span", "h3", "  " + s.err));
+    h2.appendChild(el("span", "", "  records " + j.records + (j.evictions ? "  evicted " + j.evictions : "") +
+      (j.aged ? "  aged " + j.aged : "") + (j.rejected ? "  rejected " + j.rejected : "")));
+  }
+
+  // ── the table ────────────────────────────────────────────────────
+  // One of app.js's DataTable (the owner's 2026-10-26 ruling: every table
+  // on the page is one implementation). With no sort set the rows stay
+  // in the server's order: an emergency first, live before gone, the
+  // most recently heard first.
+  var T = null, rows = [];
+  function val(k) { return function (a) { return num(a[k]) ? a[k] : null; }; }
+  var COLS = [
+    { k: "hx", label: "HEX", w: 8, min: 6, type: "text", val: function (a) { return a.hex; } },
+    { k: "fl", label: "FLIGHT", w: 9, min: 4, type: "text", val: function (a) { return a.flight || ""; } },
+    { k: "sq", label: "SQWK", w: 5, min: 4, type: "text", val: function (a) { return a.squawk || ""; } },
+    { k: "ct", label: "CAT", w: 4, min: 3, type: "text", val: function (a) { return a.category || ""; } },
+    { k: "al", label: "ALT ft", w: 7, min: 4, num: true, type: "num", val: function (a) { return a.on_ground ? -1 : altOf(a); } },
+    { k: "vs", label: "V/S", w: 7, min: 4, num: true, type: "num", val: rateOf },
+    { k: "gs", label: "GS kt", w: 6, min: 3, num: true, type: "num", val: val("gs") },
+    { k: "tk", label: "TRK", w: 5, min: 3, num: true, type: "num", val: val("track") },
+    { k: "ps", label: "POSITION", w: 19, min: 6, type: "text", val: function (a) { return num(a.lat) ? a.lat + "," + a.lon : ""; } },
+    { k: "rs", label: "RSSI", w: 6, min: 4, num: true, type: "num", val: val("rssi") },
+    { k: "sg", label: "SIGNAL", w: 10, min: 5, type: "num", val: val("rssi") },
+    { k: "ms", label: "MSGS", w: 7, min: 4, num: true, type: "num", val: val("messages") },
+    { k: "sr", label: "SOURCE", w: 10, min: 4, type: "text", val: function (a) { return a.source_type || ""; } },
+    { k: "st", label: "STATE", w: 5, min: 4, type: "text", val: function (a) { return a.state; } },
+    { k: "ag", label: "HEARD", w: 6, min: 3, type: "time", val: val("last_seen") }
+  ];
+  function table() {
+    if (T || !window.SlothTables || !$("adsb-box")) return T;
+    T = window.SlothTables.make({ id: "adsb", label: "aircraft", box: $("adsb-box"),
+      head: $("adsb-thead"), reset: $("adsb-tools"), redraw: drawRows, cols: COLS });
+    return T;
+  }
+  function cell(cls, text) { var c = el("span", cls); if (text !== undefined) c.textContent = String(text); return c; }
+  function rssiFrac(v) { return Math.max(0, Math.min(1, (v - RSSI_LO) / -RSSI_LO)); }
+  // A row under the columns: bright when it has a position, normal
+  // without, dim once gone; an emergency or a reserved squawk in the
+  // peak heat colour on its own cells (text colour only, no row tint).
+  function row(a, now) {
+    var on = sel === a.hex;
+    var cls = a.state === "gone" ? "d-dim" : num(a.lat) ? "d-bright" : "d-normal";
+    var r = el("div", "adsbrow dt-row " + cls + (on ? " on" : ""));
+    r.appendChild(cell("c-hx", a.hex));
+    r.appendChild(cell("c-fl" + (emerg(a) ? " h3" : ""), a.flight || "-"));
+    r.appendChild(cell("c-sq" + (SPECIAL[a.squawk] || emerg(a) ? " h3" : ""), a.squawk || "-"));
+    r.appendChild(cell("c-ct", a.category || "-"));
+    var alt = altOf(a);
+    r.appendChild(cell("c-al n " + (a.on_ground ? "d-dim" : num(alt) ? heatClass(Math.max(0, alt) / ALT_SPAN) : "d-dim"), altText(a)));
+    r.appendChild(cell("c-vs n", rateText(a)));
+    r.appendChild(cell("c-gs n", fx(a.gs, 0)));
+    r.appendChild(cell("c-tk n", fx(a.track, 0)));
+    r.appendChild(cell("c-ps", num(a.lat) ? a.lat.toFixed(3) + ", " + a.lon.toFixed(3) : "-"));
+    r.appendChild(cell("c-rs n " + (num(a.rssi) ? heatClass(rssiFrac(a.rssi)) : "d-dim"), fx(a.rssi, 1)));
+    var sig = cell("c-sg " + (num(a.rssi) ? heatClass(rssiFrac(a.rssi)) : ""));
+    var bar = el("span", "adsb-bar");
+    bar.style.width = (num(a.rssi) ? Math.round(rssiFrac(a.rssi) * 100) : 0) + "%";
+    sig.appendChild(bar);
+    r.appendChild(sig);
+    r.appendChild(cell("c-ms n", num(a.messages) ? a.messages : "-"));
+    r.appendChild(cell("c-sr", a.source_type || "-"));
+    r.appendChild(cell("c-st", a.state));
+    r.appendChild(cell("c-ag d-dim", age(a.last_seen, now)));
+    r.tabIndex = 0;
+    function pick() { sel = a.hex; detail(a, now); drawRows(); plot(last); }
+    r.addEventListener("click", pick);
+    r.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+    return r;
+  }
+  function drawRows() {
+    if (!last) return;
+    var j = last, now = num(j.now) ? j.now : Math.floor(Date.now() / 1000);
+    var t = table();
+    var ordered = t ? t.sort(rows, true) : rows.slice();
+    var body = clear($("adsb-rows"));
+    set("adsb-count", j.live + " live" + (j.total > j.live ? ", " + (j.total - j.live) + " gone" : ""));
+    ordered.forEach(function (a) { body.appendChild(row(a, now)); });
+  }
+
+  // ── the detail: one aircraft's figures ───────────────────────────
+  function detail(a, now) {
+    var box = $("adsb-detail");
+    box.hidden = false;
+    set("adsb-detail-name", label(a) + (a.flight ? " (" + a.hex + ")" : ""));
+    var kv = clear($("adsb-detail-kv"));
+    [["address", a.hex + (a.non_icao ? " (non-ICAO: TIS-B or similar)" : " (ICAO 24-bit)")],
+     ["callsign", a.flight || "-"],
+     ["squawk", a.squawk ? a.squawk + (SPECIAL[a.squawk] ? " (reserved: " + SPECIAL[a.squawk] + ")" : "") : "-"],
+     ["emergency", a.emergency || "- (not sent)"],
+     ["category", a.category || "-"],
+     ["altitude", a.on_ground ? "on the ground" :
+        (num(a.alt_baro) ? a.alt_baro + " ft baro" : "-") + (num(a.alt_geom) ? ", " + a.alt_geom + " ft geometric" : "")],
+     ["altitude band", a.alt_band === -2 ? "ground" : a.alt_band < 0 ? "unknown" : String(a.alt_band)],
+     ["vertical rate", num(rateOf(a)) ? rateOf(a) + " ft/min" + (num(a.baro_rate) ? " (baro)" : " (geometric)") : null],
+     ["ground speed", num(a.gs) ? a.gs.toFixed(1) + " kt" : null],
+     ["track", num(a.track) ? a.track.toFixed(1) + " deg true" : null],
+     ["position", num(a.lat) ? a.lat.toFixed(5) + ", " + a.lon.toFixed(5) + (num(a.pos_ts) ? " (" + age(a.pos_ts, now) + " ago)" : "") : "-"],
+     ["track points", String((a.track_pts || []).length)],
+     ["RSSI", num(a.rssi) ? a.rssi.toFixed(1) + " dBFS" : null],
+     ["messages", num(a.messages) ? String(a.messages) : null],
+     ["decoder source", a.source_type || "-"],
+     ["state", a.state],
+     ["first seen", age(a.first_seen, now) + " ago"],
+     ["last heard", age(a.last_seen, now) + " ago"],
+     ["last record", age(a.ts, now) + " ago (" + a.records + " records)"]
+    ].forEach(function (p) {
+      if (p[1] === null) return;
+      kv.appendChild(el("dt", "", p[0]));
+      kv.appendChild(el("dd", "", p[1]));
+    });
+  }
+  function closeDetail() { $("adsb-detail").hidden = true; sel = null; drawRows(); plot(last); }
+
+  // ── the plot: positions and tracks, north up, no map ─────────────
+  // Equirectangular around the rows' own centre, longitude scaled by
+  // cos(latitude) so distances read true near the middle; a scale bar
+  // in km. Colour is altitude on the heat ramp over 45,000 ft.
+  function plot(j) {
+    var c = $("adsb-plot");
+    if (!c || !j) return;
+    var dpr = window.devicePixelRatio || 1;
+    var W = Math.max(240, c.clientWidth || 480), H = 360;
+    c.width = W * dpr; c.height = H * dpr;
+    var g = c.getContext("2d");
+    if (!g) return;
+    g.scale(dpr, dpr);
+    g.clearRect(0, 0, W, H);
+    var pts = [];
+    (j.rows || []).forEach(function (a) {
+      (a.track_pts || []).forEach(function (p) { pts.push(p); });
+      if (num(a.lat)) pts.push([0, a.lat, a.lon, null]);
+    });
+    var dim = cssVar("--tui-dim", "#888");
+    g.font = "11px monospace";
+    if (!pts.length) {
+      g.fillStyle = dim;
+      g.textAlign = "center";
+      g.fillText("no aircraft with a position", W / 2, H / 2);
+      set("adsb-plot-note", "");
+      return;
+    }
+    var la0 = 90, la1 = -90, lo0 = 180, lo1 = -180;
+    pts.forEach(function (p) {
+      la0 = Math.min(la0, p[1]); la1 = Math.max(la1, p[1]);
+      lo0 = Math.min(lo0, p[2]); lo1 = Math.max(lo1, p[2]);
+    });
+    var lac = (la0 + la1) / 2, loc = (lo0 + lo1) / 2, k = Math.cos(lac * Math.PI / 180);
+    // At least 0.2 deg across so one aircraft is not a full-screen dot.
+    var spanY = Math.max(0.2, la1 - la0), spanX = Math.max(0.2 / Math.max(k, 0.1), lo1 - lo0) * k;
+    var pad = 24, sc = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
+    function X(lon) { return W / 2 + (lon - loc) * k * sc; }
+    function Y(lat) { return H / 2 - (lat - lac) * sc; }
+    // The scale bar: a round number of km near a fifth of the width.
+    var kmPerPx = 111.32 / sc, want = W / 5 * kmPerPx, step = Math.pow(10, Math.floor(Math.log(want) / Math.LN10));
+    var km = want / step >= 5 ? 5 * step : want / step >= 2 ? 2 * step : step;
+    g.strokeStyle = dim; g.fillStyle = dim; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(10, H - 10); g.lineTo(10 + km / kmPerPx, H - 10); g.stroke();
+    g.textAlign = "left";
+    g.fillText(km + " km", 10, H - 14);
+    g.fillText("N↑", W - 24, 14);
+    (j.rows || []).forEach(function (a) {
+      var tp = a.track_pts || [];
+      var gone = a.state === "gone", picked = sel === a.hex;
+      g.globalAlpha = gone ? 0.35 : 1;
+      g.lineWidth = picked ? 2.5 : 1.2;
+      for (var i = 1; i < tp.length; i++) {
+        var alt = num(tp[i][3]) ? Math.max(0, tp[i][3]) : 0;
+        g.strokeStyle = heatColor(alt / ALT_SPAN);
+        g.beginPath(); g.moveTo(X(tp[i - 1][2]), Y(tp[i - 1][1])); g.lineTo(X(tp[i][2]), Y(tp[i][1])); g.stroke();
+      }
+      if (!num(a.lat)) { g.globalAlpha = 1; return; }
+      var x = X(a.lon), y = Y(a.lat), aa = altOf(a);
+      var col = a.on_ground ? dim : heatColor(num(aa) ? Math.max(0, aa) / ALT_SPAN : 0);
+      g.fillStyle = col; g.strokeStyle = col;
+      g.beginPath(); g.arc(x, y, picked ? 5 : 3.5, 0, Math.PI * 2); g.fill();
+      if (num(a.track)) {
+        var t = (a.track - 90) * Math.PI / 180;
+        g.lineWidth = 1.5;
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x + 12 * Math.cos(t), y + 12 * Math.sin(t)); g.stroke();
+      }
+      if (emerg(a) || SPECIAL[a.squawk]) {
+        g.strokeStyle = cssVar("--heat-3", "#f00");
+        g.beginPath(); g.arc(x, y, 9, 0, Math.PI * 2); g.stroke();
+      }
+      g.fillStyle = cssVar("--ink", "currentColor");
+      g.textAlign = "left";
+      g.fillText(label(a) + (num(aa) && !a.on_ground ? " " + Math.round(aa / 100) : ""), x + 7, y - 6);
+      g.globalAlpha = 1;
+    });
+    set("adsb-plot-note", "about " + Math.round(spanY * 111) + " km north to south");
+  }
+
+  function load() {
+    var my = ++gen;
+    getJSON("/api/adsb").then(function (j) {
+      if (my !== gen || !visible()) return;
+      if (j.out_of_scope) return;
+      last = j;
+      rows = (j.rows || []).slice();
+      header(j);
+      drawRows();
+      plot(j);
+      if (sel) {
+        var cur = rows.filter(function (a) { return a.hex === sel; })[0];
+        if (cur) detail(cur, num(j.now) ? j.now : Math.floor(Date.now() / 1000));
+      }
+    }).catch(function (e) {
+      if (my !== gen) return;
+      set("adsb-head", "ADS-B: " + (e && e.message ? e.message : "error"));
+    });
+  }
+
+  function show() {
+    if (!$("v-adsb")) return;
+    load();
+    if (!timer) timer = setInterval(function () { if (visible()) load(); }, POLL_MS);
+  }
+
+  var closeBtn = $("adsb-detail-close");
+  if (closeBtn) closeBtn.addEventListener("click", closeDetail);
+
+  window.SlothAdsb = { show: show };
+})();

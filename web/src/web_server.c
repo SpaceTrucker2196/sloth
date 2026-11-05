@@ -146,6 +146,10 @@ void web_server_set_gnss(web_server_t *s, web_gnss_t *g) {
     s->gnss = g;
 }
 
+void web_server_set_adsb(web_server_t *s, web_adsb_t *a) {
+    s->adsb = a;
+}
+
 void web_server_stop(web_server_t *s) {
     char b = 1;
     ssize_t r = write(s->wake[1], &b, 1);
@@ -230,6 +234,7 @@ static void health_now(web_server_t *s, web_health_t *h) {
     h->m4          = s->m4;
     h->ble         = s->ble;
     h->gnss        = s->gnss;
+    h->adsb        = s->adsb;
     h->sql         = s->sql;
     h->sc          = NULL;    /* web_route() sets a request's own */
 }

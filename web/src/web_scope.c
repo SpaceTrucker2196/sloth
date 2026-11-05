@@ -46,6 +46,8 @@ static const struct { const char *t; int tag; } RTYPES[] = {
     { "twin_episode", M }, { "wifi_merged", M },
     /* the BLE receivers: passive radio */
     { "ble_device", M }, { "ble_alert", M },
+    /* the ADS-B decoder's SDR (web_adsb.h): passive radio, as BLE */
+    { "adsb_aircraft", M },
     /* the IP capture (src/capture/capture.c) */
     { "dns", LI }, { "tls", LI }, { "quic", LI }, { "http", LI }, { "ntp", LI },
     { "icmp", LI }, { "packet", LI },

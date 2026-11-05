@@ -128,6 +128,7 @@ int main(void) {
     SUITE(run_frrs_tests);
     SUITE(run_ble_tests);
     SUITE(run_gnss_tests);
+    SUITE(run_adsb_tests);
     SUITE(run_bledev_tests);
     SUITE(run_btsig_tests);
     SUITE(run_evidence_tests);
