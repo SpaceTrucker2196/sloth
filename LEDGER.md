@@ -312,3 +312,4 @@
 | 17c5e9e | 2026-11-04T02:45:06Z | claude-fable-5-1, claude-opus-5-5 | 62 | 7093 | 5459259 | 415146 | 9.7429 | #171 slothweb visual system V1-V4: series-backed tiles and strip facts with bands, G4 heatmap, shared-scale multiples; RSSI range glyphs, new-thing mark, bullet bars; horizon strips, History event rug, WiFi four-panel; attack chain timeline, Flows matrix |
 | 0d69d16 | 2026-11-04T03:18:25Z | claude-fable-5-1, claude-opus-5-5 | 98 | 8040 | 6111117 | 856742 | 13.8223 | README and docs brought up to date; AGENTS.md cost and concurrency lessons |
 | ecf40da | 2026-11-04T12:37:43Z | claude-opus-5 | 478 | 166414 | 46441848 | 546562 | 32.8493 | #183 — roster the host's own interface MACs as the sensor's own (items 1,3,4): s |
+| d78b019 | 2026-11-05T12:27:09Z | claude-opus-5 | 376 | 166820 | 31279715 | 520954 | 25.0218 | #185 — arch S0 docs: coupling inventory, ADRs 1-7, pack-schema v1 draft |
