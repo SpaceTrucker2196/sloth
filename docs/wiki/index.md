@@ -27,6 +27,15 @@ the Wi-Fi it watches:
 
 - [[sloth]] — what sloth is, what it explicitly never does.
 - [[architecture]] — code-tree layout and the seams between layers.
+- [[architecture-split]] — the measured coupling between the sensor, the
+  dashboard and the intelligence tables: every reference out of `web/`
+  and every intelligence table in `src/`, with #184's contract table
+  C1–C10 filled in and the places the grep disagrees with it.
+- [ADRs 0001–0007](adr/README.md) — the architecture decision records for
+  the three-repository programme (#184), one per decision, with the gaps
+  that still need an owner ruling marked in place.
+- [[pack-schema]] — the intel pack manifest, file set and immutability
+  rule, v1 draft.
 - [[threat-model]] — assets A1–A5, adversaries ADV-1..4, trust
   boundaries TB-1..7, and the finding → boundary map every security
   issue cites by ID.

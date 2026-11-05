@@ -6463,3 +6463,41 @@ the four GNSS rules, `alert_incidents` (sloth.db v11) and the antenna
 fixture guide. `agents/AGENTS.md` gains "Cost and concurrency": one
 builder plus one fixing reviewer, one workflow at a time, change-local
 tests, and the integration traps that turned CI red after green slices.
+
+## 2026-11-05 — Stage 0 contract freeze: the coupling inventory, ADRs 1 to 7, pack schema v1 (#185)
+
+Created [architecture-split.md](architecture-split.md), the measured
+coupling between the three concerns #184 proposes to split into `sloth`,
+`sloth-dash` and `sloth-comint`: the `Makefile`'s slothweb section
+(573–902, not the 575–760 both issues cite) reference by reference, the
+include lines out of `web/` resolved through `-iquote src` as well as the
+explicit `../../src/` ones, the intelligence tables in `src/` with a
+counted row count and the lookup function behind each, the committed data
+in `web/data/`, and #184 §2's contract table C1–C10 filled in from the
+greps. Nine disagreements with #184 are recorded in §5 rather than
+smoothed over, the largest three being that `rsn_ie.c` is not in
+`WEB_CORE_SRCS`, that `tests/` reaches into `web/` from eight places
+including three fuzz harnesses that `#include` slothweb source, and that
+the intelligence list in §1 is missing nine tables that meet its own
+definition. Every list carries the command that produced it.
+
+Created [adr/](adr/README.md) with the seven records #184 §2 lists —
+three repositories, the corpus staying with the rules, intelligence as
+files, `libsloth-wire`, no runtime dependency, opt-in sharing, versions
+per repository and per seam — each with context, decision and
+consequences, and with the owner's 2026-11-04 rulings on names,
+visibility, the vendor research workflow's home and the artifact's home
+recorded where they apply. Five gaps #184 does not decide are marked
+`OPEN — needs owner ruling` in place: the new repositories' licence,
+which intelligence tables move, what `libsloth-wire` contains beyond
+`WEB_CORE_SRCS`, and where `sloth-ble-scan.service` lives.
+
+Created [pack-schema.md](pack-schema.md), the v1 draft for Stage 1:
+manifest fields (schema and pack version, build time, per-file SHA-256,
+bytes, source URL, retrieval date, licence, format), the file set
+grounded in what `web/data/`, `web/data/btsig/` and `web/data/vendors/`
+hold today with each `SOURCE.md`'s own counts, the `src/` tables as
+`csv-rows` files, the two named tables that have no rows to carry, and
+the rule that a published pack version is never re-published with
+different bytes. Marked a draft throughout. Updated
+[index.md](index.md).
