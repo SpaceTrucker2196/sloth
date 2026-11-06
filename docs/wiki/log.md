@@ -6652,3 +6652,10 @@ it. Owner: a 9 dBi antenna on the Wi-Fi monitor radio. Updated
 ring, from `/api/radar`'s new `devs` lists; a label layout pass in which
 no label can overlap another; a velocity tick for any aircraft or APRS
 station with a speed and heading. The per-band rings stay, fainter.
+
+## 2026-11-06 — Radar device labels: ten a family, hover for the rest
+
+[[slothweb]]: after a first look at 100 stacked labels, only the 10 most
+recently heard Wi-Fi and BLE devices are labelled; any other shows its
+label while hovered or selected; labels compact; no label under a
+floating panel.

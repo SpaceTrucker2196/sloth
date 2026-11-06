@@ -1064,9 +1064,13 @@ ring at that distance (`globalAlpha` 0.15, `lineWidth` 1, Wi-Fi solid,
 BLE `[6, 4]` dashed, no fill); the per-band rings stay, fainter
 (0.09). The axis is a convention, not a bearing, and the side panel
 says so ("distance from signal strength; no bearing: drawn on the north
-axis"). A device's label is its name or SSID, else its address, its
-`~metres` and sloth's trend as its glyph (↘ approaching, → steady, ↗
-leaving): the only motion a Wi-Fi or BLE emitter has. The caption
+axis"). Only the 10 most recently heard of each family carry a label
+(owner ruling after seeing 100 labels cover the dome); any other dot
+shows its label while the pointer is over it or it is selected. A label
+is compact: the name or SSID cut to 12 characters, else the address's
+last three octets, its `~metres` and sloth's trend as its glyph (↘
+approaching, → steady, ↗ leaving): the only motion a Wi-Fi or BLE
+emitter has. No label is placed under a panel floating over the dome. The caption
 counts them ("devices: 50 of 1012 BLE, 50 of 61 Wi-Fi shown (most
 recent)"). A dot, or its stacked label, is picked before a ring; the
 panel opens it in BLE Devices or Devices (the drawers).

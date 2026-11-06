@@ -49,7 +49,12 @@
   var PRI = { sel: 0, air: 1, aprs: 2, dev: 3, satUsed: 4, sat: 5, band: 6, range: 7 };
   var S = { yaw: 0, pitch: PITCH_DFLT, zoom: 1, gnss: null, adsb: null, aprs: null, radar: null, trails: null,
             sel: null, selTrack: null, marks: [], rings: [], raf: 0, timer: 0, gen: 0, rgen: 0, tgen: 0,
-            sgen: 0, radarAt: 0, trailAt: 0, cam: null, drag: null, errs: {}, placed: null, labelPicks: [] };
+            sgen: 0, radarAt: 0, trailAt: 0, cam: null, drag: null, errs: {}, placed: null, labelPicks: [],
+            hover: null };
+  // Device labels (owner ruling 2026-11-06): of the 50 dots a family
+  // draws, only the LABEL_N most recently heard carry a label; any
+  // other shows its label while hovered or selected.
+  var LABEL_N = 10;
 
   function $(id) { return document.getElementById(id); }
   function num(v) { return typeof v === "number" && isFinite(v); }
@@ -190,8 +195,11 @@
   }
   function devKey(fam, dv) { return fam === "ble" ? dv.addr + "/" + dv.addr_type + "/" + dv.iface : dv.mac; }
   function trendGlyph(t) { return Object.prototype.hasOwnProperty.call(TREND_GLYPH, t) ? TREND_GLYPH[t] : ""; }
+  // Compact: a name or SSID cut to 12, else the address's last three
+  // octets; the distance and sloth's trend glyph.
   function devLabel(fam, dv) {
-    var id = fam === "ble" ? (dv.name || dv.addr) : (dv.ssid || dv.mac), gl = trendGlyph(dv.trend);
+    var nm = fam === "ble" ? dv.name : dv.ssid, ad = String((fam === "ble" ? dv.addr : dv.mac) || "");
+    var id = nm ? (nm.length > 12 ? nm.slice(0, 11) + "\u2026" : nm) : ad.slice(-8), gl = trendGlyph(dv.trend);
     return id + " ~" + metres(devM(dv)) + (gl ? " " + gl : "");
   }
 
@@ -313,8 +321,20 @@
       return { x0: x0, y0: y0, x1: x0 + w, y1: y0 + h };
     });
   }
-  function drawLabels(g, want, dpr, W, Hh, T) {
-    var boxes = [], h = 12 * dpr, gap = 2 * dpr;
+  // The panels floating over the dome (header, picked panel, caption),
+  // in canvas pixels: no label is placed under one.
+  function overlayBoxes(cv) {
+    var cb = cv.getBoundingClientRect(), sx = cv.width / Math.max(1, cb.width), sy = cv.height / Math.max(1, cb.height);
+    var out = [], ov = document.querySelectorAll("#radar-stage .radar-ov");
+    for (var i = 0; i < ov.length; i++) {
+      if (ov[i].hidden || !ov[i].offsetParent) continue;
+      var r = ov[i].getBoundingClientRect();
+      out.push({ x0: (r.left - cb.left) * sx, y0: (r.top - cb.top) * sy, x1: (r.right - cb.left) * sx, y1: (r.bottom - cb.top) * sy });
+    }
+    return out;
+  }
+  function drawLabels(g, want, dpr, W, Hh, T, blocked) {
+    var boxes = (blocked || []).slice(), h = 12 * dpr, gap = 2 * dpr;
     g.textAlign = "left";
     g.textBaseline = "top";
     want.forEach(function (w) { w.w = g.measureText(w.text).width; });
@@ -486,11 +506,12 @@
     var shown = { ble: 0, wifi: 0 };
     [["wifi", "R"], ["ble", "L"]].forEach(function (fam) {
       var list = (S.radar && S.radar.devs && S.radar.devs[fam[0]]) || [];
-      list.forEach(function (dv) {
+      list.forEach(function (dv, idx) {
         var m = devM(dv);
         if (!num(m)) return;
         shown[fam[0]]++;
         var key = devKey(fam[0], dv), on = isSel(fam[0], key), ble = fam[0] === "ble";
+        var hov = !!S.hover && S.hover.kind === fam[0] && S.hover.key === key;
         var old = stale(ble ? dv.last_seen : dv.ts, now), col = on ? T.signal : T.normal;
         if (ble) g.setLineDash([6, 4]); else g.setLineDash([]);
         g.lineWidth = 1;
@@ -505,8 +526,10 @@
         if (ble) dot(g, p.x, p.y, 3 * dpr); else square(g, p.x, p.y, 3 * dpr);
         g.globalAlpha = 1;
         S.marks.push({ x: p.x, y: p.y, kind: fam[0], key: key, ref: dv });
-        want.push({ x: p.x, y: p.y, col: fam[1], text: devLabel(fam[0], dv), pri: on ? PRI.sel : PRI.dev,
-                    color: on ? T.signal : T.muted, alpha: old ? 0.35 : 1, pick: { kind: fam[0], key: key } });
+        if (idx < LABEL_N || on || hov)
+          want.push({ x: p.x, y: p.y, col: fam[1], text: devLabel(fam[0], dv), pri: on || hov ? PRI.sel : PRI.dev,
+                      color: on ? T.signal : hov ? T.ink : T.muted, alpha: old && !hov ? 0.35 : 1,
+                      pick: { kind: fam[0], key: key } });
       });
     });
     g.lineWidth = dpr;
@@ -623,7 +646,7 @@
     // The sensor itself.
     g.fillStyle = T.ink;
     g.fillRect(o.x - 2 * dpr, o.y - 2 * dpr, 4 * dpr, 4 * dpr);
-    drawLabels(g, want, dpr, W, Hh, T);
+    drawLabels(g, want, dpr, W, Hh, T, overlayBoxes(cv));
     placed.ble = shown.ble;
     placed.wifi = shown.wifi;
     S.placed = placed;
@@ -944,7 +967,14 @@
     });
     cv.addEventListener("pointermove", function (ev) {
       var dr = S.drag;
-      if (!dr) return;
+      if (!dr) {
+        // Hover: a device dot under the pointer shows its label.
+        var pt = canvasPoint(ev, cv), pk = pickAt(pt[0], pt[1]);
+        var hv = pk && (pk.kind === "ble" || pk.kind === "wifi") ? pk : null;
+        var was = S.hover ? S.hover.kind + "|" + S.hover.key : "", now = hv ? hv.kind + "|" + hv.key : "";
+        if (was !== now) { S.hover = hv; dirty(); }
+        return;
+      }
       var dx = ev.clientX - dr.x, dy = ev.clientY - dr.y;
       dr.x = ev.clientX; dr.y = ev.clientY;
       dr.moved += Math.abs(dx) + Math.abs(dy);
@@ -966,6 +996,7 @@
     }
     cv.addEventListener("pointerup", up);
     cv.addEventListener("pointercancel", up);
+    cv.addEventListener("pointerleave", function () { if (S.hover) { S.hover = null; dirty(); } });
     cv.addEventListener("wheel", function (ev) {
       ev.preventDefault();
       setCam(S.yaw, S.pitch, ev.deltaY < 0 ? S.zoom * ZOOM_STEP : S.zoom / ZOOM_STEP);

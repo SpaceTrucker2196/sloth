@@ -838,8 +838,8 @@ static void test_radar_devices_js(void) {
               "      return { x0: x0, y0: y0, x1: x0 + w, y1: y0 + h };\n"
               "    });\n"
               "  }");
-    WT_HAS(p, "  function drawLabels(g, want, dpr, W, Hh, T) {\n"
-              "    var boxes = [], h = 12 * dpr, gap = 2 * dpr;\n"
+    WT_HAS(p, "  function drawLabels(g, want, dpr, W, Hh, T, blocked) {\n"
+              "    var boxes = (blocked || []).slice(), h = 12 * dpr, gap = 2 * dpr;\n"
               "    g.textAlign = \"left\";\n"
               "    g.textBaseline = \"top\";\n"
               "    want.forEach(function (w) { w.w = g.measureText(w.text).width; });\n"
@@ -921,13 +921,22 @@ static void test_radar_devices_js(void) {
               "  }");
     WT_HAS(p, "  function devKey(fam, dv) { return fam === \"ble\" ? dv.addr + \"/\" + dv.addr_type + \"/\" + dv.iface : dv.mac; }\n"
               "  function trendGlyph(t) { return Object.prototype.hasOwnProperty.call(TREND_GLYPH, t) ? TREND_GLYPH[t] : \"\"; }\n"
+              "  // Compact: a name or SSID cut to 12, else the address's last three\n"
+              "  // octets; the distance and sloth's trend glyph.\n"
               "  function devLabel(fam, dv) {\n"
-              "    var id = fam === \"ble\" ? (dv.name || dv.addr) : (dv.ssid || dv.mac), gl = trendGlyph(dv.trend);\n"
+              "    var nm = fam === \"ble\" ? dv.name : dv.ssid, ad = String((fam === \"ble\" ? dv.addr : dv.mac) || \"\");\n"
+              "    var id = nm ? (nm.length > 12 ? nm.slice(0, 11) + \"\\u2026\" : nm) : ad.slice(-8), gl = trendGlyph(dv.trend);\n"
               "    return id + \" ~\" + metres(devM(dv)) + (gl ? \" \" + gl : \"\");\n"
               "  }");
-    WT_HAS(p, "  function devLabel(fam, dv) {\n"
-              "    var id = fam === \"ble\" ? (dv.name || dv.addr) : (dv.ssid || dv.mac), gl = trendGlyph(dv.trend);\n"
-              "    return id + \" ~\" + metres(devM(dv)) + (gl ? \" \" + gl : \"\");\n"
+    WT_HAS(p, "  function overlayBoxes(cv) {\n"
+              "    var cb = cv.getBoundingClientRect(), sx = cv.width / Math.max(1, cb.width), sy = cv.height / Math.max(1, cb.height);\n"
+              "    var out = [], ov = document.querySelectorAll(\"#radar-stage .radar-ov\");\n"
+              "    for (var i = 0; i < ov.length; i++) {\n"
+              "      if (ov[i].hidden || !ov[i].offsetParent) continue;\n"
+              "      var r = ov[i].getBoundingClientRect();\n"
+              "      out.push({ x0: (r.left - cb.left) * sx, y0: (r.top - cb.top) * sy, x1: (r.right - cb.left) * sx, y1: (r.bottom - cb.top) * sy });\n"
+              "    }\n"
+              "    return out;\n"
               "  }");
     WT_HAS(p, "  function square(g, x, y, s) {\n"
               "    g.beginPath();\n"
@@ -942,11 +951,12 @@ static void test_radar_devices_js(void) {
     WT_HAS(p, "    var shown = { ble: 0, wifi: 0 };\n"
               "    [[\"wifi\", \"R\"], [\"ble\", \"L\"]].forEach(function (fam) {\n"
               "      var list = (S.radar && S.radar.devs && S.radar.devs[fam[0]]) || [];\n"
-              "      list.forEach(function (dv) {\n"
+              "      list.forEach(function (dv, idx) {\n"
               "        var m = devM(dv);\n"
               "        if (!num(m)) return;\n"
               "        shown[fam[0]]++;\n"
               "        var key = devKey(fam[0], dv), on = isSel(fam[0], key), ble = fam[0] === \"ble\";\n"
+              "        var hov = !!S.hover && S.hover.kind === fam[0] && S.hover.key === key;\n"
               "        var old = stale(ble ? dv.last_seen : dv.ts, now), col = on ? T.signal : T.normal;\n"
               "        if (ble) g.setLineDash([6, 4]); else g.setLineDash([]);\n"
               "        g.lineWidth = 1;\n"
@@ -961,8 +971,10 @@ static void test_radar_devices_js(void) {
               "        if (ble) dot(g, p.x, p.y, 3 * dpr); else square(g, p.x, p.y, 3 * dpr);\n"
               "        g.globalAlpha = 1;\n"
               "        S.marks.push({ x: p.x, y: p.y, kind: fam[0], key: key, ref: dv });\n"
-              "        want.push({ x: p.x, y: p.y, col: fam[1], text: devLabel(fam[0], dv), pri: on ? PRI.sel : PRI.dev,\n"
-              "                    color: on ? T.signal : T.muted, alpha: old ? 0.35 : 1, pick: { kind: fam[0], key: key } });\n"
+              "        if (idx < LABEL_N || on || hov)\n"
+              "          want.push({ x: p.x, y: p.y, col: fam[1], text: devLabel(fam[0], dv), pri: on || hov ? PRI.sel : PRI.dev,\n"
+              "                      color: on ? T.signal : hov ? T.ink : T.muted, alpha: old && !hov ? 0.35 : 1,\n"
+              "                      pick: { kind: fam[0], key: key } });\n"
               "      });\n"
               "    });\n"
               "    g.lineWidth = dpr;\n"
@@ -984,7 +996,20 @@ static void test_radar_devices_js(void) {
               "    else if (s.kind === \"wifi\") { H.show(\"devices\"); H.openDrawer(ref.mac); }");
     WT_HAS(p, "  var TREND_GLYPH = { approaching: \"\\u2198\", steady: \"\\u2192\", leaving: \"\\u2197\" };");
     WT_HAS(p, "  var PRI = { sel: 0, air: 1, aprs: 2, dev: 3, satUsed: 4, sat: 5, band: 6, range: 7 };");
-    WT_HAS(p, "    drawLabels(g, want, dpr, W, Hh, T);\n");
+    WT_HAS(p, "    drawLabels(g, want, dpr, W, Hh, T, overlayBoxes(cv));\n");
+    /* Device labels (owner ruling 2026-11-06): the 10 most recent of each
+     * family labelled, any other while hovered or selected; no label
+     * under a floating panel (overlayBoxes seeds the placer). */
+    WT_HAS(p, "  var LABEL_N = 10;");
+    WT_HAS(p, "      if (!dr) {\n"
+              "        // Hover: a device dot under the pointer shows its label.\n"
+              "        var pt = canvasPoint(ev, cv), pk = pickAt(pt[0], pt[1]);\n"
+              "        var hv = pk && (pk.kind === \"ble\" || pk.kind === \"wifi\") ? pk : null;\n"
+              "        var was = S.hover ? S.hover.kind + \"|\" + S.hover.key : \"\", now = hv ? hv.kind + \"|\" + hv.key : \"\";\n"
+              "        if (was !== now) { S.hover = hv; dirty(); }\n"
+              "        return;\n"
+              "      }");
+    WT_HAS(p, "    cv.addEventListener(\"pointerleave\", function () { if (S.hover) { S.hover = null; dirty(); } });");
     WT_HAS(p, "                  [\"placement\", \"distance from signal strength; no bearing: drawn on the north axis\"]]);");
     WT_HAS(p, "                   (rd.wifi ? rd.wifi.estimated : 0) + \" Wi-Fi shown (most recent), on the north axis: no bearing\");");
     WT_HAS(p, "      parts.push(\"ticks are speed and heading (aircraft gs/track, APRS speed/course); Wi-Fi and BLE have neither, \" +\n"
