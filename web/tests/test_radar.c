@@ -352,7 +352,7 @@ static void test_radar_page(void) {
     static const char *const ids[] = {
         "radar-head", "radar-note", "radar-cam", "radar-reset", "radar-north", "radar-top",
         "radar-zin", "radar-zout", "radar-side", "radar-side-name", "radar-side-kv",
-        "radar-side-list", "radar-open", "radar-side-close", "radar-cap",
+        "radar-side-list", "radar-open", "radar-side-close", "radar-cap", "radar-full",
     };
     for (size_t i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
         char want[64];
@@ -379,12 +379,27 @@ static void test_radar_page(void) {
     WT_HAS(p, "<details class=\"radar-about\"><summary>about this view</summary><span class=\"sub\" id=\"radar-note\">");
     WT_HAS(p, "  function fit() {\n"
               "    var st = $(\"radar-stage\");\n"
-              "    if (!st) return;\n"
+              "    if (!st || full()) return;\n"
               "    var top = st.getBoundingClientRect().top + (window.scrollY || 0);\n"
               "    var h = Math.max(320, Math.floor(window.innerHeight - top - 12)) + \"px\";\n"
               "    if (st.style.height !== h) st.style.height = h;\n"
               "  }");
     WT_HAS(p, "    if (!cv || !H) return;\n    fit();\n");
+    /* Full screen, the dome alone (owner request 2026-11-06): the stage
+     * through the Fullscreen API, every panel over it hidden there, f or
+     * the button toggles, fit() stands aside while it is up. */
+    WT_HAS(p, "          <button type=\"button\" id=\"radar-full\">full screen</button></div>");
+    WT_HAS(p, "  function full() { return document.fullscreenElement === $(\"radar-stage\"); }\n"
+              "  function toggleFull() {\n"
+              "    var st = $(\"radar-stage\");\n"
+              "    if (!st || !document.fullscreenEnabled) return;\n"
+              "    if (full()) document.exitFullscreen();\n"
+              "    else st.requestFullscreen().then(function () { $(\"radar-dome\").focus(); }, function () {});\n"
+              "  }");
+    WT_HAS(p, "    if (!st || full()) return;");
+    WT_HAS(p, "      else if (k === \"f\") toggleFull();");
+    WT_HAS(p, ".radar-stage:fullscreen .radar-ov { display: none; }");
+    WT_HAS(p, ".radar-stage:fullscreen { height: 100% !important; width: 100%; border: 0; background: var(--bg); }");
     /* The two includes in their places: the CSS after bledev's, the
      * script after bledev.js (after app.js). */
     const char *bcss = strstr(p, "canvas.wfall.bledev-classes"), *rcss = strstr(p, ".radar-stage { position: relative;");
@@ -410,7 +425,7 @@ static void test_radar_page(void) {
             WT_LACKS(view, "<textarea");
             WT_LACKS(view, "aria-pressed");
             WT_LACKS(view, "aria-checked");
-            WT_EQ(count(view, "<button type=\"button\" id=\"radar-"), 7);
+            WT_EQ(count(view, "<button type=\"button\" id=\"radar-"), 8);   /* + full screen */
             WT_EQ(count(view, "<canvas"), 1);
             free(view);
         }

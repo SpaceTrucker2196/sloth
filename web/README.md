@@ -1027,7 +1027,9 @@ The dome is the page (owner request, 2026-11-06): on the Radar tab the
 canvas fills the window below the tab bar, and the header, the camera
 line and buttons, the picked panel and the caption float over it as
 small panels; the explanation folds under "about this view". Other tabs
-are unchanged.
+are unchanged. **full screen** (or `f` on the focused dome) puts the
+dome alone into the browser's full screen, every panel hidden; Esc
+leaves. The button is hidden where the browser has no Fullscreen API.
 
 A single passive sensor has no bearing for a terrestrial emitter
 (`web/src/web_frrs_report.c`, `src/position_track.h`), so rings are the

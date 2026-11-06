@@ -31,3 +31,7 @@
   .radar-tl { max-width: calc(100% - 16px); }
   .radar-tr { top: auto; bottom: 8px; left: 8px; width: auto; max-height: 50%; }
 }
+/* Full screen (radar.js toggleFull): the dome alone. The inline height
+ * fit() set is overridden; every panel over it is hidden. */
+.radar-stage:fullscreen { height: 100% !important; width: 100%; border: 0; background: var(--bg); }
+.radar-stage:fullscreen .radar-ov { display: none; }

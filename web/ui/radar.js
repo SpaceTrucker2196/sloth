@@ -238,10 +238,22 @@
   // 320 px. Set before the canvas is sized from it.
   function fit() {
     var st = $("radar-stage");
-    if (!st) return;
+    if (!st || full()) return;
     var top = st.getBoundingClientRect().top + (window.scrollY || 0);
     var h = Math.max(320, Math.floor(window.innerHeight - top - 12)) + "px";
     if (st.style.height !== h) st.style.height = h;
+  }
+
+  // Full screen (owner request, 2026-11-06: "only the dome visible"):
+  // the stage alone goes full screen through the Fullscreen API, and
+  // radar.css hides every panel over it there. Esc (the browser's own)
+  // or f on the focused dome leaves. Hidden where the API is not.
+  function full() { return document.fullscreenElement === $("radar-stage"); }
+  function toggleFull() {
+    var st = $("radar-stage");
+    if (!st || !document.fullscreenEnabled) return;
+    if (full()) document.exitFullscreen();
+    else st.requestFullscreen().then(function () { $("radar-dome").focus(); }, function () {});
   }
 
   function draw() {
@@ -785,6 +797,7 @@
       else if (k === "0") resetCam();
       else if (k === "n") setCam(0, S.pitch, S.zoom);
       else if (k === "t") setCam(S.yaw, PITCH_MAX, S.zoom);
+      else if (k === "f") toggleFull();
       else if (k === "Escape") select(null);
       else return;
       ev.preventDefault();
@@ -797,6 +810,10 @@
     $("radar-zout").addEventListener("click", function () { setCam(S.yaw, S.pitch, S.zoom / ZOOM_STEP); });
     $("radar-side-close").addEventListener("click", function () { select(null); cv.focus(); });
     $("radar-open").addEventListener("click", openSel);
+    var fb = $("radar-full");
+    fb.hidden = !document.fullscreenEnabled;
+    fb.addEventListener("click", toggleFull);
+    document.addEventListener("fullscreenchange", function () { if (visible()) dirty(); });
     window.addEventListener("resize", function () { if (visible()) dirty(); });
     panel();
   }
