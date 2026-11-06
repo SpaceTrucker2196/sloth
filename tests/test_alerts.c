@@ -2098,6 +2098,96 @@ static void test_recurring_transit_fires_at_threshold(void) {
     ASSERT(strstr(s.alerts[idx].key, "transit:02:aa:bb:cc:dd:01") != NULL);
 }
 
+/* #183 item 2: the "device" circling is the sensor's own radio. Still
+ * reported — demoted from WARN to LOW and tagged "self" — rather than
+ * read as a stranger passing by repeatedly. */
+static void test_recurring_transit_self_device_demoted_and_tagged(void) {
+    alerts_clear(); ownership_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t mac[6] = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    ASSERT(ownership_self_add(mac));
+    seed_transit(&s, mac, TRANSIT_RECUR_THRESH, time(NULL));
+    alerts_update(&s);
+    int idx = find_alert(&s, ALERT_TYPE_RECURRING_TRANSIT);
+    ASSERT(idx >= 0);
+    if (idx >= 0) {
+        ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_LOW);
+        ASSERT(strstr(s.alerts[idx].detail, "self") != NULL);
+    }
+    ownership_clear();
+}
+
+/* ── Block-Ack paralysis — Bl0ck (#70) ─────────────────────
+ *
+ * No test drove rule_blockack_attack() through alerts_update() before
+ * #183 item 2 touched it — tests/test_ctrl_frames.c's BAR tests stop at
+ * bar_worst_offender(). Added here, baseline alongside the self case.
+ *
+ * Real time(NULL) for the BAR timestamps, not small literals: alerts_
+ * update() reads the host wall clock for its own `now`, and
+ * bar_worst_offender()'s 300s window is measured against that — unlike
+ * pm_forge_observe()'s now_sec/now_usec, which stamp the frame pair's
+ * own capture-relative proximity, not the wall-clock age the PM_FORGE
+ * rule checks separately. */
+static int build_bar_frame(uint8_t *f, const uint8_t ra[6],
+                           const uint8_t ta[6], int tid, uint16_t ssn) {
+    memset(f, 0, 20);
+    f[0] = (uint8_t)((CTRL_SUB_BLOCKACK_REQ << 4) | (1 << 2));
+    memcpy(f + 4,  ra, 6);
+    memcpy(f + 10, ta, 6);
+    uint16_t ctl = (uint16_t)(tid << 12);
+    f[16] = (uint8_t)(ctl & 0xff);
+    f[17] = (uint8_t)(ctl >> 8);
+    uint16_t ssc = (uint16_t)(ssn << 4);
+    f[18] = (uint8_t)(ssc & 0xff);
+    f[19] = (uint8_t)(ssc >> 8);
+    return 20;
+}
+
+static void test_blockack_attack_fires_warn_without_ownership(void) {
+    alerts_clear(); ownership_clear(); ctrl_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x02,0x11,0x22,0x33,0x44,0x55};
+    static const uint8_t sta[6]   = {0x02,0xaa,0xbb,0xcc,0xdd,0x01};
+    time_t base = time(NULL);
+    uint8_t f[20];
+    ctrl_observe(f, build_bar_frame(f, bssid, sta, 3, 2000), 6, base);
+    ctrl_observe(f, build_bar_frame(f, bssid, sta, 3,
+                 (uint16_t)(2000 + BAR_SUSPICIOUS_JUMP + 1)), 6, base + 1);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_BLOCKACK_ATTACK);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[i].detail, "self") == NULL);
+    }
+    ctrl_clear(); ownership_clear();
+}
+
+/* #183 item 2: the station whose Block-Ack window is being paralysed
+ * is the sensor's own radio. Demoted one step, WARN to LOW, tagged
+ * "self" rather than read as an attack on a third party. */
+static void test_blockack_attack_self_device_demoted_and_tagged(void) {
+    alerts_clear(); ownership_clear(); ctrl_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x02,0x11,0x22,0x33,0x44,0x66};
+    static const uint8_t sta[6]   = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    ASSERT(ownership_self_add(sta));
+    time_t base = time(NULL);
+    uint8_t f[20];
+    ctrl_observe(f, build_bar_frame(f, bssid, sta, 3, 3000), 6, base);
+    ctrl_observe(f, build_bar_frame(f, bssid, sta, 3,
+                 (uint16_t)(3000 + BAR_SUSPICIOUS_JUMP + 1)), 6, base + 1);
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_BLOCKACK_ATTACK);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_LOW);
+        ASSERT(strstr(s.alerts[i].detail, "self") != NULL);
+    }
+    ctrl_clear(); ownership_clear();
+}
+
 /* Two passes is a round trip — going somewhere and coming back is what
  * roads are for. The threshold has to mean something. */
 static void test_two_passes_do_not_fire(void) {
@@ -8907,6 +8997,63 @@ static void test_pm_forge_quiet_with_no_contradiction(void) {
     pm_forge_clear(); beacon_clear();
 }
 
+/* #183 item 2: the contradicting station is the sensor's own radio.
+ * Still evaluated (a compromised sensor is worth knowing about), but
+ * demoted one step from WARN to LOW and tagged "self" rather than
+ * silenced or left reading as a third-party attacker. */
+static void test_pm_forge_self_device_demoted_and_tagged(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x88};
+    static const uint8_t sta[6]   = {0x24,0x41,0x8c,0x30,0x97,0xa1};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+    ASSERT(ownership_self_add(sta));
+
+    uint8_t f[32]; int len;
+    len = pmforge_frame(f, 0xC, 1, bssid, sta, 0);
+    pm_forge_observe(f, len, 4000, 0);
+    len = pmforge_frame(f, 0x8, 0, bssid, sta, 5);
+    pm_forge_observe(f, len, 4000, 50000);
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_PM_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_LOW);
+        ASSERT(strstr(s.alerts[i].detail, "self") != NULL);
+    }
+    pm_forge_clear(); beacon_clear(); ownership_clear();
+}
+
+/* Same contradiction, but the BSSID is also operator-designated: mine
+ * escalates WARN to CRIT, self then demotes one step to WARN — the two
+ * effects compose rather than one masking the other. */
+static void test_pm_forge_self_device_on_my_bssid_is_warn_not_crit(void) {
+    alerts_clear(); ownership_clear(); pm_forge_clear(); beacon_clear();
+    sloth_state_t s; seed_state(&s);
+    static const uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x99};
+    static const uint8_t sta[6]   = {0x24,0x41,0x8c,0x30,0x97,0xa2};
+    beacon_record(bssid, "Net", -50, 6, "WPA2", 100, NULL);
+    ASSERT(ownership_add_bssid("00:11:22:33:44:99"));
+    ASSERT(ownership_self_add(sta));
+
+    uint8_t f[32]; int len;
+    len = pmforge_frame(f, 0xC, 1, bssid, sta, 0);
+    pm_forge_observe(f, len, 5000, 0);
+    len = pmforge_frame(f, 0x8, 0, bssid, sta, 5);
+    pm_forge_observe(f, len, 5000, 50000);
+
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_PM_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[i].detail, "self") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "YOUR network") != NULL);
+    }
+    pm_forge_clear(); beacon_clear(); ownership_clear();
+}
+
 /* ── Queued-frame release — Framing Frames CVE-2022-47522 (#107 shape B) ── */
 
 /* AP -> STA data frame: ToDS=0, FromDS=1, addr1=DA addr2=BSSID
@@ -10946,9 +11093,14 @@ void run_alerts_tests(void) {
 
     TEST_SUITE("alerts: recurring transit (#54)");
     RUN_TEST(test_recurring_transit_fires_at_threshold);
+    RUN_TEST(test_recurring_transit_self_device_demoted_and_tagged);
     RUN_TEST(test_two_passes_do_not_fire);
     RUN_TEST(test_stale_passes_do_not_fire);
     RUN_TEST(test_no_transits_no_fire);
+
+    TEST_SUITE("alerts: Block-Ack paralysis / Bl0ck (#70)");
+    RUN_TEST(test_blockack_attack_fires_warn_without_ownership);
+    RUN_TEST(test_blockack_attack_self_device_demoted_and_tagged);
 
     TEST_SUITE("alerts: unknown device on my network (#55)");
     RUN_TEST(test_unknown_device_on_my_network_fires);
@@ -11207,6 +11359,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_pm_forge_fires_warn_without_ownership);
     RUN_TEST(test_pm_forge_escalates_to_crit_on_my_bssid);
     RUN_TEST(test_pm_forge_quiet_with_no_contradiction);
+    RUN_TEST(test_pm_forge_self_device_demoted_and_tagged);
+    RUN_TEST(test_pm_forge_self_device_on_my_bssid_is_warn_not_crit);
 
     TEST_SUITE("alerts: queued-frame release (#107 shape B)");
     RUN_TEST(test_queue_evict_ages_out_of_the_report_window);

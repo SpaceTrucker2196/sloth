@@ -1,7 +1,7 @@
 ---
 type: ASSOC_FLOOD
 technique: T1498.001
-rule_file: src/alerts/rules_wifi_mgmt.c:136 rule_assoc_flood()
+rule_file: src/alerts/rules_wifi_mgmt.c:147 rule_assoc_flood()
 count_semantics: per evaluation tick, per BSSID key, while a flood is standing. fire_ev() bumps count every poll in which the busiest BSSID's in-window (Re)Association-request total is still >= threshold; one increment is one poll (~4/s), NOT one association frame. The underlying measurement (assoc_flood_bssid) counts every observed request frame in the 256-slot ASSOC_REQ_RING over the window - including 802.11 retransmissions, since the Retry bit is not filtered - so the detail's "N assoc reqs" is a per-frame count but the alert's own count is per-tick
 severity_assessment: agree - WARN off your network, CRIT on a --my-bssid BSSID, matches the impact: an assoc flood is an availability attack and only becomes CRIT when it is aimed at an AP the operator owns
 false_positive_risk: low - the rate threshold (21 reqs to one BSSID in 60 s) is far above any roaming policy; the realistic benign trip is a broken client in a reassociation loop, which the detail flags as "(few sources)"

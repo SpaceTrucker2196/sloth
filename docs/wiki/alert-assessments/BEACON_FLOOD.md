@@ -1,7 +1,7 @@
 ---
 type: BEACON_FLOOD
 technique: T1498.001
-rule_file: src/alerts/rules_wifi_mgmt.c:85 rule_beacon_flood()
+rule_file: src/alerts/rules_wifi_mgmt.c:96 rule_beacon_flood()
 count_semantics: per evaluation tick, one global key, while the condition stands. fire_ev() bumps count every poll (>= 4/s, POLL_MS 250 is the longest wait) in which at least beacon.flood_thresh BSSIDs were first-seen inside the trailing beacon.flood_window_s; one increment is one poll, NOT one beacon and NOT one new BSSID. The underlying measurement (beacon_recent_new_bssids) counts stamps in a 256-slot new-BSSID ring, so the detail's "N new BSSIDs" is a per-first-sighting count and the alert's count is per tick; a burst that stops ages out of the window about window_s later and the key resolves 300 s after the last tick that met it
 severity_assessment: agree - WARN with no ownership split is right: a fabricated network is nobody's --my-bssid, the harm is scan-list pollution and airtime, and the rule names its tool shape (mdk) rather than claiming an intent it cannot see
 false_positive_risk: medium - the signal is "first-seen BSSID rate", and three things besides an attacker produce first sightings in bulk: a sensor start in a dense area (every real AP is new to an empty table), the 256-row beacon table evicting and re-admitting APs in an environment with more than 256 BSSIDs, and a --hop sweep arriving on a crowded band; none is filtered, so a tripped rule needs the cited beacons read before it is called a flood

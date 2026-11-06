@@ -1,7 +1,7 @@
 ---
 type: UNKNOWN_DEVICE
 technique: T1200
-rule_file: src/alerts/rules_wifi_mgmt.c:1065 rule_unknown_device()
+rule_file: src/alerts/rules_wifi_mgmt.c:1082 rule_unknown_device()
 count_semantics: per evaluation tick, per standing (unrostered STA) key - fire() bumps `evaluations`/`count` every poll in which the STA is still in `s->assocs[]` on a designated BSSID/SSID and still absent from the roster; one increment is one poll (~4/s at the default 250 ms POLL_MS), not one frame or one association
 severity_assessment: agree - WARN is right for "a device I did not list is on my network": actionable, but the commonest cause is an incomplete roster, and the rule cannot escalate on anything it observes
 false_positive_risk: high - every guest handset, every rotated private MAC and every device the operator forgot to roster fires it; the rule is only as good as the roster

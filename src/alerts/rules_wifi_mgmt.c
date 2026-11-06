@@ -35,6 +35,17 @@ SLOTH_STATIC_ASSERT(PM_FORGE_EVIDENCE_IDS <= ALERT_EVIDENCE_IDS,
 SLOTH_STATIC_ASSERT(QUEUE_EVICT_EVIDENCE_IDS <= ALERT_EVIDENCE_IDS,
                     queue_evict_cites_within_the_alert);
 
+/* #183 item 2: a rule with no roster exoneration still evaluates when
+ * the MAC on one side of the finding turns out to be the sensor's own
+ * (ownership_is_own_device(), #183 item 1) — a compromised sensor is
+ * still worth knowing about — but drops one severity step and says so
+ * in the detail, so the operator reads "the sensor" rather than
+ * "an attacker". One step only: CRIT->WARN->LOW, floor at LOW. */
+static alert_sev_t sev_demote_one(alert_sev_t sev) {
+    return sev > ALERT_SEV_LOW ? (alert_sev_t)(sev - 1) : ALERT_SEV_LOW;
+}
+#define SELF_TAG " - self (the sensor's own radio)"
+
 /* Deauth/disassoc flood (#88). Fires per (BSSID, victim) impact
  * aggregate while its sliding window is flooded: at least
  * DEAUTH_FLOOD_THRESH distinct frames inside some DEAUTH_FLOOD_WIN_SECS
@@ -357,6 +368,7 @@ void rule_blockack_attack(const sloth_state_t *s, time_t now) {
     if (bar_worst_offender(now, 300, &b) <= 0) return;
 
     int mine = ownership_is_my_bssid(b.bssid);
+    int self = ownership_is_own_device(b.sta);
 
     /* Is the receiving side visibly struggling? rf_quality tracks the
      * retry ratio per channel; a stalled Block-Ack window shows up
@@ -375,13 +387,15 @@ void rule_blockack_attack(const sloth_state_t *s, time_t now) {
     snprintf(key, sizeof(key), "bl0ck:%.17s:%.17s:%u", rx, tx, b.tid);
     snprintf(detail, sizeof(detail),
              "Bl0ck: %.17s -> %.17s TID %u SSN jump %u, %u suspicious of "
-             "%u BARs%s%s",
+             "%u BARs%s%s%s",
              tx, rx, b.tid, b.last_jump, b.suspicious_bars, b.total_bars,
              degraded ? " (channel retrying hard)" : "",
-             mine ? " - YOUR network" : "");
+             mine ? " - YOUR network" : "",
+             self ? SELF_TAG : "");
 
-    fire(ALERT_TYPE_BLOCKACK_ATTACK,
-         mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+    alert_sev_t sev = mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN;
+    if (self) sev = sev_demote_one(sev);
+    fire(ALERT_TYPE_BLOCKACK_ATTACK, sev,
          "BLOCKACK_ATK", detail, key, NULL, 0, now);
 }
 
@@ -1033,15 +1047,18 @@ void rule_recurring_transit(const sloth_state_t *s, time_t now) {
 
         char mac_buf[20];
         mac_to_str(d->mac, mac_buf, sizeof(mac_buf));
+        int self = ownership_is_own_device(d->mac);
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         snprintf(key, sizeof(key), "transit:%s", mac_buf);
         long span = (long)(d->last_seen - d->pass_ts[0]);
         if (span < 0) span = 0;
         snprintf(detail, sizeof(detail),
-                 "%s passed %d times in %ldm (closest %ddBm) - circling",
-                 mac_buf, passes, span / 60, (int)d->best_rssi);
-        fire(ALERT_TYPE_RECURRING_TRANSIT, ALERT_SEV_WARN,
+                 "%s passed %d times in %ldm (closest %ddBm) - circling%s",
+                 mac_buf, passes, span / 60, (int)d->best_rssi,
+                 self ? SELF_TAG : "");
+        fire(ALERT_TYPE_RECURRING_TRANSIT,
+             self ? sev_demote_one(ALERT_SEV_WARN) : ALERT_SEV_WARN,
              "RECURRING_TRANSIT", detail, key, NULL, 0, now);
     }
 }
@@ -1169,22 +1186,26 @@ void rule_pm_forge(const sloth_state_t *s, time_t now) {
         mac_to_str(tbl[i].bssid, bss, sizeof(bss));
         mac_to_str(tbl[i].sta,   sta, sizeof(sta));
         int mine = ownership_is_my_bssid(tbl[i].bssid);
+        int self = ownership_is_own_device(tbl[i].sta);
 
         char key[ALERT_KEY_LEN], detail[ALERT_DETAIL_LEN];
         snprintf(key, sizeof(key), "pmforge:%s", sta);
         snprintf(detail, sizeof(detail),
                  "%s at %s: PM=0 data contradicted a PM=1 sleep "
                  "declaration %d time(s) - pattern consistent with "
-                 "Framing Frames queue manipulation, CVE-2022-47522%s",
+                 "Framing Frames queue manipulation, CVE-2022-47522%s%s",
                  sta, bss, tbl[i].contradiction_count,
-                 mine ? " - YOUR network" : "");
+                 mine ? " - YOUR network" : "",
+                 self ? SELF_TAG : "");
         /* Cites the frame pairs that formed the contradiction (#92):
          * a data frame has no flow sloth can export on for this — the
          * queue manipulation is the 802.11 header — so the evidence
          * ring is the only route back to the bytes. */
         uint64_t ev[PM_FORGE_EVIDENCE_IDS];
         int ev_n = pm_forge_evidence(&tbl[i], ev, PM_FORGE_EVIDENCE_IDS);
-        fire_ev(ALERT_TYPE_PM_FORGE, mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN,
+        alert_sev_t sev = mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN;
+        if (self) sev = sev_demote_one(sev);
+        fire_ev(ALERT_TYPE_PM_FORGE, sev,
                 ev, ev_n, "PM_FORGE", detail, key, NULL, 0, now);
     }
 }

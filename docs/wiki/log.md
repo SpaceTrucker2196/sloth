@@ -6578,3 +6578,33 @@ object's position is not its sender's); the `aprs` sensor;
 step; slothweb's APRS tab with `/api/aprs`, `/api/aprs/seen` and
 `/api/aprs/station`. Updated [[cli-reference]], [[jsonl-schema]],
 [[non-ip-sensors]], [[sqlite-schema]], [[slothweb]], [[index]].
+
+## 2026-11-06 — Self-tag and demote, not silence (#183 item 2)
+
+`PM_FORGE`, `RECURRING_TRANSIT` and `BLOCKACK_ATTACK` had no roster
+exoneration (unlike `MY_NETWORK_RECON` / `UNKNOWN_DEVICE`, #183 item 1),
+so a finding whose MAC turned out to be the sensor's own radio
+(`ownership_is_own_device()`) still read as a third party. All three,
+plus the already-designed-for `ATTACK_PATH` case, were named in #183 as
+needing the same tag-and-demote treatment; `ATTACK_PATH` keys on an IP
+(`http_log_entry_t` carries no MAC, and sloth has no "this is one of the
+host's own IPs" primitive — unlike the MAC roster, that is genuinely new
+infrastructure, not plumbing that already exists) and is left as a named
+follow-up rather than built on a guess. The three MAC-keyed rules now
+still fire when the party is the sensor's own address — a compromised
+sensor is worth knowing about — but drop one severity step (new shared
+`sev_demote_one()`, `src/alerts/rules_wifi_mgmt.c`) and tag the detail
+"self (the sensor's own radio)" instead of silence or an unqualified
+attacker reading. `BLOCKACK_ATTACK` had no test driving it through
+`alerts_update()` before this touched it; added a baseline alongside the
+self case. Tests: `test_pm_forge_self_device_demoted_and_tagged`,
+`test_pm_forge_self_device_on_my_bssid_is_warn_not_crit`,
+`test_recurring_transit_self_device_demoted_and_tagged`,
+`test_blockack_attack_fires_warn_without_ownership`,
+`test_blockack_attack_self_device_demoted_and_tagged`
+(`tests/test_alerts.c`). Updated the three assessments' Assessment
+section (the reference-host noise figures predate this and are not
+re-measured, same caveat as #173's entries above) and the `rule_file`
+line of every assessment whose rule moved — all twenty-one in
+`rules_wifi_mgmt.c`, because the new shared helper sits above
+`rule_deauth_flood`, the first of them.
