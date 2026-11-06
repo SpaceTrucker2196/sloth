@@ -158,6 +158,9 @@ typedef enum {
     TUNE_RF_PATH_LOSS_N_6G,
     TUNE_RF_MEDIAN_K,
     TUNE_RF_REF_DIST_DM,
+    /* 2026-11-06: the receive antenna's gain, dB, per receiver. */
+    TUNE_RF_RX_GAIN_DB_WIFI,
+    TUNE_RF_RX_GAIN_DB_BLE,
     /* 2026-10-27: --location / --gps (src/gps.h). Sampling and
        freshness knobs for the position stamp, not detector thresholds:
        no rule reads a position. */

@@ -14,6 +14,7 @@
  *
  * The track is fed hand-built sample series, never a capture. */
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -616,6 +617,77 @@ static void test_labels(void) {
     ASSERT_STR(rf_ptx_source_name(RF_PTX_ASSUMED), "assumed");
 }
 
+/* The receive antenna gain (2026-11-06, a 9 dBi antenna on the Wi-Fi
+ * monitor): with rf.rx_gain_db_wifi=9 a -40 dBm sample reads as -49 and
+ * the estimate moves out by 10^(9/28) at N 2.8; BLE keeps its own knob
+ * and is untouched by the Wi-Fi one; a calibration in force supersedes
+ * the gain (its offset already holds it). Seen red with the `if (!cal)`
+ * guard dropped (the calibrated reference AP read 2 m x 2.10, not 2 m)
+ * and with the sign flipped (the estimate moved in, not out). */
+static void test_rx_gain(void) {
+    tune_reset();
+    rf_calibration_reset();
+    ownership_clear();
+    char err[160];
+    rf_ctx_t c;
+    ctx_ap_assumed_6(&c);
+    rf_track_t t;
+    memset(&t, 0, sizeof(t));
+    rf_track_observe(&t, -40, T0, &c);
+    int base = t.est_dm;
+    ASSERT(base > 0);
+    ASSERT_EQ(tune_set("rf.rx_gain_db_wifi=9", err, sizeof(err)), 0);
+    memset(&t, 0, sizeof(t));
+    rf_track_observe(&t, -40, T0, &c);
+    /* The same sample, 9 dB weaker: as -49 dBm read raw. */
+    rf_track_t r;
+    memset(&r, 0, sizeof(r));
+    tune_set("rf.rx_gain_db_wifi=0", err, sizeof(err));
+    rf_track_observe(&r, -49, T0, &c);
+    ASSERT_EQ(t.est_dm, r.est_dm);
+    ASSERT(t.est_dm > base);
+    ASSERT_NEAR((double)t.est_dm / base, pow(10.0, 9.0 / 28.0), 0.03);
+    ASSERT_EQ(t.calibrated, 0);
+    /* BLE: the Wi-Fi knob does not reach it; its own does. */
+    ASSERT_EQ(tune_set("rf.rx_gain_db_wifi=9", err, sizeof(err)), 0);
+    rf_ctx_t b;
+    rf_ctx_ble(&b, 0, 0, 0, 0);
+    memset(&t, 0, sizeof(t));
+    rf_track_observe(&t, -55, T0, &b);
+    ASSERT_EQ(t.est_dm, 35);    /* 3.505 m, as uncalibrated with no gain */
+    ASSERT_EQ(tune_set("rf.rx_gain_db_ble=6", err, sizeof(err)), 0);
+    memset(&t, 0, sizeof(t));
+    rf_track_observe(&t, -55, T0, &b);
+    ASSERT(t.est_dm > 35);
+    /* A calibration in force supersedes the gain: the reference AP
+     * still reads its stated 2 m with the gain set. */
+    sloth_state_t *s = calloc(1, sizeof(*s));
+    ASSERT(s != NULL);
+    if (s) {
+        beacon_ap_t *ap = &s->beacon_aps[0];
+        const uint8_t mine[6] = { 0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x01 };
+        memcpy(ap->bssid, mine, 6);
+        ap->channel = 6;
+        rf_track_observe(&ap->dist, -40, T0, &c);
+        s->beacon_count = 1;
+        ASSERT_EQ(tune_set("rf.ref_dist_dm=20", err, sizeof(err)), 0);
+        ASSERT_EQ(ownership_add_bssid("02:aa:bb:cc:dd:01"), 1);
+        rf_calibration_update(s);
+        memset(&t, 0, sizeof(t));
+        rf_track_observe(&t, -40, T0, &c);
+        ASSERT_EQ(t.calibrated, 1);
+        ASSERT_EQ(t.est_dm, 20);
+        free(s);
+    }
+    /* Bounds. */
+    ASSERT_EQ(tune_set("rf.rx_gain_db_wifi=31", err, sizeof(err)), -1);
+    ASSERT_EQ(tune_set("rf.rx_gain_db_wifi=-21", err, sizeof(err)), -1);
+    ASSERT_EQ(tune_set("rf.rx_gain_db_wifi=-3", err, sizeof(err)), 0);
+    ownership_clear();
+    rf_calibration_reset();
+    tune_reset();
+}
+
 static void test_tune_knobs_bounded(void) {
     tune_reset();
     char err[160];
@@ -911,6 +983,7 @@ void run_rf_distance_tests(void) {
     RUN_TEST(test_track_band_change_is_held);
     RUN_TEST(test_calibration_from_my_bssid);
     RUN_TEST(test_tune_knobs_bounded);
+    RUN_TEST(test_rx_gain);
 
     TEST_SUITE("rf distance: cells, labels, JSONL");
     RUN_TEST(test_cells);

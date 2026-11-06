@@ -153,6 +153,8 @@ rows (~44).
 | `rf.path_loss_n_6g` | 30 | 16..60 | N ×10 for 6 GHz (P.1238 has no row; the 5 GHz value) |
 | `rf.median_k` | 8 | 1..16 | RSSI samples the distance median takes (the newest, within 60 s) |
 | `rf.ref_dist_dm` | 0 | 0..1000 | decimetres from the sensor to the `--my-bssid` AP; non-zero turns on calibration from that AP's measured path loss, per Wi-Fi band, bounded ±20 dB, never applied to BLE. 0 = no calibration |
+| `rf.rx_gain_db_wifi` | 0 | -20..30 | receive antenna gain, dBi, of the Wi-Fi monitor radio (2026-11-06): subtracted from every RSSI before the distance is solved; 9 dB moves an estimate out ×2.1 at N 2.8. A `--my-bssid` calibration in force supersedes it (its offset already holds the gain) |
+| `rf.rx_gain_db_ble` | 0 | -20..30 | the same for the BLE receiver |
 
 #### Knobs added 2026-10-27 (sensor position, `--gps`)
 

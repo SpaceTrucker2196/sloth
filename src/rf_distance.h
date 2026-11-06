@@ -142,6 +142,14 @@ typedef enum {
 #define RF_CAL_MAX_DB       20.0
 #define RF_REF_DIST_DM_HI 1000
 
+/* --tune rf.rx_gain_db_wifi / rf.rx_gain_db_ble: the receive antenna's
+ * gain, dBi (2026-11-06). The bounds take a lossy setup (a long cable,
+ * an attenuator) to a large panel or Yagi; outside them the figure is
+ * not an antenna. Subtracted from the RSSI, i.e. the model offset is
+ * -G, unless a calibration is in force (rf_track_observe). */
+#define RF_RX_GAIN_DB_LO   (-20)
+#define RF_RX_GAIN_DB_HI     30
+
 /* Cell widths for the TUI distance column: "~150m bldg ↘" and "~150m↘". */
 #define RF_CELL_FULL        12
 #define RF_CELL_SHORT        6

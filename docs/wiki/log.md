@@ -6635,3 +6635,11 @@ panel opens each family's own tab. Satellites only under Local
 bar; the header, the camera buttons, the picked panel and the caption
 are small panels over it, the explanation folded under "about this
 view". Owner request: the radar first, everything else secondary.
+
+## 2026-11-06 — the receive antenna's gain in the distance estimate
+
+[[rf-distance]]: `--tune rf.rx_gain_db_wifi` and `rf.rx_gain_db_ble`
+(dBi, default 0) subtract the sensor antenna's gain from the RSSI before
+the distance is solved; a `--my-bssid` calibration in force supersedes
+it. Owner: a 9 dBi antenna on the Wi-Fi monitor radio. Updated
+[[cli-reference]].

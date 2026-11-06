@@ -20,7 +20,7 @@ no alert rule reads it.
 `include/rf_track.h`, `research/papers/rssi-distance-estimation.md`
 (every number below, cited), `tests/test_rf_distance.c`.
 
-**Last updated**: 2026-10-26 (owner request: "use rf signal strength to
+**Last updated**: 2026-11-06 (`rf.rx_gain_db_wifi` / `rf.rx_gain_db_ble`: the receive antenna's gain subtracted before the estimate, superseded by a calibration in force); 2026-10-26 (owner request: "use rf signal strength to
 estimate distance as a data point"; sloth side, slothweb display later;
 review round: bands held against noise, trend not signed, a Country
 ceiling one-sided and never on 6 GHz, the band from radiotap on probe
@@ -132,6 +132,18 @@ and receive gain and any error in the AP's power. It corrects the
 offset, not `N`, and not the walls between the sensor and anyone else.
 It is never applied to BLE, whose controller is a different receiver.
 A calibrated estimate says so (`cal` on the detail panes).
+
+**The receive antenna's gain** (2026-11-06). The model's reference loss
+assumes a 0 dBi antenna at the sensor. A gain antenna raises every RSSI
+by its gain G, which read raw puts every device 10^(G/10N) nearer than
+it is (×2.1 for 9 dB at N 2.8, ×2.0 at N 3.0). `--tune
+rf.rx_gain_db_wifi=9` (and `rf.rx_gain_db_ble` for the BLE receiver)
+subtracts it before the distance is solved, an offset of -G. Where a
+`--my-bssid` calibration is in force for the band, its measured offset
+already holds the antenna, and the gain is not applied a second time.
+Without a calibration the gain is the better correction than none; with
+one, the calibration is the better still (it also absorbs the radio's
+own receive chain).
 
 ## Where it shows
 

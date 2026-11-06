@@ -371,6 +371,13 @@ void rf_track_observe(rf_track_t *t, int rssi_dbm, time_t ts, const rf_ctx_t *c)
 
     double off = 0;
     int cal = c->radio != RF_RADIO_BLE && rf_calibration_get(c->radio, &off);
+    /* No calibration: the configured receive antenna gain. The model's
+     * reference loss assumes 0 dBi at the receiver, so a gain G is an
+     * offset of -G. A calibration's measured offset already holds the
+     * gain; adding it again would count it twice. */
+    if (!cal)
+        off = -(double)tune_val(c->radio == RF_RADIO_BLE ? TUNE_RF_RX_GAIN_DB_BLE
+                                                         : TUNE_RF_RX_GAIN_DB_WIFI);
     int n10 = rf_n_x10(c->radio);
     double m = rf_distance_m(c->ptx_dbm, med, c->freq_mhz, n10, off);
     if (m < 0) return;

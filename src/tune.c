@@ -258,6 +258,14 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "rf.path_loss_n_6g",          RF_N_6G_X10, RF_N_X10_LO, RF_N_X10_HI, "N x10, 6 GHz (no P.1238 row; the 5 GHz value)" },
     { "rf.median_k",                RF_MEDIAN_K, 1, RF_RAW_MAX, "RSSI samples the distance median takes" },
     { "rf.ref_dist_dm",             0, 0, RF_REF_DIST_DM_HI, "decimetres from the sensor to the --my-bssid AP for distance calibration, 0 for none" },
+    /* The receive antenna's gain (2026-11-06, owner: a 9 dBi antenna on
+     * the Wi-Fi monitor radio). The model's reference loss assumes 0 dBi
+     * at the receiver; a gain G raises every RSSI by G, which read raw
+     * puts the device 10^(G/10N) nearer. Subtracted before the distance
+     * is solved, unless a --my-bssid calibration is in force for the
+     * band (its measured offset already holds the gain). */
+    { "rf.rx_gain_db_wifi",         0, RF_RX_GAIN_DB_LO, RF_RX_GAIN_DB_HI, "receive antenna gain, dBi, of the Wi-Fi monitor radio; subtracted from RSSI before the distance estimate (a --my-bssid calibration supersedes it)" },
+    { "rf.rx_gain_db_ble",          0, RF_RX_GAIN_DB_LO, RF_RX_GAIN_DB_HI, "receive antenna gain, dBi, of the BLE receiver; subtracted from RSSI before the distance estimate" },
     /* --location / --gps (2026-10-27, src/gps.h). A device position is
      * sampled when the fix has moved min_move_m since the device's last
      * sample or sample_s have elapsed; a fix older than max_fix_age_s
