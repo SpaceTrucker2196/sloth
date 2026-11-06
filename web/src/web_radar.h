@@ -13,7 +13,9 @@
  *           "bands":{"immediate":{"n","devs":[≤8 {addr,addr_type,iface,name,rssi,last_seen}]},
  *                    "near":..,"room":..,"building":..,"far":..}} | null,
  *    "wifi":{"total","estimated","none",
- *            "bands":{..same five.. devs:[≤8 {mac,kind:"ap"|"sta",ssid,rssi,ts}]}} | null}
+ *            "bands":{..same five.. devs:[≤8 {mac,kind:"ap"|"sta",ssid,rssi,ts}]}} | null,
+ *    "devs":{"ble":[≤50 {addr,addr_type,iface,name,m,band,trend,rssi,last_seen}],
+ *            "wifi":[≤50 {mac,kind,ssid,m,band,trend,rssi,ts}]}}
  *
  * total is every row the table holds, estimated the rows with one of
  * sloth's five band words (src/rf_distance.h: immediate < 1 m, near
@@ -21,6 +23,13 @@
  * a signal reading and no estimate (the TUI's "-": never 0, never a
  * band). devs lists each band's WEB_RADAR_DEVS strongest-signal rows
  * (the panel says "8 of 31"); a row without a reading sorts last. The
+ * devs (owner request 2026-11-06, "add Bluetooth and Wi-Fi devices ...
+ * along the north axis") lists each family's WEB_RADAR_RECENT most
+ * recently heard rows that carry an estimate (newest last_seen / ts
+ * first; ties the stronger signal, then the address), each with sloth's
+ * metres (null when the record carried none: the band still places it),
+ * band and trend word ("" when not one of sloth's four), so the page can
+ * draw each one at its own distance. A family with no table is []. The
  * BLE half walks web_ble_t.dev[] under its mutex (a row per advertiser
  * as one sensor heard it, as every BLE answer counts), the Wi-Fi half
  * the FRRS ledger through web_frrs_rf_census(). A name is cut to
@@ -43,6 +52,7 @@
 #define WEB_RADAR_DEVS      8
 #define WEB_RADAR_NAME_MAX  24
 #define WEB_RADAR_BANDS     5
+#define WEB_RADAR_RECENT    50
 
 /* The body into body (cap bytes), *status set; 0, or -1 when even an
  * error did not fit. none_here (Local): the query is checked and a 200

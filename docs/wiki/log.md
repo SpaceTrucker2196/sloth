@@ -6643,3 +6643,12 @@ view". Owner request: the radar first, everything else secondary.
 the distance is solved; a `--my-bssid` calibration in force supersedes
 it. Owner: a 9 dBi antenna on the Wi-Fi monitor radio. Updated
 [[cli-reference]].
+
+## 2026-11-06 — Radar: devices on the north axis, labels that never overlap
+
+[[slothweb]]: the Radar dome adds the 50 most recently heard Wi-Fi and
+50 BLE devices that carry a distance estimate, each on the north axis
+(no bearing exists for them) at its own estimated distance with a faint
+ring, from `/api/radar`'s new `devs` lists; a label layout pass in which
+no label can overlap another; a velocity tick for any aircraft or APRS
+station with a speed and heading. The per-band rings stay, fainter.

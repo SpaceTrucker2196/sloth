@@ -638,6 +638,15 @@ int web_frrs_rf(web_frrs_t *f, int bssid, const char *mac, web_frrs_rf_t *out) {
     return got;
 }
 
+/* The estimate's metres and trend into row, for the census. */
+static void census_est(const frrs_est_t *e, web_frrs_rf_row_t *row) {
+    static const char *const TREND[] = { "approaching", "steady", "leaving",
+                                         "unknown", NULL };
+    row->has_m = e->have && row->band[0] && isfinite(e->m) && e->m >= 0.0 && e->m <= 100000.0;
+    row->m = row->has_m ? e->m : 0.0;
+    row->trend = e->have && one_of(e->trend, TREND) ? e->trend : "";
+}
+
 void web_frrs_rf_census(web_frrs_t *f, void (*cb)(const web_frrs_rf_row_t *, void *),
                         void *ctx) {
     static const char *const BAND[] = { "immediate", "near", "room", "building",
@@ -655,6 +664,7 @@ void web_frrs_rf_census(web_frrs_t *f, void (*cb)(const web_frrs_rf_row_t *, voi
         row.has_rssi = b->signal_dbm != 0;
         row.rssi = b->signal_dbm;
         row.band = b->est.have && one_of(b->est.band, BAND) ? b->est.band : "";
+        census_est(&b->est, &row);
         row.ts = b->ts_b;
         cb(&row, ctx);
     }
@@ -667,6 +677,7 @@ void web_frrs_rf_census(web_frrs_t *f, void (*cb)(const web_frrs_rf_row_t *, voi
         row.has_rssi = s->signal_dbm != 0;
         row.rssi = s->signal_dbm;
         row.band = s->est.have && one_of(s->est.band, BAND) ? s->est.band : "";
+        census_est(&s->est, &row);
         row.ts = s->ts_p;
         cb(&row, ctx);
     }

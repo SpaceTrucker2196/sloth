@@ -507,7 +507,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/aprs?limit=&call=` | `200` JSON, the APRS tab ([APRS](#aprs)): the `sensor_health` aprs block and the stations (live before gone, the most recently heard first, without tracks; `limit` 1..1024; as many as fit the 64 KB answer, `"cut":true` when the buffer stopped the list, `shown` how many); with `call=` (an AX.25 callsign) that one station with `track_pts` (`[ts, lat, lon]`, its last 32 positions) and `packets_recent` (its last 16 packets as rows named by `packet_cols`), `"station":null` when not kept. Under Local the query is checked, then `out_of_scope`. `400` names an unknown parameter, `bad_limit`, `bad_call` |
    | `GET /api/aprs/seen?days=&limit=&offset=&q=` | `200` JSON from sloth.db's `aprs_stations` (needs `--sloth-db`): the stations last heard in the last `days` (1..400, default 7), newest first, `limit` (1..100) a page from `offset`, `more` when another page follows; `q` a callsign prefix of `[0-9A-Za-z-]` (at most 9, upper-cased; anything else `400 bad_q`); the comment cut to 48. A file older than v13 answers `"have":false` and an empty list. Monitor's and Hybrid's |
    | `GET /api/aprs/station?call=&days=` | `200` JSON, one station's `aprs_stations` row (`null` when not in the file) and its `aprs_packets` over the window, oldest first, the newest 400 that fit the 64 KB answer (`"cut":true` when older ones were left out), compact rows named by `cols`. `400 bad_call` for anything but an AX.25 callsign. Monitor's and Hybrid's |
-   | `GET /api/radar` | `200` JSON, the Radar tab's band census ([Radar](#radar)): for BLE and for Wi-Fi the row total, the rows with one of sloth's five distance bands, the rows with a reading and no estimate (`none`), and per band (`immediate`, `near`, `room`, `building`, `far`) its count and up to eight strongest-signal rows (BLE `addr`, `addr_type`, `iface`, `name`, `rssi`, `last_seen`; Wi-Fi `mac`, `kind` `ap`\|`sta`, `ssid`, `rssi`, `ts`); a half with no table attached is `null`; Monitor's and Hybrid's, Local answers `out_of_scope` with the query checked; `400` for any parameter |
+   | `GET /api/radar` | `200` JSON, the Radar tab's band census ([Radar](#radar)): for BLE and for Wi-Fi the row total, the rows with one of sloth's five distance bands, the rows with a reading and no estimate (`none`), and per band (`immediate`, `near`, `room`, `building`, `far`) its count and up to eight strongest-signal rows (BLE `addr`, `addr_type`, `iface`, `name`, `rssi`, `last_seen`; Wi-Fi `mac`, `kind` `ap`\|`sta`, `ssid`, `rssi`, `ts`); `devs.ble` and `devs.wifi`, each family's 50 most recently heard rows with an estimate, newest first, the same members plus `m` (metres, `null` when the record carried none), `band` and `trend` (sloth's word or `""`); a half with no table attached is `null`; Monitor's and Hybrid's, Local answers `out_of_scope` with the query checked; `400` for any parameter |
    | `GET /api/gnss/fixes?since=&limit=` | `200` JSON, the kept `gnss_fix` records (512 in memory) oldest first after `since` (unix seconds), at most `limit` (default and most 128); the page walks the ring (`gnss.js fixes()`: from `since=0`, then from the last row's `ts` while a page comes back full, at most eight pages), so the strip reaches the newest record once the ring holds more than a page; `400` for `bad_since` / `bad_limit` |
    | `HEAD /api/alerts`, `HEAD /api/alert`, `HEAD /api/pcap`, `HEAD /api/pcap/frames`, `HEAD /api/bundle` | `405`, `Allow: GET`, as `/api/query` |
    | `GET /api/positions?mac=&format=json\|geojson\|gpx&since=&until=` | `200`, sloth.db v9's `device_positions` for one MAC (where the sensor was when it heard it, not the device's position) and the sensor's track over the same span, newest first, at most 200 of each (the track the newest 200 points within the samples' span, so the oldest samples of a full answer may have no track under them), `"more"` when there were more; the GeoJSON carries the same `"more"` and `"limit"` as foreign members of its FeatureCollection (RFC 7946 §6.1) and a cut GPX says `truncated` in its `<metadata><desc>` ([Sensor location](#sensor-location)); `json` is `application/json`, `geojson` (RFC 7946) `application/geo+json` and `gpx` (GPX 1.1) `application/gpx+xml`, both as attachments; `400` for a parameter that does not pass (`bad_mac`, `bad_format`, `bad_range`); `503` with no `--sloth-db` or sloth.db unreadable. A file before v9 answers empty lists. `HEAD` is `405` |
@@ -1020,8 +1020,8 @@ honestly has:
 | GNSS satellites (`/api/gnss`) | azimuth, elevation | ◇ on the rim shell at its az/el; filled when in the solution, C/N0 on the heat ramp, an unhealthy one ringed; the `/api/gnss/tracks` trail behind it |
 | ADS-B aircraft (`/api/adsb`) | lat, lon, altitude, track, kept track | ▲ rotated to its track at its true bearing and elevation angle, a drop line to its ground foot, the kept track through the same mapping; altitude on the heat ramp, an emergency or a reserved squawk ringed and worded |
 | APRS stations (`/api/aprs`) | lat, lon, altitude as broadcast | ○ at its true bearing, `--heat-2` when heard direct; the selected station's kept track |
-| Wi-Fi APs and stations (`/api/radar`) | sloth's distance **band** only, no bearing | one solid ring per band on the ground, labelled `Wi-Fi room 7` |
-| BLE advertisers (`/api/radar`) | sloth's distance band only, no bearing | one dashed ring per band, labelled `BLE room 12` |
+| Wi-Fi APs and stations (`/api/radar`) | sloth's distance estimate (metres, band, trend), no bearing | the 50 most recently heard with an estimate as ■ on the **north axis** at their own distance, each with its own faint solid ring; and one fainter solid ring per band on the ground, labelled `Wi-Fi room 7` |
+| BLE advertisers (`/api/radar`) | sloth's distance estimate, no bearing | the 50 most recently heard with an estimate as ● on the north axis, each with its own faint dashed ring; and one fainter dashed ring per band, labelled `BLE room 12` |
 
 The dome is the page (owner request, 2026-11-06): on the Radar tab the
 canvas fills the window below the tab bar, and the header, the camera
@@ -1052,6 +1052,48 @@ north up, `t` plan view and `Escape`; five buttons mirror them for
 touch. The dome is drawn only when something changed, through one
 `requestAnimationFrame`, never on an idle loop.
 
+**Devices on the north axis** (owner request 2026-11-06: "add
+Bluetooth and Wi-Fi devices; since we have no azimuth or location for
+them, plot them along the north axis as a dot and label, with a light
+transparent ring showing the distance"). Of each family, the 50 most
+recently heard rows that carry a distance estimate (`/api/radar`
+`devs`, newest first) sit at azimuth 0 on the ground at their own
+estimated metres through the same log range (the band's nominal radius
+when the record carried no metres): ■ Wi-Fi, ● BLE, each with its own
+ring at that distance (`globalAlpha` 0.15, `lineWidth` 1, Wi-Fi solid,
+BLE `[6, 4]` dashed, no fill); the per-band rings stay, fainter
+(0.09). The axis is a convention, not a bearing, and the side panel
+says so ("distance from signal strength; no bearing: drawn on the north
+axis"). A device's label is its name or SSID, else its address, its
+`~metres` and sloth's trend as its glyph (↘ approaching, → steady, ↗
+leaving): the only motion a Wi-Fi or BLE emitter has. The caption
+counts them ("devices: 50 of 1012 BLE, 50 of 61 Wi-Fi shown (most
+recent)"). A dot, or its stacked label, is picked before a ring; the
+panel opens it in BLE Devices or Devices (the drawers).
+
+**Labels never overlap.** One layout pass a frame (`drawLabels()`):
+every label is a request with an anchor and a priority (selected,
+aircraft, APRS, devices, used satellites, other satellites, band
+labels, range labels); N E S W are placed first, then the selected,
+aircraft and APRS labels greedily (eight directions around the anchor
+at two radii, then, for those three, a third radius with a `--rule`
+leader), then the north-axis devices in two stacked columns with
+leaders (Wi-Fi right of the axis, BLE left; one-dimensional stacking by
+anchor height, relaxed upward when a column overflows the canvas),
+then everything else greedily. Every label reaches the canvas through
+one function that refuses a box off the canvas or touching any box
+already placed, so the rule holds whatever a placer proposes; a label
+with no room is left out and its mark is still drawn.
+
+**Speed and heading.** An aircraft with a ground speed and a track, or
+an APRS station with a speed and a course, gets a velocity tick from
+its mark along its heading, drawn on the ground-projected direction
+(its ground point and a point a small world step along the heading,
+each through the same mapping, so the tick bends as the map does), of
+screen length `6 + 14·log10(1 + kt/10)` px, at most 30, in the mark's
+colour; the ▲ points the same way, and the label adds `250 kt 090°`.
+A speed of 0 or none draws no tick.
+
 **The centre** is the GPS fix when `gnss.fix` is a 2D/3D fix within 60
 s, else the position `sensor_health` carries (`/api/gnss` `loc`: the
 last fix or `--location`), else the header says "no sensor position:
@@ -1062,8 +1104,8 @@ skips `/api/adsb`, `/api/aprs` and `/api/radar` and the header says
 "Local: only the host's own receiver (satellites). Aircraft, APRS,
 Wi-Fi monitor and BLE are the passive radios' — switch to Monitor or
 Hybrid". Every fetch is the page's scoped `getJSON`; `/api/gnss` and
-the two decoders every 5 s, `/api/radar` every 30 s, the trails every
-60 s. **Picking**: a tap (under 4 px of travel) takes the nearest mark
+the two decoders every 5 s, `/api/radar` every 10 s (the devices are
+current), the trails every 60 s. **Picking**: a tap (under 4 px of travel) takes the nearest mark
 within 8 px, else the nearest ring by its ellipse distance; the side
 panel (textContent only) gives the identity, the exact bearing, ground
 range, altitude and elevation angle, the signal, lat/lon for an aircraft
@@ -1088,10 +1130,13 @@ and probe_clients through `web_frrs_rf_census()`), the row total, the
 rows with one of sloth's five band words, the rows with a reading and
 no estimate (`none`), and per band the count and its eight
 strongest-signal rows (a name cut to 24 octets on a code-point
-boundary). `/api/ble?limit=1024` answers 62.8 KB with `more:true` and
+boundary); and `devs`, each family's 50 most recently heard rows with
+an estimate (metres, band, trend word). `/api/ble?limit=1024` answers 62.8 KB with `more:true` and
 `/api/wifi/aps` 57 KB, so counting on the page would be a dozen pages
-every 30 s; this answer is under 6 KB with every BLE row held and about
-9.5 KB with both censuses full (measured by `test_radar.c`). It takes
+every 10 s; the bands are under 6 KB with every BLE row held, and the
+whole answer at its worst (every BLE row and a full ledger, every name
+and SSID escaped to six bytes a character) is 43.8 KB, held under 48 KB
+by `test_radar.c`. It takes
 no parameter (any is `400`), Local answers `out_of_scope` with the query
 checked, and a half whose table is not attached is `null`.
 

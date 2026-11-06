@@ -254,7 +254,9 @@ int  web_frrs_rf(web_frrs_t *f, int bssid, const char *mac, web_frrs_rf_t *out);
  * signal_dbm (has_rssi 0 when the record carried none: the ledger keeps
  * 0 for absent) and sloth's distance band word from its est members
  * ("" when there is no estimate or the word is not one of sloth's), as
- * web_frrs_rf() reads them. cb is called once per row under the
+ * web_frrs_rf() reads them; with the band, the estimate's metres (has_m
+ * 0 unless finite and in 0..100000) and trend word ("" unless one of
+ * sloth's four). cb is called once per row under the
  * ledger's lock, so it must not call back into this module; the strings
  * are the ledger's and valid for the call only. */
 typedef struct {
@@ -263,6 +265,9 @@ typedef struct {
     const char *ssid;                /* "" for a station */
     int         has_rssi, rssi;
     const char *band;
+    int         has_m;
+    double      m;
+    const char *trend;
     long long   ts;
 } web_frrs_rf_row_t;
 void web_frrs_rf_census(web_frrs_t *f, void (*cb)(const web_frrs_rf_row_t *, void *),

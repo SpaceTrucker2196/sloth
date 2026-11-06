@@ -25,7 +25,7 @@
 (function () {
   "use strict";
   var H = null;
-  var POLL_MS = 5000, RADAR_MS = 30000, TRAIL_MS = 60000, TRAIL_H = 6;
+  var POLL_MS = 5000, RADAR_MS = 10000, TRAIL_MS = 60000, TRAIL_H = 6;
   // The log range: 0.3 m at the centre (so the "immediate" ring is not
   // the centre point), 300 km at the rim; beyond it an object sits on
   // the rim, dimmed, with its true range in the label.
@@ -42,9 +42,14 @@
   var BAND_EDGE = ["under 1 m", "1 to 3 m", "3 to 10 m", "10 to 30 m", "over 30 m"];
   var BAND_R = [1, 3, 10, 30, 100];
   var SPECIAL = { "7500": "unlawful interference", "7600": "radio failure", "7700": "emergency" };
+  // sloth's trend words as rf_distance.c draws them: the only motion a
+  // Wi-Fi or BLE emitter has (no speed, no heading).
+  var TREND_GLYPH = { approaching: "\u2198", steady: "\u2192", leaving: "\u2197" };
+  // Label priorities, most important first.
+  var PRI = { sel: 0, air: 1, aprs: 2, dev: 3, satUsed: 4, sat: 5, band: 6, range: 7 };
   var S = { yaw: 0, pitch: PITCH_DFLT, zoom: 1, gnss: null, adsb: null, aprs: null, radar: null, trails: null,
             sel: null, selTrack: null, marks: [], rings: [], raf: 0, timer: 0, gen: 0, rgen: 0, tgen: 0,
-            sgen: 0, radarAt: 0, trailAt: 0, cam: null, drag: null, errs: {}, placed: null };
+            sgen: 0, radarAt: 0, trailAt: 0, cam: null, drag: null, errs: {}, placed: null, labelPicks: [] };
 
   function $(id) { return document.getElementById(id); }
   function num(v) { return typeof v === "number" && isFinite(v); }
@@ -133,6 +138,62 @@
     g.arc(x, y, s, 0, Math.PI * 2);
     g.stroke();
   }
+  function square(g, x, y, s) {
+    g.beginPath();
+    g.rect(x - s, y - s, 2 * s, 2 * s);
+    g.fill();
+  }
+  function dot(g, x, y, s) {
+    g.beginPath();
+    g.arc(x, y, s, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  // ── speed and heading: a velocity tick along the ground ──────────
+  // The heading's direction on screen at an object at bearing az and
+  // ground range m: its ground point and a point a small world step
+  // (2 % of the range, at least 1 m) along the heading, each through
+  // place() and project(), the difference normalised; null when the two
+  // coincide. Through the log range, so the tick bends as the map does.
+  function tickDir(az, m, hdg, cam) {
+    var d = Math.PI / 180, s = Math.max(1, m * 0.02);
+    var e = m * Math.sin(az * d), n = m * Math.cos(az * d);
+    var e2 = e + s * Math.sin(hdg * d), n2 = n + s * Math.cos(hdg * d);
+    var a = project(place(az, 0, m), cam);
+    var b = project(place(Math.atan2(e2, n2) / d, 0, Math.sqrt(e2 * e2 + n2 * n2)), cam);
+    var dx = b.x - a.x, dy = b.y - a.y, l = Math.sqrt(dx * dx + dy * dy);
+    return l > 1e-6 ? { dx: dx / l, dy: dy / l } : null;
+  }
+  // The tick's length in px (before dpr) for a speed in knots.
+  function tickLen(kt) {
+    return Math.min(30, 6 + 14 * Math.log(1 + kt / 10) / Math.LN10);
+  }
+  function velTick(g, p, dir, kt, dpr) {
+    var l = tickLen(kt) * dpr;
+    g.beginPath();
+    g.moveTo(p.x, p.y);
+    g.lineTo(p.x + dir.dx * l, p.y + dir.dy * l);
+    g.stroke();
+  }
+  function velText(kt, hdg) {
+    var h = String(Math.round(hdg) % 360);
+    while (h.length < 3) h = "0" + h;
+    return Math.round(kt) + " kt " + h + "\u00b0";
+  }
+
+  // ── Wi-Fi and BLE devices (/api/radar devs) ──────────────────────
+  // The estimate's metres, else the band's nominal radius.
+  function devM(dv) {
+    if (num(dv.m)) return dv.m;
+    var i = BANDS.indexOf(dv.band);
+    return i >= 0 ? BAND_R[i] : null;
+  }
+  function devKey(fam, dv) { return fam === "ble" ? dv.addr + "/" + dv.addr_type + "/" + dv.iface : dv.mac; }
+  function trendGlyph(t) { return Object.prototype.hasOwnProperty.call(TREND_GLYPH, t) ? TREND_GLYPH[t] : ""; }
+  function devLabel(fam, dv) {
+    var id = fam === "ble" ? (dv.name || dv.addr) : (dv.ssid || dv.mac), gl = trendGlyph(dv.trend);
+    return id + " ~" + metres(devM(dv)) + (gl ? " " + gl : "");
+  }
 
   // ── the sensor's position: the fix, else --location, else none ───
   function centre() {
@@ -175,6 +236,10 @@
     if (s.kind === "sat") return ((S.gnss && S.gnss.sats) || []).filter(function (x) { return x.gnssid === s.key.gnssid && x.prn === s.key.prn; })[0] || null;
     if (s.kind === "adsb") return ((S.adsb && S.adsb.rows) || []).filter(function (x) { return x.hex === s.key; })[0] || null;
     if (s.kind === "aprs") return ((S.aprs && S.aprs.stations) || []).filter(function (x) { return x.call === s.key; })[0] || null;
+    if (s.kind === "ble" || s.kind === "wifi") {
+      var list = (S.radar && S.radar.devs && S.radar.devs[s.kind]) || [];
+      return list.filter(function (x) { return devKey(s.kind, x) === s.key; })[0] || null;
+    }
     if (s.kind === "ring") {
       var fam = S.radar && S.radar[s.key.fam];
       return fam && fam.bands ? fam.bands[BANDS[s.key.band]] || null : null;
@@ -206,32 +271,99 @@
     for (var i = 1; i < pts.length; i++) g.lineTo(pts[i].x, pts[i].y);
     g.stroke();
   }
-  // Label placement: right-above, else right-below, else skipped;
-  // aircraft before APRS before used satellites before the rest.
-  function labels(g, want, dpr) {
-    var boxes = [], lh = 12 * dpr;
-    want.sort(function (a, b) { return a.pri - b.pri; });
-    g.textAlign = "left";
-    g.textBaseline = "alphabetic";
-    want.forEach(function (w) {
-      var tw = g.measureText(w.text).width;
-      var tries = [[w.x + 6 * dpr, w.y - 5 * dpr], [w.x + 6 * dpr, w.y + lh]];
-      for (var t = 0; t < tries.length; t++) {
-        var bx = { x0: tries[t][0], y0: tries[t][1] - lh, x1: tries[t][0] + tw, y1: tries[t][1] + 2 * dpr };
-        var hit = false;
-        for (var k = 0; k < boxes.length && !hit; k++) {
-          var o = boxes[k];
-          hit = bx.x0 < o.x1 && bx.x1 > o.x0 && bx.y0 < o.y1 && bx.y1 > o.y0;
-        }
-        if (hit) continue;
-        boxes.push(bx);
-        g.globalAlpha = w.alpha;
-        g.fillStyle = w.color;
-        g.fillText(w.text, tries[t][0], tries[t][1]);
-        g.globalAlpha = 1;
-        return;
-      }
+  // ── label layout: one pass a frame; no label ever on another ─────
+  // Every label is a request {x, y (its anchor), text, pri, color,
+  // alpha, and col "R"|"L" (a north-axis device), left (prefers the
+  // anchor's left), fixed (N E S W), pick (a device, clickable)}.
+  // drawLabels() measures them all and places them in this order: the
+  // fixed ones; the selected, aircraft and APRS greedily; the devices in
+  // two stacked columns with leaders (Wi-Fi right, BLE left); the rest
+  // greedily. put() is the one way a label reaches the canvas, and it
+  // refuses a box off the canvas or touching one already placed, so the
+  // invariant holds whatever a placer proposes; a label with no room is
+  // skipped, its mark still drawn.
+  function boxHit(b, boxes) {
+    for (var k = 0; k < boxes.length; k++) {
+      var o = boxes[k];
+      if (b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0) return true;
+    }
+    return false;
+  }
+  // One-dimensional stacking: anchors ys ascending (a label's wanted
+  // bottom edge); each bottom at least its anchor, top and a step below
+  // the previous one; when the last passes bottom, the column relaxes
+  // upward from it.
+  function stackColumn(ys, h, gap, top, bottom) {
+    var out = [], n = ys.length, step = h + gap, i;
+    for (i = 0; i < n; i++) out.push(Math.max(ys[i], top, i ? out[i - 1] + step : top));
+    if (n && out[n - 1] > bottom) {
+      out[n - 1] = bottom;
+      for (i = n - 2; i >= 0; i--) out[i] = Math.min(out[i], out[i + 1] - step);
+    }
+    return out;
+  }
+  // The candidate boxes (w by h) around an anchor at radius r: eight
+  // directions, right of it first (left first for a left label).
+  function candidates(x, y, w, h, r, left) {
+    var D = left ? [[-1, -1], [-1, 1], [-1, 0], [1, -1], [1, 1], [1, 0], [0, -1], [0, 1]]
+                 : [[1, -1], [1, 1], [1, 0], [-1, -1], [-1, 1], [-1, 0], [0, -1], [0, 1]];
+    return D.map(function (d) {
+      var x0 = d[0] > 0 ? x + r : d[0] < 0 ? x - r - w : x - w / 2;
+      var y0 = d[1] > 0 ? y + r : d[1] < 0 ? y - r - h : y - h / 2;
+      return { x0: x0, y0: y0, x1: x0 + w, y1: y0 + h };
     });
+  }
+  function drawLabels(g, want, dpr, W, Hh, T) {
+    var boxes = [], h = 12 * dpr, gap = 2 * dpr;
+    g.textAlign = "left";
+    g.textBaseline = "top";
+    want.forEach(function (w) { w.w = g.measureText(w.text).width; });
+    want.sort(function (a, b) { return a.pri - b.pri; });
+    function put(w, b, lead) {
+      if (b.x0 < 0 || b.y0 < 0 || b.x1 > W || b.y1 > Hh || boxHit(b, boxes)) return false;
+      boxes.push(b);
+      g.globalAlpha = w.alpha;
+      if (lead) {
+        g.strokeStyle = T.rule;
+        g.lineWidth = dpr;
+        g.setLineDash([]);
+        polyline(g, [{ x: w.x, y: w.y }, { x: w.x < b.x0 ? b.x0 : w.x > b.x1 ? b.x1 : (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 }]);
+      }
+      g.fillStyle = w.color;
+      g.fillText(w.text, b.x0, b.y0 + dpr);
+      g.globalAlpha = 1;
+      if (w.pick) S.labelPicks.push({ box: b, pick: w.pick });
+      return true;
+    }
+    function greedy(w) {
+      var radii = [6 * dpr, 16 * dpr], cs, i, k;
+      for (i = 0; i < radii.length; i++) {
+        cs = candidates(w.x, w.y, w.w, h, radii[i], w.left);
+        for (k = 0; k < cs.length; k++) if (put(w, cs[k], false)) return;
+      }
+      if (w.pri > PRI.aprs) return;
+      cs = candidates(w.x, w.y, w.w, h, 30 * dpr, w.left);
+      for (k = 0; k < cs.length; k++) if (put(w, cs[k], true)) return;
+    }
+    function column(items, right) {
+      if (!items.length) return;
+      items.sort(function (a, b) { return a.y - b.y; });
+      var xs = items.map(function (w) { return w.x; }), ws = items.map(function (w) { return w.w; });
+      var maxw = Math.max.apply(null, ws);
+      var cx = right ? Math.min(Math.max.apply(null, xs) + 10 * dpr, W - maxw - 2 * dpr)
+                     : Math.max(Math.min.apply(null, xs) - 10 * dpr, maxw + 2 * dpr);
+      var ys = stackColumn(items.map(function (w) { return w.y + h / 2; }), h, gap, h, Hh);
+      items.forEach(function (w, i) {
+        put(w, { x0: right ? cx : cx - w.w, x1: right ? cx + w.w : cx, y0: ys[i] - h, y1: ys[i] }, true);
+      });
+    }
+    want.filter(function (w) { return w.fixed; }).forEach(function (w) {
+      put(w, { x0: w.x - w.w / 2, y0: w.y - h / 2, x1: w.x + w.w / 2, y1: w.y + h / 2 }, false);
+    });
+    want.filter(function (w) { return !w.fixed && !w.col && w.pri <= PRI.aprs; }).forEach(greedy);
+    column(want.filter(function (w) { return w.col === "R"; }), true);
+    column(want.filter(function (w) { return w.col === "L"; }), false);
+    want.filter(function (w) { return !w.fixed && !w.col && w.pri > PRI.aprs; }).forEach(greedy);
   }
   // The dome is the page: the stage takes the window below its own top
   // edge (page offset, so a scrolled page does not grow it), at least
@@ -271,6 +403,7 @@
     S.cam = cam;
     S.marks = [];
     S.rings = [];
+    S.labelPicks = [];
     var want = [], now = nowOf(S.gnss), c = centre(), zoomIn = S.zoom >= LABEL_ZOOM;
     var placed = { sats: 0, satsNo: 0, air: 0, airNo: 0, aprs: 0, aprsNo: 0 };
     g.font = Math.round(11 * dpr) + "px " + H.tok("--font-mono");
@@ -285,22 +418,18 @@
       var e = project(place(b, 0, R_MAX), cam);
       polyline(g, [o, e]);
     }
-    g.textAlign = "center";
-    g.textBaseline = "middle";
     ["N", "E", "S", "W"].forEach(function (w, i) {
       var p = project(place(i * 90, 0, R_MAX * 1.0), cam);
       var dx = p.x - cam.cx, dy = p.y - cam.cy, l = Math.sqrt(dx * dx + dy * dy) || 1;
-      g.fillStyle = i === 0 ? T.ink : T.muted;
-      g.fillText(w, p.x + dx / l * 9 * dpr, p.y + dy / l * 9 * dpr);
+      want.push({ fixed: true, x: p.x + dx / l * 9 * dpr, y: p.y + dy / l * 9 * dpr, text: w, pri: -1,
+                  color: i === 0 ? T.ink : T.muted, alpha: 1 });
     });
-    g.fillStyle = T.faint;
-    g.textAlign = "left";
     RINGS.forEach(function (m) {
       var r = rn(m);
       groundPath(g, cam, r, 0);
       g.stroke();
       var p = project(place(180, 0, m), cam);
-      g.fillText(metres(m), p.x + 3 * dpr, p.y - 2 * dpr);
+      want.push({ x: p.x, y: p.y, text: metres(m), pri: PRI.range, color: T.faint, alpha: 1 });
     });
     groundPath(g, cam, 1, 0);
     g.strokeStyle = T.rule;
@@ -322,9 +451,9 @@
     }
 
     // The Wi-Fi and BLE band rings on the ground, counted: Wi-Fi solid,
-    // BLE dashed, each at the band's nominal radius, labelled with the
-    // word and the count (Wi-Fi at screen right, BLE at screen left).
-    var yR = -1e9, yL = -1e9;
+    // BLE dashed, each at the band's nominal radius, faint (the devices
+    // carry their own rings), labelled with the word and the count
+    // (Wi-Fi at the ring's screen right, BLE at its left).
     [["wifi", "Wi-Fi "], ["ble", "BLE "]].forEach(function (fam) {
       var cen = S.radar && S.radar[fam[0]];
       if (!cen || !cen.bands) return;
@@ -335,26 +464,52 @@
         S.rings.push({ r: r, fam: fam[0], band: i, n: band.n });
         if (fam[0] === "ble") g.setLineDash([6, 4]); else g.setLineDash([]);
         g.lineWidth = on ? 2 * dpr : 1;
-        g.globalAlpha = on ? 1 : 0.25;
+        g.globalAlpha = on ? 1 : 0.09;
         g.strokeStyle = on ? T.signal : T.normal;
         groundPath(g, cam, r, 0);
         g.stroke();
         g.setLineDash([]);
         g.globalAlpha = 1;
-        g.fillStyle = on ? T.signal : T.muted;
-        var txt = fam[1] + BANDS[i] + " " + band.n, lx, ly;
-        if (fam[0] === "wifi") {
-          lx = cam.cx + R * r + 4 * dpr; ly = Math.max(cam.cy, yR + 12 * dpr); yR = ly;
-          g.textAlign = "left";
-        } else {
-          lx = cam.cx - R * r - 4 * dpr; ly = Math.max(cam.cy, yL + 12 * dpr); yL = ly;
-          g.textAlign = "right";
-        }
-        g.fillText(txt, lx, ly);
+        var txt = fam[1] + BANDS[i] + " " + band.n, ble = fam[0] === "ble";
+        want.push({ x: cam.cx + (ble ? -1 : 1) * R * r, y: cam.cy, text: txt, left: ble,
+                    pri: on ? PRI.sel : PRI.band, color: on ? T.signal : T.muted, alpha: 1 });
       }
     });
     g.lineWidth = dpr;
-    g.textAlign = "left";
+
+    // Wi-Fi and BLE devices on the north axis: a single passive sensor
+    // has no bearing for them, so each of the 50 most recently heard of
+    // each family sits at azimuth 0 on the ground at its own estimated
+    // distance (the band's nominal radius when the record carried no
+    // metres): ■ Wi-Fi, ● BLE, each with its own faint ring (Wi-Fi
+    // solid, BLE dashed); their labels stack in two columns.
+    var shown = { ble: 0, wifi: 0 };
+    [["wifi", "R"], ["ble", "L"]].forEach(function (fam) {
+      var list = (S.radar && S.radar.devs && S.radar.devs[fam[0]]) || [];
+      list.forEach(function (dv) {
+        var m = devM(dv);
+        if (!num(m)) return;
+        shown[fam[0]]++;
+        var key = devKey(fam[0], dv), on = isSel(fam[0], key), ble = fam[0] === "ble";
+        var old = stale(ble ? dv.last_seen : dv.ts, now), col = on ? T.signal : T.normal;
+        if (ble) g.setLineDash([6, 4]); else g.setLineDash([]);
+        g.lineWidth = 1;
+        g.globalAlpha = on ? 0.6 : old ? 0.06 : 0.15;
+        g.strokeStyle = col;
+        groundPath(g, cam, rn(m), 0);
+        g.stroke();
+        g.setLineDash([]);
+        var p = project(place(0, 0, m), cam);
+        g.globalAlpha = old ? 0.35 : 1;
+        g.fillStyle = col;
+        if (ble) dot(g, p.x, p.y, 3 * dpr); else square(g, p.x, p.y, 3 * dpr);
+        g.globalAlpha = 1;
+        S.marks.push({ x: p.x, y: p.y, kind: fam[0], key: key, ref: dv });
+        want.push({ x: p.x, y: p.y, col: fam[1], text: devLabel(fam[0], dv), pri: on ? PRI.sel : PRI.dev,
+                    color: on ? T.signal : T.muted, alpha: old ? 0.35 : 1, pick: { kind: fam[0], key: key } });
+      });
+    });
+    g.lineWidth = dpr;
 
     // The satellite trails (/api/gnss/tracks), fading toward the oldest
     // point, with gnss.js's gap rule; the selected one in the accent.
@@ -395,7 +550,7 @@
       g.globalAlpha = 1;
       S.marks.push({ x: p.x, y: p.y, kind: "sat", key: key, ref: s });
       if (zoomIn || on) want.push({ x: p.x, y: p.y, text: s.id || (String(s.gnss || "").charAt(0) + s.prn),
-                                    pri: s.used ? 2 : 3, color: on ? T.signal : T.ink, alpha: alpha });
+                                    pri: on ? PRI.sel : s.used ? PRI.satUsed : PRI.sat, color: on ? T.signal : T.ink, alpha: alpha });
     });
 
     // Aircraft: ▲ rotated to the track at the true bearing and
@@ -419,13 +574,17 @@
       g.strokeStyle = T.faint;
       polyline(g, [p, f]);
       g.strokeStyle = col; g.fillStyle = col;
-      tri(g, p.x, p.y, 6 * dpr, num(a.track) ? a.track - S.yaw : 0, true);
+      var mv = num(a.gs) && a.gs > 0 && num(a.track);
+      var dir = num(a.track) ? tickDir(L.az, L.range, a.track, cam) : null;
+      tri(g, p.x, p.y, 6 * dpr, dir ? Math.atan2(dir.dy, dir.dx) / d + 90 : 0, true);
+      if (mv && dir) velTick(g, p, dir, a.gs, dpr);
       var word = emerg(a) ? a.emergency : SPECIAL[a.squawk] || "";
       if (word) { g.strokeStyle = H.tok("--heat-3"); ring(g, p.x, p.y, 10 * dpr); }
       g.globalAlpha = 1;
       S.marks.push({ x: p.x, y: p.y, kind: "adsb", key: a.hex, ref: a });
-      want.push({ x: p.x, y: p.y, pri: 0, color: on ? T.signal : T.ink, alpha: alpha,
+      want.push({ x: p.x, y: p.y, pri: on ? PRI.sel : PRI.air, color: on ? T.signal : T.ink, alpha: alpha,
                   text: (a.flight || a.hex) + (num(ft) && !a.on_ground ? " FL" + Math.round(ft / 100) : "") +
+                        (mv ? " " + velText(a.gs, a.track) : "") +
                         (word ? " " + word : "") + (L.range > R_MAX ? " " + metres(L.range) : "") });
     });
 
@@ -451,17 +610,22 @@
       if (L.h !== 0) { g.strokeStyle = T.faint; polyline(g, [p, project(L.foot, cam)]); }
       g.strokeStyle = col;
       ring(g, p.x, p.y, 5 * dpr);
+      var mv = num(a.speed_kt) && a.speed_kt > 0 && num(a.course);
+      var dir = mv ? tickDir(L.az, L.range, a.course, cam) : null;
+      if (dir) velTick(g, p, dir, a.speed_kt, dpr);
       g.globalAlpha = 1;
       S.marks.push({ x: p.x, y: p.y, kind: "aprs", key: a.call, ref: a });
-      want.push({ x: p.x, y: p.y, pri: 1, color: on ? T.signal : T.ink, alpha: alpha,
-                  text: a.call + (L.range > R_MAX ? " " + metres(L.range) : "") });
+      want.push({ x: p.x, y: p.y, pri: on ? PRI.sel : PRI.aprs, color: on ? T.signal : T.ink, alpha: alpha,
+                  text: a.call + (mv ? " " + velText(a.speed_kt, a.course) : "") + (L.range > R_MAX ? " " + metres(L.range) : "") });
     });
     g.lineWidth = dpr;
 
     // The sensor itself.
     g.fillStyle = T.ink;
     g.fillRect(o.x - 2 * dpr, o.y - 2 * dpr, 4 * dpr, 4 * dpr);
-    labels(g, want, dpr);
+    drawLabels(g, want, dpr, W, Hh, T);
+    placed.ble = shown.ble;
+    placed.wifi = shown.wifi;
     S.placed = placed;
     H.set("radar-cam", "yaw " + Math.round(((S.yaw % 360) + 360) % 360) + "°  pitch " + Math.round(S.pitch) +
           "°  zoom " + S.zoom.toFixed(1) + "×" + (S.pitch >= PITCH_MAX ? "  (plan view)" : ""));
@@ -473,6 +637,11 @@
     var cam = S.cam;
     if (!cam) return null;
     var lim = PICK_PX * cam.dpr, best = null, bd = lim;
+    // A device's stacked label is its handle where dots crowd the axis.
+    for (var i = 0; i < S.labelPicks.length; i++) {
+      var b = S.labelPicks[i].box;
+      if (px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1) return S.labelPicks[i].pick;
+    }
     S.marks.forEach(function (m) {
       var dx = m.x - px, dy = m.y - py, dd = Math.sqrt(dx * dx + dy * dy);
       if (dd <= bd) { bd = dd; best = { kind: m.kind, key: m.key }; }
@@ -558,6 +727,19 @@
                   ["level", num(ref.level) ? String(ref.level) : null],
                   ["last heard", age(ref.last_seen, now) + " ago"]]);
       openTab("APRS");
+    } else if (s.kind === "ble" || s.kind === "wifi") {
+      var isBle = s.kind === "ble", gl = trendGlyph(ref.trend);
+      H.set("radar-side-name", isBle ? (ref.name ? "\"" + ref.name + "\" " : "") + ref.addr
+                                     : (ref.ssid ? "\"" + ref.ssid + "\" " : "") + ref.mac);
+      kvRows(kv, [["family", isBle ? "BLE advertiser (the BLE receivers)" : "Wi-Fi " + (ref.kind === "ap" ? "access point" : "station") + " (the monitor radio)"],
+                  [isBle ? "address" : "MAC", isBle ? ref.addr + " (type " + ref.addr_type + ", " + ref.iface + ")" : ref.mac],
+                  [isBle ? "name" : "SSID", isBle ? ref.name || "-" : ref.ssid || (ref.kind === "ap" ? "- (hidden)" : null)],
+                  ["distance", (num(ref.m) ? "~" + metres(ref.m) : "- (the band's nominal " + metres(devM(ref)) + ")") + ", " + ref.band],
+                  ["trend", ref.trend ? ref.trend + (gl ? " " + gl : "") : "-"],
+                  ["RSSI", num(ref.rssi) ? ref.rssi + " dBm" : "-"],
+                  ["last seen", age(isBle ? ref.last_seen : ref.ts, now) + " ago"],
+                  ["placement", "distance from signal strength; no bearing: drawn on the north axis"]]);
+      openTab(isBle ? "BLE Devices" : "Devices");
     } else if (s.kind === "ring") {
       var ble = s.key.fam === "ble", word = BANDS[s.key.band], devs = ref.devs || [];
       var fam = S.radar[s.key.fam];
@@ -597,6 +779,8 @@
     else if (s.kind === "adsb") { H.show("adsb"); if (window.SlothAdsb && SlothAdsb.select) SlothAdsb.select(ref.hex); }
     else if (s.kind === "aprs") { H.show("aprs"); if (window.SlothAprs && SlothAprs.select) SlothAprs.select(ref.call); }
     else if (s.kind === "ring") H.show(s.key.fam === "ble" ? "ble" : "devices");
+    else if (s.kind === "ble") { H.show("ble"); H.openBleDrawer(ref.addr, ref.addr_type, ref.iface); }
+    else if (s.kind === "wifi") { H.show("devices"); H.openDrawer(ref.mac); }
   }
 
   // ── the header and the caption (R9) ──────────────────────────────
@@ -625,7 +809,7 @@
   }
   function caption() {
     var c = centre(), now = nowOf(S.gnss), p = S.placed || {}, rd = S.radar, local = H.scope() === "local";
-    var parts = ["sources /api/gnss 5 s" + (local ? "" : ", /api/adsb 5 s, /api/aprs 5 s, /api/radar 30 s") +
+    var parts = ["sources /api/gnss 5 s" + (local ? "" : ", /api/adsb 5 s, /api/aprs 5 s, /api/radar 10 s") +
                  ", /api/gnss/tracks " + TRAIL_H + " h 60 s"];
     parts.push("sensor position " + (c ? c.from + (num(c.age) ? " " + age(now - c.age, now) + " ago" : "") : "none"));
     parts.push("range log 0.3 m–300 km; height is true elevation angle");
@@ -636,7 +820,11 @@
       if (rd && (rd.wifi || rd.ble)) {
         parts.push((rd.wifi ? rd.wifi.estimated : 0) + " Wi-Fi, " + (rd.ble ? rd.ble.estimated : 0) + " BLE in bands (far drawn at 100 m, nominal)");
         parts.push((rd.wifi ? rd.wifi.none : 0) + " Wi-Fi, " + (rd.ble ? rd.ble.none : 0) + " BLE without a distance estimate");
+        parts.push("devices: " + (p.ble || 0) + " of " + (rd.ble ? rd.ble.estimated : 0) + " BLE, " + (p.wifi || 0) + " of " +
+                   (rd.wifi ? rd.wifi.estimated : 0) + " Wi-Fi shown (most recent), on the north axis: no bearing");
       }
+      parts.push("ticks are speed and heading (aircraft gs/track, APRS speed/course); Wi-Fi and BLE have neither, " +
+                 "their arrow is sloth's trend (\u2198 approaching, \u2192 steady, \u2197 leaving)");
       parts.push("distance from signal strength is an estimate; a ring is where the device may be, not where it is");
     } else {
       parts.push("Local: the passive radios' families are not read");

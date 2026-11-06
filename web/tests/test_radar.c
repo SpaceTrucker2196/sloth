@@ -17,7 +17,13 @@
  * line added to radar.js; the divide-by-depth ban with `/ depth` put
  * into project(); the control census with `<select id="radar-x">`
  * added to v-radar; the scoped-out ban with a `$("v-radar")` toggle
- * added to scopeUI(); the `radar.sel` ban with a prefSet of it added. */
+ * added to scopeUI(); the `radar.sel` ban with a prefSet of it added;
+ * the recent lists' cap with recent_take()'s bound widened to 2048 (60
+ * listed); the estimate rule with recent_take() moved from the band
+ * branch to the none branch (unestimated rows listed); Local's devs with
+ * route_radar()'s none_here forced 0; the one-fillText rule with a
+ * second fillText added to draw(); put()'s overlap refusal with its
+ * boxHit() test dropped (the drawLabels pin). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -167,7 +173,7 @@ static void test_radar_census(void) {
               "{\"mac\":\"02:00:00:00:00:a1\",\"kind\":\"ap\",\"ssid\":\"home\",\"rssi\":-47,\"ts\":1793100000},"
               "{\"mac\":\"02:00:00:00:00:a2\",\"kind\":\"ap\",\"ssid\":\"\",\"rssi\":-61,\"ts\":1793100000}]},"
               "\"building\":{\"n\":1,\"devs\":[{\"mac\":\"02:00:00:00:00:51\",\"kind\":\"sta\",\"ssid\":\"\",\"rssi\":-66,\"ts\":1793100000}]},"
-              "\"far\":{\"n\":0,\"devs\":[]}}}}");
+              "\"far\":{\"n\":0,\"devs\":[]}}},\"devs\":{\"ble\":[");
     WT_LACKS(b, "02:00:00:00:00:a3");
     /* A word that is not sloth's is no band: counted as none when it
      * has a reading (seen red with the band_index() lookup replaced by
@@ -179,7 +185,7 @@ static void test_radar_census(void) {
     H.ble = NULL;
     H.m4 = NULL;
     WT_EQ(route(&H, "/api/radar", ""), 200);
-    WT_HAS(body_of(g_out), "{\"now\":1793100005,\"ble\":null,\"wifi\":null}");
+    WT_HAS(body_of(g_out), "{\"now\":1793100005,\"ble\":null,\"wifi\":null,\"devs\":{\"ble\":[],\"wifi\":[]}}");
 }
 
 /* Eight listed of twelve in one band, the strongest eight, in order;
@@ -273,11 +279,14 @@ static void test_radar_scope_and_params(void) {
     }
 }
 
-/* The answer stays small whatever the tables hold: every BLE row the
- * table has (WEB_BLE_DEVICES, every band, names at the row cap) and a
- * full set of Wi-Fi rows still fit the plan's 8 KB, since each band
- * lists eight. The name cut keeps a long peer name to its first
- * WEB_RADAR_NAME_MAX octets on a code-point boundary. */
+/* The answer stays small whatever the tables hold. The bands alone:
+ * every BLE row the table has (WEB_BLE_DEVICES) under 8 KB without the
+ * recent list's names. The worst case: every BLE row and a full ledger
+ * (WEB_FRRS_LEDGER_BSSID beacons, WEB_FRRS_LEDGER_STA probes), every
+ * name and SSID 32 '<' (cut to 24, each escaped to six bytes), measured
+ * and held under 48 KB, inside the 63 KB a body has behind its header.
+ * The name cut keeps a long peer name to its first WEB_RADAR_NAME_MAX
+ * octets on a code-point boundary. */
 static void test_radar_size(void) {
     fresh();
     static const char *const BANDS[] = { "immediate", "near", "room", "building", "far" };
@@ -289,32 +298,119 @@ static void test_radar_size(void) {
     web_health_t H;
     health(&H);
     WT_EQ(route(&H, "/api/radar", ""), 200);
-    WT_HAS(body_of(g_out), "\"ble\":{\"total\":1024,\"estimated\":1024,\"none\":0,");
-    fprintf(stderr, "    /api/radar body with 1024 BLE rows: %zu bytes\n", strlen(body_of(g_out)));
-    WT_ASSERT(strlen(body_of(g_out)) < 8192);
-    for (int i = 0; i < 64; i++) {
-        char mac[18];
-        snprintf(mac, sizeof(mac), "02:00:00:00:%02x:%02x", 0x10 + (i >> 8), i & 0xff);
-        feed_rf(rf_line(i & 1, mac, "an SSID of the longest kind here", -40 - i % 50, BANDS[i % 5]));
-    }
-    WT_EQ(route(&H, "/api/radar", ""), 200);
     const char *b = body_of(g_out);
     WT_HAS(b, "\"ble\":{\"total\":1024,\"estimated\":1024,\"none\":0,");
-    WT_HAS(b, "\"wifi\":{\"total\":64,\"estimated\":64,\"none\":0,");
-    /* Both censuses full, every name at the cut: the measured bound
-     * (the plan's 8 KB is one family's; the answer buffer is 64 KB). */
-    fprintf(stderr, "    /api/radar body with both censuses full: %zu bytes\n", strlen(b));
-    WT_ASSERT(strlen(b) < 10240);
-    WT_EQ(count(b, "\"addr\":"), 5 * WEB_RADAR_DEVS);
-    WT_EQ(count(b, "\"mac\":"), 5 * WEB_RADAR_DEVS);
+    const char *dv = strstr(b, ",\"devs\":{\"ble\":[");
+    WT_ASSERT(dv != NULL);
+    if (dv) {
+        fprintf(stderr, "    /api/radar bands with 1024 BLE rows: %zu bytes\n", (size_t)(dv - b));
+        WT_ASSERT((size_t)(dv - b) < 8192);
+        WT_EQ(count(dv, "\"addr\":"), WEB_RADAR_RECENT);
+    }
     WT_HAS(b, "\"name\":\"a name of some length he\"");
-    WT_HAS(b, "\"ssid\":\"an SSID of the longest k\"");
+    /* The worst case. */
+    fresh();
+    char lt[33];
+    memset(lt, '<', 32);
+    lt[32] = '\0';
+    for (int i = 0; i < WEB_BLE_DEVICES; i++) {
+        char addr[18];
+        snprintf(addr, sizeof(addr), "02:%02x:00:00:00:%02x", i >> 8, i & 0xff);
+        feed_ble(ble_line(addr, 0, lt, -30 - i % 70, BANDS[i % 5]));
+    }
+    for (int i = 0; i < WEB_FRRS_LEDGER_BSSID; i++) {
+        char mac[18];
+        snprintf(mac, sizeof(mac), "02:00:00:01:%02x:%02x", i >> 8, i & 0xff);
+        feed_rf(rf_line(1, mac, lt, -40 - i % 50, BANDS[i % 5]));
+    }
+    for (int i = 0; i < WEB_FRRS_LEDGER_STA; i++) {
+        char mac[18];
+        snprintf(mac, sizeof(mac), "02:00:00:02:%02x:%02x", i >> 8, i & 0xff);
+        feed_rf(rf_line(0, mac, "", -40 - i % 50, BANDS[i % 5]));
+    }
+    WT_EQ(route(&H, "/api/radar", ""), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"ble\":{\"total\":1024,\"estimated\":1024,\"none\":0,");
+    WT_HAS(b, "\"wifi\":{\"total\":1536,\"estimated\":1536,\"none\":0,");
+    fprintf(stderr, "    /api/radar worst case (1024 BLE, a full ledger, names escaped): %zu bytes\n", strlen(b));
+    WT_ASSERT(strlen(b) < 49152);
+    WT_EQ(count(b, "\"addr\":"), 5 * WEB_RADAR_DEVS + WEB_RADAR_RECENT);
+    WT_EQ(count(b, "\"mac\":"), 5 * WEB_RADAR_DEVS + WEB_RADAR_RECENT);
+    WT_HAS(b, "\"name\":\"\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c"
+              "\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c\\u003c\",");
+    WT_LACKS(b, "<");
     /* The cut is on a code-point boundary: a two-byte character at the
      * edge is dropped whole, never split. */
     fresh();
     feed_ble(ble_line("02:de:00:00:00:01", 0, "abcdefghijklmnopqrstuvw\xc3\xa9", -45, "near"));
     WT_EQ(route(&H, "/api/radar", ""), 200);
     WT_HAS(body_of(g_out), "\"name\":\"abcdefghijklmnopqrstuvw\"");
+}
+
+/* devs (owner request 2026-11-06): each family's WEB_RADAR_RECENT most
+ * recently heard rows with an estimate, newest first, with sloth's
+ * metres, band and trend; a row without an estimate never listed;
+ * Local still out_of_scope. Seen red with recent_take()'s cap removed
+ * (sixty listed) and with census_take()'s recent_take() moved outside
+ * the band test (the unestimated rows listed). */
+static void test_radar_recent(void) {
+    fresh();
+    char line[1024];
+    /* Sixty BLE rows, each heard a second later than the last; the
+     * table keeps the record's last_seen. */
+    for (int i = 0; i < 60; i++) {
+        char addr[18];
+        snprintf(addr, sizeof(addr), "02:de:00:00:03:%02x", i);
+        snprintf(line, sizeof(line), "%s", ble_line(addr, 1, i == 59 ? "newest" : "", -40 - i % 30, "room"));
+        char *p = strstr(line, "\"last_seen\":1793100000");
+        char ts[32];
+        snprintf(ts, sizeof(ts), "\"last_seen\":%lld", T - 100 + i);
+        if (p) memcpy(p, ts, strlen(ts));
+        feed_ble(line);
+    }
+    /* Newer than all of them but no estimate: never listed. */
+    snprintf(line, sizeof(line), "%s", ble_line("02:de:00:00:04:01", 0, "noest", -41, ""));
+    feed_ble(line);
+    /* Wi-Fi: an AP with metres and a trend, a station whose trend word
+     * is not sloth's, an AP without an estimate. */
+    feed_rf(rf_line(1, "02:00:00:00:00:b1", "lab", -52, "room"));
+    snprintf(line, sizeof(line), "{\"type\":\"probe_client\",\"ts\":%lld,\"mac\":\"02:00:00:00:00:b2\","
+             "\"signal_dbm\":-70,\"frame_count\":3,\"est_dist_m\":22.25,\"est_dist_band\":\"building\","
+             "\"est_dist_trend\":\"wobbling\",\"est_ptx_source\":\"assumed\"}", T + 9);
+    feed_rf(line);
+    feed_rf(rf_line(1, "02:00:00:00:00:b3", "none", -45, ""));
+    web_health_t H;
+    health(&H);
+    WT_EQ(route(&H, "/api/radar", ""), 200);
+    const char *b = body_of(g_out);
+    const char *dv = strstr(b, "\"devs\":{\"ble\":[");
+    WT_ASSERT(dv != NULL);
+    if (!dv) return;
+    const char *wf = strstr(dv, "],\"wifi\":[");
+    WT_ASSERT(wf != NULL);
+    if (!wf) return;
+    char seg[16384];
+    snprintf(seg, sizeof(seg), "%.*s", (int)(wf - dv), dv);
+    WT_EQ(count(seg, "\"addr\":"), WEB_RADAR_RECENT);
+    /* Newest first: the row heard at T-41 leads, the oldest kept is
+     * T-90 (rows T-100..T-91 fell off). The estimate as the table keeps
+     * it: est_dist_dm 25 -> 2.5 m, sloth's trend word. */
+    WT_HAS(seg, "\"devs\":{\"ble\":[{\"addr\":\"02:de:00:00:03:3b\",\"addr_type\":1,\"iface\":\"bluetooth-monitor\","
+                "\"name\":\"newest\",\"m\":2.5,\"band\":\"room\",\"trend\":\"steady\",\"rssi\":-69,\"last_seen\":1793099959},"
+                "{\"addr\":\"02:de:00:00:03:3a\",");
+    WT_HAS(seg, "\"last_seen\":1793099910}");
+    WT_LACKS(seg, "\"last_seen\":1793099909}");
+    WT_LACKS(seg, "02:de:00:00:03:09\"");
+    WT_LACKS(seg, "noest");
+    WT_HAS(wf, "],\"wifi\":[{\"mac\":\"02:00:00:00:00:b2\",\"kind\":\"sta\",\"ssid\":\"\",\"m\":22.2,\"band\":\"building\","
+               "\"trend\":\"\",\"rssi\":-70,\"ts\":1793100009},"
+               "{\"mac\":\"02:00:00:00:00:b1\",\"kind\":\"ap\",\"ssid\":\"lab\",\"m\":6.0,\"band\":\"room\","
+               "\"trend\":\"steady\",\"rssi\":-52,\"ts\":1793100000}]}}");
+    WT_LACKS(wf, "02:00:00:00:00:b3");
+    /* Local: the query checked, no row. */
+    WT_EQ(route(&H, "/api/radar", "scope=local"), 200);
+    WT_LACKS(body_of(g_out), "\"devs\"");
+    WT_LACKS(body_of(g_out), "02:de:00:00:03:3b");
 }
 
 /* ── the page ─────────────────────────────────────────────────────── */
@@ -528,18 +624,20 @@ static void test_radar_marks_are_shapes(void) {
               "  }");
     WT_HAS(p, "        if (fam[0] === \"ble\") g.setLineDash([6, 4]); else g.setLineDash([]);\n"
               "        g.lineWidth = on ? 2 * dpr : 1;\n"
-              "        g.globalAlpha = on ? 1 : 0.25;\n"
+              "        g.globalAlpha = on ? 1 : 0.09;\n"
               "        g.strokeStyle = on ? T.signal : T.normal;\n"
               "        groundPath(g, cam, r, 0);\n"
               "        g.stroke();");
     WT_HAS(p, "    [[\"wifi\", \"Wi-Fi \"], [\"ble\", \"BLE \"]].forEach(function (fam) {");
-    WT_HAS(p, "        var txt = fam[1] + BANDS[i] + \" \" + band.n, lx, ly;");
+    WT_HAS(p, "        var txt = fam[1] + BANDS[i] + \" \" + band.n, ble = fam[0] === \"ble\";\n"
+              "        want.push({ x: cam.cx + (ble ? -1 : 1) * R * r, y: cam.cy, text: txt, left: ble,\n"
+              "                    pri: on ? PRI.sel : PRI.band, color: on ? T.signal : T.muted, alpha: 1 });");
     /* The selection is the one accent; gone or stale is 0.35. */
     WT_HAS(p, "      var col = on ? T.signal : num(s.cn0) ? H.heat(s.cn0 / CN0_SPAN) : T.dim;");
     WT_HAS(p, "      var alpha = gone ? 0.35 : L.range > R_MAX ? 0.5 : 1;");
     WT_HAS(p, "      if (stale(s.ts, now)) alpha = 0.35;");
     WT_HAS(p, "      diamond(g, p.x, p.y, (s.used ? 5 : 4) * dpr, !!s.used);");
-    WT_HAS(p, "      tri(g, p.x, p.y, 6 * dpr, num(a.track) ? a.track - S.yaw : 0, true);");
+    WT_HAS(p, "      tri(g, p.x, p.y, 6 * dpr, dir ? Math.atan2(dir.dy, dir.dx) / d + 90 : 0, true);");
     WT_HAS(p, "      ring(g, p.x, p.y, 5 * dpr);");
     char *mod = module(p);
     WT_ASSERT(mod != NULL);
@@ -651,7 +749,7 @@ static void test_radar_scope_and_caption(void) {
         WT_EQ(count(mod, "H.getJSON(\"/api/gnss/tracks?hours=\" + TRAIL_H)"), 1);
         WT_EQ(count(mod, "H.getJSON(\"/api/aprs?call=\" + encodeURIComponent(call))"), 1);
         WT_EQ(count(mod, "H.getJSON("), 6);
-        WT_HAS(mod, "  var POLL_MS = 5000, RADAR_MS = 30000, TRAIL_MS = 60000, TRAIL_H = 6;");
+        WT_HAS(mod, "  var POLL_MS = 5000, RADAR_MS = 10000, TRAIL_MS = 60000, TRAIL_H = 6;");
         free(mod);
     }
 }
@@ -697,13 +795,219 @@ static void test_select_hooks(void) {
               "          else { H.show(\"devices\"); H.openDrawer(dv.mac); }");
 }
 
+/* The devices on the north axis, the label layout and the velocity
+ * tick (owner request 2026-11-06), whole: the layout's four functions,
+ * the tick's four, the device helpers and painters, the device, aircraft
+ * and APRS draw blocks, picking a stacked label first, "open in".
+ *
+ * What the pins prove and what they do not: a C test cannot run the
+ * script, so "no label ever overlaps another" is held by construction
+ * and pinned, not executed: put() is the only fillText in the module
+ * (counted: one), and put() refuses a box that is off the canvas or hits
+ * any placed box (boxHit, pinned whole), so whatever order or offsets
+ * the placers propose, a drawn label never touches another. The pins do
+ * not prove the layout is good (how many labels find room): that was
+ * measured by hand with a stub canvas (50 + 50 devices, 67 of the
+ * labels drawn on an 800 x 440 canvas, 0 overlapping). Seen red with a
+ * second fillText added to draw() (the count) and with put()'s boxHit
+ * test dropped (the drawLabels pin). */
+static void test_radar_devices_js(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "  function boxHit(b, boxes) {\n"
+              "    for (var k = 0; k < boxes.length; k++) {\n"
+              "      var o = boxes[k];\n"
+              "      if (b.x0 < o.x1 && b.x1 > o.x0 && b.y0 < o.y1 && b.y1 > o.y0) return true;\n"
+              "    }\n"
+              "    return false;\n"
+              "  }");
+    WT_HAS(p, "  function stackColumn(ys, h, gap, top, bottom) {\n"
+              "    var out = [], n = ys.length, step = h + gap, i;\n"
+              "    for (i = 0; i < n; i++) out.push(Math.max(ys[i], top, i ? out[i - 1] + step : top));\n"
+              "    if (n && out[n - 1] > bottom) {\n"
+              "      out[n - 1] = bottom;\n"
+              "      for (i = n - 2; i >= 0; i--) out[i] = Math.min(out[i], out[i + 1] - step);\n"
+              "    }\n"
+              "    return out;\n"
+              "  }");
+    WT_HAS(p, "  function candidates(x, y, w, h, r, left) {\n"
+              "    var D = left ? [[-1, -1], [-1, 1], [-1, 0], [1, -1], [1, 1], [1, 0], [0, -1], [0, 1]]\n"
+              "                 : [[1, -1], [1, 1], [1, 0], [-1, -1], [-1, 1], [-1, 0], [0, -1], [0, 1]];\n"
+              "    return D.map(function (d) {\n"
+              "      var x0 = d[0] > 0 ? x + r : d[0] < 0 ? x - r - w : x - w / 2;\n"
+              "      var y0 = d[1] > 0 ? y + r : d[1] < 0 ? y - r - h : y - h / 2;\n"
+              "      return { x0: x0, y0: y0, x1: x0 + w, y1: y0 + h };\n"
+              "    });\n"
+              "  }");
+    WT_HAS(p, "  function drawLabels(g, want, dpr, W, Hh, T) {\n"
+              "    var boxes = [], h = 12 * dpr, gap = 2 * dpr;\n"
+              "    g.textAlign = \"left\";\n"
+              "    g.textBaseline = \"top\";\n"
+              "    want.forEach(function (w) { w.w = g.measureText(w.text).width; });\n"
+              "    want.sort(function (a, b) { return a.pri - b.pri; });\n"
+              "    function put(w, b, lead) {\n"
+              "      if (b.x0 < 0 || b.y0 < 0 || b.x1 > W || b.y1 > Hh || boxHit(b, boxes)) return false;\n"
+              "      boxes.push(b);\n"
+              "      g.globalAlpha = w.alpha;\n"
+              "      if (lead) {\n"
+              "        g.strokeStyle = T.rule;\n"
+              "        g.lineWidth = dpr;\n"
+              "        g.setLineDash([]);\n"
+              "        polyline(g, [{ x: w.x, y: w.y }, { x: w.x < b.x0 ? b.x0 : w.x > b.x1 ? b.x1 : (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 }]);\n"
+              "      }\n"
+              "      g.fillStyle = w.color;\n"
+              "      g.fillText(w.text, b.x0, b.y0 + dpr);\n"
+              "      g.globalAlpha = 1;\n"
+              "      if (w.pick) S.labelPicks.push({ box: b, pick: w.pick });\n"
+              "      return true;\n"
+              "    }\n"
+              "    function greedy(w) {\n"
+              "      var radii = [6 * dpr, 16 * dpr], cs, i, k;\n"
+              "      for (i = 0; i < radii.length; i++) {\n"
+              "        cs = candidates(w.x, w.y, w.w, h, radii[i], w.left);\n"
+              "        for (k = 0; k < cs.length; k++) if (put(w, cs[k], false)) return;\n"
+              "      }\n"
+              "      if (w.pri > PRI.aprs) return;\n"
+              "      cs = candidates(w.x, w.y, w.w, h, 30 * dpr, w.left);\n"
+              "      for (k = 0; k < cs.length; k++) if (put(w, cs[k], true)) return;\n"
+              "    }\n"
+              "    function column(items, right) {\n"
+              "      if (!items.length) return;\n"
+              "      items.sort(function (a, b) { return a.y - b.y; });\n"
+              "      var xs = items.map(function (w) { return w.x; }), ws = items.map(function (w) { return w.w; });\n"
+              "      var maxw = Math.max.apply(null, ws);\n"
+              "      var cx = right ? Math.min(Math.max.apply(null, xs) + 10 * dpr, W - maxw - 2 * dpr)\n"
+              "                     : Math.max(Math.min.apply(null, xs) - 10 * dpr, maxw + 2 * dpr);\n"
+              "      var ys = stackColumn(items.map(function (w) { return w.y + h / 2; }), h, gap, h, Hh);\n"
+              "      items.forEach(function (w, i) {\n"
+              "        put(w, { x0: right ? cx : cx - w.w, x1: right ? cx + w.w : cx, y0: ys[i] - h, y1: ys[i] }, true);\n"
+              "      });\n"
+              "    }\n"
+              "    want.filter(function (w) { return w.fixed; }).forEach(function (w) {\n"
+              "      put(w, { x0: w.x - w.w / 2, y0: w.y - h / 2, x1: w.x + w.w / 2, y1: w.y + h / 2 }, false);\n"
+              "    });\n"
+              "    want.filter(function (w) { return !w.fixed && !w.col && w.pri <= PRI.aprs; }).forEach(greedy);\n"
+              "    column(want.filter(function (w) { return w.col === \"R\"; }), true);\n"
+              "    column(want.filter(function (w) { return w.col === \"L\"; }), false);\n"
+              "    want.filter(function (w) { return !w.fixed && !w.col && w.pri > PRI.aprs; }).forEach(greedy);\n"
+              "  }");
+    WT_HAS(p, "  function tickDir(az, m, hdg, cam) {\n"
+              "    var d = Math.PI / 180, s = Math.max(1, m * 0.02);\n"
+              "    var e = m * Math.sin(az * d), n = m * Math.cos(az * d);\n"
+              "    var e2 = e + s * Math.sin(hdg * d), n2 = n + s * Math.cos(hdg * d);\n"
+              "    var a = project(place(az, 0, m), cam);\n"
+              "    var b = project(place(Math.atan2(e2, n2) / d, 0, Math.sqrt(e2 * e2 + n2 * n2)), cam);\n"
+              "    var dx = b.x - a.x, dy = b.y - a.y, l = Math.sqrt(dx * dx + dy * dy);\n"
+              "    return l > 1e-6 ? { dx: dx / l, dy: dy / l } : null;\n"
+              "  }");
+    WT_HAS(p, "  function tickLen(kt) {\n"
+              "    return Math.min(30, 6 + 14 * Math.log(1 + kt / 10) / Math.LN10);\n"
+              "  }");
+    WT_HAS(p, "  function velTick(g, p, dir, kt, dpr) {\n"
+              "    var l = tickLen(kt) * dpr;\n"
+              "    g.beginPath();\n"
+              "    g.moveTo(p.x, p.y);\n"
+              "    g.lineTo(p.x + dir.dx * l, p.y + dir.dy * l);\n"
+              "    g.stroke();\n"
+              "  }");
+    WT_HAS(p, "  function velText(kt, hdg) {\n"
+              "    var h = String(Math.round(hdg) % 360);\n"
+              "    while (h.length < 3) h = \"0\" + h;\n"
+              "    return Math.round(kt) + \" kt \" + h + \"\\u00b0\";\n"
+              "  }");
+    WT_HAS(p, "  function devM(dv) {\n"
+              "    if (num(dv.m)) return dv.m;\n"
+              "    var i = BANDS.indexOf(dv.band);\n"
+              "    return i >= 0 ? BAND_R[i] : null;\n"
+              "  }");
+    WT_HAS(p, "  function devKey(fam, dv) { return fam === \"ble\" ? dv.addr + \"/\" + dv.addr_type + \"/\" + dv.iface : dv.mac; }\n"
+              "  function trendGlyph(t) { return Object.prototype.hasOwnProperty.call(TREND_GLYPH, t) ? TREND_GLYPH[t] : \"\"; }\n"
+              "  function devLabel(fam, dv) {\n"
+              "    var id = fam === \"ble\" ? (dv.name || dv.addr) : (dv.ssid || dv.mac), gl = trendGlyph(dv.trend);\n"
+              "    return id + \" ~\" + metres(devM(dv)) + (gl ? \" \" + gl : \"\");\n"
+              "  }");
+    WT_HAS(p, "  function devLabel(fam, dv) {\n"
+              "    var id = fam === \"ble\" ? (dv.name || dv.addr) : (dv.ssid || dv.mac), gl = trendGlyph(dv.trend);\n"
+              "    return id + \" ~\" + metres(devM(dv)) + (gl ? \" \" + gl : \"\");\n"
+              "  }");
+    WT_HAS(p, "  function square(g, x, y, s) {\n"
+              "    g.beginPath();\n"
+              "    g.rect(x - s, y - s, 2 * s, 2 * s);\n"
+              "    g.fill();\n"
+              "  }");
+    WT_HAS(p, "  function dot(g, x, y, s) {\n"
+              "    g.beginPath();\n"
+              "    g.arc(x, y, s, 0, Math.PI * 2);\n"
+              "    g.fill();\n"
+              "  }");
+    WT_HAS(p, "    var shown = { ble: 0, wifi: 0 };\n"
+              "    [[\"wifi\", \"R\"], [\"ble\", \"L\"]].forEach(function (fam) {\n"
+              "      var list = (S.radar && S.radar.devs && S.radar.devs[fam[0]]) || [];\n"
+              "      list.forEach(function (dv) {\n"
+              "        var m = devM(dv);\n"
+              "        if (!num(m)) return;\n"
+              "        shown[fam[0]]++;\n"
+              "        var key = devKey(fam[0], dv), on = isSel(fam[0], key), ble = fam[0] === \"ble\";\n"
+              "        var old = stale(ble ? dv.last_seen : dv.ts, now), col = on ? T.signal : T.normal;\n"
+              "        if (ble) g.setLineDash([6, 4]); else g.setLineDash([]);\n"
+              "        g.lineWidth = 1;\n"
+              "        g.globalAlpha = on ? 0.6 : old ? 0.06 : 0.15;\n"
+              "        g.strokeStyle = col;\n"
+              "        groundPath(g, cam, rn(m), 0);\n"
+              "        g.stroke();\n"
+              "        g.setLineDash([]);\n"
+              "        var p = project(place(0, 0, m), cam);\n"
+              "        g.globalAlpha = old ? 0.35 : 1;\n"
+              "        g.fillStyle = col;\n"
+              "        if (ble) dot(g, p.x, p.y, 3 * dpr); else square(g, p.x, p.y, 3 * dpr);\n"
+              "        g.globalAlpha = 1;\n"
+              "        S.marks.push({ x: p.x, y: p.y, kind: fam[0], key: key, ref: dv });\n"
+              "        want.push({ x: p.x, y: p.y, col: fam[1], text: devLabel(fam[0], dv), pri: on ? PRI.sel : PRI.dev,\n"
+              "                    color: on ? T.signal : T.muted, alpha: old ? 0.35 : 1, pick: { kind: fam[0], key: key } });\n"
+              "      });\n"
+              "    });\n"
+              "    g.lineWidth = dpr;\n"
+              "");
+    WT_HAS(p, "      var mv = num(a.gs) && a.gs > 0 && num(a.track);\n"
+              "      var dir = num(a.track) ? tickDir(L.az, L.range, a.track, cam) : null;\n"
+              "      tri(g, p.x, p.y, 6 * dpr, dir ? Math.atan2(dir.dy, dir.dx) / d + 90 : 0, true);\n"
+              "      if (mv && dir) velTick(g, p, dir, a.gs, dpr);");
+    WT_HAS(p, "      var mv = num(a.speed_kt) && a.speed_kt > 0 && num(a.course);\n"
+              "      var dir = mv ? tickDir(L.az, L.range, a.course, cam) : null;\n"
+              "      if (dir) velTick(g, p, dir, a.speed_kt, dpr);");
+    WT_HAS(p, "    // A device's stacked label is its handle where dots crowd the axis.\n"
+              "    for (var i = 0; i < S.labelPicks.length; i++) {\n"
+              "      var b = S.labelPicks[i].box;\n"
+              "      if (px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1) return S.labelPicks[i].pick;\n"
+              "    }\n"
+              "    S.marks.forEach");
+    WT_HAS(p, "    else if (s.kind === \"ble\") { H.show(\"ble\"); H.openBleDrawer(ref.addr, ref.addr_type, ref.iface); }\n"
+              "    else if (s.kind === \"wifi\") { H.show(\"devices\"); H.openDrawer(ref.mac); }");
+    WT_HAS(p, "  var TREND_GLYPH = { approaching: \"\\u2198\", steady: \"\\u2192\", leaving: \"\\u2197\" };");
+    WT_HAS(p, "  var PRI = { sel: 0, air: 1, aprs: 2, dev: 3, satUsed: 4, sat: 5, band: 6, range: 7 };");
+    WT_HAS(p, "    drawLabels(g, want, dpr, W, Hh, T);\n");
+    WT_HAS(p, "                  [\"placement\", \"distance from signal strength; no bearing: drawn on the north axis\"]]);");
+    WT_HAS(p, "                   (rd.wifi ? rd.wifi.estimated : 0) + \" Wi-Fi shown (most recent), on the north axis: no bearing\");");
+    WT_HAS(p, "      parts.push(\"ticks are speed and heading (aircraft gs/track, APRS speed/course); Wi-Fi and BLE have neither, \" +\n"
+              "                 \"their arrow is sloth's trend (\\u2198 approaching, \\u2192 steady, \\u2197 leaving)\");");
+    char *mod = module(p);
+    WT_ASSERT(mod != NULL);
+    if (mod) {
+        WT_EQ(count(mod, "fillText("), 1);
+        WT_EQ(count(mod, "strokeText("), 0);
+        WT_LACKS(mod, "function labels(");
+        free(mod);
+    }
+}
+
 void run_radar_tests(void) {
     WT_RUN(test_radar_census);
     WT_RUN(test_radar_cap);
     WT_RUN(test_radar_scope_and_params);
     WT_RUN(test_radar_size);
+    WT_RUN(test_radar_recent);
     WT_RUN(test_radar_page);
     WT_RUN(test_radar_projection_js);
+    WT_RUN(test_radar_devices_js);
     WT_RUN(test_radar_marks_are_shapes);
     WT_RUN(test_radar_prefs);
     WT_RUN(test_radar_scope_and_caption);
