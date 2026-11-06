@@ -168,7 +168,7 @@ static void read_snx(const char *path) {
             if (r) {
                 int k = 0;
                 r += 8;
-                while (isdigit((unsigned char)r[k]) && k < 16) k++;
+                while (k < 16 && isdigit((unsigned char)r[k])) k++;
                 if (k) { memcpy(release, r, (size_t)k); release[k] = '\0'; }
             }
         }
