@@ -515,6 +515,17 @@
     });
   }
 
+  // Another module's pick (radar.js): the row selected as a click would
+  // select it; a row not listed yet is applied by the next load().
+  function select(hex) {
+    if (typeof hex !== "string" || !/^~?[0-9a-f]{6}$/.test(hex)) return;
+    sel = hex;
+    var cur = rows.filter(function (a) { return a.hex === hex; })[0];
+    if (cur) detail(cur, num(last && last.now) ? last.now : Math.floor(Date.now() / 1000));
+    drawRows();
+    histLoad(hex);
+    if (last) plot(last);
+  }
   function show() {
     if (!$("v-adsb")) return;
     load();
@@ -538,5 +549,5 @@
   var closeBtn = $("adsb-detail-close");
   if (closeBtn) closeBtn.addEventListener("click", closeDetail);
 
-  window.SlothAdsb = { show: show };
+  window.SlothAdsb = { show: show, select: select };
 })();

@@ -1251,7 +1251,7 @@
 
   // ── views ─────────────────────────────────────────────────────────
   var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "flows", "history",
-               "lookup", "tacdb", "ble", "gnss", "adsb", "aprs"];
+               "lookup", "tacdb", "ble", "gnss", "adsb", "aprs", "radar"];
   // The views with a tab, and the drill-downs: the Alerts page (6),
   // an alert's page, the record ticker by type, the sensor's health.
   var NAV = VIEWS.concat(["alerts"]);
@@ -1300,6 +1300,8 @@
     if (v === "adsb" && window.SlothAdsb) SlothAdsb.show();
     // The APRS panel (aprs.js, its own module): a no-op when not loaded.
     if (v === "aprs" && window.SlothAprs) SlothAprs.show();
+    // The Radar view (radar.js, its own module): a no-op when not loaded.
+    if (v === "radar" && window.SlothRadar) SlothRadar.show();
     if (v === "alerts") alertsView();
     if (v === "alert") alertView();
     if (v === "records") recordsView();
@@ -1384,6 +1386,7 @@
   $("nav-gnss").addEventListener("click", function () { show("gnss"); });
   $("nav-adsb").addEventListener("click", function () { show("adsb"); });
   $("nav-aprs").addEventListener("click", function () { show("aprs"); });
+  $("nav-radar").addEventListener("click", function () { show("radar"); });
 
   // ── the theme toggle ──────────────────────────────────────────────
   // Light or dark on :root's data-theme, the choice kept in this
@@ -1479,6 +1482,9 @@
     $("v-adsb").classList.toggle("scoped-out", SCOPE === "local");
     // And Dire Wolf's APRS receiver.
     $("v-aprs").classList.toggle("scoped-out", SCOPE === "local");
+    // No scoped-out toggle for v-radar: the satellites it draws are the
+    // host's own receiver's, every scope's; under Local the module itself
+    // skips the three passive fetches and says so in its header.
     scopeBar();
     scopeView(view);
   }
@@ -5706,6 +5712,13 @@
   if (window.SlothBleDev) SlothBleDev.init({ el: el, set: set, getJSON: getJSON, theme: theme,
     heat: heat, keyColor: keyColor, sizeCanvas: sizeCanvas, fmt: fmt, hhmmss: hhmmss, css: css,
     errText: errText, series: series, tierFor: tierFor, openBleDrawer: openBleDrawer });
+
+  // The Radar view (web/ui/radar.js): the page's helpers, lent once; its
+  // fetches go through the scoped getJSON, so the dome shows the scope
+  // in force.
+  if (window.SlothRadar) SlothRadar.init({ el: el, set: set, getJSON: getJSON, theme: theme, tok: tok,
+    heat: heat, sizeCanvas: sizeCanvas, prefGet: prefGet, prefSet: prefSet, show: show,
+    openDrawer: openDrawer, openBleDrawer: openBleDrawer, scope: function () { return SCOPE; } });
 
   // G2, G6 and the new mark in the tables (web/ui/rf.js).
   if (window.SlothRf) SlothRf.init({ tok: tok });

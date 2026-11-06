@@ -19,7 +19,7 @@ row's a `text_m` line).
 `src/device_risk.c`, `include/sloth.h` (`DEV_SRC_*`, `CAM_SIG_*`),
 `include/sloth_alerts.def`, owner request 2026-10-26.
 
-**Last updated**: 2026-11-03 (the four GNSS alerts in every scope, as their records are). 2026-11-01 (the BLE view: Monitor's and Hybrid's,
+**Last updated**: 2026-11-06 (the Radar tab under Local: satellites only, said in its header). 2026-11-03 (the four GNSS alerts in every scope, as their records are). 2026-11-01 (the BLE view: Monitor's and Hybrid's,
 `out_of_scope` under Local), 2026-10-27 (the verify pass: top hosts, `THREAT_IP`,
 `BEACONING` and `host.*` from the `/proc` socket table stay Local on a
 radio, `/api/metrics` counts a scope's own keys, Records and Health drop
@@ -41,7 +41,10 @@ own-state alerts `NO_MONITOR_MODE` and `BT_OWN_TRANSMIT`, the list
 `tests/test_research_corpus.c :: test_own_state_kinds_are_named` pins)
 appears in every scope, and so does the host's own GNSS receiver: its
 `gnss_*` records and, since 2026-11-03, the four `GNSS_*` alerts that
-read it ([[gnss]]).
+read it ([[gnss]]). slothweb's Radar tab (2026-11-06) follows: under
+Local its dome draws the satellites only, the aircraft, APRS stations
+and the Wi-Fi and BLE band rings being the passive radios', and its
+header says so rather than showing an empty sky.
 
 ## How a datum gets its scope
 

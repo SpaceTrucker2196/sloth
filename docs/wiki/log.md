@@ -6616,3 +6616,15 @@ line of every assessment whose rule moved — all twenty-one in
 fix, else `--location`), signed on the 0.01° cell. slothweb keeps it and
 `/api/gnss` ends with `loc` ([[gnss]]). The first slice of the Radar
 view, whose dome centres on it.
+
+## 2026-11-06 — the Radar tab
+
+[[slothweb]]: a Radar tab after APRS, one orthographic half-dome centred
+on the sensor (the position [[location]] carried a slice earlier) that
+places GNSS satellites at their az/el, aircraft and APRS stations at
+their true bearing and elevation angle with the range on a log scale
+(0.3 m to 300 km), and the Wi-Fi and BLE distance bands as counted
+rings from the new `/api/radar` census. Drag, tilt, zoom, pick; a side
+panel opens each family's own tab. Satellites only under Local
+([[capture-scope]]). Exempt from the visual spec's R12 by owner ruling
+(`docs/web-ui-spec.md`), the first such exemption.

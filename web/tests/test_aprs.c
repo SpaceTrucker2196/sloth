@@ -371,9 +371,9 @@ static void test_aprs_page(void) {
     WT_HAS(p, "    getJSON(\"/api/aprs/station?call=\" + encodeURIComponent(call) + \"&days=\" + encodeURIComponent(seenDays())).then(function (j) {");
     WT_HAS(p, "    if (q && !/^[0-9A-Za-z-]{1,9}$/.test(q)) { set(\"aprs-seen-count\", \"search: letters, digits and - only\"); return; }");
     WT_HAS(p, "      if (j.out_of_scope) return;");
-    WT_HAS(p, "  window.SlothAprs = { show: show };");
+    WT_HAS(p, "  window.SlothAprs = { show: show, select: select };");
     /* No markup built from a string in the module. */
-    const char *m = strstr(p, "window.SlothAprs = { show: show };");
+    const char *m = strstr(p, "window.SlothAprs = { show: show, select: select };");
     const char *s = strstr(p, "// slothweb: the APRS panel");
     WT_ASSERT(s && m && s < m);
     if (s && m) {

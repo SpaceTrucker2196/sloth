@@ -539,6 +539,19 @@
       set("gnss-trail-note", "trails need --sloth-db");
     });
   }
+  // Another module's pick (radar.js): the satellite selected as a row's
+  // click would select it; one not listed yet is applied by the next load().
+  function select(gnssid, prn) {
+    if (!num(gnssid) || !num(prn)) return;
+    sel = { gnssid: gnssid, prn: prn };
+    var cur = rows.filter(function (s) { return s.gnssid === gnssid && s.prn === prn; })[0];
+    if (cur) {
+      detail(cur, num(last && last.now) ? last.now : Math.floor(Date.now() / 1000));
+      hist(gnssid, prn, (cur.id || cur.gnss + " PRN " + cur.prn) + (cur.veh ? " " + cur.veh.name : ""));
+    }
+    drawRows();
+    if (last) sky(last);
+  }
   function show() {
     if (!$("v-gnss")) return;
     load();
@@ -564,5 +577,5 @@
   var closeBtn = $("gnss-detail-close");
   if (closeBtn) closeBtn.addEventListener("click", closeDetail);
 
-  window.SlothGnss = { show: show };
+  window.SlothGnss = { show: show, select: select };
 })();

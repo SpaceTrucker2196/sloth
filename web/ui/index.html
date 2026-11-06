@@ -19,6 +19,7 @@
 @include adsb.css
 @include aprs.css
 @include bledev.css
+@include radar.css
 </style>
 <script>
 @include palette.js
@@ -37,6 +38,7 @@
 @include adsb.js
 @include aprs.js
 @include bledev.js
+@include radar.js
 </script>
 </head>
 <body>
@@ -60,6 +62,7 @@
       <li><button type="button" class="go" id="nav-gnss">GPS Sat</button></li>
       <li><button type="button" class="go" id="nav-adsb">ADS-B</button></li>
       <li><button type="button" class="go" id="nav-aprs">APRS</button></li>
+      <li><button type="button" class="go" id="nav-radar">Radar</button></li>
       <li><button type="button" class="go" id="nav-tacdb">TACDB</button></li>
     </ol></nav>
     <div class="scope">
@@ -436,6 +439,30 @@
       <div class="hscroll" id="aprs-seen-box"><div class="histrow dhead" id="aprs-seen-thead"></div><div id="aprs-seen-rows"></div></div>
       <div><button type="button" id="aprs-seen-more" hidden>more</button></div>
       <div class="sub" id="aprs-seen-note">every source callsign heard in the window, from sloth.db's aprs_stations (one row per call, kept as long as sloth's --db retention keeps entities): first and last heard, visits (each time it came back after an hour unheard), packets, whether it was ever heard direct, the best level, the last via, position, symbol and comment. Click a row for its history.</div>
+    </section>
+   </div>
+   <div id="v-radar" hidden>
+    <section class="panel">
+      <div class="radarline" id="radar-head" aria-label="radar: the sensor and what is placed around it"></div>
+      <span class="sub" id="radar-note">every radio sloth hears on one half-dome centred on the sensor: GNSS satellites at their azimuth and elevation on the rim, aircraft (ADS-B) and APRS stations at their true bearing and elevation angle with the range compressed (log scale, 0.3 m at the centre to 300 km at the rim), and Wi-Fi and BLE emitters as one ring per distance band on the ground (Wi-Fi solid, BLE dashed, counted), because a single passive sensor has no bearing for them. The centre is the GPS fix, else <code>--location</code>, else the header says so. Drag to turn and tilt, wheel or + and - to zoom, 0 resets, n north up, t plan view; click or tap a mark or a ring for its figures and a way into its own tab. No map tiles and nothing fetched from anywhere but this server. Observation only: no mark here is a finding.</span>
+    </section>
+    <section class="panel radar-two">
+      <div>
+        <div class="label">dome <span class="sub" id="radar-cam"></span>
+          <button type="button" id="radar-north">north up</button>
+          <button type="button" id="radar-top">plan</button>
+          <button type="button" id="radar-zin">+</button>
+          <button type="button" id="radar-zout">-</button>
+          <button type="button" id="radar-reset">reset view</button></div>
+        <canvas id="radar-dome" aria-label="half-dome of every radio heard: satellites by azimuth and elevation, aircraft and APRS stations by bearing, elevation and log range, Wi-Fi and BLE as rings per distance band"></canvas>
+      </div>
+      <div id="radar-side" hidden>
+        <div class="label">picked <span class="sub" id="radar-side-name"></span> <button type="button" id="radar-side-close">close</button></div>
+        <dl class="radar-kv" id="radar-side-kv"></dl>
+        <div id="radar-side-list"></div>
+        <div><button type="button" id="radar-open" hidden></button></div>
+      </div>
+      <div class="sub" id="radar-cap"></div>
     </section>
    </div>
    <div id="v-wifi" hidden>

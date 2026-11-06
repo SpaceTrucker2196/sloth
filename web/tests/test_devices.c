@@ -126,7 +126,7 @@ static void test_page_carries_the_m4_views(void) {
         WT_ASSERT(strstr(p, want) || strstr(p, alt));
     }
     WT_HAS(p, "var VIEWS = [\"overview\", \"activity\", \"devices\", \"anomalies\", \"wifi\", \"flows\", \"history\",\n"
-              "               \"lookup\", \"tacdb\", \"ble\", \"gnss\", \"adsb\", \"aprs\"];");
+              "               \"lookup\", \"tacdb\", \"ble\", \"gnss\", \"adsb\", \"aprs\", \"radar\"];");
     WT_HAS(p, "var p = \"/api/devices?limit=\" + DEV_PAGE + \"&offset=\" + offset +\n"
               "            \"&sort=\" + encodeURIComponent(sort);");
     WT_HAS(p, "if (q !== \"\") p += \"&q=\" + encodeURIComponent(q);");

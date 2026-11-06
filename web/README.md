@@ -507,6 +507,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/aprs?limit=&call=` | `200` JSON, the APRS tab ([APRS](#aprs)): the `sensor_health` aprs block and the stations (live before gone, the most recently heard first, without tracks; `limit` 1..1024; as many as fit the 64 KB answer, `"cut":true` when the buffer stopped the list, `shown` how many); with `call=` (an AX.25 callsign) that one station with `track_pts` (`[ts, lat, lon]`, its last 32 positions) and `packets_recent` (its last 16 packets as rows named by `packet_cols`), `"station":null` when not kept. Under Local the query is checked, then `out_of_scope`. `400` names an unknown parameter, `bad_limit`, `bad_call` |
    | `GET /api/aprs/seen?days=&limit=&offset=&q=` | `200` JSON from sloth.db's `aprs_stations` (needs `--sloth-db`): the stations last heard in the last `days` (1..400, default 7), newest first, `limit` (1..100) a page from `offset`, `more` when another page follows; `q` a callsign prefix of `[0-9A-Za-z-]` (at most 9, upper-cased; anything else `400 bad_q`); the comment cut to 48. A file older than v13 answers `"have":false` and an empty list. Monitor's and Hybrid's |
    | `GET /api/aprs/station?call=&days=` | `200` JSON, one station's `aprs_stations` row (`null` when not in the file) and its `aprs_packets` over the window, oldest first, the newest 400 that fit the 64 KB answer (`"cut":true` when older ones were left out), compact rows named by `cols`. `400 bad_call` for anything but an AX.25 callsign. Monitor's and Hybrid's |
+   | `GET /api/radar` | `200` JSON, the Radar tab's band census ([Radar](#radar)): for BLE and for Wi-Fi the row total, the rows with one of sloth's five distance bands, the rows with a reading and no estimate (`none`), and per band (`immediate`, `near`, `room`, `building`, `far`) its count and up to eight strongest-signal rows (BLE `addr`, `addr_type`, `iface`, `name`, `rssi`, `last_seen`; Wi-Fi `mac`, `kind` `ap`\|`sta`, `ssid`, `rssi`, `ts`); a half with no table attached is `null`; Monitor's and Hybrid's, Local answers `out_of_scope` with the query checked; `400` for any parameter |
    | `GET /api/gnss/fixes?since=&limit=` | `200` JSON, the kept `gnss_fix` records (512 in memory) oldest first after `since` (unix seconds), at most `limit` (default and most 128); the page walks the ring (`gnss.js fixes()`: from `since=0`, then from the last row's `ts` while a page comes back full, at most eight pages), so the strip reaches the newest record once the ring holds more than a page; `400` for `bad_since` / `bad_limit` |
    | `HEAD /api/alerts`, `HEAD /api/alert`, `HEAD /api/pcap`, `HEAD /api/pcap/frames`, `HEAD /api/bundle` | `405`, `Allow: GET`, as `/api/query` |
    | `GET /api/positions?mac=&format=json\|geojson\|gpx&since=&until=` | `200`, sloth.db v9's `device_positions` for one MAC (where the sensor was when it heard it, not the device's position) and the sensor's track over the same span, newest first, at most 200 of each (the track the newest 200 points within the samples' span, so the oldest samples of a full answer may have no track under them), `"more"` when there were more; the GeoJSON carries the same `"more"` and `"limit"` as foreign members of its FeatureCollection (RFC 7946 §6.1) and a cut GPX says `truncated` in its `<metadata><desc>` ([Sensor location](#sensor-location)); `json` is `application/json`, `geojson` (RFC 7946) `application/geo+json` and `gpx` (GPX 1.1) `application/gpx+xml`, both as attachments; `400` for a parameter that does not pass (`bad_mac`, `bad_format`, `bad_range`); `503` with no `--sloth-db` or sloth.db unreadable. A file before v9 answers empty lists. `HEAD` is `405` |
@@ -1003,6 +1004,88 @@ range checked and anything outside is `null`, never clamped. Answers
 are budgeted in bytes as well as rows, since an escaped comment can
 cost six bytes a character. Observation only: no row is a finding, and
 APRS authenticates nothing - a position is what a station claimed.
+
+## Radar
+
+The Radar tab (2026-11-06; owner request, "a master radar / CIC view of
+every radio heard") is one half-dome centred on the sensor that places
+every radio sloth observes, drawn as vector graphics on a plain canvas
+and turned, tilted and zoomed by the viewer (`web/ui/radar.js`,
+`window.SlothRadar`, containers `radar-*`, one hook in `app.js`; its
+spec is `docs/web-ui-spec.md` §8.14). Each family contributes what it
+honestly has:
+
+| Family | Position data | Drawn as |
+|---|---|---|
+| GNSS satellites (`/api/gnss`) | azimuth, elevation | ◇ on the rim shell at its az/el; filled when in the solution, C/N0 on the heat ramp, an unhealthy one ringed; the `/api/gnss/tracks` trail behind it |
+| ADS-B aircraft (`/api/adsb`) | lat, lon, altitude, track, kept track | ▲ rotated to its track at its true bearing and elevation angle, a drop line to its ground foot, the kept track through the same mapping; altitude on the heat ramp, an emergency or a reserved squawk ringed and worded |
+| APRS stations (`/api/aprs`) | lat, lon, altitude as broadcast | ○ at its true bearing, `--heat-2` when heard direct; the selected station's kept track |
+| Wi-Fi APs and stations (`/api/radar`) | sloth's distance **band** only, no bearing | one solid ring per band on the ground, labelled `Wi-Fi room 7` |
+| BLE advertisers (`/api/radar`) | sloth's distance band only, no bearing | one dashed ring per band, labelled `BLE room 12` |
+
+A single passive sensor has no bearing for a terrestrial emitter
+(`web/src/web_frrs_report.c`, `src/position_track.h`), so rings are the
+honest form, and the caption says what a ring is: where the device may
+be, not where it is. **True direction, compressed distance**: every
+object sits at its true (azimuth, elevation) with its slant range on a
+log scale, 0.3 m at the centre (so the "immediate" ring is not the
+centre point) to 300 km at the rim, labelled rings at 1 m, 10 m, 100 m,
+1 km, 10 km and 100 km; a satellite is the rim-shell case of the same
+rule, so a 10 km-away aircraft 10 km up sits at 45° as it does in the
+sky, and an airliner 100 km out sits near the horizon. Beyond 300 km an
+object is on the rim, dimmed, its true range in the label. The ground
+range is the haversine on R 6371008.8 m with the forward azimuth. The
+camera is orthographic (yaw, pitch 10° to 90° where 90° is the plan /
+PPI view, zoom 0.5 to 4): equal ranges stay equal on screen, so picking
+is two-dimensional and the depth only dims a mark on the dome's far
+side. Drag turns and tilts (0.5°/px, pointer capture), the wheel zooms,
+the focused canvas takes the arrows (Shift ×3), `+` `-`, `0` reset, `n`
+north up, `t` plan view and `Escape`; five buttons mirror them for
+touch. The dome is drawn only when something changed, through one
+`requestAnimationFrame`, never on an idle loop.
+
+**The centre** is the GPS fix when `gnss.fix` is a 2D/3D fix within 60
+s, else the position `sensor_health` carries (`/api/gnss` `loc`: the
+last fix or `--location`), else the header says "no sensor position:
+aircraft and APRS not placed" and draws the satellites and the rings
+anyway. **Scope**: the satellites are the host's own receiver's, every
+scope's, so the view has no `scoped-out` state; under Local the module
+skips `/api/adsb`, `/api/aprs` and `/api/radar` and the header says
+"Local: only the host's own receiver (satellites). Aircraft, APRS,
+Wi-Fi monitor and BLE are the passive radios' — switch to Monitor or
+Hybrid". Every fetch is the page's scoped `getJSON`; `/api/gnss` and
+the two decoders every 5 s, `/api/radar` every 30 s, the trails every
+60 s. **Picking**: a tap (under 4 px of travel) takes the nearest mark
+within 8 px, else the nearest ring by its ellipse distance; the side
+panel (textContent only) gives the identity, the exact bearing, ground
+range, altitude and elevation angle, the signal, lat/lon for an aircraft
+or a station, last seen, and for a ring the family, the band's metre
+edges (`src/rf_distance.h`), the count and up to eight devices ("8 of
+31"), each a way into its drawer; "open in GPS Sat / ADS-B / APRS / BLE
+Devices / Devices" shows the tab and hands the family's module the
+selection (`SlothGnss.select`, `SlothAdsb.select`, `SlothAprs.select`,
+`openBleDrawer`, `openDrawer`). The caption (R9) names the sources and
+their windows, the position's source and age, the range and height
+rule, each family's placed and unplaced counts, how many Wi-Fi and BLE
+rows have no distance estimate, and the estimate sentence. The visual
+spec's R12 (no glyph without a TUI form) is waived for this view by
+owner ruling (`docs/web-ui-spec.md`): the dome has no character-cell
+form; its marks still carry shape and word (R10), it uses no gradient,
+shadow or fill on the chrome (R8), and the selection is the one accent.
+
+`/api/radar` (`web/src/web_radar.c`) is the band census the rings
+need: one answer with, for BLE (the tables of [BLE](#ble), a row per
+advertiser as one sensor heard it) and Wi-Fi (the FRRS ledger's beacons
+and probe_clients through `web_frrs_rf_census()`), the row total, the
+rows with one of sloth's five band words, the rows with a reading and
+no estimate (`none`), and per band the count and its eight
+strongest-signal rows (a name cut to 24 octets on a code-point
+boundary). `/api/ble?limit=1024` answers 62.8 KB with `more:true` and
+`/api/wifi/aps` 57 KB, so counting on the page would be a dozen pages
+every 30 s; this answer is under 6 KB with every BLE row held and about
+9.5 KB with both censuses full (measured by `test_radar.c`). It takes
+no parameter (any is `400`), Local answers `out_of_scope` with the query
+checked, and a half whose table is not attached is `null`.
 
 ## The data socket (M1)
 
@@ -3977,6 +4060,7 @@ and forgets the kept ones, so it does show all.
 | Flows: protocol tab, window, sort, address, the pairs' drawing | `flows.proto`, `ctl.f-win`, `ctl.f-sort`, `ctl.f-ip`, `ctl.f-mode` | an address picked from a row, the matrix or the chord is kept as if typed; the drawing is the matrix until the chord is chosen (ruling 4) |
 | BLE: search, sort | `ctl.b-q`, `ctl.b-sort` | an address naming a search (`#ble?q=`) opens on it, not kept |
 | BLE Devices: cells, window, devices | `ctl.bledev-metric`, `ctl.bledev-win`, `ctl.bledev-n` | the waterfall's three selects |
+| Radar: the camera | `radar.yaw`, `radar.pitch`, `radar.zoom` | by `radar.js`; a number in range (yaw 0..360, pitch 10..90, zoom 0.5..4) else the default; `reset view` removes all three; the selection is not kept |
 | the SQL box's text | `ctl.q-sql` | the draft; the first recipe no longer replaces it |
 | Alerts: triage filter | `ctl.al-triage` | by `frrs.js`; `#alerts?triage=out` wins, and an address naming any other filter opens on `any` |
 | triage: the "by" name | `frrs.by` | typed once, sent with every triage change from this browser |
@@ -4775,6 +4859,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own; the BLE view's vocabularies (the PDU, band, trend, glyph and P_tx-source words, the finding kinds, the alert names, the TUI's address-type letters and its legend line) held to `src/` as text |
 | `test_ble.c` | the BLE view ([BLE](#ble)) from hand-built `ble_device`, `ble_alert`, `alert.resolve` and `sensor_health` lines in the emitter's exact shape: two rows for one address heard by two sensors, a heartbeat updating in place (the sticky masks OR-ed, the earlier first_seen kept, the rate from two points), the hostile strings (a control byte escaped and flagged, an over-long name cut back to a code-point boundary, a category that is not sloth's slug dropped and counted, an unknown iface `other`, a bad record kept nowhere), the record's absent values null and an anonymous all-zero address a row, the estimate's four fields with the TUI's cell and description, the LRU at 1025 rows evicting the oldest, the findings (standing, the resolve of the key, the time-out, the day's listing, the key never rendered, a `hid_oui` finding under its address), the `sensor_health` block and its rotation bands; the two metrics only while a Bluetooth source is configured; every route through the table (the sort words and both directions, each refusal a word never echoing the value, the search, paging, HEAD, Monitor and Hybrid serving, Local `out_of_scope` with the query still checked, `/api/live`'s `ble` member and `/api/health`'s counters, the M0 shape without the tables, the BLE incident typed and Monitor's on the Alerts page); the page's lines pinned as served; with SQLite the store round trip through the store thread's flush, a changed row upserted once, the seed on reopen with the name's display form and the estimate, every field of a seeded finding (a flood's fresh count, rate, window and citation, a `hid_oui` finding's address and the drawer's match on it), a resolve on a seeded finding updating its stored row in place, a seeded row's presence strip shifting on with fresh traffic, retention at compaction, a failed write (a trigger aborting it mid-transaction) rolled back whole and its batch written by the next flush, the row caps (the oldest gone, a flagged row kept past newer unflagged ones, counted) and a non-canonical stored address not seeded; every sort word in both directions with an empty key last (`mfr`'s three tiers fixed in either direction); a name cut back to a code-point boundary; `ble.devices` with an Ubertooth alone and `ble.adv_rate` only with the host stream; `/api/live`'s `ble` member with every string at its cut and escaped six-fold; without a store the tables still ingest and serve. Each absence seen red under a named mutation |
 | `test_bledev.c` | the BLE Devices waterfall ([BLE](#ble)): each class rule on hand-built fields (SIG Appearance values, Continuity types, the registry's UUIDs) and each left-out shape landing in Unknown, the first-match order and the table's match numbers, the slugs (never a channel key, the only `bleclass` keys), a class from a record line; the proximity edges against `src/rf_distance.h` and `.c` read in the test; the page's class table and grade pinned against the C ones, the panels inside `v-ble`, no `innerHTML` in the module; the mix engine taking kinds 3 and 4 (an advertiser, anonymous advertising) apart and refusing 5, a sized ring; the class mix fed from `ble_device` lines (a baseline, deltas, a reconnect, a row born while listening, a sampled row, one address on two sensors kept apart); the advertisers gauge once a pass, an address on two sensors once; the one anonymous row sloth can send (the host stream's, its first mfr pair kept, a keyboard's HID bit OR-ed in) credited to Unknown alone as one entry and one advertiser while its fields read Phones then Input, named rows and an Ubertooth's uncredited samples beside it, each class's advertisers, drawn transmitters, reports and drawn frames agreeing, no series under the zero address; the anonymous entry through both routes (one `anonymous` tx entry in `b:unk`, its kind word the one `bledev.js` tests, no proximity row, never nearest, `anonymous_heard`, the strip counting it once) and under a read cut (no slot taken: 256 read); five thousand fresh BLE addresses leaving a Wi-Fi row's high-water mark (and its true delta) in place; both routes from memory (display order, the tx entries named from the tables or by address alone, the strip's facts, every refusal), the proximity rows' order, means and window, a tracker heard before three hundred newer addresses still read and first, each row graded with its announced power (extended header, TX Power Level, else 0 dBm) and nearest by the margin; `now`'s sensor facts; both routes 503 `no_time_series` in either scope and the mix 503 `no_ble_mix`; Local `out_of_scope` with the query checked and a long query a 400; with SQLite the WiFi and BLE mixes in one `chmix` at the same tier and t, each namespace reading only its own, each route drawing only its own, a kind-4 anonymous row read back and drawn, and the file still v7. Each absence seen red under a named mutation |
+| `test_radar.c` | the Radar tab ([Radar](#radar)): `/api/radar` from seeded `ble_device`, `beacon` and `probe_client` lines (every row in total, the banded rows nearest-RSSI first, a reading without an estimate in `none` and nowhere else, a word that is not sloth's no band, both halves `null` without their tables), the eight-per-band cap on twelve scrambled rows, rows without a reading sorting last, Monitor and Hybrid against Local's `out_of_scope` with the query checked, `400` for any parameter, the body under 8 KB with every BLE row held and under 10 KB with both censuses full, the name cut on a code-point boundary; the page: the tab between APRS and TACDB, the hook and init lines, every container id looked up, no `scoped-out` toggle and the comment saying why, no control in the view, the projection functions whole (`rn`, `geo`, `place`, `project`, `ringDist`) with no divide by depth, the painters whole, the ring dash and alpha, no gradient or shadow, the kept camera's three prefs validated and cleared, no kept selection, one `requestAnimationFrame`, the Local and estimate sentences verbatim, the centre rule, every fetch through the lent scoped `getJSON`, the three `select()` exports whole. Each absence seen red under a named mutation |
 | `test_btsig.c` | the Bluetooth SIG table this binary was built with (`WEB_BTSIG_EXPECT`): sorted, the names printable and within the cut, the lookups answering the SIG's names for Apple, Microsoft, Google, Ericsson, Battery, Human Interface Device, the keyboard appearance and the generic forms, a miss and the bounds null; the committed CSVs byte for byte the ones `web/data/btsig/SOURCE.md` hashes, with its row counts; `update_btsig.sh` run by the `update-btsig` target alone and named by no workflow; the generator run on a name holding every trigraph's opening, a quote and a backslash, its literal decoded back byte-identical and no `??` left in its output |
 | `test_replay.c` | spec §12's M3 acceptance: a six-week JSONL stream generated in the test (never a fixture) through the framer, decoder, live state, metric derivation, identity tables, rollup, `web_tsdb_step()` and the engine as `main.c` wires them, on pinned clocks: four weeks of routine (noisy gauges, Poisson counts, and an input for every rule: names that agree, a randomised MAC with its own name, a month-old probe client, a steady ssh host), then a quiet 7 d week in which nothing at all fires, slothweb and sloth restarting in the middle of it in an SQLite build, then a 7 d week in which A1 fires for a burst of connections and A3 for a daytime device that appears only at night, while a device that is only ever present at night never fires; and the hour that just closed reaching the baseline at flush phases 0, 3 and 7 (the previous slice fed it only at phase 0); A9 for a new host whose first row the rollup released late, at sloth's real cadence (SQLite); five weeks of a 13:30-14:30 routine in IST firing nothing. Both builds |
 | `test_evidence.c` | an alert's proof, every pcap written at run time from byte arrays built per their clause (no capture is committed): the file header in both byte orders and both resolutions, pcapng and junk refused by name, the record walk (orig_len raised to incl_len, a caplen past the snaplen, a file cut inside a record); the decoders on Ethernet/IPv4/TCP with a ClientHello cut at 64 bytes (no SNI claimed), a DNS query whole and cut, a compression pointer to itself, SLL2/ICMP, SLL/ARP, radiotap deauthentication (reason 7, Table 9-26 roles, channel and signal), a beacon (SSID, DS channel, RSN, a 33-octet SSID called invalid), an authentication status 0; the hex dump; a page of 24 frames, the next page, the worst case stopping with `more` inside its buffer, a cut file, a record cut below a 0xffffffff snaplen said as `40 of 270 bytes captured` and never as the snaplen; both alert-pcap name grammars and what they refuse (a handshake pcap's name, `eapol.22000`, a path, a near miss of each); the manifest line in `src/evidence_manifest.c`'s shape and every sink and shape it refuses; a directory: newest first, a handshake line and an unterminated tail not indexed, an 18-digit `written_at_epoch` sorted first and returned as written (no arithmetic on a stamp; the sanitized build would stop on an overflow) and equal stamps in read order, the three joins and the fallback only when they find nothing, hash verified, mismatched by a byte and by a length, no entry; a symlink, a FIFO, a name off the gate and a 16 MiB + 1 file refused; a missing directory; the routes: `captures` with no `incident_id`, session or path in the answer, `hash verified`, `no manifest entry`, `HASH MISMATCH` after a byte changed, `404` past the list, `400` for a file name or a bad `n`, `405` on `HEAD`, the download's headers and bytes, its `X-Sloth-SHA256` of the bytes served (`verified`, then `mismatch` after a byte changed, `no_manifest_entry`), `415` for pcapng, `why_no_capture` for an L2-only rule and with no `--pcap-dir`; an evidence pcap listed `withheld` and refused `403` by both routes with no frame or byte, then decoded and served under `serve_evidence`; a symlink and a FIFO with manifest lines listed `unreadable: not a regular file` and refused `403`; a file with sloth's line and a forged later-stamped line `hash verified` (by sloth's line) with `conflicting manifest lines (2)`, and a file with only a forged line `HASH MISMATCH`; the assessment generator run on documents it writes (header lines, front matter, sections, bibliography, Related pages left out, an indented continuation kept with its entry and other prose kept apart as the note, MY_NETWORK_RECON.md's note never in an entry) and its two build stops; the page's hooks (the drawer's list by its `data-ev` mark, the frame index through `DataTable`, a withheld or unreadable capture never opened), the download's one form and the section's place, last |
@@ -4848,6 +4933,8 @@ web/
     web_chain.c    G8's links: the stream's twin_episode pairs, in memory (#171 V4)
     web_bledev.c   the BLE device classes, the proximity grade, /api/ble/classes,
                    /api/ble/proximity (the BLE Devices waterfall)
+    web_radar.c    /api/radar: the Wi-Fi and BLE distance-band census the Radar
+                   tab's rings draw (the BLE tables, the FRRS ledger)
     web_history.c  /api/history/*, /api/sessions, /api/sessions/new (M5)
     web_flows.c    /api/flows, /api/flows/graph and its matrix form (M6, #171 V4)
     web_alerts.c   /api/alerts, /api/alert: the Alerts page, an alert's page
@@ -4874,8 +4961,9 @@ web/
                    evidence.js, bundle.js the copy-JSON
                    control, location.js and location.css: where
                    the sensor was, gnss.js and gnss.css: the GPS Sat
-                   tab, and bledev.js and bledev.css: the BLE Devices
-                   waterfall)
+                   tab, bledev.js and bledev.css: the BLE Devices
+                   waterfall, and radar.js and radar.css: the Radar tab's
+                   dome)
   tools/
     embed.c        ui/ -> build/web/web_assets.c (build time only)
     oui_gen.c      web/data/*.csv -> build/web/web_oui_table.c (build time only)

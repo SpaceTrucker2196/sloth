@@ -20,6 +20,7 @@
 #include "web_series.h"
 #include "web_wifi.h"
 #include "web_positions.h"
+#include "web_radar.h"
 
 static int route_scoped(const web_req_t *rq, const web_health_t *h,
                         int sse_room, char *out, size_t outsz, web_resp_t *r);
@@ -916,6 +917,36 @@ static int route_aprs(const web_req_t *rq, const web_health_t *h,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+/* /api/radar (web_radar.h): the Radar view's Wi-Fi and BLE band census,
+ * from the BLE tables and the FRRS ledger (h->m4->frrs). Both are
+ * passive radio, so Monitor's and Hybrid's; under Local the query is
+ * checked, then the one out_of_scope answer. */
+static int route_radar(const web_req_t *rq, const web_health_t *h,
+                       char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    web_frrs_t *f = h->m4 ? h->m4->frrs : NULL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_radar_route(h->ble, f, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_radar_out_of_scope_json(body, cap);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
 /* /api/ble, /api/ble/alerts, /api/ble/{addr} (web_ble.h): slothweb's
  * own BLE tables. The receivers are passive radio, so Monitor and
  * Hybrid serve them and Local is a view that holds nothing of them:
@@ -1462,6 +1493,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_adsb(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/aprs"))
             return route_aprs(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/radar"))
+            return route_radar(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble"))
             return route_ble(rq, h, BLE_DEVICES, NULL, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble/alerts"))

@@ -87,6 +87,7 @@ void run_ble_tests(void);
 void run_gnss_tests(void);               /* tests/test_gnss.c (2026-11-02) */
 void run_adsb_tests(void);               /* tests/test_adsb.c (2026-11-05) */
 void run_aprs_tests(void);               /* tests/test_aprs.c (2026-11-05) */
+void run_radar_tests(void);              /* tests/test_radar.c (2026-11-06) */
 void run_rfhist_tests(void);             /* tests/test_rfhist.c (2026-11-05) */
 void run_bledev_tests(void);             /* tests/test_bledev.c (2026-11-02) */
 void run_btsig_tests(void);

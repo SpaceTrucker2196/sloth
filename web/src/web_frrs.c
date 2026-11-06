@@ -638,6 +638,41 @@ int web_frrs_rf(web_frrs_t *f, int bssid, const char *mac, web_frrs_rf_t *out) {
     return got;
 }
 
+void web_frrs_rf_census(web_frrs_t *f, void (*cb)(const web_frrs_rf_row_t *, void *),
+                        void *ctx) {
+    static const char *const BAND[] = { "immediate", "near", "room", "building",
+                                        "far", NULL };
+    if (!f || !f->led || !f->lmu_init || !cb) return;
+    web_frrs_rf_row_t row;
+    pthread_mutex_lock(&f->lmu);
+    const struct web_frrs_led *L = f->led;
+    for (int i = 0; i < L->nbss; i++) {
+        const frrs_bss_t *b = &L->bss[i];
+        if (!b->has_b) continue;
+        row.kind = "ap";
+        row.mac = b->mac;
+        row.ssid = b->ssid;
+        row.has_rssi = b->signal_dbm != 0;
+        row.rssi = b->signal_dbm;
+        row.band = b->est.have && one_of(b->est.band, BAND) ? b->est.band : "";
+        row.ts = b->ts_b;
+        cb(&row, ctx);
+    }
+    for (int i = 0; i < L->nsta; i++) {
+        const frrs_sta_t *s = &L->sta[i];
+        if (!s->has_p) continue;
+        row.kind = "sta";
+        row.mac = s->mac;
+        row.ssid = "";
+        row.has_rssi = s->signal_dbm != 0;
+        row.rssi = s->signal_dbm;
+        row.band = s->est.have && one_of(s->est.band, BAND) ? s->est.band : "";
+        row.ts = s->ts_p;
+        cb(&row, ctx);
+    }
+    pthread_mutex_unlock(&f->lmu);
+}
+
 const frrs_sta_t *frrs_led_sta(const web_frrs_t *f, const char *mac) {
     if (!f || !f->led) return NULL;
     for (int i = 0; i < f->led->nsta; i++)

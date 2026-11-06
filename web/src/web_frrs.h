@@ -248,6 +248,26 @@ typedef struct {
 } web_frrs_rf_t;
 int  web_frrs_rf(web_frrs_t *f, int bssid, const char *mac, web_frrs_rf_t *out);
 
+/* The Wi-Fi band census for /api/radar (web_radar.h, 2026-11-06): every
+ * BSSID with a beacon (kind "ap": its SSID) and every station with a
+ * probe_client (kind "sta") the ledger holds, each with the record's
+ * signal_dbm (has_rssi 0 when the record carried none: the ledger keeps
+ * 0 for absent) and sloth's distance band word from its est members
+ * ("" when there is no estimate or the word is not one of sloth's), as
+ * web_frrs_rf() reads them. cb is called once per row under the
+ * ledger's lock, so it must not call back into this module; the strings
+ * are the ledger's and valid for the call only. */
+typedef struct {
+    const char *kind;                /* "ap" or "sta" */
+    const char *mac;
+    const char *ssid;                /* "" for a station */
+    int         has_rssi, rssi;
+    const char *band;
+    long long   ts;
+} web_frrs_rf_row_t;
+void web_frrs_rf_census(web_frrs_t *f, void (*cb)(const web_frrs_rf_row_t *, void *),
+                        void *ctx);
+
 /* Is this a path of the module (GET or POST)? */
 int  web_frrs_path(const char *path);
 

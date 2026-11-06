@@ -158,7 +158,9 @@
   }
 
   // ── the detail: one station's figures and recent packets ─────────
+  // A row's click, or another module's pick (radar.js).
   function select(call) {
+    if (typeof call !== "string" || !call) return;
     sel = call;
     selLive = null;
     $("aprs-detail").hidden = false;
@@ -480,5 +482,5 @@
   var closeBtn = $("aprs-detail-close");
   if (closeBtn) closeBtn.addEventListener("click", closeDetail);
 
-  window.SlothAprs = { show: show };
+  window.SlothAprs = { show: show, select: select };
 })();
