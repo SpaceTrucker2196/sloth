@@ -18,7 +18,7 @@ each is a typed producer of observations copied into `sloth_state_t`, exactly
 like the 802.11 path. Until the sensor seam exists, treat everything here as
 design, not implementation.
 
-**Last updated**: 2026-11-05 (ADS-B in slothweb: the ADS-B tab, [[adsb]]); 2026-11-05 (ADS-B slice 1 shipped: the `--adsb` feed, the aircraft table and the `adsb_aircraft` record, [[adsb]]); 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
+**Last updated**: 2026-11-05 (APRS shipped: `--aprs` off Dire Wolf's packet log, JSONL, sloth.db v13 and slothweb's APRS tab, [[aprs]]); 2026-11-05 (ADS-B in slothweb: the ADS-B tab, [[adsb]]); 2026-11-05 (ADS-B slice 1 shipped: the `--adsb` feed, the aircraft table and the `adsb_aircraft` record, [[adsb]]); 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
 
 ---
 
@@ -153,6 +153,27 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
   The view, slothweb, `--db` and the emergency-squawk alert (with its
   research citation) are pending. See [[adsb]].
 
+### APRS (144.390 MHz) — shipped
+- **Observe**: APRS packets a local Dire Wolf decoded (position, status,
+  message, object, telemetry reports): source and heard-via callsigns,
+  audio level, data type, symbol, position, speed, course, altitude,
+  comment, status, the sender's system.
+- **Hardware**: any receiver Dire Wolf demodulates (an SDR through
+  `rx_fm`, or a radio's audio); sloth reads Dire Wolf's `-L` log
+  (`--aprs PATH`) and never touches the radio or Dire Wolf.
+- **State**: `aprs_station_t` keyed by source callsign, a ring of
+  `aprs_packet_t`, `aprs_health_t` (`include/sloth.h`, `src/aprs.c`).
+- **View**: slothweb's APRS tab (stations, position plot, history); no
+  TUI view.
+- **JSONL**: `aprs_packet` (one per packet), `aprs_station`
+  (change-only), `aprs_*` in `sensor_health`, the `sensor` kind `aprs`;
+  sloth.db v13 `aprs_stations` / `aprs_packets`.
+- **Out of scope**: transmitting, igating, APRS-IS, talking to Dire
+  Wolf over KISS / AGW.
+- **Test**: hand-written log lines in Dire Wolf's shape with invented
+  calls (`tests/test_aprs.c`), a fuzz harness; no captures.
+- **Status**: shipped 2026-11-05. See [[aprs]].
+
 ### Meshtastic / LoRa
 - **Observe**: packet metadata from a local Meshtastic node in a
   listen/monitor role — node IDs, channel, hop limit, RSSI/SNR, port; message
@@ -193,3 +214,4 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
 - [[wifi-sigint]] — the 802.11 family whose patterns these mirror.
 - [[jsonl-schema]] — the record-type contract new families extend.
 - [[adsb]] — the ADS-B family's first slice.
+- [[aprs]] — the APRS family, off Dire Wolf's packet log.

@@ -2,6 +2,7 @@
 
 #include "db.h"
 #include "adsb.h"
+#include "aprs.h"
 #include "gps.h"
 #include "position_track.h"
 #include "beacon_snoop.h"   /* RSN_AKM_*_FAMILY */
@@ -78,6 +79,8 @@ static const char *const TIER_OBSERVATION[] = {
     "gnss_fixes", "gnss_sightings",
     /* ADS-B (#26, schema v12): an aircraft's track, change by change. */
     "adsb_sightings",
+    /* APRS (schema v13): one row per packet. */
+    "aprs_packets",
 };
 
 /* 3x — the inventory. "Which devices were on this network in March"
@@ -91,6 +94,8 @@ static const char *const TIER_ENTITY[] = {
     "ndp_ras", "ndp_ra_prefixes", "sensors",
     /* ADS-B (#26, schema v12): every aircraft address ever listed. */
     "adsb_aircraft",
+    /* APRS (schema v13): every source callsign ever heard. */
+    "aprs_stations",
 };
 
 /* 12x — the findings. These are why the operator kept the file. */
@@ -141,6 +146,7 @@ enum {
     ST_DEV_POS, ST_SENSOR_POS,
     ST_GNSS_FIX, ST_GNSS_SIGHT,
     ST_ADSB_AC, ST_ADSB_SIGHT,
+    ST_APRS_STN, ST_APRS_PKT,
     ST_COUNT
 };
 
@@ -168,6 +174,10 @@ static struct {
     uint64_t sig;
     time_t   ts;
 } g_adsb_mem[DB_ADSB_SLOTS];
+
+/* APRS (schema v13): the newest packet seq write_aprs() has written
+ * (src/aprs.c's ring), cleared by db_open(). */
+static uint64_t g_aprs_seq;
 
 /* The ST_DEVICE upsert spells the MAC-keyed camera bits as literals. */
 #if CAM_SIG_SETUP_SSID != 2 || CAM_SIG_SETUP_OUI != 16
@@ -685,6 +695,41 @@ static const char *const SQL[ST_COUNT] = {
     "baro_rate,lat,lon,rssi,messages,source_type) VALUES (?1,?2,?3,"
     "NULLIF(?4,''),NULLIF(?5,''),NULLIF(?6,''),NULLIF(?7,''),?8,?9,?10,?11,"
     "?12,?13,?14,?15,?16,?17,?18,NULLIF(?19,''))",
+/* APRS (schema v13). One upsert per packet: the inventory keeps the
+ * earliest first_seen and the latest last_seen, counts the packet,
+ * counts a visit each time sloth's own first_seen for the call moves
+ * (visit_first is that first_seen), and keeps the newest non-empty via,
+ * dti, symbol, position, comment, status and system, the best level,
+ * and whether any packet was heard direct. */
+[ST_APRS_STN] =
+    "INSERT INTO aprs_stations (call,first_seen,last_seen,visit_first,visits,"
+    "packets,via,heard_direct,best_level,dti,symbol,lat,lon,pos_ts,comment,"
+    "status,system) VALUES (?1,?2,?2,?3,1,1,NULLIF(?4,''),?5,?6,NULLIF(?7,''),"
+    "NULLIF(?8,''),?9,?10,?11,NULLIF(?12,''),NULLIF(?13,''),NULLIF(?14,''))"
+    " ON CONFLICT(call) DO UPDATE SET"
+    "  first_seen=MIN(aprs_stations.first_seen, excluded.first_seen),"
+    "  last_seen=MAX(aprs_stations.last_seen, excluded.last_seen),"
+    "  visits=aprs_stations.visits +"
+    "    (excluded.visit_first <> aprs_stations.visit_first),"
+    "  visit_first=excluded.visit_first,"
+    "  packets=aprs_stations.packets + 1,"
+    "  via=COALESCE(excluded.via, aprs_stations.via),"
+    "  heard_direct=MAX(aprs_stations.heard_direct, excluded.heard_direct),"
+    "  best_level=COALESCE(MAX(aprs_stations.best_level, excluded.best_level),"
+    "    aprs_stations.best_level, excluded.best_level),"
+    "  dti=COALESCE(excluded.dti, aprs_stations.dti),"
+    "  symbol=COALESCE(excluded.symbol, aprs_stations.symbol),"
+    "  lat=COALESCE(excluded.lat, aprs_stations.lat),"
+    "  lon=COALESCE(excluded.lon, aprs_stations.lon),"
+    "  pos_ts=COALESCE(excluded.pos_ts, aprs_stations.pos_ts),"
+    "  comment=COALESCE(excluded.comment, aprs_stations.comment),"
+    "  status=COALESCE(excluded.status, aprs_stations.status),"
+    "  system=COALESCE(excluded.system, aprs_stations.system)",
+[ST_APRS_PKT] =
+    "INSERT INTO aprs_packets (last_seen,source,heard,dti,name,symbol,lat,lon,"
+    "speed_kt,course,alt_m,level,status,comment) VALUES (?1,?2,NULLIF(?3,''),"
+    "NULLIF(?4,''),NULLIF(?5,''),NULLIF(?6,''),?7,?8,?9,?10,?11,?12,"
+    "NULLIF(?13,''),NULLIF(?14,''))",
 /* The key's newest row, which the write above continues instead of
  * starting one under the engine's first_seen (#170). The engine keeps
  * first_seen across a reopen in its side table, but that table is LRU
@@ -1042,6 +1087,9 @@ static const db_step_t g_steps[] = {
     { 11, db_schema_migrate_v11_sql, TABLES_NONE,
       "adsb_aircraft and adsb_sightings ride the unconditional schema;"
       " stamp only" },
+    { 12, db_schema_migrate_v12_sql, TABLES_NONE,
+      "aprs_stations and aprs_packets ride the unconditional schema;"
+      " stamp only" },
 };
 #define DB_STEP_N ((int)(sizeof(g_steps) / sizeof(g_steps[0])))
 /* The oldest version db_open() upgrades from. */
@@ -1185,6 +1233,7 @@ int db_open(const char *path) {
     memset(&g_gnss_fix_mem, 0, sizeof(g_gnss_fix_mem));
     memset(g_gnss_sat_mem, 0, sizeof(g_gnss_sat_mem));
     memset(g_adsb_mem, 0, sizeof(g_adsb_mem));
+    g_aprs_seq = 0;
     /* The #error above checks the headers; this checks the library the
      * dynamic linker actually loaded, which can be older on a host the
      * binary was copied to (#142). Before anything touches the path:
@@ -2073,6 +2122,64 @@ static void write_adsb(const sloth_state_t *s, time_t now) {
     }
 }
 
+/* APRS (schema v13): one aprs_packets row and one aprs_stations
+ * upsert per packet past this writer's own cursor, off src/aprs.c's
+ * ring (APRS_PKT_RING, the newest kept), so a packet reaches the file
+ * once however --db-interval-secs paces the writes; a writer more than
+ * the ring behind loses the oldest. An object or item (dti ';' or ')')
+ * names something else: its position, symbol and comment go in the
+ * packet row, never on the sender's station row (src/aprs.c merge()). */
+static void write_aprs(const sloth_state_t *s) {
+    if (!s->aprs.configured || !s->aprs_pkts) return;
+    int n = s->aprs_pkt_count;
+    if (n && s->aprs_pkts[n - 1].seq < g_aprs_seq) g_aprs_seq = 0;   /* ring restarted */
+    for (int i = 0; i < n; i++) {
+        const aprs_packet_t *p = &s->aprs_pkts[i];
+        if (p->seq <= g_aprs_seq) continue;
+        g_aprs_seq = p->seq;
+        char dti[2] = { p->dti, '\0' };
+        int other = p->dti == ';' || p->dti == ')';
+        int direct = p->heard[0] && strcmp(p->heard, p->source) == 0;
+
+        sqlite3_stmt *st = g_st[ST_APRS_STN];
+        bind_txt(st, 1, p->source);
+        sqlite3_bind_int64(st, 2, (sqlite3_int64)p->utime);
+        sqlite3_bind_int64(st, 3, (sqlite3_int64)(p->stn_first_seen ? p->stn_first_seen
+                                                                     : p->utime));
+        bind_txt(st, 4, p->heard);
+        sqlite3_bind_int(st, 5, direct);
+        if (p->level >= 0) sqlite3_bind_int(st, 6, p->level);
+        bind_txt(st, 7, dti);
+        bind_txt(st, 8, other ? "" : p->symbol);
+        if (p->has_pos && !other) {
+            sqlite3_bind_double(st, 9, p->lat);
+            sqlite3_bind_double(st, 10, p->lon);
+            sqlite3_bind_int64(st, 11, (sqlite3_int64)p->utime);
+        }
+        bind_txt(st, 12, other ? "" : p->comment);
+        bind_txt(st, 13, p->status);
+        bind_txt(st, 14, p->system);
+        step_reset(ST_APRS_STN);
+
+        st = g_st[ST_APRS_PKT];
+        sqlite3_bind_int64(st, 1, (sqlite3_int64)p->utime);
+        bind_txt(st, 2, p->source);
+        bind_txt(st, 3, p->heard);
+        bind_txt(st, 4, dti);
+        bind_txt(st, 5, p->name);
+        bind_txt(st, 6, p->symbol);
+        bind_opt_real(st, 7, p->has_pos, p->lat);
+        bind_opt_real(st, 8, p->has_pos, p->lon);
+        bind_opt_real(st, 9, p->has_speed, p->speed_kt);
+        bind_opt_real(st, 10, p->has_course, p->course);
+        bind_opt_real(st, 11, p->has_alt, p->alt_m);
+        if (p->level >= 0) sqlite3_bind_int(st, 12, p->level);
+        bind_txt(st, 13, p->status);
+        bind_txt(st, 14, p->comment);
+        step_reset(ST_APRS_PKT);
+    }
+}
+
 static void write_events(const sloth_state_t *s, time_t now) {
     for (int i = 0; i < s->alert_count; i++) {
         const alert_t *a = &s->alerts[i];
@@ -2675,6 +2782,7 @@ void db_tick(const sloth_state_t *s, time_t now) {
     write_positions      ();
     write_gnss           (s, now);
     write_adsb           (s, now);
+    write_aprs           (s);
 
     if (g_disabled) {
         exec("ROLLBACK", "rollback");

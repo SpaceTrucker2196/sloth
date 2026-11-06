@@ -6561,3 +6561,20 @@ compiled in at build): name, NORAD and COSPAR numbers, SVN, block,
 launch, plane and slot. The sky plot draws each satellite's trail over
 1 to 24 h from `gnss_sightings` (`/api/gnss/tracks`). Updated
 [[slothweb]].
+
+## 2026-11-05 — APRS stations off Dire Wolf's packet log
+
+[[aprs]], new page: `--aprs PATH` tails the `-L` CSV log a local Dire
+Wolf (144.390 MHz) writes - from its end at startup, a new or rotated
+file from 0, copytruncate handled, 256 KiB a poll, 1024-byte lines -
+receive-only and file-only. The parser follows Dire Wolf 1.7's
+`src/log.c` (22 fields, `quote_for_csv()`), refusing a line with a bad
+shape, channel, time or callsign and leaving any other bad field
+absent. Stations keyed by source call (512, one hour to expire; an
+object's position is not its sender's); the `aprs` sensor;
+`sensor_health`'s `aprs_*`; `aprs_packet` per packet and change-only
+`aprs_station` (held 0.01° cells); [[sqlite-schema]] v13
+`aprs_stations` (entity) and `aprs_packets` (observation), a stamp-only
+step; slothweb's APRS tab with `/api/aprs`, `/api/aprs/seen` and
+`/api/aprs/station`. Updated [[cli-reference]], [[jsonl-schema]],
+[[non-ip-sensors]], [[sqlite-schema]], [[slothweb]], [[index]].

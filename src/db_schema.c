@@ -901,6 +901,59 @@ static const char SCHEMA_SQL[] =
     "CREATE INDEX IF NOT EXISTS idx_adsb_sightings_hex"
     " ON adsb_sightings(hex, last_seen);\n"
 
+    /* APRS (schema v13, docs/wiki/aprs.md): what the --aprs Dire Wolf
+     * log carried. aprs_stations is the inventory, one row per source
+     * callsign ever heard (the entity tier): earliest first seen, latest
+     * last seen (Dire Wolf's utime of the packet), visits (one more each
+     * time sloth's own first_seen for the call moves: it expired and
+     * came back), packets, the newest position, symbol, comment, status
+     * and system it sent, whether any packet was heard direct, the best
+     * audio level and the newest heard-via. aprs_packets is one row per
+     * packet (the observation tier): no key of its own, since one
+     * packet is often heard twice in a second, direct and through a
+     * digipeater. Every text column is what a transmitter chose. */
+    "CREATE TABLE IF NOT EXISTS aprs_stations ("
+    "  call         TEXT PRIMARY KEY,"
+    "  first_seen   INTEGER NOT NULL,"
+    "  last_seen    INTEGER NOT NULL,"
+    "  visit_first  INTEGER NOT NULL,"
+    "  visits       INTEGER NOT NULL DEFAULT 1,"
+    "  packets      INTEGER NOT NULL DEFAULT 1,"
+    "  via          TEXT,"
+    "  heard_direct INTEGER NOT NULL DEFAULT 0,"
+    "  best_level   INTEGER,"
+    "  dti          TEXT,"
+    "  symbol       TEXT,"
+    "  lat          REAL,"
+    "  lon          REAL,"
+    "  pos_ts       INTEGER,"
+    "  comment      TEXT,"
+    "  status       TEXT,"
+    "  system       TEXT"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_aprs_stations_last_seen"
+    " ON aprs_stations(last_seen);\n"
+    "CREATE TABLE IF NOT EXISTS aprs_packets ("
+    "  last_seen  INTEGER NOT NULL,"
+    "  source     TEXT NOT NULL,"
+    "  heard      TEXT,"
+    "  dti        TEXT,"
+    "  name       TEXT,"
+    "  symbol     TEXT,"
+    "  lat        REAL,"
+    "  lon        REAL,"
+    "  speed_kt   REAL,"
+    "  course     REAL,"
+    "  alt_m      REAL,"
+    "  level      INTEGER,"
+    "  status     TEXT,"
+    "  comment    TEXT"
+    ");\n"
+    "CREATE INDEX IF NOT EXISTS idx_aprs_packets_last_seen"
+    " ON aprs_packets(last_seen);\n"
+    "CREATE INDEX IF NOT EXISTS idx_aprs_packets_source"
+    " ON aprs_packets(source, last_seen);\n"
+
     "CREATE TABLE IF NOT EXISTS sensors ("
     "  kind       INTEGER NOT NULL,"
     "  iface      TEXT NOT NULL,"
@@ -1031,6 +1084,12 @@ static const char MIGRATE_V10_SQL[] = "";
  * file recorded an aircraft. */
 static const char MIGRATE_V11_SQL[] = "";
 
+/* v12 -> v13 (2026-11-05): no ALTER. aprs_stations and aprs_packets
+ * are new tables on the unconditional schema; the step is the stamp,
+ * as v11 -> v12 was. Nothing is backfilled: no earlier file recorded a
+ * packet. */
+static const char MIGRATE_V12_SQL[] = "";
+
 const char *db_schema_sql(void)        { return SCHEMA_SQL; }
 const char *db_schema_meta_sql(void)   { return META_SQL; }
 int db_schema_version(void)            { return DB_SCHEMA_VERSION; }
@@ -1045,3 +1104,4 @@ const char *db_schema_migrate_v8_sql(void) { return MIGRATE_V8_SQL; }
 const char *db_schema_migrate_v9_sql(void) { return MIGRATE_V9_SQL; }
 const char *db_schema_migrate_v10_sql(void) { return MIGRATE_V10_SQL; }
 const char *db_schema_migrate_v11_sql(void) { return MIGRATE_V11_SQL; }
+const char *db_schema_migrate_v12_sql(void) { return MIGRATE_V12_SQL; }

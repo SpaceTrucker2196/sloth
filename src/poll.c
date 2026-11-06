@@ -9,6 +9,7 @@
 #include "persist_health.h"
 #include "gps.h"
 #include "adsb.h"
+#include "aprs.h"
 #include "position_track.h"
 #include "history.h"
 #include "bandwidth.h"
@@ -115,6 +116,9 @@ static void st_health(sloth_state_t *s, const poll_ctx_t *ctx) {
     /* --adsb (#26 slice 1): expire the aircraft the decoder stopped
      * reporting and copy the table, before anything this tick reads it. */
     adsb_health_poll(s, ctx->wall, ctx->mono_ms);
+    /* --aprs: expire the stations unheard for an hour and copy the
+     * table and the packet ring, before anything this tick reads them. */
+    aprs_health_poll(s, ctx->wall, ctx->mono_ms);
     /* #96: per-sink write-failure counts, for the cannot-persist badge. */
     persist_health_poll(&s->persist_health);
     /* #85: re-check each pinned ifindex still names its interface; a
@@ -322,6 +326,21 @@ static void st_sensors(sloth_state_t *s, const poll_ctx_t *ctx) {
         else
             sensor_set_state(ad, s->adsb.reads ? SENSOR_STATE_ACTIVE
                                                : SENSOR_STATE_PRESENT);
+    }
+    /* APRS: Dire Wolf's packet log, observing decoded packets. An
+     * unreadable file is the registry's ERROR; a missing one (Dire Wolf
+     * creates it with its first packet) and a quiet channel are not:
+     * PRESENT until a packet, ACTIVE after. After the ADS-B decoder,
+     * for the same id-slot reason. */
+    if (s->aprs.configured) {
+        sensor_t *ap = sensor_register(s, SENSOR_APRS, "APRS decoder",
+                                       s->aprs.src, ctx->wall);
+        sensor_observe(ap, s->aprs.packets, ctx->wall);
+        if (s->aprs.state == APRS_ERROR)
+            sensor_set_state(ap, SENSOR_STATE_ERROR);
+        else
+            sensor_set_state(ap, s->aprs.packets ? SENSOR_STATE_ACTIVE
+                                                 : SENSOR_STATE_PRESENT);
     }
 }
 

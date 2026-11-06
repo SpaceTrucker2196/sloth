@@ -289,6 +289,8 @@ All routes are `GET`. Any other method returns `405`. Responses are JSON unless 
 | `/api/gnss/tracks?hours=` | the GPS Sat sky plot's trails from `gnss_sightings` (2026-11-05) |
 | `/api/gnss/seen?days=&limit=`, `/api/gnss/sat?gnssid=&prn=&days=` | the GPS Sat tab's history from sloth.db's `gnss_sightings`: satellites seen over a window, one satellite's records (2026-11-05) |
 | `/api/adsb/seen?days=&limit=&offset=&q=`, `/api/adsb/aircraft?hex=&days=` | the ADS-B tab's history from sloth.db's `adsb_aircraft` / `adsb_sightings` (v12): aircraft seen over a window, one aircraft's row and sightings (2026-11-05); Monitor's and Hybrid's |
+| `/api/aprs?limit=&call=` | the APRS tab's decoder health and stations, or one station with its track and recent packets (2026-11-05); Monitor's and Hybrid's |
+| `/api/aprs/seen?days=&limit=&offset=&q=`, `/api/aprs/station?call=&days=` | the APRS tab's history from sloth.db's `aprs_stations` / `aprs_packets` (v13): stations heard over a window, one station's row and packets (2026-11-05); Monitor's and Hybrid's |
 | `/events` | SSE stream (see below) |
 
 ### 7.1 SSE events

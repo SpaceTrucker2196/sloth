@@ -919,7 +919,7 @@ static void test_page(void) {
     const char *p = (const char *)web_page;
     WT_HAS(p, "<li><button type=\"button\" class=\"go\" id=\"nav-ble\"><span class=\"k\">0</span>BLE Devices</button></li>");
     WT_HAS(p, "    if (e.key === \"0\") show(\"ble\");");
-    WT_HAS(p, "               \"lookup\", \"tacdb\", \"ble\", \"gnss\", \"adsb\"];");
+    WT_HAS(p, "               \"lookup\", \"tacdb\", \"ble\", \"gnss\", \"adsb\", \"aprs\"];");
     WT_HAS(p, "    if (v === \"ble\") bleView();");
     /* The bundle module's hook in the drawer header: the container and
      * the guarded call, a no-op without bundle.js. Seen red with the
@@ -970,7 +970,8 @@ static void test_page(void) {
     WT_HAS(p, "        [\"distance (est)\", num(d.rssi) ? (d.est ? d.est.describe : \"no estimate\") : null],");
     /* Kept controls, the scope, the strip, the Health block. */
     WT_HAS(p, "\"q-sql\", \"b-q\", \"b-sort\", \"bledev-win\", \"bledev-metric\", \"bledev-n\",\n"
-              "   \"gnss-seen-days\", \"adsb-seen-days\", \"adsb-seen-q\", \"gnss-trail-hours\"].forEach(keepCtl);");
+              "   \"gnss-seen-days\", \"adsb-seen-days\", \"adsb-seen-q\", \"gnss-trail-hours\",\n"
+              "   \"aprs-seen-days\", \"aprs-seen-q\"].forEach(keepCtl);");
     /* The BLE Devices waterfall (web/ui/bledev.js): its module after
      * app.js, its four hooks guarded (reset since the 2026-11-02
      * review: the drawer's BLE lines never outlive their address), its

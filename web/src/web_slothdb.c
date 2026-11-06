@@ -140,6 +140,26 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "adsb_sightings", "lat", 12, 1, 0 },       { "adsb_sightings", "lon", 12, 1, 0 },
     { "adsb_sightings", "rssi", 12, 1, 0 },      { "adsb_sightings", "messages", 12, 1, 0 },
     { "adsb_sightings", "source_type", 12, 1, 0 },
+    /* v13: the --aprs decoder's stations (docs/wiki/aprs.md). The call
+     * is the AX.25 source address a transmitter sent; the comment,
+     * status, system, name and symbol are its free text, shown as they
+     * are and never a key. */
+    { "aprs_stations", "call", 13, 1, 0 },        { "aprs_stations", "first_seen", 13, 1, 0 },
+    { "aprs_stations", "last_seen", 13, 1, 0 },   { "aprs_stations", "visit_first", 13, 1, 0 },
+    { "aprs_stations", "visits", 13, 1, 0 },      { "aprs_stations", "packets", 13, 1, 0 },
+    { "aprs_stations", "via", 13, 1, 0 },         { "aprs_stations", "heard_direct", 13, 1, 0 },
+    { "aprs_stations", "best_level", 13, 1, 0 },  { "aprs_stations", "dti", 13, 1, 0 },
+    { "aprs_stations", "symbol", 13, 1, 0 },      { "aprs_stations", "lat", 13, 1, 0 },
+    { "aprs_stations", "lon", 13, 1, 0 },         { "aprs_stations", "pos_ts", 13, 1, 0 },
+    { "aprs_stations", "comment", 13, 1, 0 },     { "aprs_stations", "status", 13, 1, 0 },
+    { "aprs_stations", "system", 13, 1, 0 },
+    { "aprs_packets", "last_seen", 13, 1, 0 },    { "aprs_packets", "source", 13, 1, 0 },
+    { "aprs_packets", "heard", 13, 1, 0 },        { "aprs_packets", "dti", 13, 1, 0 },
+    { "aprs_packets", "name", 13, 1, 0 },         { "aprs_packets", "symbol", 13, 1, 0 },
+    { "aprs_packets", "lat", 13, 1, 0 },          { "aprs_packets", "lon", 13, 1, 0 },
+    { "aprs_packets", "speed_kt", 13, 1, 0 },     { "aprs_packets", "course", 13, 1, 0 },
+    { "aprs_packets", "alt_m", 13, 1, 0 },        { "aprs_packets", "level", 13, 1, 0 },
+    { "aprs_packets", "status", 13, 1, 0 },       { "aprs_packets", "comment", 13, 1, 0 },
     /* v11 (#175): one row per incident beside the per-finding alerts
      * row. The key is the alerts key and as predicate-only as that one;
      * so is sloth's incident_id, a hash over the key (web_alerts.h never
@@ -701,6 +721,21 @@ int web_sdb_adsb_one(web_sdb_conn_t *c, const char *hex, web_sdb_ac_t *out) {
 int web_sdb_adsb_track(web_sdb_conn_t *c, const char *hex, long long from,
                        int max, web_sdb_apt_fn fn, void *ctx) {
     (void)c; (void)hex; (void)from; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_aprs_seen(web_sdb_conn_t *c, long long from, long long limit,
+                      long long offset, const char *q, web_sdb_aprs_stn_fn fn,
+                      void *ctx) {
+    (void)c; (void)from; (void)limit; (void)offset; (void)q; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_aprs_one(web_sdb_conn_t *c, const char *call, web_sdb_aprs_stn_t *out) {
+    (void)c; (void)call; (void)out;
+    return -1;
+}
+int web_sdb_aprs_packets(web_sdb_conn_t *c, const char *call, long long from,
+                         int max, web_sdb_aprs_pkt_fn fn, void *ctx) {
+    (void)c; (void)call; (void)from; (void)max; (void)fn; (void)ctx;
     return -1;
 }
 
@@ -3015,16 +3050,16 @@ static int adsb_ac_ok(web_sdb_conn_t *c) {
 
 static void ac_row(sqlite3_stmt *st, web_sdb_ac_t *a) {
     memset(a, 0, sizeof(*a));
-    text(st, 0, a->hex, sizeof(a->hex));
+    text(st, 0, a->hex, sizeof(a->hex) - 1);
     a->non_icao = sqlite3_column_int(st, 1);
     a->first_seen = sqlite3_column_int64(st, 2);
     a->last_seen = sqlite3_column_int64(st, 3);
     a->visits = sqlite3_column_int64(st, 4);
     a->sightings = sqlite3_column_int64(st, 5);
-    text(st, 6, a->flight, sizeof(a->flight));
-    text(st, 7, a->squawk, sizeof(a->squawk));
-    text(st, 8, a->category, sizeof(a->category));
-    text(st, 9, a->source_type, sizeof(a->source_type));
+    text(st, 6, a->flight, sizeof(a->flight) - 1);
+    text(st, 7, a->squawk, sizeof(a->squawk) - 1);
+    text(st, 8, a->category, sizeof(a->category) - 1);
+    text(st, 9, a->source_type, sizeof(a->source_type) - 1);
     a->emergency_seen = sqlite3_column_int(st, 10);
     a->has_alt = sqlite3_column_type(st, 11) != SQLITE_NULL &&
                  sqlite3_column_type(st, 12) != SQLITE_NULL;
@@ -3115,9 +3150,9 @@ int web_sdb_adsb_track(web_sdb_conn_t *c, const char *hex, long long from,
         memset(&p, 0, sizeof(p));
         p.ts = sqlite3_column_int64(st, 0);
         p.heard = sqlite3_column_int64(st, 1);
-        text(st, 2, p.flight, sizeof(p.flight));
-        text(st, 3, p.squawk, sizeof(p.squawk));
-        text(st, 4, p.emergency, sizeof(p.emergency));
+        text(st, 2, p.flight, sizeof(p.flight) - 1);
+        text(st, 3, p.squawk, sizeof(p.squawk) - 1);
+        text(st, 4, p.emergency, sizeof(p.emergency) - 1);
         p.on_ground = sqlite3_column_int(st, 5);
         p.has_alt_baro = sqlite3_column_type(st, 6) != SQLITE_NULL;
         p.alt_baro = sqlite3_column_int(st, 6);
@@ -3142,5 +3177,140 @@ int web_sdb_adsb_track(web_sdb_conn_t *c, const char *hex, long long from,
     sqlite3_finalize(st);
     return rc == SQLITE_DONE ? n : -1;
 }
+
+/* ── APRS (v13) ──────────────────────────────────────────────────── */
+
+static int aprs_stn_ok(web_sdb_conn_t *c) {
+    static const char *const k[] = { "call", "first_seen", "last_seen", "visits",
+                                     "packets", "via", "heard_direct", "best_level",
+                                     "dti", "symbol", "lat", "lon", "pos_ts",
+                                     "comment", "status", "system", NULL };
+    return have_all(c, "aprs_stations", k);
+}
+
+#define APRS_STN_COLS "call, first_seen, last_seen, visits, packets, via," \
+    " heard_direct, best_level, dti, symbol, lat, lon, pos_ts, comment, status," \
+    " system"
+
+static int has(sqlite3_stmt *st, int col) {
+    return sqlite3_column_type(st, col) != SQLITE_NULL;
+}
+
+/* text() takes the longest string, so a buffer of sizeof(b) holds
+ * sizeof(b) - 1 and the NUL. */
+#define TEXT(st, col, b) text((st), (col), (b), sizeof(b) - 1)
+
+static void aprs_stn_row(sqlite3_stmt *st, web_sdb_aprs_stn_t *a) {
+    memset(a, 0, sizeof(*a));
+    TEXT(st, 0, a->call);
+    a->first_seen = sqlite3_column_int64(st, 1);
+    a->last_seen = sqlite3_column_int64(st, 2);
+    a->visits = sqlite3_column_int64(st, 3);
+    a->packets = sqlite3_column_int64(st, 4);
+    TEXT(st, 5, a->via);
+    a->heard_direct = sqlite3_column_int(st, 6);
+    a->has_level = has(st, 7);
+    a->best_level = sqlite3_column_int(st, 7);
+    TEXT(st, 8, a->dti);
+    TEXT(st, 9, a->symbol);
+    a->has_pos = has(st, 10) && has(st, 11);
+    a->lat = sqlite3_column_double(st, 10);
+    a->lon = sqlite3_column_double(st, 11);
+    a->pos_ts = sqlite3_column_int64(st, 12);
+    TEXT(st, 13, a->comment);
+    TEXT(st, 14, a->status);
+    TEXT(st, 15, a->system);
+}
+
+int web_sdb_aprs_seen(web_sdb_conn_t *c, long long from, long long limit,
+                      long long offset, const char *q, web_sdb_aprs_stn_fn fn,
+                      void *ctx) {
+    if (!aprs_stn_ok(c)) return 0;
+    sqlite3_stmt *st = NULL;
+    /* The prefix is bound, never spliced, and the caller has already
+     * refused anything but [0-9A-Z-]; '%' and '_' cannot reach it. */
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT " APRS_STN_COLS " FROM aprs_stations WHERE last_seen >= ?1"
+            " AND (?3 = '' OR call LIKE ?3 || '%')"
+            " ORDER BY last_seen DESC, call LIMIT ?2 OFFSET ?4", -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, limit);
+    sqlite3_bind_text(st, 3, q ? q : "", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 4, offset);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_aprs_stn_t a;
+        aprs_stn_row(st, &a);
+        n++;
+        if (fn(ctx, &a)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_sdb_aprs_one(web_sdb_conn_t *c, const char *call, web_sdb_aprs_stn_t *out) {
+    memset(out, 0, sizeof(*out));
+    if (!aprs_stn_ok(c)) return 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT " APRS_STN_COLS " FROM aprs_stations WHERE call = ?1",
+            -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_text(st, 1, call, -1, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(st), found = 0;
+    if (rc == SQLITE_ROW) { aprs_stn_row(st, out); found = 1; rc = SQLITE_DONE; }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? found : -1;
+}
+
+int web_sdb_aprs_packets(web_sdb_conn_t *c, const char *call, long long from,
+                         int max, web_sdb_aprs_pkt_fn fn, void *ctx) {
+    static const char *const k[] = { "last_seen", "source", "heard", "dti", "name",
+                                     "symbol", "lat", "lon", "speed_kt", "course",
+                                     "alt_m", "level", "status", "comment", NULL };
+    if (!have_all(c, "aprs_packets", k)) return 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT last_seen, heard, dti, name, symbol, lat, lon, speed_kt, course,"
+            " alt_m, level, status, comment FROM ("
+            " SELECT last_seen, heard, dti, name, symbol, lat, lon, speed_kt,"
+            " course, alt_m, level, status, comment"
+            " FROM aprs_packets WHERE source = ?1 AND last_seen >= ?2"
+            " ORDER BY last_seen DESC LIMIT ?3) ORDER BY last_seen",
+            -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_text(st, 1, call, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 2, from);
+    sqlite3_bind_int(st, 3, max);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_aprs_pkt_t p;
+        memset(&p, 0, sizeof(p));
+        p.ts = sqlite3_column_int64(st, 0);
+        TEXT(st, 1, p.heard);
+        TEXT(st, 2, p.dti);
+        TEXT(st, 3, p.name);
+        TEXT(st, 4, p.symbol);
+        p.has_pos = has(st, 5) && has(st, 6);
+        p.lat = sqlite3_column_double(st, 5);
+        p.lon = sqlite3_column_double(st, 6);
+        p.has_speed = has(st, 7);
+        p.speed_kt = sqlite3_column_double(st, 7);
+        p.has_course = has(st, 8);
+        p.course = sqlite3_column_double(st, 8);
+        p.has_alt = has(st, 9);
+        p.alt_m = sqlite3_column_double(st, 9);
+        p.has_level = has(st, 10);
+        p.level = sqlite3_column_int(st, 10);
+        TEXT(st, 11, p.status);
+        TEXT(st, 12, p.comment);
+        n++;
+        if (fn(ctx, &p)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+#undef TEXT
 
 #endif /* WITH_SQLITE */

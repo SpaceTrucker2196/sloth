@@ -504,6 +504,9 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/gnss/sat?gnssid=&prn=&days=` | `200` JSON, one satellite's `gnss_sightings` over the window, oldest first, at most 400, as `[ts, el, az, cn0, used, health]`; `400` `bad_gnssid` / `bad_prn` / `bad_days` |
    | `GET /api/adsb/seen?days=&limit=&offset=&q=` | `200` JSON from sloth.db's `adsb_aircraft`: the aircraft last seen in the last `days` (default 7), newest first, `limit` (1..100) from `offset`, `more` when there are others; `q` a hex or callsign prefix (letters and digits, a leading `~`; anything else `400` `bad_q`); `"have":false` from a file older than v12; Monitor's and Hybrid's (Local `out_of_scope`, the query checked) |
    | `GET /api/adsb/aircraft?hex=&days=` | `200` JSON, one aircraft's inventory row (`null` when not in the file) and its `adsb_sightings` over the window, oldest first, at most 400, as compact rows named in `cols`; `400` `bad_hex` for anything but sloth's six lower-case hex digits (optionally `~`) |
+   | `GET /api/aprs?limit=&call=` | `200` JSON, the APRS tab ([APRS](#aprs)): the `sensor_health` aprs block and the stations (live before gone, the most recently heard first, without tracks; `limit` 1..1024; as many as fit the 64 KB answer, `"cut":true` when the buffer stopped the list, `shown` how many); with `call=` (an AX.25 callsign) that one station with `track_pts` (`[ts, lat, lon]`, its last 32 positions) and `packets_recent` (its last 16 packets as rows named by `packet_cols`), `"station":null` when not kept. Under Local the query is checked, then `out_of_scope`. `400` names an unknown parameter, `bad_limit`, `bad_call` |
+   | `GET /api/aprs/seen?days=&limit=&offset=&q=` | `200` JSON from sloth.db's `aprs_stations` (needs `--sloth-db`): the stations last heard in the last `days` (1..400, default 7), newest first, `limit` (1..100) a page from `offset`, `more` when another page follows; `q` a callsign prefix of `[0-9A-Za-z-]` (at most 9, upper-cased; anything else `400 bad_q`); the comment cut to 48. A file older than v13 answers `"have":false` and an empty list. Monitor's and Hybrid's |
+   | `GET /api/aprs/station?call=&days=` | `200` JSON, one station's `aprs_stations` row (`null` when not in the file) and its `aprs_packets` over the window, oldest first, the newest 400 that fit the 64 KB answer (`"cut":true` when older ones were left out), compact rows named by `cols`. `400 bad_call` for anything but an AX.25 callsign. Monitor's and Hybrid's |
    | `GET /api/gnss/fixes?since=&limit=` | `200` JSON, the kept `gnss_fix` records (512 in memory) oldest first after `since` (unix seconds), at most `limit` (default and most 128); the page walks the ring (`gnss.js fixes()`: from `since=0`, then from the last row's `ts` while a page comes back full, at most eight pages), so the strip reaches the newest record once the ring holds more than a page; `400` for `bad_since` / `bad_limit` |
    | `HEAD /api/alerts`, `HEAD /api/alert`, `HEAD /api/pcap`, `HEAD /api/pcap/frames`, `HEAD /api/bundle` | `405`, `Allow: GET`, as `/api/query` |
    | `GET /api/positions?mac=&format=json\|geojson\|gpx&since=&until=` | `200`, sloth.db v9's `device_positions` for one MAC (where the sensor was when it heard it, not the device's position) and the sensor's track over the same span, newest first, at most 200 of each (the track the newest 200 points within the samples' span, so the oldest samples of a full answer may have no track under them), `"more"` when there were more; the GeoJSON carries the same `"more"` and `"limit"` as foreign members of its FeatureCollection (RFC 7946 §6.1) and a cut GPX says `truncated` in its `<metadata><desc>` ([Sensor location](#sensor-location)); `json` is `application/json`, `geojson` (RFC 7946) `application/geo+json` and `gpx` (GPX 1.1) `application/gpx+xml`, both as attachments; `400` for a parameter that does not pass (`bad_mac`, `bad_format`, `bad_range`); `503` with no `--sloth-db` or sloth.db unreadable. A file before v9 answers empty lists. `HEAD` is `405` |
@@ -948,6 +951,58 @@ at most 8, the squawk four octal digits, the category `A0`..`D7`, the
 emergency one of sloth's eight words; every number is range checked
 and anything outside is `null`, never clamped. Observation only: no
 row is a finding; the emergency-squawk alert is a later slice.
+
+## APRS
+
+The APRS tab (2026-11-05) is the stations a local Dire Wolf decodes on
+144.390 MHz, as sloth reports them ([aprs](../docs/wiki/aprs.md)): with
+`--aprs`, sloth tails Dire Wolf's `-L` packet log (one CSV line per
+packet; it never talks to the radio or to Dire Wolf) and writes one
+`aprs_packet` record per packet and one change-only `aprs_station`
+record per station (first heard, a new held 0.01° position cell, a new
+symbol, the first packet heard direct, the 300 s heartbeat, and one
+`"gone"` after an hour unheard), plus the `aprs_*` members of
+`sensor_health`. `web/src/web_aprs.c` keeps them in memory: 1024
+stations keyed by callsign, the least recently reported evicted; a gone
+station kept, dimmed, for 30 minutes; a live one quiet for 660 s aged
+out and counted; each with its last 32 positions and its last 16
+packets (time, type, via, level, the comment cut to 48). A station's
+last heard, via, level, comment and position follow its packets; an
+object's or item's position belongs to the object, never to its sender.
+
+The page (`web/ui/aprs.js`, `window.SlothAprs`, containers `aprs-*`,
+one hook in `app.js`) draws a header from the decoder's health (the log
+file's state, stations live / with a position / heard direct, the last
+packet's age, line, packet, bad-line, rotation and truncation counts),
+the station table (app.js's DataTable: CALL, SYM, LAST HEARD, PACKETS,
+VIA - `direct` or the digipeater -, POSITION, SPD, CRS, ALT, LEVEL
+heat-graded over 0..100, COMMENT, SYSTEM), a position plot (north up,
+no map tiles and nothing fetched: each station at its last position,
+brighter when heard direct, the selected one with its kept track solid
+and its recorded positions dashed, a km scale bar) and a detail panel
+on click with its figures, its recent packets and its history. Every
+comment, status and system string is a transmitter's free text, shown
+with `textContent` only. Dire Wolf's receiver is a passive radio, so
+`aprs_packet` and `aprs_station` are Monitor's; under Local the view
+shows its scope note and the routes answer `out_of_scope`.
+
+**History**: with `--sloth-db`, the tab reads sloth.db's
+`aprs_stations` and `aprs_packets` (schema v13, written by sloth's
+`--db` with `--aprs`; `web/src/web_aprshist.c`): a "stations seen"
+table over a window (24 h to a year, 100 a page, a callsign search, the
+window and search kept per browser) with first and last heard, visits,
+packets, ever heard direct, best level, last via, position and comment;
+and, for a station clicked there or live, its recorded packets (the
+newest 400 that fit the answer) in the detail panel and its recorded
+positions on the plot.
+
+Every string is hostile: a call must be an AX.25 callsign (else the
+record is rejected and counted), the symbol two printable bytes, the
+type one, text printable ASCII within sloth's caps; every number is
+range checked and anything outside is `null`, never clamped. Answers
+are budgeted in bytes as well as rows, since an escaped comment can
+cost six bytes a character. Observation only: no row is a finding, and
+APRS authenticates nothing - a position is what a station claimed.
 
 ## The data socket (M1)
 

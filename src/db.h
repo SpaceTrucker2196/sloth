@@ -103,7 +103,10 @@
 /* Bumped to 12 on 2026-11-05 (#26, docs/wiki/adsb.md): adsb_aircraft
  * and adsb_sightings are new tables and ride the unconditional schema;
  * the v11 -> v12 step is a stamp alone. No existing table changes. */
-#define DB_SCHEMA_VERSION 12
+/* Bumped to 13 on 2026-11-05 (docs/wiki/aprs.md): aprs_stations and
+ * aprs_packets are new tables and ride the unconditional schema; the
+ * v12 -> v13 step is a stamp alone. No existing table changes. */
+#define DB_SCHEMA_VERSION 13
 
 /* The incidents kept per key in alert_incidents (#175), newest first
  * by first_seen. A key evicted under pressure re-fires as a new
@@ -416,5 +419,8 @@ const char *db_schema_migrate_v10_sql(void);
 /* v11 -> v12 (#26): no ALTER — adsb_aircraft and adsb_sightings are new
  * tables and ride the unconditional schema. An empty statement list. */
 const char *db_schema_migrate_v11_sql(void);
+/* v12 -> v13 (APRS): no ALTER - aprs_stations and aprs_packets are new
+ * tables and ride the unconditional schema. An empty statement list. */
+const char *db_schema_migrate_v12_sql(void);
 
 #endif /* SLOTH_DB_H */

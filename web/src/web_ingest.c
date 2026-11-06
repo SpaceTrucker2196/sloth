@@ -18,6 +18,7 @@
 #include "web_chain.h"
 #include "web_ble.h"
 #include "web_adsb.h"
+#include "web_aprs.h"
 #include "web_gnss.h"
 #include "web_metrics.h"
 
@@ -136,6 +137,7 @@ static void one_line(web_feed_t *f, web_live_t *l, long long now_ms) {
         if (f->ble) web_ble_record(f->ble, &f->rec, now_ms);
         if (f->gnss) web_gnss_record(f->gnss, &f->rec, now_ms);
         if (f->adsb) web_adsb_record(f->adsb, &f->rec, now_ms);
+        if (f->aprs) web_aprs_record(f->aprs, &f->rec, now_ms);
         if (f->chain) web_chain_record(f->chain, &f->rec);
     } else {
         web_live_decode_error(l, e, now_ms);
@@ -380,6 +382,10 @@ void web_ingest_set_gnss(web_ingest_t *g, struct web_gnss *n) {
 
 void web_ingest_set_adsb(web_ingest_t *g, struct web_adsb *a) {
     g->feed.adsb = a;
+}
+
+void web_ingest_set_aprs(web_ingest_t *g, struct web_aprs *a) {
+    g->feed.aprs = a;
 }
 
 void web_ingest_set_chain(web_ingest_t *g, struct web_chain *c) {

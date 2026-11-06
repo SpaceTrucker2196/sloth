@@ -1,5 +1,6 @@
 #include "web_routes.h"
 #include "web_rfhist.h"
+#include "web_aprshist.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -370,6 +371,11 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
         web_jw_raw(&w, ",\"adsb\":");
         web_adsb_health_json(h->adsb, &w);
     }
+    /* The APRS panel (web_aprs.h), likewise only when kept. */
+    if (h->aprs) {
+        web_jw_raw(&w, ",\"aprs\":");
+        web_aprs_health_json(h->aprs, &w);
+    }
     web_jw_raw(&w, ",\"sse_clients\":");
     web_jw_int(&w, h->sse_clients);
     web_jw_raw(&w, ",\"tick_seq\":");
@@ -683,7 +689,8 @@ static int route_m4(const web_req_t *rq, const web_health_t *h, int which,
 
 enum { M5_CHANNELS, M5_DEAUTH, M5_APS, M5_OVERVIEW, M5_HDEVICES, M5_HALERTS,
        M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW, M6_FLOWS, M6_GRAPH, M5_WLOCAL,
-       M5_CHAIN, RF_GNSS_SEEN, RF_GNSS_SAT, RF_ADSB_SEEN, RF_ADSB_AC, RF_GNSS_TRACKS };
+       M5_CHAIN, RF_GNSS_SEEN, RF_GNSS_SAT, RF_ADSB_SEEN, RF_ADSB_AC, RF_GNSS_TRACKS,
+       RF_APRS_SEEN, RF_APRS_STN };
 
 /* The WiFi and History routes (M5, web_wifi.h, web_history.h) and the
  * Flows routes (M6, web_flows.h): the same shape as route_m4(). */
@@ -706,6 +713,7 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         web_wifi_local_route, web_wifi_chain_route,
         web_gnss_seen_route, web_gnss_sat_route, web_adsb_seen_route,
         web_adsb_aircraft_route, web_gnss_tracks_route,
+        web_aprs_seen_route, web_aprs_station_route,
     };
     /* A view a capture scope holds nothing of (web_scope.h): the WiFi
      * view's channels, deauths and APs are the monitor radio's, its card
@@ -732,6 +740,9 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         : sc == WEB_SCOPE_LOCAL && (which == RF_ADSB_SEEN || which == RF_ADSB_AC)
             ? "aircraft are the ADS-B decoder's (--adsb), a passive radio; the "
               "host's own interfaces carried none"
+        : sc == WEB_SCOPE_LOCAL && (which == RF_APRS_SEEN || which == RF_APRS_STN)
+            ? "APRS stations are the Dire Wolf decoder's (--aprs), a passive "
+              "radio; the host's own interfaces carried none"
         : NULL;
     if (qlong(rq)) {
         status = 400;
@@ -867,6 +878,35 @@ static int route_adsb(const web_req_t *rq, const web_health_t *h,
     } else {
         rc = web_adsb_route(h->adsb, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
         if (rc == 0 && none_here && status == 200) bl = web_adsb_out_of_scope_json(body, cap);
+    }
+    if (rc != 0 || bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, rq->is_head, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/aprs (web_aprs.h): the stations a local Dire Wolf decodes. Its
+ * receiver is a passive radio, as the decoder's SDR for ADS-B, so
+ * Monitor's and Hybrid's; under Local the query is checked, then the
+ * one out_of_scope answer. */
+static int route_aprs(const web_req_t *rq, const web_health_t *h,
+                      char *out, size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE;
+    size_t bl = 0;
+    int status = 200, rc;
+    int sc = h->sc ? h->sc->scope : WEB_SCOPE_HYBRID;
+    int none_here = sc == WEB_SCOPE_LOCAL;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+        rc = bl ? 0 : -1;
+    } else {
+        rc = web_aprs_route(h->aprs, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
+        if (rc == 0 && none_here && status == 200) bl = web_aprs_out_of_scope_json(body, cap);
     }
     if (rc != 0 || bl == 0) {
         r->status = 503;
@@ -1391,6 +1431,9 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             { "/api/gnss/tracks", RF_GNSS_TRACKS },
             { "/api/adsb/seen", RF_ADSB_SEEN },
             { "/api/adsb/aircraft", RF_ADSB_AC },
+            /* APRS history (web_aprshist.h): sloth.db's. */
+            { "/api/aprs/seen", RF_APRS_SEEN },
+            { "/api/aprs/station", RF_APRS_STN },
             { "/api/wifi/aps", M5_APS },
             { "/api/wifi/local", M5_WLOCAL },
             { "/api/history/overview", M5_OVERVIEW },
@@ -1417,6 +1460,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_gnss(rq, h, 1, out, outsz, r);
         if (!strcmp(rq->path, "/api/adsb"))
             return route_adsb(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/aprs"))
+            return route_aprs(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble"))
             return route_ble(rq, h, BLE_DEVICES, NULL, out, outsz, r);
         if (!strcmp(rq->path, "/api/ble/alerts"))

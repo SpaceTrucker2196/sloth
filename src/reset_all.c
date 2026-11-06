@@ -4,6 +4,7 @@
 
 #include "action_snoop.h"
 #include "adsb.h"
+#include "aprs.h"
 #include "alerts.h"
 #include "assoc_track.h"
 #include "gps.h"

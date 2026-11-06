@@ -17,6 +17,7 @@
 @include location.css
 @include gnss.css
 @include adsb.css
+@include aprs.css
 @include bledev.css
 </style>
 <script>
@@ -34,6 +35,7 @@
 @include location.js
 @include gnss.js
 @include adsb.js
+@include aprs.js
 @include bledev.js
 </script>
 </head>
@@ -57,6 +59,7 @@
       <li><button type="button" class="go" id="nav-ble"><span class="k">0</span>BLE Devices</button></li>
       <li><button type="button" class="go" id="nav-gnss">GPS Sat</button></li>
       <li><button type="button" class="go" id="nav-adsb">ADS-B</button></li>
+      <li><button type="button" class="go" id="nav-aprs">APRS</button></li>
       <li><button type="button" class="go" id="nav-tacdb">TACDB</button></li>
     </ol></nav>
     <div class="scope">
@@ -396,6 +399,43 @@
       <div class="hscroll" id="adsb-seen-box"><div class="histrow dhead" id="adsb-seen-thead"></div><div id="adsb-seen-rows"></div></div>
       <div><button type="button" id="adsb-seen-more" hidden>more</button></div>
       <div class="sub" id="adsb-seen-note">every aircraft address the decoder listed in the window, from sloth.db's adsb_aircraft (one row per address, kept as long as sloth's --db retention keeps entities): first and last seen, visits (each time it came back after expiring), recorded sightings, the callsign, squawk and category last heard, the altitude range, top ground speed and strongest signal, and whether it ever reported an emergency. Click a row for its history.</div>
+    </section>
+   </div>
+   <div id="v-aprs" hidden>
+    <section class="panel scope-empty" id="aprs-scope-empty"><div class="label">APRS</div><p>Nothing here under Local. APRS stations are the Dire Wolf decoder's (<code>--aprs</code>), a passive radio; the host's own interfaces carried none. Switch to Monitor or Hybrid to see them.</p></section>
+    <section class="panel">
+      <div class="aprsline" id="aprs-head" aria-label="aprs decoder"></div>
+      <div class="aprsline d-dim" id="aprs-head2"></div>
+      <div class="aprsline d-dim" id="aprs-empty" hidden></div>
+      <span class="sub" id="aprs-note">sloth's aprs_packet and aprs_station records off the --aprs Dire Wolf packet log (144.390 MHz), kept by slothweb in memory: each station's last heard, via, level, comment and position follow its packets. Receive-only: sloth reads a file and never touches the radio or Dire Wolf. Positions are what each station broadcast, unverified (APRS authenticates nothing). Observation only: no row here is a finding.</span>
+    </section>
+    <section class="panel">
+      <div class="label">stations <span class="sub" id="aprs-count"></span> <span class="dt-tools" id="aprs-tools"></span></div>
+      <div class="hscroll" id="aprs-box"><div class="aprsrow dhead" id="aprs-thead"></div><div id="aprs-rows"></div></div>
+      <div class="sub">one row per source callsign heard; live before gone, the most recently heard first. A column header sorts, drag its right edge to resize. Bright rows have a position, dim rows are gone (unheard an hour; kept 30 minutes). VIA is the station heard on the air: the source itself (direct) or the digipeater that repeated it. LEVEL is Dire Wolf's audio level, heat-graded over 0..100. Click a row for its figures, its recent packets and its history.</div>
+    </section>
+    <section class="panel">
+      <div class="label">positions <span class="sub" id="aprs-plot-note"></span></div>
+      <canvas id="aprs-plot" class="heat" aria-label="aprs station positions, north up"></canvas>
+      <div class="sub">north up, no map: each station at its last reported position, bright when heard direct, the selected one with its track (solid: this session; dashed: sloth.db); the label is the callsign.</div>
+    </section>
+    <section class="panel" id="aprs-detail" hidden>
+      <div class="label">station <span class="sub" id="aprs-detail-name"></span> <button type="button" id="aprs-detail-close">close</button></div>
+      <dl class="aprs-kv" id="aprs-detail-kv"></dl>
+      <div class="label">recent packets <span class="sub" id="aprs-recent-note"></span></div>
+      <div class="hscroll"><div id="aprs-recent"></div></div>
+      <div class="label">history <span class="sub" id="aprs-hist-note"></span></div>
+      <dl class="aprs-kv" id="aprs-hist-kv"></dl>
+      <div class="hscroll"><div id="aprs-hist-pkts"></div></div>
+      <div class="sub">the station's packets in the window from sloth.db's aprs_packets (one row per packet, oldest first, the newest 400 at most); its recorded positions are drawn dashed on the plot above.</div>
+    </section>
+    <section class="panel">
+      <div class="label">stations seen <span class="sub" id="aprs-seen-count"></span> <span class="dt-tools" id="aprs-seen-tools"></span>
+        <label class="sub">window <select id="aprs-seen-days"><option value="1">24 h</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="365">a year</option></select></label>
+        <label class="sub">search <input type="search" id="aprs-seen-q" maxlength="9" spellcheck="false" autocomplete="off" placeholder="callsign"></label></div>
+      <div class="hscroll" id="aprs-seen-box"><div class="histrow dhead" id="aprs-seen-thead"></div><div id="aprs-seen-rows"></div></div>
+      <div><button type="button" id="aprs-seen-more" hidden>more</button></div>
+      <div class="sub" id="aprs-seen-note">every source callsign heard in the window, from sloth.db's aprs_stations (one row per call, kept as long as sloth's --db retention keeps entities): first and last heard, visits (each time it came back after an hour unheard), packets, whether it was ever heard direct, the best level, the last via, position, symbol and comment. Click a row for its history.</div>
     </section>
    </div>
    <div id="v-wifi" hidden>

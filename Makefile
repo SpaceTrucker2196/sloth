@@ -242,6 +242,10 @@ CORE_COMMON_SRCS += src/gps.c src/capture/gps_reader.c src/position_track.c
 # pure; the reader re-reads a local file and needs neither libpcap nor
 # SQLite.
 CORE_COMMON_SRCS += src/adsb.c src/capture/adsb_reader.c
+# --aprs (2026-11-05): Dire Wolf's packet-log parser and the station
+# table are pure; the reader tails a local file and needs neither
+# libpcap nor SQLite.
+CORE_COMMON_SRCS += src/aprs.c src/capture/aprs_reader.c
 
 # Feature-gated core sources, grouped by the flag that gates them.
 # CORE_SRCS_ALL is their union with the common list: the test and fuzz

@@ -113,6 +113,11 @@ void jsonl_emit_gnss          (const sloth_state_t *s);
  * lists, change-only on src/adsb.h's held bands, and one "gone" record
  * per row retired this poll; a no-op without --adsb. */
 void jsonl_emit_adsb          (const sloth_state_t *s);
+/* APRS (2026-11-05): one aprs_packet per packet Dire Wolf decoded (each
+ * once, off src/aprs.c's ring), and one aprs_station per station,
+ * change-only on aprs_station_sig() plus "gone"; a no-op without
+ * --aprs. */
+void jsonl_emit_aprs          (const sloth_state_t *s);
 
 /* Sensor self-report (#91 slice 3). Unlike every emitter above this is a
  * SINGLETON, not one line per table row: "healthy with no detections"

@@ -893,7 +893,8 @@
   ["n-win", "a-win", "d-q", "d-sort", "l-q", "w-grid", "w-metric", "w-win", "w-sort", "al-state", "al-sev",
    "al-q", "al-win", "f-win", "f-sort", "f-ip", "f-mode", "ev-filter",
    "q-sql", "b-q", "b-sort", "bledev-win", "bledev-metric", "bledev-n",
-   "gnss-seen-days", "adsb-seen-days", "adsb-seen-q", "gnss-trail-hours"].forEach(keepCtl);
+   "gnss-seen-days", "adsb-seen-days", "adsb-seen-q", "gnss-trail-hours",
+   "aprs-seen-days", "aprs-seen-q"].forEach(keepCtl);
   // Filled from the server's answer, so put back where it is filled.
   $("al-type").addEventListener("change", function () { ctlSave("al-type"); });
   // Each drill-down bar's "show all" (its href the bare view).
@@ -1250,7 +1251,7 @@
 
   // ── views ─────────────────────────────────────────────────────────
   var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "flows", "history",
-               "lookup", "tacdb", "ble", "gnss", "adsb"];
+               "lookup", "tacdb", "ble", "gnss", "adsb", "aprs"];
   // The views with a tab, and the drill-downs: the Alerts page (6),
   // an alert's page, the record ticker by type, the sensor's health.
   var NAV = VIEWS.concat(["alerts"]);
@@ -1297,6 +1298,8 @@
     if (v === "gnss" && window.SlothGnss) SlothGnss.show();
     // The ADS-B panel (adsb.js, its own module): a no-op when not loaded.
     if (v === "adsb" && window.SlothAdsb) SlothAdsb.show();
+    // The APRS panel (aprs.js, its own module): a no-op when not loaded.
+    if (v === "aprs" && window.SlothAprs) SlothAprs.show();
     if (v === "alerts") alertsView();
     if (v === "alert") alertView();
     if (v === "records") recordsView();
@@ -1380,6 +1383,7 @@
   $("nav-ble").addEventListener("click", function () { show("ble"); });
   $("nav-gnss").addEventListener("click", function () { show("gnss"); });
   $("nav-adsb").addEventListener("click", function () { show("adsb"); });
+  $("nav-aprs").addEventListener("click", function () { show("aprs"); });
 
   // ── the theme toggle ──────────────────────────────────────────────
   // Light or dark on :root's data-theme, the choice kept in this
@@ -1473,6 +1477,8 @@
     $("v-ble").classList.toggle("scoped-out", SCOPE === "local");
     // So is the ADS-B decoder's SDR.
     $("v-adsb").classList.toggle("scoped-out", SCOPE === "local");
+    // And Dire Wolf's APRS receiver.
+    $("v-aprs").classList.toggle("scoped-out", SCOPE === "local");
     scopeBar();
     scopeView(view);
   }

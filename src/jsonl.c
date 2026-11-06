@@ -8,6 +8,7 @@
 #include "jsonl.h"
 #include "gps.h"
 #include "adsb.h"
+#include "aprs.h"
 #include "position_track.h"
 #include "sloth_clock.h"
 #include "netstr.h"
@@ -99,7 +100,7 @@ static jsonl_dedup_slot_t g_dedup[JSONL_DEDUP_SLOTS];
 /* Snapshot event "kinds" — one per deduped emitter. */
 enum { JD_PNL = 1, JD_SEQNUM, JD_SENSOR_HEALTH, JD_WIFI_REG,
        JD_BLE_DEVICE, JD_BLE_ALERT, JD_GNSS_FIX, JD_GNSS_SKY, JD_GNSS_SAT,
-       JD_ADSB_AIRCRAFT };
+       JD_ADSB_AIRCRAFT, JD_APRS_STATION };
 
 static uint64_t fnv1a(const void *data, size_t n, uint64_t h) {
     const unsigned char *p = (const unsigned char *)data;
@@ -2216,6 +2217,13 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         int      adsb_configured, adsb_state;
         int      adsb_read_err_any, adsb_parse_err_any, adsb_overflow_any;
         int      adsb_bad_any, adsb_err_any;
+        /* --aprs: the source's state (waiting / live / error; a quiet
+         * channel is live) and none/some bands of the tallies and the
+         * error. Never the line, packet, byte or station counts, nor
+         * last_read: each moves with every poll or packet. */
+        int      aprs_configured, aprs_state, aprs_missing;
+        int      aprs_read_err_any, aprs_bad_any, aprs_overflow_any;
+        int      aprs_err_any;
     } sig;
     memset(&sig, 0, sizeof(sig));
     sig.cap_open    = s->cap_health.open;
@@ -2342,6 +2350,13 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
     sig.adsb_overflow_any  = s->adsb.overflow > 0;
     sig.adsb_bad_any       = s->adsb.bad_entries > 0;
     sig.adsb_err_any       = s->adsb.err[0] != '\0';
+    sig.aprs_configured    = s->aprs.configured;
+    sig.aprs_state         = s->aprs.state;
+    sig.aprs_missing       = s->aprs.missing;
+    sig.aprs_read_err_any  = s->aprs.read_errors > 0;
+    sig.aprs_bad_any       = s->aprs.bad_lines > 0;
+    sig.aprs_overflow_any  = s->aprs.overflow > 0;
+    sig.aprs_err_any       = s->aprs.err[0] != '\0';
     const int pcap_on = alert_pcap_enabled();
     sig.pcap_swept_band     = pcap_on ? decade_band(alert_pcap_swept()) : -1;
     sig.pcap_sweep_err_band = pcap_on
@@ -2689,6 +2704,27 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "adsb_expired", (long long)a->expired);
         kv_str(buf, LINEBUF, &off, "adsb_err", a->err);
     }
+    /* --aprs, ONLY with --aprs, so a run without it writes exactly what
+     * it wrote before. Appended. */
+    if (s->aprs.configured) {
+        const aprs_health_t *a = &s->aprs;
+        kv_str(buf, LINEBUF, &off, "aprs_state", aprs_state_name(a->state));
+        kv_str(buf, LINEBUF, &off, "aprs_src", a->src);
+        kv_int(buf, LINEBUF, &off, "aprs_missing", a->missing);
+        kv_int(buf, LINEBUF, &off, "aprs_last_read", (long long)a->last_read);
+        kv_int(buf, LINEBUF, &off, "aprs_last_packet", (long long)a->last_packet);
+        kv_int(buf, LINEBUF, &off, "aprs_stations", a->stations);
+        kv_int(buf, LINEBUF, &off, "aprs_bytes", (long long)a->bytes);
+        kv_int(buf, LINEBUF, &off, "aprs_lines", (long long)a->lines);
+        kv_int(buf, LINEBUF, &off, "aprs_packets", (long long)a->packets);
+        kv_int(buf, LINEBUF, &off, "aprs_bad_lines", (long long)a->bad_lines);
+        kv_int(buf, LINEBUF, &off, "aprs_overflow", (long long)a->overflow);
+        kv_int(buf, LINEBUF, &off, "aprs_expired", (long long)a->expired);
+        kv_int(buf, LINEBUF, &off, "aprs_truncations", (long long)a->truncations);
+        kv_int(buf, LINEBUF, &off, "aprs_rotations", (long long)a->rotations);
+        kv_int(buf, LINEBUF, &off, "aprs_read_errors", (long long)a->read_errors);
+        kv_str(buf, LINEBUF, &off, "aprs_err", a->err);
+    }
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }
@@ -2895,6 +2931,136 @@ void jsonl_emit_adsb(const sloth_state_t *s) {
                            adsb_row_sig(a), now))
             continue;
         emit_adsb_row(a, "live", s->adsb.src, now);
+    }
+}
+
+/* ── APRS (2026-11-05) ──────────────────────────────────────────────
+ *
+ * aprs_packet: one record per packet Dire Wolf decoded - an event, not
+ * a snapshot: the channel's 1200 bit/s bounds the rate to a few a
+ * second at the very most. Every parsed field, each omitted when the
+ * line left it empty or out of range (never written as 0 or ""). The
+ * packets come off src/aprs.c's ring (s->aprs_pkts, oldest first);
+ * this writer keeps its own cursor, the newest seq written, so a tick
+ * writes each new packet once. With no sink open the cursor still
+ * moves: a consumer connecting later is not handed old packets.
+ *
+ * aprs_station: one record per station (the packet's source), change-
+ * only on aprs_station_sig() - the call, first_seen, the held 0.01
+ * degree cell, has_pos, the symbol, heard_direct - plus the 300 s
+ * heartbeat while it stays, and one "state":"gone" record when it has
+ * not been heard for APRS_EXPIRE_S; the gone record re-signs the slot,
+ * so the same call coming back is a fresh record. Figures without %f
+ * (gps_fmt_fixed; locale). */
+static uint64_t g_aprs_cursor;
+
+static void kv_str_opt(char *buf, int *off, const char *key, const char *v) {
+    if (v && v[0]) kv_str(buf, LINEBUF, off, key, v);
+}
+
+static void emit_aprs_packet(const aprs_packet_t *p, const char *src, time_t now) {
+    char buf[LINEBUF]; int off = 0;
+    start_obj(buf, LINEBUF, &off, "aprs_packet", now);
+    kv_str(buf, LINEBUF, &off, "src", src);
+    kv_int(buf, LINEBUF, &off, "seq", (long long)p->seq);
+    kv_int(buf, LINEBUF, &off, "chan", p->chan);
+    kv_int(buf, LINEBUF, &off, "utime", (long long)p->utime);
+    kv_str(buf, LINEBUF, &off, "source", p->source);
+    if (p->heard[0]) {
+        kv_str(buf, LINEBUF, &off, "heard", p->heard);
+        kv_int(buf, LINEBUF, &off, "direct", strcmp(p->heard, p->source) == 0);
+    }
+    if (p->level >= 0) kv_int(buf, LINEBUF, &off, "level", p->level);
+    if (p->error >= 0) kv_int(buf, LINEBUF, &off, "error", p->error);
+    if (p->dti) {
+        char d[2] = { p->dti, '\0' };
+        kv_str(buf, LINEBUF, &off, "dti", d);
+    }
+    kv_str_opt(buf, &off, "name", p->name);
+    kv_str_opt(buf, &off, "symbol", p->symbol);
+    if (p->has_pos) {
+        kv_fixed(buf, &off, "lat", p->lat, 6);
+        kv_fixed(buf, &off, "lon", p->lon, 6);
+    }
+    if (p->has_speed)  kv_fixed(buf, &off, "speed_kt", p->speed_kt, 1);
+    if (p->has_course) kv_fixed(buf, &off, "course", p->course, 1);
+    if (p->has_alt)    kv_fixed(buf, &off, "alt_m", p->alt_m, 1);
+    kv_str_opt(buf, &off, "freq", p->freq);
+    kv_str_opt(buf, &off, "offset", p->offset);
+    kv_str_opt(buf, &off, "tone", p->tone);
+    kv_str_opt(buf, &off, "system", p->system);
+    kv_str_opt(buf, &off, "status", p->status);
+    kv_str_opt(buf, &off, "telemetry", p->telemetry);
+    kv_str_opt(buf, &off, "comment", p->comment);
+    end_obj(buf, LINEBUF, &off);
+    emit_line(buf);
+}
+
+static void emit_aprs_station(const aprs_station_t *a, const char *state,
+                              const char *src, time_t now) {
+    char buf[LINEBUF]; int off = 0;
+    start_obj(buf, LINEBUF, &off, "aprs_station", now);
+    kv_str(buf, LINEBUF, &off, "call", a->call);
+    kv_str(buf, LINEBUF, &off, "state", state);
+    kv_str(buf, LINEBUF, &off, "src", src);
+    kv_int(buf, LINEBUF, &off, "first_seen", (long long)a->first_seen);
+    kv_int(buf, LINEBUF, &off, "last_seen", (long long)a->last_seen);
+    kv_int(buf, LINEBUF, &off, "packets", (long long)a->packets);
+    if (a->via[0]) {
+        kv_str(buf, LINEBUF, &off, "via", a->via);
+        kv_int(buf, LINEBUF, &off, "direct", a->last_direct);
+    }
+    kv_int(buf, LINEBUF, &off, "heard_direct", a->heard_direct);
+    if (a->level >= 0)      kv_int(buf, LINEBUF, &off, "level", a->level);
+    if (a->best_level >= 0) kv_int(buf, LINEBUF, &off, "best_level", a->best_level);
+    if (a->dti) {
+        char d[2] = { a->dti, '\0' };
+        kv_str(buf, LINEBUF, &off, "dti", d);
+    }
+    kv_str_opt(buf, &off, "symbol", a->symbol);
+    if (a->has_pos) {
+        kv_fixed(buf, &off, "lat", a->lat, 6);
+        kv_fixed(buf, &off, "lon", a->lon, 6);
+        kv_int(buf, LINEBUF, &off, "pos_ts", (long long)a->pos_ts);
+        if (a->has_speed)  kv_fixed(buf, &off, "speed_kt", a->speed_kt, 1);
+        if (a->has_course) kv_fixed(buf, &off, "course", a->course, 1);
+        if (a->has_alt)    kv_fixed(buf, &off, "alt_m", a->alt_m, 1);
+    }
+    kv_str_opt(buf, &off, "system", a->system);
+    kv_str_opt(buf, &off, "status", a->status);
+    kv_str_opt(buf, &off, "comment", a->comment);
+    end_obj(buf, LINEBUF, &off);
+    emit_line(buf);
+}
+
+void jsonl_emit_aprs(const sloth_state_t *s) {
+    if (!s || !s->aprs.configured) return;
+    int sink = any_sink();
+    time_t now = sloth_wall();
+    /* The ring restarted under the cursor (aprs_reset(): tests, or a
+     * reconfigure): start again from its oldest. */
+    if (s->aprs_pkts && s->aprs_pkt_count &&
+        s->aprs_pkts[s->aprs_pkt_count - 1].seq < g_aprs_cursor)
+        g_aprs_cursor = 0;
+    for (int i = 0; s->aprs_pkts && i < s->aprs_pkt_count; i++) {
+        const aprs_packet_t *p = &s->aprs_pkts[i];
+        if (p->seq <= g_aprs_cursor) continue;
+        if (sink) emit_aprs_packet(p, s->aprs.src, now);
+        g_aprs_cursor = p->seq;
+    }
+    if (!sink) return;
+    for (int i = 0; s->aprs_gone && i < s->aprs_gone_count; i++) {
+        const aprs_station_t *a = &s->aprs_gone[i];
+        (void)jsonl_changed(JD_APRS_STATION, a->call, strlen(a->call),
+                            ~aprs_station_sig(a), now);
+        emit_aprs_station(a, "gone", s->aprs.src, now);
+    }
+    for (int i = 0; s->aprs_rows && i < s->aprs_count; i++) {
+        const aprs_station_t *a = &s->aprs_rows[i];
+        if (!jsonl_changed(JD_APRS_STATION, a->call, strlen(a->call),
+                           aprs_station_sig(a), now))
+            continue;
+        emit_aprs_station(a, "live", s->aprs.src, now);
     }
 }
 
@@ -3183,6 +3349,7 @@ void jsonl_emit_state_snapshots(sloth_state_t *s) {
     jsonl_emit_ble_alerts        (s);
     jsonl_emit_gnss              (s);   /* 2026-11-02 */
     jsonl_emit_adsb              (s);   /* #26 slice 1 */
+    jsonl_emit_aprs              (s);   /* 2026-11-05 */
     /* Last: the sensor's self-report about this tick, after every
      * observation in it has been emitted (#91 slice 3). */
     jsonl_emit_sensor_health     (s);

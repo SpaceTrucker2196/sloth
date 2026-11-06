@@ -126,7 +126,7 @@ static void test_page_carries_the_m4_views(void) {
         WT_ASSERT(strstr(p, want) || strstr(p, alt));
     }
     WT_HAS(p, "var VIEWS = [\"overview\", \"activity\", \"devices\", \"anomalies\", \"wifi\", \"flows\", \"history\",\n"
-              "               \"lookup\", \"tacdb\", \"ble\", \"gnss\", \"adsb\"];");
+              "               \"lookup\", \"tacdb\", \"ble\", \"gnss\", \"adsb\", \"aprs\"];");
     WT_HAS(p, "var p = \"/api/devices?limit=\" + DEV_PAGE + \"&offset=\" + offset +\n"
               "            \"&sort=\" + encodeURIComponent(sort);");
     WT_HAS(p, "if (q !== \"\") p += \"&q=\" + encodeURIComponent(q);");
@@ -614,9 +614,9 @@ static void test_health_members(void) {
     WT_EQ(route(&H, "/api/health", "", 0), 200);
     const char *b = body_of(g_out);
     WT_HAS(b, "\"milestone\":\"M6\"");
-    WT_HAS(b, "\"db\":\"open\",\"db_schema\":12,\"db_rows\":9,\"db_path\":");
+    WT_HAS(b, "\"db\":\"open\",\"db_schema\":13,\"db_rows\":9,\"db_path\":");
     WT_HAS(b, "\"db_mode\":\"immutable\"");
-    WT_HAS(b, "\"db_supported\":[1,12]");
+    WT_HAS(b, "\"db_supported\":[1,13]");
     WT_HAS(b, "\"vendor_table\":\"ieee\",\"vendor_counts\":{\"ma_l\":3,"
               "\"ma_m\":0,\"ma_s\":1}");
     WT_HAS(b, "\"a4\":\"on\"");

@@ -2643,6 +2643,7 @@ typedef struct {
 typedef enum {
     SENSOR_WIFI = 0, SENSOR_BLE, SENSOR_ZIGBEE, SENSOR_SDR,
     SENSOR_GPS, SENSOR_ADSB, SENSOR_MESHTASTIC, SENSOR_CAN,
+    SENSOR_APRS,              /* appended: the kind number is persisted */
     SENSOR_KIND_COUNT
 } sensor_kind_t;
 typedef enum {
@@ -3269,6 +3270,98 @@ typedef struct {
     int      aircraft;         /* rows now */
 } adsb_health_t;
 
+/* ── APRS stations (#26 family, 2026-11-05) ──────────────────────────
+ * What a local, already-running Dire Wolf decoding 144.390 MHz writes
+ * to its packet log (-L FILE, one CSV line per decoded packet), tailed
+ * by --aprs (docs/wiki/aprs.md). sloth never opens, tunes or talks to
+ * the radio, the SDR or Dire Wolf, and uses no network: it reads a
+ * file. Field meanings and units are Dire Wolf's (User Guide, "Logging",
+ * and src/log.c, wb2osz/direwolf 1.7): speed knots, course degrees,
+ * altitude metres, lat/lon decimal degrees; the data type indicator
+ * and the two-byte symbol are APRS 1.0.1's (APRS101.pdf, ch. 5 and
+ * 20). Kept by src/aprs.c under its lock and copied once per poll by
+ * aprs_health_poll(): the pointers on sloth_state_t name that copy. */
+#define APRS_MAX_STATIONS 512
+#define APRS_PKT_RING     256    /* the newest packets, for the sinks */
+#define APRS_CALL_MAX     9      /* AX.25 call + "-SSID" */
+#define APRS_TEXT_MAX     64     /* system, status, telemetry, freq ... */
+#define APRS_COMMENT_MAX  128
+
+typedef struct {
+    uint64_t seq;              /* src/aprs.c's own count from 1: each
+                                * sink's cursor (jsonl.c, db.c) */
+    int      chan;             /* Dire Wolf's radio channel */
+    time_t   utime;            /* Dire Wolf's clock at decode (unix s) */
+    char     source[APRS_CALL_MAX + 1];
+    char     heard[APRS_CALL_MAX + 1];   /* heard direct: a digipeater, or
+                                          * the source itself; "" absent */
+    int      level;            /* audio level, -1 absent */
+    int      error;            /* Dire Wolf's "error" (bits fixed), -1 absent */
+    char     dti;              /* APRS data type indicator, '\0' absent */
+    char     name[APRS_CALL_MAX + 1];    /* object / item name, else the source */
+    char     symbol[3];        /* table + code, "" absent */
+    uint8_t  has_pos, has_speed, has_course, has_alt;
+    double   lat, lon;         /* only as a valid pair */
+    double   speed_kt, course, alt_m;
+    char     freq[16], offset[16], tone[16];   /* as Dire Wolf wrote them, checked */
+    char     system[APRS_TEXT_MAX + 1];  /* the sender's software / device */
+    char     status[APRS_TEXT_MAX + 1];  /* Mic-E status */
+    char     telemetry[APRS_TEXT_MAX + 1];
+    char     comment[APRS_COMMENT_MAX + 1];
+    /* Kept by src/aprs.c, not parsed: */
+    time_t   stn_first_seen;   /* the sending station's first_seen at this
+                                * packet (sloth.db's visit count) */
+} aprs_packet_t;
+
+typedef struct {
+    char     call[APRS_CALL_MAX + 1];    /* the key: the packet's source */
+    time_t   first_seen;       /* utime of its first packet this visit */
+    time_t   last_seen;        /* utime of its newest packet */
+    uint64_t last_mono_ms;     /* when that packet was read: the expiry */
+    uint32_t packets;          /* this visit */
+    char     via[APRS_CALL_MAX + 1];     /* the newest packet's heard, "" unknown */
+    uint8_t  last_direct;      /* the newest packet was heard direct */
+    uint8_t  heard_direct;     /* any packet this visit was */
+    int      level, best_level;          /* -1 unknown */
+    char     dti;
+    char     symbol[3];
+    uint8_t  has_pos, has_speed, has_course, has_alt;
+    double   lat, lon, speed_kt, course, alt_m;
+    time_t   pos_ts;           /* utime of the position */
+    char     system[APRS_TEXT_MAX + 1];
+    char     status[APRS_TEXT_MAX + 1];
+    char     comment[APRS_COMMENT_MAX + 1];
+    int32_t  cell_lat, cell_lon;         /* the held 0.01 degree cell */
+    uint8_t  has_cell;
+} aprs_station_t;
+
+/* The --aprs source's health. A quiet channel is not a fault: APRS can
+ * be silent for an hour, so the state says whether the file is there
+ * and readable, never whether anything was heard lately. */
+typedef enum {
+    APRS_NONE = 0, APRS_WAITING, APRS_LIVE, APRS_ERROR
+} aprs_state_t;
+
+typedef struct {
+    int      configured;
+    int      state;            /* aprs_state_t */
+    int      missing;          /* the file is not there (yet) */
+    char     src[48];          /* "file:/var/lib/direwolf/aprs.log" */
+    char     err[96];          /* the last read failure, "" none */
+    time_t   last_read;        /* wall of the last good poll, 0 never */
+    time_t   last_packet;      /* utime of the newest packet, 0 none */
+    uint64_t bytes;            /* read from the file */
+    uint64_t lines;            /* complete non-blank lines, the header too */
+    uint64_t packets;          /* lines parsed into a packet */
+    uint64_t bad_lines;        /* refused: malformed, overlong, a bad call */
+    uint64_t overflow;         /* new stations refused for the cap */
+    uint64_t expired;          /* stations retired after APRS_EXPIRE_S */
+    uint64_t truncations;      /* the file shrank under the offset */
+    uint64_t rotations;        /* a new file at the path */
+    uint64_t read_errors;      /* opens / reads that failed */
+    int      stations;         /* rows now */
+} aprs_health_t;
+
 typedef struct {
     int      configured;       /* --bt-capture given */
     int      state;            /* bt_cap_state_t */
@@ -3772,6 +3865,17 @@ typedef struct {
     int              adsb_count;
     const adsb_aircraft_t *adsb_gone;
     int              adsb_gone_count;
+    /* APRS (2026-11-05): the --aprs source's health, the station
+     * table, the stations retired by this poll, and the packet ring
+     * (oldest first; each sink writes the ones past its own cursor),
+     * filled by aprs_health_poll(); NULL before the first poll. */
+    aprs_health_t    aprs;
+    const aprs_station_t *aprs_rows;
+    int              aprs_count;
+    const aprs_station_t *aprs_gone;
+    int              aprs_gone_count;
+    const aprs_packet_t  *aprs_pkts;
+    int              aprs_pkt_count;
     bredr_lap_t      bredr_laps[MAX_BREDR_LAPS];
     int              bredr_lap_count;
 

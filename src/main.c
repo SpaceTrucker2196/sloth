@@ -133,6 +133,8 @@
 #include "gps.h"                 /* --location (2026-10-27) */
 #include "adsb.h"                /* --adsb (#26 slice 1) */
 #include "capture/adsb_reader.h"
+#include "aprs.h"                /* --aprs (2026-11-05) */
+#include "capture/aprs_reader.h"
 #include "ble_hci.h"
 
 static sloth_state_t g_state;
@@ -316,7 +318,7 @@ static void print_usage(const char *argv0) {
             "       [--refresh-ms N] [--hop] [--strict] [--allow-active]\n"
             "       [--bt-monitor] [--bt-capture PATH] [--ble-rotation-hints]\n"
             "       [--location LAT,LON[,ALT]] [--gps SPEC] [--gps-allow-remote]\n"
-            "       [--gps-baud N] [--adsb SPEC]\n"
+            "       [--gps-baud N] [--adsb SPEC] [--aprs SPEC]\n"
             "       [--user NAME] [--no-privdrop]\n"
             "       [--tune NAME=VALUE ...] [--tune-list]\n"
             "       [--no-correlate] [--correlate-retain SECS]\n"
@@ -585,6 +587,13 @@ static void print_usage(const char *argv0) {
             "                     opens or tunes the SDR and uses no network.\n"
             "                     sbs:// and beast:// are not yet supported.\n"
             "                     Refused with --replay.\n"
+            "  --aprs SPEC        tail the packet log a local Dire Wolf APRS\n"
+            "                     decoder already writes (direwolf -L FILE):\n"
+            "                       /path/aprs.log or file:///path\n"
+            "                     Checked once a second, from its end at\n"
+            "                     startup; sloth never touches the radio or\n"
+            "                     Dire Wolf and uses no network. Refused\n"
+            "                     with --replay.\n"
             "  --ble-rotation-hints\n"
             "                     INTERNAL USE ONLY, off by default: link\n"
             "                     private BLE addresses that may be one\n"
@@ -794,6 +803,7 @@ int main(int argc, char **argv) {
     int         gps_allow_remote = 0;    /* --gps-allow-remote */
     int         gps_baud     = 0;        /* --gps-baud N; 0 = 9600 */
     const char *adsb_arg     = NULL;     /* --adsb SPEC (#26 slice 1) */
+    const char *aprs_arg     = NULL;     /* --aprs SPEC (2026-11-05) */
     const char *replay_arg   = NULL;     /* --replay FILE[,FILE] (#119) */
     long        max_ticks    = 0;        /* --ticks N; 0 = run until quit */
     time_t      session_start = sloth_wall();
@@ -899,6 +909,8 @@ int main(int argc, char **argv) {
             gps_arg = argv[++i];
         } else if (!strcmp(argv[i], "--adsb") && i + 1 < argc) {
             adsb_arg = argv[++i];
+        } else if (!strcmp(argv[i], "--aprs") && i + 1 < argc) {
+            aprs_arg = argv[++i];
         } else if (!strcmp(argv[i], "--gps-allow-remote")) {
             gps_allow_remote = 1;
         } else if (!strcmp(argv[i], "--gps-baud") && i + 1 < argc) {
@@ -1208,6 +1220,24 @@ int main(int argc, char **argv) {
         if (adsb_spec_parse(adsb_arg, apath, sizeof(apath), NULL, 0) == 0)
             fprintf(stderr, "sloth: --adsb reading %s about once a second "
                             "(read-only; no SDR, no network)\n", apath);
+    }
+    /* --aprs: the SPEC only, as --adsb; Dire Wolf creates its log with
+     * its first packet, so a file not there yet is a state. */
+    if (aprs_arg) {
+        char aerr[200];
+        if (replay_arg) {
+            fprintf(stderr, "sloth: --replay reads savefiles, not a live "
+                            "decoder: --aprs does not apply\n");
+            return 2;
+        }
+        if (aprs_reader_configure(aprs_arg, aerr, sizeof(aerr)) != 0) {
+            fprintf(stderr, "sloth: --aprs %s: %s\n", aprs_arg, aerr);
+            return 2;
+        }
+        char apath[256];
+        if (aprs_spec_parse(aprs_arg, apath, sizeof(apath), NULL, 0) == 0)
+            fprintf(stderr, "sloth: --aprs tailing %s from its end "
+                            "(read-only; no radio, no network)\n", apath);
     }
 
     char replay_paths[REPLAY_MAX_FILES][REPLAY_PATH_MAX];
@@ -1766,6 +1796,7 @@ int main(int argc, char **argv) {
 #endif
     gps_reader_run();   /* after the drop: gpsd is dialled from here */
     adsb_reader_run();  /* after the drop: the file is read as the run's account */
+    aprs_reader_run();  /* after the drop: likewise */
     event_wake_init();
     updater_init(check_manifest);
     if (headless) {
@@ -1837,6 +1868,7 @@ int main(int argc, char **argv) {
     if (!headless) tui_cleanup();
     gps_reader_stop();
     adsb_reader_stop();
+    aprs_reader_stop();
 #ifdef WITH_PCAP
     probe_stop();
     capture_stop();

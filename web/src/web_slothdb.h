@@ -82,7 +82,7 @@
 #include "web_secret.h"
 
 #define WEB_SDB_SCHEMA_MIN 1
-#define WEB_SDB_SCHEMA_MAX 12
+#define WEB_SDB_SCHEMA_MAX 13
 #define WEB_SDB_BUSY_MS    100
 #define WEB_SDB_HTTP_MS    250       /* a request's budget */
 /* /api/history/overview's alone. It counts every device and alert
@@ -737,5 +737,46 @@ typedef int (*web_sdb_apt_fn)(void *ctx, const web_sdb_apt_t *p);
  * `max` of them. Rows, or -1. */
 int  web_sdb_adsb_track(web_sdb_conn_t *c, const char *hex, long long from,
                         int max, web_sdb_apt_fn fn, void *ctx);
+
+/* ── the APRS stations, over time (2026-11-05) ───────────────────────
+ *
+ * The APRS tab's "stations seen" and one station's packets
+ * (web_aprshist.h): sloth.db's aprs_stations / aprs_packets (v13). A
+ * file older than the tables answers 0 rows. Every text column is what
+ * a transmitter sent: shown, never a key but the call, which the caller
+ * has checked is an AX.25 callsign. */
+typedef struct {
+    char      call[10];
+    long long first_seen, last_seen, visits, packets;
+    char      via[10];
+    int       heard_direct, has_level, best_level;
+    char      dti[2], symbol[3];
+    int       has_pos;
+    double    lat, lon;
+    long long pos_ts;
+    char      comment[129], status[65], system[65];
+} web_sdb_aprs_stn_t;
+typedef int (*web_sdb_aprs_stn_fn)(void *ctx, const web_sdb_aprs_stn_t *a);
+/* aprs_stations rows last seen at or after `from`, newest first, at
+ * most limit after offset; `q`, when not empty, a prefix of the call
+ * (only [0-9A-Z-], upper-cased by the caller). Rows, or -1. */
+int  web_sdb_aprs_seen(web_sdb_conn_t *c, long long from, long long limit,
+                       long long offset, const char *q, web_sdb_aprs_stn_fn fn,
+                       void *ctx);
+/* One station's inventory row: 1 found, 0 not, -1 error. */
+int  web_sdb_aprs_one(web_sdb_conn_t *c, const char *call, web_sdb_aprs_stn_t *out);
+
+typedef struct {
+    long long ts;
+    char      heard[10], dti[2], name[10], symbol[3];
+    int       has_pos, has_speed, has_course, has_alt, has_level, level;
+    double    lat, lon, speed_kt, course, alt_m;
+    char      status[65], comment[129];
+} web_sdb_aprs_pkt_t;
+typedef int (*web_sdb_aprs_pkt_fn)(void *ctx, const web_sdb_aprs_pkt_t *p);
+/* One station's packets at or after `from`, oldest first, the newest
+ * `max` of them. Rows, or -1. */
+int  web_sdb_aprs_packets(web_sdb_conn_t *c, const char *call, long long from,
+                          int max, web_sdb_aprs_pkt_fn fn, void *ctx);
 
 #endif
