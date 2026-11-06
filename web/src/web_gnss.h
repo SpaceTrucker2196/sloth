@@ -42,6 +42,7 @@
 
 #include "web_json.h"
 #include "web_jsonl.h"
+#include "web_loc.h"
 
 #define WEB_GNSS_SATS      64
 #define WEB_GNSS_PTS       16
@@ -115,6 +116,12 @@ typedef struct web_gnss {
     int             fix_n, fix_head;
     web_gnss_sky_t  sky;
     web_gnss_sh_t   sh;
+    /* Where the sensor is (2026-11-06): sensor_health's loc_* members,
+     * the arbitrated GPS-else---location stamp, range-checked by
+     * web_loc_set(); cleared by a sensor_health without them (the
+     * position was lost or never configured). The Radar view's centre;
+     * served as /api/gnss "loc". */
+    web_loc_t       loc;
     char            src[WEB_GNSS_SRC_MAX + 1];
     unsigned long   records, evictions, aged, rejected;
 } web_gnss_t;

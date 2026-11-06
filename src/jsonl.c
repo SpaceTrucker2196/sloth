@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -2203,6 +2204,11 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
          * a receiver is talking, and would sign a line per tick. */
         int      gps_configured, gps_state, gps_age_bucket;
         int      gps_bad_any, gps_err_any;
+        /* The sensor's position (2026-11-06): its source and its 0.01
+         * degree cell (about 1.1 km), never the figure - a fix wanders
+         * metres a second. The exact figure rides every line written
+         * and the heartbeat refreshes it. */
+        int      loc_src, loc_cell_lat, loc_cell_lon;
         /* GNSS observation (2026-11-02): the clock offset (its held
          * band), the mean C/N0 and the jamming indicator (sticky across
          * the TPVs gpsd omits it from) as bands only (src/gps.c
@@ -2337,6 +2343,9 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         : (s->gps.fix_age_s > tune_val(TUNE_GPS_MAX_FIX_AGE_S) ? 1 : 0);
     sig.gps_bad_any    = (s->gps.bad_checksum + s->gps.parse_errors) > 0;
     sig.gps_err_any    = s->gps.err[0] != '\0';
+    sig.loc_src        = s->gps.has_loc ? s->gps.loc_src : 0;
+    sig.loc_cell_lat   = s->gps.has_loc ? (int)floor(s->gps.loc_lat * 100.0) : 0;
+    sig.loc_cell_lon   = s->gps.has_loc ? (int)floor(s->gps.loc_lon * 100.0) : 0;
     /* The held band (gps.c take_tpv: hysteresis a quarter past each
      * edge), never the raw one: a 9600-baud offset hovering at 500 ms
      * otherwise re-signed this line TPV by TPV. */
@@ -2684,6 +2693,24 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
             if (g->has_time_off)
                 kv_int(buf, LINEBUF, &off, "gnss_time_offset_ms", g->time_off_ms);
             kv_int(buf, LINEBUF, &off, "gnss_jam", g->jam);
+        }
+        /* Where the sensor is (2026-11-06, docs/wiki/location.md): the
+         * stamp the alerts carry, here for a consumer with no alert to
+         * read it from (slothweb's Radar centre). Only while a position
+         * exists: a --gps run searching for its first fix writes none.
+         * Five decimals as the alert stamp's are seven: a metre is
+         * enough for a centre. Appended; no %f (locale). */
+        if (g->has_loc) {
+            char la[32], lo[32];
+            gps_fmt_fixed(la, sizeof(la), g->loc_lat, 5);
+            gps_fmt_fixed(lo, sizeof(lo), g->loc_lon, 5);
+            appendf(buf, LINEBUF, &off, ",\"loc_lat\":%s,\"loc_lon\":%s", la, lo);
+            if (g->loc_has_alt) {
+                char al[32];
+                gps_fmt_fixed(al, sizeof(al), g->loc_alt_m, 1);
+                appendf(buf, LINEBUF, &off, ",\"loc_alt_m\":%s", al);
+            }
+            kv_str(buf, LINEBUF, &off, "loc_src", gps_loc_src_name(g->loc_src));
         }
     }
     /* --adsb (#26 slice 1), ONLY with --adsb, so a run without it writes

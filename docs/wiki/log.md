@@ -6608,3 +6608,11 @@ re-measured, same caveat as #173's entries above) and the `rule_file`
 line of every assessment whose rule moved — all twenty-one in
 `rules_wifi_mgmt.c`, because the new shared helper sits above
 `rule_deauth_flood`, the first of them.
+
+## 2026-11-06 — the sensor's position on sensor_health
+
+[[location]] / [[jsonl-schema]]: `sensor_health` carries `loc_lat`,
+`loc_lon`, `loc_alt_m` and `loc_src` while a position exists (a fresh
+fix, else `--location`), signed on the 0.01° cell. slothweb keeps it and
+`/api/gnss` ends with `loc` ([[gnss]]). The first slice of the Radar
+view, whose dome centres on it.

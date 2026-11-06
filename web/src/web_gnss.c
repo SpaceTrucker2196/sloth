@@ -234,6 +234,23 @@ static void sh_apply(web_gnss_t *g, const web_jrec_t *r, long long ts) {
     }
 }
 
+/* sensor_health's loc_* (the sensor's own position): kept when both
+ * coordinates are present and in range and the source is sloth's word;
+ * a line without them clears it, so a lost position is not served as a
+ * current one. Every sensor_health carries them while a position
+ * exists, so the clear is right, not a gap. */
+static void loc_apply(web_gnss_t *g, const web_jrec_t *r, long long ts) {
+    double lat, lon, alt = 0.0;
+    const char *src = web_jl_str(r, "loc_src");
+    if (!web_jl_num(r, "loc_lat", &lat) || !web_jl_num(r, "loc_lon", &lon) || !src) {
+        memset(&g->loc, 0, sizeof(g->loc));
+        return;
+    }
+    int has_alt = web_jl_num(r, "loc_alt_m", &alt) && isfinite(alt) && alt >= -1000 && alt <= 20000;
+    if (!web_loc_set(&g->loc, lat, lon, has_alt, alt, 0, 0, src, ts))
+        memset(&g->loc, 0, sizeof(g->loc));
+}
+
 void web_gnss_record(web_gnss_t *g, const web_jrec_t *r, long long now_ms) {
     (void)now_ms;
     if (!g || !g->sats) return;
@@ -244,7 +261,7 @@ void web_gnss_record(web_gnss_t *g, const web_jrec_t *r, long long now_ms) {
     if (!strcmp(t, "gnss_sat")) { g->records++; sat_apply(g, r, ts); age_out(g, ts); }
     else if (!strcmp(t, "gnss_sky")) { g->records++; sky_apply(g, r, ts); age_out(g, ts); }
     else if (!strcmp(t, "gnss_fix")) { g->records++; fix_apply(g, r, ts); }
-    else if (!strcmp(t, "sensor_health")) sh_apply(g, r, ts);
+    else if (!strcmp(t, "sensor_health")) { loc_apply(g, r, ts); sh_apply(g, r, ts); }
     pthread_mutex_unlock(&g->mu);
 }
 
@@ -421,7 +438,12 @@ int web_gnss_route(web_gnss_t *g, const char *query, long long now_s,
         web_gnss_ident_json(&w, s->gnssid, s->svid, s->prn, s->ts);
         web_jw_raw(&w, "}");
     }
-    web_jw_raw(&w, "]}");
+    web_jw_raw(&w, "]");
+    /* The sensor's own position (loc_apply), last: the pinned heads of
+     * this answer stand. */
+    web_jw_raw(&w, ",\"loc\":");
+    web_loc_json(&w, &g->loc);
+    web_jw_raw(&w, "}");
     pthread_mutex_unlock(&g->mu);
     if (w.overflow) return -1;
     *len = w.len;

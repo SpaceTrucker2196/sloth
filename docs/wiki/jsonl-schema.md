@@ -14,7 +14,7 @@ scripts) code against.
 
 **Sources**: `src/jsonl.c`, `src/netstr.c`, `src/data_socket.c`, `src/sensor_health.c`, `src/dns_wire.c`.
 
-**Last updated**: 2026-11-05 ([[aprs]]: the `aprs_packet` record, one per packet Dire Wolf decoded, the change-only `aprs_station` record, the `aprs_*` block appended to `sensor_health`, present only with `--aprs`, and the `sensor` kind `aprs`), 2026-11-05 (#26 slice 1, [[adsb]]: the change-only `adsb_aircraft` record, and the `adsb_*` block appended to `sensor_health`, present only with `--adsb`), 2026-11-03 (#173: the MGMT_FUZZ lifecycle example carries the banded detail), 2026-11-03 (#180: `evict_frag_ap_ident` appended to the `sensor_health` breakout — the FragAttacks per-BSSID AP-identity table), 2026-11-02 ([[gnss]]: the change-only `gnss_fix`, `gnss_sky` and `gnss_sat` records, and `gnss_sats_in_view`, `gnss_sats_used`, `gnss_cn0_mean`, `gnss_time_offset_ms`, `gnss_jam` appended to `sensor_health` with a `--gps` reader; on review, the used count signed as a band, the offset band with hysteresis, `jam` sticky across the TPVs gpsd omits it from, `el` / `az` absent rather than -1, and a set satellite inferred from its heartbeat lapsing), 2026-10-27 ([[location]]: the `loc` object on `alert` and every `alert.*` record of a stamped incident; the `gps_*` block in `sensor_health`, present only with `--location` or `--gps`), 2026-10-26 (`capture_linktype` and `monitor_only` in `sensor_health`, for slothweb's capture scope), 2026-10-26 (RSSI distance data point: `est_dist_m`, `est_dist_band`, `est_dist_trend`, `est_ptx_source` on `beacon`, `probe_client`, `assoc`, `device` and `ble_device`, present only with an estimate; `ble_device` signs the band only, never metres or the trend), 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
+**Last updated**: 2026-11-06 ([[location]]: `loc_lat`, `loc_lon`, `loc_alt_m`, `loc_src` appended to `sensor_health` while a position exists, signed on the 0.01° cell; slothweb's Radar centre), 2026-11-05 ([[aprs]]: the `aprs_packet` record, one per packet Dire Wolf decoded, the change-only `aprs_station` record, the `aprs_*` block appended to `sensor_health`, present only with `--aprs`, and the `sensor` kind `aprs`), 2026-11-05 (#26 slice 1, [[adsb]]: the change-only `adsb_aircraft` record, and the `adsb_*` block appended to `sensor_health`, present only with `--adsb`), 2026-11-03 (#173: the MGMT_FUZZ lifecycle example carries the banded detail), 2026-11-03 (#180: `evict_frag_ap_ident` appended to the `sensor_health` breakout — the FragAttacks per-BSSID AP-identity table), 2026-11-02 ([[gnss]]: the change-only `gnss_fix`, `gnss_sky` and `gnss_sat` records, and `gnss_sats_in_view`, `gnss_sats_used`, `gnss_cn0_mean`, `gnss_time_offset_ms`, `gnss_jam` appended to `sensor_health` with a `--gps` reader; on review, the used count signed as a band, the offset band with hysteresis, `jam` sticky across the TPVs gpsd omits it from, `el` / `az` absent rather than -1, and a set satellite inferred from its heartbeat lapsing), 2026-10-27 ([[location]]: the `loc` object on `alert` and every `alert.*` record of a stamped incident; the `gps_*` block in `sensor_health`, present only with `--location` or `--gps`), 2026-10-26 (`capture_linktype` and `monitor_only` in `sensor_health`, for slothweb's capture scope), 2026-10-26 (RSSI distance data point: `est_dist_m`, `est_dist_band`, `est_dist_trend`, `est_ptx_source` on `beacon`, `probe_client`, `assoc`, `device` and `ble_device`, present only with an estimate; `ble_device` signs the band only, never metres or the trend), 2026-10-26 (#170: incidents versus `--db` findings stated under *Incident lifecycle*; no record changed), 2026-10-26 (#166: `pcap_retain_days`, `pcap_swept`, `pcap_sweep_errors` in `sensor_health`, present only with `--pcap-dir`), 2026-10-23 (#156: the three banded `ble_rot_*` `sensor_health` fields, present only with `--ble-rotation-hints`; review round: bands replace exact counts, no signature edge), 2026-10-23 (#148: `alert.resolve` reasons `displaced`
 and `drained`; the `beacon-overflow` `BEACONING` finding; IPv4-mapped
 beaconing peers keyed as IPv4), 2026-10-23 (#165 audit: a PTR `answer`
 is whole up to 63 bytes, for a PTR question only; a target that would
@@ -965,6 +965,28 @@ receiver and writes none of these):
 
 Their signature contribution is the offset band, the mean-C/N0 band
 and the jam band only, never the counts.
+
+**The sensor's position** (2026-11-06, [[location]]; slothweb's Radar
+centre). Appended after the GNSS block (after `gps_err` in a
+`--location` run) and present only while a position exists: the stamp
+`gps_location_current()` gives the tick, a fresh fix else the fixed
+`--location`; a `--gps` run still searching for its first fix writes
+none of these:
+
+| Field | Meaning |
+|---|---|
+| `loc_lat`, `loc_lon` | degrees, five decimals (the alert stamp's `loc` has seven; a metre is enough for a centre) |
+| `loc_alt_m` | metres, one decimal; **omitted** when the source gave none |
+| `loc_src` | `gps` or `fixed` |
+
+The signature takes `loc_src` and the position's **0.01° cell**
+(`floor(lat × 100)`, `floor(lon × 100)`, about 1.1 km; the
+`aprs_station` cell), never the figure: a fix wanders metres a second,
+and a 17 m fix straddling a finer cell's edge would re-sign this line
+several times a minute. The exact figure rides every line written and
+the 300 s heartbeat refreshes it. A consumer with no alert to read a
+`loc` stamp from (slothweb, until an alert fires) reads the position
+here.
 
 **ADS-B decoder** (2026-11-05, #26 slice 1, [[adsb]]). Appended after
 the GNSS block, present **only** with `--adsb`:

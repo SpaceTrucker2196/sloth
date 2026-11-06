@@ -3065,6 +3065,14 @@ typedef struct {
     double   pdop, vdop;       /* 0 unknown */
     int      status;           /* TPV status, -1 absent */
     int      jam;              /* TPV jam (u-blox jamInd 0..255), -1 absent */
+    /* Where the sensor is (2026-11-06, for slothweb's Radar centre): the
+     * arbitrated stamp gps_location_current() gives this tick - a fresh
+     * GPS fix, else the --location, else none (has_loc 0). loc_src is a
+     * loc_src_t. sensor_health writes it when has_loc; its signature
+     * takes the 0.01 degree cell, never the figure. */
+    int      has_loc, loc_has_alt;
+    int      loc_src;
+    double   loc_lat, loc_lon, loc_alt_m;
 } gps_health_t;
 
 /* ── GNSS observation (2026-11-02) ──────────────────────────────────

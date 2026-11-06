@@ -36,7 +36,7 @@ gpsd(8) (https://gpsd.gitlab.io/gpsd/gpsd.html), the client HOWTO
 (https://gpsd.gitlab.io/gpsd/gpsd_json.html); RFC 7946 (GeoJSON); GPX
 1.1 (https://www.topografix.com/GPX/1/1/).
 
-**Last updated**: 2026-11-02 ([[gnss]]: the same receiver's sky, clock offset and the `[#]` view are their own page; `gps_health_poll()` now also fills `s->gnss_sky` / `s->gnss_fix`); 2026-11-02 (a fix is aged on sloth's monotonic clock, and ends when its source goes away; a GSA mode 1 no longer ends a fix; out-of-range accuracy and altitude are dropped; a parked sensor's device sample rate and the `--location` recommendation). 2026-11-02 (`loc_ts` is receipt time; a GSA never renews a position; a FIFO is treated as live; what leaves the host through slothweb and the data socket; `gps_reconnects` counts lost sessions; `gps_quality` -1 before any sentence). 2026-10-27.
+**Last updated**: 2026-11-06 (`loc_lat` / `loc_lon` / `loc_alt_m` / `loc_src` on `sensor_health` while a position exists; slothweb's `/api/gnss` `loc`); 2026-11-02 ([[gnss]]: the same receiver's sky, clock offset and the `[#]` view are their own page; `gps_health_poll()` now also fills `s->gnss_sky` / `s->gnss_fix`); 2026-11-02 (a fix is aged on sloth's monotonic clock, and ends when its source goes away; a GSA mode 1 no longer ends a fix; out-of-range accuracy and altitude are dropped; a parked sensor's device sample rate and the `--location` recommendation). 2026-11-02 (`loc_ts` is receipt time; a GSA never renews a position; a FIFO is treated as live; what leaves the host through slothweb and the data socket; `gps_reconnects` counts lost sessions; `gps_quality` -1 before any sentence). 2026-10-27.
 
 ## Sources of a position
 
@@ -150,6 +150,7 @@ fix on the device.
 | per-session manifest line beside `--pcap-dir` / `--eapol-dir` files | `loc` | files an alert wrote, stamped ([[pcap-export]] §5) |
 | `sloth.db` `device_positions`, `sensor_positions` | one row per sample | `--gps` with a fresh fix, and `--db` |
 | JSONL `sensor_health` | `gps_state`, `gps_src`, `gps_fix_age_s`, `gps_quality`, `gps_sats`, `gps_hdop`, `gps_sentences`, `gps_bad_checksum`, `gps_parse_errors`, `gps_reconnects`, `gps_positions_dropped`, `gps_err` | `--location` or `--gps` given |
+| JSONL `sensor_health` | `loc_lat`, `loc_lon`, `loc_alt_m`?, `loc_src` (2026-11-06): the same stamp the alerts carry, for a consumer with no alert to read it from; signed on its 0.01° cell ([[jsonl-schema]]) | while a position exists (a fresh fix, or `--location`) |
 | TUI alert detail | `Location:` line | `--location` or `--gps` given |
 | TUI interface view health strip | `gps fix 9sat`, `gps stale 45s`, `gps searching (using --location)`, `err ...` | `--location` or `--gps` given |
 | slothweb | the alert page's "where the sensor was", the drawer's scatter, `/api/positions` JSON / GeoJSON / GPX | sloth.db v9 or a stream carrying `loc` ([[slothweb]]) |
@@ -194,8 +195,13 @@ the `?WATCH` line to gpsd, loopback unless `--gps-allow-remote` says
 otherwise. The host as a whole can: slothweb serves alert `loc` and
 `/api/positions` (JSON, GeoJSON and GPX of the device samples and the
 sensor's track) to any client its bind address and ACL admit, and a
-`--data-socket` client receives every `loc` the stream carries. Bind
-and ACL those as you would the coordinates themselves. Run without the
+`--data-socket` client receives every `loc` the stream carries, and,
+since 2026-11-06, the sensor's current position on every
+`sensor_health` line while one exists (`loc_lat` / `loc_lon`: the same
+figure the alert stamps carry, at the same trust boundary; slothweb
+serves it as `/api/gnss` `loc` to its allow-listed clients, for the
+Radar view's centre). Bind and ACL those as you would the coordinates
+themselves. Run without the
 flags and no position exists anywhere.
 
 ## Deployment

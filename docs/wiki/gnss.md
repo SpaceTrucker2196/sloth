@@ -32,7 +32,7 @@ GST, `gpsd_time_parse()`, the sky / fix state, `gps_gnss_*_sig()`),
 `tests/test_gnss_view.c`, `tests/test_db.c` (v9 → v10),
 `web/tests/test_gnss.c`.
 
-**Last updated**: 2026-11-05 (slothweb names each satellite: the RINEX identifier and, from the IGS satellite metadata compiled in, the vehicle - name, NORAD and COSPAR numbers, SVN, block, launch, plane and slot - at the record's time; the sky plot draws each satellite's trail from `gnss_sightings`, `/api/gnss/tracks`). 2026-11-05 (slothweb's "satellites seen" history over `gnss_sightings`, `/api/gnss/seen` and `/api/gnss/sat`, and a satellite's C/N0 and elevation over a window). 2026-11-03 (the four GNSS rules replace the hooks section; the history carries the monotonic clock, `eps`, `leapseconds` and `reacq`). 2026-11-02 (verify: `GPSD_MAX_LINE` 10240 so a full multi-GNSS SKY fits; a fractional `mode` is no fix; slothweb shows any offset sloth records). 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
+**Last updated**: 2026-11-06 (`/api/gnss` gains `loc`, the sensor's own position from `sensor_health`'s `loc_*`, GPS else `--location`, for the Radar view's centre); 2026-11-05 (slothweb names each satellite: the RINEX identifier and, from the IGS satellite metadata compiled in, the vehicle - name, NORAD and COSPAR numbers, SVN, block, launch, plane and slot - at the record's time; the sky plot draws each satellite's trail from `gnss_sightings`, `/api/gnss/tracks`). 2026-11-05 (slothweb's "satellites seen" history over `gnss_sightings`, `/api/gnss/seen` and `/api/gnss/sat`, and a satellite's C/N0 and elevation over a window). 2026-11-03 (the four GNSS rules replace the hooks section; the history carries the monotonic clock, `eps`, `leapseconds` and `reacq`). 2026-11-02 (verify: `GPSD_MAX_LINE` 10240 so a full multi-GNSS SKY fits; a fractional `mode` is no fix; slothweb shows any offset sloth records). 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
 
 ## What is read
 
@@ -249,6 +249,14 @@ each as a line fading toward its oldest point, the selected satellite
 bold, with no line across a gap of more than two buckets (a satellite
 setting and rising again); a window picker (1 h to 24 h) sits on the
 plot and is kept per browser.
+
+**The sensor's position** (2026-11-06): `/api/gnss` ends with `loc`,
+the `web_loc.h` shape (`lat`, `lon` to seven places, `alt_m`, `acc_m`
+null, `src` `gps` or `fixed`, `ts`) or `null`, kept from
+`sensor_health`'s `loc_*` members ([[location]]): a fresh fix, else the
+`--location`, cleared by a line without them. It is the one place
+slothweb learns a `--location`-only sensor's position without an alert;
+the Radar view centres its dome on it.
 
 **Scope**: the receiver is the host's own, neither the monitor radio's
 nor the IP capture's. Its records are tagged META like

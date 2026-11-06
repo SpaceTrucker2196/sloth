@@ -173,7 +173,7 @@ static void test_gnss_ingest_and_route(void) {
     fresh();
     WT_EQ(route(&H, "/api/gnss", ""), 200);
     WT_HAS(body_of(g_out), "\",\"records\":0,\"evictions\":0,\"aged\":0,\"rejected\":0,"
-                           "\"sensor\":null,\"fix\":null,\"fixes\":0,\"sky\":null,\"total\":0,\"sats\":[]}");
+                           "\"sensor\":null,\"fix\":null,\"fixes\":0,\"sky\":null,\"total\":0,\"sats\":[],\"loc\":null}");
     WT_HAS(body_of(g_out), "\"src\":\"\",\"meta\":");
     /* A sensor_health without the block (a sloth with no --gps) leaves
      * the sensor null. */
@@ -527,7 +527,46 @@ static void test_gnss_meta_source(void) {
     WT_ASSERT(strstr(md, hex) != NULL);
 }
 
+/* The sensor's own position (2026-11-06, the Radar centre): sensor_health's
+ * loc_* kept and served as "loc", null without them, refused out of
+ * range or with a source that is not sloth's word, cleared by a later
+ * line without them. Seen red with loc_apply()'s clear path removed (the
+ * third answer still carried 51.5007400). */
+static void test_gnss_loc(void) {
+    fresh();
+    web_health_t H;
+    memset(&H, 0, sizeof(H));
+    H.gnss = &G;
+    H.wall_s = T;
+    feed("{\"type\":\"sensor_health\",\"ts\":1793059200,\"capture_iface\":\"any\","
+         "\"gps_state\":\"fixed\",\"gps_src\":\"fixed\",\"loc_lat\":10.00000,\"loc_lon\":20.00000,"
+         "\"loc_alt_m\":30.0,\"loc_src\":\"fixed\"}");
+    WT_EQ(route(&H, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"sats\":[],\"loc\":{\"lat\":10.0000000,\"lon\":20.0000000,\"alt_m\":30.0,"
+                           "\"acc_m\":null,\"src\":\"fixed\",\"ts\":1793059200}}");
+    feed("{\"type\":\"sensor_health\",\"ts\":1793059201,\"capture_iface\":\"any\","
+         "\"gps_state\":\"fix\",\"gps_src\":\"gpsd:127.0.0.1:2947\",\"loc_lat\":51.50074,"
+         "\"loc_lon\":-0.12469,\"loc_src\":\"gps\"}");
+    WT_EQ(route(&H, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"loc\":{\"lat\":51.5007400,\"lon\":-0.1246900,\"alt_m\":null,"
+                           "\"acc_m\":null,\"src\":\"gps\",\"ts\":1793059201}}");
+    /* Without the members: cleared. */
+    feed("{\"type\":\"sensor_health\",\"ts\":1793059202,\"capture_iface\":\"any\","
+         "\"gps_state\":\"searching\",\"gps_src\":\"gpsd:127.0.0.1:2947\"}");
+    WT_EQ(route(&H, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"loc\":null}");
+    WT_LACKS(body_of(g_out), "51.5007400");
+    /* Out of range, or a source that is not sloth's: refused. */
+    feed("{\"type\":\"sensor_health\",\"ts\":1793059203,\"loc_lat\":91,\"loc_lon\":0,\"loc_src\":\"gps\"}");
+    WT_EQ(route(&H, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"loc\":null}");
+    feed("{\"type\":\"sensor_health\",\"ts\":1793059203,\"loc_lat\":1,\"loc_lon\":2,\"loc_src\":\"guess\"}");
+    WT_EQ(route(&H, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"loc\":null}");
+}
+
 void run_gnss_tests(void) {
+    WT_RUN(test_gnss_loc);
     WT_RUN(test_gnss_ident);
     WT_RUN(test_gnss_meta_source);
     WT_RUN(test_gnss_tab_label);

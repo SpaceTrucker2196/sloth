@@ -1993,6 +1993,85 @@ static void test_gnss_records_change_only(void) {
  * a C/N0 wandering inside its band writes nothing, the clock offset
  * crossing 2 s writes one line. Seen red with sig.gnss_time_off_band
  * replaced by the raw offset (every tick wrote a line). */
+/* The sensor's position on sensor_health (2026-11-06, slothweb's Radar
+ * centre): loc_lat / loc_lon / loc_alt_m / loc_src with --location
+ * (fixed) and with a fresh fix (gps), none when nothing is configured;
+ * and the signature takes the 0.01 degree cell, so a fix wandering
+ * inside its cell writes nothing and one crossing the cell writes one
+ * line. Seen red with the has_loc guard dropped from the emitter (a
+ * --gps run before any fix wrote "loc_lat":0.00000, caught by
+ * test_sensor_health_gnss_block's pin of its first line) and with
+ * sig.loc_cell_lat set to the raw latitude x 1e5 (every fix a line:
+ * the count of 2 here read 11). */
+static int count_of(const char *b, const char *needle) {
+    int n = 0;
+    for (const char *p = b; (p = strstr(p, needle)); p += strlen(needle)) n++;
+    return n;
+}
+
+static void test_sensor_health_loc_members(void) {
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    char err[160];
+    /* Nothing configured: no loc_ key. */
+    jl_open();
+    poll_at(&s, 1793059200);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *b = read_all(g_jl);
+    ASSERT(b != NULL);
+    if (b) ASSERT(strstr(b, "\"loc_") == NULL);
+    unlink(g_jl);
+    /* --location with an altitude: fixed, after gps_err. */
+    gps_location_reset();
+    jsonl_dedup_reset();
+    jl_open();
+    ASSERT_EQ(gps_location_parse_fixed("10,20,30", err, sizeof(err)), 0);
+    poll_at(&s, 1793059200);
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    b = read_all(g_jl);
+    ASSERT(b != NULL);
+    if (b) {
+        ASSERT(strstr(b, "\"gps_err\":\"\",\"loc_lat\":10.00000,\"loc_lon\":20.00000,"
+                         "\"loc_alt_m\":30.0,\"loc_src\":\"fixed\"}") != NULL);
+    }
+    unlink(g_jl);
+    /* --gps with a fix: gps, after gnss_jam; ten TPVs wandering inside
+     * the 0.01 degree cell write nothing more, the eleventh crossing it
+     * writes one line. */
+    gps_location_reset();
+    jsonl_dedup_reset();
+    jl_open();
+    gps_location_set_gps("gpsd:127.0.0.1:2947");
+    static gpsd_msg_t m;
+    for (int i = 0; i < 11; i++) {
+        static char line[256];
+        /* 51.5000 .. 51.5009 stay in cell 5150; 51.5110 is cell 5151. */
+        snprintf(line, sizeof(line),
+                 "{\"class\":\"TPV\",\"mode\":3,\"lat\":%s,\"lon\":-0.1,\"altMSL\":12}",
+                 i < 10 ? (const char *[]){ "51.5000", "51.5001", "51.5002", "51.5003",
+                                            "51.5004", "51.5005", "51.5006", "51.5007",
+                                            "51.5008", "51.5009" }[i] : "51.5110");
+        ASSERT_EQ(gpsd_json_parse(line, strlen(line), &m), 1);
+        clk(1793059200 + i);
+        gps_location_feed_gpsd(&m, 1793059200 + i);
+        poll_at(&s, 1793059200 + i);
+        jsonl_emit_sensor_health(&s);
+    }
+    jsonl_close();
+    b = read_all(g_jl);
+    ASSERT(b != NULL);
+    if (b) {
+        ASSERT(strstr(b, ",\"loc_lat\":51.50000,\"loc_lon\":-0.10000,"
+                         "\"loc_alt_m\":12.0,\"loc_src\":\"gps\"}") != NULL);
+        ASSERT(strstr(b, "\"loc_lat\":51.51100,") != NULL);
+        ASSERT_EQ(count_of(b, "\"type\":\"sensor_health\""), 2);
+    }
+    unlink(g_jl);
+    gps_location_reset();
+}
+
 static void test_sensor_health_gnss_block(void) {
     TEST_STATE(s);
     memset(&s, 0, sizeof(s));
@@ -2065,9 +2144,13 @@ static void test_sensor_health_gnss_block(void) {
     b = read_all(g_jl);
     ASSERT(b != NULL);
     if (b) {
-        ASSERT_EQ(count_type(b, "\"type\":\"sensor_health\""), 2);
-        ASSERT(strstr(b, "\"gnss_time_offset_ms\":250,\"gnss_jam\":12}") != NULL);
-        ASSERT(strstr(b, "\"gnss_time_offset_ms\":3000,\"gnss_jam\":12}") != NULL);
+        /* Three since 2026-11-06: TPV_FULL's fix (lon -0.12469) and the
+         * wandering TPVs' (lon -0.1) are one 0.01 degree cell apart, so
+         * the first wander is a position change too (loc_* in the
+         * signature); the sixty after it still write nothing. */
+        ASSERT_EQ(count_type(b, "\"type\":\"sensor_health\""), 3);
+        ASSERT(strstr(b, "\"gnss_time_offset_ms\":250,\"gnss_jam\":12,\"loc_lat\":") != NULL);
+        ASSERT(strstr(b, "\"gnss_time_offset_ms\":3000,\"gnss_jam\":12,\"loc_lat\":") != NULL);
     }
     unlink(g_jl);
     sloth_clock_test_set(NULL, NULL);
@@ -2244,11 +2327,13 @@ static void test_jam_is_sticky_across_tpvs(void) {
     char *b = read_all(g_jl);
     ASSERT(b != NULL);
     if (b) {
-        /* First line, the hold expiring (jam band -1), 70 (band 2). */
-        ASSERT_EQ(count_type(b, "\"type\":\"sensor_health\""), 3);
-        ASSERT(strstr(b, "\"gnss_jam\":12}") != NULL);
-        ASSERT(strstr(b, "\"gnss_jam\":-1}") != NULL);
-        ASSERT(strstr(b, "\"gnss_jam\":70}") != NULL);
+        /* First line, the first feed_tpv_off (its fix is one 0.01 degree
+         * cell west of TPV_FULL's: a position change, 2026-11-06), the
+         * hold expiring (jam band -1), 70 (band 2). */
+        ASSERT_EQ(count_type(b, "\"type\":\"sensor_health\""), 4);
+        ASSERT(strstr(b, "\"gnss_jam\":12,\"loc_lat\":") != NULL);
+        ASSERT(strstr(b, "\"gnss_jam\":-1,\"loc_lat\":") != NULL);
+        ASSERT(strstr(b, "\"gnss_jam\":70,\"loc_lat\":") != NULL);
     }
     unlink(g_jl);
     sloth_clock_test_set(NULL, NULL);
@@ -2303,7 +2388,11 @@ static void test_time_off_band_hysteresis(void) {
         /* The first, then each band move: 700, 300, 1900, 2600, 1400,
          * 9000, 12600, 7400 - eight. */
         ASSERT_EQ(count_type(b, "\"type\":\"gnss_fix\""), 9);
-        ASSERT_EQ(count_type(b, "\"type\":\"sensor_health\""), 9);
+        /* sensor_health: one more since 2026-11-06 - the first
+         * feed_tpv_off moves the fix one 0.01 degree cell west of
+         * TPV_FULL's, a position change (loc_* in its signature). The
+         * gnss_fix record does not sign the position: still nine. */
+        ASSERT_EQ(count_type(b, "\"type\":\"sensor_health\""), 10);
         ASSERT(strstr(b, "\"time_off_ms\":700,") != NULL);
         ASSERT(strstr(b, "\"time_off_ms\":550,") == NULL);
         ASSERT(strstr(b, "\"time_off_ms\":600,") == NULL);
@@ -2473,6 +2562,7 @@ void run_gps_tests(void) {
     RUN_TEST(test_gnss_history_rings_wrap);
     RUN_TEST(test_gnss_records_change_only);
     RUN_TEST(test_sensor_health_gnss_block);
+    RUN_TEST(test_sensor_health_loc_members);
     RUN_TEST(test_sensor_registry_gps);
     RUN_TEST(test_gnss_signature_bands);
     RUN_TEST(test_jam_is_sticky_across_tpvs);

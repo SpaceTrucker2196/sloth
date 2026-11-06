@@ -1234,7 +1234,8 @@ int gps_location_last_fix(loc_stamp_t *out) {
 
 void gps_health_poll(sloth_state_t *s, time_t now) {
     if (!s) return;
-    (void)now;   /* the fix's age is monotonic; see fix_age_s() */
+    /* `now` stamps a fixed position only; the fix's age is monotonic
+     * (fix_age_s()). */
     gps_health_t *h = &s->gps;
     memset(h, 0, sizeof(*h));
     pthread_mutex_lock(&g_mu);
@@ -1275,6 +1276,16 @@ void gps_health_poll(sloth_state_t *s, time_t now) {
     g_hist_snap = g_loc.hist;
     s->gnss_hist = &g_hist_snap;
     pthread_mutex_unlock(&g_mu);
+    /* After the unlock: gps_location_current() takes g_mu itself. */
+    loc_stamp_t st;
+    h->has_loc = gps_location_current(&st, now) != LOC_SRC_NONE;
+    if (h->has_loc) {
+        h->loc_src = st.src;
+        h->loc_lat = st.lat;
+        h->loc_lon = st.lon;
+        h->loc_has_alt = st.has_alt;
+        h->loc_alt_m = st.alt_m;
+    }
 }
 
 void gps_location_reset(void) {
