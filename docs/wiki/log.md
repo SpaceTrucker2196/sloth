@@ -6551,3 +6551,13 @@ the v11 → v12 step is a stamp. slothweb reads them and the v10
 `/api/adsb/aircraft`): a "seen" table in each tab and per-item history
 (a satellite's C/N0 and elevation, an aircraft's altitude profile and
 recorded track). Updated [[adsb]], [[gnss]], [[slothweb]].
+
+## 2026-11-05 — which GNSS satellite, and the sky's trails
+
+[[gnss]]: slothweb names each satellite: the RINEX identifier, and the
+vehicle on that PRN at the record's time from the IGS satellite metadata
+(release 2441, committed in `web/data/gnss/` with its SOURCE.md and
+compiled in at build): name, NORAD and COSPAR numbers, SVN, block,
+launch, plane and slot. The sky plot draws each satellite's trail over
+1 to 24 h from `gnss_sightings` (`/api/gnss/tracks`). Updated
+[[slothweb]].

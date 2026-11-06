@@ -687,6 +687,17 @@ WEB_BTSIG_CSVS  = $(wildcard $(WEB_BTSIG_DIR)/company_identifiers.csv \
                              $(WEB_BTSIG_DIR)/service_uuids.csv \
                              $(WEB_BTSIG_DIR)/appearance_values.csv)
 WEB_BTSIGGEN    = $(WEB_GEN_DIR)/btsig_gen
+# The IGS satellite metadata (2026-11-05, web/data/gnss/SOURCE.md):
+# web/tools/gnssmeta_gen.c compiles the committed SINEX file into
+# build/web/web_gnssmeta_table.c (never committed), the vehicle behind
+# each GNSS PRN (web/src/web_gnssmeta.h). WEB_GNSS_DIR elsewhere, or one
+# without the file, builds empty tables (the identifier alone).
+WEB_GNSS_DIR   ?= web/data/gnss
+WEB_GNSS_SNX    = $(wildcard $(WEB_GNSS_DIR)/igs_satellite_metadata.snx)
+WEB_GNSSGEN     = $(WEB_GEN_DIR)/gnssmeta_gen
+WEB_GNSSGEN_SRCS = web/tools/gnssmeta_gen.c
+WEB_GNSS_C      = $(WEB_GEN_DIR)/web_gnssmeta_table.c
+WEB_GNSS_STAMP  = $(WEB_GEN_DIR)/gnssmeta.inputs
 WEB_BTSIGGEN_SRCS = web/tools/btsig_gen.c
 WEB_BTSIG_C     = $(WEB_GEN_DIR)/web_btsig_table.c
 WEB_BTSIG_STAMP = $(WEB_GEN_DIR)/btsig.inputs
@@ -721,7 +732,8 @@ WEB_ASM_STAMP   = $(WEB_GEN_DIR)/alertasm.inputs
 WEB_CORE_SRCS   = src/dot11_frame.c src/radiotap.c src/wifi_freq.c src/dns_wire.c \
                   src/dot11_ie.c src/netstr.c
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C) \
-                  $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C)
+                  $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C) \
+                  $(WEB_GNSS_C)
 # slothweb has no version of its own: the bundle's envelope
 # (web/src/web_bundle.c) names the sloth tree it was built from as
 # build_version, read out of include/sloth.h here because web/ never
@@ -802,6 +814,19 @@ $(WEB_BTSIG_C): $(WEB_BTSIGGEN) $(WEB_BTSIG_STAMP) $(WEB_BTSIG_CSVS)
 	$(WEB_BTSIGGEN) $@.tmp $(WEB_BTSIG_ARGS)
 	mv $@.tmp $@
 
+$(WEB_GNSSGEN): $(WEB_GNSSGEN_SRCS) $(WEB_GEN_DIR)/.flags
+	@mkdir -p $(WEB_GEN_DIR)
+	$(CC) $(CFLAGS) -o $@ $(WEB_GNSSGEN_SRCS)
+
+$(WEB_GNSS_STAMP): STAMP = $(WEB_GNSS_SNX) $(if $(WEB_GNSS_SNX),$(shell cksum $(WEB_GNSS_SNX)))
+$(WEB_GNSS_STAMP): FORCE
+	@mkdir -p $(WEB_GEN_DIR)
+	@[ -f $@ ] && [ "$$(cat $@)" = "$(STAMP)" ] || printf '%s\n' '$(STAMP)' > $@
+
+$(WEB_GNSS_C): $(WEB_GNSSGEN) $(WEB_GNSS_STAMP) $(WEB_GNSS_SNX) web/src/web_gnssmeta.h
+	$(WEB_GNSSGEN) $@.tmp $(WEB_GNSS_SNX)
+	mv $@.tmp $@
+
 $(WEB_RECIPESGEN): $(WEB_RECIPES_SRCS) $(WEB_GEN_DIR)/.flags
 	@mkdir -p $(WEB_GEN_DIR)
 	$(CC) $(CFLAGS) -o $@ $(WEB_RECIPES_SRCS)
@@ -850,7 +875,7 @@ $(WEB_ASM_C): $(WEB_ASMGEN) $(WEB_ASM_STAMP) $(WEB_ASM_MD) include/sloth_alerts.
 	$(WEB_ASMGEN) $@.tmp include/sloth_alerts.def $(WEB_ASM_DIR)
 	mv $@.tmp $@
 
-web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C)
+web: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C) $(WEB_GNSS_C)
 	$(CC) $(CFLAGS) $(WEB_SQL_DEFS) $(WEB_VERSION_DEF) -Iweb/src -iquote src -o slothweb $(WEB_MAIN) \
 	      $(WEB_SRCS) $(WEB_CORE_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDFLAGS) $(WEB_LDLIBS)
 
@@ -881,12 +906,13 @@ web-quickstart-check:
 # only; no host file, no running sloth, no name lookup, no network beyond
 # 127.0.0.1 and ::1. The test links the embedder's
 # SHA-256 to recompute the page's CSP hashes; slothweb does not.
-web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C) $(WEB_ASMGEN)
+web-test: $(WEB_ASSETS_C) $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C) $(WEB_ASMGEN) $(WEB_GNSS_C)
 	$(CC) $(TEST_CFLAGS) $(WEB_SQL_DEFS) $(WEB_VERSION_DEF) -DSLOTHWEB_DEMO_LIB -Iweb/src -Iweb/tests -Iweb/tools \
 	      -Iinclude -iquote web/tools -iquote src -iquote research -DWEB_OUI_EXPECT='"$(if $(WEB_OUI_CSVS),ieee,sloth)"' \
 	      -DWEB_OUI_DATA='"$(WEB_OUI_DIR)"' \
 	      -DWEB_BTSIG_EXPECT='"$(if $(WEB_BTSIG_CSVS),sig,none)"' \
 	      -DWEB_BTSIG_DATA='"$(WEB_BTSIG_DIR)"' -DWEB_VKBGEN_BIN='"$(WEB_VKBGEN)"' \
+	      -DWEB_GNSS_EXPECT='"$(if $(WEB_GNSS_SNX),igs,none)"' \
 	      -DWEB_ASMGEN='"$(WEB_ASMGEN)"' -o slothweb_test \
 	      $(WEB_TEST_SRCS) $(WEB_SRCS) $(WEB_CORE_SRCS) $(WEB_TOOL_SRCS) $(WEB_LDLIBS)
 	@$(call TEST_IN_TMPDIR,./slothweb_test)

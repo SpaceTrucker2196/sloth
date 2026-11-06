@@ -336,8 +336,10 @@
     </section>
     <section class="panel gnss-two">
       <div>
-        <div class="label">sky <span class="sub">azimuth around, elevation inward; north up</span></div>
-        <canvas id="gnss-sky" width="320" height="320" aria-label="satellite positions by azimuth and elevation"></canvas>
+        <div class="label">sky <span class="sub">azimuth around, elevation inward; north up</span>
+          <label class="sub">trails <select id="gnss-trail-hours"><option value="1">1 h</option><option value="3">3 h</option><option value="6" selected>6 h</option><option value="12">12 h</option><option value="24">24 h</option></select></label></div>
+        <canvas id="gnss-sky" width="320" height="320" aria-label="satellite positions by azimuth and elevation, with each satellite's trail over the window"></canvas>
+        <div class="sub" id="gnss-trail-note"></div>
       </div>
       <div>
         <div class="label">fix history <span class="sub" id="gnss-fix-note"></span></div>

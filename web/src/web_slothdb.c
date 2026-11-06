@@ -684,6 +684,11 @@ int web_sdb_gnss_sat(web_sdb_conn_t *c, int gnssid, int prn, long long from,
     (void)c; (void)gnssid; (void)prn; (void)from; (void)max; (void)fn; (void)ctx;
     return -1;
 }
+int web_sdb_gnss_tracks(web_sdb_conn_t *c, long long from, long long bucket_s, int max,
+                        web_sdb_gtrk_fn fn, void *ctx) {
+    (void)c; (void)from; (void)bucket_s; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
 int web_sdb_adsb_seen(web_sdb_conn_t *c, long long from, long long limit,
                       long long offset, const char *q, web_sdb_ac_fn fn, void *ctx) {
     (void)c; (void)from; (void)limit; (void)offset; (void)q; (void)fn; (void)ctx;
@@ -2960,6 +2965,36 @@ int web_sdb_gnss_sat(web_sdb_conn_t *c, int gnssid, int prn, long long from,
         p.health = sqlite3_column_type(st, 5) == SQLITE_NULL ? -1 : sqlite3_column_int(st, 5);
         n++;
         if (fn(ctx, &p)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_sdb_gnss_tracks(web_sdb_conn_t *c, long long from, long long bucket_s, int max,
+                        web_sdb_gtrk_fn fn, void *ctx) {
+    if (!gnss_sight_ok(c)) return 0;
+    if (bucket_s < 1) bucket_s = 1;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT gnssid, prn, svid, max(last_seen), el, az FROM gnss_sightings"
+            " WHERE last_seen >= ?1 AND el IS NOT NULL AND az IS NOT NULL"
+            " GROUP BY gnssid, prn, last_seen / ?2"
+            " ORDER BY gnssid, prn, max(last_seen) LIMIT ?3", -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, bucket_s);
+    sqlite3_bind_int(st, 3, max);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_gtrk_t t;
+        t.gnssid = sqlite3_column_int(st, 0);
+        t.prn = sqlite3_column_int(st, 1);
+        t.svid = sqlite3_column_type(st, 2) == SQLITE_NULL ? -1 : sqlite3_column_int(st, 2);
+        t.ts = sqlite3_column_int64(st, 3);
+        t.el = sqlite3_column_int(st, 4);
+        t.az = sqlite3_column_int(st, 5);
+        n++;
+        if (fn(ctx, &t)) { rc = SQLITE_DONE; break; }
     }
     sqlite3_finalize(st);
     return rc == SQLITE_DONE ? n : -1;

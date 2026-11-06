@@ -80,6 +80,13 @@ data/
 # subdirectory is re-included whole because nothing but its four files
 # is ever written there.
 !/web/data/btsig/
+# The IGS satellite metadata for slothweb's GPS Sat tab
+# (web/data/gnss/SOURCE.md), committed the same way: the subdirectory
+# named back and emptied, its two files named back.
+!/web/data/gnss/
+/web/data/gnss/*
+!/web/data/gnss/igs_satellite_metadata.snx
+!/web/data/gnss/SOURCE.md
 # The vendor research entries (owner request 2026-10-27,
 # docs/wiki/vendor-research.md) sit beside the registry: the directory
 # is named back and emptied the same way, and only its .md files are

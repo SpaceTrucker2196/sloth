@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "web_gnss.h"
+#include "web_gnssmeta.h"
 #include "web_json.h"
 #include "web_series.h"
 #include "web_slothdb.h"
@@ -107,6 +108,7 @@ static int emit_gsat(void *ctx, const web_sdb_gsat_t *g) {
     web_jw_raw(w, ",\"cn0_mean\":");
     jw_num(w, g->cn0_n > 0, g->cn0_sum / (double)(g->cn0_n > 0 ? g->cn0_n : 1), 1);
     web_jw_raw(w, ",\"el_max\":"); jw_int_or_null(w, g->has_el, g->el_max);
+    web_gnss_ident_json(w, g->gnssid, g->svid, g->prn, g->last_seen);
     web_jw_raw(w, "}");
     return 0;
 }
@@ -207,6 +209,76 @@ int web_gnss_sat_route(const web_m4_t *m, const char *query, long long now_s,
         return answer_error(503, to ? "sloth_db_timeout" : "sloth_db_error", NULL,
                             body, cap, len, status);
     web_jw_raw(&w, "],\"total\":"); web_jw_int(&w, k.n);
+    web_jw_raw(&w, "}\n");
+    if (w.overflow) return -1;
+    *len = w.len;
+    *status = 200;
+    return 0;
+}
+
+/* ── /api/gnss/tracks ───────────────────────────────────────────────── */
+
+typedef struct { web_jw_t *w; int n, open, gnssid, prn; } trk_ctx_t;
+
+static int emit_trk(void *ctx, const web_sdb_gtrk_t *t) {
+    trk_ctx_t *k = ctx;
+    web_jw_t *w = k->w;
+    if (!k->open || t->gnssid != k->gnssid || t->prn != k->prn) {
+        if (k->open) web_jw_raw(w, "]},");
+        k->open = 1;
+        k->gnssid = t->gnssid;
+        k->prn = t->prn;
+        k->n++;
+        char id[8];
+        web_gnss_rinex_id(t->gnssid, t->svid, t->prn, id);
+        web_jw_raw(w, "{\"gnssid\":"); web_jw_int(w, t->gnssid);
+        web_jw_raw(w, ",\"prn\":"); web_jw_int(w, t->prn);
+        web_jw_raw(w, ",\"id\":"); web_jw_str(w, id);
+        web_jw_raw(w, ",\"pts\":[");
+    } else {
+        web_jw_raw(w, ",");
+    }
+    /* [ts, el, az]: el may be negative (under the horizon, still listed). */
+    web_jw_raw(w, "["); web_jw_int(w, t->ts);
+    web_jw_raw(w, ","); web_jw_int(w, t->el < -90 ? -90 : t->el > 90 ? 90 : t->el);
+    web_jw_raw(w, ","); web_jw_int(w, ((t->az % 360) + 360) % 360);
+    web_jw_raw(w, "]");
+    return 0;
+}
+
+int web_gnss_tracks_route(const web_m4_t *m, const char *query, long long now_s,
+                          char *body, size_t cap, size_t *len, int *status) {
+    web_param_t ps[1] = { { "hours", "", 0 } };
+    char err[48];
+    if (web_params_parse(query, ps, 1, err, sizeof(err)) != 0)
+        return answer_error(400, err, NULL, body, cap, len, status);
+    long long hours = 6;
+    if (ps[0].seen && decimal(ps[0].val, 1, 24, &hours) != 0)
+        return answer_error(400, "bad_hours", NULL, body, cap, len, status);
+    if (no_db(m, body, cap, len, status)) return 0;
+    WEB_M4_CHECKED(m, len, status);
+    web_sdb_conn_t conn;
+    if (open_sdb(m, &conn, now_s, body, cap, len, status) != 0) return 0;
+    long long from = now_s - hours * 3600;
+    long long bucket = hours * 3600 / WEB_RFHIST_TRK_PTS;
+    web_jw_t w;
+    web_jw_init(&w, body, cap);
+    web_jw_raw(&w, "{\"now\":"); web_jw_int(&w, now_s);
+    web_jw_raw(&w, ",\"hours\":"); web_jw_int(&w, hours);
+    web_jw_raw(&w, ",\"bucket_s\":"); web_jw_int(&w, bucket);
+    web_jw_raw(&w, ",\"have\":"); web_jw_raw(&w, conn.schema >= 10 ? "true" : "false");
+    web_jw_raw(&w, ",\"tracks\":[");
+    trk_ctx_t k = { &w, 0, 0, 0, 0 };
+    int n = web_sdb_gnss_tracks(&conn, from, bucket, WEB_RFHIST_TRK_ROWS, emit_trk, &k);
+    int to = conn.timed_out;
+    web_slothdb_close(&conn);
+    if (n < 0)
+        return answer_error(503, to ? "sloth_db_timeout" : "sloth_db_error", NULL,
+                            body, cap, len, status);
+    if (k.open) web_jw_raw(&w, "]}");
+    web_jw_raw(&w, "],\"total\":"); web_jw_int(&w, k.n);
+    web_jw_raw(&w, ",\"points\":"); web_jw_int(&w, n);
+    web_jw_raw(&w, ",\"cut\":"); web_jw_raw(&w, n >= WEB_RFHIST_TRK_ROWS ? "true" : "false");
     web_jw_raw(&w, "}\n");
     if (w.overflow) return -1;
     *len = w.len;

@@ -16,6 +16,10 @@
  *                                     the highest elevation
  *   /api/gnss/sat?gnssid=&prn=&days=  one satellite's records over the
  *                                     window (el, az, C/N0, used, health)
+ *   /api/gnss/tracks?hours=           every satellite's (el, az) over the
+ *                                     last hours (1..24, default 6), at
+ *                                     most WEB_RFHIST_TRK_PTS a satellite:
+ *                                     the sky plot's trails
  *   /api/adsb/seen?days=&limit=&offset=&q=
  *                                     the aircraft inventory rows last
  *                                     seen in the window, a page at a
@@ -45,11 +49,17 @@
 #define WEB_RFHIST_AC_MAX      100
 #define WEB_RFHIST_OFFSET_MAX  100000
 #define WEB_RFHIST_PTS_MAX     400
+/* Trails: a satellite's window in this many buckets, and a row cap
+ * (some 16 bytes a point) that keeps 60-odd satellites inside 64 KB. */
+#define WEB_RFHIST_TRK_PTS     32
+#define WEB_RFHIST_TRK_ROWS    2400
 
 int web_gnss_seen_route(const web_m4_t *m, const char *query, long long now_s,
                         char *body, size_t cap, size_t *len, int *status);
 int web_gnss_sat_route(const web_m4_t *m, const char *query, long long now_s,
                        char *body, size_t cap, size_t *len, int *status);
+int web_gnss_tracks_route(const web_m4_t *m, const char *query, long long now_s,
+                          char *body, size_t cap, size_t *len, int *status);
 int web_adsb_seen_route(const web_m4_t *m, const char *query, long long now_s,
                         char *body, size_t cap, size_t *len, int *status);
 int web_adsb_aircraft_route(const web_m4_t *m, const char *query, long long now_s,

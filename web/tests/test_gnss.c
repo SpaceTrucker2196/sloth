@@ -10,12 +10,15 @@
  * out_of_scope branch (a Local answer carried no rows); the range
  * checks with sat_apply()'s el bound widened to 180 (95 landed on the
  * row); the ring bound with fix_apply()'s wrap removed (ASan). */
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "web_assets.h"
 #include "web_gnss.h"
+#include "web_gnssmeta.h"
+#include "sha256.h"
 #include "web_jsonl.h"
 #include "web_live.h"
 #include "web_metrics.h"
@@ -116,8 +119,12 @@ static void test_gnss_ingest_and_route(void) {
     H.wall_s = T + 5;
     WT_EQ(route(&H, "/api/gnss", ""), 200);
     const char *b = body_of(g_out);
+    char meta[64];
+    snprintf(meta, sizeof(meta), "\"meta\":\"%s\",", web_gnssmeta_release);
+    WT_HAS(b, meta);
     WT_HAS(b, "{\"now\":1793059205,\"scope_note\":\"every scope: the host's own receiver\","
-              "\"src\":\"gpsd:127.0.0.1:2947\",\"records\":6,\"evictions\":0,\"aged\":0,"
+              "\"src\":\"gpsd:127.0.0.1:2947\",\"meta\":\"");
+    WT_HAS(b, "\",\"records\":6,\"evictions\":0,\"aged\":0,"
               "\"rejected\":0,\"sensor\":{\"ts\":1793059200,\"state\":\"fix\","
               "\"sats_in_view\":4,\"sats_used\":2,\"cn0_mean\":31.3,\"time_off_ms\":250,"
               "\"jam\":12},\"fix\":{\"ts\":1793059200,\"fix_ts\":1793059200,\"mode\":3,"
@@ -131,7 +138,7 @@ static void test_gnss_ingest_and_route(void) {
               "\"total\":4,\"sats\":[{\"gnss\":\"GPS\",\"gnssid\":0,\"svid\":5,\"prn\":5,"
               "\"sigid\":0,\"el\":45,\"az\":120,\"cn0\":41.0,\"used\":1,\"health\":1,"
               "\"ts\":1793059200,\"first_ts\":1793059200,\"sky_ts\":1793059200,\"records\":1,"
-              "\"points\":[[1793059200,41.0]]},{\"gnss\":\"GLONASS\"");
+              "\"points\":[[1793059200,41.0]],\"id\":\"G05\",\"veh\":");
     const char *g1 = strstr(b, "\"gnss\":\"GPS\",\"gnssid\":0,\"svid\":5");
     const char *g2 = strstr(b, "\"gnss\":\"GLONASS\"");
     const char *g3 = strstr(b, "\"gnss\":\"GPS\",\"gnssid\":0,\"svid\":7");
@@ -143,7 +150,7 @@ static void test_gnss_ingest_and_route(void) {
     WT_HAS(b, "\"svid\":7,\"prn\":7,\"sigid\":null,\"el\":null,\"az\":null,\"cn0\":22.5");
     WT_HAS(b, "\"svid\":131,\"prn\":131,\"sigid\":null,\"el\":10,\"az\":200,\"cn0\":null,"
               "\"used\":0,\"health\":0,\"ts\":1793059200,\"first_ts\":1793059200,"
-              "\"sky_ts\":1793059200,\"records\":1,\"points\":[]}");
+              "\"sky_ts\":1793059200,\"records\":1,\"points\":[],\"id\":\"S31\",\"veh\":null}");
     /* A later record of a row appends a point and keeps first_ts. */
     static char line[512];
     snprintf(line, sizeof(line), "%s", SAT5);
@@ -157,7 +164,7 @@ static void test_gnss_ingest_and_route(void) {
     WT_HAS(b, "\"total\":4,\"sats\":[{\"gnss\":\"GPS\",\"gnssid\":0,\"svid\":5,\"prn\":5,"
               "\"sigid\":0,\"el\":45,\"az\":120,\"cn0\":47.5,\"used\":1,\"health\":1,"
               "\"ts\":1793059261,\"first_ts\":1793059200,\"sky_ts\":1793059200,\"records\":2,"
-              "\"points\":[[1793059200,41.0],[1793059261,47.5]]}]}");
+              "\"points\":[[1793059200,41.0],[1793059261,47.5]],\"id\":\"G05\",\"veh\":");
     /* The health member. */
     WT_EQ(route(&H, "/api/health", ""), 200);
     WT_HAS(body_of(g_out), "\"gnss\":{\"sats\":4,\"fixes\":1,\"records\":7,\"evictions\":0,"
@@ -165,8 +172,9 @@ static void test_gnss_ingest_and_route(void) {
     /* Nothing yet: nulls, not zeros. */
     fresh();
     WT_EQ(route(&H, "/api/gnss", ""), 200);
-    WT_HAS(body_of(g_out), "\"src\":\"\",\"records\":0,\"evictions\":0,\"aged\":0,\"rejected\":0,"
+    WT_HAS(body_of(g_out), "\",\"records\":0,\"evictions\":0,\"aged\":0,\"rejected\":0,"
                            "\"sensor\":null,\"fix\":null,\"fixes\":0,\"sky\":null,\"total\":0,\"sats\":[]}");
+    WT_HAS(body_of(g_out), "\"src\":\"\",\"meta\":");
     /* A sensor_health without the block (a sloth with no --gps) leaves
      * the sensor null. */
     feed("{\"type\":\"sensor_health\",\"ts\":1793059200,\"capture_iface\":\"any\","
@@ -432,7 +440,96 @@ static void test_gnss_tab_label(void) {
     WT_HAS(p, "<div id=\"v-gnss\" hidden>");
 }
 
+/* Which satellite (web_gnssmeta.h): the RINEX identifier from gpsd's
+ * gnssid / svid (and the NMEA PRN without an svid), and the vehicle at
+ * the record's time from the IGS metadata compiled in. The pins are the
+ * IGS file's own rows (web/data/gnss/igs_satellite_metadata.snx,
+ * SATELLITE/IDENTIFIER and SATELLITE/PRN): G05 is SVN G050 since
+ * 2009:229, G05 was SVN G035 from 1993:242 to 2009:160 - a PRN names
+ * different satellites over time, which is why the lookup takes a time.
+ * Seen red with web_gnss_vehicle()'s time test dropped (G05 in 2026
+ * named G005, the 1980 vehicle, the first G05 row in the file). */
+static void test_gnss_ident(void) {
+    char id[8];
+    web_gnss_rinex_id(0, 5, 5, id);     WT_ASSERT(!strcmp(id, "G05"));
+    web_gnss_rinex_id(6, 9, 73, id);    WT_ASSERT(!strcmp(id, "R09"));
+    web_gnss_rinex_id(6, -1, 73, id);   WT_ASSERT(!strcmp(id, "R09"));   /* NMEA 65..96 */
+    web_gnss_rinex_id(2, 11, 311, id);  WT_ASSERT(!strcmp(id, "E11"));
+    web_gnss_rinex_id(3, 23, 423, id);  WT_ASSERT(!strcmp(id, "C23"));
+    web_gnss_rinex_id(5, 2, 194, id);   WT_ASSERT(!strcmp(id, "J02"));
+    web_gnss_rinex_id(5, -1, 194, id);  WT_ASSERT(!strcmp(id, "J02"));   /* 193..202 */
+    web_gnss_rinex_id(7, 10, 0, id);    WT_ASSERT(!strcmp(id, "I10"));
+    web_gnss_rinex_id(1, 131, 131, id); WT_ASSERT(!strcmp(id, "S31"));   /* PRN - 100 */
+    web_gnss_rinex_id(1, -1, 48, id);   WT_ASSERT(!strcmp(id, "S35"));   /* NMEA 33..64: PRN 135 */
+    web_gnss_rinex_id(4, 1, 173, id);   WT_ASSERT(!strcmp(id, ""));      /* IMES: no letter */
+    web_gnss_rinex_id(2, -1, 311, id);  WT_ASSERT(!strcmp(id, ""));      /* no svid, no safe range */
+    if (!strcmp(WEB_GNSS_EXPECT, "none")) {
+        WT_ASSERT(web_gnss_vehs_n == 0);
+        WT_ASSERT(web_gnss_vehicle(0, 5, 5, T, NULL, NULL) == NULL);
+        return;
+    }
+    const char *pl, *sl;
+    const web_gnss_veh_t *v = web_gnss_vehicle(0, 5, 5, T, &pl, &sl);
+    WT_ASSERT(v != NULL);
+    if (!v) return;
+    WT_ASSERT(!strcmp(v->svn, "G050"));
+    WT_EQ(v->satcat, 35752);
+    WT_ASSERT(!strcmp(v->cospar, "2009-043A"));
+    WT_ASSERT(!strcmp(v->name, "NAVSTAR 64"));
+    WT_ASSERT(!strcmp(v->block, "GPS-IIR-M"));
+    WT_ASSERT(!strcmp(v->launched, "2009-08-17"));
+    WT_ASSERT(!strcmp(sl, "E3A"));
+    /* 1995-01-01: G05 was G035. */
+    v = web_gnss_vehicle(0, 5, 5, 788918400LL, NULL, NULL);
+    WT_ASSERT(v != NULL && !strcmp(v->svn, "G035"));
+    v = web_gnss_vehicle(6, 9, 73, T, NULL, NULL);
+    WT_ASSERT(v != NULL && !strcmp(v->name, "COSMOS 2501") && v->satcat == 40315);
+    v = web_gnss_vehicle(5, 2, 194, T, NULL, NULL);
+    WT_ASSERT(v != NULL && !strcmp(v->name, "MICHIBIKI-2"));
+    WT_ASSERT(web_gnss_vehicle(1, 131, 131, T, NULL, NULL) == NULL);   /* SBAS: not in IGS */
+    WT_ASSERT(!strcmp(web_gnssmeta_release, "2441"));
+    WT_EQ(web_gnss_vehs_n, 295);
+    /* Through the route: the live row carries it. */
+    fresh();
+    seed();
+    web_health_t H;
+    memset(&H, 0, sizeof(H));
+    H.gnss = &G;
+    H.wall_s = T;
+    WT_EQ(route(&H, "/api/gnss", ""), 200);
+    WT_HAS(body_of(g_out), "\"id\":\"G05\",\"veh\":{\"svn\":\"G050\",\"norad\":35752,"
+                           "\"cospar\":\"2009-043A\",\"name\":\"NAVSTAR 64\",\"block\":\"GPS-IIR-M\","
+                           "\"launched\":\"2009-08-17\",\"plane\":\"5\",\"slot\":\"E3A\"}}");
+}
+
+/* web/data/gnss/ is the file SOURCE.md hashes, byte for byte. Seen red
+ * with one hex digit of the hash in SOURCE.md changed. */
+static void test_gnss_meta_source(void) {
+    if (!strcmp(WEB_GNSS_EXPECT, "none")) return;
+    FILE *f = fopen("web/data/gnss/igs_satellite_metadata.snx", "rb");
+    WT_ASSERT(f != NULL);
+    if (!f) return;
+    static unsigned char buf[1 << 20];
+    size_t n = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+    uint8_t h[32];
+    web_sha256(buf, n, h);
+    char hex[65];
+    for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", h[i]);
+    FILE *m = fopen("web/data/gnss/SOURCE.md", "rb");
+    WT_ASSERT(m != NULL);
+    if (!m) return;
+    static char md[1 << 14];
+    size_t mn = fread(md, 1, sizeof(md) - 1, m);
+    md[mn] = '\0';
+    fclose(m);
+    if (!strstr(md, hex)) fprintf(stderr, "    igs_satellite_metadata.snx sha256 %s not in SOURCE.md\n", hex);
+    WT_ASSERT(strstr(md, hex) != NULL);
+}
+
 void run_gnss_tests(void) {
+    WT_RUN(test_gnss_ident);
+    WT_RUN(test_gnss_meta_source);
     WT_RUN(test_gnss_tab_label);
     WT_RUN(test_gnss_ingest_and_route);
     WT_RUN(test_gnss_ranges_and_refusals);

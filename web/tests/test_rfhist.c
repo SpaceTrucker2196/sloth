@@ -64,6 +64,9 @@ static void test_rfhist_page(void) {
     WT_HAS(p, "    getJSON(\"/api/adsb/seen?days=\" + encodeURIComponent(seenDays()) + \"&limit=\" + SEEN_PAGE +\n"
               "            \"&offset=\" + off + (q ? \"&q=\" + encodeURIComponent(q) : \"\")).then(function (j) {");
     WT_HAS(p, "    getJSON(\"/api/adsb/aircraft?hex=\" + encodeURIComponent(hex) + \"&days=\" + encodeURIComponent(seenDays())).then(function (j) {");
+    WT_HAS(p, "    getJSON(\"/api/gnss/tracks?hours=\" + encodeURIComponent(trailHours())).then(function (j) {");
+    WT_HAS(p, "<select id=\"gnss-trail-hours\">");
+    WT_HAS(p, "      g.fillText(s.id || (s.gnss.charAt(0) + (num(s.svid) ? s.svid : s.prn)), x, y - 9);");
     WT_HAS(p, "    if (q && !/^~?[0-9A-Za-z]{1,8}$/.test(q)) { set(\"adsb-seen-count\", \"search: letters and digits only\"); return; }");
 }
 
@@ -125,6 +128,39 @@ static void exec_db(const char *sql) {
     WT_EQ(sdb_exec(g_db, sql), 0);
 }
 
+static void seed_gnss(void);
+
+/* The sky trails: every satellite's (el, az) over the window, grouped
+ * by satellite and oldest first, one point a bucket (the bucket's
+ * newest record), the 3-day-old PRN 9 outside 6 h. Seen red with the
+ * GROUP BY's bucket term dropped (PRN 5 collapsed to one point). */
+static void test_gnss_tracks(void) {
+    db_up(db_schema_version());
+    seed_gnss();
+    /* A second record inside PRN 5's newest bucket (675 s at 6 h): the
+     * bucket shows the newer one. */
+    char sql[256];
+    snprintf(sql, sizeof(sql), "INSERT INTO gnss_sightings VALUES (%lld,0,5,5,52,131,31.0,0,1);",
+             T - 590);
+    exec_db(sql);
+    WT_EQ(route(&H, "/api/gnss/tracks", ""), 200);
+    const char *b = body_of(g_out);
+    char want[512];
+    snprintf(want, sizeof(want), "\"hours\":6,\"bucket_s\":675,\"have\":true,\"tracks\":["
+             "{\"gnssid\":0,\"prn\":5,\"id\":\"G05\",\"pts\":[[%lld,40,120],[%lld,45,125],[%lld,52,131]]},"
+             "{\"gnssid\":6,\"prn\":73,\"id\":\"R09\",\"pts\":[[%lld,10,300]]}],"
+             "\"total\":2,\"points\":4,\"cut\":false}", T - 3600, T - 1800, T - 590, T - 300);
+    WT_HAS(b, want);
+    WT_LACKS(b, "\"prn\":9,");
+    WT_EQ(route(&H, "/api/gnss/tracks", "hours=24"), 200);
+    WT_HAS(body_of(g_out), "\"bucket_s\":2700,");
+    WT_EQ(route(&H, "/api/gnss/tracks", "hours=25"), 400);
+    WT_HAS(body_of(g_out), "bad_hours");
+    WT_EQ(route(&H, "/api/gnss/tracks", "scope=local"), 200);
+    WT_HAS(body_of(g_out), "\"total\":2,");
+    db_down();
+}
+
 /* gnss_sightings rows: PRN 5 three records (two used), PRN 73 one with
  * no C/N0, PRN 9 three days old. */
 static void seed_gnss(void) {
@@ -148,11 +184,12 @@ static void test_gnss_seen_and_sat(void) {
     const char *b = body_of(g_out);
     WT_HAS(b, "\"days\":1,");
     WT_HAS(b, "\"have\":true,\"sats\":[{\"gnss\":\"GLONASS\",\"gnssid\":6,\"prn\":73,\"svid\":9,");
-    WT_HAS(b, "\"records\":1,\"used_pct\":0,\"cn0_max\":null,\"cn0_mean\":null,\"el_max\":10}");
+    WT_HAS(b, "\"records\":1,\"used_pct\":0,\"cn0_max\":null,\"cn0_mean\":null,\"el_max\":10,"
+              "\"id\":\"R09\",\"veh\":");
     char want[512];
     snprintf(want, sizeof(want), "{\"gnss\":\"GPS\",\"gnssid\":0,\"prn\":5,\"svid\":5,"
              "\"first_seen\":%lld,\"last_seen\":%lld,\"records\":3,\"used_pct\":67,"
-             "\"cn0_max\":47.0,\"cn0_mean\":39.3,\"el_max\":50}", T - 3600, T - 600);
+             "\"cn0_max\":47.0,\"cn0_mean\":39.3,\"el_max\":50,\"id\":\"G05\",\"veh\":", T - 3600, T - 600);
     WT_HAS(b, want);
     WT_HAS(b, "\"total\":2,\"more\":false}");
     WT_LACKS(b, "\"prn\":9,");
@@ -274,6 +311,7 @@ void run_rfhist_tests(void) {
     WT_RUN(test_rfhist_page);
     WT_RUN(test_rfhist_no_db);
     WT_RUN(test_gnss_seen_and_sat);
+    WT_RUN(test_gnss_tracks);
     WT_RUN(test_adsb_seen_and_aircraft);
     WT_RUN(test_rfhist_older_file);
 }

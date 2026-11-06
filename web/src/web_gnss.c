@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "web_gnssmeta.h"
 #include "web_series.h"
 
 /* ── lifecycle ──────────────────────────────────────────────────────── */
@@ -339,6 +340,7 @@ int web_gnss_route(web_gnss_t *g, const char *query, long long now_s,
     web_jw_raw(&w, "{\"now\":"); web_jw_int(&w, now_s);
     web_jw_raw(&w, "," GNSS_SCOPE_NOTE);
     web_jw_raw(&w, ",\"src\":"); web_jw_str(&w, g->src);
+    web_jw_raw(&w, ",\"meta\":"); web_jw_str(&w, web_gnssmeta_release);
     web_jw_raw(&w, ",\"records\":"); web_jw_int(&w, (long long)g->records);
     web_jw_raw(&w, ",\"evictions\":"); web_jw_int(&w, (long long)g->evictions);
     web_jw_raw(&w, ",\"aged\":"); web_jw_int(&w, (long long)g->aged);
@@ -413,7 +415,11 @@ int web_gnss_route(web_gnss_t *g, const char *query, long long now_s,
             web_jw_raw(&w, ","); jw_num(&w, 1, s->pts_cn0[at], 1);
             web_jw_raw(&w, "]");
         }
-        web_jw_raw(&w, "]}");
+        web_jw_raw(&w, "]");
+        /* Which satellite this is: the RINEX id and, at the row's time,
+         * the vehicle (web_gnssmeta.h). */
+        web_gnss_ident_json(&w, s->gnssid, s->svid, s->prn, s->ts);
+        web_jw_raw(&w, "}");
     }
     web_jw_raw(&w, "]}");
     pthread_mutex_unlock(&g->mu);

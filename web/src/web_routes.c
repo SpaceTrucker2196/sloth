@@ -683,7 +683,7 @@ static int route_m4(const web_req_t *rq, const web_health_t *h, int which,
 
 enum { M5_CHANNELS, M5_DEAUTH, M5_APS, M5_OVERVIEW, M5_HDEVICES, M5_HALERTS,
        M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW, M6_FLOWS, M6_GRAPH, M5_WLOCAL,
-       M5_CHAIN, RF_GNSS_SEEN, RF_GNSS_SAT, RF_ADSB_SEEN, RF_ADSB_AC };
+       M5_CHAIN, RF_GNSS_SEEN, RF_GNSS_SAT, RF_ADSB_SEEN, RF_ADSB_AC, RF_GNSS_TRACKS };
 
 /* The WiFi and History routes (M5, web_wifi.h, web_history.h) and the
  * Flows routes (M6, web_flows.h): the same shape as route_m4(). */
@@ -705,7 +705,7 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         web_sessions_new_route, web_flows_route, web_flows_graph_route,
         web_wifi_local_route, web_wifi_chain_route,
         web_gnss_seen_route, web_gnss_sat_route, web_adsb_seen_route,
-        web_adsb_aircraft_route,
+        web_adsb_aircraft_route, web_gnss_tracks_route,
     };
     /* A view a capture scope holds nothing of (web_scope.h): the WiFi
      * view's channels, deauths and APs are the monitor radio's, its card
@@ -1388,6 +1388,7 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             /* GNSS and ADS-B history (web_rfhist.h): sloth.db's. */
             { "/api/gnss/seen", RF_GNSS_SEEN },
             { "/api/gnss/sat", RF_GNSS_SAT },
+            { "/api/gnss/tracks", RF_GNSS_TRACKS },
             { "/api/adsb/seen", RF_ADSB_SEEN },
             { "/api/adsb/aircraft", RF_ADSB_AC },
             { "/api/wifi/aps", M5_APS },

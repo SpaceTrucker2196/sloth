@@ -695,6 +695,15 @@ typedef int (*web_sdb_gpt_fn)(void *ctx, const web_sdb_gpt_t *p);
 int  web_sdb_gnss_sat(web_sdb_conn_t *c, int gnssid, int prn, long long from,
                       int max, web_sdb_gpt_fn fn, void *ctx);
 
+/* The sky trails: each satellite's (el, az) over the window, one per
+ * bucket_s (the bucket's newest record: SQLite takes a bare column from
+ * the max() row), grouped by satellite and oldest first within one. At
+ * most max rows. Rows, or -1. */
+typedef struct { int gnssid, prn, svid; long long ts; int el, az; } web_sdb_gtrk_t;
+typedef int (*web_sdb_gtrk_fn)(void *ctx, const web_sdb_gtrk_t *t);
+int  web_sdb_gnss_tracks(web_sdb_conn_t *c, long long from, long long bucket_s, int max,
+                         web_sdb_gtrk_fn fn, void *ctx);
+
 typedef struct {
     char      hex[8];
     int       non_icao, emergency_seen, pos_seen;

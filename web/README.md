@@ -500,6 +500,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/gnss?limit=` | `200` JSON, the GNSS tab ([GNSS](#gnss)): the `sensor_health` gnss block, the newest `gnss_fix` and `gnss_sky`, every satellite row with its last 16 `(ts, C/N0)` points sorted by C/N0, and the panel's counts; `scope_note` says the receiver is the host's own, so the answer is the same under every scope; `400` for an unknown parameter or a `limit` outside 1..64; `503` with no panel |
    | `GET /api/adsb?limit=` | `200` JSON, the ADS-B tab ([ADS-B](#ads-b)): the `sensor_health` adsb block, every aircraft row with its kept track (its last 32 positions, `[ts, lat, lon, alt]`), an emergency first, then live before gone, then the most recently heard, and the panel's counts (`total`, `live`, `with_pos`, `emergency`); Monitor's and Hybrid's, Local answers `out_of_scope` with the query still checked; `400` for an unknown parameter or a `limit` outside 1..512; `503` with no panel |
    | `GET /api/gnss/seen?days=&limit=` | `200` JSON from sloth.db's `gnss_sightings` (needs `--sloth-db`): one row per satellite seen in the last `days` (1..400, default 1), most recently seen first, at most `limit` (1..160): first and last seen, records, `used_pct`, `cn0_max`, `cn0_mean`, `el_max`; `"have":false` from a file older than v10; every scope's; `503` `no_sloth_db` without one |
+   | `GET /api/gnss/tracks?hours=` | `200` JSON from `gnss_sightings`: every satellite's `[ts, el, az]` over the last `hours` (1..24, default 6), at most 32 a satellite (the newest record of each `bucket_s`) and 2400 in all (`cut`), each track with its RINEX `id`; the sky plot's trails; every scope's |
    | `GET /api/gnss/sat?gnssid=&prn=&days=` | `200` JSON, one satellite's `gnss_sightings` over the window, oldest first, at most 400, as `[ts, el, az, cn0, used, health]`; `400` `bad_gnssid` / `bad_prn` / `bad_days` |
    | `GET /api/adsb/seen?days=&limit=&offset=&q=` | `200` JSON from sloth.db's `adsb_aircraft`: the aircraft last seen in the last `days` (default 7), newest first, `limit` (1..100) from `offset`, `more` when there are others; `q` a hex or callsign prefix (letters and digits, a leading `~`; anything else `400` `bad_q`); `"have":false` from a file older than v12; Monitor's and Hybrid's (Local `out_of_scope`, the query checked) |
    | `GET /api/adsb/aircraft?hex=&days=` | `200` JSON, one aircraft's inventory row (`null` when not in the file) and its `adsb_sightings` over the window, oldest first, at most 400, as compact rows named in `cols`; `400` `bad_hex` for anything but sloth's six lower-case hex digits (optionally `~`) |
@@ -876,6 +877,16 @@ the line arrived — coarse (serial and gpsd latency, no PPS), enough to
 see a multi-second step and nothing finer; the page labels it so.
 Observation only: no row is a finding, and the detectors are a later
 slice.
+
+Every satellite row (live and seen) names the satellite: `id`, the
+RINEX identifier (`G05`, `R09`, `E11`, `C23`, `J02`, `I10`, `S31`), and
+`veh`, the vehicle on that PRN at the row's time from the IGS satellite
+metadata compiled in (`web/data/gnss/SOURCE.md`; `web/tools/gnssmeta_gen.c`
+makes `build/web/web_gnssmeta_table.c`): name, NORAD catalogue number,
+COSPAR designator, SVN, block, launch date, orbital plane and slot;
+`null` for SBAS and IMES, which the file does not hold. `/api/gnss`
+says the release in `meta`. With `--sloth-db` the sky plot draws each
+satellite's trail over a chosen window (`/api/gnss/tracks`).
 
 With `--sloth-db`, the tab's "satellites seen" table reads sloth.db's
 `gnss_sightings` (`/api/gnss/seen`): every satellite listed in the

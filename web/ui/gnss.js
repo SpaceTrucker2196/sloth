@@ -114,8 +114,11 @@
   // strongest first, untracked last).
   var T = null, rows = [];
   function val(k) { return function (s) { return num(s[k]) ? s[k] : null; }; }
+  function vname(s) { return s.veh ? s.veh.name : ""; }
   var COLS = [
+    { k: "id", label: "ID", w: 4, min: 3, type: "text", val: function (s) { return s.id || ""; } },
     { k: "gn", label: "GNSS", w: 9, min: 4, type: "text", val: function (s) { return s.gnss || ""; } },
+    { k: "nm", label: "SATELLITE", w: 14, min: 5, type: "text", val: vname },
     { k: "sv", label: "SV", w: 4, min: 2, num: true, type: "num", val: val("svid") },
     { k: "pr", label: "PRN", w: 5, min: 3, num: true, type: "num", val: val("prn") },
     { k: "el", label: "EL", w: 4, min: 2, num: true, type: "num", val: val("el") },
@@ -161,7 +164,9 @@
     var on = sel && sel.gnssid === s.gnssid && sel.prn === s.prn;
     var cls = s.health === 2 ? "d-dim" : s.used ? "d-bright" : "d-normal";
     var r = el("div", "gnssrow dt-row " + cls + (on ? " on" : ""));
+    r.appendChild(cell("c-id", s.id || "-"));
     r.appendChild(cell("c-gn", s.gnss));
+    r.appendChild(cell("c-nm", vname(s) || "-"));
     r.appendChild(cell("c-sv n", num(s.svid) ? s.svid : "-"));
     r.appendChild(cell("c-pr n", s.prn));
     r.appendChild(cell("c-el n", num(s.el) ? s.el : "-"));
@@ -181,7 +186,11 @@
     r.appendChild(tc);
     r.appendChild(cell("c-ag d-dim", age(s.ts, now)));
     r.tabIndex = 0;
-    function pick() { sel = { gnssid: s.gnssid, prn: s.prn }; detail(s, now); drawRows(); hist(s.gnssid, s.prn); }
+    function pick() {
+      sel = { gnssid: s.gnssid, prn: s.prn };
+      detail(s, now); drawRows(); sky(last);
+      hist(s.gnssid, s.prn, (s.id || s.gnss + " PRN " + s.prn) + (s.veh ? " " + s.veh.name : ""));
+    }
     r.addEventListener("click", pick);
     r.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
     r._trail = [c, s.points];
@@ -208,9 +217,17 @@
   function detail(s, now) {
     var box = $("gnss-detail");
     box.hidden = false;
-    set("gnss-detail-name", s.gnss + " PRN " + s.prn);
+    var v = s.veh;
+    set("gnss-detail-name", (s.id || s.gnss + " PRN " + s.prn) + (v ? " " + v.name : ""));
     var kv = clear($("gnss-detail-kv"));
-    [["constellation", s.gnss + " (gnssid " + s.gnssid + ")"],
+    [["satellite ID", s.id ? s.id + " (RINEX: system letter and number)" : "-"],
+     ["vehicle", v ? v.name + (v.block ? " (" + v.block + ")" : "") : (s.gnss === "SBAS" ? "- (SBAS is not in the IGS metadata)" : "- (not in the IGS metadata)")],
+     ["NORAD catalog #", v && v.norad ? String(v.norad) : null],
+     ["COSPAR ID", v ? v.cospar : null],
+     ["SVN", v ? v.svn : null],
+     ["launched", v && v.launched ? v.launched : null],
+     ["orbital plane / slot", v && v.plane ? v.plane + " / " + v.slot : null],
+     ["constellation", s.gnss + " (gnssid " + s.gnssid + ")"],
      ["svid", num(s.svid) ? String(s.svid) : "-"],
      ["PRN", String(s.prn)],
      ["signal id", num(s.sigid) ? String(s.sigid) : null],
@@ -228,7 +245,7 @@
       kv.appendChild(el("dd", "", p[1]));
     });
   }
-  function closeDetail() { $("gnss-detail").hidden = true; sel = null; drawRows(); }
+  function closeDetail() { $("gnss-detail").hidden = true; sel = null; drawRows(); sky(last); }
 
   // ── the sky: a polar plot, north up, elevation inward ────────────
   function sky(j) {
@@ -253,6 +270,31 @@
     });
     g.beginPath(); g.moveTo(cx, cy - R); g.lineTo(cx, cy + R); g.moveTo(cx - R, cy); g.lineTo(cx + R, cy); g.stroke();
     g.fillText("N", cx, 10); g.fillText("S", cx, S - 2); g.fillText("E", S - 6, cy + 4); g.fillText("W", 6, cy + 4);
+    // The trails (sloth.db's gnss_sightings, /api/gnss/tracks): each
+    // satellite's path over the window, fading toward its oldest point,
+    // the selected one bold. A point under the horizon is drawn on it.
+    function P(el, az) {
+      var r = R * (90 - Math.max(0, el)) / 90, a = (az - 90) * Math.PI / 180;
+      return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+    }
+    var tcol = cssVar("--tui-dim", "#888");
+    (trails && trails.tracks || []).forEach(function (t) {
+      var pts = t.pts || [];
+      if (pts.length < 2) return;
+      var picked = sel && sel.gnssid === t.gnssid && sel.prn === t.prn;
+      g.strokeStyle = picked ? cssVar("--signal", tcol) : tcol;
+      g.lineWidth = picked ? 2 : 1;
+      for (var i = 1; i < pts.length; i++) {
+        // A gap over two buckets is the satellite setting and rising
+        // again: no line across the sky.
+        if (pts[i][0] - pts[i - 1][0] > 2 * trails.bucket_s + 60) continue;
+        var a0 = P(pts[i - 1][1], pts[i - 1][2]), a1 = P(pts[i][1], pts[i][2]);
+        g.globalAlpha = 0.15 + 0.6 * i / pts.length;
+        g.beginPath(); g.moveTo(a0[0], a0[1]); g.lineTo(a1[0], a1[1]); g.stroke();
+      }
+      g.globalAlpha = 1;
+    });
+    g.lineWidth = 1;
     (j.sats || []).forEach(function (s) {
       if (!num(s.el) || !num(s.az)) return;
       var r = R * (90 - s.el) / 90, a = (s.az - 90) * Math.PI / 180;
@@ -262,7 +304,7 @@
       g.beginPath(); g.arc(x, y, s.used ? 6 : 4, 0, Math.PI * 2); g.fill();
       if (s.health === 2) { g.strokeStyle = cssVar("--heat-3", "#f00"); g.beginPath(); g.arc(x, y, 8, 0, Math.PI * 2); g.stroke(); }
       g.fillStyle = cssVar("--ink", "currentColor");
-      g.fillText(s.gnss.charAt(0) + (num(s.svid) ? s.svid : s.prn), x, y - 9);
+      g.fillText(s.id || (s.gnss.charAt(0) + (num(s.svid) ? s.svid : s.prn)), x, y - 9);
     });
   }
 
@@ -359,7 +401,10 @@
   }
   var ST = null, seenRows = [], seenLast = null;
   var SEEN_COLS = [
+    { k: "id", label: "ID", w: 4, min: 3, type: "text", val: function (g) { return g.id || ""; } },
     { k: "gn", label: "GNSS", w: 9, min: 4, type: "text", val: function (g) { return g.gnss; } },
+    { k: "nm", label: "SATELLITE", w: 14, min: 5, type: "text", val: vname },
+    { k: "nr", label: "NORAD", w: 6, min: 4, num: true, type: "num", val: function (g) { return g.veh ? g.veh.norad : null; } },
     { k: "pr", label: "PRN", w: 5, min: 3, num: true, type: "num", val: val("prn") },
     { k: "sv", label: "SV", w: 4, min: 2, num: true, type: "num", val: val("svid") },
     { k: "fs", label: "FIRST", w: 11, min: 5, type: "time", val: val("first_seen") },
@@ -387,7 +432,10 @@
     ordered.forEach(function (g) {
       var on = histSel && histSel.gnssid === g.gnssid && histSel.prn === g.prn;
       var r = el("div", "histrow dt-row d-normal" + (on ? " on" : ""));
+      r.appendChild(cell("c-id", g.id || "-"));
       r.appendChild(cell("c-gn", g.gnss));
+      r.appendChild(cell("c-nm", vname(g) || "-"));
+      r.appendChild(cell("c-nr n", g.veh ? g.veh.norad : "-"));
       r.appendChild(cell("c-pr n", g.prn));
       r.appendChild(cell("c-sv n", num(g.svid) ? g.svid : "-"));
       r.appendChild(cell("c-fs d-dim", when(g.first_seen)));
@@ -398,7 +446,7 @@
       r.appendChild(cell("c-cm n " + (num(g.cn0_mean) ? heatClass(g.cn0_mean / SPAN_DBHZ) : "d-dim"), fx(g.cn0_mean, 1)));
       r.appendChild(cell("c-el n", num(g.el_max) ? g.el_max : "-"));
       r.tabIndex = 0;
-      function pick() { hist(g.gnssid, g.prn); }
+      function pick() { hist(g.gnssid, g.prn, (g.id || g.gnss + " PRN " + g.prn) + (g.veh ? " " + g.veh.name : "")); }
       r.addEventListener("click", pick);
       r.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
       body.appendChild(r);
@@ -418,15 +466,15 @@
       set("gnss-seen-count", "history unavailable: " + (e && e.message ? e.message : "error") + " (needs --sloth-db)");
     });
   }
-  function hist(gnssid, prn) {
-    histSel = { gnssid: gnssid, prn: prn };
+  function hist(gnssid, prn, label) {
+    histSel = { gnssid: gnssid, prn: prn, label: label };
     var my = ++histGen;
     $("gnss-hist").hidden = false;
     set("gnss-hist-note", "loading");
     drawSeen();
     getJSON("/api/gnss/sat?gnssid=" + gnssid + "&prn=" + prn + "&days=" + encodeURIComponent(seenDays())).then(function (j) {
       if (my !== histGen) return;
-      set("gnss-hist-name", j.gnss + " PRN " + j.prn + " over " + (j.days === 1 ? "24 h" : j.days + " days"));
+      set("gnss-hist-name", (label || j.gnss + " PRN " + j.prn) + " over " + (j.days === 1 ? "24 h" : j.days + " days"));
       histPlot(j.points || []);
     }).catch(function (e) {
       if (my !== histGen) return;
@@ -472,20 +520,43 @@
       ", " + used + " in the solution; larger dots were used. C/N0 over 0..50 dB-Hz, elevation 0..90 deg.");
   }
 
+  // The sky trails, once a minute: a satellite moves about half a
+  // degree a minute across the sky, and sloth records it per band.
+  var trails = null, trailAt = 0, trailGen = 0;
+  function trailHours() { var s = $("gnss-trail-hours"); return s ? s.value : "6"; }
+  function loadTrails() {
+    var my = ++trailGen;
+    trailAt = Date.now();
+    getJSON("/api/gnss/tracks?hours=" + encodeURIComponent(trailHours())).then(function (j) {
+      if (my !== trailGen) return;
+      trails = j;
+      set("gnss-trail-note", j.have === false ? "no sloth.db history yet" :
+        j.total + " trails over " + j.hours + " h" + (j.cut ? " (cut at the point cap)" : ""));
+      if (last) sky(last);
+    }).catch(function () {
+      if (my !== trailGen) return;
+      trails = null;
+      set("gnss-trail-note", "trails need --sloth-db");
+    });
+  }
   function show() {
     if (!$("v-gnss")) return;
     load();
     if (Date.now() - seenAt > SEEN_MS) loadSeen();
+    if (Date.now() - trailAt > SEEN_MS) loadTrails();
     if (!timer) timer = setInterval(function () {
       if (!visible()) return;
       load();
       if (Date.now() - seenAt > SEEN_MS) loadSeen();
+      if (Date.now() - trailAt > SEEN_MS) loadTrails();
     }, POLL_MS);
   }
+  var trailSel = $("gnss-trail-hours");
+  if (trailSel) trailSel.addEventListener("change", loadTrails);
   var daysSel = $("gnss-seen-days");
   if (daysSel) daysSel.addEventListener("change", function () {
     loadSeen();
-    if (histSel) hist(histSel.gnssid, histSel.prn);
+    if (histSel) hist(histSel.gnssid, histSel.prn, histSel.label);
   });
   var histClose = $("gnss-hist-close");
   if (histClose) histClose.addEventListener("click", function () { $("gnss-hist").hidden = true; histSel = null; drawSeen(); });
