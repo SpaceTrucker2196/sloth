@@ -44,7 +44,6 @@ SLOTH_STATIC_ASSERT(QUEUE_EVICT_EVIDENCE_IDS <= ALERT_EVIDENCE_IDS,
 static alert_sev_t sev_demote_one(alert_sev_t sev) {
     return sev > ALERT_SEV_LOW ? (alert_sev_t)(sev - 1) : ALERT_SEV_LOW;
 }
-#define SELF_TAG " - self (the sensor's own radio)"
 
 /* Deauth/disassoc flood (#88). Fires per (BSSID, victim) impact
  * aggregate while its sliding window is flooded: at least
@@ -391,7 +390,7 @@ void rule_blockack_attack(const sloth_state_t *s, time_t now) {
              tx, rx, b.tid, b.last_jump, b.suspicious_bars, b.total_bars,
              degraded ? " (channel retrying hard)" : "",
              mine ? " - YOUR network" : "",
-             self ? SELF_TAG : "");
+             self ? " - self (the sensor's own radio)" : "");
 
     alert_sev_t sev = mine ? ALERT_SEV_CRIT : ALERT_SEV_WARN;
     if (self) sev = sev_demote_one(sev);
@@ -1056,7 +1055,7 @@ void rule_recurring_transit(const sloth_state_t *s, time_t now) {
         snprintf(detail, sizeof(detail),
                  "%s passed %d times in %ldm (closest %ddBm) - circling%s",
                  mac_buf, passes, span / 60, (int)d->best_rssi,
-                 self ? SELF_TAG : "");
+                 self ? " - self (the sensor's own radio)" : "");
         fire(ALERT_TYPE_RECURRING_TRANSIT,
              self ? sev_demote_one(ALERT_SEV_WARN) : ALERT_SEV_WARN,
              "RECURRING_TRANSIT", detail, key, NULL, 0, now);
@@ -1196,7 +1195,7 @@ void rule_pm_forge(const sloth_state_t *s, time_t now) {
                  "Framing Frames queue manipulation, CVE-2022-47522%s%s",
                  sta, bss, tbl[i].contradiction_count,
                  mine ? " - YOUR network" : "",
-                 self ? SELF_TAG : "");
+                 self ? " - self (the sensor's own radio)" : "");
         /* Cites the frame pairs that formed the contradiction (#92):
          * a data frame has no flow sloth can export on for this — the
          * queue manipulation is the 802.11 header — so the evidence

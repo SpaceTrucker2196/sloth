@@ -1,7 +1,7 @@
 ---
 type: CSA_ABUSE
 technique: T1557
-rule_file: src/alerts/rules_wifi_mgmt.c:569 rule_csa_abuse()
+rule_file: src/alerts/rules_wifi_mgmt.c:568 rule_csa_abuse()
 count_semantics: per tick - one increment per alerts_update() pass (default poll 250 ms, src/poll.c:296, include/sloth.h:28) in which this BSSID has a CSA event inside the 60 s window and either its newest in-window event is a forged-TA action frame or targets a twin-hosting channel, or its in-window events name >= 4 distinct channels; fire() bumps evaluations (aliased to count) on every re-assertion of an open key (src/alerts/engine.c:478-479). Not per announcement and not per frame.
 severity_assessment: too high in one branch - WARN for a bare storm and CRIT for a forged TA or a twin-hosting target are sound, but to_downgrade (rules_wifi_mgmt.c:595) promotes any firing to CRIT whenever any AP on the target channel merely advertises a weaker lane, which is a property of the neighbourhood, not of this announcement.
 false_positive_risk: medium - DFS radar moves and auto-channel changes produce legitimate CSAs; the forged-TA test is clean, the storm test (4 distinct targets in 60 s) is reachable by a flapping AP, and the twin-target branch inherits the evil-twin detector's own false positives.

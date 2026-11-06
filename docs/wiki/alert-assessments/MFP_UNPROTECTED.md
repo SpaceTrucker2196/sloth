@@ -1,7 +1,7 @@
 ---
 type: MFP_UNPROTECTED
 technique: T1562.004
-rule_file: src/alerts/rules_wifi_mgmt.c:454 rule_mfp_unprotected()
+rule_file: src/alerts/rules_wifi_mgmt.c:453 rule_mfp_unprotected()
 count_semantics: per evaluation tick, per BSSID key, for as long as the violation table holds the offender. fire() (not fire_ev()) re-asserts the key every poll (>= 4/s; POLL_MS 250 is the longest wait) while action_mfp_violations() still returns a worst offender with count > 0; one increment is one poll, NOT one unprotected frame. The detail's "N unprotected robust action frame(s)" is the offender's cumulative frame tally in g_mfpv[], which is monotonic - it is never cleared on the live path - so once a single violating frame is seen the key fires every tick thereafter and both N and the alert count only grow
 severity_assessment: agree - CRIT with no ownership split is right: an unprotected robust Action frame on a BSS that advertises MFP required is either a non-conforming stack or an injection (CVE-2019-16275), and the rule states it cannot tell which rather than overclaiming
 false_positive_risk: low-to-medium - the three-state MFP check (required=2, not capable=1 or off=0, not -1 "no beacon on file") removes the obvious misfires, so the residual is a genuinely non-conforming client/AP stack emitting an unprotected robust Action frame on a required BSS, which is a real finding even when it is not an attack

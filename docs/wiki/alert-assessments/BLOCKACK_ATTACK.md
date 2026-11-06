@@ -1,7 +1,7 @@
 ---
 type: BLOCKACK_ATTACK
 technique: T1499.004
-rule_file: src/alerts/rules_wifi_mgmt.c:365 rule_blockack_attack()
+rule_file: src/alerts/rules_wifi_mgmt.c:364 rule_blockack_attack()
 count_semantics: per tick - one increment per alerts_update() pass (default poll 250 ms) while the worst (receiver, transmitter, TID) triple - any BAR from it inside the trailing 300 s, and a cumulative suspicious_bars > 0 that never decays - is still returned by bar_worst_offender(); fire() bumps evaluations/count on each re-assertion (engine.c:478-479). Not per BAR. The suspicious/total BAR counts and the SSN jump size are carried in the detail, not in count.
 severity_assessment: agree - WARN for a Bl0ck signature at another network, CRIT at a --my-bssid network. The rule correctly makes the retry-burst corroboration optional rather than a gate, and the modulo-4096 arithmetic is the thing that keeps it honest about wraps - though not about observation gaps (see false_positive_risk).
 false_positive_risk: medium, high on a hopping sensor - the modulo-4096 arithmetic removes the sequence-wrap false positive and the first BAR per triple is excluded, but the jump is measured between consecutive BARs *sloth saw*, not consecutive BARs sent: any observation gap of more than 128 of the station's frames (channel hop, range fade, lost frames) between two legitimate BARs reads as a suspicious jump, and once counted it is never decayed, so the triple keeps re-qualifying while any BAR traffic continues.

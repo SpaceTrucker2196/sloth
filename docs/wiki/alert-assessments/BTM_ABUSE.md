@@ -1,7 +1,7 @@
 ---
 type: BTM_ABUSE
 technique: T1498
-rule_file: src/alerts/rules_wifi_mgmt.c:211 rule_btm_abuse()
+rule_file: src/alerts/rules_wifi_mgmt.c:210 rule_btm_abuse()
 count_semantics: per evaluation tick, per (BSSID, STA) key, while the forcing is standing. fire_ev() bumps count every poll in which the busiest pair still has >= threshold Disassociation-Imminent BTM Requests in the window; one increment is one poll (~4/s), NOT one BTM frame. The detail's "4/7 req 60s" is per-frame (imminent/total in window); the alert's own count is per-tick
 severity_assessment: agree - WARN for a forced roam off a network you do not own, CRIT when a candidate is a known twin, or on --my-bssid, or when the STA is rostered. The escalation ties severity to "this forcing has an identified landing site or hits my fleet", which is the right discriminator
 false_positive_risk: medium - aggressive band-steering controllers set Disassociation Imminent and can legitimately steer one client repeatedly; the rule mitigates with per-pair keying and the imminent-bit gate, but a stubborn-client steering loop can still reach 4/60s

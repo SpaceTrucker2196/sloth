@@ -1,7 +1,7 @@
 ---
 type: RTS_FLOOD
 technique: T1498
-rule_file: src/alerts/rules_wifi_mgmt.c:473 rule_rts_flood()
+rule_file: src/alerts/rules_wifi_mgmt.c:472 rule_rts_flood()
 count_semantics: per tick - one increment per alerts_update() pass (default poll 250 ms) in which the busiest RTS source - last heard (by any RTS/BAR/BA/PS-Poll frame) inside the trailing 60 s - still passes the rate and sustain tests, both computed over the source slot's whole lifetime, not the window; fire() bumps evaluations/count on each re-assertion (engine.c:478-479). Not per RTS frame. The observed RTS count, duration and per-second rate are carried in the detail, not in count.
 severity_assessment: agree - WARN for a high sustained RTS rate from another source, CRIT when the NAV Duration exceeds the legal maximum (32767 us, no conforming radio emits one) or the source is --my-bssid. The NAV>legal escalation is the right discriminator in principle, but as implemented `max_nav` also absorbs PS-Poll Duration/ID values (AID | 0xC000), so a qualifying source that is a power-saving client reaches CRIT benignly.
 false_positive_risk: low - the rate (>= 500 RTS/s) is set well above saturation and the sustain requirement (>= 5 s) excludes retry bursts; a hidden-node pair on a congested channel is the only realistic benign trigger and the docs name it.
