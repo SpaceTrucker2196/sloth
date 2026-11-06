@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "sdb_gen.h"
@@ -33,6 +34,7 @@
 #include "web_jsonl.h"
 #include "web_live.h"
 #include "web_routes.h"
+#include "web_slothdb.h"
 #include "web_scope.h"
 #include "wtest.h"
 #include "wt_tmp.h"
@@ -419,6 +421,10 @@ static void test_aprshist_no_db(void) {
     WT_HAS(body_of(g_out), "bad_call");
     WT_EQ(route(&HH, "/api/aprs/station", "call=n0test"), 400);
     WT_EQ(route(&HH, "/api/aprs/station", "call=N0TEST&sort=x"), 400);
+    WT_EQ(route(&HH, "/api/aprs/tracks", ""), 503);
+    WT_HAS(body_of(g_out), "no_sloth_db");
+    WT_EQ(route(&HH, "/api/aprs/tracks", "hours=0"), 400);
+    WT_HAS(body_of(g_out), "bad_hours");
 }
 
 #ifdef WITH_SQLITE
@@ -583,6 +589,167 @@ static void test_aprshist_budget(void) {
     db_down();
 }
 
+/* /api/aprs/tracks (the Radar, 2026-11-06): stations, and objects keyed
+ * by their own name with the station that reported them; last_seen the
+ * newest packet of any kind (a status-only packet advances it and its
+ * status is the entity's) while the position stays the newest that had
+ * one; moving from two distinct cells or a speed; a trail only when
+ * moving, bucketed to at most 48 points; the window; the refusals and
+ * Local. Seen red, each in web_sdb_aprs_tracks() unless named: with the
+ * status's `!t->status[0]` guard dropped (an older empty status won),
+ * with the speed test made `>= 0` (the fixed station at 0 kt moved),
+ * with rows without a position skipped before the entity is taken (the
+ * status-only packet no longer advanced last_seen: the mobile left the
+ * hour), and with route_m5()'s RF_APRS_TRK taken out of the Local list
+ * (Local served entities). */
+static void test_aprshist_tracks(void) {
+    db_up(db_schema_version());
+    char sql[8192];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO aprs_packets (last_seen,source,heard,dti,name,symbol,lat,lon,speed_kt,"
+        "course,alt_m,level,status,comment) VALUES"
+        /* N0TEST-9: a mobile, three positions, then a status-only packet. */
+        " (%lld,'N0TEST-9',NULL,'=','N0TEST-9','/>',10.20,-20.50,40.0,90.0,376.0,NULL,NULL,'leaving'),"
+        " (%lld,'N0TEST-9',NULL,'=','N0TEST-9','/>',10.21,-20.48,45.0,80.0,380.0,NULL,NULL,NULL),"
+        " (%lld,'N0TEST-9',NULL,'=','N0TEST-9','/>',10.22,-20.46,50.0,70.0,390.0,NULL,'',NULL),"
+        " (%lld,'N0TEST-9',NULL,'>','N0TEST-9',NULL,NULL,NULL,NULL,NULL,NULL,NULL,'At the pass',NULL),"
+        /* N0TEST-5: a fixed station, the same position twice, a later empty status. */
+        " (%lld,'N0TEST-5','N0TEST-5','!','N0TEST-5','/#',10.00000,-20.00000,NULL,NULL,NULL,50,'QRV 2m',NULL),"
+        " (%lld,'N0TEST-5','N0TEST-5','!','N0TEST-5','/#',10.00001,-20.00001,0.0,NULL,NULL,50,'','home'),"
+        /* An object N0TEST-5 reports, and an item N0CALL-1 does. */
+        " (%lld,'N0TEST-5','N0CALL-1',';','TESTOBJ','/r',11.0,-21.0,NULL,NULL,NULL,70,NULL,'object note'),"
+        " (%lld,'N0CALL-1','N0CALL-1',')','ITEM1','/j',12.0,-22.0,NULL,NULL,NULL,NULL,NULL,NULL),"
+        /* An object packet with an empty name is its source's. */
+        " (%lld,'N0CALL-1','N0CALL-1',';','',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'unnamed'),"
+        /* Two days old: outside every window. */
+        " (%lld,'N0OLD','N0OLD','!','N0OLD','/#',9.0,-19.0,NULL,NULL,NULL,NULL,NULL,NULL);",
+        TN - 7200, TN - 5400, TN - 3600, TN - 60,
+        TN - 9000, TN - 120, TN - 300, TN - 1000, TN - 30, TN - 2 * 86400LL);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    WT_EQ(route(&HH, "/api/aprs/tracks", ""), 200);
+    const char *b = body_of(g_out);
+    char want[2048];
+    snprintf(want, sizeof(want), "{\"now\":%lld,\"hours\":24,\"bucket_s\":1800,\"have\":true,"
+             "\"cols\":[\"key\",\"object\",\"via\",\"symbol\",\"last_seen\",\"lat\",\"lon\",\"alt_m\","
+             "\"speed_kt\",\"course\",\"pos_ts\",\"moving\",\"status\",\"comment\",\"pts\"],\"entities\":["
+             "[\"N0CALL-1\",0,\"\",\"\",%lld,null,null,null,null,null,null,0,\"\",\"unnamed\",[]],"
+             "[\"N0TEST-9\",0,\"\",\"/\\u003e\",%lld,10.22000,-20.46000,390,50.0,70,%lld,1,\"At the pass\","
+             "\"leaving\",[[%lld,10.20000,-20.50000],[%lld,10.21000,-20.48000],[%lld,10.22000,-20.46000]]],"
+             "[\"N0TEST-5\",0,\"\",\"/#\",%lld,10.00001,-20.00001,null,0.0,null,%lld,0,\"QRV 2m\",\"home\",[]],"
+             "[\"TESTOBJ\",1,\"N0TEST-5\",\"/r\",%lld,11.00000,-21.00000,null,null,null,%lld,0,\"\","
+             "\"object note\",[]],"
+             "[\"ITEM1\",1,\"N0CALL-1\",\"/j\",%lld,12.00000,-22.00000,",
+             TN, TN - 30, TN - 60, TN - 3600, TN - 7200, TN - 5400, TN - 3600,
+             TN - 120, TN - 120, TN - 300, TN - 300, TN - 1000);
+    WT_HAS(b, want);
+    WT_HAS(b, "\"total\":5,\"cut\":false}");
+    WT_LACKS(b, "N0OLD");
+    WT_LACKS(b, "[\"\",");
+    /* The last hour: the mobile (its status packet is the newest) stays
+     * with its older position; the object 1000 s old too; nothing
+     * heard only before the hour. */
+    WT_EQ(route(&HH, "/api/aprs/tracks", "hours=1"), 200);
+    b = body_of(g_out);
+    WT_HAS(b, "\"hours\":1,\"bucket_s\":75,");
+    snprintf(want, sizeof(want), "[\"N0TEST-9\",0,\"\",\"/\\u003e\",%lld,10.22000,-20.46000,", TN - 60);
+    WT_HAS(b, want);
+    WT_HAS(b, "\"total\":5,");
+    WT_EQ(route(&HH, "/api/aprs/tracks", "hours=0"), 400);
+    WT_HAS(body_of(g_out), "bad_hours");
+    WT_EQ(route(&HH, "/api/aprs/tracks", "hours=25"), 400);
+    WT_EQ(route(&HH, "/api/aprs/tracks", "days=1"), 400);
+    WT_HAS(body_of(g_out), "unknown_parameter");
+    WT_EQ(route(&HH, "/api/aprs/tracks", "scope=local"), 200);
+    WT_HAS(body_of(g_out), "\"out_of_scope\":true,\"reason\":\"APRS stations are the Dire Wolf decoder");
+    WT_LACKS(body_of(g_out), "N0TEST");
+    WT_EQ(route(&HH, "/api/aprs/tracks", "scope=local&hours=99"), 400);
+    WT_EQ(route(&HH, "/api/aprs/tracks", "scope=monitor"), 200);
+    WT_HAS(body_of(g_out), "\"total\":5,");
+    db_down();
+}
+
+/* A moving station's 24 h of packets, one a minute: its trail is the
+ * newest row of each 30 min bucket, at most 48, oldest first. Then the
+ * caps: 301 entities answer 300 and cut; 300 moving entities whose
+ * status and comment are 64 '<' (six bytes each escaped), each with a
+ * full trail, stop at the budget and say cut, inside the buffer. And
+ * the query's time on 86,400 packets (a 1200 bit/s channel's day) from
+ * 2,000 entities, inside the request budget. */
+static void test_aprshist_tracks_caps(void) {
+    db_up(db_schema_version());
+    WT_EQ(sdb_exec(g_db, "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 1439)"
+                         " INSERT INTO aprs_packets (last_seen,source,dti,name,lat,lon,speed_kt)"
+                         " SELECT 1792627200 - 60 * i, 'N0MOV-1', '=', 'N0MOV-1', 10.0 + i * 0.001,"
+                         " -20.0, 30.0 FROM n;"), 0);
+    WT_EQ(route(&HH, "/api/aprs/tracks", ""), 200);
+    const char *b = body_of(g_out);
+    const char *pts = strstr(b, ",1,\"\",\"\",[");
+    WT_ASSERT(pts != NULL);
+    if (pts) {
+        int np = 0;
+        for (const char *q = pts + 10; *q && !(q[0] == ']' && q[1] == ']' && q[2] == ']'); q++) if (*q == '[') np++;
+        WT_EQ(np, WEB_APRSHIST_TRK_POINTS);
+    }
+    WT_HAS(b, "[\"N0MOV-1\",0,\"\",\"\",");
+    char newest[64];
+    snprintf(newest, sizeof(newest), "[%lld,10.00000,-20.00000]]]],", TN);
+    WT_HAS(b, newest);
+    db_down();
+
+    db_up(db_schema_version());
+    WT_EQ(sdb_exec(g_db, "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 300)"
+                         " INSERT INTO aprs_packets (last_seen,source,dti,name,lat,lon)"
+                         " SELECT 1792627200 - i, 'N' || i, '!', 'N' || i, 10.0, -20.0 FROM n;"), 0);
+    WT_EQ(route(&HH, "/api/aprs/tracks", ""), 200);
+    WT_HAS(body_of(g_out), "\"total\":300,\"cut\":true}");
+    WT_HAS(body_of(g_out), "[\"N0\",0,");
+    WT_LACKS(body_of(g_out), "[\"N300\",");
+    db_down();
+
+    db_up(db_schema_version());
+    WT_EQ(sdb_exec(g_db, "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 14399)"
+                         " INSERT INTO aprs_packets (last_seen,source,dti,name,lat,lon,speed_kt,course,"
+                         "alt_m,symbol,status,comment)"
+                         " SELECT 1792627200 - (i / 300) * 1800, 'N0' || (i % 300) || '-15', '=', '', 10.123456 + i * 0.00001,"
+                         " -120.123456, 999.9, 359.0, 9999.0, '<<', printf('%.64c', '<'), printf('%.64c', '<') FROM n;"), 0);
+    WT_EQ(route(&HH, "/api/aprs/tracks", ""), 200);
+    b = body_of(g_out);
+    size_t n = strlen(b);
+    fprintf(stderr, "    /api/aprs/tracks worst case (300 moving, 48 points, text escaped): %zu bytes\n", n);
+    WT_HAS(b, "\"cut\":true}");
+    WT_ASSERT(n < 65536 - 1024);
+    WT_HAS(b, ",1,\"\\u003c\\u003c");
+    WT_LACKS(b, "<");
+    db_down();
+
+    db_up(db_schema_version());
+    WT_EQ(sdb_exec(g_db, "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 86399)"
+                         " INSERT INTO aprs_packets (last_seen,source,heard,dti,name,symbol,lat,lon,speed_kt,"
+                         "course,level,comment)"
+                         " SELECT 1792627200 - i, 'N' || (i % 2000) || '-9', 'N0DIGI', CASE WHEN i % 7 = 0 THEN ';' ELSE '!' END,"
+                         " CASE WHEN i % 7 = 0 THEN 'OBJ' || (i % 50) ELSE NULL END, '/>', 10.0 + (i % 13) * 0.01,"
+                         " -20.0, i % 3, i % 360, 40, 'a comment of ordinary length' FROM n;"), 0);
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    WT_EQ(route(&HH, "/api/aprs/tracks", ""), 200);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    long ms = (long)((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000);
+    fprintf(stderr, "    /api/aprs/tracks on 86400 packets, 2050 entities: %ld ms, %zu bytes\n", ms,
+            strlen(body_of(g_out)));
+    WT_HAS(body_of(g_out), "\"have\":true,");
+    WT_ASSERT(ms < WEB_SDB_HTTP_MS * web_sdb_test_budget_scale);
+    db_down();
+}
+
+/* A file older than the tables: an empty answer that says so. */
+static void test_aprshist_tracks_older_file(void) {
+    db_up(12);
+    WT_EQ(route(&HH, "/api/aprs/tracks", ""), 200);
+    WT_HAS(body_of(g_out), "\"have\":false,\"cols\":[");
+    WT_HAS(body_of(g_out), "\"entities\":[],\"total\":0,\"cut\":false}");
+    db_down();
+}
+
 /* A sloth.db from before the tables: an empty answer that says so,
  * never an error. */
 static void test_aprshist_older_file(void) {
@@ -609,6 +776,9 @@ void run_aprs_tests(void) {
     WT_RUN(test_aprshist_seen_and_station);
     WT_RUN(test_aprshist_budget);
     WT_RUN(test_aprshist_older_file);
+    WT_RUN(test_aprshist_tracks);
+    WT_RUN(test_aprshist_tracks_caps);
+    WT_RUN(test_aprshist_tracks_older_file);
 #endif
     web_aprs_destroy(&A);
 }

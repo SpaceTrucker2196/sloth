@@ -779,4 +779,32 @@ typedef int (*web_sdb_aprs_pkt_fn)(void *ctx, const web_sdb_aprs_pkt_t *p);
 int  web_sdb_aprs_packets(web_sdb_conn_t *c, const char *call, long long from,
                           int max, web_sdb_aprs_pkt_fn fn, void *ctx);
 
+/* The Radar's APRS entities over a window (2026-11-06, web_aprshist.h
+ * /api/aprs/tracks): aprs_packets rows last seen at or after `from`,
+ * grouped by entity: an object or item (dti ';' or ')') with a name is
+ * its own entity keyed by that name, reported `via` its source; every
+ * other packet is its source's. Per entity: last_seen, the newest
+ * packet of any kind (a status-only packet advances it); the newest
+ * row with a position (its lat, lon, alt, speed, course, symbol and
+ * ts); moving (more than one distinct 0.001-degree cell, truncated, or a speed
+ * above 0 in any row); the newest non-empty status and comment, cut to
+ * 64 bytes; and up to WEB_SDB_APRS_TRK_PTS points, the newest row of
+ * each bucket_s with a position, oldest first. At most max entities,
+ * newest last_seen first, *more set when there were others. One range
+ * scan of the last_seen index, newest first. Entities, or -1. */
+#define WEB_SDB_APRS_TRK_PTS 48
+typedef struct {
+    int       object;
+    char      key[10], via[10], symbol[3];
+    long long last_seen, pos_ts;
+    int       has_pos, has_alt, has_speed, has_course, moving;
+    double    lat, lon, alt_m, speed_kt, course;
+    char      status[65], comment[65];
+    int       npts;
+    long long pts_ts[WEB_SDB_APRS_TRK_PTS];
+    double    pts_lat[WEB_SDB_APRS_TRK_PTS], pts_lon[WEB_SDB_APRS_TRK_PTS];
+} web_sdb_aprs_trk_t;
+int  web_sdb_aprs_tracks(web_sdb_conn_t *c, long long from, long long bucket_s,
+                         web_sdb_aprs_trk_t *out, int max, int *more);
+
 #endif

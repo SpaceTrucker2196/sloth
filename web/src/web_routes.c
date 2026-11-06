@@ -691,7 +691,7 @@ static int route_m4(const web_req_t *rq, const web_health_t *h, int which,
 enum { M5_CHANNELS, M5_DEAUTH, M5_APS, M5_OVERVIEW, M5_HDEVICES, M5_HALERTS,
        M5_HFLOWS, M5_SESSIONS, M5_SESSIONS_NEW, M6_FLOWS, M6_GRAPH, M5_WLOCAL,
        M5_CHAIN, RF_GNSS_SEEN, RF_GNSS_SAT, RF_ADSB_SEEN, RF_ADSB_AC, RF_GNSS_TRACKS,
-       RF_APRS_SEEN, RF_APRS_STN };
+       RF_APRS_SEEN, RF_APRS_STN, RF_APRS_TRK };
 
 /* The WiFi and History routes (M5, web_wifi.h, web_history.h) and the
  * Flows routes (M6, web_flows.h): the same shape as route_m4(). */
@@ -714,7 +714,7 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         web_wifi_local_route, web_wifi_chain_route,
         web_gnss_seen_route, web_gnss_sat_route, web_adsb_seen_route,
         web_adsb_aircraft_route, web_gnss_tracks_route,
-        web_aprs_seen_route, web_aprs_station_route,
+        web_aprs_seen_route, web_aprs_station_route, web_aprs_tracks_route,
     };
     /* A view a capture scope holds nothing of (web_scope.h): the WiFi
      * view's channels, deauths and APs are the monitor radio's, its card
@@ -741,7 +741,8 @@ static int route_m5(const web_req_t *rq, const web_health_t *h, int which,
         : sc == WEB_SCOPE_LOCAL && (which == RF_ADSB_SEEN || which == RF_ADSB_AC)
             ? "aircraft are the ADS-B decoder's (--adsb), a passive radio; the "
               "host's own interfaces carried none"
-        : sc == WEB_SCOPE_LOCAL && (which == RF_APRS_SEEN || which == RF_APRS_STN)
+        : sc == WEB_SCOPE_LOCAL && (which == RF_APRS_SEEN || which == RF_APRS_STN ||
+                                    which == RF_APRS_TRK)
             ? "APRS stations are the Dire Wolf decoder's (--aprs), a passive "
               "radio; the host's own interfaces carried none"
         : NULL;
@@ -1465,6 +1466,7 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             /* APRS history (web_aprshist.h): sloth.db's. */
             { "/api/aprs/seen", RF_APRS_SEEN },
             { "/api/aprs/station", RF_APRS_STN },
+            { "/api/aprs/tracks", RF_APRS_TRK },
             { "/api/wifi/aps", M5_APS },
             { "/api/wifi/local", M5_WLOCAL },
             { "/api/history/overview", M5_OVERVIEW },

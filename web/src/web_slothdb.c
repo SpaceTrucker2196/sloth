@@ -738,6 +738,12 @@ int web_sdb_aprs_packets(web_sdb_conn_t *c, const char *call, long long from,
     (void)c; (void)call; (void)from; (void)max; (void)fn; (void)ctx;
     return -1;
 }
+int web_sdb_aprs_tracks(web_sdb_conn_t *c, long long from, long long bucket_s,
+                        web_sdb_aprs_trk_t *out, int max, int *more) {
+    (void)c; (void)from; (void)bucket_s; (void)out; (void)max;
+    if (more) *more = 0;
+    return -1;
+}
 
 #else
 
@@ -3310,6 +3316,115 @@ int web_sdb_aprs_packets(web_sdb_conn_t *c, const char *call, long long from,
     }
     sqlite3_finalize(st);
     return rc == SQLITE_DONE ? n : -1;
+}
+
+/* The entity of a packet: an object or item with a name is its own,
+ * every other packet its source's (web_slothdb.h). */
+#define APRS_ENT_OBJ "(dti IN (';', ')') AND name IS NOT NULL AND name <> '')"
+
+/* The entity table's index: open addressing over (object, key). */
+#define APRS_TRK_SLOTS 1024
+static unsigned trk_hash(int obj, const char *k) {
+    unsigned h = 2166136261u ^ (unsigned)obj;
+    for (; *k; k++) { h ^= (unsigned char)*k; h *= 16777619u; }
+    return h & (APRS_TRK_SLOTS - 1);
+}
+
+int web_sdb_aprs_tracks(web_sdb_conn_t *c, long long from, long long bucket_s,
+                        web_sdb_aprs_trk_t *out, int max, int *more) {
+    static const char *const k[] = { "last_seen", "source", "dti", "name", "symbol",
+                                     "lat", "lon", "speed_kt", "course", "alt_m",
+                                     "status", "comment", NULL };
+    *more = 0;
+    if (!have_all(c, "aprs_packets", k)) return 0;
+    if (bucket_s < 1) bucket_s = 1;
+    if (max > APRS_TRK_SLOTS / 2) max = APRS_TRK_SLOTS / 2;
+    /* One range scan, newest first, folded here: an entity's first row
+     * is its newest packet, its first row with a position its newest
+     * position, its first non-empty status and comment the newest; a
+     * point for each bucket as the scan first enters it (that bucket's
+     * newest row), the newest WEB_SDB_APRS_TRK_PTS kept and reversed at
+     * the end. (Five GROUP BYs over the same rows took 250 ms on a busy
+     * day's 86,400 packets; this one pass is the budget's.) */
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT CASE WHEN " APRS_ENT_OBJ " THEN 1 ELSE 0 END,"
+            " CASE WHEN " APRS_ENT_OBJ " THEN name ELSE source END,"
+            " last_seen, source, symbol, lat, lon, alt_m, speed_kt, course, status, comment"
+            " FROM aprs_packets WHERE last_seen >= ?1 ORDER BY last_seen DESC",
+            -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int64(st, 1, from);
+    short slot[APRS_TRK_SLOTS];
+    long long cell[APRS_TRK_SLOTS / 2];
+    for (int i = 0; i < APRS_TRK_SLOTS; i++) slot[i] = -1;
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        int obj = sqlite3_column_int(st, 0);
+        char key[10];
+        TEXT(st, 1, key);
+        unsigned h = trk_hash(obj, key);
+        web_sdb_aprs_trk_t *t = NULL;
+        while (slot[h] >= 0) {
+            web_sdb_aprs_trk_t *e = &out[slot[h]];
+            if (e->object == obj && !strcmp(e->key, key)) { t = e; break; }
+            h = (h + 1) & (APRS_TRK_SLOTS - 1);
+        }
+        long long ts = sqlite3_column_int64(st, 2);
+        if (!t) {
+            if (n >= max) { *more = 1; continue; }
+            slot[h] = (short)n;
+            t = &out[n];
+            memset(t, 0, sizeof(*t));
+            cell[n] = 0;
+            n++;
+            t->object = obj;
+            snprintf(t->key, sizeof(t->key), "%s", key);
+            t->last_seen = ts;
+            if (obj) TEXT(st, 3, t->via);
+        }
+        if (!t->symbol[0] && has(st, 4)) TEXT(st, 4, t->symbol);
+        if (!t->status[0] && has(st, 10)) text(st, 10, t->status, 64);
+        if (!t->comment[0] && has(st, 11)) text(st, 11, t->comment, 64);
+        if (has(st, 8) && sqlite3_column_double(st, 8) > 0) t->moving = 1;
+        if (!has(st, 5) || !has(st, 6)) continue;
+        double lat = sqlite3_column_double(st, 5), lon = sqlite3_column_double(st, 6);
+        /* The 0.001-degree cell, truncated: a second cell is motion. */
+        long long cl = (long long)(lat * 1000) * 1000000 + (long long)(lon * 1000);
+        if (!t->has_pos) {
+            t->has_pos = 1;
+            t->pos_ts = ts;
+            t->lat = lat;
+            t->lon = lon;
+            t->has_alt = has(st, 7);
+            t->alt_m = sqlite3_column_double(st, 7);
+            t->has_speed = has(st, 8);
+            t->speed_kt = sqlite3_column_double(st, 8);
+            t->has_course = has(st, 9);
+            t->course = sqlite3_column_double(st, 9);
+            cell[t - out] = cl;
+        } else if (cell[t - out] != cl) {
+            t->moving = 1;
+        }
+        if (t->npts < WEB_SDB_APRS_TRK_PTS &&
+            (!t->npts || t->pts_ts[t->npts - 1] / bucket_s != ts / bucket_s)) {
+            t->pts_ts[t->npts] = ts;
+            t->pts_lat[t->npts] = lat;
+            t->pts_lon[t->npts] = lon;
+            t->npts++;
+        }
+    }
+    sqlite3_finalize(st);
+    if (rc != SQLITE_DONE) return -1;
+    for (int e = 0; e < n; e++) {             /* oldest first */
+        web_sdb_aprs_trk_t *t = &out[e];
+        for (int a = 0, b = t->npts - 1; a < b; a++, b--) {
+            long long tt = t->pts_ts[a]; t->pts_ts[a] = t->pts_ts[b]; t->pts_ts[b] = tt;
+            double x = t->pts_lat[a]; t->pts_lat[a] = t->pts_lat[b]; t->pts_lat[b] = x;
+            x = t->pts_lon[a]; t->pts_lon[a] = t->pts_lon[b]; t->pts_lon[b] = x;
+        }
+    }
+    return n;
 }
 #undef TEXT
 

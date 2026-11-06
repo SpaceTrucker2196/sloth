@@ -484,7 +484,7 @@ static void test_radar_page(void) {
     /* Full screen, the dome alone (owner request 2026-11-06): the stage
      * through the Fullscreen API, every panel over it hidden there, f or
      * the button toggles, fit() stands aside while it is up. */
-    WT_HAS(p, "          <button type=\"button\" id=\"radar-full\">full screen</button></div>");
+    WT_HAS(p, "          <button type=\"button\" id=\"radar-full\">full screen</button>\n");
     WT_HAS(p, "  function full() { return document.fullscreenElement === $(\"radar-stage\"); }\n"
               "  function toggleFull() {\n"
               "    var st = $(\"radar-stage\");\n"
@@ -516,7 +516,13 @@ static void test_radar_page(void) {
         if (view) {
             memcpy(view, v, n);
             view[n] = '\0';
-            WT_LACKS(view, "<select");
+            /* One control (owner request 2026-11-06, "a setting that
+             * defaults to one hour for APRS objects"): the APRS window,
+             * kept by keepCtl (test_prefs.c's census lists it). No other:
+             * the camera is kept by its prefs, not by controls. Seen red
+             * with a second <select id="radar-x"> added. */
+            WT_EQ(count(view, "<select"), 1);
+            WT_HAS(view, "<select id=\"radar-aprs-win\">");
             WT_LACKS(view, "<input");
             WT_LACKS(view, "<textarea");
             WT_LACKS(view, "aria-pressed");
@@ -638,7 +644,7 @@ static void test_radar_marks_are_shapes(void) {
     WT_HAS(p, "      if (stale(s.ts, now)) alpha = 0.35;");
     WT_HAS(p, "      diamond(g, p.x, p.y, (s.used ? 5 : 4) * dpr, !!s.used);");
     WT_HAS(p, "      tri(g, p.x, p.y, 6 * dpr, dir ? Math.atan2(dir.dy, dir.dx) / d + 90 : 0, true);");
-    WT_HAS(p, "      ring(g, p.x, p.y, 5 * dpr);");
+    WT_HAS(p, "      if (e.kind === \"object\") cross(g, p.x, p.y, 4 * dpr); else ring(g, p.x, p.y, 5 * dpr);");
     char *mod = module(p);
     WT_ASSERT(mod != NULL);
     if (mod) {
@@ -731,8 +737,8 @@ static void test_radar_scope_and_caption(void) {
               "    return null;");
     WT_HAS(p, "        if (j.out_of_scope) { S.radar = null; after(); return; }");
     WT_HAS(p, "    if (local) {\n"
-              "      S.adsb = S.aprs = S.radar = null;\n"
-              "      S.radarAt = 0;\n"
+              "      S.adsb = S.aprs = S.radar = S.atrk = null;\n"
+              "      S.radarAt = S.atrkAt = 0;\n"
               "      after();\n"
               "      return;\n"
               "    }");
@@ -748,7 +754,8 @@ static void test_radar_scope_and_caption(void) {
         WT_EQ(count(mod, "H.getJSON(\"/api/radar\")"), 1);
         WT_EQ(count(mod, "H.getJSON(\"/api/gnss/tracks?hours=\" + TRAIL_H)"), 1);
         WT_EQ(count(mod, "H.getJSON(\"/api/aprs?call=\" + encodeURIComponent(call))"), 1);
-        WT_EQ(count(mod, "H.getJSON("), 6);
+        WT_EQ(count(mod, "H.getJSON(\"/api/aprs/tracks?hours=\" + ATRK_H)"), 1);
+        WT_EQ(count(mod, "H.getJSON("), 7);
         WT_HAS(mod, "  var POLL_MS = 5000, RADAR_MS = 10000, TRAIL_MS = 60000, TRAIL_H = 6;");
         free(mod);
     }
@@ -789,7 +796,7 @@ static void test_select_hooks(void) {
     /* The dome's side: the tab first, then the family's own pick. */
     WT_HAS(p, "    if (s.kind === \"sat\") { H.show(\"gnss\"); if (window.SlothGnss && SlothGnss.select) SlothGnss.select(ref.gnssid, ref.prn); }\n"
               "    else if (s.kind === \"adsb\") { H.show(\"adsb\"); if (window.SlothAdsb && SlothAdsb.select) SlothAdsb.select(ref.hex); }\n"
-              "    else if (s.kind === \"aprs\") { H.show(\"aprs\"); if (window.SlothAprs && SlothAprs.select) SlothAprs.select(ref.call); }\n"
+              "    else if (s.kind === \"aprs\") { H.show(\"aprs\"); if (window.SlothAprs && SlothAprs.select) SlothAprs.select(ref.kind === \"object\" ? ref.via : ref.key); }\n"
               "    else if (s.kind === \"ring\") H.show(s.key.fam === \"ble\" ? \"ble\" : \"devices\");");
     WT_HAS(p, "          if (ble) { H.show(\"ble\"); H.openBleDrawer(dv.addr, dv.addr_type, dv.iface); }\n"
               "          else { H.show(\"devices\"); H.openDrawer(dv.mac); }");
@@ -865,6 +872,14 @@ static void test_radar_devices_js(void) {
               "      for (i = 0; i < radii.length; i++) {\n"
               "        cs = candidates(w.x, w.y, w.w, h, radii[i], w.left);\n"
               "        for (k = 0; k < cs.length; k++) if (put(w, cs[k], false)) return;\n"
+              "      }\n"
+              "      // No room for the long form: the short one, from the start.\n"
+              "      if (w.alt) {\n"
+              "        w.text = w.alt;\n"
+              "        w.alt = null;\n"
+              "        w.w = g.measureText(w.text).width;\n"
+              "        greedy(w);\n"
+              "        return;\n"
               "      }\n"
               "      if (w.pri > PRI.aprs) return;\n"
               "      cs = candidates(w.x, w.y, w.w, h, 30 * dpr, w.left);\n"
@@ -983,9 +998,9 @@ static void test_radar_devices_js(void) {
               "      var dir = num(a.track) ? tickDir(L.az, L.range, a.track, cam) : null;\n"
               "      tri(g, p.x, p.y, 6 * dpr, dir ? Math.atan2(dir.dy, dir.dx) / d + 90 : 0, true);\n"
               "      if (mv && dir) velTick(g, p, dir, a.gs, dpr);");
-    WT_HAS(p, "      var mv = num(a.speed_kt) && a.speed_kt > 0 && num(a.course);\n"
-              "      var dir = mv ? tickDir(L.az, L.range, a.course, cam) : null;\n"
-              "      if (dir) velTick(g, p, dir, a.speed_kt, dpr);");
+    WT_HAS(p, "      var mv = num(e.speed_kt) && e.speed_kt > 0 && num(e.course);\n"
+              "      var dir = mv ? tickDir(L.az, L.range, e.course, cam) : null;\n"
+              "      if (dir) velTick(g, p, dir, e.speed_kt, dpr);");
     WT_HAS(p, "    // A device's stacked label is its handle where dots crowd the axis.\n"
               "    for (var i = 0; i < S.labelPicks.length; i++) {\n"
               "      var b = S.labelPicks[i].box;\n"
@@ -1024,6 +1039,228 @@ static void test_radar_devices_js(void) {
     }
 }
 
+/* The APRS window and trails (owner request 2026-11-06: "a setting that
+ * defaults to one hour for APRS objects and show trails if they are
+ * moving for the last 24 hours"; "objects will update status regularly
+ * but remain up to one hour before clearing after no transmission"),
+ * whole: the window select (1 h selected) and its keepCtl entry; the
+ * merge of sloth.db's entities with the live stations and the window
+ * filter on the newest packet of any kind; the trail; the object's ✕;
+ * the label with its status suffix and the short form the placer falls
+ * back to; the 60 s loader; the panel's rows; the caption. Seen red
+ * with aprsEntities()'s filter made `now - e.pos_ts` (a status-only
+ * packet no longer kept an entity: the pin and the LACKS) and with the
+ * trail's gap test dropped (the pin). */
+static void test_radar_aprs_js(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p, "<label class=\"sub\">APRS for <select id=\"radar-aprs-win\"><option value=\"900\">15 min</option>"
+              "<option value=\"3600\" selected>1 h</option><option value=\"10800\">3 h</option>"
+              "<option value=\"21600\">6 h</option><option value=\"86400\">24 h</option></select></label></div>");
+    WT_HAS(p, "   \"aprs-seen-days\", \"aprs-seen-q\", \"radar-aprs-win\"].forEach(keepCtl);");
+    WT_HAS(p, "  var APRS_WINS = [900, 3600, 10800, 21600, 86400], APRS_WIN_DFLT = 3600;");
+    WT_HAS(p, "  var ATRK_H = 24, ATRK_MS = 60000;");
+    WT_HAS(p, "    $(\"radar-aprs-win\").addEventListener(\"change\", function () { S.atrkAt = 0; load(); dirty(); });");
+    WT_HAS(p, "    if (s.kind === \"aprs\") return S.aents.filter(function (x) { return x.id === s.key; })[0] || null;");
+    WT_HAS(p, "  function aprsWin() {\n"
+              "    var el = $(\"radar-aprs-win\"), v = el ? Number(el.value) : NaN;\n"
+              "    return APRS_WINS.indexOf(v) >= 0 ? v : APRS_WIN_DFLT;\n"
+              "  }");
+    WT_HAS(p, "  function winText(s) { return s < 3600 ? Math.round(s / 60) + \" min\" : Math.round(s / 3600) + \" h\"; }\n"
+              "  // sloth.db's entities (/api/aprs/tracks: stations by source call,\n"
+              "  // objects and items by their own name, each with its newest packet's\n"
+              "  // time, its newest position, status, comment and a moving one's 24 h\n"
+              "  // trail) merged with the live table's stations (/api/aprs), keyed by\n"
+              "  // kind and key: the live row wins for the latest position, the newer\n"
+              "  // last_seen of the two counts. Then the window: an entity is shown\n"
+              "  // while now - last_seen <= win, last_seen being its newest packet of\n"
+              "  // any kind, so a status-only packet keeps it (at its last position).\n"
+              "  function aprsEntities(now, win) {\n"
+              "    var by = Object.create(null), out = [];\n"
+              "    function get(kind, key) {\n"
+              "      var id = kind + \"|\" + key;\n"
+              "      if (!by[id]) {\n"
+              "        by[id] = { id: id, kind: kind, key: key, via: \"\", symbol: \"\", last_seen: 0, moving: false,\n"
+              "                   status: \"\", comment: \"\", pts: [], bucket_s: 0, live: null };\n"
+              "        out.push(by[id]);\n"
+              "      }\n"
+              "      return by[id];\n"
+              "    }\n"
+              "    var t = S.atrk, cols = t && Array.isArray(t.cols) ? t.cols : [];\n"
+              "    ((t && t.entities) || []).forEach(function (r) {\n"
+              "      if (!Array.isArray(r)) return;\n"
+              "      var o = {};\n"
+              "      cols.forEach(function (c, i) { o[c] = r[i]; });\n"
+              "      if (typeof o.key !== \"string\" || !o.key) return;\n"
+              "      var e = get(o.object ? \"object\" : \"station\", o.key);\n"
+              "      e.via = typeof o.via === \"string\" ? o.via : \"\";\n"
+              "      e.symbol = typeof o.symbol === \"string\" ? o.symbol : \"\";\n"
+              "      e.last_seen = num(o.last_seen) ? o.last_seen : 0;\n"
+              "      e.lat = o.lat; e.lon = o.lon; e.alt_m = o.alt_m; e.speed_kt = o.speed_kt; e.course = o.course;\n"
+              "      e.moving = !!o.moving;\n"
+              "      e.status = typeof o.status === \"string\" ? o.status : \"\";\n"
+              "      e.comment = typeof o.comment === \"string\" ? o.comment : \"\";\n"
+              "      e.pts = Array.isArray(o.pts) ? o.pts : [];\n"
+              "      e.bucket_s = num(t.bucket_s) ? t.bucket_s : 1800;\n"
+              "    });\n"
+              "    ((S.aprs && S.aprs.stations) || []).forEach(function (a) {\n"
+              "      if (typeof a.call !== \"string\" || !a.call) return;\n"
+              "      var e = get(\"station\", a.call);\n"
+              "      e.live = a;\n"
+              "      if (num(a.lat) && num(a.lon)) {\n"
+              "        e.lat = a.lat; e.lon = a.lon; e.alt_m = a.alt_m; e.speed_kt = a.speed_kt; e.course = a.course;\n"
+              "      }\n"
+              "      if (num(a.last_seen) && a.last_seen > e.last_seen) e.last_seen = a.last_seen;\n"
+              "      if (a.status) e.status = a.status;\n"
+              "      if (a.comment) e.comment = a.comment;\n"
+              "      if (!e.symbol && typeof a.symbol === \"string\") e.symbol = a.symbol;\n"
+              "    });\n"
+              "    return out.filter(function (e) { return now - e.last_seen <= win; });\n"
+              "  }");
+    WT_HAS(p, "  function aprsEntities(now, win) {\n"
+              "    var by = Object.create(null), out = [];\n"
+              "    function get(kind, key) {\n"
+              "      var id = kind + \"|\" + key;\n"
+              "      if (!by[id]) {\n"
+              "        by[id] = { id: id, kind: kind, key: key, via: \"\", symbol: \"\", last_seen: 0, moving: false,\n"
+              "                   status: \"\", comment: \"\", pts: [], bucket_s: 0, live: null };\n"
+              "        out.push(by[id]);\n"
+              "      }\n"
+              "      return by[id];\n"
+              "    }\n"
+              "    var t = S.atrk, cols = t && Array.isArray(t.cols) ? t.cols : [];\n"
+              "    ((t && t.entities) || []).forEach(function (r) {\n"
+              "      if (!Array.isArray(r)) return;\n"
+              "      var o = {};\n"
+              "      cols.forEach(function (c, i) { o[c] = r[i]; });\n"
+              "      if (typeof o.key !== \"string\" || !o.key) return;\n"
+              "      var e = get(o.object ? \"object\" : \"station\", o.key);\n"
+              "      e.via = typeof o.via === \"string\" ? o.via : \"\";\n"
+              "      e.symbol = typeof o.symbol === \"string\" ? o.symbol : \"\";\n"
+              "      e.last_seen = num(o.last_seen) ? o.last_seen : 0;\n"
+              "      e.lat = o.lat; e.lon = o.lon; e.alt_m = o.alt_m; e.speed_kt = o.speed_kt; e.course = o.course;\n"
+              "      e.moving = !!o.moving;\n"
+              "      e.status = typeof o.status === \"string\" ? o.status : \"\";\n"
+              "      e.comment = typeof o.comment === \"string\" ? o.comment : \"\";\n"
+              "      e.pts = Array.isArray(o.pts) ? o.pts : [];\n"
+              "      e.bucket_s = num(t.bucket_s) ? t.bucket_s : 1800;\n"
+              "    });\n"
+              "    ((S.aprs && S.aprs.stations) || []).forEach(function (a) {\n"
+              "      if (typeof a.call !== \"string\" || !a.call) return;\n"
+              "      var e = get(\"station\", a.call);\n"
+              "      e.live = a;\n"
+              "      if (num(a.lat) && num(a.lon)) {\n"
+              "        e.lat = a.lat; e.lon = a.lon; e.alt_m = a.alt_m; e.speed_kt = a.speed_kt; e.course = a.course;\n"
+              "      }\n"
+              "      if (num(a.last_seen) && a.last_seen > e.last_seen) e.last_seen = a.last_seen;\n"
+              "      if (a.status) e.status = a.status;\n"
+              "      if (a.comment) e.comment = a.comment;\n"
+              "      if (!e.symbol && typeof a.symbol === \"string\") e.symbol = a.symbol;\n"
+              "    });\n"
+              "    return out.filter(function (e) { return now - e.last_seen <= win; });\n"
+              "  }");
+    WT_HAS(p, "  function trail(g, pts, bucket, c, cam, col, dpr) {\n"
+              "    if (!Array.isArray(pts) || pts.length < 2) return;\n"
+              "    var t0 = pts[0][0], span = Math.max(1, pts[pts.length - 1][0] - t0), prev = null;\n"
+              "    g.strokeStyle = col;\n"
+              "    g.lineWidth = dpr;\n"
+              "    for (var i = 0; i < pts.length; i++) {\n"
+              "      var q = pts[i];\n"
+              "      if (!Array.isArray(q) || !num(q[0]) || !num(q[1]) || !num(q[2])) { prev = null; continue; }\n"
+              "      var pt = project(locate(c, q[1], q[2], null).p, cam);\n"
+              "      if (prev && q[0] - prev.ts <= 2 * bucket) {\n"
+              "        g.globalAlpha = 0.15 + 0.45 * (q[0] - t0) / span;\n"
+              "        polyline(g, [prev.p, pt]);\n"
+              "      }\n"
+              "      prev = { p: pt, ts: q[0] };\n"
+              "    }\n"
+              "    g.globalAlpha = 1;\n"
+              "  }");
+    WT_HAS(p, "  function aprsLabel(e, mv, far) {\n"
+              "    var base = (e.kind === \"object\" ? e.key + \" (obj via \" + (e.via || \"?\") + \")\" : e.key) +\n"
+              "               (mv ? \" \" + velText(e.speed_kt, e.course) : \"\") + (far ? \" \" + far : \"\");\n"
+              "    var note = e.status || e.comment;\n"
+              "    if (!note) return { text: base, alt: null };\n"
+              "    return { text: base + \" \\u00b7 \" + (note.length > 16 ? note.slice(0, 15) + \"\\u2026\" : note), alt: base };\n"
+              "  }");
+    WT_HAS(p, "  function cross(g, x, y, s) {\n"
+              "    g.beginPath();\n"
+              "    g.moveTo(x - s, y - s); g.lineTo(x + s, y + s);\n"
+              "    g.moveTo(x + s, y - s); g.lineTo(x - s, y + s);\n"
+              "    g.stroke();\n"
+              "  }");
+    WT_HAS(p, "    var awin = aprsWin(), ents = aprsEntities(now, awin);\n"
+              "    S.aents = ents;\n"
+              "    ents.forEach(function (e) {\n"
+              "      placed.aprsN++;\n"
+              "      if (e.moving) placed.aprsMoving++;\n"
+              "      if (e.kind === \"object\") placed.aprsObj++;\n"
+              "      if (!c || !num(e.lat) || !num(e.lon)) { placed.aprsNo++; return; }\n"
+              "      placed.aprs++;\n"
+              "      var a = e.live, L = locate(c, e.lat, e.lon, num(e.alt_m) ? e.alt_m : null);\n"
+              "      var on = isSel(\"aprs\", e.id), gone = (a && a.state === \"gone\") || stale(e.last_seen, now);\n"
+              "      var col = on ? T.signal : e.kind === \"object\" ? T.normal : a && a.heard_direct ? H.tok(\"--heat-2\") : T.dim;\n"
+              "      var alpha = gone ? 0.35 : L.range > R_MAX ? 0.5 : 1;\n"
+              "      if (e.moving) trail(g, e.pts, e.bucket_s, c, cam, on ? T.signal : T.muted, dpr);\n"
+              "      g.globalAlpha = alpha;\n"
+              "      g.lineWidth = on ? 2 * dpr : dpr;\n"
+              "      if (on && !e.moving && S.selTrack) {\n"
+              "        g.strokeStyle = T.signal;\n"
+              "        polyline(g, S.selTrack.filter(function (q) { return num(q[1]) && num(q[2]); }).map(function (q) {\n"
+              "          return project(locate(c, q[1], q[2], null).p, cam);\n"
+              "        }));\n"
+              "      }\n"
+              "      var p = project(L.p, cam);\n"
+              "      if (L.h !== 0) { g.strokeStyle = T.faint; polyline(g, [p, project(L.foot, cam)]); }\n"
+              "      g.strokeStyle = col;\n"
+              "      if (e.kind === \"object\") cross(g, p.x, p.y, 4 * dpr); else ring(g, p.x, p.y, 5 * dpr);\n"
+              "      var mv = num(e.speed_kt) && e.speed_kt > 0 && num(e.course);\n"
+              "      var dir = mv ? tickDir(L.az, L.range, e.course, cam) : null;\n"
+              "      if (dir) velTick(g, p, dir, e.speed_kt, dpr);\n"
+              "      g.globalAlpha = 1;\n"
+              "      S.marks.push({ x: p.x, y: p.y, kind: \"aprs\", key: e.id, ref: e });\n"
+              "      var lb = aprsLabel(e, mv, L.range > R_MAX ? metres(L.range) : \"\");\n"
+              "      want.push({ x: p.x, y: p.y, pri: on ? PRI.sel : PRI.aprs, color: on ? T.signal : T.ink, alpha: alpha,\n"
+              "                  text: lb.text, alt: lb.alt });\n"
+              "    });");
+    WT_HAS(p, "    if (Date.now() - S.atrkAt > ATRK_MS) {\n"
+              "      S.atrkAt = Date.now();\n"
+              "      var ag = ++S.agen;\n"
+              "      H.getJSON(\"/api/aprs/tracks?hours=\" + ATRK_H).then(function (j) {\n"
+              "        if (ag !== S.agen) return;\n"
+              "        S.atrk = j.out_of_scope ? null : j;\n"
+              "        S.atrkErr = j.have === false ? \"no APRS tables yet\" : \"\";\n"
+              "        after();\n"
+              "      }).catch(function (e) {\n"
+              "        if (ag !== S.agen) return;\n"
+              "        S.atrk = null;\n"
+              "        S.atrkErr = msg(e) === \"no_sloth_db\" ? \"trails need --sloth-db\" : msg(e);\n"
+              "        after();\n"
+              "      });\n"
+              "    }");
+    WT_HAS(p, "      parts.push(\"APRS: \" + (p.aprsN || 0) + \" in the last \" + winText(aprsWin()) + \" (\" + (p.aprsMoving || 0) +\n"
+              "                 \" moving, trails 24 h), \" + (p.aprsObj || 0) + \" objects\" + (p.aprsNo ? \", \" + p.aprsNo + \" unplaced\" : \"\") +\n"
+              "                 (S.atrkErr ? \" (sloth.db: \" + S.atrkErr + \")\" : \"\"));");
+    WT_HAS(p, "                  [\"status\", ref.status || null],\n"
+              "                  [\"comment\", ref.comment || null],\n"
+              "                  [\"trail\", np + \" points over \" + (span / 3600).toFixed(1) + \" h, \" + (ref.moving ? \"moving\" : \"stationary\")],");
+    WT_HAS(p, "      // No room for the long form: the short one, from the start.\n"
+              "      if (w.alt) {\n"
+              "        w.text = w.alt;\n"
+              "        w.alt = null;\n"
+              "        w.w = g.measureText(w.text).width;\n"
+              "        greedy(w);\n"
+              "        return;\n"
+              "      }");
+    char *mod = module(p);
+    WT_ASSERT(mod != NULL);
+    if (mod) {
+        /* The window is the newest packet's age, never the position's. */
+        WT_LACKS(mod, "pos_ts <= win");
+        WT_EQ(count(mod, "cross(g, p.x, p.y, 4 * dpr)"), 1);   /* objects only */
+        free(mod);
+    }
+}
+
 void run_radar_tests(void) {
     WT_RUN(test_radar_census);
     WT_RUN(test_radar_cap);
@@ -1033,6 +1270,7 @@ void run_radar_tests(void) {
     WT_RUN(test_radar_page);
     WT_RUN(test_radar_projection_js);
     WT_RUN(test_radar_devices_js);
+    WT_RUN(test_radar_aprs_js);
     WT_RUN(test_radar_marks_are_shapes);
     WT_RUN(test_radar_prefs);
     WT_RUN(test_radar_scope_and_caption);

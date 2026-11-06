@@ -894,7 +894,7 @@
    "al-q", "al-win", "f-win", "f-sort", "f-ip", "f-mode", "ev-filter",
    "q-sql", "b-q", "b-sort", "bledev-win", "bledev-metric", "bledev-n",
    "gnss-seen-days", "adsb-seen-days", "adsb-seen-q", "gnss-trail-hours",
-   "aprs-seen-days", "aprs-seen-q"].forEach(keepCtl);
+   "aprs-seen-days", "aprs-seen-q", "radar-aprs-win"].forEach(keepCtl);
   // Filled from the server's answer, so put back where it is filled.
   $("al-type").addEventListener("change", function () { ctlSave("al-type"); });
   // Each drill-down bar's "show all" (its href the bare view).

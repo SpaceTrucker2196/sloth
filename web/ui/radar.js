@@ -50,7 +50,15 @@
   var S = { yaw: 0, pitch: PITCH_DFLT, zoom: 1, gnss: null, adsb: null, aprs: null, radar: null, trails: null,
             sel: null, selTrack: null, marks: [], rings: [], raf: 0, timer: 0, gen: 0, rgen: 0, tgen: 0,
             sgen: 0, radarAt: 0, trailAt: 0, cam: null, drag: null, errs: {}, placed: null, labelPicks: [],
-            hover: null };
+            hover: null, atrk: null, atrkAt: 0, agen: 0, atrkErr: "", aents: [] };
+  // The APRS window (owner request 2026-11-06, "a setting that defaults
+  // to one hour for APRS objects"): an entity stays on the dome while its
+  // newest packet of any kind is younger than this; every packet resets
+  // it. The select's options, in seconds; its value is kept by app.js.
+  var APRS_WINS = [900, 3600, 10800, 21600, 86400], APRS_WIN_DFLT = 3600;
+  // sloth.db's APRS entities and their trails (/api/aprs/tracks), read
+  // over 24 h once a minute.
+  var ATRK_H = 24, ATRK_MS = 60000;
   // Device labels (owner ruling 2026-11-06): of the 50 dots a family
   // draws, only the LABEL_N most recently heard carry a label; any
   // other shows its label while hovered or selected.
@@ -148,6 +156,13 @@
     g.rect(x - s, y - s, 2 * s, 2 * s);
     g.fill();
   }
+  // An APRS object or item: a ✕, a shape no other family uses.
+  function cross(g, x, y, s) {
+    g.beginPath();
+    g.moveTo(x - s, y - s); g.lineTo(x + s, y + s);
+    g.moveTo(x + s, y - s); g.lineTo(x - s, y + s);
+    g.stroke();
+  }
   function dot(g, x, y, s) {
     g.beginPath();
     g.arc(x, y, s, 0, Math.PI * 2);
@@ -243,7 +258,7 @@
     if (!s) return null;
     if (s.kind === "sat") return ((S.gnss && S.gnss.sats) || []).filter(function (x) { return x.gnssid === s.key.gnssid && x.prn === s.key.prn; })[0] || null;
     if (s.kind === "adsb") return ((S.adsb && S.adsb.rows) || []).filter(function (x) { return x.hex === s.key; })[0] || null;
-    if (s.kind === "aprs") return ((S.aprs && S.aprs.stations) || []).filter(function (x) { return x.call === s.key; })[0] || null;
+    if (s.kind === "aprs") return S.aents.filter(function (x) { return x.id === s.key; })[0] || null;
     if (s.kind === "ble" || s.kind === "wifi") {
       var list = (S.radar && S.radar.devs && S.radar.devs[s.kind]) || [];
       return list.filter(function (x) { return devKey(s.kind, x) === s.key; })[0] || null;
@@ -279,6 +294,92 @@
     for (var i = 1; i < pts.length; i++) g.lineTo(pts[i].x, pts[i].y);
     g.stroke();
   }
+  // ── APRS entities: stations, objects and items (sloth.db + live) ─
+  function aprsWin() {
+    var el = $("radar-aprs-win"), v = el ? Number(el.value) : NaN;
+    return APRS_WINS.indexOf(v) >= 0 ? v : APRS_WIN_DFLT;
+  }
+  function winText(s) { return s < 3600 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " h"; }
+  // sloth.db's entities (/api/aprs/tracks: stations by source call,
+  // objects and items by their own name, each with its newest packet's
+  // time, its newest position, status, comment and a moving one's 24 h
+  // trail) merged with the live table's stations (/api/aprs), keyed by
+  // kind and key: the live row wins for the latest position, the newer
+  // last_seen of the two counts. Then the window: an entity is shown
+  // while now - last_seen <= win, last_seen being its newest packet of
+  // any kind, so a status-only packet keeps it (at its last position).
+  function aprsEntities(now, win) {
+    var by = Object.create(null), out = [];
+    function get(kind, key) {
+      var id = kind + "|" + key;
+      if (!by[id]) {
+        by[id] = { id: id, kind: kind, key: key, via: "", symbol: "", last_seen: 0, moving: false,
+                   status: "", comment: "", pts: [], bucket_s: 0, live: null };
+        out.push(by[id]);
+      }
+      return by[id];
+    }
+    var t = S.atrk, cols = t && Array.isArray(t.cols) ? t.cols : [];
+    ((t && t.entities) || []).forEach(function (r) {
+      if (!Array.isArray(r)) return;
+      var o = {};
+      cols.forEach(function (c, i) { o[c] = r[i]; });
+      if (typeof o.key !== "string" || !o.key) return;
+      var e = get(o.object ? "object" : "station", o.key);
+      e.via = typeof o.via === "string" ? o.via : "";
+      e.symbol = typeof o.symbol === "string" ? o.symbol : "";
+      e.last_seen = num(o.last_seen) ? o.last_seen : 0;
+      e.lat = o.lat; e.lon = o.lon; e.alt_m = o.alt_m; e.speed_kt = o.speed_kt; e.course = o.course;
+      e.moving = !!o.moving;
+      e.status = typeof o.status === "string" ? o.status : "";
+      e.comment = typeof o.comment === "string" ? o.comment : "";
+      e.pts = Array.isArray(o.pts) ? o.pts : [];
+      e.bucket_s = num(t.bucket_s) ? t.bucket_s : 1800;
+    });
+    ((S.aprs && S.aprs.stations) || []).forEach(function (a) {
+      if (typeof a.call !== "string" || !a.call) return;
+      var e = get("station", a.call);
+      e.live = a;
+      if (num(a.lat) && num(a.lon)) {
+        e.lat = a.lat; e.lon = a.lon; e.alt_m = a.alt_m; e.speed_kt = a.speed_kt; e.course = a.course;
+      }
+      if (num(a.last_seen) && a.last_seen > e.last_seen) e.last_seen = a.last_seen;
+      if (a.status) e.status = a.status;
+      if (a.comment) e.comment = a.comment;
+      if (!e.symbol && typeof a.symbol === "string") e.symbol = a.symbol;
+    });
+    return out.filter(function (e) { return now - e.last_seen <= win; });
+  }
+  // A moving entity's trail on the ground through the same mapping,
+  // fading toward its oldest point (alpha 0.15 to 0.6 by age), broken
+  // across a gap of more than two buckets.
+  function trail(g, pts, bucket, c, cam, col, dpr) {
+    if (!Array.isArray(pts) || pts.length < 2) return;
+    var t0 = pts[0][0], span = Math.max(1, pts[pts.length - 1][0] - t0), prev = null;
+    g.strokeStyle = col;
+    g.lineWidth = dpr;
+    for (var i = 0; i < pts.length; i++) {
+      var q = pts[i];
+      if (!Array.isArray(q) || !num(q[0]) || !num(q[1]) || !num(q[2])) { prev = null; continue; }
+      var pt = project(locate(c, q[1], q[2], null).p, cam);
+      if (prev && q[0] - prev.ts <= 2 * bucket) {
+        g.globalAlpha = 0.15 + 0.45 * (q[0] - t0) / span;
+        polyline(g, [prev.p, pt]);
+      }
+      prev = { p: pt, ts: q[0] };
+    }
+    g.globalAlpha = 1;
+  }
+  // The label: the call, or an object's name and who reported it; its
+  // speed and heading; with room, its status (else comment) cut to 16.
+  function aprsLabel(e, mv, far) {
+    var base = (e.kind === "object" ? e.key + " (obj via " + (e.via || "?") + ")" : e.key) +
+               (mv ? " " + velText(e.speed_kt, e.course) : "") + (far ? " " + far : "");
+    var note = e.status || e.comment;
+    if (!note) return { text: base, alt: null };
+    return { text: base + " \u00b7 " + (note.length > 16 ? note.slice(0, 15) + "\u2026" : note), alt: base };
+  }
+
   // ── label layout: one pass a frame; no label ever on another ─────
   // Every label is a request {x, y (its anchor), text, pri, color,
   // alpha, and col "R"|"L" (a north-axis device), left (prefers the
@@ -361,6 +462,14 @@
         cs = candidates(w.x, w.y, w.w, h, radii[i], w.left);
         for (k = 0; k < cs.length; k++) if (put(w, cs[k], false)) return;
       }
+      // No room for the long form: the short one, from the start.
+      if (w.alt) {
+        w.text = w.alt;
+        w.alt = null;
+        w.w = g.measureText(w.text).width;
+        greedy(w);
+        return;
+      }
       if (w.pri > PRI.aprs) return;
       cs = candidates(w.x, w.y, w.w, h, 30 * dpr, w.left);
       for (k = 0; k < cs.length; k++) if (put(w, cs[k], true)) return;
@@ -425,7 +534,7 @@
     S.rings = [];
     S.labelPicks = [];
     var want = [], now = nowOf(S.gnss), c = centre(), zoomIn = S.zoom >= LABEL_ZOOM;
-    var placed = { sats: 0, satsNo: 0, air: 0, airNo: 0, aprs: 0, aprsNo: 0 };
+    var placed = { sats: 0, satsNo: 0, air: 0, airNo: 0, aprs: 0, aprsNo: 0, aprsN: 0, aprsMoving: 0, aprsObj: 0 };
     g.font = Math.round(11 * dpr) + "px " + H.tok("--font-mono");
     g.lineWidth = dpr;
     g.setLineDash([]);
@@ -611,19 +720,26 @@
                         (word ? " " + word : "") + (L.range > R_MAX ? " " + metres(L.range) : "") });
     });
 
-    // APRS stations: ○ at the true bearing on the ground (or at the
-    // altitude they reported), heard direct in --heat-2, else dim; the
-    // selected station's kept track.
-    ((S.aprs && S.aprs.stations) || []).forEach(function (a) {
-      if (!c || !num(a.lat) || !num(a.lon)) { placed.aprsNo++; return; }
+    // APRS stations (○) and objects (✕) heard within the window, at the
+    // true bearing on the ground (or the altitude they reported); a
+    // station heard direct in --heat-2, else dim; a moving one's 24 h
+    // trail, else the selected station's live track.
+    var awin = aprsWin(), ents = aprsEntities(now, awin);
+    S.aents = ents;
+    ents.forEach(function (e) {
+      placed.aprsN++;
+      if (e.moving) placed.aprsMoving++;
+      if (e.kind === "object") placed.aprsObj++;
+      if (!c || !num(e.lat) || !num(e.lon)) { placed.aprsNo++; return; }
       placed.aprs++;
-      var L = locate(c, a.lat, a.lon, num(a.alt_m) ? a.alt_m : null);
-      var on = isSel("aprs", a.call), gone = a.state === "gone" || stale(a.last_seen, now);
-      var col = on ? T.signal : a.heard_direct ? H.tok("--heat-2") : T.dim;
+      var a = e.live, L = locate(c, e.lat, e.lon, num(e.alt_m) ? e.alt_m : null);
+      var on = isSel("aprs", e.id), gone = (a && a.state === "gone") || stale(e.last_seen, now);
+      var col = on ? T.signal : e.kind === "object" ? T.normal : a && a.heard_direct ? H.tok("--heat-2") : T.dim;
       var alpha = gone ? 0.35 : L.range > R_MAX ? 0.5 : 1;
+      if (e.moving) trail(g, e.pts, e.bucket_s, c, cam, on ? T.signal : T.muted, dpr);
       g.globalAlpha = alpha;
       g.lineWidth = on ? 2 * dpr : dpr;
-      if (on && S.selTrack) {
+      if (on && !e.moving && S.selTrack) {
         g.strokeStyle = T.signal;
         polyline(g, S.selTrack.filter(function (q) { return num(q[1]) && num(q[2]); }).map(function (q) {
           return project(locate(c, q[1], q[2], null).p, cam);
@@ -632,14 +748,15 @@
       var p = project(L.p, cam);
       if (L.h !== 0) { g.strokeStyle = T.faint; polyline(g, [p, project(L.foot, cam)]); }
       g.strokeStyle = col;
-      ring(g, p.x, p.y, 5 * dpr);
-      var mv = num(a.speed_kt) && a.speed_kt > 0 && num(a.course);
-      var dir = mv ? tickDir(L.az, L.range, a.course, cam) : null;
-      if (dir) velTick(g, p, dir, a.speed_kt, dpr);
+      if (e.kind === "object") cross(g, p.x, p.y, 4 * dpr); else ring(g, p.x, p.y, 5 * dpr);
+      var mv = num(e.speed_kt) && e.speed_kt > 0 && num(e.course);
+      var dir = mv ? tickDir(L.az, L.range, e.course, cam) : null;
+      if (dir) velTick(g, p, dir, e.speed_kt, dpr);
       g.globalAlpha = 1;
-      S.marks.push({ x: p.x, y: p.y, kind: "aprs", key: a.call, ref: a });
+      S.marks.push({ x: p.x, y: p.y, kind: "aprs", key: e.id, ref: e });
+      var lb = aprsLabel(e, mv, L.range > R_MAX ? metres(L.range) : "");
       want.push({ x: p.x, y: p.y, pri: on ? PRI.sel : PRI.aprs, color: on ? T.signal : T.ink, alpha: alpha,
-                  text: a.call + (mv ? " " + velText(a.speed_kt, a.course) : "") + (L.range > R_MAX ? " " + metres(L.range) : "") });
+                  text: lb.text, alt: lb.alt });
     });
     g.lineWidth = dpr;
 
@@ -737,18 +854,24 @@
                   ["last heard", age(ref.last_seen, now) + " ago"]]);
       openTab("ADS-B");
     } else if (s.kind === "aprs") {
+      var lv = ref.live || {}, obj = ref.kind === "object", np = (ref.pts || []).length;
       var A = c && num(ref.lat) ? locate(c, ref.lat, ref.lon, num(ref.alt_m) ? ref.alt_m : null) : null;
-      H.set("radar-side-name", ref.call + (ref.state === "gone" ? ", gone" : ""));
-      kvRows(kv, [["call", ref.call], ["bearing", A ? deg(A.az, 1) + " true" : "- (no sensor position)"],
+      var span = np > 1 ? ref.pts[np - 1][0] - ref.pts[0][0] : 0;
+      H.set("radar-side-name", ref.key + (obj ? " (object)" : "") + (lv.state === "gone" ? ", gone" : ""));
+      kvRows(kv, [[obj ? "object" : "call", obj ? ref.key + ", object, reported by " + (ref.via || "-") : ref.key],
+                  ["bearing", A ? deg(A.az, 1) + " true" : "- (no sensor position)"],
                   ["ground range", A ? metres(A.range) : null],
                   ["altitude", num(ref.alt_m) ? ref.alt_m.toFixed(0) + " m (as reported)" : "- (not reported: drawn on the ground)"],
                   ["elevation angle", A ? deg(A.el, 1) : null],
                   ["position", num(ref.lat) ? ref.lat.toFixed(5) + ", " + ref.lon.toFixed(5) + " (as broadcast, unverified)" : "-"],
                   ["course", num(ref.course) ? deg(ref.course, 0) : null],
                   ["speed", num(ref.speed_kt) ? ref.speed_kt.toFixed(0) + " kt" : null],
-                  ["heard via", ref.via ? (ref.direct ? "direct (" + ref.via + ")" : "digipeater " + ref.via) : "-"],
-                  ["level", num(ref.level) ? String(ref.level) : null],
-                  ["last heard", age(ref.last_seen, now) + " ago"]]);
+                  ["status", ref.status || null],
+                  ["comment", ref.comment || null],
+                  ["trail", np + " points over " + (span / 3600).toFixed(1) + " h, " + (ref.moving ? "moving" : "stationary")],
+                  ["heard via", lv.via ? (lv.direct ? "direct (" + lv.via + ")" : "digipeater " + lv.via) : null],
+                  ["level", num(lv.level) ? String(lv.level) : null],
+                  ["last heard", age(ref.last_seen, now) + " ago (shown for " + winText(aprsWin()) + " after its last packet)"]]);
       openTab("APRS");
     } else if (s.kind === "ble" || s.kind === "wifi") {
       var isBle = s.kind === "ble", gl = trendGlyph(ref.trend);
@@ -800,7 +923,7 @@
     if (!s || !ref) return;
     if (s.kind === "sat") { H.show("gnss"); if (window.SlothGnss && SlothGnss.select) SlothGnss.select(ref.gnssid, ref.prn); }
     else if (s.kind === "adsb") { H.show("adsb"); if (window.SlothAdsb && SlothAdsb.select) SlothAdsb.select(ref.hex); }
-    else if (s.kind === "aprs") { H.show("aprs"); if (window.SlothAprs && SlothAprs.select) SlothAprs.select(ref.call); }
+    else if (s.kind === "aprs") { H.show("aprs"); if (window.SlothAprs && SlothAprs.select) SlothAprs.select(ref.kind === "object" ? ref.via : ref.key); }
     else if (s.kind === "ring") H.show(s.key.fam === "ble" ? "ble" : "devices");
     else if (s.kind === "ble") { H.show("ble"); H.openBleDrawer(ref.addr, ref.addr_type, ref.iface); }
     else if (s.kind === "wifi") { H.show("devices"); H.openDrawer(ref.mac); }
@@ -823,7 +946,7 @@
       h.appendChild(H.el("span", "d-dim", " (a GPS fix or --location gives one; satellites and rings are drawn)"));
     }
     var sats = (S.gnss && S.gnss.sats || []).length, air = (S.adsb && S.adsb.rows || []).length;
-    var stn = (S.aprs && S.aprs.stations || []).length, rd = S.radar;
+    var stn = aprsEntities(now, aprsWin()).length, rd = S.radar;
     h.appendChild(H.el("span", "", "  " + sats + " satellites, " + air + " aircraft, " + stn + " APRS" +
                        (rd && rd.wifi ? ", Wi-Fi " + rd.wifi.estimated + " in bands" : "") +
                        (rd && rd.ble ? ", BLE " + rd.ble.estimated : "")));
@@ -832,14 +955,16 @@
   }
   function caption() {
     var c = centre(), now = nowOf(S.gnss), p = S.placed || {}, rd = S.radar, local = H.scope() === "local";
-    var parts = ["sources /api/gnss 5 s" + (local ? "" : ", /api/adsb 5 s, /api/aprs 5 s, /api/radar 10 s") +
+    var parts = ["sources /api/gnss 5 s" + (local ? "" : ", /api/adsb 5 s, /api/aprs 5 s, /api/aprs/tracks 24 h 60 s, /api/radar 10 s") +
                  ", /api/gnss/tracks " + TRAIL_H + " h 60 s"];
     parts.push("sensor position " + (c ? c.from + (num(c.age) ? " " + age(now - c.age, now) + " ago" : "") : "none"));
     parts.push("range log 0.3 m–300 km; height is true elevation angle");
     parts.push("satellites " + (p.sats || 0) + " placed" + (p.satsNo ? ", " + p.satsNo + " without az/el" : ""));
     if (!local) {
       parts.push("aircraft " + (p.air || 0) + " placed" + (p.airNo ? ", " + p.airNo + " unplaced" : ""));
-      parts.push("APRS " + (p.aprs || 0) + " placed" + (p.aprsNo ? ", " + p.aprsNo + " unplaced" : ""));
+      parts.push("APRS: " + (p.aprsN || 0) + " in the last " + winText(aprsWin()) + " (" + (p.aprsMoving || 0) +
+                 " moving, trails 24 h), " + (p.aprsObj || 0) + " objects" + (p.aprsNo ? ", " + p.aprsNo + " unplaced" : "") +
+                 (S.atrkErr ? " (sloth.db: " + S.atrkErr + ")" : ""));
       if (rd && (rd.wifi || rd.ble)) {
         parts.push((rd.wifi ? rd.wifi.estimated : 0) + " Wi-Fi, " + (rd.ble ? rd.ble.estimated : 0) + " BLE in bands (far drawn at 100 m, nominal)");
         parts.push((rd.wifi ? rd.wifi.none : 0) + " Wi-Fi, " + (rd.ble ? rd.ble.none : 0) + " BLE without a distance estimate");
@@ -859,10 +984,10 @@
   function after() { header(); panel(); dirty(); caption(); }
   function loadSelTrack() {
     var s = S.sel;
-    if (!s || s.kind !== "aprs" || H.scope() === "local") return;
-    var my = ++S.sgen, call = s.key;
+    if (!s || s.kind !== "aprs" || s.key.indexOf("station|") !== 0 || H.scope() === "local") return;
+    var my = ++S.sgen, id = s.key, call = id.slice(8);
     H.getJSON("/api/aprs?call=" + encodeURIComponent(call)).then(function (j) {
-      if (my !== S.sgen || j.out_of_scope || !S.sel || S.sel.key !== call) return;
+      if (my !== S.sgen || j.out_of_scope || !S.sel || S.sel.key !== id) return;
       S.selTrack = j.station && Array.isArray(j.station.track_pts) ? j.station.track_pts : null;
       dirty();
     }).catch(function () { /* the mark still shows; the next poll retries */ });
@@ -888,8 +1013,8 @@
     // Under Local the passive radios' three answers are out_of_scope by
     // definition: not fetched, and the header says so.
     if (local) {
-      S.adsb = S.aprs = S.radar = null;
-      S.radarAt = 0;
+      S.adsb = S.aprs = S.radar = S.atrk = null;
+      S.radarAt = S.atrkAt = 0;
       after();
       return;
     }
@@ -912,6 +1037,21 @@
         S.radar = j;
         after();
       }).catch(function (e) { if (rg === S.rgen) { S.errs.radar = msg(e); S.radarAt = 0; after(); } });
+    }
+    if (Date.now() - S.atrkAt > ATRK_MS) {
+      S.atrkAt = Date.now();
+      var ag = ++S.agen;
+      H.getJSON("/api/aprs/tracks?hours=" + ATRK_H).then(function (j) {
+        if (ag !== S.agen) return;
+        S.atrk = j.out_of_scope ? null : j;
+        S.atrkErr = j.have === false ? "no APRS tables yet" : "";
+        after();
+      }).catch(function (e) {
+        if (ag !== S.agen) return;
+        S.atrk = null;
+        S.atrkErr = msg(e) === "no_sloth_db" ? "trails need --sloth-db" : msg(e);
+        after();
+      });
     }
     if (S.sel && S.sel.kind === "aprs") loadSelTrack();
   }
@@ -1029,6 +1169,8 @@
     $("radar-zout").addEventListener("click", function () { setCam(S.yaw, S.pitch, S.zoom / ZOOM_STEP); });
     $("radar-side-close").addEventListener("click", function () { select(null); cv.focus(); });
     $("radar-open").addEventListener("click", openSel);
+    // The APRS window: the entities read again and the dome redrawn.
+    $("radar-aprs-win").addEventListener("change", function () { S.atrkAt = 0; load(); dirty(); });
     var fb = $("radar-full");
     fb.hidden = !document.fullscreenEnabled;
     fb.addEventListener("click", toggleFull);

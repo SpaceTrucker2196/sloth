@@ -6659,3 +6659,11 @@ station with a speed and heading. The per-band rings stay, fainter.
 recently heard Wi-Fi and BLE devices are labelled; any other shows its
 label while hovered or selected; labels compact; no label under a
 floating panel.
+
+## 2026-11-06 — Radar: the APRS window, objects and trails
+
+[[slothweb]] / [[aprs]]: the Radar view's one control, `APRS for`
+(default 1 h), keeps an APRS entity on the dome until it has been silent
+that long; objects and items become entities of their own keyed by
+name; each carries its newest status and comment; a moving one draws
+its 24 h trail. New `/api/aprs/tracks` over sloth.db's `aprs_packets`.

@@ -505,6 +505,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/adsb/seen?days=&limit=&offset=&q=` | `200` JSON from sloth.db's `adsb_aircraft`: the aircraft last seen in the last `days` (default 7), newest first, `limit` (1..100) from `offset`, `more` when there are others; `q` a hex or callsign prefix (letters and digits, a leading `~`; anything else `400` `bad_q`); `"have":false` from a file older than v12; Monitor's and Hybrid's (Local `out_of_scope`, the query checked) |
    | `GET /api/adsb/aircraft?hex=&days=` | `200` JSON, one aircraft's inventory row (`null` when not in the file) and its `adsb_sightings` over the window, oldest first, at most 400, as compact rows named in `cols`; `400` `bad_hex` for anything but sloth's six lower-case hex digits (optionally `~`) |
    | `GET /api/aprs?limit=&call=` | `200` JSON, the APRS tab ([APRS](#aprs)): the `sensor_health` aprs block and the stations (live before gone, the most recently heard first, without tracks; `limit` 1..1024; as many as fit the 64 KB answer, `"cut":true` when the buffer stopped the list, `shown` how many); with `call=` (an AX.25 callsign) that one station with `track_pts` (`[ts, lat, lon]`, its last 32 positions) and `packets_recent` (its last 16 packets as rows named by `packet_cols`), `"station":null` when not kept. Under Local the query is checked, then `out_of_scope`. `400` names an unknown parameter, `bad_limit`, `bad_call` |
+   | `GET /api/aprs/tracks?hours=` | `200` JSON, the Radar tab's APRS entities from sloth.db's `aprs_packets` (needs `--sloth-db`) over the last `hours` (1..24, default 24): stations by source call and, as entities of their own, objects and items by their name with the station that reported them as `via`; newest first, each a compact row named by `cols` (`key`, `object`, `via`, `symbol`, `last_seen` its newest packet of any kind, the newest position's `lat`, `lon`, `alt_m`, `speed_kt`, `course`, `pos_ts`, `moving`, the newest non-empty `status` and `comment` cut to 64, and `pts`, a moving entity's trail `[ts, lat, lon]` of at most 48 points, `[]` when stationary); at most 300, while a worst-case row still fits the 64 KB answer, `cut` when more; `bucket_s`; `"have":false` from a file older than v13; `400` `bad_hours` or an unknown parameter; Monitor's and Hybrid's (Local `out_of_scope`, the query checked) |
    | `GET /api/aprs/seen?days=&limit=&offset=&q=` | `200` JSON from sloth.db's `aprs_stations` (needs `--sloth-db`): the stations last heard in the last `days` (1..400, default 7), newest first, `limit` (1..100) a page from `offset`, `more` when another page follows; `q` a callsign prefix of `[0-9A-Za-z-]` (at most 9, upper-cased; anything else `400 bad_q`); the comment cut to 48. A file older than v13 answers `"have":false` and an empty list. Monitor's and Hybrid's |
    | `GET /api/aprs/station?call=&days=` | `200` JSON, one station's `aprs_stations` row (`null` when not in the file) and its `aprs_packets` over the window, oldest first, the newest 400 that fit the 64 KB answer (`"cut":true` when older ones were left out), compact rows named by `cols`. `400 bad_call` for anything but an AX.25 callsign. Monitor's and Hybrid's |
    | `GET /api/radar` | `200` JSON, the Radar tab's band census ([Radar](#radar)): for BLE and for Wi-Fi the row total, the rows with one of sloth's five distance bands, the rows with a reading and no estimate (`none`), and per band (`immediate`, `near`, `room`, `building`, `far`) its count and up to eight strongest-signal rows (BLE `addr`, `addr_type`, `iface`, `name`, `rssi`, `last_seen`; Wi-Fi `mac`, `kind` `ap`\|`sta`, `ssid`, `rssi`, `ts`); `devs.ble` and `devs.wifi`, each family's 50 most recently heard rows with an estimate, newest first, the same members plus `m` (metres, `null` when the record carried none), `band` and `trend` (sloth's word or `""`); a half with no table attached is `null`; Monitor's and Hybrid's, Local answers `out_of_scope` with the query checked; `400` for any parameter |
@@ -1088,6 +1089,31 @@ then everything else greedily. Every label reaches the canvas through
 one function that refuses a box off the canvas or touching any box
 already placed, so the rule holds whatever a placer proposes; a label
 with no room is left out and its mark is still drawn.
+
+**APRS: the window, objects, trails** (owner request 2026-11-06: "a
+setting that defaults to one hour for APRS objects and show trails if
+they are moving for the last 24 hours"; "objects will update status
+regularly but remain up to one hour before clearing after no
+transmission"). The top-left panel's one control, `APRS for`
+(`radar-aprs-win`: 15 min, **1 h**, 3 h, 6 h, 24 h, kept per browser),
+is how long an APRS entity stays on the dome after its **newest packet
+of any kind**: every packet resets it, a status-only one included, and
+an entity whose newest packet has no position stays at its last known
+one. The entities are stations (by source call, ○) and, of their own,
+objects and items (by their name, a ✕, labelled `NAME (obj via CALL)`),
+read from sloth.db over 24 h once a minute (`/api/aprs/tracks`, so the
+live table's 660 s age-out does not clear them) and merged with the
+live `/api/aprs` stations, the live row winning for the latest
+position. Each carries its newest status and comment: the side panel
+shows both, the label adds the status (else the comment) cut to 16
+characters when there is room and drops it when there is not. A
+**moving** entity (two distinct 0.001° cells, or a speed above 0, in
+the 24 h) draws its trail on the ground through the same log mapping,
+at most 48 points (the newest of each 30 min bucket), fading toward
+its oldest point and broken across a gap of more than two buckets; the
+caption says "APRS: N in the last 1 h (M moving, trails 24 h), K
+objects". Without `--sloth-db` the live stations still draw, without
+trails or objects, and the caption says why.
 
 **Speed and heading.** An aircraft with a ground speed and a track, or
 an APRS station with a speed and a course, gets a velocity tick from
@@ -4117,6 +4143,7 @@ and forgets the kept ones, so it does show all.
 | Flows: protocol tab, window, sort, address, the pairs' drawing | `flows.proto`, `ctl.f-win`, `ctl.f-sort`, `ctl.f-ip`, `ctl.f-mode` | an address picked from a row, the matrix or the chord is kept as if typed; the drawing is the matrix until the chord is chosen (ruling 4) |
 | BLE: search, sort | `ctl.b-q`, `ctl.b-sort` | an address naming a search (`#ble?q=`) opens on it, not kept |
 | BLE Devices: cells, window, devices | `ctl.bledev-metric`, `ctl.bledev-win`, `ctl.bledev-n` | the waterfall's three selects |
+| Radar: the APRS window | `ctl.radar-aprs-win` | by `keepCtl()`; one of its five options (15 min to 24 h), else 1 h |
 | Radar: the camera | `radar.yaw`, `radar.pitch`, `radar.zoom` | by `radar.js`; a number in range (yaw 0..360, pitch 10..90, zoom 0.5..4) else the default; `reset view` removes all three; the selection is not kept |
 | the SQL box's text | `ctl.q-sql` | the draft; the first recipe no longer replaces it |
 | Alerts: triage filter | `ctl.al-triage` | by `frrs.js`; `#alerts?triage=out` wins, and an address naming any other filter opens on `any` |

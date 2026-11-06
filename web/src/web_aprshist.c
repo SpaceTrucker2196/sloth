@@ -282,3 +282,89 @@ int web_aprs_station_route(const web_m4_t *m, const char *query, long long now_s
     *status = 200;
     return 0;
 }
+
+/* ── /api/aprs/tracks ───────────────────────────────────────────────── */
+
+/* One entity as a compact row named by the answer's "cols". */
+static void trk_json(web_jw_t *w, const web_sdb_aprs_trk_t *t) {
+    web_jw_raw(w, "["); web_jw_str(w, t->key);
+    web_jw_raw(w, ","); web_jw_int(w, t->object);
+    web_jw_raw(w, ","); web_jw_str(w, t->via);
+    web_jw_raw(w, ","); web_jw_str(w, t->symbol);
+    web_jw_raw(w, ","); web_jw_int(w, t->last_seen);
+    web_jw_raw(w, ","); jw_num(w, t->has_pos, t->lat, 5);
+    web_jw_raw(w, ","); jw_num(w, t->has_pos, t->lon, 5);
+    web_jw_raw(w, ","); jw_num(w, t->has_pos && t->has_alt, t->alt_m, 0);
+    web_jw_raw(w, ","); jw_num(w, t->has_pos && t->has_speed, t->speed_kt, 1);
+    web_jw_raw(w, ","); jw_num(w, t->has_pos && t->has_course, t->course, 0);
+    web_jw_raw(w, ","); jw_int_or_null(w, t->has_pos, t->pos_ts);
+    web_jw_raw(w, ","); web_jw_int(w, t->moving);
+    web_jw_raw(w, ","); web_jw_str(w, t->status);
+    web_jw_raw(w, ","); web_jw_str(w, t->comment);
+    web_jw_raw(w, ",[");
+    for (int i = 0; t->moving && i < t->npts; i++) {
+        if (i) web_jw_raw(w, ",");
+        web_jw_raw(w, "["); web_jw_int(w, t->pts_ts[i]);
+        web_jw_raw(w, ","); jw_num(w, 1, t->pts_lat[i], 5);
+        web_jw_raw(w, ","); jw_num(w, 1, t->pts_lon[i], 5);
+        web_jw_raw(w, "]");
+    }
+    web_jw_raw(w, "]]");
+}
+
+int web_aprs_tracks_route(const web_m4_t *m, const char *query, long long now_s,
+                          char *body, size_t cap, size_t *len, int *status) {
+    web_param_t ps[1] = { { "hours", "", 0 } };
+    char err[48];
+    if (web_params_parse(query, ps, 1, err, sizeof(err)) != 0)
+        return answer_error(400, err, NULL, body, cap, len, status);
+    long long hours = WEB_APRSHIST_TRK_HOURS;
+    if (ps[0].seen && decimal(ps[0].val, 1, WEB_APRSHIST_TRK_HOURS, &hours) != 0)
+        return answer_error(400, "bad_hours", NULL, body, cap, len, status);
+    if (no_db(m, body, cap, len, status)) return 0;
+    WEB_M4_CHECKED(m, len, status);
+    web_sdb_aprs_trk_t *t = malloc(WEB_APRSHIST_TRK_MAX * sizeof(*t));
+    if (!t) return -1;
+    web_sdb_conn_t conn;
+    if (open_sdb(m, &conn, now_s, body, cap, len, status) != 0) { free(t); return 0; }
+    long long bucket = hours * 3600 / WEB_APRSHIST_TRK_POINTS, more = 0;
+    int mo = 0;
+    int n = web_sdb_aprs_tracks(&conn, now_s - hours * 3600, bucket, t, WEB_APRSHIST_TRK_MAX, &mo);
+    more = mo;
+    int to = conn.timed_out, schema = conn.schema;
+    web_slothdb_close(&conn);
+    if (n < 0) {
+        free(t);
+        return answer_error(503, to ? "sloth_db_timeout" : "sloth_db_error", NULL,
+                            body, cap, len, status);
+    }
+    web_jw_t w;
+    web_jw_init(&w, body, cap);
+    web_jw_raw(&w, "{\"now\":"); web_jw_int(&w, now_s);
+    web_jw_raw(&w, ",\"hours\":"); web_jw_int(&w, hours);
+    web_jw_raw(&w, ",\"bucket_s\":"); web_jw_int(&w, bucket);
+    web_jw_raw(&w, ",\"have\":"); web_jw_raw(&w, schema >= 13 ? "true" : "false");
+    web_jw_raw(&w, ",\"cols\":[\"key\",\"object\",\"via\",\"symbol\",\"last_seen\",\"lat\","
+                   "\"lon\",\"alt_m\",\"speed_kt\",\"course\",\"pos_ts\",\"moving\",\"status\","
+                   "\"comment\",\"pts\"],\"entities\":[");
+    /* Each entity measured in a scratch first: one that would not fit
+     * stops the list, newest first, and the answer says cut. */
+    static char scratch[WEB_APRSHIST_TRK_WORST];
+    int shown = 0;
+    for (int i = 0; i < n; i++) {
+        web_jw_t s;
+        web_jw_init(&s, scratch, sizeof(scratch));
+        trk_json(&s, &t[i]);
+        if (s.overflow || w.len + s.len + WEB_APRSHIST_TAIL > cap) { more = 1; break; }
+        if (shown++) web_jw_raw(&w, ",");
+        trk_json(&w, &t[i]);
+    }
+    free(t);
+    web_jw_raw(&w, "],\"total\":"); web_jw_int(&w, shown);
+    web_jw_raw(&w, ",\"cut\":"); web_jw_raw(&w, more ? "true" : "false");
+    web_jw_raw(&w, "}\n");
+    if (w.overflow) return -1;
+    *len = w.len;
+    *status = 200;
+    return 0;
+}

@@ -18,6 +18,17 @@
  *                                  WEB_APRSHIST_PKTS_MAX, as compact
  *                                  rows named by "cols"
  *
+ *   /api/aprs/tracks?hours=        the Radar's APRS entities (2026-11-06):
+ *                                  stations, and objects and items as
+ *                                  entities of their own keyed by name,
+ *                                  heard in the last hours (1..24,
+ *                                  default 24), newest first, each with
+ *                                  its newest packet's time, its newest
+ *                                  position, motion, status and comment,
+ *                                  and for a moving one its trail of at
+ *                                  most WEB_SDB_APRS_TRK_PTS bucketed
+ *                                  points ([ts, lat, lon], oldest first)
+ *
  * days is 1..400 (default 7). A sloth.db older than the tables answers
  * an empty list with "have":false, never an error. Scope: the decoder's
  * receiver is a passive radio (Monitor's and Hybrid's; route_m5 answers
@@ -48,10 +59,23 @@
  * six-byte escape), and the bytes kept back for the answer's close. */
 #define WEB_APRSHIST_ROW_WORST  1700
 #define WEB_APRSHIST_TAIL       4096
+/* /api/aprs/tracks: the entities read at most, the window's hours, and
+ * the scratch an entity is measured in before it is written (its worst:
+ * every text a six-byte escape, 48 points). */
+#define WEB_APRSHIST_TRK_MAX    300
+#define WEB_APRSHIST_TRK_HOURS  24
+#define WEB_APRSHIST_TRK_POINTS 48
+#define WEB_APRSHIST_TRK_WORST  6144
 
 int web_aprs_seen_route(const web_m4_t *m, const char *query, long long now_s,
                         char *body, size_t cap, size_t *len, int *status);
 int web_aprs_station_route(const web_m4_t *m, const char *query, long long now_s,
                            char *body, size_t cap, size_t *len, int *status);
+/* Entities newest first while a worst-case one still fits the buffer;
+ * "cut" when the read held more than WEB_APRSHIST_TRK_MAX or the budget
+ * stopped the list. A stationary entity's trail is [] (its position is
+ * its lat/lon). */
+int web_aprs_tracks_route(const web_m4_t *m, const char *query, long long now_s,
+                          char *body, size_t cap, size_t *len, int *status);
 
 #endif /* SLOTHWEB_APRSHIST_H */

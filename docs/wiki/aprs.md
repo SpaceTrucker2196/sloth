@@ -35,7 +35,7 @@ references: the Dire Wolf User Guide ("Logging") and `src/log.c`
 (APRS101.pdf) for the data type indicators (ch. 5), objects and items
 (ch. 11) and the symbol tables (ch. 20, appendix 2).
 
-**Last updated**: 2026-11-05 (shipped: the feed, the table, JSONL, sloth.db v13, slothweb's APRS tab and history).
+**Last updated**: 2026-11-06 (the Radar tab: stations and, by name, objects and items as entities of their own, kept for the `APRS for` window after their newest packet, with status, comment and a moving one's 24 h trail, from `/api/aprs/tracks`); 2026-11-05 (shipped: the feed, the table, JSONL, sloth.db v13, slothweb's APRS tab and history).
 
 ---
 
@@ -257,6 +257,20 @@ Wolf's receiver is a passive radio, so all of it is Monitor's and
 Hybrid's; under Local the routes check the query and answer
 `out_of_scope`. Full description in
 [`web/README.md`](../../web/README.md#aprs).
+
+**The Radar tab** (2026-11-06) draws APRS on its dome. Its entities are
+the stations (by source call) and, as entities of their own, the
+**objects and items** (`dti` `;` / `)`, keyed by their name, shown as
+`NAME (obj via CALL)`): the `aprs_station` table above folds an object
+into its sender, the Radar does not. They come from sloth.db over 24 h
+(`/api/aprs/tracks?hours=`, `web/src/web_aprshist.c`, one newest-first
+range scan of `aprs_packets` on its `last_seen` index) merged with the
+live stations. An entity stays on the dome for the `APRS for` window
+(default 1 h) after its newest packet of **any** kind, so an object
+that keeps sending status stays, at its last known position, and one
+silent for the whole window clears; it carries its newest status and
+comment, and a moving one (two 0.001° cells or a speed above 0 in the
+24 h) its trail of at most 48 points. [[slothweb]] has the rest.
 
 ## Privacy
 
