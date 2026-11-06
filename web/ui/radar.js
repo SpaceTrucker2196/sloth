@@ -233,10 +233,22 @@
       }
     });
   }
+  // The dome is the page: the stage takes the window below its own top
+  // edge (page offset, so a scrolled page does not grow it), at least
+  // 320 px. Set before the canvas is sized from it.
+  function fit() {
+    var st = $("radar-stage");
+    if (!st) return;
+    var top = st.getBoundingClientRect().top + (window.scrollY || 0);
+    var h = Math.max(320, Math.floor(window.innerHeight - top - 12)) + "px";
+    if (st.style.height !== h) st.style.height = h;
+  }
+
   function draw() {
     S.raf = 0;
     var cv = $("radar-dome");
     if (!cv || !H) return;
+    fit();
     var T = H.theme(), dpr = H.sizeCanvas(cv), g = cv.getContext("2d");
     if (!g) return;
     var W = cv.width, Hh = cv.height, d = Math.PI / 180;

@@ -1023,6 +1023,12 @@ honestly has:
 | Wi-Fi APs and stations (`/api/radar`) | sloth's distance **band** only, no bearing | one solid ring per band on the ground, labelled `Wi-Fi room 7` |
 | BLE advertisers (`/api/radar`) | sloth's distance band only, no bearing | one dashed ring per band, labelled `BLE room 12` |
 
+The dome is the page (owner request, 2026-11-06): on the Radar tab the
+canvas fills the window below the tab bar, and the header, the camera
+line and buttons, the picked panel and the caption float over it as
+small panels; the explanation folds under "about this view". Other tabs
+are unchanged.
+
 A single passive sensor has no bearing for a terrestrial emitter
 (`web/src/web_frrs_report.c`, `src/position_track.h`), so rings are the
 honest form, and the caption says what a ring is: where the device may

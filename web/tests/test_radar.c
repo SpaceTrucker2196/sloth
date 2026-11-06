@@ -366,12 +366,28 @@ static void test_radar_page(void) {
         free(mod);
     }
     WT_HAS(p, "<dl class=\"radar-kv\" id=\"radar-side-kv\"></dl>");
-    WT_HAS(p, "<div class=\"sub\" id=\"radar-cap\"></div>");
-    WT_HAS(p, ".radar-two { display: grid; grid-template-columns: 1fr 300px;");
-    WT_HAS(p, "#radar-dome { display: block; width: 100%; height: 440px; max-width: 100%; touch-action: none; cursor: grab; }");
+    WT_HAS(p, "<div class=\"sub radar-ov radar-bl\" id=\"radar-cap\"></div>");
+    /* The dome is the page (owner request 2026-11-06): the stage holds
+     * the canvas full size and the rest floats over it; fit() gives the
+     * stage the window below its top. */
+    WT_HAS(p, "<section class=\"panel radar-stage\" id=\"radar-stage\">\n"
+              "      <canvas id=\"radar-dome\"");
+    WT_HAS(p, ".radar-stage { position: relative; padding: 0; overflow: hidden; height: 70vh; min-height: 320px; }");
+    WT_HAS(p, "#radar-dome { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }");
+    WT_HAS(p, ".radar-ov { position: absolute; z-index: 1; background: var(--panel); border: 1px solid var(--rule); padding: 6px 8px; font-size: 12px; }");
+    WT_HAS(p, "<div class=\"radar-ov radar-tr\" id=\"radar-side\" hidden>");
+    WT_HAS(p, "<details class=\"radar-about\"><summary>about this view</summary><span class=\"sub\" id=\"radar-note\">");
+    WT_HAS(p, "  function fit() {\n"
+              "    var st = $(\"radar-stage\");\n"
+              "    if (!st) return;\n"
+              "    var top = st.getBoundingClientRect().top + (window.scrollY || 0);\n"
+              "    var h = Math.max(320, Math.floor(window.innerHeight - top - 12)) + \"px\";\n"
+              "    if (st.style.height !== h) st.style.height = h;\n"
+              "  }");
+    WT_HAS(p, "    if (!cv || !H) return;\n    fit();\n");
     /* The two includes in their places: the CSS after bledev's, the
      * script after bledev.js (after app.js). */
-    const char *bcss = strstr(p, "canvas.wfall.bledev-classes"), *rcss = strstr(p, ".radar-two { display: grid;");
+    const char *bcss = strstr(p, "canvas.wfall.bledev-classes"), *rcss = strstr(p, ".radar-stage { position: relative;");
     WT_ASSERT(bcss && rcss && bcss < rcss);
     const char *bjs = strstr(p, "window.SlothBleDev = {"), *rjs = strstr(p, "// slothweb: the Radar view");
     const char *ajs = strstr(p, "window.SlothRadar) SlothRadar.init(");

@@ -1,13 +1,25 @@
 /* The Radar view (radar.js, web_radar.h, 2026-11-06). Colours are the
  * palette's: the chrome in the grey tokens, C/N0 and altitude on the
- * heat ramp, the selection in --signal; shapes carry the family. */
-.radarline { font-size: 12px; white-space: pre-wrap; margin: 2px 0 6px; }
-.radar-two { display: grid; grid-template-columns: 1fr 300px; gap: var(--gap, 12px); }
-@media (max-width: 760px) { .radar-two { grid-template-columns: 1fr; } }
-#radar-dome { display: block; width: 100%; height: 440px; max-width: 100%; touch-action: none; cursor: grab; }
+ * heat ramp, the selection in --signal; shapes carry the family.
+ *
+ * The dome is the page (owner request, 2026-11-06): the stage fills the
+ * window below its own top edge (radar.js fit() sets its height), the
+ * canvas fills the stage, and the header, the controls, the picked
+ * panel and the caption sit over it as small panels. Solid panel
+ * backgrounds, no shadow or blur (R8). */
+.radar-stage { position: relative; padding: 0; overflow: hidden; height: 70vh; min-height: 320px; }
+#radar-dome { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
 #radar-dome:active { cursor: grabbing; }
 #radar-dome:focus-visible { outline-offset: -1px; }
-@media (max-width: 760px) { #radar-dome { height: 320px; } }
+.radar-ov { position: absolute; z-index: 1; background: var(--panel); border: 1px solid var(--rule); padding: 6px 8px; font-size: 12px; }
+.radar-tl { top: 8px; left: 8px; max-width: min(560px, calc(100% - 340px)); }
+.radar-tr { top: 8px; right: 8px; width: 300px; max-height: calc(100% - 64px); overflow: auto; }
+.radar-bl { left: 8px; bottom: 8px; max-width: min(720px, calc(100% - 16px)); font-size: 11px; }
+.radarline { font-size: 12px; white-space: pre-wrap; margin: 0 0 4px; }
+.radar-btns { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.radar-about { margin-top: 4px; }
+.radar-about summary { cursor: pointer; font-size: 11px; opacity: 0.8; }
+.radar-about .sub { display: block; max-height: 30vh; overflow: auto; margin-top: 4px; }
 #radar-side[hidden] { display: none; }
 .radar-kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; font-size: 12px; margin: 4px 0; }
 .radar-kv dt { opacity: 0.7; }
@@ -15,4 +27,7 @@
 .radar-list { list-style: none; margin: 4px 0; padding: 0; font-size: 12px; }
 .radar-list li { margin: 2px 0; }
 .radar-dev { display: block; width: 100%; text-align: left; font: inherit; overflow-wrap: anywhere; }
-#radar-cap { grid-column: 1 / -1; }
+@media (max-width: 760px) {
+  .radar-tl { max-width: calc(100% - 16px); }
+  .radar-tr { top: auto; bottom: 8px; left: 8px; width: auto; max-height: 50%; }
+}

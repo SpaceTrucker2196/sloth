@@ -6628,3 +6628,10 @@ rings from the new `/api/radar` census. Drag, tilt, zoom, pick; a side
 panel opens each family's own tab. Satellites only under Local
 ([[capture-scope]]). Exempt from the visual spec's R12 by owner ruling
 (`docs/web-ui-spec.md`), the first such exemption.
+
+## 2026-11-06 — the Radar dome is the page
+
+[[slothweb]]: on the Radar tab the dome fills the window below the tab
+bar; the header, the camera buttons, the picked panel and the caption
+are small panels over it, the explanation folded under "about this
+view". Owner request: the radar first, everything else secondary.
