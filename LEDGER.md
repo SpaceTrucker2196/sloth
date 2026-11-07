@@ -313,3 +313,4 @@
 | 0d69d16 | 2026-11-04T03:18:25Z | claude-fable-5-1, claude-opus-5-5 | 98 | 8040 | 6111117 | 856742 | 13.8223 | README and docs brought up to date; AGENTS.md cost and concurrency lessons |
 | ecf40da | 2026-11-04T12:37:43Z | claude-opus-5 | 478 | 166414 | 46441848 | 546562 | 32.8493 | #183 — roster the host's own interface MACs as the sensor's own (items 1,3,4): s |
 | d78b019 | 2026-11-05T12:27:09Z | claude-opus-5 | 376 | 166820 | 31279715 | 520954 | 25.0218 | #185 — arch S0 docs: coupling inventory, ADRs 1-7, pack-schema v1 draft |
+| 1ebd449 | 2026-11-07T12:22:23Z | claude-opus-5 | 298 | 75471 | 22100467 | 489555 | 17.8340 | #186 — ADS-B TUI aircraft view: the 38th view keyed [^], recency-sorted aircraft |
