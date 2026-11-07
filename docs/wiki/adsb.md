@@ -14,8 +14,9 @@ speed, track, rates, position, RSSI and message count. sloth **never
 opens, tunes or talks to the SDR** and uses **no network**: the source
 is a file it re-reads about once a second. Slice 1 is the core only:
 the parser, the table, the source's health in the sensor registry and
-`sensor_health`, and the change-only `adsb_aircraft` JSONL record. No
-TUI view, no slothweb tab, no alert rule and no `--db` table yet.
+`sensor_health`, and the change-only `adsb_aircraft` JSONL record; the
+`[^]` TUI view, slothweb's tab and the `--db` tables followed. No alert
+rule yet.
 
 **Sources**: `src/adsb.h`, `src/adsb.c` (parser, spec, table, bands,
 signature), `src/capture/adsb_reader.h`, `src/capture/adsb_reader.c`
@@ -28,7 +29,7 @@ stage, `SENSOR_ADSB` in the sensors stage), `src/jsonl.c`
 readsb's `README-json.md` (wiedehopf/readsb; dump1090-fa documents
 the same `aircraft.json`).
 
-**Last updated**: 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
+**Last updated**: 2026-11-07 (the `[^]` TUI aircraft view, the `adsb` health-strip token, and `gps_bearing_deg()` beside `gps_distance_m()`); 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
 
 ---
 
@@ -43,7 +44,7 @@ the same `aircraft.json`).
    dump1090-fa, which the operator runs; sloth needs only the file.
 3. **State**: `adsb_aircraft_t` keyed by (24-bit address, non-ICAO
    flag), and `adsb_health_t` (`include/sloth.h`).
-4. **View**: slothweb's ADS-B tab (below); no TUI view yet (pending).
+4. **View**: the `[^]` TUI view (below) and slothweb's ADS-B tab (below).
 5. **JSONL / --db**: `adsb_aircraft`, plus `adsb_*` fields on `sensor_health`;
    with `--db`, the `adsb_aircraft` and `adsb_sightings` tables (v12, below)
    and a `sensor` record of kind `adsb`.
@@ -257,10 +258,47 @@ an altitude profile over time (emergencies ringed), and the recorded
 track dashed on the positions plot, also for an aircraft the decoder no
 longer lists. Monitor's and Hybrid's, as the live panel is.
 
+## The `[^]` TUI view
+
+`[^]` draws the table (`src/views/adsb.c`,
+[`docs/views/adsb.md`](../views/adsb.md) has the mockup and the
+column notes): one row per address, **freshest first** by the
+decoder's own last-heard time with the address as the tie-break, over
+a header of the decoder's state, the aircraft count, the aircraft
+reporting an `emergency`, the decoder's lifetime message total, how
+long since its clock last advanced, the source label and the read /
+parse / overflow / bad / expired tallies. Columns: ICAO, callsign,
+squawk, altitude (barometric, else geometric, else `ground`), ground
+speed, track, RSSI, age, and a width-flexing RSSI bar over -30..0
+dBFS. A row the decoder still lists but has not heard from for 30 s or
+more is dim. The cursor follows the aircraft across the re-sort, not
+the row index. The key is `^` because every letter and digit already
+selects a view, `*` is BLE and `#` is GNSS.
+
+**Distance and bearing are drawn only when the sensor's own position
+is known** — `gps_location_current()` returning a stamp, so a
+`--location` or a fresh `--gps` fix. Range is `gps_distance_m()` in
+kilometres and direction `gps_bearing_deg()` (added beside it,
+2026-11-07: the initial great-circle bearing in degrees true, with
+identical, antipodal and dateline-crossing pairs pinned in
+`tests/test_gps.c`). Without a sensor position the two columns are
+absent rather than drawn empty, and the legend says why; with one, a
+row the decoder has sent no position for reads `-` in both while the
+columns stand, because what is missing there is the aircraft's
+position and not the sensor's.
+
+The view is **observation**: it grades nothing and counts the
+`emergency` rows rather than judging them. `--adsb` also adds an
+`adsb` token to the Interfaces health strip beside `gps` — opt-in,
+the state always, the aircraft count while live, the stalled age and
+the reader's error on fault — because a feed that stopped looks the
+same as quiet sky at the terminal.
+
 ## Pending (later slices)
 
-A TUI aircraft view, an emergency-squawk alert with its research
-citation, SBS / Beast socket input.
+An emergency-squawk alert with its research citation, SBS / Beast
+socket input, and `packaging/` notes on `/run/readsb` being readable
+by the `sloth` user under the service's sandboxing.
 
 ## Related pages
 

@@ -39,7 +39,7 @@ the Wi-Fi it watches:
 - [[threat-model]] — assets A1–A5, adversaries ADV-1..4, trust
   boundaries TB-1..7, and the finding → boundary map every security
   issue cites by ID.
-- [[views-catalog]] — keybinding-to-view map for all <!-- count:views -->37<!-- /count --> views.
+- [[views-catalog]] — keybinding-to-view map for all <!-- count:views -->38<!-- /count --> views.
 - [[dashboard]] — the seven-band composite view.
 
 ## Engines

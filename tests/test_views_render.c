@@ -43,6 +43,7 @@
 #include "views/fragattack.h"
 #include "views/ble.h"
 #include "views/gnss.h"
+#include "views/adsb.h"
 
 /* Every view through the shipped renderer (#116).
  *

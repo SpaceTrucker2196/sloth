@@ -2,6 +2,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include "gps.h"
+#include "../adsb.h"
 #include "sloth.h"
 #include "tui.h"
 #include "views/view_page.h"
@@ -538,6 +539,21 @@ void iface_fmt_health_strip(const sloth_state_t *s, char *buf, int sz) {
             strip_addf(buf, sz, &off, " (using --location)");
         if (g->err[0])
             strip_addf(buf, sz, &off, " err %.60s", g->err);
+    }
+    /* --adsb (#186, 2026-11-07). Opt-in like the gps token above, and
+     * shown for the same reason: the operator asked for an aircraft
+     * feed and should see whether the decoder is still writing one.
+     * Detail only on fault — how long the decoder's clock has been
+     * still, and the reader's error. */
+    if (s->adsb.configured) {
+        const adsb_health_t *a = &s->adsb;
+        strip_addf(buf, sz, &off, "  adsb %s", adsb_state_name(a->state));
+        if (a->state == ADSB_LIVE && a->aircraft > 0)
+            strip_addf(buf, sz, &off, " %dac", a->aircraft);
+        if (a->state == ADSB_STALE && a->age_s >= 0)
+            strip_addf(buf, sz, &off, " %ds", a->age_s);
+        if (a->err[0])
+            strip_addf(buf, sz, &off, " err %.60s", a->err);
     }
 }
 

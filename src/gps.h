@@ -320,6 +320,25 @@ int  gps_location_last_fix(loc_stamp_t *out);
  * the position sampler's movement test. */
 double gps_distance_m(double lat1, double lon1, double lat2, double lon2);
 
+/* Initial great-circle bearing from point 1 to point 2, degrees true
+ * clockwise from north in [0, 360): the direction to steer at point 1,
+ * which changes along a great circle and is not the bearing back
+ * reversed. Beside gps_distance_m() because the pair is what a sensor
+ * needs to say where something it hears is ([^] ADS-B, 2026-11-07).
+ *
+ * Three degenerate cases, each a real answer rather than a failure, and
+ * each pinned in tests/test_gps.c:
+ *   - identical points: 0 (no direction exists; north is the
+ *     convention, and atan2(0, 0) gives it without a branch);
+ *   - antipodal points: every great circle between them is a shortest
+ *     path, so the value is whichever one the formula picks (90 on the
+ *     equator, 180 from the north pole) — not meaningless, just not
+ *     unique;
+ *   - a longitude difference past +/-180 (either side of the dateline)
+ *     needs no normalising: sin and cos of the difference are periodic,
+ *     so 179.5E -> 179.5W reads 90, due east, as it should. */
+double gps_bearing_deg(double lat1, double lon1, double lat2, double lon2);
+
 /* Fixed-point decimal of v with `decimals` places (0..9), written
  * without printf's %f, which honours LC_NUMERIC: the TUI calls
  * setlocale(LC_ALL, "") and a decimal-comma locale would corrupt every

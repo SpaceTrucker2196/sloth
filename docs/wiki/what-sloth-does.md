@@ -8,7 +8,7 @@ type: reference
 
 **Summary**: sloth is a terminal-based **passive** network monitor for
 Linux, C99, single binary. It reads what is already on the wire and in
-the air and surfaces it through <!-- count:views -->37<!-- /count --> views and <!-- count:rules -->94<!-- /count --> alert rules. It never
+the air and surfaces it through <!-- count:views -->38<!-- /count --> views and <!-- count:rules -->94<!-- /count --> alert rules. It never
 injects a frame onto a network it monitors; everything else that uses
 the network is opt-in and announced (`MISSION.md` §2). This page is the one-screen map of everything it does; each row links to the
 page that covers it in full.
@@ -16,7 +16,7 @@ page that covers it in full.
 **Sources**: `MISSION.md`, `CLAUDE.md`, `src/main.c`, `include/sloth.h`,
 all `docs/views/*.md`.
 
-**Last updated**: 2026-10-15.
+**Last updated**: 2026-11-07 (the sensor-family views — BLE `[*]`, GNSS `[#]`, ADS-B `[^]` — were missing from the view groups); 2026-10-15.
 
 ---
 
@@ -44,9 +44,9 @@ NTP, ICMP, and the 802.11 frame classes ([[how-wifi-works]] §2). It reads
 every layer; it writes to none. See [[platform-vtable]] for the kernel
 seam and [[architecture]] for the code tree.
 
-## What it shows (<!-- count:views -->37<!-- /count --> views)
+## What it shows (<!-- count:views -->38<!-- /count --> views)
 
-Grouped three ways. Full keybinding map: [[views-catalog]].
+Grouped four ways. Full keybinding map: [[views-catalog]].
 
 - **Observation** — straight from the wire/kernel: Interfaces, Connections,
   WiFi, Packets, Processes, Stats, Probe, ARP, mDNS, NBNS, DHCP, SSDP,
@@ -54,6 +54,9 @@ Grouped three ways. Full keybinding map: [[views-catalog]].
 - **Synthesis** — derived: Alerts, Devices, Dashboard, OSI stack, Twins,
   KARMA, Rogue RADIUS, FragAttacks, Research, Help.
 - **WiFi SIGINT** — PNL, EAPOL, Seqnum, Assoc. See [[wifi-sigint]].
+- **Sensor families** — what a receiver or a local decoder the operator
+  already runs reports, never a radio sloth drives: BLE `[*]`
+  ([[ble]]), GNSS `[#]` ([[gnss]]), ADS-B `[^]` ([[adsb]]).
 
 The **Dashboard** `[o]` tiles seven bands into one screen; see [[dashboard]].
 

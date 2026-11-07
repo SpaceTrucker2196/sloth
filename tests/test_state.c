@@ -46,6 +46,7 @@ void test_view_tab_cycles_forward(void) {
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_FRAGATTACK);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_BLE);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_GNSS);
+    v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_ADSB);
     v = (view_t)((v + 1) % VIEW_COUNT);  ASSERT_EQ(v, VIEW_IFACE);   /* wraps */
 }
 
@@ -68,6 +69,8 @@ void test_view_for_key_selects(void) {
      * and digit was taken. Pinned so a later row cannot quietly take it. */
     ASSERT_EQ(view_for_key('*'), VIEW_BLE);
     ASSERT_EQ(view_for_key('#'), VIEW_GNSS);
+    /* #186: the third punctuation key, for the same reason. */
+    ASSERT_EQ(view_for_key('^'), VIEW_ADSB);
     /* Not view keys: the handler's own globals, the Tab cycle, the
      * arrow codes views navigate with, and the NUL tui_poll_key()
      * returns for "no key". */

@@ -3873,6 +3873,11 @@ typedef struct {
     int              adsb_count;
     const adsb_aircraft_t *adsb_gone;
     int              adsb_gone_count;
+    int              adsb_sel;        /* row index into the sorted table */
+    int              adsb_sel_key;    /* the selected aircraft's identity
+                                       * (views/adsb.c adsb_row_key), 0 none:
+                                       * the cursor follows the aircraft, not
+                                       * the index, across a re-sort */
     /* APRS (2026-11-05): the --aprs source's health, the station
      * table, the stations retired by this poll, and the packet ring
      * (oldest first; each sink writes the ones past its own cursor),

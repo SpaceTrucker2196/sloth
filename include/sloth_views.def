@@ -63,3 +63,9 @@ X(FRAGATTACK,   "FragAttacks", "c", fragattack)   /* per-BSSID FragAttacks count
 X(BLE,          "BLE",         "*", ble)          /* BLE advertisers per sensor (#144 slice 4) */
 /* '#', the next free symbol: the GNSS receiver's sky (2026-11-02). */
 X(GNSS,         "GNSS",        "#", gnss)         /* satellites in view, C/N0, DOP, clock offset */
+/* '^', the next free symbol after '*' and '#', and it points up, which
+ * is where the aircraft are (2026-11-07). Every letter and digit selects
+ * a view already; '?' is help, '/' and '\' edit the packet filter, 'q'
+ * quits and 'n' toggles DNS, and no view claims a punctuation key in
+ * src/view_route.c::view_claims_key(). */
+X(ADSB,         "ADS-B",       "^", adsb)         /* aircraft the --adsb decoder lists (#26, #186) */

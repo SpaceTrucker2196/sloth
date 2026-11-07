@@ -982,6 +982,71 @@ static void test_distance(void) {
     ASSERT_NEAR(gps_distance_m(0, 0, 0, 180), 3.14159265358979 * 6371008.8, 1.0);
 }
 
+/* gps_bearing_deg (#186): the initial great-circle bearing, for the
+ * [^] ADS-B view's direction-to-contact column.
+ *
+ * Every expectation below is computed from the published formula
+ *   theta = atan2(sin dlon . cos lat2,
+ *                 cos lat1 . sin lat2 - sin lat1 . cos lat2 . cos dlon)
+ * independently of this function — the four cardinals and the
+ * dateline / equator / antipodal cases fall out of it by hand, and the
+ * five-decimal figures were worked out separately before the code
+ * existed. Nothing here is the function's own output fed back. */
+static void test_bearing(void) {
+    /* The four cardinals from the equator at the prime meridian. One
+     * degree away each way, so the sign of each term is unambiguous. */
+    ASSERT_NEAR(gps_bearing_deg(0, 0, 0,  1),  90.0, 1e-9);
+    ASSERT_NEAR(gps_bearing_deg(0, 0,  1, 0),   0.0, 1e-9);
+    ASSERT_NEAR(gps_bearing_deg(0, 0, 0, -1), 270.0, 1e-9);
+    ASSERT_NEAR(gps_bearing_deg(0, 0, -1, 0), 180.0, 1e-9);
+
+    /* Two long legs, each with its reciprocal: the bearing back is NOT
+     * the bearing out reversed, which is the whole reason this is the
+     * *initial* bearing and why a row's figure is the direction to
+     * steer now. */
+    ASSERT_NEAR(gps_bearing_deg(51.5, -0.1167, 48.85, 2.35), 148.24524, 1e-4);
+    ASSERT_NEAR(gps_bearing_deg(48.85, 2.35, 51.5, -0.1167), 330.14030, 1e-4);
+    ASSERT_NEAR(gps_bearing_deg(40.6413, -73.7781, 51.47, -0.4543),
+                51.35252, 1e-4);
+    ASSERT_NEAR(gps_bearing_deg(51.47, -0.4543, 40.6413, -73.7781),
+                287.94319, 1e-4);
+
+    /* Across the dateline: a longitude difference of -359 degrees is
+     * the same one degree east, because sin and cos of the difference
+     * are periodic — no normalising step, and none needed. */
+    ASSERT_NEAR(gps_bearing_deg(0,  179.5, 0, -179.5),  90.0, 1e-9);
+    ASSERT_NEAR(gps_bearing_deg(0, -179.5, 0,  179.5), 270.0, 1e-9);
+
+    /* Across the equator, both ways. */
+    ASSERT_NEAR(gps_bearing_deg(-0.5, 0, 0.5, 0),   0.0, 1e-9);
+    ASSERT_NEAR(gps_bearing_deg(0.5, 0, -0.5, 0), 180.0, 1e-9);
+
+    /* Identical points: no direction exists; 0 is the convention and
+     * what atan2(0, 0) gives. Including the +0 / -0 case: the result
+     * must never format as "-0". */
+    ASSERT_NEAR(gps_bearing_deg(51.5, -0.1167, 51.5, -0.1167), 0.0, 1e-12);
+    char b[16];
+    gps_fmt_fixed(b, sizeof(b), gps_bearing_deg(10, 20, 10, 20), 0);
+    ASSERT_STR(b, "0");
+
+    /* Antipodal: every great circle between the pair is a shortest
+     * path, so the answer is whichever one the formula picks — due east
+     * along the equator, due south from the north pole. Not unique, but
+     * not a failure either. */
+    ASSERT_NEAR(gps_bearing_deg(0, 0, 0, 180),  90.0, 1e-6);
+    ASSERT_NEAR(gps_bearing_deg(90, 0, -90, 0), 180.0, 1e-6);
+
+    /* Near the pole, where a degree of longitude is short: 0.1 degrees
+     * below the pole, a quarter turn of longitude away, is 45 degrees. */
+    ASSERT_NEAR(gps_bearing_deg(89.9, 0, 89.9, 90), 45.00004, 1e-4);
+
+    /* The range is [0, 360): nothing returns 360 or a negative. */
+    for (int i = -179; i <= 180; i++) {
+        double t = gps_bearing_deg(12.5, 0, -3.25, (double)i);
+        ASSERT(t >= 0.0 && t < 360.0);
+    }
+}
+
 /* ── the engine stamps a new incident ──────────────────────── */
 
 static char g_jl[TEST_TMP_MAX];
@@ -2534,6 +2599,7 @@ void run_gps_tests(void) {
     RUN_TEST(test_loc_json);
     RUN_TEST(test_loc_json_absent_when_unstamped);
     RUN_TEST(test_distance);
+    RUN_TEST(test_bearing);
     TEST_SUITE("gps: alert stamp and sensor_health");
     RUN_TEST(test_engine_stamps_new_incident);
     RUN_TEST(test_engine_unstamped_without_location);

@@ -51,6 +51,7 @@
 #include "views/fragattack.h"
 #include "views/ble.h"
 #include "views/gnss.h"
+#include "views/adsb.h"
 #include "coverage.h"
 #include "karma_detect.h"
 #include "eap_track.h"

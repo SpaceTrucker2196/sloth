@@ -6667,3 +6667,25 @@ floating panel.
 that long; objects and items become entities of their own keyed by
 name; each carries its newest status and comment; a moving one draws
 its 24 h trail. New `/api/aprs/tracks` over sloth.db's `aprs_packets`.
+
+## 2026-11-07 — the `[^]` ADS-B TUI view and the `adsb` health token (#186)
+
+New `docs/views/adsb.md`. The 38th view draws the
+`--adsb` decoder's aircraft table (`src/views/adsb.c`): one row per
+address, freshest first by the decoder's own last-heard time with the
+address as the tie-break, over a header of the decoder's state, the
+aircraft count, how many report an `emergency`, the message total, the
+clock age, the source and the read / parse / overflow / bad / expired
+tallies. ICAO, callsign, squawk, altitude (barometric, else geometric,
+else `ground`), ground speed, track, RSSI, age, and a width-flexing
+RSSI bar over -30..0 dBFS; rows unheard for 30 s dim, the cursor
+follows the aircraft across the re-sort. **Distance (km) and bearing
+(deg true) are drawn only when the sensor's own position is known**
+(`gps_location_current()`), absent rather than empty otherwise;
+`gps_bearing_deg()` joins `gps_distance_m()` in `src/gps.c` for the
+second half of that pair. `--adsb` also adds an `adsb` token to the
+Interfaces health strip beside `gps`. The key is `^` because every
+letter and digit already selects a view, `*` is BLE and `#` is GNSS.
+Observation only: the emergency-squawk rule, `sbs://` input and the
+`packaging/` notes are still open on #186. Updated [[adsb]],
+[[views-catalog]], [[cli-reference]], [[non-ip-sensors]].

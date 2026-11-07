@@ -1412,6 +1412,20 @@ double gps_distance_m(double lat1, double lon1, double lat2, double lon2) {
     return 2.0 * r * asin(sqrt(a));
 }
 
+double gps_bearing_deg(double lat1, double lon1, double lat2, double lon2) {
+    const double k = 3.14159265358979323846 / 180.0;
+    double p1 = lat1 * k, p2 = lat2 * k, dl = (lon2 - lon1) * k;
+    double y = sin(dl) * cos(p2);
+    double x = cos(p1) * sin(p2) - sin(p1) * cos(p2) * cos(dl);
+    double t = atan2(y, x) / k;
+    if (t < 0.0) t += 360.0;
+    /* atan2 returns -0.0 for y == -0.0 with x > 0, which is not < 0 and
+     * would format as "-0". The comparison holds for -0.0, so the
+     * assignment is what normalises the sign. */
+    if (t == 0.0) t = 0.0;
+    return t;
+}
+
 const char *gps_state_name(int state) {
     switch (state) {
     case GPS_FIXED_ONLY: return "fixed";
