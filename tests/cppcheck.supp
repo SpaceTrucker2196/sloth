@@ -109,6 +109,19 @@ legacyUninitvar:src/views/dashboard_grid.c
 uninitvar:src/views/dashboard_bands.c
 # tmp[] is filled by dfs_append(); cppcheck does not follow the out-param.
 uninitvar:src/views/procs.c
+# idx[] is filled by sorted(), which writes idx[0..n-1] = &s->adsb_rows[i]
+# and returns n; every read is bounded by that n, and no slot written is
+# ever NULL. Same out-param blindness as the procs.c entry above, except
+# cppcheck reports it as the pointee's members rather than the pointer:
+# it reads `const adsb_aircraft_t *idx[256]` as an array of structs and
+# lists all 35 fields of adsb_aircraft_t. Not initialised to {0} instead,
+# because that would make every slot a NULL cppcheck could then flag on
+# the same dereference, trading one false positive for another.
+# Scoping cost, per this file's header: this hides a future genuine
+# uninitvar anywhere in src/views/adsb.c, so review changes to that file
+# with the entry in mind. Found by CI on 1ebd449 (#186); cppcheck is not
+# installed on the dev host, so it could not be reproduced locally.
+uninitvar:src/views/adsb.c
 # qsort() of sorted_exts with count sec_c_next, all of which were written.
 uninitvar:src/tls_log.c
 # fdopen() failure leaves fd open (POSIX), so the close(fd) on that path
