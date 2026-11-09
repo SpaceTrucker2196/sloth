@@ -164,7 +164,71 @@ static void test_ie_uniform(void) {
     karma_update(&s);
     ASSERT_EQ(s.karma_aps[0].ie_uniform, 1);
     ASSERT_EQ(s.karma_aps[0].score, 1 + 1);   /* base + ie_uniform */
+    /* The count behind the boolean (#187 S4): three SSIDs, one posture. */
+    ASSERT_EQ(s.karma_aps[0].ie_fp_distinct, 1);
+    ASSERT_EQ(karma_ie_distinct_fp(&s.beacon_aps[0]), 1);
+    ASSERT_EQ(karma_ie_collapsed(&s.beacon_aps[0]), 1);
 }
+
+/* The count is of DISTINCT values, not of changes: a BSSID whose third
+ * SSID returns to the first one's posture has two postures, not three
+ * and not one. A dedup that only compared each entry with its
+ * predecessor would call {A,B,A} three distinct, and one that compared
+ * only against entry 0 would call it two for the wrong reason — so the
+ * repeat is non-adjacent and the expected value is the set size. */
+static void test_ie_distinct_counts_the_set_not_the_transitions(void) {
+    sloth_state_t s; seed(&s);
+    uint8_t ap[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *adv[] = { "a", "b", "c" };
+    add_multi_ssid_ap(&s, ap, adv, 3);
+    s.beacon_aps[0].ssid_history_fp[0] = 0x11111111u;
+    s.beacon_aps[0].ssid_history_fp[1] = 0x22222222u;
+    s.beacon_aps[0].ssid_history_fp[2] = 0x11111111u;   /* back to the first */
+    karma_update(&s);
+    ASSERT_EQ(karma_ie_distinct_fp(&s.beacon_aps[0]), 2);
+    ASSERT_EQ(s.karma_aps[0].ie_fp_distinct, 2);
+    /* Two postures is not a collapse, so no boolean and no score bonus. */
+    ASSERT_EQ(s.karma_aps[0].ie_uniform, 0);
+    ASSERT_EQ(s.karma_aps[0].score, 1);
+}
+
+/* A partly observed set answers "cannot say" (0) rather than counting
+ * the fingerprints it does have. Two SSIDs share one known posture and
+ * the third is unknown: counting the known ones would return 1 and read
+ * as a collapse across all three, which is the direction that invents
+ * the finding. Seen to fail with the `if (fp == 0) return 0;` guard in
+ * karma_ie_distinct_fp() removed — it then returns 1 and ie_uniform
+ * goes to 1, so both assertions below redden. */
+static void test_ie_unknown_fingerprint_is_not_counted_as_agreement(void) {
+    sloth_state_t s; seed(&s);
+    uint8_t ap[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *adv[] = { "a", "b", "c" };
+    add_multi_ssid_ap(&s, ap, adv, 3);
+    s.beacon_aps[0].ssid_history_fp[0] = 0xABCD1234u;
+    s.beacon_aps[0].ssid_history_fp[1] = 0xABCD1234u;
+    s.beacon_aps[0].ssid_history_fp[2] = 0;             /* never observed */
+    karma_update(&s);
+    ASSERT_EQ(karma_ie_distinct_fp(&s.beacon_aps[0]), 0);
+    ASSERT_EQ(s.karma_aps[0].ie_uniform, 0);
+    ASSERT_EQ(s.karma_aps[0].score, 1);
+}
+
+/* One SSID carrying one fingerprint is every ordinary AP in range, not
+ * a collapse: there is nothing for the postures to have collapsed
+ * *from*. The helper is called directly because a single-SSID BSSID is
+ * below KARMA_SSID_THRESH and never becomes a row to inspect. Seen to
+ * fail with the `ssid_history_n < 2` guard in karma_ie_collapsed()
+ * dropped. */
+static void test_ie_collapse_needs_at_least_two_ssids(void) {
+    sloth_state_t s; seed(&s);
+    uint8_t ap[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *adv[] = { "only" };
+    add_multi_ssid_ap(&s, ap, adv, 1);
+    s.beacon_aps[0].ssid_history_fp[0] = 0xABCD1234u;
+    ASSERT_EQ(karma_ie_distinct_fp(&s.beacon_aps[0]), 1);
+    ASSERT_EQ(karma_ie_collapsed(&s.beacon_aps[0]), 0);
+}
+
 
 static void test_ie_varied_not_uniform(void) {
     /* A legit multi-VAP AP varies its per-VAP IE tuple -> not uniform. */
@@ -346,6 +410,47 @@ static void test_view_pnl_column_still_shows_the_union(void) {
     capture_karma(&one, out, sizeof(out));
     ASSERT(strstr(out, "00:11:22:33:44:55      3     2") != NULL);
     ASSERT_EQ(pnl_cell_pair(), CP_BRIGHT);
+}
+
+/* The [y] view's IE column prints the distinct count, so the operator
+ * can read 3-SSIDs-3-postures as the argument against a lure that it
+ * is. The old cell was "Y"/"-" and spent the same "-" on "postures
+ * differ" and "nothing observed". The cells are pinned between the J%
+ * and chain columns so a mutation that writes the digit into the wrong
+ * column cannot pass. Rows drawn unselected (karma_sel -1), as the
+ * selected row is reverse video. */
+static void test_view_ie_column_prints_the_distinct_count(void) {
+    uint8_t ap[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *adv[] = { "a", "b", "c" };
+    char out[8192];
+
+    /* Collapsed: three SSIDs, one posture -> "1", and bright. */
+    sloth_state_t one; seed(&one);
+    add_multi_ssid_ap(&one, ap, adv, 3);
+    for (int i = 0; i < 3; i++) one.beacon_aps[0].ssid_history_fp[i] = 0x5a5a5a5au;
+    karma_update(&one);
+    one.karma_sel = -1;
+    capture_karma(&one, out, sizeof(out));
+    ASSERT(strstr(out, "0%    1   -") != NULL);
+
+    /* Varied: three SSIDs, three postures -> "3", not a "-". */
+    sloth_state_t many; seed(&many);
+    add_multi_ssid_ap(&many, ap, adv, 3);
+    many.beacon_aps[0].ssid_history_fp[0] = 0x11111111u;
+    many.beacon_aps[0].ssid_history_fp[1] = 0x22222222u;
+    many.beacon_aps[0].ssid_history_fp[2] = 0x33333333u;
+    karma_update(&many);
+    many.karma_sel = -1;
+    capture_karma(&many, out, sizeof(out));
+    ASSERT(strstr(out, "0%    3   -") != NULL);
+
+    /* Unknown: the one case that really is an absent observation. */
+    sloth_state_t unk; seed(&unk);
+    add_multi_ssid_ap(&unk, ap, adv, 3);   /* fingerprints left 0 */
+    karma_update(&unk);
+    unk.karma_sel = -1;
+    capture_karma(&unk, out, sizeof(out));
+    ASSERT(strstr(out, "0%    -   -") != NULL);
 }
 
 static void test_view_legend_states_the_corroboration_rule(void) {
@@ -615,6 +720,10 @@ void run_karma_tests(void) {
     RUN_TEST(test_jaccard_ppm);
     RUN_TEST(test_jaccard_full_overlap);
     RUN_TEST(test_ie_uniform);
+    RUN_TEST(test_ie_distinct_counts_the_set_not_the_transitions);
+    RUN_TEST(test_ie_unknown_fingerprint_is_not_counted_as_agreement);
+    RUN_TEST(test_ie_collapse_needs_at_least_two_ssids);
+    RUN_TEST(test_view_ie_column_prints_the_distinct_count);
     RUN_TEST(test_ie_varied_not_uniform);
     RUN_TEST(test_ie_unknown_fp_not_uniform);
     RUN_TEST(test_deauth_chain);

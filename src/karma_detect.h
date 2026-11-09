@@ -83,6 +83,56 @@ int karma_pnl_union_hits(const sloth_state_t *s, const beacon_ap_t *a);
 int karma_pnl_client_hits(const sloth_state_t *s, const beacon_ap_t *a,
                           uint8_t best_sta_out[6]);
 
+/* How many *distinct* IE fingerprints this BSSID's advertised SSIDs
+ * carry (#187 S4), or 0 when the answer is not knowable.
+ *
+ * `ap_ie_fingerprint()` (src/beacon_snoop.c) hashes one SSID's security
+ * posture as beaconed: encryption, pairwise and group cipher, AKM, MFP
+ * and the vendor-IE hash. So this is "how many different security
+ * postures came out of this one address", and the collapse to 1 is what
+ * #187 calls the IE-fingerprint collapse.
+ *
+ * Returns 0 if any recorded SSID's fingerprint is the 0 "unknown"
+ * sentinel, rather than counting the rest. A count taken over a partly
+ * observed set can only *understate* the real variety, and understating
+ * variety is the direction that manufactures a collapse — so the honest
+ * answer for an incomplete set is "cannot say", not a smaller number.
+ * (In the live beacon path this cannot happen: ap_ie_fingerprint()
+ * never returns 0 and the fingerprint is written in the same step that
+ * appends the SSID. It is reachable from seeded state and from a row
+ * loaded with no fingerprints, which is exactly where a silent
+ * miscount would go unnoticed.)
+ *
+ * One definition for both surfaces — the KARMA_AP rule's confidence and
+ * detail, and the [y] view's IE column — for the same reason
+ * karma_pnl_client_hits() is shared: two independent copies of this
+ * loop would let the alert and the table state different numbers about
+ * one BSSID, and nothing would error. */
+int karma_ie_distinct_fp(const beacon_ap_t *a);
+
+/* 1 when this BSSID's SSIDs collapse onto a single known fingerprint:
+ * >= 2 SSIDs advertised and karma_ie_distinct_fp() == 1.
+ *
+ * What this is worth is narrower than it looks, and the narrow reading
+ * is the one the weight and the docs are written to. A BSSID is
+ * associated with exactly one BSS, and VAPs on real multi-SSID gear
+ * each get their own BSSID, so the "legitimate multi-VAP AP varies its
+ * IEs per VAP" contrast this signal is usually explained by describes
+ * APs that never reach this code: each of their BSSIDs carries one
+ * SSID and so never becomes a candidate. The 802.11ax Multiple BSSID
+ * set is the one shape that does put several SSIDs behind one
+ * transmitted BSSID, and sloth does not decode its nontransmitted
+ * profiles (docs/wiki/fragattacks.md).
+ *
+ * So the benign population that actually crosses KARMA_SSID_THRESH is
+ * a BSS renamed over a long session, or SSID-cycling hotspot gear —
+ * and those keep one security posture, so they collapse exactly like a
+ * lure does. Collapse is therefore weak, same-direction corroboration
+ * and never a severity escalator; the sharper reading is the converse,
+ * that genuine IE *variety* argues against one spoofing radio. See
+ * research/papers/mbssid-per-bss-ie-variation.md. */
+int karma_ie_collapsed(const beacon_ap_t *a);
+
 /* Is there a deauth-then-lure chain naming a victim of *this* candidate
  * specifically (#90)? A bare "some flood happened somewhere recently"
  * credits every KARMA candidate in range with any unrelated victim's

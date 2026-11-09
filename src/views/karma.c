@@ -133,7 +133,24 @@ void view_karma_draw(const sloth_state_t *s) {
     for (int row = top; row < end; row++) {
         const karma_ap_t *k = &s->karma_aps[row];
         char bssid[20], chain[6], age[24], last[64], jac[16], tool[64];
-        const char *ie = k->ie_uniform ? "Y" : "-";
+        /* The distinct-fingerprint count, not a yes/no (#187 S4). "1"
+         * against an SSIDs column of 4 is the collapse; "4" is the AP
+         * showing four different security postures, which is the
+         * reading that argues against one spoofing radio — and the old
+         * "-" said that and "nothing observed" with the same glyph.
+         * Still "-" when a fingerprint is missing, which is the only
+         * case that is genuinely an absent observation.
+         *
+         * Clamped to MAX_AP_SSID_HISTORY here rather than trusting the
+         * producer: the count cannot exceed it by construction, but the
+         * invariant lives in another file, and the cost of being wrong
+         * is a cell wider than the 2-column field, which shoves every
+         * column after it out of line for that row. */
+        char ie[4];
+        int ie_fps = k->ie_fp_distinct;
+        if (ie_fps > MAX_AP_SSID_HISTORY) ie_fps = MAX_AP_SSID_HISTORY;
+        if (ie_fps > 0) snprintf(ie, sizeof(ie), "%d", ie_fps);
+        else            snprintf(ie, sizeof(ie), "-");
         fmt_mac(k->bssid, bssid, sizeof(bssid));
         snprintf(chain, sizeof(chain), "%s", k->deauth_chain ? "YES" : "-");
         snprintf(jac, sizeof(jac), "%d%%", (k->pnl_jaccard_ppm + 5000) / 10000);

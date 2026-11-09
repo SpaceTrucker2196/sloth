@@ -1,7 +1,7 @@
 ---
 type: EVIL_TWIN
 technique: T1557
-rule_file: src/alerts/rules_twin.c:1360 (rule_evil_twin); also src/alerts/rules_twin.c:1736 (rule_evil_twin_attack_chain), which fires the same type under a twin-chain: key
+rule_file: src/alerts/rules_twin.c:1381 (rule_evil_twin); also src/alerts/rules_twin.c:1783 (rule_evil_twin_attack_chain), which fires the same type under a twin-chain: key
 count_semantics: per poll tick (default 250 ms) per qualifying `a` (the first BSSID of a pair), for as long as both BSSIDs remain in the beacon table and the condition holds - branches 1 and 2 `break` after the first qualifying sibling for each `a` (rules_twin.c:1426, :1574) and branch 2 scans only j>i of a signal-sorted table, so a second pair for the same `a`, or a pair whose order flips, is not re-asserted every tick and can resolve after 300 s; `count` aliases `evaluations` (engine.c:478-479). Not per beacon, not per incident. BEACON_AGE_SECS = 300 s keeps a pair alive 5 min past its last beacon, so a pair that merely exists accrues ~4 counts/s.
 severity_assessment: agree - graded WARN/CRIT with a separate 5..95% confidence; CRIT is held for an OPEN/WEP clone of a protected name or a hard signal (attacker OUI, BTM steer at the pair, inventory mismatch, deauth-then-twin chain)
 false_positive_risk: medium - the same-security branch fires WARN on a cross-vendor OUI alone (conf 20%), the shape a mixed-vendor mesh or range extender presents; the weak/strong branch fires on an operator's own open guest SSID sharing a name with the protected one

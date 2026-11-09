@@ -35,10 +35,36 @@ Per candidate:
   client-PNL union (`|A∩B| / |A∪B|`), shown as a percentage. Trends
   toward 100% as the AP mirrors the entire union of probed networks —
   the sharpest PineAP tell. Rendered bright at ≥70%.
-- **IE** — `Y` when every SSID this BSSID beacons carries an identical
-  IE fingerprint (encryption / cipher / AKM / MFP + vendor-IE hash). A
-  legit multi-VAP AP varies these per VAP; a single spoofing radio does
-  not, so uniformity is a KARMA signal (adds +1 to the score).
+- **IE** — how many **distinct** IE fingerprints (encryption / cipher /
+  AKM / MFP + vendor-IE hash) this BSSID's advertised SSIDs came back
+  with, or `-` when any of them has none recorded. `1` against an SSIDs
+  column of 4 is the *IE-fingerprint collapse* (#187): four names, one
+  security posture. It is rendered bright, and adds `+1` to the score.
+  The cell printed `Y`/`-` before #187 and spent the same `-` on
+  "postures differ" and "nothing observed", which are opposite
+  readings.
+
+  **What the collapse is and is not worth.** A collapse is weak,
+  same-direction corroboration, which is why the `KARMA_AP` alert pays
+  it only `KARMA_W_IE_COLLAPSE` = 10 confidence and never escalates
+  severity on it. The contrast usually claimed for this signal — one
+  spoofing radio versus multi-VAP gear that varies RSN and vendor IEs
+  per VAP — is **not** the contrast sloth can draw here: a BSSID
+  belongs to exactly one BSS, and the VAPs of real multi-SSID gear each
+  get their own BSSID, so each of them carries one SSID and never
+  becomes a candidate at all. The one shape that does put several SSIDs
+  behind a single transmitted BSSID is the 802.11ax Multiple BSSID set,
+  and sloth does not decode its nontransmitted profiles
+  ([[fragattacks]]). What is left crossing the threshold benignly is a
+  BSS renamed over a long session, or hotspot gear cycling SSIDs — and
+  those keep one posture, so they collapse exactly as a lure does.
+
+  The sharper reading is the **converse**: a count that tracks the SSID
+  count is the AP showing genuinely different security postures per
+  name, which a single spoofing radio does not do. That is why the
+  count is printed in both directions rather than only when it
+  incriminates. It earns no confidence today (see "Open" below).
+  Basis: `research/papers/mbssid-per-bss-ie-variation.md`.
 - **chain** — a **shared-victim** deauth-then-lure chain (#90): a
   station deauthed off a *different* BSSID within the 60 s window
   (measured from when the flood's threshold was last *met*, not the
@@ -72,7 +98,23 @@ The same signals drive the `KARMA_AP` alert in `[v] Alerts`, which adds
 a `confidence` percentage and escalates WARN→CRIT only when a
 single-station PNL match, the deauth chain, or a verified tool match
 corroborates the bare SSID count (#90) — this view is the ranked, browsable surface for
-the same underlying signals, not a mirror of the alert's severity.
+the same underlying signals, not a mirror of the alert's severity. The
+IE count and the collapse judgement come from `karma_ie_distinct_fp()`
+and `karma_ie_collapsed()` (`src/karma_detect.h`), which this view and
+the alert rule both call, so the two surfaces cannot state different
+numbers about one BSSID — the same reason the PNL measures are shared.
+
+## Open
+
+- IE **variety** earns no confidence. It is the better-founded half of
+  the signal (it argues against one spoofing radio, where collapse is
+  consistent with the benign rename), but spending confidence *down*
+  on it would change what every existing uncorroborated candidate
+  reports, so #187's S4 slice left it reported-only. A negative weight
+  is a separate proposal.
+- Collapse is reported per BSSID over the whole SSID history, with no
+  time dimension: an AP renamed twice a year ago and a radio cycling
+  three names this minute produce the same cell.
 
 ## View
 
@@ -81,8 +123,8 @@ the same underlying signals, not a mirror of the alert's severity.
  KARMA/PineAP candidates: 1 / max 64  deauth-then-lure: 1
  BSSID              SSIDs  PNL   J%    IE  chain  score  Top SSID / last
  -----------------  -----  ----  ----  --  -----  -----  ---------------
- 00:11:22:33:44:55      7     4  80%   Y   YES        7  Starbucks (2s)
- 24:6f:28:33:44:55      3     0  0%    -   -          1  ACME-Cor (4s)  [ESP32 M~/med? provisional]
+ 00:11:22:33:44:55      7     4  80%   1   YES        7  Starbucks (2s)
+ 24:6f:28:33:44:55      3     0  0%    3   -          1  ACME-Cor (4s)  [ESP32 M~/med? provisional]
  PNL = SSIDs in client probe lists, >=2 on one station; chain = deauth-then-lure on shared victim
  [tool/conf? provisional] = UNVERIFIED signature, no capture: a hypothesis, not an identification
 ```

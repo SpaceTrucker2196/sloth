@@ -244,6 +244,20 @@ the neighbourhood. The union is still reported and still feeds the
 common SSID in one passer-by's list made a benign multi-VAP AP page
 as an active lure.
 
+Since #187 the same rule also reports the **IE-fingerprint collapse**:
+how many distinct IE fingerprints the advertised SSIDs came back with,
+`, 1 IE fingerprint` or `, N IE fingerprints`, and nothing when any of
+them has none recorded. A collapse pays `KARMA_W_IE_COLLAPSE` = 10
+confidence and never moves severity, and the reason is the same
+discipline as the PNL union above — the signal does not separate the
+population it is usually said to. A VAP on real multi-SSID gear has its
+own BSSID and so never becomes a candidate, the Multiple BSSID set's
+nontransmitted profiles are not decoded, and the benign case that does
+cross the threshold, a BSS renamed over a session, collapses exactly
+like a lure. The converse — genuine IE variety — is the better-founded
+reading and is reported for that reason, though it earns no weight yet.
+Basis: `research/papers/mbssid-per-bss-ie-variation.md`.
+
 Collapsing the two axes is what let an uncorroborated same-SSID
 coincidence page at the same volume as an observed attack, and it pushed
 the detector toward suppressing weak candidates outright to keep the

@@ -983,6 +983,14 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
         int pnl_best   = karma_pnl_client_hits(s, a, pnl_sta);
         int pnl_corrob = pnl_best >= KARMA_PNL_CORROB_MIN;
         int deauth     = karma_deauth_lure_victim(s, a, now, NULL);
+        /* Shared with the [y] view so one BSSID cannot be described two
+         * ways (#187 S4). Reported in both directions: variety is the
+         * reading that actually argues against a single spoofing radio,
+         * so it is worth printing, and a signal that only ever appears
+         * when it incriminates teaches the operator nothing about the
+         * times it did not. */
+        int ie_fps      = karma_ie_distinct_fp(a);
+        int ie_collapse = karma_ie_collapsed(a);
 
         /* Has a PMKID been harvested from this BSSID (#68)? Unlike a
          * tool's beacon quirks, this is a *protocol* observable — an AP
@@ -1013,6 +1021,10 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
          * being narrowed to avoid. */
         if (pnl_corrob) confidence += KARMA_W_PNL_OVERLAP;
         if (deauth)     confidence += KARMA_W_DEAUTH_VICTIM;
+        /* Confidence only, never severity: the benign rename case
+         * collapses the same way, so this cannot be what turns a
+         * candidate into a finding. See KARMA_W_IE_COLLAPSE. */
+        if (ie_collapse) confidence += KARMA_W_IE_COLLAPSE;
         if (tool_row)
             confidence += tool_unverified ? KARMA_W_TOOL_UNVERIF
                                           : KARMA_W_TOOL_VERIFIED;
@@ -1023,6 +1035,7 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
         char key[ALERT_KEY_LEN];
         char detail[ALERT_DETAIL_LEN];
         char pnl_note[64]   = "";
+        char ie_note[32]    = "";
         char chain_note[24] = "";
         char tool_note[56]  = "";
         char pmkid_note[16] = "";
@@ -1037,6 +1050,14 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
         else if (overlap > 0)
             snprintf(pnl_note, sizeof(pnl_note),
                      ", %d in client PNLs", overlap);
+        /* Singular is the collapse; a plural count is the AP arguing its
+         * own case. Nothing is printed when the fingerprints are not all
+         * known, because "0 IE fingerprints" would read as a finding. */
+        if (ie_collapse)
+            snprintf(ie_note, sizeof(ie_note), ", 1 IE fingerprint");
+        else if (ie_fps > 1)
+            snprintf(ie_note, sizeof(ie_note), ", %d IE fingerprints",
+                     ie_fps);
         if (deauth)
             snprintf(chain_note, sizeof(chain_note),
                      " +deauth-then-lure");
@@ -1055,9 +1076,9 @@ void rule_karma_ap(const sloth_state_t *s, time_t now) {
          * cannot drift — see karma_alert_key(). */
         karma_alert_key(a->bssid, key, sizeof(key));
         snprintf(detail, sizeof(detail),
-                 "KARMA BSSID %s: %d SSIDs%s%s%s%s, conf %d%%%s",
-                 bssid_str, a->ssid_history_n, pnl_note, chain_note,
-                 pmkid_note, tool_note, confidence,
+                 "KARMA BSSID %s: %d SSIDs%s%s%s%s%s, conf %d%%%s",
+                 bssid_str, a->ssid_history_n, ie_note, pnl_note,
+                 chain_note, pmkid_note, tool_note, confidence,
                  sev == ALERT_SEV_WARN ? " - candidate, uncorroborated" : "");
         /* The newest frame carrying each distinct SSID (#92 slice 4):
          * the finding is that set, so one frame per SSID is its

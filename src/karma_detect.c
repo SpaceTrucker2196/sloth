@@ -97,18 +97,32 @@ static int jaccard_ppm(int a_count, int b_count, int inter) {
     return (int)((long)inter * 1000000L / uni);
 }
 
-/* 1 if every SSID this BSSID beaconed carried an identical, known IE
- * fingerprint — the PineAP tell. Legit multi-VAP APs vary RSN/vendor
- * IEs per VAP; a single spoofing radio does not. Requires >= 2 SSIDs
- * and non-zero (actually observed) fingerprints; all-unknown stays 0. */
-static int ie_uniform(const beacon_ap_t *a) {
+/* Distinct IE fingerprints across the advertised SSIDs — see the
+ * declaration in karma_detect.h for why an incomplete set answers 0
+ * rather than counting what it has. */
+int karma_ie_distinct_fp(const beacon_ap_t *a) {
+    if (!a) return 0;
     int n = a->ssid_history_n;
-    if (n < 2) return 0;
-    uint32_t first = a->ssid_history_fp[0];
-    if (first == 0) return 0;
-    for (int i = 1; i < n && i < MAX_AP_SSID_HISTORY; i++)
-        if (a->ssid_history_fp[i] != first) return 0;
-    return 1;
+    if (n > MAX_AP_SSID_HISTORY) n = MAX_AP_SSID_HISTORY;
+    if (n < 1) return 0;
+
+    int distinct = 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t fp = a->ssid_history_fp[i];
+        if (fp == 0) return 0;          /* set not fully observed */
+        int seen = 0;
+        for (int j = 0; j < i && !seen; j++)
+            if (a->ssid_history_fp[j] == fp) seen = 1;
+        if (!seen) distinct++;
+    }
+    return distinct;
+}
+
+/* The collapse judgement — see the declaration in karma_detect.h for
+ * what it is and is not evidence of. */
+int karma_ie_collapsed(const beacon_ap_t *a) {
+    if (!a || a->ssid_history_n < 2) return 0;
+    return karma_ie_distinct_fp(a) == 1;
 }
 
 /* Deauth-then-lure with a shared victim (#90) — see the declaration in
@@ -210,7 +224,8 @@ void karma_update(sloth_state_t *s) {
         k->pnl_overlap  = karma_pnl_union_hits(s, a);
         k->pnl_best     = karma_pnl_client_hits(s, a, NULL);
         k->pnl_jaccard_ppm = jaccard_ppm(k->ssid_count, b_count, k->pnl_overlap);
-        k->ie_uniform   = ie_uniform(a);
+        k->ie_uniform     = karma_ie_collapsed(a);
+        k->ie_fp_distinct = karma_ie_distinct_fp(a);
         k->deauth_chain = karma_deauth_lure_victim(s, a, now, NULL);
         /* The PNL bonus keys on pnl_best, not pnl_overlap (#90): the
          * union is a description, only a single station asking for

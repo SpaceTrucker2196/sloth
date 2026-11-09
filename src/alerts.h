@@ -292,6 +292,27 @@ const char  *twin_class_label(twin_class_t c);
                                     * union over all clients is reported but
                                     * neither scores nor escalates */
 #define KARMA_W_DEAUTH_VICTIM 30   /* shared-victim deauth-then-lure chain */
+#define KARMA_W_IE_COLLAPSE   10   /* every advertised SSID came back with one
+                                    * IE fingerprint (#187 S4) — see
+                                    * karma_ie_collapsed() for the scope.
+                                    *
+                                    * Deliberately in the low, informational
+                                    * tier with PMKID rather than beside the
+                                    * PNL and deauth weights, and deliberately
+                                    * not a severity escalator. The contrast
+                                    * usually claimed for this signal — one
+                                    * spoofing radio versus multi-VAP gear
+                                    * that varies RSN/vendor IEs per VAP — is
+                                    * not the contrast sloth can draw: a VAP
+                                    * has its own BSSID and so never reaches
+                                    * this rule, and the Multiple BSSID set's
+                                    * nontransmitted profiles are not decoded.
+                                    * The benign case that DOES cross the
+                                    * threshold is a BSS renamed over a
+                                    * session, which keeps one posture and
+                                    * collapses identically. So this earns a
+                                    * little confidence and proves nothing on
+                                    * its own. */
 #define KARMA_W_TOOL_VERIFIED 30   /* a capture-backed tool signature match */
 #define KARMA_W_TOOL_UNVERIF  10   /* an UNVERIFIED signature guess only */
 #define KARMA_W_PMKID         10   /* PMKID observed — informational, not

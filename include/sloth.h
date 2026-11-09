@@ -1789,7 +1789,16 @@ typedef struct {
      * the union and the score it feeds. */
     int      pnl_best;
     int      pnl_jaccard_ppm; /* Jaccard(advertised, PNL-union) in parts-per-million */
-    int      ie_uniform;    /* 1 = identical IE fingerprint across all SSIDs (PineAP tell) */
+    int      ie_uniform;    /* 1 = identical IE fingerprint across all SSIDs
+                             * (karma_ie_collapsed(); narrower evidence than
+                             * "PineAP tell" — see that declaration) */
+    /* Distinct IE fingerprints behind ie_uniform, 0 when not all the
+     * advertised SSIDs have a known one (#187 S4). The [y] view's IE
+     * column prints it, so the operator sees 3-SSIDs-3-postures as the
+     * argument against a lure that it is, instead of a bare "-" that
+     * looks like an absent observation. Not persisted: the DB keeps the
+     * boolean, and this is derivable from the fingerprints. */
+    int      ie_fp_distinct;
     int      deauth_chain;  /* 1 = shared-victim deauth-then-lure (#90) */
     /* composite: 1 + (pnl_best >= KARMA_PNL_CORROB_MIN ? 2 : 0)
      *              + (ie_uniform ? 1 : 0) + (deauth_chain ? 3 : 0) */

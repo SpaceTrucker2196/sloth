@@ -4201,6 +4201,91 @@ static void test_karma_confidence_keys_on_the_corroborated_station(void) {
     ASSERT_EQ((int)s.alerts[i].confidence, KARMA_W_SSID_THRESH);
 }
 
+/* ── IE-fingerprint collapse (#187 S4) ──────────────────────
+ *
+ * The signal the KARMA_AP rule was missing: across the SSIDs one BSSID
+ * advertises, how many distinct IE fingerprints came back. It pays a
+ * small confidence weight and never moves severity — see
+ * KARMA_W_IE_COLLAPSE for why it is deliberately in the informational
+ * tier. Every existing fixture here leaves ssid_history_fp[] zero, so
+ * none of them is affected, which is also the third case below. */
+
+static void test_karma_ie_collapse_pays_confidence_not_severity(void) {
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    /* Three unrelated names, one security posture behind all of them. */
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count - 1];
+    for (int i = 0; i < 3; i++) b->ssid_history_fp[i] = 0x5a5a5a5au;
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    /* The exact value, so a mutation that files this weight under a
+       different one, or pays it twice, cannot pass. */
+    ASSERT_EQ((int)s.alerts[i].confidence,
+              KARMA_W_SSID_THRESH + KARMA_W_IE_COLLAPSE);
+    ASSERT(strstr(s.alerts[i].detail, ", 1 IE fingerprint") != NULL);
+    /* Still a WARN. Nothing ties this pattern to this radio: a BSS
+       renamed over a long session shows exactly one posture too, so a
+       collapse that escalated would make the commonest benign cause of
+       a multi-SSID BSSID read as a confirmed lure. Seen to fail with
+       `|| ie_collapse` added to the severity condition in
+       rule_karma_ap(), which reddens this line alone. */
+    ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+    ASSERT(strstr(s.alerts[i].detail, "uncorroborated") != NULL);
+}
+
+static void test_karma_ie_variety_pays_nothing_and_says_so(void) {
+    /* The converse reading, and the sharper one: a BSSID whose
+       advertised SSIDs carry genuinely different postures is doing
+       something a single spoofing radio does not. It earns no weight —
+       asserted as the exact bare threshold value, so a mutation that
+       pays KARMA_W_IE_COLLAPSE whenever the count is merely *known*
+       (`if (ie_fps)` rather than `if (ie_collapse)`) reddens here — and
+       the count is printed anyway, because a signal that only appears
+       when it incriminates tells the operator nothing about the times
+       it did not. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "corp", "corp-guest", "corp-iot" };
+    seed_karma_ap(&s, bssid, ssids, 3);
+    beacon_ap_t *b = &s.beacon_aps[s.beacon_count - 1];
+    b->ssid_history_fp[0] = 0x11111111u;
+    b->ssid_history_fp[1] = 0x22222222u;
+    b->ssid_history_fp[2] = 0x33333333u;
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT_EQ((int)s.alerts[i].confidence, KARMA_W_SSID_THRESH);
+    ASSERT(strstr(s.alerts[i].detail, ", 3 IE fingerprints") != NULL);
+}
+
+static void test_karma_unknown_fingerprints_state_nothing(void) {
+    /* An AP whose fingerprints were never recorded must produce no IE
+       clause at all. "0 IE fingerprints" would read as an observation
+       about the AP rather than about sloth's coverage, and a bare "1"
+       from counting only the known entries would be the invented
+       collapse karma_ie_distinct_fp() refuses. Seen to fail with the
+       `else if (ie_fps > 1)` branch in rule_karma_ap() changed to
+       `else`, which appends ", 0 IE fingerprints" here. */
+    alerts_clear();
+    sloth_state_t s; seed_state(&s);
+    uint8_t bssid[6] = {0x00,0x11,0x22,0x33,0x44,0x55};
+    const char *ssids[] = { "homewifi", "Starbucks", "ACME-Corp" };
+    seed_karma_ap(&s, bssid, ssids, 3);   /* ssid_history_fp[] left 0 */
+    alerts_update(&s);
+    int i = find_alert(&s, ALERT_TYPE_KARMA_AP);
+    ASSERT(i >= 0);
+    if (i < 0) return;
+    ASSERT(strstr(s.alerts[i].detail, "IE fingerprint") == NULL);
+    ASSERT_EQ((int)s.alerts[i].confidence, KARMA_W_SSID_THRESH);
+}
+
 static void test_karma_detail_names_the_corroborating_station(void) {
     /* karma_pnl_client_hits() reports WHICH station corroborated, and
        the detail prints it. Review mutated `memcpy(best_sta_out,
@@ -11153,6 +11238,9 @@ void run_alerts_tests(void) {
     RUN_TEST(test_karma_single_pnl_hit_is_uncorroborated);
     RUN_TEST(test_karma_pnl_hits_spread_across_clients_no_escalation);
     RUN_TEST(test_karma_confidence_keys_on_the_corroborated_station);
+    RUN_TEST(test_karma_ie_collapse_pays_confidence_not_severity);
+    RUN_TEST(test_karma_ie_variety_pays_nothing_and_says_so);
+    RUN_TEST(test_karma_unknown_fingerprints_state_nothing);
     RUN_TEST(test_karma_detail_names_the_corroborating_station);
     RUN_TEST(test_karma_alert_key_is_the_shared_one);
     RUN_TEST(test_karma_unrelated_deauth_flood_no_chain);

@@ -1,7 +1,7 @@
 ---
 type: EVIL_TWIN_PROXIMITY
 technique: T1557
-rule_file: src/alerts/rules_twin.c:1725 (rule_evil_twin_proximity)
+rule_file: src/alerts/rules_twin.c:1746 (rule_evil_twin_proximity)
 count_semantics: per poll tick (default 250 ms) per BSSID whose 60 s RSSI swing stays >= the threshold; `count` aliases `evaluations` (engine.c:478-479). Not per beacon and not per distinct swing event - the min/max are recomputed each beacon over a 60 s window (RSSI_WIN_SECS, 16 samples), so one sustained spread keeps re-firing every tick
 severity_assessment: agree - WARN, and the rule's own comment calls it noisy on its own; it is a corroborator for EVIL_TWIN, not a standalone finding
 false_positive_risk: high - any mobile radio walking past the sensor, or the sensor/AP antenna environment changing, produces a >=15 dBm swing with no attacker present; the rule's comment says so
