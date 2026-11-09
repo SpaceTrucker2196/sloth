@@ -77,6 +77,9 @@
  *   (adsb_icao_nt), 1 non-ICAO (adsb_other), 2 TIS-B fine (tisb_icao,
  *   IMF set: tisb_trackfile, non-ICAO), 5 TIS-B non-ICAO (tisb_other),
  *   6 ADS-R (adsr_icao, IMF: adsr_other); 3, 4, 7 are not decoded.
+ *   IMF is read only where readsb reads it: TC 0/9-18/20-22 bit 8,
+ *   5-8 bit 21, 19 (subtypes 1-4) bit 9, 28 (subtype 1) bit 56, 29
+ *   bit 51, 31 bit 56; elsewhere that bit is data.
  *   DF4/20 altitude: the 13-bit AC field with Q = 1 (25 ft) only; Q = 0
  *   (Gillham, 100 ft) and M = 1 (metres) leave it absent. DF5/21 the
  *   13-bit identity, Gillham-ordered C1 A1 C2 A2 C4 A4 X B1 D1 B2 D2 B4

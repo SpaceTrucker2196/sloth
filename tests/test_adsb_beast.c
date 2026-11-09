@@ -575,6 +575,44 @@ static void test_df18_address_spaces(void) {
     adsb_reset();
 }
 
+/* DF18 CF 2 (fine TIS-B): the IMF bit, set, makes the address a track
+ * file number (non-ICAO), and it sits where readsb's
+ * decodeExtendedSquitter() callers read it - surface position bit 21,
+ * target state (TC 29) bit 51, status bit 56 for subtype 1 only. TC 28
+ * subtype 2 (an ACAS RA broadcast) has no IMF: its bit 56 is data and
+ * the address stays ICAO. */
+static void test_df18_imf_positions(void) {
+    begin();
+    uint8_t f[14], me[7];
+    memset(me, 0, sizeof(me));
+    put(me, 1, 5, 6);                       /* surface position */
+    put(me, 21, 21, 1);
+    mk_es(f, 18, 2, 0x710001, me);
+    feed(f, 14, 10);
+    memset(me, 0, sizeof(me));
+    put(me, 1, 5, 29);                      /* target state and status */
+    put(me, 51, 51, 1);
+    mk_es(f, 18, 2, 0x710002, me);
+    feed(f, 14, 10);
+    memset(me, 0, sizeof(me));
+    put(me, 1, 5, 28);                      /* ACAS RA broadcast */
+    put(me, 6, 8, 2);
+    put(me, 56, 56, 1);
+    mk_es(f, 18, 2, 0x710003, me);
+    feed(f, 14, 10);
+    poll_now();
+    const adsb_aircraft_t *s = row(0x710001, 1), *t = row(0x710002, 1),
+                          *r = row(0x710003, 0);
+    ASSERT(s && t && r);
+    if (s) { ASSERT_STR(s->type, "tisb_trackfile"); ASSERT_EQ(s->on_ground, 1); }
+    if (t) ASSERT_STR(t->type, "tisb_trackfile");
+    if (r) ASSERT_STR(r->type, "tisb_icao");
+    ASSERT(row(0x710001, 0) == NULL);
+    ASSERT(row(0x710002, 0) == NULL);
+    ASSERT(row(0x710003, 1) == NULL);
+    adsb_reset();
+}
+
 /* ── Address/parity replies ────────────────────────────────────── */
 
 /* The Riddle's DF4 and DF5 replies: their address is whatever the
@@ -952,6 +990,7 @@ void run_adsb_beast_tests(void) {
     RUN_TEST(test_gnss_alt_and_surface);
     RUN_TEST(test_status_tc28);
     RUN_TEST(test_df18_address_spaces);
+    RUN_TEST(test_df18_imf_positions);
     RUN_TEST(test_ap_needs_confirmation);
     RUN_TEST(test_confirmation_sources_and_lapse);
     RUN_TEST(test_df11_interrogator_code);

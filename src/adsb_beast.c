@@ -387,13 +387,24 @@ int adsb_beast_decode(adsb_beast_t *b, const uint8_t *msg, int len,
         default: b->ignored++; return ADSB_BEAST_IGNORED;
         }
         if (check_imf) {
-            /* The IMF bit sits where each type code puts it (readsb
-             * setIMF() callers): velocity 9, airborne position 8,
-             * status 56; identification has none. */
+            /* The IMF bit sits where each type code puts it, and only
+             * those (readsb decodeExtendedSquitter() and the setIMF()
+             * callers): velocity subtypes 1-4 bit 9, surface position
+             * 21, airborne position 8, status subtype 1 bit 56, target
+             * state 51, operational status 56; identification and the
+             * rest have none. Elsewhere that bit is data (TC 28
+             * subtype 2's bit 56 is the RA's threat identity), and
+             * reading it as IMF would key a TIS-B track-file number
+             * as an ICAO address or the reverse. */
             int imf = 0;
-            if (tc == 19) imf = (int)bits(me, 9, 9);
-            else if ((tc >= 9 && tc <= 18) || (tc >= 20 && tc <= 22)) imf = (int)bits(me, 8, 8);
-            else if (tc == 28) imf = (int)bits(me, 56, 56);
+            unsigned st = bits(me, 6, 8);
+            if (tc == 19 && st >= 1 && st <= 4) imf = (int)bits(me, 9, 9);
+            else if (tc >= 5 && tc <= 8) imf = (int)bits(me, 21, 21);
+            else if (tc == 0 || (tc >= 9 && tc <= 18) || (tc >= 20 && tc <= 22))
+                imf = (int)bits(me, 8, 8);
+            else if (tc == 28 && st == 1) imf = (int)bits(me, 56, 56);
+            else if (tc == 29) imf = (int)bits(me, 51, 51);
+            else if (tc == 31) imf = (int)bits(me, 56, 56);
             if (imf) {
                 non_icao = 1;
                 type = df == 18 && bits(msg, 6, 8) == 2 ? "tisb_trackfile" : "adsr_other";

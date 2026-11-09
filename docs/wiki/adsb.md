@@ -271,7 +271,7 @@ without a frame.
 |---|---|---|
 | CRC-24, generator `0x1FFF409` | remainder over the whole frame | 0 for an intact DF11 (II 0), DF17, DF18; for DF4/5/20/21 it is the sender's address. **No bit is ever corrected.** |
 | DF17 | only with remainder 0 | confirms its address (below); type `adsb_icao` |
-| DF18 | only with remainder 0; CF 0 `adsb_icao_nt`, 1 `adsb_other` (non-ICAO), 2 `tisb_icao` (IMF set: `tisb_trackfile`, non-ICAO), 5 `tisb_other`, 6 `adsr_icao` (IMF: `adsr_other`) | CF 3, 4, 7 not decoded. Does **not** confirm an address. |
+| DF18 | only with remainder 0; CF 0 `adsb_icao_nt`, 1 `adsb_other` (non-ICAO), 2 `tisb_icao` (IMF set: `tisb_trackfile`, non-ICAO), 5 `tisb_other`, 6 `adsr_icao` (IMF: `adsr_other`) | CF 3, 4, 7 not decoded. The IMF bit is read only where readsb reads it (TC 0/9-18/20-22 bit 8, 5-8 bit 21, 19 subtypes 1-4 bit 9, 28 subtype 1 bit 56, 29 bit 51, 31 bit 56); elsewhere it is data. Does **not** confirm an address. |
 | DF11 | only with remainder 0 | confirms its address; makes no row. A remainder within the low 7 bits is the interrogator code of the radar it answered (readsb: `IID = crc & 0x7f`): ignored, neither an error nor a confirmation; above them it is a CRC failure. The first live run counted such a reply as `bad` until this was fixed. |
 | DF4 / DF20 | only from a confirmed address | the 13-bit AC with Q = 1 (25 ft); Q = 0 (Gillham, 100 ft) and M = 1 (metres) leave the altitude absent |
 | DF5 / DF21 | only from a confirmed address | the 13-bit identity, C1 A1 C2 A2 C4 A4 X B1 D1 B2 D2 B4 D4, as the squawk; all zero leaves it absent |
