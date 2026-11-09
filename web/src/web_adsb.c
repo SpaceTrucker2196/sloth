@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "web_alertkb.h"
+#include "web_live.h"
 #include "web_series.h"
 
 /* ── lifecycle ──────────────────────────────────────────────────────── */
@@ -284,7 +286,45 @@ static int by_interest(const void *pa, const void *pb) {
     return strcmp(x->hex, y->hex);
 }
 
-static void row_json(web_jw_t *w, const web_adsb_row_t *x) {
+int web_adsb_alerts(struct web_live_s *l, web_adsb_alert_t *out, int max) {
+    if (!l || max <= 0) return 0;
+    web_live_inc_t *inc = calloc(WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, sizeof(*inc));
+    if (!inc) return 0;
+    int nopen = 0, n = 0;
+    web_live_incidents(l, inc, WEB_LIVE_INCIDENTS + WEB_LIVE_CLOSED, &nopen);
+    for (int i = 0; i < nopen && n < max; i++) {
+        const web_live_inc_t *e = &inc[i];
+        const web_akb_t *k = web_akb_get(e->type);
+        if (!k || strcmp(k->name, "ADSB_EMERGENCY") || !e->hid[0]) continue;
+        /* adsbemerg:<6 hex>:<icao|nonicao>: - anything else is not a
+         * key this rule wrote, and names no row. */
+        const char *p = e->key;
+        if (strncmp(p, "adsbemerg:", 10)) continue;
+        p += 10;
+        char hx[7];
+        int ok = 1;
+        for (int j = 0; j < 6; j++) {
+            if (!ok_hexd((unsigned char)p[j])) { ok = 0; break; }
+            hx[j] = p[j];
+        }
+        hx[6] = '\0';
+        if (!ok || p[6] != ':') continue;
+        p += 7;
+        int non_icao;
+        if (!strncmp(p, "icao:", 5)) non_icao = 0;
+        else if (!strncmp(p, "nonicao:", 8)) non_icao = 1;
+        else continue;
+        web_adsb_alert_t *o = &out[n++];
+        snprintf(o->hex, sizeof(o->hex), "%s%s", non_icao ? "~" : "", hx);
+        snprintf(o->id, sizeof(o->id), "s%s", e->hid);
+        o->sev = e->sev < 0 ? 0 : e->sev > 2 ? 2 : e->sev;
+    }
+    free(inc);
+    return n;
+}
+
+static void row_json(web_jw_t *w, const web_adsb_row_t *x,
+                     const web_adsb_alert_t *al, int nal) {
     web_jw_raw(w, "{\"hex\":"); web_jw_str(w, x->hex);
     web_jw_raw(w, ",\"non_icao\":"); web_jw_int(w, x->non_icao);
     web_jw_raw(w, ",\"state\":"); web_jw_str(w, x->gone ? "gone" : "live");
@@ -310,6 +350,19 @@ static void row_json(web_jw_t *w, const web_adsb_row_t *x) {
     web_jw_raw(w, ",\"last_seen\":"); web_jw_int(w, x->last_seen);
     web_jw_raw(w, ",\"ts\":"); web_jw_int(w, x->ts);
     web_jw_raw(w, ",\"records\":"); web_jw_int(w, x->records);
+    /* The open ADSB_EMERGENCY incident naming this address, the page's
+     * way to its alert (#186); null with none. */
+    web_jw_raw(w, ",\"alert\":");
+    const web_adsb_alert_t *hit = NULL;
+    for (int j = 0; al && j < nal && !hit; j++)
+        if (!strcmp(al[j].hex, x->hex)) hit = &al[j];
+    if (hit) {
+        web_jw_raw(w, "{\"id\":"); web_jw_str(w, hit->id);
+        web_jw_raw(w, ",\"sev\":"); web_jw_int(w, hit->sev);
+        web_jw_raw(w, "}");
+    } else {
+        web_jw_raw(w, "null");
+    }
     /* Oldest first: [ts, lat, lon, alt] with alt null unknown, -1 on
      * the ground. */
     web_jw_raw(w, ",\"track_pts\":[");
@@ -327,6 +380,7 @@ static void row_json(web_jw_t *w, const web_adsb_row_t *x) {
 }
 
 int web_adsb_route(web_adsb_t *a, const char *query, long long now_s, int none_here,
+                   const web_adsb_alert_t *al, int nal,
                    char *body, size_t cap, size_t *len, int *status) {
     web_param_t ps[1] = { { "limit", "", 0 } };
     char err[48];
@@ -388,7 +442,7 @@ int web_adsb_route(web_adsb_t *a, const char *query, long long now_s, int none_h
     web_jw_raw(&w, ",\"rows\":[");
     for (int i = 0; i < n && i < limit; i++) {
         if (i) web_jw_raw(&w, ",");
-        row_json(&w, idx[i]);
+        row_json(&w, idx[i], al, nal);
     }
     web_jw_raw(&w, "]}");
     pthread_mutex_unlock(&a->mu);

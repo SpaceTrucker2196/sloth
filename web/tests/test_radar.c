@@ -766,7 +766,7 @@ static void test_radar_scope_and_caption(void) {
  * leaves one it does not for the next load. */
 static void test_select_hooks(void) {
     const char *p = (const char *)web_page;
-    WT_HAS(p, "  window.SlothAdsb = { show: show, select: select };");
+    WT_HAS(p, "  window.SlothAdsb = { init: init, show: show, select: select };");
     WT_HAS(p, "  window.SlothGnss = { show: show, select: select };");
     WT_HAS(p, "  window.SlothAprs = { show: show, select: select };");
     WT_HAS(p, "  function select(hex) {\n"

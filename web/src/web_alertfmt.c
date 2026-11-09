@@ -65,6 +65,12 @@ const web_adf_t web_alert_detail_audited[] = {
     { "MLE_RECONFIG_NO_MLO", "", "" },
     { "WPS_PIXIE_PROBE", "", "" },
     { "WPS_PIXIE_LIKELY_SUCCESS", "", "" },
+    { "ADSB_EMERGENCY", "callsign sq ew",
+      "callsign is the aircraft's broadcast flight ID (adsb_aircraft_t.flight: at most 8 printable ASCII,"
+      " no quote or backslash, src/adsb.c flight_fix()) or the literal \"-\", a public identifier in the"
+      " position an SSID holds; sq is the squawk, 4 octal digits (squawk_ok()) or \"-\";"
+      " ew is adsb_emergency_name()'s literal from sloth's own k_emerg[] table or \"-\""
+      " (src/alerts/rules_adsb.c)" },
 };
 const size_t web_alert_detail_audited_n =
     sizeof(web_alert_detail_audited) / sizeof(web_alert_detail_audited[0]);

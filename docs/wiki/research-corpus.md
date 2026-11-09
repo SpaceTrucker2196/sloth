@@ -3,7 +3,7 @@
 **Issue:** [#73](https://github.com/SpaceTrucker2196/sloth/issues/73) ·
 **Built by:** `make research-index` · **Guard:** `tests/test_research_corpus.c`
 
-**Last updated**: 2026-11-03 (the four GNSS kinds landed: each document's `alert_kinds` uncommented); 2026-11-02 (four GNSS documents, kinds pending; the BLE device-class document, no alert kind); 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
+**Last updated**: 2026-11-08 (#186: `research/adsb/emergency-squawks.md` for `ADSB_EMERGENCY`); 2026-11-03 (the four GNSS kinds landed: each document's `alert_kinds` uncommented); 2026-11-02 (four GNSS documents, kinds pending; the BLE device-class document, no alert kind); 2026-10-26 (the RSSI distance document, no alert kind); 2026-10-21 (#144 slice 4: three BLE documents); 2026-10-15 (#137: corpus opened as an untrusted database)
 
 `agents/AGENTS.md` § Discipline says every detector names its basis. The
 citations exist — in issue bodies, wiki pages and the rule table — but
@@ -26,6 +26,8 @@ research/
                                  Bluetooth link types and Core Spec clauses
   gnss/spoofing-detection.md     GNSS spoofing, jamming, time/position
                                  integrity, ATT&CK mapping
+  adsb/emergency-squawks.md      ADS-B emergency codes and status, and
+                                 why the alert is flag only
   tools/                         tool documentation
 ```
 
@@ -437,6 +439,16 @@ direction fails on a kind the enum lacks; the commit that added the four
 Mobile T1464 (owner ruling 2026-11-03) and the coverage guard holds it;
 the other three are on the cited-basis list in
 `test_uncitable_kinds_with_a_real_basis_are_still_cited`. See [[gnss]].
+
+`ADSB_EMERGENCY` (#186) cites `research/adsb/emergency-squawks.md`:
+SERA.13005 (EU 923/2012) for the meaning of 7500 / 7600 / 7700, readsb's
+`README-json.md` for the squawk and the DO-260B emergency/priority
+status as the decoder reports them, and Costin & Francillon (Black Hat
+USA 2012) and Schäfer, Lenders & Martinovic (ACNS 2013, the "False
+Alarm Attack") for why it is flag only. Each was read first-hand on
+2026-11-08; ICAO Doc 8168 / 4444, FAA AIM 4-1-20 and RTCA DO-260B were
+not, and the document says so. Empty technique, on the cited-basis
+list. See [[adsb]].
 
 ## What is not here yet
 - **Coverage.** 59 of 60 alert kinds have a document, and the sixtieth

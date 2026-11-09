@@ -16,8 +16,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "sloth.h"
 #include "web_adsb.h"
 #include "web_assets.h"
+#include "web_ingest.h"
 #include "web_jsonl.h"
 #include "web_live.h"
 #include "web_routes.h"
@@ -125,13 +127,13 @@ static void test_adsb_ingest_and_route(void) {
               "\"track\":271.5,\"baro_rate\":-64,\"geom_rate\":-32,\"lat\":10.12345,"
               "\"lon\":20.54321,\"pos_ts\":1793059199,\"rssi\":-18.4,\"messages\":2210,"
               "\"first_seen\":1793059100,\"last_seen\":1793059199,\"ts\":1793059200,"
-              "\"records\":1,\"track_pts\":[[1793059199,10.12345,20.54321,34000]]}");
+              "\"records\":1,\"alert\":null,\"track_pts\":[[1793059199,10.12345,20.54321,34000]]}");
     WT_HAS(b, "{\"hex\":\"0d0e0f\",\"non_icao\":0,\"state\":\"live\",\"source_type\":\"mode_s\","
               "\"flight\":\"\",\"squawk\":\"\",\"category\":\"\",\"emergency\":\"\",\"on_ground\":0,"
               "\"alt_baro\":null,\"alt_geom\":2550,\"alt_band\":3,\"gs\":115.4,\"track\":null,"
               "\"baro_rate\":null,\"geom_rate\":null,\"lat\":null,\"lon\":null,\"pos_ts\":null,"
               "\"rssi\":-25.0,\"messages\":12,\"first_seen\":1793059150,\"last_seen\":1793059170,"
-              "\"ts\":1793059200,\"records\":1,\"track_pts\":[]}");
+              "\"ts\":1793059200,\"records\":1,\"alert\":null,\"track_pts\":[]}");
     /* A later record with a new cell appends a point; one with the same
      * position (a heartbeat) does not. */
     static char line[1024];
@@ -144,7 +146,7 @@ static void test_adsb_ingest_and_route(void) {
     feed(line);
     WT_EQ(route(&H, "/api/adsb", "limit=2"), 200);
     b = body_of(g_out);
-    WT_HAS(b, "\"records\":3,\"track_pts\":[[1793059199,10.12345,20.54321,34000],"
+    WT_HAS(b, "\"records\":3,\"alert\":null,\"track_pts\":[[1793059199,10.12345,20.54321,34000],"
               "[1793059199,10.23456,20.54321,34000]]}]}");
     WT_LACKS(b, "\"hex\":\"0d0e0f\"");     /* limit=2 */
     /* The health member. */
@@ -226,7 +228,7 @@ static void test_adsb_gone_and_age(void) {
     feed(line);
     WT_EQ(route(&H, "/api/adsb", ""), 200);
     WT_HAS(body_of(g_out), "\"first_seen\":1793059350,\"last_seen\":1793059199,\"ts\":1793059360,"
-                           "\"records\":1,\"track_pts\":[[1793059199,11.00000,20.54321,34000]]}");
+                           "\"records\":1,\"alert\":null,\"track_pts\":[[1793059199,11.00000,20.54321,34000]]}");
     /* 700 s on, a sensor_health: AC2 (live, last record at T) is past
      * the live TTL and aged; AC1 (live again at T+160) stays. */
     snprintf(line, sizeof(line), "%s", SH);
@@ -334,6 +336,129 @@ static void test_adsb_page(void) {
     WT_LACKS(p, "class=\"adsb-table\"");
 }
 
+/* An open ADSB_EMERGENCY incident (#186) links its aircraft: the row's
+ * "alert" is the incident's alert-page handle and severity, matched by
+ * the address sloth's key names (adsbemerg:<hex>:<icao|nonicao>:...),
+ * and null for every row no open incident of that type names. Each
+ * absence seen red under a mutation of web_adsb_alerts() and restored:
+ * the closed 7500 incident linked a1b2c3 with the loop over every
+ * incident instead of the open ones; the PORT_SCAN incident with an
+ * adsbemerg key linked 0d0e0f with the type test removed; the
+ * nonicao-keyed incident linked 0d0e0f with the '~' prefix dropped. */
+static void test_adsb_alert_link(void) {
+    fresh();
+    feed(SH); feed(AC1); feed(AC2); feed(AC3);
+    web_live_t *l = calloc(1, sizeof(*l));
+    WT_ASSERT(l != NULL);
+    if (!l) return;
+    web_live_init(l, "unix:/t/s.sock");
+    web_live_sock_connected(l, 0);
+    web_feed_t f;
+    memset(&f, 0, sizeof(f));
+    web_feed_reset(&f);
+    static char b[4096];
+    int n = snprintf(b, sizeof(b),
+        "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"ad5b000000000001\","
+        "\"key\":\"adsbemerg:00abcd:nonicao:7700\",\"title\":\"ADSB_EMERGENCY\",\"sev\":1,"
+        "\"ty\":%d,\"count\":1}\n"
+        "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"ad5b000000000002\","
+        "\"key\":\"adsbemerg:a1b2c3:icao:7500\",\"title\":\"ADSB_EMERGENCY\",\"sev\":0,"
+        "\"ty\":%d,\"count\":1}\n"
+        "{\"type\":\"alert.resolve\",\"ts\":%lld,\"incident_id\":\"ad5b000000000002\","
+        "\"key\":\"adsbemerg:a1b2c3:icao:7500\",\"title\":\"ADSB_EMERGENCY\",\"sev\":0,"
+        "\"ty\":%d,\"count\":3,\"reason\":\"expired\"}\n"
+        "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"ad5b000000000003\","
+        "\"key\":\"adsbemerg:0d0e0f:icao:7700\",\"title\":\"PORT_SCAN\",\"sev\":1,"
+        "\"ty\":0,\"count\":1}\n"
+        "{\"type\":\"alert.create\",\"ts\":%lld,\"incident_id\":\"ad5b000000000004\","
+        "\"key\":\"adsbemerg:0d0e0f:nonicao:7600\",\"title\":\"ADSB_EMERGENCY\",\"sev\":0,"
+        "\"ty\":%d,\"count\":1}\n",
+        T - 60, (int)ALERT_TYPE_ADSB_EMERGENCY, T - 50, (int)ALERT_TYPE_ADSB_EMERGENCY,
+        T - 10, (int)ALERT_TYPE_ADSB_EMERGENCY, T - 40, T - 30, (int)ALERT_TYPE_ADSB_EMERGENCY);
+    WT_ASSERT(n > 0 && n < (int)sizeof(b));
+    web_feed_bytes(&f, l, b, (size_t)n, 1000);
+    web_health_t H;
+    health(&H, T + 5);
+    H.live = l;
+    WT_EQ(route(&H, "/api/adsb", ""), 200);
+    const char *body = body_of(g_out);
+    const char *r1 = strstr(body, "{\"hex\":\"~00abcd\"");
+    const char *r2 = strstr(body, "{\"hex\":\"a1b2c3\"");
+    const char *r3 = strstr(body, "{\"hex\":\"0d0e0f\"");
+    WT_ASSERT(r1 && r2 && r3 && r1 < r2 && r2 < r3);
+    if (r1 && r2 && r3) {
+        const char *a1 = strstr(r1, "\"alert\":");
+        WT_ASSERT(a1 && a1 < r2 && !strncmp(a1, "\"alert\":{\"id\":\"s", 16));
+        const char *sv = a1 ? strstr(a1, "\"sev\":") : NULL;
+        WT_ASSERT(sv && sv < r2 && !strncmp(sv, "\"sev\":1}", 8));
+        const char *a2 = strstr(r2, "\"alert\":");
+        WT_ASSERT(a2 && a2 < r3 && !strncmp(a2, "\"alert\":null", 12));
+        const char *a3 = strstr(r3, "\"alert\":");
+        WT_ASSERT(a3 && !strncmp(a3, "\"alert\":null", 12));
+    }
+    /* The handle is one the alert route answers. */
+    web_adsb_alert_t al[WEB_ADSB_ALERTS];
+    int nal = web_adsb_alerts(l, al, WEB_ADSB_ALERTS);
+    WT_EQ(nal, 2);
+    int seen = 0;
+    for (int i = 0; i < nal; i++) {
+        if (strcmp(al[i].hex, "~00abcd")) continue;
+        seen = 1;
+        char q[64];
+        snprintf(q, sizeof(q), "id=%s", al[i].id);
+        WT_EQ(route(&H, "/api/alert", q), 200);
+        WT_HAS(body_of(g_out), "\"type_name\":\"ADSB_EMERGENCY\"");
+    }
+    WT_EQ(seen, 1);
+    WT_EQ(web_adsb_alerts(NULL, al, WEB_ADSB_ALERTS), 0);
+    WT_EQ(route(&H, "/api/adsb", "scope=local"), 200);
+    WT_LACKS(body_of(g_out), "\"alert\":{");
+    web_live_destroy(l);
+    free(l);
+}
+
+/* The page's half of the link: the whole of alertOf() and alertMark(),
+ * the ALERT column, the row's and the detail's use of the mark, and
+ * app.js lending go() (agents/AGENTS.md: pin whole functions). */
+static void test_adsb_alert_link_page(void) {
+    const char *p = (const char *)web_page;
+    WT_HAS(p,
+        "  var ALERT_ID_RE = /^s[0-9A-Za-z]{1,24}$/;\n"
+        "  function alertOf(a) {\n"
+        "    return a.alert && typeof a.alert.id === \"string\" && ALERT_ID_RE.test(a.alert.id) ? a.alert : null;\n"
+        "  }\n"
+        "  function alertMark(a) {\n"
+        "    var al = alertOf(a);\n"
+        "    if (!al) return null;\n"
+        "    var held = al.sev >= 1;\n"
+        "    var m = el(\"span\", \"go adsb-alert \" + (held ? \"h3\" : \"h2\"), held ? \"ALERT\" : \"alert\");\n"
+        "    m.tabIndex = 0;\n"
+        "    m.role = \"link\";\n"
+        "    m.title = \"ADSB_EMERGENCY \" + (held ? \"held\" : \"first sight\") + \": flag only, unverified\";\n"
+        "    function open(e) { e.stopPropagation(); if (H && H.go) H.go(\"alert\", { id: al.id }); }\n"
+        "    m.addEventListener(\"click\", open);\n"
+        "    m.addEventListener(\"keydown\", function (e) { if (e.key === \"Enter\" || e.key === \" \") { e.preventDefault(); open(e); } });\n"
+        "    return m;\n"
+        "  }\n");
+    WT_HAS(p, "    { k: \"ak\", label: \"ALERT\", w: 6, min: 5, type: \"num\", val: function (a) { var al = alertOf(a); return al ? al.sev + 1 : 0; } }\n  ];");
+    WT_HAS(p,
+        "    var ac = cell(\"c-ak\");\n"
+        "    var mk = alertMark(a);\n"
+        "    if (mk) ac.appendChild(mk); else { ac.textContent = \"-\"; ac.className = \"c-ak d-dim\"; }\n"
+        "    r.appendChild(ac);\n");
+    WT_HAS(p,
+        "    var mk = alertMark(a);\n"
+        "    if (mk) {\n"
+        "      kv.appendChild(el(\"dt\", \"\", \"alert\"));\n"
+        "      var dd = el(\"dd\", \"\");\n"
+        "      dd.appendChild(mk);\n");
+    WT_HAS(p, "  function init(h) { H = h; }\n\n  window.SlothAdsb = { init: init, show: show, select: select };");
+    WT_HAS(p, "  if (window.SlothAdsb) SlothAdsb.init({ go: go });");
+    /* The id the page sends is the route's own shape (app.js ALERT_ID_RE
+     * takes s or d; a row only ever names a stream incident). */
+    WT_HAS(p, "  var ALERT_ID_RE = /^[sd][0-9A-Za-z]{1,24}$/;");
+}
+
 void run_adsb_tests(void) {
     WT_RUN(test_adsb_ingest_and_route);
     WT_RUN(test_adsb_ranges_and_refusals);
@@ -342,5 +467,7 @@ void run_adsb_tests(void) {
     WT_RUN(test_adsb_scope);
     WT_RUN(test_adsb_vocabulary_is_sloths);
     WT_RUN(test_adsb_page);
+    WT_RUN(test_adsb_alert_link);
+    WT_RUN(test_adsb_alert_link_page);
     web_adsb_destroy(&A);
 }

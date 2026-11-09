@@ -302,6 +302,14 @@ static void test_uncitable_kinds_with_a_real_basis_are_still_cited(void) {
         "ALERT_TYPE_GNSS_SPOOF_SUSPECT",
         "ALERT_TYPE_GNSS_TIME_JUMP",
         "ALERT_TYPE_GNSS_POSITION_JUMP",
+        /* #186. An aircraft squawking 7500/7600/7700 or reporting a
+         * DO-260B emergency status is a third party declaring its own
+         * state, not an adversary's step, and a forged one cannot be
+         * told from a real one by one receiver. SERA.13005, readsb's
+         * README-json.md, Costin & Francillon 2012 and Schafer et al.
+         * 2013 are what it detects from
+         * (research/adsb/emergency-squawks.md). */
+        "ALERT_TYPE_ADSB_EMERGENCY",
     };
     sqlite3 *db = open_corpus();
     ASSERT(db != NULL);

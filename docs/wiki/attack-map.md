@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/README.md`, `docs/views/alerts.md`, all per-view docs.
 
-**Last updated**: 2026-11-03 (GNSS receiver attacks); 2026-10-15.
+**Last updated**: 2026-11-08 (ADS-B emergency declarations, flag only); 2026-11-03 (GNSS receiver attacks); 2026-10-15.
 
 ---
 
@@ -52,6 +52,7 @@ type: reference
 | GPS spoofing | [gnss.md](../views/gnss.md), [[alerts]] (`GNSS_SPOOF_SUSPECT`) |
 | Receiver clock moved (host time steered by GNSS) | [[gnss]] (the clock offset), [[alerts]] (`GNSS_TIME_JUMP`) |
 | Position moved implausibly | [[location]], [[alerts]] (`GNSS_POSITION_JUMP`) |
+| Aircraft declaring an emergency (7500 / 7600 / 7700 or ADS-B status; flag only, may be forged) | [[adsb]], [[alerts]] (`ADSB_EMERGENCY`) |
 
 ## Triage tips
 
@@ -65,7 +66,7 @@ type: reference
 
 ## Related pages
 
-- [[alerts]] — the <!-- count:rules -->94<!-- /count --> alert rules and what each one keys on.
+- [[alerts]] — the <!-- count:rules -->95<!-- /count --> alert rules and what each one keys on.
 - [[threat-intel]] — the IOC list and its match semantics.
 - [[ja3-fingerprinting]] — TLS-client identification primitive.
 - [[beacon-detection]] — C2 periodicity detector.

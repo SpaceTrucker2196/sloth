@@ -20,3 +20,5 @@
 .adsb-kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; font-size: 12px; margin: 4px 0; }
 .adsb-kv dt { opacity: 0.7; }
 .adsb-kv dd { margin: 0; }
+/* The ALERT cell's link (#186): text colour only, no row tint. */
+.adsbrow > span.c-ak .adsb-alert { cursor: pointer; font-weight: bold; text-decoration: underline dotted; }

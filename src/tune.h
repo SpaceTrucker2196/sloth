@@ -184,6 +184,10 @@ typedef enum {
     TUNE_GNSS_SPOOF_WINDOW_S,
     TUNE_GNSS_TIME_JUMP_MS,
     TUNE_GNSS_POS_JUMP_K,
+    /* #186: ADSB_EMERGENCY (src/alerts/rules_adsb.c). How long the
+       aircraft's emergency condition must hold, by its own messages,
+       before LOW becomes WARN. */
+    TUNE_ADSB_EMERG_HOLD_S,
     TUNE_COUNT
 } tune_id_t;
 

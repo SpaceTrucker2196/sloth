@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-03 (#173: a detail carries only what moves with the evidence; per-rule fixes listed under *Incident lifecycle*). 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
+**Last updated**: 2026-11-08 (#186: `ADSB_EMERGENCY`, `src/alerts/rules_adsb.c`). 2026-11-03 (#173: a detail carries only what moves with the evidence; per-rule fixes listed under *Incident lifecycle*). 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
 **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
@@ -713,6 +713,50 @@ Each rule judges a fix pair once; `c` (alerts_clear) drops the rules'
 memory and a fix received before it is never judged after it, so
 clearing cannot replay a minute-old jump. No new JSONL record: the
 alert records already carry `loc` ([[location]]).
+
+### ADS-B emergency squawks and status (#186)
+
+What the `--adsb` decoder lists ([[adsb]]), judged by
+`src/alerts/rules_adsb.c` from the per-poll table (`s->adsb`,
+`s->adsb_rows`) and never from `src/adsb.c`.
+
+| Kind | Sev | ATT&CK | Fires on |
+|---|---|---|---|
+| `ADSB_EMERGENCY` | LOW on first sight, WARN once held 10 s, never CRIT | — | an aircraft listed while the source is live with squawk 7500, 7600 or 7700, or an emergency/priority status other than `none` |
+
+**Flag only.** An aircraft declaring an emergency is a third party's
+state, not anything about the operator's network, and ADS-B carries no
+authentication: Schäfer et al. 2013 §3.2 name the "False Alarm Attack"
+outright, and one receiver has no second opinion. sloth surfaces the
+declaration and never acts on it; the detail says so.
+
+**One incident per address and condition.** The key is
+`adsbemerg:<icao>:<icao|nonicao>:<condition>`, the condition the 7x00
+code when the squawk is one, else the status word (readsb: the status is
+"a superset of the 7x00 squawks"). A code change (7700 to 7500) re-keys
+and re-fires; a status following its code from `none` to `general` is
+the same incident; a steady condition re-asserted every pass holds its
+detail still (#173). An aircraft that leaves the table, or a source gone
+`stale`, stops being evaluated and the incident expires on the quiet
+period like any other.
+
+**Severity is persistence, not corroboration.** The squawk and the
+status are one declaration reported two ways (DO-260B carries both in
+the Aircraft Status message), so agreement between them is not a second
+observation. A single corrupted reply or a code dialled through in
+passing is what the hold keeps at LOW: the condition must hold for
+`adsb.emerg_hold_s` (10 s, [[cli-reference]]) of the aircraft's **own**
+message time (the row's `last_mono_ms`), so a decoder relisting an
+aircraft it has not heard again does not age it into WARN. No source
+gives that number; it is a judgement and a knob.
+
+Empty technique, second exemption form: SERA.13005, readsb's
+README-json.md, Costin & Francillon 2012 and Schäfer et al. 2013 are
+its basis (`research/adsb/emergency-squawks.md`), and it is on the named
+list in `tests/test_research_corpus.c`. Tested in
+`tests/test_adsb_rules.c` with hand-written aircraft.json documents
+through the module's own parser, every absence seen red under a named
+mutation.
 
 ### Exposure rules — no ATT&CK technique, on purpose
 

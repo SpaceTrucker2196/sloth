@@ -498,7 +498,7 @@ the store is refused, `2` on a usage error or a policy refusal (a
    | `GET /api/pcap?id=&n=` | `200` the same file's bytes, `Content-Type: application/vnd.tcpdump.pcap`, `Content-Disposition: attachment; filename="<its name>"`, `X-Sloth-SHA256: verified`, `mismatch` or `no_manifest_entry` (the check of the bytes served), `Cache-Control: no-store`; the errors as above, as JSON |
    | `GET /api/bundle?kind=device\|alert\|lookup\|ble\|platform&id=` | `200` JSON, a detail view's whole answer for its "copy JSON" button ([Copy JSON: the analysis bundle](#copy-json-the-analysis-bundle)); `400` for a kind, an id or a parameter that does not pass; `404` and `503` as the route it splices (`not_found` for a BLE address no sensor heard, `no_such_platform`, `no_store`); `413` `bundle_too_large` |
    | `GET /api/gnss?limit=` | `200` JSON, the GNSS tab ([GNSS](#gnss)): the `sensor_health` gnss block, the newest `gnss_fix` and `gnss_sky`, every satellite row with its last 16 `(ts, C/N0)` points sorted by C/N0, and the panel's counts; `scope_note` says the receiver is the host's own, so the answer is the same under every scope; `400` for an unknown parameter or a `limit` outside 1..64; `503` with no panel |
-   | `GET /api/adsb?limit=` | `200` JSON, the ADS-B tab ([ADS-B](#ads-b)): the `sensor_health` adsb block, every aircraft row with its kept track (its last 32 positions, `[ts, lat, lon, alt]`), an emergency first, then live before gone, then the most recently heard, and the panel's counts (`total`, `live`, `with_pos`, `emergency`); Monitor's and Hybrid's, Local answers `out_of_scope` with the query still checked; `400` for an unknown parameter or a `limit` outside 1..512; `503` with no panel |
+   | `GET /api/adsb?limit=` | `200` JSON, the ADS-B tab ([ADS-B](#ads-b)): the `sensor_health` adsb block, every aircraft row with its kept track (its last 32 positions, `[ts, lat, lon, alt]`), an emergency first, then live before gone, then the most recently heard, each row's `alert` (the open `ADSB_EMERGENCY` incident naming its address, `{"id","sev"}`, else `null`), and the panel's counts (`total`, `live`, `with_pos`, `emergency`); Monitor's and Hybrid's, Local answers `out_of_scope` with the query still checked; `400` for an unknown parameter or a `limit` outside 1..512; `503` with no panel |
    | `GET /api/gnss/seen?days=&limit=` | `200` JSON from sloth.db's `gnss_sightings` (needs `--sloth-db`): one row per satellite seen in the last `days` (1..400, default 1), most recently seen first, at most `limit` (1..160): first and last seen, records, `used_pct`, `cn0_max`, `cn0_mean`, `el_max`; `"have":false` from a file older than v10; every scope's; `503` `no_sloth_db` without one |
    | `GET /api/gnss/tracks?hours=` | `200` JSON from `gnss_sightings`: every satellite's `[ts, el, az]` over the last `hours` (1..24, default 6), at most 32 a satellite (the newest record of each `bucket_s`) and 2400 in all (`cut`), each track with its RINEX `id`; the sky plot's trails; every scope's |
    | `GET /api/gnss/sat?gnssid=&prn=&days=` | `200` JSON, one satellite's `gnss_sightings` over the window, oldest first, at most 400, as `[ts, el, az, cn0, used, health]`; `400` `bad_gnssid` / `bad_prn` / `bad_days` |
@@ -952,7 +952,15 @@ hex digits (else rejected and counted), the callsign printable ASCII of
 at most 8, the squawk four octal digits, the category `A0`..`D7`, the
 emergency one of sloth's eight words; every number is range checked
 and anything outside is `null`, never clamped. Observation only: no
-row is a finding; the emergency-squawk alert is a later slice.
+row is a finding. The finding is sloth's flag-only `ADSB_EMERGENCY`
+(#186, an emergency squawk or status; [adsb](../docs/wiki/adsb.md)),
+and the tab links to it: a row whose address an **open**
+`ADSB_EMERGENCY` incident names (sloth's key
+`adsbemerg:<hex>:<icao|nonicao>:...`) carries `alert` (`{"id","sev"}`,
+the alert page's handle), shown as an ALERT column (`ALERT` for WARN,
+`alert` for LOW) and an alert line in the detail panel, each opening
+the alert's page. A closed incident, or one of another type, links
+nothing. The incident is Monitor's, as the records are.
 
 ## APRS
 

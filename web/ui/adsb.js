@@ -61,6 +61,30 @@
   }
   function label(a) { return a.flight || a.hex; }
 
+  // The open ADSB_EMERGENCY incident on an aircraft (#186), as /api/adsb
+  // names it: the row's ALERT cell and the detail's alert line open its
+  // alert page through app.js's go(). sloth only flags the declaration
+  // (ADS-B is unauthenticated); the page only links it. WARN (held)
+  // reads ALERT in the peak colour, LOW (first sight) alert, one down.
+  var H = null;
+  var ALERT_ID_RE = /^s[0-9A-Za-z]{1,24}$/;
+  function alertOf(a) {
+    return a.alert && typeof a.alert.id === "string" && ALERT_ID_RE.test(a.alert.id) ? a.alert : null;
+  }
+  function alertMark(a) {
+    var al = alertOf(a);
+    if (!al) return null;
+    var held = al.sev >= 1;
+    var m = el("span", "go adsb-alert " + (held ? "h3" : "h2"), held ? "ALERT" : "alert");
+    m.tabIndex = 0;
+    m.role = "link";
+    m.title = "ADSB_EMERGENCY " + (held ? "held" : "first sight") + ": flag only, unverified";
+    function open(e) { e.stopPropagation(); if (H && H.go) H.go("alert", { id: al.id }); }
+    m.addEventListener("click", open);
+    m.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(e); } });
+    return m;
+  }
+
   function getJSON(path) {
     return fetch(path, { credentials: "same-origin", cache: "no-store" }).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
@@ -129,7 +153,8 @@
     { k: "ms", label: "MSGS", w: 7, min: 4, num: true, type: "num", val: val("messages") },
     { k: "sr", label: "SOURCE", w: 10, min: 4, type: "text", val: function (a) { return a.source_type || ""; } },
     { k: "st", label: "STATE", w: 5, min: 4, type: "text", val: function (a) { return a.state; } },
-    { k: "ag", label: "HEARD", w: 6, min: 3, type: "time", val: val("last_seen") }
+    { k: "ag", label: "HEARD", w: 6, min: 3, type: "time", val: val("last_seen") },
+    { k: "ak", label: "ALERT", w: 6, min: 5, type: "num", val: function (a) { var al = alertOf(a); return al ? al.sev + 1 : 0; } }
   ];
   function table() {
     if (T || !window.SlothTables || !$("adsb-box")) return T;
@@ -166,6 +191,10 @@
     r.appendChild(cell("c-sr", a.source_type || "-"));
     r.appendChild(cell("c-st", a.state));
     r.appendChild(cell("c-ag d-dim", age(a.last_seen, now)));
+    var ac = cell("c-ak");
+    var mk = alertMark(a);
+    if (mk) ac.appendChild(mk); else { ac.textContent = "-"; ac.className = "c-ak d-dim"; }
+    r.appendChild(ac);
     r.tabIndex = 0;
     function pick() { sel = a.hex; detail(a, now); drawRows(); histLoad(a.hex); }
     r.addEventListener("click", pick);
@@ -213,6 +242,14 @@
       kv.appendChild(el("dt", "", p[0]));
       kv.appendChild(el("dd", "", p[1]));
     });
+    var mk = alertMark(a);
+    if (mk) {
+      kv.appendChild(el("dt", "", "alert"));
+      var dd = el("dd", "");
+      dd.appendChild(mk);
+      dd.appendChild(el("span", "d-dim", " ADSB_EMERGENCY, flag only: ADS-B is unauthenticated and sloth cannot verify it"));
+      kv.appendChild(dd);
+    }
   }
   function closeDetail() {
     $("adsb-detail").hidden = true;
@@ -549,5 +586,8 @@
   var closeBtn = $("adsb-detail-close");
   if (closeBtn) closeBtn.addEventListener("click", closeDetail);
 
-  window.SlothAdsb = { show: show, select: select };
+  // app.js's helpers, lent once: go() for the alert link.
+  function init(h) { H = h; }
+
+  window.SlothAdsb = { init: init, show: show, select: select };
 })();

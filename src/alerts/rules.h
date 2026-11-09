@@ -132,4 +132,7 @@ void rule_gnss_jamming(const sloth_state_t *s, time_t now);
 void rule_gnss_spoof_suspect(const sloth_state_t *s, time_t now);
 void rule_gnss_time_jump(const sloth_state_t *s, time_t now);
 void rule_gnss_position_jump(const sloth_state_t *s, time_t now);
+
+/* src/alerts/rules_adsb.c (#186): the --adsb decoder's aircraft table */
+void rule_adsb_emergency(const sloth_state_t *s, time_t now);
 #endif

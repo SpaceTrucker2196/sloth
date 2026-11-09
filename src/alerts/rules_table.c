@@ -114,6 +114,8 @@ const alert_rule_t g_alert_rules[] = {
     R(rule_gnss_time_jump),
     R(rule_gnss_position_jump),
     R(rule_gnss_spoof_suspect),
+    /* Reads only the ADS-B table; depends on no other rule. */
+    R(rule_adsb_emergency),
 };
 
 #undef R

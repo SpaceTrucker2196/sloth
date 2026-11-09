@@ -291,6 +291,9 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     { "gnss.spoof_window_s",        300, 10, 3600, "seconds in which two GNSS_SPOOF_SUSPECT heuristics must both have been seen" },
     { "gnss.time_jump_ms",          1000, 200, 3600000, "ms the receiver's time must step against the host's monotonic clock between fixes for GNSS_TIME_JUMP" },
     { "gnss.pos_jump_k",            3, 1, 100, "multiplier on the two fixes' eph in the GNSS_POSITION_JUMP bound" },
+    /* #186, src/alerts/rules_adsb.c. Below ADSB_EXPIRE_S (60): a hold
+     * the table cannot keep a row for could never be reached. */
+    { "adsb.emerg_hold_s",          10, 2, 59, "seconds an aircraft's emergency squawk or status must hold, by its own messages, before ADSB_EMERGENCY goes from LOW to WARN" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

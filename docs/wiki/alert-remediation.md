@@ -10,7 +10,7 @@ by `web/tools/alertkb.c`, never copied by hand).
 step's basis; each section names its own), `docs/wiki/alerts.md` and
 `docs/views/alerts.md` (what each rule fires on).
 
-**Last updated**: 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
+**Last updated**: 2026-11-08 (#186: ADSB_EMERGENCY). 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
 remove" steps made conditional on the premises, as the rest are;
 review: WEAK_TLS aimed at the client
 that offered the old version; every on-device step conditional on the
@@ -1945,6 +1945,30 @@ Sources: `research/gnss/time-and-position-integrity.md`
 indicators with no stated confidence level, by gpsd's own account.
 
 Sources: `research/gnss/time-and-position-integrity.md`
+
+## `ADSB_EMERGENCY`
+
+**Investigate**
+
+1. Read the address, callsign, squawk and status in the detail, and
+   whether it held (WARN) or was seen once (LOW). A LOW that never
+   became WARN is most often a decode error or a code dialled through
+   in passing.
+2. Open the aircraft in the ADS-B tab or the `[^]` view: a real
+   emergency usually shows with it, as a descent, a diversion or a turn
+   back, and a consistent track and callsign over minutes.
+3. Treat it as unverified. ADS-B is unauthenticated, a false alarm can
+   be injected, and one receiver cannot tell the two apart.
+
+**Fix**
+
+1. None. sloth only flags this; it is not about the operator's network
+   and there is nothing on it to change. If it matters to someone, the
+   authority is air traffic control, not a passive receiver.
+
+**Vendor fix:** none.
+
+Sources: `research/adsb/emergency-squawks.md`
 
 ## Related pages
 

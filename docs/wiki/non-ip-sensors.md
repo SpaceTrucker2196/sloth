@@ -18,7 +18,7 @@ each is a typed producer of observations copied into `sloth_state_t`, exactly
 like the 802.11 path. Until the sensor seam exists, treat everything here as
 design, not implementation.
 
-**Last updated**: 2026-11-07 (ADS-B: the `[^]` TUI view and the `adsb` health token, [[adsb]]); 2026-11-05 (APRS shipped: `--aprs` off Dire Wolf's packet log, JSONL, sloth.db v13 and slothweb's APRS tab, [[aprs]]); 2026-11-05 (ADS-B in slothweb: the ADS-B tab, [[adsb]]); 2026-11-05 (ADS-B slice 1 shipped: the `--adsb` feed, the aircraft table and the `adsb_aircraft` record, [[adsb]]); 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
+**Last updated**: 2026-11-08 (ADS-B: the flag-only `ADSB_EMERGENCY` alert, #186, [[adsb]]); 2026-11-07 (ADS-B: the `[^]` TUI view and the `adsb` health token, [[adsb]]); 2026-11-05 (APRS shipped: `--aprs` off Dire Wolf's packet log, JSONL, sloth.db v13 and slothweb's APRS tab, [[aprs]]); 2026-11-05 (ADS-B in slothweb: the ADS-B tab, [[adsb]]); 2026-11-05 (ADS-B slice 1 shipped: the `--adsb` feed, the aircraft table and the `adsb_aircraft` record, [[adsb]]); 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
 
 ---
 
@@ -153,9 +153,10 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
   README-json.md (`tests/test_adsb.c`), a fuzz harness; no captures.
 - **Status**: slice 1 (2026-11-05) is the core — feed, state, JSONL;
   slothweb and `--db` followed the same day, the `[^]` TUI view and the
-  `adsb` health token on 2026-11-07. The emergency-squawk alert (with
-  its research citation), `sbs://` input and the `packaging/` notes on
-  running beside readsb are pending. See [[adsb]].
+  `adsb` health token on 2026-11-07, the flag-only `ADSB_EMERGENCY`
+  alert (#186, `research/adsb/emergency-squawks.md`) and the
+  `packaging/` note on running beside readsb on 2026-11-08. `sbs://`
+  input is pending. See [[adsb]].
 
 ### APRS (144.390 MHz) — shipped
 - **Observe**: APRS packets a local Dire Wolf decoded (position, status,

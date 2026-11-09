@@ -15,8 +15,9 @@ opens, tunes or talks to the SDR** and uses **no network**: the source
 is a file it re-reads about once a second. Slice 1 is the core only:
 the parser, the table, the source's health in the sensor registry and
 `sensor_health`, and the change-only `adsb_aircraft` JSONL record; the
-`[^]` TUI view, slothweb's tab and the `--db` tables followed. No alert
-rule yet.
+`[^]` TUI view, slothweb's tab and the `--db` tables followed, then
+one alert rule, `ADSB_EMERGENCY` (#186): an emergency squawk or status,
+flag only.
 
 **Sources**: `src/adsb.h`, `src/adsb.c` (parser, spec, table, bands,
 signature), `src/capture/adsb_reader.h`, `src/capture/adsb_reader.c`
@@ -25,11 +26,13 @@ signature), `src/capture/adsb_reader.h`, `src/capture/adsb_reader.c`
 stage, `SENSOR_ADSB` in the sensors stage), `src/jsonl.c`
 (`jsonl_emit_adsb()`, the `adsb_*` appends in
 `jsonl_emit_sensor_health()`), `src/main.c` (`--adsb`); tests
-`tests/test_adsb.c`, `tests/fuzz/fuzz_adsb_doc.c`. Format reference:
+`tests/test_adsb.c`, `tests/fuzz/fuzz_adsb_doc.c`; the alert
+`src/alerts/rules_adsb.c`, `tests/test_adsb_rules.c`,
+`research/adsb/emergency-squawks.md`. Format reference:
 readsb's `README-json.md` (wiedehopf/readsb; dump1090-fa documents
 the same `aircraft.json`).
 
-**Last updated**: 2026-11-07 (the `[^]` TUI aircraft view, the `adsb` health-strip token, and `gps_bearing_deg()` beside `gps_distance_m()`); 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
+**Last updated**: 2026-11-08 (#186: `ADSB_EMERGENCY`, flag only; slothweb's ADS-B tab marks an aircraft with an open one; the `packaging/` note on `/run/readsb`); 2026-11-07 (the `[^]` TUI aircraft view, the `adsb` health-strip token, and `gps_bearing_deg()` beside `gps_distance_m()`); 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
 
 ---
 
@@ -294,11 +297,41 @@ the state always, the aircraft count while live, the stalled age and
 the reader's error on fault — because a feed that stopped looks the
 same as quiet sky at the terminal.
 
+## `ADSB_EMERGENCY` (#186)
+
+An aircraft listed while the source is `live` with squawk **7500**,
+**7600** or **7700** (SERA.13005: unlawful interference,
+radio-communication failure, emergency), or an emergency/priority status
+other than `none` (`general`, `lifeguard`, `minfuel`, `nordo`,
+`unlawful`, `downed`, `reserved`), raises `ADSB_EMERGENCY`
+(`src/alerts/rules_adsb.c`). One incident per address and condition -
+the code when there is one, else the status word - so a code change
+re-fires and a steady one does not. LOW on first sight, WARN once the
+condition has held `adsb.emerg_hold_s` (10 s) of the aircraft's own
+message time, never CRIT.
+
+**Flag only.** sloth surfaces the declaration and never acts on it. It
+is a third party's state, not the operator's network's, and ADS-B is
+unauthenticated: a false alarm can be injected (Schäfer et al. 2013
+§3.2) and one receiver cannot tell it from a real one. The view above
+still counts emergency rows without judging them; the judgement is the
+rule's. Basis and the persistence argument: [[alerts]] § ADS-B,
+`research/adsb/emergency-squawks.md`, and the assessment
+`alert-assessments/ADSB_EMERGENCY.md`.
+
+## Running beside readsb under systemd
+
+No unit change: `sloth-sensor.service`'s `ProtectSystem=strict` leaves
+`/run` readable, and the reference host's readsb leaves `/run/readsb`
+0755 and `aircraft.json` 0644 (checked 2026-11-08), so the `sloth` user
+reads it. Add `--adsb /run/readsb/aircraft.json` to `SLOTH_ARGS` in
+`/etc/default/sloth` (`packaging/default/sloth` says the same). A
+decoder writing under `/home` would need `ProtectHome=` relaxed in a
+drop-in.
+
 ## Pending (later slices)
 
-An emergency-squawk alert with its research citation, SBS / Beast
-socket input, and `packaging/` notes on `/run/readsb` being readable
-by the `sloth` user under the service's sandboxing.
+SBS / Beast socket input.
 
 ## Related pages
 

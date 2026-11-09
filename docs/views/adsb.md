@@ -52,9 +52,11 @@ degrees true (`gps_bearing_deg()`), from the sensor position
 `gps_location_current()` arbitrates — a `--gps` fix, or a fixed
 `--location`. No fix, no columns: see below.
 
-Observation only. The emergency-squawk detector that will read this
-table is a following slice, so the header *counts* the aircraft
-reporting the decoder's `emergency` field and grades nothing.
+Observation only. The header *counts* the aircraft reporting the
+decoder's `emergency` field and grades nothing; the judgement is the
+flag-only `ADSB_EMERGENCY` rule's (#186, `src/alerts/rules_adsb.c`,
+[`alerts.md`](alerts.md)), which reads the same table and shows on the
+Alerts view.
 
 ## View
 
@@ -122,15 +124,19 @@ decoder with an empty table says that rather than any of the four.
 
 ## What's suspicious
 
-Nothing here is a finding — this view is observation, and the detector
-that reads it is a later slice (#186). What is worth an operator's eye:
+Nothing in this view is a finding — it is observation; the one
+detector that reads the table is `ADSB_EMERGENCY` (#186), on the Alerts
+view. What is worth an operator's eye:
 
 - **Emergency and priority codes.** `7500` (unlawful interference),
   `7600` (radio failure), `7700` (general emergency), and the decoder's
   own `emergency` field (`general`, `lifeguard`, `minfuel`, `nordo`,
   `unlawful`, `downed`). The header's `emerg` count is how many rows
-  report one. sloth surfaces these and never acts on them: there is no
-  reply path, by §2 and by design.
+  report one. `ADSB_EMERGENCY` flags each (LOW on first sight, WARN
+  once held 10 s of the aircraft's own messages, never CRIT). sloth
+  surfaces these and never acts on them: there is no reply path, by §2
+  and by design, and ADS-B is unauthenticated, so a declaration can be
+  forged and one receiver cannot tell.
 - **An aircraft whose position is implausible for its speed** — a jump
   of tens of kilometres between documents, or a position that does not
   move while the ground speed says 450 kt. Either is a decoder or a

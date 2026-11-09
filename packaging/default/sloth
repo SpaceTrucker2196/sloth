@@ -16,6 +16,14 @@ SLOTH_IFACE=alfa0
 #   --my-bssid MAC        its BSSID
 #   --site-label LABEL    name stamped on the posture report
 #   --inventory FILE      approved-inventory JSON (#89), if you keep one
+#   --adsb PATH           a local readsb's aircraft.json (wiki: adsb), e.g.
+#                         --adsb /run/readsb/aircraft.json. No unit change
+#                         is needed: ProtectSystem=strict leaves /run
+#                         readable, and the reference host's readsb leaves
+#                         /run/readsb 0755 and aircraft.json 0644
+#                         (checked 2026-11-08), so the sloth user reads it.
+#                         A decoder writing elsewhere under /home needs
+#                         ProtectHome= relaxed in a drop-in.
 # Example:
 #   SLOTH_ARGS=--my-ssid HomeNet --my-bssid 28:25:5f:00:00:00 --site-label attic-sensor
 SLOTH_ARGS=--site-label sloth-sensor

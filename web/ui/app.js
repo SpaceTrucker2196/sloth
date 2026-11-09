@@ -5720,6 +5720,9 @@
     heat: heat, sizeCanvas: sizeCanvas, prefGet: prefGet, prefSet: prefSet, show: show,
     openDrawer: openDrawer, openBleDrawer: openBleDrawer, scope: function () { return SCOPE; } });
 
+  // The ADS-B view (web/ui/adsb.js): go() for its alert links (#186).
+  if (window.SlothAdsb) SlothAdsb.init({ go: go });
+
   // G2, G6 and the new mark in the tables (web/ui/rf.js).
   if (window.SlothRf) SlothRf.init({ tok: tok });
 

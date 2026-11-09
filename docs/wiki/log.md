@@ -6689,3 +6689,25 @@ letter and digit already selects a view, `*` is BLE and `#` is GNSS.
 Observation only: the emergency-squawk rule, `sbs://` input and the
 `packaging/` notes are still open on #186. Updated [[adsb]],
 [[views-catalog]], [[cli-reference]], [[non-ip-sensors]].
+
+## 2026-11-08 — `ADSB_EMERGENCY`, flag only (#186)
+
+The last alert item of the ADS-B family. `src/alerts/rules_adsb.c`
+raises `ADSB_EMERGENCY` for an aircraft the `--adsb` decoder lists
+while the source is live with squawk 7500, 7600 or 7700, or a DO-260B
+emergency/priority status other than `none`: one incident per address
+and condition (the code, else the status word), LOW on first sight,
+WARN once held `adsb.emerg_hold_s` (10 s, new knob) of the aircraft's
+own message time, never CRIT. Flag only: ADS-B is unauthenticated and
+a false alarm can be injected, so sloth surfaces it and never acts.
+Empty technique, second exemption form; basis in the new
+`research/adsb/emergency-squawks.md` (SERA.13005, readsb's
+README-json.md, Costin & Francillon 2012, Schäfer et al. 2013, each
+read first-hand; ICAO Doc 8168 / 4444, FAA AIM and DO-260B not).
+slothweb: Monitor's scope, the detail shown (audited: callsign, squawk,
+status word), and the ADS-B tab's ALERT column and detail line link an
+aircraft to its open incident (`/api/adsb` rows carry `alert`).
+`packaging/default/sloth` notes that `/run/readsb` needs no unit
+change. New assessment `alert-assessments/ADSB_EMERGENCY.md`. Updated
+[[alerts]], [[adsb]], [[non-ip-sensors]], [[attack-map]],
+[[cli-reference]], [[research-corpus]], [[alert-remediation]].

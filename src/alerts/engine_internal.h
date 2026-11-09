@@ -64,6 +64,10 @@ void rules_wired_forget(void);
  * judged after it. */
 void rules_gnss_forget(void);
 
+/* src/alerts/rules_adsb.c - drops ADSB_EMERGENCY's per-address holds;
+ * called by alerts_clear(). A standing emergency then starts at LOW. */
+void rules_adsb_forget(void);
+
 /* Formatting helpers every rule file uses. static inline rather than
  * external: a name as generic as mac_to_str() has no business in
  * libsloth_core.a's symbol table. */

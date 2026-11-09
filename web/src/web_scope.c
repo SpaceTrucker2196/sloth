@@ -138,6 +138,9 @@ const web_scope_alert_t web_scope_alerts[] = {
      * the IP capture's: every scope's, as their gnss_* records are. */
     { "GNSS_JAMMING", MT }, { "GNSS_SPOOF_SUSPECT", MT },
     { "GNSS_TIME_JUMP", MT }, { "GNSS_POSITION_JUMP", MT },
+    /* The ADS-B decoder's SDR is a passive radio: Monitor's, as its
+     * adsb_aircraft records are (#186). */
+    { "ADSB_EMERGENCY", M },
 };
 const int web_scope_alerts_n = (int)(sizeof(web_scope_alerts) / sizeof(web_scope_alerts[0]));
 

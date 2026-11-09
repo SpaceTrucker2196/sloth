@@ -344,3 +344,15 @@ X(GNSS_TIME_JUMP, "") /* real basis, no ATT&CK technique (second exemption form)
 /* Empty on the same form and for the same second reason. */
 /* consecutive fixes farther apart than speed x dt plus k x (eph + eph) — Psiaki & Humphreys 2016 §III-C */
 X(GNSS_POSITION_JUMP, "") /* real basis, no ATT&CK technique (second exemption form) */
+/* The ADS-B rule (#186, src/alerts/rules_adsb.c), read off the --adsb
+ * decoder's aircraft table (docs/wiki/adsb.md). Deliberately empty, the
+ * second exemption form: a real basis - the ICAO emergency codes as
+ * SERA.13005 sets them, the DO-260B emergency/priority status readsb
+ * reports, and the ADS-B spoofing literature (Costin & Francillon 2012,
+ * Schafer et al. 2013) - and no technique: what it reports is a third
+ * party's declared state, an aircraft's crew squawking for help, not an
+ * adversary's step against the operator's network; and a spoofed one
+ * cannot be told from a real one here (research/adsb/emergency-squawks.md).
+ * Flag only: sloth surfaces it and never acts on it. */
+/* squawk 7500 / 7600 / 7700 or a DO-260B emergency status other than none, per address — SERA.13005, readsb README-json */
+X(ADSB_EMERGENCY, "") /* real basis, no ATT&CK technique (second exemption form) */

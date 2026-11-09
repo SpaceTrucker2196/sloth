@@ -117,13 +117,33 @@ void web_adsb_record(web_adsb_t *a, const web_jrec_t *r, long long now_ms);
  * adsb_emergency_name()). */
 const char *web_adsb_emergency_name(int e);
 
+/* An open ADSB_EMERGENCY incident (#186) by the aircraft its key names:
+ * sloth keys it adsbemerg:<6 hex>:<icao|nonicao>:<condition>
+ * (src/alerts/rules_adsb.c), and hex is this table's spelling of that
+ * address ('~' leading a non-ICAO one). id is the alert page's handle,
+ * "s" and the stream's hid; sev sloth's 0..2. */
+#define WEB_ADSB_ALERTS 64
+typedef struct {
+    char hex[8];
+    char id[32];
+    int  sev;
+} web_adsb_alert_t;
+
+struct web_live_s;
+/* The live stream's open ADSB_EMERGENCY incidents into out (at most
+ * max), newest change first, so an aircraft whose code changed links
+ * its newest incident. Their count; 0 with no stream. */
+int web_adsb_alerts(struct web_live_s *l, web_adsb_alert_t *out, int max);
+
 /* /api/adsb?limit=: the sensor block and up to `limit` (default and
  * most WEB_ADSB_ROWS) rows with their tracks, an emergency first, then
  * live before gone, then the most recently heard; a 400 names an
- * unknown parameter. With none_here (Local) the query is checked and
- * the caller answers web_adsb_out_of_scope_json() instead. 0 with
- * *len / *status set, -1 when the body did not fit. */
+ * unknown parameter. Each row's "alert" is the first of al[] naming its
+ * address ({"id","sev"}), or null. With none_here (Local) the query is
+ * checked and the caller answers web_adsb_out_of_scope_json() instead.
+ * 0 with *len / *status set, -1 when the body did not fit. */
 int web_adsb_route(web_adsb_t *a, const char *query, long long now_s, int none_here,
+                   const web_adsb_alert_t *al, int nal,
                    char *body, size_t cap, size_t *len, int *status);
 size_t web_adsb_out_of_scope_json(char *body, size_t cap);
 

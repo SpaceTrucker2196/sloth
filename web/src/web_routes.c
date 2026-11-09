@@ -878,7 +878,13 @@ static int route_adsb(const web_req_t *rq, const web_health_t *h,
         bl = web_series_error_json("query_too_long", body, cap);
         rc = bl ? 0 : -1;
     } else {
-        rc = web_adsb_route(h->adsb, rq->query, h->wall_s, none_here, body, cap, &bl, &status);
+        /* The open ADSB_EMERGENCY incidents, so a row links its alert
+         * (#186); read before the panel's lock, never under it. */
+        web_adsb_alert_t al[WEB_ADSB_ALERTS];
+        memset(al, 0, sizeof(al));
+        int nal = none_here ? 0 : web_adsb_alerts(h->live, al, WEB_ADSB_ALERTS);
+        rc = web_adsb_route(h->adsb, rq->query, h->wall_s, none_here, al, nal,
+                            body, cap, &bl, &status);
         if (rc == 0 && none_here && status == 200) bl = web_adsb_out_of_scope_json(body, cap);
     }
     if (rc != 0 || bl == 0) {
