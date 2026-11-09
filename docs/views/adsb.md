@@ -97,6 +97,15 @@ decoder has sent no position for reads `-` in both cells while the
 columns stand: what is missing there is the *aircraft's* position, not
 the sensor's.
 
+With an `sbs://` source the header's `src` reads `sbs:127.0.0.1:30003`,
+its tally line counts `lines` (MSG lines) instead of `docs`, and `msgs`
+is those lines too, not the decoder's lifetime count; SBS carries no
+emergency status word, so `emerg` never counts an SBS row (the squawk
+column still shows 7500 / 7600 / 7700, and `ADSB_EMERGENCY` fires on
+it). Waiting reads as waiting for the first SBS line, and stale as no
+line, not even readsb's 60 s heartbeat, for 130 s
+([adsb wiki](../wiki/adsb.md#the-sbs-source-sbs)).
+
 Without `--adsb` the view names the flag and says who owns the SDR.
 With it, the four decoder states each read as themselves: `waiting`
 (nothing read yet), `live`, `stale` (the file is readable but the

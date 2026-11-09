@@ -24,6 +24,14 @@ SLOTH_IFACE=alfa0
 #                         (checked 2026-11-08), so the sloth user reads it.
 #                         A decoder writing elsewhere under /home needs
 #                         ProtectHome= relaxed in a drop-in.
+#   --adsb sbs://127.0.0.1:30003
+#                         the decoder's SBS output instead (loopback only,
+#                         read-only: sloth sends nothing on the socket).
+#                         This one DOES need a unit change: the unit's
+#                         RestrictAddressFamilies= has no AF_INET, so add
+#                         it by a drop-in - the gpsd block of
+#                         /usr/local/share/sloth/sloth-sensor-gps.conf is
+#                         exactly that line (AF_INET AF_INET6).
 # Example:
 #   SLOTH_ARGS=--my-ssid HomeNet --my-bssid 28:25:5f:00:00:00 --site-label attic-sensor
 SLOTH_ARGS=--site-label sloth-sensor

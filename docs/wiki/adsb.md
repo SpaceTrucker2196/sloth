@@ -1,6 +1,6 @@
 ---
 name: adsb
-description: ADS-B aircraft (#26 slice 1) — --adsb tails the aircraft.json a local readsb / dump1090-fa decoder already writes; the parser, the aircraft table, freshness and expiry, the adsb sensor, the adsb_* sensor_health fields and the change-only adsb_aircraft record with its altitude bands and position cells
+description: ADS-B aircraft (#26 slice 1) — --adsb tails the aircraft.json a local readsb / dump1090-fa decoder already writes, or reads its SBS / BaseStation TCP output read-only; the parser, the aircraft table, freshness and expiry, the adsb sensor, the adsb_* sensor_health fields and the change-only adsb_aircraft record with its altitude bands and position cells
 type: reference
 ---
 
@@ -11,13 +11,15 @@ local, already-running Mode S / ADS-B decoder (readsb, dump1090-fa)
 writes, and turns it into typed rows: one per address the decoder
 lists, with callsign, squawk, emergency status, category, altitude,
 speed, track, rates, position, RSSI and message count. sloth **never
-opens, tunes or talks to the SDR** and uses **no network**: the source
-is a file it re-reads about once a second. Slice 1 is the core only:
+opens, tunes or talks to the SDR**. The source is a file it re-reads
+about once a second, using no network, or (2026-11-09) the decoder's
+SBS / BaseStation output on a loopback TCP port, read by a client that
+never writes a byte to the socket. Slice 1 is the core only:
 the parser, the table, the source's health in the sensor registry and
 `sensor_health`, and the change-only `adsb_aircraft` JSONL record; the
 `[^]` TUI view, slothweb's tab and the `--db` tables followed, then
 one alert rule, `ADSB_EMERGENCY` (#186): an emergency squawk or status,
-flag only.
+flag only. `sbs://` input closed the family's last open item.
 
 **Sources**: `src/adsb.h`, `src/adsb.c` (parser, spec, table, bands,
 signature), `src/capture/adsb_reader.h`, `src/capture/adsb_reader.c`
@@ -28,11 +30,20 @@ stage, `SENSOR_ADSB` in the sensors stage), `src/jsonl.c`
 `jsonl_emit_sensor_health()`), `src/main.c` (`--adsb`); tests
 `tests/test_adsb.c`, `tests/fuzz/fuzz_adsb_doc.c`; the alert
 `src/alerts/rules_adsb.c`, `tests/test_adsb_rules.c`,
-`research/adsb/emergency-squawks.md`. Format reference:
-readsb's `README-json.md` (wiedehopf/readsb; dump1090-fa documents
-the same `aircraft.json`).
+`research/adsb/emergency-squawks.md`; for `sbs://`
+`tests/fuzz/fuzz_adsb_sbs.c` and the SBS cases in the three test files.
+Format references: readsb's `README-json.md` (wiedehopf/readsb;
+dump1090-fa documents the same `aircraft.json`); for SBS, readsb's own
+writer, `modesSendSBSOutput()` in `net_io.c` (read at bf8f8fd), its
+heartbeat (`sbs_heartbeat`, `MODES_NET_HEARTBEAT_INTERVAL` 60 s) and
+idle-client rule (`net_io.c`: a client silent for twice the interval
+is dropped). That function cites the BaseStation socket-data reference
+it was checked against (`Barebones42_Socket_Data.htm`); that page was
+**not** read first-hand here, only through readsb's code, and the live
+readsb 3.16 on the reference host's port 30003 was looked at to
+confirm the shape.
 
-**Last updated**: 2026-11-08 (#186: `ADSB_EMERGENCY`, flag only; slothweb's ADS-B tab marks an aircraft with an open one; the `packaging/` note on `/run/readsb`); 2026-11-07 (the `[^]` TUI aircraft view, the `adsb` health-strip token, and `gps_bearing_deg()` beside `gps_distance_m()`); 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
+**Last updated**: 2026-11-09 (#186: `--adsb sbs://`, the decoder's SBS output, loopback, read-only; the `AF_INET` drop-in note); 2026-11-08 (#186: `ADSB_EMERGENCY`, flag only; slothweb's ADS-B tab marks an aircraft with an open one; the `packaging/` note on `/run/readsb`); 2026-11-07 (the `[^]` TUI aircraft view, the `adsb` health-strip token, and `gps_bearing_deg()` beside `gps_distance_m()`); 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
 
 ---
 
@@ -42,9 +53,10 @@ the same `aircraft.json`).
 
 1. **Observable passively**: what the decoder already decoded from
    1090 MHz Mode S / ADS-B (and, for readsb, MLAT and TIS-B) — the
-   records in `aircraft.json`.
+   records in `aircraft.json`, or the lines on its SBS port.
 2. **Hardware**: an RTL-SDR (or similar) on 1090 MHz feeding readsb or
-   dump1090-fa, which the operator runs; sloth needs only the file.
+   dump1090-fa, which the operator runs; sloth needs only the file or
+   the port.
 3. **State**: `adsb_aircraft_t` keyed by (24-bit address, non-ICAO
    flag), and `adsb_health_t` (`include/sloth.h`).
 4. **View**: the `[^]` TUI view (below) and slothweb's ADS-B tab (below).
@@ -52,19 +64,22 @@ the same `aircraft.json`).
    with `--db`, the `adsb_aircraft` and `adsb_sightings` tables (v12, below)
    and a `sensor` record of kind `adsb`.
 6. **Out of scope**: transmitting or interrogating (active radar),
-   driving the SDR, SBS / Beast network feeds (slice 1 refuses
-   `sbs://` and `beast://` as "not yet supported").
+   driving the SDR, writing anything to the decoder, a non-loopback
+   SBS source, and Beast (`beast://` is refused as "not yet
+   supported").
 7. **Testing**: hand-written JSON documents from `README-json.md`
-   (`tests/test_adsb.c`), a temporary file for the reader, a libFuzzer
-   harness; no captured `aircraft.json`.
+   (`tests/test_adsb.c`), SBS lines written from readsb's
+   `modesSendSBSOutput()`, a temporary file and a loopback listener of
+   the test's own for the reader, two libFuzzer harnesses; no captured
+   `aircraft.json` and no recorded SBS stream.
 
 ## The source
 
 `--adsb /run/readsb/aircraft.json` or
 `--adsb file:///run/readsb/aircraft.json`. Only an absolute local path:
 `file://HOST/...`, a relative path, any other scheme and a trailing `/`
-exit 2. `sbs://` and `beast://` exit 2 with "not yet supported". Refused
-with `--replay` (a savefile is not a live decoder). The file need not
+exit 2. `beast://` exits 2 with "not yet supported"; `sbs://` is its own
+source (next section). Refused with `--replay` (a savefile is not a live decoder). The file need not
 exist at startup: a decoder starting after sloth is normal, and reads
 as the `error` state until it appears.
 
@@ -79,6 +94,107 @@ parses it. A file whose device, inode, size and mtime are all unchanged
 since the last read is not parsed again: the decoder has not written.
 `O_RDONLY | O_NONBLOCK`: a FIFO placed at the path cannot hang the
 worker, and is refused as not a regular file.
+
+## The SBS source (`sbs://`)
+
+`--adsb sbs://127.0.0.1:30003` (or `sbs://`, the same; `sbs://[::1]:PORT`
+for IPv6). `HOST` must be a numeric loopback address (`127.0.0.0/8`,
+`::1`): a name, a routable address (exit 2, "not loopback") or a port
+outside 1..65535 is refused. The decoder is local, as the file one is;
+reading a remote decoder is a later decision with its own flag, as
+`--gps-allow-remote` is for gpsd, not a default. On startup sloth
+announces on stderr that it will connect, to where, and that it sends
+nothing (MISSION.md §2: a network-using input is opt-in and
+announced).
+
+**Read-only.** The worker (`src/capture/adsb_reader.c`), started after
+the privilege drop, makes a non-blocking connect bounded at 3 s and
+then only reads: no `send()`, `write()` or `shutdown()` is ever called
+on the socket (the connect's handshake is the only thing sloth's side
+puts on it). readsb's SBS output ignores what a client sends anyway
+(`READ_MODE_IGNORE`). `tests/test_adsb.c ::
+test_sbs_reader_session` pins that nothing arrives at the listener.
+
+**Reconnect.** A refused or timed-out connect is a read error (`adsb_err`
+"connect: ..."), retried after 2 s, doubling to 30 s while it keeps
+failing. A session the decoder closes ("decoder closed the connection")
+or a read error is a read error, retried after 2 s. A successful
+connect clears the error. Rows stand until they expire, as they do when
+`aircraft.json` goes missing.
+
+**Framing.** CRLF-ended lines (a bare LF is taken too), at most
+`ADSB_SBS_MAX_LINE` (512) bytes; readsb's are under 260 even with its
+extra fields. A partial line waits for the next read. A longer line is
+one parse error and is discarded up to its newline, however many reads
+it spans. The main thread never touches the socket.
+
+**The line** (`adsb_sbs_parse()`), per readsb's writer: 22 comma-separated
+fields, 24 with `--sbs-extra-fields`; anything else is malformed.
+
+| Field | Content | Kept as |
+|---|---|---|
+| 0 | `MSG` (the other BaseStation records `SEL`, `ID`, `AIR`, `STA`, `CLK` are ignored, not errors; readsb sends none) | - |
+| 1 | transmission type 1..8 | the line's type; outside 1..8 is malformed |
+| 4 | hex ident, 6 hex digits, `~` prefix for a non-ICAO address | the row key (address, non-ICAO), as `hex` |
+| 6, 7 | date and time generated, `YYYY/MM/DD`, `HH:MM:SS.mmm`, UTC | the message time (below) |
+| 10 | callsign, 8 characters space padded | `flight`, trimmed |
+| 11 | altitude, ft; a trailing `H` is GNSS | `alt_baro`, or `alt_geom` with `H` |
+| 12, 13 | ground speed kt, track deg | `gs`, `track` |
+| 14, 15 | lat, lon | the position, only as a pair inside ±90 / ±180 |
+| 16 | vertical rate ft/min; `H` is GNSS | `baro_rate`, or `geom_rate` with `H` |
+| 17 | squawk, 4 digits | `squawk`, only as 4 octal digits |
+| 18, 19, 20 | squawk-change alert, squawk emergency, SPI flags | not kept (below) |
+| 21 | on ground, `-1` ground / `0` airborne | `on_ground`; a barometric altitude on a ground line is dropped, as aircraft.json's `"ground"` is |
+| 22, 23 | RSSI dBFS, category (`A3`), extra fields only | `rssi`, `category` |
+
+readsb fills only what each message carried (1 identification, 2
+surface position, 3 airborne position, 4 velocity, 5 surveillance
+altitude, 6 surveillance identity, 7 air-to-air, 8 all-call). A number
+or date that does not parse is malformed; a well-formed value out of
+range leaves its field absent, as in `aircraft.json`. Numbers are
+walked digit by digit, never `strtod()`. A malformed line is counted in
+`adsb_parse_errors` and sets `adsb_err` until the next good line; it
+never stops the reader.
+
+**Merge.** Every MSG line goes through the same sticky merge as an
+`aircraft.json` entry, into the same table under the same 256-row cap
+and the same expiry. So an MSG,3 position and an MSG,1 callsign for one
+address make **one row**, and an empty field never clears a kept one.
+The row's `seen` is the read time minus the line's generated time
+(never negative; 0 without a time), so `last_seen`, `last_mono_ms`,
+the expiry and `ADSB_EMERGENCY`'s hold all run on the aircraft's
+message time exactly as they do from `aircraft.json`'s `seen`. A
+decoder replaying hour-old lines therefore makes rows that expire on
+the next poll.
+
+**What SBS does not carry, and the mapping chosen:**
+
+- **No emergency status word.** Field 19 is a flag, and readsb sets it
+  from the 7500 / 7600 / 7700 squawk on the same line (or passes
+  another SBS feed's flag through); on MLAT lines readsb reuses fields
+  18 and 19 for the receiver count and error estimate. So the flag is
+  not read: the squawk is the evidence, and `ADSB_EMERGENCY` fires on
+  it as it does for `aircraft.json` (`tests/test_adsb_rules.c ::
+  test_sbs_emergency_squawk_fires`). An SBS row's `emergency` stays
+  absent - "general" would claim a DO-260B status the aircraft never
+  sent - so the view's `emerg` count and the status-word form of the
+  rule never see SBS rows. A flag of -1 on an ordinary squawk fires
+  nothing (`test_sbs_flag_alone_does_not_fire`).
+- **No RSSI** unless readsb runs with `--sbs-extra-fields`.
+- **No per-aircraft message count.** A row's `messages` counts the MSG
+  lines sloth received for it, and `adsb_messages` the MSG lines in
+  all, not the decoder's lifetime Mode S count.
+- **No `type`** (`adsb_icao`, `mlat`, ...): `source_type` is written `""`.
+- **No airborne transition without an altitude**: a row on the ground
+  becomes airborne when a barometric altitude arrives.
+
+**Freshness** for a stream is a line arriving, any line, readsb's
+heartbeat (`\r\n` alone, every 60 s to an idle client) included: so an
+empty sky stays `live`. `stale` is no line for `ADSB_SBS_STALE_S`
+(130 s, past readsb's own two-interval rule for a silent peer):
+connected, but the decoder is hung. `waiting` is configured with no
+line yet; `error` as for the file. `adsb_reads` counts MSG lines, and
+the `[^]` header labels it `lines` instead of `docs`.
 
 ## The parser
 
@@ -139,8 +255,11 @@ in a document without one, the file's mtime) moving forward. States:
 | `stale` | it has not for longer: the file is readable but the decoder stopped writing. Also a first document already more than 10 s old: a decoder that hung before sloth started (`adsb_age_s` -1) |
 | `error` | the last attempt failed: missing or unreadable file, not a regular file, over 2 MiB, malformed. Clears on the next good document |
 
+For `sbs://` the clock is a line arriving, and `live` lasts 130 s, not
+10 (the SBS section above).
+
 The registry's `adsb` sensor (name "ADS-B decoder", iface the source
-label `file:/path`, `observed` the documents parsed) reads `error` for
+label `file:/path` or `sbs:127.0.0.1:30003`, `observed` the documents parsed) reads `error` for
 `stale` and `error`, `active` once a document has parsed, `present`
 before.
 
@@ -329,9 +448,23 @@ reads it. Add `--adsb /run/readsb/aircraft.json` to `SLOTH_ARGS` in
 decoder writing under `/home` would need `ProtectHome=` relaxed in a
 drop-in.
 
+`sbs://` **does** need a unit change: the shipped unit's
+`RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_PACKET` has no IP
+family, so the connect fails with `socket: Address family not
+supported by protocol` (a read error, retried) until a drop-in adds
+`RestrictAddressFamilies=AF_INET` (`AF_INET6` too for `[::1]`). The
+lists merge, so it widens the unit by exactly that. The `gps.conf`
+drop-in's commented gpsd block is that line
+(`packaging/systemd/sloth-sensor.service.d/gps.conf`, installed inert
+at `/usr/local/share/sloth/sloth-sensor-gps.conf`); uncommented and
+copied to `/etc/systemd/system/sloth-sensor.service.d/`, it serves
+`--adsb sbs://` as well. The unit sets no `IPAddressDeny=`, so nothing
+else is needed. `packaging/default/sloth` says the same.
+
 ## Pending (later slices)
 
-SBS / Beast socket input.
+Beast (`beast://`) socket input; an opt-in for a non-loopback SBS
+source.
 
 ## Related pages
 

@@ -6711,3 +6711,22 @@ aircraft to its open incident (`/api/adsb` rows carry `alert`).
 change. New assessment `alert-assessments/ADSB_EMERGENCY.md`. Updated
 [[alerts]], [[adsb]], [[non-ip-sensors]], [[attack-map]],
 [[cli-reference]], [[research-corpus]], [[alert-remediation]].
+
+## 2026-11-09 — `--adsb sbs://`, the decoder's SBS output (#186)
+
+The last open item of #186. `--adsb sbs://[HOST[:PORT]]` (default
+`127.0.0.1:30003`, numeric loopback only) reads readsb's / dump1090's
+SBS / BaseStation TCP output with a client that never writes a byte to
+the socket, announced on stderr. Lines are framed with a 512-byte cap
+across reads (CRLF; garbage and over-cap lines are parse errors, not
+fatal), parsed per readsb's `modesSendSBSOutput()` (`net_io.c`), and
+merged into the same `adsb_aircraft_t` table with the same sticky
+merge, cap and expiry, so an MSG,3 position and an MSG,1 callsign for
+one address are one row; a row's age is the line's generated time.
+Freshness is any line within 130 s (readsb heartbeats every 60 s); a
+refused connect or a closed session is a read error, retried with
+2..30 s backoff. SBS's emergency flag is not mapped to a status word:
+the 7x00 squawk drives `ADSB_EMERGENCY`. The hardened unit needs
+`AF_INET` by drop-in (the `gps.conf` gpsd block is that line).
+`beast://` stays refused. New fuzz target `fuzz_adsb_sbs`. Updated
+[[adsb]], [[cli-reference]], [[non-ip-sensors]].

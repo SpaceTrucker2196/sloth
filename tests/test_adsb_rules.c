@@ -393,6 +393,88 @@ static void test_clear_restarts_the_hold(void) {
     end();
 }
 
+/* ── sbs:// rows (2026-11-09) ──────────────────────────────────── *
+ * The same rule over rows the SBS reader built: lines written by hand
+ * from readsb's modesSendSBSOutput() (net_io.c, field 17 the squawk as
+ * four digits, field 19 the squawk emergency flag, -1 for set), fed
+ * through adsb_sbs_lines_feed() as the reader feeds them. */
+
+static void begin_sbs(void) {
+    begin();
+    adsb_reset();
+    adsb_set_source_sbs("sbs:127.0.0.1:30003");
+}
+
+/* One second on: the decoder sends `lines`, sloth polls and evaluates.
+ * Each "@T" in `lines` becomes the generated date and time fields of a
+ * message heard at this tick's wall second (UTC). */
+static void tick_sbs(const char *lines) {
+    static adsb_sbs_lines_t l;
+    char buf[2048], ts[40];
+    g_mono += 1000;
+    g_wall += 1;
+    struct tm tm;
+    time_t w = g_wall;
+    gmtime_r(&w, &tm);
+    snprintf(ts, sizeof(ts), "%04d/%02d/%02d,%02d:%02d:%02d.000",
+             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+             tm.tm_hour, tm.tm_min, tm.tm_sec);
+    size_t o = 0;
+    for (const char *p = lines; *p && o + 40 < sizeof(buf); ) {
+        if (p[0] == '@' && p[1] == 'T') {
+            o += (size_t)snprintf(buf + o, sizeof(buf) - o, "%s", ts);
+            p += 2;
+        } else {
+            buf[o++] = *p++;
+        }
+    }
+    buf[o] = '\0';
+    adsb_sbs_lines_init(&l);
+    adsb_sbs_lines_feed(&l, (const uint8_t *)buf, o,
+                        (int64_t)g_wall * 1000, g_mono);
+    adsb_health_poll(&g_s, g_wall, g_mono);
+    alerts_update(&g_s);
+}
+
+/* An MSG,6 with squawk 7700 and the emergency flag set reaches
+ * ADSB_EMERGENCY, keyed on the code, and the callsign an MSG,1 gave the
+ * same address is in the detail: the two lines are one row. */
+static void test_sbs_emergency_squawk_fires(void) {
+    begin_sbs();
+    tick_sbs("MSG,1,1,1,A1B2C3,1,@T,@T,SYN77   ,,,,,,,,,,,0\r\n"
+             "MSG,6,1,1,A1B2C3,1,@T,@T,,,,,,,,7700,0,-1,0,0\r\n");
+    ASSERT_EQ(g_s.adsb.state, ADSB_LIVE);
+    ASSERT_EQ(g_s.adsb_count, 1);
+    const alert_t *a = by_key("adsbemerg:a1b2c3:icao:7700");
+    ASSERT(a != NULL);
+    ASSERT_EQ(n_type(), 1);
+    if (a) {
+        ASSERT_EQ(a->sev, ALERT_SEV_LOW);
+        ASSERT(strstr(a->detail, "ICAO a1b2c3 callsign SYN77 squawk 7700 emergency -") != NULL);
+    }
+    /* Held on the rows' own message time, as for aircraft.json. */
+    for (int i = 0; i < 12; i++)
+        tick_sbs("MSG,6,1,1,A1B2C3,1,@T,@T,,,,,,,,7700,0,-1,0,0\r\n");
+    a = by_key("adsbemerg:a1b2c3:icao:7700");
+    if (a) ASSERT_EQ(a->sev, ALERT_SEV_WARN);
+    end();
+}
+
+/* The SBS emergency flag alone is not a status word: a flag of -1 on a
+ * squawk that is not 7500/7600/7700 (only another SBS feed passed
+ * through readsb can send that) fires nothing, and the row's emergency
+ * stays absent. Seen red with adsb_sbs_parse() mapping field 19 "-1"
+ * to ADSB_EMERG_GENERAL: the rule then fired "general". */
+static void test_sbs_flag_alone_does_not_fire(void) {
+    begin_sbs();
+    for (int i = 0; i < 3; i++)
+        tick_sbs("MSG,6,1,1,0ABCDE,1,@T,@T,,,,,,,,1200,0,-1,0,0\r\n");
+    ASSERT_EQ(g_s.adsb_count, 1);
+    if (g_s.adsb_count == 1) ASSERT_EQ(g_s.adsb_rows[0].emergency, ADSB_EMERG_ABSENT);
+    ASSERT_EQ(n_type(), 0);
+    end();
+}
+
 void run_adsb_rules_tests(void) {
     RUN_TEST(test_each_code_fires);
     RUN_TEST(test_each_status_fires);
@@ -408,4 +490,6 @@ void run_adsb_rules_tests(void) {
     RUN_TEST(test_clear_restarts_the_hold);
     RUN_TEST(test_error_pass_keeps_the_hold);
     RUN_TEST(test_stall_past_expiry_restarts_the_hold);
+    RUN_TEST(test_sbs_emergency_squawk_fires);
+    RUN_TEST(test_sbs_flag_alone_does_not_fire);
 }

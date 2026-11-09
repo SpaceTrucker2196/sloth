@@ -19,16 +19,26 @@
  * and reported in sensor_health and the sensor registry; it never stops
  * the worker. The open is O_RDONLY: sloth writes nothing to the
  * decoder's directory, and dials nothing. Started after the privilege
- * drop: the decoder's file is world-readable as readsb ships it. */
+ * drop: the decoder's file is world-readable as readsb ships it.
+ *
+ * sbs:// (2026-11-09): the worker instead connects to the decoder's SBS
+ * output on loopback (bounded non-blocking connect), reads CRLF lines
+ * through adsb_sbs_lines_feed() and never writes a byte to the socket.
+ * A refused or failed connect is a read error and is retried after
+ * 2, 4, ... 30 s; a session the decoder closes, or a read error, is a
+ * read error and is retried after 2 s. Lines are framed with a hard
+ * cap (ADSB_SBS_MAX_LINE) across reads. The main thread never touches
+ * the socket. */
 
-/* Parse SPEC and record the source with adsb_set_source(). 0, or -1 with
- * err. Opens nothing: a decoder that starts after sloth is the normal
- * case, not an error. */
+/* Parse SPEC and record the source with adsb_set_source() (or
+ * adsb_set_source_sbs()). 0, or -1 with err. Opens and dials nothing: a
+ * decoder that starts after sloth is the normal case, not an error. */
 int  adsb_reader_configure(const char *spec, char *err, size_t errsz);
 
 int  adsb_reader_configured(void);
 
-/* One poll: open, check, read, parse, feed, at host `wall` / `mono_ms`.
+/* One poll of a file source (-1 for an sbs:// one): open, check, read,
+ * parse, feed, at host `wall` / `mono_ms`.
  * What the worker runs every ADSB_POLL_MS, and the tests' seam. Returns
  * 1 for a document fed, 0 for an unchanged file, -1 for a failure
  * (already counted). */

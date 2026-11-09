@@ -177,6 +177,34 @@ static void test_adsb_waiting_for_the_first_document(void) {
     sloth_clock_test_set(NULL, NULL);
 }
 
+/* An sbs:// source (2026-11-09): the header counts lines, not
+ * documents, and the empty states speak of the stream - waiting for a
+ * first line, stale as no line for ADSB_SBS_STALE_S - not of a file's
+ * clock. The "docs" absence was seen red with the header's label fixed
+ * at "docs"; the file-clock absence with the stream's stale branch
+ * guarded `if (0)`. */
+static void test_adsb_sbs_source_states(void) {
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    g_wall = WALL0;
+    sloth_clock_test_set(tm_, tw);
+    s.adsb.configured = 1;
+    s.adsb.state = ADSB_WAITING;
+    s.adsb.age_s = -1;
+    snprintf(s.adsb.src, sizeof(s.adsb.src), "sbs:127.0.0.1:30003");
+    const char *b = render(&s);
+    ASSERT(strstr(b, "src sbs:127.0.0.1:30003") != NULL);
+    ASSERT(strstr(b, " lines 0  read err 0  parse err 0") != NULL);
+    ASSERT(strstr(b, " docs 0") == NULL);
+    ASSERT(strstr(b, "waiting for the decoder's first SBS line") != NULL);
+    s.adsb.state = ADSB_STALE;
+    s.adsb.age_s = 140;
+    b = render(&s);
+    ASSERT(strstr(b, "sent no line, not even its heartbeat") != NULL);
+    ASSERT(strstr(b, "clock has stopped advancing") == NULL);
+    sloth_clock_test_set(NULL, NULL);
+}
+
 /* The populated table with no sensor position: the header's figures,
  * rows freshest first with the address tie-break, the per-field cells
  * and absences, the RSSI bar, the dim row, and the legend.
@@ -488,4 +516,5 @@ void run_adsb_view_tests(void) {
     RUN_TEST(test_adsb_nav_follows_the_aircraft);
     RUN_TEST(test_adsb_renders_a_polled_table);
     RUN_TEST(test_adsb_health_strip_token);
+    RUN_TEST(test_adsb_sbs_source_states);
 }

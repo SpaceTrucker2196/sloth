@@ -581,12 +581,15 @@ static void print_usage(const char *argv0) {
             "                     --strict refuses a remote gpsd regardless.\n"
             "  --gps-baud N       serial speed for --gps /dev/... (4800, 9600\n"
             "                     (default), 19200, 38400, 57600, 115200).\n"
-            "  --adsb SPEC        tail the aircraft.json a local ADS-B decoder\n"
-            "                     (readsb, dump1090-fa) already writes:\n"
+            "  --adsb SPEC        read a local ADS-B decoder (readsb,\n"
+            "                     dump1090-fa) that is already running:\n"
             "                       /path/aircraft.json or file:///path\n"
-            "                     Re-read about once a second; sloth never\n"
-            "                     opens or tunes the SDR and uses no network.\n"
-            "                     sbs:// and beast:// are not yet supported.\n"
+            "                         re-read about once a second, or\n"
+            "                       sbs://[HOST[:PORT]] its SBS/BaseStation\n"
+            "                         TCP output (default 127.0.0.1:30003;\n"
+            "                         loopback only; sloth sends nothing).\n"
+            "                     sloth never opens or tunes the SDR.\n"
+            "                     beast:// is not yet supported.\n"
             "                     Refused with --replay.\n"
             "  --aprs SPEC        tail the packet log a local Dire Wolf APRS\n"
             "                     decoder already writes (direwolf -L FILE):\n"
@@ -1217,10 +1220,20 @@ int main(int argc, char **argv) {
             fprintf(stderr, "sloth: --adsb %s: %s\n", adsb_arg, aerr);
             return 2;
         }
-        char apath[256];
-        if (adsb_spec_parse(adsb_arg, apath, sizeof(apath), NULL, 0) == 0)
-            fprintf(stderr, "sloth: --adsb reading %s about once a second "
-                            "(read-only; no SDR, no network)\n", apath);
+        adsb_spec_t asp;
+        if (adsb_spec_parse(adsb_arg, &asp, NULL, 0) == 0) {
+            if (asp.kind == ADSB_SPEC_SBS)
+                /* MISSION.md section 2: a network-using input is announced. */
+                fprintf(stderr, "sloth: --adsb connecting to the decoder's "
+                                "SBS output at %s%s%s:%d over TCP after the "
+                                "privilege drop (loopback; read-only: sloth "
+                                "sends nothing on the socket; no SDR)\n",
+                        strchr(asp.host, ':') ? "[" : "", asp.host,
+                        strchr(asp.host, ':') ? "]" : "", asp.port);
+            else
+                fprintf(stderr, "sloth: --adsb reading %s about once a second "
+                                "(read-only; no SDR, no network)\n", asp.path);
+        }
     }
     /* --aprs: the SPEC only, as --adsb; Dire Wolf creates its log with
      * its first packet, so a file not there yet is a state. */

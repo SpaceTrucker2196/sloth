@@ -1194,9 +1194,10 @@ static void test_usage_strict_claims_no_total_coverage(void) {
     ASSERT(has_ci(b, "--no-discovery"));
 }
 
-/* --adsb refuses sbs:// and beast:// alike (src/adsb.c
- * adsb_spec_parse, docs/wiki/cli-reference.md); the help named only
- * sbs://, so an operator reading it would try beast:// and hit exit 2. */
+/* --adsb's help names both socket schemes: sbs:// is accepted since
+ * 2026-11-09 and beast:// is still refused (src/adsb.c adsb_spec_parse,
+ * docs/wiki/cli-reference.md). The help once named only sbs://, so an
+ * operator reading it would try beast:// and hit exit 2. */
 static void test_usage_adsb_names_both_refused_schemes(void) {
     char b[2048];
     ASSERT_EQ(usage_option_block("--adsb", b, sizeof(b)), 1);

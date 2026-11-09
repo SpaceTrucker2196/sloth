@@ -1,4 +1,6 @@
+#include <arpa/inet.h>
 #include <math.h>
+#include <netinet/in.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -374,48 +376,337 @@ done:
 
 /* ── The --adsb SPEC ───────────────────────────────────────────── */
 
-int adsb_spec_parse(const char *spec, char *path, size_t pathsz,
+static int set_err(char *err, size_t errsz, const char *msg) {
+    if (err && errsz) snprintf(err, errsz, "%s", msg);
+    return -1;
+}
+
+/* 1..65535 in decimal, nothing else. */
+static int port_parse(const char *s, int *out) {
+    long v = 0;
+    if (!*s) return -1;
+    for (; *s; s++) {
+        if (*s < '0' || *s > '9') return -1;
+        v = v * 10 + (*s - '0');
+        if (v > 65535) return -1;
+    }
+    if (v < 1) return -1;
+    *out = (int)v;
+    return 0;
+}
+
+/* sbs://[HOST[:PORT]]: HOST numeric, IPv6 in brackets, loopback only. */
+static int sbs_spec_parse(const char *h, adsb_spec_t *out, char *err, size_t errsz) {
+    static const char bad[] = "sbs:// wants a numeric loopback HOST "
+                              "(127.0.0.1, [::1]) and PORT 1..65535";
+    char host[64];
+    const char *portp = NULL;
+    int v6 = 0;
+    if (*h == '\0' || *h == ':') {
+        snprintf(host, sizeof(host), "127.0.0.1");
+        if (*h == ':') portp = h + 1;
+    } else if (*h == '[') {
+        const char *rb = strchr(h, ']');
+        if (!rb || rb == h + 1 || (size_t)(rb - h - 1) >= sizeof(host))
+            return set_err(err, errsz, bad);
+        memcpy(host, h + 1, (size_t)(rb - h - 1));
+        host[rb - h - 1] = '\0';
+        if (rb[1] == ':') portp = rb + 2;
+        else if (rb[1] != '\0') return set_err(err, errsz, bad);
+        v6 = 1;
+    } else {
+        const char *colon = strchr(h, ':');
+        size_t hl = colon ? (size_t)(colon - h) : strlen(h);
+        if (hl == 0 || hl >= sizeof(host)) return set_err(err, errsz, bad);
+        memcpy(host, h, hl);
+        host[hl] = '\0';
+        if (colon) portp = colon + 1;
+    }
+    int port = ADSB_SBS_DEFAULT_PORT;
+    if (portp && port_parse(portp, &port) != 0) return set_err(err, errsz, bad);
+    int loop;
+    if (v6) {
+        struct in6_addr a6;
+        if (inet_pton(AF_INET6, host, &a6) != 1) return set_err(err, errsz, bad);
+        loop = IN6_IS_ADDR_LOOPBACK(&a6);
+    } else {
+        struct in_addr a4;
+        if (inet_pton(AF_INET, host, &a4) != 1) return set_err(err, errsz, bad);
+        loop = (ntohl(a4.s_addr) >> 24) == 127;
+    }
+    if (!loop) {
+        if (err && errsz)
+            snprintf(err, errsz, "sbs:// reads a decoder on this host: %s is "
+                     "not loopback (127.0.0.0/8, [::1])", host);
+        return -1;
+    }
+    out->kind = ADSB_SPEC_SBS;
+    snprintf(out->host, sizeof(out->host), "%s", host);
+    out->port = port;
+    return 0;
+}
+
+int adsb_spec_parse(const char *spec, adsb_spec_t *out,
                     char *err, size_t errsz) {
     const char *p = spec;
-    if (!spec || !*spec) {
-        if (err && errsz) snprintf(err, errsz, "empty SPEC");
-        return -1;
-    }
-    if (strncmp(spec, "sbs://", 6) == 0 || strncmp(spec, "beast://", 8) == 0) {
-        if (err && errsz)
-            snprintf(err, errsz, "%.*s input is not yet supported: give the "
-                     "decoder's aircraft.json path (e.g. /run/readsb/aircraft.json)",
-                     spec[0] == 's' ? 3 : 5, spec);
-        return -1;
-    }
+    if (!out) return set_err(err, errsz, "no output");
+    memset(out, 0, sizeof(*out));
+    if (!spec || !*spec) return set_err(err, errsz, "empty SPEC");
+    if (strncmp(spec, "sbs://", 6) == 0)
+        return sbs_spec_parse(spec + 6, out, err, errsz);
+    if (strncmp(spec, "beast://", 8) == 0)
+        return set_err(err, errsz, "beast:// input is not yet supported: give "
+                       "the decoder's aircraft.json path (e.g. "
+                       "/run/readsb/aircraft.json) or its SBS output "
+                       "(sbs://127.0.0.1:30003)");
     if (strncmp(spec, "file://", 7) == 0) {
         p = spec + 7;
-        if (*p != '/') {
-            if (err && errsz)
-                snprintf(err, errsz, "file:// takes a local absolute path "
-                         "(file:///path), not a host");
-            return -1;
-        }
+        if (*p != '/')
+            return set_err(err, errsz, "file:// takes a local absolute path "
+                           "(file:///path), not a host");
     } else if (strstr(spec, "://")) {
-        if (err && errsz)
-            snprintf(err, errsz, "unsupported scheme: want an absolute path "
-                     "or file:///path to aircraft.json");
-        return -1;
+        return set_err(err, errsz, "unsupported scheme: want an absolute path "
+                       "or file:///path to aircraft.json, or sbs://HOST:PORT");
     } else if (*spec != '/') {
-        if (err && errsz) snprintf(err, errsz, "want an absolute path");
-        return -1;
+        return set_err(err, errsz, "want an absolute path");
     }
     size_t l = strlen(p);
-    if (l < 2 || p[l - 1] == '/') {
-        if (err && errsz) snprintf(err, errsz, "want a file, not a directory");
-        return -1;
-    }
-    if (!path || l >= pathsz) {
-        if (err && errsz) snprintf(err, errsz, "path too long");
-        return -1;
-    }
-    memcpy(path, p, l + 1);
+    if (l < 2 || p[l - 1] == '/')
+        return set_err(err, errsz, "want a file, not a directory");
+    if (l >= sizeof(out->path)) return set_err(err, errsz, "path too long");
+    memcpy(out->path, p, l + 1);
+    out->kind = ADSB_SPEC_FILE;
     return 0;
+}
+
+void adsb_spec_label(const adsb_spec_t *sp, char *out, size_t outsz) {
+    if (!out || !outsz) return;
+    if (!sp) { out[0] = '\0'; return; }
+    if (sp->kind == ADSB_SPEC_SBS)
+        snprintf(out, outsz, strchr(sp->host, ':') ? "sbs:[%s]:%d" : "sbs:%s:%d",
+                 sp->host, sp->port);
+    else
+        snprintf(out, outsz, "file:%.200s", sp->path);
+}
+
+/* ── SBS / BaseStation lines ───────────────────────────────────── */
+
+#define SBS_MIN_FIELDS 22
+#define SBS_MAX_FIELDS 24
+
+typedef struct { const char *p; size_t n; } sbs_field_t;
+
+/* A whole field as a number: jnum over it, every byte consumed. 0, or
+ * -1 for an empty or non-numeric field. */
+static int field_num(sbs_field_t f, double *out) {
+    if (f.n == 0) return -1;
+    jcur_t c = { f.p, f.p + f.n };
+    if (jnum(&c, out) != 0 || c.p != c.e) return -1;
+    return 0;
+}
+
+/* An integer field with readsb's optional trailing 'H' (GNSS). 1 with
+ * *geom set, 0 for an empty field, -1 malformed. */
+static int field_alt(sbs_field_t f, double *out, int *geom) {
+    *geom = 0;
+    if (f.n == 0) return 0;
+    if (f.p[f.n - 1] == 'H') { *geom = 1; f.n--; }
+    return field_num(f, out) == 0 ? 1 : -1;
+}
+
+static int field_is(sbs_field_t f, const char *lit) {
+    size_t l = strlen(lit);
+    return f.n == l && memcmp(f.p, lit, l) == 0;
+}
+
+/* Exactly `n` decimal digits at p. */
+static int digits(const char *p, int n, int *out) {
+    int v = 0;
+    for (int i = 0; i < n; i++) {
+        if (p[i] < '0' || p[i] > '9') return -1;
+        v = v * 10 + (p[i] - '0');
+    }
+    *out = v;
+    return 0;
+}
+
+/* Days since 1970-01-01 of a proleptic Gregorian date (Howard
+ * Hinnant's days_from_civil); timegm() is not C99. */
+static int64_t days_from_civil(int y, int m, int d) {
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const int64_t yoe = y - era * 400;
+    const int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+/* "YYYY/MM/DD" + "HH:MM:SS[.mmm]" (UTC) -> unix ms. 0 for both empty
+ * (no time), 1 parsed, -1 malformed. */
+static int field_time(sbs_field_t d, sbs_field_t t, int64_t *ms) {
+    if (d.n == 0 && t.n == 0) return 0;
+    int y = 0, mo = 0, dd = 0, h = 0, mi = 0, se = 0, frac = 0;
+    if (d.n != 10 || d.p[4] != '/' || d.p[7] != '/' ||
+        digits(d.p, 4, &y) || digits(d.p + 5, 2, &mo) || digits(d.p + 8, 2, &dd))
+        return -1;
+    if (t.n < 8 || t.p[2] != ':' || t.p[5] != ':' ||
+        digits(t.p, 2, &h) || digits(t.p + 3, 2, &mi) || digits(t.p + 6, 2, &se))
+        return -1;
+    if (t.n > 8) {
+        /* readsb writes exactly three; one to three are taken as ms. */
+        int fl = (int)t.n - 9;
+        if (t.p[8] != '.' || fl < 1 || fl > 3 || digits(t.p + 9, fl, &frac))
+            return -1;
+        for (int i = fl; i < 3; i++) frac *= 10;
+    }
+    if (y < 1970 || mo < 1 || mo > 12 || dd < 1 || dd > 31 ||
+        h > 23 || mi > 59 || se > 60)
+        return -1;
+    *ms = ((days_from_civil(y, mo, dd) * 86400 + h * 3600 + mi * 60 + se) * 1000) + frac;
+    return 1;
+}
+
+int adsb_sbs_parse(const char *line, size_t n, adsb_sbs_msg_t *out) {
+    if (!line || !out) return -1;
+    if (n > 0 && line[n - 1] == '\r') n--;
+    memset(out, 0, sizeof(*out));
+    adsb_aircraft_t *a = &out->ac;
+    a->emergency = ADSB_EMERG_ABSENT;
+    if (n == 0) return 0;                          /* readsb's heartbeat */
+    if (n > ADSB_SBS_MAX_LINE) return -1;
+    for (size_t i = 0; i < n; i++)
+        if ((unsigned char)line[i] < 0x20 || (unsigned char)line[i] > 0x7e) return -1;
+
+    sbs_field_t f[SBS_MAX_FIELDS] = {{ NULL, 0 }};
+    int nf = 0;
+    const char *p = line, *e = line + n;
+    for (;;) {
+        const char *c = memchr(p, ',', (size_t)(e - p));
+        const char *end = c ? c : e;
+        if (nf == SBS_MAX_FIELDS) return -1;
+        f[nf].p = p;
+        f[nf].n = (size_t)(end - p);
+        nf++;
+        if (!c) break;
+        p = c + 1;
+    }
+    /* The other BaseStation records carry no aircraft state readsb
+     * would send; they are not errors. */
+    static const char *const others[] = { "SEL", "ID", "AIR", "STA", "CLK" };
+    for (size_t i = 0; i < sizeof(others) / sizeof(others[0]); i++)
+        if (field_is(f[0], others[i])) return 0;
+    if (!field_is(f[0], "MSG") || nf < SBS_MIN_FIELDS) return -1;
+    if (f[1].n != 1 || f[1].p[0] < '1' || f[1].p[0] > '8') return -1;
+    out->type = f[1].p[0] - '0';
+
+    char tmp[16];
+    int ni;
+    if (f[4].n >= sizeof(tmp)) return -1;
+    memcpy(tmp, f[4].p, f[4].n);
+    tmp[f[4].n] = '\0';
+    if (adsb_hex_parse(tmp, &a->icao, &ni) != 0) return -1;
+    a->non_icao = (uint8_t)ni;
+
+    int64_t ms = 0;
+    int tr = field_time(f[6], f[7], &ms);
+    if (tr < 0) return -1;
+    if (tr > 0) { out->has_time = 1; out->time_ms = ms; }
+
+    /* 10 callsign: at most 8 characters before trimming. */
+    if (f[10].n > 0 && f[10].n <= 8) {
+        memcpy(tmp, f[10].p, f[10].n);
+        tmp[f[10].n] = '\0';
+        if (flight_fix(tmp)) put(a->flight, sizeof(a->flight), tmp);
+    }
+
+    double d = 0;
+    int geom = 0, r;
+    /* 21 on ground: -1 is "ground", as alt_baro's string is; a
+     * barometric altitude on the same line is then not kept. */
+    int ground = field_is(f[21], "-1");
+    if (ground) a->on_ground = 1;
+    /* 11 altitude */
+    if ((r = field_alt(f[11], &d, &geom)) < 0) return -1;
+    if (r > 0 && finite_in(d, -2000, 100000)) {
+        if (geom) { a->alt_geom = round_i32(d); a->has_alt_geom = 1; }
+        else if (!ground) { a->alt_baro = round_i32(d); a->has_alt_baro = 1; }
+    }
+    /* 12 ground speed, 13 track */
+    if (f[12].n) {
+        if (field_num(f[12], &d) != 0) return -1;
+        if (finite_in(d, 0, 4000)) { a->gs = d; a->has_gs = 1; }
+    }
+    if (f[13].n) {
+        if (field_num(f[13], &d) != 0) return -1;
+        if (finite_in(d, 0, 360)) { a->track = d; a->has_track = 1; }
+    }
+    /* 14 / 15 position, only as a pair */
+    if (f[14].n || f[15].n) {
+        double lat = 0, lon = 0;
+        if (field_num(f[14], &lat) != 0 || field_num(f[15], &lon) != 0) return -1;
+        if (finite_in(lat, -90, 90) && finite_in(lon, -180, 180)) {
+            a->lat = lat; a->lon = lon; a->has_pos = 1;
+        }
+    }
+    /* 16 vertical rate */
+    if ((r = field_alt(f[16], &d, &geom)) < 0) return -1;
+    if (r > 0 && finite_in(d, -60000, 60000)) {
+        if (geom) { a->geom_rate = round_i32(d); a->has_geom_rate = 1; }
+        else      { a->baro_rate = round_i32(d); a->has_baro_rate = 1; }
+    }
+    /* 17 squawk */
+    if (f[17].n == 4) {
+        memcpy(tmp, f[17].p, 4);
+        tmp[4] = '\0';
+        if (squawk_ok(tmp)) put(a->squawk, sizeof(a->squawk), tmp);
+    }
+    /* 22 RSSI, 23 category: readsb --sbs-extra-fields only. */
+    if (nf > 22 && f[22].n) {
+        if (field_num(f[22], &d) != 0) return -1;
+        if (finite_in(d, -200, 10)) { a->rssi = d; a->has_rssi = 1; }
+    }
+    if (nf > 23 && f[23].n == 2) {
+        memcpy(tmp, f[23].p, 2);
+        tmp[2] = '\0';
+        if (category_ok(tmp)) put(a->category, sizeof(a->category), tmp);
+    }
+    return 1;
+}
+
+void adsb_sbs_lines_init(adsb_sbs_lines_t *l) {
+    if (!l) return;
+    l->len = 0;
+    l->overlong = 0;
+}
+
+static void sbs_line(adsb_sbs_lines_t *l, int64_t wall_ms, uint64_t mono_ms) {
+    int r = adsb_sbs_parse(l->buf, l->len, &l->msg);
+    if (r > 0)       adsb_feed_sbs(&l->msg, wall_ms, mono_ms);
+    else if (r == 0) adsb_note_sbs_alive(wall_ms, mono_ms);
+    else             adsb_note_parse_error("malformed SBS line");
+}
+
+void adsb_sbs_lines_feed(adsb_sbs_lines_t *l, const uint8_t *data, size_t n,
+                         int64_t wall_ms, uint64_t mono_ms) {
+    if (!l || !data) return;
+    for (size_t i = 0; i < n; i++) {
+        char ch = (char)data[i];
+        if (ch == '\n') {
+            if (!l->overlong) sbs_line(l, wall_ms, mono_ms);
+            l->len = 0;
+            l->overlong = 0;
+            continue;
+        }
+        if (l->overlong) continue;
+        /* +1: a trailing '\r' rides along and is stripped by the parse. */
+        if (l->len >= ADSB_SBS_MAX_LINE + 1) {
+            l->overlong = 1;
+            l->len = 0;
+            adsb_note_parse_error("SBS line over 512 bytes");
+            continue;
+        }
+        l->buf[l->len++] = ch;
+    }
 }
 
 /* ── Bands and the signature ───────────────────────────────────── */
@@ -496,6 +787,7 @@ uint64_t adsb_row_sig(const adsb_aircraft_t *a) {
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct {
     int             configured;
+    int             sbs;            /* the source is an SBS stream */
     char            label[48];
     char            err[96];
     int             ever_doc;
@@ -519,6 +811,13 @@ void adsb_set_source(const char *label) {
     pthread_mutex_lock(&g_mu);
     g.configured = 1;
     snprintf(g.label, sizeof(g.label), "%s", label ? label : "");
+    pthread_mutex_unlock(&g_mu);
+}
+
+void adsb_set_source_sbs(const char *label) {
+    adsb_set_source(label);
+    pthread_mutex_lock(&g_mu);
+    g.sbs = 1;
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -618,6 +917,69 @@ void adsb_feed_doc(const adsb_doc_t *d, double stamp, time_t wall,
     pthread_mutex_unlock(&g_mu);
 }
 
+/* Under g_mu: an SBS line arrived. A stream has no document clock: the
+ * line itself, heartbeat included, is the decoder showing it runs. */
+static void sbs_alive(time_t wall, uint64_t mono_ms) {
+    g.ever_doc = 1;
+    g.ever_advance = 1;
+    g.advance_mono = mono_ms;
+    g.last_read = wall;
+    g.err[0] = '\0';
+}
+
+void adsb_note_sbs_alive(int64_t wall_ms, uint64_t mono_ms) {
+    pthread_mutex_lock(&g_mu);
+    sbs_alive((time_t)(wall_ms / 1000), mono_ms);
+    pthread_mutex_unlock(&g_mu);
+}
+
+void adsb_note_connected(void) {
+    pthread_mutex_lock(&g_mu);
+    g.err[0] = '\0';
+    pthread_mutex_unlock(&g_mu);
+}
+
+void adsb_feed_sbs(const adsb_sbs_msg_t *m, int64_t wall_ms, uint64_t mono_ms) {
+    if (!m) return;
+    time_t wall = (time_t)(wall_ms / 1000);
+    adsb_aircraft_t a = m->ac;
+    /* seen as aircraft.json has it: seconds before the read that the
+     * decoder heard the message. The decoder's clock is the host's (the
+     * source is loopback); a line stamped ahead of the read is 0. */
+    double seen = 0;
+    if (m->has_time && wall_ms > m->time_ms) {
+        seen = (double)(wall_ms - m->time_ms) / 1000.0;
+        if (seen > 1e6) seen = 1e6;
+    }
+    a.has_seen = 1;
+    a.seen = seen;
+    if (a.has_pos) { a.has_seen_pos = 1; a.seen_pos = seen; }
+    pthread_mutex_lock(&g_mu);
+    sbs_alive(wall, mono_ms);
+    g.reads++;
+    g.messages++;
+    adsb_aircraft_t *r = row_find(a.icao, a.non_icao);
+    if (!r) {
+        if (g.n >= ADSB_MAX_AIRCRAFT) {
+            g.overflow++;
+            pthread_mutex_unlock(&g_mu);
+            return;
+        }
+        r = &g.rows[g.n++];
+        memset(r, 0, sizeof(*r));
+        r->icao = a.icao;
+        r->non_icao = a.non_icao;
+        r->emergency = ADSB_EMERG_ABSENT;
+        r->alt_band = INT16_MIN;
+        r->first_seen = wall;
+    }
+    /* No per-aircraft count in SBS: the lines received for it. */
+    a.has_messages = 1;
+    a.messages = r->messages + 1;
+    merge(r, &a, wall, mono_ms);
+    pthread_mutex_unlock(&g_mu);
+}
+
 static void note_err(const char *err, uint64_t *tally) {
     pthread_mutex_lock(&g_mu);
     (*tally)++;
@@ -666,7 +1028,7 @@ void adsb_health_poll(sloth_state_t *s, time_t wall, uint64_t mono_ms) {
     if (g.ever_advance) {
         uint64_t age = mono_ms > g.advance_mono ? mono_ms - g.advance_mono : 0;
         h->age_s = (int)(age / 1000u > 0x7fffffff ? 0x7fffffff : age / 1000u);
-        h->fresh_bucket = h->age_s <= ADSB_STALE_S ? 0 : 1;
+        h->fresh_bucket = h->age_s <= (g.sbs ? ADSB_SBS_STALE_S : ADSB_STALE_S) ? 0 : 1;
     } else if (g.ever_doc) {
         h->fresh_bucket = 1;   /* stale at first sight: no advance seen */
     }

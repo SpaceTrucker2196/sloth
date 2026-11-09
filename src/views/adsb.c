@@ -127,8 +127,10 @@ static void header(const sloth_state_t *s, const loc_stamp_t *loc, int have_loc,
     else               TPRINT("-");
     tui_dim();
     TPRINT("  src %s  [up/dn]\n", h->src);
-    TPRINT(" docs %llu  read err %llu  parse err %llu  overflow %llu"
+    /* An sbs:// source counts MSG lines, not documents. */
+    TPRINT(" %s %llu  read err %llu  parse err %llu  overflow %llu"
            "  bad %llu  expired %llu\n",
+           strncmp(h->src, "sbs:", 4) == 0 ? "lines" : "docs",
            (unsigned long long)h->reads, (unsigned long long)h->read_errors,
            (unsigned long long)h->parse_errors, (unsigned long long)h->overflow,
            (unsigned long long)h->bad_entries, (unsigned long long)h->expired);
@@ -146,11 +148,11 @@ void view_adsb_draw(const sloth_state_t *s) {
     if (!s->adsb.configured) {
         tui_normal(); TPRINT(" ADS-B: "); tui_dim();
         TPRINT("no decoder\n"
-               "  (start with --adsb /run/readsb/aircraft.json; see "
-               "docs/wiki/adsb.md.\n"
+               "  (start with --adsb /run/readsb/aircraft.json or\n"
+               "   --adsb sbs://127.0.0.1:30003; see docs/wiki/adsb.md.\n"
                "   sloth never opens or tunes the SDR: a local readsb or\n"
                "   dump1090-fa does, and sloth only reads the aircraft.json\n"
-               "   it already writes.)\n");
+               "   it already writes, or its SBS output.)\n");
         tui_normal();
         return;
     }
@@ -168,9 +170,17 @@ void view_adsb_draw(const sloth_state_t *s) {
 
     if (n == 0) {
         tui_dim();
-        if (s->adsb.state == ADSB_WAITING)
+        int sbs = strncmp(s->adsb.src, "sbs:", 4) == 0;
+        if (s->adsb.state == ADSB_WAITING && sbs)
+            TPRINT("  (waiting for the decoder's first SBS line - connected\n"
+                   "   or connecting; an empty sky sends only a heartbeat)\n");
+        else if (s->adsb.state == ADSB_WAITING)
             TPRINT("  (waiting for the decoder's first document - it writes\n"
                    "   aircraft.json about once a second once it is running)\n");
+        else if (s->adsb.state == ADSB_STALE && sbs)
+            TPRINT("  (the decoder has sent no line, not even its heartbeat,\n"
+                   "   for over %d s: connected, but nothing is arriving)\n",
+                   ADSB_SBS_STALE_S);
         else if (s->adsb.state == ADSB_ERROR)
             TPRINT("  (the last read failed, so the table stands as it was:\n"
                    "   nothing yet. A decoder starting after sloth is normal.)\n");

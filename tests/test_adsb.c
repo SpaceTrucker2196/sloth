@@ -2,6 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/poll.h>  /* not <poll.h>: -Isrc puts src/poll.h first */
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <time.h>
@@ -479,23 +483,443 @@ static void test_alt_bands(void) {
 /* ── The --adsb SPEC ───────────────────────────────────────────── */
 
 static void test_spec_parse(void) {
-    char p[256], e[200];
-    ASSERT_EQ(adsb_spec_parse("/run/readsb/aircraft.json", p, sizeof(p), e, sizeof(e)), 0);
-    ASSERT_STR(p, "/run/readsb/aircraft.json");
-    ASSERT_EQ(adsb_spec_parse("file:///run/dump1090-fa/aircraft.json", p, sizeof(p), e, sizeof(e)), 0);
-    ASSERT_STR(p, "/run/dump1090-fa/aircraft.json");
+    adsb_spec_t sp;
+    char e[200], lab[64];
+    ASSERT_EQ(adsb_spec_parse("/run/readsb/aircraft.json", &sp, e, sizeof(e)), 0);
+    ASSERT_EQ(sp.kind, ADSB_SPEC_FILE);
+    ASSERT_STR(sp.path, "/run/readsb/aircraft.json");
+    adsb_spec_label(&sp, lab, sizeof(lab));
+    ASSERT_STR(lab, "file:/run/readsb/aircraft.json");
+    ASSERT_EQ(adsb_spec_parse("file:///run/dump1090-fa/aircraft.json", &sp, e, sizeof(e)), 0);
+    ASSERT_STR(sp.path, "/run/dump1090-fa/aircraft.json");
     e[0] = '\0';
-    ASSERT_EQ(adsb_spec_parse("sbs://127.0.0.1:30003", p, sizeof(p), e, sizeof(e)), -1);
+    ASSERT_EQ(adsb_spec_parse("beast://127.0.0.1:30005", &sp, e, sizeof(e)), -1);
     ASSERT(strstr(e, "not yet supported") != NULL);
+    ASSERT_EQ(adsb_spec_parse("file://host/aircraft.json", &sp, e, sizeof(e)), -1);
+    ASSERT_EQ(adsb_spec_parse("http://127.0.0.1/data/aircraft.json", &sp, e, sizeof(e)), -1);
+    ASSERT_EQ(adsb_spec_parse("aircraft.json", &sp, e, sizeof(e)), -1);
+    ASSERT_EQ(adsb_spec_parse("", &sp, e, sizeof(e)), -1);
+    ASSERT_EQ(adsb_spec_parse("/run/readsb/", &sp, e, sizeof(e)), -1);
+    char longp[300];
+    memset(longp, 'a', sizeof(longp) - 1);
+    longp[0] = '/';
+    longp[sizeof(longp) - 1] = '\0';
+    ASSERT_EQ(adsb_spec_parse(longp, &sp, e, sizeof(e)), -1);   /* too long */
+}
+
+/* sbs:// (2026-11-09): numeric loopback HOST, PORT 1..65535, default
+ * 127.0.0.1:30003 (readsb's --net-sbs-port default). The refusals of a
+ * routable address were seen red with the loopback test in
+ * sbs_spec_parse() forced to 1: 192.0.2.1 and 2001:db8::1 parsed. */
+static void test_spec_parse_sbs(void) {
+    adsb_spec_t sp;
+    char e[200], lab[64];
+    ASSERT_EQ(adsb_spec_parse("sbs://127.0.0.1:30003", &sp, e, sizeof(e)), 0);
+    ASSERT_EQ(sp.kind, ADSB_SPEC_SBS);
+    ASSERT_STR(sp.host, "127.0.0.1");
+    ASSERT_EQ(sp.port, 30003);
+    adsb_spec_label(&sp, lab, sizeof(lab));
+    ASSERT_STR(lab, "sbs:127.0.0.1:30003");
+    ASSERT_EQ(adsb_spec_parse("sbs://", &sp, e, sizeof(e)), 0);
+    ASSERT_STR(sp.host, "127.0.0.1");
+    ASSERT_EQ(sp.port, 30003);
+    ASSERT_EQ(adsb_spec_parse("sbs://127.0.0.2", &sp, e, sizeof(e)), 0);
+    ASSERT_EQ(sp.port, 30003);
+    ASSERT_EQ(adsb_spec_parse("sbs://[::1]:31003", &sp, e, sizeof(e)), 0);
+    ASSERT_STR(sp.host, "::1");
+    ASSERT_EQ(sp.port, 31003);
+    adsb_spec_label(&sp, lab, sizeof(lab));
+    ASSERT_STR(lab, "sbs:[::1]:31003");
     e[0] = '\0';
-    ASSERT_EQ(adsb_spec_parse("beast://127.0.0.1:30005", p, sizeof(p), e, sizeof(e)), -1);
-    ASSERT(strstr(e, "not yet supported") != NULL);
-    ASSERT_EQ(adsb_spec_parse("file://host/aircraft.json", p, sizeof(p), e, sizeof(e)), -1);
-    ASSERT_EQ(adsb_spec_parse("http://127.0.0.1/data/aircraft.json", p, sizeof(p), e, sizeof(e)), -1);
-    ASSERT_EQ(adsb_spec_parse("aircraft.json", p, sizeof(p), e, sizeof(e)), -1);
-    ASSERT_EQ(adsb_spec_parse("", p, sizeof(p), e, sizeof(e)), -1);
-    ASSERT_EQ(adsb_spec_parse("/run/readsb/", p, sizeof(p), e, sizeof(e)), -1);
-    ASSERT_EQ(adsb_spec_parse("/a/b.json", p, 5, e, sizeof(e)), -1);   /* too long */
+    ASSERT_EQ(adsb_spec_parse("sbs://192.0.2.1:30003", &sp, e, sizeof(e)), -1);
+    ASSERT(strstr(e, "not loopback") != NULL);
+    ASSERT_EQ(adsb_spec_parse("sbs://[2001:db8::1]:30003", &sp, e, sizeof(e)), -1);
+    ASSERT(strstr(e, "not loopback") != NULL);
+    ASSERT_EQ(adsb_spec_parse("sbs://localhost:30003", &sp, e, sizeof(e)), -1);  /* a name */
+    ASSERT_EQ(adsb_spec_parse("sbs://127.0.0.1:0", &sp, e, sizeof(e)), -1);
+    ASSERT_EQ(adsb_spec_parse("sbs://127.0.0.1:65536", &sp, e, sizeof(e)), -1);
+    ASSERT_EQ(adsb_spec_parse("sbs://127.0.0.1:30003x", &sp, e, sizeof(e)), -1);
+    ASSERT_EQ(adsb_spec_parse("sbs://127.0.0.1:", &sp, e, sizeof(e)), -1);
+    ASSERT_EQ(adsb_spec_parse("sbs://[::1", &sp, e, sizeof(e)), -1);
+    ASSERT_EQ(adsb_spec_parse("sbs://[::1]x", &sp, e, sizeof(e)), -1);
+}
+
+/* ── SBS / BaseStation lines ───────────────────────────────────────
+ *
+ * Every line here is written by hand from readsb's
+ * modesSendSBSOutput() (net_io.c, wiedehopf/readsb bf8f8fd): 22 comma
+ * separated fields, CRLF, fields left empty when the message did not
+ * carry them, readsb's choice of which fields each transmission type
+ * fills (1 callsign; 2 surface position; 3 airborne position; 4
+ * velocity; 5 surveillance altitude; 6 surveillance identity / squawk;
+ * 7 air-to-air; 8 all-call). Addresses, callsigns and positions are
+ * invented. The wall clock 1800000000 is 2027/01/15 08:00:00 UTC. */
+
+#define SBS_T "2027/01/15,08:00:00.000,2027/01/15,08:00:00.010"
+#define SBS_WALL_MS 1800000000000LL
+
+static adsb_sbs_msg_t g_m;
+
+static int sbs(const char *line) { return adsb_sbs_parse(line, strlen(line), &g_m); }
+
+static void test_sbs_parse_each_type(void) {
+    const adsb_aircraft_t *a = &g_m.ac;
+    /* 1: identification */
+    ASSERT_EQ(sbs("MSG,1,1,1,A1B2C3,1," SBS_T ",SYN510  ,,,,,,,,,,,0\r"), 1);
+    ASSERT_EQ(g_m.type, 1);
+    ASSERT_EQ(a->icao, 0xa1b2c3u);
+    ASSERT_EQ(a->non_icao, 0);
+    ASSERT_STR(a->flight, "SYN510");
+    ASSERT_EQ(a->has_alt_baro + a->has_pos + a->has_gs + a->squawk[0], 0);
+    ASSERT_EQ(a->emergency, ADSB_EMERG_ABSENT);
+    /* The generated date and time, fields 6 and 7, as unix ms. */
+    ASSERT_EQ(g_m.has_time, 1);
+    ASSERT_EQ(g_m.time_ms, SBS_WALL_MS);
+    /* 2: surface position: speed, track, position, on the ground. */
+    ASSERT_EQ(sbs("MSG,2,1,1,A1B2C3,1," SBS_T ",,,12,271,33.1,-111.9,,,,,,-1"), 1);
+    ASSERT_EQ(a->on_ground, 1);
+    ASSERT_EQ(a->has_gs, 1);
+    ASSERT_NEAR(a->gs, 12.0, 1e-9);
+    ASSERT_NEAR(a->track, 271.0, 1e-9);
+    ASSERT_EQ(a->has_pos, 1);
+    ASSERT_NEAR(a->lat, 33.1, 1e-9);
+    ASSERT_NEAR(a->lon, -111.9, 1e-9);
+    /* 3: airborne position */
+    ASSERT_EQ(sbs("MSG,3,1,1,A1B2C3,1," SBS_T ",,3000,,,33.273972,-111.845380,,,0,,0,0"), 1);
+    ASSERT_EQ(a->has_alt_baro, 1);
+    ASSERT_EQ(a->alt_baro, 3000);
+    ASSERT_EQ(a->on_ground, 0);
+    ASSERT_NEAR(a->lat, 33.273972, 1e-9);
+    ASSERT_NEAR(a->lon, -111.845380, 1e-9);
+    /* 4: velocity, with a negative vertical rate */
+    ASSERT_EQ(sbs("MSG,4,1,1,A1B2C3,1," SBS_T ",,,118,232,,,-448,,,,,0"), 1);
+    ASSERT_NEAR(a->gs, 118.0, 1e-9);
+    ASSERT_NEAR(a->track, 232.0, 1e-9);
+    ASSERT_EQ(a->has_baro_rate, 1);
+    ASSERT_EQ(a->baro_rate, -448);
+    ASSERT_EQ(a->has_alt_baro + a->has_pos, 0);
+    /* 5: surveillance altitude */
+    ASSERT_EQ(sbs("MSG,5,1,1,A1B2C3,1," SBS_T ",,14375,,,,,,,0,,0,0"), 1);
+    ASSERT_EQ(a->alt_baro, 14375);
+    /* 6: surveillance identity */
+    ASSERT_EQ(sbs("MSG,6,1,1,A1B2C3,1," SBS_T ",,,,,,,,1200,0,0,0,0"), 1);
+    ASSERT_STR(a->squawk, "1200");
+    /* 7: air-to-air */
+    ASSERT_EQ(sbs("MSG,7,1,1,A1B2C3,1," SBS_T ",,14375,,,,,,,,,,"), 1);
+    ASSERT_EQ(a->alt_baro, 14375);
+    /* 8: all-call: the address and nothing else */
+    ASSERT_EQ(sbs("MSG,8,1,1,A1B2C3,1," SBS_T ",,,,,,,,,,,,0"), 1);
+    ASSERT_EQ(g_m.type, 8);
+    ASSERT_EQ(a->has_alt_baro + a->has_alt_geom + a->has_gs + a->has_pos + a->flight[0], 0);
+}
+
+/* readsb's variants: a trailing 'H' on altitude and vertical rate is
+ * GNSS (geometric); a ground flag drops a barometric altitude as
+ * aircraft.json's "ground" does; --sbs-extra-fields adds RSSI and the
+ * category; '~' is a non-ICAO address. */
+static void test_sbs_parse_variants(void) {
+    const adsb_aircraft_t *a = &g_m.ac;
+    ASSERT_EQ(sbs("MSG,3,1,1,A1B2C3,1," SBS_T ",,3125H,,,33.2,-111.8,,,0,,0,0"), 1);
+    ASSERT_EQ(a->has_alt_geom, 1);
+    ASSERT_EQ(a->alt_geom, 3125);
+    ASSERT_EQ(a->has_alt_baro, 0);
+    ASSERT_EQ(sbs("MSG,4,1,1,A1B2C3,1," SBS_T ",,,300,90,,,640H,,,,,0"), 1);
+    ASSERT_EQ(a->has_geom_rate, 1);
+    ASSERT_EQ(a->geom_rate, 640);
+    ASSERT_EQ(a->has_baro_rate, 0);
+    ASSERT_EQ(sbs("MSG,5,1,1,A1B2C3,1," SBS_T ",,25,,,,,,,0,,0,-1"), 1);
+    ASSERT_EQ(a->on_ground, 1);
+    ASSERT_EQ(a->has_alt_baro, 0);
+    ASSERT_EQ(sbs("MSG,1,1,1,A1B2C3,1," SBS_T ",SYN1    ,,,,,,,,,,,0,-23.5,A3\r"), 1);
+    ASSERT_EQ(a->has_rssi, 1);
+    ASSERT_NEAR(a->rssi, -23.5, 1e-9);
+    ASSERT_STR(a->category, "A3");
+    ASSERT_EQ(sbs("MSG,1,1,1,A1B2C3,1," SBS_T ",SYN1    ,,,,,,,,,,,0,,"), 1);
+    ASSERT_EQ(a->has_rssi, 0);
+    ASSERT_STR(a->category, "");
+    ASSERT_EQ(sbs("MSG,8,1,1,~0B0C0D,1," SBS_T ",,,,,,,,,,,,"), 1);
+    ASSERT_EQ(a->icao, 0x0b0c0du);
+    ASSERT_EQ(a->non_icao, 1);
+    /* A time without milliseconds is taken; date and time empty is no
+     * time, not an error. */
+    ASSERT_EQ(sbs("MSG,8,1,1,A1B2C3,1,2027/01/15,08:00:01,,,,,,,,,,,,,,"), 1);
+    ASSERT_EQ(g_m.time_ms, SBS_WALL_MS + 1000);
+    ASSERT_EQ(sbs("MSG,8,1,1,A1B2C3,1,,,,,,,,,,,,,,,,"), 1);
+    ASSERT_EQ(g_m.has_time, 0);
+}
+
+/* Well-formed values out of range leave their field absent, as in
+ * aircraft.json; the line is still taken. Seen red with the squawk's
+ * octal check removed (7800 was kept) and the latitude bound removed
+ * (has_pos 1 at 91). */
+static void test_sbs_parse_out_of_range(void) {
+    const adsb_aircraft_t *a = &g_m.ac;
+    ASSERT_EQ(sbs("MSG,3,1,1,A1B2C3,1," SBS_T ",,3000,,,91.0,10.0,,,0,,0,0"), 1);
+    ASSERT_EQ(a->has_pos, 0);
+    ASSERT_EQ(a->has_alt_baro, 1);
+    ASSERT_EQ(sbs("MSG,6,1,1,A1B2C3,1," SBS_T ",,,,,,,,7800,0,0,0,0"), 1);
+    ASSERT_STR(a->squawk, "");
+    ASSERT_EQ(sbs("MSG,6,1,1,A1B2C3,1," SBS_T ",,,,,,,,770,0,0,0,0"), 1);
+    ASSERT_STR(a->squawk, "");
+    ASSERT_EQ(sbs("MSG,1,1,1,A1B2C3,1," SBS_T ",SYN123456,,,,,,,,,,,0"), 1);  /* 9 chars */
+    ASSERT_STR(a->flight, "");
+    ASSERT_EQ(sbs("MSG,1,1,1,A1B2C3,1," SBS_T ",        ,,,,,,,,,,,0"), 1);   /* blank */
+    ASSERT_STR(a->flight, "");
+    ASSERT_EQ(sbs("MSG,4,1,1,A1B2C3,1," SBS_T ",,,5000,400,,,,,,,,0"), 1);
+    ASSERT_EQ(a->has_gs, 0);
+    ASSERT_EQ(a->has_track, 0);
+}
+
+/* Malformed lines are -1 (a parse error), a line that carries nothing
+ * for the table is 0. */
+static void test_sbs_parse_malformed(void) {
+    ASSERT_EQ(sbs(""), 0);                 /* readsb's heartbeat, CR stripped */
+    ASSERT_EQ(sbs("\r"), 0);
+    ASSERT_EQ(sbs("SEL,,496,2286,4CA4E5,27215,2010/02/19,18:06:07.710,2010/02/19,18:06:07.710,RYR1427"), 0);
+    ASSERT_EQ(sbs("CLK,,496,-1,,-1,2010/02/19,18:18:19.036,2010/02/19,18:18:19.036"), 0);
+    ASSERT_EQ(sbs("hello"), -1);
+    ASSERT_EQ(sbs("MSG,3,1,1,A1B2C3,1,2027/01/15"), -1);                       /* truncated */
+    ASSERT_EQ(sbs("MSG,3,1,1,A1B2C3,1," SBS_T ",,3000,,,33.2,-111.8,,,0,,0"), -1);   /* 21 fields */
+    ASSERT_EQ(sbs("MSG,3,1,1,A1B2C3,1," SBS_T ",,3000,,,33.2,-111.8,,,0,,0,0,,,"), -1); /* 25 */
+    ASSERT_EQ(sbs("MSG,9,1,1,A1B2C3,1," SBS_T ",,,,,,,,,,,,"), -1);
+    ASSERT_EQ(sbs("MSG,0,1,1,A1B2C3,1," SBS_T ",,,,,,,,,,,,"), -1);
+    ASSERT_EQ(sbs("MSG,,1,1,A1B2C3,1," SBS_T ",,,,,,,,,,,,"), -1);
+    ASSERT_EQ(sbs("MSG,8,1,1,A1B2CZ,1," SBS_T ",,,,,,,,,,,,"), -1);
+    ASSERT_EQ(sbs("MSG,8,1,1,A1B2C,1," SBS_T ",,,,,,,,,,,,"), -1);
+    ASSERT_EQ(sbs("MSG,8,1,1,,1," SBS_T ",,,,,,,,,,,,"), -1);
+    ASSERT_EQ(sbs("MSG,5,1,1,A1B2C3,1," SBS_T ",,12a00,,,,,,,0,,0,0"), -1);
+    ASSERT_EQ(sbs("MSG,3,1,1,A1B2C3,1," SBS_T ",,3000,,,33.2,,,,0,,0,0"), -1);   /* lat alone */
+    ASSERT_EQ(sbs("MSG,4,1,1,A1B2C3,1," SBS_T ",,,1.2.3,90,,,,,,,,0"), -1);
+    ASSERT_EQ(sbs("MSG,8,1,1,A1B2C3,1,2027-01-15,08:00:00.000,,,,,,,,,,,,,,"), -1);
+    ASSERT_EQ(sbs("MSG,8,1,1,A1B2C3,1,2027/13/15,08:00:00.000,,,,,,,,,,,,,,"), -1);
+    ASSERT_EQ(sbs("MSG,8,1,1,A1B2C3,1,2027/01/15,08:00:00.1234,,,,,,,,,,,,,,"), -1);
+    ASSERT_EQ(sbs("MSG,8,1,1,A1B2C3,1,2027/01/15,,,,,,,,,,,,,,,"), -1);
+    ASSERT_EQ(sbs("MSG,8,1,1,A1B2C3,1," SBS_T ",SYN\x01,,,,,,,,,,,"), -1);
+    ASSERT_EQ(sbs("MSG,8,1,1,A1B2C3,1," SBS_T ",\xc3\xa9,,,,,,,,,,,"), -1);
+}
+
+/* An MSG,3 position and an MSG,1 callsign for one address merge into
+ * one row (#186's test list), sticky: the later line's empty fields do
+ * not clear the earlier one's. A second address is a second row, and
+ * the same 24 bits with '~' a third. messages counts the lines. */
+static void test_sbs_merge_across_types(void) {
+    adsb_reset();
+    adsb_set_source_sbs("sbs:127.0.0.1:30003");
+    adsb_sbs_lines_t *l = calloc(1, sizeof(*l));
+    ASSERT(l != NULL);
+    if (!l) return;
+    adsb_sbs_lines_init(l);
+    static const char feed[] =
+        "MSG,3,1,1,A1B2C3,1," SBS_T ",,3000,,,33.273972,-111.845380,,,0,,0,0\r\n"
+        "MSG,1,1,1,A1B2C3,1," SBS_T ",SYN510  ,,,,,,,,,,,0\r\n"
+        "MSG,4,1,1,A1B2C3,1," SBS_T ",,,118,232,,,448,,,,,0\r\n"
+        "MSG,6,1,1,A1B2C3,1," SBS_T ",,,,,,,,1200,0,0,0,0\r\n"
+        "MSG,8,1,1,0ABCDE,1," SBS_T ",,,,,,,,,,,,0\r\n"
+        "MSG,8,1,1,~A1B2C3,1," SBS_T ",,,,,,,,,,,,\r\n";
+    adsb_sbs_lines_feed(l, (const uint8_t *)feed, sizeof(feed) - 1,
+                        SBS_WALL_MS, 1000000);
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    adsb_health_poll(&s, 1800000000, 1000000);
+    ASSERT_EQ(s.adsb.state, ADSB_LIVE);
+    ASSERT_STR(s.adsb.src, "sbs:127.0.0.1:30003");
+    ASSERT_EQ(s.adsb_count, 3);
+    ASSERT_EQ(s.adsb.reads, 6u);
+    ASSERT_EQ(s.adsb.messages, 6u);
+    ASSERT_EQ(s.adsb.parse_errors, 0u);
+    const adsb_aircraft_t *a = NULL;
+    for (int i = 0; i < s.adsb_count; i++)
+        if (s.adsb_rows[i].icao == 0xa1b2c3u && !s.adsb_rows[i].non_icao) a = &s.adsb_rows[i];
+    ASSERT(a != NULL);
+    if (a) {
+        ASSERT_STR(a->flight, "SYN510");
+        ASSERT_EQ(a->has_pos, 1);
+        ASSERT_NEAR(a->lat, 33.273972, 1e-9);
+        ASSERT_EQ(a->has_alt_baro, 1);
+        ASSERT_EQ(a->alt_baro, 3000);
+        ASSERT_NEAR(a->gs, 118.0, 1e-9);
+        ASSERT_EQ(a->baro_rate, 448);
+        ASSERT_STR(a->squawk, "1200");
+        ASSERT_EQ(a->messages, 4u);
+        ASSERT_EQ(a->emergency, ADSB_EMERG_ABSENT);
+        ASSERT_EQ(a->first_seen, (time_t)1800000000);
+    }
+    free(l);
+    adsb_reset();
+}
+
+/* The framer: one byte per read, CRLF, a partial line held until its
+ * newline, a garbage line and an over-cap line each one parse error
+ * that does not stop the next line. The held-partial assertion was seen
+ * red with adsb_sbs_lines_feed() parsing what it held at the end of
+ * every read (the half line was a parse error and no row); the
+ * one-error-per-over-cap-line assertions with the overlong flag never
+ * set (the line's tail was cut into more lines, each another error). */
+static void test_sbs_lines_framing(void) {
+    adsb_reset();
+    adsb_set_source_sbs("sbs:127.0.0.1:30003");
+    adsb_sbs_lines_t *l = calloc(1, sizeof(*l));
+    ASSERT(l != NULL);
+    if (!l) return;
+    adsb_sbs_lines_init(l);
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    static const char one[] = "MSG,1,1,1,A1B2C3,1," SBS_T ",SYN510  ,,,,,,,,,,,0\r\n";
+    for (size_t i = 0; i < sizeof(one) - 3; i++)
+        adsb_sbs_lines_feed(l, (const uint8_t *)one + i, 1, SBS_WALL_MS, 1000000);
+    adsb_health_poll(&s, 1800000000, 1000000);
+    ASSERT_EQ(s.adsb_count, 0);               /* no newline yet */
+    ASSERT_EQ(s.adsb.parse_errors, 0u);
+    ASSERT_EQ(s.adsb.state, ADSB_WAITING);
+    adsb_sbs_lines_feed(l, (const uint8_t *)one + sizeof(one) - 3, 2, SBS_WALL_MS, 1000000);
+    adsb_health_poll(&s, 1800000000, 1000000);
+    ASSERT_EQ(s.adsb_count, 1);
+    if (s.adsb_count == 1) ASSERT_STR(s.adsb_rows[0].flight, "SYN510");
+
+    /* Garbage, then a good line in the same read. */
+    static const char junk[] = "\x7f\x01garbage,,,\r\nMSG,8,1,1,0ABCDE,1," SBS_T ",,,,,,,,,,,,0\r\n";
+    adsb_sbs_lines_feed(l, (const uint8_t *)junk, sizeof(junk) - 1, SBS_WALL_MS, 1000000);
+    adsb_health_poll(&s, 1800000000, 1000000);
+    ASSERT_EQ(s.adsb.parse_errors, 1u);
+    ASSERT_EQ(s.adsb_count, 2);
+    ASSERT_EQ(s.adsb.state, ADSB_LIVE);       /* the good line cleared it */
+
+    /* A line over the cap: one parse error, discarded to its newline,
+     * however many reads it spans; the next line is taken. */
+    char big[ADSB_SBS_MAX_LINE * 3];
+    memset(big, 'M', sizeof(big));
+    for (int k = 0; k < 3; k++)
+        adsb_sbs_lines_feed(l, (const uint8_t *)big, sizeof(big), SBS_WALL_MS, 1000000);
+    adsb_health_poll(&s, 1800000000, 1000000);
+    ASSERT_EQ(s.adsb.parse_errors, 2u);
+    ASSERT_EQ(s.adsb.state, ADSB_ERROR);
+    ASSERT(strstr(s.adsb.err, "over") != NULL);
+    static const char tail[] = "MMMM,1,2,3\r\nMSG,8,1,1,0BCDEF,1," SBS_T ",,,,,,,,,,,,0\n";
+    adsb_sbs_lines_feed(l, (const uint8_t *)tail, sizeof(tail) - 1, SBS_WALL_MS, 1000000);
+    adsb_health_poll(&s, 1800000000, 1000000);
+    ASSERT_EQ(s.adsb.parse_errors, 2u);       /* the tail was the big line's */
+    ASSERT_EQ(s.adsb_count, 3);
+    ASSERT_EQ(s.adsb.state, ADSB_LIVE);
+
+    /* Exactly the cap, CR excluded, is a line (a BaseStation SEL
+     * record padded out: no error); one byte more is not. */
+    char exact[ADSB_SBS_MAX_LINE + 3];
+    memset(exact, ' ', sizeof(exact));
+    memcpy(exact, "SEL,", 4);
+    exact[ADSB_SBS_MAX_LINE] = '\r';
+    exact[ADSB_SBS_MAX_LINE + 1] = '\n';
+    adsb_sbs_lines_feed(l, (const uint8_t *)exact, ADSB_SBS_MAX_LINE + 2, SBS_WALL_MS, 1000000);
+    adsb_health_poll(&s, 1800000000, 1000000);
+    ASSERT_EQ(s.adsb.parse_errors, 2u);
+    exact[ADSB_SBS_MAX_LINE] = ' ';
+    exact[ADSB_SBS_MAX_LINE + 1] = '\r';
+    exact[ADSB_SBS_MAX_LINE + 2] = '\n';
+    adsb_sbs_lines_feed(l, (const uint8_t *)exact, ADSB_SBS_MAX_LINE + 3, SBS_WALL_MS, 1000000);
+    adsb_health_poll(&s, 1800000000, 1000000);
+    ASSERT_EQ(s.adsb.parse_errors, 3u);
+    free(l);
+    adsb_reset();
+}
+
+/* The row's clock is the line's generated time, as aircraft.json's is
+ * its seen: a message stamped 5 s before the read is 5 s old, and one
+ * stamped 61 s before is retired by the next poll's expiry. A stamp
+ * after the read is 0 s, never negative. Seen red with adsb_feed_sbs()
+ * ignoring the line's time (seen 0): last_seen was the read time and
+ * nothing expired. */
+static void test_sbs_seen_from_message_time(void) {
+    adsb_reset();
+    adsb_set_source_sbs("sbs:127.0.0.1:30003");
+    adsb_sbs_msg_t m;
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(adsb_sbs_parse(S("MSG,8,1,1,A1B2C3,1,2027/01/15,07:59:55.000,,,,,,,,,,,,,,"), &m), 1);
+    adsb_feed_sbs(&m, SBS_WALL_MS, 1000000);
+    ASSERT_EQ(adsb_sbs_parse(S("MSG,8,1,1,0ABCDE,1,2027/01/15,07:58:59.000,,,,,,,,,,,,,,"), &m), 1);
+    adsb_feed_sbs(&m, SBS_WALL_MS, 1000000);
+    ASSERT_EQ(adsb_sbs_parse(S("MSG,8,1,1,0BCDEF,1,2027/01/15,08:00:03.000,,,,,,,,,,,,,,"), &m), 1);
+    adsb_feed_sbs(&m, SBS_WALL_MS, 1000000);
+    adsb_health_poll(&s, 1800000000, 1000000);
+    ASSERT_EQ(s.adsb_count, 2);
+    ASSERT_EQ(s.adsb_gone_count, 1);
+    if (s.adsb_gone_count == 1) ASSERT_EQ(s.adsb_gone[0].icao, 0x0abcdeu);
+    for (int i = 0; i < s.adsb_count; i++) {
+        const adsb_aircraft_t *a = &s.adsb_rows[i];
+        if (a->icao == 0xa1b2c3u) {
+            ASSERT_EQ(a->last_seen, (time_t)1799999995);
+            ASSERT_EQ(a->last_mono_ms, 995000u);
+        } else {
+            ASSERT_EQ(a->last_seen, (time_t)1800000000);
+            ASSERT_EQ(a->last_mono_ms, 1000000u);
+        }
+    }
+    adsb_reset();
+}
+
+/* Freshness on a stream is a line arriving, any line: a quiet sky with
+ * only readsb's heartbeats stays live. Live past ADSB_STALE_S (a
+ * document clock's 10 s) and stale only past ADSB_SBS_STALE_S. The
+ * live-at-11-s assertion was seen red with adsb_health_poll() using
+ * ADSB_STALE_S for a stream. */
+static void test_sbs_freshness(void) {
+    adsb_reset();
+    adsb_set_source_sbs("sbs:127.0.0.1:30003");
+    adsb_sbs_lines_t *l = calloc(1, sizeof(*l));
+    ASSERT(l != NULL);
+    if (!l) return;
+    adsb_sbs_lines_init(l);
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    adsb_health_poll(&s, 1800000000, 1000);
+    ASSERT_EQ(s.adsb.state, ADSB_WAITING);
+    static const char msg[] = "MSG,8,1,1,A1B2C3,1," SBS_T ",,,,,,,,,,,,0\r\n";
+    adsb_sbs_lines_feed(l, (const uint8_t *)msg, sizeof(msg) - 1, SBS_WALL_MS, 1000);
+    adsb_health_poll(&s, 1800000000, 1000 + (ADSB_STALE_S + 1) * 1000);
+    ASSERT_EQ(s.adsb.state, ADSB_LIVE);
+    ASSERT_EQ(s.adsb.age_s, ADSB_STALE_S + 1);
+    adsb_health_poll(&s, 1800000000, 1000 + (ADSB_SBS_STALE_S + 1) * 1000);
+    ASSERT_EQ(s.adsb.state, ADSB_STALE);
+    /* The heartbeat alone. */
+    adsb_sbs_lines_feed(l, (const uint8_t *)"\r\n", 2, SBS_WALL_MS + 140000,
+                        1000 + 140000);
+    adsb_health_poll(&s, 1800000140, 1000 + 140000);
+    ASSERT_EQ(s.adsb.state, ADSB_LIVE);
+    ASSERT_EQ(s.adsb.reads, 1u);              /* a heartbeat is not a read */
+    /* A failure is an error until the next line. */
+    adsb_note_read_error("decoder closed the connection");
+    adsb_health_poll(&s, 1800000140, 1000 + 140000);
+    ASSERT_EQ(s.adsb.state, ADSB_ERROR);
+    adsb_note_connected();
+    adsb_health_poll(&s, 1800000140, 1000 + 140000);
+    ASSERT_EQ(s.adsb.state, ADSB_LIVE);
+    free(l);
+    adsb_reset();
+}
+
+/* The table cap holds for a stream: 256 addresses fill it, the 257th
+ * is refused and counted, and a known address still merges. */
+static void test_sbs_cap(void) {
+    adsb_reset();
+    adsb_set_source_sbs("sbs:127.0.0.1:30003");
+    adsb_sbs_msg_t m;
+    char line[160];
+    for (int i = 0; i <= ADSB_MAX_AIRCRAFT; i++) {
+        snprintf(line, sizeof(line), "MSG,8,1,1,%06X,1," SBS_T ",,,,,,,,,,,,0", 0x100000 + i);
+        ASSERT_EQ(adsb_sbs_parse(line, strlen(line), &m), 1);
+        adsb_feed_sbs(&m, SBS_WALL_MS, 1000000);
+    }
+    ASSERT_EQ(adsb_sbs_parse(S("MSG,1,1,1,100000,1," SBS_T ",SYN1    ,,,,,,,,,,,0"), &m), 1);
+    adsb_feed_sbs(&m, SBS_WALL_MS, 1000000);
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    adsb_health_poll(&s, 1800000000, 1000000);
+    ASSERT_EQ(s.adsb_count, ADSB_MAX_AIRCRAFT);
+    ASSERT_EQ(s.adsb.overflow, 1u);
+    int named = 0;
+    for (int i = 0; i < s.adsb_count; i++)
+        if (s.adsb_rows[i].icao == 0x100000u && strcmp(s.adsb_rows[i].flight, "SYN1") == 0) named = 1;
+    ASSERT_EQ(named, 1);
+    adsb_reset();
 }
 
 /* ── The reader against a real file ────────────────────────────── */
@@ -573,6 +997,139 @@ static void test_reader_polls_a_file(void) {
     adsb_reader_stop();
     unlink(g_file);
     rmdir(g_dir);
+}
+
+/* ── The sbs:// reader against a loopback socket ───────────────────
+ * The "decoder" is this test's own listener on 127.0.0.1; no network.
+ * Real clocks: the reader thread runs. */
+
+static int sbs_listener(int *port) {
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    socklen_t al = sizeof(a);
+    if (bind(fd, (struct sockaddr *)&a, sizeof(a)) != 0 || listen(fd, 1) != 0 ||
+        getsockname(fd, (struct sockaddr *)&a, &al) != 0) {
+        close(fd);
+        return -1;
+    }
+    *port = ntohs(a.sin_port);
+    return fd;
+}
+
+static void nap_ms(long ms) {
+    struct timespec ts = { ms / 1000, (ms % 1000) * 1000000L };
+    nanosleep(&ts, NULL);
+}
+
+static void sbs_poll_now(sloth_state_t *s) {
+    memset(s, 0, sizeof(*s));
+    adsb_health_poll(s, sloth_wall(), sloth_mono_ms());
+}
+
+/* Nothing listening: an error naming the connect, no crash, no rows. */
+static void test_sbs_reader_connect_refused(void) {
+    char err[200], spec[64];
+    int port = 0;
+    int lfd = sbs_listener(&port);
+    ASSERT(lfd >= 0);
+    if (lfd < 0) return;
+    close(lfd);
+    snprintf(spec, sizeof(spec), "sbs://127.0.0.1:%d", port);
+    ASSERT_EQ(adsb_reader_configure(spec, err, sizeof(err)), 0);
+    ASSERT_EQ(adsb_reader_poll_once(1800000000, 1000), -1);   /* not a file */
+    adsb_reader_run();
+    TEST_STATE(s);
+    for (int i = 0; i < 100; i++) {
+        sbs_poll_now(&s);
+        if (s.adsb.read_errors > 0) break;
+        nap_ms(20);
+    }
+    adsb_reader_stop();
+    ASSERT_EQ(s.adsb.state, ADSB_ERROR);
+    ASSERT(strstr(s.adsb.err, "connect") != NULL);
+    ASSERT_EQ(s.adsb_count, 0);
+    adsb_reset();
+}
+
+/* A session: two lines split across three writes with CRLF become one
+ * row; sloth writes nothing to the socket; the decoder hanging up is a
+ * read error, and the reader dials again. The "writes nothing"
+ * assertion was seen red with a one-byte send() added after the connect
+ * in sbs_connect(). */
+static void test_sbs_reader_session(void) {
+    char err[200], spec[64];
+    int port = 0;
+    int lfd = sbs_listener(&port);
+    ASSERT(lfd >= 0);
+    if (lfd < 0) return;
+    snprintf(spec, sizeof(spec), "sbs://127.0.0.1:%d", port);
+    ASSERT_EQ(adsb_reader_configure(spec, err, sizeof(err)), 0);
+    adsb_reader_run();
+    struct pollfd pfd = { lfd, POLLIN, 0 };
+    ASSERT_EQ(poll(&pfd, 1, 5000), 1);
+    int c = accept(lfd, NULL, NULL);
+    ASSERT(c >= 0);
+    if (c < 0) { adsb_reader_stop(); close(lfd); return; }
+    static const char *const parts[] = {
+        "MSG,3,1,1,A1B2C3,1,2027/01/15,08:00:00.000,2027/01/15,08:00:00.010,,3000,,,33.27",
+        "3972,-111.845380,,,0,,0,0\r\nMSG,1,1,1,A1B2C3,1,2027/01/15,08:00:00.000,",
+        "2027/01/15,08:00:00.010,SYN510  ,,,,,,,,,,,0\r\n",
+    };
+    for (int i = 0; i < 3; i++) {
+        ASSERT_EQ(write(c, parts[i], strlen(parts[i])), (ssize_t)strlen(parts[i]));
+        nap_ms(30);
+    }
+    TEST_STATE(s);
+    for (int i = 0; i < 100; i++) {
+        sbs_poll_now(&s);
+        if (s.adsb.reads >= 2) break;
+        nap_ms(20);
+    }
+    ASSERT_EQ(s.adsb.reads, 2u);
+    ASSERT_EQ(s.adsb.parse_errors, 0u);
+    /* The rows are stamped by the 2027 message time, read now: the row
+     * stands until polled past it, which this test does not need. */
+    ASSERT_EQ(s.adsb_count + s.adsb_gone_count, 1);
+    const adsb_aircraft_t *a = s.adsb_count ? &s.adsb_rows[0]
+                             : s.adsb_gone_count ? &s.adsb_gone[0] : NULL;
+    if (a) {
+        ASSERT_STR(a->flight, "SYN510");
+        ASSERT_EQ(a->has_pos, 1);
+        ASSERT_NEAR(a->lat, 33.273972, 1e-9);
+    }
+    /* sloth sent nothing. */
+    char got[16];
+    struct pollfd cp = { c, POLLIN, 0 };
+    ASSERT_EQ(poll(&cp, 1, 300), 0);
+    ASSERT_EQ(recv(c, got, sizeof(got), MSG_DONTWAIT), (ssize_t)-1);
+
+    close(c);                                 /* the decoder hangs up */
+    for (int i = 0; i < 100; i++) {
+        sbs_poll_now(&s);
+        if (s.adsb.read_errors > 0) break;
+        nap_ms(20);
+    }
+    ASSERT_EQ(s.adsb.state, ADSB_ERROR);
+    ASSERT_STR(s.adsb.err, "decoder closed the connection");
+    /* ... and is dialled again after the 2 s wait. */
+    pfd.revents = 0;
+    ASSERT_EQ(poll(&pfd, 1, 5000), 1);
+    c = accept(lfd, NULL, NULL);
+    ASSERT(c >= 0);
+    for (int i = 0; i < 100; i++) {
+        sbs_poll_now(&s);
+        if (s.adsb.state != ADSB_ERROR) break;
+        nap_ms(20);
+    }
+    ASSERT(s.adsb.state != ADSB_ERROR);      /* the connect cleared it */
+    if (c >= 0) close(c);
+    adsb_reader_stop();
+    close(lfd);
+    adsb_reset();
 }
 
 /* ── The sensor registry ───────────────────────────────────────── */
@@ -832,7 +1389,19 @@ void run_adsb_tests(void) {
     RUN_TEST(test_stale_file_at_startup);
     RUN_TEST(test_alt_bands);
     RUN_TEST(test_spec_parse);
+    RUN_TEST(test_spec_parse_sbs);
+    RUN_TEST(test_sbs_parse_each_type);
+    RUN_TEST(test_sbs_parse_variants);
+    RUN_TEST(test_sbs_parse_out_of_range);
+    RUN_TEST(test_sbs_parse_malformed);
+    RUN_TEST(test_sbs_merge_across_types);
+    RUN_TEST(test_sbs_lines_framing);
+    RUN_TEST(test_sbs_seen_from_message_time);
+    RUN_TEST(test_sbs_freshness);
+    RUN_TEST(test_sbs_cap);
     RUN_TEST(test_reader_polls_a_file);
+    RUN_TEST(test_sbs_reader_connect_refused);
+    RUN_TEST(test_sbs_reader_session);
     RUN_TEST(test_sensor_registry_adsb);
     RUN_TEST(test_jsonl_change_only);
     RUN_TEST(test_sensor_health_adsb_block);
