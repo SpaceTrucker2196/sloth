@@ -134,10 +134,12 @@ void adsb_spec_label(const adsb_spec_t *sp, char *out, size_t outsz);
  * (unless extra fields) and no per-aircraft message count: the row's
  * messages counts the MSG lines sloth received for it.
  *
- * readsb writes "
-" alone as a heartbeat to an idle SBS client every
- * 60 s by default (net_io.c sbs_heartbeat, MODES_NET_HEARTBEAT_INTERVAL)
- * and itself drops a client silent for twice that. */
+ * readsb writes "\r\n" alone as a heartbeat to an idle SBS client every
+ * 60 s by default (net_io.c sbs_heartbeat, MODES_NET_HEARTBEAT_INTERVAL).
+ * It does not drop a client that never writes: its idle rule
+ * (serviceReconnectCallback) covers only its own outbound connectors
+ * that expect an inbound heartbeat, and the SBS output has none
+ * (heartbeat_in no_heartbeat), so a read-only sloth stays connected. */
 #define ADSB_SBS_MAX_LINE 512   /* bytes, newline excluded; readsb's are under 260 */
 #define ADSB_SBS_STALE_S  130   /* past 2 x readsb's 60 s heartbeat: a live
                                  * decoder sends a line, if only that,

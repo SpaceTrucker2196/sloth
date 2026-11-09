@@ -542,6 +542,15 @@ static void test_spec_parse_sbs(void) {
     ASSERT_EQ(adsb_spec_parse("sbs://127.0.0.1:", &sp, e, sizeof(e)), -1);
     ASSERT_EQ(adsb_spec_parse("sbs://[::1", &sp, e, sizeof(e)), -1);
     ASSERT_EQ(adsb_spec_parse("sbs://[::1]x", &sp, e, sizeof(e)), -1);
+    /* The longest spelling of ::1 is stored canonical, so the label
+     * fits sensor_health's 48 bytes with its port whole. Seen red
+     * before the inet_ntop() (label "sbs:[0000:...:0001]:3000"). */
+    ASSERT_EQ(adsb_spec_parse("sbs://[0000:0000:0000:0000:0000:0000:0000:0001]:30003",
+                              &sp, e, sizeof(e)), 0);
+    ASSERT_STR(sp.host, "::1");
+    char lab48[48];
+    adsb_spec_label(&sp, lab48, sizeof(lab48));
+    ASSERT_STR(lab48, "sbs:[::1]:30003");
 }
 
 /* ── SBS / BaseStation lines ───────────────────────────────────────
@@ -892,6 +901,12 @@ static void test_sbs_freshness(void) {
     adsb_note_connected();
     adsb_health_poll(&s, 1800000140, 1000 + 140000);
     ASSERT_EQ(s.adsb.state, ADSB_LIVE);
+    /* A file source declared after the stream (configure, stop,
+     * configure) is back on the document's 10 s window. Seen red with
+     * adsb_set_source() leaving the stream flag set. */
+    adsb_set_source("file:/run/readsb/aircraft.json");
+    adsb_health_poll(&s, 1800000140, 1000 + 140000 + (ADSB_STALE_S + 1) * 1000);
+    ASSERT_EQ(s.adsb.state, ADSB_STALE);
     free(l);
     adsb_reset();
 }

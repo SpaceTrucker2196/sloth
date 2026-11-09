@@ -424,14 +424,22 @@ static int sbs_spec_parse(const char *h, adsb_spec_t *out, char *err, size_t err
     }
     int port = ADSB_SBS_DEFAULT_PORT;
     if (portp && port_parse(portp, &port) != 0) return set_err(err, errsz, bad);
+    /* The host is kept in its canonical text form (inet_ntop), so the
+     * longest spelling of ::1 (39 characters) cannot overrun the 48-byte
+     * source label sensor_health carries. */
     int loop;
+    char canon[INET6_ADDRSTRLEN];
     if (v6) {
         struct in6_addr a6;
-        if (inet_pton(AF_INET6, host, &a6) != 1) return set_err(err, errsz, bad);
+        if (inet_pton(AF_INET6, host, &a6) != 1 ||
+            !inet_ntop(AF_INET6, &a6, canon, sizeof(canon)))
+            return set_err(err, errsz, bad);
         loop = IN6_IS_ADDR_LOOPBACK(&a6);
     } else {
         struct in_addr a4;
-        if (inet_pton(AF_INET, host, &a4) != 1) return set_err(err, errsz, bad);
+        if (inet_pton(AF_INET, host, &a4) != 1 ||
+            !inet_ntop(AF_INET, &a4, canon, sizeof(canon)))
+            return set_err(err, errsz, bad);
         loop = (ntohl(a4.s_addr) >> 24) == 127;
     }
     if (!loop) {
@@ -441,7 +449,7 @@ static int sbs_spec_parse(const char *h, adsb_spec_t *out, char *err, size_t err
         return -1;
     }
     out->kind = ADSB_SPEC_SBS;
-    snprintf(out->host, sizeof(out->host), "%s", host);
+    snprintf(out->host, sizeof(out->host), "%s", canon);
     out->port = port;
     return 0;
 }
@@ -807,19 +815,19 @@ static struct {
 static adsb_aircraft_t g_snap[ADSB_MAX_AIRCRAFT];
 static adsb_aircraft_t g_gone[ADSB_MAX_AIRCRAFT];
 
-void adsb_set_source(const char *label) {
+/* Sets the kind as well as the label: a file source declared after an
+ * SBS one (configure, stop, configure) must not keep the stream's
+ * 130 s freshness window. */
+static void set_source(const char *label, int sbs) {
     pthread_mutex_lock(&g_mu);
     g.configured = 1;
+    g.sbs = sbs;
     snprintf(g.label, sizeof(g.label), "%s", label ? label : "");
     pthread_mutex_unlock(&g_mu);
 }
 
-void adsb_set_source_sbs(const char *label) {
-    adsb_set_source(label);
-    pthread_mutex_lock(&g_mu);
-    g.sbs = 1;
-    pthread_mutex_unlock(&g_mu);
-}
+void adsb_set_source(const char *label)     { set_source(label, 0); }
+void adsb_set_source_sbs(const char *label) { set_source(label, 1); }
 
 static adsb_aircraft_t *row_find(uint32_t icao, int non_icao) {
     for (int i = 0; i < g.n; i++)

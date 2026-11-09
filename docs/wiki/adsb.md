@@ -35,9 +35,11 @@ stage, `SENSOR_ADSB` in the sensors stage), `src/jsonl.c`
 Format references: readsb's `README-json.md` (wiedehopf/readsb;
 dump1090-fa documents the same `aircraft.json`); for SBS, readsb's own
 writer, `modesSendSBSOutput()` in `net_io.c` (read at bf8f8fd), its
-heartbeat (`sbs_heartbeat`, `MODES_NET_HEARTBEAT_INTERVAL` 60 s) and
-idle-client rule (`net_io.c`: a client silent for twice the interval
-is dropped). That function cites the BaseStation socket-data reference
+heartbeat (`sbs_heartbeat`, `MODES_NET_HEARTBEAT_INTERVAL` 60 s), and
+its idle rule (`serviceReconnectCallback()`), which drops a silent peer
+only on readsb's own outbound connectors that expect an inbound
+heartbeat - the SBS output expects none, so a client that never writes,
+as sloth's never does, is not dropped. That function cites the BaseStation socket-data reference
 it was checked against (`Barebones42_Socket_Data.htm`); that page was
 **not** read first-hand here, only through readsb's code, and the live
 readsb 3.16 on the reference host's port 30003 was looked at to
@@ -191,7 +193,7 @@ the next poll.
 **Freshness** for a stream is a line arriving, any line, readsb's
 heartbeat (`\r\n` alone, every 60 s to an idle client) included: so an
 empty sky stays `live`. `stale` is no line for `ADSB_SBS_STALE_S`
-(130 s, past readsb's own two-interval rule for a silent peer):
+(130 s, past two of readsb's 60 s heartbeat intervals):
 connected, but the decoder is hung. `waiting` is configured with no
 line yet; `error` as for the file. `adsb_reads` counts MSG lines, and
 the `[^]` header labels it `lines` instead of `docs`.

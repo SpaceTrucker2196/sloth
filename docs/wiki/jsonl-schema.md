@@ -993,15 +993,15 @@ the GNSS block, present **only** with `--adsb`:
 
 | Field | Meaning |
 |---|---|
-| `adsb_state` | `waiting` (no document parsed yet), `live` (the decoder's `now`, or the file's mtime in a document without one, advanced within 10 s), `stale` (it has not for longer: the decoder stopped writing), `error` (the last read or parse failed; clears on the next good document) |
-| `adsb_src` | `file:/run/readsb/aircraft.json` |
+| `adsb_state` | `waiting` (no document parsed yet), `live` (the decoder's `now`, or the file's mtime in a document without one, advanced within 10 s), `stale` (it has not for longer: the decoder stopped writing), `error` (the last read or parse failed; clears on the next good document). For `sbs://`, `live` is any line, readsb's heartbeat included, within 130 s, and `stale` none for longer |
+| `adsb_src` | `file:/run/readsb/aircraft.json`, or `sbs:127.0.0.1:30003` / `sbs:[::1]:30003` for an SBS source |
 | `adsb_age_s` | seconds since the decoder's clock last advanced, on sloth's monotonic clock; -1 never |
 | `adsb_last_read` | wall time of the last document parsed, 0 never |
 | `adsb_aircraft` | rows in the aircraft table now (at most 256) |
-| `adsb_messages` | the decoder's lifetime Mode S message count (its `messages`) |
-| `adsb_reads` | documents parsed (an unchanged file is not re-read) |
+| `adsb_messages` | the decoder's lifetime Mode S message count (its `messages`); for `sbs://`, the MSG lines received |
+| `adsb_reads` | documents parsed (an unchanged file is not re-read); for `sbs://`, MSG lines parsed |
 | `adsb_read_errors` | opens or reads that failed, not a regular file, over 2 MiB |
-| `adsb_parse_errors` | documents refused as malformed (once per distinct file) |
+| `adsb_parse_errors` | documents refused as malformed (once per distinct file); for `sbs://`, malformed or over-512-byte lines |
 | `adsb_overflow` | aircraft refused for the 256-row cap: past it in one document, or a new address into a full table |
 | `adsb_bad_entries` | `aircraft[]` entries refused: not an object, no or a bad `hex` |
 | `adsb_expired` | rows retired after 60 s unheard |
