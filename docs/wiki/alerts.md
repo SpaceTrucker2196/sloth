@@ -738,12 +738,14 @@ and re-fires; a status following its code from `none` to `general` is
 the same incident; a steady condition re-asserted every pass holds its
 detail still (#173). An aircraft that leaves the table, or a source gone
 `stale`, stops being evaluated and the incident expires on the quiet
-period like any other.
+period like any other. A pass that is not live keeps the hold of every
+aircraft still listed, so a one-poll read or parse error does not fire
+an open WARN back at LOW.
 
 **Severity is persistence, not corroboration.** The squawk and the
-status are one declaration reported two ways (DO-260B carries both in
-the Aircraft Status message), so agreement between them is not a second
-observation. A single corrupted reply or a code dialled through in
+status are one declaration reported two ways (readsb: the status is "a
+superset of the 7x00 squawks"; DO-260B itself was not read), so
+agreement between them is not a second observation. A single corrupted reply or a code dialled through in
 passing is what the hold keeps at LOW: the condition must hold for
 `adsb.emerg_hold_s` (10 s, [[cli-reference]]) of the aircraft's **own**
 message time (the row's `last_mono_ms`), so a decoder relisting an

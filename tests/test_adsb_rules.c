@@ -340,6 +340,43 @@ static void test_hold_is_the_knob(void) {
     end();
 }
 
+/* One poll with the source in ERROR (a read or parse failure the next
+ * document clears) does not restart a standing hold: the open WARN
+ * incident stays WARN, with no downgrade. Seen red (WARN fired back at
+ * LOW) with the rule wiping its holds on every pass that is not LIVE. */
+static void test_error_pass_keeps_the_hold(void) {
+    begin();
+    for (int i = 0; i < 15; i++) tick("{\"hex\":\"a1b2c3\",\"squawk\":\"7700\",\"seen\":0}");
+    const alert_t *a = by_key("adsbemerg:a1b2c3:icao:7700");
+    ASSERT(a != NULL);
+    if (a) ASSERT_EQ(a->sev, ALERT_SEV_WARN);
+    adsb_note_parse_error("malformed aircraft.json");
+    tick_silent();
+    ASSERT_EQ(g_s.adsb.state, ADSB_ERROR);
+    tick("{\"hex\":\"a1b2c3\",\"squawk\":\"7700\",\"seen\":0}");
+    ASSERT_EQ(g_s.adsb.state, ADSB_LIVE);
+    a = by_key("adsbemerg:a1b2c3:icao:7700");
+    ASSERT(a != NULL);
+    if (a) ASSERT_EQ(a->sev, ALERT_SEV_WARN);
+    end();
+}
+
+/* A hold does not outlive its row: an aircraft the table retired
+ * while the source was stalled comes back LOW. Seen red (WARN at first
+ * sight) with the not-LIVE pass keeping every hold. */
+static void test_stall_past_expiry_restarts_the_hold(void) {
+    begin();
+    for (int i = 0; i < 15; i++) tick("{\"hex\":\"a1b2c3\",\"squawk\":\"7700\",\"seen\":0}");
+    for (int i = 0; i < ADSB_EXPIRE_S + 1; i++) tick_silent();
+    ASSERT_EQ(g_s.adsb_count, 0);
+    tick("{\"hex\":\"a1b2c3\",\"squawk\":\"7700\",\"seen\":0}");
+    ASSERT_EQ(g_s.adsb.state, ADSB_LIVE);
+    const alert_t *a = by_key("adsbemerg:a1b2c3:icao:7700");
+    ASSERT(a != NULL);
+    if (a) ASSERT_EQ(a->sev, ALERT_SEV_LOW);
+    end();
+}
+
 /* 'c' (alerts_clear) drops the holds: a standing emergency comes back
  * LOW and holds again. Seen red with rules_adsb_forget() not called
  * from alerts_clear(). */
@@ -369,4 +406,6 @@ void run_adsb_rules_tests(void) {
     RUN_TEST(test_relisted_without_messages_stays_low);
     RUN_TEST(test_hold_is_the_knob);
     RUN_TEST(test_clear_restarts_the_hold);
+    RUN_TEST(test_error_pass_keeps_the_hold);
+    RUN_TEST(test_stall_past_expiry_restarts_the_hold);
 }

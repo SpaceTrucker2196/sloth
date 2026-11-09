@@ -1,7 +1,7 @@
 ---
 type: ADSB_EMERGENCY
 technique: ""
-rule_file: src/alerts/rules_adsb.c:103 rule_adsb_emergency() (the condition in condition() at line 43, the three codes in emerg_code() at line 32; tune row adsb.emerg_hold_s in src/tune.c)
+rule_file: src/alerts/rules_adsb.c:112 rule_adsb_emergency() (the condition in condition() at line 43, the three codes in emerg_code() at line 32; tune row adsb.emerg_hold_s in src/tune.c)
 count_semantics: per poll while the condition stands - one fire() per listed aircraft with a condition each alert pass, one incident per (address, condition); the detail changes at most twice (status filled in, first sight to held) and then holds still, so observations stay put while evaluations follow the poll rate. Not per message
 severity_assessment: agree - LOW on first sight, WARN once held 10 s of the aircraft's own messages, never CRIT: the declaration is unambiguous when real, but unauthenticated, forgeable, and about a third party rather than the operator's network
 false_positive_risk: medium - a decode error or a code dialled through in passing is kept at LOW by the hold; a forged false alarm (Schafer et al. 2013 §3.2) cannot be told from a real one by one receiver, and lifeguard / minfuel are priority states rather than distress
@@ -12,12 +12,12 @@ researched: 2026-11-08
 ---
 ## What the rule checks
 
-`rule_adsb_emergency()` (src/alerts/rules_adsb.c:103) walks the ADS-B table `adsb_health_poll()` copied onto the state (`s->adsb_rows`), only while the source is `live` (`s->adsb.state == ADSB_LIVE`). An aircraft has a condition (`condition()`, line 43) when its squawk is exactly `7500`, `7600` or `7700` (`emerg_code()`, line 32), else when its emergency/priority status is present and not `none`. The condition is the code when there is one, else the status word.
+`rule_adsb_emergency()` (src/alerts/rules_adsb.c:112) walks the ADS-B table `adsb_health_poll()` copied onto the state (`s->adsb_rows`), only while the source is `live` (`s->adsb.state == ADSB_LIVE`). An aircraft has a condition (`condition()`, line 43) when its squawk is exactly `7500`, `7600` or `7700` (`emerg_code()`, line 32), else when its emergency/priority status is present and not `none`. The condition is the code when there is one, else the status word.
 
 - **Key** `adsbemerg:<icao hex>:<icao|nonicao>:<condition>`: a code change re-keys and re-fires; a status following its code from `none` to `general` is the same incident.
 - **Severity** LOW until the same condition has held `adsb.emerg_hold_s` (10 s) measured on the row's `last_mono_ms` - the decoder's last message from the aircraft on sloth's monotonic clock - then WARN. Never CRIT.
 - **Detail**: the address (`non-ICAO ~` for a '~' address), callsign (`-` absent), squawk, status word, `first sight` or `held past adsb.emerg_hold_s`, and "flag only: ADS-B is unauthenticated and a false alarm can be injected; sloth cannot verify it and takes no action". No `match_ip`.
-- **Not evaluated**: a row the table no longer lists (its incident expires on the quiet period), and every row while the source is `stale`, `error` or `waiting`.
+- **Not evaluated**: a row the table no longer lists (its incident expires on the quiet period), and every row while the source is `stale`, `error` or `waiting`. Such a pass keeps the hold of every address still listed, so a one-poll read or parse error does not drop an open WARN back to LOW; a row the table retires loses its hold.
 
 Empty technique, second exemption form (research/adsb/emergency-squawks.md).
 

@@ -48,8 +48,9 @@ static const char *condition(const adsb_aircraft_t *a) {
 }
 
 /* Each address's condition and when, by its own messages, it began.
- * Rebuilt every pass from the rows that hold one, so an address whose
- * condition clears, changes or whose row leaves the table starts over. */
+ * Rebuilt every LIVE pass from the rows that hold one, so an address
+ * whose condition clears, changes or whose row leaves the table starts
+ * over; a pass that is not LIVE only drops the rows no longer listed. */
 typedef struct {
     uint32_t    icao;
     uint8_t     non_icao;
@@ -94,12 +95,20 @@ static const adsb_hold_t *hold_find(uint32_t icao, uint8_t non_icao,
  * span from the row's last_mono_ms when the condition was first seen to
  * its last_mono_ms now, so a row the decoder relists without hearing
  * the aircraft again does not age into WARN. Persistence, not
- * corroboration, because the two fields are not independent: DO-260B
- * carries the code and the status in the same Aircraft Status message,
- * and a transponder set to 7x00 sets the status with it, so agreeing
- * fields are one observation, not two. A single corrupted reply that
- * decodes as 7x00, or a code dialled through in passing, is the case
- * the hold keeps at LOW. Never CRIT: see the head of this file. */
+ * corroboration, because the two fields are not independent: readsb
+ * calls the status "a superset of the 7x00 squawks", so agreeing fields
+ * are one declaration reported twice, not two observations (DO-260B
+ * itself was not read; research/adsb/emergency-squawks.md). A single
+ * corrupted reply that decodes as 7x00, or a code dialled through in
+ * passing, is the case the hold keeps at LOW. Never CRIT: see the head
+ * of this file.
+ *
+ * A pass with the source not LIVE evaluates nothing but keeps the holds
+ * of the addresses still listed: a one-poll read or parse error, or a
+ * short stall, says nothing about the aircraft, and wiping the hold
+ * would fire an open WARN incident back at LOW (an alert.update
+ * downgrade) and re-escalate it a hold later. A row the table retires
+ * (ADSB_EXPIRE_S unheard) loses its hold either way. */
 void rule_adsb_emergency(const sloth_state_t *s, time_t now) {
     static adsb_hold_t next[ADSB_MAX_AIRCRAFT];
     int nn = 0;
@@ -143,6 +152,16 @@ void rule_adsb_emergency(const sloth_state_t *s, time_t now) {
                      held ? "; held past adsb.emerg_hold_s" : "; first sight");
             fire(ALERT_TYPE_ADSB_EMERGENCY, held ? ALERT_SEV_WARN : ALERT_SEV_LOW,
                  "ADSB_EMERGENCY", detail, key, NULL, 0, now);
+        }
+    } else {
+        for (int j = 0; j < g_adsb.n; j++) {
+            const adsb_hold_t *h = &g_adsb.h[j];
+            for (int i = 0; s->adsb_rows && i < s->adsb_count; i++)
+                if (s->adsb_rows[i].icao == h->icao &&
+                    s->adsb_rows[i].non_icao == h->non_icao) {
+                    next[nn++] = *h;
+                    break;
+                }
         }
     }
     memcpy(g_adsb.h, next, (size_t)nn * sizeof(next[0]));
