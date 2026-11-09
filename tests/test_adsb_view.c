@@ -145,6 +145,7 @@ static void test_adsb_empty_without_decoder(void) {
     ASSERT(strstr(b, "--adsb /run/readsb/aircraft.json") != NULL);
     ASSERT(strstr(b, "docs/wiki/adsb.md") != NULL);
     ASSERT(strstr(b, "never opens or tunes the SDR") != NULL);
+    ASSERT(strstr(b, "beast://127.0.0.1:30005") != NULL);
     ASSERT(strstr(b, "ICAO ") == NULL);              /* no table header */
     ASSERT(strstr(b, "docs 0") == NULL);             /* no health line */
 }
@@ -201,6 +202,35 @@ static void test_adsb_sbs_source_states(void) {
     s.adsb.age_s = 140;
     b = render(&s);
     ASSERT(strstr(b, "sent no line, not even its heartbeat") != NULL);
+    ASSERT(strstr(b, "clock has stopped advancing") == NULL);
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* A beast:// source (2026-11-09): the header counts frames, and the
+ * empty states speak of Beast frames. The "lines"/"docs" absences were
+ * seen red with the header's beast arm removed (it then read "docs");
+ * the SBS-wording absence with the beast waiting branch guarded
+ * `if (0)` (the file wording showed instead). */
+static void test_adsb_beast_source_states(void) {
+    TEST_STATE(s);
+    memset(&s, 0, sizeof(s));
+    g_wall = WALL0;
+    sloth_clock_test_set(tm_, tw);
+    s.adsb.configured = 1;
+    s.adsb.state = ADSB_WAITING;
+    s.adsb.age_s = -1;
+    snprintf(s.adsb.src, sizeof(s.adsb.src), "beast:127.0.0.1:30005");
+    const char *b = render(&s);
+    ASSERT(strstr(b, "src beast:127.0.0.1:30005") != NULL);
+    ASSERT(strstr(b, " frames 0  read err 0  parse err 0") != NULL);
+    ASSERT(strstr(b, " docs 0") == NULL);
+    ASSERT(strstr(b, " lines 0") == NULL);
+    ASSERT(strstr(b, "waiting for the decoder's first Beast frame") != NULL);
+    ASSERT(strstr(b, "first document") == NULL);
+    s.adsb.state = ADSB_STALE;
+    s.adsb.age_s = 140;
+    b = render(&s);
+    ASSERT(strstr(b, "sent no frame, not even its heartbeat") != NULL);
     ASSERT(strstr(b, "clock has stopped advancing") == NULL);
     sloth_clock_test_set(NULL, NULL);
 }
@@ -517,4 +547,5 @@ void run_adsb_view_tests(void) {
     RUN_TEST(test_adsb_renders_a_polled_table);
     RUN_TEST(test_adsb_health_strip_token);
     RUN_TEST(test_adsb_sbs_source_states);
+    RUN_TEST(test_adsb_beast_source_states);
 }

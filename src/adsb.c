@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "adsb.h"
+#include "adsb_beast.h"
 
 /* Contract in adsb.h. Pure except the table at the bottom, one
  * mutex-guarded struct the reader feeds and the main thread polls. */
@@ -395,10 +396,15 @@ static int port_parse(const char *s, int *out) {
     return 0;
 }
 
-/* sbs://[HOST[:PORT]]: HOST numeric, IPv6 in brackets, loopback only. */
-static int sbs_spec_parse(const char *h, adsb_spec_t *out, char *err, size_t errsz) {
-    static const char bad[] = "sbs:// wants a numeric loopback HOST "
-                              "(127.0.0.1, [::1]) and PORT 1..65535";
+/* sbs:// or beast://[HOST[:PORT]]: HOST numeric, IPv6 in brackets,
+ * loopback only. One parser: the two are the same decoder on the same
+ * host, a different port and framing. */
+static int stream_spec_parse(const char *h, int kind, adsb_spec_t *out,
+                             char *err, size_t errsz) {
+    const char *scheme = kind == ADSB_SPEC_BEAST ? "beast" : "sbs";
+    char bad[96];
+    snprintf(bad, sizeof(bad), "%s:// wants a numeric loopback HOST "
+             "(127.0.0.1, [::1]) and PORT 1..65535", scheme);
     char host[64];
     const char *portp = NULL;
     int v6 = 0;
@@ -422,7 +428,8 @@ static int sbs_spec_parse(const char *h, adsb_spec_t *out, char *err, size_t err
         host[hl] = '\0';
         if (colon) portp = colon + 1;
     }
-    int port = ADSB_SBS_DEFAULT_PORT;
+    int port = kind == ADSB_SPEC_BEAST ? ADSB_BEAST_DEFAULT_PORT
+                                       : ADSB_SBS_DEFAULT_PORT;
     if (portp && port_parse(portp, &port) != 0) return set_err(err, errsz, bad);
     /* The host is kept in its canonical text form (inet_ntop), so the
      * longest spelling of ::1 (39 characters) cannot overrun the 48-byte
@@ -444,11 +451,11 @@ static int sbs_spec_parse(const char *h, adsb_spec_t *out, char *err, size_t err
     }
     if (!loop) {
         if (err && errsz)
-            snprintf(err, errsz, "sbs:// reads a decoder on this host: %s is "
-                     "not loopback (127.0.0.0/8, [::1])", host);
+            snprintf(err, errsz, "%s:// reads a decoder on this host: %s is "
+                     "not loopback (127.0.0.0/8, [::1])", scheme, host);
         return -1;
     }
-    out->kind = ADSB_SPEC_SBS;
+    out->kind = kind;
     snprintf(out->host, sizeof(out->host), "%s", canon);
     out->port = port;
     return 0;
@@ -461,12 +468,9 @@ int adsb_spec_parse(const char *spec, adsb_spec_t *out,
     memset(out, 0, sizeof(*out));
     if (!spec || !*spec) return set_err(err, errsz, "empty SPEC");
     if (strncmp(spec, "sbs://", 6) == 0)
-        return sbs_spec_parse(spec + 6, out, err, errsz);
+        return stream_spec_parse(spec + 6, ADSB_SPEC_SBS, out, err, errsz);
     if (strncmp(spec, "beast://", 8) == 0)
-        return set_err(err, errsz, "beast:// input is not yet supported: give "
-                       "the decoder's aircraft.json path (e.g. "
-                       "/run/readsb/aircraft.json) or its SBS output "
-                       "(sbs://127.0.0.1:30003)");
+        return stream_spec_parse(spec + 8, ADSB_SPEC_BEAST, out, err, errsz);
     if (strncmp(spec, "file://", 7) == 0) {
         p = spec + 7;
         if (*p != '/')
@@ -474,7 +478,7 @@ int adsb_spec_parse(const char *spec, adsb_spec_t *out,
                            "(file:///path), not a host");
     } else if (strstr(spec, "://")) {
         return set_err(err, errsz, "unsupported scheme: want an absolute path "
-                       "or file:///path to aircraft.json, or sbs://HOST:PORT");
+                       "or file:///path to aircraft.json, or sbs:// / beast://HOST:PORT");
     } else if (*spec != '/') {
         return set_err(err, errsz, "want an absolute path");
     }
@@ -490,9 +494,9 @@ int adsb_spec_parse(const char *spec, adsb_spec_t *out,
 void adsb_spec_label(const adsb_spec_t *sp, char *out, size_t outsz) {
     if (!out || !outsz) return;
     if (!sp) { out[0] = '\0'; return; }
-    if (sp->kind == ADSB_SPEC_SBS)
-        snprintf(out, outsz, strchr(sp->host, ':') ? "sbs:[%s]:%d" : "sbs:%s:%d",
-                 sp->host, sp->port);
+    if (sp->kind == ADSB_SPEC_SBS || sp->kind == ADSB_SPEC_BEAST)
+        snprintf(out, outsz, strchr(sp->host, ':') ? "%s:[%s]:%d" : "%s:%s:%d",
+                 sp->kind == ADSB_SPEC_BEAST ? "beast" : "sbs", sp->host, sp->port);
     else
         snprintf(out, outsz, "file:%.200s", sp->path);
 }
@@ -947,18 +951,11 @@ void adsb_note_connected(void) {
     pthread_mutex_unlock(&g_mu);
 }
 
-void adsb_feed_sbs(const adsb_sbs_msg_t *m, int64_t wall_ms, uint64_t mono_ms) {
-    if (!m) return;
+/* One stream message (an SBS line, a Beast frame) heard `seen` s
+ * before the read at wall_ms / mono_ms, merged into its row. */
+static void feed_stream(adsb_aircraft_t a, double seen, int64_t wall_ms,
+                        uint64_t mono_ms) {
     time_t wall = (time_t)(wall_ms / 1000);
-    adsb_aircraft_t a = m->ac;
-    /* seen as aircraft.json has it: seconds before the read that the
-     * decoder heard the message. The decoder's clock is the host's (the
-     * source is loopback); a line stamped ahead of the read is 0. */
-    double seen = 0;
-    if (m->has_time && wall_ms > m->time_ms) {
-        seen = (double)(wall_ms - m->time_ms) / 1000.0;
-        if (seen > 1e6) seen = 1e6;
-    }
     a.has_seen = 1;
     a.seen = seen;
     if (a.has_pos) { a.has_seen_pos = 1; a.seen_pos = seen; }
@@ -981,10 +978,37 @@ void adsb_feed_sbs(const adsb_sbs_msg_t *m, int64_t wall_ms, uint64_t mono_ms) {
         r->alt_band = INT16_MIN;
         r->first_seen = wall;
     }
-    /* No per-aircraft count in SBS: the lines received for it. */
+    /* No per-aircraft count in either stream: the messages received
+     * for it. */
     a.has_messages = 1;
     a.messages = r->messages + 1;
     merge(r, &a, wall, mono_ms);
+    pthread_mutex_unlock(&g_mu);
+}
+
+void adsb_feed_sbs(const adsb_sbs_msg_t *m, int64_t wall_ms, uint64_t mono_ms) {
+    if (!m) return;
+    /* seen as aircraft.json has it: seconds before the read that the
+     * decoder heard the message. The decoder's clock is the host's (the
+     * source is loopback); a line stamped ahead of the read is 0. */
+    double seen = 0;
+    if (m->has_time && wall_ms > m->time_ms) {
+        seen = (double)(wall_ms - m->time_ms) / 1000.0;
+        if (seen > 1e6) seen = 1e6;
+    }
+    feed_stream(m->ac, seen, wall_ms, mono_ms);
+}
+
+void adsb_feed_beast(const adsb_aircraft_t *a, int64_t wall_ms, uint64_t mono_ms) {
+    /* A Beast frame carries the receiver's clock, not the wall: it was
+     * heard at the read, give or take readsb's output flush interval. */
+    if (a) feed_stream(*a, 0, wall_ms, mono_ms);
+}
+
+void adsb_note_bad_frame(int64_t wall_ms, uint64_t mono_ms) {
+    pthread_mutex_lock(&g_mu);
+    sbs_alive((time_t)(wall_ms / 1000), mono_ms);
+    g.bad++;
     pthread_mutex_unlock(&g_mu);
 }
 

@@ -28,7 +28,11 @@
  * 2, 4, ... 30 s; a session the decoder closes, or a read error, is a
  * read error and is retried after 2 s. Lines are framed with a hard
  * cap (ADSB_SBS_MAX_LINE) across reads. The main thread never touches
- * the socket. */
+ * the socket.
+ *
+ * beast:// (2026-11-09): the same session, connect and backoff; the
+ * bytes go through adsb_beast_feed() instead, which holds at most one
+ * frame body across reads. */
 
 /* Parse SPEC and record the source with adsb_set_source() (or
  * adsb_set_source_sbs()). 0, or -1 with err. Opens and dials nothing: a
@@ -37,7 +41,7 @@ int  adsb_reader_configure(const char *spec, char *err, size_t errsz);
 
 int  adsb_reader_configured(void);
 
-/* One poll of a file source (-1 for an sbs:// one): open, check, read,
+/* One poll of a file source (-1 for an sbs:// or beast:// one): open, check, read,
  * parse, feed, at host `wall` / `mono_ms`.
  * What the worker runs every ADSB_POLL_MS, and the tests' seam. Returns
  * 1 for a document fed, 0 for an unchanged file, -1 for a failure

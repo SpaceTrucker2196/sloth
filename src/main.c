@@ -587,9 +587,11 @@ static void print_usage(const char *argv0) {
             "                         re-read about once a second, or\n"
             "                       sbs://[HOST[:PORT]] its SBS/BaseStation\n"
             "                         TCP output (default 127.0.0.1:30003;\n"
-            "                         loopback only; sloth sends nothing).\n"
+            "                         loopback only; sloth sends nothing),\n"
+            "                         or beast://[HOST[:PORT]] its Beast\n"
+            "                         binary output (default 127.0.0.1:30005;\n"
+            "                         the same rules; sloth decodes Mode S).\n"
             "                     sloth never opens or tunes the SDR.\n"
-            "                     beast:// is not yet supported.\n"
             "                     Refused with --replay.\n"
             "  --aprs SPEC        tail the packet log a local Dire Wolf APRS\n"
             "                     decoder already writes (direwolf -L FILE):\n"
@@ -1222,12 +1224,13 @@ int main(int argc, char **argv) {
         }
         adsb_spec_t asp;
         if (adsb_spec_parse(adsb_arg, &asp, NULL, 0) == 0) {
-            if (asp.kind == ADSB_SPEC_SBS)
+            if (asp.kind == ADSB_SPEC_SBS || asp.kind == ADSB_SPEC_BEAST)
                 /* MISSION.md section 2: a network-using input is announced. */
                 fprintf(stderr, "sloth: --adsb connecting to the decoder's "
-                                "SBS output at %s%s%s:%d over TCP after the "
+                                "%s output at %s%s%s:%d over TCP after the "
                                 "privilege drop (loopback; read-only: sloth "
                                 "sends nothing on the socket; no SDR)\n",
+                        asp.kind == ADSB_SPEC_BEAST ? "Beast" : "SBS",
                         strchr(asp.host, ':') ? "[" : "", asp.host,
                         strchr(asp.host, ':') ? "]" : "", asp.port);
             else

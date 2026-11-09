@@ -102,6 +102,7 @@ void run_iface_graph_tests(void);
 void run_geo_tests(void);
 void run_gps_tests(void);
 void run_adsb_tests(void);               /* tests/test_adsb.c (#26 slice 1) */
+void run_adsb_beast_tests(void);         /* tests/test_adsb_beast.c (#186) */
 void run_aprs_tests(void);               /* tests/test_aprs.c (2026-11-05) */
 void run_gnss_view_tests(void);          /* tests/test_gnss_view.c (2026-11-02) */
 void run_adsb_view_tests(void);          /* tests/test_adsb_view.c (#186) */
@@ -312,6 +313,7 @@ int main(void) {
     run_geo_tests();
     run_gps_tests();
     run_adsb_tests();
+    run_adsb_beast_tests();
     run_aprs_tests();
     run_gnss_view_tests();
     run_adsb_view_tests();

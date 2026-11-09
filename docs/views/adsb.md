@@ -106,6 +106,16 @@ it). Waiting reads as waiting for the first SBS line, and stale as no
 line, not even readsb's 60 s heartbeat, for 130 s
 ([adsb wiki](../wiki/adsb.md#the-sbs-source-sbs)).
 
+With a `beast://` source the `src` reads `beast:127.0.0.1:30005` and the
+tally line counts `frames`: the Mode S frames sloth decoded itself and
+took into the table (`msgs` is the same count); `bad` counts frames
+refused by their CRC and `parse err` garbage or cut frames on the
+stream. A Beast row does carry the emergency status word (from the
+aircraft's TC 28 status message), so `emerg` counts it. Waiting reads
+as waiting for the first Beast frame, stale as no frame, not even
+readsb's 60 s heartbeat, for 130 s
+([adsb wiki](../wiki/adsb.md#the-beast-source-beast)).
+
 Without `--adsb` the view names the flag and says who owns the SDR.
 With it, the four decoder states each read as themselves: `waiting`
 (nothing read yet), `live`, `stale` (the file is readable but the

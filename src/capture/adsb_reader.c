@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "adsb.h"
+#include "adsb_beast.h"
 #include "capture/capture.h"     /* capture_run_flag_t */
 #include "capture/adsb_reader.h"
 #include "sloth_clock.h"
@@ -41,7 +42,7 @@ int adsb_reader_configure(const char *spec, char *err, size_t errsz) {
         return -1;
     char label[48];
     adsb_spec_label(&g_spec, label, sizeof(label));
-    if (g_spec.kind == ADSB_SPEC_SBS) {
+    if (g_spec.kind == ADSB_SPEC_SBS || g_spec.kind == ADSB_SPEC_BEAST) {
         g_path[0] = '\0';
         adsb_set_source_sbs(label);
     } else {
@@ -150,11 +151,14 @@ static void *adsb_file_thread(void) {
     return NULL;
 }
 
-/* ── sbs:// ────────────────────────────────────────────────────────
+/* ── sbs:// and beast:// ───────────────────────────────────────────
  * A TCP client that only reads. connect() is the one thing sent (the
  * handshake); no send(), write() or shutdown() is ever called on the
  * socket, and the decoder's SBS output ignores what a client sends
- * anyway (readsb: READ_MODE_IGNORE). */
+ * anyway (readsb: READ_MODE_IGNORE). The Beast output reads commands
+ * from a client (READ_MODE_BEAST_COMMAND, handleBeastCommand(): ping,
+ * Mode A/C on/off, a rate reduction); sloth sends none, so it gets the
+ * defaults: no pings, no Mode A/C unless another client asked. */
 
 static void sbs_err(const char *what, int e) {
     char why[96];
@@ -202,9 +206,12 @@ static int sbs_connect(void) {
     return fd;
 }
 
-static void *adsb_sbs_thread(void) {
+static void *adsb_stream_thread(void) {
     static adsb_sbs_lines_t lines;   /* the worker's alone */
+    static adsb_beast_t beast;       /* ~140 KB of tracks: off the stack */
     static uint8_t buf[4096];
+    const int is_beast = g_spec.kind == ADSB_SPEC_BEAST;
+    if (is_beast) adsb_beast_init(&beast);
     int backoff = SBS_BACKOFF_MIN;
     while (capture_run_flag_get(&g_running)) {
         int fd = sbs_connect();
@@ -216,6 +223,12 @@ static void *adsb_sbs_thread(void) {
         adsb_note_connected();
         backoff = SBS_BACKOFF_MIN;
         adsb_sbs_lines_init(&lines);
+        /* A new session starts the framer afresh; the tracks (address
+         * confirmations, CPR halves) are kept: their own clocks age
+         * them out. */
+        beast.st = 0;
+        beast.got = 0;
+        beast.garbage_run = 0;
         while (capture_run_flag_get(&g_running)) {
             struct pollfd pfd = { fd, POLLIN, 0 };
             int r = poll(&pfd, 1, ADSB_SLICE_MS);
@@ -236,8 +249,12 @@ static void *adsb_sbs_thread(void) {
                 adsb_note_read_error("decoder closed the connection");
                 break;
             }
-            adsb_sbs_lines_feed(&lines, buf, (size_t)n, sloth_wall_ms(),
+            if (is_beast)
+                adsb_beast_feed(&beast, buf, (size_t)n, sloth_wall_ms(),
                                 sloth_mono_ms());
+            else
+                adsb_sbs_lines_feed(&lines, buf, (size_t)n, sloth_wall_ms(),
+                                    sloth_mono_ms());
         }
         close(fd);
         /* A session that ended is retried after the shortest wait: the
@@ -250,7 +267,7 @@ static void *adsb_sbs_thread(void) {
 
 static void *adsb_reader_thread(void *arg) {
     (void)arg;
-    return g_spec.kind == ADSB_SPEC_SBS ? adsb_sbs_thread() : adsb_file_thread();
+    return g_spec.kind == ADSB_SPEC_FILE ? adsb_file_thread() : adsb_stream_thread();
 }
 
 void adsb_reader_run(void) {

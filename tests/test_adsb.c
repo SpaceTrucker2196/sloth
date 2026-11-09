@@ -492,9 +492,8 @@ static void test_spec_parse(void) {
     ASSERT_STR(lab, "file:/run/readsb/aircraft.json");
     ASSERT_EQ(adsb_spec_parse("file:///run/dump1090-fa/aircraft.json", &sp, e, sizeof(e)), 0);
     ASSERT_STR(sp.path, "/run/dump1090-fa/aircraft.json");
-    e[0] = '\0';
-    ASSERT_EQ(adsb_spec_parse("beast://127.0.0.1:30005", &sp, e, sizeof(e)), -1);
-    ASSERT(strstr(e, "not yet supported") != NULL);
+    /* beast:// is a source since 2026-11-09: tests/test_adsb_beast.c ::
+     * test_spec_parse_beast. */
     ASSERT_EQ(adsb_spec_parse("file://host/aircraft.json", &sp, e, sizeof(e)), -1);
     ASSERT_EQ(adsb_spec_parse("http://127.0.0.1/data/aircraft.json", &sp, e, sizeof(e)), -1);
     ASSERT_EQ(adsb_spec_parse("aircraft.json", &sp, e, sizeof(e)), -1);

@@ -18,7 +18,7 @@ each is a typed producer of observations copied into `sloth_state_t`, exactly
 like the 802.11 path. Until the sensor seam exists, treat everything here as
 design, not implementation.
 
-**Last updated**: 2026-11-09 (ADS-B: `--adsb sbs://`, [[adsb]]); 2026-11-08 (ADS-B: the flag-only `ADSB_EMERGENCY` alert, #186, [[adsb]]); 2026-11-07 (ADS-B: the `[^]` TUI view and the `adsb` health token, [[adsb]]); 2026-11-05 (APRS shipped: `--aprs` off Dire Wolf's packet log, JSONL, sloth.db v13 and slothweb's APRS tab, [[aprs]]); 2026-11-05 (ADS-B in slothweb: the ADS-B tab, [[adsb]]); 2026-11-05 (ADS-B slice 1 shipped: the `--adsb` feed, the aircraft table and the `adsb_aircraft` record, [[adsb]]); 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
+**Last updated**: 2026-11-09 (ADS-B: `--adsb beast://`, [[adsb]]); 2026-11-09 (ADS-B: `--adsb sbs://`, [[adsb]]); 2026-11-08 (ADS-B: the flag-only `ADSB_EMERGENCY` alert, #186, [[adsb]]); 2026-11-07 (ADS-B: the `[^]` TUI view and the `adsb` health token, [[adsb]]); 2026-11-05 (APRS shipped: `--aprs` off Dire Wolf's packet log, JSONL, sloth.db v13 and slothweb's APRS tab, [[aprs]]); 2026-11-05 (ADS-B in slothweb: the ADS-B tab, [[adsb]]); 2026-11-05 (ADS-B slice 1 shipped: the `--adsb` feed, the aircraft table and the `adsb_aircraft` record, [[adsb]]); 2026-11-02 (the GPS family is shipped: [[location]] for the position, [[gnss]] for the sky; the sketch below replaced by what exists); 2026-10-14.
 
 ---
 
@@ -138,8 +138,9 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
 - **Hardware**: an RTL-SDR on 1090 MHz feeding readsb or dump1090-fa,
   whose `aircraft.json` sloth re-reads (`--adsb PATH`), or whose SBS /
   BaseStation output it reads on a loopback TCP port (`--adsb sbs://`,
-  read-only: sloth sends nothing on the socket). sloth never opens or
-  tunes the SDR.
+  read-only: sloth sends nothing on the socket), or whose Beast binary
+  output it reads the same way and decodes itself (`--adsb beast://`:
+  CRC, ghost suppression, CPR). sloth never opens or tunes the SDR.
 - **State**: `adsb_aircraft_t` keyed by address, `adsb_health_t`
   (`include/sloth.h`, `src/adsb.c`).
 - **View**: the `[^]` ADS-B TUI view (aircraft table, distance and
@@ -149,17 +150,19 @@ Ordered roughly by how cleanly they fit the passive filter (easiest first).
   position cells; `adsb_*` in `sensor_health`; the `sensor` record of
   kind `adsb`.
 - **Out of scope**: transmitting, interrogating (that's active radar),
-  driving the SDR, writing to the decoder. A Beast socket is refused
-  as not yet supported, a non-loopback SBS source as not loopback.
+  driving the SDR, writing to the decoder, correcting bit errors. A
+  non-loopback SBS or Beast source is refused as not loopback.
 - **Test**: hand-written `aircraft.json` documents from readsb's
   README-json.md and SBS lines from readsb's `modesSendSBSOutput()`
-  (`tests/test_adsb.c`), two fuzz harnesses; no captures.
+  (`tests/test_adsb.c`), Beast frames built field by field plus the
+  published examples of *The 1090 Megahertz Riddle*
+  (`tests/test_adsb_beast.c`), three fuzz harnesses; no captures.
 - **Status**: slice 1 (2026-11-05) is the core — feed, state, JSONL;
   slothweb and `--db` followed the same day, the `[^]` TUI view and the
   `adsb` health token on 2026-11-07, the flag-only `ADSB_EMERGENCY`
   alert (#186, `research/adsb/emergency-squawks.md`) and the
   `packaging/` note on running beside readsb on 2026-11-08, `sbs://`
-  input on 2026-11-09. Beast input is pending. See [[adsb]].
+  and `beast://` input on 2026-11-09. See [[adsb]].
 
 ### APRS (144.390 MHz) — shipped
 - **Observe**: APRS packets a local Dire Wolf decoded (position, status,

@@ -127,10 +127,12 @@ static void header(const sloth_state_t *s, const loc_stamp_t *loc, int have_loc,
     else               TPRINT("-");
     tui_dim();
     TPRINT("  src %s  [up/dn]\n", h->src);
-    /* An sbs:// source counts MSG lines, not documents. */
+    /* An sbs:// source counts MSG lines, a beast:// one Mode S frames
+     * taken into the table, not documents. */
     TPRINT(" %s %llu  read err %llu  parse err %llu  overflow %llu"
            "  bad %llu  expired %llu\n",
-           strncmp(h->src, "sbs:", 4) == 0 ? "lines" : "docs",
+           strncmp(h->src, "sbs:", 4) == 0 ? "lines" :
+           strncmp(h->src, "beast:", 6) == 0 ? "frames" : "docs",
            (unsigned long long)h->reads, (unsigned long long)h->read_errors,
            (unsigned long long)h->parse_errors, (unsigned long long)h->overflow,
            (unsigned long long)h->bad_entries, (unsigned long long)h->expired);
@@ -149,10 +151,11 @@ void view_adsb_draw(const sloth_state_t *s) {
         tui_normal(); TPRINT(" ADS-B: "); tui_dim();
         TPRINT("no decoder\n"
                "  (start with --adsb /run/readsb/aircraft.json or\n"
-               "   --adsb sbs://127.0.0.1:30003; see docs/wiki/adsb.md.\n"
+               "   --adsb sbs://127.0.0.1:30003 or beast://127.0.0.1:30005;\n"
+               "   see docs/wiki/adsb.md.\n"
                "   sloth never opens or tunes the SDR: a local readsb or\n"
                "   dump1090-fa does, and sloth only reads the aircraft.json\n"
-               "   it already writes, or its SBS output.)\n");
+               "   it already writes, or its SBS or Beast output.)\n");
         tui_normal();
         return;
     }
@@ -171,7 +174,15 @@ void view_adsb_draw(const sloth_state_t *s) {
     if (n == 0) {
         tui_dim();
         int sbs = strncmp(s->adsb.src, "sbs:", 4) == 0;
-        if (s->adsb.state == ADSB_WAITING && sbs)
+        int beast = strncmp(s->adsb.src, "beast:", 6) == 0;
+        if (s->adsb.state == ADSB_WAITING && beast)
+            TPRINT("  (waiting for the decoder's first Beast frame - connected\n"
+                   "   or connecting; an empty sky sends only a heartbeat)\n");
+        else if (s->adsb.state == ADSB_STALE && beast)
+            TPRINT("  (the decoder has sent no frame, not even its heartbeat,\n"
+                   "   for over %d s: connected, but nothing is arriving)\n",
+                   ADSB_SBS_STALE_S);
+        else if (s->adsb.state == ADSB_WAITING && sbs)
             TPRINT("  (waiting for the decoder's first SBS line - connected\n"
                    "   or connecting; an empty sky sends only a heartbeat)\n");
         else if (s->adsb.state == ADSB_WAITING)

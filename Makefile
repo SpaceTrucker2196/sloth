@@ -245,7 +245,7 @@ CORE_COMMON_SRCS += src/gps.c src/capture/gps_reader.c src/position_track.c
 # --adsb (#26 slice 1, 2026-11-05): the aircraft.json parser and table are
 # pure; the reader re-reads a local file and needs neither libpcap nor
 # SQLite.
-CORE_COMMON_SRCS += src/adsb.c src/capture/adsb_reader.c
+CORE_COMMON_SRCS += src/adsb.c src/adsb_beast.c src/capture/adsb_reader.c
 # --aprs (2026-11-05): Dire Wolf's packet-log parser and the station
 # table are pure; the reader tails a local file and needs neither
 # libpcap nor SQLite.

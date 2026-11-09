@@ -6730,3 +6730,24 @@ the 7x00 squawk drives `ADSB_EMERGENCY`. The hardened unit needs
 `AF_INET` by drop-in (the `gps.conf` gpsd block is that line).
 `beast://` stays refused. New fuzz target `fuzz_adsb_sbs`. Updated
 [[adsb]], [[cli-reference]], [[non-ip-sensors]].
+
+## 2026-11-09 — `--adsb beast://`, the decoder's Beast output (#186)
+
+The last open input of #186. `--adsb beast://[HOST[:PORT]]` (default
+`127.0.0.1:30005`, numeric loopback only) reads readsb's Beast binary
+output with the same never-writing client and backoff as `sbs://`, and
+decodes the Mode S frames in sloth (`src/adsb_beast.c`): a framer for
+readsb's 0x1A-escaped stream (types 1/2/3; receiver id and Radarcape
+frames skipped; garbage, unknown types and cut frames are parse errors
+with resync), CRC-24 with no bit correction, DF17/18 only intact,
+DF4/5/20/21 only for an address a clean DF17 or DF11 vouched for in
+the last 60 s (readsb's `icaoFilterAdd()` rule; DF18 does not vouch),
+TC 1-4 identification, TC 5-8 as on-ground, TC 9-18 / 20-22 altitude
+and CPR (a global pair within 10 s, refused across NL zones, else local
+against the aircraft's own fix, every result bounded by a speed limit),
+TC 19 velocity, and TC 28 subtype 1's emergency word and Mode A code.
+RSSI per readsb's formula, `seen` from the read time (the Beast
+timestamp is the receiver's clock). `ADSB_EMERGENCY` fires on Beast
+rows from a squawk or the status word. Known-answer tests from *The
+1090 Megahertz Riddle*; new fuzz target `fuzz_adsb_beast`. Updated
+[[adsb]], [[cli-reference]], [[non-ip-sensors]], [[jsonl-schema]].

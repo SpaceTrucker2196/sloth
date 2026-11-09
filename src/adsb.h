@@ -16,10 +16,12 @@
  *   --adsb /run/readsb/aircraft.json
  *   --adsb file:///run/readsb/aircraft.json
  *   --adsb sbs://127.0.0.1:30003     (2026-11-09, below)
+ *   --adsb beast://127.0.0.1:30005   (2026-11-09, src/adsb_beast.h)
  *
- * sbs:// is the decoder's SBS / BaseStation TCP output, read by a
- * client that never writes a byte to the socket, loopback only. Beast
- * (beast://) is refused with a "not yet supported" error.
+ * sbs:// is the decoder's SBS / BaseStation TCP output and beast:// its
+ * Beast binary output, each read by a client that never writes a byte
+ * to the socket, loopback only. The Beast framer and Mode S decoder are
+ * src/adsb_beast.c; both streams feed the table below.
  *
  * This file is the pure half - the document parser, the spec parser,
  * and the table the reader (src/capture/adsb_reader.c) feeds and the
@@ -78,29 +80,29 @@ const char *adsb_emergency_name(int e);
 
 /* ── The --adsb SPEC ───────────────────────────────────────────── */
 
-enum { ADSB_SPEC_FILE = 1, ADSB_SPEC_SBS };
+enum { ADSB_SPEC_FILE = 1, ADSB_SPEC_SBS, ADSB_SPEC_BEAST };
 
 #define ADSB_SBS_DEFAULT_PORT 30003
 
 typedef struct {
     int  kind;                  /* ADSB_SPEC_* */
     char path[256];             /* FILE */
-    char host[64];              /* SBS: a numeric loopback address */
-    int  port;                  /* SBS */
+    char host[64];              /* SBS, BEAST: a numeric loopback address */
+    int  port;                  /* SBS, BEAST */
 } adsb_spec_t;
 
 /* An absolute path, or file:///absolute/path (file://HOST/ refused), or
  * sbs://[HOST[:PORT]] with HOST a numeric loopback address (127.0.0.0/8,
  * [::1]; default 127.0.0.1:30003): the decoder is local, as the file
  * one is, and a remote one is a later decision, not a default.
- * beast:// is refused as not yet supported, any other scheme or a
- * relative path as malformed. 0 with out filled, -1 with a reason in
- * err. */
+ * beast://[HOST[:PORT]] the same, default 127.0.0.1:30005 (readsb
+ * --net-bo-port). Any other scheme or a relative path is malformed. 0
+ * with out filled, -1 with a reason in err. */
 int  adsb_spec_parse(const char *spec, adsb_spec_t *out,
                      char *err, size_t errsz);
 
 /* "file:/run/readsb/aircraft.json" / "sbs:127.0.0.1:30003" /
- * "sbs:[::1]:30003": the source label sensor_health and the registry
+ * "sbs:[::1]:30003" / "beast:127.0.0.1:30005": the source label sensor_health and the registry
  * carry. */
 void adsb_spec_label(const adsb_spec_t *sp, char *out, size_t outsz);
 
@@ -182,9 +184,10 @@ void adsb_sbs_lines_feed(adsb_sbs_lines_t *l, const uint8_t *data, size_t n,
 /* Declare the source and its label ("file:/run/readsb/aircraft.json");
  * the state is WAITING until a document parses. */
 void adsb_set_source(const char *label);
-/* The same for an SBS stream: freshness is then a line (any line,
- * heartbeat included) arriving within ADSB_SBS_STALE_S, not a document
- * clock advancing within ADSB_STALE_S. */
+/* The same for a stream, SBS or Beast: freshness is then a line or
+ * frame (heartbeat included) arriving within ADSB_SBS_STALE_S, not a
+ * document clock advancing within ADSB_STALE_S. Both readsb outputs
+ * send their heartbeat every 60 s to an idle client. */
 void adsb_set_source_sbs(const char *label);
 
 /* One SBS MSG line read at `wall_ms` / `mono_ms`: merged into its row
@@ -194,8 +197,16 @@ void adsb_set_source_sbs(const char *label);
  * line's generated time (fields 6/7), never negative; without a time,
  * 0. Counts a read, marks the source alive and clears the error. */
 void adsb_feed_sbs(const adsb_sbs_msg_t *m, int64_t wall_ms, uint64_t mono_ms);
-/* A line that carried nothing for the table (heartbeat, other record):
- * the source is alive. Clears the error. */
+/* One decoded Beast frame's fields (adsb_beast_decode()), merged as
+ * adsb_feed_sbs() merges a line, with seen 0: the frame's timestamp is
+ * the receiver's clock, not the wall. */
+void adsb_feed_beast(const adsb_aircraft_t *a, int64_t wall_ms, uint64_t mono_ms);
+/* A Beast frame refused by its CRC: counted in bad_entries; the source
+ * is alive. */
+void adsb_note_bad_frame(int64_t wall_ms, uint64_t mono_ms);
+/* A line or frame that carried nothing for the table (heartbeat, other
+ * record, Mode A/C, an unconfirmed reply): the source is alive. Clears
+ * the error. */
 void adsb_note_sbs_alive(int64_t wall_ms, uint64_t mono_ms);
 /* The SBS session opened: clears the error the last failure left (the
  * state is then waiting or stale until a line arrives). */
