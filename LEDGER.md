@@ -315,3 +315,4 @@
 | d78b019 | 2026-11-05T12:27:09Z | claude-opus-5 | 376 | 166820 | 31279715 | 520954 | 25.0218 | #185 — arch S0 docs: coupling inventory, ADRs 1-7, pack-schema v1 draft |
 | 1ebd449 | 2026-11-07T12:22:23Z | claude-opus-5 | 298 | 75471 | 22100467 | 489555 | 17.8340 | #186 — ADS-B TUI aircraft view: the 38th view keyed [^], recency-sorted aircraft |
 | 68aea3a | 2026-11-07T12:45:52Z | claude-opus-5 | 142 | 45289 | 10862236 | 115738 | 7.7214 | #186 — tell cppcheck that sorted() fills the ADS-B view's index array (fixes red |
+| 39999f7 | 2026-11-09T12:40:45Z | claude-opus-5 | 456 | 206533 | 38170420 | 665527 | 30.9061 | #187 — KARMA IE-fingerprint collapse (S4): judge it in the alert, not only the s |
