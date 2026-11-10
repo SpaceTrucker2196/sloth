@@ -6751,3 +6751,21 @@ timestamp is the receiver's clock). `ADSB_EMERGENCY` fires on Beast
 rows from a squawk or the status word. Known-answer tests from *The
 1090 Megahertz Riddle*; new fuzz target `fuzz_adsb_beast`. Updated
 [[adsb]], [[cli-reference]], [[non-ip-sensors]], [[jsonl-schema]].
+
+## 2026-11-09 — `GNSS_TIME_JUMP`: a late read is not judged (#182)
+
+The queued-read guard's mirror. A reader late by a steady amount on
+every fix passes the queue test, and the next-fix hold then confirms
+the lag: 1.5 s of reader starvation reads as a held -1500 ms step and
+its recovery as a held +1500 ms one. `read_lateness()` sums, from the
+anchor, the host's gap past the receiver's over the reads on which the
+receiver kept its fix interval (`fix_interval_ms()`, the ring's
+median); past 250 ms the fix is neither judged nor the anchor, and a
+lateness standing 30 s is re-anchored on unjudged. A real step at the
+ordinary cadence still fires: its host gap is the interval. The detail
+gains the two gaps and the interval. Added because a late read must
+not be judged, not because the cause of 2026-11-03's 97 fires (alert
+d15049, during a rebuild/test gate, per-step detail not retained) was
+confirmed; the host was then silent from 2026-11-05 to 2026-11-09
+over 39,783 fixes. TOFF parsing (the issue's item 1) not done. Updated
+[[gnss]], [[alerts]], `alert-assessments/GNSS_TIME_JUMP.md`.

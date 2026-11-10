@@ -67,7 +67,7 @@ each file's `count_semantics` says how its rule counts.
 | [GNSS_JAMMING](GNSS_JAMMING.md) | T1464 | agree | medium | not measured |
 | [GNSS_POSITION_JUMP](GNSS_POSITION_JUMP.md) | - | agree | medium | not measured |
 | [GNSS_SPOOF_SUSPECT](GNSS_SPOOF_SUSPECT.md) | - | agree | medium | not measured |
-| [GNSS_TIME_JUMP](GNSS_TIME_JUMP.md) | - | agree | low | not measured |
+| [GNSS_TIME_JUMP](GNSS_TIME_JUMP.md) | - | agree | low | noisy once, then silent, cause unconfirmed |
 | [ICMP_TUNNEL](ICMP_TUNNEL.md) | T1095 | agree | medium | noisy on the reference host |
 | [KARMA_AP](KARMA_AP.md) | T1557 | agree | medium | noisy on the reference host |
 | [KERB_PREAUTH_BURST](KERB_PREAUTH_BURST.md) | T1110.003 | agree, with one caveat | medium | not seen on the reference host |

@@ -1,7 +1,7 @@
 ---
 type: GNSS_POSITION_JUMP
 technique: ""
-rule_file: src/alerts/rules_gnss.c:537 rule_gnss_position_jump() (the bound in pos_bound_m() at line 239, Δt in fix_dt_s() at line 198; tune row gnss.pos_jump_k in src/tune.c)
+rule_file: src/alerts/rules_gnss.c:639 rule_gnss_position_jump() (the bound in pos_bound_m() at line 302, Δt in fix_dt_s() at line 207; tune row gnss.pos_jump_k in src/tune.c)
 count_semantics: per offending fix pair - each consecutive pair of positioned fixes is judged once, and a pair past the bound is one fire(); a receiver that jumps away and back is two fires in one incident. One incident per receiver (key `gnsspos`). Not per poll
 severity_assessment: agree - WARN: an unphysical move is the observable the spoofing literature names, and is not CRIT because multipath and receiver faults produce it too
 false_positive_risk: medium - multipath at a fixed site can exceed the error estimate (the research says the estimate "may not cover it"), and gpsd's eph has no stated confidence level; the speed term, the eph multiplier and the reacquisition skip keep a moving vehicle and a cold start out
@@ -12,11 +12,11 @@ researched: 2026-11-03
 ---
 ## What the rule checks
 
-`rule_gnss_position_jump()` (src/alerts/rules_gnss.c:537) walks the positioned-fix ring in `s->gnss_hist` (mode >= 2 with a position; the ring holds no other) and judges each consecutive pair once. The bound (`pos_bound_m()`, line 239) is
+`rule_gnss_position_jump()` (src/alerts/rules_gnss.c:639) walks the positioned-fix ring in `s->gnss_hist` (mode >= 2 with a position; the ring holds no other) and judges each consecutive pair once. The bound (`pos_bound_m()`, line 302) is
 
 `(v + eps) × Δt + gnss.pos_jump_k × (eph₁ + eph₂)`
 
-with `v` the larger of the two fixes' reported `speed`, `eps` the larger reported speed error (gpsd TPV `eps`, 0 when absent), and Δt the time between the two fixes' epochs: the receiver's own time difference (`fix_dt_s()`, line 198), which is the research's Δt. The host's receipt gap is not it: a reader that stalls and then drains gpsd's queue reads fixes a second apart a millisecond apart, and the first version's bound shrank to the error estimates alone for a car doing 30 m/s. The receiver's difference is used when it is positive and at most 30 s (`GNSS_BACKLOG_MAX_MS`) past the host's elapsed time (the larger of its monotonic and wall clocks', so a suspend counts); otherwise the monotonic gap, so a receiver clock stepped by an hour cannot stretch the bound over a position jump made with it. It fires when the great-circle distance (`gps_distance_m()`) exceeds the bound.
+with `v` the larger of the two fixes' reported `speed`, `eps` the larger reported speed error (gpsd TPV `eps`, 0 when absent), and Δt the time between the two fixes' epochs: the receiver's own time difference (`fix_dt_s()`, line 207), which is the research's Δt. The host's receipt gap is not it: a reader that stalls and then drains gpsd's queue reads fixes a second apart a millisecond apart, and the first version's bound shrank to the error estimates alone for a car doing 30 m/s. The receiver's difference is used when it is positive and at most 30 s (`GNSS_BACKLOG_MAX_MS`) past the host's elapsed time (the larger of its monotonic and wall clocks', so a suspend counts); otherwise the monotonic gap, so a receiver clock stepped by an hour cannot stretch the bound over a position jump made with it. It fires when the great-circle distance (`gps_distance_m()`) exceeds the bound.
 
 - **Not judged**: a pair whose second fix is a reacquisition (the first positioned fix since start, after a mode 0/1 TPV, or after a lost source), and a pair where either fix has no `eph` - no error estimate, no bound, no claim.
 - **Key** `gnsspos`. **Severity** WARN. **Detail**: distance, Δt, the bound, the speed and eps used, both eph values and k, and "a spoofed position, multipath or a receiver fault look alike here". No `match_ip`.

@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-08 (#186: `ADSB_EMERGENCY`, `src/alerts/rules_adsb.c`). 2026-11-03 (#173: a detail carries only what moves with the evidence; per-rule fixes listed under *Incident lifecycle*). 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
+**Last updated**: 2026-11-09 (#182: `GNSS_TIME_JUMP` late-read guard). 2026-11-08 (#186: `ADSB_EMERGENCY`, `src/alerts/rules_adsb.c`). 2026-11-03 (#173: a detail carries only what moves with the evidence; per-rule fixes listed under *Incident lifecycle*). 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
 **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
@@ -688,7 +688,7 @@ is the conservative one.
 |---|---|---|---|
 | `GNSS_JAMMING` | WARN, CRIT when the fix is lost | Mobile T1464 | the tracked satellites' median C/N0 collapsing at once (≥ 10 dB under the 60 s before a 10 s window, satellites still listed and the list not down 2, the used set down 2 or the fix gone; ss-0 rows are not tracked and do not count), or the u-blox `jamInd` ≥ 128 held 30 s |
 | `GNSS_SPOOF_SUSPECT` | LOW on two heuristics, WARN on three, never CRIT | — | two of: used C/N0 too high on ≥ 4 satellites, used C/N0 uniform (sd < 1 dB over ≥ 6) and high, a reacquisition with a position or time jump — within 300 s |
-| `GNSS_TIME_JUMP` | WARN | — | the receiver's time stepping ≥ 1000 ms against the host's monotonic clock from the last accepted fix, held on the next fix; not a queued read after a stall, not a suspend |
+| `GNSS_TIME_JUMP` | WARN | — | the receiver's time stepping ≥ 1000 ms against the host's monotonic clock from the last accepted fix, held on the next fix; not a queued read after a stall, not a late read by a starved reader (#182), not a suspend |
 | `GNSS_POSITION_JUMP` | WARN | — | consecutive fixes farther apart than (speed + eps) × Δt + 3 × (eph₁ + eph₂), Δt the receiver's epoch spacing |
 
 **`GNSS_JAMMING` takes Mobile T1464** (owner ruling 2026-11-03), the
@@ -713,7 +713,8 @@ the window, so a sky falling over minutes moves it a decibel or two; a
 dip that keeps the solution (foliage) does not fire; an empty sky is
 the antenna gone, not this. `GNSS_TIME_JUMP` takes the host's own wall
 step out (an NTP step or `date -s` moves the clock offset and never
-fires it), passes over a step that does not hold on the next fix, and
+fires it), passes over a step that does not hold on the next fix and a
+fix read late by a starved reader (#182), and
 does not judge the first fix after a start or a loss, a leap second (a
 whole-second step with a `leapseconds` change, or at UTC midnight) or a
 1024-week rollover. `GNSS_POSITION_JUMP` puts the reported speed in the

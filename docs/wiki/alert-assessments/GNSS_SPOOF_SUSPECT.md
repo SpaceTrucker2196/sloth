@@ -1,7 +1,7 @@
 ---
 type: GNSS_SPOOF_SUSPECT
 technique: ""
-rule_file: src/alerts/rules_gnss.c:610 rule_gnss_spoof_suspect() (bound and benign-step helpers at lines 239 and 155; tune rows in src/tune.c, gnss.spoof_*)
+rule_file: src/alerts/rules_gnss.c:712 rule_gnss_spoof_suspect() (bound and benign-step helpers at lines 302 and 164; tune rows in src/tune.c, gnss.spoof_*)
 count_semantics: per poll tick while at least two of the three heuristics have each been seen within gnss.spoof_window_s - fire() bumps count every poll (>= 4/s) in that state, so a single sighting of two heuristics keeps the incident asserted for up to the window (300 s) afterwards; one increment is one poll. One incident per receiver (key `gnssspoof`)
 severity_assessment: agree - LOW on two heuristics, WARN on three, never CRIT: the research calls every heuristic weak alone and says nothing short of cryptographic authentication stops a careful spoofer, so the rule reports a suspicion
 false_positive_risk: medium - a GPS repeater (DHS 2017's unintentional spoofing) can satisfy heuristics 1 and 2 together, an amplified antenna heuristic 1, a cold start or USB re-enumeration heuristic 3; requiring two in one window and gating heuristic 2 on a high mean keep the common single causes out
@@ -12,7 +12,7 @@ researched: 2026-11-03
 ---
 ## What the rule checks
 
-`rule_gnss_spoof_suspect()` (src/alerts/rules_gnss.c:610) keeps, per heuristic, the monotonic time it was last seen and the figures it was seen with, and fires while at least two were seen within `gnss.spoof_window_s`. The sky is evaluated only when it is younger than `GNSS_LIVE_MS` (5 s). Only satellites **in the solution** with a C/N0 count: a spoofer must be in the fix to move it.
+`rule_gnss_spoof_suspect()` (src/alerts/rules_gnss.c:712) keeps, per heuristic, the monotonic time it was last seen and the figures it was seen with, and fires while at least two were seen within `gnss.spoof_window_s`. The sky is evaluated only when it is younger than `GNSS_LIVE_MS` (5 s). Only satellites **in the solution** with a C/N0 count: a spoofer must be in the fix to move it.
 
 - **Heuristic 1, absolute C/N0 too high**: at least `gnss.spoof_high_sats` used satellites at or above `gnss.spoof_cn0_high_db`.
 - **Heuristic 2, uniform and high**: over at least `gnss.spoof_min_sats` used satellites, the standard deviation of C/N0 under `gnss.spoof_cn0_sd_db` with the mean at or above `gnss.spoof_cn0_mean_db`.

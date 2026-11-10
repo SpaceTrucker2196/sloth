@@ -678,7 +678,10 @@ static void test_time_jump_not_replayed_after_clear(void) {
 }
 
 /* A receiver whose clock steps back 5 s at the ordinary cadence: the
- * queued-read skip below must not swallow a backward step. */
+ * queued-read skip below must not swallow a backward step, nor the
+ * late-read guard (#182), whose host-side sum counts only pairs where
+ * the receiver kept its fix interval. Seen red, with every firing case
+ * here, when that interval test was dropped (every pair's gap summed). */
 static void test_time_jump_backward_step_fires(void) {
     begin();
     fixopt_t o = nominal_fix();
@@ -699,8 +702,8 @@ static void test_time_jump_backward_step_fires(void) {
  * stream is on time again after them. The first draft fired on this (+1998 ms
  * "held"): it measured the pair after an outlier from the fix before
  * it, which was itself an outlier. Seen red on the rule's first draft, and here
- * with both the queued-read skip and the next-fix hold removed (either
- * one alone keeps it quiet). */
+ * with the queued-read skip, the next-fix hold and the late-read guard
+ * (#182) all removed; any one of them alone keeps it quiet. */
 static void test_time_jump_reader_stall_does_not_fire(void) {
     begin();
     fixopt_t o = nominal_fix();
@@ -718,8 +721,10 @@ static void test_time_jump_reader_stall_does_not_fire(void) {
 /* The same drain under gnss.time_jump_ms=3000 after a six-second stall:
  * the queued fixes step back toward the anchor by 999 ms each, under
  * half the threshold, so the next-fix hold reads the first of them as a
- * held -5000 ms step. Only the queued-read skip tells them apart. Seen
- * red with the queued-read skip removed (and on the rule's first draft). */
+ * held -5000 ms step. The queued-read skip tells them apart, and since
+ * #182 so does the late-read guard (the stall's long gap is summed from
+ * the anchor). Seen red with both removed (and on the rule's first
+ * draft); either alone keeps it quiet. */
 static void test_time_jump_backlog_under_a_raised_threshold_does_not_fire(void) {
     begin();
     ASSERT_EQ(tune_set("gnss.time_jump_ms=3000", NULL, 0), 0);
@@ -730,6 +735,91 @@ static void test_time_jump_backlog_under_a_raised_threshold_does_not_fire(void) 
     fixes(5, &o);
     evaluate();
     ASSERT_EQ(find_type(ALERT_TYPE_GNSS_TIME_JUMP), -1);
+    end();
+}
+
+/* A reader starved by a loaded host (#182): from one fix on, every TPV
+ * is read 1.5 s after its epoch, for six fixes, and then the reader
+ * catches up - the first queued fix a millisecond after the last late
+ * one, the next half a second later, on time after that. Every late
+ * read is a second after the one before it, so the queued-read test
+ * passes them all, and against the anchor each is a -1500 ms step that
+ * holds on the next; the recovery is a +1500 ms one that holds too.
+ * Neither the onset nor the recovery may fire. Seen red with the
+ * late-read guard in rule_gnss_time_jump() removed; the queued-read
+ * skip and the hold alone do not catch it. */
+static void test_time_jump_sustained_reader_lag_does_not_fire(void) {
+    begin();
+    fixopt_t o = nominal_fix();
+    fixes(10, &o);
+    fix_read(&o, 2500, 1000);           /* falls 1.5 s behind */
+    for (int k = 0; k < 5; k++) fix_read(&o, 1000, 1000);
+    fix_read(&o, 1, 1000);              /* catches up: 0.5 s late */
+    fix_read(&o, 500, 1000);            /* on time */
+    fixes(5, &o);
+    evaluate();
+    ASSERT_EQ(find_type(ALERT_TYPE_GNSS_TIME_JUMP), -1);
+    end();
+}
+
+/* The same lag at onset only, judged tick by tick as it arrives, so no
+ * evaluation sees the catch-up first. Seen red with the late-read guard
+ * removed. */
+static void test_time_jump_reader_lag_onset_judged_live_does_not_fire(void) {
+    begin();
+    fixopt_t o = nominal_fix();
+    fixes(10, &o);
+    evaluate();
+    fix_read(&o, 2500, 1000);
+    evaluate();
+    for (int k = 0; k < 4; k++) {
+        fix_read(&o, 1000, 1000);
+        evaluate();
+    }
+    ASSERT_EQ(find_type(ALERT_TYPE_GNSS_TIME_JUMP), -1);
+    end();
+}
+
+/* A real step during ordinary 1 Hz reads, with the late-read guard in
+ * place: the forward and backward steps fire (as in
+ * test_time_jump_fires / _backward_step_fires) and the detail carries
+ * both gaps, so an operator can tell a step (reads 1000 ms apart,
+ * receiver off the interval) from a late read (reads past it). */
+static void test_time_jump_detail_carries_both_gaps(void) {
+    begin();
+    fixopt_t o = nominal_fix();
+    fixes(10, &o);
+    g_rx -= 3000;
+    fixes(2, &o);
+    evaluate();
+    int i = find_type(ALERT_TYPE_GNSS_TIME_JUMP);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT(strstr(g_s.alerts[i].detail, "stepped -3000 ms") != NULL);
+        ASSERT(strstr(g_s.alerts[i].detail,
+                      "reads 1000 ms apart, receiver times -2000 ms apart, "
+                      "fix interval 1000 ms") != NULL);
+    }
+    end();
+}
+
+/* A reader that falls 1.5 s behind and stays there: after
+ * GNSS_LATE_REBASE_MS (30 s) the lateness is the new normal and a real
+ * +5000 ms step at that cadence fires. Without the re-anchor the rule
+ * would never judge again. Seen red with the re-anchor (set_anchor()
+ * in the late branch) removed. */
+static void test_time_jump_standing_lag_is_rebased(void) {
+    begin();
+    fixopt_t o = nominal_fix();
+    fixes(10, &o);
+    fix_read(&o, 2500, 1000);
+    for (int k = 0; k < 35; k++) fix_read(&o, 1000, 1000);
+    evaluate();
+    ASSERT_EQ(find_type(ALERT_TYPE_GNSS_TIME_JUMP), -1);
+    fix_read(&o, 1000, 6000);           /* the receiver steps +5 s */
+    fix_read(&o, 1000, 1000);
+    evaluate();
+    ASSERT(find_type(ALERT_TYPE_GNSS_TIME_JUMP) >= 0);
     end();
 }
 
@@ -1156,6 +1246,10 @@ void run_gnss_rules_tests(void) {
     RUN_TEST(test_time_jump_reader_stall_does_not_fire);
     RUN_TEST(test_time_jump_backlog_under_a_raised_threshold_does_not_fire);
     RUN_TEST(test_time_jump_host_suspend_does_not_fire);
+    RUN_TEST(test_time_jump_sustained_reader_lag_does_not_fire);
+    RUN_TEST(test_time_jump_reader_lag_onset_judged_live_does_not_fire);
+    RUN_TEST(test_time_jump_detail_carries_both_gaps);
+    RUN_TEST(test_time_jump_standing_lag_is_rebased);
     RUN_TEST(test_pos_jump_fires);
     RUN_TEST(test_pos_jump_moving_vehicle_does_not_fire);
     RUN_TEST(test_pos_jump_cold_start_not_judged);

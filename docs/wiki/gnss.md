@@ -32,7 +32,7 @@ GST, `gpsd_time_parse()`, the sky / fix state, `gps_gnss_*_sig()`),
 `tests/test_gnss_view.c`, `tests/test_db.c` (v9 → v10),
 `web/tests/test_gnss.c`.
 
-**Last updated**: 2026-11-06 (`/api/gnss` gains `loc`, the sensor's own position from `sensor_health`'s `loc_*`, GPS else `--location`, for the Radar view's centre); 2026-11-05 (slothweb names each satellite: the RINEX identifier and, from the IGS satellite metadata compiled in, the vehicle - name, NORAD and COSPAR numbers, SVN, block, launch, plane and slot - at the record's time; the sky plot draws each satellite's trail from `gnss_sightings`, `/api/gnss/tracks`). 2026-11-05 (slothweb's "satellites seen" history over `gnss_sightings`, `/api/gnss/seen` and `/api/gnss/sat`, and a satellite's C/N0 and elevation over a window). 2026-11-03 (the four GNSS rules replace the hooks section; the history carries the monotonic clock, `eps`, `leapseconds` and `reacq`). 2026-11-02 (verify: `GPSD_MAX_LINE` 10240 so a full multi-GNSS SKY fits; a fractional `mode` is no fix; slothweb shows any offset sloth records). 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
+**Last updated**: 2026-11-09 (#182: `GNSS_TIME_JUMP` does not judge or anchor on a fix read late, the queued read's mirror; its detail carries both gaps and the fix interval). 2026-11-06 (`/api/gnss` gains `loc`, the sensor's own position from `sensor_health`'s `loc_*`, GPS else `--location`, for the Radar view's centre); 2026-11-05 (slothweb names each satellite: the RINEX identifier and, from the IGS satellite metadata compiled in, the vehicle - name, NORAD and COSPAR numbers, SVN, block, launch, plane and slot - at the record's time; the sky plot draws each satellite's trail from `gnss_sightings`, `/api/gnss/tracks`). 2026-11-05 (slothweb's "satellites seen" history over `gnss_sightings`, `/api/gnss/seen` and `/api/gnss/sat`, and a satellite's C/N0 and elevation over a window). 2026-11-03 (the four GNSS rules replace the hooks section; the history carries the monotonic clock, `eps`, `leapseconds` and `reacq`). 2026-11-02 (verify: `GPSD_MAX_LINE` 10240 so a full multi-GNSS SKY fits; a fractional `mode` is no fix; slothweb shows any offset sloth records). 2026-11-02 (review: `jam` sticky across the TPVs gpsd omits it from; the clock-offset band held with hysteresis; the used count signed as a band in `gnss_fix` and `gnss_sky`; `el` / `az` carried with flags and absent from the records rather than -1; an empty `satellites` set empties the sky and the view says so; the `[#]` cursor follows the satellite across a re-sort; the TUI's cursor, the DataTable and the fix-ring walk in slothweb; what a set satellite writes, and the accepted band-edge case, stated); 2026-11-02 (first version).
 
 ## What is read
 
@@ -288,7 +288,7 @@ are the twelve `gnss.*` knobs ([[cli-reference]]).
 |---|---|---|---|
 | `GNSS_JAMMING` | WARN; CRIT when the fix is lost | Mobile T1464 | the 300 s series: the newest point's median C/N0 over the tracked satellites (ss > 0) against the 60 s before a 10 s window, with the used set falling and the sky still listed at its size; or `jam` held high for 30 s |
 | `GNSS_SPOOF_SUSPECT` | LOW on two heuristics, WARN on three | — | the sky (used C/N0 too high; uniform and high) and the fix ring (a reacquisition with a jump), two within 300 s |
-| `GNSS_TIME_JUMP` | WARN | — | the fix ring: the receiver's time against the host's monotonic clock, from the last accepted fix, held on the next; a fix read from a queue or that did not hold is never the reference |
+| `GNSS_TIME_JUMP` | WARN | — | the fix ring: the receiver's time against the host's monotonic clock, from the last accepted fix, held on the next; a fix read from a queue, read late (#182) or that did not hold is never the reference |
 | `GNSS_POSITION_JUMP` | WARN | — | the fix ring: distance against (speed + eps) × Δt + 3 × (eph₁ + eph₂), Δt the receiver's epoch spacing |
 
 **What the history carries for them** (`gnss_hist_t`, now in
@@ -310,8 +310,15 @@ monotonic receipt time. A host clock step therefore moves
 TPV. A reader that stalls (the TUI stopped with Ctrl-Z, a loaded Pi)
 and then drains what gpsd queued reads fixes a second apart in the
 receiver's time a millisecond apart; a host suspend stops the monotonic
-clock while the receiver's keeps going. `GNSS_TIME_JUMP` therefore
-skips a fix read from a queue and never measures from one, and takes a
+clock while the receiver's keeps going. A starved reader (a loaded
+host) can also read every fix late by the same amount for a while,
+each a second after the last; only the read where it fell behind
+shows a long gap. `GNSS_TIME_JUMP` therefore skips a fix read from a
+queue and never measures from one; skips, likewise, a fix read late
+(#182: summed from its reference over the reads where the receiver
+kept its fix interval, the host's gaps ran more than 250 ms past the
+receiver's), re-anchoring unjudged on a lateness that stands 30 s so a
+permanently slower reader does not blind it; and takes a
 suspend (the receiver's and the host's wall clocks moving past the
 monotonic one together) as a reacquisition; `GNSS_POSITION_JUMP` takes
 Δt from the receiver's own time.

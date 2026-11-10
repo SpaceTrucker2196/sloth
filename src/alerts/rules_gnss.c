@@ -67,6 +67,12 @@
  * host's elapsed time and still be taken as their epoch spacing: a
  * reader seconds behind, not a receiver clock stepped by minutes. */
 #define GNSS_BACKLOG_MAX_MS   30000
+/* How long a read lateness may stand before the rule takes it as the
+ * reader's new normal and re-anchors on it (#182): without this a
+ * reader late by a steady 300 ms forever would leave GNSS_TIME_JUMP
+ * never judging again. The GNSS_BACKLOG_MAX_MS figure, a reader
+ * seconds behind; a judgement, no source gives one. */
+#define GNSS_LATE_REBASE_MS   30000
 
 /* What the rules remember between ticks. Fix pairs are judged once:
  * each rule keeps the TPV count of the newest fix it has judged. A fix
@@ -82,6 +88,9 @@ static struct {
      * ring may have moved past it. */
     int           has_anchor;
     gnss_fix_pt_t anchor;
+    /* Host monotonic ms of the first fix of the current run read late
+     * against the anchor (read_lateness()), 0 when none is running. */
+    uint64_t      late_mono;
     /* GNSS_JAMMING: the baseline a collapse was measured against, held
      * while the mean stays down so a standing jam does not resolve the
      * moment its own collapse ages into the baseline. */
@@ -214,6 +223,60 @@ static int read_from_queue(const gnss_fix_pt_t *b, const gnss_fix_pt_t *c) {
     long long rx = c->rx_time_ms - b->rx_time_ms;
     long long md = (long long)(c->mono_ms - b->mono_ms);
     return md + GNSS_BACKLOG_MS < rx;
+}
+
+/* The receiver's fix interval, ms: the median of its own time between
+ * consecutive fixes in the ring, 0 with fewer than two pairs. The
+ * receiver's epochs are what sloth's reads cannot move, so this is the
+ * cadence a read's gap is held against; the median, because a step or
+ * a dropped epoch is one pair. */
+static long long fix_interval_ms(const gnss_hist_t *h) {
+    long long v[GNSS_FIX_HIST];
+    int n = 0;
+    for (int i = 1; i < h->fix_n; i++) {
+        const gnss_fix_pt_t *p = fix_at(h, i - 1), *x = fix_at(h, i);
+        if (!p->has_rx_time || !x->has_rx_time) continue;
+        long long rd = x->rx_time_ms - p->rx_time_ms;
+        if (rd <= 0) continue;
+        int j = n++;
+        while (j > 0 && v[j - 1] > rd) { v[j] = v[j - 1]; j--; }
+        v[j] = rd;
+    }
+    return n >= 2 ? v[n / 2] : 0;
+}
+
+/* How late b was read against the anchor a, ms (#182), into *late: over
+ * each pair of consecutive reads from a to b on which the receiver kept
+ * its fix interval iv (within tol), the host's gap past the receiver's.
+ * There the receiver says one epoch passed and any difference is the
+ * reader's: a starved reader late by 1.5 s shows it once, on the read
+ * where it fell behind, and every read after it is as late until a
+ * short gap catches it up. A pair off the interval is the receiver's
+ * own spacing moving - a step, GNSS_TIME_JUMP's business - and adds
+ * nothing, which is what keeps a real step at the ordinary cadence
+ * judged: its host gap is the interval. tol is half the threshold, so
+ * a step of at least the threshold always moves its pair off the
+ * interval. Negative when the reads ran short of the receiver's, which
+ * is the anchor having been the late one. 0 returned when a is no
+ * longer in the ring, so there is nothing to sum. */
+static int read_lateness(const gnss_hist_t *h, int bi, const gnss_fix_pt_t *a,
+                         long long iv, long long tol, long long *late) {
+    int j = bi;
+    while (j > 0 && fix_at(h, j - 1)->seq > a->seq) j--;
+    if (j == 0 || fix_at(h, j - 1)->seq != a->seq) return 0;
+    long long sum = 0;
+    const gnss_fix_pt_t *p = a;
+    for (; j <= bi; j++) {
+        const gnss_fix_pt_t *x = fix_at(h, j);
+        if (iv > 0 && time_pair_ok(p, x)) {
+            long long rd = x->rx_time_ms - p->rx_time_ms;
+            long long md = (long long)(x->mono_ms - p->mono_ms);
+            if (llabs_(rd - iv) <= tol) sum += md - rd;
+        }
+        p = x;
+    }
+    *late = sum;
+    return 1;
 }
 
 /* The host suspended between a and b: the receiver's clock and the
@@ -437,10 +500,29 @@ void rule_gnss_jamming(const sloth_state_t *s, time_t now) {
  *     is not judged: after a stall the reader drains a second of epochs
  *     per millisecond, each late by what is left of the stall, and at a
  *     raised threshold their 1 s steps back are under the hold's half;
- *   - neither kind becomes the anchor, so each fix after a run of them
- *     is measured from the last good one. The first draft measured the
- *     pair after an outlier from the fix before it, itself an outlier
- *     in a drained queue, and fired on a four-second Ctrl-Z.
+ *   - a fix read late (read_lateness(), #182: on the reads since the
+ *     anchor where the receiver kept its fix interval, the host's gaps
+ *     ran more than GNSS_BACKLOG_MS past the receiver's) is not judged.
+ *     This is the queued read's mirror, and it is needed because a
+ *     reader late by a steady amount on every fix passes the queue test
+ *     (each next fix is no further on in receiver time than in host
+ *     time) and the hold then confirms the lag instead of rejecting it:
+ *     a starved reader 1.5 s behind read as a held -1500 ms step, and
+ *     its recovery as a held +1500 ms one. The lateness is summed from
+ *     the anchor, not taken from the last pair, because only the read
+ *     where the reader fell behind shows a long gap; the reads after it
+ *     are as late and a second apart. A real step at the ordinary
+ *     cadence is untouched: its host gap is the interval and its
+ *     receiver gap is off it by at least the threshold, past the half
+ *     threshold the sum allows. So the hold now only ever sees a fix
+ *     read on time against an anchor read on time. A lateness that
+ *     stands GNSS_LATE_REBASE_MS is re-anchored on, unjudged, so a
+ *     reader permanently slower does not blind the rule; a real step
+ *     inside such a run is absorbed with it;
+ *   - none of these becomes the anchor, so each fix after a run of
+ *     them is measured from the last good one. The first draft measured
+ *     the pair after an outlier from the fix before it, itself an
+ *     outlier in a drained queue, and fired on a four-second Ctrl-Z.
  * A host suspend stops CLOCK_MONOTONIC and neither the receiver's clock
  * nor the host's wall clock: both move past it together
  * (host_suspended()), and that fix is a reacquisition, not a jump.
@@ -461,11 +543,13 @@ void rule_gnss_jamming(const sloth_state_t *s, time_t now) {
 static void set_anchor(const gnss_fix_pt_t *p) {
     g_gnss.anchor = *p;
     g_gnss.has_anchor = 1;
+    g_gnss.late_mono = 0;
 }
 
 void rule_gnss_time_jump(const sloth_state_t *s, time_t now) {
     const gnss_hist_t *h = s->gnss_hist ? s->gnss_hist : &g_empty;
     const long long thr = (long long)tune_val(TUNE_GNSS_TIME_JUMP_MS);
+    const long long iv = fix_interval_ms(h);
     for (int i = 0; i < h->fix_n; i++) {
         const gnss_fix_pt_t *b = fix_at(h, i);
         if (b->seq <= g_gnss.time_seq) continue;
@@ -478,6 +562,21 @@ void rule_gnss_time_jump(const sloth_state_t *s, time_t now) {
             g_gnss.time_seq = b->seq;
             continue;
         }
+        /* A late read (#182): neither judged nor the anchor, like a
+         * queued one. A lateness standing GNSS_LATE_REBASE_MS, or one
+         * whose anchor has left the ring, is the reader's new normal:
+         * re-anchor on it unjudged rather than go blind. */
+        long long late = 0;
+        int have_late = read_lateness(h, i, a, iv, thr / 2, &late);
+        if (!have_late && g_gnss.late_mono) late = GNSS_BACKLOG_MS + 1;
+        if (llabs_(late) > GNSS_BACKLOG_MS) {
+            g_gnss.time_seq = b->seq;
+            if (!g_gnss.late_mono) g_gnss.late_mono = b->mono_ms;
+            if (!have_late || b->mono_ms >= g_gnss.late_mono + GNSS_LATE_REBASE_MS)
+                set_anchor(b);
+            continue;
+        }
+        g_gnss.late_mono = 0;
         long long step = rx_step(a, b);
         if (llabs_(step) < thr || time_step_benign(a, b, step) ||
             host_suspended(a, b, step, thr)) {
@@ -498,13 +597,16 @@ void rule_gnss_time_jump(const sloth_state_t *s, time_t now) {
         akey_begin(&ak, key, sizeof(key), "gnsstime");
         if (!akey_end(&ak)[0]) return;
         long long hs = host_step(a, b);
+        long long read_gap = (long long)(b->mono_ms - a->mono_ms);
+        long long rx_gap = b->rx_time_ms - a->rx_time_ms;
         char detail[ALERT_DETAIL_LEN];
         snprintf(detail, sizeof(detail),
                  "receiver time stepped %+lld ms against the host's monotonic "
-                 "clock between fixes read %.1f s apart, held on the next fix; "
+                 "clock, held on the next fix; reads %lld ms apart, receiver "
+                 "times %lld ms apart, fix interval %lld ms; "
                  "clock offset %+lld -> %+lld ms, host clock step %+lld ms; "
                  "leap %d -> %d, not a leap second or week rollover",
-                 step, mono_dt_s(a, b),
+                 step, read_gap, rx_gap, iv,
                  a->has_time_off ? a->time_off_ms : 0,
                  b->has_time_off ? b->time_off_ms : 0, hs, a->leap, b->leap);
         set_anchor(b);

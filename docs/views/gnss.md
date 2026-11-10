@@ -107,8 +107,8 @@ here when one fires.
   row's signal bar drop together?
 - **Time jump** (`GNSS_TIME_JUMP`, WARN): the receiver's time stepping
   by a second or more against sloth's monotonic clock and staying
-  there; a host clock step, a suspend and a reader draining a queue
-  after a stall do not count. Here: the header's clock offset.
+  there; a host clock step, a suspend, a reader draining a queue
+  after a stall and a reader running late (#182) do not count. Here: the header's clock offset.
 - **Position jump** (`GNSS_POSITION_JUMP`, WARN): consecutive fixes
   further apart than the reported speed and accuracy allow over the
   time between their epochs (the receiver's own clock, not when sloth
