@@ -317,3 +317,4 @@
 | 68aea3a | 2026-11-07T12:45:52Z | claude-opus-5 | 142 | 45289 | 10862236 | 115738 | 7.7214 | #186 — tell cppcheck that sorted() fills the ADS-B view's index array (fixes red |
 | 39999f7 | 2026-11-09T12:40:45Z | claude-opus-5 | 456 | 206533 | 38170420 | 665527 | 30.9061 | #187 — KARMA IE-fingerprint collapse (S4): judge it in the alert, not only the s |
 | dac89dd | 2026-11-09T14:13:44Z | claude-opus-5 | 284 | 135585 | 12350852 | 2291111 | 32.4776 | release v1.8.6 |
+| 308aa87 | 2026-11-10T12:29:03Z | claude-opus-5 | 336 | 110232 | 27612356 | 504457 | 21.6082 | #185 item 3 — SLOTH_JSONL_VERSION reported as jsonl_version in sensor_health |
