@@ -258,7 +258,22 @@ static long long fix_interval_ms(const gnss_hist_t *h) {
  * a step of at least the threshold always moves its pair off the
  * interval. Negative when the reads ran short of the receiver's, which
  * is the anchor having been the late one. 0 returned when a is no
- * longer in the ring, so there is nothing to sum. */
+ * longer in the ring, so there is nothing to sum.
+ *
+ * A pair adds only what the host's gap says on its own: the lesser of
+ * its gap past the receiver's and past the interval, and nothing when
+ * the two disagree in sign. A late read moves the host's gap off both
+ * alike. A receiver whose own gap is nudged inside tol while its fixes
+ * are read on time moves only the first, and the first draft summed
+ * that: one 300 ms nudge from a spoofer read as lateness, left the rule
+ * blind, and a step after it was re-anchored on unjudged 30 s later.
+ * A receiver that re-times its output with the nudge moves both gaps
+ * together and leaves the difference at 0.
+ *
+ * Not caught: a reader that falls behind on the very pair where the
+ * receiver also dropped an epoch. That pair is off the interval, and
+ * must be, since at 1 Hz a dropped epoch and a whole-second forward
+ * step have the same receiver gap. */
 static int read_lateness(const gnss_hist_t *h, int bi, const gnss_fix_pt_t *a,
                          long long iv, long long tol, long long *late) {
     int j = bi;
@@ -271,7 +286,10 @@ static int read_lateness(const gnss_hist_t *h, int bi, const gnss_fix_pt_t *a,
         if (iv > 0 && time_pair_ok(p, x)) {
             long long rd = x->rx_time_ms - p->rx_time_ms;
             long long md = (long long)(x->mono_ms - p->mono_ms);
-            if (llabs_(rd - iv) <= tol) sum += md - rd;
+            long long by_rx = md - rd, by_iv = md - iv;
+            if (llabs_(rd - iv) <= tol && by_rx && by_iv &&
+                (by_rx > 0) == (by_iv > 0))
+                sum += llabs_(by_rx) < llabs_(by_iv) ? by_rx : by_iv;
         }
         p = x;
     }

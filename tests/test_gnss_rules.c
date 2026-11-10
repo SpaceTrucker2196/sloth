@@ -680,8 +680,10 @@ static void test_time_jump_not_replayed_after_clear(void) {
 /* A receiver whose clock steps back 5 s at the ordinary cadence: the
  * queued-read skip below must not swallow a backward step, nor the
  * late-read guard (#182), whose host-side sum counts only pairs where
- * the receiver kept its fix interval. Seen red, with every firing case
- * here, when that interval test was dropped (every pair's gap summed). */
+ * the receiver kept its fix interval, and from each only what the
+ * host's gap shows past the interval. Seen red, with every firing case
+ * here, with both dropped (every pair's md - rd summed); either one
+ * alone keeps an on-time step judged. */
 static void test_time_jump_backward_step_fires(void) {
     begin();
     fixopt_t o = nominal_fix();
@@ -821,6 +823,37 @@ static void test_time_jump_standing_lag_is_rebased(void) {
     evaluate();
     ASSERT(find_type(ALERT_TYPE_GNSS_TIME_JUMP) >= 0);
     end();
+}
+
+/* A receiver nudged 300 ms on one epoch while sloth reads every fix on
+ * time, then stepped 5 s, held for 40 fixes and judged tick by tick
+ * (#182 review). Pre-guard the nudge was under the threshold and became
+ * the anchor, and the step fired. The guard's first draft summed the
+ * receiver's short gap as reader lateness: the rule went blind, and 30 s
+ * on re-anchored on the stepped clock unjudged. The host's gap alone
+ * decides lateness now. Both directions; seen red with the pair's
+ * contribution reverted to md - rd. */
+static void nudge_then_step(long long nudge, long long step) {
+    begin();
+    fixopt_t o = nominal_fix();
+    fixes(10, &o);
+    evaluate();
+    fix_read(&o, 1000, 1000 + nudge);
+    evaluate();
+    fixes(3, &o);
+    evaluate();
+    g_rx += step;
+    for (int k = 0; k < 40; k++) {
+        fix(&o);
+        evaluate();
+    }
+    ASSERT(find_type(ALERT_TYPE_GNSS_TIME_JUMP) >= 0);
+    end();
+}
+
+static void test_time_jump_receiver_nudge_does_not_blind_the_rule(void) {
+    nudge_then_step(-300, 5000);
+    nudge_then_step(300, -5000);
 }
 
 /* The host suspended for a minute: CLOCK_MONOTONIC stopped, the
@@ -1250,6 +1283,7 @@ void run_gnss_rules_tests(void) {
     RUN_TEST(test_time_jump_reader_lag_onset_judged_live_does_not_fire);
     RUN_TEST(test_time_jump_detail_carries_both_gaps);
     RUN_TEST(test_time_jump_standing_lag_is_rebased);
+    RUN_TEST(test_time_jump_receiver_nudge_does_not_blind_the_rule);
     RUN_TEST(test_pos_jump_fires);
     RUN_TEST(test_pos_jump_moving_vehicle_does_not_fire);
     RUN_TEST(test_pos_jump_cold_start_not_judged);

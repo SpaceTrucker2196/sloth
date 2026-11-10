@@ -1,7 +1,7 @@
 ---
 type: GNSS_JAMMING
 technique: T1464
-rule_file: src/alerts/rules_gnss.c:369 rule_gnss_jamming() (constants at lines 34-75; tracked median in src/gps.c sky_tracked_median_x10(); tune rows in src/tune.c, gnss.jam_*)
+rule_file: src/alerts/rules_gnss.c:387 rule_gnss_jamming() (constants at lines 34-75; tracked median in src/gps.c sky_tracked_median_x10(); tune rows in src/tune.c, gnss.jam_*)
 count_semantics: per poll tick while either path holds - fire() bumps count every poll (>= 4/s at POLL_MS 250) in which the newest one-second point shows the collapse (held against its onset baseline while the median stays down) or a jamInd run at or above gnss.jam_ind spans gnss.jam_hold_s; one increment is one poll, not one satellite or one TPV. One incident per receiver (key `gnssjam`), resolving through the engine's quiet period once neither path holds
 severity_assessment: agree - WARN for a collapse or a held indicator, CRIT only when the fix is lost (mode 0/1), the research's end state of a jam and the point where every position stamp sloth writes is gone; never a claim of intent, which DHS 2017 says the observable cannot carry
 false_positive_risk: medium - the C/N0 path cannot tell jamming from attenuation (an antenna fault, a cable, a tunnel or garage for a moving sensor), which the research states; the slow-decline, keeps-its-solution, shrinking-list, partial-obstruction and empty-sky cases are excluded and tested. The median is over tracked satellites only (ss > 0), so satellites lost behind an obstruction do not dilute it. The indicator path is uncalibrated (the vendor says calibrate in place), so a receiver whose ordinary jamInd sits high would fire it

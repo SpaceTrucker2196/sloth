@@ -6769,3 +6769,14 @@ d15049, during a rebuild/test gate, per-step detail not retained) was
 confirmed; the host was then silent from 2026-11-05 to 2026-11-09
 over 39,783 fixes. TOFF parsing (the issue's item 1) not done. Updated
 [[gnss]], [[alerts]], `alert-assessments/GNSS_TIME_JUMP.md`.
+
+Review, same day: the first draft summed each pair's host gap past the
+receiver's, which a receiver can move. One 300 ms nudge of the
+receiver's time with its fixes read on time read as lateness, blinded
+the rule, and a 5 s step after it was re-anchored on unjudged 30 s
+later; before the guard the nudge became the anchor and the step fired.
+A pair now adds only what the host's gap shows on its own (the lesser of
+its excess over the receiver's gap and over the interval, nothing when
+they disagree in sign). Residual, stated in the rule and the assessment:
+a reader falling behind on the very pair where the receiver dropped an
+epoch is not seen, since at 1 Hz that gap is a whole-second step's.

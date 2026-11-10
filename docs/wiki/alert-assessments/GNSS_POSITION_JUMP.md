@@ -1,7 +1,7 @@
 ---
 type: GNSS_POSITION_JUMP
 technique: ""
-rule_file: src/alerts/rules_gnss.c:639 rule_gnss_position_jump() (the bound in pos_bound_m() at line 302, Δt in fix_dt_s() at line 207; tune row gnss.pos_jump_k in src/tune.c)
+rule_file: src/alerts/rules_gnss.c:657 rule_gnss_position_jump() (the bound in pos_bound_m() at line 320, Δt in fix_dt_s() at line 207; tune row gnss.pos_jump_k in src/tune.c)
 count_semantics: per offending fix pair - each consecutive pair of positioned fixes is judged once, and a pair past the bound is one fire(); a receiver that jumps away and back is two fires in one incident. One incident per receiver (key `gnsspos`). Not per poll
 severity_assessment: agree - WARN: an unphysical move is the observable the spoofing literature names, and is not CRIT because multipath and receiver faults produce it too
 false_positive_risk: medium - multipath at a fixed site can exceed the error estimate (the research says the estimate "may not cover it"), and gpsd's eph has no stated confidence level; the speed term, the eph multiplier and the reacquisition skip keep a moving vehicle and a cold start out

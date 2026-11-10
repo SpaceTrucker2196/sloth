@@ -317,7 +317,8 @@ shows a long gap. `GNSS_TIME_JUMP` therefore skips a fix read from a
 queue and never measures from one; skips, likewise, a fix read late
 (#182: summed from its reference over the reads where the receiver
 kept its fix interval, the host's gaps ran more than 250 ms past the
-receiver's), re-anchoring unjudged on a lateness that stands 30 s so a
+receiver's and past the interval alike, so a receiver nudged inside the
+interval while read on time is not taken for a late reader), re-anchoring unjudged on a lateness that stands 30 s so a
 permanently slower reader does not blind it; and takes a
 suspend (the receiver's and the host's wall clocks moving past the
 monotonic one together) as a reacquisition; `GNSS_POSITION_JUMP` takes
