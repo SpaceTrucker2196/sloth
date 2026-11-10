@@ -1149,6 +1149,31 @@ static void test_schema_doc_lists_every_memory_field(void) {
     free(doc);
 }
 
+/* #185 item 3: the contract page names the `jsonl_version` field and the
+ * value this build emits. Both, because each catches a different drift:
+ * the field name going undocumented, and a bump that moves the macro and
+ * leaves the page describing the previous contract. A consumer reads the
+ * page to know what a version means, so the page being behind the
+ * emitter is the one failure mode the version field cannot survive. */
+static void test_schema_doc_states_the_jsonl_contract_version(void) {
+    char *doc = slurp_text("docs/wiki/jsonl-schema.md");
+    ASSERT(doc != NULL);
+    if (!doc) return;
+    int named = strstr(doc, "`jsonl_version`") != NULL;
+    if (!named)
+        fprintf(stderr, "    jsonl-schema.md does not document "
+                        "`jsonl_version`\n");
+    ASSERT(named);
+    char want[64];
+    snprintf(want, sizeof(want), "`%s`", SLOTH_JSONL_VERSION);
+    int versioned = strstr(doc, want) != NULL;
+    if (!versioned)
+        fprintf(stderr, "    jsonl-schema.md does not name the current "
+                        "contract version %s\n", want);
+    ASSERT(versioned);
+    free(doc);
+}
+
 void run_sensor_health_tests(void) {
     TEST_SUITE("sensor health — table-overflow tally (#91 slice 3)");
     RUN_TEST(test_tally_starts_at_zero);
@@ -1200,6 +1225,7 @@ void run_sensor_health_tests(void) {
     RUN_TEST(test_mem_sample_follows_glibc_malloc);
     RUN_TEST(test_mem_sample_reports_resolver_counter);
     RUN_TEST(test_schema_doc_lists_every_memory_field);
+    RUN_TEST(test_schema_doc_states_the_jsonl_contract_version);
 
     sh_evict_reset();   /* leave the tally clean for later suites */
     sh_parse_fault_reset();

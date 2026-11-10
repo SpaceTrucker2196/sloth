@@ -2098,8 +2098,17 @@ static void test_sensor_health_loc_members(void) {
     b = read_all(g_jl);
     ASSERT(b != NULL);
     if (b) {
+        /* The anchor after `loc_src` is the field that follows it, not
+         * the record's `}`. The `}` was right until #185 item 3 appended
+         * `jsonl_version` last, unconditionally; the premise "the
+         * position block ends the record" expired, while what these
+         * assertions are actually for — the order, the adjacency and the
+         * five-decimal formatting — did not. Naming the successor pins
+         * more than `}` did, since it also fails if something is
+         * inserted between. */
         ASSERT(strstr(b, "\"gps_err\":\"\",\"loc_lat\":10.00000,\"loc_lon\":20.00000,"
-                         "\"loc_alt_m\":30.0,\"loc_src\":\"fixed\"}") != NULL);
+                         "\"loc_alt_m\":30.0,\"loc_src\":\"fixed\","
+                         "\"jsonl_version\":") != NULL);
     }
     unlink(g_jl);
     /* --gps with a fix: gps, after gnss_jam; ten TPVs wandering inside
@@ -2128,8 +2137,10 @@ static void test_sensor_health_loc_members(void) {
     b = read_all(g_jl);
     ASSERT(b != NULL);
     if (b) {
+        /* Successor anchor, for the reason given above. */
         ASSERT(strstr(b, ",\"loc_lat\":51.50000,\"loc_lon\":-0.10000,"
-                         "\"loc_alt_m\":12.0,\"loc_src\":\"gps\"}") != NULL);
+                         "\"loc_alt_m\":12.0,\"loc_src\":\"gps\","
+                         "\"jsonl_version\":") != NULL);
         ASSERT(strstr(b, "\"loc_lat\":51.51100,") != NULL);
         ASSERT_EQ(count_of(b, "\"type\":\"sensor_health\""), 2);
     }
@@ -2169,8 +2180,11 @@ static void test_sensor_health_gnss_block(void) {
     b = read_all(g_jl);
     ASSERT(b != NULL);
     if (b) {
+        /* Successor anchor, as in test_sensor_health_loc_members: the
+         * GNSS tail is no longer the end of the record (#185 item 3). */
         ASSERT(strstr(b, "\"gps_err\":\"\",\"gnss_sats_in_view\":4,\"gnss_sats_used\":2,"
-                         "\"gnss_cn0_mean\":31.3,\"gnss_jam\":-1}") != NULL);
+                         "\"gnss_cn0_mean\":31.3,\"gnss_jam\":-1,"
+                         "\"jsonl_version\":") != NULL);
         ASSERT(strstr(b, "gnss_time_offset_ms") == NULL);
     }
     unlink(g_jl);

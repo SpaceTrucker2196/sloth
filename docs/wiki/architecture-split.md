@@ -20,7 +20,8 @@ section naming every place the grep and #184 §2 disagree.
 `web/data/vendors/COVERAGE.md`, `packaging/systemd/`, issues #184 and
 #185, owner rulings on #184 of 2026-11-04.
 
-**Last updated**: 2026-11-05
+**Last updated**: 2026-11-10 (C1 shipped: `SLOTH_JSONL_VERSION` exists and
+`sensor_health` reports it, #185 item 3), 2026-11-05
 
 This page is a measurement, not a plan. It is Stage 0's first deliverable
 (#185 item 1) and it exists so that Stages 1 to 4 cut along lines someone
@@ -331,7 +332,7 @@ differs from #184's text has it marked, and §5 says why it matters.
 
 | # | #184 says | Found | Owner |
 |---|---|---|---|
-| C1 | JSONL over `--data-socket`; gains `SLOTH_JSONL_VERSION` reported in `sensor_health` | Confirmed as the starting state. `jsonl_emit_sensor_health()` is `src/jsonl.c:2104`, the record opens at `:2339`. No `SLOTH_JSONL_VERSION` exists yet (`include/sloth.h` carries `SLOTH_VERSION "1.8.5"` at line 22); it is #185 item 3, not this slice | sloth |
+| C1 | JSONL over `--data-socket`; gains `SLOTH_JSONL_VERSION` reported in `sensor_health` | **Done** (#185 item 3, 2026-11-10). `SLOTH_JSONL_VERSION` is `"1.0.0"` in `include/sloth.h`, beside `SLOTH_VERSION`; `jsonl_emit_sensor_health()` writes it as the record's last field, `jsonl_version`. Bump rule in [jsonl-schema.md](jsonl-schema.md) *Versioning*. When this row was first written the macro did not exist and this cell said so | sloth |
 | C2 | `sloth.db` schema, `DB_SCHEMA_VERSION` 11, `src/db_schema.c` as DDL text; slothweb's tests link `src/db_schema.c` | Confirmed. `src/db.h:103` is `#define DB_SCHEMA_VERSION 11`. `src/db_schema.c` reaches `web/` twice, not once: `WEB_TEST_SRCS` (727) **and** `WEB_DEMO_DB_SRCS` (861), the demo generator. There is no `--print-schema` flag today | sloth |
 | C3 | slothweb links `WEB_CORE_SRCS`: `dot11_frame.c`, `radiotap.c`, `wifi_freq.c`, `dns_wire.c`, `dot11_ie.c`, `rsn_ie.c`, … | **Differs.** `WEB_CORE_SRCS` (717–718) is exactly six files and `rsn_ie.c` is **not** among them: `dot11_frame.c`, `radiotap.c`, `wifi_freq.c`, `dns_wire.c`, `dot11_ie.c`, `netstr.c`. `rsn_ie.c` reaches `web/` only through `WEB_TEST_SRCS` (728), with five other `src/` files `libsloth-wire` would also have to carry or dash would have to replace | sloth |
 | C4 | one generator reads `sloth_alerts.def`, `docs/views/alerts.md`, `docs/wiki/alerts.md`, `docs/wiki/alert-remediation.md`, `research/**` and `docs/wiki/alert-assessments/*.md` | **Differs.** Two generators. `web/tools/alertkb.c` takes the first four plus `research/` (`Makefile:814–815`); `web/tools/alertasm.c` takes `include/sloth_alerts.def` and `docs/wiki/alert-assessments/` (`:846`). The bundle has two consumers to satisfy, and `web-test` also passes `-DWEB_ASMGEN=` so a test can run the second generator (`:886`) | sloth |

@@ -2752,6 +2752,17 @@ void jsonl_emit_sensor_health(const sloth_state_t *s) {
         kv_int(buf, LINEBUF, &off, "aprs_read_errors", (long long)a->read_errors);
         kv_str(buf, LINEBUF, &off, "aprs_err", a->err);
     }
+    /* The record stream's own contract version (ADR 0007, #185 item 3),
+     * appended after the flag-gated blocks above so every earlier field
+     * keeps its name and position — a version field is worth less than
+     * the positional stability of the fields a consumer already reads.
+     *
+     * Outside `sig` for the reason `libs` is: a compile-time constant can
+     * never be the change worth a line. It rides every line instead,
+     * which is the point — a consumer holding one record can tell which
+     * contract it was written under without a second source, and the
+     * sensor that wrote it may be long gone. */
+    kv_str(buf, LINEBUF, &off, "jsonl_version", SLOTH_JSONL_VERSION);
     end_obj(buf, LINEBUF, &off);
     emit_line(buf);
 }

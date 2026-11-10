@@ -1827,6 +1827,77 @@ static void test_emit_sensor_health_carries_loaded_libs(void) {
     if (end) ASSERT_EQ(end[1], '\n');
 }
 
+/* #185 item 3 / ADR 0007: the record stream's own contract version,
+ * `jsonl_version`, on every sensor_health line. Compared against the
+ * macro rather than a literal — a literal here would have to be edited
+ * on every bump, and the thing worth pinning is that the emitter reports
+ * the macro the build was compiled with, not what some test remembers.
+ * The macro's own shape is pinned separately below.
+ *
+ * Appended LAST, after the blocks that are present only under a flag, so
+ * every earlier field keeps its name and position. That is checked in
+ * both shapes: the minimal record, and one carrying the --adsb and
+ * --aprs blocks, which are the fields it now has to follow.
+ *
+ * Not in the change-only signature, for `libs`' reason: it is a
+ * compile-time constant, so it could never be the change worth a line.
+ * That is deliberately NOT asserted — no input can move a constant, so
+ * a "does not churn" test would pass whatever the signature contained,
+ * which is the kind of green agents/AGENTS.md says to refuse. */
+static void test_emit_sensor_health_reports_the_jsonl_contract_version(void) {
+    open_fresh();
+    sh_evict_reset();
+    sh_parse_fault_reset();
+    sloth_state_t s; seed_health(&s);
+    char want[64], tail[80];
+    snprintf(want, sizeof(want), "\"jsonl_version\":\"%s\"", SLOTH_JSONL_VERSION);
+    /* The `}` follows the value's closing quote with nothing between,
+     * and the line ends there: the field is last, not merely present. */
+    snprintf(tail, sizeof(tail), "%s}\n", want);
+
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    char *body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT(contains(body, want));
+    ASSERT(contains(body, tail));
+
+    /* Same with the two optional trailing blocks present. Both are
+     * `configured` gates, so this also moves the signature and the
+     * change-only writer emits a second line. */
+    open_fresh();
+    s.adsb.configured = 1;
+    s.aprs.configured = 1;
+    jsonl_emit_sensor_health(&s);
+    jsonl_close();
+    body = slurp(tmp_path);
+    ASSERT(body != NULL);
+    if (!body) return;
+    ASSERT(contains(body, "\"aprs_err\":"));
+    ASSERT(contains(body, tail));
+    const char *aprs = strstr(body, "\"aprs_err\":");
+    const char *ver  = strstr(body, "\"jsonl_version\":");
+    ASSERT(aprs && ver);
+    if (aprs && ver) ASSERT(aprs < ver);
+}
+
+/* The macro's form IS the bump rule, so it is pinned rather than
+ * trusted: three numeric components and nothing after them, and MAJOR
+ * 1. MINOR and PATCH are free to move — that is a slice's call under
+ * agents/dark-factory.md §4.1 — while MAJOR is a non-additive break and
+ * therefore a stop-and-ask (§4.3). This assertion is what that
+ * stop-and-ask has to come through. */
+static void test_jsonl_contract_version_is_a_major_1_semver(void) {
+    int maj = -1, min = -1, pat = -1;
+    char rest[8] = "x";
+    int n = sscanf(SLOTH_JSONL_VERSION, "%d.%d.%d%7s", &maj, &min, &pat, rest);
+    ASSERT_EQ(n, 3);                 /* exactly three components, no tail */
+    ASSERT_EQ(maj, 1);
+    ASSERT_GE(min, 0);
+    ASSERT_GE(pat, 0);
+}
+
 /* …and, like the flow rings, the tally must NOT move the change-only
  * signature. Under mdk4 mode m or a beacon flood it climbs on every
  * frame; signing over it would emit this record every tick forever
@@ -2870,6 +2941,8 @@ void run_jsonl_tests(void) {
     RUN_TEST(test_sensor_health_flow_ring_churn_does_not_re_emit);
     RUN_TEST(test_emit_sensor_health_parse_faults);
     RUN_TEST(test_emit_sensor_health_carries_loaded_libs);
+    RUN_TEST(test_emit_sensor_health_reports_the_jsonl_contract_version);
+    RUN_TEST(test_jsonl_contract_version_is_a_major_1_semver);
     RUN_TEST(test_sensor_health_parse_faults_do_not_re_emit);
     RUN_TEST(test_emit_sensor_health_memory_fields);
     RUN_TEST(test_sensor_health_memory_does_not_re_emit);

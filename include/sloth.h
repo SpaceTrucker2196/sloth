@@ -21,6 +21,33 @@
 
 #define SLOTH_VERSION "1.8.6"
 
+/* The JSONL record stream's own contract version, reported as
+ * `jsonl_version` on every `sensor_health` line (ADR 0007, #185 item 3).
+ * Kept apart from SLOTH_VERSION deliberately: that one is this tree's
+ * semantic version, this one is what a consumer codes against, and they
+ * move for different reasons — a release that changes no record leaves
+ * this alone, and a record change between releases does not wait for a
+ * tag.
+ *
+ * MAJOR.MINOR.PATCH. The bump rule, in prose and with the reasoning, is
+ * docs/wiki/jsonl-schema.md "Versioning":
+ *   MINOR  a record type or a field was added, or an optional field
+ *          became present in a case where it was absent before —
+ *          additive, which is the only kind of change MISSION.md §4
+ *          item 3 permits here;
+ *   PATCH  an emitted value was corrected with no field added, renamed
+ *          or removed;
+ *   MAJOR  anything non-additive. That is an external-contract break,
+ *          so it is a stop-and-ask (agents/dark-factory.md §4.3) and
+ *          never a slice's own call; tests/test_jsonl.c pins the 1 so a
+ *          MAJOR bump has to argue with a test.
+ *
+ * 1.0.0 is where the DECLARED contract starts, not a claim about the
+ * stream's history — the records predate the field by many releases. A
+ * `sensor_health` line with no `jsonl_version` is from a stream written
+ * before this version and says nothing more than that. */
+#define SLOTH_JSONL_VERSION "1.0.0"
+
 #define MAX_IFACES   32
 #define MAX_CONNS    1024
 #define MAX_WIFI_APS 64
