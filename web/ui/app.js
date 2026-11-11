@@ -1864,18 +1864,27 @@
   }
 
   // The hour-of-week heatmap (§8.4, §8.12), G4 (glyph.js): 7 rows from
-  // Monday, 24 columns, the heat ramp by the cell's mean against the
-  // largest, a warming cell (fewer than warm_n samples) plain --rule
-  // with no hatch (F3, R8), the current cell outlined in --signal. The
-  // grid's own words are its caption (heatCaption): how many cells are
-  // warming and the top of the ramp.
+  // Monday, 24 columns, every cell drawn (owner ruling 2026-11-11). A
+  // fed cell is the heat ramp by its mean against the largest fed mean;
+  // a warming cell (fewer than warm_n samples) is plain --rule with no
+  // hatch (F3, R8), and one with a sample carries its value so far as a
+  // --tui-dim bar on that tile; the current cell is outlined in
+  // --signal. bl is /api/baseline's answer or the drawer's week member:
+  // {cells, warm_n, now_cell} and share (or scale "share_of_weeks") for
+  // a map of shares. No cells is R5's dash with no labels round it. The
+  // grid's own words are its caption (heatCaption).
   var DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   function heatmap(c, bl) {
     var T = theme();
     var cells = bl && bl.cells || null;
     var warm = bl && num(bl.warm_n) ? bl.warm_n : 3;
+    var share = !!bl && (bl.share === true || bl.scale === "share_of_weeks");
     glyph.paint(c, glyph.g4(cells, { w: c.clientWidth, h: c.clientHeight, x0: 32, y0: 14,
-                                     warm: warm, now: bl ? bl.now_cell : -1 }), tok);
+                                     warm: warm, now: bl ? bl.now_cell : -1,
+                                     share: share }), tok);
+    var st = glyph.g4Stats(cells, warm);
+    st.share = share;
+    if (!cells) return st;
     var dpr = window.devicePixelRatio || 1;
     var g = c.getContext("2d");
     var cw = (c.width - 32 * dpr) / 24, ch = (c.height - 14 * dpr) / 7;
@@ -1885,15 +1894,26 @@
     for (var d = 0; d < 7; d++) g.fillText(DAYS[d], 0, 14 * dpr + ch * (d + 0.5));
     g.textBaseline = "top";
     for (var h = 0; h < 24; h += 3) g.fillText(String(h), 32 * dpr + cw * h, 0);
-    return glyph.g4Stats(cells, warm);
+    return st;
   }
   // R9 for a G4: the source, the window, the scale (the ramp's top, in
-  // the series' unit), n (the samples behind the fed cells), and the
-  // warming count whenever a cell is still warming.
+  // the series' unit, while a cell is fed; the provisional bar's scale
+  // while a cell is provisional: 0 to 1 for shares, else 0 to the
+  // largest mean of any sampled cell), n (the samples behind the fed
+  // and the provisional cells), and while a cell is warming the counts:
+  // warming, fed, provisional, not yet observed. No cells: `no data`.
   function heatCaption(source, st, unit) {
-    return glyph.caption({ source: source, window: "hour of week",
-      scale: st.fed ? "ramp 0 to " + fmt(st.max) + (unit ? " " + unit : "") : "",
-      n: st.n, state: st.warming ? "warming: " + st.warming + " of 168 cells" : "" });
+    if (st.none)
+      return glyph.caption({ source: source, window: "hour of week", n: 0, state: "no data" });
+    var u = unit ? " " + unit : "", sc = [];
+    if (st.fed) sc.push("ramp 0 to " + fmt(st.max) + u);
+    if (st.prov)
+      sc.push("provisional bar in thirds of 0 to " + (st.share ? "1" : fmt(st.top) + u));
+    return glyph.caption({ source: source, window: "hour of week", scale: sc.join(", "),
+      n: st.n + st.pn,
+      state: st.warming ? "warming: " + st.warming + " of 168 cells, fed: " + st.fed +
+             ", provisional: " + st.prov + " (under " + st.warm + " weeks), not yet observed: " +
+             st.unseen : "" });
   }
 
   // ── Overview (§8.4) ───────────────────────────────────────────────
@@ -3049,7 +3069,8 @@
         cells = [];
         for (var c = 0; c < 168; c++) cells.push([wk.cells[c][0], 0, wk.cells[c][1]]);
       }
-      var ws = heatmap($("dr-week"), { cells: cells, warm_n: wk.warm_n, now_cell: wk.now_cell });
+      var ws = heatmap($("dr-week"), { cells: cells, warm_n: wk.warm_n, now_cell: wk.now_cell,
+                                       share: true });
       set("dr-week-note", heatCaption("dev.present, share of weeks present", ws, ""));
       var an = $("dr-anoms");
       while (an.firstChild) an.removeChild(an.firstChild);

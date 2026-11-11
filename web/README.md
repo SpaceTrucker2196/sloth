@@ -2126,7 +2126,10 @@ The Overview (§8.4) gains a throughput tile (the `iface.rx_rate` of the
 interface sloth reported most recently) with its 24 h sparkline over the
 baseline band, an open-anomalies tile, "now vs normal" (the same series,
 larger), the hour-of-week heatmap of that series (7 x 24, the heat ramp
-by mean, warming cells plain grey (no hatch, #171 V1), the current cell outlined in
+by mean, warming cells plain grey (no hatch, #171 V1; since the ruling
+of 2026-11-11 every cell is drawn and a warming cell with a sample
+carries a `--tui-dim` bar for its value so far, [below](#the-glyph-layer)),
+the current cell outlined in
 `--signal`), and the five highest-scoring open episodes. Since #171
 V1 every tile has its own series and band (the glyph layer, below):
 the hour-of-week grid's warming cells are plain grey, counted in its
@@ -4703,7 +4706,12 @@ slothweb change checks the change against the list
   line and the number beside it, always. Min and max dots only where
   there is no band, because then the range is the only reference.
 - **R8. No hatching, no gradients, no shadows, no rounded bars.** The
-  chrome's radius applies to panels, not to data.
+  chrome's radius applies to panels, not to data. "Not known yet" is
+  never a texture either: G4's warming cell is a plain `--rule` tile,
+  and where it has a sample its value so far is a solid `--tui-dim` bar
+  on that tile (owner ruling of 2026-11-11, recorded at the head of
+  `docs/web-visual-spec.md`; it amends the earlier rule that a warming
+  cell makes no claim), never a hatch and never a heat token.
 - **R9. The caption line.** Every panel ends with one `--muted` line:
   source, window, tier, scale, n, in that order, and then the state
   when there is one (`glyph.caption()`). Example: `ap.rssi
@@ -4893,14 +4901,44 @@ own.
   its strip.
   A failed read hides the canvas and says `series unavailable`, never a
   blank; the card's caption follows R9 and ends `shaded: the episode`.
-- **Hour-of-week grid (F3, G4).** A warming cell is one plain `--rule`
-  `warm` mark, no hatch (R8); a grid with every cell warming draws only
-  the now `outline` and its caption. The caption (`heatCaption()`) is
-  R9's: the source, `hour of week`, the top of the ramp (`ramp 0 to
-  1.2k B/s`, the largest fed mean; a warming cell's mean never sets
-  it), n (the samples behind the fed cells), and `warming: n of 168
-  cells` while any is. The warming cell's meaning is that count in
-  words (R10), so the grey itself is not asked to reach 3:1.
+- **Hour-of-week grid (F3, G4; owner ruling of 2026-11-11).** Every
+  one of the 168 cells is drawn whenever there are cells: a grid that
+  is all warming is 168 tiles under the now `outline`, which is always
+  the last mark. (Until the ruling an all-warming grid drew the outline
+  alone, which for the first three weeks of a store, and for any device
+  under three weeks old, was one tile on an empty canvas.) A fed cell
+  (n >= `warm_n`, 3) is one `cell` mark on the heat ramp by its mean
+  against the largest fed mean, as before, and only a fed cell takes
+  the ramp. A warming cell is one plain `--rule` `warm` mark, no hatch
+  (R8). A warming cell with a sample (1 <= n < `warm_n`; a cell gets
+  one sample a week) is **provisional**: on its tile it carries a
+  `prov` bar in one ink, `--tui-dim`, the tile's width, rising from
+  the tile's floor: 1 px for a mean of 0 (observed, absent so far), a
+  quarter, a half or three quarters of the tile for a mean in the
+  first, second or last third of the provisional scale (under 0.34,
+  under 0.67, the rest). The bar never fills the tile, so in one grey
+  a provisional cell is a part-inked tile and a fed cell a whole one
+  (R10). **The provisional scale** is fixed at 0 to 1 for a map of
+  shares (the drawer's presence map passes `share`; `/api/baseline`'s
+  `"scale":"share_of_weeks"` says the same), where n = 1 gives the
+  floor or three quarters and n = 2 the floor, the half or three
+  quarters; for a mean of a gauge or a counter (the Overview's
+  `iface.rx_rate`) it is 0 to the largest mean of any sampled cell,
+  fed or provisional. A cell with n = 0 is the tile alone, so
+  "observed, absent so far" and "not yet observed" are different
+  marks. No cells at all (`"cells":null`, a pair never fed) is R5's
+  `no data`: the `--faint` dash alone, no outline, no day or hour
+  labels. The caption (`heatCaption()`) is R9's: the source, `hour of
+  week`, the scale (`ramp 0 to 1.2k B/s`, the largest fed mean, while
+  a cell is fed; `provisional bar in thirds of 0 to 1`, or `... of 0
+  to 25.0k B/s`, while a cell is provisional), n (the samples behind
+  the fed and the provisional cells), and while any cell is warming
+  `warming: 156 of 168 cells, fed: 12, provisional: 84 (under 3
+  weeks), not yet observed: 72`; with no cells, `no data`. The
+  meanings are those words (R10): the bar on its tile reads 2.75:1 in
+  the dark theme and 3.37:1 in the light, and against the panel beside
+  it 4.35:1 and 5.07:1 (the graphics table under
+  [Design](#design)).
 - **Small multiples (F6).** One G1 per key over the last hour, every
   cell on one y-scale (`glyph.shared()`, grown and never shrunk on a
   refresh, R11, started again for a new metric, a scope or the toggle)
@@ -5404,7 +5442,14 @@ meaning is carried in words, the caption's `warming: n of 168 cells`
 (R10), so the fill is structure, and a fed cell's lowest heat
 (`--heat-0`) is measured against it below: 2.05:1 in the dark theme,
 under 3:1, which is why the count in words is the carrier and not the
-grey. The dotted row
+grey. A provisional cell's bar (owner ruling of 2026-11-11) is
+`--tui-dim` on that tile: 2.75:1 in the dark theme, 3.37:1 in the
+light, and 4.35:1 and 5.07:1 against the panel at the tile's edge; it
+is told from a fed cell by shape (it never fills the tile) and by the
+caption's count, not by hue alone. `--tui-dim` was chosen over `--data`
+because `--data` at full strength reads 8.70:1 on the tile in the dark
+theme, louder than every fed cell beside it, and the painter has no
+reduced strength for a G4 mark. The dotted row
 rules are under 3:1 on purpose; they separate rows that read without
 them. A closed anomaly card is marked by a dashed edge and the word
 `closed`, never by dimming, so its data keep these ratios.
@@ -5478,6 +5523,8 @@ Graphics (`*` under 3:1):
 | `--rule` | `--bg` | row rules | 1.65 * | 1.34 * |
 | `--rule` | `--panel` | row rules, the warming cell | 1.58 * | 1.51 * |
 | `--heat-0` | `--rule` | a fed cell's lowest heat, beside a warming one | 2.05 * | 3.99 |
+| `--tui-dim` | `--rule` | a provisional cell's bar, on its warming tile | 2.75 * | 3.37 |
+| `--tui-dim` | `--panel` | a provisional cell's bar, against the panel beside the tile | 4.35 | 5.07 |
 
 Chart hues closer than 30 (CIEDE2000) in either theme; under 15 fails the build:
 
@@ -5616,8 +5663,13 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_notes.c` | anomaly triage and the links ([Anomaly triage and links](#anomaly-triage-and-links)): `test_frrs.c`'s alert triage tests again on an anomaly's id, the decision across a reopened store and a re-detected, a later and a forgotten episode, an id collision refused, alert and anomaly rows apart, links from both ends with their guards, a dangling end, the candidates' subject and both window edges, the candidate read on a 30,000-row alerts table, the bundle's `related` sections, the link's write over a socket, and `notes.js` with its functions pinned whole |
 | `test_readme.c` | this file: every message the start-up path can print, scraped from `web/src/`, quoted in Troubleshooting; the Security section's points; every screenshot this file shows present under `docs/assets/slothweb/` and under the size bound |
 | `test_tui_colors.c` | the data colours against the TUI itself ([Design](#design)): `src/tui.c`'s ANSI backend linked in and captured, every byte of an address, an SSID, a host name and an info string compared with the page's colour for it (its functions pinned as served, a C port of them over the served `SLOTH_PALETTE`, the served custom properties); the cross-panel bold and the page's `IP_SRC` bits held to `IP_SRC_*`, an alert counted by its `match_ip` alone; the alert-hot override against `tui_alert_hot_set()` (severity, bold from WARN, the TTL's edge, promotion, the full table) and its TTL and cap against `src/tui.c`; the phosphor, heat, alert-hot and monitor-row pairs; `MON_TYPES` against the record types `src/jsonl.c` emits from the monitor radio |
+<<<<<<< HEAD
 | `test_glyph.c` | the glyph layer's geometry ([the glyph layer](#the-glyph-layer)): a C port of `web/ui/glyph.js` with the JS pinned verbatim out of the served page, so a change on either side fails. The S-meter (2026-11-11): the band table against the path-loss formula, every S boundary on the edge and a hundredth either side, the reading past S9 stepped in tens, both clamps and their count, one reading on three bands, the unknown band's row and label, no reading (the dash and no segment), one reading, the peak-hold ticks and their band, the geometry at 72 by 14, greyscale, the dB-Hz and dBFS faces, the legend's labels and words, the report's character cells, every sm function and every call site pinned whole, and what it replaced gone from the page. For G1, G5 and G6: empty, warming, one point, four points as dots (R6), a gap (R5), in band, out of band (and in again once the band is widened), G1's line graded as `draw_sparkline_at()` grades it (ruling 1), min and max dots only without a band (R7), a scale that grows and never shrinks (R11), the window rule and its words (R4), the caption grammar and the three states in it (R9), the presence cells from the server's hex, the ruler's midnight and now ticks in a shifted zone (F10), the first-seen mark (F15), an anomaly episode's underline clipped to the strip, the bullet's ranges, threshold tick and severity, the count bar's shared scale, and each glyph's list read with every token flattened to one grey (R10); each glyph's TUI form named in the README (R12). Nineteen mutations, each naming the test it reddened. V2: G2's states (the dash, one sample as its dot alone, dots under five, a gap), its fixed −95 to −20 dBm scale and the −67 dBm rule, a reading off the scale clamped and counted, the whisker only when there is one and in order, the four kinds in one grey (R10); G2's words bold only by sloth's `approaching` and naming sloth's band and trend glyph, never a slope of their own; the new mark and G5's first-seen cell (F15); every placement of G2 and G6 and the card's rounded bar gone (R8). The sun (ruling 2026-11-11): a C port of `web/ui/sun.js`, pinned whole as served; rise, set, transit and both civil twilights at five places within 3 min of the U.S. Naval Observatory (London and Sydney at the June solstice, New York in November, the equator at the equinox, Fiji a tenth of a degree off the antimeridian); noon elevations from latitude and declination; polar night and midnight sun at Longyearbyen, twilight all night at Reykjavik, no day at Tromso; a strip present all day at London giving the four tokens in order with counts within a cell of the almanac; no position, a bad one or no window giving the plain strip mark for mark; cells over an hour one ink; the ruler's band under its ticks, its heights in one grey (R10); every G5 caller, the tokens, and the page naming neither geolocation nor a zone. 31 mutations (14 in the port, 15 in the JS and CSS, 2 the build's colour check), each seen red. Sensor time (the second ruling): the ruler's ticks at a UTC-7 sensor's midnights seen from UTC+1, the fallback to the viewer's clock and its words, the words' sunrise and sunset in sensor time against the almanac at New York, the zone's name for whole and part-hour offsets, the page reading the viewer's offset in one place only; 12 more mutations seen red, among them the ticks put back on the viewer's offset |
 | `test_rf.c` | the signal meter's data (`web_rf.h`): `radio`, the band the latest record was heard on, for every channel edge, a 6 GHz channel only by its `channel_source`, `null` with no channel; the hour's window; `web_rollup_trail()` merging closed and open fine buckets per cell, another key's and an earlier bucket left out; an AP's series first, a station's otherwise, the other when the first is empty, and no trail under Local or without a rollup; the member with the beacon's 60 s range or the last cell's samples as the whisker (the beacon's only when it is in the last value's minute) and sloth's band and trend from the FRRS ledger's latest beacon or probe_client; a record's word that is not sloth's, and a range out of order, refused; `WEB_RF_JSON_MAX` holding the longest member |
+=======
+| `test_glyph.c` | the glyph layer's geometry ([the glyph layer](#the-glyph-layer)): a C port of `web/ui/glyph.js` with the JS pinned verbatim out of the served page, so a change on either side fails. For G1, G5 and G6: empty, warming, one point, four points as dots (R6), a gap (R5), in band, out of band (and in again once the band is widened), G1's line graded as `draw_sparkline_at()` grades it (ruling 1), min and max dots only without a band (R7), a scale that grows and never shrinks (R11), the window rule and its words (R4), the caption grammar and the three states in it (R9), the presence cells from the server's hex, the ruler's midnight and now ticks in a shifted zone (F10), the first-seen mark (F15), an anomaly episode's underline clipped to the strip, the bullet's ranges, threshold tick and severity, the count bar's shared scale, and each glyph's list read with every token flattened to one grey (R10); each glyph's TUI form named in the README (R12). Nineteen mutations, each naming the test it reddened. V2: G2's states (the dash, one sample as its dot alone, dots under five, a gap), its fixed −95 to −20 dBm scale and the −67 dBm rule, a reading off the scale clamped and counted, the whisker only when there is one and in order, the four kinds in one grey (R10); G2's words bold only by sloth's `approaching` and naming sloth's band and trend glyph, never a slope of their own; the new mark and G5's first-seen cell (F15); every placement of G2 and G6 and the card's rounded bar gone (R8). The sun (ruling 2026-11-11): a C port of `web/ui/sun.js`, pinned whole as served; rise, set, transit and both civil twilights at five places within 3 min of the U.S. Naval Observatory (London and Sydney at the June solstice, New York in November, the equator at the equinox, Fiji a tenth of a degree off the antimeridian); noon elevations from latitude and declination; polar night and midnight sun at Longyearbyen, twilight all night at Reykjavik, no day at Tromso; a strip present all day at London giving the four tokens in order with counts within a cell of the almanac; no position, a bad one or no window giving the plain strip mark for mark; cells over an hour one ink; the ruler's band under its ticks, its heights in one grey (R10); every G5 caller, the tokens, and the page naming neither geolocation nor a zone. 31 mutations (14 in the port, 15 in the JS and CSS, 2 the build's colour check), each seen red. G4 by the ruling of 2026-11-11: an all-warming grid is 168 plain tiles and the outline last (red with the `st.fed` loop guard put back), no cells is the dash alone, a cell with n = 1 or 2 is a `--tui-dim` bar on its tile and never a heat token (red with the ramp given to it), the bar never the tile's height, a never-sampled cell no bar, the share scale against the largest-mean scale, fed cells as they were, the caption's scales and counts through a port of `heatCaption()` and `fmt()`, and `g4()`, `g4Stats()`, `heatmap()`, `heatCaption()` and both callers pinned whole. 18 mutations (12 in the port, 3 in `glyph.js`, 3 in `app.js`), each seen red |
+| `test_rf.c` | G2's data (`web_rf.h`): the hour's window; `web_rollup_trail()` merging closed and open fine buckets per cell, another key's and an earlier bucket left out; an AP's series first, a station's otherwise, the other when the first is empty, and no trail under Local or without a rollup; the member with the beacon's 60 s range or the last cell's samples as the whisker (the beacon's only when it is in the last value's minute) and sloth's band and trend from the FRRS ledger's latest beacon or probe_client; a record's word that is not sloth's, and a range out of order, refused; `WEB_RF_JSON_MAX` holding the longest member |
+>>>>>>> worktree-agent-ac481dd5dbe5710ef
 | `test_parity.c` | the AKM names (src/rsn_ie.c, linked into the test alone), the downgrade bits (`WPA_DG_*`) and DEAUTH_FLOOD's type held to sloth's own; the BLE view's vocabularies (the PDU, band, trend, glyph and P_tx-source words, the finding kinds, the alert names, the TUI's address-type letters and its legend line) held to `src/` as text |
 | `test_ble.c` | the BLE view ([BLE](#ble)) from hand-built `ble_device`, `ble_alert`, `alert.resolve` and `sensor_health` lines in the emitter's exact shape: two rows for one address heard by two sensors, a heartbeat updating in place (the sticky masks OR-ed, the earlier first_seen kept, the rate from two points), the hostile strings (a control byte escaped and flagged, an over-long name cut back to a code-point boundary, a category that is not sloth's slug dropped and counted, an unknown iface `other`, a bad record kept nowhere), the record's absent values null and an anonymous all-zero address a row, the estimate's four fields with the TUI's cell and description, the LRU at 1025 rows evicting the oldest, the findings (standing, the resolve of the key, the time-out, the day's listing, the key never rendered, a `hid_oui` finding under its address), the `sensor_health` block and its rotation bands; the two metrics only while a Bluetooth source is configured; every route through the table (the sort words and both directions, each refusal a word never echoing the value, the search, paging, HEAD, Monitor and Hybrid serving, Local `out_of_scope` with the query still checked, `/api/live`'s `ble` member and `/api/health`'s counters, the M0 shape without the tables, the BLE incident typed and Monitor's on the Alerts page); the page's lines pinned as served; with SQLite the store round trip through the store thread's flush, a changed row upserted once, the seed on reopen with the name's display form and the estimate, every field of a seeded finding (a flood's fresh count, rate, window and citation, a `hid_oui` finding's address and the drawer's match on it), a resolve on a seeded finding updating its stored row in place, a seeded row's presence strip shifting on with fresh traffic, retention at compaction, a failed write (a trigger aborting it mid-transaction) rolled back whole and its batch written by the next flush, the row caps (the oldest gone, a flagged row kept past newer unflagged ones, counted) and a non-canonical stored address not seeded; every sort word in both directions with an empty key last (`mfr`'s three tiers fixed in either direction); a name cut back to a code-point boundary; `ble.devices` with an Ubertooth alone and `ble.adv_rate` only with the host stream; `/api/live`'s `ble` member with every string at its cut and escaped six-fold; without a store the tables still ingest and serve. Each absence seen red under a named mutation |
 | `test_bledev.c` | the BLE Devices waterfall ([BLE](#ble)): each class rule on hand-built fields (SIG Appearance values, Continuity types, the registry's UUIDs) and each left-out shape landing in Unknown, the first-match order and the table's match numbers, the slugs (never a channel key, the only `bleclass` keys), a class from a record line; the proximity edges against `src/rf_distance.h` and `.c` read in the test; the page's class table and grade pinned against the C ones, the panels inside `v-ble`, no `innerHTML` in the module; the mix engine taking kinds 3 and 4 (an advertiser, anonymous advertising) apart and refusing 5, a sized ring; the class mix fed from `ble_device` lines (a baseline, deltas, a reconnect, a row born while listening, a sampled row, one address on two sensors kept apart); the advertisers gauge once a pass, an address on two sensors once; the one anonymous row sloth can send (the host stream's, its first mfr pair kept, a keyboard's HID bit OR-ed in) credited to Unknown alone as one entry and one advertiser while its fields read Phones then Input, named rows and an Ubertooth's uncredited samples beside it, each class's advertisers, drawn transmitters, reports and drawn frames agreeing, no series under the zero address; the anonymous entry through both routes (one `anonymous` tx entry in `b:unk`, its kind word the one `bledev.js` tests, no proximity row, never nearest, `anonymous_heard`, the strip counting it once) and under a read cut (no slot taken: 256 read); five thousand fresh BLE addresses leaving a Wi-Fi row's high-water mark (and its true delta) in place; both routes from memory (display order, the tx entries named from the tables or by address alone, the strip's facts, every refusal), the proximity rows' order, means and window, a tracker heard before three hundred newer addresses still read and first, each row graded with its announced power (extended header, TX Power Level, else 0 dBm) and nearest by the margin; `now`'s sensor facts; both routes 503 `no_time_series` in either scope and the mix 503 `no_ble_mix`; Local `out_of_scope` with the query checked and a long query a 400; with SQLite the WiFi and BLE mixes in one `chmix` at the same tier and t, each namespace reading only its own, each route drawing only its own, a kind-4 anonymous row read back and drawn, and the file still v7. Each absence seen red under a named mutation |

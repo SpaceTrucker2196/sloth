@@ -211,38 +211,69 @@ var glyph = (function () {
     return { rows: out, by: byz ? "|z|" : "value" };
   }
 
-  // G4, the hour-of-week grid (F3). cells are 168 [mean, sd, n] from
-  // Monday 00:00; a cell with n under warm is warming. opt: {w, h, x0,
-  // y0, warm, now} — x0 and y0 leave room for the labels, now is the
-  // current cell or -1. A fed cell is the heat ramp by its mean against
-  // the largest fed mean; a warming cell is --rule and nothing else
-  // (R8: no hatch). When every cell is warming the grid draws only the
-  // now outline, and the caption says the rest (g4Stats).
+  // G4, the hour-of-week grid (F3; owner ruling 2026-11-11). cells are
+  // 168 [mean, sd, n] from Monday 00:00, or null for no baseline at all;
+  // a cell with n under warm is warming. opt: {w, h, x0, y0, warm, now,
+  // share} — x0 and y0 leave room for the labels, now is the current
+  // cell or -1, share says the means are shares in 0..1. Every cell is
+  // drawn. A fed cell is the heat ramp by its mean against the largest
+  // fed mean, and only a fed cell takes the ramp. A warming cell is the
+  // plain --rule tile (R8: no hatch); one with a sample (1 <= n < warm)
+  // is provisional and carries a prov bar on that tile, in one ink
+  // (--tui-dim), rising from the tile's floor: 1 px for a mean of 0
+  // (observed, absent so far), then a quarter, a half or three quarters
+  // of the tile for a mean in the first, second or last third of the
+  // provisional scale, which is 0..1 for a share and 0 to the largest
+  // mean of any sampled cell otherwise. The bar never fills the tile,
+  // so it is not a fed cell in any grey (R10). A cell never sampled is
+  // the tile alone. No cells is R5's dash and nothing else.
   function g4(cells, opt) {
     var m = [], w = opt.w, h = opt.h, x0 = opt.x0 || 0, y0 = opt.y0 || 0, i;
+    if (!cells) { m.push(dash(w, h)); return m; }
     var cw = (w - x0) / 24, ch = (h - y0) / 7, st = g4Stats(cells, opt.warm);
-    for (i = 0; st.fed && i < 168; i++) {
-      var c = cells && cells[i], x = x0 + cw * (i % 24), y = y0 + ch * Math.floor(i / 24);
-      if (c && c[2] >= st.warm)
+    var top = opt.share ? 1 : st.top;
+    for (i = 0; i < 168; i++) {
+      var c = cells[i], x = x0 + cw * (i % 24), y = y0 + ch * Math.floor(i / 24);
+      if (c && c[2] >= st.warm) {
         m.push(["cell", x + 1, y + 1, cw - 2, ch - 2,
                 heatToken(st.max > 0 ? c[0] / st.max : 0)]);
-      else m.push(["warm", x + 1, y + 1, cw - 2, ch - 2, "--rule"]);
+        continue;
+      }
+      m.push(["warm", x + 1, y + 1, cw - 2, ch - 2, "--rule"]);
+      if (!c || !(c[2] >= 1)) continue;
+      var f = top > 0 ? c[0] / top : 0;
+      var lv = !(f > 0) ? 0 : f < 0.34 ? 1 : f < 0.67 ? 2 : 3;
+      var ph = lv ? (ch - 2) * lv / 4 : 1;
+      m.push(["prov", x + 1, y + ch - 1 - ph, cw - 2, ph, "--tui-dim"]);
     }
     var nc = opt.now;
     if (gnum(nc) && nc >= 0 && nc < 168)
       m.push(["outline", x0 + cw * (nc % 24), y0 + ch * Math.floor(nc / 24), cw, ch, "--signal"]);
     return m;
   }
-  // G4's caption facts: the warming count, the largest fed mean (the
-  // top of the ramp, printed), and the samples behind the fed cells.
+  // G4's caption facts: the warming count and its two parts (prov, the
+  // cells with a sample but under warm, and unseen, the cells with
+  // none), the largest fed mean (the top of the ramp, printed), the
+  // largest mean of any sampled cell (top, the provisional scale of a
+  // map that is not a share), the samples behind the fed cells (n) and
+  // behind the provisional ones (pn), and none for no cells at all.
   function g4Stats(cells, warm) {
-    var o = { warm: gnum(warm) ? warm : 3, warming: 0, fed: 0, max: 0, n: 0 };
+    var o = { warm: gnum(warm) ? warm : 3, warming: 0, fed: 0, max: 0, n: 0,
+              prov: 0, unseen: 0, top: 0, pn: 0, none: !cells };
     for (var i = 0; i < 168; i++) {
       var c = cells && cells[i];
-      if (!c || !(c[2] >= o.warm)) { o.warming++; continue; }
-      o.fed++;
-      o.n += c[2];
-      if (c[0] > o.max) o.max = c[0];
+      if (c && c[2] >= o.warm) {
+        o.fed++;
+        o.n += c[2];
+        if (c[0] > o.max) o.max = c[0];
+        if (c[0] > o.top) o.top = c[0];
+        continue;
+      }
+      o.warming++;
+      if (!c || !(c[2] >= 1)) { o.unseen++; continue; }
+      o.prov++;
+      o.pn += c[2];
+      if (c[0] > o.top) o.top = c[0];
     }
     return o;
   }
