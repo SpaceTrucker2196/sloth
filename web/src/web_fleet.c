@@ -120,7 +120,7 @@ static const char *const M_END[] = {
     "fleet_end", "rows", "wifi", "ble", "ap", "probe", "alert", "verdict",
     "truncated_wifi", "truncated_ble", "truncated_ap", "truncated_probe",
     "truncated_alert", "truncated_verdict", "next_wifi", "next_ap", "next_alert",
-    "next_verdict", "gnss_event", "complete", NULL };
+    "next_verdict", "gnss_event", "gnss_complete", "complete", NULL };
 
 const char *const *const web_fleet_members[] = {
     M_HDR, M_GNSS, M_WIFI, M_BLE, M_AP, M_PROBE, M_ALERT, M_VERDICT, M_END, M_GEV,
@@ -322,6 +322,7 @@ typedef struct {
     web_jrec_t *rec;                 /* the self-check's decoder record */
     const char *own_csv;             /* this site's radios, for own=1 */
     int         gev_n, gev_cut;      /* gnss_event lines (gnss=1) */
+    int         gev_all;             /* every one of the week's was read and sent */
 } xp_t;
 
 static void set_cur(xp_t *x, int k, long long ts, const char *tok) {
@@ -906,9 +907,12 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         if (all && xq.gnss && !c.timed_out && !w.overflow) {
             long long from = now_s - WEB_FG_EVENTS_S;
             if (since > from) from = since;
-            if (web_sdb_gnss_incidents(&c, from, WEB_FLEET_CAP_GNSSEV + 1, xp_gev, &x) < 0 &&
-                w.overflow)
-                fault = 1;
+            int gr = web_sdb_gnss_incidents(&c, from, WEB_FLEET_CAP_GNSSEV + 1, xp_gev, &x);
+            if (gr == -1 && w.overflow) fault = 1;
+            /* Complete only when the read ran to its end: a file before
+             * v11, a read error, the budget or the cap is not "nothing
+             * happened", and the importer takes coverage from this. */
+            x.gev_all = gr >= 0 && !x.gev_cut && !c.timed_out;
         }
         /* A read that ran out of budget is a cut, never an error: what
          * was read before it went out, and the cursor says where. */
@@ -981,6 +985,8 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
     if (xq.gnss && all) {
         jk(&w, M_END, "gnss_event");
         web_jw_int(&w, x.gev_n);
+        jk(&w, M_END, "gnss_complete");
+        web_jw_raw(&w, x.gev_all ? "true" : "false");
     }
     jk(&w, M_END, "complete"); web_jw_raw(&w, "true");
     web_jw_raw(&w, "}\n");
@@ -1600,6 +1606,7 @@ typedef struct {
     long long data, end_rows, counts[WEB_FK_COUNT];
     long long gev;                   /* gnss_event lines (#192 I6) */
     int       has_gev_end;           /* the end line counted them */
+    int       gev_complete;          /* and said they were all of them */
     int       has_gnss;              /* a gnss line, into gs */
     web_fg_sample_t gs;
     int       has_next[WEB_FK_COUNT];
@@ -1696,6 +1703,12 @@ static int check_line(void *ctx, const web_jrec_t *r, long long idx, const char 
             return -1;
         }
         k->has_gev_end = gg == 1;
+        int gc = 0;
+        if (v_bool(r, "gnss_complete", &gc) < 0) {
+            snprintf(k->err, k->errsz, "the end line's gnss_complete is not a boolean: refused");
+            return -1;
+        }
+        k->gev_complete = k->has_gev_end && gc == 1;
         k->seen_end = 1;
         return 0;
     }
@@ -2028,7 +2041,7 @@ static int ingest(web_fleet_t *f, int i, const char *body, size_t len,
                     gs.skew = k.hdr.generated - now_s;
                     gs.fresh = k.has_gnss && gs.gts > 0 && gs.gts <= k.hdr.generated + 5 &&
                                k.hdr.generated - gs.gts <= WEB_FG_FRESH_S;
-                    gs.evok = gs.fresh && k.hdr.sdb_open && k.has_gev_end;
+                    gs.evok = gs.fresh && k.hdr.sdb_open && k.gev_complete;
                     if (gs.has_fix && (gs.mode < 2 || gs.fix_ts <= 0 ||
                                        k.hdr.generated - gs.fix_ts > WEB_FG_FRESH_S))
                         gs.has_fix = 0;

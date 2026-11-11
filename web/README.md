@@ -4108,7 +4108,7 @@ stream's own strict decoder (`web_jsonl.h`) and nothing new:
 | `ble` | slothweb's BLE advertisers heard since: `addr`, `addr_type`, `name`, `class`, `rssi`, times; at most 1,024 |
 | `alert` | the alert keys whose latest incident is in the window: `alert_type`, `ty`, `fingerprint` (FNV-1a of type and title), `title`, `ip`, `sev`, `count`, times; at most 1,000 |
 | `verdict` | each triaged finding's current state decided since: `alert_type`, `addr`, `port`, `alert_first_seen`, `state`, `ts`; at most 1,000 |
-| `fleet_end` (last) | `rows`, the count of each kind, `truncated_<kind>` for each, with `next=1` or a page `next_wifi`, `next_ap`, `next_alert`, `next_verdict` (null, or the cursor after the last row sent of a kind that was cut), with `gnss=1` `gnss_event` (the incident lines sent), `complete: true` |
+| `fleet_end` (last) | `rows`, the count of each kind, `truncated_<kind>` for each, with `next=1` or a page `next_wifi`, `next_ap`, `next_alert`, `next_verdict` (null, or the cursor after the last row sent of a kind that was cut), with `gnss=1` `gnss_event` (the incident lines sent) and `gnss_complete` (true only when the week's incidents were read to the end: false on a sloth.db before v11, a read error or timeout, or the cap; the importer then takes no `ev` coverage from the answer), `complete: true` |
 
 Every member of every line is listed once, in `web_fleet_members[]`:
 the writer names nothing else (an unlisted name fails the answer, 503)
@@ -4268,7 +4268,9 @@ an I5 export refuses it, and the puller asks again with
 `next=1&own=1` and not with `gnss=1` for the hour.
 
 **`/api/fleet/gnss?limit=N`** (#192 I6; GET only, limit 50, 1..200;
-`web/src/web_fleetgnss.h`): GNSS across the sites. `sites`: each
+`web/src/web_fleetgnss.h`): GNSS across the sites. `local`: this site's
+sloth.db (`open`, `none`, `unavailable`, or `no_incidents` for a file
+before v11, which never reads as quiet). `sites`: each
 receiver as its last sample said (`fresh`, `incidents` offered,
 `state`, satellites, `cn0_mean`, `cn0_med` over `tracked`, `jam`,
 `time_offset_ms`, `skew_s`, the `fix` with `eph` and `hdop`), its
@@ -4288,8 +4290,10 @@ clock), and each `JAM_IND` (indicator 128 or more) and `CN0_DROP` (the
 tracked median 10 dB under the site's own hour) a site's samples show:
 `site`, `type`, `class` (interference, spoof, time, position),
 `source`, times, `verdict` (`regional`, `local`, `undetermined`) and the
-sites `with` the same class within 120 s, `quiet` (observed all of it,
-nothing), `stale` (not observed) and `far` (outside
+sites `with` the same class within 120 s, `quiet` (observed from 120 s
+before it to a pull at least 120 s after its end, nothing), `stale`
+(not observed so: an event still running, or not yet pulled past its
+window, has no quiet site) and `far` (outside
 `--peer-gnss-region-km` or with no position). `counts` by verdict over
 the week, and `basis`: each class's sources and which numbers are a
 choice. `/api/fleet/overview` gains `gnss`: the `position` and `time`

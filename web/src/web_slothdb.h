@@ -558,8 +558,10 @@ int  web_sdb_alerts_scan_upto(web_sdb_conn_t *c, long long from, long long to,
  * gnsstime, gnsspos, src/alerts/rules_gnss.c), the key matched in the
  * WHERE only, last_seen at or after from, newest first, at most max:
  * n1 = type, n2 = peak_sev, n3 = count, first_seen, last_seen. The
- * receiver is the host's own, so no capture scope applies. 0 on a file
- * before v11 (no incident rows), the rows read, or -1. */
+ * receiver is the host's own, so no capture scope applies. The rows
+ * read, WEB_SDB_GNSS_NONE on a file before v11 (no incident rows: not
+ * "none happened", which a caller must not read as quiet), or -1. */
+#define WEB_SDB_GNSS_NONE (-2)
 int  web_sdb_gnss_incidents(web_sdb_conn_t *c, long long from, int max,
                             web_sdb_item_fn fn, void *ctx);
 /* Whether c's budget is spent: sets timed_out past its deadline. The

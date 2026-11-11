@@ -12,18 +12,26 @@
  *   coverage  the spans of this site's clock over which the site was
  *             seen observing: `rx` while its receiver summary was fresh
  *             (at most WEB_FG_FRESH_S old: two of the emitter's 300 s
- *             heartbeats and a margin, WEB_GNSS_SAT_TTL_S) and carried
- *             the tracked median (so a C/N0 drop there would show), `ev` while
- *             also its sloth.db was open and its export offered the
- *             GNSS incidents (gnss=1). Samples further apart than the
- *             gap (two pull intervals and 30 s) start a new span.
+ *             heartbeats and a margin, WEB_GNSS_SAT_TTL_S), listed a sky
+ *             and carried the tracked median with the hour of history the
+ *             CN0_DROP test needs (so a C/N0 drop there would show), `ev`
+ *             while its export offered the whole of its GNSS incidents
+ *             (gnss=1, sloth.db open, read complete). Samples further
+ *             apart than the gap (two pull intervals and 30 s) start a new
+ *             span, and so does any sample that was not observing: a
+ *             span is never bridged across a sample that said "not".
+ *   sample events  JAM_IND and CN0_DROP (below), flagged as each sample
+ *             is added and kept as runs for the week (WEB_FG_SEV), so a
+ *             restart or the ring's eight hours do not drop a peer's
+ *             event while its coverage stays.
  *   reference at most one fix a WEB_FG_REF_EVERY_S, the last WEB_FG_REF
  *             of them (a week): the site's reference position is their
  *             coordinate-wise median, used from WEB_FG_REF_MIN on.
  *
- * Both are kept in slothweb.db's meta table ("fleet.gnss.<site>"), so a
- * restart keeps them; no schema step. The ring is not: the C/N0 and
- * clock references rebuild within WEB_FG_HIST_S.
+ * All three are kept in slothweb.db's meta table ("fleet.gnss.<site>"), so
+ * a restart keeps them; no schema step. The ring is not: the C/N0 and
+ * clock references rebuild within WEB_FG_HIST_S, and until then no
+ * sample is `rx` coverage.
  *
  * The events, each in this site's clock (a peer's less its skew):
  *   - sloth's own GNSS incidents (alert_incidents, v11), this site's read
@@ -42,13 +50,19 @@
  *   regional      one of them has an event of the same class whose span
  *                 comes within the window (WEB_FG_WINDOW_S) of [a, b];
  *   local         none has, and at least one was covered over
- *                 [a - window, min(b + window, now)];
+ *                 [a - window, b + window];
  *   undetermined  none of them was covered (stale, unreachable, an older
- *                 export with no incidents, or no site within the region).
- * Covered: one span holds the interval, its end widened by the gap (the
- * newest sample stands for the pull interval after it). An alert class
- * needs `ev` coverage; interference takes `rx` coverage as well when the
- * event lasted at least the gap, so a peer sample fell inside it.
+ *                 export with no incidents, an event still within the
+ *                 window of its end or not yet pulled past it, or no site
+ *                 within the region).
+ * Covered: one span holds the interval, its last sample at or after
+ * b + window, so the answer that sample came from already held anything
+ * the site saw in the window; nothing stands for the time after a
+ * sample. An incident (an alert class) is quiet on `ev` coverage, or for
+ * interference on `rx` coverage when it lasted at least the gap, so a
+ * peer sample fell inside it; a sample event (JAM_IND, CN0_DROP) only on
+ * the latter: a peer's sloth not firing its rule says nothing of a drop
+ * under the rule's test.
  *
  * The baseline (two or more static sites): each site's displacement from
  * its reference against k x eph (WEB_FG_K, the GNSS_POSITION_JUMP rule's
@@ -56,7 +70,8 @@
  * distance between the references, bounded by k x (eph_a + eph_b): "for a
  * fixed sensor, zero, so the bound collapses to the two error estimates"
  * (research/gnss/time-and-position-integrity.md). A site past its own
- * bound is named; no eph, no bound, no claim. Time: each site's clock
+ * bound is named; no eph (or an eph of 0, which no receiver means), no
+ * bound, no claim. Time: each site's clock
  * offset against its median of the hour before, a step at or above
  * WEB_FG_TIME_STEP_MS (the GNSS_TIME_JUMP rule's default, from the gpsd
  * HOWTO's 200 ms floor and "anything below roughly a second is noise"),
@@ -70,6 +85,7 @@
 #define WEB_FG_SITES         (WEB_FLEET_PEERS + 1)    /* [0] is this site */
 #define WEB_FG_RING          480        /* 8 h at the default pull */
 #define WEB_FG_SPANS         64
+#define WEB_FG_SEV           256        /* sample events kept, the week's newest */
 #define WEB_FG_REF           1008       /* a week at one per 600 s */
 #define WEB_FG_REF_EVERY_S   600
 #define WEB_FG_REF_MIN       6
@@ -119,6 +135,7 @@ typedef struct {
     int       has_eph;  double eph;
     int       has_hdop; double hdop;
     long long fix_ts;
+    unsigned char flag;              /* set by web_fg_add(): 1 JAM_IND, 2 CN0_DROP */
 } web_fg_sample_t;
 
 typedef struct {
@@ -133,6 +150,16 @@ typedef struct {
     long long ref_ts[WEB_FG_REF];
     double    ref_lat[WEB_FG_REF], ref_lon[WEB_FG_REF];
     long long last_ref, saved_at;
+    /* The sample events, oldest first: [a, b] and the word (0 JAM_IND,
+     * 1 CN0_DROP); se_open the run each word's next flagged sample may
+     * extend (-1 none). */
+    int       nse;
+    long long se_a[WEB_FG_SEV], se_b[WEB_FG_SEV];
+    unsigned char se_w[WEB_FG_SEV];
+    int       se_open[2];
+    /* Whether the newest span may be extended: cleared by a sample that
+     * was not observing, and at a load. */
+    int       rx_open, ev_open;
     int       dirty;
 } web_fg_site_t;
 
@@ -145,11 +172,12 @@ void      web_fg_free(web_fg_t *g);
 /* The slot of a site by name ("self" is [0]), made when absent; -1 when
  * full or the name is not one. */
 int  web_fg_slot(web_fg_t *g, const char *name);
-/* One sample into a site: the ring, the coverage (gap_s apart at most
- * within a span), the reference. */
+/* One sample into a site: the ring, its sample events, the coverage
+ * (gap_s apart at most within a span), the reference. */
 void web_fg_add(web_fg_t *g, int slot, const web_fg_sample_t *s, long long gap_s);
-/* "1 rx N s e .. ev N s e .. ref N ts lat lon .. last" and back; the
- * parse refuses anything but its own spelling (0, -1 left as it was). */
+/* "1 rx N s e .. ev N s e .. ref N last ts lat lon .. se N a b w .." and
+ * back; the parse refuses anything but its own spelling (0, -1 left as
+ * it was). */
 int  web_fg_state_text(const web_fg_site_t *s, char *out, size_t cap);
 int  web_fg_state_parse(web_fg_site_t *s, const char *text);
 
@@ -174,13 +202,13 @@ typedef struct {
     int             ev_none;         /* no incidents from this site at all */
 } web_fg_cov_t;
 
-/* 1 when one span of s[], e[] holds [a, b], its end widened by gap_s. */
-int  web_fg_covered(const long long *s, const long long *e, int n, long long a, long long b,
-                    long long gap_s);
+/* 1 when one span of s[], e[] holds [a, b]: it starts by a and its last
+ * sample is at or after b. */
+int  web_fg_covered(const long long *s, const long long *e, int n, long long a, long long b);
 void web_fg_classify(web_fg_event_t *ev, int n, const web_fg_cov_t *sites, int nsites,
-                     long long window_s, long long gap_s, double region_m, long long now_s);
+                     long long window_s, long long gap_s, double region_m);
 
-/* Read each site's coverage and reference back from meta over the pull
+/* Read each site's coverage, reference and sample events back from meta over the pull
  * thread's connection (web_fleet_load()'s step). */
 void web_fg_meta_load(web_fleet_t *f);
 

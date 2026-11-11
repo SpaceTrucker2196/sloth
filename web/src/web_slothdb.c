@@ -2679,7 +2679,7 @@ int web_sdb_alerts_scan_upto(web_sdb_conn_t *c, long long from, long long to,
 
 int web_sdb_gnss_incidents(web_sdb_conn_t *c, long long from, int max,
                            web_sdb_item_fn fn, void *ctx) {
-    if (!(c->feats & WEB_QF_ALERTS) || !(c->opt & WEB_SDB_OPT_INCROWS)) return 0;
+    if (!(c->feats & WEB_QF_ALERTS) || !(c->opt & WEB_SDB_OPT_INCROWS)) return WEB_SDB_GNSS_NONE;
     if (max < 1) max = 1;
     /* The four keys are sloth's own constants (akey_begin() with no
      * remote part), so the key is compared to literals and never read;

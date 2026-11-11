@@ -442,7 +442,7 @@
                            Math.round((e.last_seen - e.first_seen) / 60) + " min" : "")));
       row.appendChild(H.el("span", "", siteName(e.site)));
       row.appendChild(H.el("span", "", e.type + " (" + e.class + (e.source === "sample" ? ", from the summary" : "") + ")"));
-      row.appendChild(H.el("span", "fleet-v " + e.verdict, e.verdict));
+      row.appendChild(H.el("span", "fleet-v " + e.verdict, e.verdict === "local" ? "this site only, the others watching" : e.verdict));
       var who = [];
       if (e.with.length) who.push("same at " + e.with.map(siteName).join(", "));
       if (e.quiet.length) who.push("quiet at " + e.quiet.map(siteName).join(", "));
@@ -469,7 +469,7 @@
             j.time.verdict.replace("_", " ") + (j.time.site ? " (" + siteName(j.time.site) + ")" : "") +
             "; this week " + c.regional + " regional, " + c.local + " local, " + c.undetermined +
             " undetermined; window " + j.window_s + " s, region " + dist(j.region_m) +
-            (j.local === "open" ? "" : "; this site's sloth.db is " + j.local));
+            (j.local === "open" ? "" : "; this site's own incidents not read (sloth.db: " + j.local.replace(/_/g, " ") + ")"));
     }).catch(function (e) {
       if (gen === S.ggen) H.set("fleet-gnss-note", H.errText(e.message));
     });

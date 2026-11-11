@@ -71,7 +71,9 @@ int web_fg_slot(web_fg_t *g, const char *name) {
     int self = !strcmp(name, "self");
     if (self) {
         if (!g->site[0].used) {
+            memset(&g->site[0], 0, sizeof(g->site[0]));
             g->site[0].used = 1;
+            g->site[0].se_open[0] = g->site[0].se_open[1] = -1;
             snprintf(g->site[0].name, sizeof(g->site[0].name), "self");
         }
         return 0;
@@ -82,18 +84,23 @@ int web_fg_slot(web_fg_t *g, const char *name) {
         if (!g->site[i].used) {
             memset(&g->site[i], 0, sizeof(g->site[i]));
             g->site[i].used = 1;
+            g->site[i].se_open[0] = g->site[i].se_open[1] = -1;
             snprintf(g->site[i].name, sizeof(g->site[i].name), "%s", name);
             return i;
         }
     return -1;
 }
 
-/* A sample at t extends the newest span when it is at most gap after
- * it; otherwise it opens one, the oldest dropped when full. A clock that
+/* A sample at t that was observing extends the newest span when that
+ * span is still open and t is at most gap after it; otherwise it opens
+ * one, the oldest dropped when full. A sample that was not observing
+ * closes the newest span, so the next one cannot bridge it. A clock that
  * went back inside the newest span changes nothing. */
-static void span_add(long long *s, long long *e, int *n, long long t, long long gap) {
-    if (*n > 0 && t >= s[*n - 1] && t <= e[*n - 1]) return;
-    if (*n > 0 && t > e[*n - 1] && t - e[*n - 1] <= gap) {
+static void span_add(long long *s, long long *e, int *n, int *open, int on, long long t,
+                     long long gap) {
+    if (!on) { *open = 0; return; }
+    if (*n > 0 && *open && t >= s[*n - 1] && t <= e[*n - 1]) return;
+    if (*n > 0 && *open && t > e[*n - 1] && t - e[*n - 1] <= gap) {
         e[*n - 1] = t;
         return;
     }
@@ -104,25 +111,91 @@ static void span_add(long long *s, long long *e, int *n, long long t, long long 
     }
     s[*n] = e[*n] = t;
     (*n)++;
+    *open = 1;
+}
+
+static double med_d(double *v, int n);
+
+/* The sample's flags against the ring before it (the newest of which is
+ * the previous sample): JAM_IND, the indicator at or above WEB_FG_JAM_IND;
+ * CN0_DROP, the tracked median WEB_FG_CN0_DROP_DB under the median of the
+ * hour before, the flagged samples left out of it (so a standing drop is
+ * not absorbed into its own reference, as the jamming rule holds its
+ * onset baseline). A sample tracking nothing while its sky is listed
+ * counts as 0 dB-Hz, the rule's own reading. *cn0_ok: the drop test had
+ * its history, so a drop would have shown. */
+static unsigned char sample_flag(const web_fg_site_t *fs, const web_fg_sample_t *r,
+                                 int *cn0_ok) {
+    unsigned char f = 0;
+    *cn0_ok = 0;
+    if (!r->fresh) return 0;
+    if (r->jam >= WEB_FG_JAM_IND) f |= 1;
+    if (!r->has_trk || r->sats_view <= 0) return f;
+    double hist[WEB_FG_RING];
+    int h = 0;
+    for (int j = 0; j < fs->n; j++) {
+        const web_fg_sample_t *o = &fs->ring[(fs->head + WEB_FG_RING - fs->n + j) % WEB_FG_RING];
+        if (o->fresh && o->has_trk && o->sats_view > 0 && !(o->flag & 2) &&
+            o->t >= r->t - WEB_FG_HIST_S && o->t < r->t)
+            hist[h++] = o->tracked > 0 ? o->cn0_med : 0;
+    }
+    if (h < WEB_FG_HIST_MIN) return f;
+    *cn0_ok = 1;
+    double v = r->tracked > 0 ? r->cn0_med : 0;
+    if (v <= med_d(hist, h) - WEB_FG_CN0_DROP_DB) f |= 2;
+    return f;
+}
+
+/* Runs of a word's flagged samples no further apart than the gap are one
+ * event; the oldest is dropped when full, and any older than the week. */
+static void se_note(web_fg_site_t *s, unsigned char flag, long long t, long long gap) {
+    int drop = 0;
+    while (drop < s->nse && s->se_b[drop] < t - WEB_FG_EVENTS_S) drop++;
+    for (int w = 0; w < 2; w++) {
+        int k = s->se_open[w];
+        if (!(flag & (1u << w))) { s->se_open[w] = -1; continue; }
+        if (k >= 0 && k < s->nse && s->se_w[k] == w && t >= s->se_b[k] &&
+            t - s->se_b[k] <= gap) {
+            s->se_b[k] = t;
+            continue;
+        }
+        if (s->nse - drop == WEB_FG_SEV) drop++;
+        if (drop) {
+            memmove(s->se_a, s->se_a + drop, sizeof(s->se_a[0]) * (size_t)(s->nse - drop));
+            memmove(s->se_b, s->se_b + drop, sizeof(s->se_b[0]) * (size_t)(s->nse - drop));
+            memmove(s->se_w, s->se_w + drop, sizeof(s->se_w[0]) * (size_t)(s->nse - drop));
+            s->nse -= drop;
+            for (int v = 0; v < 2; v++)
+                s->se_open[v] = s->se_open[v] >= drop ? s->se_open[v] - drop : -1;
+            drop = 0;
+        }
+        s->se_a[s->nse] = s->se_b[s->nse] = t;
+        s->se_w[s->nse] = (unsigned char)w;
+        s->se_open[w] = s->nse++;
+    }
 }
 
 void web_fg_add(web_fg_t *g, int slot, const web_fg_sample_t *smp, long long gap_s) {
     if (!g || slot < 0 || slot >= WEB_FG_SITES) return;
     web_fg_site_t *s = &g->site[slot];
-    s->ring[s->head] = *smp;
+    int cn0_ok;
+    web_fg_sample_t r = *smp;
+    r.flag = sample_flag(s, &r, &cn0_ok);
+    s->ring[s->head] = r;
     s->head = (s->head + 1) % WEB_FG_RING;
     if (s->n < WEB_FG_RING) s->n++;
-    if (smp->fresh && smp->has_trk) span_add(s->rx_s, s->rx_e, &s->nrx, smp->t, gap_s);
-    if (smp->evok) span_add(s->ev_s, s->ev_e, &s->nev, smp->t, gap_s);
-    if (smp->fresh && smp->has_fix && smp->mode >= 2 && smp->has_eph &&
-        isfinite(smp->lat) && isfinite(smp->lon) &&
-        (s->nref == 0 || smp->t - s->last_ref >= WEB_FG_REF_EVERY_S)) {
-        s->ref_ts[s->rhead] = smp->t;
-        s->ref_lat[s->rhead] = smp->lat;
-        s->ref_lon[s->rhead] = smp->lon;
+    se_note(s, r.flag, r.t, gap_s);
+    span_add(s->rx_s, s->rx_e, &s->nrx, &s->rx_open, cn0_ok, r.t, gap_s);
+    span_add(s->ev_s, s->ev_e, &s->nev, &s->ev_open, r.evok, r.t, gap_s);
+    if (r.fresh && r.has_fix && r.mode >= 2 && r.has_eph && isfinite(r.eph) && r.eph > 0 &&
+        isfinite(r.lat) && isfinite(r.lon) &&
+        (s->nref == 0 || r.t - s->last_ref >= WEB_FG_REF_EVERY_S)) {
+        s->ref_ts[s->rhead] = r.t;
+        s->ref_lat[s->rhead] = r.lat;
+        s->ref_lon[s->rhead] = r.lon;
         s->rhead = (s->rhead + 1) % WEB_FG_REF;
         if (s->nref < WEB_FG_REF) s->nref++;
-        s->last_ref = smp->t;
+        s->last_ref = r.t;
     }
     s->dirty = 1;
 }
@@ -144,6 +217,8 @@ int web_fg_state_text(const web_fg_site_t *s, char *out, size_t cap) {
         int i = (s->rhead + WEB_FG_REF - s->nref + j) % WEB_FG_REF;
         P(" %lld %.7f %.7f", s->ref_ts[i], s->ref_lat[i], s->ref_lon[i]);
     }
+    P(" se %d", s->nse);
+    for (int i = 0; i < s->nse; i++) P(" %lld %lld %d", s->se_a[i], s->se_b[i], s->se_w[i]);
 #undef P
     return (int)o;
 }
@@ -201,6 +276,14 @@ int web_fg_state_parse(web_fg_site_t *s, const char *text) {
         ok = take_ll(&p, 0, T_MAX, &t->ref_ts[i]) == 0 &&
              take_d(&p, -90, 90, &t->ref_lat[i]) == 0 &&
              take_d(&p, -180, 180, &t->ref_lon[i]) == 0;
+    ok = ok && take_word(&p, "se") == 0 && take_ll(&p, 0, WEB_FG_SEV, &v) == 0;
+    if (ok) t->nse = (int)v;
+    for (int i = 0; ok && i < t->nse; i++) {
+        long long w;
+        ok = take_ll(&p, 0, T_MAX, &t->se_a[i]) == 0 &&
+             take_ll(&p, t->se_a[i], T_MAX, &t->se_b[i]) == 0 && take_ll(&p, 0, 1, &w) == 0;
+        if (ok) t->se_w[i] = (unsigned char)w;
+    }
     if (ok && *p) ok = 0;
     if (ok) {
         t->rhead = t->nref % WEB_FG_REF;
@@ -216,6 +299,14 @@ int web_fg_state_parse(web_fg_site_t *s, const char *text) {
         s->nref = t->nref;
         s->rhead = t->rhead;
         s->last_ref = t->last_ref;
+        memcpy(s->se_a, t->se_a, sizeof(s->se_a));
+        memcpy(s->se_b, t->se_b, sizeof(s->se_b));
+        memcpy(s->se_w, t->se_w, sizeof(s->se_w));
+        s->nse = t->nse;
+        /* Nothing loaded is extended: the time between the save and now
+         * was not seen. */
+        s->se_open[0] = s->se_open[1] = -1;
+        s->rx_open = s->ev_open = 0;
     }
     free(t);
     return ok ? 0 : -1;
@@ -343,23 +434,24 @@ void web_fleet_gnss_tick(web_fleet_t *f, long long now_s) {
 
 /* ── the classification ────────────────────────────────────────────── */
 
-int web_fg_covered(const long long *s, const long long *e, int n, long long a, long long b,
-                   long long gap_s) {
+int web_fg_covered(const long long *s, const long long *e, int n, long long a, long long b) {
     for (int i = 0; i < n; i++)
-        if (s[i] <= a && e[i] + gap_s >= b) return 1;
+        if (s[i] <= a && e[i] >= b) return 1;
     return 0;
 }
 
 void web_fg_classify(web_fg_event_t *ev, int n, const web_fg_cov_t *sites, int nsites,
-                     long long window_s, long long gap_s, double region_m, long long now_s) {
+                     long long window_s, long long gap_s, double region_m) {
     for (int i = 0; i < n; i++) {
         web_fg_event_t *e = &ev[i];
         e->with = e->quiet = e->stale = e->far = 0;
         if (e->site < 0 || e->site >= nsites) { e->verdict = WEB_FG_UNDETERMINED; continue; }
         const web_fg_cov_t *S = &sites[e->site];
+        /* The whole window, never cut at now: a peer's answer is only as
+         * new as its last pull, so an event still inside the window of
+         * its end, or not yet pulled past it, has no quiet peer. */
         long long lo = e->a - window_s, hi = e->b + window_s;
-        if (hi > now_s) hi = now_s;
-        if (hi < lo) hi = lo;
+        int alert = web_fg_is_alert(e->type);
         for (int p = 0; p < nsites && p < 32; p++) {
             if (p == e->site) continue;
             unsigned bit = 1u << p;
@@ -373,12 +465,13 @@ void web_fg_classify(web_fg_event_t *ev, int n, const web_fg_cov_t *sites, int n
                         ev[j].a <= e->b + window_s && ev[j].b >= e->a - window_s;
             if (match) { e->with |= bit; continue; }
             /* Quiet only where the site was seen observing all of the
-             * window: its incidents offered for an alert's class; its
-             * receiver alone for interference that lasted a sample's gap
-             * (so a sample of the peer fell inside it). */
-            int cov = !P->ev_none && web_fg_covered(P->ev_s, P->ev_e, P->nev, lo, hi, gap_s);
+             * window: its incidents offered, for an incident; its
+             * receiver, with the drop test's history, for interference
+             * that lasted a sample's gap (so a sample of the peer fell
+             * inside it), which is all a sample event can have. */
+            int cov = alert && !P->ev_none && web_fg_covered(P->ev_s, P->ev_e, P->nev, lo, hi);
             if (!cov && e->cls == WEB_FG_INTERFERENCE && e->b - e->a >= gap_s)
-                cov = web_fg_covered(P->rx_s, P->rx_e, P->nrx, lo, hi, gap_s);
+                cov = web_fg_covered(P->rx_s, P->rx_e, P->nrx, lo, hi);
             if (cov) e->quiet |= bit;
             else e->stale |= bit;
         }
@@ -469,54 +562,11 @@ static int local_incident(void *ctx, const web_sdb_item_t *it) {
     return x->nev >= WEB_FG_EV_MAX;
 }
 
-/* The events a site's samples show: the jamming indicator at or above
- * WEB_FG_JAM_IND, and the tracked median under the site's own median of
- * the hour before by WEB_FG_CN0_DROP_DB (the flagged samples left out of
- * that median, so a standing drop is not absorbed into its own
- * reference, as the jamming rule holds its onset baseline). A sample
- * tracking nothing while its sky is listed counts as 0 dB-Hz, the rule's
- * own reading. Runs of flagged samples no further apart than the gap are
- * one event. */
+/* The events a site's samples showed (sample_flag(), se_note()). */
 static void sample_events(gctx_t *x, int si, const web_fg_site_t *fs) {
-    int n = fs->n;
-    if (!n) return;
-    const web_fg_sample_t *ring[WEB_FG_RING];
-    for (int j = 0; j < n; j++) ring[j] = &fs->ring[(fs->head + WEB_FG_RING - n + j) % WEB_FG_RING];
     static const char *const W[2] = { "JAM_IND", "CN0_DROP" };
-    double *hist = malloc(sizeof(double) * WEB_FG_RING);
-    unsigned char *flag = calloc((size_t)n, 1);
-    if (!hist || !flag) { free(hist); free(flag); return; }
-    for (int j = 0; j < n; j++) {
-        const web_fg_sample_t *r = ring[j];
-        if (!r->fresh) continue;
-        if (r->jam >= WEB_FG_JAM_IND) flag[j] |= 1;
-        if (!r->has_trk || r->sats_view <= 0) continue;
-        double v = r->tracked > 0 ? r->cn0_med : 0;
-        int h = 0;
-        for (int q = 0; q < j; q++) {
-            const web_fg_sample_t *o = ring[q];
-            if (o->fresh && o->has_trk && o->sats_view > 0 && !(flag[q] & 2) &&
-                o->t >= r->t - WEB_FG_HIST_S && o->t < r->t)
-                hist[h++] = o->tracked > 0 ? o->cn0_med : 0;
-        }
-        if (h >= WEB_FG_HIST_MIN && v <= med_d(hist, h) - WEB_FG_CN0_DROP_DB) flag[j] |= 2;
-    }
-    for (int w = 0; w < 2; w++) {
-        unsigned char m = (unsigned char)(1u << w);
-        long long a = 0, b = 0;
-        int open = 0;
-        for (int j = 0; j <= n; j++) {
-            int on = j < n && (flag[j] & m);
-            if (on && open && ring[j]->t - b <= x->gap) { b = ring[j]->t; continue; }
-            if (open && (!on || ring[j]->t - b > x->gap)) {
-                add_event(x, si, W[w], a, b, 0, 1);
-                open = 0;
-            }
-            if (on && !open) { open = 1; a = b = ring[j]->t; }
-        }
-    }
-    free(hist);
-    free(flag);
+    for (int i = 0; i < fs->nse; i++)
+        add_event(x, si, W[fs->se_w[i] & 1], fs->se_a[i], fs->se_b[i], 0, 1);
 }
 
 /* One site's figures from its samples, under f->mu. */
@@ -545,8 +595,10 @@ static void site_figures(gctx_t *x, int si, const web_fg_site_t *fs) {
         free(a);
         free(b);
     }
+    /* An eph of 0 is no estimate: the bound would be 0 m and any fix
+     * "moved". */
     if (g->has_now && g->now.fresh && g->now.has_fix && g->now.has_eph &&
-        isfinite(g->now.eph) && g->now.eph >= 0 && isfinite(g->now.lat) &&
+        isfinite(g->now.eph) && g->now.eph > 0 && isfinite(g->now.lat) &&
         isfinite(g->now.lon)) {
         g->has_cur = 1;
         g->cur = g->now;
@@ -608,9 +660,12 @@ static void build(web_fleet_t *f, const web_fleet_src_t *src, long long now_s, g
         char err[WEB_SDB_ERR_MAX];
         if (web_slothdb_open(src->sdb, &c, WEB_SDB_OVERVIEW_MS, now_s, err, sizeof(err)) == 0) {
             x->local = "open";
-            local_ok = web_sdb_gnss_incidents(&c, now_s - WEB_FG_EVENTS_S, 256,
-                                              local_incident, x) >= 0;
-            if (!local_ok) x->local = "unavailable";
+            int r = web_sdb_gnss_incidents(&c, now_s - WEB_FG_EVENTS_S, 256,
+                                           local_incident, x);
+            /* All of them or none: a file before v11 has no incident
+             * rows, and a read cut short is not all. */
+            local_ok = r >= 0 && r < 256 && !c.timed_out;
+            if (!local_ok) x->local = r == WEB_SDB_GNSS_NONE ? "no_incidents" : "unavailable";
         } else {
             x->local = "unavailable";
         }
@@ -706,7 +761,7 @@ static void build(web_fleet_t *f, const web_fleet_src_t *src, long long now_s, g
     web_fg_cov_t cov[WEB_FG_SITES];
     for (int i = 0; i < x->n; i++) cov[i] = x->s[i].cov;
     web_fg_classify(x->ev, x->nev, cov, x->n, WEB_FG_WINDOW_S, x->gap,
-                    f ? f->gnss_region_m : WEB_FG_REGION_KM_DEF * 1000.0, now_s);
+                    f ? f->gnss_region_m : WEB_FG_REGION_KM_DEF * 1000.0);
 }
 
 /* ── the answer ────────────────────────────────────────────────────── */
@@ -813,7 +868,11 @@ static const char *const BASIS[WEB_FG_NCLASS] = {
     "affects another nearby (FCC 13-106, Bojczak, as quoted there). Two receivers that "
     "see it within the window: one source reaching both, or a wide one; one alone: a "
     "source near it. The drop (10 dB) and the indicator (128) are the GNSS_JAMMING "
-    "rule's defaults, themselves judgements: no read source puts a number on either.",
+    "rule's defaults, themselves judgements: no read source puts a number on either. "
+    "JAM_IND and CN0_DROP are slothweb's own tests on samples a pull apart, not the rule: "
+    "they cannot see the simultaneity the rule looks for, so a CN0_DROP is interference or "
+    "attenuation alike, the C/N0 half that 'cannot tell interference from attenuation' "
+    "(research/gnss/jamming-detection.md).",
     "A suspicion from weak observables, never a detection (research/gnss/"
     "spoofing-detection.md; docs/wiki/alert-assessments/GNSS_SPOOF_SUSPECT.md). At both "
     "sites at once: a wide event; at one: that site's receiver.",
