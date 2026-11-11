@@ -3655,25 +3655,18 @@ static void test_reg_envelope_does_not_survive_slot_reuse(void) {
     ASSERT_EQ((int)r->triplet_count, 0);
 }
 
-/* A full table makes room by dropping the entry heard longest ago, and
- * that AP is re-admitted with a new first_seen the next time it is
- * heard. Each entry therefore carries how long before its own insert
- * the table last evicted (evict_age_s1: monotonic seconds plus one,
- * 0 for never), which is what lets the twin scorer refuse to read such
- * a first_seen as an arrival (#188). Monotonic, so the wall clock
- * stepping an hour between the eviction and the insert changes nothing.
+/* ── BSSIDs the table has forgotten (#188) ─────────────────────
  *
- * Mutations (2026-11-11), each red here: `g_evicted = 1` removed (the
- * evicting entry and the one after it read 0); the age written whether
- * or not the table ever evicted (the 256 fillers read non-zero); the
- * `+ 1u` dropped (the evicting entry read 0, the later one 400); the
- * age taken from the wall clock (the later one, across the stepped
- * hour); the reset in beacon_clear() removed (the fillers and the last
- * row, the earlier test's eviction still standing). */
-static time_t   g_evict_wall;
-static uint64_t g_evict_mono;
-static time_t   evict_wall(void) { return g_evict_wall; }
-static uint64_t evict_mono(void) { return g_evict_mono; }
+ * The table rebuilds an entry it dropped, for age (BEACON_AGE_SECS) or
+ * for room, under a new first_seen. It keeps a memory of what it has
+ * dropped, keyed on BSSID and SSID, and stamps beacon_ap_t.arrival so
+ * the twin scorer can tell a return from an arrival. Driven through
+ * beacon_record() / beacon_snapshot() on stubbed clocks; no frames are
+ * needed, the table is the unit. */
+static time_t   g_rc_wall;
+static uint64_t g_rc_mono;
+static time_t   rc_wall(void) { return g_rc_wall; }
+static uint64_t rc_mono(void) { return g_rc_mono; }
 
 static const beacon_ap_t *snap_find(const sloth_state_t *s,
                                     const uint8_t bssid[6]) {
@@ -3683,61 +3676,255 @@ static const beacon_ap_t *snap_find(const sloth_state_t *s,
     return NULL;
 }
 
-static void test_table_eviction_is_carried_by_later_inserts(void) {
+static void rc_start(void) {
+    beacon_clear();
+    sloth_clock_test_set(rc_mono, rc_wall);
+    g_rc_wall = 1700000000;
+    g_rc_mono = 5000000;
+}
+
+static void rc_hear(const uint8_t bssid[6], const char *ssid) {
+    beacon_record(bssid, ssid, -60, 6, "WPA2", 100, NULL);
+}
+
+/* Everything in the table falls silent for longer than the table keeps
+ * it, and a snapshot drops it. */
+static void rc_age_out(sloth_state_t *s) {
+    g_rc_wall += BEACON_AGE_SECS + 1;
+    g_rc_mono += (uint64_t)(BEACON_AGE_SECS + 1) * 1000u;
+    memset(s, 0, sizeof(*s));
+    beacon_snapshot(s);
+}
+
+/* The stamp on `bssid` in a fresh snapshot, -1 when it is not there. */
+static int rc_arrival(sloth_state_t *s, const uint8_t bssid[6]) {
+    memset(s, 0, sizeof(*s));
+    beacon_snapshot(s);
+    const beacon_ap_t *ap = snap_find(s, bssid);
+    return ap ? (int)ap->arrival : -1;
+}
+
+/* An AP that drops out and comes back is a return; one never heard is
+ * an arrival; and the memory is of a name on an address, so an address
+ * heard under another name is no alibi for the name it carries now.
+ *
+ * Mutations (2026-11-11), each red here:
+ *   - recall_note_dropped() removed from the age-out in
+ *     beacon_snapshot(): every RETURN row read NEW;
+ *   - the SSID left out of the match in recall_find(): the "another
+ *     name" row and the "fresh" row read RETURN;
+ *   - the stamp removed from the rename in beacon_record_ev(): the row
+ *     where a live entry takes its remembered name read NEW, and the
+ *     one where it then takes a fresh name read RETURN;
+ *   - the stamp removed from beacon_reveal_hidden_ssid(): the revealed
+ *     row read NEW;
+ *   - the `!ap->ssid[0]` return dropped from recall_note_dropped(), so
+ *     a hidden entry is remembered under the empty name: the "dropped
+ *     while hidden" insert read RETURN;
+ *   - the insert left unstamped: the first RETURN row read NEW;
+ *   - the memory left standing by beacon_clear(): the last row. */
+static void test_recall_a_dropped_bssid_is_a_return(void) {
     static sloth_state_t s;
+    const uint8_t x[6] = { 0x80, 0xd0, 0x4a, 0x10, 0x20, 0x30 };
+    const uint8_t y[6] = { 0x02, 0x9a, 0x3c, 0x71, 0x5e, 0x08 };
+    const uint8_t z[6] = { 0x3c, 0x52, 0xa1, 0x01, 0x02, 0x03 };
+    const uint8_t h[6] = { 0x3c, 0x52, 0xa1, 0x01, 0x02, 0x04 };
+
+    rc_start();
+    rc_hear(x, "home");
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_NEW);
+    time_t first = snap_find(&s, x)->first_seen;
+
+    rc_age_out(&s);
+    ASSERT_EQ(s.beacon_count, 0);
+    rc_hear(x, "home");
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_RETURN);
+    /* first_seen is the rebuilt entry's own: the rules that read it as
+     * "watched since" are not told a longer story than the entry has. */
+    ASSERT_EQ((long long)snap_find(&s, x)->first_seen,
+              (long long)first + BEACON_AGE_SECS + 1);
+    /* A second BSSID never heard, beside it. */
+    rc_hear(y, "home");
+    ASSERT_EQ(rc_arrival(&s, y), BEACON_ARRIVAL_NEW);
+
+    /* Back again under another name: not the network that left. */
+    rc_age_out(&s);
+    rc_hear(x, "elsewhere");
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_NEW);
+    /* The live entry then takes the name it was dropped under, and
+     * after that one it has never had. */
+    rc_hear(x, "home");
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_RETURN);
+    rc_hear(x, "fresh");
+    ASSERT_EQ(rc_arrival(&s, x), BEACON_ARRIVAL_NEW);
+
+    /* A hidden AP has no name to ask about until it is revealed. */
+    rc_hear(z, "");
+    beacon_reveal_hidden_ssid(z, "corp");
+    ASSERT_EQ(rc_arrival(&s, z), BEACON_ARRIVAL_NEW);
+    rc_age_out(&s);
+    rc_hear(z, "");
+    beacon_reveal_hidden_ssid(z, "corp");
+    ASSERT_EQ(rc_arrival(&s, z), BEACON_ARRIVAL_RETURN);
+
+    /* One dropped while still hidden left nothing to remember. */
+    rc_hear(h, "");
+    rc_age_out(&s);
+    rc_hear(h, "");
+    ASSERT_EQ(rc_arrival(&s, h), BEACON_ARRIVAL_NEW);
+    beacon_reveal_hidden_ssid(h, "lab");
+    ASSERT_EQ(rc_arrival(&s, h), BEACON_ARRIVAL_NEW);
+
+    /* Clearing the table clears what it remembers. */
+    rc_age_out(&s);
+    beacon_clear();
+    rc_hear(z, "corp");
+    ASSERT_EQ(rc_arrival(&s, z), BEACON_ARRIVAL_NEW);
+
+    sloth_clock_test_set(NULL, NULL);
+    beacon_clear();
+}
+
+/* A full table drops the entry heard longest ago to admit a new one,
+ * and that AP is back on the next hop pass. It is remembered like one
+ * dropped for age, so its re-insert is a return, and the BSSID that
+ * took its slot, never heard before, is still an arrival. (Until the
+ * memory existed a full table refused every insert for the wait after
+ * an eviction, the genuine arrival with the re-insert.)
+ *
+ * Mutation (2026-11-11): recall_note_dropped() removed from the
+ * eviction in beacon_record_ev(); the re-admitted row read NEW. */
+static void test_recall_a_full_table_eviction_is_a_return(void) {
+    static sloth_state_t s;
+    const uint8_t first[6]   = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x00 };
     const uint8_t evictor[6] = { 0x02, 0xee, 0x00, 0x00, 0x00, 0x01 };
-    const uint8_t after[6]   = { 0x02, 0xee, 0x00, 0x00, 0x00, 0x02 };
     uint8_t b[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
-    beacon_clear();
-    sloth_clock_test_set(evict_mono, evict_wall);
-    g_evict_wall = 100000;
-    g_evict_mono = 5000000;
+    rc_start();
     for (int i = 0; i < MAX_BEACON_APS; i++) {
         b[4] = (uint8_t)(i >> 8); b[5] = (uint8_t)i;
-        beacon_record(b, "filler", -60, 6, "WPA2", 100, NULL);
+        rc_hear(b, "filler");
+        g_rc_wall += 1;             /* so the first is the stalest */
+        g_rc_mono += 1000;
     }
     memset(&s, 0, sizeof(s));
     beacon_snapshot(&s);
     ASSERT_EQ(s.beacon_count, MAX_BEACON_APS);
-    int aged = 0;
-    for (int i = 0; i < s.beacon_count; i++)
-        if (s.beacon_aps[i].evict_age_s1) aged++;
-    ASSERT_EQ(aged, 0);                 /* full, but nothing evicted yet */
 
-    g_evict_wall += 10;                 /* one past full */
-    g_evict_mono += 10 * 1000;
-    beacon_record(evictor, "late", -60, 6, "WPA2", 100, NULL);
-    memset(&s, 0, sizeof(s));
-    beacon_snapshot(&s);
-    ASSERT_EQ(s.beacon_count, MAX_BEACON_APS);
-    const beacon_ap_t *e = snap_find(&s, evictor);
-    ASSERT(e != NULL);
-    if (e) ASSERT_EQ((long long)e->evict_age_s1, 1);
+    rc_hear(evictor, "late");                   /* one past full */
+    ASSERT_EQ(rc_arrival(&s, evictor), BEACON_ARRIVAL_NEW);
+    ASSERT_EQ(rc_arrival(&s, first), -1);       /* it lost its slot */
 
-    /* The table empties by age and a new AP has room: it still carries
-     * the eviction, 400 s back by the monotonic clock while the wall
-     * clock was stepped an hour on top. */
-    g_evict_wall += 400 + 3600;
-    g_evict_mono += 400 * 1000;
-    memset(&s, 0, sizeof(s));
-    beacon_snapshot(&s);
-    ASSERT_EQ(s.beacon_count, 0);
-    beacon_record(after, "after", -60, 6, "WPA2", 100, NULL);
-    memset(&s, 0, sizeof(s));
-    beacon_snapshot(&s);
-    const beacon_ap_t *a = snap_find(&s, after);
-    ASSERT(a != NULL);
-    if (a) ASSERT_EQ((long long)a->evict_age_s1, 400 + 1);
+    g_rc_wall += 5;
+    g_rc_mono += 5000;
+    rc_hear(first, "filler");                   /* the next hop pass */
+    ASSERT_EQ(rc_arrival(&s, first), BEACON_ARRIVAL_RETURN);
 
-    /* A cleared table has no history. */
+    sloth_clock_test_set(NULL, NULL);
     beacon_clear();
-    beacon_record(after, "after", -60, 6, "WPA2", 100, NULL);
-    memset(&s, 0, sizeof(s));
-    beacon_snapshot(&s);
-    a = snap_find(&s, after);
-    ASSERT(a != NULL);
-    if (a) ASSERT_EQ((long long)a->evict_age_s1, 0);
+}
+
+/* The memory is a ring of BEACON_RECALL_MAX (4096). While it has lost
+ * nothing, "not found" is "never heard". Once it has overwritten a
+ * live memory it can no longer say that, and an entry it does not know
+ * is UNSURE, which the scorer does not count, until it again reaches
+ * back BEACON_RECALL_TRUST_S (a day). Literals for both, for the reason
+ * the twin tests give: a test written in the constant follows it.
+ *
+ * The first two BSSIDs are dropped one at a time so the two oldest
+ * memories are known; the other 4094 go sixteen tables' worth at a go.
+ *
+ * Mutations (2026-11-11), each red here:
+ *   - BEACON_RECALL_MAX 4095: the oldest memory was already gone at
+ *     "exactly full" (UNSURE, and the never-heard one beside it);
+ *     4097: f1 was still remembered after the overflow (RETURN);
+ *   - `g_recall_lost = 1` removed, and separately the `g_recall_lost &&`
+ *     test: every UNSURE row read NEW;
+ *   - `g_recall_reach_ms = r->dropped_ms` removed: every UNSURE row
+ *     read NEW (the reach stayed at the clock's zero, a day and more
+ *     back);
+ *   - the trust comparison made `<=`: the row at exactly a day read
+ *     UNSURE; BEACON_RECALL_TRUST_S 86399: the row one millisecond
+ *     short read NEW; 86401: the row at a day read UNSURE;
+ *   - the reset of g_recall_lost in beacon_clear(): the last row;
+ *   - the older memory of a pair left standing when the pair is
+ *     dropped again (`old->used = 0` removed): the flapping AP's block,
+ *     where the never-heard BSSID read UNSURE. */
+static void test_recall_overflow_fails_quiet(void) {
+    static sloth_state_t s;
+    const uint8_t f0[6] = { 0x06, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    const uint8_t f1[6] = { 0x06, 0x00, 0x00, 0x00, 0x00, 0x01 };
+    const uint8_t f2[6] = { 0x06, 0x00, 0x00, 0x00, 0x00, 0x02 };
+    const uint8_t u1[6] = { 0x0a, 0x00, 0x00, 0x00, 0x00, 0x01 };
+    const uint8_t u2[6] = { 0x0a, 0x00, 0x00, 0x00, 0x00, 0x02 };
+    const uint8_t u3[6] = { 0x0a, 0x00, 0x00, 0x00, 0x00, 0x03 };
+    const uint8_t u4[6] = { 0x0a, 0x00, 0x00, 0x00, 0x00, 0x04 };
+    uint8_t b[6] = { 0x06, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
+    /* One AP at the edge of range, in and out 4097 times, is one
+     * memory, not 4097: it costs the others nothing. */
+    rc_start();
+    for (int i = 0; i < 4097; i++) {
+        rc_hear(f0, "net");
+        /* Aged by the wall clock; a millisecond apart on the monotonic
+         * one, so every memory is well inside the day the ring is
+         * trusted over and a lost one would show. */
+        g_rc_wall += BEACON_AGE_SECS + 1;
+        g_rc_mono += 1;
+        memset(&s, 0, sizeof(s));
+        beacon_snapshot(&s);
+    }
+    rc_hear(u1, "net");
+    ASSERT_EQ(rc_arrival(&s, u1), BEACON_ARRIVAL_NEW);
+    rc_hear(f0, "net");
+    ASSERT_EQ(rc_arrival(&s, f0), BEACON_ARRIVAL_RETURN);
+
+    rc_start();
+    rc_hear(f0, "net");
+    rc_age_out(&s);
+    rc_hear(f1, "net");
+    rc_age_out(&s);
+    uint64_t f1_dropped = g_rc_mono;
+    for (int i = 2; i < 4096; ) {
+        for (int k = 0; k < MAX_BEACON_APS && i < 4096; k++, i++) {
+            b[4] = (uint8_t)(i >> 8); b[5] = (uint8_t)i;
+            rc_hear(b, "net");
+        }
+        rc_age_out(&s);
+    }
+
+    /* Exactly full, nothing lost: the oldest memory still answers, and
+     * a BSSID it has never held is an arrival. */
+    rc_hear(f0, "net");
+    ASSERT_EQ(rc_arrival(&s, f0), BEACON_ARRIVAL_RETURN);
+    rc_hear(u1, "net");
+    ASSERT_EQ(rc_arrival(&s, u1), BEACON_ARRIVAL_NEW);
+
+    /* Those two drop out: 4097 distinct memories now, one too many,
+     * and the one overwritten is f1's. */
+    rc_age_out(&s);
+    rc_hear(f1, "net");
+    ASSERT_EQ(rc_arrival(&s, f1), BEACON_ARRIVAL_UNSURE);
+    rc_hear(f2, "net");                         /* still held */
+    ASSERT_EQ(rc_arrival(&s, f2), BEACON_ARRIVAL_RETURN);
+    rc_hear(u2, "net");                         /* never heard: cannot say */
+    ASSERT_EQ(rc_arrival(&s, u2), BEACON_ARRIVAL_UNSURE);
+
+    /* The memory reaches back to when f1 was dropped. A day after
+     * that, what it does not know has been gone a day or was never
+     * here, and counts as new again. */
+    g_rc_mono = f1_dropped + 86400ull * 1000u - 1u;
+    rc_hear(u3, "net");
+    ASSERT_EQ(rc_arrival(&s, u3), BEACON_ARRIVAL_UNSURE);
+    g_rc_mono = f1_dropped + 86400ull * 1000u;
+    rc_hear(u4, "net");
+    ASSERT_EQ(rc_arrival(&s, u4), BEACON_ARRIVAL_NEW);
+
+    /* A cleared table has lost nothing. */
+    g_rc_mono = f1_dropped + 1000u;
+    beacon_clear();
+    rc_hear(u1, "net");
+    ASSERT_EQ(rc_arrival(&s, u1), BEACON_ARRIVAL_NEW);
 
     sloth_clock_test_set(NULL, NULL);
     beacon_clear();
@@ -3975,7 +4162,9 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_reg_malformed_counts_accumulate_across_frames);
     RUN_TEST(test_reg_shorter_country_leaves_no_triplet_tail);
     RUN_TEST(test_reg_envelope_does_not_survive_slot_reuse);
-    RUN_TEST(test_table_eviction_is_carried_by_later_inserts);
+    RUN_TEST(test_recall_a_dropped_bssid_is_a_return);
+    RUN_TEST(test_recall_a_full_table_eviction_is_a_return);
+    RUN_TEST(test_recall_overflow_fails_quiet);
     RUN_TEST(test_parse_ssid_control_octets_stored_as_marks);
     RUN_TEST(test_parse_ssid_high_octets_kept);
 }

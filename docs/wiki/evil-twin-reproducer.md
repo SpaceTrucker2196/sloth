@@ -85,8 +85,10 @@ the air, start the twin's beacon at least 120 s later
 (`twin.late_arrival_s`), and the row is CRIT at 55 % with
 `+late-arrival` in the detail and `>` in the `[x]` Twins flags. The
 sensor must be at rest: a gpsd fix at 1 m/s or more restarts the wait.
-The beacon table must have room: with more than 256 BSSIDs in earshot
-every insert evicts, and a late arrival is not counted.
+The twin's BSSID must be new to the session under that SSID: if sloth
+heard it beacon `Cafe-Net` earlier and dropped it (300 s of silence),
+its return is not an arrival. Use a fresh BSSID, or clear the beacon
+table, between runs.
 The same delay on the Phase 1 pair with no vendor-IE mismatch changes
 nothing: a late arrival corroborates other evidence and never raises a
 row on its own.

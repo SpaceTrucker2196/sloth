@@ -8356,20 +8356,21 @@ static void test_twin_late_arrival_is_not_read_off_a_moving_sensor(void) {
     ASSERT_EQ(late_of(&s, T + 600), 1);
 }
 
-/* A full beacon table turns over: it drops the AP heard longest ago to
- * admit a new one and re-admits the dropped one, with a new
- * first_seen, the next time the hopper reaches it. A first_seen
- * stamped inside the wait after an eviction is therefore not an
- * arrival. The age read is the later half's own (taken at its insert,
- * seconds plus one); the earlier half's is not the question, since a
+/* An AP that drops out and comes back is not a late arrival (#188,
+ * owner ruling on the reviewer's finding). The table rebuilds an entry
+ * it dropped under a new first_seen, so the later half must carry a
+ * name new to the session on its address (beacon_ap_t.arrival, stamped
+ * by the table: tests/test_beacon_snoop.c, test_recall_*). A return
+ * does not count, and neither does an entry the table's memory can no
+ * longer vouch for. The earlier half's stamp is not the question: a
  * re-insert there only shortens the gap.
  *
- * Mutations (2026-11-11), each red here: the evict_age_s1 clause
- * dropped from twin_pair_late_arrival (the three 0 rows, and the alert
- * went CRIT at 55); its comparison made `<=` (the 120 s row); the `- 1u`
- * dropped (the 119 s row); the clause reading the earlier half's age
+ * Mutations (2026-11-11), each red here: the arrival clause dropped
+ * from twin_pair_late_arrival (the three 0 rows, and the alert went
+ * CRIT at 55); `!= BEACON_ARRIVAL_NEW` made `== BEACON_ARRIVAL_RETURN`
+ * (the UNSURE row); the clause reading the earlier half's stamp
  * instead (every row after the first). */
-static void test_twin_late_arrival_is_not_read_off_a_full_table(void) {
+static void test_twin_late_arrival_needs_a_name_new_to_the_session(void) {
     time_t now = time(NULL);
     time_t t0  = now - 1200;
     uint8_t real[6]  = {0x00,0x11,0x22,0x33,0x44,0x55};
@@ -8381,10 +8382,9 @@ static void test_twin_late_arrival_is_not_read_off_a_full_table(void) {
     add_beacon(&s, "CorpWiFi", rogue, "WPA2");
     twin_radio(&s, 0, 6, t0,       0x1111u);
     twin_radio(&s, 1, 6, t0 + 600, 0x2222u);
-    ASSERT_EQ(late_of(&s, now), 1);             /* the table had room */
+    ASSERT_EQ(late_of(&s, now), 1);             /* never heard before */
 
-    /* Its own insert was the eviction. */
-    s.beacon_aps[1].evict_age_s1 = 1;
+    s.beacon_aps[1].arrival = BEACON_ARRIVAL_RETURN;
     ASSERT_EQ(late_of(&s, now), 0);
     alerts_update(&s);
     int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
@@ -8393,25 +8393,117 @@ static void test_twin_late_arrival_is_not_read_off_a_full_table(void) {
     ASSERT_EQ(s.alerts[idx].confidence, 35);
     ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
 
-    /* An eviction shortly before it: 119 s is inside the wait, 120 is
-     * a silence as long as the gap the signal itself asks for. */
-    s.beacon_aps[1].evict_age_s1 = 119 + 1;
+    s.beacon_aps[1].arrival = BEACON_ARRIVAL_UNSURE;
     ASSERT_EQ(late_of(&s, now), 0);
-    s.beacon_aps[1].evict_age_s1 = 120 + 1;
-    ASSERT_EQ(late_of(&s, now), 1);
 
     /* Whichever slot holds the later half. */
     twin_radio(&s, 0, 6, t0 + 600, 0x1111u);
     twin_radio(&s, 1, 6, t0,       0x2222u);
-    s.beacon_aps[1].last_seen    = now;
-    s.beacon_aps[1].evict_age_s1 = 0;
-    s.beacon_aps[0].evict_age_s1 = 1;
+    s.beacon_aps[1].last_seen = now;
+    s.beacon_aps[1].arrival   = BEACON_ARRIVAL_NEW;
+    s.beacon_aps[0].arrival   = BEACON_ARRIVAL_RETURN;
     ASSERT_EQ(late_of(&s, now), 0);
 
-    /* The earlier half re-admitted is not the question. */
-    s.beacon_aps[0].evict_age_s1 = 0;
-    s.beacon_aps[1].evict_age_s1 = 1;
+    /* The earlier half having come back is not the question. */
+    s.beacon_aps[0].arrival = BEACON_ARRIVAL_NEW;
+    s.beacon_aps[1].arrival = BEACON_ARRIVAL_RETURN;
     ASSERT_EQ(late_of(&s, now), 1);
+}
+
+/* The field shape, end to end through the real table: the carrier
+ * offload SSID of the issue, two customers' routers, one on a vendor's
+ * address and one on a locally administered one, one band, different
+ * vendor IEs. The second falls silent for longer than the table keeps
+ * an entry and comes back ten minutes after the first was first heard.
+ * It was CRIT at 55 % on that; it is the WARN at 35 % it was before
+ * the signal existed.
+ *
+ * And the true positive beside it: the same original, and a BSSID the
+ * session has never heard, appearing at the same moment. CRIT, 55.
+ *
+ * The clocks are stubbed so the table can age without the test
+ * sleeping. Channel and vendor-IE hash are set on the snapshot, as
+ * every twin test here does: what is under test is first_seen,
+ * last_seen and the arrival stamp, which the table wrote.
+ *
+ * Mutation (2026-11-11): recall_note_dropped() removed from the
+ * age-out in beacon_snapshot(); the first block went CRIT at 55 with
+ * the marker. */
+static time_t   g_tw_wall;
+static uint64_t g_tw_mono;
+static time_t   tw_wall(void) { return g_tw_wall; }
+static uint64_t tw_mono(void) { return g_tw_mono; }
+static void tw_tick(int secs) {
+    g_tw_wall += secs;
+    g_tw_mono += (uint64_t)secs * 1000u;
+}
+static int tw_slot(const sloth_state_t *s, const uint8_t bssid[6]) {
+    for (int i = 0; i < s->beacon_count; i++)
+        if (memcmp(s->beacon_aps[i].bssid, bssid, 6) == 0) return i;
+    return -1;
+}
+
+static void test_twin_an_ap_that_returns_is_not_a_late_arrival(void) {
+    uint8_t r1[6]    = {0x80,0xd0,0x4a,0x10,0x20,0x30};
+    uint8_t r2[6]    = {0xe2,0xdb,0xd1,0x40,0x50,0x60};
+    uint8_t rogue[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+    static sloth_state_t s;
+
+    for (int pass = 0; pass < 2; pass++) {
+        const uint8_t *second = pass == 0 ? r2 : rogue;
+        alerts_clear(); beacon_clear();
+        sloth_clock_test_set(tw_mono, tw_wall);
+        g_tw_wall = 1700000000;
+        g_tw_mono = 5000000;
+
+        beacon_record(r1, "Spectrum Mobile", -60, 6, "WPA2", 100, NULL);
+        if (pass == 0) {
+            tw_tick(5);
+            beacon_record(r2, "Spectrum Mobile", -88, 6, "WPA2", 100, NULL);
+        }
+        /* The first router is heard throughout; the second is not. */
+        for (int k = 0; k < 6; k++) {
+            tw_tick(100);
+            beacon_record(r1, "Spectrum Mobile", -60, 6, "WPA2", 100, NULL);
+            seed_state(&s);
+            beacon_snapshot(&s);
+        }
+        ASSERT_EQ(s.beacon_count, 1);           /* r2 aged out, if it was there */
+
+        beacon_record(second, "Spectrum Mobile", -88, 6, "WPA2", 100, NULL);
+        tw_tick(1);
+        beacon_record(r1, "Spectrum Mobile", -60, 6, "WPA2", 100, NULL);
+        seed_state(&s);
+        beacon_snapshot(&s);
+        ASSERT_EQ(s.beacon_count, 2);
+        int i1 = tw_slot(&s, r1), i2 = tw_slot(&s, second);
+        ASSERT(i1 >= 0 && i2 >= 0);
+        if (i1 < 0 || i2 < 0) break;
+        s.beacon_aps[i1].fp.vendor_ies_hash = 0x1111u;
+        s.beacon_aps[i2].fp.vendor_ies_hash = 0x2222u;
+        /* Ten minutes after the first was first heard. */
+        ASSERT_EQ((long long)(s.beacon_aps[i2].first_seen -
+                              s.beacon_aps[i1].first_seen),
+                  pass == 0 ? 605 : 600);
+
+        alerts_update(&s);
+        int idx = find_alert(&s, ALERT_TYPE_EVIL_TWIN);
+        ASSERT(idx >= 0);
+        if (idx < 0) break;
+        if (pass == 0) {
+            ASSERT_EQ((int)s.beacon_aps[i2].arrival, BEACON_ARRIVAL_RETURN);
+            ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_WARN);
+            ASSERT_EQ(s.alerts[idx].confidence, 35);
+            ASSERT(strstr(s.alerts[idx].detail, "late-arrival") == NULL);
+        } else {
+            ASSERT_EQ((int)s.beacon_aps[i2].arrival, BEACON_ARRIVAL_NEW);
+            ASSERT_EQ((int)s.alerts[idx].sev, (int)ALERT_SEV_CRIT);
+            ASSERT_EQ(s.alerts[idx].confidence, 55);
+            ASSERT(strstr(s.alerts[idx].detail, " +late-arrival") != NULL);
+        }
+    }
+    sloth_clock_test_set(NULL, NULL);
+    alerts_clear(); beacon_clear();
 }
 
 /* The longest detail the same-security branch writes: a 16-octet SSID
@@ -12859,7 +12951,8 @@ void run_alerts_tests(void) {
     RUN_TEST(test_twin_late_arrival_does_not_lift_a_same_vendor_mesh);
     RUN_TEST(test_twin_late_arrival_needs_both_on_the_air);
     RUN_TEST(test_twin_late_arrival_is_not_read_off_a_moving_sensor);
-    RUN_TEST(test_twin_late_arrival_is_not_read_off_a_full_table);
+    RUN_TEST(test_twin_late_arrival_needs_a_name_new_to_the_session);
+    RUN_TEST(test_twin_an_ap_that_returns_is_not_a_late_arrival);
     RUN_TEST(test_twin_detail_fits_with_every_phrase);
     RUN_TEST(test_twin_chain_does_not_name_a_devices_own_radio);
     RUN_TEST(test_twin_chain_reads_no_oui_from_a_local_address);

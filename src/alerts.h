@@ -214,14 +214,13 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  *     is the route, not the transmitters, and it stays the route after
  *     the sensor parks, so this is remembered rather than read off the
  *     current fix. No GNSS is "not known to be moving", as in #189;
- *   - the later half was first heard at least that long after the
- *     beacon table last evicted an entry for want of room, as of that
- *     half's own insert (beacon_ap_t.evict_age_s1). A full table
- *     (MAX_BEACON_APS) drops the AP heard longest ago to admit a new
- *     one and re-admits it a hop pass later under a new first_seen, so
- *     in a table that is turning over first_seen is the last
- *     re-insert. Where more APs are in earshot than the table holds,
- *     this signal is therefore never counted;
+ *   - the later half's name is new on its address this session
+ *     (beacon_ap_t.arrival). The table rebuilds an entry it dropped,
+ *     for age or for room, under a new first_seen, so it keeps a
+ *     memory of what it has dropped (src/beacon_snoop.c) and an AP
+ *     that comes back is a return, not an arrival. An entry that
+ *     memory cannot vouch for, because it has overflowed, is not
+ *     counted either;
  *   - the pair already has positive evidence. It corroborates and never
  *     nominates: every same-SSID pair whose halves were heard two
  *     minutes apart (a mesh node at the edge of earshot, a guest SSID
@@ -229,12 +228,14 @@ void alert_pair_key(char *out, size_t n, const char *rule_id,
  *     and a proximity candidate, which is the noise #188 was opened on.
  *     So the flag means "counted", and is never set without its weight.
  *
- * What it cannot see: first_seen is when *this table* first heard the
- * BSSID since it was last silent for BEACON_AGE_SECS, not when the
- * radio first transmitted. An AP at the edge of range that drops out
- * for five minutes and returns is a late arrival by this test. That is
- * why the weight is soft, why it is 20 and not more, and why a
- * same-vendor pair cannot reach CRIT on it (35 + 20 - 15 = 40). */
+ * What it cannot see. "New this session" is new to this sensor: an AP
+ * that was out of earshot until now and one that was switched on now
+ * look the same, which is why the weight is soft and why it is 20 and
+ * not more. And the memory is the table's, so a transmitter that sent
+ * the name it means to copy once, at a time the gap did not count
+ * (inside the wait after the original was first heard, or while the
+ * sensor moved), then fell silent for BEACON_AGE_SECS, is a return when
+ * it starts in earnest. */
 #define TWIN_W_DIFF_OUI      20   /* cross-vendor: weak, and forgeable */
 #define TWIN_W_IE_HASH       35   /* vendor-IE fingerprints disagree */
 #define TWIN_W_ATTACKER_OUI  40   /* Hak5 / Espressif OUI present */
