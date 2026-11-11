@@ -1135,8 +1135,11 @@ key, episode start) would lose every decision at each new episode,
 which the alert side does not do. Because anomaly episodes are further
 apart than an alert's incidents, a row also records its episode, and
 the read marks the current state `carried` when it was decided on
-another episode than the one held now; the page says so and does not
-dim the card; a write of the same state then is a row, not "unchanged".
+another episode than the one held now; the page says so; a write of
+the same state then is a row, not "unchanged". A triaged-out state
+dims the card whether carried or not, the mark kept on it; a carried
+`incident` never dims (owner ruling 2026-11-11, after the first build
+left a carried card undimmed).
 
 **Collisions.** The hash is unsalted (its inputs are in the answer
 anyway) and FNV is invertible, so a sender who picks its MAC could aim
@@ -1157,7 +1160,11 @@ no_recommendation`.
 `relation(id, a_kind, a_id, a_label, b_kind, b_id, b_label, note, who,
 peer, ts)`, unique on `(a_kind, a_id, b_kind, b_id)`, indexed on the
 `b` end. Kinds: 0 alert (id its subject), 1 anomaly, 2 device (a
-canonical MAC). At least one end is an anomaly. `POST /api/frrs/relate`
+canonical MAC), 3 BLE advertiser (`addr/type`, the TACDB's emitter
+form; not the anonymous type 255; held while the ledger has a row of
+it). A pair is an anomaly with anything, or an alert with a device or
+a BLE advertiser (owner ruling 2026-11-11); alert to alert, device to
+device and a thing to itself are `400 bad_pair`. `POST /api/frrs/relate`
 `{"op":"add","from","to","note","by"}` resolves both ends against what
 exists (the alert routes' own resolution; an anomaly in the engine or
 in `anom_subject`; a device sloth.db, the latest pass, the ledger or an
@@ -1191,11 +1198,9 @@ cause.
 ### 15.4 What was not built
 
 - The TACDB export and import carry alerts' triage only.
-- A link between an alert and a device with no anomaly in it (§4's
-  record already joins those).
-- BLE addresses, SSIDs and hosts (an IP address with no MAC) as link
-  ends; a device is a MAC.
+- Alert-to-alert and device-to-device links.
+- SSIDs and hosts (an IP address with no MAC) as link ends.
 - The capture scope does not filter candidates or links (operator
   state, like the TACDB).
-- Triage chips on the Anomalies view's table form and on the presence
-  strip.
+- Triage chips on the presence strip's episode marks (the Anomalies
+  view's table form has them since the follow-up of 2026-11-11).

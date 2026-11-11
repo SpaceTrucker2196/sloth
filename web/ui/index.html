@@ -685,8 +685,14 @@
       <div class="hscroll" id="frrs-hist-box"><div class="frhrow dhead" id="frrs-hist-head"></div>
       <ol class="lst" id="frrs-hist"></ol></div>
     </section>
-    <!-- The alert's links to anomalies and the candidates (web/ui/notes.js). -->
-    <section class="panel" id="notes-alert" hidden aria-label="related anomalies"></section>
+    <!-- The alert's links to anomalies and devices, and the candidates (web/ui/notes.js). -->
+    <section class="panel" id="notes-alert" hidden aria-label="linked anomalies and devices">
+      <div id="notes-alert-list"></div>
+      <div class="controls tri-form notes-form">
+        <label>link to <input type="text" id="notes-alert-to" maxlength="47" spellcheck="false" autocomplete="off" placeholder="an anomaly id, a MAC or a BLE address/type"></label>
+        <button type="button" id="notes-alert-add">link</button>
+      </div>
+    </section>
     <section class="row2">
       <div class="panel" id="ad-what">
         <div class="label">what it is</div>
@@ -1041,7 +1047,13 @@
     <canvas class="heat" id="dr-week" aria-label="share of weeks present by local hour, Monday first"></canvas>
     <div class="label">anomalies</div>
     <div class="cards" id="dr-anoms"></div>
-    <div id="notes-drawer"></div>
+    <div id="notes-drawer" hidden>
+      <div id="notes-drawer-list"></div>
+      <div class="controls tri-form notes-form">
+        <label>link to <input type="text" id="notes-dev-to" maxlength="47" spellcheck="false" autocomplete="off" placeholder="an alert id (d12) or an anomaly id"></label>
+        <button type="button" id="notes-dev-add">link</button>
+      </div>
+    </div>
     <div id="frrs-drawer"></div>
     <div id="loc-drawer" hidden></div>
     <div id="dr-vendor"></div>
@@ -1069,7 +1081,7 @@
     <div class="label">possibly related</div>
     <ol class="lst" id="notes-sugg"></ol>
     <div class="controls tri-form">
-      <label>link to <input type="text" id="notes-to" maxlength="47" spellcheck="false" autocomplete="off" placeholder="an alert id (d12), an anomaly id or a MAC"></label>
+      <label>link to <input type="text" id="notes-to" maxlength="47" spellcheck="false" autocomplete="off" placeholder="an alert id (d12), an anomaly id, a MAC or a BLE address/type"></label>
       <button type="button" id="notes-add">link</button>
     </div>
   </dialog>
@@ -1093,6 +1105,13 @@
     <div class="sub" id="bledev-chans" hidden></div>
     <div class="label">ble alerts naming it</div>
     <div id="bdr-alerts"></div>
+    <div id="notes-bdrawer" hidden>
+      <div id="notes-bdrawer-list"></div>
+      <div class="controls tri-form notes-form">
+        <label>link to <input type="text" id="notes-ble-to" maxlength="47" spellcheck="false" autocomplete="off" placeholder="an alert id (d12) or an anomaly id"></label>
+        <button type="button" id="notes-ble-add">link</button>
+      </div>
+    </div>
   </aside>
   <aside class="drawer" id="sdrawer" hidden aria-label="ssid">
     <div class="dr-hd">

@@ -150,4 +150,9 @@ int web_gnss_fixes_route(web_gnss_t *g, const char *query, long long now_s,
 /* The /api/health member: counts only. */
 void web_gnss_health_json(web_gnss_t *g, web_jw_t *w);
 
+/* The sensor's position (sensor_health's loc_*, has 0 when none) and
+ * sensor_health's gnss_* summary (seen 0 when none), copied under the
+ * lock: the fleet export's site block (web_fleet.h). */
+void web_gnss_site(web_gnss_t *g, web_loc_t *loc, web_gnss_sh_t *sh);
+
 #endif /* SLOTHWEB_GNSS_H */

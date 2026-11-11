@@ -20,6 +20,7 @@
 #include "web_config.h"
 #include "web_devices.h"
 #include "web_frrs.h"
+#include "web_fleet.h"
 #include "web_chain.h"
 #include "web_ident.h"
 #include "web_ingest.h"
@@ -57,6 +58,7 @@ static web_adsb_t     g_adsb;
 static web_aprs_t     g_aprs;
 static web_sys_t      g_sys;
 static web_chain_t    g_chain;
+static web_fleet_t    g_fleet;
 
 /* The store's BLE rows into the in-memory tables, before any thread
  * starts (the restore runs on the store's writer connection). */
@@ -195,6 +197,13 @@ int main(int argc, char **argv) {
     }
     g_m4.frrs = &g_frrs;
     g_m4.chain = &g_chain;
+    /* The owner's fleet (web_fleet.h): the export is served whatever
+     * the flags say (it is a read, to the allow list); a pull only to
+     * the peers --peer names, on a thread and a store connection of its
+     * own. */
+    web_fleet_init(&g_fleet, cfg.peer, cfg.npeer, cfg.peer_interval_s, cfg.peer_outside,
+                   have_store ? &g_store : NULL);
+    g_m4.fleet = &g_fleet;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -236,11 +245,20 @@ int main(int argc, char **argv) {
     web_ingest_set_aprs(&g_ingest, &g_aprs);
     web_ingest_set_sys(&g_ingest, &g_sys);
     web_ingest_set_chain(&g_ingest, &g_chain);
+    if (web_fleet_start(&g_fleet, err, sizeof(err)) != 0) {
+        fprintf(stderr, "slothweb: fleet: %s\n", err);
+        web_fleet_destroy(&g_fleet);
+        web_server_close(&g_srv);
+        web_frrs_destroy(&g_frrs);
+        web_store_close(&g_store);
+        return 1;
+    }
     if (web_tsdb_start(&g_tsdb, err, sizeof(err)) != 0 ||
         web_ingest_start(&g_ingest, &cfg.sock, cfg.sock_backoff_min_ms,
                          cfg.sock_backoff_max_ms, &g_live,
                          err, sizeof(err)) != 0) {
         fprintf(stderr, "slothweb: %s\n", err);
+        web_fleet_destroy(&g_fleet);
         web_tsdb_stop(&g_tsdb);
         web_server_close(&g_srv);
         web_live_destroy(&g_live);
@@ -259,7 +277,8 @@ int main(int argc, char **argv) {
                     "/api/wifi/*, /api/history/*, /api/sessions, /api/flows, "
                     "/api/flows/graph, /api/frrs/*, /api/ble, /api/ble/alerts, "
                     "/api/ble/ADDR, /api/alerts, /api/alert, /api/pcap, "
-                    "/api/pcap/frames%s, /events)\n",
+                    "/api/pcap/frames, /api/fleet/export, /api/fleet/peers%s, "
+                    "/events)\n",
             where, cfg.allow_sql ? ", /api/query, /api/recipes" : "");
     if (cfg.allow_sql)
         fprintf(stderr, "slothweb: SQL box on (--web-allow-sql): one "
@@ -343,7 +362,18 @@ int main(int argc, char **argv) {
                         "table), A9 needs the store\n");
     }
 
+    if (!cfg.npeer)
+        fprintf(stderr, "slothweb: fleet: /api/fleet/export served to the allow "
+                        "list; no --peer, nothing pulled\n");
+    for (int i = 0; i < cfg.npeer; i++)
+        fprintf(stderr, "slothweb: fleet: pulling %s from %s/api/fleet/export every "
+                        "%d s into %s%s\n", cfg.peer[i].name, cfg.peer[i].url,
+                cfg.peer_interval_s, cfg.store_path,
+                web_fleet_in_tailnet(cfg.peer[i].addr) ? " (tailnet)"
+                                                       : " (outside the tailnet, forced)");
+
     rc = web_server_run(&g_srv);
+    web_fleet_stop(&g_fleet);
     web_sqlbox_stop(&g_sql);
     web_ingest_stop(&g_ingest);
     web_tsdb_stop(&g_tsdb);
@@ -373,6 +403,7 @@ int main(int argc, char **argv) {
     web_ident_destroy(&g_ident);
     web_ptr_destroy(&g_ptr);
     web_slothdb_destroy(&g_sdb);
+    web_fleet_destroy(&g_fleet);
     web_frrs_destroy(&g_frrs);
     web_pcapdir_destroy(&g_pcap);
     web_store_close(&g_store);

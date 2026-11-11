@@ -40,6 +40,8 @@
 #define T SDB_NOW
 #define MAC1 "02:de:00:00:00:16"          /* a demo device (192.0.2.16) */
 #define MAC2 "02:de:00:00:00:99"          /* no device anywhere */
+#define MAC3 "02:de:00:00:00:12"          /* another demo device */
+#define BLE1 "02:de:00:00:00:b1"          /* a BLE advertiser the test feeds */
 #define KARMA "06:de:00:00:00:a4"         /* the demo's KARMA_AP names it */
 
 int    demo_make_db(const char *path, long long now);
@@ -662,6 +664,126 @@ static void test_anomaly_read_only(void) {
 }
 
 #ifdef WITH_SQLITE
+/* One ble_device line into the ledger, as the feed hands it. */
+static void ble_heard(const char *addr, int type, const char *iface) {
+    char line[320];
+    int n = snprintf(line, sizeof(line), "{\"type\":\"ble_device\",\"ts\":%lld,\"addr\":\"%s\","
+                     "\"addr_type\":%d,\"iface\":\"%s\",\"name\":\"BLENAME-MARK\",\"has_rssi\":1,"
+                     "\"rssi\":-60,\"rssi_best\":-60,\"last_seen\":%lld}", T, addr, type, iface, T);
+    web_jrec_t *r = malloc(sizeof(*r));
+    WT_ASSERT(r && web_jl_parse(line, (size_t)n, r) == WEB_JL_OK);
+    if (r) web_frrs_record(&E.f, r);
+    free(r);
+}
+
+/* An alert linked to a device with no anomaly in it (owner ruling
+ * 2026-11-11): made from either end, listed from both, removed from
+ * either. */
+static void test_alert_device_links(void) {
+    env_open(1);
+    if (!E.have_store) { env_close(); return; }
+    char id[40], id2[40], lbl[100], want[200], rm[160];
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    WT_ASSERT(id_of("KARMA_AP", id2, sizeof(id2)));
+    alert_label(id, "PORT_SCAN", lbl, sizeof(lbl));
+    WT_EQ(link_add(id, MAC1, "seen from the nas"), 200);
+    WT_HAS(g_out, "\"unchanged\":false,\"link\":1");
+    WT_HAS(links_part(), "{\"link\":1,\"dir\":\"to\",\"kind\":\"device\",\"id\":\"" MAC1 "\",\"label\":\"\",\"held\":true");
+    WT_HAS(links_part(), "seen from the nas");
+    /* From the device's end. */
+    WT_EQ(related(MAC1), 200);
+    snprintf(want, sizeof(want), "{\"link\":1,\"dir\":\"from\",\"kind\":\"alert\"");
+    WT_HAS(links_part(), want);
+    snprintf(want, sizeof(want), "\"label\":\"%s\",\"held\":true", lbl);
+    WT_HAS(links_part(), want);
+    /* The other order is the same link; a device to another alert is a
+     * second one. */
+    WT_EQ(link_add(MAC1, id, ""), 200);
+    WT_HAS(g_out, "\"unchanged\":true,\"link\":1");
+    WT_EQ(link_add(MAC1, id2, ""), 200);
+    WT_HAS(g_out, "\"unchanged\":false,\"link\":2");
+    WT_EQ(count_of(links_part(), "{\"link\":"), 2);
+    WT_EQ(store_int("SELECT COUNT(*) FROM relation WHERE a_kind + b_kind = 2 AND a_kind <> 1"), 2);
+    WT_EQ(store_int("SELECT COUNT(*) FROM anom_subject"), 0);
+    /* Removed from the device's end: gone from the alert's. */
+    snprintf(rm, sizeof(rm), "{\"op\":\"remove\",\"from\":\"" MAC1 "\",\"link\":1}");
+    WT_EQ(post("/api/frrs/relate", rm), 200);
+    WT_EQ(count_of(links_part(), "{\"link\":"), 1);
+    WT_EQ(related(id), 200);
+    WT_HAS(g_out, "\"links\":[]");
+    /* And from the alert's end. */
+    snprintf(rm, sizeof(rm), "{\"op\":\"remove\",\"from\":\"%s\",\"link\":2}", id2);
+    WT_EQ(post("/api/frrs/relate", rm), 200);
+    WT_EQ(store_int("SELECT COUNT(*) FROM relation"), 0);
+    env_close();
+}
+
+/* A BLE advertiser as a link's end: named by its address and type (as
+ * the TACDB names one), held while the ledger has a row of it, linked
+ * to an anomaly or an alert and never to a device or another
+ * advertiser; the answer carries the sensor its drawer opens by, and
+ * no name of it reaches the store. Unknown, of another type, or
+ * anonymous: refused. Once the ledger has let it go (here a new
+ * module: a restart, the address rotated away) the link says "held":
+ * false and still comes away. Seen red with ble_held() answering 1
+ * (the link to an advertiser never heard written, 200; the gone one
+ * listed as held). */
+static void test_ble_links(void) {
+    env_open(1);
+    if (!E.have_store) { env_close(); return; }
+    char a[WEB_ANOM_TID_MAX + 1], id[40], rm[160];
+    ep(1, "A7", WM_HOST_CONNS, "203.0.113.50", WEB_EP_OPEN, T - 600, T - 60, a);
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    ble_heard(BLE1, 1, "bluetooth-monitor");
+    WT_EQ(link_add(a, BLE1 "/1", "the tag by the door"), 200);
+    WT_HAS(links_part(), "{\"link\":1,\"dir\":\"to\",\"kind\":\"ble\",\"id\":\"" BLE1 "/1\",\"label\":\"\",\"held\":true");
+    WT_HAS(links_part(), "\"iface\":\"bluetooth-monitor\"");
+    /* Upper case and the same address again: the one link. */
+    WT_EQ(link_add(a, "02:DE:00:00:00:B1/1", ""), 200);
+    WT_HAS(g_out, "\"unchanged\":true,\"link\":1");
+    WT_EQ(link_add(id, BLE1 "/1", ""), 200);          /* an alert to it */
+    /* From the advertiser's end: both. */
+    WT_EQ(related(BLE1 "/1"), 200);
+    WT_HAS(g_out, "\"kind\":\"ble\",\"label\":\"\",\"held\":true");
+    WT_EQ(count_of(links_part(), "{\"link\":"), 2);
+    WT_HAS(links_part(), "\"dir\":\"from\",\"kind\":\"anomaly\"");
+    WT_HAS(links_part(), "\"dir\":\"from\",\"kind\":\"alert\"");
+    WT_HAS(g_out, "\"suggest\":[]");
+    /* What is not one, or not held. */
+    WT_EQ(link_add(a, BLE1 "/0", ""), 404);           /* another address type */
+    WT_HAS(g_out, "no_such_ble");
+    WT_EQ(link_add(a, "02:de:00:00:00:b9/1", ""), 404);
+    WT_EQ(link_add(a, "00:00:00:00:00:00/255", ""), 400);   /* anonymous */
+    WT_HAS(g_out, "bad_id");
+    WT_EQ(link_add(a, BLE1 "/7", ""), 400);
+    WT_EQ(link_add(a, BLE1 "/", ""), 400);
+    WT_EQ(link_add(MAC1, BLE1 "/1", ""), 400);        /* a device to it */
+    WT_HAS(g_out, "bad_pair");
+    ble_heard("02:de:00:00:00:b2", 1, "ubertooth");
+    WT_EQ(link_add(BLE1 "/1", "02:de:00:00:00:b2/1", ""), 400);
+    WT_HAS(g_out, "bad_pair");
+    WT_EQ(store_int("SELECT COUNT(*) FROM relation"), 2);
+    WT_EQ(store_int("SELECT COUNT(*) FROM relation WHERE b_kind = 3 AND b_id = '" BLE1 "/1'"), 2);
+    /* The ledger has let it go. */
+    store_down();
+    WT_ASSERT(!store_has("BLENAME-MARK"));
+    store_up(1);
+    WT_EQ(related(a), 200);
+    WT_HAS(links_part(), "\"kind\":\"ble\",\"id\":\"" BLE1 "/1\",\"label\":\"\",\"held\":false,\"note\":\"the tag by the door\"");
+    WT_LACKS(links_part(), "\"iface\"");
+    WT_EQ(related(BLE1 "/1"), 200);
+    WT_HAS(g_out, "\"kind\":\"ble\",\"label\":\"\",\"held\":false");
+    WT_EQ(count_of(links_part(), "{\"link\":"), 2);
+    WT_EQ(link_add(a, BLE1 "/1", ""), 404);           /* nothing new to what is gone */
+    WT_HAS(g_out, "no_such_ble");
+    snprintf(rm, sizeof(rm), "{\"op\":\"remove\",\"from\":\"" BLE1 "/1\",\"link\":1}");
+    WT_EQ(post("/api/frrs/relate", rm), 200);
+    WT_EQ(store_int("SELECT COUNT(*) FROM relation"), 1);
+    env_close();
+}
+#endif
+
+#ifdef WITH_SQLITE
 /* test_no_credential_and_no_stream_string_stored's: a link to a
  * cleartext credential's alert stores its type and address, none of
  * its key (which names a username); an anomaly's evidence line, the
@@ -899,6 +1021,42 @@ static void test_alert_and_anomaly_rows_apart(void) {
 #endif /* WITH_SQLITE: stored, folds, identity */
 
 #ifdef WITH_SQLITE
+static int g_verdicts, g_verdict_anom, g_verdict_state;
+static int verdict_seen(void *ctx, const web_frrs_verdict_t *v) {
+    (void)ctx;
+    g_verdicts++;
+    if (v->type < 0) g_verdict_anom++;
+    g_verdict_state = v->state;
+    return 0;
+}
+
+/* The fleet export's verdicts (web_fleet.h, #192) are alerts' only: an
+ * anomaly's decision, newer than the alert's, is neither handed to the
+ * exporter nor counted against its limit (with room for one row the
+ * alert's is the one read), and /api/fleet/export carries one verdict
+ * line. Seen red with `t.type >= 0 AND` taken out of
+ * web_frrs_verdicts() (the anomaly's row handed over, and with a limit
+ * of one the alert's verdict not read at all). */
+static void test_fleet_verdicts_are_alerts_only(void) {
+    env_open(1);
+    if (!E.have_store) { env_close(); return; }
+    char tid[WEB_ANOM_TID_MAX + 1], id[40];
+    ep(1, "A7", WM_HOST_CONNS, "203.0.113.50", WEB_EP_OPEN, T - 600, T - 60, tid);
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    WT_EQ(triage(id, "noise", NULL), 200);
+    WT_EQ(triage(tid, "incident", NULL), 200);        /* the newer row */
+    g_verdicts = g_verdict_anom = 0;
+    WT_EQ(web_frrs_verdicts(&E.f, 0, 100, verdict_seen, NULL), 1);
+    WT_EQ(g_verdicts, 1);
+    WT_EQ(g_verdict_anom, 0);
+    g_verdicts = g_verdict_anom = 0;
+    g_verdict_state = -1;
+    WT_EQ(web_frrs_verdicts(&E.f, 0, 1, verdict_seen, NULL), 1);
+    WT_EQ(g_verdict_anom, 0);
+    WT_EQ(g_verdict_state, WEB_TRI_NOISE);
+    env_close();
+}
+
 /* ── links ──────────────────────────────────────────────────────────── */
 
 /* A link is read from both ends and removed from either: an anomaly to
@@ -971,22 +1129,28 @@ static void test_links_both_directions(void) {
     env_close();
 }
 
-/* What a link may be: from or to an anomaly, never to itself; each
- * finding at most WEB_REL_PER of them (a write past it refused, never
- * an older link dropped); removed only by a finding that is one of its
- * ends. Seen red: the pair check taken out of frrs_relate_post() (the
- * alert-to-device link written); the per-end bound taken out of
+/* What a link may be: an anomaly to anything, an alert to a device or
+ * a BLE advertiser; never alert to alert, device to device, or a thing
+ * to itself; each finding at most WEB_REL_PER of them (a write past it
+ * refused, never an older link dropped); removed only by a finding that
+ * is one of its ends. Seen red: pair_ok() answering 1 past its self
+ * check (the alert-to-alert and device-to-device links written); the
+ * per-end bound taken out of
  * link_add() (the 33rd written); the END_IS() clause taken out of
  * link_remove() (another finding's link removed, 200). */
 static void test_link_guards(void) {
     env_open(1);
     if (!E.have_store) { env_close(); return; }
-    char a[WEB_ANOM_TID_MAX + 1], t[WEB_ANOM_TID_MAX + 1], id[40], key[24], rm[160];
+    char a[WEB_ANOM_TID_MAX + 1], t[WEB_ANOM_TID_MAX + 1], id[40], id2[40], key[24], rm[160];
     ep(1, "A7", WM_HOST_CONNS, "203.0.113.50", WEB_EP_OPEN, T - 600, T - 60, a);
     WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
-    WT_EQ(link_add(id, MAC1, ""), 400);
+    WT_ASSERT(id_of("KARMA_AP", id2, sizeof(id2)));
+    WT_EQ(link_add(id, id2, ""), 400);                /* alert to alert */
     WT_HAS(g_out, "bad_pair");
-    WT_EQ(link_add(MAC1, id, ""), 400);
+    WT_EQ(link_add(MAC1, MAC3, ""), 400);             /* device to device */
+    WT_HAS(g_out, "bad_pair");
+    WT_EQ(link_add(id, id, ""), 400);
+    WT_EQ(link_add(MAC1, MAC1, ""), 400);
     WT_EQ(link_add(a, a, ""), 400);
     WT_HAS(g_out, "bad_pair");
 #ifdef WITH_SQLITE
@@ -1413,10 +1577,50 @@ static void test_page_module(void) {
         "    if (!S.qt) S.qt = setTimeout(flush, 30);\n"
         "  }\n"));
     WT_ASSERT(has_fn(m,
-        "  function follow(kind, id) {\n"
+        "  function follow(kind, id, iface) {\n"
         "    if (kind === \"alert\" && ALERT_RE.test(id)) { close(); H.go(\"alert\", { id: id }); }\n"
         "    else if (kind === \"device\" && MAC_RE.test(id)) { close(); H.openDrawer(id); }\n"
+        "    else if (kind === \"ble\" && BLE_RE.test(id) && typeof iface === \"string\") {\n"
+        "      close();\n"
+        "      H.openBleDrawer(id.slice(0, 17), Number(id.slice(18)), iface);\n"
+        "    }\n"
         "    else if (kind === \"anomaly\" && TID_RE.test(id)) open(id);\n"
+        "  }\n"));
+    /* The card's chip, button and dimming, whole. A triaged-out state
+     * dims the card whether it was decided on this episode or carried
+     * from an earlier one (owner ruling 2026-11-11), the "earlier
+     * episode" mark still on it (chipOf(), above); an incident never
+     * dims (out()). Seen red with the old rule put back,
+     * `out(st.state) && !st.carried`. */
+    WT_ASSERT(has_fn(m,
+        "  function render(id) {\n"
+        "    var places = S.reg[id];\n"
+        "    if (!places) return;\n"
+        "    var st = S.st[id] || { state: \"untriaged\" };\n"
+        "    S.reg[id] = places.filter(function (p) { return p.card && p.card.isConnected; });\n"
+        "    if (!S.reg[id].length) { delete S.reg[id]; return; }\n"
+        "    S.reg[id].forEach(function (p) {\n"
+        "      clear(p.line);\n"
+        "      if (st.state !== \"untriaged\") p.line.appendChild(chipOf(st));\n"
+        "      p.line.appendChild(btn(st.state === \"untriaged\" ? \"triage\" : \"notes\", \"\", function () { open(id); }));\n"
+        "      p.card.classList.toggle(\"tri-out\", out(st.state));\n"
+        "    });\n"
+        "  }\n"));
+    WT_HAS(m, "function out(st) { return st === \"false\" || st === \"noise\" || st === \"known\"; }");
+    WT_LACKS(m, "!st.carried");
+    /* A panel's form: one link from the panel's subject to what was
+     * typed, whole. */
+    WT_ASSERT(has_fn(m,
+        "  function wire(which, inp, add) {\n"
+        "    if (!$(inp) || !$(add)) return;\n"
+        "    $(add).addEventListener(\"click\", function () {\n"
+        "      var from = S.sub[which], to = typed($(inp)), msg = S.msg[which];\n"
+        "      if (!from || !msg) return;\n"
+        "      if (!REF_RE.test(to)) { msg.textContent = WHY.bad_id; return; }\n"
+        "      var b = { op: \"add\", from: from, to: to };\n"
+        "      if (by()) b.by = by();\n"
+        "      relate(b, msg, function () { $(inp).value = \"\"; if (S.read[which]) S.read[which](); });\n"
+        "    });\n"
         "  }\n"));
     WT_ASSERT(has_fn(m,
         "  function relate(body, msg, then) {\n"
@@ -1441,7 +1645,7 @@ static void test_page_module(void) {
         "      if (l.triage && l.triage.state !== \"untriaged\") li.appendChild(chipOf(l.triage));\n"
         "      if (l.note) li.appendChild(el(\"span\", \"d-normal\", l.note));\n"
         "      li.appendChild(el(\"span\", \"d-dim\", (l.by || \"-\") + \" \xc2\xb7 from \" + (l.peer || \"?\") + \" \xc2\xb7 \" + H.shortStamp(l.ts)));\n"
-        "      if (l.held) li.appendChild(btn(\"open\", \"\", function () { follow(l.kind, l.id); }));\n"
+        "      if (l.held && (l.kind !== \"ble\" || l.iface)) li.appendChild(btn(\"open\", \"\", function () { follow(l.kind, l.id, l.iface); }));\n"
         "      if (rel.writes) li.appendChild(btn(\"remove\", \"\", function () {\n"
         "        relate({ op: \"remove\", from: from, link: l.link }, msg, redraw);\n"
         "      }));\n"
@@ -1514,14 +1718,25 @@ static void test_page_module(void) {
         "      if (window.SlothNotes) SlothNotes.drawer(mac);\n",
         "    if (window.SlothNotes) SlothNotes.alert(j);\n",
         "  if (window.SlothNotes) SlothNotes.init({ el: el, getJSON: getJSON, prefGet: prefGet, stamp: stamp,\n"
-        "    shortStamp: shortStamp, go: go, openDrawer: openDrawer });\n",
+        "    shortStamp: shortStamp, go: go, openDrawer: openDrawer, openBleDrawer: openBleDrawer });\n",
+        /* The Anomalies view's table form: the same chip and panel on
+         * every row, so every place an anomaly is listed can be triaged.
+         * Seen red with the call taken out of anomTable(). */
+        "        row.addEventListener(\"click\", function () { openDrawer(a.key); });\n      }\n"
+        "      if (window.SlothNotes) SlothNotes.card(row, a);\n      box.appendChild(row);\n",
+        "    if (window.SlothNotes) SlothNotes.ble(addr, type);\n",
     };
     for (size_t i = 0; i < sizeof(HOOK) / sizeof(HOOK[0]); i++) WT_EQ(count_of(p, HOOK[i]), 1);
-    WT_EQ(count_of(p, "SlothNotes."), 4 + 4);         /* the hooks, and the module's header naming them */
+    WT_EQ(count_of(p, "SlothNotes."), 6 + 6);         /* the hooks, and the module's header naming them */
+    WT_HAS(p, ".dt .dt-row > .notes-line { grid-column: 1 / -1; margin-top: 0; }");
     static const char *const IDS[] = {
         "<dialog class=\"notes\" id=\"notes-dlg\"", "id=\"notes-alert\"", "id=\"notes-drawer\"",
         "id=\"notes-btns\"", "id=\"notes-hist\"", "id=\"notes-links\"", "id=\"notes-sugg\"",
         "id=\"notes-to\" maxlength=\"47\"", "id=\"notes-add\"", "id=\"notes-msg\"",
+        "id=\"notes-alert-list\"", "id=\"notes-alert-to\" maxlength=\"47\"", "id=\"notes-alert-add\"",
+        "id=\"notes-drawer-list\"", "id=\"notes-dev-to\" maxlength=\"47\"", "id=\"notes-dev-add\"",
+        "id=\"notes-bdrawer\"", "id=\"notes-bdrawer-list\"", "id=\"notes-ble-to\" maxlength=\"47\"",
+        "id=\"notes-ble-add\"",
     };
     for (size_t i = 0; i < sizeof(IDS) / sizeof(IDS[0]); i++) WT_EQ(count_of(p, IDS[i]), 1);
     /* The note field carries the server's own bound, as the alert's does. */
@@ -1553,6 +1768,8 @@ void run_notes_tests(void) {
 #ifdef WITH_SQLITE
     WT_RUN(test_links_both_directions);
     WT_RUN(test_link_guards);
+    WT_RUN(test_alert_device_links);
+    WT_RUN(test_ble_links);
     WT_RUN(test_nothing_from_the_stream_stored);
     WT_RUN(test_anomaly_unchanged_write_adds_no_row);
     WT_RUN(test_anomaly_history_folds);
@@ -1560,6 +1777,7 @@ void run_notes_tests(void) {
     WT_RUN(test_anomaly_survives_reopen_and_redetection);
     WT_RUN(test_anomaly_id_collision_refused);
     WT_RUN(test_alert_and_anomaly_rows_apart);
+    WT_RUN(test_fleet_verdicts_are_alerts_only);
     WT_RUN(test_dangling_target);
     WT_RUN(test_suggestions);
     WT_RUN(test_suggestions_stay_inside_the_budget);

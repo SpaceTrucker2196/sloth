@@ -1093,6 +1093,45 @@ int web_frrs_triage_any(web_frrs_t *f) {
     return any;
 }
 
+/* The fleet export's verdicts (web_fleet.h): each subject's current
+ * state (its newest row) decided at or after since, newest first. The
+ * descriptor and the state only: the note, who and from where stay
+ * here. */
+int web_frrs_verdicts(web_frrs_t *f, long long since, int max,
+                      int (*fn)(void *ctx, const web_frrs_verdict_t *v), void *ctx) {
+    if (!f || !f->wr || max <= 0) return 0;
+    sqlite3_stmt *s = NULL;
+    if (sqlite3_prepare_v2(f->wr,
+            "SELECT t.type, t.addr, t.port, t.first_seen, t.state, t.ts FROM triage t"
+            /* Alerts only: an anomaly's rows (type -1, web_relate.c)
+             * are this sensor's own baselines' findings, no verdict on
+             * an alert a peer could hold, and would take the limit's
+             * rows from the ones that are. */
+            " WHERE t.type >= 0 AND t.ts >= ?1 AND t.id = (SELECT MAX(u.id) FROM triage u"
+            " WHERE u.subject = t.subject) ORDER BY t.ts DESC, t.id DESC LIMIT ?2",
+            -1, &s, NULL) != SQLITE_OK) {
+        sqlite3_finalize(s);
+        return -1;
+    }
+    sqlite3_bind_int64(s, 1, since);
+    sqlite3_bind_int(s, 2, max);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(s)) == SQLITE_ROW) {
+        web_frrs_verdict_t v;
+        memset(&v, 0, sizeof(v));
+        v.type = sqlite3_column_int(s, 0);
+        col_text(s, 1, v.addr, sizeof(v.addr));
+        v.port = sqlite3_column_int(s, 2);
+        v.first_seen = sqlite3_column_int64(s, 3);
+        v.state = sqlite3_column_int(s, 4);
+        v.ts = sqlite3_column_int64(s, 5);
+        n++;
+        if (fn(ctx, &v)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(s);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
 static long long q_count(web_frrs_t *f, const char *sql) {
     sqlite3_stmt *s = NULL;
     long long n = -1;
@@ -1111,6 +1150,11 @@ static int tri_lookup(web_frrs_t *f, const tri_subj_t *q, web_tri_t *out) {
     return 0;
 }
 int web_frrs_triage_any(web_frrs_t *f) { (void)f; return 0; }
+int web_frrs_verdicts(web_frrs_t *f, long long since, int max,
+                      int (*fn)(void *ctx, const web_frrs_verdict_t *v), void *ctx) {
+    (void)f; (void)since; (void)max; (void)fn; (void)ctx;
+    return 0;
+}
 static long long q_count(web_frrs_t *f, const char *sql) { (void)f; (void)sql; return -1; }
 
 #endif

@@ -503,3 +503,13 @@ void web_gnss_health_json(web_gnss_t *g, web_jw_t *w) {
     web_jw_raw(w, "}");
     pthread_mutex_unlock(&g->mu);
 }
+
+void web_gnss_site(web_gnss_t *g, web_loc_t *loc, web_gnss_sh_t *sh) {
+    memset(loc, 0, sizeof(*loc));
+    memset(sh, 0, sizeof(*sh));
+    if (!g || !g->sats) return;
+    pthread_mutex_lock(&g->mu);
+    *loc = g->loc;
+    *sh = g->sh;
+    pthread_mutex_unlock(&g->mu);
+}

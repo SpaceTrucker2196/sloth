@@ -414,7 +414,9 @@ Sat** (satellites in view, sky plot, fix history); Flows as a matrix
 page that leads with detail changes, incidents and confidence, draws
 the attack chain, shows the evidence and capture, the cited assessment,
 and triage buttons (false, noise, incident, the green **known** for
-expected traffic, follow recommended).
+expected traffic, follow recommended). With `--peer NAME=URL` it pulls
+the operator's other slothwebs over the tailnet into its own store,
+off by default and announced ([`docs/wiki/fleet.md`](docs/wiki/fleet.md)).
 
 ![slothweb Overview on synthetic data](docs/assets/slothweb/overview.png)
 

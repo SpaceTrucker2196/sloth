@@ -9,13 +9,28 @@
  * joined to the other's notes.
  *
  * A link is the operator's: from an anomaly to an alert, another
- * anomaly or a device, read from both ends, removed by its number. Both
- * ends are resolved against what exists before a row is written (an
- * alert by the alert routes' own resolution, an anomaly in the engine
- * or already in the store, a device sloth.db, the stream or the ledger
- * holds), and each end's label is slothweb's own words, kept so that a
+ * anomaly, a device or a BLE advertiser, or from an alert to a device
+ * or a BLE advertiser (owner ruling 2026-11-11); never alert to alert
+ * or device to device, which nothing on the page lists. Read from both
+ * ends, removed by its number. Both ends are resolved against what
+ * exists before a row is written (an alert by the alert routes' own
+ * resolution, an anomaly in the engine or already in the store, a
+ * device sloth.db, the stream or the ledger holds, a BLE advertiser
+ * the ledger holds), and each end's label is slothweb's own words, kept
+ * so that a
  * link whose end has aged out of sloth.db or the engine still says what
  * it pointed at ("held": false; the page says "no longer held").
+ *
+ * A BLE advertiser is named as the TACDB names one, its address and
+ * address type ("aa:bb:cc:dd:ee:ff/1", frrs_addr_canon()): the page's
+ * row is that and the sensor that heard it, and one advertiser two
+ * sensors hear is one end. That is all the identity an advertiser has.
+ * A resolvable or non-resolvable private address rotates, and the link
+ * then names an address nothing advertises: "held" false once the
+ * ledger (memory, refilled from the stream) has let it go, as any other
+ * end. The anonymous address (type 255) names no one advertiser and is
+ * refused. No name of it is stored: the label is empty, the id is what
+ * is shown.
  *
  * A candidate is never stored. Two findings are offered as possibly
  * related when they are about the same MAC or the same IP address and
@@ -45,8 +60,9 @@
 #include <sqlite3.h>
 #endif
 
-enum { REF_ALERT = 0, REF_ANOM, REF_DEVICE, REF_COUNT };
-static const char *const REF_WORD[REF_COUNT] = { "alert", "anomaly", "device" };
+/* relation.a_kind / b_kind: appended only, the stored values stand. */
+enum { REF_ALERT = 0, REF_ANOM, REF_DEVICE, REF_BLE, REF_COUNT };
+static const char *const REF_WORD[REF_COUNT] = { "alert", "anomaly", "device", "ble" };
 #define REF_ID_MAX 47
 
 static const char NOT_ESTABLISHED[] =
@@ -65,6 +81,7 @@ typedef struct {
     int        has_subj;                /* subj is its triage subject */
     tri_subj_t subj;
     frrs_anom_t an;
+    char       iface[24];               /* a held BLE advertiser's sensor, or "" */
 } ref_t;
 
 /* ── an anomaly's id ───────────────────────────────────────────────── */
@@ -246,8 +263,25 @@ static int device_held(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *c, c
     return r > 0;
 }
 
+/* Does the ledger hold a row of the BLE address id ("addr/type")? The
+ * sensor of the first into iface, when it is one of sloth's two words. */
+static int ble_held(const web_m4_t *m, const char *id, char *iface, size_t cap) {
+    web_frrs_t *f = m->frrs;
+    iface[0] = '\0';
+    if (!f || !f->lmu_init) return 0;
+    char addr[18];
+    memcpy(addr, id, 17);
+    addr[17] = '\0';
+    const frrs_ble_t *row = NULL;
+    pthread_mutex_lock(&f->lmu);
+    int n = frrs_led_ble(f, addr, atoi(id + 18), &row, 1);
+    if (n > 0 && web_ble_iface_find(row->iface) != WEB_BLE_IF_OTHER) snprintf(iface, cap, "%s", row->iface);
+    pthread_mutex_unlock(&f->lmu);
+    return n > 0;
+}
+
 /* text as a request or a stored link names a finding: an anomaly's id,
- * an alert's, or a MAC. 1 held (or, an anomaly, known to the store), 0
+ * an alert's, a MAC, or a BLE address with its type. 1 held (or, an anomaly, known to the store), 0
  * its shape is one of ours and nothing holds it (kind and id still
  * set, from the text), -1 a read failed, -2 an anomaly id collision,
  * -3 no shape of ours. */
@@ -299,6 +333,16 @@ static int resolve_ref(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *c,
         r->last = last > r->first ? last : r->first;
         r->held = r->has_subj = 1;
         return 1;
+    }
+    if (strlen(text) > 17 && text[17] == '/') {
+        /* Not the anonymous address: it is every anonymous advertiser. */
+        char canon[24];
+        if (frrs_addr_canon(FRRS_K_BLE, text, canon, sizeof(canon)) != 0 || !strcmp(canon + 18, "255"))
+            return -3;
+        r->kind = REF_BLE;
+        snprintf(r->id, sizeof(r->id), "%s", canon);
+        r->held = ble_held(m, canon, r->iface, sizeof(r->iface));
+        return r->held;
     }
     char mac[WEB_KEY_MAX + 1];
     if (strlen(text) != 17 || web_dev_canon_mac(text, mac) != 0) return -3;
@@ -551,6 +595,11 @@ static void related_json(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *c,
         web_jw_raw(w, ",\"by\":");    web_jw_str(w, l->by);
         web_jw_raw(w, ",\"peer\":");  web_jw_str(w, l->peer);
         web_jw_raw(w, ",\"ts\":");    web_jw_int(w, l->ts);
+        /* A held BLE advertiser's sensor: what its drawer is opened by. */
+        if (held && o->kind == REF_BLE && o->iface[0]) {
+            web_jw_raw(w, ",\"iface\":");
+            web_jw_str(w, o->iface);
+        }
         if (g == 1) triage_of(f, o, w);
         else web_jw_raw(w, ",\"triage\":null");
         web_jw_raw(w, "}");
@@ -563,7 +612,7 @@ static void related_json(const web_m4_t *m, web_live_t *live, web_sdb_conn_t *c,
     long long reached = 0;
     char k[WEB_KEY_MAX + 1];
     int is_mac = r->key[0] && web_key_mac(r->key, k) == 0;
-    if (nl >= 0 && r->held && r->key[0] && r->kind != REF_DEVICE) {
+    if (nl >= 0 && r->held && r->key[0] && (r->kind == REF_ANOM || r->kind == REF_ALERT)) {
         cand_anomalies(m, r, ln, nl, cs, &nc);
         if (r->kind == REF_ANOM)
             cand_alerts(m, live, c, now_s, r, is_mac, ln, nl, cs, &nc, &reached);
@@ -666,7 +715,20 @@ int frrs_related_get(const web_m4_t *m, web_live_t *live, const char *query, lon
 #ifdef WITH_SQLITE
 static const char *gone_word(int kind) {
     return kind == REF_ANOM ? "no_such_anomaly" : kind == REF_ALERT ? "no_such_alert"
-                                                                     : "no_such_device";
+         : kind == REF_BLE ? "no_such_ble" : "no_such_device";
+}
+
+/* What may be linked: anything to an anomaly, and an alert to a device
+ * or a BLE advertiser, in either order; nothing to itself. Alert to
+ * alert and device to device are not: an alert's page already lists
+ * its other alerts by the device they name, and no view lists a
+ * device's devices. */
+static int pair_ok(const ref_t *a, const ref_t *b) {
+    if (a->kind == b->kind && !strcmp(a->id, b->id)) return 0;
+    if (a->kind == REF_ANOM || b->kind == REF_ANOM) return 1;
+    int da = a->kind == REF_DEVICE || a->kind == REF_BLE;
+    int db = b->kind == REF_DEVICE || b->kind == REF_BLE;
+    return (a->kind == REF_ALERT && db) || (da && b->kind == REF_ALERT);
 }
 
 static long long end_count(web_frrs_t *f, const ref_t *r) {
@@ -812,10 +874,7 @@ int frrs_relate_post(const web_m4_t *m, web_live_t *live, const web_jrec_t *r, c
         else if (gb == -1) rc = frrs_error(503, "read_failed", NULL, body, cap, len, status);
         else if (ga == 0) rc = frrs_error(404, gone_word(a->kind), "from", body, cap, len, status);
         else if (gb == 0) rc = frrs_error(404, gone_word(b->kind), "to", body, cap, len, status);
-        /* A link is an anomaly's: to an alert, another anomaly or a
-         * device, never to itself. */
-        else if ((a->kind != REF_ANOM && b->kind != REF_ANOM) ||
-                 (a->kind == b->kind && !strcmp(a->id, b->id)))
+        else if (!pair_ok(a, b))
             rc = frrs_error(400, "bad_pair", "to", body, cap, len, status);
         else {
             int g = link_add(f, a, b, note, by, peer, now_s, &link, &why);
