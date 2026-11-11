@@ -781,6 +781,34 @@ static void test_ble_links(void) {
     WT_EQ(store_int("SELECT COUNT(*) FROM relation"), 1);
     env_close();
 }
+
+/* An address whose first hex digit is d (one OUI in sixteen, a
+ * Raspberry Pi's dc:a6:32 among them) is a device or an advertiser,
+ * not a malformed alert id: an alert's id also begins with d, and
+ * resolve_ref() refused everything after that letter that was not
+ * alphanumeric before it looked at the other shapes. Seen red with
+ * that order: 400 bad_id for each of these. */
+static void test_ids_beginning_d(void) {
+    env_open(1);
+    if (!E.have_store) { env_close(); return; }
+    char a[WEB_ANOM_TID_MAX + 1], t[WEB_ANOM_TID_MAX + 1];
+    ep(1, "A7", WM_HOST_CONNS, "203.0.113.50", WEB_EP_OPEN, T - 600, T - 60, a);
+    /* Held: an anomaly is keyed by it. */
+    ep(2, "A2", WM_DEV_PRESENT, "dc:a6:32:00:00:01", WEB_EP_OPEN, T - 600, T - 60, t);
+    WT_EQ(related("dc:a6:32:00:00:01"), 200);
+    WT_HAS(g_out, "\"kind\":\"device\"");
+    WT_EQ(link_add(a, "dc:a6:32:00:00:01", ""), 200);
+    WT_HAS(links_part(), "\"kind\":\"device\",\"id\":\"dc:a6:32:00:00:01\"");
+    ble_heard("de:ad:00:00:00:b1", 1, "bluetooth-monitor");
+    WT_EQ(link_add(a, "de:ad:00:00:00:b1/1", ""), 200);
+    WT_EQ(related("de:ad:00:00:00:b1/1"), 200);
+    WT_HAS(g_out, "\"kind\":\"ble\"");
+    /* Still not ids: an alert's shape with something else in it. */
+    WT_EQ(related("d12:34"), 400);
+    WT_EQ(related("dc:a6:32:00:00:0"), 400);
+    WT_EQ(related("s%3A1"), 400);
+    env_close();
+}
 #endif
 
 #ifdef WITH_SQLITE
@@ -1770,6 +1798,7 @@ void run_notes_tests(void) {
     WT_RUN(test_link_guards);
     WT_RUN(test_alert_device_links);
     WT_RUN(test_ble_links);
+    WT_RUN(test_ids_beginning_d);
     WT_RUN(test_nothing_from_the_stream_stored);
     WT_RUN(test_anomaly_unchanged_write_adds_no_row);
     WT_RUN(test_anomaly_history_folds);
