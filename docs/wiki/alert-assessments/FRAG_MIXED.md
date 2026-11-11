@@ -1,7 +1,7 @@
 ---
 type: FRAG_MIXED
 technique: T1557
-rule_file: src/alerts/rules_twin.c:737 (rule_fragattack(); FRAG_MIXED branch lines 796-806; counter incremented in src/fragattack.c:348-356 inside frag_track())
+rule_file: src/alerts/rules_twin.c:742 (rule_fragattack(); FRAG_MIXED branch lines 796-806; counter incremented in src/fragattack.c:348-356 inside frag_track())
 count_semantics: per poll tick, not per reassembly. fire() increments count (= evaluations) every alerts_update() pass while the BSS row's cumulative mixed_protect counter is > 0 (src/alerts/engine.c:478-480); the counter never decays (src/fragattack.c:352). The leading integer in the detail is the number of continuation fragments whose Protected bit differed from the session's fragment 0 (src/fragattack.c:351-352 runs once per FN>0 frame, retransmissions included), not the number of reassemblies.
 severity_assessment: agree - a reassembly whose fragments disagree on the Protected bit has essentially no conforming cause on an RSN; CRIT is right. The re-fire-every-tick behaviour is the shared count-semantics issue, not a severity issue.
 false_positive_risk: low-to-medium - lower than FRAG_CACHE because the signal is intrinsic to the two fragments (one encrypted, one not) rather than a timing correlation; the residual risk is a hopping radio that pairs a continuation with a stale session of the opposite protection state, since the session key omits the sequence number.
