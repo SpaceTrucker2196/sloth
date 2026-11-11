@@ -553,6 +553,17 @@ int  web_sdb_alerts_upto(web_sdb_conn_t *c, long long from, long long to, long l
                          int max, web_sdb_item_fn fn, void *ctx);
 int  web_sdb_alerts_scan_upto(web_sdb_conn_t *c, long long from, long long to,
                               long long ls_max, long long *rows, long long *oldest);
+/* The GNSS rules' incidents (#192 I6, web_fleetgnss.h): sloth.db's
+ * alert_incidents (v11) of the four receiver keys (gnssjam, gnssspoof,
+ * gnsstime, gnsspos, src/alerts/rules_gnss.c), the key matched in the
+ * WHERE only, last_seen at or after from, newest first, at most max:
+ * n1 = type, n2 = peak_sev, n3 = count, first_seen, last_seen. The
+ * receiver is the host's own, so no capture scope applies. The rows
+ * read, WEB_SDB_GNSS_NONE on a file before v11 (no incident rows: not
+ * "none happened", which a caller must not read as quiet), or -1. */
+#define WEB_SDB_GNSS_NONE (-2)
+int  web_sdb_gnss_incidents(web_sdb_conn_t *c, long long from, int max,
+                            web_sdb_item_fn fn, void *ctx);
 /* Whether c's budget is spent: sets timed_out past its deadline. The
  * progress handler only runs inside a long statement, so a loop of short
  * ones asks this between them. */

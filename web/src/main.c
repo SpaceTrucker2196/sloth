@@ -233,6 +233,10 @@ int main(int argc, char **argv) {
      * own=1, and the transmitters at a known position that calibrate a
      * peer's receiver. Read from /sys once, before any thread. */
     web_fleet_read_own(&g_fleet, NULL);
+    /* GNSS across the sites (#192 I6): this host's receiver, sampled by
+     * the pull thread beside each peer's. */
+    g_fleet.gnss = &g_gnss;
+    g_fleet.gnss_region_m = cfg.peer_gnss_region_km * 1000.0;
     g_m4.fleet = &g_fleet;
     /* A note on a satellite, an aircraft or a station is checked
      * against the panel that holds it (web_notes.h). */
@@ -315,7 +319,8 @@ int main(int argc, char **argv) {
                     "/api/flows/graph, /api/frrs/*, /api/ble, /api/ble/alerts, "
                     "/api/ble/ADDR, /api/alerts, /api/alert, /api/pcap, "
                     "/api/pcap/frames, /api/fleet/export, /api/fleet/peers, "
-                    "/api/fleet/overview, /api/fleet/shared, /api/fleet/locate%s, "
+                    "/api/fleet/overview, /api/fleet/shared, /api/fleet/locate, "
+                    "/api/fleet/gnss%s, "
                     "/events)\n",
             where, cfg.allow_sql ? ", /api/query, /api/recipes" : "");
     if (cfg.allow_sql)

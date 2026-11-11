@@ -157,5 +157,18 @@ void web_gnss_site(web_gnss_t *g, web_loc_t *loc, web_gnss_sh_t *sh);
 
 /* Does the table hold a row of this satellite now (web_notes.h)? */
 int  web_gnss_has(web_gnss_t *g, int gnssid, int prn);
+/* What the fleet's GNSS comparison reads of this receiver (#192 I6,
+ * web_fleetgnss.h), copied under the lock: the newest gnss_fix (has_fix
+ * 0 when none), and the median C/N0 of the satellites tracked (a C/N0
+ * above 0, reported within WEB_GNSS_SAT_TTL_S of now_s), the jamming
+ * rule's own observable (docs/wiki/alert-assessments/GNSS_JAMMING.md:
+ * "Tracked only and a median"), with their count. NULL g: nothing. */
+typedef struct {
+    int            has_fix;
+    web_gnss_fix_t fix;
+    int            tracked;          /* 0: no median */
+    double         cn0_med;
+} web_gnss_fleet_t;
+void web_gnss_fleet(web_gnss_t *g, long long now_s, web_gnss_fleet_t *out);
 
 #endif /* SLOTHWEB_GNSS_H */

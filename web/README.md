@@ -270,6 +270,7 @@ thread fails; slothweb is not running after either.
 | `slothweb: --peer SPEC: that name or address is given twice` | One `--peer` per peer, each with its own name. |
 | `slothweb: --peer: at most N peers` | Eight peers at most. |
 | `slothweb: --peer-interval-secs V: want a whole number from N to N` | 10 to 3600 seconds; the default is 60. |
+| `slothweb: --peer-gnss-region-km V: want a whole number from 1 to N` | 1 to 20000 km; the default is 50. |
 | `slothweb: --strict refuses --peer.` | Pulling a peer is a network service, which `--strict` refuses; drop one of the two. |
 | `slothweb: --peer needs SQLite; this slothweb was built with WITH_SQLITE=0` | The pulled rows live in the store: rebuild with `make web`. |
 | `slothweb: --web-max-mb N is below what --web-max-keys N needs: the baselines and episodes can take about N MB and the ceiling keeps N MB of history beside them (a week of hour rows for each of N series).` | Use the `--web-max-mb` it names, or a lower `--web-max-keys`. |
@@ -487,6 +488,7 @@ milestone (W0, M0 to M6; tracker #102).
 | `--web-serve-evidence-pcap[=remote]` | Serve evidence pcaps (`<incident_id>-<event>-<RULE>[-N].pcap`, the sensor's `--eapol-dir`): decoded on the alert page and downloadable. Off by default, because they are raw 802.11 frames from sloth's evidence ring and may hold EAPOL/PMKID handshake material ([What is never served](#an-alerts-proof)). Announced on stderr whenever given. With `--web-allow-remote` the bare flag is refused (exit 2); `--web-serve-evidence-pcap=remote` serves them to the admitted remote peers too, with a second announcement. |
 | `--peer NAME=URL` | Pull another of the operator's own slothwebs ([Fleet](#fleet), ADR 0008): its `/api/fleet/export`, into this store's `peer_sites` and `peer_sightings`. Repeatable, at most 8. `URL` is `http://A.B.C.D[:PORT]` (port 80 when absent), a literal address in the tailnet, `100.64.0.0/10`; a name is never resolved, and an address outside the tailnet is refused (exit 2) unless `--peer-allow-outside-tailnet` is given. Off by default; each peer is named on stderr at start. Needs a `WITH_SQLITE` build; `--strict` refuses it. |
 | `--peer-interval-secs N` | Seconds between pulls, 10..3600, default 60. |
+| `--peer-gnss-region-km N` | A GNSS event at two sites at most this far apart is regional ([Fleet](#fleet), #192 I6), 1..20000, default 50. A choice, not a sourced figure: how far a ground-level source reaches is not in the corpus. |
 | `--peer-allow-outside-tailnet` | Allow a `--peer` address outside `100.64.0.0/10` (a LAN peer, a loopback test). There is no TLS: the link you chose is the only protection, and each such peer is announced as a warning. |
 | `--help` | Usage. |
 
@@ -5223,7 +5225,7 @@ entry, and a device's bundle carries its PNL as it did before.
 
 ## Fleet
 
-Issue #192 slices F1 and F2, under [ADR 0008](../docs/wiki/adr/0008-own-fleet.md)
+Issue #192 slices F1, F2, I5 and I6, under [ADR 0008](../docs/wiki/adr/0008-own-fleet.md)
 (the owner's own sensors share at full fidelity over the tailnet) and
 [docs/wiki/fleet.md](../docs/wiki/fleet.md). Each slothweb serves what
 its sensor has seen to the addresses its allow list admits, and pulls
@@ -5241,14 +5243,15 @@ stream's own strict decoder (`web_jsonl.h`) and nothing new:
 | Line | Members |
 |---|---|
 | `fleet_export` (first) | `fleet_export_version` (1), `generated` (the peer's clock), `since`, `site_label` (sloth.db's newest session label), `slothweb_version`, `sloth_version` (null: not kept), `sloth_db` (`open`, `none`, `unavailable`), `lat`, `lon`, `alt_m`, `pos_source` (`gps`/`fixed`), `pos_ts`, `pos_age_s` (all null without a position; from `sensor_health`'s `loc_*`) |
-| `gnss` | `sensor_health`'s receiver summary: `gps_state`, `sats_in_view`, `sats_used`, `cn0_mean`, `time_offset_ms`, `jam`, `ts` |
+| `gnss` | `sensor_health`'s receiver summary: `gps_state`, `sats_in_view`, `sats_used`, `cn0_mean`, `time_offset_ms`, `jam`, `ts`; with `gnss=1` (#192 I6) also the newest fix (`fix_ts`, `mode`, `fix_lat`, `fix_lon`, `eph`, `hdop`) and the tracked satellites' median C/N0 (`cn0_med`, `tracked`) |
+| `gnss_event` | with `gnss=1` only (#192 I6): sloth.db's `alert_incidents` of the four GNSS rules' keys, the last week's changed since `since`, newest first: `alert_type`, `ty`, `first_seen`, `last_seen`, `count`, `sev`; at most 256 |
 | `wifi` | sloth.db `devices` last seen at or after `since`: `mac`, `vendor`, `ssid` (its last), `rssi`, `bssid` (its newest association), `is_ap`, `first_seen`, `last_seen`; at most 2,000 |
 | `ap` | `beacon_aps`: `bssid`, `ssid`, `channel`, `enc`, `vendor`, `rssi`, times; at most 1,000 |
 | `probe` | each exported client's probe list (`pnl_ssids`), one line per SSID: `mac`, `ssid`, times; 32 a client, 4,000 in all |
 | `ble` | slothweb's BLE advertisers heard since: `addr`, `addr_type`, `name`, `class`, `rssi`, times; at most 1,024 |
 | `alert` | the alert keys whose latest incident is in the window: `alert_type`, `ty`, `fingerprint` (FNV-1a of type and title), `title`, `ip`, `sev`, `count`, times; at most 1,000 |
 | `verdict` | each triaged finding's current state decided since: `alert_type`, `addr`, `port`, `alert_first_seen`, `state`, `ts`; at most 1,000 |
-| `fleet_end` (last) | `rows`, the count of each kind, `truncated_<kind>` for each, with `next=1` or a page `next_wifi`, `next_ap`, `next_alert`, `next_verdict` (null, or the cursor after the last row sent of a kind that was cut), `complete: true` |
+| `fleet_end` (last) | `rows`, the count of each kind, `truncated_<kind>` for each, with `next=1` or a page `next_wifi`, `next_ap`, `next_alert`, `next_verdict` (null, or the cursor after the last row sent of a kind that was cut), with `gnss=1` `gnss_event` (the incident lines sent) and `gnss_complete` (true only when the week's incidents were read to the end: false on a sloth.db before v11, a read error or timeout, or the cap; the importer then takes no `ev` coverage from the answer), `complete: true` |
 
 Every member of every line is listed once, in `web_fleet_members[]`:
 the writer names nothing else (an unlisted name fails the answer, 503)
@@ -5403,7 +5406,41 @@ The export's `own=1` adds `own_macs` to its header (this site's physical
 interfaces' addresses, comma-separated, or `null`); an F2 puller never
 asks for it, and an F2 export refuses it as an unknown parameter, which
 the puller answers by asking with `next=1` alone and not asking with
-`own=1` for an hour.
+`own=1` for an hour. `gnss=1` (#192 I6) the same way, in front of it:
+an I5 export refuses it, and the puller asks again with
+`next=1&own=1` and not with `gnss=1` for the hour.
+
+**`/api/fleet/gnss?limit=N`** (#192 I6; GET only, limit 50, 1..200;
+`web/src/web_fleetgnss.h`): GNSS across the sites. `local`: this site's
+sloth.db (`open`, `none`, `unavailable`, or `no_incidents` for a file
+before v11, which never reads as quiet). `sites`: each
+receiver as its last sample said (`fresh`, `incidents` offered,
+`state`, satellites, `cn0_mean`, `cn0_med` over `tracked`, `jam`,
+`time_offset_ms`, `skew_s`, the `fix` with `eph` and `hdop`), its
+`reference` (the coordinate-wise median of up to a week of fixes, one a
+600 s, from 6 on: `n`, `lat`, `lon`, `displacement_m` of the fix now,
+`bound_m` = 3 x eph, `outside`) and `time` (the offset now against the
+median of the hour before, `step_ms`, `stepped` at 1000 ms or more; a
+peer's skew the same way, `skew_step_s`, `skew_moved` at 2 s or more).
+`baseline`: each pair, `ref_m` between the references, `now_m` between
+the fixes now, `delta_m`, `bound_m` = 3 x (eph + eph), `verdict`
+(`within`, `outside`, `undetermined` with `why`) and `moved` (each site
+past its own bound). `position` and `time`: `consistent`, `one_site`
+(and `site`), `several` or `undetermined` (fewer than two sites
+evaluated). `events`, newest first: each GNSS incident of this site
+(sloth.db) and of each peer (its `gnss_event` lines, in this site's
+clock), and each `JAM_IND` (indicator 128 or more) and `CN0_DROP` (the
+tracked median 10 dB under the site's own hour) a site's samples show:
+`site`, `type`, `class` (interference, spoof, time, position),
+`source`, times, `verdict` (`regional`, `local`, `undetermined`) and the
+sites `with` the same class within 120 s, `quiet` (observed from 120 s
+before it to a pull at least 120 s after its end, nothing), `stale`
+(not observed so: an event still running, or not yet pulled past its
+window, has no quiet site) and `far` (outside
+`--peer-gnss-region-km` or with no position). `counts` by verdict over
+the week, and `basis`: each class's sources and which numbers are a
+choice. `/api/fleet/overview` gains `gnss`: the `position` and `time`
+verdicts and the last day's `events_24h` by verdict.
 
 **The Fleet tab** (after TACDB, `web/ui/fleet.js`): the sites on an SVG
 map with the distance between each pair, a health card per peer, and
@@ -5413,7 +5450,11 @@ the located emitters (I5): each candidate a translucent circle of its
 radius (the key on hover or tap), the picked row's range circles dashed,
 and a metre scale; it fits the sites and the candidates, so at a 17 m
 baseline it is drawn in metres. A "located emitters" table follows the
-map. The other inferences across sites are F3 and F4.
+map. "GNSS across the sites" (I6) follows: a card per receiver (C/N0,
+satellites, fix, distance from its reference, clock offset), a gauge
+per pair of sites (the band is the bound around the reference distance,
+the mark the distance now) and the classified events. The other
+inferences across sites are F3 and F4.
 
 ## Capture scope
 

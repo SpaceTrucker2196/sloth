@@ -80,6 +80,7 @@ typedef struct {
     int      npeer;
     int      peer_interval_s;      /* --peer-interval-secs */
     int      peer_outside;         /* --peer-allow-outside-tailnet */
+    int      peer_gnss_region_km;  /* --peer-gnss-region-km (#192 I6) */
 } web_config_t;
 
 void web_config_defaults(web_config_t *c);

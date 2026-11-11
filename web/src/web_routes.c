@@ -11,6 +11,7 @@
 #include "web_bledev.h"
 #include "web_evidence.h"
 #include "web_fleet.h"
+#include "web_fleetgnss.h"
 #include "web_locate.h"
 #include "web_bundle.h"
 #include "web_flows.h"
@@ -1819,6 +1820,8 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_fleet_heap(rq, h, out, outsz, r, web_fleet_shared_route);
         if (!strcmp(rq->path, "/api/fleet/locate"))
             return route_fleet_heap(rq, h, out, outsz, r, web_fleet_locate_route);
+        if (!strcmp(rq->path, "/api/fleet/gnss"))
+            return route_fleet_heap(rq, h, out, outsz, r, web_fleet_gnss_route);
         /* Without --web-allow-sql neither exists: a 404 like any path. */
         if (h->sql && h->sql->enabled) {
             if (!strcmp(rq->path, "/api/query"))

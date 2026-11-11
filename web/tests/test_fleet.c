@@ -9,6 +9,7 @@
  * v7 -> v8 migration and its failure are test_store.c's, beside the
  * other steps (make_v6() lives there). */
 #include <arpa/inet.h>
+#include <math.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
@@ -22,7 +23,9 @@
 
 #include "web_assets.h"
 #include "web_config.h"
+#include "web_alertkb.h"
 #include "web_fleet.h"
+#include "web_fleetgnss.h"
 #include "web_frrs.h"
 #include "web_jsonl.h"
 #include "web_gnss.h"
@@ -230,6 +233,7 @@ static char *fleet_module(const char *p) {
 
 static int count_of(const char *s, const char *needle) {
     int n = 0;
+    if (!s) return 0;
     for (const char *q = strstr(s, needle); q; q = strstr(q + 1, needle)) n++;
     return n;
 }
@@ -237,12 +241,13 @@ static int count_of(const char *s, const char *needle) {
 /* The tab after TACDB, its click, show()'s hook, the init line with the
  * helpers lent, the view and its ids; the map is the page's own <svg>
  * drawn with the elements' length properties (no attribute writes, no
- * namespace URL in the page); the module fetches nothing but the three
- * routes. Pinned by whole functions (#171 V1's review): the projection
- * (fitted to the sites and the located candidates' radii, #192 I5), the
- * metre scale bar, the located emitters' layer,
- * a site's bar on the shared axis, the device link, the SVG element
- * maker, the poll. The fetch census was seen red with a third getJSON
+ * namespace URL in the page); the module fetches nothing but the four
+ * routes (#192 I6 added /api/fleet/gnss). Pinned by whole functions
+ * (#171 V1's review): the projection (fitted to the sites and the
+ * located candidates' radii, #192 I5), the metre scale bar, the located
+ * emitters' layer, a site's bar on the shared axis, the device link, the
+ * SVG element maker, the poll, and the GNSS panel's gauge, event rows
+ * and load (#192 I6). The fetch census was seen red with a third getJSON
  * ("/api/fleet/peers") added to loadOverview(), and with a fetch("/x")
  * added to load(); the one-control census with a second <select
  * id="fleet-x"> added to v-fleet; the token-only colours with the
@@ -262,7 +267,8 @@ static void test_fleet_page(void) {
     static const char *const ids[] = {
         "fleet-head", "fleet-empty", "fleet-map", "fleet-map-g", "fleet-map-note",
         "fleet-cards", "fleet-shared-note", "fleet-kind", "fleet-shared-rows", "fleet-axis",
-        "fleet-loc-note", "fleet-loc-rows",
+        "fleet-loc-note", "fleet-loc-rows", "fleet-gnss-note", "fleet-gnss-sites",
+        "fleet-gnss-base", "fleet-gnss-rows",
     };
     char *mod = fleet_module(p);
     WT_ASSERT(mod != NULL);
@@ -419,9 +425,81 @@ static void test_fleet_page(void) {
               "    load();\n"
               "    if (!S.timer) S.timer = setInterval(function () { if (!$(\"v-fleet\").hidden) load(); }, POLL_MS);\n"
               "  }");
-    /* The module's fetches: the three routes, through the page's getJSON,
+    /* GNSS across the sites (#192 I6): the gauge (the band +/- the bound
+     * around the reference distance, the mark the distance now), the
+     * classified events' rows, the load and its note. */
+    WT_HAS(mod,
+              "  function gauge(p) {\n"
+              "    var row = H.el(\"div\", \"fleet-gauge\");\n"
+              "    row.appendChild(H.el(\"span\", \"fleet-who\", siteName(p.a) + \" - \" + siteName(p.b)));\n"
+              "    var tr = H.el(\"div\", \"fleet-gtrack\");\n"
+              "    if (num(p.delta_m) && num(p.bound_m)) {\n"
+              "      var span = Math.max(p.bound_m * 1.5, Math.abs(p.delta_m) * 1.2, 1);\n"
+              "      var band = H.el(\"div\", \"fleet-gband\"), mark = H.el(\"div\", \"fleet-gmark\" + (p.verdict === \"outside\" ? \" out\" : \"\"));\n"
+              "      band.style.left = (50 - 50 * p.bound_m / span).toFixed(2) + \"%\";\n"
+              "      band.style.width = (100 * p.bound_m / span).toFixed(2) + \"%\";\n"
+              "      mark.style.left = (50 + 50 * p.delta_m / span).toFixed(2) + \"%\";\n"
+              "      tr.appendChild(band);\n"
+              "      tr.appendChild(mark);\n"
+              "    }\n"
+              "    row.appendChild(tr);\n"
+              "    row.appendChild(H.el(\"span\", p.verdict === \"outside\" ? \"warn\" : \"\", p.verdict === \"undetermined\"\n"
+              "      ? \"undetermined (\" + (p.why || \"\").replace(/_/g, \" \") + \")\"\n"
+              "      : p.ref_m + \" m then, \" + p.now_m + \" m now: \" + (p.delta_m > 0 ? \"+\" : \"\") + p.delta_m + \" m, bound +/-\" +\n"
+              "        p.bound_m + \" m, \" + p.verdict + (p.moved.length ? \"; moved: \" + p.moved.map(siteName).join(\", \") : \"\")));\n"
+              "    return row;\n"
+              "  ");
+    WT_HAS(mod,
+              "  function gnssRows(j) {\n"
+              "    var box = $(\"fleet-gnss-rows\");\n"
+              "    while (box.firstChild) box.removeChild(box.firstChild);\n"
+              "    j.events.forEach(function (e) {\n"
+              "      var row = H.el(\"div\", \"fleet-gev\");\n"
+              "      row.appendChild(H.el(\"span\", \"\", H.stamp(e.first_seen) + (e.last_seen > e.first_seen ? \" +\" +\n"
+              "                           Math.round((e.last_seen - e.first_seen) / 60) + \" min\" : \"\")));\n"
+              "      row.appendChild(H.el(\"span\", \"\", siteName(e.site)));\n"
+              "      row.appendChild(H.el(\"span\", \"\", e.type + \" (\" + e.class + (e.source === \"sample\" ? \", from the summary\" : \"\") + \")\"));\n"
+              "      row.appendChild(H.el(\"span\", \"fleet-v \" + e.verdict, e.verdict === \"local\" ? \"this site only, the others watching\" : e.verdict));\n"
+              "      var who = [];\n"
+              "      if (e.with.length) who.push(\"same at \" + e.with.map(siteName).join(\", \"));\n"
+              "      if (e.quiet.length) who.push(\"quiet at \" + e.quiet.map(siteName).join(\", \"));\n"
+              "      if (e.stale.length) who.push(\"not observed at \" + e.stale.map(siteName).join(\", \"));\n"
+              "      if (e.far.length) who.push(\"outside the region: \" + e.far.map(siteName).join(\", \"));\n"
+              "      var w = H.el(\"span\", \"\", who.join(\"; \") || \"no other site\");\n"
+              "      w.title = j.basis[e.class] || \"\";\n"
+              "      row.appendChild(w);\n"
+              "      box.appendChild(row);\n"
+              "    });\n"
+              "  ");
+    WT_HAS(mod,
+              "  function loadGnss() {\n"
+              "    var gen = ++S.ggen;\n"
+              "    return H.getJSON(\"/api/fleet/gnss?limit=50\").then(function (j) {\n"
+              "      if (gen !== S.ggen) return;\n"
+              "      gnssCards(j);\n"
+              "      var base = $(\"fleet-gnss-base\");\n"
+              "      while (base.firstChild) base.removeChild(base.firstChild);\n"
+              "      j.baseline.forEach(function (p) { base.appendChild(gauge(p)); });\n"
+              "      gnssRows(j);\n"
+              "      var c = j.counts;\n"
+              "      H.set(\"fleet-gnss-note\", \"position \" + j.position.verdict.replace(\"_\", \" \") +\n"
+              "            (j.position.site ? \" (\" + siteName(j.position.site) + \")\" : \"\") + \", time \" +\n"
+              "            j.time.verdict.replace(\"_\", \" \") + (j.time.site ? \" (\" + siteName(j.time.site) + \")\" : \"\") +\n"
+              "            \"; this week \" + c.regional + \" regional, \" + c.local + \" local, \" + c.undetermined +\n"
+              "            \" undetermined; window \" + j.window_s + \" s, region \" + dist(j.region_m) +\n"
+              "            (j.local === \"open\" ? \"\" : \"; this site's own incidents not read (sloth.db: \" + j.local.replace(/_/g, \" \") + \")\"));\n"
+              "    }).catch(function (e) {\n"
+              "      if (gen === S.ggen) H.set(\"fleet-gnss-note\", H.errText(e.message));\n"
+              "    });\n"
+              "  ");
+    WT_HAS(mod,
+              "  function load() {\n"
+              "    loadOverview().then(loadLocate).then(loadShared).then(loadGnss);\n"
+              "  }");
+    /* The module's fetches: the four routes, through the page's getJSON,
      * and nothing else. */
-    WT_EQ(count_of(mod, "getJSON("), 3);
+    WT_EQ(count_of(mod, "getJSON("), 4);
+    WT_HAS(mod, "H.getJSON(\"/api/fleet/gnss?limit=50\")");
     WT_HAS(mod, "H.getJSON(\"/api/fleet/overview\")");
     WT_HAS(mod, "H.getJSON(\"/api/fleet/locate?kind=\" + kind + \"&limit=50\")");
     WT_HAS(mod, "H.getJSON(\"/api/fleet/shared?kind=\" + kind + \"&limit=100\")");
@@ -450,8 +528,9 @@ static void test_fleet_page(void) {
     WT_ASSERT(rcss && fcss && rcss < fcss);
     const char *rjs = strstr(p, "// slothweb: the Radar view"), *fjs = strstr(p, "// slothweb: the Fleet view");
     WT_ASSERT(rjs && fjs && rjs < fjs);
-    /* Colours by token only, so the light theme follows. */
-    const char *c0 = fcss, *c1 = fcss ? strstr(fcss, ".fleet-lane.self .fleet-bar") : NULL;
+    /* Colours by token only, so the light theme follows: to the end of
+     * the GNSS panel's rules (#192 I6). */
+    const char *c0 = fcss, *c1 = fcss ? strstr(fcss, ".fleet-v.undetermined {") : NULL;
     WT_ASSERT(c0 && c1);
     if (c0 && c1) {
         size_t n = (size_t)(c1 - c0);
@@ -939,7 +1018,7 @@ static void test_pull_good_and_upsert(void) {
     int rc = pull_with(GOOD, 0, req, sizeof(req));
     if (rc) fprintf(stderr, "    pull: %s\n", F.peer[0].last_error);
     WT_EQ(rc, 0);
-    WT_HAS(req, "GET /api/fleet/export?since=0&next=1&own=1 HTTP/1.1\r\n");
+    WT_HAS(req, "GET /api/fleet/export?since=0&next=1&own=1&gnss=1 HTTP/1.1\r\n");
     WT_HAS(req, "Host: 127.0.0.1:");
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sites WHERE peer='beta' AND"
                       " label='beta-site' AND pos_source='fixed' AND lat>41.87 AND"
@@ -963,7 +1042,7 @@ static void test_pull_good_and_upsert(void) {
 
     rc = pull_with(GOOD2, 0, req, sizeof(req));
     WT_EQ(rc, 0);
-    WT_HAS(req, "GET /api/fleet/export?since=1792626880&next=1&own=1 HTTP/1.1\r\n");
+    WT_HAS(req, "GET /api/fleet/export?since=1792626880&next=1&own=1&gnss=1 HTTP/1.1\r\n");
     WT_EQ(sightings(), 7);
     WT_EQ(q1(g_store, "SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi' AND"
                       " key='da:a1:19:00:00:01' AND label='CafeFree' AND rssi=-60"
@@ -1224,6 +1303,7 @@ typedef struct {
     int       lfd, stop, n;
     int       f1;                     /* answer as an F1 export: a 400 for any '&' */
     int       f2;                     /* answer as an F2 export: a 400 for own= */
+    int       i5;                     /* answer as an I5 export: a 400 for gnss= */
     pthread_mutex_t mu;               /* guards stop */
     char      req[24][256];
     web_fleet_src_t src;
@@ -1266,7 +1346,8 @@ static void *serve_export(void *arg) {
         char *body = NULL;
         size_t bl = 0;
         int st = 0;
-        if ((s->f1 && strchr(query, '&')) || (s->f2 && strstr(query, "own="))) {
+        if ((s->f1 && strchr(query, '&')) || (s->f2 && strstr(query, "own=")) ||
+            (s->i5 && strstr(query, "gnss="))) {
             /* F1's parse_since(): since= alone, else unknown_parameter. */
             body = malloc(64);
             if (body) bl = (size_t)snprintf(body, 64, "{\"error\":\"unknown_parameter\"}");
@@ -1390,7 +1471,7 @@ static void test_backfill_after_a_cut(void) {
     if (F.peer[0].last_error[0]) fprintf(stderr, "    pull 1: %s\n", F.peer[0].last_error);
     /* The whole export, then one page of each cut kind from its floor. */
     WT_ASSERT(srv.n == 5);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1"));
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1"));
     WT_ASSERT(!strncmp(srv.req[1], "since=0&kind=wifi&after=", 24));
     WT_ASSERT(!strncmp(srv.req[2], "since=0&kind=ap&after=", 22));
     WT_ASSERT(!strncmp(srv.req[3], "since=0&kind=alert&after=", 25));
@@ -1446,7 +1527,7 @@ static void test_backfill_after_a_cut(void) {
     /* The incremental pull asks only for what is new; the page goes on
      * from the cursor. */
     char want[64];
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[5], want));
     WT_ASSERT(!strncmp(srv.req[6], "since=0&kind=wifi&after=", 24));
     WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='wifi'"), want_wifi);
@@ -1504,10 +1585,11 @@ static void test_backfill_alerts_past_the_scan(void) {
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
     /* The first answer was cut by the scan, not the cap: fewer keys than
      * the cap, and a backfill. */
-    WT_ASSERT(srv.n >= 3);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1"));
-    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1"));
-    WT_ASSERT(!strncmp(srv.req[2], "since=0&kind=alert&after=", 25));
+    WT_ASSERT(srv.n >= 4);
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1"));
+    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1&own=1"));
+    WT_ASSERT(!strcmp(srv.req[2], "since=0&next=1"));
+    WT_ASSERT(!strncmp(srv.req[3], "since=0&kind=alert&after=", 25));
     for (int i = 0; i < 6 && F.peer[0].bf[WEB_FK_ALERT].active; i++)
         WT_EQ(web_fleet_pull_one(&F, 0, T + 60 * (i + 1)), 0);
     WT_EQ(F.peer[0].bf[WEB_FK_ALERT].active, 0);
@@ -1536,22 +1618,23 @@ static void test_pull_from_an_f1_peer(void) {
     int rc = web_fleet_pull_one(&F, 0, T);
     if (rc) fprintf(stderr, "    pull: %s\n", F.peer[0].last_error);
     WT_EQ(rc, 0);
-    /* own=1 refused, then next=1 refused, then plain (#192 I5 put own=1
-     * in front). */
-    WT_ASSERT(srv.n == 3);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1"));
-    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1"));
-    WT_ASSERT(!strcmp(srv.req[2], "since=0"));
+    /* gnss=1 refused, own=1 refused, then next=1 refused, then plain
+     * (#192 I5 put own=1 in front, I6 gnss=1). */
+    WT_ASSERT(srv.n == 4);
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1"));
+    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1&own=1"));
+    WT_ASSERT(!strcmp(srv.req[2], "since=0&next=1"));
+    WT_ASSERT(!strcmp(srv.req[3], "since=0"));
     WT_ASSERT(here_q("SELECT COUNT(*) FROM peer_sightings WHERE peer='beta'") > 0);
     WT_EQ(F.peer[0].failures, 0);
     WT_EQ(F.peer[0].last_error[0], '\0');
     WT_ASSERT(F.peer[0].no_next_until > T);
     /* Within the hour: plain at once, one request. */
     WT_EQ(web_fleet_pull_one(&F, 0, T + 60), 0);
-    WT_ASSERT(srv.n == 4);
+    WT_ASSERT(srv.n == 5);
     char want[64];
     snprintf(want, sizeof(want), "since=%lld", T - WEB_FLEET_OVERLAP_S);
-    WT_ASSERT(!strcmp(srv.req[3], want));
+    WT_ASSERT(!strcmp(srv.req[4], want));
     web_m4_t m4;
     memset(&m4, 0, sizeof(m4));
     m4.fleet = &F;
@@ -1567,8 +1650,8 @@ static void test_pull_from_an_f1_peer(void) {
      * upgraded meanwhile). */
     srv.f1 = 0;
     WT_EQ(web_fleet_pull_one(&F, 0, T + 60 + WEB_FLEET_NONEXT_S), 0);
-    WT_ASSERT(srv.n == 5);
-    WT_ASSERT(strstr(srv.req[4], "&next=1&own=1") != NULL);
+    WT_ASSERT(srv.n == 6);
+    WT_ASSERT(strstr(srv.req[5], "&next=1&own=1&gnss=1") != NULL);
     here_down(&srv, th);
 }
 
@@ -1819,7 +1902,7 @@ static void test_pull_own_radios(void) {
     here_up(&srv, &th);
     srv.src.own_csv = "02:00:5e:00:00:0b";
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
-    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1"));
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1"));
     WT_EQ(F.peer[0].nown, 1);
     WT_ASSERT(!strcmp(F.peer[0].own[0], "02:00:5e:00:00:0b"));
     WT_EQ(F.peer[0].own_at, T);
@@ -1827,12 +1910,14 @@ static void test_pull_own_radios(void) {
     srv.f2 = 1;
     int n0 = srv.n;
     WT_EQ(web_fleet_pull_one(&F, 0, T + 60), 0);
-    WT_ASSERT(srv.n >= n0 + 2);
+    WT_ASSERT(srv.n >= n0 + 3);
     char want[64];
-    snprintf(want, sizeof(want), "since=%lld&next=1&own=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0], want));
-    snprintf(want, sizeof(want), "since=%lld&next=1", T - WEB_FLEET_OVERLAP_S);
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1", T - WEB_FLEET_OVERLAP_S);
     WT_ASSERT(!strcmp(srv.req[n0 + 1], want));
+    snprintf(want, sizeof(want), "since=%lld&next=1", T - WEB_FLEET_OVERLAP_S);
+    WT_ASSERT(!strcmp(srv.req[n0 + 2], want));
     WT_ASSERT(F.peer[0].no_own_until > T + 60);
     WT_EQ(F.peer[0].no_next_until, 0);
     WT_EQ(F.peer[0].failures, 0);
@@ -2040,7 +2125,7 @@ static void test_locate_route(void) {
                "\"refused\",");
     WT_HAS(ob, "{\"site\":\"beta\",\"own_radios\":2,\"receiver\":{\"state\":\"calibrated\","
                "\"offset_db\":-7.1,");
-    WT_HAS(ob, "],\"distances\":[");
+    WT_HAS(ob, ",\"distances\":[");
     /* An address two sites both name as their own has no known position
      * and is no link for anyone (#192 I5 review): with this site also
      * claiming beta's card, self has no link at all and beta keeps only
@@ -2138,6 +2223,617 @@ static void test_read_own(void) {
     rmdir(p);
     rmdir(d);
 }
+
+/* ── #192 I6: GNSS across the sites ────────────────────────────────── */
+
+/* This site's receiver as sloth writes it (test_gnss.c's records at T):
+ * fixed at W9FJC, eph 4.5, offset -60 ms, three satellites tracked at
+ * 41, 30.5 and 22.5 dB-Hz. */
+static void gnss_feed(web_gnss_t *g, long long ts, double lat, double lon, long long off) {
+    web_jrec_t *r = malloc(sizeof(*r));
+    WT_ASSERT(r != NULL);
+    if (!r) return;
+    char line[1024];
+    const char *const fmt[] = {
+        "{\"type\":\"sensor_health\",\"ts\":%lld,\"capture_iface\":\"any\",\"gps_state\":\"fix\","
+        "\"gnss_sats_in_view\":4,\"gnss_sats_used\":3,\"gnss_cn0_mean\":23.5,"
+        "\"gnss_time_offset_ms\":%lld,\"gnss_jam\":12}",
+        "{\"type\":\"gnss_fix\",\"ts\":%lld,\"src\":\"gpsd:127.0.0.1:2947\",\"fix_ts\":%lld,"
+        "\"mode\":3,\"status\":2,\"nsat\":4,\"usat\":3,\"hdop\":0.9,\"lat\":%.7f,\"lon\":%.7f,"
+        "\"eph\":4.5,\"time_off_ms\":%lld,\"jam\":12,\"tpv_count\":1}",
+    };
+    snprintf(line, sizeof(line), fmt[0], ts, off);
+    WT_EQ(web_jl_parse(line, strlen(line), r), WEB_JL_OK);
+    web_gnss_record(g, r, ts * 1000);
+    snprintf(line, sizeof(line), fmt[1], ts, ts, lat, lon, off);
+    WT_EQ(web_jl_parse(line, strlen(line), r), WEB_JL_OK);
+    web_gnss_record(g, r, ts * 1000);
+    static const struct { int prn; double cn0; } sat[] = { { 5, 41 }, { 7, 22.5 }, { 9, 30.5 },
+                                                           { 11, 0 } };
+    for (size_t i = 0; i < sizeof(sat) / sizeof(sat[0]); i++) {
+        snprintf(line, sizeof(line),
+                 "{\"type\":\"gnss_sat\",\"ts\":%lld,\"gnss\":\"GPS\",\"gnssid\":0,\"svid\":%d,"
+                 "\"prn\":%d,\"el\":40,\"az\":100,\"cn0\":%.1f,\"used\":1,\"health\":1,"
+                 "\"sky_ts\":%lld}", ts, sat[i].prn, sat[i].prn, sat[i].cn0, ts);
+        WT_EQ(web_jl_parse(line, strlen(line), r), WEB_JL_OK);
+        web_gnss_record(g, r, ts * 1000);
+    }
+    free(r);
+}
+
+static void gnss_incidents(const char *db) {
+    char sql[2048];
+    int jam = web_akb_find("GNSS_JAMMING"), tj = web_akb_find("GNSS_TIME_JUMP");
+    int pj = web_akb_find("GNSS_POSITION_JUMP"), sp = web_akb_find("GNSS_SPOOF_SUSPECT");
+    WT_ASSERT(jam > 0 && tj > 0 && pj > 0 && sp > 0);
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,sev,peak_sev,"
+        "count,observations) VALUES"
+        " ('gnssjam','j1',%d,%lld,%lld,1,2,7,7),"
+        " ('gnsspos','p1',%d,%lld,%lld,1,1,1,1),"
+        " ('gnssspoof','s1',%d,%lld,%lld,1,1,1,1),"
+        /* Older than the week: not sent, not classified. */
+        " ('gnsstime','t1',%d,%lld,%lld,1,1,1,1),"
+        /* Another rule's incident with a GNSS type under its own key: the
+         * keys are the filter, so it never travels. */
+        " ('deauth:02:00:00:00:00:01','d1',%d,%lld,%lld,1,1,1,1);",
+        jam, T - 3000, T - 2900, pj, T - 1500, T - 1500, sp, T - 9000, T - 9000,
+        tj, T - 8 * DY, T - 8 * DY, tj, T - 100, T - 100);
+    WT_EQ(sdb_exec(db, sql), 0);
+}
+
+/* The export with gnss=1: the gnss line gains the newest fix and the
+ * tracked median (three satellites above 0 dB-Hz: 30.5), the week's GNSS
+ * incidents travel as gnss_event lines (not the one a week old, not the
+ * one under another key), the end line counts them, and the importer
+ * takes every line. Without gnss=1 none of it is sent: an I5 importer
+ * refuses a member it does not know. That absence was seen red with the
+ * gnss_event read's `xq.gnss &&` dropped (the plain answer then held
+ * gnss_event lines and an I5 importer refused it) and with the gnss
+ * line's `if (xq.gnss)` dropped (fix_lat in the plain answer). */
+static void test_gnss_export(void) {
+    up();
+    gnss_incidents(g_db);
+    web_gnss_t *g = malloc(sizeof(*g));
+    WT_ASSERT(g && web_gnss_init(g) == 0);
+    gnss_feed(g, T - 5, 33.32922, -111.87006, -60);
+    web_fleet_src_t src = { &SDB, NULL, g, &FR, NULL };
+    char *body = NULL;
+    size_t len = 0;
+    int st = 0;
+    WT_EQ(web_fleet_export_route(&src, "since=0&gnss=1", T, &body, &len, &st), 0);
+    WT_EQ(st, 200);
+    char *b = body ? realloc(body, len + 1) : NULL;
+    if (b) b[len] = '\0';
+    WT_HAS(b, "{\"type\":\"gnss\",\"gps_state\":\"fix\",\"sats_in_view\":4,\"sats_used\":3,"
+              "\"cn0_mean\":23.5,\"time_offset_ms\":-60,\"jam\":12,\"ts\":1792627195,"
+              "\"fix_ts\":1792627195,\"mode\":3,\"fix_lat\":33.3292200,\"fix_lon\":-111.8700600,"
+              "\"eph\":4.5,\"hdop\":0.9,\"cn0_med\":30.5,\"tracked\":3}\n");
+    char want[256];
+    snprintf(want, sizeof(want), "{\"type\":\"gnss_event\",\"alert_type\":\"GNSS_JAMMING\","
+             "\"ty\":%d,\"first_seen\":%lld,\"last_seen\":%lld,\"count\":7,\"sev\":2}\n",
+             web_akb_find("GNSS_JAMMING"), T - 3000, T - 2900);
+    WT_HAS(b, want);
+    WT_HAS(b, "\"alert_type\":\"GNSS_POSITION_JUMP\"");
+    WT_HAS(b, "\"alert_type\":\"GNSS_SPOOF_SUSPECT\"");
+    /* Not the week-old time jump, not the deauth key's incident. */
+    WT_EQ(count_of(b, "\"type\":\"gnss_event\""), 3);
+    WT_EQ(count_of(b, "GNSS_TIME_JUMP"), 0);
+    WT_HAS(b, ",\"gnss_event\":3,\"gnss_complete\":true,\"complete\":true}");
+    /* The importer takes the whole answer. */
+    web_fleet_peer_cfg_t pc;
+    char err[256];
+    WT_EQ(web_fleet_parse_peer("beta=http://127.0.0.1:1", &pc, err, sizeof(err)), 0);
+    web_fleet_init(&F, &pc, 1, 60, 1, NULL);
+    long long rows = 0, rts = 0;
+    int rc = web_fleet_ingest(&F, 0, b, len, T, 0, &rows, &rts, err, sizeof(err));
+    if (rc) fprintf(stderr, "    ingest: %s\n", err);
+    WT_EQ(rc, 0);
+    free(b);
+    /* Without gnss=1: neither the fix nor an incident nor the count. */
+    WT_EQ(web_fleet_export_route(&src, "since=0", T, &body, &len, &st), 0);
+    b = body ? realloc(body, len + 1) : NULL;
+    if (b) b[len] = '\0';
+    WT_HAS(b, "{\"type\":\"gnss\",");
+    WT_LACKS(b, "fix_lat");
+    WT_LACKS(b, "gnss_event");
+    WT_LACKS(b, "tracked");
+    WT_EQ(web_fleet_export_route(&src, "since=0&gnss=2", T, &body, &len, &st), 0);
+    WT_EQ(st, 400);
+    free(body);
+    free(b);
+    /* More than the cap in the week: the newest 256 go, and the end line
+     * says they are not all, so the importer takes no coverage from the
+     * answer. Seen red with gev_all set regardless of the cut. */
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+             "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<300)"
+             " INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,sev,"
+             "peak_sev,count,observations) SELECT 'gnssjam','m'||i,%d,%lld-i*60,%lld-i*60,"
+             "1,1,1,1 FROM n;", web_akb_find("GNSS_JAMMING"), T - 4000, T - 4000);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    WT_EQ(web_fleet_export_route(&src, "since=0&gnss=1", T, &body, &len, &st), 0);
+    b = body ? realloc(body, len + 1) : NULL;
+    if (b) b[len] = '\0';
+    WT_HAS(b, ",\"gnss_event\":256,\"gnss_complete\":false,\"complete\":true}");
+    free(b);
+    /* A sloth.db before v11 has no incident rows: no lines, and not
+     * complete, never "none happened". Seen red with the reader's
+     * WEB_SDB_GNSS_NONE returned as 0. */
+    WT_EQ(sdb_exec(g_db, "DROP TABLE alert_incidents;"), 0);
+    WT_EQ(web_fleet_export_route(&src, "since=0&gnss=1", T, &body, &len, &st), 0);
+    b = body ? realloc(body, len + 1) : NULL;
+    if (b) b[len] = '\0';
+    WT_HAS(b, ",\"gnss_event\":0,\"gnss_complete\":false,\"complete\":true}");
+    free(b);
+    web_fleet_destroy(&F);
+    web_gnss_destroy(g);
+    free(g);
+    down();
+}
+
+/* The importer's own checks of the new lines: a gnss_event of a type
+ * that is not GNSS's, an end line whose count is not the lines sent or
+ * that lacks it, a fix with a latitude and no longitude: each refuses
+ * the whole answer. */
+static void test_gnss_import_refusals(void) {
+    web_fleet_peer_cfg_t pc;
+    char err[256];
+    WT_EQ(web_fleet_parse_peer("beta=http://127.0.0.1:1", &pc, err, sizeof(err)), 0);
+    web_fleet_init(&F, &pc, 1, 60, 1, NULL);
+#define GH "{\"type\":\"fleet_export\",\"fleet_export_version\":1,\"generated\":1792627000}\n"
+#define GEND(n) "{\"type\":\"fleet_end\",\"rows\":0,\"wifi\":0,\"ble\":0,\"ap\":0,\"probe\":0," \
+                "\"alert\":0,\"verdict\":0,\"complete\":true" n "}\n"
+#define GEV(t) "{\"type\":\"gnss_event\",\"alert_type\":\"" t "\",\"ty\":90,\"first_seen\":5," \
+               "\"last_seen\":9,\"count\":1,\"sev\":1}\n"
+    static const struct { const char *body, *why; } bad[] = {
+        { GH GEV("DEAUTH_FLOOD") GEND(",\"gnss_event\":1"), "gnss_event line with a value" },
+        { GH GEV("GNSS_JAMMING") GEND(",\"gnss_event\":2"), "gnss_event count" },
+        { GH GEV("GNSS_JAMMING") GEND(""), "gnss_event count" },
+        { GH "{\"type\":\"gnss\",\"gps_state\":\"fix\",\"fix_lat\":33.3}\n" GEND(""),
+          "gnss line with a value" },
+        { GH GEV("GNSS_JAMMING") GEND(",\"gnss_event\":1,\"gnss_complete\":1"),
+          "gnss_complete" },
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        long long rows, rts;
+        err[0] = '\0';
+        WT_EQ(web_fleet_ingest(&F, 0, bad[i].body, strlen(bad[i].body), 1792627000, 0, &rows,
+                               &rts, err, sizeof(err)), -1);
+        if (!strstr(err, bad[i].why)) fprintf(stderr, "    %zu: %s\n", i, err);
+        WT_HAS(err, bad[i].why);
+    }
+    static const char good[] = GH GEV("GNSS_JAMMING") GEND(",\"gnss_event\":1,\"gnss_complete\":true");
+    long long rows, rts;
+    WT_EQ(web_fleet_ingest(&F, 0, good, strlen(good), 1792627000, 0, &rows, &rts, err,
+                           sizeof(err)), 0);
+#undef GH
+#undef GEND
+#undef GEV
+    web_fleet_destroy(&F);
+}
+
+/* The pull: a current peer is asked with gnss=1, its incidents stored as
+ * gnss_event sightings keyed type|first_seen and its receiver sampled
+ * fresh with its incidents offered; an I5 peer refuses gnss=1, is asked
+ * again with next=1&own=1 at once, its rows stored, its receiver sampled
+ * without incidents (evok 0), and not asked with gnss=1 for the hour.
+ * The I5 sample's evok 0 was seen red with evok taken without the end
+ * line's gnss_event count (1 then: an I5 peer's silence read as quiet). */
+static void test_gnss_pull_and_mixed_versions(void) {
+    peer_srv_t srv;
+    pthread_t th;
+    here_up(&srv, &th);
+    gnss_incidents(g_db);
+    web_gnss_t *g = malloc(sizeof(*g));
+    WT_ASSERT(g && web_gnss_init(g) == 0);
+    gnss_feed(g, T - 5, 33.32910, -111.86995, 20);
+    srv.src.gnss = g;
+    WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1&gnss=1"));
+    char sql[256];
+    snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM peer_sightings WHERE kind='gnss_event'"
+             " AND key='GNSS_JAMMING|%lld' AND last_seen=%lld AND extra LIKE '%%\"count\":7%%'",
+             T - 3000, T - 2900);
+    WT_EQ(here_q(sql), 1);
+    WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='gnss_event'"), 3);
+    WT_EQ(here_q("SELECT COUNT(*) FROM peer_sightings WHERE kind='gnss' AND"
+                 " extra LIKE '%\"fix_lat\":33.3291000%'"), 1);
+    int sl = web_fg_slot(F.fg, "beta");
+    WT_ASSERT(sl > 0);
+    web_fg_site_t *fs = &F.fg->site[sl];
+    WT_EQ(fs->n, 1);
+    const web_fg_sample_t *smp = &fs->ring[0];
+    WT_EQ(smp->fresh, 1);
+    WT_EQ(smp->evok, 1);
+    WT_EQ(smp->has_fix, 1);
+    WT_EQ(smp->tracked, 3);
+    WT_EQ(smp->off_ms, 20);
+    WT_EQ(smp->skew, 0);
+    WT_EQ(fs->nev, 1);
+    /* Now an I5 build. */
+    srv.i5 = 1;
+    int n0 = srv.n;
+    WT_EQ(web_fleet_pull_one(&F, 0, T + 60), 0);
+    WT_ASSERT(srv.n >= n0 + 2);
+    char want[96];
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1&gnss=1", T - WEB_FLEET_OVERLAP_S);
+    WT_ASSERT(!strcmp(srv.req[n0], want));
+    snprintf(want, sizeof(want), "since=%lld&next=1&own=1", T - WEB_FLEET_OVERLAP_S);
+    WT_ASSERT(!strcmp(srv.req[n0 + 1], want));
+    WT_ASSERT(F.peer[0].no_gnss_until > T + 60);
+    WT_EQ(F.peer[0].no_own_until, 0);
+    WT_EQ(F.peer[0].failures, 0);
+    WT_EQ(fs->n, 2);
+    WT_EQ(fs->ring[1].fresh, 1);
+    WT_EQ(fs->ring[1].evok, 0);
+    WT_EQ(fs->ring[1].has_trk, 0);
+    WT_EQ(fs->ring[1].has_fix, 0);
+    /* Within the hour: one request, without gnss=1. */
+    n0 = srv.n;
+    WT_EQ(web_fleet_pull_one(&F, 0, T + 120), 0);
+    WT_LACKS(srv.req[n0], "gnss=");
+    WT_HAS(srv.req[n0], "&own=1");
+    /* Current again, with more incidents changed since the last pull
+     * than the cap: the lines are stored and the receiver sampled fresh,
+     * but not as offering its incidents, so the span is closed there.
+     * Seen red with evok taken from the end line's count alone. */
+    srv.i5 = 0;
+    F.peer[0].no_gnss_until = 0;
+    snprintf(sql, sizeof(sql),
+             "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<300)"
+             " INSERT INTO alert_incidents (key,incident_id,type,first_seen,last_seen,sev,"
+             "peak_sev,count,observations) SELECT 'gnssjam','m'||i,%d,%lld+i,%lld+i,"
+             "1,1,1,1 FROM n;", web_akb_find("GNSS_JAMMING"), T, T);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    WT_EQ(web_fleet_pull_one(&F, 0, T + 180), 0);
+    WT_EQ(fs->n, 4);
+    WT_EQ(fs->ring[3].fresh, 1);
+    WT_EQ(fs->ring[3].evok, 0);
+    WT_EQ(fs->ev_open, 0);
+    here_down(&srv, th);
+    web_gnss_destroy(g);
+    free(g);
+}
+
+/* Samples every 60 s over two hours at both sites, both fixed: W9FJC
+ * ("self") at 33.32922,-111.87006 and beta at 33.32910,-111.86995, 16.8 m
+ * apart, eph 4.5 each, offsets -60 and 20 ms. beta's clock 100 s ahead. */
+static void gnss_two_sites(web_fleet_t *f, long long from, long long to) {
+    web_fg_sample_t s;
+    for (int site = 0; site < 2; site++) {
+        int sl = web_fg_slot(f->fg, site ? "beta" : "self");
+        for (long long t = from; t <= to; t += 60) {
+            memset(&s, 0, sizeof(s));
+            s.t = t;
+            s.fresh = s.evok = s.has_trk = 1;
+            s.gts = t + (site ? 100 : 0);
+            s.skew = site ? 100 : 0;
+            snprintf(s.state, sizeof(s.state), "fix");
+            s.sats_used = 9;
+            s.sats_view = 16;
+            s.has_cn0 = 1;
+            s.cn0_mean = 25;
+            s.tracked = 9;
+            s.cn0_med = 38;
+            s.jam = 10;
+            s.has_off = 1;
+            s.off_ms = site ? 20 : -60;
+            s.has_fix = 1;
+            s.mode = 3;
+            s.lat = site ? 33.32910 : 33.32922;
+            s.lon = site ? -111.86995 : -111.87006;
+            s.has_eph = 1;
+            s.eph = 4.5;
+            s.has_hdop = 1;
+            s.hdop = 1.2;
+            web_fg_add(f->fg, sl, &s, 150);
+        }
+    }
+}
+
+static char *gnss_get(const web_fleet_src_t *src, const char *q, long long now) {
+    char *body = NULL;
+    size_t len = 0;
+    int st = 0;
+    WT_EQ(web_fleet_gnss_route(&F, src, q, now, &body, &len, &st), 0);
+    WT_EQ(st, 200);
+    char *b = body ? realloc(body, len + 1) : NULL;
+    if (b) b[len] = '\0';
+    else free(body);
+    WT_LACKS(b, "nan");
+    WT_LACKS(b, "inf");
+    return b;
+}
+
+/* GET /api/fleet/gnss over a sloth.db (this site's incidents), a store
+ * (beta's incidents, by beta's clock, 100 s ahead) and two hours of
+ * samples at each site:
+ *   - the jam here at T-3000..T-2900 and beta's at its T-2850..T-2750
+ *     (ours T-2950..T-2850): regional, each naming the other;
+ *   - the position jump here at T-1500, beta covered and silent: local;
+ *   - the spoof suspect here at T-9000, before beta's coverage began:
+ *     undetermined, beta stale;
+ *   - beta's time jump at T-600 (its clock T-500): local to beta.
+ * The baseline: 16.8 m now as at the references, bound 27 m: within, the
+ * position consistent. Then beta's fix moves 50 m north (eph 4.5, its
+ * own bound 13.5 m): outside, beta named, the pair "outside" with beta
+ * moved. Time: beta's offset steps 2000 ms at the last sample, ours
+ * does not: one_site beta. The overview carries the verdicts and the
+ * day's counts. Seen red with the pair's `moved` taking a site whenever
+ * the pair is outside (self then listed beside beta), with the region
+ * test inverted (every verdict changed), with web_fg_covered() always 1
+ * (the spoof suspect then local), with the skew left out of a peer's
+ * incident times (beta's events printed 100 s late), and with the
+ * no-sloth.db case's ev_none ignored (beta's time jump then local on a
+ * site whose incidents were never read). */
+static void test_gnss_route(void) {
+    up();
+    gnss_incidents(g_db);
+    web_fleet_peer_cfg_t pc;
+    char err[256];
+    WT_EQ(web_fleet_parse_peer("beta=http://127.0.0.1:1", &pc, err, sizeof(err)), 0);
+    web_fleet_init(&F, &pc, 1, 60, 1, &S);
+    WT_EQ(web_store_open_aux(&S, &F.wr, err, sizeof(err)), 0);
+    char sql[2048];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO peer_sites (peer,url,label,last_attempt,last_ok,last_error,lat,lon,"
+        "remote_ts) VALUES ('beta','http://127.0.0.1:1','beta-site',%lld,%lld,'',33.3291,"
+        "-111.86995,%lld);"
+        "INSERT INTO peer_sightings (peer,kind,key,label,vendor,rssi,first_seen,last_seen,extra)"
+        " VALUES ('beta','gnss_event','GNSS_JAMMING|%lld','GNSS_JAMMING','',NULL,%lld,%lld,"
+        "'{\"count\":3,\"sev\":1}'),"
+        " ('beta','gnss_event','GNSS_TIME_JUMP|%lld','GNSS_TIME_JUMP','',NULL,%lld,%lld,"
+        "'{\"count\":1,\"sev\":1}');",
+        T, T, T + 100, T - 2850, T - 2850, T - 2750, T - 500, T - 500, T - 500);
+    WT_EQ(sql_on(g_store, sql), 0);
+    gnss_two_sites(&F, T - 7200, T);
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL };
+    char *b = gnss_get(&src, "", T);
+    WT_HAS(b, "\"local\":\"open\"");
+    WT_HAS(b, "\"window_s\":120,\"gap_s\":150,\"region_m\":50000,");
+    char want[512];
+    snprintf(want, sizeof(want), "{\"site\":\"self\",\"type\":\"GNSS_JAMMING\",\"class\":"
+             "\"interference\",\"source\":\"incident\",\"first_seen\":%lld,\"last_seen\":%lld,"
+             "\"count\":7,\"sev\":2,\"verdict\":\"regional\",\"with\":[\"beta\"],\"quiet\":[],"
+             "\"stale\":[],\"far\":[]}", T - 3000, T - 2900);
+    WT_HAS(b, want);
+    snprintf(want, sizeof(want), "{\"site\":\"beta\",\"type\":\"GNSS_JAMMING\",\"class\":"
+             "\"interference\",\"source\":\"incident\",\"first_seen\":%lld,\"last_seen\":%lld,"
+             "\"count\":3,\"sev\":1,\"verdict\":\"regional\",\"with\":[\"self\"]",
+             T - 2950, T - 2850);
+    WT_HAS(b, want);
+    snprintf(want, sizeof(want), "\"type\":\"GNSS_POSITION_JUMP\",\"class\":\"position\","
+             "\"source\":\"incident\",\"first_seen\":%lld,\"last_seen\":%lld,\"count\":1,"
+             "\"sev\":1,\"verdict\":\"local\",\"with\":[],\"quiet\":[\"beta\"]", T - 1500, T - 1500);
+    WT_HAS(b, want);
+    snprintf(want, sizeof(want), "\"type\":\"GNSS_SPOOF_SUSPECT\",\"class\":\"spoof\","
+             "\"source\":\"incident\",\"first_seen\":%lld,\"last_seen\":%lld,\"count\":1,"
+             "\"sev\":1,\"verdict\":\"undetermined\",\"with\":[],\"quiet\":[],\"stale\":[\"beta\"]",
+             T - 9000, T - 9000);
+    WT_HAS(b, want);
+    snprintf(want, sizeof(want), "{\"site\":\"beta\",\"type\":\"GNSS_TIME_JUMP\",\"class\":"
+             "\"time\",\"source\":\"incident\",\"first_seen\":%lld,\"last_seen\":%lld,"
+             "\"count\":1,\"sev\":1,\"verdict\":\"local\",\"with\":[],\"quiet\":[\"self\"]",
+             T - 600, T - 600);
+    WT_HAS(b, want);
+    /* The deauth key's incident (a GNSS type) is not this site's. */
+    snprintf(want, sizeof(want), "\"first_seen\":%lld", T - 100);
+    WT_LACKS(b, want);
+    WT_HAS(b, "\"counts\":{\"regional\":2,\"local\":2,\"undetermined\":1}");
+    WT_HAS(b, "\"baseline\":[{\"a\":\"self\",\"b\":\"beta\",\"ref_m\":16.8,\"now_m\":16.8,"
+              "\"delta_m\":0.0,\"bound_m\":27.0,\"verdict\":\"within\",\"why\":null,"
+              "\"moved\":[]}]");
+    WT_HAS(b, "\"position\":{\"verdict\":\"consistent\",\"site\":null,\"evaluated\":2}");
+    WT_HAS(b, "\"time\":{\"verdict\":\"consistent\",\"site\":null,\"evaluated\":2}");
+    WT_HAS(b, "\"reference\":{\"n\":13,\"lat\":33.3292200,\"lon\":-111.8700600,"
+              "\"displacement_m\":0.0,\"bound_m\":13.5,\"outside\":false}");
+    WT_HAS(b, "\"basis\":{\"interference\":\"Interference shows as C/N0 collapsing");
+    free(b);
+    /* beta moves 50 m north and its clock offset steps 2 s. */
+    web_fg_sample_t s;
+    int sl = web_fg_slot(F.fg, "beta");
+    s = F.fg->site[sl].ring[(F.fg->site[sl].head + WEB_FG_RING - 1) % WEB_FG_RING];
+    s.t = T + 60;
+    s.gts = T + 160;
+    s.lat += 50.0 / 111194.9;
+    s.off_ms = 2020;
+    web_fg_add(F.fg, sl, &s, 150);
+    b = gnss_get(&src, "limit=1", T + 60);
+    /* North, away from self: the distance grows 21.2 m, inside the
+     * pair's 27 m, but beta is past its own 13.5 m and named. */
+    WT_HAS(b, "\"ref_m\":16.8,\"now_m\":38.1,\"delta_m\":21.2,\"bound_m\":27.0,"
+              "\"verdict\":\"within\",\"why\":null,\"moved\":[\"beta\"]");
+    WT_HAS(b, "\"position\":{\"verdict\":\"one_site\",\"site\":\"beta\",\"evaluated\":2}");
+    WT_HAS(b, "\"time\":{\"verdict\":\"one_site\",\"site\":\"beta\",\"evaluated\":2}");
+    WT_HAS(b, "\"time\":{\"ref_ms\":20,\"now_ms\":2020,\"step_ms\":2000,\"stepped\":true,"
+              "\"skew_ref_s\":100,\"skew_step_s\":0,\"skew_moved\":false}");
+    WT_HAS(b, "\"displacement_m\":50.0,\"bound_m\":13.5,\"outside\":true}");
+    WT_EQ(count_of(b, "{\"site\":\"self\",\"type\""), 0);    /* limit=1: beta's newest */
+    free(b);
+    /* South instead, past self: the distance grows past the bound. */
+    s.t = T + 120;
+    s.gts = T + 220;
+    s.lat -= 100.0 / 111194.9;
+    web_fg_add(F.fg, sl, &s, 150);
+    b = gnss_get(&src, "limit=1", T + 120);
+    WT_HAS(b, "\"verdict\":\"outside\",\"why\":null,\"moved\":[\"beta\"]");
+    WT_HAS(b, "\"position\":{\"verdict\":\"one_site\",\"site\":\"beta\",\"evaluated\":2}");
+    free(b);
+    /* The overview's compact verdicts. */
+    static char ob[65536];
+    size_t ol = 0;
+    int st = 0;
+    WT_EQ(web_fleet_overview_route(&F, &src, "", T + 60, ob, sizeof(ob) - 1, &ol, &st), 0);
+    ob[ol] = '\0';
+    WT_HAS(ob, ",\"gnss\":{\"position\":{\"verdict\":\"one_site\",\"site\":\"beta\",\"evaluated\":2},"
+               "\"time\":{\"verdict\":\"one_site\",\"site\":\"beta\",\"evaluated\":2},"
+               "\"events_24h\":{\"regional\":2,\"local\":2,\"undetermined\":1}}");
+    /* Bad queries. */
+    char *body = NULL;
+    size_t len = 0;
+    WT_EQ(web_fleet_gnss_route(&F, &src, "limit=0", T, &body, &len, &st), 0);
+    WT_EQ(st, 400);
+    free(body);
+    WT_EQ(web_fleet_gnss_route(&F, &src, "x=1", T, &body, &len, &st), 0);
+    WT_EQ(st, 400);
+    free(body);
+    /* No sloth.db here: this site's incidents unknown, so beta's time
+     * jump, which this site was "quiet" for, becomes undetermined. */
+    /* A sample no importer would take (a NaN latitude, an infinite eph),
+     * put straight into the ring: still no nan or inf in the answer
+     * (gnss_get()'s check). Seen red with jnum()'s isfinite() dropped. */
+    s.t = T + 180;
+    s.lat = NAN;
+    s.eph = INFINITY;
+    web_fg_add(F.fg, web_fg_slot(F.fg, "self"), &s, 150);
+    b = gnss_get(&src, "", T + 180);
+    WT_HAS(b, "\"fix\":{\"lat\":null,");
+    free(b);
+    /* An eph of 0 is no estimate: no 0 m bound, so no "moved" on any
+     * metre of noise. Seen red with has_cur taking eph >= 0 (beta, 1 m
+     * from its reference, then outside a 0 m bound and named). */
+    s = F.fg->site[sl].ring[(F.fg->site[sl].head + WEB_FG_RING - 3) % WEB_FG_RING];
+    s.t = T + 240;
+    s.gts = T + 340;
+    s.lat += 1.0 / 111194.9;
+    s.eph = 0;
+    web_fg_add(F.fg, sl, &s, 150);
+    s.t = T + 240;
+    s.lat = 33.32922;
+    s.eph = 4.5;
+    web_fg_add(F.fg, web_fg_slot(F.fg, "self"), &s, 150);
+    b = gnss_get(&src, "", T + 240);
+    WT_HAS(b, "\"displacement_m\":null,\"bound_m\":null,\"outside\":null}");
+    WT_HAS(b, "\"why\":\"no_current_fix\"");
+    WT_LACKS(b, "\"moved\":[\"beta\"]");
+    free(b);
+    web_fleet_src_t nos = { NULL, NULL, NULL, &FR, NULL };
+    b = gnss_get(&nos, "", T + 60);
+    WT_HAS(b, "\"local\":\"none\"");
+    snprintf(want, sizeof(want), "{\"site\":\"beta\",\"type\":\"GNSS_TIME_JUMP\",\"class\":"
+             "\"time\",\"source\":\"incident\",\"first_seen\":%lld,\"last_seen\":%lld,"
+             "\"count\":1,\"sev\":1,\"verdict\":\"undetermined\",\"with\":[],\"quiet\":[],"
+             "\"stale\":[\"self\"]", T - 600, T - 600);
+    WT_HAS(b, want);
+    free(b);
+    web_fleet_destroy(&F);
+    down();
+}
+
+/* The events the samples show, through the route with no store and no
+ * sloth.db: the tracked median falling from 38 to 20 dB-Hz at both sites
+ * over the same 40 minutes (an 18 dB drop, past 10 dB under each site's
+ * own hour): a CN0_DROP each, regional; the jamming indicator at 200
+ * here alone for three minutes to T, past the window from beta's drop:
+ * undetermined at T (beta not yet pulled past its window), local at
+ * T + 120 with beta seen all along; a 1 dB dip is no event. The
+ * drop's own samples are kept out of the median it is measured against,
+ * so a drop standing longer than half the hour stays one event to its
+ * end: seen red with that exclusion removed (the median then reached
+ * 20 dB-Hz after half an hour and the event ended at T-960, not
+ * T-360). */
+static void test_gnss_sample_events(void) {
+    web_fleet_peer_cfg_t pc;
+    char err[256];
+    WT_EQ(web_fleet_parse_peer("beta=http://127.0.0.1:1", &pc, err, sizeof(err)), 0);
+    web_fleet_init(&F, &pc, 1, 60, 1, NULL);
+    gnss_two_sites(&F, T - 9000, T - 3000);
+    int sl[2] = { web_fg_slot(F.fg, "self"), web_fg_slot(F.fg, "beta") };
+    for (long long t = T - 2940; t <= T + 120; t += 60) {
+        if (t == T + 60) {
+            /* At T the indicator's window has not closed at beta's last
+             * pull: no quiet peer yet. */
+            char *b0 = gnss_get(&(web_fleet_src_t){ NULL, NULL, NULL, NULL, NULL }, "", T);
+            char want0[512];
+            snprintf(want0, sizeof(want0), "{\"site\":\"self\",\"type\":\"JAM_IND\",\"class\":"
+                     "\"interference\",\"source\":\"sample\",\"first_seen\":%lld,"
+                     "\"last_seen\":%lld,\"count\":0,\"sev\":1,\"verdict\":\"undetermined\","
+                     "\"with\":[],\"quiet\":[],\"stale\":[\"beta\"]", T - 180, T);
+            WT_HAS(b0, want0);
+            free(b0);
+        }
+        for (int i = 0; i < 2; i++) {
+            web_fg_site_t *fs = &F.fg->site[sl[i]];
+            web_fg_sample_t s = fs->ring[(fs->head + WEB_FG_RING - 1) % WEB_FG_RING];
+            s.t = t;
+            s.gts = t + s.skew;
+            s.cn0_med = t >= T - 2700 && t < T - 300 ? 20 : t == T - 120 ? 37 : 38;
+            s.jam = i == 0 && t >= T - 180 && t <= T ? 200 : 10;
+            web_fg_add(F.fg, sl[i], &s, 150);
+        }
+    }
+    web_fleet_src_t src = { NULL, NULL, NULL, NULL, NULL };
+    char *b = gnss_get(&src, "", T + 120);
+    char want[512];
+    snprintf(want, sizeof(want), "{\"site\":\"self\",\"type\":\"CN0_DROP\",\"class\":"
+             "\"interference\",\"source\":\"sample\",\"first_seen\":%lld,\"last_seen\":%lld,"
+             "\"count\":0,\"sev\":1,\"verdict\":\"regional\",\"with\":[\"beta\"]", T - 2700, T - 360);
+    WT_HAS(b, want);
+    snprintf(want, sizeof(want), "{\"site\":\"beta\",\"type\":\"CN0_DROP\",\"class\":"
+             "\"interference\",\"source\":\"sample\",\"first_seen\":%lld,\"last_seen\":%lld,"
+             "\"count\":0,\"sev\":1,\"verdict\":\"regional\",\"with\":[\"self\"]", T - 2700, T - 360);
+    WT_HAS(b, want);
+    snprintf(want, sizeof(want), "{\"site\":\"self\",\"type\":\"JAM_IND\",\"class\":"
+             "\"interference\",\"source\":\"sample\",\"first_seen\":%lld,\"last_seen\":%lld,"
+             "\"count\":0,\"sev\":1,\"verdict\":\"local\",\"with\":[],\"quiet\":[\"beta\"]",
+             T - 180, T);
+    WT_HAS(b, want);
+    WT_EQ(count_of(b, "\"type\":\"CN0_DROP\""), 2);
+    WT_EQ(count_of(b, "\"type\":\"JAM_IND\""), 1);
+    WT_HAS(b, "\"local\":\"none\",\"store\":false");
+    free(b);
+    web_fleet_destroy(&F);
+}
+
+/* Each site's coverage and reference go to meta at the tick and come
+ * back at a restart (web_fleet_load()); the ring does not. This site's
+ * own sample with no receiver is stale: no span. */
+static void test_gnss_state_survives_a_restart(void) {
+    up();
+    web_fleet_peer_cfg_t pc;
+    char err[256];
+    WT_EQ(web_fleet_parse_peer("beta=http://127.0.0.1:1", &pc, err, sizeof(err)), 0);
+    web_fleet_init(&F, &pc, 1, 60, 1, &S);
+    WT_EQ(web_store_open_aux(&S, &F.wr, err, sizeof(err)), 0);
+    gnss_two_sites(&F, T - 7200, T);
+    /* beta's indicator high at T + 30: a sample event, saved with the
+     * rest. */
+    int b0 = web_fg_slot(F.fg, "beta");
+    web_fg_sample_t hi = F.fg->site[b0].ring[(F.fg->site[b0].head + WEB_FG_RING - 1) % WEB_FG_RING];
+    hi.t = T + 30;
+    hi.jam = 200;
+    web_fg_add(F.fg, b0, &hi, 150);
+    web_fleet_gnss_tick(&F, T + 30);
+    WT_EQ(q1(g_store, "SELECT COUNT(*) FROM meta WHERE name IN ('fleet.gnss.self',"
+                      "'fleet.gnss.beta')"), 2);
+    int sl = web_fg_slot(F.fg, "self");
+    WT_EQ(F.fg->site[sl].nrx, 1);              /* the tick's stale sample added none */
+    int nref = F.fg->site[web_fg_slot(F.fg, "beta")].nref;
+    web_fleet_destroy(&F);
+    web_fleet_init(&F, &pc, 1, 60, 1, &S);
+    WT_EQ(web_store_open_aux(&S, &F.wr, err, sizeof(err)), 0);
+    web_fleet_load(&F);
+    int b = web_fg_slot(F.fg, "beta");
+    WT_EQ(F.fg->site[b].nref, nref);
+    WT_EQ(F.fg->site[b].nrx, 1);
+    WT_EQ(F.fg->site[b].rx_s[0], T - 6600);      /* the drop test's ten before it */
+    WT_EQ(F.fg->site[b].n, 0);
+    /* The sample event came back with the coverage: a restart (or the
+     * ring's eight hours) does not leave beta covered with its event
+     * gone, which would read beta quiet. Seen red with the "se" part
+     * left out of the saved state. */
+    WT_EQ(F.fg->site[b].nse, 1);
+    WT_EQ(F.fg->site[b].se_a[0], T + 30);
+    /* With the references back, the baseline needs only a fresh fix. */
+    gnss_two_sites(&F, T + 60, T + 60);
+    web_fleet_src_t src = { &SDB, NULL, NULL, &FR, NULL };
+    char *body = gnss_get(&src, "", T + 60);
+    WT_HAS(body, "\"verdict\":\"within\"");
+    free(body);
+    web_fleet_destroy(&F);
+    down();
+}
 #endif
 
 void run_fleet_tests(void) {
@@ -2160,6 +2856,12 @@ void run_fleet_tests(void) {
     WT_RUN(test_pull_own_radios);
     WT_RUN(test_locate_route);
     WT_RUN(test_read_own);
+    WT_RUN(test_gnss_export);
+    WT_RUN(test_gnss_import_refusals);
+    WT_RUN(test_gnss_pull_and_mixed_versions);
+    WT_RUN(test_gnss_route);
+    WT_RUN(test_gnss_sample_events);
+    WT_RUN(test_gnss_state_survives_a_restart);
 #endif
     WT_RUN(test_distance);
     WT_RUN(test_fleet_page);

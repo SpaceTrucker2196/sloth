@@ -34,7 +34,19 @@
 .fleet-lane .fleet-track { position: absolute; left: 68px; right: 0; top: 4px; height: 4px; border-bottom: 1px dotted var(--rule); }
 .fleet-lane .fleet-bar { position: absolute; top: -2px; height: 6px; min-width: 2px; background: var(--data); }
 .fleet-lane.self .fleet-bar { background: var(--signal); }
+.fleet-gauge { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(120px, 2fr) minmax(160px, 3fr); gap: 0 8px; align-items: center; font-size: 12px; padding: 3px 0; }
+.fleet-gauge .warn { color: var(--sev-warn); }
+.fleet-gtrack { position: relative; height: 12px; border-bottom: 1px dotted var(--rule); }
+.fleet-gband { position: absolute; top: 2px; height: 8px; background: var(--data); opacity: 0.25; }
+.fleet-gmark { position: absolute; top: 0; width: 2px; height: 12px; margin-left: -1px; background: var(--ink); }
+.fleet-gmark.out { background: var(--sev-warn); }
+.fleet-gev { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(90px, 1fr) minmax(170px, 1.5fr) 100px minmax(200px, 2fr); gap: 0 8px; font-size: 12px; padding: 3px 0 3px 4px; border-bottom: 1px dotted var(--rule); min-width: 640px; }
+.fleet-gev.dhead { opacity: 0.7; }
+.fleet-v.regional { color: var(--data); }
+.fleet-v.local { color: var(--sev-warn); }
+.fleet-v.undetermined { color: var(--muted); }
 @media (max-width: 480px) {
+  .fleet-gauge { grid-template-columns: 1fr; gap: 2px 0; padding: 4px 0; }
   .fleet-lane { height: 14px; }
   .fleet-lane .fleet-who { font-size: 11px; width: 56px; }
   .fleet-lane .fleet-track { left: 60px; top: 5px; }
