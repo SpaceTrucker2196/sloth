@@ -766,6 +766,13 @@
         } else {
           th.appendChild(el("span", "dt-lab", c.label));
         }
+        // G5's ruler (F10): one canvas under the presence column's
+        // label, over the rows' strips, drawn by drawRuler().
+        if (c.ruler) {
+          t.ruler = th.appendChild(el("canvas", "dt-ruler"));
+          t.ruler.ariaHidden = "true";
+          th.classList.add("dt-ruled");
+        }
         var rs = el("span", "dt-rs");
         rs.tabIndex = 0;
         rs.role = "separator";
@@ -2513,7 +2520,7 @@
       { k: "ls", label: "last", w: 10, type: "time", srv: "last", val: dv("last_seen") },
       { k: "z", label: "z", w: 4, min: 3 },
       { k: "an", label: "anom", px: 60, min: 3 },
-      { k: "pr", label: "24 h presence", px: 146 }
+      { k: "pr", label: "24 h presence", px: 146, ruler: true }
     ] });
 
   function devices() {
@@ -2544,6 +2551,8 @@
         // column's bars share its largest count (F17, R3), and the
         // caption counts what is new and what sloth says is approaching.
         D.pfrom = num(j.presence_from) ? j.presence_from : null;
+        drawRuler(DTD.ruler, D.pfrom, D.pfrom + 144 * 600, 144);
+        sunNote($("d-sun"), D.pfrom, 600, 144);
         D.anMax = SlothRf.colMax(D.rows, function (d) { return d.anomalies; });
         var nnew = 0, nnear = 0;
         D.rows.forEach(function (d) {
@@ -2592,11 +2601,85 @@
   // History's presence_cells over its range (the rest of the 144 are
   // past it). A strip the server could not answer draws R5's dash.
   // first: the first-seen cell (glyph.firstCell()), or -1 (F15's mark).
-  function drawStrip(c, hex, n, first) {
-    var cells = glyph.cellsFromHex(hex, n);
+  // from and cellS: cell 0's start and a cell's seconds, which with the
+  // sensor's position colour a present cell by the sun's phase there
+  // (sun.js; owner ruling 2026-11-11).
+  //
+  // The position is the sensor's own, out of /api/gnss (served under
+  // every scope): the newest 2D or 3D fix, else the one sensor_health
+  // carries (the last fix, or --location). It is asked for at load and
+  // every five minutes, and the last valid one is held, so every strip
+  // on the page is coloured from the same place. None held: one ink,
+  // and the strip's words say so. Never the browser's zone or its
+  // location: the viewer need not be where the sensor is.
+  var SUN = { pos: null, key: "" };
+  var SUN_POLL_MS = 300000, SUN_RUNS_MAX = 8;
+  // Every G5 on the page is painted here, and its arguments kept on its
+  // canvas, so sunRepaint() can draw it again when the position comes
+  // or moves.
+  function paintStrip(c, cells, first, from, cellS) {
+    c.g5 = [cells, first, from, cellS];
     glyph.paint(c, glyph.g5(cells, { w: c.clientWidth, h: c.clientHeight,
-                                     first: num(first) ? first : -1, ground: "--bg" }), tok);
+                                     first: num(first) ? first : -1, ground: "--bg",
+                                     from: from, cellS: cellS, pos: SUN.pos }), tok);
   }
+  function drawStrip(c, hex, n, first, from, cellS) {
+    paintStrip(c, glyph.cellsFromHex(hex, n), first, from, cellS);
+  }
+  // G5's ruler in a table's header (F10), once per table: the midnight
+  // ticks in the zone the page's own clock labels are in, now where it
+  // falls, and the sun's phases under them when there is a position.
+  function drawRuler(c, from, to, cells) {
+    if (!c) return;
+    c.g5r = [from, to, cells];
+    if (!num(from) || !num(to)) { glyph.paint(c, [], tok); return; }
+    glyph.paint(c, glyph.g5Ruler({ w: c.clientWidth, h: c.clientHeight, from: from, to: to,
+                                   offset: -new Date(to * 1000).getTimezoneOffset() * 60,
+                                   now: Date.now() / 1000, cells: cells, pos: SUN.pos }), tok);
+  }
+  // The strip's phases in words (R10: a colour is also a word), each
+  // with the time it begins in the window, or why there are none.
+  function sunWords(from, cellS, n) {
+    if (!num(from) || !(cellS > 0)) return "";
+    if (cellS > SlothSun.MAX_CELL_S) return "cells over 1 h: presence in one ink";
+    if (!SUN.pos) return "no sensor position: presence in one ink";
+    var r = SlothSun.runs(SlothSun.phases(from, cellS, n, SUN.pos));
+    if (!r.length) return "";
+    var head = "coloured by the sun at the sensor (" + SUN.pos.from + "): ";
+    if (r.length > SUN_RUNS_MAX) return head + SlothSun.WORDS.join(", ");
+    return head + r.map(function (x) {
+      return SlothSun.WORDS[x[0]] + (x[1] ? " " + hhmmss(from + x[1] * cellS).slice(0, 5) : "");
+    }).join(", ");
+  }
+  function sunNote(e, from, cellS, n) {
+    if (!e) return;
+    e.g5w = [from, cellS, n];
+    e.classList.add("sunw");
+    e.textContent = sunWords(from, cellS, n);
+  }
+  function sunRepaint() {
+    var cs = document.querySelectorAll("canvas"), i;
+    for (i = 0; i < cs.length; i++) {
+      if (cs[i].g5) paintStrip(cs[i], cs[i].g5[0], cs[i].g5[1], cs[i].g5[2], cs[i].g5[3]);
+      if (cs[i].g5r) drawRuler(cs[i], cs[i].g5r[0], cs[i].g5r[1], cs[i].g5r[2]);
+    }
+    var ws = document.querySelectorAll(".sunw");
+    for (i = 0; i < ws.length; i++)
+      if (ws[i].g5w) sunNote(ws[i], ws[i].g5w[0], ws[i].g5w[1], ws[i].g5w[2]);
+  }
+  function sunLoad() {
+    getJSON("/api/gnss").then(function (j) {
+      var p = SlothSun.pos(j);
+      if (!p) return;
+      var k = p.lat.toFixed(2) + "," + p.lon.toFixed(2) + "," + p.from;
+      if (k === SUN.key) return;
+      SUN.pos = p;
+      SUN.key = k;
+      sunRepaint();
+    }).catch(function () { /* no answer: what is held stands, and none is one ink */ });
+  }
+  sunLoad();
+  setInterval(sunLoad, SUN_POLL_MS);
 
   function rowEl() {
     var r = { el: el("div", "drow dt-row"), k: -1, mac: "" };
@@ -2678,7 +2761,7 @@
     var an = num(d.anomalies) ? d.anomalies : 0;
     r.cells["c-an"].className = "c-an";
     SlothRf.count(r.cells["c-an"], an, D.anMax, String(an), an > 0 ? heatClass(0.5) : "d-dim");
-    drawStrip(r.cv, d.presence, 144, glyph.firstCell(d.first_seen, D.pfrom, 600, 144));
+    drawStrip(r.cv, d.presence, 144, glyph.firstCell(d.first_seen, D.pfrom, 600, 144), D.pfrom, 600);
   }
 
   function layout() {
@@ -2945,7 +3028,9 @@
                            " only (the request's time budget)"));
       var rec = j.record;
       drawStrip($("dr-strip"), j.presence, 144,
-                glyph.firstCell(rec ? rec.first_seen : null, j.presence_from, 600, 144));
+                glyph.firstCell(rec ? rec.first_seen : null, j.presence_from, 600, 144),
+                j.presence_from, 600);
+      sunNote($("dr-sun"), j.presence_from, 600, 144);
       // G2 at the drawer's width (F9, §6.8): the device's signal over
       // the hour, with sloth's band and trend.
       var drf = clear("dr-rf");
@@ -2994,10 +3079,12 @@
       // analyst need not leave the view to see when and how near.
       function tail() {
         if (typeof j.presence !== "string") return;
-        box.appendChild(el("div", "label", "24 h presence, 10 min cells"));
+        var lb = box.appendChild(el("div", "label", "24 h presence, 10 min cells "));
+        sunNote(lb.appendChild(el("span", "sub")), j.presence_from, 600, 144);
         var sc = box.appendChild(el("canvas", "strip"));
         sc.ariaLabel = "presence over the last 24 hours";
-        drawStrip(sc, j.presence, 144, glyph.firstCell(d ? d.first_seen : null, j.presence_from, 600, 144));
+        drawStrip(sc, j.presence, 144, glyph.firstCell(d ? d.first_seen : null, j.presence_from, 600, 144),
+                  j.presence_from, 600);
         box.appendChild(SlothRf.block(j.rf, j.mac));
       }
       if (d) {
@@ -3491,7 +3578,7 @@
       { k: "mac", label: "mac", w: 20, min: 8, type: "mac", val: av("mac") },
       { k: "ven", label: "vendor", w: 12, flex: true, type: "text", val: av("vendor") },
       { k: "sig", label: "dBm", px: 150, min: 3, type: "num", val: av("signal") },
-      { k: "pr", label: "24 h presence", px: 146 },
+      { k: "pr", label: "24 h presence", px: 146, ruler: true },
       { k: "ls", label: "last", w: 10, type: "time", val: av("last_seen") }
     ] });
   function clientsDraw() {
@@ -3515,7 +3602,7 @@
       row.role = "row";
       row.tabIndex = 0;
       box.appendChild(row);
-      drawStrip(cv, d.presence, 144, glyph.firstCell(d.first_seen, WF.clFrom, 600, 144));
+      drawStrip(cv, d.presence, 144, glyph.firstCell(d.first_seen, WF.clFrom, 600, 144), WF.clFrom, 600);
     });
     if (!WF.cl.length) box.appendChild(el("div", "sub", "no probing client last seen in the window"));
   }
@@ -3525,6 +3612,8 @@
       if (gen !== WF.gen) return;
       WF.cl = j.rows || [];
       WF.clFrom = num(j.presence_from) ? j.presence_from : null;
+      drawRuler(DTWL.ruler, WF.clFrom, WF.clFrom + 144 * 600, 144);
+      sunNote($("w-cl-sun"), WF.clFrom, 600, 144);
       var nnew = 0, nnear = 0;
       WF.cl.forEach(function (d) {
         if (glyph.isNew(d.first_seen, WF.clFrom)) nnew++;
@@ -4238,7 +4327,7 @@
       { k: "nm", label: "name", w: 10, flex: true, type: "text", val: hv("name") },
       { k: "fs", label: "first", w: 11, type: "time", val: hv("first_seen") },
       { k: "ls", label: "last", w: 11, type: "time", val: hv("last_seen") },
-      { k: "pr", label: "presence in the range", px: 146 }
+      { k: "pr", label: "presence in the range", px: 146, ruler: true }
     ] });
   function histDevs() {
     var box = $("h-devs");
@@ -4286,7 +4375,7 @@
     row.addEventListener("click", function () { openDrawer(d.mac); });
     row.tabIndex = 0;
     $("h-devs").appendChild(row);
-    drawStrip(cv, d.presence, cells);
+    drawStrip(cv, d.presence, cells, -1, HS.pfrom, HS.cellS);
   }
 
   function histAlerts() {
@@ -4336,6 +4425,10 @@
       if (gen !== HS.gen) return;
       HS.devs = j.rows || [];
       HS.cells = j.presence_cells;
+      HS.pfrom = num(j.presence_from) ? j.presence_from : null;
+      HS.cellS = num(j.presence_cell_s) ? j.presence_cell_s : null;
+      drawRuler(DTH.ruler, HS.pfrom, HS.pfrom + HS.cells * HS.cellS, HS.cells);
+      sunNote($("h-sun"), HS.pfrom, HS.cellS, HS.cells);
       histDevs();
       set("h-dev-count", (j.rows || []).length + " overlap the range" +
           (j.more ? ", more than shown" : "") + "; strip: " + fmt(j.presence_cells) +
@@ -4861,6 +4954,7 @@
     if (window.SlothLocation) window.SlothLocation.alert(null);
     if (window.SlothChain) SlothChain.alert(null);
     drawStrip($("ad-strip"), null);
+    sunNote($("ad-sun"));
     if (typeof id !== "string" || !ALERT_ID_RE.test(id)) {
       set("ad-head", "no alert named");
       set("ad-note", "");
@@ -5039,7 +5133,8 @@
         b.type = "button";
         b.addEventListener("click", function () { openDrawer(mac); });
         box.appendChild(b);
-        drawStrip($("ad-strip"), d.presence);
+        drawStrip($("ad-strip"), d.presence, 144, -1, d.presence_from, 600);
+        sunNote($("ad-sun"), d.presence_from, 600, 144);
         AD.others = (d.alerts || []).filter(function (x) { return x.id !== j.id && x.id !== j.db_id; });
         AD.othersNone = "none";
         othersDraw();
@@ -5460,9 +5555,13 @@
   // before its newest, 24 hex digits most significant first); the
   // first-seen cell marked when it is in the day.
   function blePresence(d, now) {
-    var c = $("bdr-strip"), p = d.presence, cells = [], first = -1;
+    var c = $("bdr-strip"), p = d.presence, cells = [], first = -1, from = null, cellS = null;
     if (p && typeof p.bits === "string" && /^[0-9a-f]{24}$/.test(p.bits) && num(p.newest) && num(p.bucket_s)) {
       var bs = p.bucket_s, nowB = Math.floor(now / bs), newB = Math.floor(p.newest / bs);
+      // Cell 0 is the bucket 95 before now's: the strip's start, for
+      // the sun's phase of each quarter hour.
+      from = (nowB - 95) * bs;
+      cellS = bs;
       for (var j = 0; j < 96; j++) {
         var b = nowB - 95 + j, i = newB - b, on = 0;
         if (i >= 0 && i < 96) on = (parseInt(p.bits.charAt(23 - (i >> 2)), 16) >> (i & 3)) & 1;
@@ -5470,7 +5569,8 @@
         if (num(d.first_seen) && Math.floor(d.first_seen / bs) === b) first = j;
       }
     }
-    glyph.paint(c, glyph.g5(cells, { w: c.clientWidth, h: c.clientHeight, first: first, ground: "--bg" }), tok);
+    paintStrip(c, cells, first, from, cellS);
+    sunNote($("bdr-sun"), from, cellS, 96);
     set("bdr-strip-note", cells.length ? "a quarter hour is set when a record's last_seen fell in it; a heard advertiser's record comes once a 10 s slot and a quiet one's on the 300 s heartbeat, so a quiet quarter can be an unchanged advertiser whose heartbeat fell in the next"
                                        : "no data");
   }

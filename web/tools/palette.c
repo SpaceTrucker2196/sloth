@@ -568,6 +568,51 @@ static int chart_apart(void) {
     return bad ? -1 : 0;
 }
 
+/* ── the sun's phases on the presence strip (G5) ───────────────────── */
+
+/* theme.css writes the four --sun-* tokens for both themes (its comment
+ * says why the light ones are not derived). They are graphics, cells
+ * and a ruler band, never text, so each must reach 3:1 on both grounds
+ * (WCAG 1.4.11); and a present cell must be tellable from every other
+ * phase and from the marks drawn on the same strip: the first-seen
+ * cell and the now tick (--signal), the anomaly underline (--heat-2),
+ * the ruler's midnight ticks (--faint). --signal and --heat-2 are not
+ * held apart from each other here: they are a diamond and a 1 px
+ * underline, and were on the strip before this. */
+#define SUN_APART_MIN 20.0
+#define SUN_GFX_MIN 3.0
+#define NSUN 4
+#define NSUN_OTHER 3
+static const char *const SUN_NAME[NSUN + NSUN_OTHER] = {
+    "--sun-night", "--sun-rise", "--sun-day", "--sun-set", "--signal", "--heat-2", "--faint" };
+
+static int sun_apart(void) {
+    rgb_t c[2][NSUN + NSUN_OTHER];
+    int bad = 0;
+    for (int i = 0; i < NSUN + NSUN_OTHER; i++)
+        for (int t = 0; t < 2; t++) c[t][i] = need(SUN_NAME[i], t);
+    for (int i = 0; i < NSUN; i++)
+        for (int t = 0; t < 2; t++) {
+            double rb = contrast(c[t][i], need("--bg", t)), rp = contrast(c[t][i], need("--panel", t));
+            if (rb < SUN_GFX_MIN || rp < SUN_GFX_MIN) {
+                fprintf(stderr, "palette: %s is %.2f:1 on --bg and %.2f:1 on --panel (%s), "
+                                "under %.0f:1\n", SUN_NAME[i], rb, rp, t ? "light" : "dark",
+                        SUN_GFX_MIN);
+                bad = 1;
+            }
+        }
+    for (int i = 0; i < NSUN; i++)
+        for (int j = i + 1; j < NSUN + NSUN_OTHER; j++) {
+            double d0 = de2000(c[0][i], c[0][j]), d1 = de2000(c[1][i], c[1][j]);
+            if (d0 < SUN_APART_MIN || d1 < SUN_APART_MIN) {
+                fprintf(stderr, "palette: %s and %s are %.1f (dark) / %.1f (light) apart, "
+                                "under %.0f\n", SUN_NAME[i], SUN_NAME[j], d0, d1, SUN_APART_MIN);
+                bad = 1;
+            }
+        }
+    return bad ? -1 : 0;
+}
+
 static int compute(void) {
     rgb_t lbg = need("--bg", 1), lpanel = need("--panel", 1), dbg = need("--bg", 0);
     for (int i = 0; i < g_ntok; i++) {
@@ -597,7 +642,8 @@ static int compute(void) {
     for (int i = 0; i < NMON; i++) g_mon[i][0] = xterm_rgb(g_mon_x[i]);
     g_mon[0][1] = light_ground(g_mon[0][0], dbg, lbg);
     for (int i = 1; i < NMON; i++) g_mon[i][1] = light_variant(g_mon[i][0], g_mon[0][1], g_mon[0][1]);
-    return chart_apart();
+    if (chart_apart() != 0) return -1;
+    return sun_apart();
 }
 
 /* ── output ────────────────────────────────────────────────────────── */
@@ -729,6 +775,27 @@ static int emit_contrast(void) {
     for (int i = 0; i < g_napart; i++)
         printf("| `%s`, `%s` | %.1f | %.1f |\n", g_apart[i].a, g_apart[i].b,
                g_apart[i].d[0], g_apart[i].d[1]);
+    printf("\nThe sun's phases on the presence strip (G5), graphics (`*` under %.0f:1), and how "
+           "far apart (CIEDE2000) they and the strip's other marks are; under %.0f fails the "
+           "build:\n\n| token | dark | on --bg | on --panel | light | on --bg | on --panel |\n"
+           "|---|---|---|---|---|---|---|\n", SUN_GFX_MIN, SUN_APART_MIN);
+    for (int i = 0; i < NSUN; i++) {
+        char a[8], b[8];
+        rgb_t d = need(SUN_NAME[i], 0), l = need(SUN_NAME[i], 1);
+        hex(d, a);
+        hex(l, b);
+        double r[4] = { contrast(d, need("--bg", 0)), contrast(d, need("--panel", 0)),
+                        contrast(l, need("--bg", 1)), contrast(l, need("--panel", 1)) };
+        printf("| `%s` | `%s` | %.2f%s | %.2f%s | `%s` | %.2f%s | %.2f%s |\n", SUN_NAME[i],
+               a, r[0], r[0] < SUN_GFX_MIN ? " *" : "", r[1], r[1] < SUN_GFX_MIN ? " *" : "",
+               b, r[2], r[2] < SUN_GFX_MIN ? " *" : "", r[3], r[3] < SUN_GFX_MIN ? " *" : "");
+    }
+    printf("\n| marks | dark | light |\n|---|---|---|\n");
+    for (int i = 0; i < NSUN; i++)
+        for (int j = i + 1; j < NSUN + NSUN_OTHER; j++)
+            printf("| `%s`, `%s` | %.1f | %.1f |\n", SUN_NAME[i], SUN_NAME[j],
+                   de2000(need(SUN_NAME[i], 0), need(SUN_NAME[j], 0)),
+                   de2000(need(SUN_NAME[i], 1), need(SUN_NAME[j], 1)));
     printf("\nMonitor rows, on `--mon-bg` (`");
     for (int t = 0; t < 2; t++) {
         char h[8];

@@ -342,6 +342,11 @@ table.qt th.dt-th { display: table-cell; }
 .dt-lab { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 table.qt .dt-lab { text-transform: none; letter-spacing: 0; font-size: 12px; }
 .dt-th.n { justify-content: flex-end; }
+/* G5's ruler (F10): under the presence column's label, the rows' strips'
+ * width, square (R8). Midnight ticks and now the full height, the sun's
+ * phases the bottom 1 to 3 px. */
+.dt .dhead > .dt-th.dt-ruled { flex-direction: column; align-items: flex-start; justify-content: center; }
+canvas.dt-ruler { display: block; flex: none; width: 144px; height: 6px; margin-top: 1px; border-radius: 0; }
 button.dt-sort { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; padding: 0; color: inherit; background: none; border: 0; border-radius: 0; font: inherit; letter-spacing: 0; text-transform: none; cursor: pointer; }
 button.dt-sort:hover { color: var(--hover); background: none; }
 .dt-ind { color: var(--signal); font-size: 9px; flex: none; }

@@ -23,6 +23,7 @@
 </style>
 <script>
 @include palette.js
+@include sun.js
 @include glyph.js
 @include facts.js
 @include rf.js
@@ -237,6 +238,7 @@
     </section>
     <section class="panel">
       <div class="label">devices <span class="sub" id="d-count"></span> <span class="dt-tools" id="d-tools"></span></div>
+      <div class="sub" id="d-sun"></div>
       <div class="hscroll" id="d-box">
       <div class="drow dhead" id="d-head"></div>
       <div class="vscroll" id="d-scroll" tabindex="0" aria-label="devices table">
@@ -540,6 +542,7 @@
       <div class="label">clients <span class="sub" id="w-pc-note"></span></div>
       <canvas class="chart" id="w-probe" aria-label="probe clients over time, over their baseline band"></canvas>
       <div class="label">probing in the window <span class="sub" id="w-cl-count"></span> <span class="dt-tools" id="w-cl-tools"></span></div>
+      <div class="sub" id="w-cl-sun"></div>
       <div class="hscroll" id="w-cl-box">
       <div class="dhead" id="w-cl-head"></div>
       <div id="w-cl"></div>
@@ -646,6 +649,7 @@
     <section class="panel" id="ad-device">
       <div class="label">the device <span class="sub" id="ad-device-note"></span></div>
       <div id="ad-device-b"></div>
+      <div class="label">24 h presence, 10 min cells <span class="sub" id="ad-sun"></span></div>
       <canvas class="strip" id="ad-strip" aria-label="the device's presence over the last 24 hours"></canvas>
       <div class="label">its other alerts <span class="dt-tools" id="ad-dev-alerts-tools"></span></div>
       <div class="hscroll" id="ad-dev-alerts-box"><div class="adarow dhead" id="ad-dev-alerts-head"></div>
@@ -753,6 +757,7 @@
     </section>
     <section class="panel">
       <div class="label">who was here <span class="sub" id="h-dev-count"></span> <span class="dt-tools" id="h-devs-tools"></span></div>
+      <div class="sub" id="h-sun"></div>
       <div class="hscroll" id="h-devs-box"><div class="hrow dhead" id="h-devs-head"></div><div id="h-devs"></div></div>
     </section>
     <section class="row2">
@@ -920,7 +925,7 @@
       <button type="button" id="dr-close">close</button>
     </div>
     <div id="dr-body"></div>
-    <div class="label">24 h presence, 10 min cells</div>
+    <div class="label">24 h presence, 10 min cells <span class="sub" id="dr-sun"></span></div>
     <canvas class="strip" id="dr-strip" aria-label="presence over the last 24 hours"></canvas>
     <div id="dr-rf"></div>
     <div id="dr-chain" hidden>
@@ -945,6 +950,7 @@
     <div id="bdr-body"></div>
     <div class="label">24 h presence, 15 min cells <span class="sub" id="bdr-strip-note"></span></div>
     <canvas class="strip" id="bdr-strip" aria-label="this row's presence over the last 24 hours"></canvas>
+    <div class="sub" id="bdr-sun"></div>
     <div class="label">advertising rate <span class="sub" id="bdr-rate-note"></span></div>
     <canvas class="spark" id="bdr-rate" aria-label="advertisements per second between this row's records"></canvas>
     <div class="label">signal over the waterfall's window <span class="sub" id="bledev-rssi-note"></span></div>

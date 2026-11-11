@@ -260,19 +260,25 @@ var glyph = (function () {
 
   // G5, the binary presence strip. cells is an array, oldest first: 1
   // present, 0 absent, -1 an interval nothing was observed in (a gap,
-  // R5). opt: {w, h, first, ground} — first is the index of the
-  // first-seen cell, or -1 when the device was first seen before the
-  // window; ground is the token an absent cell shows, for a strip that
-  // sits on a panel but reads against the page's own ground.
+  // R5). opt: {w, h, first, ground, from, cellS, pos} — first is the
+  // index of the first-seen cell, or -1 when the device was first seen
+  // before the window; ground is the token an absent cell shows, for a
+  // strip that sits on a panel but reads against the page's own ground.
+  // from (cell 0's start, unix seconds), cellS and pos (the sensor's
+  // position) colour a present cell by the sun's phase at the sensor at
+  // the cell's midpoint (sun.js; R1's exception for G5, owner ruling
+  // 2026-11-11). With no position, or a cell over an hour, every
+  // present cell is the one ink, --tui-normal.
   function g5(cells, opt) {
     var m = [], w = opt.w, h = opt.h, n = cells ? cells.length : 0, i;
     if (opt.ground) m.push(["ground", 0, 0, w, h, opt.ground]);
     if (!n) { m.push(dash(w, h)); return m; }
-    var cw = w / n;
+    var cw = w / n, ph = SlothSun.phases(opt.from, opt.cellS, n, opt.pos);
     for (i = 0; i < n; i++) {
       var x = Math.floor(i * cw), cwi = Math.max(1, Math.ceil(cw));
       if (cells[i] < 0) m.push(["gap", x, 0, cwi, h, "--faint"]);
-      else if (cells[i] > 0) m.push(["cell", x, 0, cwi, h, "--tui-normal"]);
+      else if (cells[i] > 0)
+        m.push(["cell", x, 0, cwi, h, ph ? SlothSun.TOKENS[ph[i]] : "--tui-normal"]);
     }
     if (gnum(opt.first) && opt.first >= 0 && opt.first < n)
       m.push(["first", Math.floor(opt.first * cw), 0, Math.max(1, Math.ceil(cw)), h,
@@ -292,16 +298,34 @@ var glyph = (function () {
 
   // G5's ruler (F10), drawn once per table rather than per row: a
   // --faint tick at each local midnight in the window and a --signal
-  // tick at now. opt: {w, h, from, to, offset} — offset is the local
-  // zone's offset from UTC in seconds, as /api/baseline reports it.
+  // tick at now. opt: {w, h, from, to, offset, now, cells, pos} —
+  // offset is the zone's offset from UTC in seconds; now, when given,
+  // is drawn where it falls and not at all outside the window (a
+  // History range that ended yesterday has no now), else at the right
+  // edge. cells and pos add the sun's phases under the ticks, one
+  // "sun" mark a run, so a row with few present cells still reads
+  // against day and night; each phase has its own height as well as its
+  // token (R10: night 1 px, sunrise and sunset 2, day 3), from the
+  // bottom, and the ticks, the full height, are pushed after them.
+  // With no position, or cells over an hour, the ruler is the ticks.
+  var SUN_H = [1, 2, 3, 2];
   function g5Ruler(opt) {
-    var m = [], w = opt.w, h = opt.h, from = opt.from, to = opt.to;
+    var m = [], w = opt.w, h = opt.h, from = opt.from, to = opt.to, i;
     if (!(to > from)) return m;
+    var n = opt.cells >= 1 ? Math.floor(opt.cells) : 0;
+    var ph = n ? SlothSun.phases(from, (to - from) / n, n, opt.pos) : null;
+    var r = SlothSun.runs(ph);
+    for (i = 0; i < r.length; i++) {
+      var a = r[i][1], b = i + 1 < r.length ? r[i + 1][1] : n, sh = SUN_H[r[i][0]];
+      m.push(["sun", a * w / n, h - sh, (b - a) * w / n, sh, SlothSun.TOKENS[r[i][0]]]);
+    }
     var off = gnum(opt.offset) ? opt.offset : 0;
     var first = Math.ceil((from + off) / 86400) * 86400 - off;
     for (var t = first; t <= to; t += 86400)
       m.push(["tick", (t - from) / (to - from) * w, 0, 1, h, "--faint"]);
-    m.push(["now", w - 1, 0, 1, h, "--signal"]);
+    if (!gnum(opt.now)) m.push(["now", w - 1, 0, 1, h, "--signal"]);
+    else if (opt.now >= from && opt.now <= to)
+      m.push(["now", Math.min(w - 1, (opt.now - from) / (to - from) * w), 0, 1, h, "--signal"]);
     return m;
   }
 

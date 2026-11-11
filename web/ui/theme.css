@@ -76,6 +76,20 @@
   --f-snmp: #9be564;  --f-bgp:  #ff9ecb;  --f-ldap: #c0c0c0;
   --f-kerb: var(--tui-normal);
 
+  /* the sun's phase on the presence strip's cells (G5, owner ruling
+   * 2026-11-11; web/ui/sun.js): night the quiet one (the least
+   * contrast of the four in both themes), day the plain one (CP_NORMAL
+   * itself, by reference, the ink every present cell had before),
+   * sunrise yellow and sunset magenta. The light values are written
+   * here, not derived: the data rule lowers a yellow's lightness to a
+   * brown within 15 of --heat-2's, the anomaly underline on the same
+   * strip. palette.c fails the build if one of the three written here
+   * is under 3:1 (WCAG 1.4.11, a graphic) on --bg or --panel, or if two
+   * of the four, or one and a mark that shares the strip (--signal,
+   * --heat-2, --faint), come within 20 (CIEDE2000), in either theme. */
+  --sun-night: #4a72c4;  --sun-rise: #ffe07a;  --sun-set: #e0569b;
+  --sun-day: var(--tui-normal);
+
   /* Dark is the default, whatever the browser prefers; the toggle
    * stores a choice of light. */
   color-scheme: dark;
@@ -117,6 +131,9 @@
   --phosphor:     #0b8c6a;
   --phosphor-dim: #4a9a85;
   --hover:        var(--phosphor-hi);
+
+  /* the sun's phases on cream (above); --sun-day follows CP_NORMAL */
+  --sun-night: #5b84d6;  --sun-rise: #8a7a00;  --sun-set: #c2247a;
 
   color-scheme: light;
 }

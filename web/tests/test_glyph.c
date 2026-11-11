@@ -321,17 +321,86 @@ static void gl_g4(const double (*cells)[3], double w, double h, double x0, doubl
         gm_push(g, "outline", x0 + cw * (now % 24), y0 + ch * (now / 24), cw, ch, "--signal");
 }
 
-/* G5, the binary presence strip. cells: 1 present, 0 absent, -1 a gap. */
-static void gl_g5(const int *cells, int n, double w, double h, int first,
-                  const int (*ep)[2], int nep, gmarks_t *g) {
+/* ── web/ui/sun.js, ported ──────────────────────────────────────── */
+
+#define SUN_PI 3.14159265358979323846
+#define SUN_NIGHT_BELOW (-6.0)
+#define SUN_DAY_ABOVE 6.0
+#define SUN_MAX_CELL_S 3600.0
+#define SUN_T_MAX 4102444800.0
+#define SUN_CELLS_MAX 1440
+static const char *const SUN_TOKENS[4] = { "--sun-night", "--sun-rise", "--sun-day", "--sun-set" };
+static const double SUN_RAD = SUN_PI / 180;
+
+typedef struct { double lat, lon; } sunpos_t;
+
+static int sun_leap(int y) { return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0; }
+
+static double sun_elev(double t, double lat, double lon) {
+    double day = floor(t / 86400), sec = t - day * 86400;
+    int y = 1970;
+    double len = 365;
+    while (day >= len) { day -= len; y++; len = sun_leap(y) ? 366 : 365; }
+    double g = 2 * SUN_PI / len * (day + (sec / 3600 - 12) / 24);
+    double eq = 229.18 * (0.000075 + 0.001868 * cos(g) - 0.032077 * sin(g) -
+                          0.014615 * cos(2 * g) - 0.040849 * sin(2 * g));
+    double dec = 0.006918 - 0.399912 * cos(g) + 0.070257 * sin(g) -
+                 0.006758 * cos(2 * g) + 0.000907 * sin(2 * g) -
+                 0.002697 * cos(3 * g) + 0.00148 * sin(3 * g);
+    double ha = (sec / 60 + eq + 4 * lon) / 4 - 180;
+    double s = sin(lat * SUN_RAD) * sin(dec) +
+               cos(lat * SUN_RAD) * cos(dec) * cos(ha * SUN_RAD);
+    return asin(s < -1 ? -1 : s > 1 ? 1 : s) / SUN_RAD;
+}
+
+static int sun_phase(double t, double half, double lat, double lon) {
+    double e = sun_elev(t, lat, lon);
+    if (e < SUN_NIGHT_BELOW) return 0;
+    if (e > SUN_DAY_ABOVE) return 2;
+    return sun_elev(t + half, lat, lon) >= sun_elev(t - half, lat, lon) ? 1 : 3;
+}
+
+static int sun_ok_pos(double lat, double lon) {
+    return isfinite(lat) && isfinite(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+}
+
+/* phases(): 1 and out[0..n-1] filled, or 0 for the JS's null. The JS
+ * keeps its answers by (position, from, cellS, n); a memo of a pure
+ * function says nothing, so the port has none. */
+static int sun_phases(double from, double cell_s, int n, const sunpos_t *pos, int *out) {
+    if (!pos || !sun_ok_pos(pos->lat, pos->lon)) return 0;
+    if (!isfinite(from) || from < 0 || !(cell_s > 0) || cell_s > SUN_MAX_CELL_S) return 0;
+    if (!(n >= 1) || n > SUN_CELLS_MAX || from + n * cell_s > SUN_T_MAX) return 0;
+    double lat = floor(pos->lat * 100 + 0.5) / 100, lon = floor(pos->lon * 100 + 0.5) / 100;
+    double half = cell_s / 2;
+    for (int i = 0; i < n; i++) out[i] = sun_phase(from + i * cell_s + half, half, lat, lon);
+    return 1;
+}
+
+/* runs(): [phase, first cell] pairs, the count returned. */
+static int sun_runs(const int *ph, int n, int (*out)[2]) {
+    int k = 0;
+    for (int i = 0; ph && i < n; i++)
+        if (!i || ph[i] != ph[i - 1]) { out[k][0] = ph[i]; out[k][1] = i; k++; }
+    return k;
+}
+
+/* G5, the binary presence strip. cells: 1 present, 0 absent, -1 a gap.
+ * from NAN and pos NULL are the JS's undefined. */
+static void gl_g5_sun(const int *cells, int n, double w, double h, int first,
+                      const int (*ep)[2], int nep, double from, double cell_s,
+                      const sunpos_t *pos, gmarks_t *g) {
+    static int ph[SUN_CELLS_MAX];
     memset(g, 0, sizeof(*g));
     if (n <= 0) { gl_dash(g, w, h); return; }
     double cw = w / n;
+    int has = sun_phases(from, cell_s, n, pos, ph);
     for (int i = 0; i < n; i++) {
         double x = floor(i * cw), cwi = ceil(cw);
         if (cwi < 1) cwi = 1;
         if (cells[i] < 0) gm_push(g, "gap", x, 0, cwi, h, "--faint");
-        else if (cells[i] > 0) gm_push(g, "cell", x, 0, cwi, h, "--tui-normal");
+        else if (cells[i] > 0)
+            gm_push(g, "cell", x, 0, cwi, h, has ? SUN_TOKENS[ph[i]] : "--tui-normal");
     }
     if (first >= 0 && first < n) {
         double cwi = ceil(cw);
@@ -346,15 +415,41 @@ static void gl_g5(const int *cells, int n, double w, double h, int first,
         gm_push(g, "anom", floor(a * cw), h - 1, wd, 1, "--heat-2");
     }
 }
+/* A strip given no window and no position: every caller before the
+ * 2026-11-11 ruling, and every strip while the sensor has no position. */
+static void gl_g5(const int *cells, int n, double w, double h, int first,
+                  const int (*ep)[2], int nep, gmarks_t *g) {
+    gl_g5_sun(cells, n, w, h, first, ep, nep, NAN, NAN, NULL, g);
+}
 
-static void gl_g5_ruler(double w, double h, double from, double to, double off,
-                        gmarks_t *g) {
+/* now NAN is the JS's undefined; cells 0 and pos NULL likewise. */
+static void gl_g5_ruler_sun(double w, double h, double from, double to, double off,
+                            double now, int cells, const sunpos_t *pos, gmarks_t *g) {
+    static const double SUN_H[4] = { 1, 2, 3, 2 };
+    static int ph[SUN_CELLS_MAX];
+    int r[SUN_CELLS_MAX][2];
     memset(g, 0, sizeof(*g));
     if (!(to > from)) return;
+    int n = cells >= 1 ? cells : 0;
+    int has = n ? sun_phases(from, (to - from) / n, n, pos, ph) : 0;
+    int nr = sun_runs(has ? ph : NULL, n, r);
+    for (int i = 0; i < nr; i++) {
+        int a = r[i][1], b = i + 1 < nr ? r[i + 1][1] : n;
+        double sh = SUN_H[r[i][0]];
+        gm_push(g, "sun", a * w / n, h - sh, (b - a) * w / n, sh, SUN_TOKENS[r[i][0]]);
+    }
     double first = ceil((from + off) / 86400) * 86400 - off;
     for (double t = first; t <= to; t += 86400)
         gm_push(g, "tick", (t - from) / (to - from) * w, 0, 1, h, "--faint");
-    gm_push(g, "now", w - 1, 0, 1, h, "--signal");
+    if (!isfinite(now)) gm_push(g, "now", w - 1, 0, 1, h, "--signal");
+    else if (now >= from && now <= to) {
+        double x = (now - from) / (to - from) * w;
+        gm_push(g, "now", x < w - 1 ? x : w - 1, 0, 1, h, "--signal");
+    }
+}
+static void gl_g5_ruler(double w, double h, double from, double to, double off,
+                        gmarks_t *g) {
+    gl_g5_ruler_sun(w, h, from, to, off, NAN, 0, NULL, g);
 }
 
 /* G6, the bullet and the count bar. */
@@ -806,9 +901,9 @@ static void test_the_page_carries_the_ported_js(void) {
     WT_HAS(p, "    m.push([\"last\", X(pts[k][0]), Y(pts[k][1]), 2.5, 2.5, tok]);");
     WT_HAS(p, "      out.push((parseInt(hex.charAt(i >> 2), 16) & (8 >> (i & 3))) "
               "? 1 : 0);");
-    WT_HAS(p, "      if (cells[i] < 0) m.push([\"gap\", x, 0, cwi, h, \"--faint\"]);\n"
-              "      else if (cells[i] > 0) m.push([\"cell\", x, 0, cwi, h, "
-              "\"--tui-normal\"]);");
+    /* G5's cell line, and all of g5() and g5Ruler(), are pinned whole in
+     * test_the_page_carries_the_sun (the 2026-11-11 ruling). */
+    WT_HAS(p, "      if (cells[i] < 0) m.push([\"gap\", x, 0, cwi, h, \"--faint\"]);\n");
     WT_HAS(p, "    var first = Math.ceil((from + off) / 86400) * 86400 - off;");
     WT_HAS(p, "      m.push([\"anom\", Math.floor(a * cw), h - 1,\n"
               "              Math.max(1, Math.ceil((b - a + 1) * cw)), 1, \"--heat-2\"]);");
@@ -1315,6 +1410,685 @@ static void test_g5_reads_in_greyscale(void) {
     WT_ASSERT(near(gm_get(&g, "first").x, 50));
 }
 
+/* ── the sun's phase on G5 (web/ui/sun.js, ruling 2026-11-11) ───── */
+
+/* Unix seconds of a UTC civil time, by the days-from-civil count of the
+ * proleptic Gregorian calendar (era of 400 years, year from March), not
+ * by the port's year walk: the expectations below must not lean on the
+ * code they test. */
+static double utc(int y, int m, int d, int hh, int mm) {
+    y -= m <= 2;
+    int era = (y >= 0 ? y : y - 399) / 400;
+    int yoe = y - era * 400;
+    int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return ((double)era * 146097 + doe - 719468) * 86400 + hh * 3600 + mm * 60;
+}
+
+/* The first second in [t0, t1) at which the elevation crosses `level`,
+ * upward (up 1) or downward (up 0); -1 when it never does. */
+static double sun_cross(double lat, double lon, double t0, double t1, double level, int up) {
+    double a = sun_elev(t0, lat, lon) - level;
+    for (double t = t0 + 1; t <= t1; t += 1) {
+        double b = sun_elev(t, lat, lon) - level;
+        if (up ? (a < 0 && b >= 0) : (a >= 0 && b < 0)) return t;
+        a = b;
+    }
+    return -1;
+}
+/* The second of the highest (hi 1) or lowest elevation in [t0, t1). */
+static double sun_extreme(double lat, double lon, double t0, double t1, int hi, double *e) {
+    double bt = t0, be = sun_elev(t0, lat, lon);
+    for (double t = t0 + 10; t < t1; t += 10) {
+        double v = sun_elev(t, lat, lon);
+        if (hi ? v > be : v < be) { be = v; bt = t; }
+    }
+    if (e) *e = be;
+    return bt;
+}
+static int within(double got, double want, double tol) { return got >= 0 && fabs(got - want) <= tol; }
+
+/* The almanac. Every time below is the U.S. Naval Observatory's
+ * "Complete Sun and Moon Data for One Day" (aa.usno.navy.mil, its
+ * api/rstt/oneday with tz=0), read on 2026-11-11, in UTC to the minute.
+ * Its rise and set are the upper limb on the horizon with 34' of
+ * refraction, the centre 0.8333 degrees below it; its civil twilight is
+ * the centre 6 degrees below, which is NIGHT_BELOW itself. hhmm, and
+ * the events in the order they fall in the UTC day. */
+typedef struct {
+    const char *name;
+    double lat, lon;
+    int y, m, d;
+    int civil_begin, rise, transit, set, civil_end;
+} almanac_t;
+static const almanac_t ALMANAC[] = {
+    /* Greenwich's latitude on the June solstice */
+    { "London 51.48N 0.00E",        51.48,    0.00, 2026,  6, 21,  255,  343, 1202, 2021, 2109 },
+    /* a negative longitude, in November */
+    { "New York 40.71N 74.01W",     40.71,  -74.01, 2026, 11, 11, 1109, 1138, 1640, 2142, 2211 },
+    /* the southern hemisphere in June: the short day, the sun to the north */
+    { "Sydney 33.87S 151.21E",     -33.87,  151.21, 2026,  6, 21, 2032, 2100,  157,  654,  722 },
+    /* the equator on the March equinox */
+    { "equator 0N 0E",               0.00,    0.00, 2026,  3, 20,  544,  604, 1207, 1811, 1831 },
+    /* a tenth of a degree short of the antimeridian (Vanua Levu, Fiji) */
+    { "Fiji 16.80S 179.90E",       -16.80,  179.90, 2026,  9, 23, 1727, 1749, 2353,  556,  618 },
+};
+#define ALMANAC_TOL_S 180.0
+
+/* Sunrise, sunset, both civil twilights and the transit of five places
+ * against the almanac, each within three minutes. Seen red with the
+ * longitude's sign turned in the port's hour angle (15 assertions:
+ * the three places off the prime meridian), with the equation of time
+ * left out (15: where it is over three minutes that day), and with the
+ * declination's first harmonic's sign turned. */
+static void test_sun_against_the_almanac(void) {
+    for (size_t i = 0; i < sizeof(ALMANAC) / sizeof(ALMANAC[0]); i++) {
+        const almanac_t *a = &ALMANAC[i];
+        double t0 = utc(a->y, a->m, a->d, 0, 0), t1 = t0 + 86400;
+#define AT(hhmm) (t0 + ((hhmm) / 100) * 3600 + ((hhmm) % 100) * 60)
+        fprintf(stderr, "  %s\n", a->name);
+        WT_ASSERT(within(sun_cross(a->lat, a->lon, t0, t1, -0.8333, 1), AT(a->rise), ALMANAC_TOL_S));
+        WT_ASSERT(within(sun_cross(a->lat, a->lon, t0, t1, -0.8333, 0), AT(a->set), ALMANAC_TOL_S));
+        WT_ASSERT(within(sun_cross(a->lat, a->lon, t0, t1, SUN_NIGHT_BELOW, 1), AT(a->civil_begin), ALMANAC_TOL_S));
+        WT_ASSERT(within(sun_cross(a->lat, a->lon, t0, t1, SUN_NIGHT_BELOW, 0), AT(a->civil_end), ALMANAC_TOL_S));
+        WT_ASSERT(within(sun_extreme(a->lat, a->lon, t0, t1, 1, NULL), AT(a->transit), ALMANAC_TOL_S));
+#undef AT
+    }
+}
+
+/* Noon's elevation is 90 degrees less the latitude plus the
+ * declination, and the declination is the obliquity, 23.44 degrees, at
+ * a solstice and nothing at an equinox. Seen red with the port's
+ * latitude left out of its sine (the equator's line here, and the
+ * almanac's), and with the declination's sign turned (the same). */
+static void test_sun_noon_elevation(void) {
+    double e;
+    /* The equator at the equinox: overhead. The equinox itself was at
+     * 14:46 UTC, so at the 12:07 transit the sun was a few hundredths
+     * of a degree south. */
+    sun_extreme(0, 0, utc(2026, 3, 20, 0, 0), utc(2026, 3, 21, 0, 0), 1, &e);
+    WT_ASSERT(e > 89.0 && e <= 90.0);
+    /* London at the June solstice: 90 - 51.48 + 23.44 = 61.96. */
+    sun_extreme(51.48, 0, utc(2026, 6, 21, 0, 0), utc(2026, 6, 22, 0, 0), 1, &e);
+    WT_ASSERT(fabs(e - 61.96) < 0.3);
+    /* Sydney the same day, the sun to the north: 90 - 33.87 - 23.44 =
+     * 32.69, and its day under ten hours (the almanac's 21:00 to 06:54). */
+    sun_extreme(-33.87, 151.21, utc(2026, 6, 21, 0, 0), utc(2026, 6, 22, 0, 0), 1, &e);
+    WT_ASSERT(fabs(e - 32.69) < 0.3);
+    /* The antimeridian is one meridian: 180 east is 180 west. */
+    for (double t = utc(2026, 9, 23, 0, 0); t < utc(2026, 9, 24, 0, 0); t += 3600)
+        WT_ASSERT(fabs(sun_elev(t, -16.8, 180) - sun_elev(t, -16.8, -180)) < 1e-9);
+}
+
+static void count_phases(const int *ph, int n, int c[4]) {
+    c[0] = c[1] = c[2] = c[3] = 0;
+    for (int i = 0; i < n; i++) c[ph[i]]++;
+}
+
+/* Where the sun neither rises nor sets, and where it does not get all
+ * the way: no case of its own in the code, so each is asserted. Seen
+ * red with the port's rising test turned (>= made <: Reykjavik's and
+ * Tromso's orders), and with NIGHT_BELOW made -12 in the port (the
+ * polar night's 144 became 133 and one run four). */
+static void test_sun_polar_and_twilight(void) {
+    int ph[144], c[4], r[144][2];
+    /* Longyearbyen, 78.22N 15.63E. December solstice: the sun's highest
+     * is 90 - 78.22 - 23.44 = -11.66, under civil twilight all day. */
+    sunpos_t lyr = { 78.22, 15.63 };
+    double e;
+    sun_extreme(lyr.lat, lyr.lon, utc(2026, 12, 21, 0, 0), utc(2026, 12, 22, 0, 0), 1, &e);
+    WT_ASSERT(fabs(e - -11.66) < 0.3);
+    WT_EQ(sun_phases(utc(2026, 12, 21, 0, 0), 600, 144, &lyr, ph), 1);
+    count_phases(ph, 144, c);
+    WT_EQ(c[0], 144);
+    WT_EQ(sun_runs(ph, 144, r), 1);
+    /* June solstice: its lowest is 78.22 + 23.44 - 90 = 11.66, day all
+     * night. */
+    sun_extreme(lyr.lat, lyr.lon, utc(2026, 6, 21, 0, 0), utc(2026, 6, 22, 0, 0), 0, &e);
+    WT_ASSERT(fabs(e - 11.66) < 0.3);
+    WT_EQ(sun_phases(utc(2026, 6, 21, 0, 0), 600, 144, &lyr, ph), 1);
+    count_phases(ph, 144, c);
+    WT_EQ(c[2], 144);
+    /* Reykjavik, 64.15N 21.94W, June solstice: the lowest is 64.15 +
+     * 23.44 - 90 = -2.41, twilight all night and no night at all. The
+     * strip from 00:00 UTC is sunset, sunrise, day, sunset, and sunset
+     * turns to sunrise at the sun's lowest: twelve hours from a transit
+     * that is London's almanac 12:02 moved 21.94 degrees west at four
+     * minutes a degree, so 01:29.8, in cell 8 (01:20 to 01:30) with the
+     * turn at the edge of cell 9. */
+    sunpos_t rey = { 64.15, -21.94 };
+    WT_EQ(sun_phases(utc(2026, 6, 21, 0, 0), 600, 144, &rey, ph), 1);
+    count_phases(ph, 144, c);
+    WT_EQ(c[0], 0);
+    WT_EQ(sun_runs(ph, 144, r), 4);
+    WT_EQ(r[0][0], 3); WT_EQ(r[1][0], 1); WT_EQ(r[2][0], 2); WT_EQ(r[3][0], 3);
+    WT_ASSERT(abs(r[1][1] - 9) <= 1);
+    /* Tromso, 69.65N 18.96E, December solstice: the highest is 90 -
+     * 69.65 - 23.44 = -3.09, never day; night, sunrise, sunset, night,
+     * the two twilights the same length to a cell. */
+    sunpos_t tos = { 69.65, 18.96 };
+    WT_EQ(sun_phases(utc(2026, 12, 21, 0, 0), 600, 144, &tos, ph), 1);
+    count_phases(ph, 144, c);
+    WT_EQ(c[2], 0);
+    WT_ASSERT(c[0] > 0 && c[1] > 0 && abs(c[1] - c[3]) <= 1);
+    WT_EQ(sun_runs(ph, 144, r), 4);
+    WT_EQ(r[0][0], 0); WT_EQ(r[1][0], 1); WT_EQ(r[2][0], 3); WT_EQ(r[3][0], 0);
+}
+
+/* A strip present all 24 h at London on 2026-06-21: the four tokens in
+ * the order of the day, each count within a cell of the almanac. Night
+ * is the almanac's civil twilights: 00:00 to 02:55 and 21:09 to 24:00,
+ * 346 min. Day is the sun over +6 degrees, from the spherical triangle
+ * with the solstice's declination: cos H = (sin 6 - sin lat sin dec) /
+ * (cos lat cos dec), 2H of the day's 360 degrees. Sunrise and sunset
+ * split what is left. The first-seen cell and the anomaly underline
+ * are the marks they were. Seen red with DAY_ABOVE made 0 in the port
+ * (the day and twilight counts) and with NIGHT_BELOW made -12 (the
+ * night count). The tolerance is a cell, so this does not tell the
+ * cell's midpoint from its start, and does not claim to. */
+static void test_g5_sun_phases_at_london(void) {
+    int cells[144];
+    for (int i = 0; i < 144; i++) cells[i] = 1;
+    static const int ep[1][2] = { {30, 40} };
+    sunpos_t lon = { 51.48, 0.0 };
+    double from = utc(2026, 6, 21, 0, 0);
+    gmarks_t g, plain;
+    gl_g5_sun(cells, 144, 144, 12, 5, ep, 1, from, 600, &lon, &g);
+    gl_g5(cells, 144, 144, 12, 5, ep, 1, &plain);
+    WT_EQ(g.n, 146);
+    WT_EQ(g.n, plain.n);
+    int c[4] = { 0, 0, 0, 0 }, order[8], no = 0;
+    for (int i = 0; i < 144; i++) {
+        WT_ASSERT(!strcmp(g.m[i].kind, "cell"));
+        int p = -1;
+        for (int k = 0; k < 4; k++) if (!strcmp(g.m[i].tok, SUN_TOKENS[k])) p = k;
+        if (p < 0) { WT_ASSERT(p >= 0); continue; }
+        c[p]++;
+        if (no < 8 && (!no || order[no - 1] != p)) order[no++] = p;
+        /* Only the token moved: the geometry is the plain strip's. */
+        WT_ASSERT(near(g.m[i].x, plain.m[i].x) && near(g.m[i].w, plain.m[i].w) &&
+                  near(g.m[i].h, plain.m[i].h));
+    }
+    WT_EQ(no, 5);
+    WT_EQ(order[0], 0); WT_EQ(order[1], 1); WT_EQ(order[2], 2); WT_EQ(order[3], 3); WT_EQ(order[4], 0);
+    double night = (2 * 60 + 55 + 24 * 60 - (21 * 60 + 9)) / 10.0;            /* 34.6 cells */
+    double rad = SUN_PI / 180, dec = 23.44 * rad, lat = 51.48 * rad;
+    double H = acos((sin(6 * rad) - sin(lat) * sin(dec)) / (cos(lat) * cos(dec))) / rad;
+    double day = 2 * H / 360 * 144;                                           /* 89.0 cells */
+    double twi = (144 - night - day) / 2;                                     /* 10.2 cells */
+    WT_ASSERT(fabs(day - 88.96) < 0.05);
+    WT_ASSERT(fabs(c[0] - night) <= 1);
+    WT_ASSERT(fabs(c[2] - day) <= 1);
+    WT_ASSERT(fabs(c[1] - twi) <= 1);
+    WT_ASSERT(fabs(c[3] - twi) <= 1);
+    WT_EQ(c[0] + c[1] + c[2] + c[3], 144);
+    /* F15's diamond and the anomaly underline: byte for byte the plain
+     * strip's, after the cells. */
+    for (int i = 144; i < 146; i++) {
+        WT_ASSERT(!strcmp(g.m[i].kind, plain.m[i].kind) && !strcmp(g.m[i].tok, plain.m[i].tok));
+        WT_ASSERT(near(g.m[i].x, plain.m[i].x) && near(g.m[i].y, plain.m[i].y) &&
+                  near(g.m[i].w, plain.m[i].w) && near(g.m[i].h, plain.m[i].h));
+    }
+    WT_ASSERT(!strcmp(g.m[144].kind, "first") && !strcmp(g.m[144].tok, "--signal"));
+    WT_ASSERT(!strcmp(g.m[145].kind, "anom") && !strcmp(g.m[145].tok, "--heat-2"));
+    /* A gap stays a gap and an absent cell stays nothing, whatever the
+     * phase. */
+    cells[20] = -1;
+    cells[21] = 0;
+    gl_g5_sun(cells, 144, 144, 12, -1, NULL, 0, from, 600, &lon, &g);
+    WT_EQ(gm_count(&g, "cell"), 142);
+    WT_EQ(gm_count(&g, "gap"), 1);
+    WT_ASSERT(!strcmp(gm_get(&g, "gap").tok, "--faint"));
+}
+
+static int same_marks(const gmarks_t *a, const gmarks_t *b) {
+    if (a->n != b->n) return 0;
+    for (int i = 0; i < a->n; i++)
+        if (strcmp(a->m[i].kind, b->m[i].kind) || strcmp(a->m[i].tok, b->m[i].tok) ||
+            !near(a->m[i].x, b->m[i].x) || !near(a->m[i].y, b->m[i].y) ||
+            !near(a->m[i].w, b->m[i].w) || !near(a->m[i].h, b->m[i].h)) return 0;
+    return 1;
+}
+static int count_tok(const gmarks_t *g, const char *kind, const char *tok) {
+    int n = 0;
+    for (int i = 0; i < g->n; i++) if (!strcmp(g->m[i].kind, kind) && !strcmp(g->m[i].tok, tok)) n++;
+    return n;
+}
+
+/* No position, no phase: the strip is the one it was before the ruling,
+ * mark for mark, every present cell --tui-normal. The same for a
+ * position that is not one, and for a window that is not one. Seen red
+ * with the port's `!pos ||` guard taken out and a NULL position read
+ * as 0N 0E, which colours anyway (96 --tui-normal cells became 0, and
+ * the sameness after it), with okPos's latitude bound made 900 (the
+ * 91 degree position), and with the `from < 0` guard dropped (the
+ * negative start). */
+static void test_g5_no_position_is_one_ink(void) {
+    int cells[144];
+    for (int i = 0; i < 144; i++) cells[i] = (i % 3) ? 1 : 0;
+    static const int ep[1][2] = { {30, 40} };
+    double from = utc(2026, 6, 21, 0, 0);
+    gmarks_t g, plain;
+    gl_g5(cells, 144, 144, 12, 5, ep, 1, &plain);
+    WT_EQ(count_tok(&plain, "cell", "--tui-normal"), 96);
+    gl_g5_sun(cells, 144, 144, 12, 5, ep, 1, from, 600, NULL, &g);
+    WT_EQ(count_tok(&g, "cell", "--tui-normal"), 96);
+    WT_EQ(gm_count(&g, "cell"), 96);
+    WT_ASSERT(same_marks(&g, &plain));
+    sunpos_t bad_lat = { 91, 0 }, bad_lon = { 10, 180.5 }, nan_lat = { NAN, 0 }, ok = { 51.48, 0 };
+    gl_g5_sun(cells, 144, 144, 12, 5, ep, 1, from, 600, &bad_lat, &g);
+    WT_ASSERT(same_marks(&g, &plain));
+    gl_g5_sun(cells, 144, 144, 12, 5, ep, 1, from, 600, &bad_lon, &g);
+    WT_ASSERT(same_marks(&g, &plain));
+    gl_g5_sun(cells, 144, 144, 12, 5, ep, 1, from, 600, &nan_lat, &g);
+    WT_ASSERT(same_marks(&g, &plain));
+    /* A position and no window (a strip whose answer had none). */
+    gl_g5_sun(cells, 144, 144, 12, 5, ep, 1, NAN, 600, &ok, &g);
+    WT_ASSERT(same_marks(&g, &plain));
+    gl_g5_sun(cells, 144, 144, 12, 5, ep, 1, -86400, 600, &ok, &g);
+    WT_ASSERT(same_marks(&g, &plain));
+    gl_g5_sun(cells, 144, 144, 12, 5, ep, 1, from, 0, &ok, &g);
+    WT_ASSERT(same_marks(&g, &plain));
+    /* And the control: the same call with all three is not the plain
+     * strip, so the sameness above is the guards' doing. */
+    gl_g5_sun(cells, 144, 144, 12, 5, ep, 1, from, 600, &ok, &g);
+    WT_ASSERT(!same_marks(&g, &plain));
+    WT_EQ(count_tok(&g, "cell", "--tui-normal"), 0);
+}
+
+/* A cell of an hour is one phase; a longer one spans a sunrise too
+ * often to be, and keeps the one ink (History's long ranges). Seen red
+ * with MAX_CELL_S made 7200 in the port. */
+static void test_g5_long_cells_are_one_ink(void) {
+    int cells[24];
+    for (int i = 0; i < 24; i++) cells[i] = 1;
+    sunpos_t lon = { 51.48, 0.0 };
+    double from = utc(2026, 6, 21, 0, 0);
+    gmarks_t g;
+    gl_g5_sun(cells, 24, 144, 12, -1, NULL, 0, from, 3600, &lon, &g);
+    WT_EQ(count_tok(&g, "cell", "--tui-normal"), 0);
+    WT_ASSERT(count_tok(&g, "cell", "--sun-night") > 0 && count_tok(&g, "cell", "--sun-day") > 0);
+    gl_g5_sun(cells, 24, 144, 12, -1, NULL, 0, from, 3601, &lon, &g);
+    WT_EQ(count_tok(&g, "cell", "--tui-normal"), 24);
+    gl_g5_sun(cells, 24, 144, 12, -1, NULL, 0, from, 7200, &lon, &g);
+    WT_EQ(count_tok(&g, "cell", "--tui-normal"), 24);
+    /* The BLE drawer's quarter hours are coloured. */
+    int q[96];
+    for (int i = 0; i < 96; i++) q[i] = 1;
+    gl_g5_sun(q, 96, 192, 18, -1, NULL, 0, from, 900, &lon, &g);
+    WT_EQ(count_tok(&g, "cell", "--tui-normal"), 0);
+    WT_ASSERT(abs(count_tok(&g, "cell", "--sun-night") - 23) <= 1);   /* 346 min of 15 */
+}
+
+/* The ruler's band: one "sun" mark a run, under the ticks, each phase
+ * its own height as well as its token (R10). With no position, or
+ * cells over an hour, the ruler is the one it was. Seen red with the
+ * a stray "sun" mark pushed after now in the port (the counts), with
+ * SUN_H made all 2 (the heights and the greyscale reading), with a
+ * NULL position read as 0N 0E (the no-position sameness) and with
+ * MAX_CELL_S made 7200 (the two-hour cells' sameness). */
+static void test_g5_ruler_sun_band(void) {
+    sunpos_t lon = { 51.48, 0.0 };
+    double from = utc(2026, 6, 21, 0, 0), to = from + 86400;
+    gmarks_t g, plain;
+    gl_g5_ruler(144, 6, from, to, 0, &plain);
+    WT_EQ(plain.n, 3);
+    gl_g5_ruler_sun(144, 6, from, to, 0, NAN, 144, &lon, &g);
+    WT_EQ(gm_count(&g, "sun"), 5);
+    WT_EQ(gm_count(&g, "tick"), 2);
+    WT_EQ(gm_count(&g, "now"), 1);
+    static const char *const want[5] = { "--sun-night", "--sun-rise", "--sun-day", "--sun-set", "--sun-night" };
+    static const double hh[5] = { 1, 2, 3, 2, 1 };
+    double x = 0;
+    for (int i = 0; i < 5; i++) {
+        WT_ASSERT(!strcmp(g.m[i].kind, "sun") && !strcmp(g.m[i].tok, want[i]));
+        WT_ASSERT(near(g.m[i].h, hh[i]) && near(g.m[i].y, 6 - hh[i]));
+        WT_ASSERT(near(g.m[i].x, x));          /* the runs abut, left to right */
+        x += g.m[i].w;
+    }
+    WT_ASSERT(near(x, 144));
+    /* The ticks and now are the marks they were, after the band, and
+     * taller than any of it. */
+    for (int i = 0; i < 3; i++) {
+        WT_ASSERT(!strcmp(g.m[5 + i].kind, plain.m[i].kind) && !strcmp(g.m[5 + i].tok, plain.m[i].tok));
+        WT_ASSERT(near(g.m[5 + i].x, plain.m[i].x) && near(g.m[5 + i].h, 6));
+    }
+    /* R10: in one grey, night, twilight and day are three heights, and
+     * sunrise is the twilight before the day. */
+    gm_grey(&g);
+    WT_ASSERT(gm_all_grey(&g));
+    WT_ASSERT(g.m[0].h < g.m[1].h && g.m[1].h < g.m[2].h && g.m[3].h < g.m[2].h);
+    WT_ASSERT(g.m[1].x < g.m[2].x && g.m[2].x < g.m[3].x);
+    /* No position, an unusable one, or cells over an hour: the plain
+     * ruler, mark for mark. */
+    gl_g5_ruler_sun(144, 6, from, to, 0, NAN, 144, NULL, &g);
+    WT_ASSERT(same_marks(&g, &plain));
+    sunpos_t bad = { -95, 0 };
+    gl_g5_ruler_sun(144, 6, from, to, 0, NAN, 144, &bad, &g);
+    WT_ASSERT(same_marks(&g, &plain));
+    gl_g5_ruler_sun(144, 6, from, to, 0, NAN, 12, &lon, &g);
+    WT_ASSERT(same_marks(&g, &plain));
+    gl_g5_ruler_sun(144, 6, from, to, 0, NAN, 0, &lon, &g);
+    WT_ASSERT(same_marks(&g, &plain));
+    /* now, when the page gives it: where it falls, and not at all
+     * outside the window (History's past ranges). */
+    gl_g5_ruler_sun(144, 6, from, to, 0, from + 43200, 0, NULL, &g);
+    WT_ASSERT(near(gm_get(&g, "now").x, 72));
+    gl_g5_ruler_sun(144, 6, from, to, 0, to, 0, NULL, &g);
+    WT_ASSERT(near(gm_get(&g, "now").x, 143));
+    gl_g5_ruler_sun(144, 6, from, to, 0, to + 1, 0, NULL, &g);
+    WT_EQ(gm_count(&g, "now"), 0);
+    WT_EQ(gm_count(&g, "tick"), 2);
+}
+
+/* The position is kept to a hundredth of a degree, so a moving sensor
+ * does not ask for a new table at every fix. Seen red with the port's
+ * rounding taken out. */
+static void test_sun_position_is_rounded(void) {
+    static int a[1440], b[1440];
+    sunpos_t p = { 51.4849, 0.0049 }, q = { 51.48, 0.0 };
+    /* One-second cells across the morning's twilight line (the
+     * almanac's 02:55): half a hundredth of a degree moves the crossing
+     * by a second or more, so the unrounded positions would disagree in
+     * at least one cell. */
+    double from = utc(2026, 6, 21, 2, 43);
+    WT_EQ(sun_phases(from, 1, 1440, &p, a), 1);
+    WT_EQ(sun_phases(from, 1, 1440, &q, b), 1);
+    WT_EQ(a[0], 0);
+    WT_EQ(a[1439], 1);
+    WT_EQ(memcmp(a, b, sizeof(a)), 0);
+}
+
+/* sun.js as served, whole functions (the #171 V1 review's rule), and
+ * the page's half: every G5 caller, the ruler, the words, where the
+ * position comes from. Seen red, one pin each, with sun.js's
+ * NIGHT_BELOW made -7, its elev()'s longitude sign turned, its
+ * phases() colouring with no position, its pos() taking a 1D fix;
+ * g5() giving every present cell a sun token; g5Ruler()'s SUN_H made
+ * all 2; paintStrip() making up a position, drawRuler() passing none,
+ * blePresence() dropping its window, History's call dropping its
+ * window, an eighth drawStrip() call added (the count), a token's hex
+ * changed; and with sun.js put after glyph.js in index.html (the
+ * order assertion). */
+static void test_the_page_carries_the_sun(void) {
+    const char *p = page();
+    const char *s = strstr(p, "var SlothSun = (function () {");
+    const char *gl = strstr(p, "var glyph = (function () {");
+    WT_ASSERT(s && gl && s < gl);          /* g5() calls it */
+    /* web/ui/sun.js */
+    WT_HAS(p, "  var NIGHT_BELOW = -6, DAY_ABOVE = 6;\n"
+              "  // A cell longer than this spans more than one phase too often to be\n"
+              "  // given one: it keeps the single ink.\n"
+              "  var MAX_CELL_S = 3600;\n"
+              "  // 2100-01-01: the year walk below is bounded by it.\n"
+              "  var T_MAX = 4102444800;\n"
+              "  var TOKENS = [\"--sun-night\", \"--sun-rise\", \"--sun-day\", \"--sun-set\"];\n"
+              "  var WORDS = [\"night\", \"sunrise\", \"day\", \"sunset\"];\n"
+              "  var RAD = Math.PI / 180;\n"
+              "  function snum(v) { return typeof v === \"number\" && isFinite(v); }\n"
+              "  function leap(y) { return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }\n");
+    /* web/ui/sun.js */
+    WT_HAS(p, "  function elev(t, lat, lon) {\n"
+              "    var day = Math.floor(t / 86400), sec = t - day * 86400, y = 1970, len = 365;\n"
+              "    while (day >= len) { day -= len; y++; len = leap(y) ? 366 : 365; }\n"
+              "    var g = 2 * Math.PI / len * (day + (sec / 3600 - 12) / 24);\n"
+              "    var eq = 229.18 * (0.000075 + 0.001868 * Math.cos(g) - 0.032077 * Math.sin(g) -\n"
+              "                       0.014615 * Math.cos(2 * g) - 0.040849 * Math.sin(2 * g));\n"
+              "    var dec = 0.006918 - 0.399912 * Math.cos(g) + 0.070257 * Math.sin(g) -\n"
+              "              0.006758 * Math.cos(2 * g) + 0.000907 * Math.sin(2 * g) -\n"
+              "              0.002697 * Math.cos(3 * g) + 0.00148 * Math.sin(3 * g);\n"
+              "    var ha = (sec / 60 + eq + 4 * lon) / 4 - 180;\n"
+              "    var s = Math.sin(lat * RAD) * Math.sin(dec) +\n"
+              "            Math.cos(lat * RAD) * Math.cos(dec) * Math.cos(ha * RAD);\n"
+              "    return Math.asin(s < -1 ? -1 : s > 1 ? 1 : s) / RAD;\n"
+              "  }\n");
+    /* web/ui/sun.js */
+    WT_HAS(p, "  function phase(t, half, lat, lon) {\n"
+              "    var e = elev(t, lat, lon);\n"
+              "    if (e < NIGHT_BELOW) return 0;\n"
+              "    if (e > DAY_ABOVE) return 2;\n"
+              "    return elev(t + half, lat, lon) >= elev(t - half, lat, lon) ? 1 : 3;\n"
+              "  }\n");
+    /* web/ui/sun.js */
+    WT_HAS(p, "  function okPos(lat, lon) {\n"
+              "    return snum(lat) && snum(lon) && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;\n"
+              "  }\n");
+    /* web/ui/sun.js */
+    WT_HAS(p, "  function phases(from, cellS, n, pos) {\n"
+              "    if (!pos || !okPos(pos.lat, pos.lon)) return null;\n"
+              "    if (!snum(from) || from < 0 || !(cellS > 0) || cellS > MAX_CELL_S) return null;\n"
+              "    if (!(n >= 1) || n > 1440 || from + n * cellS > T_MAX) return null;\n"
+              "    var lat = Math.round(pos.lat * 100) / 100, lon = Math.round(pos.lon * 100) / 100;\n"
+              "    var key = lat + \",\" + lon + \",\" + from + \",\" + cellS + \",\" + n;\n"
+              "    if (cache[key]) return cache[key];\n"
+              "    var out = [], half = cellS / 2;\n"
+              "    for (var i = 0; i < n; i++) out.push(phase(from + i * cellS + half, half, lat, lon));\n"
+              "    if (cached >= CACHE_MAX) { cache = {}; cached = 0; }\n"
+              "    cache[key] = out;\n"
+              "    cached++;\n"
+              "    return out;\n"
+              "  }\n");
+    /* web/ui/sun.js */
+    WT_HAS(p, "  function runs(ph) {\n"
+              "    var out = [];\n"
+              "    for (var i = 0; ph && i < ph.length; i++)\n"
+              "      if (!i || ph[i] !== ph[i - 1]) out.push([ph[i], i]);\n"
+              "    return out;\n"
+              "  }\n");
+    /* web/ui/sun.js */
+    WT_HAS(p, "  function pos(j) {\n"
+              "    var f = j && j.fix, l = j && j.loc;\n"
+              "    if (f && snum(f.mode) && f.mode >= 2 && okPos(f.lat, f.lon))\n"
+              "      return { lat: f.lat, lon: f.lon, from: \"gps fix\" };\n"
+              "    if (l && okPos(l.lat, l.lon) && (l[\"src\"] === \"gps\" || l[\"src\"] === \"fixed\"))\n"
+              "      return { lat: l.lat, lon: l.lon, from: l[\"src\"] === \"gps\" ? \"last gps fix\" : \"--location\" };\n"
+              "    return null;\n"
+              "  }\n");
+    /* web/ui/glyph.js */
+    WT_HAS(p, "  function g5(cells, opt) {\n"
+              "    var m = [], w = opt.w, h = opt.h, n = cells ? cells.length : 0, i;\n"
+              "    if (opt.ground) m.push([\"ground\", 0, 0, w, h, opt.ground]);\n"
+              "    if (!n) { m.push(dash(w, h)); return m; }\n"
+              "    var cw = w / n, ph = SlothSun.phases(opt.from, opt.cellS, n, opt.pos);\n"
+              "    for (i = 0; i < n; i++) {\n"
+              "      var x = Math.floor(i * cw), cwi = Math.max(1, Math.ceil(cw));\n"
+              "      if (cells[i] < 0) m.push([\"gap\", x, 0, cwi, h, \"--faint\"]);\n"
+              "      else if (cells[i] > 0)\n"
+              "        m.push([\"cell\", x, 0, cwi, h, ph ? SlothSun.TOKENS[ph[i]] : \"--tui-normal\"]);\n"
+              "    }\n"
+              "    if (gnum(opt.first) && opt.first >= 0 && opt.first < n)\n"
+              "      m.push([\"first\", Math.floor(opt.first * cw), 0, Math.max(1, Math.ceil(cw)), h,\n"
+              "              \"--signal\"]);\n"
+              "    // An anomaly episode underlines the cells it covers, 1 px, so the\n"
+              "    // strip says when the device was here and when it was odd without\n"
+              "    // either reading changing the other (R1: colour for out of band).\n"
+              "    var ep = opt.episodes || [];\n"
+              "    for (i = 0; i < ep.length; i++) {\n"
+              "      var a = ep[i][0] < 0 ? 0 : ep[i][0], b = ep[i][1] > n - 1 ? n - 1 : ep[i][1];\n"
+              "      if (b < a) continue;\n"
+              "      m.push([\"anom\", Math.floor(a * cw), h - 1,\n"
+              "              Math.max(1, Math.ceil((b - a + 1) * cw)), 1, \"--heat-2\"]);\n"
+              "    }\n"
+              "    return m;\n"
+              "  }\n");
+    /* web/ui/glyph.js */
+    WT_HAS(p, "  var SUN_H = [1, 2, 3, 2];\n"
+              "  function g5Ruler(opt) {\n"
+              "    var m = [], w = opt.w, h = opt.h, from = opt.from, to = opt.to, i;\n"
+              "    if (!(to > from)) return m;\n"
+              "    var n = opt.cells >= 1 ? Math.floor(opt.cells) : 0;\n"
+              "    var ph = n ? SlothSun.phases(from, (to - from) / n, n, opt.pos) : null;\n"
+              "    var r = SlothSun.runs(ph);\n"
+              "    for (i = 0; i < r.length; i++) {\n"
+              "      var a = r[i][1], b = i + 1 < r.length ? r[i + 1][1] : n, sh = SUN_H[r[i][0]];\n"
+              "      m.push([\"sun\", a * w / n, h - sh, (b - a) * w / n, sh, SlothSun.TOKENS[r[i][0]]]);\n"
+              "    }\n"
+              "    var off = gnum(opt.offset) ? opt.offset : 0;\n"
+              "    var first = Math.ceil((from + off) / 86400) * 86400 - off;\n"
+              "    for (var t = first; t <= to; t += 86400)\n"
+              "      m.push([\"tick\", (t - from) / (to - from) * w, 0, 1, h, \"--faint\"]);\n"
+              "    if (!gnum(opt.now)) m.push([\"now\", w - 1, 0, 1, h, \"--signal\"]);\n"
+              "    else if (opt.now >= from && opt.now <= to)\n"
+              "      m.push([\"now\", Math.min(w - 1, (opt.now - from) / (to - from) * w), 0, 1, h, \"--signal\"]);\n"
+              "    return m;\n"
+              "  }\n");
+    /* web/ui/app.js */
+    WT_HAS(p, "  var SUN = { pos: null, key: \"\" };\n"
+              "  var SUN_POLL_MS = 300000, SUN_RUNS_MAX = 8;\n");
+    /* web/ui/app.js */
+    WT_HAS(p, "  function paintStrip(c, cells, first, from, cellS) {\n"
+              "    c.g5 = [cells, first, from, cellS];\n"
+              "    glyph.paint(c, glyph.g5(cells, { w: c.clientWidth, h: c.clientHeight,\n"
+              "                                     first: num(first) ? first : -1, ground: \"--bg\",\n"
+              "                                     from: from, cellS: cellS, pos: SUN.pos }), tok);\n"
+              "  }\n");
+    /* web/ui/app.js */
+    WT_HAS(p, "  function drawStrip(c, hex, n, first, from, cellS) {\n"
+              "    paintStrip(c, glyph.cellsFromHex(hex, n), first, from, cellS);\n"
+              "  }\n");
+    /* web/ui/app.js */
+    WT_HAS(p, "  function drawRuler(c, from, to, cells) {\n"
+              "    if (!c) return;\n"
+              "    c.g5r = [from, to, cells];\n"
+              "    if (!num(from) || !num(to)) { glyph.paint(c, [], tok); return; }\n"
+              "    glyph.paint(c, glyph.g5Ruler({ w: c.clientWidth, h: c.clientHeight, from: from, to: to,\n"
+              "                                   offset: -new Date(to * 1000).getTimezoneOffset() * 60,\n"
+              "                                   now: Date.now() / 1000, cells: cells, pos: SUN.pos }), tok);\n"
+              "  }\n");
+    /* web/ui/app.js */
+    WT_HAS(p, "  function sunWords(from, cellS, n) {\n"
+              "    if (!num(from) || !(cellS > 0)) return \"\";\n"
+              "    if (cellS > SlothSun.MAX_CELL_S) return \"cells over 1 h: presence in one ink\";\n"
+              "    if (!SUN.pos) return \"no sensor position: presence in one ink\";\n"
+              "    var r = SlothSun.runs(SlothSun.phases(from, cellS, n, SUN.pos));\n"
+              "    if (!r.length) return \"\";\n"
+              "    var head = \"coloured by the sun at the sensor (\" + SUN.pos.from + \"): \";\n"
+              "    if (r.length > SUN_RUNS_MAX) return head + SlothSun.WORDS.join(\", \");\n"
+              "    return head + r.map(function (x) {\n"
+              "      return SlothSun.WORDS[x[0]] + (x[1] ? \" \" + hhmmss(from + x[1] * cellS).slice(0, 5) : \"\");\n"
+              "    }).join(\", \");\n"
+              "  }\n");
+    /* web/ui/app.js */
+    WT_HAS(p, "  function sunNote(e, from, cellS, n) {\n"
+              "    if (!e) return;\n"
+              "    e.g5w = [from, cellS, n];\n"
+              "    e.classList.add(\"sunw\");\n"
+              "    e.textContent = sunWords(from, cellS, n);\n"
+              "  }\n");
+    /* web/ui/app.js */
+    WT_HAS(p, "  function sunRepaint() {\n"
+              "    var cs = document.querySelectorAll(\"canvas\"), i;\n"
+              "    for (i = 0; i < cs.length; i++) {\n"
+              "      if (cs[i].g5) paintStrip(cs[i], cs[i].g5[0], cs[i].g5[1], cs[i].g5[2], cs[i].g5[3]);\n"
+              "      if (cs[i].g5r) drawRuler(cs[i], cs[i].g5r[0], cs[i].g5r[1], cs[i].g5r[2]);\n"
+              "    }\n"
+              "    var ws = document.querySelectorAll(\".sunw\");\n"
+              "    for (i = 0; i < ws.length; i++)\n"
+              "      if (ws[i].g5w) sunNote(ws[i], ws[i].g5w[0], ws[i].g5w[1], ws[i].g5w[2]);\n"
+              "  }\n");
+    /* web/ui/app.js */
+    WT_HAS(p, "  function sunLoad() {\n"
+              "    getJSON(\"/api/gnss\").then(function (j) {\n"
+              "      var p = SlothSun.pos(j);\n"
+              "      if (!p) return;\n"
+              "      var k = p.lat.toFixed(2) + \",\" + p.lon.toFixed(2) + \",\" + p.from;\n"
+              "      if (k === SUN.key) return;\n"
+              "      SUN.pos = p;\n"
+              "      SUN.key = k;\n"
+              "      sunRepaint();\n"
+              "    }).catch(function () { /* no answer: what is held stands, and none is one ink */ });\n"
+              "  }\n"
+              "  sunLoad();\n"
+              "  setInterval(sunLoad, SUN_POLL_MS);\n");
+    /* web/ui/app.js */
+    WT_HAS(p, "  function blePresence(d, now) {\n"
+              "    var c = $(\"bdr-strip\"), p = d.presence, cells = [], first = -1, from = null, cellS = null;\n"
+              "    if (p && typeof p.bits === \"string\" && /^[0-9a-f]{24}$/.test(p.bits) && num(p.newest) && num(p.bucket_s)) {\n"
+              "      var bs = p.bucket_s, nowB = Math.floor(now / bs), newB = Math.floor(p.newest / bs);\n"
+              "      // Cell 0 is the bucket 95 before now's: the strip's start, for\n"
+              "      // the sun's phase of each quarter hour.\n"
+              "      from = (nowB - 95) * bs;\n"
+              "      cellS = bs;\n"
+              "      for (var j = 0; j < 96; j++) {\n"
+              "        var b = nowB - 95 + j, i = newB - b, on = 0;\n"
+              "        if (i >= 0 && i < 96) on = (parseInt(p.bits.charAt(23 - (i >> 2)), 16) >> (i & 3)) & 1;\n"
+              "        cells.push(on);\n"
+              "        if (num(d.first_seen) && Math.floor(d.first_seen / bs) === b) first = j;\n"
+              "      }\n"
+              "    }\n"
+              "    paintStrip(c, cells, first, from, cellS);\n"
+              "    sunNote($(\"bdr-sun\"), from, cellS, 96);\n"
+              "    set(\"bdr-strip-note\", cells.length ? \"a quarter hour is set when a record's last_seen fell in it; a heard advertiser's record comes once a 10 s slot and a quiet one's on the 300 s heartbeat, so a quiet quarter can be an unchanged advertiser whose heartbeat fell in the next\"\n"
+              "                                       : \"no data\");\n"
+              "  }\n");
+    /* Every G5 caller gives the window and the cell: Devices, the
+     * drawer, Lookup, the WiFi clients, History, the alert page (the
+     * BLE drawer's is blePresence(), above). */
+    WT_HAS(p, "    drawStrip(r.cv, d.presence, 144, glyph.firstCell(d.first_seen, D.pfrom, 600, 144), D.pfrom, 600);");
+    WT_HAS(p, "      drawStrip($(\"dr-strip\"), j.presence, 144,\n"
+              "                glyph.firstCell(rec ? rec.first_seen : null, j.presence_from, 600, 144),\n"
+              "                j.presence_from, 600);\n"
+              "      sunNote($(\"dr-sun\"), j.presence_from, 600, 144);");
+    WT_HAS(p, "        var lb = box.appendChild(el(\"div\", \"label\", \"24 h presence, 10 min cells \"));\n"
+              "        sunNote(lb.appendChild(el(\"span\", \"sub\")), j.presence_from, 600, 144);");
+    WT_HAS(p, "        drawStrip(sc, j.presence, 144, glyph.firstCell(d ? d.first_seen : null, j.presence_from, 600, 144),\n"
+              "                  j.presence_from, 600);");
+    WT_HAS(p, "      drawStrip(cv, d.presence, 144, glyph.firstCell(d.first_seen, WF.clFrom, 600, 144), WF.clFrom, 600);");
+    WT_HAS(p, "    drawStrip(cv, d.presence, cells, -1, HS.pfrom, HS.cellS);");
+    WT_HAS(p, "        drawStrip($(\"ad-strip\"), d.presence, 144, -1, d.presence_from, 600);\n"
+              "        sunNote($(\"ad-sun\"), d.presence_from, 600, 144);");
+    WT_HAS(p, "    drawStrip($(\"ad-strip\"), null);\n    sunNote($(\"ad-sun\"));");
+    /* ... and there is no other: seven calls and the definition. */
+    int calls = 0;
+    for (const char *q = p; (q = strstr(q, "drawStrip(")) != NULL; q += 10) calls++;
+    WT_EQ(calls, 8);
+    int g5s = 0;
+    for (const char *q = p; (q = strstr(q, "glyph.g5(")) != NULL; q += 9) g5s++;
+    WT_EQ(g5s, 1);                         /* paintStrip()'s, the one painter */
+    /* The three tables' rulers and words. */
+    WT_HAS(p, "        D.pfrom = num(j.presence_from) ? j.presence_from : null;\n"
+              "        drawRuler(DTD.ruler, D.pfrom, D.pfrom + 144 * 600, 144);\n"
+              "        sunNote($(\"d-sun\"), D.pfrom, 600, 144);");
+    WT_HAS(p, "      WF.clFrom = num(j.presence_from) ? j.presence_from : null;\n"
+              "      drawRuler(DTWL.ruler, WF.clFrom, WF.clFrom + 144 * 600, 144);\n"
+              "      sunNote($(\"w-cl-sun\"), WF.clFrom, 600, 144);");
+    WT_HAS(p, "      HS.cells = j.presence_cells;\n"
+              "      HS.pfrom = num(j.presence_from) ? j.presence_from : null;\n"
+              "      HS.cellS = num(j.presence_cell_s) ? j.presence_cell_s : null;\n"
+              "      drawRuler(DTH.ruler, HS.pfrom, HS.pfrom + HS.cells * HS.cellS, HS.cells);\n"
+              "      sunNote($(\"h-sun\"), HS.pfrom, HS.cellS, HS.cells);");
+    WT_HAS(p, "        if (c.ruler) {\n"
+              "          t.ruler = th.appendChild(el(\"canvas\", \"dt-ruler\"));\n"
+              "          t.ruler.ariaHidden = \"true\";\n"
+              "          th.classList.add(\"dt-ruled\");\n"
+              "        }");
+    WT_HAS(p, "      { k: \"pr\", label: \"24 h presence\", px: 146, ruler: true }\n");
+    WT_HAS(p, "      { k: \"pr\", label: \"24 h presence\", px: 146, ruler: true },\n");
+    WT_HAS(p, "      { k: \"pr\", label: \"presence in the range\", px: 146, ruler: true }\n");
+    WT_HAS(p, "canvas.dt-ruler { display: block; flex: none; width: 144px; height: 6px; margin-top: 1px; border-radius: 0; }");
+    WT_HAS(p, "<div class=\"sub\" id=\"d-sun\"></div>");
+    WT_HAS(p, "<div class=\"sub\" id=\"w-cl-sun\"></div>");
+    WT_HAS(p, "<div class=\"sub\" id=\"h-sun\"></div>");
+    WT_HAS(p, "<div class=\"label\">24 h presence, 10 min cells <span class=\"sub\" id=\"dr-sun\"></span></div>");
+    WT_HAS(p, "<div class=\"label\">24 h presence, 10 min cells <span class=\"sub\" id=\"ad-sun\"></span></div>");
+    WT_HAS(p, "<div class=\"sub\" id=\"bdr-sun\"></div>");
+    /* The four tokens, both themes, as theme.css writes them
+     * (web/tools/palette.c holds them apart and to 3:1 at build time,
+     * and prints the figures in web/README.md's table). */
+    WT_HAS(p, "  --sun-night: #4a72c4;  --sun-rise: #ffe07a;  --sun-set: #e0569b;\n"
+              "  --sun-day: var(--tui-normal);\n");
+    WT_HAS(p, "  --sun-night: #5b84d6;  --sun-rise: #8a7a00;  --sun-set: #c2247a;\n");
+    /* The sensor's position and nothing else: the page never asks the
+     * browser where it is, and never reads a zone's name to guess. Seen
+     * red with a navigator.geolocation call added to sunLoad(), and
+     * with Intl.DateTimeFormat().resolvedOptions().timeZone read in
+     * sunWords(). */
+    WT_LACKS(p, "geolocation");
+    WT_LACKS(p, "timeZone");
+    WT_LACKS(p, "Intl.");
+    WT_LACKS(p, "getCurrentPosition");
+}
+
 /* ── G6 ─────────────────────────────────────────────────────────── */
 
 static void test_g6_bullet(void) {
@@ -1744,8 +2518,9 @@ static void test_new_mark_and_first_cell(void) {
     WT_ASSERT(near(gm_get(&g, "first").x, 30));
     /* The page passes it: Devices, the drawer and the Lookup card. */
     const char *p = page();
-    WT_HAS(p, "    drawStrip(r.cv, d.presence, 144, glyph.firstCell(d.first_seen, D.pfrom, 600, 144));");
-    WT_HAS(p, "                glyph.firstCell(rec ? rec.first_seen : null, j.presence_from, 600, 144));");
+    WT_HAS(p, "    drawStrip(r.cv, d.presence, 144, glyph.firstCell(d.first_seen, D.pfrom, 600, 144), D.pfrom, 600);");
+    WT_HAS(p, "                glyph.firstCell(rec ? rec.first_seen : null, j.presence_from, 600, 144),\n"
+              "                j.presence_from, 600);");
     WT_HAS(p, "    r.nw = SlothRf.newMark(d.first_seen, D.pfrom);");
     WT_HAS(p, "    var nw = SlothRf.newMark(a.first_seen, WF.newFrom);");
     WT_HAS(p, "    if (!glyph.isNew(first, from)) return null;");
@@ -2118,7 +2893,7 @@ static void test_v3_wiring(void) {
     WT_HAS(p, "    var q = \"src:probe seen:<\" + seenWord(r.win);");
     WT_HAS(p, "    getJSON(\"/api/devices?limit=\" + CL_PAGE + \"&sort=signal&q=\" + encodeURIComponent(q))");
     WT_HAS(p, "      SlothRf.cell(row.appendChild(el(\"span\", \"c-sig d-dim\")), d.rf, num(d.signal) ? d.signal : null);");
-    WT_HAS(p, "      drawStrip(cv, d.presence, 144, glyph.firstCell(d.first_seen, WF.clFrom, 600, 144));");
+    WT_HAS(p, "      drawStrip(cv, d.presence, 144, glyph.firstCell(d.first_seen, WF.clFrom, 600, 144), WF.clFrom, 600);");
     WT_HAS(p, "id: \"wclients\"");
     WT_HAS(p, "    glyph.paint(c, glyph.g7(lanes, { w: W, h: Hh, lane: L, gap: HS_GAP, marks: marks }), tok);");
     WT_HAS(p, "scale: \"one scale, tallest \" + fmt(glyph.g7Max(lanes)) +");
@@ -2661,6 +3436,15 @@ void run_glyph_tests(void) {
     WT_RUN(test_g5_ruler);
     WT_RUN(test_g5_anomaly_underline);
     WT_RUN(test_g5_reads_in_greyscale);
+    WT_RUN(test_sun_against_the_almanac);
+    WT_RUN(test_sun_noon_elevation);
+    WT_RUN(test_sun_polar_and_twilight);
+    WT_RUN(test_sun_position_is_rounded);
+    WT_RUN(test_g5_sun_phases_at_london);
+    WT_RUN(test_g5_no_position_is_one_ink);
+    WT_RUN(test_g5_long_cells_are_one_ink);
+    WT_RUN(test_g5_ruler_sun_band);
+    WT_RUN(test_the_page_carries_the_sun);
     WT_RUN(test_g6_bullet);
     WT_RUN(test_g6_count_bar);
     WT_RUN(test_g6_states);
