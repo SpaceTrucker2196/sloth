@@ -6850,3 +6850,11 @@ position (`/api/gnss`: the fix, else `loc`), computed on the page by
 and says so. G5's ruler is drawn in the three tables' headers with the
 phases as a band. R1 gains its second exception, for G5 only
 (`docs/web-visual-spec.md`, `web/README.md`). [[slothweb]].
+
+## 2026-11-11 — every key of a metric on the Activity graph, a colour a key
+
+Owner request ("make the activity page able to show all the keys on the graph with color coding") and ruling: R1's one ink is set aside for this one graph mode (recorded at the head of `docs/web-visual-spec.md` and under R1 in `web/README.md`). The Activity graph drew one key over its band, the others only as small multiples. A `keys: one` / `keys: all` button (kept as `act.allkeys`, one key the default) now draws every key the key picker holds as its own line on one shared y-scale, each in the key's hash colour (`ipColorIndex()`, the colour the key already has as an address or a device swatch). A ranked, numbered legend lists every key with its latest value, largest first; the top five lines carry rank and key at their end; hover, focus or a pick draws one line last in colour and the rest in `--rule`; the band is drawn only for a picked key; a device's entry opens its drawer; a presence metric is stacked strips. Data: the new `/api/series/all` (`web/src/web_allkeys.c`), each key merged into at most 480 cells, keys in byte order, at most 32 to an answer, the 256-key cap said as `listed` of `total` and in the caption as "256 of 300 keys". `web/ui/allkeys.js`, `web/tests/test_allkeys.c`. [[slothweb]].
+
+## 2026-11-11 — satellites coloured by constellation; the emitter report in two columns
+
+Two owner requests on slothweb. The GNSS tab colours each satellite by its constellation, one key-palette colour per `gnssid`, in the sky plot, its trails, both tables' GNSS column and a key under the sky; C/N0 keeps its heat in the signal cells. The emitter report's sections show two columns, the field and what was observed; where a value came from is its tooltip. [[gnss]], [[slothweb]].
