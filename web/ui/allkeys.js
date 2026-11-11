@@ -6,18 +6,28 @@
 // that lists every key drawn. R1's one ink is set aside for this mode
 // by that ruling and for nothing else.
 //
-// Eight colours and up to 256 keys: colour is never the only carrier
+// Eight colours and up to 8,192 keys: colour is never the only carrier
 // (R10). The legend is ranked and numbered, the top few lines carry
 // their rank and key at their right end, and a legend entry hovered,
 // focused or picked brings its line forward in its colour while every
-// other line goes to --rule.
+// other line goes to --faint.
 //
-// Two halves, as glyph.js: rank(), keysText(), tierOf(), lines(),
-// frame() and strips() are pure (no DOM, no canvas, no theme) and are
-// ported line for line into web/tests/test_allkeys.c, which pins them
-// verbatim; the rest fetches, builds the legend and paints the list
-// (paintMarks(), glyph.paint()'s rules with the lines batched). Keys are untrusted text: textContent, fillText and
-// encodeURIComponent only.
+// Every key is every key (owner ruling 2026-11-11, "lift the cap"):
+// /api/series/all walks them all, a page an answer, and this draws
+// what has arrived while the rest is read, saying "loading N of M
+// keys". What bounds it is said, never silent: the graph holds 8,192
+// keys (--web-max-keys' own maximum) and a read stops at 60 s; past
+// either the caption says "N of M keys" and why. The cells the graph
+// holds across all its keys are bounded too (POINTS), so many keys are
+// read at fewer cells each and the paint stays inside a frame.
+//
+// Two halves, as glyph.js: rank(), keysText(), tierOf(), colsFor(),
+// filterRows(), lines(), frame() and strips() are pure (no DOM, no
+// canvas, no theme) and are ported line for line into
+// web/tests/test_allkeys.c, which pins them verbatim; the rest fetches,
+// builds the legend and paints the list (paintMarks(), glyph.paint()'s
+// rules with the lines batched). Keys are untrusted text: textContent,
+// fillText and encodeURIComponent only.
 //
 // window.SlothAllKeys, two hooks app.js calls:
 //   SlothAllKeys.init(h)   once, main()'s helpers lent
@@ -35,13 +45,37 @@
   var LABEL_GAP = 11;
   // The plot's insets: the y numbers, the end labels, the time labels.
   var PAD_L = 48, PAD_R = 132, PAD_T = 6, PAD_B = 16;
-  // A presence row: 6 px of ink and 2 of gap.
-  var ROW_H = 8;
   // web_allkeys.h: WEB_ALLKEYS_COLS_MIN, _MAX and _BUCKETS.
   var COLS_MIN = 8, COLS_MAX = 480, BUCKETS = 10080;
+  // The keys the graph holds: --web-max-keys' own maximum
+  // (WEB_MAX_KEYS_MAX), so every key a rollup can hold is drawn.
+  var KEYS_MAX = 8192;
+  // The cells the graph holds across all its keys: 8,192 keys of 64
+  // cells, 1,092 of the plot's 480. What a read carries and the page
+  // keeps is bounded by it.
+  var POINTS = 524288;
+  // And for a presence metric, whose every cell can be a mark of its
+  // own: 8,192 keys of 16 cells.
+  var POINTS_STRIPS = 131072;
+  // The keys drawn as lines: the largest LINES by the legend's order,
+  // and the focus row whatever its rank. A line costs its length in
+  // pixels to draw, so 8,192 of them are 8,192 plot widths however few
+  // cells each has; past LINES the rest are drawn as one thing, the
+  // range they span in each cell, which is what a mass of lines shows.
+  var LINES = 256;
+  // A read that has run this long stops, and the caption says so.
+  var READ_MS = 60000;
+  // While a first read runs, the graph is drawn again this often.
+  var DRAW_MS = 300;
+  // The legend's entries in the page at once; "show more" adds as many.
+  var LEGEND_CHUNK = 200;
+  // The line of a row that is not the focus: grey, a step above --rule.
+  var DIM = "--faint";
   var S = { on: false, gen: 0, got: null, of: "", at: 0, pick: null, hot: null,
             scale: null, scaleOf: "", lastKey: null, ctx: "", rows: [], view: null,
-            bl: null, blOf: "", raf: 0, m: null, shrunk: "", clamped: false };
+            bl: null, blOf: "", raf: 0, m: null, shrunk: "", clamped: false,
+            loading: false, done: false, took: 0, tick: 0, filter: "", shown: LEGEND_CHUNK,
+            lkeys: [], pickOut: false };
 
   function gnum(v) { return typeof v === "number" && isFinite(v); }
   function $(id) { return document.getElementById(id); }
@@ -62,11 +96,16 @@
   }
 
   // How many keys the graph holds, for the caption's source: all of
-  // them, or "N of M" with the reason. The route lists the 256 most
-  // recently seen (WEB_KEYS_MAX); cut is a read that stopped early.
-  function keysText(shown, total, cut) {
-    if (cut) return shown + " of " + total + " keys (the read stopped)";
-    if (total > shown) return shown + " of " + total + " keys, the most recently seen";
+  // them, or "N of M" with the reason, never fewer in silence. cut is
+  // "" for a whole read, "bound" for the graph's KEYS_MAX, "time" for
+  // READ_MS, "stopped" for a read the server ended; min says the total
+  // is a count the server stopped at; loading is a read under way.
+  function keysText(shown, total, cut, min, loading) {
+    var of = gnum(total) ? " of " + total + (min ? "+" : "") : "";
+    if (loading) return "loading " + shown + of + " keys";
+    if (cut === "bound") return shown + of + " keys, the first by key (the graph holds " + shown + ")";
+    if (cut === "time") return shown + of + " keys (the read was stopped at 60 s)";
+    if (cut === "stopped") return shown + of + " keys (the read stopped)";
     return shown + (shown === 1 ? " key" : " keys");
   }
 
@@ -80,14 +119,49 @@
     return ["hour", 3600, win > BUCKETS * 3600 ? BUCKETS * 3600 : win];
   }
 
+  // The cells each key is read in: the plot's own (one for every two
+  // pixels) while every key's cells together are within what the graph
+  // holds, else as many as that leaves each key, never under the
+  // route's least. total is how many keys there are (the graph holds
+  // max of them).
+  function colsFor(total, plot, points, max, least) {
+    var n = total > max ? max : total;
+    if (!(n > 0) || n * plot <= points) return plot;
+    var c = Math.floor(points / n);
+    return c < least ? least : c;
+  }
+
+  // The legend's filter: the rows whose key holds q, ASCII case aside;
+  // every row for an empty q. The answer is the rows' indices, so an
+  // entry keeps the rank it has among them all.
+  function filterRows(rows, q) {
+    var out = [], i;
+    q = q.toLowerCase();
+    for (i = 0; i < rows.length; i++)
+      if (q === "" || rows[i].key.toLowerCase().indexOf(q) >= 0) out.push(i);
+    return out;
+  }
+
+  // A presence row's height for n rows: 8 px (6 of ink, 2 of gap) while
+  // the stack is within 4,096 px, then 4, 2 and 1, so 8,192 rows are a
+  // canvas a browser will make. [row, ink, the rows between ranks].
+  function stripRow(n) {
+    if (n <= 512) return [8, 6, 5];
+    if (n <= 1024) return [4, 2, 10];
+    if (n <= 4096) return [2, 2, 50];
+    return [1, 1, 100];
+  }
+
   // The multi-key mark list. rows are in the legend's order, each
   // {k, pts, label}: k the key's colour index, pts [t, v] oldest first,
   // label its end-of-line words. opt: {w, h, padL, padR, padT, padB,
-  // from, to, step, scale, pick, hot, labels, band}: scale the shared
-  // [lo, hi]; pick and hot the picked and the hovered row or -1; band
-  // the picked row's, as G1 takes it, or null. Rows are drawn last
-  // first, so the largest is on top, and the focus row (hot, else
-  // pick) after them all; with a focus every other row is --rule.
+  // from, to, step, t0, scale, pick, hot, labels, lines, band}: scale
+  // the shared [lo, hi]; pick and hot the picked and the hovered row or
+  // -1; lines how many rows are drawn as lines, the rest folded into
+  // one range a cell (the cells counted from t0 in steps); band
+  // the picked row's, as G1 takes it, or null. Rows are listed last
+  // first and the focus row (hot, else pick) after them all, so it is
+  // drawn over the rest; with a focus every other row is DIM.
   function lines(rows, opt) {
     var m = [], w = opt.w, h = opt.h, i, j, n;
     var x0 = opt.padL, x1 = w - opt.padR, y0 = opt.padT, y1 = h - opt.padB;
@@ -107,12 +181,31 @@
       var bw = Math.min(Math.max(1, X(bp[i][0] + opt.step) - bx), Math.max(0, x1 - bx));
       if (bw > 0) m.push(["band", bx, Y(b[1]), bw, Y(b[0]) - Y(b[1]), "--data"]);
     }
-    for (n = rows.length; n >= 0; n--) {
+    // The rows past opt.lines, but the focus: the least and the most of
+    // them in each cell, one range mark a cell, under every line.
+    var rl = [], rh = [], c, p;
+    for (i = opt.lines; i < rows.length; i++) {
+      if (i === focus) continue;
+      p = rows[i].pts;
+      for (j = 0; j < p.length; j++) {
+        c = Math.round((p[j][0] - opt.t0) / opt.step);
+        if (c < 0) continue;
+        if (rl[c] === undefined || p[j][1] < rl[c]) rl[c] = p[j][1];
+        if (rh[c] === undefined || p[j][1] > rh[c]) rh[c] = p[j][1];
+      }
+    }
+    for (c = 0; c < rl.length; c++) {
+      if (rl[c] === undefined) continue;
+      var ex = X(opt.t0 + c * opt.step);
+      var ew = Math.min(Math.max(1, X(opt.t0 + (c + 1) * opt.step) - ex), Math.max(0, x1 - ex));
+      if (ew > 0 && ex >= x0) m.push(["range", ex, Y(rh[c]), ew, Math.max(1, Y(rl[c]) - Y(rh[c])), DIM]);
+    }
+    for (n = rows.length < opt.lines ? rows.length : opt.lines; n >= 0; n--) {
       i = n > 0 ? n - 1 : focus;
       if (i < 0 || (n > 0 && i === focus)) continue;
-      var p = rows[i].pts;
+      p = rows[i].pts;
       if (!p.length) continue;
-      var tok = focus >= 0 && i !== focus ? "--rule" : "--k-" + rows[i].k;
+      var tok = focus >= 0 && i !== focus ? DIM : "--k-" + rows[i].k;
       var dots = p.length < DOTS_BELOW;
       for (j = 0; j < p.length; j++) {
         var left = j > 0 && p[j][0] - p[j - 1][0] <= gap;
@@ -131,11 +224,11 @@
     // The end labels: the first opt.labels rows that have a point, and
     // the focus row whatever its rank; pushed apart top down, then the
     // stack lifted back inside the plot.
-    var li = [], ly = [], c = 0;
+    var li = [], ly = [], lc = 0;
     for (i = 0; i < rows.length && opt.padR > 8; i++) {
       if (!rows[i].pts.length) continue;
-      if (c >= opt.labels && i !== focus) continue;
-      c++;
+      if (lc >= opt.labels && i !== focus) continue;
+      lc++;
       var y = Y(rows[i].pts[rows[i].pts.length - 1][1]);
       for (j = li.length; j > 0 && ly[j - 1] > y; j--) { li[j] = li[j - 1]; ly[j] = ly[j - 1]; }
       li[j] = i;
@@ -145,7 +238,7 @@
     var over = li.length ? ly[li.length - 1] - (y1 - LABEL_H / 2) : 0;
     for (j = 0; j < li.length; j++)
       m.push(["label", x1 + 6, over > 0 ? ly[j] - over : ly[j], opt.padR - 8, LABEL_H,
-              focus >= 0 && li[j] !== focus ? "--rule" : "--k-" + rows[li[j]].k, rows[li[j]].label]);
+              focus >= 0 && li[j] !== focus ? DIM : "--k-" + rows[li[j]].k, rows[li[j]].label]);
     return m;
   }
 
@@ -172,9 +265,10 @@
   // A presence metric has no line: its keys are stacked strips, one row
   // a key in the legend's order, each run of cells the key was present
   // in one mark in the key's colour. rows are [{k, cells}], cells the
-  // present cells' indices ascending. opt: {w, rowH, padL, padR, ncell,
-  // pick, hot, xt}. The first row and every fifth carry their rank;
-  // under the last row, the window's three times (xt).
+  // present cells' indices ascending. opt: {w, rowH, ink, every, padL,
+  // padR, ncell, pick, hot, xt}: a row is rowH px, ink of them drawn
+  // (stripRow()). The first row and every opt.every'th carry their
+  // rank; under the last row, the window's three times (xt).
   function strips(rows, opt) {
     var m = [], x0 = opt.padL, pw = opt.w - opt.padL - opt.padR, rh = opt.rowH, i, j;
     var any = false;
@@ -186,13 +280,13 @@
     var focus = opt.hot >= 0 ? opt.hot : opt.pick;
     for (i = 0; i < rows.length; i++) {
       var c = rows[i].cells, y = i * rh;
-      var tok = focus >= 0 && i !== focus ? "--rule" : "--k-" + rows[i].k;
-      if (i === 0 || (i + 1) % 5 === 0)
-        m.push(["num", 2, y + rh / 2, x0 - 4, rh, "--muted", String(i + 1)]);
+      var tok = focus >= 0 && i !== focus ? DIM : "--k-" + rows[i].k;
+      if (i === 0 || (i + 1) % opt.every === 0)
+        m.push(["num", 2, y + rh / 2, x0 - 4, 8, "--muted", String(i + 1)]);
       for (j = 0; j < c.length; j++) {
         var a = c[j], e = a;
         while (j + 1 < c.length && c[j + 1] === e + 1) { j++; e++; }
-        m.push(["cell", x0 + a / opt.ncell * pw, y, Math.max(1, (e + 1 - a) / opt.ncell * pw), rh - 2, tok]);
+        m.push(["cell", x0 + a / opt.ncell * pw, y, Math.max(1, (e + 1 - a) / opt.ncell * pw), opt.ink, tok]);
       }
     }
     var ty = rows.length * rh + 8;
@@ -207,7 +301,9 @@
   // lists hold, with one difference that is only cost. A run of line
   // marks in one token is one path and one stroke, where glyph.paint()
   // strokes each segment: 256 keys of 480 cells are 122,880 segments.
-  // A gap draws nothing (R5).
+  // (One path a row, not one a colour: a path of every row of a colour
+  // was measured slower, not faster.) A range is the band's rectangle at
+  // 35 percent. A gap draws nothing (R5).
   function paintMarks(c, marks, resolve) {
     var dpr = window.devicePixelRatio || 1;
     var w = Math.max(1, Math.round(c.clientWidth * dpr));
@@ -238,8 +334,8 @@
         g.textBaseline = "middle";
         g.textAlign = "left";
         g.fillText(m[6], m[1] * dpr, m[2] * dpr, Math.max(1, m[3] * dpr));
-      } else if (k === "band") {
-        g.globalAlpha = 0.12;
+      } else if (k === "band" || k === "range") {
+        g.globalAlpha = k === "band" ? 0.12 : 0.35;
         g.fillRect(m[1] * dpr, m[2] * dpr, Math.max(1, m[3] * dpr), Math.max(1, m[4] * dpr));
         g.globalAlpha = 1;
       } else if (k === "dot" || k === "last") {
@@ -256,28 +352,6 @@
   function modeBtn() {
     $("ak-mode").ariaPressed = S.on ? "true" : "false";
     H.set("ak-mode", S.on ? "keys: all" : "keys: one");
-  }
-
-  // Every page of /api/series/all for one window, in the route's key
-  // order. 64 answers hold 256 keys at the route's worst (7 full keys
-  // an answer is 37); past that the read stops and the caption says so.
-  function read(m, tier, from, to, cols) {
-    var keys = [], head = null, pages = 0;
-    function page(after) {
-      var p = "/api/series/all?metric=" + encodeURIComponent(m.name) + "&tier=" + tier +
-              "&from=" + from + "&to=" + to + "&cols=" + cols;
-      if (after !== null) p += "&after=" + encodeURIComponent(after);
-      return H.getJSON(p).then(function (j) {
-        head = j;
-        var ks = j.keys || [];
-        for (var i = 0; i < ks.length; i++)
-          if (ks[i] && typeof ks[i].key === "string" && Array.isArray(ks[i].p)) keys.push(ks[i]);
-        pages++;
-        if (j.more === true && typeof j.next === "string" && pages < 64) return page(j.next);
-        return { head: head, keys: keys, cut: j.more === true };
-      });
-    }
-    return page(null);
   }
 
   // One key's answer as a row: its points, its present cells, its
@@ -317,10 +391,19 @@
     });
   }
 
+  // The legend: every key drawn, ranked. Only LEGEND_CHUNK entries are
+  // in the page at once (8,192 buttons would not be a list anyone
+  // reads, and would cost a second to build): the filter narrows them
+  // by the key's text, "show more" adds a chunk. An entry keeps the
+  // rank it has among every key, filtered or not.
   function legend(m) {
-    var box = $("ak-legend"), head = S.got.head, presence = head.kind === "presence";
+    var box = $("ak-legend"), head = S.got ? S.got.head : null;
+    var presence = !!head && head.kind === "presence";
+    var hits = filterRows(S.rows, S.filter), n = Math.min(hits.length, S.shown);
     while (box.firstChild) box.removeChild(box.firstChild);
-    S.rows.forEach(function (r, i) {
+    S.lkeys = [];
+    hits.slice(0, n).forEach(function (i) {
+      var r = S.rows[i];
       var row = H.el("div", "ak-row");
       row.role = "listitem";
       var b = H.el("button", "ak-key" + (S.pick === r.key ? " on" : ""));
@@ -350,20 +433,29 @@
         row.appendChild(o);
       }
       box.appendChild(row);
+      S.lkeys.push(r.key);
     });
     $("ak-all").hidden = S.pick === null;
+    $("ak-filter").hidden = S.rows.length <= 8 && S.filter === "";
+    $("ak-more").hidden = n >= hits.length;
+    H.set("ak-more", "show " + Math.min(LEGEND_CHUNK, hits.length - n) + " more");
     H.set("ak-rule", !S.rows.length ? ""
       : (presence ? "every key by the cells it was present in, most first"
                   : "every key by its latest value, largest first") +
-        "; equal values by key. Pick one to show it alone; Esc or the same entry again for all.");
+        "; equal values by key. Pick one to show it alone; Esc or the same entry again for all." +
+        (n < S.rows.length ? " Listed: " + n + " of " +
+          (S.filter === "" ? S.rows.length : hits.length + " matching, of " + S.rows.length) + "."
+                           : ""));
   }
 
   function pick(m, key) {
     S.pick = key;
-    if (key !== null) { H.pickKey(key); S.lastKey = key; }
+    // The key picker follows, when the key is one of its 256.
+    S.pickOut = false;
+    if (key !== null) { S.pickOut = !H.pickKey(key); S.lastKey = H.key(); }
     var bs = $("ak-legend").querySelectorAll("button.ak-key");
-    for (var i = 0; i < bs.length && i < S.rows.length; i++) {
-      var on = S.rows[i].key === key;
+    for (var i = 0; i < bs.length && i < S.lkeys.length; i++) {
+      var on = S.lkeys[i] === key;
       bs[i].classList.toggle("on", on);
       bs[i].ariaPressed = on ? "true" : "false";
     }
@@ -405,10 +497,12 @@
     cv.hidden = !S.rows.length;
     for (i = 0; i < S.rows.length; i++) pn += S.rows[i].pts.length;
     var win = head.to - head.from, marks, scaleText;
-    var keys = keysText(S.rows.length, gnum(head.total) ? head.total : S.rows.length, g.cut);
+    var keys = keysText(S.rows.length, g.total, g.cut, g.min, S.loading && !S.done);
     if (presence) {
-      cv.style.height = Math.max(3, S.rows.length) * ROW_H + PAD_B + "px";
-      var so = { w: cv.clientWidth, rowH: ROW_H, padL: 28, padR: 4, ncell: head.cells, pick: pi, hot: hi,
+      var sr = stripRow(S.rows.length);
+      cv.style.height = Math.max(3, S.rows.length) * sr[0] + PAD_B + "px";
+      var so = { w: cv.clientWidth, rowH: sr[0], ink: sr[1], every: sr[2], padL: 28, padR: 4,
+                 ncell: head.cells, pick: pi, hot: hi,
                  xt: [stamp(head.from, win), stamp((head.from + head.to) / 2, win), stamp(head.to, win)] };
       marks = strips(S.rows, so);
       S.view = { presence: true, o: so };
@@ -433,8 +527,8 @@
       }
       var gw = glyph.win(t0 === null ? [] : [[t0, 0], [t1, 0]], head.from, head.to);
       var o = { w: cv.clientWidth, h: cv.clientHeight, padL: PAD_L, padR: PAD_R, padT: PAD_T, padB: PAD_B,
-                from: gw.from, to: gw.to, step: head.cell, scale: [lo, hi2], pick: pi, hot: hi,
-                labels: LABELS, band: band, now: Date.now() / 1000,
+                from: gw.from, to: gw.to, step: head.cell, t0: head.from, scale: [lo, hi2], pick: pi, hot: hi,
+                labels: LABELS, lines: LINES, band: band, now: Date.now() / 1000,
                 ytop: H.fmt(hi2), ybot: H.fmt(lo),
                 xt: [stamp(gw.from, win), stamp((gw.from + gw.to) / 2, win), stamp(gw.to, win)] };
       for (i = 0; i < S.rows.length; i++)
@@ -446,7 +540,9 @@
         (banded ? "band ±" + H.sens().toFixed(1) + " sd for " + S.pick
                 : pi >= 0 ? "no band for " + S.pick + " yet"
                 : "no band: it is one key's, pick a key for its") +
-        ", sorted by latest value";
+        ", sorted by latest value" +
+        (S.rows.length > LINES ? ", lines for the " + LINES + " largest, the other " +
+                                 (S.rows.length - LINES) + " as their range a cell" : "");
       S.shrunk = gw.shrunk ? gw.text : "";
     }
     paintMarks(cv, marks, H.tok);
@@ -458,10 +554,11 @@
       source: m.name + ", " + keys + ", " + head.source,
       window: glyph.dur(win), tier: cellWord, scale: scaleText, n: pn,
       state: head.out_of_scope === true ? "not in the " + H.scopeWord(H.scope()) + " scope"
-           : !S.rows.length ? "no " + (head.keykind || "key") + " seen yet"
+           : !S.rows.length ? (S.loading && !S.done ? "" : "no " + (head.keykind || "key") + " seen yet")
            : !pn ? "no data"
            : !presence && S.shrunk ? S.shrunk
            : !presence && pi >= 0 && !isBanded(band) ? "warming" : "" }) +
+      (S.pickOut && S.pick !== null ? "; " + S.pick + " is not one of the key picker's 256" : "") +
       (S.clamped ? "; minute and hour tiers need a WITH_SQLITE build" : ""));
   }
 
@@ -479,7 +576,8 @@
     var t = o.from + (x - x0) / (x1 - x0) * (o.to - o.from), best = -1, bd = 12;
     for (i = 0; i < S.rows.length; i++) {
       var p = S.rows[i].pts, a = 0, b = p.length - 1;
-      if (!p.length) continue;
+      // A row folded into the range has no line to point at.
+      if (!p.length || (i >= o.lines && i !== o.pick)) continue;
       while (a < b) { var mid = (a + b) >> 1; if (p[mid][0] < t) a = mid + 1; else b = mid; }
       if (a > 0 && t - p[a - 1][0] < p[a][0] - t) a--;
       if (Math.abs(p[a][0] - t) > o.step * GAP_STEPS) continue;
@@ -489,38 +587,102 @@
     return best;
   }
 
+  // One answer's keys as rows, onto the read's own list.
+  function take(R, j) {
+    var ks = j.keys || [], presence = R.head.kind === "presence";
+    for (var i = 0; i < ks.length && R.rows.length < KEYS_MAX; i++)
+      if (ks[i] && typeof ks[i].key === "string" && Array.isArray(ks[i].p))
+        R.rows.push(rowOf(ks[i], R.head, presence));
+  }
+
+  // What a read has so far, onto the page: ranked, listed, drawn. done
+  // is the read's end, with why it ended short ("" when it did not).
+  function land(m, R, done, cut) {
+    S.got = { head: R.head, total: R.total, min: R.min, cut: cut };
+    S.rows = rank(R.rows);
+    S.done = done;
+    if (done) {
+      S.loading = false;
+      S.at = Date.now();
+      S.took = S.at - R.t0;
+    }
+    if (indexOfKey(S.pick) < 0) { S.pick = null; S.pickOut = false; }
+    S.hot = null;
+    legend(m);
+    wantBand(m);
+    paint(m);
+  }
+
   // Read the window again when it, the metric or the scope changed, or
-  // when a cell's worth of time has passed (60 s at most); between
-  // those a call only repaints.
+  // when a cell's time has passed (60 s at most, and never sooner than
+  // ten times what the last read took: 8,192 keys are not read every
+  // minute); between those a call only repaints.
+  //
+  // The read is a walk of /api/series/all's pages, one request at a
+  // time, each answer handled in its own turn so the page stays
+  // responsive. A first read of a window draws what has arrived every
+  // DRAW_MS and says "loading N of M keys"; a later read of the same
+  // window lands whole, so the graph does not flicker each minute. It
+  // ends early, and says why, at KEYS_MAX keys or READ_MS. It stops
+  // without a word when the metric, scope, window or mode changed
+  // (S.gen moved) or the Activity view is no longer the one shown; the
+  // next call starts it afresh.
   function load(m) {
     var want = Number($("a-win").value) || 3600;
     var tr = tierOf(want, H.storeOn()), tier = tr[0], step = tr[1], win = tr[2];
     // A cell for every two pixels of the plot: the box's width, because
     // the canvas is hidden while there is no key to draw.
-    var cols = Math.max(COLS_MIN, Math.min(COLS_MAX, Math.floor(($("ak-box").clientWidth - PAD_L - PAD_R) / 2)));
-    var of = m.name + "\u0000" + H.scope() + "\u0000" + win + "\u0000" + tier + "\u0000" + cols;
-    var age = Date.now() - S.at;
-    var fresh = S.got && S.of === of && age < Math.min(60, S.got.head.cell) * 1000 - 500;
-    if (fresh) { paint(m); return; }
+    var plot = Math.max(COLS_MIN, Math.min(COLS_MAX, Math.floor(($("ak-box").clientWidth - PAD_L - PAD_R) / 2)));
+    var of = m.name + "\u0000" + H.scope() + "\u0000" + win + "\u0000" + tier + "\u0000" + plot;
+    if (S.loading && S.of === of) { paint(m); return; }
+    var every = S.got ? Math.max(Math.min(60, S.got.head.cell) * 1000 - 500, S.took * 10) : 0;
+    if (S.got && S.done && S.of === of && Date.now() - S.at < every) { paint(m); return; }
     var now = Math.floor(Date.now() / 1000);
     var to = now - now % step + step, from = to - win;
-    var gen = ++S.gen;
-    if (S.of !== of) { S.got = null; S.rows = []; }
-    read(m, tier, from, to, cols).then(function (g) {
-      if (gen !== S.gen || !S.on) return;
-      S.got = g;
-      S.of = of;
-      S.at = Date.now();
-      S.clamped = !H.storeOn() && want > 86400;
-      var presence = g.head.kind === "presence";
-      S.rows = rank(g.keys.map(function (k) { return rowOf(k, g.head, presence); }));
-      if (indexOfKey(S.pick) < 0) S.pick = null;
-      S.hot = null;
+    var gen = ++S.gen, first = S.of !== of || !S.done;
+    var R = { rows: [], head: null, total: null, min: false, cols: plot, t0: Date.now(), drawn: 0 };
+    if (first) {
+      S.got = null;
+      S.rows = [];
+      S.done = false;
+      S.shown = LEGEND_CHUNK;
       legend(m);
-      wantBand(m);
-      paint(m);
-    }).catch(function (e) {
+      H.set("a-title", m.name + "  every key  (" + m.unit + ")");
+      H.set("a-src", m.name + ", " + keysText(0, null, "", false, true));
+    }
+    S.of = of;
+    S.loading = true;
+    S.clamped = !H.storeOn() && want > 86400;
+    function page(after) {
+      var p = "/api/series/all?metric=" + encodeURIComponent(m.name) + "&tier=" + tier +
+              "&from=" + from + "&to=" + to + "&cols=" + R.cols;
+      if (after !== null) p += "&after=" + encodeURIComponent(after);
+      return H.getJSON(p).then(function (j) {
+        if (gen !== S.gen) return;
+        if (!S.on || !H.active()) { S.gen++; S.loading = false; S.done = false; return; }
+        if (after === null) {
+          R.total = gnum(j.total) ? j.total : null;
+          R.min = j.total_min === true;
+          // More cells than the graph holds: the same walk at fewer
+          // cells a key, from the start.
+          var fit = colsFor(R.total === null ? 0 : R.total, R.cols,
+                            j.kind === "presence" ? POINTS_STRIPS : POINTS, KEYS_MAX, COLS_MIN);
+          if (fit < R.cols) { R.cols = fit; return page(null); }
+        }
+        R.head = j;
+        take(R, j);
+        var more = j.more === true && typeof j.next === "string";
+        var cut = R.rows.length >= KEYS_MAX && j.more === true ? "bound"
+                : more && Date.now() - R.t0 >= READ_MS ? "time"
+                : j.more === true && !more ? "stopped" : "";
+        if (!more || cut !== "") { land(m, R, true, cut); return; }
+        if (first && Date.now() - R.drawn >= DRAW_MS) { R.drawn = Date.now(); land(m, R, false, ""); }
+        return page(j.next);
+      });
+    }
+    page(null).catch(function (e) {
       if (gen !== S.gen) return;
+      S.loading = false;
       H.set("a-src", "error: " + e.message);
     });
   }
@@ -535,6 +697,7 @@
     var k = H.key(), ctx = m.name + "\u0000" + H.scope();
     if (ctx !== S.ctx) S.pick = null;
     else if (k !== S.lastKey && k !== "") S.pick = S.on ? k : null;
+    if (k !== S.lastKey || ctx !== S.ctx) S.pickOut = false;
     S.ctx = ctx;
     S.lastKey = k;
     S.m = m;
@@ -552,9 +715,20 @@
       H.prefSet("act.allkeys", S.on ? true : null);
       modeBtn();
       S.gen++;
+      S.loading = false;
+      if (!S.done) S.of = "";
       H.redraw();
     });
     $("ak-all").addEventListener("click", function () { if (S.m) pick(S.m, null); });
+    $("ak-filter").addEventListener("input", function () {
+      S.filter = $("ak-filter").value.trim();
+      S.shown = LEGEND_CHUNK;
+      if (S.m) legend(S.m);
+    });
+    $("ak-more").addEventListener("click", function () {
+      S.shown += LEGEND_CHUNK;
+      if (S.m) legend(S.m);
+    });
     $("ak-legend").addEventListener("keydown", function (e) {
       if (e.key === "Escape" && S.m && S.pick !== null) pick(S.m, null);
       if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
@@ -585,6 +759,7 @@
   }
 
   window.SlothAllKeys = { init: init, main: main, rank: rank, keysText: keysText, tierOf: tierOf,
+                          colsFor: colsFor, filterRows: filterRows, stripRow: stripRow,
                           lines: lines, frame: frame, strips: strips,
                           paintMarks: paintMarks };
 })();

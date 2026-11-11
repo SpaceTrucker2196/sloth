@@ -6,6 +6,8 @@
  * panel's one accent. */
 #ak-chart { cursor: crosshair; }
 #ak-hover { min-height: 1.4em; }
+#ak-filter { width: 26ch; }
+#ak-more { margin-top: 4px; }
 .ak-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-top: var(--gap); }
 .ak-legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap: 2px 12px; margin-top: 4px; max-height: 260px; overflow-y: auto; }
 .ak-row { display: flex; align-items: center; gap: 6px; min-width: 0; }

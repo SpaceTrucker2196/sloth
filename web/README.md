@@ -1607,7 +1607,7 @@ this build serves them.
 GET /api/series/all?metric=host.rx_rate&tier=fine&from=1792540800&to=1792627200&cols=480
 {"metric":"host.rx_rate","tier":"fine","step":10,"cell":180,"cells":480,
  "kind":"gauge","unit":"B/s","keykind":"ip","from":1792540800,"to":1792627200,
- "total":300,"listed":256,
+ "total":300,
  "keys":[{"key":"192.0.2.10","p":[0,1002.5,1,998.25,7,1010]},...],
  "more":true,"next":"192.0.2.31","source":"store+memory"}
 ```
@@ -1615,7 +1615,8 @@ GET /api/series/all?metric=host.rx_rate&tier=fine&from=1792540800&to=1792627200&
 Every key of one metric over one window, for the Activity graph's
 `keys: all` (`web/src/web_allkeys.c`). One `/api/series` read a key
 would be 2,560 requests for 256 keys over 24 h at 10 s (ten pages of 900
-each); this is one read a key on the server and a handful of answers.
+each), and 81,920 for 8,192; this is one read a key on the server, 128
+keys to an answer.
 
 - **Cells.** A key's buckets are merged into at most `cols` cells
   (8..480, 240 when absent). A cell is `cell` seconds, a whole number of
@@ -1625,15 +1626,25 @@ each); this is one read a key on the server and a handful of answers.
   a 0. A cell's value is its buckets' merge read as `/api/series` reads
   one bucket: a gauge's mean, a counter's **sum** (per `cell` seconds,
   not per bucket), presence's max. Six significant digits.
-- **Keys, and the cap.** The keys are `/api/keys`': the 256 most
-  recently seen that the scope holds. `listed` is how many that is and
-  `total` how many the metric has, so a reader can say `256 of 300`;
-  nothing is cut without both numbers.
-- **Paging.** Keys are answered in byte order, at most 32 to an answer
-  and fewer when the 64 KB answer is full (a key is never cut: the one
-  that did not fit is the next answer's first). `more` and `next` say to
-  ask again with `after=next`. The set is read afresh for each answer,
-  so a key that entered or left the 256 between two pages is the one
+- **Keys: every one.** Not `/api/keys`' 256 most recently seen (owner
+  ruling of 2026-11-11, "lift the cap"): the union of the keys the
+  rollup holds a series of now (at most `--web-max-keys`, 8,192 at its
+  maximum) and the keys the store holds a bucket of in the window
+  (`web_store_keys_after()`: one seek of the `(metric, key)` index a
+  series and one of the tier's primary key, no scan of the window), so
+  a key the rollup has since evicted is still answered from its rows.
+  The first answer (no `after`) carries `total`, how many there are;
+  the others `"total":null`. A store holding more than the 65,536 keys
+  one answer counts says `"total_min":true`, and the page writes
+  `65536+`.
+- **Paging.** Keys are answered in byte order, at most 128 to an
+  answer, and fewer when the 64 KB answer is full (a key is never cut:
+  the one that did not fit is the next answer's first) or when the
+  answer has taken keys for 100 ms (`WEB_ALLKEYS_ANSWER_MS`; it always
+  answers one), which is what keeps an answer inside the request's
+  250 ms whatever the keys hold. `more` and `next` say to ask again
+  with `after=next`. The lists are read afresh for each answer, so a
+  key that appeared or was evicted between two pages is the one
   inconsistency a paged read can show; none is answered twice.
 - **Bounds.** `after` is a key of the metric, canonicalised as `key`
   is (`bad_after`; a global metric takes none); `cols` out of range is
@@ -1644,13 +1655,20 @@ each); this is one read a key on the server and a handful of answers.
   not hold answers no key and `"out_of_scope":true`.
 - **Cost.** Rows, not cells: a key is one read of at most 10,081
   buckets (the store's and the ring's, merged as `/api/series` merges
-  them). Measured by `test_allkeys.c` on the build host, unsanitized:
-  the fullest answer memory can give (19 keys of 4,096 buckets each in
-  480 cells, 62,384 bytes, the ring's 131,072 rows scanned for each)
-  took 18 ms, and the fullest the store can (14 keys of 24 h at 10 s,
-  8,640 rows each, 62,659 bytes) 38 ms, against the 250 ms a request is
-  allowed. A dense key is some 4.5 KB, so 256 dense keys are about 19
-  answers; sparse keys (devices) go 32 to an answer, 8 answers.
+  them) and one pass over the fine ring. Measured by `test_allkeys.c`
+  on the build host, unsanitized, on a busy machine:
+
+  | what | answers | bytes | in all | the slowest answer |
+  |---|---|---|---|---|
+  | the fullest answer from memory: 19 keys of 4,096 buckets each in 480 cells | 1 | 62,372 | 15 to 16 ms | |
+  | the fullest from the store: 14 keys of 24 h at 10 s, 8,640 rows each | 1 | 62,647 | 32 to 37 ms | |
+  | 8,192 keys walked from the store (8 rows each, none in the rollup), 64 cells | 64 | 604,978 | 89 to 100 ms | 4.5 to 5.4 ms (the first, which counts the keys: 6 to 8 ms) |
+  | 8,192 keys walked from memory (16 buckets each: the ring's 131,072 rows full), 64 cells | 64 to 65 | 416,178 | 3.8 to 4.0 s | 71 to 100 ms (100 is the answer's own time bound stopping it) |
+
+  The last is the ring's worst: `web_rollup_fine()` passes over all
+  131,072 rows for each key, 0.47 ms a key, so a full ring and the most
+  keys a rollup can hold is 3.8 s of answers, each inside the budget.
+  A dense key is some 4.5 KB, so dense keys go 14 to an answer.
 
 ### The Activity view
 
@@ -1693,12 +1711,18 @@ in the key's colour, with a legend.
   every load and in every view. Nothing but the key's bytes goes in:
   not its rank, not how many keys there are. `eth0` is `--k-6`,
   `wlan0mon` `--k-1` (pinned in `test_allkeys.c`).
-- **More keys than colours.** Eight hues and up to 256 keys: colours
+- **More keys than colours.** Eight hues and up to 8,192 keys: colours
   repeat, and colour is never the only carrier (R10). The legend is
   ranked and numbered; the top five lines carry `rank key` at their
   right end, pushed apart so no two overlap; hovering or focusing a
   legend entry, or hovering a line, draws that line last in its colour
-  and every other line in `--rule`.
+  and every other line in `--faint`. (`--rule` at first; the owner
+  asked for the dimmed lines "a little more visible" on 2026-11-11.
+  `--faint` is 2.84:1 on `--bg` and 2.72:1 on `--panel` in the dark
+  theme, 3.03 and 3.39 in the light, where `--rule` is 1.65 and 1.58,
+  1.34 and 1.51: `make web-contrast`. `--tui-dim`, 4.55:1, is a
+  phosphor green and would read as a ninth key colour; the picked
+  line's hue against a grey is what makes it dominate.)
 - **The legend** lists every key drawn: rank, swatch, the key (through
   `keySpan()`, so an address is an address), and its latest value in
   the window (`-` when it has none). The order is stated beside it:
@@ -1708,13 +1732,47 @@ in the key's colour, with a legend.
   again, `show every key`, or Esc. A click on a line does the same.
   Up and Down move between entries. A pick also sets the key picker, so
   `keys: one` opens on that key, and moving the key picker picks that
-  key here. A device's entry carries a `device` button, the drawer.
-  (A host has no detail view of its own to open by address, so an
-  address's entry has none.)
-- **"Every key" is the key picker's.** `/api/keys` lists the 256 most
-  recently seen, and so does this. With more, the caption says
-  `256 of 300 keys, the most recently seen`; with all of them, `19
-  keys`. Never fewer without saying so.
+  key here; the key picker keeps its 256, so a picked key it does not
+  hold is said in the caption: `; 02:5e:ed:00:1f:fc is not one of the
+  key picker's 256`. A device's entry carries a `device` button, the
+  drawer. (A host has no detail view of its own to open by address, so
+  an address's entry has none.) **At 8,192 keys** the legend is not
+  8,192 buttons: 200 entries are in the page at once, `show 200 more`
+  adds as many, and a **filter** box over it (`#ak-filter`, the page's
+  own search input, not kept: it is a look at one metric's keys)
+  narrows the entries to the keys whose text holds what is typed,
+  ASCII case aside. An entry keeps the rank it has among every key,
+  and the line beside the box says `Listed: 16 of 16 matching, of
+  8192`. The filter narrows the list, not the graph.
+- **"Every key" is every key** (owner ruling of 2026-11-11, "lift the
+  cap"): the route walks them all, 128 to an answer, and the page
+  draws what has arrived while the rest is read, the caption saying
+  `loading 3968 of 8212 keys`, each answer handled in its own turn so
+  the page stays responsive, the graph drawn again every 300 ms. What
+  bounds it is said in the caption, never silent:
+  - the graph holds **8,192 keys**, `--web-max-keys`' own maximum, so
+    every key a rollup can hold is drawn; a store with more in the
+    window reads `8192 of 8212 keys, the first by key (the graph holds
+    8192)`;
+  - a read that has run **60 s** stops: `3072 of 8192 keys (the read
+    was stopped at 60 s)`;
+  - a read the server ended: `(the read stopped)`.
+
+  A read is dropped without a word when the metric, the scope, the
+  window or the mode changes, and stops when the Activity view is no
+  longer the one shown; coming back starts it afresh. A later read of
+  the same window (a cell's time on, 60 s at most, and never sooner
+  than ten times what the last read took) lands whole, so the graph
+  does not flicker each minute.
+- **What 8,192 lines are.** A line costs its length in pixels to
+  draw, so 8,192 of them are 8,192 plot widths however few cells each
+  has (measured: 88 ms). So the **256 largest** by the legend's order
+  are lines, and the focus row whatever its rank; the rest are drawn as
+  one thing, **the range they span in each cell** (least to most, one
+  `--faint` rectangle a cell at 35 percent, under the lines), which is
+  what a mass of lines shows. The caption says `lines for the 256
+  largest, the other 7936 as their range a cell`. Pick or hover any
+  key, from the legend or its filter, and its line is drawn.
 - **One scale, stated.** Every line is on one y-scale, grown and never
   shrunk on a refresh (R11), its top in the caption: `shared scale,
   top 86.6k B/s`.
@@ -1726,25 +1784,47 @@ in the key's colour, with a legend.
 - **Cells, tier, cost.** Each key is read as at most 480 cells, one for
   every two pixels of the plot; the caption names them: `fine in 3 min
   cells (mean)`, `(sum)` for a counter, whose values are then per cell
-  and not per bucket. The tier is the finest whose buckets over the
-  window number at most 10,080: fine for 1 h, 6 h and 24 h, minute for
-  7 d, hour for 30 d and 400 d (the one-key graph reads 30 d at the
-  minute tier; the caption says which). The window is read again when
-  it, the metric or the scope changes or a cell's time has passed (60 s
-  at most); a hover or a pick repaints from what was read. Measured in
-  headless Chrome on the build host (software raster, 1200 px, device
-  ratio 1): the worst the graph can hold, 256 keys of 480 cells each
-  (122,893 marks), is 3 ms to build and 16 ms to paint; 32 keys of 480
-  cells are 2 ms and 3 ms. That is with the lines of one colour in one
-  path; through `glyph.paint()`, which strokes each segment, the same
-  list took 116 ms, which is why the module has its own painter
-  (`paintMarks()`, the same rules).
+  and not per bucket. The cells the graph holds across all its keys
+  are bounded (524,288; 131,072 for a presence metric, whose every
+  cell can be a mark of its own), so past 1,092 keys each is read at
+  fewer: 128 cells at 4,096 keys, 64 at 8,192 (the first answer says
+  how many keys there are, and the walk starts again at the cells that
+  fit). The tier is the finest whose buckets over the window number at
+  most 10,080: fine for 1 h, 6 h and 24 h, minute for 7 d, hour for
+  30 d and 400 d (the one-key graph reads 30 d at the minute tier; the
+  caption says which; kept by owner ruling of 2026-11-11). A hover or
+  a pick repaints from what was read. Measured in headless Chrome on
+  the build host (software raster, 1200 px, device ratio 1), the
+  graph's build and paint, with no focus and with a key picked:
+
+  | keys | cells a key | marks | build | paint |
+  |---|---|---|---|---|
+  | 256 | 480 | 122,893 | 5 to 21 ms | 24 to 28 ms (16 ms on a quieter host, the first measurement) |
+  | 1,024 | 480 | 123,373 | 12 to 23 ms | 23 to 27 ms |
+  | 4,096 | 128 | 32,909 | 8 to 12 ms | 6 to 7 ms |
+  | 8,192 | 64 | 16,461 | 7 to 8 ms | 4 to 5 ms |
+
+  (ranking 8,192 rows: 2 to 3 ms). 256 and 1,024 keys are the same 256
+  lines of 480 cells, the worst the graph draws; more keys are fewer
+  cells a line. Without the fold, 8,192 lines of 16 cells painted in
+  86 to 94 ms. The lines of one row are one path: through
+  `glyph.paint()`, which strokes each segment, the 256-key list took
+  116 ms, which is why the module has its own painter (`paintMarks()`,
+  the same rules). **End to end**, in headless Chrome against a
+  slothweb whose store held 8,192 synthetic devices (24 rows each in
+  the hour): 8,192 of 8,212 keys read, ranked and drawn in 0.65 to
+  0.71 s over 65 requests, the first 128 keys on the graph at 86 to
+  142 ms; two tasks over 50 ms on the page's thread in that time (50
+  and 58 ms, each a redraw of the legend and the graph).
 - **Presence.** A presence metric has no line. Its keys are stacked
   strips on one canvas: a row a key, 8 px, in the legend's order (most
   cells present first; the legend's value is `n/480 cells`), each
   run of present cells in the key's colour, the rank beside the first
   row and every fifth, three time labels under the last row, the same
-  hover and pick. Stacked and not disabled, because "who was here when,
+  hover and pick. Past 512 keys a row is 4 px, past 1,024 2 px, past
+  4,096 1 px, so 8,192 keys are a canvas of 8,192 px (a browser makes
+  no taller one reliably); measured, 8,192 rows of 16 cells (46,506
+  marks) paint in 26 to 28 ms, 1,024 of 128 cells in 25 ms. Stacked and not disabled, because "who was here when,
   across every device" is what a presence metric is for.
 - **Scopes and empty states.** Every scope the view has: the keys are
   the scope's (an interface by its radio), and a metric the scope does
@@ -5542,7 +5622,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_ble.c` | the BLE view ([BLE](#ble)) from hand-built `ble_device`, `ble_alert`, `alert.resolve` and `sensor_health` lines in the emitter's exact shape: two rows for one address heard by two sensors, a heartbeat updating in place (the sticky masks OR-ed, the earlier first_seen kept, the rate from two points), the hostile strings (a control byte escaped and flagged, an over-long name cut back to a code-point boundary, a category that is not sloth's slug dropped and counted, an unknown iface `other`, a bad record kept nowhere), the record's absent values null and an anonymous all-zero address a row, the estimate's four fields with the TUI's cell and description, the LRU at 1025 rows evicting the oldest, the findings (standing, the resolve of the key, the time-out, the day's listing, the key never rendered, a `hid_oui` finding under its address), the `sensor_health` block and its rotation bands; the two metrics only while a Bluetooth source is configured; every route through the table (the sort words and both directions, each refusal a word never echoing the value, the search, paging, HEAD, Monitor and Hybrid serving, Local `out_of_scope` with the query still checked, `/api/live`'s `ble` member and `/api/health`'s counters, the M0 shape without the tables, the BLE incident typed and Monitor's on the Alerts page); the page's lines pinned as served; with SQLite the store round trip through the store thread's flush, a changed row upserted once, the seed on reopen with the name's display form and the estimate, every field of a seeded finding (a flood's fresh count, rate, window and citation, a `hid_oui` finding's address and the drawer's match on it), a resolve on a seeded finding updating its stored row in place, a seeded row's presence strip shifting on with fresh traffic, retention at compaction, a failed write (a trigger aborting it mid-transaction) rolled back whole and its batch written by the next flush, the row caps (the oldest gone, a flagged row kept past newer unflagged ones, counted) and a non-canonical stored address not seeded; every sort word in both directions with an empty key last (`mfr`'s three tiers fixed in either direction); a name cut back to a code-point boundary; `ble.devices` with an Ubertooth alone and `ble.adv_rate` only with the host stream; `/api/live`'s `ble` member with every string at its cut and escaped six-fold; without a store the tables still ingest and serve. Each absence seen red under a named mutation |
 | `test_bledev.c` | the BLE Devices waterfall ([BLE](#ble)): each class rule on hand-built fields (SIG Appearance values, Continuity types, the registry's UUIDs) and each left-out shape landing in Unknown, the first-match order and the table's match numbers, the slugs (never a channel key, the only `bleclass` keys), a class from a record line; the proximity edges against `src/rf_distance.h` and `.c` read in the test; the page's class table and grade pinned against the C ones, the panels inside `v-ble`, no `innerHTML` in the module; the mix engine taking kinds 3 and 4 (an advertiser, anonymous advertising) apart and refusing 5, a sized ring; the class mix fed from `ble_device` lines (a baseline, deltas, a reconnect, a row born while listening, a sampled row, one address on two sensors kept apart); the advertisers gauge once a pass, an address on two sensors once; the one anonymous row sloth can send (the host stream's, its first mfr pair kept, a keyboard's HID bit OR-ed in) credited to Unknown alone as one entry and one advertiser while its fields read Phones then Input, named rows and an Ubertooth's uncredited samples beside it, each class's advertisers, drawn transmitters, reports and drawn frames agreeing, no series under the zero address; the anonymous entry through both routes (one `anonymous` tx entry in `b:unk`, its kind word the one `bledev.js` tests, no proximity row, never nearest, `anonymous_heard`, the strip counting it once) and under a read cut (no slot taken: 256 read); five thousand fresh BLE addresses leaving a Wi-Fi row's high-water mark (and its true delta) in place; both routes from memory (display order, the tx entries named from the tables or by address alone, the strip's facts, every refusal), the proximity rows' order, means and window, a tracker heard before three hundred newer addresses still read and first, each row graded with its announced power (extended header, TX Power Level, else 0 dBm) and nearest by the margin; `now`'s sensor facts; both routes 503 `no_time_series` in either scope and the mix 503 `no_ble_mix`; Local `out_of_scope` with the query checked and a long query a 400; with SQLite the WiFi and BLE mixes in one `chmix` at the same tier and t, each namespace reading only its own, each route drawing only its own, a kind-4 anonymous row read back and drawn, and the file still v7. Each absence seen red under a named mutation |
 | `test_radar.c` | the Radar tab ([Radar](#radar)): `/api/radar` from seeded `ble_device`, `beacon` and `probe_client` lines (every row in total, the banded rows nearest-RSSI first, a reading without an estimate in `none` and nowhere else, a word that is not sloth's no band, both halves `null` without their tables), the eight-per-band cap on twelve scrambled rows, rows without a reading sorting last, Monitor and Hybrid against Local's `out_of_scope` with the query checked, `400` for any parameter, the body under 8 KB with every BLE row held and under 10 KB with both censuses full, the name cut on a code-point boundary; the page: the tab between APRS and TACDB, the hook and init lines, every container id looked up, no `scoped-out` toggle and the comment saying why, no control in the view, the projection functions whole (`rn`, `geo`, `place`, `project`, `ringDist`) with no divide by depth, the painters whole, the ring dash and alpha, no gradient or shadow, the kept camera's three prefs validated and cleared, no kept selection, one `requestAnimationFrame`, the Local and estimate sentences verbatim, the centre rule, every fetch through the lent scoped `getJSON`, the three `select()` exports whole. Each absence seen red under a named mutation |
-| `test_allkeys.c` | the Activity graph's `keys: all`: `/api/series/all` (every parameter and reason word, the cell arithmetic, the answer's shape for a gauge, a counter, presence and a global metric, an empty cell absent, keys in byte order, 32 to an answer and `after` paging with no key twice, the 256-key cap said as `listed` of `total` and the oldest left out, a full answer stopping whole, the scopes by metric and by key, the route's `400` and `503`), the fullest answer from memory and from the store timed against the 250 ms request budget and printed; and `web/ui/allkeys.js`: its pure half ported to C line for line and pinned verbatim (the legend's order, the `N of M keys` words, the tier per window, the multi-key mark list: one token a key, the shared scale, gaps, dots under five points, the focus row last and the rest `--rule`, the band only for a picked key, the top five end labels pushed apart, greyscale; the frame; the presence strips), the key colours pinned against `ip_color_index()`, and the other half by whole functions, with no `innerHTML`, no `setAttribute` and one `--signal`. Each absence seen red under a named mutation |
+| `test_allkeys.c` | the Activity graph's `keys: all`: `/api/series/all` (every parameter and reason word, the cell arithmetic, the answer's shape for a gauge, a counter, presence and a global metric, an empty cell absent, keys in byte order, 128 to an answer and `after` paging with no key twice, `total` on the first answer only, a full answer stopping whole, the scopes by metric and by key, the route's `400` and `503`), every key walked (300 where `/api/keys` lists 256, the oldest among them; the rollup's and the store's, a store key with no bucket in the window left out), an answer stopping at its time and still answering one key, the fullest answer and a walk of 8,192 keys from memory and from the store timed against the 250 ms request budget and printed; and `web/ui/allkeys.js`: its pure half ported to C line for line and pinned verbatim (the legend's order, the `N of M keys` and `loading N of M keys` words, the tier per window, the cells a key is read in, the legend's filter, the multi-key mark list: one token a key, the shared scale, gaps, dots under five points, the focus row last and the rest `--faint` (never `--rule`), the rows past 256 folded into one range a cell, the band only for a picked key, the top five end labels pushed apart, greyscale; the frame; the presence strips), the key colours pinned against `ip_color_index()`, and the other half by whole functions, with no `innerHTML`, no `setAttribute` and one `--signal`. Each absence seen red under a named mutation |
 | `test_btsig.c` | the Bluetooth SIG table this binary was built with (`WEB_BTSIG_EXPECT`): sorted, the names printable and within the cut, the lookups answering the SIG's names for Apple, Microsoft, Google, Ericsson, Battery, Human Interface Device, the keyboard appearance and the generic forms, a miss and the bounds null; the committed CSVs byte for byte the ones `web/data/btsig/SOURCE.md` hashes, with its row counts; `update_btsig.sh` run by the `update-btsig` target alone and named by no workflow; the generator run on a name holding every trigraph's opening, a quote and a backslash, its literal decoded back byte-identical and no `??` left in its output |
 | `test_replay.c` | spec §12's M3 acceptance: a six-week JSONL stream generated in the test (never a fixture) through the framer, decoder, live state, metric derivation, identity tables, rollup, `web_tsdb_step()` and the engine as `main.c` wires them, on pinned clocks: four weeks of routine (noisy gauges, Poisson counts, and an input for every rule: names that agree, a randomised MAC with its own name, a month-old probe client, a steady ssh host), then a quiet 7 d week in which nothing at all fires, slothweb and sloth restarting in the middle of it in an SQLite build, then a 7 d week in which A1 fires for a burst of connections and A3 for a daytime device that appears only at night, while a device that is only ever present at night never fires; and the hour that just closed reaching the baseline at flush phases 0, 3 and 7 (the previous slice fed it only at phase 0); A9 for a new host whose first row the rollup released late, at sloth's real cadence (SQLite); five weeks of a 13:30-14:30 routine in IST firing nothing. Both builds |
 | `test_evidence.c` | an alert's proof, every pcap written at run time from byte arrays built per their clause (no capture is committed): the file header in both byte orders and both resolutions, pcapng and junk refused by name, the record walk (orig_len raised to incl_len, a caplen past the snaplen, a file cut inside a record); the decoders on Ethernet/IPv4/TCP with a ClientHello cut at 64 bytes (no SNI claimed), a DNS query whole and cut, a compression pointer to itself, SLL2/ICMP, SLL/ARP, radiotap deauthentication (reason 7, Table 9-26 roles, channel and signal), a beacon (SSID, DS channel, RSN, a 33-octet SSID called invalid), an authentication status 0; the hex dump; a page of 24 frames, the next page, the worst case stopping with `more` inside its buffer, a cut file, a record cut below a 0xffffffff snaplen said as `40 of 270 bytes captured` and never as the snaplen; both alert-pcap name grammars and what they refuse (a handshake pcap's name, `eapol.22000`, a path, a near miss of each); the manifest line in `src/evidence_manifest.c`'s shape and every sink and shape it refuses; a directory: newest first, a handshake line and an unterminated tail not indexed, an 18-digit `written_at_epoch` sorted first and returned as written (no arithmetic on a stamp; the sanitized build would stop on an overflow) and equal stamps in read order, the three joins and the fallback only when they find nothing, hash verified, mismatched by a byte and by a length, no entry; a symlink, a FIFO, a name off the gate and a 16 MiB + 1 file refused; a missing directory; the routes: `captures` with no `incident_id`, session or path in the answer, `hash verified`, `no manifest entry`, `HASH MISMATCH` after a byte changed, `404` past the list, `400` for a file name or a bad `n`, `405` on `HEAD`, the download's headers and bytes, its `X-Sloth-SHA256` of the bytes served (`verified`, then `mismatch` after a byte changed, `no_manifest_entry`), `415` for pcapng, `why_no_capture` for an L2-only rule and with no `--pcap-dir`; an evidence pcap listed `withheld` and refused `403` by both routes with no frame or byte, then decoded and served under `serve_evidence`; a symlink and a FIFO with manifest lines listed `unreadable: not a regular file` and refused `403`; a file with sloth's line and a forged later-stamped line `hash verified` (by sloth's line) with `conflicting manifest lines (2)`, and a file with only a forged line `HASH MISMATCH`; the assessment generator run on documents it writes (header lines, front matter, sections, bibliography, Related pages left out, an indented continuation kept with its entry and other prose kept apart as the note, MY_NETWORK_RECON.md's note never in an entry) and its two build stops; the page's hooks (the drawer's list by its `data-ev` mark, the frame index through `DataTable`, a withheld or unreadable capture never opened), the download's one form and the section's place, last |

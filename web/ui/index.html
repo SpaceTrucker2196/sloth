@@ -919,8 +919,9 @@
       <div id="ak-box" hidden>
         <canvas class="chart" id="ak-chart" aria-label="every key of the metric on one scale, one colour a key; the legend below lists them"></canvas>
         <div class="sub" id="ak-hover"></div>
-        <div class="ak-head"><span class="sub" id="ak-rule"></span> <button type="button" class="dt-reset" id="ak-all" hidden>show every key</button></div>
+        <div class="ak-head"><input type="search" id="ak-filter" maxlength="63" spellcheck="false" autocomplete="off" placeholder="filter the keys listed" aria-label="filter the keys listed" hidden> <span class="sub" id="ak-rule"></span> <button type="button" class="dt-reset" id="ak-all" hidden>show every key</button></div>
         <div class="ak-legend" id="ak-legend" role="list" aria-label="every key drawn, its colour and its latest value"></div>
+        <button type="button" class="dt-reset" id="ak-more" hidden>show more</button>
       </div>
     </section>
     <section class="panel">
