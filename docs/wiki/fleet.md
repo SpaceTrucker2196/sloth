@@ -36,7 +36,7 @@ health member), `web/src/web_frrs.c` (`web_frrs_verdicts()`),
 issue #192; RFC 9112 (HTTP/1.1 message syntax), RFC 6598 (the
 100.64.0.0/10 shared address space Tailscale numbers its nodes from).
 
-**Last updated**: 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
+**Last updated**: 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
 
 ## What travels, and what never does
 
@@ -56,6 +56,14 @@ export carries, each kind newest first and bounded:
 | `ble` | slothweb's BLE table | address and its type, local name, device class, RSSI, times | 1,024 |
 | `alert` | sloth.db `alerts` | type, title, a fingerprint of type and title, match IP, severity, count, times | 1,000 |
 | `verdict` | slothweb.db `triage` | the finding's descriptor (type, address, port, first seen) and its current state | 1,000 |
+
+The export holds every line it writes to the importer's own checks
+(below) before sending it, because one line the importer refuses
+refuses the whole answer, at every pull, for as long as that row is in
+the window. A row a sensor stored outside those ranges (a signal of
++60 dBm, a first seen after its last seen) is therefore left out and
+its kind's `truncated_<kind>` is true; a receiver summary out of range
+is left out; a position out of range goes as none.
 
 Never: a credential or username (`cleartext_creds`, `alerts.key`,
 `alerts.detail`, `mqtt_flows.last_username`, `rdp_flows.last_cookie`,
@@ -106,7 +114,10 @@ A thread of its own wakes every `--peer-interval-secs` (default 60,
 10..3600) and sends each peer one `GET /api/fleet/export?since=N`
 over HTTP/1.1, `Connection: close`: 5 s to connect, 30 s for the whole
 answer, held to 10 MB (refused whole past it, never cut to fit), a
-`Content-Length` that does not match the body refused as cut short.
+`Content-Length` that does not match the body refused as cut short, and
+a second `Content-Length` or any `Transfer-Encoding` refused (the export
+sends neither). The 30 s is the whole answer's, not each read's, so a
+peer that trickles bytes is cut off at 30 s.
 `since` is the peer's own `generated` time at its last good pull less
 120 s, so the two sites' clocks need not agree; the first pull asks
 from 0 and gets the newest rows of each kind at their caps.
@@ -117,7 +128,8 @@ row is written: a `fleet_export` header of version 1 first, a
 `fleet_end` line last saying `complete` with each kind's count equal to
 the rows sent, every member of every line on the list, every value in
 range (MACs canonical, times before 2100, RSSI -150..30 dBm, strings at
-most 255 bytes, verdict states triage's own words). Anything else is
+most 255 bytes, altitude -1,000..100,000 m as slothweb's own position
+takes it, verdict states triage's own words). Anything else is
 refused with a reason in slothweb's words, kept on the peer, in
 `/api/health` and in `peer_sites.last_error`, and no sighting is
 written.

@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "web_config.h"
@@ -23,6 +24,7 @@
 #include "web_jsonl.h"
 #include "web_routes.h"
 #include "web_secret.h"
+#include "web_slothdb.h"
 #include "web_store.h"
 #include "wtest.h"
 #include "wt_tmp.h"
@@ -445,6 +447,45 @@ static void test_export_since(void) {
     down();
 }
 
+/* A row the importer would refuse is not sent: one such row refuses the
+ * peer's whole answer, at every pull, while it is in the window. A device
+ * whose stored signal is +60 dBm (outside the importer's -150..30) and
+ * one whose first seen is after its last seen are left out, the wifi
+ * kind is marked truncated, and the answer is still taken. Seen red with
+ * row_end()'s self-check removed (the importer then refused the answer:
+ * "line N: a wifi line with a value out of range"). */
+static void test_export_sends_only_what_the_importer_takes(void) {
+    up();
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+        "INSERT INTO devices (mac,vendor,is_ap,signal_dbm,first_seen,last_seen) VALUES"
+        " ('02:0b:ad:00:00:60','Odd',0,60,%lld,%lld),"
+        " ('02:0b:ad:00:00:61','Odd',0,-50,%lld,%lld);",
+        T - 100, T - 20, T - 5, T - 30);
+    WT_EQ(sdb_exec(g_db, sql), 0);
+    int st = 0;
+    char *b = export(0, NULL, &st);
+    WT_EQ(st, 200);
+    if (b) {
+        WT_LACKS(b, "02:0b:ad:00:00:6");
+        WT_HAS(b, "\"mac\":\"da:a1:19:00:00:01\"");
+        WT_HAS(b, "\"truncated_wifi\":true");
+        WT_HAS(b, "\"truncated_ap\":false");
+        web_fleet_t f;
+        web_fleet_peer_cfg_t pc;
+        char err[200];
+        WT_EQ(web_fleet_parse_peer("self=http://100.64.0.1:8770", &pc, err, sizeof(err)), 0);
+        web_fleet_init(&f, &pc, 1, 60, 0, &S);
+        long long rows = 0, rts = 0;
+        int rc = web_fleet_ingest(&f, 0, b, strlen(b), T, 0, &rows, &rts, err, sizeof(err));
+        if (rc) fprintf(stderr, "    ingest: %s\n", err);
+        WT_EQ(rc, 0);
+        web_fleet_destroy(&f);
+    }
+    free(b);
+    down();
+}
+
 /* ── the pull, from a loopback server ───────────────────────────────── */
 
 typedef struct {
@@ -722,6 +763,12 @@ static void test_pull_refusals(void) {
           "HTTP status 503" },
         { "cut short", "HTTP/1.1 200 OK\r\nContent-Length: 9999\r\n\r\n"
           HDR(1792627900), 1, "cut short" },
+        { "chunked", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+          "1f4\r\n" HDR(1792627900) "\r\n0\r\n\r\n", 1, "Transfer-Encoding" },
+        { "two lengths", "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n"
+          "Content-Length: 10\r\n\r\n0123456789", 1, "two Content-Length" },
+        { "length not a number", "HTTP/1.1 200 OK\r\nContent-Length: x\r\n\r\n", 1,
+          "not a number" },
         { "not http", "SSH-2.0-OpenSSH_9.6\r\n", 1, "not an HTTP response" },
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
@@ -764,7 +811,70 @@ static void test_pull_refusals(void) {
     /* And a good one after them all is stored. */
     WT_EQ(pull_with(GOOD2, 0, NULL, 0), 0);
     WT_EQ(F.peer[0].last_error[0], '\0');
-    WT_EQ(F.peer[0].failures, 10);
+    WT_EQ(F.peer[0].failures, 13);
+    pull_down();
+}
+
+/* A peer that answers a byte at a time and never finishes. */
+typedef struct {
+    int lfd;
+} trickle_t;
+
+static void *serve_trickle(void *arg) {
+    trickle_t *t = arg;
+    int fd = accept(t->lfd, NULL, NULL);
+    if (fd < 0) return NULL;
+    char rq[512];
+    (void)recv(fd, rq, sizeof(rq), 0);
+    static const char H[] = "HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n";
+    if (send(fd, H, sizeof(H) - 1, MSG_NOSIGNAL) > 0) {
+        /* A byte every 50 ms for up to 20 s, until the client hangs up. */
+        for (int i = 0; i < 400; i++) {
+            if (send(fd, "{", 1, MSG_NOSIGNAL) != 1) break;
+            usleep(50000);
+        }
+    }
+    close(fd);
+    return NULL;
+}
+
+static long long ms_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* The read deadline is the whole answer's, not each read's: a peer that
+ * keeps a trickle going is cut off at read_ms, not held for as long as
+ * it likes. Seen red with http_get() renewing the deadline after each
+ * read (the pull then ran the trickle's whole 20 s and failed for
+ * another reason). */
+static void test_pull_trickle_is_cut_off(void) {
+    pull_up();
+    trickle_t t;
+    t.lfd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    WT_EQ(bind(t.lfd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+    WT_EQ(listen(t.lfd, 1), 0);
+    socklen_t sl = sizeof(sa);
+    getsockname(t.lfd, (struct sockaddr *)&sa, &sl);
+    F.peer[0].cfg.port = ntohs(sa.sin_port);
+    F.read_ms = 600;
+    pthread_t th;
+    pthread_create(&th, NULL, serve_trickle, &t);
+    long long t0 = ms_now();
+    WT_EQ(web_fleet_pull_one(&F, 0, T), -1);
+    long long ms = ms_now() - t0;
+    pthread_join(th, NULL);
+    close(t.lfd);
+    if (!strstr(F.peer[0].last_error, "timed out"))
+        fprintf(stderr, "    trickle: \"%s\" after %lld ms\n", F.peer[0].last_error, ms);
+    WT_HAS(F.peer[0].last_error, "read: timed out");
+    WT_ASSERT(ms < 600 + 2000LL * web_sdb_test_budget_scale);
+    WT_EQ(sightings(), 0);
     pull_down();
 }
 
@@ -814,8 +924,10 @@ void run_fleet_tests(void) {
 #ifdef WITH_SQLITE
     WT_RUN(test_export_withholds_secrets);
     WT_RUN(test_export_since);
+    WT_RUN(test_export_sends_only_what_the_importer_takes);
     WT_RUN(test_pull_good_and_upsert);
     WT_RUN(test_pull_refusals);
+    WT_RUN(test_pull_trickle_is_cut_off);
     WT_RUN(test_pull_unreachable_and_thread);
 #endif
 }

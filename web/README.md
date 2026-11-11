@@ -4118,18 +4118,24 @@ says; `web/tests/test_fleet.c` seeds each one and holds it out of the
 body. A triage verdict travels without its note, author or address of
 origin. A kind cut at its cap, or by sloth.db's read budget (1.5 s),
 says so in `truncated_<kind>`; the body is never cut, and a row that
-would pass 8 MB is not written.
+would pass 8 MB is not written. So does a kind with a row the importer
+below would refuse (a stored signal of +60 dBm, a first seen after the
+last): every line is held to the importer's own checks before it is
+sent, and such a row is left out, because one would refuse the peer's
+whole answer at every pull while it stayed in the window.
 
 **The pull** runs on a thread of its own, every `--peer-interval-secs`:
 one HTTP/1.1 `GET /api/fleet/export?since=` to each peer over plain TCP,
-5 s to connect and 30 s for the answer, which is held to 10 MB and
-refused whole past it (never cut to fit). `since` is the peer's own
+5 s to connect and 30 s for the whole answer (not each read: a peer
+that trickles bytes is cut off), which is held to 10 MB and refused
+whole past it (never cut to fit); a `Transfer-Encoding` or a second
+`Content-Length` is refused. `since` is the peer's own
 `generated` at its last good pull less 120 s, so a clock difference
 between the sites loses nothing, and a first pull asks from 0 (the newest
 rows of each kind, at their caps). An answer is checked whole before a
 row is written: every line decoded, every member known, every value in
 range (MACs canonical, times 0..2100, RSSI -150..30, strings at most 255
-bytes, state one of triage's words), the header version 1 and the end
+bytes, altitude -1,000..100,000 m, state one of triage's words), the header version 1 and the end
 line's counts equal to the rows sent. Anything else is refused with a
 reason in slothweb's own words (`line 4: a wifi line with a member it
 may not carry: refused`, `HTTP status 503`, `response over 10485760

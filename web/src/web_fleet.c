@@ -207,20 +207,65 @@ int web_fleet_check_peer(const web_fleet_peer_cfg_t *p, int allow_outside,
 
 /* ── the export ────────────────────────────────────────────────────── */
 
+/* The importer's own checks (below), which the export holds each line it
+ * writes to: a row the importer would refuse is never sent, because one
+ * such row refuses the peer's whole answer, at every pull, for as long as
+ * the row is in the window. */
+typedef struct frow {
+    int       kind;                  /* WEB_FK_*, or -1 for gnss */
+    char      key[2 * WEB_FLEET_STR_MAX + 4];
+    char      label[WEB_FLEET_STR_MAX + 1];
+    char      vendor[WEB_FLEET_STR_MAX + 1];
+    int       has_rssi, rssi;
+    long long first, last;
+    char      extra[2048];
+} frow_t;
+
+typedef struct fhdr {
+    long long generated, pos_ts;
+    char      label[WEB_FLEET_STR_MAX + 1];
+    char      version[32];
+    char      pos_source[8];
+    int       has_pos, has_alt;
+    double    lat, lon, alt;
+} fhdr_t;
+
+static int row_of(const web_jrec_t *r, const char *type, frow_t *o, const char **why);
+static int hdr_of(const web_jrec_t *r, fhdr_t *h);
+
 typedef struct {
     web_jw_t   *w;
     long long   since;
     int         n[WEB_FK_COUNT];
     int         cut[WEB_FK_COUNT];
+    int         skip[WEB_FK_COUNT];  /* a row the importer would refuse, left out */
     size_t      soft;                /* rows stop here; the end line after */
     web_sdb_conn_t *c;
     char       (*macs)[WEB_KEY_MAX + 1];
     int         nmacs;
     const char *pnl_mac;
+    web_jrec_t *rec;                 /* the self-check's decoder record */
 } xp_t;
 
+/* Would the importer take the line at buf[mark..len)? type NULL: the
+ * header. */
+static int line_takes(xp_t *x, size_t mark, const char *type) {
+    web_jw_t *w = x->w;
+    if (web_jl_parse(w->buf + mark, w->len - mark, x->rec) != WEB_JL_OK) return 0;
+    if (!type) {
+        fhdr_t h;
+        return hdr_of(x->rec, &h) == 0;
+    }
+    frow_t o;
+    const char *why;
+    return row_of(x->rec, type, &o, &why) == 0;
+}
+
 /* A row is written whole or not at all: past the soft bound it is taken
- * back and its kind marked cut. 1 when it was kept, 0 cut, -1 a fault. */
+ * back and its kind marked cut, and so is a row the importer would refuse
+ * (a sensor's value outside the importer's range: the row is not sent and
+ * the kind says it is not whole). 1 when it was kept, 0 cut (stop), 2
+ * dropped (go on), -1 a fault. */
 static void row_begin(xp_t *x, size_t *mark) {
     *mark = x->w->len;
 }
@@ -236,9 +281,49 @@ static int row_end(xp_t *x, int k, size_t mark) {
         x->cut[k] = 1;
         return 0;
     }
-    web_jw_raw(w, "}\n");
+    web_jw_raw(w, "}");
+    if (!w->overflow && !line_takes(x, mark, KIND_WORD[k])) {
+        w->len = mark;
+        x->skip[k] = 1;
+        return 2;
+    }
+    web_jw_raw(w, "\n");
+    if (w->overflow || w->len > x->soft) {
+        w->len = mark;
+        w->overflow = 0;
+        x->cut[k] = 1;
+        return 0;
+    }
     x->n[k]++;
     return 1;
+}
+
+static void xp_header(xp_t *x, long long now_s, long long since, const char *label,
+                      const char *sdb_word, const web_loc_t *loc) {
+    web_jw_t *w = x->w;
+    w->len = 0;
+    web_jw_raw(w, "{\"type\":\"fleet_export\"");
+    jk(w, M_HDR, "fleet_export_version"); web_jw_int(w, WEB_FLEET_EXPORT_VERSION);
+    jk(w, M_HDR, "generated");            web_jw_int(w, now_s);
+    jk(w, M_HDR, "since");                web_jw_int(w, since);
+    jk(w, M_HDR, "site_label");           jstr_or_null(w, label);
+    jk(w, M_HDR, "slothweb_version");     web_jw_str(w, SLOTHWEB_BUILD_VERSION);
+    /* The running sensor's own version is not kept by slothweb. */
+    jk(w, M_HDR, "sloth_version");        web_jw_raw(w, "null");
+    jk(w, M_HDR, "sloth_db");             web_jw_str(w, sdb_word);
+    jk(w, M_HDR, "lat");
+    if (loc->has) jfix(w, loc->lat, 7); else web_jw_raw(w, "null");
+    jk(w, M_HDR, "lon");
+    if (loc->has) jfix(w, loc->lon, 7); else web_jw_raw(w, "null");
+    jk(w, M_HDR, "alt_m");
+    if (loc->has && loc->has_alt) jfix(w, loc->alt_m, 1); else web_jw_raw(w, "null");
+    jk(w, M_HDR, "pos_source");           jstr_or_null(w, loc->has ? loc->src : NULL);
+    jk(w, M_HDR, "pos_ts");
+    if (loc->has) web_jw_int(w, loc->ts); else web_jw_raw(w, "null");
+    jk(w, M_HDR, "pos_age_s");
+    if (loc->has) web_jw_int(w, now_s > loc->ts ? now_s - loc->ts : 0);
+    else web_jw_raw(w, "null");
+    web_jw_raw(w, "}");
 }
 
 static int xp_assoc(void *ctx, const web_sdb_item_t *it) {
@@ -269,8 +354,7 @@ static int xp_dev(void *ctx, const web_sdb_dev_t *d) {
     jk(w, M_WIFI, "first_seen"); web_jw_int(w, d->first_seen);
     jk(w, M_WIFI, "last_seen");  web_jw_int(w, d->last_seen);
     int r = row_end(x, WEB_FK_WIFI, mark);
-    if (r < 0) return 1;
-    if (r == 0) return 1;
+    if (r != 1) return r == 2 ? 0 : 1;
     if (!d->is_ap && x->nmacs < WEB_FLEET_CAP_WIFI)
         snprintf(x->macs[x->nmacs++], WEB_KEY_MAX + 1, "%s", mac);
     return 0;
@@ -429,7 +513,8 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
     }
     char *buf = malloc(WEB_FLEET_EXPORT_MAX);
     char (*macs)[WEB_KEY_MAX + 1] = malloc(sizeof(*macs) * WEB_FLEET_CAP_WIFI);
-    if (!buf || !macs) { free(buf); free(macs); return -1; }
+    web_jrec_t *rec = malloc(sizeof(*rec));
+    if (!buf || !macs || !rec) { free(buf); free(macs); free(rec); return -1; }
     web_jw_t w;
     web_jw_init(&w, buf, WEB_FLEET_EXPORT_MAX);
     xp_t x;
@@ -438,6 +523,7 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
     x.since = since;
     x.soft = WEB_FLEET_EXPORT_MAX - 4096;
     x.macs = macs;
+    x.rec = rec;
 
     /* sloth.db, through the M4 reader and its column allow-list. */
     web_sdb_conn_t c;
@@ -465,30 +551,19 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
     web_gnss_sh_t sh;
     web_gnss_site(src->gnss, &loc, &sh);
 
-    web_jw_raw(&w, "{\"type\":\"fleet_export\"");
-    jk(&w, M_HDR, "fleet_export_version"); web_jw_int(&w, WEB_FLEET_EXPORT_VERSION);
-    jk(&w, M_HDR, "generated");            web_jw_int(&w, now_s);
-    jk(&w, M_HDR, "since");                web_jw_int(&w, since);
-    jk(&w, M_HDR, "site_label");           jstr_or_null(&w, label);
-    jk(&w, M_HDR, "slothweb_version");     web_jw_str(&w, SLOTHWEB_BUILD_VERSION);
-    /* The running sensor's own version is not kept by slothweb. */
-    jk(&w, M_HDR, "sloth_version");        web_jw_raw(&w, "null");
-    jk(&w, M_HDR, "sloth_db");             web_jw_str(&w, sdb_word);
-    jk(&w, M_HDR, "lat");
-    if (loc.has) jfix(&w, loc.lat, 7); else web_jw_raw(&w, "null");
-    jk(&w, M_HDR, "lon");
-    if (loc.has) jfix(&w, loc.lon, 7); else web_jw_raw(&w, "null");
-    jk(&w, M_HDR, "alt_m");
-    if (loc.has && loc.has_alt) jfix(&w, loc.alt_m, 1); else web_jw_raw(&w, "null");
-    jk(&w, M_HDR, "pos_source");           jstr_or_null(&w, loc.has ? loc.src : NULL);
-    jk(&w, M_HDR, "pos_ts");
-    if (loc.has) web_jw_int(&w, loc.ts); else web_jw_raw(&w, "null");
-    jk(&w, M_HDR, "pos_age_s");
-    if (loc.has) web_jw_int(&w, now_s > loc.ts ? now_s - loc.ts : 0);
-    else web_jw_raw(&w, "null");
-    web_jw_raw(&w, "}\n");
+    /* The header, held to the importer's checks like every line: a
+     * position it would refuse goes as none rather than refuse the
+     * answer; a header it refuses without one is a fault (a 503). */
+    xp_header(&x, now_s, since, label, sdb_word, &loc);
+    if (!w.overflow && !line_takes(&x, 0, NULL)) {
+        loc.has = 0;
+        xp_header(&x, now_s, since, label, sdb_word, &loc);
+        if (!line_takes(&x, 0, NULL)) w.overflow = 1;
+    }
+    web_jw_raw(&w, "\n");
 
-    if (sh.seen) {
+    if (sh.seen && !w.overflow) {
+        size_t gmark = w.len;
         web_jw_raw(&w, "{\"type\":\"gnss\"");
         jk(&w, M_GNSS, "gps_state");    web_jw_str(&w, sh.gps_state);
         jk(&w, M_GNSS, "sats_in_view"); web_jw_int(&w, sh.sats_in_view);
@@ -499,7 +574,11 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         jk(&w, M_GNSS, "jam");
         if (sh.jam >= 0) web_jw_int(&w, sh.jam); else web_jw_raw(&w, "null");
         jk(&w, M_GNSS, "ts");           web_jw_int(&w, sh.ts);
-        web_jw_raw(&w, "}\n");
+        web_jw_raw(&w, "}");
+        /* The receiver's summary is optional: one the importer would
+         * refuse is left out. */
+        if (!w.overflow && !line_takes(&x, gmark, "gnss")) w.len = gmark;
+        else web_jw_raw(&w, "\n");
     }
     int fault = w.overflow;
 
@@ -543,11 +622,12 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         char nm[32];
         snprintf(nm, sizeof(nm), "truncated_%s", KIND_WORD[k]);
         jk(&w, M_END, nm);
-        web_jw_raw(&w, x.cut[k] ? "true" : "false");
+        web_jw_raw(&w, x.cut[k] || x.skip[k] ? "true" : "false");
     }
     jk(&w, M_END, "complete"); web_jw_raw(&w, "true");
     web_jw_raw(&w, "}\n");
     free(macs);
+    free(rec);
     if (fault || w.overflow) {
         *len = web_series_error_json("export_failed", buf, WEB_FLEET_EXPORT_MAX);
         *status = 503;
@@ -695,9 +775,25 @@ static int http_get(web_fleet_t *f, const web_fleet_peer_cfg_t *p, long long sin
     size_t hl = (size_t)(end - b) + 4, bl = len - hl;
     long long clen = -1;
     for (char *h = strstr(b, "\r\n"); h && h < end; h = strstr(h + 2, "\r\n")) {
+        /* A transfer coding is not read (the export never uses one, and
+         * a chunked body read as lines would be refused for the wrong
+         * reason), and a second Content-Length is refused as RFC 9112
+         * 6.3 asks, not resolved. */
+        if (ci_prefix(h + 2, "transfer-encoding:")) {
+            snprintf(err, errsz, "a Transfer-Encoding response is not read: refused");
+            goto fail;
+        }
         if (ci_prefix(h + 2, "content-length:")) {
+            if (clen >= 0) {
+                snprintf(err, errsz, "two Content-Length headers: refused");
+                goto fail;
+            }
             const char *v = h + 2 + 15;
             while (*v == ' ' || *v == '\t') v++;
+            if (*v < '0' || *v > '9') {
+                snprintf(err, errsz, "a Content-Length that is not a number: refused");
+                goto fail;
+            }
             clen = 0;
             while (*v >= '0' && *v <= '9' && clen < (1LL << 40)) clen = clen * 10 + (*v++ - '0');
         }
@@ -722,25 +818,6 @@ fail:
 }
 
 /* ── the ingest: check whole, then store ───────────────────────────── */
-
-typedef struct {
-    int       kind;                  /* WEB_FK_*, or -1 for gnss */
-    char      key[2 * WEB_FLEET_STR_MAX + 4];
-    char      label[WEB_FLEET_STR_MAX + 1];
-    char      vendor[WEB_FLEET_STR_MAX + 1];
-    int       has_rssi, rssi;
-    long long first, last;
-    char      extra[2048];
-} frow_t;
-
-typedef struct {
-    long long generated, pos_ts;
-    char      label[WEB_FLEET_STR_MAX + 1];
-    char      version[32];
-    char      pos_source[8];
-    int       has_pos, has_alt;
-    double    lat, lon, alt;
-} fhdr_t;
 
 #define T_MAX 4102444800LL           /* 2100-01-01: no clock reads later */
 
@@ -978,7 +1055,7 @@ static int hdr_of(const web_jrec_t *r, fhdr_t *h) {
         v_str(r, "sloth_db", 15, tmp, sizeof(tmp)) < 0)
         return -1;
     int ga = v_num(r, "lat", -90, 90, &h->lat), gb = v_num(r, "lon", -180, 180, &h->lon);
-    int gc = v_num(r, "alt_m", -1000, 20000, &d);
+    int gc = v_num(r, "alt_m", -1000, 100000, &d);   /* web_loc_set()'s range */
     if (ga < 0 || gb < 0 || gc < 0 || ga != gb) return -1;
     h->has_pos = ga == 1;
     h->has_alt = gc == 1;

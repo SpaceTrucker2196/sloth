@@ -27,12 +27,16 @@
  * credential column, no alert key, no alert detail and no EAPOL table
  * can be read, whatever a later edit to this file says; an alert travels
  * as its type, title, severity, count, times and a fingerprint of its
- * type and title.
+ * type and title. Every line is held to the importer's own checks before
+ * it is sent: a row the importer would refuse (a value a sensor stored
+ * outside its ranges) is left out and its kind marked truncated, since
+ * one such line refuses the whole answer at every pull.
  *
  * The pull. --peer NAME=URL (at most WEB_FLEET_PEERS), every
  * --peer-interval-secs (default 60), on a thread of its own: a plain
  * HTTP/1.1 GET over TCP to http://A.B.C.D[:PORT] (literal IPv4 only,
- * nothing is resolved), connect and read deadlines, the response held
+ * nothing is resolved), a connect deadline and one read deadline for the
+ * whole answer, no transfer coding, the response held
  * to WEB_FLEET_RESP_MAX and refused whole past it. The address must be
  * in 100.64.0.0/10 (the tailnet: WireGuard binds it to a node key)
  * unless --peer-allow-outside-tailnet is given, which is announced.
