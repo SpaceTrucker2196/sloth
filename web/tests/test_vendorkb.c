@@ -348,7 +348,15 @@ static void test_drawer_and_lookup_carry_the_section(void) {
 /* The page: the section is drawn by one function the drawer and Lookup
  * both call, every value through textContent, the sources as text (the
  * whole page has no href but fragments and no markup sink:
- * test_routes.c). Seen red with Lookup's call removed. */
+ * test_routes.c). Seen red with Lookup's call removed.
+ *
+ * In the drawer it is the last thing (owner request 2026-11-11, "move
+ * the vendor research to the bottom on the wifi detail view"): drawn
+ * into #dr-vendor, the aside's last child, after the record, the lists,
+ * the strip, the signal, the week, the anomalies and the FRRS record,
+ * and cleared when another device is opened. Seen red with the call
+ * moved back above the names (into box), and with #dr-vendor moved
+ * above #frrs-drawer. Lookup's card keeps it where it was. */
 static void test_page_shows_research_as_text(void) {
     const char *p = (const char *)web_page;
     const char *fn = strstr(p, "  function vendorResearch(box, vr, oui) {");
@@ -378,7 +386,37 @@ static void test_page_shows_research_as_text(void) {
     int calls = 0;
     for (const char *c = p; (c = strstr(c, "vendorResearch(box, j.vendor_research, j.oui);")) != NULL; c++)
         calls++;
-    WT_EQ(calls, 2);                 /* the drawer and Lookup */
+    WT_EQ(calls, 1);                 /* Lookup's, into its card */
+    /* The drawer's: after everything else it draws, into the last
+     * container of the aside. */
+    const char *od = strstr(p, "  function openDrawer(mac) {");
+    const char *oe = od ? strstr(od, "\n  }\n") : NULL;
+    WT_ASSERT(od && oe);
+    if (od && oe) {
+        static const char CALL[] =
+            "      vendorResearch(clear(\"dr-vendor\"), j.vendor_research, j.oui);\n";
+        const char *call = strstr(od, CALL);
+        const char *names = strstr(od, "itemList(box, \"names (passive)\"");
+        const char *alerts = strstr(od, "itemList(box, \"alerts naming it\"");
+        const char *strip = strstr(od, "drawStrip($(\"dr-strip\")");
+        const char *anoms = strstr(od, "(j.anomalies || []).forEach(");
+        const char *frrs = strstr(od, "SlothFrrs.mountDrawer(mac, j);");
+        WT_ASSERT(call && names && alerts && strip && anoms && frrs);
+        WT_ASSERT(call && call < oe && names < call && alerts < call && strip < call &&
+                  anoms < call && frrs < call);
+        /* Nothing of the drawer's is drawn after it. */
+        WT_ASSERT(call && !strncmp(call + sizeof(CALL) - 1, "    }).catch(", 13));
+        const char *early = strstr(od, "    clear(\"dr-vendor\");\n");
+        const char *get = strstr(od, "getJSON(\"/api/device/\"");
+        WT_ASSERT(early && get && early < get);
+    }
+    const char *as = strstr(p, "<aside class=\"drawer\" id=\"drawer\"");
+    const char *ae = as ? strstr(as, "</aside>") : NULL;
+    const char *dv = as ? strstr(as, "    <div id=\"dr-vendor\"></div>\n  </aside>") : NULL;
+    const char *fd = as ? strstr(as, "id=\"frrs-drawer\"") : NULL;
+    const char *ld = as ? strstr(as, "id=\"loc-drawer\"") : NULL;
+    const char *db = as ? strstr(as, "id=\"dr-body\"") : NULL;
+    WT_ASSERT(as && ae && dv && fd && ld && db && dv < ae && db < dv && fd < dv && ld < dv);
     WT_HAS(p, "if (j.kind === \"mac\") vendorResearch(box, j.vendor_research, j.oui);");
     WT_HAS(p, ".vr-src { ");
 }

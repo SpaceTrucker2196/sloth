@@ -2887,6 +2887,8 @@
     $("dr-sw").style.background = keyColor(mac);
     $("dr-mac").className = "d-dim";
     set("dr-note", "loading");
+    // The last device's research is not this one's.
+    clear("dr-vendor");
     if (window.SlothLocation) window.SlothLocation.drawer(mac);
     // G8 when the device is a BSSID with more than one stage (§6.8).
     if (window.SlothChain) SlothChain.drawer(mac);
@@ -2911,7 +2913,6 @@
         ["dhcp vci", dt.dhcp_vci]
       ] : [["stream ip", j.stream ? ipVal(j.stream.ip, IP_SRC.dev) : null],
            ["stream first seen", j.stream && num(j.stream.first_seen) ? stamp(j.stream.first_seen) : null]]));
-      vendorResearch(box, j.vendor_research, j.oui);
       itemList(box, "names (passive)", j.names, nameLine, false);
       itemList(box, "pnl ssids", j.ssids, function (x) { return ssidSpan(String(x.ssid), x.ssid_k, x.ssid_np); }, j.ssids_more);
       itemList(box, "associations", j.assocs, function (x) {
@@ -2963,6 +2964,11 @@
       if (!j.anomalies || !j.anomalies.length) an.appendChild(el("div", "sub", "none"));
       (j.anomalies || []).forEach(function (a) { an.appendChild(card(a)); });
       if (window.SlothFrrs) SlothFrrs.mountDrawer(mac, j);
+      // The vendor research last (owner request 2026-11-11): under the
+      // device's own record, strip, signal, week, anomalies and FRRS
+      // record, in the drawer's last container, not between its
+      // addresses and its names.
+      vendorResearch(clear("dr-vendor"), j.vendor_research, j.oui);
     }).catch(function (e) { if (gen === DR.gen) set("dr-note", errText(e.message)); });
   }
 

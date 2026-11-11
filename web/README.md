@@ -2328,7 +2328,15 @@ border in its severity colour; text stays `--ink` and `--muted`. A row
 click opens the drawer, as does an Anomalies card keyed by a MAC; Esc
 closes it. The drawer lists everything `/api/device/{mac}` gives, the
 strip, the week heatmap (the Overview's heatmap drawing, by share of
-weeks) and the episodes as cards. `9` opens Lookup: one input, a MAC or
+weeks) and the episodes as cards. The vendor research is the drawer's
+last block (owner request 2026-11-11, "move the vendor research to the
+bottom on the wifi detail view"): its own container, `#dr-vendor`,
+after the FRRS record and the sensor's positions, so a device's own
+record, lists, presence, signal and anomalies come before what is
+documented about its OUI's holder. The drawer is one view whatever
+opened it (a WiFi client or access point, a Devices row, an anomaly
+card), so it moved for all of them; the Lookup card keeps the section
+under its OUI card. `9` opens Lookup: one input, a MAC or
 an IP, and the card, which ends with the drawer's strip and G2 (F20).
 Slice V2 (#171) puts G2 in the signal column, G6 in risk and anom, the
 `new` mark before the swatch and the first-seen `◆` on the strip; see
