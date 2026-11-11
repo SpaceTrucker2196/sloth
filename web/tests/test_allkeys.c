@@ -640,10 +640,16 @@ static void test_worst_page_from_the_store(void) {
         web_rollup_add(&ru, WM_HOST_RX, qs, 1, T + 86400);
     }
     snprintf(qs, sizeof(qs), "metric=host.rx_rate&cols=480&from=%lld&to=%lld", T, T + 86400);
+    /* The answer's own time bound scales with the sanitizer as the read
+     * budget below does: under TSan the unscaled 100 ms took fewer than
+     * the seven keys this test expects of a full answer, in both of the
+     * gate's TSan runs, on a correct route. */
+    web_allkeys_budget_ms = WEB_ALLKEYS_ANSWER_MS * web_sdb_test_budget_scale;
     struct timespec t0;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     size_t n = answer(qs, 1);
     double ms = ms_since(&t0);
+    web_allkeys_budget_ms = WEB_ALLKEYS_ANSWER_MS;
     WT_ASSERT(n > 0);
     WT_HAS(body, "\"cell\":180,\"cells\":480,");
     WT_HAS(body, "\"source\":\"store+memory\"}\n");
