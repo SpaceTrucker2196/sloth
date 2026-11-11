@@ -1,7 +1,7 @@
 ---
 type: WPA_DOWNGRADE
 technique: T1600
-rule_file: src/alerts/rules_twin.c:970 rule_wpa_downgrade()
+rule_file: src/alerts/rules_twin.c:1029 rule_wpa_downgrade()
 count_semantics: Since #173 the detail carries the posture's age as a band (`(observed 30s+)`, `5m+`, `1h+`, `1d+`; `wpa_downgrade_age_band()`, rules_twin.c) rather than the exact seconds, so `observations` and `alert.update` move on a band crossing (at most three per incident), a change of SSID, or the exercised/mine flags - not every second. `count` is unchanged: per evaluation tick, per (BSSID, downgrade-kind) key - fire() bumps count every poll in which the AP is still advertising that weak lane after >=30 s of observation; one increment is one poll (~4/s), NOT one beacon. The posture is a standing fact about the AP's beacons, so this rule counts "polls while the posture holds", which is why a long-lived transition-mode AP accrues enormous per-key counts
 severity_assessment: agree - WARN for a posture offered but not exercised, CRIT on --my-bssid or when a client actually took the weak lane. A configuration prerequisite is correctly WARN; it becomes CRIT only when it is your AP or the lane was used
 false_positive_risk: high as an "attack" signal, low as a "posture" signal - the rule fires on a true fact (the AP advertises a weak lane). Almost every trip is a legitimate WPA2/WPA3 transition or MFP-optional config, which is a posture to fix, not an intrusion. It is not a false positive so much as a not-an-attack positive

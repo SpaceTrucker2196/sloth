@@ -1647,6 +1647,15 @@ typedef struct {
      * somewhere else must not rewrite where it came from. 0 = unknown
      * (an entry created with no channel). */
     int      first_seen_channel;
+    /* How long before this entry's insert the table last evicted one
+     * for want of room: seconds on the monotonic clock plus one, so 1
+     * is "this insert was the eviction" and 0 is "it never had". A full
+     * table drops the entry heard longest ago to admit a new one, and
+     * that AP is back on the next hop pass under a new first_seen, so a
+     * first_seen this close to an eviction is a re-insert as likely as
+     * an arrival (#188). Sits in what was padding: sloth_state_t does
+     * not grow, which tests that hold three on the stack depend on. */
+    uint32_t evict_age_s1;
     time_t   last_seen;
     int      frame_count;
     /* Evil-twin fingerprint surface. Populated incrementally:
@@ -1765,6 +1774,8 @@ typedef struct {
     uint8_t  attack_in_progress;     /* set when chain rule tainted twin BSSID */
     uint8_t  attacker_oui;           /* twin OUI in Hak5 / Espressif tables */
     uint8_t  hash_mismatch;          /* vendor-IE hashes differ */
+    uint8_t  late_arrival;           /* the later half came well after the
+                                      * earlier and the scorer counted it (#188) */
     /* Do we actually know which half is the impostor? (#89)
      *
      * 1 only when something other than radio physics said so: an

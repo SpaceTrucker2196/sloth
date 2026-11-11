@@ -182,6 +182,38 @@ static void test_twins_hash_mismatch_flag(void) {
     ASSERT_EQ(s.twin_episodes[0].hash_mismatch, 1);
 }
 
+/* Late-arrival flag (#188, ruling 3b): the episode carries what the
+ * scorer counted, so the view's `>` and the JSONL field cannot say
+ * something the alert's "+late-arrival" does not. A copy on a locally
+ * administered address ten minutes after the original, one band,
+ * different vendor IEs; and the same pair a minute apart, where the
+ * flag is off and the confidence is the 35 it was. */
+static void test_twins_late_arrival_flag(void) {
+    alerts_clear();
+    time_t now = time(NULL);
+    sloth_state_t s; seed(&s);
+    uint8_t a[6] = {0xa8,0xbb,0xcc,0x01,0x02,0x03};
+    uint8_t b[6] = {0x02,0x9a,0x3c,0x71,0x5e,0x08};
+    add_beacon(&s, "Cafe-Net", a, "WPA2", -70);
+    add_beacon(&s, "Cafe-Net", b, "WPA2", -50);
+    s.beacon_aps[0].fp.vendor_ies_hash = 0xdeadbeefu;
+    s.beacon_aps[1].fp.vendor_ies_hash = 0xcafef00du;
+    s.beacon_aps[0].first_seen = now - 1200;
+    s.beacon_aps[1].first_seen = now - 600;
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 1);
+    ASSERT_EQ(s.twin_episodes[0].late_arrival, 1);
+    ASSERT_EQ(s.twin_episodes[0].hash_mismatch, 1);
+    ASSERT_EQ((int)s.twin_episodes[0].confidence,
+              TWIN_W_IE_HASH + TWIN_W_LATE_ARRIVAL);
+
+    s.beacon_aps[1].first_seen = now - 1140;
+    twins_snapshot(&s);
+    ASSERT_EQ(s.twin_episode_count, 1);
+    ASSERT_EQ(s.twin_episodes[0].late_arrival, 0);
+    ASSERT_EQ((int)s.twin_episodes[0].confidence, TWIN_W_IE_HASH);
+}
+
 /* Attacker OUI flag — and it is now what *attributes* the pair. An OUI
  * in the Hak5 / Espressif tables is an observed device identity, not a
  * signal-strength guess, so it can name the impostor where RSSI cannot.
@@ -816,6 +848,7 @@ void run_twins_tests(void) {
     RUN_TEST(test_twins_rssi_does_not_decide_sides);
     RUN_TEST(test_twins_episode_carries_confidence);
     RUN_TEST(test_twins_hash_mismatch_flag);
+    RUN_TEST(test_twins_late_arrival_flag);
     RUN_TEST(test_twins_attacker_oui_attributes_the_impostor);
     RUN_TEST(test_twins_rssi_swing_from_twin_side);
     RUN_TEST(test_twins_taint_overrides_rssi_assignment);

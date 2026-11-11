@@ -23,7 +23,7 @@
  * at the 100-column minimum Flags started at column 97: a `!*#?` row
  * showed `!*`, losing the hash-mismatch mark and the `?` that says
  * neither half is accused, while the legend under the table still
- * explained it. Flags is what this view exists to show, so the room
+ * explained it. (Five marks since #188 added `>`; the column is six.) Flags is what this view exists to show, so the room
  * comes out of SSID first (a twin's two halves share it, and the
  * BSSIDs tell them apart) and then Last, which is only shown whole.
  * The ANSI build has no width and keeps every column. */
@@ -154,11 +154,13 @@ void view_twins_draw(const sloth_state_t *s) {
          *   ! = attack-in-progress (deauth-fed chain CRIT)
          *   * = attacker-tool OUI (Hak5 / Espressif)
          *   # = vendor-IE hash mismatch
+         *   > = late arrival: first heard well after the other half
          *   ? = unattributed — candidate pair, neither half accused */
         int  fi = 0;
         if (e->attack_in_progress) flags[fi++] = '!';
         if (e->attacker_oui)       flags[fi++] = '*';
         if (e->hash_mismatch)      flags[fi++] = '#';
+        if (e->late_arrival)       flags[fi++] = '>';
         if (!e->attributed)        flags[fi++] = '?';
         flags[fi] = '\0';
         if (!flags[0]) snprintf(flags, sizeof(flags), "-");
@@ -245,7 +247,8 @@ void view_twins_draw(const sloth_state_t *s) {
 
     /* Legend */
     tui_dim();
-    TPRINT(" flags: ! attack-in-progress  * attacker OUI  # vendor-IE hash mismatch\n");
+    TPRINT(" flags: ! attack-in-progress  * attacker OUI  # vendor-IE hash mismatch"
+           "  > late arrival\n");
     TPRINT("        ? sides unattributed - candidate pair, neither half accused\n");
     /* The three categories #89 asked the UI to separate, and the one it
      * asked the UI not to assert. */

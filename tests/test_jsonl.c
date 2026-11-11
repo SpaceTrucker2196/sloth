@@ -311,6 +311,7 @@ static void test_emit_twin_episode_full_fields(void) {
     e->attack_in_progress = 1;
     e->attacker_oui       = 1;
     e->hash_mismatch      = 1;
+    e->late_arrival       = 1;
     e->attributed         = 1;
     e->confidence         = 60;
     e->last_seen          = 1700000000;
@@ -331,6 +332,7 @@ static void test_emit_twin_episode_full_fields(void) {
     ASSERT(contains(body, "\"attack_in_progress\":1"));
     ASSERT(contains(body, "\"attacker_oui\":1"));
     ASSERT(contains(body, "\"hash_mismatch\":1"));
+    ASSERT(contains(body, "\"late_arrival\":1"));
     ASSERT(contains(body, "\"attributed\":1"));
     ASSERT(contains(body, "\"confidence\":60"));
 }

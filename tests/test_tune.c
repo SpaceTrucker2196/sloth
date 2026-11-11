@@ -46,6 +46,7 @@ static void test_defaults_are_the_shipped_values(void) {
     ASSERT_EQ((long long)tune_val(TUNE_EVIL_TWIN_PROXIMITY_DBM), 15);
     ASSERT_EQ((long long)tune_val(TUNE_DEAUTH_TWIN_WIN_SECS), 5);
     ASSERT_EQ((long long)tune_val(TUNE_TWIN_STEER_WINDOW_S), 300);
+    ASSERT_EQ((long long)tune_val(TUNE_TWIN_LATE_ARRIVAL_S), 120);
     ASSERT_EQ((long long)tune_val(TUNE_RECON_SUSTAIN_S), 600);
     ASSERT_EQ((long long)tune_val(TUNE_RECON_SUSTAIN_PROBES), 20);
     ASSERT_EQ((long long)tune_val(TUNE_KERB_PREAUTH_BURST), 5);
@@ -72,6 +73,13 @@ static void test_specs_match_enum_order(void) {
     ASSERT_STR(tune_spec(TUNE_SSH_BRUTE_FORCE)->name, "ssh.brute_force");
     ASSERT_STR(tune_spec(TUNE_MQTT_BRUTE_FAILS)->name, "mqtt.brute_fails");
     ASSERT_STR(tune_spec(TUNE_TWIN_STEER_WINDOW_S)->name, "twin.steer_window_s");
+    ASSERT_STR(tune_spec(TUNE_TWIN_LATE_ARRIVAL_S)->name, "twin.late_arrival_s");
+    /* The floor keeps the wait above the sibling window (10 s) and one
+     * worst pass of the default hop list (22 s). */
+    ASSERT_EQ((long long)tune_spec(TUNE_TWIN_LATE_ARRIVAL_S)->lo, 30);
+    /* A day, as documented; unpinned until 2026-11-11, when a ceiling
+     * of 3600 passed the suite. */
+    ASSERT_EQ((long long)tune_spec(TUNE_TWIN_LATE_ARRIVAL_S)->hi, 86400);
     ASSERT_STR(tune_spec(TUNE_RECON_SUSTAIN_PROBES)->name, "recon.sustain_probes");
     ASSERT_STR(tune_spec(TUNE_SOCKET_MAX_PER_PEER)->name, "socket.max_per_peer");
     ASSERT_STR(tune_spec(TUNE_SOCKET_IDLE_SECS)->name, "socket.idle_secs");

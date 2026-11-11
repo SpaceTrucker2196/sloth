@@ -20,6 +20,11 @@
 
 static beacon_ap_t     g_aps[MAX_BEACON_APS];
 static int             g_count = 0;
+/* The last insert that had to evict, on the monotonic clock; under
+ * g_mu. Each new entry records its distance from it
+ * (beacon_ap_t.evict_age_s1). */
+static int             g_evicted;
+static uint64_t        g_evicted_mono_ms;
 static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
 
 /* Ring of timestamps of recently first-seen BSSIDs — the beacon-flood
@@ -1289,6 +1294,8 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
             }
         }
         sh_evict_note(SH_EVICT_BEACON_AP);   /* #91 wave 6 */
+        g_evicted = 1;
+        g_evicted_mono_ms = sloth_mono_ms();
     }
 
     note_new_bssid(now, event_id);   /* beacon-flood rate signal (roadmap B4) */
@@ -1300,6 +1307,11 @@ void beacon_record_ev(const uint8_t *bssid, const char *ssid,
     g_aps[slot].channel    = channel;
     g_aps[slot].beacon_ms  = beacon_ms;
     g_aps[slot].first_seen = now;
+    if (g_evicted) {
+        uint64_t age = (sloth_mono_ms() - g_evicted_mono_ms) / 1000u;
+        g_aps[slot].evict_age_s1 =
+            age >= UINT32_MAX ? UINT32_MAX : (uint32_t)age + 1u;
+    }
     g_aps[slot].first_seen_channel = channel;   /* #101: never updated */
     g_aps[slot].last_seen  = now;
     g_aps[slot].frame_count = 1;
@@ -1540,6 +1552,7 @@ void beacon_clear(void)
 {
     pthread_mutex_lock(&g_mu);
     g_count = 0;
+    g_evicted = 0;
     memset(g_new_bssid_ts, 0, sizeof(g_new_bssid_ts));
     memset(g_new_bssid_ev, 0, sizeof(g_new_bssid_ev));
     g_new_bssid_head = 0;

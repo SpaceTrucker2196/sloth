@@ -76,7 +76,20 @@ Since #188 this needs both beacons on one band (the helper's
 `channel=6` default does that; vendor IEs are not compared across
 bands) and the different globally administered OUIs of Phase 1: the
 mismatch alone is 35 % and a soft-signal CRIT needs 50 %. With a
-same-OUI or locally administered twin the row stays WARN.
+same-OUI twin the row stays WARN.
+
+**Late arrival** (ruling 3b on #188): a twin on a locally administered
+address (say `02:9a:3c:71:5e:08`) has no OUI to differ, so sent together
+with the real AP as above it is WARN at 35 %. Keep the real beacon on
+the air, start the twin's beacon at least 120 s later
+(`twin.late_arrival_s`), and the row is CRIT at 55 % with
+`+late-arrival` in the detail and `>` in the `[x]` Twins flags. The
+sensor must be at rest: a gpsd fix at 1 m/s or more restarts the wait.
+The beacon table must have room: with more than 256 BSSIDs in earshot
+every insert evicts, and a late arrival is not counted.
+The same delay on the Phase 1 pair with no vendor-IE mismatch changes
+nothing: a late arrival corroborates other evidence and never raises a
+row on its own.
 
 **Attacker OUI bonus**: swap the twin BSSID to `00:13:37:..` (Hak5) or
 `24:0a:c4:..` (Espressif) and the same WARN→CRIT escalation fires even
@@ -112,6 +125,13 @@ deauth = (RadioTap() /
           Dot11Deauth(reason=7))
 sendp([deauth] * 20, iface="wlan1mon", inter=0.02)
 ```
+
+Since #188 (ruling 4a) the chain needs a pair the scorer accepts, which
+the Phase 1 pair is (two globally administered OUIs). A twin on a
+locally administered address is named only with evidence of its own:
+use the Phase 2 vendor IEs on one band. Two addresses at most 2 bytes
+apart on different bands, first sent within 10 s of each other, are one
+device and are not named.
 
 Expected within 5 s of the last deauth:
 

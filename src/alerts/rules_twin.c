@@ -174,6 +174,55 @@ static int twin_pair_is_sibling(const beacon_ap_t *a, const beacon_ap_t *b) {
     return gap <= TWIN_SIBLING_WINDOW_S;
 }
 
+/* ── The copy arrives after the original (#188, ruling 3b) ────
+ * The conditions and why each exists: src/alerts.h. */
+#define TWIN_LATE_ARRIVAL_S ((time_t)tune_val(TUNE_TWIN_LATE_ARRIVAL_S))
+
+static int twin_sensor_moving(const sloth_state_t *s, time_t now);
+
+/* When the sensor was last known to be moving, 0 for never. Kept here
+ * because the fix history is 64 fixes deep and the question is asked
+ * for as long as the pair stands: a sensor that drove in, heard one AP
+ * at the gate and its mesh partner seven minutes later, then parked,
+ * holds that seven-minute gap for hours after the last moving fix has
+ * left the ring. twin_sensor_moving() looks RSSI_WIN_SECS back, so this
+ * trails the last moving fix by up to that much, which only lengthens
+ * the wait. Main-loop state like the rest of the scorer; alerts_clear()
+ * forgets it with the other rule history, so an operator who clears
+ * inside the wait after parking gets the gaps back early. */
+static time_t g_twin_moved_at;
+
+void rules_twin_forget(void) { g_twin_moved_at = 0; }
+
+static void twin_note_motion(const sloth_state_t *s, time_t now) {
+    if (s && twin_sensor_moving(s, now)) g_twin_moved_at = now;
+}
+
+/* Wall-clock differences, like the sibling window: first_seen and
+ * last_seen are evidence stamps and the table keeps no monotonic one.
+ * A step of the host clock between the two first sightings is
+ * therefore read as a gap (a host with no RTC corrected by NTP after
+ * sloth started): stamps already written do not move with the clock.
+ * Not guarded; the EVIL_TWIN assessment lists it. */
+static int twin_pair_late_arrival(const beacon_ap_t *a, const beacon_ap_t *b) {
+    if (!a->first_seen || !b->first_seen) return 0;
+    const beacon_ap_t *early = a->first_seen <= b->first_seen ? a : b;
+    const beacon_ap_t *late  = early == a ? b : a;
+    if (late->first_seen - early->first_seen < TWIN_LATE_ARRIVAL_S) return 0;
+    if (early->last_seen < late->first_seen) return 0;
+    /* A full table re-admits what it evicted a hop pass ago under a new
+     * first_seen, so one stamped inside the wait after an eviction is
+     * not an arrival. The age is the later half's own, taken at its
+     * insert: an eviction since then says nothing about it. */
+    if (late->evict_age_s1 &&
+        (time_t)(late->evict_age_s1 - 1u) < TWIN_LATE_ARRIVAL_S)
+        return 0;
+    if (g_twin_moved_at &&
+        late->first_seen - g_twin_moved_at < TWIN_LATE_ARRIVAL_S)
+        return 0;
+    return 1;
+}
+
 int btm_candidate_is_twin(const sloth_state_t *s,
                           const uint8_t bssid[6]) {
     for (int i = 0; i < s->twin_episode_count; i++) {
@@ -309,6 +358,7 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
     memset(&ev, 0, sizeof(ev));
     if (!a || !b) { if (out) *out = ev; return 0; }
 
+    twin_note_motion(s, now);
     ev.sibling = twin_pair_is_sibling(a, b);
 
     /* Two OUIs are comparable only when both are OUIs (#188). With a
@@ -377,6 +427,13 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
      * an OUI; it cannot edit the file. This is what keeps a spoofed
      * neighbour claim from erasing an inventory mismatch. */
     if (ev.inv_mismatch) { ev.positive += TWIN_W_INV_MISMATCH; ev.hard = 1; }
+    /* Last, and only on a pair that is already one: it corroborates and
+     * never nominates (alerts.h). Below the sibling return, so one
+     * device's radios are never asked. */
+    if (ev.positive > 0 && twin_pair_late_arrival(a, b)) {
+        ev.late_arrival = 1;
+        ev.positive += TWIN_W_LATE_ARRIVAL;
+    }
 
     if (ev.nbr_claim) ev.context += TWIN_C_NBR_CLAIM;
     if (ev.same_oui)  ev.context += TWIN_C_SAME_OUI;
@@ -399,13 +456,15 @@ int twin_evidence_score(const sloth_state_t *s, const beacon_ap_t *a,
     return ev.positive > 0;
 }
 
-/* One short, bounded phrase per context signal. ALERT_DETAIL_LEN is 256
- * and the SSID + two BSSIDs + cipher already take ~60 of it. The BTM
+/* One short, bounded phrase per context signal. ALERT_DETAIL_LEN is 320
+ * and the longest EVIL_TWIN detail, every phrase present, is 281
+ * (test_twin_detail_fits_with_every_phrase). The BTM
  * steer is not here: it gets its own note naming the steering AP, which
  * is the actionable half. */
 static void twin_evidence_note(char *out, size_t n, const twin_evidence_t *ev) {
-    snprintf(out, n, "%s%s%s",
+    snprintf(out, n, "%s%s%s%s",
              ev->inv_mismatch ? " +not in inventory"           : "",
+             ev->late_arrival ? " +late-arrival"               : "",
              ev->same_oui     ? " +same-vendor-OUI"            : "",
              ev->nbr_claim    ? " +802.11k claim (unverified)" : "");
 }
@@ -1476,6 +1535,9 @@ static int enc_is_strong(const char *enc) {
 }
 
 void rule_evil_twin(const sloth_state_t *s, time_t now) {
+    /* Every tick, pair or no pair: the scorer only runs when two APs
+     * share a name, and a drive with none in earshot still happened. */
+    twin_note_motion(s, now);
     for (int i = 0; i < s->beacon_count; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
         if (!a->ssid[0]) continue;      /* hidden -> can't correlate */
@@ -1529,7 +1591,7 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
                 twin_evidence_score(s, a, b, now, &ev);
                 int conf = clamp_conf(TWIN_W_WEAK_CLONE + ev.positive -
                                       ev.context);
-                char note[64];
+                char note[80];
                 twin_evidence_note(note, sizeof(note), &ev);
 
                 /* Both radios declared by the operator (#89 slice 2).
@@ -1674,16 +1736,18 @@ void rule_evil_twin(const sloth_state_t *s, time_t now) {
              * sensor reported a week of CRIT rows at 10-20 %, every one
              * of them one device's own radios. Hard signals are exempt
              * for the reason the neighbour claim above cannot touch
-             * them. With today's weights the one soft pair that clears
-             * the bar is a vendor-IE mismatch plus a different globally
-             * administered OUI; the reason says which signal it was. */
+             * them. With today's weights a vendor-IE mismatch clears
+             * the bar with one cross-device signal beside it: a
+             * different globally administered OUI, or the copy having
+             * arrived after the original (+late-arrival), which is the
+             * only one a locally administered address can show. */
             if (!ev.hard && sev > ALERT_SEV_WARN &&
                 ev.confidence < TWIN_CRIT_MIN_CONF)
                 sev = ALERT_SEV_WARN;
 
             char key[ALERT_KEY_LEN];
             char detail[ALERT_DETAIL_LEN];
-            char note[64];
+            char note[80];
             /* Canonical pair key (#89). `twin-fp` stays the rule id so
              * the CRIT `twin` key for the same pair still coexists, but
              * the identity is now the ordered BSSID pair rather than the
@@ -1903,7 +1967,12 @@ static int twin_sensor_moving(const sloth_state_t *s, time_t now) {
  * predicate: a weak/strong split under one SSID, or the same non-OPEN
  * security with positive evidence. The second goes through
  * twin_evidence_score, so one device's radios on two bands (#188) are
- * not a candidate here either. */
+ * not a candidate here either.
+ *
+ * Every pair rule_evil_twin_attack_chain names is one of these since
+ * ruling 4a: it has the same security, is not OPEN, and passed the same
+ * scorer. Before, a chain pair with a locally administered half was
+ * admitted on its first three bytes and was not a candidate here. */
 static int twin_pair_is_candidate(const sloth_state_t *s, const beacon_ap_t *a,
                                   const beacon_ap_t *b, time_t now) {
     if (!a->ssid[0] || strcmp(a->ssid, b->ssid) != 0) return 0;
@@ -1963,7 +2032,31 @@ void rule_evil_twin_proximity(const sloth_state_t *s, time_t now) {
  * Same-cipher pair criteria mirror the WARN branch in rule_evil_twin.
  * We deliberately re-derive them rather than tracking pairs separately
  * — the cost is one extra O(n²) walk per poll over MAX_BEACON_APS=256,
- * which is fine at ≈1 Hz. */
+ * which is fine at ≈1 Hz.
+ *
+ * Which second BSSID is "the other half" (#188, ruling 4a). The flood
+ * is real either way; what this rule adds is a name for the rogue and a
+ * taint on it, and until 4a it gave both to a vehicle hotspot's own
+ * 5 GHz radio, because 02:24:a5 and 02:49:a5 read as two vendors, and
+ * to any dual-band AP whose two radios sit in adjacent OUI blocks.
+ *
+ * So the pair is one twin_evidence_score() calls a candidate: the same
+ * question rule_evil_twin, the Twins view and the proximity rule ask,
+ * answered by the same code. That brings the sibling test (one device's
+ * radios are not a pair), the U/L bit (a locally administered half has
+ * no OUI, so its first three bytes neither admit the pair nor excuse
+ * it, and it needs evidence of its own), and the inventory (two radios
+ * the operator declared are not each other's rogue; one left out of a
+ * declared SSID is reported even beside its sibling).
+ *
+ * One thing is kept from before: two globally administered addresses
+ * with the same OUI are the deployment's own next AP and are skipped,
+ * whatever the scorer makes of their vendor IEs. Under a flood, a mesh
+ * whose nodes differ there would otherwise have a node named the rogue.
+ *
+ * The cost, stated in the assessment: a copy on a locally administered
+ * address that shows no evidence of its own is not named, and the
+ * flood is then DEAUTH_FLOOD's row alone. */
 #define DEAUTH_TWIN_WIN_SECS ((int)tune_val(TUNE_DEAUTH_TWIN_WIN_SECS))
 
 void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
@@ -1982,7 +2075,7 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
             break;
         }
         if (!flood) continue;
-        /* Find a same-SSID + same-cipher + diff-OUI sibling — that's
+        /* Find the same-SSID + same-cipher second transmitter — that's
          * the rogue half. Loop covers both i<j and j<i so a deauth
          * targeting either AP picks up its twin partner. */
         for (int j = 0; j < s->beacon_count; j++) {
@@ -1991,7 +2084,10 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
             if (strcmp(a->ssid, b->ssid) != 0) continue;
             if (memcmp(a->bssid, b->bssid, 6) == 0) continue;
             if (strcmp(a->enc, b->enc) != 0) continue;
-            if (memcmp(a->bssid, b->bssid, 3) == 0) continue;
+            if (!bssid_is_laa(a->bssid) && !bssid_is_laa(b->bssid) &&
+                memcmp(a->bssid, b->bssid, 3) == 0)
+                continue;
+            if (!twin_evidence_score(s, a, b, now, NULL)) continue;
 
             taint_mark(b->bssid, now);
 

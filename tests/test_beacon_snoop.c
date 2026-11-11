@@ -5,6 +5,7 @@
 #include "runner.h"
 #include "sloth.h"
 #include "beacon_snoop.h"
+#include "sloth_clock.h"
 #include "views/beacon.h"
 
 /* ── Beacon frame builder helpers ────────────────────────── */
@@ -3654,6 +3655,94 @@ static void test_reg_envelope_does_not_survive_slot_reuse(void) {
     ASSERT_EQ((int)r->triplet_count, 0);
 }
 
+/* A full table makes room by dropping the entry heard longest ago, and
+ * that AP is re-admitted with a new first_seen the next time it is
+ * heard. Each entry therefore carries how long before its own insert
+ * the table last evicted (evict_age_s1: monotonic seconds plus one,
+ * 0 for never), which is what lets the twin scorer refuse to read such
+ * a first_seen as an arrival (#188). Monotonic, so the wall clock
+ * stepping an hour between the eviction and the insert changes nothing.
+ *
+ * Mutations (2026-11-11), each red here: `g_evicted = 1` removed (the
+ * evicting entry and the one after it read 0); the age written whether
+ * or not the table ever evicted (the 256 fillers read non-zero); the
+ * `+ 1u` dropped (the evicting entry read 0, the later one 400); the
+ * age taken from the wall clock (the later one, across the stepped
+ * hour); the reset in beacon_clear() removed (the fillers and the last
+ * row, the earlier test's eviction still standing). */
+static time_t   g_evict_wall;
+static uint64_t g_evict_mono;
+static time_t   evict_wall(void) { return g_evict_wall; }
+static uint64_t evict_mono(void) { return g_evict_mono; }
+
+static const beacon_ap_t *snap_find(const sloth_state_t *s,
+                                    const uint8_t bssid[6]) {
+    for (int i = 0; i < s->beacon_count; i++)
+        if (memcmp(s->beacon_aps[i].bssid, bssid, 6) == 0)
+            return &s->beacon_aps[i];
+    return NULL;
+}
+
+static void test_table_eviction_is_carried_by_later_inserts(void) {
+    static sloth_state_t s;
+    const uint8_t evictor[6] = { 0x02, 0xee, 0x00, 0x00, 0x00, 0x01 };
+    const uint8_t after[6]   = { 0x02, 0xee, 0x00, 0x00, 0x00, 0x02 };
+    uint8_t b[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
+    beacon_clear();
+    sloth_clock_test_set(evict_mono, evict_wall);
+    g_evict_wall = 100000;
+    g_evict_mono = 5000000;
+    for (int i = 0; i < MAX_BEACON_APS; i++) {
+        b[4] = (uint8_t)(i >> 8); b[5] = (uint8_t)i;
+        beacon_record(b, "filler", -60, 6, "WPA2", 100, NULL);
+    }
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, MAX_BEACON_APS);
+    int aged = 0;
+    for (int i = 0; i < s.beacon_count; i++)
+        if (s.beacon_aps[i].evict_age_s1) aged++;
+    ASSERT_EQ(aged, 0);                 /* full, but nothing evicted yet */
+
+    g_evict_wall += 10;                 /* one past full */
+    g_evict_mono += 10 * 1000;
+    beacon_record(evictor, "late", -60, 6, "WPA2", 100, NULL);
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, MAX_BEACON_APS);
+    const beacon_ap_t *e = snap_find(&s, evictor);
+    ASSERT(e != NULL);
+    if (e) ASSERT_EQ((long long)e->evict_age_s1, 1);
+
+    /* The table empties by age and a new AP has room: it still carries
+     * the eviction, 400 s back by the monotonic clock while the wall
+     * clock was stepped an hour on top. */
+    g_evict_wall += 400 + 3600;
+    g_evict_mono += 400 * 1000;
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    ASSERT_EQ(s.beacon_count, 0);
+    beacon_record(after, "after", -60, 6, "WPA2", 100, NULL);
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    const beacon_ap_t *a = snap_find(&s, after);
+    ASSERT(a != NULL);
+    if (a) ASSERT_EQ((long long)a->evict_age_s1, 400 + 1);
+
+    /* A cleared table has no history. */
+    beacon_clear();
+    beacon_record(after, "after", -60, 6, "WPA2", 100, NULL);
+    memset(&s, 0, sizeof(s));
+    beacon_snapshot(&s);
+    a = snap_find(&s, after);
+    ASSERT(a != NULL);
+    if (a) ASSERT_EQ((long long)a->evict_age_s1, 0);
+
+    sloth_clock_test_set(NULL, NULL);
+    beacon_clear();
+}
+
 /* #138: the SSID is stored through netstr_copy() at the one choke point,
  * dot11_ie_ssid_copy(). '\n' (which ncurses acts on — a row-spoofing
  * SSID) and DEL become '?'. Mutation-proved: restoring the memcpy in
@@ -3886,6 +3975,7 @@ void run_beacon_snoop_tests(void) {
     RUN_TEST(test_reg_malformed_counts_accumulate_across_frames);
     RUN_TEST(test_reg_shorter_country_leaves_no_triplet_tail);
     RUN_TEST(test_reg_envelope_does_not_survive_slot_reuse);
+    RUN_TEST(test_table_eviction_is_carried_by_later_inserts);
     RUN_TEST(test_parse_ssid_control_octets_stored_as_marks);
     RUN_TEST(test_parse_ssid_high_octets_kept);
 }
