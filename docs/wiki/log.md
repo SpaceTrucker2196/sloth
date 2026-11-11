@@ -6913,3 +6913,11 @@ Owner request: list every radio, SDR and GPS in sensor health, add voltage, temp
 ## 2026-11-11 — slothweb: anomaly triage follow-up, and its store step resequenced
 
 Owner rulings: a triaged-out state carried from an earlier episode dims the card at once, the "earlier episode" mark kept on it (a carried incident never dims); an alert may be linked to a device with no anomaly in it (alert to alert and device to device stay refused); a BLE advertiser is a link kind, named by address and address type as the TACDB names one, "no longer held" once the ledger has let it go, the anonymous type refused, no name stored; the Anomalies view's table form carries the triage chip and panel. The fleet (#192) reached main first with slothweb.db v8, so `anom_subject` and `relation` are v9, migrated from a v8 file with the fleet's rows untouched. `web_frrs_verdicts()` reads alerts' triage rows only, so an anomaly's decision neither travels in the fleet export nor takes its limit. [[slothweb]].
+
+## 2026-11-11 — plain notes on devices and the rest; slothweb-mcp and the agent's write path
+
+**Source**: owner request 2026-11-11 ("an openclaw agent will need to read the data thru an mcp and add notes to anomalies, devices, and other observations and devices").
+
+Slice 1: plain notes (`web/src/web_notes.c`, `web/ui/subnotes.js`) on six kinds of subject (device, BLE advertiser, SSID by its octets, GNSS satellite, aircraft, APRS station), append-only with retraction as a row, only retracted notes folding at the caps (64 a subject, 20,000); `GET /api/frrs/notes`, `GET /api/frrs/notes/marks`, `POST /api/frrs/note`; `/api/glossary`; slothweb.db v10 (`note`, `relation.via`) with its migration from v9, its failure case and the chain from v7; `via` gains `agent`; the bundle's `device.notes` and `ble.notes`.
+
+Slice 2: `slothweb-mcp` (`web/mcp/`, `make web-mcp`), an MCP server over slothweb's HTTP API on loopback, 22 read tools and 5 write tools; `slothweb --web-agent-secret PATH` and the `X-Slothweb-Agent` header (`web/src/web_agent.c`): a write proving the run's secret, from loopback with no Origin, is recorded `via: agent`; one without the header can never be; a wrong secret is 403. New page [[slothweb-mcp]]; [[slothweb]], [[cli-reference]].
