@@ -100,8 +100,14 @@
 #define WEB_CHANNEL_KEYS     64
 #define WEB_ALERT_KEYS       128
 /* The record types sloth's stream carries (web_live.h: WEB_LIVE_TYPES),
- * with headroom: the set is sloth's own, not a peer's to grow. */
-#define WEB_RECTYPE_KEYS     64
+ * with headroom: the set is sloth's own, not a peer's to grow. 80
+ * since JSONL 1.1.0 added four: web_scope.c lists 64 types and the
+ * alert lifecycle is five more, which the old 64 no longer held. */
+#define WEB_RECTYPE_KEYS     80
+/* The sensor's host status (web_sysstat.h): its temperature and
+ * voltage sensors (36 at most) and its sources (7), sloth's own
+ * bounded catalogue, with headroom. */
+#define WEB_SYS_KEYS         64
 /* The BLE view's device classes (web_bledev.h): seven, and a spare. */
 #define WEB_BLECLASS_KEYS    8
 /* The longest canonical key: an IPv6 address is at most 45 bytes. */
@@ -126,7 +132,8 @@
 
 enum { WEB_TIER_FINE = 0, WEB_TIER_MINUTE, WEB_TIER_HOUR, WEB_TIER_COUNT };
 enum { WEB_KC_GLOBAL = 0, WEB_KC_DEV, WEB_KC_HOST, WEB_KC_IFACE, WEB_KC_CHANNEL,
-       WEB_KC_ALERT, WEB_KC_RECTYPE, WEB_KC_BLECLASS, WEB_KC_BLE, WEB_KC_COUNT };
+       WEB_KC_ALERT, WEB_KC_RECTYPE, WEB_KC_SYS, WEB_KC_BLECLASS, WEB_KC_BLE,
+       WEB_KC_COUNT };
 enum { WEB_MK_GAUGE = 0, WEB_MK_COUNTER, WEB_MK_PRESENCE };
 
 /* §5.1, the metrics whose source records sloth emits today
@@ -184,6 +191,13 @@ enum {
      * one-channel Ubertooth sample left out). Monitor's; not scored by
      * the anomaly engine (a crowd walking in is not an anomaly). */
     WM_BLE_CLASS_ADVERTISERS, WM_BLE_CLASS_ADV,
+    /* The sensor's host status and sources (web_sysstat.h, 2026-11-11),
+     * from sloth's sys_status, sys_sensor and source_status records,
+     * one sample a minute. Four global, four keyed by sensor or source
+     * in the "sys" class. sloth's own state, so every scope's; not
+     * scored by the anomaly engine. */
+    WM_SYS_CPU, WM_SYS_MEM_USED, WM_SYS_RSS, WM_SYS_UNDERVOLT,
+    WM_SYS_TEMP, WM_SYS_VOLT, WM_SRC_RATE, WM_SRC_UP,
     WM_COUNT
 };
 
@@ -191,7 +205,7 @@ typedef struct {
     const char *name;      /* "iface.rx_rate" */
     int         kind;      /* WEB_MK_* */
     int         kclass;    /* WEB_KC_* */
-    const char *keykind;   /* "iface", "ip", "mac", "channel", "alert_type", "" */
+    const char *keykind;   /* "iface", "ip", "mac", "channel", "alert_type", "sys", "" */
     const char *source;    /* the record type(s) and member it comes from */
     const char *unit;
 } web_metric_t;

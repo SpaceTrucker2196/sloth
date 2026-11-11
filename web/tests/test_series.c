@@ -290,11 +290,14 @@ static void test_routes(void) {
     WT_EQ(r.status, 200);
     WT_HAS(out, "\"store\":\"memory\",\"store_path\":null,");
     WT_HAS(out, "\"series_key_caps\":{\"global\":1,\"device\":64,\"host\":32,"
-                "\"iface\":32,\"channel\":64,\"alert\":128,\"rectype\":64,\"bleclass\":8,\"ble\":64}");
+                "\"iface\":32,\"channel\":64,\"alert\":128,\"rectype\":80,\"sys\":64,"
+                "\"bleclass\":8,\"ble\":64}");
     WT_HAS(out, "\"key_evictions\":{\"global\":0,\"device\":0,\"host\":0,"
-                "\"iface\":0,\"channel\":0,\"alert\":0,\"rectype\":0,\"bleclass\":0,\"ble\":0}");
+                "\"iface\":0,\"channel\":0,\"alert\":0,\"rectype\":0,\"sys\":0,"
+                "\"bleclass\":0,\"ble\":0}");
     WT_HAS(out, "\"key_returns\":{\"global\":0,\"device\":0,\"host\":0,"
-                "\"iface\":0,\"channel\":0,\"alert\":0,\"rectype\":0,\"bleclass\":0,\"ble\":0}");
+                "\"iface\":0,\"channel\":0,\"alert\":0,\"rectype\":0,\"sys\":0,"
+                "\"bleclass\":0,\"ble\":0}");
     WT_HAS(out, "\"queue_rows\":0,\"queue_cap\":0,");
     WT_HAS(out, "\"queue_dropped\":0,\"churn_dropped\":0,");
     /* The ceiling's raised passes and the analysis state's measured size
@@ -487,6 +490,7 @@ static size_t sample_all_keys(long long now) {
                 : kc == WEB_KC_IFACE ? WEB_IFACE_KEYS
                 : kc == WEB_KC_CHANNEL ? WEB_CHANNEL_KEYS
                 : kc == WEB_KC_RECTYPE ? WEB_RECTYPE_KEYS
+                : kc == WEB_KC_SYS ? WEB_SYS_KEYS
                 : kc == WEB_KC_BLECLASS ? WEB_BLECLASS_KEYS : WEB_ALERT_KEYS;
         for (int i = 0; i < cap; i++) {
             switch (kc) {

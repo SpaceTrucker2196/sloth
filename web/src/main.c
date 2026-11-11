@@ -55,6 +55,7 @@ static web_ble_t      g_ble;
 static web_gnss_t     g_gnss;
 static web_adsb_t     g_adsb;
 static web_aprs_t     g_aprs;
+static web_sys_t      g_sys;
 static web_chain_t    g_chain;
 
 /* The store's BLE rows into the in-memory tables, before any thread
@@ -134,6 +135,7 @@ int main(int argc, char **argv) {
         web_gnss_init(&g_gnss) != 0 ||
         web_adsb_init(&g_adsb) != 0 ||
         web_aprs_init(&g_aprs) != 0 ||
+        web_sys_init(&g_sys) != 0 ||
         web_chain_init(&g_chain) != 0) {
         fprintf(stderr, "slothweb: time series: out of memory\n");
         return 1;
@@ -225,12 +227,14 @@ int main(int argc, char **argv) {
     web_server_set_gnss(&g_srv, &g_gnss);
     web_server_set_adsb(&g_srv, &g_adsb);
     web_server_set_aprs(&g_srv, &g_aprs);
+    web_server_set_sys(&g_srv, &g_sys);
     web_ingest_set_metrics(&g_ingest, &g_metrics);
     web_ingest_set_frrs(&g_ingest, &g_frrs);
     web_ingest_set_ble(&g_ingest, &g_ble);
     web_ingest_set_gnss(&g_ingest, &g_gnss);
     web_ingest_set_adsb(&g_ingest, &g_adsb);
     web_ingest_set_aprs(&g_ingest, &g_aprs);
+    web_ingest_set_sys(&g_ingest, &g_sys);
     web_ingest_set_chain(&g_ingest, &g_chain);
     if (web_tsdb_start(&g_tsdb, err, sizeof(err)) != 0 ||
         web_ingest_start(&g_ingest, &cfg.sock, cfg.sock_backoff_min_ms,
@@ -361,6 +365,7 @@ int main(int argc, char **argv) {
     web_gnss_destroy(&g_gnss);
     web_adsb_destroy(&g_adsb);
     web_aprs_destroy(&g_aprs);
+    web_sys_destroy(&g_sys);
     web_chain_destroy(&g_chain);
     web_rollup_destroy(&g_rollup);
     web_anomaly_destroy(&g_anomaly);

@@ -85,6 +85,7 @@ void run_rf_tests(void);
 void run_frrs_tests(void);
 void run_ble_tests(void);
 void run_gnss_tests(void);               /* tests/test_gnss.c (2026-11-02) */
+void run_sysstat_tests(void);            /* tests/test_sysstat.c (2026-11-11) */
 void run_adsb_tests(void);               /* tests/test_adsb.c (2026-11-05) */
 void run_aprs_tests(void);               /* tests/test_aprs.c (2026-11-05) */
 void run_radar_tests(void);              /* tests/test_radar.c (2026-11-06) */

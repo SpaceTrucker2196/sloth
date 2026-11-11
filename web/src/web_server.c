@@ -154,6 +154,10 @@ void web_server_set_aprs(web_server_t *s, web_aprs_t *a) {
     s->aprs = a;
 }
 
+void web_server_set_sys(web_server_t *s, web_sys_t *y) {
+    s->sys = y;
+}
+
 void web_server_stop(web_server_t *s) {
     char b = 1;
     ssize_t r = write(s->wake[1], &b, 1);
@@ -240,6 +244,7 @@ static void health_now(web_server_t *s, web_health_t *h) {
     h->gnss        = s->gnss;
     h->adsb        = s->adsb;
     h->aprs        = s->aprs;
+    h->sys         = s->sys;
     h->sql         = s->sql;
     h->sc          = NULL;    /* web_route() sets a request's own */
 }

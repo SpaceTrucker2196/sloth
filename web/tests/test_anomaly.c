@@ -223,6 +223,31 @@ static void test_a1_scores_no_rssi(void) {
     fx_done();
 }
 
+/* The sensor host's own readings are not network behaviour: the same
+ * sustained jump on a "sys" class gauge (a board warming up, a source's
+ * rate) opens nothing (web_sysstat.h: no rule was asked for over them).
+ * Seen red with the minute pass's WEB_KC_SYS test taken out. */
+static void test_a1_scores_no_sys(void) {
+    fx(0, NULL);
+    static const double C45[] = { 45, 45, 45 };
+    seed(WM_SYS_TEMP, "thermal_zone0", T0, C45, 3);
+    seed(WM_SRC_RATE, "monitor", T0, FIVE3, 3);
+    seed(WM_HOST_CONNS, "10.0.0.5", T0, FIVE3, 3);
+    step(T0);
+    for (int i = 0; i < 3; i++) {
+        long long t = T0 + i * 60;
+        gauge(WM_SYS_TEMP, "thermal_zone0", t, 95);
+        gauge(WM_SRC_RATE, "monitor", t, 500);
+        gauge(WM_HOST_CONNS, "10.0.0.5", t, 500);
+        step(t + 60);
+    }
+    WT_ASSERT(ep(WEB_ANOM_A1_RATE, "thermal_zone0")->state == WEB_EP_FREE);
+    WT_ASSERT(ep(WEB_ANOM_A1_RATE, "monitor")->state == WEB_EP_FREE);
+    /* The control: the same minutes on host.conns do open. */
+    WT_ASSERT(ep(WEB_ANOM_A1_RATE, "10.0.0.5")->state == WEB_EP_OPEN);
+    fx_done();
+}
+
 /* Two burst minutes are not three: nothing opens, and the builder is
  * dropped by the quiet minute after. Seen red with A1's streak at 2. */
 static void test_a1_two_minutes_never_open(void) {
@@ -1962,6 +1987,7 @@ static void test_a2_durable_first_seen(void) {
 void run_anomaly_tests(void) {
     WT_RUN(test_a1_fires_on_sustained_burst);
     WT_RUN(test_a1_scores_no_rssi);
+    WT_RUN(test_a1_scores_no_sys);
     WT_RUN(test_a1_two_minutes_never_open);
     WT_RUN(test_a1_gauge_gap_breaks_streak);
     WT_RUN(test_a1_quiet_jitter_fires_nothing);
