@@ -758,6 +758,16 @@ int web_sdb_adsb_track(web_sdb_conn_t *c, const char *hex, long long from,
     (void)c; (void)hex; (void)from; (void)max; (void)fn; (void)ctx;
     return -1;
 }
+int web_sdb_adsb_fleet(web_sdb_conn_t *c, long long from, long long pos_from,
+                       long long limit, web_sdb_acf_fn fn, void *ctx) {
+    (void)c; (void)from; (void)pos_from; (void)limit; (void)fn; (void)ctx;
+    return -1;
+}
+int web_sdb_adsb_positions(web_sdb_conn_t *c, long long from, long long max,
+                           web_sdb_apos_fn fn, void *ctx) {
+    (void)c; (void)from; (void)max; (void)fn; (void)ctx;
+    return -1;
+}
 int web_sdb_aprs_seen(web_sdb_conn_t *c, long long from, long long limit,
                       long long offset, const char *q, web_sdb_aprs_stn_fn fn,
                       void *ctx) {
@@ -3396,6 +3406,115 @@ int web_sdb_adsb_track(web_sdb_conn_t *c, const char *hex, long long from,
         p.lon = sqlite3_column_double(st, 13);
         p.has_rssi = sqlite3_column_type(st, 14) != SQLITE_NULL;
         p.rssi = sqlite3_column_double(st, 14);
+        n++;
+        if (fn(ctx, &p)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+/* The fleet's aircraft (#192 I7). The newest sighting's figures and
+ * the newest positioned one's, each by the (hex, last_seen) index. */
+int web_sdb_adsb_fleet(web_sdb_conn_t *c, long long from, long long pos_from,
+                       long long limit, web_sdb_acf_fn fn, void *ctx) {
+    static const char *const k[] = { "last_seen", "hex", "emergency", "on_ground",
+                                     "alt_baro", "alt_geom", "gs", "track", "lat",
+                                     "lon", "rssi", "messages", NULL };
+    static const char *const ka[] = { "hex", "first_seen", "last_seen", "visit_first",
+                                      "flight", "squawk", "category", "messages", NULL };
+    if (!have_all(c, "adsb_aircraft", ka) || !have_all(c, "adsb_sightings", k)) return 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT a.hex, a.first_seen, a.last_seen, a.visit_first, a.flight, a.squawk,"
+            " a.category, a.messages,"
+            " s.emergency, s.on_ground, s.alt_baro, s.alt_geom, s.gs, s.track, s.rssi,"
+            " s.messages, p.last_seen, p.lat, p.lon, p.alt_baro, p.alt_geom"
+            " FROM adsb_aircraft a"
+            " LEFT JOIN adsb_sightings s ON s.hex = a.hex AND s.last_seen ="
+            "  (SELECT max(last_seen) FROM adsb_sightings WHERE hex = a.hex)"
+            " LEFT JOIN adsb_sightings p ON p.hex = a.hex AND p.last_seen ="
+            "  (SELECT max(last_seen) FROM adsb_sightings WHERE hex = a.hex AND"
+            "   last_seen >= max(?3, a.visit_first) AND lat IS NOT NULL AND lon IS NOT NULL)"
+            " WHERE a.last_seen >= ?1 ORDER BY a.last_seen DESC, a.hex LIMIT ?2",
+            -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, limit);
+    sqlite3_bind_int64(st, 3, pos_from);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_acf_t a;
+        memset(&a, 0, sizeof(a));
+        text(st, 0, a.hex, sizeof(a.hex) - 1);
+        a.first_seen = sqlite3_column_int64(st, 1);
+        a.last_seen = sqlite3_column_int64(st, 2);
+        a.visit_first = sqlite3_column_int64(st, 3);
+        text(st, 4, a.flight, sizeof(a.flight) - 1);
+        text(st, 5, a.squawk, sizeof(a.squawk) - 1);
+        text(st, 6, a.category, sizeof(a.category) - 1);
+        text(st, 8, a.emergency, sizeof(a.emergency) - 1);
+        a.on_ground = sqlite3_column_int(st, 9);
+        if (sqlite3_column_type(st, 10) != SQLITE_NULL) {
+            a.has_alt = 1;
+            a.alt = sqlite3_column_int(st, 10);
+        } else if (sqlite3_column_type(st, 11) != SQLITE_NULL) {
+            a.has_alt = 1;
+            a.alt = sqlite3_column_int(st, 11);
+        }
+        a.has_gs = sqlite3_column_type(st, 12) != SQLITE_NULL;
+        a.gs = sqlite3_column_double(st, 12);
+        a.has_track = sqlite3_column_type(st, 13) != SQLITE_NULL;
+        a.track = sqlite3_column_double(st, 13);
+        a.has_rssi = sqlite3_column_type(st, 14) != SQLITE_NULL;
+        a.rssi = sqlite3_column_double(st, 14);
+        /* The sighting's own count, else the inventory's. */
+        int mc = sqlite3_column_type(st, 15) != SQLITE_NULL ? 15
+               : sqlite3_column_type(st, 7) != SQLITE_NULL ? 7 : -1;
+        a.has_messages = mc >= 0;
+        if (mc >= 0) a.messages = sqlite3_column_int64(st, mc);
+        if (sqlite3_column_type(st, 16) != SQLITE_NULL &&
+            sqlite3_column_type(st, 17) != SQLITE_NULL &&
+            sqlite3_column_type(st, 18) != SQLITE_NULL) {
+            a.has_pos = 1;
+            a.pos_ts = sqlite3_column_int64(st, 16);
+            a.lat = sqlite3_column_double(st, 17);
+            a.lon = sqlite3_column_double(st, 18);
+            int ac = sqlite3_column_type(st, 19) != SQLITE_NULL ? 19
+                   : sqlite3_column_type(st, 20) != SQLITE_NULL ? 20 : -1;
+            a.pos_alt_has = ac >= 0;
+            if (ac >= 0) a.pos_alt = sqlite3_column_int(st, ac);
+        }
+        n++;
+        if (fn(ctx, &a)) { rc = SQLITE_DONE; break; }
+    }
+    sqlite3_finalize(st);
+    return rc == SQLITE_DONE ? n : -1;
+}
+
+int web_sdb_adsb_positions(web_sdb_conn_t *c, long long from, long long max,
+                           web_sdb_apos_fn fn, void *ctx) {
+    static const char *const k[] = { "last_seen", "on_ground", "alt_baro", "alt_geom",
+                                     "lat", "lon", NULL };
+    if (!have_all(c, "adsb_sightings", k)) return 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(c->db,
+            "SELECT last_seen, lat, lon, alt_baro, alt_geom FROM adsb_sightings"
+            " WHERE last_seen >= ?1 AND lat IS NOT NULL AND lon IS NOT NULL"
+            " AND on_ground = 0 ORDER BY last_seen DESC LIMIT ?2", -1, &st, NULL) != SQLITE_OK)
+        return -1;
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, max);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        web_sdb_apos_t p;
+        memset(&p, 0, sizeof(p));
+        p.ts = sqlite3_column_int64(st, 0);
+        p.lat = sqlite3_column_double(st, 1);
+        p.lon = sqlite3_column_double(st, 2);
+        int ac = sqlite3_column_type(st, 3) != SQLITE_NULL ? 3
+               : sqlite3_column_type(st, 4) != SQLITE_NULL ? 4 : -1;
+        p.has_alt = ac >= 0;
+        if (ac >= 0) p.alt = sqlite3_column_int(st, ac);
         n++;
         if (fn(ctx, &p)) { rc = SQLITE_DONE; break; }
     }

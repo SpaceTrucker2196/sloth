@@ -17,8 +17,10 @@
 #include <unistd.h>
 
 #include "web_alertkb.h"
+#include "web_adsb.h"
 #include "web_ble.h"
 #include "web_bledev.h"
+#include "web_fleetadsb.h"
 #include "web_fleetgnss.h"
 #include "web_frrs.h"
 #include "web_gnss.h"
@@ -120,10 +122,27 @@ static const char *const M_END[] = {
     "fleet_end", "rows", "wifi", "ble", "ap", "probe", "alert", "verdict",
     "truncated_wifi", "truncated_ble", "truncated_ap", "truncated_probe",
     "truncated_alert", "truncated_verdict", "next_wifi", "next_ap", "next_alert",
-    "next_verdict", "gnss_event", "gnss_complete", "complete", NULL };
+    "next_verdict", "gnss_event", "gnss_complete", "aircraft", "truncated_aircraft",
+    "complete", NULL };
+/* This site's ADS-B receiver and its demonstrated coverage (#192 I7),
+ * for adsb=1 only: r<deg> the farthest position heard in the 30-degree
+ * sector from that bearing, n<deg> the positions in it. */
+static const char *const M_ADSBRX[] = {
+    "adsb_rx", "source", "state", "ts", "aircraft", "messages", "msg_rate",
+    "window_s", "positions", "cov_complete", "range_max_m",
+    "r000", "r030", "r060", "r090", "r120", "r150", "r180", "r210", "r240", "r270",
+    "r300", "r330",
+    "n000", "n030", "n060", "n090", "n120", "n150", "n180", "n210", "n240", "n270",
+    "n300", "n330", NULL };
+/* One aircraft this site's receiver heard (#192 I7), for adsb=1 only. */
+static const char *const M_AIRCRAFT[] = {
+    "aircraft", "hex", "flight", "squawk", "category", "emergency", "alt",
+    "on_ground", "gs", "track", "rssi", "messages", "lat", "lon", "pos_ts",
+    "pos_alt", "first_seen", "visit_first", "last_seen", NULL };
 
 const char *const *const web_fleet_members[] = {
     M_HDR, M_GNSS, M_WIFI, M_BLE, M_AP, M_PROBE, M_ALERT, M_VERDICT, M_END, M_GEV,
+    M_ADSBRX, M_AIRCRAFT,
 };
 const size_t web_fleet_members_n = sizeof(web_fleet_members) / sizeof(web_fleet_members[0]);
 
@@ -290,6 +309,7 @@ typedef struct {
     int       next;
     int       own;                   /* own=1: the header names this site's radios */
     int       gnss;                  /* gnss=1: the fix, the incidents (#192 I6) */
+    int       adsb;                  /* adsb=1: the receiver, the aircraft (#192 I7) */
     int       only;                  /* -1 every kind, else the page's WEB_FK_* */
     int       has_after;
     long long after_ts;
@@ -323,6 +343,7 @@ typedef struct {
     const char *own_csv;             /* this site's radios, for own=1 */
     int         gev_n, gev_cut;      /* gnss_event lines (gnss=1) */
     int         gev_all;             /* every one of the week's was read and sent */
+    int         ac_n, ac_cut;        /* aircraft lines (adsb=1) */
 } xp_t;
 
 static void set_cur(xp_t *x, int k, long long ts, const char *tok) {
@@ -636,6 +657,123 @@ static int xp_gev(void *ctx, const web_sdb_item_t *it) {
     return 0;
 }
 
+/* A line of an optional kind (adsb_rx, aircraft): taken back whole past
+ * the soft bound (*cut set, 1), left out when the importer would refuse
+ * it (0), -1 for an unlisted member. */
+static int opt_end(xp_t *x, size_t mark, const char *type, int *cut) {
+    web_jw_t *w = x->w;
+    web_jw_raw(w, "}");
+    if (w->overflow) {
+        if (w->len <= x->soft) return -1;
+        w->len = mark;
+        w->overflow = 0;
+        *cut = 1;
+        return 1;
+    }
+    if (!line_takes(x, mark, type)) { w->len = mark; return 0; }
+    web_jw_raw(w, "\n");
+    if (w->overflow || w->len > x->soft) {
+        w->len = mark;
+        w->overflow = 0;
+        *cut = 1;
+        return 1;
+    }
+    return 2;
+}
+
+/* The receiver (#192 I7): its summary and its demonstrated coverage
+ * from this site's position. c NULL: no coverage (sloth.db not open). */
+static int xp_adsb_rx(xp_t *x, struct web_adsb *a, web_sdb_conn_t *c, const web_loc_t *loc,
+                      long long now_s) {
+    web_fa_rx_t rx;
+    web_fa_rx_read(a, &rx);
+    web_fa_cov_t cov;
+    memset(&cov, 0, sizeof(cov));
+    if (c && loc->has) web_fa_cov_read(c, loc->lat, loc->lon, now_s, &cov);
+    if (!rx.seen && cov.n == 0) return 0;
+    web_jw_t *w = x->w;
+    size_t mark = w->len;
+    if (w->len > x->soft) return 0;
+    web_jw_raw(w, "{\"type\":\"adsb_rx\"");
+    jk(w, M_ADSBRX, "source");    jstr_or_null(w, rx.seen ? rx.source : NULL);
+    jk(w, M_ADSBRX, "state");     jstr_or_null(w, rx.seen ? rx.state : NULL);
+    jk(w, M_ADSBRX, "ts");
+    if (rx.seen && rx.ts > 0) web_jw_int(w, rx.ts); else web_jw_raw(w, "null");
+    jk(w, M_ADSBRX, "aircraft");
+    if (rx.seen) web_jw_int(w, rx.aircraft); else web_jw_raw(w, "null");
+    jk(w, M_ADSBRX, "messages");
+    if (rx.seen) web_jw_int(w, rx.messages); else web_jw_raw(w, "null");
+    jk(w, M_ADSBRX, "msg_rate");
+    if (rx.seen && rx.has_rate && isfinite(rx.rate)) jfix(w, rx.rate, 1);
+    else web_jw_raw(w, "null");
+    jk(w, M_ADSBRX, "window_s");     web_jw_int(w, WEB_FA_COV_WINDOW_S);
+    jk(w, M_ADSBRX, "positions");    web_jw_int(w, cov.n);
+    jk(w, M_ADSBRX, "cov_complete"); web_jw_raw(w, cov.complete ? "true" : "false");
+    jk(w, M_ADSBRX, "range_max_m");
+    if (cov.n > 0 && isfinite(cov.max_m)) jfix(w, cov.max_m, 0); else web_jw_raw(w, "null");
+    for (int k = 0; k < WEB_FA_SECTORS; k++) {
+        char nm[16];
+        snprintf(nm, sizeof(nm), "r%03d", k * WEB_FA_SECTOR_DEG);
+        jk(w, M_ADSBRX, nm);
+        if (cov.sec_n[k] > 0 && isfinite(cov.sec_m[k])) jfix(w, cov.sec_m[k], 0);
+        else web_jw_raw(w, "null");
+    }
+    for (int k = 0; k < WEB_FA_SECTORS; k++) {
+        char nm[16];
+        snprintf(nm, sizeof(nm), "n%03d", k * WEB_FA_SECTOR_DEG);
+        jk(w, M_ADSBRX, nm);
+        web_jw_int(w, cov.sec_n[k]);
+    }
+    int cut = 0;
+    return opt_end(x, mark, "adsb_rx", &cut) < 0 ? -1 : 0;
+}
+
+/* One aircraft (#192 I7). Each optional figure null when sloth.db holds
+ * none; a line the importer would refuse is left out and the kind
+ * marked truncated. */
+static int xp_ac(void *ctx, const web_sdb_acf_t *a) {
+    xp_t *x = ctx;
+    if (x->ac_n >= WEB_FA_CAP_AIRCRAFT) { x->ac_cut = 1; return 1; }
+    web_jw_t *w = x->w;
+    size_t mark = w->len;
+    if (w->len > x->soft) { x->ac_cut = 1; return 1; }
+    web_jw_raw(w, "{\"type\":\"aircraft\"");
+    jk(w, M_AIRCRAFT, "hex");       web_jw_str(w, a->hex);
+    jk(w, M_AIRCRAFT, "flight");    jstr_or_null(w, a->flight);
+    jk(w, M_AIRCRAFT, "squawk");    jstr_or_null(w, a->squawk);
+    jk(w, M_AIRCRAFT, "category");  jstr_or_null(w, a->category);
+    jk(w, M_AIRCRAFT, "emergency"); jstr_or_null(w, a->emergency);
+    jk(w, M_AIRCRAFT, "alt");
+    if (a->has_alt) web_jw_int(w, a->alt); else web_jw_raw(w, "null");
+    jk(w, M_AIRCRAFT, "on_ground"); web_jw_raw(w, a->on_ground ? "true" : "false");
+    jk(w, M_AIRCRAFT, "gs");
+    if (a->has_gs && isfinite(a->gs)) jfix(w, a->gs, 1); else web_jw_raw(w, "null");
+    jk(w, M_AIRCRAFT, "track");
+    if (a->has_track && isfinite(a->track)) jfix(w, a->track, 1); else web_jw_raw(w, "null");
+    jk(w, M_AIRCRAFT, "rssi");
+    if (a->has_rssi && isfinite(a->rssi)) jfix(w, a->rssi, 1); else web_jw_raw(w, "null");
+    jk(w, M_AIRCRAFT, "messages");
+    if (a->has_messages) web_jw_int(w, a->messages); else web_jw_raw(w, "null");
+    int pos = a->has_pos && isfinite(a->lat) && isfinite(a->lon);
+    jk(w, M_AIRCRAFT, "lat");
+    if (pos) jfix(w, a->lat, 5); else web_jw_raw(w, "null");
+    jk(w, M_AIRCRAFT, "lon");
+    if (pos) jfix(w, a->lon, 5); else web_jw_raw(w, "null");
+    jk(w, M_AIRCRAFT, "pos_ts");
+    if (pos) web_jw_int(w, a->pos_ts); else web_jw_raw(w, "null");
+    jk(w, M_AIRCRAFT, "pos_alt");
+    if (pos && a->pos_alt_has) web_jw_int(w, a->pos_alt); else web_jw_raw(w, "null");
+    jk(w, M_AIRCRAFT, "first_seen");  web_jw_int(w, a->first_seen);
+    jk(w, M_AIRCRAFT, "visit_first"); web_jw_int(w, a->visit_first);
+    jk(w, M_AIRCRAFT, "last_seen");   web_jw_int(w, a->last_seen);
+    int r = opt_end(x, mark, "aircraft", &x->ac_cut);
+    if (r < 0) return -1;
+    if (r == 0) { x->ac_cut = 1; return 0; }
+    if (r == 1) return 1;
+    x->ac_n++;
+    return 0;
+}
+
 static void xp_ble(xp_t *x, struct web_ble *ble, long long now_s) {
     web_ble_cand_t *cand = malloc(sizeof(*cand) * WEB_FLEET_CAP_BLE);
     if (!cand) { x->cut[WEB_FK_BLE] = 1; return; }
@@ -674,9 +812,9 @@ static int kind_of_word(const char *s, size_t n) {
     return -1;
 }
 
-/* since=EPOCH, next=1, own=1, gnss=1, kind=wifi|ap|alert|verdict,
+/* since=EPOCH, next=1, own=1, gnss=1, adsb=1, kind=wifi|ap|alert|verdict,
  * after=CURSOR (with kind), each at most once, nothing else. gnss=1
- * (#192 I6) the same way as own=1. own=1 (#192 I5) asks
+ * (#192 I6) and adsb=1 (#192 I7) the same way as own=1. own=1 (#192 I5) asks
  * for the header's own_macs: an older puller never sends it, so it never
  * meets a member it does not know, and an older export refuses it as an
  * unknown parameter, which the puller takes as "not offered". */
@@ -707,6 +845,9 @@ static int parse_query(const char *q, xq_t *x, const char **why) {
         } else if (kl == 4 && !strncmp(p, "gnss", 4) && !x->gnss) {
             if (vl != 1 || v[0] != '1') { *why = "bad_gnss"; return -1; }
             x->gnss = 1;
+        } else if (kl == 4 && !strncmp(p, "adsb", 4) && !x->adsb) {
+            if (vl != 1 || v[0] != '1') { *why = "bad_adsb"; return -1; }
+            x->adsb = 1;
         } else if (kl == 4 && !strncmp(p, "kind", 4) && !seen_kind) {
             seen_kind = 1;
             int k = kind_of_word(v, vl);
@@ -914,6 +1055,17 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
              * happened", and the importer takes coverage from this. */
             x.gev_all = gr >= 0 && !x.gev_cut && !c.timed_out;
         }
+        /* The receiver and its aircraft (#192 I7): adsb=1, the whole
+         * export only, the rows changed since `since` within the last
+         * WEB_FA_EXPORT_S. */
+        if (all && xq.adsb && !c.timed_out && !w.overflow) {
+            if (xp_adsb_rx(&x, src->adsb, &c, &loc, now_s) != 0) fault = 1;
+            long long from = now_s - WEB_FA_EXPORT_S;
+            if (since > from) from = since;
+            int ar = fault ? 0 : web_sdb_adsb_fleet(&c, from, 0, WEB_FA_CAP_AIRCRAFT + 1, xp_ac, &x);
+            if (ar == -1 && w.overflow) fault = 1;
+            if (ar < 0 || c.timed_out) x.ac_cut = 1;
+        }
         /* A read that ran out of budget is a cut, never an error: what
          * was read before it went out, and the cursor says where. */
         if (c.timed_out) {
@@ -923,6 +1075,9 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         }
     }
     if (have_c) web_slothdb_close(&c);
+    /* No sloth.db: the receiver's summary alone, no coverage. */
+    if (!have_c && all && xq.adsb && !fault && xp_adsb_rx(&x, src->adsb, NULL, &loc, now_s) != 0)
+        fault = 1;
     if (all && src->ble && !fault) xp_ble(&x, src->ble, now_s);
     if (WANT(WEB_FK_VERDICT) && src->frrs && !fault) {
         long long ats = -1, aid = 0;
@@ -987,6 +1142,12 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
         web_jw_int(&w, x.gev_n);
         jk(&w, M_END, "gnss_complete");
         web_jw_raw(&w, x.gev_all ? "true" : "false");
+    }
+    if (xq.adsb && all) {
+        jk(&w, M_END, "aircraft");
+        web_jw_int(&w, x.ac_n);
+        jk(&w, M_END, "truncated_aircraft");
+        web_jw_raw(&w, x.ac_cut ? "true" : "false");
     }
     jk(&w, M_END, "complete"); web_jw_raw(&w, "true");
     web_jw_raw(&w, "}\n");
@@ -1359,6 +1520,153 @@ static int state_word(const char *s) {
     return v >= 0 && v < WEB_TRI_COUNT;
 }
 
+/* An ICAO address as sloth spells it: six lower-case hex digits, '~'
+ * first for a non-ICAO one. */
+static int icao_ok(const char *h) {
+    size_t i = h[0] == '~' ? 1 : 0;
+    if (strlen(h) != i + 6) return 0;
+    for (; h[i]; i++)
+        if (!((h[i] >= '0' && h[i] <= '9') || (h[i] >= 'a' && h[i] <= 'f'))) return 0;
+    return 1;
+}
+
+/* A string member that is null or matches: printable ASCII of 1..max
+ * (callsign), exactly n octal digits (squawk), [A-D][0-7] (category). */
+static int v_print(const web_jrec_t *r, const char *k, size_t max, char *out, size_t cap) {
+    int g = v_str(r, k, max, out, cap);
+    if (g < 0) return -1;
+    for (const char *p = out; g == 1 && *p; p++)
+        if (*p < 0x20 || *p > 0x7e) return -1;
+    return g;
+}
+
+static int put_num(web_jw_t *w, int *fst, const char *k, int g, double v, int dp) {
+    if (g != 1) return 0;
+    ex_key(w, fst, k);
+    jfix(w, v, dp);
+    return 0;
+}
+
+/* An aircraft line (#192 I7): kind -3, keyed by its address; label the
+ * callsign, vendor the category, the rest into extra. */
+static int ac_row(const web_jrec_t *r, frow_t *o, web_jw_t *w, int *fst) {
+    o->kind = -3;
+    char hex[16], fl[16], sq[16], cat[16], em[16];
+    long long alt = 0, pts = 0, palt = 0, msgs = 0, vf = 0;
+    double gs, trk, rssi, lat, lon;
+    int ground = 0;
+    if (v_str(r, "hex", 7, hex, sizeof(hex)) != 1 || !icao_ok(hex) ||
+        !times_ok(r, &o->first, &o->last) ||
+        v_print(r, "flight", 8, fl, sizeof(fl)) < 0 ||
+        v_str(r, "squawk", 4, sq, sizeof(sq)) < 0 ||
+        v_str(r, "category", 2, cat, sizeof(cat)) < 0 ||
+        v_str(r, "emergency", 11, em, sizeof(em)) < 0 || v_bool(r, "on_ground", &ground) < 0)
+        return -1;
+    if (sq[0] && (strlen(sq) != 4 || strspn(sq, "01234567") != 4)) return -1;
+    if (cat[0] && (strlen(cat) != 2 || cat[0] < 'A' || cat[0] > 'D' || cat[1] < '0' ||
+                   cat[1] > '7'))
+        return -1;
+    if (em[0]) {
+        int e = 0;
+        while (e < WEB_ADSB_EMERG_COUNT && strcmp(em, web_adsb_emergency_name(e))) e++;
+        if (e == WEB_ADSB_EMERG_COUNT) return -1;
+    }
+    int galt = v_int(r, "alt", -2000, 100000, &alt);
+    int ggs = v_num(r, "gs", 0, 2000, &gs), gtr = v_num(r, "track", 0, 360, &trk);
+    int grs = v_num(r, "rssi", -100, 10, &rssi);
+    int gms = v_int(r, "messages", 0, 1LL << 50, &msgs);
+    int gla = v_num(r, "lat", -90, 90, &lat), glo = v_num(r, "lon", -180, 180, &lon);
+    int gpt = v_int(r, "pos_ts", 1, T_MAX, &pts), gpa = v_int(r, "pos_alt", -2000, 100000, &palt);
+    int gvf = v_int(r, "visit_first", 0, T_MAX, &vf);
+    if (galt < 0 || ggs < 0 || gtr < 0 || grs < 0 || gms < 0 || gla < 0 || glo < 0 ||
+        gpt < 0 || gpa < 0 || gvf < 0 || gla != glo || gla != gpt || (gpa == 1 && gla != 1) ||
+        (gvf == 1 && vf > o->last))
+        return -1;
+    snprintf(o->key, sizeof(o->key), "%s", hex);
+    snprintf(o->label, sizeof(o->label), "%s", fl);
+    snprintf(o->vendor, sizeof(o->vendor), "%s", cat);
+    if (grs == 1) {
+        o->has_rssi = 1;
+        o->rssi = (int)lround(rssi);
+    }
+    ex_begin(w, o->extra, sizeof(o->extra));
+    ex_key(w, fst, "visit_first"); web_jw_int(w, gvf == 1 ? vf : o->first);
+    ex_key(w, fst, "squawk");      jstr_or_null(w, sq);
+    ex_key(w, fst, "emergency");   jstr_or_null(w, em);
+    ex_key(w, fst, "on_ground");   web_jw_raw(w, ground ? "true" : "false");
+    if (galt == 1) { ex_key(w, fst, "alt"); web_jw_int(w, alt); }
+    put_num(w, fst, "gs", ggs, gs, 1);
+    put_num(w, fst, "track", gtr, trk, 1);
+    put_num(w, fst, "rssi", grs, rssi, 1);
+    if (gms == 1) { ex_key(w, fst, "messages"); web_jw_int(w, msgs); }
+    if (gla == 1) {
+        ex_key(w, fst, "lat");    jfix(w, lat, 5);
+        ex_key(w, fst, "lon");    jfix(w, lon, 5);
+        ex_key(w, fst, "pos_ts"); web_jw_int(w, pts);
+        if (gpa == 1) { ex_key(w, fst, "pos_alt"); web_jw_int(w, palt); }
+    }
+    return 0;
+}
+
+/* The receiver line (#192 I7): kind -4, key "receiver"; label the
+ * decoder's state, vendor its source kind, the figures and the coverage
+ * into extra. */
+static int rx_row(const web_jrec_t *r, frow_t *o, web_jw_t *w, int *fst) {
+    o->kind = -4;
+    char src[24], st[24];
+    long long ts = 0, ac = 0, msgs = 0, win = 0, npos = 0;
+    double rate, rmax;
+    int comp = 0;
+    if (v_str(r, "source", 15, src, sizeof(src)) < 0 || v_str(r, "state", 11, st, sizeof(st)) < 0)
+        return -1;
+    for (const char *p = src; *p; p++)
+        if (!((*p >= 'a' && *p <= 'z') || *p == '_')) return -1;
+    for (const char *p = st; *p; p++)
+        if (!((*p >= 'a' && *p <= 'z') || *p == '_')) return -1;
+    int gts = v_int(r, "ts", 1, T_MAX, &ts), gac = v_int(r, "aircraft", 0, 100000, &ac);
+    int gms = v_int(r, "messages", 0, 1LL << 50, &msgs), grt = v_num(r, "msg_rate", 0, 1e6, &rate);
+    int gmx = v_num(r, "range_max_m", 0, 2e6, &rmax);
+    if (gts < 0 || gac < 0 || gms < 0 || grt < 0 || gmx < 0 ||
+        v_int(r, "window_s", 1, 1000000, &win) != 1 ||
+        v_int(r, "positions", 0, 1000000000, &npos) != 1 || v_bool(r, "cov_complete", &comp) != 1)
+        return -1;
+    double sm[WEB_FA_SECTORS];
+    long long sn[WEB_FA_SECTORS];
+    int gsm[WEB_FA_SECTORS];
+    for (int k = 0; k < WEB_FA_SECTORS; k++) {
+        char kr[16], kn[16];
+        snprintf(kr, sizeof(kr), "r%03d", k * WEB_FA_SECTOR_DEG);
+        snprintf(kn, sizeof(kn), "n%03d", k * WEB_FA_SECTOR_DEG);
+        if ((gsm[k] = v_num(r, kr, 0, 2e6, &sm[k])) < 0 ||
+            v_int(r, kn, 0, 1000000000, &sn[k]) != 1)
+            return -1;
+    }
+    snprintf(o->key, sizeof(o->key), "receiver");
+    snprintf(o->label, sizeof(o->label), "%s", st);
+    snprintf(o->vendor, sizeof(o->vendor), "%s", src);
+    o->first = o->last = gts == 1 ? ts : 0;
+    ex_begin(w, o->extra, sizeof(o->extra));
+    ex_key(w, fst, "aircraft");
+    if (gac == 1) web_jw_int(w, ac); else web_jw_raw(w, "null");
+    ex_key(w, fst, "messages");
+    if (gms == 1) web_jw_int(w, msgs); else web_jw_raw(w, "null");
+    ex_key(w, fst, "msg_rate");
+    if (grt == 1) jfix(w, rate, 1); else web_jw_raw(w, "null");
+    ex_key(w, fst, "window_s");     web_jw_int(w, win);
+    ex_key(w, fst, "positions");    web_jw_int(w, npos);
+    ex_key(w, fst, "cov_complete"); web_jw_raw(w, comp ? "true" : "false");
+    put_num(w, fst, "range_max_m", gmx, rmax, 0);
+    for (int k = 0; k < WEB_FA_SECTORS; k++) {
+        char kr[16], kn[16];
+        snprintf(kr, sizeof(kr), "r%03d", k * WEB_FA_SECTOR_DEG);
+        snprintf(kn, sizeof(kn), "n%03d", k * WEB_FA_SECTOR_DEG);
+        put_num(w, fst, kr, gsm[k], sm[k], 0);
+        ex_key(w, fst, kn);
+        web_jw_int(w, sn[k]);
+    }
+    return 0;
+}
+
 /* One data line into a row. 0, or -1 with why. */
 static int row_of(const web_jrec_t *r, const char *type, frow_t *o, const char **why) {
     memset(o, 0, sizeof(o[0]));
@@ -1514,6 +1822,10 @@ static int row_of(const web_jrec_t *r, const char *type, frow_t *o, const char *
         ex_begin(&w, o->extra, sizeof(o->extra));
         ex_key(&w, &fst, "count"); web_jw_int(&w, count);
         ex_key(&w, &fst, "sev");   web_jw_int(&w, sev);
+    } else if (!strcmp(type, "aircraft")) {
+        if (ac_row(r, o, &w, &fst) != 0) return -1;
+    } else if (!strcmp(type, "adsb_rx")) {
+        if (rx_row(r, o, &w, &fst) != 0) return -1;
     } else {
         *why = "unknown_type";
         return -1;
@@ -1607,6 +1919,8 @@ typedef struct {
     long long gev;                   /* gnss_event lines (#192 I6) */
     int       has_gev_end;           /* the end line counted them */
     int       gev_complete;          /* and said they were all of them */
+    long long ac;                    /* aircraft lines (#192 I7) */
+    int       has_ac_end, ac_trunc;  /* the end line counted them; cut */
     int       has_gnss;              /* a gnss line, into gs */
     web_fg_sample_t gs;
     int       has_next[WEB_FK_COUNT];
@@ -1709,6 +2023,17 @@ static int check_line(void *ctx, const web_jrec_t *r, long long idx, const char 
             return -1;
         }
         k->gev_complete = k->has_gev_end && gc == 1;
+        /* The aircraft's count and cut, for adsb=1 only (#192 I7). */
+        int ga = v_int(r, "aircraft", 0, LLONG_MAX / 4, &v);
+        int at = 0, gt = v_bool(r, "truncated_aircraft", &at);
+        if (ga < 0 || (ga == 1 && v != k->ac) || (ga == 0 && k->ac > 0) || gt < 0 ||
+            (gt == 1) != (ga == 1)) {
+            snprintf(k->err, k->errsz, "the end line's aircraft count is not the "
+                     "lines sent: refused");
+            return -1;
+        }
+        k->has_ac_end = ga == 1;
+        k->ac_trunc = at;
         k->seen_end = 1;
         return 0;
     }
@@ -1724,6 +2049,10 @@ static int check_line(void *ctx, const web_jrec_t *r, long long idx, const char 
         k->data++;
     } else if (row.kind == -2) {
         k->gev++;
+    } else if (row.kind == -3) {
+        k->ac++;
+    } else if (row.kind == -4) {
+        /* the receiver: stored as it is */
     } else {
         gnss_sample(r, &k->gs);
         k->has_gnss = 1;
@@ -1739,6 +2068,7 @@ typedef struct {
     sqlite3_stmt *up;
     long long     rows;
     int           failed;
+    long long     gen;               /* the answer's clock */
 } put_t;
 
 static const char UPSERT_SQL[] =
@@ -1757,11 +2087,15 @@ static int put_line(void *ctx, const web_jrec_t *r, long long idx, const char *t
     frow_t row;
     const char *why;
     if (row_of(r, type, &row, &why) != 0) return -1;   /* checked already */
+    /* A receiver line with no summary (coverage alone): kept as of the
+     * answer, so the age bound does not take it at once. */
+    if (row.kind == -4 && row.last <= 0) row.first = row.last = p->gen;
     sqlite3_stmt *s = p->up;
     sqlite3_reset(s);
     sqlite3_bind_text(s, 1, p->peer, -1, SQLITE_STATIC);
     sqlite3_bind_text(s, 2, row.kind >= 0 ? KIND_WORD[row.kind]
-                            : row.kind == -2 ? "gnss_event" : "gnss", -1, SQLITE_STATIC);
+                            : row.kind == -2 ? "gnss_event" : row.kind == -3 ? "aircraft"
+                            : row.kind == -4 ? "adsb" : "gnss", -1, SQLITE_STATIC);
     sqlite3_bind_text(s, 3, row.key, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(s, 4, row.label, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(s, 5, row.vendor, -1, SQLITE_TRANSIENT);
@@ -1847,6 +2181,40 @@ static void bf_meta_read(sqlite3 *db, const char *peer, web_fleet_bf_t *bf) {
     sqlite3_finalize(s);
 }
 
+/* meta "fleet.adsb.<peer>": "<through> <cut>", the peer's clock at its
+ * newest answer that carried aircraft, and at its newest cut one (0
+ * none) (#192 I7, web_fleetadsb.h). */
+static int ac_meta_write(sqlite3 *db, const char *peer, const chk_t *k) {
+    char nm[96], v[64];
+    snprintf(nm, sizeof(nm), "fleet.adsb.%s", peer);
+    long long cut = 0;
+    sqlite3_stmt *s = NULL;
+    if (sqlite3_prepare_v2(db, "SELECT value FROM meta WHERE name=?1", -1, &s, NULL) != SQLITE_OK) {
+        sqlite3_finalize(s);
+        return -1;
+    }
+    sqlite3_bind_text(s, 1, nm, -1, SQLITE_TRANSIENT);
+    if (sqlite3_step(s) == SQLITE_ROW) {
+        const unsigned char *t = sqlite3_column_text(s, 0);
+        long long th = 0, cu = 0;
+        if (t && sscanf((const char *)t, "%lld %lld", &th, &cu) == 2 && cu > 0 && cu <= T_MAX)
+            cut = cu;
+    }
+    sqlite3_finalize(s);
+    if (k->ac_trunc) cut = k->hdr.generated;
+    snprintf(v, sizeof(v), "%lld %lld", k->hdr.generated, cut);
+    s = NULL;
+    int ok = sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO meta (name,value) VALUES (?1,?2)",
+                                -1, &s, NULL) == SQLITE_OK;
+    if (ok) {
+        sqlite3_bind_text(s, 1, nm, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(s, 2, v, -1, SQLITE_TRANSIENT);
+        ok = sqlite3_step(s) == SQLITE_DONE;
+    }
+    sqlite3_finalize(s);
+    return ok ? 0 : -1;
+}
+
 static int store_answer(web_fleet_t *f, const web_fleet_peer_cfg_t *pc, const chk_t *k,
                         const char *body, size_t len, web_jrec_t *rec, long long now_s,
                         int page, const web_fleet_bf_t *bf, char *err, size_t errsz) {
@@ -1859,6 +2227,7 @@ static int store_answer(web_fleet_t *f, const web_fleet_peer_cfg_t *pc, const ch
     memset(&p, 0, sizeof(p));
     p.f = f;
     p.peer = pc->name;
+    p.gen = k->hdr.generated;
     long long nl;
     char e2[WEB_FLEET_ERR_MAX + 1];
     int ok = sqlite3_prepare_v2(db, UPSERT_SQL, -1, &p.up, NULL) == SQLITE_OK &&
@@ -1907,6 +2276,17 @@ static int store_answer(web_fleet_t *f, const web_fleet_peer_cfg_t *pc, const ch
              run1(db, "DELETE FROM peer_sightings WHERE rowid IN (SELECT rowid FROM"
                       " peer_sightings WHERE peer=?1 ORDER BY last_seen DESC, rowid DESC"
                       " LIMIT -1 OFFSET ?2)", pc->name, WEB_FLEET_ROWS_PER_PEER) == 0;
+    /* The aircraft (#192 I7): kept WEB_FA_KEEP_S and at most
+     * WEB_FA_ROWS_PER_PEER, so a busy sky never crowds the other kinds;
+     * and the peer's clock at this answer, and at its newest cut one. */
+    if (ok)
+        ok = run1(db, "DELETE FROM peer_sightings WHERE peer=?1 AND kind='aircraft' AND"
+                      " last_seen<?2", pc->name, k->hdr.generated - WEB_FA_KEEP_S) == 0 &&
+             run1(db, "DELETE FROM peer_sightings WHERE rowid IN (SELECT rowid FROM"
+                      " peer_sightings WHERE peer=?1 AND kind='aircraft' ORDER BY last_seen"
+                      " DESC, rowid DESC LIMIT -1 OFFSET ?2)", pc->name,
+                  WEB_FA_ROWS_PER_PEER) == 0;
+    if (ok && page < 0 && k->has_ac_end) ok = ac_meta_write(db, pc->name, k) == 0;
     /* The backfill's state commits with the rows it follows. */
     if (ok) ok = bf_meta_write(db, pc->name, bf) == 0;
     if (ok) ok = sqlite3_exec(db, "COMMIT", NULL, NULL, NULL) == SQLITE_OK;
@@ -2126,50 +2506,37 @@ int web_fleet_pull_one(web_fleet_t *f, int i, long long now_s) {
          * asked again without it, and not asked with it for
          * WEB_FLEET_NONEXT_S, so a fleet is upgraded a host at a time.
          * Its answers carry no cursor, so nothing is backfilled from it
-         * until it is upgraded. */
-        /* own=1 the same way (#192 I5): an F2 export refuses it, so it
-         * is asked again with next=1 alone, and not asked with own=1 for
-         * WEB_FLEET_NOOWN_S. */
-        /* gnss=1 the same way again (#192 I6): an I5 export refuses it,
-         * so it is asked again with next=1&own=1, and not asked with
-         * gnss=1 for WEB_FLEET_NOGNSS_S. */
+         * until it is upgraded. own=1 the same way (#192 I5, an F2
+         * export refuses it; WEB_FLEET_NOOWN_S), gnss=1 (#192 I6, an I5
+         * export; WEB_FLEET_NOGNSS_S) and adsb=1 (#192 I7, an I6 export;
+         * WEB_FA_NOADSB_S): each refusal drops the newest flag and asks
+         * again, down to since= alone. */
+        static const char *const LEVEL_Q[5] = {
+            "since=%lld", "since=%lld&next=1", "since=%lld&next=1&own=1",
+            "since=%lld&next=1&own=1&gnss=1", "since=%lld&next=1&own=1&gnss=1&adsb=1",
+        };
         pthread_mutex_lock(&f->mu);
-        int plain = p->no_next_until > now_s;
-        int noown = plain || p->no_own_until > now_s;
-        int nognss = noown || p->no_gnss_until > now_s;
+        int lv = p->no_next_until > now_s ? 0 : p->no_own_until > now_s ? 1
+               : p->no_gnss_until > now_s ? 2 : p->no_adsb_until > now_s ? 3 : 4;
         pthread_mutex_unlock(&f->mu);
-        char q[64];
-        snprintf(q, sizeof(q), plain ? "since=%lld" : noown ? "since=%lld&next=1"
-                               : nognss ? "since=%lld&next=1&own=1"
-                                        : "since=%lld&next=1&own=1&gnss=1", since);
-        int unk = 0;
-        int g = http_get(f, &p->cfg, q, &body, &len, err, sizeof(err), &unk);
-        if (g != 0 && unk && !nognss) {
-            nognss = 1;
+        char q[96];
+        int g;
+        for (;;) {
+            snprintf(q, sizeof(q), LEVEL_Q[lv], since);
+            int unk = 0;
+            g = http_get(f, &p->cfg, q, &body, &len, err, sizeof(err), lv > 0 ? &unk : NULL);
+            if (g == 0 || !unk || lv == 0) break;
             pthread_mutex_lock(&f->mu);
-            p->no_gnss_until = now_s + WEB_FLEET_NOGNSS_S;
+            long long until = now_s + (lv == 4 ? WEB_FA_NOADSB_S : lv == 3 ? WEB_FLEET_NOGNSS_S
+                                       : lv == 2 ? WEB_FLEET_NOOWN_S : WEB_FLEET_NONEXT_S);
+            if (lv == 4) p->no_adsb_until = until;
+            else if (lv == 3) p->no_gnss_until = until;
+            else if (lv == 2) p->no_own_until = until;
+            else p->no_next_until = until;
             pthread_mutex_unlock(&f->mu);
-            snprintf(q, sizeof(q), "since=%lld&next=1&own=1", since);
-            unk = 0;
-            g = http_get(f, &p->cfg, q, &body, &len, err, sizeof(err), &unk);
+            lv--;
         }
-        if (g != 0 && unk && !noown) {
-            noown = 1;
-            pthread_mutex_lock(&f->mu);
-            p->no_own_until = now_s + WEB_FLEET_NOOWN_S;
-            pthread_mutex_unlock(&f->mu);
-            snprintf(q, sizeof(q), "since=%lld&next=1", since);
-            unk = 0;
-            g = http_get(f, &p->cfg, q, &body, &len, err, sizeof(err), &unk);
-        }
-        if (g != 0 && unk && !plain) {
-            plain = 1;
-            pthread_mutex_lock(&f->mu);
-            p->no_next_until = now_s + WEB_FLEET_NONEXT_S;
-            pthread_mutex_unlock(&f->mu);
-            snprintf(q, sizeof(q), "since=%lld", since);
-            g = http_get(f, &p->cfg, q, &body, &len, err, sizeof(err), NULL);
-        }
+        int plain = lv == 0;
         if (g == 0)
             rc = ingest(f, i, body, len, now_s, 1, -1, since, &rows, &remote, err, sizeof(err));
         if (rc == 0 && plain) skip_pages = 1;
@@ -2743,6 +3110,9 @@ int web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const c
     /* The compact GNSS verdicts (#192 I6, web_fleetgnss.h). */
     web_jw_raw(&w, ",\"gnss\":");
     web_fg_overview_json(f, src, now_s, &w);
+    /* The compact aircraft verdicts (#192 I7, web_fleetadsb.h). */
+    web_jw_raw(&w, ",\"aircraft\":");
+    web_fa_overview_json(f, src, now_s, &w);
     /* Every pair of sites with a position, this one named "self". */
     web_jw_raw(&w, ",\"distances\":[");
     int nd = 0;

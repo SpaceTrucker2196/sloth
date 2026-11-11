@@ -28,7 +28,11 @@ each receiver calibrated by another site's own radio when it hears one;
 I6 compares the sites' GNSS receivers (`/api/fleet/gnss`): each GNSS
 event classified regional, local or undetermined, the baseline between
 two static sites against its bound, and a clock step named to its site;
-the other inferences across sites (F3, I7) come next.
+I7 compares the sites' ADS-B receivers (`/api/fleet/aircraft`): each
+aircraft confirmed, unconfirmed (a second receiver that demonstrably
+hears that sector did not hear it), out of that receiver's coverage, or
+undetermined, which is every aircraft while the fleet has one receiver;
+the identity inferences across sites (F3) come next.
 
 **Sources**: `web/src/web_fleet.h`, `web/src/web_fleet.c` (the export,
 the member allow-list, the HTTP/1.1 client, the ingest and its checks,
@@ -44,8 +48,11 @@ health member), `web/src/web_frrs.c` (`web_frrs_verdicts()`),
 `src/rf_model.c` (the path-loss model both sloth and slothweb link),
 `web/src/web_fleetgnss.h`, `web/src/web_fleetgnss.c` (I6),
 `web/src/web_slothdb.c` (`web_sdb_gnss_incidents()`), `web/src/web_gnss.c`
-(`web_gnss_fleet()`),
+(`web_gnss_fleet()`), `web/src/web_fleetadsb.h`, `web/src/web_fleetadsb.c`
+(I7), `web/src/web_slothdb.c` (`web_sdb_adsb_fleet()`,
+`web_sdb_adsb_positions()`),
 `web/tests/test_fleet.c`, `web/tests/test_locate.c`, `web/tests/test_fleetgnss.c`,
+`web/tests/test_fleetadsb.c`,
 `web/tests/test_store.c`
 (`test_v7_file_is_migrated`), `web/README.md` ("Fleet"),
 [ADR 0008](adr/0008-own-fleet.md), [ADR 0006](adr/0006-sharing-is-opt-in.md),
@@ -56,9 +63,13 @@ ITU-R P.1238-10 eq. (1), Tables 2 and 4, through
 error); for I6 `research/gnss/jamming-detection.md`,
 `research/gnss/spoofing-detection.md`,
 `research/gnss/time-and-position-integrity.md` and
-`docs/wiki/alert-assessments/GNSS_*.md`.
+`docs/wiki/alert-assessments/GNSS_*.md`; for I7
+`research/adsb/multi-receiver-verification.md` (Strohmeier, Lenders and
+Martinovic's ADS-B security survey, section V-F; the 4/3-earth radio
+horizon) and `research/adsb/emergency-squawks.md` (ADS-B carries no
+authentication).
 
-**Last updated**: 2026-11-11 (#192 I6 review: no quiet peer before a pull past the window's end; a span never bridged across a sample that was not observing; `rx` only with the drop test's history; the sample events kept for the week across a restart; a sample event never quiet on incidents alone; `gnss_complete`, so a pre-v11 `sloth.db`, a timeout or the cap is no coverage; an eph of 0 no bound; the UI's "local" worded as seen at one site while the others watched); 2026-11-11 (#192 I6: GNSS regional or local, the baseline and clock checks, `/api/fleet/gnss`, the export's `gnss=1`, `--peer-gnss-region-km`, the Fleet tab's GNSS panel); 2026-11-11 (#192 I5 review: the least-squares fix damped and refused when unsettled; `nearest` with its difference's sigma and `within_band`; the export's probe reading only within 120 s of its row and not on 5 or 6 GHz; a 5 GHz probe no calibration link and modelled at 5 GHz; an address two sites claim no link); 2026-11-11 (#192 I5: locating emitters from two or more sites' signal strength, `/api/fleet/locate`, the own-radio calibration and `own=1`, the overview's `calibration`, the map's located emitters and metre scale; a stored 0 dBm is no reading, and an ARP-only device takes its probe reading); 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
+**Last updated**: 2026-11-11 (#192 I7: aircraft across the sites, the export's `adsb=1` (`adsb_rx`, `aircraft` lines), peer_sightings kinds `aircraft` and `adsb`, `/api/fleet/aircraft`, the overview's `aircraft`, the Fleet tab's aircraft panel with each receiver's coverage plot); 2026-11-11 (#192 I6 review: no quiet peer before a pull past the window's end; a span never bridged across a sample that was not observing; `rx` only with the drop test's history; the sample events kept for the week across a restart; a sample event never quiet on incidents alone; `gnss_complete`, so a pre-v11 `sloth.db`, a timeout or the cap is no coverage; an eph of 0 no bound; the UI's "local" worded as seen at one site while the others watched); 2026-11-11 (#192 I6: GNSS regional or local, the baseline and clock checks, `/api/fleet/gnss`, the export's `gnss=1`, `--peer-gnss-region-km`, the Fleet tab's GNSS panel); 2026-11-11 (#192 I5 review: the least-squares fix damped and refused when unsettled; `nearest` with its difference's sigma and `within_band`; the export's probe reading only within 120 s of its row and not on 5 or 6 GHz; a 5 GHz probe no calibration link and modelled at 5 GHz; an address two sites claim no link); 2026-11-11 (#192 I5: locating emitters from two or more sites' signal strength, `/api/fleet/locate`, the own-radio calibration and `own=1`, the overview's `calibration`, the map's located emitters and metre scale; a stored 0 dBm is no reading, and an ARP-only device takes its probe reading); 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
 
 ## What travels, and what never does
 
@@ -657,6 +668,147 @@ beta-site's is ntpsec over the network pool only (its selected source a
 stratum-1 PPS server, no refclock), so the two clocks are independent
 and the skew compares a GNSS-steered clock with a network one.
 
+## Aircraft across the sites (I7)
+
+One ADS-B receiver cannot tell a real aircraft from one a transmitter
+injected: ADS-B carries no authentication
+(`research/adsb/emergency-squawks.md`). Two can check each other in the
+coarsest way the literature lists, presence: an aircraft one receiver
+places well inside the area a second receiver demonstrably hears, which
+the second, hearing other aircraft at the time, never heard, is a
+plausibility red flag (Strohmeier, Lenders and Martinovic, section V-F:
+"Investigating airplanes which suddenly appear well within the maximum
+communication range of a receiver", and a per-station map of where it
+hears aircraft; `research/adsb/multi-receiver-verification.md`). Never a
+detection: terrain, buildings and the antenna shadow a receiver, and a
+weak transponder is heard shorter than the strongest one that set a
+sector's reach.
+
+**What travels.** With `adsb=1` (asked for only, like `gnss=1`; an I6
+export refuses it, and the puller asks again with `gnss=1` and not with
+`adsb=1` for the hour) the whole export adds:
+
+- one `adsb_rx` line, this site's receiver: the decoder's source kind
+  (`file`, never its path) and state, aircraft and message counts and
+  messages/s between two summaries, and its **demonstrated coverage**:
+  every airborne position `sloth.db` holds from the last 24 h, measured
+  from the site's own position (the header's), as the farthest in each
+  30-degree sector (`r000` .. `r330`, metres) with the positions counted
+  (`n000` .. `n330`), and overall. A position beyond the horizon of an
+  aircraft at 50,000 ft (521 km from a 10 m antenna) is no line-of-sight
+  decode and is not counted, so a ghost far out cannot inflate it;
+- one `aircraft` line per `adsb_aircraft` row changed since `since`
+  within the last 6 h, newest first, at most 1,000: the ICAO address,
+  callsign, squawk, category, emergency word, the newest altitude, ground
+  speed, track, RSSI and messages, the newest position of the current
+  visit with its time and altitude, and first seen, the visit's start
+  and last seen. Each held to the importer's own checks first (an address
+  of six lower-case hex digits, `~` first for a non-ICAO one; a squawk of
+  four octal digits; a category A0..D7; one of sloth's eight emergency
+  words; every number in range and finite);
+- on the end line, `aircraft` (the lines sent) and `truncated_aircraft`.
+
+No cursor and no backfill: the comparison needs the last two hours,
+which at beta-site's measured rate (1,047 aircraft in 24 h) is far below
+the cap; a cut answer instead makes its site undetermined over the time
+it covered.
+
+**The store.** `peer_sightings` kind `aircraft` (key the address, label
+the callsign, vendor the category, `extra` the rest) and kind `adsb` (key
+`receiver`), upserted like every kind (earliest first seen, newest last
+seen); kept two days and at most 3,000 aircraft rows a peer by the
+peer's clock, so a busy sky never crowds the other kinds out. `meta`
+`fleet.adsb.<peer>` holds the peer's clock at its newest answer that
+carried aircraft and at its newest cut one. No schema step.
+
+**The comparison** (`web_fa_classify()`), per address over the last two
+hours, every time in this site's clock (a peer's less its skew):
+
+- `confirmed`: two receivers heard it at overlapping times, each
+  receiver's [visit start, last seen + 300 s] within 120 s of the
+  other's. 300 s is sloth's ADS-B write heartbeat (`src/db.c`): a
+  receiver still hearing an aircraft writes it at least that often.
+- `unconfirmed`: the reporting receiver's newest position (at time t)
+  lies within 0.8 of a second receiver B's farthest decoded position in
+  that bearing sector, the sector holding at least 10 positions, and
+  within 0.8 of the radio horizon between B's antenna and the aircraft,
+  d = 4.12 (sqrt h_rx + sqrt h_ac) km (the 4/3-earth line-of-sight
+  distance; h_rx taken as 10 m, h_ac as the altitude less B's); and B
+  was answering (its data complete past t + 120 s, its writer's 30 s lag
+  allowed), not cut, hearing at least two other aircraft within
+  [t - 120, t + 120], and had not heard the address since before
+  t - 120 - 300 s.
+- `out_of_peer_coverage`: the same, but the position lies beyond that
+  for every such B, or in a sector B never showed 10 positions in.
+- `undetermined`, with the reason: `single_receiver` (fewer than two
+  receivers: every aircraft, today), `no_position`, `no_altitude` (or on
+  the ground), and for B `pending` (no data past the window yet),
+  `answer_cut`, `not_receiving`, `heard_later` (B's newest visit started
+  after the window, so its earlier hearing cannot be ruled out).
+
+Never a false `unconfirmed` by construction: every reason B might have
+heard the aircraft without the data showing it reads `undetermined`;
+the tests build each one and watch the guard's removal turn it
+`unconfirmed`.
+
+Separately, two receivers' positions for one address at most 600 s
+apart that are further apart than the aircraft could fly between them
+(its reported ground speed x 1.25 + 30 m/s, else 340 m/s, times the gap,
+plus 2 km) are flagged `inconsistent`: the survey's "mobility grade
+threshold" across receivers.
+
+**The thresholds are choices with no source**: the survey does not
+quantify "well within". 0.8 keeps the test off the edge of what B was
+seen to reach; 10 positions a sector over 24 h keeps one lucky decode
+from defining a sector; two other aircraft is the least evidence B was
+receiving; 30-degree sectors are coarse enough to fill in a day at
+beta-site's rate; 10 m for the antenna because sloth knows no antenna
+height. The route's `basis` says so.
+
+**`GET /api/fleet/aircraft?limit=N`** (100, 1..500; GET only): `local`
+(this site's `sloth.db`: `open`, `none`, `unavailable`, `partial`),
+`store`, `receivers`, `single_receiver`, the constants (`window_s`,
+`heartbeat_s`, `list_s`, `cov_window_s`, `k`, `rx_agl_m`, `sector_min`,
+`health_min`); `sites` (each: `receiver`, the decoder's `source`,
+`state`, `summary_age_s`, `fresh`, `aircraft_now`, `messages`,
+`msg_rate`, the position, `skew_s`, `through_age_s`, `cut_age_s`,
+`held`, `positions`, `cov_complete`, `range_max_m` and `sectors`, twelve
+`{from, max_m, n}`); `counts` by verdict and `inconsistent`; `aircraft`,
+unconfirmed first, then inconsistent, then the most recently heard (each:
+`hex`, `flight`, `squawk`, `category`, `emergency`, `alt`, `gs`, `track`,
+`lat`, `lon`, `pos_ts`, `last_seen`, `verdict`, `why`, `ref` (the site
+whose position was tested), `inconsistent` with `separation_m` and
+`allowed_m`, `seen` per site (`first_seen`, `visit_first`, `last_seen`,
+`rssi`, `messages`, `pos`, `range_m`), `peers` per other receiver
+(`state`: `heard`, `should_have_heard`, `outside_coverage`,
+`no_coverage`, `pending`, `answer_cut`, `not_receiving`, `heard_later`,
+`no_position`, `no_altitude`; `dist_m`, `sector_max_m`, `horizon_m`));
+`total`, `partial`, and `basis`. Every number is finite or null.
+`/api/fleet/overview` gains `aircraft`: `receivers`, `single_receiver`,
+the aircraft compared and the `counts`.
+
+**The Fleet tab** gains "aircraft across the sites" after the GNSS
+panel: a card per receiver (decoder state, aircraft and messages/s now,
+coverage positions and the farthest, how old its data is) with a polar
+plot of its coverage, north up, each sector drawn out to its farthest
+decode scaled to the farthest of all; and a row per aircraft with what
+was reported and by whom, the sites that heard it, the verdict (its
+basis on hover) and each other receiver's state. With one receiver the
+note says every aircraft is undetermined until a second site decodes
+ADS-B.
+
+**At W9FJC and beta-site** (measured 2026-11-11 from beta-site's own
+`/api/adsb/seen` and `/api/adsb/aircraft`, before this build ran there):
+beta-site's readsb heard 1,047 aircraft in 24 h, 867 of them with a
+position, 8,327 positions in all; the farthest 80.6 km (bearing
+240-270), the sectors from north clockwise 37.2, 43.1, 45.5, 68.5, 78.4,
+58.2, 49.7, 64.5, 80.6, 60.3, 32.2 and 22.2 km, every sector above 190
+positions. W9FJC has no ADS-B receiver (owner ruling: GPS, Wi-Fi and BLE
+only), so the fleet has one receiver and every aircraft reads
+`undetermined` (`single_receiver`): the cross-check is built and tested
+on synthetic two-receiver data and is honestly inert until a second
+site runs `--adsb`.
+
 ## Related pages
 
 - [ADR 0008 — own fleet](adr/0008-own-fleet.md)
@@ -665,5 +817,6 @@ and the skew compares a GNSS-steered clock with a network one.
 - [[location]] — the sensor positions the site block carries.
 - [[rf-distance]] — the single-sensor RSSI distance whose model I5 uses.
 - [[gnss]] — the receiver summary.
+- [[adsb]] — the receiver the aircraft cross-check (I7) compares.
 - [[data-socket-exposure]] — the other network surface and its rules.
 - [[threat-model]]

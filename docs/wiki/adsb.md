@@ -66,7 +66,7 @@ and Mode S surveillance, whose example messages are the known-answer
 tests. ICAO Annex 10 Vol. IV and RTCA DO-260B were **not** read; what
 is said here of them comes through those two.
 
-**Last updated**: 2026-11-09 (#186: `--adsb beast://`, the decoder's Beast output, decoded in sloth: CRC, ghost suppression, CPR, the TC 28 emergency word); 2026-11-09 (#186: `--adsb sbs://`, the decoder's SBS output, loopback, read-only; the `AF_INET` drop-in note); 2026-11-08 (#186: `ADSB_EMERGENCY`, flag only; slothweb's ADS-B tab marks an aircraft with an open one; the `packaging/` note on `/run/readsb`); 2026-11-07 (the `[^]` TUI aircraft view, the `adsb` health-strip token, and `gps_bearing_deg()` beside `gps_distance_m()`); 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
+**Last updated**: 2026-11-11 (#192 I7: the owner's fleet compares its ADS-B receivers, `/api/fleet/aircraft`, [[fleet]]); 2026-11-09 (#186: `--adsb beast://`, the decoder's Beast output, decoded in sloth: CRC, ghost suppression, CPR, the TC 28 emergency word); 2026-11-09 (#186: `--adsb sbs://`, the decoder's SBS output, loopback, read-only; the `AF_INET` drop-in note); 2026-11-08 (#186: `ADSB_EMERGENCY`, flag only; slothweb's ADS-B tab marks an aircraft with an open one; the `packaging/` note on `/run/readsb`); 2026-11-07 (the `[^]` TUI aircraft view, the `adsb` health-strip token, and `gps_bearing_deg()` beside `gps_distance_m()`); 2026-11-05 (`--db`: schema v12, `adsb_aircraft` and `adsb_sightings`; slothweb's "aircraft seen" history and each aircraft's recorded track and altitude profile); 2026-11-05 (slothweb: the ADS-B tab and `/api/adsb`, `web/src/web_adsb.c`, `web/ui/adsb.js`); 2026-11-05 (review: a file already stale when first read is `stale` and takes no rows; the help names `beast://`); 2026-11-05 (slice 1 shipped: feed, state, JSONL).
 
 ---
 
@@ -503,6 +503,16 @@ within its band and cell, not the decoder's latest second. The SDR is a
 passive radio, so the records are Monitor's, as BLE's are; under Local
 the tab shows its scope note. Full description in
 [`web/README.md`](../../web/README.md#ads-b).
+
+Across the owner's sensors (#192 I7, [[fleet]] "Aircraft across the
+sites"), each slothweb exports its receiver's summary, its demonstrated
+coverage (the farthest position decoded in each 30-degree sector over a
+day) and the aircraft it heard, and `/api/fleet/aircraft` classifies
+each aircraft as confirmed by two receivers, unconfirmed (inside a
+second receiver's demonstrated coverage and horizon while it heard
+others, yet never heard), out of that receiver's coverage, or
+undetermined; with one receiver in the fleet, as in 2026-11, every
+aircraft is undetermined.
 
 ## `--db`: `adsb_aircraft` and `adsb_sightings` (schema v12)
 

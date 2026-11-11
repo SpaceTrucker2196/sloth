@@ -45,6 +45,16 @@
 .fleet-v.regional { color: var(--data); }
 .fleet-v.local { color: var(--sev-warn); }
 .fleet-v.undetermined { color: var(--muted); }
+.fleet-polar { display: block; width: 150px; height: 150px; margin: 4px 0; }
+.fleet-polar .fleet-pring { fill: none; stroke: var(--rule); stroke-width: 1; }
+.fleet-polar .fleet-pcov { fill: var(--data); fill-opacity: 0.25; stroke: var(--data); stroke-width: 1; }
+.fleet-polar .fleet-pself { fill: var(--signal); }
+.fleet-polar .fleet-pt { fill: var(--muted); font-size: 10px; text-anchor: middle; }
+.fleet-ac { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(150px, 1.3fr) minmax(170px, 1.5fr) minmax(130px, 1fr) minmax(200px, 2fr); gap: 0 8px; font-size: 12px; padding: 3px 0 3px 4px; border-bottom: 1px dotted var(--rule); min-width: 700px; }
+.fleet-ac.dhead { opacity: 0.7; }
+.fleet-v.confirmed { color: var(--data); }
+.fleet-v.unconfirmed { color: var(--sev-warn); }
+.fleet-v.out_of_peer_coverage { color: var(--muted); }
 @media (max-width: 480px) {
   .fleet-gauge { grid-template-columns: 1fr; gap: 2px 0; padding: 4px 0; }
   .fleet-lane { height: 14px; }

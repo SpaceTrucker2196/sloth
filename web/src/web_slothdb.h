@@ -791,6 +791,39 @@ typedef int (*web_sdb_apt_fn)(void *ctx, const web_sdb_apt_t *p);
 int  web_sdb_adsb_track(web_sdb_conn_t *c, const char *hex, long long from,
                         int max, web_sdb_apt_fn fn, void *ctx);
 
+/* The fleet's aircraft (#192 I7, web_fleetadsb.h): each adsb_aircraft
+ * row last seen at or after `from`, newest first, at most limit, with
+ * its current visit's start, the figures of its newest sighting and the
+ * newest sighting of the current visit that held a position (and at or
+ * after pos_from). */
+typedef struct {
+    char      hex[8];
+    long long first_seen, last_seen, visit_first;
+    char      flight[9], squawk[5], category[3], emergency[12];
+    int       has_alt, alt;              /* the newest sighting's, ft */
+    int       on_ground;
+    int       has_gs, has_track, has_rssi, has_messages;
+    double    gs, track, rssi;
+    long long messages;
+    int       has_pos, pos_alt_has, pos_alt;
+    double    lat, lon;
+    long long pos_ts;
+} web_sdb_acf_t;
+typedef int (*web_sdb_acf_fn)(void *ctx, const web_sdb_acf_t *a);
+int  web_sdb_adsb_fleet(web_sdb_conn_t *c, long long from, long long pos_from,
+                        long long limit, web_sdb_acf_fn fn, void *ctx);
+/* Every airborne sighting with a position at or after `from`, at most
+ * max: what a receiver demonstrably heard, for its coverage. Rows, or
+ * -1. */
+typedef struct {
+    long long ts;
+    double    lat, lon;
+    int       has_alt, alt;              /* ft */
+} web_sdb_apos_t;
+typedef int (*web_sdb_apos_fn)(void *ctx, const web_sdb_apos_t *p);
+int  web_sdb_adsb_positions(web_sdb_conn_t *c, long long from, long long max,
+                            web_sdb_apos_fn fn, void *ctx);
+
 /* ── the APRS stations, over time (2026-11-05) ───────────────────────
  *
  * The APRS tab's "stations seen" and one station's packets

@@ -19,6 +19,10 @@
  *   {"type":"fleet_end",...}     the count of each kind, a truncated_<kind>
  *                                flag for each, and "complete":true
  *
+ * With adsb=1 (#192 I7, web_fleetadsb.h) the whole export also carries
+ * this site's ADS-B receiver and its demonstrated coverage (adsb_rx) and
+ * the aircraft it heard (aircraft lines), counted on the end line.
+ *
  * With own=1 (#192 I5) the header also names this site's own radios
  * (own_macs), the transmitters at a known position that calibrate a
  * peer's receiver (web_locate.h); only asked for, so an older importer
@@ -199,6 +203,7 @@ typedef struct {
     long long no_next_until;               /* an F1 peer: plain pulls until then */
     long long no_own_until;                /* an F2 peer: no own=1 until then */
     long long no_gnss_until;               /* an I5 peer: no gnss=1 until then */
+    long long no_adsb_until;               /* an I6 peer: no adsb=1 until then */
     /* The peer's own radios, as its last full answer named them (own=1;
      * memory only: the next pull after a restart names them again). */
     int       nown;
@@ -294,6 +299,7 @@ struct web_slothdb;
 struct web_ble;
 struct web_gnss;
 struct web_frrs;
+struct web_adsb;
 
 /* What the export reads; any may be NULL (its lines are then absent,
  * and the header says why for sloth.db). */
@@ -303,6 +309,7 @@ typedef struct {
     struct web_gnss    *gnss;
     struct web_frrs    *frrs;
     const char         *own_csv;   /* this site's radios (own=1), may be NULL */
+    struct web_adsb    *adsb;      /* the receiver's summary (adsb=1, #192 I7) */
 } web_fleet_src_t;
 
 /* /api/fleet/export: a heap body the caller frees, in *body. 0 with

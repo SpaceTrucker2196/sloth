@@ -96,5 +96,6 @@ void run_chain_tests(void);              /* tests/test_chain.c (#171 V4) */
 void run_fleet_tests(void);              /* tests/test_fleet.c (#192 F1) */
 void run_locate_tests(void);             /* tests/test_locate.c (#192 I5) */
 void run_fleetgnss_tests(void);          /* tests/test_fleetgnss.c (#192 I6) */
+void run_fleetadsb_tests(void);          /* tests/test_fleetadsb.c (#192 I7) */
 
 #endif

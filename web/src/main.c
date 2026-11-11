@@ -283,7 +283,7 @@ int main(int argc, char **argv) {
                     "/api/ble/ADDR, /api/alerts, /api/alert, /api/pcap, "
                     "/api/pcap/frames, /api/fleet/export, /api/fleet/peers, "
                     "/api/fleet/overview, /api/fleet/shared, /api/fleet/locate, "
-                    "/api/fleet/gnss%s, "
+                    "/api/fleet/gnss, /api/fleet/aircraft%s, "
                     "/events)\n",
             where, cfg.allow_sql ? ", /api/query, /api/recipes" : "");
     if (cfg.allow_sql)
