@@ -31,7 +31,7 @@ static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
  * range that fell silent for five minutes lifted a pair to CRIT. This
  * is what lets an insert be told from a return.
  *
- * Shape: a ring of (BSSID, FNV-1a of the SSID it carried when dropped,
+ * Shape: a ring of (BSSID, the SSID it carried when dropped,
  * monotonic time it was dropped), newest last, all under g_mu. Static,
  * so nothing is allocated on the frame path; the scan is linear and
  * runs when an entry is dropped, created or renamed, never per beacon
@@ -42,10 +42,14 @@ static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
  * a BSSID-only memory would let a transmitter make itself "known" by
  * beaconing any name once, five minutes ahead. With the name in the
  * key it has to have sent the name it is copying, and that earlier
- * moment was judged as the arrival it was. An entry dropped while its
+ * moment was judged as the arrival it was. The name itself is kept and
+ * compared, not a digest of it: the transmitter chooses its SSID, and a
+ * second name with the same 32-bit FNV-1a as the one it means to copy
+ * takes seconds to find, which made the alibi above available again
+ * under a name that copies nothing. An entry dropped while its
  * SSID was still hidden is not remembered: there is no name to key.
  *
- * Capacity 4096: sixteen times the table, 24 bytes each, 96 KiB. For
+ * Capacity 4096: sixteen times the table, 48 bytes each, 192 KiB. For
  * the session, with no age-out, as ruled: a neighbour's router that
  * was last heard on Monday is not an arrival on Thursday. What bounds
  * it is the ring. When it is full the oldest memory is overwritten,
@@ -69,7 +73,7 @@ static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
 typedef struct {
     uint8_t  bssid[6];
     uint8_t  used;          /* 0: superseded by a later memory of the pair */
-    uint32_t ssid_fnv;
+    char     ssid[33];      /* as beacon_ap_t.ssid: 32 octets and a NUL */
     uint64_t dropped_ms;    /* monotonic */
 } beacon_recall_t;
 
@@ -79,21 +83,15 @@ static int             g_recall_head;   /* next slot written */
 static int             g_recall_lost;   /* a live memory was overwritten */
 static uint64_t        g_recall_reach_ms;   /* ... dropped at this time */
 
-static uint32_t recall_fnv(const char *ssid) {
-    uint32_t h = 2166136261u;
-    for (int i = 0; i < 32 && ssid[i]; i++) {
-        h ^= (uint8_t)ssid[i];
-        h *= 16777619u;
-    }
-    return h;
-}
-
-static beacon_recall_t *recall_find(const uint8_t bssid[6], uint32_t fnv) {
+/* The address first: it differs in nearly every slot, so the name is
+ * compared about once a scan. 32 octets, as much as the table holds. */
+static beacon_recall_t *recall_find(const uint8_t bssid[6], const char *ssid) {
     for (int k = 0; k < g_recall_n; k++) {
         beacon_recall_t *r = &g_recall[(g_recall_head - 1 - k +
                                         2 * BEACON_RECALL_MAX) %
                                        BEACON_RECALL_MAX];
-        if (r->used && r->ssid_fnv == fnv && memcmp(r->bssid, bssid, 6) == 0)
+        if (r->used && memcmp(r->bssid, bssid, 6) == 0 &&
+            strncmp(r->ssid, ssid, 32) == 0)
             return r;
     }
     return NULL;
@@ -102,8 +100,7 @@ static beacon_recall_t *recall_find(const uint8_t bssid[6], uint32_t fnv) {
 /* The table is dropping `ap`. Caller holds g_mu. */
 static void recall_note_dropped(const beacon_ap_t *ap, uint64_t now_ms) {
     if (!ap->ssid[0]) return;
-    uint32_t fnv = recall_fnv(ap->ssid);
-    beacon_recall_t *old = recall_find(ap->bssid, fnv);
+    beacon_recall_t *old = recall_find(ap->bssid, ap->ssid);
     if (old) old->used = 0;     /* one memory per pair, the newest */
     beacon_recall_t *r = &g_recall[g_recall_head];
     if (g_recall_n == BEACON_RECALL_MAX) {
@@ -116,7 +113,7 @@ static void recall_note_dropped(const beacon_ap_t *ap, uint64_t now_ms) {
     }
     memcpy(r->bssid, ap->bssid, 6);
     r->used       = 1;
-    r->ssid_fnv   = fnv;
+    snprintf(r->ssid, sizeof(r->ssid), "%.32s", ap->ssid);
     r->dropped_ms = now_ms;
     g_recall_head = (g_recall_head + 1) % BEACON_RECALL_MAX;
 }
@@ -125,7 +122,7 @@ static void recall_note_dropped(const beacon_ap_t *ap, uint64_t now_ms) {
 static uint8_t recall_arrival(const uint8_t bssid[6], const char *ssid,
                               uint64_t now_ms) {
     /* An empty name finds nothing: a hidden entry is never remembered. */
-    if (recall_find(bssid, recall_fnv(ssid)))
+    if (recall_find(bssid, ssid))
         return BEACON_ARRIVAL_RETURN;
     if (g_recall_lost &&
         now_ms - g_recall_reach_ms < (uint64_t)BEACON_RECALL_TRUST_S * 1000u)
