@@ -722,7 +722,11 @@ int posture_session_record(const char *path, int json,
                            char *err, size_t errsz) {
     char stem[POSTURE_PATH_MAX];
     const char *ext;
-    if (stamped_stem(path, session_start, "", stem, sizeof(stem), &ext) != 0) {
+    /* The stem fitting is not enough: sfile_fopen_unique() builds
+     * "<stem><ext>" and "<stem>_NN<ext>" with a clamping snprintf, and
+     * a clamped name is some other file. Room for the longest of them. */
+    if (stamped_stem(path, session_start, "", stem, sizeof(stem), &ext) != 0 ||
+        strlen(stem) + 3 + strlen(ext) >= name_sz) {
         snprintf(err, errsz, "%.200s: bad or over-long path",
                  path ? path : "?");
         return -1;

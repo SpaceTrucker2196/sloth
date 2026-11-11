@@ -778,6 +778,26 @@ static void test_session_records_are_never_overwritten(void) {
     ASSERT(contains(pl_slurp(a), "| LOW  | 1 |"));
     ASSERT_EQ(pl_count(e.dir, NULL, NULL, 0), 3);
 
+    /* A path whose stamped name would not fit POSTURE_PATH_MAX is
+     * refused, never clamped: a clamped name is some other file (here
+     * it would lose its ".md"). 1004 + 17 for the stamp leaves the stem
+     * two short of the buffer, so only the extension overflows. Seen
+     * red with the length check in posture_session_record() removed:
+     * the write then fails on the missing directory instead, with a
+     * reason that is not about length. */
+    {
+        char longp[POSTURE_PATH_MAX + 8];
+        memset(longp, 'd', 1004);
+        longp[200] = longp[400] = longp[600] = longp[800] = '/';
+        memcpy(longp + 1004, ".md", 4);
+        c[0] = '\0';
+        err[0] = '\0';
+        ASSERT_EQ(posture_session_record(longp, 0, &s, 1700000000, NULL,
+                                         c, sizeof(c), err, sizeof(err)), -1);
+        ASSERT(contains(err, "over-long"));
+        ASSERT_EQ(pl_count(e.dir, NULL, NULL, 0), 3);
+    }
+
     /* The JSON record, beside --report-json. */
     ASSERT_EQ(posture_session_record(e.json, 1, &s, 1700000000, NULL,
                                      c, sizeof(c), err, sizeof(err)), 0);
