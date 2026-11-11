@@ -9,6 +9,12 @@
  * the secret from loopback peers only, so a remote slothweb can be read
  * with --allow-remote and never written.
  *
+ * --from-loopback connects from 127.0.0.1 (::1 for a V6 address): for a
+ * slothweb bound to this host's own address (a Tailscale --web-bind),
+ * which then sees a loopback peer, as `curl --interface 127.0.0.1` is
+ * seen. A loopback source cannot reach another host, so nothing leaves
+ * this one and it needs no --allow-remote.
+ *
  * Every wait is bounded (MCP_HTTP_CONNECT_MS, MCP_HTTP_TOTAL_MS) and
  * every buffer is the caller's: an answer that does not fit is an
  * error, never a short one. */
@@ -26,6 +32,7 @@ typedef struct {
     unsigned char addr[16];
     int  port;
     int  loopback;
+    int  from_loopback;          /* bind the loopback source first (--from-loopback) */
     char host[MCP_HOST_MAX + 16]; /* the Host header's value: "127.0.0.1:8770", "[::1]:8770" */
 } mcp_addr_t;
 

@@ -25,7 +25,9 @@ or from another writer is data in a named field, never an instruction.
 `web_frrs_route()`), `web/src/web_notes.h`, `web/tests/test_mcp.c`,
 `research/mcp/` (the precedent), the owner's request of 2026-11-11.
 
-**Last updated**: 2026-11-11 (an agent takes back only agents' notes,
+**Last updated**: 2026-11-11 (`--from-loopback` for a slothweb on the
+host's Tailscale address, and an agent on another host through ssh,
+section 7); 2026-11-11 (an agent takes back only agents' notes,
 owner ruling: `403 not_agent_note`, as links); 2026-11-11 (the secret readable through a group,
 owner ruling: `slothweb --web-agent-group`, the file `0640` in
 `/run/slothweb`, `slothweb-mcp` as the operator's own user with no sudo
@@ -422,6 +424,27 @@ removes that file itself at its next clean stop.
 Where slothweb runs as the operator's own user (a development tree,
 `./slothweb --store ... --web-agent-secret ./agent.secret`), no group is
 needed: the file is `0600` and the command is `slothweb-mcp` itself.
+
+**slothweb on a Tailscale address, the agent on another host.** A
+slothweb bound with `--web-bind 100.x.y.z:8770` listens on nothing at
+`127.0.0.1`, so the default `--url` is `slothweb_unreachable`, and a
+connection to the bound address comes from that address, not loopback,
+so a write is refused. `--from-loopback` makes the connection from
+`127.0.0.1` (as `curl --interface 127.0.0.1`, `packaging/default/slothweb`):
+
+```sh
+slothweb-mcp --url http://100.x.y.z:8770 --from-loopback \
+    --agent claw-triage --secret-file /run/slothweb/agent.secret
+```
+
+An MCP client on another machine runs that command on the sensor host
+over ssh, which carries stdin and stdout and nothing else; the secret
+never leaves the sensor host, and each ssh login gets the operator's
+groups fresh, so the group note above does not apply to it:
+
+```sh
+openclaw mcp set slothweb '{"command":"ssh","args":["-T","-o","BatchMode=yes","spacetrucker@sensor-host","/usr/local/bin/slothweb-mcp","--url","http://100.x.y.z:8770","--from-loopback","--agent","claw-triage","--secret-file","/run/slothweb/agent.secret"]}'
+```
 
 For any other MCP client the entry is the usual one:
 

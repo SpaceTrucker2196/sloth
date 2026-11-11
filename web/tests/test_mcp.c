@@ -1537,6 +1537,11 @@ static void test_over_socket(void) {
     WT_EQ(call("sloth_health", NULL), 1);
     WT_HAS(g_env, "\"ok\":true,\"http_status\":200,\"data\":{");
     WT_HAS(g_env, "\"agent\":{\"enabled\":true,");
+    /* --from-loopback binds the source first; to a loopback address
+     * that changes nothing, and the note below then goes over it. */
+    C.addr.from_loopback = 1;
+    WT_EQ(call("sloth_health", NULL), 1);
+    WT_HAS(g_env, "\"ok\":true,\"http_status\":200,\"data\":{");
     WT_EQ(call("sloth_gnss", "{\"limit\":5}"), 1);
     WT_HAS(g_env, "\"prn\":5");
     WT_EQ(call("sloth_notes", "{\"kind\":\"aircraft\",\"id\":\"" W_HEX "\"}"), 1);

@@ -6944,3 +6944,15 @@ Slice 2: `slothweb-mcp` (`web/mcp/`, `make web-mcp`), an MCP server over slothwe
 
 `--web-agent-group NAME` writes the agent secret `0640` in a group holding slothweb's user and the operator, so `slothweb-mcp` needs no sudo; `slothweb.service` gains `RuntimeDirectory=slothweb` and gives `fchown` back to its filter. An agent may retract only notes written `via: agent` (`403 not_agent_note`); the page may retract any. slothweb.db v11 `anom_cover` keeps each run's observed minutes, so an hour split by a restart is judged on all runs' minutes and fed from the minute tier; a kill loses only the minute in progress. [[slothweb-mcp]], [[slothweb]], [[deployment]].
 - 2026-11-11 — [[fleet]] (#192 I5): locating an emitter two or more of the owner's sites hear, from each site's RSSI by sloth's own model (`src/rf_model.h`, now a leaf both sloth and slothweb link; ITU-R P.1238-10), with a one-sigma band, receivers calibrated by another site's own radio (`own=1`, the header's `own_macs`, bounded +/-20 dB, 2.4 GHz Wi-Fi only), readings paired within 120 s on skew-corrected clocks; two sites give the range circles' crossings and the nearer site by dB, three a least-squares fix; `/api/fleet/locate`, the overview's `calibration`, the map's located emitters and metre scale. A stored 0 dBm is no reading, and an ARP-only device takes its probe reading. Updated [[slothweb]], `web/README.md` and `research/papers/rssi-distance-estimation.md` ("Two or more sensors").
+
+## 2026-11-11 — slothweb-mcp `--from-loopback`
+
+A slothweb bound to the host's Tailscale address (`--web-bind
+100.x.y.z:8770`) listens on nothing at `127.0.0.1`, and a connection to
+the bound address comes from that address, so `slothweb-mcp` could not
+write to it. `--from-loopback` binds `127.0.0.1` (or `::1`) as the
+source before connecting, as `curl --interface 127.0.0.1` does; slothweb
+sees a loopback peer and takes the agent secret by its existing rules.
+A loopback source reaches this host only, so it needs no
+`--allow-remote`. [[slothweb-mcp]] section 7 adds the setup for an agent
+on another machine, through `ssh -T`. [[cli-reference]].

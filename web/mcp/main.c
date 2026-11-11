@@ -21,7 +21,8 @@ static void usage(FILE *o) {
         "slothweb-mcp - MCP server over slothweb's HTTP API\n"
         "\n"
         "usage: slothweb-mcp [--url http://127.0.0.1:8770] [--allow-remote]\n"
-        "                    [--agent NAME] [--secret-file PATH] [--read-only]\n"
+        "                    [--from-loopback] [--agent NAME] [--secret-file PATH]\n"
+        "                    [--read-only]\n"
         "\n"
         "Speaks newline-delimited JSON-RPC on stdin/stdout. Not meant to be run\n"
         "by hand; register it with an MCP client.\n"
@@ -35,6 +36,11 @@ static void usage(FILE *o) {
         "                     sensor heard then crosses the network in the clear\n"
         "                     (slothweb has no TLS). Writes still fail: slothweb\n"
         "                     takes the agent secret from loopback peers only.\n"
+        "  --from-loopback    connect from 127.0.0.1 (::1): for a slothweb bound\n"
+        "                     to this host's own address (--web-bind on a\n"
+        "                     Tailscale address), which then sees a loopback\n"
+        "                     peer and takes the agent secret. Reaches this\n"
+        "                     host only, so --url needs no --allow-remote.\n"
         "  --agent NAME       the name every write is recorded under (\"by\"):\n"
         "                     1..32 bytes of UTF-8, no control characters.\n"
         "                     Without it the write tools refuse.\n"
@@ -74,7 +80,7 @@ static int read_line(FILE *in, char *buf, size_t cap, size_t *len, int *too_long
 int main(int argc, char **argv) {
     static mcp_cfg_t cfg;
     const char *url = "http://127.0.0.1:8770", *why = NULL;
-    int allow_remote = 0;
+    int allow_remote = 0, from_loopback = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         int more = i + 1 < argc;
@@ -85,6 +91,8 @@ int main(int argc, char **argv) {
             url = argv[++i];
         } else if (!strcmp(a, "--allow-remote")) {
             allow_remote = 1;
+        } else if (!strcmp(a, "--from-loopback")) {
+            from_loopback = 1;
         } else if (!strcmp(a, "--read-only")) {
             cfg.read_only = 1;
         } else if (!strcmp(a, "--agent") && more) {
@@ -107,7 +115,7 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    if (mcp_addr_parse(&cfg.addr, url, allow_remote, &why) != 0) {
+    if (mcp_addr_parse(&cfg.addr, url, allow_remote || from_loopback, &why) != 0) {
         if (!strcmp(why, "not_loopback"))
             fprintf(stderr, "slothweb-mcp: --url is not a loopback address. The sensor's data "
                             "would cross the network in the clear (slothweb has no TLS);\n"
@@ -118,6 +126,7 @@ int main(int argc, char **argv) {
                             "http://[V6][:PORT]: a literal address, no name, no path\n");
         return 2;
     }
+    cfg.addr.from_loopback = from_loopback;
     cfg.xfer = mcp_http_xfer;
     cfg.xfer_ctx = &cfg.addr;
     /* slothweb closing a connection mid-send must be an error return,

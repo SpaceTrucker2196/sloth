@@ -111,6 +111,23 @@ int mcp_http_xfer(void *ctx, const char *req, size_t len, char *resp, size_t cap
         memcpy(&s4->sin_addr, a->addr, 4);
         sl = sizeof(*s4);
     }
+    if (a->from_loopback) {
+        struct sockaddr_storage src;
+        memset(&src, 0, sizeof(src));
+        if (a->family == AF_INET6) {
+            struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&src;
+            s6->sin6_family = AF_INET6;
+            s6->sin6_addr = in6addr_loopback;
+        } else {
+            struct sockaddr_in *s4 = (struct sockaddr_in *)&src;
+            s4->sin_family = AF_INET;
+            s4->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        }
+        if (bind(fd, (struct sockaddr *)&src, sl) != 0) {
+            close(fd);
+            return -1;
+        }
+    }
     long long t0 = mono_ms(), deadline = t0 + MCP_HTTP_TOTAL_MS;
     if (connect(fd, (struct sockaddr *)&ss, sl) != 0) {
         int err = 0;
