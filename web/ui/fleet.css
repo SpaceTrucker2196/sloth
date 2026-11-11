@@ -8,6 +8,15 @@
 #fleet-map .fleet-site.self { fill: var(--signal); }
 #fleet-map .fleet-name { fill: var(--ink); font-size: 13px; text-anchor: middle; }
 #fleet-map .fleet-frame { fill: none; stroke: var(--rule); stroke-width: 1; }
+#fleet-map .fleet-cand { fill: var(--data); fill-opacity: 0.12; stroke: var(--data); stroke-opacity: 0.6; stroke-width: 1; cursor: pointer; }
+#fleet-map .fleet-cand.picked { fill-opacity: 0.25; stroke-opacity: 1; stroke-width: 2; }
+#fleet-map .fleet-range { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+#fleet-map .fleet-scale { stroke: var(--ink); stroke-width: 2; }
+#fleet-map .fleet-scale-t { fill: var(--ink); font-size: 11px; }
+.fleet-loc { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(200px, 2fr) minmax(110px, 1fr) minmax(160px, 1.5fr); gap: 0 8px; font-size: 12px; padding: 3px 0 3px 4px; border-bottom: 1px dotted var(--rule); min-width: 600px; }
+.fleet-loc.dhead { opacity: 0.7; }
+.fleet-loc.picked { border-left: 2px solid var(--data); }
+.fleet-loc .warn { color: var(--sev-warn); }
 .fleet-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--gap, 8px); }
 .fleet-card { border: 1px solid var(--rule); border-radius: var(--radius-sm, 8px); padding: 6px 8px; font-size: 12px; }
 .fleet-card .fleet-card-h { font-size: 13px; margin-bottom: 4px; }

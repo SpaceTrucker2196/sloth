@@ -929,8 +929,11 @@
     <section class="panel">
       <div class="label">sites <span class="sub" id="fleet-head"></span></div>
       <div class="sub" id="fleet-empty" hidden>no peer: this slothweb pulls no other sensor. Start it with <code>--peer NAME=URL</code> for each of your other sensors, URL that sensor's slothweb at its tailnet address, and let each admit the other with <code>--web-allow</code> (docs/wiki/fleet.md). Nothing is shared by default.</div>
-      <svg id="fleet-map" viewBox="0 0 600 300" role="img" aria-label="the sites on an equirectangular map fitted to them, north up, with the distance between each pair"><g id="fleet-map-g"></g></svg>
+      <svg id="fleet-map" viewBox="0 0 600 300" role="img" aria-label="the sites on an equirectangular map fitted to them, north up, with the distance between each pair, the emitters located from two or more sites' signal strength, and a metre scale"><g id="fleet-map-g"></g></svg>
       <div class="sub" id="fleet-map-note"></div>
+      <div class="label">located emitters <span class="sub" id="fleet-loc-note"></span></div>
+      <div class="hscroll"><div class="fleet-loc dhead"><span>key</span><span>range from each site, m (band)</span><span>nearer</span><span>method</span></div>
+      <div id="fleet-loc-rows"></div></div>
     </section>
     <section class="panel">
       <div class="label">peers</div>

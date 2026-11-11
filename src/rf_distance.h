@@ -38,6 +38,7 @@
 #include <time.h>
 #include "sloth.h"      /* rf_track_t, reg_ie_t, sloth_state_t */
 #include "wifi_freq.h"
+#include "rf_model.h"  /* the coefficients and the pure model */
 
 /* Which radio heard it: picks N, sigma and the calibration slot. BLE
  * shares 2.4 GHz propagation but never a Wi-Fi calibration — its
@@ -76,29 +77,7 @@ typedef enum {
     RF_TREND_LEAVING       /* RSSI falling */
 } rf_trend_t;
 
-/* ── Coefficients (research/papers/rssi-distance-estimation.md) ── */
-
-/* N x 10, ITU-R P.1238-10 Table 2: 2.4 GHz residential 28; 5.2 GHz
- * residential (apartment) 30; 6 GHz has no row and takes the 5.2 GHz
- * value. --tune rf.path_loss_n_{2g,5g,6g}; BLE uses the 2g knob. */
-#define RF_N_2G_X10        28
-#define RF_N_5G_X10        30
-#define RF_N_6G_X10        30
-#define RF_N_X10_LO        16   /* below P.1238's corridor ~18 */
-#define RF_N_X10_HI        60   /* above its worst ~44 */
-
-/* Shadow-fading sigma, dB, P.1238-10 Table 4: 1.8-2 GHz residential 8
- * (no 2.4 GHz row); 5.2 GHz office 12 (no residential row). */
-#define RF_SIGMA_2G_DB      8.0
-#define RF_SIGMA_5G_DB     12.0
-#define RF_SIGMA_6G_DB     12.0
-
-/* Assumed transmit powers, dBm, and the extra sigma an assumption
- * costs. sloth's choices, no cited basis: that is what "assumed" says. */
-#define RF_PTX_AP_ASSUMED   20
-#define RF_PTX_STA_ASSUMED  15
-#define RF_PTX_BLE_ASSUMED   0
-#define RF_ASSUMED_SIGMA_DB 6.0
+/* ── Coefficients: rf_model.h (shared with slothweb) ── */
 
 /* Robust statistic: median of the last K samples inside the window. */
 #define RF_MEDIAN_K          8     /* --tune rf.median_k, 1..RF_RAW_MAX */
@@ -136,10 +115,8 @@ typedef enum {
 #define RF_TREND_ENTER_DB10  3.0
 #define RF_TREND_EXIT_DB10   1.5
 
-/* Calibration (--tune rf.ref_dist_dm with --my-bssid): bound on the
- * offset, dB. A reference that wants more than this is not a gain
- * correction; it is a wrong distance or a wall, and is refused. */
-#define RF_CAL_MAX_DB       20.0
+/* Calibration (--tune rf.ref_dist_dm with --my-bssid): RF_CAL_MAX_DB
+ * (rf_model.h) bounds the offset. */
 #define RF_REF_DIST_DM_HI 1000
 
 /* --tune rf.rx_gain_db_wifi / rf.rx_gain_db_ble: the receive antenna's
@@ -197,19 +174,6 @@ int rf_country_max_dbm(const reg_ie_t *reg, int channel, int *dbm);
  * v is untouched. Returns n, 0 for n <= 0 (outputs untouched). */
 int rf_median_spread(const int8_t *v, int n, int *median, int *spread_db);
 
-/* Free-space loss at 1 m, dB, for f in MHz: 20 log10 f - 28. */
-double rf_ref_loss_db(int freq_mhz);
-
-/* Metres for one P_tx / RSSI pair, or -1 when an input is unusable
- * (freq <= 0, n_x10 <= 0, rssi == 0). Not clamped. */
-double rf_distance_m(int ptx_dbm, int rssi_dbm, int freq_mhz, int n_x10,
-                     double offset_db);
-
-/* The offset that makes the model put a reference AP at ref_m. 1 and
- * *offset when |offset| <= RF_CAL_MAX_DB, else 0. */
-int rf_ref_offset_db(int ptx_dbm, int rssi_dbm, int freq_mhz, int n_x10,
-                     double ref_m, double *offset);
-
 /* The band `m` lies in, without and with hysteresis against `prev`:
  * leaving `prev` needs `m` past the boundary by `hyst_db` of path loss
  * at exponent n_x10 / 10, a factor of 10 ^ (hyst_db / n_x10) in metres.
@@ -228,10 +192,6 @@ double rf_slope_db10(const int8_t *dbm, const time_t *ts, int n);
 
 /* Trend with hysteresis. `enough` 0 means too few points: UNKNOWN. */
 rf_trend_t rf_trend_hyst(rf_trend_t prev, double slope_db10, int enough);
-
-/* Export quantisation: 0.5 m below 10 m, 1 m below 100 m, 10 m above.
- * A third party's proximity never leaves the process finer than that. */
-double rf_quantise_m(double m);
 
 /* Sigma and N (x10, the tune registry's current value) for a radio. */
 double rf_sigma_db(rf_radio_t r);

@@ -1,6 +1,7 @@
 #include "web_fleet.h"
 
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -11,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -20,6 +22,7 @@
 #include "web_frrs.h"
 #include "web_gnss.h"
 #include "web_jsonl.h"
+#include "web_locate.h"
 #include "web_metrics.h"
 #include "web_series.h"
 #include "web_slothdb.h"
@@ -85,7 +88,7 @@ static void cursor_split(const char *s, long long *ts, char *tok, size_t cap) {
 static const char *const M_HDR[] = {
     "fleet_export", "fleet_export_version", "generated", "since", "site_label",
     "slothweb_version", "sloth_version", "sloth_db", "lat", "lon", "alt_m",
-    "pos_source", "pos_ts", "pos_age_s", NULL };
+    "pos_source", "pos_ts", "pos_age_s", "own_macs", NULL };
 static const char *const M_GNSS[] = {
     "gnss", "gps_state", "sats_in_view", "sats_used", "cn0_mean",
     "time_offset_ms", "jam", "ts", NULL };
@@ -265,6 +268,8 @@ typedef struct fhdr {
     char      pos_source[8];
     int       has_pos, has_alt;
     double    lat, lon, alt;
+    int       has_own, nown;         /* own_macs was sent; its MACs */
+    char      own[WEB_FLEET_OWN_MAX][WEB_FLEET_MAC_SZ];
 } fhdr_t;
 
 static int row_of(const web_jrec_t *r, const char *type, frow_t *o, const char **why);
@@ -275,6 +280,7 @@ static int hdr_of(const web_jrec_t *r, fhdr_t *h);
 typedef struct {
     long long since;
     int       next;
+    int       own;                   /* own=1: the header names this site's radios */
     int       only;                  /* -1 every kind, else the page's WEB_FK_* */
     int       has_after;
     long long after_ts;
@@ -305,6 +311,7 @@ typedef struct {
     int         alert_bottom;
     long long   alert_bottom_ts;
     web_jrec_t *rec;                 /* the self-check's decoder record */
+    const char *own_csv;             /* this site's radios, for own=1 */
 } xp_t;
 
 static void set_cur(xp_t *x, int k, long long ts, const char *tok) {
@@ -397,6 +404,13 @@ static void xp_header(xp_t *x, long long now_s, long long since, const char *lab
     jk(w, M_HDR, "pos_age_s");
     if (loc->has) web_jw_int(w, now_s > loc->ts ? now_s - loc->ts : 0);
     else web_jw_raw(w, "null");
+    /* This site's own radios (#192 I5), asked for with own=1 only: a
+     * peer that hears one is hearing a transmitter at a known position,
+     * which calibrates that peer's receiver (web_locate.h). */
+    if (x->q && x->q->own) {
+        jk(w, M_HDR, "own_macs");
+        jstr_or_null(w, x->own_csv);
+    }
     web_jw_raw(w, "}");
 }
 
@@ -428,8 +442,27 @@ static int xp_dev(void *ctx, const web_sdb_dev_t *d) {
     jk(w, M_WIFI, "mac");        web_jw_str(w, mac);
     jk(w, M_WIFI, "vendor");     jstr_or_null(w, d->vendor);
     jk(w, M_WIFI, "ssid");       jstr_or_null(w, d->ssid);
+    /* A radio reading or none (web_sdb_seen(): sloth's 0 is "never heard
+     * on the air"); an ARP- or DHCP-only row takes the station's probe
+     * reading when the monitor heard it probe. The importer takes a row's
+     * rssi as of its last_seen and, with no channel, at 2.4 GHz
+     * (web_locate.h), so the probe's reading travels only when it is
+     * within WEB_LOC_WINDOW_S of this row's last_seen and not on 5 or
+     * 6 GHz: on W9FJC, 2026-11-11, all 24 such client readings were
+     * older than their row's ARP-moved last_seen by more than that (7 by
+     * a day), and 10 of the 24 were on 5 GHz. */
+    int has_sig = d->has_signal && d->signal_dbm < 0;
+    long long sig = d->signal_dbm;
+    if (!has_sig && !d->is_ap) {
+        web_sdb_item_t it;
+        if (web_sdb_seen(x->c, WEB_SEEN_DEVICE, d->mac, NULL, &it) == 1 && it.has_n3 &&
+            it.n2 >= d->last_seen - WEB_LOC_WINDOW_S && web_loc_chan_24((int)it.n1)) {
+            has_sig = 1;
+            sig = it.n3;
+        }
+    }
     jk(w, M_WIFI, "rssi");
-    if (d->has_signal) web_jw_int(w, d->signal_dbm); else web_jw_raw(w, "null");
+    if (has_sig) web_jw_int(w, sig); else web_jw_raw(w, "null");
     jk(w, M_WIFI, "bssid");      jstr_or_null(w, bssid);
     jk(w, M_WIFI, "is_ap");      web_jw_raw(w, d->is_ap ? "true" : "false");
     jk(w, M_WIFI, "first_seen"); web_jw_int(w, d->first_seen);
@@ -473,7 +506,8 @@ static int xp_ap(void *ctx, const web_sdb_ap_t *a) {
     jk(w, M_AP, "enc");        jstr_or_null(w, a->enc);
     jk(w, M_AP, "vendor");     jstr_or_null(w, a->vendor);
     jk(w, M_AP, "rssi");
-    if (a->has_signal) web_jw_int(w, a->signal_dbm); else web_jw_raw(w, "null");
+    if (a->has_signal && a->signal_dbm < 0) web_jw_int(w, a->signal_dbm);
+    else web_jw_raw(w, "null");
     jk(w, M_AP, "first_seen"); web_jw_int(w, a->first_seen);
     jk(w, M_AP, "last_seen");  web_jw_int(w, a->last_seen);
     int r = row_end(x, WEB_FK_AP, mark);
@@ -597,8 +631,11 @@ static int kind_of_word(const char *s, size_t n) {
     return -1;
 }
 
-/* since=EPOCH, next=1, kind=wifi|ap|alert|verdict, after=CURSOR (with
- * kind), each at most once, nothing else. */
+/* since=EPOCH, next=1, own=1, kind=wifi|ap|alert|verdict, after=CURSOR
+ * (with kind), each at most once, nothing else. own=1 (#192 I5) asks
+ * for the header's own_macs: an older puller never sends it, so it never
+ * meets a member it does not know, and an older export refuses it as an
+ * unknown parameter, which the puller takes as "not offered". */
 static int parse_query(const char *q, xq_t *x, const char **why) {
     memset(x, 0, sizeof(*x));
     x->only = -1;
@@ -620,6 +657,9 @@ static int parse_query(const char *q, xq_t *x, const char **why) {
         } else if (kl == 4 && !strncmp(p, "next", 4) && !x->next) {
             if (vl != 1 || v[0] != '1') { *why = "bad_next"; return -1; }
             x->next = 1;
+        } else if (kl == 3 && !strncmp(p, "own", 3) && !x->own) {
+            if (vl != 1 || v[0] != '1') { *why = "bad_own"; return -1; }
+            x->own = 1;
         } else if (kl == 4 && !strncmp(p, "kind", 4) && !seen_kind) {
             seen_kind = 1;
             int k = kind_of_word(v, vl);
@@ -673,6 +713,7 @@ int web_fleet_export_route(const web_fleet_src_t *src, const char *query,
     x.soft = WEB_FLEET_EXPORT_MAX - 4096;
     x.rec = rec;
     x.alert_after_rid = LLONG_MAX;
+    x.own_csv = src->own_csv;
     if (xq.only == WEB_FK_ALERT && xq.has_after && xq.after_tok[0]) {
         long long r = 0;
         for (const char *p = xq.after_tok; *p >= '0' && *p <= '9' && r < LLONG_MAX / 20; p++)
@@ -1058,6 +1099,84 @@ fail:
     return -1;
 }
 
+/* ── a site's own radios (#192 I5) ──────────────────────────────── */
+
+int web_fleet_own_parse(const char *csv, char own[][WEB_FLEET_MAC_SZ], int *n) {
+    *n = 0;
+    if (!csv || !csv[0]) return 0;
+    for (const char *p = csv;;) {
+        size_t l = strcspn(p, ",");
+        char one[WEB_KEY_MAX + 1], k[WEB_KEY_MAX + 1];
+        if (l == 0 || l > WEB_KEY_MAX || *n >= WEB_FLEET_OWN_MAX) return -1;
+        memcpy(one, p, l);
+        one[l] = '\0';
+        /* Canonical as sent (the export writes web_key_mac()'s form), and
+         * a unicast address: a group address is no transmitter. */
+        if (web_key_mac(one, k) != 0 || strcmp(one, k) || l != WEB_FLEET_MAC_SZ - 1) return -1;
+        unsigned b0 = (unsigned)strtoul(k, NULL, 16);
+        if (b0 & 1u || !strcmp(k, "00:00:00:00:00:00")) return -1;
+        memcpy(own[(*n)++], k, l + 1);
+        p += l;
+        if (!*p) break;
+        p++;
+        if (!*p) return -1;
+    }
+    return 0;
+}
+
+static int by_str(const void *a, const void *b) {
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+int web_fleet_read_own(web_fleet_t *f, const char *sysfs) {
+    f->nown = 0;
+    f->own_csv[0] = '\0';
+    char dir[256];
+    snprintf(dir, sizeof(dir), "%s/class/net", sysfs ? sysfs : "/sys");
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    /* Interface names in order, so the list does not move between
+     * starts: at most 64 looked at. */
+    char names[64][64];
+    const char *ord[64] = { 0 };
+    int nn = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) && nn < 64) {
+        size_t l = strlen(e->d_name);
+        if (e->d_name[0] == '.' || l >= sizeof(names[0])) continue;
+        memcpy(names[nn], e->d_name, l + 1);
+        ord[nn] = names[nn];
+        nn++;
+    }
+    closedir(d);
+    qsort(ord, (size_t)nn, sizeof(ord[0]), by_str);
+    size_t used = 0;
+    for (int i = 0; i < nn && f->nown < WEB_FLEET_OWN_MAX; i++) {
+        char p[384], a[64] = "", k[WEB_KEY_MAX + 1];
+        struct stat st;
+        /* A physical interface only (it has a device): a bridge, a tunnel
+         * or a container's veth puts nothing on the air. */
+        snprintf(p, sizeof(p), "%s/%s/device", dir, ord[i]);
+        if (stat(p, &st) != 0) continue;
+        snprintf(p, sizeof(p), "%s/%s/address", dir, ord[i]);
+        FILE *fp = fopen(p, "r");
+        if (!fp) continue;
+        if (!fgets(a, sizeof(a), fp)) a[0] = '\0';
+        fclose(fp);
+        a[strcspn(a, "\r\n")] = '\0';
+        if (web_key_mac(a, k) != 0 || !strcmp(k, "00:00:00:00:00:00") ||
+            (strtoul(k, NULL, 16) & 1u))
+            continue;
+        int dup = 0;
+        for (int j = 0; j < f->nown; j++) dup |= !strcmp(f->own[j], k);
+        if (dup) continue;
+        memcpy(f->own[f->nown++], k, WEB_FLEET_MAC_SZ);
+        used += (size_t)snprintf(f->own_csv + used, sizeof(f->own_csv) - used, "%s%s",
+                                 used ? "," : "", k);
+    }
+    return f->nown;
+}
+
 /* ── the ingest: check whole, then store ───────────────────────────── */
 
 /* Absent or null: "" and 0. A string at most max bytes: 1. Anything
@@ -1301,6 +1420,16 @@ static int hdr_of(const web_jrec_t *r, fhdr_t *h) {
     h->alt = d;
     if (h->pos_source[0] && strcmp(h->pos_source, "gps") && strcmp(h->pos_source, "fixed"))
         return -1;
+    /* own_macs (#192 I5, sent for own=1): null, or 1..WEB_FLEET_OWN_MAX
+     * MACs, comma-separated, each canonical. */
+    char own[WEB_FLEET_STR_MAX + 1];
+    int go = v_str(r, "own_macs", WEB_FLEET_STR_MAX, own, sizeof(own));
+    if (go < 0) return -1;
+    if (go == 1 && web_fleet_own_parse(own, h->own, &h->nown) != 0) return -1;
+    /* Sent, even as null (a peer with no radio to name), replaces what
+     * the peer said before; absent (not asked, or an older export)
+     * leaves it. */
+    h->has_own = web_jl_get(r, "own_macs") != NULL;
     return 0;
 }
 
@@ -1706,6 +1835,11 @@ static int ingest(web_fleet_t *f, int i, const char *body, size_t len,
         if (rc == 0) {
             pthread_mutex_lock(&f->mu);
             memcpy(f->peer[i].bf, nb, sizeof(nb));
+            if (page < 0 && k.hdr.has_own) {
+                memcpy(f->peer[i].own, k.hdr.own, sizeof(f->peer[i].own));
+                f->peer[i].nown = k.hdr.nown;
+                f->peer[i].own_at = now_s;
+            }
             pthread_mutex_unlock(&f->mu);
         }
     }
@@ -1785,13 +1919,27 @@ int web_fleet_pull_one(web_fleet_t *f, int i, long long now_s) {
          * WEB_FLEET_NONEXT_S, so a fleet is upgraded a host at a time.
          * Its answers carry no cursor, so nothing is backfilled from it
          * until it is upgraded. */
+        /* own=1 the same way (#192 I5): an F2 export refuses it, so it
+         * is asked again with next=1 alone, and not asked with own=1 for
+         * WEB_FLEET_NOOWN_S. */
         pthread_mutex_lock(&f->mu);
         int plain = p->no_next_until > now_s;
+        int noown = plain || p->no_own_until > now_s;
         pthread_mutex_unlock(&f->mu);
         char q[64];
-        snprintf(q, sizeof(q), plain ? "since=%lld" : "since=%lld&next=1", since);
+        snprintf(q, sizeof(q), plain ? "since=%lld" : noown ? "since=%lld&next=1"
+                                                            : "since=%lld&next=1&own=1", since);
         int unk = 0;
         int g = http_get(f, &p->cfg, q, &body, &len, err, sizeof(err), &unk);
+        if (g != 0 && unk && !noown) {
+            noown = 1;
+            pthread_mutex_lock(&f->mu);
+            p->no_own_until = now_s + WEB_FLEET_NOOWN_S;
+            pthread_mutex_unlock(&f->mu);
+            snprintf(q, sizeof(q), "since=%lld&next=1", since);
+            unk = 0;
+            g = http_get(f, &p->cfg, q, &body, &len, err, sizeof(err), &unk);
+        }
         if (g != 0 && unk && !plain) {
             plain = 1;
             pthread_mutex_lock(&f->mu);
@@ -2361,8 +2509,11 @@ int web_fleet_overview_route(web_fleet_t *f, const web_fleet_src_t *src, const c
             web_jw_raw(&w, "null");
         web_jw_raw(&w, "}");
     }
+    /* Each site's receiver calibration (#192 I5, web_locate.h). */
+    web_jw_raw(&w, "],");
+    web_loc_cal_json(f, src, now_s, &w);
     /* Every pair of sites with a position, this one named "self". */
-    web_jw_raw(&w, "],\"distances\":[");
+    web_jw_raw(&w, ",\"distances\":[");
     int nd = 0;
     for (int a = -1; a < np; a++) {
         int ha = a < 0 ? me.loc.has : ps[a].has_pos;
@@ -2515,7 +2666,10 @@ int web_fleet_shared_route(web_fleet_t *f, const web_fleet_src_t *src, const cha
                 COLT(2, r->label);
                 COLT(3, r->vendor);
 #undef COLT
-                r->has_rssi = sqlite3_column_type(q, 4) != SQLITE_NULL;
+                /* A peer whose export predates I5 sent sloth's 0 ("never
+                 * heard on the air") as a reading: none. */
+                r->has_rssi = sqlite3_column_type(q, 4) != SQLITE_NULL &&
+                              sqlite3_column_int(q, 4) < 0;
                 r->rssi = sqlite3_column_int(q, 4);
                 r->first = sqlite3_column_int64(q, 5);
                 r->last = sqlite3_column_int64(q, 6);

@@ -39,6 +39,7 @@ CORE_COMMON_SRCS = \
        src/radiotap.c      \
        src/wifi_freq.c     \
        src/rf_quality.c    \
+       src/rf_model.c      \
        src/rf_distance.c   \
        src/db_schema.c     \
        src/history.c       \
@@ -742,7 +743,7 @@ WEB_ASM_C       = $(WEB_GEN_DIR)/web_alertasm_table.c
 WEB_ASM_STAMP   = $(WEB_GEN_DIR)/alertasm.inputs
 # sloth's leaf parsers, linked into slothweb (see above).
 WEB_CORE_SRCS   = src/dot11_frame.c src/radiotap.c src/wifi_freq.c src/dns_wire.c \
-                  src/dot11_ie.c src/netstr.c
+                  src/dot11_ie.c src/netstr.c src/rf_model.c
 WEB_SRCS        = $(filter-out $(WEB_MAIN),$(wildcard web/src/*.c)) $(WEB_ASSETS_C) \
                   $(WEB_OUI_C) $(WEB_RECIPES_C) $(WEB_AKB_C) $(WEB_BTSIG_C) $(WEB_VKB_C) $(WEB_ASM_C) \
                   $(WEB_GNSS_C)

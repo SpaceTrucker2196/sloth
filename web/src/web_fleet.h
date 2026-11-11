@@ -19,6 +19,11 @@
  *   {"type":"fleet_end",...}     the count of each kind, a truncated_<kind>
  *                                flag for each, and "complete":true
  *
+ * With own=1 (#192 I5) the header also names this site's own radios
+ * (own_macs), the transmitters at a known position that calibrate a
+ * peer's receiver (web_locate.h); only asked for, so an older importer
+ * never meets the member.
+ *
  * Every member of every line is named in web_fleet_members[] and in no
  * other place: the writer emits those names only, the reader refuses a
  * line holding any other, and the suite holds each name to
@@ -120,6 +125,12 @@
  * for this long before it is asked with it again. */
 #define WEB_FLEET_NONEXT_S       3600
 #define WEB_FLEET_KEEP_S         (90LL * 86400)
+/* A site's own radios (#192 I5): at most this many MACs a site names,
+ * each "aa:bb:cc:dd:ee:ff" and its NUL. An older peer's export refuses
+ * own=1; it is then asked without it for WEB_FLEET_NOOWN_S. */
+#define WEB_FLEET_OWN_MAX        8
+#define WEB_FLEET_MAC_SZ         18
+#define WEB_FLEET_NOOWN_S        3600
 
 enum { WEB_FK_WIFI = 0, WEB_FK_BLE, WEB_FK_AP, WEB_FK_PROBE, WEB_FK_ALERT,
        WEB_FK_VERDICT, WEB_FK_COUNT };
@@ -180,6 +191,12 @@ typedef struct {
     unsigned long pulls, failures;
     unsigned long pages, page_failures;    /* backfill pages fetched, refused */
     long long no_next_until;               /* an F1 peer: plain pulls until then */
+    long long no_own_until;                /* an F2 peer: no own=1 until then */
+    /* The peer's own radios, as its last full answer named them (own=1;
+     * memory only: the next pull after a restart names them again). */
+    int       nown;
+    long long own_at;                      /* 0: never named */
+    char      own[WEB_FLEET_OWN_MAX][WEB_FLEET_MAC_SZ];
     web_fleet_bf_t bf[WEB_FK_COUNT];
     char      last_error[WEB_FLEET_ERR_MAX + 1];
 } web_fleet_peer_t;
@@ -198,11 +215,25 @@ typedef struct web_fleet {
     int               allow_outside;
     web_store_t *store;               /* NULL: no store, nothing pulled */
     struct sqlite3   *wr;                  /* the pull thread's own */
+    /* This site's own radios (web_fleet_read_own(), at start, before
+     * any thread: read without the lock after that). */
+    int               nown;
+    char              own[WEB_FLEET_OWN_MAX][WEB_FLEET_MAC_SZ];
+    char              own_csv[WEB_FLEET_OWN_MAX * WEB_FLEET_MAC_SZ];
     /* Test seams, the defaults otherwise. */
     int               connect_ms, read_ms;
     size_t            resp_max;
     int               pages_per_pull;
 } web_fleet_t;
+
+/* "a,b,c": 0..WEB_FLEET_OWN_MAX canonical unicast MACs into own, *n
+ * set; -1 for anything else. */
+int  web_fleet_own_parse(const char *csv, char own[][WEB_FLEET_MAC_SZ], int *n);
+/* This host's own radios: the address of each physical interface under
+ * SYSFS/class/net (sysfs NULL: /sys), sorted by interface name, at most
+ * WEB_FLEET_OWN_MAX, into f->own and f->own_csv. A read of the host's
+ * own files, nothing on a network. The count. */
+int  web_fleet_read_own(web_fleet_t *f, const char *sysfs);
 
 /* Set up (no thread, no connection). peers may be NULL with n 0. */
 void web_fleet_init(web_fleet_t *f, const web_fleet_peer_cfg_t *peers, int n,
@@ -250,6 +281,7 @@ typedef struct {
     struct web_ble     *ble;
     struct web_gnss    *gnss;
     struct web_frrs    *frrs;
+    const char         *own_csv;   /* this site's radios (own=1), may be NULL */
 } web_fleet_src_t;
 
 /* /api/fleet/export: a heap body the caller frees, in *body. 0 with

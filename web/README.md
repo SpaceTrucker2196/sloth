@@ -5356,7 +5356,9 @@ counted by kind.
 position, `last_ok_age_s`, `last_attempt_age_s`, `last_error`, `skew_s`
 = the peer's clock at its last good answer less this one's then,
 `remote_version`, `rows_last`, `counts` by kind, `backfill` per running
-kind with `floor` and `cursor`, `pages`, `page_failures`, `pages_refused`, `distance_m`)
+kind with `floor` and `cursor`, `pages`, `page_failures`, `pages_refused`, `distance_m`),
+`calibration` (#192 I5: each site with a position, its count of own
+radios, and its receiver's `state`, `offset_db` and links, as below)
 and `distances` (every pair of sites with a position, haversine metres,
 this site `self`). **`/api/fleet/shared?kind=wifi|ble|ap|probe&limit=N`**
 (GET only, limit 50, 1..200): the keys of the kind a peer sent that this
@@ -5366,12 +5368,52 @@ address from slothweb's table), the newest activity at any site first,
 each with `sites` (`self` and each peer: `first_seen`, `last_seen`,
 `rssi`) and `verdict` (this site's triage at the address, else a
 peer's); `partial` when the 5,000-row scan or the budget stopped short.
+A signal is a radio reading or `null`: sloth's stored 0 ("never heard on
+the air", an ARP- or DHCP-only device) is none, and a device row without
+a reading takes `probe_clients`' reading of the same MAC (#192 I5); the
+export's `rssi` follows the same rule, except that a probe reading
+travels only when it is within 120 s of the row's `last_seen` and not on
+5 or 6 GHz (the importer reads a row's `rssi` as of its `last_seen`, at
+2.4 GHz).
+
+**`/api/fleet/locate?kind=wifi|ap|ble&limit=N`** (#192 I5; GET only,
+limit 50, 1..200; `web/src/web_locate.h`): each emitter two or more
+sites heard within 120 s of each other (a peer's time less its measured
+skew; the newest within 15 minutes), each site's range by sloth's own
+path-loss model (`src/rf_model.h`, ITU-R P.1238-10; power assumed) with
+a one-sigma band, and the location: the two range circles' crossings
+(`two_circles`, 0 to 2 `candidates`) or a weighted least-squares fix
+(`least_squares`, three or more sites, with `residual_m`), each
+candidate as `lat`/`lon`, plane `e`/`n` metres around the sites'
+centroid and `radius_m`; always `nearest` (the site with the least path
+loss, by how many dB, the difference's one-sigma `sigma_db` and
+`within_band`, true when the difference is inside it and says nothing
+about which site is nearer), `baseline_m`, `band_m` and `coarse` (the
+band wider than the baseline: a side, not a point). A least-squares fix
+that has not settled within 500 damped steps is no candidate. `sites` lists each site
+with a position, `too_far` (none other within 2 km) and its receiver's
+`calibration`: from another site's own radio heard at a known distance
+(`own=1` on the export names a site's radios, read from
+`/sys/class/net` at start), an offset bounded at +/-20 dB applied to
+2.4 GHz Wi-Fi rows only. Then `scanned`, `keys`, `looked_up`,
+`unpaired`, `stale`, `partial`. The model, the band and what it is worth
+at a 17 m baseline: [docs/wiki/fleet.md](../docs/wiki/fleet.md).
+
+The export's `own=1` adds `own_macs` to its header (this site's physical
+interfaces' addresses, comma-separated, or `null`); an F2 puller never
+asks for it, and an F2 export refuses it as an unknown parameter, which
+the puller answers by asking with `next=1` alone and not asking with
+`own=1` for an hour.
 
 **The Fleet tab** (after TACDB, `web/ui/fleet.js`): the sites on an SVG
 map with the distance between each pair, a health card per peer, and
 "seen at more than one site" with each site's first-to-last-seen bar on
-one time axis, the key a link to the device drawer. The inferences
-across sites are F3 and F4.
+one time axis, the key a link to the device drawer. The map also draws
+the located emitters (I5): each candidate a translucent circle of its
+radius (the key on hover or tap), the picked row's range circles dashed,
+and a metre scale; it fits the sites and the candidates, so at a 17 m
+baseline it is drawn in metres. A "located emitters" table follows the
+map. The other inferences across sites are F3 and F4.
 
 ## Capture scope
 

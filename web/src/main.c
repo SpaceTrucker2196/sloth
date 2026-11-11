@@ -229,6 +229,10 @@ int main(int argc, char **argv) {
      * own. */
     web_fleet_init(&g_fleet, cfg.peer, cfg.npeer, cfg.peer_interval_s, cfg.peer_outside,
                    have_store ? &g_store : NULL);
+    /* This host's own radios (#192 I5): named to a peer that asks with
+     * own=1, and the transmitters at a known position that calibrate a
+     * peer's receiver. Read from /sys once, before any thread. */
+    web_fleet_read_own(&g_fleet, NULL);
     g_m4.fleet = &g_fleet;
     /* A note on a satellite, an aircraft or a station is checked
      * against the panel that holds it (web_notes.h). */
@@ -311,7 +315,7 @@ int main(int argc, char **argv) {
                     "/api/flows/graph, /api/frrs/*, /api/ble, /api/ble/alerts, "
                     "/api/ble/ADDR, /api/alerts, /api/alert, /api/pcap, "
                     "/api/pcap/frames, /api/fleet/export, /api/fleet/peers, "
-                    "/api/fleet/overview, /api/fleet/shared%s, "
+                    "/api/fleet/overview, /api/fleet/shared, /api/fleet/locate%s, "
                     "/events)\n",
             where, cfg.allow_sql ? ", /api/query, /api/recipes" : "");
     if (cfg.allow_sql)

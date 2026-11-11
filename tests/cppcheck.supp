@@ -59,6 +59,9 @@ readdirCalled:src/platform/linux_dhcp.c
 readdirCalled:web/tools/alertkb.c
 readdirCalled:web/tools/alertasm.c
 readdirCalled:web/src/web_pcapdir.c
+# web_fleet_read_own() (#192 I5): one DIR of /sys/class/net, read once
+# at start before any thread.
+readdirCalled:web/src/web_fleet.c
 readdirCalled:web/tests/test_alertfmt.c
 # The test suites' temporary-file helpers (test_rm_tree, the leak
 # guard's walk): each recursion level opendir()s its own local DIR* and
