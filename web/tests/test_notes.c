@@ -1021,6 +1021,42 @@ static void test_alert_and_anomaly_rows_apart(void) {
 #endif /* WITH_SQLITE: stored, folds, identity */
 
 #ifdef WITH_SQLITE
+static int g_verdicts, g_verdict_anom, g_verdict_state;
+static int verdict_seen(void *ctx, const web_frrs_verdict_t *v) {
+    (void)ctx;
+    g_verdicts++;
+    if (v->type < 0) g_verdict_anom++;
+    g_verdict_state = v->state;
+    return 0;
+}
+
+/* The fleet export's verdicts (web_fleet.h, #192) are alerts' only: an
+ * anomaly's decision, newer than the alert's, is neither handed to the
+ * exporter nor counted against its limit (with room for one row the
+ * alert's is the one read), and /api/fleet/export carries one verdict
+ * line. Seen red with `t.type >= 0 AND` taken out of
+ * web_frrs_verdicts() (the anomaly's row handed over, and with a limit
+ * of one the alert's verdict not read at all). */
+static void test_fleet_verdicts_are_alerts_only(void) {
+    env_open(1);
+    if (!E.have_store) { env_close(); return; }
+    char tid[WEB_ANOM_TID_MAX + 1], id[40];
+    ep(1, "A7", WM_HOST_CONNS, "203.0.113.50", WEB_EP_OPEN, T - 600, T - 60, tid);
+    WT_ASSERT(id_of("PORT_SCAN", id, sizeof(id)));
+    WT_EQ(triage(id, "noise", NULL), 200);
+    WT_EQ(triage(tid, "incident", NULL), 200);        /* the newer row */
+    g_verdicts = g_verdict_anom = 0;
+    WT_EQ(web_frrs_verdicts(&E.f, 0, 100, verdict_seen, NULL), 1);
+    WT_EQ(g_verdicts, 1);
+    WT_EQ(g_verdict_anom, 0);
+    g_verdicts = g_verdict_anom = 0;
+    g_verdict_state = -1;
+    WT_EQ(web_frrs_verdicts(&E.f, 0, 1, verdict_seen, NULL), 1);
+    WT_EQ(g_verdict_anom, 0);
+    WT_EQ(g_verdict_state, WEB_TRI_NOISE);
+    env_close();
+}
+
 /* ── links ──────────────────────────────────────────────────────────── */
 
 /* A link is read from both ends and removed from either: an anomaly to
@@ -1741,6 +1777,7 @@ void run_notes_tests(void) {
     WT_RUN(test_anomaly_survives_reopen_and_redetection);
     WT_RUN(test_anomaly_id_collision_refused);
     WT_RUN(test_alert_and_anomaly_rows_apart);
+    WT_RUN(test_fleet_verdicts_are_alerts_only);
     WT_RUN(test_dangling_target);
     WT_RUN(test_suggestions);
     WT_RUN(test_suggestions_stay_inside_the_budget);

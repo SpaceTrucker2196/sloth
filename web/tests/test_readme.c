@@ -136,6 +136,8 @@ static const char *const NOTICE[] = {
     "sloth.db %s: schema v", "BLE: ",
     /* triage and the TACDB (web_frrs.h): which way the writes are */
     "triage and TACDB writes ", "--web-read-only: no write route", "follow recommended: ",
+    /* the fleet (web_fleet.h): what is served and which peers are pulled */
+    "fleet: pulling ", "fleet: /api/fleet/export served ",
 };
 static const struct { const char *file, *start; } RUNTIME[] = {
     { "web_ingest.c", "socket: " }, { "web_ingest.c", "fcntl: " },

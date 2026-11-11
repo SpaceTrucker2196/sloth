@@ -6780,6 +6780,9 @@ its excess over the receiver's gap and over the interval, nothing when
 they disagree in sign). Residual, stated in the rule and the assessment:
 a reader falling behind on the very pair where the receiver dropped an
 epoch is not seen, since at 1 Hz that gap is a whole-second step's.
+- 2026-11-10 — ADR 0008 "own fleet" (#192 F0): the owner's own sensors share at full fidelity over the tailnet, pulled by slothweb; ADR 0006 stays the rule for community sharing.
+- 2026-11-10 — [[fleet]] (#192 F1): slothweb's read-only `/api/fleet/export?since=` (JSON Lines, member allow-list held to `web_secret.h`, no credential, username, alert key or detail, EAPOL row or RADIUS identity), the `--peer NAME=URL` pull over the tailnet (`--peer-interval-secs`, `--peer-allow-outside-tailnet` announced), slothweb.db v7 -> v8 (`peer_sites`, `peer_sightings`), `/api/health`'s `fleet` and `/api/fleet/peers`. Updated [[slothweb]], [[cli-reference]], [[index]].
+- 2026-11-10 — [[fleet]] (#192 F1 review): the export holds each line to the importer's own checks before sending it (a stored value outside the importer's ranges no longer refuses a peer's whole answer at every pull; the row is left out and its kind marked truncated); the pull refuses a transfer coding and a second `Content-Length`; the importer takes altitude to 100,000 m as `web_loc_set()` does.
 
 ## 2026-11-11 — device risk: anonymity counts once, own devices exempt (#191)
 

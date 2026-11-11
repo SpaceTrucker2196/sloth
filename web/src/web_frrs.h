@@ -352,6 +352,17 @@ int  web_frrs_triage_find(web_frrs_t *f, web_sdb_conn_t *c, const web_tri_q_t *q
                           web_tri_t *out);
 /* Whether any triage row exists: the join's shortcut. */
 int  web_frrs_triage_any(web_frrs_t *f);
+/* The current state of each triaged subject decided at or after since,
+ * newest first, at most max, each to fn (nonzero stops): the fleet
+ * export's verdicts (web_fleet.h). The descriptor and the state only.
+ * Rows given, 0 without a store, -1 on an error. */
+typedef struct {
+    int       type, port, state;
+    char      addr[WEB_FRRS_ADDR_MAX + 1];
+    long long first_seen, ts;
+} web_frrs_verdict_t;
+int  web_frrs_verdicts(web_frrs_t *f, long long since, int max,
+                       int (*fn)(void *ctx, const web_frrs_verdict_t *v), void *ctx);
 /* "any", "untriaged", "false", "noise", "incident", "known", "triaged", "out"
  * -> the WEB_TRI_* value or WEB_TRI_F_*; WEB_TRI_F_BAD for anything
  * else. */

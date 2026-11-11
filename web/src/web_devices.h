@@ -51,6 +51,7 @@
 
 struct web_frrs;
 struct web_chain;
+struct web_fleet;
 
 #define WEB_DEV_LIMIT       100
 #define WEB_DEV_LIMIT_MAX   200
@@ -83,6 +84,9 @@ typedef struct {
     /* The stream's twin_episode links for G8 (web_chain.h); NULL: not
      * attached, and a chain has no links. */
     struct web_chain    *chain;
+    /* The owner's fleet (web_fleet.h): the peers pulled, for
+     * /api/health and /api/fleet/peers; NULL: not attached. */
+    struct web_fleet    *fleet;
 } web_m4_t;
 
 /* In a route, once its parameters are checked: under check_only, an

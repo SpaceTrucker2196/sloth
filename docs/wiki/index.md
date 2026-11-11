@@ -31,7 +31,7 @@ the Wi-Fi it watches:
   dashboard and the intelligence tables: every reference out of `web/`
   and every intelligence table in `src/`, with #184's contract table
   C1–C10 filled in and the places the grep disagrees with it.
-- [ADRs 0001–0007](adr/README.md) — the architecture decision records for
+- [ADRs 0001–0008](adr/README.md) — the architecture decision records for
   the three-repository programme (#184), one per decision, with the gaps
   that still need an owner ruling marked in place.
 - [[pack-schema]] — the intel pack manifest, file set and immutability
@@ -159,6 +159,10 @@ the Wi-Fi it watches:
   the five-minute README (`web/README.md`) with its troubleshooting
   table and security section; alert triage, the FRRS emitter record
   and the TACDB tab, its spec [`docs/web-frrs-spec.md`](../web-frrs-spec.md).
+- [[fleet]] — the owner's own sensors sharing over the tailnet (#192,
+  ADR 0008): slothweb's `/api/fleet/export`, the `--peer` pull into
+  slothweb.db v8 (`peer_sites`, `peer_sightings`), what never travels,
+  and the cross-site inferences the later slices build on it.
 - [[capture-scope]] — slothweb's Monitor / Hybrid / Local switch: what
   the passive monitor radio heard, what the host's own interfaces
   carried, or both; how each record, alert, metric, interface and

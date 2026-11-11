@@ -265,6 +265,13 @@ thread fails; slothweb is not running after either.
 | `slothweb: --sloth-db and --store name the same file (PATH): sloth.db is sloth's, the store is slothweb's own` | Point `--store` somewhere else. |
 | `slothweb: --web-allow-sql needs --sloth-db PATH: the box reads sloth.db and nothing else.` | Add `--sloth-db`, or drop `--web-allow-sql`. |
 | `slothweb: --strict refuses --web-allow-sql.` | The SQL box is a query surface; `--strict` refuses it. Drop one. |
+| `slothweb: --peer SPEC: want NAME=http://A.B.C.D[:PORT]`, `the name must be 1 to 32 of A-Z a-z 0-9 . _ -`, `the URL must start http:// (no TLS: the tailnet encrypts the link)`, `the URL is longer than 64 bytes`, `not a literal IPv4 address (names are not resolved)`, `bad port`, `the URL is the peer's address only, with no path` | `--peer w9fjc=http://100.101.102.103:8770`: a name of your own, then the peer slothweb's tailnet address and port, nothing after it ([Fleet](#fleet)). |
+| `slothweb: --peer NAME: http://ADDR:PORT is outside the tailnet (100.64.0.0/10); refused without --peer-allow-outside-tailnet` | Use the peer's `100.x` tailnet address (`tailscale ip -4` on the peer). Only if the link is one you trust some other way, add `--peer-allow-outside-tailnet`; that is announced. |
+| `slothweb: --peer SPEC: that name or address is given twice` | One `--peer` per peer, each with its own name. |
+| `slothweb: --peer: at most N peers` | Eight peers at most. |
+| `slothweb: --peer-interval-secs V: want a whole number from N to N` | 10 to 3600 seconds; the default is 60. |
+| `slothweb: --strict refuses --peer.` | Pulling a peer is a network service, which `--strict` refuses; drop one of the two. |
+| `slothweb: --peer needs SQLite; this slothweb was built with WITH_SQLITE=0` | The pulled rows live in the store: rebuild with `make web`. |
 | `slothweb: --web-max-mb N is below what --web-max-keys N needs: the baselines and episodes can take about N MB and the ceiling keeps N MB of history beside them (a week of hour rows for each of N series).` | Use the `--web-max-mb` it names, or a lower `--web-max-keys`. |
 
 **Warnings** (slothweb runs; each names an exposure you asked for):
@@ -275,6 +282,7 @@ thread fails; slothweb is not running after either.
 | `slothweb: WARNING: admitting non-loopback peers in CIDR (--web-allow, authorised by --web-allow-remote).` | As it says. |
 | `slothweb: WARNING: --web-allow-sql with --web-allow-remote: the SQL box (/api/query) ...` | Every admitted peer can run read-only SQL over sloth.db. |
 | `slothweb: WARNING: reading the data stream from SPEC, which is not loopback.` | The stream crosses a network unencrypted; read it on the sensor instead, or tunnel it. |
+| `slothweb: WARNING: --peer NAME at URL is outside the tailnet (--peer-allow-outside-tailnet).` | The pull and the export it reads travel as plain HTTP over whatever path reaches that address; only that path protects them ([Fleet](#fleet)). |
 
 **Starting up** (exit 1 unless said):
 
@@ -298,6 +306,7 @@ thread fails; slothweb is not running after either.
 | `slothweb: time series: out of memory` | Lower `--web-max-keys`. |
 | `slothweb: --pcap-dir: out of memory` | The manifest index (4,096 entries, about 1.3 MB) could not be allocated; free memory and start again. |
 | `slothweb: SQL box: cannot start its thread`, `slothweb: pipe: ERR`, `slothweb: pthread_create failed` | Out of threads or descriptors: check `ulimit -u` and `ulimit -n`. |
+| `slothweb: fleet: ERR`: `--peer needs the store (slothweb.db), and there is none`, the store's own refusals for a third connection (`the store is not open`, `PATH: changed while it was being opened; refused`), `pthread_create failed` | The pull thread (a connection to the store of its own, [Fleet](#fleet)) could not start. Start again; exit 1. |
 
 **sloth.db** (not fatal; slothweb runs and retries on every request,
 and the page says why in each view that needs it):
@@ -335,7 +344,10 @@ the SIG CSVs in web/data/btsig/` for a `WEB_BTSIG_DIR` build without
 them), `time series in`, `baselines (N restored)`, `store schema vN
 migrated to vN`, `triage and TACDB writes on` (or `off (no store)`),
 `--web-read-only: no write route; every POST is 405`, `follow
-recommended: ...`, and in a `WITH_SQLITE=0` build:
+recommended: ...`, `fleet: /api/fleet/export served to the allow list;
+no --peer, nothing pulled` or one `fleet: pulling NAME from
+URL/api/fleet/export every N s into PATH (tailnet)` per `--peer`, and in
+a `WITH_SQLITE=0` build:
 
 | Message | Meaning |
 |---|---|
@@ -416,9 +428,20 @@ Read this before exposing slothweb to anything but your own loopback.
   read-only `SELECT` at a time over sloth.db (5 s, 10,000 rows, the
   withheld columns refused) for every admitted peer. Combined with
   `--web-allow-remote` that is announced as a warning.
+- **The fleet** ([Fleet](#fleet), ADR 0008). `/api/fleet/export` is a
+  read like any other route, so it answers only what the allow list
+  admits; it reads sloth.db through the same allow-list and its member
+  names are one list held to the withheld words, so no credential,
+  username, alert key or detail, EAPOL row or RADIUS identity is in it.
+  It does carry SSIDs and client MACs: admit only your own sensors, one
+  address each. `--peer` pulls nothing unless given, refuses an address
+  outside the tailnet unless `--peer-allow-outside-tailnet` (announced),
+  and refuses a peer's answer whole if it is oversize or carries
+  anything not on the list. A peer's `slothweb.db` then holds this
+  site's device history: protect every sensor as the most sensitive.
 - **`--strict`** refuses every non-loopback bind, allow entry and
-  `--socket tcp:` address, and the SQL box, even when the opt-in flags
-  are given.
+  `--socket tcp:` address, the SQL box and `--peer`, even when the
+  opt-in flags are given.
 - **No name resolution, ever.** slothweb resolves nothing: not its bind
   address, not `--socket`, no reverse DNS, no WHOIS. Every name it
   shows was already in sloth's stream or database.
@@ -452,6 +475,9 @@ milestone (W0, M0 to M6; tracker #102).
 | `--web-assessments DIR` | Where "follow recommended" reads each alert type's research assessment, `DIR/<TYPE>.md` (front matter `false_positive_risk`, `noise_verdict`, `severity_assessment`; [Triage](#triage-and-the-frrs-record)). The type name comes from the alert table, never from a request; each file read until its front matter closes, at most 32 KiB. Unset, or a path not there: every type says "no recommendation yet". Something there that is not a directory is refused (exit 2). `slothweb.service` passes `/usr/local/share/sloth/alert-assessments`, where `make install` copies `docs/wiki/alert-assessments/*.md`. |
 | `--pcap-dir DIR` | The sensor's `--pcap-dir`, read-only, for the alert page's packet capture ([An alert's proof](#an-alerts-proof)). Repeatable once more for its `--eapol-dir` (at most two; the same path twice is refused). Only a file named as sloth names an alert pcap is ever opened (`alert_YYYYMMDD_HHMMSS_<slug>.pcap`, or `<incident_id>-<event>-<RULE>[-N].pcap`), through the directory's descriptor, not following a symlink, a regular file of at most 16 MiB; never a handshake pcap or `eapol.22000`, whatever directory they sit in. Absent: the page says "slothweb was not given --pcap-dir". An evidence pcap is listed but withheld unless `--web-serve-evidence-pcap` is given (below). |
 | `--web-serve-evidence-pcap[=remote]` | Serve evidence pcaps (`<incident_id>-<event>-<RULE>[-N].pcap`, the sensor's `--eapol-dir`): decoded on the alert page and downloadable. Off by default, because they are raw 802.11 frames from sloth's evidence ring and may hold EAPOL/PMKID handshake material ([What is never served](#an-alerts-proof)). Announced on stderr whenever given. With `--web-allow-remote` the bare flag is refused (exit 2); `--web-serve-evidence-pcap=remote` serves them to the admitted remote peers too, with a second announcement. |
+| `--peer NAME=URL` | Pull another of the operator's own slothwebs ([Fleet](#fleet), ADR 0008): its `/api/fleet/export`, into this store's `peer_sites` and `peer_sightings`. Repeatable, at most 8. `URL` is `http://A.B.C.D[:PORT]` (port 80 when absent), a literal address in the tailnet, `100.64.0.0/10`; a name is never resolved, and an address outside the tailnet is refused (exit 2) unless `--peer-allow-outside-tailnet` is given. Off by default; each peer is named on stderr at start. Needs a `WITH_SQLITE` build; `--strict` refuses it. |
+| `--peer-interval-secs N` | Seconds between pulls, 10..3600, default 60. |
+| `--peer-allow-outside-tailnet` | Allow a `--peer` address outside `100.64.0.0/10` (a LAN peer, a loopback test). There is no TLS: the link you chose is the only protection, and each such peer is announced as a warning. |
 | `--help` | Usage. |
 
 Exit status: `0` after `SIGINT`/`SIGTERM`, `1` when the bind fails or
@@ -1457,18 +1483,19 @@ state (`baseline`, `baseline_cell`, `episode`, `fanout`, `reported`;
   own version stamp, so a failed step leaves the file at the version it
   last reached, with the step's own changes rolled back. A new file is
   stamped v0 first and takes the same chain, so the chain runs on every
-  first start. The chain's first five steps: v0 to v1 creates the four
+  first start. Today the chain is nine steps: v0 to v1 creates the four
   tables, v1 to v2 indexes each tier on `t`, v2 to v3 creates the five
   analysis tables, v3 to v4 creates `passive_ptr` and its index (M4),
   v4 to v5 creates `chmix` and its index (the WiFi view's channel mix,
-  [below](#the-channel-mix-slothwebdb-v5); plain `CREATE TABLE` and
+  [below](#the-channel-mix-slothwebdb-v5)), v5 to v6 the triage and
+  TACDB tables ([Triage](#triage-and-the-frrs-record)), v6 to v7 the BLE
+  tables ([below](#the-ble-tables-slothwebdb-v7)), v7 to v8 the
+  fleet's `peer_sites` and `peer_sightings`
+  ([Fleet](#the-fleet-tables-slothwebdb-v8)) and v8 to v9 the anomaly
+  subjects and the operator's links
+  ([below](#anomaly-triage-and-links-slothwebdb-v9)); plain `CREATE TABLE` and
   `CREATE INDEX`: a name already taken fails the step rather than being
-  adopted). Then v5 to v6 creates the triage and TACDB tables
-  ([Triage and the FRRS record](#triage-and-the-frrs-record)), v6 to v7
-  the BLE tables ([below](#the-ble-tables-slothwebdb-v7)) and v7 to v8
-  the anomaly subjects and the operator's links
-  ([below](#anomaly-triage-and-links-slothwebdb-v8)): eight steps, v8
-  what this build writes.
+  adopted.
 - **No column can hold a credential**: `web/tests/test_store.c` keeps
   sloth's `test_db.c` guardrail (no column named for a password, a
   community, a nonce, a key or a token may be TEXT or BLOB), and scans
@@ -2447,19 +2474,23 @@ Devices view's class mix is not in these tables: it is `chmix` rows of
 kind 3 under `b:` keys ([The channel mix](#the-channel-mix-slothwebdb-v5)),
 and a row's class is derived from its fields when asked, never stored.
 
-### Anomaly triage and links: slothweb.db v8
+### Anomaly triage and links: slothweb.db v9
 
-`v7 -> v8` (owner request 2026-11-11) adds `anom_subject` and
+`v8 -> v9` (owner request 2026-11-11; sequenced after the fleet's v8,
+which reached main first) adds `anom_subject` and
 `relation` with the links' two indexes (`relation_pair`, unique on both
 ends; `relation_to`), in one additive `BEGIN IMMEDIATE` step like the
 others: plain `CREATE`, so a name already taken fails the step and
-leaves the file at v7. `web/tests/test_store.c` builds a v7 file as the
-BLE slice writes it (two triage rows, a TACDB platform and a BLE
-finding in it) and holds both the migration, which leaves every row and
-the `triage` table's columns as they were, and that failure (a v7 file
-already holding the name `relation_to`: still v7, none of the step's
-three other objects left behind; seen red with the migration's
-`ROLLBACK` made `COMMIT`). The `triage` table is not touched: an
+leaves the file at v8. `web/tests/test_store.c` builds a v8 file as the
+fleet slice writes it (a pulled peer in `peer_sites` and two of its
+sightings in `peer_sightings`, two triage rows, a TACDB platform and a
+BLE advertiser in it) and holds both the migration, which leaves the
+fleet's tables and rows, every other row and the `triage` table's
+columns as they were, and that failure (a v8 file already holding the
+name `relation_to`: still v8, none of the step's three other objects
+left behind; seen red with the migration's `ROLLBACK` made `COMMIT`).
+A v7 file goes v7, v8, v9 in one open
+(`test_v7_file_reaches_v9_in_one_open`). The `triage` table is not touched: an
 anomaly's decisions are rows in it beside the alerts', under a subject
 of their own (`a` and sixteen hex digits, type `-1`), so the cap, the
 folding and the history are one mechanism
@@ -4260,7 +4291,7 @@ from both ends, their guards and bound, a dangling end; the
 candidates' subject and both edges of the window to the second, nothing
 stored until accepted; the read on the large table; the bundle; the
 link's write over a socket; and `notes.js` with its drawing and writing
-functions pinned whole. `test_store.c` holds the v7 to v8 migration and
+functions pinned whole. `test_store.c` holds the v8 to v9 migration and
 its failure.
 
 `web/tests/test_frrs.c` holds it: hand-built requests through the
@@ -4743,6 +4774,108 @@ device out. The view shows what sloth.db already holds, to whoever the
 peer list already admits; it adds no export: the copy-JSON bundle
 gains no kind and no member for it, so the bundle's glossary needed no
 entry, and a device's bundle carries its PNL as it did before.
+
+## Fleet
+
+Issue #192 slice F1, under [ADR 0008](../docs/wiki/adr/0008-own-fleet.md)
+(the owner's own sensors share at full fidelity over the tailnet) and
+[docs/wiki/fleet.md](../docs/wiki/fleet.md). Each slothweb serves what
+its sensor has seen to the addresses its allow list admits, and pulls
+the same from the peers `--peer` names, into its own `slothweb.db`. The
+sensor and `sloth.db` are not touched; slothweb still never writes
+`sloth.db`. The code is `web/src/web_fleet.c`.
+
+**`/api/fleet/export?since=EPOCH`** (GET only, `application/x-ndjson`)
+is read-only and on the existing listener, so it answers exactly the
+peers `--web-allow` admits: on the operator's other sensor that is this
+host's tailnet address, as one address, never a subnet (ADR 0008). It is
+JSON Lines, one flat object a line, so the puller reads it with the
+stream's own strict decoder (`web_jsonl.h`) and nothing new:
+
+| Line | Members |
+|---|---|
+| `fleet_export` (first) | `fleet_export_version` (1), `generated` (the peer's clock), `since`, `site_label` (sloth.db's newest session label), `slothweb_version`, `sloth_version` (null: not kept), `sloth_db` (`open`, `none`, `unavailable`), `lat`, `lon`, `alt_m`, `pos_source` (`gps`/`fixed`), `pos_ts`, `pos_age_s` (all null without a position; from `sensor_health`'s `loc_*`) |
+| `gnss` | `sensor_health`'s receiver summary: `gps_state`, `sats_in_view`, `sats_used`, `cn0_mean`, `time_offset_ms`, `jam`, `ts` |
+| `wifi` | sloth.db `devices` last seen at or after `since`: `mac`, `vendor`, `ssid` (its last), `rssi`, `bssid` (its newest association), `is_ap`, `first_seen`, `last_seen`; at most 2,000 |
+| `ap` | `beacon_aps`: `bssid`, `ssid`, `channel`, `enc`, `vendor`, `rssi`, times; at most 1,000 |
+| `probe` | each exported client's probe list (`pnl_ssids`), one line per SSID: `mac`, `ssid`, times; 32 a client, 4,000 in all |
+| `ble` | slothweb's BLE advertisers heard since: `addr`, `addr_type`, `name`, `class`, `rssi`, times; at most 1,024 |
+| `alert` | the alert keys whose latest incident is in the window: `alert_type`, `ty`, `fingerprint` (FNV-1a of type and title), `title`, `ip`, `sev`, `count`, times; at most 1,000 |
+| `verdict` | each triaged finding's current state decided since: `alert_type`, `addr`, `port`, `alert_first_seen`, `state`, `ts`; at most 1,000 |
+| `fleet_end` (last) | `rows`, the count of each kind, `truncated_<kind>` for each, `complete: true` |
+
+Every member of every line is listed once, in `web_fleet_members[]`:
+the writer names nothing else (an unlisted name fails the answer, 503)
+and the reader refuses a line holding anything else; the suite holds
+each name to `web_sdb_is_secret()` ([Security](#security)). The
+`sloth.db` rows come through the M4 reader and its column allow-list,
+so no credential, username, alert key, alert detail, EAPOL row, RADIUS
+identity, MQTT username or RDP cookie can be read, whatever a later edit
+says; `web/tests/test_fleet.c` seeds each one and holds it out of the
+body. A triage verdict travels without its note, author or address of
+origin. A kind cut at its cap, or by sloth.db's read budget (1.5 s),
+says so in `truncated_<kind>`; the body is never cut, and a row that
+would pass 8 MB is not written. So does a kind with a row the importer
+below would refuse (a stored signal of +60 dBm, a first seen after the
+last): every line is held to the importer's own checks before it is
+sent, and such a row is left out, because one would refuse the peer's
+whole answer at every pull while it stayed in the window.
+
+**The pull** runs on a thread of its own, every `--peer-interval-secs`:
+one HTTP/1.1 `GET /api/fleet/export?since=` to each peer over plain TCP,
+5 s to connect and 30 s for the whole answer (not each read: a peer
+that trickles bytes is cut off), which is held to 10 MB and refused
+whole past it (never cut to fit); a `Transfer-Encoding` or a second
+`Content-Length` is refused. `since` is the peer's own
+`generated` at its last good pull less 120 s, so a clock difference
+between the sites loses nothing, and a first pull asks from 0 (the newest
+rows of each kind, at their caps). An answer is checked whole before a
+row is written: every line decoded, every member known, every value in
+range (MACs canonical, times 0..2100, RSSI -150..30, strings at most 255
+bytes, altitude -1,000..100,000 m, state one of triage's words), the header version 1 and the end
+line's counts equal to the rows sent. Anything else is refused with a
+reason in slothweb's own words (`line 4: a wifi line with a member it
+may not carry: refused`, `HTTP status 503`, `response over 10485760
+bytes: refused`), kept in memory, in `/api/health` and in `peer_sites`,
+and no sighting is written.
+
+### The fleet tables: slothweb.db v8
+
+`v7 -> v8` adds `peer_sites`, `peer_sightings` and one index, in one
+additive `BEGIN IMMEDIATE` step like the others (a name already taken
+fails it and leaves the file at v7; `web/tests/test_store.c` holds the
+migration of a v7 file with a BLE advertiser, a triage row and a TACDB
+platform in it, which come through unchanged, and that failure).
+
+- `peer_sites`: one row per `--peer` name: `url`, `label`,
+  `last_attempt`, `last_ok` (slothweb's clock), `last_error`, the
+  site's `lat`, `lon`, `alt`, `pos_source`, `pos_ts`, the peer's
+  `remote_version`, `remote_ts` (its clock at the last good answer, the
+  next pull's `since`) and `rows_last`.
+- `peer_sightings`: one row per `(peer, kind, key)`: `kind` is `wifi`,
+  `ble`, `ap`, `probe`, `alert`, `verdict` or `gnss`; `key` the
+  canonical MAC (a probe: `mac|ssid`; an alert: its fingerprint; a
+  verdict: `type|addr|port|alert_first_seen`); `label` the SSID, name,
+  title or state; `vendor` (a BLE row's class); `rssi`; `first_seen`
+  and `last_seen`, widened by every pull (the earlier first, the later
+  last); and `extra`, JSON slothweb writes itself from validated
+  members.
+
+The pull thread writes over a store connection of its own (as triage
+does, a busy timeout of 5 s), one transaction a pull; the HTTP thread
+reads over the read-only one. Bounded twice per peer at every pull: no
+sighting older than 90 days by the peer's own clock, and at most 20,000
+sightings, the least recently seen dropped first. A row is a few hundred
+bytes, so eight peers at the cap are some 50 MB, inside `--web-max-mb`'s
+accounting but not dropped by its ceiling.
+
+**`/api/health`** gains `fleet`: `{"export":true,"export_version":1,
+"interval_s":60,"outside_tailnet":false,"peers":[{"name","url",
+"last_ok_age_s","last_attempt_age_s","last_error","rows","pulls",
+"failures"}]}`. **`/api/fleet/peers`** answers each `peer_sites` row
+(`configured` false for a name no longer given) with its sightings
+counted by kind. There is no Fleet tab yet (#192 F2); the inferences
+across sites are F3 and F4.
 
 ## Capture scope
 

@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #include "web_acl.h"
+#include "web_fleet.h"
 #include "web_ingest.h"
 #include "web_pcapdir.h"
 #include "web_rollup.h"
@@ -66,6 +67,13 @@ typedef struct {
      * remote peers too. An evidence pcap can hold EAPOL/PMKID material
      * (web_pcapdir.h). */
     int      serve_evidence_pcap;
+    /* The owner's fleet (web_fleet.h, ADR 0008): the peers pulled,
+     * none by default; how often; and whether an address outside the
+     * tailnet (100.64.0.0/10) may be named. */
+    web_fleet_peer_cfg_t peer[WEB_FLEET_PEERS];   /* --peer, repeatable */
+    int      npeer;
+    int      peer_interval_s;      /* --peer-interval-secs */
+    int      peer_outside;         /* --peer-allow-outside-tailnet */
 } web_config_t;
 
 void web_config_defaults(web_config_t *c);
@@ -87,6 +95,8 @@ int  web_parse_bind(const char *s, int *family, uint8_t addr[16],
  *     nothing else to read);
  *   - --web-serve-evidence-pcap with --web-allow-remote, unless given
  *     as --web-serve-evidence-pcap=remote.
+ *   - a --peer outside 100.64.0.0/10 without
+ *     --peer-allow-outside-tailnet, and any --peer under strict.
  * Pure: no output, no socket. 0, or -1 with the refusal in err. */
 int  web_config_check(const web_config_t *c, char *err, size_t errsz);
 
@@ -108,7 +118,8 @@ int  web_config_parse(web_config_t *c, int argc, char **argv,
  * for a --socket read from another host, and one for the SQL box served
  * to remote peers (--web-allow-sql with --web-allow-remote); and, for
  * any configuration, one when evidence pcaps are served
- * (--web-serve-evidence-pcap), naming remote peers when they get them.
+ * (--web-serve-evidence-pcap), naming remote peers when they get them;
+ * one for each peer outside the tailnet (--peer-allow-outside-tailnet).
  * Prints nothing for a loopback-only configuration without that flag. */
 void web_config_announce(const web_config_t *c, FILE *err);
 

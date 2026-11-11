@@ -1292,14 +1292,15 @@ static void test_store_shares_chmix(void) {
     web_chmix_destroy(&wm);
     route_down();
     web_store_close(&st);
-    /* Still the version it was made at (v8 since the anomaly triage
-     * slice; this one added no step), and it opens as one. */
-    WT_EQ(raw_q(p, "SELECT value FROM meta WHERE name='schema_version'"), 8);
-    WT_EQ(WEB_STORE_SCHEMA, 8);
+    /* Still a current file (v8 since the fleet, #192 F1; v9 since the
+     * anomaly triage slice: this one added no step), and it opens
+     * as one. */
+    WT_EQ(raw_q(p, "SELECT value FROM meta WHERE name='schema_version'"), WEB_STORE_SCHEMA);
+    WT_EQ(WEB_STORE_SCHEMA, 9);
     WT_EQ(web_store_open(&st, p, err, sizeof(err)), 0);
     WT_EQ(web_store_mix_count(&st), 5);
     web_store_close(&st);
-    WT_EQ(raw_q(p, "SELECT value FROM meta WHERE name='schema_version'"), 8);
+    WT_EQ(raw_q(p, "SELECT value FROM meta WHERE name='schema_version'"), WEB_STORE_SCHEMA);
     const char *files[] = { "slothweb.db", "slothweb.db-wal", "slothweb.db-shm" };
     for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
         snprintf(p, sizeof(p), "%s/%s", g_dir, files[i]);

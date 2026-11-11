@@ -29,6 +29,7 @@ before Stage 1 starts.
 | [0005](0005-no-runtime-dependency.md) | No component depends on another at run time | Accepted |
 | [0006](0006-sharing-is-opt-in.md) | Cross-installation sharing is opt-in and sanitised | Accepted |
 | [0007](0007-versioning.md) | Semantic versions per repository, contract versions per seam | Accepted |
+| [0008](0008-own-fleet.md) | The owner's own sensors share at full fidelity over the tailnet (#192) | Accepted |
 
 ## Related pages
 

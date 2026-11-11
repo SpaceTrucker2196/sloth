@@ -10,6 +10,7 @@
 #include "web_assets.h"
 #include "web_bledev.h"
 #include "web_evidence.h"
+#include "web_fleet.h"
 #include "web_bundle.h"
 #include "web_flows.h"
 #include "web_frrs.h"
@@ -388,13 +389,22 @@ static size_t health_json(const web_health_t *h, char *out, size_t outsz) {
      * when the module is attached, so the answer without it is as it
      * was. */
     if (h->m4 && h->m4->frrs) web_frrs_health(h->m4->frrs, &w);
+    /* The owner's fleet (web_fleet.h): the export, and each peer pulled
+     * with its last good pull's age and its last refusal. Additive and
+     * last, only when attached, as triage is. */
+    if (h->m4 && h->m4->fleet) {
+        web_jw_raw(&w, ",\"fleet\":");
+        web_fleet_health_json(h->m4->fleet, &w, h->wall_s);
+    }
     web_jw_raw(&w, "}\n");
     return w.overflow ? 0 : w.len;
 }
 
 static int route_health(const web_req_t *rq, const web_health_t *h,
                         char *out, size_t outsz, web_resp_t *r) {
-    char body[8192];
+    /* 8 KB before the fleet; eight peers, each a last refusal of up to
+     * WEB_FLEET_ERR_MAX bytes escaped, take up to another 10 KB. */
+    char body[20480];
     size_t bl = health_json(h, body, sizeof(body));
     if (bl == 0) return -1;
     r->status = 200;
@@ -1308,6 +1318,87 @@ static int route_bundle(const web_req_t *rq, const web_health_t *h, char *out,
     return 0;
 }
 
+/* /api/fleet/export (web_fleet.h): GET only, a heap body as
+ * /api/bundle's. Read-only, and served to whatever the allow list
+ * admits, as every route is: the peers a fleet names are --web-allow
+ * entries. */
+static int route_fleet_export(const web_req_t *rq, const web_health_t *h, char *out,
+                              size_t outsz, web_resp_t *r) {
+    if (rq->is_head) {
+        r->status = 405;
+        return fit(snprintf(out, outsz,
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n"), outsz, &r->out_len);
+    }
+    if (qlong(rq)) {
+        if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+        size_t bl = web_series_error_json("query_too_long", out + WEB_LIVE_HDR_RESERVE,
+                                          outsz - WEB_LIVE_HDR_RESERVE);
+        if (!bl) return -1;
+        return json_answer(rq, h, 400, bl, out, outsz, r);
+    }
+    web_fleet_src_t src = {
+        h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
+    };
+    char *body = NULL;
+    size_t bl = 0;
+    int status = 200;
+    if (web_fleet_export_route(&src, rq->query, h->wall_s, &body, &bl, &status) != 0 ||
+        !body || bl == 0) {
+        free(body);
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (fit(snprintf(out, outsz,
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", status, web_http_reason(status),
+        status == 200 ? "application/x-ndjson" : "application/json", bl),
+        outsz, &r->out_len) != 0) {
+        free(body);
+        return -1;
+    }
+    r->status = status;
+    r->body = (const unsigned char *)body;
+    r->body_owned = (unsigned char *)body;
+    r->body_len = bl;
+    return 0;
+}
+
+/* /api/fleet/peers (web_fleet.h): what each peer last reported. */
+static int route_fleet_peers(const web_req_t *rq, const web_health_t *h, char *out,
+                             size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE, bl = 0;
+    int status = 200;
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+    } else if (web_fleet_peers_route(h->m4 ? h->m4->fleet : NULL, rq->query, h->wall_s,
+                                     body, cap, &bl, &status) != 0) {
+        bl = 0;
+    }
+    if (bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
 /* /api/recipes: docs/wiki/sqlite-schema.md's, as built in. */
 static int route_recipes(const web_req_t *rq, const web_health_t *h, char *out, size_t outsz,
                          web_resp_t *r) {
@@ -1578,6 +1669,10 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_bundle(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/positions"))
             return route_positions(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/fleet/export"))
+            return route_fleet_export(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/fleet/peers"))
+            return route_fleet_peers(rq, h, out, outsz, r);
         /* Without --web-allow-sql neither exists: a 404 like any path. */
         if (h->sql && h->sql->enabled) {
             if (!strcmp(rq->path, "/api/query"))
