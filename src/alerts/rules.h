@@ -135,4 +135,12 @@ void rule_gnss_position_jump(const sloth_state_t *s, time_t now);
 
 /* src/alerts/rules_adsb.c (#186): the --adsb decoder's aircraft table */
 void rule_adsb_emergency(const sloth_state_t *s, time_t now);
+
+/* src/alerts/rules_sensor.c (2026-11-11): the sensor's own state, read
+ * off sys_status_get(). The spans are the rule file's to justify. */
+#define SENSOR_RECOVER_S        120   /* clear this long before `recovered` */
+#define SENSOR_SRC_DOWN_HOLD_S  10    /* `down` this long opens */
+#define SENSOR_SRC_STALE_S      300   /* not `ok` this long opens */
+void rule_sensor_undervolt(const sloth_state_t *s, time_t now);
+void rule_sensor_source_down(const sloth_state_t *s, time_t now);
 #endif

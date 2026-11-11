@@ -356,3 +356,13 @@ X(GNSS_POSITION_JUMP, "") /* real basis, no ATT&CK technique (second exemption f
  * Flag only: sloth surfaces it and never acts on it. */
 /* squawk 7500 / 7600 / 7700 or a DO-260B emergency status other than none, per address — SERA.13005, readsb README-json */
 X(ADSB_EMERGENCY, "") /* real basis, no ATT&CK technique (second exemption form) */
+/* The sensor's own state (2026-11-11, src/alerts/rules_sensor.c), read
+ * off the host-status snapshot src/sys_status.c takes. Deliberately
+ * empty, the FIRST exemption form (agents/AGENTS.md): sloth's own
+ * operational state, no adversary, nothing to cite - the rows of
+ * NO_MONITOR_MODE and BT_OWN_TRANSMIT, pinned by
+ * tests/test_research_corpus.c :: test_own_state_kinds_are_named. */
+/* the host's under-voltage alarm (an hwmon inN_lcrit_alarm, the Raspberry Pi firmware's flag) reads 1 */
+X(SENSOR_UNDERVOLT, "") /* own operational state (first exemption form) */
+/* a source the command line configured (source_status) is down, or stale past SENSOR_SRC_STALE_S */
+X(SENSOR_SOURCE_DOWN, "") /* own operational state (first exemption form) */

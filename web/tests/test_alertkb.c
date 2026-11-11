@@ -5,7 +5,7 @@
  * has a section in docs/wiki/alert-remediation.md; and every source a
  * remediation section names is a corpus document whose alert_kinds list
  * that type, so no step rests on a source the corpus does not cite for
- * it. The two own-operational-state types have no corpus document by
+ * it. The own-operational-state types have no corpus document by
  * design (agents/AGENTS.md) and may cite sloth's own pages only. Runs
  * from the top of the tree, as the suite does. */
 #include <stdio.h>
@@ -36,7 +36,8 @@ static char *slurp(const char *path) {
 }
 
 static int own_state(const char *name) {
-    return !strcmp(name, "NO_MONITOR_MODE") || !strcmp(name, "BT_OWN_TRANSMIT");
+    return !strcmp(name, "NO_MONITOR_MODE") || !strcmp(name, "BT_OWN_TRANSMIT") ||
+           !strcmp(name, "SENSOR_UNDERVOLT") || !strcmp(name, "SENSOR_SOURCE_DOWN");
 }
 
 /* Seen red with the generator's row_label() mapping removed

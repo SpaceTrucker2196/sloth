@@ -10,7 +10,7 @@ by `web/tools/alertkb.c`, never copied by hand).
 step's basis; each section names its own), `docs/wiki/alerts.md` and
 `docs/views/alerts.md` (what each rule fires on).
 
-**Last updated**: 2026-11-08 (#186: ADSB_EMERGENCY). 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
+**Last updated**: 2026-11-11 (SENSOR_UNDERVOLT, SENSOR_SOURCE_DOWN). 2026-11-08 (#186: ADSB_EMERGENCY). 2026-11-03 (#173: FRAG_PLAINTEXT reads the station pair from the view; PM_FORGE's 900 s report window). 2026-11-03 (the four GNSS types). 2026-10-26 (the last two unconditioned "locate and
 remove" steps made conditional on the premises, as the rest are;
 review: WEAK_TLS aimed at the client
 that offered the old version; every on-device step conditional on the
@@ -40,10 +40,11 @@ Each section has the same four parts:
 - **Sources**: the corpus documents the steps rest on, by path. Each one
   lists the type in its `alert_kinds` frontmatter, and
   `web/tests/test_alertkb.c` fails the build's tests if a section cites
-  a document that does not, or a type has no section. The two
-  own-operational-state types (`NO_MONITOR_MODE`, `BT_OWN_TRANSMIT`)
-  have no corpus document by design (`agents/AGENTS.md`, *Detectors cite
-  their sources*) and cite sloth's own pages instead.
+  a document that does not, or a type has no section. The
+  own-operational-state types (`NO_MONITOR_MODE`, `BT_OWN_TRANSMIT`,
+  `SENSOR_UNDERVOLT`, `SENSOR_SOURCE_DOWN`) have no corpus document by
+  design (`agents/AGENTS.md`, *Detectors cite their sources*) and cite
+  sloth's own pages instead.
 
 A step that says "the source does not say" is the honest answer; the
 operator's own logs are usually where the rest of the answer lives.
@@ -1969,6 +1970,53 @@ Sources: `research/gnss/time-and-position-integrity.md`
 **Vendor fix:** none.
 
 Sources: `research/adsb/emergency-squawks.md`
+
+## `SENSOR_UNDERVOLT`
+
+**Investigate**
+
+1. This is sloth's own host: the board's under-voltage alarm read 1.
+   The detail names the hwmon node and its driver (`rpi_volt` on a
+   Raspberry Pi). Look in the kernel log (`dmesg`) for the same moment.
+2. Read the Sensor health page (or the `sys_status` and `sys_sensor`
+   records): which sources went `down` or `stale` around the same time.
+   A radio or GNSS receiver on USB is often the first thing to drop.
+
+**Fix**
+
+1. Use the board maker's rated supply and a short, thick cable; move
+   USB radios that draw much to a powered hub.
+2. After repeated alarms, check the SD card's file system: a brown-out
+   during a write is how cards get corrupted.
+
+**Vendor fix:** not applicable; this is the host's power supply.
+
+Sources: `docs/wiki/alerts.md`, `docs/wiki/jsonl-schema.md`
+
+## `SENSOR_SOURCE_DOWN`
+
+**Investigate**
+
+1. This is sloth's own sensor: a source it was told to read is `down`,
+   or has not been `ok` for five minutes. The detail names the source,
+   its endpoint and the reader's own word for what went wrong.
+2. CRIT means the monitor radio or the IP capture: every finding of that
+   domain is missing while it lasts, and a quiet view is not a quiet
+   network.
+3. Check the receiver: `ip link` for the interface, `dmesg` for a USB
+   disconnect, the decoder (readsb, gpsd, Dire Wolf) for its own state.
+
+**Fix**
+
+1. Reconnect or restart what the source reads; the incident closes by
+   itself after two minutes of `ok`.
+2. If the source is not wanted, drop its flag: a source that is not
+   configured never fires.
+
+**Vendor fix:** not applicable; this is the sensor's own configuration
+and hardware.
+
+Sources: `docs/wiki/alerts.md`, `docs/wiki/jsonl-schema.md`
 
 ## Related pages
 

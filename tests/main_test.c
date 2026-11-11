@@ -133,6 +133,7 @@ void run_ubertooth_tests(void);           /* tests/test_ubertooth.c (#144 slice 
 void run_ble_rules_tests(void);           /* tests/test_ble_rules.c (#144 slice 4) */
 void run_gnss_rules_tests(void);          /* tests/test_gnss_rules.c (GNSS rules) */
 void run_adsb_rules_tests(void);          /* tests/test_adsb_rules.c (#186) */
+void run_sensor_rules_tests(void);        /* tests/test_sensor_rules.c */
 void run_ble_rotation_tests(void);        /* tests/test_ble_rotation.c (#156 item 2) */
 void run_ble_scan_tests(void);            /* tests/test_ble_scan.c (sloth-ble-scan) */
 void run_tmp_dir_tests(void);             /* tests/test_tmp_dir.c */
@@ -484,6 +485,7 @@ int main(void) {
     run_ble_rules_tests();
     run_gnss_rules_tests();
     run_adsb_rules_tests();
+    run_sensor_rules_tests();
     run_ble_rotation_tests();
     run_ble_scan_tests();
     run_tmp_dir_tests();

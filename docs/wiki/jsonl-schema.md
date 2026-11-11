@@ -493,6 +493,7 @@ not duration.
 | `cleared` | the operator pressed `c` in the TUI. Every open incident closes — leaving them open would strand a consumer waiting for a resolve that can never come |
 | `displaced` | additive, #148 — a per-destination `BEACONING` finding (`beacon:<ip>:<port>`) lost its place among the `bd.max_findings` strongest tracks to a clearly stronger one, or — no longer strong itself — to any strong one, or the cap was lowered under it. The track may still be beaconing: from this record on it is counted in the `beacon-overflow` finding for as long as it stays strong (a holder displaced because it stopped being strong is not counted at all), and if it wins a place back its next `alert.create` is a new incident of the same key (`reopen_count` > 0) |
 | `drained` | additive, #148 — the `beacon-overflow` finding closed because no strong beaconing track is without its own finding (K = 0) — whether the overflowed tracks won places or simply stopped being strong |
+| `recovered` | additive, 2026-11-11 — an own-state finding closed by its rule because the condition has been clear for 120 s without a break: `SENSOR_UNDERVOLT` (the under-voltage alarm read 0) and `SENSOR_SOURCE_DOWN` (the source read `ok`). The hold is what makes a flapping supply or source one incident ([[alerts]]) |
 
 | Field | Type | Meaning |
 |-------|------|---------|
