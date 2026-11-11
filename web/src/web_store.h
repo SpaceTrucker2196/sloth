@@ -71,7 +71,7 @@
 #include "web_rollup.h"
 
 /* The version this build writes. */
-#define WEB_STORE_SCHEMA   10
+#define WEB_STORE_SCHEMA   11
 #define WEB_STORE_ERR_MAX  320
 #define WEB_DEFAULT_STORE  "./slothweb.db"
 /* --web-max-mb: the ceiling on the store's used pages. */
@@ -92,7 +92,7 @@
 #define WEB_STORE_EXPIRE_STEPS  256
 #define WEB_STORE_VACUUM_PAGES  256
 
-#define WEB_STORE_AN_STMTS 18
+#define WEB_STORE_AN_STMTS 24
 
 struct sqlite3;
 struct sqlite3_stmt;
@@ -367,6 +367,35 @@ int  web_store_any_before(web_store_t *s, int metric, const char *key,
  * -1. */
 int  web_store_hours_at(web_store_t *s, int metric, const char *key,
                         const long long *ts, int n, web_point_t *out);
+
+/* ── the hour coverage (v11) ───────────────────────────────────────────
+ *
+ * On the writer connection, from the store thread only, like the rest
+ * of the analysis state: which minutes of each hour slothweb observed,
+ * across its restarts (web_anomaly.c). A row is (hour start, mask, done):
+ * bit i of mask the hour's minute i, done once a run passed the hour. */
+#define WEB_STORE_COVER_ALL ((1ULL << 60) - 1)
+/* OR mask's bits into the hour's row (made if absent). 0, or -1. */
+int  web_store_cover_put(web_store_t *s, long long hour, unsigned long long mask);
+/* Mark the hour passed (the row made if absent). 0, or -1. */
+int  web_store_cover_done(web_store_t *s, long long hour);
+/* The hour's row: 1 found (mask and done set), 0 none (both 0), -1. */
+int  web_store_cover_get(web_store_t *s, long long hour, unsigned long long *mask,
+                         int *done);
+/* Up to max hours with from <= hour < to not yet passed, oldest first,
+ * into hours. How many, or -1. */
+int  web_store_cover_open(web_store_t *s, long long from, long long to,
+                          long long *hours, int max);
+/* Rows of hours before `before` deleted. 0, or -1. */
+int  web_store_cover_prune(web_store_t *s, long long before);
+/* Every minute row of every series with hour <= t < hour + 3600, to
+ * fn(ctx, metric, key, the row), in no set order: what the minute tier
+ * holds of the hour, every run's rows of it. Rows given, or -1 (then
+ * fn may have seen some). */
+typedef void (*web_store_minute_fn)(void *ctx, int metric, const char *key,
+                                    const web_point_t *pt);
+long long web_store_hour_minutes(web_store_t *s, long long hour,
+                                 web_store_minute_fn fn, void *ctx);
 
 /* ── the passive PTR cache (v4, #162) ──────────────────────────────────
  *

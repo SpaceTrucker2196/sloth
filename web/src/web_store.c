@@ -478,6 +478,26 @@ static const char STEP_V10_SQL[] =
     "ALTER TABLE relation ADD COLUMN via INTEGER NOT NULL DEFAULT 0;\n"
     "CREATE INDEX note_subject ON note (kind, subject, id);\n";
 
+/* v10 -> v11 (owner ruling 2026-11-11: schedule the restart-loss fix):
+ * which minutes of an hour slothweb observed, kept across its own
+ * restarts. One row an hour: mask's bit i is the hour's minute i,
+ * observed (the socket connected and a record inside 60 s at every
+ * store-thread step in it, web_anomaly.c's minute_observed()) by a
+ * process that also wrote that minute's rows to the minute tier first;
+ * each process ORs its own bits in, so a row is the union of every
+ * run's. done is 1 once a process has passed the hour (fed it to the
+ * baselines or judged it unobserved). The hour's values themselves are
+ * not stored here: the minute tier already holds both parts of a split
+ * hour (web_anomaly.c's hour_merge()). Additive: one new table, nothing
+ * that exists is changed. Plain CREATE: a file already holding the name
+ * fails the step and stays at v10. */
+static const char STEP_V11_SQL[] =
+    "CREATE TABLE anom_cover (\n"
+    "  hour INTEGER PRIMARY KEY,\n"
+    "  mask INTEGER NOT NULL DEFAULT 0,\n"
+    "  done INTEGER NOT NULL DEFAULT 0\n"
+    ");\n";
+
 typedef struct {
     int         from;
     const char *sql;
@@ -497,6 +517,7 @@ static const web_step_t STEPS[] = {
     { 7, STEP_V8_SQL, "created peer_sites and peer_sightings" },
     { 8, STEP_V9_SQL, "created anom_subject and relation" },
     { 9, STEP_V10_SQL, "created note and added relation.via" },
+    { 10, STEP_V11_SQL, "created anom_cover" },
 };
 #define STEP_N ((int)(sizeof(STEPS) / sizeof(STEPS[0])))
 
@@ -680,6 +701,41 @@ int web_store_any_before(web_store_t *s, int metric, const char *key,
 int web_store_hours_at(web_store_t *s, int metric, const char *key,
                        const long long *ts, int n, web_point_t *out) {
     (void)s; (void)metric; (void)key; (void)ts; (void)n; (void)out;
+    return -1;
+}
+
+int web_store_cover_put(web_store_t *s, long long hour, unsigned long long mask) {
+    (void)s; (void)hour; (void)mask;
+    return -1;
+}
+
+int web_store_cover_done(web_store_t *s, long long hour) {
+    (void)s; (void)hour;
+    return -1;
+}
+
+int web_store_cover_get(web_store_t *s, long long hour, unsigned long long *mask,
+                        int *done) {
+    (void)s; (void)hour;
+    *mask = 0;
+    *done = 0;
+    return -1;
+}
+
+int web_store_cover_open(web_store_t *s, long long from, long long to,
+                         long long *hours, int max) {
+    (void)s; (void)from; (void)to; (void)hours; (void)max;
+    return -1;
+}
+
+int web_store_cover_prune(web_store_t *s, long long before) {
+    (void)s; (void)before;
+    return -1;
+}
+
+long long web_store_hour_minutes(web_store_t *s, long long hour,
+                                 web_store_minute_fn fn, void *ctx) {
+    (void)s; (void)hour; (void)fn; (void)ctx;
     return -1;
 }
 
@@ -896,7 +952,8 @@ enum {
     AN_BL_INS = 0, AN_BL_UPD, AN_CELL_PUT, AN_BL_DEL, AN_CELL_DEL,
     AN_EP_PUT, AN_EP_DEL, AN_FAN_PUT, AN_FAN_DEL, AN_REP_PUT, AN_REP_PRUNE,
     AN_ANY_MIN, AN_ANY_HOUR, AN_HOUR_AT, AN_BL_FIND, AN_EP_EXPIRE,
-    AN_PTR_PUT, AN_PTR_PRUNE
+    AN_PTR_PUT, AN_PTR_PRUNE, AN_COV_PUT, AN_COV_DONE, AN_COV_GET,
+    AN_COV_OPEN, AN_COV_PRUNE, AN_HOUR_MIN
 };
 static const char *const AN_SQL[WEB_STORE_AN_STMTS] = {
     [AN_BL_INS]    = "INSERT INTO baseline (metric,key,last_active,last_fed,"
@@ -939,6 +996,19 @@ static const char *const AN_SQL[WEB_STORE_AN_STMTS] = {
     [AN_PTR_PRUNE] = "DELETE FROM passive_ptr WHERE ip IN (SELECT ip FROM"
                      " passive_ptr ORDER BY last_seen DESC, ip LIMIT -1"
                      " OFFSET ?1)",
+    /* v11: a run's bits are ORed in, never put in place of another's. */
+    [AN_COV_PUT]   = "INSERT INTO anom_cover (hour,mask) VALUES (?1,?2)"
+                     " ON CONFLICT(hour) DO UPDATE SET mask=mask|excluded.mask",
+    [AN_COV_DONE]  = "INSERT INTO anom_cover (hour,done) VALUES (?1,1)"
+                     " ON CONFLICT(hour) DO UPDATE SET done=1",
+    [AN_COV_GET]   = "SELECT mask,done FROM anom_cover WHERE hour=?1",
+    [AN_COV_OPEN]  = "SELECT hour FROM anom_cover WHERE done=0 AND hour>=?1"
+                     " AND hour<?2 ORDER BY hour LIMIT ?3",
+    [AN_COV_PRUNE] = "DELETE FROM anom_cover WHERE hour<?1",
+    /* The hour's minute rows, every series: minute_t picks the hour. */
+    [AN_HOUR_MIN]  = "SELECT s.metric,s.key,r.t,r.sum,r.n,r.min,r.max FROM"
+                     " minute r JOIN series s ON s.id=r.series WHERE"
+                     " r.t>=?1 AND r.t<?2",
 };
 
 int web_store_available(void) { return 1; }
@@ -2703,6 +2773,115 @@ int web_store_hours_at(web_store_t *s, int metric, const char *key,
         }
     }
     return found;
+}
+
+/* ── the hour coverage (v11) ─────────────────────────────────────────── */
+
+int web_store_cover_put(web_store_t *s, long long hour, unsigned long long mask) {
+    if (!s->db) return -1;
+    sqlite3_stmt *st = s->an[AN_COV_PUT];
+    sqlite3_bind_int64(st, 1, hour);
+    sqlite3_bind_int64(st, 2, (sqlite3_int64)(mask & WEB_STORE_COVER_ALL));
+    if (an_step_done(st) != 0) {
+        note_fail(s, "coverage write");
+        return -1;
+    }
+    return 0;
+}
+
+int web_store_cover_done(web_store_t *s, long long hour) {
+    if (!s->db) return -1;
+    sqlite3_stmt *st = s->an[AN_COV_DONE];
+    sqlite3_bind_int64(st, 1, hour);
+    if (an_step_done(st) != 0) {
+        note_fail(s, "coverage done");
+        return -1;
+    }
+    return 0;
+}
+
+int web_store_cover_get(web_store_t *s, long long hour, unsigned long long *mask,
+                        int *done) {
+    *mask = 0;
+    *done = 0;
+    if (!s->db) return -1;
+    sqlite3_stmt *st = s->an[AN_COV_GET];
+    sqlite3_bind_int64(st, 1, hour);
+    int rc = sqlite3_step(st), found = 0;
+    if (rc == SQLITE_ROW) {
+        /* A value no run wrote (negative, or bits past minute 59) is
+         * read as the minutes it can name, never as more. */
+        *mask = (unsigned long long)sqlite3_column_int64(st, 0) & WEB_STORE_COVER_ALL;
+        *done = sqlite3_column_int64(st, 1) != 0;
+        found = 1;
+    }
+    sqlite3_reset(st);
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
+        note_fail(s, "coverage read");
+        return -1;
+    }
+    return found;
+}
+
+int web_store_cover_open(web_store_t *s, long long from, long long to,
+                         long long *hours, int max) {
+    if (!s->db || max <= 0) return -1;
+    sqlite3_stmt *st = s->an[AN_COV_OPEN];
+    sqlite3_bind_int64(st, 1, from);
+    sqlite3_bind_int64(st, 2, to);
+    sqlite3_bind_int(st, 3, max);
+    int n = 0, rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW && n < max) {
+        long long h = sqlite3_column_int64(st, 0);
+        if (h % WEB_HOUR_S == 0) hours[n++] = h;   /* an hour start, or not one of ours */
+    }
+    sqlite3_reset(st);
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
+        note_fail(s, "coverage list");
+        return -1;
+    }
+    return n;
+}
+
+int web_store_cover_prune(web_store_t *s, long long before) {
+    if (!s->db) return -1;
+    sqlite3_stmt *st = s->an[AN_COV_PRUNE];
+    sqlite3_bind_int64(st, 1, before);
+    if (an_step_done(st) != 0) {
+        note_fail(s, "coverage prune");
+        return -1;
+    }
+    return 0;
+}
+
+long long web_store_hour_minutes(web_store_t *s, long long hour,
+                                 web_store_minute_fn fn, void *ctx) {
+    if (!s->db || hour % WEB_HOUR_S) return -1;
+    sqlite3_stmt *st = s->an[AN_HOUR_MIN];
+    sqlite3_bind_int64(st, 1, hour);
+    sqlite3_bind_int64(st, 2, hour + WEB_HOUR_S);
+    long long n = 0;
+    int rc;
+    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+        const unsigned char *mt = sqlite3_column_text(st, 0);
+        const unsigned char *k = sqlite3_column_text(st, 1);
+        int metric = mt ? web_metric_find((const char *)mt) : -1;
+        if (metric < 0 || !k) continue;
+        char key[WEB_KEY_MAX + 1];
+        snprintf(key, sizeof(key), "%s", (const char *)k);
+        long long c = sqlite3_column_int64(st, 4);
+        web_point_t pt = { sqlite3_column_int64(st, 2), sqlite3_column_double(st, 3),
+                           sqlite3_column_double(st, 5), sqlite3_column_double(st, 6),
+                           c > 0 ? (unsigned long)c : 0 };
+        fn(ctx, metric, key, &pt);
+        n++;
+    }
+    sqlite3_reset(st);
+    if (rc != SQLITE_DONE) {
+        note_fail(s, "hour minutes");
+        return -1;
+    }
+    return n;
 }
 
 /* ── the passive PTR cache (v4, #162) ────────────────────────────────── */

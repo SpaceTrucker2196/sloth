@@ -408,6 +408,7 @@ int main(int argc, char **argv) {
     web_sqlbox_stop(&g_sql);
     web_ingest_stop(&g_ingest);
     web_tsdb_stop(&g_tsdb);
+    web_anomaly_save_cover(&g_anomaly);
 
     web_stats_t st;
     web_server_stats(&g_srv, &st);

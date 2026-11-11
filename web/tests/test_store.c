@@ -60,12 +60,13 @@ static void test_schema_text_guardrail(void) {
     const char *v8 = web_store_step_sql(7);
     const char *v9 = web_store_step_sql(8);
     const char *v10 = web_store_step_sql(9);
-    WT_ASSERT(meta && v1 && v2 && v3 && v4 && v5 && v6 && v7 && v8 && v9 && v10);
-    if (!v10) return;
-    WT_ASSERT(web_store_step_sql(10) == NULL);    /* v10 is current */
-    WT_EQ(WEB_STORE_SCHEMA, 10);
-    const char *both[11] = { meta, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10 };
-    for (int k = 0; k < 11; k++) {
+    const char *v11 = web_store_step_sql(10);
+    WT_ASSERT(meta && v1 && v2 && v3 && v4 && v5 && v6 && v7 && v8 && v9 && v10 && v11);
+    if (!v11) return;
+    WT_ASSERT(web_store_step_sql(11) == NULL);    /* v11 is current */
+    WT_EQ(WEB_STORE_SCHEMA, 11);
+    const char *both[12] = { meta, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11 };
+    for (int k = 0; k < 12; k++) {
         for (size_t i = 0; i < NFORBIDDEN; i++) {
             if (!strcmp(FORBIDDEN[i], "mic")) {
                 WT_ASSERT(strstr(both[k], "  mic ") == NULL);
@@ -179,6 +180,17 @@ static void test_schema_text_guardrail(void) {
     WT_ASSERT(strstr(v10, "triage") == NULL);
     WT_ASSERT(strstr(v10, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v10, "ssid") == NULL);
+    /* v11: the hour coverage table alone, every column with a default
+     * but the key; no other table touched. */
+    creates = semis = 0;
+    for (const char *p = v11; (p = strstr(p, "CREATE ")); p++) creates++;
+    for (const char *p = v11; *p; p++) semis += *p == ';';
+    WT_EQ(creates, 1);
+    WT_EQ(semis, 1);
+    WT_HAS(v11, "CREATE TABLE anom_cover (\n  hour INTEGER PRIMARY KEY,\n"
+                "  mask INTEGER NOT NULL DEFAULT 0,\n  done INTEGER NOT NULL DEFAULT 0\n);\n");
+    WT_ASSERT(strstr(v11, "IF NOT EXISTS") == NULL);
+    WT_ASSERT(strstr(v11, "ALTER") == NULL);
     /* Not IF NOT EXISTS: a step must fail on a name already taken. */
     WT_ASSERT(strstr(v1, "IF NOT EXISTS") == NULL);
     WT_ASSERT(strstr(v2, "IF NOT EXISTS") == NULL);
@@ -836,7 +848,7 @@ static void test_v7_file_is_migrated(void) {
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
     /* Through v8 and on to the current version in the one open (v9
-     * since the anomaly triage slice; test_v7_file_reaches_v10_in_one_open
+     * since the anomaly triage slice; test_v7_file_reaches_v11_in_one_open
      * holds that step's own objects). */
     WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), WEB_STORE_SCHEMA);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name IN"
@@ -1099,7 +1111,10 @@ static void test_v9_file_is_migrated(void) {
     v9_rows_as_written(p, tri_cols, 11);
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 10);
+    /* Through v10 and on to the current version in the one open (v11
+     * since the hour coverage; test_v10_file_is_migrated holds that
+     * step's own objects). */
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), WEB_STORE_SCHEMA);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('note','note_subject')"), 2);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM pragma_table_info('note')"), 10);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM note"), 0);
@@ -1108,7 +1123,7 @@ static void test_v9_file_is_migrated(void) {
     /* Opened again, nothing runs a second time. */
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 10);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), WEB_STORE_SCHEMA);
     v9_rows_as_written(p, tri_cols, 12);
     rm_store(p);
 }
@@ -1139,17 +1154,144 @@ static void test_v9_failed_step_leaves_file_unchanged(void) {
     rm_store(p);
 }
 
+/* A v10 file as the plain notes slice writes it: the v9 file (the
+ * fleet's rows, the triage rows, an anomaly's descriptor, two links),
+ * the v10 step, two notes on a device (the operator's and an agent's)
+ * and the row that retracts the first, an agent's link, and episodes,
+ * baselines and a minute row (the v3 tables and the v1 tiers, which the
+ * restart-loss fix reads), stamped v10. */
+static void make_v10(const char *p, const char *extra) {
+    char sql[8192];
+    make_v9(p, "");
+    snprintf(sql, sizeof(sql), "%s INSERT INTO note (id, kind, subject, text, who, peer, via,"
+             " retracts, folded, ts) VALUES"
+             " (1,0,'02:00:00:00:00:07','the printer','op','127.0.0.1',0,0,0,1200),"
+             " (2,0,'02:00:00:00:00:07','moved','claw','127.0.0.1',3,0,0,1210),"
+             " (3,0,'02:00:00:00:00:07','wrong','op','127.0.0.1',0,1,0,1220);"
+             " INSERT INTO relation (id, a_kind, a_id, a_label, b_kind, b_id, b_label, note,"
+             " who, peer, ts, via) VALUES (3,1,'a0123456789abcdef','A2',2,'02:00:00:00:00:08','',"
+             "'','claw','127.0.0.1',1230,3);"
+             " UPDATE meta SET value='10' WHERE name='schema_version'; %s",
+             web_store_step_sql(9), extra);
+    raw_exec(p, sql);
+}
+
+/* What the v10 file held, as it must still hold it after the v11 step
+ * ran or failed. */
+static void v10_rows_as_written(const char *p, long long tri_cols) {
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM peer_sites WHERE peer='car' AND"
+                     " url='http://100.64.0.7:8770' AND last_ok=1090 AND rows_last=2"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM peer_sightings"), 2);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM pragma_table_info('triage')"), tri_cols);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM triage"), 3);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM triage WHERE id=5 AND subject='a0123456789abcdef'"
+                     " AND type=-1 AND state=4 AND note='the new laptop'"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM anom_subject WHERE subject='a0123456789abcdef'"
+                     " AND rule='A2' AND key='02:00:00:00:00:07' AND ts=1150"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM pragma_table_info('relation')"), 12);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM relation"), 3);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM relation WHERE via = 0"), 2);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM relation WHERE id=3 AND via=3 AND who='claw'"
+                     " AND b_id='02:00:00:00:00:08' AND ts=1230"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM note"), 3);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM note WHERE id=1 AND kind=0 AND"
+                     " subject='02:00:00:00:00:07' AND text='the printer' AND who='op' AND"
+                     " via=0 AND retracts=0 AND ts=1200"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM note WHERE id=2 AND via=3 AND who='claw'"
+                     " AND text='moved' AND ts=1210"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM note WHERE id=3 AND retracts=1 AND text='wrong'"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name='note_subject'"
+                     " AND tbl_name='note'"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM ble_device WHERE addr='aa:bb:cc:00:00:01'"
+                     " AND name='tag' AND rssi=-60 AND adv_count=9"), 1);
+    WT_EQ(raw_int(p, "SELECT frames FROM chmix WHERE channel='6' AND t=960"), 40);
+    WT_EQ(raw_int(p, "SELECT sum FROM minute WHERE series=1 AND t=960"), 7);
+    WT_EQ(raw_int(p, "SELECT score FROM episode WHERE id=5"), 70);
+}
+
+/* v10 -> v11 adds anom_cover, empty, and changes nothing that was
+ * there: the fleet's rows, the triage rows, the anomaly's descriptor,
+ * the three links (one an agent's), the notes and the retraction, the
+ * episodes and the minute tier, column for column. Seen red with the
+ * step's mask written without its default (AN_COV_DONE, which names
+ * only the hour, then failed NOT NULL: the done row count 0). */
+static void test_v10_file_is_migrated(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v10.db");
+    make_v10(p, "");
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 10);
+    long long tri_cols = raw_int(p, "SELECT COUNT(*) FROM pragma_table_info('triage')");
+    v10_rows_as_written(p, tri_cols);
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    /* The new table works from the store's own statements: bits ORed,
+     * done marked without a mask, both read back. */
+    WT_EQ(web_store_cover_put(&S, 3600, 0x5), 0);
+    WT_EQ(web_store_cover_put(&S, 3600, 0x3), 0);
+    WT_EQ(web_store_cover_done(&S, 7200), 0);
+    unsigned long long m = 0;
+    int done = 0;
+    WT_EQ(web_store_cover_get(&S, 3600, &m, &done), 1);
+    WT_EQ(m, 0x7);
+    WT_EQ(done, 0);
+    WT_EQ(web_store_cover_get(&S, 7200, &m, &done), 1);
+    WT_EQ(m, 0);
+    WT_EQ(done, 1);
+    WT_EQ(web_store_cover_get(&S, 10800, &m, &done), 0);
+    long long hours[4];
+    WT_EQ(web_store_cover_open(&S, 0, 20000, hours, 4), 1);
+    WT_EQ(hours[0], 3600);
+    WT_EQ(web_store_cover_prune(&S, 7200), 0);
+    WT_EQ(web_store_cover_get(&S, 3600, &m, &done), 0);
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 11);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name='anom_cover'"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM pragma_table_info('anom_cover')"), 3);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM anom_cover WHERE hour=7200 AND mask=0 AND done=1"), 1);
+    v10_rows_as_written(p, tri_cols);
+    /* Opened again, nothing runs a second time. */
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 11);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM anom_cover"), 1);
+    v10_rows_as_written(p, tri_cols);
+    rm_store(p);
+}
+
+/* The v10 step's failure: a v10 file already holding the name
+ * anom_cover (an index of its own on minute) fails the step's one
+ * statement. It stays at v10, keeps that index and every row, and the
+ * stamp is not moved. Seen red with the step's failure ignored in
+ * migrate() (the stamp then ran: a file stamped v11 holding no table
+ * of that version, the version read 11, not 10). */
+static void test_v10_failed_step_leaves_file_unchanged(void) {
+    char p[128], err[512];
+    path_in(p, sizeof(p), "v10bad.db");
+    make_v10(p, "CREATE INDEX anom_cover ON minute (t);");
+    long long tri_cols = raw_int(p, "SELECT COUNT(*) FROM pragma_table_info('triage')");
+    WT_EQ(web_store_open(&S, p, err, sizeof(err)), -1);
+    WT_HAS(err, "unchanged from v10");
+    web_store_close(&S);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 10);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='anom_cover'"), 0);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE"
+                     " name='anom_cover' AND tbl_name='minute'"), 1);
+    v10_rows_as_written(p, tri_cols);
+    rm_store(p);
+}
+
 /* The whole chain from a v7 file in one open: v7 -> v8 (the fleet's)
- * -> v9 (the links') -> v10 (the notes'), each step's objects there
- * and the v7 rows as they were. */
-static void test_v7_file_reaches_v10_in_one_open(void) {
+ * -> v9 (the links') -> v10 (the notes') -> v11 (the hour coverage),
+ * each step's objects there and the v7 rows as they were. */
+static void test_v7_file_reaches_v11_in_one_open(void) {
     char p[128], err[512];
     path_in(p, sizeof(p), "v7chain.db");
     make_v7(p, "");
     WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 7);
     WT_EQ(web_store_open(&S, p, err, sizeof(err)), 0);
     web_store_close(&S);
-    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 10);
+    WT_EQ(raw_int(p, "SELECT value FROM meta WHERE name='schema_version'"), 11);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name='anom_cover'"), 1);
+    WT_EQ(raw_int(p, "SELECT COUNT(*) FROM anom_cover"), 0);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name IN"
                      " ('peer_sites','peer_sightings','peer_sightings_last')"), 3);
     WT_EQ(raw_int(p, "SELECT COUNT(*) FROM sqlite_master WHERE name IN"
@@ -1603,9 +1745,9 @@ static void refused_untouched(const char *p, const char *want) {
  * left exactly as it was. */
 static void test_newer_file_refused(void) {
     char p[128];
-    path_in(p, sizeof(p), "v11.db");
+    path_in(p, sizeof(p), "v12.db");
     raw_exec(p, "CREATE TABLE meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);"
-                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','11');"
+                "INSERT INTO meta VALUES ('store','slothweb'),('schema_version','12');"
                 "CREATE TABLE future (x INTEGER);");
     refused_untouched(p, "newer slothweb");
     rm_store(p);
@@ -2739,7 +2881,9 @@ void run_store_tests(void) {
     WT_RUN(test_v8_failed_step_leaves_file_unchanged);
     WT_RUN(test_v9_file_is_migrated);
     WT_RUN(test_v9_failed_step_leaves_file_unchanged);
-    WT_RUN(test_v7_file_reaches_v10_in_one_open);
+    WT_RUN(test_v10_file_is_migrated);
+    WT_RUN(test_v10_failed_step_leaves_file_unchanged);
+    WT_RUN(test_v7_file_reaches_v11_in_one_open);
     WT_RUN(test_mix_rows_round_trip);
     WT_RUN(test_mix_retention_and_cap);
     WT_RUN(test_mix_cut_keeps_buckets_whole);

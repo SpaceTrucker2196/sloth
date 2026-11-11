@@ -241,6 +241,7 @@ static void analysis_health(web_anomaly_t *a, web_jw_t *w) {
     web_jw_raw(w, ",\"hours_fed\":");         web_jw_int(w, (long long)s.hours_fed);
     web_jw_raw(w, ",\"hours_unobserved\":");  web_jw_int(w, (long long)s.hours_unobserved);
     web_jw_raw(w, ",\"minutes_unobserved\":"); web_jw_int(w, (long long)s.minutes_unobserved);
+    web_jw_raw(w, ",\"hours_merged\":");      web_jw_int(w, (long long)s.hours_merged);
     web_jw_raw(w, ",\"mad\":");
     web_jw_raw(w, a->cfg.store ? "true" : "false");
     web_jw_raw(w, ",\"mad_queries\":");       web_jw_int(w, (long long)s.mad_queries);

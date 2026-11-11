@@ -671,7 +671,7 @@ the `docs/web-ui-spec.md` §8.1 tokens in `web/ui/theme.css`.
  "anomaly":{"open":1,"building":0,"closed_kept":2,"cap":512,"opened":3,
    "closed":2,"dropped":0,"evicted_closed":0,"candidates_dropped":0,
    "rows_dropped":0,"late_rows":4,"hours_fed":31,"hours_unobserved":1,
-   "minutes_unobserved":3,"mad":true,"mad_queries":2,"mad_skipped":0,
+   "minutes_unobserved":3,"hours_merged":1,"mad":true,"mad_queries":2,"mad_skipped":0,
    "a9":true,"a9_queries":5,"fanout_hosts":20,"fanout_evictions":0,
    "reported":1,"reported_evicted":0,"known_evictions":0,
    "persist_errors":0,"persisted":true},
@@ -2045,6 +2045,22 @@ hour is fed to the baselines only when at least 45 of its minutes were
 observed; otherwise it is skipped and counted (`hours_unobserved`): a
 counter that did not see half its hour would read as a quiet hour.
 
+**A slothweb restart** (owner ruling 2026-11-11) no longer costs an
+hour by itself. Coverage used to live in memory and count only minutes
+after the process started, so every restart lost the clock hour it
+started in and the hour it stopped in. Now each run writes the minutes
+it observed to the store ([slothweb.db v11](#restarts-inside-an-hour-slothwebdb-v11))
+at every minute boundary, after that minute's rows are in the minute
+tier, and an hour that began before this run is judged on every run's
+minutes together: 45 or more and it is fed (`hours_merged`), from the
+minute tier's rows of the hour, both runs' parts. A run killed without
+a clean exit loses only the minute in progress (at most 60 s and one
+store-thread step); every completed minute's bits are already written.
+An hour the previous run observed but never passed (it stopped before
+the hour ended, and this run started after) is passed at this run's
+first step, if it is within the last day. Without a store, the old rule
+stands.
+
 ### The baseline (§5.3)
 
 - **Cells** are the local hour of the week, `((tm_wday + 6) % 7) * 24 +
@@ -2229,6 +2245,7 @@ read back before any thread starts:
 | `episode (id, kind, metric, key, state, score, peak, evidence, ...)` | open and closed episodes; `kind` holds the rule (`A1`..`A10`) | each minute an episode changes |
 | `fanout (key, windows, hist)` | A7's per-host histogram, 16 weights as text | at each 10-minute window |
 | `reported (kind, key, t)` | the MACs A2 has reported, `t` the MAC's `first_seen`, for 24 h from it | as they are reported |
+| `anom_cover (hour, mask, done)` (v11) | which minutes of each hour a run observed, every run's bits ORed; `done` once a run passed the hour; two days kept | at each minute boundary and at a clean exit; `done` at the hour pass |
 
 At start the most recently active entries up to the cap are loaded and
 any other row is deleted, so the file never holds a row the table does
@@ -2672,7 +2689,7 @@ and columns as written, and the failure (a v9 file already holding the
 name `note_subject`: still v9, no `note` table, `relation` with the
 eleven columns it had; seen red with the migration's `ROLLBACK` made
 `COMMIT`, and the default seen red as `DEFAULT 3`). A v7 file goes v7,
-v8, v9, v10 in one open (`test_v7_file_reaches_v10_in_one_open`). The
+v8, v9, v10 (and on to v11) in one open (`test_v7_file_reaches_v11_in_one_open`). The
 `triage` table is not touched: its `via` column already takes the new
 value.
 
@@ -2686,6 +2703,60 @@ value.
 can set it: a body naming `via` is refused as an unknown member, and 3
 is written only for a request the gate authenticated as the agent's
 ([[slothweb-mcp]]).
+
+
+### Restarts inside an hour: slothweb.db v11
+
+`v10 -> v11` (owner ruling 2026-11-11: schedule the restart-loss fix as
+its own slice) adds one table in one `BEGIN IMMEDIATE` step:
+
+| Table | Columns | Holds |
+|---|---|---|
+| `anom_cover` | `hour` (PK, an hour start), `mask` (bit i the hour's minute i), `done` | which minutes of the hour slothweb observed, across its runs: each run ORs its own bits in (`INSERT ... ON CONFLICT DO UPDATE SET mask = mask \| excluded.mask`), never puts its bits in place of another's; `done` is 1 once a run passed the hour. Rows older than two days are deleted at each hour pass |
+
+What it is for and what each metric kind gets
+([Where the numbers come from](#where-the-numbers-come-from), "Observed time"): the bits of minute m are
+written by the store thread at the step that crosses into m+1, after
+that step has flushed the rollup's queue, so a persisted bit always
+names a minute whose rows are in the minute tier; if a store write
+failed while an hour was open, no more of that hour's bits are written,
+and it may be judged short but is never fed from rows that are not
+there. An hour that began before the running process is fed only when
+the runs together observed 45 minutes, and then from the minute tier's
+rows of the hour (every run's, with whatever a killed run had flushed),
+in place of this run's own hour row, which holds only its part: a
+presence metric's value is the max of those rows (present if present
+in either part), a counter's the sum of their sums (both parts; its
+minutes with no row count 0, as in any hour), a gauge's the sum of
+sums over the sum of counts; the within-hour spread is rebuilt from
+the same rows, a value a minute. A pair with a baseline and no row in
+either part is fed 0 (presence and counters only, as in any fed hour);
+an hour not fed is never zero-filled. A late hour row from this run for
+such an hour is dropped, as before, since it is a part. No metric kind
+is left out: the minute tier carries sum, count, min and max for all
+three. What is still lost: a killed run's minute in progress (its rows
+and its bit), a minute row the rollup's queue dropped when full
+(`queue_dropped`), and any minute rows the `--web-max-mb` ceiling has
+already trimmed (it trims the oldest first; an hour is merged within
+the hour after it).
+
+Cost, measured in the test build (`-O0`, this host): rebuilding an hour
+of 2,050 series, 60 minute rows each, took 199.9 ms on the store
+thread; one coverage write 0.012 ms. Both run on the store thread
+(web_tsdb's step hook) over the writer connection, never on a request,
+and the store is in WAL mode, so a request's read on the reader
+connection is not held by either.
+
+`web/tests/test_store.c` builds a v10 file (the v9 file, two notes and
+a retraction, an agent's link, episodes and minute rows) and holds the
+migration, which leaves every one of those rows as written and the new
+table's own statements working (`test_v10_file_is_migrated`), and the
+failure (a v10 file already holding the name `anom_cover`: still v10,
+its rows as they were; `test_v10_failed_step_leaves_file_unchanged`).
+A v7 file goes v7 to v11 in one open
+(`test_v7_file_reaches_v11_in_one_open`). `web/tests/test_anomaly.c`'s
+`test_restart_*` and `test_killed_run_loses_only_the_minute_in_progress`
+hold the engine's side.
 
 ### /api/devices, /api/device/{mac}, /api/lookup
 
@@ -6393,7 +6464,7 @@ and under `EXTRA_CFLAGS="-Werror -fsanitize=thread"` with
 | `test_server.c` | real loopback sockets: default bind address, a refused peer over v4 and v6, 405 for POST/PUT/DELETE/PATCH, 431, idle and slow clients timed out, slot exhaustion; the page byte for byte and its `304`, health, a stream's ticks and pings and the client leaving, the first tick at once, a departing client noticed on the read path with no event due, the stream socket's `TCP_NODELAY` and `SO_SNDBUF`, a non-reading stream client dropped at the 64 KB backlog and not past it, the stream cap, `421` for `Host: attacker.example`; an episode that opens reaching a stream client as one `anomaly` event, counted once |
 | `test_baseline.c` | the cell as the local hour of the week, Monday first, and the same cell for the same local hour across a DST change (167 UTC hours apart), a never-fed pair scoring absent and a zero feed making no entry, warming forcing z to 0, an established cell's z, the sd floor (a constant history and one AP more scores 1, not 31,623; 10% of the mean; 1 KiB/s for a byte rate), an hour fed once, zero feeds for counters and presence and none for gauges and not counted as activity, cells independent, the full table evicting the least recently active entry by real feeds only, ageing out with the row id queued for deletion, allocation following the entries, dirty cells out once and back through a restore, the cap at the default and the extremes, NaN and both infinities ignored, the value scale per kind, a minute's sd carrying the within-hour spread (and Poisson for a counter), the delete queue returning 5,000 ids with none lost, refused records held to the next pass, restore refusing values a float cannot hold and keeping `first_fed` |
 | `test_ident.c` | records on a pinned clock: the earliest `first_seen` kept and randomised MACs left out, names cut to 63 bytes on a code-point boundary and NBNS to 15, group NBNS suffixes ignored and names current for their TTL, both tables evicting and counting, the DNS join (an NXDOMAIN answer counted once against the client that asked that qname within 10 s, a late or unknown one unmatched), the normal form |
-| `test_anomaly.c` | every rule from seeded state, rows given to the engine as web_tsdb gives them and the clock moved only through its step: A1 opening on three burst minutes with the evidence `metric[key]` closed, never on two, a gauge gap breaking the streak, a constant history with ±1 jitter firing nothing, a silent counter scored as 0, unobserved minutes not scored, a bucket closed in two parts scored as one, 300 keys all scored (the previous cap was 256); the lifecycle (open after one quiet minute, closed after two, a closed episode listed 59 minutes on and not 61, a recurrence starting a new episode that must earn three minutes, a full table keeping its open episodes, the worst-case listing fitting with `more`, the kind and since filters, the change feed); A2 once per MAC across a restart and never for an old or randomised MAC; A3 at four weeks and not three, and not in normal hours; A5 for the randomised MAC only and not through a reassigned lease; A6's normal form and escaped evidence; A7 far above its p95 and not without history or margin; A8 for the client the answers were joined to, not under 20 queries or at exactly 30%; A9 on first use and not for a host with history across a restart; MAD refuting a return to an old level and confirming a real burst, once per hour per series; baselines and an open episode surviving a restart; A10 for a connection that never sends, not just after a reconnect, not while disconnected, not before the limit; the engine without a store; the newest changes when there are more than asked for; the hour pass learning the within-hour spread; A2 not new after sloth restarts (by the baseline, and by the store's rows), a flood of new MACs as one episode that keeps another rule's history, the slot policy, the reported set evicting its oldest with the new MAC still given its episode and the evicted one not reported again while remembered, re-reports (8) bounded by evictions (32), a burst's and a trickle's evidence counting exactly what was judged new and naming two MACs, a trickle of eight a minute folded into one episode once the hour's sixteen are reported, a scan past 4,096 identity slots; MAD refuted by the within-hour term alone; A3 in a half-hour zone; A7 below its minimum excess and across a restart; a baseline pair evicted and back in one hour, a refused batch written later, restored episode values checked (the episode's own score, and a metric below -1) |
+| `test_anomaly.c` | every rule from seeded state, rows given to the engine as web_tsdb gives them and the clock moved only through its step: A1 opening on three burst minutes with the evidence `metric[key]` closed, never on two, a gauge gap breaking the streak, a constant history with ±1 jitter firing nothing, a silent counter scored as 0, unobserved minutes not scored, a bucket closed in two parts scored as one, 300 keys all scored (the previous cap was 256); the lifecycle (open after one quiet minute, closed after two, a closed episode listed 59 minutes on and not 61, a recurrence starting a new episode that must earn three minutes, a full table keeping its open episodes, the worst-case listing fitting with `more`, the kind and since filters, the change feed); A2 once per MAC across a restart and never for an old or randomised MAC; A3 at four weeks and not three, and not in normal hours; A5 for the randomised MAC only and not through a reassigned lease; A6's normal form and escaped evidence; A7 far above its p95 and not without history or margin; A8 for the client the answers were joined to, not under 20 queries or at exactly 30%; A9 on first use and not for a host with history across a restart; MAD refuting a return to an old level and confirming a real burst, once per hour per series; baselines and an open episode surviving a restart; A10 for a connection that never sends, not just after a reconnect, not while disconnected, not before the limit; the engine without a store; the newest changes when there are more than asked for; the hour pass learning the within-hour spread; A2 not new after sloth restarts (by the baseline, and by the store's rows), a flood of new MACs as one episode that keeps another rule's history, the slot policy, the reported set evicting its oldest with the new MAC still given its episode and the evicted one not reported again while remembered, re-reports (8) bounded by evictions (32), a burst's and a trickle's evidence counting exactly what was judged new and naming two MACs, a trickle of eight a minute folded into one episode once the hour's sixteen are reported, a scan past 4,096 identity slots; MAD refuted by the within-hour term alone; A3 in a half-hour zone; A7 below its minimum excess and across a restart; a baseline pair evicted and back in one hour, a refused batch written later, restored episode values checked (the episode's own score, and a metric below -1); a slothweb restart inside an hour fed once from both runs' minute rows (presence present in either part, Z zero-filled, the counter's 30 x 2 + 30 x 4), a counter not fed when the first run's rows could not be written, 20 + 20 minutes feeding nothing, a killed run losing only its minute in progress, a restart across the hour boundary feeding both hours, and the merge's cost (SQLite) |
 | `test_oui.c` | the vendor table from registry CSVs the test writes into its own directory (MA-L, MA-M, MA-S, IAB; a BOM, CRLF, quoted fields with commas, quotes and a line break; CID skipped; a duplicate keeps the first): the most specific block first, 28- and 36-bit blocks inside the IEEE's MA-L, the local and group bits on a miss, the generated C (octal escapes, no name ending a literal or a comment), every malformed CSV failing with its row, names cleaned and cut on a code-point boundary, sloth's own `src/oui.c` read as text (every initialiser line, Apple found, an MA-S vendor not), the built-in table's source (the one `make web-test` says the build should have: `ieee` by default, `sloth` from an empty `WEB_OUI_DIR`) and order; the committed `web/data/` held to `SOURCE.md`'s hashes and built in a forked child under a time bound, its counts `SOURCE.md`'s rows, and a first file of 6,000 names then a second built under one too (the generator hung there until 2026-10-26); `update-oui` named in the Makefile only by comments, `.PHONY` and its own rule, and by no workflow or script under `.github/`; `update_oui.sh` run on a copy of `web/data/` with the same four files leaving `SOURCE.md` unchanged, and rewriting it once a CSV differs |
 | `test_query.c` | the query language: the acceptance terms, every §9.1 prefix, free text, negation, quotes and MAC fragments as text, every refusal and its reason, the length, term and term-length bounds, the compiled statement holding no byte of the query (an injection attempt and LIKE metacharacters bound and escaped, the text the same whatever the values), the day range, missing tables reading as false, the worst case fitting, the anomaly kinds and `src:` bits held to the engine's and to `include/sloth.h`'s `DEV_SRC_*` |
 | `test_ptr.c` | the passive PTR cache: reverse names per RFC 1035 §3.5 and RFC 3596 §2.5 (and what is not one), what a dns record must be to be recorded (an empty answer, sloth's today, counted), the bound and its eviction, a rename, changed rows out once and back on a failed write, a row read back checked; the identity tables' M4 readers |
