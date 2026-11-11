@@ -22,6 +22,7 @@
 #include "bytes.h"
 #include "sensor_health.h"
 #include "tune.h"
+#include "harvest_track.h"
 
 /* ── Storage ─────────────────────────────────────────────── */
 
@@ -705,6 +706,8 @@ int eapol_observe_frame(const dot11_frame_t *f,
 
     pending_t *p = pending_get(bssid, sta, now);
     p->last_seen = now;
+    /* An M2 that establishes this attempt's pair, once (#172). */
+    int fresh_pair = 0;
     attempt_expire(p, now);
 
     /* A new M1 starts a new attempt. Only a verbatim retransmission —
@@ -772,6 +775,7 @@ int eapol_observe_frame(const dot11_frame_t *f,
          * MIC was computed over a different exchange — it can never
          * crack, and it was never evidence of anything. */
         if (p->has_m1 && rc_eq(p->m1_rc, rc)) {
+            fresh_pair    = !p->paired;
             p->paired     = 1;
             p->rc_checked = 1;
             if (p->progress < 2) p->progress = 2;
@@ -840,6 +844,12 @@ int eapol_observe_frame(const dot11_frame_t *f,
      * a meaning; on an M1 nothing has been compared yet. */
     ev.handshake_progress = p->progress;
     push_event(&ev);
+
+    /* The harvest tracker (#172) counts what this classification
+     * found; it changes nothing here. A message that travelled the
+     * wrong way returned above and is not counted. Its lock is a leaf. */
+    harvest_note_eapol(bssid, sta, msg, msg == 1 && has_pmkid, fresh_pair,
+                       f->event_id);
 
     if (ev.assoc_evidence)
         assoc_observe(ev.bssid, ev.sta_mac,

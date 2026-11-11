@@ -19,6 +19,8 @@
 #include "ctrl_frames.h"
 #include "db.h"
 #include "eapol_log.h"
+#include "karma_detect.h"
+#include "harvest_track.h"
 #include "presence.h"
 #include "rf_distance.h"
 #include "queue_evict.h"
@@ -297,6 +299,21 @@ static const tune_spec_t g_specs[TUNE_COUNT] = {
     /* #186, src/alerts/rules_adsb.c. Below ADSB_EXPIRE_S (60): a hold
      * the table cannot keep a row for could never be reached. */
     { "adsb.emerg_hold_s",          10, 2, 59, "seconds an aircraft's emergency squawk or status must hold, by its own messages, before ADSB_EMERGENCY goes from LOW to WARN" },
+    /* #187 S2, KARMA_PROBE_FORGE (src/karma_detect.h argues both
+     * defaults). The count's ceiling is the per-row SSID set: a
+     * threshold above what a row can hold would never fire. */
+    { "karma.forge_ssids",          KARMA_FORGE_SSID_MIN_DEFAULT, 2, KARMA_FORGE_MAX_SSIDS, "distinct never-beaconed SSIDs one BSSID answered directed probes for" },
+    { "karma.forge_window_s",       KARMA_FORGE_WINDOW_DEFAULT_S, 10, 86400, "seconds an answered SSID stays on the forge row" },
+    /* #172 (src/harvest_track.h argues each default). The BSSID count's
+     * ceiling is the per-station target table, the deauth count's floor
+     * 1 (one frame is a legitimate setting, if a noisy one), and the
+     * window's floor is the reconnect window's ceiling so a chain is
+     * never aged out before it could complete. */
+    { "harvest.window_s",           HARVEST_WINDOW_DEFAULT_S, 600, 86400, "seconds a soliciting station's targets and a BSSID's harvest victims stay counted" },
+    { "harvest.min_bssids",         HARVEST_MIN_BSSIDS_DEFAULT, 2, HARVEST_MAX_TGT, "distinct BSSIDs that answered one station with an M1 it left unanswered" },
+    { "harvest.unanswered_pct",     HARVEST_UNANSWERED_PCT_DEFAULT, 1, 100, "percent of a station's M1-answering BSSIDs left without an M2" },
+    { "harvest.deauth_min",         HARVEST_DEAUTH_MIN_DEFAULT, 1, 1000, "distinct deauth/disassoc frames claimed from the BSSID before a fresh M1/M2" },
+    { "harvest.reconnect_s",        HARVEST_RECONNECT_DEFAULT_S, 1, 600, "seconds from the last such frame to the fresh M1/M2 pair" },
 };
 
 /* Lazily seeded from g_specs on first read, so a test that forgets

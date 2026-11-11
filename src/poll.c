@@ -25,6 +25,7 @@
 #include "twins.h"
 #include "probe_pnl.h"
 #include "eapol_log.h"
+#include "harvest_track.h"
 #include "seqnum_track.h"
 #include "assoc_track.h"
 #include "action_snoop.h"
@@ -154,6 +155,7 @@ static void st_wifi_snapshots(sloth_state_t *s, const poll_ctx_t *ctx) {
     mon_frame_snapshot(s);
     probe_pnl_snapshot(s);
     eapol_snapshot(s);
+    harvest_snapshot(s);  /* PMKID / handshake harvesting (#172) */
     seqnum_snapshot(s);
     assoc_snapshot(s);
     assoc_request_snapshot(s);
@@ -165,6 +167,9 @@ static void st_wifi_snapshots(sloth_state_t *s, const poll_ctx_t *ctx) {
     mle_snapshot(s);
     cp_snapshot(s);
     beacon_snapshot(s);
+    /* After the beacon table: KARMA_PROBE_FORGE judges these answers
+     * against it (#187 S2). */
+    karma_forge_snapshot(s);
     /* The operator's own AP sets the distance calibration (--tune
      * rf.ref_dist_dm with --my-bssid); the capture threads read it
      * from the next frame on. */

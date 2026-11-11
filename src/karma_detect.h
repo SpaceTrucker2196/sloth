@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include "sloth.h"
 #include "tool_fingerprint.h"
+#include "dot11_frame.h"
 
 /* Rebuild s->karma_aps[] from the current beacon table, client PNLs, and
  * deauth ring. One row per BSSID beaconing >= KARMA_SSID_THRESH distinct
@@ -163,5 +164,103 @@ const sloth_tool_sig_t *karma_tool_match(const sloth_state_t *s,
                                          const beacon_ap_t *candidate,
                                          sloth_tool_conf_t *conf,
                                          int *pmkid_out);
+
+/* ── Directed probe-response forgery (#187 S2) ─────────────────
+ *
+ * Dai Zovi & Macaulay (2005) built KARMA as "a special access point
+ * that responded to any Probe Request, allowing us to serve any SSID
+ * requested by a client within range"; airbase-ng's -P "causes the
+ * fake access point to respond to all probes regardless of the ESSIDs
+ * specified" (research/papers/daizovi-macaulay-2005-karma.md,
+ * research/tools/airbase-ng.md). Both beacon one
+ * name, or none, and answer the rest. KARMA_AP reads the beacon
+ * history only, so it is structurally blind to that radio (its
+ * assessment says so); this is the observable that is not.
+ *
+ * What is recorded: a Probe Response (subtype 5) whose DA is a station
+ * that sent a *directed* Probe Request (subtype 4) for exactly that
+ * SSID within KARMA_FORGE_PAIR_S, from a BSSID whose current name (as
+ * the beacon table knows it, revealed hidden names included) is not
+ * that SSID. An AP answering for its own name, hidden or not, never
+ * reaches the table; nor does any answer to a wildcard probe, which
+ * carries the responder's own SSID. Whether the BSSID ever beaconed the
+ * name is judged later, at rule time, against its whole beacon history.
+ *
+ * Fed from the monitor thread (src/capture/probe.c) and from tests.
+ * Durations run on sloth_mono_ms() read at observation, for both frame
+ * kinds, so an offline replay's capture timestamps cannot split a pair
+ * and a wall step cannot age a row; sloth_wall() stamps first/last seen
+ * for display only. */
+/* `ssid` is the frame's SSID element as the caller's own element walk
+ * read it (dot11_ie_ssid(): the probe request's elements, or the probe
+ * response's after its 12-octet fixed part), "" for none. Passed in
+ * rather than re-read so a frame is walked once and an overrun is
+ * tallied once (#126). */
+void karma_observe_frame(const dot11_frame_t *f, const char *ssid);
+void karma_forge_snapshot(sloth_state_t *s);
+void karma_forge_clear(void);
+/* Stations, answers and BSS rows displaced by the bounds since the last
+ * clear, for tests and the sensor's own accounting. */
+unsigned long karma_forge_evictions(void);
+
+/* A response this long after the request is not the answer to it. The
+ * real interval is milliseconds — a probing station dwells on a channel
+ * for MLME-SCAN's ProbeDelay/MinChannelTime/MaxChannelTime, all in TU —
+ * and the bound is generous because a station repeats its directed
+ * probes and an AP may answer any repeat: the pairing only has to say
+ * "this station asked for this name just now". Monotonic clock. Not
+ * tunable: it encodes the protocol, not a judgement about a site. */
+#define KARMA_FORGE_PAIR_S 5
+
+/* Directed probe requests remembered for pairing. A flood of random
+ * station MACs churns this ring and can make a real answer unpairable,
+ * which loses a detection; it never manufactures one, because an
+ * unpaired response is ignored. */
+#define KARMA_PREQ_RING 128
+
+/* How many distinct never-beaconed SSIDs one BSSID must have answered
+ * before KARMA_PROBE_FORGE fires. 2 is the smallest count one BSS cannot
+ * produce by being itself: a BSS has one SSID, and a hidden one is
+ * filtered as its own name above. The one legitimate shape that could
+ * put a second name in an answer from one address is an 802.11ax
+ * Multiple BSSID transmitter answering for a nontransmitted profile, if
+ * an implementation wrote that profile's SSID into the frame's own SSID
+ * element; sloth does not decode nontransmitted profiles and this has
+ * not been checked against the clause, which is why the count is a knob
+ * (karma.forge_ssids) and not a constant. */
+#define KARMA_FORGE_SSID_MIN_DEFAULT 2
+#define KARMA_FORGE_SSID_MIN ((int)tune_val(TUNE_KARMA_FORGE_SSIDS))
+
+/* How long an answered SSID stays on a row. Long enough to see two
+ * passing phones' PNLs answered by one radio when phones scan only a
+ * few times a minute while unassociated; short enough that a name the
+ * BSSID answered once an hour ago is not held against it forever.
+ * Tunable: karma.forge_window_s. */
+#define KARMA_FORGE_WINDOW_DEFAULT_S 600
+#define KARMA_FORGE_WINDOW_S ((time_t)tune_val(TUNE_KARMA_FORGE_WINDOW_S))
+
+/* Distinct stations whose own probes drew forged answers before the
+ * alert is CRIT without the fan-out corroborator. One station's
+ * directed probes answered twice by one radio is already the KARMA
+ * shape; the same radio answering *different* people's private network
+ * names is the mechanism the 2005 paper describes, and no AP
+ * misconfiguration produces it. */
+#define KARMA_FORGE_STA_CRIT 2
+
+/* How many of this row's SSIDs its BSSID answered without ever
+ * beaconing them, judged against s->beacon_aps[] (#187 S2). 0 when the
+ * answer is not knowable: no beacon row for the BSSID (aged out, or
+ * never heard on this radio's channels), or a beacon history at
+ * MAX_AP_SSID_HISTORY, where a name past the cap is unrecorded rather
+ * than unbeaconed. The BSSID's current name (a revealed hidden SSID
+ * included) never counts. `sta_n_out` gets the distinct stations those
+ * answers went to; `ev_out` (up to `ev_max`) the newest answering frame
+ * per counted SSID, `*ev_n` how many. Any out pointer may be NULL.
+ *
+ * Shared by the KARMA_PROBE_FORGE rule and karma_update() so the alert
+ * and the [y] FRG column state one number about one BSSID. */
+int karma_forged_ssids(const sloth_state_t *s, const karma_forge_t *r,
+                       int *sta_n_out, uint64_t *ev_out, int ev_max,
+                       int *ev_n);
 
 #endif /* KARMA_DETECT_H */

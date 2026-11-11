@@ -98,6 +98,10 @@ static void test_specs_match_enum_order(void) {
     ASSERT_STR(tune_spec(TUNE_QUEUE_EVICT_REPORT_SECS)->name, "queue_evict.report_secs");
     ASSERT_STR(tune_spec(TUNE_PRESENCE_MIN_SAMPLES)->name, "presence.min_samples");
     ASSERT_STR(tune_spec(TUNE_SEQNUM_CORR_DT_MAX_S)->name, "seqnum.corr_dt_max_s");
+    ASSERT_STR(tune_spec(TUNE_KARMA_FORGE_SSIDS)->name, "karma.forge_ssids");
+    ASSERT_STR(tune_spec(TUNE_KARMA_FORGE_WINDOW_S)->name, "karma.forge_window_s");
+    ASSERT_STR(tune_spec(TUNE_HARVEST_WINDOW_S)->name, "harvest.window_s");
+    ASSERT_STR(tune_spec(TUNE_HARVEST_RECONNECT_S)->name, "harvest.reconnect_s");
     /* Every name is unique — two rows answering to one name would make
        --tune set whichever the lookup met first. */
     int dupes = 0;

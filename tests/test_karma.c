@@ -8,6 +8,13 @@
 #include "karma_detect.h"
 #include "views/karma.h"
 #include "views/dashboard.h"
+#include "alerts.h"
+#include "beacon_snoop.h"
+#include "dot11_frame.h"
+#include "dot11_ie.h"
+#include "sloth_clock.h"
+#include "tune.h"
+#include "frame_build.h"
 
 /* State-driven only: karma_update reads the beacon table, client PNLs,
  * and the deauth ring, and writes s->karma_aps[]. */
@@ -490,7 +497,8 @@ static void test_view_legend_states_the_corroboration_rule(void) {
  * not fitted to COLS, so at 100 columns every attributed row wrapped
  * and took a second screen line. The fixture is the worst case the
  * view can be handed: more candidates than fit, every top SSID at its
- * 32-octet maximum, a seven-digit age, and attributions as long as
+ * 32-octet maximum, a 14-day age (printed "14d" since #187 S2 took
+ * four cells for the FR column), and attributions as long as
  * tool_attribution_format() makes them (a 20-character label).
  *
  * Seen to fail three ways, each then restored: KARMA_CHROME set to 3
@@ -522,7 +530,7 @@ static void test_view_full_page_fits_a_100x33_terminal(void) {
         k->deauth_chain    = 1;
         k->score           = 99;
         /* Even rows a one-digit age, so the label keeps some of
-         * itself (the "~" branch); odd rows the seven-digit age, so it
+         * itself (the "~" branch); odd rows the 14-day age, so it
          * keeps none (the bare-marker branch). */
         k->last_seen       = (i & 1) ? now - 1234567 : now - 4;
         snprintf(k->top_ssid, sizeof(k->top_ssid), "%s",
@@ -558,7 +566,7 @@ static void test_view_full_page_fits_a_100x33_terminal(void) {
                 !strstr(line, "[Twenty-char-label-XX/") &&
                 !strstr(line, "~/"))
                 unclipped_cut++;
-            if (strstr(line, "[ESP32 M~/med? provisional]")) kept_some++;
+            if (strstr(line, "[ESP~/med? provisional]")) kept_some++;
             if (strstr(line, "[~/high? provisional]"))       kept_none++;
         }
     }
@@ -708,6 +716,597 @@ static void test_karma_alert_key_format(void) {
     ASSERT(1);
 }
 
+/* ── Directed probe-response forgery (#187 S2) ─────────────────
+ *
+ * Every frame below is built per IEEE 802.11-2020 with
+ * tests/frame_build.h: the management header of §9.3.3.1 (A1 = DA,
+ * A2 = SA, A3 = BSSID), the Beacon and Probe Response fixed fields of
+ * §9.3.3.3 / §9.3.3.11 (Timestamp, Beacon Interval, Capability), the
+ * Probe Request body of §9.3.3.10 (elements only), and the SSID element
+ * of §9.4.2.2. fd_dispatch() hands each one to the observers in the
+ * order src/capture/probe.c does — beacon_parse_frame() and
+ * beacon_record_ev() for a beacon; beacon_reveal_hidden_ssid() before
+ * karma_observe_frame() for a probe response — so the hidden-SSID case
+ * is tested with the ordering the capture path actually has.
+ *
+ * The monotonic clock is the test's (g_fd_mono), so the pairing window
+ * and the forge window are driven exactly. Wall time stays real: the
+ * beacon table ages on it. */
+
+static uint64_t g_fd_mono = 1000000;
+static uint64_t fd_mono(void) { return g_fd_mono; }
+
+static const uint8_t FD_BCAST[6] = {0xff,0xff,0xff,0xff,0xff,0xff};
+
+static void fd_begin(void) {
+    sloth_clock_test_set(fd_mono, NULL);
+    g_fd_mono = 1000000;
+    tune_reset();
+    beacon_clear();
+    karma_forge_clear();
+    alerts_clear();
+}
+
+static void fd_end(void) {
+    karma_forge_clear();
+    beacon_clear();
+    tune_reset();
+    sloth_clock_test_set(NULL, NULL);
+}
+
+/* Beacon (§9.3.3.3): DA broadcast, SA = BSSID. An empty `ssid` is the
+ * hidden form: a zero-length SSID element. */
+static int fd_beacon(uint8_t *buf, int cap, const uint8_t bssid[6],
+                     const char *ssid) {
+    fb_t b; fb_init(&b, buf, cap);
+    fb_mgmt(&b, 8, 0, FD_BCAST, bssid, bssid, 0x0010, 0);
+    fb_beacon_fixed(&b, 0x1122334455667788ULL, 100, 0x0001);
+    fb_ssid(&b, ssid);
+    static const uint8_t rates[4] = {0x82, 0x84, 0x8b, 0x96};
+    fb_ie(&b, 1, rates, 4);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+/* Probe Request (§9.3.3.10): DA and BSSID broadcast, SA the station,
+ * body is elements only. "" is the wildcard SSID. */
+static int fd_preq(uint8_t *buf, int cap, const uint8_t sta[6],
+                   const char *ssid) {
+    fb_t b; fb_init(&b, buf, cap);
+    fb_mgmt(&b, 4, 0, FD_BCAST, sta, FD_BCAST, 0x0020, 0);
+    fb_ssid(&b, ssid);
+    static const uint8_t rates[4] = {0x02, 0x04, 0x0b, 0x16};
+    fb_ie(&b, 1, rates, 4);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+/* Probe Response (§9.3.3.11): DA the asking station, SA = BSSID. */
+static int fd_presp_flags(uint8_t *buf, int cap, uint8_t flags,
+                          const uint8_t da[6], const uint8_t bssid[6],
+                          const char *ssid) {
+    fb_t b; fb_init(&b, buf, cap);
+    fb_mgmt(&b, 5, flags, da, bssid, bssid, 0x0030, 0);
+    fb_beacon_fixed(&b, 0x1122334455667788ULL, 100, 0x0001);
+    fb_ssid(&b, ssid);
+    return fb_ok(&b) ? b.len : -1;
+}
+
+static int fd_presp(uint8_t *buf, int cap, const uint8_t da[6],
+                    const uint8_t bssid[6], const char *ssid) {
+    return fd_presp_flags(buf, cap, 0, da, bssid, ssid);
+}
+
+/* The capture path's dispatch for the three subtypes, in its order. */
+static void fd_dispatch_ev(const uint8_t *buf, int len, uint64_t ev) {
+    ASSERT(len > 0);
+    if (len <= 0) return;
+    dot11_frame_t fr;
+    dot11_frame_decode(buf, len, NULL, &fr);
+    fr.event_id = ev;
+    if (fr.type == 0 && fr.subtype == 8) {
+        char ssid[33], enc[10]; uint8_t bssid[6]; int ch; uint16_t bms;
+        beacon_rsn_t rsn;
+        if (beacon_parse_frame(&fr, -50, ssid, bssid, &ch, enc, &bms, &rsn))
+            beacon_record_ev(bssid, ssid, -50, ch, enc, bms, &rsn, ev);
+        return;
+    }
+    /* The SSID as probe.c reads it: the first element of a probe
+     * request, or of a probe response after its 12-octet fixed part,
+     * and nothing at all from a body that is not readable. */
+    char ssid[33] = "";
+    const uint8_t *body; int blen;
+    if (fr.type == 0 && dot11_frame_body(&fr, &body, &blen)) {
+        if (fr.subtype == 4)
+            dot11_ie_ssid(body, blen, ssid, NULL);
+        else if (fr.subtype == 5 && blen >= 12)
+            dot11_ie_ssid(body + 12, blen - 12, ssid, NULL);
+    }
+    if (fr.type == 0 && fr.subtype == 5 && ssid[0] && fr.bssid)
+        beacon_reveal_hidden_ssid(fr.bssid, ssid);
+    karma_observe_frame(&fr, ssid);
+}
+
+static void fd_dispatch(const uint8_t *buf, int len) {
+    fd_dispatch_ev(buf, len, 0);
+}
+
+static void fd_send_beacon(const uint8_t bssid[6], const char *ssid) {
+    uint8_t f[96];
+    fd_dispatch(f, fd_beacon(f, (int)sizeof f, bssid, ssid));
+}
+
+static void fd_send_preq(const uint8_t sta[6], const char *ssid) {
+    uint8_t f[96];
+    fd_dispatch(f, fd_preq(f, (int)sizeof f, sta, ssid));
+}
+
+static void fd_send_presp(const uint8_t da[6], const uint8_t bssid[6],
+                          const char *ssid) {
+    uint8_t f[96];
+    fd_dispatch(f, fd_presp(f, (int)sizeof f, da, bssid, ssid));
+}
+
+/* A station asks for `ssid` by name and `bssid` answers as that name. */
+static void fd_asked_and_answered(const uint8_t sta[6],
+                                  const uint8_t bssid[6], const char *ssid) {
+    fd_send_preq(sta, ssid);
+    g_fd_mono += 3;                      /* a response is milliseconds */
+    fd_send_presp(sta, bssid, ssid);
+}
+
+/* Snapshot both tables and run the rules, as a poll would. */
+static void fd_poll(sloth_state_t *s) {
+    beacon_snapshot(s);
+    karma_forge_snapshot(s);
+    alerts_update(s);
+}
+
+static int fd_find(const sloth_state_t *s, alert_type_t t) {
+    for (int i = 0; i < s->alert_count; i++)
+        if (s->alerts[i].type == t) return i;
+    return -1;
+}
+
+static const uint8_t FD_LURE[6]  = {0x02,0x13,0x37,0x00,0x00,0x01};
+static const uint8_t FD_STA_A[6] = {0x02,0xaa,0x00,0x00,0x00,0x01};
+static const uint8_t FD_STA_B[6] = {0x02,0xaa,0x00,0x00,0x00,0x02};
+
+/* The classic KARMA radio: beacons one name, answers one station's
+ * directed probes for two others. WARN — one station. KARMA_AP stays
+ * silent on the same radio (one beaconed SSID), which is the gap this
+ * kind exists for. */
+static void test_forge_classic_karma_warns(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    fd_send_beacon(FD_LURE, "default");
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "HomeNet");
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "CorpNet");
+    fd_poll(&s);
+    ASSERT_EQ(s.karma_forge_count, 1);
+    ASSERT_EQ(karma_forged_ssids(&s, &s.karma_forge[0], NULL, NULL, 0, NULL), 2);
+    int i = fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_WARN);
+        ASSERT(strstr(s.alerts[i].detail, "for 2 SSIDs it never beaconed") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "to 1 stations") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "uncorroborated") != NULL);
+        ASSERT_STR(s.alerts[i].key, "karmaforge:02:13:37:00:00:01");
+    }
+    ASSERT(fd_find(&s, ALERT_TYPE_KARMA_AP) < 0);
+    fd_end();
+}
+
+/* One radio answering two different stations' private names: CRIT.
+ * Seen to fail with KARMA_FORGE_STA_CRIT raised to 3 and with the
+ * gate's >= made >, each then restored. */
+static void test_forge_two_stations_is_crit(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    fd_send_beacon(FD_LURE, "default");
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "HomeNet");
+    fd_asked_and_answered(FD_STA_B, FD_LURE, "CafeNet");
+    fd_poll(&s);
+    int i = fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "to 2 stations") != NULL);
+    }
+    fd_end();
+}
+
+/* The issue's joint rule, S1 + S2: the same BSSID beacon-fans past
+ * KARMA_SSID_THRESH and forges answers. CRIT on one station. Seen to
+ * fail with the fan-out term removed from the gate, then restored. */
+static void test_forge_with_beacon_fanout_is_crit(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    fd_send_beacon(FD_LURE, "FreeWiFi");
+    fd_send_beacon(FD_LURE, "Airport");
+    fd_send_beacon(FD_LURE, "Hotel");
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "HomeNet");
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "CorpNet");
+    fd_poll(&s);
+    int i = fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        ASSERT_EQ((int)s.alerts[i].sev, (int)ALERT_SEV_CRIT);
+        ASSERT(strstr(s.alerts[i].detail, "+beacon fan-out") != NULL);
+        ASSERT(strstr(s.alerts[i].detail, "(beacons 3)") != NULL);
+    }
+    /* Both kinds, one radio: the fan-out is KARMA_AP's own finding. */
+    ASSERT(fd_find(&s, ALERT_TYPE_KARMA_AP) >= 0);
+    fd_end();
+}
+
+/* The count's boundary. One forged name: nothing (an AP has one name,
+ * and a single odd answer is not two). Two: fires. With the knob at 3,
+ * two: nothing. Seen to fail with KARMA_FORGE_SSID_MIN_DEFAULT at 1
+ * (the one-name case fires) and at 3 (the two-name case is silent),
+ * and with the rule's `<` made `<=`, each then restored. */
+static void test_forge_count_boundary(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    fd_send_beacon(FD_LURE, "default");
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "HomeNet");
+    fd_poll(&s);
+    ASSERT(fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE) < 0);
+
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "CorpNet");
+    alerts_clear(); memset(&s, 0, sizeof s);
+    fd_poll(&s);
+    ASSERT(fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE) >= 0);
+
+    ASSERT_EQ(tune_set_id(TUNE_KARMA_FORGE_SSIDS, 3), 1);
+    alerts_clear(); memset(&s, 0, sizeof s);
+    fd_poll(&s);
+    ASSERT(fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE) < 0);
+    /* Below the floor and past the per-row set are refused. */
+    ASSERT_EQ(tune_set_id(TUNE_KARMA_FORGE_SSIDS, 1), 0);
+    ASSERT_EQ(tune_set_id(TUNE_KARMA_FORGE_SSIDS, KARMA_FORGE_MAX_SSIDS + 1), 0);
+    fd_end();
+}
+
+/* A hidden-SSID AP beacons a zero-length SSID and answers directed
+ * probes for its real name: the honest answer, since the reveal makes
+ * it the AP's own name before the forge check reads it. Two hidden APs,
+ * two names, one station: still nothing. Seen to fail with the
+ * own-name check in karma_observe_frame() removed (both answers are
+ * recorded as forged and the rule fires on the station that probed
+ * both), then restored. */
+static void test_forge_hidden_ssid_ap_is_not_forging(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    const uint8_t hid1[6] = {0x02,0x40,0x00,0x00,0x00,0x01};
+    fd_send_beacon(hid1, "");
+    fd_asked_and_answered(FD_STA_A, hid1, "SecretNet");
+    fd_asked_and_answered(FD_STA_B, hid1, "SecretNet");
+    fd_poll(&s);
+    ASSERT_EQ(s.karma_forge_count, 0);
+    ASSERT(fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE) < 0);
+    fd_end();
+}
+
+/* The negative controls #187 names. Each answers only for its own
+ * name, so no forge row is ever opened:
+ *   - a guest + corp + IoT AP: three adjacent BSSIDs, one SSID each,
+ *     each answering a station that asks for all three by name;
+ *   - a hotspot answering a wildcard probe with its own SSID;
+ *   - a phone's hotspot, beaconing its name and answering its owner's
+ *     laptop by name and by wildcard. */
+static void test_forge_legitimate_aps_do_not_fire(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    const uint8_t guest[6] = {0x02,0x50,0x00,0x00,0x00,0x10};
+    const uint8_t corp[6]  = {0x02,0x50,0x00,0x00,0x00,0x11};
+    const uint8_t iot[6]   = {0x02,0x50,0x00,0x00,0x00,0x12};
+    fd_send_beacon(guest, "ACME-Guest");
+    fd_send_beacon(corp,  "ACME-Corp");
+    fd_send_beacon(iot,   "ACME-IoT");
+    fd_asked_and_answered(FD_STA_A, guest, "ACME-Guest");
+    fd_asked_and_answered(FD_STA_A, corp,  "ACME-Corp");
+    fd_asked_and_answered(FD_STA_A, iot,   "ACME-IoT");
+
+    const uint8_t cafe[6] = {0x02,0x60,0x00,0x00,0x00,0x01};
+    fd_send_beacon(cafe, "CafeFreeWiFi");
+    fd_send_preq(FD_STA_B, "");                       /* wildcard */
+    g_fd_mono += 3;
+    fd_send_presp(FD_STA_B, cafe, "CafeFreeWiFi");
+
+    const uint8_t phone[6]  = {0x02,0x70,0x00,0x00,0x00,0x01};
+    const uint8_t laptop[6] = {0x02,0x70,0x00,0x00,0x00,0x02};
+    fd_send_beacon(phone, "Pixel_4821");
+    fd_asked_and_answered(laptop, phone, "Pixel_4821");
+    fd_send_preq(laptop, "");
+    g_fd_mono += 3;
+    fd_send_presp(laptop, phone, "Pixel_4821");
+
+    fd_poll(&s);
+    ASSERT_EQ(s.karma_forge_count, 0);
+    ASSERT(fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE) < 0);
+    fd_end();
+}
+
+/* A name the BSSID beaconed earlier is not forged even though it is no
+ * longer the current one: an AP renamed from OldName to NewName that
+ * still answers a station asking for OldName. One genuinely forged name
+ * beside it stays under the count. Seen to fail with the ssid_history
+ * comparison in karma_forged_ssids() removed (OldName counts, two
+ * names, the rule fires), then restored. */
+static void test_forge_previously_beaconed_name_is_not_forged(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    fd_send_beacon(FD_LURE, "OldName");
+    fd_send_beacon(FD_LURE, "NewName");
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "OldName");
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "HomeNet");
+    fd_poll(&s);
+    ASSERT_EQ(s.karma_forge_count, 1);
+    ASSERT_EQ(karma_forged_ssids(&s, &s.karma_forge[0], NULL, NULL, 0, NULL), 1);
+    ASSERT(fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE) < 0);
+    fd_end();
+}
+
+/* An answer nobody asked for is not an answer to a directed probe:
+ * unsolicited responses naming names, and responses to a station that
+ * asked for a different name, are not recorded. Seen to fail with the
+ * preq_matches() call removed from karma_observe_frame() (both are
+ * recorded and the rule fires), then restored. */
+static void test_forge_needs_the_directed_probe(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    fd_send_beacon(FD_LURE, "default");
+    fd_send_presp(FD_STA_A, FD_LURE, "HomeNet");        /* never asked */
+    fd_send_preq(FD_STA_B, "CafeNet");
+    g_fd_mono += 3;
+    fd_send_presp(FD_STA_B, FD_LURE, "CorpNet");        /* asked for another */
+    fd_poll(&s);
+    ASSERT_EQ(s.karma_forge_count, 0);
+    ASSERT(fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE) < 0);
+    fd_end();
+}
+
+/* The pairing window: an answer 5 s (the documented KARMA_FORGE_PAIR_S,
+ * written as a literal so moving the constant is seen) after the
+ * request pairs, one millisecond later does not. Seen to fail with the
+ * comparison made >= (the on-boundary answer is dropped) and with
+ * KARMA_FORGE_PAIR_S at 4 and at 6 (one side of the boundary moves),
+ * each then restored. */
+static void test_forge_pairing_window_boundary(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    fd_send_beacon(FD_LURE, "default");
+    fd_send_preq(FD_STA_A, "HomeNet");
+    g_fd_mono += 5000;
+    fd_send_presp(FD_STA_A, FD_LURE, "HomeNet");        /* on the edge */
+    fd_send_preq(FD_STA_A, "CorpNet");
+    g_fd_mono += 5001;
+    fd_send_presp(FD_STA_A, FD_LURE, "CorpNet");        /* one ms late */
+    fd_poll(&s);
+    ASSERT_EQ(s.karma_forge_count, 1);
+    ASSERT_EQ(s.karma_forge[0].n_ssids, 1);
+    ASSERT_STR(s.karma_forge[0].ssids[0], "HomeNet");
+    fd_end();
+}
+
+/* Truncated and adversarial frames reach nothing:
+ *   - a probe response cut inside its 12-octet fixed part;
+ *   - one whose SSID element claims more octets than the frame holds;
+ *   - one with the Protected bit set (the body is not plaintext);
+ *   - one addressed to the broadcast DA;
+ *   - a probe request from a group SA.
+ * Each would otherwise name a fresh SSID to a station that asked. The
+ * fixed-part and overrun guards cannot be isolated from
+ * dot11_ie_ssid(), which refuses a negative or overrunning length on
+ * its own; they are asserted here as outcomes, not as the guard that
+ * produced them. */
+static void test_forge_truncated_and_adversarial_frames(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    fd_send_beacon(FD_LURE, "default");
+
+    uint8_t f[96];
+    int n;
+    /* Cut 2 octets into the Capability field: header 24 + 10. */
+    fd_send_preq(FD_STA_A, "HomeNet");
+    n = fd_presp(f, (int)sizeof f, FD_STA_A, FD_LURE, "HomeNet");
+    ASSERT(n > 34);
+    fd_dispatch(f, 24 + 10);
+
+    /* SSID element length 40 with 7 octets present. */
+    fd_send_preq(FD_STA_A, "CorpNet");
+    n = fd_presp(f, (int)sizeof f, FD_STA_A, FD_LURE, "CorpNet");
+    ASSERT(n > 0);
+    f[24 + 12 + 1] = 40;
+    fd_dispatch(f, n);
+
+    /* Protected management frame: the body is ciphertext. */
+    fd_send_preq(FD_STA_A, "CafeNet");
+    n = fd_presp_flags(f, (int)sizeof f, FB_PROTECTED, FD_STA_A, FD_LURE,
+                       "CafeNet");
+    fd_dispatch(f, n);
+
+    /* Group DA. */
+    fd_send_preq(FD_STA_A, "GymNet");
+    n = fd_presp(f, (int)sizeof f, FD_BCAST, FD_LURE, "GymNet");
+    fd_dispatch(f, n);
+
+    /* A probe request "from" a group address, then the answer to it. */
+    const uint8_t grp[6] = {0x03,0xaa,0x00,0x00,0x00,0x09};
+    fd_send_preq(grp, "LibraryNet");
+    g_fd_mono += 3;
+    fd_send_presp(grp, FD_LURE, "LibraryNet");
+
+    fd_poll(&s);
+    ASSERT_EQ(s.karma_forge_count, 0);
+    ASSERT(fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE) < 0);
+    fd_end();
+}
+
+/* "Never beaconed" is unknowable without a beacon row, and past a full
+ * beacon history. Both answer 0 rather than counting. Seen to fail with
+ * the `!a` arm returning the raw row count, and with the saturation arm
+ * removed, each then restored. */
+static void test_forge_unknowable_without_beacon_history(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    const uint8_t quiet[6] = {0x02,0x80,0x00,0x00,0x00,0x01};
+    fd_asked_and_answered(FD_STA_A, quiet, "HomeNet");
+    fd_asked_and_answered(FD_STA_A, quiet, "CorpNet");
+
+    const uint8_t full[6] = {0x02,0x80,0x00,0x00,0x00,0x02};
+    char name[16];
+    for (int i = 0; i < MAX_AP_SSID_HISTORY; i++) {
+        snprintf(name, sizeof name, "pool-%d", i);
+        fd_send_beacon(full, name);
+    }
+    fd_asked_and_answered(FD_STA_A, full, "HomeNet");
+    fd_asked_and_answered(FD_STA_A, full, "CorpNet");
+
+    fd_poll(&s);
+    ASSERT_EQ(s.karma_forge_count, 2);
+    for (int i = 0; i < s.karma_forge_count; i++)
+        ASSERT_EQ(karma_forged_ssids(&s, &s.karma_forge[i], NULL, NULL, 0, NULL), 0);
+    ASSERT(fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE) < 0);
+    fd_end();
+}
+
+/* Answers age out of the row after karma.forge_window_s (600 s, a
+ * literal here so a moved default is seen), and a row with none left
+ * goes. Seen to fail with the snapshot's age-out removed (the row
+ * survives), with its `>` made `>=`, and with
+ * KARMA_FORGE_WINDOW_DEFAULT_S at 599 and 601, each then restored. */
+static void test_forge_window_ages_out(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    fd_send_beacon(FD_LURE, "default");
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "HomeNet");
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "CorpNet");
+    karma_forge_snapshot(&s);
+    ASSERT_EQ(s.karma_forge_count, 1);
+    g_fd_mono += 600000;
+    karma_forge_snapshot(&s);
+    ASSERT_EQ(s.karma_forge_count, 1);          /* on the edge: kept */
+    g_fd_mono += 1;
+    karma_forge_snapshot(&s);
+    ASSERT_EQ(s.karma_forge_count, 0);
+    fd_end();
+}
+
+/* Bounded both ways, and what goes is stated: past KARMA_FORGE_MAX_BSS
+ * answering BSSIDs the least recently answering row is evicted; past
+ * KARMA_FORGE_MAX_SSIDS names on a row the name answered longest ago is
+ * replaced; past KARMA_FORGE_MAX_STA stations the newcomer is left out
+ * of the station count. Every displacement is counted. */
+static void test_forge_tables_are_bounded(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    for (int i = 0; i < KARMA_FORGE_MAX_BSS + 1; i++) {
+        const uint8_t b[6] = {0x02,0x90,0x00,0x00,0x00,(uint8_t)i};
+        fd_asked_and_answered(FD_STA_A, b, "HomeNet");
+        g_fd_mono += 10;
+    }
+    karma_forge_snapshot(&s);
+    ASSERT_EQ(s.karma_forge_count, KARMA_FORGE_MAX_BSS);
+    ASSERT_EQ((long long)karma_forge_evictions(), 1);
+    int has_first = 0, has_last = 0;
+    for (int i = 0; i < s.karma_forge_count; i++) {
+        if (s.karma_forge[i].bssid[5] == 0) has_first = 1;
+        if (s.karma_forge[i].bssid[5] == KARMA_FORGE_MAX_BSS) has_last = 1;
+    }
+    ASSERT_EQ(has_first, 0);       /* the stalest row went */
+    ASSERT_EQ(has_last, 1);
+
+    karma_forge_clear();
+    char name[16];
+    for (int i = 0; i < KARMA_FORGE_MAX_SSIDS + 1; i++) {
+        snprintf(name, sizeof name, "net-%d", i);
+        fd_asked_and_answered(FD_STA_A, FD_LURE, name);
+        g_fd_mono += 10;
+    }
+    for (int i = 0; i < KARMA_FORGE_MAX_STA + 1; i++) {
+        const uint8_t st[6] = {0x02,0xbb,0x00,0x00,0x00,(uint8_t)i};
+        fd_asked_and_answered(st, FD_LURE, "net-1");
+        g_fd_mono += 10;
+    }
+    karma_forge_snapshot(&s);
+    ASSERT_EQ(s.karma_forge_count, 1);
+    ASSERT_EQ(s.karma_forge[0].n_ssids, KARMA_FORGE_MAX_SSIDS);
+    ASSERT_EQ(s.karma_forge[0].n_sta, KARMA_FORGE_MAX_STA);
+    /* One name replaced; FD_STA_A already held a station slot, so of
+     * the nine new stations seven fit and two are left out. */
+    ASSERT_EQ(s.karma_forge[0].dropped, 3);
+    int has_net0 = 0;
+    for (int i = 0; i < s.karma_forge[0].n_ssids; i++)
+        if (strcmp(s.karma_forge[0].ssids[i], "net-0") == 0) has_net0 = 1;
+    ASSERT_EQ(has_net0, 0);        /* the name answered longest ago went */
+    fd_end();
+}
+
+/* The alert cites the answering frames, one per forged name, the
+ * newest of each. */
+static void test_forge_alert_cites_the_answers(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    fd_send_beacon(FD_LURE, "default");
+    uint8_t f[96];
+    fd_send_preq(FD_STA_A, "HomeNet");
+    fd_dispatch_ev(f, fd_presp(f, (int)sizeof f, FD_STA_A, FD_LURE, "HomeNet"), 7001);
+    fd_dispatch_ev(f, fd_presp(f, (int)sizeof f, FD_STA_A, FD_LURE, "HomeNet"), 7002);
+    fd_send_preq(FD_STA_A, "CorpNet");
+    fd_dispatch_ev(f, fd_presp(f, (int)sizeof f, FD_STA_A, FD_LURE, "CorpNet"), 7003);
+    fd_poll(&s);
+    int i = fd_find(&s, ALERT_TYPE_KARMA_PROBE_FORGE);
+    ASSERT(i >= 0);
+    if (i >= 0) {
+        const alert_t *a = &s.alerts[i];
+        ASSERT_EQ((int)a->evidence_id_count, 2);
+        int saw2 = 0, saw3 = 0, saw1 = 0;
+        for (int k = 0; k < a->evidence_id_count; k++) {
+            if (a->evidence_ids[k] == 7001) saw1 = 1;
+            if (a->evidence_ids[k] == 7002) saw2 = 1;
+            if (a->evidence_ids[k] == 7003) saw3 = 1;
+        }
+        ASSERT_EQ(saw1, 0);
+        ASSERT_EQ(saw2, 1);
+        ASSERT_EQ(saw3, 1);
+    }
+    fd_end();
+}
+
+/* A forging BSSID reaches the [y] table on that alone, with the forged
+ * count, the +3 and the FR cell; a BSSID that only answers its own name
+ * does not. */
+static void test_forge_reaches_the_karma_view(void) {
+    fd_begin();
+    static sloth_state_t s; memset(&s, 0, sizeof s);
+    const uint8_t honest[6] = {0x02,0x50,0x00,0x00,0x00,0x11};
+    fd_send_beacon(honest, "ACME-Corp");
+    fd_asked_and_answered(FD_STA_A, honest, "ACME-Corp");
+    fd_send_beacon(FD_LURE, "default");
+    fd_asked_and_answered(FD_STA_A, FD_LURE, "HomeNet");
+    fd_asked_and_answered(FD_STA_B, FD_LURE, "CafeNet");
+    beacon_snapshot(&s);
+    karma_forge_snapshot(&s);
+    karma_update(&s);
+    ASSERT_EQ(s.karma_count, 1);
+    ASSERT_EQ(memcmp(s.karma_aps[0].bssid, FD_LURE, 6), 0);
+    ASSERT_EQ(s.karma_aps[0].ssid_count, 1);
+    ASSERT_EQ(s.karma_aps[0].forged, 2);
+    ASSERT_EQ(s.karma_aps[0].forge_stations, 2);
+    ASSERT_EQ(s.karma_aps[0].score, 4);
+
+    char out[8192];
+    capture_karma(&s, out, sizeof(out));
+    ASSERT(strstr(out, "FR") != NULL);
+    ASSERT(strstr(out, "FR = forged") != NULL);
+    const char *row = strstr(out, "02:13:37:00:00:01");
+    ASSERT(row != NULL);
+    /* SSIDs 1, PNL 0, J% 0%, IE 1 (one known posture), chain -, FR 2. */
+    if (row) ASSERT(strstr(row, "-      2       4") != NULL);
+    fd_end();
+}
+
 void run_karma_tests(void) {
     TEST_SUITE("KARMA/PineAP view (#30)");
     RUN_TEST(test_karma_alert_key_format);
@@ -734,4 +1333,19 @@ void run_karma_tests(void) {
     RUN_TEST(test_view_full_page_fits_a_100x33_terminal);
     RUN_TEST(test_ranking);
     RUN_TEST(test_sel_clamps);
+    RUN_TEST(test_forge_classic_karma_warns);
+    RUN_TEST(test_forge_two_stations_is_crit);
+    RUN_TEST(test_forge_with_beacon_fanout_is_crit);
+    RUN_TEST(test_forge_count_boundary);
+    RUN_TEST(test_forge_hidden_ssid_ap_is_not_forging);
+    RUN_TEST(test_forge_legitimate_aps_do_not_fire);
+    RUN_TEST(test_forge_previously_beaconed_name_is_not_forged);
+    RUN_TEST(test_forge_needs_the_directed_probe);
+    RUN_TEST(test_forge_pairing_window_boundary);
+    RUN_TEST(test_forge_truncated_and_adversarial_frames);
+    RUN_TEST(test_forge_unknowable_without_beacon_history);
+    RUN_TEST(test_forge_window_ages_out);
+    RUN_TEST(test_forge_tables_are_bounded);
+    RUN_TEST(test_forge_alert_cites_the_answers);
+    RUN_TEST(test_forge_reaches_the_karma_view);
 }

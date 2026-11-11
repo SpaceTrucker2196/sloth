@@ -2131,3 +2131,77 @@ void rule_evil_twin_attack_chain(const sloth_state_t *s, time_t now) {
         }
     }
 }
+
+/* ── KARMA_PROBE_FORGE: directed probe-response forgery (#187 S2) ──
+ *
+ * One BSSID answering stations' directed probe requests for SSIDs it
+ * has never beaconed. KARMA as Dai Zovi & Macaulay built it in 2005 —
+ * "a special access point that responded to any Probe Request" — and
+ * airbase-ng -P, which "causes the fake access point to respond to all
+ * probes regardless of the ESSIDs specified"
+ * (research/papers/daizovi-macaulay-2005-karma.md,
+ * research/tools/airbase-ng.md). The capture side and the
+ * counting are in src/karma_detect.c; the count is shared with the [y]
+ * view's FRG column through karma_forged_ssids().
+ *
+ * A separate kind rather than evidence on KARMA_AP, because KARMA_AP's
+ * candidate set is the beacon fan-out (ssid_history_n >=
+ * KARMA_SSID_THRESH) and the radio this catches beacons one name: as
+ * evidence on KARMA_AP it would only ever be read for BSSIDs that are
+ * already candidates, which is exactly the population that does not
+ * need it. The issue's joint rule lands here instead, as the CRIT gate.
+ *
+ * Severity. WARN at karma.forge_ssids (default 2) never-beaconed names
+ * answered. CRIT when the answers went to KARMA_FORGE_STA_CRIT (2)
+ * distinct stations — one radio answering different people's private
+ * network names is the mechanism itself, not a quirk one client can
+ * trigger — or when the same BSSID is also beacon-fanning past
+ * KARMA_SSID_THRESH, the issue's S1 + S2. The issue's S3 (response
+ * latency) is not built: no primary source for its threshold was found
+ * (docs/views/karma.md). Its S4 (IE collapse) does not escalate here
+ * either, for the reason KARMA_AP gives: a renamed BSS collapses the
+ * same way a lure does. */
+void rule_karma_probe_forge(const sloth_state_t *s, time_t now) {
+    for (int i = 0; s->karma_forge && i < s->karma_forge_count; i++) {
+        const karma_forge_t *r = &s->karma_forge[i];
+        int stations = 0;
+        uint64_t evid[ALERT_EVIDENCE_IDS];
+        int ev_n = 0;
+        int forged = karma_forged_ssids(s, r, &stations, evid,
+                                        ALERT_EVIDENCE_IDS, &ev_n);
+        if (forged < KARMA_FORGE_SSID_MIN) continue;
+
+        /* karma_forged_ssids() answered, so the beacon row exists. */
+        int beaconed = 0;
+        for (int b = 0; b < s->beacon_count; b++)
+            if (memcmp(s->beacon_aps[b].bssid, r->bssid, 6) == 0) {
+                beaconed = s->beacon_aps[b].ssid_history_n;
+                break;
+            }
+        int fanout = beaconed >= KARMA_SSID_THRESH;
+        alert_sev_t sev = (fanout || stations >= KARMA_FORGE_STA_CRIT)
+                        ? ALERT_SEV_CRIT : ALERT_SEV_WARN;
+
+        char bssid_str[20];
+        snprintf(bssid_str, sizeof(bssid_str),
+                 "%02x:%02x:%02x:%02x:%02x:%02x",
+                 r->bssid[0], r->bssid[1], r->bssid[2],
+                 r->bssid[3], r->bssid[4], r->bssid[5]);
+        const char *fan_note = fanout ? " +beacon fan-out" : "";
+        const char *tail = sev == ALERT_SEV_WARN
+                         ? " - one station, uncorroborated" : "";
+        char detail[ALERT_DETAIL_LEN];
+        snprintf(detail, sizeof(detail),
+                 "KARMA forge BSSID %s: answered directed probes for %d "
+                 "SSIDs it never beaconed (beacons %d), to %d stations%s%s",
+                 bssid_str, forged, beaconed, stations, fan_note, tail);
+
+        char key[ALERT_KEY_LEN];
+        akey_t k;
+        akey_begin(&k, key, sizeof(key), "karmaforge");
+        akey_mac(&k, r->bssid);
+        if (!akey_end(&k)[0]) continue;
+        fire_ev(ALERT_TYPE_KARMA_PROBE_FORGE, sev, evid, ev_n,
+                "KARMA_PROBE_FORGE", detail, key, NULL, 0, now);
+    }
+}

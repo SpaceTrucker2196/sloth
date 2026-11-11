@@ -10,7 +10,7 @@ type: reference
 
 **Sources**: `docs/views/alerts.md`, `docs/views/dns.md`, `docs/views/connections.md`, `docs/views/deauth.md`.
 
-**Last updated**: 2026-11-09 (#182: `GNSS_TIME_JUMP` late-read guard). 2026-11-08 (#186: `ADSB_EMERGENCY`, `src/alerts/rules_adsb.c`). 2026-11-03 (#173: a detail carries only what moves with the evidence; per-rule fixes listed under *Incident lifecycle*). 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
+**Last updated**: 2026-11-11 (#172: `PMKID_HARVEST`, `HANDSHAKE_HARVEST`). 2026-11-11 (#187 S2: `KARMA_PROBE_FORGE`, directed probe-response forgery). 2026-11-09 (#182: `GNSS_TIME_JUMP` late-read guard). 2026-11-08 (#186: `ADSB_EMERGENCY`, `src/alerts/rules_adsb.c`). 2026-11-03 (#173: a detail carries only what moves with the evidence; per-rule fixes listed under *Incident lifecycle*). 2026-11-03 (the four GNSS rules: `GNSS_JAMMING`, `GNSS_SPOOF_SUSPECT`, `GNSS_TIME_JUMP`, `GNSS_POSITION_JUMP`, `src/alerts/rules_gnss.c`). 2026-10-27 (per-type research assessments in [alert-assessments/](alert-assessments/README.md)). 2026-10-26 (#170: `first_seen` kept across every reopen; one `--db` row per finding). 2026-10-23 (#156: `BLE_HID_UNEXPECTED` form (b), `BLE_ADV_FLOOD` and `BLE_WATCHLIST` unchanged by `--ble-rotation-hints`); 2026-10-23 (#148: `BEACONING` capped at `bd.max_findings` per-destination findings plus one `beacon-overflow` finding).
 **Last updated**: 2026-10-21 (#144 slice 4: `BLE_ADV_FLOOD`, `BLE_HID_UNEXPECTED`, `BLE_WATCHLIST`; #144 slice 2: `BT_OWN_TRANSMIT`, the Bluetooth host's own transmissions).
 **Last updated**: 2026-10-20 (#101 slice A: `COUNTRY_ABSENT`, `DFS_MASKING`; #82: the two Pixie-Dust rules).
 **Last updated**: 2026-10-20 (#106 slice B: `CAM_RTSP_UNAUTH`, anonymous RTSP DESCRIBE).
@@ -244,6 +244,33 @@ the neighbourhood. The union is still reported and still feeds the
 common SSID in one passer-by's list made a benign multi-VAP AP page
 as an active lure.
 
+`KARMA_PROBE_FORGE` (#187 S2) is `KARMA_AP`'s blind spot made into its
+own kind. `KARMA_AP` reads the beacon history only, so the classic KARMA
+radio — the 2005 paper's access point "that responded to any Probe
+Request", `airbase-ng -P` — which beacons one name and answers the rest,
+never becomes a candidate. The new rule reads Probe Responses instead:
+one BSSID answering a station's **directed** probe (paired by DA and
+SSID within 5 s) for an SSID that is not its own name and that it has
+never beaconed. `karma.forge_ssids` (2) such names is WARN; two distinct
+stations answered, or the same BSSID also fanning out beacons past
+`karma.ssid_thresh` (the issue's joint S1 + S2), is CRIT. It asserts
+what it observed, so it carries no confidence percentage. Basis:
+`research/papers/daizovi-macaulay-2005-karma.md`,
+`research/tools/airbase-ng.md`; the row is in
+[`docs/views/alerts.md`](../views/alerts.md).
+
+`PMKID_HARVEST` and `HANDSHAKE_HARVEST` (#172) are the two harvesting
+vectors hcxdumptool's README names, read passively off three frame
+streams no earlier rule joins (`src/harvest_track.c`): one station's
+association requests answered by ≥ 3 BSSIDs' M1s that it left without
+an M2 (WARN; CRIT when ≥ 3 of those M1s carried a PMKID and the station
+answered none), and ≥ 2 deauths claimed from a BSSID followed within
+30 s by the victim's fresh M1/M2 pair (WARN; CRIT at two victims of one
+BSSID). Both are built to see what the flood rules miss: a harvest
+paced under their thresholds. Nothing transmits, and the handshake
+capture and export are unchanged. Every threshold is a judgement,
+labelled and tunable; the sources describe the mechanism, not a count.
+
 Since #187 the same rule also reports the **IE-fingerprint collapse**:
 how many distinct IE fingerprints the advertised SSIDs came back with,
 `, 1 IE fingerprint` or `, N IE fingerprints`, and nothing when any of
@@ -455,7 +482,8 @@ the headline rules per tier:
   station in range), or for a named kit's portal page; see
   [[captive-portal]]
 - **CRIT**: `THREAT_DOMAIN`, `THREAT_IP`, `ARP_SPOOF`, `ROGUE_DHCP`,
-  `EVIL_TWIN`, `KARMA_AP`, `DNS_TUNNEL`, `ATTACK_TOOL_UA`,
+  `EVIL_TWIN`, `KARMA_AP`, `KARMA_PROBE_FORGE`, `DNS_TUNNEL`,
+  `ATTACK_TOOL_UA`, `PMKID_HARVEST`, `HANDSHAKE_HARVEST`,
   `ATTACK_PATH`, `WPS_PIN_BRUTE`, `WPS_PBC_RACE`,
   `WPS_PIXIE_LIKELY_SUCCESS`
 
@@ -906,6 +934,9 @@ one.
 | `WPS_PBC_RACE` | fires above 2 / 120 s | `--wps-pbc-concurrent N` |
 | `WPS_PIXIE_PROBE` | 60 s of silence after M3 with no M4 | `--tune wps.pixie_silence_s=N` |
 | `WPS_PIXIE_LIKELY_SUCCESS` | 24 h look-back from a completed run | `--tune wps.pixie_success_window_s=N` |
+| `KARMA_PROBE_FORGE` | 2 never-beaconed SSIDs answered, 600 s | `--tune karma.forge_ssids=N`, `--tune karma.forge_window_s=N` |
+| `PMKID_HARVEST` | 3 BSSIDs, 50 % unanswered, 900 s | `--tune harvest.min_bssids=N`, `harvest.unanswered_pct=N`, `harvest.window_s=N` |
+| `HANDSHAKE_HARVEST` | 2 deauths, fresh M1/M2 within 30 s | `--tune harvest.deauth_min=N`, `harvest.reconnect_s=N`, `harvest.window_s=N` |
 
 `WPS_LOCKOUT_CYCLING`'s evidence is readable: the **WPS ACTIVITY**
 block on the Beacons detail screen (`b`, then Enter on the AP) shows

@@ -1854,8 +1854,18 @@ typedef struct {
      * boolean, and this is derivable from the fingerprints. */
     int      ie_fp_distinct;
     int      deauth_chain;  /* 1 = shared-victim deauth-then-lure (#90) */
+    /* Directed probe-response forgery (#187 S2): how many distinct
+     * SSIDs this BSSID answered a station's directed probe for while
+     * never beaconing them (karma_forged_ssids()), and to how many
+     * stations. A BSSID reaches the table on this alone, because the
+     * classic KARMA radio beacons one name and answers the rest, so it
+     * never crosses KARMA_SSID_THRESH. Not persisted: the DB keeps the
+     * score this feeds. */
+    int      forged;
+    int      forge_stations;
     /* composite: 1 + (pnl_best >= KARMA_PNL_CORROB_MIN ? 2 : 0)
-     *              + (ie_uniform ? 1 : 0) + (deauth_chain ? 3 : 0) */
+     *              + (ie_uniform ? 1 : 0) + (deauth_chain ? 3 : 0)
+     *              + (forged >= KARMA_FORGE_SSID_MIN ? 3 : 0) */
     int      score;
     char     top_ssid[33];  /* most recently advertised SSID */
     /* Tool attribution as the operator reads it — "ESP32 Marauder/med?
@@ -1865,6 +1875,35 @@ typedef struct {
     char     tool[48];
     time_t   last_seen;
 } karma_ap_t;
+
+/* Directed probe-response answers for SSIDs other than the BSSID's own
+ * current name (#187 S2), one row per answering BSSID, snapshotted by
+ * karma_forge_snapshot() from src/karma_detect.c. A row is raw
+ * observation: whether each SSID was ever *beaconed* by this BSSID is
+ * judged at rule time against the beacon table (karma_forged_ssids()),
+ * because the beacon history and this table are filled by different
+ * frames and either may arrive first. Bounded both ways, see
+ * karma_detect.h. */
+#define KARMA_FORGE_MAX_BSS   16
+#define KARMA_FORGE_MAX_SSIDS  8
+#define KARMA_FORGE_MAX_STA    8
+typedef struct {
+    uint8_t  bssid[6];
+    char     ssids[KARMA_FORGE_MAX_SSIDS][33];
+    time_t   ssid_last[KARMA_FORGE_MAX_SSIDS];
+    uint64_t ssid_ev[KARMA_FORGE_MAX_SSIDS];   /* newest answering frame, 0 none */
+    /* bit i = sta[i] received an answer naming this SSID */
+    uint8_t  ssid_sta_mask[KARMA_FORGE_MAX_SSIDS];
+    int      n_ssids;
+    uint8_t  sta[KARMA_FORGE_MAX_STA][6];
+    int      n_sta;
+    int      dropped;      /* SSIDs or stations displaced by the bounds */
+    time_t   first_seen;
+    time_t   last_seen;
+} karma_forge_t;
+
+struct harvest_sta_s;     /* src/harvest_track.h (#172) */
+struct harvest_chain_s;
 
 /* ── Rogue-RADIUS / EAP method tracking (#31) ────────────────
  * One row per BSSID seen running an 802.1X EAP conversation. Records
@@ -3786,6 +3825,21 @@ typedef struct {
     karma_ap_t     karma_aps[MAX_KARMA_APS];   /* KARMA/PineAP candidates (#30) */
     int            karma_count;
     int            karma_sel;
+    /* Directed-probe answers (#187 S2): karma_forge_snapshot() points
+     * this at its own per-poll copy, NULL before the first poll. A
+     * pointer, not the ~7 KB table, for the reason gnss_hist is one:
+     * tests return this struct by value, three deep, on an 8 MB stack
+     * (tests/test_state.c make_healthy_sensor_state), and an inline
+     * table of this size was measured to overflow it. */
+    const karma_forge_t *karma_forge;
+    int            karma_forge_count;
+    /* PMKID / handshake harvesting (#172): harvest_snapshot()'s per-poll
+     * copies (src/harvest_track.h), NULL before the first poll. Pointers
+     * for the reason karma_forge is one. */
+    const struct harvest_sta_s   *harvest_sta;
+    int                           harvest_sta_count;
+    const struct harvest_chain_s *harvest_chain;
+    int                           harvest_chain_count;
 
     /* Research-corpus coverage (#73 slice 3). */
     research_cov_t research_cov[MAX_RESEARCH_COV];

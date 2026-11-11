@@ -356,3 +356,18 @@ X(GNSS_POSITION_JUMP, "") /* real basis, no ATT&CK technique (second exemption f
  * Flag only: sloth surfaces it and never acts on it. */
 /* squawk 7500 / 7600 / 7700 or a DO-260B emergency status other than none, per address — SERA.13005, readsb README-json */
 X(ADSB_EMERGENCY, "") /* real basis, no ATT&CK technique (second exemption form) */
+/* One BSSID answering stations' directed probe requests for SSIDs it
+ * has never beaconed (#187 S2, src/karma_detect.h): the classic KARMA
+ * radio that beacons one name and answers the rest, which KARMA_AP's
+ * beacon-only fan-out cannot see. Same technique as KARMA_AP. */
+/* >= karma.forge_ssids never-beaconed SSIDs answered to directed probes — Dai Zovi & Macaulay 2005, airbase-ng -P */
+X(KARMA_PROBE_FORGE, "T1557") /* AiTM (forged directed probe response) */
+/* Key-material harvesting (#172, src/alerts/rules_harvest.c): the two
+ * attack vectors hcxdumptool's README names, read off association
+ * requests, EAPOL-Key messages and deauthentications. T1040 as the
+ * issue proposed: what is collected is credential material captured
+ * off the air for offline use. */
+/* one station's association requests answered by >= harvest.min_bssids M1s it left without an M2 — Steube 2018, hcxdumptool */
+X(PMKID_HARVEST, "T1040") /* Network Sniffing (clientless PMKID solicitation) */
+/* >= harvest.deauth_min deauths claimed from a BSSID, then the victim's fresh M1/M2 within harvest.reconnect_s — hcxdumptool */
+X(HANDSHAKE_HARVEST, "T1040") /* Network Sniffing (deauth-driven 4-way handshake capture) */

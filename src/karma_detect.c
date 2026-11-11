@@ -1,5 +1,7 @@
 #include "karma_detect.h"
 #include "sloth_clock.h"
+#include "beacon_snoop.h"
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -201,7 +203,9 @@ const sloth_tool_sig_t *karma_tool_match(const sloth_state_t *s,
     obs.vendor_ie_hash     = candidate->fp.vendor_ies_hash;
     obs.beacon_interval_ms = candidate->beacon_ms;
     obs.fp_flags           = candidate->fp.flags;
-    /* Every caller asks about a BSSID already over KARMA_SSID_THRESH. */
+    /* Every caller asks about a BSSID already over KARMA_SSID_THRESH, or
+     * one answering directed probes for names it never beaconed (#187
+     * S2): either way it answers to many names. */
     obs.karma_echo         = 1;
     obs.pmkid_seen         = pmkid;
     return tool_fingerprint_match_row(&obs, conf);
@@ -215,7 +219,19 @@ void karma_update(sloth_state_t *s) {
     for (int i = 0; i < s->beacon_count &&
                     s->karma_count < MAX_KARMA_APS; i++) {
         const beacon_ap_t *a = &s->beacon_aps[i];
-        if (a->ssid_history_n < KARMA_SSID_THRESH) continue;
+        /* A row on either signal (#187 S2): the beacon fan-out, or
+         * answers to directed probes for names this BSSID never
+         * beaconed — the classic KARMA radio, which beacons one name
+         * and so never reaches the fan-out threshold. */
+        int forged = 0, forge_sta = 0;
+        for (int f = 0; s->karma_forge && f < s->karma_forge_count; f++)
+            if (memcmp(s->karma_forge[f].bssid, a->bssid, 6) == 0) {
+                forged = karma_forged_ssids(s, &s->karma_forge[f],
+                                            &forge_sta, NULL, 0, NULL);
+                break;
+            }
+        int forging = forged >= KARMA_FORGE_SSID_MIN;
+        if (a->ssid_history_n < KARMA_SSID_THRESH && !forging) continue;
 
         karma_ap_t *k = &s->karma_aps[s->karma_count++];
         memset(k, 0, sizeof(*k));
@@ -232,9 +248,15 @@ void karma_update(sloth_state_t *s) {
          * KARMA_PNL_CORROB_MIN of these names is evidence. Same rule
          * as the KARMA_AP alert's CRIT gate, so the [y] score and the
          * alert severity cannot disagree about one BSSID. */
+        k->forged         = forged;
+        k->forge_stations = forge_sta;
+        /* Forging weighs what the deauth chain does: like it, it is an
+         * act observed against stations, not a property of the
+         * beacons, and the KARMA_PROBE_FORGE rule fires on it alone. */
         k->score        = 1 + (k->pnl_best >= KARMA_PNL_CORROB_MIN ? 2 : 0)
                             + (k->ie_uniform ? 1 : 0)
-                            + (k->deauth_chain ? 3 : 0);
+                            + (k->deauth_chain ? 3 : 0)
+                            + (forging ? 3 : 0);
         k->last_seen    = a->last_seen;
         /* Display only: the score is left alone, since an UNVERIFIED
          * row is not corroboration (#90) and none other ships. */
@@ -259,4 +281,276 @@ void karma_update(sloth_state_t *s) {
 
     if (s->karma_sel >= s->karma_count)
         s->karma_sel = s->karma_count > 0 ? s->karma_count - 1 : 0;
+}
+
+/* ── Directed probe-response forgery (#187 S2) ─────────────────
+ *
+ * Capture-side state: the recent directed probe requests, and per
+ * answering BSSID the names it answered that were not its own. See
+ * karma_detect.h for what is and is not recorded, and why. */
+
+typedef struct {
+    uint8_t  sta[6];
+    char     ssid[33];
+    uint64_t ms;          /* 0 = empty slot */
+} karma_preq_t;
+
+typedef struct {
+    karma_forge_t row;                         /* the exported part */
+    uint64_t      ssid_ms[KARMA_FORGE_MAX_SSIDS];
+    uint64_t      last_ms;
+} forge_slot_t;
+
+static pthread_mutex_t g_forge_mu = PTHREAD_MUTEX_INITIALIZER;
+static karma_preq_t    g_preq[KARMA_PREQ_RING];
+static int             g_preq_head;
+static forge_slot_t    g_forge[KARMA_FORGE_MAX_BSS];
+static int             g_forge_n;
+static unsigned long   g_forge_evict;
+static karma_forge_t   g_forge_copy[KARMA_FORGE_MAX_BSS];
+
+static int mac_is_group(const uint8_t m[6]) { return (m[0] & 0x01) != 0; }
+
+static int mac_is_zero(const uint8_t m[6]) {
+    for (int i = 0; i < 6; i++) if (m[i]) return 0;
+    return 1;
+}
+
+void karma_forge_clear(void) {
+    pthread_mutex_lock(&g_forge_mu);
+    memset(g_preq, 0, sizeof(g_preq));
+    g_preq_head = 0;
+    memset(g_forge, 0, sizeof(g_forge));
+    g_forge_n = 0;
+    g_forge_evict = 0;
+    pthread_mutex_unlock(&g_forge_mu);
+}
+
+unsigned long karma_forge_evictions(void) {
+    pthread_mutex_lock(&g_forge_mu);
+    unsigned long n = g_forge_evict;
+    pthread_mutex_unlock(&g_forge_mu);
+    return n;
+}
+
+/* Did `sta` send a directed probe for `ssid` within the pairing window?
+ * Caller holds g_forge_mu. */
+static int preq_matches(const uint8_t sta[6], const char *ssid,
+                        uint64_t now_ms) {
+    uint64_t pair_ms = (uint64_t)KARMA_FORGE_PAIR_S * 1000u;
+    for (int i = 0; i < KARMA_PREQ_RING; i++) {
+        const karma_preq_t *q = &g_preq[i];
+        if (!q->ms || q->ms > now_ms || now_ms - q->ms > pair_ms) continue;
+        if (memcmp(q->sta, sta, 6) == 0 && strcmp(q->ssid, ssid) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* Record one answer on its BSSID's row. Caller holds g_forge_mu. */
+static void forge_note(const uint8_t bssid[6], const uint8_t sta[6],
+                       const char *ssid, uint64_t ev, uint64_t now_ms,
+                       time_t wall) {
+    forge_slot_t *f = NULL;
+    for (int i = 0; i < g_forge_n; i++)
+        if (memcmp(g_forge[i].row.bssid, bssid, 6) == 0) {
+            f = &g_forge[i];
+            break;
+        }
+    if (!f) {
+        /* The least recently answering row goes. Rows exist only for
+         * answers naming something other than the BSSID's own SSID,
+         * which honest APs do not produce, so a full table means
+         * several answering radios at once, and the freshest are the
+         * ones an alert can still be about. */
+        if (g_forge_n < KARMA_FORGE_MAX_BSS) {
+            f = &g_forge[g_forge_n++];
+        } else {
+            f = &g_forge[0];
+            for (int i = 1; i < g_forge_n; i++)
+                if (g_forge[i].last_ms < f->last_ms) f = &g_forge[i];
+            g_forge_evict++;
+        }
+        memset(f, 0, sizeof(*f));
+        memcpy(f->row.bssid, bssid, 6);
+        f->row.first_seen = wall;
+    }
+    karma_forge_t *r = &f->row;
+    f->last_ms   = now_ms;
+    r->last_seen = wall;
+
+    /* The station, as an index into the row's station list. A full list
+     * keeps its stations and leaves the newcomer out of the mask: the
+     * distinct-station count then understates, the direction that
+     * withholds CRIT rather than invents it. */
+    int si = -1;
+    for (int i = 0; i < r->n_sta; i++)
+        if (memcmp(r->sta[i], sta, 6) == 0) { si = i; break; }
+    if (si < 0) {
+        if (r->n_sta < KARMA_FORGE_MAX_STA) {
+            si = r->n_sta++;
+            memcpy(r->sta[si], sta, 6);
+        } else {
+            r->dropped++;
+            g_forge_evict++;
+        }
+    }
+
+    int k = -1;
+    for (int i = 0; i < r->n_ssids; i++)
+        if (strcmp(r->ssids[i], ssid) == 0) { k = i; break; }
+    if (k < 0) {
+        if (r->n_ssids < KARMA_FORGE_MAX_SSIDS) {
+            k = r->n_ssids++;
+        } else {
+            /* Replace the name answered longest ago: the row is about
+             * this radio's current behaviour. */
+            k = 0;
+            for (int i = 1; i < r->n_ssids; i++)
+                if (f->ssid_ms[i] < f->ssid_ms[k]) k = i;
+            r->dropped++;
+            g_forge_evict++;
+        }
+        snprintf(r->ssids[k], sizeof(r->ssids[k]), "%s", ssid);
+        r->ssid_ev[k]       = 0;
+        r->ssid_sta_mask[k] = 0;
+    }
+    f->ssid_ms[k]   = now_ms;
+    r->ssid_last[k] = wall;
+    if (ev) r->ssid_ev[k] = ev;
+    if (si >= 0) r->ssid_sta_mask[k] |= (uint8_t)(1u << si);
+}
+
+void karma_observe_frame(const dot11_frame_t *f, const char *ssid) {
+    if (!f || !ssid || f->proto != 0 || f->type != 0) return;
+    if (f->subtype != 4 && f->subtype != 5) return;
+    const uint8_t *body; int blen;
+    /* No readable header, or a Protected body: the caller's SSID did
+     * not come from plaintext elements, so it is not used. */
+    if (!dot11_frame_body(f, &body, &blen)) return;
+
+    if (f->subtype == 4) {
+        /* Probe Request (§9.3.3.10). A wildcard (zero-length) SSID asks
+         * for nobody in particular, so there is nothing to forge an
+         * answer to. */
+        if (!f->sa || mac_is_group(f->sa) || mac_is_zero(f->sa)) return;
+        if (!ssid[0]) return;
+        uint64_t now_ms = sloth_mono_ms();
+        pthread_mutex_lock(&g_forge_mu);
+        karma_preq_t *q = &g_preq[g_preq_head];
+        g_preq_head = (g_preq_head + 1) % KARMA_PREQ_RING;
+        memcpy(q->sta, f->sa, 6);
+        snprintf(q->ssid, sizeof(q->ssid), "%s", ssid);
+        q->ms = now_ms ? now_ms : 1;
+        pthread_mutex_unlock(&g_forge_mu);
+        return;
+    }
+
+    /* Probe Response (§9.3.3.11): Timestamp(8) Beacon Interval(2)
+     * Capability(2), then elements. Shorter than the fixed part is not
+     * a probe response. A group DA answers nobody's directed probe. */
+    if (blen < 12) return;
+    if (!f->da || !f->bssid) return;
+    if (mac_is_group(f->da) || mac_is_zero(f->da)) return;
+    if (mac_is_group(f->bssid) || mac_is_zero(f->bssid)) return;
+    if (!ssid[0]) return;
+
+    /* The BSSID's own name, beaconed or revealed from a hidden beacon,
+     * is the honest answer. Read before this module's lock is taken:
+     * the beacon table has its own, and the two are never held
+     * together. */
+    char own[33];
+    if (beacon_find_ssid(f->bssid, own) && strcmp(own, ssid) == 0) return;
+
+    uint64_t now_ms = sloth_mono_ms();
+    time_t   wall   = sloth_wall();
+    pthread_mutex_lock(&g_forge_mu);
+    if (preq_matches(f->da, ssid, now_ms))
+        forge_note(f->bssid, f->da, ssid, f->event_id, now_ms, wall);
+    pthread_mutex_unlock(&g_forge_mu);
+}
+
+void karma_forge_snapshot(sloth_state_t *s) {
+    if (!s) return;
+    uint64_t now_ms = sloth_mono_ms();
+    uint64_t win_ms = (uint64_t)KARMA_FORGE_WINDOW_S * 1000u;
+    pthread_mutex_lock(&g_forge_mu);
+    /* Names answered longer ago than the window go, then rows left with
+     * none. */
+    int i = 0;
+    while (i < g_forge_n) {
+        forge_slot_t  *f = &g_forge[i];
+        karma_forge_t *r = &f->row;
+        int k = 0;
+        while (k < r->n_ssids) {
+            if (now_ms > f->ssid_ms[k] && now_ms - f->ssid_ms[k] > win_ms) {
+                int last = r->n_ssids - 1;
+                if (k != last) {
+                    memcpy(r->ssids[k], r->ssids[last], sizeof(r->ssids[k]));
+                    r->ssid_last[k]     = r->ssid_last[last];
+                    r->ssid_ev[k]       = r->ssid_ev[last];
+                    r->ssid_sta_mask[k] = r->ssid_sta_mask[last];
+                    f->ssid_ms[k]       = f->ssid_ms[last];
+                }
+                r->n_ssids--;
+            } else {
+                k++;
+            }
+        }
+        if (r->n_ssids == 0) {
+            g_forge[i] = g_forge[--g_forge_n];
+            memset(&g_forge[g_forge_n], 0, sizeof(g_forge[g_forge_n]));
+        } else {
+            i++;
+        }
+    }
+    /* Written only here, on the poll thread that also reads it, so the
+     * copy needs no lock of its own once taken. */
+    for (i = 0; i < g_forge_n; i++) g_forge_copy[i] = g_forge[i].row;
+    s->karma_forge       = g_forge_copy;
+    s->karma_forge_count = g_forge_n;
+    pthread_mutex_unlock(&g_forge_mu);
+}
+
+int karma_forged_ssids(const sloth_state_t *s, const karma_forge_t *r,
+                       int *sta_n_out, uint64_t *ev_out, int ev_max,
+                       int *ev_n) {
+    if (sta_n_out) *sta_n_out = 0;
+    if (ev_n) *ev_n = 0;
+    if (!s || !r) return 0;
+    const beacon_ap_t *a = NULL;
+    for (int i = 0; i < s->beacon_count; i++)
+        if (memcmp(s->beacon_aps[i].bssid, r->bssid, 6) == 0) {
+            a = &s->beacon_aps[i];
+            break;
+        }
+    /* No beacon on file: "never beaconed" cannot be said of a BSSID this
+     * radio never heard beacon at all. A saturated history: a name past
+     * the cap was dropped unrecorded, not unbeaconed. */
+    if (!a || a->ssid_history_n >= MAX_AP_SSID_HISTORY) return 0;
+
+    int forged = 0;
+    unsigned sta_mask = 0;
+    int nn = r->n_ssids < KARMA_FORGE_MAX_SSIDS ? r->n_ssids
+                                                : KARMA_FORGE_MAX_SSIDS;
+    for (int k = 0; k < nn; k++) {
+        const char *name = r->ssids[k];
+        if (!name[0]) continue;
+        if (a->ssid[0] && strcmp(a->ssid, name) == 0) continue;
+        int beaconed = 0;
+        for (int h = 0; h < a->ssid_history_n; h++)
+            if (strcmp(a->ssid_history[h], name) == 0) { beaconed = 1; break; }
+        if (beaconed) continue;
+        forged++;
+        sta_mask |= r->ssid_sta_mask[k];
+        if (ev_out && ev_n && r->ssid_ev[k] && *ev_n < ev_max)
+            ev_out[(*ev_n)++] = r->ssid_ev[k];
+    }
+    if (sta_n_out) {
+        int n = 0;
+        for (int b = 0; b < KARMA_FORGE_MAX_STA; b++)
+            if (sta_mask & (1u << b)) n++;
+        *sta_n_out = n;
+    }
+    return forged;
 }

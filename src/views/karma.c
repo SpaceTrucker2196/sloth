@@ -104,20 +104,24 @@ void view_karma_draw(const sloth_state_t *s) {
     }
     TPRINT("\n");
 
-    /* Columns — BSSID 17 | SSIDs 5 | PNL 4 | J% 4 | IE 2 | chain 5 | score 5 */
+    /* Columns — BSSID 17 | SSIDs 5 | PNL 4 | J% 4 | IE 2 | chain 5 |
+     * FR 2 | score 5. FR is #187 S2's forged-answer count: names this
+     * BSSID answered directed probes for and never beaconed. */
     tui_dim();
-    TPRINT(" %-17s  %-5s  %-4s  %-4s  %-2s  %-5s  %-5s  %s\n",
-           "BSSID", "SSIDs", "PNL", "J%", "IE", "chain", "score", "Top SSID / last");
-    TPRINT(" %-17s  %-5s  %-4s  %-4s  %-2s  %-5s  %-5s  %s\n",
-           "-----------------", "-----", "----", "----", "--", "-----", "-----",
-           "---------------");
+    TPRINT(" %-17s  %-5s  %-4s  %-4s  %-2s  %-5s  %-2s  %-5s  %s\n",
+           "BSSID", "SSIDs", "PNL", "J%", "IE", "chain", "FR", "score",
+           "Top SSID / last");
+    TPRINT(" %-17s  %-5s  %-4s  %-4s  %-2s  %-5s  %-2s  %-5s  %s\n",
+           "-----------------", "-----", "----", "----", "--", "-----", "--",
+           "-----", "---------------");
     tui_normal();
 
     if (s->karma_count == 0) {
         tui_dim();
         TPRINT("  (no KARMA candidates — sloth needs one BSSID beaconing >=%d\n"
-               "   distinct SSIDs. Start monitor capture and give it time.)\n",
-               3);
+               "   distinct SSIDs, or answering directed probes for >=%d it\n"
+               "   never beaconed. Start monitor capture and give it time.)\n",
+               KARMA_SSID_THRESH, KARMA_FORGE_SSID_MIN);
         tui_normal();
         return;
     }
@@ -133,6 +137,15 @@ void view_karma_draw(const sloth_state_t *s) {
     for (int row = top; row < end; row++) {
         const karma_ap_t *k = &s->karma_aps[row];
         char bssid[20], chain[6], age[24], last[64], jac[16], tool[64];
+        /* Forged answers, clamped to the row's SSID set for the same
+         * reason the IE cell is: a wider cell shoves the row. "-" is
+         * none, not "unknown": no forge row and no countable answer
+         * read the same to the operator. */
+        char frg[4];
+        int forged = k->forged;
+        if (forged > KARMA_FORGE_MAX_SSIDS) forged = KARMA_FORGE_MAX_SSIDS;
+        if (forged > 0) snprintf(frg, sizeof(frg), "%d", forged);
+        else            snprintf(frg, sizeof(frg), "-");
         /* The distinct-fingerprint count, not a yes/no (#187 S4). "1"
          * against an SSIDs column of 4 is the collapse; "4" is the AP
          * showing four different security postures, which is the
@@ -155,7 +168,14 @@ void view_karma_draw(const sloth_state_t *s) {
         snprintf(chain, sizeof(chain), "%s", k->deauth_chain ? "YES" : "-");
         snprintf(jac, sizeof(jac), "%d%%", (k->pnl_jaccard_ppm + 5000) / 10000);
         if (k->last_seen == 0) snprintf(age, sizeof(age), "?");
-        else snprintf(age, sizeof(age), "%lds", (long)(now - k->last_seen));
+        else {
+            /* Whole days past a day (#187 S2): the FR column took four
+             * cells from the tail, and "(1234567s)" spent ten of what
+             * was left on a figure nobody reads in seconds. */
+            long secs = (long)(now - k->last_seen);
+            if (secs >= 86400) snprintf(age, sizeof(age), "%ldd", secs / 86400);
+            else               snprintf(age, sizeof(age), "%lds", secs);
+        }
         /* Same bracketed attribution the KARMA_AP alert detail carries
          * (#90), including its "? provisional" suffix for a signature
          * with no capture behind it - fitted to the terminal width,
@@ -163,9 +183,9 @@ void view_karma_draw(const sloth_state_t *s) {
          * legend off the screen. */
 #ifdef WITH_NCURSES
         int prefix = snprintf(NULL, 0,
-                              " %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  ",
+                              " %-17s  %5d  %4d  %-4s  %-2s  %-5s  %-2s  %5d  ",
                               bssid, k->ssid_count, k->pnl_overlap, jac, ie,
-                              chain, k->score);
+                              chain, frg, k->score);
         int room = COLS - 1 - prefix;
 #else
         int room = (int)sizeof(last) + (int)sizeof(tool);
@@ -175,9 +195,9 @@ void view_karma_draw(const sloth_state_t *s) {
 #ifdef WITH_NCURSES
         if (row == s->karma_sel) {
             tui_sel();
-            tui_printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s%s\n",
-                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score,
-                   last, tool);
+            tui_printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %-2s  %5d  %s%s\n",
+                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, frg,
+                   k->score, last, tool);
             tui_reset();
         } else {
             tui_bright(); tui_printf(" %-17s", bssid);
@@ -200,6 +220,8 @@ void view_karma_draw(const sloth_state_t *s) {
             tui_printf("  %-2s", ie);
             if (k->deauth_chain) tui_bright(); else tui_dim();
             tui_printf("  %-5s", chain);
+            if (k->forged >= KARMA_FORGE_SSID_MIN) tui_bright(); else tui_dim();
+            tui_printf("  %-2s", frg);
             tui_bright(); tui_printf("  %5d", k->score);
             tui_dim();    tui_printf("  %s", last);
             if (tool[0]) { tui_bright(); tui_printf("%s", tool); }
@@ -209,14 +231,14 @@ void view_karma_draw(const sloth_state_t *s) {
 #else
         if (row == s->karma_sel) {
             tui_sel();
-            tui_printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s%s",
-                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score,
-                   last, tool);
+            tui_printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %-2s  %5d  %s%s",
+                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, frg,
+                   k->score, last, tool);
             tui_reset(); tui_printf("\n");
         } else {
-            tui_printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %5d  %s%s\n",
-                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, k->score,
-                   last, tool);
+            tui_printf(" %-17s  %5d  %4d  %-4s  %-2s  %-5s  %-2s  %5d  %s%s\n",
+                   bssid, k->ssid_count, k->pnl_overlap, jac, ie, chain, frg,
+                   k->score, last, tool);
         }
 #endif
     }
@@ -224,8 +246,10 @@ void view_karma_draw(const sloth_state_t *s) {
 
     /* Legend */
     tui_dim();
-    TPRINT(" PNL = SSIDs in client probe lists, >=%d on one station;"
-           " chain = deauth-then-lure on shared victim\n",
+    /* 95 cells: the legend has to fit the 100-column minimum, which is
+     * why "in client probe lists" became "probed" when FR joined it. */
+    TPRINT(" PNL = SSIDs probed, >=%d on one station;"
+           " chain = deauth-then-lure on shared victim; FR = forged\n",
            KARMA_PNL_CORROB_MIN);
     TPRINT(" [tool/conf? provisional] = UNVERIFIED signature, no capture:"
            " a hypothesis, not an identification\n");
