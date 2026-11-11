@@ -304,10 +304,10 @@ static void test_risk_own_device_with_both_evidence_is_crit(void) {
 }
 
 static void test_oui_alfa_resolves(void) {
-    /* 00:c0:ca is ALFA's registered block; the adapter above read as
+    /* 00:c0:ca is Alfa Network's registered block; the adapter above read as
      * UNKNOWN_VENDOR while tool_fingerprint.c knew the prefix. */
     uint8_t mac[] = { 0x00, 0xc0, 0xca, 0x11, 0x22, 0x05 };
-    ASSERT_STR(oui_lookup(mac), "ALFA");
+    ASSERT_STR(oui_lookup(mac), "Alfa Network");
 
     /* The table is binary-searched, so a row out of order hides its
      * neighbours: the entries either side of the new one still resolve. */

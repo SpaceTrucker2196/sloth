@@ -416,7 +416,9 @@ the attack chain, shows the evidence and capture, the cited assessment,
 and triage buttons (false, noise, incident, the green **known** for
 expected traffic, follow recommended). With `--peer NAME=URL` it pulls
 the operator's other slothwebs over the tailnet into its own store,
-off by default and announced ([`docs/wiki/fleet.md`](docs/wiki/fleet.md)).
+off by default and announced, and its **Fleet** tab maps the sites,
+shows each peer's health and lists what was seen at more than one site
+on a shared timeline ([`docs/wiki/fleet.md`](docs/wiki/fleet.md)).
 
 ![slothweb Overview on synthetic data](docs/assets/slothweb/overview.png)
 

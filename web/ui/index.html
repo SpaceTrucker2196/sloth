@@ -26,6 +26,7 @@
 @include ssid.css
 @include probes.css
 @include syshealth.css
+@include fleet.css
 </style>
 <script>
 @include palette.js
@@ -52,6 +53,7 @@
 @include ssid.js
 @include probes.js
 @include syshealth.js
+@include fleet.js
 </script>
 </head>
 <body>
@@ -78,6 +80,7 @@
       <li><button type="button" class="go" id="nav-aprs">APRS</button></li>
       <li><button type="button" class="go" id="nav-radar">Radar</button></li>
       <li><button type="button" class="go" id="nav-tacdb">TACDB</button></li>
+      <li><button type="button" class="go" id="nav-fleet">Fleet</button></li>
     </ol></nav>
     <div class="scope">
       <div class="scope-g" id="scope" role="radiogroup" aria-label="capture scope: what the views show, by how it was captured">
@@ -920,6 +923,27 @@
       <textarea id="q-sql" rows="6" spellcheck="false" autocomplete="off" aria-label="one SELECT or WITH statement"></textarea>
       <div class="sub">one SELECT or WITH statement, 5 s, 10,000 rows; credential columns (usernames, identities, cookies, alert keys and details) are withheld</div>
       <div class="qout" id="q-out"></div>
+    </section>
+   </div>
+   <div id="v-fleet" hidden>
+    <section class="panel">
+      <div class="label">sites <span class="sub" id="fleet-head"></span></div>
+      <div class="sub" id="fleet-empty" hidden>no peer: this slothweb pulls no other sensor. Start it with <code>--peer NAME=URL</code> for each of your other sensors, URL that sensor's slothweb at its tailnet address, and let each admit the other with <code>--web-allow</code> (docs/wiki/fleet.md). Nothing is shared by default.</div>
+      <svg id="fleet-map" viewBox="0 0 600 300" role="img" aria-label="the sites on an equirectangular map fitted to them, north up, with the distance between each pair"><g id="fleet-map-g"></g></svg>
+      <div class="sub" id="fleet-map-note"></div>
+    </section>
+    <section class="panel">
+      <div class="label">peers</div>
+      <div class="fleet-cards" id="fleet-cards"></div>
+      <div class="sub">each peer's last good pull and attempt (this slothweb's clock), its last refusal, its clock less this one's at the last good pull, the rows held from it by kind, and whether a kind cut at its cap is still being fetched a page a pull (backfill)</div>
+    </section>
+    <section class="panel">
+      <div class="label">seen at more than one site <span class="sub" id="fleet-shared-note"></span>
+        <label class="sub">kind <select id="fleet-kind"><option value="wifi" selected>Wi-Fi devices</option><option value="ble">BLE advertisers</option><option value="ap">access points</option><option value="probe">probed SSIDs</option></select></label></div>
+      <div class="hscroll"><div class="fleet-row dhead"><span>key</span><span>label</span><span>verdict</span><span>first to last seen, per site</span></div>
+      <div id="fleet-shared-rows"></div></div>
+      <div class="sub" id="fleet-axis"></div>
+      <div class="sub">a key a peer sent that this site's sloth.db (or, for BLE, slothweb's own table) holds too, each site's first and last seen on one time axis; a verdict is this site's triage of a finding at that address, else the newest a peer sent. A random MAC that rotates is a new key at each site. Observation only: no row here is a finding.</div>
     </section>
    </div>
    <div id="v-tacdb" hidden>

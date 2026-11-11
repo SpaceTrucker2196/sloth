@@ -310,7 +310,8 @@ int main(int argc, char **argv) {
                     "/api/wifi/*, /api/history/*, /api/sessions, /api/flows, "
                     "/api/flows/graph, /api/frrs/*, /api/ble, /api/ble/alerts, "
                     "/api/ble/ADDR, /api/alerts, /api/alert, /api/pcap, "
-                    "/api/pcap/frames, /api/fleet/export, /api/fleet/peers%s, "
+                    "/api/pcap/frames, /api/fleet/export, /api/fleet/peers, "
+                    "/api/fleet/overview, /api/fleet/shared%s, "
                     "/events)\n",
             where, cfg.allow_sql ? ", /api/query, /api/recipes" : "");
     if (cfg.allow_sql)

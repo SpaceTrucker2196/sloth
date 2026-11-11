@@ -6783,6 +6783,8 @@ epoch is not seen, since at 1 Hz that gap is a whole-second step's.
 - 2026-11-10 — ADR 0008 "own fleet" (#192 F0): the owner's own sensors share at full fidelity over the tailnet, pulled by slothweb; ADR 0006 stays the rule for community sharing.
 - 2026-11-10 — [[fleet]] (#192 F1): slothweb's read-only `/api/fleet/export?since=` (JSON Lines, member allow-list held to `web_secret.h`, no credential, username, alert key or detail, EAPOL row or RADIUS identity), the `--peer NAME=URL` pull over the tailnet (`--peer-interval-secs`, `--peer-allow-outside-tailnet` announced), slothweb.db v7 -> v8 (`peer_sites`, `peer_sightings`), `/api/health`'s `fleet` and `/api/fleet/peers`. Updated [[slothweb]], [[cli-reference]], [[index]].
 - 2026-11-10 — [[fleet]] (#192 F1 review): the export holds each line to the importer's own checks before sending it (a stored value outside the importer's ranges no longer refuses a peer's whole answer at every pull; the row is left out and its kind marked truncated); the pull refuses a transfer coding and a second `Content-Length`; the importer takes altitude to 100,000 m as `web_loc_set()` does.
+- 2026-11-11 — [[fleet]] (#192 F2): the Fleet tab (`web/ui/fleet.js`): the sites on an SVG map with the distance between each pair, per-peer health cards, "seen at more than one site" for Wi-Fi, BLE, APs and probed SSIDs with a per-site timeline; `/api/fleet/overview` and `/api/fleet/shared`; the pull's backfill of a kind cut at its cap (`next=1`, `next_<kind>` cursors, `kind=&after=` pages, the state in slothweb.db's `meta`). Updated [[slothweb]].
+- 2026-11-11 — [[fleet]] (#192 F2 review): an alert answer whose reader scan (20,000 rows) stops short of the floor is cut and backfilled from the scan's oldest row (`web_sdb_alerts_upto()`); an F2 puller against an F1 peer retries without `next=1` (`pages_refused`), so a fleet upgrades a host at a time; the shared list's verdicts in one pass per table; the budget checked between its lookups.
 
 ## 2026-11-11 — device risk: anonymity counts once, own devices exempt (#191)
 
@@ -6792,7 +6794,7 @@ vendor, no hostname, probe-only) summed to three. They are now one point
 between them, so anonymity stops at MED and HIGH takes an evidence
 signal (a cleartext credential or an alert naming the device's IP), CRIT
 both. Bit 64 (`SELF`) marks the sensor's own interfaces and rostered
-devices, which record no anonymity signal. `00:c0:ca` resolves to ALFA.
+devices, which record no anonymity signal. `00:c0:ca` resolves to Alfa Network.
 slothweb scores from `risk_signals` in every scope and no longer reads
 the stored `risk_level`, so rows stored under the old sums read at the
 new level. The replay golden file's three probe-only device rows move

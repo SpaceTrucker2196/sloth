@@ -20,7 +20,9 @@ usernames, alert keys and details, EAPOL rows and RADIUS identities
 never travel: the export reads `sloth.db` only through the M4 reader's
 column allow-list, every member name is held to `web_secret.h`, and a
 test seeds each one and holds it out. Slice F1 of #192 is the plumbing;
-the Fleet tab (F2) and the inferences across sites (F3, F4) come next.
+F2 is the Fleet tab (the sites on a map, each peer's health, what was
+seen at more than one site) and the backfill of a kind an answer cut at
+its cap; the inferences across sites (F3, F4) come next.
 
 **Sources**: `web/src/web_fleet.h`, `web/src/web_fleet.c` (the export,
 the member allow-list, the HTTP/1.1 client, the ingest and its checks,
@@ -30,13 +32,15 @@ the pull thread, `/api/fleet/peers`), `web/src/web_store.c` (`STEP_V8_SQL`),
 `web/src/web_routes.c` (`/api/fleet/export`, `/api/fleet/peers`, the
 health member), `web/src/web_frrs.c` (`web_frrs_verdicts()`),
 `web/src/web_gnss.c` (`web_gnss_site()`), `web/src/web_secret.h`,
+`web/src/web_slothdb.c` (`web_sdb_devices_after()`, `web_sdb_aps_after()`,
+`web_sdb_seen()`), `web/ui/fleet.js`, `web/ui/fleet.css`,
 `web/tests/test_fleet.c`, `web/tests/test_store.c`
 (`test_v7_file_is_migrated`), `web/README.md` ("Fleet"),
 [ADR 0008](adr/0008-own-fleet.md), [ADR 0006](adr/0006-sharing-is-opt-in.md),
 issue #192; RFC 9112 (HTTP/1.1 message syntax), RFC 6598 (the
 100.64.0.0/10 shared address space Tailscale numbers its nodes from).
 
-**Last updated**: 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
+**Last updated**: 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
 
 ## What travels, and what never does
 
@@ -134,6 +138,134 @@ refused with a reason in slothweb's words, kept on the peer, in
 `/api/health` and in `peer_sites.last_error`, and no sighting is
 written.
 
+## The backfill
+
+`since` advances at every good pull, so the rows a kind's cap cut from
+an answer (the first pull of a busy sensor: 2,000 devices, 1,000 APs)
+would never be asked for again. From F2 the pull asks with `next=1`, and
+the export's end line then carries `next_wifi`, `next_ap`, `next_alert`
+and `next_verdict`: `null`, or for a kind that was cut a cursor,
+`<last_seen>~<key>`, naming the last row sent in the reader's own order
+(a device's MAC or an AP's BSSID as `sloth.db` holds it, an alert's
+rowid, a triage row's id). The puller keeps, per peer and kind, the cut
+answer's `since` (the floor) and the cursor, and after each good pull
+asks for up to 4 pages of each:
+`GET /api/fleet/export?since=FLOOR&kind=wifi&after=CURSOR`, which answers
+that kind only, the next cap's worth after the cursor, and its own
+`next_wifi`. A page that is not cut ends the backfill.
+
+The page is a keyset on (last_seen, key), not an offset: a row updated
+meanwhile moves above the cursor, out of the page's range and into the
+next incremental pull, and the rows below the cursor do not shift, so
+none is skipped; rows that share a `last_seen` across the cut are
+ordered by their key (`web/tests/test_fleet.c` seeds 4,500 devices in
+four `last_seen` values to hold that). A client's probe list rides its
+wifi row (a device goes with all of its probes, or the page ends before
+it), so `probe` needs no cursor; the BLE table never holds more
+advertisers than the BLE cap, so `ble` is never cut. A row the export
+leaves out because the importer would refuse it marks its kind
+truncated but gives no cursor: asking again would not change it.
+
+The state is kept in slothweb.db's `meta` table, one row a peer and
+kind (`fleet.backfill.NAME.KIND`, the floor and the cursor), written in
+the same transaction as the rows it follows and read back at start, so
+a restart resumes a backfill rather than lose its rows; there is no new
+column and no schema step. A whole export cut again while a backfill
+runs restarts that kind's backfill from the new cut, with the older of
+the two floors, which fetches some rows twice and loses none. A page
+that does not move its cursor (the peer's read ran out of its budget
+first) is asked again at the next pull, not again in the same one.
+
+Alerts need one more step. The reader takes its keys from the newest
+20,000 rows of the range (`WEB_SDB_ALERT_SCAN`), and on a busy sensor
+one finding's incidents fill that long before the cap: on W9FJC
+(2026-11-11) the newest 20,000 of 364,191 incidents were 955 of 17,988
+keys, so the first answer looked whole at 955. When the scan does not
+reach the range's floor, the export now marks `alert` cut and its
+cursor is the scan's oldest `last_seen` (`<ts>~`, every key at it
+included); a page reads only the rows at or before its cursor
+(`web_sdb_alerts_upto()`), so each page's scan starts where the last
+one ended. A key newer than the cursor may come again with an older
+`last_seen`; the importer's widening keeps its newest. More than 20,000
+incidents in one second would stop the alert backfill at that second
+(it is asked again each pull, and says so in its unchanged cursor).
+
+Only `next=1` brings the cursors: an F1 puller, which refuses a member
+it does not know, is answered as before. An F1 export refuses `next=1`
+as an unknown parameter; an F2 puller that gets that 400 asks again
+with `since=` alone, stores the answer, pulls that peer without `next=1`
+for the next hour (then tries it again), and pages nothing from it;
+the overview's `pages_refused` and the peer's card say so. A fleet can
+therefore be upgraded one host at a time.
+
+## The Fleet tab
+
+After TACDB (`web/ui/fleet.js`, `web/ui/fleet.css`, one module with its
+own `fleet-*` ids, one `SlothFleet.init` and one `show` hook in
+`app.js`). Three panels, refreshed every minute while shown:
+
+- **Sites**: an SVG map, equirectangular (x = longitude x cos of the
+  mean latitude, y = -latitude), fitted to the sites with a margin,
+  north up; this site in the accent colour, each peer in the data
+  colour, a dashed line between each pair with a position and its
+  great-circle distance. No tiles and nothing fetched but this server.
+  A site with no position is named under the map; one site alone is
+  centred.
+- **Peers**: a card each, from `peer_sites` and the pull's live state:
+  last good pull and last attempt (this slothweb's clock), the last
+  refusal, the clock skew, the distance from this site, the rows held
+  by kind, and the backfill (running for which kinds, pages fetched and
+  refused, or complete). A peer no longer given with `--peer` is shown
+  as such.
+- **Seen at more than one site**: for Wi-Fi devices, BLE advertisers,
+  APs or probed SSIDs (the one `kind` select, kept per browser), each
+  key a peer sent that this site holds too, newest activity first: its
+  label, this site's triage verdict of a finding at that address (else
+  the newest a peer sent, named with its site), and one bar per site
+  from first to last seen, every row on the same time axis. The key
+  opens the device drawer (the BLE drawer for an advertiser; a probed
+  SSID opens its client).
+
+No `--peer` gives an empty state that says how to configure one; a peer
+with nothing in common says that instead. A random MAC that rotates is
+a new key at each site and is never matched; correlating rotations is
+F3's.
+
+## The tab's routes
+
+**`GET /api/fleet/overview`**: `local` (`name` `self`, the label from
+`sloth.db`'s newest session, `sloth_db`, and the position the export
+sends: `lat`, `lon`, `alt_m`, `pos_source`, `pos_age_s`), `interval_s`,
+`store`, `configured`, and `peers`, each `peer_sites` row and each
+configured peer not yet pulled: `name`, `configured`, `url`, `label`,
+the position as the peer last reported it (`pos_age_s` by the peer's own
+clock), `last_ok_age_s`, `last_attempt_age_s`, `last_error`, `skew_s`
+(the peer's clock at its last good answer less this one's then:
+positive, the peer runs ahead; within one pull's duration of the
+truth), `remote_version`, `rows_last`, `counts` by kind, `backfill`
+(each running kind's `floor` and `cursor`), `pages`, `page_failures`,
+`pages_refused` (the peer's export refused `next=1`: an F1 build, pulled
+without it) and `distance_m` from this site. `distances` lists every pair of sites
+with a position (`a`, `b`, `m`), this site named `self`: the haversine
+on the IUGG mean radius, 6,371,008.8 m.
+
+**`GET /api/fleet/shared?kind=wifi|ble|ap|probe&limit=N`** (`limit`
+50 by default, 1..200; GET only): the newest 5,000 `peer_sightings` rows
+of the kind are grouped by key, and each key is looked up at this site,
+most recently seen at a peer first: a device in `sloth.db`'s `devices`,
+an AP in `beacon_aps`, a probed SSID in `pnl_ssids`, through the M4
+reader (read-only, its column allow-list, the 1.5 s overview budget); a
+BLE address in slothweb's own BLE table. `rows`, newest activity at any
+site first: `key`, `addr` (what the drawer opens), `label`, `vendor`,
+`last`, `sites` (`self` first, then each peer: `first_seen`,
+`last_seen`, `rssi`) and `verdict` (`state` and `site`, or null):
+this site's triage at the address, else the newest a peer sent, each
+found in one pass over its table for all the listed rows, not a scan a
+row. `partial` is true when the scan stopped at 5,000 rows or the budget
+ran out (checked between the lookups, which are each too short for the
+reader's own progress check); `scanned`, `keys` and `looked_up` say how far it got, and `local`
+whether `sloth.db` was read (`open`, `none`, `unavailable`, `ble`).
+
 ## The store: slothweb.db v8
 
 `peer_sites` is one row per peer name: its URL, the last attempt and
@@ -165,7 +297,7 @@ held to the cited-basis rule when it lands.
 
 - [ADR 0008 — own fleet](adr/0008-own-fleet.md)
 - [ADR 0006 — sharing is opt-in and sanitised](adr/0006-sharing-is-opt-in.md)
-- [[slothweb]] — the dashboard this runs in.
+- [[slothweb]] — the dashboard this runs in, the Fleet tab among its tabs.
 - [[location]] — the sensor positions the site block carries.
 - [[gnss]] — the receiver summary.
 - [[data-socket-exposure]] — the other network surface and its rules.

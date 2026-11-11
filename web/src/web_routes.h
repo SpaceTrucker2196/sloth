@@ -37,6 +37,10 @@
  *                 ?since=, for the owner's other slothwebs (web_fleet.h),
  *                 GET only; a heap body
  *   /api/fleet/peers JSON: the peers --peer pulls and what each reported
+ *   /api/fleet/overview JSON: this site and each peer, their health and
+ *                 the distances between them (the Fleet tab)
+ *   /api/fleet/shared JSON: ?kind=&limit=, keys seen here and at a peer,
+ *                 GET only; a heap body
  *   /events       Server-Sent Events: tick, record, anomaly, ping
  *   anything else 404
  *

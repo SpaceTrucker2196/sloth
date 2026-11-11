@@ -1112,24 +1112,28 @@ int web_frrs_triage_any(web_frrs_t *f) {
  * state (its newest row) decided at or after since, newest first. The
  * descriptor and the state only: the note, who and from where stay
  * here. */
-int web_frrs_verdicts(web_frrs_t *f, long long since, int max,
+int web_frrs_verdicts(web_frrs_t *f, long long since, long long after_ts,
+                      long long after_id, int max,
                       int (*fn)(void *ctx, const web_frrs_verdict_t *v), void *ctx) {
     if (!f || !f->wr || max <= 0) return 0;
     sqlite3_stmt *s = NULL;
     if (sqlite3_prepare_v2(f->wr,
-            "SELECT t.type, t.addr, t.port, t.first_seen, t.state, t.ts FROM triage t"
+            "SELECT t.type, t.addr, t.port, t.first_seen, t.state, t.ts, t.id FROM triage t"
             /* Alerts only: an anomaly's rows (type -1, web_relate.c)
              * are this sensor's own baselines' findings, no verdict on
              * an alert a peer could hold, and would take the limit's
              * rows from the ones that are. */
             " WHERE t.type >= 0 AND t.ts >= ?1 AND t.id = (SELECT MAX(u.id) FROM triage u"
-            " WHERE u.subject = t.subject) ORDER BY t.ts DESC, t.id DESC LIMIT ?2",
+            " WHERE u.subject = t.subject) AND (?3 < 0 OR t.ts < ?3 OR (t.ts = ?3"
+            " AND t.id < ?4)) ORDER BY t.ts DESC, t.id DESC LIMIT ?2",
             -1, &s, NULL) != SQLITE_OK) {
         sqlite3_finalize(s);
         return -1;
     }
     sqlite3_bind_int64(s, 1, since);
     sqlite3_bind_int(s, 2, max);
+    sqlite3_bind_int64(s, 3, after_ts);
+    sqlite3_bind_int64(s, 4, after_id);
     int n = 0, rc;
     while ((rc = sqlite3_step(s)) == SQLITE_ROW) {
         web_frrs_verdict_t v;
@@ -1140,11 +1144,48 @@ int web_frrs_verdicts(web_frrs_t *f, long long since, int max,
         v.first_seen = sqlite3_column_int64(s, 3);
         v.state = sqlite3_column_int(s, 4);
         v.ts = sqlite3_column_int64(s, 5);
+        v.id = sqlite3_column_int64(s, 6);
         n++;
         if (fn(ctx, &v)) { rc = SQLITE_DONE; break; }
     }
     sqlite3_finalize(s);
     return rc == SQLITE_DONE ? n : -1;
+}
+
+static int addr_cmp(const void *k, const void *e) {
+    return strcmp((const char *)k, *(const char *const *)e);
+}
+
+int web_frrs_addr_states(web_frrs_t *f, const char *const *addrs, int n, int *state) {
+    for (int i = 0; i < n; i++) state[i] = -1;
+    if (!f || !f->wr || n <= 0) return 0;
+    sqlite3_stmt *s = NULL;
+    /* One pass over triage, newest first, whatever n is: never a scan
+     * an address (no index leads with addr). */
+    if (sqlite3_prepare_v2(f->wr,
+            "SELECT t.addr, t.state FROM triage t WHERE t.addr <> '' AND t.id = (SELECT"
+            " MAX(u.id) FROM triage u WHERE u.subject = t.subject)"
+            " ORDER BY t.ts DESC, t.id DESC", -1, &s, NULL) != SQLITE_OK) {
+        sqlite3_finalize(s);
+        return -1;
+    }
+    int found = 0, rc = SQLITE_DONE;
+    while (found < n && (rc = sqlite3_step(s)) == SQLITE_ROW) {
+        const char *a = (const char *)sqlite3_column_text(s, 0);
+        if (!a) continue;
+        const char *const *hit = bsearch(a, addrs, (size_t)n, sizeof(*addrs), addr_cmp);
+        if (!hit) continue;
+        /* Equal addresses sit together: each takes the newest. */
+        while (hit > addrs && !strcmp(hit[-1], a)) hit--;
+        for (; hit < addrs + n && !strcmp(*hit, a); hit++) {
+            if (state[hit - addrs] >= 0) continue;
+            state[hit - addrs] = sqlite3_column_int(s, 1);
+            found++;
+        }
+    }
+    if (found == n) rc = SQLITE_DONE;
+    sqlite3_finalize(s);
+    return rc == SQLITE_DONE ? found : -1;
 }
 
 static long long q_count(web_frrs_t *f, const char *sql) {
@@ -1165,9 +1206,15 @@ static int tri_lookup(web_frrs_t *f, const tri_subj_t *q, web_tri_t *out) {
     return 0;
 }
 int web_frrs_triage_any(web_frrs_t *f) { (void)f; return 0; }
-int web_frrs_verdicts(web_frrs_t *f, long long since, int max,
+int web_frrs_verdicts(web_frrs_t *f, long long since, long long after_ts,
+                      long long after_id, int max,
                       int (*fn)(void *ctx, const web_frrs_verdict_t *v), void *ctx) {
-    (void)f; (void)since; (void)max; (void)fn; (void)ctx;
+    (void)f; (void)since; (void)after_ts; (void)after_id; (void)max; (void)fn; (void)ctx;
+    return 0;
+}
+int web_frrs_addr_states(web_frrs_t *f, const char *const *addrs, int n, int *state) {
+    (void)f; (void)addrs;
+    for (int i = 0; i < n; i++) state[i] = -1;
     return 0;
 }
 static long long q_count(web_frrs_t *f, const char *sql) { (void)f; (void)sql; return -1; }

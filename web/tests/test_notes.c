@@ -1077,12 +1077,12 @@ static void test_fleet_verdicts_are_alerts_only(void) {
     WT_EQ(triage(id, "noise", NULL), 200);
     WT_EQ(triage(tid, "incident", NULL), 200);        /* the newer row */
     g_verdicts = g_verdict_anom = 0;
-    WT_EQ(web_frrs_verdicts(&E.f, 0, 100, verdict_seen, NULL), 1);
+    WT_EQ(web_frrs_verdicts(&E.f, 0, -1, 0, 100, verdict_seen, NULL), 1);
     WT_EQ(g_verdicts, 1);
     WT_EQ(g_verdict_anom, 0);
     g_verdicts = g_verdict_anom = 0;
     g_verdict_state = -1;
-    WT_EQ(web_frrs_verdicts(&E.f, 0, 1, verdict_seen, NULL), 1);
+    WT_EQ(web_frrs_verdicts(&E.f, 0, -1, 0, 1, verdict_seen, NULL), 1);
     WT_EQ(g_verdict_anom, 0);
     WT_EQ(g_verdict_state, WEB_TRI_NOISE);
     env_close();

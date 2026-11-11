@@ -1446,6 +1446,87 @@ static int route_glossary(const web_req_t *rq, const web_health_t *h, char *out,
     return json_answer(rq, h, status, bl, out, outsz, r);
 }
 
+/* /api/fleet/overview (web_fleet.h, F2): the sites, their health and
+ * the distances between them. */
+static int route_fleet_overview(const web_req_t *rq, const web_health_t *h, char *out,
+                                size_t outsz, web_resp_t *r) {
+    if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+    char *body = out + WEB_LIVE_HDR_RESERVE;
+    size_t cap = outsz - WEB_LIVE_HDR_RESERVE, bl = 0;
+    int status = 200;
+    web_fleet_src_t src = {
+        h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
+    };
+    if (qlong(rq)) {
+        status = 400;
+        bl = web_series_error_json("query_too_long", body, cap);
+    } else if (web_fleet_overview_route(h->m4 ? h->m4->fleet : NULL, &src, rq->query,
+                                        h->wall_s, body, cap, &bl, &status) != 0) {
+        bl = 0;
+    }
+    if (bl == 0) {
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    return json_answer(rq, h, status, bl, out, outsz, r);
+}
+
+/* /api/fleet/shared (web_fleet.h, F2): keys seen at this site and at a
+ * peer. GET only, a heap body as /api/fleet/export's. */
+static int route_fleet_shared(const web_req_t *rq, const web_health_t *h, char *out,
+                              size_t outsz, web_resp_t *r) {
+    if (rq->is_head) {
+        r->status = 405;
+        return fit(snprintf(out, outsz,
+            "HTTP/1.1 405 Method Not Allowed\r\n"
+            "Allow: GET\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            "Cache-Control: no-store\r\n"
+            COMMON
+            CSP_NONE
+            "Connection: close\r\n"
+            "\r\n"), outsz, &r->out_len);
+    }
+    if (qlong(rq)) {
+        if (outsz <= WEB_LIVE_HDR_RESERVE) return -1;
+        size_t bl = web_series_error_json("query_too_long", out + WEB_LIVE_HDR_RESERVE,
+                                          outsz - WEB_LIVE_HDR_RESERVE);
+        if (!bl) return -1;
+        return json_answer(rq, h, 400, bl, out, outsz, r);
+    }
+    web_fleet_src_t src = {
+        h->m4 ? h->m4->sdb : NULL, h->ble, h->gnss, h->m4 ? h->m4->frrs : NULL,
+    };
+    char *body = NULL;
+    size_t bl = 0;
+    int status = 200;
+    if (web_fleet_shared_route(h->m4 ? h->m4->fleet : NULL, &src, rq->query, h->wall_s,
+                               &body, &bl, &status) != 0 || !body || bl == 0) {
+        free(body);
+        r->status = 503;
+        r->out_len = web_http_response(503, 0, out, outsz);
+        return r->out_len ? 0 : -1;
+    }
+    if (fit(snprintf(out, outsz,
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Cache-Control: no-store\r\n"
+        COMMON
+        CSP_NONE
+        "Connection: close\r\n"
+        "\r\n", status, web_http_reason(status), bl), outsz, &r->out_len) != 0) {
+        free(body);
+        return -1;
+    }
+    r->status = status;
+    r->body = (const unsigned char *)body;
+    r->body_owned = (unsigned char *)body;
+    r->body_len = bl;
+    return 0;
+}
+
 /* /api/recipes: docs/wiki/sqlite-schema.md's, as built in. */
 static int route_recipes(const web_req_t *rq, const web_health_t *h, char *out, size_t outsz,
                          web_resp_t *r) {
@@ -1724,6 +1805,10 @@ static int route_paths(const web_req_t *rq, const web_health_t *h,
             return route_fleet_peers(rq, h, out, outsz, r);
         if (!strcmp(rq->path, "/api/glossary"))
             return route_glossary(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/fleet/overview"))
+            return route_fleet_overview(rq, h, out, outsz, r);
+        if (!strcmp(rq->path, "/api/fleet/shared"))
+            return route_fleet_shared(rq, h, out, outsz, r);
         /* Without --web-allow-sql neither exists: a 404 like any path. */
         if (h->sql && h->sql->enabled) {
             if (!strcmp(rq->path, "/api/query"))

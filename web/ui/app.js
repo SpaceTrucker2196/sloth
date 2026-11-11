@@ -914,7 +914,7 @@
    "al-q", "al-win", "f-win", "f-sort", "f-ip", "f-mode", "ev-filter",
    "q-sql", "b-q", "b-sort", "bledev-win", "bledev-metric", "bledev-n",
    "gnss-seen-days", "adsb-seen-days", "adsb-seen-q", "gnss-trail-hours",
-   "aprs-seen-days", "aprs-seen-q", "radar-aprs-win"].forEach(keepCtl);
+   "aprs-seen-days", "aprs-seen-q", "radar-aprs-win", "fleet-kind"].forEach(keepCtl);
   // Filled from the server's answer, so put back where it is filled.
   $("al-type").addEventListener("change", function () { ctlSave("al-type"); });
   // Each drill-down bar's "show all" (its href the bare view).
@@ -1271,7 +1271,7 @@
 
   // ── views ─────────────────────────────────────────────────────────
   var VIEWS = ["overview", "activity", "devices", "anomalies", "wifi", "flows", "history",
-               "lookup", "tacdb", "ble", "gnss", "adsb", "aprs", "radar"];
+               "lookup", "tacdb", "ble", "gnss", "adsb", "aprs", "radar", "fleet"];
   // The Probes view (web/ui/probes.js), a tab of its own.
   VIEWS.push("probes");
   // The views with a tab, and the drill-downs: the Alerts page (6),
@@ -1326,6 +1326,8 @@
     if (v === "radar" && window.SlothRadar) SlothRadar.show();
     // The Probes view (probes.js, its own module): a no-op when not loaded.
     if (v === "probes" && window.SlothProbes) SlothProbes.show();
+    // The Fleet view (fleet.js, its own module): a no-op when not loaded.
+    if (v === "fleet" && window.SlothFleet) SlothFleet.show();
     if (v === "alerts") alertsView();
     if (v === "alert") alertView();
     if (v === "records") recordsView();
@@ -1414,6 +1416,7 @@
   $("nav-aprs").addEventListener("click", function () { show("aprs"); });
   $("nav-radar").addEventListener("click", function () { show("radar"); });
   $("nav-probes").addEventListener("click", function () { show("probes"); });
+  $("nav-fleet").addEventListener("click", function () { show("fleet"); });
 
   // ── the theme toggle ──────────────────────────────────────────────
   // Light or dark on :root's data-theme, the choice kept in this
@@ -5910,6 +5913,10 @@
   if (window.SlothRadar) SlothRadar.init({ el: el, set: set, getJSON: getJSON, theme: theme, tok: tok,
     heat: heat, sizeCanvas: sizeCanvas, prefGet: prefGet, prefSet: prefSet, show: show,
     openDrawer: openDrawer, openBleDrawer: openBleDrawer, scope: function () { return SCOPE; } });
+
+  // The Fleet view (web/ui/fleet.js): the page's helpers, lent once.
+  if (window.SlothFleet) SlothFleet.init({ el: el, set: set, getJSON: getJSON, errText: errText,
+    stamp: stamp, openDrawer: openDrawer, openBleDrawer: openBleDrawer });
 
   // The ADS-B view (web/ui/adsb.js): go() for its alert links (#186).
   if (window.SlothAdsb) SlothAdsb.init({ go: go });

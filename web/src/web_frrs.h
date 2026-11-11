@@ -369,16 +369,25 @@ int  web_frrs_triage_find(web_frrs_t *f, web_sdb_conn_t *c, const web_tri_q_t *q
 /* Whether any triage row exists: the join's shortcut. */
 int  web_frrs_triage_any(web_frrs_t *f);
 /* The current state of each triaged subject decided at or after since,
- * newest first, at most max, each to fn (nonzero stops): the fleet
- * export's verdicts (web_fleet.h). The descriptor and the state only.
- * Rows given, 0 without a store, -1 on an error. */
+ * newest first (ts, then the row id), at most max, each to fn (nonzero
+ * stops): the fleet export's verdicts (web_fleet.h). The descriptor and
+ * the state only. after_ts >= 0: only those after (after_ts, after_id)
+ * in that order, the export's keyset page. Rows given, 0 without a
+ * store, -1 on an error. */
 typedef struct {
     int       type, port, state;
     char      addr[WEB_FRRS_ADDR_MAX + 1];
-    long long first_seen, ts;
+    long long first_seen, ts, id;
 } web_frrs_verdict_t;
-int  web_frrs_verdicts(web_frrs_t *f, long long since, int max,
+int  web_frrs_verdicts(web_frrs_t *f, long long since, long long after_ts,
+                       long long after_id, int max,
                        int (*fn)(void *ctx, const web_frrs_verdict_t *v), void *ctx);
+/* For each of addrs (n, sorted by strcmp, canonical IPs or MACs) the
+ * newest current state of a triaged subject whose descriptor's address
+ * it is, else -1: the Fleet tab's verdicts (web_fleet.h), one pass over
+ * triage for all of them. The state only. Addresses found, -1 on an
+ * error. */
+int  web_frrs_addr_states(web_frrs_t *f, const char *const *addrs, int n, int *state);
 /* "any", "untriaged", "false", "noise", "incident", "known", "triaged", "out"
  * -> the WEB_TRI_* value or WEB_TRI_F_*; WEB_TRI_F_BAD for anything
  * else. */

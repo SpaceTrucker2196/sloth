@@ -640,7 +640,7 @@ static void test_page_probes(void) {
     WT_HAS(p, JS_FORMULA);
     WT_HAS(p, JS_SELECT);
     WT_HAS(p, JS_SHOW);
-    WT_HAS(p, "               \"lookup\", \"tacdb\", \"ble\", \"gnss\", \"adsb\", \"aprs\", \"radar\"];\n"
+    WT_HAS(p, "               \"lookup\", \"tacdb\", \"ble\", \"gnss\", \"adsb\", \"aprs\", \"radar\", \"fleet\"];\n"
               "  // The Probes view (web/ui/probes.js), a tab of its own.\n"
               "  VIEWS.push(\"probes\");\n");
     WT_HAS(p, "    if (v === \"probes\" && window.SlothProbes) SlothProbes.show();\n");
