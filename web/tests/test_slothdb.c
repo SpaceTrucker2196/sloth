@@ -1079,6 +1079,12 @@ static void test_authorizer_denies(void) {
         "SELECT title FROM alerts WHERE instr(key,'alice') > 0",
         "SELECT * FROM devices",
         "SELECT dhcp_prl FROM devices",
+        /* Off the list since #191: the level is scored from
+         * risk_signals, and the stored one (an older formula's, on a
+         * row sloth never rewrites) cannot be read back. Seen red with
+         * { "devices", "risk_level" } on web_sdb_allow[] again. */
+        "SELECT risk_level FROM devices",
+        "SELECT mac FROM devices ORDER BY risk_level DESC",
         "SELECT last_identity FROM rogue_radius",
         "SELECT mac FROM devices WHERE mac IN (SELECT username FROM cleartext_creds)",
         "PRAGMA table_info(cleartext_creds)",
