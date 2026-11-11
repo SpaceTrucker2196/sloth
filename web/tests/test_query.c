@@ -9,6 +9,7 @@
 #include "sloth.h"
 #include "web_anomaly.h"
 #include "web_query.h"
+#include "web_scope.h"
 #include "wtest.h"
 
 #define NOW 1792627200LL     /* 2026-10-22 00:00:00 UTC */
@@ -232,7 +233,27 @@ static void test_compiled_shape(void) {
     WT_HAS(S.sql, " AND (0) AND ");            /* has:pnl, no pnl tables */
     WT_LACKS(S.sql, "pnl_ssids");
     WT_LACKS(S.sql, "dhcp_leases");
-    WT_HAS(S.sql, "ORDER BY d.risk_level DESC, d.last_seen DESC, d.mac");
+    /* The risk sort is on the level scored from d.risk_signals, named
+     * s_risk in the SELECT list, and the stored d.risk_level is in no
+     * statement (#191: a row sloth never sees again keeps the level an
+     * older formula stored). */
+    char want[256], lut[129];
+    for (int v = 0; v < 128; v++) lut[v] = (char)('0' + web_scope_risk_level(v));
+    lut[128] = '\0';
+    snprintf(want, sizeof(want), " d.risk_signals, CAST(substr('%s', (d.risk_signals & 127)"
+             " + 1, 1) AS INTEGER) AS s_risk, d.first_seen,", lut);
+    WT_HAS(S.sql, want);
+    /* The table's first sixteen, by eye: no signal LOW, any of the four
+     * anonymity bits MED. */
+    WT_HAS(S.sql, "substr('0111111111111111222");
+    WT_HAS(S.sql, "ORDER BY s_risk DESC, d.last_seen DESC, d.mac");
+    WT_LACKS(S.sql, "risk_level");
+    for (int sc = 0; sc < 3; sc++)
+        for (int dir = 0; dir < 3; dir++) {
+            WT_EQ(web_query_compile_scoped(&Q, ~0u, sc, WEB_QS_RISK | (dir << 8), 10, 0, &S), 0);
+            WT_LACKS(S.sql, "risk_level");
+        }
+    WT_EQ(web_query_compile(&Q, 0, WEB_QS_RISK, 10, 0, &S), 0);
     WT_EQ(S.nb, 5);
     WT_EQ(web_query_compile(&Q, WEB_QF_PNL, WEB_QS_LAST, 10, 0, &S), 0);
     WT_HAS(S.sql, "EXISTS (SELECT 1 FROM pnl_ssids s WHERE s.mac = d.mac)");

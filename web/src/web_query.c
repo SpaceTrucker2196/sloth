@@ -372,8 +372,8 @@ static const char *op_text(int op) {
 
 /* ── the capture scope's columns (web_scope.h) ─────────────────────── *
  *
- * Under Hybrid every column is the devices row's own, and the statement
- * is exactly what it was before scopes. Under Monitor or Local a device
+ * Under Hybrid every column but the risk level is the devices row's
+ * own. Under Monitor or Local a device
  * row is a member when the scope's own tables hold its MAC, or its
  * sources (the latest tick's only: sloth's upsert replaces them) have
  * the scope's bits; and each column is the scope's: the address, the
@@ -381,8 +381,9 @@ static const char *op_text(int op) {
  * and the AP bit Monitor's, the signal the scope's own table's
  * (probe_clients, then beacon_aps; wifi_stas), first and last seen over
  * the scope's tables (the row's own when they hold none), the sources
- * and risk signals masked to the scope's bits and the risk level summed
- * again from those with sloth's weights (web_scope_risk_w[]). Every
+ * and risk signals masked to the scope's bits and the risk level scored
+ * again from those (risk_case()). Hybrid scores its level from the
+ * row's signals too and never reads the stored one. Every
  * mask is built from web_scope.h's WEB_SRC_*, WEB_CAM_* and
  * web_scope_risk_mask(), the ones web_scope_device() and the tests use.
  * Each fragment is constant text of this file's, chosen by the scope and
@@ -405,18 +406,21 @@ static void cat(char *dst, size_t cap, const char *s) {
     memcpy(dst + n, s, k + 1);
 }
 
-/* The risk level from masked signals S, with sloth's weights. */
+/* The risk level from signals S, of which the scope sees `mask`:
+ * web_scope_risk_level() itself, tabulated over the 128 signal values
+ * into a string of level digits that S indexes, so the SQL cannot score
+ * differently from the C and S is evaluated once. Summing the weights
+ * in SQL and bucketing the sum in a CASE names the sum three times; on
+ * 900,000 devices the risk sort then took four times what sorting the
+ * stored column did, against under twice for this. A NULL S is NULL,
+ * which the row reads as 0. */
 static void risk_case(char *out, size_t cap, const char *s, long long mask) {
-    char sum[1280] = "(0";
-    for (int b = 0; b < 6; b++) {
-        if (!(mask & (1LL << b))) continue;
-        char t[320];
-        snprintf(t, sizeof(t), " + %d * ((%s & %d) <> 0)", web_scope_risk_w[b], s, 1 << b);
-        cat(sum, sizeof(sum), t);
-    }
-    cat(sum, sizeof(sum), ")");
-    snprintf(out, cap, "(CASE WHEN %s >= 5 THEN 3 WHEN %s >= 3 THEN 2"
-             " WHEN %s >= 1 THEN 1 ELSE 0 END)", sum, sum, sum);
+    char lut[WEB_RISK_ALL + 2];
+    for (int v = 0; v <= WEB_RISK_ALL; v++)
+        lut[v] = (char)('0' + web_scope_risk_level(v & mask));
+    lut[WEB_RISK_ALL + 1] = '\0';
+    snprintf(out, cap, "CAST(substr('%s', (%s & %d) + 1, 1) AS INTEGER)", lut, s,
+             WEB_RISK_ALL);
 }
 
 static void dcols(unsigned f, int scope, dcols_t *c) {
@@ -440,12 +444,14 @@ static void dcols(unsigned f, int scope, dcols_t *c) {
             snprintf(c->sources, sizeof(c->sources), "(d.sources & %d)", WEB_SRC_MONITOR);
         /* PROBE_ONLY recomputed over the radio's sources: sloth clears
          * its bit for a device in the managed card's station dump (STA,
-         * Local's), which Monitor does not see. */
+         * Local's), which Monitor does not see. Not on a SELF device:
+         * the sensor writes no anonymity bit beside SELF (#191), and
+         * the host's own card scanning is not a passer-by. */
         snprintf(c->rsig, sizeof(c->rsig),
                  "((d.risk_signals & %lld) | CASE WHEN (d.sources & 16) <> 0 AND"
-                 " (d.sources & 8) = 0 THEN %d ELSE 0 END)",
+                 " (d.sources & 8) = 0 AND (d.risk_signals & %d) = 0 THEN %d ELSE 0 END)",
                  web_scope_risk_mask(WEB_SCOPE_MONITOR) & ~(long long)WEB_RISK_MONITOR,
-                 WEB_RISK_MONITOR);
+                 WEB_RISK_SELF, WEB_RISK_MONITOR);
         risk_case(c->risk, sizeof(c->risk), c->rsig, web_scope_risk_mask(WEB_SCOPE_MONITOR));
         snprintf(c->signal, sizeof(c->signal), "COALESCE(%s, %s)",
                  (f & WEB_QF_PROBE)
@@ -578,7 +584,12 @@ static void dcols(unsigned f, int scope, dcols_t *c) {
         snprintf(c->is_ap, sizeof(c->is_ap), "d.is_ap");
         snprintf(c->sources, sizeof(c->sources), "d.sources");
         snprintf(c->rsig, sizeof(c->rsig), "d.risk_signals");
-        snprintf(c->risk, sizeof(c->risk), "d.risk_level");
+        /* Not d.risk_level: the stored level is whatever formula the
+         * sensor had when it last saw the device, and most rows are
+         * never seen again (#191). No index covered it, so the sort
+         * read every row before as well. */
+        risk_case(c->risk, sizeof(c->risk), "d.risk_signals",
+                  web_scope_risk_mask(WEB_SCOPE_HYBRID));
         snprintf(c->signal, sizeof(c->signal), "d.signal_dbm");
         snprintf(c->first, sizeof(c->first), "d.first_seen");
         snprintf(c->last, sizeof(c->last), "d.last_seen");
@@ -842,8 +853,10 @@ static int row_select(const dcols_t *c, const char *extra, char *out, size_t cap
     out[0] = '\0';
     if (!c->scope) {
         sb_put(&b, "SELECT d.mac, d.ip, d.hostname, d.vendor, d.last_ssid,"
-                " d.signal_dbm, d.sources, d.risk_signals, d.risk_level,"
-                " d.first_seen, d.last_seen, d.is_ap, ");
+                " d.signal_dbm, d.sources, d.risk_signals, ");
+        sb_put(&b, c->risk);
+        /* Named for the ORDER BY, as the scoped list's is. */
+        sb_put(&b, " AS s_risk, d.first_seen, d.last_seen, d.is_ap, ");
     } else {
         /* Named, so the ORDER BY says each once (SQLite resolves a
          * result column's alias inside an ORDER BY expression). */
@@ -928,7 +941,7 @@ int web_query_compile_scoped(const web_query_t *q, unsigned feats, int scope,
         " ORDER BY d.last_seen DESC, d.mac",
         " ORDER BY d.first_seen DESC, d.mac",
         " ORDER BY d.mac",
-        " ORDER BY d.risk_level DESC, d.last_seen DESC, d.mac",
+        " ORDER BY s_risk DESC, d.last_seen DESC, d.mac",
         " ORDER BY d.vendor IS NULL, d.vendor, d.mac",
         " ORDER BY web_ipkey(d.ip) IS NULL, web_ipkey(d.ip), d.ip, d.mac",
         " ORDER BY d.last_ssid IS NULL, d.last_ssid, d.mac",
@@ -939,7 +952,7 @@ int web_query_compile_scoped(const web_query_t *q, unsigned feats, int scope,
      * An address sorts by its numeric key (web_slothdb.c fn_ipkey()),
      * as the page compares addresses, not as text. */
     static const char *const KEY[WEB_QS_COUNT] = {
-        "d.last_seen", "d.first_seen", "d.mac", "d.risk_level", "d.vendor",
+        "d.last_seen", "d.first_seen", "d.mac", "s_risk", "d.vendor",
         "web_ipkey(d.ip)", "d.last_ssid", "d.signal_dbm", "d.sources",
     };
     int dir = WEB_SORT_DIR(sort);

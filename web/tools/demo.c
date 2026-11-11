@@ -67,6 +67,12 @@ typedef struct {
     int         first_days;            /* first seen this many days ago */
 } demo_dev_t;
 
+/* The signals that score a demo device's level under sloth's formula
+ * (web_scope_risk_level()): unknown vendor is MED, an alert naming the
+ * device HIGH, that and a cleartext credential CRIT. slothweb scores the
+ * level from these and does not read the stored one. */
+static const int RISK_SIG[4] = { 0, 2, 32, 16 | 32 };
+
 /* sources: 1 ARP, 2 DHCP, 8 beacon, 16 probe, 32 station. */
 static const demo_dev_t DEV[NDEV] = {
     { "02:de:00:00:00:01", "192.0.2.1",  "gw.lan.example",       "",              1, -38, 1 | 2 | 8,  0, 29 },
@@ -187,7 +193,7 @@ static int make_db(const char *path) {
            d->mac, d->ip[0] ? "'" : "", d->ip[0] ? d->ip : "NULL", d->ip[0] ? "'" : "",
            d->host[0] ? "'" : "", d->host[0] ? d->host : "NULL", d->host[0] ? "'" : "",
            d->ssid[0] ? "'" : "", d->ssid[0] ? d->ssid : "NULL", d->ssid[0] ? "'" : "",
-           d->is_ap, d->signal, d->sources, d->risk ? 1 << d->risk : 0, d->risk, fs, ls);
+           d->is_ap, d->signal, d->sources, RISK_SIG[d->risk & 3], d->risk, fs, ls);
         if (d->ip[0]) {
             ex("INSERT INTO arp (ip,mac,iface,first_seen,last_seen) VALUES"
                " ('%s','%s','eth0',%lld,%lld)", d->ip, d->mac, fs, ls);
@@ -685,7 +691,7 @@ static void pass(long long t, long long start, unsigned long k) {
              "\"probe_count\":0,\"sources\":%d,\"last_seen\":%lld,\"risk\":\"%s\","
              "\"risk_signals\":%d}", t, d->mac, d->ip, d->host, d->ssid, d->is_ap,
              d->signal + (int)rnd(5) - 2, d->sources, t, RISK[d->risk & 3],
-             d->risk ? 1 << d->risk : 0);
+             RISK_SIG[d->risk & 3]);
     }
     /* A deauth burst against the home AP for a minute in every ten. */
     if (k % 600 >= 300 && k % 600 < 360)

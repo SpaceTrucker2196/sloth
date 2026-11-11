@@ -26,7 +26,10 @@ const web_sdb_col_t web_sdb_allow[] = {
     { "devices", "hostname", 1, 0, 0 },  { "devices", "vendor", 1, 0, 0 },
     { "devices", "last_ssid", 1, 0, 0 }, { "devices", "is_ap", 1, 0, 0 },
     { "devices", "signal_dbm", 1, 0, 0 },{ "devices", "sources", 1, 0, 0 },
-    { "devices", "risk_signals", 1, 0, 0 }, { "devices", "risk_level", 1, 0, 0 },
+    /* Not risk_level: the level is scored from the signals in every
+     * scope (web_scope_risk_level()), so a row stored under an older
+     * formula cannot be read back at its old level (#191). */
+    { "devices", "risk_signals", 1, 0, 0 },
     { "devices", "first_seen", 1, 0, 0 },{ "devices", "last_seen", 1, 0, 0 },
     { "devices", "device_class", 6, 1, 0 }, { "devices", "camera_vendor", 6, 1, 0 },
     { "devices", "camera_model", 6, 1, 0 }, { "devices", "dhcp_vci", 7, 1, 0 },

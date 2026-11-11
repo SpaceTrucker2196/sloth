@@ -40,7 +40,13 @@ and A4 off), shows
 passive names only (active reverse DNS is cut), adds rule A4 and a
 durable A2 from `devices.first_seen`, and serves `/api/devices`,
 `/api/device/{mac}` and `/api/lookup` behind the Devices view, the
-device drawer and the Lookup view. M3 keeps 168 local hour-of-week baseline cells
+device drawer and the Lookup view. A device's risk level is scored from
+`devices.risk_signals` on every read, in every scope, with sloth's
+formula (#191: the anonymity bits one point as a family, a cleartext
+credential and an alert three each, nothing for anonymity on a self
+device, bit 64); the stored `devices.risk_level` is never read, so rows
+an older sloth stored HIGH for three anonymity bits read MED without a
+rewrite ([[capture-scope]] has the score and its SQL). M3 keeps 168 local hour-of-week baseline cells
 per (metric, key) with the MAD ratio, runs nine of §6's ten anomaly
 rules (A4 moves to M4 with the OUI table) as episodes on the buckets
 that just closed, keeps both in `slothweb.db` (schema v3) across
