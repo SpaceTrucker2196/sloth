@@ -347,7 +347,10 @@
         return (s.site === "self" ? "here" : s.site) + " " + s.range_m + " m (" + s.lo_m + "-" + s.hi_m +
                ")" + (s.calibrated ? "" : "*");
       }).join(", ")));
-      row.appendChild(H.el("span", "", siteName(r.nearest.site) + " by " + r.nearest.by_db + " dB"));
+      // A difference inside its own sigma names no side.
+      row.appendChild(H.el("span", r.nearest.within_band ? "warn" : "", r.nearest.within_band
+        ? "neither (" + r.nearest.by_db + " dB, inside +/-" + r.nearest.sigma_db + ")"
+        : siteName(r.nearest.site) + " by " + r.nearest.by_db + " dB (+/-" + r.nearest.sigma_db + ")"));
       row.appendChild(H.el("span", r.coarse ? "warn" : "", r.method.replace("_", " ") +
                            (r.candidates.length ? ", " + r.candidates.length + " candidate" +
                             (r.candidates.length === 1 ? "" : "s") : ", circles do not cross") +

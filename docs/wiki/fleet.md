@@ -48,7 +48,7 @@ ITU-R P.1238-10 eq. (1), Tables 2 and 4, through
 `research/papers/rssi-distance-estimation.md` (I5's model, exponent and
 error).
 
-**Last updated**: 2026-11-11 (#192 I5: locating emitters from two or more sites' signal strength, `/api/fleet/locate`, the own-radio calibration and `own=1`, the overview's `calibration`, the map's located emitters and metre scale; a stored 0 dBm is no reading, and an ARP-only device takes its probe reading); 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
+**Last updated**: 2026-11-11 (#192 I5 review: the least-squares fix damped and refused when unsettled; `nearest` with its difference's sigma and `within_band`; the export's probe reading only within 120 s of its row and not on 5 or 6 GHz; a 5 GHz probe no calibration link and modelled at 5 GHz; an address two sites claim no link); 2026-11-11 (#192 I5: locating emitters from two or more sites' signal strength, `/api/fleet/locate`, the own-radio calibration and `own=1`, the overview's `calibration`, the map's located emitters and metre scale; a stored 0 dBm is no reading, and an ARP-only device takes its probe reading); 2026-11-11 (#192 F2 review: the alert backfill past the reader's 20,000-row scan, an F1 peer pulled without `next=1`, the shared list's verdicts in one pass); 2026-11-11 (#192 F2: the Fleet tab, `/api/fleet/overview`, `/api/fleet/shared`, the backfill); 2026-11-10 (#192 F1 review: the export sends only lines the importer takes; a transfer coding or a second Content-Length refused; the read deadline is the whole answer's); 2026-11-10 (#192 F1: the export, the pull, slothweb.db v8, `/api/health`'s `fleet`, `/api/fleet/peers`).
 
 ## What travels, and what never does
 
@@ -310,7 +310,9 @@ receiver's, applied to 2.4 GHz Wi-Fi rows only, never to 5/6 GHz or
 BLE (`rf_distance.h` keeps its calibration per radio for the same
 reason). An offset past the bound is reported as `refused` with its
 value: a wall or a receiver far from the model, not a gain to correct.
-A link at most a day old counts.
+A link at most a day old counts, and only from a reading on 2.4 GHz or
+an unknown channel (a probe heard on 5 GHz is no link for a 2.4 GHz
+offset).
 
 **Pairing in time.** A peer's value is its last RSSI as of its
 `last_seen`. Every site used for a key has `last_seen` within 120 s
@@ -328,13 +330,20 @@ error at a few kilometres):
   candidates, each with a radius of the two bands' half-widths combined
   over the sine of the crossing angle (never below 0.25, so a tangent
   crossing is spread along the line);
-- three or more: a weighted least-squares fix (Gauss-Newton, each range
-  weighted by its band), its rms residual and the fix's one-sigma from
-  the normal equations; collinear sites with the emitter on their line
-  give no fix;
+- three or more: a weighted least-squares fix (Levenberg-Marquardt,
+  each range weighted by its band), its rms residual and the fix's
+  one-sigma from the normal equations; collinear sites give no fix, nor
+  does an iteration that has not settled within 500 steps (an undamped
+  Gauss-Newton step overshoots when the ranges disagree, and the first
+  build reported wherever its 50th step landed);
 - always `nearest`: the site with the least path loss after each
-  receiver's offset, and by how many dB. When the circles do not cross,
-  this is the whole answer.
+  receiver's offset, by how many dB, and that difference's one-sigma
+  (`sigma_db`: each link's shadow fading and each uncalibrated
+  receiver's 6 dB, in quadrature; the assumed power is the same
+  emitter's at both and cancels), with `within_band` when the
+  difference is inside it. At 2.4 GHz that sigma is 11.3 dB with both
+  receivers calibrated and 14.1 dB with neither, so a few dB is no
+  side at all. When the circles do not cross, this is the whole answer.
 
 A site with no other within 2 km shares no emitter and is not paired
 (`too_far`). Metres are quantised as sloth quantises a third party's
@@ -343,8 +352,9 @@ proximity (0.5 m below 10 m, 1 m below 100 m, 10 m above).
 **What it is worth.** At W9FJC and beta-site, 16.8 m apart, a band of
 +/-15 to 30 m is wider than the baseline, and the row says `coarse`:
 the candidates are not a position, only a side. What two sensors that
-close can say honestly is which one an emitter is nearer and by how
-many dB, and roughly how far; a point needs more sites, a longer
+close can say honestly is which one an emitter is nearer, when the
+difference in path loss exceeds its own 11-14 dB sigma, and roughly how
+far; a point needs more sites, a longer
 baseline, or both. Three sites give a least-squares fix whose residual
 shows how far the ranges disagree.
 
@@ -366,7 +376,7 @@ coordinates, `too_far`, and its receiver's `calibration` (`state`
 `age_s`). `rows`, newest first: `key`, `label`, `age_s`, `freq_mhz`,
 `ptx_dbm`, `ptx` (`assumed`), `exponent_x10`, `sites` (each `site`,
 `rssi`, `seen`, `range_m`, `lo_m`, `hi_m`, `sigma_db`, `calibrated`),
-`nearest` (`site`, `by_db`, `than`), `candidates` (`lat`, `lon`, `e`,
+`nearest` (`site`, `by_db`, `than`, `sigma_db`, `within_band`), `candidates` (`lat`, `lon`, `e`,
 `n`, `radius_m`), `method` (`two_circles`, `least_squares`),
 `residual_m`, `baseline_m`, `band_m` and `coarse`. Then `scanned`,
 `keys`, `looked_up`, `unpaired`, `stale`, `partial`. The overview gains
@@ -380,14 +390,23 @@ list shows none (a peer still on F2 included), and a device row without
 a reading takes `probe_clients`' reading of the same MAC, where sloth
 keeps the monitor's signal of a station heard probing. That is how a
 sensor's own managed card, whose `devices` row comes from ARP, has a
-signal at the other site.
+signal at the other site. In the export the probe's reading travels
+only when it is within 120 s of the row's `last_seen` and not on 5 or
+6 GHz: the importer takes a row's `rssi` as of its `last_seen` and,
+with no channel, at 2.4 GHz. On W9FJC (2026-11-11) every one of the 24
+client rows this applied to had an ARP-moved `last_seen` newer than its
+probe by more than 120 s (7 by a day), and 10 of the probes were on
+5 GHz. Locally the probe's own time and channel are used: a reading on
+5 or 6 GHz is modelled there, and is no calibration link.
 
 On the map: each located emitter's candidates as translucent circles of
 their radius, the key on hover or tap, the two-site range circles as
 dashed arcs for the row picked in the table, and a metre scale bar; the
 map fits the sites and the candidates, so at a 17 m baseline it is
 drawn in metres. A table under the map lists each located emitter: key,
-the sites with their ranges, the nearer site by dB, the method, and
+the sites with their ranges, the nearer site by dB with that
+difference's sigma ("neither" when the difference is inside it), the
+method, and
 "coarse" when the band exceeds the baseline.
 
 ## The store: slothweb.db v8

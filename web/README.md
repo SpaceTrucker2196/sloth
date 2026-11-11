@@ -4228,7 +4228,10 @@ peer's); `partial` when the 5,000-row scan or the budget stopped short.
 A signal is a radio reading or `null`: sloth's stored 0 ("never heard on
 the air", an ARP- or DHCP-only device) is none, and a device row without
 a reading takes `probe_clients`' reading of the same MAC (#192 I5); the
-export's `rssi` follows the same rule.
+export's `rssi` follows the same rule, except that a probe reading
+travels only when it is within 120 s of the row's `last_seen` and not on
+5 or 6 GHz (the importer reads a row's `rssi` as of its `last_seen`, at
+2.4 GHz).
 
 **`/api/fleet/locate?kind=wifi|ap|ble&limit=N`** (#192 I5; GET only,
 limit 50, 1..200; `web/src/web_locate.h`): each emitter two or more
@@ -4240,8 +4243,11 @@ a one-sigma band, and the location: the two range circles' crossings
 (`least_squares`, three or more sites, with `residual_m`), each
 candidate as `lat`/`lon`, plane `e`/`n` metres around the sites'
 centroid and `radius_m`; always `nearest` (the site with the least path
-loss, by how many dB), `baseline_m`, `band_m` and `coarse` (the band
-wider than the baseline: a side, not a point). `sites` lists each site
+loss, by how many dB, the difference's one-sigma `sigma_db` and
+`within_band`, true when the difference is inside it and says nothing
+about which site is nearer), `baseline_m`, `band_m` and `coarse` (the
+band wider than the baseline: a side, not a point). A least-squares fix
+that has not settled within 500 damped steps is no candidate. `sites` lists each site
 with a position, `too_far` (none other within 2 km) and its receiver's
 `calibration`: from another site's own radio heard at a known distance
 (`own=1` on the export names a site's radios, read from

@@ -278,7 +278,9 @@ which parts are sloth's choices.
   receiver (the same size as the assumed-power term); pairing readings
   within 120 s; the candidate radius as the bands' half-widths over the
   sine of the crossing angle, floored at 0.25; the 2 km cut-off between
-  sites; weighted Gauss-Newton least squares for three or more sites.
+  sites; weighted least squares (Levenberg-Marquardt) for three or more
+  sites; the nearer site's difference sigma (shadow fading per link and
+  the uncalibrated-receiver term, the assumed power cancelling).
 
 Not read and not cited: Rappaport (as above), and the RSS-localisation
 literature on the Cramer-Rao bound for this setting (for example

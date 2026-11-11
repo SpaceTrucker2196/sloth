@@ -63,6 +63,9 @@
  * this (a tangent crossing is spread along the line, not a point).
  * sloth's choice. */
 #define WEB_LOC_MIN_SIN        0.25
+/* Iterations for a least-squares fix at most; one that has not settled
+ * by then is no fix. */
+#define WEB_LOC_LSQ_ITER       500
 
 enum { WEB_LOC_WIFI = 0, WEB_LOC_AP, WEB_LOC_BLE };
 
@@ -74,6 +77,11 @@ typedef struct {
     double sigma_db;
 } web_loc_model_t;
 void web_loc_model(int kind, int channel, web_loc_model_t *m);
+
+/* 1 when a reading's channel is 2.4 GHz or unknown (<= 0): the band a
+ * Wi-Fi row without a channel is modelled at and the calibration is
+ * for; 0 for 5 or 6 GHz. */
+int web_loc_chan_24(int channel);
 
 /* One site's range: metres and its one-sigma band, from an RSSI and the
  * receiver's offset. sigma_db out: the band's sigma, shadow fading with
@@ -95,11 +103,13 @@ int web_loc_circles(double ax, double ay, double ra, double bx, double by, doubl
                     double out[2][2]);
 
 /* Weighted least squares over n >= 3 circles (x, y, r, w: the range's
- * one-sigma half-width): Gauss-Newton from the centroid weighted by 1/r.
- * 0 with the point, the rms residual (metres, unweighted) and the
- * radius (the fix's one-sigma, from the normal equations); -1 when the
- * geometry gives no fix (collinear sites and emitter, a singular
- * system). */
+ * one-sigma half-width): Levenberg-Marquardt (Gauss-Newton, damped
+ * until the weighted cost does not rise) from the centroid weighted by
+ * 1/r. 0 with the
+ * point, the rms residual (metres, unweighted) and the radius (the fix's
+ * one-sigma, from the normal equations); -1 when the geometry gives no
+ * fix (collinear sites, a singular system) or the iteration has not
+ * settled within WEB_LOC_LSQ_ITER steps. */
 int web_loc_lsq(const double *x, const double *y, const double *r, const double *w, int n,
                 double *px, double *py, double *resid, double *radius);
 

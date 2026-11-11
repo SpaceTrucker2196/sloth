@@ -345,6 +345,36 @@ static void test_fleet_page(void) {
               "      });\n"
               "    });\n"
               "  }");
+    /* The located emitters' table, whole (#192 I5 review: "neither"
+     * when the nearer site's difference is inside its sigma). */
+    WT_HAS(mod,
+              "  function locRows() {\n"
+              "    var box = $(\"fleet-loc-rows\"), L = S.loc;\n"
+              "    while (box.firstChild) box.removeChild(box.firstChild);\n"
+              "    if (!L) return;\n"
+              "    L.rows.forEach(function (r) {\n"
+              "      var row = H.el(\"div\", \"fleet-loc\" + (r.key === S.pick ? \" picked\" : \"\"));\n"
+              "      var b = H.el(\"button\", \"fleet-dev\", r.key);\n"
+              "      b.type = \"button\";\n"
+              "      b.title = \"show its range circles on the map\";\n"
+              "      b.addEventListener(\"click\", function () { pick(r.key); });\n"
+              "      row.appendChild(b);\n"
+              "      row.appendChild(H.el(\"span\", \"\", r.sites.map(function (s) {\n"
+              "        return (s.site === \"self\" ? \"here\" : s.site) + \" \" + s.range_m + \" m (\" + s.lo_m + \"-\" + s.hi_m +\n"
+              "               \")\" + (s.calibrated ? \"\" : \"*\");\n"
+              "      }).join(\", \")));\n"
+              "      // A difference inside its own sigma names no side.\n"
+              "      row.appendChild(H.el(\"span\", r.nearest.within_band ? \"warn\" : \"\", r.nearest.within_band\n"
+              "        ? \"neither (\" + r.nearest.by_db + \" dB, inside +/-\" + r.nearest.sigma_db + \")\"\n"
+              "        : siteName(r.nearest.site) + \" by \" + r.nearest.by_db + \" dB (+/-\" + r.nearest.sigma_db + \")\"));\n"
+              "      row.appendChild(H.el(\"span\", r.coarse ? \"warn\" : \"\", r.method.replace(\"_\", \" \") +\n"
+              "                           (r.candidates.length ? \", \" + r.candidates.length + \" candidate\" +\n"
+              "                            (r.candidates.length === 1 ? \"\" : \"s\") : \", circles do not cross\") +\n"
+              "                           (r.coarse ? \"; coarse: band +/-\" + r.band_m + \" m over a \" + r.baseline_m +\n"
+              "                            \" m baseline\" : \"\")));\n"
+              "      box.appendChild(row);\n"
+              "    });\n"
+              "  ");
     WT_HAS(mod,
               "  function lane(site, t0, t1) {\n"
               "    var ln = H.el(\"div\", \"fleet-lane\" + (site.site === \"self\" ? \" self\" : \"\"));\n"
@@ -701,15 +731,20 @@ static void test_export_since(void) {
  * "line N: a wifi line with a value out of range"). */
 static void test_export_sends_only_what_the_importer_takes(void) {
     up();
-    char sql[512];
+    char sql[1024];
     snprintf(sql, sizeof(sql),
         "INSERT INTO devices (mac,vendor,is_ap,signal_dbm,first_seen,last_seen) VALUES"
         " ('02:0b:ad:00:00:60','Odd',0,60,%lld,%lld),"
         " ('02:0b:ad:00:00:61','Odd',0,-50,%lld,%lld),"
-        " ('02:0b:ad:00:00:62','Arp',0,0,%lld,%lld);"
+        " ('02:0b:ad:00:00:62','Arp',0,0,%lld,%lld),"
+        " ('02:0b:ad:00:00:63','Old',0,0,%lld,%lld),"
+        " ('02:0b:ad:00:00:64','Five',0,0,%lld,%lld);"
         "INSERT INTO probe_clients (mac,ssid,signal_dbm,channel,first_seen,last_seen)"
-        " VALUES ('02:0b:ad:00:00:62','',-52,6,%lld,%lld);",
-        T - 100, T - 20, T - 5, T - 30, T - 100, T - 20, T - 100, T - 40);
+        " VALUES ('02:0b:ad:00:00:62','',-52,6,%lld,%lld),"
+        " ('02:0b:ad:00:00:63','',-53,6,%lld,%lld),"
+        " ('02:0b:ad:00:00:64','',-54,36,%lld,%lld);",
+        T - 100, T - 20, T - 5, T - 30, T - 100, T - 20, T - 100, T - 20, T - 100, T - 20,
+        T - 100, T - 40, T - 900, T - 20 - WEB_LOC_WINDOW_S - 1, T - 100, T - 20);
     WT_EQ(sdb_exec(g_db, sql), 0);
     int st = 0;
     char *b = export(0, NULL, &st);
@@ -724,6 +759,14 @@ static void test_export_sends_only_what_the_importer_takes(void) {
          * red with the export's fallback removed: "rssi":null). */
         WT_HAS(b, "\"mac\":\"02:0b:ad:00:00:62\",\"vendor\":\"Arp\",\"ssid\":null,"
                   "\"rssi\":-52,");
+        /* Not a probe older than the window before the row's last_seen,
+         * which the importer would pair as current, nor one on 5 GHz,
+         * which it would model at 2.4 (#192 I5 review; seen red with
+         * each condition removed: -53 and -54). */
+        WT_HAS(b, "\"mac\":\"02:0b:ad:00:00:63\",\"vendor\":\"Old\",\"ssid\":null,"
+                  "\"rssi\":null,");
+        WT_HAS(b, "\"mac\":\"02:0b:ad:00:00:64\",\"vendor\":\"Five\",\"ssid\":null,"
+                  "\"rssi\":null,");
         WT_HAS(b, "\"mac\":\"da:a1:19:00:00:01\"");
         WT_HAS(b, "\"truncated_wifi\":true");
         WT_HAS(b, "\"truncated_ap\":false");
@@ -1453,11 +1496,18 @@ static void test_backfill_alerts_past_the_scan(void) {
     long long want = q1(g_db, "SELECT COUNT(DISTINCT type||'|'||title) FROM alerts");
     WT_ASSERT(want > 1500);
     F.pages_per_pull = 4;
+    /* The peer is an F2 build (#192 I5 review): own=1 refused, asked
+     * again with next=1, and the backfill runs from that answer's
+     * cursor as from any other. Seen red with the own=1 retry made to
+     * drop next=1 as well (no page asked for). */
+    srv.f2 = 1;
     WT_EQ(web_fleet_pull_one(&F, 0, T), 0);
     /* The first answer was cut by the scan, not the cap: fewer keys than
      * the cap, and a backfill. */
-    WT_ASSERT(srv.n >= 2);
-    WT_ASSERT(!strncmp(srv.req[1], "since=0&kind=alert&after=", 25));
+    WT_ASSERT(srv.n >= 3);
+    WT_ASSERT(!strcmp(srv.req[0], "since=0&next=1&own=1"));
+    WT_ASSERT(!strcmp(srv.req[1], "since=0&next=1"));
+    WT_ASSERT(!strncmp(srv.req[2], "since=0&kind=alert&after=", 25));
     for (int i = 0; i < 6 && F.peer[0].bf[WEB_FK_ALERT].active; i++)
         WT_EQ(web_fleet_pull_one(&F, 0, T + 60 * (i + 1)), 0);
     WT_EQ(F.peer[0].bf[WEB_FK_ALERT].active, 0);
@@ -1827,13 +1877,19 @@ static void test_locate_route(void) {
         " ('02:aa:00:00:00:02',NULL,0,-60,%lld,%lld),"
         " ('02:aa:00:00:00:03',NULL,0,-60,%lld,%lld),"
         " ('02:aa:00:00:00:04',NULL,0,-58,%lld,%lld),"
-        " ('02:aa:00:00:00:06',NULL,0,-60,%lld,%lld);"
+        " ('02:aa:00:00:00:06',NULL,0,-60,%lld,%lld),"
+        " ('02:00:5e:00:00:0c','Beta 5 GHz card',0,0,%lld,%lld),"
+        " ('02:aa:00:00:00:07',NULL,0,0,%lld,%lld),"
+        " ('02:aa:00:00:00:08',NULL,0,-40,%lld,%lld);"
         "INSERT INTO probe_clients (mac,ssid,signal_dbm,channel,first_seen,last_seen)"
-        " VALUES ('02:00:5e:00:00:0b','',-88,1,%lld,%lld);"
+        " VALUES ('02:00:5e:00:00:0b','',-88,1,%lld,%lld),"
+        " ('02:00:5e:00:00:0c','',-60,36,%lld,%lld),"
+        " ('02:aa:00:00:00:07','',-60,36,%lld,%lld);"
         "INSERT INTO beacon_aps (bssid,ssid,signal_dbm,channel,enc,first_seen,last_seen)"
         " VALUES ('02:bb:00:00:00:05','Five',-70,36,'WPA2',%lld,%lld);",
         T - 900, T - 5, T - 900, T - 10, T - 900, T - 10, T - 2000, T - 1800,
-        T - 900, T - 5, T - 900, T - 10, T - 900, T - 60, T - 900, T - 10);
+        T - 900, T - 5, T - 900, T - 10, T - 900, T - 5, T - 900, T - 5, T - 900, T - 10,
+        T - 900, T - 60, T - 900, T - 60, T - 900, T - 10, T - 900, T - 10);
     WT_EQ(sdb_exec(g_here_db, sql), 0);
     snprintf(sql, sizeof(sql),
         "INSERT INTO peer_sites (peer,url,lat,lon,pos_source,remote_ts,last_ok) VALUES"
@@ -1849,17 +1905,21 @@ static void test_locate_route(void) {
         " ('gamma','wifi','02:aa:00:00:00:04',-63,%lld,%lld,'{}'),"
         " ('far','wifi','02:aa:00:00:00:01',-40,%lld,%lld,'{}'),"
         " ('beta','wifi','02:aa:00:00:00:06',0,%lld,%lld,'{}'),"
+        " ('beta','wifi','02:aa:00:00:00:07',-55,%lld,%lld,'{}'),"
+        " ('beta','wifi','02:aa:00:00:00:08',-75,%lld,%lld,'{}'),"
         " ('beta','ap','02:bb:00:00:00:05',-72,%lld,%lld,'{\"channel\":36,\"enc\":\"WPA2\"}');",
         T + 100, T, T, T, T, T,
         T, T + 100 - 30, T, T + 100 - 20, T, T + 100 - 200, T - 2000, T + 100 - 1790,
-        T, T + 100 - 8, T, T - 6, T, T - 5, T, T + 100 - 5, T, T + 100 - 15);
+        T, T + 100 - 8, T, T - 6, T, T - 5, T, T + 100 - 5, T, T + 100 - 10, T, T + 100 - 10,
+        T, T + 100 - 15);
     WT_EQ(sql_on(g_store, sql), 0);
     F.nown = 1;
     snprintf(F.own[0], sizeof(F.own[0]), "02:00:5e:00:00:0a");
     snprintf(F.own_csv, sizeof(F.own_csv), "02:00:5e:00:00:0a");
-    F.peer[0].nown = 1;
+    F.peer[0].nown = 2;
     F.peer[0].own_at = T;
     snprintf(F.peer[0].own[0], sizeof(F.peer[0].own[0]), "02:00:5e:00:00:0b");
+    snprintf(F.peer[0].own[1], sizeof(F.peer[0].own[1]), "02:00:5e:00:00:0c");
     web_slothdb_t here;
     web_slothdb_init(&here, g_here_db, NULL);
     web_gnss_t G;
@@ -1887,9 +1947,14 @@ static void test_locate_route(void) {
         WT_HAS(b, "\"calibration\":{\"state\":\"calibrated\",\"offset_db\":-7.1,\"exponent_x10\":28,"
                   "\"links\":[{\"from\":\"self\",\"mac\":\"02:00:5e:00:00:0a\",\"rssi\":-52,"
                   "\"dist_m\":16.8,\"offset_db\":-7.1,\"accepted\":true,\"age_s\":30}]}");
+        /* Beta's second card, heard here only on 5 GHz, is no link for
+         * a 2.4 GHz offset (#192 I5 review; seen red with the channel
+         * test removed from calibrate_all(): its +1.0 dB link accepted,
+         * self calibrated). */
         WT_HAS(b, "\"calibration\":{\"state\":\"refused\",\"offset_db\":28.9,\"exponent_x10\":28,"
                   "\"links\":[{\"from\":\"beta\",\"mac\":\"02:00:5e:00:00:0b\",\"rssi\":-88,"
                   "\"dist_m\":16.8,\"offset_db\":28.9,\"accepted\":false,\"age_s\":60}]}");
+        WT_LACKS(b, "02:00:5e:00:00:0c");
         const char *r1 = strstr(b, "{\"key\":\"02:aa:00:00:00:01\"");
         WT_ASSERT(r1 != NULL);
         if (r1) {
@@ -1899,8 +1964,11 @@ static void test_locate_route(void) {
             WT_HAS(r1, "\"sigma_db\":11.7,\"calibrated\":false},{\"site\":\"beta\",\"rssi\":-52,"
                        "\"seen\":");
             WT_HAS(r1, "\"range_m\":17.0,");
+            /* 0.9 dB is inside the difference's sigma, sqrt(2 x 8^2 + 6^2)
+             * with self uncalibrated: no side (#192 I5 review). */
             WT_HAS(r1, "\"sigma_db\":10.0,\"calibrated\":true}],\"nearest\":{\"site\":\"beta\","
-                       "\"by_db\":0.9,\"than\":\"self\"},\"candidates\":[{\"lat\":");
+                       "\"by_db\":0.9,\"than\":\"self\",\"sigma_db\":12.8,\"within_band\":true},"
+                       "\"candidates\":[{\"lat\":");
             const char *e1 = strstr(r1, "\"method\":");
             WT_ASSERT(e1 && count_of(r1, "\"radius_m\"") >= 2);
             if (e1) WT_HAS(e1, "\"method\":\"two_circles\",\"residual_m\":null,"
@@ -1913,6 +1981,20 @@ static void test_locate_route(void) {
          * (seen red with the scan's rssi < 0 dropped). */
         WT_LACKS(b, "02:aa:00:00:00:06");
         WT_LACKS(b, "{\"site\":\"far\",\"rssi\"");
+        /* :08, -40 here and -75 at calibrated beta: 42.1 dB, a side. */
+        WT_HAS(b, "\"nearest\":{\"site\":\"self\",\"by_db\":42.1,\"than\":\"beta\","
+                  "\"sigma_db\":12.8,\"within_band\":false}");
+        /* :07's reading here is a probe on channel 36: the row is
+         * modelled at 5 GHz, uncalibrated (#192 I5 review; seen red with
+         * the local row's channel kept for APs only: 2437 MHz, N 2.8). */
+        const char *r7 = strstr(b, "{\"key\":\"02:aa:00:00:00:07\"");
+        WT_ASSERT(r7 != NULL);
+        if (r7) {
+            WT_HAS(r7, "\"freq_mhz\":5180,\"ptx_dbm\":15,\"ptx\":\"assumed\",\"exponent_x10\":30,");
+            const char *e7 = strstr(r7, "\"method\":");
+            const char *c7 = strstr(r7, "\"calibrated\":true");
+            WT_ASSERT(e7 && (!c7 || c7 > e7));
+        }
         const char *r4 = strstr(b, "{\"key\":\"02:aa:00:00:00:04\"");
         WT_ASSERT(r4 != NULL);
         if (r4) {
@@ -1956,9 +2038,30 @@ static void test_locate_route(void) {
     WT_EQ(st, 200);
     WT_HAS(ob, "],\"calibration\":[{\"site\":\"self\",\"own_radios\":1,\"receiver\":{\"state\":"
                "\"refused\",");
-    WT_HAS(ob, "{\"site\":\"beta\",\"own_radios\":1,\"receiver\":{\"state\":\"calibrated\","
+    WT_HAS(ob, "{\"site\":\"beta\",\"own_radios\":2,\"receiver\":{\"state\":\"calibrated\","
                "\"offset_db\":-7.1,");
     WT_HAS(ob, "],\"distances\":[");
+    /* An address two sites both name as their own has no known position
+     * and is no link for anyone (#192 I5 review): with this site also
+     * claiming beta's card, self has no link at all and beta keeps only
+     * the link to self's other radio. Seen red with the check removed
+     * (self "refused" by the -88 dBm link again). */
+    F.nown = 2;
+    snprintf(F.own[1], sizeof(F.own[1]), "02:00:5e:00:00:0b");
+    WT_EQ(web_fleet_locate_route(&F, &src, "kind=wifi", T, &b, &bl, &st), 0);
+    WT_EQ(st, 200);
+    if (b) {
+        b[bl - 1] = '\0';
+        const char *me = strstr(b, "{\"site\":\"self\",\"lat\":");
+        const char *mc = me ? strstr(me, "\"calibration\":") : NULL;
+        WT_ASSERT(mc && !strncmp(mc, "\"calibration\":{\"state\":\"none\",\"offset_db\":null,"
+                                     "\"exponent_x10\":28,\"links\":[]}", 76));
+        WT_HAS(b, "\"calibration\":{\"state\":\"calibrated\",\"offset_db\":-7.1,\"exponent_x10\":28,"
+                  "\"links\":[{\"from\":\"self\",\"mac\":\"02:00:5e:00:00:0a\",");
+        WT_LACKS(b, "\"mac\":\"02:00:5e:00:00:0b\"");
+        free(b);
+    }
+    F.nown = 1;
     /* Through the router: GET only. */
     web_m4_t m4;
     memset(&m4, 0, sizeof(m4));

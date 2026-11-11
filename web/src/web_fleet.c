@@ -444,12 +444,19 @@ static int xp_dev(void *ctx, const web_sdb_dev_t *d) {
     jk(w, M_WIFI, "ssid");       jstr_or_null(w, d->ssid);
     /* A radio reading or none (web_sdb_seen(): sloth's 0 is "never heard
      * on the air"); an ARP- or DHCP-only row takes the station's probe
-     * reading when the monitor heard it probe. */
+     * reading when the monitor heard it probe. The importer takes a row's
+     * rssi as of its last_seen and, with no channel, at 2.4 GHz
+     * (web_locate.h), so the probe's reading travels only when it is
+     * within WEB_LOC_WINDOW_S of this row's last_seen and not on 5 or
+     * 6 GHz: on W9FJC, 2026-11-11, all 24 such client readings were
+     * older than their row's ARP-moved last_seen by more than that (7 by
+     * a day), and 10 of the 24 were on 5 GHz. */
     int has_sig = d->has_signal && d->signal_dbm < 0;
     long long sig = d->signal_dbm;
     if (!has_sig && !d->is_ap) {
         web_sdb_item_t it;
-        if (web_sdb_seen(x->c, WEB_SEEN_DEVICE, d->mac, NULL, &it) == 1 && it.has_n3) {
+        if (web_sdb_seen(x->c, WEB_SEEN_DEVICE, d->mac, NULL, &it) == 1 && it.has_n3 &&
+            it.n2 >= d->last_seen - WEB_LOC_WINDOW_S && web_loc_chan_24((int)it.n1)) {
             has_sig = 1;
             sig = it.n3;
         }

@@ -51,6 +51,12 @@ void web_loc_model(int kind, int channel, web_loc_model_t *m) {
     }
 }
 
+int web_loc_chan_24(int channel) {
+    if (channel <= 0) return 1;
+    wifi_band_t b = wifi_freq_infer_band(channel);
+    return b != WIFI_BAND_5GHZ && b != WIFI_BAND_6GHZ;
+}
+
 double web_loc_range(const web_loc_model_t *m, int rssi, int calibrated,
                      double offset_db, double *lo, double *hi, double *sigma_db) {
     if (rssi >= 0) return -1;
@@ -102,6 +108,17 @@ int web_loc_circles(double ax, double ay, double ra, double bx, double by, doubl
     return 2;
 }
 
+/* The weighted sum of squares the fix minimises. */
+static double lsq_cost(const double *x, const double *y, const double *r, const double *w,
+                       int n, double X, double Y) {
+    double c = 0;
+    for (int i = 0; i < n; i++) {
+        double f = hypot(X - x[i], Y - y[i]) - r[i];
+        c += f * f / (w[i] * w[i] > 1e-6 ? w[i] * w[i] : 1e-6);
+    }
+    return c;
+}
+
 int web_loc_lsq(const double *x, const double *y, const double *r, const double *w, int n,
                 double *px, double *py, double *resid, double *radius) {
     if (n < 3) return -1;
@@ -113,8 +130,9 @@ int web_loc_lsq(const double *x, const double *y, const double *r, const double 
         sw += k;
     }
     double X = sx / sw, Y = sy / sw;
-    double a11 = 0, a12 = 0, a22 = 0;
-    for (int it = 0; it < 50; it++) {
+    double a11 = 0, a12 = 0, a22 = 0, cost = lsq_cost(x, y, r, w, n, X, Y), lam = -1;
+    int conv = 0;
+    for (int it = 0; it < WEB_LOC_LSQ_ITER && !conv; it++) {
         double b1 = 0, b2 = 0;
         a11 = a12 = a22 = 0;
         for (int i = 0; i < n; i++) {
@@ -127,11 +145,34 @@ int web_loc_lsq(const double *x, const double *y, const double *r, const double 
         }
         double det = a11 * a22 - a12 * a12;
         if (!(fabs(det) > 1e-12 * (a11 * a22 + 1e-30))) return -1;
-        double ux = (a22 * b1 - a12 * b2) / det, uy = (a11 * b2 - a12 * b1) / det;
-        X -= ux;
-        Y -= uy;
-        if (hypot(ux, uy) < 1e-6) break;
+        /* Levenberg-Marquardt: a full Gauss-Newton step overshoots when
+         * the ranges disagree (#192 I5 review: a third of random
+         * inconsistent sets were still oscillating after 50 full steps,
+         * and the last step was reported as the fix). The damping grows
+         * until the cost does not rise and shrinks after each step taken;
+         * a step too small to matter is convergence. */
+        double lam_lo = 1e-12 * (a11 + a22);
+        if (lam < lam_lo) lam = lam < 0 ? 1e-3 * (a11 + a22) : lam_lo;
+        for (int k = 0;; k++) {
+            double m11 = a11 + lam, m22 = a22 + lam, dm = m11 * m22 - a12 * a12;
+            double ux = (m22 * b1 - a12 * b2) / dm, uy = (m11 * b2 - a12 * b1) / dm;
+            /* 4^60 of damping and still no descent: a minimum to the
+             * arithmetic's precision. */
+            if (hypot(ux, uy) < 1e-6 * (1.0 + hypot(X, Y)) || k >= 60) { conv = 1; break; }
+            double nx = X - ux, ny = Y - uy, c2 = lsq_cost(x, y, r, w, n, nx, ny);
+            if (c2 <= cost) {
+                X = nx;
+                Y = ny;
+                cost = c2;
+                lam /= 3;
+                break;
+            }
+            lam *= 4;
+        }
     }
+    /* Not settled within the bound: no fix rather than wherever the
+     * iteration stopped. */
+    if (!conv) return -1;
     double det = a11 * a22 - a12 * a12;
     if (!(fabs(det) > 1e-12 * (a11 * a22 + 1e-30)) || !isfinite(X) || !isfinite(Y)) return -1;
     double ss = 0;
@@ -308,17 +349,31 @@ static void sites_done(lctx_t *x) {
     x->have_c = 0;
 }
 
-/* Site r's Wi-Fi reading of mac: 1 with rssi and its time on this
- * site's clock. */
+#ifdef WITH_SQLITE
+/* The channel member of a peer row's extra JSON (an AP's), or 0. */
+static int extra_channel(const char *ex) {
+    const char *p = ex ? strstr(ex, "\"channel\":") : NULL;
+    if (!p) return 0;
+    p += 10;
+    int c = 0;
+    while (*p >= '0' && *p <= '9' && c < 1000) c = c * 10 + (*p++ - '0');
+    return c;
+}
+#endif
+
+/* Site r's Wi-Fi reading of mac: 1 with rssi, its time on this site's
+ * clock and its channel (0 unknown). */
 static int wifi_reading(web_fleet_t *f, lctx_t *x, int r, const char *mac, int *rssi,
-                        long long *ts) {
+                        long long *ts, int *chan) {
     lsite_t *R = &x->s[r];
+    *chan = 0;
     if (R->is_self) {
         web_sdb_item_t it;
         if (!x->have_c || web_sdb_seen(&x->c, WEB_SEEN_DEVICE, mac, NULL, &it) != 1 || !it.has_n3)
             return 0;
         *rssi = (int)it.n3;
         *ts = it.n2;
+        *chan = (int)it.n1;
         return 1;
     }
     int got = 0;
@@ -327,7 +382,7 @@ static int wifi_reading(web_fleet_t *f, lctx_t *x, int r, const char *mac, int *
     if (s && s->rd) {
         pthread_mutex_lock(&s->rmu);
         sqlite3_stmt *q = NULL;
-        if (sqlite3_prepare_v2(s->rd, "SELECT rssi,last_seen FROM peer_sightings WHERE"
+        if (sqlite3_prepare_v2(s->rd, "SELECT rssi,last_seen,extra FROM peer_sightings WHERE"
                                " peer=?1 AND kind='wifi' AND key=?2 AND rssi < 0",
                                -1, &q, NULL) == SQLITE_OK) {
             sqlite3_bind_text(q, 1, R->name, -1, SQLITE_TRANSIENT);
@@ -335,6 +390,7 @@ static int wifi_reading(web_fleet_t *f, lctx_t *x, int r, const char *mac, int *
             if (sqlite3_step(q) == SQLITE_ROW) {
                 *rssi = sqlite3_column_int(q, 0);
                 *ts = sqlite3_column_int64(q, 1) - R->skew;
+                *chan = extra_channel((const char *)sqlite3_column_text(q, 2));
                 got = 1;
             }
         }
@@ -347,7 +403,19 @@ static int wifi_reading(web_fleet_t *f, lctx_t *x, int r, const char *mac, int *
     return got;
 }
 
-/* Each receiver's links to another site's own radios, and its offset. */
+/* 1 when a site other than t names mac as its own: an address two
+ * sites claim has no known position, and is no link for either. */
+static int own_claimed_elsewhere(const lctx_t *x, int t, const char *mac) {
+    for (int u = 0; u < x->n; u++)
+        for (int k = 0; u != t && k < x->s[u].nown; k++)
+            if (!strcmp(x->s[u].own[k], mac)) return 1;
+    return 0;
+}
+
+/* Each receiver's links to another site's own radios, and its offset.
+ * What a peer names as its own is the peer's word: it chooses which
+ * transmitter a receiver is calibrated by, and RF_CAL_MAX_DB is what
+ * bounds the offset that buys it. */
 static void calibrate_all(web_fleet_t *f, lctx_t *x, long long now_s) {
     for (int r = 0; r < x->n; r++) {
         lsite_t *R = &x->s[r];
@@ -360,9 +428,13 @@ static void calibrate_all(web_fleet_t *f, lctx_t *x, long long now_s) {
             double d = web_fleet_dist_m(R->lat, R->lon, Tt->lat, Tt->lon);
             if (d < 1.0) continue;    /* the model holds from 1 m (P.1238) */
             for (int m = 0; m < Tt->nown && R->nlink < 16; m++) {
-                int rssi = 0;
+                if (own_claimed_elsewhere(x, t, Tt->own[m])) continue;
+                int rssi = 0, chan = 0;
                 long long ts = 0;
-                if (!wifi_reading(f, x, r, Tt->own[m], &rssi, &ts)) continue;
+                if (!wifi_reading(f, x, r, Tt->own[m], &rssi, &ts, &chan)) continue;
+                /* The offset is a 2.4 GHz receiver's (web_loc_model());
+                 * a reading heard on 5 or 6 GHz is no link for it. */
+                if (!web_loc_chan_24(chan)) continue;
                 long long age = now_s > ts ? now_s - ts : 0;
                 if (age > WEB_LOC_CAL_MAX_AGE_S) continue;
                 double off = 0;
@@ -515,18 +587,6 @@ static int parse_mac6(const char *s, uint8_t out[6]) {
     return 0;
 }
 
-#ifdef WITH_SQLITE
-/* The channel member of a peer row's extra JSON (an AP's), or 0. */
-static int extra_channel(const char *ex) {
-    const char *p = ex ? strstr(ex, "\"channel\":") : NULL;
-    if (!p) return 0;
-    p += 10;
-    int c = 0;
-    while (*p >= '0' && *p <= '9' && c < 1000) c = c * 10 + (*p++ - '0');
-    return c;
-}
-#endif
-
 /* One located key into w: sites ss[0..n) (indices into rows), each
  * paired. */
 static void row_json(web_jw_t *w, const lctx_t *x, int kind, const lrow_t *rows,
@@ -593,6 +653,21 @@ static void row_json(web_jw_t *w, const lctx_t *x, int kind, const lrow_t *rows,
     jfix(w, b >= 0 ? ex[b] - ex[a] : 0, 1);
     web_jw_raw(w, ",\"than\":");
     web_jw_str(w, x->s[rows[use[b >= 0 ? b : a]].site].name);
+    /* The difference's one-sigma: the assumed power is the same emitter's
+     * at both and cancels; each link's shadow fading and each
+     * uncalibrated receiver's term do not. A difference inside it says
+     * nothing about which site is nearer. */
+    double sd = 0;
+    if (b >= 0) {
+        sd = 2 * m.sigma_db * m.sigma_db;
+        if (!cal[a]) sd += RF_ASSUMED_SIGMA_DB * RF_ASSUMED_SIGMA_DB;
+        if (!cal[b]) sd += RF_ASSUMED_SIGMA_DB * RF_ASSUMED_SIGMA_DB;
+        sd = sqrt(sd);
+    }
+    web_jw_raw(w, ",\"sigma_db\":");
+    jfix(w, sd, 1);
+    web_jw_raw(w, ",\"within_band\":");
+    web_jw_raw(w, b < 0 || ex[b] - ex[a] <= sd ? "true" : "false");
     web_jw_raw(w, "},\"candidates\":[");
     int nc = 0;
     double resid = -1;
@@ -744,7 +819,9 @@ int web_fleet_locate_route(web_fleet_t *f, const web_fleet_src_t *src, const cha
             if (rc == 1 && it.has_n3) {
                 me.rssi = (int)it.n3;
                 me.ts = it.n2;
-                me.channel = kind == WEB_LOC_AP ? (int)it.n1 : 0;
+                /* An AP's beacon channel; a client's probe channel when
+                 * its reading came from probe_clients, else unknown. */
+                me.channel = (int)it.n1;
                 got = 1;
             }
         }

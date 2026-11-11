@@ -67,10 +67,42 @@ static void test_lsq(void) {
     WT_EQ(web_loc_lsq(x, y, r, w, 4, &px, &py, &res, &rad), 0);
     WT_ASSERT(res > 0.3);
     WT_ASSERT(hypot(px - 12, py - 7) > 0.3 && hypot(px - 12, py - 7) < 3);
-    /* Wider bands at the far sites move the weight to the near ones. */
+    /* Three sites in a line: no fix (the mirror images are equal). */
     double xl[3] = { 0, 10, 20 }, yl[3] = { 0, 0, 0 }, rl[3] = { 5, 5, 15 };
     WT_EQ(web_loc_lsq(xl, yl, rl, w, 3, &px, &py, &res, &rad), -1);
     WT_EQ(web_loc_lsq(x, y, r, w, 2, &px, &py, &res, &rad), -1);
+}
+
+static double lsq_cost(const double *x, const double *y, const double *r, const double *w,
+                       int n, double px, double py) {
+    double c = 0;
+    for (int i = 0; i < n; i++) {
+        double f = hypot(px - x[i], py - y[i]) - r[i];
+        c += f * f / (w[i] * w[i]);
+    }
+    return c;
+}
+
+/* Ranges that disagree (#192 I5 review): a full Gauss-Newton step from
+ * the centroid overshoots, and the undamped iteration was still
+ * oscillating after its 50 steps; the step it stopped on, (19.35,
+ * 28.97), was reported as the fix at a weighted cost of 19.2 against
+ * the minimum's 4.68. The fix now is a minimum: no 1 cm move lowers the
+ * cost. Seen red with the damping removed (lam held at 0 and every step
+ * taken: no fix within the bound) and, that way, with the convergence
+ * test dropped as well (the last step reported: a cost above 4.7, and
+ * a 1 cm move lowering it). */
+static void test_lsq_disagreeing_ranges(void) {
+    double x[3] = { 18.65, 37.46, 5.04 }, y[3] = { 17.2, 35.7, 9.63 };
+    double r[3] = { 2.78, 8.36, 18.88 }, w[3] = { 2.224, 6.688, 15.104 };
+    double px = 0, py = 0, res = 0, rad = 0;
+    WT_EQ(web_loc_lsq(x, y, r, w, 3, &px, &py, &res, &rad), 0);
+    double c0 = lsq_cost(x, y, r, w, 3, px, py);
+    WT_ASSERT(c0 < 4.7);
+    static const double mv[4][2] = { { .01, 0 }, { -.01, 0 }, { 0, .01 }, { 0, -.01 } };
+    for (int k = 0; k < 4; k++)
+        WT_ASSERT(lsq_cost(x, y, r, w, 3, px + mv[k][0], py + mv[k][1]) >= c0);
+    WT_ASSERT(isfinite(res) && isfinite(rad) && rad > 0);
 }
 
 /* The plane at the two sites' centroid: each site out and back to its
@@ -185,6 +217,7 @@ static void test_own_parse(void) {
 void run_locate_tests(void) {
     WT_RUN(test_circles);
     WT_RUN(test_lsq);
+    WT_RUN(test_lsq_disagreeing_ranges);
     WT_RUN(test_enu);
     WT_RUN(test_model);
     WT_RUN(test_calibrate);
