@@ -268,6 +268,7 @@ All routes are `GET`. Any other method returns `405`. Responses are JSON unless 
 | `/api/health` | socket state, last record age, `sloth.db` schema version, rows, uptime |
 | `/api/live` | the current in-memory snapshot: devices, hosts, alerts, channels (what the TUI shows) |
 | `/api/series?metric=&key=&from=&to=&tier=` | buckets `[t, avg, min, max, n]` plus the baseline band for the same range |
+| `/api/series/all?metric=&tier=&from=&to=&cols=&after=` | every key of one metric (the 256 most recently seen, `listed` of `total`), each merged into at most `cols` cells (8..480) as a sparse `[i, v, ...]`, keys in byte order, at most 32 to an answer with `more` / `next` (2026-11-11, the Activity chart's `keys: all`) |
 | `/api/baseline?metric=&key=` | the 168 cells, for the hour-of-week heatmap |
 | `/api/anomalies?since=&kind=` | open and recent anomaly episodes |
 | `/api/devices?q=&sort=&limit=&offset=` | joined view of `devices`, `pnl_clients`, `arp`, `dhcp_leases`, vendor lookup, name lookup |
@@ -405,6 +406,7 @@ The current-vs-average workbench.
 - Main band chart: live line, `mean ± 2 sd` band, `warming` cells hatched. Hover gives the bucket value, the baseline mean, the z-score.
 - Under it, a **small-multiples grid**: one sparkline per key, sorted by `abs(z)` descending, so the outlier is top left. Each sparkline is colour-coded by key with the hash colour from §8.12, and its frame turns heat-coloured when out of band.
 - Toggle: absolute values, or ratio to baseline (`x / mean`), which puts a 10 KB/s IoT device and a 50 MB/s NAS on the same axis.
+- **`keys: one` / `keys: all`** on the main chart (owner request and ruling, 2026-11-11; `docs/web-visual-spec.md` §6.2 and its rulings). One, the default, is the chart above. All draws every key of the metric (the 256 most recently seen, `N of M keys` in the caption when there are more) as its own line on one shared y-scale in the key's hash colour of §8.12, with a legend of every key drawn (rank, swatch, key, latest value; largest first), hover or focus to bring one line forward, a pick to hold it and return, the picked key's band only, and a device's drawer from its entry. A presence metric stacks its strips, a row a key. Kept per browser as `act.allkeys`. Data: `/api/series/all`.
 
 ### 8.6 View: Devices
 

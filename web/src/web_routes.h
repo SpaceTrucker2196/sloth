@@ -8,6 +8,8 @@
  *   /api/live     JSON: the live state (web_live.h)
  *   /api/series   JSON: one series' buckets (web_series.h, M2)
  *   /api/keys     JSON: the keys of one metric
+ *   /api/series/all JSON: every key of one metric, each in at most
+ *                 cols cells, a page of keys to an answer (web_allkeys.h)
  *   /api/metrics  JSON: the metric catalogue and tiers
  *   /api/anomalies JSON: open and recently closed anomaly episodes (M3),
  *                 ?since= and ?kind= (web_series.h)

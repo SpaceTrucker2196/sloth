@@ -278,12 +278,18 @@ static const struct toggle TOGGLES[] = {
     { "n-chips",    "    prefSet(\"anom.kind\", N.kind || null);" },
     { "f-tabs",     "          prefSet(\"flows.proto\", p);" },
     { "a-scale",    "    prefSet(\"act.scale\", A.ownScale ? \"own\" : null);" },
+    { "ak-mode",    "      H.prefSet(\"act.allkeys\", S.on ? true : null);" },
 };
 static const char *const TOGGLE_JS[] = {   /* the script's ARIA state, each a listed toggle's */
     "      b.ariaChecked = on ? \"true\" : \"false\";",
     "    $(\"n-mode\").ariaPressed = N.table ? \"true\" : \"false\";",
     "        b.ariaSelected = p === F.proto ? \"true\" : \"false\";",
     "    $(\"a-scale\").ariaPressed = A.ownScale ? \"true\" : \"false\";",
+    "    $(\"ak-mode\").ariaPressed = S.on ? \"true\" : \"false\";",
+    /* allkeys.js's legend: each entry a button whose pressed state is
+     * the picked key, which is not kept (a pick is a look, not a setting) */
+    "      b.ariaPressed = S.pick === r.key ? \"true\" : \"false\";",
+    "      bs[i].ariaPressed = on ? \"true\" : \"false\";",
 };
 
 static void test_every_toggle_is_decided(void) {

@@ -2249,6 +2249,8 @@
 
   function mainChart() {
     var m = selMetric();
+    // "keys: all" (web/ui/allkeys.js) draws the graph itself.
+    if (window.SlothAllKeys && SlothAllKeys.main(m)) return;
     if (!m || !A.keys.length) { set("a-title", m ? m.name : "-"); return; }
     var key = A.keys[A.key] || "";
     var win = Number($("a-win").value) || 3600;
@@ -5726,6 +5728,20 @@
 
   // The ADS-B view (web/ui/adsb.js): go() for its alert links (#186).
   if (window.SlothAdsb) SlothAdsb.init({ go: go });
+
+  // The Activity graph's "keys: all" (web/ui/allkeys.js): the page's
+  // helpers, lent once; its fetches go through the scoped getJSON.
+  if (window.SlothAllKeys) SlothAllKeys.init({ el: el, set: set, getJSON: getJSON, tok: tok, fmt: fmt,
+    keySpan: keySpan, colorIndex: ipColorIndex, baseline: baseline, bands: bands, hhmmss: hhmmss,
+    prefGet: prefGet, prefSet: prefSet, openDrawer: openDrawer,
+    isMac: function (k) { return MAC_RE.test(k); }, sens: function () { return sens; },
+    scope: function () { return SCOPE; }, scopeWord: function (s) { return SCOPE_WORD[s]; },
+    storeOn: function () { return A.storeOn; }, key: function () { return A.keys[A.key] || ""; },
+    pickKey: function (k) {
+      var i = A.keys.indexOf(k);
+      if (i >= 0) { A.key = i; $("a-key").value = String(i); actKeep(); }
+    },
+    redraw: function () { if (view === "activity") refresh(); } });
 
   // G2, G6 and the new mark in the tables (web/ui/rf.js).
   if (window.SlothRf) SlothRf.init({ tok: tok });
